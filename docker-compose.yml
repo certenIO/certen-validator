@@ -112,11 +112,14 @@ services:
       ATTESTATION_TIMEOUT: 30s
 
       # ─────────────────────────────────────────────────────────────
-      # Accumulate Network
+      # Accumulate Network (Kermit)
       # ─────────────────────────────────────────────────────────────
       ACCUMULATE_URL: ${ACCUMULATE_URL:?ACCUMULATE_URL is required}
       ACCUMULATE_COMET_DN: ${ACCUMULATE_COMET_DN:-}
       ACCUMULATE_COMET_BVN: ${ACCUMULATE_COMET_BVN:-}
+      ACCUMULATE_COMET_BVN0: ${ACCUMULATE_COMET_BVN0:-}
+      ACCUMULATE_COMET_BVN1: ${ACCUMULATE_COMET_BVN1:-}
+      ACCUMULATE_COMET_BVN2: ${ACCUMULATE_COMET_BVN2:-}
 
       # ─────────────────────────────────────────────────────────────
       # Ethereum Network

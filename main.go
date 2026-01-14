@@ -570,18 +570,48 @@ func startValidator(
 
     // Create lite client proof generator with CometBFT endpoints for REAL L1-L3 proofs
     // CometBFT endpoints are required for consensus binding (app_hash validation)
+    // Multi-BVN support for Kermit and other networks with multiple BVN partitions
     v3Endpoint := strings.TrimSuffix(cfg.AccumulateURL, "/") + "/v3"
     log.Printf("[PROOF] Creating LiteClientProofGenerator with:")
     log.Printf("   V3 API: %s", v3Endpoint)
     log.Printf("   DN CometBFT: %s", cfg.AccumulateCometDN)
-    log.Printf("   BVN CometBFT: %s", cfg.AccumulateCometBVN)
+    log.Printf("   BVN0 CometBFT: %s", cfg.AccumulateCometBVN0)
+    log.Printf("   BVN1 CometBFT: %s", cfg.AccumulateCometBVN1)
+    log.Printf("   BVN2 CometBFT: %s", cfg.AccumulateCometBVN2)
 
-    liteClientProofGen, err := proof.NewLiteClientProofGeneratorWithComet(
-        v3Endpoint,
-        cfg.AccumulateCometDN,
-        cfg.AccumulateCometBVN,
-        30*time.Second,
-    )
+    // Use multi-BVN constructor if specific BVN endpoints are configured, otherwise fall back to legacy
+    var liteClientProofGen *proof.LiteClientProofGenerator
+    if cfg.AccumulateCometBVN0 != "" || cfg.AccumulateCometBVN1 != "" || cfg.AccumulateCometBVN2 != "" {
+        // Multi-BVN mode (Kermit, production networks)
+        bvn0 := cfg.AccumulateCometBVN0
+        if bvn0 == "" {
+            bvn0 = cfg.AccumulateCometBVN // Fall back to legacy single BVN
+        }
+        bvn1 := cfg.AccumulateCometBVN1
+        if bvn1 == "" {
+            bvn1 = bvn0 // Fall back to BVN0 if not specified
+        }
+        bvn2 := cfg.AccumulateCometBVN2
+        if bvn2 == "" {
+            bvn2 = bvn0 // Fall back to BVN0 if not specified
+        }
+        liteClientProofGen, err = proof.NewLiteClientProofGeneratorMultiBVN(
+            v3Endpoint,
+            cfg.AccumulateCometDN,
+            bvn0,
+            bvn1,
+            bvn2,
+            30*time.Second,
+        )
+    } else {
+        // Legacy single-BVN mode (DevNet, backward compatibility)
+        liteClientProofGen, err = proof.NewLiteClientProofGeneratorWithComet(
+            v3Endpoint,
+            cfg.AccumulateCometDN,
+            cfg.AccumulateCometBVN,
+            30*time.Second,
+        )
+    }
     if err != nil {
         return nil, nil, fmt.Errorf("failed to create lite client proof generator: %w", err)
     }

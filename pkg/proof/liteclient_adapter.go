@@ -32,11 +32,15 @@ type LiteClientProofGenerator struct {
 	backend      lctypes.DataBackend
 	v3Client     *jsonrpc.Client
 	cometDN      *comethttp.HTTP
-	cometBVN     *comethttp.HTTP
+	cometBVN     *comethttp.HTTP // Legacy single BVN (defaults to BVN0)
+	cometBVN0    *comethttp.HTTP // BVN0 CometBFT client
+	cometBVN1    *comethttp.HTTP // BVN1 CometBFT client
+	cometBVN2    *comethttp.HTTP // BVN2 CometBFT client
 	proofBuilder *chained_proof.ProofBuilder
 	endpoint     string
 	dnEndpoint   string
-	bvnEndpoint  string
+	bvnEndpoint  string // Legacy single BVN endpoint
+	bvnEndpoints map[string]string // Map of BVN name to endpoint (bvn0, bvn1, bvn2)
 	timeout      time.Duration
 }
 
@@ -54,7 +58,15 @@ func NewLiteClientProofGenerator(v3Endpoint string, timeout time.Duration) (*Lit
 
 // NewLiteClientProofGeneratorWithComet creates a proof generator with explicit CometBFT endpoints.
 // This is required for the REAL L1-L3 chained proofs with consensus binding.
+// For multi-BVN networks, use NewLiteClientProofGeneratorMultiBVN instead.
 func NewLiteClientProofGeneratorWithComet(v3Endpoint, dnCometEndpoint, bvnCometEndpoint string, timeout time.Duration) (*LiteClientProofGenerator, error) {
+	// Use legacy single BVN as BVN0 for backward compatibility
+	return NewLiteClientProofGeneratorMultiBVN(v3Endpoint, dnCometEndpoint, bvnCometEndpoint, bvnCometEndpoint, bvnCometEndpoint, timeout)
+}
+
+// NewLiteClientProofGeneratorMultiBVN creates a proof generator with all BVN CometBFT endpoints.
+// This supports Kermit and other multi-BVN networks.
+func NewLiteClientProofGeneratorMultiBVN(v3Endpoint, dnCometEndpoint, bvn0Endpoint, bvn1Endpoint, bvn2Endpoint string, timeout time.Duration) (*LiteClientProofGenerator, error) {
 	if v3Endpoint == "" {
 		return nil, fmt.Errorf("v3Endpoint cannot be empty")
 	}
@@ -71,30 +83,64 @@ func NewLiteClientProofGeneratorWithComet(v3Endpoint, dnCometEndpoint, bvnCometE
 	// Create V3 JSON-RPC client for real proof builder
 	v3Client := jsonrpc.NewClient(v3Endpoint)
 
-	// Create CometBFT clients for consensus binding (optional - may fail if DevNet not running)
-	var cometDN, cometBVN *comethttp.HTTP
+	// Create CometBFT clients for consensus binding
+	var cometDN, cometBVN, cometBVN0, cometBVN1, cometBVN2 *comethttp.HTTP
 	var proofBuilder *chained_proof.ProofBuilder
 
-	if dnCometEndpoint != "" && bvnCometEndpoint != "" {
+	// DN CometBFT client
+	if dnCometEndpoint != "" {
 		cometDN, err = comethttp.New(dnCometEndpoint, "/websocket")
 		if err != nil {
-			log.Printf("[PROOF] Warning: DN CometBFT client failed (proofs will be partial): %v", err)
-		}
-
-		cometBVN, err = comethttp.New(bvnCometEndpoint, "/websocket")
-		if err != nil {
-			log.Printf("[PROOF] Warning: BVN CometBFT client failed (proofs will be partial): %v", err)
-		}
-
-		// Create real ProofBuilder if both CometBFT clients are available
-		if cometDN != nil && cometBVN != nil {
-			proofBuilder = chained_proof.NewProofBuilder(v3Client, cometDN, cometBVN, true)
-			proofBuilder.WithArtifacts = true
-			log.Printf("[PROOF] ✅ Real ProofBuilder initialized with CometBFT consensus binding")
+			log.Printf("[PROOF] Warning: DN CometBFT client failed: %v", err)
+		} else {
+			log.Printf("[PROOF] ✅ DN CometBFT connected: %s", dnCometEndpoint)
 		}
 	}
 
-	if proofBuilder == nil {
+	// BVN CometBFT clients
+	bvnEndpoints := make(map[string]string)
+
+	if bvn0Endpoint != "" {
+		cometBVN0, err = comethttp.New(bvn0Endpoint, "/websocket")
+		if err != nil {
+			log.Printf("[PROOF] Warning: BVN0 CometBFT client failed: %v", err)
+		} else {
+			log.Printf("[PROOF] ✅ BVN0 CometBFT connected: %s", bvn0Endpoint)
+			bvnEndpoints["bvn0"] = bvn0Endpoint
+		}
+	}
+
+	if bvn1Endpoint != "" {
+		cometBVN1, err = comethttp.New(bvn1Endpoint, "/websocket")
+		if err != nil {
+			log.Printf("[PROOF] Warning: BVN1 CometBFT client failed: %v", err)
+		} else {
+			log.Printf("[PROOF] ✅ BVN1 CometBFT connected: %s", bvn1Endpoint)
+			bvnEndpoints["bvn1"] = bvn1Endpoint
+		}
+	}
+
+	if bvn2Endpoint != "" {
+		cometBVN2, err = comethttp.New(bvn2Endpoint, "/websocket")
+		if err != nil {
+			log.Printf("[PROOF] Warning: BVN2 CometBFT client failed: %v", err)
+		} else {
+			log.Printf("[PROOF] ✅ BVN2 CometBFT connected: %s", bvn2Endpoint)
+			bvnEndpoints["bvn2"] = bvn2Endpoint
+		}
+	}
+
+	// Use BVN0 as the default/legacy BVN
+	cometBVN = cometBVN0
+	bvnEndpoint := bvn0Endpoint
+
+	// Create real ProofBuilder if DN and at least one BVN are available
+	if cometDN != nil && cometBVN != nil {
+		proofBuilder = chained_proof.NewProofBuilder(v3Client, cometDN, cometBVN, true)
+		proofBuilder.WithArtifacts = true
+		log.Printf("[PROOF] ✅ Real ProofBuilder initialized with CometBFT consensus binding")
+		log.Printf("[PROOF]    DN: %s, BVN0: %s, BVN1: %s, BVN2: %s", dnCometEndpoint, bvn0Endpoint, bvn1Endpoint, bvn2Endpoint)
+	} else {
 		log.Printf("[PROOF] ⚠️ ProofBuilder not available - using basic proof mode")
 	}
 
@@ -103,10 +149,14 @@ func NewLiteClientProofGeneratorWithComet(v3Endpoint, dnCometEndpoint, bvnCometE
 		v3Client:     v3Client,
 		cometDN:      cometDN,
 		cometBVN:     cometBVN,
+		cometBVN0:    cometBVN0,
+		cometBVN1:    cometBVN1,
+		cometBVN2:    cometBVN2,
 		proofBuilder: proofBuilder,
 		endpoint:     v3Endpoint,
 		dnEndpoint:   dnCometEndpoint,
-		bvnEndpoint:  bvnCometEndpoint,
+		bvnEndpoint:  bvnEndpoint,
+		bvnEndpoints: bvnEndpoints,
 		timeout:      timeout,
 	}, nil
 }
