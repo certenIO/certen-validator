@@ -1,8 +1,8 @@
 # Binaries
 *.exe
-validator
-govproof
-txhash
+/validator
+/govproof
+/txhash
 
 # Environment files (contain secrets)
 .env
