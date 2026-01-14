@@ -182,7 +182,7 @@ func main() {
 
     // Parse CLI flags
     var (
-        validatorID = flag.String("validator-id", "validator-1", "Validator ID")
+        validatorID = flag.String("validator-id", "", "Validator ID (overrides VALIDATOR_ID env var)")
         showHelp    = flag.Bool("help", false, "Show help message")
     )
     flag.Parse()
@@ -195,7 +195,6 @@ func main() {
     }
 
     log.Printf("🚀 Starting Certen BFT Validator with full consensus capabilities...")
-    log.Printf("📋 Validator ID: %s", *validatorID)
 
     // Load configuration
     cfg, err := config.Load()
@@ -206,10 +205,17 @@ func main() {
     // LedgerStore is now created and managed within the ABCI application
     // No need for separate initialization here
 
-    // Override config from CLI
+    // Override config from CLI (only if explicitly set)
     if *validatorID != "" {
+        log.Printf("📋 CLI flag override: using validator ID from command line: %s", *validatorID)
         cfg.ValidatorID = *validatorID
     }
+    log.Printf("📋 Validator ID: %s (from %s)", cfg.ValidatorID, func() string {
+        if *validatorID != "" {
+            return "CLI flag"
+        }
+        return "VALIDATOR_ID env var"
+    }())
 
     // ==========================================================================
     // PHASE 5: Initialize PostgreSQL Database Connection

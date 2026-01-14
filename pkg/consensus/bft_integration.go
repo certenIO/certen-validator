@@ -1822,46 +1822,37 @@ func (app *CertenApplication) computeAppHash() []byte {
 	return hash.Sum(nil)
 }
 
-// generateDeterministicNodeKey creates a deterministic node key based on validator ID and base key
+// generateDeterministicNodeKey creates a deterministic node key based on validator ID and chain ID
+// IMPORTANT: This MUST match the exact seed format used by generate-genesis to ensure consistent node IDs
 func generateDeterministicNodeKey(validatorID string) cmted25519.PrivKey {
-	// Get base key from environment
-	baseKey := os.Getenv("ACCUM_PRIV_KEY")
-	if baseKey == "" {
-		// Fallback to a predictable seed for deterministic generation
-		baseKey = "deterministic_seed_for_certen_validators"
+	// Get chain ID from environment - MUST match the genesis generator's chain ID
+	chainID := os.Getenv("COMETBFT_CHAIN_ID")
+	if chainID == "" {
+		chainID = "certen-testnet" // Default to match typical testnet deployment
 	}
 
-	// Create deterministic seed using SAME ORDER as mining: baseKey + nodeID + identifier
-	hasher := sha256.New()
-	hasher.Write([]byte(baseKey))
-	hasher.Write([]byte(validatorID))
-	hasher.Write([]byte("CERTEN_VALIDATOR_P2P_NODE"))
-	seed := hasher.Sum(nil)
+	// Use EXACT same seed format as genesis generator:
+	// seed := sha256.Sum256([]byte(fmt.Sprintf("certen-validator-key-%s-%s", chainID, validatorID)))
+	seedStr := fmt.Sprintf("certen-validator-key-%s-%s", chainID, validatorID)
+	seed := sha256.Sum256([]byte(seedStr))
 
-	// Use the first 32 bytes as the ed25519 private key seed
-	if len(seed) >= 32 {
-		privateKeySeed := seed[:32]
+	// Generate proper ed25519 key from seed (same as genesis generator)
+	privateKey := ed25519.NewKeyFromSeed(seed[:])
+	publicKey := privateKey.Public().(ed25519.PublicKey)
 
-		// Generate proper ed25519 key from seed
-		privateKey := ed25519.NewKeyFromSeed(privateKeySeed)
-		publicKey := privateKey.Public().(ed25519.PublicKey)
+	// CometBFT expects 64-byte format: private key seed (32) + public key (32)
+	combined := make([]byte, 64)
+	copy(combined[:32], privateKey[:32])  // First 32 bytes: private key
+	copy(combined[32:], publicKey)        // Last 32 bytes: public key
 
-		// CometBFT expects 64-byte format: private key + public key
-		combined := make([]byte, 64)
-		copy(combined[:32], privateKey[:32])  // First 32 bytes: private key
-		copy(combined[32:], publicKey)        // Last 32 bytes: public key
-
-		return cmted25519.PrivKey(combined)
-	}
-
-	// Should not happen with SHA256, but fallback
-	return cmted25519.GenPrivKey()
+	return cmted25519.PrivKey(combined)
 }
 
 // generateDeterministicValidatorPublicKey creates the public key for any validator ID
+// IMPORTANT: Uses SAME seed as node key (matching genesis generator behavior)
 func generateDeterministicValidatorPublicKey(validatorID string) cmted25519.PubKey {
-	// Use the validator key variant (same as used for privValidator)
-	privKey := generateDeterministicNodeKey(validatorID + "_validator")
+	// Use the SAME key as node key (genesis generator uses one key for both)
+	privKey := generateDeterministicNodeKey(validatorID)
 	pubKey := privKey.PubKey()
 
 	// Type assert to the specific ed25519 public key type
@@ -1966,8 +1957,8 @@ func NewUnifiedCometBFTEngine(validatorID string) (*RealCometBFTEngine, error) {
 	os.Remove(privValKeyFile)
 	os.Remove(privValStateFile)
 
-	// Generate deterministic private validator key using the same logic as main.go
-	privValidatorKey := generateDeterministicNodeKey(validatorID + "_validator")
+	// Generate deterministic private validator key using SAME seed as node key (matches genesis generator)
+	privValidatorKey := generateDeterministicNodeKey(validatorID)
 
 	// Create the private validator - NewFilePV expects (PrivKey, keyFilePath, stateFilePath)
 	privValidator := privval.NewFilePV(privValidatorKey, privValKeyFile, privValStateFile)
@@ -3017,7 +3008,7 @@ func NewProductionEngine(cfg EngineConfig, app abcitypes.Application, logger *lo
 	os.Remove(privValKeyFile)
 	os.Remove(privValStateFile)
 
-	privValidatorKey := generateDeterministicNodeKey(cfg.ValidatorID + "_validator")
+	privValidatorKey := generateDeterministicNodeKey(cfg.ValidatorID)
 	privValidator := privval.NewFilePV(privValidatorKey, privValKeyFile, privValStateFile)
 	privValidator.Save()
 
