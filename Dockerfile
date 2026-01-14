@@ -39,7 +39,8 @@ WORKDIR /build/accumulate-lite-client-2/liteclient/proof/consolidated_governance
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o /build/govproof .
 
 # Build the txhash tool for G2 payload verification
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o /build/txhash ./cmd/txhash
+WORKDIR /build/accumulate-lite-client-2/liteclient/cmd/txhash
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o /build/txhash .
 WORKDIR /build
 
 # ═══════════════════════════════════════════════════════════════
