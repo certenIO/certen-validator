@@ -1,0 +1,179 @@
+# ═══════════════════════════════════════════════════════════════
+# Certen Protocol Independent Validator - Docker Compose
+# Single-node deployment configuration
+# ═══════════════════════════════════════════════════════════════
+
+services:
+  # ═══════════════════════════════════════════════════════════════
+  # PostgreSQL Database
+  # ═══════════════════════════════════════════════════════════════
+  postgres:
+    image: postgres:15-alpine
+    container_name: certen-postgres
+    ports:
+      - "5433:5432"  # External port 5433 to avoid conflict
+    environment:
+      POSTGRES_DB: certen
+      POSTGRES_USER: certen
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./pkg/database/migrations/001_initial_schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U certen -d certen"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+  # ═══════════════════════════════════════════════════════════════
+  # Redis Cache (Optional - for caching and rate limiting)
+  # ═══════════════════════════════════════════════════════════════
+  redis:
+    image: redis:7-alpine
+    container_name: certen-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  # ═══════════════════════════════════════════════════════════════
+  # Certen Validator Node
+  # ═══════════════════════════════════════════════════════════════
+  validator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: certen-validator
+    command: ["./validator"]
+    ports:
+      - "8086:8080"    # HTTP API
+      - "9086:9090"    # Prometheus Metrics
+      - "26666:26656"  # CometBFT P2P (external 26666)
+      - "26667:26657"  # CometBFT RPC (external 26667)
+    env_file:
+      - .env
+    environment:
+      # ─────────────────────────────────────────────────────────────
+      # Validator Identity
+      # ─────────────────────────────────────────────────────────────
+      VALIDATOR_ID: ${VALIDATOR_ID:-validator-1}
+      NETWORK_NAME: ${NETWORK_NAME:-testnet}
+
+      # ─────────────────────────────────────────────────────────────
+      # Database Configuration
+      # ─────────────────────────────────────────────────────────────
+      DATABASE_URL: postgres://certen:${POSTGRES_PASSWORD}@postgres:5432/certen?sslmode=disable
+      DATABASE_MAX_CONNS: 20
+      DATABASE_MIN_CONNS: 5
+
+      # ─────────────────────────────────────────────────────────────
+      # CometBFT Consensus
+      # ─────────────────────────────────────────────────────────────
+      COMETBFT_ENABLED: "true"
+      COMETBFT_MODE: validator
+      COMETBFT_CHAIN_ID: ${COMETBFT_CHAIN_ID:-certen-testnet}
+      COMETBFT_P2P_LADDR: tcp://0.0.0.0:26656
+      COMETBFT_RPC_LADDR: tcp://0.0.0.0:26657
+      COMETBFT_RPC_URL: http://127.0.0.1:26657
+
+      # Persistent peers (set via .env for testnet connection)
+      COMETBFT_P2P_PERSISTENT_PEERS: ${COMETBFT_P2P_PERSISTENT_PEERS:-}
+
+      # ─────────────────────────────────────────────────────────────
+      # Attestation Configuration
+      # ─────────────────────────────────────────────────────────────
+      ATTESTATION_PEERS: ${ATTESTATION_PEERS:-}
+      ATTESTATION_REQUIRED_COUNT: ${ATTESTATION_REQUIRED_COUNT:-3}
+      ATTESTATION_TIMEOUT: 30s
+
+      # ─────────────────────────────────────────────────────────────
+      # Accumulate Network
+      # ─────────────────────────────────────────────────────────────
+      ACCUMULATE_URL: ${ACCUMULATE_URL:?ACCUMULATE_URL is required}
+      ACCUMULATE_COMET_DN: ${ACCUMULATE_COMET_DN:-}
+      ACCUMULATE_COMET_BVN: ${ACCUMULATE_COMET_BVN:-}
+
+      # ─────────────────────────────────────────────────────────────
+      # Ethereum Network
+      # ─────────────────────────────────────────────────────────────
+      ETHEREUM_URL: ${ETHEREUM_URL:?ETHEREUM_URL is required}
+      ETH_CHAIN_ID: ${ETH_CHAIN_ID:-11155111}
+      ETH_PRIVATE_KEY: ${ETH_PRIVATE_KEY:?ETH_PRIVATE_KEY is required}
+
+      # ─────────────────────────────────────────────────────────────
+      # Contract Addresses (Sepolia defaults)
+      # ─────────────────────────────────────────────────────────────
+      CERTEN_CONTRACT_ADDRESS: ${CERTEN_CONTRACT_ADDRESS:-0xEb17eBd351D2e040a0cB3026a3D04BEc182d8b98}
+      CERTEN_ANCHOR_V3_ADDRESS: ${CERTEN_ANCHOR_V3_ADDRESS:-0xEb17eBd351D2e040a0cB3026a3D04BEc182d8b98}
+      BLS_ZK_VERIFIER_ADDRESS: ${BLS_ZK_VERIFIER_ADDRESS:-0x631B6444216b981561034655349F8a28962DcC5F}
+
+      # ─────────────────────────────────────────────────────────────
+      # BLS ZK Configuration
+      # ─────────────────────────────────────────────────────────────
+      BLS_ZK_TESTING_MODE: ${BLS_ZK_TESTING_MODE:-false}
+
+      # ─────────────────────────────────────────────────────────────
+      # Proof Cycle Write-back (optional)
+      # ─────────────────────────────────────────────────────────────
+      PROOF_CYCLE_WRITEBACK: ${PROOF_CYCLE_WRITEBACK:-false}
+
+    volumes:
+      - validator_data:/app/data
+      - validator_bft_keys:/app/bft-keys
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 1G
+
+# ═══════════════════════════════════════════════════════════════
+# Volumes
+# ═══════════════════════════════════════════════════════════════
+volumes:
+  postgres_data:
+    name: certen-postgres-data
+  redis_data:
+    name: certen-redis-data
+  validator_data:
+    name: certen-validator-data
+  validator_bft_keys:
+    name: certen-validator-keys
+
+# ═══════════════════════════════════════════════════════════════
+# Networks
+# ═══════════════════════════════════════════════════════════════
+networks:
+  default:
+    name: certen-network

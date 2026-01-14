@@ -1,0 +1,15 @@
+{
+  "id": 1,
+  "jsonrpc": "2.0",
+  "result": {
+    "count": 2,
+    "lastBlockTime": "2026-01-05T16:00:59Z",
+    "name": "main",
+    "recordType": "chain",
+    "state": [
+      null,
+      "782fc8fac9bae6dde20bb8d87e1d431cffc8163c93bf063941a0664b9d1bb5a7"
+    ],
+    "type": "transaction"
+  }
+}

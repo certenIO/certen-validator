@@ -1,0 +1,9 @@
+[
+  {
+    "timestamp": "2026-01-05T16:01:00.1552237Z",
+    "operation": "DOMAIN_REGISTER",
+    "subject": "accumulate_ed25519",
+    "result": "SUCCESS",
+    "hash": ""
+  }
+]

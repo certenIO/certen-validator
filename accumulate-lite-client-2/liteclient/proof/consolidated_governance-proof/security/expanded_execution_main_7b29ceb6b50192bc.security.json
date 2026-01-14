@@ -1,0 +1,10 @@
+{
+  "artifactId": "expanded_execution_main_7b29ceb6b50192bc",
+  "creationTime": "2026-01-05T16:01:00.2227693Z",
+  "integrityHash": "a39f93a49b478f47d7874a8548fa03c263298ac62a124339dec5d3db4ebbe8d3",
+  "verificationHash": "51d8e776288387ecdb32c832009a00f40c3d5409b79474f5f092bcc1a8936ebd",
+  "chainPosition": 4,
+  "custodyEvents": 4,
+  "securityLevel": "ENHANCED",
+  "auditEvents": 1
+}

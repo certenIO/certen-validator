@@ -1,0 +1,40 @@
+# Binaries
+*.exe
+validator
+govproof
+txhash
+
+# Environment files (contain secrets)
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Go
+vendor/
+
+# BLS ZK keys (generated, can be large)
+bls_zk_keys/
+
+# Data directories
+data/
+bft-keys/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Test artifacts
+test_results_*/
+coverage.out
+
+# Temporary files
+tmpclaude-*

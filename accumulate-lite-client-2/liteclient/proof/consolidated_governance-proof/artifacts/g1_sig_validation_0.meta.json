@@ -1,0 +1,13 @@
+{
+  "label": "g1_sig_validation_0",
+  "endpoint": "http://127.0.0.1:26660/v3",
+  "sha256_response_raw": "555790ec7c354b7aeaca722d6cfe9963b9ef5e6c3a0878cc69a93395e55a54b8",
+  "integrity_hash": "f0d3e738b827807f83af8094141dff04b97b6487737dee1cf2ee2d8b411f6b5e",
+  "verification_hash": "430487487791572484f328e081feec5b5e777e594d6969f2bbdaa712208365f0",
+  "ts_unix": 1767628860,
+  "security_level": "ENHANCED",
+  "custody_events": 14,
+  "audit_events": 1,
+  "verified_operations": 0,
+  "failed_operations": 0
+}

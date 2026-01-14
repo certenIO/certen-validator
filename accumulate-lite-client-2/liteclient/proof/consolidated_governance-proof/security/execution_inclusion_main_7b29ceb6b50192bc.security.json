@@ -1,0 +1,10 @@
+{
+  "artifactId": "execution_inclusion_main_7b29ceb6b50192bc",
+  "creationTime": "2026-01-05T16:01:00.1856424Z",
+  "integrityHash": "a39f93a49b478f47d7874a8548fa03c263298ac62a124339dec5d3db4ebbe8d3",
+  "verificationHash": "c6aff7738d31e1ee2f1837d020417c438f9f9f61c057837cf04a6e5534c7b7e9",
+  "chainPosition": 2,
+  "custodyEvents": 2,
+  "securityLevel": "ENHANCED",
+  "auditEvents": 1
+}

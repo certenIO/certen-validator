@@ -1,0 +1,17 @@
+{
+  "error": {
+    "code": -33404,
+    "data": {
+      "cause": {
+        "code": "notFound",
+        "codeID": 404,
+        "message": "Account.acc://test.acme.MainChain.ElementIndex.abc123def456 not found"
+      },
+      "code": "notFound",
+      "message": "get entry index: Account.acc://test.acme.MainChain.ElementIndex.abc123def456 not found"
+    },
+    "message": "get entry index: Account.acc://test.acme.MainChain.ElementIndex.abc123def456 not found"
+  },
+  "id": 1,
+  "jsonrpc": "2.0"
+}

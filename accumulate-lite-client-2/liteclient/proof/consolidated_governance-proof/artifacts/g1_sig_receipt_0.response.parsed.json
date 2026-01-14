@@ -1,0 +1,126 @@
+{
+  "id": 1,
+  "jsonrpc": "2.0",
+  "result": {
+    "entry": "2031cd5129f288c2f049d9a64ebab812f64204e9aeaaa05d9d99f3c20df7f99f",
+    "index": 33,
+    "lastBlockTime": "2026-01-05T16:00:59Z",
+    "name": "signature",
+    "receipt": {
+      "anchor": "8f8c53f0de082a9d22eb7adca730d351b04df0119b71680d6e69e50fbf02e9d5",
+      "end": "2031cd5129f288c2f049d9a64ebab812f64204e9aeaaa05d9d99f3c20df7f99f",
+      "entries": [
+        {
+          "hash": "add17bbece7fa5e4b4944a2d6227e6edfac6eb09a13a3ad9bd6a161a95632acc"
+        },
+        {
+          "hash": "962f479021eed4c56d594bd85b1122ea59b1f725253cd5c52b1095e650df280e"
+        },
+        {
+          "hash": "9f397a11c589aefa13b27171045dba76696dbd39fc7a96f4e25f0a261c852dbc",
+          "right": true
+        },
+        {
+          "hash": "468405d7207ed4756333c5010e7c412246b39da6b76997810463fcdeca70ee25",
+          "right": true
+        },
+        {
+          "hash": "924f28dc786ed8ed66106f3c96c6330ea1940234138aec1105357472abd5133f"
+        },
+        {
+          "hash": "83de0191a6ee911120d980f7798edd841fd3dfd9eff9d82c3cd89c9b13a797b4"
+        },
+        {
+          "hash": "832d91d17eb40551fed3ff66c849766112fa8e45cc52373a0b928dd99abc6bcf"
+        },
+        {
+          "hash": "a764dbc885a5a050448956d4874e4b9166f1773d7b49f8b87a6fe5cea1f787fe"
+        },
+        {
+          "hash": "c3cd5a7c630f97419213ca669cd01b8dc86ecd9365fcd20a8e96a1026ea9a070"
+        }
+      ],
+      "localBlock": 457920,
+      "localBlockTime": "2026-01-05T15:20:31Z",
+      "start": "2031cd5129f288c2f049d9a64ebab812f64204e9aeaaa05d9d99f3c20df7f99f"
+    },
+    "recordType": "chainEntry",
+    "state": [
+      null,
+      "0e8b5ddf6d0bcfd6d5c53bb0a7cee50a97889cff77667f8654e33db6b45ef3dc",
+      null,
+      null,
+      null,
+      "962f479021eed4c56d594bd85b1122ea59b1f725253cd5c52b1095e650df280e",
+      null
+    ],
+    "type": "transaction",
+    "value": {
+      "cause": {
+        "recordType": "range",
+        "start": 0,
+        "total": 0
+      },
+      "id": "acc://2031cd5129f288c2f049d9a64ebab812f64204e9aeaaa05d9d99f3c20df7f99f@certen-devnet-1.acme/book/1",
+      "message": {
+        "signature": {
+          "publicKey": "2f07a1a5681a8149d38c8fd08b8470dfc9ad87c8bb541ddd74342d088b29fcb7",
+          "signature": "793c8e51ac02d5ff90bfcc08e0e17e9e94655cd58a60203e52b0f106c2211a3b4e5aaaefb7819e0eb7bc574614b91b4eadeed81bb1f830bba5a4d5938f650400",
+          "signer": "acc://certen-devnet-1.acme/book/1",
+          "signerVersion": 1,
+          "timestamp": 1767626431886000,
+          "transactionHash": "7b29ceb6b50192bc71989b5c151e14eed4c2aed96f09e0f119f9465e9b1e7b0e",
+          "type": "ed25519"
+        },
+        "txID": "acc://7b29ceb6b50192bc71989b5c151e14eed4c2aed96f09e0f119f9465e9b1e7b0e@certen-devnet-1.acme/data",
+        "type": "signature"
+      },
+      "produced": {
+        "recordType": "range",
+        "records": [
+          {
+            "recordType": "txID",
+            "value": "acc://9b2dd9ef62ae548705ea4b5cf141ff3e16b3aff2a78d00abeabcefa83bed897d@certen-devnet-1.acme/data"
+          },
+          {
+            "recordType": "txID",
+            "value": "acc://abb573068ff9836c17e94e1a431c145e3a9698a897bc658ffcdc8bf2c6fab664@certen-devnet-1.acme/data"
+          },
+          {
+            "recordType": "txID",
+            "value": "acc://dd1e5fa332f9484f9ee598be7ba8e2d048a957ecd3a9ee7add75c7950160780d@certen-devnet-1.acme/data"
+          },
+          {
+            "recordType": "txID",
+            "value": "acc://9b2dd9ef62ae548705ea4b5cf141ff3e16b3aff2a78d00abeabcefa83bed897d@certen-devnet-1.acme/data"
+          },
+          {
+            "recordType": "txID",
+            "value": "acc://abb573068ff9836c17e94e1a431c145e3a9698a897bc658ffcdc8bf2c6fab664@certen-devnet-1.acme/data"
+          },
+          {
+            "recordType": "txID",
+            "value": "acc://dd1e5fa332f9484f9ee598be7ba8e2d048a957ecd3a9ee7add75c7950160780d@certen-devnet-1.acme/data"
+          }
+        ],
+        "start": 0,
+        "total": 6
+      },
+      "received": 457920,
+      "recordType": "message",
+      "result": {
+        "type": "unknown"
+      },
+      "sequence": {
+        "type": "sequenced"
+      },
+      "signatures": {
+        "recordType": "range",
+        "start": 0,
+        "total": 0
+      },
+      "status": "delivered",
+      "statusNo": 201
+    }
+  }
+}

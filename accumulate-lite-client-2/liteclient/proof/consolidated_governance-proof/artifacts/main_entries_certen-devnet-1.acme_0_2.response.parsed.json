@@ -1,0 +1,33 @@
+{
+  "id": 1,
+  "jsonrpc": "2.0",
+  "result": {
+    "lastBlockTime": "2026-01-05T16:00:59Z",
+    "recordType": "range",
+    "records": [
+      {
+        "entry": "e47e770aa2c1dac08ba506623749b77990e101c46fa0f66462368a71e0551646",
+        "index": 0,
+        "name": "main",
+        "recordType": "chainEntry",
+        "state": [
+          "e47e770aa2c1dac08ba506623749b77990e101c46fa0f66462368a71e0551646"
+        ],
+        "type": "transaction"
+      },
+      {
+        "entry": "291ef39cae48271c67de23178b622a865499a695ba458d98217b66169cde4033",
+        "index": 1,
+        "name": "main",
+        "recordType": "chainEntry",
+        "state": [
+          null,
+          "782fc8fac9bae6dde20bb8d87e1d431cffc8163c93bf063941a0664b9d1bb5a7"
+        ],
+        "type": "transaction"
+      }
+    ],
+    "start": 0,
+    "total": 2
+  }
+}

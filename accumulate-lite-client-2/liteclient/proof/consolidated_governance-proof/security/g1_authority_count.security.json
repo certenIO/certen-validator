@@ -1,0 +1,10 @@
+{
+  "artifactId": "g1_authority_count",
+  "creationTime": "2026-01-05T16:01:00.2602975Z",
+  "integrityHash": "dd7326cb53a23300816ae77aa90581f10e62fdb01cbe9772a02cc730fa934c4b",
+  "verificationHash": "e37b5dd13fd44d8a1d5cea4f3c45fa2b22a3803cc210a90d1868edc3ccccd6d8",
+  "chainPosition": 8,
+  "custodyEvents": 8,
+  "securityLevel": "ENHANCED",
+  "auditEvents": 1
+}

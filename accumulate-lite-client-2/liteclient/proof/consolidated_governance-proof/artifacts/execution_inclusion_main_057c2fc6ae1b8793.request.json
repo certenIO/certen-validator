@@ -1,0 +1,14 @@
+{
+  "id": 1,
+  "jsonrpc": "2.0",
+  "method": "query",
+  "params": {
+    "query": {
+      "entry": "057c2fc6ae1b8793a3f259705ee1b26f44e4ffed26ac0b897dc0fb733a19f116",
+      "includeReceipt": true,
+      "name": "main",
+      "queryType": "chain"
+    },
+    "scope": "acc://testtesttest10.acme/data1"
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "label": "execution_inclusion_main_abc123def456",
+  "endpoint": "http://127.0.0.1:26660/v3",
+  "sha256_response_raw": "1354c4340f40f6d164f7b317f2ecd880c2cf836e25074f341f97034b49bfcfbb",
+  "ts_unix": 1766540146
+}

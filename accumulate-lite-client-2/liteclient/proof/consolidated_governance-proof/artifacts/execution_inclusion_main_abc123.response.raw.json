@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","error":{"code":-33404,"message":"get entry index: Account.acc://test.acme.MainChain.ElementIndex.abc123 not found","data":{"message":"get entry index: Account.acc://test.acme.MainChain.ElementIndex.abc123 not found","code":"notFound","cause":{"message":"Account.acc://test.acme.MainChain.ElementIndex.abc123 not found","code":"notFound","codeID":404}}},"id":1}

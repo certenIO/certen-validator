@@ -1,0 +1,13 @@
+{
+  "label": "signature_chain_count_certen-devnet-1.acme",
+  "endpoint": "http://127.0.0.1:26660/v3",
+  "sha256_response_raw": "39f9c87e81d5ffcb45b15487c7d48c4f2daf772af0b765dfb9fb1e66540fe7b1",
+  "integrity_hash": "ef14e4f64ef7ceeebbfe5a470ffc43e767270fc9b695e2d7c2654b43287943ef",
+  "verification_hash": "a7b35a636f252ac5b3e0dee88c5b62f1f7e4b5178c582804af207606c8f482c3",
+  "ts_unix": 1767628860,
+  "security_level": "ENHANCED",
+  "custody_events": 7,
+  "audit_events": 1,
+  "verified_operations": 0,
+  "failed_operations": 0
+}

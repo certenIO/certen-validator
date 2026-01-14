@@ -1,0 +1,15 @@
+{
+  "id": 1,
+  "jsonrpc": "2.0",
+  "method": "query",
+  "params": {
+    "query": {
+      "entry": "2031cd5129f288c2f049d9a64ebab812f64204e9aeaaa05d9d99f3c20df7f99f",
+      "expand": false,
+      "includeReceipt": true,
+      "name": "signature",
+      "queryType": "chain"
+    },
+    "scope": "acc://certen-devnet-1.acme/book/1"
+  }
+}

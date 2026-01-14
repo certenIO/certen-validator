@@ -1,0 +1,45 @@
+{
+  "network": {
+    "v3_endpoint": "https://testnet.accumulatenetwork.io/v3",
+    "v2_endpoint": "https://testnet.accumulatenetwork.io/v2",
+    "timeout": "60s",
+    "max_retries": 5,
+    "retry_backoff": "2s"
+  },
+  "server": {
+    "address": "localhost",
+    "port": 8080,
+    "enable_cors": true,
+    "cors_origins": ["http://localhost:3000", "http://localhost:3001"]
+  },
+  "logging": {
+    "level": "debug",
+    "format": "text",
+    "output": "stdout",
+    "structured": false,
+    "enable_request_logging": true
+  },
+  "security": {
+    "enable_rate_limit": false,
+    "rate_limit_rpm": 1000,
+    "enable_validation": true,
+    "max_request_size": 10485760
+  },
+  "storage": {
+    "type": "memory",
+    "enable_cache": true,
+    "cache_ttl": "10m",
+    "max_cache_size": 10000
+  },
+  "development": {
+    "debug": true,
+    "enable_pprof": true,
+    "enable_metrics": true,
+    "test_accounts": [
+      "acc://RenatoDAP.acme",
+      "acc://DefiDevs.acme",
+      "acc://apollo.acme/tokens"
+    ],
+    "disable_proof_verification": false
+  }
+}

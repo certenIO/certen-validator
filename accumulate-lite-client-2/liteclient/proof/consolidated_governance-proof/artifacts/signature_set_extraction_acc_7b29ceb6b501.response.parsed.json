@@ -1,0 +1,204 @@
+{
+  "id": 1,
+  "jsonrpc": "2.0",
+  "result": {
+    "cause": {
+      "recordType": "range",
+      "records": [
+        {
+          "recordType": "txID",
+          "value": "acc://6a9e696d32be93f4db7b89a395c28e7a94ae81ee13faeda632a4d6de9689bbc5@certen-devnet-1.acme/book"
+        },
+        {
+          "recordType": "txID",
+          "value": "acc://abb573068ff9836c17e94e1a431c145e3a9698a897bc658ffcdc8bf2c6fab664@certen-devnet-1.acme/data"
+        }
+      ],
+      "start": 0,
+      "total": 2
+    },
+    "id": "acc://7b29ceb6b50192bc71989b5c151e14eed4c2aed96f09e0f119f9465e9b1e7b0e@certen-devnet-1.acme/data",
+    "lastBlockTime": "2026-01-05T16:00:59Z",
+    "message": {
+      "transaction": {
+        "body": {
+          "entry": {
+            "data": [
+              "7b226b696e64223a2243455254454e5f494e54454e54222c2276657273696f6e223a22312e30222c2270726f6f665f636c617373223a226f6e5f64656d616e64222c22696e74656e745f6964223a2237313531373562332d663532332d346436652d383661382d623839616162336136313565222c22637265617465645f6174223a22323032362d30312d30355431353a32303a33312e3838345a222c22696e74656e7454797065223a2263726f73735f636861696e5f7472616e73666572222c226465736372697074696f6e223a22455448207472616e73666572206f6e205365706f6c6961227d",
+              "7b2270726f746f636f6c223a2243455254454e222c2276657273696f6e223a22312e30222c226f7065726174696f6e47726f75704964223a2237313531373562332d663532332d346436652d383661382d623839616162336136313565222c226c656773223a5b7b226c65674964223a226c65672d31222c22636861696e223a22657468657265756d222c22636861696e4964223a31313135353131312c2266726f6d223a22307838423138424535454537423465316633334241643666356630663331353838463634463633413465222c22746f223a22307830323834314637466136326330643246373439386130376663316434413635416438384365453439222c22616d6f756e74576569223a223130303030303030303030222c22616e63686f72436f6e7472616374223a7b2261646472657373223a22307838333938443745423539346243633630386130323130636632303662333932643335456435333339222c2266756e6374696f6e53656c6563746f72223a22636f6d6d6974416e63686f7228627974657333322c627974657329227d7d5d7d",
+              "7b226f7267616e697a6174696f6e416469223a226163633a2f2f63657274656e2d6465766e65742d312e61636d65222c22617574686f72697a6174696f6e223a7b2272657175697265645f6b65795f626f6f6b223a226163633a2f2f63657274656e2d6465766e65742d312e61636d652f626f6f6b222c227369676e61747572655f7468726573686f6c64223a317d7d",
+              "7b226e6f6e6365223a2263657274656e5f31373637363236343331383834222c22637265617465645f6174223a313736373632363433312c22657870697265735f6174223a313736373633303033317d"
+            ],
+            "type": "doubleHash"
+          },
+          "type": "writeData"
+        },
+        "header": {
+          "initiator": "50fb81b56bbca0c5c960a30e6b9205898ab2931f9e3c43b7d4f61ee1481c222d",
+          "memo": "CERTEN_INTENT",
+          "metadata": "01025f00",
+          "principal": "acc://certen-devnet-1.acme/data"
+        }
+      },
+      "type": "transaction"
+    },
+    "produced": {
+      "recordType": "range",
+      "start": 0,
+      "total": 0
+    },
+    "recordType": "message",
+    "result": {
+      "accountID": "91f090bc0a25cc51d9e93a2a371d4a8d6051b1e13299a8cd42c3d40bbfd336c0",
+      "accountUrl": "acc://certen-devnet-1.acme/data",
+      "entryHash": "4229bde130094febd1127ff10b0a38bca591ed782714cb82478f16472c9e9696",
+      "type": "writeData"
+    },
+    "sequence": {
+      "type": "sequenced"
+    },
+    "signatures": {
+      "recordType": "range",
+      "records": [
+        {
+          "account": {
+            "authorities": [
+              {
+                "url": "acc://certen-devnet-1.acme/book"
+              }
+            ],
+            "pageCount": 1,
+            "type": "keyBook",
+            "url": "acc://certen-devnet-1.acme/book"
+          },
+          "recordType": "signatureSet",
+          "signatures": {
+            "recordType": "range",
+            "records": [
+              {
+                "historical": true,
+                "id": "acc://6a9e696d32be93f4db7b89a395c28e7a94ae81ee13faeda632a4d6de9689bbc5@certen-devnet-1.acme/book",
+                "message": {
+                  "authority": "acc://certen-devnet-1.acme/book",
+                  "cause": "acc://abb573068ff9836c17e94e1a431c145e3a9698a897bc658ffcdc8bf2c6fab664@certen-devnet-1.acme/data",
+                  "txID": "acc://7b29ceb6b50192bc71989b5c151e14eed4c2aed96f09e0f119f9465e9b1e7b0e@certen-devnet-1.acme/data",
+                  "type": "signatureRequest"
+                },
+                "recordType": "message"
+              }
+            ],
+            "start": 0,
+            "total": 1
+          }
+        },
+        {
+          "account": {
+            "acceptThreshold": 1,
+            "creditBalance": 9995290,
+            "keyBook": "acc://certen-devnet-1.acme/book",
+            "keys": [
+              {
+                "lastUsedOn": 1767626431886000,
+                "publicKey": "549e7ac1e763aa247b13323856395536907017f936a4d9d293889f7eeaf0755b",
+                "publicKeyHash": "549e7ac1e763aa247b13323856395536907017f936a4d9d293889f7eeaf0755b"
+              }
+            ],
+            "threshold": 1,
+            "type": "keyPage",
+            "url": "acc://certen-devnet-1.acme/book/1",
+            "version": 1
+          },
+          "recordType": "signatureSet",
+          "signatures": {
+            "recordType": "range",
+            "records": [
+              {
+                "historical": true,
+                "id": "acc://2031cd5129f288c2f049d9a64ebab812f64204e9aeaaa05d9d99f3c20df7f99f@certen-devnet-1.acme/book/1",
+                "message": {
+                  "signature": {
+                    "publicKey": "2f07a1a5681a8149d38c8fd08b8470dfc9ad87c8bb541ddd74342d088b29fcb7",
+                    "signature": "793c8e51ac02d5ff90bfcc08e0e17e9e94655cd58a60203e52b0f106c2211a3b4e5aaaefb7819e0eb7bc574614b91b4eadeed81bb1f830bba5a4d5938f650400",
+                    "signer": "acc://certen-devnet-1.acme/book/1",
+                    "signerVersion": 1,
+                    "timestamp": 1767626431886000,
+                    "transactionHash": "7b29ceb6b50192bc71989b5c151e14eed4c2aed96f09e0f119f9465e9b1e7b0e",
+                    "type": "ed25519"
+                  },
+                  "txID": "acc://7b29ceb6b50192bc71989b5c151e14eed4c2aed96f09e0f119f9465e9b1e7b0e@certen-devnet-1.acme/data",
+                  "type": "signature"
+                },
+                "recordType": "message"
+              }
+            ],
+            "start": 0,
+            "total": 1
+          }
+        },
+        {
+          "account": {
+            "authorities": [
+              {
+                "url": "acc://certen-devnet-1.acme/book"
+              }
+            ],
+            "type": "dataAccount",
+            "url": "acc://certen-devnet-1.acme/data"
+          },
+          "recordType": "signatureSet",
+          "signatures": {
+            "recordType": "range",
+            "records": [
+              {
+                "historical": true,
+                "id": "acc://abb573068ff9836c17e94e1a431c145e3a9698a897bc658ffcdc8bf2c6fab664@certen-devnet-1.acme/data",
+                "message": {
+                  "authority": "acc://certen-devnet-1.acme/data",
+                  "cause": "acc://2031cd5129f288c2f049d9a64ebab812f64204e9aeaaa05d9d99f3c20df7f99f@certen-devnet-1.acme/book/1",
+                  "txID": "acc://7b29ceb6b50192bc71989b5c151e14eed4c2aed96f09e0f119f9465e9b1e7b0e@certen-devnet-1.acme/data",
+                  "type": "signatureRequest"
+                },
+                "recordType": "message"
+              },
+              {
+                "historical": true,
+                "id": "acc://9b2dd9ef62ae548705ea4b5cf141ff3e16b3aff2a78d00abeabcefa83bed897d@certen-devnet-1.acme/data",
+                "message": {
+                  "cause": "acc://2031cd5129f288c2f049d9a64ebab812f64204e9aeaaa05d9d99f3c20df7f99f@certen-devnet-1.acme/book/1",
+                  "initiator": true,
+                  "paid": 40,
+                  "payer": "acc://certen-devnet-1.acme/book/1",
+                  "txID": "acc://7b29ceb6b50192bc71989b5c151e14eed4c2aed96f09e0f119f9465e9b1e7b0e@certen-devnet-1.acme/data",
+                  "type": "creditPayment"
+                },
+                "recordType": "message"
+              },
+              {
+                "historical": true,
+                "id": "acc://dd1e5fa332f9484f9ee598be7ba8e2d048a957ecd3a9ee7add75c7950160780d@certen-devnet-1.acme/data",
+                "message": {
+                  "signature": {
+                    "authority": "acc://certen-devnet-1.acme/book",
+                    "cause": "acc://2031cd5129f288c2f049d9a64ebab812f64204e9aeaaa05d9d99f3c20df7f99f@certen-devnet-1.acme/book/1",
+                    "origin": "acc://certen-devnet-1.acme/book/1",
+                    "txID": "acc://7b29ceb6b50192bc71989b5c151e14eed4c2aed96f09e0f119f9465e9b1e7b0e@certen-devnet-1.acme/data",
+                    "type": "authority"
+                  },
+                  "txID": "acc://7b29ceb6b50192bc71989b5c151e14eed4c2aed96f09e0f119f9465e9b1e7b0e@certen-devnet-1.acme/data",
+                  "type": "signature"
+                },
+                "recordType": "message"
+              }
+            ],
+            "start": 0,
+            "total": 3
+          }
+        }
+      ],
+      "start": 0,
+      "total": 3
+    },
+    "status": "delivered",
+    "statusNo": 201
+  }
+}

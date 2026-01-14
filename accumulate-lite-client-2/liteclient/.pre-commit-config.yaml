@@ -1,0 +1,57 @@
+# .pre-commit-config.yaml
+# Pre-commit hooks for Accumulate Lite Client
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+        args: ['--maxkb=1000']
+      - id: check-case-conflict
+      - id: check-merge-conflict
+      - id: detect-private-key
+
+  - repo: https://github.com/dnephin/pre-commit-golang
+    rev: v0.5.1
+    hooks:
+      - id: go-fmt
+      - id: go-vet
+      - id: go-imports
+      - id: go-cyclo
+        args: [-over=15]
+      - id: go-mod-tidy
+      - id: go-unit-tests
+        args: [-tags=unit]
+
+  - repo: local
+    hooks:
+      - id: no-mocks
+        name: Check for mock usage
+        entry: bash -c 'if grep -r "Mock" --include="*.go" --exclude-dir=vendor . | grep -v "//go:build mock_disabled"; then echo "Error: Mock found without mock_disabled tag!"; exit 1; fi'
+        language: system
+        files: '\.go$'
+        exclude: '^vendor/'
+
+      - id: build-tags
+        name: Check build tags
+        entry: bash -c 'for f in $(find . -name "*_test.go" -not -path "./vendor/*"); do if grep -q "Mock" "$f" && ! grep -q "//go:build mock_disabled\|// +build mock_disabled" "$f"; then echo "Error: Test with mocks missing build tag: $f"; exit 1; fi; done'
+        language: system
+        files: '_test\.go$'
+        exclude: '^vendor/'
+
+      - id: crystal-step1
+        name: Verify Crystal Step 1
+        entry: bash -c 'go build -o /tmp/crystal-step1 ./proof/crystal/cmd/crystal-step1 && /tmp/crystal-step1 -account "acc://RenatoDAP.acme"'
+        language: system
+        pass_filenames: false
+        files: '^proof/crystal/'
+
+      - id: golangci-lint
+        name: golangci-lint
+        entry: golangci-lint run --fix
+        language: system
+        files: '\.go$'
+        exclude: '^vendor/'

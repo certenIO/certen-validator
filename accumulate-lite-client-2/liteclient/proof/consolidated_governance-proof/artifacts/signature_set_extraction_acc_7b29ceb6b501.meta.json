@@ -1,0 +1,13 @@
+{
+  "label": "signature_set_extraction_acc_7b29ceb6b501",
+  "endpoint": "http://127.0.0.1:26660/v3",
+  "sha256_response_raw": "d855d5a10724dc03ac5036883b369928071d4826c454f61d2d457e94c951e1ea",
+  "integrity_hash": "5f1049c476141e688083bf027c19fd20afc298832d503fceda609ee48bc1dc53",
+  "verification_hash": "563b181d15bfd1036b52eca92535573d5f9672012f50f82bf9754f06eaf29007",
+  "ts_unix": 1767628860,
+  "security_level": "ENHANCED",
+  "custody_events": 12,
+  "audit_events": 1,
+  "verified_operations": 0,
+  "failed_operations": 0
+}

@@ -1,0 +1,13 @@
+{
+  "label": "g1_authority_count",
+  "endpoint": "http://127.0.0.1:26660/v3",
+  "sha256_response_raw": "af731c69ba4b8912eb3d375f0f5b6a49b8bb4ae5f532fe9d9c84508797738b54",
+  "integrity_hash": "dd7326cb53a23300816ae77aa90581f10e62fdb01cbe9772a02cc730fa934c4b",
+  "verification_hash": "e37b5dd13fd44d8a1d5cea4f3c45fa2b22a3803cc210a90d1868edc3ccccd6d8",
+  "ts_unix": 1767628860,
+  "security_level": "ENHANCED",
+  "custody_events": 8,
+  "audit_events": 1,
+  "verified_operations": 0,
+  "failed_operations": 0
+}

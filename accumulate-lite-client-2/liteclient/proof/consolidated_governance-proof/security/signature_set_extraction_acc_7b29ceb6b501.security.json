@@ -1,0 +1,10 @@
+{
+  "artifactId": "signature_set_extraction_acc_7b29ceb6b501",
+  "creationTime": "2026-01-05T16:01:00.3593315Z",
+  "integrityHash": "5f1049c476141e688083bf027c19fd20afc298832d503fceda609ee48bc1dc53",
+  "verificationHash": "563b181d15bfd1036b52eca92535573d5f9672012f50f82bf9754f06eaf29007",
+  "chainPosition": 12,
+  "custodyEvents": 12,
+  "securityLevel": "ENHANCED",
+  "auditEvents": 1
+}

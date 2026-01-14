@@ -1,0 +1,59 @@
+{
+  "id": 1,
+  "jsonrpc": "2.0",
+  "result": {
+    "cause": {
+      "recordType": "range",
+      "start": 0,
+      "total": 0
+    },
+    "id": "acc://2031cd5129f288c2f049d9a64ebab812f64204e9aeaaa05d9d99f3c20df7f99f@certen-devnet-1.acme/book/1",
+    "lastBlockTime": "2026-01-05T16:00:59Z",
+    "message": {
+      "signature": {
+        "publicKey": "2f07a1a5681a8149d38c8fd08b8470dfc9ad87c8bb541ddd74342d088b29fcb7",
+        "signature": "793c8e51ac02d5ff90bfcc08e0e17e9e94655cd58a60203e52b0f106c2211a3b4e5aaaefb7819e0eb7bc574614b91b4eadeed81bb1f830bba5a4d5938f650400",
+        "signer": "acc://certen-devnet-1.acme/book/1",
+        "signerVersion": 1,
+        "timestamp": 1767626431886000,
+        "transactionHash": "7b29ceb6b50192bc71989b5c151e14eed4c2aed96f09e0f119f9465e9b1e7b0e",
+        "type": "ed25519"
+      },
+      "txID": "acc://7b29ceb6b50192bc71989b5c151e14eed4c2aed96f09e0f119f9465e9b1e7b0e@certen-devnet-1.acme/data",
+      "type": "signature"
+    },
+    "produced": {
+      "recordType": "range",
+      "records": [
+        {
+          "recordType": "txID",
+          "value": "acc://9b2dd9ef62ae548705ea4b5cf141ff3e16b3aff2a78d00abeabcefa83bed897d@certen-devnet-1.acme/data"
+        },
+        {
+          "recordType": "txID",
+          "value": "acc://abb573068ff9836c17e94e1a431c145e3a9698a897bc658ffcdc8bf2c6fab664@certen-devnet-1.acme/data"
+        },
+        {
+          "recordType": "txID",
+          "value": "acc://dd1e5fa332f9484f9ee598be7ba8e2d048a957ecd3a9ee7add75c7950160780d@certen-devnet-1.acme/data"
+        }
+      ],
+      "start": 0,
+      "total": 6
+    },
+    "recordType": "message",
+    "result": {
+      "type": "unknown"
+    },
+    "sequence": {
+      "type": "sequenced"
+    },
+    "signatures": {
+      "recordType": "range",
+      "start": 0,
+      "total": 0
+    },
+    "status": "delivered",
+    "statusNo": 201
+  }
+}

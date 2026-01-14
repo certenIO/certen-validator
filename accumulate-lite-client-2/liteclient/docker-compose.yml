@@ -1,0 +1,137 @@
+# Docker Compose for Accumulate Lite Client Development and Deployment
+version: '3.8'
+
+services:
+  # Main lite client service
+  liteclient:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - LITECLIENT_CONFIG_FILE=/etc/liteclient/config.json
+      - LITECLIENT_LOG_LEVEL=info
+      - LITECLIENT_DEBUG=false
+    volumes:
+      - ./config/production.json:/etc/liteclient/config.json:ro
+      - liteclient_data:/data
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/liteclient", "--health-check"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - liteclient_network
+
+  # Development version with hot reload
+  liteclient-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    ports:
+      - "8081:8080"
+    environment:
+      - LITECLIENT_CONFIG_FILE=/etc/liteclient/config.json
+      - LITECLIENT_LOG_LEVEL=debug
+      - LITECLIENT_DEBUG=true
+      - LITECLIENT_ENABLE_PPROF=true
+    volumes:
+      - ./config/development.json:/etc/liteclient/config.json:ro
+      - ./:/app
+      - liteclient_dev_data:/data
+    profiles:
+      - dev
+    networks:
+      - liteclient_network
+
+  # Redis for caching (optional)
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    profiles:
+      - cache
+    networks:
+      - liteclient_network
+
+  # PostgreSQL for persistent storage (optional)
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_DB=liteclient
+      - POSTGRES_USER=liteclient
+      - POSTGRES_PASSWORD=liteclient_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./storage/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U liteclient"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    profiles:
+      - postgres
+    networks:
+      - liteclient_network
+
+  # Prometheus for metrics collection (optional)
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    profiles:
+      - monitoring
+    networks:
+      - liteclient_network
+
+  # Grafana for metrics visualization (optional)
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    profiles:
+      - monitoring
+    networks:
+      - liteclient_network
+
+networks:
+  liteclient_network:
+    driver: bridge
+
+volumes:
+  liteclient_data:
+  liteclient_dev_data:
+  redis_data:
+  postgres_data:
+  prometheus_data:
+  grafana_data:

@@ -1,0 +1,45 @@
+{
+  "network": {
+    "v3_endpoint": "https://mainnet.accumulatenetwork.io/v3",
+    "v2_endpoint": "https://mainnet.accumulatenetwork.io/v2",
+    "timeout": "30s",
+    "max_retries": 3,
+    "retry_backoff": "1s"
+  },
+  "server": {
+    "address": "0.0.0.0",
+    "port": 8080,
+    "read_timeout": "30s",
+    "write_timeout": "30s",
+    "enable_cors": true,
+    "cors_origins": []
+  },
+  "logging": {
+    "level": "info",
+    "format": "json",
+    "output": "stdout",
+    "structured": true,
+    "enable_request_logging": true
+  },
+  "security": {
+    "enable_rate_limit": true,
+    "rate_limit_rpm": 100,
+    "enable_validation": true,
+    "max_request_size": 1048576,
+    "allowed_account_patterns": ["acc://*"]
+  },
+  "storage": {
+    "type": "sqlite",
+    "connection_string": "/data/liteclient.db",
+    "enable_cache": true,
+    "cache_ttl": "5m",
+    "max_cache_size": 1000
+  },
+  "development": {
+    "debug": false,
+    "enable_pprof": false,
+    "enable_metrics": true,
+    "test_accounts": [],
+    "disable_proof_verification": false
+  }
+}

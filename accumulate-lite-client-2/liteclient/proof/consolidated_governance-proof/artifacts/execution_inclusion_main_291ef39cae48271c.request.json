@@ -1,0 +1,14 @@
+{
+  "id": 1,
+  "jsonrpc": "2.0",
+  "method": "query",
+  "params": {
+    "query": {
+      "entry": "291ef39cae48271c67de23178b622a865499a695ba458d98217b66169cde4033",
+      "includeReceipt": true,
+      "name": "main",
+      "queryType": "chain"
+    },
+    "scope": "acc://certen-devnet-1.acme/data"
+  }
+}

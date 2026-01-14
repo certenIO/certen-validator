@@ -1,0 +1,10 @@
+{
+  "artifactId": "g1_sig_receipt_0",
+  "creationTime": "2026-01-05T16:01:00.4174145Z",
+  "integrityHash": "04d4fcc613773c00a5c42b1377523b0d2de762e8d6a5346d9791cfa45ce2b112",
+  "verificationHash": "bda8950c03ec9de5c10fe9f640ccd7be4ec39de306e680a45c169098c0961327",
+  "chainPosition": 16,
+  "custodyEvents": 16,
+  "securityLevel": "ENHANCED",
+  "auditEvents": 1
+}

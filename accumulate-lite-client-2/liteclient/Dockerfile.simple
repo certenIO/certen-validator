@@ -1,0 +1,26 @@
+# Build stage
+FROM golang:1.21-alpine AS builder
+
+WORKDIR /app
+
+# Copy source
+COPY cmd/crystal-api-simple/main.go ./
+
+# Build
+RUN go build -o crystal-api main.go
+
+# Runtime stage
+FROM alpine:latest
+
+RUN apk add --no-cache ca-certificates
+
+WORKDIR /app
+
+# Copy binary
+COPY --from=builder /app/crystal-api .
+
+# Expose port
+EXPOSE 8080
+
+# Run
+CMD ["./crystal-api"]

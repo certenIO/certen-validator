@@ -1,0 +1,15 @@
+{
+  "id": 1,
+  "jsonrpc": "2.0",
+  "result": {
+    "count": 3,
+    "lastBlockTime": "2026-01-05T16:00:59Z",
+    "name": "signature",
+    "recordType": "chain",
+    "state": [
+      "2a7349b76fcb44d13a7b349427fe1af12e1b51e04abefa119a5d76b2e313ca00",
+      "27735a4bef5f1c86a8de3274a54fec6107251a980dff099a72a1c2527cde3b0b"
+    ],
+    "type": "transaction"
+  }
+}

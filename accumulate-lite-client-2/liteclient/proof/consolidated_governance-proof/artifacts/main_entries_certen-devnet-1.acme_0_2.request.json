@@ -1,0 +1,20 @@
+{
+  "id": 1,
+  "jsonrpc": "2.0",
+  "method": "query",
+  "params": {
+    "query": {
+      "expand": true,
+      "includeReceipt": {
+        "forAny": true
+      },
+      "name": "main",
+      "queryType": "chain",
+      "range": {
+        "count": 2,
+        "start": 0
+      }
+    },
+    "scope": "acc://certen-devnet-1.acme"
+  }
+}

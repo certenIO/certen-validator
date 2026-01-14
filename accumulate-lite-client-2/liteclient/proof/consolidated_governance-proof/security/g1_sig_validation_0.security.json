@@ -1,0 +1,10 @@
+{
+  "artifactId": "g1_sig_validation_0",
+  "creationTime": "2026-01-05T16:01:00.3881656Z",
+  "integrityHash": "f0d3e738b827807f83af8094141dff04b97b6487737dee1cf2ee2d8b411f6b5e",
+  "verificationHash": "430487487791572484f328e081feec5b5e777e594d6969f2bbdaa712208365f0",
+  "chainPosition": 14,
+  "custodyEvents": 14,
+  "securityLevel": "ENHANCED",
+  "auditEvents": 1
+}

@@ -1,0 +1,13 @@
+{
+  "label": "main_entries_certen-devnet-1.acme_0_2",
+  "endpoint": "http://127.0.0.1:26660/v3",
+  "sha256_response_raw": "9bad9a12fa19d310d050dab698510391c5a9369f5ba599c798a5dbd396d0ac1d",
+  "integrity_hash": "7c3b12238eb9efdf3112f9c6764818f52d942f56e72bd1b9573cac4fd9215485",
+  "verification_hash": "0712f722909e88e12ffc33e887f2896f1a7c49f0939a44ae4a1fa5a99bd964eb",
+  "ts_unix": 1767628860,
+  "security_level": "ENHANCED",
+  "custody_events": 10,
+  "audit_events": 1,
+  "verified_operations": 0,
+  "failed_operations": 0
+}

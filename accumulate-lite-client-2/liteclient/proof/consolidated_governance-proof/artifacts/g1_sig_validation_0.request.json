@@ -1,0 +1,15 @@
+{
+  "id": 1,
+  "jsonrpc": "2.0",
+  "method": "query",
+  "params": {
+    "query": {
+      "expand": true,
+      "includeReceipt": {
+        "forAny": true
+      },
+      "queryType": "default"
+    },
+    "scope": "acc://2031cd5129f288c2f049d9a64ebab812f64204e9aeaaa05d9d99f3c20df7f99f@certen-devnet-1.acme/book/1"
+  }
+}

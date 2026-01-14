@@ -1,0 +1,10 @@
+{
+  "artifactId": "main_entries_certen-devnet-1.acme_0_2",
+  "creationTime": "2026-01-05T16:01:00.3012271Z",
+  "integrityHash": "7c3b12238eb9efdf3112f9c6764818f52d942f56e72bd1b9573cac4fd9215485",
+  "verificationHash": "0712f722909e88e12ffc33e887f2896f1a7c49f0939a44ae4a1fa5a99bd964eb",
+  "chainPosition": 10,
+  "custodyEvents": 10,
+  "securityLevel": "ENHANCED",
+  "auditEvents": 1
+}

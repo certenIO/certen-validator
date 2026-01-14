@@ -1,0 +1,65 @@
+{
+    "meta": {
+        "name": "Missing Anchors Failure", 
+        "description": "Test fixture representing missing BVN/DN anchor scenario from real network test",
+        "version": "1.0",
+        "created_at": "2025-01-15T10:30:00Z",
+        "created_by": "test-consolidation",
+        "network_state": "mainnet",
+        "categories": ["failure", "missing-component"],
+        "tags": ["strategy-f", "missing-anchors", "api-limitation"]
+    },
+    "input": {
+        "account_url": "acc://RenatoDAP.acme", 
+        "strategy": "strategy-f",
+        "options": {
+            "strict_mode": false,
+            "timeout_seconds": 30
+        }
+    },
+    "proof_bundle": {
+        "schema_version": "strategy-f-1.0",
+        "account_url": "acc://RenatoDAP.acme",
+        "proven_at": "2025-01-15T10:30:00Z",
+        "account_state": {
+            "type": "account",
+            "data": {"url": "acc://RenatoDAP.acme", "type": "identity"},
+            "chain_id": "test_chain_id"
+        },
+        "account_chains": [
+            {
+                "type": "chain",
+                "data": {"name": "main", "type": "transaction"},
+                "entries": [{"hash": "test_entry_hash"}]
+            }
+        ],
+        "bvn_anchor": null,
+        "dn_anchor": null, 
+        "dn_keybook": null,
+        "source_endpoints": ["v3:https://mainnet.accumulate.io/v3"],
+        "healing_actions": [],
+        "checksum": "sha256:missing_anchors_test_bundle"
+    },
+    "verification": {
+        "valid": false,
+        "account_to_bvn": false,
+        "bvn_to_dn": false,
+        "dn_operators": false,
+        "missing_components": ["BVN_ANCHOR", "DN_ANCHOR", "DN_KEYBOOK"],
+        "error": "BVN anchor missing",
+        "failure_reasons": [
+            "BVN anchor unavailable: BVN anchor query failed: request failed: load state: Account.acc://boomdogg.acme/anchor.Main not found",
+            "DN anchor unavailable: DN anchor query failed: request failed: load state: Account.acc://directory/anchor.Main not found",
+            "DN keybook unavailable: DN keybook query failed: request failed: load state: Account.acc://directory/keybook.Main not found"
+        ]
+    },
+    "provenance": {
+        "source_endpoints": ["https://mainnet.accumulate.io/v3"],
+        "capture_method": "real-network-failure",
+        "failure_cause": "missing_network_infrastructure"
+    },
+    "integrity": {
+        "fixture_checksum": "sha256:test_fixture_missing_anchors_001",
+        "bundle_checksum": "sha256:missing_anchors_test_bundle"
+    }
+}

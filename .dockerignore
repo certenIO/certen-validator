@@ -1,0 +1,41 @@
+# Binaries
+*.exe
+validator
+govproof
+txhash
+
+# Git
+.git
+.gitignore
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# Test files
+*_test.go
+test/
+tests/
+
+# Documentation
+*.md
+docs/
+implementation-planning-doc/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Build artifacts
+*.log
+*.tmp
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Go
+vendor/
