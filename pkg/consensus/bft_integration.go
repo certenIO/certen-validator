@@ -1455,7 +1455,7 @@ func NewCertenApplicationWithDB(engine *RealCometBFTEngine, cfg *config.Config, 
 		validator:        nil, // Will be set via SetValidatorRef
 		cmtDB:            cmtDB,
 		ledgerStore:      ledgerStore,
-		chainID:          fmt.Sprintf("certen-validator-%s", validatorID),
+		chainID:          getChainIDFromEnv(), // Use consistent chainID across all validators
 		executorVersion:  Version, // Set from package-level Version variable (can be overridden at build time)
 		upstreamVersions: []ledger.UpstreamExecutor{
 			// Accumulate upstream executor - version populated when lite client connects
@@ -2302,8 +2302,14 @@ func (engine *RealCometBFTEngine) createGenesisDocument() (*cmttypes.GenesisDoc,
 	// Use deterministic genesis time
 	deterministicGenesisTime := time.Date(2025, 11, 20, 12, 0, 0, 0, time.UTC)
 
+	// Get chainID from environment, with consistent default for all validators
+	chainID := os.Getenv("COMETBFT_CHAIN_ID")
+	if chainID == "" {
+		chainID = "certen-testnet" // Default chain ID for the testnet
+	}
+
 	genesisDoc := &cmttypes.GenesisDoc{
-		ChainID:         "certen-bft-unified",
+		ChainID:         chainID,
 		GenesisTime:     deterministicGenesisTime,
 		InitialHeight:   1,
 		ConsensusParams: cmttypes.DefaultConsensusParams(),
@@ -2313,6 +2319,16 @@ func (engine *RealCometBFTEngine) createGenesisDocument() (*cmttypes.GenesisDoc,
 	}
 
 	return genesisDoc, nil
+}
+
+// getChainIDFromEnv returns the consistent chain ID from environment variable
+// All validators MUST use the same chainID to participate in the same consensus network
+func getChainIDFromEnv() string {
+	chainID := os.Getenv("COMETBFT_CHAIN_ID")
+	if chainID == "" {
+		chainID = "certen-testnet" // Default chain ID
+	}
+	return chainID
 }
 
 // SubmitProofVerification submits a proof verification request via real CometBFT
