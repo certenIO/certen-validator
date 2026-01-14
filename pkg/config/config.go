@@ -13,7 +13,10 @@ type Config struct {
 	// Network Configuration
 	AccumulateURL      string
 	AccumulateCometDN  string // CometBFT endpoint for DN (e.g., http://127.0.0.1:26657)
-	AccumulateCometBVN string // CometBFT endpoint for BVN (e.g., http://127.0.0.1:26757)
+	AccumulateCometBVN  string // CometBFT endpoint for BVN (e.g., http://127.0.0.1:26757) - legacy single BVN
+	AccumulateCometBVN0 string // CometBFT endpoint for BVN0
+	AccumulateCometBVN1 string // CometBFT endpoint for BVN1
+	AccumulateCometBVN2 string // CometBFT endpoint for BVN2
 	EthereumURL        string
 	EthChainID         int64
 
@@ -103,7 +106,10 @@ func Load() (*Config, error) {
 		// Network Configuration - REQUIRED, no defaults for production security
 		AccumulateURL:      getEnv("ACCUMULATE_URL", ""),
 		AccumulateCometDN:  getEnv("ACCUMULATE_COMET_DN", ""),  // DN CometBFT for L1-L3 proofs (optional, enables real proofs)
-		AccumulateCometBVN: getEnv("ACCUMULATE_COMET_BVN", ""), // BVN CometBFT for L1-L3 proofs (optional, enables real proofs)
+		AccumulateCometBVN:  getEnv("ACCUMULATE_COMET_BVN", ""),  // BVN CometBFT for L1-L3 proofs (legacy single BVN)
+		AccumulateCometBVN0: getEnv("ACCUMULATE_COMET_BVN0", ""), // BVN0 CometBFT endpoint
+		AccumulateCometBVN1: getEnv("ACCUMULATE_COMET_BVN1", ""), // BVN1 CometBFT endpoint
+		AccumulateCometBVN2: getEnv("ACCUMULATE_COMET_BVN2", ""), // BVN2 CometBFT endpoint
 		EthereumURL:        getEnv("ETHEREUM_URL", ""),
 		EthChainID:         getEnvInt64("ETH_CHAIN_ID", 11155111),
 
