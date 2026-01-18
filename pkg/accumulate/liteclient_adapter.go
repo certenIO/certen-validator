@@ -165,20 +165,24 @@ func (l *LiteClientAdapter) isCertenTransaction(entry BlockEntry) bool {
 		entryType = t
 	}
 
-	// Debug: Check for account field which indicates user transactions
+	// Debug: Log ALL accounts to see what we're getting
 	if account, ok := entry.Data["account"].(string); ok {
-		if strings.Contains(account, "certen") {
-			log.Printf("🔍 [CERTEN-CHECK] Found certen account entry: %s, type=%s", account, entryType)
-			// Log the keys at various levels to understand structure
-			log.Printf("🔍 [CERTEN-CHECK] Entry data keys: %v", getKeys(entry.Data))
-			if value, ok := entry.Data["value"].(map[string]interface{}); ok {
-				log.Printf("🔍 [CERTEN-CHECK] Entry.value keys: %v", getKeys(value))
-				if message, ok := value["message"].(map[string]interface{}); ok {
-					log.Printf("🔍 [CERTEN-CHECK] Entry.value.message keys: %v", getKeys(message))
-					if tx, ok := message["transaction"].(map[string]interface{}); ok {
-						log.Printf("🔍 [CERTEN-CHECK] Entry.value.message.transaction keys: %v", getKeys(tx))
-						if header, ok := tx["header"].(map[string]interface{}); ok {
-							log.Printf("🔍 [CERTEN-CHECK] Entry.value.message.transaction.header: %v", header)
+		// Only log non-anchor accounts
+		if !strings.Contains(account, "/anchors") {
+			log.Printf("🔍 [ENTRY-ACCOUNT] Found entry account: %s, type=%s", account, entryType)
+
+			// If it's a certen account, log full structure
+			if strings.Contains(account, "certen") {
+				log.Printf("🔍 [CERTEN-CHECK] Entry data keys: %v", getKeys(entry.Data))
+				if value, ok := entry.Data["value"].(map[string]interface{}); ok {
+					log.Printf("🔍 [CERTEN-CHECK] Entry.value keys: %v", getKeys(value))
+					if message, ok := value["message"].(map[string]interface{}); ok {
+						log.Printf("🔍 [CERTEN-CHECK] Entry.value.message keys: %v", getKeys(message))
+						if tx, ok := message["transaction"].(map[string]interface{}); ok {
+							log.Printf("🔍 [CERTEN-CHECK] Entry.value.message.transaction keys: %v", getKeys(tx))
+							if header, ok := tx["header"].(map[string]interface{}); ok {
+								log.Printf("🔍 [CERTEN-CHECK] Header contents: %v", header)
+							}
 						}
 					}
 				}
