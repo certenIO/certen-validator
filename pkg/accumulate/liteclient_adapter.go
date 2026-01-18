@@ -84,52 +84,44 @@ func NewLiteClientAdapter(config *LiteClientConfig) (*LiteClientAdapter, error) 
 	}, nil
 }
 
-// SearchCertenTransactions searches for CERTEN_INTENT transactions across all partitions
-// FIXED: Like legacy implementation, search ALL partitions [acc://bvn1, acc://bvn2, acc://bvn3, acc://dn]
+// SearchCertenTransactions searches for CERTEN_INTENT transactions across all BVN partitions
+// FIXED: Query BVNs directly since DN blocks only contain anchors without full transaction details
 func (l *LiteClientAdapter) SearchCertenTransactions(ctx context.Context, blockHeight int64) ([]*CertenTransaction, error) {
-	log.Printf("🔍 [CERTEN-SEARCH] Searching DN block %d for CERTEN_INTENT (directoryHeight scan)", blockHeight)
+	log.Printf("🔍 [CERTEN-SEARCH] Searching all BVNs at block %d for CERTEN_INTENT", blockHeight)
 
-	// directoryHeight is a DN concept – don't use it for BVNs
-	// BVN transactions are anchored in DN blocks with their actual BVN minorBlockIndex
-	blocks, err := l.queryMinorBlocks(ctx, "acc://dn", blockHeight)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get DN ledger block %d: %w", blockHeight, err)
-	}
+	var allTransactions []*CertenTransaction
 
-	if len(blocks) == 0 {
-		log.Printf("📊 [CERTEN-SEARCH] No DN block found at height %d", blockHeight)
-		return nil, nil
-	}
+	// Query all 3 BVNs directly - they contain the actual writeData transactions with memos
+	bvnPartitions := []string{"acc://bvn-BVN1.acme", "acc://bvn-BVN2.acme", "acc://bvn-BVN3.acme"}
 
-	block := blocks[0]
-	log.Printf("📊 [CERTEN-SEARCH] DN block %d has %d entries (includes anchored BVN entries)", blockHeight, len(block.Entries))
+	for _, bvn := range bvnPartitions {
+		blocks, err := l.queryMinorBlocks(ctx, bvn, blockHeight)
+		if err != nil {
+			log.Printf("⚠️ [CERTEN-SEARCH] Failed to query %s block %d: %v", bvn, blockHeight, err)
+			continue
+		}
 
-	// Debug instrumentation: log all entries to confirm anchored flattening
-	for i, e := range block.Entries {
-		if e.Data != nil {
-			if account, ok := e.Data["account"].(string); ok {
-				entryType := "unknown"
-				if t, ok := e.Data["type"].(string); ok {
-					entryType = t
-				}
-				log.Printf("🔍 [DN-ENTRY-%d] account=%s, type=%s", i, account, entryType)
+		if len(blocks) == 0 {
+			log.Printf("📊 [CERTEN-SEARCH] No block found at height %d on %s", blockHeight, bvn)
+			continue
+		}
+
+		block := blocks[0]
+		log.Printf("📊 [CERTEN-SEARCH] %s block %d has %d entries", bvn, blockHeight, len(block.Entries))
+
+		for _, entry := range block.Entries {
+			if !l.isCertenTransaction(entry) {
+				continue
+			}
+			certenTx := l.parseCertenTransaction(entry, block, bvn)
+			if certenTx != nil {
+				allTransactions = append(allTransactions, certenTx)
+				log.Printf("🎯 [CERTEN-SEARCH] Found CERTEN transaction %s in %s block", certenTx.Hash, bvn)
 			}
 		}
 	}
 
-	var allTransactions []*CertenTransaction
-	for _, entry := range block.Entries {
-		if !l.isCertenTransaction(entry) {
-			continue
-		}
-		certenTx := l.parseCertenTransaction(entry, block, "acc://dn")
-		if certenTx != nil {
-			allTransactions = append(allTransactions, certenTx)
-			log.Printf("🎯 [CERTEN-SEARCH] Found CERTEN transaction %s in DN block", certenTx.Hash)
-		}
-	}
-
-	log.Printf("✅ [CERTEN-SEARCH] DN block %d yielded %d CERTEN_INTENT txs", blockHeight, len(allTransactions))
+	log.Printf("✅ [CERTEN-SEARCH] All BVNs at block %d yielded %d CERTEN_INTENT txs", blockHeight, len(allTransactions))
 	return allTransactions, nil
 }
 
@@ -1013,12 +1005,13 @@ func (l *LiteClientAdapter) queryMinorBlocks(ctx context.Context, partitionURL s
 	ledgerScope := l.convertToLedgerScope(partitionURL)
 	log.Printf("🔧 [SCOPE-FIX] Converted %s to ledger scope: %s", partitionURL, ledgerScope)
 
-	// Query exactly one block
+	// Query exactly one block with expand=true to get full transaction details including memo
 	queryParams := map[string]interface{}{
 		"scope": ledgerScope,
 		"query": map[string]interface{}{
 			"queryType": "block",
 			"minor":     blockHeight,
+			"expand":    true,
 		},
 	}
 
