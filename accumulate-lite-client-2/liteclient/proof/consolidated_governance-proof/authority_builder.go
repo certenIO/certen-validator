@@ -559,30 +559,53 @@ func (ab *AuthorityBuilder) isSyntheticCreateIdentity(value interface{}) bool {
 }
 
 // isUpdateKeyPage checks if the message value represents an updateKeyPage transaction
-func (ab *AuthorityBuilder) isUpdateKeyPage(value interface{}) bool {
-	valueMap, ok := value.(map[string]interface{})
+// Note: This receives `msg` which is already the message object (not a wrapper containing message)
+// Structure: { "type": "transaction", "transaction": { "body": { "type": "updateKeyPage" } } }
+func (ab *AuthorityBuilder) isUpdateKeyPage(msg interface{}) bool {
+	msgMap, ok := msg.(map[string]interface{})
 	if !ok {
 		return false
 	}
 
 	pu := ProofUtilities{}
-	message := pu.CaseInsensitiveGet(valueMap, "message")
-	if message == nil {
-		return false
-	}
 
-	messageMap, ok := message.(map[string]interface{})
-	if !ok {
-		return false
-	}
-
-	msgType := pu.CaseInsensitiveGet(messageMap, "type")
+	// First check that this is a transaction message
+	msgType := pu.CaseInsensitiveGet(msgMap, "type")
 	msgTypeStr, ok := msgType.(string)
+	if !ok || !strings.EqualFold(msgTypeStr, "transaction") {
+		return false
+	}
+
+	// Get transaction object
+	transaction := pu.CaseInsensitiveGet(msgMap, "transaction")
+	if transaction == nil {
+		return false
+	}
+
+	transactionMap, ok := transaction.(map[string]interface{})
 	if !ok {
 		return false
 	}
 
-	return strings.EqualFold(msgTypeStr, "updateKeyPage")
+	// Get transaction body
+	body := pu.CaseInsensitiveGet(transactionMap, "body")
+	if body == nil {
+		return false
+	}
+
+	bodyMap, ok := body.(map[string]interface{})
+	if !ok {
+		return false
+	}
+
+	// Check body type is updateKeyPage
+	bodyType := pu.CaseInsensitiveGet(bodyMap, "type")
+	bodyTypeStr, ok := bodyType.(string)
+	if !ok {
+		return false
+	}
+
+	return strings.EqualFold(bodyTypeStr, "updateKeyPage")
 }
 
 // parseGenesisKeyPageState parses initial key page state from syntheticCreateIdentity
@@ -664,46 +687,126 @@ func (ab *AuthorityBuilder) parseGenesisKeyPageState(msg map[string]interface{},
 }
 
 // parseKeyPageMutation parses previous and new states from updateKeyPage transaction
+// Accumulate updateKeyPage structure: msg.transaction.body.operation[]
+// Each operation has: type ("add", "remove", "update", "setThreshold"), and key/entry info
 func (ab *AuthorityBuilder) parseKeyPageMutation(msg map[string]interface{}) (KeyPageState, KeyPageState, error) {
 	pu := ProofUtilities{}
 
-	// Extract previous state
-	prevState := pu.CaseInsensitiveGet(msg, "previousState")
-	if prevState == nil {
-		return KeyPageState{}, KeyPageState{}, ValidationError{Msg: "Missing previousState in updateKeyPage"}
+	// Navigate to transaction.body.operation
+	transaction := pu.CaseInsensitiveGet(msg, "transaction")
+	if transaction == nil {
+		return KeyPageState{}, KeyPageState{}, ValidationError{Msg: "Missing transaction in updateKeyPage message"}
 	}
 
-	prevStateMap, ok := prevState.(map[string]interface{})
+	txMap, ok := transaction.(map[string]interface{})
 	if !ok {
-		return KeyPageState{}, KeyPageState{}, ValidationError{Msg: "previousState is not an object"}
+		return KeyPageState{}, KeyPageState{}, ValidationError{Msg: "Transaction is not an object"}
 	}
 
-	// Extract new state
-	newState := pu.CaseInsensitiveGet(msg, "newState")
-	if newState == nil {
-		newState = pu.CaseInsensitiveGet(msg, "keyPage") // Alternative path
-	}
-	if newState == nil {
-		return KeyPageState{}, KeyPageState{}, ValidationError{Msg: "Missing newState in updateKeyPage"}
+	body := pu.CaseInsensitiveGet(txMap, "body")
+	if body == nil {
+		return KeyPageState{}, KeyPageState{}, ValidationError{Msg: "Missing body in updateKeyPage transaction"}
 	}
 
-	newStateMap, ok := newState.(map[string]interface{})
+	bodyMap, ok := body.(map[string]interface{})
 	if !ok {
-		return KeyPageState{}, KeyPageState{}, ValidationError{Msg: "newState is not an object"}
+		return KeyPageState{}, KeyPageState{}, ValidationError{Msg: "Body is not an object"}
 	}
 
-	// Parse both states
-	prev, err := ab.parseKeyPageStateFromDef(prevStateMap)
-	if err != nil {
-		return KeyPageState{}, KeyPageState{}, fmt.Errorf("failed to parse previous state: %v", err)
+	operations := pu.CaseInsensitiveGet(bodyMap, "operation")
+	if operations == nil {
+		return KeyPageState{}, KeyPageState{}, ValidationError{Msg: "Missing operation in updateKeyPage body"}
 	}
 
-	new, err := ab.parseKeyPageStateFromDef(newStateMap)
-	if err != nil {
-		return KeyPageState{}, KeyPageState{}, fmt.Errorf("failed to parse new state: %v", err)
+	opArray, ok := operations.([]interface{})
+	if !ok {
+		return KeyPageState{}, KeyPageState{}, ValidationError{Msg: "Operation is not an array"}
 	}
 
-	return prev, new, nil
+	fmt.Printf("[AUTHORITY] [MUTATION] Parsing %d operations from updateKeyPage\n", len(opArray))
+
+	// Parse operations to extract key changes
+	// For now, we track old and new key hashes
+	var oldKeys, newKeys []string
+	var thresholdChange *uint64
+
+	for i, op := range opArray {
+		opMap, ok := op.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		opType := pu.CaseInsensitiveGet(opMap, "type")
+		opTypeStr, _ := opType.(string)
+		fmt.Printf("[AUTHORITY] [MUTATION] Operation %d: type=%s\n", i, opTypeStr)
+
+		switch strings.ToLower(opTypeStr) {
+		case "add":
+			// Adding a new key
+			entry := pu.CaseInsensitiveGet(opMap, "entry")
+			if entryMap, ok := entry.(map[string]interface{}); ok {
+				if keyHash := pu.CaseInsensitiveGet(entryMap, "keyHash"); keyHash != nil {
+					newKeys = append(newKeys, keyHash.(string))
+					fmt.Printf("[AUTHORITY] [MUTATION] Add key: %s\n", keyHash.(string)[:16])
+				}
+			}
+		case "remove":
+			// Removing a key
+			entry := pu.CaseInsensitiveGet(opMap, "entry")
+			if entryMap, ok := entry.(map[string]interface{}); ok {
+				if keyHash := pu.CaseInsensitiveGet(entryMap, "keyHash"); keyHash != nil {
+					oldKeys = append(oldKeys, keyHash.(string))
+					fmt.Printf("[AUTHORITY] [MUTATION] Remove key: %s\n", keyHash.(string)[:16])
+				}
+			}
+		case "update":
+			// Updating/replacing a key
+			oldEntry := pu.CaseInsensitiveGet(opMap, "oldEntry")
+			newEntry := pu.CaseInsensitiveGet(opMap, "newEntry")
+			if oldEntryMap, ok := oldEntry.(map[string]interface{}); ok {
+				if keyHash := pu.CaseInsensitiveGet(oldEntryMap, "keyHash"); keyHash != nil {
+					oldKeys = append(oldKeys, keyHash.(string))
+					fmt.Printf("[AUTHORITY] [MUTATION] Update old key: %s\n", keyHash.(string)[:16])
+				}
+			}
+			if newEntryMap, ok := newEntry.(map[string]interface{}); ok {
+				if keyHash := pu.CaseInsensitiveGet(newEntryMap, "keyHash"); keyHash != nil {
+					newKeys = append(newKeys, keyHash.(string))
+					fmt.Printf("[AUTHORITY] [MUTATION] Update new key: %s\n", keyHash.(string)[:16])
+				}
+			}
+		case "setthreshold":
+			threshold := pu.CaseInsensitiveGet(opMap, "threshold")
+			if t, ok := threshold.(float64); ok {
+				thresholdVal := uint64(t)
+				thresholdChange = &thresholdVal
+				fmt.Printf("[AUTHORITY] [MUTATION] Set threshold: %d\n", thresholdVal)
+			}
+		}
+	}
+
+	// Create placeholder states - the actual state will be computed incrementally
+	// from genesis + all mutations. Each updateKeyPage increments version by 1.
+	// The previous/new states here are used to track what changed, not the full state.
+	prevState := KeyPageState{
+		Version:   0, // Will be filled in by caller based on genesis + prior mutations
+		Threshold: 1, // Default, may be overridden
+		Keys:      oldKeys,
+	}
+
+	newState := KeyPageState{
+		Version:   0, // Will be filled in by caller (prevVersion + 1)
+		Threshold: 1, // Default, may be overridden
+		Keys:      newKeys,
+	}
+
+	if thresholdChange != nil {
+		newState.Threshold = *thresholdChange
+	}
+
+	fmt.Printf("[AUTHORITY] [MUTATION] Parsed mutation: %d old keys, %d new keys\n", len(oldKeys), len(newKeys))
+
+	return prevState, newState, nil
 }
 
 // parseKeyPageStateFromDef parses KeyPageState from key page definition object
@@ -798,27 +901,46 @@ func (ab *AuthorityBuilder) buildFinalState(genesis GenesisEvent, mutations []Mu
 	state := genesis.PageState
 
 	// Apply each mutation in order
+	// Version starts at genesis (1) and increments by 1 for each updateKeyPage
 	for _, mutation := range mutations {
-		// Validate previous state matches current state
-		if mutation.PreviousState.Version != state.Version {
-			return KeyPageState{}, ValidationError{
-				Msg: fmt.Sprintf("State version mismatch at mutation block %d: expected %d, got %d",
-					mutation.LocalBlock, state.Version, mutation.PreviousState.Version),
+		prevVersion := state.Version
+		newVersion := prevVersion + 1
+
+		// Apply key changes from mutation operations
+		// Remove old keys and add new keys
+		newKeys := make([]string, 0, len(state.Keys))
+
+		// Keep keys that weren't removed
+		for _, existingKey := range state.Keys {
+			removed := false
+			for _, oldKey := range mutation.PreviousState.Keys {
+				if existingKey == oldKey {
+					removed = true
+					break
+				}
+			}
+			if !removed {
+				newKeys = append(newKeys, existingKey)
 			}
 		}
 
-		// Validate new state version increments
-		if mutation.NewState.Version != state.Version+1 {
-			return KeyPageState{}, ValidationError{
-				Msg: fmt.Sprintf("Invalid version increment at mutation block %d: %d -> %d",
-					mutation.LocalBlock, state.Version, mutation.NewState.Version),
-			}
+		// Add new keys
+		newKeys = append(newKeys, mutation.NewState.Keys...)
+
+		// Update threshold if changed
+		newThreshold := state.Threshold
+		if mutation.NewState.Threshold > 0 {
+			newThreshold = mutation.NewState.Threshold
 		}
 
-		// Apply mutation
-		state = mutation.NewState
-		fmt.Printf("[AUTHORITY] Applied mutation: version %d -> %d at block %d\n",
-			mutation.PreviousState.Version, mutation.NewState.Version, mutation.LocalBlock)
+		state = KeyPageState{
+			Version:   newVersion,
+			Threshold: newThreshold,
+			Keys:      newKeys,
+		}
+
+		fmt.Printf("[AUTHORITY] Applied mutation: version %d -> %d at block %d (keys: %d -> %d)\n",
+			prevVersion, newVersion, mutation.LocalBlock, len(genesis.PageState.Keys)+len(mutation.PreviousState.Keys), len(state.Keys))
 	}
 
 	return state, nil
