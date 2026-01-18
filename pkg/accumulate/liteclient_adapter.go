@@ -84,44 +84,49 @@ func NewLiteClientAdapter(config *LiteClientConfig) (*LiteClientAdapter, error) 
 	}, nil
 }
 
-// SearchCertenTransactions searches for CERTEN_INTENT transactions across all BVN partitions
-// FIXED: Query BVNs directly since DN blocks only contain anchors without full transaction details
+// SearchCertenTransactions searches for CERTEN_INTENT transactions across DN and all BVN partitions
+// Scans both DN (for anchored transactions) and all BVNs (for direct transactions) with expand=true
 func (l *LiteClientAdapter) SearchCertenTransactions(ctx context.Context, blockHeight int64) ([]*CertenTransaction, error) {
-	log.Printf("🔍 [CERTEN-SEARCH] Searching all BVNs at block %d for CERTEN_INTENT", blockHeight)
+	log.Printf("🔍 [CERTEN-SEARCH] Searching DN + all BVNs at block %d with expand=true for CERTEN_INTENT", blockHeight)
 
 	var allTransactions []*CertenTransaction
 
-	// Query all 3 BVNs directly - they contain the actual writeData transactions with memos
-	bvnPartitions := []string{"acc://bvn-BVN1.acme", "acc://bvn-BVN2.acme", "acc://bvn-BVN3.acme"}
+	// Query all partitions: DN + 3 BVNs
+	partitions := []string{
+		"acc://dn.acme",
+		"acc://bvn-BVN1.acme",
+		"acc://bvn-BVN2.acme",
+		"acc://bvn-BVN3.acme",
+	}
 
-	for _, bvn := range bvnPartitions {
-		blocks, err := l.queryMinorBlocks(ctx, bvn, blockHeight)
+	for _, partition := range partitions {
+		blocks, err := l.queryMinorBlocks(ctx, partition, blockHeight)
 		if err != nil {
-			log.Printf("⚠️ [CERTEN-SEARCH] Failed to query %s block %d: %v", bvn, blockHeight, err)
+			log.Printf("⚠️ [CERTEN-SEARCH] Failed to query %s block %d: %v", partition, blockHeight, err)
 			continue
 		}
 
 		if len(blocks) == 0 {
-			log.Printf("📊 [CERTEN-SEARCH] No block found at height %d on %s", blockHeight, bvn)
+			log.Printf("📊 [CERTEN-SEARCH] No block found at height %d on %s", blockHeight, partition)
 			continue
 		}
 
 		block := blocks[0]
-		log.Printf("📊 [CERTEN-SEARCH] %s block %d has %d entries", bvn, blockHeight, len(block.Entries))
+		log.Printf("📊 [CERTEN-SEARCH] %s block %d has %d entries", partition, blockHeight, len(block.Entries))
 
 		for _, entry := range block.Entries {
 			if !l.isCertenTransaction(entry) {
 				continue
 			}
-			certenTx := l.parseCertenTransaction(entry, block, bvn)
+			certenTx := l.parseCertenTransaction(entry, block, partition)
 			if certenTx != nil {
 				allTransactions = append(allTransactions, certenTx)
-				log.Printf("🎯 [CERTEN-SEARCH] Found CERTEN transaction %s in %s block", certenTx.Hash, bvn)
+				log.Printf("🎯 [CERTEN-SEARCH] Found CERTEN transaction %s in %s block %d", certenTx.Hash, partition, blockHeight)
 			}
 		}
 	}
 
-	log.Printf("✅ [CERTEN-SEARCH] All BVNs at block %d yielded %d CERTEN_INTENT txs", blockHeight, len(allTransactions))
+	log.Printf("✅ [CERTEN-SEARCH] DN + all BVNs at block %d yielded %d CERTEN_INTENT txs", blockHeight, len(allTransactions))
 	return allTransactions, nil
 }
 
