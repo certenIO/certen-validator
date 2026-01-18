@@ -790,32 +790,39 @@ func startValidator(
 
         // Create anchor adapter that bridges batch.Processor to AnchorManager
         // This uses the REAL Merkle roots from closed batches
-        anchorAdapter := batch.NewAnchorAdapter(
-            batch.NewAnchorManagerWrapper(func(ctx context.Context, batchID string, merkleRoot, opCommit, crossCommit, govRoot []byte,
-                txCount int, accumHeight int64, accumHash, targetChain, validatorID string) (
-                txHash string, blockNumber int64, blockHash string, gasUsed int64,
-                gasPriceWei, totalCostWei string, success bool, err error) {
+        anchorManagerWrapper := batch.NewAnchorManagerWrapper(func(ctx context.Context, batchID string, merkleRoot, opCommit, crossCommit, govRoot []byte,
+            txCount int, accumHeight int64, accumHash, targetChain, validatorID string) (
+            txHash string, blockNumber int64, blockHash string, gasUsed int64,
+            gasPriceWei, totalCostWei string, success bool, err error) {
 
-                // Call the real AnchorManager's CreateBatchAnchorOnChain
-                req := &anchor.AnchorOnChainRequest{
-                    BatchID:              batchID,
-                    MerkleRoot:           merkleRoot,
-                    OperationCommitment:  opCommit,
-                    CrossChainCommitment: crossCommit,
-                    GovernanceRoot:       govRoot,
-                    TxCount:              txCount,
-                    AccumulateHeight:     accumHeight,
-                    AccumulateHash:       accumHash,
-                    TargetChain:          targetChain,
-                    ValidatorID:          validatorID,
-                }
-                result, err := anchorManager.CreateBatchAnchorOnChain(ctx, req)
-                if err != nil {
-                    return "", 0, "", 0, "", "", false, err
-                }
-                return result.TxHash, result.BlockNumber, result.BlockHash,
-                    result.GasUsed, result.GasPriceWei, result.TotalCostWei, result.Success, nil
-            }),
+            // Call the real AnchorManager's CreateBatchAnchorOnChain
+            req := &anchor.AnchorOnChainRequest{
+                BatchID:              batchID,
+                MerkleRoot:           merkleRoot,
+                OperationCommitment:  opCommit,
+                CrossChainCommitment: crossCommit,
+                GovernanceRoot:       govRoot,
+                TxCount:              txCount,
+                AccumulateHeight:     accumHeight,
+                AccumulateHash:       accumHash,
+                TargetChain:          targetChain,
+                ValidatorID:          validatorID,
+            }
+            result, err := anchorManager.CreateBatchAnchorOnChain(ctx, req)
+            if err != nil {
+                return "", 0, "", 0, "", "", false, err
+            }
+            return result.TxHash, result.BlockNumber, result.BlockHash,
+                result.GasUsed, result.GasPriceWei, result.TotalCostWei, result.Success, nil
+        })
+
+        // Wire the ExecuteComprehensiveProofOnChain function to enable Ethereum proof execution
+        // Per CRITICAL-001: This MUST be set for comprehensive proofs to be submitted on-chain
+        anchorManagerWrapper.SetExecuteProofFunc(anchorManager.ExecuteComprehensiveProofOnChain)
+        log.Println("✅ [Phase 5] ExecuteComprehensiveProofOnChain wired to anchor manager")
+
+        anchorAdapter := batch.NewAnchorAdapter(
+            anchorManagerWrapper,
             log.New(log.Writer(), "[AnchorAdapter] ", log.LstdFlags),
         )
         log.Println("✅ [Phase 5] Anchor adapter created for real Merkle root anchoring")
