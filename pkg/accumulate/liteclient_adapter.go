@@ -1011,12 +1011,17 @@ func (l *LiteClientAdapter) queryMinorBlocks(ctx context.Context, partitionURL s
 	log.Printf("🔧 [SCOPE-FIX] Converted %s to ledger scope: %s", partitionURL, ledgerScope)
 
 	// Query exactly one block with expand=true to get full transaction details including memo
+	// Include entryRange with high count to get ALL entries (blocks can have many entries)
 	queryParams := map[string]interface{}{
 		"scope": ledgerScope,
 		"query": map[string]interface{}{
 			"queryType": "block",
 			"minor":     blockHeight,
 			"expand":    true,
+			"entryRange": map[string]interface{}{
+				"start": 0,
+				"count": 500, // Get up to 500 entries per block
+			},
 		},
 	}
 
