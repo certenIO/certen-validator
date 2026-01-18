@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ssh root@116.202.214.38 \"docker ps --format ''{{.Names}}'' | head -5\")"
+    ]
+  }
+}

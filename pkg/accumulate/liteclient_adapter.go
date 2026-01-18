@@ -165,23 +165,39 @@ func (l *LiteClientAdapter) isCertenTransaction(entry BlockEntry) bool {
 		entryType = t
 	}
 
-	// Debug: Log ALL accounts to see what we're getting
-	if account, ok := entry.Data["account"].(string); ok {
-		// Only log non-anchor accounts
-		if !strings.Contains(account, "/anchors") {
-			log.Printf("🔍 [ENTRY-ACCOUNT] Found entry account: %s, type=%s", account, entryType)
+	// Find the REAL principal from the nested transaction structure
+	// Path: entry.Data["value"]["message"]["transaction"]["header"]["principal"]
+	realPrincipal := ""
+	if value, ok := entry.Data["value"].(map[string]interface{}); ok {
+		if message, ok := value["message"].(map[string]interface{}); ok {
+			if tx, ok := message["transaction"].(map[string]interface{}); ok {
+				if header, ok := tx["header"].(map[string]interface{}); ok {
+					if principal, ok := header["principal"].(string); ok {
+						realPrincipal = principal
+					}
+				}
+			}
+		}
+	}
 
-			// If it's a certen account, log full structure
-			if strings.Contains(account, "certen") {
-				log.Printf("🔍 [CERTEN-CHECK] Entry data keys: %v", getKeys(entry.Data))
-				if value, ok := entry.Data["value"].(map[string]interface{}); ok {
-					log.Printf("🔍 [CERTEN-CHECK] Entry.value keys: %v", getKeys(value))
-					if message, ok := value["message"].(map[string]interface{}); ok {
-						log.Printf("🔍 [CERTEN-CHECK] Entry.value.message keys: %v", getKeys(message))
-						if tx, ok := message["transaction"].(map[string]interface{}); ok {
-							log.Printf("🔍 [CERTEN-CHECK] Entry.value.message.transaction keys: %v", getKeys(tx))
-							if header, ok := tx["header"].(map[string]interface{}); ok {
-								log.Printf("🔍 [CERTEN-CHECK] Header contents: %v", header)
+	// Debug: Log all non-anchor entries with their real principal
+	if realPrincipal != "" && !strings.Contains(realPrincipal, "/anchors") {
+		log.Printf("🔍 [ENTRY-PRINCIPAL] Entry type=%s, principal=%s", entryType, realPrincipal)
+
+		// If it's a certen account, log full structure including memo
+		if strings.Contains(realPrincipal, "certen") {
+			log.Printf("🎯 [CERTEN-ENTRY-FOUND] Found certen entry! principal=%s", realPrincipal)
+			log.Printf("🔍 [CERTEN-ENTRY] Entry data keys: %v", getKeys(entry.Data))
+			if value, ok := entry.Data["value"].(map[string]interface{}); ok {
+				log.Printf("🔍 [CERTEN-ENTRY] Entry.value keys: %v", getKeys(value))
+				if message, ok := value["message"].(map[string]interface{}); ok {
+					log.Printf("🔍 [CERTEN-ENTRY] Entry.value.message keys: %v", getKeys(message))
+					if tx, ok := message["transaction"].(map[string]interface{}); ok {
+						log.Printf("🔍 [CERTEN-ENTRY] Entry.value.message.transaction keys: %v", getKeys(tx))
+						if header, ok := tx["header"].(map[string]interface{}); ok {
+							log.Printf("🔍 [CERTEN-ENTRY] Header contents: %v", header)
+							if memo, ok := header["memo"].(string); ok {
+								log.Printf("🔍 [CERTEN-ENTRY] *** MEMO VALUE: '%s' ***", memo)
 							}
 						}
 					}
@@ -190,11 +206,18 @@ func (l *LiteClientAdapter) isCertenTransaction(entry BlockEntry) bool {
 		}
 	}
 
-	log.Printf("🔍 [CERTEN-CHECK] Checking entry type=%s for CERTEN_INTENT memo", entryType)
+	// Also check the top-level account field as fallback
+	if account, ok := entry.Data["account"].(string); ok {
+		if strings.Contains(account, "certen") && !strings.Contains(account, "/anchors") {
+			log.Printf("🔍 [ENTRY-ACCOUNT] Found certen in top-level account: %s, type=%s", account, entryType)
+		}
+	}
+
+	log.Printf("🔍 [CERTEN-CHECK] Checking entry type=%s, principal=%s for CERTEN_INTENT memo", entryType, realPrincipal)
 
 	// RELAXED: Check ANY transaction type for CERTEN_INTENT memo
 	if l.hasAnyCertenMemo(entry) {
-		log.Printf("✅ [CERTEN-CHECK] Found CERTEN_INTENT memo in %s entry", entryType)
+		log.Printf("✅ [CERTEN-CHECK] Found CERTEN_INTENT memo in %s entry (principal=%s)", entryType, realPrincipal)
 		return true
 	}
 
