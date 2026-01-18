@@ -43,22 +43,24 @@ func NewAuthorityBuilder(client RPCClientInterface, artifactManager *ArtifactMan
 func (ab *AuthorityBuilder) BuildAuthoritySnapshot(ctx context.Context, keyPage string, execMBI int64, execWitness string) (*AuthoritySnapshot, error) {
 	fmt.Printf("[AUTHORITY] Building authority snapshot for %s at MBI %d\n", keyPage, execMBI)
 
-	// Extract principal from keyPage URL
-	principal, err := ab.extractPrincipal(keyPage)
-	if err != nil {
-		return nil, fmt.Errorf("failed to extract principal from keyPage: %v", err)
+	// Use the full keyPage URL for querying main chain entries
+	// This is critical: updateKeyPage transactions are on the KEY PAGE's main chain,
+	// not the ADI's main chain. Previous bug queried ADI instead of key page.
+	keyPageScope := keyPage
+	if !strings.HasPrefix(keyPageScope, "acc://") {
+		keyPageScope = "acc://" + keyPageScope
 	}
 
-	// Get P#main chain count
-	mainCount, err := ab.getMainChainCount(ctx, principal)
+	// Get key page's main chain count
+	mainCount, err := ab.getMainChainCount(ctx, keyPageScope)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get main chain count: %v", err)
 	}
 
-	fmt.Printf("[AUTHORITY] Principal %s has %d entries on main chain\n", principal, mainCount)
+	fmt.Printf("[AUTHORITY] Key page %s has %d entries on main chain\n", keyPageScope, mainCount)
 
-	// Enumerate all P#main entries
-	mainEntries, err := ab.enumerateMainEntries(ctx, principal, mainCount)
+	// Enumerate all key page's main chain entries
+	mainEntries, err := ab.enumerateMainEntries(ctx, keyPageScope, mainCount)
 	if err != nil {
 		return nil, fmt.Errorf("failed to enumerate main entries: %v", err)
 	}
@@ -112,17 +114,18 @@ func (ab *AuthorityBuilder) BuildAuthoritySnapshot(ctx context.Context, keyPage 
 	return snapshot, nil
 }
 
-// getMainChainCount gets the total count of P#main entries
+// getMainChainCount gets the total count of main chain entries for the given scope
 // Direct translation of Python count query logic
-func (ab *AuthorityBuilder) getMainChainCount(ctx context.Context, principal string) (int, error) {
+func (ab *AuthorityBuilder) getMainChainCount(ctx context.Context, scopeURL string) (int, error) {
 	// Build count query like Python: count=0 returns total count
 	query := ab.queryBuilder.BuildChainQuery("main", nil, nil, nil, false, &[]bool{false}[0])
 
+	// scopeURL should already be a full acc:// URL
 	response, err := ab.artifactManager.SaveRPCArtifact(
 		ctx,
 		"g1_authority_count",
 		ab.client,
-		fmt.Sprintf("acc://%s", principal),
+		scopeURL,
 		query,
 	)
 	if err != nil {
@@ -157,8 +160,8 @@ func (ab *AuthorityBuilder) getMainChainCount(ctx context.Context, principal str
 	return totalEntries, nil
 }
 
-// enumerateMainEntries enumerates all P#main entries with paging
-func (ab *AuthorityBuilder) enumerateMainEntries(ctx context.Context, principal string, totalCount int) ([]map[string]interface{}, error) {
+// enumerateMainEntries enumerates all main chain entries with paging for the given scope
+func (ab *AuthorityBuilder) enumerateMainEntries(ctx context.Context, scopeURL string, totalCount int) ([]map[string]interface{}, error) {
 	var allEntries []map[string]interface{}
 	pageSize := 50 // Reasonable page size for enumeration
 
@@ -170,11 +173,12 @@ func (ab *AuthorityBuilder) enumerateMainEntries(ctx context.Context, principal 
 
 		query := ab.queryBuilder.BuildMainChainRangeQuery(start, count)
 
+		// scopeURL should already be a full acc:// URL
 		response, err := ab.artifactManager.SaveRPCArtifact(
 			ctx,
-			fmt.Sprintf("main_entries_%s_%d_%d", principal, start, count),
+			fmt.Sprintf("main_entries_%d_%d", start, count),
 			ab.client,
-			fmt.Sprintf("acc://%s", principal),
+			scopeURL,
 			query,
 		)
 		if err != nil {
@@ -218,12 +222,12 @@ func (ab *AuthorityBuilder) classifyGovernanceEvents(entries []map[string]interf
 
 	pu := ProofUtilities{}
 
-	// Extract principal domain from keypage for entry expansion queries
-	principal, err := ab.extractPrincipal(keyPage)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to extract principal from keypage: %v", err)
+	// Use the full keyPage URL for entry expansion queries
+	// This ensures we query the key page's chain, not the ADI's chain
+	keyPageScope := keyPage
+	if !strings.HasPrefix(keyPageScope, "acc://") {
+		keyPageScope = "acc://" + keyPageScope
 	}
-	principalScope := fmt.Sprintf("acc://%s", principal)
 
 	// Phase 2: Expand each entry and classify (matching Python approach)
 	for i, entry := range entries {
@@ -238,7 +242,7 @@ func (ab *AuthorityBuilder) classifyGovernanceEvents(entries []map[string]interf
 
 		// Expand entry to get full transaction details (like Python lines 386-402)
 		fmt.Printf("[AUTHORITY] [DEBUG] Expanding entry %s...\n", entryHash[:16])
-		expandedEntry, err := ab.expandSingleEntry(entryHash, principalScope)
+		expandedEntry, err := ab.expandSingleEntry(entryHash, keyPageScope)
 		if err != nil {
 			fmt.Printf("[AUTHORITY] [WARN] Failed to expand entry %s: %v\n", entryHash[:16], err)
 			continue
