@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/api"
@@ -25,9 +26,13 @@ import (
 // LiteClientAdapter wraps the Accumulate lite client for our validator service
 // This is the CANONICAL implementation of the accumulate.Client interface
 type LiteClientAdapter struct {
-	client       *api.Client
-	// proofBuilder proof.ProofBuilder // Removed - not available in production lite client
-	config       *LiteClientConfig
+	client *api.Client
+	config *LiteClientConfig
+
+	// Partition discovery cache - dynamically discovers partitions from network-status API
+	partitionsMu      sync.RWMutex
+	cachedPartitions  []string
+	partitionsCacheAt time.Time
 }
 
 // Ensure LiteClientAdapter implements the Client interface at compile time
@@ -93,6 +98,111 @@ func getKeys(m map[string]interface{}) []string {
 	return keys
 }
 
+// =============================================================================
+// DYNAMIC PARTITION DISCOVERY
+// Replaces hardcoded partition lists with network-status API discovery
+// =============================================================================
+
+const partitionCacheTTL = 5 * time.Minute
+
+// getPartitions returns the list of partition ledger URLs, using cache if valid
+func (l *LiteClientAdapter) getPartitions(ctx context.Context) ([]string, error) {
+	l.partitionsMu.RLock()
+	if len(l.cachedPartitions) > 0 && time.Since(l.partitionsCacheAt) < partitionCacheTTL {
+		partitions := make([]string, len(l.cachedPartitions))
+		copy(partitions, l.cachedPartitions)
+		l.partitionsMu.RUnlock()
+		log.Printf("🔄 [PARTITION-DISCOVERY] Using cached partitions (%d partitions, age=%v)", len(partitions), time.Since(l.partitionsCacheAt))
+		return partitions, nil
+	}
+	stalePartitions := l.cachedPartitions
+	l.partitionsMu.RUnlock()
+
+	// Discover partitions from network-status API
+	partitions, err := l.discoverPartitions(ctx)
+	if err != nil {
+		// Fall back to stale cache if discovery fails
+		if len(stalePartitions) > 0 {
+			log.Printf("⚠️ [PARTITION-DISCOVERY] Discovery failed, using stale cache (%d partitions): %v", len(stalePartitions), err)
+			return stalePartitions, nil
+		}
+		return nil, fmt.Errorf("partition discovery failed and no cache available: %w", err)
+	}
+
+	// Update cache
+	l.partitionsMu.Lock()
+	l.cachedPartitions = partitions
+	l.partitionsCacheAt = time.Now()
+	l.partitionsMu.Unlock()
+
+	log.Printf("✅ [PARTITION-DISCOVERY] Discovered %d partitions: %v", len(partitions), partitions)
+	return partitions, nil
+}
+
+// discoverPartitions calls the network-status v3 API to get actual partition information
+func (l *LiteClientAdapter) discoverPartitions(ctx context.Context) ([]string, error) {
+	log.Printf("🔍 [PARTITION-DISCOVERY] Querying network-status API for partitions...")
+
+	result, err := l.queryV3API(ctx, "network-status", map[string]interface{}{})
+	if err != nil {
+		return nil, fmt.Errorf("network-status query failed: %w", err)
+	}
+
+	// Parse partitions from network.partitions array
+	// Expected structure: { "network": { "partitions": [{ "id": "BVN0" }, { "id": "Directory" }] } }
+	var partitions []string
+
+	if network, ok := result["network"].(map[string]interface{}); ok {
+		if partitionsArr, ok := network["partitions"].([]interface{}); ok {
+			for _, p := range partitionsArr {
+				if partitionMap, ok := p.(map[string]interface{}); ok {
+					if id, ok := partitionMap["id"].(string); ok {
+						ledgerURL := l.constructPartitionLedgerURL(id)
+						partitions = append(partitions, ledgerURL)
+						log.Printf("🔍 [PARTITION-DISCOVERY] Found partition: id=%s -> %s", id, ledgerURL)
+					}
+				}
+			}
+		}
+	}
+
+	// Also check for top-level partitions array (alternative response format)
+	if len(partitions) == 0 {
+		if partitionsArr, ok := result["partitions"].([]interface{}); ok {
+			for _, p := range partitionsArr {
+				if partitionMap, ok := p.(map[string]interface{}); ok {
+					if id, ok := partitionMap["id"].(string); ok {
+						ledgerURL := l.constructPartitionLedgerURL(id)
+						partitions = append(partitions, ledgerURL)
+						log.Printf("🔍 [PARTITION-DISCOVERY] Found partition (top-level): id=%s -> %s", id, ledgerURL)
+					}
+				}
+			}
+		}
+	}
+
+	if len(partitions) == 0 {
+		return nil, fmt.Errorf("no partitions found in network-status response: %+v", result)
+	}
+
+	return partitions, nil
+}
+
+// constructPartitionLedgerURL converts a partition ID to its ledger URL
+func (l *LiteClientAdapter) constructPartitionLedgerURL(partitionID string) string {
+	// Normalize partition ID to lowercase for comparison
+	normalizedID := strings.ToLower(partitionID)
+
+	// Handle Directory Network (DN)
+	if normalizedID == "directory" || normalizedID == "dn" {
+		return "acc://dn.acme/ledger"
+	}
+
+	// Handle BVN partitions - preserve the original ID format
+	// Examples: BVN0, BVN1, bvn-BVN1, etc.
+	return fmt.Sprintf("acc://%s.acme/ledger", partitionID)
+}
+
 // SearchCertenTransactions searches for CERTEN_INTENT transactions across DN and all BVN partitions
 // Scans both DN (for anchored transactions) and all BVNs (for direct transactions) with expand=true
 func (l *LiteClientAdapter) SearchCertenTransactions(ctx context.Context, blockHeight int64) ([]*CertenTransaction, error) {
@@ -100,12 +210,10 @@ func (l *LiteClientAdapter) SearchCertenTransactions(ctx context.Context, blockH
 
 	var allTransactions []*CertenTransaction
 
-	// Query all partitions: DN + 3 BVNs
-	partitions := []string{
-		"acc://dn.acme",
-		"acc://bvn-BVN1.acme",
-		"acc://bvn-BVN2.acme",
-		"acc://bvn-BVN3.acme",
+	// Dynamically discover partitions from network-status API
+	partitions, err := l.getPartitions(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to discover partitions: %w", err)
 	}
 
 	for _, partition := range partitions {
@@ -1099,18 +1207,31 @@ func (l *LiteClientAdapter) queryMinorBlocks(ctx context.Context, partitionURL s
 }
 
 // convertToLedgerScope converts partition URLs to correct ledger scopes for v3 API
-// BVN transactions are anchored to Directory Network - we search DN blocks for anchored BVN transactions
+// Handles any partition URL format dynamically (supports any network's partition naming)
 func (l *LiteClientAdapter) convertToLedgerScope(partitionURL string) string {
-	switch partitionURL {
-	case "acc://bvn1", "acc://bvn2", "acc://bvn3":
-		// BVN transactions are anchored to Directory - query Directory for anchored entries
-		return "acc://dn.acme/ledger"
-	case "acc://dn":
-		return "acc://dn.acme/ledger"
-	default:
-		// If already in correct format, return as-is
+	// If already a ledger URL, return as-is
+	if strings.HasSuffix(partitionURL, "/ledger") {
 		return partitionURL
 	}
+
+	// Remove acc:// prefix for parsing
+	url := strings.TrimPrefix(partitionURL, "acc://")
+
+	// Handle URLs with .acme suffix (e.g., "dn.acme", "BVN0.acme")
+	if strings.Contains(url, ".acme") {
+		// Already has .acme, just append /ledger
+		return "acc://" + url + "/ledger"
+	}
+
+	// Handle bare partition names (e.g., "dn", "bvn1", "BVN0")
+	// Normalize DN variations
+	normalizedURL := strings.ToLower(url)
+	if normalizedURL == "dn" || normalizedURL == "directory" {
+		return "acc://dn.acme/ledger"
+	}
+
+	// Handle BVN partitions - add .acme suffix
+	return "acc://" + url + ".acme/ledger"
 }
 
 // MinorBlock represents a minor block from Accumulate v3 API
@@ -1222,8 +1343,12 @@ func (l *LiteClientAdapter) getBlockEntries(blockData map[string]interface{}, bl
 func (l *LiteClientAdapter) queryBVNStatus(ctx context.Context) (*NetworkStatus, error) {
 	log.Printf("🔍 [V3-API] Querying BVN partitions for latest block info...")
 
-	// Try each BVN partition to get the latest block information
-	partitions := []string{"acc://bvn1", "acc://bvn2", "acc://bvn3", "acc://dn"}
+	// Dynamically discover partitions, with ultimate fallback to DN only
+	partitions, err := l.getPartitions(ctx)
+	if err != nil {
+		log.Printf("⚠️ [V3-API] Partition discovery failed, using DN fallback: %v", err)
+		partitions = []string{"acc://dn.acme/ledger"}
+	}
 
 	for _, partition := range partitions {
 		blocks, err := l.queryMinorBlocks(ctx, partition, -1) // -1 for latest
