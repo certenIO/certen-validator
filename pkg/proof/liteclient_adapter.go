@@ -557,6 +557,7 @@ func truncateString(s string, maxLen int) string {
 // normalizeBVNPartition validates and normalizes the BVN partition for L1-L3 proofs.
 // Returns a valid BVN name like "bvn0", "bvn1", etc.
 // If the input is invalid (e.g., "acc://dn", empty), it determines the correct BVN.
+// DEPRECATED: Use LiteClientProofGenerator.routeBVNForAccount() instead for proper routing.
 func normalizeBVNPartition(bvn, accountURL string) string {
 	bvn = strings.ToLower(strings.TrimSpace(bvn))
 
@@ -567,24 +568,108 @@ func normalizeBVNPartition(bvn, accountURL string) string {
 		return bvn
 	}
 
-	// Invalid or missing BVN - need to determine the correct one
-	log.Printf("[PROOF] ⚠️ Invalid BVN partition '%s' for account %s - determining correct BVN", bvn, accountURL)
+	// Invalid or missing BVN - try to calculate from account URL
+	log.Printf("[PROOF] ⚠️ Invalid BVN partition '%s' for account %s - calculating from routing", bvn, accountURL)
 
-	// For DevNet/single-BVN setups, all non-DN accounts live on bvn1
-	// TODO: For multi-BVN setups, query the routing to determine the correct BVN
-	// This can be done via the V3 API's routing query or by parsing the account URL
-	defaultBVN := "bvn1"
-
-	// Heuristic: Parse account URL to guess BVN
-	// In Accumulate, the routing is based on the account hash, but for most DevNet setups
-	// there's only one BVN (bvn1). For production, we'd need to query the routing.
-	if strings.Contains(accountURL, "acc://dn") {
-		// DN accounts don't need BVN routing - but this shouldn't happen for L1-L3 proofs
-		log.Printf("[PROOF] ⚠️ Account appears to be on DN, defaulting to %s", defaultBVN)
+	// Calculate BVN from account URL routing number
+	calculatedBVN := calculateBVNFromAccountURL(accountURL)
+	if calculatedBVN != "" {
+		log.Printf("[PROOF] ✅ Calculated BVN partition: %s (from account URL routing)", calculatedBVN)
+		return calculatedBVN
 	}
 
-	log.Printf("[PROOF] ✅ Using BVN partition: %s (corrected from '%s')", defaultBVN, bvn)
+	// Fallback to bvn1 if calculation fails
+	defaultBVN := "bvn1"
+	log.Printf("[PROOF] ⚠️ Could not calculate BVN, defaulting to %s", defaultBVN)
 	return defaultBVN
+}
+
+// calculateBVNFromAccountURL calculates the BVN partition from an account URL
+// using the Accumulate routing algorithm (prefix matching on routing number).
+// This implements the same logic as the Accumulate routing package.
+func calculateBVNFromAccountURL(accountURL string) string {
+	// Parse the account URL to extract the identity
+	// Account URLs are like: acc://identity.acme/path or acc://identity.acme
+	if !strings.HasPrefix(accountURL, "acc://") {
+		return ""
+	}
+
+	// Extract identity from URL (everything after acc:// up to / or end)
+	urlPart := strings.TrimPrefix(accountURL, "acc://")
+	identity := strings.Split(urlPart, "/")[0]
+
+	// Calculate routing number from identity
+	// The routing number is derived from SHA256 hash of the lowercase identity
+	routingNumber := calculateRoutingNumber(identity)
+	if routingNumber == 0 {
+		return ""
+	}
+
+	// Use hardcoded Kermit routing table (3 BVNs)
+	// Routes: length=1 → BVN1, length=2/value=2 → BVN2, length=2/value=3 → BVN3
+	// This matches the Kermit network configuration
+	return routeByPrefixTable(routingNumber)
+}
+
+// calculateRoutingNumber computes the routing number from an identity string.
+// This matches Accumulate's url.Routing() method.
+func calculateRoutingNumber(identity string) uint64 {
+	if identity == "" {
+		return 0
+	}
+
+	// Normalize to lowercase
+	identity = strings.ToLower(identity)
+
+	// SHA256 hash of the identity
+	h := sha256.Sum256([]byte(identity))
+
+	// Routing number is first 8 bytes as big-endian uint64
+	var routingNum uint64
+	for i := 0; i < 8; i++ {
+		routingNum = (routingNum << 8) | uint64(h[i])
+	}
+
+	log.Printf("[PROOF] 🔢 Identity '%s' routing number: %016X", identity, routingNum)
+	return routingNum
+}
+
+// routeByPrefixTable routes a routing number using the Kermit network's routing table.
+// Kermit routing table:
+//   - length=1, value=0 (implicit) → BVN1 (first bit = 0)
+//   - length=2, value=2 → BVN2 (first 2 bits = 10)
+//   - length=2, value=3 → BVN3 (first 2 bits = 11)
+//
+// This means:
+//   - If first bit is 0 → BVN1
+//   - If first 2 bits are 10 → BVN2
+//   - If first 2 bits are 11 → BVN3
+func routeByPrefixTable(routingNumber uint64) string {
+	// Extract first 2 bits (positions 63 and 62)
+	first2Bits := (routingNumber >> 62) & 0x3
+
+	// Route based on prefix
+	switch first2Bits {
+	case 0, 1:
+		// First bit is 0 (00 or 01) → BVN1 (length=1 match)
+		if (routingNumber >> 63) == 0 {
+			log.Printf("[PROOF] 🎯 Routing: first bit=0 → BVN1")
+			return "bvn1"
+		}
+		// First bit is 1, check 2-bit prefix
+		fallthrough
+	case 2:
+		// First 2 bits = 10 → BVN2
+		log.Printf("[PROOF] 🎯 Routing: first 2 bits=10 → BVN2")
+		return "bvn2"
+	case 3:
+		// First 2 bits = 11 → BVN3
+		log.Printf("[PROOF] 🎯 Routing: first 2 bits=11 → BVN3")
+		return "bvn3"
+	}
+
+	// Should not reach here
+	return "bvn1"
 }
 
 // GetEndpoint returns the Accumulate v3 endpoint being used
