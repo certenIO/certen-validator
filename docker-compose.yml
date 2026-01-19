@@ -148,6 +148,7 @@ services:
     volumes:
       - validator_data:/app/data
       - validator_bft_keys:/app/bft-keys
+      - ./bls_zk_keys:/app/bls_zk_keys:ro
     depends_on:
       postgres:
         condition: service_healthy

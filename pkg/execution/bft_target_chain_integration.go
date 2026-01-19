@@ -307,8 +307,14 @@ func (btce *BFTTargetChainExecutor) executeEthereumOperations(
 	if contractConfig.CreationContract == "" {
 		contractConfig.CreationContract = os.Getenv("ANCHOR_CONTRACT_ADDRESS")
 	}
+	if contractConfig.CreationContract == "" {
+		contractConfig.CreationContract = os.Getenv("CERTEN_CONTRACT_ADDRESS")
+	}
 	if contractConfig.VerificationContract == "" {
 		contractConfig.VerificationContract = os.Getenv("ANCHOR_CONTRACT_V2_ADDRESS")
+	}
+	if contractConfig.VerificationContract == "" {
+		contractConfig.VerificationContract = os.Getenv("CERTEN_CONTRACT_ADDRESS")
 	}
 
 	btce.logger.Printf("📡 [ETH-EXEC] Contract config:")
@@ -477,15 +483,26 @@ func (btce *BFTTargetChainExecutor) convertToLegacyIntent(intentID, transactionH
 	// Load configuration from environment
 	orgADI, chainID := getTargetChainConfig()
 
+	// Get the anchor contract address - this is the target for Ethereum relay
+	// CRITICAL: extractTargetParamsFromIntent uses the "to" field to determine where to send the tx
+	anchorContractAddr := os.Getenv("CERTEN_ANCHOR_V3_ADDRESS")
+	if anchorContractAddr == "" {
+		anchorContractAddr = os.Getenv("CERTEN_CONTRACT_ADDRESS")
+	}
+	if anchorContractAddr == "" {
+		btce.logger.Printf("⚠️ [CONVERT] No anchor contract address configured, using default")
+		anchorContractAddr = "0xEb17eBd351D2e040a0cB3026a3D04BEc182d8b98" // Sepolia default
+	}
+
 	// Create a minimal CertenIntent for contract integration
-	// In real implementation, this would preserve all original intent data
+	// IMPORTANT: CrossChainData must include "to" field for extractTargetParamsFromIntent
 	return &intent.CertenIntent{
 		IntentID:        intentID,
 		TransactionHash: transactionHash,
 		AccountURL:      accountURL,
 		OrganizationADI: orgADI,
 		IntentData:      []byte(fmt.Sprintf(`{"intent_id":"%s","account_url":"%s","block_height":%d}`, intentID, accountURL, certenProof.BlockHeight)),
-		CrossChainData:  []byte(fmt.Sprintf(`{"protocol":"CERTEN","version":"1.0","legs":[{"chain":"ethereum","chainId":%d}]}`, chainID)),
+		CrossChainData:  []byte(fmt.Sprintf(`{"protocol":"CERTEN","version":"1.0","legs":[{"chain":"ethereum","chainId":%d,"to":"%s","amountWei":"1"}]}`, chainID, anchorContractAddr)),
 		GovernanceData:  []byte(fmt.Sprintf(`{"organizationAdi":"%s","authorization":{"required_signers":["%s/book"]}}`, orgADI, orgADI)),
 		ReplayData:      []byte(fmt.Sprintf(`{"nonce":"certen_bft_execution","intent_hash":"0x%s"}`, intentID)),
 	}
