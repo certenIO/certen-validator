@@ -1102,6 +1102,12 @@ func NewValidatorChainEngine(
 	chainID := fmt.Sprintf("validator-chain-%s", validatorID)
 	app := NewValidatorApp(ledgerStore, chainID)
 
+	// CRITICAL: Recover state from ledger before CometBFT calls Info()
+	// This ensures the app reports the correct height/appHash so CometBFT can sync properly
+	if err := app.RecoverState(); err != nil {
+		logger.Printf("⚠️ State recovery failed (will start fresh): %v", err)
+	}
+
 	// Create minimal CometBFT config for ValidatorBlock consensus
 	cfg := config.DefaultConfig()
 	cfg.RootDir = filepath.Join("/app", "data", "validator-chain", validatorID)
@@ -2012,6 +2018,12 @@ func NewUnifiedCometBFTEngine(validatorID string) (*RealCometBFTEngine, error) {
 	chainID := fmt.Sprintf("validator-chain-%s", validatorID)
 	app := NewValidatorApp(ledgerStore, chainID)
 	logger.Printf("✅ [VALIDATOR-CHAIN] Created ValidatorApp for VB consensus: chain=%s", chainID)
+
+	// CRITICAL: Recover state from ledger before CometBFT calls Info()
+	// This ensures the app reports the correct height/appHash so CometBFT can sync properly
+	if err := app.RecoverState(); err != nil {
+		logger.Printf("⚠️ State recovery failed (will start fresh): %v", err)
+	}
 
 	// Use the new, clean RealCometBFTEngine constructor instead of manual struct literal
 	engine, err := NewRealCometBFTEngine(cfg, app, logger)
