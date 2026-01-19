@@ -1908,11 +1908,23 @@ func NewUnifiedCometBFTEngine(validatorID string) (*RealCometBFTEngine, error) {
 	cfg.Moniker = validatorID
 
 	// Set up deterministic P2P configuration with persistent peers
+	// Per BFT Resiliency Task 4: Each validator should have ALL other validators as persistent peers
 	persistentPeers := os.Getenv("COMETBFT_P2P_PERSISTENT_PEERS")
 	if persistentPeers != "" {
 		cfg.P2P.PersistentPeers = persistentPeers
 		logger.Printf("🔗 Configured persistent peers: %s", persistentPeers)
 	}
+
+	// Seeds for initial peer discovery (alternative to persistent peers)
+	seeds := os.Getenv("COMETBFT_P2P_SEEDS")
+	if seeds != "" {
+		cfg.P2P.Seeds = seeds
+		logger.Printf("🌱 Configured seeds: %s", seeds)
+	}
+
+	// Unconditional peer exchange for better network discovery
+	cfg.P2P.PexReactor = true
+	cfg.P2P.AddrBookStrict = false // Allow private IPs in Docker network
 
 	// P2P network configuration to prevent pong timeouts and connection drops
 	// These settings are critical for stable multi-validator consensus in Docker networks

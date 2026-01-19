@@ -1,0 +1,419 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: certen-postgres
+    environment:
+      POSTGRES_DB: certen
+      POSTGRES_USER: certen
+      POSTGRES_PASSWORD: certen_testnet_2026
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./validator-build/pkg/database/migrations/001_initial_schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U certen -d certen"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - certen-net
+
+  validator-1:
+    build: ./validator-build
+    container_name: certen-validator-1
+    hostname: validator-1
+    ports:
+      - "8081:8080"
+      - "26656:26656"
+      - "26657:26657"
+    environment:
+      VALIDATOR_ID: validator-1
+      DATABASE_URL: postgres://certen:certen_testnet_2026@postgres:5432/certen_proofs?sslmode=disable
+      COMETBFT_ENABLED: "true"
+      COMETBFT_MODE: validator
+      COMETBFT_CHAIN_ID: certen-testnet
+      COMETBFT_RPC_URL: http://127.0.0.1:26657
+      COMETBFT_P2P_LADDR: tcp://0.0.0.0:26656
+      COMETBFT_RPC_LADDR: tcp://0.0.0.0:26657
+      # Per BFT Resiliency Task 4: Full peer redundancy - all other validators as seeds
+      COMETBFT_P2P_SEEDS: "validator-2:26656,validator-3:26656,validator-4:26656,validator-5:26656,validator-6:26656,validator-7:26656"
+      ACCUMULATE_URL: http://206.191.154.164:8660
+      ACCUMULATE_COMET_DN: http://206.191.154.164:8660
+      ACCUMULATE_COMET_BVN: http://206.191.154.164:8760
+      ACCUMULATE_COMET_BVN0: http://206.191.154.164:8760
+      ACCUMULATE_COMET_BVN1: http://206.191.154.164:8860
+      ACCUMULATE_COMET_BVN2: http://206.191.154.164:8960
+      ETHEREUM_URL: https://eth-sepolia.g.alchemy.com/v2/aosGJNJkUckm6lCldSEmP
+      ETH_CHAIN_ID: "11155111"
+      ETH_PRIVATE_KEY: "0xf0a3f54cc0a31764dea5dc2c1b380a77187202e3b4d9b1adeaf799ffd006c1bf"
+      CERTEN_CONTRACT_ADDRESS: "0xEb17eBd351D2e040a0cB3026a3D04BEc182d8b98"
+      ATTESTATION_PEERS: http://validator-2:8080,http://validator-3:8080,http://validator-4:8080,http://validator-5:8080,http://validator-6:8080,http://validator-7:8080
+      ATTESTATION_REQUIRED_COUNT: "5"
+      BLS_ZK_TESTING_MODE: "false"
+      LOG_LEVEL: info
+      PROOF_CYCLE_WRITEBACK: "true"
+      ACCUMULATE_SIGNER_URL: "acc://certenprotocol.acme/book/1"
+      ACCUMULATE_WRITEBACK_PRIV_KEY: "0c2576e533a6c4e81c07a9062859462514bf3bdb13bb92a32621d1e849ad1232d481f10ac40451048c827ac60327a233e21187043d41676832166b96812cab84"
+      ACCUMULATE_RESULTS_PRINCIPAL: "acc://certenprotocol.acme/execution-results"
+      CERTEN_IDENTITY: "acc://certenprotocol.acme"
+      CERTEN_IDENTITY_BOOK: "acc://certenprotocol.acme/book"
+      CERTEN_IDENTITY_KEYPAGE: "acc://certenprotocol.acme/book/1"
+      CERTEN_IDENTITY_DATA: "acc://certenprotocol.acme/execution-results"
+      CERTEN_KEYPAGE_PUBLIC_KEY: "d481f10ac40451048c827ac60327a233e21187043d41676832166b96812cab84"
+      CERTEN_KEYPAGE_PRIVATE_KEY: "0c2576e533a6c4e81c07a9062859462514bf3bdb13bb92a32621d1e849ad1232d481f10ac40451048c827ac60327a233e21187043d41676832166b96812cab84"
+    volumes:
+      - validator1_data:/app/data
+      - validator1_keys:/app/bft-keys
+      - ./bls_zk_keys:/app/bls_zk_keys:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - certen-net
+
+  validator-2:
+    build: ./validator-build
+    container_name: certen-validator-2
+    hostname: validator-2
+    ports:
+      - "8082:8080"
+      - "26666:26656"
+      - "26667:26657"
+    environment:
+      VALIDATOR_ID: validator-2
+      DATABASE_URL: postgres://certen:certen_testnet_2026@postgres:5432/certen_proofs?sslmode=disable
+      COMETBFT_ENABLED: "true"
+      COMETBFT_MODE: validator
+      COMETBFT_CHAIN_ID: certen-testnet
+      COMETBFT_RPC_URL: http://127.0.0.1:26657
+      COMETBFT_P2P_LADDR: tcp://0.0.0.0:26656
+      COMETBFT_RPC_LADDR: tcp://0.0.0.0:26657
+      # Per BFT Resiliency Task 4: Full peer redundancy
+      COMETBFT_P2P_SEEDS: "validator-1:26656,validator-3:26656,validator-4:26656,validator-5:26656,validator-6:26656,validator-7:26656"
+      ACCUMULATE_URL: http://206.191.154.164:8660
+      ACCUMULATE_COMET_DN: http://206.191.154.164:8660
+      ACCUMULATE_COMET_BVN: http://206.191.154.164:8760
+      ACCUMULATE_COMET_BVN0: http://206.191.154.164:8760
+      ACCUMULATE_COMET_BVN1: http://206.191.154.164:8860
+      ACCUMULATE_COMET_BVN2: http://206.191.154.164:8960
+      ETHEREUM_URL: https://eth-sepolia.g.alchemy.com/v2/aosGJNJkUckm6lCldSEmP
+      ETH_CHAIN_ID: "11155111"
+      ETH_PRIVATE_KEY: "0x29055a92af477888b7858c5e36293a6aaa65045384319fe948b86f4e24c9f6c4"
+      CERTEN_CONTRACT_ADDRESS: "0xEb17eBd351D2e040a0cB3026a3D04BEc182d8b98"
+      ATTESTATION_PEERS: http://validator-1:8080,http://validator-3:8080,http://validator-4:8080,http://validator-5:8080,http://validator-6:8080,http://validator-7:8080
+      ATTESTATION_REQUIRED_COUNT: "5"
+      BLS_ZK_TESTING_MODE: "false"
+      LOG_LEVEL: info
+      PROOF_CYCLE_WRITEBACK: "true"
+      ACCUMULATE_SIGNER_URL: "acc://certenprotocol.acme/book/1"
+      ACCUMULATE_WRITEBACK_PRIV_KEY: "0c2576e533a6c4e81c07a9062859462514bf3bdb13bb92a32621d1e849ad1232d481f10ac40451048c827ac60327a233e21187043d41676832166b96812cab84"
+      ACCUMULATE_RESULTS_PRINCIPAL: "acc://certenprotocol.acme/execution-results"
+      CERTEN_IDENTITY: "acc://certenprotocol.acme"
+      CERTEN_IDENTITY_BOOK: "acc://certenprotocol.acme/book"
+      CERTEN_IDENTITY_KEYPAGE: "acc://certenprotocol.acme/book/1"
+      CERTEN_IDENTITY_DATA: "acc://certenprotocol.acme/execution-results"
+      CERTEN_KEYPAGE_PUBLIC_KEY: "d481f10ac40451048c827ac60327a233e21187043d41676832166b96812cab84"
+      CERTEN_KEYPAGE_PRIVATE_KEY: "0c2576e533a6c4e81c07a9062859462514bf3bdb13bb92a32621d1e849ad1232d481f10ac40451048c827ac60327a233e21187043d41676832166b96812cab84"
+    volumes:
+      - validator2_data:/app/data
+      - validator2_keys:/app/bft-keys
+      - ./bls_zk_keys:/app/bls_zk_keys:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - certen-net
+
+  validator-3:
+    build: ./validator-build
+    container_name: certen-validator-3
+    hostname: validator-3
+    ports:
+      - "8083:8080"
+      - "26676:26656"
+      - "26677:26657"
+    environment:
+      VALIDATOR_ID: validator-3
+      DATABASE_URL: postgres://certen:certen_testnet_2026@postgres:5432/certen_proofs?sslmode=disable
+      COMETBFT_ENABLED: "true"
+      COMETBFT_MODE: validator
+      COMETBFT_CHAIN_ID: certen-testnet
+      COMETBFT_RPC_URL: http://127.0.0.1:26657
+      COMETBFT_P2P_LADDR: tcp://0.0.0.0:26656
+      COMETBFT_RPC_LADDR: tcp://0.0.0.0:26657
+      # Per BFT Resiliency Task 4: Full peer redundancy
+      COMETBFT_P2P_SEEDS: "validator-1:26656,validator-2:26656,validator-4:26656,validator-5:26656,validator-6:26656,validator-7:26656"
+      ACCUMULATE_URL: http://206.191.154.164:8660
+      ACCUMULATE_COMET_DN: http://206.191.154.164:8660
+      ACCUMULATE_COMET_BVN: http://206.191.154.164:8760
+      ACCUMULATE_COMET_BVN0: http://206.191.154.164:8760
+      ACCUMULATE_COMET_BVN1: http://206.191.154.164:8860
+      ACCUMULATE_COMET_BVN2: http://206.191.154.164:8960
+      ETHEREUM_URL: https://eth-sepolia.g.alchemy.com/v2/aosGJNJkUckm6lCldSEmP
+      ETH_CHAIN_ID: "11155111"
+      ETH_PRIVATE_KEY: "0x1945bda06a2bbec70a12bc104c2eaa809c1acaacf4602ec802c8ecba86cef415"
+      CERTEN_CONTRACT_ADDRESS: "0xEb17eBd351D2e040a0cB3026a3D04BEc182d8b98"
+      ATTESTATION_PEERS: http://validator-1:8080,http://validator-2:8080,http://validator-4:8080,http://validator-5:8080,http://validator-6:8080,http://validator-7:8080
+      ATTESTATION_REQUIRED_COUNT: "5"
+      BLS_ZK_TESTING_MODE: "false"
+      LOG_LEVEL: info
+      PROOF_CYCLE_WRITEBACK: "true"
+      ACCUMULATE_SIGNER_URL: "acc://certenprotocol.acme/book/1"
+      ACCUMULATE_WRITEBACK_PRIV_KEY: "0c2576e533a6c4e81c07a9062859462514bf3bdb13bb92a32621d1e849ad1232d481f10ac40451048c827ac60327a233e21187043d41676832166b96812cab84"
+      ACCUMULATE_RESULTS_PRINCIPAL: "acc://certenprotocol.acme/execution-results"
+      CERTEN_IDENTITY: "acc://certenprotocol.acme"
+      CERTEN_IDENTITY_BOOK: "acc://certenprotocol.acme/book"
+      CERTEN_IDENTITY_KEYPAGE: "acc://certenprotocol.acme/book/1"
+      CERTEN_IDENTITY_DATA: "acc://certenprotocol.acme/execution-results"
+      CERTEN_KEYPAGE_PUBLIC_KEY: "d481f10ac40451048c827ac60327a233e21187043d41676832166b96812cab84"
+      CERTEN_KEYPAGE_PRIVATE_KEY: "0c2576e533a6c4e81c07a9062859462514bf3bdb13bb92a32621d1e849ad1232d481f10ac40451048c827ac60327a233e21187043d41676832166b96812cab84"
+    volumes:
+      - validator3_data:/app/data
+      - validator3_keys:/app/bft-keys
+      - ./bls_zk_keys:/app/bls_zk_keys:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - certen-net
+
+  validator-4:
+    build: ./validator-build
+    container_name: certen-validator-4
+    hostname: validator-4
+    ports:
+      - "8084:8080"
+      - "26686:26656"
+      - "26687:26657"
+    environment:
+      VALIDATOR_ID: validator-4
+      DATABASE_URL: postgres://certen:certen_testnet_2026@postgres:5432/certen_proofs?sslmode=disable
+      COMETBFT_ENABLED: "true"
+      COMETBFT_MODE: validator
+      COMETBFT_CHAIN_ID: certen-testnet
+      COMETBFT_RPC_URL: http://127.0.0.1:26657
+      COMETBFT_P2P_LADDR: tcp://0.0.0.0:26656
+      COMETBFT_RPC_LADDR: tcp://0.0.0.0:26657
+      # Per BFT Resiliency Task 4: Full peer redundancy
+      COMETBFT_P2P_SEEDS: "validator-1:26656,validator-2:26656,validator-3:26656,validator-5:26656,validator-6:26656,validator-7:26656"
+      ACCUMULATE_URL: http://206.191.154.164:8660
+      ACCUMULATE_COMET_DN: http://206.191.154.164:8660
+      ACCUMULATE_COMET_BVN: http://206.191.154.164:8760
+      ACCUMULATE_COMET_BVN0: http://206.191.154.164:8760
+      ACCUMULATE_COMET_BVN1: http://206.191.154.164:8860
+      ACCUMULATE_COMET_BVN2: http://206.191.154.164:8960
+      ETHEREUM_URL: https://eth-sepolia.g.alchemy.com/v2/aosGJNJkUckm6lCldSEmP
+      ETH_CHAIN_ID: "11155111"
+      ETH_PRIVATE_KEY: "0x17216e70e068b0d93079af8f3989d7463194c731f25f1ce37332c2bc9adbb22a"
+      CERTEN_CONTRACT_ADDRESS: "0xEb17eBd351D2e040a0cB3026a3D04BEc182d8b98"
+      ATTESTATION_PEERS: http://validator-1:8080,http://validator-2:8080,http://validator-3:8080,http://validator-5:8080,http://validator-6:8080,http://validator-7:8080
+      ATTESTATION_REQUIRED_COUNT: "5"
+      BLS_ZK_TESTING_MODE: "false"
+      LOG_LEVEL: info
+      PROOF_CYCLE_WRITEBACK: "true"
+      ACCUMULATE_SIGNER_URL: "acc://certenprotocol.acme/book/1"
+      ACCUMULATE_WRITEBACK_PRIV_KEY: "0c2576e533a6c4e81c07a9062859462514bf3bdb13bb92a32621d1e849ad1232d481f10ac40451048c827ac60327a233e21187043d41676832166b96812cab84"
+      ACCUMULATE_RESULTS_PRINCIPAL: "acc://certenprotocol.acme/execution-results"
+      CERTEN_IDENTITY: "acc://certenprotocol.acme"
+      CERTEN_IDENTITY_BOOK: "acc://certenprotocol.acme/book"
+      CERTEN_IDENTITY_KEYPAGE: "acc://certenprotocol.acme/book/1"
+      CERTEN_IDENTITY_DATA: "acc://certenprotocol.acme/execution-results"
+      CERTEN_KEYPAGE_PUBLIC_KEY: "d481f10ac40451048c827ac60327a233e21187043d41676832166b96812cab84"
+      CERTEN_KEYPAGE_PRIVATE_KEY: "0c2576e533a6c4e81c07a9062859462514bf3bdb13bb92a32621d1e849ad1232d481f10ac40451048c827ac60327a233e21187043d41676832166b96812cab84"
+    volumes:
+      - validator4_data:/app/data
+      - validator4_keys:/app/bft-keys
+      - ./bls_zk_keys:/app/bls_zk_keys:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - certen-net
+
+  validator-5:
+    build: ./validator-build
+    container_name: certen-validator-5
+    hostname: validator-5
+    ports:
+      - "8085:8080"
+      - "26696:26656"
+      - "26697:26657"
+    environment:
+      VALIDATOR_ID: validator-5
+      DATABASE_URL: postgres://certen:certen_testnet_2026@postgres:5432/certen_proofs?sslmode=disable
+      COMETBFT_ENABLED: "true"
+      COMETBFT_MODE: validator
+      COMETBFT_CHAIN_ID: certen-testnet
+      COMETBFT_RPC_URL: http://127.0.0.1:26657
+      COMETBFT_P2P_LADDR: tcp://0.0.0.0:26656
+      COMETBFT_RPC_LADDR: tcp://0.0.0.0:26657
+      # Per BFT Resiliency Task 4: Full peer redundancy
+      COMETBFT_P2P_SEEDS: "validator-1:26656,validator-2:26656,validator-3:26656,validator-4:26656,validator-6:26656,validator-7:26656"
+      ACCUMULATE_URL: http://206.191.154.164:8660
+      ACCUMULATE_COMET_DN: http://206.191.154.164:8660
+      ACCUMULATE_COMET_BVN: http://206.191.154.164:8760
+      ACCUMULATE_COMET_BVN0: http://206.191.154.164:8760
+      ACCUMULATE_COMET_BVN1: http://206.191.154.164:8860
+      ACCUMULATE_COMET_BVN2: http://206.191.154.164:8960
+      ETHEREUM_URL: https://eth-sepolia.g.alchemy.com/v2/aosGJNJkUckm6lCldSEmP
+      ETH_CHAIN_ID: "11155111"
+      ETH_PRIVATE_KEY: "0xb4fd71ebfb521de668996298dd5304ba1133964c38be9b7d5c9579bb0041c7a9"
+      CERTEN_CONTRACT_ADDRESS: "0xEb17eBd351D2e040a0cB3026a3D04BEc182d8b98"
+      ATTESTATION_PEERS: http://validator-1:8080,http://validator-2:8080,http://validator-3:8080,http://validator-4:8080,http://validator-6:8080,http://validator-7:8080
+      ATTESTATION_REQUIRED_COUNT: "5"
+      BLS_ZK_TESTING_MODE: "false"
+      LOG_LEVEL: info
+      PROOF_CYCLE_WRITEBACK: "true"
+      ACCUMULATE_SIGNER_URL: "acc://certenprotocol.acme/book/1"
+      ACCUMULATE_WRITEBACK_PRIV_KEY: "0c2576e533a6c4e81c07a9062859462514bf3bdb13bb92a32621d1e849ad1232d481f10ac40451048c827ac60327a233e21187043d41676832166b96812cab84"
+      ACCUMULATE_RESULTS_PRINCIPAL: "acc://certenprotocol.acme/execution-results"
+      CERTEN_IDENTITY: "acc://certenprotocol.acme"
+      CERTEN_IDENTITY_BOOK: "acc://certenprotocol.acme/book"
+      CERTEN_IDENTITY_KEYPAGE: "acc://certenprotocol.acme/book/1"
+      CERTEN_IDENTITY_DATA: "acc://certenprotocol.acme/execution-results"
+      CERTEN_KEYPAGE_PUBLIC_KEY: "d481f10ac40451048c827ac60327a233e21187043d41676832166b96812cab84"
+      CERTEN_KEYPAGE_PRIVATE_KEY: "0c2576e533a6c4e81c07a9062859462514bf3bdb13bb92a32621d1e849ad1232d481f10ac40451048c827ac60327a233e21187043d41676832166b96812cab84"
+    volumes:
+      - validator5_data:/app/data
+      - validator5_keys:/app/bft-keys
+      - ./bls_zk_keys:/app/bls_zk_keys:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - certen-net
+
+  validator-6:
+    build: ./validator-build
+    container_name: certen-validator-6
+    hostname: validator-6
+    ports:
+      - "8086:8080"
+      - "26706:26656"
+      - "26707:26657"
+    environment:
+      VALIDATOR_ID: validator-6
+      DATABASE_URL: postgres://certen:certen_testnet_2026@postgres:5432/certen_proofs?sslmode=disable
+      COMETBFT_ENABLED: "true"
+      COMETBFT_MODE: validator
+      COMETBFT_CHAIN_ID: certen-testnet
+      COMETBFT_RPC_URL: http://127.0.0.1:26657
+      COMETBFT_P2P_LADDR: tcp://0.0.0.0:26656
+      COMETBFT_RPC_LADDR: tcp://0.0.0.0:26657
+      # Per BFT Resiliency Task 4: Full peer redundancy
+      COMETBFT_P2P_SEEDS: "validator-1:26656,validator-2:26656,validator-3:26656,validator-4:26656,validator-5:26656,validator-7:26656"
+      ACCUMULATE_URL: http://206.191.154.164:8660
+      ACCUMULATE_COMET_DN: http://206.191.154.164:8660
+      ACCUMULATE_COMET_BVN: http://206.191.154.164:8760
+      ACCUMULATE_COMET_BVN0: http://206.191.154.164:8760
+      ACCUMULATE_COMET_BVN1: http://206.191.154.164:8860
+      ACCUMULATE_COMET_BVN2: http://206.191.154.164:8960
+      ETHEREUM_URL: https://eth-sepolia.g.alchemy.com/v2/aosGJNJkUckm6lCldSEmP
+      ETH_CHAIN_ID: "11155111"
+      ETH_PRIVATE_KEY: "0xa17a541b422a30813dc1cec732ac6dfe7a1dd2784fe1bd54ef403ee3cb6ba785"
+      CERTEN_CONTRACT_ADDRESS: "0xEb17eBd351D2e040a0cB3026a3D04BEc182d8b98"
+      ATTESTATION_PEERS: http://validator-1:8080,http://validator-2:8080,http://validator-3:8080,http://validator-4:8080,http://validator-5:8080,http://validator-7:8080
+      ATTESTATION_REQUIRED_COUNT: "5"
+      BLS_ZK_TESTING_MODE: "false"
+      LOG_LEVEL: info
+      PROOF_CYCLE_WRITEBACK: "true"
+      ACCUMULATE_SIGNER_URL: "acc://certenprotocol.acme/book/1"
+      ACCUMULATE_WRITEBACK_PRIV_KEY: "0c2576e533a6c4e81c07a9062859462514bf3bdb13bb92a32621d1e849ad1232d481f10ac40451048c827ac60327a233e21187043d41676832166b96812cab84"
+      ACCUMULATE_RESULTS_PRINCIPAL: "acc://certenprotocol.acme/execution-results"
+      CERTEN_IDENTITY: "acc://certenprotocol.acme"
+      CERTEN_IDENTITY_BOOK: "acc://certenprotocol.acme/book"
+      CERTEN_IDENTITY_KEYPAGE: "acc://certenprotocol.acme/book/1"
+      CERTEN_IDENTITY_DATA: "acc://certenprotocol.acme/execution-results"
+      CERTEN_KEYPAGE_PUBLIC_KEY: "d481f10ac40451048c827ac60327a233e21187043d41676832166b96812cab84"
+      CERTEN_KEYPAGE_PRIVATE_KEY: "0c2576e533a6c4e81c07a9062859462514bf3bdb13bb92a32621d1e849ad1232d481f10ac40451048c827ac60327a233e21187043d41676832166b96812cab84"
+    volumes:
+      - validator6_data:/app/data
+      - validator6_keys:/app/bft-keys
+      - ./bls_zk_keys:/app/bls_zk_keys:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - certen-net
+
+  validator-7:
+    build: ./validator-build
+    container_name: certen-validator-7
+    hostname: validator-7
+    ports:
+      - "8087:8080"
+      - "26716:26656"
+      - "26717:26657"
+    environment:
+      VALIDATOR_ID: validator-7
+      DATABASE_URL: postgres://certen:certen_testnet_2026@postgres:5432/certen_proofs?sslmode=disable
+      COMETBFT_ENABLED: "true"
+      COMETBFT_MODE: validator
+      COMETBFT_CHAIN_ID: certen-testnet
+      COMETBFT_RPC_URL: http://127.0.0.1:26657
+      COMETBFT_P2P_LADDR: tcp://0.0.0.0:26656
+      COMETBFT_RPC_LADDR: tcp://0.0.0.0:26657
+      # Per BFT Resiliency Task 4: Full peer redundancy
+      COMETBFT_P2P_SEEDS: "validator-1:26656,validator-2:26656,validator-3:26656,validator-4:26656,validator-5:26656,validator-6:26656"
+      ACCUMULATE_URL: http://206.191.154.164:8660
+      ACCUMULATE_COMET_DN: http://206.191.154.164:8660
+      ACCUMULATE_COMET_BVN: http://206.191.154.164:8760
+      ACCUMULATE_COMET_BVN0: http://206.191.154.164:8760
+      ACCUMULATE_COMET_BVN1: http://206.191.154.164:8860
+      ACCUMULATE_COMET_BVN2: http://206.191.154.164:8960
+      ETHEREUM_URL: https://eth-sepolia.g.alchemy.com/v2/aosGJNJkUckm6lCldSEmP
+      ETH_CHAIN_ID: "11155111"
+      ETH_PRIVATE_KEY: "0xd16b58f60d3274cb85d62347a096e339d30d546d30da3e209ed2b4d330effa25"
+      CERTEN_CONTRACT_ADDRESS: "0xEb17eBd351D2e040a0cB3026a3D04BEc182d8b98"
+      ATTESTATION_PEERS: http://validator-1:8080,http://validator-2:8080,http://validator-3:8080,http://validator-4:8080,http://validator-5:8080,http://validator-6:8080
+      ATTESTATION_REQUIRED_COUNT: "5"
+      BLS_ZK_TESTING_MODE: "false"
+      LOG_LEVEL: info
+      PROOF_CYCLE_WRITEBACK: "true"
+      ACCUMULATE_SIGNER_URL: "acc://certenprotocol.acme/book/1"
+      ACCUMULATE_WRITEBACK_PRIV_KEY: "0c2576e533a6c4e81c07a9062859462514bf3bdb13bb92a32621d1e849ad1232d481f10ac40451048c827ac60327a233e21187043d41676832166b96812cab84"
+      ACCUMULATE_RESULTS_PRINCIPAL: "acc://certenprotocol.acme/execution-results"
+      CERTEN_IDENTITY: "acc://certenprotocol.acme"
+      CERTEN_IDENTITY_BOOK: "acc://certenprotocol.acme/book"
+      CERTEN_IDENTITY_KEYPAGE: "acc://certenprotocol.acme/book/1"
+      CERTEN_IDENTITY_DATA: "acc://certenprotocol.acme/execution-results"
+      CERTEN_KEYPAGE_PUBLIC_KEY: "d481f10ac40451048c827ac60327a233e21187043d41676832166b96812cab84"
+      CERTEN_KEYPAGE_PRIVATE_KEY: "0c2576e533a6c4e81c07a9062859462514bf3bdb13bb92a32621d1e849ad1232d481f10ac40451048c827ac60327a233e21187043d41676832166b96812cab84"
+    volumes:
+      - validator7_data:/app/data
+      - validator7_keys:/app/bft-keys
+      - ./bls_zk_keys:/app/bls_zk_keys:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - certen-net
+
+volumes:
+  postgres_data:
+  validator1_data:
+  validator1_keys:
+  validator2_data:
+  validator2_keys:
+  validator3_data:
+  validator3_keys:
+  validator4_data:
+  validator4_keys:
+  validator5_data:
+  validator5_keys:
+  validator6_data:
+  validator6_keys:
+  validator7_data:
+  validator7_keys:
+
+networks:
+  certen-net:
+    driver: bridge
