@@ -653,11 +653,6 @@ func (app *ValidatorApp) Shutdown() error {
 		}
 		app.logger.Printf("✅ State flushed: height=%d, hash=%x",
 			app.latestHeight, app.lastCommitHash[:min(8, len(app.lastCommitHash))])
-
-		// Close ledger store
-		if err := app.ledgerStore.Close(); err != nil {
-			app.logger.Printf("⚠️ Error closing ledger store: %v", err)
-		}
 	}
 
 	app.logger.Printf("✅ Graceful shutdown complete")
