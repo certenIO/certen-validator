@@ -37,15 +37,31 @@ type ValidatorApp struct {
 	currentAccAnchor   *ledger.SystemAccumulateAnchorRef
 }
 
-// NewValidatorApp creates a new ABCI application for validator consensus
+// NewValidatorApp creates a new ABCI application for validator consensus.
+// It automatically restores state from the ledger if available, ensuring
+// CometBFT can sync properly after restart.
 func NewValidatorApp(ledgerStore *ledger.LedgerStore, chainID string) *ValidatorApp {
-	return &ValidatorApp{
+	app := &ValidatorApp{
 		logger:          log.New(log.Writer(), "[ValidatorApp] ", log.LstdFlags),
 		latestHeight:    0,
 		validatorBlocks: make(map[string]*ValidatorBlock),
 		ledgerStore:     ledgerStore,
 		chainID:         chainID,
 	}
+
+	// Restore persisted ABCI state for CometBFT recovery
+	if ledgerStore != nil {
+		if state, err := ledgerStore.LoadABCIState(); err != nil {
+			app.logger.Printf("⚠️ Failed to load ABCI state: %v (starting fresh)", err)
+		} else if state != nil {
+			app.latestHeight = state.LastBlockHeight
+			app.lastCommitHash = state.LastBlockAppHash
+			app.logger.Printf("✅ Restored ABCI state: height=%d, appHash=%x",
+				app.latestHeight, app.lastCommitHash[:min(8, len(app.lastCommitHash))])
+		}
+	}
+
+	return app
 }
 
 // GetLedgerStore returns the ledger store for compatibility with anchor manager
@@ -274,6 +290,16 @@ func (app *ValidatorApp) Commit(ctx context.Context, req *abcitypes.RequestCommi
 	// Generate application hash from current state
 	appHash := app.generateAppHash()
 	app.lastCommitHash = appHash
+
+	// CRITICAL: Persist ABCI state for CometBFT recovery after restart
+	// This ensures Info() returns the correct height and appHash so CometBFT
+	// can sync properly with the application state.
+	if err := app.ledgerStore.SaveABCIState(&ledger.ABCIState{
+		LastBlockHeight:  app.latestHeight,
+		LastBlockAppHash: appHash,
+	}); err != nil {
+		app.logger.Printf("❌ Failed to persist ABCI state: %v", err)
+	}
 
 	blockCount := len(app.validatorBlocks)
 	app.logger.Printf("📦 Committed validator block %d with %d ValidatorBlocks (hash: %x)",

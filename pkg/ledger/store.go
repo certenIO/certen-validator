@@ -45,6 +45,9 @@ var (
 
 	// Intent discovery state keys
 	keyIntentLastBlock = []byte("intent:last_block")          // -> uint64 (last processed block height)
+
+	// ABCI state keys (for CometBFT state recovery)
+	keyABCIState = []byte("abci:state")                       // -> ABCIState (height + appHash)
 )
 
 // systemBlockKey generates a KV key for a specific system ledger block
@@ -362,6 +365,32 @@ func (s *LedgerStore) LoadIntentLastBlock() (uint64, error) {
 		return 0, fmt.Errorf("invalid intent last block data: expected 8 bytes, got %d", len(b))
 	}
 	return binary.BigEndian.Uint64(b), nil
+}
+
+// ====== ABCI State Persistence for CometBFT Recovery ======
+
+// SaveABCIState persists the ABCI application state for CometBFT recovery.
+// This must be called during Commit() to ensure the state is durable.
+func (s *LedgerStore) SaveABCIState(state *ABCIState) error {
+	b, err := json.Marshal(state)
+	if err != nil {
+		return fmt.Errorf("failed to marshal ABCIState: %w", err)
+	}
+	return s.kv.Set(keyABCIState, b)
+}
+
+// LoadABCIState loads the persisted ABCI state for recovery after restart.
+// Returns nil, nil if no state has been persisted yet (fresh start).
+func (s *LedgerStore) LoadABCIState() (*ABCIState, error) {
+	b, err := s.kv.Get(keyABCIState)
+	if err != nil || len(b) == 0 {
+		return nil, nil // No state persisted yet - fresh start
+	}
+	var state ABCIState
+	if err := json.Unmarshal(b, &state); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal ABCIState: %w", err)
+	}
+	return &state, nil
 }
 
 // ====== Historical System Ledger Queries ======

@@ -123,6 +123,16 @@ type SystemLedgerQueryParams struct {
 	Height *uint64 `json:"height,omitempty"` // if nil or "latest" use latest
 }
 
+// ====== ABCI State for CometBFT Recovery ======
+
+// ABCIState stores the ABCI application state needed for CometBFT recovery after restart.
+// This ensures Info() returns correct LastBlockHeight and LastBlockAppHash so CometBFT
+// can sync properly with the application state.
+type ABCIState struct {
+	LastBlockHeight  int64  `json:"lastBlockHeight"`
+	LastBlockAppHash []byte `json:"lastBlockAppHash"`
+}
+
 // ====== Anchor Targets Configuration ======
 
 // AnchorTargets contains the fixed list of known anchor targets for iteration

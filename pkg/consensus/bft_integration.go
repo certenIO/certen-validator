@@ -1889,10 +1889,8 @@ func NewUnifiedCometBFTEngine(validatorID string) (*RealCometBFTEngine, error) {
 	cfg.P2P.ListenAddress = fmt.Sprintf("tcp://0.0.0.0:%d", p2pPort)
 	cfg.RPC.ListenAddress = fmt.Sprintf("tcp://0.0.0.0:%d", rpcPort)
 
-	// Block production settings - ENABLE empty blocks to keep consensus progressing
-	// This is critical for preventing consensus stalls due to P2P pong timeouts in Docker networks
-	cfg.Consensus.CreateEmptyBlocks = true
-	cfg.Consensus.CreateEmptyBlocksInterval = 3 * time.Second // Create empty block every 3s of idle to maintain peer sync
+	// Block production settings - Event-based (only create blocks when there are transactions)
+	cfg.Consensus.CreateEmptyBlocks = false
 
 	// Faster consensus timeouts for responsive block production
 	cfg.Consensus.TimeoutPropose = 2 * time.Second
