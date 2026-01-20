@@ -1980,10 +1980,10 @@ func NewUnifiedCometBFTEngine(validatorID string) (*RealCometBFTEngine, error) {
 	privValidator := privval.NewFilePV(privValidatorKey, privValKeyFile, privValStateFile)
 	privValidator.Save()
 
-	// Create a unified validator set of 4 BFT validators
-	totalValidators := 4
-	byzantineFaultThreshold := (totalValidators - 1) / 3 // f = 1
-	consensusThreshold := 2*byzantineFaultThreshold + 1  // 2f+1 = 3
+	// Create a unified validator set of 7 BFT validators
+	totalValidators := 7
+	byzantineFaultThreshold := (totalValidators - 1) / 3 // f = 2 (can tolerate 2 Byzantine faults)
+	consensusThreshold := 2*byzantineFaultThreshold + 1  // 2f+1 = 5 (need 5 for consensus)
 
 	logger.Printf("🏛️ Unified BFT validator network configuration:")
 	logger.Printf("   • Total validators: %d", totalValidators)
@@ -1991,9 +1991,9 @@ func NewUnifiedCometBFTEngine(validatorID string) (*RealCometBFTEngine, error) {
 	logger.Printf("   • Consensus threshold: %d", consensusThreshold)
 	logger.Printf("   • Current validator: %s", validatorID)
 
-	// Create the unified validator set for 4 BFT validators
+	// Create the unified validator set for 7 BFT validators
 	validatorMap := make(map[string]*SimpleBFTValidator)
-	validatorIDs := []string{"validator-1", "validator-2", "validator-3", "validator-4"}
+	validatorIDs := []string{"validator-1", "validator-2", "validator-3", "validator-4", "validator-5", "validator-6", "validator-7"}
 
 	for _, vID := range validatorIDs {
 		validatorPubKey := generateDeterministicValidatorPublicKey(vID)
@@ -2263,7 +2263,7 @@ func (e *RealCometBFTEngine) GetLedgerStoreProvider() LedgerStoreProvider {
 	return nil
 }
 
-// writeDeterministicGenesisIfNeeded writes shared genesis for all 4 validators
+// writeDeterministicGenesisIfNeeded writes shared genesis for all 7 validators
 func (engine *RealCometBFTEngine) writeDeterministicGenesisIfNeeded(cfg *config.Config) error {
 	genFile := cfg.GenesisFile()
 
@@ -2289,7 +2289,7 @@ func (engine *RealCometBFTEngine) writeDeterministicGenesisIfNeeded(cfg *config.
 		return fmt.Errorf("write genesis doc: %w", err)
 	}
 
-	engine.logger.Printf("✅ [GENESIS] Written shared deterministic genesis for 4-validator BFT network: %s", genFile)
+	engine.logger.Printf("✅ [GENESIS] Written shared deterministic genesis for 7-validator BFT network: %s", genFile)
 	engine.logger.Printf("   • ChainID: %s", genesisDoc.ChainID)
 	engine.logger.Printf("   • Validators: %d", len(genesisDoc.Validators))
 
@@ -2298,7 +2298,7 @@ func (engine *RealCometBFTEngine) writeDeterministicGenesisIfNeeded(cfg *config.
 
 // createGenesisDocument creates the genesis document with all validators
 func (engine *RealCometBFTEngine) createGenesisDocument() (*cmttypes.GenesisDoc, error) {
-	allValidatorIDs := []string{"validator-1", "validator-2", "validator-3", "validator-4"}
+	allValidatorIDs := []string{"validator-1", "validator-2", "validator-3", "validator-4", "validator-5", "validator-6", "validator-7"}
 	validators := make([]cmttypes.GenesisValidator, 0, len(allValidatorIDs))
 
 	for _, validatorID := range allValidatorIDs {
@@ -2599,7 +2599,7 @@ func (bv *BFTValidator) selectExecutorDeterministically(roundID, intentID string
 
 	// Convert to number and mod by available validators
 	// For now, just use a simple list of known validators
-	validators := []string{"validator-1", "validator-2", "validator-3", "validator-4"}
+	validators := []string{"validator-1", "validator-2", "validator-3", "validator-4", "validator-5", "validator-6", "validator-7"}
 	index := int(hashBytes[0]) % len(validators)
 
 	selected := validators[index]

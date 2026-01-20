@@ -190,7 +190,7 @@ func DefaultProcessorConfig() *ProcessorConfig {
 		GovernanceLevel: proof.GovLevelG1, // Default to G1 (governance correctness)
 		V3Endpoint:      "",               // Must be configured for real governance proofs
 		// CONSENSUS FIX: Default validator set - MUST be configured with actual validators
-		ValidatorSet:    []string{"validator-1", "validator-2", "validator-3", "validator-4"},
+		ValidatorSet:    []string{"validator-1", "validator-2", "validator-3", "validator-4", "validator-5", "validator-6", "validator-7"},
 	}
 }
 
@@ -210,7 +210,7 @@ func NewProcessor(repos *database.Repositories, anchorCreator AnchorCreator, cfg
 	validatorSet := cfg.ValidatorSet
 	if len(validatorSet) == 0 {
 		// Default validator set - MUST match across all validators
-		validatorSet = []string{"validator-1", "validator-2", "validator-3", "validator-4"}
+		validatorSet = []string{"validator-1", "validator-2", "validator-3", "validator-4", "validator-5", "validator-6", "validator-7"}
 	}
 	// Sort to ensure deterministic selection across all validators
 	sort.Strings(validatorSet)
