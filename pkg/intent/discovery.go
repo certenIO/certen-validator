@@ -1017,16 +1017,22 @@ func (id *IntentDiscovery) routeIntentToBatchSystem(intent *CertenIntent, certen
 // isCertenIntent checks if a transaction is a Certen intent (CRITICAL legacy method)
 func (id *IntentDiscovery) isCertenIntent(tx *accumulate.Transaction) bool {
 	// Check for CERTEN_INTENT memo in transaction header
+	// Accept both "CERTEN_INTENT" (canonical) and "certen-intent" (legacy) formats
 	if header, ok := tx.Data["header"].(map[string]interface{}); ok {
-		if memo, ok := header["memo"].(string); ok && memo == CERTEN_INTENT_MEMO {
-			return true
+		if memo, ok := header["memo"].(string); ok {
+			if memo == CERTEN_INTENT_MEMO || strings.EqualFold(memo, "certen-intent") {
+				return true
+			}
 		}
 	}
 
 	// Check for CERTEN_INTENT memo in transaction data (fallback)
+	// Accept both "CERTEN_INTENT" (canonical) and "certen-intent" (legacy) formats
 	if data, ok := tx.Data["memo"]; ok {
-		if memo, ok := data.(string); ok && memo == CERTEN_INTENT_MEMO {
-			return true
+		if memo, ok := data.(string); ok {
+			if memo == CERTEN_INTENT_MEMO || strings.EqualFold(memo, "certen-intent") {
+				return true
+			}
 		}
 	}
 

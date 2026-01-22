@@ -299,14 +299,23 @@ func main() {
     })
 
     // Ledger query endpoints
-    if abciApp := validatorNode.GetConsensusEngine().GetABCIApp(); abciApp != nil && abciApp.GetLedgerStore() != nil {
-        ledgerHandlers := server.NewLedgerHandlers(abciApp.GetLedgerStore(), abciApp.GetChainID())
-        mux.HandleFunc("/api/system-ledger", ledgerHandlers.HandleSystemLedger)
-        mux.HandleFunc("/api/anchor-ledger", ledgerHandlers.HandleAnchorLedger)
-        mux.HandleFunc("/api/ledger/status", ledgerHandlers.HandleLedgerStatus)
-        log.Printf("✅ Ledger query endpoints configured at /api/*")
+    // Use GetLedgerStoreProvider() which works for both CertenApplication and ValidatorApp
+    consensusEngine := validatorNode.GetConsensusEngine()
+    if consensusEngine == nil {
+        log.Printf("⚠️ Ledger endpoints not available - ConsensusEngine is nil")
     } else {
-        log.Printf("⚠️ Ledger endpoints not available - LedgerStore not found")
+        ledgerProvider := consensusEngine.GetLedgerStoreProvider()
+        if ledgerProvider == nil {
+            log.Printf("⚠️ Ledger endpoints not available - LedgerStoreProvider is nil")
+        } else if ledgerProvider.GetLedgerStore() == nil {
+            log.Printf("⚠️ Ledger endpoints not available - LedgerStore is nil (provider exists)")
+        } else {
+            ledgerHandlers := server.NewLedgerHandlers(ledgerProvider.GetLedgerStore(), ledgerProvider.GetChainID())
+            mux.HandleFunc("/api/system-ledger", ledgerHandlers.HandleSystemLedger)
+            mux.HandleFunc("/api/anchor-ledger", ledgerHandlers.HandleAnchorLedger)
+            mux.HandleFunc("/api/ledger/status", ledgerHandlers.HandleLedgerStatus)
+            log.Printf("✅ Ledger query endpoints configured at /api/*")
+        }
     }
 
     // ==========================================================================

@@ -128,6 +128,9 @@ type BFTConsensusEngine interface {
 	// BroadcastAppTxSync broadcasts ABCI transactions (executor_selection, execution_result) via in-process engine
 	BroadcastAppTxSync(ctx context.Context, tx []byte) error
 	GetABCIApp() *CertenApplication
+	// GetLedgerStoreProvider returns the ABCI app if it provides ledger store access
+	// This works for both CertenApplication and ValidatorApp
+	GetLedgerStoreProvider() LedgerStoreProvider
 }
 
 // BFTExecutionResult = "what CometBFT told us" for the VB tx.

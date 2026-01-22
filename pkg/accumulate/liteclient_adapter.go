@@ -342,10 +342,13 @@ func (l *LiteClientAdapter) searchForCertenMemo(data interface{}) bool {
 	switch v := data.(type) {
 	case map[string]interface{}:
 		// Check if this level has a memo field
+		// Accept both "CERTEN_INTENT" (canonical) and "certen-intent" (legacy) formats
 		if memo, ok := v["memo"]; ok {
-			if memoStr, ok := memo.(string); ok && memoStr == "CERTEN_INTENT" {
-				log.Printf("🎯 [MEMO-FOUND] Found CERTEN_INTENT memo in nested structure")
-				return true
+			if memoStr, ok := memo.(string); ok {
+				if memoStr == "CERTEN_INTENT" || strings.EqualFold(memoStr, "certen-intent") {
+					log.Printf("🎯 [MEMO-FOUND] Found CERTEN_INTENT memo in nested structure (value: %s)", memoStr)
+					return true
+				}
 			}
 		}
 		// Recursively search all nested maps
@@ -410,14 +413,15 @@ func (l *LiteClientAdapter) isWriteDataTransactionWithCertenMemo(entry BlockEntr
 	}
 
 	// Check 1: Must have CERTEN_INTENT memo in header
+	// Accept both "CERTEN_INTENT" (canonical) and "certen-intent" (legacy) formats
 	hasCertenMemo := false
 	if header, ok := transaction["header"].(map[string]interface{}); ok {
 		if memo, ok := header["memo"].(string); ok {
-			if memo == "CERTEN_INTENT" {
+			if memo == "CERTEN_INTENT" || strings.EqualFold(memo, "certen-intent") {
 				hasCertenMemo = true
-				log.Printf("✅ [STRICT-CHECK] Found CERTEN_INTENT memo in header")
+				log.Printf("✅ [STRICT-CHECK] Found CERTEN_INTENT memo in header (value: %s)", memo)
 			} else {
-				log.Printf("❌ [STRICT-CHECK] Header memo is '%s', not 'CERTEN_INTENT'", memo)
+				log.Printf("❌ [STRICT-CHECK] Header memo is '%s', not 'CERTEN_INTENT' or 'certen-intent'", memo)
 			}
 		} else {
 			// Check if memo is nil/empty vs missing
