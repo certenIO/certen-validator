@@ -53,15 +53,15 @@ services:
       BLS_ZK_TESTING_MODE: "false"
       LOG_LEVEL: info
       PROOF_CYCLE_WRITEBACK: "true"
-      ACCUMULATE_SIGNER_URL: "acc://certenprotocol.acme/book/1"
-      ACCUMULATE_WRITEBACK_PRIV_KEY: "0c2576e533a6c4e81c07a9062859462514bf3bdb13bb92a32621d1e849ad1232d481f10ac40451048c827ac60327a233e21187043d41676832166b96812cab84"
-      ACCUMULATE_RESULTS_PRINCIPAL: "acc://certenprotocol.acme/execution-results"
-      CERTEN_IDENTITY: "acc://certenprotocol.acme"
-      CERTEN_IDENTITY_BOOK: "acc://certenprotocol.acme/book"
-      CERTEN_IDENTITY_KEYPAGE: "acc://certenprotocol.acme/book/1"
-      CERTEN_IDENTITY_DATA: "acc://certenprotocol.acme/execution-results"
-      CERTEN_KEYPAGE_PUBLIC_KEY: "d481f10ac40451048c827ac60327a233e21187043d41676832166b96812cab84"
-      CERTEN_KEYPAGE_PRIVATE_KEY: "0c2576e533a6c4e81c07a9062859462514bf3bdb13bb92a32621d1e849ad1232d481f10ac40451048c827ac60327a233e21187043d41676832166b96812cab84"
+      ACCUMULATE_SIGNER_URL: "acc://certen-kermit-12.acme/book/1"
+      ACCUMULATE_WRITEBACK_PRIV_KEY: "7cf706620841738ec5f876f955601c6198967eac5e918667e699e288f5b568a29d7f15934ee37295c9c9480c8ae53cd11d38f067dde67231ecefc4eea38c82a7"
+      ACCUMULATE_RESULTS_PRINCIPAL: "acc://certen-kermit-12.acme/execution-results"
+      CERTEN_IDENTITY: "acc://certen-kermit-12.acme"
+      CERTEN_IDENTITY_BOOK: "acc://certen-kermit-12.acme/book"
+      CERTEN_IDENTITY_KEYPAGE: "acc://certen-kermit-12.acme/book/1"
+      CERTEN_IDENTITY_DATA: "acc://certen-kermit-12.acme/execution-results"
+      CERTEN_KEYPAGE_PUBLIC_KEY: "9d7f15934ee37295c9c9480c8ae53cd11d38f067dde67231ecefc4eea38c82a7"
+      CERTEN_KEYPAGE_PRIVATE_KEY: "7cf706620841738ec5f876f955601c6198967eac5e918667e699e288f5b568a29d7f15934ee37295c9c9480c8ae53cd11d38f067dde67231ecefc4eea38c82a7"
     volumes:
       - validator1_data:/app/data
       - validator1_keys:/app/bft-keys
@@ -107,15 +107,15 @@ services:
       BLS_ZK_TESTING_MODE: "false"
       LOG_LEVEL: info
       PROOF_CYCLE_WRITEBACK: "true"
-      ACCUMULATE_SIGNER_URL: "acc://certenprotocol.acme/book/1"
-      ACCUMULATE_WRITEBACK_PRIV_KEY: "0c2576e533a6c4e81c07a9062859462514bf3bdb13bb92a32621d1e849ad1232d481f10ac40451048c827ac60327a233e21187043d41676832166b96812cab84"
-      ACCUMULATE_RESULTS_PRINCIPAL: "acc://certenprotocol.acme/execution-results"
-      CERTEN_IDENTITY: "acc://certenprotocol.acme"
-      CERTEN_IDENTITY_BOOK: "acc://certenprotocol.acme/book"
-      CERTEN_IDENTITY_KEYPAGE: "acc://certenprotocol.acme/book/1"
-      CERTEN_IDENTITY_DATA: "acc://certenprotocol.acme/execution-results"
-      CERTEN_KEYPAGE_PUBLIC_KEY: "d481f10ac40451048c827ac60327a233e21187043d41676832166b96812cab84"
-      CERTEN_KEYPAGE_PRIVATE_KEY: "0c2576e533a6c4e81c07a9062859462514bf3bdb13bb92a32621d1e849ad1232d481f10ac40451048c827ac60327a233e21187043d41676832166b96812cab84"
+      ACCUMULATE_SIGNER_URL: "acc://certen-kermit-12.acme/book/1"
+      ACCUMULATE_WRITEBACK_PRIV_KEY: "7cf706620841738ec5f876f955601c6198967eac5e918667e699e288f5b568a29d7f15934ee37295c9c9480c8ae53cd11d38f067dde67231ecefc4eea38c82a7"
+      ACCUMULATE_RESULTS_PRINCIPAL: "acc://certen-kermit-12.acme/execution-results"
+      CERTEN_IDENTITY: "acc://certen-kermit-12.acme"
+      CERTEN_IDENTITY_BOOK: "acc://certen-kermit-12.acme/book"
+      CERTEN_IDENTITY_KEYPAGE: "acc://certen-kermit-12.acme/book/1"
+      CERTEN_IDENTITY_DATA: "acc://certen-kermit-12.acme/execution-results"
+      CERTEN_KEYPAGE_PUBLIC_KEY: "9d7f15934ee37295c9c9480c8ae53cd11d38f067dde67231ecefc4eea38c82a7"
+      CERTEN_KEYPAGE_PRIVATE_KEY: "7cf706620841738ec5f876f955601c6198967eac5e918667e699e288f5b568a29d7f15934ee37295c9c9480c8ae53cd11d38f067dde67231ecefc4eea38c82a7"
     volumes:
       - validator2_data:/app/data
       - validator2_keys:/app/bft-keys
@@ -161,15 +161,15 @@ services:
       BLS_ZK_TESTING_MODE: "false"
       LOG_LEVEL: info
       PROOF_CYCLE_WRITEBACK: "true"
-      ACCUMULATE_SIGNER_URL: "acc://certenprotocol.acme/book/1"
-      ACCUMULATE_WRITEBACK_PRIV_KEY: "0c2576e533a6c4e81c07a9062859462514bf3bdb13bb92a32621d1e849ad1232d481f10ac40451048c827ac60327a233e21187043d41676832166b96812cab84"
-      ACCUMULATE_RESULTS_PRINCIPAL: "acc://certenprotocol.acme/execution-results"
-      CERTEN_IDENTITY: "acc://certenprotocol.acme"
-      CERTEN_IDENTITY_BOOK: "acc://certenprotocol.acme/book"
-      CERTEN_IDENTITY_KEYPAGE: "acc://certenprotocol.acme/book/1"
-      CERTEN_IDENTITY_DATA: "acc://certenprotocol.acme/execution-results"
-      CERTEN_KEYPAGE_PUBLIC_KEY: "d481f10ac40451048c827ac60327a233e21187043d41676832166b96812cab84"
-      CERTEN_KEYPAGE_PRIVATE_KEY: "0c2576e533a6c4e81c07a9062859462514bf3bdb13bb92a32621d1e849ad1232d481f10ac40451048c827ac60327a233e21187043d41676832166b96812cab84"
+      ACCUMULATE_SIGNER_URL: "acc://certen-kermit-12.acme/book/1"
+      ACCUMULATE_WRITEBACK_PRIV_KEY: "7cf706620841738ec5f876f955601c6198967eac5e918667e699e288f5b568a29d7f15934ee37295c9c9480c8ae53cd11d38f067dde67231ecefc4eea38c82a7"
+      ACCUMULATE_RESULTS_PRINCIPAL: "acc://certen-kermit-12.acme/execution-results"
+      CERTEN_IDENTITY: "acc://certen-kermit-12.acme"
+      CERTEN_IDENTITY_BOOK: "acc://certen-kermit-12.acme/book"
+      CERTEN_IDENTITY_KEYPAGE: "acc://certen-kermit-12.acme/book/1"
+      CERTEN_IDENTITY_DATA: "acc://certen-kermit-12.acme/execution-results"
+      CERTEN_KEYPAGE_PUBLIC_KEY: "9d7f15934ee37295c9c9480c8ae53cd11d38f067dde67231ecefc4eea38c82a7"
+      CERTEN_KEYPAGE_PRIVATE_KEY: "7cf706620841738ec5f876f955601c6198967eac5e918667e699e288f5b568a29d7f15934ee37295c9c9480c8ae53cd11d38f067dde67231ecefc4eea38c82a7"
     volumes:
       - validator3_data:/app/data
       - validator3_keys:/app/bft-keys
@@ -215,15 +215,15 @@ services:
       BLS_ZK_TESTING_MODE: "false"
       LOG_LEVEL: info
       PROOF_CYCLE_WRITEBACK: "true"
-      ACCUMULATE_SIGNER_URL: "acc://certenprotocol.acme/book/1"
-      ACCUMULATE_WRITEBACK_PRIV_KEY: "0c2576e533a6c4e81c07a9062859462514bf3bdb13bb92a32621d1e849ad1232d481f10ac40451048c827ac60327a233e21187043d41676832166b96812cab84"
-      ACCUMULATE_RESULTS_PRINCIPAL: "acc://certenprotocol.acme/execution-results"
-      CERTEN_IDENTITY: "acc://certenprotocol.acme"
-      CERTEN_IDENTITY_BOOK: "acc://certenprotocol.acme/book"
-      CERTEN_IDENTITY_KEYPAGE: "acc://certenprotocol.acme/book/1"
-      CERTEN_IDENTITY_DATA: "acc://certenprotocol.acme/execution-results"
-      CERTEN_KEYPAGE_PUBLIC_KEY: "d481f10ac40451048c827ac60327a233e21187043d41676832166b96812cab84"
-      CERTEN_KEYPAGE_PRIVATE_KEY: "0c2576e533a6c4e81c07a9062859462514bf3bdb13bb92a32621d1e849ad1232d481f10ac40451048c827ac60327a233e21187043d41676832166b96812cab84"
+      ACCUMULATE_SIGNER_URL: "acc://certen-kermit-12.acme/book/1"
+      ACCUMULATE_WRITEBACK_PRIV_KEY: "7cf706620841738ec5f876f955601c6198967eac5e918667e699e288f5b568a29d7f15934ee37295c9c9480c8ae53cd11d38f067dde67231ecefc4eea38c82a7"
+      ACCUMULATE_RESULTS_PRINCIPAL: "acc://certen-kermit-12.acme/execution-results"
+      CERTEN_IDENTITY: "acc://certen-kermit-12.acme"
+      CERTEN_IDENTITY_BOOK: "acc://certen-kermit-12.acme/book"
+      CERTEN_IDENTITY_KEYPAGE: "acc://certen-kermit-12.acme/book/1"
+      CERTEN_IDENTITY_DATA: "acc://certen-kermit-12.acme/execution-results"
+      CERTEN_KEYPAGE_PUBLIC_KEY: "9d7f15934ee37295c9c9480c8ae53cd11d38f067dde67231ecefc4eea38c82a7"
+      CERTEN_KEYPAGE_PRIVATE_KEY: "7cf706620841738ec5f876f955601c6198967eac5e918667e699e288f5b568a29d7f15934ee37295c9c9480c8ae53cd11d38f067dde67231ecefc4eea38c82a7"
     volumes:
       - validator4_data:/app/data
       - validator4_keys:/app/bft-keys
@@ -269,15 +269,15 @@ services:
       BLS_ZK_TESTING_MODE: "false"
       LOG_LEVEL: info
       PROOF_CYCLE_WRITEBACK: "true"
-      ACCUMULATE_SIGNER_URL: "acc://certenprotocol.acme/book/1"
-      ACCUMULATE_WRITEBACK_PRIV_KEY: "0c2576e533a6c4e81c07a9062859462514bf3bdb13bb92a32621d1e849ad1232d481f10ac40451048c827ac60327a233e21187043d41676832166b96812cab84"
-      ACCUMULATE_RESULTS_PRINCIPAL: "acc://certenprotocol.acme/execution-results"
-      CERTEN_IDENTITY: "acc://certenprotocol.acme"
-      CERTEN_IDENTITY_BOOK: "acc://certenprotocol.acme/book"
-      CERTEN_IDENTITY_KEYPAGE: "acc://certenprotocol.acme/book/1"
-      CERTEN_IDENTITY_DATA: "acc://certenprotocol.acme/execution-results"
-      CERTEN_KEYPAGE_PUBLIC_KEY: "d481f10ac40451048c827ac60327a233e21187043d41676832166b96812cab84"
-      CERTEN_KEYPAGE_PRIVATE_KEY: "0c2576e533a6c4e81c07a9062859462514bf3bdb13bb92a32621d1e849ad1232d481f10ac40451048c827ac60327a233e21187043d41676832166b96812cab84"
+      ACCUMULATE_SIGNER_URL: "acc://certen-kermit-12.acme/book/1"
+      ACCUMULATE_WRITEBACK_PRIV_KEY: "7cf706620841738ec5f876f955601c6198967eac5e918667e699e288f5b568a29d7f15934ee37295c9c9480c8ae53cd11d38f067dde67231ecefc4eea38c82a7"
+      ACCUMULATE_RESULTS_PRINCIPAL: "acc://certen-kermit-12.acme/execution-results"
+      CERTEN_IDENTITY: "acc://certen-kermit-12.acme"
+      CERTEN_IDENTITY_BOOK: "acc://certen-kermit-12.acme/book"
+      CERTEN_IDENTITY_KEYPAGE: "acc://certen-kermit-12.acme/book/1"
+      CERTEN_IDENTITY_DATA: "acc://certen-kermit-12.acme/execution-results"
+      CERTEN_KEYPAGE_PUBLIC_KEY: "9d7f15934ee37295c9c9480c8ae53cd11d38f067dde67231ecefc4eea38c82a7"
+      CERTEN_KEYPAGE_PRIVATE_KEY: "7cf706620841738ec5f876f955601c6198967eac5e918667e699e288f5b568a29d7f15934ee37295c9c9480c8ae53cd11d38f067dde67231ecefc4eea38c82a7"
     volumes:
       - validator5_data:/app/data
       - validator5_keys:/app/bft-keys
@@ -323,15 +323,15 @@ services:
       BLS_ZK_TESTING_MODE: "false"
       LOG_LEVEL: info
       PROOF_CYCLE_WRITEBACK: "true"
-      ACCUMULATE_SIGNER_URL: "acc://certenprotocol.acme/book/1"
-      ACCUMULATE_WRITEBACK_PRIV_KEY: "0c2576e533a6c4e81c07a9062859462514bf3bdb13bb92a32621d1e849ad1232d481f10ac40451048c827ac60327a233e21187043d41676832166b96812cab84"
-      ACCUMULATE_RESULTS_PRINCIPAL: "acc://certenprotocol.acme/execution-results"
-      CERTEN_IDENTITY: "acc://certenprotocol.acme"
-      CERTEN_IDENTITY_BOOK: "acc://certenprotocol.acme/book"
-      CERTEN_IDENTITY_KEYPAGE: "acc://certenprotocol.acme/book/1"
-      CERTEN_IDENTITY_DATA: "acc://certenprotocol.acme/execution-results"
-      CERTEN_KEYPAGE_PUBLIC_KEY: "d481f10ac40451048c827ac60327a233e21187043d41676832166b96812cab84"
-      CERTEN_KEYPAGE_PRIVATE_KEY: "0c2576e533a6c4e81c07a9062859462514bf3bdb13bb92a32621d1e849ad1232d481f10ac40451048c827ac60327a233e21187043d41676832166b96812cab84"
+      ACCUMULATE_SIGNER_URL: "acc://certen-kermit-12.acme/book/1"
+      ACCUMULATE_WRITEBACK_PRIV_KEY: "7cf706620841738ec5f876f955601c6198967eac5e918667e699e288f5b568a29d7f15934ee37295c9c9480c8ae53cd11d38f067dde67231ecefc4eea38c82a7"
+      ACCUMULATE_RESULTS_PRINCIPAL: "acc://certen-kermit-12.acme/execution-results"
+      CERTEN_IDENTITY: "acc://certen-kermit-12.acme"
+      CERTEN_IDENTITY_BOOK: "acc://certen-kermit-12.acme/book"
+      CERTEN_IDENTITY_KEYPAGE: "acc://certen-kermit-12.acme/book/1"
+      CERTEN_IDENTITY_DATA: "acc://certen-kermit-12.acme/execution-results"
+      CERTEN_KEYPAGE_PUBLIC_KEY: "9d7f15934ee37295c9c9480c8ae53cd11d38f067dde67231ecefc4eea38c82a7"
+      CERTEN_KEYPAGE_PRIVATE_KEY: "7cf706620841738ec5f876f955601c6198967eac5e918667e699e288f5b568a29d7f15934ee37295c9c9480c8ae53cd11d38f067dde67231ecefc4eea38c82a7"
     volumes:
       - validator6_data:/app/data
       - validator6_keys:/app/bft-keys
@@ -377,15 +377,15 @@ services:
       BLS_ZK_TESTING_MODE: "false"
       LOG_LEVEL: info
       PROOF_CYCLE_WRITEBACK: "true"
-      ACCUMULATE_SIGNER_URL: "acc://certenprotocol.acme/book/1"
-      ACCUMULATE_WRITEBACK_PRIV_KEY: "0c2576e533a6c4e81c07a9062859462514bf3bdb13bb92a32621d1e849ad1232d481f10ac40451048c827ac60327a233e21187043d41676832166b96812cab84"
-      ACCUMULATE_RESULTS_PRINCIPAL: "acc://certenprotocol.acme/execution-results"
-      CERTEN_IDENTITY: "acc://certenprotocol.acme"
-      CERTEN_IDENTITY_BOOK: "acc://certenprotocol.acme/book"
-      CERTEN_IDENTITY_KEYPAGE: "acc://certenprotocol.acme/book/1"
-      CERTEN_IDENTITY_DATA: "acc://certenprotocol.acme/execution-results"
-      CERTEN_KEYPAGE_PUBLIC_KEY: "d481f10ac40451048c827ac60327a233e21187043d41676832166b96812cab84"
-      CERTEN_KEYPAGE_PRIVATE_KEY: "0c2576e533a6c4e81c07a9062859462514bf3bdb13bb92a32621d1e849ad1232d481f10ac40451048c827ac60327a233e21187043d41676832166b96812cab84"
+      ACCUMULATE_SIGNER_URL: "acc://certen-kermit-12.acme/book/1"
+      ACCUMULATE_WRITEBACK_PRIV_KEY: "7cf706620841738ec5f876f955601c6198967eac5e918667e699e288f5b568a29d7f15934ee37295c9c9480c8ae53cd11d38f067dde67231ecefc4eea38c82a7"
+      ACCUMULATE_RESULTS_PRINCIPAL: "acc://certen-kermit-12.acme/execution-results"
+      CERTEN_IDENTITY: "acc://certen-kermit-12.acme"
+      CERTEN_IDENTITY_BOOK: "acc://certen-kermit-12.acme/book"
+      CERTEN_IDENTITY_KEYPAGE: "acc://certen-kermit-12.acme/book/1"
+      CERTEN_IDENTITY_DATA: "acc://certen-kermit-12.acme/execution-results"
+      CERTEN_KEYPAGE_PUBLIC_KEY: "9d7f15934ee37295c9c9480c8ae53cd11d38f067dde67231ecefc4eea38c82a7"
+      CERTEN_KEYPAGE_PRIVATE_KEY: "7cf706620841738ec5f876f955601c6198967eac5e918667e699e288f5b568a29d7f15934ee37295c9c9480c8ae53cd11d38f067dde67231ecefc4eea38c82a7"
     volumes:
       - validator7_data:/app/data
       - validator7_keys:/app/bft-keys
