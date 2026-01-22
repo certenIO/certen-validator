@@ -44,10 +44,10 @@ func (r *BatchRepository) CreateBatch(ctx context.Context, input *NewAnchorBatch
 
 	query := `
 		INSERT INTO anchor_batches (
-			batch_id, batch_type, merkle_root, transaction_count,
+			id, batch_type, merkle_root, transaction_count,
 			batch_start_time, validator_id, status, created_at, updated_at
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-		RETURNING batch_id, created_at, updated_at`
+		RETURNING id, created_at, updated_at`
 
 	err := r.client.QueryRowContext(ctx, query,
 		batch.BatchID, batch.BatchType, batch.MerkleRoot, batch.TxCount,
@@ -64,12 +64,12 @@ func (r *BatchRepository) CreateBatch(ctx context.Context, input *NewAnchorBatch
 // GetBatch retrieves a batch by ID
 func (r *BatchRepository) GetBatch(ctx context.Context, batchID uuid.UUID) (*AnchorBatch, error) {
 	query := `
-		SELECT batch_id, batch_type, merkle_root, transaction_count,
+		SELECT id, batch_type, merkle_root, transaction_count,
 			batch_start_time, batch_end_time, accumulate_block_height,
 			accumulate_block_hash, validator_id, status, error_message,
 			created_at, updated_at
 		FROM anchor_batches
-		WHERE batch_id = $1`
+		WHERE id = $1`
 
 	batch := &AnchorBatch{}
 	err := r.client.QueryRowContext(ctx, query, batchID).Scan(
@@ -93,7 +93,7 @@ func (r *BatchRepository) GetBatch(ctx context.Context, batchID uuid.UUID) (*Anc
 // GetPendingBatch returns the current open batch for the validator (if any)
 func (r *BatchRepository) GetPendingBatch(ctx context.Context, validatorID string, batchType BatchType) (*AnchorBatch, error) {
 	query := `
-		SELECT batch_id, batch_type, merkle_root, transaction_count,
+		SELECT id, batch_type, merkle_root, transaction_count,
 			batch_start_time, batch_end_time, accumulate_block_height,
 			accumulate_block_hash, validator_id, status, error_message,
 			created_at, updated_at
@@ -124,7 +124,7 @@ func (r *BatchRepository) GetPendingBatch(ctx context.Context, validatorID strin
 // GetBatchesReadyForAnchoring returns batches that are closed and ready to be anchored
 func (r *BatchRepository) GetBatchesReadyForAnchoring(ctx context.Context) ([]*AnchorBatch, error) {
 	query := `
-		SELECT batch_id, batch_type, merkle_root, transaction_count,
+		SELECT id, batch_type, merkle_root, transaction_count,
 			batch_start_time, batch_end_time, accumulate_block_height,
 			accumulate_block_hash, validator_id, status, error_message,
 			created_at, updated_at
@@ -166,7 +166,7 @@ func (r *BatchRepository) CloseBatch(ctx context.Context, batchID uuid.UUID, mer
 			accumulate_block_height = $4,
 			accumulate_block_hash = $5,
 			updated_at = $6
-		WHERE batch_id = $1 AND status = 'pending'`
+		WHERE id = $1 AND status = 'pending'`
 
 	result, err := r.client.ExecContext(ctx, query,
 		batchID, merkleRoot, time.Now(), accumHeight, accumHash, time.Now())
@@ -191,13 +191,13 @@ func (r *BatchRepository) UpdateBatchStatus(ctx context.Context, batchID uuid.UU
 		query = `
 			UPDATE anchor_batches
 			SET status = $2, error_message = $3, updated_at = $4
-			WHERE batch_id = $1`
+			WHERE id = $1`
 		args = []interface{}{batchID, status, errorMsg, time.Now()}
 	} else {
 		query = `
 			UPDATE anchor_batches
 			SET status = $2, updated_at = $3
-			WHERE batch_id = $1`
+			WHERE id = $1`
 		args = []interface{}{batchID, status, time.Now()}
 	}
 
@@ -214,7 +214,7 @@ func (r *BatchRepository) IncrementTxCount(ctx context.Context, batchID uuid.UUI
 	query := `
 		UPDATE anchor_batches
 		SET transaction_count = transaction_count + 1, updated_at = $2
-		WHERE batch_id = $1`
+		WHERE id = $1`
 
 	_, err := r.client.ExecContext(ctx, query, batchID, time.Now())
 	if err != nil {
