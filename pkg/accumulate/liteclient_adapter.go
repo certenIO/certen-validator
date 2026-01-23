@@ -1843,12 +1843,33 @@ func (l *LiteClientAdapter) SubmitEnvelope(ctx context.Context, envelopeJSON []b
 	}
 
 	// Build the SubmitRequest format expected by Accumulate V3 API
-	// The API expects: { "envelope": { "signatures": [...], "transaction": [...] } }
-	submitRequest := map[string]interface{}{
-		"envelope": envelope,
+	// IMPORTANT: V3 API expects { "transaction": [...], "signatures": [...] } directly
+	// NOT wrapped in "envelope" - this matches the JS SDK format
+	submitRequest := map[string]interface{}{}
+
+	// Extract transaction and signatures from the envelope
+	if txs, ok := envelope["Transaction"].([]interface{}); ok {
+		submitRequest["transaction"] = txs
+	} else if txs, ok := envelope["transaction"].([]interface{}); ok {
+		submitRequest["transaction"] = txs
+	} else if tx, ok := envelope["Transaction"]; ok {
+		submitRequest["transaction"] = []interface{}{tx}
+	} else if tx, ok := envelope["transaction"]; ok {
+		submitRequest["transaction"] = []interface{}{tx}
 	}
 
-	log.Printf("🔍 [V3-SUBMIT] Submitting envelope to Accumulate with method 'submit'")
+	if sigs, ok := envelope["Signatures"].([]interface{}); ok {
+		submitRequest["signatures"] = sigs
+	} else if sigs, ok := envelope["signatures"].([]interface{}); ok {
+		submitRequest["signatures"] = sigs
+	} else if sig, ok := envelope["Signatures"]; ok {
+		submitRequest["signatures"] = []interface{}{sig}
+	} else if sig, ok := envelope["signatures"]; ok {
+		submitRequest["signatures"] = []interface{}{sig}
+	}
+
+	log.Printf("🔍 [V3-SUBMIT] Submitting to Accumulate (format: transaction+signatures)")
+	log.Printf("🔍 [V3-SUBMIT] Request: %+v", submitRequest)
 
 	// Submit using V3 API
 	result, err := l.queryV3API(ctx, "submit", submitRequest)
