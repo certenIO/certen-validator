@@ -1633,43 +1633,117 @@ func (l *LiteClientAdapter) Close() error {
 // These methods support the proof cycle write-back to Accumulate
 // =============================================================================
 
-// GetTransactionStatus queries the status of a transaction by hash
+// GetTransactionStatus queries the status of a transaction by hash or full transaction ID
 func (l *LiteClientAdapter) GetTransactionStatus(ctx context.Context, txHash string) (string, error) {
 	if l.client == nil {
 		return "", fmt.Errorf("lite client not initialized")
 	}
 
+	// Determine the scope for the query
+	// If txHash is already a full transaction ID (starts with acc://), use it directly
+	// Otherwise, construct the scope with @unknown (legacy behavior)
+	var scope string
+	if strings.HasPrefix(txHash, "acc://") {
+		scope = txHash
+	} else {
+		scope = fmt.Sprintf("acc://%s@unknown", txHash)
+	}
+
+	log.Printf("🔍 [V3-STATUS] Querying transaction status: %s", scope)
+
 	// Query transaction using V3 API
 	result, err := l.queryV3API(ctx, "query", map[string]interface{}{
-		"scope":  fmt.Sprintf("acc://%s@unknown", txHash),
-		"query": map[string]interface{}{
-			"queryType": "transactionStatus",
-		},
+		"scope": scope,
 	})
 	if err != nil {
 		return "", fmt.Errorf("query transaction status: %w", err)
 	}
 
-	// Extract status from response
-	if record, ok := result["record"].(map[string]interface{}); ok {
-		if status, ok := record["status"].(map[string]interface{}); ok {
-			if code, ok := status["code"].(string); ok {
-				return code, nil
+	log.Printf("🔍 [V3-STATUS] Query result: %+v", result)
+
+	// Helper to extract status from a status object
+	extractStatus := func(status map[string]interface{}) string {
+		// Check for string status code
+		if code, ok := status["code"].(string); ok {
+			return code
+		}
+		// Check for numeric status code (statusNo)
+		if statusNo, ok := status["statusNo"].(float64); ok {
+			switch int(statusNo) {
+			case 0:
+				return "pending"
+			case 201:
+				return "delivered"
+			case 301, 302, 303, 304, 305:
+				return "failed"
+			default:
+				return "unknown"
 			}
-			if codeFloat, ok := status["code"].(float64); ok {
-				// Map numeric codes to string status
-				switch int(codeFloat) {
-				case 0:
-					return "pending", nil
-				case 201:
-					return "delivered", nil
-				default:
-					return "unknown", nil
-				}
+		}
+		// Check for numeric code
+		if codeFloat, ok := status["code"].(float64); ok {
+			switch int(codeFloat) {
+			case 0:
+				return "pending"
+			case 201:
+				return "delivered"
+			default:
+				return "unknown"
+			}
+		}
+		// Check for string status directly
+		if s, ok := status["status"].(string); ok {
+			return s
+		}
+		return ""
+	}
+
+	// Try extracting status from various response formats
+	// Format 1: Direct status in result
+	if status, ok := result["status"].(string); ok && status != "" {
+		log.Printf("🔍 [V3-STATUS] Found direct status: %s", status)
+		return status, nil
+	}
+
+	// Format 2: statusNo in result
+	if statusNo, ok := result["statusNo"].(float64); ok {
+		switch int(statusNo) {
+		case 201:
+			return "delivered", nil
+		case 0:
+			return "pending", nil
+		default:
+			return "unknown", nil
+		}
+	}
+
+	// Format 3: Status in record.status
+	if record, ok := result["record"].(map[string]interface{}); ok {
+		if statusObj, ok := record["status"].(map[string]interface{}); ok {
+			if s := extractStatus(statusObj); s != "" {
+				log.Printf("🔍 [V3-STATUS] Found status in record.status: %s", s)
+				return s, nil
+			}
+		}
+		// Also check for direct status/statusNo in record
+		if status, ok := record["status"].(string); ok && status != "" {
+			return status, nil
+		}
+		if statusNo, ok := record["statusNo"].(float64); ok && int(statusNo) == 201 {
+			return "delivered", nil
+		}
+	}
+
+	// Format 4: Status in message records
+	if msg, ok := result["message"].(map[string]interface{}); ok {
+		if statusObj, ok := msg["status"].(map[string]interface{}); ok {
+			if s := extractStatus(statusObj); s != "" {
+				return s, nil
 			}
 		}
 	}
 
+	log.Printf("⚠️ [V3-STATUS] Could not extract status, returning pending")
 	return "pending", nil
 }
 
