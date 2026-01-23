@@ -1973,8 +1973,14 @@ func (l *LiteClientAdapter) SubmitDirect(ctx context.Context, submission map[str
 
 	log.Printf("🔍 [V3-SUBMIT-DIRECT] Submitting to Accumulate with method 'submit'")
 
+	// Wrap the submission in an "envelope" key as required by V3 API
+	// The API expects: { "envelope": { "transaction": [...], "signatures": [...] } }
+	params := map[string]interface{}{
+		"envelope": submission,
+	}
+
 	// Submit using V3 API
-	result, err := l.queryV3API(ctx, "submit", submission)
+	result, err := l.queryV3API(ctx, "submit", params)
 	if err != nil {
 		return "", fmt.Errorf("submit direct: %w", err)
 	}
