@@ -366,24 +366,32 @@ func (p *Processor) ProcessClosedBatch(ctx context.Context, result *ClosedBatchR
 		p.mu.Unlock()
 	}()
 
-	p.logger.Printf("Processing closed batch %s (txs=%d, root=%s)",
-		result.BatchID, result.TxCount, result.MerkleRootHex[:16]+"...")
+	// Determine batch type prefix for logging
+	batchTypePrefix := "[ON-CADENCE]"
+	priceTier := "$0.05/proof"
+	if result.BatchType == database.BatchTypeOnDemand {
+		batchTypePrefix = "[ON-DEMAND]"
+		priceTier = "$0.25/proof"
+	}
+
+	p.logger.Printf("%s Processing closed batch %s (txs=%d, root=%s, price_tier=%s)",
+		batchTypePrefix, result.BatchID, result.TxCount, result.MerkleRootHex[:16]+"...", priceTier)
 
 	// =======================================================================
 	// Phase 2 Task 2.2: Generate Real Governance Proofs Before Anchoring
 	// Per CRITICAL-002 fix: Generate governance proofs using native library
 	// =======================================================================
 	if p.govGenerator != nil && len(result.Transactions) > 0 {
-		p.logger.Printf("🔐 [Phase 2] Generating governance proofs for batch %s...", result.BatchID)
+		p.logger.Printf("%s 🔐 [Phase 2] Generating governance proofs for batch %s...", batchTypePrefix, result.BatchID)
 		if err := p.enrichBatchWithGovernanceProofs(ctx, result); err != nil {
-			p.logger.Printf("⚠️ [Phase 2] Governance proof generation failed (non-fatal): %v", err)
+			p.logger.Printf("%s ⚠️ [Phase 2] Governance proof generation failed (non-fatal): %v", batchTypePrefix, err)
 			// Continue - governance proof failure is non-fatal
 			// In production with strict mode, this should be a hard failure
 		} else {
-			p.logger.Printf("✅ [Phase 2] Governance proofs generated successfully")
+			p.logger.Printf("%s ✅ [Phase 2] Governance proofs generated successfully", batchTypePrefix)
 		}
 	} else if len(result.Transactions) > 0 {
-		p.logger.Printf("⚠️ [Phase 2] No governance generator configured - using existing proof data")
+		p.logger.Printf("%s ⚠️ [Phase 2] No governance generator configured - using existing proof data", batchTypePrefix)
 	}
 
 	// =======================================================================
@@ -398,8 +406,8 @@ func (p *Processor) ProcessClosedBatch(ctx context.Context, result *ClosedBatchR
 	// Step 1: Create anchor on external chain (ONLY if elected executor)
 	var anchorResult *BatchAnchorResult
 	if p.anchorCreator != nil && isElected {
-		p.logger.Printf("🚀 [CONSENSUS] Validator %s is ELECTED - proceeding with anchor creation for batch %s",
-			p.validatorID, result.BatchID)
+		p.logger.Printf("%s 🚀 [CONSENSUS] Validator %s is ELECTED - proceeding with anchor creation for batch %s (price_tier=%s)",
+			batchTypePrefix, p.validatorID, result.BatchID, priceTier)
 
 		// Phase 2: Extract proof data from ClosedBatchResult per HIGH-002, HIGH-003
 		txProofs, govProofs, govLevels := p.extractProofDataFromResult(result)
@@ -430,34 +438,34 @@ func (p *Processor) ProcessClosedBatch(ctx context.Context, result *ClosedBatchR
 			return fmt.Errorf("failed to create anchor: %w", err)
 		}
 
-		p.logger.Printf("✅ [CONSENSUS] Anchor created by elected executor on %s: tx=%s, block=%d",
-			anchorResult.TargetChain, anchorResult.TxHash[:16]+"...", anchorResult.BlockNumber)
+		p.logger.Printf("%s ✅ [CONSENSUS] Anchor created by elected executor on %s: tx=%s, block=%d",
+			batchTypePrefix, anchorResult.TargetChain, anchorResult.TxHash[:16]+"...", anchorResult.BlockNumber)
 		// =====================================================================
 		// PHASE 1: Execute Comprehensive Proof (CRITICAL-001 Fix)
 		// Per ANCHOR_V3_IMPLEMENTATION_PLAN.md: MUST call executeComprehensiveProof
 		// after createAnchor to submit L1-L4 cryptographic proofs and G0-G2
 		// governance proofs for on-chain verification.
 		// =====================================================================
-		p.logger.Printf("📋 [Phase 1] Building comprehensive proof for batch %s...", result.BatchID)
+		p.logger.Printf("%s 📋 [Phase 1] Building comprehensive proof for batch %s...", batchTypePrefix, result.BatchID)
 
 		proofReq, buildErr := p.buildProofRequestFromBatch(result, anchorResult)
 		if buildErr != nil {
-			p.logger.Printf("⚠️ [Phase 1] Failed to build proof request: %v", buildErr)
+			p.logger.Printf("%s ⚠️ [Phase 1] Failed to build proof request: %v", batchTypePrefix, buildErr)
 			// Continue - anchor was created, proof execution is optional for now
 			// In production, this should be a hard failure
 		} else {
-			p.logger.Printf("📋 [Phase 1] Executing comprehensive proof on-chain...")
+			p.logger.Printf("%s 📋 [Phase 1] Executing comprehensive proof on-chain...", batchTypePrefix)
 
 			proofResult, proofErr := p.anchorCreator.ExecuteComprehensiveProof(ctx, proofReq)
 			if proofErr != nil {
-				p.logger.Printf("⚠️ [Phase 1] Comprehensive proof execution failed: %v", proofErr)
+				p.logger.Printf("%s ⚠️ [Phase 1] Comprehensive proof execution failed: %v", batchTypePrefix, proofErr)
 				// Continue - anchor was created, but proof execution failed
 				// In production, this should trigger retry logic
 			} else if proofResult != nil {
-				p.logger.Printf("✅ [Phase 1] Comprehensive proof executed successfully!")
-				p.logger.Printf("   Proof TxHash: %s", proofResult.TxHash[:16]+"...")
-				p.logger.Printf("   Block: %d, GasUsed: %d", proofResult.BlockNumber, proofResult.GasUsed)
-				p.logger.Printf("   ProofValid: %v, Success: %v", proofResult.ProofValid, proofResult.Success)
+				p.logger.Printf("%s ✅ [Phase 1] Comprehensive proof executed successfully!", batchTypePrefix)
+				p.logger.Printf("%s    Proof TxHash: %s", batchTypePrefix, proofResult.TxHash[:16]+"...")
+				p.logger.Printf("%s    Block: %d, GasUsed: %d", batchTypePrefix, proofResult.BlockNumber, proofResult.GasUsed)
+				p.logger.Printf("%s    ProofValid: %v, Success: %v", batchTypePrefix, proofResult.ProofValid, proofResult.Success)
 			}
 		}
 	} else if p.anchorCreator != nil && !isElected {
@@ -529,7 +537,7 @@ func (p *Processor) ProcessClosedBatch(ctx context.Context, result *ClosedBatchR
 		}
 	}
 
-	p.logger.Printf("Batch %s processed successfully", result.BatchID)
+	p.logger.Printf("%s Batch %s processed successfully (price_tier=%s)", batchTypePrefix, result.BatchID, priceTier)
 	return nil
 }
 

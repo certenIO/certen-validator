@@ -106,6 +106,48 @@ type OnDemandAnchorResponse struct {
 	Error string `json:"error,omitempty"`
 }
 
+// BatchInfoResponse provides detailed batch information with class-aware context
+// Per Implementation Plan: API responses must include delay expectation and status messages
+type BatchInfoResponse struct {
+	// Batch identification
+	BatchID   string `json:"batch_id"`
+	BatchType string `json:"batch_type"` // "on_cadence" or "on_demand"
+
+	// Batch state
+	Status         string `json:"status"`
+	StatusMessage  string `json:"status_message"`
+	TransactionCount int  `json:"transaction_count"`
+
+	// Timing information
+	StartTime            string  `json:"start_time"`
+	AgeSeconds           int64   `json:"age_seconds"`
+	ExpectedCompletionAt *string `json:"expected_completion_at,omitempty"`
+
+	// Class-aware context
+	IsDelayExpected bool   `json:"is_delay_expected"`
+	PriceTier       string `json:"price_tier"` // "$0.05" or "$0.25"
+
+	// Additional context for on-cadence batches
+	RemainingSeconds *int64 `json:"remaining_seconds,omitempty"`
+}
+
+// CurrentBatchesResponse is the enhanced response for /api/batches/current
+type CurrentBatchesResponse struct {
+	ValidatorID      string             `json:"validator_id"`
+	Timestamp        string             `json:"timestamp"`
+	OnCadenceBatch   *BatchInfoResponse `json:"on_cadence_batch,omitempty"`
+	OnDemandBatch    *BatchInfoResponse `json:"on_demand_batch,omitempty"`
+	OnDemandStats    interface{}        `json:"on_demand_stats,omitempty"`
+	SystemHealth     *BatchHealthInfo   `json:"system_health"`
+}
+
+// BatchHealthInfo provides batch system health status
+type BatchHealthInfo struct {
+	Status               string `json:"status"` // "healthy", "delayed", "stalled"
+	Message              string `json:"message"`
+	OnCadenceDelayNormal bool   `json:"on_cadence_delay_normal"`
+}
+
 // HandleOnDemandAnchor handles POST /api/anchors/on-demand
 // Per whitepaper: On-demand anchoring at ~$0.25/proof for immediate confirmation
 func (h *BatchHandlers) HandleOnDemandAnchor(w http.ResponseWriter, r *http.Request) {
@@ -257,6 +299,7 @@ func (h *BatchHandlers) HandleBatchStatus(w http.ResponseWriter, r *http.Request
 
 // HandleBatchInfo handles GET /api/batches/current
 // Returns info about the current on-cadence and on-demand batches
+// Per Implementation Plan: Enhanced response includes delay expectations and status messages
 func (h *BatchHandlers) HandleBatchInfo(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
@@ -265,35 +308,98 @@ func (h *BatchHandlers) HandleBatchInfo(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	response := map[string]interface{}{
-		"validator_id": h.validatorID,
-		"timestamp":    time.Now().UTC().Format(time.RFC3339),
+	// Default batch interval (15 minutes per whitepaper)
+	batchInterval := 15 * time.Minute
+
+	response := &CurrentBatchesResponse{
+		ValidatorID: h.validatorID,
+		Timestamp:   time.Now().UTC().Format(time.RFC3339),
+		SystemHealth: &BatchHealthInfo{
+			Status:               "healthy",
+			Message:              "Batch system operational.",
+			OnCadenceDelayNormal: true,
+		},
 	}
 
 	if h.collector != nil {
+		// Process on-cadence batch with class-aware context
 		if onCadence := h.collector.GetOnCadenceBatchInfo(); onCadence != nil {
-			response["on_cadence_batch"] = map[string]interface{}{
-				"batch_id":   onCadence.BatchID,
-				"batch_type": onCadence.BatchType,
-				"start_time": onCadence.StartTime,
-				"tx_count":   onCadence.TxCount,
-				"age":        onCadence.Age.String(),
+			statusInfo := batch.GetBatchStatusInfo(
+				onCadence.BatchType,
+				database.BatchStatusPending,
+				onCadence.StartTime,
+				batchInterval,
+			)
+
+			batchInfo := &BatchInfoResponse{
+				BatchID:          onCadence.BatchID.String(),
+				BatchType:        string(onCadence.BatchType),
+				Status:           string(database.BatchStatusPending),
+				StatusMessage:    statusInfo.StatusMessage,
+				TransactionCount: onCadence.TxCount,
+				StartTime:        onCadence.StartTime.UTC().Format(time.RFC3339),
+				AgeSeconds:       int64(onCadence.Age.Seconds()),
+				IsDelayExpected:  statusInfo.IsDelayExpected,
+				PriceTier:        statusInfo.PriceTier,
 			}
+
+			// Add expected completion time for on-cadence batches
+			if statusInfo.ExpectedCompletionAt != nil {
+				completionStr := statusInfo.ExpectedCompletionAt.UTC().Format(time.RFC3339)
+				batchInfo.ExpectedCompletionAt = &completionStr
+
+				remaining := time.Until(*statusInfo.ExpectedCompletionAt).Seconds()
+				if remaining > 0 {
+					remainingSec := int64(remaining)
+					batchInfo.RemainingSeconds = &remainingSec
+				}
+			}
+
+			response.OnCadenceBatch = batchInfo
+
+			// Update system health message
+			response.SystemHealth.Message = "On-cadence batch collecting transactions. Delays up to 15 minutes are normal."
 		}
 
+		// Process on-demand batch
 		if onDemand := h.collector.GetOnDemandBatchInfo(); onDemand != nil {
-			response["on_demand_batch"] = map[string]interface{}{
-				"batch_id":   onDemand.BatchID,
-				"batch_type": onDemand.BatchType,
-				"start_time": onDemand.StartTime,
-				"tx_count":   onDemand.TxCount,
-				"age":        onDemand.Age.String(),
+			statusInfo := batch.GetBatchStatusInfo(
+				onDemand.BatchType,
+				database.BatchStatusPending,
+				onDemand.StartTime,
+				batchInterval,
+			)
+
+			batchInfo := &BatchInfoResponse{
+				BatchID:          onDemand.BatchID.String(),
+				BatchType:        string(onDemand.BatchType),
+				Status:           string(database.BatchStatusPending),
+				StatusMessage:    statusInfo.StatusMessage,
+				TransactionCount: onDemand.TxCount,
+				StartTime:        onDemand.StartTime.UTC().Format(time.RFC3339),
+				AgeSeconds:       int64(onDemand.Age.Seconds()),
+				IsDelayExpected:  statusInfo.IsDelayExpected,
+				PriceTier:        statusInfo.PriceTier,
 			}
+
+			response.OnDemandBatch = batchInfo
+		}
+
+		// Get batch system health
+		healthStatus := batch.GetBatchSystemHealth(
+			h.collector.GetOnCadenceBatchInfo(),
+			h.collector.GetOnDemandBatchInfo(),
+			batchInterval,
+		)
+		response.SystemHealth = &BatchHealthInfo{
+			Status:               healthStatus.OverallStatus,
+			Message:              healthStatus.StatusMessage,
+			OnCadenceDelayNormal: healthStatus.OnCadenceDelayNormal,
 		}
 	}
 
 	if h.onDemandHandler != nil {
-		response["on_demand_stats"] = h.onDemandHandler.GetStats()
+		response.OnDemandStats = h.onDemandHandler.GetStats()
 	}
 
 	json.NewEncoder(w).Encode(response)

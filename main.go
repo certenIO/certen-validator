@@ -298,6 +298,118 @@ func main() {
         w.Write(healthStatus.ToJSON())
     })
 
+    // Detailed health endpoint - Per Implementation Plan: Batch-aware health status
+    // This endpoint provides comprehensive health information including batch system state
+    mux.HandleFunc("/health/detailed", func(w http.ResponseWriter, r *http.Request) {
+        w.Header().Set("Content-Type", "application/json")
+
+        // Build detailed health response
+        detailed := struct {
+            Status            string                 `json:"status"`
+            Phase             string                 `json:"phase"`
+            Consensus         string                 `json:"consensus"`
+            Database          string                 `json:"database"`
+            Ethereum          string                 `json:"ethereum"`
+            Accumulate        string                 `json:"accumulate"`
+            BatchSystem       string                 `json:"batch_system"`
+            ProofCycle        string                 `json:"proof_cycle"`
+            UptimeSeconds     int64                  `json:"uptime_seconds"`
+            BatchDetails      map[string]interface{} `json:"batch_details"`
+            StatusExplanation string                 `json:"status_explanation"`
+        }{
+            Status:        healthStatus.Status,
+            Phase:         healthStatus.Phase,
+            Consensus:     healthStatus.Consensus,
+            Database:      healthStatus.Database,
+            Ethereum:      healthStatus.Ethereum,
+            Accumulate:    healthStatus.Accumulate,
+            BatchSystem:   healthStatus.BatchSystem,
+            ProofCycle:    healthStatus.ProofCycle,
+            UptimeSeconds: int64(time.Since(healthStatus.startTime).Seconds()),
+            BatchDetails:  make(map[string]interface{}),
+        }
+
+        // Add batch system details if available
+        if batchComponents != nil && batchComponents.Collector != nil {
+            batchInterval := 15 * time.Minute
+
+            // Get on-cadence batch info
+            onCadenceInfo := batchComponents.Collector.GetOnCadenceBatchInfo()
+            if onCadenceInfo != nil {
+                expectedCompletion := onCadenceInfo.StartTime.Add(batchInterval)
+                remaining := time.Until(expectedCompletion)
+
+                detailed.BatchDetails["on_cadence"] = map[string]interface{}{
+                    "batch_id":               onCadenceInfo.BatchID.String(),
+                    "transaction_count":      onCadenceInfo.TxCount,
+                    "age_seconds":            int64(onCadenceInfo.Age.Seconds()),
+                    "start_time":             onCadenceInfo.StartTime.UTC().Format(time.RFC3339),
+                    "expected_completion_at": expectedCompletion.UTC().Format(time.RFC3339),
+                    "remaining_seconds":      int64(remaining.Seconds()),
+                    "is_delay_expected":      true,
+                    "price_tier":             "$0.05/proof",
+                    "status_message":         "On-cadence batch delays up to 15 minutes are normal operation.",
+                }
+
+                // Check if batch is stalled (beyond expected + grace period)
+                if onCadenceInfo.Age > (batchInterval + 5*time.Minute) {
+                    detailed.BatchDetails["on_cadence_warning"] = "Batch age exceeds expected window. May require investigation."
+                }
+            }
+
+            // Get on-demand batch info
+            onDemandInfo := batchComponents.Collector.GetOnDemandBatchInfo()
+            if onDemandInfo != nil {
+                detailed.BatchDetails["on_demand"] = map[string]interface{}{
+                    "batch_id":          onDemandInfo.BatchID.String(),
+                    "transaction_count": onDemandInfo.TxCount,
+                    "age_seconds":       int64(onDemandInfo.Age.Seconds()),
+                    "start_time":        onDemandInfo.StartTime.UTC().Format(time.RFC3339),
+                    "is_delay_expected": false,
+                    "price_tier":        "$0.25/proof",
+                    "status_message":    "On-demand batches anchor immediately.",
+                }
+
+                // Check if on-demand batch is stalled
+                if onDemandInfo.Age > 2*time.Minute {
+                    detailed.BatchDetails["on_demand_warning"] = "On-demand batch age exceeds expected. May require investigation."
+                }
+            }
+
+            // Get batch system health status
+            batchHealth := batch.GetBatchSystemHealth(onCadenceInfo, onDemandInfo, batchInterval)
+            detailed.BatchDetails["system_health"] = map[string]interface{}{
+                "overall_status":         batchHealth.OverallStatus,
+                "on_cadence_status":      batchHealth.OnCadenceStatus,
+                "on_demand_status":       batchHealth.OnDemandStatus,
+                "on_cadence_delay_normal": batchHealth.OnCadenceDelayNormal,
+                "message":                batchHealth.StatusMessage,
+            }
+        }
+
+        // Build status explanation
+        switch healthStatus.Status {
+        case "ok":
+            detailed.StatusExplanation = "All systems operational. Batch system is functioning normally."
+        case "degraded":
+            detailed.StatusExplanation = "System is operational but some components are degraded. " +
+                "On-cadence batch delays up to 15 minutes are expected and do not indicate a problem."
+        case "error":
+            detailed.StatusExplanation = "One or more critical components have failed. Investigation required."
+        default:
+            detailed.StatusExplanation = "System status is being determined."
+        }
+
+        // Return appropriate status code
+        if healthStatus.Status == "ok" || healthStatus.Status == "degraded" {
+            w.WriteHeader(http.StatusOK)
+        } else {
+            w.WriteHeader(http.StatusServiceUnavailable)
+        }
+
+        json.NewEncoder(w).Encode(detailed)
+    })
+
     // Ledger query endpoints
     // Use GetLedgerStoreProvider() which works for both CertenApplication and ValidatorApp
     consensusEngine := validatorNode.GetConsensusEngine()

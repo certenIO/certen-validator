@@ -284,6 +284,65 @@ type ConfirmationStats struct {
 	TrackerRunning        bool  `json:"tracker_running"`
 }
 
+// BatchAwareStatus provides batch-type-aware status for health checks
+type BatchAwareStatus struct {
+	TrackerStatus         string `json:"tracker_status"`
+	TotalAnchors          int64  `json:"total_anchors"`
+	FinalizedAnchors      int64  `json:"finalized_anchors"`
+	PendingAnchors        int64  `json:"pending_anchors"`
+	RequiredConfirmations int    `json:"required_confirmations"`
+	StatusMessage         string `json:"status_message"`
+	IsHealthy             bool   `json:"is_healthy"`
+}
+
+// GetBatchAwareStatus returns the confirmation tracker status with batch-aware context
+// Per Implementation Plan: This method provides health check information that understands
+// that on-cadence batch delays are expected and should not be flagged as issues
+func (t *ConfirmationTracker) GetBatchAwareStatus(ctx context.Context) (*BatchAwareStatus, error) {
+	stats, err := t.GetStats(ctx)
+	if err != nil {
+		return &BatchAwareStatus{
+			TrackerStatus: "error",
+			StatusMessage: fmt.Sprintf("Failed to get tracker stats: %v", err),
+			IsHealthy:     false,
+		}, err
+	}
+
+	status := &BatchAwareStatus{
+		TotalAnchors:          stats.TotalAnchors,
+		FinalizedAnchors:      stats.FinalizedAnchors,
+		PendingAnchors:        stats.PendingAnchors,
+		RequiredConfirmations: stats.RequiredConfirmations,
+		IsHealthy:             true,
+	}
+
+	// Determine tracker status
+	if !stats.TrackerRunning {
+		status.TrackerStatus = "stopped"
+		status.StatusMessage = "Confirmation tracker is not running."
+		status.IsHealthy = false
+		return status, nil
+	}
+
+	status.TrackerStatus = "running"
+
+	// Build status message
+	if stats.PendingAnchors > 0 {
+		status.StatusMessage = fmt.Sprintf(
+			"Tracking %d pending anchors. %d/%d confirmations required for finality. "+
+				"Waiting for confirmations is normal operation.",
+			stats.PendingAnchors, 0, stats.RequiredConfirmations)
+	} else if stats.TotalAnchors > 0 {
+		status.StatusMessage = fmt.Sprintf(
+			"All %d anchors confirmed. System operating normally.",
+			stats.FinalizedAnchors)
+	} else {
+		status.StatusMessage = "No anchors tracked yet. System ready."
+	}
+
+	return status, nil
+}
+
 // EthereumBlockProvider implements BlockInfoProvider for Ethereum
 type EthereumBlockProvider struct {
 	// getLatestBlock is called to get the latest block number

@@ -114,7 +114,7 @@ func (s *Scheduler) Start(ctx context.Context) error {
 
 	go s.run(ctx)
 
-	s.logger.Printf("Scheduler started (interval=%s, check=%s)", s.interval, s.checkInterval)
+	s.logger.Printf("[ON-CADENCE] Scheduler started (interval=%s, check=%s)", s.interval, s.checkInterval)
 	return nil
 }
 
@@ -133,7 +133,7 @@ func (s *Scheduler) Stop() error {
 	// Wait for run loop to finish
 	<-s.doneCh
 
-	s.logger.Println("Scheduler stopped")
+	s.logger.Println("[ON-CADENCE] Scheduler stopped")
 	return nil
 }
 
@@ -143,7 +143,7 @@ func (s *Scheduler) Pause() {
 	defer s.mu.Unlock()
 	if s.state == SchedulerStateRunning {
 		s.state = SchedulerStatePaused
-		s.logger.Println("Scheduler paused")
+		s.logger.Println("[ON-CADENCE] Scheduler paused")
 	}
 }
 
@@ -153,7 +153,7 @@ func (s *Scheduler) Resume() {
 	defer s.mu.Unlock()
 	if s.state == SchedulerStatePaused {
 		s.state = SchedulerStateRunning
-		s.logger.Println("Scheduler resumed")
+		s.logger.Println("[ON-CADENCE] Scheduler resumed")
 	}
 }
 
@@ -178,7 +178,7 @@ func (s *Scheduler) run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			s.logger.Println("Scheduler context cancelled")
+			s.logger.Println("[ON-CADENCE] Scheduler context cancelled")
 			return
 
 		case <-s.stopCh:
@@ -203,8 +203,10 @@ func (s *Scheduler) run(ctx context.Context) {
 			if !hasBatch {
 				batchStartTime = info.StartTime
 				hasBatch = true
-				s.logger.Printf("Tracking on-cadence batch %s (started %s ago)",
-					info.BatchID, time.Since(info.StartTime).Round(time.Second))
+				expectedCompletion := info.StartTime.Add(s.interval)
+				s.logger.Printf("[ON-CADENCE] Tracking batch %s (started %s ago, expected completion: %s)",
+					info.BatchID, time.Since(info.StartTime).Round(time.Second),
+					expectedCompletion.Format("15:04:05"))
 			}
 
 			// Check if batch should be closed
@@ -226,7 +228,7 @@ func (s *Scheduler) run(ctx context.Context) {
 			}
 
 			if shouldClose && info.TxCount > 0 {
-				s.logger.Printf("Closing on-cadence batch %s (reason=%s, txs=%d, age=%s)",
+				s.logger.Printf("[ON-CADENCE] Closing batch %s (reason=%s, txs=%d, age=%s, price_tier=$0.05/proof)",
 					info.BatchID, reason, info.TxCount, time.Since(batchStartTime).Round(time.Second))
 
 				// Get current Accumulate state
@@ -235,7 +237,7 @@ func (s *Scheduler) run(ctx context.Context) {
 				// Close the batch
 				result, err := s.collector.CloseOnCadenceBatch(ctx, height, hash)
 				if err != nil {
-					s.logger.Printf("Failed to close batch: %v", err)
+					s.logger.Printf("[ON-CADENCE] Failed to close batch: %v", err)
 					continue
 				}
 
@@ -244,7 +246,7 @@ func (s *Scheduler) run(ctx context.Context) {
 				// Call the callback if set
 				if s.callback != nil && result != nil {
 					if err := s.callback(ctx, result); err != nil {
-						s.logger.Printf("Batch callback failed: %v", err)
+						s.logger.Printf("[ON-CADENCE] Batch callback failed: %v", err)
 					}
 				}
 			}
@@ -270,7 +272,7 @@ func (s *Scheduler) TriggerClose(ctx context.Context) (*ClosedBatchResult, error
 
 	if s.callback != nil && result != nil {
 		if err := s.callback(ctx, result); err != nil {
-			s.logger.Printf("Batch callback failed: %v", err)
+			s.logger.Printf("[ON-CADENCE] Batch callback failed during manual trigger: %v", err)
 		}
 	}
 
@@ -303,5 +305,5 @@ func (s *Scheduler) SetInterval(d time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.interval = d
-	s.logger.Printf("Batch interval updated to %s", d)
+	s.logger.Printf("[ON-CADENCE] Batch interval updated to %s", d)
 }

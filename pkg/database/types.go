@@ -36,12 +36,14 @@ const (
 type BatchStatus string
 
 const (
-	BatchStatusPending   BatchStatus = "pending"   // Batch is open, accepting transactions
-	BatchStatusClosed    BatchStatus = "closed"    // Batch is closed, ready for anchoring
-	BatchStatusAnchoring BatchStatus = "anchoring" // Anchor transaction submitted
-	BatchStatusAnchored  BatchStatus = "anchored"  // Anchor transaction confirmed (1+ confirmations)
-	BatchStatusConfirmed BatchStatus = "confirmed" // Anchor has sufficient confirmations
-	BatchStatusFailed    BatchStatus = "failed"    // Anchoring failed
+	BatchStatusPending          BatchStatus = "pending"                // Batch is open, accepting transactions
+	BatchStatusWaitingForBatch  BatchStatus = "waiting_for_batch"      // Transaction added, waiting for batch window to close (~15 min on-cadence)
+	BatchStatusClosed           BatchStatus = "closed"                 // Batch is closed, ready for anchoring
+	BatchStatusAnchoring        BatchStatus = "anchoring"              // Anchor transaction submitted
+	BatchStatusAnchored         BatchStatus = "anchored"               // Anchor transaction confirmed (1+ confirmations)
+	BatchStatusWaitingConfirms  BatchStatus = "waiting_for_confirmations" // Waiting for blockchain finality confirmations
+	BatchStatusConfirmed        BatchStatus = "confirmed"              // Anchor has sufficient confirmations
+	BatchStatusFailed           BatchStatus = "failed"                 // Anchoring failed
 )
 
 // AnchorBatch represents a batch of transactions anchored together
