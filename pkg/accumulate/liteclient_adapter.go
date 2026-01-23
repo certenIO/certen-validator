@@ -1912,13 +1912,35 @@ func (l *LiteClientAdapter) SubmitEnvelope(ctx context.Context, envelopeJSON []b
 		return txID, nil
 	}
 
-	// If we got a success response but no ID, generate one from the envelope
-	if result["success"] == true || result["message"] == nil {
-		log.Printf("⚠️ [V3-SUBMIT] No transaction ID in response, but submission appears successful")
-		return "submitted-pending-id", nil
+	// Log full response structure for debugging
+	responseJSON, _ := json.MarshalIndent(result, "", "  ")
+	log.Printf("🔍 [V3-SUBMIT] Full response structure:\n%s", string(responseJSON))
+
+	// Check if response itself is an array (direct result array format)
+	// This handles cases where Accumulate returns: [{ "status": { "txID": "..." }, "success": true }]
+	if respArr, ok := result[""].([]interface{}); ok && len(respArr) > 0 {
+		log.Printf("🔍 [V3-SUBMIT] Found root-level array with %d items", len(respArr))
+		if first, ok := respArr[0].(map[string]interface{}); ok {
+			if status, ok := first["status"].(map[string]interface{}); ok {
+				if txID, ok := status["txID"].(string); ok {
+					return txID, nil
+				}
+			}
+		}
 	}
 
-	return "", fmt.Errorf("no transaction hash in response: %+v", result)
+	// Final fallback: check for "message" field which may contain txID
+	if msg, ok := result["message"].(map[string]interface{}); ok {
+		if txID, ok := msg["txID"].(string); ok {
+			return txID, nil
+		}
+		if id, ok := msg["id"].(string); ok {
+			return id, nil
+		}
+	}
+
+	// IMPORTANT: Don't return placeholder - return error so we can debug
+	return "", fmt.Errorf("could not extract transaction ID from response: %+v", result)
 }
 
 // GetCreditBalance returns the credit balance for a key page or lite identity
