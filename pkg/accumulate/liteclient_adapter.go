@@ -1964,6 +1964,64 @@ func (l *LiteClientAdapter) SubmitEnvelope(ctx context.Context, envelopeJSON []b
 	return "", fmt.Errorf("could not extract transaction ID from response: %+v", result)
 }
 
+// SubmitDirect submits a transaction directly using the V3 API format
+// This takes a pre-built submission map with "transaction" and "signatures" keys
+func (l *LiteClientAdapter) SubmitDirect(ctx context.Context, submission map[string]interface{}) (string, error) {
+	if l.client == nil {
+		return "", fmt.Errorf("lite client not initialized")
+	}
+
+	log.Printf("🔍 [V3-SUBMIT-DIRECT] Submitting to Accumulate with method 'submit'")
+
+	// Submit using V3 API
+	result, err := l.queryV3API(ctx, "submit", submission)
+	if err != nil {
+		return "", fmt.Errorf("submit direct: %w", err)
+	}
+
+	log.Printf("🔍 [V3-SUBMIT-DIRECT] Submit response: %+v", result)
+
+	// Extract transaction hash from response
+	// Response format is: { "result": [{ "status": { "txID": "..." }, "success": true }, ...] }
+	// Or the array may be at the top level
+	if arr, ok := result["result"].([]interface{}); ok && len(arr) > 0 {
+		for _, item := range arr {
+			if submission, ok := item.(map[string]interface{}); ok {
+				if success, _ := submission["success"].(bool); success {
+					if status, ok := submission["status"].(map[string]interface{}); ok {
+						if txID, ok := status["txID"].(string); ok {
+							log.Printf("✅ [V3-SUBMIT-DIRECT] Transaction submitted successfully: %s", txID)
+							return txID, nil
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Also check for top-level array (some API versions)
+	if arr, ok := result[""].([]interface{}); ok && len(arr) > 0 {
+		if first, ok := arr[0].(map[string]interface{}); ok {
+			if status, ok := first["status"].(map[string]interface{}); ok {
+				if txID, ok := status["txID"].(string); ok {
+					return txID, nil
+				}
+			}
+		}
+	}
+
+	// Check for direct txID in result
+	if txID, ok := result["txID"].(string); ok {
+		return txID, nil
+	}
+
+	// Log full response for debugging
+	responseJSON, _ := json.MarshalIndent(result, "", "  ")
+	log.Printf("⚠️ [V3-SUBMIT-DIRECT] Could not extract txID. Full response:\n%s", string(responseJSON))
+
+	return "", fmt.Errorf("could not extract transaction ID from submit response")
+}
+
 // GetCreditBalance returns the credit balance for a key page or lite identity
 func (l *LiteClientAdapter) GetCreditBalance(ctx context.Context, signerURL string) (uint64, error) {
 	if l.client == nil {

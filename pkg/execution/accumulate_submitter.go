@@ -269,16 +269,49 @@ func (s *AccumulateSubmitterImpl) createAndSignSignature(tx *protocol.Transactio
 
 // submitEnvelope submits the envelope to Accumulate via JSON-RPC
 func (s *AccumulateSubmitterImpl) submitEnvelope(ctx context.Context, envelope *messaging.Envelope) (string, error) {
-	// Serialize the envelope to JSON for the JSON-RPC call
-	envelopeJSON, err := json.Marshal(envelope)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal envelope: %w", err)
+	// Build the submission in the exact format expected by Accumulate V3 API
+	// Format: { "transaction": [...], "signatures": [...] }
+	// This matches the JS SDK's client.submit() format
+
+	// Convert transactions to the expected format
+	txArray := make([]interface{}, 0, len(envelope.Transaction))
+	for _, tx := range envelope.Transaction {
+		txJSON, err := json.Marshal(tx)
+		if err != nil {
+			return "", fmt.Errorf("failed to marshal transaction: %w", err)
+		}
+		var txMap map[string]interface{}
+		if err := json.Unmarshal(txJSON, &txMap); err != nil {
+			return "", fmt.Errorf("failed to unmarshal transaction: %w", err)
+		}
+		txArray = append(txArray, txMap)
 	}
 
-	s.logger.Printf("🔍 [V3-SUBMIT] Submitting envelope to Accumulate")
+	// Convert signatures to the expected format
+	sigArray := make([]interface{}, 0, len(envelope.Signatures))
+	for _, sig := range envelope.Signatures {
+		sigJSON, err := json.Marshal(sig)
+		if err != nil {
+			return "", fmt.Errorf("failed to marshal signature: %w", err)
+		}
+		var sigMap map[string]interface{}
+		if err := json.Unmarshal(sigJSON, &sigMap); err != nil {
+			return "", fmt.Errorf("failed to unmarshal signature: %w", err)
+		}
+		sigArray = append(sigArray, sigMap)
+	}
 
-	// Submit using the client's SubmitEnvelope method
-	txHash, err := s.client.SubmitEnvelope(ctx, envelopeJSON)
+	// Build the submission request directly (not wrapped in "envelope")
+	submission := map[string]interface{}{
+		"transaction": txArray,
+		"signatures":  sigArray,
+	}
+
+	submissionJSON, _ := json.MarshalIndent(submission, "", "  ")
+	s.logger.Printf("🔍 [V3-SUBMIT] Submitting to Accumulate:\n%s", string(submissionJSON))
+
+	// Submit using the client's SubmitDirect method
+	txHash, err := s.client.SubmitDirect(ctx, submission)
 	if err != nil {
 		return "", fmt.Errorf("failed to submit to network: %w", err)
 	}
