@@ -2075,6 +2075,42 @@ func (l *LiteClientAdapter) GetCreditBalance(ctx context.Context, signerURL stri
 	return 0, nil
 }
 
+// GetKeyPageVersion returns the current version for a key page
+// This MUST be queried before each transaction to ensure correct signer version
+func (l *LiteClientAdapter) GetKeyPageVersion(ctx context.Context, signerURL string) (uint64, error) {
+	if l.client == nil {
+		return 0, fmt.Errorf("lite client not initialized")
+	}
+
+	// Query account to get key page version
+	result, err := l.queryV3API(ctx, "query", map[string]interface{}{
+		"scope": signerURL,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("query key page version: %w", err)
+	}
+
+	// Extract version from response
+	// The V3 API returns {"recordType": "account", "account": {...}} at top level
+	if account, ok := result["account"].(map[string]interface{}); ok {
+		if version, ok := account["version"].(float64); ok {
+			return uint64(version), nil
+		}
+	}
+
+	// Structure 2: result["record"]["account"]["version"] (wrapped response)
+	if record, ok := result["record"].(map[string]interface{}); ok {
+		if account, ok := record["account"].(map[string]interface{}); ok {
+			if version, ok := account["version"].(float64); ok {
+				return uint64(version), nil
+			}
+		}
+	}
+
+	// Default to 1 if not found (most key pages start at version 1)
+	return 1, nil
+}
+
 // GetSignerNonce returns the current nonce for a signer (key page or lite identity)
 func (l *LiteClientAdapter) GetSignerNonce(ctx context.Context, signerURL string) (uint64, error) {
 	if l.client == nil {

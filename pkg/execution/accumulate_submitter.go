@@ -175,7 +175,7 @@ func (s *AccumulateSubmitterImpl) SubmitTransaction(ctx context.Context, tx *Syn
 
 	// Step 3: Create and sign the signature using proper Accumulate signing
 	timestamp := uint64(time.Now().UnixMicro())
-	sig, err := s.createAndSignSignature(accTx, timestamp)
+	sig, err := s.createAndSignSignature(ctx, accTx, timestamp)
 	if err != nil {
 		return "", fmt.Errorf("failed to create signature: %w", err)
 	}
@@ -226,19 +226,37 @@ func (s *AccumulateSubmitterImpl) createAccumulateTransaction(tx *SyntheticTrans
 	return accTx, nil
 }
 
+// getKeyPageVersion queries the signer URL to get the current key page version
+func (s *AccumulateSubmitterImpl) getKeyPageVersion(ctx context.Context) (uint64, error) {
+	// Query the key page to get current version
+	version, err := s.client.GetKeyPageVersion(ctx, s.signerURL)
+	if err != nil {
+		s.logger.Printf("⚠️ Failed to query key page version, using fallback: %v", err)
+		return s.keyPageIndex, nil // Fall back to configured value
+	}
+	s.logger.Printf("🔑 Key page version from query: %d", version)
+	return version, nil
+}
+
 // createAndSignSignature creates and signs an ED25519 signature using Accumulate protocol
-func (s *AccumulateSubmitterImpl) createAndSignSignature(tx *protocol.Transaction, timestamp uint64) (*protocol.ED25519Signature, error) {
+func (s *AccumulateSubmitterImpl) createAndSignSignature(ctx context.Context, tx *protocol.Transaction, timestamp uint64) (*protocol.ED25519Signature, error) {
 	// Parse the signer URL
 	signerURL, err := url.Parse(s.signerURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid signer URL: %w", err)
 	}
 
+	// Query current key page version - MUST be done before each signature
+	keyPageVersion, err := s.getKeyPageVersion(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get key page version: %w", err)
+	}
+
 	// Create the signature object (without the actual signature bytes yet)
 	sig := &protocol.ED25519Signature{
 		PublicKey:     s.publicKey,
 		Signer:        signerURL,
-		SignerVersion: s.keyPageIndex,
+		SignerVersion: keyPageVersion,
 		Timestamp:     timestamp,
 	}
 
