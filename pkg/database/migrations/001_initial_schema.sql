@@ -25,14 +25,24 @@ CREATE TABLE IF NOT EXISTS anchor_batches (
     status          VARCHAR(20) NOT NULL DEFAULT 'pending',
     merkle_root     BYTEA,
     tx_count        INTEGER NOT NULL DEFAULT 0,
+    transaction_count INTEGER NOT NULL DEFAULT 0,
     target_chain    VARCHAR(50) NOT NULL DEFAULT 'ethereum',
     anchor_tx_hash  VARCHAR(66),
     anchor_block_num BIGINT,
     gas_used        BIGINT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     closed_at       TIMESTAMPTZ,
     anchored_at     TIMESTAMPTZ,
     confirmed_at    TIMESTAMPTZ,
+    -- Batch timing and source tracking
+    batch_start_time TIMESTAMPTZ DEFAULT NOW(),
+    batch_end_time  TIMESTAMPTZ,
+    validator_id    VARCHAR(100),
+    error_message   TEXT,
+    -- Accumulate block reference
+    accumulate_block_height BIGINT,
+    accumulate_block_hash VARCHAR(66),
     -- Phase 5 additions
     bpt_root        BYTEA,
     governance_root BYTEA,
@@ -61,23 +71,31 @@ CREATE INDEX IF NOT EXISTS idx_anchor_batches_quorum ON anchor_batches(quorum_re
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS batch_transactions (
-    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id              BIGSERIAL PRIMARY KEY,
     batch_id        UUID NOT NULL REFERENCES anchor_batches(id) ON DELETE CASCADE,
-    accum_tx_hash   VARCHAR(128) NOT NULL,
+    accumulate_tx_hash VARCHAR(128) NOT NULL,
     account_url     VARCHAR(512) NOT NULL,
-    leaf_hash       BYTEA NOT NULL,
-    leaf_index      INTEGER NOT NULL,
-    merkle_path     TEXT,
-    proof_json      TEXT,
+    tree_index      INTEGER NOT NULL,
+    merkle_path     JSONB,
+    transaction_hash BYTEA,
+    chained_proof   JSONB,
+    chained_proof_valid BOOLEAN DEFAULT FALSE,
+    governance_proof JSONB,
+    governance_level VARCHAR(10),
+    governance_valid BOOLEAN DEFAULT FALSE,
+    intent_type     VARCHAR(100),
+    intent_data     JSONB,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
-    CONSTRAINT unique_tx_in_batch UNIQUE (batch_id, accum_tx_hash)
+    CONSTRAINT unique_tx_in_batch UNIQUE (batch_id, accumulate_tx_hash),
+    CONSTRAINT valid_gov_level_tx CHECK (governance_level IS NULL OR governance_level IN ('G0', 'G1', 'G2'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_batch_tx_batch ON batch_transactions(batch_id);
-CREATE INDEX IF NOT EXISTS idx_batch_tx_hash ON batch_transactions(accum_tx_hash);
+CREATE INDEX IF NOT EXISTS idx_batch_tx_hash ON batch_transactions(accumulate_tx_hash);
 CREATE INDEX IF NOT EXISTS idx_batch_tx_account ON batch_transactions(account_url);
 CREATE INDEX IF NOT EXISTS idx_batch_tx_created ON batch_transactions(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_batch_tx_tree_index ON batch_transactions(batch_id, tree_index);
 
 -- ============================================================================
 -- TABLE 3: anchor_records - External Chain Anchor Records (Final Schema)

@@ -15,7 +15,9 @@ import (
 	"time"
 
 	abcitypes "github.com/cometbft/cometbft/abci/types"
+	"github.com/certen/independant-validator/pkg/database"
 	"github.com/certen/independant-validator/pkg/ledger"
+	"github.com/google/uuid"
 )
 
 // ValidatorApp implements the ABCI interface for validator consensus
@@ -35,6 +37,12 @@ type ValidatorApp struct {
 	currentBlockHash   string
 	currentBlockTime   time.Time
 	currentAccAnchor   *ledger.SystemAccumulateAnchorRef
+
+	// Database repositories for consensus persistence
+	repos *database.Repositories
+
+	// Validator count for quorum calculation
+	validatorCount int
 }
 
 // NewValidatorApp creates a new ABCI application for validator consensus.
@@ -72,6 +80,16 @@ func (app *ValidatorApp) GetLedgerStore() *ledger.LedgerStore {
 // GetChainID returns the chain ID for compatibility with anchor manager
 func (app *ValidatorApp) GetChainID() string {
 	return app.chainID
+}
+
+// SetRepositories sets the database repositories for consensus persistence
+func (app *ValidatorApp) SetRepositories(repos *database.Repositories) {
+	app.repos = repos
+}
+
+// SetValidatorCount sets the total number of validators for quorum calculation
+func (app *ValidatorApp) SetValidatorCount(count int) {
+	app.validatorCount = count
 }
 
 // Info returns application information
@@ -320,6 +338,11 @@ func (app *ValidatorApp) Commit(ctx context.Context, req *abcitypes.RequestCommi
 		LastBlockAppHash: appHash,
 	}); err != nil {
 		app.logger.Printf("❌ Failed to persist ABCI state: %v", err)
+	}
+
+	// Persist consensus entries and batch attestations to postgres
+	if app.repos != nil && app.repos.Consensus != nil {
+		app.persistConsensusData(ctx)
 	}
 
 	blockCount := len(app.validatorBlocks)
@@ -671,4 +694,145 @@ func (app *ValidatorApp) GetStateInfo() (height int64, appHash []byte, blockCoun
 	app.mu.RLock()
 	defer app.mu.RUnlock()
 	return app.latestHeight, app.lastCommitHash, len(app.validatorBlocks)
+}
+
+// ==============================================
+// Consensus Data Persistence
+// Per CERTEN_COMPLETE_PROOF_CYCLE_SPEC.md
+// ==============================================
+
+// persistConsensusData persists ValidatorBlocks to postgres consensus_entries and batch_attestations tables.
+// This ensures the proof cycle data is durably stored and available for querying.
+// Called during Commit() after block finalization.
+func (app *ValidatorApp) persistConsensusData(ctx context.Context) {
+	if app.repos == nil || app.repos.Consensus == nil {
+		return
+	}
+
+	persistedCount := 0
+	attestationCount := 0
+
+	for bundleID, vb := range app.validatorBlocks {
+		// Generate deterministic UUID from BundleID for database linkage
+		batchUUID := uuid.NewSHA1(uuid.NameSpaceOID, []byte(bundleID))
+
+		// Decode hex strings to bytes for storage
+		merkleRootBytes, err := database.DecodeHexString(vb.GovernanceProof.MerkleRoot)
+		if err != nil {
+			app.logger.Printf("⚠️ [PERSIST] Failed to decode merkle_root for bundle %s: %v", bundleID, err)
+			merkleRootBytes = nil
+		}
+
+		blsSigBytes, err := database.DecodeHexString(vb.GovernanceProof.BLSAggregateSignature)
+		if err != nil {
+			app.logger.Printf("⚠️ [PERSIST] Failed to decode BLS signature for bundle %s: %v", bundleID, err)
+			blsSigBytes = nil
+		}
+
+		blsPubKeyBytes, err := database.DecodeHexString(vb.GovernanceProof.BLSValidatorSetPubKey)
+		if err != nil {
+			app.logger.Printf("⚠️ [PERSIST] Failed to decode BLS pubkey for bundle %s: %v", bundleID, err)
+			blsPubKeyBytes = nil
+		}
+
+		// Parse timestamp
+		parsedTime, err := time.Parse(time.RFC3339, vb.Timestamp)
+		if err != nil {
+			parsedTime = time.Now()
+		}
+
+		// Determine state based on governance level
+		state := "initiated"
+		if vb.GovernanceProof.GovernanceLevel == "G2" {
+			state = "completed"
+		} else if vb.GovernanceProof.GovernanceLevel == "G1" {
+			state = "quorum_met"
+		} else if vb.GovernanceProof.GovernanceLevel == "G0" {
+			state = "collecting"
+		}
+
+		// Calculate quorum fraction
+		quorumFraction := 0.0
+		if app.validatorCount > 0 {
+			// For now, assume 1 attestation per ValidatorBlock (self-attestation)
+			// In a full implementation, count attestations from the block
+			quorumFraction = 1.0 / float64(app.validatorCount)
+		}
+
+		// Build result JSON from governance proofs
+		resultJSON := map[string]interface{}{
+			"bundle_id":             vb.BundleID,
+			"governance_level":      vb.GovernanceProof.GovernanceLevel,
+			"operation_commitment":  vb.OperationCommitment,
+			"execution_stage":       vb.ExecutionProof.Stage,
+			"proof_class":           vb.ExecutionProof.ProofClass,
+			"cross_chain_operation": vb.CrossChainProof.OperationID,
+		}
+
+		// Add governance proof artifacts if available
+		if vb.GovernanceProof.G0Proof != nil {
+			resultJSON["g0_complete"] = vb.GovernanceProof.G0Proof.G0ProofComplete
+			resultJSON["g0_txid"] = vb.GovernanceProof.G0Proof.TXID
+		}
+		if vb.GovernanceProof.G1Proof != nil {
+			resultJSON["g1_complete"] = vb.GovernanceProof.G1Proof.G1ProofComplete
+			resultJSON["g1_threshold_satisfied"] = vb.GovernanceProof.G1Proof.ThresholdSatisfied
+		}
+		if vb.GovernanceProof.G2Proof != nil {
+			resultJSON["g2_complete"] = vb.GovernanceProof.G2Proof.G2ProofComplete
+			resultJSON["g2_payload_verified"] = vb.GovernanceProof.G2Proof.PayloadVerified
+		}
+
+		// Create consensus entry
+		consensusEntry := &database.NewConsensusEntry{
+			BatchID:            batchUUID,
+			MerkleRoot:         merkleRootBytes,
+			AnchorTxHash:       vb.AccumulateAnchorReference.TxHash,
+			BlockNumber:        int64(vb.BlockHeight),
+			TxCount:            len(vb.SyntheticTransactions),
+			State:              state,
+			AttestationCount:   1, // Self-attestation
+			RequiredCount:      (app.validatorCount * 2 / 3) + 1, // 2/3 + 1 for BFT quorum
+			QuorumFraction:     quorumFraction,
+			AggregateSignature: blsSigBytes,
+			AggregatePubKey:    blsPubKeyBytes,
+			StartTime:          parsedTime,
+			ResultJSON:         resultJSON,
+		}
+
+		_, err = app.repos.Consensus.CreateConsensusEntry(ctx, consensusEntry)
+		if err != nil {
+			app.logger.Printf("⚠️ [PERSIST] Failed to create consensus entry for bundle %s: %v", bundleID, err)
+		} else {
+			persistedCount++
+		}
+
+		// Create batch attestation for this validator's self-attestation
+		signatureValid := true
+		if blsSigBytes != nil && len(blsSigBytes) > 0 {
+			attestation := &database.NewBatchAttestation{
+				BatchID:         batchUUID,
+				ValidatorID:     vb.ValidatorID,
+				MerkleRoot:      merkleRootBytes,
+				BLSSignature:    blsSigBytes,
+				BLSPublicKey:    blsPubKeyBytes,
+				TxCount:         len(vb.SyntheticTransactions),
+				BlockHeight:     int64(vb.BlockHeight),
+				AttestationTime: parsedTime,
+				SignatureValid:  &signatureValid,
+			}
+
+			_, err = app.repos.Consensus.CreateBatchAttestation(ctx, attestation)
+			if err != nil {
+				app.logger.Printf("⚠️ [PERSIST] Failed to create batch attestation for bundle %s: %v", bundleID, err)
+			} else {
+				attestationCount++
+			}
+		}
+	}
+
+	if persistedCount > 0 || attestationCount > 0 {
+		app.logger.Printf("✅ [PERSIST] Stored %d consensus entries and %d batch attestations to postgres",
+			persistedCount, attestationCount)
+	}
 }

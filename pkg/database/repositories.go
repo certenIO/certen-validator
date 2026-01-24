@@ -13,6 +13,7 @@ type Repositories struct {
 	ProofArtifacts *ProofArtifactRepository // NEW: Comprehensive proof artifact storage
 	Attestations   *AttestationRepository
 	Requests       *RequestRepository
+	Consensus      *ConsensusRepository // Consensus entries and batch attestations
 }
 
 // NewRepositories creates all repositories with the given client
@@ -24,5 +25,6 @@ func NewRepositories(client *Client) *Repositories {
 		ProofArtifacts: NewProofArtifactRepository(client.DB()), // NEW: Uses raw *sql.DB
 		Attestations:   NewAttestationRepository(client),
 		Requests:       NewRequestRepository(client),
+		Consensus:      NewConsensusRepository(client),
 	}
 }

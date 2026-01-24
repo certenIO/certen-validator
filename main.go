@@ -893,6 +893,12 @@ func startValidator(
         // Create database repositories
         repos := database.NewRepositories(dbClient)
 
+        // Wire repositories to ValidatorApp for consensus persistence
+        // This enables the ABCI Commit() function to persist consensus entries and batch attestations
+        cometEngine.SetValidatorRepositories(repos)
+        cometEngine.SetValidatorCount(7) // 7 validators in the network
+        log.Println("✅ [Phase 5] Database repositories wired to ValidatorApp for consensus persistence")
+
         // Create batch collector configuration
         collectorCfg := &batch.CollectorConfig{
             ValidatorID:  cfg.ValidatorID,

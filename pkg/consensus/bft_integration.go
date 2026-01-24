@@ -35,6 +35,7 @@ import (
 	lcproof "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof"
 
 	"github.com/certen/independant-validator/pkg/crypto/bls"
+	"github.com/certen/independant-validator/pkg/database"
 	"github.com/certen/independant-validator/pkg/kvdb"
 	"github.com/certen/independant-validator/pkg/ledger"
 	"github.com/certen/independant-validator/pkg/proof"
@@ -2264,6 +2265,31 @@ func (e *RealCometBFTEngine) GetLedgerStoreProvider() LedgerStoreProvider {
 		return validatorApp
 	}
 	return nil
+}
+
+// GetValidatorApp returns the ValidatorApp if the engine is using one, nil otherwise
+func (e *RealCometBFTEngine) GetValidatorApp() *ValidatorApp {
+	if validatorApp, ok := e.app.(*ValidatorApp); ok {
+		return validatorApp
+	}
+	return nil
+}
+
+// SetValidatorRepositories sets the database repositories on the ValidatorApp for consensus persistence.
+// This enables the ValidatorApp to persist consensus entries and batch attestations to postgres.
+func (e *RealCometBFTEngine) SetValidatorRepositories(repos *database.Repositories) {
+	if validatorApp := e.GetValidatorApp(); validatorApp != nil {
+		validatorApp.SetRepositories(repos)
+		e.logger.Printf("✅ [PERSIST] Database repositories wired to ValidatorApp for consensus persistence")
+	}
+}
+
+// SetValidatorCount sets the total validator count on the ValidatorApp for quorum calculations.
+func (e *RealCometBFTEngine) SetValidatorCount(count int) {
+	if validatorApp := e.GetValidatorApp(); validatorApp != nil {
+		validatorApp.SetValidatorCount(count)
+		e.logger.Printf("✅ [PERSIST] Validator count set to %d for quorum calculations", count)
+	}
 }
 
 // writeDeterministicGenesisIfNeeded writes shared genesis for all 7 validators
