@@ -849,8 +849,32 @@ type ProofCycleCompletion struct {
 	// Execution commitment (stored for write-back context)
 	Commitment *ExecutionCommitment `json:"commitment,omitempty"`
 
-	// External chain execution
+	// External chain execution (legacy: single tx)
 	ExecutionResult *ExternalChainResult `json:"execution_result"`
+
+	// ============ ENHANCED: All 3 Anchor Workflow Transactions ============
+	// The Ethereum anchor workflow consists of 3 transactions:
+	//   Step 1: createAnchor - stores anchor data on-chain
+	//   Step 2: executeComprehensiveProof - submits BLS proof verification
+	//   Step 3: executeWithGovernance - executes the actual value transfer
+
+	// Transaction hashes for all 3 steps
+	CreateTxHash     common.Hash `json:"create_tx_hash"`     // Step 1
+	VerifyTxHash     common.Hash `json:"verify_tx_hash"`     // Step 2
+	GovernanceTxHash common.Hash `json:"governance_tx_hash"` // Step 3
+
+	// Observation results for each transaction
+	CreateResult     *ExternalChainResult `json:"create_result"`     // Step 1 result
+	VerifyResult     *ExternalChainResult `json:"verify_result"`     // Step 2 result
+	GovernanceResult *ExternalChainResult `json:"governance_result"` // Step 3 result
+
+	// Observation timing for each step
+	CreateObservedAt     time.Time `json:"create_observed_at"`
+	VerifyObservedAt     time.Time `json:"verify_observed_at"`
+	GovernanceObservedAt time.Time `json:"governance_observed_at"`
+
+	// Overall workflow status
+	AllTxsConfirmed bool `json:"all_txs_confirmed"`
 
 	// Multi-validator attestation
 	Attestation *AggregatedAttestation `json:"attestation"`

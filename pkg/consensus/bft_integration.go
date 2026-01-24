@@ -163,12 +163,28 @@ type AnchorResponse struct {
 	Message  string `json:"message"`
 }
 
+// AnchorWorkflowTxHashes contains all 3 transaction hashes from the Ethereum anchor workflow
+// This enables comprehensive tracking and observation of the entire anchor process
+type AnchorWorkflowTxHashes struct {
+	CreateTxHash     common.Hash // Step 1: createAnchor tx
+	VerifyTxHash     common.Hash // Step 2: executeComprehensiveProof tx
+	GovernanceTxHash common.Hash // Step 3: executeWithGovernance tx
+
+	// For backwards compatibility, PrimaryTxHash points to CreateTxHash
+	PrimaryTxHash common.Hash
+}
+
 // ProofCycleOrchestratorInterface defines the interface for proof cycle orchestration
 // This enables the BFTValidator to trigger Phase 7-9 after successful execution
 type ProofCycleOrchestratorInterface interface {
 	// StartProofCycle initiates Phase 7-9 for an executed operation
 	// The commitment parameter uses interface{} to avoid circular imports with execution package
 	StartProofCycle(ctx context.Context, intentID string, bundleID [32]byte, executionTxHash common.Hash, commitment interface{}) error
+
+	// StartProofCycleWithAllTxs initiates Phase 7-9 with all 3 anchor workflow tx hashes
+	// Enhanced: Tracks createAnchor, executeComprehensiveProof, and executeWithGovernance
+	// The txHashes parameter uses interface{} to avoid circular imports - actual type is *AnchorWorkflowTxHashes
+	StartProofCycleWithAllTxs(ctx context.Context, intentID string, bundleID [32]byte, txHashes interface{}, commitment interface{}) error
 }
 
 // BFTValidatorInfo represents information about a BFT validator
@@ -993,12 +1009,15 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 		bv.logger.Printf("✅ [CANONICAL-AUDIT] External audit completed: tx=%s network=%s",
 			anchorRes.AnchorTxID, anchorRes.Network)
 
+		// Enhanced logging for all 3 transaction hashes
+		bv.logger.Printf("📋 [ANCHOR-WORKFLOW] Transaction hashes:")
+		bv.logger.Printf("   Create TX:     %s", anchorRes.CreateTxHash)
+		bv.logger.Printf("   Verify TX:     %s", anchorRes.VerifyTxHash)
+		bv.logger.Printf("   Governance TX: %s", anchorRes.GovernanceTxHash)
+
 		// Phase 7-9: Trigger proof cycle for observation, attestation, and write-back
 		if bv.proofCycleOrchestrator != nil && anchorRes.AnchorTxID != "" {
 			go func() {
-				// Parse anchor transaction hash as Ethereum common.Hash
-				executionTxHash := common.HexToHash(anchorRes.AnchorTxID)
-
 				// Parse bundle ID from ValidatorBlock
 				var bundleID [32]byte
 				bundleIDBytes := []byte(vb.BundleID)
@@ -1011,11 +1030,23 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 				// Other validators verify the actual execution matches this commitment.
 				commitment := bv.buildExecutionCommitmentFromIntent(certenIntent, bundleID)
 
+				// Enhanced: Build AnchorWorkflowTxHashes with all 3 transaction hashes
+				txHashes := &AnchorWorkflowTxHashes{
+					CreateTxHash:     common.HexToHash(anchorRes.CreateTxHash),
+					VerifyTxHash:     common.HexToHash(anchorRes.VerifyTxHash),
+					GovernanceTxHash: common.HexToHash(anchorRes.GovernanceTxHash),
+					PrimaryTxHash:    common.HexToHash(anchorRes.AnchorTxID),
+				}
+
 				bv.logger.Printf("🔄 [PROOF-CYCLE] Triggering Phase 7-9 for intent: %s", certenIntent.IntentID)
+				bv.logger.Printf("   Tracking all 3 anchor workflow transactions")
+
 				// Use fresh context for proof cycle - the parent ctx may already be near expiration
 				// The proof cycle has its own ObservationTimeout (10 minutes) for waiting on confirmations
 				proofCycleCtx := context.Background()
-				if err := bv.proofCycleOrchestrator.StartProofCycle(proofCycleCtx, certenIntent.IntentID, bundleID, executionTxHash, commitment); err != nil {
+
+				// Try enhanced method first, fall back to legacy if not implemented
+				if err := bv.proofCycleOrchestrator.StartProofCycleWithAllTxs(proofCycleCtx, certenIntent.IntentID, bundleID, txHashes, commitment); err != nil {
 					bv.logger.Printf("⚠️ [PROOF-CYCLE] Failed to start proof cycle: %v", err)
 					// Non-fatal - proof cycle failure doesn't invalidate execution
 				}

@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math/big"
 	"os"
+	"reflect"
 	"sync"
 	"time"
 
@@ -229,6 +230,214 @@ func (o *ProofCycleOrchestrator) StartProofCycle(
 	go o.executePhase7(ctx, cycleID, cycle, executionTxHash, execCommitment)
 
 	return nil
+}
+
+// AnchorWorkflowTxHashes contains all 3 transaction hashes from the Ethereum anchor workflow
+// Duplicated here to avoid circular imports with consensus package
+type AnchorWorkflowTxHashes struct {
+	CreateTxHash     common.Hash // Step 1: createAnchor tx
+	VerifyTxHash     common.Hash // Step 2: executeComprehensiveProof tx
+	GovernanceTxHash common.Hash // Step 3: executeWithGovernance tx
+	PrimaryTxHash    common.Hash // For backwards compatibility
+}
+
+// StartProofCycleWithAllTxs initiates a complete proof cycle tracking all 3 anchor workflow transactions
+// Enhanced: Observes createAnchor, executeComprehensiveProof, and executeWithGovernance
+func (o *ProofCycleOrchestrator) StartProofCycleWithAllTxs(
+	ctx context.Context,
+	intentID string,
+	bundleID [32]byte,
+	txHashesInterface interface{},
+	commitment interface{},
+) error {
+	// Convert interface to actual type
+	var txHashes *AnchorWorkflowTxHashes
+	switch th := txHashesInterface.(type) {
+	case *AnchorWorkflowTxHashes:
+		txHashes = th
+	default:
+		return fmt.Errorf("invalid txHashes type: %T", txHashesInterface)
+	}
+	// Type assert the commitment if provided
+	var execCommitment *ExecutionCommitment
+	if commitment != nil {
+		switch c := commitment.(type) {
+		case *ExecutionCommitment:
+			execCommitment = c
+		case *ExecutionCommitmentData:
+			execCommitment = &ExecutionCommitment{
+				BundleID:    c.BundleID,
+				TargetChain: c.TargetChain,
+			}
+		case map[string]interface{}:
+			execCommitment = convertMapToExecutionCommitment(c, o.logger)
+		default:
+			o.logger.Printf("⚠️ [PROOF-CYCLE] Unknown commitment type %T, proceeding without commitment", commitment)
+		}
+	}
+
+	o.mu.Lock()
+
+	// Check for duplicate using primary tx hash
+	cycleID := fmt.Sprintf("%s:%s", intentID, txHashes.CreateTxHash.Hex())
+	if _, exists := o.activeCycles[cycleID]; exists {
+		o.mu.Unlock()
+		return fmt.Errorf("proof cycle already active: %s", cycleID)
+	}
+
+	// Initialize proof cycle with all tx hashes
+	cycle := &ProofCycleCompletion{
+		IntentID:         intentID,
+		BundleID:         bundleID,
+		ValidatorBlockID: fmt.Sprintf("vb-%s", intentID[:16]),
+		IntentTime:       time.Now(),
+		Commitment:       execCommitment,
+
+		// Enhanced: Store all 3 tx hashes
+		CreateTxHash:     txHashes.CreateTxHash,
+		VerifyTxHash:     txHashes.VerifyTxHash,
+		GovernanceTxHash: txHashes.GovernanceTxHash,
+	}
+	o.activeCycles[cycleID] = cycle
+	o.mu.Unlock()
+
+	o.logger.Printf("🔄 [PROOF-CYCLE] Starting enhanced proof cycle: %s", cycleID)
+	o.logger.Printf("   📋 Tracking all 3 anchor workflow transactions:")
+	o.logger.Printf("      Step 1 (Create):     %s", txHashes.CreateTxHash.Hex())
+	o.logger.Printf("      Step 2 (Verify):     %s", txHashes.VerifyTxHash.Hex())
+	o.logger.Printf("      Step 3 (Governance): %s", txHashes.GovernanceTxHash.Hex())
+
+	// Phase 7: Observe all 3 transactions
+	go o.executePhase7Enhanced(ctx, cycleID, cycle, txHashes, execCommitment)
+
+	return nil
+}
+
+// executePhase7Enhanced observes all 3 anchor workflow transactions
+func (o *ProofCycleOrchestrator) executePhase7Enhanced(
+	ctx context.Context,
+	cycleID string,
+	cycle *ProofCycleCompletion,
+	txHashes *AnchorWorkflowTxHashes,
+	commitment *ExecutionCommitment,
+) {
+	o.logger.Printf("📡 [PHASE-7-ENHANCED] Observing all 3 anchor workflow transactions")
+
+	// Use timeout context - give more time since we're tracking 3 txs
+	observeCtx, cancel := context.WithTimeout(ctx, o.config.ObservationTimeout*2)
+	defer cancel()
+
+	// Track observation results
+	var createResult, verifyResult, govResult *ExternalChainResult
+	var createErr, verifyErr, govErr error
+
+	// Observe all 3 transactions concurrently
+	var wg sync.WaitGroup
+	wg.Add(3)
+
+	// Step 1: Observe createAnchor transaction
+	go func() {
+		defer wg.Done()
+		if txHashes.CreateTxHash != (common.Hash{}) {
+			o.logger.Printf("📡 [PHASE-7] Observing Step 1 (createAnchor): %s", txHashes.CreateTxHash.Hex())
+			createResult, createErr = o.observer.ObserveTransaction(observeCtx, txHashes.CreateTxHash, commitment)
+			if createErr != nil {
+				o.logger.Printf("⚠️ [PHASE-7] Step 1 observation failed: %v", createErr)
+			} else {
+				o.mu.Lock()
+				cycle.CreateResult = createResult
+				cycle.CreateObservedAt = time.Now()
+				o.mu.Unlock()
+				o.logger.Printf("✅ [PHASE-7] Step 1 (createAnchor) confirmed: block=%d success=%v",
+					createResult.BlockNumber.Uint64(), createResult.IsSuccess())
+			}
+		}
+	}()
+
+	// Step 2: Observe executeComprehensiveProof transaction
+	go func() {
+		defer wg.Done()
+		if txHashes.VerifyTxHash != (common.Hash{}) {
+			o.logger.Printf("📡 [PHASE-7] Observing Step 2 (executeComprehensiveProof): %s", txHashes.VerifyTxHash.Hex())
+			verifyResult, verifyErr = o.observer.ObserveTransaction(observeCtx, txHashes.VerifyTxHash, commitment)
+			if verifyErr != nil {
+				o.logger.Printf("⚠️ [PHASE-7] Step 2 observation failed: %v", verifyErr)
+			} else {
+				o.mu.Lock()
+				cycle.VerifyResult = verifyResult
+				cycle.VerifyObservedAt = time.Now()
+				o.mu.Unlock()
+				o.logger.Printf("✅ [PHASE-7] Step 2 (executeComprehensiveProof) confirmed: block=%d success=%v",
+					verifyResult.BlockNumber.Uint64(), verifyResult.IsSuccess())
+			}
+		}
+	}()
+
+	// Step 3: Observe executeWithGovernance transaction
+	go func() {
+		defer wg.Done()
+		if txHashes.GovernanceTxHash != (common.Hash{}) {
+			o.logger.Printf("📡 [PHASE-7] Observing Step 3 (executeWithGovernance): %s", txHashes.GovernanceTxHash.Hex())
+			govResult, govErr = o.observer.ObserveTransaction(observeCtx, txHashes.GovernanceTxHash, commitment)
+			if govErr != nil {
+				o.logger.Printf("⚠️ [PHASE-7] Step 3 observation failed: %v", govErr)
+			} else {
+				o.mu.Lock()
+				cycle.GovernanceResult = govResult
+				cycle.GovernanceObservedAt = time.Now()
+				o.mu.Unlock()
+				o.logger.Printf("✅ [PHASE-7] Step 3 (executeWithGovernance) confirmed: block=%d success=%v",
+					govResult.BlockNumber.Uint64(), govResult.IsSuccess())
+			}
+		}
+	}()
+
+	// Wait for all observations to complete
+	wg.Wait()
+
+	// Determine overall success - at minimum, createAnchor must succeed
+	if createErr != nil {
+		o.handleCycleFailed(cycleID, fmt.Errorf("phase 7 observation failed: createAnchor: %w", createErr))
+		return
+	}
+
+	// Update cycle with overall status
+	o.mu.Lock()
+	cycle.ExecutionResult = createResult // Use createAnchor as primary result for backwards compatibility
+	cycle.ExecutionTime = time.Now()
+	cycle.AllTxsConfirmed = createErr == nil && verifyErr == nil && govErr == nil
+	o.mu.Unlock()
+
+	// Log summary
+	o.logger.Printf("✅ [PHASE-7-ENHANCED] Observation complete:")
+	o.logger.Printf("   Step 1 (Create):     %s (block=%d)",
+		statusString(createResult), blockNum(createResult))
+	o.logger.Printf("   Step 2 (Verify):     %s (block=%d)",
+		statusString(verifyResult), blockNum(verifyResult))
+	o.logger.Printf("   Step 3 (Governance): %s (block=%d)",
+		statusString(govResult), blockNum(govResult))
+	o.logger.Printf("   All confirmed: %v", cycle.AllTxsConfirmed)
+
+	// Proceed to Phase 8
+	o.executePhase8(ctx, cycleID, cycle, createResult, commitment)
+}
+
+// Helper functions for logging
+func statusString(r *ExternalChainResult) string {
+	if r == nil {
+		return "skipped"
+	}
+	if r.IsSuccess() {
+		return "✅ success"
+	}
+	return "❌ failed"
+}
+
+func blockNum(r *ExternalChainResult) uint64 {
+	if r == nil || r.BlockNumber == nil {
+		return 0
+	}
+	return r.BlockNumber.Uint64()
 }
 
 // executePhase7 observes the external chain transaction and constructs proofs
@@ -649,19 +858,24 @@ func (o *ProofCycleOrchestrator) persistProofArtifact(cycle *ProofCycleCompletio
 	var anchorBlockNumber int64
 	var anchorChain string
 
-	if cycle.ExecutionResult != nil {
-		if cycle.ExecutionResult.TxHash != (common.Hash{}) {
-			anchorTxHash = cycle.ExecutionResult.TxHash.Hex()
-		}
-		if cycle.ExecutionResult.BlockNumber != nil {
-			anchorBlockNumber = cycle.ExecutionResult.BlockNumber.Int64()
-		}
-		anchorChain = "ethereum" // Default to ethereum for now
+	// Use createAnchor tx as primary anchor tx (confirms first)
+	if cycle.CreateTxHash != (common.Hash{}) {
+		anchorTxHash = cycle.CreateTxHash.Hex()
+	} else if cycle.ExecutionResult != nil && cycle.ExecutionResult.TxHash != (common.Hash{}) {
+		anchorTxHash = cycle.ExecutionResult.TxHash.Hex()
 	}
 
+	if cycle.CreateResult != nil && cycle.CreateResult.BlockNumber != nil {
+		anchorBlockNumber = cycle.CreateResult.BlockNumber.Int64()
+	} else if cycle.ExecutionResult != nil && cycle.ExecutionResult.BlockNumber != nil {
+		anchorBlockNumber = cycle.ExecutionResult.BlockNumber.Int64()
+	}
+	anchorChain = "ethereum" // Default to ethereum for now
+
 	// Build comprehensive artifact JSON containing all proof cycle data
+	// Enhanced: Now includes all 3 anchor workflow transactions
 	artifactData := map[string]interface{}{
-		"proof_cycle_version": "2.0",
+		"proof_cycle_version": "3.0", // Upgraded version for enhanced tracking
 		"intent_id":           cycle.IntentID,
 		"intent_tx_hash":      cycle.IntentTxHash,
 		"intent_block":        cycle.IntentBlock,
@@ -669,13 +883,73 @@ func (o *ProofCycleOrchestrator) persistProofArtifact(cycle *ProofCycleCompletio
 		"cycle_hash":          hex.EncodeToString(cycle.CycleHash[:]),
 		"validator_id":        o.validatorID,
 		"anchor_chain":        anchorChain,
-		"anchor_tx_hash":      anchorTxHash,
+		"anchor_tx_hash":      anchorTxHash, // Primary (createAnchor)
 		"anchor_block":        anchorBlockNumber,
 		"total_duration_ms":   cycle.TotalDuration.Milliseconds(),
 		"completed_at":        time.Now().Format(time.RFC3339),
+		"all_txs_confirmed":   cycle.AllTxsConfirmed,
 	}
 
-	// Add execution result details
+	// ============ ENHANCED: All 3 Anchor Workflow Transactions ============
+	anchorWorkflow := map[string]interface{}{
+		"workflow_version": "1.0",
+		"all_confirmed":    cycle.AllTxsConfirmed,
+	}
+
+	// Step 1: createAnchor transaction
+	if cycle.CreateTxHash != (common.Hash{}) {
+		step1 := map[string]interface{}{
+			"tx_hash": cycle.CreateTxHash.Hex(),
+		}
+		if cycle.CreateResult != nil {
+			step1["block_number"] = cycle.CreateResult.BlockNumber.Uint64()
+			step1["success"] = cycle.CreateResult.IsSuccess()
+			step1["gas_used"] = cycle.CreateResult.TxGasUsed
+			step1["confirmations"] = cycle.CreateResult.ConfirmationBlocks
+		}
+		if !cycle.CreateObservedAt.IsZero() {
+			step1["observed_at"] = cycle.CreateObservedAt.Format(time.RFC3339)
+		}
+		anchorWorkflow["step1_create_anchor"] = step1
+	}
+
+	// Step 2: executeComprehensiveProof transaction
+	if cycle.VerifyTxHash != (common.Hash{}) {
+		step2 := map[string]interface{}{
+			"tx_hash": cycle.VerifyTxHash.Hex(),
+		}
+		if cycle.VerifyResult != nil {
+			step2["block_number"] = cycle.VerifyResult.BlockNumber.Uint64()
+			step2["success"] = cycle.VerifyResult.IsSuccess()
+			step2["gas_used"] = cycle.VerifyResult.TxGasUsed
+			step2["confirmations"] = cycle.VerifyResult.ConfirmationBlocks
+		}
+		if !cycle.VerifyObservedAt.IsZero() {
+			step2["observed_at"] = cycle.VerifyObservedAt.Format(time.RFC3339)
+		}
+		anchorWorkflow["step2_verify_proof"] = step2
+	}
+
+	// Step 3: executeWithGovernance transaction
+	if cycle.GovernanceTxHash != (common.Hash{}) {
+		step3 := map[string]interface{}{
+			"tx_hash": cycle.GovernanceTxHash.Hex(),
+		}
+		if cycle.GovernanceResult != nil {
+			step3["block_number"] = cycle.GovernanceResult.BlockNumber.Uint64()
+			step3["success"] = cycle.GovernanceResult.IsSuccess()
+			step3["gas_used"] = cycle.GovernanceResult.TxGasUsed
+			step3["confirmations"] = cycle.GovernanceResult.ConfirmationBlocks
+		}
+		if !cycle.GovernanceObservedAt.IsZero() {
+			step3["observed_at"] = cycle.GovernanceObservedAt.Format(time.RFC3339)
+		}
+		anchorWorkflow["step3_governance"] = step3
+	}
+
+	artifactData["anchor_workflow"] = anchorWorkflow
+
+	// Add execution result details (legacy format for backwards compatibility)
 	if cycle.ExecutionResult != nil {
 		artifactData["execution"] = map[string]interface{}{
 			"tx_hash":             anchorTxHash,
@@ -1095,6 +1369,89 @@ func (a *ProofCycleOrchestratorAdapter) StartProofCycle(
 	}
 
 	return a.orchestrator.StartProofCycle(ctx, intentID, bundleID, executionTxHash, internalCommitment)
+}
+
+// ConsensusAnchorWorkflowTxHashes mirrors consensus.AnchorWorkflowTxHashes to avoid import cycle
+type ConsensusAnchorWorkflowTxHashes struct {
+	CreateTxHash     common.Hash
+	VerifyTxHash     common.Hash
+	GovernanceTxHash common.Hash
+	PrimaryTxHash    common.Hash
+}
+
+// StartProofCycleWithAllTxs implements the consensus.ProofCycleOrchestratorInterface
+// Enhanced: Tracks all 3 anchor workflow transactions
+func (a *ProofCycleOrchestratorAdapter) StartProofCycleWithAllTxs(
+	ctx context.Context,
+	intentID string,
+	bundleID [32]byte,
+	txHashes interface{},
+	commitment interface{},
+) error {
+	// Convert the txHashes from consensus package type to local type
+	var localTxHashes *AnchorWorkflowTxHashes
+
+	switch th := txHashes.(type) {
+	case *AnchorWorkflowTxHashes:
+		localTxHashes = th
+	case *ConsensusAnchorWorkflowTxHashes:
+		localTxHashes = &AnchorWorkflowTxHashes{
+			CreateTxHash:     th.CreateTxHash,
+			VerifyTxHash:     th.VerifyTxHash,
+			GovernanceTxHash: th.GovernanceTxHash,
+			PrimaryTxHash:    th.PrimaryTxHash,
+		}
+	default:
+		// Use reflection to extract fields from consensus.AnchorWorkflowTxHashes
+		// This handles the case where we can't import the consensus package directly
+		localTxHashes = extractTxHashesViaReflection(txHashes)
+		if localTxHashes == nil {
+			return fmt.Errorf("unknown txHashes type: %T", txHashes)
+		}
+	}
+
+	return a.orchestrator.StartProofCycleWithAllTxs(ctx, intentID, bundleID, localTxHashes, commitment)
+}
+
+// extractTxHashesViaReflection uses reflection to extract tx hashes from a struct
+// This is used to avoid circular imports between execution and consensus packages
+func extractTxHashesViaReflection(txHashes interface{}) *AnchorWorkflowTxHashes {
+	if txHashes == nil {
+		return nil
+	}
+
+	// Use type assertion with interface to extract common.Hash fields
+	v := reflect.ValueOf(txHashes)
+	if v.Kind() == reflect.Ptr {
+		v = v.Elem()
+	}
+	if v.Kind() != reflect.Struct {
+		return nil
+	}
+
+	result := &AnchorWorkflowTxHashes{}
+
+	// Try to get CreateTxHash field
+	if f := v.FieldByName("CreateTxHash"); f.IsValid() && f.Type() == reflect.TypeOf(common.Hash{}) {
+		result.CreateTxHash = f.Interface().(common.Hash)
+	}
+
+	// Try to get VerifyTxHash field
+	if f := v.FieldByName("VerifyTxHash"); f.IsValid() && f.Type() == reflect.TypeOf(common.Hash{}) {
+		result.VerifyTxHash = f.Interface().(common.Hash)
+	}
+
+	// Try to get GovernanceTxHash field
+	if f := v.FieldByName("GovernanceTxHash"); f.IsValid() && f.Type() == reflect.TypeOf(common.Hash{}) {
+		result.GovernanceTxHash = f.Interface().(common.Hash)
+	}
+
+	// Try to get PrimaryTxHash field
+	if f := v.FieldByName("PrimaryTxHash"); f.IsValid() && f.Type() == reflect.TypeOf(common.Hash{}) {
+		result.PrimaryTxHash = f.Interface().(common.Hash)
+	}
+
+	return result
 }
 
 // =============================================================================

@@ -164,11 +164,21 @@ func (tcew *TargetChainExecutorWrapper) SubmitAnchorFromValidatorBlock(
     }
 
     // Convert result to new verification format
+    // Enhanced: Now includes all 3 transaction hashes from the anchor workflow
     return &verification.AnchorExecutionResult{
-        AnchorTxID:  result.TxHash,
+        AnchorTxID:  result.TxHash, // Primary tx (createAnchor)
         Network:     result.Chain,
         Height:      result.BlockNumber,
         ConfirmedAt: bft.CommittedAt,
+
+        // Enhanced: All 3 tx hashes for comprehensive tracking
+        CreateTxHash:             result.CreateTxHash,
+        VerifyTxHash:             result.VerifyTxHash,
+        GovernanceTxHash:         result.GovernanceTxHash,
+        CreateBlockNumber:        result.CreateBlockNumber,
+        VerifyBlockNumber:        result.VerifyBlockNumber,
+        GovernanceBlockNumber:    result.GovernanceBlockNumber,
+        AllTransactionsConfirmed: result.Success,
     }, nil
 }
 

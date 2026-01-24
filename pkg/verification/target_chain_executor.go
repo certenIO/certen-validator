@@ -72,11 +72,28 @@ type BFTExecutionMetadata struct {
 }
 
 // AnchorExecutionResult summarises what happened on the target chain(s).
+// Enhanced to track all 3 transactions in the Ethereum anchor workflow:
+//   Step 1: CreateAnchor - stores anchor data on-chain
+//   Step 2: ExecuteComprehensiveProof - submits BLS proof for verification
+//   Step 3: ExecuteWithGovernance - executes the actual value transfer
 type AnchorExecutionResult struct {
-	AnchorTxID  string
+	AnchorTxID  string // Primary tx (createAnchor) for backwards compatibility
 	Network     string
 	Height      uint64
 	ConfirmedAt time.Time
+
+	// Enhanced: All 3 transaction hashes from the anchor workflow
+	CreateTxHash     string // Step 1: createAnchor tx hash
+	VerifyTxHash     string // Step 2: executeComprehensiveProof tx hash
+	GovernanceTxHash string // Step 3: executeWithGovernance tx hash
+
+	// Block numbers for each transaction
+	CreateBlockNumber     uint64
+	VerifyBlockNumber     uint64
+	GovernanceBlockNumber uint64
+
+	// All transactions confirmed successfully
+	AllTransactionsConfirmed bool
 }
 
 // TargetChainExecutor is strictly responsible for the

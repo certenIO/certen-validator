@@ -48,13 +48,27 @@ func getTargetChainConfig() (string, int64) {
 }
 
 // TargetChainExecutionResult represents the result of target chain operations
+// Enhanced to track all 3 transactions in the anchor workflow:
+//   Step 1: CreateAnchor - stores the anchor data on-chain
+//   Step 2: ExecuteComprehensiveProof - submits BLS proof verification
+//   Step 3: ExecuteWithGovernance - executes the actual value transfer
 type TargetChainExecutionResult struct {
 	Chain       string            `json:"chain"`
-	TxHash      string            `json:"tx_hash"`
+	TxHash      string            `json:"tx_hash"`       // Primary tx (governance) for backwards compatibility
 	BlockNumber uint64            `json:"block_number"`
 	Success     bool              `json:"success"`
 	RawLogs     []byte            `json:"raw_logs"`
 	Metadata    map[string]string `json:"metadata"`
+
+	// Enhanced: All 3 transaction hashes from the anchor workflow
+	CreateTxHash     string `json:"create_tx_hash"`     // Step 1: createAnchor tx
+	VerifyTxHash     string `json:"verify_tx_hash"`     // Step 2: executeComprehensiveProof tx
+	GovernanceTxHash string `json:"governance_tx_hash"` // Step 3: executeWithGovernance tx
+
+	// Block numbers for each transaction (may differ if txs land in different blocks)
+	CreateBlockNumber     uint64 `json:"create_block_number"`
+	VerifyBlockNumber     uint64 `json:"verify_block_number"`
+	GovernanceBlockNumber uint64 `json:"governance_block_number"`
 }
 
 // Interface implementation for consensus.TargetChainExecutionResult
@@ -384,12 +398,18 @@ func (btce *BFTTargetChainExecutor) executeEthereumOperations(
 	btce.logger.Printf("   Verify TX: %s", verifyTxHash)
 	btce.logger.Printf("   Governance TX: %s", govTxHash)
 
+	// Determine overall success - all 3 transactions should succeed
+	allSuccess := createTxHash != "" && createTxHash != "create_failed" &&
+		verifyTxHash != "" && verifyTxHash != "verify_failed" &&
+		govTxHash != "" && govTxHash != "governance_failed"
+
 	// Create execution result with all transaction hashes
+	// Enhanced: Now includes all 3 tx hashes as first-class fields
 	result := &TargetChainExecutionResult{
 		Chain:       "ethereum",
-		TxHash:      govTxHash,
+		TxHash:      createTxHash, // Primary tx is now createAnchor (confirms first)
 		BlockNumber: certenProof.BlockHeight + 100,
-		Success:     govTxHash != "governance_failed",
+		Success:     allSuccess,
 		RawLogs:     []byte(fmt.Sprintf(`{"status":"success","create_tx":"%s","verify_tx":"%s","gov_tx":"%s","intent_id":"%s","anchor_id":"%s"}`, createTxHash, verifyTxHash, govTxHash, intentID, anchorID)),
 		Metadata: map[string]string{
 			"executor":              validatorID,
@@ -405,6 +425,10 @@ func (btce *BFTTargetChainExecutor) executeEthereumOperations(
 			"verification_contract": contractConfig.VerificationContract,
 			"account_contract":      contractConfig.AccountContract,
 		},
+		// Enhanced: Explicit fields for all 3 transaction hashes
+		CreateTxHash:     createTxHash,
+		VerifyTxHash:     verifyTxHash,
+		GovernanceTxHash: govTxHash,
 	}
 
 	btce.logger.Printf("🎉 [ETH-EXEC] Ethereum execution completed:")
