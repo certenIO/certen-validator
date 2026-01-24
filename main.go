@@ -1250,6 +1250,11 @@ func startValidator(
     validatorSet := execution.NewValidatorSetFromConfig(cfg.ValidatorID, validatorAddress)
 
     // Create Proof Cycle Orchestrator
+    // Pass database repositories for proof artifact persistence (enables web app to track all 9 stages)
+    var orchestratorRepos *database.Repositories
+    if batchComponents != nil {
+        orchestratorRepos = batchComponents.Repos
+    }
     orchestrator, orchestratorErr := execution.NewProofCycleOrchestrator(
         cfg.ValidatorID,
         validatorAddress,
@@ -1257,6 +1262,7 @@ func startValidator(
         validatorSet,
         orchestratorConfig,
         accSubmitter,
+        orchestratorRepos,
         log.New(log.Writer(), "[ProofCycle] ", log.LstdFlags),
     )
 

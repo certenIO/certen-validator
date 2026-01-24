@@ -16,12 +16,14 @@ package execution
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math/big"
 	"os"
 	"sync"
 	"time"
 
+	"github.com/certen/independant-validator/pkg/database"
 	"github.com/ethereum/go-ethereum/common"
 )
 
@@ -60,6 +62,9 @@ type ProofCycleOrchestrator struct {
 	onCycleComplete func(*ProofCycleCompletion)
 	onCycleFailed   func(string, error)
 
+	// Database repositories for persistence
+	repos *database.Repositories
+
 	// Logging
 	logger Logger
 }
@@ -94,6 +99,7 @@ func NewProofCycleOrchestrator(
 	validatorSet *ValidatorSet,
 	config *ProofCycleConfig,
 	accSubmitter AccumulateSubmitter,
+	repos *database.Repositories,
 	logger Logger,
 ) (*ProofCycleOrchestrator, error) {
 
@@ -152,6 +158,7 @@ func NewProofCycleOrchestrator(
 		txBuilder:        txBuilder,
 		config:           config,
 		activeCycles:     make(map[string]*ProofCycleCompletion),
+		repos:            repos,
 		logger:           logger,
 	}
 
@@ -613,9 +620,191 @@ func (o *ProofCycleOrchestrator) completeCycle(
 	o.logger.Printf("   Cycle Hash: %s", cycle.ToHex())
 	o.logger.Printf("   Total Duration: %s", cycle.TotalDuration)
 
+	// Persist completion data to proof_artifacts table
+	if err := o.persistProofArtifact(cycle); err != nil {
+		o.logger.Printf("⚠️ [PROOF-CYCLE] Failed to persist proof artifact: %v", err)
+		// Non-fatal - cycle completed successfully, just persistence failed
+	} else {
+		o.logger.Printf("✅ [PROOF-CYCLE] Proof artifact persisted to database")
+	}
+
 	if o.onCycleComplete != nil {
 		go o.onCycleComplete(cycle)
 	}
+}
+
+// persistProofArtifact saves completion data to the proof_artifacts table
+// This enables the web app to track progress through all 9 stages
+func (o *ProofCycleOrchestrator) persistProofArtifact(cycle *ProofCycleCompletion) error {
+	if o.repos == nil || o.repos.ProofArtifacts == nil {
+		o.logger.Printf("⚠️ [PROOF-CYCLE] No database repository available for proof artifact persistence")
+		return nil // Not an error - just skip persistence
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Extract anchor data from execution result
+	var anchorTxHash string
+	var anchorBlockNumber int64
+	var anchorChain string
+
+	if cycle.ExecutionResult != nil {
+		if cycle.ExecutionResult.TxHash != (common.Hash{}) {
+			anchorTxHash = cycle.ExecutionResult.TxHash.Hex()
+		}
+		if cycle.ExecutionResult.BlockNumber != nil {
+			anchorBlockNumber = cycle.ExecutionResult.BlockNumber.Int64()
+		}
+		anchorChain = "ethereum" // Default to ethereum for now
+	}
+
+	// Build comprehensive artifact JSON containing all proof cycle data
+	artifactData := map[string]interface{}{
+		"proof_cycle_version": "2.0",
+		"intent_id":           cycle.IntentID,
+		"intent_tx_hash":      cycle.IntentTxHash,
+		"intent_block":        cycle.IntentBlock,
+		"bundle_id":           hex.EncodeToString(cycle.BundleID[:]),
+		"cycle_hash":          hex.EncodeToString(cycle.CycleHash[:]),
+		"validator_id":        o.validatorID,
+		"anchor_chain":        anchorChain,
+		"anchor_tx_hash":      anchorTxHash,
+		"anchor_block":        anchorBlockNumber,
+		"total_duration_ms":   cycle.TotalDuration.Milliseconds(),
+		"completed_at":        time.Now().Format(time.RFC3339),
+	}
+
+	// Add execution result details
+	if cycle.ExecutionResult != nil {
+		artifactData["execution"] = map[string]interface{}{
+			"tx_hash":             anchorTxHash,
+			"block_number":        anchorBlockNumber,
+			"success":             cycle.ExecutionResult.IsSuccess(),
+			"gas_used":            cycle.ExecutionResult.TxGasUsed,
+			"confirmation_blocks": cycle.ExecutionResult.ConfirmationBlocks,
+		}
+	}
+
+	// Add attestation details (BLS aggregate signature)
+	if cycle.Attestation != nil {
+		attestationData := map[string]interface{}{
+			"validator_count":     cycle.Attestation.ValidatorCount,
+			"threshold_met":       cycle.Attestation.ThresholdMet,
+			"result_hash":         hex.EncodeToString(cycle.Attestation.ResultHash[:]),
+		}
+		if cycle.Attestation.SignedVotingPower != nil {
+			attestationData["signed_voting_power"] = cycle.Attestation.SignedVotingPower.String()
+		}
+		if cycle.Attestation.AggregateSignature != nil {
+			attestationData["aggregate_signature"] = hex.EncodeToString(cycle.Attestation.AggregateSignature)
+		}
+		artifactData["attestation"] = attestationData
+	}
+
+	// Add writeback transaction details
+	if cycle.WriteBackTx != nil {
+		writebackData := map[string]interface{}{
+			"tx_type":   cycle.WriteBackTx.TxType,
+			"principal": cycle.WriteBackTx.Principal,
+			"status":    cycle.WriteBackTx.Status,
+		}
+		if cycle.WriteBackTx.TxHash != ([32]byte{}) {
+			writebackData["tx_hash"] = hex.EncodeToString(cycle.WriteBackTx.TxHash[:])
+		}
+		if !cycle.WriteBackTx.ConfirmedAt.IsZero() {
+			writebackData["confirmed_at"] = cycle.WriteBackTx.ConfirmedAt.Format(time.RFC3339)
+		}
+		artifactData["writeback"] = writebackData
+	}
+
+	// Add timing data
+	artifactData["timing"] = map[string]interface{}{
+		"intent_time":      cycle.IntentTime.Format(time.RFC3339),
+		"execution_time":   cycle.ExecutionTime.Format(time.RFC3339),
+		"attestation_time": cycle.AttestationTime.Format(time.RFC3339),
+		"writeback_time":   cycle.WriteBackTime.Format(time.RFC3339),
+	}
+
+	artifactJSON, err := json.Marshal(artifactData)
+	if err != nil {
+		return fmt.Errorf("failed to serialize proof artifact: %w", err)
+	}
+
+	// First, try to find existing proof artifact by intent tx hash
+	existingProof, err := o.repos.ProofArtifacts.GetProofByTxHash(ctx, cycle.IntentTxHash)
+	if err != nil {
+		o.logger.Printf("⚠️ [PROOF-CYCLE] Error checking existing proof: %v", err)
+		// Continue to create new one
+	}
+
+	if existingProof != nil {
+		// Update existing proof artifact with completion data
+		o.logger.Printf("📝 [PROOF-CYCLE] Updating existing proof artifact: %s", existingProof.ProofID)
+
+		// Update anchor information
+		if anchorTxHash != "" {
+			if err := o.repos.ProofArtifacts.UpdateProofAnchored(
+				ctx,
+				existingProof.ProofID,
+				existingProof.ProofID, // Use same ID as anchor ID
+				anchorTxHash,
+				anchorBlockNumber,
+				anchorChain,
+			); err != nil {
+				o.logger.Printf("⚠️ [PROOF-CYCLE] Failed to update proof anchored status: %v", err)
+			}
+		}
+
+		// Mark as verified (all 9 steps complete)
+		if err := o.repos.ProofArtifacts.UpdateProofVerified(ctx, existingProof.ProofID, true); err != nil {
+			o.logger.Printf("⚠️ [PROOF-CYCLE] Failed to update proof verified status: %v", err)
+		}
+
+		o.logger.Printf("✅ [PROOF-CYCLE] Updated proof artifact %s with completion data", existingProof.ProofID)
+		return nil
+	}
+
+	// Create new proof artifact if none exists
+	o.logger.Printf("📝 [PROOF-CYCLE] Creating new proof artifact for intent: %s", cycle.IntentID)
+
+	govLevel := database.GovLevelG2 // G2 = Governance + outcome binding (BLS attestation provides this)
+	input := &database.NewProofArtifact{
+		ProofType:    database.ProofTypeCertenAnchor,
+		AccumTxHash:  cycle.IntentTxHash,
+		AccountURL:   cycle.IntentID, // Use intent ID as account URL if not available
+		GovLevel:     &govLevel,
+		ProofClass:   database.ProofClassOnCadence,
+		ValidatorID:  o.validatorID,
+		ArtifactJSON: artifactJSON,
+	}
+
+	proof, err := o.repos.ProofArtifacts.CreateProofArtifact(ctx, input)
+	if err != nil {
+		return fmt.Errorf("failed to create proof artifact: %w", err)
+	}
+
+	// Immediately update with anchor and verification status
+	if anchorTxHash != "" {
+		if updateErr := o.repos.ProofArtifacts.UpdateProofAnchored(
+			ctx,
+			proof.ProofID,
+			proof.ProofID,
+			anchorTxHash,
+			anchorBlockNumber,
+			anchorChain,
+		); updateErr != nil {
+			o.logger.Printf("⚠️ [PROOF-CYCLE] Failed to update new proof with anchor: %v", updateErr)
+		}
+	}
+
+	// Mark as verified since cycle completed successfully
+	if verifyErr := o.repos.ProofArtifacts.UpdateProofVerified(ctx, proof.ProofID, true); verifyErr != nil {
+		o.logger.Printf("⚠️ [PROOF-CYCLE] Failed to mark new proof as verified: %v", verifyErr)
+	}
+
+	o.logger.Printf("✅ [PROOF-CYCLE] Created proof artifact %s for intent %s", proof.ProofID, cycle.IntentID)
+	return nil
 }
 
 // handleCycleFailed handles a failed proof cycle
@@ -679,6 +868,7 @@ func NewProofCycleOrchestratorFromEnv(
 	validatorIndex uint32,
 	validatorSet *ValidatorSet,
 	accSubmitter AccumulateSubmitter,
+	repos *database.Repositories,
 	logger Logger,
 ) (*ProofCycleOrchestrator, error) {
 
@@ -705,6 +895,7 @@ func NewProofCycleOrchestratorFromEnv(
 		validatorSet,
 		config,
 		accSubmitter,
+		repos,
 		logger,
 	)
 }

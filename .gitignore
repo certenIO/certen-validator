@@ -39,6 +39,21 @@ coverage.out
 # Temporary files
 tmpclaude-*
 validator-eth-keys.txt
+temp_*.json
+*temp_exec_results*.json
+*temp_data_results*.json
+
+# Build artifacts and binaries
+validator-build/
+validator-linux-fixed
+nul
+
+# BLS ZK keys tarball
+bls_zk_keys.tar.gz
+
+# Claude scratchpad files (Windows paths that get mangled)
+C*Accumulate_Stuff*
+C*Users*AppData*
 
 # Scripts directory
 /scripts/
