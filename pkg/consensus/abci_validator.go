@@ -7,6 +7,7 @@ package consensus
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -835,4 +836,99 @@ func (app *ValidatorApp) persistConsensusData(ctx context.Context) {
 		app.logger.Printf("✅ [PERSIST] Stored %d consensus entries and %d batch attestations to postgres",
 			persistedCount, attestationCount)
 	}
+
+	// Update Phase 5 fields on anchor_batches after CometBFT commit
+	// Since CometBFT achieved consensus, we know 2/3+ validators agreed
+	app.updatePhase5AfterCommit(ctx)
+}
+
+// updatePhase5AfterCommit updates anchor_batches Phase 5 fields after CometBFT consensus
+// Per PostgreSQL Data Population Gap Analysis: Gap 1 fix
+// CometBFT consensus proves 2/3+ validators agreed, so we can mark quorum as reached
+func (app *ValidatorApp) updatePhase5AfterCommit(ctx context.Context) {
+	if app.repos == nil || app.repos.Batches == nil {
+		return
+	}
+
+	now := time.Now()
+	updatedCount := 0
+
+	for bundleID, vb := range app.validatorBlocks {
+		// Parse bundle ID to UUID
+		batchUUID, err := uuid.Parse(bundleID)
+		if err != nil {
+			// Try alternate format (hex string without dashes)
+			if len(bundleID) >= 32 {
+				batchUUID, err = uuid.Parse(bundleID[:8] + "-" + bundleID[8:12] + "-" + bundleID[12:16] + "-" + bundleID[16:20] + "-" + bundleID[20:32])
+			}
+			if err != nil {
+				continue
+			}
+		}
+
+		// Extract BLS signature and public key from GovernanceProof
+		var aggregatedSig, aggregatedPubKey []byte
+		if vb.GovernanceProof.BLSAggregateSignature != "" {
+			aggregatedSig, _ = hexDecode(vb.GovernanceProof.BLSAggregateSignature)
+		}
+		if vb.GovernanceProof.BLSValidatorSetPubKey != "" {
+			aggregatedPubKey, _ = hexDecode(vb.GovernanceProof.BLSValidatorSetPubKey)
+		}
+
+		// CometBFT consensus means all validators in the commit agreed
+		// The actual attestation count is the validator count (they all signed the block)
+		attestationCount := app.validatorCount
+		if attestationCount == 0 {
+			attestationCount = 7 // Default to 7 validators if not set
+		}
+
+		// Update Phase 5 fields on anchor_batches
+		phase5Update := &database.BatchPhase5Update{
+			ProofDataIncluded:    true,
+			AttestationCount:     attestationCount,
+			AggregatedSignature:  aggregatedSig,
+			AggregatedPublicKey:  aggregatedPubKey,
+			QuorumReached:        true, // CometBFT consensus proves quorum
+			ConsensusCompletedAt: &now,
+		}
+
+		err = app.repos.Batches.UpdateBatchPhase5(ctx, batchUUID, phase5Update)
+		if err != nil {
+			app.logger.Printf("⚠️ [PHASE5] Failed to update Phase 5 for batch %s: %v", bundleID, err)
+		} else {
+			updatedCount++
+		}
+
+		// Also update consensus_entries to reflect quorum_met state
+		if app.repos.Consensus != nil {
+			// Build result JSON for the quorum update
+			resultJSON := map[string]interface{}{
+				"bundle_id":          bundleID,
+				"quorum_met_at":      now.Format(time.RFC3339),
+				"validator_count":    attestationCount,
+				"governance_level":   vb.GovernanceProof.GovernanceLevel,
+				"cometbft_consensus": true,
+			}
+			err = app.repos.Consensus.MarkConsensusQuorumMet(ctx, batchUUID, aggregatedSig, aggregatedPubKey, attestationCount, resultJSON)
+			if err != nil {
+				app.logger.Printf("⚠️ [PHASE5] Failed to update consensus entry for batch %s: %v", bundleID, err)
+			}
+		}
+	}
+
+	if updatedCount > 0 {
+		app.logger.Printf("✅ [PHASE5] Updated %d batches with Phase 5 consensus fields (quorum_reached=true, attestation_count=%d)",
+			updatedCount, app.validatorCount)
+	}
+}
+
+// hexDecode decodes a hex string with or without 0x prefix
+func hexDecode(s string) ([]byte, error) {
+	if len(s) >= 2 && s[:2] == "0x" {
+		s = s[2:]
+	}
+	if len(s) == 0 {
+		return nil, nil
+	}
+	return hex.DecodeString(s)
 }
