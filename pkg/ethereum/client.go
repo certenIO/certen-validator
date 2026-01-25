@@ -223,10 +223,15 @@ func (c *Client) SendContractTransaction(ctx context.Context, contractAddr commo
 		return nil, fmt.Errorf("failed to get nonce: %w", err)
 	}
 
-	// Get gas price
+	// Get gas price with minimum floor
 	gasPrice, err := c.client.SuggestGasPrice(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get gas price: %w", err)
+	}
+	// Enforce minimum 5 Gwei to ensure transactions get included
+	minGasPrice := big.NewInt(5 * 1e9)
+	if gasPrice.Cmp(minGasPrice) < 0 {
+		gasPrice = minGasPrice
 	}
 
 	// Create transaction
@@ -306,6 +311,12 @@ func (c *Client) SendContractTransactionWithRetry(ctx context.Context, contractA
 		baseGasPrice, err := c.client.SuggestGasPrice(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get gas price: %w", err)
+		}
+
+		// Enforce minimum 5 Gwei to ensure transactions get included
+		minGasPrice := big.NewInt(5 * 1e9)
+		if baseGasPrice.Cmp(minGasPrice) < 0 {
+			baseGasPrice = minGasPrice
 		}
 
 		// Escalate gas price by 20% for each retry

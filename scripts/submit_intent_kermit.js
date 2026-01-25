@@ -9,8 +9,8 @@ import { api_v3, core, ED25519Key, Signer } from 'file:///C:/Accumulate_Stuff/ty
 
 // Config - Kermit Testnet
 const ENDPOINT = 'http://206.191.154.164:8660/v3';
-const DATA_ACCOUNT = 'acc://certen-kermit-11.acme/data';
-const KEY_PAGE = 'acc://certen-kermit-11.acme/book/1';
+const DATA_ACCOUNT = 'acc://certen-kermit-12.acme/data';
+const KEY_PAGE = 'acc://certen-kermit-12.acme/book/1';
 const PRIVATE_KEY = '7cf706620841738ec5f876f955601c6198967eac5e918667e699e288f5b568a29d7f15934ee37295c9c9480c8ae53cd11d38f067dde67231ecefc4eea38c82a7';
 
 // Create intent data (hex-encoded JSON blobs)
@@ -38,7 +38,7 @@ function createIntentData() {
                 }
             }]
         }),
-        toHex({ organizationAdi: "acc://certen-kermit-11.acme", authorization: { required_key_book: "acc://certen-kermit-11.acme/book", signature_threshold: 1 } }),
+        toHex({ organizationAdi: "acc://certen-kermit-12.acme", authorization: { required_key_book: "acc://certen-kermit-12.acme/book", signature_threshold: 1 } }),
         toHex({ nonce: `certen_${now}`, created_at: Math.floor(now/1000), expires_at: Math.floor(now/1000) + 3600 })
     ];
 }
