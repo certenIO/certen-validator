@@ -273,6 +273,12 @@ func (c *Collector) addToBatch(ctx context.Context, batch *activeBatch, tx *Tran
 	c.logger.Printf("Added tx %s to %s batch %s (index=%d, size=%d)",
 		tx.AccumTxHash[:16]+"...", batch.batchType, batch.batchID, treeIndex, len(batch.leaves))
 
+	// Trigger Firestore sync for intent discovery (Stage 3)
+	// This fires when we discover an intent from Accumulate
+	if c.firestoreSyncService != nil && c.firestoreSyncService.IsEnabled() {
+		go c.triggerIntentDiscoveredFirestoreEvent(tx, batch.batchType)
+	}
+
 	return result, nil
 }
 
@@ -667,5 +673,36 @@ func (c *Collector) triggerBatchClosedFirestoreEvent(batch *activeBatch, merkleR
 
 	if err := c.firestoreSyncService.OnBatchClosed(ctx, event); err != nil {
 		c.logger.Printf("Warning: failed to send batch closed event to Firestore: %v", err)
+	}
+}
+
+// triggerIntentDiscoveredFirestoreEvent sends intent discovered event to Firestore
+// This enables real-time UI updates for Stage 3 (Intent Discovery)
+func (c *Collector) triggerIntentDiscoveredFirestoreEvent(tx *TransactionData, batchType database.BatchType) {
+	if c.firestoreSyncService == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Determine proof class from batch type
+	proofClass := "on_cadence"
+	if batchType == database.BatchTypeOnDemand {
+		proofClass = "on_demand"
+	}
+
+	event := &firestore.IntentDiscoveredEvent{
+		AccumTxHash:   tx.AccumTxHash,
+		AccountURL:    tx.AccountURL,
+		BlockHeight:   0, // Not tracked at this point
+		DiscoveryTime: time.Now(),
+		ProofClass:    proofClass,
+		IntentType:    tx.IntentType,
+		TargetChain:   "", // Will be determined during anchoring
+	}
+
+	if err := c.firestoreSyncService.OnIntentDiscovered(ctx, event); err != nil {
+		c.logger.Printf("Warning: failed to send intent discovered event to Firestore: %v", err)
 	}
 }

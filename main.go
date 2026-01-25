@@ -1108,6 +1108,11 @@ func startValidator(
             log.Printf("⚠️ [Phase 5] Failed to create confirmation tracker: %v", err)
             // Continue without confirmation tracking - it's not critical
         } else {
+            // Wire Firestore sync service to confirmation tracker
+            if firestoreSyncService != nil {
+                confirmationTracker.SetFirestoreSyncService(firestoreSyncService)
+                log.Println("✅ [Firestore] Sync service wired to confirmation tracker")
+            }
             // Start the confirmation tracker
             if err := confirmationTracker.Start(context.Background()); err != nil {
                 log.Printf("⚠️ [Phase 5] Failed to start confirmation tracker: %v", err)

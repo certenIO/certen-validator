@@ -29,7 +29,8 @@ services:
       - "26657:26657"
     environment:
       VALIDATOR_ID: validator-1
-      DATABASE_URL: postgres://certen:certen_testnet_2026@postgres:5432/certen_proofs?sslmode=disable
+      DATABASE_URL: postgres://certen:certen_testnet_2026@postgres:5432/certen?sslmode=disable
+      DATABASE_REQUIRED: "true"
       COMETBFT_ENABLED: "true"
       COMETBFT_MODE: validator
       COMETBFT_CHAIN_ID: certen-testnet
@@ -62,10 +63,15 @@ services:
       CERTEN_IDENTITY_DATA: "acc://certen-kermit-12.acme/execution-results"
       CERTEN_KEYPAGE_PUBLIC_KEY: "9d7f15934ee37295c9c9480c8ae53cd11d38f067dde67231ecefc4eea38c82a7"
       CERTEN_KEYPAGE_PRIVATE_KEY: "7cf706620841738ec5f876f955601c6198967eac5e918667e699e288f5b568a29d7f15934ee37295c9c9480c8ae53cd11d38f067dde67231ecefc4eea38c82a7"
+      # Firestore sync configuration
+      FIRESTORE_ENABLED: "true"
+      FIREBASE_PROJECT_ID: "certen-web"
+      GOOGLE_APPLICATION_CREDENTIALS: "/app/firebase-credentials.json"
     volumes:
       - validator1_data:/app/data
       - validator1_keys:/app/bft-keys
       - ./bls_zk_keys:/app/bls_zk_keys:ro
+      - ./firebase-service-account.json:/app/firebase-credentials.json:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -83,7 +89,8 @@ services:
       - "26667:26657"
     environment:
       VALIDATOR_ID: validator-2
-      DATABASE_URL: postgres://certen:certen_testnet_2026@postgres:5432/certen_proofs?sslmode=disable
+      DATABASE_URL: postgres://certen:certen_testnet_2026@postgres:5432/certen?sslmode=disable
+      DATABASE_REQUIRED: "true"
       COMETBFT_ENABLED: "true"
       COMETBFT_MODE: validator
       COMETBFT_CHAIN_ID: certen-testnet
@@ -116,10 +123,15 @@ services:
       CERTEN_IDENTITY_DATA: "acc://certen-kermit-12.acme/execution-results"
       CERTEN_KEYPAGE_PUBLIC_KEY: "9d7f15934ee37295c9c9480c8ae53cd11d38f067dde67231ecefc4eea38c82a7"
       CERTEN_KEYPAGE_PRIVATE_KEY: "7cf706620841738ec5f876f955601c6198967eac5e918667e699e288f5b568a29d7f15934ee37295c9c9480c8ae53cd11d38f067dde67231ecefc4eea38c82a7"
+      # Firestore sync configuration
+      FIRESTORE_ENABLED: "true"
+      FIREBASE_PROJECT_ID: "certen-web"
+      GOOGLE_APPLICATION_CREDENTIALS: "/app/firebase-credentials.json"
     volumes:
       - validator2_data:/app/data
       - validator2_keys:/app/bft-keys
       - ./bls_zk_keys:/app/bls_zk_keys:ro
+      - ./firebase-service-account.json:/app/firebase-credentials.json:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -137,7 +149,8 @@ services:
       - "26677:26657"
     environment:
       VALIDATOR_ID: validator-3
-      DATABASE_URL: postgres://certen:certen_testnet_2026@postgres:5432/certen_proofs?sslmode=disable
+      DATABASE_URL: postgres://certen:certen_testnet_2026@postgres:5432/certen?sslmode=disable
+      DATABASE_REQUIRED: "true"
       COMETBFT_ENABLED: "true"
       COMETBFT_MODE: validator
       COMETBFT_CHAIN_ID: certen-testnet
@@ -170,10 +183,15 @@ services:
       CERTEN_IDENTITY_DATA: "acc://certen-kermit-12.acme/execution-results"
       CERTEN_KEYPAGE_PUBLIC_KEY: "9d7f15934ee37295c9c9480c8ae53cd11d38f067dde67231ecefc4eea38c82a7"
       CERTEN_KEYPAGE_PRIVATE_KEY: "7cf706620841738ec5f876f955601c6198967eac5e918667e699e288f5b568a29d7f15934ee37295c9c9480c8ae53cd11d38f067dde67231ecefc4eea38c82a7"
+      # Firestore sync configuration
+      FIRESTORE_ENABLED: "true"
+      FIREBASE_PROJECT_ID: "certen-web"
+      GOOGLE_APPLICATION_CREDENTIALS: "/app/firebase-credentials.json"
     volumes:
       - validator3_data:/app/data
       - validator3_keys:/app/bft-keys
       - ./bls_zk_keys:/app/bls_zk_keys:ro
+      - ./firebase-service-account.json:/app/firebase-credentials.json:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -191,7 +209,8 @@ services:
       - "26687:26657"
     environment:
       VALIDATOR_ID: validator-4
-      DATABASE_URL: postgres://certen:certen_testnet_2026@postgres:5432/certen_proofs?sslmode=disable
+      DATABASE_URL: postgres://certen:certen_testnet_2026@postgres:5432/certen?sslmode=disable
+      DATABASE_REQUIRED: "true"
       COMETBFT_ENABLED: "true"
       COMETBFT_MODE: validator
       COMETBFT_CHAIN_ID: certen-testnet
@@ -224,10 +243,15 @@ services:
       CERTEN_IDENTITY_DATA: "acc://certen-kermit-12.acme/execution-results"
       CERTEN_KEYPAGE_PUBLIC_KEY: "9d7f15934ee37295c9c9480c8ae53cd11d38f067dde67231ecefc4eea38c82a7"
       CERTEN_KEYPAGE_PRIVATE_KEY: "7cf706620841738ec5f876f955601c6198967eac5e918667e699e288f5b568a29d7f15934ee37295c9c9480c8ae53cd11d38f067dde67231ecefc4eea38c82a7"
+      # Firestore sync configuration
+      FIRESTORE_ENABLED: "true"
+      FIREBASE_PROJECT_ID: "certen-web"
+      GOOGLE_APPLICATION_CREDENTIALS: "/app/firebase-credentials.json"
     volumes:
       - validator4_data:/app/data
       - validator4_keys:/app/bft-keys
       - ./bls_zk_keys:/app/bls_zk_keys:ro
+      - ./firebase-service-account.json:/app/firebase-credentials.json:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -245,7 +269,8 @@ services:
       - "26697:26657"
     environment:
       VALIDATOR_ID: validator-5
-      DATABASE_URL: postgres://certen:certen_testnet_2026@postgres:5432/certen_proofs?sslmode=disable
+      DATABASE_URL: postgres://certen:certen_testnet_2026@postgres:5432/certen?sslmode=disable
+      DATABASE_REQUIRED: "true"
       COMETBFT_ENABLED: "true"
       COMETBFT_MODE: validator
       COMETBFT_CHAIN_ID: certen-testnet
@@ -278,10 +303,15 @@ services:
       CERTEN_IDENTITY_DATA: "acc://certen-kermit-12.acme/execution-results"
       CERTEN_KEYPAGE_PUBLIC_KEY: "9d7f15934ee37295c9c9480c8ae53cd11d38f067dde67231ecefc4eea38c82a7"
       CERTEN_KEYPAGE_PRIVATE_KEY: "7cf706620841738ec5f876f955601c6198967eac5e918667e699e288f5b568a29d7f15934ee37295c9c9480c8ae53cd11d38f067dde67231ecefc4eea38c82a7"
+      # Firestore sync configuration
+      FIRESTORE_ENABLED: "true"
+      FIREBASE_PROJECT_ID: "certen-web"
+      GOOGLE_APPLICATION_CREDENTIALS: "/app/firebase-credentials.json"
     volumes:
       - validator5_data:/app/data
       - validator5_keys:/app/bft-keys
       - ./bls_zk_keys:/app/bls_zk_keys:ro
+      - ./firebase-service-account.json:/app/firebase-credentials.json:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -299,7 +329,8 @@ services:
       - "26707:26657"
     environment:
       VALIDATOR_ID: validator-6
-      DATABASE_URL: postgres://certen:certen_testnet_2026@postgres:5432/certen_proofs?sslmode=disable
+      DATABASE_URL: postgres://certen:certen_testnet_2026@postgres:5432/certen?sslmode=disable
+      DATABASE_REQUIRED: "true"
       COMETBFT_ENABLED: "true"
       COMETBFT_MODE: validator
       COMETBFT_CHAIN_ID: certen-testnet
@@ -332,10 +363,15 @@ services:
       CERTEN_IDENTITY_DATA: "acc://certen-kermit-12.acme/execution-results"
       CERTEN_KEYPAGE_PUBLIC_KEY: "9d7f15934ee37295c9c9480c8ae53cd11d38f067dde67231ecefc4eea38c82a7"
       CERTEN_KEYPAGE_PRIVATE_KEY: "7cf706620841738ec5f876f955601c6198967eac5e918667e699e288f5b568a29d7f15934ee37295c9c9480c8ae53cd11d38f067dde67231ecefc4eea38c82a7"
+      # Firestore sync configuration
+      FIRESTORE_ENABLED: "true"
+      FIREBASE_PROJECT_ID: "certen-web"
+      GOOGLE_APPLICATION_CREDENTIALS: "/app/firebase-credentials.json"
     volumes:
       - validator6_data:/app/data
       - validator6_keys:/app/bft-keys
       - ./bls_zk_keys:/app/bls_zk_keys:ro
+      - ./firebase-service-account.json:/app/firebase-credentials.json:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -353,7 +389,8 @@ services:
       - "26717:26657"
     environment:
       VALIDATOR_ID: validator-7
-      DATABASE_URL: postgres://certen:certen_testnet_2026@postgres:5432/certen_proofs?sslmode=disable
+      DATABASE_URL: postgres://certen:certen_testnet_2026@postgres:5432/certen?sslmode=disable
+      DATABASE_REQUIRED: "true"
       COMETBFT_ENABLED: "true"
       COMETBFT_MODE: validator
       COMETBFT_CHAIN_ID: certen-testnet
@@ -386,10 +423,15 @@ services:
       CERTEN_IDENTITY_DATA: "acc://certen-kermit-12.acme/execution-results"
       CERTEN_KEYPAGE_PUBLIC_KEY: "9d7f15934ee37295c9c9480c8ae53cd11d38f067dde67231ecefc4eea38c82a7"
       CERTEN_KEYPAGE_PRIVATE_KEY: "7cf706620841738ec5f876f955601c6198967eac5e918667e699e288f5b568a29d7f15934ee37295c9c9480c8ae53cd11d38f067dde67231ecefc4eea38c82a7"
+      # Firestore sync configuration
+      FIRESTORE_ENABLED: "true"
+      FIREBASE_PROJECT_ID: "certen-web"
+      GOOGLE_APPLICATION_CREDENTIALS: "/app/firebase-credentials.json"
     volumes:
       - validator7_data:/app/data
       - validator7_keys:/app/bft-keys
       - ./bls_zk_keys:/app/bls_zk_keys:ro
+      - ./firebase-service-account.json:/app/firebase-credentials.json:ro
     depends_on:
       postgres:
         condition: service_healthy

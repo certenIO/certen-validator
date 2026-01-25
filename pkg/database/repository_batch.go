@@ -501,3 +501,34 @@ func (r *BatchRepository) UpdateMerklePathByTreeIndex(ctx context.Context, batch
 
 	return nil
 }
+
+// GetTransactionHashesByBatchID returns the Accumulate transaction hashes for a batch
+// Used for Firestore sync to link confirmation updates back to user intents
+func (r *BatchRepository) GetTransactionHashesByBatchID(ctx context.Context, batchID uuid.UUID) ([]string, error) {
+	query := `
+		SELECT accum_tx_hash
+		FROM batch_transactions
+		WHERE batch_id = $1
+		ORDER BY tree_index`
+
+	rows, err := r.client.QueryContext(ctx, query, batchID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query transaction hashes: %w", err)
+	}
+	defer rows.Close()
+
+	var hashes []string
+	for rows.Next() {
+		var hash string
+		if err := rows.Scan(&hash); err != nil {
+			return nil, fmt.Errorf("failed to scan transaction hash: %w", err)
+		}
+		hashes = append(hashes, hash)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating transaction hashes: %w", err)
+	}
+
+	return hashes, nil
+}

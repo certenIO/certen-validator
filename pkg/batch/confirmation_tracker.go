@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/certen/independant-validator/pkg/database"
+	"github.com/certen/independant-validator/pkg/firestore"
 )
 
 // BlockInfoProvider provides information about blocks on the target chain
@@ -36,8 +37,9 @@ type ConfirmationTracker struct {
 	mu sync.RWMutex
 
 	// Dependencies
-	repos         *database.Repositories
-	blockProvider BlockInfoProvider
+	repos                *database.Repositories
+	blockProvider        BlockInfoProvider
+	firestoreSyncService *firestore.SyncService // Real-time UI sync
 
 	// Configuration
 	pollInterval          time.Duration
@@ -131,6 +133,16 @@ func (t *ConfirmationTracker) Stop() error {
 	return nil
 }
 
+// SetFirestoreSyncService sets the Firestore sync service for real-time UI updates
+func (t *ConfirmationTracker) SetFirestoreSyncService(svc *firestore.SyncService) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.firestoreSyncService = svc
+	if svc != nil && svc.IsEnabled() {
+		t.logger.Println("Firestore sync service connected - will sync confirmation updates")
+	}
+}
+
 // run is the main tracking loop
 func (t *ConfirmationTracker) run(ctx context.Context) {
 	defer close(t.doneCh)
@@ -216,6 +228,11 @@ func (t *ConfirmationTracker) processAnchor(ctx context.Context, anchor *databas
 		return
 	}
 
+	// Sync confirmation update to Firestore (Stage 7)
+	if t.firestoreSyncService != nil && t.firestoreSyncService.IsEnabled() {
+		go t.triggerConfirmationFirestoreEvent(ctx, anchor, confirmations, latestBlock)
+	}
+
 	// Check if anchor has reached finality
 	if confirmations >= t.requiredConfirmations {
 		t.logger.Printf("Anchor %s reached finality (%d confirmations)", anchor.AnchorID, confirmations)
@@ -298,6 +315,38 @@ type ConfirmationStats struct {
 	PendingAnchors        int64 `json:"pending_anchors"`
 	RequiredConfirmations int   `json:"required_confirmations"`
 	TrackerRunning        bool  `json:"tracker_running"`
+}
+
+// triggerConfirmationFirestoreEvent sends confirmation update to Firestore (Stage 7)
+func (t *ConfirmationTracker) triggerConfirmationFirestoreEvent(ctx context.Context, anchor *database.AnchorRecord, confirmations int, latestBlock int64) {
+	if t.firestoreSyncService == nil {
+		return
+	}
+
+	// Get transaction hashes for this anchor's batch
+	txHashes, err := t.repos.Batches.GetTransactionHashesByBatchID(ctx, anchor.BatchID)
+	if err != nil {
+		t.logger.Printf("Warning: failed to get tx hashes for batch %s: %v", anchor.BatchID, err)
+		return
+	}
+
+	if len(txHashes) == 0 {
+		return
+	}
+
+	event := &firestore.ConfirmationUpdateEvent{
+		BatchID:               anchor.BatchID.String(),
+		AnchorTxHash:          anchor.AnchorTxHash,
+		CurrentConfirmations:  confirmations,
+		RequiredConfirmations: t.requiredConfirmations,
+		IsConfirmed:           confirmations >= t.requiredConfirmations,
+		BlockNumber:           latestBlock,
+		TransactionHashes:     txHashes,
+	}
+
+	if err := t.firestoreSyncService.OnConfirmationUpdate(ctx, event); err != nil {
+		t.logger.Printf("Warning: failed to sync confirmation update to Firestore: %v", err)
+	}
 }
 
 // BatchAwareStatus provides batch-type-aware status for health checks
