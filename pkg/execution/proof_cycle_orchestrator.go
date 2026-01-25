@@ -26,6 +26,7 @@ import (
 
 	"github.com/certen/independant-validator/pkg/database"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/google/uuid"
 )
 
 // =============================================================================
@@ -1073,6 +1074,7 @@ func (o *ProofCycleOrchestrator) persistProofArtifact(cycle *ProofCycleCompletio
 	o.logger.Printf("📝 [PROOF-CYCLE] Creating new proof artifact for intent: %s", cycle.IntentID)
 
 	govLevel := database.GovLevelG2 // G2 = Governance + outcome binding (BLS attestation provides this)
+	intentID := cycle.IntentID      // Copy for pointer
 	input := &database.NewProofArtifact{
 		ProofType:    database.ProofTypeCertenAnchor,
 		AccumTxHash:  cycle.IntentTxHash,
@@ -1081,6 +1083,7 @@ func (o *ProofCycleOrchestrator) persistProofArtifact(cycle *ProofCycleCompletio
 		ProofClass:   database.ProofClassOnCadence,
 		ValidatorID:  o.validatorID,
 		ArtifactJSON: artifactJSON,
+		IntentID:     &intentID, // Set intent tracking for Firestore linking
 	}
 
 	proof, err := o.repos.ProofArtifacts.CreateProofArtifact(ctx, input)
@@ -1133,6 +1136,18 @@ func (o *ProofCycleOrchestrator) persistExternalChainResults(
 	persistCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
+	// Try to find the proof_id by looking up the proof artifact for this intent
+	var proofID *uuid.UUID
+	if cycle.IntentID != "" {
+		proof, err := o.repos.ProofArtifacts.GetProofByIntentID(persistCtx, cycle.IntentID)
+		if err == nil && proof != nil {
+			proofID = &proof.ProofID
+			o.logger.Printf("📋 [PHASE-7] Linked to proof artifact: %s", proof.ProofID)
+		} else {
+			o.logger.Printf("⚠️ [PHASE-7] Could not find proof artifact for intent %s: %v", cycle.IntentID, err)
+		}
+	}
+
 	// Helper to persist a single result
 	persistResult := func(stepName string, result *ExternalChainResult, stepNum int) {
 		if result == nil {
@@ -1161,7 +1176,16 @@ func (o *ProofCycleOrchestrator) persistExternalChainResults(
 			}
 		}
 
+		// Set finalized_at if finalized
+		isFinalized := result.ConfirmationBlocks >= 12
+		var finalizedAt *time.Time
+		if isFinalized {
+			now := time.Now()
+			finalizedAt = &now
+		}
+
 		input := &database.ExternalChainResultInput{
+			ProofID:               proofID, // Link to proof artifact if found
 			BundleID:              cycle.BundleID[:],
 			OperationID:           cycle.BundleID[:], // Use BundleID as OperationID
 			ChainType:             "ethereum",
@@ -1182,7 +1206,8 @@ func (o *ProofCycleOrchestrator) persistExternalChainResults(
 			LogsJSON:              logsJSON,
 			ConfirmationBlocks:    result.ConfirmationBlocks,
 			RequiredConfirmations: 12,
-			IsFinalized:           result.ConfirmationBlocks >= 12,
+			IsFinalized:           isFinalized,
+			FinalizedAt:           finalizedAt,
 			ResultHash:            result.ResultHash[:],
 			ObserverValidatorID:   o.validatorID,
 			ObservedAt:            time.Now(),

@@ -1585,12 +1585,13 @@ type ExternalChainResultInput struct {
 	RevertReason         string
 	ContractAddress      []byte
 	LogsJSON             json.RawMessage
-	ConfirmationBlocks   int
+	ConfirmationBlocks    int
 	RequiredConfirmations int
-	IsFinalized          bool
-	ResultHash           []byte
-	ObserverValidatorID  string
-	ObservedAt           time.Time
+	IsFinalized           bool
+	FinalizedAt           *time.Time // Set when IsFinalized is true
+	ResultHash            []byte
+	ObserverValidatorID   string
+	ObservedAt            time.Time
 }
 
 // SaveExternalChainResultV2 creates a new external chain execution result matching the actual schema
@@ -1602,10 +1603,10 @@ func (r *ProofArtifactRepository) SaveExternalChainResultV2(ctx context.Context,
 			block_number, block_hash, block_timestamp,
 			state_root, transactions_root, receipts_root,
 			execution_status, execution_success, revert_reason, contract_address, logs_json,
-			confirmation_blocks, required_confirmations, is_finalized,
+			confirmation_blocks, required_confirmations, is_finalized, finalized_at,
 			result_hash, observer_validator_id, observed_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29
 		)
 		RETURNING result_id`
 
@@ -1616,7 +1617,7 @@ func (r *ProofArtifactRepository) SaveExternalChainResultV2(ctx context.Context,
 		input.BlockNumber, input.BlockHash, input.BlockTimestamp,
 		input.StateRoot, input.TransactionsRoot, input.ReceiptsRoot,
 		input.ExecutionStatus, input.ExecutionSuccess, input.RevertReason, input.ContractAddress, input.LogsJSON,
-		input.ConfirmationBlocks, input.RequiredConfirmations, input.IsFinalized,
+		input.ConfirmationBlocks, input.RequiredConfirmations, input.IsFinalized, input.FinalizedAt,
 		input.ResultHash, input.ObserverValidatorID, input.ObservedAt,
 	).Scan(&resultID)
 
