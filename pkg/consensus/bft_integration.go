@@ -184,7 +184,7 @@ type ProofCycleOrchestratorInterface interface {
 	// StartProofCycleWithAllTxs initiates Phase 7-9 with all 3 anchor workflow tx hashes
 	// Enhanced: Tracks createAnchor, executeComprehensiveProof, and executeWithGovernance
 	// The txHashes parameter uses interface{} to avoid circular imports - actual type is *AnchorWorkflowTxHashes
-	StartProofCycleWithAllTxs(ctx context.Context, intentID string, bundleID [32]byte, txHashes interface{}, commitment interface{}) error
+	StartProofCycleWithAllTxs(ctx context.Context, intentID string, userID string, bundleID [32]byte, txHashes interface{}, commitment interface{}) error
 }
 
 // BFTValidatorInfo represents information about a BFT validator
@@ -1046,7 +1046,7 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 				proofCycleCtx := context.Background()
 
 				// Try enhanced method first, fall back to legacy if not implemented
-				if err := bv.proofCycleOrchestrator.StartProofCycleWithAllTxs(proofCycleCtx, certenIntent.IntentID, bundleID, txHashes, commitment); err != nil {
+				if err := bv.proofCycleOrchestrator.StartProofCycleWithAllTxs(proofCycleCtx, certenIntent.IntentID, certenIntent.UserID, bundleID, txHashes, commitment); err != nil {
 					bv.logger.Printf("⚠️ [PROOF-CYCLE] Failed to start proof cycle: %v", err)
 					// Non-fatal - proof cycle failure doesn't invalidate execution
 				}

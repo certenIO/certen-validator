@@ -838,6 +838,7 @@ func (w *ResultWriteBack) GetSubmittedCount() int {
 type ProofCycleCompletion struct {
 	// Original intent
 	IntentID      string   `json:"intent_id"`
+	UserID        string   `json:"user_id"`        // User who created the intent
 	IntentTxHash  string   `json:"intent_tx_hash"`
 	IntentBlock   uint64   `json:"intent_block"`
 	IntentHash    [32]byte `json:"intent_hash"`

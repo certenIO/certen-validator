@@ -248,6 +248,7 @@ type AnchorWorkflowTxHashes struct {
 func (o *ProofCycleOrchestrator) StartProofCycleWithAllTxs(
 	ctx context.Context,
 	intentID string,
+	userID string,
 	bundleID [32]byte,
 	txHashesInterface interface{},
 	commitment interface{},
@@ -308,6 +309,7 @@ func (o *ProofCycleOrchestrator) StartProofCycleWithAllTxs(
 	// Initialize proof cycle with all tx hashes
 	cycle := &ProofCycleCompletion{
 		IntentID:         intentID,
+		UserID:           userID,
 		IntentTxHash:     intentTxHash,
 		BundleID:         bundleID,
 		ValidatorBlockID: fmt.Sprintf("vb-%s", intentID[:16]),
@@ -1065,13 +1067,19 @@ func (o *ProofCycleOrchestrator) persistProofArtifact(cycle *ProofCycleCompletio
 		// Update existing proof artifact with completion data
 		o.logger.Printf("📝 [PROOF-CYCLE] Updating existing proof artifact: %s", existingProof.ProofID)
 
-		// Update intent tracking (intent_id for Firestore linking)
-		if cycle.IntentID != "" {
-			intentID := cycle.IntentID
-			if err := o.repos.ProofArtifacts.UpdateProofIntentTracking(ctx, existingProof.ProofID, nil, &intentID); err != nil {
+		// Update intent tracking (user_id and intent_id for Firestore linking)
+		if cycle.IntentID != "" || cycle.UserID != "" {
+			var userIDPtr, intentIDPtr *string
+			if cycle.UserID != "" {
+				userIDPtr = &cycle.UserID
+			}
+			if cycle.IntentID != "" {
+				intentIDPtr = &cycle.IntentID
+			}
+			if err := o.repos.ProofArtifacts.UpdateProofIntentTracking(ctx, existingProof.ProofID, userIDPtr, intentIDPtr); err != nil {
 				o.logger.Printf("⚠️ [PROOF-CYCLE] Failed to update proof intent tracking: %v", err)
 			} else {
-				o.logger.Printf("✅ [PROOF-CYCLE] Updated intent_id=%s on proof %s", intentID, existingProof.ProofID)
+				o.logger.Printf("✅ [PROOF-CYCLE] Updated user_id=%s, intent_id=%s on proof %s", cycle.UserID, cycle.IntentID, existingProof.ProofID)
 			}
 		}
 
@@ -1109,6 +1117,7 @@ func (o *ProofCycleOrchestrator) persistProofArtifact(cycle *ProofCycleCompletio
 
 	govLevel := database.GovLevelG2 // G2 = Governance + outcome binding (BLS attestation provides this)
 	intentID := cycle.IntentID      // Copy for pointer
+	userID := cycle.UserID          // Copy for pointer
 	input := &database.NewProofArtifact{
 		ProofType:    database.ProofTypeCertenAnchor,
 		AccumTxHash:  cycle.IntentTxHash,
@@ -1117,6 +1126,7 @@ func (o *ProofCycleOrchestrator) persistProofArtifact(cycle *ProofCycleCompletio
 		ProofClass:   database.ProofClassOnCadence,
 		ValidatorID:  o.validatorID,
 		ArtifactJSON: artifactJSON,
+		UserID:       &userID,   // Set user tracking for Firestore linking
 		IntentID:     &intentID, // Set intent tracking for Firestore linking
 	}
 
@@ -1748,6 +1758,7 @@ type ConsensusAnchorWorkflowTxHashes struct {
 func (a *ProofCycleOrchestratorAdapter) StartProofCycleWithAllTxs(
 	ctx context.Context,
 	intentID string,
+	userID string,
 	bundleID [32]byte,
 	txHashes interface{},
 	commitment interface{},
@@ -1774,7 +1785,7 @@ func (a *ProofCycleOrchestratorAdapter) StartProofCycleWithAllTxs(
 		}
 	}
 
-	return a.orchestrator.StartProofCycleWithAllTxs(ctx, intentID, bundleID, localTxHashes, commitment)
+	return a.orchestrator.StartProofCycleWithAllTxs(ctx, intentID, userID, bundleID, localTxHashes, commitment)
 }
 
 // extractTxHashesViaReflection uses reflection to extract tx hashes from a struct
