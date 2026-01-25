@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 )
 
 // ProofArtifactRepository provides access to proof artifact storage
@@ -3287,10 +3288,24 @@ func (r *ProofArtifactRepository) SaveAggregatedBLSAttestation(ctx context.Conte
 	agg.LastAttestationAt = input.LastAttestationAt
 	agg.AggregationHash = input.AggregationHash
 
+	// Convert arrays to pq-compatible types for PostgreSQL
+	// BYTEA[] - use pq.ByteaArray
+	byteaArray := pq.ByteaArray(input.ValidatorAddresses)
+
+	// INTEGER[] - use pq.Int32Array
+	int32Array := pq.Int32Array(input.ValidatorIndices)
+
+	// UUID[] - convert to string array for PostgreSQL
+	uuidStrings := make([]string, len(input.AttestationIDs))
+	for i, id := range input.AttestationIDs {
+		uuidStrings[i] = id.String()
+	}
+	uuidArray := pq.StringArray(uuidStrings)
+
 	err := r.db.QueryRowContext(ctx, query,
 		input.ResultID, input.ResultHash, input.BundleID, input.MessageHash, input.AttestedBlockNumber,
 		input.AggregateSignature, input.AggregatePublicKey, input.ValidatorBitfield,
-		input.ValidatorCount, input.ValidatorAddresses, input.ValidatorIndices, input.AttestationIDs,
+		input.ValidatorCount, byteaArray, int32Array, uuidArray,
 		input.TotalVotingPower, input.SignedVotingPower, input.VotingPowerPercentage,
 		input.ThresholdNumerator, input.ThresholdDenominator, input.ThresholdMet,
 		input.FirstAttestationAt, input.LastAttestationAt, input.AggregationHash,
