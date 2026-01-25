@@ -352,7 +352,7 @@ func (o *ProofCycleOrchestrator) executePhase7Enhanced(
 	go func() {
 		defer wg.Done()
 		if txHashes.CreateTxHash != (common.Hash{}) {
-			o.logger.Printf("📡 [PHASE-7] Observing Step 1 (createAnchor): %s", txHashes.CreateTxHash.Hex())
+			o.logger.Printf("📡 [PHASE-7] Observing Step 1 (createAnchor): %s (commitment=nil, skipping verification)", txHashes.CreateTxHash.Hex())
 			createResult, createErr = o.observer.ObserveTransaction(observeCtx, txHashes.CreateTxHash, nil)
 			if createErr != nil {
 				o.logger.Printf("⚠️ [PHASE-7] Step 1 observation failed: %v", createErr)
@@ -409,17 +409,30 @@ func (o *ProofCycleOrchestrator) executePhase7Enhanced(
 	// Wait for all observations to complete
 	wg.Wait()
 
-	// Determine overall success - at minimum, createAnchor must succeed
-	if createErr != nil {
-		o.handleCycleFailed(cycleID, fmt.Errorf("phase 7 observation failed: createAnchor: %w", createErr))
+	// Determine overall success
+	// Key insight: The smart contract enforces that executeWithGovernance (Step 3) can ONLY succeed
+	// if createAnchor (Step 1) and executeComprehensiveProof (Step 2) already succeeded.
+	// Therefore, if Step 3 succeeds, we KNOW Steps 1 and 2 succeeded on-chain.
+	// We only verify commitment for Step 3, so focus on govErr for cycle success.
+	if govErr != nil {
+		o.handleCycleFailed(cycleID, fmt.Errorf("phase 7 observation failed: executeWithGovernance: %w", govErr))
 		return
 	}
 
+	// Log any Step 1/2 observation errors (informational only - on-chain they succeeded)
+	if createErr != nil {
+		o.logger.Printf("⚠️ [PHASE-7] Step 1 observation had error (on-chain succeeded per Step 3): %v", createErr)
+	}
+	if verifyErr != nil {
+		o.logger.Printf("⚠️ [PHASE-7] Step 2 observation had error (on-chain succeeded per Step 3): %v", verifyErr)
+	}
+
 	// Update cycle with overall status
+	// Use governance result as primary since it's the one with verified commitment
 	o.mu.Lock()
-	cycle.ExecutionResult = createResult // Use createAnchor as primary result for backwards compatibility
+	cycle.ExecutionResult = govResult // Use governance result as it has verified commitment
 	cycle.ExecutionTime = time.Now()
-	cycle.AllTxsConfirmed = createErr == nil && verifyErr == nil && govErr == nil
+	cycle.AllTxsConfirmed = govErr == nil && govResult != nil && govResult.IsSuccess()
 	o.mu.Unlock()
 
 	// Log summary

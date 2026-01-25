@@ -199,10 +199,14 @@ func (o *ExternalChainObserver) ObserveTransaction(
 
 	// Verify commitment if provided
 	if commitment != nil {
+		o.log("🔍 [OBSERVER] Commitment provided, verifying against result...")
 		if !commitment.VerifyAgainstResult(result) {
+			o.log("❌ [OBSERVER] Commitment verification FAILED")
 			return nil, fmt.Errorf("result does not match execution commitment")
 		}
 		o.log("✅ [OBSERVER] Result verified against execution commitment")
+	} else {
+		o.log("⏭️ [OBSERVER] No commitment provided, skipping verification")
 	}
 
 	o.log("🎉 [OBSERVER] External chain result complete: hash=%s status=%d", result.ToHex()[:16], result.Status)
