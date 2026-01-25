@@ -250,13 +250,25 @@ func (o *ProofCycleOrchestrator) StartProofCycleWithAllTxs(
 	txHashesInterface interface{},
 	commitment interface{},
 ) error {
-	// Convert interface to actual type
+	// Convert interface to actual type - support both local and consensus package types
 	var txHashes *AnchorWorkflowTxHashes
 	switch th := txHashesInterface.(type) {
 	case *AnchorWorkflowTxHashes:
 		txHashes = th
+	case *ConsensusAnchorWorkflowTxHashes:
+		txHashes = &AnchorWorkflowTxHashes{
+			CreateTxHash:     th.CreateTxHash,
+			VerifyTxHash:     th.VerifyTxHash,
+			GovernanceTxHash: th.GovernanceTxHash,
+			PrimaryTxHash:    th.PrimaryTxHash,
+		}
 	default:
-		return fmt.Errorf("invalid txHashes type: %T", txHashesInterface)
+		// Use reflection to extract fields from consensus.AnchorWorkflowTxHashes
+		// This handles cross-package type assertion issues
+		txHashes = extractTxHashesViaReflection(txHashesInterface)
+		if txHashes == nil {
+			return fmt.Errorf("invalid txHashes type: %T", txHashesInterface)
+		}
 	}
 	// Type assert the commitment if provided
 	var execCommitment *ExecutionCommitment
