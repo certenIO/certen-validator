@@ -312,3 +312,65 @@ func (r *AttestationRepository) GetDistinctValidators(ctx context.Context) ([]st
 
 	return validators, rows.Err()
 }
+
+// ============================================================================
+// ATTESTATION VERIFICATION OPERATIONS
+// ============================================================================
+
+// MarkVerified updates the signature verification status of an attestation
+func (r *AttestationRepository) MarkVerified(ctx context.Context, attestationID uuid.UUID, valid bool) error {
+	query := `
+		UPDATE validator_attestations
+		SET signature_valid = $2, verified_at = NOW()
+		WHERE attestation_id = $1`
+
+	result, err := r.client.ExecContext(ctx, query, attestationID, valid)
+	if err != nil {
+		return fmt.Errorf("failed to mark attestation verified: %w", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("attestation not found: %s", attestationID)
+	}
+
+	return nil
+}
+
+// MarkVerifiedByProofAndValidator updates verification status for attestation by proof and validator
+func (r *AttestationRepository) MarkVerifiedByProofAndValidator(ctx context.Context, proofID uuid.UUID, validatorID string, valid bool) error {
+	query := `
+		UPDATE validator_attestations
+		SET signature_valid = $3, verified_at = NOW()
+		WHERE proof_id = $1 AND validator_id = $2`
+
+	result, err := r.client.ExecContext(ctx, query, proofID, validatorID, valid)
+	if err != nil {
+		return fmt.Errorf("failed to mark attestation verified: %w", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("attestation not found for proof %s and validator %s", proofID, validatorID)
+	}
+
+	return nil
+}
+
+// CountVerifiedAttestationsForProof counts verified attestations for a proof
+func (r *AttestationRepository) CountVerifiedAttestationsForProof(ctx context.Context, proofID uuid.UUID) (int, int, error) {
+	query := `
+		SELECT
+			COUNT(*) FILTER (WHERE signature_valid = TRUE) as valid_count,
+			COUNT(*) FILTER (WHERE signature_valid = FALSE) as invalid_count
+		FROM validator_attestations
+		WHERE proof_id = $1 AND signature_valid IS NOT NULL`
+
+	var validCount, invalidCount int
+	err := r.client.QueryRowContext(ctx, query, proofID).Scan(&validCount, &invalidCount)
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to count verified attestations: %w", err)
+	}
+
+	return validCount, invalidCount, nil
+}

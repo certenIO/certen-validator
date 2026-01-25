@@ -224,6 +224,44 @@ func (r *BatchRepository) IncrementTxCount(ctx context.Context, batchID uuid.UUI
 	return nil
 }
 
+// UpdateBatchPhase5 updates the Phase 5 consensus fields after quorum is reached
+func (r *BatchRepository) UpdateBatchPhase5(ctx context.Context, batchID uuid.UUID, update *BatchPhase5Update) error {
+	query := `
+		UPDATE anchor_batches
+		SET bpt_root = COALESCE($2, bpt_root),
+			governance_root = COALESCE($3, governance_root),
+			proof_data_included = $4,
+			attestation_count = $5,
+			aggregated_signature = COALESCE($6, aggregated_signature),
+			aggregated_public_key = COALESCE($7, aggregated_public_key),
+			quorum_reached = $8,
+			consensus_completed_at = $9,
+			updated_at = NOW()
+		WHERE id = $1`
+
+	result, err := r.client.ExecContext(ctx, query,
+		batchID,
+		update.BPTRoot,
+		update.GovernanceRoot,
+		update.ProofDataIncluded,
+		update.AttestationCount,
+		update.AggregatedSignature,
+		update.AggregatedPublicKey,
+		update.QuorumReached,
+		update.ConsensusCompletedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update batch Phase 5 fields: %w", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("batch not found: %s", batchID)
+	}
+
+	return nil
+}
+
 // ============================================================================
 // BATCH TRANSACTION OPERATIONS
 // ============================================================================
@@ -234,6 +272,15 @@ func (r *BatchRepository) AddTransaction(ctx context.Context, input *NewBatchTra
 	merklePathJSON, err := json.Marshal(input.MerklePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to serialize merkle path: %w", err)
+	}
+
+	// Build UserID and IntentID null strings
+	var userID, intentID sql.NullString
+	if input.UserID != nil {
+		userID = sql.NullString{String: *input.UserID, Valid: true}
+	}
+	if input.IntentID != nil {
+		intentID = sql.NullString{String: *input.IntentID, Valid: true}
 	}
 
 	tx := &BatchTransaction{
@@ -251,6 +298,8 @@ func (r *BatchRepository) AddTransaction(ctx context.Context, input *NewBatchTra
 		IntentType:   sql.NullString{String: input.IntentType, Valid: input.IntentType != ""},
 		IntentData:   input.IntentData,
 		CreatedAt:    time.Now(),
+		UserID:       userID,
+		IntentID:     intentID,
 	}
 
 	query := `
@@ -258,15 +307,15 @@ func (r *BatchRepository) AddTransaction(ctx context.Context, input *NewBatchTra
 			batch_id, accumulate_tx_hash, account_url, tree_index,
 			merkle_path, transaction_hash, chained_proof, chained_proof_valid,
 			governance_proof, governance_level, governance_valid,
-			intent_type, intent_data, created_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+			intent_type, intent_data, user_id, intent_id, created_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 		RETURNING id, created_at`
 
 	err = r.client.QueryRowContext(ctx, query,
 		tx.BatchID, tx.AccumTxHash, tx.AccountURL, tx.TreeIndex,
 		tx.MerklePath, tx.TxHash, tx.ChainedProof, tx.ChainedValid,
 		tx.GovProof, tx.GovLevel, tx.GovValid,
-		tx.IntentType, tx.IntentData, tx.CreatedAt,
+		tx.IntentType, tx.IntentData, tx.UserID, tx.IntentID, tx.CreatedAt,
 	).Scan(&tx.ID, &tx.CreatedAt)
 
 	if err != nil {

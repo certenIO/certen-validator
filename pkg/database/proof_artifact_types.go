@@ -106,21 +106,28 @@ type ProofArtifact struct {
 
 	// Computed
 	ArtifactHash []byte `json:"artifact_hash" db:"artifact_hash"`
+
+	// Intent Tracking (for Firestore linking)
+	UserID   *string `json:"user_id,omitempty" db:"user_id"`
+	IntentID *string `json:"intent_id,omitempty" db:"intent_id"`
 }
 
 // NewProofArtifact is used to create a new proof artifact
 type NewProofArtifact struct {
-	ProofType    ProofType       `json:"proof_type"`
-	AccumTxHash  string          `json:"accum_tx_hash"`
-	AccountURL   string          `json:"account_url"`
-	BatchID      *uuid.UUID      `json:"batch_id,omitempty"`
-	MerkleRoot   []byte          `json:"merkle_root,omitempty"`
-	LeafHash     []byte          `json:"leaf_hash,omitempty"`
-	LeafIndex    *int            `json:"leaf_index,omitempty"`
+	ProofType    ProofType        `json:"proof_type"`
+	AccumTxHash  string           `json:"accum_tx_hash"`
+	AccountURL   string           `json:"account_url"`
+	BatchID      *uuid.UUID       `json:"batch_id,omitempty"`
+	MerkleRoot   []byte           `json:"merkle_root,omitempty"`
+	LeafHash     []byte           `json:"leaf_hash,omitempty"`
+	LeafIndex    *int             `json:"leaf_index,omitempty"`
 	GovLevel     *GovernanceLevel `json:"gov_level,omitempty"`
-	ProofClass   ProofClass      `json:"proof_class"`
-	ValidatorID  string          `json:"validator_id"`
-	ArtifactJSON json.RawMessage `json:"artifact_json"`
+	ProofClass   ProofClass       `json:"proof_class"`
+	ValidatorID  string           `json:"validator_id"`
+	ArtifactJSON json.RawMessage  `json:"artifact_json"`
+	// Intent Tracking (for Firestore linking)
+	UserID   *string `json:"user_id,omitempty"`
+	IntentID *string `json:"intent_id,omitempty"`
 }
 
 // ============================================================================

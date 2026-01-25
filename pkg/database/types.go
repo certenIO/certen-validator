@@ -77,21 +77,24 @@ type MerklePathNode struct {
 // BatchTransaction represents an individual transaction in an anchor batch
 // Maps to: batch_transactions table
 type BatchTransaction struct {
-	ID              int64          `db:"id" json:"id"`
-	BatchID         uuid.UUID      `db:"batch_id" json:"batch_id"`
-	AccumTxHash     string         `db:"accumulate_tx_hash" json:"accumulate_tx_hash"`
-	AccountURL      string         `db:"account_url" json:"account_url"`
-	TreeIndex       int            `db:"tree_index" json:"tree_index"`
+	ID              int64           `db:"id" json:"id"`
+	BatchID         uuid.UUID       `db:"batch_id" json:"batch_id"`
+	AccumTxHash     string          `db:"accumulate_tx_hash" json:"accumulate_tx_hash"`
+	AccountURL      string          `db:"account_url" json:"account_url"`
+	TreeIndex       int             `db:"tree_index" json:"tree_index"`
 	MerklePath      json.RawMessage `db:"merkle_path" json:"merkle_path"` // JSON array of MerklePathNode
-	TxHash          []byte         `db:"transaction_hash" json:"transaction_hash"` // 32 bytes
+	TxHash          []byte          `db:"transaction_hash" json:"transaction_hash"` // 32 bytes
 	ChainedProof    json.RawMessage `db:"chained_proof" json:"chained_proof,omitempty"`
-	ChainedValid    bool           `db:"chained_proof_valid" json:"chained_proof_valid"`
+	ChainedValid    bool            `db:"chained_proof_valid" json:"chained_proof_valid"`
 	GovProof        json.RawMessage `db:"governance_proof" json:"governance_proof,omitempty"`
-	GovLevel        sql.NullString `db:"governance_level" json:"governance_level,omitempty"`
-	GovValid        bool           `db:"governance_valid" json:"governance_valid"`
-	IntentType      sql.NullString `db:"intent_type" json:"intent_type,omitempty"`
+	GovLevel        sql.NullString  `db:"governance_level" json:"governance_level,omitempty"`
+	GovValid        bool            `db:"governance_valid" json:"governance_valid"`
+	IntentType      sql.NullString  `db:"intent_type" json:"intent_type,omitempty"`
 	IntentData      json.RawMessage `db:"intent_data" json:"intent_data,omitempty"`
-	CreatedAt       time.Time      `db:"created_at" json:"created_at"`
+	CreatedAt       time.Time       `db:"created_at" json:"created_at"`
+	// Intent Tracking (for Firestore linking)
+	UserID   sql.NullString `db:"user_id" json:"user_id,omitempty"`
+	IntentID sql.NullString `db:"intent_id" json:"intent_id,omitempty"`
 }
 
 // GetMerklePath deserializes the merkle path from JSON
@@ -315,6 +318,9 @@ type NewBatchTransaction struct {
 	GovLevel     GovernanceLevel // Optional
 	IntentType   string          // Optional
 	IntentData   json.RawMessage // Optional
+	// Intent Tracking (for Firestore linking)
+	UserID   *string // Optional - user who submitted the intent
+	IntentID *string // Optional - Firestore intent document ID
 }
 
 // NewAnchorRecord is used to create a new anchor record
@@ -366,6 +372,18 @@ type NewProofRequest struct {
 	RequestType RequestType
 	Priority    RequestPriority
 	RequesterID string
+}
+
+// BatchPhase5Update is used to update Phase 5 consensus fields on anchor_batches
+type BatchPhase5Update struct {
+	BPTRoot             []byte     // Binary Prefix Tree root
+	GovernanceRoot      []byte     // Governance proof root
+	ProofDataIncluded   bool       // Whether proof data was included
+	AttestationCount    int        // Number of attestations collected
+	AggregatedSignature []byte     // BLS aggregated signature
+	AggregatedPublicKey []byte     // BLS aggregated public key
+	QuorumReached       bool       // Whether quorum threshold was met
+	ConsensusCompletedAt *time.Time // When consensus was completed
 }
 
 // ============================================================================

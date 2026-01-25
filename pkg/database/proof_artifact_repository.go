@@ -42,10 +42,10 @@ func (r *ProofArtifactRepository) CreateProofArtifact(ctx context.Context, input
 			proof_type, proof_version, accum_tx_hash, account_url,
 			batch_id, merkle_root, leaf_hash, leaf_index,
 			gov_level, proof_class, validator_id, status,
-			artifact_json, artifact_hash, created_at
+			artifact_json, artifact_hash, user_id, intent_id, created_at
 		) VALUES (
 			$1, '1.0', $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending',
-			$11, $12, NOW()
+			$11, $12, $13, $14, NOW()
 		)
 		RETURNING proof_id, created_at`
 
@@ -64,12 +64,14 @@ func (r *ProofArtifactRepository) CreateProofArtifact(ctx context.Context, input
 	proof.Status = ProofStatusPending
 	proof.ArtifactJSON = input.ArtifactJSON
 	proof.ArtifactHash = artifactHash[:]
+	proof.UserID = input.UserID
+	proof.IntentID = input.IntentID
 
 	err := r.db.QueryRowContext(ctx, query,
 		input.ProofType, input.AccumTxHash, input.AccountURL,
 		input.BatchID, input.MerkleRoot, input.LeafHash, input.LeafIndex,
 		input.GovLevel, input.ProofClass, input.ValidatorID,
-		input.ArtifactJSON, artifactHash[:],
+		input.ArtifactJSON, artifactHash[:], input.UserID, input.IntentID,
 	).Scan(&proof.ProofID, &proof.CreatedAt)
 
 	if err != nil {
@@ -402,6 +404,216 @@ func (r *ProofArtifactRepository) UpdateProofVerified(ctx context.Context, proof
 	result, err := r.db.ExecContext(ctx, query, status, proofID)
 	if err != nil {
 		return fmt.Errorf("failed to update proof verified: %w", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("proof not found: %s", proofID)
+	}
+
+	return nil
+}
+
+// UpdateProofStatus updates the lifecycle status of a proof
+func (r *ProofArtifactRepository) UpdateProofStatus(ctx context.Context, proofID uuid.UUID, status ProofStatus) error {
+	query := `
+		UPDATE proof_artifacts
+		SET status = $2
+		WHERE proof_id = $1`
+
+	result, err := r.db.ExecContext(ctx, query, proofID, status)
+	if err != nil {
+		return fmt.Errorf("failed to update proof status: %w", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("proof not found: %s", proofID)
+	}
+
+	return nil
+}
+
+// MarkProofBatched marks a proof as batched with batch information
+func (r *ProofArtifactRepository) MarkProofBatched(ctx context.Context, proofID uuid.UUID, batchID uuid.UUID, batchPosition int) error {
+	query := `
+		UPDATE proof_artifacts
+		SET status = 'batched', batch_id = $2, batch_position = $3
+		WHERE proof_id = $1`
+
+	result, err := r.db.ExecContext(ctx, query, proofID, batchID, batchPosition)
+	if err != nil {
+		return fmt.Errorf("failed to mark proof batched: %w", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("proof not found: %s", proofID)
+	}
+
+	return nil
+}
+
+// MarkProofAttested marks a proof as attested with attestation count
+func (r *ProofArtifactRepository) MarkProofAttested(ctx context.Context, proofID uuid.UUID, attestationCount int) error {
+	query := `
+		UPDATE proof_artifacts
+		SET status = 'attested'
+		WHERE proof_id = $1`
+
+	result, err := r.db.ExecContext(ctx, query, proofID)
+	if err != nil {
+		return fmt.Errorf("failed to mark proof attested: %w", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("proof not found: %s", proofID)
+	}
+
+	return nil
+}
+
+// MarkProofFailed marks a proof as failed with error details
+func (r *ProofArtifactRepository) MarkProofFailed(ctx context.Context, proofID uuid.UUID) error {
+	query := `
+		UPDATE proof_artifacts
+		SET status = 'failed'
+		WHERE proof_id = $1`
+
+	result, err := r.db.ExecContext(ctx, query, proofID)
+	if err != nil {
+		return fmt.Errorf("failed to mark proof failed: %w", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("proof not found: %s", proofID)
+	}
+
+	return nil
+}
+
+// UpdateProofsByBatchStatus updates the status of all proofs in a batch
+func (r *ProofArtifactRepository) UpdateProofsByBatchStatus(ctx context.Context, batchID uuid.UUID, status ProofStatus) error {
+	query := `
+		UPDATE proof_artifacts
+		SET status = $2
+		WHERE batch_id = $1`
+
+	_, err := r.db.ExecContext(ctx, query, batchID, status)
+	if err != nil {
+		return fmt.Errorf("failed to update proofs by batch status: %w", err)
+	}
+
+	return nil
+}
+
+// MarkProofsAnchoredByBatch marks all proofs in a batch as anchored
+func (r *ProofArtifactRepository) MarkProofsAnchoredByBatch(ctx context.Context, batchID uuid.UUID, anchorID uuid.UUID, anchorTxHash string, anchorBlockNumber int64, anchorChain string) error {
+	query := `
+		UPDATE proof_artifacts
+		SET status = 'anchored',
+			anchor_id = $2,
+			anchor_tx_hash = $3,
+			anchor_block_number = $4,
+			anchor_chain = $5,
+			anchored_at = NOW()
+		WHERE batch_id = $1`
+
+	_, err := r.db.ExecContext(ctx, query, batchID, anchorID, anchorTxHash, anchorBlockNumber, anchorChain)
+	if err != nil {
+		return fmt.Errorf("failed to mark proofs anchored by batch: %w", err)
+	}
+
+	return nil
+}
+
+// ============================================================================
+// INTENT TRACKING OPERATIONS
+// ============================================================================
+
+// GetProofByIntentID retrieves a proof by Firestore intent ID
+func (r *ProofArtifactRepository) GetProofByIntentID(ctx context.Context, intentID string) (*ProofArtifact, error) {
+	query := `
+		SELECT proof_id, proof_type, proof_version, accum_tx_hash, account_url,
+			   batch_id, batch_position, anchor_id, anchor_tx_hash, anchor_block_number, anchor_chain,
+			   merkle_root, leaf_hash, leaf_index, gov_level, proof_class, validator_id,
+			   status, verification_status, created_at, anchored_at, verified_at,
+			   artifact_json, artifact_hash, user_id, intent_id
+		FROM proof_artifacts
+		WHERE intent_id = $1`
+
+	var proof ProofArtifact
+	err := r.db.QueryRowContext(ctx, query, intentID).Scan(
+		&proof.ProofID, &proof.ProofType, &proof.ProofVersion, &proof.AccumTxHash, &proof.AccountURL,
+		&proof.BatchID, &proof.BatchPosition, &proof.AnchorID, &proof.AnchorTxHash, &proof.AnchorBlockNumber, &proof.AnchorChain,
+		&proof.MerkleRoot, &proof.LeafHash, &proof.LeafIndex, &proof.GovLevel, &proof.ProofClass, &proof.ValidatorID,
+		&proof.Status, &proof.VerificationStatus, &proof.CreatedAt, &proof.AnchoredAt, &proof.VerifiedAt,
+		&proof.ArtifactJSON, &proof.ArtifactHash, &proof.UserID, &proof.IntentID,
+	)
+
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get proof by intent ID: %w", err)
+	}
+
+	return &proof, nil
+}
+
+// GetProofsByUserID retrieves all proofs for a user (paginated)
+func (r *ProofArtifactRepository) GetProofsByUserID(ctx context.Context, userID string, limit, offset int) ([]ProofSummary, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+
+	query := `
+		SELECT pa.proof_id, pa.proof_type, pa.accum_tx_hash, pa.account_url,
+			   pa.gov_level, pa.status, pa.created_at, pa.anchored_at,
+			   COALESCE((SELECT COUNT(*) FROM validator_attestations va WHERE va.proof_id = pa.proof_id), 0) as attestation_count
+		FROM proof_artifacts pa
+		WHERE pa.user_id = $1
+		ORDER BY pa.created_at DESC
+		LIMIT $2 OFFSET $3`
+
+	rows, err := r.db.QueryContext(ctx, query, userID, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query proofs by user: %w", err)
+	}
+	defer rows.Close()
+
+	var summaries []ProofSummary
+	for rows.Next() {
+		var s ProofSummary
+		if err := rows.Scan(
+			&s.ProofID, &s.ProofType, &s.AccumTxHash, &s.AccountURL,
+			&s.GovLevel, &s.Status, &s.CreatedAt, &s.AnchoredAt,
+			&s.AttestationCount,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan proof summary: %w", err)
+		}
+		summaries = append(summaries, s)
+	}
+
+	return summaries, nil
+}
+
+// UpdateProofIntentTracking updates the intent tracking fields for a proof
+func (r *ProofArtifactRepository) UpdateProofIntentTracking(ctx context.Context, proofID uuid.UUID, userID, intentID *string) error {
+	query := `
+		UPDATE proof_artifacts
+		SET user_id = COALESCE($2, user_id),
+			intent_id = COALESCE($3, intent_id)
+		WHERE proof_id = $1`
+
+	result, err := r.db.ExecContext(ctx, query, proofID, userID, intentID)
+	if err != nil {
+		return fmt.Errorf("failed to update proof intent tracking: %w", err)
 	}
 
 	rows, _ := result.RowsAffected()
@@ -2489,6 +2701,151 @@ func (r *ProofArtifactRepository) QueryProofsForExport(ctx context.Context, filt
 	}
 
 	return proofs, nil
+}
+
+// ============================================================================
+// FINALIZATION OPERATIONS
+// ============================================================================
+
+// MarkExternalChainResultFinalized marks an external chain result as finalized
+func (r *ProofArtifactRepository) MarkExternalChainResultFinalized(ctx context.Context, resultID uuid.UUID) error {
+	query := `
+		UPDATE external_chain_results
+		SET is_finalized = TRUE, finalized_at = NOW(), updated_at = NOW()
+		WHERE result_id = $1`
+
+	result, err := r.db.ExecContext(ctx, query, resultID)
+	if err != nil {
+		return fmt.Errorf("failed to mark external chain result finalized: %w", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("external chain result not found: %s", resultID)
+	}
+
+	return nil
+}
+
+// MarkExternalChainResultFinalizedByTxHash marks an external chain result as finalized by transaction hash
+func (r *ProofArtifactRepository) MarkExternalChainResultFinalizedByTxHash(ctx context.Context, txHash []byte) error {
+	query := `
+		UPDATE external_chain_results
+		SET is_finalized = TRUE, finalized_at = NOW(), updated_at = NOW()
+		WHERE tx_hash = $1`
+
+	result, err := r.db.ExecContext(ctx, query, txHash)
+	if err != nil {
+		return fmt.Errorf("failed to mark external chain result finalized by tx hash: %w", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("external chain result not found for tx hash")
+	}
+
+	return nil
+}
+
+// UpdateExternalChainResultConfirmations updates the confirmation count for a result
+func (r *ProofArtifactRepository) UpdateExternalChainResultConfirmations(ctx context.Context, resultID uuid.UUID, confirmations int) error {
+	query := `
+		UPDATE external_chain_results
+		SET confirmation_blocks = $2, updated_at = NOW()
+		WHERE result_id = $1`
+
+	result, err := r.db.ExecContext(ctx, query, resultID, confirmations)
+	if err != nil {
+		return fmt.Errorf("failed to update external chain result confirmations: %w", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("external chain result not found: %s", resultID)
+	}
+
+	return nil
+}
+
+// MarkBLSAggregationFinalized marks a BLS aggregation as finalized
+func (r *ProofArtifactRepository) MarkBLSAggregationFinalized(ctx context.Context, aggregationID uuid.UUID) error {
+	query := `
+		UPDATE aggregated_bls_attestations
+		SET finalized_at = NOW()
+		WHERE aggregation_id = $1`
+
+	result, err := r.db.ExecContext(ctx, query, aggregationID)
+	if err != nil {
+		return fmt.Errorf("failed to mark BLS aggregation finalized: %w", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("BLS aggregation not found: %s", aggregationID)
+	}
+
+	return nil
+}
+
+// MarkBLSAggregationVerified marks a BLS aggregation as verified
+func (r *ProofArtifactRepository) MarkBLSAggregationVerified(ctx context.Context, aggregationID uuid.UUID, verified bool) error {
+	query := `
+		UPDATE aggregated_bls_attestations
+		SET aggregate_verified = $2, verified_at = NOW()
+		WHERE aggregation_id = $1`
+
+	result, err := r.db.ExecContext(ctx, query, aggregationID, verified)
+	if err != nil {
+		return fmt.Errorf("failed to mark BLS aggregation verified: %w", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("BLS aggregation not found: %s", aggregationID)
+	}
+
+	return nil
+}
+
+// GetUnfinalizedExternalChainResults retrieves external chain results that are not yet finalized
+func (r *ProofArtifactRepository) GetUnfinalizedExternalChainResults(ctx context.Context, limit int) ([]ExternalChainResultRecord, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+
+	query := `
+		SELECT result_id, proof_id, chain_id, chain_name, block_number, block_hash, transaction_hash,
+			   execution_status, gas_used, return_data,
+			   storage_proof_json, storage_proof_hash,
+			   sequence_number, previous_result_hash, result_hash,
+			   anchor_proof_hash, artifact_json, verified, verified_at, created_at
+		FROM external_chain_results
+		WHERE is_finalized = FALSE
+		ORDER BY created_at ASC
+		LIMIT $1`
+
+	rows, err := r.db.QueryContext(ctx, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query unfinalized external chain results: %w", err)
+	}
+	defer rows.Close()
+
+	var results []ExternalChainResultRecord
+	for rows.Next() {
+		var result ExternalChainResultRecord
+		if err := rows.Scan(
+			&result.ResultID, &result.ProofID, &result.ChainID, &result.ChainName, &result.BlockNumber, &result.BlockHash, &result.TransactionHash,
+			&result.ExecutionStatus, &result.GasUsed, &result.ReturnData,
+			&result.StorageProofJSON, &result.StorageProofHash,
+			&result.SequenceNumber, &result.PreviousResultHash, &result.ResultHash,
+			&result.AnchorProofHash, &result.ArtifactJSON, &result.Verified, &result.VerifiedAt, &result.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan external chain result: %w", err)
+		}
+		results = append(results, result)
+	}
+
+	return results, nil
 }
 
 // Unused import fix
