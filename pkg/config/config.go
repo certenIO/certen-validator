@@ -87,6 +87,11 @@ type Config struct {
 	// Rate Limiting
 	RateLimitRequests int
 	RateLimitWindow   int
+
+	// Firestore Configuration (for real-time UI sync)
+	FirestoreEnabled        bool   // Enable Firestore sync
+	FirebaseProjectID       string // Firebase/GCP project ID
+	FirebaseCredentialsFile string // Path to service account JSON
 }
 
 // Load reads configuration from environment variables
@@ -179,6 +184,11 @@ func Load() (*Config, error) {
 		// Rate Limiting
 		RateLimitRequests: getEnvInt("RATE_LIMIT_REQUESTS", 100),
 		RateLimitWindow:   getEnvInt("RATE_LIMIT_WINDOW", 60),
+
+		// Firestore Configuration (for real-time UI sync)
+		FirestoreEnabled:        getEnvBool("FIRESTORE_ENABLED", false),
+		FirebaseProjectID:       getEnv("FIREBASE_PROJECT_ID", ""),
+		FirebaseCredentialsFile: getEnv("GOOGLE_APPLICATION_CREDENTIALS", ""),
 	}
 
 	return cfg, nil

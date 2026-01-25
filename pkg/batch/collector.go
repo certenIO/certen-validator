@@ -24,6 +24,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/certen/independant-validator/pkg/database"
+	"github.com/certen/independant-validator/pkg/firestore"
 	"github.com/certen/independant-validator/pkg/merkle"
 )
 
@@ -41,6 +42,11 @@ type TransactionData struct {
 	// Phase 2 additions: Extended metadata for governance proof generation
 	KeyPage  string                 // Optional KeyPage URL for governance proofs
 	Metadata map[string]interface{} // Optional metadata (e.g., signer info)
+
+	// Intent tracking: Links validator proofs back to user intents in Firestore
+	// These are populated when the intent can be resolved from Firestore
+	UserID   string // Firestore user ID (optional)
+	IntentID string // Firestore intent document ID (optional)
 }
 
 // Collector manages transaction batching for anchoring
@@ -62,6 +68,9 @@ type Collector struct {
 
 	// Logging
 	logger *log.Logger
+
+	// Firestore sync for real-time UI updates
+	firestoreSyncService *firestore.SyncService
 }
 
 // activeBatch represents a batch being built
@@ -114,6 +123,13 @@ func NewCollector(repos *database.Repositories, cfg *CollectorConfig) (*Collecto
 		maxOnDemand:    cfg.MaxOnDemand,
 		logger:         cfg.Logger,
 	}, nil
+}
+
+// SetFirestoreSyncService sets the Firestore sync service for real-time UI updates
+func (c *Collector) SetFirestoreSyncService(svc *firestore.SyncService) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.firestoreSyncService = svc
 }
 
 // AddOnCadenceTransaction adds a transaction to the current on-cadence batch
@@ -414,6 +430,11 @@ func (c *Collector) closeBatch(ctx context.Context, batch *activeBatch, accumHei
 		batch.batchType, batch.batchID, tree.RootHex()[:16]+"...",
 		len(batch.leaves), time.Since(batch.startTime))
 
+	// Trigger Firestore sync for batch closed event (Stage 5)
+	if c.firestoreSyncService != nil && c.firestoreSyncService.IsEnabled() {
+		go c.triggerBatchClosedFirestoreEvent(batch, tree.RootHex())
+	}
+
 	return &ClosedBatchResult{
 		BatchID:          batch.batchID,
 		BatchType:        batch.batchType,
@@ -600,4 +621,43 @@ func (c *Collector) HasPendingOnDemandBatch() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.onDemandBatch != nil && len(c.onDemandBatch.leaves) > 0
+}
+
+// triggerBatchClosedFirestoreEvent sends batch closed events to Firestore for each transaction
+// This enables real-time UI updates for Stage 5 (Batch Consensus)
+func (c *Collector) triggerBatchClosedFirestoreEvent(batch *activeBatch, merkleRootHex string) {
+	if c.firestoreSyncService == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Build batch transactions list for the event
+	batchTxs := make([]firestore.BatchTransaction, 0, len(batch.txData))
+	for i, tx := range batch.txData {
+		batchTxs = append(batchTxs, firestore.BatchTransaction{
+			AccumTxHash: tx.AccumTxHash,
+			Position:    i,
+			LeafHash:    hex.EncodeToString(tx.TxHash),
+		})
+	}
+
+	// Determine proof class from batch type
+	proofClass := "on_cadence"
+	if batch.batchType == database.BatchTypeOnDemand {
+		proofClass = "on_demand"
+	}
+
+	event := &firestore.BatchClosedEvent{
+		BatchID:      batch.batchID.String(),
+		MerkleRoot:   merkleRootHex,
+		BatchSize:    len(batch.txData),
+		ProofClass:   proofClass,
+		Transactions: batchTxs,
+	}
+
+	if err := c.firestoreSyncService.OnBatchClosed(ctx, event); err != nil {
+		c.logger.Printf("Warning: failed to send batch closed event to Firestore: %v", err)
+	}
 }

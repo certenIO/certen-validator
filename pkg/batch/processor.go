@@ -25,6 +25,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/certen/independant-validator/pkg/database"
+	"github.com/certen/independant-validator/pkg/firestore"
 	"github.com/certen/independant-validator/pkg/merkle"
 	"github.com/certen/independant-validator/pkg/proof"
 )
@@ -158,6 +159,9 @@ type Processor struct {
 
 	// Logging
 	logger *log.Logger
+
+	// Firestore sync for real-time UI updates
+	firestoreSyncService *firestore.SyncService
 }
 
 // ProcessorConfig holds processor configuration
@@ -336,6 +340,14 @@ func (p *Processor) SetDefaultGovernanceLevel(level proof.GovernanceLevel) {
 	defer p.mu.Unlock()
 	p.defaultGovLevel = level
 	p.logger.Printf("✅ Default governance level set to %s", level)
+}
+
+// SetFirestoreSyncService sets the Firestore sync service for real-time UI updates
+func (p *Processor) SetFirestoreSyncService(svc *firestore.SyncService) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.firestoreSyncService = svc
+	p.logger.Printf("✅ Firestore sync service configured for batch processor")
 }
 
 // HasGovernanceGenerator returns true if governance generator is configured
@@ -535,6 +547,11 @@ func (p *Processor) ProcessClosedBatch(ctx context.Context, result *ClosedBatchR
 		} else {
 			p.logger.Printf("✅ Attestation collection initiated for batch %s", result.BatchID)
 		}
+	}
+
+	// Trigger Firestore sync for anchor submitted event (Stage 6)
+	if p.firestoreSyncService != nil && p.firestoreSyncService.IsEnabled() && anchorResult != nil {
+		go p.triggerAnchorSubmittedFirestoreEvent(result, anchorResult)
 	}
 
 	p.logger.Printf("%s Batch %s processed successfully (price_tier=%s)", batchTypePrefix, result.BatchID, priceTier)
@@ -1126,4 +1143,35 @@ func (p *Processor) enrichBatchWithGovernanceProofs(ctx context.Context, result 
 
 	p.logger.Printf("✅ Batch enriched with %d governance proofs", govResult.SuccessCount)
 	return nil
+}
+
+// triggerAnchorSubmittedFirestoreEvent sends anchor submitted events to Firestore for each transaction
+// This enables real-time UI updates for Stage 6 (Ethereum Anchoring)
+func (p *Processor) triggerAnchorSubmittedFirestoreEvent(result *ClosedBatchResult, anchorResult *BatchAnchorResult) {
+	if p.firestoreSyncService == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Collect all transaction hashes from the batch
+	txHashes := make([]string, 0, len(result.Transactions))
+	for _, tx := range result.Transactions {
+		txHashes = append(txHashes, tx.AccumTxHash)
+	}
+
+	event := &firestore.AnchorSubmittedEvent{
+		BatchID:           result.BatchID.String(),
+		AnchorTxHash:      anchorResult.TxHash,
+		BlockNumber:       anchorResult.BlockNumber,
+		ContractAddress:   p.contractAddr,
+		GasUsed:           anchorResult.GasUsed,
+		NetworkName:       p.networkName,
+		TransactionHashes: txHashes,
+	}
+
+	if err := p.firestoreSyncService.OnAnchorSubmitted(ctx, event); err != nil {
+		p.logger.Printf("Warning: failed to send anchor submitted event to Firestore: %v", err)
+	}
 }

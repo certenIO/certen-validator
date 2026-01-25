@@ -32,6 +32,7 @@ import (
     "github.com/certen/independant-validator/pkg/database"
     "github.com/certen/independant-validator/pkg/ethereum"
     "github.com/certen/independant-validator/pkg/execution"
+    "github.com/certen/independant-validator/pkg/firestore"
     "github.com/certen/independant-validator/pkg/intent"
     "github.com/certen/independant-validator/pkg/ledger"
     "github.com/certen/independant-validator/pkg/proof"
@@ -249,6 +250,48 @@ func main() {
         }
     }
 
+    // ==========================================================================
+    // Initialize Firestore for Real-Time UI Sync
+    // Per Data Collection & Management Plan: Sync proof cycle progress to Firestore
+    // ==========================================================================
+    var firestoreClient *firestore.Client
+    var firestoreSyncService *firestore.SyncService
+
+    if cfg.FirestoreEnabled {
+        log.Println("🔥 [Firestore] Initializing Firestore client for real-time UI sync...")
+        firestoreCfg := &firestore.ClientConfig{
+            ProjectID:       cfg.FirebaseProjectID,
+            CredentialsFile: cfg.FirebaseCredentialsFile,
+            Enabled:         true,
+            Logger:          log.New(log.Writer(), "[Firestore] ", log.LstdFlags),
+        }
+
+        var firestoreErr error
+        firestoreClient, firestoreErr = firestore.NewClient(context.Background(), firestoreCfg)
+        if firestoreErr != nil {
+            log.Printf("⚠️ [Firestore] Failed to create Firestore client: %v", firestoreErr)
+            log.Printf("   Real-time UI sync DISABLED - web app will not receive status updates")
+        } else {
+            log.Println("✅ [Firestore] Connected to Firestore")
+
+            // Create sync service
+            syncCfg := &firestore.SyncServiceConfig{
+                Client:         firestoreClient,
+                ValidatorID:    cfg.ValidatorID,
+                Logger:         log.New(log.Writer(), "[FirestoreSync] ", log.LstdFlags),
+                IntentCacheTTL: 5 * time.Minute,
+            }
+            firestoreSyncService, firestoreErr = firestore.NewSyncService(syncCfg)
+            if firestoreErr != nil {
+                log.Printf("⚠️ [Firestore] Failed to create sync service: %v", firestoreErr)
+            } else {
+                log.Println("✅ [Firestore] Sync service initialized - will sync proof cycle events")
+            }
+        }
+    } else {
+        log.Println("⚠️ [Firestore] Firestore sync DISABLED (set FIRESTORE_ENABLED=true to enable)")
+    }
+
     // Initialize Accumulate client using canonical interface
     log.Println("📡 Connecting to Accumulate network...")
     liteClientConfig := &accumulate.LiteClientConfig{
@@ -276,7 +319,7 @@ func main() {
 
     // Initialize BFT validator node and consensus
     log.Printf("🔐 Initializing BFT Validator Node (%s) with full consensus capabilities...", cfg.ValidatorID)
-    validatorNode, batchComponents, err := startValidator(cfg, accClient, ethClient, dbClient)
+    validatorNode, batchComponents, err := startValidator(cfg, accClient, ethClient, dbClient, firestoreSyncService)
     if err != nil {
         log.Fatal("Failed to initialize BFT validator node:", err)
     }
@@ -569,6 +612,13 @@ func main() {
         log.Printf("HTTP server shutdown error: %v", err)
     }
 
+    // Close Firestore client
+    if firestoreClient != nil {
+        if err := firestoreClient.Close(); err != nil {
+            log.Printf("Firestore client close error: %v", err)
+        }
+    }
+
     log.Printf("✅ BFT Validator stopped")
 }
 
@@ -581,6 +631,7 @@ type BatchComponents struct {
     ConfirmationTracker  *batch.ConfirmationTracker
     AttestationService   *attestation.Service
     Repos                *database.Repositories
+    FirestoreSyncService *firestore.SyncService // Real-time UI sync
 }
 
 // loadOrGenerateEd25519Key securely loads or generates an Ed25519 private key
@@ -650,6 +701,7 @@ func startValidator(
     accClient accumulate.Client,
     ethClient *ethereum.Client,
     dbClient *database.Client,
+    firestoreSyncService *firestore.SyncService,
 ) (*consensus.BFTValidator, *BatchComponents, error) {
     // Base validator info used for BFT validator set
     validatorInfo := consensus.BFTValidatorInfo{
@@ -971,6 +1023,13 @@ func startValidator(
         }
         log.Println("✅ [Phase 5] Batch processor created")
 
+        // Wire Firestore sync service to batch collector and processor
+        if firestoreSyncService != nil {
+            collector.SetFirestoreSyncService(firestoreSyncService)
+            processor.SetFirestoreSyncService(firestoreSyncService)
+            log.Println("✅ [Firestore] Sync service wired to batch collector and processor")
+        }
+
         // PHASE 5: Attestation callback will be wired after attestation service is created
         // See below after attestation service initialization
 
@@ -1152,16 +1211,24 @@ func startValidator(
 
         // Package all batch components
         batchComponents = &BatchComponents{
-            Scheduler:           batchScheduler,
-            Collector:           collector,
-            Processor:           processor,
-            OnDemandHandler:     onDemandHandler,
-            ConfirmationTracker: confirmationTracker,
-            AttestationService:  attestationService,
-            Repos:               repos,
+            Scheduler:            batchScheduler,
+            Collector:            collector,
+            Processor:            processor,
+            OnDemandHandler:      onDemandHandler,
+            ConfirmationTracker:  confirmationTracker,
+            AttestationService:   attestationService,
+            Repos:                repos,
+            FirestoreSyncService: firestoreSyncService,
         }
         // E.2 remediation: Update health status for batch system
         healthStatus.SetBatchSystem("active")
+
+        // Log Firestore sync status
+        if firestoreSyncService != nil && firestoreSyncService.IsEnabled() {
+            log.Println("✅ [Firestore] Sync service wired to batch system - UI will receive real-time updates")
+        } else {
+            log.Println("⚠️ [Firestore] Sync service not enabled - web app will not receive real-time status updates")
+        }
     } else {
         log.Println("⚠️ [Phase 5] Database not available - batch system disabled")
         // E.2 remediation: Health status already set to disconnected/disabled in main
