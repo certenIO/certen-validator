@@ -1153,6 +1153,14 @@ func (o *ProofCycleOrchestrator) persistExternalChainResults(
 			blockNumber = result.BlockNumber.Int64()
 		}
 
+		// Build logs JSON from result logs
+		var logsJSON json.RawMessage = []byte("[]") // Default to empty array
+		if len(result.Logs) > 0 {
+			if jsonBytes, err := json.Marshal(result.Logs); err == nil {
+				logsJSON = jsonBytes
+			}
+		}
+
 		input := &database.ExternalChainResultInput{
 			BundleID:              cycle.BundleID[:],
 			OperationID:           cycle.BundleID[:], // Use BundleID as OperationID
@@ -1171,6 +1179,7 @@ func (o *ProofCycleOrchestrator) persistExternalChainResults(
 			ReceiptsRoot:          result.ReceiptsRoot.Bytes(),
 			ExecutionStatus:       executionStatus,
 			ExecutionSuccess:      result.IsSuccess(),
+			LogsJSON:              logsJSON,
 			ConfirmationBlocks:    result.ConfirmationBlocks,
 			RequiredConfirmations: 12,
 			IsFinalized:           result.ConfirmationBlocks >= 12,
