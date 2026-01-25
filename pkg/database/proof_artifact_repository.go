@@ -3352,6 +3352,26 @@ func (r *ProofArtifactRepository) GetAggregatedBLSAttestationByResult(ctx contex
 	return &agg, nil
 }
 
+// MarkAggregatedBLSAttestationFinalized marks an aggregated BLS attestation as finalized and verified
+func (r *ProofArtifactRepository) MarkAggregatedBLSAttestationFinalized(ctx context.Context, aggregationID uuid.UUID, verified bool, errMsg *string) error {
+	query := `
+		UPDATE aggregated_bls_attestations
+		SET finalized_at = NOW(), aggregate_verified = $2, verified_at = NOW(), verification_error = $3, updated_at = NOW()
+		WHERE aggregation_id = $1`
+
+	result, err := r.db.ExecContext(ctx, query, aggregationID, verified, errMsg)
+	if err != nil {
+		return fmt.Errorf("failed to mark aggregated BLS attestation finalized: %w", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("aggregated BLS attestation not found: %s", aggregationID)
+	}
+
+	return nil
+}
+
 // Unused import fix
 var _ = hex.EncodeToString
 var _ = json.Marshal

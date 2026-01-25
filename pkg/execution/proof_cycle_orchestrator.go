@@ -24,6 +24,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/certen/independant-validator/pkg/crypto/bls"
 	"github.com/certen/independant-validator/pkg/database"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/google/uuid"
@@ -298,9 +299,16 @@ func (o *ProofCycleOrchestrator) StartProofCycleWithAllTxs(
 		return fmt.Errorf("proof cycle already active: %s", cycleID)
 	}
 
+	// Get IntentTxHash from commitment if available
+	intentTxHash := ""
+	if execCommitment != nil && execCommitment.IntentTxHash != "" {
+		intentTxHash = execCommitment.IntentTxHash
+	}
+
 	// Initialize proof cycle with all tx hashes
 	cycle := &ProofCycleCompletion{
 		IntentID:         intentID,
+		IntentTxHash:     intentTxHash,
 		BundleID:         bundleID,
 		ValidatorBlockID: fmt.Sprintf("vb-%s", intentID[:16]),
 		IntentTime:       time.Now(),
@@ -1311,7 +1319,12 @@ func (o *ProofCycleOrchestrator) persistBLSResultAttestation(
 		return
 	}
 
-	o.logger.Printf("✅ [PHASE-8] Persisted BLS result attestation %s for validator %s",
+	// Mark attestation as verified (signature was validated in VerifyAndAttest)
+	if err := o.repos.ProofArtifacts.MarkBLSResultAttestationVerified(ctx, att.AttestationID, true, nil); err != nil {
+		o.logger.Printf("⚠️ [PHASE-8] Failed to mark attestation verified: %v", err)
+	}
+
+	o.logger.Printf("✅ [PHASE-8] Persisted BLS result attestation %s for validator %s (verified=true)",
 		att.AttestationID, attestation.ValidatorID)
 }
 
@@ -1345,8 +1358,27 @@ func (o *ProofCycleOrchestrator) persistAggregatedBLSAttestation(
 	}
 
 	attestationIDs := make([]uuid.UUID, 0, len(blsAttestations))
+	publicKeys := make([]*bls.PublicKey, 0, len(blsAttestations))
 	for _, att := range blsAttestations {
 		attestationIDs = append(attestationIDs, att.AttestationID)
+		// Collect public keys for aggregation
+		if len(att.BLSPublicKey) > 0 {
+			pk, err := bls.PublicKeyFromBytes(att.BLSPublicKey)
+			if err == nil {
+				publicKeys = append(publicKeys, pk)
+			}
+		}
+	}
+
+	// Compute aggregate public key
+	var aggregatePublicKey []byte
+	if len(publicKeys) > 0 {
+		aggPk, err := bls.AggregatePublicKeys(publicKeys)
+		if err == nil {
+			aggregatePublicKey = aggPk.Bytes()
+		} else {
+			o.logger.Printf("⚠️ [PHASE-8] Failed to aggregate public keys: %v", err)
+		}
 	}
 
 	// Convert validator addresses to byte slices
@@ -1381,7 +1413,7 @@ func (o *ProofCycleOrchestrator) persistAggregatedBLSAttestation(
 		MessageHash:           agg.MessageHash[:],
 		AttestedBlockNumber:   result.BlockNumber.Int64(),
 		AggregateSignature:    agg.AggregateSignature,
-		AggregatePublicKey:    nil, // Not tracked in current implementation
+		AggregatePublicKey:    aggregatePublicKey,
 		ValidatorBitfield:     agg.ValidatorBitfield,
 		ValidatorCount:        agg.ValidatorCount,
 		ValidatorAddresses:    validatorAddresses,
@@ -1404,7 +1436,12 @@ func (o *ProofCycleOrchestrator) persistAggregatedBLSAttestation(
 		return
 	}
 
-	o.logger.Printf("✅ [PHASE-8] Persisted aggregated BLS attestation %s with %d validators, threshold_met=%v",
+	// Mark aggregation as finalized and verified (threshold was met, aggregation complete)
+	if err := o.repos.ProofArtifacts.MarkAggregatedBLSAttestationFinalized(ctx, aggRecord.AggregationID, true, nil); err != nil {
+		o.logger.Printf("⚠️ [PHASE-8] Failed to mark aggregation finalized: %v", err)
+	}
+
+	o.logger.Printf("✅ [PHASE-8] Persisted aggregated BLS attestation %s with %d validators, threshold_met=%v (finalized)",
 		aggRecord.AggregationID, agg.ValidatorCount, agg.ThresholdMet)
 }
 
