@@ -854,9 +854,28 @@ func (app *ValidatorApp) updatePhase5AfterCommit(ctx context.Context) {
 	updatedCount := 0
 
 	for bundleID, vb := range app.validatorBlocks {
-		// Generate deterministic UUID from BundleID - MUST match how consensus_entries creates batch_id
-		// This ensures we can find the corresponding anchor_batch created during consensus
-		batchUUID := uuid.NewSHA1(uuid.NameSpaceOID, []byte(bundleID))
+		// Look up the actual batch by merkle_root instead of deriving a UUID
+		// anchor_batches use random UUIDs, not SHA1-derived UUIDs
+		var batchUUID uuid.UUID
+		merkleRootHex := vb.GovernanceProof.MerkleRoot
+		if merkleRootHex != "" {
+			merkleRootBytes, err := hexDecode(merkleRootHex)
+			if err == nil && len(merkleRootBytes) > 0 {
+				batch, err := app.repos.Batches.GetBatchByMerkleRoot(ctx, merkleRootBytes)
+				if err == nil && batch != nil {
+					batchUUID = batch.BatchID
+					app.logger.Printf("✅ [PHASE5] Found batch %s by merkle_root for bundle %s", batchUUID, bundleID)
+				} else {
+					app.logger.Printf("⚠️ [PHASE5] No batch found for merkle_root %s (bundle %s): %v", merkleRootHex[:16], bundleID, err)
+					continue
+				}
+			}
+		}
+		if batchUUID == uuid.Nil {
+			// Fallback: use SHA1-derived UUID for consensus_entries (they use this)
+			batchUUID = uuid.NewSHA1(uuid.NameSpaceOID, []byte(bundleID))
+			app.logger.Printf("⚠️ [PHASE5] Using SHA1-derived UUID %s for bundle %s (no merkle_root match)", batchUUID, bundleID)
+		}
 
 		// Extract BLS signature and public key from GovernanceProof
 		var aggregatedSig, aggregatedPubKey []byte

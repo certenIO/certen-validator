@@ -90,6 +90,36 @@ func (r *BatchRepository) GetBatch(ctx context.Context, batchID uuid.UUID) (*Anc
 	return batch, nil
 }
 
+// GetBatchByMerkleRoot retrieves a batch by its merkle root
+func (r *BatchRepository) GetBatchByMerkleRoot(ctx context.Context, merkleRoot []byte) (*AnchorBatch, error) {
+	query := `
+		SELECT id, batch_type, merkle_root, transaction_count,
+			batch_start_time, batch_end_time, accumulate_block_height,
+			accumulate_block_hash, validator_id, status, error_message,
+			created_at, updated_at
+		FROM anchor_batches
+		WHERE merkle_root = $1
+		ORDER BY created_at DESC
+		LIMIT 1`
+
+	batch := &AnchorBatch{}
+	err := r.client.QueryRowContext(ctx, query, merkleRoot).Scan(
+		&batch.BatchID, &batch.BatchType, &batch.MerkleRoot, &batch.TxCount,
+		&batch.StartTime, &batch.EndTime, &batch.AccumHeight,
+		&batch.AccumHash, &batch.ValidatorID, &batch.Status, &batch.ErrorMessage,
+		&batch.CreatedAt, &batch.UpdatedAt,
+	)
+
+	if err == sql.ErrNoRows {
+		return nil, ErrBatchNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get batch by merkle root: %w", err)
+	}
+
+	return batch, nil
+}
+
 // GetPendingBatch returns the current open batch for the validator (if any)
 func (r *BatchRepository) GetPendingBatch(ctx context.Context, validatorID string, batchType BatchType) (*AnchorBatch, error) {
 	query := `
