@@ -446,7 +446,8 @@ func (o *ProofCycleOrchestrator) executePhase7Enhanced(
 	o.logger.Printf("   All confirmed: %v", cycle.AllTxsConfirmed)
 
 	// Proceed to Phase 8
-	o.executePhase8(ctx, cycleID, cycle, createResult, commitment)
+	// Use govResult since that's what we verified against the commitment
+	o.executePhase8(ctx, cycleID, cycle, govResult, commitment)
 }
 
 // Helper functions for logging
