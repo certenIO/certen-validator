@@ -348,11 +348,12 @@ func (o *ProofCycleOrchestrator) executePhase7Enhanced(
 	wg.Add(3)
 
 	// Step 1: Observe createAnchor transaction
+	// Note: Pass nil commitment - Step 1 uses different contract/selector than the final commitment
 	go func() {
 		defer wg.Done()
 		if txHashes.CreateTxHash != (common.Hash{}) {
 			o.logger.Printf("📡 [PHASE-7] Observing Step 1 (createAnchor): %s", txHashes.CreateTxHash.Hex())
-			createResult, createErr = o.observer.ObserveTransaction(observeCtx, txHashes.CreateTxHash, commitment)
+			createResult, createErr = o.observer.ObserveTransaction(observeCtx, txHashes.CreateTxHash, nil)
 			if createErr != nil {
 				o.logger.Printf("⚠️ [PHASE-7] Step 1 observation failed: %v", createErr)
 			} else {
@@ -367,11 +368,12 @@ func (o *ProofCycleOrchestrator) executePhase7Enhanced(
 	}()
 
 	// Step 2: Observe executeComprehensiveProof transaction
+	// Note: Pass nil commitment - Step 2 uses different contract/selector than the final commitment
 	go func() {
 		defer wg.Done()
 		if txHashes.VerifyTxHash != (common.Hash{}) {
 			o.logger.Printf("📡 [PHASE-7] Observing Step 2 (executeComprehensiveProof): %s", txHashes.VerifyTxHash.Hex())
-			verifyResult, verifyErr = o.observer.ObserveTransaction(observeCtx, txHashes.VerifyTxHash, commitment)
+			verifyResult, verifyErr = o.observer.ObserveTransaction(observeCtx, txHashes.VerifyTxHash, nil)
 			if verifyErr != nil {
 				o.logger.Printf("⚠️ [PHASE-7] Step 2 observation failed: %v", verifyErr)
 			} else {
