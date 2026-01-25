@@ -1057,6 +1057,16 @@ func (o *ProofCycleOrchestrator) persistProofArtifact(cycle *ProofCycleCompletio
 		// Update existing proof artifact with completion data
 		o.logger.Printf("📝 [PROOF-CYCLE] Updating existing proof artifact: %s", existingProof.ProofID)
 
+		// Update intent tracking (intent_id for Firestore linking)
+		if cycle.IntentID != "" {
+			intentID := cycle.IntentID
+			if err := o.repos.ProofArtifacts.UpdateProofIntentTracking(ctx, existingProof.ProofID, nil, &intentID); err != nil {
+				o.logger.Printf("⚠️ [PROOF-CYCLE] Failed to update proof intent tracking: %v", err)
+			} else {
+				o.logger.Printf("✅ [PROOF-CYCLE] Updated intent_id=%s on proof %s", intentID, existingProof.ProofID)
+			}
+		}
+
 		// Update anchor information (use Simple version to avoid FK constraint on anchor_records)
 		if anchorTxHash != "" {
 			if err := o.repos.ProofArtifacts.UpdateProofAnchoredSimple(
