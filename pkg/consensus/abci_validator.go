@@ -854,17 +854,9 @@ func (app *ValidatorApp) updatePhase5AfterCommit(ctx context.Context) {
 	updatedCount := 0
 
 	for bundleID, vb := range app.validatorBlocks {
-		// Parse bundle ID to UUID
-		batchUUID, err := uuid.Parse(bundleID)
-		if err != nil {
-			// Try alternate format (hex string without dashes)
-			if len(bundleID) >= 32 {
-				batchUUID, err = uuid.Parse(bundleID[:8] + "-" + bundleID[8:12] + "-" + bundleID[12:16] + "-" + bundleID[16:20] + "-" + bundleID[20:32])
-			}
-			if err != nil {
-				continue
-			}
-		}
+		// Generate deterministic UUID from BundleID - MUST match how consensus_entries creates batch_id
+		// This ensures we can find the corresponding anchor_batch created during consensus
+		batchUUID := uuid.NewSHA1(uuid.NameSpaceOID, []byte(bundleID))
 
 		// Extract BLS signature and public key from GovernanceProof
 		var aggregatedSig, aggregatedPubKey []byte
@@ -892,7 +884,7 @@ func (app *ValidatorApp) updatePhase5AfterCommit(ctx context.Context) {
 			ConsensusCompletedAt: &now,
 		}
 
-		err = app.repos.Batches.UpdateBatchPhase5(ctx, batchUUID, phase5Update)
+		err := app.repos.Batches.UpdateBatchPhase5(ctx, batchUUID, phase5Update)
 		if err != nil {
 			app.logger.Printf("⚠️ [PHASE5] Failed to update Phase 5 for batch %s: %v", bundleID, err)
 		} else {
@@ -909,8 +901,7 @@ func (app *ValidatorApp) updatePhase5AfterCommit(ctx context.Context) {
 				"governance_level":   vb.GovernanceProof.GovernanceLevel,
 				"cometbft_consensus": true,
 			}
-			err = app.repos.Consensus.MarkConsensusQuorumMet(ctx, batchUUID, aggregatedSig, aggregatedPubKey, attestationCount, resultJSON)
-			if err != nil {
+			if err := app.repos.Consensus.MarkConsensusQuorumMet(ctx, batchUUID, aggregatedSig, aggregatedPubKey, attestationCount, resultJSON); err != nil {
 				app.logger.Printf("⚠️ [PHASE5] Failed to update consensus entry for batch %s: %v", bundleID, err)
 			}
 		}
