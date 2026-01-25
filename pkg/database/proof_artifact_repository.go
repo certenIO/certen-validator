@@ -389,6 +389,28 @@ func (r *ProofArtifactRepository) UpdateProofAnchored(ctx context.Context, proof
 	return nil
 }
 
+// UpdateProofAnchoredSimple updates a proof with anchor tx info without requiring an anchor_records FK
+// Use this when you have the Ethereum tx details but haven't created an anchor_records entry
+func (r *ProofArtifactRepository) UpdateProofAnchoredSimple(ctx context.Context, proofID uuid.UUID, anchorTxHash string, anchorBlockNumber int64, anchorChain string) error {
+	query := `
+		UPDATE proof_artifacts
+		SET anchor_tx_hash = $1, anchor_block_number = $2, anchor_chain = $3,
+			status = 'anchored', anchored_at = NOW()
+		WHERE proof_id = $4`
+
+	result, err := r.db.ExecContext(ctx, query, anchorTxHash, anchorBlockNumber, anchorChain, proofID)
+	if err != nil {
+		return fmt.Errorf("failed to update proof anchored: %w", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("proof not found: %s", proofID)
+	}
+
+	return nil
+}
+
 // UpdateProofVerified updates a proof's verification status
 func (r *ProofArtifactRepository) UpdateProofVerified(ctx context.Context, proofID uuid.UUID, verified bool) error {
 	status := VerificationStatusVerified
@@ -1537,6 +1559,72 @@ func (r *ProofArtifactRepository) SaveExternalChainResult(ctx context.Context, i
 	}
 
 	return &result, nil
+}
+
+// ExternalChainResultInput matches the actual database schema for external_chain_results
+type ExternalChainResultInput struct {
+	ProofID              *uuid.UUID // Optional FK to proof_artifacts
+	BundleID             []byte
+	OperationID          []byte
+	ChainType            string // ethereum, bitcoin, solana, polygon
+	ChainID              int64
+	NetworkName          string
+	TxHash               []byte
+	TxIndex              int
+	TxGasUsed            int64
+	TxFromAddress        []byte
+	TxToAddress          []byte
+	BlockNumber          int64
+	BlockHash            []byte
+	BlockTimestamp       time.Time
+	StateRoot            []byte
+	TransactionsRoot     []byte
+	ReceiptsRoot         []byte
+	ExecutionStatus      int // 0 or 1
+	ExecutionSuccess     bool
+	RevertReason         string
+	ContractAddress      []byte
+	LogsJSON             json.RawMessage
+	ConfirmationBlocks   int
+	RequiredConfirmations int
+	IsFinalized          bool
+	ResultHash           []byte
+	ObserverValidatorID  string
+	ObservedAt           time.Time
+}
+
+// SaveExternalChainResultV2 creates a new external chain execution result matching the actual schema
+func (r *ProofArtifactRepository) SaveExternalChainResultV2(ctx context.Context, input *ExternalChainResultInput) (uuid.UUID, error) {
+	query := `
+		INSERT INTO external_chain_results (
+			proof_id, bundle_id, operation_id, chain_type, chain_id, network_name,
+			tx_hash, tx_index, tx_gas_used, tx_from_address, tx_to_address,
+			block_number, block_hash, block_timestamp,
+			state_root, transactions_root, receipts_root,
+			execution_status, execution_success, revert_reason, contract_address, logs_json,
+			confirmation_blocks, required_confirmations, is_finalized,
+			result_hash, observer_validator_id, observed_at
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28
+		)
+		RETURNING result_id`
+
+	var resultID uuid.UUID
+	err := r.db.QueryRowContext(ctx, query,
+		input.ProofID, input.BundleID, input.OperationID, input.ChainType, input.ChainID, input.NetworkName,
+		input.TxHash, input.TxIndex, input.TxGasUsed, input.TxFromAddress, input.TxToAddress,
+		input.BlockNumber, input.BlockHash, input.BlockTimestamp,
+		input.StateRoot, input.TransactionsRoot, input.ReceiptsRoot,
+		input.ExecutionStatus, input.ExecutionSuccess, input.RevertReason, input.ContractAddress, input.LogsJSON,
+		input.ConfirmationBlocks, input.RequiredConfirmations, input.IsFinalized,
+		input.ResultHash, input.ObserverValidatorID, input.ObservedAt,
+	).Scan(&resultID)
+
+	if err != nil {
+		return uuid.UUID{}, fmt.Errorf("failed to save external chain result: %w", err)
+	}
+
+	return resultID, nil
 }
 
 // GetExternalChainResultByID retrieves an external chain result by ID

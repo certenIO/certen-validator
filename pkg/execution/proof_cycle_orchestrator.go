@@ -445,6 +445,9 @@ func (o *ProofCycleOrchestrator) executePhase7Enhanced(
 		statusString(govResult), blockNum(govResult))
 	o.logger.Printf("   All confirmed: %v", cycle.AllTxsConfirmed)
 
+	// Persist external chain results to database
+	o.persistExternalChainResults(ctx, cycle, createResult, verifyResult, govResult)
+
 	// Proceed to Phase 8
 	// Use govResult since that's what we verified against the commitment
 	o.executePhase8(ctx, cycleID, cycle, govResult, commitment)
@@ -1044,12 +1047,11 @@ func (o *ProofCycleOrchestrator) persistProofArtifact(cycle *ProofCycleCompletio
 		// Update existing proof artifact with completion data
 		o.logger.Printf("📝 [PROOF-CYCLE] Updating existing proof artifact: %s", existingProof.ProofID)
 
-		// Update anchor information
+		// Update anchor information (use Simple version to avoid FK constraint on anchor_records)
 		if anchorTxHash != "" {
-			if err := o.repos.ProofArtifacts.UpdateProofAnchored(
+			if err := o.repos.ProofArtifacts.UpdateProofAnchoredSimple(
 				ctx,
 				existingProof.ProofID,
-				existingProof.ProofID, // Use same ID as anchor ID
 				anchorTxHash,
 				anchorBlockNumber,
 				anchorChain,
@@ -1086,11 +1088,10 @@ func (o *ProofCycleOrchestrator) persistProofArtifact(cycle *ProofCycleCompletio
 		return fmt.Errorf("failed to create proof artifact: %w", err)
 	}
 
-	// Immediately update with anchor and verification status
+	// Immediately update with anchor and verification status (use Simple version to avoid FK constraint)
 	if anchorTxHash != "" {
-		if updateErr := o.repos.ProofArtifacts.UpdateProofAnchored(
+		if updateErr := o.repos.ProofArtifacts.UpdateProofAnchoredSimple(
 			ctx,
-			proof.ProofID,
 			proof.ProofID,
 			anchorTxHash,
 			anchorBlockNumber,
@@ -1107,6 +1108,78 @@ func (o *ProofCycleOrchestrator) persistProofArtifact(cycle *ProofCycleCompletio
 
 	o.logger.Printf("✅ [PROOF-CYCLE] Created proof artifact %s for intent %s", proof.ProofID, cycle.IntentID)
 	return nil
+}
+
+// persistExternalChainResults saves the Ethereum transaction results to external_chain_results table
+func (o *ProofCycleOrchestrator) persistExternalChainResults(
+	ctx context.Context,
+	cycle *ProofCycleCompletion,
+	createResult, verifyResult, govResult *ExternalChainResult,
+) {
+	if o.repos == nil || o.repos.ProofArtifacts == nil {
+		o.logger.Printf("⚠️ [PHASE-7] No database repository available for external chain result persistence")
+		return
+	}
+
+	persistCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	// Helper to persist a single result
+	persistResult := func(stepName string, result *ExternalChainResult, stepNum int) {
+		if result == nil {
+			return
+		}
+
+		// Build input matching the actual schema
+		// Derive execution status from IsSuccess (1 = success, 0 = failure)
+		executionStatus := 0
+		if result.IsSuccess() {
+			executionStatus = 1
+		}
+
+		input := &database.ExternalChainResultInput{
+			BundleID:              cycle.BundleID[:],
+			OperationID:           cycle.BundleID[:], // Use BundleID as OperationID
+			ChainType:             "ethereum",
+			ChainID:               o.config.ChainID,
+			NetworkName:           "sepolia",
+			TxHash:                result.TxHash.Bytes(),
+			TxIndex:               int(result.TxIndex),
+			TxGasUsed:             int64(result.TxGasUsed),
+			TxFromAddress:         result.TxFrom.Bytes(),
+			BlockNumber:           result.BlockNumber.Int64(),
+			BlockHash:             result.BlockHash.Bytes(),
+			BlockTimestamp:        result.BlockTime, // Use BlockTime not BlockTimestamp
+			StateRoot:             result.StateRoot.Bytes(),
+			TransactionsRoot:      result.TransactionsRoot.Bytes(),
+			ReceiptsRoot:          result.ReceiptsRoot.Bytes(),
+			ExecutionStatus:       executionStatus,
+			ExecutionSuccess:      result.IsSuccess(),
+			ConfirmationBlocks:    result.ConfirmationBlocks,
+			RequiredConfirmations: 12,
+			IsFinalized:           result.ConfirmationBlocks >= 12,
+			ResultHash:            result.ResultHash[:],
+			ObserverValidatorID:   o.validatorID,
+			ObservedAt:            time.Now(),
+		}
+
+		// Set TxTo if available
+		if result.TxTo != nil {
+			input.TxToAddress = result.TxTo.Bytes()
+		}
+
+		resultID, err := o.repos.ProofArtifacts.SaveExternalChainResultV2(persistCtx, input)
+		if err != nil {
+			o.logger.Printf("⚠️ [PHASE-7] Failed to persist %s result: %v", stepName, err)
+		} else {
+			o.logger.Printf("✅ [PHASE-7] Persisted %s result: %s (tx=%s)", stepName, resultID, result.TxHash.Hex()[:18])
+		}
+	}
+
+	// Persist all 3 anchor workflow results
+	persistResult("Step1-createAnchor", createResult, 1)
+	persistResult("Step2-verifyProof", verifyResult, 2)
+	persistResult("Step3-governance", govResult, 3)
 }
 
 // handleCycleFailed handles a failed proof cycle
