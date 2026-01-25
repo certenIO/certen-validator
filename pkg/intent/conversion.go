@@ -25,6 +25,7 @@ type rawIntentMeta struct {
     IntentType   string `json:"intentType,omitempty"`
     Organization string `json:"organizationAdi,omitempty"`
     IntentID     string `json:"intent_id,omitempty"`
+    CreatedBy    string `json:"created_by,omitempty"`     // User who created the intent
     CreatedAt    string `json:"created_at,omitempty"`
     ProofClass   string `json:"proof_class,omitempty"`    // CRITICAL for routing
 }
@@ -116,6 +117,7 @@ func BuildCertenIntent(
     // Build the canonical CertenIntent struct (as defined in pkg/consensus/intent.go)
     ci := &CertenIntent{
         IntentID:        im.IntentID,
+        UserID:          im.CreatedBy,  // User who created the intent (from created_by field)
         TransactionHash: txHash,
         AccountURL:      accountURL,
         OrganizationADI: orgADI,

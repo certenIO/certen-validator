@@ -168,7 +168,7 @@ func TestConsensusEntry_WithAttestations(t *testing.T) {
 // ============================================================================
 
 func TestNewConsensusCoordinator_NilBroadcaster(t *testing.T) {
-	_, err := NewConsensusCoordinator(nil, nil, nil, nil)
+	_, err := NewConsensusCoordinator(nil, nil, nil, nil, nil)
 	if err == nil {
 		t.Error("Expected error for nil broadcaster")
 	}
@@ -176,7 +176,7 @@ func TestNewConsensusCoordinator_NilBroadcaster(t *testing.T) {
 
 func TestNewConsensusCoordinator_NilProcessor(t *testing.T) {
 	broadcaster := &AttestationBroadcaster{}
-	_, err := NewConsensusCoordinator(nil, broadcaster, nil, nil)
+	_, err := NewConsensusCoordinator(nil, broadcaster, nil, nil, nil)
 	if err == nil {
 		t.Error("Expected error for nil processor")
 	}

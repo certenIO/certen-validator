@@ -237,6 +237,22 @@ func (t *ConfirmationTracker) processAnchor(ctx context.Context, anchor *databas
 				t.logger.Printf("Failed to update proof %s confirmations: %v", proof.ProofID, err)
 			}
 		}
+
+		// Mark external chain results as finalized (Gap 5 fix)
+		if t.repos.ProofArtifacts != nil {
+			if ecCount, err := t.repos.ProofArtifacts.MarkExternalChainResultsFinalizedByAnchor(ctx, anchor.AnchorID); err != nil {
+				t.logger.Printf("Failed to finalize external chain results for anchor %s: %v", anchor.AnchorID, err)
+			} else if ecCount > 0 {
+				t.logger.Printf("Finalized %d external chain results for anchor %s", ecCount, anchor.AnchorID)
+			}
+
+			// Mark BLS aggregations as finalized (Gap 6 fix)
+			if blsCount, err := t.repos.ProofArtifacts.MarkBLSAggregationsFinalizedByAnchor(ctx, anchor.AnchorID); err != nil {
+				t.logger.Printf("Failed to finalize BLS aggregations for anchor %s: %v", anchor.AnchorID, err)
+			} else if blsCount > 0 {
+				t.logger.Printf("Finalized %d BLS aggregations for anchor %s", blsCount, anchor.AnchorID)
+			}
+		}
 	}
 }
 

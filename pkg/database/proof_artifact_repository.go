@@ -2807,6 +2807,47 @@ func (r *ProofArtifactRepository) MarkBLSAggregationVerified(ctx context.Context
 	return nil
 }
 
+// MarkExternalChainResultsFinalizedByAnchor marks all external chain results for proofs
+// associated with an anchor as finalized. This is called when an anchor reaches finality.
+func (r *ProofArtifactRepository) MarkExternalChainResultsFinalizedByAnchor(ctx context.Context, anchorID uuid.UUID) (int64, error) {
+	query := `
+		UPDATE external_chain_results
+		SET is_finalized = TRUE, finalized_at = NOW(), updated_at = NOW()
+		WHERE proof_id IN (
+			SELECT proof_id FROM proof_artifacts WHERE anchor_id = $1
+		) AND is_finalized = FALSE`
+
+	result, err := r.db.ExecContext(ctx, query, anchorID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to mark external chain results finalized by anchor: %w", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	return rows, nil
+}
+
+// MarkBLSAggregationsFinalizedByAnchor marks all BLS aggregations for proofs
+// associated with an anchor as finalized. This is called when an anchor reaches finality.
+func (r *ProofArtifactRepository) MarkBLSAggregationsFinalizedByAnchor(ctx context.Context, anchorID uuid.UUID) (int64, error) {
+	query := `
+		UPDATE aggregated_bls_attestations
+		SET finalized_at = NOW()
+		WHERE result_id IN (
+			SELECT ecr.result_id
+			FROM external_chain_results ecr
+			INNER JOIN proof_artifacts pa ON ecr.proof_id = pa.proof_id
+			WHERE pa.anchor_id = $1
+		) AND finalized_at IS NULL`
+
+	result, err := r.db.ExecContext(ctx, query, anchorID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to mark BLS aggregations finalized by anchor: %w", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	return rows, nil
+}
+
 // GetUnfinalizedExternalChainResults retrieves external chain results that are not yet finalized
 func (r *ProofArtifactRepository) GetUnfinalizedExternalChainResults(ctx context.Context, limit int) ([]ExternalChainResultRecord, error) {
 	if limit <= 0 {

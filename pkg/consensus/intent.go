@@ -35,6 +35,7 @@ import (
 //   - Flexible proof generation with proper cryptographic commitments
 type CertenIntent struct {
 	IntentID        string `json:"intentId"`
+	UserID          string `json:"userId,omitempty"` // User who created the intent (from intent_data.created_by)
 	TransactionHash string `json:"transactionHash"`
 	AccountURL      string `json:"accountUrl"`      // Principal account URL (where TX lives): .../data
 	OrganizationADI string `json:"organizationAdi"` // Organization ADI (for policy/routing): org ADI only

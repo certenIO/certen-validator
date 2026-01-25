@@ -241,6 +241,14 @@ func (c *Collector) addToBatch(ctx context.Context, batch *activeBatch, tx *Tran
 		IntentData:   tx.IntentData,
 	}
 
+	// Pass intent tracking fields if present (for Firestore linking)
+	if tx.UserID != "" {
+		dbTx.UserID = &tx.UserID
+	}
+	if tx.IntentID != "" {
+		dbTx.IntentID = &tx.IntentID
+	}
+
 	storedTx, err := c.repos.Batches.AddTransaction(ctx, dbTx)
 	if err != nil {
 		// Rollback in-memory state

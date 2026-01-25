@@ -695,6 +695,9 @@ func (id *IntentDiscovery) convertIntentToTransactionData(intent *CertenIntent, 
 		TxHash:       txHash[:],
 		IntentType:   "certen_intent",
 		IntentData:   intent.IntentData,
+		// Intent tracking: links validator proofs back to Firestore intents
+		UserID:       intent.UserID,   // From intent_data.created_by
+		IntentID:     intent.IntentID, // From intent_data.intent_id
 	}
 
 	// Add ChainedProof and GovProof if available from CertenProof

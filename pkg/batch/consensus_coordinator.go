@@ -25,6 +25,7 @@ import (
 
 	"github.com/certen/independant-validator/pkg/anchor"
 	"github.com/certen/independant-validator/pkg/crypto/bls"
+	"github.com/certen/independant-validator/pkg/database"
 )
 
 // =============================================================================
@@ -138,6 +139,9 @@ type ConsensusCoordinator struct {
 	eventWatcher  *anchor.EventWatcher
 	processor     *Processor
 
+	// Database access for Phase 5 updates
+	repos *database.Repositories
+
 	// Consensus tracking
 	entries    map[uuid.UUID]*ConsensusEntry
 	entriesMu  sync.RWMutex
@@ -165,6 +169,7 @@ func NewConsensusCoordinator(
 	broadcaster *AttestationBroadcaster,
 	eventWatcher *anchor.EventWatcher,
 	processor *Processor,
+	repos *database.Repositories,
 ) (*ConsensusCoordinator, error) {
 	if config == nil {
 		config = DefaultConsensusCoordinatorConfig()
@@ -185,6 +190,7 @@ func NewConsensusCoordinator(
 		broadcaster:  broadcaster,
 		eventWatcher: eventWatcher,
 		processor:    processor,
+		repos:        repos,
 		entries:      make(map[uuid.UUID]*ConsensusEntry),
 		logger:       config.Logger,
 	}
@@ -350,6 +356,8 @@ func (cc *ConsensusCoordinator) collectAttestations(entry *ConsensusEntry) {
 func (cc *ConsensusCoordinator) handleConsensusSuccess(entry *ConsensusEntry, attResult *AttestationResult) {
 	cc.updateEntryState(entry.BatchID, ConsensusStateQuorumMet)
 
+	now := time.Now()
+
 	// Build consensus result
 	consensusResult := &ConsensusResult{
 		BatchID:            entry.BatchID,
@@ -363,7 +371,7 @@ func (cc *ConsensusCoordinator) handleConsensusSuccess(entry *ConsensusEntry, at
 		AggregateSignature: attResult.AggregatedSignature,
 		AggregatePubKey:    attResult.AggregatedPublicKey,
 		StartTime:          entry.StartTime,
-		EndTime:            time.Now(),
+		EndTime:            now,
 		Duration:           time.Since(entry.StartTime),
 	}
 
@@ -372,13 +380,61 @@ func (cc *ConsensusCoordinator) handleConsensusSuccess(entry *ConsensusEntry, at
 	if e, ok := cc.entries[entry.BatchID]; ok {
 		e.Result = consensusResult
 		e.State = ConsensusStateCompleted
-		e.LastUpdate = time.Now()
+		e.LastUpdate = now
 	}
 	cc.entriesMu.Unlock()
 
 	cc.logger.Printf("Consensus reached for batch %s: %d/%d validators, signature=%s",
 		entry.BatchID, attResult.AttestationCount, attResult.RequiredCount,
 		hex.EncodeToString(attResult.AggregatedSignature)[:16]+"...")
+
+	// Persist Phase 5 consensus data to PostgreSQL
+	if cc.repos != nil && cc.repos.Batches != nil {
+		phase5Update := &database.BatchPhase5Update{
+			ProofDataIncluded:    true,
+			AttestationCount:     attResult.AttestationCount,
+			AggregatedSignature:  attResult.AggregatedSignature,
+			AggregatedPublicKey:  attResult.AggregatedPublicKey,
+			QuorumReached:        true,
+			ConsensusCompletedAt: &now,
+		}
+
+		if err := cc.repos.Batches.UpdateBatchPhase5(cc.ctx, entry.BatchID, phase5Update); err != nil {
+			cc.logger.Printf("Failed to persist Phase 5 data for batch %s: %v", entry.BatchID, err)
+		} else {
+			cc.logger.Printf("Persisted Phase 5 consensus data for batch %s", entry.BatchID)
+		}
+
+		// Also update consensus entry in database with aggregate data
+		if cc.repos.Consensus != nil {
+			if err := cc.repos.Consensus.MarkConsensusQuorumMet(
+				cc.ctx,
+				entry.BatchID,
+				attResult.AggregatedSignature,
+				attResult.AggregatedPublicKey,
+				attResult.AttestationCount,
+				consensusResult,
+			); err != nil {
+				cc.logger.Printf("Failed to update consensus entry for batch %s: %v", entry.BatchID, err)
+			}
+
+			// Mark all collected attestations as verified
+			// All attestations that made it to this point passed BLS signature verification
+			for _, att := range attResult.Attestations {
+				if err := cc.repos.Consensus.MarkBatchAttestationVerifiedByBatchAndValidator(
+					cc.ctx,
+					entry.BatchID,
+					att.ValidatorID,
+					true, // verified successfully
+				); err != nil {
+					cc.logger.Printf("Failed to mark attestation verified for batch %s validator %s: %v",
+						entry.BatchID, att.ValidatorID[:8], err)
+				}
+			}
+			cc.logger.Printf("Marked %d attestations as verified for batch %s",
+				len(attResult.Attestations), entry.BatchID)
+		}
+	}
 
 	// Trigger callback
 	if cc.onConsensusReached != nil {

@@ -377,6 +377,27 @@ func (r *ConsensusRepository) MarkBatchAttestationVerified(ctx context.Context, 
 	return r.MarkAttestationValid(ctx, attestationID, valid)
 }
 
+// MarkBatchAttestationVerifiedByBatchAndValidator marks attestation verified by batch ID and validator ID
+func (r *ConsensusRepository) MarkBatchAttestationVerifiedByBatchAndValidator(ctx context.Context, batchID uuid.UUID, validatorID string, valid bool) error {
+	query := `
+		UPDATE batch_attestations
+		SET signature_valid = $3, verified_at = NOW()
+		WHERE batch_id = $1 AND validator_id = $2`
+
+	result, err := r.client.ExecContext(ctx, query, batchID, validatorID, valid)
+	if err != nil {
+		return fmt.Errorf("failed to mark batch attestation verified: %w", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		// Not an error - attestation might not exist yet in database
+		return nil
+	}
+
+	return nil
+}
+
 // UpdateConsensusAggregates updates the aggregated signature and public key for a consensus entry
 func (r *ConsensusRepository) UpdateConsensusAggregates(ctx context.Context, batchID uuid.UUID, aggregateSig []byte, aggregatePubKey []byte, attestationCount int) error {
 	query := `
