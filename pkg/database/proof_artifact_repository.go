@@ -2792,6 +2792,34 @@ func (r *ProofArtifactRepository) QueryProofsForExport(ctx context.Context, filt
 	return proofs, nil
 }
 
+// GetExternalChainResultIDByTxHash retrieves the result_id by tx_hash
+func (r *ProofArtifactRepository) GetExternalChainResultIDByTxHash(ctx context.Context, txHash []byte) (*uuid.UUID, error) {
+	query := `SELECT result_id FROM external_chain_results WHERE tx_hash = $1 LIMIT 1`
+	var resultID uuid.UUID
+	err := r.db.QueryRowContext(ctx, query, txHash).Scan(&resultID)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get result ID by tx hash: %w", err)
+	}
+	return &resultID, nil
+}
+
+// GetExternalChainResultIDByResultHash retrieves the result_id by result_hash
+func (r *ProofArtifactRepository) GetExternalChainResultIDByResultHash(ctx context.Context, resultHash []byte) (*uuid.UUID, error) {
+	query := `SELECT result_id FROM external_chain_results WHERE result_hash = $1 LIMIT 1`
+	var resultID uuid.UUID
+	err := r.db.QueryRowContext(ctx, query, resultHash).Scan(&resultID)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get result ID by result hash: %w", err)
+	}
+	return &resultID, nil
+}
+
 // ============================================================================
 // FINALIZATION OPERATIONS
 // ============================================================================
@@ -2854,6 +2882,22 @@ func (r *ProofArtifactRepository) UpdateExternalChainResultConfirmations(ctx con
 	}
 
 	return nil
+}
+
+// LinkExternalChainResultsToProof links all external_chain_results with a given bundle_id to a proof_id
+func (r *ProofArtifactRepository) LinkExternalChainResultsToProof(ctx context.Context, bundleID []byte, proofID uuid.UUID) (int64, error) {
+	query := `
+		UPDATE external_chain_results
+		SET proof_id = $1, finalized_at = CASE WHEN is_finalized AND finalized_at IS NULL THEN NOW() ELSE finalized_at END, updated_at = NOW()
+		WHERE bundle_id = $2 AND proof_id IS NULL`
+
+	result, err := r.db.ExecContext(ctx, query, proofID, bundleID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to link external chain results to proof: %w", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	return rows, nil
 }
 
 // MarkBLSAggregationFinalized marks a BLS aggregation as finalized
@@ -2976,6 +3020,321 @@ func (r *ProofArtifactRepository) GetUnfinalizedExternalChainResults(ctx context
 	}
 
 	return results, nil
+}
+
+// ============================================================================
+// BLS RESULT ATTESTATIONS (actual schema)
+// ============================================================================
+
+// NewBLSResultAttestation is the input for creating a BLS result attestation
+type NewBLSResultAttestation struct {
+	ResultID             uuid.UUID
+	ResultHash           []byte
+	BundleID             []byte
+	MessageHash          []byte
+	ValidatorID          string
+	ValidatorAddress     []byte
+	ValidatorIndex       int
+	BLSSignature         []byte
+	BLSPublicKey         []byte
+	SignatureDomain      string
+	AttestedBlockNumber  int64
+	AttestedBlockHash    []byte
+	ConfirmationsAtAttest int
+	AttestationTime      time.Time
+}
+
+// BLSResultAttestationRecord represents a stored BLS result attestation
+type BLSResultAttestationRecord struct {
+	AttestationID         uuid.UUID
+	ResultID              uuid.UUID
+	ResultHash            []byte
+	BundleID              []byte
+	MessageHash           []byte
+	ValidatorID           string
+	ValidatorAddress      []byte
+	ValidatorIndex        int
+	BLSSignature          []byte
+	BLSPublicKey          []byte
+	SignatureDomain       string
+	AttestedBlockNumber   int64
+	AttestedBlockHash     []byte
+	ConfirmationsAtAttest int
+	SignatureValid        *bool
+	VerifiedAt            *time.Time
+	VerificationError     *string
+	AttestationTime       time.Time
+	CreatedAt             time.Time
+}
+
+// SaveBLSResultAttestation creates a new BLS result attestation in bls_result_attestations table
+func (r *ProofArtifactRepository) SaveBLSResultAttestation(ctx context.Context, input *NewBLSResultAttestation) (*BLSResultAttestationRecord, error) {
+	domain := input.SignatureDomain
+	if domain == "" {
+		domain = "CERTEN_RESULT_ATTESTATION_V1"
+	}
+
+	query := `
+		INSERT INTO bls_result_attestations (
+			result_id, result_hash, bundle_id, message_hash,
+			validator_id, validator_address, validator_index,
+			bls_signature, bls_public_key, signature_domain,
+			attested_block_number, attested_block_hash, confirmations_at_attest,
+			attestation_time
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+		)
+		ON CONFLICT (result_id, validator_id) DO UPDATE SET
+			bls_signature = EXCLUDED.bls_signature,
+			bls_public_key = EXCLUDED.bls_public_key,
+			attestation_time = EXCLUDED.attestation_time
+		RETURNING attestation_id, created_at`
+
+	var att BLSResultAttestationRecord
+	att.ResultID = input.ResultID
+	att.ResultHash = input.ResultHash
+	att.BundleID = input.BundleID
+	att.MessageHash = input.MessageHash
+	att.ValidatorID = input.ValidatorID
+	att.ValidatorAddress = input.ValidatorAddress
+	att.ValidatorIndex = input.ValidatorIndex
+	att.BLSSignature = input.BLSSignature
+	att.BLSPublicKey = input.BLSPublicKey
+	att.SignatureDomain = domain
+	att.AttestedBlockNumber = input.AttestedBlockNumber
+	att.AttestedBlockHash = input.AttestedBlockHash
+	att.ConfirmationsAtAttest = input.ConfirmationsAtAttest
+	att.AttestationTime = input.AttestationTime
+
+	err := r.db.QueryRowContext(ctx, query,
+		input.ResultID, input.ResultHash, input.BundleID, input.MessageHash,
+		input.ValidatorID, input.ValidatorAddress, input.ValidatorIndex,
+		input.BLSSignature, input.BLSPublicKey, domain,
+		input.AttestedBlockNumber, input.AttestedBlockHash, input.ConfirmationsAtAttest,
+		input.AttestationTime,
+	).Scan(&att.AttestationID, &att.CreatedAt)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to save BLS result attestation: %w", err)
+	}
+
+	return &att, nil
+}
+
+// GetBLSResultAttestationsByResult retrieves all BLS result attestations for a result
+func (r *ProofArtifactRepository) GetBLSResultAttestationsByResult(ctx context.Context, resultID uuid.UUID) ([]BLSResultAttestationRecord, error) {
+	query := `
+		SELECT attestation_id, result_id, result_hash, bundle_id, message_hash,
+			   validator_id, validator_address, validator_index,
+			   bls_signature, bls_public_key, signature_domain,
+			   attested_block_number, attested_block_hash, confirmations_at_attest,
+			   signature_valid, verified_at, verification_error,
+			   attestation_time, created_at
+		FROM bls_result_attestations
+		WHERE result_id = $1
+		ORDER BY attestation_time ASC`
+
+	rows, err := r.db.QueryContext(ctx, query, resultID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query BLS result attestations: %w", err)
+	}
+	defer rows.Close()
+
+	var attestations []BLSResultAttestationRecord
+	for rows.Next() {
+		var att BLSResultAttestationRecord
+		if err := rows.Scan(
+			&att.AttestationID, &att.ResultID, &att.ResultHash, &att.BundleID, &att.MessageHash,
+			&att.ValidatorID, &att.ValidatorAddress, &att.ValidatorIndex,
+			&att.BLSSignature, &att.BLSPublicKey, &att.SignatureDomain,
+			&att.AttestedBlockNumber, &att.AttestedBlockHash, &att.ConfirmationsAtAttest,
+			&att.SignatureValid, &att.VerifiedAt, &att.VerificationError,
+			&att.AttestationTime, &att.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan BLS result attestation: %w", err)
+		}
+		attestations = append(attestations, att)
+	}
+
+	return attestations, nil
+}
+
+// MarkBLSResultAttestationVerified marks a BLS result attestation as verified
+func (r *ProofArtifactRepository) MarkBLSResultAttestationVerified(ctx context.Context, attestationID uuid.UUID, valid bool, errMsg *string) error {
+	query := `
+		UPDATE bls_result_attestations
+		SET signature_valid = $2, verified_at = NOW(), verification_error = $3
+		WHERE attestation_id = $1`
+
+	result, err := r.db.ExecContext(ctx, query, attestationID, valid, errMsg)
+	if err != nil {
+		return fmt.Errorf("failed to mark BLS result attestation verified: %w", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("BLS result attestation not found: %s", attestationID)
+	}
+
+	return nil
+}
+
+// ============================================================================
+// AGGREGATED BLS ATTESTATIONS (actual schema)
+// ============================================================================
+
+// NewAggregatedBLSAttestation is the input for creating an aggregated BLS attestation
+type NewAggregatedBLSAttestation struct {
+	ResultID              uuid.UUID
+	ResultHash            []byte
+	BundleID              []byte
+	MessageHash           []byte
+	AttestedBlockNumber   int64
+	AggregateSignature    []byte
+	AggregatePublicKey    []byte
+	ValidatorBitfield     []byte
+	ValidatorCount        int
+	ValidatorAddresses    [][]byte
+	ValidatorIndices      []int32
+	AttestationIDs        []uuid.UUID
+	TotalVotingPower      string // Use string for NUMERIC(78,0)
+	SignedVotingPower     string
+	VotingPowerPercentage float64
+	ThresholdNumerator    int
+	ThresholdDenominator  int
+	ThresholdMet          bool
+	FirstAttestationAt    time.Time
+	LastAttestationAt     time.Time
+	AggregationHash       []byte
+}
+
+// AggregatedBLSAttestationRecord represents a stored aggregated BLS attestation
+type AggregatedBLSAttestationRecord struct {
+	AggregationID         uuid.UUID
+	ResultID              uuid.UUID
+	ResultHash            []byte
+	BundleID              []byte
+	MessageHash           []byte
+	AttestedBlockNumber   int64
+	AggregateSignature    []byte
+	AggregatePublicKey    []byte
+	ValidatorBitfield     []byte
+	ValidatorCount        int
+	TotalVotingPower      string
+	SignedVotingPower     string
+	VotingPowerPercentage float64
+	ThresholdNumerator    int
+	ThresholdDenominator  int
+	ThresholdMet          bool
+	FirstAttestationAt    time.Time
+	LastAttestationAt     time.Time
+	FinalizedAt           *time.Time
+	AggregateVerified     *bool
+	VerifiedAt            *time.Time
+	VerificationError     *string
+	AggregationHash       []byte
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
+}
+
+// SaveAggregatedBLSAttestation creates a new aggregated BLS attestation in aggregated_bls_attestations table
+func (r *ProofArtifactRepository) SaveAggregatedBLSAttestation(ctx context.Context, input *NewAggregatedBLSAttestation) (*AggregatedBLSAttestationRecord, error) {
+	query := `
+		INSERT INTO aggregated_bls_attestations (
+			result_id, result_hash, bundle_id, message_hash, attested_block_number,
+			aggregate_signature, aggregate_public_key, validator_bitfield,
+			validator_count, validator_addresses, validator_indices, attestation_ids,
+			total_voting_power, signed_voting_power, voting_power_percentage,
+			threshold_numerator, threshold_denominator, threshold_met,
+			first_attestation_at, last_attestation_at, aggregation_hash
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21
+		)
+		ON CONFLICT (result_id) DO UPDATE SET
+			aggregate_signature = EXCLUDED.aggregate_signature,
+			aggregate_public_key = EXCLUDED.aggregate_public_key,
+			validator_bitfield = EXCLUDED.validator_bitfield,
+			validator_count = EXCLUDED.validator_count,
+			validator_addresses = EXCLUDED.validator_addresses,
+			validator_indices = EXCLUDED.validator_indices,
+			attestation_ids = EXCLUDED.attestation_ids,
+			total_voting_power = EXCLUDED.total_voting_power,
+			signed_voting_power = EXCLUDED.signed_voting_power,
+			voting_power_percentage = EXCLUDED.voting_power_percentage,
+			threshold_met = EXCLUDED.threshold_met,
+			last_attestation_at = EXCLUDED.last_attestation_at,
+			aggregation_hash = EXCLUDED.aggregation_hash,
+			updated_at = NOW()
+		RETURNING aggregation_id, created_at, updated_at`
+
+	var agg AggregatedBLSAttestationRecord
+	agg.ResultID = input.ResultID
+	agg.ResultHash = input.ResultHash
+	agg.BundleID = input.BundleID
+	agg.MessageHash = input.MessageHash
+	agg.AttestedBlockNumber = input.AttestedBlockNumber
+	agg.AggregateSignature = input.AggregateSignature
+	agg.AggregatePublicKey = input.AggregatePublicKey
+	agg.ValidatorBitfield = input.ValidatorBitfield
+	agg.ValidatorCount = input.ValidatorCount
+	agg.TotalVotingPower = input.TotalVotingPower
+	agg.SignedVotingPower = input.SignedVotingPower
+	agg.VotingPowerPercentage = input.VotingPowerPercentage
+	agg.ThresholdNumerator = input.ThresholdNumerator
+	agg.ThresholdDenominator = input.ThresholdDenominator
+	agg.ThresholdMet = input.ThresholdMet
+	agg.FirstAttestationAt = input.FirstAttestationAt
+	agg.LastAttestationAt = input.LastAttestationAt
+	agg.AggregationHash = input.AggregationHash
+
+	err := r.db.QueryRowContext(ctx, query,
+		input.ResultID, input.ResultHash, input.BundleID, input.MessageHash, input.AttestedBlockNumber,
+		input.AggregateSignature, input.AggregatePublicKey, input.ValidatorBitfield,
+		input.ValidatorCount, input.ValidatorAddresses, input.ValidatorIndices, input.AttestationIDs,
+		input.TotalVotingPower, input.SignedVotingPower, input.VotingPowerPercentage,
+		input.ThresholdNumerator, input.ThresholdDenominator, input.ThresholdMet,
+		input.FirstAttestationAt, input.LastAttestationAt, input.AggregationHash,
+	).Scan(&agg.AggregationID, &agg.CreatedAt, &agg.UpdatedAt)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to save aggregated BLS attestation: %w", err)
+	}
+
+	return &agg, nil
+}
+
+// GetAggregatedBLSAttestationByResult retrieves the aggregated BLS attestation for a result
+func (r *ProofArtifactRepository) GetAggregatedBLSAttestationByResult(ctx context.Context, resultID uuid.UUID) (*AggregatedBLSAttestationRecord, error) {
+	query := `
+		SELECT aggregation_id, result_id, result_hash, bundle_id, message_hash, attested_block_number,
+			   aggregate_signature, aggregate_public_key, validator_bitfield, validator_count,
+			   total_voting_power, signed_voting_power, voting_power_percentage,
+			   threshold_numerator, threshold_denominator, threshold_met,
+			   first_attestation_at, last_attestation_at, finalized_at,
+			   aggregate_verified, verified_at, verification_error, aggregation_hash,
+			   created_at, updated_at
+		FROM aggregated_bls_attestations
+		WHERE result_id = $1`
+
+	var agg AggregatedBLSAttestationRecord
+	err := r.db.QueryRowContext(ctx, query, resultID).Scan(
+		&agg.AggregationID, &agg.ResultID, &agg.ResultHash, &agg.BundleID, &agg.MessageHash, &agg.AttestedBlockNumber,
+		&agg.AggregateSignature, &agg.AggregatePublicKey, &agg.ValidatorBitfield, &agg.ValidatorCount,
+		&agg.TotalVotingPower, &agg.SignedVotingPower, &agg.VotingPowerPercentage,
+		&agg.ThresholdNumerator, &agg.ThresholdDenominator, &agg.ThresholdMet,
+		&agg.FirstAttestationAt, &agg.LastAttestationAt, &agg.FinalizedAt,
+		&agg.AggregateVerified, &agg.VerifiedAt, &agg.VerificationError, &agg.AggregationHash,
+		&agg.CreatedAt, &agg.UpdatedAt,
+	)
+
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get aggregated BLS attestation: %w", err)
+	}
+
+	return &agg, nil
 }
 
 // Unused import fix

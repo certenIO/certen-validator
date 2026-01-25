@@ -530,6 +530,9 @@ func (o *ProofCycleOrchestrator) executePhase8(
 	o.logger.Printf("   Validator: %s", attestation.ValidatorID)
 	o.logger.Printf("   Message Hash: %x", attestation.MessageHash[:8])
 
+	// Persist BLS result attestation to database
+	o.persistBLSResultAttestation(ctx, result, attestation)
+
 	// Update cycle
 	o.mu.Lock()
 	cycle.AttestationTime = time.Now()
@@ -542,6 +545,8 @@ func (o *ProofCycleOrchestrator) executePhase8(
 	// Check if we already have threshold (single validator or fast path)
 	agg := o.collector.GetAggregated(result.ResultHash)
 	if agg != nil && agg.ThresholdMet {
+		// Persist aggregated attestation before moving to Phase 9
+		o.persistAggregatedBLSAttestation(ctx, result, agg)
 		o.executePhase9(ctx, cycleID, cycle, result, agg)
 	}
 }
@@ -569,8 +574,12 @@ func (o *ProofCycleOrchestrator) onAttestationThreshold(agg *AggregatedAttestati
 		return
 	}
 
+	// Persist aggregated attestation before moving to Phase 9
+	ctx := context.Background()
+	o.persistAggregatedBLSAttestation(ctx, cycle.ExecutionResult, agg)
+
 	// Proceed to Phase 9
-	o.executePhase9(context.Background(), cycleID, cycle, cycle.ExecutionResult, agg)
+	o.executePhase9(ctx, cycleID, cycle, cycle.ExecutionResult, agg)
 }
 
 // executePhase9 writes the proof result back to Accumulate
@@ -1066,6 +1075,13 @@ func (o *ProofCycleOrchestrator) persistProofArtifact(cycle *ProofCycleCompletio
 			o.logger.Printf("⚠️ [PROOF-CYCLE] Failed to update proof verified status: %v", err)
 		}
 
+		// Link external_chain_results to this proof artifact
+		if linkedCount, err := o.repos.ProofArtifacts.LinkExternalChainResultsToProof(ctx, cycle.BundleID[:], existingProof.ProofID); err != nil {
+			o.logger.Printf("⚠️ [PROOF-CYCLE] Failed to link external chain results: %v", err)
+		} else if linkedCount > 0 {
+			o.logger.Printf("✅ [PROOF-CYCLE] Linked %d external chain results to proof %s", linkedCount, existingProof.ProofID)
+		}
+
 		o.logger.Printf("✅ [PROOF-CYCLE] Updated proof artifact %s with completion data", existingProof.ProofID)
 		return nil
 	}
@@ -1107,6 +1123,13 @@ func (o *ProofCycleOrchestrator) persistProofArtifact(cycle *ProofCycleCompletio
 	// Mark as verified since cycle completed successfully
 	if verifyErr := o.repos.ProofArtifacts.UpdateProofVerified(ctx, proof.ProofID, true); verifyErr != nil {
 		o.logger.Printf("⚠️ [PROOF-CYCLE] Failed to mark new proof as verified: %v", verifyErr)
+	}
+
+	// Link external_chain_results to this newly created proof artifact
+	if linkedCount, err := o.repos.ProofArtifacts.LinkExternalChainResultsToProof(ctx, cycle.BundleID[:], proof.ProofID); err != nil {
+		o.logger.Printf("⚠️ [PROOF-CYCLE] Failed to link external chain results to new proof: %v", err)
+	} else if linkedCount > 0 {
+		o.logger.Printf("✅ [PROOF-CYCLE] Linked %d external chain results to new proof %s", linkedCount, proof.ProofID)
 	}
 
 	o.logger.Printf("✅ [PROOF-CYCLE] Created proof artifact %s for intent %s", proof.ProofID, cycle.IntentID)
@@ -1230,6 +1253,149 @@ func (o *ProofCycleOrchestrator) persistExternalChainResults(
 	persistResult("Step1-createAnchor", createResult, 1)
 	persistResult("Step2-verifyProof", verifyResult, 2)
 	persistResult("Step3-governance", govResult, 3)
+}
+
+// persistBLSResultAttestation persists an individual BLS result attestation to the database
+func (o *ProofCycleOrchestrator) persistBLSResultAttestation(
+	ctx context.Context,
+	result *ExternalChainResult,
+	attestation *ResultAttestation,
+) {
+	if o.repos == nil || o.repos.ProofArtifacts == nil {
+		o.logger.Printf("⚠️ [PHASE-8] Cannot persist attestation: repos not available")
+		return
+	}
+
+	// Look up the result_id from external_chain_results by tx_hash
+	resultID, err := o.repos.ProofArtifacts.GetExternalChainResultIDByResultHash(ctx, result.ResultHash[:])
+	if err != nil {
+		o.logger.Printf("⚠️ [PHASE-8] Failed to look up result_id: %v", err)
+		return
+	}
+	if resultID == nil {
+		o.logger.Printf("⚠️ [PHASE-8] No result_id found for result hash %x", result.ResultHash[:8])
+		return
+	}
+
+	// Prepare the attestation input
+	input := &database.NewBLSResultAttestation{
+		ResultID:              *resultID,
+		ResultHash:            result.ResultHash[:],
+		BundleID:              attestation.BundleID[:],
+		MessageHash:           attestation.MessageHash[:],
+		ValidatorID:           attestation.ValidatorID,
+		ValidatorAddress:      attestation.ValidatorAddress.Bytes(),
+		ValidatorIndex:        int(attestation.ValidatorIndex),
+		BLSSignature:          attestation.BLSSignature,
+		BLSPublicKey:          o.verifier.GetBLSPublicKey(),
+		SignatureDomain:       "CERTEN_RESULT_ATTESTATION_V1",
+		AttestedBlockNumber:   result.BlockNumber.Int64(),
+		AttestedBlockHash:     result.BlockHash[:],
+		ConfirmationsAtAttest: attestation.Confirmations,
+		AttestationTime:       attestation.AttestationTime,
+	}
+
+	att, err := o.repos.ProofArtifacts.SaveBLSResultAttestation(ctx, input)
+	if err != nil {
+		o.logger.Printf("⚠️ [PHASE-8] Failed to persist BLS result attestation: %v", err)
+		return
+	}
+
+	o.logger.Printf("✅ [PHASE-8] Persisted BLS result attestation %s for validator %s",
+		att.AttestationID, attestation.ValidatorID)
+}
+
+// persistAggregatedBLSAttestation persists an aggregated BLS attestation to the database
+func (o *ProofCycleOrchestrator) persistAggregatedBLSAttestation(
+	ctx context.Context,
+	result *ExternalChainResult,
+	agg *AggregatedAttestation,
+) {
+	if o.repos == nil || o.repos.ProofArtifacts == nil {
+		o.logger.Printf("⚠️ [PHASE-8] Cannot persist aggregated attestation: repos not available")
+		return
+	}
+
+	// Look up the result_id from external_chain_results
+	resultID, err := o.repos.ProofArtifacts.GetExternalChainResultIDByResultHash(ctx, result.ResultHash[:])
+	if err != nil {
+		o.logger.Printf("⚠️ [PHASE-8] Failed to look up result_id for aggregation: %v", err)
+		return
+	}
+	if resultID == nil {
+		o.logger.Printf("⚠️ [PHASE-8] No result_id found for aggregation, result hash %x", result.ResultHash[:8])
+		return
+	}
+
+	// Get individual attestation IDs from the database
+	blsAttestations, err := o.repos.ProofArtifacts.GetBLSResultAttestationsByResult(ctx, *resultID)
+	if err != nil {
+		o.logger.Printf("⚠️ [PHASE-8] Failed to get BLS attestations for aggregation: %v", err)
+		return
+	}
+
+	attestationIDs := make([]uuid.UUID, 0, len(blsAttestations))
+	for _, att := range blsAttestations {
+		attestationIDs = append(attestationIDs, att.AttestationID)
+	}
+
+	// Convert validator addresses to byte slices
+	validatorAddresses := make([][]byte, 0, len(agg.ValidatorAddresses))
+	for _, addr := range agg.ValidatorAddresses {
+		validatorAddresses = append(validatorAddresses, addr.Bytes())
+	}
+
+	// Convert validator indices to int32 slice
+	validatorIndices := make([]int32, len(validatorAddresses))
+	// Note: We don't have individual validator indices in AggregatedAttestation
+	// So we'll leave them as zeros for now
+
+	// Compute aggregation hash
+	aggHash := agg.ComputeAggregateHash()
+
+	// Compute voting power percentage
+	var votingPowerPct float64
+	if agg.TotalVotingPower != nil && agg.TotalVotingPower.Sign() > 0 {
+		pct := new(big.Float).Quo(
+			new(big.Float).SetInt(agg.SignedVotingPower),
+			new(big.Float).SetInt(agg.TotalVotingPower),
+		)
+		votingPowerPct, _ = pct.Mul(pct, big.NewFloat(100)).Float64()
+	}
+
+	// Prepare the aggregation input
+	input := &database.NewAggregatedBLSAttestation{
+		ResultID:              *resultID,
+		ResultHash:            result.ResultHash[:],
+		BundleID:              agg.BundleID[:],
+		MessageHash:           agg.MessageHash[:],
+		AttestedBlockNumber:   result.BlockNumber.Int64(),
+		AggregateSignature:    agg.AggregateSignature,
+		AggregatePublicKey:    nil, // Not tracked in current implementation
+		ValidatorBitfield:     agg.ValidatorBitfield,
+		ValidatorCount:        agg.ValidatorCount,
+		ValidatorAddresses:    validatorAddresses,
+		ValidatorIndices:      validatorIndices,
+		AttestationIDs:        attestationIDs,
+		TotalVotingPower:      agg.TotalVotingPower.String(),
+		SignedVotingPower:     agg.SignedVotingPower.String(),
+		VotingPowerPercentage: votingPowerPct,
+		ThresholdNumerator:    int(agg.ThresholdNumerator),
+		ThresholdDenominator:  int(agg.ThresholdDenominator),
+		ThresholdMet:          agg.ThresholdMet,
+		FirstAttestationAt:    agg.FirstAttestation,
+		LastAttestationAt:     agg.LastAttestation,
+		AggregationHash:       aggHash[:],
+	}
+
+	aggRecord, err := o.repos.ProofArtifacts.SaveAggregatedBLSAttestation(ctx, input)
+	if err != nil {
+		o.logger.Printf("⚠️ [PHASE-8] Failed to persist aggregated BLS attestation: %v", err)
+		return
+	}
+
+	o.logger.Printf("✅ [PHASE-8] Persisted aggregated BLS attestation %s with %d validators, threshold_met=%v",
+		aggRecord.AggregationID, agg.ValidatorCount, agg.ThresholdMet)
 }
 
 // handleCycleFailed handles a failed proof cycle
