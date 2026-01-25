@@ -1116,6 +1116,15 @@ func (o *ProofCycleOrchestrator) persistExternalChainResults(
 	cycle *ProofCycleCompletion,
 	createResult, verifyResult, govResult *ExternalChainResult,
 ) {
+	// Recover from any panics to prevent crashing the proof cycle
+	defer func() {
+		if r := recover(); r != nil {
+			o.logger.Printf("❌ [PHASE-7] PANIC in persistExternalChainResults: %v", r)
+		}
+	}()
+
+	o.logger.Printf("📊 [PHASE-7] Starting external chain result persistence...")
+
 	if o.repos == nil || o.repos.ProofArtifacts == nil {
 		o.logger.Printf("⚠️ [PHASE-7] No database repository available for external chain result persistence")
 		return
@@ -1127,6 +1136,7 @@ func (o *ProofCycleOrchestrator) persistExternalChainResults(
 	// Helper to persist a single result
 	persistResult := func(stepName string, result *ExternalChainResult, stepNum int) {
 		if result == nil {
+			o.logger.Printf("⚠️ [PHASE-7] %s result is nil, skipping persistence", stepName)
 			return
 		}
 
@@ -1135,6 +1145,12 @@ func (o *ProofCycleOrchestrator) persistExternalChainResults(
 		executionStatus := 0
 		if result.IsSuccess() {
 			executionStatus = 1
+		}
+
+		// Safely extract block number (can be nil)
+		var blockNumber int64
+		if result.BlockNumber != nil {
+			blockNumber = result.BlockNumber.Int64()
 		}
 
 		input := &database.ExternalChainResultInput{
@@ -1147,9 +1163,9 @@ func (o *ProofCycleOrchestrator) persistExternalChainResults(
 			TxIndex:               int(result.TxIndex),
 			TxGasUsed:             int64(result.TxGasUsed),
 			TxFromAddress:         result.TxFrom.Bytes(),
-			BlockNumber:           result.BlockNumber.Int64(),
+			BlockNumber:           blockNumber,
 			BlockHash:             result.BlockHash.Bytes(),
-			BlockTimestamp:        result.BlockTime, // Use BlockTime not BlockTimestamp
+			BlockTimestamp:        result.BlockTime,
 			StateRoot:             result.StateRoot.Bytes(),
 			TransactionsRoot:      result.TransactionsRoot.Bytes(),
 			ReceiptsRoot:          result.ReceiptsRoot.Bytes(),
