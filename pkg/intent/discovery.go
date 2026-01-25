@@ -688,6 +688,17 @@ func (id *IntentDiscovery) convertIntentToTransactionData(intent *CertenIntent, 
 		intent.GovernanceData...),
 		intent.ReplayData...))
 
+	// Extract target chain from intent legs per Unified Multi-Chain Architecture
+	targetChain, chainID, err := intent.GetTargetChain()
+	if err != nil {
+		id.logger.Printf("⚠️ Failed to extract target chain for intent %s: %v (using default)", intent.IntentID, err)
+		// Default to sepolia for Ethereum testnets
+		targetChain = "sepolia"
+		chainID = 11155111
+	} else {
+		id.logger.Printf("✅ [TARGET-CHAIN] Extracted target chain '%s' (chainID: %d) from intent %s", targetChain, chainID, intent.IntentID)
+	}
+
 	// Build TransactionData for the batch system
 	txData := &batch.TransactionData{
 		AccumTxHash:  intent.TransactionHash,
@@ -698,7 +709,12 @@ func (id *IntentDiscovery) convertIntentToTransactionData(intent *CertenIntent, 
 		// Intent tracking: links validator proofs back to Firestore intents
 		UserID:       intent.UserID,   // From intent_data.created_by
 		IntentID:     intent.IntentID, // From intent_data.intent_id
+		// Multi-Chain Support: Target chain for anchoring
+		TargetChain:  targetChain,
 	}
+
+	// Log chain ID for debugging (not stored in TransactionData directly)
+	_ = chainID // Suppress unused warning
 
 	// Add ChainedProof and GovProof if available from CertenProof
 	if certenProof != nil && certenProof.LiteClientProof != nil {

@@ -14,6 +14,7 @@ type Repositories struct {
 	Attestations   *AttestationRepository
 	Requests       *RequestRepository
 	Consensus      *ConsensusRepository // Consensus entries and batch attestations
+	Unified        *UnifiedRepository   // Multi-chain unified attestations and chain execution results
 }
 
 // NewRepositories creates all repositories with the given client
@@ -26,5 +27,6 @@ func NewRepositories(client *Client) *Repositories {
 		Attestations:   NewAttestationRepository(client),
 		Requests:       NewRequestRepository(client),
 		Consensus:      NewConsensusRepository(client),
+		Unified:        NewUnifiedRepository(client.DB()),       // Multi-chain unified tables
 	}
 }

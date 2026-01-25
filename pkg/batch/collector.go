@@ -47,6 +47,10 @@ type TransactionData struct {
 	// These are populated when the intent can be resolved from Firestore
 	UserID   string // Firestore user ID (optional)
 	IntentID string // Firestore intent document ID (optional)
+
+	// Multi-Chain Support: Target chain for anchoring
+	// Per Unified Multi-Chain Architecture: Transactions specify their target chain
+	TargetChain string // Target chain ID (e.g., "ethereum", "sepolia", "solana-devnet")
 }
 
 // Collector manages transaction batching for anchoring

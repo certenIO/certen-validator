@@ -324,6 +324,70 @@ func (ci *CertenIntent) GetProofClass() (string, error) {
 	return ci.ProofClass, nil
 }
 
+// GetTargetChain extracts the target chain from cross-chain data legs
+// Per Unified Multi-Chain Architecture: Extract target_chain from intent legs[].chain
+// Returns the chain name (e.g., "ethereum", "sepolia", "solana") and chain ID
+func (ci *CertenIntent) GetTargetChain() (chainName string, chainID uint64, err error) {
+	// Parse cross-chain data
+	ccEnvelope, err := ci.ParseCrossChain()
+	if err != nil {
+		return "", 0, fmt.Errorf("parse cross-chain data for target chain: %w", err)
+	}
+
+	if len(ccEnvelope.Legs) == 0 {
+		return "", 0, fmt.Errorf("no cross-chain legs found in intent")
+	}
+
+	// Find the destination leg (role="destination") or use the first leg
+	var targetLeg *CCLeg
+	for i := range ccEnvelope.Legs {
+		leg := &ccEnvelope.Legs[i]
+		if leg.Role == "destination" {
+			targetLeg = leg
+			break
+		}
+	}
+
+	// Fallback to first leg if no destination found
+	if targetLeg == nil {
+		targetLeg = &ccEnvelope.Legs[0]
+	}
+
+	// Extract chain information
+	chainName = targetLeg.Chain
+	if chainName == "" {
+		chainName = targetLeg.Network // Fallback to network name
+	}
+
+	chainID = targetLeg.ChainID
+
+	// Normalize chain name to lowercase
+	if chainName != "" {
+		chainName = normalizeChainName(chainName)
+	}
+
+	return chainName, chainID, nil
+}
+
+// normalizeChainName converts chain names to the canonical format
+func normalizeChainName(chain string) string {
+	// Convert to lowercase and normalize common names
+	switch chain {
+	case "Ethereum", "ETHEREUM", "ethereum":
+		return "ethereum"
+	case "Sepolia", "SEPOLIA", "sepolia":
+		return "sepolia"
+	case "Solana", "SOLANA", "solana":
+		return "solana"
+	case "Near", "NEAR", "near":
+		return "near"
+	case "TON", "ton", "Ton":
+		return "ton"
+	default:
+		return chain
+	}
+}
+
 // Validate performs comprehensive validation of the CertenIntent structure
 // F.1.1 remediation: Input validation before processing
 // This should be called before any intent processing to ensure data integrity

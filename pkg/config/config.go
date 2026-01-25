@@ -92,6 +92,14 @@ type Config struct {
 	FirestoreEnabled        bool   // Enable Firestore sync
 	FirebaseProjectID       string // Firebase/GCP project ID
 	FirebaseCredentialsFile string // Path to service account JSON
+
+	// Unified Multi-Chain Feature Flags
+	// Per Unified Multi-Chain Architecture plan
+	UseUnifiedOrchestrator bool   // Use unified orchestrator for proof cycles
+	EnableMultiChain       bool   // Enable multi-chain execution strategies
+	EnableUnifiedTables    bool   // Write to unified PostgreSQL tables
+	FallbackToLegacy       bool   // Fall back to legacy if unified fails
+	DefaultTargetChain     string // Default target chain (e.g., "ethereum", "sepolia")
 }
 
 // Load reads configuration from environment variables
@@ -189,6 +197,14 @@ func Load() (*Config, error) {
 		FirestoreEnabled:        getEnvBool("FIRESTORE_ENABLED", false),
 		FirebaseProjectID:       getEnv("FIREBASE_PROJECT_ID", ""),
 		FirebaseCredentialsFile: getEnv("GOOGLE_APPLICATION_CREDENTIALS", ""),
+
+		// Unified Multi-Chain Feature Flags
+		// Per Unified Multi-Chain Architecture plan
+		UseUnifiedOrchestrator: getEnvBool("FF_UNIFIED_ORCHESTRATOR", false),
+		EnableMultiChain:       getEnvBool("FF_MULTI_CHAIN", false),
+		EnableUnifiedTables:    getEnvBool("FF_UNIFIED_TABLES", true),
+		FallbackToLegacy:       getEnvBool("FF_FALLBACK_LEGACY", true),
+		DefaultTargetChain:     getEnv("DEFAULT_TARGET_CHAIN", "sepolia"),
 	}
 
 	return cfg, nil

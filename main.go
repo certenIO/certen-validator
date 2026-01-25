@@ -25,6 +25,7 @@ import (
     "github.com/certen/independant-validator/pkg/accumulate"
     "github.com/certen/independant-validator/pkg/anchor"
     "github.com/certen/independant-validator/pkg/attestation"
+    attestationStrategy "github.com/certen/independant-validator/pkg/attestation/strategy"
     "github.com/certen/independant-validator/pkg/batch"
     "github.com/certen/independant-validator/pkg/config"
     "github.com/certen/independant-validator/pkg/consensus"
@@ -37,6 +38,7 @@ import (
     "github.com/certen/independant-validator/pkg/ledger"
     "github.com/certen/independant-validator/pkg/proof"
     "github.com/certen/independant-validator/pkg/server"
+    "github.com/certen/independant-validator/pkg/strategy"
 )
 
 // MemoryKV is a simple in-memory implementation of the KV interface
@@ -1344,7 +1346,78 @@ func startValidator(
         // F.2 remediation: Update health status for proof cycle
         healthStatus.SetProofCycle("disabled")
     } else {
-        // Wire orchestrator to BFT validator
+        // ==========================================================================
+        // UNIFIED MULTI-CHAIN ORCHESTRATOR (Feature Flag Controlled)
+        // Per Unified Multi-Chain Architecture plan
+        // ==========================================================================
+        if cfg.UseUnifiedOrchestrator {
+            log.Printf("🔄 [Unified] Initializing Unified Multi-Chain Orchestrator...")
+
+            // Create strategy registry with all attestation and chain strategies
+            strategyRegistry, registryErr := initializeStrategyRegistry(cfg, blsKeyManager, privateKey)
+            if registryErr != nil {
+                log.Printf("⚠️ [Unified] Failed to create strategy registry: %v (falling back to legacy)", registryErr)
+            } else {
+                // Get unified repository
+                var unifiedRepo *database.UnifiedRepository
+                if batchComponents != nil && batchComponents.Repos != nil {
+                    unifiedRepo = batchComponents.Repos.Unified
+                }
+
+                // Create unified orchestrator configuration
+                unifiedConfig := &execution.UnifiedOrchestratorConfig{
+                    ValidatorID:          cfg.ValidatorID,
+                    ValidatorIndex:       0,
+                    Registry:             strategyRegistry,
+                    Repos:                orchestratorRepos,
+                    UnifiedRepo:          unifiedRepo,
+                    DefaultChainID:       cfg.DefaultTargetChain,
+                    ThresholdConfig:      attestationStrategy.DefaultThresholdConfig(),
+                    ObservationTimeout:   10 * time.Minute,
+                    AttestationTimeout:   5 * time.Minute,
+                    WriteBackTimeout:     2 * time.Minute,
+                    AttestationPeers:     cfg.AttestationPeers,
+                    AttestationRequiredCount: cfg.AttestationRequiredCount,
+                    AccumulateClient:     accSubmitter,
+                    ResultsPrincipal:     accWritebackPrincipal,
+                    Ed25519Key:           privateKey,
+                    EnableMultiChain:     cfg.EnableMultiChain,
+                    EnableUnifiedTables:  cfg.EnableUnifiedTables,
+                    FallbackToLegacy:     cfg.FallbackToLegacy,
+                    EnableWriteBack:      writebackEnabled,
+                }
+
+                unifiedOrchestrator, unifiedErr := execution.NewUnifiedOrchestrator(unifiedConfig)
+                if unifiedErr != nil {
+                    log.Printf("⚠️ [Unified] Failed to create unified orchestrator: %v (falling back to legacy)", unifiedErr)
+                } else {
+                    // Create adapter that implements ProofCycleOrchestratorInterface
+                    adapter := execution.NewUnifiedOrchestratorAdapter(
+                        unifiedOrchestrator,
+                        orchestrator, // Legacy orchestrator for fallback
+                        true,         // useUnified = true
+                        cfg.FallbackToLegacy,
+                    )
+
+                    // Wire adapter to validator (implements same interface as legacy)
+                    validator.SetProofCycleOrchestrator(adapter)
+                    log.Printf("✅ [Unified] Unified Multi-Chain Orchestrator initialized and wired to validator")
+                    log.Printf("   - Strategy Registry: %d attestation schemes, %d chains",
+                        len(strategyRegistry.ListAttestationSchemes()),
+                        len(strategyRegistry.ListChainIDs()))
+                    log.Printf("   - Default Chain: %s", cfg.DefaultTargetChain)
+                    log.Printf("   - Multi-Chain: %v", cfg.EnableMultiChain)
+                    log.Printf("   - Unified Tables: %v", cfg.EnableUnifiedTables)
+                    log.Printf("   - Fallback to Legacy: %v", cfg.FallbackToLegacy)
+                    healthStatus.SetProofCycle("active")
+
+                    // Skip wiring legacy orchestrator
+                    goto afterOrchestrator
+                }
+            }
+        }
+
+        // Wire legacy orchestrator to BFT validator (default or fallback)
         validator.SetProofCycleOrchestrator(orchestrator)
         log.Printf("✅ [Phase 7-9] Proof Cycle Orchestrator initialized and wired to validator")
         log.Printf("   - Ethereum RPC: %s", cfg.EthereumURL)
@@ -1352,6 +1425,8 @@ func startValidator(
         log.Printf("   - Write-back: %v", writebackEnabled)
         // F.2 remediation: Update health status for proof cycle
         healthStatus.SetProofCycle("active")
+
+    afterOrchestrator:
     }
 
     // --- Intent discovery wiring ---
@@ -1429,6 +1504,33 @@ func generateDeterministicValidatorKey(validatorID string) ed25519.PrivateKey {
     privateKeySeed := seed[:32]
     privateKey := ed25519.NewKeyFromSeed(privateKeySeed)
     return privateKey
+}
+
+// initializeStrategyRegistry creates and populates the strategy registry
+// with all attestation and chain execution strategies
+// Per Unified Multi-Chain Architecture plan
+func initializeStrategyRegistry(
+    cfg *config.Config,
+    blsKeyManager *bls.KeyManager,
+    ed25519Key ed25519.PrivateKey,
+) (*strategy.Registry, error) {
+    // Create registry configuration
+    regConfig := &strategy.RegistryConfig{
+        ValidatorID:       cfg.ValidatorID,
+        ValidatorIndex:    0, // Would come from validator set
+        BLSPrivateKey:     blsKeyManager.GetPrivateKeyBytes(),
+        Ed25519PrivateKey: ed25519Key,
+        EthereumRPC:       cfg.EthereumURL,
+        EthPrivateKey:     cfg.EthPrivateKey,
+        EthChainID:        cfg.EthChainID,
+        AnchorContract:    cfg.AnchorContractAddress,
+        CertenContract:    cfg.CertenContractAddress,
+        NetworkName:       cfg.NetworkName,
+        Logger:            log.New(log.Writer(), "[StrategyRegistry] ", log.LstdFlags),
+    }
+
+    // Initialize the registry with all strategies
+    return strategy.InitializeRegistry(regConfig)
 }
 
 func printHelp() {
