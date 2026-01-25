@@ -9,6 +9,11 @@
 .env.local
 .env.*.local
 
+# Firebase/Google Cloud credentials (NEVER commit these!)
+firebase-service-account.json
+*-firebase-adminsdk-*.json
+*.serviceAccountKey.json
+
 # IDE
 .idea/
 .vscode/
