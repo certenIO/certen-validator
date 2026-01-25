@@ -241,7 +241,7 @@ services:
     container_name: certen-validator-5
     hostname: validator-5
     ports:
-      - "8085:8080"
+      - "8095:8080"
       - "26696:26656"
       - "26697:26657"
     environment:
