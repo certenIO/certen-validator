@@ -13,7 +13,9 @@ package execution
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
+	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/google/uuid"
@@ -207,6 +209,23 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 			}
 		}
 
+		// Extract governance data from commitment (for G1/G2 proof levels)
+		var governanceRoot, operationCommitment [32]byte
+		if commitMap, ok := commitment.(map[string]interface{}); ok {
+			// Extract governanceRoot (hex string -> [32]byte)
+			if govRootStr, ok := commitMap["governanceRoot"].(string); ok && govRootStr != "" {
+				if decoded, err := hexStringToBytes32(govRootStr); err == nil {
+					governanceRoot = decoded
+				}
+			}
+			// Extract operationCommitment (hex string -> [32]byte)
+			if opCommitStr, ok := commitMap["operationCommitment"].(string); ok && opCommitStr != "" {
+				if decoded, err := hexStringToBytes32(opCommitStr); err == nil {
+					operationCommitment = decoded
+				}
+			}
+		}
+
 		// Create unified request with Accumulate reference data
 		var userIDPtr *string
 		if userID != "" {
@@ -223,6 +242,8 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 			AccumulateAccountURL: accumulateAccountURL,
 			AccumulateTxHash:     accumulateTxHash,
 			AccumulateBVN:        bvn,
+			GovernanceRoot:       governanceRoot,
+			OperationCommitment:  operationCommitment,
 		}
 
 		fmt.Printf("[UnifiedAdapter] Starting unified proof cycle with Accumulate ref for intent %s\n", intentID)
@@ -324,4 +345,31 @@ func (a *UnifiedOrchestratorAdapter) GetLegacyOrchestrator() *ProofCycleOrchestr
 // IsUsingUnified returns true if the adapter is using the unified orchestrator
 func (a *UnifiedOrchestratorAdapter) IsUsingUnified() bool {
 	return a.useUnified && a.unified != nil
+}
+
+// =============================================================================
+// HELPER: Hex String to Bytes32
+// =============================================================================
+
+// hexStringToBytes32 converts a hex string (with or without 0x prefix) to [32]byte
+func hexStringToBytes32(hexStr string) ([32]byte, error) {
+	var result [32]byte
+
+	// Remove 0x prefix if present
+	hexStr = strings.TrimPrefix(hexStr, "0x")
+
+	// Decode hex string
+	decoded, err := hex.DecodeString(hexStr)
+	if err != nil {
+		return result, fmt.Errorf("failed to decode hex string: %w", err)
+	}
+
+	// Copy to fixed-size array (pad or truncate as needed)
+	if len(decoded) > 32 {
+		copy(result[:], decoded[:32])
+	} else {
+		copy(result[32-len(decoded):], decoded)
+	}
+
+	return result, nil
 }

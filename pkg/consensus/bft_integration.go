@@ -1034,6 +1034,18 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 				// Other validators verify the actual execution matches this commitment.
 				commitment := bv.buildExecutionCommitmentFromIntent(certenIntent, bundleID)
 
+				// Add governance data from ValidatorBlock for G1/G2 proof levels
+				if commitMap, ok := commitment.(map[string]interface{}); ok {
+					// Add MerkleRoot from governance proof (for G1 - Governance Correctness)
+					if vb.GovernanceProof.MerkleRoot != "" {
+						commitMap["governanceRoot"] = vb.GovernanceProof.MerkleRoot
+					}
+					// Add OperationCommitment (for G2 - Outcome Binding)
+					if vb.OperationCommitment != "" {
+						commitMap["operationCommitment"] = vb.OperationCommitment
+					}
+				}
+
 				// Enhanced: Build AnchorWorkflowTxHashes with all 3 transaction hashes
 				txHashes := &AnchorWorkflowTxHashes{
 					CreateTxHash:     common.HexToHash(anchorRes.CreateTxHash),
