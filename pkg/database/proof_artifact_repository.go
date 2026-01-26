@@ -1113,10 +1113,10 @@ func (r *ProofArtifactRepository) CreateAnchorReference(ctx context.Context, inp
 		INSERT INTO anchor_references (
 			proof_id, target_chain, chain_id, network_name,
 			anchor_tx_hash, anchor_block_number, anchor_block_hash, anchor_timestamp,
-			contract_address, confirmations, is_confirmed, confirmed_at,
+			contract_address, confirmations, required_confirmations, is_confirmed, confirmed_at,
 			gas_used, gas_price_wei, total_cost_wei, created_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW()
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW()
 		)
 		RETURNING reference_id, created_at`
 
@@ -1131,6 +1131,7 @@ func (r *ProofArtifactRepository) CreateAnchorReference(ctx context.Context, inp
 	ref.AnchorTimestamp = input.AnchorTimestamp
 	ref.ContractAddress = input.ContractAddress
 	ref.Confirmations = input.Confirmations
+	ref.RequiredConfirmations = input.RequiredConfirmations
 	ref.IsConfirmed = input.IsConfirmed
 	ref.ConfirmedAt = input.ConfirmedAt
 	ref.GasUsed = input.GasUsed
@@ -1140,7 +1141,7 @@ func (r *ProofArtifactRepository) CreateAnchorReference(ctx context.Context, inp
 	err := r.db.QueryRowContext(ctx, query,
 		input.ProofID, input.TargetChain, input.ChainID, input.NetworkName,
 		input.AnchorTxHash, input.AnchorBlockNumber, input.AnchorBlockHash, input.AnchorTimestamp,
-		input.ContractAddress, input.Confirmations, input.IsConfirmed, input.ConfirmedAt,
+		input.ContractAddress, input.Confirmations, input.RequiredConfirmations, input.IsConfirmed, input.ConfirmedAt,
 		input.GasUsed, input.GasPriceWei, input.TotalCostWei,
 	).Scan(&ref.ReferenceID, &ref.CreatedAt)
 
@@ -1156,7 +1157,7 @@ func (r *ProofArtifactRepository) GetAnchorReference(ctx context.Context, proofI
 	query := `
 		SELECT reference_id, proof_id, target_chain, chain_id, network_name,
 			   anchor_tx_hash, anchor_block_number, anchor_block_hash, anchor_timestamp,
-			   contract_address, confirmations, is_confirmed, confirmed_at,
+			   contract_address, confirmations, required_confirmations, is_confirmed, confirmed_at,
 			   gas_used, gas_price_wei, total_cost_wei, created_at
 		FROM anchor_references
 		WHERE proof_id = $1`
@@ -1165,7 +1166,7 @@ func (r *ProofArtifactRepository) GetAnchorReference(ctx context.Context, proofI
 	err := r.db.QueryRowContext(ctx, query, proofID).Scan(
 		&ref.ReferenceID, &ref.ProofID, &ref.TargetChain, &ref.ChainID, &ref.NetworkName,
 		&ref.AnchorTxHash, &ref.AnchorBlockNumber, &ref.AnchorBlockHash, &ref.AnchorTimestamp,
-		&ref.ContractAddress, &ref.Confirmations, &ref.IsConfirmed, &ref.ConfirmedAt,
+		&ref.ContractAddress, &ref.Confirmations, &ref.RequiredConfirmations, &ref.IsConfirmed, &ref.ConfirmedAt,
 		&ref.GasUsed, &ref.GasPriceWei, &ref.TotalCostWei, &ref.CreatedAt,
 	)
 

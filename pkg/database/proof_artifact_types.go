@@ -343,9 +343,10 @@ type AnchorReferenceRecord struct {
 	ContractAddress *string `json:"contract_address,omitempty" db:"contract_address"`
 
 	// Confirmation Status
-	Confirmations int        `json:"confirmations" db:"confirmations"`
-	IsConfirmed   bool       `json:"is_confirmed" db:"is_confirmed"`
-	ConfirmedAt   *time.Time `json:"confirmed_at,omitempty" db:"confirmed_at"`
+	Confirmations         int        `json:"confirmations" db:"confirmations"`
+	RequiredConfirmations *int       `json:"required_confirmations,omitempty" db:"required_confirmations"`
+	IsConfirmed           bool       `json:"is_confirmed" db:"is_confirmed"`
+	ConfirmedAt           *time.Time `json:"confirmed_at,omitempty" db:"confirmed_at"`
 
 	// Gas Costs
 	GasUsed      *int64  `json:"gas_used,omitempty" db:"gas_used"`
@@ -357,21 +358,22 @@ type AnchorReferenceRecord struct {
 
 // NewAnchorReference is input for creating an anchor reference
 type NewAnchorReference struct {
-	ProofID           uuid.UUID  `json:"proof_id"`
-	TargetChain       string     `json:"target_chain"`
-	ChainID           string     `json:"chain_id"`
-	NetworkName       string     `json:"network_name"`
-	AnchorTxHash      string     `json:"anchor_tx_hash"`
-	AnchorBlockNumber int64      `json:"anchor_block_number"`
-	AnchorBlockHash   *string    `json:"anchor_block_hash,omitempty"`
-	AnchorTimestamp   *time.Time `json:"anchor_timestamp,omitempty"`
-	ContractAddress   *string    `json:"contract_address,omitempty"`
-	Confirmations     int        `json:"confirmations"`
-	IsConfirmed       bool       `json:"is_confirmed"`
-	ConfirmedAt       *time.Time `json:"confirmed_at,omitempty"`
-	GasUsed           *int64     `json:"gas_used,omitempty"`
-	GasPriceWei       *string    `json:"gas_price_wei,omitempty"`
-	TotalCostWei      *string    `json:"total_cost_wei,omitempty"`
+	ProofID               uuid.UUID  `json:"proof_id"`
+	TargetChain           string     `json:"target_chain"`
+	ChainID               string     `json:"chain_id"`
+	NetworkName           string     `json:"network_name"`
+	AnchorTxHash          string     `json:"anchor_tx_hash"`
+	AnchorBlockNumber     int64      `json:"anchor_block_number"`
+	AnchorBlockHash       *string    `json:"anchor_block_hash,omitempty"`
+	AnchorTimestamp       *time.Time `json:"anchor_timestamp,omitempty"`
+	ContractAddress       *string    `json:"contract_address,omitempty"`
+	Confirmations         int        `json:"confirmations"`
+	RequiredConfirmations *int       `json:"required_confirmations,omitempty"` // Target confirmation count (default 12)
+	IsConfirmed           bool       `json:"is_confirmed"`
+	ConfirmedAt           *time.Time `json:"confirmed_at,omitempty"`
+	GasUsed               *int64     `json:"gas_used,omitempty"`
+	GasPriceWei           *string    `json:"gas_price_wei,omitempty"`
+	TotalCostWei          *string    `json:"total_cost_wei,omitempty"`
 }
 
 // ============================================================================

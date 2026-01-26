@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS anchor_references (
 
     -- Confirmation Status
     confirmations INT DEFAULT 0,
+    required_confirmations INT DEFAULT 12,
     is_confirmed BOOLEAN DEFAULT FALSE,
     confirmed_at TIMESTAMPTZ,
 
@@ -142,11 +143,22 @@ CREATE TABLE IF NOT EXISTS chained_proof_layers (
     -- Layer-specific JSON data
     layer_json JSONB,
 
+    -- Verification status
+    verified BOOLEAN DEFAULT FALSE,
+    verified_at TIMESTAMPTZ,
+
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_chained_layers_proof ON chained_proof_layers(proof_id);
 CREATE INDEX IF NOT EXISTS idx_chained_layers_number ON chained_proof_layers(layer_number);
+
+-- Add verified columns if table already exists (idempotent)
+ALTER TABLE chained_proof_layers ADD COLUMN IF NOT EXISTS verified BOOLEAN DEFAULT FALSE;
+ALTER TABLE chained_proof_layers ADD COLUMN IF NOT EXISTS verified_at TIMESTAMPTZ;
+
+-- Add required_confirmations to anchor_references (idempotent)
+ALTER TABLE anchor_references ADD COLUMN IF NOT EXISTS required_confirmations INT DEFAULT 12;
 
 -- Record migration
 INSERT INTO schema_migrations (version, applied_at)

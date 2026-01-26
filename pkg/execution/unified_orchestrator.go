@@ -1221,25 +1221,39 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 		blockTimestamp := obs.BlockTimestamp
 		confirmedAt := time.Now().UTC()
 
+		// When finalized, ensure confirmations reflects at least the required amount
+		confirmations := obs.Confirmations
+		if obs.IsFinalized && obs.RequiredConfirmations > 0 && confirmations < obs.RequiredConfirmations {
+			confirmations = obs.RequiredConfirmations
+		}
+
+		// Get required confirmations (default to 12 if not set)
+		reqConfirmations := obs.RequiredConfirmations
+		if reqConfirmations <= 0 {
+			reqConfirmations = 12
+		}
+
 		anchorRef := &database.NewAnchorReference{
-			ProofID:           proofArtifact.ProofID,
-			TargetChain:       result.ChainPlatform,
-			ChainID:           result.ChainID,
-			NetworkName:       networkName,
-			AnchorTxHash:      obs.TxHash,
-			AnchorBlockNumber: int64(obs.BlockNumber),
-			AnchorBlockHash:   &obs.BlockHash,
-			AnchorTimestamp:   &blockTimestamp,
-			Confirmations:     obs.Confirmations,
-			IsConfirmed:       obs.IsFinalized,
-			ConfirmedAt:       &confirmedAt,
-			GasUsed:           ptrInt64(int64(obs.GasUsed)),
+			ProofID:               proofArtifact.ProofID,
+			TargetChain:           result.ChainPlatform,
+			ChainID:               result.ChainID,
+			NetworkName:           networkName,
+			AnchorTxHash:          obs.TxHash,
+			AnchorBlockNumber:     int64(obs.BlockNumber),
+			AnchorBlockHash:       &obs.BlockHash,
+			AnchorTimestamp:       &blockTimestamp,
+			Confirmations:         confirmations,
+			RequiredConfirmations: ptrInt(reqConfirmations),
+			IsConfirmed:           obs.IsFinalized,
+			ConfirmedAt:           &confirmedAt,
+			GasUsed:               ptrInt64(int64(obs.GasUsed)),
 		}
 
 		if _, err := o.config.Repos.ProofArtifacts.CreateAnchorReference(ctx, anchorRef); err != nil {
 			fmt.Printf("Warning: failed to create anchor reference: %v\n", err)
 		} else {
-			fmt.Printf("Created anchor_reference for proof_id=%s\n", proofArtifact.ProofID)
+			fmt.Printf("Created anchor_reference for proof_id=%s, confirmations=%d, finalized=%v\n",
+				proofArtifact.ProofID, confirmations, obs.IsFinalized)
 		}
 	}
 
