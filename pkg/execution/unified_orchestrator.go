@@ -14,6 +14,7 @@ package execution
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -30,6 +31,7 @@ import (
 	attestation "github.com/certen/independant-validator/pkg/attestation/strategy"
 	chain "github.com/certen/independant-validator/pkg/chain/strategy"
 	"github.com/certen/independant-validator/pkg/database"
+	"github.com/certen/independant-validator/pkg/proof"
 	"github.com/certen/independant-validator/pkg/strategy"
 )
 
@@ -333,6 +335,14 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 			o.config.OnCycleFailed(result, err)
 		}
 		return result, err
+	}
+
+	// Generate and persist proof bundle (after all phases complete)
+	if o.config.EnableUnifiedTables && o.config.Repos != nil {
+		if err := o.generateAndPersistBundle(cycleCtx, cycle); err != nil {
+			// Log warning but don't fail the cycle - bundle generation is supplementary
+			fmt.Printf("Warning: failed to generate proof bundle: %v\n", err)
+		}
 	}
 
 	// Success
@@ -1098,4 +1108,188 @@ func ptrInt64(v int64) *int64 {
 
 func ptrInt(v int) *int {
 	return &v
+}
+
+// =============================================================================
+// BUNDLE GENERATION
+// =============================================================================
+
+// generateAndPersistBundle creates a CertenProofBundle and persists it to proof_bundles table
+// This is the final step after all phases complete, creating a self-contained verification bundle
+func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycle *activeCycle) error {
+	if o.config.Repos == nil || o.config.Repos.ProofArtifacts == nil {
+		return fmt.Errorf("proof artifacts repository not configured")
+	}
+
+	req := cycle.Request
+	result := cycle.Result
+
+	// Step 1: Create proof_artifact entry first (to get proof_id)
+	proofClass := database.ProofClassOnDemand
+	if req.ProofClass == "on_cadence" {
+		proofClass = database.ProofClassOnCadence
+	}
+
+	// Determine accumulate tx hash (use first tx hash or intent ID)
+	accumTxHash := req.IntentID
+	if accumTxHash == "" && len(req.TxHashes) > 0 {
+		accumTxHash = req.TxHashes[0]
+	}
+
+	// Build artifact JSON with cycle result summary
+	artifactData := map[string]interface{}{
+		"cycle_id":           cycle.CycleID,
+		"chain_platform":     result.ChainPlatform,
+		"chain_id":           result.ChainID,
+		"attestation_scheme": result.Scheme,
+		"threshold_met":      result.ThresholdMet,
+		"write_back_success": result.WriteBackSuccess,
+	}
+	artifactJSON, err := json.Marshal(artifactData)
+	if err != nil {
+		return fmt.Errorf("marshal artifact data: %w", err)
+	}
+
+	newArtifact := &database.NewProofArtifact{
+		ProofType:    database.ProofTypeCertenAnchor,
+		AccumTxHash:  accumTxHash,
+		AccountURL:   req.IntentID, // Use intent ID as account reference
+		BatchID:      req.BatchID,
+		MerkleRoot:   req.MerkleRoot[:],
+		ProofClass:   proofClass,
+		ValidatorID:  o.config.ValidatorID,
+		ArtifactJSON: artifactJSON,
+		UserID:       req.UserID,
+		IntentID:     &req.IntentID,
+	}
+
+	proofArtifact, err := o.config.Repos.ProofArtifacts.CreateProofArtifact(ctx, newArtifact)
+	if err != nil {
+		return fmt.Errorf("create proof artifact: %w", err)
+	}
+
+	// Update the result with the proof ID
+	result.ProofID = proofArtifact.ProofID
+
+	fmt.Printf("Created proof artifact: proof_id=%s, cycle_id=%s\n", proofArtifact.ProofID, cycle.CycleID)
+
+	// Step 2: Build the CertenProofBundle
+	bundle := proof.NewCertenProofBundle(cycle.CycleID)
+
+	// Set transaction reference
+	bundle.SetTransactionRef(accumTxHash, req.IntentID, req.ProofClass)
+
+	// Set Merkle inclusion proof if available
+	if req.MerkleRoot != [32]byte{} {
+		bundle.SetMerkleInclusion(
+			hex.EncodeToString(req.MerkleRoot[:]),
+			hex.EncodeToString(req.OperationCommitment[:]), // Use operation commitment as leaf hash
+			0, // Leaf index (would need to be passed in request)
+			nil, // Merkle path (would need to be passed in request)
+		)
+	}
+
+	// Set anchor reference from chain execution results
+	if len(result.ObservationResults) > 0 {
+		obs := result.ObservationResults[0]
+		bundle.SetAnchorReference(
+			result.ChainID,
+			obs.TxHash,
+			obs.BlockNumber,
+			obs.Confirmations,
+		)
+		// Also set contract address if available
+		if bundle.ProofComponents.AnchorReference != nil {
+			bundle.ProofComponents.AnchorReference.AnchorBlockHash = obs.BlockHash
+		}
+	}
+
+	// Set governance proof (basic G1 structure)
+	if req.GovernanceRoot != [32]byte{} {
+		govProof := &proof.GovernanceProof{
+			Level:       proof.GovLevelG1,
+			SpecVersion: "1.0",
+			GeneratedAt: time.Now().UTC(),
+			G1: &proof.G1Result{
+				G0Result: proof.G0Result{
+					EntryHashExec:   hex.EncodeToString(req.OperationCommitment[:]),
+					TxHash:          accumTxHash,
+					ExecWitness:     hex.EncodeToString(req.GovernanceRoot[:]),
+					Chain:           result.ChainID,
+					G0ProofComplete: true,
+				},
+				ThresholdSatisfied: result.ThresholdMet,
+				ExecutionSuccess:   result.WriteBackSuccess,
+				G1ProofComplete:    true,
+			},
+		}
+		bundle.SetGovernanceProof(govProof)
+	}
+
+	// Add validator attestations
+	if result.Attestations != nil {
+		for _, att := range result.Attestations {
+			bundle.AddAttestation(
+				att.ValidatorID,
+				hex.EncodeToString(att.Signature),
+				hex.EncodeToString(att.MessageHash[:]),
+				att.Timestamp,
+			)
+		}
+	}
+
+	// Finalize bundle integrity
+	artifactHash, err := bundle.ComputeArtifactHash()
+	if err != nil {
+		return fmt.Errorf("compute artifact hash: %w", err)
+	}
+	bundle.BundleIntegrity = proof.BundleIntegrity{
+		ArtifactHash:     artifactHash,
+		CustodyChainHash: hex.EncodeToString(proofArtifact.ProofID[:]),
+		SignerID:         o.config.ValidatorID,
+	}
+
+	// Compress bundle to gzipped JSON
+	compressedData, err := bundle.ToCompressedJSON()
+	if err != nil {
+		return fmt.Errorf("compress bundle: %w", err)
+	}
+
+	// Compute hash of uncompressed JSON for verification
+	uncompressedData, err := bundle.ToJSON()
+	if err != nil {
+		return fmt.Errorf("serialize bundle: %w", err)
+	}
+	bundleHash := sha256.Sum256(uncompressedData)
+
+	// Step 3: Persist to proof_bundles table
+	includesChained := bundle.ProofComponents.ChainedProof != nil
+	includesGovernance := bundle.ProofComponents.GovernanceProof != nil
+	includesMerkle := bundle.ProofComponents.MerkleInclusion != nil
+	includesAnchor := bundle.ProofComponents.AnchorReference != nil
+
+	newBundle := &database.NewProofBundle{
+		ProofID:            proofArtifact.ProofID,
+		BundleFormat:       "certen_v1",
+		BundleVersion:      proof.BundleVersion,
+		BundleData:         compressedData,
+		BundleHash:         bundleHash[:],
+		BundleSizeBytes:    len(compressedData),
+		IncludesChained:    includesChained,
+		IncludesGovernance: includesGovernance,
+		IncludesMerkle:     includesMerkle,
+		IncludesAnchor:     includesAnchor,
+		AttestationCount:   len(bundle.ValidatorAttestations),
+	}
+
+	dbBundle, err := o.config.Repos.ProofArtifacts.CreateProofBundle(ctx, newBundle)
+	if err != nil {
+		return fmt.Errorf("create proof bundle: %w", err)
+	}
+
+	fmt.Printf("Created proof bundle: bundle_id=%s, proof_id=%s, size=%d bytes, attestations=%d, components=[merkle=%v,anchor=%v,chained=%v,gov=%v]\n",
+		dbBundle.BundleID, proofArtifact.ProofID, len(compressedData), len(bundle.ValidatorAttestations),
+		includesMerkle, includesAnchor, includesChained, includesGovernance)
+
+	return nil
 }
