@@ -418,11 +418,19 @@ func (o *UnifiedOrchestrator) persistChainExecution(ctx context.Context, cycle *
 		return uuid.Nil, fmt.Errorf("unified repo not configured")
 	}
 
-	logsJSON, _ := json.Marshal(obs.Logs)
 	workflowStep := database.WorkflowStep(step)
 
-	// Base64 encode the raw receipt for JSONB storage (binary RLP data contains invalid UTF-8)
-	var rawReceiptJSON json.RawMessage
+	// Properly encode all JSONB fields - PostgreSQL JSONB requires valid JSON, not nil/empty
+	// 1. Logs - marshal event logs array, default to empty array
+	var logsJSON json.RawMessage = []byte("[]")
+	if len(obs.Logs) > 0 {
+		if encoded, err := json.Marshal(obs.Logs); err == nil {
+			logsJSON = encoded
+		}
+	}
+
+	// 2. RawReceipt - base64 encode binary RLP data, default to null
+	var rawReceiptJSON json.RawMessage = []byte("null")
 	if len(obs.RawReceipt) > 0 {
 		receiptWrapper := map[string]string{
 			"encoding": "base64",
@@ -432,6 +440,9 @@ func (o *UnifiedOrchestrator) persistChainExecution(ctx context.Context, cycle *
 			rawReceiptJSON = encoded
 		}
 	}
+
+	// 3. PlatformData - default to empty object
+	var platformDataJSON json.RawMessage = []byte("{}")
 
 	input := &database.NewChainExecutionResult{
 		CycleID:               cycle.CycleID,
@@ -455,6 +466,7 @@ func (o *UnifiedOrchestrator) persistChainExecution(ctx context.Context, cycle *
 		ReceiptsRoot:          obs.ReceiptsRoot[:],
 		RawReceipt:            rawReceiptJSON,
 		Logs:                  logsJSON,
+		PlatformData:          platformDataJSON,
 		ObserverValidatorID:   o.config.ValidatorID,
 		WorkflowStep:          &workflowStep,
 	}
