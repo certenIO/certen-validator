@@ -444,6 +444,11 @@ func (o *UnifiedOrchestrator) persistChainExecution(ctx context.Context, cycle *
 	// 3. PlatformData - default to empty object
 	var platformDataJSON json.RawMessage = []byte("{}")
 
+	// Debug: log JSONB field values
+	fmt.Printf("[DEBUG-PERSIST] Logs JSON (%d bytes): %s\n", len(logsJSON), string(logsJSON)[:min(100, len(logsJSON))])
+	fmt.Printf("[DEBUG-PERSIST] RawReceipt JSON (%d bytes): %s\n", len(rawReceiptJSON), string(rawReceiptJSON)[:min(100, len(rawReceiptJSON))])
+	fmt.Printf("[DEBUG-PERSIST] PlatformData JSON (%d bytes): %s\n", len(platformDataJSON), string(platformDataJSON))
+
 	input := &database.NewChainExecutionResult{
 		CycleID:               cycle.CycleID,
 		ChainPlatform:         database.ChainPlatform(cycle.Result.ChainPlatform),
