@@ -1173,7 +1173,112 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 
 	fmt.Printf("Created proof artifact: proof_id=%s, cycle_id=%s\n", proofArtifact.ProofID, cycle.CycleID)
 
-	// Step 2: Build the CertenProofBundle
+	// Step 2: Populate related tables for GetProofWithDetails support
+
+	// 2a. Create anchor_references entry (from chain execution results)
+	if len(result.ObservationResults) > 0 {
+		obs := result.ObservationResults[0]
+		networkName := getNetworkName(result.ChainID)
+		blockTimestamp := obs.BlockTimestamp
+		confirmedAt := time.Now().UTC()
+
+		anchorRef := &database.NewAnchorReference{
+			ProofID:           proofArtifact.ProofID,
+			TargetChain:       result.ChainPlatform,
+			ChainID:           result.ChainID,
+			NetworkName:       networkName,
+			AnchorTxHash:      obs.TxHash,
+			AnchorBlockNumber: int64(obs.BlockNumber),
+			AnchorBlockHash:   &obs.BlockHash,
+			AnchorTimestamp:   &blockTimestamp,
+			Confirmations:     obs.Confirmations,
+			IsConfirmed:       obs.IsFinalized,
+			ConfirmedAt:       &confirmedAt,
+			GasUsed:           ptrInt64(int64(obs.GasUsed)),
+		}
+
+		if _, err := o.config.Repos.ProofArtifacts.CreateAnchorReference(ctx, anchorRef); err != nil {
+			fmt.Printf("Warning: failed to create anchor reference: %v\n", err)
+		} else {
+			fmt.Printf("Created anchor_reference for proof_id=%s\n", proofArtifact.ProofID)
+		}
+	}
+
+	// 2b. Create governance_proof_levels entry
+	if req.GovernanceRoot != [32]byte{} {
+		govLevelJSON, _ := json.Marshal(map[string]interface{}{
+			"governance_root":  hex.EncodeToString(req.GovernanceRoot[:]),
+			"threshold_met":    result.ThresholdMet,
+			"attestation_count": len(result.Attestations),
+		})
+
+		isAnchored := len(result.ObservationResults) > 0
+		sigCount := len(result.Attestations)
+
+		govLevel := &database.NewGovernanceProofLevel{
+			ProofID:        proofArtifact.ProofID,
+			GovLevel:       database.GovLevelG1,
+			LevelName:      "G1 - Governance Correctness",
+			IsAnchored:     &isAnchored,
+			SignatureCount: &sigCount,
+			LevelJSON:      govLevelJSON,
+		}
+
+		if _, err := o.config.Repos.ProofArtifacts.CreateGovernanceProofLevel(ctx, govLevel); err != nil {
+			fmt.Printf("Warning: failed to create governance proof level: %v\n", err)
+		} else {
+			fmt.Printf("Created governance_proof_level G1 for proof_id=%s\n", proofArtifact.ProofID)
+		}
+	}
+
+	// 2c. Create validator_attestations entries
+	if result.Attestations != nil {
+		for _, att := range result.Attestations {
+			var anchorTxHash *string
+			var blockNumber *int64
+			if len(result.ObservationResults) > 0 {
+				anchorTxHash = &result.ObservationResults[0].TxHash
+				bn := int64(result.ObservationResults[0].BlockNumber)
+				blockNumber = &bn
+			}
+
+			proofAttest := &database.NewProofAttestation{
+				ProofArtifactID: &proofArtifact.ProofID,
+				ValidatorID:     att.ValidatorID,
+				ValidatorPubkey: att.PublicKey,
+				AttestedHash:    att.MessageHash[:],
+				Signature:       att.Signature,
+				AnchorTxHash:    anchorTxHash,
+				MerkleRoot:      req.MerkleRoot[:],
+				BlockNumber:     blockNumber,
+				AttestedAt:      att.Timestamp,
+			}
+
+			if _, err := o.config.Repos.ProofArtifacts.CreateProofAttestation(ctx, proofAttest); err != nil {
+				fmt.Printf("Warning: failed to create proof attestation for %s: %v\n", att.ValidatorID, err)
+			}
+		}
+		fmt.Printf("Created %d validator_attestations for proof_id=%s\n", len(result.Attestations), proofArtifact.ProofID)
+	}
+
+	// 2d. Create verification_history entry (record that proof was verified)
+	verifierID := o.config.ValidatorID
+	durationMS := int(time.Since(cycle.StartedAt).Milliseconds())
+	if _, err := o.config.Repos.ProofArtifacts.CreateVerificationRecord(
+		ctx,
+		proofArtifact.ProofID,
+		"proof_cycle_complete",
+		result.ThresholdMet,
+		nil, // no error
+		&verifierID,
+		&durationMS,
+	); err != nil {
+		fmt.Printf("Warning: failed to create verification record: %v\n", err)
+	} else {
+		fmt.Printf("Created verification_history for proof_id=%s\n", proofArtifact.ProofID)
+	}
+
+	// Step 3: Build the CertenProofBundle
 	bundle := proof.NewCertenProofBundle(cycle.CycleID)
 
 	// Set transaction reference

@@ -1052,6 +1052,50 @@ func (r *ProofArtifactRepository) GetProofWithDetails(ctx context.Context, proof
 	return result, nil
 }
 
+// CreateAnchorReference creates a new anchor reference record
+func (r *ProofArtifactRepository) CreateAnchorReference(ctx context.Context, input *NewAnchorReference) (*AnchorReferenceRecord, error) {
+	query := `
+		INSERT INTO anchor_references (
+			proof_id, target_chain, chain_id, network_name,
+			anchor_tx_hash, anchor_block_number, anchor_block_hash, anchor_timestamp,
+			contract_address, confirmations, is_confirmed, confirmed_at,
+			gas_used, gas_price_wei, total_cost_wei, created_at
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW()
+		)
+		RETURNING reference_id, created_at`
+
+	var ref AnchorReferenceRecord
+	ref.ProofID = input.ProofID
+	ref.TargetChain = input.TargetChain
+	ref.ChainID = input.ChainID
+	ref.NetworkName = input.NetworkName
+	ref.AnchorTxHash = input.AnchorTxHash
+	ref.AnchorBlockNumber = input.AnchorBlockNumber
+	ref.AnchorBlockHash = input.AnchorBlockHash
+	ref.AnchorTimestamp = input.AnchorTimestamp
+	ref.ContractAddress = input.ContractAddress
+	ref.Confirmations = input.Confirmations
+	ref.IsConfirmed = input.IsConfirmed
+	ref.ConfirmedAt = input.ConfirmedAt
+	ref.GasUsed = input.GasUsed
+	ref.GasPriceWei = input.GasPriceWei
+	ref.TotalCostWei = input.TotalCostWei
+
+	err := r.db.QueryRowContext(ctx, query,
+		input.ProofID, input.TargetChain, input.ChainID, input.NetworkName,
+		input.AnchorTxHash, input.AnchorBlockNumber, input.AnchorBlockHash, input.AnchorTimestamp,
+		input.ContractAddress, input.Confirmations, input.IsConfirmed, input.ConfirmedAt,
+		input.GasUsed, input.GasPriceWei, input.TotalCostWei,
+	).Scan(&ref.ReferenceID, &ref.CreatedAt)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to create anchor reference: %w", err)
+	}
+
+	return &ref, nil
+}
+
 // GetAnchorReference retrieves anchor reference for a proof
 func (r *ProofArtifactRepository) GetAnchorReference(ctx context.Context, proofID uuid.UUID) (*AnchorReferenceRecord, error) {
 	query := `
