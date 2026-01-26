@@ -941,7 +941,7 @@ func (r *ProofArtifactRepository) CountValidAttestations(ctx context.Context, ba
 // CreateVerificationRecord creates a verification audit log entry
 func (r *ProofArtifactRepository) CreateVerificationRecord(ctx context.Context, proofID uuid.UUID, verificationType string, passed bool, errorMsg *string, verifierID *string, durationMS *int) (*ProofVerificationRecord, error) {
 	query := `
-		INSERT INTO proof_verifications (
+		INSERT INTO verification_history (
 			proof_id, verification_type, passed, error_message, verifier_id, duration_ms, created_at
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, NOW()
@@ -972,7 +972,7 @@ func (r *ProofArtifactRepository) GetVerificationHistory(ctx context.Context, pr
 	query := `
 		SELECT verification_id, proof_id, verification_type, passed, error_message, error_code,
 			   verifier_id, verification_method, duration_ms, artifacts_json, created_at
-		FROM proof_verifications
+		FROM verification_history
 		WHERE proof_id = $1
 		ORDER BY created_at DESC`
 

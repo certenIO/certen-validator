@@ -29,31 +29,44 @@ func NewLiteClientProofGeneratorAdapter(gen *proof.LiteClientProofGenerator) *Li
 
 // GenerateChainedProofForTx implements ChainedProofGenerator interface
 // Generates L1/L2/L3 chained proof for a transaction
-func (a *LiteClientProofGeneratorAdapter) GenerateChainedProofForTx(ctx context.Context, txHash string) (*ChainedProofResult, error) {
+// Parameters:
+//   - accountURL: The Accumulate account URL (e.g., "acc://certen.acme/intent-data")
+//   - txHash: The Accumulate transaction hash (64-char hex)
+//   - bvn: The BVN partition name (e.g., "bvn0", "bvn1", "bvn2")
+func (a *LiteClientProofGeneratorAdapter) GenerateChainedProofForTx(ctx context.Context, accountURL, txHash, bvn string) (*ChainedProofResult, error) {
 	if a.generator == nil {
 		return nil, fmt.Errorf("proof generator not initialized")
 	}
 
-	// The LiteClientProofGenerator needs account URL, tx hash, and BVN name
-	// For now, we'll try to generate proof using the tx hash as the account URL
-	// In a full implementation, we'd need to look up the account URL from the intent
-
 	// Try to generate chained proof - this requires the real proof builder
 	if !a.generator.HasRealProofBuilder() {
-		return nil, fmt.Errorf("real proof builder not available")
+		return nil, fmt.Errorf("real proof builder not available - CometBFT endpoints required")
 	}
 
+	// Validate inputs
+	if accountURL == "" {
+		return nil, fmt.Errorf("accountURL is required for chained proof generation")
+	}
+	if txHash == "" {
+		return nil, fmt.Errorf("txHash is required for chained proof generation")
+	}
+	if bvn == "" {
+		bvn = "bvn0" // Default to BVN0
+	}
+
+	fmt.Printf("Generating chained proof: accountURL=%s, txHash=%s, bvn=%s\n", accountURL, txHash, bvn)
+
 	// Generate chained proof for the transaction
-	// We need to determine the BVN - for now use "bvn0" as default
-	// In production, this would be determined from the transaction's routing
-	chainedProof, err := a.generator.GenerateChainedProofForIntent(ctx, txHash, txHash, "bvn0")
+	chainedProof, err := a.generator.GenerateChainedProofForIntent(ctx, accountURL, txHash, bvn)
 	if err != nil {
-		// Try with different BVNs if the first fails
-		chainedProof, err = a.generator.GenerateChainedProofForIntent(ctx, txHash, txHash, "bvn1")
+		// Try with different BVNs if the first fails (transaction might be routed to different partition)
+		fmt.Printf("BVN %s failed, trying bvn1: %v\n", bvn, err)
+		chainedProof, err = a.generator.GenerateChainedProofForIntent(ctx, accountURL, txHash, "bvn1")
 		if err != nil {
-			chainedProof, err = a.generator.GenerateChainedProofForIntent(ctx, txHash, txHash, "bvn2")
+			fmt.Printf("BVN bvn1 failed, trying bvn2: %v\n", err)
+			chainedProof, err = a.generator.GenerateChainedProofForIntent(ctx, accountURL, txHash, "bvn2")
 			if err != nil {
-				return nil, fmt.Errorf("generate chained proof: %w", err)
+				return nil, fmt.Errorf("generate chained proof (tried all BVNs): %w", err)
 			}
 		}
 	}

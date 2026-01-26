@@ -98,7 +98,11 @@ type UnifiedOrchestratorConfig struct {
 // ChainedProofGenerator interface for generating Accumulate chained proofs
 type ChainedProofGenerator interface {
 	// GenerateChainedProofForTx generates L1/L2/L3 chained proof for a transaction
-	GenerateChainedProofForTx(ctx context.Context, txHash string) (*ChainedProofResult, error)
+	// Parameters:
+	//   - accountURL: The Accumulate account URL (e.g., "acc://certen.acme/intent-data")
+	//   - txHash: The Accumulate transaction hash (64-char hex)
+	//   - bvn: The BVN partition name (e.g., "bvn0", "bvn1")
+	GenerateChainedProofForTx(ctx context.Context, accountURL, txHash, bvn string) (*ChainedProofResult, error)
 }
 
 // ChainedProofResult contains the L1/L2/L3 proof chain
@@ -171,6 +175,11 @@ type UnifiedProofCycleRequest struct {
 
 	// User tracking (for Firestore)
 	UserID *string `json:"user_id,omitempty"`
+
+	// Accumulate proof chain data (for L1/L2/L3 proofs)
+	AccumulateAccountURL string `json:"accumulate_account_url,omitempty"` // Account URL where intent was created
+	AccumulateTxHash     string `json:"accumulate_tx_hash,omitempty"`     // Transaction hash on Accumulate
+	AccumulateBVN        string `json:"accumulate_bvn,omitempty"`         // BVN partition (bvn0, bvn1, bvn2)
 }
 
 // UnifiedProofCycleResult represents the result of a proof cycle
@@ -1327,10 +1336,33 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 
 	// 2c. Create chained_proof_layers entries (L1/L2/L3)
 	// Fetch chained proof from Accumulate if ProofGenerator is configured
-	if o.config.ProofGenerator != nil && req.IntentID != "" {
-		chainedProof, err := o.config.ProofGenerator.GenerateChainedProofForTx(ctx, req.IntentID)
-		if err != nil {
-			fmt.Printf("Warning: failed to generate chained proof for %s: %v\n", req.IntentID, err)
+	if o.config.ProofGenerator != nil {
+		// Determine parameters for chained proof generation
+		accountURL := req.AccumulateAccountURL
+		txHash := req.AccumulateTxHash
+		bvn := req.AccumulateBVN
+
+		// Fallbacks for missing values
+		if accountURL == "" {
+			// Use ResultsPrincipal or construct from IntentID
+			if o.config.ResultsPrincipal != "" {
+				accountURL = o.config.ResultsPrincipal
+			} else if req.IntentID != "" {
+				// Last resort: use intent ID (may not work)
+				accountURL = req.IntentID
+			}
+		}
+		if txHash == "" {
+			txHash = req.IntentID // Fall back to intent ID as tx hash
+		}
+		if bvn == "" {
+			bvn = "bvn0" // Default to BVN0
+		}
+
+		if accountURL != "" && txHash != "" {
+			chainedProof, err := o.config.ProofGenerator.GenerateChainedProofForTx(ctx, accountURL, txHash, bvn)
+			if err != nil {
+				fmt.Printf("Warning: failed to generate chained proof (account=%s, tx=%s, bvn=%s): %v\n", accountURL, txHash, bvn, err)
 		} else if chainedProof != nil {
 			// L1: Transaction → BVN
 			l1JSON, _ := json.Marshal(map[string]interface{}{
@@ -1392,8 +1424,11 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 			}
 
 			fmt.Printf("Created chained_proof_layers L1/L2/L3 for proof_id=%s\n", proofArtifact.ProofID)
+			}
+		} else {
+			fmt.Printf("Note: Cannot generate chained proof - missing accountURL or txHash\n")
 		}
-	} else if o.config.ProofGenerator == nil {
+	} else {
 		fmt.Printf("Note: ProofGenerator not configured, skipping chained proof layers\n")
 	}
 
