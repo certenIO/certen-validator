@@ -96,6 +96,9 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAllTxs(
 	txHashes interface{},
 	commitment interface{},
 ) error {
+	fmt.Printf("[UnifiedAdapter] StartProofCycleWithAllTxs called: intent=%s, useUnified=%v, unified=%v\n",
+		intentID, a.useUnified, a.unified != nil)
+
 	if a.useUnified && a.unified != nil {
 		// Extract tx hashes from the interface
 		var txHashStrs []string
@@ -112,6 +115,8 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAllTxs(
 			txHashStrs = []string{fmt.Sprintf("%v", txHashes)}
 		}
 
+		fmt.Printf("[UnifiedAdapter] Extracted %d tx hashes for intent %s: %v\n", len(txHashStrs), intentID, txHashStrs)
+
 		// Create unified request
 		var userIDPtr *string
 		if userID != "" {
@@ -127,13 +132,18 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAllTxs(
 			UserID:      userIDPtr,
 		}
 
+		fmt.Printf("[UnifiedAdapter] Starting unified proof cycle for intent %s with target chain %s\n",
+			intentID, a.unified.config.DefaultChainID)
+
 		// Start cycle asynchronously
 		go func() {
-			result, err := a.unified.StartProofCycle(ctx, req)
+			fmt.Printf("[UnifiedAdapter] Goroutine started for intent %s\n", intentID)
+			result, err := a.unified.StartProofCycle(context.Background(), req)
 			if err != nil {
-				fmt.Printf("Unified proof cycle failed: %v\n", err)
+				fmt.Printf("[UnifiedAdapter] Unified proof cycle FAILED for %s: %v\n", intentID, err)
 			} else if result != nil {
-				fmt.Printf("Unified proof cycle completed: success=%v\n", result.Success)
+				fmt.Printf("[UnifiedAdapter] Unified proof cycle COMPLETED for %s: success=%v, phase=%d\n",
+					intentID, result.Success, result.FailPhase)
 			}
 		}()
 		return nil
