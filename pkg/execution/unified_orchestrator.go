@@ -1263,6 +1263,9 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 			"confirmations":      result.ObservationResults[0].Confirmations,
 		})
 
+		// G0 is verified if we have anchor data
+		g0Verified := true
+
 		g0Level := &database.NewGovernanceProofLevel{
 			ProofID:      proofArtifact.ProofID,
 			GovLevel:     database.GovLevelG0,
@@ -1271,6 +1274,7 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 			AnchorHeight: anchorHeight,
 			IsAnchored:   &isAnchored,
 			LevelJSON:    g0JSON,
+			Verified:     &g0Verified,
 		}
 
 		if _, err := o.config.Repos.ProofArtifacts.CreateGovernanceProofLevel(ctx, g0Level); err != nil {
@@ -1288,6 +1292,9 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 			"attestation_count": len(result.Attestations),
 		})
 
+		// G1 is verified if threshold is met
+		g1Verified := result.ThresholdMet
+
 		g1Level := &database.NewGovernanceProofLevel{
 			ProofID:        proofArtifact.ProofID,
 			GovLevel:       database.GovLevelG1,
@@ -1295,6 +1302,7 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 			IsAnchored:     &isAnchored,
 			SignatureCount: &sigCount,
 			LevelJSON:      g1JSON,
+			Verified:       &g1Verified,
 		}
 
 		if _, err := o.config.Repos.ProofArtifacts.CreateGovernanceProofLevel(ctx, g1Level); err != nil {
@@ -1315,6 +1323,9 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 			"write_back_success":   result.WriteBackSuccess,
 		})
 
+		// G2 is verified if threshold met and binding enforced
+		g2Verified := result.ThresholdMet && bindingEnforced
+
 		g2Level := &database.NewGovernanceProofLevel{
 			ProofID:         proofArtifact.ProofID,
 			GovLevel:        database.GovLevelG2,
@@ -1325,6 +1336,7 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 			OutcomeHash:     req.OperationCommitment[:],
 			BindingEnforced: &bindingEnforced,
 			LevelJSON:       g2JSON,
+			Verified:        &g2Verified,
 		}
 
 		if _, err := o.config.Repos.ProofArtifacts.CreateGovernanceProofLevel(ctx, g2Level); err != nil {
@@ -1465,6 +1477,9 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 				blockNumber = &bn
 			}
 
+			// Attestations from the proof cycle are validated signatures
+			signatureValid := true
+
 			proofAttest := &database.NewProofAttestation{
 				ProofArtifactID: &proofArtifact.ProofID,
 				ValidatorID:     att.ValidatorID,
@@ -1475,6 +1490,7 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 				MerkleRoot:      req.MerkleRoot[:],
 				BlockNumber:     blockNumber,
 				AttestedAt:      att.Timestamp,
+				SignatureValid:  &signatureValid,
 			}
 
 			if _, err := o.config.Repos.ProofArtifacts.CreateProofAttestation(ctx, proofAttest); err != nil {
@@ -1618,6 +1634,37 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 	fmt.Printf("Created proof bundle: bundle_id=%s, proof_id=%s, size=%d bytes, attestations=%d, components=[merkle=%v,anchor=%v,chained=%v,gov=%v]\n",
 		dbBundle.BundleID, proofArtifact.ProofID, len(compressedData), len(bundle.ValidatorAttestations),
 		includesMerkle, includesAnchor, includesChained, includesGovernance)
+
+	// Step 4: Update proof_artifacts with final state (status, anchor info, gov_level, verification)
+	// This ensures the main proof record reflects the completed cycle
+	if len(result.ObservationResults) > 0 {
+		obs := result.ObservationResults[0]
+
+		// Determine the highest governance level achieved
+		govLevel := database.GovLevelG0 // Default to G0 if anchored
+		if req.GovernanceRoot != [32]byte{} {
+			govLevel = database.GovLevelG1
+		}
+		if req.OperationCommitment != [32]byte{} && result.ThresholdMet {
+			govLevel = database.GovLevelG2
+		}
+
+		// Update the proof_artifacts record with final state
+		if err := o.config.Repos.ProofArtifacts.UpdateProofFinalState(
+			ctx,
+			proofArtifact.ProofID,
+			obs.TxHash,
+			int64(obs.BlockNumber),
+			result.ChainID,
+			govLevel,
+			result.ThresholdMet,
+		); err != nil {
+			fmt.Printf("Warning: failed to update proof final state: %v\n", err)
+		} else {
+			fmt.Printf("Updated proof_artifacts final state: proof_id=%s, status=anchored, gov_level=%s, verified=%v\n",
+				proofArtifact.ProofID, govLevel, result.ThresholdMet)
+		}
+	}
 
 	return nil
 }

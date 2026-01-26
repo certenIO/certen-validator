@@ -242,6 +242,7 @@ type NewGovernanceProofLevel struct {
 	OutcomeHash       []byte          `json:"outcome_hash,omitempty"`
 	BindingEnforced   *bool           `json:"binding_enforced,omitempty"`
 	LevelJSON         json.RawMessage `json:"level_json"`
+	Verified          *bool           `json:"verified,omitempty"` // Mark as verified when conditions are met
 }
 
 // ============================================================================
@@ -315,6 +316,7 @@ type NewProofAttestation struct {
 	MerkleRoot      []byte     `json:"merkle_root,omitempty"`
 	BlockNumber     *int64     `json:"block_number,omitempty"`
 	AttestedAt      time.Time  `json:"attested_at"`
+	SignatureValid  *bool      `json:"signature_valid,omitempty"` // Set to true when signature is validated
 }
 
 // ============================================================================

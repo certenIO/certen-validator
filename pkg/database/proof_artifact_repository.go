@@ -457,6 +457,54 @@ func (r *ProofArtifactRepository) UpdateProofStatus(ctx context.Context, proofID
 	return nil
 }
 
+// UpdateProofGovLevel updates the governance level of a proof
+func (r *ProofArtifactRepository) UpdateProofGovLevel(ctx context.Context, proofID uuid.UUID, govLevel GovernanceLevel) error {
+	query := `
+		UPDATE proof_artifacts
+		SET gov_level = $2
+		WHERE proof_id = $1`
+
+	result, err := r.db.ExecContext(ctx, query, proofID, govLevel)
+	if err != nil {
+		return fmt.Errorf("failed to update proof gov_level: %w", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("proof not found: %s", proofID)
+	}
+
+	return nil
+}
+
+// UpdateProofFinalState updates the final state of a proof after cycle completes
+// This is a comprehensive update that sets anchor info, status, gov_level, and verification in one call
+func (r *ProofArtifactRepository) UpdateProofFinalState(ctx context.Context, proofID uuid.UUID, anchorTxHash string, anchorBlockNumber int64, anchorChain string, govLevel GovernanceLevel, verified bool) error {
+	verificationStatus := VerificationStatusVerified
+	if !verified {
+		verificationStatus = VerificationStatusFailed
+	}
+
+	query := `
+		UPDATE proof_artifacts
+		SET anchor_tx_hash = $2, anchor_block_number = $3, anchor_chain = $4,
+			gov_level = $5, status = 'anchored', verification_status = $6,
+			anchored_at = NOW(), verified_at = NOW()
+		WHERE proof_id = $1`
+
+	result, err := r.db.ExecContext(ctx, query, proofID, anchorTxHash, anchorBlockNumber, anchorChain, govLevel, verificationStatus)
+	if err != nil {
+		return fmt.Errorf("failed to update proof final state: %w", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("proof not found: %s", proofID)
+	}
+
+	return nil
+}
+
 // MarkProofBatched marks a proof as batched with batch information
 func (r *ProofArtifactRepository) MarkProofBatched(ctx context.Context, proofID uuid.UUID, batchID uuid.UUID, batchPosition int) error {
 	query := `
@@ -743,9 +791,10 @@ func (r *ProofArtifactRepository) CreateGovernanceProofLevel(ctx context.Context
 			block_height, finality_timestamp, anchor_height, is_anchored,
 			authority_url, key_page_count, threshold_m, threshold_n, signature_count,
 			outcome_type, outcome_hash, binding_enforced,
-			level_json, created_at
+			level_json, verified, verified_at, created_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW()
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
+			CASE WHEN $17 = TRUE THEN NOW() ELSE NULL END, NOW()
 		)
 		RETURNING level_id, created_at`
 
@@ -766,13 +815,16 @@ func (r *ProofArtifactRepository) CreateGovernanceProofLevel(ctx context.Context
 	level.OutcomeHash = input.OutcomeHash
 	level.BindingEnforced = input.BindingEnforced
 	level.LevelJSON = input.LevelJSON
+	if input.Verified != nil {
+		level.Verified = *input.Verified
+	}
 
 	err := r.db.QueryRowContext(ctx, query,
 		input.ProofID, input.GovLevel, input.LevelName,
 		input.BlockHeight, input.FinalityTimestamp, input.AnchorHeight, input.IsAnchored,
 		input.AuthorityURL, input.KeyPageCount, input.ThresholdM, input.ThresholdN, input.SignatureCount,
 		input.OutcomeType, input.OutcomeHash, input.BindingEnforced,
-		input.LevelJSON,
+		input.LevelJSON, input.Verified,
 	).Scan(&level.LevelID, &level.CreatedAt)
 
 	if err != nil {
@@ -828,9 +880,9 @@ func (r *ProofArtifactRepository) CreateProofAttestation(ctx context.Context, in
 		INSERT INTO validator_attestations (
 			proof_id, batch_id, validator_id, validator_pubkey,
 			attested_hash, signature, anchor_tx_hash, merkle_root, block_number,
-			attested_at, created_at
+			signature_valid, attested_at, created_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW()
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW()
 		)
 		RETURNING attestation_id, created_at`
 
@@ -845,11 +897,14 @@ func (r *ProofArtifactRepository) CreateProofAttestation(ctx context.Context, in
 	att.MerkleRoot = input.MerkleRoot
 	att.BlockNumber = input.BlockNumber
 	att.AttestedAt = input.AttestedAt
+	if input.SignatureValid != nil {
+		att.SignatureValid = *input.SignatureValid
+	}
 
 	err := r.db.QueryRowContext(ctx, query,
 		input.ProofArtifactID, input.BatchID, input.ValidatorID, input.ValidatorPubkey,
 		input.AttestedHash, input.Signature, input.AnchorTxHash, input.MerkleRoot, input.BlockNumber,
-		input.AttestedAt,
+		input.SignatureValid, input.AttestedAt,
 	).Scan(&att.AttestationID, &att.CreatedAt)
 
 	if err != nil {
