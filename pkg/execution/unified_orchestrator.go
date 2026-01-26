@@ -89,6 +89,36 @@ type UnifiedOrchestratorConfig struct {
 	EnableUnifiedTables    bool
 	FallbackToLegacy       bool
 	EnableWriteBack        bool // Enable Phase 9 write-back to Accumulate
+
+	// Chained proof generator for L1/L2/L3 proofs
+	// Used to fetch Accumulate proof chain: Transaction → BVN → DN → Consensus
+	ProofGenerator ChainedProofGenerator
+}
+
+// ChainedProofGenerator interface for generating Accumulate chained proofs
+type ChainedProofGenerator interface {
+	// GenerateChainedProofForTx generates L1/L2/L3 chained proof for a transaction
+	GenerateChainedProofForTx(ctx context.Context, txHash string) (*ChainedProofResult, error)
+}
+
+// ChainedProofResult contains the L1/L2/L3 proof chain
+type ChainedProofResult struct {
+	// L1: Transaction to BVN
+	L1ReceiptAnchor []byte
+	L1BVNRoot       []byte
+	L1BVNPartition  string
+
+	// L2: BVN to DN
+	L2DNRoot      []byte
+	L2AnchorSeq   int64
+	L2DNBlockHash []byte
+
+	// L3: DN to Consensus
+	L3ConsensusTimestamp time.Time
+	L3DNBlockHeight      int64
+
+	// Complete proof data
+	CompleteProof interface{} // *lcproof.CompleteProof
 }
 
 // DefaultUnifiedOrchestratorConfig returns default configuration
@@ -1204,34 +1234,170 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 		}
 	}
 
-	// 2b. Create governance_proof_levels entry
+	// 2b. Create governance_proof_levels entries (G0, G1, G2)
+	isAnchored := len(result.ObservationResults) > 0
+	sigCount := len(result.Attestations)
+
+	// G0 - Inclusion and Finality (always created if we have anchor data)
+	if isAnchored {
+		var blockHeight *int64
+		var anchorHeight *int64
+		if len(result.ObservationResults) > 0 {
+			bh := int64(result.ObservationResults[0].BlockNumber)
+			blockHeight = &bh
+			anchorHeight = &bh
+		}
+
+		g0JSON, _ := json.Marshal(map[string]interface{}{
+			"inclusion_verified": true,
+			"finality_achieved":  result.ObservationResults[0].IsFinalized,
+			"confirmations":      result.ObservationResults[0].Confirmations,
+		})
+
+		g0Level := &database.NewGovernanceProofLevel{
+			ProofID:      proofArtifact.ProofID,
+			GovLevel:     database.GovLevelG0,
+			LevelName:    "G0 - Inclusion and Finality",
+			BlockHeight:  blockHeight,
+			AnchorHeight: anchorHeight,
+			IsAnchored:   &isAnchored,
+			LevelJSON:    g0JSON,
+		}
+
+		if _, err := o.config.Repos.ProofArtifacts.CreateGovernanceProofLevel(ctx, g0Level); err != nil {
+			fmt.Printf("Warning: failed to create G0 governance level: %v\n", err)
+		} else {
+			fmt.Printf("Created governance_proof_level G0 for proof_id=%s\n", proofArtifact.ProofID)
+		}
+	}
+
+	// G1 - Governance Correctness (created if we have governance root and attestations)
 	if req.GovernanceRoot != [32]byte{} {
-		govLevelJSON, _ := json.Marshal(map[string]interface{}{
-			"governance_root":  hex.EncodeToString(req.GovernanceRoot[:]),
-			"threshold_met":    result.ThresholdMet,
+		g1JSON, _ := json.Marshal(map[string]interface{}{
+			"governance_root":   hex.EncodeToString(req.GovernanceRoot[:]),
+			"threshold_met":     result.ThresholdMet,
 			"attestation_count": len(result.Attestations),
 		})
 
-		isAnchored := len(result.ObservationResults) > 0
-		sigCount := len(result.Attestations)
-
-		govLevel := &database.NewGovernanceProofLevel{
+		g1Level := &database.NewGovernanceProofLevel{
 			ProofID:        proofArtifact.ProofID,
 			GovLevel:       database.GovLevelG1,
 			LevelName:      "G1 - Governance Correctness",
 			IsAnchored:     &isAnchored,
 			SignatureCount: &sigCount,
-			LevelJSON:      govLevelJSON,
+			LevelJSON:      g1JSON,
 		}
 
-		if _, err := o.config.Repos.ProofArtifacts.CreateGovernanceProofLevel(ctx, govLevel); err != nil {
-			fmt.Printf("Warning: failed to create governance proof level: %v\n", err)
+		if _, err := o.config.Repos.ProofArtifacts.CreateGovernanceProofLevel(ctx, g1Level); err != nil {
+			fmt.Printf("Warning: failed to create G1 governance level: %v\n", err)
 		} else {
 			fmt.Printf("Created governance_proof_level G1 for proof_id=%s\n", proofArtifact.ProofID)
 		}
 	}
 
-	// 2c. Create validator_attestations entries
+	// G2 - Outcome Binding (created if we have operation commitment binding)
+	if req.OperationCommitment != [32]byte{} && result.ThresholdMet {
+		outcomeType := "execution_complete"
+		bindingEnforced := true
+
+		g2JSON, _ := json.Marshal(map[string]interface{}{
+			"operation_commitment": hex.EncodeToString(req.OperationCommitment[:]),
+			"outcome_bound":        true,
+			"write_back_success":   result.WriteBackSuccess,
+		})
+
+		g2Level := &database.NewGovernanceProofLevel{
+			ProofID:         proofArtifact.ProofID,
+			GovLevel:        database.GovLevelG2,
+			LevelName:       "G2 - Outcome Binding",
+			IsAnchored:      &isAnchored,
+			SignatureCount:  &sigCount,
+			OutcomeType:     &outcomeType,
+			OutcomeHash:     req.OperationCommitment[:],
+			BindingEnforced: &bindingEnforced,
+			LevelJSON:       g2JSON,
+		}
+
+		if _, err := o.config.Repos.ProofArtifacts.CreateGovernanceProofLevel(ctx, g2Level); err != nil {
+			fmt.Printf("Warning: failed to create G2 governance level: %v\n", err)
+		} else {
+			fmt.Printf("Created governance_proof_level G2 for proof_id=%s\n", proofArtifact.ProofID)
+		}
+	}
+
+	// 2c. Create chained_proof_layers entries (L1/L2/L3)
+	// Fetch chained proof from Accumulate if ProofGenerator is configured
+	if o.config.ProofGenerator != nil && req.IntentID != "" {
+		chainedProof, err := o.config.ProofGenerator.GenerateChainedProofForTx(ctx, req.IntentID)
+		if err != nil {
+			fmt.Printf("Warning: failed to generate chained proof for %s: %v\n", req.IntentID, err)
+		} else if chainedProof != nil {
+			// L1: Transaction → BVN
+			l1JSON, _ := json.Marshal(map[string]interface{}{
+				"layer":          "L1",
+				"description":    "Transaction to BVN",
+				"bvn_partition":  chainedProof.L1BVNPartition,
+				"receipt_anchor": hex.EncodeToString(chainedProof.L1ReceiptAnchor),
+			})
+			l1Layer := &database.NewChainedProofLayer{
+				ProofID:       proofArtifact.ProofID,
+				LayerNumber:   1,
+				LayerName:     "L1 - Transaction to BVN",
+				BVNPartition:  &chainedProof.L1BVNPartition,
+				ReceiptAnchor: chainedProof.L1ReceiptAnchor,
+				BVNRoot:       chainedProof.L1BVNRoot,
+				LayerJSON:     l1JSON,
+			}
+			if _, err := o.config.Repos.ProofArtifacts.CreateChainedProofLayer(ctx, l1Layer); err != nil {
+				fmt.Printf("Warning: failed to create L1 chained layer: %v\n", err)
+			}
+
+			// L2: BVN → DN
+			l2JSON, _ := json.Marshal(map[string]interface{}{
+				"layer":       "L2",
+				"description": "BVN to DN",
+				"anchor_seq":  chainedProof.L2AnchorSeq,
+			})
+			l2Layer := &database.NewChainedProofLayer{
+				ProofID:        proofArtifact.ProofID,
+				LayerNumber:    2,
+				LayerName:      "L2 - BVN to DN",
+				DNRoot:         chainedProof.L2DNRoot,
+				AnchorSequence: &chainedProof.L2AnchorSeq,
+				DNBlockHash:    chainedProof.L2DNBlockHash,
+				LayerJSON:      l2JSON,
+			}
+			if _, err := o.config.Repos.ProofArtifacts.CreateChainedProofLayer(ctx, l2Layer); err != nil {
+				fmt.Printf("Warning: failed to create L2 chained layer: %v\n", err)
+			}
+
+			// L3: DN → Consensus
+			l3JSON, _ := json.Marshal(map[string]interface{}{
+				"layer":               "L3",
+				"description":         "DN to Consensus",
+				"dn_block_height":     chainedProof.L3DNBlockHeight,
+				"consensus_timestamp": chainedProof.L3ConsensusTimestamp,
+			})
+			consensusTS := chainedProof.L3ConsensusTimestamp
+			l3Layer := &database.NewChainedProofLayer{
+				ProofID:            proofArtifact.ProofID,
+				LayerNumber:        3,
+				LayerName:          "L3 - DN to Consensus",
+				DNBlockHeight:      &chainedProof.L3DNBlockHeight,
+				ConsensusTimestamp: &consensusTS,
+				LayerJSON:          l3JSON,
+			}
+			if _, err := o.config.Repos.ProofArtifacts.CreateChainedProofLayer(ctx, l3Layer); err != nil {
+				fmt.Printf("Warning: failed to create L3 chained layer: %v\n", err)
+			}
+
+			fmt.Printf("Created chained_proof_layers L1/L2/L3 for proof_id=%s\n", proofArtifact.ProofID)
+		}
+	} else if o.config.ProofGenerator == nil {
+		fmt.Printf("Note: ProofGenerator not configured, skipping chained proof layers\n")
+	}
+
+	// 2d. Create validator_attestations entries
 	if result.Attestations != nil {
 		for _, att := range result.Attestations {
 			var anchorTxHash *string
@@ -1261,7 +1427,7 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 		fmt.Printf("Created %d validator_attestations for proof_id=%s\n", len(result.Attestations), proofArtifact.ProofID)
 	}
 
-	// 2d. Create verification_history entry (record that proof was verified)
+	// 2e. Create verification_history entry (record that proof was verified)
 	verifierID := o.config.ValidatorID
 	durationMS := int(time.Since(cycle.StartedAt).Milliseconds())
 	if _, err := o.config.Repos.ProofArtifacts.CreateVerificationRecord(
