@@ -67,6 +67,10 @@ func (c *Client) GetGasPrice(ctx context.Context) (*big.Int, error) {
 
 // CreateTransactor creates a transactor from a private key
 func (c *Client) CreateTransactor(privateKeyHex string) (*bind.TransactOpts, error) {
+	// Strip "0x" or "0X" prefix if present (crypto.HexToECDSA expects raw hex)
+	if len(privateKeyHex) >= 2 && (privateKeyHex[:2] == "0x" || privateKeyHex[:2] == "0X") {
+		privateKeyHex = privateKeyHex[2:]
+	}
 	privateKey, err := crypto.HexToECDSA(privateKeyHex)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse private key: %w", err)
@@ -82,6 +86,10 @@ func (c *Client) CreateTransactor(privateKeyHex string) (*bind.TransactOpts, err
 
 // GetPublicAddress gets the public address from a private key
 func GetPublicAddress(privateKeyHex string) (common.Address, error) {
+	// Strip "0x" or "0X" prefix if present (crypto.HexToECDSA expects raw hex)
+	if len(privateKeyHex) >= 2 && (privateKeyHex[:2] == "0x" || privateKeyHex[:2] == "0X") {
+		privateKeyHex = privateKeyHex[2:]
+	}
 	privateKey, err := crypto.HexToECDSA(privateKeyHex)
 	if err != nil {
 		return common.Address{}, fmt.Errorf("failed to parse private key: %w", err)

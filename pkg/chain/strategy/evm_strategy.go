@@ -134,7 +134,13 @@ func NewEVMStrategy(config *EVMStrategyConfig) (*EVMStrategy, error) {
 
 	// Parse private key and create auth
 	if config.PrivateKeyHex != "" {
-		privateKey, err := crypto.HexToECDSA(config.PrivateKeyHex)
+		// Strip "0x" prefix if present (crypto.HexToECDSA expects raw hex)
+		privateKeyHex := config.PrivateKeyHex
+		if len(privateKeyHex) >= 2 && (privateKeyHex[:2] == "0x" || privateKeyHex[:2] == "0X") {
+			privateKeyHex = privateKeyHex[2:]
+		}
+
+		privateKey, err := crypto.HexToECDSA(privateKeyHex)
 		if err != nil {
 			return nil, fmt.Errorf("invalid private key: %w", err)
 		}
