@@ -14,6 +14,7 @@ package execution
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -420,6 +421,13 @@ func (o *UnifiedOrchestrator) persistChainExecution(ctx context.Context, cycle *
 	logsJSON, _ := json.Marshal(obs.Logs)
 	workflowStep := database.WorkflowStep(step)
 
+	// Base64 encode the raw receipt for JSONB storage (binary RLP data contains invalid UTF-8)
+	var rawReceiptJSON json.RawMessage
+	if len(obs.RawReceipt) > 0 {
+		encoded := base64.StdEncoding.EncodeToString(obs.RawReceipt)
+		rawReceiptJSON = json.RawMessage(`{"encoding":"base64","data":"` + encoded + `"}`)
+	}
+
 	input := &database.NewChainExecutionResult{
 		CycleID:               cycle.CycleID,
 		ChainPlatform:         database.ChainPlatform(cycle.Result.ChainPlatform),
@@ -440,7 +448,7 @@ func (o *UnifiedOrchestrator) persistChainExecution(ctx context.Context, cycle *
 		StateRoot:             obs.StateRoot[:],
 		TransactionsRoot:      obs.TransactionsRoot[:],
 		ReceiptsRoot:          obs.ReceiptsRoot[:],
-		RawReceipt:            obs.RawReceipt,
+		RawReceipt:            rawReceiptJSON,
 		Logs:                  logsJSON,
 		ObserverValidatorID:   o.config.ValidatorID,
 		WorkflowStep:          &workflowStep,
