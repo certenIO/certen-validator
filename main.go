@@ -1364,6 +1364,15 @@ func startValidator(
                     unifiedRepo = batchComponents.Repos.Unified
                 }
 
+                // Create proof generator adapter for chained proofs (L1/L2/L3)
+                var proofGenAdapter *execution.LiteClientProofGeneratorAdapter
+                if liteClientProofGen != nil && liteClientProofGen.HasRealProofBuilder() {
+                    proofGenAdapter = execution.NewLiteClientProofGeneratorAdapter(liteClientProofGen)
+                    log.Printf("   - Chained Proof Generator: enabled (L1/L2/L3 proofs)")
+                } else {
+                    log.Printf("   - Chained Proof Generator: disabled (no real proof builder)")
+                }
+
                 // Create unified orchestrator configuration
                 unifiedConfig := &execution.UnifiedOrchestratorConfig{
                     ValidatorID:          cfg.ValidatorID,
@@ -1385,6 +1394,7 @@ func startValidator(
                     EnableUnifiedTables:  cfg.EnableUnifiedTables,
                     FallbackToLegacy:     cfg.FallbackToLegacy,
                     EnableWriteBack:      writebackEnabled,
+                    ProofGenerator:       proofGenAdapter,
                 }
 
                 unifiedOrchestrator, unifiedErr := execution.NewUnifiedOrchestrator(unifiedConfig)
