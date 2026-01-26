@@ -92,9 +92,20 @@ type BatchTransaction struct {
 	IntentType      sql.NullString  `db:"intent_type" json:"intent_type,omitempty"`
 	IntentData      json.RawMessage `db:"intent_data" json:"intent_data,omitempty"`
 	CreatedAt       time.Time       `db:"created_at" json:"created_at"`
+
 	// Intent Tracking (for Firestore linking)
 	UserID   sql.NullString `db:"user_id" json:"user_id,omitempty"`
 	IntentID sql.NullString `db:"intent_id" json:"intent_id,omitempty"`
+
+	// Intent Metadata (for Transaction Center integration)
+	FromChain       sql.NullString `db:"from_chain" json:"from_chain,omitempty"`
+	ToChain         sql.NullString `db:"to_chain" json:"to_chain,omitempty"`
+	FromAddress     sql.NullString `db:"from_address" json:"from_address,omitempty"`
+	ToAddress       sql.NullString `db:"to_address" json:"to_address,omitempty"`
+	Amount          sql.NullString `db:"amount" json:"amount,omitempty"`
+	TokenSymbol     sql.NullString `db:"token_symbol" json:"token_symbol,omitempty"`
+	AdiURL          sql.NullString `db:"adi_url" json:"adi_url,omitempty"`
+	CreatedAtClient sql.NullTime   `db:"created_at_client" json:"created_at_client,omitempty"`
 }
 
 // GetMerklePath deserializes the merkle path from JSON
@@ -318,9 +329,20 @@ type NewBatchTransaction struct {
 	GovLevel     GovernanceLevel // Optional
 	IntentType   string          // Optional
 	IntentData   json.RawMessage // Optional
+
 	// Intent Tracking (for Firestore linking)
 	UserID   *string // Optional - user who submitted the intent
 	IntentID *string // Optional - Firestore intent document ID
+
+	// Intent Metadata (for Transaction Center integration)
+	FromChain       *string    // Source chain (e.g., 'accumulate')
+	ToChain         *string    // Destination chain (e.g., 'ethereum')
+	FromAddress     *string    // Source address
+	ToAddress       *string    // Destination address
+	Amount          *string    // Amount as string (supports uint256)
+	TokenSymbol     *string    // Token symbol (e.g., 'ACME', 'ETH')
+	AdiURL          *string    // ADI URL for the account
+	CreatedAtClient *time.Time // Client-side creation timestamp
 }
 
 // NewAnchorRecord is used to create a new anchor record

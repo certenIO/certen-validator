@@ -313,23 +313,59 @@ func (r *BatchRepository) AddTransaction(ctx context.Context, input *NewBatchTra
 		intentID = sql.NullString{String: *input.IntentID, Valid: true}
 	}
 
+	// Build intent metadata null strings
+	var fromChain, toChain, fromAddress, toAddress, amount, tokenSymbol, adiURL sql.NullString
+	var createdAtClient sql.NullTime
+	if input.FromChain != nil {
+		fromChain = sql.NullString{String: *input.FromChain, Valid: true}
+	}
+	if input.ToChain != nil {
+		toChain = sql.NullString{String: *input.ToChain, Valid: true}
+	}
+	if input.FromAddress != nil {
+		fromAddress = sql.NullString{String: *input.FromAddress, Valid: true}
+	}
+	if input.ToAddress != nil {
+		toAddress = sql.NullString{String: *input.ToAddress, Valid: true}
+	}
+	if input.Amount != nil {
+		amount = sql.NullString{String: *input.Amount, Valid: true}
+	}
+	if input.TokenSymbol != nil {
+		tokenSymbol = sql.NullString{String: *input.TokenSymbol, Valid: true}
+	}
+	if input.AdiURL != nil {
+		adiURL = sql.NullString{String: *input.AdiURL, Valid: true}
+	}
+	if input.CreatedAtClient != nil {
+		createdAtClient = sql.NullTime{Time: *input.CreatedAtClient, Valid: true}
+	}
+
 	tx := &BatchTransaction{
-		BatchID:      input.BatchID,
-		AccumTxHash:  input.AccumTxHash,
-		AccountURL:   input.AccountURL,
-		TreeIndex:    input.TreeIndex,
-		MerklePath:   merklePathJSON,
-		TxHash:       input.TxHash,
-		ChainedProof: input.ChainedProof,
-		ChainedValid: input.ChainedProof != nil,
-		GovProof:     input.GovProof,
-		GovLevel:     sql.NullString{String: string(input.GovLevel), Valid: input.GovLevel != ""},
-		GovValid:     input.GovProof != nil,
-		IntentType:   sql.NullString{String: input.IntentType, Valid: input.IntentType != ""},
-		IntentData:   input.IntentData,
-		CreatedAt:    time.Now(),
-		UserID:       userID,
-		IntentID:     intentID,
+		BatchID:         input.BatchID,
+		AccumTxHash:     input.AccumTxHash,
+		AccountURL:      input.AccountURL,
+		TreeIndex:       input.TreeIndex,
+		MerklePath:      merklePathJSON,
+		TxHash:          input.TxHash,
+		ChainedProof:    input.ChainedProof,
+		ChainedValid:    input.ChainedProof != nil,
+		GovProof:        input.GovProof,
+		GovLevel:        sql.NullString{String: string(input.GovLevel), Valid: input.GovLevel != ""},
+		GovValid:        input.GovProof != nil,
+		IntentType:      sql.NullString{String: input.IntentType, Valid: input.IntentType != ""},
+		IntentData:      input.IntentData,
+		CreatedAt:       time.Now(),
+		UserID:          userID,
+		IntentID:        intentID,
+		FromChain:       fromChain,
+		ToChain:         toChain,
+		FromAddress:     fromAddress,
+		ToAddress:       toAddress,
+		Amount:          amount,
+		TokenSymbol:     tokenSymbol,
+		AdiURL:          adiURL,
+		CreatedAtClient: createdAtClient,
 	}
 
 	query := `
@@ -337,15 +373,19 @@ func (r *BatchRepository) AddTransaction(ctx context.Context, input *NewBatchTra
 			batch_id, accumulate_tx_hash, account_url, tree_index,
 			merkle_path, transaction_hash, chained_proof, chained_proof_valid,
 			governance_proof, governance_level, governance_valid,
-			intent_type, intent_data, user_id, intent_id, created_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+			intent_type, intent_data, user_id, intent_id,
+			from_chain, to_chain, from_address, to_address, amount, token_symbol, adi_url, created_at_client,
+			created_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
 		RETURNING id, created_at`
 
 	err = r.client.QueryRowContext(ctx, query,
 		tx.BatchID, tx.AccumTxHash, tx.AccountURL, tx.TreeIndex,
 		tx.MerklePath, tx.TxHash, tx.ChainedProof, tx.ChainedValid,
 		tx.GovProof, tx.GovLevel, tx.GovValid,
-		tx.IntentType, tx.IntentData, tx.UserID, tx.IntentID, tx.CreatedAt,
+		tx.IntentType, tx.IntentData, tx.UserID, tx.IntentID,
+		tx.FromChain, tx.ToChain, tx.FromAddress, tx.ToAddress, tx.Amount, tx.TokenSymbol, tx.AdiURL, tx.CreatedAtClient,
+		tx.CreatedAt,
 	).Scan(&tx.ID, &tx.CreatedAt)
 
 	if err != nil {

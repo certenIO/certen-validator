@@ -51,6 +51,16 @@ type TransactionData struct {
 	// Multi-Chain Support: Target chain for anchoring
 	// Per Unified Multi-Chain Architecture: Transactions specify their target chain
 	TargetChain string // Target chain ID (e.g., "ethereum", "sepolia", "solana-devnet")
+
+	// Intent Metadata (for Transaction Center integration)
+	FromChain       string     // Source chain (e.g., 'accumulate')
+	ToChain         string     // Destination chain (e.g., 'ethereum')
+	FromAddress     string     // Source address
+	ToAddress       string     // Destination address
+	Amount          string     // Amount as string (supports uint256)
+	TokenSymbol     string     // Token symbol (e.g., 'ACME', 'ETH')
+	AdiURL          string     // ADI URL for the account
+	CreatedAtClient *time.Time // Client-side creation timestamp
 }
 
 // Collector manages transaction batching for anchoring
@@ -251,6 +261,32 @@ func (c *Collector) addToBatch(ctx context.Context, batch *activeBatch, tx *Tran
 	}
 	if tx.IntentID != "" {
 		dbTx.IntentID = &tx.IntentID
+	}
+
+	// Pass intent metadata fields if present (for Transaction Center)
+	if tx.FromChain != "" {
+		dbTx.FromChain = &tx.FromChain
+	}
+	if tx.ToChain != "" {
+		dbTx.ToChain = &tx.ToChain
+	}
+	if tx.FromAddress != "" {
+		dbTx.FromAddress = &tx.FromAddress
+	}
+	if tx.ToAddress != "" {
+		dbTx.ToAddress = &tx.ToAddress
+	}
+	if tx.Amount != "" {
+		dbTx.Amount = &tx.Amount
+	}
+	if tx.TokenSymbol != "" {
+		dbTx.TokenSymbol = &tx.TokenSymbol
+	}
+	if tx.AdiURL != "" {
+		dbTx.AdiURL = &tx.AdiURL
+	}
+	if tx.CreatedAtClient != nil {
+		dbTx.CreatedAtClient = tx.CreatedAtClient
 	}
 
 	storedTx, err := c.repos.Batches.AddTransaction(ctx, dbTx)
