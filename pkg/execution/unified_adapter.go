@@ -167,6 +167,86 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAllTxs(
 	return nil
 }
 
+// StartProofCycleWithAccumulateRef implements the enhanced ProofCycleOrchestratorInterface with Accumulate reference data
+func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
+	ctx context.Context,
+	intentID string,
+	userID string,
+	bundleID [32]byte,
+	txHashes interface{},
+	commitment interface{},
+	accumulateAccountURL string,
+	accumulateTxHash string,
+	bvn string,
+) error {
+	fmt.Printf("[UnifiedAdapter] StartProofCycleWithAccumulateRef: intent=%s, accountURL=%s, txHash=%s, bvn=%s\n",
+		intentID, accumulateAccountURL, accumulateTxHash, bvn)
+
+	if a.useUnified && a.unified != nil {
+		// Extract tx hashes from the interface
+		var txHashStrs []string
+		switch hashes := txHashes.(type) {
+		case []string:
+			txHashStrs = hashes
+		case *AnchorWorkflowTxHashes:
+			txHashStrs = []string{
+				hashes.CreateTxHash.Hex(),
+				hashes.VerifyTxHash.Hex(),
+				hashes.GovernanceTxHash.Hex(),
+			}
+		default:
+			// Handle AnchorWorkflowTxHashes from consensus package (different type due to package boundary)
+			if extracted := extractTxHashesViaReflection(txHashes); extracted != nil {
+				txHashStrs = []string{
+					extracted.CreateTxHash.Hex(),
+					extracted.VerifyTxHash.Hex(),
+					extracted.GovernanceTxHash.Hex(),
+				}
+			} else {
+				txHashStrs = []string{fmt.Sprintf("%v", txHashes)}
+			}
+		}
+
+		// Create unified request with Accumulate reference data
+		var userIDPtr *string
+		if userID != "" {
+			userIDPtr = &userID
+		}
+
+		req := &UnifiedProofCycleRequest{
+			IntentID:             intentID,
+			BundleID:             bundleID,
+			TxHashes:             txHashStrs,
+			ProofClass:           "on_demand",
+			TargetChain:          a.unified.config.DefaultChainID,
+			UserID:               userIDPtr,
+			AccumulateAccountURL: accumulateAccountURL,
+			AccumulateTxHash:     accumulateTxHash,
+			AccumulateBVN:        bvn,
+		}
+
+		fmt.Printf("[UnifiedAdapter] Starting unified proof cycle with Accumulate ref for intent %s\n", intentID)
+
+		// Start cycle asynchronously
+		go func() {
+			result, err := a.unified.StartProofCycle(context.Background(), req)
+			if err != nil {
+				fmt.Printf("[UnifiedAdapter] Unified proof cycle FAILED for %s: %v\n", intentID, err)
+			} else if result != nil {
+				fmt.Printf("[UnifiedAdapter] Unified proof cycle COMPLETED for %s: success=%v\n", intentID, result.Success)
+			}
+		}()
+		return nil
+	}
+
+	// Fall back to legacy method without Accumulate ref
+	if a.legacy != nil {
+		return a.legacy.StartProofCycleWithAllTxs(ctx, intentID, userID, bundleID, txHashes, commitment)
+	}
+
+	return nil
+}
+
 // =============================================================================
 // BATCH PROCESSOR CALLBACK ADAPTER
 // =============================================================================

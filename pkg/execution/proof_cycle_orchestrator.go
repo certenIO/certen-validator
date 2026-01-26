@@ -336,6 +336,26 @@ func (o *ProofCycleOrchestrator) StartProofCycleWithAllTxs(
 	return nil
 }
 
+// StartProofCycleWithAccumulateRef implements the enhanced interface with Accumulate reference data
+// This is a pass-through to StartProofCycleWithAllTxs for the legacy orchestrator
+// (Accumulate reference data is only used by the unified orchestrator for L1/L2/L3 chained proofs)
+func (o *ProofCycleOrchestrator) StartProofCycleWithAccumulateRef(
+	ctx context.Context,
+	intentID string,
+	userID string,
+	bundleID [32]byte,
+	txHashes interface{},
+	commitment interface{},
+	accumulateAccountURL string,
+	accumulateTxHash string,
+	bvn string,
+) error {
+	// Legacy orchestrator doesn't use Accumulate reference data - pass through to regular method
+	o.logger.Printf("ℹ️ [PROOF-CYCLE] StartProofCycleWithAccumulateRef: Accumulate ref data available but legacy orchestrator doesn't use it")
+	o.logger.Printf("   accountURL=%s, txHash=%s, bvn=%s", accumulateAccountURL, accumulateTxHash, bvn)
+	return o.StartProofCycleWithAllTxs(ctx, intentID, userID, bundleID, txHashes, commitment)
+}
+
 // executePhase7Enhanced observes all 3 anchor workflow transactions
 func (o *ProofCycleOrchestrator) executePhase7Enhanced(
 	ctx context.Context,
@@ -1786,6 +1806,22 @@ func (a *ProofCycleOrchestratorAdapter) StartProofCycleWithAllTxs(
 	}
 
 	return a.orchestrator.StartProofCycleWithAllTxs(ctx, intentID, userID, bundleID, localTxHashes, commitment)
+}
+
+// StartProofCycleWithAccumulateRef implements the enhanced interface with Accumulate reference data
+func (a *ProofCycleOrchestratorAdapter) StartProofCycleWithAccumulateRef(
+	ctx context.Context,
+	intentID string,
+	userID string,
+	bundleID [32]byte,
+	txHashes interface{},
+	commitment interface{},
+	accumulateAccountURL string,
+	accumulateTxHash string,
+	bvn string,
+) error {
+	// Pass through to orchestrator's method
+	return a.orchestrator.StartProofCycleWithAccumulateRef(ctx, intentID, userID, bundleID, txHashes, commitment, accumulateAccountURL, accumulateTxHash, bvn)
 }
 
 // extractTxHashesViaReflection uses reflection to extract tx hashes from a struct

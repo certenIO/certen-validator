@@ -185,6 +185,10 @@ type ProofCycleOrchestratorInterface interface {
 	// Enhanced: Tracks createAnchor, executeComprehensiveProof, and executeWithGovernance
 	// The txHashes parameter uses interface{} to avoid circular imports - actual type is *AnchorWorkflowTxHashes
 	StartProofCycleWithAllTxs(ctx context.Context, intentID string, userID string, bundleID [32]byte, txHashes interface{}, commitment interface{}) error
+
+	// StartProofCycleWithAccumulateRef initiates Phase 7-9 with Accumulate reference data for L1/L2/L3 proofs
+	// Enhanced: Includes Accumulate account URL and tx hash for chained proof generation
+	StartProofCycleWithAccumulateRef(ctx context.Context, intentID string, userID string, bundleID [32]byte, txHashes interface{}, commitment interface{}, accumulateAccountURL string, accumulateTxHash string, bvn string) error
 }
 
 // BFTValidatorInfo represents information about a BFT validator
@@ -1040,13 +1044,25 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 
 				bv.logger.Printf("🔄 [PROOF-CYCLE] Triggering Phase 7-9 for intent: %s", certenIntent.IntentID)
 				bv.logger.Printf("   Tracking all 3 anchor workflow transactions")
+				bv.logger.Printf("   Accumulate ref: accountURL=%s, txHash=%s", certenIntent.AccountURL, certenIntent.TransactionHash)
 
 				// Use fresh context for proof cycle - the parent ctx may already be near expiration
 				// The proof cycle has its own ObservationTimeout (10 minutes) for waiting on confirmations
 				proofCycleCtx := context.Background()
 
-				// Try enhanced method first, fall back to legacy if not implemented
-				if err := bv.proofCycleOrchestrator.StartProofCycleWithAllTxs(proofCycleCtx, certenIntent.IntentID, certenIntent.UserID, bundleID, txHashes, commitment); err != nil {
+				// Try enhanced method with Accumulate reference data for L1/L2/L3 chained proofs
+				// This passes the Accumulate account URL and transaction hash needed for proof generation
+				if err := bv.proofCycleOrchestrator.StartProofCycleWithAccumulateRef(
+					proofCycleCtx,
+					certenIntent.IntentID,
+					certenIntent.UserID,
+					bundleID,
+					txHashes,
+					commitment,
+					certenIntent.AccountURL,    // Accumulate account URL (e.g., "acc://certen-kermit-12.acme/data")
+					certenIntent.TransactionHash, // Accumulate transaction hash
+					"",                          // BVN - will be auto-determined
+				); err != nil {
 					bv.logger.Printf("⚠️ [PROOF-CYCLE] Failed to start proof cycle: %v", err)
 					// Non-fatal - proof cycle failure doesn't invalidate execution
 				}
