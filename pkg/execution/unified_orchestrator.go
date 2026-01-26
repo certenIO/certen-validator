@@ -920,6 +920,8 @@ func (o *UnifiedOrchestrator) buildAttestationBundleFromCycle(cycle *activeCycle
 			AggregateSignature: result.AggregatedAttestation.AggregatedSignature,
 			ValidatorCount:     result.AggregatedAttestation.ParticipantCount,
 			ThresholdMet:       result.AggregatedAttestation.ThresholdMet,
+			Finalized:          result.AggregatedAttestation.ThresholdMet && result.AggregatedAttestation.Verified,
+			FinalizedAt:        time.Now().UTC(),
 		}
 	}
 
