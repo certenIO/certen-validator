@@ -444,11 +444,23 @@ func (o *UnifiedOrchestrator) persistChainExecution(ctx context.Context, cycle *
 	// 3. PlatformData - default to empty object
 	var platformDataJSON json.RawMessage = []byte("{}")
 
+	// 4. Derive network name from chain ID
+	networkName := getNetworkName(cycle.Result.ChainID)
+
+	// 5. Set anchor_id from request BundleID
+	var anchorID []byte
+	if cycle.Request != nil {
+		anchorID = cycle.Request.BundleID[:]
+	}
+
+	// 6. Set submitted_at to cycle start time
+	submittedAt := cycle.StartedAt
+
 	input := &database.NewChainExecutionResult{
 		CycleID:               cycle.CycleID,
 		ChainPlatform:         database.ChainPlatform(cycle.Result.ChainPlatform),
 		ChainID:               cycle.Result.ChainID,
-		NetworkName:           "", // Would come from chain strategy
+		NetworkName:           networkName,
 		TxHash:                obs.TxHash,
 		BlockNumber:           ptrInt64(int64(obs.BlockNumber)),
 		BlockHash:             obs.BlockHash,
@@ -469,9 +481,35 @@ func (o *UnifiedOrchestrator) persistChainExecution(ctx context.Context, cycle *
 		PlatformData:          platformDataJSON,
 		ObserverValidatorID:   o.config.ValidatorID,
 		WorkflowStep:          &workflowStep,
+		AnchorID:              anchorID,
+		SubmittedAt:           &submittedAt,
 	}
 
 	return o.config.UnifiedRepo.CreateChainExecutionResult(ctx, input)
+}
+
+// getNetworkName returns human-readable network name from chain ID
+func getNetworkName(chainID string) string {
+	networkNames := map[string]string{
+		"1":        "ethereum-mainnet",
+		"11155111": "sepolia",
+		"137":      "polygon-mainnet",
+		"80001":    "polygon-mumbai",
+		"42161":    "arbitrum-one",
+		"421614":   "arbitrum-sepolia",
+		"10":       "optimism-mainnet",
+		"11155420": "optimism-sepolia",
+		"8453":     "base-mainnet",
+		"84532":    "base-sepolia",
+		"43114":    "avalanche-mainnet",
+		"43113":    "avalanche-fuji",
+		"56":       "bsc-mainnet",
+		"97":       "bsc-testnet",
+	}
+	if name, ok := networkNames[chainID]; ok {
+		return name
+	}
+	return "unknown-" + chainID
 }
 
 // =============================================================================
@@ -598,6 +636,13 @@ func (o *UnifiedOrchestrator) persistUnifiedAttestation(ctx context.Context, cyc
 	validatorIndex := int32(att.ValidatorIndex)
 	blockNumber := int64(att.AttestedBlockNumber)
 
+	// Extract block hash from observation results if available
+	var attestedBlockHash []byte
+	if len(cycle.Result.ObservationResults) > 0 {
+		obs := cycle.Result.ObservationResults[0]
+		attestedBlockHash = []byte(obs.BlockHash)
+	}
+
 	input := &database.NewUnifiedAttestation{
 		CycleID:             cycle.CycleID,
 		Scheme:              database.AttestationScheme(att.Scheme),
@@ -608,10 +653,22 @@ func (o *UnifiedOrchestrator) persistUnifiedAttestation(ctx context.Context, cyc
 		MessageHash:         att.MessageHash[:],
 		Weight:              att.Weight,
 		AttestedBlockNumber: &blockNumber,
+		AttestedBlockHash:   attestedBlockHash,
 		AttestedAt:          att.Timestamp,
 	}
 
-	return o.config.UnifiedRepo.CreateUnifiedAttestation(ctx, input)
+	// Create attestation and get ID
+	attID, err := o.config.UnifiedRepo.CreateUnifiedAttestation(ctx, input)
+	if err != nil {
+		return uuid.Nil, err
+	}
+
+	// Mark as verified (attestations are verified before persisting)
+	if err := o.config.UnifiedRepo.MarkUnifiedAttestationVerified(ctx, attID, true, "signature verified during collection"); err != nil {
+		fmt.Printf("Warning: failed to mark attestation verified: %v\n", err)
+	}
+
+	return attID, nil
 }
 
 // persistAggregatedAttestation persists an aggregated attestation
@@ -652,7 +709,20 @@ func (o *UnifiedOrchestrator) persistAggregatedAttestation(ctx context.Context, 
 		AggregatedAt:         agg.AggregatedAt,
 	}
 
-	return o.config.UnifiedRepo.CreateAggregatedAttestation(ctx, input)
+	// Create aggregated attestation and get ID
+	aggID, err := o.config.UnifiedRepo.CreateAggregatedAttestation(ctx, input)
+	if err != nil {
+		return uuid.Nil, err
+	}
+
+	// Mark as verified if threshold was met and aggregation succeeded
+	if agg.ThresholdMet && agg.Verified {
+		if err := o.config.UnifiedRepo.MarkAggregatedAttestationVerified(ctx, aggID, true, "threshold met, aggregation verified"); err != nil {
+			fmt.Printf("Warning: failed to mark aggregation verified: %v\n", err)
+		}
+	}
+
+	return aggID, nil
 }
 
 // =============================================================================
