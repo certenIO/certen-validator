@@ -22,6 +22,7 @@ import (
 	"io"
 	"math/big"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -1265,10 +1266,16 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 	if isAnchored {
 		var blockHeight *int64
 		var anchorHeight *int64
+		var finalityTimestamp *time.Time
 		if len(result.ObservationResults) > 0 {
-			bh := int64(result.ObservationResults[0].BlockNumber)
+			obs := result.ObservationResults[0]
+			bh := int64(obs.BlockNumber)
 			blockHeight = &bh
 			anchorHeight = &bh
+			// Set finality timestamp from block timestamp
+			if !obs.BlockTimestamp.IsZero() {
+				finalityTimestamp = &obs.BlockTimestamp
+			}
 		}
 
 		g0JSON, _ := json.Marshal(map[string]interface{}{
@@ -1281,14 +1288,15 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 		g0Verified := true
 
 		g0Level := &database.NewGovernanceProofLevel{
-			ProofID:      proofArtifact.ProofID,
-			GovLevel:     database.GovLevelG0,
-			LevelName:    "G0 - Inclusion and Finality",
-			BlockHeight:  blockHeight,
-			AnchorHeight: anchorHeight,
-			IsAnchored:   &isAnchored,
-			LevelJSON:    g0JSON,
-			Verified:     &g0Verified,
+			ProofID:           proofArtifact.ProofID,
+			GovLevel:          database.GovLevelG0,
+			LevelName:         "G0 - Inclusion and Finality",
+			BlockHeight:       blockHeight,
+			FinalityTimestamp: finalityTimestamp,
+			AnchorHeight:      anchorHeight,
+			IsAnchored:        &isAnchored,
+			LevelJSON:         g0JSON,
+			Verified:          &g0Verified,
 		}
 
 		if _, err := o.config.Repos.ProofArtifacts.CreateGovernanceProofLevel(ctx, g0Level); err != nil {
@@ -1300,10 +1308,28 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 
 	// G1 - Governance Correctness (created if we have governance root and attestations)
 	if req.GovernanceRoot != [32]byte{} {
+		// Derive authority URL from Accumulate account URL (e.g., "acc://certen-kermit-12.acme/data" -> "acc://certen-kermit-12.acme")
+		authorityURL := req.AccumulateAccountURL
+		if idx := strings.LastIndex(authorityURL, "/"); idx > 0 {
+			authorityURL = authorityURL[:idx]
+		}
+
+		// Threshold values: M of N (e.g., 5 of 7 validators)
+		// ThresholdM = minimum signatures required (2/3 + 1 of total)
+		// ThresholdN = total validators in set
+		thresholdN := 7 // Default validator count
+		if result.AggregatedAttestation != nil && result.AggregatedAttestation.ParticipantCount > 0 {
+			thresholdN = result.AggregatedAttestation.ParticipantCount
+		}
+		thresholdM := (thresholdN * 2 / 3) + 1 // BFT threshold
+
 		g1JSON, _ := json.Marshal(map[string]interface{}{
 			"governance_root":   hex.EncodeToString(req.GovernanceRoot[:]),
 			"threshold_met":     result.ThresholdMet,
 			"attestation_count": len(result.Attestations),
+			"authority_url":     authorityURL,
+			"threshold_m":       thresholdM,
+			"threshold_n":       thresholdN,
 		})
 
 		// G1 is verified if threshold is met
@@ -1313,6 +1339,9 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 			ProofID:        proofArtifact.ProofID,
 			GovLevel:       database.GovLevelG1,
 			LevelName:      "G1 - Governance Correctness",
+			AuthorityURL:   &authorityURL,
+			ThresholdM:     &thresholdM,
+			ThresholdN:     &thresholdN,
 			IsAnchored:     &isAnchored,
 			SignatureCount: &sigCount,
 			LevelJSON:      g1JSON,
