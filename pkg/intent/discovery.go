@@ -713,6 +713,55 @@ func (id *IntentDiscovery) convertIntentToTransactionData(intent *CertenIntent, 
 		TargetChain:  targetChain,
 	}
 
+	// Extract Transaction Center metadata from CrossChainData
+	// This populates from_chain, to_chain, from_address, to_address, amount, token_symbol
+	if len(intent.CrossChainData) > 0 {
+		var ccEnvelope consensus.CrossChainEnvelope
+		if err := json.Unmarshal(intent.CrossChainData, &ccEnvelope); err == nil && len(ccEnvelope.Legs) > 0 {
+			// Use first leg for primary transaction metadata
+			leg := ccEnvelope.Legs[0]
+			txData.FromChain = "accumulate" // Source is always Accumulate
+			txData.ToChain = leg.Chain      // Target chain from leg
+			txData.FromAddress = leg.From
+			txData.ToAddress = leg.To
+			// Prefer AmountWei, fall back to AmountEth
+			if leg.AmountWei != "" {
+				txData.Amount = leg.AmountWei
+			} else if leg.AmountEth != "" {
+				txData.Amount = leg.AmountEth
+			}
+			txData.TokenSymbol = leg.Asset.Symbol
+			id.logger.Printf("✅ [TX-METADATA] Extracted: %s → %s, %s %s to %s",
+				txData.FromChain, txData.ToChain, txData.Amount, txData.TokenSymbol, txData.ToAddress)
+		}
+	}
+
+	// Extract ADI URL from GovernanceData
+	if len(intent.GovernanceData) > 0 {
+		var govData struct {
+			OrganizationADI string `json:"organizationAdi"`
+		}
+		if err := json.Unmarshal(intent.GovernanceData, &govData); err == nil && govData.OrganizationADI != "" {
+			txData.AdiUrl = govData.OrganizationADI
+		}
+	}
+	// Fallback to intent's OrganizationADI
+	if txData.AdiUrl == "" && intent.OrganizationADI != "" {
+		txData.AdiUrl = intent.OrganizationADI
+	}
+
+	// Extract created_at from IntentData for client timestamp
+	if len(intent.IntentData) > 0 {
+		var intentMeta struct {
+			CreatedAt string `json:"created_at"`
+		}
+		if err := json.Unmarshal(intent.IntentData, &intentMeta); err == nil && intentMeta.CreatedAt != "" {
+			if t, err := time.Parse(time.RFC3339, intentMeta.CreatedAt); err == nil {
+				txData.CreatedAtClient = &t
+			}
+		}
+	}
+
 	// Log chain ID for debugging (not stored in TransactionData directly)
 	_ = chainID // Suppress unused warning
 
