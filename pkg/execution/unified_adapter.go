@@ -112,7 +112,17 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAllTxs(
 				hashes.GovernanceTxHash.Hex(),
 			}
 		default:
-			txHashStrs = []string{fmt.Sprintf("%v", txHashes)}
+			// Handle AnchorWorkflowTxHashes from consensus package (different type due to package boundary)
+			// Use reflection to extract the hash fields
+			if extracted := extractTxHashesViaReflection(txHashes); extracted != nil {
+				txHashStrs = []string{
+					extracted.CreateTxHash.Hex(),
+					extracted.VerifyTxHash.Hex(),
+					extracted.GovernanceTxHash.Hex(),
+				}
+			} else {
+				txHashStrs = []string{fmt.Sprintf("%v", txHashes)}
+			}
 		}
 
 		fmt.Printf("[UnifiedAdapter] Extracted %d tx hashes for intent %s: %v\n", len(txHashStrs), intentID, txHashStrs)
