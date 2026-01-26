@@ -201,6 +201,27 @@ func initializeChainStrategies(registry *Registry, cfg *RegistryConfig) error {
 		}
 	}
 
+	// Register well-known network name aliases for common chains
+	knownAliases := map[int64][]string{
+		1:        {"ethereum", "mainnet", "eth-mainnet"},
+		11155111: {"sepolia", "eth-sepolia", "ethereum-sepolia"},
+		137:      {"polygon", "matic"},
+		42161:    {"arbitrum", "arbitrum-one"},
+		10:       {"optimism", "op-mainnet"},
+		8453:     {"base", "base-mainnet"},
+	}
+	if aliases, ok := knownAliases[int64(cfg.EthChainID)]; ok {
+		for _, alias := range aliases {
+			if alias != chainID && alias != cfg.NetworkName {
+				if err := registry.RegisterChainStrategy(alias, evmStrategy.Config(), evmStrategy); err == nil {
+					if cfg.Logger != nil {
+						cfg.Logger.Printf("   ✅ Registered alias: %s -> %s", alias, chainID)
+					}
+				}
+			}
+		}
+	}
+
 	// Register stub strategies for other chains (future implementation)
 	if err := registerStubChainStrategies(registry, cfg); err != nil {
 		if cfg.Logger != nil {
