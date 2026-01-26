@@ -3,6 +3,9 @@
 -- Migration 003: Unified Multi-Chain Architecture
 -- Adds support for multiple attestation schemes and chain platforms
 --
+-- This migration is IDEMPOTENT - safe to run multiple times
+-- Handles both fresh installs and partial previous runs
+--
 -- Per Unified Multi-Chain Architecture:
 -- - Unified attestations table (scheme-agnostic)
 -- - Aggregated attestations table
@@ -31,164 +34,269 @@ ALTER TABLE proof_artifacts
 -- UNIFIED ATTESTATIONS TABLE
 -- =============================================================================
 
--- Unified attestations table (scheme-agnostic)
--- Stores individual validator attestations regardless of cryptographic scheme
+-- Create unified_attestations if not exists
 CREATE TABLE IF NOT EXISTS unified_attestations (
     attestation_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    proof_id UUID REFERENCES proof_artifacts(proof_id),
+    proof_id UUID,
     cycle_id VARCHAR(255) NOT NULL,
-
-    -- Attestation scheme (bls12-381, ed25519, schnorr, threshold)
     scheme VARCHAR(32) NOT NULL,
-
-    -- Validator identity
     validator_id VARCHAR(255) NOT NULL,
     validator_index INT,
     public_key BYTEA NOT NULL,
-
-    -- Signature data
     signature BYTEA NOT NULL,
     message_hash BYTEA NOT NULL,
-
-    -- Weight for quorum calculation
     weight BIGINT DEFAULT 1,
-
-    -- Verification status
     signature_valid BOOLEAN,
     verified_at TIMESTAMPTZ,
     verification_notes TEXT,
-
-    -- Block information at time of attestation
     attested_block_number BIGINT,
     attested_block_hash BYTEA,
-
-    -- Timestamps
     attested_at TIMESTAMPTZ NOT NULL,
     created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW(),
-
-    -- Ensure unique attestation per validator per proof per scheme
-    UNIQUE(proof_id, validator_id, scheme)
+    updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Ensure all columns exist (for upgrades from older versions)
+ALTER TABLE unified_attestations ADD COLUMN IF NOT EXISTS proof_id UUID;
+ALTER TABLE unified_attestations ADD COLUMN IF NOT EXISTS cycle_id VARCHAR(255);
+ALTER TABLE unified_attestations ADD COLUMN IF NOT EXISTS scheme VARCHAR(32);
+ALTER TABLE unified_attestations ADD COLUMN IF NOT EXISTS validator_id VARCHAR(255);
+ALTER TABLE unified_attestations ADD COLUMN IF NOT EXISTS validator_index INT;
+ALTER TABLE unified_attestations ADD COLUMN IF NOT EXISTS public_key BYTEA;
+ALTER TABLE unified_attestations ADD COLUMN IF NOT EXISTS signature BYTEA;
+ALTER TABLE unified_attestations ADD COLUMN IF NOT EXISTS message_hash BYTEA;
+ALTER TABLE unified_attestations ADD COLUMN IF NOT EXISTS weight BIGINT DEFAULT 1;
+ALTER TABLE unified_attestations ADD COLUMN IF NOT EXISTS signature_valid BOOLEAN;
+ALTER TABLE unified_attestations ADD COLUMN IF NOT EXISTS verified_at TIMESTAMPTZ;
+ALTER TABLE unified_attestations ADD COLUMN IF NOT EXISTS verification_notes TEXT;
+ALTER TABLE unified_attestations ADD COLUMN IF NOT EXISTS attested_block_number BIGINT;
+ALTER TABLE unified_attestations ADD COLUMN IF NOT EXISTS attested_block_hash BYTEA;
+ALTER TABLE unified_attestations ADD COLUMN IF NOT EXISTS attested_at TIMESTAMPTZ;
+ALTER TABLE unified_attestations ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE unified_attestations ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
+-- Add foreign key if not exists (safe: referencing existing proof_artifacts)
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.table_constraints
+        WHERE constraint_name = 'unified_attestations_proof_id_fkey'
+    ) THEN
+        ALTER TABLE unified_attestations
+            ADD CONSTRAINT unified_attestations_proof_id_fkey
+            FOREIGN KEY (proof_id) REFERENCES proof_artifacts(proof_id);
+    END IF;
+END $$;
+
+-- Add unique constraint if not exists
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.table_constraints
+        WHERE constraint_name = 'unified_attestations_proof_id_validator_id_scheme_key'
+    ) THEN
+        ALTER TABLE unified_attestations
+            ADD CONSTRAINT unified_attestations_proof_id_validator_id_scheme_key
+            UNIQUE (proof_id, validator_id, scheme);
+    END IF;
+EXCEPTION
+    WHEN duplicate_table THEN NULL;
+END $$;
 
 -- =============================================================================
 -- AGGREGATED ATTESTATIONS TABLE
 -- =============================================================================
 
--- Aggregated attestations table (scheme-agnostic)
--- Stores aggregated/collected attestations after threshold is met
+-- Create aggregated_attestations if not exists
 CREATE TABLE IF NOT EXISTS aggregated_attestations (
     aggregation_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    proof_id UUID REFERENCES proof_artifacts(proof_id),
+    proof_id UUID,
     cycle_id VARCHAR(255) NOT NULL,
-
-    -- Scheme
     scheme VARCHAR(32) NOT NULL,
     message_hash BYTEA NOT NULL,
-
-    -- Aggregated signature (BLS only, NULL for Ed25519)
     aggregated_signature BYTEA,
     aggregated_public_key BYTEA,
-
-    -- Participants
-    participant_ids JSONB NOT NULL, -- Array of validator IDs
+    participant_ids JSONB NOT NULL,
     participant_count INT NOT NULL,
-    validator_bitfield BYTEA, -- Compact bitfield of participating validators
-
-    -- Threshold tracking
+    validator_bitfield BYTEA,
     total_weight BIGINT NOT NULL,
     achieved_weight BIGINT NOT NULL,
     threshold_weight BIGINT NOT NULL,
     threshold_met BOOLEAN NOT NULL,
-
-    -- Threshold configuration
     threshold_numerator INT DEFAULT 2,
     threshold_denominator INT DEFAULT 3,
-
-    -- Verification
     aggregation_valid BOOLEAN,
     verified_at TIMESTAMPTZ,
     verification_notes TEXT,
-
-    -- Individual attestation references
-    attestation_ids JSONB, -- Array of attestation_id UUIDs
-
-    -- Timestamps
+    attestation_ids JSONB,
     first_attestation_at TIMESTAMPTZ,
     last_attestation_at TIMESTAMPTZ,
     aggregated_at TIMESTAMPTZ NOT NULL,
     created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW(),
-
-    -- Ensure unique aggregation per proof per scheme
-    UNIQUE(proof_id, scheme)
+    updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Ensure all columns exist (for upgrades from older versions)
+ALTER TABLE aggregated_attestations ADD COLUMN IF NOT EXISTS proof_id UUID;
+ALTER TABLE aggregated_attestations ADD COLUMN IF NOT EXISTS cycle_id VARCHAR(255);
+ALTER TABLE aggregated_attestations ADD COLUMN IF NOT EXISTS scheme VARCHAR(32);
+ALTER TABLE aggregated_attestations ADD COLUMN IF NOT EXISTS message_hash BYTEA;
+ALTER TABLE aggregated_attestations ADD COLUMN IF NOT EXISTS aggregated_signature BYTEA;
+ALTER TABLE aggregated_attestations ADD COLUMN IF NOT EXISTS aggregated_public_key BYTEA;
+ALTER TABLE aggregated_attestations ADD COLUMN IF NOT EXISTS participant_ids JSONB;
+ALTER TABLE aggregated_attestations ADD COLUMN IF NOT EXISTS participant_count INT;
+ALTER TABLE aggregated_attestations ADD COLUMN IF NOT EXISTS validator_bitfield BYTEA;
+ALTER TABLE aggregated_attestations ADD COLUMN IF NOT EXISTS total_weight BIGINT;
+ALTER TABLE aggregated_attestations ADD COLUMN IF NOT EXISTS achieved_weight BIGINT;
+ALTER TABLE aggregated_attestations ADD COLUMN IF NOT EXISTS threshold_weight BIGINT;
+ALTER TABLE aggregated_attestations ADD COLUMN IF NOT EXISTS threshold_met BOOLEAN;
+ALTER TABLE aggregated_attestations ADD COLUMN IF NOT EXISTS threshold_numerator INT DEFAULT 2;
+ALTER TABLE aggregated_attestations ADD COLUMN IF NOT EXISTS threshold_denominator INT DEFAULT 3;
+ALTER TABLE aggregated_attestations ADD COLUMN IF NOT EXISTS aggregation_valid BOOLEAN;
+ALTER TABLE aggregated_attestations ADD COLUMN IF NOT EXISTS verified_at TIMESTAMPTZ;
+ALTER TABLE aggregated_attestations ADD COLUMN IF NOT EXISTS verification_notes TEXT;
+ALTER TABLE aggregated_attestations ADD COLUMN IF NOT EXISTS attestation_ids JSONB;
+ALTER TABLE aggregated_attestations ADD COLUMN IF NOT EXISTS first_attestation_at TIMESTAMPTZ;
+ALTER TABLE aggregated_attestations ADD COLUMN IF NOT EXISTS last_attestation_at TIMESTAMPTZ;
+ALTER TABLE aggregated_attestations ADD COLUMN IF NOT EXISTS aggregated_at TIMESTAMPTZ;
+ALTER TABLE aggregated_attestations ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE aggregated_attestations ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
+-- Add foreign key if not exists
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.table_constraints
+        WHERE constraint_name = 'aggregated_attestations_proof_id_fkey'
+    ) THEN
+        ALTER TABLE aggregated_attestations
+            ADD CONSTRAINT aggregated_attestations_proof_id_fkey
+            FOREIGN KEY (proof_id) REFERENCES proof_artifacts(proof_id);
+    END IF;
+END $$;
+
+-- Add unique constraint if not exists
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.table_constraints
+        WHERE constraint_name = 'aggregated_attestations_proof_id_scheme_key'
+    ) THEN
+        ALTER TABLE aggregated_attestations
+            ADD CONSTRAINT aggregated_attestations_proof_id_scheme_key
+            UNIQUE (proof_id, scheme);
+    END IF;
+EXCEPTION
+    WHEN duplicate_table THEN NULL;
+END $$;
 
 -- =============================================================================
 -- CHAIN EXECUTION RESULTS TABLE
 -- =============================================================================
 
--- Chain execution results (platform-agnostic)
--- Stores results of anchor operations across all supported chains
+-- Create chain_execution_results if not exists
 CREATE TABLE IF NOT EXISTS chain_execution_results (
     result_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    proof_id UUID REFERENCES proof_artifacts(proof_id),
+    proof_id UUID,
     cycle_id VARCHAR(255) NOT NULL,
-
-    -- Chain identification
-    chain_platform VARCHAR(32) NOT NULL, -- evm, cosmwasm, solana, move, ton, near
+    chain_platform VARCHAR(32) NOT NULL,
     chain_id VARCHAR(64) NOT NULL,
     network_name VARCHAR(64),
-
-    -- Transaction details
     tx_hash VARCHAR(128) NOT NULL,
     block_number BIGINT,
     block_hash VARCHAR(128),
     block_timestamp TIMESTAMPTZ,
-
-    -- Execution status (0=pending, 1=success, 2=failed)
     status SMALLINT NOT NULL DEFAULT 0,
     gas_used BIGINT,
-    gas_cost VARCHAR(78), -- For large numbers (wei, lamports, etc.)
-
-    -- Confirmations
+    gas_cost VARCHAR(78),
     confirmations INT DEFAULT 0,
     required_confirmations INT,
     is_finalized BOOLEAN DEFAULT FALSE,
-
-    -- Cryptographic data
     result_hash BYTEA,
     merkle_proof BYTEA,
     receipt_proof BYTEA,
     state_root BYTEA,
     transactions_root BYTEA,
     receipts_root BYTEA,
-
-    -- Platform-specific data (JSON for flexibility)
     raw_receipt JSONB,
-    logs JSONB, -- Event logs
-    platform_data JSONB, -- Any platform-specific fields
-
-    -- Observer information
+    logs JSONB,
+    platform_data JSONB,
     observer_validator_id VARCHAR(255),
-
-    -- Anchor workflow step (1=create, 2=verify, 3=governance)
     workflow_step SMALLINT,
     anchor_id BYTEA,
-
-    -- Timestamps
     submitted_at TIMESTAMPTZ,
     confirmed_at TIMESTAMPTZ,
     finalized_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW(),
-
-    -- Ensure unique tx per chain
-    UNIQUE(chain_id, tx_hash)
+    updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Ensure all columns exist (for upgrades from older versions)
+-- This is the CRITICAL section - ensures anchor_id exists before index creation
+ALTER TABLE chain_execution_results ADD COLUMN IF NOT EXISTS proof_id UUID;
+ALTER TABLE chain_execution_results ADD COLUMN IF NOT EXISTS cycle_id VARCHAR(255);
+ALTER TABLE chain_execution_results ADD COLUMN IF NOT EXISTS chain_platform VARCHAR(32);
+ALTER TABLE chain_execution_results ADD COLUMN IF NOT EXISTS chain_id VARCHAR(64);
+ALTER TABLE chain_execution_results ADD COLUMN IF NOT EXISTS network_name VARCHAR(64);
+ALTER TABLE chain_execution_results ADD COLUMN IF NOT EXISTS tx_hash VARCHAR(128);
+ALTER TABLE chain_execution_results ADD COLUMN IF NOT EXISTS block_number BIGINT;
+ALTER TABLE chain_execution_results ADD COLUMN IF NOT EXISTS block_hash VARCHAR(128);
+ALTER TABLE chain_execution_results ADD COLUMN IF NOT EXISTS block_timestamp TIMESTAMPTZ;
+ALTER TABLE chain_execution_results ADD COLUMN IF NOT EXISTS status SMALLINT DEFAULT 0;
+ALTER TABLE chain_execution_results ADD COLUMN IF NOT EXISTS gas_used BIGINT;
+ALTER TABLE chain_execution_results ADD COLUMN IF NOT EXISTS gas_cost VARCHAR(78);
+ALTER TABLE chain_execution_results ADD COLUMN IF NOT EXISTS confirmations INT DEFAULT 0;
+ALTER TABLE chain_execution_results ADD COLUMN IF NOT EXISTS required_confirmations INT;
+ALTER TABLE chain_execution_results ADD COLUMN IF NOT EXISTS is_finalized BOOLEAN DEFAULT FALSE;
+ALTER TABLE chain_execution_results ADD COLUMN IF NOT EXISTS result_hash BYTEA;
+ALTER TABLE chain_execution_results ADD COLUMN IF NOT EXISTS merkle_proof BYTEA;
+ALTER TABLE chain_execution_results ADD COLUMN IF NOT EXISTS receipt_proof BYTEA;
+ALTER TABLE chain_execution_results ADD COLUMN IF NOT EXISTS state_root BYTEA;
+ALTER TABLE chain_execution_results ADD COLUMN IF NOT EXISTS transactions_root BYTEA;
+ALTER TABLE chain_execution_results ADD COLUMN IF NOT EXISTS receipts_root BYTEA;
+ALTER TABLE chain_execution_results ADD COLUMN IF NOT EXISTS raw_receipt JSONB;
+ALTER TABLE chain_execution_results ADD COLUMN IF NOT EXISTS logs JSONB;
+ALTER TABLE chain_execution_results ADD COLUMN IF NOT EXISTS platform_data JSONB;
+ALTER TABLE chain_execution_results ADD COLUMN IF NOT EXISTS observer_validator_id VARCHAR(255);
+ALTER TABLE chain_execution_results ADD COLUMN IF NOT EXISTS workflow_step SMALLINT;
+ALTER TABLE chain_execution_results ADD COLUMN IF NOT EXISTS anchor_id BYTEA;
+ALTER TABLE chain_execution_results ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMPTZ;
+ALTER TABLE chain_execution_results ADD COLUMN IF NOT EXISTS confirmed_at TIMESTAMPTZ;
+ALTER TABLE chain_execution_results ADD COLUMN IF NOT EXISTS finalized_at TIMESTAMPTZ;
+ALTER TABLE chain_execution_results ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE chain_execution_results ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
+-- Add foreign key if not exists
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.table_constraints
+        WHERE constraint_name = 'chain_execution_results_proof_id_fkey'
+    ) THEN
+        ALTER TABLE chain_execution_results
+            ADD CONSTRAINT chain_execution_results_proof_id_fkey
+            FOREIGN KEY (proof_id) REFERENCES proof_artifacts(proof_id);
+    END IF;
+END $$;
+
+-- Add unique constraint if not exists
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.table_constraints
+        WHERE constraint_name = 'chain_execution_results_chain_id_tx_hash_key'
+    ) THEN
+        ALTER TABLE chain_execution_results
+            ADD CONSTRAINT chain_execution_results_chain_id_tx_hash_key
+            UNIQUE (chain_id, tx_hash);
+    END IF;
+EXCEPTION
+    WHEN duplicate_table THEN NULL;
+END $$;
 
 -- =============================================================================
 -- INDEXES FOR PERFORMANCE
+-- Note: All columns MUST exist before creating indexes
 -- =============================================================================
 
 -- Unified attestations indexes
@@ -274,7 +382,7 @@ CREATE TRIGGER update_chain_execution_results_updated_at
 CREATE OR REPLACE VIEW v_proof_with_attestations AS
 SELECT
     pa.proof_id,
-    pa.cycle_id,
+    pa.intent_id,
     pa.proof_type,
     pa.proof_class,
     pa.attestation_scheme,
