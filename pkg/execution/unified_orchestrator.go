@@ -1363,7 +1363,29 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 			chainedProof, err := o.config.ProofGenerator.GenerateChainedProofForTx(ctx, accountURL, txHash, bvn)
 			if err != nil {
 				fmt.Printf("Warning: failed to generate chained proof (account=%s, tx=%s, bvn=%s): %v\n", accountURL, txHash, bvn, err)
-		} else if chainedProof != nil {
+
+				// Record the failure in chained_proof_layers so we have a record of the attempt
+				failJSON, _ := json.Marshal(map[string]interface{}{
+					"status":      "failed",
+					"error":       err.Error(),
+					"account_url": accountURL,
+					"tx_hash":     txHash,
+					"bvn":         bvn,
+					"attempted_at": time.Now().UTC(),
+				})
+				failLayer := &database.NewChainedProofLayer{
+					ProofID:      proofArtifact.ProofID,
+					LayerNumber:  0, // 0 indicates failed attempt
+					LayerName:    "L1-L3 Generation Failed",
+					BVNPartition: &bvn,
+					LayerJSON:    failJSON,
+				}
+				if _, createErr := o.config.Repos.ProofArtifacts.CreateChainedProofLayer(ctx, failLayer); createErr != nil {
+					fmt.Printf("Warning: failed to record chained proof failure: %v\n", createErr)
+				} else {
+					fmt.Printf("Recorded chained proof generation failure for proof_id=%s\n", proofArtifact.ProofID)
+				}
+			} else if chainedProof != nil {
 			// L1: Transaction → BVN
 			l1JSON, _ := json.Marshal(map[string]interface{}{
 				"layer":          "L1",
