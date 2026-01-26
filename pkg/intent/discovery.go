@@ -742,12 +742,12 @@ func (id *IntentDiscovery) convertIntentToTransactionData(intent *CertenIntent, 
 			OrganizationADI string `json:"organizationAdi"`
 		}
 		if err := json.Unmarshal(intent.GovernanceData, &govData); err == nil && govData.OrganizationADI != "" {
-			txData.AdiUrl = govData.OrganizationADI
+			txData.AdiURL = govData.OrganizationADI
 		}
 	}
 	// Fallback to intent's OrganizationADI
-	if txData.AdiUrl == "" && intent.OrganizationADI != "" {
-		txData.AdiUrl = intent.OrganizationADI
+	if txData.AdiURL == "" && intent.OrganizationADI != "" {
+		txData.AdiURL = intent.OrganizationADI
 	}
 
 	// Extract created_at from IntentData for client timestamp
