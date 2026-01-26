@@ -200,8 +200,8 @@ func Load() (*Config, error) {
 
 		// Unified Multi-Chain Feature Flags
 		// Per Unified Multi-Chain Architecture plan
-		UseUnifiedOrchestrator: getEnvBool("FF_UNIFIED_ORCHESTRATOR", false),
-		EnableMultiChain:       getEnvBool("FF_MULTI_CHAIN", false),
+		UseUnifiedOrchestrator: getEnvBool("FF_UNIFIED_ORCHESTRATOR", true),
+		EnableMultiChain:       getEnvBool("FF_MULTI_CHAIN", true),
 		EnableUnifiedTables:    getEnvBool("FF_UNIFIED_TABLES", true),
 		FallbackToLegacy:       getEnvBool("FF_FALLBACK_LEGACY", true),
 		DefaultTargetChain:     getEnv("DEFAULT_TARGET_CHAIN", "sepolia"),
