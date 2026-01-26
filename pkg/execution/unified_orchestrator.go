@@ -424,8 +424,13 @@ func (o *UnifiedOrchestrator) persistChainExecution(ctx context.Context, cycle *
 	// Base64 encode the raw receipt for JSONB storage (binary RLP data contains invalid UTF-8)
 	var rawReceiptJSON json.RawMessage
 	if len(obs.RawReceipt) > 0 {
-		encoded := base64.StdEncoding.EncodeToString(obs.RawReceipt)
-		rawReceiptJSON = json.RawMessage(`{"encoding":"base64","data":"` + encoded + `"}`)
+		receiptWrapper := map[string]string{
+			"encoding": "base64",
+			"data":     base64.StdEncoding.EncodeToString(obs.RawReceipt),
+		}
+		if encoded, err := json.Marshal(receiptWrapper); err == nil {
+			rawReceiptJSON = encoded
+		}
 	}
 
 	input := &database.NewChainExecutionResult{
