@@ -36,11 +36,12 @@ type LiteClientProofGenerator struct {
 	cometBVN0    *comethttp.HTTP // BVN0 CometBFT client
 	cometBVN1    *comethttp.HTTP // BVN1 CometBFT client
 	cometBVN2    *comethttp.HTTP // BVN2 CometBFT client
+	cometBVN3    *comethttp.HTTP // BVN3 CometBFT client (Kermit network)
 	proofBuilder *chained_proof.ProofBuilder
 	endpoint     string
 	dnEndpoint   string
 	bvnEndpoint  string // Legacy single BVN endpoint
-	bvnEndpoints map[string]string // Map of BVN name to endpoint (bvn0, bvn1, bvn2)
+	bvnEndpoints map[string]string // Map of BVN name to endpoint (bvn0, bvn1, bvn2, bvn3)
 	timeout      time.Duration
 }
 
@@ -61,12 +62,17 @@ func NewLiteClientProofGenerator(v3Endpoint string, timeout time.Duration) (*Lit
 // For multi-BVN networks, use NewLiteClientProofGeneratorMultiBVN instead.
 func NewLiteClientProofGeneratorWithComet(v3Endpoint, dnCometEndpoint, bvnCometEndpoint string, timeout time.Duration) (*LiteClientProofGenerator, error) {
 	// Use legacy single BVN as BVN0 for backward compatibility
-	return NewLiteClientProofGeneratorMultiBVN(v3Endpoint, dnCometEndpoint, bvnCometEndpoint, bvnCometEndpoint, bvnCometEndpoint, timeout)
+	return NewLiteClientProofGeneratorMultiBVN(v3Endpoint, dnCometEndpoint, bvnCometEndpoint, bvnCometEndpoint, bvnCometEndpoint, "", timeout)
 }
 
 // NewLiteClientProofGeneratorMultiBVN creates a proof generator with all BVN CometBFT endpoints.
-// This supports Kermit and other multi-BVN networks.
-func NewLiteClientProofGeneratorMultiBVN(v3Endpoint, dnCometEndpoint, bvn0Endpoint, bvn1Endpoint, bvn2Endpoint string, timeout time.Duration) (*LiteClientProofGenerator, error) {
+// This supports Kermit (3 BVNs: bvn1, bvn2, bvn3) and other multi-BVN networks.
+// For Kermit network CometBFT ports:
+//   - DN:   http://206.191.154.164:16592
+//   - BVN1: http://206.191.154.164:16692
+//   - BVN2: http://206.191.154.164:16792
+//   - BVN3: http://206.191.154.164:16892
+func NewLiteClientProofGeneratorMultiBVN(v3Endpoint, dnCometEndpoint, bvn0Endpoint, bvn1Endpoint, bvn2Endpoint, bvn3Endpoint string, timeout time.Duration) (*LiteClientProofGenerator, error) {
 	if v3Endpoint == "" {
 		return nil, fmt.Errorf("v3Endpoint cannot be empty")
 	}
@@ -130,9 +136,25 @@ func NewLiteClientProofGeneratorMultiBVN(v3Endpoint, dnCometEndpoint, bvn0Endpoi
 		}
 	}
 
-	// Use BVN0 as the default/legacy BVN
+	// BVN3 CometBFT client (for Kermit network)
+	var cometBVN3 *comethttp.HTTP
+	if bvn3Endpoint != "" {
+		cometBVN3, err = comethttp.New(bvn3Endpoint, "/websocket")
+		if err != nil {
+			log.Printf("[PROOF] Warning: BVN3 CometBFT client failed: %v", err)
+		} else {
+			log.Printf("[PROOF] ✅ BVN3 CometBFT connected: %s", bvn3Endpoint)
+			bvnEndpoints["bvn3"] = bvn3Endpoint
+		}
+	}
+
+	// Use BVN0 as the default/legacy BVN (or BVN1 for Kermit if BVN0 not available)
 	cometBVN = cometBVN0
 	bvnEndpoint := bvn0Endpoint
+	if cometBVN == nil && cometBVN1 != nil {
+		cometBVN = cometBVN1
+		bvnEndpoint = bvn1Endpoint
+	}
 
 	// Create real ProofBuilder if DN and at least one BVN are available
 	if cometDN != nil && cometBVN != nil {
@@ -152,6 +174,7 @@ func NewLiteClientProofGeneratorMultiBVN(v3Endpoint, dnCometEndpoint, bvn0Endpoi
 		cometBVN0:    cometBVN0,
 		cometBVN1:    cometBVN1,
 		cometBVN2:    cometBVN2,
+		cometBVN3:    cometBVN3,
 		proofBuilder: proofBuilder,
 		endpoint:     v3Endpoint,
 		dnEndpoint:   dnCometEndpoint,
@@ -196,8 +219,8 @@ func (g *LiteClientProofGenerator) GenerateAccumulateProof(ctx context.Context, 
 //   - txHash: The transaction hash (64-char hex, no 0x prefix)
 //   - bvn: The BVN partition (e.g., "bvn1")
 func (g *LiteClientProofGenerator) GenerateChainedProof(ctx context.Context, accountURL, txHash, bvn string) (*chained_proof.ChainedProof, error) {
-	if g.proofBuilder == nil {
-		return nil, fmt.Errorf("proofBuilder not available - CometBFT endpoints required for L1-L3 proofs")
+	if g.cometDN == nil {
+		return nil, fmt.Errorf("DN CometBFT client not available - required for L1-L3 proofs")
 	}
 	if accountURL == "" {
 		return nil, fmt.Errorf("accountURL cannot be empty")
@@ -211,13 +234,26 @@ func (g *LiteClientProofGenerator) GenerateChainedProof(ctx context.Context, acc
 	// It should NOT be "acc://dn" or empty - those are invalid for L1-L3 proofs
 	bvn = normalizeBVNPartition(bvn, accountURL)
 
+	// DYNAMIC BVN SELECTION: Select the correct CometBFT client for this BVN
+	// This is critical for multi-BVN networks like Kermit (BVN1, BVN2, BVN3)
+	cometBVN := g.selectBVNCometClient(bvn)
+	if cometBVN == nil {
+		return nil, fmt.Errorf("no CometBFT client available for BVN '%s' - check ACCUMULATE_COMET_BVN* config", bvn)
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, g.timeout)
 	defer cancel()
 
 	log.Printf("[PROOF] 🔨 Building REAL L1-L3 chained proof for %s (txHash=%s, bvn=%s)", accountURL, txHash[:16]+"...", bvn)
+	log.Printf("[PROOF]    Using BVN CometBFT endpoint for %s", bvn)
+
+	// Create a ProofBuilder with the correct BVN CometBFT client for this partition
+	// This ensures consensus binding uses the right partition's CometBFT node
+	proofBuilder := chained_proof.NewProofBuilder(g.v3Client, g.cometDN, cometBVN, true)
+	proofBuilder.WithArtifacts = true
 
 	// Build real proof using the working-proof_do_not_edit ProofBuilder
-	chainedProof, err := g.proofBuilder.BuildProof(ctx, chained_proof.ProofInput{
+	chainedProof, err := proofBuilder.BuildProof(ctx, chained_proof.ProofInput{
 		Account: accountURL,
 		TxHash:  txHash,
 		BVN:     bvn,
@@ -232,6 +268,52 @@ func (g *LiteClientProofGenerator) GenerateChainedProof(ctx context.Context, acc
 	log.Printf("[PROOF]    L3: DNConsensusHeight=%d", chainedProof.Layer3.DNConsensusHeight)
 
 	return chainedProof, nil
+}
+
+// selectBVNCometClient returns the CometBFT client for the specified BVN partition.
+// For Kermit network: bvn1, bvn2, bvn3 map to different CometBFT ports.
+func (g *LiteClientProofGenerator) selectBVNCometClient(bvn string) *comethttp.HTTP {
+	bvn = strings.ToLower(strings.TrimSpace(bvn))
+
+	switch bvn {
+	case "bvn0":
+		if g.cometBVN0 != nil {
+			log.Printf("[PROOF] 🎯 Selected BVN0 CometBFT client")
+			return g.cometBVN0
+		}
+	case "bvn1":
+		if g.cometBVN1 != nil {
+			log.Printf("[PROOF] 🎯 Selected BVN1 CometBFT client")
+			return g.cometBVN1
+		}
+	case "bvn2":
+		if g.cometBVN2 != nil {
+			log.Printf("[PROOF] 🎯 Selected BVN2 CometBFT client")
+			return g.cometBVN2
+		}
+	case "bvn3":
+		if g.cometBVN3 != nil {
+			log.Printf("[PROOF] 🎯 Selected BVN3 CometBFT client")
+			return g.cometBVN3
+		}
+	}
+
+	// Fallback to any available BVN client
+	log.Printf("[PROOF] ⚠️ No specific CometBFT client for %s, trying fallbacks...", bvn)
+	if g.cometBVN1 != nil {
+		log.Printf("[PROOF] 🎯 Fallback to BVN1 CometBFT client")
+		return g.cometBVN1
+	}
+	if g.cometBVN0 != nil {
+		log.Printf("[PROOF] 🎯 Fallback to BVN0 CometBFT client")
+		return g.cometBVN0
+	}
+	if g.cometBVN != nil {
+		log.Printf("[PROOF] 🎯 Fallback to legacy BVN CometBFT client")
+		return g.cometBVN
+	}
+
+	return nil
 }
 
 // ChainedProofToCompleteProof converts a ChainedProof to CompleteProof format
@@ -353,8 +435,12 @@ func (g *LiteClientProofGenerator) GenerateChainedProofForIntent(ctx context.Con
 }
 
 // HasRealProofBuilder returns true if the real L1-L3 proof builder is available.
+// Requires DN CometBFT client and at least one BVN CometBFT client.
 func (g *LiteClientProofGenerator) HasRealProofBuilder() bool {
-	return g.proofBuilder != nil
+	// Need DN client and at least one BVN client for L1-L3 proofs
+	hasDN := g.cometDN != nil
+	hasBVN := g.cometBVN != nil || g.cometBVN0 != nil || g.cometBVN1 != nil || g.cometBVN2 != nil || g.cometBVN3 != nil
+	return hasDN && hasBVN
 }
 
 // VerifyProof verifies a CompleteProof using the lite client verification system.

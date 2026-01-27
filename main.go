@@ -759,11 +759,12 @@ func startValidator(
     log.Printf("   BVN0 CometBFT: %s", cfg.AccumulateCometBVN0)
     log.Printf("   BVN1 CometBFT: %s", cfg.AccumulateCometBVN1)
     log.Printf("   BVN2 CometBFT: %s", cfg.AccumulateCometBVN2)
+    log.Printf("   BVN3 CometBFT: %s", cfg.AccumulateCometBVN3)
 
     // Use multi-BVN constructor if specific BVN endpoints are configured, otherwise fall back to legacy
     var liteClientProofGen *proof.LiteClientProofGenerator
-    if cfg.AccumulateCometBVN0 != "" || cfg.AccumulateCometBVN1 != "" || cfg.AccumulateCometBVN2 != "" {
-        // Multi-BVN mode (Kermit, production networks)
+    if cfg.AccumulateCometBVN0 != "" || cfg.AccumulateCometBVN1 != "" || cfg.AccumulateCometBVN2 != "" || cfg.AccumulateCometBVN3 != "" {
+        // Multi-BVN mode (Kermit has BVN1/BVN2/BVN3, production networks)
         bvn0 := cfg.AccumulateCometBVN0
         if bvn0 == "" {
             bvn0 = cfg.AccumulateCometBVN // Fall back to legacy single BVN
@@ -776,12 +777,15 @@ func startValidator(
         if bvn2 == "" {
             bvn2 = bvn0 // Fall back to BVN0 if not specified
         }
+        bvn3 := cfg.AccumulateCometBVN3
+        // BVN3 doesn't need fallback - it's optional (only used in Kermit/production)
         liteClientProofGen, err = proof.NewLiteClientProofGeneratorMultiBVN(
             v3Endpoint,
             cfg.AccumulateCometDN,
             bvn0,
             bvn1,
             bvn2,
+            bvn3,
             30*time.Second,
         )
     } else {

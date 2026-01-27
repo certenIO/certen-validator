@@ -17,6 +17,7 @@ type Config struct {
 	AccumulateCometBVN0 string // CometBFT endpoint for BVN0
 	AccumulateCometBVN1 string // CometBFT endpoint for BVN1
 	AccumulateCometBVN2 string // CometBFT endpoint for BVN2
+	AccumulateCometBVN3 string // CometBFT endpoint for BVN3 (Kermit network)
 	EthereumURL        string
 	EthChainID         int64
 
@@ -123,6 +124,7 @@ func Load() (*Config, error) {
 		AccumulateCometBVN0: getEnv("ACCUMULATE_COMET_BVN0", ""), // BVN0 CometBFT endpoint
 		AccumulateCometBVN1: getEnv("ACCUMULATE_COMET_BVN1", ""), // BVN1 CometBFT endpoint
 		AccumulateCometBVN2: getEnv("ACCUMULATE_COMET_BVN2", ""), // BVN2 CometBFT endpoint
+		AccumulateCometBVN3: getEnv("ACCUMULATE_COMET_BVN3", ""), // BVN3 CometBFT endpoint (Kermit)
 		EthereumURL:        getEnv("ETHEREUM_URL", ""),
 		EthChainID:         getEnvInt64("ETH_CHAIN_ID", 11155111),
 
