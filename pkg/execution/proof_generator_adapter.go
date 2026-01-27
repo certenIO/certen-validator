@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"time"
 
+	chained_proof "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/working-proof_do_not_edit"
+	"github.com/certen/independant-validator/pkg/database"
 	"github.com/certen/independant-validator/pkg/proof"
 )
 
@@ -84,28 +86,60 @@ func (a *LiteClientProofGeneratorAdapter) GenerateChainedProofForTx(ctx context.
 		CompleteProof: chainedProof,
 	}
 
-	// Extract L1 data
+	// Extract L1 data (Transaction to BVN)
 	if chainedProof.Layer1.BVNRootChainAnchor != "" {
 		result.L1ReceiptAnchor = hexToBytes(chainedProof.Layer1.Receipt.Anchor)
 		result.L1BVNRoot = hexToBytes(chainedProof.Layer1.BVNRootChainAnchor)
 		result.L1BVNPartition = chainedProof.Input.BVN
+		// Extract source/target hashes and receipt entries for visualization
+		result.L1SourceHash = hexToBytes(chainedProof.Layer1.Receipt.Start)
+		result.L1TargetHash = hexToBytes(chainedProof.Layer1.Receipt.Anchor)
+		result.L1ReceiptEntries = convertReceiptEntries(chainedProof.Layer1.Receipt.Entries)
 	}
 
-	// Extract L2 data
+	// Extract L2 data (BVN to DN)
 	if chainedProof.Layer2.DNRootChainAnchor != "" {
 		result.L2DNRoot = hexToBytes(chainedProof.Layer2.DNRootChainAnchor)
 		result.L2AnchorSeq = int64(chainedProof.Layer2.DNIndex)
 		result.L2DNBlockHash = hexToBytes(chainedProof.Layer2.BVNStateTreeAnchor)
+		// Extract source/target hashes and receipt entries for visualization
+		// L2 has two receipts - we use RootReceipt for the main path
+		result.L2SourceHash = hexToBytes(chainedProof.Layer2.RootReceipt.Start)
+		result.L2TargetHash = hexToBytes(chainedProof.Layer2.RootReceipt.Anchor)
+		result.L2ReceiptEntries = convertReceiptEntries(chainedProof.Layer2.RootReceipt.Entries)
 	}
 
-	// Extract L3 data
+	// Extract L3 data (DN to Consensus)
 	if chainedProof.Layer3.DNConsensusHeight > 0 {
 		result.L3DNBlockHeight = int64(chainedProof.Layer3.DNConsensusHeight)
 		// Consensus timestamp is approximately now since we just fetched it
 		result.L3ConsensusTimestamp = time.Now().UTC()
+		// Extract source/target hashes and receipt entries for visualization
+		result.L3SourceHash = hexToBytes(chainedProof.Layer3.RootReceipt.Start)
+		result.L3TargetHash = hexToBytes(chainedProof.Layer3.RootReceipt.Anchor)
+		result.L3ReceiptEntries = convertReceiptEntries(chainedProof.Layer3.RootReceipt.Entries)
 	}
 
 	return result, nil
+}
+
+// convertReceiptEntries converts chained_proof.ReceiptStep to database.MerklePathNode
+func convertReceiptEntries(entries []chained_proof.ReceiptStep) []database.MerklePathNode {
+	if len(entries) == 0 {
+		return nil
+	}
+	result := make([]database.MerklePathNode, len(entries))
+	for i, entry := range entries {
+		position := "left"
+		if entry.Right {
+			position = "right"
+		}
+		result[i] = database.MerklePathNode{
+			Hash:     entry.Hash,
+			Position: position,
+		}
+	}
+	return result
 }
 
 // hexToBytes converts a hex string to bytes, handling "0x" prefix

@@ -123,18 +123,27 @@ type AccumulateQueryClient interface {
 // ChainedProofResult contains the L1/L2/L3 proof chain
 type ChainedProofResult struct {
 	// L1: Transaction to BVN
-	L1ReceiptAnchor []byte
-	L1BVNRoot       []byte
-	L1BVNPartition  string
+	L1ReceiptAnchor  []byte
+	L1BVNRoot        []byte
+	L1BVNPartition   string
+	L1SourceHash     []byte                   // Receipt start hash
+	L1TargetHash     []byte                   // Receipt anchor hash
+	L1ReceiptEntries []database.MerklePathNode // Receipt path entries
 
 	// L2: BVN to DN
-	L2DNRoot      []byte
-	L2AnchorSeq   int64
-	L2DNBlockHash []byte
+	L2DNRoot         []byte
+	L2AnchorSeq      int64
+	L2DNBlockHash    []byte
+	L2SourceHash     []byte                   // Receipt start hash
+	L2TargetHash     []byte                   // Receipt anchor hash
+	L2ReceiptEntries []database.MerklePathNode // Receipt path entries
 
 	// L3: DN to Consensus
 	L3ConsensusTimestamp time.Time
 	L3DNBlockHeight      int64
+	L3SourceHash         []byte                   // Receipt start hash
+	L3TargetHash         []byte                   // Receipt anchor hash
+	L3ReceiptEntries     []database.MerklePathNode // Receipt path entries
 
 	// Complete proof data
 	CompleteProof interface{} // *lcproof.CompleteProof
@@ -1626,15 +1635,21 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 				"description":    "Transaction to BVN",
 				"bvn_partition":  chainedProof.L1BVNPartition,
 				"receipt_anchor": hex.EncodeToString(chainedProof.L1ReceiptAnchor),
+				"source_hash":    hex.EncodeToString(chainedProof.L1SourceHash),
+				"target_hash":    hex.EncodeToString(chainedProof.L1TargetHash),
+				"path_depth":     len(chainedProof.L1ReceiptEntries),
 			})
 			l1Layer := &database.NewChainedProofLayer{
-				ProofID:       proofArtifact.ProofID,
-				LayerNumber:   1,
-				LayerName:     "L1 - Transaction to BVN",
-				BVNPartition:  &chainedProof.L1BVNPartition,
-				ReceiptAnchor: chainedProof.L1ReceiptAnchor,
-				BVNRoot:       chainedProof.L1BVNRoot,
-				LayerJSON:     l1JSON,
+				ProofID:        proofArtifact.ProofID,
+				LayerNumber:    1,
+				LayerName:      "L1 - Transaction to BVN",
+				BVNPartition:   &chainedProof.L1BVNPartition,
+				ReceiptAnchor:  chainedProof.L1ReceiptAnchor,
+				BVNRoot:        chainedProof.L1BVNRoot,
+				SourceHash:     chainedProof.L1SourceHash,
+				TargetHash:     chainedProof.L1TargetHash,
+				ReceiptEntries: chainedProof.L1ReceiptEntries,
+				LayerJSON:      l1JSON,
 			}
 			if _, err := o.config.Repos.ProofArtifacts.CreateChainedProofLayer(ctx, l1Layer); err != nil {
 				fmt.Printf("Warning: failed to create L1 chained layer: %v\n", err)
@@ -1645,6 +1660,9 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 				"layer":       "L2",
 				"description": "BVN to DN",
 				"anchor_seq":  chainedProof.L2AnchorSeq,
+				"source_hash": hex.EncodeToString(chainedProof.L2SourceHash),
+				"target_hash": hex.EncodeToString(chainedProof.L2TargetHash),
+				"path_depth":  len(chainedProof.L2ReceiptEntries),
 			})
 			l2Layer := &database.NewChainedProofLayer{
 				ProofID:        proofArtifact.ProofID,
@@ -1653,6 +1671,9 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 				DNRoot:         chainedProof.L2DNRoot,
 				AnchorSequence: &chainedProof.L2AnchorSeq,
 				DNBlockHash:    chainedProof.L2DNBlockHash,
+				SourceHash:     chainedProof.L2SourceHash,
+				TargetHash:     chainedProof.L2TargetHash,
+				ReceiptEntries: chainedProof.L2ReceiptEntries,
 				LayerJSON:      l2JSON,
 			}
 			if _, err := o.config.Repos.ProofArtifacts.CreateChainedProofLayer(ctx, l2Layer); err != nil {
@@ -1665,6 +1686,9 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 				"description":         "DN to Consensus",
 				"dn_block_height":     chainedProof.L3DNBlockHeight,
 				"consensus_timestamp": chainedProof.L3ConsensusTimestamp,
+				"source_hash":         hex.EncodeToString(chainedProof.L3SourceHash),
+				"target_hash":         hex.EncodeToString(chainedProof.L3TargetHash),
+				"path_depth":          len(chainedProof.L3ReceiptEntries),
 			})
 			consensusTS := chainedProof.L3ConsensusTimestamp
 			l3Layer := &database.NewChainedProofLayer{
@@ -1673,6 +1697,9 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 				LayerName:          "L3 - DN to Consensus",
 				DNBlockHeight:      &chainedProof.L3DNBlockHeight,
 				ConsensusTimestamp: &consensusTS,
+				SourceHash:         chainedProof.L3SourceHash,
+				TargetHash:         chainedProof.L3TargetHash,
+				ReceiptEntries:     chainedProof.L3ReceiptEntries,
 				LayerJSON:          l3JSON,
 			}
 			if _, err := o.config.Repos.ProofArtifacts.CreateChainedProofLayer(ctx, l3Layer); err != nil {
@@ -1977,6 +2004,7 @@ func (o *UnifiedOrchestrator) generateBatchProofArtifacts(ctx context.Context, c
 			MerkleRoot:   req.MerkleRoot[:],
 			LeafHash:     batchTx.TxHash,   // Transaction hash is the leaf
 			LeafIndex:    leafIndexPtr,     // Position in the Merkle tree
+			MerklePath:   merklePath,       // Merkle path for visualization
 			ProofClass:   proofClass,
 			ValidatorID:  o.config.ValidatorID,
 			ArtifactJSON: artifactJSON,
