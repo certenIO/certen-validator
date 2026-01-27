@@ -1763,11 +1763,27 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 	return nil
 }
 
-// generateBatchProofArtifacts creates proof artifacts for each transaction in an on-cadence batch.
+// generateBatchProofArtifacts creates proof artifacts for each transaction in a batch.
 // This ensures each transaction has its own proof artifact with proper leaf_index and merkle_path.
+// Works for both on-cadence and on-demand batches.
 func (o *UnifiedOrchestrator) generateBatchProofArtifacts(ctx context.Context, cycle *activeCycle, proofClass database.ProofClass, artifactJSON []byte) error {
 	req := cycle.Request
 	result := cycle.Result
+
+	// Look up the actual batch to determine the correct proof class
+	batch, err := o.config.Repos.Batches.GetBatch(ctx, *req.BatchID)
+	if err != nil {
+		fmt.Printf("Warning: failed to look up batch %s, using provided proof class: %v\n", req.BatchID, err)
+	} else if batch != nil {
+		// Use the actual batch type for proof class
+		switch batch.BatchType {
+		case database.BatchTypeOnDemand:
+			proofClass = database.ProofClassOnDemand
+		case database.BatchTypeOnCadence:
+			proofClass = database.ProofClassOnCadence
+		}
+		fmt.Printf("Batch %s type is %s, using proof class %s\n", req.BatchID, batch.BatchType, proofClass)
+	}
 
 	// Query batch_transactions to get all transactions in the batch
 	batchTxs, err := o.config.Repos.Batches.GetTransactionsInBatch(ctx, *req.BatchID)
