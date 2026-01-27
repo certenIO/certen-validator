@@ -38,15 +38,25 @@ func (r *ProofArtifactRepository) CreateProofArtifact(ctx context.Context, input
 	// Compute artifact hash for integrity
 	artifactHash := sha256.Sum256(input.ArtifactJSON)
 
+	// Serialize merkle_path to JSON if provided
+	var merklePathJSON []byte
+	if len(input.MerklePath) > 0 {
+		var err error
+		merklePathJSON, err = json.Marshal(input.MerklePath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal merkle_path: %w", err)
+		}
+	}
+
 	query := `
 		INSERT INTO proof_artifacts (
 			proof_type, proof_version, accum_tx_hash, account_url,
-			batch_id, merkle_root, leaf_hash, leaf_index,
+			batch_id, merkle_root, leaf_hash, leaf_index, merkle_path,
 			gov_level, proof_class, validator_id, status,
 			artifact_json, artifact_hash, user_id, intent_id, created_at
 		) VALUES (
-			$1, '1.0', $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending',
-			$11, $12, $13, $14, NOW()
+			$1, '1.0', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'pending',
+			$12, $13, $14, $15, NOW()
 		)
 		RETURNING proof_id, created_at`
 
@@ -70,7 +80,7 @@ func (r *ProofArtifactRepository) CreateProofArtifact(ctx context.Context, input
 
 	err := r.db.QueryRowContext(ctx, query,
 		input.ProofType, input.AccumTxHash, input.AccountURL,
-		input.BatchID, input.MerkleRoot, input.LeafHash, input.LeafIndex,
+		input.BatchID, input.MerkleRoot, input.LeafHash, input.LeafIndex, merklePathJSON,
 		input.GovLevel, input.ProofClass, input.ValidatorID,
 		input.ArtifactJSON, artifactHash[:], input.UserID, input.IntentID,
 	).Scan(&proof.ProofID, &proof.CreatedAt)
@@ -701,15 +711,25 @@ func (r *ProofArtifactRepository) UpdateProofIntentTracking(ctx context.Context,
 
 // CreateChainedProofLayer creates a new layer record
 func (r *ProofArtifactRepository) CreateChainedProofLayer(ctx context.Context, input *NewChainedProofLayer) (*ChainedProofLayer, error) {
+	// Serialize receipt_entries to JSON if provided
+	var receiptEntriesJSON []byte
+	if len(input.ReceiptEntries) > 0 {
+		var err error
+		receiptEntriesJSON, err = json.Marshal(input.ReceiptEntries)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal receipt_entries: %w", err)
+		}
+	}
+
 	query := `
 		INSERT INTO chained_proof_layers (
 			proof_id, layer_number, layer_name,
 			bvn_partition, receipt_anchor,
 			bvn_root, dn_root, anchor_sequence, bvn_partition_id,
 			dn_block_hash, dn_block_height, consensus_timestamp,
-			layer_json, created_at
+			layer_json, source_hash, target_hash, receipt_entries, created_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW()
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW()
 		)
 		RETURNING layer_id, created_at`
 
@@ -733,7 +753,7 @@ func (r *ProofArtifactRepository) CreateChainedProofLayer(ctx context.Context, i
 		input.BVNPartition, input.ReceiptAnchor,
 		input.BVNRoot, input.DNRoot, input.AnchorSequence, input.BVNPartitionID,
 		input.DNBlockHash, input.DNBlockHeight, input.ConsensusTimestamp,
-		input.LayerJSON,
+		input.LayerJSON, input.SourceHash, input.TargetHash, receiptEntriesJSON,
 	).Scan(&layer.LayerID, &layer.CreatedAt)
 
 	if err != nil {

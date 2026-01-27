@@ -121,6 +121,9 @@ type NewProofArtifact struct {
 	MerkleRoot   []byte           `json:"merkle_root,omitempty"`
 	LeafHash     []byte           `json:"leaf_hash,omitempty"`
 	LeafIndex    *int             `json:"leaf_index,omitempty"`
+	// MerklePath stores the Merkle inclusion proof path for visualization
+	// Format: [{"hash": "0x...", "right": true/false}, ...]
+	MerklePath   []MerklePathNode `json:"merkle_path,omitempty"`
 	GovLevel     *GovernanceLevel `json:"gov_level,omitempty"`
 	ProofClass   ProofClass       `json:"proof_class"`
 	ValidatorID  string           `json:"validator_id"`
@@ -182,6 +185,10 @@ type NewChainedProofLayer struct {
 	DNBlockHeight      *int64          `json:"dn_block_height,omitempty"`
 	ConsensusTimestamp *time.Time      `json:"consensus_timestamp,omitempty"`
 	LayerJSON          json.RawMessage `json:"layer_json"`
+	// New fields for ProofChainDiagram visualization
+	SourceHash     []byte           `json:"source_hash,omitempty"`     // Source hash for layer diagram
+	TargetHash     []byte           `json:"target_hash,omitempty"`     // Target hash for layer diagram
+	ReceiptEntries []MerklePathNode `json:"receipt_entries,omitempty"` // Receipt path entries
 }
 
 // ============================================================================
