@@ -10,8 +10,10 @@ package chained_proof
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -361,4 +363,165 @@ func getenv(k, def string) string {
 		return def
 	}
 	return v
+}
+
+// Test_ChainedProof_Kermit tests the chained proof against the Kermit network.
+// This uses the Kermit CometBFT ports:
+//   - DN:   http://206.191.154.164:16592
+//   - BVN1: http://206.191.154.164:16692
+//   - BVN2: http://206.191.154.164:16792
+//   - BVN3: http://206.191.154.164:16892
+//
+// Run with:
+//   go test -tags=integration -run Test_ChainedProof_Kermit -v ./...
+//
+// Or with custom account/txhash:
+//   CERTEN_ACCOUNT="acc://certen-kermit-12.acme" CERTEN_TXHASH="..." go test -tags=integration -run Test_ChainedProof_Kermit -v ./...
+func Test_ChainedProof_Kermit(t *testing.T) {
+	t.Logf("🚀 CERTEN Working Proof Implementation - Kermit Network Integration Test")
+	t.Logf("📋 Testing complete L1-L3 chained proof on Kermit (3 BVNs + 1 DN)")
+
+	// Kermit network endpoints
+	// V3 API: 16595 (DN), 16695 (BVN1), 16795 (BVN2), 16895 (BVN3) - all route to same DN
+	// CometBFT: 16592 (DN), 16692 (BVN1), 16792 (BVN2), 16892 (BVN3)
+	kermitHost := getenv("KERMIT_HOST", "206.191.154.164")
+	v3URL := getenv("CERTEN_V3", fmt.Sprintf("http://%s:16595/v3", kermitHost))
+	dnComet := getenv("CERTEN_DN_COMET", fmt.Sprintf("http://%s:16592", kermitHost))
+
+	// Account URL - will be used to determine which BVN to query
+	account := getenv("CERTEN_ACCOUNT", "acc://certen-kermit-12.acme")
+	txhash := getenv("CERTEN_TXHASH", "") // Must be provided for real test
+	bvn := getenv("CERTEN_BVN", "")       // Will be auto-detected from account if empty
+
+	// If no txhash provided, skip the full proof test but verify connectivity
+	if txhash == "" {
+		t.Logf("⚠️  No CERTEN_TXHASH provided - testing connectivity only")
+		t.Logf("   To run full proof test, provide a valid txhash:")
+		t.Logf("   CERTEN_TXHASH=<64-char-hex> go test -tags=integration -run Test_ChainedProof_Kermit -v ./...")
+	}
+
+	t.Logf("\n=== KERMIT NETWORK CONFIGURATION ===")
+	t.Logf("📡 V3 Endpoint: %s", v3URL)
+	t.Logf("🏛️  DN CometBFT: %s (port 16592)", dnComet)
+	t.Logf("🏗️  BVN CometBFT Ports:")
+	t.Logf("     BVN1: %s:16692", kermitHost)
+	t.Logf("     BVN2: %s:16792", kermitHost)
+	t.Logf("     BVN3: %s:16892", kermitHost)
+	t.Logf("📁 Account: %s", account)
+	t.Logf("🔗 TxHash: %s", txhash)
+	t.Logf("🌐 BVN: %s (auto-detect if empty)", bvn)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Test DN CometBFT connectivity
+	t.Logf("\n=== Testing CometBFT Connectivity ===")
+	dnClient, err := http.New(dnComet, "/websocket")
+	if err != nil {
+		t.Fatalf("❌ DN CometBFT client failed: %v", err)
+	}
+
+	dnStatus, err := dnClient.Status(ctx)
+	if err != nil {
+		t.Fatalf("❌ DN CometBFT status query failed: %v", err)
+	}
+	t.Logf("✅ DN CometBFT connected: %s (height=%d)", dnStatus.NodeInfo.Moniker, dnStatus.SyncInfo.LatestBlockHeight)
+
+	// Determine BVN from account URL if not provided
+	if bvn == "" {
+		bvn = calculateBVNFromKermitRouting(account)
+		t.Logf("🎯 Auto-detected BVN from account routing: %s", bvn)
+	}
+
+	// Select the correct BVN CometBFT endpoint based on partition
+	var bvnComet string
+	switch bvn {
+	case "bvn1":
+		bvnComet = fmt.Sprintf("http://%s:16692", kermitHost)
+	case "bvn2":
+		bvnComet = fmt.Sprintf("http://%s:16792", kermitHost)
+	case "bvn3":
+		bvnComet = fmt.Sprintf("http://%s:16892", kermitHost)
+	default:
+		t.Fatalf("❌ Unknown BVN partition: %s", bvn)
+	}
+	t.Logf("📍 Using BVN CometBFT endpoint: %s", bvnComet)
+
+	// Test BVN CometBFT connectivity
+	bvnClient, err := http.New(bvnComet, "/websocket")
+	if err != nil {
+		t.Fatalf("❌ BVN CometBFT client failed: %v", err)
+	}
+
+	bvnStatus, err := bvnClient.Status(ctx)
+	if err != nil {
+		t.Fatalf("❌ BVN CometBFT status query failed: %v", err)
+	}
+	t.Logf("✅ BVN CometBFT connected: %s (height=%d)", bvnStatus.NodeInfo.Moniker, bvnStatus.SyncInfo.LatestBlockHeight)
+
+	// If no txhash, we're done with connectivity test
+	if txhash == "" {
+		t.Logf("\n✅ Kermit network connectivity verified successfully!")
+		t.Logf("   DN height: %d", dnStatus.SyncInfo.LatestBlockHeight)
+		t.Logf("   BVN (%s) height: %d", bvn, bvnStatus.SyncInfo.LatestBlockHeight)
+		return
+	}
+
+	// Full L1-L3 proof test
+	t.Logf("\n=== Building L1-L3 Chained Proof ===")
+	v3c := jsonrpc.NewClient(v3URL)
+	builder := NewProofBuilder(v3c, dnClient, bvnClient, true)
+	builder.WithArtifacts = true
+
+	proof, err := builder.BuildProof(ctx, ProofInput{
+		Account: account,
+		TxHash:  txhash,
+		BVN:     bvn,
+	})
+	if err != nil {
+		t.Fatalf("❌ Build proof failed: %v", err)
+	}
+
+	t.Logf("✅ L1-L3 chained proof built successfully on Kermit!")
+	t.Logf("   L1: TxChainIndex=%d, BVNMinorBlockIndex=%d", proof.Layer1.TxChainIndex, proof.Layer1.BVNMinorBlockIndex)
+	t.Logf("   L2: DNMinorBlockIndex=%d", proof.Layer2.DNMinorBlockIndex)
+	t.Logf("   L3: DNConsensusHeight=%d", proof.Layer3.DNConsensusHeight)
+
+	// Verify proof
+	verifier := NewProofVerifier(dnClient, bvnClient, true)
+	if err := verifier.Verify(ctx, proof); err != nil {
+		t.Fatalf("❌ Proof verification failed: %v", err)
+	}
+	t.Logf("✅ COMPLETE CRYPTOGRAPHIC PROOF VERIFIED ON KERMIT!")
+}
+
+// calculateBVNFromKermitRouting determines which BVN an account is on using Kermit's routing table.
+// Kermit has 3 BVNs with prefix-based routing:
+//   - First bit = 0 → BVN1
+//   - First 2 bits = 10 → BVN2
+//   - First 2 bits = 11 → BVN3
+func calculateBVNFromKermitRouting(accountURL string) string {
+	// Extract identity from URL
+	if !strings.HasPrefix(accountURL, "acc://") {
+		return "bvn1" // Default fallback
+	}
+	urlPart := strings.TrimPrefix(accountURL, "acc://")
+	identity := strings.Split(urlPart, "/")[0]
+
+	// Calculate routing number from SHA256 of identity
+	h := sha256.Sum256([]byte(strings.ToLower(identity)))
+	var routingNum uint64
+	for i := 0; i < 8; i++ {
+		routingNum = (routingNum << 8) | uint64(h[i])
+	}
+
+	// Route based on prefix bits
+	first2Bits := (routingNum >> 62) & 0x3
+	if (routingNum >> 63) == 0 {
+		return "bvn1" // First bit = 0
+	}
+	if first2Bits == 2 {
+		return "bvn2" // First 2 bits = 10
+	}
+	return "bvn3" // First 2 bits = 11
 }

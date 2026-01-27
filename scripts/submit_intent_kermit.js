@@ -20,7 +20,7 @@ function createIntentData() {
     const toHex = (obj) => Buffer.from(JSON.stringify(obj), 'utf8').toString('hex');
 
     return [
-        toHex({ kind: "CERTEN_INTENT", version: "1.0", proof_class: "on_demand", intent_id: intentId, created_at: new Date().toISOString(), intentType: "cross_chain_transfer", description: "ETH transfer on Sepolia" }),
+        toHex({ kind: "CERTEN_INTENT", version: "1.0", proof_class: "on_demand", intent_id: intentId, created_by: "test-user-" + intentId.substring(0, 8), created_at: new Date().toISOString(), intentType: "cross_chain_transfer", description: "ETH transfer on Sepolia" }),
         toHex({
             protocol: "CERTEN",
             version: "1.0",

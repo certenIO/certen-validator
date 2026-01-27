@@ -29,9 +29,25 @@ type Client interface {
 	GetKeyPage(ctx context.Context, url string) (*KeyPage, error)
 	VerifySignature(ctx context.Context, message, signature, publicKey string) (bool, error)
 
+	// Transaction governance data (M-of-N key page threshold)
+	GetTransactionGovernanceData(ctx context.Context, txHash string, accountURL string) (*TransactionGovernanceData, error)
+
 	// Network health and lifecycle
 	Health(ctx context.Context) error
 	Close() error
+}
+
+// TransactionGovernanceData contains the key page governance data from a transaction
+// Extracted from signatureBooks in the Accumulate transaction query response
+type TransactionGovernanceData struct {
+	// ThresholdN is the acceptThreshold from the key page (required signatures to authorize)
+	ThresholdN int `json:"threshold_n"`
+	// ThresholdM is the number of signatures actually collected
+	ThresholdM int `json:"threshold_m"`
+	// AuthorityURL is the key book authority that authorized the transaction
+	AuthorityURL string `json:"authority_url"`
+	// KeyPageURL is the key page that signed the transaction
+	KeyPageURL string `json:"key_page_url"`
 }
 
 // AccountResponse represents account data from Accumulate

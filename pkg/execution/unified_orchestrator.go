@@ -29,6 +29,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/google/uuid"
 
+	"github.com/certen/independant-validator/pkg/accumulate"
 	attestation "github.com/certen/independant-validator/pkg/attestation/strategy"
 	chain "github.com/certen/independant-validator/pkg/chain/strategy"
 	"github.com/certen/independant-validator/pkg/database"
@@ -80,6 +81,10 @@ type UnifiedOrchestratorConfig struct {
 	ResultsPrincipal string                 // Accumulate URL for results (e.g., "acc://certen.acme/results")
 	Ed25519Key       []byte                 // Ed25519 signing key for write-back transactions
 
+	// Accumulate query client for fetching transaction governance data (M-of-N threshold)
+	// This is used to query signatureBooks from transactions for accurate governance_proof_levels
+	AccumulateQueryClient AccumulateQueryClient
+
 	// Callbacks
 	OnCycleComplete func(*UnifiedProofCycleResult)
 	OnCycleFailed   func(*UnifiedProofCycleResult, error)
@@ -104,6 +109,15 @@ type ChainedProofGenerator interface {
 	//   - txHash: The Accumulate transaction hash (64-char hex)
 	//   - bvn: The BVN partition name (e.g., "bvn0", "bvn1")
 	GenerateChainedProofForTx(ctx context.Context, accountURL, txHash, bvn string) (*ChainedProofResult, error)
+}
+
+// AccumulateQueryClient interface for querying transaction governance data
+// This provides read-only access to Accumulate transaction data for extracting
+// key page M-of-N threshold values (signatureBooks.pages.signer.acceptThreshold)
+type AccumulateQueryClient interface {
+	// GetTransactionGovernanceData queries a transaction and extracts key page governance data
+	// Returns ThresholdM (signatures collected) and ThresholdN (signatures required)
+	GetTransactionGovernanceData(ctx context.Context, txHash, accountURL string) (*accumulate.TransactionGovernanceData, error)
 }
 
 // ChainedProofResult contains the L1/L2/L3 proof chain
@@ -186,6 +200,11 @@ type UnifiedProofCycleRequest struct {
 	AccumulateAccountURL string `json:"accumulate_account_url,omitempty"` // Account URL where intent was created
 	AccumulateTxHash     string `json:"accumulate_tx_hash,omitempty"`     // Transaction hash on Accumulate
 	AccumulateBVN        string `json:"accumulate_bvn,omitempty"`         // BVN partition (bvn0, bvn1, bvn2)
+
+	// Key page governance data (M of N multi-sig threshold)
+	// These come from the Accumulate key page that authorized the transaction
+	KeyPageThreshold int `json:"key_page_threshold,omitempty"` // M - required signatures
+	KeyPageKeyCount  int `json:"key_page_key_count,omitempty"` // N - total keys on page
 }
 
 // UnifiedProofCycleResult represents the result of a proof cycle
@@ -1297,6 +1316,26 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 	isAnchored := len(result.ObservationResults) > 0
 	sigCount := len(result.Attestations)
 
+	// Query transaction governance data (M-of-N key page threshold) from Accumulate
+	// This extracts signatureBooks[].pages[].signer.acceptThreshold and signatures count
+	var txGovData *accumulate.TransactionGovernanceData
+	if o.config.AccumulateQueryClient != nil && req.AccumulateTxHash != "" && req.AccumulateAccountURL != "" {
+		govQueryCtx, govCancel := context.WithTimeout(ctx, 10*time.Second)
+		var err error
+		txGovData, err = o.config.AccumulateQueryClient.GetTransactionGovernanceData(
+			govQueryCtx,
+			req.AccumulateTxHash,
+			req.AccumulateAccountURL,
+		)
+		govCancel()
+		if err != nil {
+			fmt.Printf("Warning: failed to query transaction governance data: %v\n", err)
+		} else if txGovData != nil {
+			fmt.Printf("Retrieved transaction governance data: ThresholdM=%d, ThresholdN=%d, Authority=%s\n",
+				txGovData.ThresholdM, txGovData.ThresholdN, txGovData.AuthorityURL)
+		}
+	}
+
 	// G0 - Inclusion and Finality (always created if we have anchor data)
 	if isAnchored {
 		var blockHeight *int64
@@ -1313,10 +1352,57 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 			}
 		}
 
+		// Use key page threshold values from transaction governance data (M of N multi-sig)
+		// These come from signatureBooks in the Accumulate transaction query
+		var thresholdM, thresholdN *int
+		var authorityURL *string
+		var keyPageURL *string
+
+		if txGovData != nil {
+			// Use actual values from the transaction's signatureBooks
+			if txGovData.ThresholdM > 0 {
+				m := txGovData.ThresholdM
+				thresholdM = &m
+			}
+			if txGovData.ThresholdN > 0 {
+				n := txGovData.ThresholdN
+				thresholdN = &n
+			}
+			if txGovData.AuthorityURL != "" {
+				authorityURL = &txGovData.AuthorityURL
+			}
+			if txGovData.KeyPageURL != "" {
+				keyPageURL = &txGovData.KeyPageURL
+			}
+		} else {
+			// Fallback to request values if transaction query failed
+			if req.KeyPageThreshold > 0 {
+				m := req.KeyPageThreshold
+				thresholdM = &m
+			}
+			if req.KeyPageKeyCount > 0 {
+				n := req.KeyPageKeyCount
+				thresholdN = &n
+			}
+			// Authority URL from Accumulate account
+			if req.AccumulateAccountURL != "" {
+				authURL := req.AccumulateAccountURL
+				if idx := strings.LastIndex(authURL, "/"); idx > 0 {
+					authURL = authURL[:idx]
+				}
+				authorityURL = &authURL
+			}
+		}
+		// Use keyPageURL for logging (avoid unused variable warning)
+		_ = keyPageURL
+
 		g0JSON, _ := json.Marshal(map[string]interface{}{
 			"inclusion_verified": true,
 			"finality_achieved":  result.ObservationResults[0].IsFinalized,
 			"confirmations":      result.ObservationResults[0].Confirmations,
+			"threshold_m":        thresholdM,
+			"threshold_n":        thresholdN,
+			"authority_url":      authorityURL,
 		})
 
 		// G0 is verified if we have anchor data
@@ -1330,6 +1416,10 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 			FinalityTimestamp: finalityTimestamp,
 			AnchorHeight:      anchorHeight,
 			IsAnchored:        &isAnchored,
+			ThresholdM:        thresholdM,
+			ThresholdN:        thresholdN,
+			SignatureCount:    &sigCount,
+			AuthorityURL:      authorityURL,
 			LevelJSON:         g0JSON,
 			Verified:          &g0Verified,
 		}
@@ -1343,20 +1433,41 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 
 	// G1 - Governance Correctness (created if we have governance root and attestations)
 	if req.GovernanceRoot != [32]byte{} {
-		// Derive authority URL from Accumulate account URL (e.g., "acc://certen-kermit-12.acme/data" -> "acc://certen-kermit-12.acme")
-		authorityURL := req.AccumulateAccountURL
-		if idx := strings.LastIndex(authorityURL, "/"); idx > 0 {
-			authorityURL = authorityURL[:idx]
+		// Use key page threshold values from transaction governance data (M of N multi-sig)
+		var thresholdM, thresholdN *int
+		var authorityURL string
+
+		if txGovData != nil {
+			// Use actual values from the transaction's signatureBooks
+			if txGovData.ThresholdM > 0 {
+				m := txGovData.ThresholdM
+				thresholdM = &m
+			}
+			if txGovData.ThresholdN > 0 {
+				n := txGovData.ThresholdN
+				thresholdN = &n
+			}
+			if txGovData.AuthorityURL != "" {
+				authorityURL = txGovData.AuthorityURL
+			}
 		}
 
-		// Threshold values: M of N (e.g., 5 of 7 validators)
-		// ThresholdM = minimum signatures required (2/3 + 1 of total)
-		// ThresholdN = total validators in set
-		thresholdN := 7 // Default validator count
-		if result.AggregatedAttestation != nil && result.AggregatedAttestation.ParticipantCount > 0 {
-			thresholdN = result.AggregatedAttestation.ParticipantCount
+		// Fallback to request values if transaction query didn't provide them
+		if thresholdM == nil && req.KeyPageThreshold > 0 {
+			m := req.KeyPageThreshold
+			thresholdM = &m
 		}
-		thresholdM := (thresholdN * 2 / 3) + 1 // BFT threshold
+		if thresholdN == nil && req.KeyPageKeyCount > 0 {
+			n := req.KeyPageKeyCount
+			thresholdN = &n
+		}
+		if authorityURL == "" {
+			// Derive authority URL from Accumulate account URL
+			authorityURL = req.AccumulateAccountURL
+			if idx := strings.LastIndex(authorityURL, "/"); idx > 0 {
+				authorityURL = authorityURL[:idx]
+			}
+		}
 
 		g1JSON, _ := json.Marshal(map[string]interface{}{
 			"governance_root":   hex.EncodeToString(req.GovernanceRoot[:]),
@@ -1375,8 +1486,8 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 			GovLevel:       database.GovLevelG1,
 			LevelName:      "G1 - Governance Correctness",
 			AuthorityURL:   &authorityURL,
-			ThresholdM:     &thresholdM,
-			ThresholdN:     &thresholdN,
+			ThresholdM:     thresholdM,
+			ThresholdN:     thresholdN,
 			IsAnchored:     &isAnchored,
 			SignatureCount: &sigCount,
 			LevelJSON:      g1JSON,
@@ -1395,10 +1506,40 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 		outcomeType := "execution_complete"
 		bindingEnforced := true
 
+		// Use key page threshold values from transaction governance data (M of N multi-sig)
+		var thresholdM, thresholdN *int
+		var authorityURL *string
+
+		if txGovData != nil {
+			if txGovData.ThresholdM > 0 {
+				m := txGovData.ThresholdM
+				thresholdM = &m
+			}
+			if txGovData.ThresholdN > 0 {
+				n := txGovData.ThresholdN
+				thresholdN = &n
+			}
+			if txGovData.AuthorityURL != "" {
+				authorityURL = &txGovData.AuthorityURL
+			}
+		} else {
+			// Fallback to request values
+			if req.KeyPageThreshold > 0 {
+				m := req.KeyPageThreshold
+				thresholdM = &m
+			}
+			if req.KeyPageKeyCount > 0 {
+				n := req.KeyPageKeyCount
+				thresholdN = &n
+			}
+		}
+
 		g2JSON, _ := json.Marshal(map[string]interface{}{
 			"operation_commitment": hex.EncodeToString(req.OperationCommitment[:]),
 			"outcome_bound":        true,
 			"write_back_success":   result.WriteBackSuccess,
+			"threshold_m":          thresholdM,
+			"threshold_n":          thresholdN,
 		})
 
 		// G2 is verified if threshold met and binding enforced
@@ -1408,6 +1549,9 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 			ProofID:         proofArtifact.ProofID,
 			GovLevel:        database.GovLevelG2,
 			LevelName:       "G2 - Outcome Binding",
+			ThresholdM:      thresholdM,
+			ThresholdN:      thresholdN,
+			AuthorityURL:    authorityURL,
 			IsAnchored:      &isAnchored,
 			SignatureCount:  &sigCount,
 			OutcomeType:     &outcomeType,

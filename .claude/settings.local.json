@@ -124,7 +124,13 @@
       "Bash(cast 4byte:*)",
       "Bash(go get:*)",
       "Bash(go mod tidy:*)",
-      "Bash(do echo -n \"Port $port: \")"
+      "Bash(do echo -n \"Port $port: \")",
+      "Bash(PGPASSWORD=certen123 psql:*)",
+      "Bash(wc:*)",
+      "Bash(python3:*)",
+      "Bash(go vet:*)",
+      "Bash(npx tsc:*)",
+      "Bash(git checkout:*)"
     ]
   }
 }

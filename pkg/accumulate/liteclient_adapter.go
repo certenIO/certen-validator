@@ -2146,3 +2146,101 @@ func (l *LiteClientAdapter) GetSignerNonce(ctx context.Context, signerURL string
 	// Default to 0 if not found (first transaction)
 	return 0, nil
 }
+
+// =============================================================================
+// TRANSACTION GOVERNANCE DATA
+// Extracts key page M-of-N threshold from Accumulate transaction signatureBooks
+// =============================================================================
+
+// GetTransactionGovernanceData queries a transaction by txid and extracts the key page governance data
+// This returns the M-of-N multi-sig threshold from the signatureBooks field
+func (l *LiteClientAdapter) GetTransactionGovernanceData(ctx context.Context, txHash string, accountURL string) (*TransactionGovernanceData, error) {
+	if txHash == "" || accountURL == "" {
+		return nil, fmt.Errorf("txHash and accountURL are required")
+	}
+
+	// Build the full txid in Accumulate format: acc://txHash@accountURL
+	// e.g., acc://0ee7307c157f68f8d87d774353dd12c65f4a3a8f1146fe7c7047f689fa6fe350@certen-kermit-12.acme/data
+	scope := fmt.Sprintf("acc://%s@%s", txHash, strings.TrimPrefix(accountURL, "acc://"))
+
+	log.Printf("🔍 [TX-GOV-DATA] Querying transaction governance data: %s", scope)
+
+	// Query the transaction with full details
+	result, err := l.queryV3API(ctx, "query", map[string]interface{}{
+		"scope": scope,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("query transaction: %w", err)
+	}
+
+	govData := &TransactionGovernanceData{}
+
+	// Extract signatureBooks[0].pages[0].signer.acceptThreshold and signatures count
+	// Structure: signatureBooks[].pages[].signer.acceptThreshold, signatureBooks[].pages[].signatures[]
+	if signatureBooks, ok := result["signatureBooks"].([]interface{}); ok && len(signatureBooks) > 0 {
+		if book, ok := signatureBooks[0].(map[string]interface{}); ok {
+			// Extract authority URL
+			if authority, ok := book["authority"].(string); ok {
+				govData.AuthorityURL = authority
+			}
+
+			// Extract pages
+			if pages, ok := book["pages"].([]interface{}); ok && len(pages) > 0 {
+				if page, ok := pages[0].(map[string]interface{}); ok {
+					// Extract signer info (key page)
+					if signer, ok := page["signer"].(map[string]interface{}); ok {
+						// ThresholdN = acceptThreshold (required signatures)
+						if acceptThreshold, ok := signer["acceptThreshold"].(float64); ok {
+							govData.ThresholdN = int(acceptThreshold)
+						}
+						// Key page URL
+						if url, ok := signer["url"].(string); ok {
+							govData.KeyPageURL = url
+						}
+					}
+
+					// ThresholdM = count of signatures collected
+					if signatures, ok := page["signatures"].([]interface{}); ok {
+						govData.ThresholdM = len(signatures)
+					}
+				}
+			}
+		}
+	}
+
+	// Fallback: Try to get from status.signers if signatureBooks not available
+	if govData.ThresholdN == 0 {
+		if status, ok := result["status"].(map[string]interface{}); ok {
+			if signers, ok := status["signers"].([]interface{}); ok && len(signers) > 0 {
+				if signer, ok := signers[0].(map[string]interface{}); ok {
+					if acceptThreshold, ok := signer["acceptThreshold"].(float64); ok {
+						govData.ThresholdN = int(acceptThreshold)
+					}
+					if url, ok := signer["url"].(string); ok {
+						govData.KeyPageURL = url
+					}
+					if keyBook, ok := signer["keyBook"].(string); ok {
+						govData.AuthorityURL = keyBook
+					}
+					// Count keys as potential signers
+					if keys, ok := signer["keys"].([]interface{}); ok {
+						// If ThresholdM not set from signatures, we have at least 1 signature (tx was delivered)
+						if govData.ThresholdM == 0 && len(keys) > 0 {
+							govData.ThresholdM = 1 // At least 1 signature since tx was delivered
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// If we got valid data, return it
+	if govData.ThresholdN > 0 || govData.ThresholdM > 0 {
+		log.Printf("✅ [TX-GOV-DATA] Extracted governance data: ThresholdM=%d, ThresholdN=%d, Authority=%s, KeyPage=%s",
+			govData.ThresholdM, govData.ThresholdN, govData.AuthorityURL, govData.KeyPageURL)
+		return govData, nil
+	}
+
+	log.Printf("⚠️ [TX-GOV-DATA] No governance data found in transaction %s", txHash)
+	return nil, nil
+}

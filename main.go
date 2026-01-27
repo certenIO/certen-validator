@@ -1399,6 +1399,7 @@ func startValidator(
                     FallbackToLegacy:     cfg.FallbackToLegacy,
                     EnableWriteBack:      writebackEnabled,
                     ProofGenerator:       proofGenAdapter,
+                    AccumulateQueryClient: liteClientAdapter, // For querying tx governance data (M-of-N threshold)
                 }
 
                 unifiedOrchestrator, unifiedErr := execution.NewUnifiedOrchestrator(unifiedConfig)

@@ -236,6 +236,7 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 
 		// Extract governance data from commitment (for G1/G2 proof levels)
 		var governanceRoot, operationCommitment [32]byte
+		var keyPageThreshold, keyPageKeyCount int
 		if commitMap, ok := commitment.(map[string]interface{}); ok {
 			// Extract governanceRoot (hex string -> [32]byte)
 			if govRootStr, ok := commitMap["governanceRoot"].(string); ok && govRootStr != "" {
@@ -248,6 +249,20 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 				if decoded, err := hexStringToBytes32(opCommitStr); err == nil {
 					operationCommitment = decoded
 				}
+			}
+			// Extract key page governance threshold (M of N multi-sig)
+			if threshold, ok := commitMap["signatureThreshold"].(float64); ok {
+				keyPageThreshold = int(threshold)
+			}
+			if keyCount, ok := commitMap["keyPageKeyCount"].(float64); ok {
+				keyPageKeyCount = int(keyCount)
+			}
+			// Fallback: if not provided, default to 1 of 1 (single sig)
+			if keyPageThreshold == 0 {
+				keyPageThreshold = 1
+			}
+			if keyPageKeyCount == 0 {
+				keyPageKeyCount = 1
 			}
 		}
 
@@ -281,6 +296,9 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 			AccumulateBVN:        bvn,
 			GovernanceRoot:       governanceRoot,
 			OperationCommitment:  operationCommitment,
+			// Key page governance threshold (M of N)
+			KeyPageThreshold: keyPageThreshold,
+			KeyPageKeyCount:  keyPageKeyCount,
 			// Merkle inclusion proof data (for MerkleTreeVisualization)
 			LeafHash:   leafHash,
 			LeafIndex:  0, // Single transaction, always index 0
