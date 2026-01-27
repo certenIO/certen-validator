@@ -129,6 +129,25 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAllTxs(
 
 		fmt.Printf("[UnifiedAdapter] Extracted %d tx hashes for intent %s: %v\n", len(txHashStrs), intentID, txHashStrs)
 
+		// Extract operation commitment from commitment interface (for Merkle data)
+		var operationCommitment [32]byte
+		if commitMap, ok := commitment.(map[string]interface{}); ok {
+			if opCommitStr, ok := commitMap["operationCommitment"].(string); ok && opCommitStr != "" {
+				if decoded, err := hexStringToBytes32(opCommitStr); err == nil {
+					operationCommitment = decoded
+				}
+			}
+		}
+
+		// For on-demand proofs (single transaction):
+		// LeafIndex = 0, LeafHash = operation commitment
+		var leafHash []byte
+		var merkleRoot [32]byte
+		if operationCommitment != [32]byte{} {
+			leafHash = operationCommitment[:]
+			merkleRoot = operationCommitment
+		}
+
 		// Create unified request
 		var userIDPtr *string
 		if userID != "" {
@@ -136,12 +155,18 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAllTxs(
 		}
 
 		req := &UnifiedProofCycleRequest{
-			IntentID:    intentID,
-			BundleID:    bundleID,
-			TxHashes:    txHashStrs,
-			ProofClass:  "on_demand",
-			TargetChain: a.unified.config.DefaultChainID,
-			UserID:      userIDPtr,
+			IntentID:            intentID,
+			BundleID:            bundleID,
+			TxHashes:            txHashStrs,
+			ProofClass:          "on_demand",
+			TargetChain:         a.unified.config.DefaultChainID,
+			UserID:              userIDPtr,
+			OperationCommitment: operationCommitment,
+			// Merkle inclusion proof data
+			LeafHash:   leafHash,
+			LeafIndex:  0,
+			MerklePath: nil,
+			MerkleRoot: merkleRoot,
 		}
 
 		fmt.Printf("[UnifiedAdapter] Starting unified proof cycle for intent %s with target chain %s\n",
@@ -232,6 +257,18 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 			userIDPtr = &userID
 		}
 
+		// For on-demand proofs (single transaction):
+		// - LeafIndex = 0 (single transaction in batch)
+		// - LeafHash = operation commitment (the leaf hash)
+		// - MerklePath = nil (single leaf, leaf is the root)
+		// - MerkleRoot = operation commitment (for single leaf, root = leaf)
+		var leafHash []byte
+		var merkleRoot [32]byte
+		if operationCommitment != [32]byte{} {
+			leafHash = operationCommitment[:]
+			merkleRoot = operationCommitment // For single tx, merkle root = leaf
+		}
+
 		req := &UnifiedProofCycleRequest{
 			IntentID:             intentID,
 			BundleID:             bundleID,
@@ -244,6 +281,11 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 			AccumulateBVN:        bvn,
 			GovernanceRoot:       governanceRoot,
 			OperationCommitment:  operationCommitment,
+			// Merkle inclusion proof data (for MerkleTreeVisualization)
+			LeafHash:   leafHash,
+			LeafIndex:  0, // Single transaction, always index 0
+			MerklePath: nil, // Empty path for single leaf (leaf = root)
+			MerkleRoot: merkleRoot,
 		}
 
 		fmt.Printf("[UnifiedAdapter] Starting unified proof cycle with Accumulate ref for intent %s\n", intentID)

@@ -169,6 +169,11 @@ type UnifiedProofCycleRequest struct {
 	GovernanceRoot      [32]byte `json:"governance_root"`
 	BundleID            [32]byte `json:"bundle_id"`
 
+	// Merkle inclusion proof details (for MerkleTreeVisualization)
+	LeafHash   []byte                   `json:"leaf_hash,omitempty"`   // The leaf (transaction) hash
+	LeafIndex  int                      `json:"leaf_index,omitempty"`  // Position in the tree (0-indexed)
+	MerklePath []database.MerklePathNode `json:"merkle_path,omitempty"` // Sibling hashes for proof
+
 	// Additional context
 	AccumulateHeight int64             `json:"accumulate_height,omitempty"`
 	AccumulateHash   string            `json:"accumulate_hash,omitempty"`
@@ -1190,12 +1195,20 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 		return fmt.Errorf("marshal artifact data: %w", err)
 	}
 
+	// Determine leaf index pointer
+	var leafIndexPtr *int
+	if req.LeafIndex > 0 || len(req.LeafHash) > 0 {
+		leafIndexPtr = &req.LeafIndex
+	}
+
 	newArtifact := &database.NewProofArtifact{
 		ProofType:    database.ProofTypeCertenAnchor,
 		AccumTxHash:  accumTxHash,
 		AccountURL:   req.IntentID, // Use intent ID as account reference
 		BatchID:      req.BatchID,
 		MerkleRoot:   req.MerkleRoot[:],
+		LeafHash:     req.LeafHash,                                        // Transaction hash (leaf in Merkle tree)
+		LeafIndex:    leafIndexPtr,                                        // Position in the tree
 		ProofClass:   proofClass,
 		ValidatorID:  o.config.ValidatorID,
 		ArtifactJSON: artifactJSON,
@@ -1568,11 +1581,27 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 
 	// Set Merkle inclusion proof if available
 	if req.MerkleRoot != [32]byte{} {
+		// Use actual leaf hash if available, otherwise fall back to operation commitment
+		leafHashStr := hex.EncodeToString(req.OperationCommitment[:])
+		if len(req.LeafHash) > 0 {
+			leafHashStr = hex.EncodeToString(req.LeafHash)
+		}
+
+		// Convert MerklePath to bundle format
+		// database.MerklePathNode uses Position ("left"/"right"), proof.MerklePathEntry uses Right (bool)
+		var merklePath []proof.MerklePathEntry
+		for _, node := range req.MerklePath {
+			merklePath = append(merklePath, proof.MerklePathEntry{
+				Hash:  node.Hash,
+				Right: node.Position == "right",
+			})
+		}
+
 		bundle.SetMerkleInclusion(
 			hex.EncodeToString(req.MerkleRoot[:]),
-			hex.EncodeToString(req.OperationCommitment[:]), // Use operation commitment as leaf hash
-			0, // Leaf index (would need to be passed in request)
-			nil, // Merkle path (would need to be passed in request)
+			leafHashStr,
+			int64(req.LeafIndex),
+			merklePath,
 		)
 	}
 
