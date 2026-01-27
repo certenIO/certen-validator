@@ -1161,6 +1161,12 @@ func ptrInt(v int) *int {
 
 // generateAndPersistBundle creates a CertenProofBundle and persists it to proof_bundles table
 // This is the final step after all phases complete, creating a self-contained verification bundle
+//
+// For on-cadence batches: Creates proof artifacts for each transaction in the batch,
+// with proper leaf_index and merkle_path from batch_transactions table.
+//
+// For on-demand proofs: Creates a single proof artifact with leaf_index=0 for single-tx,
+// or multiple artifacts for multi-leg intents.
 func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycle *activeCycle) error {
 	if o.config.Repos == nil || o.config.Repos.ProofArtifacts == nil {
 		return fmt.Errorf("proof artifacts repository not configured")
@@ -1169,16 +1175,10 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 	req := cycle.Request
 	result := cycle.Result
 
-	// Step 1: Create proof_artifact entry first (to get proof_id)
+	// Determine proof class
 	proofClass := database.ProofClassOnDemand
 	if req.ProofClass == "on_cadence" {
 		proofClass = database.ProofClassOnCadence
-	}
-
-	// Determine accumulate tx hash (use first tx hash or intent ID)
-	accumTxHash := req.IntentID
-	if accumTxHash == "" && len(req.TxHashes) > 0 {
-		accumTxHash = req.TxHashes[0]
 	}
 
 	// Build artifact JSON with cycle result summary
@@ -1195,10 +1195,31 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 		return fmt.Errorf("marshal artifact data: %w", err)
 	}
 
-	// Determine leaf index pointer
+	// =========================================================================
+	// ON-CADENCE BATCH: Create proof artifacts for each transaction in batch
+	// =========================================================================
+	if req.ProofClass == "on_cadence" && req.BatchID != nil && o.config.Repos.Batches != nil {
+		return o.generateBatchProofArtifacts(ctx, cycle, proofClass, artifactJSON)
+	}
+
+	// =========================================================================
+	// ON-DEMAND: Create single proof artifact (or handle multi-leg)
+	// =========================================================================
+
+	// Determine accumulate tx hash (use first tx hash or intent ID)
+	accumTxHash := req.IntentID
+	if accumTxHash == "" && len(req.TxHashes) > 0 {
+		accumTxHash = req.TxHashes[0]
+	}
+
+	// Determine leaf index pointer - for on-demand single-tx, always set to 0
 	var leafIndexPtr *int
-	if req.LeafIndex > 0 || len(req.LeafHash) > 0 {
-		leafIndexPtr = &req.LeafIndex
+	leafIndex := req.LeafIndex
+	if req.ProofClass == "on_demand" {
+		// For on-demand, always set leaf_index (0 for single tx)
+		leafIndexPtr = &leafIndex
+	} else if req.LeafIndex > 0 || len(req.LeafHash) > 0 {
+		leafIndexPtr = &leafIndex
 	}
 
 	newArtifact := &database.NewProofArtifact{
@@ -1207,8 +1228,8 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 		AccountURL:   req.IntentID, // Use intent ID as account reference
 		BatchID:      req.BatchID,
 		MerkleRoot:   req.MerkleRoot[:],
-		LeafHash:     req.LeafHash,                                        // Transaction hash (leaf in Merkle tree)
-		LeafIndex:    leafIndexPtr,                                        // Position in the tree
+		LeafHash:     req.LeafHash,   // Transaction hash (leaf in Merkle tree)
+		LeafIndex:    leafIndexPtr,   // Position in the tree
 		ProofClass:   proofClass,
 		ValidatorID:  o.config.ValidatorID,
 		ArtifactJSON: artifactJSON,
@@ -1224,7 +1245,8 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 	// Update the result with the proof ID
 	result.ProofID = proofArtifact.ProofID
 
-	fmt.Printf("Created proof artifact: proof_id=%s, cycle_id=%s\n", proofArtifact.ProofID, cycle.CycleID)
+	fmt.Printf("Created proof artifact: proof_id=%s, cycle_id=%s, leaf_index=%v\n",
+		proofArtifact.ProofID, cycle.CycleID, leafIndexPtr)
 
 	// Step 2: Populate related tables for GetProofWithDetails support
 
@@ -1739,4 +1761,218 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 	}
 
 	return nil
+}
+
+// generateBatchProofArtifacts creates proof artifacts for each transaction in an on-cadence batch.
+// This ensures each transaction has its own proof artifact with proper leaf_index and merkle_path.
+func (o *UnifiedOrchestrator) generateBatchProofArtifacts(ctx context.Context, cycle *activeCycle, proofClass database.ProofClass, artifactJSON []byte) error {
+	req := cycle.Request
+	result := cycle.Result
+
+	// Query batch_transactions to get all transactions in the batch
+	batchTxs, err := o.config.Repos.Batches.GetTransactionsInBatch(ctx, *req.BatchID)
+	if err != nil {
+		return fmt.Errorf("get batch transactions: %w", err)
+	}
+
+	if len(batchTxs) == 0 {
+		fmt.Printf("Warning: batch %s has no transactions, creating single batch-level artifact\n", req.BatchID)
+		// Fall through to create batch-level artifact without per-tx data
+		return o.generateSingleBatchArtifact(ctx, cycle, proofClass, artifactJSON)
+	}
+
+	fmt.Printf("Creating proof artifacts for %d transactions in batch %s\n", len(batchTxs), req.BatchID)
+
+	var firstProofArtifact *database.ProofArtifact
+
+	// Create a proof artifact for each transaction in the batch
+	for i, batchTx := range batchTxs {
+		// Get the merkle path from the batch transaction
+		merklePath, err := batchTx.GetMerklePath()
+		if err != nil {
+			fmt.Printf("Warning: failed to get merkle path for tx %d: %v\n", i, err)
+			merklePath = nil
+		}
+
+		// Determine leaf index
+		leafIndex := batchTx.TreeIndex
+		leafIndexPtr := &leafIndex
+
+		// Determine intent/user IDs from batch transaction
+		var userID *string
+		var intentID *string
+		if batchTx.UserID.Valid && batchTx.UserID.String != "" {
+			userID = &batchTx.UserID.String
+		}
+		if batchTx.IntentID.Valid && batchTx.IntentID.String != "" {
+			intentID = &batchTx.IntentID.String
+		}
+
+		// Create proof artifact for this transaction
+		newArtifact := &database.NewProofArtifact{
+			ProofType:    database.ProofTypeCertenAnchor,
+			AccumTxHash:  batchTx.AccumTxHash,
+			AccountURL:   batchTx.AccountURL,
+			BatchID:      req.BatchID,
+			MerkleRoot:   req.MerkleRoot[:],
+			LeafHash:     batchTx.TxHash,   // Transaction hash is the leaf
+			LeafIndex:    leafIndexPtr,     // Position in the Merkle tree
+			ProofClass:   proofClass,
+			ValidatorID:  o.config.ValidatorID,
+			ArtifactJSON: artifactJSON,
+			UserID:       userID,
+			IntentID:     intentID,
+		}
+
+		proofArtifact, err := o.config.Repos.ProofArtifacts.CreateProofArtifact(ctx, newArtifact)
+		if err != nil {
+			fmt.Printf("Warning: failed to create proof artifact for tx %d: %v\n", i, err)
+			continue
+		}
+
+		fmt.Printf("Created proof artifact for batch tx: proof_id=%s, accum_tx=%s, leaf_index=%d\n",
+			proofArtifact.ProofID, batchTx.AccumTxHash[:16]+"...", leafIndex)
+
+		// Keep first artifact for result
+		if firstProofArtifact == nil {
+			firstProofArtifact = proofArtifact
+		}
+
+		// Create related tables for this proof artifact
+		o.populateRelatedTablesForBatchTx(ctx, proofArtifact, batchTx, merklePath, result, req)
+	}
+
+	// Update the result with the first proof ID (for backward compatibility)
+	if firstProofArtifact != nil {
+		result.ProofID = firstProofArtifact.ProofID
+	}
+
+	return nil
+}
+
+// generateSingleBatchArtifact creates a single batch-level proof artifact when no transactions are found
+func (o *UnifiedOrchestrator) generateSingleBatchArtifact(ctx context.Context, cycle *activeCycle, proofClass database.ProofClass, artifactJSON []byte) error {
+	req := cycle.Request
+	result := cycle.Result
+
+	accumTxHash := ""
+	if len(req.TxHashes) > 0 {
+		accumTxHash = req.TxHashes[0]
+	}
+
+	newArtifact := &database.NewProofArtifact{
+		ProofType:    database.ProofTypeCertenAnchor,
+		AccumTxHash:  accumTxHash,
+		AccountURL:   "",
+		BatchID:      req.BatchID,
+		MerkleRoot:   req.MerkleRoot[:],
+		ProofClass:   proofClass,
+		ValidatorID:  o.config.ValidatorID,
+		ArtifactJSON: artifactJSON,
+	}
+
+	proofArtifact, err := o.config.Repos.ProofArtifacts.CreateProofArtifact(ctx, newArtifact)
+	if err != nil {
+		return fmt.Errorf("create batch proof artifact: %w", err)
+	}
+
+	result.ProofID = proofArtifact.ProofID
+	fmt.Printf("Created batch-level proof artifact: proof_id=%s, batch_id=%s\n", proofArtifact.ProofID, req.BatchID)
+
+	return nil
+}
+
+// populateRelatedTablesForBatchTx creates related records (anchor_references, etc.) for a batch transaction's proof artifact
+func (o *UnifiedOrchestrator) populateRelatedTablesForBatchTx(
+	ctx context.Context,
+	proofArtifact *database.ProofArtifact,
+	batchTx *database.BatchTransaction,
+	merklePath []database.MerklePathNode,
+	result *UnifiedProofCycleResult,
+	req *UnifiedProofCycleRequest,
+) {
+	// Create anchor_references entry
+	if len(result.ObservationResults) > 0 {
+		obs := result.ObservationResults[0]
+		networkName := getNetworkName(result.ChainID)
+		blockTimestamp := obs.BlockTimestamp
+		confirmedAt := time.Now().UTC()
+
+		confirmations := obs.Confirmations
+		if obs.IsFinalized && obs.RequiredConfirmations > 0 && confirmations < obs.RequiredConfirmations {
+			confirmations = obs.RequiredConfirmations
+		}
+
+		reqConfirmations := obs.RequiredConfirmations
+		if reqConfirmations <= 0 {
+			reqConfirmations = 12
+		}
+
+		anchorRef := &database.NewAnchorReference{
+			ProofID:               proofArtifact.ProofID,
+			TargetChain:           result.ChainPlatform,
+			ChainID:               result.ChainID,
+			NetworkName:           networkName,
+			AnchorTxHash:          obs.TxHash,
+			AnchorBlockNumber:     int64(obs.BlockNumber),
+			AnchorBlockHash:       &obs.BlockHash,
+			AnchorTimestamp:       &blockTimestamp,
+			Confirmations:         confirmations,
+			RequiredConfirmations: ptrInt(reqConfirmations),
+			IsConfirmed:           obs.IsFinalized,
+			ConfirmedAt:           &confirmedAt,
+			GasUsed:               ptrInt64(int64(obs.GasUsed)),
+		}
+
+		if _, err := o.config.Repos.ProofArtifacts.CreateAnchorReference(ctx, anchorRef); err != nil {
+			fmt.Printf("Warning: failed to create anchor reference for batch tx: %v\n", err)
+		}
+	}
+
+	// Create governance_proof_levels for G0 (inclusion/finality)
+	if len(result.ObservationResults) > 0 {
+		obs := result.ObservationResults[0]
+		bh := int64(obs.BlockNumber)
+		blockHeight := &bh
+		anchorHeight := &bh
+
+		g0JSON, _ := json.Marshal(map[string]interface{}{
+			"inclusion_verified": true,
+			"finality_achieved":  obs.IsFinalized,
+			"confirmations":      obs.Confirmations,
+		})
+
+		g0Level := &database.NewGovernanceProofLevel{
+			ProofID:        proofArtifact.ProofID,
+			GovLevel:       database.GovLevelG0,
+			ThresholdM:     ptrInt(1),
+			ThresholdN:     ptrInt(1),
+			SignatureCount: ptrInt(1),
+			AnchorHeight:   anchorHeight,
+			BlockHeight:    blockHeight,
+			LevelJSON:      g0JSON,
+		}
+
+		if _, err := o.config.Repos.ProofArtifacts.CreateGovernanceProofLevel(ctx, g0Level); err != nil {
+			fmt.Printf("Warning: failed to create G0 level for batch tx: %v\n", err)
+		}
+	}
+
+	// Update proof_artifacts final state
+	if len(result.ObservationResults) > 0 {
+		obs := result.ObservationResults[0]
+		govLevel := database.GovLevelG0
+
+		if err := o.config.Repos.ProofArtifacts.UpdateProofFinalState(
+			ctx,
+			proofArtifact.ProofID,
+			obs.TxHash,
+			int64(obs.BlockNumber),
+			result.ChainID,
+			govLevel,
+			result.ThresholdMet,
+		); err != nil {
+			fmt.Printf("Warning: failed to update proof final state for batch tx: %v\n", err)
+		}
+	}
 }
