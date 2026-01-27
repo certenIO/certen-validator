@@ -1272,7 +1272,7 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 	newArtifact := &database.NewProofArtifact{
 		ProofType:    database.ProofTypeCertenAnchor,
 		AccumTxHash:  accumTxHash,
-		AccountURL:   req.IntentID, // Use intent ID as account reference
+		AccountURL:   req.AccumulateAccountURL, // Use actual Accumulate account URL (ADI)
 		BatchID:      req.BatchID,
 		MerkleRoot:   req.MerkleRoot[:],
 		LeafHash:     req.LeafHash,   // Transaction hash (leaf in Merkle tree)

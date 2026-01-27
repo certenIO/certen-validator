@@ -1135,13 +1135,26 @@ func (o *ProofCycleOrchestrator) persistProofArtifact(cycle *ProofCycleCompletio
 	// Create new proof artifact if none exists
 	o.logger.Printf("📝 [PROOF-CYCLE] Creating new proof artifact for intent: %s", cycle.IntentID)
 
+	// Look up the actual account URL from batch_transactions
+	accountURL := ""
+	if cycle.IntentID != "" {
+		if url, err := o.repos.Batches.GetAccountURLByIntentID(ctx, cycle.IntentID); err == nil && url != "" {
+			accountURL = url
+			o.logger.Printf("📍 [PROOF-CYCLE] Found account URL for intent %s: %s", cycle.IntentID, accountURL)
+		}
+	}
+	// Fallback to intent tx hash if no account URL found (for CLI-submitted intents)
+	if accountURL == "" {
+		accountURL = cycle.IntentTxHash
+	}
+
 	govLevel := database.GovLevelG2 // G2 = Governance + outcome binding (BLS attestation provides this)
 	intentID := cycle.IntentID      // Copy for pointer
 	userID := cycle.UserID          // Copy for pointer
 	input := &database.NewProofArtifact{
 		ProofType:    database.ProofTypeCertenAnchor,
 		AccumTxHash:  cycle.IntentTxHash,
-		AccountURL:   cycle.IntentID, // Use intent ID as account URL if not available
+		AccountURL:   accountURL, // Use actual Accumulate account URL (ADI)
 		GovLevel:     &govLevel,
 		ProofClass:   database.ProofClassOnCadence,
 		ValidatorID:  o.validatorID,

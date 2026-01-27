@@ -572,6 +572,26 @@ func (r *BatchRepository) UpdateMerklePathByTreeIndex(ctx context.Context, batch
 	return nil
 }
 
+// GetAccountURLByIntentID retrieves the account URL for an intent
+// Used to populate proof_artifacts with the correct Accumulate account URL
+func (r *BatchRepository) GetAccountURLByIntentID(ctx context.Context, intentID string) (string, error) {
+	query := `
+		SELECT COALESCE(account_url, adi_url, '')
+		FROM batch_transactions
+		WHERE intent_id = $1
+		LIMIT 1`
+
+	var accountURL string
+	err := r.client.QueryRowContext(ctx, query, intentID).Scan(&accountURL)
+	if err == sql.ErrNoRows {
+		return "", nil // Not found, return empty string
+	}
+	if err != nil {
+		return "", fmt.Errorf("failed to get account URL by intent: %w", err)
+	}
+	return accountURL, nil
+}
+
 // GetTransactionHashesByBatchID returns the Accumulate transaction hashes for a batch
 // Used for Firestore sync to link confirmation updates back to user intents
 func (r *BatchRepository) GetTransactionHashesByBatchID(ctx context.Context, batchID uuid.UUID) ([]string, error) {
