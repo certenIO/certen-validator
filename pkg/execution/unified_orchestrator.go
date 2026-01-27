@@ -1952,18 +1952,62 @@ func (o *UnifiedOrchestrator) populateRelatedTablesForBatchTx(
 		blockHeight := &bh
 		anchorHeight := &bh
 
+		// Extract threshold values from governance proof if available
+		// These represent the Accumulate key page M-of-N signature requirements
+		var thresholdM, thresholdN, signatureCount *int
+		var authorityURL *string
+
+		if len(batchTx.GovProof) > 0 {
+			var govProof struct {
+				RequiredThreshold uint64 `json:"required_threshold"`
+				AchievedWeight    uint64 `json:"achieved_weight"`
+				AuthorityURL      string `json:"authority_url"`
+				KeyPageURL        string `json:"key_page_url"`
+				Signatures        []struct {
+					Weight uint64 `json:"weight"`
+				} `json:"signatures"`
+			}
+			if err := json.Unmarshal(batchTx.GovProof, &govProof); err == nil {
+				// ThresholdM = required threshold (minimum weight needed)
+				if govProof.RequiredThreshold > 0 {
+					m := int(govProof.RequiredThreshold)
+					thresholdM = &m
+				}
+				// SignatureCount = number of signatures collected
+				sigCount := len(govProof.Signatures)
+				if sigCount > 0 {
+					signatureCount = &sigCount
+				}
+				// ThresholdN = total possible weight (sum of all key weights, or use signature count as proxy)
+				// In Accumulate, the total weight depends on key page configuration
+				// For now, use achieved weight as a proxy if available
+				if govProof.AchievedWeight > 0 {
+					n := int(govProof.AchievedWeight)
+					thresholdN = &n
+				} else if sigCount > 0 {
+					thresholdN = &sigCount
+				}
+				if govProof.AuthorityURL != "" {
+					authorityURL = &govProof.AuthorityURL
+				}
+			}
+		}
+
 		g0JSON, _ := json.Marshal(map[string]interface{}{
 			"inclusion_verified": true,
 			"finality_achieved":  obs.IsFinalized,
 			"confirmations":      obs.Confirmations,
+			"authority_url":      authorityURL,
 		})
 
 		g0Level := &database.NewGovernanceProofLevel{
 			ProofID:        proofArtifact.ProofID,
 			GovLevel:       database.GovLevelG0,
-			ThresholdM:     ptrInt(1),
-			ThresholdN:     ptrInt(1),
-			SignatureCount: ptrInt(1),
+			LevelName:      "G0 - Inclusion and Finality",
+			ThresholdM:     thresholdM,
+			ThresholdN:     thresholdN,
+			SignatureCount: signatureCount,
+			AuthorityURL:   authorityURL,
 			AnchorHeight:   anchorHeight,
 			BlockHeight:    blockHeight,
 			LevelJSON:      g0JSON,
