@@ -1445,9 +1445,9 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 		if txHash == "" {
 			txHash = req.IntentID // Fall back to intent ID as tx hash
 		}
-		if bvn == "" {
-			bvn = "bvn0" // Default to BVN0
-		}
+		// BVN calculation is handled by the ProofGenerator adapter
+		// which uses deterministic routing from account URL
+		// (see proof.CalculateBVNFromAccountURL)
 
 		if accountURL != "" && txHash != "" {
 			chainedProof, err := o.config.ProofGenerator.GenerateChainedProofForTx(ctx, accountURL, txHash, bvn)

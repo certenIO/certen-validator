@@ -758,6 +758,15 @@ func routeByPrefixTable(routingNumber uint64) string {
 	return "bvn1"
 }
 
+// CalculateBVNFromAccountURL is the exported version of calculateBVNFromAccountURL.
+// It calculates the BVN partition from an account URL using Accumulate's
+// deterministic routing algorithm (SHA256-based prefix matching).
+// For Kermit testnet, this returns "bvn1", "bvn2", or "bvn3".
+// Returns empty string if the account URL is invalid.
+func CalculateBVNFromAccountURL(accountURL string) string {
+	return calculateBVNFromAccountURL(accountURL)
+}
+
 // GetEndpoint returns the Accumulate v3 endpoint being used
 func (g *LiteClientProofGenerator) GetEndpoint() string {
 	return g.endpoint
