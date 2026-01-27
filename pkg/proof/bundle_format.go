@@ -138,16 +138,26 @@ type ChainedProofData struct {
 	VerifiedLevel string `json:"verified_level"` // "layer1", "layer2", "layer3", "complete"
 }
 
+// ReceiptData represents the Merkle receipt for a layer
+// Matches the web app's expected structure: { start, anchor, entries }
+type ReceiptData struct {
+	Start   string            `json:"start"`   // Starting hash (source)
+	Anchor  string            `json:"anchor"`  // Ending hash (target)
+	Entries []MerklePathEntry `json:"entries"` // Receipt path entries
+}
+
 // ProofLayer represents a single layer in the chained proof
 type ProofLayer struct {
-	SourceHash   string            `json:"source_hash"`   // Starting hash
-	TargetHash   string            `json:"target_hash"`   // Ending hash
-	ReceiptPath  []MerklePathEntry `json:"receipt_path"`  // Merkle path
-	BlockHeight  uint64            `json:"block_height"`
-	BlockHash    string            `json:"block_hash,omitempty"`
-	PartitionID  string            `json:"partition_id,omitempty"` // BVN/DN identifier
-	Verified     bool              `json:"verified"`
-	VerifiedAt   time.Time         `json:"verified_at,omitempty"`
+	LayerName    string       `json:"layer_name,omitempty"` // Layer description
+	SourceHash   string       `json:"source_hash"`          // Starting hash
+	TargetHash   string       `json:"target_hash"`          // Ending hash
+	Receipt      *ReceiptData `json:"receipt,omitempty"`    // Receipt with entries (web app format)
+	ReceiptPath  []MerklePathEntry `json:"receipt_path,omitempty"` // Legacy: direct path (deprecated)
+	BlockHeight  uint64       `json:"block_height"`
+	BlockHash    string       `json:"block_hash,omitempty"`
+	PartitionID  string       `json:"partition_id,omitempty"` // BVN/DN identifier
+	Verified     bool         `json:"verified"`
+	VerifiedAt   time.Time    `json:"verified_at,omitempty"`
 }
 
 // =============================================================================

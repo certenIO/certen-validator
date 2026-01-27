@@ -163,6 +163,25 @@ func DefaultUnifiedOrchestratorConfig() *UnifiedOrchestratorConfig {
 }
 
 // =============================================================================
+// HELPER FUNCTIONS
+// =============================================================================
+
+// convertMerklePathToBundle converts database MerklePathNode to bundle MerklePathEntry
+func convertMerklePathToBundle(nodes []database.MerklePathNode) []proof.MerklePathEntry {
+	if len(nodes) == 0 {
+		return nil
+	}
+	result := make([]proof.MerklePathEntry, len(nodes))
+	for i, node := range nodes {
+		result[i] = proof.MerklePathEntry{
+			Hash:  node.Hash,
+			Right: node.Position == "right",
+		}
+	}
+	return result
+}
+
+// =============================================================================
 // PROOF CYCLE INPUT/OUTPUT TYPES
 // =============================================================================
 
@@ -1579,6 +1598,8 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 
 	// 2c. Create chained_proof_layers entries (L1/L2/L3)
 	// Fetch chained proof from Accumulate if ProofGenerator is configured
+	// Store the result for bundle creation later
+	var storedChainedProof *ChainedProofResult
 	if o.config.ProofGenerator != nil {
 		// Determine parameters for chained proof generation
 		accountURL := req.AccumulateAccountURL
@@ -1629,6 +1650,9 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 					fmt.Printf("Recorded chained proof generation failure for proof_id=%s\n", proofArtifact.ProofID)
 				}
 			} else if chainedProof != nil {
+			// Store for bundle creation later
+			storedChainedProof = chainedProof
+
 			// L1: Transaction → BVN
 			l1JSON, _ := json.Marshal(map[string]interface{}{
 				"layer":          "L1",
@@ -1833,6 +1857,59 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 			},
 		}
 		bundle.SetGovernanceProof(govProof)
+	}
+
+	// Set chained proof from stored result (L1/L2/L3 layers)
+	if storedChainedProof != nil {
+		l1Source := hex.EncodeToString(storedChainedProof.L1SourceHash)
+		l1Target := hex.EncodeToString(storedChainedProof.L1TargetHash)
+		l2Source := hex.EncodeToString(storedChainedProof.L2SourceHash)
+		l2Target := hex.EncodeToString(storedChainedProof.L2TargetHash)
+		l3Source := hex.EncodeToString(storedChainedProof.L3SourceHash)
+		l3Target := hex.EncodeToString(storedChainedProof.L3TargetHash)
+
+		bundle.ProofComponents.ChainedProof = &proof.ChainedProofData{
+			Layer1: &proof.ProofLayer{
+				LayerName:   "L1 - Transaction to BVN",
+				SourceHash:  l1Source,
+				TargetHash:  l1Target,
+				PartitionID: storedChainedProof.L1BVNPartition,
+				Verified:    true,
+				VerifiedAt:  time.Now().UTC(),
+				Receipt: &proof.ReceiptData{
+					Start:   l1Source,
+					Anchor:  l1Target,
+					Entries: convertMerklePathToBundle(storedChainedProof.L1ReceiptEntries),
+				},
+			},
+			Layer2: &proof.ProofLayer{
+				LayerName:  "L2 - BVN to DN",
+				SourceHash: l2Source,
+				TargetHash: l2Target,
+				Verified:   true,
+				VerifiedAt: time.Now().UTC(),
+				Receipt: &proof.ReceiptData{
+					Start:   l2Source,
+					Anchor:  l2Target,
+					Entries: convertMerklePathToBundle(storedChainedProof.L2ReceiptEntries),
+				},
+			},
+			Layer3: &proof.ProofLayer{
+				LayerName:   "L3 - DN to Consensus",
+				SourceHash:  l3Source,
+				TargetHash:  l3Target,
+				BlockHeight: uint64(storedChainedProof.L3DNBlockHeight),
+				Verified:    true,
+				VerifiedAt:  time.Now().UTC(),
+				Receipt: &proof.ReceiptData{
+					Start:   l3Source,
+					Anchor:  l3Target,
+					Entries: convertMerklePathToBundle(storedChainedProof.L3ReceiptEntries),
+				},
+			},
+			Verified:      true,
+			VerifiedLevel: "complete",
+		}
 	}
 
 	// Add validator attestations
