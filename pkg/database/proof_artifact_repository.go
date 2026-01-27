@@ -39,14 +39,17 @@ func (r *ProofArtifactRepository) CreateProofArtifact(ctx context.Context, input
 	artifactHash := sha256.Sum256(input.ArtifactJSON)
 
 	// Serialize merkle_path to JSON if provided
-	var merklePathJSON []byte
+	// Use interface{} to properly handle NULL - a typed nil []byte may not be
+	// correctly interpreted as SQL NULL by lib/pq
+	var merklePathJSON interface{}
 	if len(input.MerklePath) > 0 {
-		var err error
-		merklePathJSON, err = json.Marshal(input.MerklePath)
+		data, err := json.Marshal(input.MerklePath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal merkle_path: %w", err)
 		}
+		merklePathJSON = data
 	}
+	// When merklePathJSON is nil (untyped), PostgreSQL will receive NULL
 
 	query := `
 		INSERT INTO proof_artifacts (
@@ -712,14 +715,17 @@ func (r *ProofArtifactRepository) UpdateProofIntentTracking(ctx context.Context,
 // CreateChainedProofLayer creates a new layer record
 func (r *ProofArtifactRepository) CreateChainedProofLayer(ctx context.Context, input *NewChainedProofLayer) (*ChainedProofLayer, error) {
 	// Serialize receipt_entries to JSON if provided
-	var receiptEntriesJSON []byte
+	// Use interface{} to properly handle NULL - a typed nil []byte may not be
+	// correctly interpreted as SQL NULL by lib/pq
+	var receiptEntriesJSON interface{}
 	if len(input.ReceiptEntries) > 0 {
-		var err error
-		receiptEntriesJSON, err = json.Marshal(input.ReceiptEntries)
+		data, err := json.Marshal(input.ReceiptEntries)
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal receipt_entries: %w", err)
 		}
+		receiptEntriesJSON = data
 	}
+	// When receiptEntriesJSON is nil (untyped), PostgreSQL will receive NULL
 
 	query := `
 		INSERT INTO chained_proof_layers (
