@@ -161,6 +161,6 @@ ALTER TABLE chained_proof_layers ADD COLUMN IF NOT EXISTS verified_at TIMESTAMPT
 ALTER TABLE anchor_references ADD COLUMN IF NOT EXISTS required_confirmations INT DEFAULT 12;
 
 -- Record migration
-INSERT INTO schema_migrations (version, applied_at)
-VALUES ('004_add_proof_detail_tables', NOW())
+INSERT INTO schema_migrations (version, description, applied_at)
+VALUES ('004_add_proof_detail_tables', 'Add proof detail tables for GetProofWithDetails', NOW())
 ON CONFLICT (version) DO NOTHING;

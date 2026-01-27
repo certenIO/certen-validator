@@ -40,7 +40,7 @@ services:
       # Per BFT Resiliency Task 4: Full peer redundancy - all other validators as seeds
       COMETBFT_P2P_SEEDS: "e24dcf6bcdf202b991ce0d0a3a6fc623f260ba0d@validator-2:26656,af2acabc841ab5622556d01021c9f1a6a038d97a@validator-3:26656,960da0d351187c61f1732308e1168833c9610946@validator-4:26656,1b6cbe9bafe79fb977ba59dbe237f64cc91fbe2b@validator-5:26656,faa57dcd8de29025d52785044e21cf1f703c63ac@validator-6:26656,2ff901c93ec6d8ede51767c56eaf678b7901a611@validator-7:26656"
       # Kermit testnet CometBFT RPC endpoints (correct ports: DN=16592, BVN1=16692, BVN2=16792, BVN3=16892)
-      ACCUMULATE_URL: https://kermit.accumulatenetwork.io/v3
+      ACCUMULATE_URL: https://kermit.accumulatenetwork.io
       ACCUMULATE_COMET_DN: http://206.191.154.164:16592
       ACCUMULATE_COMET_BVN: http://206.191.154.164:16692
       ACCUMULATE_COMET_BVN1: http://206.191.154.164:16692
@@ -95,7 +95,7 @@ services:
       # Per BFT Resiliency Task 4: Full peer redundancy
       COMETBFT_P2P_SEEDS: "6678a01f08728ef00ff438c3517213773d92136d@validator-1:26656,af2acabc841ab5622556d01021c9f1a6a038d97a@validator-3:26656,960da0d351187c61f1732308e1168833c9610946@validator-4:26656,1b6cbe9bafe79fb977ba59dbe237f64cc91fbe2b@validator-5:26656,faa57dcd8de29025d52785044e21cf1f703c63ac@validator-6:26656,2ff901c93ec6d8ede51767c56eaf678b7901a611@validator-7:26656"
       # Kermit testnet CometBFT RPC endpoints (correct ports: DN=16592, BVN1=16692, BVN2=16792, BVN3=16892)
-      ACCUMULATE_URL: https://kermit.accumulatenetwork.io/v3
+      ACCUMULATE_URL: https://kermit.accumulatenetwork.io
       ACCUMULATE_COMET_DN: http://206.191.154.164:16592
       ACCUMULATE_COMET_BVN: http://206.191.154.164:16692
       ACCUMULATE_COMET_BVN1: http://206.191.154.164:16692
@@ -150,7 +150,7 @@ services:
       # Per BFT Resiliency Task 4: Full peer redundancy
       COMETBFT_P2P_SEEDS: "6678a01f08728ef00ff438c3517213773d92136d@validator-1:26656,e24dcf6bcdf202b991ce0d0a3a6fc623f260ba0d@validator-2:26656,960da0d351187c61f1732308e1168833c9610946@validator-4:26656,1b6cbe9bafe79fb977ba59dbe237f64cc91fbe2b@validator-5:26656,faa57dcd8de29025d52785044e21cf1f703c63ac@validator-6:26656,2ff901c93ec6d8ede51767c56eaf678b7901a611@validator-7:26656"
       # Kermit testnet CometBFT RPC endpoints (correct ports: DN=16592, BVN1=16692, BVN2=16792, BVN3=16892)
-      ACCUMULATE_URL: https://kermit.accumulatenetwork.io/v3
+      ACCUMULATE_URL: https://kermit.accumulatenetwork.io
       ACCUMULATE_COMET_DN: http://206.191.154.164:16592
       ACCUMULATE_COMET_BVN: http://206.191.154.164:16692
       ACCUMULATE_COMET_BVN1: http://206.191.154.164:16692
@@ -205,7 +205,7 @@ services:
       # Per BFT Resiliency Task 4: Full peer redundancy
       COMETBFT_P2P_SEEDS: "6678a01f08728ef00ff438c3517213773d92136d@validator-1:26656,e24dcf6bcdf202b991ce0d0a3a6fc623f260ba0d@validator-2:26656,af2acabc841ab5622556d01021c9f1a6a038d97a@validator-3:26656,1b6cbe9bafe79fb977ba59dbe237f64cc91fbe2b@validator-5:26656,faa57dcd8de29025d52785044e21cf1f703c63ac@validator-6:26656,2ff901c93ec6d8ede51767c56eaf678b7901a611@validator-7:26656"
       # Kermit testnet CometBFT RPC endpoints (correct ports: DN=16592, BVN1=16692, BVN2=16792, BVN3=16892)
-      ACCUMULATE_URL: https://kermit.accumulatenetwork.io/v3
+      ACCUMULATE_URL: https://kermit.accumulatenetwork.io
       ACCUMULATE_COMET_DN: http://206.191.154.164:16592
       ACCUMULATE_COMET_BVN: http://206.191.154.164:16692
       ACCUMULATE_COMET_BVN1: http://206.191.154.164:16692
@@ -260,7 +260,7 @@ services:
       # Per BFT Resiliency Task 4: Full peer redundancy
       COMETBFT_P2P_SEEDS: "6678a01f08728ef00ff438c3517213773d92136d@validator-1:26656,e24dcf6bcdf202b991ce0d0a3a6fc623f260ba0d@validator-2:26656,af2acabc841ab5622556d01021c9f1a6a038d97a@validator-3:26656,960da0d351187c61f1732308e1168833c9610946@validator-4:26656,faa57dcd8de29025d52785044e21cf1f703c63ac@validator-6:26656,2ff901c93ec6d8ede51767c56eaf678b7901a611@validator-7:26656"
       # Kermit testnet CometBFT RPC endpoints (correct ports: DN=16592, BVN1=16692, BVN2=16792, BVN3=16892)
-      ACCUMULATE_URL: https://kermit.accumulatenetwork.io/v3
+      ACCUMULATE_URL: https://kermit.accumulatenetwork.io
       ACCUMULATE_COMET_DN: http://206.191.154.164:16592
       ACCUMULATE_COMET_BVN: http://206.191.154.164:16692
       ACCUMULATE_COMET_BVN1: http://206.191.154.164:16692
@@ -315,7 +315,7 @@ services:
       # Per BFT Resiliency Task 4: Full peer redundancy
       COMETBFT_P2P_SEEDS: "6678a01f08728ef00ff438c3517213773d92136d@validator-1:26656,e24dcf6bcdf202b991ce0d0a3a6fc623f260ba0d@validator-2:26656,af2acabc841ab5622556d01021c9f1a6a038d97a@validator-3:26656,960da0d351187c61f1732308e1168833c9610946@validator-4:26656,1b6cbe9bafe79fb977ba59dbe237f64cc91fbe2b@validator-5:26656,2ff901c93ec6d8ede51767c56eaf678b7901a611@validator-7:26656"
       # Kermit testnet CometBFT RPC endpoints (correct ports: DN=16592, BVN1=16692, BVN2=16792, BVN3=16892)
-      ACCUMULATE_URL: https://kermit.accumulatenetwork.io/v3
+      ACCUMULATE_URL: https://kermit.accumulatenetwork.io
       ACCUMULATE_COMET_DN: http://206.191.154.164:16592
       ACCUMULATE_COMET_BVN: http://206.191.154.164:16692
       ACCUMULATE_COMET_BVN1: http://206.191.154.164:16692
@@ -370,7 +370,7 @@ services:
       # Per BFT Resiliency Task 4: Full peer redundancy
       COMETBFT_P2P_SEEDS: "6678a01f08728ef00ff438c3517213773d92136d@validator-1:26656,e24dcf6bcdf202b991ce0d0a3a6fc623f260ba0d@validator-2:26656,af2acabc841ab5622556d01021c9f1a6a038d97a@validator-3:26656,960da0d351187c61f1732308e1168833c9610946@validator-4:26656,1b6cbe9bafe79fb977ba59dbe237f64cc91fbe2b@validator-5:26656,faa57dcd8de29025d52785044e21cf1f703c63ac@validator-6:26656"
       # Kermit testnet CometBFT RPC endpoints (correct ports: DN=16592, BVN1=16692, BVN2=16792, BVN3=16892)
-      ACCUMULATE_URL: https://kermit.accumulatenetwork.io/v3
+      ACCUMULATE_URL: https://kermit.accumulatenetwork.io
       ACCUMULATE_COMET_DN: http://206.191.154.164:16592
       ACCUMULATE_COMET_BVN: http://206.191.154.164:16692
       ACCUMULATE_COMET_BVN1: http://206.191.154.164:16692
