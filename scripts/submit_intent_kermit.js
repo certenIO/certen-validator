@@ -69,7 +69,7 @@ async function main() {
     console.log(`Created ${entries.length} data entries`);
 
     const tx = new core.Transaction({
-        header: { principal: DATA_ACCOUNT, memo: "CERTEN_INTENT", metadata: "01025f00" },
+        header: { principal: DATA_ACCOUNT, memo: "CERTEN_INTENT" },
         body: { type: "writeData", entry: { type: "doubleHash", data: entries } }
     });
 
