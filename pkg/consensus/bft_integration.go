@@ -969,6 +969,10 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 		// for on-chain verification. Without this, proofHashes[] is empty and
 		// the contract's merkleVerified check fails.
 		LiteClientProof: liteClientProof,
+
+		// CRITICAL: Pass original CrossChainData for executeWithGovernance target address
+		// This ensures the correct target address (leg.To) is used, NOT the anchor contract.
+		CrossChainData: certenIntent.CrossChainData,
 	}
 
 	bftMeta := &verification.BFTExecutionMetadata{

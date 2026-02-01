@@ -60,6 +60,12 @@ type ValidatorBlockMetadata struct {
 	// actual Merkle proof path (proofHashes[]) for on-chain verification.
 	// Without this, the contract's merkleVerified check will fail.
 	LiteClientProof *lcproof.CompleteProof
+
+	// ============ ORIGINAL INTENT DATA FOR EXECUTION ============
+	// CrossChainData contains the original legs[] with target addresses and values.
+	// CRITICAL: This must be passed through to executeWithGovernance() so the
+	// correct target address (leg.To) is used, NOT the anchor contract address.
+	CrossChainData []byte
 }
 
 // BFTExecutionMetadata describes what CometBFT told us about the commit.

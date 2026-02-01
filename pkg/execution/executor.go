@@ -105,6 +105,8 @@ func (tcew *TargetChainExecutorWrapper) SubmitAnchorFromValidatorBlock(
         AccountURL:            vb.AccountURL,
         GeneratedAt:           bft.CommittedAt,
         BLSAggregateSignature: vb.BLSAggregateSignature,
+        // CRITICAL: Pass original CrossChainData for executeWithGovernance target address
+        CrossChainData:        vb.CrossChainData,
         // LiteClientProof with CompleteProof for Merkle proof extraction
         // CRITICAL: CompleteProof contains the full Merkle receipts (MainChainProof, BPTProof,
         // CombinedReceipt, etc.) which extractMerkleProofHashes() needs to build proofHashes[].

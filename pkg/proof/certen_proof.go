@@ -69,6 +69,11 @@ type CertenProof struct {
 	// Performance metadata
 	ProcessingTime time.Duration           `json:"processing_time"`
 	Metrics        *ProofGenerationMetrics `json:"metrics,omitempty"`
+
+	// CRITICAL: Original CrossChainData from intent for executeWithGovernance target address
+	// This must be passed through to ensure the correct target address (leg.To) is used,
+	// NOT the anchor contract address.
+	CrossChainData []byte `json:"cross_chain_data,omitempty"`
 }
 
 // AccumulateAnchorData contains anchor reference data from Accumulate blockchain

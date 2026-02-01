@@ -505,17 +505,27 @@ func (btce *BFTTargetChainExecutor) extractTargetParamsFromIntent(legacyIntent *
 // BFT parameters back into legacy intent.CertenIntent format for contract calls.
 func (btce *BFTTargetChainExecutor) convertToLegacyIntent(intentID, transactionHash, accountURL string, certenProof *proof.CertenProof) *intent.CertenIntent {
 	// Load configuration from environment
-	orgADI, chainID := getTargetChainConfig()
+	orgADI, _ := getTargetChainConfig()
 
-	// Get the anchor contract address - this is the target for Ethereum relay
-	// CRITICAL: extractTargetParamsFromIntent uses the "to" field to determine where to send the tx
-	anchorContractAddr := os.Getenv("CERTEN_ANCHOR_V3_ADDRESS")
-	if anchorContractAddr == "" {
-		anchorContractAddr = os.Getenv("CERTEN_CONTRACT_ADDRESS")
-	}
-	if anchorContractAddr == "" {
-		btce.logger.Printf("⚠️ [CONVERT] No anchor contract address configured, using default")
-		anchorContractAddr = "0xEb17eBd351D2e040a0cB3026a3D04BEc182d8b98" // Sepolia default
+	// CRITICAL FIX: Use the original CrossChainData if available
+	// This ensures executeWithGovernance uses the correct target address (leg.To)
+	// instead of the anchor contract address.
+	var crossChainData []byte
+	if certenProof != nil && len(certenProof.CrossChainData) > 0 {
+		crossChainData = certenProof.CrossChainData
+		btce.logger.Printf("✅ [CONVERT] Using original CrossChainData from proof (%d bytes)", len(crossChainData))
+	} else {
+		// Fallback: generate minimal CrossChainData (should not happen in production)
+		btce.logger.Printf("⚠️ [CONVERT] No CrossChainData in proof, generating fallback (THIS SHOULD NOT HAPPEN)")
+		chainID := int64(11155111) // Sepolia default
+		anchorContractAddr := os.Getenv("CERTEN_ANCHOR_V3_ADDRESS")
+		if anchorContractAddr == "" {
+			anchorContractAddr = os.Getenv("CERTEN_CONTRACT_ADDRESS")
+		}
+		if anchorContractAddr == "" {
+			anchorContractAddr = "0xEb17eBd351D2e040a0cB3026a3D04BEc182d8b98" // Sepolia default
+		}
+		crossChainData = []byte(fmt.Sprintf(`{"protocol":"CERTEN","version":"1.0","legs":[{"chain":"ethereum","chainId":%d,"to":"%s","amountWei":"1"}]}`, chainID, anchorContractAddr))
 	}
 
 	// Create a minimal CertenIntent for contract integration
@@ -526,7 +536,7 @@ func (btce *BFTTargetChainExecutor) convertToLegacyIntent(intentID, transactionH
 		AccountURL:      accountURL,
 		OrganizationADI: orgADI,
 		IntentData:      []byte(fmt.Sprintf(`{"intent_id":"%s","account_url":"%s","block_height":%d}`, intentID, accountURL, certenProof.BlockHeight)),
-		CrossChainData:  []byte(fmt.Sprintf(`{"protocol":"CERTEN","version":"1.0","legs":[{"chain":"ethereum","chainId":%d,"to":"%s","amountWei":"1"}]}`, chainID, anchorContractAddr)),
+		CrossChainData:  crossChainData,
 		GovernanceData:  []byte(fmt.Sprintf(`{"organizationAdi":"%s","authorization":{"required_signers":["%s/book"]}}`, orgADI, orgADI)),
 		ReplayData:      []byte(fmt.Sprintf(`{"nonce":"certen_bft_execution","intent_hash":"0x%s"}`, intentID)),
 	}
