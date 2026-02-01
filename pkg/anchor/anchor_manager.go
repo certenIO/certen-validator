@@ -26,7 +26,124 @@ import (
 
 // CertenAnchor contract ABI - canonical anchor format with three commitments
 // Phase 1: Extended with executeComprehensiveProof for full proof verification
-const certenAnchorABI = `[
+const certenAnchorABI = `[`
+
+// CertenAnchorV4 contract ABI - unified single/multi-leg support
+// V4 handles both single-leg and multi-leg intents with createAnchorWithLegs()
+const certenAnchorV4ABI = `[
+	{
+		"inputs": [
+			{"name": "intentId", "type": "bytes32"},
+			{"name": "operationId", "type": "bytes32"},
+			{"name": "proofRoot", "type": "bytes32"},
+			{"name": "totalLegsInIntent", "type": "uint8"},
+			{
+				"name": "legs",
+				"type": "tuple[]",
+				"components": [
+					{"name": "legId", "type": "bytes32"},
+					{"name": "legIndex", "type": "uint8"},
+					{"name": "fromAddress", "type": "address"},
+					{"name": "toAddress", "type": "address"},
+					{"name": "amount", "type": "uint256"},
+					{"name": "assetId", "type": "bytes32"}
+				]
+			}
+		],
+		"name": "createAnchorWithLegs",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"name": "requests",
+				"type": "tuple[]",
+				"components": [
+					{"name": "intentId", "type": "bytes32"},
+					{"name": "operationId", "type": "bytes32"},
+					{"name": "proofRoot", "type": "bytes32"},
+					{"name": "totalLegsInIntent", "type": "uint8"},
+					{
+						"name": "legs",
+						"type": "tuple[]",
+						"components": [
+							{"name": "legId", "type": "bytes32"},
+							{"name": "legIndex", "type": "uint8"},
+							{"name": "fromAddress", "type": "address"},
+							{"name": "toAddress", "type": "address"},
+							{"name": "amount", "type": "uint256"},
+							{"name": "assetId", "type": "bytes32"}
+						]
+					}
+				]
+			}
+		],
+		"name": "createAnchorsWithLegsBatch",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{"name": "intentId", "type": "bytes32"},
+			{"name": "merkleProof", "type": "bytes32[]"},
+			{"name": "blsSignature", "type": "bytes"}
+		],
+		"name": "executeLegs",
+		"outputs": [{"name": "", "type": "bool"}],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [{"name": "intentId", "type": "bytes32"}],
+		"name": "getIntentAnchor",
+		"outputs": [
+			{"name": "intentId", "type": "bytes32"},
+			{"name": "operationId", "type": "bytes32"},
+			{"name": "totalLegsInIntent", "type": "uint8"},
+			{"name": "legsOnThisChain", "type": "uint8"},
+			{"name": "proofRoot", "type": "bytes32"},
+			{"name": "verified", "type": "bool"},
+			{"name": "createdAt", "type": "uint256"},
+			{"name": "verifiedAt", "type": "uint256"},
+			{"name": "validator", "type": "address"}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [{"name": "intentId", "type": "bytes32"}],
+		"name": "getIntentLegs",
+		"outputs": [
+			{
+				"name": "",
+				"type": "tuple[]",
+				"components": [
+					{"name": "legId", "type": "bytes32"},
+					{"name": "legIndex", "type": "uint8"},
+					{"name": "fromAddress", "type": "address"},
+					{"name": "toAddress", "type": "address"},
+					{"name": "amount", "type": "uint256"},
+					{"name": "assetId", "type": "bytes32"}
+				]
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [{"name": "intentId", "type": "bytes32"}],
+		"name": "isIntentVerified",
+		"outputs": [{"name": "", "type": "bool"}],
+		"stateMutability": "view",
+		"type": "function"
+	}
+]`
+
+// Legacy V3 ABI for backward compatibility
+const certenAnchorV3ABI = certenAnchorABI + `[
 	{
 		"inputs": [
 			{"name": "bundleId", "type": "bytes32"},
@@ -244,6 +361,85 @@ type BatchScheduler struct {
 	batchConfig    *AnchorBatchConfig
 	pendingAnchors []*AnchorData
 	batchTimer     *time.Timer
+}
+
+// =============================================================================
+// MULTI-LEG INTENT SUPPORT (CertenAnchorV4)
+// Per Multi-Leg Intents Implementation Plan
+// =============================================================================
+
+// LegData represents a single leg for multi-leg anchoring on CertenAnchorV4
+type LegData struct {
+	LegID       [32]byte       `json:"leg_id"`
+	LegIndex    uint8          `json:"leg_index"`
+	FromAddress common.Address `json:"from_address"`
+	ToAddress   common.Address `json:"to_address"`
+	Amount      *big.Int       `json:"amount"`
+	AssetID     [32]byte       `json:"asset_id"`
+}
+
+// MultiLegAnchorRequest represents a request to anchor multiple legs for an intent
+type MultiLegAnchorRequest struct {
+	IntentID          string     `json:"intent_id"`
+	OperationID       string     `json:"operation_id"`
+	ProofRoot         []byte     `json:"proof_root"`         // 32 bytes - single proof for all legs
+	TotalLegsInIntent int        `json:"total_legs_in_intent"` // Total legs across ALL chains
+	Legs              []*LegData `json:"legs"`                 // Legs for THIS chain only
+	TargetChain       string     `json:"target_chain"`
+	AccumulateHeight  int64      `json:"accumulate_height"`
+	ValidatorID       string     `json:"validator_id"`
+}
+
+// MultiLegAnchorResult represents the result of a multi-leg anchor creation
+type MultiLegAnchorResult struct {
+	IntentID          string    `json:"intent_id"`
+	TxHash            string    `json:"tx_hash"`
+	BlockNumber       int64     `json:"block_number"`
+	BlockHash         string    `json:"block_hash"`
+	GasUsed           int64     `json:"gas_used"`
+	LegsAnchored      int       `json:"legs_anchored"`
+	TotalLegsInIntent int       `json:"total_legs_in_intent"`
+	Success           bool      `json:"success"`
+	Timestamp         time.Time `json:"timestamp"`
+}
+
+// ChainGroupAnchorRequest represents a request to anchor all legs for a chain group
+type ChainGroupAnchorRequest struct {
+	IntentID          string                 `json:"intent_id"`
+	OperationID       string                 `json:"operation_id"`
+	ChainKey          string                 `json:"chain_key"`   // e.g., "ethereum:1"
+	ProofRoot         []byte                 `json:"proof_root"`  // Single proof for entire intent
+	TotalLegsInIntent int                    `json:"total_legs_in_intent"`
+	Legs              []*LegData             `json:"legs"`
+	ExecutionMode     string                 `json:"execution_mode"` // "sequential", "parallel", "atomic"
+	AccumulateHeight  int64                  `json:"accumulate_height"`
+	ValidatorID       string                 `json:"validator_id"`
+	Metadata          map[string]interface{} `json:"metadata,omitempty"`
+}
+
+// IntentAnchorStatus tracks the anchoring status for a multi-leg intent
+type IntentAnchorStatus struct {
+	IntentID           string                        `json:"intent_id"`
+	TotalLegs          int                           `json:"total_legs"`
+	ChainGroups        map[string]*ChainGroupStatus  `json:"chain_groups"`
+	AllChainsAnchored  bool                          `json:"all_chains_anchored"`
+	AllChainsVerified  bool                          `json:"all_chains_verified"`
+	ExecutionMode      string                        `json:"execution_mode"`
+	CreatedAt          time.Time                     `json:"created_at"`
+	CompletedAt        *time.Time                    `json:"completed_at,omitempty"`
+}
+
+// ChainGroupStatus tracks anchoring status for a specific chain group
+type ChainGroupStatus struct {
+	ChainKey      string    `json:"chain_key"`
+	LegsCount     int       `json:"legs_count"`
+	Anchored      bool      `json:"anchored"`
+	Verified      bool      `json:"verified"`
+	TxHash        string    `json:"tx_hash,omitempty"`
+	BlockNumber   int64     `json:"block_number,omitempty"`
+	AnchoredAt    time.Time `json:"anchored_at,omitempty"`
+	VerifiedAt    *time.Time `json:"verified_at,omitempty"`
+	Error         string    `json:"error,omitempty"`
 }
 
 // NewAnchorManager creates a new unified anchor manager with shared proof generator
@@ -909,6 +1105,373 @@ func (ec *EthereumChain) GetLatestBlock(ctx context.Context) (*ChainBlock, error
 		chainBlock.Number, chainBlock.Hash[:10]+"...", blockTime.Format("15:04:05"))
 
 	return chainBlock, nil
+}
+
+// =============================================================================
+// MULTI-LEG INTENT ANCHORING (CertenAnchorV4)
+// Per Multi-Leg Intents Implementation Plan
+// Supports 1-N legs per chain, unified single/multi-leg contract
+// =============================================================================
+
+// CreateMultiLegAnchor creates an anchor for a multi-leg intent on CertenAnchorV4
+// This method handles both single-leg and multi-leg intents through the unified V4 contract
+func (am *AnchorManager) CreateMultiLegAnchor(ctx context.Context, req *MultiLegAnchorRequest) (*MultiLegAnchorResult, error) {
+	am.logger.Printf("🔗 [Multi-Leg] Creating anchor for intent %s with %d legs", req.IntentID, len(req.Legs))
+
+	if req.IntentID == "" {
+		return nil, fmt.Errorf("intent_id is required")
+	}
+	if len(req.Legs) == 0 {
+		return nil, fmt.Errorf("at least one leg is required")
+	}
+	if len(req.ProofRoot) != 32 {
+		return nil, fmt.Errorf("proof_root must be 32 bytes, got %d", len(req.ProofRoot))
+	}
+
+	// Get the target chain (default to ethereum)
+	targetChain := req.TargetChain
+	if targetChain == "" {
+		targetChain = "ethereum"
+	}
+
+	chain, exists := am.chains[targetChain]
+	if !exists {
+		return nil, fmt.Errorf("chain %s not configured", targetChain)
+	}
+
+	ethChain, ok := chain.(*EthereumChain)
+	if !ok {
+		return nil, fmt.Errorf("chain %s does not support multi-leg anchoring", targetChain)
+	}
+
+	am.logger.Printf("   IntentID: %s", req.IntentID)
+	am.logger.Printf("   OperationID: %s", req.OperationID)
+	am.logger.Printf("   ProofRoot: %x...", req.ProofRoot[:8])
+	am.logger.Printf("   TotalLegsInIntent: %d", req.TotalLegsInIntent)
+	am.logger.Printf("   LegsOnThisChain: %d", len(req.Legs))
+	am.logger.Printf("   TargetChain: %s", targetChain)
+
+	for i, leg := range req.Legs {
+		am.logger.Printf("   Leg[%d]: index=%d, from=%s, to=%s, amount=%s",
+			i, leg.LegIndex, leg.FromAddress.Hex(), leg.ToAddress.Hex(), leg.Amount.String())
+	}
+
+	// Call the V4 contract's createAnchorWithLegs function
+	result, err := ethChain.CreateAnchorWithLegs(ctx, req)
+	if err != nil {
+		am.logger.Printf("❌ [Multi-Leg] Failed to create anchor: %v", err)
+		return nil, fmt.Errorf("failed to create multi-leg anchor: %w", err)
+	}
+
+	// Mark anchor as produced in ledger store
+	if am.ledgerStore != nil {
+		targetURL := fmt.Sprintf("%s://mainnet", targetChain)
+		if err := am.ledgerStore.MarkAnchorProduced(
+			uint64(req.AccumulateHeight),
+			targetURL,
+			result.TxHash,
+			time.Now(),
+			0,
+			time.Time{},
+		); err != nil {
+			am.logger.Printf("❌ Failed to mark multi-leg anchor as produced in ledger: %v", err)
+		} else {
+			am.logger.Printf("✅ Marked multi-leg anchor as produced in ledger: %s -> %s", req.IntentID, targetChain)
+		}
+	}
+
+	am.logger.Printf("🎉 [Multi-Leg] Anchor created successfully!")
+	am.logger.Printf("   TxHash: %s", result.TxHash)
+	am.logger.Printf("   BlockNumber: %d", result.BlockNumber)
+	am.logger.Printf("   LegsAnchored: %d", result.LegsAnchored)
+
+	return result, nil
+}
+
+// CreateChainGroupAnchor creates an anchor for all legs in a chain group
+// This is called by the intent discovery when routing legs grouped by chain
+func (am *AnchorManager) CreateChainGroupAnchor(ctx context.Context, req *ChainGroupAnchorRequest) (*MultiLegAnchorResult, error) {
+	am.logger.Printf("🔗 [Chain Group] Creating anchor for chain group %s with %d legs", req.ChainKey, len(req.Legs))
+
+	// Extract chain name and ID from chain key (e.g., "ethereum:1" -> "ethereum", 1)
+	chainName, _, err := parseChainKey(req.ChainKey)
+	if err != nil {
+		return nil, fmt.Errorf("invalid chain key %s: %w", req.ChainKey, err)
+	}
+
+	// Build the multi-leg anchor request
+	multiLegReq := &MultiLegAnchorRequest{
+		IntentID:          req.IntentID,
+		OperationID:       req.OperationID,
+		ProofRoot:         req.ProofRoot,
+		TotalLegsInIntent: req.TotalLegsInIntent,
+		Legs:              req.Legs,
+		TargetChain:       chainName,
+		AccumulateHeight:  req.AccumulateHeight,
+		ValidatorID:       req.ValidatorID,
+	}
+
+	return am.CreateMultiLegAnchor(ctx, multiLegReq)
+}
+
+// CreateAnchorWithLegs on EthereumChain calls the V4 contract
+func (ec *EthereumChain) CreateAnchorWithLegs(ctx context.Context, req *MultiLegAnchorRequest) (*MultiLegAnchorResult, error) {
+	log.Printf("🔗 Creating multi-leg anchor on Ethereum V4 contract: %s", ec.config.ContractAddress)
+
+	// Convert intent ID to bytes32
+	var intentID [32]byte
+	copy(intentID[:], []byte(req.IntentID))
+
+	// Convert operation ID to bytes32
+	var operationID [32]byte
+	copy(operationID[:], []byte(req.OperationID))
+
+	// Convert proof root to bytes32
+	var proofRoot [32]byte
+	copy(proofRoot[:], req.ProofRoot)
+
+	// Total legs in intent (across all chains)
+	totalLegs := uint8(req.TotalLegsInIntent)
+	if totalLegs == 0 {
+		totalLegs = uint8(len(req.Legs))
+	}
+
+	// Parse contract address
+	contractAddr := common.HexToAddress(ec.config.ContractAddress)
+
+	log.Printf("📋 V4 createAnchorWithLegs params:")
+	log.Printf("   - IntentID: %x", intentID)
+	log.Printf("   - OperationID: %x", operationID)
+	log.Printf("   - ProofRoot: %x", proofRoot)
+	log.Printf("   - TotalLegsInIntent: %d", totalLegs)
+	log.Printf("   - LegsOnThisChain: %d", len(req.Legs))
+
+	// Use the low-level ethereum client to send the contract transaction with retry
+	result, err := ec.ethereumClient.SendContractTransactionWithRetry(
+		ctx,
+		contractAddr,
+		certenAnchorV4ABI,
+		ec.config.PrivateKey,
+		"createAnchorWithLegs",
+		ec.config.GasLimit * 2, // Higher gas limit for multi-leg
+		5, // maxRetries
+		intentID,
+		operationID,
+		proofRoot,
+		totalLegs,
+		req.Legs, // Array of LegData structs
+	)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to call createAnchorWithLegs: %w", err)
+	}
+
+	log.Printf("🎉 Multi-leg anchor created successfully on Ethereum V4!")
+	log.Printf("   TxHash: %s", result.TransactionHash)
+
+	return &MultiLegAnchorResult{
+		IntentID:          req.IntentID,
+		TxHash:            result.TransactionHash,
+		BlockNumber:       int64(result.BlockNumber),
+		BlockHash:         result.BlockHash,
+		GasUsed:           int64(result.GasUsed),
+		LegsAnchored:      len(req.Legs),
+		TotalLegsInIntent: int(totalLegs),
+		Success:           result.Success,
+		Timestamp:         result.Timestamp,
+	}, nil
+}
+
+// ExecuteMultiLegProof executes the proof verification for a multi-leg intent
+func (am *AnchorManager) ExecuteMultiLegProof(ctx context.Context, intentID string, merkleProof [][32]byte, blsSignature []byte) (*ExecuteComprehensiveProofResult, error) {
+	am.logger.Printf("📋 [Multi-Leg] Executing proof for intent %s", intentID)
+
+	chain, exists := am.chains["ethereum"]
+	if !exists {
+		return nil, fmt.Errorf("ethereum chain not configured")
+	}
+
+	ethChain, ok := chain.(*EthereumChain)
+	if !ok {
+		return nil, fmt.Errorf("chain does not support multi-leg proof execution")
+	}
+
+	result, err := ethChain.ExecuteLegs(ctx, intentID, merkleProof, blsSignature)
+	if err != nil {
+		am.logger.Printf("❌ [Multi-Leg] Proof execution failed: %v", err)
+		return nil, fmt.Errorf("failed to execute multi-leg proof: %w", err)
+	}
+
+	am.logger.Printf("✅ [Multi-Leg] Proof executed successfully!")
+	am.logger.Printf("   TxHash: %s", result.TxHash)
+
+	return result, nil
+}
+
+// ExecuteLegs on EthereumChain calls the V4 contract's executeLegs function
+func (ec *EthereumChain) ExecuteLegs(ctx context.Context, intentID string, merkleProof [][32]byte, blsSignature []byte) (*ExecuteComprehensiveProofResult, error) {
+	log.Printf("🔗 Executing multi-leg proof on Ethereum V4 contract: %s", ec.config.ContractAddress)
+
+	// Convert intent ID to bytes32
+	var intentIDBytes [32]byte
+	copy(intentIDBytes[:], []byte(intentID))
+
+	// Parse contract address
+	contractAddr := common.HexToAddress(ec.config.ContractAddress)
+
+	log.Printf("📋 V4 executeLegs params:")
+	log.Printf("   - IntentID: %x", intentIDBytes)
+	log.Printf("   - MerkleProof length: %d", len(merkleProof))
+	log.Printf("   - BLS Signature length: %d", len(blsSignature))
+
+	// Use the low-level ethereum client to send the contract transaction with retry
+	result, err := ec.ethereumClient.SendContractTransactionWithRetry(
+		ctx,
+		contractAddr,
+		certenAnchorV4ABI,
+		ec.config.PrivateKey,
+		"executeLegs",
+		ec.config.GasLimit * 3, // Higher gas limit for proof execution
+		5, // maxRetries
+		intentIDBytes,
+		merkleProof,
+		blsSignature,
+	)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to call executeLegs: %w", err)
+	}
+
+	log.Printf("🎉 Multi-leg proof executed successfully!")
+	log.Printf("   TxHash: %s", result.TransactionHash)
+
+	return &ExecuteComprehensiveProofResult{
+		TxHash:      result.TransactionHash,
+		BlockNumber: int64(result.BlockNumber),
+		BlockHash:   result.BlockHash,
+		GasUsed:     int64(result.GasUsed),
+		Timestamp:   result.Timestamp,
+		Success:     result.Success,
+		ProofValid:  result.Success,
+	}, nil
+}
+
+// GetIntentAnchorStatus retrieves the anchor status for a multi-leg intent
+func (am *AnchorManager) GetIntentAnchorStatus(ctx context.Context, intentID string) (*IntentAnchorStatus, error) {
+	am.logger.Printf("🔍 [Multi-Leg] Getting anchor status for intent %s", intentID)
+
+	chain, exists := am.chains["ethereum"]
+	if !exists {
+		return nil, fmt.Errorf("ethereum chain not configured")
+	}
+
+	ethChain, ok := chain.(*EthereumChain)
+	if !ok {
+		return nil, fmt.Errorf("chain does not support multi-leg status queries")
+	}
+
+	return ethChain.GetIntentAnchorStatus(ctx, intentID)
+}
+
+// GetIntentAnchorStatus on EthereumChain retrieves anchor status from V4 contract
+func (ec *EthereumChain) GetIntentAnchorStatus(ctx context.Context, intentID string) (*IntentAnchorStatus, error) {
+	// Convert intent ID to bytes32
+	var intentIDBytes [32]byte
+	copy(intentIDBytes[:], []byte(intentID))
+
+	// Parse contract address
+	contractAddr := common.HexToAddress(ec.config.ContractAddress)
+
+	// Call getIntentAnchor
+	result, err := ec.ethereumClient.CallContract(ctx, contractAddr, certenAnchorV4ABI, "getIntentAnchor", intentIDBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call getIntentAnchor: %w", err)
+	}
+
+	if len(result) < 9 {
+		return nil, fmt.Errorf("unexpected result length from getIntentAnchor: %d", len(result))
+	}
+
+	// Parse results
+	// intentId, operationId, totalLegsInIntent, legsOnThisChain, proofRoot, verified, createdAt, verifiedAt, validator
+	_ = result[0].([32]byte) // intentId
+	_ = result[1].([32]byte) // operationId
+	totalLegs := result[2].(uint8)
+	legsOnChain := result[3].(uint8)
+	_ = result[4].([32]byte) // proofRoot
+	verified := result[5].(bool)
+	createdAt := result[6].(*big.Int)
+	verifiedAt := result[7].(*big.Int)
+	_ = result[8].(common.Address) // validator
+
+	// Build status
+	status := &IntentAnchorStatus{
+		IntentID:  intentID,
+		TotalLegs: int(totalLegs),
+		ChainGroups: map[string]*ChainGroupStatus{
+			"ethereum": {
+				ChainKey:    "ethereum",
+				LegsCount:   int(legsOnChain),
+				Anchored:    createdAt.Int64() > 0,
+				Verified:    verified,
+				AnchoredAt:  time.Unix(createdAt.Int64(), 0),
+			},
+		},
+		AllChainsAnchored: createdAt.Int64() > 0,
+		AllChainsVerified: verified,
+		CreatedAt:         time.Unix(createdAt.Int64(), 0),
+	}
+
+	if verified && verifiedAt.Int64() > 0 {
+		verTime := time.Unix(verifiedAt.Int64(), 0)
+		status.ChainGroups["ethereum"].VerifiedAt = &verTime
+		status.CompletedAt = &verTime
+	}
+
+	return status, nil
+}
+
+// parseChainKey parses a chain key (e.g., "ethereum:1") into chain name and chain ID
+func parseChainKey(chainKey string) (string, int64, error) {
+	parts := make([]string, 0)
+	current := ""
+	for _, c := range chainKey {
+		if c == ':' {
+			parts = append(parts, current)
+			current = ""
+		} else {
+			current += string(c)
+		}
+	}
+	if current != "" {
+		parts = append(parts, current)
+	}
+
+	if len(parts) < 2 {
+		return chainKey, 0, nil // No chain ID, just return chain name
+	}
+
+	chainName := parts[0]
+	chainID := int64(0)
+	if len(parts) > 1 {
+		if id, err := parseChainID(parts[1]); err == nil {
+			chainID = id
+		}
+	}
+
+	return chainName, chainID, nil
+}
+
+// parseChainID parses a string to int64
+func parseChainID(s string) (int64, error) {
+	var id int64
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return 0, fmt.Errorf("invalid chain ID: %s", s)
+		}
+		id = id*10 + int64(c-'0')
+	}
+	return id, nil
 }
 
 // =============================================================================
@@ -1702,4 +2265,121 @@ func (am *AnchorManager) CreateBatchAnchorWithVerification(
 	am.logger.Printf("   BundleID: %s", bundleIDStr)
 
 	return result, expectedRoot, nil
+}
+
+// =============================================================================
+// MULTI-LEG HELPER FUNCTIONS
+// Conversion utilities for multi-leg intent data
+// =============================================================================
+
+// NewLegData creates a LegData structure for multi-leg anchoring
+func NewLegData(legID string, legIndex int, fromAddr, toAddr string, amount *big.Int, assetID string) *LegData {
+	var legIDBytes [32]byte
+	copy(legIDBytes[:], []byte(legID))
+
+	var assetIDBytes [32]byte
+	copy(assetIDBytes[:], []byte(assetID))
+
+	return &LegData{
+		LegID:       legIDBytes,
+		LegIndex:    uint8(legIndex),
+		FromAddress: common.HexToAddress(fromAddr),
+		ToAddress:   common.HexToAddress(toAddr),
+		Amount:      amount,
+		AssetID:     assetIDBytes,
+	}
+}
+
+// ConvertCCLegToLegData converts a consensus CCLeg to anchor LegData
+// This bridges the consensus package leg representation to the anchor format
+func ConvertCCLegToLegData(legID string, legIndex int, chain string, chainID int64, fromAddr, toAddr string, amountWei string, assetSymbol string) *LegData {
+	// Parse amount
+	amount := big.NewInt(0)
+	if amountWei != "" {
+		amount.SetString(amountWei, 10)
+	}
+
+	// Create asset ID from chain and symbol
+	assetID := fmt.Sprintf("%s:%d:%s", chain, chainID, assetSymbol)
+
+	return NewLegData(legID, legIndex, fromAddr, toAddr, amount, assetID)
+}
+
+// BuildMultiLegAnchorRequest builds a MultiLegAnchorRequest from intent data
+// This is used by intent discovery when routing legs to chain groups
+func BuildMultiLegAnchorRequest(
+	intentID string,
+	operationID string,
+	proofRoot []byte,
+	totalLegsInIntent int,
+	chainLegs []*LegData,
+	targetChain string,
+	accumHeight int64,
+	validatorID string,
+) *MultiLegAnchorRequest {
+	return &MultiLegAnchorRequest{
+		IntentID:          intentID,
+		OperationID:       operationID,
+		ProofRoot:         proofRoot,
+		TotalLegsInIntent: totalLegsInIntent,
+		Legs:              chainLegs,
+		TargetChain:       targetChain,
+		AccumulateHeight:  accumHeight,
+		ValidatorID:       validatorID,
+	}
+}
+
+// BuildChainGroupAnchorRequest builds a ChainGroupAnchorRequest from intent data
+func BuildChainGroupAnchorRequest(
+	intentID string,
+	operationID string,
+	chainKey string,
+	proofRoot []byte,
+	totalLegsInIntent int,
+	chainLegs []*LegData,
+	executionMode string,
+	accumHeight int64,
+	validatorID string,
+) *ChainGroupAnchorRequest {
+	return &ChainGroupAnchorRequest{
+		IntentID:          intentID,
+		OperationID:       operationID,
+		ChainKey:          chainKey,
+		ProofRoot:         proofRoot,
+		TotalLegsInIntent: totalLegsInIntent,
+		Legs:              chainLegs,
+		ExecutionMode:     executionMode,
+		AccumulateHeight:  accumHeight,
+		ValidatorID:       validatorID,
+	}
+}
+
+// GetV4ContractABI returns the CertenAnchorV4 ABI for external use
+func GetV4ContractABI() string {
+	return certenAnchorV4ABI
+}
+
+// GetV3ContractABI returns the legacy CertenAnchorV3 ABI for backward compatibility
+func GetV3ContractABI() string {
+	return certenAnchorABI
+}
+
+// IsMultiLegIntent determines if the anchor request is for a multi-leg intent
+func IsMultiLegIntent(legs []*LegData) bool {
+	return len(legs) > 1
+}
+
+// ComputeIntentProofRoot computes a proof root for a multi-leg intent
+// This combines the operation ID with all leg IDs to create a unique proof root
+func ComputeIntentProofRoot(operationID string, legs []*LegData) [32]byte {
+	// Start with the operation ID
+	data := []byte(operationID)
+
+	// Add each leg ID
+	for _, leg := range legs {
+		data = append(data, leg.LegID[:]...)
+	}
+
+	// Hash to create the proof root
+	return Keccak256(data)
 }

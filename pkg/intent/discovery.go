@@ -94,6 +94,10 @@ type IntentDiscovery struct {
 	batchingEnabled      bool                           // Toggle for batch system routing
 	governanceProofGen   proof.GovernanceProofGenerator // For G0/G1/G2 proof generation
 
+	// Multi-leg intent support
+	legCompletionHandler *LegCompletionHandler          // For multi-leg coordination
+	multiLegEnabled      bool                           // Toggle for multi-leg processing
+
 	// Block monitoring state
 	lastProcessedBlock  uint64
 	isMonitoring       bool
@@ -202,6 +206,20 @@ func (id *IntentDiscovery) SetGovernanceProofGenerator(gen proof.GovernanceProof
 	if gen != nil {
 		id.logger.Printf("✅ Governance proof generator configured for G0/G1/G2 proof generation")
 	}
+}
+
+// SetLegCompletionHandler configures the leg completion handler for multi-leg intent coordination
+func (id *IntentDiscovery) SetLegCompletionHandler(handler *LegCompletionHandler) {
+	id.legCompletionHandler = handler
+	id.multiLegEnabled = (handler != nil)
+	if id.multiLegEnabled {
+		id.logger.Printf("✅ Multi-leg intent coordination enabled via LegCompletionHandler")
+	}
+}
+
+// IsMultiLegEnabled returns whether multi-leg processing is enabled
+func (id *IntentDiscovery) IsMultiLegEnabled() bool {
+	return id.multiLegEnabled
 }
 
 // StartMonitoring begins monitoring Accumulate blockchain for Certen intents
@@ -812,8 +830,19 @@ func (id *IntentDiscovery) convertIntentToTransactionData(intent *CertenIntent, 
 
 // processIntent triggers consensus for the discovered intent
 // PHASE 5: Now routes to batch system based on proofClass for PostgreSQL persistence
+// Multi-Leg: Detects multi-leg intents and routes to chain-grouped leg processing
 func (id *IntentDiscovery) processIntent(intent *CertenIntent, blockHeight uint64) error {
 	id.logger.Printf("🚀 Processing Certen intent: %s", intent.IntentID)
+
+	// Detect if this is a multi-leg intent
+	isMultiLeg, err := intent.IsMultiLeg()
+	if err != nil {
+		id.logger.Printf("⚠️ Failed to detect multi-leg status for %s: %v", intent.IntentID, err)
+	}
+
+	if isMultiLeg && id.multiLegEnabled {
+		return id.processMultiLegIntent(intent, blockHeight)
+	}
 
 	// Prefer canonical AccountURL; fall back to orgAdi/data if missing
 	accountURL := intent.AccountURL
@@ -1078,6 +1107,370 @@ func (id *IntentDiscovery) routeIntentToBatchSystem(intent *CertenIntent, certen
 	}
 
 	return nil
+}
+
+// =============================================================================
+// Multi-Leg Intent Processing
+// =============================================================================
+
+// processMultiLegIntent handles intents with multiple legs
+// Routes legs grouped by target chain to the appropriate batch system
+func (id *IntentDiscovery) processMultiLegIntent(intent *CertenIntent, blockHeight uint64) error {
+	id.logger.Printf("🔀 Processing multi-leg intent: %s", intent.IntentID)
+
+	// Get execution mode
+	execMode, err := intent.GetExecutionMode()
+	if err != nil {
+		execMode = "sequential"
+	}
+	id.logger.Printf("   Execution mode: %s", execMode)
+
+	// Get leg count
+	legCount, err := intent.GetLegCount()
+	if err != nil {
+		return fmt.Errorf("get leg count: %w", err)
+	}
+	id.logger.Printf("   Leg count: %d", legCount)
+
+	// Register intent with leg completion handler
+	var intentRecord *MultiLegIntentRecord
+	if id.legCompletionHandler != nil {
+		record, err := id.legCompletionHandler.RegisterIntent((*consensus.CertenIntent)(intent), blockHeight)
+		if err != nil {
+			return fmt.Errorf("register multi-leg intent: %w", err)
+		}
+		intentRecord = record
+		id.logger.Printf("   Registered with %d chain groups", len(record.ChainGroups))
+	}
+
+	// Group legs by target chain
+	legsGrouped, err := intent.GetLegsGroupedByChain()
+	if err != nil {
+		return fmt.Errorf("group legs by chain: %w", err)
+	}
+	id.logger.Printf("   Chain groups: %v", func() []string {
+		keys := make([]string, 0, len(legsGrouped))
+		for k := range legsGrouped {
+			keys = append(keys, k)
+		}
+		return keys
+	}())
+
+	// Generate proofs (same for all legs)
+	accountURL := intent.AccountURL
+	if accountURL == "" && intent.OrganizationADI != "" {
+		accountURL = fmt.Sprintf("%s/data", intent.OrganizationADI)
+	}
+
+	proofClass, err := intent.GetProofClass()
+	if err != nil {
+		proofClass = "on_cadence"
+	}
+
+	// Generate CertenProof
+	var certenProof *proof.CertenProof
+	var govProof *proof.GovernanceProof
+
+	if id.proofGenerator != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), id.config.BFTTimeout)
+		defer cancel()
+
+		// Try L1-L3 chained proof
+		if id.proofGenerator.HasRealProofBuilder() && intent.TransactionHash != "" && intent.Partition != "" {
+			id.logger.Printf("🔗 [MULTI-LEG] Generating L1-L3 chained proof for %s", intent.IntentID)
+
+			chainedProof, err := id.proofGenerator.GenerateChainedProof(ctx, accountURL, intent.TransactionHash, intent.Partition)
+			if err != nil {
+				id.logger.Printf("⚠️ [MULTI-LEG] L1-L3 proof failed: %v", err)
+			} else {
+				complete := proof.ChainedProofToCompleteProof(chainedProof)
+				req := &proof.ProofRequest{
+					RequestID:       fmt.Sprintf("multileg_%s", intent.IntentID),
+					ProofType:       "chained_l1_l2_l3",
+					TransactionHash: intent.TransactionHash,
+					AccountURL:      accountURL,
+				}
+				adapter := proof.NewCertenProofAdapter(complete, req, id.validatorID)
+				certenProof = adapter.ToCertenProof()
+				id.logger.Printf("✅ [MULTI-LEG] CertenProof created for all legs")
+			}
+		}
+
+		// Fallback to basic proof
+		if certenProof == nil {
+			id.logger.Printf("📋 [MULTI-LEG] Using basic proof for %s", intent.IntentID)
+			complete, err := id.proofGenerator.GenerateProofForIntent(ctx, accountURL)
+			if err != nil {
+				id.logger.Printf("⚠️ [MULTI-LEG] Basic proof failed: %v", err)
+			} else {
+				req := &proof.ProofRequest{
+					RequestID:       fmt.Sprintf("multileg_%s", intent.IntentID),
+					ProofType:       "account",
+					TransactionHash: intent.TransactionHash,
+					AccountURL:      accountURL,
+				}
+				adapter := proof.NewCertenProofAdapter(complete, req, id.validatorID)
+				certenProof = adapter.ToCertenProof()
+			}
+		}
+	}
+
+	// Generate governance proof if available
+	if id.governanceProofGen != nil && certenProof != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		govRequest := &proof.GovernanceRequest{
+			AccountURL:      accountURL,
+			TransactionHash: intent.TransactionHash,
+			Chain:           "main",
+		}
+		g0Wrapper, g0Err := id.governanceProofGen.GenerateG0(ctx, govRequest)
+		if g0Err == nil && g0Wrapper != nil {
+			govProof = g0Wrapper
+		}
+		cancel()
+	}
+
+	// Route based on execution mode
+	switch execMode {
+	case "sequential":
+		// Execute first chain group, then next chain group
+		err = id.routeSequentialChainGroups(intent, legsGrouped, certenProof, govProof, proofClass, blockHeight, intentRecord)
+	case "parallel":
+		// Execute all chain groups in parallel
+		err = id.routeParallelChainGroups(intent, legsGrouped, certenProof, govProof, proofClass, blockHeight, intentRecord)
+	case "atomic":
+		// All chain groups must succeed or all rollback
+		err = id.routeAtomicChainGroups(intent, legsGrouped, certenProof, govProof, proofClass, blockHeight, intentRecord)
+	default:
+		// Default to sequential
+		err = id.routeSequentialChainGroups(intent, legsGrouped, certenProof, govProof, proofClass, blockHeight, intentRecord)
+	}
+
+	if err != nil {
+		return fmt.Errorf("route multi-leg intent: %w", err)
+	}
+
+	id.logger.Printf("✅ Multi-leg intent %s routed to batch system", intent.IntentID)
+
+	// Execute via BFT consensus
+	if id.bftConsensus != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), id.config.BFTTimeout)
+		defer cancel()
+
+		err = id.bftConsensus.ExecuteCanonicalIntentWithBFTConsensus(
+			ctx,
+			(*consensus.CertenIntent)(intent),
+			certenProof,
+			blockHeight,
+		)
+		if err != nil {
+			id.logger.Printf("❌ BFT consensus failed for multi-leg intent %s: %v", intent.IntentID, err)
+			return err
+		}
+		id.logger.Printf("✅ BFT consensus completed for multi-leg intent: %s", intent.IntentID)
+	}
+
+	id.mu.Lock()
+	id.intentCount++
+	id.mu.Unlock()
+
+	return nil
+}
+
+// routeSequentialChainGroups routes chain groups one at a time (sequential mode)
+func (id *IntentDiscovery) routeSequentialChainGroups(
+	intent *CertenIntent,
+	legsGrouped map[string][]consensus.CCLeg,
+	certenProof *proof.CertenProof,
+	govProof *proof.GovernanceProof,
+	proofClass string,
+	blockHeight uint64,
+	intentRecord *MultiLegIntentRecord,
+) error {
+	// For sequential mode, we only route the first chain group initially
+	// Subsequent groups are triggered by the LegCompletionHandler when the first completes
+	firstGroup := true
+	for chainKey, legs := range legsGrouped {
+		if firstGroup {
+			id.logger.Printf("📦 [SEQUENTIAL] Routing first chain group %s with %d legs", chainKey, len(legs))
+			if err := id.routeChainLegsToBatchSystem(intent, chainKey, legs, certenProof, govProof, proofClass, blockHeight); err != nil {
+				return fmt.Errorf("route chain group %s: %w", chainKey, err)
+			}
+			firstGroup = false
+		} else {
+			id.logger.Printf("📋 [SEQUENTIAL] Chain group %s with %d legs queued for later", chainKey, len(legs))
+		}
+	}
+	return nil
+}
+
+// routeParallelChainGroups routes all chain groups simultaneously (parallel mode)
+func (id *IntentDiscovery) routeParallelChainGroups(
+	intent *CertenIntent,
+	legsGrouped map[string][]consensus.CCLeg,
+	certenProof *proof.CertenProof,
+	govProof *proof.GovernanceProof,
+	proofClass string,
+	blockHeight uint64,
+	intentRecord *MultiLegIntentRecord,
+) error {
+	// Route all chain groups
+	for chainKey, legs := range legsGrouped {
+		id.logger.Printf("📦 [PARALLEL] Routing chain group %s with %d legs", chainKey, len(legs))
+		if err := id.routeChainLegsToBatchSystem(intent, chainKey, legs, certenProof, govProof, proofClass, blockHeight); err != nil {
+			return fmt.Errorf("route chain group %s: %w", chainKey, err)
+		}
+	}
+	return nil
+}
+
+// routeAtomicChainGroups routes all chain groups with atomic rollback support
+func (id *IntentDiscovery) routeAtomicChainGroups(
+	intent *CertenIntent,
+	legsGrouped map[string][]consensus.CCLeg,
+	certenProof *proof.CertenProof,
+	govProof *proof.GovernanceProof,
+	proofClass string,
+	blockHeight uint64,
+	intentRecord *MultiLegIntentRecord,
+) error {
+	// For atomic mode, we route all groups but track them for potential rollback
+	id.logger.Printf("⚛️ [ATOMIC] Routing all chain groups atomically")
+
+	var errors []error
+	for chainKey, legs := range legsGrouped {
+		id.logger.Printf("📦 [ATOMIC] Routing chain group %s with %d legs", chainKey, len(legs))
+		if err := id.routeChainLegsToBatchSystem(intent, chainKey, legs, certenProof, govProof, proofClass, blockHeight); err != nil {
+			errors = append(errors, fmt.Errorf("chain group %s: %w", chainKey, err))
+		}
+	}
+
+	if len(errors) > 0 {
+		// In atomic mode, any failure should trigger rollback consideration
+		id.logger.Printf("⚠️ [ATOMIC] %d chain groups failed - rollback may be needed", len(errors))
+		return fmt.Errorf("atomic routing failed: %d errors", len(errors))
+	}
+
+	return nil
+}
+
+// routeChainLegsToBatchSystem routes all legs for a specific chain to that chain's anchor
+func (id *IntentDiscovery) routeChainLegsToBatchSystem(
+	intent *CertenIntent,
+	chainKey string,
+	legs []consensus.CCLeg,
+	certenProof *proof.CertenProof,
+	govProof *proof.GovernanceProof,
+	proofClass string,
+	blockHeight uint64,
+) error {
+	id.logger.Printf("📦 Routing %d legs for chain %s to batch system", len(legs), chainKey)
+
+	// For each leg, create a transaction and route to batch system
+	for i, leg := range legs {
+		// Create transaction data for this leg
+		txData, err := id.convertLegToTransactionData(intent, &leg, i, certenProof, govProof)
+		if err != nil {
+			id.logger.Printf("⚠️ Failed to convert leg %d to transaction data: %v", i, err)
+			continue
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+
+		switch proofClass {
+		case "on_demand":
+			if id.onDemandHandler == nil {
+				cancel()
+				return fmt.Errorf("on_demand but OnDemandHandler not configured")
+			}
+			id.logger.Printf("⚡ [LEG %d] Routing to OnDemandHandler", i)
+			result, err := id.onDemandHandler.ProcessTransaction(ctx, txData)
+			if err != nil {
+				cancel()
+				return fmt.Errorf("on_demand handler failed for leg %d: %w", i, err)
+			}
+			if result.AnchorTriggered {
+				id.logger.Printf("⚡ [LEG %d] Anchor triggered (batch: %s)", i, result.BatchResult.BatchID)
+			}
+
+		case "on_cadence":
+			if id.batchCollector == nil {
+				cancel()
+				return fmt.Errorf("on_cadence but BatchCollector not configured")
+			}
+			id.logger.Printf("📦 [LEG %d] Routing to BatchCollector", i)
+			result, err := id.batchCollector.AddOnCadenceTransaction(ctx, txData)
+			if err != nil {
+				cancel()
+				return fmt.Errorf("batch collector failed for leg %d: %w", i, err)
+			}
+			id.logger.Printf("📦 [LEG %d] Added to batch %s (position: %d)", i, result.BatchID, result.TreeIndex)
+		}
+
+		cancel()
+	}
+
+	return nil
+}
+
+// convertLegToTransactionData converts a single leg to batch.TransactionData
+func (id *IntentDiscovery) convertLegToTransactionData(
+	intent *CertenIntent,
+	leg *consensus.CCLeg,
+	legIndex int,
+	certenProof *proof.CertenProof,
+	govProof *proof.GovernanceProof,
+) (*batch.TransactionData, error) {
+	// Compute unique transaction hash for this leg
+	legData := fmt.Sprintf("%s:leg:%d:%s", intent.TransactionHash, legIndex, leg.LegID)
+	txHash := sha256.Sum256([]byte(legData))
+
+	// Build TransactionData for this leg
+	txData := &batch.TransactionData{
+		AccumTxHash:  intent.TransactionHash,
+		AccountURL:   intent.AccountURL,
+		TxHash:       txHash[:],
+		IntentType:   "certen_intent",
+		IntentData:   intent.IntentData,
+		UserID:       intent.UserID,
+		IntentID:     intent.IntentID,
+		TargetChain:  leg.Chain,
+		FromChain:    "accumulate",
+		ToChain:      leg.Chain,
+		FromAddress:  leg.From,
+		ToAddress:    leg.To,
+		TokenSymbol:  leg.Asset.Symbol,
+	}
+
+	// Set amount
+	if leg.AmountWei != "" {
+		txData.Amount = leg.AmountWei
+	} else if leg.AmountEth != "" {
+		txData.Amount = leg.AmountEth
+	}
+
+	// Extract ADI URL
+	if intent.OrganizationADI != "" {
+		txData.AdiURL = intent.OrganizationADI
+	}
+
+	// Add proofs
+	if certenProof != nil && certenProof.LiteClientProof != nil {
+		chainedBytes, err := json.Marshal(certenProof.LiteClientProof)
+		if err == nil {
+			txData.ChainedProof = chainedBytes
+		}
+	}
+
+	if govProof != nil {
+		govProofBytes, err := json.Marshal(govProof)
+		if err == nil {
+			txData.GovProof = govProofBytes
+			txData.GovLevel = string(govProof.Level)
+		}
+	}
+
+	return txData, nil
 }
 
 // Helper methods

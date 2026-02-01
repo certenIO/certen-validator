@@ -80,21 +80,59 @@ type IntentData struct {
 // CrossChainEnvelope represents the parsed cross-chain data blob
 type CrossChainEnvelope struct {
 	Protocol               string                 `json:"protocol"`        // "CERTEN"
-	Version                string                 `json:"version"`         // "1.0"
+	Version                string                 `json:"version"`         // "1.0" (single-leg) or "2.0" (multi-leg)
 	OperationGroupId       string                 `json:"operationGroupId"`
-	Legs                   []CCLeg                `json:"legs"`
+	Legs                   []CCLeg                `json:"legs"`            // 1-N legs for multi-leg support
 	Atomicity              map[string]interface{} `json:"atomicity"`
 	ExecutionConstraints   map[string]interface{} `json:"execution_constraints"`
 	CrossChainRouting      map[string]interface{} `json:"cross_chain_routing"`
+
+	// Multi-leg coordination (Version 2.0+)
+	// ExecutionMode determines how legs are executed:
+	// - "sequential": Legs execute in sequence_order, one chain group at a time
+	// - "parallel": All chain groups execute simultaneously
+	// - "atomic": All legs must succeed or all are rolled back
+	ExecutionMode          string                 `json:"execution_mode,omitempty"`
+
+	// LegDependencies explicitly define which legs depend on others
+	LegDependencies        []LegDependency        `json:"leg_dependencies,omitempty"`
+
+	// RollbackPolicy defines behavior when a leg fails in atomic mode
+	RollbackPolicy         *RollbackPolicy        `json:"rollback_policy,omitempty"`
+
+	// TimeoutPolicy defines global timeout behavior for multi-leg intent
+	TimeoutPolicy          *TimeoutPolicy         `json:"timeout_policy,omitempty"`
 
 	// OperationGroup is a legacy field; OperationGroupId is canonical.
 	OperationGroup         string                 `json:"operationGroup,omitempty"`
 }
 
+// LegDependency defines an explicit dependency between legs
+type LegDependency struct {
+	LegID          string `json:"leg_id"`           // The leg that has the dependency
+	DependsOnLegID string `json:"depends_on_leg_id"` // The leg it depends on
+	ConditionType  string `json:"condition_type"`    // "success", "completion", "confirmation"
+}
+
+// RollbackPolicy defines rollback behavior for atomic multi-leg intents
+type RollbackPolicy struct {
+	Enabled           bool   `json:"enabled"`             // Whether rollback is enabled
+	RollbackOnFailure bool   `json:"rollback_on_failure"` // Rollback all legs if one fails
+	RollbackOnTimeout bool   `json:"rollback_on_timeout"` // Rollback if timeout exceeded
+	MaxRollbackLegs   int    `json:"max_rollback_legs"`   // Maximum legs to attempt rollback (0 = all)
+}
+
+// TimeoutPolicy defines timeout behavior for multi-leg execution
+type TimeoutPolicy struct {
+	GlobalTimeoutSeconds int `json:"global_timeout_seconds"` // Max time for entire intent
+	PerLegTimeoutSeconds int `json:"per_leg_timeout_seconds"` // Max time per leg
+	PerChainTimeoutSeconds int `json:"per_chain_timeout_seconds"` // Max time per chain group
+}
+
 // CCLeg represents a single cross-chain operation leg
 type CCLeg struct {
 	LegID   string `json:"legId"`
-	Role    string `json:"role"`    // "source" or "destination"
+	Role    string `json:"role"`    // "source", "destination", or "intermediate"
 	Chain   string `json:"chain"`   // "ethereum"
 	ChainID uint64 `json:"chainId"` // 11155111 for Sepolia
 	Network string `json:"network"` // "sepolia"
@@ -103,6 +141,7 @@ type CCLeg struct {
 		Symbol   string `json:"symbol"`   // "ETH"
 		Decimals uint8  `json:"decimals"` // 18
 		Native   bool   `json:"native"`   // true
+		Address  string `json:"address,omitempty"` // Token contract address (for non-native)
 	} `json:"asset"`
 
 	From      string `json:"from"`      // Source address
@@ -116,11 +155,29 @@ type CCLeg struct {
 	} `json:"anchorContract"`
 
 	GasPolicy struct {
-		MaxFeePerGasGwei        string `json:"maxFeePerGasGwei"`
+		MaxFeePerGasGwei         string `json:"maxFeePerGasGwei"`
 		MaxPriorityFeePerGasGwei string `json:"maxPriorityFeePerGasGwei"`
-		GasLimit                uint64 `json:"gasLimit"`
-		Payer                   string `json:"payer"`
+		GasLimit                 uint64 `json:"gasLimit"`
+		Payer                    string `json:"payer"`
 	} `json:"gasPolicy"`
+
+	// Multi-leg execution fields (Version 2.0+)
+	// SequenceOrder determines execution order for sequential mode (0-indexed)
+	SequenceOrder int `json:"sequence_order,omitempty"`
+
+	// DependsOnLegs lists leg IDs that must complete before this leg executes
+	DependsOnLegs []string `json:"depends_on_legs,omitempty"`
+
+	// MaxRetries is the maximum number of retry attempts for this leg
+	MaxRetries int `json:"max_retries,omitempty"`
+
+	// Priority allows per-leg priority override (higher = more urgent)
+	Priority int `json:"priority,omitempty"`
+}
+
+// ChainKey returns a unique key for this leg's target chain (e.g., "ethereum:1")
+func (leg *CCLeg) ChainKey() string {
+	return fmt.Sprintf("%s:%d", normalizeChainName(leg.Chain), leg.ChainID)
 }
 
 // GovernanceData represents the parsed governance data blob
@@ -505,6 +562,262 @@ func (ci *CertenIntent) ValidateForExecution(blockHeight uint64) error {
 		// This just ensures the field is present if set
 		if replayData.CreatedAt <= 0 {
 			return fmt.Errorf("intent validation for execution failed: expires_at set but created_at missing")
+		}
+	}
+
+	return nil
+}
+
+// =============================================================================
+// Multi-Leg Intent Support Methods
+// =============================================================================
+
+// GetLegsGroupedByChain groups all legs by their target chain for efficient anchoring.
+// Returns a map where keys are chain keys (e.g., "ethereum:1", "polygon:137")
+// and values are slices of legs targeting that chain.
+// This enables one anchor call per chain group.
+func (ci *CertenIntent) GetLegsGroupedByChain() (map[string][]CCLeg, error) {
+	ccEnvelope, err := ci.ParseCrossChain()
+	if err != nil {
+		return nil, fmt.Errorf("parse cross-chain data for leg grouping: %w", err)
+	}
+
+	grouped := make(map[string][]CCLeg)
+	for _, leg := range ccEnvelope.Legs {
+		key := leg.ChainKey()
+		grouped[key] = append(grouped[key], leg)
+	}
+
+	return grouped, nil
+}
+
+// GetLegCount returns the number of legs in this intent
+func (ci *CertenIntent) GetLegCount() (int, error) {
+	ccEnvelope, err := ci.ParseCrossChain()
+	if err != nil {
+		return 0, fmt.Errorf("parse cross-chain data for leg count: %w", err)
+	}
+	return len(ccEnvelope.Legs), nil
+}
+
+// GetExecutionMode returns the execution mode for this intent
+// Defaults to "sequential" for backward compatibility
+func (ci *CertenIntent) GetExecutionMode() (string, error) {
+	ccEnvelope, err := ci.ParseCrossChain()
+	if err != nil {
+		return "", fmt.Errorf("parse cross-chain data for execution mode: %w", err)
+	}
+
+	// Check explicit execution_mode field first
+	if ccEnvelope.ExecutionMode != "" {
+		return ccEnvelope.ExecutionMode, nil
+	}
+
+	// Check execution_constraints map (legacy/alternative location)
+	if mode, ok := ccEnvelope.ExecutionConstraints["mode"].(string); ok && mode != "" {
+		return mode, nil
+	}
+
+	// Default to sequential for backward compatibility
+	return "sequential", nil
+}
+
+// DetectIntentVersion returns the intent version based on structure analysis:
+// - "1.0": Single-leg (legacy) - 1 leg, no execution mode
+// - "1.1": Multi-leg sequential default - >1 legs, no explicit mode
+// - "2.0": Multi-leg with coordination - >1 legs, explicit execution mode
+func (ci *CertenIntent) DetectIntentVersion() (string, error) {
+	ccEnvelope, err := ci.ParseCrossChain()
+	if err != nil {
+		return "", fmt.Errorf("parse cross-chain data for version detection: %w", err)
+	}
+
+	legCount := len(ccEnvelope.Legs)
+
+	// Single-leg is always version 1.0
+	if legCount <= 1 {
+		return "1.0", nil
+	}
+
+	// Check for explicit execution mode (indicates v2.0)
+	if ccEnvelope.ExecutionMode != "" {
+		return "2.0", nil
+	}
+
+	// Check execution_constraints for mode
+	if _, hasMode := ccEnvelope.ExecutionConstraints["mode"]; hasMode {
+		return "2.0", nil
+	}
+
+	// Check for leg dependencies (indicates v2.0)
+	if len(ccEnvelope.LegDependencies) > 0 {
+		return "2.0", nil
+	}
+
+	// Check for individual leg ordering
+	for _, leg := range ccEnvelope.Legs {
+		if leg.SequenceOrder > 0 || len(leg.DependsOnLegs) > 0 {
+			return "2.0", nil
+		}
+	}
+
+	// Multi-leg without explicit coordination is v1.1
+	return "1.1", nil
+}
+
+// IsMultiLeg returns true if this intent has more than one leg
+func (ci *CertenIntent) IsMultiLeg() (bool, error) {
+	count, err := ci.GetLegCount()
+	if err != nil {
+		return false, err
+	}
+	return count > 1, nil
+}
+
+// GetLegByID returns a specific leg by its LegID
+func (ci *CertenIntent) GetLegByID(legID string) (*CCLeg, error) {
+	ccEnvelope, err := ci.ParseCrossChain()
+	if err != nil {
+		return nil, fmt.Errorf("parse cross-chain data for leg lookup: %w", err)
+	}
+
+	for i := range ccEnvelope.Legs {
+		if ccEnvelope.Legs[i].LegID == legID {
+			return &ccEnvelope.Legs[i], nil
+		}
+	}
+
+	return nil, fmt.Errorf("leg not found: %s", legID)
+}
+
+// GetLegByIndex returns a leg by its index (0-indexed)
+func (ci *CertenIntent) GetLegByIndex(index int) (*CCLeg, error) {
+	ccEnvelope, err := ci.ParseCrossChain()
+	if err != nil {
+		return nil, fmt.Errorf("parse cross-chain data for leg index lookup: %w", err)
+	}
+
+	if index < 0 || index >= len(ccEnvelope.Legs) {
+		return nil, fmt.Errorf("leg index out of range: %d (have %d legs)", index, len(ccEnvelope.Legs))
+	}
+
+	return &ccEnvelope.Legs[index], nil
+}
+
+// GetUniqueChains returns a list of unique chain keys across all legs
+func (ci *CertenIntent) GetUniqueChains() ([]string, error) {
+	grouped, err := ci.GetLegsGroupedByChain()
+	if err != nil {
+		return nil, err
+	}
+
+	chains := make([]string, 0, len(grouped))
+	for chainKey := range grouped {
+		chains = append(chains, chainKey)
+	}
+
+	return chains, nil
+}
+
+// GetLegsForChain returns all legs targeting a specific chain
+func (ci *CertenIntent) GetLegsForChain(chainKey string) ([]CCLeg, error) {
+	grouped, err := ci.GetLegsGroupedByChain()
+	if err != nil {
+		return nil, err
+	}
+
+	legs, ok := grouped[chainKey]
+	if !ok {
+		return nil, fmt.Errorf("no legs found for chain: %s", chainKey)
+	}
+
+	return legs, nil
+}
+
+// LegOperationID computes an operation ID specific to a leg within the intent.
+// This is derived from the main OperationID plus the leg index.
+func (ci *CertenIntent) LegOperationID(legIndex int) (string, error) {
+	mainOpID, err := ci.OperationID()
+	if err != nil {
+		return "", err
+	}
+
+	// For multi-leg, append leg index to create unique per-leg operation ID
+	return fmt.Sprintf("%s-leg%d", mainOpID, legIndex), nil
+}
+
+// ValidateMultiLeg performs validation specific to multi-leg intents
+func (ci *CertenIntent) ValidateMultiLeg() error {
+	// First run basic validation
+	if err := ci.Validate(); err != nil {
+		return err
+	}
+
+	ccEnvelope, err := ci.ParseCrossChain()
+	if err != nil {
+		return fmt.Errorf("multi-leg validation failed: %w", err)
+	}
+
+	legCount := len(ccEnvelope.Legs)
+	if legCount == 0 {
+		return fmt.Errorf("multi-leg validation failed: no legs defined")
+	}
+
+	// Validate execution mode if set
+	execMode, err := ci.GetExecutionMode()
+	if err != nil {
+		return fmt.Errorf("multi-leg validation failed: %w", err)
+	}
+	if execMode != "sequential" && execMode != "parallel" && execMode != "atomic" {
+		return fmt.Errorf("multi-leg validation failed: invalid execution mode '%s'", execMode)
+	}
+
+	// Validate each leg
+	seenLegIDs := make(map[string]bool)
+	for i, leg := range ccEnvelope.Legs {
+		// Check for duplicate leg IDs
+		if leg.LegID != "" {
+			if seenLegIDs[leg.LegID] {
+				return fmt.Errorf("multi-leg validation failed: duplicate leg ID '%s'", leg.LegID)
+			}
+			seenLegIDs[leg.LegID] = true
+		}
+
+		// Validate chain info
+		if leg.Chain == "" {
+			return fmt.Errorf("multi-leg validation failed: leg %d has empty chain", i)
+		}
+
+		// Validate role
+		if leg.Role != "source" && leg.Role != "destination" && leg.Role != "intermediate" {
+			return fmt.Errorf("multi-leg validation failed: leg %d has invalid role '%s'", i, leg.Role)
+		}
+
+		// Validate dependencies reference existing legs
+		for _, depLegID := range leg.DependsOnLegs {
+			found := false
+			for _, otherLeg := range ccEnvelope.Legs {
+				if otherLeg.LegID == depLegID {
+					found = true
+					break
+				}
+			}
+			if !found && depLegID != "" {
+				return fmt.Errorf("multi-leg validation failed: leg %d depends on unknown leg '%s'", i, depLegID)
+			}
+		}
+	}
+
+	// Validate explicit leg dependencies
+	for _, dep := range ccEnvelope.LegDependencies {
+		if !seenLegIDs[dep.LegID] {
+			return fmt.Errorf("multi-leg validation failed: dependency references unknown leg '%s'", dep.LegID)
+		}
+		if !seenLegIDs[dep.DependsOnLegID] {
+			return fmt.Errorf("multi-leg validation failed: dependency references unknown depends_on_leg '%s'", dep.DependsOnLegID)
+		}
+		if dep.LegID == dep.DependsOnLegID {
+			return fmt.Errorf("multi-leg validation failed: leg '%s' cannot depend on itself", dep.LegID)
 		}
 	}
 
