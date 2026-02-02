@@ -246,6 +246,20 @@ type GovernanceProofGenerator interface {
 	GenerateAtLevel(ctx context.Context, level proof.GovernanceLevel, req *proof.GovernanceRequest) (*proof.GovernanceProof, error)
 }
 
+// AnchorScheduler defines the interface for scheduling anchor operations
+// This enables on_cadence batching vs on_demand immediate execution per FIRST_PRINCIPLES 2.5
+type AnchorScheduler interface {
+	// QueueForCadence queues an intent for batched on-cadence execution
+	// Returns the scheduled time when the batch will be processed
+	QueueForCadence(ctx context.Context, intentID string, vbMeta *verification.ValidatorBlockMetadata, bftMeta *verification.BFTExecutionMetadata) (scheduledAt time.Time, err error)
+
+	// GetQueuedCount returns the number of intents waiting in the cadence queue
+	GetQueuedCount() int
+
+	// IsRunning returns whether the scheduler is actively processing
+	IsRunning() bool
+}
+
 // BFTValidator represents a decentralized BFT validator with elected executor consensus
 // Phase 3: BFTValidator now uses only CometBFT for consensus (no ExecutionConsensus)
 type BFTValidator struct {
@@ -268,6 +282,10 @@ type BFTValidator struct {
 
 	// Proof Cycle Orchestrator for Phase 7-9 (observation, attestation, write-back)
 	proofCycleOrchestrator ProofCycleOrchestratorInterface
+
+	// Anchor Scheduler for on_cadence batching per FIRST_PRINCIPLES 2.5
+	// When set, on_cadence intents are queued for batched execution instead of immediate
+	anchorScheduler        AnchorScheduler
 }
 
 // Intent represents an intent to be executed
@@ -380,6 +398,24 @@ func (bv *BFTValidator) GetProofCycleOrchestrator() ProofCycleOrchestratorInterf
 	bv.mu.RLock()
 	defer bv.mu.RUnlock()
 	return bv.proofCycleOrchestrator
+}
+
+// SetAnchorScheduler sets the anchor scheduler for on_cadence batching
+// Per FIRST_PRINCIPLES 2.5: on_cadence and on_demand are NEVER interchangeable
+func (bv *BFTValidator) SetAnchorScheduler(scheduler AnchorScheduler) {
+	bv.mu.Lock()
+	defer bv.mu.Unlock()
+	bv.anchorScheduler = scheduler
+	if scheduler != nil {
+		bv.logger.Printf("✅ Anchor scheduler configured for on_cadence batching")
+	}
+}
+
+// GetAnchorScheduler returns the anchor scheduler
+func (bv *BFTValidator) GetAnchorScheduler() AnchorScheduler {
+	bv.mu.RLock()
+	defer bv.mu.RUnlock()
+	return bv.anchorScheduler
 }
 
 // Start starts the validator's background services
@@ -1003,11 +1039,46 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	bv.logger.Printf("⚡ [CANONICAL-BFT] Validator %s is ELECTED EXECUTOR for round %s - proceeding with external submission",
 		bv.validatorID, roundID)
 
+	// =======================================================================
+	// PROOF CLASS ROUTING: on_cadence vs on_demand per FIRST_PRINCIPLES 2.5
+	// These are NEVER interchangeable - on_cadence gets batched, on_demand executes immediately
+	// =======================================================================
+	var anchorRes *verification.AnchorExecutionResult
+
+	if proofClass == "on_cadence" && bv.anchorScheduler != nil {
+		// ON-CADENCE: Queue for batched execution
+		bv.logger.Printf("📦 [CADENCE-BATCH] Queuing intent %s for on_cadence batched execution", certenIntent.IntentID)
+
+		scheduledAt, queueErr := bv.anchorScheduler.QueueForCadence(ctx, certenIntent.IntentID, vbMeta, bftMeta)
+		if queueErr != nil {
+			bv.logger.Printf("⚠️ [CADENCE-BATCH] Failed to queue for cadence: %v - falling back to immediate execution", queueErr)
+			// Fall through to immediate execution
+		} else {
+			queuedCount := bv.anchorScheduler.GetQueuedCount()
+			bv.logger.Printf("✅ [CADENCE-BATCH] Intent %s queued for batch execution at %s (queue size: %d)",
+				certenIntent.IntentID, scheduledAt.Format(time.RFC3339), queuedCount)
+
+			// Return success - execution will happen when batch is processed
+			return &ExecutionTaskResult{
+				Success:       true,
+				ExecutorID:    bv.validatorID,
+				ConsensusHash: fmt.Sprintf("cadence_queued_%s_%d", roundID, bftRes.Height),
+			}, nil
+		}
+	}
+
+	// ON-DEMAND or fallback: Execute immediately
+	if proofClass == "on_demand" {
+		bv.logger.Printf("⚡ [ON-DEMAND] Executing intent %s immediately (on_demand proof class)", certenIntent.IntentID)
+	} else if proofClass == "on_cadence" {
+		bv.logger.Printf("⚠️ [CADENCE-FALLBACK] No scheduler configured - executing on_cadence intent %s immediately", certenIntent.IntentID)
+	}
+
 	// External audit boundary - validators do NOT impersonate audit logic
 	anchorCtx, anchorCancel := context.WithTimeout(ctx, 60*time.Second)
 	defer anchorCancel()
 
-	anchorRes, err := bv.targets.SubmitAnchorFromValidatorBlock(anchorCtx, vbMeta, bftMeta)
+	anchorRes, err = bv.targets.SubmitAnchorFromValidatorBlock(anchorCtx, vbMeta, bftMeta)
 	if err != nil {
 		bv.logger.Printf("⚠️ [CANONICAL-AUDIT] External audit submission failed: %v (continuing)", err)
 		// Non-fatal - audit failure doesn't invalidate consensus

@@ -941,6 +941,43 @@ func startValidator(
     log.Printf("✅ Unified BFT consensus with real CometBFT networking active for validator: %s", cfg.ValidatorID)
 
     // ==========================================================================
+    // ON-CADENCE SCHEDULER: Wire BFT Scheduler for batched execution
+    // Per FIRST_PRINCIPLES 2.5: on_cadence and on_demand are NEVER interchangeable
+    // ==========================================================================
+    log.Println("📦 [Cadence] Initializing BFT scheduler for on_cadence batching...")
+
+    // Create anchor scheduler service
+    schedulerConfig := anchor.DefaultSchedulerConfig()
+    schedulerConfig.OnCadenceInterval = 15 * time.Minute // Batch every 15 minutes per whitepaper
+    anchorSchedulerService, err := anchor.NewAnchorSchedulerService(schedulerConfig)
+    if err != nil {
+        log.Printf("⚠️ [Cadence] Failed to create anchor scheduler service: %v (continuing without cadence batching)", err)
+    } else {
+        // Create BFT scheduler adapter
+        bftSchedulerConfig := &anchor.BFTSchedulerConfig{
+            BatchInterval: 15 * time.Minute, // Process batches every 15 minutes
+            MinBatchSize:  1,                // Process even single intents when due
+            MaxBatchSize:  100,              // Max 100 intents per batch
+        }
+        bftScheduler := anchor.NewBFTSchedulerAdapter(
+            anchorSchedulerService,
+            targetChainWrapper,
+            bftSchedulerConfig,
+            log.New(log.Writer(), "[BFT-Scheduler] ", log.LstdFlags),
+        )
+
+        // Wire scheduler to validator
+        validator.SetAnchorScheduler(bftScheduler)
+
+        // Start the scheduler
+        if err := bftScheduler.Start(context.Background()); err != nil {
+            log.Printf("⚠️ [Cadence] Failed to start BFT scheduler: %v", err)
+        } else {
+            log.Printf("✅ [Cadence] BFT scheduler started - on_cadence intents will be batched every 15 minutes")
+        }
+    }
+
+    // ==========================================================================
     // PHASE 5: Wire Batch System for Real Merkle Roots
     // Per Implementation Plan: Connect batch collector/processor to AnchorManager
     // ==========================================================================
