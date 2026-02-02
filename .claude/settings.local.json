@@ -130,7 +130,13 @@
       "Bash(python3:*)",
       "Bash(go vet:*)",
       "Bash(npx tsc:*)",
-      "Bash(git checkout:*)"
+      "Bash(git checkout:*)",
+      "Bash(git show:*)",
+      "Bash(pushd \"C:\\\\Accumulate_Stuff\\\\certen\\\\certen-web-app\")",
+      "Bash(npx:*)",
+      "Bash(PGPASSWORD=$CERTEN_DB_PASSWORD psql -h 116.202.214.38 -U certen_user -d certen_proofs -c \"\\\\d proof_artifacts\")",
+      "Bash(PGPASSWORD=$CERTEN_DB_PASSWORD psql -h 116.202.214.38 -U certen_user -d certen_proofs -c \"\\\\d batch_transactions\")",
+      "Bash(npm run build:*)"
     ]
   }
 }

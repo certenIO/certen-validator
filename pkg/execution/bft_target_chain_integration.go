@@ -343,21 +343,29 @@ func (btce *BFTTargetChainExecutor) executeEthereumOperations(
 	// Create legacy intent for contract integration
 	legacyIntent := btce.convertToLegacyIntent(intentID, transactionHash, accountURL, certenProof)
 
-	// SECURITY CRITICAL: Extract target parameters from intent's CrossChainData
-	// These are NOT hardcoded - they come from the original intent
-	targetAddress, value, callData := btce.extractTargetParamsFromIntent(legacyIntent)
+	// SECURITY CRITICAL: Extract ALL legs from intent's CrossChainData for multi-leg support
+	allLegs := btce.extractAllLegsFromIntent(legacyIntent)
+
+	// Use first leg for primary workflow (anchor creation uses first leg's params)
+	targetAddress := allLegs[0].Target
+	value := allLegs[0].Value
+	callData := allLegs[0].Data
 
 	btce.logger.Printf("🎯 [ETH-EXEC] Execution parameters from intent:")
-	btce.logger.Printf("   Target Address: %s", targetAddress.Hex())
-	btce.logger.Printf("   Value: %s wei", value.String())
-	btce.logger.Printf("   CallData length: %d bytes", len(callData))
+	btce.logger.Printf("   Total Legs: %d", len(allLegs))
+	btce.logger.Printf("   First Leg Target: %s", targetAddress.Hex())
+	btce.logger.Printf("   First Leg Value: %s wei", value.String())
 
 	// Execute unified 3-step workflow:
-	// Step 1: createAnchor
-	// Step 2: executeComprehensiveProof
-	// Step 3: executeWithGovernance
-	btce.logger.Printf("🔗 [ETH-EXEC] Executing full 3-step anchor workflow...")
+	// Step 1: createAnchor (once for all legs)
+	// Step 2: executeComprehensiveProof (once for all legs)
+	// Step 3: executeWithGovernance (for EACH leg)
+	btce.logger.Printf("🔗 [ETH-EXEC] Executing anchor workflow with %d legs...", len(allLegs))
 
+	var createTxHash, verifyTxHash string
+	var govTxHashes []string
+
+	// Try full workflow first (creates anchor + verifies + executes first leg)
 	createTxHash, verifyTxHash, govTxHash, err := ethManager.ExecuteUnifiedAnchorWorkflowFull(
 		ctx,
 		legacyIntent,
@@ -384,14 +392,39 @@ func (btce *BFTTargetChainExecutor) executeEthereumOperations(
 			return nil, fmt.Errorf("anchor workflow failed: %w", err)
 		}
 
-		// Step 3: Execute governance via CertenAnchorV3.executeWithGovernance
+		// Execute governance for first leg
 		computedBundleID := ethManager.generateAnchorID(legacyIntent, certenProof)
 		govTxHash, err = ethManager.ExecuteGovernanceWithAnchor(ctx, computedBundleID, targetAddress, value, callData)
 		if err != nil {
-			btce.logger.Printf("⚠️ [ETH-EXEC] ExecuteWithGovernance failed: %v", err)
+			btce.logger.Printf("⚠️ [ETH-EXEC] ExecuteWithGovernance failed for leg 0: %v", err)
 			govTxHash = "governance_failed"
 		}
 	}
+	govTxHashes = append(govTxHashes, govTxHash)
+
+	// Execute remaining legs (leg 1, 2, 3, etc.)
+	if len(allLegs) > 1 {
+		btce.logger.Printf("🦵 [MULTI-LEG] Executing remaining %d legs...", len(allLegs)-1)
+		computedBundleID := ethManager.generateAnchorID(legacyIntent, certenProof)
+
+		for i := 1; i < len(allLegs); i++ {
+			leg := allLegs[i]
+			btce.logger.Printf("🦵 [MULTI-LEG] Executing leg %d (%s): target=%s value=%s wei",
+				i, leg.LegID, leg.Target.Hex(), leg.Value.String())
+
+			legGovTxHash, legErr := ethManager.ExecuteGovernanceWithAnchor(ctx, computedBundleID, leg.Target, leg.Value, leg.Data)
+			if legErr != nil {
+				btce.logger.Printf("⚠️ [MULTI-LEG] ExecuteWithGovernance failed for leg %d: %v", i, legErr)
+				legGovTxHash = fmt.Sprintf("governance_failed_leg_%d", i)
+			} else {
+				btce.logger.Printf("✅ [MULTI-LEG] Leg %d executed: tx=%s", i, legGovTxHash)
+			}
+			govTxHashes = append(govTxHashes, legGovTxHash)
+		}
+	}
+
+	// Combine all governance tx hashes
+	govTxHash = strings.Join(govTxHashes, ",")
 
 	btce.logger.Printf("✅ [ETH-EXEC] Anchor workflow completed:")
 	btce.logger.Printf("   Create TX: %s", createTxHash)
@@ -440,22 +473,29 @@ func (btce *BFTTargetChainExecutor) executeEthereumOperations(
 	return result, nil
 }
 
-// extractTargetParamsFromIntent extracts target address, value, and calldata from intent
+// LegExecution represents a single leg to execute
+type LegExecution struct {
+	LegID   string
+	Target  common.Address
+	Value   *big.Int
+	Data    []byte
+}
+
+// extractAllLegsFromIntent extracts ALL legs from intent for multi-leg execution
 // SECURITY: This ensures execution parameters come from the intent, not hardcoded values
-func (btce *BFTTargetChainExecutor) extractTargetParamsFromIntent(legacyIntent *intent.CertenIntent) (common.Address, *big.Int, []byte) {
-	// Default values
+func (btce *BFTTargetChainExecutor) extractAllLegsFromIntent(legacyIntent *intent.CertenIntent) []LegExecution {
 	defaultTarget := common.HexToAddress("0x02841F7Fa62c0d2F7498a07fc1d4A65Ad88CeE49")
 	defaultValue := big.NewInt(1)
-	defaultCallData := []byte{}
 
 	if legacyIntent == nil || len(legacyIntent.CrossChainData) == 0 {
 		btce.logger.Printf("⚠️ [EXTRACT] No CrossChainData, using defaults")
-		return defaultTarget, defaultValue, defaultCallData
+		return []LegExecution{{LegID: "default", Target: defaultTarget, Value: defaultValue, Data: []byte{}}}
 	}
 
 	// Parse CrossChainData
 	var crossChainData struct {
 		Legs []struct {
+			LegID     string `json:"legId"`
 			To        string `json:"to"`
 			AmountWei string `json:"amountWei"`
 		} `json:"legs"`
@@ -463,39 +503,60 @@ func (btce *BFTTargetChainExecutor) extractTargetParamsFromIntent(legacyIntent *
 
 	if err := json.Unmarshal(legacyIntent.CrossChainData, &crossChainData); err != nil {
 		btce.logger.Printf("⚠️ [EXTRACT] Failed to parse CrossChainData: %v", err)
-		return defaultTarget, defaultValue, defaultCallData
+		return []LegExecution{{LegID: "default", Target: defaultTarget, Value: defaultValue, Data: []byte{}}}
 	}
 
 	if len(crossChainData.Legs) == 0 {
 		btce.logger.Printf("⚠️ [EXTRACT] No legs in CrossChainData, using defaults")
-		return defaultTarget, defaultValue, defaultCallData
+		return []LegExecution{{LegID: "default", Target: defaultTarget, Value: defaultValue, Data: []byte{}}}
 	}
 
-	leg := crossChainData.Legs[0]
+	btce.logger.Printf("🦵 [MULTI-LEG] Found %d legs in intent", len(crossChainData.Legs))
 
-	// Extract target address
-	targetAddress := defaultTarget
-	if leg.To != "" {
-		targetAddress = common.HexToAddress(leg.To)
-		btce.logger.Printf("✅ [EXTRACT] Target address from intent: %s", targetAddress.Hex())
-	}
+	legs := make([]LegExecution, 0, len(crossChainData.Legs))
+	for i, leg := range crossChainData.Legs {
+		targetAddress := defaultTarget
+		if leg.To != "" {
+			targetAddress = common.HexToAddress(leg.To)
+		}
 
-	// Extract value
-	value := defaultValue
-	if leg.AmountWei != "" {
-		amountStr := strings.TrimSpace(leg.AmountWei)
-		if parsed, ok := new(big.Int).SetString(amountStr, 10); ok {
-			value = parsed
-		} else {
-			// Try parsing as float (for scientific notation)
-			if f, _, err := big.ParseFloat(amountStr, 10, 256, big.ToNearestEven); err == nil {
-				value, _ = f.Int(nil)
+		value := defaultValue
+		if leg.AmountWei != "" {
+			amountStr := strings.TrimSpace(leg.AmountWei)
+			if parsed, ok := new(big.Int).SetString(amountStr, 10); ok {
+				value = parsed
+			} else {
+				if f, _, err := big.ParseFloat(amountStr, 10, 256, big.ToNearestEven); err == nil {
+					value, _ = f.Int(nil)
+				}
 			}
 		}
-		btce.logger.Printf("✅ [EXTRACT] Value from intent: %s wei", value.String())
+
+		legID := leg.LegID
+		if legID == "" {
+			legID = fmt.Sprintf("leg-%d", i)
+		}
+
+		btce.logger.Printf("   🦵 Leg %d (%s): target=%s value=%s wei", i, legID, targetAddress.Hex(), value.String())
+		legs = append(legs, LegExecution{
+			LegID:  legID,
+			Target: targetAddress,
+			Value:  value,
+			Data:   []byte{},
+		})
 	}
 
-	return targetAddress, value, defaultCallData
+	return legs
+}
+
+// extractTargetParamsFromIntent extracts target address, value, and calldata from intent (first leg only)
+// DEPRECATED: Use extractAllLegsFromIntent for multi-leg support
+func (btce *BFTTargetChainExecutor) extractTargetParamsFromIntent(legacyIntent *intent.CertenIntent) (common.Address, *big.Int, []byte) {
+	legs := btce.extractAllLegsFromIntent(legacyIntent)
+	if len(legs) > 0 {
+		return legs[0].Target, legs[0].Value, legs[0].Data
+	}
+	return common.HexToAddress("0x02841F7Fa62c0d2F7498a07fc1d4A65Ad88CeE49"), big.NewInt(1), []byte{}
 }
 
 // convertToLegacyIntent converts BFT Intent parameters to legacy intent.CertenIntent format
