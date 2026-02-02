@@ -111,7 +111,15 @@ func (a *BFTSchedulerAdapter) QueueForCadence(
 		return a.nextBatchTime, fmt.Errorf("intent %s already queued", intentID)
 	}
 
-	// Calculate scheduled time
+	// CRITICAL FIX: Ensure nextBatchTime is always in the future
+	// If nextBatchTime is in the past (no intents queued for a while), reset it to now + batchInterval
+	now := time.Now()
+	if a.nextBatchTime.Before(now) {
+		a.nextBatchTime = now.Add(a.batchInterval)
+		a.logger.Printf("🔄 [CADENCE-RESET] Resetting nextBatchTime to %s (was in the past)", a.nextBatchTime.Format(time.RFC3339))
+	}
+
+	// Calculate scheduled time - always in the future now
 	scheduledAt := a.nextBatchTime
 
 	// Queue the intent
