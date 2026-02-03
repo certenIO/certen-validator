@@ -508,54 +508,58 @@ func (btce *BFTTargetChainExecutor) executeEthereumOperations(
 
 		// Execute anchor workflow for this chain
 		var chainCreateTx, chainVerifyTx, chainGovTx string
+		var chainExecErr error
 
-		// Try full workflow first
-		chainCreateTx, chainVerifyTx, chainGovTx, chainExecErr := chainEthManager.ExecuteUnifiedAnchorWorkflowFull(
-			ctx,
-			legacyIntent,
-			certenProof,
+		// NEW FLOW: 2-step anchor workflow + user account execution
+		// Step 1 & 2: Create anchor and verify proof
+		btce.logger.Printf("🔗 [MULTI-CHAIN] Starting 2-step anchor workflow for %s...", chainDisplayName)
+
+		chainCreateTx, chainVerifyTx, chainExecErr = chainEthManager.ExecuteUnifiedAnchorWorkflow(
+			ctx, legacyIntent, certenProof,
 			&anchor.AnchorResponse{
 				AnchorID: anchorID,
 				Success:  true,
 				Message:  fmt.Sprintf("BFT consensus anchor for %s", chainDisplayName),
 			},
-			firstLeg.Target,
-			firstLeg.Value,
-			firstLeg.Data,
 		)
 
 		if chainExecErr != nil {
-			btce.logger.Printf("⚠️ [MULTI-CHAIN] Full workflow failed for %s: %v, trying step-by-step", chainDisplayName, chainExecErr)
+			btce.logger.Printf("❌ [MULTI-CHAIN] Anchor workflow failed for %s: %v", chainDisplayName, chainExecErr)
+			overallSuccess = false
+			allCreateTxHashes = append(allCreateTxHashes, fmt.Sprintf("create_failed_%s", chainDisplayName))
+			allVerifyTxHashes = append(allVerifyTxHashes, fmt.Sprintf("verify_failed_%s", chainDisplayName))
+			for _, leg := range chainLegs {
+				allGovTxHashes = append(allGovTxHashes, fmt.Sprintf("execution_failed_%s", leg.LegID))
+			}
+			continue
+		}
 
-			// Fallback to step-by-step
-			chainCreateTx, chainVerifyTx, chainExecErr = chainEthManager.ExecuteUnifiedAnchorWorkflow(
-				ctx, legacyIntent, certenProof,
-				&anchor.AnchorResponse{
-					AnchorID: anchorID,
-					Success:  true,
-					Message:  fmt.Sprintf("BFT consensus anchor (fallback) for %s", chainDisplayName),
-				},
+		// Step 3: Execute via user's Abstract Account (CORRECT FLOW)
+		computedBundleID := chainEthManager.generateAnchorID(legacyIntent, certenProof)
+
+		// Check if user has an Abstract Account (SourceAddress from leg.From)
+		if firstLeg.SourceAddress != (common.Address{}) {
+			btce.logger.Printf("🏦 [USER-ACCOUNT] Executing via user's Abstract Account: %s", firstLeg.SourceAddress.Hex())
+			chainGovTx, chainExecErr = chainEthManager.ExecuteViaUserAccount(
+				ctx,
+				firstLeg.SourceAddress,
+				computedBundleID,
+				firstLeg.Target,
+				firstLeg.Value,
+				firstLeg.Data,
+				certenProof,
+				accountURL, // ADI URL from intent
 			)
-
-			if chainExecErr != nil {
-				btce.logger.Printf("❌ [MULTI-CHAIN] Anchor workflow failed for %s: %v", chainDisplayName, chainExecErr)
-				overallSuccess = false
-				allCreateTxHashes = append(allCreateTxHashes, fmt.Sprintf("create_failed_%s", chainDisplayName))
-				allVerifyTxHashes = append(allVerifyTxHashes, fmt.Sprintf("verify_failed_%s", chainDisplayName))
-				for _, leg := range chainLegs {
-					allGovTxHashes = append(allGovTxHashes, fmt.Sprintf("governance_failed_%s", leg.LegID))
-				}
-				continue
-			}
-
-			// Execute governance for first leg
-			computedBundleID := chainEthManager.generateAnchorID(legacyIntent, certenProof)
+		} else {
+			// Fallback to anchor-based execution (legacy mode - anchor contract holds funds)
+			btce.logger.Printf("⚠️ [LEGACY] No user account, falling back to anchor-based execution")
 			chainGovTx, chainExecErr = chainEthManager.ExecuteGovernanceWithAnchor(ctx, computedBundleID, firstLeg.Target, firstLeg.Value, firstLeg.Data)
-			if chainExecErr != nil {
-				btce.logger.Printf("⚠️ [MULTI-CHAIN] Governance failed for %s leg 0: %v", chainDisplayName, chainExecErr)
-				chainGovTx = fmt.Sprintf("governance_failed_%s", firstLeg.LegID)
-				overallSuccess = false
-			}
+		}
+
+		if chainExecErr != nil {
+			btce.logger.Printf("⚠️ [MULTI-CHAIN] Execution failed for %s leg 0: %v", chainDisplayName, chainExecErr)
+			chainGovTx = fmt.Sprintf("execution_failed_%s", firstLeg.LegID)
+			overallSuccess = false
 		}
 
 		allCreateTxHashes = append(allCreateTxHashes, fmt.Sprintf("%s:%s", chainDisplayName, chainCreateTx))
@@ -574,13 +578,34 @@ func (btce *BFTTargetChainExecutor) executeEthereumOperations(
 
 			for i := 1; i < len(chainLegs); i++ {
 				leg := chainLegs[i]
-				btce.logger.Printf("🦵 [MULTI-CHAIN] Executing leg %s on %s: target=%s value=%s wei",
-					leg.LegID, chainDisplayName, leg.Target.Hex(), leg.Value.String())
+				btce.logger.Printf("🦵 [MULTI-CHAIN] Executing leg %s on %s: from=%s target=%s value=%s wei",
+					leg.LegID, chainDisplayName, leg.SourceAddress.Hex(), leg.Target.Hex(), leg.Value.String())
 
-				legGovTxHash, legErr := chainEthManager.ExecuteGovernanceWithAnchor(ctx, computedBundleID, leg.Target, leg.Value, leg.Data)
+				var legGovTxHash string
+				var legErr error
+
+				// Execute via user's Abstract Account (CORRECT FLOW)
+				if leg.SourceAddress != (common.Address{}) {
+					btce.logger.Printf("🏦 [USER-ACCOUNT] Executing via user's Abstract Account: %s", leg.SourceAddress.Hex())
+					legGovTxHash, legErr = chainEthManager.ExecuteViaUserAccount(
+						ctx,
+						leg.SourceAddress,
+						computedBundleID,
+						leg.Target,
+						leg.Value,
+						leg.Data,
+						certenProof,
+						accountURL,
+					)
+				} else {
+					// Fallback to anchor-based execution (legacy mode)
+					btce.logger.Printf("⚠️ [LEGACY] No user account, falling back to anchor-based execution")
+					legGovTxHash, legErr = chainEthManager.ExecuteGovernanceWithAnchor(ctx, computedBundleID, leg.Target, leg.Value, leg.Data)
+				}
+
 				if legErr != nil {
-					btce.logger.Printf("⚠️ [MULTI-CHAIN] Governance failed for %s %s: %v", chainDisplayName, leg.LegID, legErr)
-					legGovTxHash = fmt.Sprintf("governance_failed_%s", leg.LegID)
+					btce.logger.Printf("⚠️ [MULTI-CHAIN] Execution failed for %s %s: %v", chainDisplayName, leg.LegID, legErr)
+					legGovTxHash = fmt.Sprintf("execution_failed_%s", leg.LegID)
 					overallSuccess = false
 				} else {
 					btce.logger.Printf("✅ [MULTI-CHAIN] %s %s executed: tx=%s", chainDisplayName, leg.LegID, legGovTxHash)
@@ -642,12 +667,13 @@ func (btce *BFTTargetChainExecutor) executeEthereumOperations(
 
 // LegExecution represents a single leg to execute
 type LegExecution struct {
-	LegID   string
-	Target  common.Address
-	Value   *big.Int
-	Data    []byte
-	ChainID int64  // Target chain for this leg
-	Chain   string // Chain name (e.g., "ethereum sepolia", "arbitrum sepolia")
+	LegID         string
+	Target        common.Address
+	Value         *big.Int
+	Data          []byte
+	ChainID       int64          // Target chain for this leg
+	Chain         string         // Chain name (e.g., "ethereum sepolia", "arbitrum sepolia")
+	SourceAddress common.Address // User's Abstract Account address (from leg.From)
 }
 
 // extractAllLegsFromIntent extracts ALL legs from intent for multi-leg execution
@@ -667,6 +693,7 @@ func (btce *BFTTargetChainExecutor) extractAllLegsFromIntent(legacyIntent *inten
 	var crossChainData struct {
 		Legs []struct {
 			LegID     string `json:"legId"`
+			From      string `json:"from"` // User's Abstract Account address
 			To        string `json:"to"`
 			AmountWei string `json:"amountWei"`
 			ChainID   int64  `json:"chainId"`
@@ -720,15 +747,22 @@ func (btce *BFTTargetChainExecutor) extractAllLegsFromIntent(legacyIntent *inten
 			chainName = "ethereum sepolia"
 		}
 
-		btce.logger.Printf("   🦵 Leg %d (%s): chain=%s chainId=%d target=%s value=%s wei",
-			i, legID, chainName, chainID, targetAddress.Hex(), value.String())
+		// Extract source address (user's Abstract Account)
+		sourceAddress := common.Address{}
+		if leg.From != "" {
+			sourceAddress = common.HexToAddress(leg.From)
+		}
+
+		btce.logger.Printf("   🦵 Leg %d (%s): chain=%s chainId=%d from=%s target=%s value=%s wei",
+			i, legID, chainName, chainID, sourceAddress.Hex(), targetAddress.Hex(), value.String())
 		legs = append(legs, LegExecution{
-			LegID:   legID,
-			Target:  targetAddress,
-			Value:   value,
-			Data:    []byte{},
-			ChainID: chainID,
-			Chain:   chainName,
+			LegID:         legID,
+			Target:        targetAddress,
+			Value:         value,
+			Data:          []byte{},
+			ChainID:       chainID,
+			Chain:         chainName,
+			SourceAddress: sourceAddress,
 		})
 	}
 

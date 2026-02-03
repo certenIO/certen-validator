@@ -568,6 +568,133 @@ func (ecm *EthereumContractManager) ExecuteGovernanceWithAnchor(
 	return txHash, nil
 }
 
+// ExecuteViaUserAccount executes a transfer via the user's Abstract Account (CertenAccountV2)
+// This is the CORRECT flow: the user's smart contract wallet holds funds and sends them
+// after verifying the governance proof.
+//
+// CONTRACT: CertenAccountV2.executeWithGovernanceProof(target, value, data, proof)
+// EXECUTES: target.call{value: value}(data) FROM THE USER'S ACCOUNT
+// EMITS: ProofExecuted(target, value, success)
+func (ecm *EthereumContractManager) ExecuteViaUserAccount(
+	ctx context.Context,
+	userAccountAddress common.Address,
+	bundleID [32]byte,
+	target common.Address,
+	value *big.Int,
+	callData []byte,
+	certenProof *proof.CertenProof,
+	adiURL string,
+) (string, error) {
+	fmt.Printf("🏦 [USER-ACCOUNT] Executing via user's Abstract Account...\n")
+	fmt.Printf("   User Account: %s\n", userAccountAddress.Hex())
+	fmt.Printf("   Target: %s\n", target.Hex())
+	fmt.Printf("   Value: %s wei\n", value.String())
+	fmt.Printf("   ADI URL: %s\n", adiURL)
+
+	// Create contract instance at user's account address
+	userAccount, err := contracts.NewCertenAccountV2(userAccountAddress, ecm.client)
+	if err != nil {
+		return "", fmt.Errorf("failed to bind user account contract: %w", err)
+	}
+
+	// Build the AccountProof struct from our CertenProof
+	accountProof := ecm.buildAccountProof(bundleID, certenProof, adiURL)
+
+	fmt.Printf("   Proof built:\n")
+	fmt.Printf("     AnchorID: 0x%x\n", accountProof.AnchorId[:8])
+	fmt.Printf("     MerkleProof: %d hashes\n", len(accountProof.MerkleProof))
+	fmt.Printf("     Timestamp: %s\n", accountProof.Timestamp.String())
+	fmt.Printf("     ExpiresAt: %s\n", accountProof.ExpiresAt.String())
+
+	// Set gas limit for account execution
+	ecm.auth.GasLimit = 500000
+	fmt.Printf("   Gas Limit: %d\n", ecm.auth.GasLimit)
+
+	// Call user's Abstract Account executeWithGovernanceProof
+	tx, err := userAccount.ExecuteWithGovernanceProof(ecm.auth, target, value, callData, accountProof)
+	if err != nil {
+		return "", fmt.Errorf("user account executeWithGovernanceProof failed: %w", err)
+	}
+
+	txHash := tx.Hash().Hex()
+	fmt.Printf("✅ [USER-ACCOUNT] Execution submitted!\n")
+	fmt.Printf("   Transaction: %s\n", txHash)
+
+	// Wait for confirmation
+	receipt, err := bind.WaitMined(ctx, ecm.client, tx)
+	if err != nil {
+		fmt.Printf("⚠️ [USER-ACCOUNT] Failed to get receipt: %v\n", err)
+	} else {
+		fmt.Printf("   Block: %d\n", receipt.BlockNumber.Uint64())
+		fmt.Printf("   Gas Used: %d\n", receipt.GasUsed)
+		fmt.Printf("   Status: %d (1=success)\n", receipt.Status)
+		if receipt.Status == 0 {
+			return "", fmt.Errorf("user account execution reverted on-chain")
+		}
+	}
+
+	return txHash, nil
+}
+
+// buildAccountProof constructs the AccountProof struct for CertenAccountV2
+func (ecm *EthereumContractManager) buildAccountProof(
+	bundleID [32]byte,
+	certenProof *proof.CertenProof,
+	adiURL string,
+) contracts.AccountProof {
+	// Build merkle proof from CertenProof's LiteClientProof
+	var merkleProof [][32]byte
+	if certenProof != nil && certenProof.LiteClientProof != nil && certenProof.LiteClientProof.CompleteProof != nil {
+		cp := certenProof.LiteClientProof.CompleteProof
+		// Extract hashes from proof components for merkle verification
+		if cp.AccountHash != nil && len(cp.AccountHash) == 32 {
+			var h [32]byte
+			copy(h[:], cp.AccountHash)
+			merkleProof = append(merkleProof, h)
+		}
+		if cp.BPTRoot != nil && len(cp.BPTRoot) == 32 {
+			var h [32]byte
+			copy(h[:], cp.BPTRoot)
+			merkleProof = append(merkleProof, h)
+		}
+		if cp.BlockHash != nil && len(cp.BlockHash) == 32 {
+			var h [32]byte
+			copy(h[:], cp.BlockHash)
+			merkleProof = append(merkleProof, h)
+		}
+	}
+
+	// Set expiration (1 hour from now)
+	expiresAt := big.NewInt(time.Now().Add(1 * time.Hour).Unix())
+
+	// Build validator signatures from BLS aggregate signature
+	var validatorSigs []byte
+	if certenProof != nil && certenProof.BLSAggregateSignature != "" {
+		// Decode hex signature
+		sigBytes, err := hex.DecodeString(strings.TrimPrefix(certenProof.BLSAggregateSignature, "0x"))
+		if err == nil {
+			validatorSigs = sigBytes
+		}
+	}
+
+	// Get nonce (0 for now, will be managed by account contract)
+	nonce := big.NewInt(0)
+
+	return contracts.AccountProof{
+		AdiURL:              adiURL,
+		AnchorId:            bundleID,
+		MerkleProof:         merkleProof,
+		KeyBookProof:        []byte{}, // Governance proof data
+		RoleProof:           []byte{}, // Role proof data
+		ThresholdProof:      []byte{}, // Threshold proof data
+		Timestamp:           big.NewInt(time.Now().Unix()),
+		ExpiresAt:           expiresAt,
+		ValidatorSignatures: validatorSigs,
+		Nonce:               nonce,
+		RequiredLevel:       1, // G1 governance level
+	}
+}
+
 // ExecuteUnifiedAnchorWorkflowFull executes the complete 3-step anchor workflow:
 // Step 1: Create anchor on CertenAnchorV3 (createAnchor)
 // Step 2: Execute comprehensive proof on CertenAnchorV3 (executeComprehensiveProof)
