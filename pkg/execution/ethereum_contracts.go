@@ -610,8 +610,8 @@ func (ecm *EthereumContractManager) ExecuteViaUserAccount(
 	ecm.auth.GasLimit = 500000
 	fmt.Printf("   Gas Limit: %d\n", ecm.auth.GasLimit)
 
-	// Call user's Abstract Account executeWithGovernanceProof
-	tx, err := userAccount.ExecuteWithGovernanceProof(ecm.auth, target, value, callData, accountProof)
+	// Call user's Abstract Account executeGovernanceProofDirect (direct call, not through EntryPoint)
+	tx, err := userAccount.ExecuteGovernanceProofDirect(ecm.auth, target, value, callData, accountProof)
 	if err != nil {
 		return "", fmt.Errorf("user account executeWithGovernanceProof failed: %w", err)
 	}
