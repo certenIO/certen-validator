@@ -438,14 +438,14 @@ func (btce *BFTTargetChainExecutor) executeEthereumOperations(
 		contractConfig.VerificationContract = contractConfig.CreationContract
 	}
 
-	// Log chain details
+	// Log chain details (for primary chain passed in - used in result metadata)
 	chainName := "Unknown"
 	explorerURL := ""
 	if chainCfg != nil {
 		chainName = chainCfg.Name
 		explorerURL = chainCfg.ExplorerURL
 	}
-	btce.logger.Printf("📡 [EVM-EXEC] Contract config for %s:", chainName)
+	btce.logger.Printf("📡 [EVM-EXEC] Primary chain config for %s:", chainName)
 	btce.logger.Printf("   Chain ID: %d", contractConfig.ChainID)
 	btce.logger.Printf("   Anchor Contract: %s", contractConfig.CreationContract)
 	btce.logger.Printf("   RPC: %s", contractConfig.EthereumRPC)
@@ -453,10 +453,8 @@ func (btce *BFTTargetChainExecutor) executeEthereumOperations(
 		btce.logger.Printf("   Explorer: %s/address/%s", explorerURL, contractConfig.CreationContract)
 	}
 
-	ethManager, err := NewEthereumContractManager(contractConfig)
-	if err != nil {
-		return nil, fmt.Errorf("initialize Ethereum contract manager: %w", err)
-	}
+	// NOTE: Chain-specific managers are now created inside the multi-chain loop below
+	// This allows each leg to be routed to its correct target chain
 
 	// Create legacy intent for contract integration
 	legacyIntent := btce.convertToLegacyIntent(intentID, transactionHash, accountURL, certenProof)
@@ -464,133 +462,180 @@ func (btce *BFTTargetChainExecutor) executeEthereumOperations(
 	// SECURITY CRITICAL: Extract ALL legs from intent's CrossChainData for multi-leg support
 	allLegs := btce.extractAllLegsFromIntent(legacyIntent)
 
-	// Use first leg for primary workflow (anchor creation uses first leg's params)
-	targetAddress := allLegs[0].Target
-	value := allLegs[0].Value
-	callData := allLegs[0].Data
-
 	btce.logger.Printf("🎯 [ETH-EXEC] Execution parameters from intent:")
 	btce.logger.Printf("   Total Legs: %d", len(allLegs))
-	btce.logger.Printf("   First Leg Target: %s", targetAddress.Hex())
-	btce.logger.Printf("   First Leg Value: %s wei", value.String())
 
-	// Execute unified 3-step workflow:
-	// Step 1: createAnchor (once for all legs)
-	// Step 2: executeComprehensiveProof (once for all legs)
-	// Step 3: executeWithGovernance (for EACH leg)
-	btce.logger.Printf("🔗 [ETH-EXEC] Executing anchor workflow with %d legs...", len(allLegs))
+	// MULTI-CHAIN: Group legs by their target chain
+	legsByChain := btce.groupLegsByChain(allLegs)
 
-	var createTxHash, verifyTxHash string
-	var govTxHashes []string
+	// Track results across all chains
+	var allCreateTxHashes []string
+	var allVerifyTxHashes []string
+	var allGovTxHashes []string
+	var chainResults []string
+	overallSuccess := true
 
-	// Try full workflow first (creates anchor + verifies + executes first leg)
-	createTxHash, verifyTxHash, govTxHash, err := ethManager.ExecuteUnifiedAnchorWorkflowFull(
-		ctx,
-		legacyIntent,
-		certenProof,
-		&anchor.AnchorResponse{
-			AnchorID: anchorID,
-			Success:  true,
-			Message:  "BFT consensus anchor",
-		},
-		targetAddress,
-		value,
-		callData,
-	)
-	if err != nil {
-		// If full workflow fails, fall back to step-by-step mode
-		btce.logger.Printf("⚠️ [ETH-EXEC] Full workflow failed: %v, falling back to step-by-step mode", err)
+	// Execute on each target chain
+	for targetChainID, chainLegs := range legsByChain {
+		btce.logger.Printf("🔗 [MULTI-CHAIN] Processing %d legs for chainId=%d...", len(chainLegs), targetChainID)
 
-		createTxHash, verifyTxHash, err = ethManager.ExecuteUnifiedAnchorWorkflow(ctx, legacyIntent, certenProof, &anchor.AnchorResponse{
-			AnchorID: anchorID,
-			Success:  true,
-			Message:  "BFT consensus anchor (fallback)",
-		})
-		if err != nil {
-			return nil, fmt.Errorf("anchor workflow failed: %w", err)
-		}
-
-		// Execute governance for first leg
-		computedBundleID := ethManager.generateAnchorID(legacyIntent, certenProof)
-		govTxHash, err = ethManager.ExecuteGovernanceWithAnchor(ctx, computedBundleID, targetAddress, value, callData)
-		if err != nil {
-			btce.logger.Printf("⚠️ [ETH-EXEC] ExecuteWithGovernance failed for leg 0: %v", err)
-			govTxHash = "governance_failed"
-		}
-	}
-	govTxHashes = append(govTxHashes, govTxHash)
-
-	// Execute remaining legs (leg 1, 2, 3, etc.)
-	if len(allLegs) > 1 {
-		btce.logger.Printf("🦵 [MULTI-LEG] Executing remaining %d legs...", len(allLegs)-1)
-		computedBundleID := ethManager.generateAnchorID(legacyIntent, certenProof)
-
-		for i := 1; i < len(allLegs); i++ {
-			leg := allLegs[i]
-			btce.logger.Printf("🦵 [MULTI-LEG] Executing leg %d (%s): target=%s value=%s wei",
-				i, leg.LegID, leg.Target.Hex(), leg.Value.String())
-
-			legGovTxHash, legErr := ethManager.ExecuteGovernanceWithAnchor(ctx, computedBundleID, leg.Target, leg.Value, leg.Data)
-			if legErr != nil {
-				btce.logger.Printf("⚠️ [MULTI-LEG] ExecuteWithGovernance failed for leg %d: %v", i, legErr)
-				legGovTxHash = fmt.Sprintf("governance_failed_leg_%d", i)
-			} else {
-				btce.logger.Printf("✅ [MULTI-LEG] Leg %d executed: tx=%s", i, legGovTxHash)
+		// Get contract manager for this specific chain
+		chainEthManager, chainSpecificCfg, chainErr := btce.getContractManagerForChain(targetChainID, anchorCfg)
+		if chainErr != nil {
+			btce.logger.Printf("❌ [MULTI-CHAIN] Failed to get contract manager for chainId=%d: %v", targetChainID, chainErr)
+			overallSuccess = false
+			for _, leg := range chainLegs {
+				allGovTxHashes = append(allGovTxHashes, fmt.Sprintf("chain_config_failed_%s", leg.LegID))
 			}
-			govTxHashes = append(govTxHashes, legGovTxHash)
+			continue
 		}
+
+		chainExplorerURL := ""
+		chainDisplayName := fmt.Sprintf("chain-%d", targetChainID)
+		if chainSpecificCfg != nil {
+			chainExplorerURL = chainSpecificCfg.ExplorerURL
+			chainDisplayName = chainSpecificCfg.Name
+		}
+
+		btce.logger.Printf("📡 [MULTI-CHAIN] Connected to %s:", chainDisplayName)
+		btce.logger.Printf("   Chain ID: %d", targetChainID)
+		if chainExplorerURL != "" {
+			btce.logger.Printf("   Explorer: %s", chainExplorerURL)
+		}
+
+		// Use first leg of this chain for anchor creation
+		firstLeg := chainLegs[0]
+
+		// Execute anchor workflow for this chain
+		var chainCreateTx, chainVerifyTx, chainGovTx string
+
+		// Try full workflow first
+		chainCreateTx, chainVerifyTx, chainGovTx, chainExecErr := chainEthManager.ExecuteUnifiedAnchorWorkflowFull(
+			ctx,
+			legacyIntent,
+			certenProof,
+			&anchor.AnchorResponse{
+				AnchorID: anchorID,
+				Success:  true,
+				Message:  fmt.Sprintf("BFT consensus anchor for %s", chainDisplayName),
+			},
+			firstLeg.Target,
+			firstLeg.Value,
+			firstLeg.Data,
+		)
+
+		if chainExecErr != nil {
+			btce.logger.Printf("⚠️ [MULTI-CHAIN] Full workflow failed for %s: %v, trying step-by-step", chainDisplayName, chainExecErr)
+
+			// Fallback to step-by-step
+			chainCreateTx, chainVerifyTx, chainExecErr = chainEthManager.ExecuteUnifiedAnchorWorkflow(
+				ctx, legacyIntent, certenProof,
+				&anchor.AnchorResponse{
+					AnchorID: anchorID,
+					Success:  true,
+					Message:  fmt.Sprintf("BFT consensus anchor (fallback) for %s", chainDisplayName),
+				},
+			)
+
+			if chainExecErr != nil {
+				btce.logger.Printf("❌ [MULTI-CHAIN] Anchor workflow failed for %s: %v", chainDisplayName, chainExecErr)
+				overallSuccess = false
+				allCreateTxHashes = append(allCreateTxHashes, fmt.Sprintf("create_failed_%s", chainDisplayName))
+				allVerifyTxHashes = append(allVerifyTxHashes, fmt.Sprintf("verify_failed_%s", chainDisplayName))
+				for _, leg := range chainLegs {
+					allGovTxHashes = append(allGovTxHashes, fmt.Sprintf("governance_failed_%s", leg.LegID))
+				}
+				continue
+			}
+
+			// Execute governance for first leg
+			computedBundleID := chainEthManager.generateAnchorID(legacyIntent, certenProof)
+			chainGovTx, chainExecErr = chainEthManager.ExecuteGovernanceWithAnchor(ctx, computedBundleID, firstLeg.Target, firstLeg.Value, firstLeg.Data)
+			if chainExecErr != nil {
+				btce.logger.Printf("⚠️ [MULTI-CHAIN] Governance failed for %s leg 0: %v", chainDisplayName, chainExecErr)
+				chainGovTx = fmt.Sprintf("governance_failed_%s", firstLeg.LegID)
+				overallSuccess = false
+			}
+		}
+
+		allCreateTxHashes = append(allCreateTxHashes, fmt.Sprintf("%s:%s", chainDisplayName, chainCreateTx))
+		allVerifyTxHashes = append(allVerifyTxHashes, fmt.Sprintf("%s:%s", chainDisplayName, chainVerifyTx))
+		allGovTxHashes = append(allGovTxHashes, fmt.Sprintf("%s:%s:%s", chainDisplayName, firstLeg.LegID, chainGovTx))
+
+		btce.logger.Printf("✅ [MULTI-CHAIN] %s first leg executed:", chainDisplayName)
+		btce.logger.Printf("   Create TX: %s", chainCreateTx)
+		btce.logger.Printf("   Verify TX: %s", chainVerifyTx)
+		btce.logger.Printf("   Governance TX: %s", chainGovTx)
+
+		// Execute remaining legs for this chain
+		if len(chainLegs) > 1 {
+			computedBundleID := chainEthManager.generateAnchorID(legacyIntent, certenProof)
+			btce.logger.Printf("🦵 [MULTI-CHAIN] Executing remaining %d legs for %s...", len(chainLegs)-1, chainDisplayName)
+
+			for i := 1; i < len(chainLegs); i++ {
+				leg := chainLegs[i]
+				btce.logger.Printf("🦵 [MULTI-CHAIN] Executing leg %s on %s: target=%s value=%s wei",
+					leg.LegID, chainDisplayName, leg.Target.Hex(), leg.Value.String())
+
+				legGovTxHash, legErr := chainEthManager.ExecuteGovernanceWithAnchor(ctx, computedBundleID, leg.Target, leg.Value, leg.Data)
+				if legErr != nil {
+					btce.logger.Printf("⚠️ [MULTI-CHAIN] Governance failed for %s %s: %v", chainDisplayName, leg.LegID, legErr)
+					legGovTxHash = fmt.Sprintf("governance_failed_%s", leg.LegID)
+					overallSuccess = false
+				} else {
+					btce.logger.Printf("✅ [MULTI-CHAIN] %s %s executed: tx=%s", chainDisplayName, leg.LegID, legGovTxHash)
+				}
+				allGovTxHashes = append(allGovTxHashes, fmt.Sprintf("%s:%s:%s", chainDisplayName, leg.LegID, legGovTxHash))
+			}
+		}
+
+		chainResults = append(chainResults, fmt.Sprintf("%s:%d_legs", chainDisplayName, len(chainLegs)))
 	}
 
-	// Combine all governance tx hashes
-	govTxHash = strings.Join(govTxHashes, ",")
+	// Combine all transaction hashes
+	createTxHash := strings.Join(allCreateTxHashes, ",")
+	verifyTxHash := strings.Join(allVerifyTxHashes, ",")
+	govTxHash := strings.Join(allGovTxHashes, ",")
 
-	btce.logger.Printf("✅ [ETH-EXEC] Anchor workflow completed:")
-	btce.logger.Printf("   Create TX: %s", createTxHash)
-	btce.logger.Printf("   Verify TX: %s", verifyTxHash)
-	btce.logger.Printf("   Governance TX: %s", govTxHash)
-
-	// Determine overall success - all 3 transactions should succeed
-	allSuccess := createTxHash != "" && createTxHash != "create_failed" &&
-		verifyTxHash != "" && verifyTxHash != "verify_failed" &&
-		govTxHash != "" && govTxHash != "governance_failed"
+	btce.logger.Printf("✅ [MULTI-CHAIN] All chains processed:")
+	btce.logger.Printf("   Chains: %s", strings.Join(chainResults, ", "))
+	btce.logger.Printf("   Create TXs: %s", createTxHash)
+	btce.logger.Printf("   Verify TXs: %s", verifyTxHash)
+	btce.logger.Printf("   Governance TXs: %s", govTxHash)
 
 	// Create execution result with all transaction hashes
-	// Enhanced: Now includes all 3 tx hashes as first-class fields
-	// MULTI-CHAIN: Uses actual chain name from config
+	// MULTI-CHAIN: Combines results from all target chains
 	result := &TargetChainExecutionResult{
 		Chain:       chainName,
-		TxHash:      createTxHash, // Primary tx is now createAnchor (confirms first)
+		TxHash:      createTxHash,
 		BlockNumber: certenProof.BlockHeight + 100,
-		Success:     allSuccess,
-		RawLogs:     []byte(fmt.Sprintf(`{"status":"success","chain":"%s","chain_id":%d,"create_tx":"%s","verify_tx":"%s","gov_tx":"%s","intent_id":"%s","anchor_id":"%s"}`, chainName, chainID, createTxHash, verifyTxHash, govTxHash, intentID, anchorID)),
+		Success:     overallSuccess,
+		RawLogs:     []byte(fmt.Sprintf(`{"status":"%s","chains":"%s","create_txs":"%s","verify_txs":"%s","gov_txs":"%s","intent_id":"%s","anchor_id":"%s"}`, map[bool]string{true: "success", false: "partial_failure"}[overallSuccess], strings.Join(chainResults, ","), createTxHash, verifyTxHash, govTxHash, intentID, anchorID)),
 		Metadata: map[string]string{
 			"executor":              validatorID,
 			"consensus":             "bft",
 			"proof_id":              certenProof.ProofID,
 			"bundle_id":             bundleID,
-			"chain":                 chainName,
-			"chain_id":              fmt.Sprintf("%d", chainID),
-			"create_tx":             createTxHash,
-			"verify_tx":             verifyTxHash,
-			"governance_tx":         govTxHash,
-			"target_address":        targetAddress.Hex(),
-			"value_wei":             value.String(),
+			"chains":                strings.Join(chainResults, ","),
+			"total_legs":            fmt.Sprintf("%d", len(allLegs)),
+			"total_chains":          fmt.Sprintf("%d", len(legsByChain)),
+			"create_txs":            createTxHash,
+			"verify_txs":            verifyTxHash,
+			"governance_txs":        govTxHash,
 			"creation_contract":     contractConfig.CreationContract,
 			"verification_contract": contractConfig.VerificationContract,
 			"account_contract":      contractConfig.AccountContract,
 			"explorer_url":          explorerURL,
 		},
-		// Enhanced: Explicit fields for all 3 transaction hashes
 		CreateTxHash:     createTxHash,
 		VerifyTxHash:     verifyTxHash,
 		GovernanceTxHash: govTxHash,
 	}
 
-	btce.logger.Printf("🎉 [EVM-EXEC] %s execution completed:", chainName)
-	btce.logger.Printf("   Chain: %s (ID: %d)", result.Chain, chainID)
-	btce.logger.Printf("   Create TX: %s", createTxHash)
-	btce.logger.Printf("   Verify TX: %s", verifyTxHash)
-	btce.logger.Printf("   Governance TX: %s", govTxHash)
+	btce.logger.Printf("🎉 [MULTI-CHAIN] Multi-chain execution completed:")
+	btce.logger.Printf("   Total Chains: %d", len(legsByChain))
+	btce.logger.Printf("   Total Legs: %d", len(allLegs))
+	btce.logger.Printf("   Overall Success: %v", overallSuccess)
 
 	return result, nil
 }
@@ -601,36 +646,42 @@ type LegExecution struct {
 	Target  common.Address
 	Value   *big.Int
 	Data    []byte
+	ChainID int64  // Target chain for this leg
+	Chain   string // Chain name (e.g., "ethereum sepolia", "arbitrum sepolia")
 }
 
 // extractAllLegsFromIntent extracts ALL legs from intent for multi-leg execution
 // SECURITY: This ensures execution parameters come from the intent, not hardcoded values
+// MULTI-CHAIN: Now captures chainId for each leg to enable proper chain routing
 func (btce *BFTTargetChainExecutor) extractAllLegsFromIntent(legacyIntent *intent.CertenIntent) []LegExecution {
 	defaultTarget := common.HexToAddress("0x02841F7Fa62c0d2F7498a07fc1d4A65Ad88CeE49")
 	defaultValue := big.NewInt(1)
+	defaultChainID := int64(11155111) // Ethereum Sepolia
 
 	if legacyIntent == nil || len(legacyIntent.CrossChainData) == 0 {
 		btce.logger.Printf("⚠️ [EXTRACT] No CrossChainData, using defaults")
-		return []LegExecution{{LegID: "default", Target: defaultTarget, Value: defaultValue, Data: []byte{}}}
+		return []LegExecution{{LegID: "default", Target: defaultTarget, Value: defaultValue, Data: []byte{}, ChainID: defaultChainID, Chain: "ethereum sepolia"}}
 	}
 
-	// Parse CrossChainData
+	// Parse CrossChainData with chain information
 	var crossChainData struct {
 		Legs []struct {
 			LegID     string `json:"legId"`
 			To        string `json:"to"`
 			AmountWei string `json:"amountWei"`
+			ChainID   int64  `json:"chainId"`
+			Chain     string `json:"chain"`
 		} `json:"legs"`
 	}
 
 	if err := json.Unmarshal(legacyIntent.CrossChainData, &crossChainData); err != nil {
 		btce.logger.Printf("⚠️ [EXTRACT] Failed to parse CrossChainData: %v", err)
-		return []LegExecution{{LegID: "default", Target: defaultTarget, Value: defaultValue, Data: []byte{}}}
+		return []LegExecution{{LegID: "default", Target: defaultTarget, Value: defaultValue, Data: []byte{}, ChainID: defaultChainID, Chain: "ethereum sepolia"}}
 	}
 
 	if len(crossChainData.Legs) == 0 {
 		btce.logger.Printf("⚠️ [EXTRACT] No legs in CrossChainData, using defaults")
-		return []LegExecution{{LegID: "default", Target: defaultTarget, Value: defaultValue, Data: []byte{}}}
+		return []LegExecution{{LegID: "default", Target: defaultTarget, Value: defaultValue, Data: []byte{}, ChainID: defaultChainID, Chain: "ethereum sepolia"}}
 	}
 
 	btce.logger.Printf("🦵 [MULTI-LEG] Found %d legs in intent", len(crossChainData.Legs))
@@ -659,12 +710,25 @@ func (btce *BFTTargetChainExecutor) extractAllLegsFromIntent(legacyIntent *inten
 			legID = fmt.Sprintf("leg-%d", i)
 		}
 
-		btce.logger.Printf("   🦵 Leg %d (%s): target=%s value=%s wei", i, legID, targetAddress.Hex(), value.String())
+		// Capture chain information for multi-chain routing
+		chainID := leg.ChainID
+		if chainID == 0 {
+			chainID = defaultChainID
+		}
+		chainName := leg.Chain
+		if chainName == "" {
+			chainName = "ethereum sepolia"
+		}
+
+		btce.logger.Printf("   🦵 Leg %d (%s): chain=%s chainId=%d target=%s value=%s wei",
+			i, legID, chainName, chainID, targetAddress.Hex(), value.String())
 		legs = append(legs, LegExecution{
-			LegID:  legID,
-			Target: targetAddress,
-			Value:  value,
-			Data:   []byte{},
+			LegID:   legID,
+			Target:  targetAddress,
+			Value:   value,
+			Data:    []byte{},
+			ChainID: chainID,
+			Chain:   chainName,
 		})
 	}
 
@@ -679,6 +743,68 @@ func (btce *BFTTargetChainExecutor) extractTargetParamsFromIntent(legacyIntent *
 		return legs[0].Target, legs[0].Value, legs[0].Data
 	}
 	return common.HexToAddress("0x02841F7Fa62c0d2F7498a07fc1d4A65Ad88CeE49"), big.NewInt(1), []byte{}
+}
+
+// groupLegsByChain groups legs by their target chainId for multi-chain execution
+// Returns a map of chainId -> []LegExecution
+func (btce *BFTTargetChainExecutor) groupLegsByChain(legs []LegExecution) map[int64][]LegExecution {
+	grouped := make(map[int64][]LegExecution)
+	for _, leg := range legs {
+		grouped[leg.ChainID] = append(grouped[leg.ChainID], leg)
+	}
+
+	btce.logger.Printf("🔀 [MULTI-CHAIN] Grouped %d legs into %d chains:", len(legs), len(grouped))
+	for chainID, chainLegs := range grouped {
+		btce.logger.Printf("   Chain %d: %d legs", chainID, len(chainLegs))
+		for _, leg := range chainLegs {
+			btce.logger.Printf("      - %s: target=%s value=%s wei", leg.LegID, leg.Target.Hex(), leg.Value.String())
+		}
+	}
+
+	return grouped
+}
+
+// getContractManagerForChain creates a contract manager for a specific chain
+func (btce *BFTTargetChainExecutor) getContractManagerForChain(
+	chainID int64,
+	anchorCfg *config.AnchorConfig,
+) (*EthereumContractManager, *config.EVMChainConfig, error) {
+	var chainCfg *config.EVMChainConfig
+	if anchorCfg != nil {
+		chainCfg = anchorCfg.GetEVMChainConfig(chainID)
+	}
+
+	var contractConfig *CertenContractConfig
+	if chainCfg != nil && chainCfg.RPCURL != "" {
+		btce.logger.Printf("✅ [MULTI-CHAIN] Loading config for %s (chainId=%d)", chainCfg.Name, chainID)
+		contractConfig = &CertenContractConfig{
+			EthereumRPC:          chainCfg.RPCURL,
+			ChainID:              chainCfg.ChainID,
+			PrivateKey:           os.Getenv("ETH_PRIVATE_KEY"),
+			CreationContract:     chainCfg.AnchorV4Address,
+			VerificationContract: chainCfg.AnchorV4Address,
+			AccountContract:      chainCfg.AccountFactory,
+			GasLimit:             uint64(chainCfg.GasLimitAnchor),
+			MaxGasPriceGwei:      chainCfg.MaxGasPriceGwei,
+		}
+		if contractConfig.CreationContract == "" {
+			contractConfig.CreationContract = chainCfg.AnchorV3Address
+			contractConfig.VerificationContract = chainCfg.AnchorV3Address
+		}
+	} else {
+		return nil, nil, fmt.Errorf("no configuration found for chainId=%d", chainID)
+	}
+
+	if contractConfig.CreationContract == "" {
+		return nil, nil, fmt.Errorf("no anchor contract address for chainId=%d", chainID)
+	}
+
+	ethManager, err := NewEthereumContractManager(contractConfig)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create contract manager for chainId=%d: %w", chainID, err)
+	}
+
+	return ethManager, chainCfg, nil
 }
 
 // convertToLegacyIntent converts BFT Intent parameters to legacy intent.CertenIntent format
