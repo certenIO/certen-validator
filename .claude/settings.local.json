@@ -136,7 +136,16 @@
       "Bash(npx:*)",
       "Bash(PGPASSWORD=$CERTEN_DB_PASSWORD psql -h 116.202.214.38 -U certen_user -d certen_proofs -c \"\\\\d proof_artifacts\")",
       "Bash(PGPASSWORD=$CERTEN_DB_PASSWORD psql -h 116.202.214.38 -U certen_user -d certen_proofs -c \"\\\\d batch_transactions\")",
-      "Bash(npm run build:*)"
+      "Bash(npm run build:*)",
+      "Bash(forge build:*)",
+      "Bash(cast send:*)",
+      "Bash(export PRIVATE_KEY=0xbf90cedf27a3009a2c8a1634971430e853872dc5d1dbb837e02beffa4760d9cf)",
+      "Bash(export BLS_VERIFIER_ADDRESS=0x609987770BCEE4fB7F2e0e81685CE912c437f7f1)",
+      "Bash(forge script:*)",
+      "Bash(BLS_VERIFIER_ADDRESS=0x609987770BCEE4fB7F2e0e81685CE912c437f7f1 forge script script/DeployAnchorV4.s.sol:DeployAnchorV4 --rpc-url https://optimism-sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a --private-key 0xbf90cedf27a3009a2c8a1634971430e853872dc5d1dbb837e02beffa4760d9cf --broadcast)",
+      "Bash(BLS_VERIFIER_ADDRESS=0x488d2c2bB3d65a60eae9f72665fBaf191F38B7b7 forge script script/DeployAnchorV4.s.sol:DeployAnchorV4 --rpc-url https://arbitrum-sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a --private-key 0xbf90cedf27a3009a2c8a1634971430e853872dc5d1dbb837e02beffa4760d9cf --broadcast)",
+      "Bash(forge verify-contract:*)",
+      "Bash(cast code:*)"
     ]
   }
 }

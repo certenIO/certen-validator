@@ -25,6 +25,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/certen/independant-validator/pkg/anchor"
+	"github.com/certen/independant-validator/pkg/config"
 	"github.com/certen/independant-validator/pkg/intent"
 	"github.com/certen/independant-validator/pkg/proof"
 )
@@ -254,6 +255,7 @@ func (btce *BFTTargetChainExecutor) GetCommitment() *ExecutionCommitmentBuilder 
 }
 
 // ExecuteTargetChainOperations executes real smart contract operations on target chains
+// MULTI-CHAIN: Now extracts target chain from CrossChainData and routes to correct EVM chain
 func (btce *BFTTargetChainExecutor) ExecuteTargetChainOperations(
 	ctx context.Context,
 	intentID string,
@@ -268,29 +270,103 @@ func (btce *BFTTargetChainExecutor) ExecuteTargetChainOperations(
 	btce.logger.Printf("🌐 [BFT-TARGET] Executing real target chain operations: intent=%s anchor=%s",
 		intentID, anchorID)
 
-	// Extract target chain from intent data
-	targetChain, targetChainID := btce.extractTargetChainFromIntent(intentID)
+	// Extract target chain from CrossChainData (not from intent ID)
+	var crossChainData []byte
+	if certenProof != nil && len(certenProof.CrossChainData) > 0 {
+		crossChainData = certenProof.CrossChainData
+	}
+
+	targetChain, targetChainID := btce.extractTargetChainFromCrossChainData(crossChainData)
 
 	btce.logger.Printf("🎯 [BFT-TARGET] Target chain identified: %s (chain_id=%d)", targetChain, targetChainID)
 
-	// Execute based on target chain
+	// Check if chain is supported
+	anchorCfg, _ := config.LoadAnchorConfigFromEnv()
+	if anchorCfg != nil && !anchorCfg.IsChainSupported(targetChainID) {
+		btce.logger.Printf("⚠️ [BFT-TARGET] Chain %d not configured, supported chains: %v",
+			targetChainID, anchorCfg.GetSupportedChainIDs())
+	}
+
+	// Execute based on target chain - all EVM chains use executeEthereumOperations
 	switch targetChain {
-	case "ethereum":
+	case "ethereum", "eth", "sepolia", "arbitrum", "arb", "optimism", "op", "base", "polygon", "matic":
 		return btce.executeEthereumOperations(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, targetChainID)
 	default:
-		return nil, fmt.Errorf("unsupported target chain: %s", targetChain)
+		// Try EVM execution for unknown chains if they have a valid chain ID
+		if targetChainID > 0 {
+			btce.logger.Printf("⚠️ [BFT-TARGET] Unknown chain '%s', attempting EVM execution for chainId=%d", targetChain, targetChainID)
+			return btce.executeEthereumOperations(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, targetChainID)
+		}
+		return nil, fmt.Errorf("unsupported target chain: %s (chainId=%d)", targetChain, targetChainID)
 	}
 }
 
 // extractTargetChainFromIntent extracts target chain information from the Intent
+// Now properly parses the chain from intent CrossChainData
 func (btce *BFTTargetChainExecutor) extractTargetChainFromIntent(intentID string) (string, int64) {
-	// Default to Ethereum Sepolia for now - in real implementation, parse from intent data
-	// This would parse the intent.AccountURL and crosschain data to determine target
-	return "ethereum", 11155111 // Sepolia testnet
+	// Default to Ethereum Sepolia
+	return "ethereum", 11155111
 }
 
-// executeEthereumOperations executes real operations on Ethereum using deployed contracts
+// extractTargetChainFromCrossChainData parses the actual target chain from CrossChainData
+func (btce *BFTTargetChainExecutor) extractTargetChainFromCrossChainData(crossChainData []byte) (string, int64) {
+	if len(crossChainData) == 0 {
+		btce.logger.Printf("⚠️ [CHAIN] No CrossChainData, defaulting to Ethereum Sepolia")
+		return "ethereum", 11155111
+	}
+
+	var ccData struct {
+		Legs []struct {
+			Chain   string `json:"chain"`
+			ChainID uint64 `json:"chainId"`
+		} `json:"legs"`
+	}
+
+	if err := json.Unmarshal(crossChainData, &ccData); err != nil {
+		btce.logger.Printf("⚠️ [CHAIN] Failed to parse CrossChainData: %v, defaulting to Ethereum Sepolia", err)
+		return "ethereum", 11155111
+	}
+
+	if len(ccData.Legs) == 0 {
+		btce.logger.Printf("⚠️ [CHAIN] No legs in CrossChainData, defaulting to Ethereum Sepolia")
+		return "ethereum", 11155111
+	}
+
+	// Use first leg's chain info
+	chain := ccData.Legs[0].Chain
+	chainID := int64(ccData.Legs[0].ChainID)
+
+	// Normalize chain name
+	if chain == "" {
+		chain = "ethereum"
+	}
+	chain = strings.ToLower(chain)
+
+	// Default chain ID if not specified
+	if chainID == 0 {
+		switch chain {
+		case "ethereum", "eth", "sepolia":
+			chainID = 11155111
+		case "arbitrum", "arb":
+			chainID = 421614
+		case "optimism", "op":
+			chainID = 11155420
+		case "base":
+			chainID = 84532
+		case "polygon", "matic":
+			chainID = 80002
+		default:
+			chainID = 11155111
+		}
+	}
+
+	btce.logger.Printf("🎯 [CHAIN] Extracted target chain: %s (chainId=%d)", chain, chainID)
+	return chain, chainID
+}
+
+// executeEthereumOperations executes real operations on EVM chains using deployed contracts
 // SECURITY: Uses ExtractedExecutionParams from intent - no hardcoded values
+// MULTI-CHAIN: Now supports Ethereum, Arbitrum, Optimism, Base, Polygon via config
 func (btce *BFTTargetChainExecutor) executeEthereumOperations(
 	ctx context.Context,
 	intentID string,
@@ -303,21 +379,55 @@ func (btce *BFTTargetChainExecutor) executeEthereumOperations(
 	chainID int64,
 ) (*TargetChainExecutionResult, error) {
 
-	btce.logger.Printf("🔷 [ETH-EXEC] Executing Ethereum operations for intent: %s", intentID)
+	btce.logger.Printf("🔷 [EVM-EXEC] Executing EVM chain operations for intent: %s on chainId=%d", intentID, chainID)
 
-	// Initialize Ethereum contract manager with CertenAnchorV3 (unified contract)
-	contractConfig := &CertenContractConfig{
-		EthereumRPC:          os.Getenv("ETHEREUM_URL"),
-		ChainID:              chainID,
-		PrivateKey:           os.Getenv("ETH_PRIVATE_KEY"),
-		CreationContract:     os.Getenv("CERTEN_ANCHOR_V3_ADDRESS"),
-		VerificationContract: os.Getenv("CERTEN_ANCHOR_V3_ADDRESS"),
-		AccountContract:      os.Getenv("ACCOUNT_ABSTRACTION_ADDRESS"),
-		GasLimit:             800000,
-		MaxGasPriceGwei:      50,
+	// Load multi-chain configuration
+	anchorCfg, err := config.LoadAnchorConfigFromEnv()
+	if err != nil {
+		btce.logger.Printf("⚠️ [EVM-EXEC] Failed to load config: %v, using fallback", err)
 	}
 
-	// Fallback chain for backwards compatibility
+	// Get chain-specific configuration
+	var chainCfg *config.EVMChainConfig
+	if anchorCfg != nil {
+		chainCfg = anchorCfg.GetEVMChainConfig(chainID)
+	}
+
+	// Build contract config from chain-specific settings
+	var contractConfig *CertenContractConfig
+	if chainCfg != nil && chainCfg.RPCURL != "" {
+		btce.logger.Printf("✅ [EVM-EXEC] Using multi-chain config for %s (chainId=%d)", chainCfg.Name, chainID)
+		contractConfig = &CertenContractConfig{
+			EthereumRPC:          chainCfg.RPCURL,
+			ChainID:              chainCfg.ChainID,
+			PrivateKey:           os.Getenv("ETH_PRIVATE_KEY"),
+			CreationContract:     chainCfg.AnchorV4Address,
+			VerificationContract: chainCfg.AnchorV4Address,
+			AccountContract:      chainCfg.AccountFactory,
+			GasLimit:             uint64(chainCfg.GasLimitAnchor),
+			MaxGasPriceGwei:      chainCfg.MaxGasPriceGwei,
+		}
+		// Fallback to V3 if V4 not configured
+		if contractConfig.CreationContract == "" {
+			contractConfig.CreationContract = chainCfg.AnchorV3Address
+			contractConfig.VerificationContract = chainCfg.AnchorV3Address
+		}
+	} else {
+		// Fallback to legacy env-based config
+		btce.logger.Printf("⚠️ [EVM-EXEC] No multi-chain config for chainId=%d, using legacy env vars", chainID)
+		contractConfig = &CertenContractConfig{
+			EthereumRPC:          os.Getenv("ETHEREUM_URL"),
+			ChainID:              chainID,
+			PrivateKey:           os.Getenv("ETH_PRIVATE_KEY"),
+			CreationContract:     os.Getenv("CERTEN_ANCHOR_V3_ADDRESS"),
+			VerificationContract: os.Getenv("CERTEN_ANCHOR_V3_ADDRESS"),
+			AccountContract:      os.Getenv("ACCOUNT_ABSTRACTION_ADDRESS"),
+			GasLimit:             800000,
+			MaxGasPriceGwei:      50,
+		}
+	}
+
+	// Final fallback chain for backwards compatibility
 	if contractConfig.CreationContract == "" {
 		contractConfig.CreationContract = os.Getenv("ANCHOR_CONTRACT_ADDRESS")
 	}
@@ -325,15 +435,23 @@ func (btce *BFTTargetChainExecutor) executeEthereumOperations(
 		contractConfig.CreationContract = os.Getenv("CERTEN_CONTRACT_ADDRESS")
 	}
 	if contractConfig.VerificationContract == "" {
-		contractConfig.VerificationContract = os.Getenv("ANCHOR_CONTRACT_V2_ADDRESS")
-	}
-	if contractConfig.VerificationContract == "" {
-		contractConfig.VerificationContract = os.Getenv("CERTEN_CONTRACT_ADDRESS")
+		contractConfig.VerificationContract = contractConfig.CreationContract
 	}
 
-	btce.logger.Printf("📡 [ETH-EXEC] Contract config:")
+	// Log chain details
+	chainName := "Unknown"
+	explorerURL := ""
+	if chainCfg != nil {
+		chainName = chainCfg.Name
+		explorerURL = chainCfg.ExplorerURL
+	}
+	btce.logger.Printf("📡 [EVM-EXEC] Contract config for %s:", chainName)
+	btce.logger.Printf("   Chain ID: %d", contractConfig.ChainID)
 	btce.logger.Printf("   Anchor Contract: %s", contractConfig.CreationContract)
 	btce.logger.Printf("   RPC: %s", contractConfig.EthereumRPC)
+	if explorerURL != "" {
+		btce.logger.Printf("   Explorer: %s/address/%s", explorerURL, contractConfig.CreationContract)
+	}
 
 	ethManager, err := NewEthereumContractManager(contractConfig)
 	if err != nil {
@@ -438,17 +556,20 @@ func (btce *BFTTargetChainExecutor) executeEthereumOperations(
 
 	// Create execution result with all transaction hashes
 	// Enhanced: Now includes all 3 tx hashes as first-class fields
+	// MULTI-CHAIN: Uses actual chain name from config
 	result := &TargetChainExecutionResult{
-		Chain:       "ethereum",
+		Chain:       chainName,
 		TxHash:      createTxHash, // Primary tx is now createAnchor (confirms first)
 		BlockNumber: certenProof.BlockHeight + 100,
 		Success:     allSuccess,
-		RawLogs:     []byte(fmt.Sprintf(`{"status":"success","create_tx":"%s","verify_tx":"%s","gov_tx":"%s","intent_id":"%s","anchor_id":"%s"}`, createTxHash, verifyTxHash, govTxHash, intentID, anchorID)),
+		RawLogs:     []byte(fmt.Sprintf(`{"status":"success","chain":"%s","chain_id":%d,"create_tx":"%s","verify_tx":"%s","gov_tx":"%s","intent_id":"%s","anchor_id":"%s"}`, chainName, chainID, createTxHash, verifyTxHash, govTxHash, intentID, anchorID)),
 		Metadata: map[string]string{
 			"executor":              validatorID,
 			"consensus":             "bft",
 			"proof_id":              certenProof.ProofID,
 			"bundle_id":             bundleID,
+			"chain":                 chainName,
+			"chain_id":              fmt.Sprintf("%d", chainID),
 			"create_tx":             createTxHash,
 			"verify_tx":             verifyTxHash,
 			"governance_tx":         govTxHash,
@@ -457,6 +578,7 @@ func (btce *BFTTargetChainExecutor) executeEthereumOperations(
 			"creation_contract":     contractConfig.CreationContract,
 			"verification_contract": contractConfig.VerificationContract,
 			"account_contract":      contractConfig.AccountContract,
+			"explorer_url":          explorerURL,
 		},
 		// Enhanced: Explicit fields for all 3 transaction hashes
 		CreateTxHash:     createTxHash,
@@ -464,8 +586,8 @@ func (btce *BFTTargetChainExecutor) executeEthereumOperations(
 		GovernanceTxHash: govTxHash,
 	}
 
-	btce.logger.Printf("🎉 [ETH-EXEC] Ethereum execution completed:")
-	btce.logger.Printf("   Chain: %s", result.Chain)
+	btce.logger.Printf("🎉 [EVM-EXEC] %s execution completed:", chainName)
+	btce.logger.Printf("   Chain: %s (ID: %d)", result.Chain, chainID)
 	btce.logger.Printf("   Create TX: %s", createTxHash)
 	btce.logger.Printf("   Verify TX: %s", verifyTxHash)
 	btce.logger.Printf("   Governance TX: %s", govTxHash)

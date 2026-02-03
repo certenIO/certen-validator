@@ -114,6 +114,33 @@ type EventSettings struct {
 type NetworkSettings struct {
 	Ethereum   EthereumNetworkSettings   `yaml:"ethereum"`
 	Accumulate AccumulateNetworkSettings `yaml:"accumulate"`
+	// Multi-chain support: map of chainID -> chain config
+	EVMChains map[int64]*EVMChainConfig `yaml:"evm_chains"`
+}
+
+// EVMChainConfig contains configuration for a specific EVM chain
+type EVMChainConfig struct {
+	Name               string   `yaml:"name"`
+	ChainID            int64    `yaml:"chain_id"`
+	RPCURL             string   `yaml:"rpc_url"`
+	WSURL              string   `yaml:"ws_url"`
+	RPCTimeout         Duration `yaml:"rpc_timeout"`
+	MaxConnections     int      `yaml:"max_connections"`
+	MaxIdleConnections int      `yaml:"max_idle_connections"`
+
+	// Contract addresses for this chain
+	AnchorV4Address    string `yaml:"anchor_v4_address"`
+	AnchorV3Address    string `yaml:"anchor_v3_address"`
+	BLSVerifierAddress string `yaml:"bls_verifier_address"`
+	AccountFactory     string `yaml:"account_factory_address"`
+
+	// Gas settings (optional, falls back to global)
+	MaxGasPriceGwei    int64 `yaml:"max_gas_price_gwei"`
+	MaxPriorityFeeGwei int64 `yaml:"max_priority_fee_gwei"`
+	GasLimitAnchor     int64 `yaml:"gas_limit_anchor"`
+
+	// Explorer URL for logging/debugging
+	ExplorerURL string `yaml:"explorer_url"`
 }
 
 // EthereumNetworkSettings contains Ethereum network configuration
@@ -667,6 +694,68 @@ func (c *AnchorConfig) GetMaxGasPriceWei() int64 {
 	return c.Anchor.Gas.MaxGasPriceGwei * 1_000_000_000
 }
 
+// GetEVMChainConfig returns configuration for a specific EVM chain by chainID
+// Falls back to default Ethereum config if chain not found
+func (c *AnchorConfig) GetEVMChainConfig(chainID int64) *EVMChainConfig {
+	if c.Network.EVMChains != nil {
+		if cfg, ok := c.Network.EVMChains[chainID]; ok {
+			return cfg
+		}
+	}
+
+	// Fallback to default Ethereum config (for backward compatibility)
+	return &EVMChainConfig{
+		Name:               c.Network.Ethereum.Name,
+		ChainID:            c.Network.Ethereum.ChainID,
+		RPCURL:             c.Network.Ethereum.RPCURL,
+		WSURL:              c.Network.Ethereum.WSURL,
+		RPCTimeout:         c.Network.Ethereum.RPCTimeout,
+		MaxConnections:     c.Network.Ethereum.MaxConnections,
+		MaxIdleConnections: c.Network.Ethereum.MaxIdleConnections,
+		AnchorV4Address:    c.Anchor.Contract.Address,
+		MaxGasPriceGwei:    c.Anchor.Gas.MaxGasPriceGwei,
+		MaxPriorityFeeGwei: c.Anchor.Gas.MaxPriorityFeeGwei,
+		GasLimitAnchor:     c.Anchor.Gas.GasLimitAnchor,
+	}
+}
+
+// GetSupportedChainIDs returns a list of all configured EVM chain IDs
+func (c *AnchorConfig) GetSupportedChainIDs() []int64 {
+	chainIDs := make([]int64, 0)
+
+	// Always include the default Ethereum chain
+	chainIDs = append(chainIDs, c.Network.Ethereum.ChainID)
+
+	// Add all configured EVM chains
+	if c.Network.EVMChains != nil {
+		for chainID := range c.Network.EVMChains {
+			// Avoid duplicates
+			if chainID != c.Network.Ethereum.ChainID {
+				chainIDs = append(chainIDs, chainID)
+			}
+		}
+	}
+
+	return chainIDs
+}
+
+// IsChainSupported returns true if the given chainID is configured
+func (c *AnchorConfig) IsChainSupported(chainID int64) bool {
+	// Check default Ethereum config
+	if c.Network.Ethereum.ChainID == chainID {
+		return true
+	}
+
+	// Check EVM chains map
+	if c.Network.EVMChains != nil {
+		if _, ok := c.Network.EVMChains[chainID]; ok {
+			return true
+		}
+	}
+
+	return false
+}
+
 // ==============================================================================
 // Environment-based Config Loading (Compatibility)
 // ==============================================================================
@@ -751,6 +840,8 @@ func LoadAnchorConfigFromEnv() (*AnchorConfig, error) {
 				Network:    getEnv("ACCUMULATE_NETWORK", "devnet"),
 				APITimeout: Duration(30 * time.Second),
 			},
+			// Multi-chain EVM support
+			EVMChains: loadEVMChainsFromEnv(),
 		},
 
 		Validator: ValidatorSettings{
@@ -857,4 +948,121 @@ func getEnvInt64Local(key string, defaultValue int64) int64 {
 		}
 	}
 	return defaultValue
+}
+
+// ==============================================================================
+// Multi-Chain EVM Configuration
+// ==============================================================================
+
+// loadEVMChainsFromEnv loads multi-chain EVM configurations from environment variables
+// Supports Ethereum Sepolia, Arbitrum Sepolia, Optimism Sepolia, Base Sepolia, Polygon Amoy
+func loadEVMChainsFromEnv() map[int64]*EVMChainConfig {
+	chains := make(map[int64]*EVMChainConfig)
+
+	// Ethereum Sepolia (11155111) - Primary chain
+	if rpc := getEnv("ETHEREUM_SEPOLIA_RPC_URL", getEnv("ETHEREUM_URL", "")); rpc != "" {
+		chains[11155111] = &EVMChainConfig{
+			Name:               "Ethereum Sepolia",
+			ChainID:            11155111,
+			RPCURL:             rpc,
+			WSURL:              getEnv("ETHEREUM_SEPOLIA_WS_URL", ""),
+			RPCTimeout:         Duration(30 * time.Second),
+			MaxConnections:     10,
+			MaxIdleConnections: 5,
+			AnchorV4Address:    getEnv("SEPOLIA_ANCHORV4_ADDRESS", "0x6C664360f5451d61042289481A00Ce57BF322aa5"),
+			AnchorV3Address:    getEnv("SEPOLIA_ANCHORV3_ADDRESS", "0xEb17eBd351D2e040a0cB3026a3D04BEc182d8b98"),
+			BLSVerifierAddress: getEnv("SEPOLIA_BLSZKVERIFIER_ADDRESS", "0x631B6444216b981561034655349F8a28962DcC5F"),
+			AccountFactory:     getEnv("SEPOLIA_ACCOUNTFACTORY_ADDRESS", "0xbd9D33310358C8A10254175dD297e2CA8cd623c3"),
+			MaxGasPriceGwei:    getEnvInt64("SEPOLIA_MAX_GAS_PRICE_GWEI", 100),
+			MaxPriorityFeeGwei: getEnvInt64("SEPOLIA_MAX_PRIORITY_FEE_GWEI", 2),
+			GasLimitAnchor:     getEnvInt64("SEPOLIA_GAS_LIMIT_ANCHOR", 500000),
+			ExplorerURL:        "https://sepolia.etherscan.io",
+		}
+	}
+
+	// Arbitrum Sepolia (421614)
+	if rpc := getEnv("ARBITRUM_SEPOLIA_RPC_URL", ""); rpc != "" {
+		chains[421614] = &EVMChainConfig{
+			Name:               "Arbitrum Sepolia",
+			ChainID:            421614,
+			RPCURL:             rpc,
+			WSURL:              getEnv("ARBITRUM_SEPOLIA_WS_URL", ""),
+			RPCTimeout:         Duration(30 * time.Second),
+			MaxConnections:     10,
+			MaxIdleConnections: 5,
+			AnchorV4Address:    getEnv("ARBITRUM_SEPOLIA_ANCHORV4_ADDRESS", "0x52E8e8E5d5EE35ED52BA6B7BB2Cb2dc2D2b2c952"),
+			AnchorV3Address:    getEnv("ARBITRUM_SEPOLIA_ANCHORV3_ADDRESS", "0x609987770BCEE4fB7F2e0e81685CE912c437f7f1"),
+			BLSVerifierAddress: getEnv("ARBITRUM_SEPOLIA_BLSZKVERIFIER_ADDRESS", "0x488d2c2bB3d65a60eae9f72665fBaf191F38B7b7"),
+			AccountFactory:     getEnv("ARBITRUM_SEPOLIA_ACCOUNTFACTORY_ADDRESS", "0xc9489206A9c8FA12129Fa1EFee8CcB47Ed93896d"),
+			MaxGasPriceGwei:    getEnvInt64("ARBITRUM_MAX_GAS_PRICE_GWEI", 1),
+			MaxPriorityFeeGwei: getEnvInt64("ARBITRUM_MAX_PRIORITY_FEE_GWEI", 0),
+			GasLimitAnchor:     getEnvInt64("ARBITRUM_GAS_LIMIT_ANCHOR", 2000000),
+			ExplorerURL:        "https://sepolia.arbiscan.io",
+		}
+	}
+
+	// Optimism Sepolia (11155420)
+	if rpc := getEnv("OPTIMISM_SEPOLIA_RPC_URL", ""); rpc != "" {
+		chains[11155420] = &EVMChainConfig{
+			Name:               "Optimism Sepolia",
+			ChainID:            11155420,
+			RPCURL:             rpc,
+			WSURL:              getEnv("OPTIMISM_SEPOLIA_WS_URL", ""),
+			RPCTimeout:         Duration(30 * time.Second),
+			MaxConnections:     10,
+			MaxIdleConnections: 5,
+			AnchorV4Address:    getEnv("OPTIMISM_SEPOLIA_ANCHORV4_ADDRESS", "0x52E8e8E5d5EE35ED52BA6B7BB2Cb2dc2D2b2c952"),
+			AnchorV3Address:    getEnv("OPTIMISM_SEPOLIA_ANCHORV3_ADDRESS", "0xc0e54d4D1A5B25e4Cc719Bec436c44241F2BA5d9"),
+			BLSVerifierAddress: getEnv("OPTIMISM_SEPOLIA_BLSZKVERIFIER_ADDRESS", "0x609987770BCEE4fB7F2e0e81685CE912c437f7f1"),
+			AccountFactory:     getEnv("OPTIMISM_SEPOLIA_ACCOUNTFACTORY_ADDRESS", "0xCc1fE1950c89A6fF1ef28cCF38bA151fF8abFD5C"),
+			MaxGasPriceGwei:    getEnvInt64("OPTIMISM_MAX_GAS_PRICE_GWEI", 1),
+			MaxPriorityFeeGwei: getEnvInt64("OPTIMISM_MAX_PRIORITY_FEE_GWEI", 0),
+			GasLimitAnchor:     getEnvInt64("OPTIMISM_GAS_LIMIT_ANCHOR", 2000000),
+			ExplorerURL:        "https://sepolia-optimism.etherscan.io",
+		}
+	}
+
+	// Base Sepolia (84532)
+	if rpc := getEnv("BASE_SEPOLIA_RPC_URL", ""); rpc != "" {
+		chains[84532] = &EVMChainConfig{
+			Name:               "Base Sepolia",
+			ChainID:            84532,
+			RPCURL:             rpc,
+			WSURL:              getEnv("BASE_SEPOLIA_WS_URL", ""),
+			RPCTimeout:         Duration(30 * time.Second),
+			MaxConnections:     10,
+			MaxIdleConnections: 5,
+			AnchorV4Address:    getEnv("BASE_SEPOLIA_ANCHORV4_ADDRESS", ""),
+			AnchorV3Address:    getEnv("BASE_SEPOLIA_ANCHORV3_ADDRESS", "0x609987770BCEE4fB7F2e0e81685CE912c437f7f1"),
+			BLSVerifierAddress: getEnv("BASE_SEPOLIA_BLSZKVERIFIER_ADDRESS", "0x488d2c2bB3d65a60eae9f72665fBaf191F38B7b7"),
+			AccountFactory:     getEnv("BASE_SEPOLIA_ACCOUNTFACTORY_ADDRESS", "0xc9489206A9c8FA12129Fa1EFee8CcB47Ed93896d"),
+			MaxGasPriceGwei:    getEnvInt64("BASE_MAX_GAS_PRICE_GWEI", 1),
+			MaxPriorityFeeGwei: getEnvInt64("BASE_MAX_PRIORITY_FEE_GWEI", 0),
+			GasLimitAnchor:     getEnvInt64("BASE_GAS_LIMIT_ANCHOR", 2000000),
+			ExplorerURL:        "https://sepolia.basescan.org",
+		}
+	}
+
+	// Polygon Amoy (80002)
+	if rpc := getEnv("POLYGON_AMOY_RPC_URL", ""); rpc != "" {
+		chains[80002] = &EVMChainConfig{
+			Name:               "Polygon Amoy",
+			ChainID:            80002,
+			RPCURL:             rpc,
+			WSURL:              getEnv("POLYGON_AMOY_WS_URL", ""),
+			RPCTimeout:         Duration(30 * time.Second),
+			MaxConnections:     10,
+			MaxIdleConnections: 5,
+			AnchorV4Address:    getEnv("POLYGON_AMOY_ANCHORV4_ADDRESS", ""),
+			AnchorV3Address:    getEnv("POLYGON_AMOY_ANCHORV3_ADDRESS", "0x609987770BCEE4fB7F2e0e81685CE912c437f7f1"),
+			BLSVerifierAddress: getEnv("POLYGON_AMOY_BLSZKVERIFIER_ADDRESS", "0x488d2c2bB3d65a60eae9f72665fBaf191F38B7b7"),
+			AccountFactory:     getEnv("POLYGON_AMOY_ACCOUNTFACTORY_ADDRESS", "0xc9489206A9c8FA12129Fa1EFee8CcB47Ed93896d"),
+			MaxGasPriceGwei:    getEnvInt64("POLYGON_MAX_GAS_PRICE_GWEI", 50),
+			MaxPriorityFeeGwei: getEnvInt64("POLYGON_MAX_PRIORITY_FEE_GWEI", 30),
+			GasLimitAnchor:     getEnvInt64("POLYGON_GAS_LIMIT_ANCHOR", 500000),
+			ExplorerURL:        "https://amoy.polygonscan.com",
+		}
+	}
+
+	return chains
 }
