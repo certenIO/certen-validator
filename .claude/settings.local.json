@@ -145,7 +145,17 @@
       "Bash(BLS_VERIFIER_ADDRESS=0x609987770BCEE4fB7F2e0e81685CE912c437f7f1 forge script script/DeployAnchorV4.s.sol:DeployAnchorV4 --rpc-url https://optimism-sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a --private-key 0xbf90cedf27a3009a2c8a1634971430e853872dc5d1dbb837e02beffa4760d9cf --broadcast)",
       "Bash(BLS_VERIFIER_ADDRESS=0x488d2c2bB3d65a60eae9f72665fBaf191F38B7b7 forge script script/DeployAnchorV4.s.sol:DeployAnchorV4 --rpc-url https://arbitrum-sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a --private-key 0xbf90cedf27a3009a2c8a1634971430e853872dc5d1dbb837e02beffa4760d9cf --broadcast)",
       "Bash(forge verify-contract:*)",
-      "Bash(cast code:*)"
+      "Bash(cast code:*)",
+      "Bash(cat:*)",
+      "WebFetch(domain:sepolia.arbiscan.io)",
+      "Bash(cast 4byte-decode:*)",
+      "Bash(forge clean:*)",
+      "Bash(cast sig:*)",
+      "Bash(cast calldata-decode:*)",
+      "Bash(cast run:*)",
+      "Bash(cast keccak:*)",
+      "Bash(abigen:*)",
+      "Bash(BLS_VERIFIER_ADDRESS=0x631B6444216b981561034655349F8a28962DcC5F forge script:*)"
     ]
   }
 }

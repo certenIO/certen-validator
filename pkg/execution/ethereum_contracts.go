@@ -462,7 +462,8 @@ func (ecm *EthereumContractManager) SubmitCertenProofToAnchor(
 	ecm.auth.GasLimit = estimatedGas
 
 	// Build comprehensive proof from CERTEN proof data
-	comprehensiveProof := ecm.buildComprehensiveProof(certenIntent, certenProof, anchorResult)
+	// Pass anchorID so BLS messageHash is bound to this anchor (anti-replay)
+	comprehensiveProof := ecm.buildComprehensiveProof(certenIntent, certenProof, anchorResult, anchorID)
 
 	fmt.Printf("📡 [ETH-VERIFY] Submitting proof to CertenAnchorV3 via executeComprehensiveProof...\n")
 	fmt.Printf("   Contract: %s\n", ecm.anchor.GetAddress().Hex())
@@ -762,7 +763,8 @@ func (ecm *EthereumContractManager) ExecuteUnifiedAnchorWorkflowFull(
 	bundleID := ecm.generateAnchorID(certenIntent, certenProof)
 
 	// Build commitments from proof data
-	comprehensiveProof := ecm.buildComprehensiveProof(certenIntent, certenProof, anchorResult)
+	// Pass bundleID so BLS messageHash is bound to this anchor (anti-replay)
+	comprehensiveProof := ecm.buildComprehensiveProof(certenIntent, certenProof, anchorResult, bundleID)
 
 	// Compute adiURLHash from the Accumulate data account URL
 	// This cryptographically binds the anchor to the specific account
@@ -826,7 +828,8 @@ func (ecm *EthereumContractManager) ExecuteUnifiedAnchorWorkflow(
 	bundleID := ecm.generateAnchorID(certenIntent, certenProof)
 
 	// Build commitments from proof data
-	comprehensiveProof := ecm.buildComprehensiveProof(certenIntent, certenProof, anchorResult)
+	// Pass bundleID so BLS messageHash is bound to this anchor (anti-replay)
+	comprehensiveProof := ecm.buildComprehensiveProof(certenIntent, certenProof, anchorResult, bundleID)
 
 	// Compute adiURLHash from the Accumulate data account URL
 	// This cryptographically binds the anchor to the specific account
@@ -866,10 +869,12 @@ func (ecm *EthereumContractManager) ExecuteUnifiedAnchorWorkflow(
 }
 
 // buildComprehensiveProof creates a ComprehensiveCertenProof from CERTEN proof data
+// anchorId is used as the BLS messageHash to cryptographically bind the signature to this anchor
 func (ecm *EthereumContractManager) buildComprehensiveProof(
 	certenIntent *intent.CertenIntent,
 	certenProof *proof.CertenProof,
 	anchorResult *anchor.AnchorResponse,
+	anchorId [32]byte,
 ) contracts.ComprehensiveCertenProof {
 
 	// Parse transaction hash
@@ -955,9 +960,10 @@ func (ecm *EthereumContractManager) buildComprehensiveProof(
 		}
 	}
 
-	// Compute message hash for BLS verification
-	var messageHash [32]byte
-	copy(messageHash[:], crypto.Keccak256([]byte(certenIntent.IntentID)))
+	// SECURITY: Use anchorId as BLS messageHash to bind signature to this anchor
+	// This prevents replay attacks - signatures from other anchors cannot be reused
+	// The anchorId is unique per intent (includes intentID + blockHeight + txHash)
+	messageHash := anchorId
 
 	// Generate ZK proof from BLS signature if prover is available
 	zkProofBytes := ecm.generateBLSZKProof(blsSignatureBytes, messageHash, signedVotingPower, totalVotingPower)
