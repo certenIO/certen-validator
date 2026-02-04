@@ -155,7 +155,8 @@
       "Bash(cast run:*)",
       "Bash(cast keccak:*)",
       "Bash(abigen:*)",
-      "Bash(BLS_VERIFIER_ADDRESS=0x631B6444216b981561034655349F8a28962DcC5F forge script:*)"
+      "Bash(BLS_VERIFIER_ADDRESS=0x631B6444216b981561034655349F8a28962DcC5F forge script:*)",
+      "Bash(source .env)"
     ]
   }
 }
