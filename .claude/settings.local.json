@@ -156,7 +156,14 @@
       "Bash(cast keccak:*)",
       "Bash(abigen:*)",
       "Bash(BLS_VERIFIER_ADDRESS=0x631B6444216b981561034655349F8a28962DcC5F forge script:*)",
-      "Bash(source .env)"
+      "Bash(source .env)",
+      "Bash(if [ \"0xa4fA4209FDE5340B0D5b36522a34641a2d50C7c6\" = \"$ETH_ADDRESS_VALIDATOR_3\" ])",
+      "Bash(then echo \"✓ MATCH - Validator is known validator #3\")",
+      "Bash(else echo \"Checking other validators...\")",
+      "Bash(fi)",
+      "Bash(PRIVATE_KEY=\"0xbf90cedf27a3009a2c8a1634971430e853872dc5d1dbb837e02beffa4760d9cf\" BLS_VERIFIER_ADDRESS=\"0x488d2c2bB3d65a60eae9f72665fBaf191F38B7b7\" forge script script/DeployAnchorV4.s.sol:DeployAnchorV4 --rpc-url \"https://arbitrum-sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a\" --broadcast -vvv)",
+      "Bash(PRIVATE_KEY=\"0xbf90cedf27a3009a2c8a1634971430e853872dc5d1dbb837e02beffa4760d9cf\" BLS_VERIFIER_ADDRESS=\"0x609987770BCEE4fB7F2e0e81685CE912c437f7f1\" forge script:*)",
+      "Bash(PRIVATE_KEY=\"0xbf90cedf27a3009a2c8a1634971430e853872dc5d1dbb837e02beffa4760d9cf\" forge script:*)"
     ]
   }
 }

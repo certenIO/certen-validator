@@ -980,7 +980,7 @@ func loadEVMChainsFromEnv() map[int64]*EVMChainConfig {
 		}
 	}
 
-	// Arbitrum Sepolia (421614)
+	// Arbitrum Sepolia (421614) - Updated 2026-02-04
 	if rpc := getEnv("ARBITRUM_SEPOLIA_RPC_URL", ""); rpc != "" {
 		chains[421614] = &EVMChainConfig{
 			Name:               "Arbitrum Sepolia",
@@ -990,10 +990,10 @@ func loadEVMChainsFromEnv() map[int64]*EVMChainConfig {
 			RPCTimeout:         Duration(30 * time.Second),
 			MaxConnections:     10,
 			MaxIdleConnections: 5,
-			AnchorV4Address:    getEnv("ARBITRUM_SEPOLIA_ANCHORV4_ADDRESS", "0x52E8e8E5d5EE35ED52BA6B7BB2Cb2dc2D2b2c952"),
+			AnchorV4Address:    getEnv("ARBITRUM_SEPOLIA_ANCHORV4_ADDRESS", "0x0518ABBA8D56cC3369b3fcB826313AB1e4702f35"),
 			AnchorV3Address:    getEnv("ARBITRUM_SEPOLIA_ANCHORV3_ADDRESS", "0x609987770BCEE4fB7F2e0e81685CE912c437f7f1"),
 			BLSVerifierAddress: getEnv("ARBITRUM_SEPOLIA_BLSZKVERIFIER_ADDRESS", "0x488d2c2bB3d65a60eae9f72665fBaf191F38B7b7"),
-			AccountFactory:     getEnv("ARBITRUM_SEPOLIA_ACCOUNTFACTORY_ADDRESS", "0x36d019b8218ae4fbe684Aa8FD7F3F400b2EFb589"),  // V4 Factory
+			AccountFactory:     getEnv("ARBITRUM_SEPOLIA_ACCOUNTFACTORY_ADDRESS", "0x842271e696EFC9EC05161FAfBB611ccFC37F5cfa"),
 			MaxGasPriceGwei:    getEnvInt64("ARBITRUM_MAX_GAS_PRICE_GWEI", 1),
 			MaxPriorityFeeGwei: getEnvInt64("ARBITRUM_MAX_PRIORITY_FEE_GWEI", 0),
 			GasLimitAnchor:     getEnvInt64("ARBITRUM_GAS_LIMIT_ANCHOR", 2000000),
@@ -1001,7 +1001,7 @@ func loadEVMChainsFromEnv() map[int64]*EVMChainConfig {
 		}
 	}
 
-	// Optimism Sepolia (11155420)
+	// Optimism Sepolia (11155420) - Updated 2026-02-04
 	if rpc := getEnv("OPTIMISM_SEPOLIA_RPC_URL", ""); rpc != "" {
 		chains[11155420] = &EVMChainConfig{
 			Name:               "Optimism Sepolia",
@@ -1011,10 +1011,10 @@ func loadEVMChainsFromEnv() map[int64]*EVMChainConfig {
 			RPCTimeout:         Duration(30 * time.Second),
 			MaxConnections:     10,
 			MaxIdleConnections: 5,
-			AnchorV4Address:    getEnv("OPTIMISM_SEPOLIA_ANCHORV4_ADDRESS", "0x52E8e8E5d5EE35ED52BA6B7BB2Cb2dc2D2b2c952"),
+			AnchorV4Address:    getEnv("OPTIMISM_SEPOLIA_ANCHORV4_ADDRESS", "0x0518ABBA8D56cC3369b3fcB826313AB1e4702f35"),
 			AnchorV3Address:    getEnv("OPTIMISM_SEPOLIA_ANCHORV3_ADDRESS", "0xc0e54d4D1A5B25e4Cc719Bec436c44241F2BA5d9"),
 			BLSVerifierAddress: getEnv("OPTIMISM_SEPOLIA_BLSZKVERIFIER_ADDRESS", "0x609987770BCEE4fB7F2e0e81685CE912c437f7f1"),
-			AccountFactory:     getEnv("OPTIMISM_SEPOLIA_ACCOUNTFACTORY_ADDRESS", "0x36d019b8218ae4fbe684Aa8FD7F3F400b2EFb589"),  // V4 Factory
+			AccountFactory:     getEnv("OPTIMISM_SEPOLIA_ACCOUNTFACTORY_ADDRESS", "0x7a8c5DC01C2d2Ba498F76832dBcbf0Fe2f69a6C3"),
 			MaxGasPriceGwei:    getEnvInt64("OPTIMISM_MAX_GAS_PRICE_GWEI", 1),
 			MaxPriorityFeeGwei: getEnvInt64("OPTIMISM_MAX_PRIORITY_FEE_GWEI", 0),
 			GasLimitAnchor:     getEnvInt64("OPTIMISM_GAS_LIMIT_ANCHOR", 2000000),
