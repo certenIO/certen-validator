@@ -996,16 +996,32 @@ func (ecm *EthereumContractManager) buildComprehensiveProof(
 	// Build metadata for leaf hash
 	metadata := []byte(fmt.Sprintf("intent:%s,account:%s", certenIntent.IntentID, certenProof.AccountURL))
 
-	// CRITICAL FIX: Compute merkleRoot as keccak256(op || cc || gov)
-	// This MUST match what createAnchor() stores in the contract
-	// The contract computes: bytes32 computedMerkleRoot = keccak256(abi.encodePacked(op, cc, gov))
-	merkleRootData := make([]byte, 96) // 32 + 32 + 32
-	copy(merkleRootData[0:32], commitments.OperationCommitment[:])
-	copy(merkleRootData[32:64], commitments.CrossChainCommitment[:])
-	copy(merkleRootData[64:96], commitments.GovernanceRoot[:])
-	merkleRoot := crypto.Keccak256Hash(merkleRootData)
+	// CRITICAL V4 FIX: Compute 4-leaf merkle root with sorted hash
+	// Tree structure:
+	//           merkleRoot
+	//          /          \
+	//     hash01          hash23
+	//    /     \         /     \
+	// adiURL  opComm  ccComm  govRoot
+	//
+	// This MUST match what createAnchor() stores in the V4 contract
 
-	log.Printf("✅ [MERKLE-FIX] Computed contract-compatible merkleRoot: %x", merkleRoot[:])
+	// Compute adiURLHash from account URL
+	adiURL := certenProof.AccountURL
+	if adiURL == "" {
+		adiURL = fmt.Sprintf("%s/data", certenIntent.OrganizationADI)
+	}
+	adiURLHash := crypto.Keccak256Hash([]byte(adiURL))
+
+	// Compute 4-leaf merkle root using sorted hash
+	hash01 := sortedHash(adiURLHash[:], commitments.OperationCommitment[:])
+	hash23 := sortedHash(commitments.CrossChainCommitment[:], commitments.GovernanceRoot[:])
+	merkleRoot := sortedHash(hash01, hash23)
+	var merkleRootHash common.Hash
+	copy(merkleRootHash[:], merkleRoot)
+
+	log.Printf("✅ [MERKLE-V4] Computed 4-leaf merkleRoot: %x", merkleRootHash[:])
+	log.Printf("   adiURLHash: %x", adiURLHash[:8])
 	log.Printf("   OperationCommitment: %x", commitments.OperationCommitment[:8])
 	log.Printf("   CrossChainCommitment: %x", commitments.CrossChainCommitment[:8])
 	log.Printf("   GovernanceRoot: %x", commitments.GovernanceRoot[:8])
@@ -1016,7 +1032,7 @@ func (ecm *EthereumContractManager) buildComprehensiveProof(
 	// By setting leaf = root when we have no intermediate proofs, we satisfy the verification.
 	var leafHash common.Hash
 	if len(proofHashes) == 0 {
-		leafHash = merkleRoot
+		leafHash = merkleRootHash
 		log.Printf("✅ [MERKLE-FIX] No proofHashes - setting leafHash = merkleRoot for trivial verification")
 	} else {
 		leafHash = crypto.Keccak256Hash(metadata)
@@ -1025,7 +1041,7 @@ func (ecm *EthereumContractManager) buildComprehensiveProof(
 
 	return contracts.ComprehensiveCertenProof{
 		TransactionHash: txHash,
-		MerkleRoot:      merkleRoot,
+		MerkleRoot:      merkleRootHash,
 		ProofHashes:     proofHashes,
 		LeafHash:        leafHash,
 		GovernanceProof: govProof,
@@ -1631,4 +1647,39 @@ func (ecm *EthereumContractManager) encodeValidatorSignatures(sigs []ValidatorSi
 // GetContractConfig returns the contract configuration
 func (ecm *EthereumContractManager) GetContractConfig() *CertenContractConfig {
 	return ecm.config
+}
+
+// sortedHash computes keccak256(a || b) where a and b are sorted lexicographically
+// This matches the Solidity _sortedHash function in CertenAnchorV4
+func sortedHash(a, b []byte) []byte {
+	var data []byte
+	if compareBytes(a, b) < 0 {
+		data = append(a, b...)
+	} else {
+		data = append(b, a...)
+	}
+	return crypto.Keccak256(data)
+}
+
+// compareBytes compares two byte slices lexicographically
+func compareBytes(a, b []byte) int {
+	minLen := len(a)
+	if len(b) < minLen {
+		minLen = len(b)
+	}
+	for i := 0; i < minLen; i++ {
+		if a[i] < b[i] {
+			return -1
+		}
+		if a[i] > b[i] {
+			return 1
+		}
+	}
+	if len(a) < len(b) {
+		return -1
+	}
+	if len(a) > len(b) {
+		return 1
+	}
+	return 0
 }
