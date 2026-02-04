@@ -612,25 +612,23 @@ func (ecm *EthereumContractManager) ExecuteViaUserAccount(
 		return "", fmt.Errorf("failed to bind user account contract: %w", err)
 	}
 
-	// Compute commitments for 4-leaf merkle proof (same logic as buildComprehensiveProof)
-	var opCommitment, ccCommitment, govRoot [32]byte
-
-	// Operation commitment: hash of intent data
-	opCommitmentHash := crypto.Keccak256Hash([]byte(fmt.Sprintf("commitment_%s", bundleID)))
-	copy(opCommitment[:], opCommitmentHash[:])
-
-	// Cross-chain commitment: from lite client proof if available
-	if certenProof.LiteClientProof != nil && len(certenProof.LiteClientProof.BPTRoot) >= 32 {
-		copy(ccCommitment[:], certenProof.LiteClientProof.BPTRoot[:32])
+	// FIXED: Fetch actual commitments from the anchor instead of re-computing
+	// The anchor stores the exact values used during creation - we must use those
+	// for the merkle proof to verify correctly
+	anchor, err := ecm.anchor.GetAnchorFull(nil, bundleID)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch anchor for commitments: %w", err)
 	}
 
-	// Governance root: from BLS signature
-	if certenProof.BLSAggregateSignature != "" {
-		sigHex := strings.TrimPrefix(certenProof.BLSAggregateSignature, "0x")
-		if blsSigBytes, err := hex.DecodeString(sigHex); err == nil && len(blsSigBytes) >= 32 {
-			copy(govRoot[:], crypto.Keccak256(blsSigBytes)[:32])
-		}
-	}
+	// Use the actual stored commitments from the anchor
+	opCommitment := anchor.OperationCommitment
+	ccCommitment := anchor.CrossChainCommitment
+	govRoot := anchor.GovernanceRoot
+
+	fmt.Printf("   Fetched commitments from anchor:\n")
+	fmt.Printf("     opCommitment: 0x%x\n", opCommitment[:8])
+	fmt.Printf("     ccCommitment: 0x%x\n", ccCommitment[:8])
+	fmt.Printf("     govRoot: 0x%x\n", govRoot[:8])
 
 	// Build the AccountProof struct with 4-leaf merkle proof
 	accountProof := ecm.buildAccountProof(bundleID, certenProof, adiURL, opCommitment, ccCommitment, govRoot)
