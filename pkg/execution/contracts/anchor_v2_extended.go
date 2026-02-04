@@ -115,8 +115,8 @@ type AnchorData struct {
 	Valid                 bool           `json:"valid"`
 }
 
-// VerificationResult contains detailed verification results
-type VerificationResult struct {
+// VerificationResultV2 contains detailed verification results (V2 contract)
+type VerificationResultV2 struct {
 	MerkleVerified     bool `json:"merkleVerified"`
 	GovernanceVerified bool `json:"governanceVerified"`
 	BLSVerified        bool `json:"blsVerified"`

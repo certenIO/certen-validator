@@ -969,7 +969,7 @@ func loadEVMChainsFromEnv() map[int64]*EVMChainConfig {
 			RPCTimeout:         Duration(30 * time.Second),
 			MaxConnections:     10,
 			MaxIdleConnections: 5,
-			AnchorV4Address:    getEnv("SEPOLIA_ANCHORV4_ADDRESS", "0x6C664360f5451d61042289481A00Ce57BF322aa5"),
+			AnchorV4Address:    getEnv("SEPOLIA_ANCHORV4_ADDRESS", "0x9ADA9dcE3568Fc9852E91f911bC21FddbC71c2b3"),
 			AnchorV3Address:    getEnv("SEPOLIA_ANCHORV3_ADDRESS", "0xEb17eBd351D2e040a0cB3026a3D04BEc182d8b98"),
 			BLSVerifierAddress: getEnv("SEPOLIA_BLSZKVERIFIER_ADDRESS", "0x631B6444216b981561034655349F8a28962DcC5F"),
 			AccountFactory:     getEnv("SEPOLIA_ACCOUNTFACTORY_ADDRESS", "0xbd9D33310358C8A10254175dD297e2CA8cd623c3"),

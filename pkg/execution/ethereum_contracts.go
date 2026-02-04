@@ -6,6 +6,7 @@
 package execution
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"fmt"
@@ -143,7 +144,7 @@ type EthereumContractManager struct {
 	creationContractAddr       common.Address                    // CertenAnchorV3 unified contract
 	verificationContract       *CertenAnchorV2Contract           // Legacy V2 binding (deprecated)
 	verificationContractExt    *contracts.CertenAnchorV2Extended // Legacy V2 extended (deprecated)
-	anchorV3                   *contracts.CertenAnchorV3Wrapper  // CertenAnchorV3 - Primary contract for all operations
+	anchor                   *contracts.CertenAnchorWrapper  // CertenAnchorV3 - Primary contract for all operations
 	acctContract               *CertenAccountV2Contract
 }
 
@@ -353,7 +354,7 @@ func NewEthereumContractManager(config *CertenContractConfig) (*EthereumContract
 
 	// Initialize CertenAnchorV3 wrapper - PRIMARY contract for all operations
 	// CertenAnchorV3 is a unified contract with createAnchor() and executeComprehensiveProof()
-	anchorV3, err := contracts.NewCertenAnchorV3Wrapper(
+	anchor, err := contracts.NewCertenAnchorWrapper(
 		common.HexToAddress(verificationAddr), client)
 	if err != nil {
 		return nil, fmt.Errorf("failed to instantiate CertenAnchorV3 contract: %w", err)
@@ -377,31 +378,34 @@ func NewEthereumContractManager(config *CertenContractConfig) (*EthereumContract
 		creationContractAddr:    creationAddr,
 		verificationContract:    verificationContract,
 		verificationContractExt: verificationContractExt,
-		anchorV3:                anchorV3,
+		anchor:                anchor,
 		acctContract:            acctContract,
 	}, nil
 }
 
-// CreateAnchorOnChain creates an anchor on CertenAnchorV3 unified contract
+// CreateAnchorOnChain creates an anchor on CertenAnchorV4 unified contract
 // This is Step 1 of the anchor workflow.
-// Uses CertenAnchorV3.createAnchor with 5 parameters
+// Uses CertenAnchorV4.createAnchor with 6 parameters (includes adiURLHash for account binding)
 func (ecm *EthereumContractManager) CreateAnchorOnChain(
 	ctx context.Context,
 	bundleID [32]byte,
+	adiURLHash [32]byte,
 	operationCommitment [32]byte,
 	crossChainCommitment [32]byte,
 	governanceRoot [32]byte,
 	accumulateBlockHeight *big.Int,
 ) (string, error) {
-	fmt.Printf("📡 [ETH-CREATE] Creating anchor on CertenAnchorV3...\n")
-	fmt.Printf("   Contract: %s\n", ecm.anchorV3.GetAddress().Hex())
+	fmt.Printf("📡 [ETH-CREATE] Creating anchor on CertenAnchorV4...\n")
+	fmt.Printf("   Contract: %s\n", ecm.anchor.GetAddress().Hex())
 	fmt.Printf("   Bundle ID: 0x%x\n", bundleID)
+	fmt.Printf("   ADI URL Hash: 0x%x\n", adiURLHash)
 	fmt.Printf("   Block Height: %s\n", accumulateBlockHeight.String())
 
-	// Use CertenAnchorV3 wrapper to create anchor
-	tx, err := ecm.anchorV3.CreateAnchorSimple(
+	// Use CertenAnchorV4 wrapper to create anchor
+	tx, err := ecm.anchor.CreateAnchorSimple(
 		ecm.auth,
 		bundleID,
+		adiURLHash,
 		operationCommitment,
 		crossChainCommitment,
 		governanceRoot,
@@ -461,39 +465,47 @@ func (ecm *EthereumContractManager) SubmitCertenProofToAnchor(
 	comprehensiveProof := ecm.buildComprehensiveProof(certenIntent, certenProof, anchorResult)
 
 	fmt.Printf("📡 [ETH-VERIFY] Submitting proof to CertenAnchorV3 via executeComprehensiveProof...\n")
-	fmt.Printf("   Contract: %s\n", ecm.anchorV3.GetAddress().Hex())
+	fmt.Printf("   Contract: %s\n", ecm.anchor.GetAddress().Hex())
 	fmt.Printf("   Anchor ID: 0x%x\n", anchorID)
 
 	// Convert ComprehensiveCertenProof to CertenProofV3 for V3 contract
 	proofV3 := contracts.ConvertFromExtended(comprehensiveProof)
 
-	// Execute comprehensive proof on-chain using CertenAnchorV3 wrapper
-	tx, err := ecm.anchorV3.ExecuteComprehensiveProofSimple(ecm.auth, anchorID, proofV3)
+	// Execute comprehensive proof on-chain using CertenAnchorV4 wrapper
+	tx, err := ecm.anchor.ExecuteComprehensiveProofSimple(ecm.auth, anchorID, proofV3)
 	if err != nil {
-		// If on-chain execution fails, fall back to detailed verification
-		fmt.Printf("⚠️ [ETH-VERIFY] On-chain execution failed: %v, attempting detailed verification...\n", err)
+		// If on-chain execution fails, try merkle proof verification as diagnostic
+		fmt.Printf("⚠️ [ETH-VERIFY] On-chain execution failed: %v, attempting merkle verification...\n", err)
 
-		// Use V3 detailed verification
-		verifyResult, verifyErr := ecm.anchorV3.VerifyProofDetailed(&bind.CallOpts{}, anchorID, proofV3)
+		// V4 uses simpler verification - check merkle proof
+		merkleValid, verifyErr := ecm.anchor.VerifyMerkleProof(
+			&bind.CallOpts{},
+			anchorID,
+			proofV3.ProofHashes,
+			proofV3.LeafHash,
+		)
 		if verifyErr != nil {
-			return "", fmt.Errorf("both on-chain and detailed verification failed: on-chain=%v, verify=%v", err, verifyErr)
+			return "", fmt.Errorf("on-chain execution failed and merkle verification error: on-chain=%v, verify=%v", err, verifyErr)
+		}
+		if !merkleValid {
+			return "", fmt.Errorf("on-chain execution failed (%v) and merkle proof invalid", err)
 		}
 
-		// Check if all verification steps passed
-		allPassed := verifyResult.MerkleVerified && verifyResult.GovernanceVerified &&
-		             verifyResult.BLSVerified && verifyResult.CommitmentVerified &&
-		             verifyResult.TimestampValid && verifyResult.NonceValid
-		if !allPassed {
-			return "", fmt.Errorf("on-chain execution failed (%v) and detailed verification failed: merkle=%v gov=%v bls=%v commit=%v time=%v nonce=%v",
-				err, verifyResult.MerkleVerified, verifyResult.GovernanceVerified,
-				verifyResult.BLSVerified, verifyResult.CommitmentVerified,
-				verifyResult.TimestampValid, verifyResult.NonceValid)
+		// Merkle is valid, check BLS signature
+		blsValid, blsErr := ecm.anchor.VerifyBLSSignature(
+			&bind.CallOpts{},
+			proofV3.BlsProof.AggregateSignature,
+			proofV3.BlsProof.MessageHash,
+		)
+		if blsErr != nil {
+			return "", fmt.Errorf("on-chain execution failed and BLS verification error: on-chain=%v, bls=%v", err, blsErr)
+		}
+		if !blsValid {
+			return "", fmt.Errorf("on-chain execution failed (%v) and BLS signature invalid", err)
 		}
 
-		// Generate synthetic hash for verified but not on-chain proof
-		txHash := fmt.Sprintf("0x%x", crypto.Keccak256Hash([]byte(fmt.Sprintf("local_verified_%x_%d", anchorID, time.Now().Unix()))).Bytes())
-		fmt.Printf("✅ [ETH-VERIFY] Proof verified locally (not on-chain): %s\n", txHash)
-		return txHash, nil
+		// Both verifications passed but on-chain execution still failed
+		return "", fmt.Errorf("on-chain execution failed (%v) despite valid merkle and BLS proofs - check contract state", err)
 	}
 
 	txHash := tx.Hash().Hex()
@@ -543,7 +555,7 @@ func (ecm *EthereumContractManager) ExecuteGovernanceWithAnchor(
 	fmt.Printf("   Gas Limit: %d\n", estimatedGas)
 
 	// Call CertenAnchorV3.executeWithGovernance
-	tx, err := ecm.anchorV3.ExecuteWithGovernanceSimple(ecm.auth, bundleID, target, value, callData)
+	tx, err := ecm.anchor.ExecuteWithGovernanceSimple(ecm.auth, bundleID, target, value, callData)
 	if err != nil {
 		return "", fmt.Errorf("executeWithGovernance failed: %w", err)
 	}
@@ -575,6 +587,8 @@ func (ecm *EthereumContractManager) ExecuteGovernanceWithAnchor(
 // CONTRACT: CertenAccountV2.executeWithGovernanceProof(target, value, data, proof)
 // EXECUTES: target.call{value: value}(data) FROM THE USER'S ACCOUNT
 // EMITS: ProofExecuted(target, value, success)
+//
+// V4 UPDATE: Computes commitments internally for proper 4-leaf merkle proof construction
 func (ecm *EthereumContractManager) ExecuteViaUserAccount(
 	ctx context.Context,
 	userAccountAddress common.Address,
@@ -597,8 +611,28 @@ func (ecm *EthereumContractManager) ExecuteViaUserAccount(
 		return "", fmt.Errorf("failed to bind user account contract: %w", err)
 	}
 
-	// Build the AccountProof struct from our CertenProof
-	accountProof := ecm.buildAccountProof(bundleID, certenProof, adiURL)
+	// Compute commitments for 4-leaf merkle proof (same logic as buildComprehensiveProof)
+	var opCommitment, ccCommitment, govRoot [32]byte
+
+	// Operation commitment: hash of intent data
+	opCommitmentHash := crypto.Keccak256Hash([]byte(fmt.Sprintf("commitment_%s", bundleID)))
+	copy(opCommitment[:], opCommitmentHash[:])
+
+	// Cross-chain commitment: from lite client proof if available
+	if certenProof.LiteClientProof != nil && len(certenProof.LiteClientProof.BPTRoot) >= 32 {
+		copy(ccCommitment[:], certenProof.LiteClientProof.BPTRoot[:32])
+	}
+
+	// Governance root: from BLS signature
+	if certenProof.BLSAggregateSignature != "" {
+		sigHex := strings.TrimPrefix(certenProof.BLSAggregateSignature, "0x")
+		if blsSigBytes, err := hex.DecodeString(sigHex); err == nil && len(blsSigBytes) >= 32 {
+			copy(govRoot[:], crypto.Keccak256(blsSigBytes)[:32])
+		}
+	}
+
+	// Build the AccountProof struct with 4-leaf merkle proof
+	accountProof := ecm.buildAccountProof(bundleID, certenProof, adiURL, opCommitment, ccCommitment, govRoot)
 
 	fmt.Printf("   Proof built:\n")
 	fmt.Printf("     AnchorID: 0x%x\n", accountProof.AnchorId[:8])
@@ -637,32 +671,45 @@ func (ecm *EthereumContractManager) ExecuteViaUserAccount(
 }
 
 // buildAccountProof constructs the AccountProof struct for CertenAccountV2
+// V4 UPDATE: Computes correct 4-leaf merkle proof for adiURL verification
+//
+// Merkle Tree Structure:
+//                     root
+//                   /      \
+//              hash01      hash23
+//             /    \      /    \
+//        adiHash   op   cc    gov
+//
+// To prove adiHash, we need: [op, hash23]
 func (ecm *EthereumContractManager) buildAccountProof(
 	bundleID [32]byte,
 	certenProof *proof.CertenProof,
 	adiURL string,
+	opCommitment [32]byte,
+	ccCommitment [32]byte,
+	govRoot [32]byte,
 ) contracts.AccountProof {
-	// Build merkle proof from CertenProof's LiteClientProof
+	// Build 4-leaf merkle proof for adiURL verification
+	// proof[0] = sibling at level 0 (operationCommitment)
+	// proof[1] = sibling at level 1 (hash of cc + gov)
 	var merkleProof [][32]byte
-	if certenProof != nil && certenProof.LiteClientProof != nil && certenProof.LiteClientProof.CompleteProof != nil {
-		cp := certenProof.LiteClientProof.CompleteProof
-		// Extract hashes from proof components for merkle verification
-		if cp.AccountHash != nil && len(cp.AccountHash) == 32 {
-			var h [32]byte
-			copy(h[:], cp.AccountHash)
-			merkleProof = append(merkleProof, h)
-		}
-		if cp.BPTRoot != nil && len(cp.BPTRoot) == 32 {
-			var h [32]byte
-			copy(h[:], cp.BPTRoot)
-			merkleProof = append(merkleProof, h)
-		}
-		if cp.BlockHash != nil && len(cp.BlockHash) == 32 {
-			var h [32]byte
-			copy(h[:], cp.BlockHash)
-			merkleProof = append(merkleProof, h)
-		}
+
+	// proof[0] = operationCommitment
+	merkleProof = append(merkleProof, opCommitment)
+
+	// proof[1] = sortedHash(ccCommitment, govRoot)
+	var hash23 [32]byte
+	if ccCommitment[0] < govRoot[0] || (ccCommitment[0] == govRoot[0] && bytes.Compare(ccCommitment[:], govRoot[:]) < 0) {
+		copy(hash23[:], crypto.Keccak256(append(ccCommitment[:], govRoot[:]...)))
+	} else {
+		copy(hash23[:], crypto.Keccak256(append(govRoot[:], ccCommitment[:]...)))
 	}
+	merkleProof = append(merkleProof, hash23)
+
+	log.Printf("🌳 [MERKLE] Built 4-leaf proof for adiURL verification:")
+	log.Printf("   adiURL: %s", adiURL)
+	log.Printf("   proof[0] (op): 0x%x", opCommitment[:8])
+	log.Printf("   proof[1] (hash23): 0x%x", hash23[:8])
 
 	// Set expiration (1 hour from now)
 	expiresAt := big.NewInt(time.Now().Add(1 * time.Hour).Unix())
@@ -684,9 +731,9 @@ func (ecm *EthereumContractManager) buildAccountProof(
 		AdiURL:              adiURL,
 		AnchorId:            bundleID,
 		MerkleProof:         merkleProof,
-		KeyBookProof:        []byte{}, // Governance proof data
-		RoleProof:           []byte{}, // Role proof data
-		ThresholdProof:      []byte{}, // Threshold proof data
+		KeyBookProof:        []byte{}, // Governance proof data - validated off-chain by validators
+		RoleProof:           []byte{}, // Role proof data - validated off-chain by validators
+		ThresholdProof:      []byte{}, // Threshold proof data - validated off-chain by validators
 		Timestamp:           big.NewInt(time.Now().Unix()),
 		ExpiresAt:           expiresAt,
 		ValidatorSignatures: validatorSigs,
@@ -717,9 +764,20 @@ func (ecm *EthereumContractManager) ExecuteUnifiedAnchorWorkflowFull(
 	// Build commitments from proof data
 	comprehensiveProof := ecm.buildComprehensiveProof(certenIntent, certenProof, anchorResult)
 
+	// Compute adiURLHash from the Accumulate data account URL
+	// This cryptographically binds the anchor to the specific account
+	var adiURLHash [32]byte
+	adiURL := certenProof.AccountURL
+	if adiURL == "" {
+		adiURL = fmt.Sprintf("%s/data", certenIntent.OrganizationADI) // Fallback to org data account
+	}
+	copy(adiURLHash[:], crypto.Keccak256([]byte(adiURL)))
+	fmt.Printf("   ADI URL: %s\n", adiURL)
+
 	createTxHash, err = ecm.CreateAnchorOnChain(
 		ctx,
 		bundleID,
+		adiURLHash,
 		comprehensiveProof.Commitments.OperationCommitment,
 		comprehensiveProof.Commitments.CrossChainCommitment,
 		comprehensiveProof.Commitments.GovernanceRoot,
@@ -770,9 +828,20 @@ func (ecm *EthereumContractManager) ExecuteUnifiedAnchorWorkflow(
 	// Build commitments from proof data
 	comprehensiveProof := ecm.buildComprehensiveProof(certenIntent, certenProof, anchorResult)
 
+	// Compute adiURLHash from the Accumulate data account URL
+	// This cryptographically binds the anchor to the specific account
+	var adiURLHash [32]byte
+	adiURL := certenProof.AccountURL
+	if adiURL == "" {
+		adiURL = fmt.Sprintf("%s/data", certenIntent.OrganizationADI) // Fallback to org data account
+	}
+	copy(adiURLHash[:], crypto.Keccak256([]byte(adiURL)))
+	fmt.Printf("   ADI URL: %s\n", adiURL)
+
 	createTxHash, err = ecm.CreateAnchorOnChain(
 		ctx,
 		bundleID,
+		adiURLHash,
 		comprehensiveProof.Commitments.OperationCommitment,
 		comprehensiveProof.Commitments.CrossChainCommitment,
 		comprehensiveProof.Commitments.GovernanceRoot,

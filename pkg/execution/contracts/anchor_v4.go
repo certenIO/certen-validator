@@ -1,14 +1,14 @@
 // Copyright 2025 Certen Protocol
 //
-// CertenAnchorV3 Go Bindings - Unified Anchor Contract
-// Per Gap Analysis Step 4: Consolidates all features from Creation + Verification V2
+// CertenAnchorV4 Go Bindings - Unified Anchor Contract
+// Per Gap Analysis Step 4: Consolidates all features from Creation + Verification
 //
 // This file provides wrapper types and convenience functions for the abigen-generated bindings.
-// The actual bindings are in anchor_v3_generated.go
+// The actual bindings are in anchor_v4_generated.go
 //
-// Generated from CertenAnchorV3.sol using:
+// Generated from CertenAnchorV4.sol using:
 //   1. Compile: npx hardhat compile
-//   2. Generate: abigen --abi CertenAnchorV3.abi --bin CertenAnchorV3.bin --pkg contracts --type CertenAnchorV3 --out anchor_v3_generated.go
+//   2. Generate: abigen --abi CertenAnchorV4.abi --bin CertenAnchorV4.bin --pkg contracts --type CertenAnchorV4 --out anchor_v4_generated.go
 
 package contracts
 
@@ -23,29 +23,27 @@ import (
 )
 
 // =============================================================================
-// TYPE ALIASES - Map to generated types for backward compatibility
+// TYPE ALIASES - Map to generated types
 // =============================================================================
 
-// CertenProofV3 is the unified proof structure for V3 contract
-// Alias to the abigen-generated type for backward compatibility
-type CertenProofV3 = CertenAnchorV3CertenProof
+// CertenProof is the unified proof structure
+type CertenProof = CertenAnchorV4CertenProof
 
-// GovernanceProofV3 contains governance authorization data
-type GovernanceProofV3 = CertenAnchorV3GovernanceProofData
+// GovernanceProof contains governance authorization data
+type GovernanceProof = CertenAnchorV4GovernanceProofData
 
-// BLSProofV3 contains BLS aggregated signature data
-type BLSProofV3 = CertenAnchorV3BLSProofData
+// BLSProof contains BLS aggregated signature data
+type BLSProof = CertenAnchorV4BLSProofData
 
-// CommitmentV3 contains cross-chain commitment information
-type CommitmentV3 = CertenAnchorV3CommitmentData
+// Commitment contains cross-chain commitment information
+type Commitment = CertenAnchorV4CommitmentData
 
 // =============================================================================
 // EXTENDED ANCHOR TYPES - Additional fields beyond generated types
 // =============================================================================
 
-// AnchorV3 represents stored anchor data from the V3 contract
-// Extended version with additional helper fields
-type AnchorV3 struct {
+// Anchor represents stored anchor data from the V4 contract
+type Anchor struct {
 	BundleId              [32]byte       `json:"bundleId"`
 	MerkleRoot            [32]byte       `json:"merkleRoot"`
 	OperationCommitment   [32]byte       `json:"operationCommitment"`
@@ -58,8 +56,8 @@ type AnchorV3 struct {
 	ProofExecuted         bool           `json:"proofExecuted"`
 }
 
-// VerificationResultV3 contains detailed verification results
-type VerificationResultV3 struct {
+// VerificationResult contains detailed verification results
+type VerificationResult struct {
 	MerkleVerified     bool `json:"merkleVerified"`
 	GovernanceVerified bool `json:"governanceVerified"`
 	BLSVerified        bool `json:"blsVerified"`
@@ -68,8 +66,8 @@ type VerificationResultV3 struct {
 	NonceValid         bool `json:"nonceValid"`
 }
 
-// ValidatorInfoV3 contains validator registration info
-type ValidatorInfoV3 struct {
+// ValidatorInfo contains validator registration info
+type ValidatorInfo struct {
 	Registered   bool     `json:"registered"`
 	VotingPower  *big.Int `json:"votingPower"`
 	BLSPublicKey []byte   `json:"blsPublicKey"`
@@ -77,29 +75,29 @@ type ValidatorInfoV3 struct {
 }
 
 // =============================================================================
-// V3 CONTRACT WRAPPER - Provides convenience methods over generated bindings
+// V4 CONTRACT WRAPPER - Provides convenience methods over generated bindings
 // =============================================================================
 
-// CertenAnchorV3Wrapper wraps the generated CertenAnchorV3 with additional convenience methods
-type CertenAnchorV3Wrapper struct {
-	*CertenAnchorV3
+// CertenAnchorWrapper wraps the generated CertenAnchorV4 with additional convenience methods
+type CertenAnchorWrapper struct {
+	*CertenAnchorV4
 	address common.Address
 }
 
-// NewCertenAnchorV3Wrapper creates a new V3 contract wrapper instance
-func NewCertenAnchorV3Wrapper(address common.Address, backend bind.ContractBackend) (*CertenAnchorV3Wrapper, error) {
-	contract, err := NewCertenAnchorV3(address, backend)
+// NewCertenAnchorWrapper creates a new V4 contract wrapper instance
+func NewCertenAnchorWrapper(address common.Address, backend bind.ContractBackend) (*CertenAnchorWrapper, error) {
+	contract, err := NewCertenAnchorV4(address, backend)
 	if err != nil {
 		return nil, err
 	}
-	return &CertenAnchorV3Wrapper{
-		CertenAnchorV3: contract,
+	return &CertenAnchorWrapper{
+		CertenAnchorV4: contract,
 		address:        address,
 	}, nil
 }
 
 // GetAddress returns the contract address
-func (w *CertenAnchorV3Wrapper) GetAddress() common.Address {
+func (w *CertenAnchorWrapper) GetAddress() common.Address {
 	return w.address
 }
 
@@ -108,24 +106,26 @@ func (w *CertenAnchorV3Wrapper) GetAddress() common.Address {
 // =============================================================================
 
 // CreateAnchorSimple creates a new anchor using direct parameters (simplified interface)
-func (w *CertenAnchorV3Wrapper) CreateAnchorSimple(
+// V4 UPDATE: Now requires adiURLHash to bind anchor to specific Accumulate data account
+func (w *CertenAnchorWrapper) CreateAnchorSimple(
 	opts *bind.TransactOpts,
 	bundleId [32]byte,
+	adiURLHash [32]byte,
 	operationCommitment [32]byte,
 	crossChainCommitment [32]byte,
 	governanceRoot [32]byte,
 	accumulateBlockHeight *big.Int,
 ) (*types.Transaction, error) {
-	return w.CertenAnchorV3Transactor.CreateAnchor(opts, bundleId, operationCommitment, crossChainCommitment, governanceRoot, accumulateBlockHeight)
+	return w.CertenAnchorV4Transactor.CreateAnchor(opts, bundleId, adiURLHash, operationCommitment, crossChainCommitment, governanceRoot, accumulateBlockHeight)
 }
 
 // ExecuteComprehensiveProofSimple executes comprehensive proof verification
-func (w *CertenAnchorV3Wrapper) ExecuteComprehensiveProofSimple(
+func (w *CertenAnchorWrapper) ExecuteComprehensiveProofSimple(
 	opts *bind.TransactOpts,
 	anchorId [32]byte,
-	proof CertenProofV3,
+	proof CertenProof,
 ) (*types.Transaction, error) {
-	return w.CertenAnchorV3Transactor.ExecuteComprehensiveProof(opts, anchorId, proof)
+	return w.CertenAnchorV4Transactor.ExecuteComprehensiveProof(opts, anchorId, proof)
 }
 
 // ExecuteWithGovernanceSimple executes governance-authorized operation on target
@@ -133,23 +133,23 @@ func (w *CertenAnchorV3Wrapper) ExecuteComprehensiveProofSimple(
 // REQUIRES: anchor.proofExecuted == true, caller must be operator
 // EXECUTES: target.call{value: value}(data)
 // EMITS: GovernanceExecuted(anchorId, target, value, success, timestamp)
-func (w *CertenAnchorV3Wrapper) ExecuteWithGovernanceSimple(
+func (w *CertenAnchorWrapper) ExecuteWithGovernanceSimple(
 	opts *bind.TransactOpts,
 	anchorId [32]byte,
 	target common.Address,
 	value *big.Int,
 	data []byte,
 ) (*types.Transaction, error) {
-	return w.CertenAnchorV3Transactor.ExecuteWithGovernance(opts, anchorId, target, value, data)
+	return w.CertenAnchorV4Transactor.ExecuteWithGovernance(opts, anchorId, target, value, data)
 }
 
-// GetAnchorFull retrieves full anchor data as AnchorV3 struct
-func (w *CertenAnchorV3Wrapper) GetAnchorFull(opts *bind.CallOpts, anchorId [32]byte) (*AnchorV3, error) {
-	result, err := w.CertenAnchorV3Caller.Anchors(opts, anchorId)
+// GetAnchorFull retrieves full anchor data as Anchor struct
+func (w *CertenAnchorWrapper) GetAnchorFull(opts *bind.CallOpts, anchorId [32]byte) (*Anchor, error) {
+	result, err := w.CertenAnchorV4Caller.Anchors(opts, anchorId)
 	if err != nil {
 		return nil, err
 	}
-	return &AnchorV3{
+	return &Anchor{
 		BundleId:              result.BundleId,
 		MerkleRoot:            result.MerkleRoot,
 		OperationCommitment:   result.OperationCommitment,
@@ -163,41 +163,40 @@ func (w *CertenAnchorV3Wrapper) GetAnchorFull(opts *bind.CallOpts, anchorId [32]
 	}, nil
 }
 
-// GetValidatorInfo retrieves validator information as ValidatorInfoV3
-func (w *CertenAnchorV3Wrapper) GetValidatorInfo(opts *bind.CallOpts, validator common.Address) (*ValidatorInfoV3, error) {
-	registered, votingPower, err := w.CertenAnchorV3Caller.GetBLSValidatorInfo(opts, validator)
+// GetValidatorInfo retrieves validator information as ValidatorInfo
+func (w *CertenAnchorWrapper) GetValidatorInfo(opts *bind.CallOpts, validator common.Address) (*ValidatorInfo, error) {
+	registered, votingPower, err := w.CertenAnchorV4Caller.GetBLSValidatorInfo(opts, validator)
 	if err != nil {
 		return nil, err
 	}
-	return &ValidatorInfoV3{
+	return &ValidatorInfo{
 		Registered:  registered,
 		VotingPower: votingPower,
 	}, nil
 }
 
-// VerifyProofDetailed returns detailed verification results as VerificationResultV3
-func (w *CertenAnchorV3Wrapper) VerifyProofDetailed(
+// VerifyMerkleProof verifies a merkle proof against the anchor
+func (w *CertenAnchorWrapper) VerifyMerkleProof(
 	opts *bind.CallOpts,
 	anchorId [32]byte,
-	proof CertenProofV3,
-) (*VerificationResultV3, error) {
-	result, err := w.CertenAnchorV3Caller.VerifyCertenProofDetailed(opts, anchorId, proof)
-	if err != nil {
-		return nil, err
-	}
-	return &VerificationResultV3{
-		MerkleVerified:     result[0],
-		GovernanceVerified: result[1],
-		BLSVerified:        result[2],
-		CommitmentVerified: result[3],
-		TimestampValid:     result[4],
-		NonceValid:         result[5],
-	}, nil
+	merkleProof [][32]byte,
+	leaf [32]byte,
+) (bool, error) {
+	return w.CertenAnchorV4Caller.VerifyProof(opts, anchorId, merkleProof, leaf)
+}
+
+// VerifyBLSSignature verifies a BLS signature
+func (w *CertenAnchorWrapper) VerifyBLSSignature(
+	opts *bind.CallOpts,
+	signature []byte,
+	messageHash [32]byte,
+) (bool, error) {
+	return w.CertenAnchorV4Caller.VerifyBLSSignature(opts, signature, messageHash)
 }
 
 // GetThresholdInfo returns BLS threshold configuration
-func (w *CertenAnchorV3Wrapper) GetThresholdInfo(opts *bind.CallOpts) (numerator, denominator, totalPower *big.Int, err error) {
-	return w.CertenAnchorV3Caller.GetBLSThresholdInfo(opts)
+func (w *CertenAnchorWrapper) GetThresholdInfo(opts *bind.CallOpts) (numerator, denominator, totalPower *big.Int, err error) {
+	return w.CertenAnchorV4Caller.GetBLSThresholdInfo(opts)
 }
 
 // =============================================================================
@@ -213,19 +212,19 @@ func WaitForConfirmation(
 	return bind.WaitMined(ctx, client, tx)
 }
 
-// BuildCertenProofV3 creates a CertenProofV3 from components
-func BuildCertenProofV3(
+// BuildCertenProof creates a CertenProof from components
+func BuildCertenProof(
 	txHash [32]byte,
 	merkleRoot [32]byte,
 	proofHashes [][32]byte,
 	leafHash [32]byte,
-	govProof GovernanceProofV3,
-	blsProof BLSProofV3,
-	commitments CommitmentV3,
+	govProof GovernanceProof,
+	blsProof BLSProof,
+	commitments Commitment,
 	expirationTime *big.Int,
 	metadata []byte,
-) CertenProofV3 {
-	return CertenProofV3{
+) CertenProof {
+	return CertenProof{
 		TransactionHash: txHash,
 		MerkleRoot:      merkleRoot,
 		ProofHashes:     proofHashes,
@@ -244,8 +243,8 @@ func BuildDefaultGovernanceProof(
 	keyBookRoot [32]byte,
 	authorityAddress common.Address,
 	nonce *big.Int,
-) GovernanceProofV3 {
-	return GovernanceProofV3{
+) GovernanceProof {
+	return GovernanceProof{
 		KeyBookURL:         keyBookURL,
 		KeyBookRoot:        keyBookRoot,
 		KeyPageProofs:      [][32]byte{},
@@ -264,12 +263,12 @@ func BuildDefaultBLSProof(
 	validatorAddresses []common.Address,
 	votingPowers []*big.Int,
 	messageHash [32]byte,
-) BLSProofV3 {
+) BLSProof {
 	totalPower := big.NewInt(0)
 	for _, power := range votingPowers {
 		totalPower.Add(totalPower, power)
 	}
-	return BLSProofV3{
+	return BLSProof{
 		AggregateSignature: aggregateSignature,
 		ValidatorAddresses: validatorAddresses,
 		VotingPowers:       votingPowers,
@@ -288,8 +287,8 @@ func BuildDefaultCommitment(
 	sourceBlockHeight *big.Int,
 	sourceTxHash [32]byte,
 	targetAddress common.Address,
-) CommitmentV3 {
-	return CommitmentV3{
+) Commitment {
+	return Commitment{
 		OperationCommitment:  operationCommitment,
 		CrossChainCommitment: crossChainCommitment,
 		GovernanceRoot:       governanceRoot,
@@ -306,15 +305,14 @@ func DefaultExpirationTime() *big.Int {
 	return big.NewInt(time.Now().Add(time.Hour).Unix())
 }
 
-// ConvertFromExtended converts ComprehensiveCertenProof to CertenProofV3
-// Compatibility shim for existing code
-func ConvertFromExtended(proof ComprehensiveCertenProof) CertenProofV3 {
-	return CertenProofV3{
+// ConvertFromExtended converts ComprehensiveCertenProof to CertenProof
+func ConvertFromExtended(proof ComprehensiveCertenProof) CertenProof {
+	return CertenProof{
 		TransactionHash: proof.TransactionHash,
 		MerkleRoot:      proof.MerkleRoot,
 		ProofHashes:     proof.ProofHashes,
 		LeafHash:        proof.LeafHash,
-		GovernanceProof: GovernanceProofV3{
+		GovernanceProof: GovernanceProof{
 			KeyBookURL:         proof.GovernanceProof.KeyBookURL,
 			KeyBookRoot:        proof.GovernanceProof.KeyBookRoot,
 			KeyPageProofs:      proof.GovernanceProof.KeyPageProofs,
@@ -325,7 +323,7 @@ func ConvertFromExtended(proof ComprehensiveCertenProof) CertenProofV3 {
 			ProvidedSignatures: proof.GovernanceProof.ProvidedSignatures,
 			ThresholdMet:       proof.GovernanceProof.ThresholdMet,
 		},
-		BlsProof: BLSProofV3{
+		BlsProof: BLSProof{
 			AggregateSignature: proof.BLSProof.AggregateSignature,
 			ValidatorAddresses: proof.BLSProof.ValidatorAddresses,
 			VotingPowers:       proof.BLSProof.VotingPowers,
@@ -334,7 +332,7 @@ func ConvertFromExtended(proof ComprehensiveCertenProof) CertenProofV3 {
 			ThresholdMet:       proof.BLSProof.ThresholdMet,
 			MessageHash:        proof.BLSProof.MessageHash,
 		},
-		Commitments: CommitmentV3{
+		Commitments: Commitment{
 			OperationCommitment:  proof.Commitments.OperationCommitment,
 			CrossChainCommitment: proof.Commitments.CrossChainCommitment,
 			GovernanceRoot:       proof.Commitments.GovernanceRoot,
