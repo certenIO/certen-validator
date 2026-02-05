@@ -163,7 +163,8 @@
       "Bash(fi)",
       "Bash(PRIVATE_KEY=\"0xbf90cedf27a3009a2c8a1634971430e853872dc5d1dbb837e02beffa4760d9cf\" BLS_VERIFIER_ADDRESS=\"0x488d2c2bB3d65a60eae9f72665fBaf191F38B7b7\" forge script script/DeployAnchorV4.s.sol:DeployAnchorV4 --rpc-url \"https://arbitrum-sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a\" --broadcast -vvv)",
       "Bash(PRIVATE_KEY=\"0xbf90cedf27a3009a2c8a1634971430e853872dc5d1dbb837e02beffa4760d9cf\" BLS_VERIFIER_ADDRESS=\"0x609987770BCEE4fB7F2e0e81685CE912c437f7f1\" forge script:*)",
-      "Bash(PRIVATE_KEY=\"0xbf90cedf27a3009a2c8a1634971430e853872dc5d1dbb837e02beffa4760d9cf\" forge script:*)"
+      "Bash(PRIVATE_KEY=\"0xbf90cedf27a3009a2c8a1634971430e853872dc5d1dbb837e02beffa4760d9cf\" forge script:*)",
+      "Bash(cast etherscan-source:*)"
     ]
   }
 }
