@@ -955,7 +955,7 @@ func getEnvInt64Local(key string, defaultValue int64) int64 {
 // ==============================================================================
 
 // loadEVMChainsFromEnv loads multi-chain EVM configurations from environment variables
-// Supports Ethereum Sepolia, Arbitrum Sepolia, Optimism Sepolia, Base Sepolia, Polygon Amoy
+// Supports Ethereum Sepolia, Arbitrum Sepolia, Optimism Sepolia, Base Sepolia, Polygon Amoy, BSC Testnet, Moonbase Alpha
 func loadEVMChainsFromEnv() map[int64]*EVMChainConfig {
 	chains := make(map[int64]*EVMChainConfig)
 
@@ -1022,7 +1022,7 @@ func loadEVMChainsFromEnv() map[int64]*EVMChainConfig {
 		}
 	}
 
-	// Base Sepolia (84532)
+	// Base Sepolia (84532) - Updated 2026-02-08
 	if rpc := getEnv("BASE_SEPOLIA_RPC_URL", ""); rpc != "" {
 		chains[84532] = &EVMChainConfig{
 			Name:               "Base Sepolia",
@@ -1032,10 +1032,10 @@ func loadEVMChainsFromEnv() map[int64]*EVMChainConfig {
 			RPCTimeout:         Duration(30 * time.Second),
 			MaxConnections:     10,
 			MaxIdleConnections: 5,
-			AnchorV4Address:    getEnv("BASE_SEPOLIA_ANCHORV4_ADDRESS", ""),
+			AnchorV4Address:    getEnv("BASE_SEPOLIA_ANCHORV4_ADDRESS", "0x52E8e8E5d5EE35ED52BA6B7BB2Cb2dc2D2b2c952"),
 			AnchorV3Address:    getEnv("BASE_SEPOLIA_ANCHORV3_ADDRESS", "0x609987770BCEE4fB7F2e0e81685CE912c437f7f1"),
 			BLSVerifierAddress: getEnv("BASE_SEPOLIA_BLSZKVERIFIER_ADDRESS", "0x488d2c2bB3d65a60eae9f72665fBaf191F38B7b7"),
-			AccountFactory:     getEnv("BASE_SEPOLIA_ACCOUNTFACTORY_ADDRESS", "0xc9489206A9c8FA12129Fa1EFee8CcB47Ed93896d"),
+			AccountFactory:     getEnv("BASE_SEPOLIA_ACCOUNTFACTORY_V4_ADDRESS", getEnv("BASE_SEPOLIA_ACCOUNTFACTORY_ADDRESS", "0x4e8a1F68f8965C136D505737dEfB154deD34EbFb")),
 			MaxGasPriceGwei:    getEnvInt64("BASE_MAX_GAS_PRICE_GWEI", 1),
 			MaxPriorityFeeGwei: getEnvInt64("BASE_MAX_PRIORITY_FEE_GWEI", 0),
 			GasLimitAnchor:     getEnvInt64("BASE_GAS_LIMIT_ANCHOR", 2000000),
@@ -1043,7 +1043,7 @@ func loadEVMChainsFromEnv() map[int64]*EVMChainConfig {
 		}
 	}
 
-	// Polygon Amoy (80002)
+	// Polygon Amoy (80002) - Updated 2026-02-08
 	if rpc := getEnv("POLYGON_AMOY_RPC_URL", ""); rpc != "" {
 		chains[80002] = &EVMChainConfig{
 			Name:               "Polygon Amoy",
@@ -1053,14 +1053,79 @@ func loadEVMChainsFromEnv() map[int64]*EVMChainConfig {
 			RPCTimeout:         Duration(30 * time.Second),
 			MaxConnections:     10,
 			MaxIdleConnections: 5,
-			AnchorV4Address:    getEnv("POLYGON_AMOY_ANCHORV4_ADDRESS", ""),
+			AnchorV4Address:    getEnv("POLYGON_AMOY_ANCHORV4_ADDRESS", "0x52E8e8E5d5EE35ED52BA6B7BB2Cb2dc2D2b2c952"),
 			AnchorV3Address:    getEnv("POLYGON_AMOY_ANCHORV3_ADDRESS", "0x609987770BCEE4fB7F2e0e81685CE912c437f7f1"),
 			BLSVerifierAddress: getEnv("POLYGON_AMOY_BLSZKVERIFIER_ADDRESS", "0x488d2c2bB3d65a60eae9f72665fBaf191F38B7b7"),
-			AccountFactory:     getEnv("POLYGON_AMOY_ACCOUNTFACTORY_ADDRESS", "0xc9489206A9c8FA12129Fa1EFee8CcB47Ed93896d"),
+			AccountFactory:     getEnv("POLYGON_AMOY_ACCOUNTFACTORY_V4_ADDRESS", getEnv("POLYGON_AMOY_ACCOUNTFACTORY_ADDRESS", "0x4e8a1F68f8965C136D505737dEfB154deD34EbFb")),
 			MaxGasPriceGwei:    getEnvInt64("POLYGON_MAX_GAS_PRICE_GWEI", 50),
 			MaxPriorityFeeGwei: getEnvInt64("POLYGON_MAX_PRIORITY_FEE_GWEI", 30),
 			GasLimitAnchor:     getEnvInt64("POLYGON_GAS_LIMIT_ANCHOR", 500000),
 			ExplorerURL:        "https://amoy.polygonscan.com",
+		}
+	}
+
+	// BSC Testnet (97) - Added 2026-02-08
+	if rpc := getEnv("BSC_TESTNET_RPC_URL", ""); rpc != "" {
+		chains[97] = &EVMChainConfig{
+			Name:               "BSC Testnet",
+			ChainID:            97,
+			RPCURL:             rpc,
+			WSURL:              getEnv("BSC_TESTNET_WS_URL", ""),
+			RPCTimeout:         Duration(30 * time.Second),
+			MaxConnections:     10,
+			MaxIdleConnections: 5,
+			AnchorV4Address:    getEnv("BSC_TESTNET_ANCHORV4_ADDRESS", "0x52E8e8E5d5EE35ED52BA6B7BB2Cb2dc2D2b2c952"),
+			AnchorV3Address:    getEnv("BSC_TESTNET_ANCHORV3_ADDRESS", ""),
+			BLSVerifierAddress: getEnv("BSC_TESTNET_BLSZKVERIFIER_ADDRESS", "0x488d2c2bB3d65a60eae9f72665fBaf191F38B7b7"),
+			AccountFactory:     getEnv("BSC_TESTNET_ACCOUNTFACTORY_V4_ADDRESS", "0x4e8a1F68f8965C136D505737dEfB154deD34EbFb"),
+			MaxGasPriceGwei:    getEnvInt64("BSC_MAX_GAS_PRICE_GWEI", 10),
+			MaxPriorityFeeGwei: getEnvInt64("BSC_MAX_PRIORITY_FEE_GWEI", 1),
+			GasLimitAnchor:     getEnvInt64("BSC_GAS_LIMIT_ANCHOR", 500000),
+			ExplorerURL:        "https://testnet.bscscan.com",
+		}
+	}
+
+	// Moonbase Alpha (1287) - Added 2026-02-08
+	if rpc := getEnv("MOONBASE_ALPHA_RPC_URL", ""); rpc != "" {
+		chains[1287] = &EVMChainConfig{
+			Name:               "Moonbase Alpha",
+			ChainID:            1287,
+			RPCURL:             rpc,
+			WSURL:              getEnv("MOONBASE_ALPHA_WS_URL", ""),
+			RPCTimeout:         Duration(30 * time.Second),
+			MaxConnections:     10,
+			MaxIdleConnections: 5,
+			AnchorV4Address:    getEnv("MOONBASE_ALPHA_ANCHORV4_ADDRESS", "0x52E8e8E5d5EE35ED52BA6B7BB2Cb2dc2D2b2c952"),
+			AnchorV3Address:    getEnv("MOONBASE_ALPHA_ANCHORV3_ADDRESS", ""),
+			BLSVerifierAddress: getEnv("MOONBASE_ALPHA_BLSZKVERIFIER_ADDRESS", "0x488d2c2bB3d65a60eae9f72665fBaf191F38B7b7"),
+			AccountFactory:     getEnv("MOONBASE_ALPHA_ACCOUNTFACTORY_V4_ADDRESS", "0x4e8a1F68f8965C136D505737dEfB154deD34EbFb"),
+			MaxGasPriceGwei:    getEnvInt64("MOONBASE_MAX_GAS_PRICE_GWEI", 1),
+			MaxPriorityFeeGwei: getEnvInt64("MOONBASE_MAX_PRIORITY_FEE_GWEI", 0),
+			GasLimitAnchor:     getEnvInt64("MOONBASE_GAS_LIMIT_ANCHOR", 500000),
+			ExplorerURL:        "https://moonbase.moonscan.io",
+		}
+	}
+
+	// TRON Shasta (2494104990) - Added 2026-02-09
+	// TRON provides EVM-compatible JSON-RPC at /jsonrpc endpoint
+	// Chain ID 0x94a9059e = 2494104990
+	if rpc := getEnv("TRON_SHASTA_RPC_URL", ""); rpc != "" {
+		chains[2494104990] = &EVMChainConfig{
+			Name:               "TRON Shasta",
+			ChainID:            2494104990,
+			RPCURL:             rpc,
+			WSURL:              "",
+			RPCTimeout:         Duration(30 * time.Second),
+			MaxConnections:     10,
+			MaxIdleConnections: 5,
+			AnchorV4Address:    getEnv("TRON_SHASTA_ANCHORV4_ADDRESS", "0xca04231da28aab992fdffd3c9a7f8ddcd1f26027"),
+			AnchorV3Address:    "",
+			BLSVerifierAddress: getEnv("TRON_SHASTA_BLSZKVERIFIER_ADDRESS", "0x069d4a29221d721a7af1e7229d5e30803609b420"),
+			AccountFactory:     getEnv("TRON_SHASTA_ACCOUNTFACTORY_ADDRESS", "0xddbee4463bab94cfeea3516272f68f49d9936ce2"),
+			MaxGasPriceGwei:    getEnvInt64("TRON_MAX_GAS_PRICE_GWEI", 420),
+			MaxPriorityFeeGwei: 0,
+			GasLimitAnchor:     getEnvInt64("TRON_GAS_LIMIT_ANCHOR", 1000000),
+			ExplorerURL:        "https://shasta.tronscan.org",
 		}
 	}
 

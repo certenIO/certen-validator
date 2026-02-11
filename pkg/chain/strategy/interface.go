@@ -486,6 +486,7 @@ var SupportedChains = map[string]ChainPlatform{
 	"avalanche":        ChainPlatformEVM,
 	"bsc":              ChainPlatformEVM,
 	"tron":             ChainPlatformEVM,
+	"tron-shasta":      ChainPlatformEVM,
 
 	// CosmWasm Chains
 	"osmosis":    ChainPlatformCosmWasm,
@@ -502,16 +503,20 @@ var SupportedChains = map[string]ChainPlatform{
 	// Move Chains
 	"aptos":       ChainPlatformMove,
 	"sui":         ChainPlatformMove,
-	"aptos-mainnet": ChainPlatformMove,
-	"sui-mainnet":   ChainPlatformMove,
+	"aptos-mainnet":  ChainPlatformMove,
+	"aptos-testnet":  ChainPlatformMove,
+	"sui-mainnet":    ChainPlatformMove,
+	"sui-testnet":    ChainPlatformMove,
 
 	// TON
-	"ton":         ChainPlatformTON,
-	"ton-mainnet": ChainPlatformTON,
+	"ton":          ChainPlatformTON,
+	"ton-mainnet":  ChainPlatformTON,
+	"ton-testnet":  ChainPlatformTON,
 
 	// NEAR
 	"near":         ChainPlatformNEAR,
 	"near-mainnet": ChainPlatformNEAR,
+	"near-testnet": ChainPlatformNEAR,
 }
 
 // GetPlatformForChain returns the platform for a chain identifier
