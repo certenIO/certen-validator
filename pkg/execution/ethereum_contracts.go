@@ -311,22 +311,21 @@ func NewEthereumContractManager(config *CertenContractConfig) (*EthereumContract
 	auth.GasLimit = config.GasLimit
 
 	// Set dynamic gas price based on network conditions
-	// Minimum 5 Gwei to ensure transactions get included on Sepolia
-	minGasPrice := big.NewInt(5 * 1e9) // 5 gwei minimum
+	// Use network-suggested price, capped by MaxGasPriceGwei
 	gasPrice, err := client.SuggestGasPrice(context.Background())
 	if err == nil {
 		maxGasPrice := big.NewInt(config.MaxGasPriceGwei * 1e9) // Convert to wei
 		if gasPrice.Cmp(maxGasPrice) > 0 {
 			gasPrice = maxGasPrice
 		}
-		// Enforce minimum gas price
-		if gasPrice.Cmp(minGasPrice) < 0 {
-			gasPrice = minGasPrice
-		}
 		auth.GasPrice = gasPrice
 	} else {
-		// Fallback gas price
-		auth.GasPrice = big.NewInt(20 * 1e9) // 20 gwei
+		// Fallback: use MaxGasPriceGwei or 1 gwei if not set
+		fallback := config.MaxGasPriceGwei
+		if fallback == 0 {
+			fallback = 1
+		}
+		auth.GasPrice = big.NewInt(fallback * 1e9)
 	}
 
 	// Parse creation contract address
