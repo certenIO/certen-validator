@@ -116,6 +116,12 @@ type NetworkSettings struct {
 	Accumulate AccumulateNetworkSettings `yaml:"accumulate"`
 	// Multi-chain support: map of chainID -> chain config
 	EVMChains map[int64]*EVMChainConfig `yaml:"evm_chains"`
+	// Non-EVM chain support
+	Solana *SolanaChainConfig `yaml:"solana,omitempty"`
+	Aptos  *AptosChainConfig  `yaml:"aptos,omitempty"`
+	Sui    *SuiChainConfig    `yaml:"sui,omitempty"`
+	NEAR   *NEARChainConfig   `yaml:"near,omitempty"`
+	TON    *TONChainConfig    `yaml:"ton,omitempty"`
 }
 
 // EVMChainConfig contains configuration for a specific EVM chain
@@ -141,6 +147,53 @@ type EVMChainConfig struct {
 
 	// Explorer URL for logging/debugging
 	ExplorerURL string `yaml:"explorer_url"`
+}
+
+// ==============================================================================
+// Non-EVM Chain Configuration Structures
+// ==============================================================================
+
+// SolanaChainConfig contains Solana network configuration
+type SolanaChainConfig struct {
+	RPCURL              string `yaml:"rpc_url"`
+	PrivateKey          string `yaml:"private_key"`
+	AnchorProgramID     string `yaml:"anchor_program_id"`
+	BLSVerifierProgramID string `yaml:"bls_verifier_program_id"`
+}
+
+// AptosChainConfig contains Aptos network configuration
+type AptosChainConfig struct {
+	RPCURL             string `yaml:"rpc_url"`
+	PrivateKey         string `yaml:"private_key"`
+	AnchorPackage      string `yaml:"anchor_package"`
+	BLSVerifierPackage string `yaml:"bls_verifier_package"`
+}
+
+// SuiChainConfig contains Sui network configuration
+type SuiChainConfig struct {
+	RPCURL            string `yaml:"rpc_url"`
+	PrivateKey        string `yaml:"private_key"`
+	AnchorPackage     string `yaml:"anchor_package"`
+	AnchorStateObject string `yaml:"anchor_state_object"`
+	BLSVerifierState  string `yaml:"bls_verifier_state"`
+}
+
+// NEARChainConfig contains NEAR network configuration
+type NEARChainConfig struct {
+	RPCURL              string `yaml:"rpc_url"`
+	PrivateKey          string `yaml:"private_key"`
+	SignerAccountID     string `yaml:"signer_account_id"`
+	AnchorContract      string `yaml:"anchor_contract"`
+	BLSVerifierContract string `yaml:"bls_verifier_contract"`
+}
+
+// TONChainConfig contains TON network configuration
+type TONChainConfig struct {
+	APIURL              string `yaml:"api_url"`
+	APIKey              string `yaml:"api_key"`
+	WalletMnemonic      string `yaml:"wallet_mnemonic"`
+	AnchorContract      string `yaml:"anchor_contract"`
+	BLSVerifierContract string `yaml:"bls_verifier_contract"`
 }
 
 // EthereumNetworkSettings contains Ethereum network configuration
@@ -842,6 +895,12 @@ func LoadAnchorConfigFromEnv() (*AnchorConfig, error) {
 			},
 			// Multi-chain EVM support
 			EVMChains: loadEVMChainsFromEnv(),
+			// Non-EVM chains
+			Solana: loadSolanaFromEnv(),
+			Aptos:  loadAptosFromEnv(),
+			Sui:    loadSuiFromEnv(),
+			NEAR:   loadNEARFromEnv(),
+			TON:    loadTONFromEnv(),
 		},
 
 		Validator: ValidatorSettings{
@@ -1130,4 +1189,91 @@ func loadEVMChainsFromEnv() map[int64]*EVMChainConfig {
 	}
 
 	return chains
+}
+
+// ==============================================================================
+// Non-EVM Chain Configuration Loading
+// ==============================================================================
+
+// loadSolanaFromEnv loads Solana configuration from environment variables.
+// Returns nil if no Solana private key is configured.
+func loadSolanaFromEnv() *SolanaChainConfig {
+	privateKey := getEnv("SOLANA_PRIVATE_KEY", "")
+	rpcURL := getEnv("SOLANA_DEVNET_RPC_URL", "")
+	if privateKey == "" && rpcURL == "" {
+		return nil
+	}
+	return &SolanaChainConfig{
+		RPCURL:               rpcURL,
+		PrivateKey:           privateKey,
+		AnchorProgramID:      getEnv("SOLANA_ANCHOR_PROGRAM_ID", ""),
+		BLSVerifierProgramID: getEnv("SOLANA_BLS_VERIFIER_PROGRAM_ID", ""),
+	}
+}
+
+// loadAptosFromEnv loads Aptos configuration from environment variables.
+// Returns nil if no Aptos private key is configured.
+func loadAptosFromEnv() *AptosChainConfig {
+	privateKey := getEnv("APTOS_PRIVATE_KEY", "")
+	rpcURL := getEnv("APTOS_TESTNET_RPC_URL", "")
+	if privateKey == "" && rpcURL == "" {
+		return nil
+	}
+	return &AptosChainConfig{
+		RPCURL:             rpcURL,
+		PrivateKey:         privateKey,
+		AnchorPackage:      getEnv("APTOS_ANCHOR_PACKAGE", ""),
+		BLSVerifierPackage: getEnv("APTOS_BLS_VERIFIER_PACKAGE", ""),
+	}
+}
+
+// loadSuiFromEnv loads Sui configuration from environment variables.
+// Returns nil if no Sui private key is configured.
+func loadSuiFromEnv() *SuiChainConfig {
+	privateKey := getEnv("SUI_PRIVATE_KEY", "")
+	rpcURL := getEnv("SUI_TESTNET_RPC_URL", "")
+	if privateKey == "" && rpcURL == "" {
+		return nil
+	}
+	return &SuiChainConfig{
+		RPCURL:            rpcURL,
+		PrivateKey:        privateKey,
+		AnchorPackage:     getEnv("SUI_ANCHOR_PACKAGE", ""),
+		AnchorStateObject: getEnv("SUI_ANCHOR_STATE_OBJECT", ""),
+		BLSVerifierState:  getEnv("SUI_BLS_VERIFIER_STATE", ""),
+	}
+}
+
+// loadNEARFromEnv loads NEAR configuration from environment variables.
+// Returns nil if no NEAR private key is configured.
+func loadNEARFromEnv() *NEARChainConfig {
+	privateKey := getEnv("NEAR_PRIVATE_KEY", "")
+	rpcURL := getEnv("NEAR_TESTNET_RPC_URL", "")
+	if privateKey == "" && rpcURL == "" {
+		return nil
+	}
+	return &NEARChainConfig{
+		RPCURL:              rpcURL,
+		PrivateKey:          privateKey,
+		SignerAccountID:     getEnv("NEAR_SIGNER_ACCOUNT_ID", ""),
+		AnchorContract:      getEnv("NEAR_ANCHOR_CONTRACT", ""),
+		BLSVerifierContract: getEnv("NEAR_BLS_VERIFIER_CONTRACT", ""),
+	}
+}
+
+// loadTONFromEnv loads TON configuration from environment variables.
+// Returns nil if no TON wallet mnemonic is configured.
+func loadTONFromEnv() *TONChainConfig {
+	mnemonic := getEnv("TON_WALLET_MNEMONIC", "")
+	apiURL := getEnv("TON_TESTNET_API_URL", "")
+	if mnemonic == "" && apiURL == "" {
+		return nil
+	}
+	return &TONChainConfig{
+		APIURL:              apiURL,
+		APIKey:              getEnv("TON_TESTNET_API_KEY", ""),
+		WalletMnemonic:      mnemonic,
+		AnchorContract:      getEnv("TON_ANCHOR_CONTRACT", ""),
+		BLSVerifierContract: getEnv("TON_BLS_VERIFIER_CONTRACT", ""),
+	}
 }
