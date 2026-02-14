@@ -22,10 +22,14 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	ethcrypto "github.com/ethereum/go-ethereum/crypto"
+
 	"github.com/certen/independant-validator/pkg/anchor"
 	"github.com/certen/independant-validator/pkg/config"
+	"github.com/certen/independant-validator/pkg/execution/contracts"
 	"github.com/certen/independant-validator/pkg/intent"
 	"github.com/certen/independant-validator/pkg/proof"
 )
@@ -292,10 +296,12 @@ func (btce *BFTTargetChainExecutor) ExecuteTargetChainOperations(
 			targetChainID, anchorCfg.GetSupportedChainIDs())
 	}
 
-	// Execute based on target chain - all EVM chains use executeEthereumOperations
+	// Execute based on target chain
 	switch targetChain {
+	case "tron", "tron shasta", "tron shasta testnet", "tron nile", "tron mainnet":
+		// TRON requires its own HTTP API — /jsonrpc doesn't support eth_getTransactionCount or eth_sendRawTransaction
+		return btce.executeTronOperations(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, targetChainID)
 	case "ethereum", "eth", "sepolia", "arbitrum", "arb", "optimism", "op", "base", "polygon", "matic",
-		"tron", "tron shasta", "tron shasta testnet", "tron nile", "tron mainnet",
 		"bsc", "bsc testnet", "binance", "moonbeam", "moonbase", "moonbeam moonbase alpha":
 		return btce.executeEthereumOperations(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, targetChainID)
 	default:
@@ -890,5 +896,199 @@ func (btce *BFTTargetChainExecutor) convertToLegacyIntent(intentID, transactionH
 		GovernanceData:  []byte(fmt.Sprintf(`{"organizationAdi":"%s","authorization":{"required_signers":["%s/book"]}}`, orgADI, orgADI)),
 		ReplayData:      []byte(fmt.Sprintf(`{"nonce":"certen_bft_execution","intent_hash":"0x%s"}`, intentID)),
 	}
+}
+
+// executeTronOperations executes anchor workflow on TRON chains using TRON's HTTP API.
+// TRON's /jsonrpc endpoint does NOT support eth_getTransactionCount or eth_sendRawTransaction,
+// so we use TRON's native HTTP API (triggersmartcontract + broadcasttransaction) for writes.
+// Proof building reuses EthereumContractManager (which works for read-only operations on TRON).
+func (btce *BFTTargetChainExecutor) executeTronOperations(
+	ctx context.Context,
+	intentID string,
+	transactionHash string,
+	accountURL string,
+	validatorID string,
+	bundleID string,
+	anchorID string,
+	certenProof *proof.CertenProof,
+	chainID int64,
+) (*TargetChainExecutionResult, error) {
+
+	btce.logger.Printf("🔷 [TRON-EXEC] Executing TRON chain operations for intent: %s on chainId=%d", intentID, chainID)
+
+	// Load multi-chain configuration
+	anchorCfg, err := config.LoadAnchorConfigFromEnv()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load anchor config: %w", err)
+	}
+
+	chainCfg := anchorCfg.GetEVMChainConfig(chainID)
+	if chainCfg == nil || chainCfg.RPCURL == "" {
+		return nil, fmt.Errorf("no TRON chain config for chainId=%d", chainID)
+	}
+
+	btce.logger.Printf("✅ [TRON-EXEC] Using TRON config for %s (chainId=%d)", chainCfg.Name, chainID)
+	btce.logger.Printf("   RPC: %s", chainCfg.RPCURL)
+	btce.logger.Printf("   Anchor Contract: %s", chainCfg.AnchorV4Address)
+	btce.logger.Printf("   Explorer: %s", chainCfg.ExplorerURL)
+
+	// Create TRON HTTP client for transaction submission
+	privateKey := os.Getenv("ETH_PRIVATE_KEY")
+	tronClient, err := NewTronClient(chainCfg.RPCURL, privateKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create TRON client: %w", err)
+	}
+	btce.logger.Printf("   TRON Address: %s", tronClient.GetOwnerAddressHex())
+
+	// Create EthereumContractManager for proof building (works for read-only ops on TRON /jsonrpc)
+	contractConfig := &CertenContractConfig{
+		EthereumRPC:          chainCfg.RPCURL,
+		ChainID:              chainCfg.ChainID,
+		PrivateKey:           privateKey,
+		CreationContract:     chainCfg.AnchorV4Address,
+		VerificationContract: chainCfg.AnchorV4Address,
+		AccountContract:      chainCfg.AccountFactory,
+		GasLimit:             uint64(chainCfg.GasLimitAnchor),
+		MaxGasPriceGwei:      chainCfg.MaxGasPriceGwei,
+	}
+
+	ethManager, err := NewEthereumContractManager(contractConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create proof builder: %w", err)
+	}
+
+	// Build legacy intent and proof data (same as EVM path)
+	legacyIntent := btce.convertToLegacyIntent(intentID, transactionHash, accountURL, certenProof)
+	bundleIdHash := ethManager.generateAnchorID(legacyIntent, certenProof)
+	comprehensiveProof := ethManager.buildComprehensiveProof(legacyIntent, certenProof,
+		&anchor.AnchorResponse{AnchorID: anchorID, Success: true, Message: fmt.Sprintf("BFT anchor for %s", chainCfg.Name)},
+		bundleIdHash,
+	)
+
+	// Compute adiURLHash (same as CreateAnchorOnChain)
+	var adiURLHash [32]byte
+	adiURL := certenProof.AccountURL
+	if adiURL == "" {
+		adiURL = fmt.Sprintf("%s/data", legacyIntent.OrganizationADI)
+	}
+	copy(adiURLHash[:], ethcrypto.Keccak256([]byte(adiURL)))
+
+	anchorContract := chainCfg.AnchorV4Address
+	feeLimit := int64(chainCfg.GasLimitAnchor)
+	if feeLimit <= 0 {
+		feeLimit = 1000000000 // 1000 TRX default fee limit
+	}
+
+	// ========== Step 1: Create Anchor via TRON HTTP API ==========
+	btce.logger.Printf("🔗 [TRON-EXEC] Step 1: Creating anchor on %s...", chainCfg.Name)
+
+	createTxHash, err := tronClient.CreateAnchor(ctx, anchorContract,
+		bundleIdHash, adiURLHash,
+		comprehensiveProof.Commitments.OperationCommitment,
+		comprehensiveProof.Commitments.CrossChainCommitment,
+		comprehensiveProof.Commitments.GovernanceRoot,
+		big.NewInt(int64(certenProof.BlockHeight)),
+		feeLimit,
+	)
+	if err != nil {
+		btce.logger.Printf("❌ [TRON-EXEC] Step 1 failed: %v", err)
+		return btce.buildTronFailedResult(chainCfg, intentID, anchorID, err), err
+	}
+
+	btce.logger.Printf("✅ [TRON-EXEC] Step 1 complete - Anchor created: %s", createTxHash)
+
+	// Wait for Step 1 confirmation
+	info, err := tronClient.WaitForConfirmation(ctx, createTxHash, 60*time.Second)
+	if err != nil {
+		btce.logger.Printf("⚠️ [TRON-EXEC] Step 1 confirmation failed: %v", err)
+	} else if info != nil {
+		if bn, ok := info["blockNumber"]; ok {
+			btce.logger.Printf("   Confirmed in TRON block: %v", bn)
+		}
+	}
+
+	// ========== Step 2: Execute Comprehensive Proof via TRON HTTP API ==========
+	btce.logger.Printf("🔗 [TRON-EXEC] Step 2: Submitting comprehensive proof on %s...", chainCfg.Name)
+
+	// Convert ComprehensiveCertenProof to V4 CertenProof for contract call
+	v4Proof := contracts.ConvertFromExtended(comprehensiveProof)
+
+	verifyTxHash, err := tronClient.ExecuteComprehensiveProof(ctx, anchorContract,
+		bundleIdHash, v4Proof, feeLimit)
+	if err != nil {
+		btce.logger.Printf("❌ [TRON-EXEC] Step 2 failed: %v", err)
+		// Step 1 succeeded, Step 2 failed — partial success
+		return btce.buildTronResult(chainCfg, intentID, anchorID,
+			createTxHash, fmt.Sprintf("verify_failed_%s", chainCfg.Name), "", false), err
+	}
+
+	btce.logger.Printf("✅ [TRON-EXEC] Step 2 complete - Proof verified: %s", verifyTxHash)
+
+	// Wait for Step 2 confirmation
+	info, err = tronClient.WaitForConfirmation(ctx, verifyTxHash, 60*time.Second)
+	if err != nil {
+		btce.logger.Printf("⚠️ [TRON-EXEC] Step 2 confirmation failed: %v", err)
+	}
+
+	// ========== Step 3: Execute governance (if applicable) ==========
+	allLegs := btce.extractAllLegsFromIntent(legacyIntent)
+	govTxHash := ""
+	if len(allLegs) > 0 && allLegs[0].SourceAddress != (common.Address{}) {
+		btce.logger.Printf("🏦 [TRON-EXEC] Step 3: Executing governance for user account %s", allLegs[0].SourceAddress.Hex())
+		var govErr error
+		govTxHash, govErr = tronClient.ExecuteWithGovernance(ctx, anchorContract,
+			bundleIdHash, allLegs[0].Target.Hex(), allLegs[0].Value, allLegs[0].Data, feeLimit)
+		if govErr != nil {
+			btce.logger.Printf("⚠️ [TRON-EXEC] Step 3 failed: %v", govErr)
+			govTxHash = fmt.Sprintf("gov_failed_%s", chainCfg.Name)
+		}
+	} else {
+		govTxHash = "no_governance_needed"
+	}
+
+	btce.logger.Printf("🎉 [TRON-EXEC] TRON anchor workflow completed for %s!", chainCfg.Name)
+	if chainCfg.ExplorerURL != "" {
+		btce.logger.Printf("   View on Tronscan: %s/#/transaction/%s", chainCfg.ExplorerURL, createTxHash)
+	}
+
+	return btce.buildTronResult(chainCfg, intentID, anchorID, createTxHash, verifyTxHash, govTxHash, true), nil
+}
+
+// buildTronResult creates a TargetChainExecutionResult for TRON operations
+func (btce *BFTTargetChainExecutor) buildTronResult(
+	chainCfg *config.EVMChainConfig,
+	intentID, anchorID string,
+	createTxHash, verifyTxHash, govTxHash string,
+	success bool,
+) *TargetChainExecutionResult {
+	return &TargetChainExecutionResult{
+		Chain:            chainCfg.Name,
+		TxHash:           createTxHash, // Primary tx for backwards compat
+		Success:          success,
+		CreateTxHash:     createTxHash,
+		VerifyTxHash:     verifyTxHash,
+		GovernanceTxHash: govTxHash,
+		Metadata: map[string]string{
+			"chain":           chainCfg.Name,
+			"chainId":         fmt.Sprintf("%d", chainCfg.ChainID),
+			"anchorContract":  chainCfg.AnchorV4Address,
+			"explorerUrl":     chainCfg.ExplorerURL,
+			"executionMethod": "tron_http_api",
+		},
+	}
+}
+
+// buildTronFailedResult creates a failed result for TRON operations
+func (btce *BFTTargetChainExecutor) buildTronFailedResult(
+	chainCfg *config.EVMChainConfig,
+	intentID, anchorID string,
+	failErr error,
+) *TargetChainExecutionResult {
+	return btce.buildTronResult(chainCfg, intentID, anchorID,
+		fmt.Sprintf("create_failed_%s", chainCfg.Name),
+		fmt.Sprintf("verify_failed_%s", chainCfg.Name),
+		fmt.Sprintf("gov_failed_%s", chainCfg.Name),
+		false,
+	)
 }
 
