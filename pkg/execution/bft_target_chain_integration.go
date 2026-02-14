@@ -1065,38 +1065,32 @@ func (btce *BFTTargetChainExecutor) executeTronOperations(
 		userAccountAddr := allLegs[0].SourceAddress
 		btce.logger.Printf("🏦 [TRON-EXEC] Step 3: Executing governance proof direct on user account %s", userAccountAddr.Hex())
 
-		// Fetch stored commitments from anchor (read-only via /jsonrpc works on TRON)
-		anchorData, err := ethManager.anchor.GetAnchorFull(nil, bundleIdHash)
-		if err != nil {
-			btce.logger.Printf("⚠️ [TRON-EXEC] Step 3: Failed to fetch anchor commitments: %v", err)
-			govTxHash = fmt.Sprintf("gov_failed_anchor_read_%s", chainCfg.Name)
-		} else {
-			// Build AccountProof with 4-leaf merkle proof (same logic as EVM buildAccountProof)
-			accountProof := btce.buildTronAccountProof(
-				bundleIdHash,
-				certenProof,
-				adiURL,
-				anchorData.OperationCommitment,
-				anchorData.CrossChainCommitment,
-				anchorData.GovernanceRoot,
-			)
+		// Use local commitment values from comprehensiveProof (same values submitted in Step 1).
+		// TRON /jsonrpc does not support complex struct reads via eth_call reliably.
+		accountProof := btce.buildTronAccountProof(
+			bundleIdHash,
+			certenProof,
+			adiURL,
+			comprehensiveProof.Commitments.OperationCommitment,
+			comprehensiveProof.Commitments.CrossChainCommitment,
+			comprehensiveProof.Commitments.GovernanceRoot,
+		)
 
-			// Convert user account address to TRON 41-prefix hex for the HTTP API call
-			userAccountHex := "0x" + hex.EncodeToString(userAccountAddr.Bytes())
+		// Convert user account address to TRON 41-prefix hex for the HTTP API call
+		userAccountHex := "0x" + hex.EncodeToString(userAccountAddr.Bytes())
 
-			var govErr error
-			govTxHash, govErr = tronClient.ExecuteGovernanceProofDirect(ctx,
-				userAccountHex,
-				allLegs[0].Target.Hex(),
-				allLegs[0].Value,
-				allLegs[0].Data,
-				accountProof,
-				feeLimit,
-			)
-			if govErr != nil {
-				btce.logger.Printf("⚠️ [TRON-EXEC] Step 3 failed: %v", govErr)
-				govTxHash = fmt.Sprintf("gov_failed_%s", chainCfg.Name)
-			}
+		var govErr error
+		govTxHash, govErr = tronClient.ExecuteGovernanceProofDirect(ctx,
+			userAccountHex,
+			allLegs[0].Target.Hex(),
+			allLegs[0].Value,
+			allLegs[0].Data,
+			accountProof,
+			feeLimit,
+		)
+		if govErr != nil {
+			btce.logger.Printf("⚠️ [TRON-EXEC] Step 3 failed: %v", govErr)
+			govTxHash = fmt.Sprintf("gov_failed_%s", chainCfg.Name)
 		}
 	} else {
 		govTxHash = "no_governance_needed"
