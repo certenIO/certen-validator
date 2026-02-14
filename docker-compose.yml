@@ -46,12 +46,12 @@ services:
       ACCUMULATE_COMET_BVN1: http://206.191.154.164:16692
       ACCUMULATE_COMET_BVN2: http://206.191.154.164:16792
       ACCUMULATE_COMET_BVN3: http://206.191.154.164:16892
-      ETHEREUM_URL: https://eth-sepolia.g.alchemy.com/v2/aosGJNJkUckm6lCldSEmP
+      ETHEREUM_URL: https://sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a
       ETH_CHAIN_ID: "11155111"
       ETH_PRIVATE_KEY: "0xf0a3f54cc0a31764dea5dc2c1b380a77187202e3b4d9b1adeaf799ffd006c1bf"
       CERTEN_CONTRACT_ADDRESS: "0x813e7F7EF2FfC14Aa9E86e2ababC49059495eC3C"
       # Multi-chain EVM support
-      ETHEREUM_SEPOLIA_RPC_URL: "https://eth-sepolia.g.alchemy.com/v2/aosGJNJkUckm6lCldSEmP"
+      ETHEREUM_SEPOLIA_RPC_URL: "https://sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a"
       SEPOLIA_ANCHORV4_ADDRESS: "0x813e7F7EF2FfC14Aa9E86e2ababC49059495eC3C"
       SEPOLIA_ANCHORV3_ADDRESS: "0xEb17eBd351D2e040a0cB3026a3D04BEc182d8b98"
       SEPOLIA_BLSZKVERIFIER_ADDRESS: "0x631B6444216b981561034655349F8a28962DcC5F"
@@ -78,9 +78,50 @@ services:
       TRON_SHASTA_ANCHORV4_ADDRESS: "0xca04231da28aab992fdffd3c9a7f8ddcd1f26027"
       TRON_SHASTA_BLSZKVERIFIER_ADDRESS: "0x069d4a29221d721a7af1e7229d5e30803609b420"
       TRON_SHASTA_ACCOUNTFACTORY_ADDRESS: "0xddbee4463bab94cfeea3516272f68f49d9936ce2"
+      # Polygon Amoy (Chain ID: 80002)
+      POLYGON_AMOY_RPC_URL: "https://rpc-amoy.polygon.technology"
+      POLYGON_AMOY_ANCHORV4_ADDRESS: "0x52E8e8E5d5EE35ED52BA6B7BB2Cb2dc2D2b2c952"
+      POLYGON_AMOY_BLSZKVERIFIER_ADDRESS: "0x488d2c2bB3d65a60eae9f72665fBaf191F38B7b7"
+      POLYGON_AMOY_ACCOUNTFACTORY_ADDRESS: "0x2e6037afFA783d487664b2440c691fc86Bc18A17"
+      # BSC Testnet (Chain ID: 97)
+      BSC_TESTNET_RPC_URL: "https://data-seed-prebsc-1-s1.binance.org:8545"
+      BSC_TESTNET_ANCHORV4_ADDRESS: "0x52E8e8E5d5EE35ED52BA6B7BB2Cb2dc2D2b2c952"
+      BSC_TESTNET_BLSZKVERIFIER_ADDRESS: "0x488d2c2bB3d65a60eae9f72665fBaf191F38B7b7"
+      BSC_TESTNET_ACCOUNTFACTORY_ADDRESS: "0x2e6037afFA783d487664b2440c691fc86Bc18A17"
+      # Moonbase Alpha (Chain ID: 1287)
+      MOONBASE_ALPHA_RPC_URL: "https://rpc.api.moonbase.moonbeam.network"
+      MOONBASE_ALPHA_ANCHORV4_ADDRESS: "0x52E8e8E5d5EE35ED52BA6B7BB2Cb2dc2D2b2c952"
+      MOONBASE_ALPHA_BLSZKVERIFIER_ADDRESS: "0x488d2c2bB3d65a60eae9f72665fBaf191F38B7b7"
+      MOONBASE_ALPHA_ACCOUNTFACTORY_ADDRESS: "0x2e6037afFA783d487664b2440c691fc86Bc18A17"
+      MOONBASE_GAS_LIMIT_ANCHOR: "2000000"
       ATTESTATION_PEERS: http://validator-2:8080,http://validator-3:8080,http://validator-4:8080,http://validator-5:8080,http://validator-6:8080,http://validator-7:8080
       ATTESTATION_REQUIRED_COUNT: "5"
       BLS_ZK_TESTING_MODE: "false"
+      # Non-EVM Chain Keys
+      SOLANA_PRIVATE_KEY: "5358zTLYbbfWH8Qg6s4SqBTkf4Tf7W85EY78DdQMQ4UNjhL2WqPsryS36wCy8VCa7PXCQFUpM6bgJgLUZZgPx8K9"
+      APTOS_PRIVATE_KEY: "0xe9289ea098e35f3a7e10dace23435c221128921e4bbf35dd6b15d571caaedca6"
+      SUI_PRIVATE_KEY: "suiprivkey1qz6a7c9v24ahestz0hg9yx9ljh6q8n5rd5nu0ck0u7ykhaq7nglxvrct0ne"
+      NEAR_SIGNER_ACCOUNT_ID: "certen-v1.testnet"
+      NEAR_PRIVATE_KEY: "ed25519:ykWTGzDzcAZ37BZTsKA4VGDiHEpQDGpEw6iu7iSjXybAppBaQPsHYhVP93NRjSvZvtkx4dfE2iXoaPknhXP9NPe"
+      TON_WALLET_MNEMONIC: "during expand human pill quit tag book clap record crane program veteran pumpkin during utility apart february hour infant eyebrow million artefact palace lamp"
+      # Non-EVM RPC URLs
+      SOLANA_DEVNET_RPC_URL: "https://api.devnet.solana.com"
+      APTOS_TESTNET_RPC_URL: "https://fullnode.testnet.aptoslabs.com/v1"
+      SUI_TESTNET_RPC_URL: "https://fullnode.testnet.sui.io:443"
+      NEAR_TESTNET_RPC_URL: "https://rpc.testnet.near.org"
+      TON_TESTNET_API_URL: "https://testnet.toncenter.com/api/v2"
+      # Non-EVM Contract Addresses
+      SOLANA_ANCHOR_PROGRAM_ID: "FBcWmM1w7wJ9gmzEMNhDFCVKGryGaM8yYuDfjGpdD1Nc"
+      SOLANA_BLS_VERIFIER_PROGRAM_ID: "2uYnieNHceDYc1LWJsM11SYUK9hDCDrH5pfQjh5m2Hoa"
+      APTOS_ANCHOR_PACKAGE: "0xf3cb210860525f9137f0ba9a088124393e12ce6758ee08d167d92b779d9c5894"
+      APTOS_BLS_VERIFIER_PACKAGE: "0xf3cb210860525f9137f0ba9a088124393e12ce6758ee08d167d92b779d9c5894"
+      SUI_ANCHOR_PACKAGE: "0xf9f8f5c8349e04404631531f2420cd45805934839867daa1f4c043ec06b6ade2"
+      SUI_ANCHOR_STATE_OBJECT: "0xecc27b868c0dd75544068d7fc61657aee94aa7e348876ca2104cb9c45a4cfb9a"
+      SUI_BLS_VERIFIER_STATE: "0x9380a3764b1ca7a2cb7fb83cba0a7bca44aaf15b21fe8fce89f7859f35b5ba5b"
+      NEAR_ANCHOR_CONTRACT: "certen-anchor.testnet"
+      NEAR_BLS_VERIFIER_CONTRACT: "certen-bls-verifier.testnet"
+      TON_ANCHOR_CONTRACT: "kQCIMusQr3j4ExEfyX_W8c-B_n6zWQdjAkBovyKpP-wGWe7v"
+      TON_BLS_VERIFIER_CONTRACT: "kQDEy6Qaq_iptycLCngQeEGAX9f46UH_66cEQ6JjFqqi3and"
       LOG_LEVEL: info
       PROOF_CYCLE_WRITEBACK: "true"
       ACCUMULATE_SIGNER_URL: "acc://certen-kermit-12.acme/book/1"
@@ -129,12 +170,12 @@ services:
       ACCUMULATE_COMET_BVN1: http://206.191.154.164:16692
       ACCUMULATE_COMET_BVN2: http://206.191.154.164:16792
       ACCUMULATE_COMET_BVN3: http://206.191.154.164:16892
-      ETHEREUM_URL: https://eth-sepolia.g.alchemy.com/v2/aosGJNJkUckm6lCldSEmP
+      ETHEREUM_URL: https://sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a
       ETH_CHAIN_ID: "11155111"
       ETH_PRIVATE_KEY: "0x29055a92af477888b7858c5e36293a6aaa65045384319fe948b86f4e24c9f6c4"
       CERTEN_CONTRACT_ADDRESS: "0x813e7F7EF2FfC14Aa9E86e2ababC49059495eC3C"
       # Multi-chain EVM support
-      ETHEREUM_SEPOLIA_RPC_URL: "https://eth-sepolia.g.alchemy.com/v2/aosGJNJkUckm6lCldSEmP"
+      ETHEREUM_SEPOLIA_RPC_URL: "https://sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a"
       SEPOLIA_ANCHORV4_ADDRESS: "0x813e7F7EF2FfC14Aa9E86e2ababC49059495eC3C"
       SEPOLIA_ANCHORV3_ADDRESS: "0xEb17eBd351D2e040a0cB3026a3D04BEc182d8b98"
       SEPOLIA_BLSZKVERIFIER_ADDRESS: "0x631B6444216b981561034655349F8a28962DcC5F"
@@ -161,9 +202,50 @@ services:
       TRON_SHASTA_ANCHORV4_ADDRESS: "0xca04231da28aab992fdffd3c9a7f8ddcd1f26027"
       TRON_SHASTA_BLSZKVERIFIER_ADDRESS: "0x069d4a29221d721a7af1e7229d5e30803609b420"
       TRON_SHASTA_ACCOUNTFACTORY_ADDRESS: "0xddbee4463bab94cfeea3516272f68f49d9936ce2"
+      # Polygon Amoy (Chain ID: 80002)
+      POLYGON_AMOY_RPC_URL: "https://rpc-amoy.polygon.technology"
+      POLYGON_AMOY_ANCHORV4_ADDRESS: "0x52E8e8E5d5EE35ED52BA6B7BB2Cb2dc2D2b2c952"
+      POLYGON_AMOY_BLSZKVERIFIER_ADDRESS: "0x488d2c2bB3d65a60eae9f72665fBaf191F38B7b7"
+      POLYGON_AMOY_ACCOUNTFACTORY_ADDRESS: "0x2e6037afFA783d487664b2440c691fc86Bc18A17"
+      # BSC Testnet (Chain ID: 97)
+      BSC_TESTNET_RPC_URL: "https://data-seed-prebsc-1-s1.binance.org:8545"
+      BSC_TESTNET_ANCHORV4_ADDRESS: "0x52E8e8E5d5EE35ED52BA6B7BB2Cb2dc2D2b2c952"
+      BSC_TESTNET_BLSZKVERIFIER_ADDRESS: "0x488d2c2bB3d65a60eae9f72665fBaf191F38B7b7"
+      BSC_TESTNET_ACCOUNTFACTORY_ADDRESS: "0x2e6037afFA783d487664b2440c691fc86Bc18A17"
+      # Moonbase Alpha (Chain ID: 1287)
+      MOONBASE_ALPHA_RPC_URL: "https://rpc.api.moonbase.moonbeam.network"
+      MOONBASE_ALPHA_ANCHORV4_ADDRESS: "0x52E8e8E5d5EE35ED52BA6B7BB2Cb2dc2D2b2c952"
+      MOONBASE_ALPHA_BLSZKVERIFIER_ADDRESS: "0x488d2c2bB3d65a60eae9f72665fBaf191F38B7b7"
+      MOONBASE_ALPHA_ACCOUNTFACTORY_ADDRESS: "0x2e6037afFA783d487664b2440c691fc86Bc18A17"
+      MOONBASE_GAS_LIMIT_ANCHOR: "2000000"
       ATTESTATION_PEERS: http://validator-1:8080,http://validator-3:8080,http://validator-4:8080,http://validator-5:8080,http://validator-6:8080,http://validator-7:8080
       ATTESTATION_REQUIRED_COUNT: "5"
       BLS_ZK_TESTING_MODE: "false"
+      # Non-EVM Chain Keys
+      SOLANA_PRIVATE_KEY: "63WkhDtPh7uyePDaL4Cfyp43mBnmL5DXUjo7HYLNZ7rSvQh8utG7C9msXKfdcdLpWwQFDiH9GYKKYaiJ5GFg5njq"
+      APTOS_PRIVATE_KEY: "0xde21b7e84de72f5927092cf2700464018ed74f89059c225ccf7261c088dcc676"
+      SUI_PRIVATE_KEY: "suiprivkey1qrfpcsd94hyl0u5k78aw9xsds8jf8vv4re9rta5gfyjf5nj4y4lv6ehe7ql"
+      NEAR_SIGNER_ACCOUNT_ID: "certen-v2.testnet"
+      NEAR_PRIVATE_KEY: "ed25519:3n1tMdhxdxqRXEo3jvHFxyXZMNZGmsB4LsDCX7btGBxf7fJLBBmb7Rx3BCxjXdHhgvTnfZBro2BWMJC2TVi8kC8Q"
+      TON_WALLET_MNEMONIC: "essay mosquito jazz meat advance observe dolphin grocery teach gap pupil future awful kangaroo action height primary concert share enable rug smile intact unhappy"
+      # Non-EVM RPC URLs
+      SOLANA_DEVNET_RPC_URL: "https://api.devnet.solana.com"
+      APTOS_TESTNET_RPC_URL: "https://fullnode.testnet.aptoslabs.com/v1"
+      SUI_TESTNET_RPC_URL: "https://fullnode.testnet.sui.io:443"
+      NEAR_TESTNET_RPC_URL: "https://rpc.testnet.near.org"
+      TON_TESTNET_API_URL: "https://testnet.toncenter.com/api/v2"
+      # Non-EVM Contract Addresses
+      SOLANA_ANCHOR_PROGRAM_ID: "FBcWmM1w7wJ9gmzEMNhDFCVKGryGaM8yYuDfjGpdD1Nc"
+      SOLANA_BLS_VERIFIER_PROGRAM_ID: "2uYnieNHceDYc1LWJsM11SYUK9hDCDrH5pfQjh5m2Hoa"
+      APTOS_ANCHOR_PACKAGE: "0xf3cb210860525f9137f0ba9a088124393e12ce6758ee08d167d92b779d9c5894"
+      APTOS_BLS_VERIFIER_PACKAGE: "0xf3cb210860525f9137f0ba9a088124393e12ce6758ee08d167d92b779d9c5894"
+      SUI_ANCHOR_PACKAGE: "0xf9f8f5c8349e04404631531f2420cd45805934839867daa1f4c043ec06b6ade2"
+      SUI_ANCHOR_STATE_OBJECT: "0xecc27b868c0dd75544068d7fc61657aee94aa7e348876ca2104cb9c45a4cfb9a"
+      SUI_BLS_VERIFIER_STATE: "0x9380a3764b1ca7a2cb7fb83cba0a7bca44aaf15b21fe8fce89f7859f35b5ba5b"
+      NEAR_ANCHOR_CONTRACT: "certen-anchor.testnet"
+      NEAR_BLS_VERIFIER_CONTRACT: "certen-bls-verifier.testnet"
+      TON_ANCHOR_CONTRACT: "kQCIMusQr3j4ExEfyX_W8c-B_n6zWQdjAkBovyKpP-wGWe7v"
+      TON_BLS_VERIFIER_CONTRACT: "kQDEy6Qaq_iptycLCngQeEGAX9f46UH_66cEQ6JjFqqi3and"
       LOG_LEVEL: info
       PROOF_CYCLE_WRITEBACK: "true"
       ACCUMULATE_SIGNER_URL: "acc://certen-kermit-12.acme/book/1"
@@ -212,12 +294,12 @@ services:
       ACCUMULATE_COMET_BVN1: http://206.191.154.164:16692
       ACCUMULATE_COMET_BVN2: http://206.191.154.164:16792
       ACCUMULATE_COMET_BVN3: http://206.191.154.164:16892
-      ETHEREUM_URL: https://eth-sepolia.g.alchemy.com/v2/aosGJNJkUckm6lCldSEmP
+      ETHEREUM_URL: https://sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a
       ETH_CHAIN_ID: "11155111"
       ETH_PRIVATE_KEY: "0x1945bda06a2bbec70a12bc104c2eaa809c1acaacf4602ec802c8ecba86cef415"
       CERTEN_CONTRACT_ADDRESS: "0x813e7F7EF2FfC14Aa9E86e2ababC49059495eC3C"
       # Multi-chain EVM support
-      ETHEREUM_SEPOLIA_RPC_URL: "https://eth-sepolia.g.alchemy.com/v2/aosGJNJkUckm6lCldSEmP"
+      ETHEREUM_SEPOLIA_RPC_URL: "https://sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a"
       SEPOLIA_ANCHORV4_ADDRESS: "0x813e7F7EF2FfC14Aa9E86e2ababC49059495eC3C"
       SEPOLIA_ANCHORV3_ADDRESS: "0xEb17eBd351D2e040a0cB3026a3D04BEc182d8b98"
       SEPOLIA_BLSZKVERIFIER_ADDRESS: "0x631B6444216b981561034655349F8a28962DcC5F"
@@ -244,9 +326,50 @@ services:
       TRON_SHASTA_ANCHORV4_ADDRESS: "0xca04231da28aab992fdffd3c9a7f8ddcd1f26027"
       TRON_SHASTA_BLSZKVERIFIER_ADDRESS: "0x069d4a29221d721a7af1e7229d5e30803609b420"
       TRON_SHASTA_ACCOUNTFACTORY_ADDRESS: "0xddbee4463bab94cfeea3516272f68f49d9936ce2"
+      # Polygon Amoy (Chain ID: 80002)
+      POLYGON_AMOY_RPC_URL: "https://rpc-amoy.polygon.technology"
+      POLYGON_AMOY_ANCHORV4_ADDRESS: "0x52E8e8E5d5EE35ED52BA6B7BB2Cb2dc2D2b2c952"
+      POLYGON_AMOY_BLSZKVERIFIER_ADDRESS: "0x488d2c2bB3d65a60eae9f72665fBaf191F38B7b7"
+      POLYGON_AMOY_ACCOUNTFACTORY_ADDRESS: "0x2e6037afFA783d487664b2440c691fc86Bc18A17"
+      # BSC Testnet (Chain ID: 97)
+      BSC_TESTNET_RPC_URL: "https://data-seed-prebsc-1-s1.binance.org:8545"
+      BSC_TESTNET_ANCHORV4_ADDRESS: "0x52E8e8E5d5EE35ED52BA6B7BB2Cb2dc2D2b2c952"
+      BSC_TESTNET_BLSZKVERIFIER_ADDRESS: "0x488d2c2bB3d65a60eae9f72665fBaf191F38B7b7"
+      BSC_TESTNET_ACCOUNTFACTORY_ADDRESS: "0x2e6037afFA783d487664b2440c691fc86Bc18A17"
+      # Moonbase Alpha (Chain ID: 1287)
+      MOONBASE_ALPHA_RPC_URL: "https://rpc.api.moonbase.moonbeam.network"
+      MOONBASE_ALPHA_ANCHORV4_ADDRESS: "0x52E8e8E5d5EE35ED52BA6B7BB2Cb2dc2D2b2c952"
+      MOONBASE_ALPHA_BLSZKVERIFIER_ADDRESS: "0x488d2c2bB3d65a60eae9f72665fBaf191F38B7b7"
+      MOONBASE_ALPHA_ACCOUNTFACTORY_ADDRESS: "0x2e6037afFA783d487664b2440c691fc86Bc18A17"
+      MOONBASE_GAS_LIMIT_ANCHOR: "2000000"
       ATTESTATION_PEERS: http://validator-1:8080,http://validator-2:8080,http://validator-4:8080,http://validator-5:8080,http://validator-6:8080,http://validator-7:8080
       ATTESTATION_REQUIRED_COUNT: "5"
       BLS_ZK_TESTING_MODE: "false"
+      # Non-EVM Chain Keys
+      SOLANA_PRIVATE_KEY: "5aFvDffmFdENvJdVAXU8hd6VpmMbzH1VLxTwTwHSg49R4kGTkU2zR6HZsTSwQ88bWoatAheWGwnkBEwhHu5KEBh6"
+      APTOS_PRIVATE_KEY: "0x4e92fce9bb4dc0a272726ffa33363d909e4e0e32b843cb7e4c175e45b4c11766"
+      SUI_PRIVATE_KEY: "suiprivkey1qrhxfyf5tae0yc8dl3a7fmxt4lpmkwaajladnsud8g0wjv78dc3k66s054s"
+      NEAR_SIGNER_ACCOUNT_ID: "certen-v3.testnet"
+      NEAR_PRIVATE_KEY: "ed25519:2mLVTMmgCSSQUSov2J54LaeTkwhJWXMkJowmoRmWc5KMBNGJ2aGrZt2EdW9jB6qwCapV9MTQ5k8Gnc2FqvgJMRTR"
+      TON_WALLET_MNEMONIC: "rebuild ivory tortoise nurse enable cherry possible turn school mobile verify join upgrade evil doll fan erupt coin sock gown table bubble inmate soul"
+      # Non-EVM RPC URLs
+      SOLANA_DEVNET_RPC_URL: "https://api.devnet.solana.com"
+      APTOS_TESTNET_RPC_URL: "https://fullnode.testnet.aptoslabs.com/v1"
+      SUI_TESTNET_RPC_URL: "https://fullnode.testnet.sui.io:443"
+      NEAR_TESTNET_RPC_URL: "https://rpc.testnet.near.org"
+      TON_TESTNET_API_URL: "https://testnet.toncenter.com/api/v2"
+      # Non-EVM Contract Addresses
+      SOLANA_ANCHOR_PROGRAM_ID: "FBcWmM1w7wJ9gmzEMNhDFCVKGryGaM8yYuDfjGpdD1Nc"
+      SOLANA_BLS_VERIFIER_PROGRAM_ID: "2uYnieNHceDYc1LWJsM11SYUK9hDCDrH5pfQjh5m2Hoa"
+      APTOS_ANCHOR_PACKAGE: "0xf3cb210860525f9137f0ba9a088124393e12ce6758ee08d167d92b779d9c5894"
+      APTOS_BLS_VERIFIER_PACKAGE: "0xf3cb210860525f9137f0ba9a088124393e12ce6758ee08d167d92b779d9c5894"
+      SUI_ANCHOR_PACKAGE: "0xf9f8f5c8349e04404631531f2420cd45805934839867daa1f4c043ec06b6ade2"
+      SUI_ANCHOR_STATE_OBJECT: "0xecc27b868c0dd75544068d7fc61657aee94aa7e348876ca2104cb9c45a4cfb9a"
+      SUI_BLS_VERIFIER_STATE: "0x9380a3764b1ca7a2cb7fb83cba0a7bca44aaf15b21fe8fce89f7859f35b5ba5b"
+      NEAR_ANCHOR_CONTRACT: "certen-anchor.testnet"
+      NEAR_BLS_VERIFIER_CONTRACT: "certen-bls-verifier.testnet"
+      TON_ANCHOR_CONTRACT: "kQCIMusQr3j4ExEfyX_W8c-B_n6zWQdjAkBovyKpP-wGWe7v"
+      TON_BLS_VERIFIER_CONTRACT: "kQDEy6Qaq_iptycLCngQeEGAX9f46UH_66cEQ6JjFqqi3and"
       LOG_LEVEL: info
       PROOF_CYCLE_WRITEBACK: "true"
       ACCUMULATE_SIGNER_URL: "acc://certen-kermit-12.acme/book/1"
@@ -295,12 +418,12 @@ services:
       ACCUMULATE_COMET_BVN1: http://206.191.154.164:16692
       ACCUMULATE_COMET_BVN2: http://206.191.154.164:16792
       ACCUMULATE_COMET_BVN3: http://206.191.154.164:16892
-      ETHEREUM_URL: https://eth-sepolia.g.alchemy.com/v2/aosGJNJkUckm6lCldSEmP
+      ETHEREUM_URL: https://sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a
       ETH_CHAIN_ID: "11155111"
       ETH_PRIVATE_KEY: "0x17216e70e068b0d93079af8f3989d7463194c731f25f1ce37332c2bc9adbb22a"
       CERTEN_CONTRACT_ADDRESS: "0x813e7F7EF2FfC14Aa9E86e2ababC49059495eC3C"
       # Multi-chain EVM support
-      ETHEREUM_SEPOLIA_RPC_URL: "https://eth-sepolia.g.alchemy.com/v2/aosGJNJkUckm6lCldSEmP"
+      ETHEREUM_SEPOLIA_RPC_URL: "https://sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a"
       SEPOLIA_ANCHORV4_ADDRESS: "0x813e7F7EF2FfC14Aa9E86e2ababC49059495eC3C"
       SEPOLIA_ANCHORV3_ADDRESS: "0xEb17eBd351D2e040a0cB3026a3D04BEc182d8b98"
       SEPOLIA_BLSZKVERIFIER_ADDRESS: "0x631B6444216b981561034655349F8a28962DcC5F"
@@ -327,9 +450,50 @@ services:
       TRON_SHASTA_ANCHORV4_ADDRESS: "0xca04231da28aab992fdffd3c9a7f8ddcd1f26027"
       TRON_SHASTA_BLSZKVERIFIER_ADDRESS: "0x069d4a29221d721a7af1e7229d5e30803609b420"
       TRON_SHASTA_ACCOUNTFACTORY_ADDRESS: "0xddbee4463bab94cfeea3516272f68f49d9936ce2"
+      # Polygon Amoy (Chain ID: 80002)
+      POLYGON_AMOY_RPC_URL: "https://rpc-amoy.polygon.technology"
+      POLYGON_AMOY_ANCHORV4_ADDRESS: "0x52E8e8E5d5EE35ED52BA6B7BB2Cb2dc2D2b2c952"
+      POLYGON_AMOY_BLSZKVERIFIER_ADDRESS: "0x488d2c2bB3d65a60eae9f72665fBaf191F38B7b7"
+      POLYGON_AMOY_ACCOUNTFACTORY_ADDRESS: "0x2e6037afFA783d487664b2440c691fc86Bc18A17"
+      # BSC Testnet (Chain ID: 97)
+      BSC_TESTNET_RPC_URL: "https://data-seed-prebsc-1-s1.binance.org:8545"
+      BSC_TESTNET_ANCHORV4_ADDRESS: "0x52E8e8E5d5EE35ED52BA6B7BB2Cb2dc2D2b2c952"
+      BSC_TESTNET_BLSZKVERIFIER_ADDRESS: "0x488d2c2bB3d65a60eae9f72665fBaf191F38B7b7"
+      BSC_TESTNET_ACCOUNTFACTORY_ADDRESS: "0x2e6037afFA783d487664b2440c691fc86Bc18A17"
+      # Moonbase Alpha (Chain ID: 1287)
+      MOONBASE_ALPHA_RPC_URL: "https://rpc.api.moonbase.moonbeam.network"
+      MOONBASE_ALPHA_ANCHORV4_ADDRESS: "0x52E8e8E5d5EE35ED52BA6B7BB2Cb2dc2D2b2c952"
+      MOONBASE_ALPHA_BLSZKVERIFIER_ADDRESS: "0x488d2c2bB3d65a60eae9f72665fBaf191F38B7b7"
+      MOONBASE_ALPHA_ACCOUNTFACTORY_ADDRESS: "0x2e6037afFA783d487664b2440c691fc86Bc18A17"
+      MOONBASE_GAS_LIMIT_ANCHOR: "2000000"
       ATTESTATION_PEERS: http://validator-1:8080,http://validator-2:8080,http://validator-3:8080,http://validator-5:8080,http://validator-6:8080,http://validator-7:8080
       ATTESTATION_REQUIRED_COUNT: "5"
       BLS_ZK_TESTING_MODE: "false"
+      # Non-EVM Chain Keys
+      SOLANA_PRIVATE_KEY: "2SYN5eGBvVdya1m3FfnPMwvzZKAPNNUmGPbCy7SbJeFFd91hPEChqFAVaUTsXygah9hLaEpwVXFYuGVrCKERYoon"
+      APTOS_PRIVATE_KEY: "0x69c5a2db32afbf916b58afb45ec55550d47142e2cf3e4a574ef17d4162a4f46f"
+      SUI_PRIVATE_KEY: "suiprivkey1qqzw4ekvwtedcjaxluug0pt6mltexqkx5ky2eduj0zgq9hapdwu25s7vyn0"
+      NEAR_SIGNER_ACCOUNT_ID: "certen-v4.testnet"
+      NEAR_PRIVATE_KEY: "ed25519:35osrBnSmxfyg555vkET9FenduuGn32sEEZpc3fSFiiXZdLNzusZYAiSJiQkXJWmwsbBhorANf3KMuGuxNku2ZXU"
+      TON_WALLET_MNEMONIC: "chef sorry toe city cancel alley crush humor case toilet media curtain afraid learn power obey index stem index release duck army rocket pulse"
+      # Non-EVM RPC URLs
+      SOLANA_DEVNET_RPC_URL: "https://api.devnet.solana.com"
+      APTOS_TESTNET_RPC_URL: "https://fullnode.testnet.aptoslabs.com/v1"
+      SUI_TESTNET_RPC_URL: "https://fullnode.testnet.sui.io:443"
+      NEAR_TESTNET_RPC_URL: "https://rpc.testnet.near.org"
+      TON_TESTNET_API_URL: "https://testnet.toncenter.com/api/v2"
+      # Non-EVM Contract Addresses
+      SOLANA_ANCHOR_PROGRAM_ID: "FBcWmM1w7wJ9gmzEMNhDFCVKGryGaM8yYuDfjGpdD1Nc"
+      SOLANA_BLS_VERIFIER_PROGRAM_ID: "2uYnieNHceDYc1LWJsM11SYUK9hDCDrH5pfQjh5m2Hoa"
+      APTOS_ANCHOR_PACKAGE: "0xf3cb210860525f9137f0ba9a088124393e12ce6758ee08d167d92b779d9c5894"
+      APTOS_BLS_VERIFIER_PACKAGE: "0xf3cb210860525f9137f0ba9a088124393e12ce6758ee08d167d92b779d9c5894"
+      SUI_ANCHOR_PACKAGE: "0xf9f8f5c8349e04404631531f2420cd45805934839867daa1f4c043ec06b6ade2"
+      SUI_ANCHOR_STATE_OBJECT: "0xecc27b868c0dd75544068d7fc61657aee94aa7e348876ca2104cb9c45a4cfb9a"
+      SUI_BLS_VERIFIER_STATE: "0x9380a3764b1ca7a2cb7fb83cba0a7bca44aaf15b21fe8fce89f7859f35b5ba5b"
+      NEAR_ANCHOR_CONTRACT: "certen-anchor.testnet"
+      NEAR_BLS_VERIFIER_CONTRACT: "certen-bls-verifier.testnet"
+      TON_ANCHOR_CONTRACT: "kQCIMusQr3j4ExEfyX_W8c-B_n6zWQdjAkBovyKpP-wGWe7v"
+      TON_BLS_VERIFIER_CONTRACT: "kQDEy6Qaq_iptycLCngQeEGAX9f46UH_66cEQ6JjFqqi3and"
       LOG_LEVEL: info
       PROOF_CYCLE_WRITEBACK: "true"
       ACCUMULATE_SIGNER_URL: "acc://certen-kermit-12.acme/book/1"
@@ -378,12 +542,12 @@ services:
       ACCUMULATE_COMET_BVN1: http://206.191.154.164:16692
       ACCUMULATE_COMET_BVN2: http://206.191.154.164:16792
       ACCUMULATE_COMET_BVN3: http://206.191.154.164:16892
-      ETHEREUM_URL: https://eth-sepolia.g.alchemy.com/v2/aosGJNJkUckm6lCldSEmP
+      ETHEREUM_URL: https://sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a
       ETH_CHAIN_ID: "11155111"
       ETH_PRIVATE_KEY: "0xb4fd71ebfb521de668996298dd5304ba1133964c38be9b7d5c9579bb0041c7a9"
       CERTEN_CONTRACT_ADDRESS: "0x813e7F7EF2FfC14Aa9E86e2ababC49059495eC3C"
       # Multi-chain EVM support
-      ETHEREUM_SEPOLIA_RPC_URL: "https://eth-sepolia.g.alchemy.com/v2/aosGJNJkUckm6lCldSEmP"
+      ETHEREUM_SEPOLIA_RPC_URL: "https://sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a"
       SEPOLIA_ANCHORV4_ADDRESS: "0x813e7F7EF2FfC14Aa9E86e2ababC49059495eC3C"
       SEPOLIA_ANCHORV3_ADDRESS: "0xEb17eBd351D2e040a0cB3026a3D04BEc182d8b98"
       SEPOLIA_BLSZKVERIFIER_ADDRESS: "0x631B6444216b981561034655349F8a28962DcC5F"
@@ -410,9 +574,50 @@ services:
       TRON_SHASTA_ANCHORV4_ADDRESS: "0xca04231da28aab992fdffd3c9a7f8ddcd1f26027"
       TRON_SHASTA_BLSZKVERIFIER_ADDRESS: "0x069d4a29221d721a7af1e7229d5e30803609b420"
       TRON_SHASTA_ACCOUNTFACTORY_ADDRESS: "0xddbee4463bab94cfeea3516272f68f49d9936ce2"
+      # Polygon Amoy (Chain ID: 80002)
+      POLYGON_AMOY_RPC_URL: "https://rpc-amoy.polygon.technology"
+      POLYGON_AMOY_ANCHORV4_ADDRESS: "0x52E8e8E5d5EE35ED52BA6B7BB2Cb2dc2D2b2c952"
+      POLYGON_AMOY_BLSZKVERIFIER_ADDRESS: "0x488d2c2bB3d65a60eae9f72665fBaf191F38B7b7"
+      POLYGON_AMOY_ACCOUNTFACTORY_ADDRESS: "0x2e6037afFA783d487664b2440c691fc86Bc18A17"
+      # BSC Testnet (Chain ID: 97)
+      BSC_TESTNET_RPC_URL: "https://data-seed-prebsc-1-s1.binance.org:8545"
+      BSC_TESTNET_ANCHORV4_ADDRESS: "0x52E8e8E5d5EE35ED52BA6B7BB2Cb2dc2D2b2c952"
+      BSC_TESTNET_BLSZKVERIFIER_ADDRESS: "0x488d2c2bB3d65a60eae9f72665fBaf191F38B7b7"
+      BSC_TESTNET_ACCOUNTFACTORY_ADDRESS: "0x2e6037afFA783d487664b2440c691fc86Bc18A17"
+      # Moonbase Alpha (Chain ID: 1287)
+      MOONBASE_ALPHA_RPC_URL: "https://rpc.api.moonbase.moonbeam.network"
+      MOONBASE_ALPHA_ANCHORV4_ADDRESS: "0x52E8e8E5d5EE35ED52BA6B7BB2Cb2dc2D2b2c952"
+      MOONBASE_ALPHA_BLSZKVERIFIER_ADDRESS: "0x488d2c2bB3d65a60eae9f72665fBaf191F38B7b7"
+      MOONBASE_ALPHA_ACCOUNTFACTORY_ADDRESS: "0x2e6037afFA783d487664b2440c691fc86Bc18A17"
+      MOONBASE_GAS_LIMIT_ANCHOR: "2000000"
       ATTESTATION_PEERS: http://validator-1:8080,http://validator-2:8080,http://validator-3:8080,http://validator-4:8080,http://validator-6:8080,http://validator-7:8080
       ATTESTATION_REQUIRED_COUNT: "5"
       BLS_ZK_TESTING_MODE: "false"
+      # Non-EVM Chain Keys
+      SOLANA_PRIVATE_KEY: "2hbDmKjxVyRvyAjzRkSN1z6cXzWRSwkoXyFEsBEfSnMtHpDjU9nugH4C2NBZkNQnzCk4CvLeCvpkXLFYypWdbziF"
+      APTOS_PRIVATE_KEY: "0x7985cf069bde25322e7a24acdf69ef889fc64a97fd7367cc27068fc81e86337c"
+      SUI_PRIVATE_KEY: "suiprivkey1qrta7nchzsjv0egswythrzkuss6dkkn6l3mr3xtqxe9xhaapxfj6z5gwvlw"
+      NEAR_SIGNER_ACCOUNT_ID: "certen-v5.testnet"
+      NEAR_PRIVATE_KEY: "ed25519:4CxAw732ciBkvzvxQYjBUu3fV4SpA9auy1X8UGLnFQbUi4nFGTb1WG3pjhaN3NfWvwLrWMgJSycEex22BMmpritk"
+      TON_WALLET_MNEMONIC: "kiss curious mask lemon visual milk phrase robot remember then spend bonus draft slight drama combine margin hand express spoil general left funny false"
+      # Non-EVM RPC URLs
+      SOLANA_DEVNET_RPC_URL: "https://api.devnet.solana.com"
+      APTOS_TESTNET_RPC_URL: "https://fullnode.testnet.aptoslabs.com/v1"
+      SUI_TESTNET_RPC_URL: "https://fullnode.testnet.sui.io:443"
+      NEAR_TESTNET_RPC_URL: "https://rpc.testnet.near.org"
+      TON_TESTNET_API_URL: "https://testnet.toncenter.com/api/v2"
+      # Non-EVM Contract Addresses
+      SOLANA_ANCHOR_PROGRAM_ID: "FBcWmM1w7wJ9gmzEMNhDFCVKGryGaM8yYuDfjGpdD1Nc"
+      SOLANA_BLS_VERIFIER_PROGRAM_ID: "2uYnieNHceDYc1LWJsM11SYUK9hDCDrH5pfQjh5m2Hoa"
+      APTOS_ANCHOR_PACKAGE: "0xf3cb210860525f9137f0ba9a088124393e12ce6758ee08d167d92b779d9c5894"
+      APTOS_BLS_VERIFIER_PACKAGE: "0xf3cb210860525f9137f0ba9a088124393e12ce6758ee08d167d92b779d9c5894"
+      SUI_ANCHOR_PACKAGE: "0xf9f8f5c8349e04404631531f2420cd45805934839867daa1f4c043ec06b6ade2"
+      SUI_ANCHOR_STATE_OBJECT: "0xecc27b868c0dd75544068d7fc61657aee94aa7e348876ca2104cb9c45a4cfb9a"
+      SUI_BLS_VERIFIER_STATE: "0x9380a3764b1ca7a2cb7fb83cba0a7bca44aaf15b21fe8fce89f7859f35b5ba5b"
+      NEAR_ANCHOR_CONTRACT: "certen-anchor.testnet"
+      NEAR_BLS_VERIFIER_CONTRACT: "certen-bls-verifier.testnet"
+      TON_ANCHOR_CONTRACT: "kQCIMusQr3j4ExEfyX_W8c-B_n6zWQdjAkBovyKpP-wGWe7v"
+      TON_BLS_VERIFIER_CONTRACT: "kQDEy6Qaq_iptycLCngQeEGAX9f46UH_66cEQ6JjFqqi3and"
       LOG_LEVEL: info
       PROOF_CYCLE_WRITEBACK: "true"
       ACCUMULATE_SIGNER_URL: "acc://certen-kermit-12.acme/book/1"
@@ -461,12 +666,12 @@ services:
       ACCUMULATE_COMET_BVN1: http://206.191.154.164:16692
       ACCUMULATE_COMET_BVN2: http://206.191.154.164:16792
       ACCUMULATE_COMET_BVN3: http://206.191.154.164:16892
-      ETHEREUM_URL: https://eth-sepolia.g.alchemy.com/v2/aosGJNJkUckm6lCldSEmP
+      ETHEREUM_URL: https://sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a
       ETH_CHAIN_ID: "11155111"
       ETH_PRIVATE_KEY: "0xa17a541b422a30813dc1cec732ac6dfe7a1dd2784fe1bd54ef403ee3cb6ba785"
       CERTEN_CONTRACT_ADDRESS: "0x813e7F7EF2FfC14Aa9E86e2ababC49059495eC3C"
       # Multi-chain EVM support
-      ETHEREUM_SEPOLIA_RPC_URL: "https://eth-sepolia.g.alchemy.com/v2/aosGJNJkUckm6lCldSEmP"
+      ETHEREUM_SEPOLIA_RPC_URL: "https://sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a"
       SEPOLIA_ANCHORV4_ADDRESS: "0x813e7F7EF2FfC14Aa9E86e2ababC49059495eC3C"
       SEPOLIA_ANCHORV3_ADDRESS: "0xEb17eBd351D2e040a0cB3026a3D04BEc182d8b98"
       SEPOLIA_BLSZKVERIFIER_ADDRESS: "0x631B6444216b981561034655349F8a28962DcC5F"
@@ -493,9 +698,50 @@ services:
       TRON_SHASTA_ANCHORV4_ADDRESS: "0xca04231da28aab992fdffd3c9a7f8ddcd1f26027"
       TRON_SHASTA_BLSZKVERIFIER_ADDRESS: "0x069d4a29221d721a7af1e7229d5e30803609b420"
       TRON_SHASTA_ACCOUNTFACTORY_ADDRESS: "0xddbee4463bab94cfeea3516272f68f49d9936ce2"
+      # Polygon Amoy (Chain ID: 80002)
+      POLYGON_AMOY_RPC_URL: "https://rpc-amoy.polygon.technology"
+      POLYGON_AMOY_ANCHORV4_ADDRESS: "0x52E8e8E5d5EE35ED52BA6B7BB2Cb2dc2D2b2c952"
+      POLYGON_AMOY_BLSZKVERIFIER_ADDRESS: "0x488d2c2bB3d65a60eae9f72665fBaf191F38B7b7"
+      POLYGON_AMOY_ACCOUNTFACTORY_ADDRESS: "0x2e6037afFA783d487664b2440c691fc86Bc18A17"
+      # BSC Testnet (Chain ID: 97)
+      BSC_TESTNET_RPC_URL: "https://data-seed-prebsc-1-s1.binance.org:8545"
+      BSC_TESTNET_ANCHORV4_ADDRESS: "0x52E8e8E5d5EE35ED52BA6B7BB2Cb2dc2D2b2c952"
+      BSC_TESTNET_BLSZKVERIFIER_ADDRESS: "0x488d2c2bB3d65a60eae9f72665fBaf191F38B7b7"
+      BSC_TESTNET_ACCOUNTFACTORY_ADDRESS: "0x2e6037afFA783d487664b2440c691fc86Bc18A17"
+      # Moonbase Alpha (Chain ID: 1287)
+      MOONBASE_ALPHA_RPC_URL: "https://rpc.api.moonbase.moonbeam.network"
+      MOONBASE_ALPHA_ANCHORV4_ADDRESS: "0x52E8e8E5d5EE35ED52BA6B7BB2Cb2dc2D2b2c952"
+      MOONBASE_ALPHA_BLSZKVERIFIER_ADDRESS: "0x488d2c2bB3d65a60eae9f72665fBaf191F38B7b7"
+      MOONBASE_ALPHA_ACCOUNTFACTORY_ADDRESS: "0x2e6037afFA783d487664b2440c691fc86Bc18A17"
+      MOONBASE_GAS_LIMIT_ANCHOR: "2000000"
       ATTESTATION_PEERS: http://validator-1:8080,http://validator-2:8080,http://validator-3:8080,http://validator-4:8080,http://validator-5:8080,http://validator-7:8080
       ATTESTATION_REQUIRED_COUNT: "5"
       BLS_ZK_TESTING_MODE: "false"
+      # Non-EVM Chain Keys
+      SOLANA_PRIVATE_KEY: "36px7NV74BNCG9zKaNiPxPub8WmPnhJUK3fn6DiwgfefAycvjY1pfbddKREg2JyQ7Jvzbk3mQj6cZNW4LuyxYttV"
+      APTOS_PRIVATE_KEY: "0xb64ada1786fbe6d4d8427eabf3ffa244e51605452baa71d42c82b143272a1a44"
+      SUI_PRIVATE_KEY: "suiprivkey1qqnpua6tllsajhtf3pt2kkvyadh07rndg5ra8kudp837sa77dhaucfr33xj"
+      NEAR_SIGNER_ACCOUNT_ID: "certen-v6.testnet"
+      NEAR_PRIVATE_KEY: "ed25519:5xhDaJZFGM952QB5YDKMF8JVyiQWQRqJTbqeoHr56Vm7MVUbUkrjUQybexbAwqwF17KUfK5msjvbAyg7KiLssrVH"
+      TON_WALLET_MNEMONIC: "long patch hard tobacco keep common glad jungle shaft liar organ galaxy surround essay toward sadness kind family method amount runway couch struggle enough"
+      # Non-EVM RPC URLs
+      SOLANA_DEVNET_RPC_URL: "https://api.devnet.solana.com"
+      APTOS_TESTNET_RPC_URL: "https://fullnode.testnet.aptoslabs.com/v1"
+      SUI_TESTNET_RPC_URL: "https://fullnode.testnet.sui.io:443"
+      NEAR_TESTNET_RPC_URL: "https://rpc.testnet.near.org"
+      TON_TESTNET_API_URL: "https://testnet.toncenter.com/api/v2"
+      # Non-EVM Contract Addresses
+      SOLANA_ANCHOR_PROGRAM_ID: "FBcWmM1w7wJ9gmzEMNhDFCVKGryGaM8yYuDfjGpdD1Nc"
+      SOLANA_BLS_VERIFIER_PROGRAM_ID: "2uYnieNHceDYc1LWJsM11SYUK9hDCDrH5pfQjh5m2Hoa"
+      APTOS_ANCHOR_PACKAGE: "0xf3cb210860525f9137f0ba9a088124393e12ce6758ee08d167d92b779d9c5894"
+      APTOS_BLS_VERIFIER_PACKAGE: "0xf3cb210860525f9137f0ba9a088124393e12ce6758ee08d167d92b779d9c5894"
+      SUI_ANCHOR_PACKAGE: "0xf9f8f5c8349e04404631531f2420cd45805934839867daa1f4c043ec06b6ade2"
+      SUI_ANCHOR_STATE_OBJECT: "0xecc27b868c0dd75544068d7fc61657aee94aa7e348876ca2104cb9c45a4cfb9a"
+      SUI_BLS_VERIFIER_STATE: "0x9380a3764b1ca7a2cb7fb83cba0a7bca44aaf15b21fe8fce89f7859f35b5ba5b"
+      NEAR_ANCHOR_CONTRACT: "certen-anchor.testnet"
+      NEAR_BLS_VERIFIER_CONTRACT: "certen-bls-verifier.testnet"
+      TON_ANCHOR_CONTRACT: "kQCIMusQr3j4ExEfyX_W8c-B_n6zWQdjAkBovyKpP-wGWe7v"
+      TON_BLS_VERIFIER_CONTRACT: "kQDEy6Qaq_iptycLCngQeEGAX9f46UH_66cEQ6JjFqqi3and"
       LOG_LEVEL: info
       PROOF_CYCLE_WRITEBACK: "true"
       ACCUMULATE_SIGNER_URL: "acc://certen-kermit-12.acme/book/1"
@@ -544,12 +790,12 @@ services:
       ACCUMULATE_COMET_BVN1: http://206.191.154.164:16692
       ACCUMULATE_COMET_BVN2: http://206.191.154.164:16792
       ACCUMULATE_COMET_BVN3: http://206.191.154.164:16892
-      ETHEREUM_URL: https://eth-sepolia.g.alchemy.com/v2/aosGJNJkUckm6lCldSEmP
+      ETHEREUM_URL: https://sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a
       ETH_CHAIN_ID: "11155111"
       ETH_PRIVATE_KEY: "0xd16b58f60d3274cb85d62347a096e339d30d546d30da3e209ed2b4d330effa25"
       CERTEN_CONTRACT_ADDRESS: "0x813e7F7EF2FfC14Aa9E86e2ababC49059495eC3C"
       # Multi-chain EVM support
-      ETHEREUM_SEPOLIA_RPC_URL: "https://eth-sepolia.g.alchemy.com/v2/aosGJNJkUckm6lCldSEmP"
+      ETHEREUM_SEPOLIA_RPC_URL: "https://sepolia.infura.io/v3/134d77bd32a6425daa26c797b2f8b64a"
       SEPOLIA_ANCHORV4_ADDRESS: "0x813e7F7EF2FfC14Aa9E86e2ababC49059495eC3C"
       SEPOLIA_ANCHORV3_ADDRESS: "0xEb17eBd351D2e040a0cB3026a3D04BEc182d8b98"
       SEPOLIA_BLSZKVERIFIER_ADDRESS: "0x631B6444216b981561034655349F8a28962DcC5F"
@@ -576,9 +822,50 @@ services:
       TRON_SHASTA_ANCHORV4_ADDRESS: "0xca04231da28aab992fdffd3c9a7f8ddcd1f26027"
       TRON_SHASTA_BLSZKVERIFIER_ADDRESS: "0x069d4a29221d721a7af1e7229d5e30803609b420"
       TRON_SHASTA_ACCOUNTFACTORY_ADDRESS: "0xddbee4463bab94cfeea3516272f68f49d9936ce2"
+      # Polygon Amoy (Chain ID: 80002)
+      POLYGON_AMOY_RPC_URL: "https://rpc-amoy.polygon.technology"
+      POLYGON_AMOY_ANCHORV4_ADDRESS: "0x52E8e8E5d5EE35ED52BA6B7BB2Cb2dc2D2b2c952"
+      POLYGON_AMOY_BLSZKVERIFIER_ADDRESS: "0x488d2c2bB3d65a60eae9f72665fBaf191F38B7b7"
+      POLYGON_AMOY_ACCOUNTFACTORY_ADDRESS: "0x2e6037afFA783d487664b2440c691fc86Bc18A17"
+      # BSC Testnet (Chain ID: 97)
+      BSC_TESTNET_RPC_URL: "https://data-seed-prebsc-1-s1.binance.org:8545"
+      BSC_TESTNET_ANCHORV4_ADDRESS: "0x52E8e8E5d5EE35ED52BA6B7BB2Cb2dc2D2b2c952"
+      BSC_TESTNET_BLSZKVERIFIER_ADDRESS: "0x488d2c2bB3d65a60eae9f72665fBaf191F38B7b7"
+      BSC_TESTNET_ACCOUNTFACTORY_ADDRESS: "0x2e6037afFA783d487664b2440c691fc86Bc18A17"
+      # Moonbase Alpha (Chain ID: 1287)
+      MOONBASE_ALPHA_RPC_URL: "https://rpc.api.moonbase.moonbeam.network"
+      MOONBASE_ALPHA_ANCHORV4_ADDRESS: "0x52E8e8E5d5EE35ED52BA6B7BB2Cb2dc2D2b2c952"
+      MOONBASE_ALPHA_BLSZKVERIFIER_ADDRESS: "0x488d2c2bB3d65a60eae9f72665fBaf191F38B7b7"
+      MOONBASE_ALPHA_ACCOUNTFACTORY_ADDRESS: "0x2e6037afFA783d487664b2440c691fc86Bc18A17"
+      MOONBASE_GAS_LIMIT_ANCHOR: "2000000"
       ATTESTATION_PEERS: http://validator-1:8080,http://validator-2:8080,http://validator-3:8080,http://validator-4:8080,http://validator-5:8080,http://validator-6:8080
       ATTESTATION_REQUIRED_COUNT: "5"
       BLS_ZK_TESTING_MODE: "false"
+      # Non-EVM Chain Keys
+      SOLANA_PRIVATE_KEY: "34EYo81BmmCFf81JJQ6UcwunevQu6NYzA2MKoBVidhc2U8ZQFgCEt6v6QY3tLucvs4D1kEVYQK2qkyknYqrWneaA"
+      APTOS_PRIVATE_KEY: "0x50840e8db7e0c188be8897054b835654543af1c0cb56f89ba77f0efb5e772b5b"
+      SUI_PRIVATE_KEY: "suiprivkey1qr3fw606l3htvfyq690mdvpx4yee35ft9e9x99yega3pu3l55kj9sx3gnj7"
+      NEAR_SIGNER_ACCOUNT_ID: "certen-v7.testnet"
+      NEAR_PRIVATE_KEY: "ed25519:4bFnW8yyukhkYuUYeFE2f8KdH3tu59vVWjFYdCSzdr4UGnCfP8eahpS8H8rAM83KEd6SG96TCVSuvPZPwrSTc3jw"
+      TON_WALLET_MNEMONIC: "broccoli hard fragile country defy oven evidence okay balance inner dose common anchor super creek spoon shell sight million crisp glow clerk bind clump"
+      # Non-EVM RPC URLs
+      SOLANA_DEVNET_RPC_URL: "https://api.devnet.solana.com"
+      APTOS_TESTNET_RPC_URL: "https://fullnode.testnet.aptoslabs.com/v1"
+      SUI_TESTNET_RPC_URL: "https://fullnode.testnet.sui.io:443"
+      NEAR_TESTNET_RPC_URL: "https://rpc.testnet.near.org"
+      TON_TESTNET_API_URL: "https://testnet.toncenter.com/api/v2"
+      # Non-EVM Contract Addresses
+      SOLANA_ANCHOR_PROGRAM_ID: "FBcWmM1w7wJ9gmzEMNhDFCVKGryGaM8yYuDfjGpdD1Nc"
+      SOLANA_BLS_VERIFIER_PROGRAM_ID: "2uYnieNHceDYc1LWJsM11SYUK9hDCDrH5pfQjh5m2Hoa"
+      APTOS_ANCHOR_PACKAGE: "0xf3cb210860525f9137f0ba9a088124393e12ce6758ee08d167d92b779d9c5894"
+      APTOS_BLS_VERIFIER_PACKAGE: "0xf3cb210860525f9137f0ba9a088124393e12ce6758ee08d167d92b779d9c5894"
+      SUI_ANCHOR_PACKAGE: "0xf9f8f5c8349e04404631531f2420cd45805934839867daa1f4c043ec06b6ade2"
+      SUI_ANCHOR_STATE_OBJECT: "0xecc27b868c0dd75544068d7fc61657aee94aa7e348876ca2104cb9c45a4cfb9a"
+      SUI_BLS_VERIFIER_STATE: "0x9380a3764b1ca7a2cb7fb83cba0a7bca44aaf15b21fe8fce89f7859f35b5ba5b"
+      NEAR_ANCHOR_CONTRACT: "certen-anchor.testnet"
+      NEAR_BLS_VERIFIER_CONTRACT: "certen-bls-verifier.testnet"
+      TON_ANCHOR_CONTRACT: "kQCIMusQr3j4ExEfyX_W8c-B_n6zWQdjAkBovyKpP-wGWe7v"
+      TON_BLS_VERIFIER_CONTRACT: "kQDEy6Qaq_iptycLCngQeEGAX9f46UH_66cEQ6JjFqqi3and"
       LOG_LEVEL: info
       PROOF_CYCLE_WRITEBACK: "true"
       ACCUMULATE_SIGNER_URL: "acc://certen-kermit-12.acme/book/1"
