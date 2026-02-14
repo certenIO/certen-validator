@@ -120,9 +120,7 @@ func main() {
 		LogInfo("MAIN", "Running in test mode: %s", config.TestRunMode)
 		if err := runTestMode(config); err != nil {
 			LogError("MAIN", "Test execution failed: %v", err)
-			if !config.Quiet {
-				fmt.Fprintf(os.Stderr, "Test Error: %v\n", err)
-			}
+			fmt.Fprintf(os.Stderr, "Test Error: %v\n", err)
 			os.Exit(1)
 		}
 
@@ -138,9 +136,8 @@ func main() {
 	LogInfo("MAIN", "Running governance proof for level: %s", config.Level)
 	if err := runGovernanceProof(config); err != nil {
 		LogError("MAIN", "Governance proof failed: %v", err)
-		if !config.Quiet {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		}
+		// Always write to stderr so the parent process can capture the error via ExitError.Stderr
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 

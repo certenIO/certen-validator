@@ -422,11 +422,20 @@ func (sv *SignatureVerifier) ExtractSignatureFromMessageResult(msgResult map[str
 	}
 	sig.Signature = normalizedSig
 
-	// Transaction hash
+	// Transaction hash: check signature.transactionHash first (devnet),
+	// then fall back to message.txID which is acc://<txHash>@<scope> (Kermit/production)
 	txHash := pu.CaseInsensitiveGet(sigMap, "transactionHash")
 	txHashStr, ok := txHash.(string)
 	if !ok || txHashStr == "" {
-		return SignatureData{}, ValidationError{Msg: "Signature.transactionHash missing/invalid"}
+		// Fall back to message.txID: acc://<transactionHash>@<scope>
+		txID := pu.CaseInsensitiveGet(msgMap, "txID")
+		if txIDStr, ok2 := txID.(string); ok2 && txIDStr != "" {
+			uu := URLUtils{}
+			txHashStr, _ = uu.ParseAccURLHash(txIDStr)
+		}
+		if txHashStr == "" {
+			return SignatureData{}, ValidationError{Msg: "Signature.transactionHash missing and no message.txID fallback"}
+		}
 	}
 	normalizedTxHash, err := hv.RequireHex32(txHashStr, "signature.transactionHash")
 	if err != nil {
