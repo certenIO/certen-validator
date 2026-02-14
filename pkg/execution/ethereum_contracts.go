@@ -965,7 +965,7 @@ func (ecm *EthereumContractManager) buildComprehensiveProof(
 	// Generate ZK proof from BLS signature if prover is available
 	// Returns both the serialized proof bytes AND the pubkeyCommitment
 	// (a Groth16 public input that binds the proof to the validators' BLS keys)
-	zkProofBytes, pubkeyCommitment := ecm.generateBLSZKProof(blsSignatureBytes, messageHash, signedVotingPower, totalVotingPower)
+	zkProofBytes, _ := ecm.generateBLSZKProof(blsSignatureBytes, messageHash, signedVotingPower, totalVotingPower)
 
 	blsProof := contracts.BLSProofData{
 		AggregateSignature: zkProofBytes, // Use ZK proof bytes, not raw signature
@@ -973,7 +973,6 @@ func (ecm *EthereumContractManager) buildComprehensiveProof(
 		SignedVotingPower:  signedVotingPower,
 		ThresholdMet:       signedVotingPower.Cmp(new(big.Int).Mul(totalVotingPower, big.NewInt(2)).Div(new(big.Int).Mul(totalVotingPower, big.NewInt(2)), big.NewInt(3))) >= 0,
 		MessageHash:        messageHash,
-		PubkeyCommitment:   pubkeyCommitment,
 	}
 
 	// Build commitment data
