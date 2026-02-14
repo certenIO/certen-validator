@@ -16,8 +16,10 @@ package execution
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math/big"
 	"os"
 	"strconv"
@@ -1054,17 +1056,47 @@ func (btce *BFTTargetChainExecutor) executeTronOperations(
 		btce.logger.Printf("⚠️ [TRON-EXEC] Step 2 confirmation failed: %v", err)
 	}
 
-	// ========== Step 3: Execute governance (if applicable) ==========
+	// ========== Step 3: Execute via user's Abstract Account ==========
+	// CORRECT FLOW: Call executeGovernanceProofDirect on the USER'S abstract account,
+	// NOT executeWithGovernance on the anchor contract.
 	allLegs := btce.extractAllLegsFromIntent(legacyIntent)
 	govTxHash := ""
 	if len(allLegs) > 0 && allLegs[0].SourceAddress != (common.Address{}) {
-		btce.logger.Printf("🏦 [TRON-EXEC] Step 3: Executing governance for user account %s", allLegs[0].SourceAddress.Hex())
-		var govErr error
-		govTxHash, govErr = tronClient.ExecuteWithGovernance(ctx, anchorContract,
-			bundleIdHash, allLegs[0].Target.Hex(), allLegs[0].Value, allLegs[0].Data, feeLimit)
-		if govErr != nil {
-			btce.logger.Printf("⚠️ [TRON-EXEC] Step 3 failed: %v", govErr)
-			govTxHash = fmt.Sprintf("gov_failed_%s", chainCfg.Name)
+		userAccountAddr := allLegs[0].SourceAddress
+		btce.logger.Printf("🏦 [TRON-EXEC] Step 3: Executing governance proof direct on user account %s", userAccountAddr.Hex())
+
+		// Fetch stored commitments from anchor (read-only via /jsonrpc works on TRON)
+		anchorData, err := ethManager.anchor.GetAnchorFull(nil, bundleIdHash)
+		if err != nil {
+			btce.logger.Printf("⚠️ [TRON-EXEC] Step 3: Failed to fetch anchor commitments: %v", err)
+			govTxHash = fmt.Sprintf("gov_failed_anchor_read_%s", chainCfg.Name)
+		} else {
+			// Build AccountProof with 4-leaf merkle proof (same logic as EVM buildAccountProof)
+			accountProof := btce.buildTronAccountProof(
+				bundleIdHash,
+				certenProof,
+				adiURL,
+				anchorData.OperationCommitment,
+				anchorData.CrossChainCommitment,
+				anchorData.GovernanceRoot,
+			)
+
+			// Convert user account address to TRON 41-prefix hex for the HTTP API call
+			userAccountHex := "0x" + hex.EncodeToString(userAccountAddr.Bytes())
+
+			var govErr error
+			govTxHash, govErr = tronClient.ExecuteGovernanceProofDirect(ctx,
+				userAccountHex,
+				allLegs[0].Target.Hex(),
+				allLegs[0].Value,
+				allLegs[0].Data,
+				accountProof,
+				feeLimit,
+			)
+			if govErr != nil {
+				btce.logger.Printf("⚠️ [TRON-EXEC] Step 3 failed: %v", govErr)
+				govTxHash = fmt.Sprintf("gov_failed_%s", chainCfg.Name)
+			}
 		}
 	} else {
 		govTxHash = "no_governance_needed"
@@ -1076,6 +1108,69 @@ func (btce *BFTTargetChainExecutor) executeTronOperations(
 	}
 
 	return btce.buildTronResult(chainCfg, intentID, anchorID, createTxHash, verifyTxHash, govTxHash, true), nil
+}
+
+// buildTronAccountProof constructs the AccountProof struct for CertenAccountV2 on TRON.
+// Mirrors EVM's buildAccountProof — computes a 4-leaf merkle proof for adiURL verification.
+//
+// Merkle Tree Structure:
+//
+//	          root
+//	        /      \
+//	   hash01      hash23
+//	  /    \      /    \
+//	adiHash  op   cc    gov
+//
+// To prove adiHash, we need: [op, hash23]
+func (btce *BFTTargetChainExecutor) buildTronAccountProof(
+	bundleID [32]byte,
+	certenProof *proof.CertenProof,
+	adiURL string,
+	opCommitment [32]byte,
+	ccCommitment [32]byte,
+	govRoot [32]byte,
+) contracts.AccountProof {
+	// proof[0] = operationCommitment (sibling at level 0)
+	var merkleProof [][32]byte
+	merkleProof = append(merkleProof, opCommitment)
+
+	// proof[1] = sortedHash(ccCommitment, govRoot) (sibling at level 1)
+	hash23 := sortedHash(ccCommitment[:], govRoot[:])
+	var hash23Arr [32]byte
+	copy(hash23Arr[:], hash23)
+	merkleProof = append(merkleProof, hash23Arr)
+
+	log.Printf("🌳 [TRON-MERKLE] Built 4-leaf proof for adiURL verification:")
+	log.Printf("   adiURL: %s", adiURL)
+	log.Printf("   proof[0] (op): 0x%x", opCommitment[:8])
+	log.Printf("   proof[1] (hash23): 0x%x", hash23Arr[:8])
+
+	// Set expiration (1 hour from now)
+	expiresAt := big.NewInt(time.Now().Add(1 * time.Hour).Unix())
+
+	// Build validator signatures from BLS aggregate signature
+	var validatorSigs []byte
+	if certenProof != nil && certenProof.BLSAggregateSignature != "" {
+		sigHex := strings.TrimPrefix(certenProof.BLSAggregateSignature, "0x")
+		sigBytes, err := hex.DecodeString(sigHex)
+		if err == nil {
+			validatorSigs = sigBytes
+		}
+	}
+
+	return contracts.AccountProof{
+		AdiURL:              adiURL,
+		AnchorId:            bundleID,
+		MerkleProof:         merkleProof,
+		KeyBookProof:        []byte{},
+		RoleProof:           []byte{},
+		ThresholdProof:      []byte{},
+		Timestamp:           big.NewInt(time.Now().Unix()),
+		ExpiresAt:           expiresAt,
+		ValidatorSignatures: validatorSigs,
+		Nonce:               big.NewInt(0),
+		RequiredLevel:       1, // G1 governance level
+	}
 }
 
 // buildTronResult creates a TargetChainExecutionResult for TRON operations

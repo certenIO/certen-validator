@@ -200,6 +200,55 @@ func (tc *TronClient) ExecuteWithGovernance(
 	return txID, nil
 }
 
+// ExecuteGovernanceProofDirect calls executeGovernanceProofDirect on the user's
+// Abstract Account contract (NOT the anchor contract). This is Step 3 of the
+// anchor workflow — the user's account verifies the governance proof and
+// forwards the call to the final target.
+func (tc *TronClient) ExecuteGovernanceProofDirect(
+	ctx context.Context,
+	userAccountAddress string,
+	target string,
+	value *big.Int,
+	data []byte,
+	accountProof contracts.AccountProof,
+	feeLimit int64,
+) (string, error) {
+	log.Printf("📡 [TRON] Executing governance proof direct on user account...")
+	log.Printf("   User Account: %s", userAccountAddress)
+	log.Printf("   Target: %s", target)
+	log.Printf("   Value: %s wei", value.String())
+
+	// Parse account ABI for encoding the function call
+	accountABI, err := abi.JSON(strings.NewReader(contracts.CertenAccountV2ABI))
+	if err != nil {
+		return "", fmt.Errorf("failed to parse account ABI: %w", err)
+	}
+
+	// ABI-encode the call: executeGovernanceProofDirect(target, value, data, proof)
+	targetAddr := toEthAddress(target)
+	calldata, err := accountABI.Pack("executeGovernanceProofDirect", targetAddr, value, data, accountProof)
+	if err != nil {
+		return "", fmt.Errorf("ABI encoding failed: %w", err)
+	}
+
+	paramHex := hex.EncodeToString(calldata[4:])
+
+	txResult, err := tc.triggerSmartContract(ctx, userAccountAddress,
+		"executeGovernanceProofDirect(address,uint256,bytes,(string,bytes32,bytes32[],bytes,bytes,bytes,uint256,uint256,bytes,uint256,uint8))",
+		paramHex, feeLimit)
+	if err != nil {
+		return "", fmt.Errorf("triggerSmartContract failed: %w", err)
+	}
+
+	txID, err := tc.signAndBroadcast(ctx, txResult)
+	if err != nil {
+		return "", fmt.Errorf("sign/broadcast failed: %w", err)
+	}
+
+	log.Printf("✅ [TRON] Governance proof direct executed: txID=%s", txID)
+	return txID, nil
+}
+
 // WaitForConfirmation polls for transaction confirmation.
 func (tc *TronClient) WaitForConfirmation(ctx context.Context, txID string, timeout time.Duration) (map[string]interface{}, error) {
 	deadline := time.Now().Add(timeout)
