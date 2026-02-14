@@ -311,14 +311,17 @@ func NewEthereumContractManager(config *CertenContractConfig) (*EthereumContract
 	auth.GasLimit = config.GasLimit
 
 	// Set dynamic gas price based on network conditions
-	// Use network-suggested price, capped by MaxGasPriceGwei
+	// Use network-suggested price with 20% buffer for L2 base fee fluctuation, capped by MaxGasPriceGwei
 	gasPrice, err := client.SuggestGasPrice(context.Background())
 	if err == nil {
+		// Add 20% buffer to handle base fee increases between suggestion and inclusion
+		buffered := new(big.Int).Mul(gasPrice, big.NewInt(120))
+		buffered.Div(buffered, big.NewInt(100))
 		maxGasPrice := big.NewInt(config.MaxGasPriceGwei * 1e9) // Convert to wei
-		if gasPrice.Cmp(maxGasPrice) > 0 {
-			gasPrice = maxGasPrice
+		if buffered.Cmp(maxGasPrice) > 0 {
+			buffered = maxGasPrice
 		}
-		auth.GasPrice = gasPrice
+		auth.GasPrice = buffered
 	} else {
 		// Fallback: use MaxGasPriceGwei or 1 gwei if not set
 		fallback := config.MaxGasPriceGwei
