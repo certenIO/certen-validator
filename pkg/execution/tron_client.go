@@ -141,7 +141,7 @@ func (tc *TronClient) ExecuteComprehensiveProof(
 
 	txResult, err := tc.triggerSmartContract(ctx, contractAddress,
 		// Must match exact Solidity signature for TRON's ABI parsing
-		"executeComprehensiveProof(bytes32,(bytes32,bytes32,bytes32[],bytes32,(string,bytes32,bytes32[],address,uint8,uint256,uint256,uint256,bool),(bytes,address[],uint256[],uint256,uint256,bool,bytes32,bytes32),(bytes32,bytes32,bytes32,string,uint256,bytes32,string,address),uint256,bytes))",
+		"executeComprehensiveProof(bytes32,(bytes32,bytes32,bytes32[],bytes32,(string,bytes32,bytes32[],address,uint8,uint256,uint256,uint256,bool),(bytes,address[],uint256[],uint256,uint256,bool,bytes32),(bytes32,bytes32,bytes32,string,uint256,bytes32,string,address),uint256,bytes))",
 		paramHex, feeLimit)
 	if err != nil {
 		return "", fmt.Errorf("triggerSmartContract failed: %w", err)
