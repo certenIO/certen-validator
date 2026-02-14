@@ -30,12 +30,17 @@ import (
 	"github.com/certen/independant-validator/pkg/proof"
 )
 
-// getTargetChainConfig loads target chain configuration from environment
-func getTargetChainConfig() (string, int64) {
-	// Load from environment or use defaults for Sepolia testnet
-	orgADI := os.Getenv("ORGANIZATION_ADI")
-	if orgADI == "" {
-		orgADI = "acc://certen-demo-13112025.acme" // Fallback for development
+// getTargetChainConfig derives org ADI from accountURL and loads chain config
+func getTargetChainConfig(accountURL string) (string, int64) {
+	// Derive org ADI from accountURL (e.g. "acc://certen-kermit-004.acme/data" → "acc://certen-kermit-004.acme")
+	orgADI := ""
+	if accountURL != "" && strings.HasPrefix(accountURL, "acc://") {
+		hostPart := accountURL[len("acc://"):]
+		if idx := strings.Index(hostPart, "/"); idx > 0 {
+			orgADI = "acc://" + hostPart[:idx]
+		} else {
+			orgADI = accountURL
+		}
 	}
 
 	chainID := int64(11155111) // Sepolia default
@@ -847,8 +852,8 @@ func (btce *BFTTargetChainExecutor) getContractManagerForChain(
 // Until the Solidity ABI matches native BFT structures, we need to convert
 // BFT parameters back into legacy intent.CertenIntent format for contract calls.
 func (btce *BFTTargetChainExecutor) convertToLegacyIntent(intentID, transactionHash, accountURL string, certenProof *proof.CertenProof) *intent.CertenIntent {
-	// Load configuration from environment
-	orgADI, _ := getTargetChainConfig()
+	// Derive org ADI from accountURL (not hardcoded fallback)
+	orgADI, _ := getTargetChainConfig(accountURL)
 
 	// CRITICAL FIX: Use the original CrossChainData if available
 	// This ensures executeWithGovernance uses the correct target address (leg.To)

@@ -894,10 +894,7 @@ func (ecm *EthereumContractManager) buildComprehensiveProof(
 	proofHashes := ecm.extractMerkleProofHashes(certenProof)
 
 	// Build governance proof data
-	orgADI := os.Getenv("ORGANIZATION_ADI")
-	if orgADI == "" {
-		orgADI = "acc://certen-demo-13112025.acme"
-	}
+	orgADI := certenIntent.OrganizationADI
 
 	// CRITICAL FIX: Contract's _verifyGovernanceProof() requires:
 	// 1. keyBookRoot != bytes32(0) OR keyPageProofs.length > 0 (for G1+ verification)
@@ -1448,11 +1445,7 @@ func (ecm *EthereumContractManager) convertToContractProof(
 	// Generate commitment hash
 	commitmentHash := ecm.generateCommitmentHash(certenIntent, anchorResult)
 
-	// Load governance configuration from environment
-	orgADI := os.Getenv("ORGANIZATION_ADI")
-	if orgADI == "" {
-		orgADI = "acc://certen-demo-13112025.acme" // Fallback for development
-	}
+	orgADI := certenIntent.OrganizationADI
 
 	// Create governance proof
 	govProof := GovernanceProofStruct{
@@ -1515,11 +1508,7 @@ func (ecm *EthereumContractManager) convertToADIGovernanceProof(
 	// Generate anchor ID
 	anchorID := ecm.generateAnchorID(certenIntent, certenProof)
 
-	// Load organization ADI from environment
-	orgADI := os.Getenv("ORGANIZATION_ADI")
-	if orgADI == "" {
-		orgADI = "acc://certen-demo-13112025.acme" // Fallback for development
-	}
+	orgADI := certenIntent.OrganizationADI
 
 	keyBookProof := KeyBookProofStruct{
 		KeyBookURL:   fmt.Sprintf("%s/book", orgADI),
