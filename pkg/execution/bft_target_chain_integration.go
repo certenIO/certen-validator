@@ -26,6 +26,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
+	"github.com/mr-tron/base58"
 
 	"github.com/certen/independant-validator/pkg/anchor"
 	"github.com/certen/independant-validator/pkg/config"
@@ -730,7 +731,7 @@ func (btce *BFTTargetChainExecutor) extractAllLegsFromIntent(legacyIntent *inten
 	for i, leg := range crossChainData.Legs {
 		targetAddress := defaultTarget
 		if leg.To != "" {
-			targetAddress = common.HexToAddress(leg.To)
+			targetAddress = parseChainAddress(leg.To)
 		}
 
 		value := defaultValue
@@ -763,7 +764,7 @@ func (btce *BFTTargetChainExecutor) extractAllLegsFromIntent(legacyIntent *inten
 		// Extract source address (user's Abstract Account)
 		sourceAddress := common.Address{}
 		if leg.From != "" {
-			sourceAddress = common.HexToAddress(leg.From)
+			sourceAddress = parseChainAddress(leg.From)
 		}
 
 		btce.logger.Printf("   🦵 Leg %d (%s): chain=%s chainId=%d from=%s target=%s value=%s wei",
@@ -780,6 +781,29 @@ func (btce *BFTTargetChainExecutor) extractAllLegsFromIntent(legacyIntent *inten
 	}
 
 	return legs
+}
+
+// tronBase58ToAddress converts a TRON base58check address (T...) to common.Address.
+// TRON base58check: base58decode → 21 bytes (0x41 + 20-byte address) + 4-byte checksum.
+func tronBase58ToAddress(addr string) (common.Address, error) {
+	decoded, err := base58.Decode(addr)
+	if err != nil {
+		return common.Address{}, fmt.Errorf("base58 decode failed: %w", err)
+	}
+	if len(decoded) < 25 || decoded[0] != 0x41 {
+		return common.Address{}, fmt.Errorf("invalid TRON address: len=%d prefix=0x%x", len(decoded), decoded[0])
+	}
+	return common.BytesToAddress(decoded[1:21]), nil
+}
+
+// parseChainAddress parses an address string that may be hex (0x...) or TRON base58 (T...).
+func parseChainAddress(addr string) common.Address {
+	if strings.HasPrefix(addr, "T") && len(addr) == 34 {
+		if parsed, err := tronBase58ToAddress(addr); err == nil {
+			return parsed
+		}
+	}
+	return common.HexToAddress(addr)
 }
 
 // extractTargetParamsFromIntent extracts target address, value, and calldata from intent (first leg only)

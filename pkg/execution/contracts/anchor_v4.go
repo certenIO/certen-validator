@@ -331,6 +331,7 @@ func ConvertFromExtended(proof ComprehensiveCertenProof) CertenProof {
 			SignedVotingPower:  proof.BLSProof.SignedVotingPower,
 			ThresholdMet:       proof.BLSProof.ThresholdMet,
 			MessageHash:        proof.BLSProof.MessageHash,
+			PubkeyCommitment:   proof.BLSProof.PubkeyCommitment,
 		},
 		Commitments: Commitment{
 			OperationCommitment:  proof.Commitments.OperationCommitment,

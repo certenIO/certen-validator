@@ -79,6 +79,9 @@ type BLSProofData struct {
 
 	// Message that was signed
 	MessageHash [32]byte `json:"messageHash"`
+
+	// Public key commitment for BLS ZK verification
+	PubkeyCommitment [32]byte `json:"pubkeyCommitment"`
 }
 
 // CommitmentData contains cross-chain commitment information
