@@ -294,7 +294,9 @@ func (btce *BFTTargetChainExecutor) ExecuteTargetChainOperations(
 
 	// Execute based on target chain - all EVM chains use executeEthereumOperations
 	switch targetChain {
-	case "ethereum", "eth", "sepolia", "arbitrum", "arb", "optimism", "op", "base", "polygon", "matic":
+	case "ethereum", "eth", "sepolia", "arbitrum", "arb", "optimism", "op", "base", "polygon", "matic",
+		"tron", "tron shasta", "tron shasta testnet", "tron nile", "tron mainnet",
+		"bsc", "bsc testnet", "binance", "moonbeam", "moonbase", "moonbeam moonbase alpha":
 		return btce.executeEthereumOperations(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, targetChainID)
 	default:
 		// Try EVM execution for unknown chains if they have a valid chain ID
