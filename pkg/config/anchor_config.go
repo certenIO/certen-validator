@@ -1183,7 +1183,7 @@ func loadEVMChainsFromEnv() map[int64]*EVMChainConfig {
 			AccountFactory:     getEnv("TRON_SHASTA_ACCOUNTFACTORY_ADDRESS", "0xddbee4463bab94cfeea3516272f68f49d9936ce2"),
 			MaxGasPriceGwei:    getEnvInt64("TRON_MAX_GAS_PRICE_GWEI", 420),
 			MaxPriorityFeeGwei: 0,
-			GasLimitAnchor:     getEnvInt64("TRON_GAS_LIMIT_ANCHOR", 1000000),
+			GasLimitAnchor:     getEnvInt64("TRON_GAS_LIMIT_ANCHOR", 10000000),
 			ExplorerURL:        "https://shasta.tronscan.org",
 		}
 	}
