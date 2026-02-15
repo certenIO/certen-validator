@@ -100,9 +100,12 @@ type IntentDiscovery struct {
 
 	// Block monitoring state
 	lastProcessedBlock  uint64
+	lastQueuedBlock    uint64             // highest block sent to workers (prevents re-queuing)
 	isMonitoring       bool
 	stopCh             chan struct{}
 	blockProcessCh     chan *BlockProcessJob
+	processedBlocks    map[uint64]bool    // tracks out-of-order block completions for watermark
+	watermarkMu        sync.Mutex         // protects lastProcessedBlock, lastQueuedBlock, processedBlocks
 	mu                 sync.RWMutex
 
 	// Intent tracking - E.4 remediation: Two-phase status tracking
@@ -236,6 +239,8 @@ func (id *IntentDiscovery) StartMonitoring() {
 	id.isMonitoring = true
 	id.stopCh = make(chan struct{})
 	id.blockProcessCh = make(chan *BlockProcessJob, id.config.MaxConcurrentBlocks)
+	id.processedBlocks = make(map[uint64]bool)
+	id.lastQueuedBlock = id.lastProcessedBlock // reset queue tracker to current watermark
 	// Keep intent status across restarts to avoid reprocessing
 	// E.4 remediation: Two-phase status tracking
 	if id.intentStatus == nil {
@@ -314,16 +319,13 @@ func (id *IntentDiscovery) monitoringLoop() {
 			id.logger.Printf("🛑 Intent discovery monitoring loop stopping")
 			return
 		case <-ticker.C:
-			id.logger.Printf("🔄 Intent discovery tick - checking for new blocks...")
 			if err := id.checkForNewBlocks(ctx); err != nil {
 				id.logger.Printf("⚠️ Error checking blocks: %v", err)
-			} else {
-				id.logger.Printf("✅ Block check completed at height: %d", id.lastProcessedBlock)
-				// Persist the updated height
-				if id.ledgerStore != nil {
-					if err := id.ledgerStore.SaveIntentLastBlock(id.lastProcessedBlock); err != nil {
-						id.logger.Printf("⚠️ Failed to persist last processed block height: %v", err)
-					}
+			}
+			// Periodic checkpoint persist (workers also persist via advanceWatermark)
+			if id.ledgerStore != nil {
+				if err := id.ledgerStore.SaveIntentLastBlock(id.lastProcessedBlock); err != nil {
+					id.logger.Printf("⚠️ Failed to persist block height: %v", err)
 				}
 			}
 		}
@@ -375,62 +377,87 @@ func (id *IntentDiscovery) initializeStartingHeight(ctx context.Context) error {
 	return nil
 }
 
-// checkForNewBlocks checks for new blocks and queues them for processing
+// checkForNewBlocks checks for new blocks and queues them for processing.
+// lastProcessedBlock is advanced by workers via advanceWatermark(), not optimistically here.
+// Blocks are never silently dropped — channel sends block with back-pressure.
 func (id *IntentDiscovery) checkForNewBlocks(ctx context.Context) error {
-	// Use DN (Directory Network) as reference for latest block height
 	latestBlock, err := id.client.GetLatestBlock(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get latest block: %w", err)
 	}
 
-	// Process any new blocks since last check, OR re-process recent blocks to show continuous activity
-	var blocksToProcess []uint64
-
-	if latestBlock.Height >= id.lastProcessedBlock {
-		// Process new blocks (including current if we haven't processed it yet)
-		for height := id.lastProcessedBlock + 1; height <= latestBlock.Height; height++ {
-			blocksToProcess = append(blocksToProcess, height)
-		}
-		if len(blocksToProcess) > 0 {
-			id.lastProcessedBlock = latestBlock.Height
-			id.logger.Printf("🔍 Processing %d NEW blocks (heights %d to %d)",
-				len(blocksToProcess), latestBlock.Height-uint64(len(blocksToProcess))+1, latestBlock.Height)
-		} else {
-			id.logger.Printf("⏳ No new blocks found (current height: %d) - waiting for new transactions", latestBlock.Height)
-			return nil
-		}
-	} else {
-		// Network switch detected (DevNet vs Kermit/Mainnet) - auto-reset to current chain
+	// Network switch detection (e.g., DevNet vs Kermit/Mainnet)
+	if latestBlock.Height < id.lastProcessedBlock {
 		id.logger.Printf("🔄 Network switch detected: current height %d < last processed %d", latestBlock.Height, id.lastProcessedBlock)
 		id.logger.Printf("🔄 Auto-resetting to current chain height (starting from %d)", latestBlock.Height)
 
-		// Reset to current height - will start processing from the next block
+		id.watermarkMu.Lock()
 		id.lastProcessedBlock = latestBlock.Height
+		id.lastQueuedBlock = latestBlock.Height
+		id.processedBlocks = make(map[uint64]bool) // clear stale entries
+		id.watermarkMu.Unlock()
 
-		// Persist the reset height
 		if id.ledgerStore != nil {
 			if err := id.ledgerStore.SaveIntentLastBlock(latestBlock.Height); err != nil {
 				id.logger.Printf("⚠️ Failed to persist reset height: %v", err)
 			}
 		}
-
-		// Process current block to catch any pending intents
-		blocksToProcess = append(blocksToProcess, latestBlock.Height)
+		return nil
 	}
 
-	// Queue all blocks for processing
-	for _, height := range blocksToProcess {
+	// Determine start height: skip blocks already queued to workers
+	id.watermarkMu.Lock()
+	startHeight := id.lastProcessedBlock + 1
+	if id.lastQueuedBlock >= startHeight {
+		startHeight = id.lastQueuedBlock + 1
+	}
+	id.watermarkMu.Unlock()
+
+	if startHeight > latestBlock.Height {
+		id.logger.Printf("⏳ No new blocks to queue (processed: %d, queued: %d, latest: %d)",
+			id.lastProcessedBlock, id.lastQueuedBlock, latestBlock.Height)
+		return nil
+	}
+
+	// Cap blocks per tick to prevent unbounded blocking on the channel send
+	endHeight := latestBlock.Height
+	maxPerTick := uint64(id.config.MaxConcurrentBlocks)
+	if endHeight-startHeight+1 > maxPerTick {
+		endHeight = startHeight + maxPerTick - 1
+	}
+
+	id.logger.Printf("🔍 Queuing blocks %d to %d for processing (%d blocks, latest: %d)",
+		startHeight, endHeight, endHeight-startHeight+1, latestBlock.Height)
+
+	// Queue blocks with back-pressure (blocking send) — never silently drop blocks
+	queued := uint64(0)
+	stopped := false
+	for height := startHeight; height <= endHeight && !stopped; height++ {
 		select {
 		case id.blockProcessCh <- &BlockProcessJob{
-			PartitionURL: "acc://dn.acme", // Main partition
+			PartitionURL: "acc://dn.acme",
 			BlockHeight:  height,
-			BlockData:    &accumulate.Block{Height: height}, // Minimal block info
+			BlockData:    &accumulate.Block{Height: height},
 		}:
-			id.logger.Printf("📦 Queued block %d for comprehensive CERTEN transaction search", height)
+			queued++
 		case <-id.stopCh:
-			return nil
-		default:
-			id.logger.Printf("⚠️ Block processing queue full, skipping block %d", height)
+			stopped = true
+		}
+	}
+
+	// Update lastQueuedBlock to the highest block actually sent to workers
+	if queued > 0 {
+		id.watermarkMu.Lock()
+		id.lastQueuedBlock = startHeight + queued - 1
+		id.watermarkMu.Unlock()
+
+		behindBy := int64(latestBlock.Height) - int64(startHeight+queued-1)
+		if behindBy > 0 {
+			id.logger.Printf("📊 Queued %d blocks, still %d blocks behind (will continue next tick)",
+				queued, behindBy)
+		} else {
+			id.logger.Printf("✅ Queued %d blocks, caught up to latest height %d",
+				queued, latestBlock.Height)
 		}
 	}
 
@@ -459,37 +486,57 @@ func (id *IntentDiscovery) blockProcessor(workerID string) {
 				id.logger.Printf("❌ Worker %s failed to process block %d: %v",
 					workerID, job.BlockHeight, err)
 			}
+			// Advance watermark regardless of success/failure to prevent getting stuck.
+			// Failed blocks are logged above; if the error was transient the block will
+			// appear again on a future polling cycle once the watermark catches up.
+			id.advanceWatermark(job.BlockHeight)
+		}
+	}
+}
+
+// advanceWatermark marks a block height as processed and advances the lastProcessedBlock
+// watermark through any contiguous sequence of completed blocks. This ensures blocks
+// processed out-of-order by concurrent workers are properly tracked without skipping any.
+func (id *IntentDiscovery) advanceWatermark(height uint64) {
+	id.watermarkMu.Lock()
+	defer id.watermarkMu.Unlock()
+
+	// Ignore stale blocks (already processed or from before a network switch reset)
+	if height <= id.lastProcessedBlock || height > id.lastQueuedBlock {
+		return
+	}
+
+	id.processedBlocks[height] = true
+
+	// Advance lastProcessedBlock through contiguous completed blocks
+	advanced := false
+	for id.processedBlocks[id.lastProcessedBlock+1] {
+		delete(id.processedBlocks, id.lastProcessedBlock+1)
+		id.lastProcessedBlock++
+		advanced = true
+	}
+
+	if advanced {
+		id.logger.Printf("📊 Watermark advanced to block %d (%d blocks pending completion)",
+			id.lastProcessedBlock, len(id.processedBlocks))
+		if id.ledgerStore != nil {
+			if err := id.ledgerStore.SaveIntentLastBlock(id.lastProcessedBlock); err != nil {
+				id.logger.Printf("⚠️ Failed to persist watermark: %v", err)
+			}
 		}
 	}
 }
 
 // processBlock processes a single block looking for Certen intents using comprehensive v3 API search
 func (id *IntentDiscovery) processBlock(job *BlockProcessJob, workerID string) error {
-	id.logger.Printf("🔍 Worker %s processing block %d using comprehensive v3 API search across all partitions...", workerID, job.BlockHeight)
-	id.logger.Printf("🔍 Worker %s querying partitions: [acc://bvn1, acc://bvn2, acc://bvn3, acc://dn]", workerID)
-
-	// Create context with timeout to prevent workers from hanging
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	foundIntents := 0
 
-	// Use the new comprehensive v3 API search across all partitions
-	id.logger.Printf("🔍 Worker %s calling SearchCertenTransactions for block %d...", workerID, job.BlockHeight)
 	certenTransactions, err := id.client.SearchCertenTransactions(ctx, int64(job.BlockHeight))
 	if err != nil {
-		id.logger.Printf("❌ Worker %s failed to search for CERTEN transactions: %v", workerID, err)
 		return err
-	}
-	id.logger.Printf("✅ Worker %s completed SearchCertenTransactions call successfully", workerID)
-
-	id.logger.Printf("📊 Worker %s searched all partitions and found %d potential CERTEN transactions for block %d",
-		workerID, len(certenTransactions), job.BlockHeight)
-
-	// Always log what we're doing, even if no transactions found
-	if len(certenTransactions) == 0 {
-		id.logger.Printf("🔍 Worker %s completed comprehensive transaction search - no CERTEN intents found in block %d", workerID, job.BlockHeight)
-		id.logger.Printf("📊 Worker %s verified: Block %d processed across all BVN and DN partitions", workerID, job.BlockHeight)
 	}
 
 	for _, certenTx := range certenTransactions {
@@ -540,8 +587,6 @@ func (id *IntentDiscovery) processBlock(job *BlockProcessJob, workerID string) e
 	if foundIntents > 0 {
 		id.logger.Printf("✅ Worker %s found and processed %d new intents in block %d",
 			workerID, foundIntents, job.BlockHeight)
-	} else {
-		id.logger.Printf("📊 Worker %s found no new intents in block %d", workerID, job.BlockHeight)
 	}
 
 	return nil

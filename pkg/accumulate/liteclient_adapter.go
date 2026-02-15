@@ -26,8 +26,9 @@ import (
 // LiteClientAdapter wraps the Accumulate lite client for our validator service
 // This is the CANONICAL implementation of the accumulate.Client interface
 type LiteClientAdapter struct {
-	client *api.Client
-	config *LiteClientConfig
+	client     *api.Client
+	config     *LiteClientConfig
+	httpClient *http.Client // reused across all v3 API calls for TCP connection pooling
 
 	// Partition discovery cache - dynamically discovers partitions from network-status API
 	partitionsMu      sync.RWMutex
@@ -86,6 +87,14 @@ func NewLiteClientAdapter(config *LiteClientConfig) (*LiteClientAdapter, error) 
 	return &LiteClientAdapter{
 		client: client,
 		config: config,
+		httpClient: &http.Client{
+			Timeout: config.RequestTimeout,
+			Transport: &http.Transport{
+				MaxIdleConns:        20,
+				MaxIdleConnsPerHost: 10,
+				IdleConnTimeout:     90 * time.Second,
+			},
+		},
 	}, nil
 }
 
@@ -112,7 +121,6 @@ func (l *LiteClientAdapter) getPartitions(ctx context.Context) ([]string, error)
 		partitions := make([]string, len(l.cachedPartitions))
 		copy(partitions, l.cachedPartitions)
 		l.partitionsMu.RUnlock()
-		log.Printf("🔄 [PARTITION-DISCOVERY] Using cached partitions (%d partitions, age=%v)", len(partitions), time.Since(l.partitionsCacheAt))
 		return partitions, nil
 	}
 	stalePartitions := l.cachedPartitions
@@ -206,44 +214,59 @@ func (l *LiteClientAdapter) constructPartitionLedgerURL(partitionID string) stri
 // SearchCertenTransactions searches for CERTEN_INTENT transactions across DN and all BVN partitions
 // Scans both DN (for anchored transactions) and all BVNs (for direct transactions) with expand=true
 func (l *LiteClientAdapter) SearchCertenTransactions(ctx context.Context, blockHeight int64) ([]*CertenTransaction, error) {
-	log.Printf("🔍 [CERTEN-SEARCH] Searching DN + all BVNs at block %d with expand=true for CERTEN_INTENT", blockHeight)
-
-	var allTransactions []*CertenTransaction
-
 	// Dynamically discover partitions from network-status API
 	partitions, err := l.getPartitions(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to discover partitions: %w", err)
 	}
 
+	// Query all partitions in parallel to reduce per-block latency
+	type partitionResult struct {
+		transactions []*CertenTransaction
+		err          error
+		partition    string
+	}
+	results := make(chan partitionResult, len(partitions))
+
 	for _, partition := range partitions {
-		blocks, err := l.queryMinorBlocks(ctx, partition, blockHeight)
-		if err != nil {
-			log.Printf("⚠️ [CERTEN-SEARCH] Failed to query %s block %d: %v", partition, blockHeight, err)
-			continue
-		}
-
-		if len(blocks) == 0 {
-			log.Printf("📊 [CERTEN-SEARCH] No block found at height %d on %s", blockHeight, partition)
-			continue
-		}
-
-		block := blocks[0]
-		log.Printf("📊 [CERTEN-SEARCH] %s block %d has %d entries", partition, blockHeight, len(block.Entries))
-
-		for _, entry := range block.Entries {
-			if !l.isCertenTransaction(entry) {
-				continue
+		go func(p string) {
+			blocks, err := l.queryMinorBlocks(ctx, p, blockHeight)
+			if err != nil {
+				results <- partitionResult{partition: p, err: err}
+				return
 			}
-			certenTx := l.parseCertenTransaction(entry, block, partition)
-			if certenTx != nil {
-				allTransactions = append(allTransactions, certenTx)
-				log.Printf("🎯 [CERTEN-SEARCH] Found CERTEN transaction %s in %s block %d", certenTx.Hash, partition, blockHeight)
+			var txs []*CertenTransaction
+			if len(blocks) > 0 {
+				for _, entry := range blocks[0].Entries {
+					if !l.isCertenTransaction(entry) {
+						continue
+					}
+					certenTx := l.parseCertenTransaction(entry, blocks[0], p)
+					if certenTx != nil {
+						txs = append(txs, certenTx)
+					}
+				}
 			}
-		}
+			results <- partitionResult{partition: p, transactions: txs}
+		}(partition)
 	}
 
-	log.Printf("✅ [CERTEN-SEARCH] DN + all BVNs at block %d yielded %d CERTEN_INTENT txs", blockHeight, len(allTransactions))
+	// Collect results from all partitions
+	var allTransactions []*CertenTransaction
+	for i := 0; i < len(partitions); i++ {
+		r := <-results
+		if r.err != nil {
+			log.Printf("⚠️ [CERTEN-SEARCH] Failed to query %s block %d: %v", r.partition, blockHeight, r.err)
+			continue
+		}
+		allTransactions = append(allTransactions, r.transactions...)
+	}
+
+	if len(allTransactions) > 0 {
+		log.Printf("🎯 [CERTEN-SEARCH] Block %d: found %d CERTEN transactions across %d partitions",
+			blockHeight, len(allTransactions), len(partitions))
+	}
+
 	return allTransactions, nil
 }
 
@@ -261,75 +284,11 @@ type CertenTransaction struct {
 }
 
 // isCertenTransaction checks if a block entry is a CERTEN intent transaction
-// STRICT FILTERING: Only writeData transactions with CERTEN_INTENT memo
 func (l *LiteClientAdapter) isCertenTransaction(entry BlockEntry) bool {
 	if entry.Data == nil {
 		return false
 	}
-
-	// DEBUG: Log every entry we're checking
-	entryType := "unknown"
-	if t, ok := entry.Data["type"].(string); ok {
-		entryType = t
-	}
-
-	// Find the REAL principal from the nested transaction structure
-	// Path: entry.Data["value"]["message"]["transaction"]["header"]["principal"]
-	realPrincipal := ""
-	if value, ok := entry.Data["value"].(map[string]interface{}); ok {
-		if message, ok := value["message"].(map[string]interface{}); ok {
-			if tx, ok := message["transaction"].(map[string]interface{}); ok {
-				if header, ok := tx["header"].(map[string]interface{}); ok {
-					if principal, ok := header["principal"].(string); ok {
-						realPrincipal = principal
-					}
-				}
-			}
-		}
-	}
-
-	// Debug: Log all non-anchor entries with their real principal
-	if realPrincipal != "" && !strings.Contains(realPrincipal, "/anchors") {
-		log.Printf("🔍 [ENTRY-PRINCIPAL] Entry type=%s, principal=%s", entryType, realPrincipal)
-
-		// If it's a certen account, log full structure including memo
-		if strings.Contains(realPrincipal, "certen") {
-			log.Printf("🎯 [CERTEN-ENTRY-FOUND] Found certen entry! principal=%s", realPrincipal)
-			log.Printf("🔍 [CERTEN-ENTRY] Entry data keys: %v", getKeys(entry.Data))
-			if value, ok := entry.Data["value"].(map[string]interface{}); ok {
-				log.Printf("🔍 [CERTEN-ENTRY] Entry.value keys: %v", getKeys(value))
-				if message, ok := value["message"].(map[string]interface{}); ok {
-					log.Printf("🔍 [CERTEN-ENTRY] Entry.value.message keys: %v", getKeys(message))
-					if tx, ok := message["transaction"].(map[string]interface{}); ok {
-						log.Printf("🔍 [CERTEN-ENTRY] Entry.value.message.transaction keys: %v", getKeys(tx))
-						if header, ok := tx["header"].(map[string]interface{}); ok {
-							log.Printf("🔍 [CERTEN-ENTRY] Header contents: %v", header)
-							if memo, ok := header["memo"].(string); ok {
-								log.Printf("🔍 [CERTEN-ENTRY] *** MEMO VALUE: '%s' ***", memo)
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-
-	// Also check the top-level account field as fallback
-	if account, ok := entry.Data["account"].(string); ok {
-		if strings.Contains(account, "certen") && !strings.Contains(account, "/anchors") {
-			log.Printf("🔍 [ENTRY-ACCOUNT] Found certen in top-level account: %s, type=%s", account, entryType)
-		}
-	}
-
-	log.Printf("🔍 [CERTEN-CHECK] Checking entry type=%s, principal=%s for CERTEN_INTENT memo", entryType, realPrincipal)
-
-	// RELAXED: Check ANY transaction type for CERTEN_INTENT memo
-	if l.hasAnyCertenMemo(entry) {
-		log.Printf("✅ [CERTEN-CHECK] Found CERTEN_INTENT memo in %s entry (principal=%s)", entryType, realPrincipal)
-		return true
-	}
-
-	return false
+	return l.hasAnyCertenMemo(entry)
 }
 
 // hasAnyCertenMemo searches recursively through the entry for any CERTEN_INTENT memo
@@ -346,23 +305,18 @@ func (l *LiteClientAdapter) searchForCertenMemo(data interface{}) bool {
 		if memo, ok := v["memo"]; ok {
 			if memoStr, ok := memo.(string); ok {
 				if memoStr == "CERTEN_INTENT" || strings.EqualFold(memoStr, "certen-intent") {
-					log.Printf("🎯 [MEMO-FOUND] Found CERTEN_INTENT memo in nested structure (value: %s)", memoStr)
 					return true
 				}
 			}
 		}
-		// Recursively search all nested maps
-		for key, value := range v {
+		for _, value := range v {
 			if l.searchForCertenMemo(value) {
-				log.Printf("🎯 [MEMO-FOUND] Found CERTEN_INTENT memo under key: %s", key)
 				return true
 			}
 		}
 	case []interface{}:
-		// Recursively search arrays
-		for i, value := range v {
+		for _, value := range v {
 			if l.searchForCertenMemo(value) {
-				log.Printf("🎯 [MEMO-FOUND] Found CERTEN_INTENT memo in array index: %d", i)
 				return true
 			}
 		}
@@ -1090,20 +1044,16 @@ func (l *LiteClientAdapter) queryV3API(ctx context.Context, method string, param
 
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: l.config.RequestTimeout}
-	resp, err := client.Do(req)
+	resp, err := l.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to make API request: %w", err)
 	}
 	defer resp.Body.Close()
 
-	// Read response body
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
-
-	log.Printf("🔍 [V3-API] Response body: %s", string(body))
 
 	// Parse JSON response
 	var apiResp V3APIResponse
@@ -1125,22 +1075,15 @@ func (l *LiteClientAdapter) queryV3API(ctx context.Context, method string, param
 
 // getNetworkStatusV3 gets current network status using direct v3 API calls
 func (l *LiteClientAdapter) getNetworkStatusV3(ctx context.Context) (*NetworkStatus, error) {
-	log.Printf("🔍 [V3-API] Querying network status...")
-
 	// Primary: direct network-status
 	result, err := l.queryV3API(ctx, "network-status", map[string]interface{}{})
 	if err != nil {
-		log.Printf("⚠️ [V3-API] network-status failed: %v", err)
-		log.Printf("🔁 [V3-API] Falling back to BVN/DN block query")
 		return l.queryBVNStatus(ctx)
 	}
-
-	log.Printf("🔍 [V3-API] network-status result: %+v", result)
 
 	// Preferred: directoryHeight (current DN directory height)
 	if directoryHeight, ok := result["directoryHeight"].(float64); ok {
 		actualBlockHeight := int64(directoryHeight)
-		log.Printf("🎯 [V3-API] directoryHeight=%d", actualBlockHeight)
 
 		return &NetworkStatus{
 			Network: struct {
@@ -1168,17 +1111,12 @@ func (l *LiteClientAdapter) getNetworkStatusV3(ctx context.Context) (*NetworkSta
 	}
 
 	// If schema changes and directoryHeight is absent, we *still* don't guess.
-	log.Printf("⚠️ [V3-API] directoryHeight not present in network-status result; falling back to BVN/DN query")
 	return l.queryBVNStatus(ctx)
 }
 
 // queryMinorBlocks queries exactly one minor block from a partition using v3 API
 func (l *LiteClientAdapter) queryMinorBlocks(ctx context.Context, partitionURL string, blockHeight int64) ([]*MinorBlock, error) {
-	log.Printf("🔍 [BLOCK-QUERY] Querying single minor block %d from partition: %s", blockHeight, partitionURL)
-
-	// Convert partition URL to correct ledger scope
 	ledgerScope := l.convertToLedgerScope(partitionURL)
-	log.Printf("🔧 [SCOPE-FIX] Converted %s to ledger scope: %s", partitionURL, ledgerScope)
 
 	// Query exactly one block with expand=true to get full transaction details including memo
 	// Include entryRange with high count to get ALL entries (blocks can have many entries)
@@ -1203,7 +1141,6 @@ func (l *LiteClientAdapter) queryMinorBlocks(ctx context.Context, partitionURL s
 	// Parse the block response
 	block := l.parseMinorBlockRecord(response, partitionURL, blockHeight)
 	if block != nil {
-		log.Printf("✅ [BLOCK-QUERY] Successfully retrieved block %d: entryCount=%d", blockHeight, len(block.Entries))
 		return []*MinorBlock{block}, nil
 	}
 
@@ -1399,18 +1336,12 @@ func (l *LiteClientAdapter) queryBVNStatus(ctx context.Context) (*NetworkStatus,
 
 // GetLatestBlock retrieves the latest block information
 func (l *LiteClientAdapter) GetLatestBlock(ctx context.Context) (*Block, error) {
-	log.Printf("🔍 [BLOCK-HEIGHT] Getting current block height from v3 network status")
-
-	// Primary: Use v3 network-status API (the only reliable approach)
 	networkStatus, err := l.getNetworkStatusV3(ctx)
 	if err == nil {
 		latestHeight := uint64(networkStatus.Network.Status.LastBlockHeight)
-		log.Printf("✅ [BLOCK-HEIGHT] Got block height from v3 network status: %d", latestHeight)
 		return l.GetBlock(ctx, latestHeight)
 	}
 
-	// Log the failure and return an error instead of unreliable fallbacks
-	log.Printf("❌ [BLOCK-HEIGHT] Failed to get network status from v3 API: %v", err)
 	return nil, fmt.Errorf("failed to determine latest block height from network status: %w", err)
 }
 
