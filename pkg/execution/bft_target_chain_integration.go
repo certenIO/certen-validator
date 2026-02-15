@@ -690,6 +690,7 @@ type LegExecution struct {
 	ChainID       int64          // Target chain for this leg
 	Chain         string         // Chain name (e.g., "ethereum sepolia", "arbitrum sepolia")
 	SourceAddress common.Address // User's Abstract Account address (from leg.From)
+	AccountOwner  common.Address // Owner wallet address for account factory deployment
 }
 
 // extractAllLegsFromIntent extracts ALL legs from intent for multi-leg execution
@@ -708,12 +709,13 @@ func (btce *BFTTargetChainExecutor) extractAllLegsFromIntent(legacyIntent *inten
 	// Parse CrossChainData with chain information
 	var crossChainData struct {
 		Legs []struct {
-			LegID     string `json:"legId"`
-			From      string `json:"from"` // User's Abstract Account address
-			To        string `json:"to"`
-			AmountWei string `json:"amountWei"`
-			ChainID   int64  `json:"chainId"`
-			Chain     string `json:"chain"`
+			LegID        string `json:"legId"`
+			From         string `json:"from"`         // User's Abstract Account address
+			To           string `json:"to"`
+			AmountWei    string `json:"amountWei"`
+			ChainID      int64  `json:"chainId"`
+			Chain        string `json:"chain"`
+			AccountOwner string `json:"accountOwner"` // Owner wallet for account factory deployment
 		} `json:"legs"`
 	}
 
@@ -769,8 +771,17 @@ func (btce *BFTTargetChainExecutor) extractAllLegsFromIntent(legacyIntent *inten
 			sourceAddress = parseChainAddress(leg.From)
 		}
 
+		// Extract account owner (wallet address for factory deployment)
+		accountOwner := common.Address{}
+		if leg.AccountOwner != "" {
+			accountOwner = parseChainAddress(leg.AccountOwner)
+		}
+
 		btce.logger.Printf("   🦵 Leg %d (%s): chain=%s chainId=%d from=%s target=%s value=%s wei",
 			i, legID, chainName, chainID, sourceAddress.Hex(), targetAddress.Hex(), value.String())
+		if accountOwner != (common.Address{}) {
+			btce.logger.Printf("      accountOwner=%s", accountOwner.Hex())
+		}
 		legs = append(legs, LegExecution{
 			LegID:         legID,
 			Target:        targetAddress,
@@ -779,6 +790,7 @@ func (btce *BFTTargetChainExecutor) extractAllLegsFromIntent(legacyIntent *inten
 			ChainID:       chainID,
 			Chain:         chainName,
 			SourceAddress: sourceAddress,
+			AccountOwner:  accountOwner,
 		})
 	}
 
@@ -1065,38 +1077,79 @@ func (btce *BFTTargetChainExecutor) executeTronOperations(
 		userAccountAddr := allLegs[0].SourceAddress
 		btce.logger.Printf("🏦 [TRON-EXEC] Step 3: Executing governance proof direct on user account %s", userAccountAddr.Hex())
 
-		// Read back anchor commitments from chain via TRON native HTTP API.
-		// This is a critical verification step — confirms on-chain state matches expectations.
-		anchorData, err := tronClient.GetAnchorData(ctx, anchorContract, bundleIdHash)
-		if err != nil {
-			btce.logger.Printf("⚠️ [TRON-EXEC] Step 3: Failed to fetch anchor commitments: %v", err)
-			govTxHash = fmt.Sprintf("gov_failed_anchor_read_%s", chainCfg.Name)
-		} else {
-			// Build AccountProof with 4-leaf merkle proof (same logic as EVM buildAccountProof)
-			accountProof := btce.buildTronAccountProof(
-				bundleIdHash,
-				certenProof,
-				adiURL,
-				anchorData.OperationCommitment,
-				anchorData.CrossChainCommitment,
-				anchorData.GovernanceRoot,
-			)
+		// Pre-flight: Check if the user's abstract account contract exists on-chain
+		userAccountHex := "0x" + hex.EncodeToString(userAccountAddr.Bytes())
+		contractExists, checkErr := tronClient.CheckContractExists(ctx, userAccountHex)
+		if checkErr != nil {
+			btce.logger.Printf("⚠️ [TRON-EXEC] Step 3: Failed to check account existence: %v", checkErr)
+		}
 
-			// Convert user account address to TRON 41-prefix hex for the HTTP API call
-			userAccountHex := "0x" + hex.EncodeToString(userAccountAddr.Bytes())
+		if !contractExists {
+			btce.logger.Printf("⚠️ [TRON-EXEC] Step 3: User account %s has no contract deployed", userAccountHex)
 
-			var govErr error
-			govTxHash, govErr = tronClient.ExecuteGovernanceProofDirect(ctx,
-				userAccountHex,
-				allLegs[0].Target.Hex(),
-				allLegs[0].Value,
-				allLegs[0].Data,
-				accountProof,
-				feeLimit,
-			)
-			if govErr != nil {
-				btce.logger.Printf("⚠️ [TRON-EXEC] Step 3 failed: %v", govErr)
-				govTxHash = fmt.Sprintf("gov_failed_%s", chainCfg.Name)
+			// Attempt auto-deploy via CertenAccountFactory if owner address is available
+			factoryAddr := chainCfg.AccountFactory
+			ownerAddr := allLegs[0].AccountOwner
+			if factoryAddr != "" && ownerAddr != (common.Address{}) {
+				btce.logger.Printf("🏗️ [TRON-EXEC] Auto-deploying user account via factory %s", factoryAddr)
+
+				salt := ComputeAccountSalt(adiURL, ownerAddr.Hex())
+				deployTx, deployErr := tronClient.DeployAccountViaFactory(ctx,
+					factoryAddr, ownerAddr, adiURL, salt,
+					1000000, // 1 TRX deployment fee
+					feeLimit,
+				)
+				if deployErr != nil {
+					btce.logger.Printf("❌ [TRON-EXEC] Account auto-deploy failed: %v", deployErr)
+					govTxHash = fmt.Sprintf("gov_failed_account_deploy_%s", chainCfg.Name)
+				} else {
+					btce.logger.Printf("✅ [TRON-EXEC] Account deployment tx: %s", deployTx)
+					// Wait for deployment confirmation before proceeding
+					_, waitErr := tronClient.WaitForConfirmation(ctx, deployTx, 60*time.Second)
+					if waitErr != nil {
+						btce.logger.Printf("⚠️ [TRON-EXEC] Account deployment confirmation failed: %v", waitErr)
+					}
+					contractExists = true // Proceed to Step 3
+				}
+			} else {
+				btce.logger.Printf("❌ [TRON-EXEC] Cannot auto-deploy: factory=%s ownerInIntent=%v",
+					factoryAddr, ownerAddr != (common.Address{}))
+				btce.logger.Printf("   User must deploy their account via the web app first")
+				govTxHash = fmt.Sprintf("gov_failed_no_account_%s", chainCfg.Name)
+			}
+		}
+
+		if contractExists && govTxHash == "" {
+			// Read back anchor commitments from chain via TRON native HTTP API.
+			// This is a critical verification step — confirms on-chain state matches expectations.
+			anchorData, err := tronClient.GetAnchorData(ctx, anchorContract, bundleIdHash)
+			if err != nil {
+				btce.logger.Printf("⚠️ [TRON-EXEC] Step 3: Failed to fetch anchor commitments: %v", err)
+				govTxHash = fmt.Sprintf("gov_failed_anchor_read_%s", chainCfg.Name)
+			} else {
+				// Build AccountProof with 4-leaf merkle proof (same logic as EVM buildAccountProof)
+				accountProof := btce.buildTronAccountProof(
+					bundleIdHash,
+					certenProof,
+					adiURL,
+					anchorData.OperationCommitment,
+					anchorData.CrossChainCommitment,
+					anchorData.GovernanceRoot,
+				)
+
+				var govErr error
+				govTxHash, govErr = tronClient.ExecuteGovernanceProofDirect(ctx,
+					userAccountHex,
+					allLegs[0].Target.Hex(),
+					allLegs[0].Value,
+					allLegs[0].Data,
+					accountProof,
+					feeLimit,
+				)
+				if govErr != nil {
+					btce.logger.Printf("⚠️ [TRON-EXEC] Step 3 failed: %v", govErr)
+					govTxHash = fmt.Sprintf("gov_failed_%s", chainCfg.Name)
+				}
 			}
 		}
 	} else {

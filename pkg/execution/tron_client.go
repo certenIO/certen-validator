@@ -577,6 +577,160 @@ func (tc *TronClient) GetAnchorData(ctx context.Context, contractAddress string,
 	return anchor, nil
 }
 
+// CheckContractExists checks if a contract is deployed at the given address
+// using TRON's getcontract API. Returns true if bytecode exists.
+func (tc *TronClient) CheckContractExists(ctx context.Context, address string) (bool, error) {
+	// Convert to TRON 41-prefix format
+	tronAddr := address
+	if strings.HasPrefix(address, "0x") || strings.HasPrefix(address, "0X") {
+		tronAddr = "41" + address[2:]
+	}
+
+	payload := map[string]interface{}{
+		"value":   tronAddr,
+		"visible": false,
+	}
+
+	body, _ := json.Marshal(payload)
+	req, err := http.NewRequestWithContext(ctx, "POST",
+		tc.httpEndpoint+"/wallet/getcontract", bytes.NewReader(body))
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := tc.httpClient.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("HTTP request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return false, fmt.Errorf("reading response: %w", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return false, fmt.Errorf("parsing response: %w", err)
+	}
+
+	// If the result has bytecode, the contract exists
+	if bytecode, ok := result["bytecode"].(string); ok && bytecode != "" {
+		return true, nil
+	}
+
+	return false, nil
+}
+
+// DeployAccountViaFactory calls createAccountIfNotExists on the CertenAccountFactory.
+// This is idempotent — if the account already exists, it returns the existing address.
+// The deployment fee (call_value) is sent with the transaction.
+func (tc *TronClient) DeployAccountViaFactory(
+	ctx context.Context,
+	factoryAddress string,
+	ownerAddress common.Address,
+	adiURL string,
+	salt *big.Int,
+	deploymentFee int64, // in sun (1 TRX = 1,000,000 sun)
+	feeLimit int64,
+) (string, error) {
+	log.Printf("📡 [TRON] Deploying account via factory...")
+	log.Printf("   Factory: %s", factoryAddress)
+	log.Printf("   Owner: %s", ownerAddress.Hex())
+	log.Printf("   ADI URL: %s", adiURL)
+	log.Printf("   Salt: %s", salt.String())
+	log.Printf("   Deployment Fee: %d sun", deploymentFee)
+
+	// Minimal ABI for createAccountIfNotExists(address,string,uint256)
+	const factoryABI = `[{"type":"function","name":"createAccountIfNotExists","inputs":[{"name":"accountOwner","type":"address"},{"name":"adiURL","type":"string"},{"name":"salt","type":"uint256"}],"outputs":[{"name":"account","type":"address"}],"stateMutability":"payable"}]`
+
+	parsedABI, err := abi.JSON(strings.NewReader(factoryABI))
+	if err != nil {
+		return "", fmt.Errorf("failed to parse factory ABI: %w", err)
+	}
+
+	calldata, err := parsedABI.Pack("createAccountIfNotExists", ownerAddress, adiURL, salt)
+	if err != nil {
+		return "", fmt.Errorf("ABI encoding failed: %w", err)
+	}
+
+	paramHex := hex.EncodeToString(calldata[4:])
+
+	// Convert factory address to TRON 41-prefix format
+	tronFactory := factoryAddress
+	if strings.HasPrefix(factoryAddress, "0x") || strings.HasPrefix(factoryAddress, "0X") {
+		tronFactory = "41" + factoryAddress[2:]
+	}
+
+	// Build transaction with call_value for deployment fee
+	payload := map[string]interface{}{
+		"owner_address":     tc.ownerAddress,
+		"contract_address":  tronFactory,
+		"function_selector": "createAccountIfNotExists(address,string,uint256)",
+		"parameter":         paramHex,
+		"fee_limit":         feeLimit,
+		"call_value":        deploymentFee,
+		"visible":           false,
+	}
+
+	body, _ := json.Marshal(payload)
+	req, err := http.NewRequestWithContext(ctx, "POST",
+		tc.httpEndpoint+"/wallet/triggersmartcontract", bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := tc.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("HTTP request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("reading response: %w", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return "", fmt.Errorf("parsing response: %w", err)
+	}
+
+	// Check for API-level error
+	if resultField, ok := result["result"].(map[string]interface{}); ok {
+		if success, ok := resultField["result"].(bool); ok && !success {
+			msg := ""
+			if msgBytes, ok := resultField["message"].(string); ok {
+				decoded, _ := hex.DecodeString(msgBytes)
+				if len(decoded) > 0 {
+					msg = string(decoded)
+				} else {
+					msg = msgBytes
+				}
+			}
+			return "", fmt.Errorf("factory createAccountIfNotExists failed: %s", msg)
+		}
+	}
+
+	txID, err := tc.signAndBroadcast(ctx, result)
+	if err != nil {
+		return "", fmt.Errorf("factory sign/broadcast failed: %w", err)
+	}
+
+	log.Printf("✅ [TRON] Account deployment submitted: txID=%s", txID)
+	return txID, nil
+}
+
+// ComputeAccountSalt computes the salt for account factory deployment.
+// Matches the web app's generateSalt: keccak256(adiUrl.toLowerCase() + ":" + ownerAddress.toLowerCase())
+func ComputeAccountSalt(adiURL string, ownerAddress string) *big.Int {
+	input := strings.ToLower(adiURL) + ":" + strings.ToLower(ownerAddress)
+	hash := crypto.Keccak256([]byte(input))
+	return new(big.Int).SetBytes(hash)
+}
+
 // toEthAddress converts a hex address string to a common.Address.
 func toEthAddress(addr string) common.Address {
 	cleaned := strings.TrimPrefix(addr, "0x")
