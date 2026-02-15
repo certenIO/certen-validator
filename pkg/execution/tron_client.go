@@ -723,11 +723,18 @@ func (tc *TronClient) DeployAccountViaFactory(
 	return txID, nil
 }
 
-// ComputeAccountSalt computes the salt for account factory deployment.
-// Matches the web app's generateSalt: keccak256(adiUrl.toLowerCase() + ":" + ownerAddress.toLowerCase())
-func ComputeAccountSalt(adiURL string, ownerAddress string) *big.Int {
-	input := strings.ToLower(adiURL) + ":" + strings.ToLower(ownerAddress)
-	hash := crypto.Keccak256([]byte(input))
+// DeriveAccountOwner derives the deterministic EVM owner address from an ADI URL.
+// Matches the Bridge API's deriveEvmOwner: last 20 bytes of keccak256(adiUrl).
+// This is the "owner" used for factory deployment — NOT a user's EOA wallet.
+func DeriveAccountOwner(adiURL string) common.Address {
+	hash := crypto.Keccak256([]byte(adiURL))
+	return common.BytesToAddress(hash[12:]) // last 20 bytes
+}
+
+// DeriveAccountSalt derives the deterministic salt from an ADI URL.
+// Matches the Bridge API's deriveSaltU256: BigInt(keccak256(adiUrl)).
+func DeriveAccountSalt(adiURL string) *big.Int {
+	hash := crypto.Keccak256([]byte(adiURL))
 	return new(big.Int).SetBytes(hash)
 }
 

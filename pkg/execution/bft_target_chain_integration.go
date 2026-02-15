@@ -1087,13 +1087,17 @@ func (btce *BFTTargetChainExecutor) executeTronOperations(
 		if !contractExists {
 			btce.logger.Printf("⚠️ [TRON-EXEC] Step 3: User account %s has no contract deployed", userAccountHex)
 
-			// Attempt auto-deploy via CertenAccountFactory if owner address is available
+			// Auto-deploy via CertenAccountFactory using deterministic derivation from ADI URL.
+			// Owner and salt are derived the same way as the Bridge API:
+			//   owner = last 20 bytes of keccak256(adiUrl)
+			//   salt  = BigInt(keccak256(adiUrl))
 			factoryAddr := chainCfg.AccountFactory
-			ownerAddr := allLegs[0].AccountOwner
-			if factoryAddr != "" && ownerAddr != (common.Address{}) {
+			if factoryAddr != "" {
+				ownerAddr := DeriveAccountOwner(adiURL)
+				salt := DeriveAccountSalt(adiURL)
 				btce.logger.Printf("🏗️ [TRON-EXEC] Auto-deploying user account via factory %s", factoryAddr)
+				btce.logger.Printf("   Derived owner: %s (from ADI URL: %s)", ownerAddr.Hex(), adiURL)
 
-				salt := ComputeAccountSalt(adiURL, ownerAddr.Hex())
 				deployTx, deployErr := tronClient.DeployAccountViaFactory(ctx,
 					factoryAddr, ownerAddr, adiURL, salt,
 					1000000, // 1 TRX deployment fee
@@ -1112,10 +1116,8 @@ func (btce *BFTTargetChainExecutor) executeTronOperations(
 					contractExists = true // Proceed to Step 3
 				}
 			} else {
-				btce.logger.Printf("❌ [TRON-EXEC] Cannot auto-deploy: factory=%s ownerInIntent=%v",
-					factoryAddr, ownerAddr != (common.Address{}))
-				btce.logger.Printf("   User must deploy their account via the web app first")
-				govTxHash = fmt.Sprintf("gov_failed_no_account_%s", chainCfg.Name)
+				btce.logger.Printf("❌ [TRON-EXEC] Cannot auto-deploy: no factory address configured")
+				govTxHash = fmt.Sprintf("gov_failed_no_factory_%s", chainCfg.Name)
 			}
 		}
 
