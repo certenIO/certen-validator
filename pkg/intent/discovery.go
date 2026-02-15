@@ -378,8 +378,15 @@ func (id *IntentDiscovery) initializeStartingHeight(ctx context.Context) error {
 }
 
 // checkForNewBlocks checks for new blocks and queues them for processing.
-// lastProcessedBlock is advanced by workers via advanceWatermark(), not optimistically here.
-// Blocks are never silently dropped — channel sends block with back-pressure.
+//
+// IMPORTANT: Accumulate's directoryHeight is the CometBFT consensus round counter,
+// which increments every ~2 seconds. However, actual Accumulate minor blocks are
+// extremely sparse — only produced when there are real transactions. On Kermit testnet,
+// only ~7 actual DN blocks exist across 500K+ heights. Iterating through every height
+// would waste 99.99% of API calls on nonexistent blocks.
+//
+// Instead, we query ONLY the latest directoryHeight each tick. Since actual blocks are
+// rare (minutes to hours apart), 5-second polling will never miss a block.
 func (id *IntentDiscovery) checkForNewBlocks(ctx context.Context) error {
 	latestBlock, err := id.client.GetLatestBlock(ctx)
 	if err != nil {
@@ -389,12 +396,11 @@ func (id *IntentDiscovery) checkForNewBlocks(ctx context.Context) error {
 	// Network switch detection (e.g., DevNet vs Kermit/Mainnet)
 	if latestBlock.Height < id.lastProcessedBlock {
 		id.logger.Printf("🔄 Network switch detected: current height %d < last processed %d", latestBlock.Height, id.lastProcessedBlock)
-		id.logger.Printf("🔄 Auto-resetting to current chain height (starting from %d)", latestBlock.Height)
 
 		id.watermarkMu.Lock()
 		id.lastProcessedBlock = latestBlock.Height
 		id.lastQueuedBlock = latestBlock.Height
-		id.processedBlocks = make(map[uint64]bool) // clear stale entries
+		id.processedBlocks = make(map[uint64]bool)
 		id.watermarkMu.Unlock()
 
 		if id.ledgerStore != nil {
@@ -405,60 +411,43 @@ func (id *IntentDiscovery) checkForNewBlocks(ctx context.Context) error {
 		return nil
 	}
 
-	// Determine start height: skip blocks already queued to workers
+	// Already processed or queued this height — nothing to do
 	id.watermarkMu.Lock()
-	startHeight := id.lastProcessedBlock + 1
-	if id.lastQueuedBlock >= startHeight {
-		startHeight = id.lastQueuedBlock + 1
-	}
+	alreadyHandled := latestBlock.Height <= id.lastProcessedBlock || latestBlock.Height <= id.lastQueuedBlock
 	id.watermarkMu.Unlock()
 
-	if startHeight > latestBlock.Height {
-		id.logger.Printf("⏳ No new blocks to queue (processed: %d, queued: %d, latest: %d)",
-			id.lastProcessedBlock, id.lastQueuedBlock, latestBlock.Height)
+	if alreadyHandled {
 		return nil
 	}
 
-	// Cap blocks per tick to prevent unbounded blocking on the channel send
-	endHeight := latestBlock.Height
-	maxPerTick := uint64(id.config.MaxConcurrentBlocks)
-	if endHeight-startHeight+1 > maxPerTick {
-		endHeight = startHeight + maxPerTick - 1
+	// Skip all intermediate empty heights and jump directly to the latest.
+	// Accumulate's directoryHeight increments with CometBFT rounds (~every 2s),
+	// but actual blocks with transactions are extremely sparse. Only the height
+	// returned by GetLatestBlock (the current directoryHeight) is guaranteed to
+	// be a real, queryable block.
+	skipped := latestBlock.Height - id.lastProcessedBlock - 1
+	if skipped > 0 {
+		id.logger.Printf("⏩ Skipping %d empty heights (%d -> %d), queuing latest block %d",
+			skipped, id.lastProcessedBlock, latestBlock.Height-1, latestBlock.Height)
 	}
 
-	id.logger.Printf("🔍 Queuing blocks %d to %d for processing (%d blocks, latest: %d)",
-		startHeight, endHeight, endHeight-startHeight+1, latestBlock.Height)
+	// Advance past all empty intermediate heights
+	id.watermarkMu.Lock()
+	id.lastProcessedBlock = latestBlock.Height - 1
+	id.watermarkMu.Unlock()
 
-	// Queue blocks with back-pressure (blocking send) — never silently drop blocks
-	queued := uint64(0)
-	stopped := false
-	for height := startHeight; height <= endHeight && !stopped; height++ {
-		select {
-		case id.blockProcessCh <- &BlockProcessJob{
-			PartitionURL: "acc://dn.acme",
-			BlockHeight:  height,
-			BlockData:    &accumulate.Block{Height: height},
-		}:
-			queued++
-		case <-id.stopCh:
-			stopped = true
-		}
-	}
-
-	// Update lastQueuedBlock to the highest block actually sent to workers
-	if queued > 0 {
+	// Queue only the latest block for processing
+	select {
+	case id.blockProcessCh <- &BlockProcessJob{
+		PartitionURL: "acc://dn.acme",
+		BlockHeight:  latestBlock.Height,
+		BlockData:    latestBlock,
+	}:
 		id.watermarkMu.Lock()
-		id.lastQueuedBlock = startHeight + queued - 1
+		id.lastQueuedBlock = latestBlock.Height
 		id.watermarkMu.Unlock()
-
-		behindBy := int64(latestBlock.Height) - int64(startHeight+queued-1)
-		if behindBy > 0 {
-			id.logger.Printf("📊 Queued %d blocks, still %d blocks behind (will continue next tick)",
-				queued, behindBy)
-		} else {
-			id.logger.Printf("✅ Queued %d blocks, caught up to latest height %d",
-				queued, latestBlock.Height)
-		}
+	case <-id.stopCh:
+		return nil
 	}
 
 	return nil
