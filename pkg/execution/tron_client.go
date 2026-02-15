@@ -615,8 +615,13 @@ func (tc *TronClient) CheckContractExists(ctx context.Context, address string) (
 		return false, fmt.Errorf("parsing response: %w", err)
 	}
 
-	// If the result has bytecode, the contract exists
+	// Contract exists if bytecode OR code_hash is present.
+	// TRON's /wallet/getcontract may return code_hash without bytecode
+	// for proxy contracts (e.g. ERC-1167 clones from account factories).
 	if bytecode, ok := result["bytecode"].(string); ok && bytecode != "" {
+		return true, nil
+	}
+	if codeHash, ok := result["code_hash"].(string); ok && codeHash != "" {
 		return true, nil
 	}
 
