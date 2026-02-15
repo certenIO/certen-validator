@@ -400,10 +400,11 @@ func (nc *NearClient) DeployAccountViaFactory(
 	log.Printf("   Deposit: %s yoctoNEAR", deposit.String())
 
 	args := map[string]interface{}{
-		"owner":     owner,
+		"owner":         owner,
+		"owner_eth":     ownerEth,
 		"owner_eth_hex": ownerEth,
-		"adi_url":   adiURL,
-		"salt":      salt,
+		"adi_url":       adiURL,
+		"salt":          salt,
 	}
 
 	txHash, err := nc.callContract(ctx, factoryID, "create_account", args, gas, deposit)
