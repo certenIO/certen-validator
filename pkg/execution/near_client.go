@@ -401,7 +401,7 @@ func (nc *NearClient) DeployAccountViaFactory(
 
 	args := map[string]interface{}{
 		"owner":     owner,
-		"owner_eth": ownerEth,
+		"owner_eth_hex": ownerEth,
 		"adi_url":   adiURL,
 		"salt":      salt,
 	}
