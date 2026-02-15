@@ -1180,7 +1180,7 @@ func loadEVMChainsFromEnv() map[int64]*EVMChainConfig {
 			AnchorV4Address:    getEnv("TRON_SHASTA_ANCHORV4_ADDRESS", "0xca04231da28aab992fdffd3c9a7f8ddcd1f26027"),
 			AnchorV3Address:    "",
 			BLSVerifierAddress: getEnv("TRON_SHASTA_BLSZKVERIFIER_ADDRESS", "0x069d4a29221d721a7af1e7229d5e30803609b420"),
-			AccountFactory:     getEnv("TRON_SHASTA_ACCOUNTFACTORY_ADDRESS", "0xddbee4463bab94cfeea3516272f68f49d9936ce2"),
+			AccountFactory:     getEnv("TRON_SHASTA_ACCOUNTFACTORY_ADDRESS", "0x2c3edd673738274fc81c4f0114859903936f9abd"),
 			MaxGasPriceGwei:    getEnvInt64("TRON_MAX_GAS_PRICE_GWEI", 420),
 			MaxPriorityFeeGwei: 0,
 			GasLimitAnchor:     getEnvInt64("TRON_GAS_LIMIT_ANCHOR", 150000000),
