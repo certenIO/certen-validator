@@ -440,6 +440,143 @@ func (tc *TronClient) getTransactionInfo(ctx context.Context, txID string) (map[
 	return result, nil
 }
 
+// AnchorData holds anchor commitments read back from the TRON chain.
+type AnchorData struct {
+	BundleId              [32]byte
+	MerkleRoot            [32]byte
+	AdiURLHash            [32]byte
+	OperationCommitment   [32]byte
+	CrossChainCommitment  [32]byte
+	GovernanceRoot        [32]byte
+	AccumulateBlockHeight *big.Int
+	Timestamp             *big.Int
+	Validator             common.Address
+	Valid                 bool
+}
+
+// GetAnchorData reads anchor data from the contract via TRON's triggerConstantContract API.
+// This is the read-only equivalent of triggerSmartContract — avoids TRON's /jsonrpc quirks
+// that cause JSON parse errors with go-ethereum's ethclient.
+func (tc *TronClient) GetAnchorData(ctx context.Context, contractAddress string, anchorId [32]byte) (*AnchorData, error) {
+	// ABI-encode: getAnchor(bytes32)
+	calldata, err := tc.contractABI.Pack("getAnchor", anchorId)
+	if err != nil {
+		return nil, fmt.Errorf("ABI encoding failed: %w", err)
+	}
+
+	paramHex := hex.EncodeToString(calldata[4:])
+
+	// Convert address to TRON 41-prefix format
+	tronContract := contractAddress
+	if strings.HasPrefix(contractAddress, "0x") || strings.HasPrefix(contractAddress, "0X") {
+		tronContract = "41" + contractAddress[2:]
+	}
+
+	payload := map[string]interface{}{
+		"owner_address":     tc.ownerAddress,
+		"contract_address":  tronContract,
+		"function_selector": "getAnchor(bytes32)",
+		"parameter":         paramHex,
+		"visible":           false,
+	}
+
+	body, _ := json.Marshal(payload)
+	req, err := http.NewRequestWithContext(ctx, "POST",
+		tc.httpEndpoint+"/wallet/triggerconstantcontract", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := tc.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("HTTP request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading response: %w", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("parsing response: %w", err)
+	}
+
+	// Check for API-level error
+	if resultField, ok := result["result"].(map[string]interface{}); ok {
+		if success, ok := resultField["result"].(bool); ok && !success {
+			msg := ""
+			if msgBytes, ok := resultField["message"].(string); ok {
+				decoded, _ := hex.DecodeString(msgBytes)
+				if len(decoded) > 0 {
+					msg = string(decoded)
+				} else {
+					msg = msgBytes
+				}
+			}
+			return nil, fmt.Errorf("triggerConstantContract failed: %s", msg)
+		}
+	}
+
+	// Extract the ABI-encoded return data from constant_result
+	constantResult, ok := result["constant_result"].([]interface{})
+	if !ok || len(constantResult) == 0 {
+		return nil, fmt.Errorf("no constant_result in response")
+	}
+
+	resultHex, ok := constantResult[0].(string)
+	if !ok {
+		return nil, fmt.Errorf("constant_result is not a string")
+	}
+
+	resultBytes, err := hex.DecodeString(resultHex)
+	if err != nil {
+		return nil, fmt.Errorf("decoding constant_result hex: %w", err)
+	}
+
+	// ABI-decode the getAnchor return values:
+	// (bytes32 bundleId, bytes32 merkleRoot, bytes32 adiURLHash,
+	//  bytes32 operationCommitment, bytes32 crossChainCommitment, bytes32 governanceRoot,
+	//  uint256 accumulateBlockHeight, uint256 timestamp, address validator, bool valid)
+	method, exists := tc.contractABI.Methods["getAnchor"]
+	if !exists {
+		return nil, fmt.Errorf("getAnchor method not found in ABI")
+	}
+
+	values, err := method.Outputs.Unpack(resultBytes)
+	if err != nil {
+		return nil, fmt.Errorf("ABI decoding anchor data: %w", err)
+	}
+
+	if len(values) < 10 {
+		return nil, fmt.Errorf("expected 10 return values from getAnchor, got %d", len(values))
+	}
+
+	anchor := &AnchorData{
+		BundleId:              values[0].([32]byte),
+		MerkleRoot:            values[1].([32]byte),
+		AdiURLHash:            values[2].([32]byte),
+		OperationCommitment:   values[3].([32]byte),
+		CrossChainCommitment:  values[4].([32]byte),
+		GovernanceRoot:        values[5].([32]byte),
+		AccumulateBlockHeight: values[6].(*big.Int),
+		Timestamp:             values[7].(*big.Int),
+		Validator:             values[8].(common.Address),
+		Valid:                 values[9].(bool),
+	}
+
+	if !anchor.Valid {
+		return nil, fmt.Errorf("anchor not found or invalid on-chain")
+	}
+
+	log.Printf("✅ [TRON] Anchor read-back verified: bundleId=0x%x opCommit=0x%x",
+		anchor.BundleId[:8], anchor.OperationCommitment[:8])
+
+	return anchor, nil
+}
+
 // toEthAddress converts a hex address string to a common.Address.
 func toEthAddress(addr string) common.Address {
 	cleaned := strings.TrimPrefix(addr, "0x")

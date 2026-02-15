@@ -1065,8 +1065,9 @@ func (btce *BFTTargetChainExecutor) executeTronOperations(
 		userAccountAddr := allLegs[0].SourceAddress
 		btce.logger.Printf("🏦 [TRON-EXEC] Step 3: Executing governance proof direct on user account %s", userAccountAddr.Hex())
 
-		// Fetch stored commitments from anchor (read-only via /jsonrpc works on TRON)
-		anchorData, err := ethManager.anchor.GetAnchorFull(nil, bundleIdHash)
+		// Read back anchor commitments from chain via TRON native HTTP API.
+		// This is a critical verification step — confirms on-chain state matches expectations.
+		anchorData, err := tronClient.GetAnchorData(ctx, anchorContract, bundleIdHash)
 		if err != nil {
 			btce.logger.Printf("⚠️ [TRON-EXEC] Step 3: Failed to fetch anchor commitments: %v", err)
 			govTxHash = fmt.Sprintf("gov_failed_anchor_read_%s", chainCfg.Name)
