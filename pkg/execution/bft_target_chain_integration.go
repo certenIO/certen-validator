@@ -1100,7 +1100,7 @@ func (btce *BFTTargetChainExecutor) executeTronOperations(
 
 				deployTx, deployErr := tronClient.DeployAccountViaFactory(ctx,
 					factoryAddr, ownerAddr, adiURL, salt,
-					1000000, // 1 TRX deployment fee
+					0, // deployment fee (factory fee is 0)
 					feeLimit,
 				)
 				if deployErr != nil {
@@ -1112,8 +1112,10 @@ func (btce *BFTTargetChainExecutor) executeTronOperations(
 					_, waitErr := tronClient.WaitForConfirmation(ctx, deployTx, 60*time.Second)
 					if waitErr != nil {
 						btce.logger.Printf("⚠️ [TRON-EXEC] Account deployment confirmation failed: %v", waitErr)
+						govTxHash = fmt.Sprintf("gov_failed_account_deploy_%s", chainCfg.Name)
+					} else {
+						contractExists = true // Only proceed to Step 3 if deployment succeeded
 					}
-					contractExists = true // Proceed to Step 3
 				}
 			} else {
 				btce.logger.Printf("❌ [TRON-EXEC] Cannot auto-deploy: no factory address configured")
