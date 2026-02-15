@@ -1141,11 +1141,18 @@ func (btce *BFTTargetChainExecutor) executeTronOperations(
 					anchorData.GovernanceRoot,
 				)
 
+				// Convert value from 18-decimal (intent format) to 6-decimal (TRON sun).
+				// Intent uses amountWei with 18 decimals universally; TRON uses sun (10^6).
+				tronValue := new(big.Int).Set(allLegs[0].Value)
+				weiToSunDivisor := new(big.Int).Exp(big.NewInt(10), big.NewInt(12), nil) // 10^12
+				tronValue.Div(tronValue, weiToSunDivisor)
+				btce.logger.Printf("💱 [TRON-EXEC] Value conversion: %s wei → %s sun", allLegs[0].Value.String(), tronValue.String())
+
 				var govErr error
 				govTxHash, govErr = tronClient.ExecuteGovernanceProofDirect(ctx,
 					userAccountHex,
 					allLegs[0].Target.Hex(),
-					allLegs[0].Value,
+					tronValue,
 					allLegs[0].Data,
 					accountProof,
 					feeLimit,
