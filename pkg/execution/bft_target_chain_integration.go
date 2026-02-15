@@ -304,6 +304,9 @@ func (btce *BFTTargetChainExecutor) ExecuteTargetChainOperations(
 	case "tron", "tron shasta", "tron shasta testnet", "tron nile", "tron mainnet":
 		// TRON requires its own HTTP API — /jsonrpc doesn't support eth_getTransactionCount or eth_sendRawTransaction
 		return btce.executeTronOperations(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, targetChainID)
+	case "near", "near testnet", "near protocol", "near-testnet", "near mainnet":
+		// NEAR uses Ed25519 signing, Borsh serialization, and JSON-RPC — completely different from EVM
+		return btce.executeNearOperations(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, targetChainID)
 	case "ethereum", "eth", "sepolia", "arbitrum", "arb", "optimism", "op", "base", "polygon", "matic",
 		"bsc", "bsc testnet", "binance", "moonbeam", "moonbase", "moonbeam moonbase alpha":
 		return btce.executeEthereumOperations(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, targetChainID)
@@ -1270,5 +1273,527 @@ func (btce *BFTTargetChainExecutor) buildTronFailedResult(
 		fmt.Sprintf("gov_failed_%s", chainCfg.Name),
 		false,
 	)
+}
+
+// =============================================================================
+// NEAR PROTOCOL EXECUTION
+// =============================================================================
+
+// executeNearOperations executes anchor workflow on NEAR Protocol using JSON-RPC.
+// NEAR uses Ed25519 signing, Borsh serialization, and JSON args — completely different from EVM.
+// Proof building reuses existing commitment logic from EthereumContractManager.
+func (btce *BFTTargetChainExecutor) executeNearOperations(
+	ctx context.Context,
+	intentID string,
+	transactionHash string,
+	accountURL string,
+	validatorID string,
+	bundleID string,
+	anchorID string,
+	certenProof *proof.CertenProof,
+	chainID int64,
+) (*TargetChainExecutionResult, error) {
+
+	btce.logger.Printf("🔷 [NEAR-EXEC] Executing NEAR chain operations for intent: %s", intentID)
+
+	// Load NEAR config from environment
+	nearSignerAccountID := os.Getenv("NEAR_SIGNER_ACCOUNT_ID")
+	nearPrivateKey := os.Getenv("NEAR_PRIVATE_KEY")
+	nearRPCURL := os.Getenv("NEAR_TESTNET_RPC_URL")
+	nearAnchorContract := os.Getenv("NEAR_ANCHOR_CONTRACT")
+	nearAccountFactory := os.Getenv("NEAR_ACCOUNT_FACTORY")
+
+	if nearSignerAccountID == "" || nearPrivateKey == "" || nearRPCURL == "" || nearAnchorContract == "" {
+		return nil, fmt.Errorf("missing NEAR config: NEAR_SIGNER_ACCOUNT_ID=%q, NEAR_PRIVATE_KEY=%q, NEAR_TESTNET_RPC_URL=%q, NEAR_ANCHOR_CONTRACT=%q",
+			nearSignerAccountID, nearPrivateKey != "", nearRPCURL, nearAnchorContract)
+	}
+
+	btce.logger.Printf("✅ [NEAR-EXEC] Using NEAR config:")
+	btce.logger.Printf("   Signer: %s", nearSignerAccountID)
+	btce.logger.Printf("   RPC: %s", nearRPCURL)
+	btce.logger.Printf("   Anchor Contract: %s", nearAnchorContract)
+	btce.logger.Printf("   Account Factory: %s", nearAccountFactory)
+
+	// Create NEAR client
+	nearClient, err := NewNearClient(nearRPCURL, nearSignerAccountID, nearPrivateKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create NEAR client: %w", err)
+	}
+
+	// Create EthereumContractManager for proof building (reuse commitment logic)
+	privateKey := os.Getenv("ETH_PRIVATE_KEY")
+	contractConfig := &CertenContractConfig{
+		EthereumRPC:          os.Getenv("ETHEREUM_URL"),
+		ChainID:              11155111,
+		PrivateKey:           privateKey,
+		CreationContract:     os.Getenv("CERTEN_ANCHOR_V3_ADDRESS"),
+		VerificationContract: os.Getenv("CERTEN_ANCHOR_V3_ADDRESS"),
+		GasLimit:             800000,
+		MaxGasPriceGwei:      50,
+	}
+	if contractConfig.CreationContract == "" {
+		contractConfig.CreationContract = os.Getenv("CERTEN_CONTRACT_ADDRESS")
+	}
+	if contractConfig.VerificationContract == "" {
+		contractConfig.VerificationContract = contractConfig.CreationContract
+	}
+
+	ethManager, err := NewEthereumContractManager(contractConfig)
+	if err != nil {
+		btce.logger.Printf("⚠️ [NEAR-EXEC] Failed to create proof builder (non-fatal, using defaults): %v", err)
+	}
+
+	// Build legacy intent and proof data (same as EVM/TRON path)
+	legacyIntent := btce.convertToLegacyIntent(intentID, transactionHash, accountURL, certenProof)
+
+	var bundleIdHash [32]byte
+	var comprehensiveProof *contracts.ComprehensiveCertenProof
+	if ethManager != nil {
+		bundleIdHash = ethManager.generateAnchorID(legacyIntent, certenProof)
+		cp := ethManager.buildComprehensiveProof(legacyIntent, certenProof,
+			&anchor.AnchorResponse{AnchorID: anchorID, Success: true, Message: "BFT anchor for NEAR"},
+			bundleIdHash,
+		)
+		comprehensiveProof = &cp
+	} else {
+		// Fallback: generate bundleIdHash manually
+		hash := ethcrypto.Keccak256Hash([]byte(fmt.Sprintf("certen_v3_%s_%d_%s",
+			legacyIntent.IntentID, certenProof.BlockHeight, certenProof.TransactionHash)))
+		copy(bundleIdHash[:], hash[:])
+	}
+
+	// Compute adiURLHash
+	var adiURLHash [32]byte
+	adiURL := certenProof.AccountURL
+	if adiURL == "" {
+		adiURL = fmt.Sprintf("%s/data", legacyIntent.OrganizationADI)
+	}
+	copy(adiURLHash[:], ethcrypto.Keccak256([]byte(adiURL)))
+
+	// Gas constants for NEAR (in gas units, not TGas)
+	const (
+		gasCreateAnchor  = 30_000_000_000_000  // 30 TGas
+		gasVerifyProof   = 300_000_000_000_000 // 300 TGas
+		gasGovernance    = 100_000_000_000_000 // 100 TGas
+		gasFactoryDeploy = 100_000_000_000_000 // 100 TGas
+	)
+
+	// Extract commitments
+	var opCommitment, ccCommitment, govRoot [32]byte
+	if comprehensiveProof != nil {
+		opCommitment = comprehensiveProof.Commitments.OperationCommitment
+		ccCommitment = comprehensiveProof.Commitments.CrossChainCommitment
+		govRoot = comprehensiveProof.Commitments.GovernanceRoot
+	}
+
+	// ========== Step 1: Create Anchor ==========
+	btce.logger.Printf("🔗 [NEAR-EXEC] Step 1: Creating anchor on %s...", nearAnchorContract)
+
+	createTxHash, err := nearClient.CreateAnchor(ctx, nearAnchorContract,
+		bundleIdHash, adiURLHash, opCommitment, ccCommitment, govRoot,
+		certenProof.BlockHeight, gasCreateAnchor,
+	)
+	if err != nil {
+		btce.logger.Printf("❌ [NEAR-EXEC] Step 1 failed: %v", err)
+		return btce.buildNearResult(intentID, anchorID,
+			fmt.Sprintf("create_failed_near"), "", "", false), err
+	}
+
+	btce.logger.Printf("✅ [NEAR-EXEC] Step 1 complete - Anchor created: %s", createTxHash)
+
+	// Wait for Step 1 confirmation
+	_, err = nearClient.WaitForConfirmation(ctx, createTxHash, 60*time.Second)
+	if err != nil {
+		btce.logger.Printf("⚠️ [NEAR-EXEC] Step 1 confirmation issue: %v", err)
+	}
+
+	// ========== Step 2: Execute Comprehensive Proof ==========
+	btce.logger.Printf("🔗 [NEAR-EXEC] Step 2: Submitting comprehensive proof on %s...", nearAnchorContract)
+
+	nearProof := btce.buildNearCertenProof(comprehensiveProof, certenProof)
+
+	verifyTxHash, err := nearClient.ExecuteComprehensiveProof(ctx, nearAnchorContract,
+		bundleIdHash, nearProof, gasVerifyProof,
+	)
+	if err != nil {
+		btce.logger.Printf("❌ [NEAR-EXEC] Step 2 failed: %v", err)
+		return btce.buildNearResult(intentID, anchorID,
+			createTxHash, fmt.Sprintf("verify_failed_near"), "", false), err
+	}
+
+	btce.logger.Printf("✅ [NEAR-EXEC] Step 2 complete - Proof verified: %s", verifyTxHash)
+
+	// Wait for Step 2 confirmation
+	_, err = nearClient.WaitForConfirmation(ctx, verifyTxHash, 60*time.Second)
+	if err != nil {
+		btce.logger.Printf("⚠️ [NEAR-EXEC] Step 2 confirmation issue: %v", err)
+	}
+
+	// ========== Step 3: Execute via user's Abstract Account ==========
+	allLegs := btce.extractAllLegsFromIntent(legacyIntent)
+	govTxHash := "no_governance_needed"
+
+	if len(allLegs) > 0 {
+		btce.logger.Printf("🏦 [NEAR-EXEC] Step 3: Executing governance proof direct...")
+
+		// Derive the user's NEAR account ID via factory prediction
+		// Owner is full 32-byte keccak256 hex (implicit NEAR account format)
+		ownerBytes32 := DeriveNearAccountOwnerBytes32(adiURL)
+		ownerEth := DeriveNearAccountOwnerEth(adiURL)
+		salt := DeriveNearAccountSalt(adiURL)
+
+		// Try to predict the user's account ID
+		userAccountID := ""
+		if nearAccountFactory != "" {
+			predicted, predictErr := nearClient.PredictAccountID(ctx, nearAccountFactory, ownerBytes32, adiURL, salt)
+			if predictErr != nil {
+				btce.logger.Printf("⚠️ [NEAR-EXEC] Failed to predict account ID: %v, using derivation fallback", predictErr)
+				// Fallback: derive account ID from salt and factory
+				userAccountID = fmt.Sprintf("%x.%s", salt&0xFFFFFFFF, nearAccountFactory)
+			} else {
+				userAccountID = predicted
+			}
+		} else {
+			btce.logger.Printf("⚠️ [NEAR-EXEC] No factory configured, cannot determine user account ID")
+			govTxHash = "gov_failed_no_factory_near"
+		}
+
+		if userAccountID != "" {
+			btce.logger.Printf("   User account: %s", userAccountID)
+
+			// Check if account exists
+			accountExists, checkErr := nearClient.CheckAccountExists(ctx, userAccountID)
+			if checkErr != nil {
+				btce.logger.Printf("⚠️ [NEAR-EXEC] Failed to check account existence: %v", checkErr)
+			}
+
+			if !accountExists && nearAccountFactory != "" {
+				btce.logger.Printf("⚠️ [NEAR-EXEC] User account %s not found, auto-deploying...", userAccountID)
+
+				// 0.6 NEAR deposit for account creation
+				deposit := new(big.Int)
+				deposit.SetString("600000000000000000000000", 10) // 0.6 * 10^24 yoctoNEAR
+
+				deployTx, deployErr := nearClient.DeployAccountViaFactory(ctx,
+					nearAccountFactory, ownerBytes32, ownerEth, adiURL, salt, deposit, gasFactoryDeploy,
+				)
+				if deployErr != nil {
+					btce.logger.Printf("❌ [NEAR-EXEC] Account auto-deploy failed: %v", deployErr)
+					govTxHash = "gov_failed_account_deploy_near"
+				} else {
+					btce.logger.Printf("✅ [NEAR-EXEC] Account deployment tx: %s", deployTx)
+					_, waitErr := nearClient.WaitForConfirmation(ctx, deployTx, 60*time.Second)
+					if waitErr != nil {
+						btce.logger.Printf("⚠️ [NEAR-EXEC] Account deployment confirmation failed: %v", waitErr)
+						govTxHash = "gov_failed_account_deploy_near"
+					} else {
+						accountExists = true
+					}
+				}
+			}
+
+			if accountExists && govTxHash == "no_governance_needed" {
+				// Read anchor data back for merkle proof construction
+				anchorData, readErr := nearClient.GetAnchorData(ctx, nearAnchorContract, bundleIdHash)
+				if readErr != nil {
+					btce.logger.Printf("⚠️ [NEAR-EXEC] Failed to read anchor data: %v", readErr)
+					govTxHash = "gov_failed_anchor_read_near"
+				} else {
+					// Build ADIGovernanceProof
+					accountProof := btce.buildNearAccountProof(
+						bundleIdHash, certenProof, adiURL,
+						anchorData.OperationCommitment,
+						anchorData.CrossChainCommitment,
+						anchorData.GovernanceRoot,
+					)
+
+					// Build NearCall for the governance execution
+					// Value from intent is in chain-native units (yoctoNEAR)
+					targetValue := big.NewInt(1)
+					targetAddr := ""
+					if len(allLegs) > 0 {
+						targetValue = allLegs[0].Value
+						// For NEAR, target is an account ID string from the leg's "to" field
+						// The leg stores it as common.Address from hex, we need the original string
+						targetAddr = allLegs[0].Target.Hex()
+					}
+
+					// Try to get the original NEAR account ID from CrossChainData
+					nearTargetAccountID := btce.extractNearTargetFromCrossChainData(legacyIntent)
+					if nearTargetAccountID != "" {
+						targetAddr = nearTargetAccountID
+					}
+
+					btce.logger.Printf("💱 [NEAR-EXEC] Governance: target=%s deposit=%s yoctoNEAR",
+						targetAddr, targetValue.String())
+
+					nearCall := NearCallJSON{
+						Target:  targetAddr,
+						Method:  "", // Empty method = native NEAR transfer
+						Args:    "",
+						Deposit: targetValue.String(),
+						GasTgas: 30,
+					}
+
+					var govErr error
+					govTxHash, govErr = nearClient.ExecuteGovernanceProofDirect(ctx,
+						userAccountID, nearCall, accountProof, gasGovernance,
+					)
+					if govErr != nil {
+						btce.logger.Printf("⚠️ [NEAR-EXEC] Step 3 failed: %v", govErr)
+						govTxHash = "gov_failed_near"
+					}
+				}
+			}
+		}
+	}
+
+	btce.logger.Printf("🎉 [NEAR-EXEC] NEAR anchor workflow completed!")
+	btce.logger.Printf("   Create TX: %s", createTxHash)
+	btce.logger.Printf("   Verify TX: %s", verifyTxHash)
+	btce.logger.Printf("   Governance TX: %s", govTxHash)
+
+	return btce.buildNearResult(intentID, anchorID, createTxHash, verifyTxHash, govTxHash, true), nil
+}
+
+// buildNearCertenProof converts the comprehensive proof to NEAR JSON format.
+func (btce *BFTTargetChainExecutor) buildNearCertenProof(
+	proof *contracts.ComprehensiveCertenProof,
+	certenProof *proof.CertenProof,
+) NearCertenProofInput {
+	if proof == nil {
+		return NearCertenProofInput{
+			Timestamp: uint64(time.Now().Unix()),
+		}
+	}
+
+	// Convert proof hashes
+	proofHashes := make([]string, len(proof.ProofHashes))
+	for i, h := range proof.ProofHashes {
+		proofHashes[i] = encodeBytes32AsBase64(h)
+	}
+
+	// Convert key page proofs
+	keyPageProofs := make([]string, len(proof.GovernanceProof.KeyPageProofs))
+	for i, h := range proof.GovernanceProof.KeyPageProofs {
+		keyPageProofs[i] = encodeBytes32AsBase64(h)
+	}
+
+	// Convert validator addresses
+	validatorAddrs := make([]string, len(proof.BLSProof.ValidatorAddresses))
+	for i, addr := range proof.BLSProof.ValidatorAddresses {
+		validatorAddrs[i] = encodeAddressAsHex(addr)
+	}
+
+	// Convert voting powers
+	votingPowers := make([]uint64, len(proof.BLSProof.VotingPowers))
+	for i, vp := range proof.BLSProof.VotingPowers {
+		if vp != nil {
+			votingPowers[i] = vp.Uint64()
+		}
+	}
+
+	totalVP := uint64(0)
+	if proof.BLSProof.TotalVotingPower != nil {
+		totalVP = proof.BLSProof.TotalVotingPower.Uint64()
+	}
+	signedVP := uint64(0)
+	if proof.BLSProof.SignedVotingPower != nil {
+		signedVP = proof.BLSProof.SignedVotingPower.Uint64()
+	}
+
+	govNonce := uint64(0)
+	if proof.GovernanceProof.Nonce != nil {
+		govNonce = proof.GovernanceProof.Nonce.Uint64()
+	}
+	reqSigs := uint64(0)
+	if proof.GovernanceProof.RequiredSignatures != nil {
+		reqSigs = proof.GovernanceProof.RequiredSignatures.Uint64()
+	}
+	provSigs := uint64(0)
+	if proof.GovernanceProof.ProvidedSignatures != nil {
+		provSigs = proof.GovernanceProof.ProvidedSignatures.Uint64()
+	}
+
+	blockHeight := uint64(0)
+	if proof.Commitments.SourceBlockHeight != nil {
+		blockHeight = proof.Commitments.SourceBlockHeight.Uint64()
+	}
+
+	timestamp := uint64(time.Now().Unix())
+	if proof.ExpirationTime != nil {
+		timestamp = proof.ExpirationTime.Uint64()
+	}
+
+	// Validator signatures
+	validatorSigs := ""
+	if certenProof != nil && certenProof.BLSAggregateSignature != "" {
+		sigHex := strings.TrimPrefix(certenProof.BLSAggregateSignature, "0x")
+		sigBytes, err := hex.DecodeString(sigHex)
+		if err == nil {
+			validatorSigs = encodeBytesAsBase64(sigBytes)
+		}
+	}
+
+	return NearCertenProofInput{
+		TransactionHash: encodeBytes32AsBase64(proof.TransactionHash),
+		MerkleRoot:      encodeBytes32AsBase64(proof.MerkleRoot),
+		ProofHashes:     proofHashes,
+		LeafHash:        encodeBytes32AsBase64(proof.LeafHash),
+		GovernanceProof: NearGovernanceProof{
+			KeyBookURL:         proof.GovernanceProof.KeyBookURL,
+			KeyBookRoot:        encodeBytes32AsBase64(proof.GovernanceProof.KeyBookRoot),
+			KeyPageProofs:      keyPageProofs,
+			AuthorityAddress:   encodeAddressAsHex(proof.GovernanceProof.AuthorityAddress),
+			AuthorityLevel:     proof.GovernanceProof.AuthorityLevel,
+			Nonce:              govNonce,
+			RequiredSignatures: reqSigs,
+			ProvidedSignatures: provSigs,
+			ThresholdMet:       proof.GovernanceProof.ThresholdMet,
+		},
+		BlsProof: NearBLSProof{
+			AggregateSignature: encodeBytesAsBase64(proof.BLSProof.AggregateSignature),
+			ValidatorAddresses: validatorAddrs,
+			VotingPowers:       votingPowers,
+			TotalVotingPower:   totalVP,
+			SignedVotingPower:  signedVP,
+			ThresholdMet:       proof.BLSProof.ThresholdMet,
+			MessageHash:        encodeBytes32AsBase64(proof.BLSProof.MessageHash),
+		},
+		Commitments: NearCommitmentsJSON{
+			OperationCommitment:  encodeBytes32AsBase64(proof.Commitments.OperationCommitment),
+			CrossChainCommitment: encodeBytes32AsBase64(proof.Commitments.CrossChainCommitment),
+			GovernanceRoot:       encodeBytes32AsBase64(proof.Commitments.GovernanceRoot),
+			SourceChain:          proof.Commitments.SourceChain,
+			BlockHeight:          blockHeight,
+			CommitmentHash:       encodeBytes32AsBase64(proof.Commitments.SourceTxHash),
+			AdiURL:               proof.Commitments.TargetChain,
+			AuthorityURL:         encodeAddressAsHex(proof.Commitments.TargetAddress),
+		},
+		Timestamp:     timestamp,
+		ValidatorSigs: validatorSigs,
+	}
+}
+
+// buildNearAccountProof constructs the NearADIGovernanceProofJSON for Step 3.
+// Mirrors buildTronAccountProof — computes a 4-leaf merkle proof for adiURL verification.
+func (btce *BFTTargetChainExecutor) buildNearAccountProof(
+	bundleID [32]byte,
+	certenProof *proof.CertenProof,
+	adiURL string,
+	opCommitment [32]byte,
+	ccCommitment [32]byte,
+	govRoot [32]byte,
+) NearADIGovernanceProofJSON {
+	// Build merkle proof: same 4-leaf tree as TRON/EVM
+	// proof[0] = operationCommitment (sibling at level 0)
+	// proof[1] = sortedHash(ccCommitment, govRoot) (sibling at level 1)
+	hash23 := sortedHash(ccCommitment[:], govRoot[:])
+	var hash23Arr [32]byte
+	copy(hash23Arr[:], hash23)
+
+	log.Printf("🌳 [NEAR-MERKLE] Built 4-leaf proof for adiURL verification:")
+	log.Printf("   adiURL: %s", adiURL)
+	log.Printf("   proof[0] (op): 0x%x", opCommitment[:8])
+	log.Printf("   proof[1] (hash23): 0x%x", hash23Arr[:8])
+
+	merkleProof := []string{
+		encodeBytes32AsBase64(opCommitment),
+		encodeBytes32AsBase64(hash23Arr),
+	}
+
+	now := time.Now()
+	expiresAt := now.Add(1 * time.Hour)
+
+	// Build validator signatures
+	validatorSigs := ""
+	if certenProof != nil && certenProof.BLSAggregateSignature != "" {
+		sigHex := strings.TrimPrefix(certenProof.BLSAggregateSignature, "0x")
+		sigBytes, err := hex.DecodeString(sigHex)
+		if err == nil {
+			validatorSigs = encodeBytesAsBase64(sigBytes)
+		}
+	}
+
+	return NearADIGovernanceProofJSON{
+		AdiURL:      adiURL,
+		AnchorID:    encodeBytes32AsBase64(bundleID),
+		MerkleProof: merkleProof,
+		KeyBookProof: NearKeyBookProofJSON{
+			KeyBookURL:     "",
+			KeyBookRoot:    encodeBytes32AsBase64([32]byte{}),
+			HierarchyDepth: 0,
+			KeyPageProofs:  []string{},
+			ValidFromSec:   0,
+			ValidUntilSec:  0,
+		},
+		RoleProof: NearRoleProofJSON{
+			Level:        1,
+			Permissions:  0,
+			RoleHash:     encodeBytes32AsBase64([32]byte{}),
+			Signature:    "",
+			AuthorizedBy: "",
+			GrantedAtSec: 0,
+		},
+		ThresholdProof: NearThresholdProofJSON{
+			RequiredThreshold: 0,
+			Signatures:        []string{},
+			Signers:           []string{},
+			VotingPowers:      []uint64{},
+			TotalVotingPower:  0,
+			MessageHash:       encodeBytes32AsBase64([32]byte{}),
+		},
+		ValidatorSignatures: validatorSigs,
+		TimestampSec:        uint64(now.Unix()),
+		ExpiresAtSec:        uint64(expiresAt.Unix()),
+		Nonce:               0,
+		RequiredLevel:       1, // G1 governance level
+	}
+}
+
+// extractNearTargetFromCrossChainData extracts the original NEAR account ID from CrossChainData.
+// NEAR targets are account IDs (strings like "alice.testnet"), not hex addresses.
+func (btce *BFTTargetChainExecutor) extractNearTargetFromCrossChainData(legacyIntent *intent.CertenIntent) string {
+	if legacyIntent == nil || len(legacyIntent.CrossChainData) == 0 {
+		return ""
+	}
+
+	var ccData struct {
+		Legs []struct {
+			To string `json:"to"`
+		} `json:"legs"`
+	}
+	if err := json.Unmarshal(legacyIntent.CrossChainData, &ccData); err != nil || len(ccData.Legs) == 0 {
+		return ""
+	}
+
+	// If the "to" field looks like a NEAR account ID (contains dots, no 0x prefix), use it directly
+	to := ccData.Legs[0].To
+	if to != "" && !strings.HasPrefix(to, "0x") && strings.Contains(to, ".") {
+		return to
+	}
+	return ""
+}
+
+// buildNearResult creates a TargetChainExecutionResult for NEAR operations.
+func (btce *BFTTargetChainExecutor) buildNearResult(
+	intentID, anchorID string,
+	createTxHash, verifyTxHash, govTxHash string,
+	success bool,
+) *TargetChainExecutionResult {
+	return &TargetChainExecutionResult{
+		Chain:            "near-testnet",
+		TxHash:           createTxHash,
+		Success:          success,
+		CreateTxHash:     createTxHash,
+		VerifyTxHash:     verifyTxHash,
+		GovernanceTxHash: govTxHash,
+		Metadata: map[string]string{
+			"chain":           "near-testnet",
+			"anchorContract":  os.Getenv("NEAR_ANCHOR_CONTRACT"),
+			"explorerUrl":     "https://testnet.nearblocks.io",
+			"executionMethod": "near_json_rpc",
+		},
+	}
 }
 

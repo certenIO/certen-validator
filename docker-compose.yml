@@ -120,6 +120,7 @@ services:
       SUI_BLS_VERIFIER_STATE: "0x9380a3764b1ca7a2cb7fb83cba0a7bca44aaf15b21fe8fce89f7859f35b5ba5b"
       NEAR_ANCHOR_CONTRACT: "certen-anchor-v4.testnet"
       NEAR_BLS_VERIFIER_CONTRACT: "certen-bls-verifier.testnet"
+      NEAR_ACCOUNT_FACTORY: "certen-factory.testnet"
       TON_ANCHOR_CONTRACT: "kQCIMusQr3j4ExEfyX_W8c-B_n6zWQdjAkBovyKpP-wGWe7v"
       TON_BLS_VERIFIER_CONTRACT: "kQDEy6Qaq_iptycLCngQeEGAX9f46UH_66cEQ6JjFqqi3and"
       LOG_LEVEL: info
@@ -244,6 +245,7 @@ services:
       SUI_BLS_VERIFIER_STATE: "0x9380a3764b1ca7a2cb7fb83cba0a7bca44aaf15b21fe8fce89f7859f35b5ba5b"
       NEAR_ANCHOR_CONTRACT: "certen-anchor-v4.testnet"
       NEAR_BLS_VERIFIER_CONTRACT: "certen-bls-verifier.testnet"
+      NEAR_ACCOUNT_FACTORY: "certen-factory.testnet"
       TON_ANCHOR_CONTRACT: "kQCIMusQr3j4ExEfyX_W8c-B_n6zWQdjAkBovyKpP-wGWe7v"
       TON_BLS_VERIFIER_CONTRACT: "kQDEy6Qaq_iptycLCngQeEGAX9f46UH_66cEQ6JjFqqi3and"
       LOG_LEVEL: info
@@ -368,6 +370,7 @@ services:
       SUI_BLS_VERIFIER_STATE: "0x9380a3764b1ca7a2cb7fb83cba0a7bca44aaf15b21fe8fce89f7859f35b5ba5b"
       NEAR_ANCHOR_CONTRACT: "certen-anchor-v4.testnet"
       NEAR_BLS_VERIFIER_CONTRACT: "certen-bls-verifier.testnet"
+      NEAR_ACCOUNT_FACTORY: "certen-factory.testnet"
       TON_ANCHOR_CONTRACT: "kQCIMusQr3j4ExEfyX_W8c-B_n6zWQdjAkBovyKpP-wGWe7v"
       TON_BLS_VERIFIER_CONTRACT: "kQDEy6Qaq_iptycLCngQeEGAX9f46UH_66cEQ6JjFqqi3and"
       LOG_LEVEL: info
@@ -492,6 +495,7 @@ services:
       SUI_BLS_VERIFIER_STATE: "0x9380a3764b1ca7a2cb7fb83cba0a7bca44aaf15b21fe8fce89f7859f35b5ba5b"
       NEAR_ANCHOR_CONTRACT: "certen-anchor-v4.testnet"
       NEAR_BLS_VERIFIER_CONTRACT: "certen-bls-verifier.testnet"
+      NEAR_ACCOUNT_FACTORY: "certen-factory.testnet"
       TON_ANCHOR_CONTRACT: "kQCIMusQr3j4ExEfyX_W8c-B_n6zWQdjAkBovyKpP-wGWe7v"
       TON_BLS_VERIFIER_CONTRACT: "kQDEy6Qaq_iptycLCngQeEGAX9f46UH_66cEQ6JjFqqi3and"
       LOG_LEVEL: info
@@ -616,6 +620,7 @@ services:
       SUI_BLS_VERIFIER_STATE: "0x9380a3764b1ca7a2cb7fb83cba0a7bca44aaf15b21fe8fce89f7859f35b5ba5b"
       NEAR_ANCHOR_CONTRACT: "certen-anchor-v4.testnet"
       NEAR_BLS_VERIFIER_CONTRACT: "certen-bls-verifier.testnet"
+      NEAR_ACCOUNT_FACTORY: "certen-factory.testnet"
       TON_ANCHOR_CONTRACT: "kQCIMusQr3j4ExEfyX_W8c-B_n6zWQdjAkBovyKpP-wGWe7v"
       TON_BLS_VERIFIER_CONTRACT: "kQDEy6Qaq_iptycLCngQeEGAX9f46UH_66cEQ6JjFqqi3and"
       LOG_LEVEL: info
@@ -740,6 +745,7 @@ services:
       SUI_BLS_VERIFIER_STATE: "0x9380a3764b1ca7a2cb7fb83cba0a7bca44aaf15b21fe8fce89f7859f35b5ba5b"
       NEAR_ANCHOR_CONTRACT: "certen-anchor-v4.testnet"
       NEAR_BLS_VERIFIER_CONTRACT: "certen-bls-verifier.testnet"
+      NEAR_ACCOUNT_FACTORY: "certen-factory.testnet"
       TON_ANCHOR_CONTRACT: "kQCIMusQr3j4ExEfyX_W8c-B_n6zWQdjAkBovyKpP-wGWe7v"
       TON_BLS_VERIFIER_CONTRACT: "kQDEy6Qaq_iptycLCngQeEGAX9f46UH_66cEQ6JjFqqi3and"
       LOG_LEVEL: info
@@ -864,6 +870,7 @@ services:
       SUI_BLS_VERIFIER_STATE: "0x9380a3764b1ca7a2cb7fb83cba0a7bca44aaf15b21fe8fce89f7859f35b5ba5b"
       NEAR_ANCHOR_CONTRACT: "certen-anchor-v4.testnet"
       NEAR_BLS_VERIFIER_CONTRACT: "certen-bls-verifier.testnet"
+      NEAR_ACCOUNT_FACTORY: "certen-factory.testnet"
       TON_ANCHOR_CONTRACT: "kQCIMusQr3j4ExEfyX_W8c-B_n6zWQdjAkBovyKpP-wGWe7v"
       TON_BLS_VERIFIER_CONTRACT: "kQDEy6Qaq_iptycLCngQeEGAX9f46UH_66cEQ6JjFqqi3and"
       LOG_LEVEL: info
