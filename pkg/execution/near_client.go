@@ -294,28 +294,31 @@ type NearADIGovernanceProofJSON struct {
 }
 
 // NearKeyBookProofJSON is the key book proof section.
+// Rust: key_page_proofs is Base64VecU8 (single base64 string, not array).
 type NearKeyBookProofJSON struct {
-	KeyBookURL     string   `json:"key_book_url"`
-	KeyBookRoot    string   `json:"key_book_root"`
-	HierarchyDepth uint8    `json:"hierarchy_depth"`
-	KeyPageProofs  []string `json:"key_page_proofs"`
-	ValidFromSec   uint64   `json:"valid_from_sec"`
-	ValidUntilSec  uint64   `json:"valid_until_sec"`
+	KeyBookURL     string `json:"key_book_url"`
+	KeyBookRoot    string `json:"key_book_root"`
+	HierarchyDepth uint32 `json:"hierarchy_depth"`
+	KeyPageProofs  string `json:"key_page_proofs"`
+	ValidFromSec   uint64 `json:"valid_from_sec"`
+	ValidUntilSec  uint64 `json:"valid_until_sec"`
 }
 
 // NearRoleProofJSON is the role proof section.
+// Rust: permissions is Vec<String> (JSON array of strings, not a number).
 type NearRoleProofJSON struct {
-	Level        uint8  `json:"level"`
-	Permissions  uint64 `json:"permissions"`
-	RoleHash     string `json:"role_hash"`
-	Signature    string `json:"signature"`
-	AuthorizedBy string `json:"authorized_by"`
-	GrantedAtSec uint64 `json:"granted_at_sec"`
+	Level        uint8    `json:"level"`
+	Permissions  []string `json:"permissions"`
+	RoleHash     string   `json:"role_hash"`
+	Signature    string   `json:"signature"`
+	AuthorizedBy string   `json:"authorized_by"`
+	GrantedAtSec uint64   `json:"granted_at_sec"`
 }
 
 // NearThresholdProofJSON is the threshold proof section.
+// Rust: required_threshold is u32, signatures/signers are Vec<Base64VecU8>.
 type NearThresholdProofJSON struct {
-	RequiredThreshold uint64   `json:"required_threshold"`
+	RequiredThreshold uint32   `json:"required_threshold"`
 	Signatures        []string `json:"signatures"`
 	Signers           []string `json:"signers"`
 	VotingPowers      []uint64 `json:"voting_powers"`
@@ -366,7 +369,8 @@ type NearAnchorData struct {
 	BlockHeight           uint64
 	Timestamp             uint64
 	Validator             string
-	Valid                 bool
+	ProofExecuted         bool
+	Invalidated           bool
 }
 
 // GetAnchorData reads anchor data from the contract via a view call.
@@ -381,7 +385,12 @@ func (nc *NearClient) GetAnchorData(ctx context.Context, contractID string, anch
 		return nil, fmt.Errorf("get_anchor view call failed: %w", err)
 	}
 
-	// Parse the JSON response from the contract
+	// Contract returns Option<AnchorInfo> — null means anchor not found
+	if string(resultBytes) == "null" || len(resultBytes) == 0 {
+		return nil, fmt.Errorf("anchor not found on-chain (get_anchor returned null)")
+	}
+
+	// Parse the JSON response — contract returns hex-encoded strings via hex::encode()
 	var raw struct {
 		BundleId             string `json:"bundle_id"`
 		MerkleRoot           string `json:"merkle_root"`
@@ -392,38 +401,36 @@ func (nc *NearClient) GetAnchorData(ctx context.Context, contractID string, anch
 		BlockHeight          uint64 `json:"accumulate_block_height"`
 		Timestamp            uint64 `json:"timestamp"`
 		Validator            string `json:"validator"`
-		Valid                bool   `json:"valid"`
+		ProofExecuted        bool   `json:"proof_executed"`
+		Invalidated          bool   `json:"invalidated"`
 	}
 	if err := json.Unmarshal(resultBytes, &raw); err != nil {
 		return nil, fmt.Errorf("parsing anchor data: %w", err)
 	}
 
-	if !raw.Valid {
-		return nil, fmt.Errorf("anchor not found or invalid on-chain")
-	}
-
 	anchor := &NearAnchorData{
-		BlockHeight: raw.BlockHeight,
-		Timestamp:   raw.Timestamp,
-		Validator:   raw.Validator,
-		Valid:       raw.Valid,
+		BlockHeight:   raw.BlockHeight,
+		Timestamp:     raw.Timestamp,
+		Validator:     raw.Validator,
+		ProofExecuted: raw.ProofExecuted,
+		Invalidated:   raw.Invalidated,
 	}
 
-	// Decode base64 fields
-	decodeB64ToArray := func(s string, dst *[32]byte) {
-		if data, err := base64.StdEncoding.DecodeString(s); err == nil && len(data) >= 32 {
+	// Decode hex-encoded fields (contract uses hex::encode, not base64)
+	decodeHexToArray := func(s string, dst *[32]byte) {
+		if data, err := hex.DecodeString(s); err == nil && len(data) >= 32 {
 			copy(dst[:], data[:32])
 		}
 	}
-	decodeB64ToArray(raw.BundleId, &anchor.BundleId)
-	decodeB64ToArray(raw.MerkleRoot, &anchor.MerkleRoot)
-	decodeB64ToArray(raw.AdiURLHash, &anchor.AdiURLHash)
-	decodeB64ToArray(raw.OperationCommitment, &anchor.OperationCommitment)
-	decodeB64ToArray(raw.CrossChainCommitment, &anchor.CrossChainCommitment)
-	decodeB64ToArray(raw.GovernanceRoot, &anchor.GovernanceRoot)
+	decodeHexToArray(raw.BundleId, &anchor.BundleId)
+	decodeHexToArray(raw.MerkleRoot, &anchor.MerkleRoot)
+	decodeHexToArray(raw.AdiURLHash, &anchor.AdiURLHash)
+	decodeHexToArray(raw.OperationCommitment, &anchor.OperationCommitment)
+	decodeHexToArray(raw.CrossChainCommitment, &anchor.CrossChainCommitment)
+	decodeHexToArray(raw.GovernanceRoot, &anchor.GovernanceRoot)
 
-	log.Printf("✅ [NEAR] Anchor read-back verified: bundleId=0x%x opCommit=0x%x",
-		anchor.BundleId[:8], anchor.OperationCommitment[:8])
+	log.Printf("✅ [NEAR] Anchor read-back verified: bundleId=0x%x opCommit=0x%x proofExecuted=%v",
+		anchor.BundleId[:8], anchor.OperationCommitment[:8], anchor.ProofExecuted)
 
 	return anchor, nil
 }

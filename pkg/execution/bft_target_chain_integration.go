@@ -1533,8 +1533,8 @@ func (btce *BFTTargetChainExecutor) executeNearOperations(
 
 					nearCall := NearCallJSON{
 						Target:  targetAddr,
-						Method:  "", // Empty method = native NEAR transfer
-						Args:    "",
+						Method:  "transfer",
+						Args:    encodeBytesAsBase64([]byte{}), // Base64VecU8 = empty bytes
 						Deposit: targetValue.String(),
 						GasTgas: 30,
 					}
@@ -1713,16 +1713,16 @@ func (btce *BFTTargetChainExecutor) buildNearAccountProof(
 			KeyBookURL:     "",
 			KeyBookRoot:    encodeBytes32AsBase64([32]byte{}),
 			HierarchyDepth: 0,
-			KeyPageProofs:  []string{},
+			KeyPageProofs:  encodeBytesAsBase64([]byte{}), // Base64VecU8 = single base64 string
 			ValidFromSec:   0,
 			ValidUntilSec:  0,
 		},
 		RoleProof: NearRoleProofJSON{
 			Level:        1,
-			Permissions:  0,
+			Permissions:  []string{}, // Vec<String> = JSON array of strings
 			RoleHash:     encodeBytes32AsBase64([32]byte{}),
-			Signature:    "",
-			AuthorizedBy: "",
+			Signature:    encodeBytesAsBase64([]byte{}),
+			AuthorizedBy: encodeBytesAsBase64([]byte{}),
 			GrantedAtSec: 0,
 		},
 		ThresholdProof: NearThresholdProofJSON{
