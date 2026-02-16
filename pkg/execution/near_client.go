@@ -108,7 +108,7 @@ func (nc *NearClient) CreateAnchor(
 		"operation_commitment":   base64.StdEncoding.EncodeToString(operationCommitment[:]),
 		"cross_chain_commitment": base64.StdEncoding.EncodeToString(crossChainCommitment[:]),
 		"governance_root":        base64.StdEncoding.EncodeToString(governanceRoot[:]),
-		"block_height":           blockHeight,
+		"accumulate_block_height": blockHeight,
 	}
 
 	txHash, err := nc.callContract(ctx, contractID, "create_anchor", args, gas, big.NewInt(0))
@@ -322,7 +322,7 @@ func (nc *NearClient) GetAnchorData(ctx context.Context, contractID string, anch
 		OperationCommitment  string `json:"operation_commitment"`
 		CrossChainCommitment string `json:"cross_chain_commitment"`
 		GovernanceRoot       string `json:"governance_root"`
-		BlockHeight          uint64 `json:"block_height"`
+		BlockHeight          uint64 `json:"accumulate_block_height"`
 		Timestamp            uint64 `json:"timestamp"`
 		Validator            string `json:"validator"`
 		Valid                bool   `json:"valid"`
