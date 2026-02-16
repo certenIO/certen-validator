@@ -15,6 +15,7 @@ import (
 	"math/big"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -35,6 +36,11 @@ type NearClient struct {
 	publicKey       ed25519.PublicKey  // 32-byte public key
 	publicKeyBase58 string             // "ed25519:Base58..." for RPC queries
 	httpClient      *http.Client
+
+	// Local nonce tracking to avoid nonce collisions on sequential transactions.
+	// NEAR RPC may return stale nonces if queried before the previous tx is finalized.
+	nonceMu   sync.Mutex
+	lastNonce uint64 // last nonce used (0 = not yet fetched)
 }
 
 // NewNearClient creates a NEAR client from an RPC endpoint and Ed25519 key.
@@ -683,10 +689,23 @@ func (nc *NearClient) buildAndSignTransaction(
 	gas uint64,
 	deposit *big.Int,
 ) (string, string, error) {
-	nonce, blockHash, err := nc.getNonceAndBlockHash(ctx)
+	nc.nonceMu.Lock()
+	rpcNonce, blockHash, err := nc.getNonceAndBlockHash(ctx)
 	if err != nil {
+		nc.nonceMu.Unlock()
 		return "", "", err
 	}
+
+	// Use the higher of RPC nonce or our locally tracked nonce to avoid collisions
+	// when sending multiple transactions before the RPC reflects the new nonce.
+	useNonce := rpcNonce + 1
+	if nc.lastNonce >= useNonce {
+		useNonce = nc.lastNonce + 1
+	}
+	nc.lastNonce = useNonce
+	nc.nonceMu.Unlock()
+
+	log.Printf("📡 [NEAR] TX nonce=%d (rpc=%d) receiver=%s method=%s", useNonce, rpcNonce, receiverID, methodName)
 
 	// Borsh-serialize the transaction
 	var txBuf bytes.Buffer
@@ -697,7 +716,7 @@ func (nc *NearClient) buildAndSignTransaction(
 	txBuf.WriteByte(0) // ED25519 key type
 	txBuf.Write(nc.publicKey[:32])
 	// nonce: u64
-	borshWriteU64(&txBuf, nonce+1)
+	borshWriteU64(&txBuf, useNonce)
 	// receiver_id: string
 	borshWriteString(&txBuf, receiverID)
 	// block_hash: [32]byte
