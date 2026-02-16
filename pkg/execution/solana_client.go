@@ -185,31 +185,42 @@ type SolanaCertenProof struct {
 }
 
 // SolanaGovernanceProofData is the governance section of CertenProof.
+// Field order must match Rust GovernanceProofData for Borsh serialization.
 type SolanaGovernanceProofData struct {
+	KeyBookUrl         string
 	KeyBookRoot        [32]byte
 	KeyPageProofs      [][32]byte
 	AuthorityAddress   [20]byte
 	AuthorityLevel     uint8
+	Nonce              uint64
 	RequiredSignatures uint64
 	ProvidedSignatures uint64
-	Nonce              uint64
+	ThresholdMet       bool
 }
 
 // SolanaBLSProofData is the BLS section of CertenProof.
+// Field order must match Rust BLSProofData for Borsh serialization.
 type SolanaBLSProofData struct {
 	AggregateSignature []byte
-	MessageHash        [32]byte
-	ThresholdMet       bool
-	SignedVotingPower  uint64
+	ValidatorPubkeys   [][]byte
+	VotingPowers       []uint64
 	TotalVotingPower   uint64
-	ValidatorAddresses [][32]byte
+	SignedVotingPower  uint64
+	ThresholdMet       bool
+	MessageHash        [32]byte
 }
 
 // SolanaCommitmentData is the commitments section.
+// Field order must match Rust CommitmentData for Borsh serialization.
 type SolanaCommitmentData struct {
 	OperationCommitment  [32]byte
 	CrossChainCommitment [32]byte
 	GovernanceRoot       [32]byte
+	SourceChain          string
+	SourceBlockHeight    uint64
+	SourceTxHash         [32]byte
+	TargetChain          string
+	TargetAddress        [32]byte
 }
 
 // SolanaADIGovernanceProof is the proof for Step 3 (execute_governance_proof_direct).
@@ -404,6 +415,11 @@ func (sc *SolanaClient) usedNoncePDA(authorityEth [20]byte, nonce uint64) ([32]b
 	return addr, bump
 }
 
+func (sc *SolanaClient) proofBufferPDA(anchorId [32]byte, authority [32]byte) ([32]byte, uint8) {
+	addr, bump, _ := FindProgramAddress([][]byte{[]byte("proof_buf"), anchorId[:], authority[:]}, sc.anchorProgramID)
+	return addr, bump
+}
+
 func (sc *SolanaClient) factoryStatePDA() ([32]byte, uint8) {
 	addr, bump, _ := FindProgramAddress([][]byte{[]byte("factory_state")}, sc.factoryProgramID)
 	return addr, bump
@@ -502,14 +518,46 @@ func (sc *SolanaClient) buildCreateAccountIx(owner [32]byte, adiURL string, salt
 }
 
 // =============================================================================
+// BORSH INSTRUCTION DATA BUILDERS — PROOF BUFFER
+// =============================================================================
+
+func (sc *SolanaClient) buildInitProofBufferIx(anchorId [32]byte, totalSize uint32) []byte {
+	disc := anchorDiscriminator("init_proof_buffer")
+	var buf bytes.Buffer
+	buf.Write(disc[:])
+	buf.Write(anchorId[:])
+	solBorshWriteU32(&buf, totalSize)
+	return buf.Bytes()
+}
+
+func (sc *SolanaClient) buildWriteProofChunkIx(anchorId [32]byte, offset uint32, data []byte) []byte {
+	disc := anchorDiscriminator("write_proof_chunk")
+	var buf bytes.Buffer
+	buf.Write(disc[:])
+	buf.Write(anchorId[:])
+	solBorshWriteU32(&buf, offset)
+	solBorshWriteVecU8(&buf, data)
+	return buf.Bytes()
+}
+
+func (sc *SolanaClient) buildExecuteProofFromBufferIx(anchorId [32]byte) []byte {
+	disc := anchorDiscriminator("execute_proof_from_buffer")
+	var buf bytes.Buffer
+	buf.Write(disc[:])
+	buf.Write(anchorId[:])
+	return buf.Bytes()
+}
+
+// =============================================================================
 // BORSH SERIALIZATION FOR PROOF TYPES
 // =============================================================================
 
 func (sc *SolanaClient) borshWriteCertenProof(buf *bytes.Buffer, p SolanaCertenProof) {
+	// CertenProof fields in exact Rust declaration order
 	buf.Write(p.TransactionHash[:])
 	buf.Write(p.MerkleRoot[:])
 
-	// Vec<[u8;32]>
+	// Vec<[u8;32]> proof_hashes
 	solBorshWriteU32(buf, uint32(len(p.ProofHashes)))
 	for _, h := range p.ProofHashes {
 		buf.Write(h[:])
@@ -517,7 +565,9 @@ func (sc *SolanaClient) borshWriteCertenProof(buf *bytes.Buffer, p SolanaCertenP
 
 	buf.Write(p.LeafHash[:])
 
-	// GovernanceProof
+	// GovernanceProofData — Rust order: key_book_url, key_book_root, key_page_proofs,
+	// authority_eth, authority_level, nonce, required_signatures, provided_signatures, threshold_met
+	solBorshWriteString(buf, p.GovernanceProof.KeyBookUrl)
 	buf.Write(p.GovernanceProof.KeyBookRoot[:])
 	solBorshWriteU32(buf, uint32(len(p.GovernanceProof.KeyPageProofs)))
 	for _, h := range p.GovernanceProof.KeyPageProofs {
@@ -525,29 +575,39 @@ func (sc *SolanaClient) borshWriteCertenProof(buf *bytes.Buffer, p SolanaCertenP
 	}
 	buf.Write(p.GovernanceProof.AuthorityAddress[:])
 	buf.WriteByte(p.GovernanceProof.AuthorityLevel)
+	solBorshWriteU64(buf, p.GovernanceProof.Nonce)
 	solBorshWriteU64(buf, p.GovernanceProof.RequiredSignatures)
 	solBorshWriteU64(buf, p.GovernanceProof.ProvidedSignatures)
-	solBorshWriteU64(buf, p.GovernanceProof.Nonce)
+	solBorshWriteBool(buf, p.GovernanceProof.ThresholdMet)
 
-	// BLSProof
+	// BLSProofData — Rust order: aggregate_signature, validator_pubkeys (Vec<Vec<u8>>),
+	// voting_powers (Vec<u64>), total_voting_power, signed_voting_power, threshold_met, message_hash
 	solBorshWriteVecU8(buf, p.BlsProof.AggregateSignature)
-	buf.Write(p.BlsProof.MessageHash[:])
-	if p.BlsProof.ThresholdMet {
-		buf.WriteByte(1)
-	} else {
-		buf.WriteByte(0)
+	// Vec<Vec<u8>> — outer vec length, then each inner vec with its own length prefix
+	solBorshWriteU32(buf, uint32(len(p.BlsProof.ValidatorPubkeys)))
+	for _, pk := range p.BlsProof.ValidatorPubkeys {
+		solBorshWriteVecU8(buf, pk)
 	}
-	solBorshWriteU64(buf, p.BlsProof.SignedVotingPower)
+	// Vec<u64> voting_powers
+	solBorshWriteU32(buf, uint32(len(p.BlsProof.VotingPowers)))
+	for _, vp := range p.BlsProof.VotingPowers {
+		solBorshWriteU64(buf, vp)
+	}
 	solBorshWriteU64(buf, p.BlsProof.TotalVotingPower)
-	solBorshWriteU32(buf, uint32(len(p.BlsProof.ValidatorAddresses)))
-	for _, addr := range p.BlsProof.ValidatorAddresses {
-		buf.Write(addr[:])
-	}
+	solBorshWriteU64(buf, p.BlsProof.SignedVotingPower)
+	solBorshWriteBool(buf, p.BlsProof.ThresholdMet)
+	buf.Write(p.BlsProof.MessageHash[:])
 
-	// Commitments
+	// CommitmentData — Rust order: operation_commitment, cross_chain_commitment, governance_root,
+	// source_chain, source_block_height, source_tx_hash, target_chain, target_address (Pubkey=32 bytes)
 	buf.Write(p.Commitments.OperationCommitment[:])
 	buf.Write(p.Commitments.CrossChainCommitment[:])
 	buf.Write(p.Commitments.GovernanceRoot[:])
+	solBorshWriteString(buf, p.Commitments.SourceChain)
+	solBorshWriteU64(buf, p.Commitments.SourceBlockHeight)
+	buf.Write(p.Commitments.SourceTxHash[:])
+	solBorshWriteString(buf, p.Commitments.TargetChain)
+	buf.Write(p.Commitments.TargetAddress[:])
 
 	// ExpirationTime (i64)
 	solBorshWriteI64(buf, p.ExpirationTime)
@@ -631,33 +691,100 @@ func (sc *SolanaClient) CreateAnchor(
 }
 
 // =============================================================================
-// STEP 2: EXECUTE COMPREHENSIVE PROOF
+// STEP 2: EXECUTE COMPREHENSIVE PROOF (via Proof Buffer Pattern)
 // =============================================================================
 
-// ExecuteComprehensiveProof calls execute_comprehensive_proof on the Anchor V4 program.
-func (sc *SolanaClient) ExecuteComprehensiveProof(
+// InitProofBuffer creates a proof buffer PDA for chunked proof upload.
+func (sc *SolanaClient) InitProofBuffer(
+	ctx context.Context,
+	anchorId [32]byte,
+	totalSize uint32,
+) (string, error) {
+	signerPubkey := sc.GetSignerPubkey()
+
+	proofBufPDA, _ := sc.proofBufferPDA(anchorId, signerPubkey)
+	anchorPDA, _ := sc.anchorPDA(anchorId)
+
+	ixData := sc.buildInitProofBufferIx(anchorId, totalSize)
+
+	ix := SolInstruction{
+		ProgramID: sc.anchorProgramID,
+		Accounts: []SolAccountMeta{
+			{Pubkey: proofBufPDA, IsSigner: false, IsWritable: true},
+			{Pubkey: anchorPDA, IsSigner: false, IsWritable: false},
+			{Pubkey: signerPubkey, IsSigner: true, IsWritable: true},
+			{Pubkey: solSystemProgram, IsSigner: false, IsWritable: false},
+		},
+		Data: ixData,
+	}
+
+	computeIx := buildSetComputeUnitLimitIx(100_000)
+
+	txSig, err := sc.buildSignAndSend(ctx, []SolInstruction{computeIx, ix})
+	if err != nil {
+		return "", fmt.Errorf("init_proof_buffer failed: %w", err)
+	}
+
+	log.Printf("✅ [SOLANA] Proof buffer initialized: txSig=%s", txSig)
+	return txSig, nil
+}
+
+// WriteProofChunk writes a chunk of proof data to the buffer at the given offset.
+func (sc *SolanaClient) WriteProofChunk(
+	ctx context.Context,
+	anchorId [32]byte,
+	offset uint32,
+	chunk []byte,
+) (string, error) {
+	signerPubkey := sc.GetSignerPubkey()
+
+	proofBufPDA, _ := sc.proofBufferPDA(anchorId, signerPubkey)
+
+	ixData := sc.buildWriteProofChunkIx(anchorId, offset, chunk)
+
+	ix := SolInstruction{
+		ProgramID: sc.anchorProgramID,
+		Accounts: []SolAccountMeta{
+			{Pubkey: proofBufPDA, IsSigner: false, IsWritable: true},
+			{Pubkey: signerPubkey, IsSigner: true, IsWritable: false},
+		},
+		Data: ixData,
+	}
+
+	computeIx := buildSetComputeUnitLimitIx(50_000)
+
+	txSig, err := sc.buildSignAndSend(ctx, []SolInstruction{computeIx, ix})
+	if err != nil {
+		return "", fmt.Errorf("write_proof_chunk (offset=%d, len=%d) failed: %w", offset, len(chunk), err)
+	}
+
+	log.Printf("✅ [SOLANA] Proof chunk written: offset=%d len=%d txSig=%s", offset, len(chunk), txSig)
+	return txSig, nil
+}
+
+// ExecuteProofFromBuffer deserializes the proof from the buffer, verifies it,
+// marks the anchor as executed, and closes the buffer (reclaiming rent).
+func (sc *SolanaClient) ExecuteProofFromBuffer(
 	ctx context.Context,
 	anchorId [32]byte,
 	proof SolanaCertenProof,
 ) (string, error) {
-	log.Printf("📡 [SOLANA] Submitting comprehensive proof...")
-
 	signerPubkey := sc.GetSignerPubkey()
 
-	// Derive PDAs
 	statePDA, _ := sc.statePDA()
 	anchorPDA, _ := sc.anchorPDA(anchorId)
+	proofBufPDA, _ := sc.proofBufferPDA(anchorId, signerPubkey)
 	usedCommitPDA, _ := sc.usedCommitmentPDA(proof.Commitments.OperationCommitment)
 	usedNoncePDA, _ := sc.usedNoncePDA(proof.GovernanceProof.AuthorityAddress, proof.GovernanceProof.Nonce)
 
-	// Build instruction data
-	ixData := sc.buildExecuteComprehensiveProofIx(anchorId, proof)
+	ixData := sc.buildExecuteProofFromBufferIx(anchorId)
 
 	ix := SolInstruction{
 		ProgramID: sc.anchorProgramID,
 		Accounts: []SolAccountMeta{
 			{Pubkey: statePDA, IsSigner: false, IsWritable: true},
 			{Pubkey: anchorPDA, IsSigner: false, IsWritable: true},
+			{Pubkey: proofBufPDA, IsSigner: false, IsWritable: true},
 			{Pubkey: usedCommitPDA, IsSigner: false, IsWritable: true},
 			{Pubkey: usedNoncePDA, IsSigner: false, IsWritable: true},
 			{Pubkey: signerPubkey, IsSigner: true, IsWritable: true},
@@ -671,10 +798,63 @@ func (sc *SolanaClient) ExecuteComprehensiveProof(
 
 	txSig, err := sc.buildSignAndSend(ctx, []SolInstruction{computeIx, ix})
 	if err != nil {
-		return "", fmt.Errorf("execute_comprehensive_proof failed: %w", err)
+		return "", fmt.Errorf("execute_proof_from_buffer failed: %w", err)
 	}
 
-	log.Printf("✅ [SOLANA] Comprehensive proof submitted: txSig=%s", txSig)
+	log.Printf("✅ [SOLANA] Proof executed from buffer: txSig=%s", txSig)
+	return txSig, nil
+}
+
+// ExecuteComprehensiveProof uploads proof data via the buffer pattern and executes it.
+// Uses a multi-transaction flow: init buffer → write chunks → execute from buffer.
+// The method signature is unchanged — callers don't need modification.
+func (sc *SolanaClient) ExecuteComprehensiveProof(
+	ctx context.Context,
+	anchorId [32]byte,
+	proof SolanaCertenProof,
+) (string, error) {
+	log.Printf("📡 [SOLANA] Submitting comprehensive proof via buffer pattern...")
+
+	// 1. Serialize the full proof to Borsh bytes
+	var proofBuf bytes.Buffer
+	sc.borshWriteCertenProof(&proofBuf, proof)
+	proofBytes := proofBuf.Bytes()
+	log.Printf("   Serialized proof: %d bytes", len(proofBytes))
+
+	// 2. Init proof buffer
+	initSig, err := sc.InitProofBuffer(ctx, anchorId, uint32(len(proofBytes)))
+	if err != nil {
+		return "", fmt.Errorf("buffer init failed: %w", err)
+	}
+	if err := sc.WaitForConfirmation(ctx, initSig, 30*time.Second); err != nil {
+		return "", fmt.Errorf("buffer init confirmation failed: %w", err)
+	}
+
+	// 3. Write proof data in chunks (800 bytes each, ~430 byte margin within 1232 TX limit)
+	const chunkSize = 800
+	for offset := 0; offset < len(proofBytes); offset += chunkSize {
+		end := offset + chunkSize
+		if end > len(proofBytes) {
+			end = len(proofBytes)
+		}
+		chunk := proofBytes[offset:end]
+
+		writeSig, writeErr := sc.WriteProofChunk(ctx, anchorId, uint32(offset), chunk)
+		if writeErr != nil {
+			return "", fmt.Errorf("buffer write at offset %d failed: %w", offset, writeErr)
+		}
+		if err := sc.WaitForConfirmation(ctx, writeSig, 30*time.Second); err != nil {
+			return "", fmt.Errorf("buffer write confirmation at offset %d failed: %w", offset, err)
+		}
+	}
+
+	// 4. Execute proof from buffer (verifies + closes buffer)
+	txSig, err := sc.ExecuteProofFromBuffer(ctx, anchorId, proof)
+	if err != nil {
+		return "", fmt.Errorf("execute from buffer failed: %w", err)
+	}
+
+	log.Printf("✅ [SOLANA] Comprehensive proof submitted via buffer: txSig=%s", txSig)
 	return txSig, nil
 }
 
@@ -1334,6 +1514,14 @@ func solBorshWriteString(buf *bytes.Buffer, s string) {
 func solBorshWriteVecU8(buf *bytes.Buffer, data []byte) {
 	solBorshWriteU32(buf, uint32(len(data)))
 	buf.Write(data)
+}
+
+func solBorshWriteBool(buf *bytes.Buffer, v bool) {
+	if v {
+		buf.WriteByte(1)
+	} else {
+		buf.WriteByte(0)
+	}
 }
 
 // =============================================================================

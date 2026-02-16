@@ -2143,11 +2143,32 @@ func (btce *BFTTargetChainExecutor) buildSolanaCertenProof(
 	var authorityAddr [20]byte
 	copy(authorityAddr[:], compProof.GovernanceProof.AuthorityAddress.Bytes())
 
-	// Validator addresses as [32]byte pubkeys
-	validatorAddrs := make([][32]byte, 0)
+	// Validator pubkeys: convert []common.Address (20-byte) to [][]byte
+	validatorPubkeys := make([][]byte, len(compProof.BLSProof.ValidatorAddresses))
+	for i, addr := range compProof.BLSProof.ValidatorAddresses {
+		validatorPubkeys[i] = addr.Bytes()
+	}
+
+	// Voting powers: convert []*big.Int to []uint64
+	votingPowers := make([]uint64, len(compProof.BLSProof.VotingPowers))
+	for i, vp := range compProof.BLSProof.VotingPowers {
+		if vp != nil {
+			votingPowers[i] = vp.Uint64()
+		}
+	}
 
 	// BLS aggregate signature — for Solana, pass the raw ABI bytes directly
 	aggregateSig := compProof.BLSProof.AggregateSignature
+
+	// Source block height
+	sourceBlockHeight := uint64(0)
+	if compProof.Commitments.SourceBlockHeight != nil {
+		sourceBlockHeight = compProof.Commitments.SourceBlockHeight.Uint64()
+	}
+
+	// Target address: pad 20-byte EVM address to 32 bytes (right-aligned)
+	var targetAddress [32]byte
+	copy(targetAddress[12:], compProof.Commitments.TargetAddress.Bytes())
 
 	return SolanaCertenProof{
 		TransactionHash: compProof.TransactionHash,
@@ -2155,26 +2176,34 @@ func (btce *BFTTargetChainExecutor) buildSolanaCertenProof(
 		ProofHashes:     proofHashes,
 		LeafHash:        compProof.LeafHash,
 		GovernanceProof: SolanaGovernanceProofData{
+			KeyBookUrl:         compProof.GovernanceProof.KeyBookURL,
 			KeyBookRoot:        compProof.GovernanceProof.KeyBookRoot,
 			KeyPageProofs:      keyPageProofs,
 			AuthorityAddress:   authorityAddr,
 			AuthorityLevel:     compProof.GovernanceProof.AuthorityLevel,
+			Nonce:              govNonce,
 			RequiredSignatures: reqSigs,
 			ProvidedSignatures: provSigs,
-			Nonce:              govNonce,
+			ThresholdMet:       compProof.GovernanceProof.ThresholdMet,
 		},
 		BlsProof: SolanaBLSProofData{
 			AggregateSignature: aggregateSig,
-			MessageHash:        compProof.BLSProof.MessageHash,
-			ThresholdMet:       compProof.BLSProof.ThresholdMet,
-			SignedVotingPower:  signedVP,
+			ValidatorPubkeys:   validatorPubkeys,
+			VotingPowers:       votingPowers,
 			TotalVotingPower:   totalVP,
-			ValidatorAddresses: validatorAddrs,
+			SignedVotingPower:  signedVP,
+			ThresholdMet:       compProof.BLSProof.ThresholdMet,
+			MessageHash:        compProof.BLSProof.MessageHash,
 		},
 		Commitments: SolanaCommitmentData{
 			OperationCommitment:  compProof.Commitments.OperationCommitment,
 			CrossChainCommitment: compProof.Commitments.CrossChainCommitment,
 			GovernanceRoot:       compProof.Commitments.GovernanceRoot,
+			SourceChain:          compProof.Commitments.SourceChain,
+			SourceBlockHeight:    sourceBlockHeight,
+			SourceTxHash:         compProof.Commitments.SourceTxHash,
+			TargetChain:          compProof.Commitments.TargetChain,
+			TargetAddress:        targetAddress,
 		},
 		ExpirationTime: expirationSec,
 		Metadata:       compProof.Metadata,
