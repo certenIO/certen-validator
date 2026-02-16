@@ -1718,7 +1718,7 @@ func (btce *BFTTargetChainExecutor) buildNearAccountProof(
 			ValidUntilSec:  0,
 		},
 		RoleProof: NearRoleProofJSON{
-			Level:        1,
+			Level:        "OPERATOR", // AuthorityLevel enum serializes as string
 			Permissions:  []string{}, // Vec<String> = JSON array of strings
 			RoleHash:     encodeBytes32AsBase64([32]byte{}),
 			Signature:    encodeBytesAsBase64([]byte{}),
@@ -1737,7 +1737,7 @@ func (btce *BFTTargetChainExecutor) buildNearAccountProof(
 		TimestampSec:        uint64(now.Unix()),
 		ExpiresAtSec:        uint64(expiresAt.Unix()),
 		Nonce:               0,
-		RequiredLevel:       1, // G1 governance level
+		RequiredLevel:       "OPERATOR", // AuthorityLevel enum serializes as string
 	}
 }
 

@@ -290,7 +290,7 @@ type NearADIGovernanceProofJSON struct {
 	TimestampSec        uint64                    `json:"timestamp_sec"`
 	ExpiresAtSec        uint64                    `json:"expires_at_sec"`
 	Nonce               uint64                    `json:"nonce"`
-	RequiredLevel       uint8                     `json:"required_level"`
+	RequiredLevel       string                    `json:"required_level"`
 }
 
 // NearKeyBookProofJSON is the key book proof section.
@@ -307,7 +307,7 @@ type NearKeyBookProofJSON struct {
 // NearRoleProofJSON is the role proof section.
 // Rust: permissions is Vec<String> (JSON array of strings, not a number).
 type NearRoleProofJSON struct {
-	Level        uint8    `json:"level"`
+	Level        string   `json:"level"`
 	Permissions  []string `json:"permissions"`
 	RoleHash     string   `json:"role_hash"`
 	Signature    string   `json:"signature"`
