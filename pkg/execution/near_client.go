@@ -214,12 +214,15 @@ func ConvertABIProofToNEARJSON(abiBytes []byte) (string, error) {
 		return new(big.Int).SetBytes(abiBytes[offset : offset+32]).Uint64()
 	}
 
+	// ABI bytes use EVM ecPairing convention: (c1/imaginary, c0/real) per Fq2 component.
+	// NEAR BLS verifier (arkworks) expects: x[0]=c0 (real), x[1]=c1 (imaginary).
+	// So we swap: ABI offset 64=c1, 96=c0 → NEAR X[0]=c0(96), X[1]=c1(64).
 	proof := NearBLSSignatureProofJSON{
 		Proof: NearGroth16ProofJSON{
 			A: NearG1PointJSON{X: b64(0), Y: b64(32)},
 			B: NearG2PointJSON{
-				X: [2]string{b64(64), b64(96)},
-				Y: [2]string{b64(128), b64(160)},
+				X: [2]string{b64(96), b64(64)},
+				Y: [2]string{b64(160), b64(128)},
 			},
 			C: NearG1PointJSON{X: b64(192), Y: b64(224)},
 		},
