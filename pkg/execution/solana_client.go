@@ -459,11 +459,12 @@ func anchorDiscriminator(methodName string) [8]byte {
 // BORSH INSTRUCTION DATA BUILDERS
 // =============================================================================
 
-func (sc *SolanaClient) buildCreateAnchorIx(bundleId, opCommit, ccCommit, govRoot [32]byte, blockHeight uint64) []byte {
+func (sc *SolanaClient) buildCreateAnchorIx(bundleId, adiURLHash, opCommit, ccCommit, govRoot [32]byte, blockHeight uint64) []byte {
 	disc := anchorDiscriminator("create_anchor")
 	var buf bytes.Buffer
 	buf.Write(disc[:])
 	buf.Write(bundleId[:])
+	buf.Write(adiURLHash[:])
 	buf.Write(opCommit[:])
 	buf.Write(ccCommit[:])
 	buf.Write(govRoot[:])
@@ -587,7 +588,7 @@ func (sc *SolanaClient) borshWriteADIGovernanceProof(buf *bytes.Buffer, p Solana
 // CreateAnchor calls create_anchor on the Solana Anchor V4 program.
 func (sc *SolanaClient) CreateAnchor(
 	ctx context.Context,
-	bundleId, opCommit, ccCommit, govRoot [32]byte,
+	bundleId, adiURLHash, opCommit, ccCommit, govRoot [32]byte,
 	blockHeight uint64,
 ) (string, error) {
 	log.Printf("📡 [SOLANA] Creating anchor...")
@@ -601,7 +602,7 @@ func (sc *SolanaClient) CreateAnchor(
 	anchorPDA, _ := sc.anchorPDA(bundleId)
 
 	// Build instruction data
-	ixData := sc.buildCreateAnchorIx(bundleId, opCommit, ccCommit, govRoot, blockHeight)
+	ixData := sc.buildCreateAnchorIx(bundleId, adiURLHash, opCommit, ccCommit, govRoot, blockHeight)
 
 	// Build instruction with accounts in order
 	ix := SolInstruction{
