@@ -307,6 +307,9 @@ func (btce *BFTTargetChainExecutor) ExecuteTargetChainOperations(
 	case "near", "near testnet", "near protocol", "near-testnet", "near mainnet":
 		// NEAR uses Ed25519 signing, Borsh serialization, and JSON-RPC — completely different from EVM
 		return btce.executeNearOperations(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, targetChainID)
+	case "solana", "solana devnet", "solana mainnet", "solana testnet":
+		// Solana uses Ed25519 signing, Borsh-encoded Anchor instructions, and Solana JSON-RPC
+		return btce.executeSolanaOperations(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, targetChainID)
 	case "ethereum", "eth", "sepolia", "arbitrum", "arb", "optimism", "op", "base", "polygon", "matic",
 		"bsc", "bsc testnet", "binance", "moonbeam", "moonbase", "moonbeam moonbase alpha":
 		return btce.executeEthereumOperations(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, targetChainID)
@@ -1825,6 +1828,458 @@ func (btce *BFTTargetChainExecutor) buildNearResult(
 			"anchorContract":  os.Getenv("NEAR_ANCHOR_CONTRACT"),
 			"explorerUrl":     "https://testnet.nearblocks.io",
 			"executionMethod": "near_json_rpc",
+		},
+	}
+}
+
+// =============================================================================
+// SOLANA CHAIN EXECUTION
+// =============================================================================
+
+// executeSolanaOperations executes anchor workflow on Solana using JSON-RPC.
+// Solana uses Ed25519 signing, Borsh-encoded Anchor instructions, and PDAs.
+// Proof building reuses existing commitment logic from EthereumContractManager.
+func (btce *BFTTargetChainExecutor) executeSolanaOperations(
+	ctx context.Context,
+	intentID string,
+	transactionHash string,
+	accountURL string,
+	validatorID string,
+	bundleID string,
+	anchorID string,
+	certenProof *proof.CertenProof,
+	chainID int64,
+) (*TargetChainExecutionResult, error) {
+
+	btce.logger.Printf("🔷 [SOLANA-EXEC] Executing Solana chain operations for intent: %s", intentID)
+
+	// Load Solana config from environment
+	solanaPrivateKey := os.Getenv("SOLANA_PRIVATE_KEY")
+	solanaRPCURL := os.Getenv("SOLANA_DEVNET_RPC_URL")
+	solanaAnchorProgramID := os.Getenv("SOLANA_ANCHOR_PROGRAM_ID")
+	solanaBLSVerifierProgramID := os.Getenv("SOLANA_BLS_VERIFIER_PROGRAM_ID")
+	solanaAccountFactoryProgramID := os.Getenv("SOLANA_ACCOUNT_FACTORY_PROGRAM_ID")
+	solanaAccountProgramID := os.Getenv("SOLANA_ACCOUNT_PROGRAM_ID")
+
+	if solanaPrivateKey == "" || solanaRPCURL == "" || solanaAnchorProgramID == "" {
+		return nil, fmt.Errorf("missing Solana config: SOLANA_PRIVATE_KEY=%v, SOLANA_DEVNET_RPC_URL=%q, SOLANA_ANCHOR_PROGRAM_ID=%q",
+			solanaPrivateKey != "", solanaRPCURL, solanaAnchorProgramID)
+	}
+
+	btce.logger.Printf("✅ [SOLANA-EXEC] Using Solana config:")
+	btce.logger.Printf("   RPC: %s", solanaRPCURL)
+	btce.logger.Printf("   Anchor Program: %s", solanaAnchorProgramID)
+	btce.logger.Printf("   BLS Verifier: %s", solanaBLSVerifierProgramID)
+	btce.logger.Printf("   Account Factory: %s", solanaAccountFactoryProgramID)
+	btce.logger.Printf("   Account Program: %s", solanaAccountProgramID)
+
+	// Create Solana client
+	solClient, err := NewSolanaClient(solanaRPCURL, solanaPrivateKey,
+		solanaAnchorProgramID, solanaBLSVerifierProgramID,
+		solanaAccountFactoryProgramID, solanaAccountProgramID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Solana client: %w", err)
+	}
+
+	// Create EthereumContractManager for proof building (reuse commitment logic)
+	privateKey := os.Getenv("ETH_PRIVATE_KEY")
+	contractConfig := &CertenContractConfig{
+		EthereumRPC:          os.Getenv("ETHEREUM_URL"),
+		ChainID:              11155111,
+		PrivateKey:           privateKey,
+		CreationContract:     os.Getenv("CERTEN_ANCHOR_V3_ADDRESS"),
+		VerificationContract: os.Getenv("CERTEN_ANCHOR_V3_ADDRESS"),
+		GasLimit:             800000,
+		MaxGasPriceGwei:      50,
+	}
+	if contractConfig.CreationContract == "" {
+		contractConfig.CreationContract = os.Getenv("CERTEN_CONTRACT_ADDRESS")
+	}
+	if contractConfig.VerificationContract == "" {
+		contractConfig.VerificationContract = contractConfig.CreationContract
+	}
+
+	ethManager, err := NewEthereumContractManager(contractConfig)
+	if err != nil {
+		btce.logger.Printf("⚠️ [SOLANA-EXEC] Failed to create proof builder (non-fatal, using defaults): %v", err)
+	}
+
+	// Build legacy intent and proof data (same as EVM/TRON/NEAR path)
+	legacyIntent := btce.convertToLegacyIntent(intentID, transactionHash, accountURL, certenProof)
+
+	var bundleIdHash [32]byte
+	var comprehensiveProof *contracts.ComprehensiveCertenProof
+	if ethManager != nil {
+		bundleIdHash = ethManager.generateAnchorID(legacyIntent, certenProof)
+		cp := ethManager.buildComprehensiveProof(legacyIntent, certenProof,
+			&anchor.AnchorResponse{AnchorID: anchorID, Success: true, Message: "BFT anchor for Solana"},
+			bundleIdHash,
+		)
+		comprehensiveProof = &cp
+	} else {
+		hash := ethcrypto.Keccak256Hash([]byte(fmt.Sprintf("certen_v3_%s_%d_%s",
+			legacyIntent.IntentID, certenProof.BlockHeight, certenProof.TransactionHash)))
+		copy(bundleIdHash[:], hash[:])
+	}
+
+	// Compute adiURLHash
+	var adiURLHash [32]byte
+	adiURL := certenProof.AccountURL
+	if adiURL == "" {
+		adiURL = fmt.Sprintf("%s/data", legacyIntent.OrganizationADI)
+	}
+	copy(adiURLHash[:], ethcrypto.Keccak256([]byte(adiURL)))
+
+	// Extract commitments
+	var opCommitment, ccCommitment, govRoot [32]byte
+	if comprehensiveProof != nil {
+		opCommitment = comprehensiveProof.Commitments.OperationCommitment
+		ccCommitment = comprehensiveProof.Commitments.CrossChainCommitment
+		govRoot = comprehensiveProof.Commitments.GovernanceRoot
+	}
+
+	// ========== Step 1: Create Anchor ==========
+	btce.logger.Printf("🔗 [SOLANA-EXEC] Step 1: Creating anchor...")
+
+	createTxSig, err := solClient.CreateAnchor(ctx,
+		bundleIdHash, adiURLHash, opCommitment, ccCommitment, govRoot,
+		certenProof.BlockHeight,
+	)
+	if err != nil {
+		btce.logger.Printf("❌ [SOLANA-EXEC] Step 1 failed: %v", err)
+		return btce.buildSolanaResult(intentID, anchorID,
+			"create_failed_solana", "", "", false), err
+	}
+
+	btce.logger.Printf("✅ [SOLANA-EXEC] Step 1 complete - Anchor created: %s", createTxSig)
+
+	// Wait for Step 1 confirmation
+	err = solClient.WaitForConfirmation(ctx, createTxSig, 60*time.Second)
+	if err != nil {
+		btce.logger.Printf("⚠️ [SOLANA-EXEC] Step 1 confirmation issue: %v", err)
+	}
+
+	// ========== Step 2: Execute Comprehensive Proof ==========
+	btce.logger.Printf("🔗 [SOLANA-EXEC] Step 2: Submitting comprehensive proof...")
+
+	solanaProof := btce.buildSolanaCertenProof(comprehensiveProof, certenProof)
+
+	verifyTxSig, err := solClient.ExecuteComprehensiveProof(ctx, bundleIdHash, solanaProof)
+	if err != nil {
+		btce.logger.Printf("❌ [SOLANA-EXEC] Step 2 failed: %v", err)
+		return btce.buildSolanaResult(intentID, anchorID,
+			createTxSig, "verify_failed_solana", "", false), err
+	}
+
+	btce.logger.Printf("✅ [SOLANA-EXEC] Step 2 complete - Proof verified: %s", verifyTxSig)
+
+	// Wait for Step 2 confirmation
+	err = solClient.WaitForConfirmation(ctx, verifyTxSig, 60*time.Second)
+	if err != nil {
+		btce.logger.Printf("⚠️ [SOLANA-EXEC] Step 2 confirmation issue: %v", err)
+	}
+
+	// ========== Step 3: Execute via user's Abstract Account ==========
+	allLegs := btce.extractAllLegsFromIntent(legacyIntent)
+	govTxSig := "no_governance_needed"
+
+	if len(allLegs) > 0 {
+		btce.logger.Printf("🏦 [SOLANA-EXEC] Step 3: Executing governance proof direct...")
+
+		// Derive owner keypair from ADI URL — keccak256(adiUrl) as Ed25519 seed,
+		// then use the public key as owner. Matches API bridge's deriveOwnerKeypair.
+		ownerPubkey, ownerPrivKey := DeriveSolanaAccountOwner(adiURL)
+		salt := DeriveSolanaAccountSalt(adiURL)
+
+		// Compute account PDA
+		accountStatePDA, _, _ := FindProgramAddress(
+			[][]byte{[]byte("certen_account"), ownerPubkey[:]},
+			solClient.accountProgramID,
+		)
+
+		btce.logger.Printf("   Owner: %s", base58.Encode(ownerPubkey[:]))
+		btce.logger.Printf("   Account PDA: %s", base58.Encode(accountStatePDA[:]))
+
+		// Check if account exists
+		accountExists, checkErr := solClient.CheckAccountExists(ctx, accountStatePDA)
+		if checkErr != nil {
+			btce.logger.Printf("⚠️ [SOLANA-EXEC] Failed to check account existence: %v", checkErr)
+		}
+
+		if !accountExists && solanaAccountFactoryProgramID != "" {
+			btce.logger.Printf("⚠️ [SOLANA-EXEC] User account not found, auto-deploying...")
+
+			deployTxSig, deployErr := solClient.DeployAccountViaFactory(ctx, ownerPubkey, ownerPrivKey, adiURL, salt)
+			if deployErr != nil {
+				btce.logger.Printf("❌ [SOLANA-EXEC] Account auto-deploy failed: %v", deployErr)
+				govTxSig = "gov_failed_account_deploy_solana"
+			} else {
+				btce.logger.Printf("✅ [SOLANA-EXEC] Account deployment tx: %s", deployTxSig)
+				waitErr := solClient.WaitForConfirmation(ctx, deployTxSig, 60*time.Second)
+				if waitErr != nil {
+					btce.logger.Printf("⚠️ [SOLANA-EXEC] Account deployment confirmation failed: %v", waitErr)
+					govTxSig = "gov_failed_account_deploy_solana"
+				} else {
+					// Verify account actually exists on-chain after deployment
+					verifyExists, verifyErr := solClient.CheckAccountExists(ctx, accountStatePDA)
+					if verifyErr != nil {
+						btce.logger.Printf("⚠️ [SOLANA-EXEC] Post-deploy verification failed: %v", verifyErr)
+					}
+					if verifyExists {
+						btce.logger.Printf("✅ [SOLANA-EXEC] Account verified on-chain: %s", base58.Encode(accountStatePDA[:]))
+						accountExists = true
+					} else {
+						btce.logger.Printf("❌ [SOLANA-EXEC] Account NOT found on-chain after deployment!")
+						govTxSig = "gov_failed_account_not_verified_solana"
+					}
+				}
+			}
+		}
+
+		if accountExists && govTxSig == "no_governance_needed" {
+			// Read anchor data for merkle proof construction
+			anchorData, readErr := solClient.GetAnchorData(ctx, bundleIdHash)
+			if readErr != nil {
+				btce.logger.Printf("⚠️ [SOLANA-EXEC] Failed to read anchor data: %v", readErr)
+				govTxSig = "gov_failed_anchor_read_solana"
+			} else {
+				// Determine target and value from intent
+				targetValue := uint64(1) // Default 1 lamport
+				if len(allLegs) > 0 && allLegs[0].Value != nil {
+					targetValue = allLegs[0].Value.Uint64()
+				}
+
+				// Derive recipient pubkey
+				recipientAddr := ""
+				solanaToAddr := btce.extractSolanaFieldFromCrossChainData(legacyIntent, "to")
+				if solanaToAddr != "" {
+					recipientAddr = solanaToAddr
+				} else if len(allLegs) > 0 {
+					recipientAddr = allLegs[0].Target.Hex()
+				}
+
+				recipientPubkey, recipientErr := DeriveSolanaRecipient(recipientAddr)
+				if recipientErr != nil {
+					btce.logger.Printf("⚠️ [SOLANA-EXEC] Failed to derive recipient: %v", recipientErr)
+					govTxSig = "gov_failed_invalid_recipient_solana"
+				} else {
+					btce.logger.Printf("💱 [SOLANA-EXEC] Governance: target=%s lamports=%d",
+						base58.Encode(recipientPubkey[:]), targetValue)
+
+					// Build ADIGovernanceProof
+					accountProof := btce.buildSolanaAccountProof(
+						bundleIdHash, certenProof, adiURL,
+						anchorData.OperationCommitment,
+						anchorData.CrossChainCommitment,
+						anchorData.GovernanceRoot,
+						targetValue,
+					)
+
+					var govErr error
+					govTxSig, govErr = solClient.ExecuteGovernanceProofDirect(ctx,
+						ownerPubkey, targetValue, []byte{}, accountProof, recipientPubkey,
+					)
+					if govErr != nil {
+						btce.logger.Printf("⚠️ [SOLANA-EXEC] Step 3 failed: %v", govErr)
+						govTxSig = "gov_failed_solana"
+					}
+				}
+			}
+		}
+	}
+
+	btce.logger.Printf("🎉 [SOLANA-EXEC] Solana anchor workflow completed!")
+	btce.logger.Printf("   Create TX: %s", createTxSig)
+	btce.logger.Printf("   Verify TX: %s", verifyTxSig)
+	btce.logger.Printf("   Governance TX: %s", govTxSig)
+
+	return btce.buildSolanaResult(intentID, anchorID, createTxSig, verifyTxSig, govTxSig, true), nil
+}
+
+// buildSolanaCertenProof converts the comprehensive proof to Solana Borsh format.
+func (btce *BFTTargetChainExecutor) buildSolanaCertenProof(
+	compProof *contracts.ComprehensiveCertenProof,
+	certenProof *proof.CertenProof,
+) SolanaCertenProof {
+	if compProof == nil {
+		return SolanaCertenProof{
+			ExpirationTime: time.Now().Add(24 * time.Hour).Unix(),
+		}
+	}
+
+	proofHashes := make([][32]byte, len(compProof.ProofHashes))
+	copy(proofHashes, compProof.ProofHashes)
+
+	keyPageProofs := make([][32]byte, len(compProof.GovernanceProof.KeyPageProofs))
+	copy(keyPageProofs, compProof.GovernanceProof.KeyPageProofs)
+
+	totalVP := uint64(0)
+	if compProof.BLSProof.TotalVotingPower != nil {
+		totalVP = compProof.BLSProof.TotalVotingPower.Uint64()
+	}
+	signedVP := uint64(0)
+	if compProof.BLSProof.SignedVotingPower != nil {
+		signedVP = compProof.BLSProof.SignedVotingPower.Uint64()
+	}
+	govNonce := uint64(0)
+	if compProof.GovernanceProof.Nonce != nil {
+		govNonce = compProof.GovernanceProof.Nonce.Uint64()
+	}
+	reqSigs := uint64(0)
+	if compProof.GovernanceProof.RequiredSignatures != nil {
+		reqSigs = compProof.GovernanceProof.RequiredSignatures.Uint64()
+	}
+	provSigs := uint64(0)
+	if compProof.GovernanceProof.ProvidedSignatures != nil {
+		provSigs = compProof.GovernanceProof.ProvidedSignatures.Uint64()
+	}
+
+	expirationSec := int64(time.Now().Add(24 * time.Hour).Unix())
+	if compProof.ExpirationTime != nil {
+		expirationSec = compProof.ExpirationTime.Int64()
+	}
+
+	// Authority address: 20-byte EVM address
+	var authorityAddr [20]byte
+	copy(authorityAddr[:], compProof.GovernanceProof.AuthorityAddress.Bytes())
+
+	// Validator addresses as [32]byte pubkeys
+	validatorAddrs := make([][32]byte, 0)
+
+	// BLS aggregate signature — for Solana, pass the raw ABI bytes directly
+	aggregateSig := compProof.BLSProof.AggregateSignature
+
+	return SolanaCertenProof{
+		TransactionHash: compProof.TransactionHash,
+		MerkleRoot:      compProof.MerkleRoot,
+		ProofHashes:     proofHashes,
+		LeafHash:        compProof.LeafHash,
+		GovernanceProof: SolanaGovernanceProofData{
+			KeyBookRoot:        compProof.GovernanceProof.KeyBookRoot,
+			KeyPageProofs:      keyPageProofs,
+			AuthorityAddress:   authorityAddr,
+			AuthorityLevel:     compProof.GovernanceProof.AuthorityLevel,
+			RequiredSignatures: reqSigs,
+			ProvidedSignatures: provSigs,
+			Nonce:              govNonce,
+		},
+		BlsProof: SolanaBLSProofData{
+			AggregateSignature: aggregateSig,
+			MessageHash:        compProof.BLSProof.MessageHash,
+			ThresholdMet:       compProof.BLSProof.ThresholdMet,
+			SignedVotingPower:  signedVP,
+			TotalVotingPower:   totalVP,
+			ValidatorAddresses: validatorAddrs,
+		},
+		Commitments: SolanaCommitmentData{
+			OperationCommitment:  compProof.Commitments.OperationCommitment,
+			CrossChainCommitment: compProof.Commitments.CrossChainCommitment,
+			GovernanceRoot:       compProof.Commitments.GovernanceRoot,
+		},
+		ExpirationTime: expirationSec,
+		Metadata:       compProof.Metadata,
+	}
+}
+
+// buildSolanaAccountProof constructs the SolanaADIGovernanceProof for Step 3.
+// Mirrors buildNearAccountProof — computes a 4-leaf merkle proof for adiURL verification.
+func (btce *BFTTargetChainExecutor) buildSolanaAccountProof(
+	bundleID [32]byte,
+	certenProof *proof.CertenProof,
+	adiURL string,
+	opCommitment [32]byte,
+	ccCommitment [32]byte,
+	govRoot [32]byte,
+	lamports uint64,
+) SolanaADIGovernanceProof {
+	requiredLevel := solanaAuthorityLevelForLamports(lamports)
+	log.Printf("🔐 [SOLANA-AUTH] %d lamports → authority level: %d", lamports, requiredLevel)
+
+	// Build merkle proof: same 4-leaf tree as TRON/EVM/NEAR
+	hash23 := sortedHash(ccCommitment[:], govRoot[:])
+	var hash23Arr [32]byte
+	copy(hash23Arr[:], hash23)
+
+	merkleProof := [][32]byte{opCommitment, hash23Arr}
+
+	now := time.Now()
+	expiresAt := now.Add(1 * time.Hour)
+
+	// Build validator signatures
+	var validatorSigs []byte
+	if certenProof != nil && certenProof.BLSAggregateSignature != "" {
+		sigHex := strings.TrimPrefix(certenProof.BLSAggregateSignature, "0x")
+		sigBytes, err := hex.DecodeString(sigHex)
+		if err == nil {
+			validatorSigs = sigBytes
+		}
+	}
+
+	return SolanaADIGovernanceProof{
+		AdiUrl:              adiURL,
+		AnchorId:            bundleID,
+		MerkleProof:         merkleProof,
+		KeyBookProof:        []byte{},
+		RoleProof:           []byte{},
+		ThresholdProof:      []byte{},
+		Timestamp:           now.Unix(),
+		ExpiresAt:           expiresAt.Unix(),
+		ValidatorSignatures: validatorSigs,
+		Nonce:               1,
+		RequiredLevel:       requiredLevel,
+	}
+}
+
+// extractSolanaFieldFromCrossChainData extracts a Solana address field from CrossChainData.
+// Returns the field value if it looks like a Solana base58 address (32+ chars, no 0x prefix, no dots).
+func (btce *BFTTargetChainExecutor) extractSolanaFieldFromCrossChainData(legacyIntent *intent.CertenIntent, field string) string {
+	if legacyIntent == nil || len(legacyIntent.CrossChainData) == 0 {
+		return ""
+	}
+
+	var ccData struct {
+		Legs []struct {
+			From string `json:"from"`
+			To   string `json:"to"`
+		} `json:"legs"`
+	}
+	if err := json.Unmarshal(legacyIntent.CrossChainData, &ccData); err != nil || len(ccData.Legs) == 0 {
+		return ""
+	}
+
+	var value string
+	switch field {
+	case "from":
+		value = ccData.Legs[0].From
+	case "to":
+		value = ccData.Legs[0].To
+	}
+
+	// Solana addresses are base58, 32-44 chars, no dots (unlike NEAR), no 0x prefix (unlike EVM)
+	if value != "" && !strings.HasPrefix(value, "0x") && !strings.Contains(value, ".") && len(value) >= 32 {
+		return value
+	}
+	return ""
+}
+
+// buildSolanaResult creates a TargetChainExecutionResult for Solana operations.
+func (btce *BFTTargetChainExecutor) buildSolanaResult(
+	intentID, anchorID string,
+	createTxSig, verifyTxSig, govTxSig string,
+	success bool,
+) *TargetChainExecutionResult {
+	return &TargetChainExecutionResult{
+		Chain:            "solana-devnet",
+		TxHash:           createTxSig,
+		Success:          success,
+		CreateTxHash:     createTxSig,
+		VerifyTxHash:     verifyTxSig,
+		GovernanceTxHash: govTxSig,
+		Metadata: map[string]string{
+			"chain":            "solana-devnet",
+			"anchorProgram":    os.Getenv("SOLANA_ANCHOR_PROGRAM_ID"),
+			"explorerUrl":      "https://explorer.solana.com/?cluster=devnet",
+			"executionMethod":  "solana_json_rpc",
 		},
 	}
 }
