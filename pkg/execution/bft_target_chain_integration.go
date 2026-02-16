@@ -1470,9 +1470,9 @@ func (btce *BFTTargetChainExecutor) executeNearOperations(
 			if !accountExists && nearAccountFactory != "" {
 				btce.logger.Printf("⚠️ [NEAR-EXEC] User account %s not found, auto-deploying...", userAccountID)
 
-				// 0.6 NEAR deposit for account creation
+				// 10 NEAR deposit for account creation (8 NEAR storage + 0.5 fee + headroom)
 				deposit := new(big.Int)
-				deposit.SetString("600000000000000000000000", 10) // 0.6 * 10^24 yoctoNEAR
+				deposit.SetString("10000000000000000000000000", 10) // 10 * 10^24 yoctoNEAR
 
 				deployTx, deployErr := nearClient.DeployAccountViaFactory(ctx,
 					nearAccountFactory, ownerBytes32, ownerEth, adiURL, salt, deposit, gasFactoryDeploy,
