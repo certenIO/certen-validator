@@ -777,11 +777,16 @@ func (sc *SolanaClient) ExecuteProofFromBuffer(
 	usedCommitPDA, _ := sc.usedCommitmentPDA(proof.Commitments.OperationCommitment)
 	usedNoncePDA, _ := sc.usedNoncePDA(proof.GovernanceProof.AuthorityAddress, proof.GovernanceProof.Nonce)
 
+	// BLS verifier PDAs needed for CPI during verify_all_components
+	blsStatePDA, _ := sc.blsVerifierStatePDA()
+	blsVkPDA, _ := sc.blsVerifierVkPDA()
+
 	ixData := sc.buildExecuteProofFromBufferIx(anchorId)
 
 	ix := SolInstruction{
 		ProgramID: sc.anchorProgramID,
 		Accounts: []SolAccountMeta{
+			// 8 accounts defined in the Anchor ExecuteProofFromBuffer struct
 			{Pubkey: statePDA, IsSigner: false, IsWritable: true},
 			{Pubkey: anchorPDA, IsSigner: false, IsWritable: true},
 			{Pubkey: proofBufPDA, IsSigner: false, IsWritable: true},
@@ -790,6 +795,10 @@ func (sc *SolanaClient) ExecuteProofFromBuffer(
 			{Pubkey: signerPubkey, IsSigner: true, IsWritable: true},
 			{Pubkey: solSystemProgram, IsSigner: false, IsWritable: false},
 			{Pubkey: solRentSysvar, IsSigner: false, IsWritable: false},
+			// Additional accounts for CPI to BLS verifier during proof verification
+			{Pubkey: sc.blsVerifierProgramID, IsSigner: false, IsWritable: false},
+			{Pubkey: blsStatePDA, IsSigner: false, IsWritable: false},
+			{Pubkey: blsVkPDA, IsSigner: false, IsWritable: false},
 		},
 		Data: ixData,
 	}
