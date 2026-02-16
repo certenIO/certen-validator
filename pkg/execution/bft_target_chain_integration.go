@@ -1507,14 +1507,6 @@ func (btce *BFTTargetChainExecutor) executeNearOperations(
 					btce.logger.Printf("⚠️ [NEAR-EXEC] Failed to read anchor data: %v", readErr)
 					govTxHash = "gov_failed_anchor_read_near"
 				} else {
-					// Build ADIGovernanceProof
-					accountProof := btce.buildNearAccountProof(
-						bundleIdHash, certenProof, adiURL,
-						anchorData.OperationCommitment,
-						anchorData.CrossChainCommitment,
-						anchorData.GovernanceRoot,
-					)
-
 					// Determine target and value from intent
 					targetAddr := nearToAccountID
 					if targetAddr == "" && len(allLegs) > 0 {
@@ -1530,6 +1522,15 @@ func (btce *BFTTargetChainExecutor) executeNearOperations(
 
 					btce.logger.Printf("💱 [NEAR-EXEC] Governance: target=%s deposit=%s yoctoNEAR (converted from %s wei)",
 						targetAddr, targetValue.String(), allLegs[0].Value.String())
+
+					// Build ADIGovernanceProof (pass deposit so authority level matches contract thresholds)
+					accountProof := btce.buildNearAccountProof(
+						bundleIdHash, certenProof, adiURL,
+						anchorData.OperationCommitment,
+						anchorData.CrossChainCommitment,
+						anchorData.GovernanceRoot,
+						targetValue,
+					)
 
 					nearCall := NearCallJSON{
 						Target:  targetAddr,
@@ -1665,6 +1666,28 @@ func (btce *BFTTargetChainExecutor) buildNearCertenProof(
 	}
 }
 
+// nearAuthorityLevelForDeposit returns the NEAR contract AuthorityLevel string
+// matching the deposit-based thresholds in verification/mod.rs.
+func nearAuthorityLevelForDeposit(depositYocto *big.Int) string {
+	rootThreshold := new(big.Int).SetUint64(10_000_000)
+	rootThreshold.Mul(rootThreshold, new(big.Int).SetUint64(1_000_000_000_000_000_000)) // 10 NEAR
+
+	adminThreshold := new(big.Int).SetUint64(1_000_000)
+	adminThreshold.Mul(adminThreshold, new(big.Int).SetUint64(1_000_000_000_000_000_000)) // 1 NEAR
+
+	managerThreshold := new(big.Int).SetUint64(100_000)
+	managerThreshold.Mul(managerThreshold, new(big.Int).SetUint64(1_000_000_000_000_000_000)) // 0.1 NEAR
+
+	if depositYocto.Cmp(rootThreshold) >= 0 {
+		return "ROOT"
+	} else if depositYocto.Cmp(adminThreshold) >= 0 {
+		return "ADMIN"
+	} else if depositYocto.Cmp(managerThreshold) >= 0 {
+		return "MANAGER"
+	}
+	return "OPERATOR"
+}
+
 // buildNearAccountProof constructs the NearADIGovernanceProofJSON for Step 3.
 // Mirrors buildTronAccountProof — computes a 4-leaf merkle proof for adiURL verification.
 func (btce *BFTTargetChainExecutor) buildNearAccountProof(
@@ -1674,7 +1697,12 @@ func (btce *BFTTargetChainExecutor) buildNearAccountProof(
 	opCommitment [32]byte,
 	ccCommitment [32]byte,
 	govRoot [32]byte,
+	depositYocto *big.Int,
 ) NearADIGovernanceProofJSON {
+	// Calculate authority level matching contract deposit thresholds
+	requiredLevel := nearAuthorityLevelForDeposit(depositYocto)
+	log.Printf("🔐 [NEAR-AUTH] Deposit %s yoctoNEAR → authority level: %s", depositYocto.String(), requiredLevel)
+
 	// Build merkle proof: same 4-leaf tree as TRON/EVM
 	// proof[0] = operationCommitment (sibling at level 0)
 	// proof[1] = sortedHash(ccCommitment, govRoot) (sibling at level 1)
@@ -1718,8 +1746,8 @@ func (btce *BFTTargetChainExecutor) buildNearAccountProof(
 			ValidUntilSec:  0,
 		},
 		RoleProof: NearRoleProofJSON{
-			Level:        "OPERATOR", // AuthorityLevel enum serializes as string
-			Permissions:  []string{}, // Vec<String> = JSON array of strings
+			Level:        requiredLevel, // Must match or exceed deposit-based threshold
+			Permissions:  []string{},    // Vec<String> = JSON array of strings
 			RoleHash:     encodeBytes32AsBase64([32]byte{}),
 			Signature:    encodeBytesAsBase64([]byte{}),
 			AuthorizedBy: encodeBytesAsBase64([]byte{}),
@@ -1737,7 +1765,7 @@ func (btce *BFTTargetChainExecutor) buildNearAccountProof(
 		TimestampSec:        uint64(now.Unix()),
 		ExpiresAtSec:        uint64(expiresAt.Unix()),
 		Nonce:               1, // Must be > current nonce (starts at 0)
-		RequiredLevel:       "OPERATOR", // AuthorityLevel enum serializes as string
+		RequiredLevel:       requiredLevel, // Matches deposit-based contract thresholds
 	}
 }
 
