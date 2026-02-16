@@ -1736,7 +1736,7 @@ func (btce *BFTTargetChainExecutor) buildNearAccountProof(
 		ValidatorSignatures: validatorSigs,
 		TimestampSec:        uint64(now.Unix()),
 		ExpiresAtSec:        uint64(expiresAt.Unix()),
-		Nonce:               0,
+		Nonce:               1, // Must be > current nonce (starts at 0)
 		RequiredLevel:       "OPERATOR", // AuthorityLevel enum serializes as string
 	}
 }
