@@ -214,15 +214,19 @@ func ConvertABIProofToNEARJSON(abiBytes []byte) (string, error) {
 		return new(big.Int).SetBytes(abiBytes[offset : offset+32]).Uint64()
 	}
 
-	// ABI bytes use EVM ecPairing convention: (c1/imaginary, c0/real) per Fq2 component.
-	// NEAR BLS verifier (arkworks) expects: x[0]=c0 (real), x[1]=c1 (imaginary).
-	// So we swap: ABI offset 64=c1, 96=c0 → NEAR X[0]=c0(96), X[1]=c1(64).
+	// ABI byte layout from our custom ToSolidityCalldata (prover.go):
+	//   offset 64: ProofB[0][0] = Bs.X.A0 = c0 (real)
+	//   offset 96: ProofB[0][1] = Bs.X.A1 = c1 (imaginary)
+	//   offset 128: ProofB[1][0] = Bs.Y.A0 = c0 (real)
+	//   offset 160: ProofB[1][1] = Bs.Y.A1 = c1 (imaginary)
+	// NEAR arkworks Fq2::new(x0, x1) = c0 + c1*u, so x[0]=c0, x[1]=c1.
+	// gnark's native convention matches arkworks — NO swap needed.
 	proof := NearBLSSignatureProofJSON{
 		Proof: NearGroth16ProofJSON{
 			A: NearG1PointJSON{X: b64(0), Y: b64(32)},
 			B: NearG2PointJSON{
-				X: [2]string{b64(96), b64(64)},
-				Y: [2]string{b64(160), b64(128)},
+				X: [2]string{b64(64), b64(96)},
+				Y: [2]string{b64(128), b64(160)},
 			},
 			C: NearG1PointJSON{X: b64(192), Y: b64(224)},
 		},
