@@ -1942,7 +1942,7 @@ func (btce *BFTTargetChainExecutor) executeSolanaOperations(
 	btce.logger.Printf("🔗 [SOLANA-EXEC] Step 1: Creating anchor...")
 
 	createTxSig, err := solClient.CreateAnchor(ctx,
-		bundleIdHash, adiURLHash, opCommitment, ccCommitment, govRoot,
+		bundleIdHash, opCommitment, ccCommitment, govRoot,
 		certenProof.BlockHeight,
 	)
 	if err != nil {
