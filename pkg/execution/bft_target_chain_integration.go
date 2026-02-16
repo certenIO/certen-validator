@@ -1410,7 +1410,7 @@ func (btce *BFTTargetChainExecutor) executeNearOperations(
 	// ========== Step 2: Execute Comprehensive Proof ==========
 	btce.logger.Printf("🔗 [NEAR-EXEC] Step 2: Submitting comprehensive proof on %s...", nearAnchorContract)
 
-	nearProof := btce.buildNearCertenProof(comprehensiveProof, certenProof)
+	nearProof := btce.buildNearCertenProof(comprehensiveProof, certenProof, nearSignerAccountID)
 
 	verifyTxHash, err := nearClient.ExecuteComprehensiveProof(ctx, nearAnchorContract,
 		bundleIdHash, nearProof, gasVerifyProof,
@@ -1557,40 +1557,28 @@ func (btce *BFTTargetChainExecutor) executeNearOperations(
 }
 
 // buildNearCertenProof converts the comprehensive proof to NEAR JSON format.
+// Must match the Rust CertenProofInput struct exactly.
 func (btce *BFTTargetChainExecutor) buildNearCertenProof(
 	proof *contracts.ComprehensiveCertenProof,
 	certenProof *proof.CertenProof,
+	nearSignerAccountID string,
 ) NearCertenProofInput {
 	if proof == nil {
 		return NearCertenProofInput{
-			Timestamp: uint64(time.Now().Unix()),
+			ExpirationTime: uint64(time.Now().Add(24*time.Hour).UnixNano()),
 		}
 	}
 
-	// Convert proof hashes
+	// Convert proof hashes to base64
 	proofHashes := make([]string, len(proof.ProofHashes))
 	for i, h := range proof.ProofHashes {
 		proofHashes[i] = encodeBytes32AsBase64(h)
 	}
 
-	// Convert key page proofs
+	// Convert key page proofs to base64
 	keyPageProofs := make([]string, len(proof.GovernanceProof.KeyPageProofs))
 	for i, h := range proof.GovernanceProof.KeyPageProofs {
 		keyPageProofs[i] = encodeBytes32AsBase64(h)
-	}
-
-	// Convert validator addresses
-	validatorAddrs := make([]string, len(proof.BLSProof.ValidatorAddresses))
-	for i, addr := range proof.BLSProof.ValidatorAddresses {
-		validatorAddrs[i] = encodeAddressAsHex(addr)
-	}
-
-	// Convert voting powers
-	votingPowers := make([]uint64, len(proof.BLSProof.VotingPowers))
-	for i, vp := range proof.BLSProof.VotingPowers {
-		if vp != nil {
-			votingPowers[i] = vp.Uint64()
-		}
 	}
 
 	totalVP := uint64(0)
@@ -1615,63 +1603,61 @@ func (btce *BFTTargetChainExecutor) buildNearCertenProof(
 		provSigs = proof.GovernanceProof.ProvidedSignatures.Uint64()
 	}
 
-	blockHeight := uint64(0)
-	if proof.Commitments.SourceBlockHeight != nil {
-		blockHeight = proof.Commitments.SourceBlockHeight.Uint64()
-	}
-
-	timestamp := uint64(time.Now().Unix())
+	// NEAR uses nanoseconds for block_timestamp(), so expiration must be in nanoseconds
+	expirationNano := uint64(time.Now().Add(24 * time.Hour).UnixNano())
 	if proof.ExpirationTime != nil {
-		timestamp = proof.ExpirationTime.Uint64()
+		// ExpirationTime from EVM is in seconds — convert to nanoseconds
+		expirationNano = proof.ExpirationTime.Uint64() * 1_000_000_000
 	}
 
-	// Validator signatures
-	validatorSigs := ""
-	if certenProof != nil && certenProof.BLSAggregateSignature != "" {
-		sigHex := strings.TrimPrefix(certenProof.BLSAggregateSignature, "0x")
-		sigBytes, err := hex.DecodeString(sigHex)
-		if err == nil {
-			validatorSigs = encodeBytesAsBase64(sigBytes)
+	// Convert ABI-encoded Groth16 proof to NEAR JSON format for BLS verifier
+	aggregateSigProof := ""
+	if len(proof.BLSProof.AggregateSignature) >= 448 {
+		nearProofB64, err := ConvertABIProofToNEARJSON(proof.BLSProof.AggregateSignature)
+		if err != nil {
+			log.Printf("⚠️ [NEAR] Failed to convert BLS proof to NEAR format: %v", err)
+		} else {
+			aggregateSigProof = nearProofB64
+			log.Printf("✅ [NEAR] Converted Groth16 proof to NEAR JSON format (%d base64 chars)", len(nearProofB64))
 		}
+	} else {
+		log.Printf("⚠️ [NEAR] ABI proof bytes too short (%d), using empty aggregate_signature_proof", len(proof.BLSProof.AggregateSignature))
 	}
+
+	// Authority address must be base64-encoded bytes (Base64VecU8), not hex
+	authorityAddrBase64 := encodeBytesAsBase64(proof.GovernanceProof.AuthorityAddress.Bytes())
+
+	// Validator addresses must be NEAR AccountIds, not hex EVM addresses
+	validatorAddrs := []string{nearSignerAccountID}
 
 	return NearCertenProofInput{
 		TransactionHash: encodeBytes32AsBase64(proof.TransactionHash),
-		MerkleRoot:      encodeBytes32AsBase64(proof.MerkleRoot),
 		ProofHashes:     proofHashes,
+		MerkleRoot:      encodeBytes32AsBase64(proof.MerkleRoot),
 		LeafHash:        encodeBytes32AsBase64(proof.LeafHash),
 		GovernanceProof: NearGovernanceProof{
-			KeyBookURL:         proof.GovernanceProof.KeyBookURL,
 			KeyBookRoot:        encodeBytes32AsBase64(proof.GovernanceProof.KeyBookRoot),
 			KeyPageProofs:      keyPageProofs,
-			AuthorityAddress:   encodeAddressAsHex(proof.GovernanceProof.AuthorityAddress),
+			AuthorityAddress:   authorityAddrBase64,
 			AuthorityLevel:     proof.GovernanceProof.AuthorityLevel,
-			Nonce:              govNonce,
 			RequiredSignatures: reqSigs,
 			ProvidedSignatures: provSigs,
-			ThresholdMet:       proof.GovernanceProof.ThresholdMet,
+			Nonce:              govNonce,
 		},
 		BlsProof: NearBLSProof{
-			AggregateSignature: encodeBytesAsBase64(proof.BLSProof.AggregateSignature),
-			ValidatorAddresses: validatorAddrs,
-			VotingPowers:       votingPowers,
-			TotalVotingPower:   totalVP,
-			SignedVotingPower:  signedVP,
-			ThresholdMet:       proof.BLSProof.ThresholdMet,
-			MessageHash:        encodeBytes32AsBase64(proof.BLSProof.MessageHash),
+			AggregateSignatureProof: aggregateSigProof,
+			MessageHash:             encodeBytes32AsBase64(proof.BLSProof.MessageHash),
+			ThresholdMet:            proof.BLSProof.ThresholdMet,
+			SignedVotingPower:       signedVP,
+			TotalVotingPower:        totalVP,
+			ValidatorAddresses:      validatorAddrs,
 		},
 		Commitments: NearCommitmentsJSON{
 			OperationCommitment:  encodeBytes32AsBase64(proof.Commitments.OperationCommitment),
 			CrossChainCommitment: encodeBytes32AsBase64(proof.Commitments.CrossChainCommitment),
 			GovernanceRoot:       encodeBytes32AsBase64(proof.Commitments.GovernanceRoot),
-			SourceChain:          proof.Commitments.SourceChain,
-			BlockHeight:          blockHeight,
-			CommitmentHash:       encodeBytes32AsBase64(proof.Commitments.SourceTxHash),
-			AdiURL:               proof.Commitments.TargetChain,
-			AuthorityURL:         encodeAddressAsHex(proof.Commitments.TargetAddress),
 		},
-		Timestamp:     timestamp,
-		ValidatorSigs: validatorSigs,
+		ExpirationTime: expirationNano,
 	}
 }
 

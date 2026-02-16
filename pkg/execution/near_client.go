@@ -128,50 +128,117 @@ func (nc *NearClient) CreateAnchor(
 // execute_comprehensive_proof method. Maps to Rust CertenProofInput.
 type NearCertenProofInput struct {
 	TransactionHash string               `json:"transaction_hash"`
-	MerkleRoot      string               `json:"merkle_root"`
 	ProofHashes     []string             `json:"proof_hashes"`
+	MerkleRoot      string               `json:"merkle_root"`
 	LeafHash        string               `json:"leaf_hash"`
 	GovernanceProof NearGovernanceProof   `json:"governance_proof"`
 	BlsProof        NearBLSProof          `json:"bls_proof"`
 	Commitments     NearCommitmentsJSON   `json:"commitments"`
-	Timestamp       uint64                `json:"timestamp"`
-	ValidatorSigs   string                `json:"validator_signatures"`
+	ExpirationTime  uint64                `json:"expiration_time"`
 }
 
-// NearGovernanceProof is the governance section of the proof.
+// NearGovernanceProof maps to Rust GovernanceProofDataInput.
 type NearGovernanceProof struct {
-	KeyBookURL         string   `json:"key_book_url"`
 	KeyBookRoot        string   `json:"key_book_root"`
 	KeyPageProofs      []string `json:"key_page_proofs"`
 	AuthorityAddress   string   `json:"authority_address"`
 	AuthorityLevel     uint8    `json:"authority_level"`
-	Nonce              uint64   `json:"nonce"`
 	RequiredSignatures uint64   `json:"required_signatures"`
 	ProvidedSignatures uint64   `json:"provided_signatures"`
-	ThresholdMet       bool     `json:"threshold_met"`
+	Nonce              uint64   `json:"nonce"`
 }
 
-// NearBLSProof is the BLS signature section of the proof.
+// NearBLSProof maps to Rust BLSProofDataInput.
 type NearBLSProof struct {
-	AggregateSignature string   `json:"aggregate_signature"`
-	ValidatorAddresses []string `json:"validator_addresses"`
-	VotingPowers       []uint64 `json:"voting_powers"`
-	TotalVotingPower   uint64   `json:"total_voting_power"`
-	SignedVotingPower  uint64   `json:"signed_voting_power"`
-	ThresholdMet       bool     `json:"threshold_met"`
-	MessageHash        string   `json:"message_hash"`
+	AggregateSignatureProof string   `json:"aggregate_signature_proof"`
+	MessageHash             string   `json:"message_hash"`
+	ThresholdMet            bool     `json:"threshold_met"`
+	SignedVotingPower       uint64   `json:"signed_voting_power"`
+	TotalVotingPower        uint64   `json:"total_voting_power"`
+	ValidatorAddresses      []string `json:"validator_addresses"`
 }
 
-// NearCommitmentsJSON is the commitments section of the proof.
+// NearCommitmentsJSON maps to Rust CommitmentDataInput.
 type NearCommitmentsJSON struct {
 	OperationCommitment  string `json:"operation_commitment"`
 	CrossChainCommitment string `json:"cross_chain_commitment"`
 	GovernanceRoot       string `json:"governance_root"`
-	SourceChain          string `json:"source_chain"`
-	BlockHeight          uint64 `json:"block_height"`
-	CommitmentHash       string `json:"commitment_hash"`
-	AdiURL               string `json:"adi_url"`
-	AuthorityURL         string `json:"authority_url"`
+}
+
+// NearBLSSignatureProofJSON is the JSON structure for the NEAR BLS ZK verifier's
+// BLSSignatureProofInput. This gets JSON-encoded and then base64-encoded to become
+// the aggregate_signature_proof field in NearBLSProof.
+type NearBLSSignatureProofJSON struct {
+	Proof                NearGroth16ProofJSON `json:"proof"`
+	MessageHash          string               `json:"message_hash"`
+	PubkeyCommitment     string               `json:"pubkey_commitment"`
+	SignedVotingPower    uint64               `json:"signed_voting_power"`
+	TotalVotingPower     uint64               `json:"total_voting_power"`
+	ThresholdNumerator   uint64               `json:"threshold_numerator"`
+	ThresholdDenominator uint64               `json:"threshold_denominator"`
+}
+
+// NearGroth16ProofJSON maps to Rust Groth16ProofInput.
+type NearGroth16ProofJSON struct {
+	A NearG1PointJSON `json:"a"`
+	B NearG2PointJSON `json:"b"`
+	C NearG1PointJSON `json:"c"`
+}
+
+// NearG1PointJSON maps to Rust G1PointInput (x, y as Base64VecU8).
+type NearG1PointJSON struct {
+	X string `json:"x"`
+	Y string `json:"y"`
+}
+
+// NearG2PointJSON maps to Rust G2PointInput (x, y as [Base64VecU8; 2]).
+type NearG2PointJSON struct {
+	X [2]string `json:"x"`
+	Y [2]string `json:"y"`
+}
+
+// ConvertABIProofToNEARJSON converts ABI-encoded Groth16 proof bytes (from ToSolidityCalldata)
+// into the JSON format expected by the NEAR BLS ZK verifier contract.
+// ABI layout (each 32 bytes): proofA[0], proofA[1], proofB[0][0], proofB[0][1],
+// proofB[1][0], proofB[1][1], proofC[0], proofC[1], messageHash, pubkeyCommitment,
+// signedVotingPower, totalVotingPower, thresholdNumerator, thresholdDenominator
+func ConvertABIProofToNEARJSON(abiBytes []byte) (string, error) {
+	if len(abiBytes) < 448 {
+		return "", fmt.Errorf("ABI proof bytes too short: %d (need 448)", len(abiBytes))
+	}
+
+	b64 := func(offset int) string {
+		return base64.StdEncoding.EncodeToString(abiBytes[offset : offset+32])
+	}
+	u64 := func(offset int) uint64 {
+		return new(big.Int).SetBytes(abiBytes[offset : offset+32]).Uint64()
+	}
+
+	proof := NearBLSSignatureProofJSON{
+		Proof: NearGroth16ProofJSON{
+			A: NearG1PointJSON{X: b64(0), Y: b64(32)},
+			B: NearG2PointJSON{
+				X: [2]string{b64(64), b64(96)},
+				Y: [2]string{b64(128), b64(160)},
+			},
+			C: NearG1PointJSON{X: b64(192), Y: b64(224)},
+		},
+		MessageHash:          b64(256),
+		PubkeyCommitment:     b64(288),
+		SignedVotingPower:    u64(320),
+		TotalVotingPower:     u64(352),
+		ThresholdNumerator:   u64(384),
+		ThresholdDenominator: u64(416),
+	}
+
+	jsonBytes, err := json.Marshal(proof)
+	if err != nil {
+		return "", fmt.Errorf("marshal NEAR BLS proof JSON: %w", err)
+	}
+
+	// The NEAR contract expects aggregate_signature_proof as Base64VecU8
+	// containing JSON bytes of BLSSignatureProofInput
+	return base64.StdEncoding.EncodeToString(jsonBytes), nil
 }
 
 // ExecuteComprehensiveProof calls execute_comprehensive_proof on the anchor contract.
