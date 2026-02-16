@@ -49,8 +49,8 @@ var (
 )
 
 func init() {
-	// SysvarRent111111111111111111111111 in base58
-	rentBytes, _ := base58.Decode("SysvarRent111111111111111111111111")
+	// Solana Rent sysvar address (full 44-char base58)
+	rentBytes, _ := base58.Decode("SysvarRent111111111111111111111111111111111")
 	copy(solRentSysvar[:], rentBytes)
 }
 
