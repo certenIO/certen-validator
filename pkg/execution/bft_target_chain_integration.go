@@ -1436,25 +1436,31 @@ func (btce *BFTTargetChainExecutor) executeNearOperations(
 	if len(allLegs) > 0 {
 		btce.logger.Printf("🏦 [NEAR-EXEC] Step 3: Executing governance proof direct...")
 
-		// Derive the user's NEAR account ID via factory prediction
-		// Owner is full 32-byte keccak256 hex (implicit NEAR account format)
+		// Extract NEAR account IDs directly from CrossChainData (not from hex-parsed LegExecution)
+		nearFromAccountID := btce.extractNearFieldFromCrossChainData(legacyIntent, "from")
+		nearToAccountID := btce.extractNearFieldFromCrossChainData(legacyIntent, "to")
+
+		btce.logger.Printf("   Intent from: %s", nearFromAccountID)
+		btce.logger.Printf("   Intent to: %s", nearToAccountID)
+
+		// Use the from field directly as the user account ID if it looks like a NEAR account
+		userAccountID := nearFromAccountID
+
+		// Fallback: derive via factory prediction if not available from intent
 		ownerBytes32 := DeriveNearAccountOwnerBytes32(adiURL)
 		ownerEth := DeriveNearAccountOwnerEth(adiURL)
 		salt := DeriveNearAccountSalt(adiURL)
 
-		// Try to predict the user's account ID
-		userAccountID := ""
-		if nearAccountFactory != "" {
+		if userAccountID == "" && nearAccountFactory != "" {
 			predicted, predictErr := nearClient.PredictAccountID(ctx, nearAccountFactory, ownerBytes32, adiURL, salt)
 			if predictErr != nil {
-				btce.logger.Printf("⚠️ [NEAR-EXEC] Failed to predict account ID: %v, using derivation fallback", predictErr)
-				// Fallback: derive account ID from salt and factory
+				btce.logger.Printf("⚠️ [NEAR-EXEC] Failed to predict account ID: %v", predictErr)
 				userAccountID = fmt.Sprintf("%x.%s", salt&0xFFFFFFFF, nearAccountFactory)
 			} else {
 				userAccountID = predicted
 			}
-		} else {
-			btce.logger.Printf("⚠️ [NEAR-EXEC] No factory configured, cannot determine user account ID")
+		} else if userAccountID == "" {
+			btce.logger.Printf("⚠️ [NEAR-EXEC] No factory configured and no from address in intent")
 			govTxHash = "gov_failed_no_factory_near"
 		}
 
@@ -1474,8 +1480,10 @@ func (btce *BFTTargetChainExecutor) executeNearOperations(
 				deposit := new(big.Int)
 				deposit.SetString("10000000000000000000000000", 10) // 10 * 10^24 yoctoNEAR
 
+				// Use 300 TGas for factory deployment (creates sub-account + deploys WASM)
+				const gasFactoryDeployHigh = 300_000_000_000_000 // 300 TGas
 				deployTx, deployErr := nearClient.DeployAccountViaFactory(ctx,
-					nearAccountFactory, ownerBytes32, ownerEth, adiURL, salt, deposit, gasFactoryDeploy,
+					nearAccountFactory, ownerBytes32, ownerEth, adiURL, salt, deposit, gasFactoryDeployHigh,
 				)
 				if deployErr != nil {
 					btce.logger.Printf("❌ [NEAR-EXEC] Account auto-deploy failed: %v", deployErr)
@@ -1507,25 +1515,21 @@ func (btce *BFTTargetChainExecutor) executeNearOperations(
 						anchorData.GovernanceRoot,
 					)
 
-					// Build NearCall for the governance execution
-					// Value from intent is in chain-native units (yoctoNEAR)
-					targetValue := big.NewInt(1)
-					targetAddr := ""
-					if len(allLegs) > 0 {
-						targetValue = allLegs[0].Value
-						// For NEAR, target is an account ID string from the leg's "to" field
-						// The leg stores it as common.Address from hex, we need the original string
+					// Determine target and value from intent
+					targetAddr := nearToAccountID
+					if targetAddr == "" && len(allLegs) > 0 {
 						targetAddr = allLegs[0].Target.Hex()
 					}
 
-					// Try to get the original NEAR account ID from CrossChainData
-					nearTargetAccountID := btce.extractNearTargetFromCrossChainData(legacyIntent)
-					if nearTargetAccountID != "" {
-						targetAddr = nearTargetAccountID
+					// Convert amountWei (18 decimals) to yoctoNEAR (24 decimals)
+					// Web app sends amounts in 18-decimal "wei" format, NEAR uses 24-decimal yoctoNEAR
+					targetValue := big.NewInt(1)
+					if len(allLegs) > 0 && allLegs[0].Value != nil {
+						targetValue = new(big.Int).Mul(allLegs[0].Value, big.NewInt(1_000_000)) // * 10^6
 					}
 
-					btce.logger.Printf("💱 [NEAR-EXEC] Governance: target=%s deposit=%s yoctoNEAR",
-						targetAddr, targetValue.String())
+					btce.logger.Printf("💱 [NEAR-EXEC] Governance: target=%s deposit=%s yoctoNEAR (converted from %s wei)",
+						targetAddr, targetValue.String(), allLegs[0].Value.String())
 
 					nearCall := NearCallJSON{
 						Target:  targetAddr,
@@ -1740,23 +1744,37 @@ func (btce *BFTTargetChainExecutor) buildNearAccountProof(
 // extractNearTargetFromCrossChainData extracts the original NEAR account ID from CrossChainData.
 // NEAR targets are account IDs (strings like "alice.testnet"), not hex addresses.
 func (btce *BFTTargetChainExecutor) extractNearTargetFromCrossChainData(legacyIntent *intent.CertenIntent) string {
+	return btce.extractNearFieldFromCrossChainData(legacyIntent, "to")
+}
+
+// extractNearFieldFromCrossChainData extracts a NEAR account ID field ("from" or "to") from CrossChainData.
+// Returns the field value if it looks like a NEAR account ID (contains dots, no 0x prefix).
+func (btce *BFTTargetChainExecutor) extractNearFieldFromCrossChainData(legacyIntent *intent.CertenIntent, field string) string {
 	if legacyIntent == nil || len(legacyIntent.CrossChainData) == 0 {
 		return ""
 	}
 
 	var ccData struct {
 		Legs []struct {
-			To string `json:"to"`
+			From string `json:"from"`
+			To   string `json:"to"`
 		} `json:"legs"`
 	}
 	if err := json.Unmarshal(legacyIntent.CrossChainData, &ccData); err != nil || len(ccData.Legs) == 0 {
 		return ""
 	}
 
-	// If the "to" field looks like a NEAR account ID (contains dots, no 0x prefix), use it directly
-	to := ccData.Legs[0].To
-	if to != "" && !strings.HasPrefix(to, "0x") && strings.Contains(to, ".") {
-		return to
+	var value string
+	switch field {
+	case "from":
+		value = ccData.Legs[0].From
+	case "to":
+		value = ccData.Legs[0].To
+	}
+
+	// If the field looks like a NEAR account ID (contains dots, no 0x prefix), use it directly
+	if value != "" && !strings.HasPrefix(value, "0x") && strings.Contains(value, ".") {
+		return value
 	}
 	return ""
 }
