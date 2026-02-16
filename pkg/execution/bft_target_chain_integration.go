@@ -1374,7 +1374,7 @@ func (btce *BFTTargetChainExecutor) executeNearOperations(
 	const (
 		gasCreateAnchor  = 30_000_000_000_000  // 30 TGas
 		gasVerifyProof   = 300_000_000_000_000 // 300 TGas
-		gasGovernance    = 100_000_000_000_000 // 100 TGas
+		gasGovernance    = 200_000_000_000_000 // 200 TGas
 		gasFactoryDeploy = 100_000_000_000_000 // 100 TGas
 	)
 
