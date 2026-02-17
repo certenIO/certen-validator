@@ -2316,7 +2316,12 @@ func (btce *BFTTargetChainExecutor) buildSolanaAccountProof(
 	merkleProof := [][32]byte{opCommitment, hash23Arr}
 
 	now := time.Now()
-	expiresAt := now.Add(1 * time.Hour)
+	// Use generous time window: start 5 minutes in the past, expire 2 hours in the future
+	// This accommodates Solana devnet clock skew during simulation
+	proofTimestamp := now.Add(-5 * time.Minute).Unix()
+	proofExpiresAt := now.Add(2 * time.Hour).Unix()
+	log.Printf("🕐 [SOLANA-PROOF] Timestamp: %d (now=%d, delta=%ds), ExpiresAt: %d",
+		proofTimestamp, now.Unix(), now.Unix()-proofTimestamp, proofExpiresAt)
 
 	// Build validator signatures
 	var validatorSigs []byte
@@ -2335,8 +2340,8 @@ func (btce *BFTTargetChainExecutor) buildSolanaAccountProof(
 		KeyBookProof:        []byte{},
 		RoleProof:           []byte{},
 		ThresholdProof:      []byte{},
-		Timestamp:           now.Unix(),
-		ExpiresAt:           expiresAt.Unix(),
+		Timestamp:           proofTimestamp,
+		ExpiresAt:           proofExpiresAt,
 		ValidatorSignatures: validatorSigs,
 		Nonce:               1,
 		RequiredLevel:       requiredLevel,
