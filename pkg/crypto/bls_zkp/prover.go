@@ -16,12 +16,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"math/big"
 	"os"
 	"strings"
 	"sync"
 
 	bls12381 "github.com/consensys/gnark-crypto/ecc/bls12-381"
+	bn254_curve "github.com/consensys/gnark-crypto/ecc/bn254"
+	"github.com/consensys/gnark-crypto/ecc/bn254/fr"
 	"github.com/consensys/gnark-crypto/ecc"
 	groth16_bn254 "github.com/consensys/gnark/backend/groth16/bn254"
 	"github.com/consensys/gnark/backend/groth16"
@@ -29,6 +32,7 @@ import (
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/frontend/cs/r1cs"
 	"github.com/ethereum/go-ethereum/accounts/abi"
+	"github.com/ethereum/go-ethereum/crypto"
 )
 
 // =============================================================================
@@ -291,6 +295,25 @@ func (p *BLSZKProver) GenerateProof(witness *BLSSignatureWitness) (*BLSZKProof, 
 	zkProof.SignatureCommitment = computeCommitment(witness.SignatureX, witness.SignatureY)
 	zkProof.SignedVotingPower = witness.SignedVotingPower
 	zkProof.TotalVotingPower = witness.TotalVotingPower
+
+	// === DIAGNOSTIC: Verify proof locally + manual pairing check ===
+	localResult, localErr := p.VerifyProofLocally(zkProof)
+	log.Printf("🔍 [BLS-ZK-DIAG] gnark local verify: result=%v err=%v", localResult, localErr)
+
+	manualResult, manualErr := p.ManualPairingCheck(zkProof)
+	log.Printf("🔍 [BLS-ZK-DIAG] Manual 4-pairing check: result=%v err=%v", manualResult, manualErr)
+
+	vkHash, vkBuf := p.ComputeVKHash()
+	log.Printf("🔍 [BLS-ZK-DIAG] VK hash (sha256): %s", hex.EncodeToString(vkHash[:]))
+	// Also compute keccak256 for comparison with Solana on-chain VK hash
+	keccakHash := crypto.Keccak256(vkBuf)
+	log.Printf("🔍 [BLS-ZK-DIAG] VK keccak=%x (matches Rust G16-DIAG)", keccakHash[:8])
+
+	// Log VK commitment info
+	if vkBN254, ok := p.vk.(*groth16_bn254.VerifyingKey); ok {
+		log.Printf("🔍 [BLS-ZK-DIAG] VK CommitmentKeys=%d PublicAndCommitmentCommitted=%d IC=%d",
+			len(vkBN254.CommitmentKeys), len(vkBN254.PublicAndCommitmentCommitted), len(vkBN254.G1.K))
+	}
 
 	return zkProof, nil
 }
@@ -615,6 +638,24 @@ func extractProofComponents(proof groth16.Proof) (*BLSZKProof, error) {
 		return nil, errors.New("proof is not BN254 type")
 	}
 
+	// === DIAGNOSTIC: Check for Pedersen commitments ===
+	log.Printf("🔍 [BLS-ZK-DIAG] gnark proof Commitments count: %d", len(proofBN254.Commitments))
+	if len(proofBN254.Commitments) > 0 {
+		log.Printf("⚠️ [BLS-ZK-DIAG] PROOF HAS %d PEDERSEN COMMITMENTS - standard 4-pairing check may be INCOMPLETE!", len(proofBN254.Commitments))
+		for i, c := range proofBN254.Commitments {
+			cx := new(big.Int)
+			cy := new(big.Int)
+			c.X.BigInt(cx)
+			c.Y.BigInt(cy)
+			log.Printf("⚠️ [BLS-ZK-DIAG] Commitment[%d]: x=%s y=%s", i, cx.Text(16)[:16], cy.Text(16)[:16])
+		}
+	}
+	pokX := new(big.Int)
+	pokY := new(big.Int)
+	proofBN254.CommitmentPok.X.BigInt(pokX)
+	proofBN254.CommitmentPok.Y.BigInt(pokY)
+	log.Printf("🔍 [BLS-ZK-DIAG] CommitmentPok: isZero=%v", pokX.Sign() == 0 && pokY.Sign() == 0)
+
 	// Extract ProofA (Ar - G1 point)
 	proofAX := new(big.Int)
 	proofAY := new(big.Int)
@@ -803,4 +844,170 @@ func CreateWitnessFromBLSData(
 		PubkeyY0:          pkY0,
 		PubkeyY1:          pkY1,
 	}, nil
+}
+
+// =============================================================================
+// GROTH16 PAIRING DIAGNOSTIC
+// =============================================================================
+
+// ManualPairingCheck performs the exact same 4-pairing Groth16 verification
+// that our Solana Rust code does, using gnark-crypto's native BN254 pairing.
+// This is the DEFINITIVE test: if this passes in Go but fails on-chain,
+// the issue is in the data pipeline. If this also fails, the equation is wrong.
+func (p *BLSZKProver) ManualPairingCheck(zkProof *BLSZKProof) (bool, error) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	if !p.initialized {
+		return false, errors.New("prover not initialized")
+	}
+
+	vkBN254, ok := p.vk.(*groth16_bn254.VerifyingKey)
+	if !ok {
+		return false, errors.New("VK is not BN254 type")
+	}
+
+	if len(vkBN254.G1.K) != 5 {
+		return false, fmt.Errorf("expected 5 IC points, got %d", len(vkBN254.G1.K))
+	}
+
+	// Reconstruct proof point A (G1)
+	var A bn254_curve.G1Affine
+	A.X.SetBigInt(zkProof.ProofA[0])
+	A.Y.SetBigInt(zkProof.ProofA[1])
+
+	// Reconstruct proof point B (G2)
+	var B bn254_curve.G2Affine
+	B.X.A0.SetBigInt(zkProof.ProofB[0][0])
+	B.X.A1.SetBigInt(zkProof.ProofB[0][1])
+	B.Y.A0.SetBigInt(zkProof.ProofB[1][0])
+	B.Y.A1.SetBigInt(zkProof.ProofB[1][1])
+
+	// Reconstruct proof point C (G1)
+	var C bn254_curve.G1Affine
+	C.X.SetBigInt(zkProof.ProofC[0])
+	C.Y.SetBigInt(zkProof.ProofC[1])
+
+	// Construct public inputs as Fr elements (same reduction as gnark does)
+	var inputs [4]fr.Element
+	inputs[0].SetBytes(zkProof.MessageHash[:])
+	inputs[1].SetBytes(zkProof.PubkeyCommitment[:])
+	inputs[2].SetUint64(zkProof.SignedVotingPower)
+	inputs[3].SetUint64(zkProof.TotalVotingPower)
+
+	// Log inputs for debugging
+	for i, inp := range inputs {
+		var v big.Int
+		inp.BigInt(&v)
+		b := padBigInt(&v)
+		log.Printf("🔍 [BLS-DIAG-PAIRING] input[%d] first8=%x", i, b[:8])
+	}
+
+	// Compute vk_x = IC[0] + sum(inputs[i] * IC[i+1])
+	var vk_x bn254_curve.G1Jac
+	vk_x.FromAffine(&vkBN254.G1.K[0])
+	for i := 0; i < 4; i++ {
+		var scalar big.Int
+		inputs[i].BigInt(&scalar)
+		var term bn254_curve.G1Jac
+		term.FromAffine(&vkBN254.G1.K[i+1])
+		term.ScalarMultiplication(&term, &scalar)
+		vk_x.AddAssign(&term)
+	}
+	var vk_x_aff bn254_curve.G1Affine
+	vk_x_aff.FromJacobian(&vk_x)
+
+	vkxX := new(big.Int)
+	vk_x_aff.X.BigInt(vkxX)
+	log.Printf("🔍 [BLS-DIAG-PAIRING] vk_x.x=%s", vkxX.Text(16)[:16])
+
+	// Negate G1 points: alpha, vk_x, C
+	var negAlpha, negVkX, negC bn254_curve.G1Affine
+	negAlpha.Neg(&vkBN254.G1.Alpha)
+	negVkX.Neg(&vk_x_aff)
+	negC.Neg(&C)
+
+	// 4-pairing check: e(A,B) * e(-alpha, beta) * e(-vk_x, gamma) * e(-C, delta) = 1
+	ok2, err := bn254_curve.PairingCheck(
+		[]bn254_curve.G1Affine{A, negAlpha, negVkX, negC},
+		[]bn254_curve.G2Affine{B, vkBN254.G2.Beta, vkBN254.G2.Gamma, vkBN254.G2.Delta},
+	)
+	if err != nil {
+		log.Printf("❌ [BLS-DIAG-PAIRING] PairingCheck error: %v", err)
+		return false, err
+	}
+
+	log.Printf("🔍 [BLS-DIAG-PAIRING] 4-pairing check result: %v", ok2)
+	return ok2, nil
+}
+
+// ComputeVKHash computes a SHA256 hash of all VK component bytes for comparison
+// with the on-chain VK. Also returns the raw buffer for keccak computation.
+// The byte representation matches the Rust Solana verifier's VK ordering.
+func (p *BLSZKProver) ComputeVKHash() ([32]byte, []byte) {
+	var empty [32]byte
+
+	vkBN254, ok := p.vk.(*groth16_bn254.VerifyingKey)
+	if !ok {
+		log.Printf("❌ [BLS-ZK-DIAG] VK is not BN254 type")
+		return empty, nil
+	}
+
+	// Build the same byte buffer as the Rust side: alpha1, beta2, gamma2, delta2, IC[]
+	var buf []byte
+
+	// alpha1 (G1)
+	buf = appendG1Point(buf, &vkBN254.G1.Alpha)
+
+	// beta2 (G2): x[0]=A0=c0, x[1]=A1=c1, y[0]=A0=c0, y[1]=A1=c1
+	buf = appendG2Point(buf, &vkBN254.G2.Beta)
+
+	// gamma2 (G2)
+	buf = appendG2Point(buf, &vkBN254.G2.Gamma)
+
+	// delta2 (G2)
+	buf = appendG2Point(buf, &vkBN254.G2.Delta)
+
+	// IC points
+	for _, ic := range vkBN254.G1.K {
+		buf = appendG1Point(buf, &ic)
+	}
+
+	h := sha256.New()
+	h.Write(buf)
+	var result [32]byte
+	copy(result[:], h.Sum(nil))
+
+	// Log the raw first 16 bytes of the VK buffer for direct comparison
+	if len(buf) >= 16 {
+		log.Printf("🔍 [BLS-ZK-DIAG] VK raw bytes first16=%x (total %d bytes)", buf[:16], len(buf))
+	}
+
+	return result, buf
+}
+
+func appendG1Point(buf []byte, p *bn254_curve.G1Affine) []byte {
+	x := new(big.Int)
+	y := new(big.Int)
+	p.X.BigInt(x)
+	p.Y.BigInt(y)
+	buf = append(buf, padBigInt(x)...)
+	buf = append(buf, padBigInt(y)...)
+	return buf
+}
+
+func appendG2Point(buf []byte, p *bn254_curve.G2Affine) []byte {
+	x0 := new(big.Int)
+	x1 := new(big.Int)
+	y0 := new(big.Int)
+	y1 := new(big.Int)
+	p.X.A0.BigInt(x0)
+	p.X.A1.BigInt(x1)
+	p.Y.A0.BigInt(y0)
+	p.Y.A1.BigInt(y1)
+	buf = append(buf, padBigInt(x0)...)
+	buf = append(buf, padBigInt(x1)...)
+	buf = append(buf, padBigInt(y0)...)
+	buf = append(buf, padBigInt(y1)...)
+	return buf
 }
