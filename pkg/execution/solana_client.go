@@ -1057,7 +1057,8 @@ func (sc *SolanaClient) CheckAccountExists(ctx context.Context, pubkey [32]byte)
 	params := []interface{}{
 		base58.Encode(pubkey[:]),
 		map[string]interface{}{
-			"encoding": "base64",
+			"encoding":   "base64",
+			"commitment": "confirmed",
 		},
 	}
 
@@ -1395,7 +1396,8 @@ func (sc *SolanaClient) getAccountData(ctx context.Context, pubkey [32]byte) ([]
 	params := []interface{}{
 		base58.Encode(pubkey[:]),
 		map[string]interface{}{
-			"encoding": "base64",
+			"encoding":   "base64",
+			"commitment": "confirmed",
 		},
 	}
 
