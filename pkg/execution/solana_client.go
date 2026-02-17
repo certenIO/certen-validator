@@ -891,6 +891,9 @@ func (sc *SolanaClient) ExecuteGovernanceProofDirect(
 	accountStatePDA, _ := sc.accountPDA(ownerPubkey)
 	accountVaultPDA, _ := sc.accountVaultPDA(accountStatePDA)
 	anchorPDA, _ := sc.anchorPDA(proof.AnchorId)
+	log.Printf("   Account PDA: %s", base58.Encode(accountStatePDA[:]))
+	log.Printf("   Vault PDA:   %s", base58.Encode(accountVaultPDA[:]))
+	log.Printf("   Anchor PDA:  %s", base58.Encode(anchorPDA[:]))
 	blsStatePDA, _ := sc.blsVerifierStatePDA()
 	blsVkPDA, _ := sc.blsVerifierVkPDA()
 
