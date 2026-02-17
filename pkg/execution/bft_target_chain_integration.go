@@ -2069,7 +2069,7 @@ func (btce *BFTTargetChainExecutor) executeSolanaOperations(
 
 					// Build ADIGovernanceProof
 					accountProof := btce.buildSolanaAccountProof(
-						bundleIdHash, comprehensiveProof, adiURL,
+						bundleIdHash, adiURL,
 						anchorData.OperationCommitment,
 						anchorData.CrossChainCommitment,
 						anchorData.GovernanceRoot,
@@ -2298,7 +2298,6 @@ func (btce *BFTTargetChainExecutor) buildSolanaCertenProof(
 // Mirrors buildNearAccountProof — computes a 4-leaf merkle proof for adiURL verification.
 func (btce *BFTTargetChainExecutor) buildSolanaAccountProof(
 	bundleID [32]byte,
-	compProof *contracts.ComprehensiveCertenProof,
 	adiURL string,
 	opCommitment [32]byte,
 	ccCommitment [32]byte,
@@ -2323,16 +2322,11 @@ func (btce *BFTTargetChainExecutor) buildSolanaAccountProof(
 	log.Printf("🕐 [SOLANA-PROOF] Timestamp: %d (now=%d, delta=%ds), ExpiresAt: %d",
 		proofTimestamp, now.Unix(), now.Unix()-proofTimestamp, proofExpiresAt)
 
-	// Build validator signatures: convert ABI-encoded BLS Groth16 proof to Borsh format.
-	// The BLS verifier expects Borsh-serialized BlsSignatureProofBytes (352 bytes),
-	// NOT the raw 48-byte BLS aggregate signature.
+	// BLS validator signatures: left empty for Step 3.
+	// The anchor's proof_executed=true (set by Step 2) already confirms BLS verification.
+	// verify_proof in the anchor program checks proof_executed, so BLS re-verification
+	// is redundant. This matches the NEAR model where BLS is verified asynchronously.
 	var validatorSigs []byte
-	if compProof != nil && len(compProof.BLSProof.AggregateSignature) > 0 {
-		validatorSigs = convertABIProofToBorshForSolana(compProof.BLSProof.AggregateSignature)
-		log.Printf("🔐 [SOLANA-BLS] ValidatorSignatures: %d bytes (Borsh BlsSignatureProofBytes)", len(validatorSigs))
-	} else {
-		log.Printf("⚠️ [SOLANA-BLS] No AggregateSignature available for ValidatorSignatures")
-	}
 
 	return SolanaADIGovernanceProof{
 		AdiUrl:              adiURL,
