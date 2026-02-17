@@ -2148,11 +2148,14 @@ func convertABIProofToBorshForSolana(abiBytes []byte) []byte {
 	leBytes, threshDen := abiU256ToU64LE(abiBytes[416:448])
 	copy(borsh[344:352], leBytes)
 
-	// Log the embedded message_hash and pubkey_commitment from the blob
+	// Log the embedded values from the blob for on-chain comparison
 	log.Printf("🔍 [SOLANA-BLS] ABI blob message_hash (bytes 256-287): %x", abiBytes[256:288])
 	log.Printf("🔍 [SOLANA-BLS] ABI blob pubkey_commitment (bytes 288-319): %x", abiBytes[288:320])
 	log.Printf("🔍 [SOLANA-BLS] ABI blob values: signed_vp=%d total_vp=%d threshold=%d/%d",
 		signedVP, totalVP, threshNum, threshDen)
+	// HEX DEBUG: Dump proof point first bytes for Solana-side comparison
+	log.Printf("🔍 [SOLANA-BLS-HEX] proof.a.x=%x proof.b.x0=%x proof.b.x1=%x proof.c.x=%x",
+		abiBytes[0:8], abiBytes[64:72], abiBytes[96:104], abiBytes[192:200])
 
 	// Check threshold locally
 	if threshDen > 0 {
