@@ -16,6 +16,7 @@ package execution
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -2096,6 +2097,58 @@ func (btce *BFTTargetChainExecutor) executeSolanaOperations(
 	return btce.buildSolanaResult(intentID, anchorID, createTxSig, verifyTxSig, govTxSig, true), nil
 }
 
+// convertABIProofToBorshForSolana converts a 448-byte ABI-encoded BLS aggregate signature proof
+// to the 352-byte Borsh format expected by the Solana BLS ZK verifier.
+//
+// ABI layout (448 bytes, all big-endian):
+//
+//	[0-63]   proof.a (G1: x=32, y=32)
+//	[64-191] proof.b (G2: x[0]=32, x[1]=32, y[0]=32, y[1]=32)
+//	[192-255] proof.c (G1: x=32, y=32)
+//	[256-287] message_hash (32 bytes)
+//	[288-319] pubkey_commitment (32 bytes)
+//	[320-351] signed_voting_power (uint256)
+//	[352-383] total_voting_power (uint256)
+//	[384-415] threshold_numerator (uint256)
+//	[416-447] threshold_denominator (uint256)
+//
+// Borsh layout (352 bytes):
+//
+//	[0-319]  same proof points + hashes (identical byte layout)
+//	[320-327] signed_voting_power (u64 little-endian)
+//	[328-335] total_voting_power (u64 little-endian)
+//	[336-343] threshold_numerator (u64 little-endian)
+//	[344-351] threshold_denominator (u64 little-endian)
+func convertABIProofToBorshForSolana(abiBytes []byte) []byte {
+	if len(abiBytes) < 448 {
+		log.Printf("⚠️ [SOLANA-BLS] ABI proof too short (%d bytes), passing as-is", len(abiBytes))
+		return abiBytes
+	}
+
+	borsh := make([]byte, 352)
+
+	// Copy proof points (a, b, c) + message_hash + pubkey_commitment (320 bytes) — same format
+	copy(borsh[0:320], abiBytes[0:320])
+
+	// Convert uint256 big-endian (32 bytes) → u64 little-endian (8 bytes)
+	// For each field, extract the last 8 bytes of the big-endian uint256 and reverse to little-endian
+	abiU256ToU64LE := func(src []byte) []byte {
+		val := new(big.Int).SetBytes(src)
+		u64val := val.Uint64()
+		le := make([]byte, 8)
+		binary.LittleEndian.PutUint64(le, u64val)
+		return le
+	}
+
+	copy(borsh[320:328], abiU256ToU64LE(abiBytes[320:352])) // signed_voting_power
+	copy(borsh[328:336], abiU256ToU64LE(abiBytes[352:384])) // total_voting_power
+	copy(borsh[336:344], abiU256ToU64LE(abiBytes[384:416])) // threshold_numerator
+	copy(borsh[344:352], abiU256ToU64LE(abiBytes[416:448])) // threshold_denominator
+
+	log.Printf("✅ [SOLANA-BLS] Converted ABI proof (448 bytes) to Borsh format (352 bytes)")
+	return borsh
+}
+
 // buildSolanaCertenProof converts the comprehensive proof to Solana Borsh format.
 func (btce *BFTTargetChainExecutor) buildSolanaCertenProof(
 	compProof *contracts.ComprehensiveCertenProof,
@@ -2157,8 +2210,12 @@ func (btce *BFTTargetChainExecutor) buildSolanaCertenProof(
 		}
 	}
 
-	// BLS aggregate signature — for Solana, pass the raw ABI bytes directly
-	aggregateSig := compProof.BLSProof.AggregateSignature
+	// BLS aggregate signature — convert ABI encoding to Borsh BlsSignatureProofBytes format.
+	// ABI layout (448 bytes): proof_a(64) + proof_b(128) + proof_c(64) + message_hash(32) +
+	//   pubkey_commitment(32) + signed_vp(uint256/32) + total_vp(uint256/32) +
+	//   threshold_num(uint256/32) + threshold_den(uint256/32)
+	// Borsh layout (352 bytes): same proof+hashes (320 bytes) + u64-LE fields (4 * 8 bytes)
+	aggregateSig := convertABIProofToBorshForSolana(compProof.BLSProof.AggregateSignature)
 
 	// Source block height
 	sourceBlockHeight := uint64(0)
