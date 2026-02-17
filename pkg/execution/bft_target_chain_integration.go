@@ -2084,9 +2084,16 @@ func (btce *BFTTargetChainExecutor) executeSolanaOperations(
 						targetValue,
 					)
 
+					// Build System Program Transfer instruction data:
+					// [0..3] instruction index = 2 (Transfer, u32 LE)
+					// [4..11] lamports amount (u64 LE)
+					transferIxData := make([]byte, 12)
+					binary.LittleEndian.PutUint32(transferIxData[0:4], 2) // SystemInstruction::Transfer
+					binary.LittleEndian.PutUint64(transferIxData[4:12], targetValue)
+
 					var govErr error
 					govTxSig, govErr = solClient.ExecuteGovernanceProofDirect(ctx,
-						ownerPubkey, targetValue, []byte{}, accountProof, recipientPubkey,
+						ownerPubkey, targetValue, transferIxData, accountProof, recipientPubkey,
 					)
 					if govErr != nil {
 						btce.logger.Printf("⚠️ [SOLANA-EXEC] Step 3 failed: %v", govErr)
