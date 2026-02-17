@@ -2069,7 +2069,7 @@ func (btce *BFTTargetChainExecutor) executeSolanaOperations(
 
 					// Build ADIGovernanceProof
 					accountProof := btce.buildSolanaAccountProof(
-						bundleIdHash, certenProof, adiURL,
+						bundleIdHash, comprehensiveProof, adiURL,
 						anchorData.OperationCommitment,
 						anchorData.CrossChainCommitment,
 						anchorData.GovernanceRoot,
@@ -2298,7 +2298,7 @@ func (btce *BFTTargetChainExecutor) buildSolanaCertenProof(
 // Mirrors buildNearAccountProof — computes a 4-leaf merkle proof for adiURL verification.
 func (btce *BFTTargetChainExecutor) buildSolanaAccountProof(
 	bundleID [32]byte,
-	certenProof *proof.CertenProof,
+	compProof *contracts.ComprehensiveCertenProof,
 	adiURL string,
 	opCommitment [32]byte,
 	ccCommitment [32]byte,
@@ -2323,14 +2323,15 @@ func (btce *BFTTargetChainExecutor) buildSolanaAccountProof(
 	log.Printf("🕐 [SOLANA-PROOF] Timestamp: %d (now=%d, delta=%ds), ExpiresAt: %d",
 		proofTimestamp, now.Unix(), now.Unix()-proofTimestamp, proofExpiresAt)
 
-	// Build validator signatures
+	// Build validator signatures: convert ABI-encoded BLS Groth16 proof to Borsh format.
+	// The BLS verifier expects Borsh-serialized BlsSignatureProofBytes (352 bytes),
+	// NOT the raw 48-byte BLS aggregate signature.
 	var validatorSigs []byte
-	if certenProof != nil && certenProof.BLSAggregateSignature != "" {
-		sigHex := strings.TrimPrefix(certenProof.BLSAggregateSignature, "0x")
-		sigBytes, err := hex.DecodeString(sigHex)
-		if err == nil {
-			validatorSigs = sigBytes
-		}
+	if compProof != nil && len(compProof.BLSProof.AggregateSignature) > 0 {
+		validatorSigs = convertABIProofToBorshForSolana(compProof.BLSProof.AggregateSignature)
+		log.Printf("🔐 [SOLANA-BLS] ValidatorSignatures: %d bytes (Borsh BlsSignatureProofBytes)", len(validatorSigs))
+	} else {
+		log.Printf("⚠️ [SOLANA-BLS] No AggregateSignature available for ValidatorSignatures")
 	}
 
 	return SolanaADIGovernanceProof{
