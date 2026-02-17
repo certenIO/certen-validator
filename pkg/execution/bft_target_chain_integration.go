@@ -2131,19 +2131,37 @@ func convertABIProofToBorshForSolana(abiBytes []byte) []byte {
 	copy(borsh[0:320], abiBytes[0:320])
 
 	// Convert uint256 big-endian (32 bytes) → u64 little-endian (8 bytes)
-	// For each field, extract the last 8 bytes of the big-endian uint256 and reverse to little-endian
-	abiU256ToU64LE := func(src []byte) []byte {
+	abiU256ToU64LE := func(src []byte) ([]byte, uint64) {
 		val := new(big.Int).SetBytes(src)
 		u64val := val.Uint64()
 		le := make([]byte, 8)
 		binary.LittleEndian.PutUint64(le, u64val)
-		return le
+		return le, u64val
 	}
 
-	copy(borsh[320:328], abiU256ToU64LE(abiBytes[320:352])) // signed_voting_power
-	copy(borsh[328:336], abiU256ToU64LE(abiBytes[352:384])) // total_voting_power
-	copy(borsh[336:344], abiU256ToU64LE(abiBytes[384:416])) // threshold_numerator
-	copy(borsh[344:352], abiU256ToU64LE(abiBytes[416:448])) // threshold_denominator
+	leBytes, signedVP := abiU256ToU64LE(abiBytes[320:352])
+	copy(borsh[320:328], leBytes)
+	leBytes, totalVP := abiU256ToU64LE(abiBytes[352:384])
+	copy(borsh[328:336], leBytes)
+	leBytes, threshNum := abiU256ToU64LE(abiBytes[384:416])
+	copy(borsh[336:344], leBytes)
+	leBytes, threshDen := abiU256ToU64LE(abiBytes[416:448])
+	copy(borsh[344:352], leBytes)
+
+	// Log the embedded message_hash and pubkey_commitment from the blob
+	log.Printf("🔍 [SOLANA-BLS] ABI blob message_hash (bytes 256-287): %x", abiBytes[256:288])
+	log.Printf("🔍 [SOLANA-BLS] ABI blob pubkey_commitment (bytes 288-319): %x", abiBytes[288:320])
+	log.Printf("🔍 [SOLANA-BLS] ABI blob values: signed_vp=%d total_vp=%d threshold=%d/%d",
+		signedVP, totalVP, threshNum, threshDen)
+
+	// Check threshold locally
+	if threshDen > 0 {
+		required := (totalVP * threshNum) / threshDen
+		log.Printf("🔍 [SOLANA-BLS] Threshold check: signed=%d >= required=%d → %v",
+			signedVP, required, signedVP >= required)
+	} else {
+		log.Printf("⚠️ [SOLANA-BLS] threshold_denominator is 0!")
+	}
 
 	log.Printf("✅ [SOLANA-BLS] Converted ABI proof (448 bytes) to Borsh format (352 bytes)")
 	return borsh
@@ -2215,6 +2233,12 @@ func (btce *BFTTargetChainExecutor) buildSolanaCertenProof(
 	//   pubkey_commitment(32) + signed_vp(uint256/32) + total_vp(uint256/32) +
 	//   threshold_num(uint256/32) + threshold_den(uint256/32)
 	// Borsh layout (352 bytes): same proof+hashes (320 bytes) + u64-LE fields (4 * 8 bytes)
+	btce.logger.Printf("🔍 [SOLANA-BLS-DEBUG] AggregateSignature len=%d", len(compProof.BLSProof.AggregateSignature))
+	btce.logger.Printf("🔍 [SOLANA-BLS-DEBUG] BLSProof.MessageHash=%x", compProof.BLSProof.MessageHash)
+	btce.logger.Printf("🔍 [SOLANA-BLS-DEBUG] BLSProof.TotalVotingPower=%v SignedVotingPower=%v ThresholdMet=%v",
+		compProof.BLSProof.TotalVotingPower, compProof.BLSProof.SignedVotingPower, compProof.BLSProof.ThresholdMet)
+	btce.logger.Printf("🔍 [SOLANA-BLS-DEBUG] BLSProof.ValidatorAddresses=%d VotingPowers=%d",
+		len(compProof.BLSProof.ValidatorAddresses), len(compProof.BLSProof.VotingPowers))
 	aggregateSig := convertABIProofToBorshForSolana(compProof.BLSProof.AggregateSignature)
 
 	// Source block height
