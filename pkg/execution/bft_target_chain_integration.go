@@ -2047,7 +2047,15 @@ func (btce *BFTTargetChainExecutor) executeSolanaOperations(
 				// Determine target and value from intent
 				targetValue := uint64(1) // Default 1 lamport
 				if len(allLegs) > 0 && allLegs[0].Value != nil {
-					targetValue = allLegs[0].Value.Uint64()
+					// Convert from EVM wei (10^18) to Solana lamports (10^9)
+					weiValue := new(big.Int).Set(allLegs[0].Value)
+					lamportsValue := new(big.Int).Div(weiValue, big.NewInt(1_000_000_000))
+					if lamportsValue.Sign() <= 0 {
+						lamportsValue = big.NewInt(1) // minimum 1 lamport
+					}
+					targetValue = lamportsValue.Uint64()
+					btce.logger.Printf("💱 [SOLANA-EXEC] Value conversion: %s wei → %d lamports",
+						allLegs[0].Value.String(), targetValue)
 				}
 
 				// Derive recipient pubkey
