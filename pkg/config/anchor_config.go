@@ -163,10 +163,11 @@ type SolanaChainConfig struct {
 
 // AptosChainConfig contains Aptos network configuration
 type AptosChainConfig struct {
-	RPCURL             string `yaml:"rpc_url"`
-	PrivateKey         string `yaml:"private_key"`
-	AnchorPackage      string `yaml:"anchor_package"`
-	BLSVerifierPackage string `yaml:"bls_verifier_package"`
+	RPCURL                string `yaml:"rpc_url"`
+	PrivateKey            string `yaml:"private_key"`
+	AnchorPackage         string `yaml:"anchor_package"`
+	BLSVerifierPackage    string `yaml:"bls_verifier_package"`
+	AccountFactoryPackage string `yaml:"account_factory_package"`
 }
 
 // SuiChainConfig contains Sui network configuration
@@ -1220,10 +1221,11 @@ func loadAptosFromEnv() *AptosChainConfig {
 		return nil
 	}
 	return &AptosChainConfig{
-		RPCURL:             rpcURL,
-		PrivateKey:         privateKey,
-		AnchorPackage:      getEnv("APTOS_ANCHOR_PACKAGE", ""),
-		BLSVerifierPackage: getEnv("APTOS_BLS_VERIFIER_PACKAGE", ""),
+		RPCURL:                rpcURL,
+		PrivateKey:            privateKey,
+		AnchorPackage:         getEnv("APTOS_ANCHOR_PACKAGE", ""),
+		BLSVerifierPackage:    getEnv("APTOS_BLS_VERIFIER_PACKAGE", ""),
+		AccountFactoryPackage: getEnv("APTOS_ACCOUNT_FACTORY_PACKAGE", getEnv("APTOS_ANCHOR_PACKAGE", "")),
 	}
 }
 

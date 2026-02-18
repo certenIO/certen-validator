@@ -311,6 +311,9 @@ func (btce *BFTTargetChainExecutor) ExecuteTargetChainOperations(
 	case "solana", "solana devnet", "solana mainnet", "solana testnet":
 		// Solana uses Ed25519 signing, Borsh-encoded Anchor instructions, and Solana JSON-RPC
 		return btce.executeSolanaOperations(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, targetChainID)
+	case "aptos", "aptos testnet", "aptos-testnet", "aptos mainnet", "aptos-mainnet":
+		// Aptos uses Ed25519 signing, BCS serialization, and REST API
+		return btce.executeAptosOperations(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, targetChainID)
 	case "ethereum", "eth", "sepolia", "arbitrum", "arb", "optimism", "op", "base", "polygon", "matic",
 		"bsc", "bsc testnet", "binance", "moonbeam", "moonbase", "moonbeam moonbase alpha":
 		return btce.executeEthereumOperations(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, targetChainID)
@@ -2441,6 +2444,505 @@ func (btce *BFTTargetChainExecutor) buildSolanaResult(
 			"anchorProgram":    os.Getenv("SOLANA_ANCHOR_PROGRAM_ID"),
 			"explorerUrl":      "https://explorer.solana.com/?cluster=devnet",
 			"executionMethod":  "solana_json_rpc",
+		},
+	}
+}
+
+// =============================================================================
+// APTOS CHAIN EXECUTION
+// =============================================================================
+
+// executeAptosOperations executes anchor workflow on Aptos using REST API.
+// Aptos uses Ed25519 signing, BCS serialization, and Move entry functions.
+// Follows the same 3-step pattern as NEAR/Solana/EVM/TRON.
+func (btce *BFTTargetChainExecutor) executeAptosOperations(
+	ctx context.Context,
+	intentID string,
+	transactionHash string,
+	accountURL string,
+	validatorID string,
+	bundleID string,
+	anchorID string,
+	certenProof *proof.CertenProof,
+	chainID int64,
+) (*TargetChainExecutionResult, error) {
+
+	btce.logger.Printf("🔷 [APTOS-EXEC] Executing Aptos chain operations for intent: %s", intentID)
+
+	// Load Aptos config from environment
+	aptosPrivateKey := os.Getenv("APTOS_PRIVATE_KEY")
+	aptosRPCURL := os.Getenv("APTOS_TESTNET_RPC_URL")
+	aptosAnchorPackage := os.Getenv("APTOS_ANCHOR_PACKAGE")
+	aptosAccountFactoryPackage := os.Getenv("APTOS_ACCOUNT_FACTORY_PACKAGE")
+	if aptosAccountFactoryPackage == "" {
+		aptosAccountFactoryPackage = aptosAnchorPackage // all modules share same package
+	}
+
+	if aptosPrivateKey == "" || aptosRPCURL == "" || aptosAnchorPackage == "" {
+		return nil, fmt.Errorf("missing Aptos config: APTOS_PRIVATE_KEY=%v, APTOS_TESTNET_RPC_URL=%q, APTOS_ANCHOR_PACKAGE=%q",
+			aptosPrivateKey != "", aptosRPCURL, aptosAnchorPackage)
+	}
+
+	btce.logger.Printf("✅ [APTOS-EXEC] Using Aptos config:")
+	btce.logger.Printf("   RPC: %s", aptosRPCURL)
+	btce.logger.Printf("   Anchor Package: %s", aptosAnchorPackage)
+	btce.logger.Printf("   Account Factory Package: %s", aptosAccountFactoryPackage)
+
+	// Create Aptos client
+	aptosClient, err := NewAptosClient(aptosRPCURL, aptosPrivateKey, aptosAnchorPackage)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Aptos client: %w", err)
+	}
+
+	// Create EthereumContractManager for proof building (reuse commitment logic)
+	privateKey := os.Getenv("ETH_PRIVATE_KEY")
+	contractConfig := &CertenContractConfig{
+		EthereumRPC:          os.Getenv("ETHEREUM_URL"),
+		ChainID:              11155111,
+		PrivateKey:           privateKey,
+		CreationContract:     os.Getenv("CERTEN_ANCHOR_V3_ADDRESS"),
+		VerificationContract: os.Getenv("CERTEN_ANCHOR_V3_ADDRESS"),
+		GasLimit:             800000,
+		MaxGasPriceGwei:      50,
+	}
+	if contractConfig.CreationContract == "" {
+		contractConfig.CreationContract = os.Getenv("CERTEN_CONTRACT_ADDRESS")
+	}
+	if contractConfig.VerificationContract == "" {
+		contractConfig.VerificationContract = contractConfig.CreationContract
+	}
+
+	ethManager, err := NewEthereumContractManager(contractConfig)
+	if err != nil {
+		btce.logger.Printf("⚠️ [APTOS-EXEC] Failed to create proof builder (non-fatal, using defaults): %v", err)
+	}
+
+	// Build legacy intent and proof data (same as EVM/TRON/NEAR/Solana path)
+	legacyIntent := btce.convertToLegacyIntent(intentID, transactionHash, accountURL, certenProof)
+
+	var bundleIdHash [32]byte
+	var comprehensiveProof *contracts.ComprehensiveCertenProof
+	if ethManager != nil {
+		bundleIdHash = ethManager.generateAnchorID(legacyIntent, certenProof)
+		cp := ethManager.buildComprehensiveProof(legacyIntent, certenProof,
+			&anchor.AnchorResponse{AnchorID: anchorID, Success: true, Message: "BFT anchor for Aptos"},
+			bundleIdHash,
+		)
+		comprehensiveProof = &cp
+	} else {
+		hash := ethcrypto.Keccak256Hash([]byte(fmt.Sprintf("certen_v3_%s_%d_%s",
+			legacyIntent.IntentID, certenProof.BlockHeight, certenProof.TransactionHash)))
+		copy(bundleIdHash[:], hash[:])
+	}
+
+	// Compute adiURLHash
+	var adiURLHash [32]byte
+	adiURL := certenProof.AccountURL
+	if adiURL == "" {
+		adiURL = fmt.Sprintf("%s/data", legacyIntent.OrganizationADI)
+	}
+	copy(adiURLHash[:], ethcrypto.Keccak256([]byte(adiURL)))
+
+	// Extract commitments
+	var opCommitment, ccCommitment, govRoot [32]byte
+	if comprehensiveProof != nil {
+		opCommitment = comprehensiveProof.Commitments.OperationCommitment
+		ccCommitment = comprehensiveProof.Commitments.CrossChainCommitment
+		govRoot = comprehensiveProof.Commitments.GovernanceRoot
+	}
+
+	// ========== Step 1: Create Anchor ==========
+	btce.logger.Printf("🔗 [APTOS-EXEC] Step 1: Creating anchor...")
+
+	createTxHash, err := aptosClient.CreateAnchor(ctx,
+		bundleIdHash, adiURLHash, opCommitment, ccCommitment, govRoot,
+		certenProof.BlockHeight,
+	)
+	if err != nil {
+		btce.logger.Printf("❌ [APTOS-EXEC] Step 1 failed: %v", err)
+		return btce.buildAptosResult(intentID, anchorID,
+			"create_failed_aptos", "", "", false), err
+	}
+
+	btce.logger.Printf("✅ [APTOS-EXEC] Step 1 complete - Anchor created: %s", createTxHash)
+
+	// Wait for Step 1 confirmation
+	err = aptosClient.WaitForConfirmation(ctx, createTxHash, 60*time.Second)
+	if err != nil {
+		btce.logger.Printf("⚠️ [APTOS-EXEC] Step 1 confirmation issue: %v", err)
+	}
+
+	// ========== Step 2: Execute Comprehensive Proof ==========
+	btce.logger.Printf("🔗 [APTOS-EXEC] Step 2: Submitting comprehensive proof...")
+
+	aptosProof := btce.buildAptosCertenProof(comprehensiveProof, certenProof)
+
+	verifyTxHash, err := aptosClient.submitComprehensiveProofBCS(ctx, bundleIdHash, aptosProof)
+	if err != nil {
+		btce.logger.Printf("❌ [APTOS-EXEC] Step 2 failed: %v", err)
+		return btce.buildAptosResult(intentID, anchorID,
+			createTxHash, "verify_failed_aptos", "", false), err
+	}
+
+	btce.logger.Printf("✅ [APTOS-EXEC] Step 2 complete - Proof verified: %s", verifyTxHash)
+
+	// Wait for Step 2 confirmation
+	err = aptosClient.WaitForConfirmation(ctx, verifyTxHash, 60*time.Second)
+	if err != nil {
+		btce.logger.Printf("⚠️ [APTOS-EXEC] Step 2 confirmation issue: %v", err)
+	}
+
+	// ========== Step 3: Execute via user's Abstract Account ==========
+	allLegs := btce.extractAllLegsFromIntent(legacyIntent)
+	govTxHash := "no_governance_needed"
+
+	if len(allLegs) > 0 {
+		btce.logger.Printf("🏦 [APTOS-EXEC] Step 3: Executing governance proof direct...")
+
+		// Extract Aptos addresses from CrossChainData
+		aptosFromAddr := btce.extractAptosFieldFromCrossChainData(legacyIntent, "from")
+		aptosToAddr := btce.extractAptosFieldFromCrossChainData(legacyIntent, "to")
+
+		btce.logger.Printf("   Intent from: %s", aptosFromAddr)
+		btce.logger.Printf("   Intent to: %s", aptosToAddr)
+
+		// Derive owner and salt from ADI URL
+		ownerBytes32 := DeriveAptosAccountOwnerBytes32(adiURL)
+		salt := DeriveAptosAccountSalt(adiURL)
+
+		// Predict user account address via factory
+		userAccountAddr := aptosFromAddr
+
+		if userAccountAddr == "" && aptosAccountFactoryPackage != "" {
+			predicted, predictErr := aptosClient.PredictAccountAddress(ctx, ownerBytes32, adiURL, salt)
+			if predictErr != nil {
+				btce.logger.Printf("⚠️ [APTOS-EXEC] Failed to predict account address: %v", predictErr)
+			} else {
+				userAccountAddr = predicted
+			}
+		}
+
+		if userAccountAddr == "" {
+			btce.logger.Printf("⚠️ [APTOS-EXEC] No user account address resolved")
+			govTxHash = "gov_failed_no_account_aptos"
+		}
+
+		if userAccountAddr != "" {
+			btce.logger.Printf("   User account: %s", userAccountAddr)
+
+			// Check if account exists
+			accountExists, checkErr := aptosClient.CheckAccountExists(ctx, userAccountAddr)
+			if checkErr != nil {
+				btce.logger.Printf("⚠️ [APTOS-EXEC] Failed to check account existence: %v", checkErr)
+			}
+
+			if !accountExists && aptosAccountFactoryPackage != "" {
+				btce.logger.Printf("⚠️ [APTOS-EXEC] User account %s not found, auto-deploying...", userAccountAddr)
+
+				deployTx, deployErr := aptosClient.DeployAccountViaFactory(ctx, ownerBytes32, adiURL, salt)
+				if deployErr != nil {
+					btce.logger.Printf("❌ [APTOS-EXEC] Account auto-deploy failed: %v", deployErr)
+					govTxHash = "gov_failed_account_deploy_aptos"
+				} else {
+					btce.logger.Printf("✅ [APTOS-EXEC] Account deployment tx: %s", deployTx)
+					waitErr := aptosClient.WaitForConfirmation(ctx, deployTx, 60*time.Second)
+					if waitErr != nil {
+						btce.logger.Printf("⚠️ [APTOS-EXEC] Account deployment confirmation failed: %v", waitErr)
+						govTxHash = "gov_failed_account_deploy_aptos"
+					} else {
+						accountExists = true
+					}
+				}
+			}
+
+			if accountExists && govTxHash == "no_governance_needed" {
+				// Read anchor data for merkle proof construction
+				anchorData, readErr := aptosClient.GetAnchorData(ctx, bundleIdHash)
+				if readErr != nil {
+					btce.logger.Printf("⚠️ [APTOS-EXEC] Failed to read anchor data: %v", readErr)
+					govTxHash = "gov_failed_anchor_read_aptos"
+				} else {
+					// Determine target and value from intent
+					recipientAddr := aptosToAddr
+					if recipientAddr == "" && len(allLegs) > 0 {
+						recipientAddr = allLegs[0].Target.Hex()
+					}
+
+					// Convert amountWei (18 decimals) to octas (8 decimals)
+					// EVM uses 10^18, Aptos uses 10^8, so divide by 10^10
+					amountOctas := uint64(1) // Default 1 octa
+					if len(allLegs) > 0 && allLegs[0].Value != nil {
+						weiValue := new(big.Int).Set(allLegs[0].Value)
+						octasValue := new(big.Int).Div(weiValue, big.NewInt(10_000_000_000)) // / 10^10
+						if octasValue.Sign() <= 0 {
+							octasValue = big.NewInt(1) // minimum 1 octa
+						}
+						amountOctas = octasValue.Uint64()
+						btce.logger.Printf("💱 [APTOS-EXEC] Value conversion: %s wei → %d octas",
+							allLegs[0].Value.String(), amountOctas)
+					}
+
+					btce.logger.Printf("💱 [APTOS-EXEC] Governance: target=%s octas=%d", recipientAddr, amountOctas)
+
+					// Build ADIGovernanceProof
+					accountProof := btce.buildAptosAccountProof(
+						bundleIdHash, certenProof, adiURL,
+						anchorData.OperationCommitment,
+						anchorData.CrossChainCommitment,
+						anchorData.GovernanceRoot,
+						amountOctas,
+					)
+
+					var govErr error
+					govTxHash, govErr = aptosClient.ExecuteGovernanceProofDirect(ctx,
+						userAccountAddr, recipientAddr, amountOctas, accountProof,
+					)
+					if govErr != nil {
+						btce.logger.Printf("⚠️ [APTOS-EXEC] Step 3 failed: %v", govErr)
+						govTxHash = "gov_failed_aptos"
+					}
+				}
+			}
+		}
+	}
+
+	btce.logger.Printf("🎉 [APTOS-EXEC] Aptos anchor workflow completed!")
+	btce.logger.Printf("   Create TX: %s", createTxHash)
+	btce.logger.Printf("   Verify TX: %s", verifyTxHash)
+	btce.logger.Printf("   Governance TX: %s", govTxHash)
+
+	return btce.buildAptosResult(intentID, anchorID, createTxHash, verifyTxHash, govTxHash, true), nil
+}
+
+// buildAptosCertenProof converts the comprehensive proof to Aptos format.
+func (btce *BFTTargetChainExecutor) buildAptosCertenProof(
+	compProof *contracts.ComprehensiveCertenProof,
+	certenProof *proof.CertenProof,
+) AptosCertenProof {
+	if compProof == nil {
+		return AptosCertenProof{
+			ExpirationTimeSecs: uint64(time.Now().Add(24 * time.Hour).Unix()),
+		}
+	}
+
+	proofHashes := make([][32]byte, len(compProof.ProofHashes))
+	copy(proofHashes, compProof.ProofHashes)
+
+	keyPageProofs := make([][32]byte, len(compProof.GovernanceProof.KeyPageProofs))
+	copy(keyPageProofs, compProof.GovernanceProof.KeyPageProofs)
+
+	totalVP := uint64(0)
+	if compProof.BLSProof.TotalVotingPower != nil {
+		totalVP = compProof.BLSProof.TotalVotingPower.Uint64()
+	}
+	signedVP := uint64(0)
+	if compProof.BLSProof.SignedVotingPower != nil {
+		signedVP = compProof.BLSProof.SignedVotingPower.Uint64()
+	}
+	govNonce := uint64(0)
+	if compProof.GovernanceProof.Nonce != nil {
+		govNonce = compProof.GovernanceProof.Nonce.Uint64()
+	}
+	reqSigs := uint64(0)
+	if compProof.GovernanceProof.RequiredSignatures != nil {
+		reqSigs = compProof.GovernanceProof.RequiredSignatures.Uint64()
+	}
+	provSigs := uint64(0)
+	if compProof.GovernanceProof.ProvidedSignatures != nil {
+		provSigs = compProof.GovernanceProof.ProvidedSignatures.Uint64()
+	}
+
+	expirationSecs := uint64(time.Now().Add(24 * time.Hour).Unix())
+	if compProof.ExpirationTime != nil {
+		expirationSecs = compProof.ExpirationTime.Uint64()
+	}
+
+	// Authority address as 0x+64hex
+	authorityAddr := "0x" + hex.EncodeToString(common.LeftPadBytes(compProof.GovernanceProof.AuthorityAddress.Bytes(), 32))
+
+	// Validator addresses as 0x+64hex
+	validatorAddrs := make([]string, len(compProof.BLSProof.ValidatorAddresses))
+	for i, addr := range compProof.BLSProof.ValidatorAddresses {
+		validatorAddrs[i] = "0x" + hex.EncodeToString(common.LeftPadBytes(addr.Bytes(), 32))
+	}
+
+	// BLS aggregate signature — split ABI bytes into individual fields
+	var blsProofBytes, blsMessageHash, blsPubkeyCommitment []byte
+	blsSignedVP := signedVP
+	blsTotalVP := totalVP
+	blsThreshNum := uint64(2)
+	blsThreshDen := uint64(3)
+
+	if len(compProof.BLSProof.AggregateSignature) >= 448 {
+		abiBytes := compProof.BLSProof.AggregateSignature
+		blsProofBytes = abiBytes[0:256]      // proof_a(64) + proof_b(128) + proof_c(64)
+		blsMessageHash = abiBytes[256:288]    // message_hash (32)
+		blsPubkeyCommitment = abiBytes[288:320] // pubkey_commitment (32)
+		blsSignedVP = new(big.Int).SetBytes(abiBytes[320:352]).Uint64()
+		blsTotalVP = new(big.Int).SetBytes(abiBytes[352:384]).Uint64()
+		blsThreshNum = new(big.Int).SetBytes(abiBytes[384:416]).Uint64()
+		blsThreshDen = new(big.Int).SetBytes(abiBytes[416:448]).Uint64()
+	} else {
+		blsMessageHash = compProof.BLSProof.MessageHash[:]
+	}
+
+	// Source block height
+	sourceBlockHeight := uint64(0)
+	if compProof.Commitments.SourceBlockHeight != nil {
+		sourceBlockHeight = compProof.Commitments.SourceBlockHeight.Uint64()
+	}
+
+	// Target address: pad 20-byte EVM address to 32-byte Aptos address format
+	targetAddr := "0x" + hex.EncodeToString(common.LeftPadBytes(compProof.Commitments.TargetAddress.Bytes(), 32))
+
+	return AptosCertenProof{
+		TransactionHash: compProof.TransactionHash,
+		MerkleRoot:      compProof.MerkleRoot,
+		ProofHashes:     proofHashes,
+		LeafHash:        compProof.LeafHash,
+
+		GovKeyBookURL:         compProof.GovernanceProof.KeyBookURL,
+		GovKeyBookRoot:        compProof.GovernanceProof.KeyBookRoot,
+		GovKeyPageProofs:      keyPageProofs,
+		GovAuthorityAddress:   authorityAddr,
+		GovAuthorityLevel:     compProof.GovernanceProof.AuthorityLevel,
+		GovNonce:              govNonce,
+		GovRequiredSignatures: reqSigs,
+		GovProvidedSignatures: provSigs,
+
+		BLSProofBytes:           blsProofBytes,
+		BLSMessageHash:          blsMessageHash,
+		BLSPubkeyCommitment:     blsPubkeyCommitment,
+		BLSSignedVotingPower:    blsSignedVP,
+		BLSTotalVotingPower:     blsTotalVP,
+		BLSThresholdNumerator:   blsThreshNum,
+		BLSThresholdDenominator: blsThreshDen,
+		BLSValidatorAddresses:   validatorAddrs,
+
+		CommitOperationCommitment:  compProof.Commitments.OperationCommitment,
+		CommitCrossChainCommitment: compProof.Commitments.CrossChainCommitment,
+		CommitGovernanceRoot:       compProof.Commitments.GovernanceRoot,
+		CommitSourceChain:          compProof.Commitments.SourceChain,
+		CommitSourceBlockHeight:    sourceBlockHeight,
+		CommitSourceTxHash:         compProof.Commitments.SourceTxHash,
+		CommitTargetChain:          compProof.Commitments.TargetChain,
+		CommitTargetAddress:        targetAddr,
+
+		ExpirationTimeSecs: expirationSecs,
+		Metadata:           compProof.Metadata,
+	}
+}
+
+// buildAptosAccountProof constructs the AptosADIGovernanceProof for Step 3.
+// Mirrors buildNearAccountProof — computes a 4-leaf merkle proof for adiURL verification.
+func (btce *BFTTargetChainExecutor) buildAptosAccountProof(
+	bundleID [32]byte,
+	certenProof *proof.CertenProof,
+	adiURL string,
+	opCommitment [32]byte,
+	ccCommitment [32]byte,
+	govRoot [32]byte,
+	amountOctas uint64,
+) AptosADIGovernanceProof {
+	requiredLevel := aptosAuthorityLevelForOctas(amountOctas)
+	log.Printf("🔐 [APTOS-AUTH] %d octas → authority level: %d", amountOctas, requiredLevel)
+
+	// Build merkle proof: same 4-leaf tree as TRON/EVM/NEAR/Solana
+	// proof[0] = operationCommitment (sibling at level 0)
+	// proof[1] = sortedHash(ccCommitment, govRoot) (sibling at level 1)
+	hash23 := sortedHash(ccCommitment[:], govRoot[:])
+	var hash23Arr [32]byte
+	copy(hash23Arr[:], hash23)
+
+	log.Printf("🌳 [APTOS-MERKLE] Built 4-leaf proof for adiURL verification:")
+	log.Printf("   adiURL: %s", adiURL)
+	log.Printf("   proof[0] (op): 0x%x", opCommitment[:8])
+	log.Printf("   proof[1] (hash23): 0x%x", hash23Arr[:8])
+
+	merkleProof := [][32]byte{opCommitment, hash23Arr}
+
+	now := time.Now()
+	proofTimestamp := uint64(now.Add(-5 * time.Minute).Unix())
+	proofExpiresAt := uint64(now.Add(2 * time.Hour).Unix())
+
+	// BLS validator signatures: left empty for Step 3.
+	// The anchor's proof_executed=true (set by Step 2) already confirms BLS verification.
+	var blsProofBytes, blsMessageHash, blsPubkeyCommitment []byte
+
+	return AptosADIGovernanceProof{
+		AdiURL:      adiURL,
+		AnchorID:    bundleID,
+		MerkleProof: merkleProof,
+		Timestamp:   proofTimestamp,
+		ExpiresAt:   proofExpiresAt,
+		Nonce:       1, // Must be > current nonce (starts at 0)
+		RequiredLevel: requiredLevel,
+
+		BLSProofBytes:           blsProofBytes,
+		BLSMessageHash:          blsMessageHash,
+		BLSPubkeyCommitment:     blsPubkeyCommitment,
+		BLSSignedVotingPower:    0,
+		BLSTotalVotingPower:     0,
+		BLSThresholdNumerator:   2,
+		BLSThresholdDenominator: 3,
+		BLSValidatorAddresses:   []string{},
+	}
+}
+
+// extractAptosFieldFromCrossChainData extracts an Aptos address field from CrossChainData.
+// Returns the field value if it looks like an Aptos address (0x prefix + 64 hex chars).
+func (btce *BFTTargetChainExecutor) extractAptosFieldFromCrossChainData(legacyIntent *intent.CertenIntent, field string) string {
+	if legacyIntent == nil || len(legacyIntent.CrossChainData) == 0 {
+		return ""
+	}
+
+	var ccData struct {
+		Legs []struct {
+			From string `json:"from"`
+			To   string `json:"to"`
+		} `json:"legs"`
+	}
+	if err := json.Unmarshal(legacyIntent.CrossChainData, &ccData); err != nil || len(ccData.Legs) == 0 {
+		return ""
+	}
+
+	var value string
+	switch field {
+	case "from":
+		value = ccData.Legs[0].From
+	case "to":
+		value = ccData.Legs[0].To
+	}
+
+	// Aptos addresses are 0x + 64 hex chars (32 bytes)
+	if value != "" && strings.HasPrefix(value, "0x") && len(value) == 66 {
+		// Verify it's valid hex
+		_, err := hex.DecodeString(value[2:])
+		if err == nil {
+			return value
+		}
+	}
+	return ""
+}
+
+// buildAptosResult creates a TargetChainExecutionResult for Aptos operations.
+func (btce *BFTTargetChainExecutor) buildAptosResult(
+	intentID, anchorID string,
+	createTxHash, verifyTxHash, govTxHash string,
+	success bool,
+) *TargetChainExecutionResult {
+	return &TargetChainExecutionResult{
+		Chain:            "aptos-testnet",
+		TxHash:           createTxHash,
+		Success:          success,
+		CreateTxHash:     createTxHash,
+		VerifyTxHash:     verifyTxHash,
+		GovernanceTxHash: govTxHash,
+		Metadata: map[string]string{
+			"chain":           "aptos-testnet",
+			"anchorPackage":   os.Getenv("APTOS_ANCHOR_PACKAGE"),
+			"explorerUrl":     "https://explorer.aptoslabs.com/?network=testnet",
+			"executionMethod": "aptos_rest_api",
 		},
 	}
 }

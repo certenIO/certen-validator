@@ -13,8 +13,10 @@ require (
 	github.com/ethereum/go-ethereum v1.16.7
 	github.com/google/uuid v1.6.0
 	github.com/lib/pq v1.10.9
+	github.com/mr-tron/base58 v1.2.0
 	github.com/prometheus/client_golang v1.19.1
 	gitlab.com/accumulatenetwork/accumulate v1.4.2
+	golang.org/x/crypto v0.47.0
 	google.golang.org/api v0.262.0
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -211,7 +213,6 @@ require (
 	github.com/mitchellh/go-homedir v1.1.0 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/moricho/tparallel v0.3.1 // indirect
-	github.com/mr-tron/base58 v1.2.0 // indirect
 	github.com/multiformats/go-base32 v0.1.0 // indirect
 	github.com/multiformats/go-base36 v0.2.0 // indirect
 	github.com/multiformats/go-multiaddr v0.12.2 // indirect
@@ -316,7 +317,6 @@ require (
 	go.uber.org/automaxprocs v1.5.3 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
-	golang.org/x/crypto v0.47.0 // indirect
 	golang.org/x/exp v0.0.0-20250819193227-8b4c13bb791b // indirect
 	golang.org/x/exp/typeparams v0.0.0-20240213143201-ec583247a57a // indirect
 	golang.org/x/mod v0.31.0 // indirect
