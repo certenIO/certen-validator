@@ -51,6 +51,7 @@ const (
 // Key format: hex-encoded 32-byte seed (with or without 0x prefix).
 func NewAptosClient(rpcEndpoint, privateKeyHex, packageAddress string) (*AptosClient, error) {
 	rpcEndpoint = strings.TrimSuffix(rpcEndpoint, "/")
+	rpcEndpoint = strings.TrimSuffix(rpcEndpoint, "/v1")
 
 	// Strip common prefixes
 	privateKeyHex = strings.TrimPrefix(privateKeyHex, "0x")
