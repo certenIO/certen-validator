@@ -1987,13 +1987,10 @@ func (btce *BFTTargetChainExecutor) executeSolanaOperations(
 	if len(allLegs) > 0 {
 		btce.logger.Printf("🏦 [SOLANA-EXEC] Step 3: Executing governance proof direct...")
 
-		// Derive owner keypair from IDENTITY URL (e.g. acc://X.acme), NOT data account URL.
-		// EVM/TRON use allLegs[0].SourceAddress from the intent (set by web app from identity URL).
-		// Solana must derive the same way as the API bridge: keccak256(identityURL) as Ed25519 seed.
-		// The data account URL (adiURL) is still used for proof/merkle verification below.
-		identityURL := legacyIntent.OrganizationADI
-		ownerPubkey, ownerPrivKey := DeriveSolanaAccountOwner(identityURL)
-		salt := DeriveSolanaAccountSalt(identityURL)
+		// Derive owner keypair from ADI URL — keccak256(adiUrl) as Ed25519 seed,
+		// then use the public key as owner. Matches other chain paths (EVM/TRON/NEAR).
+		ownerPubkey, ownerPrivKey := DeriveSolanaAccountOwner(adiURL)
+		salt := DeriveSolanaAccountSalt(adiURL)
 
 		// Compute account PDA
 		accountStatePDA, _, _ := FindProgramAddress(
@@ -2001,8 +1998,7 @@ func (btce *BFTTargetChainExecutor) executeSolanaOperations(
 			solClient.accountProgramID,
 		)
 
-		btce.logger.Printf("   Identity URL: %s (owner derivation)", identityURL)
-		btce.logger.Printf("   Data account URL: %s (proof/merkle)", adiURL)
+		btce.logger.Printf("   ADI URL: %s (owner derivation)", adiURL)
 		btce.logger.Printf("   Owner: %s", base58.Encode(ownerPubkey[:]))
 		btce.logger.Printf("   Account PDA: %s", base58.Encode(accountStatePDA[:]))
 
@@ -2015,7 +2011,7 @@ func (btce *BFTTargetChainExecutor) executeSolanaOperations(
 		if !accountExists && solanaAccountFactoryProgramID != "" {
 			btce.logger.Printf("⚠️ [SOLANA-EXEC] User account not found, auto-deploying...")
 
-			deployTxSig, deployErr := solClient.DeployAccountViaFactory(ctx, ownerPubkey, ownerPrivKey, identityURL, salt)
+			deployTxSig, deployErr := solClient.DeployAccountViaFactory(ctx, ownerPubkey, ownerPrivKey, adiURL, salt)
 			if deployErr != nil {
 				btce.logger.Printf("❌ [SOLANA-EXEC] Account auto-deploy failed: %v", deployErr)
 				govTxSig = "gov_failed_account_deploy_solana"
