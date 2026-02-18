@@ -1987,14 +1987,10 @@ func (btce *BFTTargetChainExecutor) executeSolanaOperations(
 	if len(allLegs) > 0 {
 		btce.logger.Printf("🏦 [SOLANA-EXEC] Step 3: Executing governance proof direct...")
 
-		// Derive owner keypair from the ADI identity URL (without /data suffix).
-		// The API bridge uses keccak256("acc://X.acme") — the identity, NOT the
-		// data account "acc://X.acme/data". adiURL (with /data) is correct for
-		// anchor adi_url_hash and merkle proofs, but owner derivation must use
-		// the identity URL to match deployed accounts.
-		identityURL := legacyIntent.OrganizationADI
-		ownerPubkey, ownerPrivKey := DeriveSolanaAccountOwner(identityURL)
-		salt := DeriveSolanaAccountSalt(identityURL)
+		// Derive owner keypair from ADI URL — keccak256(adiUrl) as Ed25519 seed,
+		// then use the public key as owner. Matches other chain paths (EVM/TRON/NEAR).
+		ownerPubkey, ownerPrivKey := DeriveSolanaAccountOwner(adiURL)
+		salt := DeriveSolanaAccountSalt(adiURL)
 
 		// Compute account PDA
 		accountStatePDA, _, _ := FindProgramAddress(
@@ -2002,7 +1998,7 @@ func (btce *BFTTargetChainExecutor) executeSolanaOperations(
 			solClient.accountProgramID,
 		)
 
-		btce.logger.Printf("   Identity URL: %s (owner derivation)", identityURL)
+		btce.logger.Printf("   ADI URL: %s (owner derivation)", adiURL)
 		btce.logger.Printf("   Owner: %s", base58.Encode(ownerPubkey[:]))
 		btce.logger.Printf("   Account PDA: %s", base58.Encode(accountStatePDA[:]))
 
