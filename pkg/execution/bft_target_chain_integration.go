@@ -1987,20 +1987,52 @@ func (btce *BFTTargetChainExecutor) executeSolanaOperations(
 	if len(allLegs) > 0 {
 		btce.logger.Printf("🏦 [SOLANA-EXEC] Step 3: Executing governance proof direct...")
 
-		// Derive owner keypair from ADI URL — keccak256(adiUrl) as Ed25519 seed,
-		// then use the public key as owner. Matches other chain paths (EVM/TRON/NEAR).
+		// Extract Solana addresses from CrossChainData (matches NEAR pattern)
+		solanaFromAddr := btce.extractSolanaFieldFromCrossChainData(legacyIntent, "from")
+		solanaToAddr := btce.extractSolanaFieldFromCrossChainData(legacyIntent, "to")
+
+		btce.logger.Printf("   Intent from: %s", solanaFromAddr)
+		btce.logger.Printf("   Intent to: %s", solanaToAddr)
+
+		// Derive owner keypair from adiURL (fallback, matches NEAR pattern line 1454)
 		ownerPubkey, ownerPrivKey := DeriveSolanaAccountOwner(adiURL)
 		salt := DeriveSolanaAccountSalt(adiURL)
 
-		// Compute account PDA
+		// Compute account PDA and vault PDA
 		accountStatePDA, _, _ := FindProgramAddress(
 			[][]byte{[]byte("certen_account"), ownerPubkey[:]},
 			solClient.accountProgramID,
 		)
+		accountVaultPDA, _, _ := FindProgramAddress(
+			[][]byte{[]byte("account_vault"), accountStatePDA[:]},
+			solClient.accountProgramID,
+		)
 
-		btce.logger.Printf("   ADI URL: %s (owner derivation)", adiURL)
+		btce.logger.Printf("   ADI URL: %s (fallback derivation)", adiURL)
 		btce.logger.Printf("   Owner: %s", base58.Encode(ownerPubkey[:]))
 		btce.logger.Printf("   Account PDA: %s", base58.Encode(accountStatePDA[:]))
+		btce.logger.Printf("   Vault PDA:   %s", base58.Encode(accountVaultPDA[:]))
+
+		// If intent has a "from" address that doesn't match derived vault PDA,
+		// re-derive using identity URL (matching API bridge derivation).
+		// This mirrors NEAR where the intent address takes priority over fallback derivation.
+		if solanaFromAddr != "" && solanaFromAddr != base58.Encode(accountVaultPDA[:]) {
+			btce.logger.Printf("⚠️ [SOLANA-EXEC] Intent from (%s) != derived vault (%s), re-deriving from identity URL",
+				solanaFromAddr, base58.Encode(accountVaultPDA[:]))
+			ownerPubkey, ownerPrivKey = DeriveSolanaAccountOwner(legacyIntent.OrganizationADI)
+			salt = DeriveSolanaAccountSalt(legacyIntent.OrganizationADI)
+			accountStatePDA, _, _ = FindProgramAddress(
+				[][]byte{[]byte("certen_account"), ownerPubkey[:]},
+				solClient.accountProgramID,
+			)
+			accountVaultPDA, _, _ = FindProgramAddress(
+				[][]byte{[]byte("account_vault"), accountStatePDA[:]},
+				solClient.accountProgramID,
+			)
+			btce.logger.Printf("   Re-derived Owner: %s", base58.Encode(ownerPubkey[:]))
+			btce.logger.Printf("   Re-derived Account PDA: %s", base58.Encode(accountStatePDA[:]))
+			btce.logger.Printf("   Re-derived Vault PDA:   %s", base58.Encode(accountVaultPDA[:]))
+		}
 
 		// Check if account exists
 		accountExists, checkErr := solClient.CheckAccountExists(ctx, accountStatePDA)
