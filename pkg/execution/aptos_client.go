@@ -600,9 +600,12 @@ func (ac *AptosClient) PredictAccountAddress(
 	return addr, nil
 }
 
-// CheckAccountExists checks if an Aptos account exists on-chain.
+// CheckAccountExists checks if a certen abstract account is initialized on-chain.
+// It checks for the AccountState resource, not just account existence (resource accounts
+// can exist without being initialized by the factory).
 func (ac *AptosClient) CheckAccountExists(ctx context.Context, addr string) (bool, error) {
-	url := fmt.Sprintf("%s/v1/accounts/%s", ac.rpcEndpoint, addr)
+	resourceType := fmt.Sprintf("%s::certen_account_v2::AccountState", ac.packageAddress)
+	url := fmt.Sprintf("%s/v1/accounts/%s/resource/%s", ac.rpcEndpoint, addr, resourceType)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
