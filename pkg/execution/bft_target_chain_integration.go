@@ -2618,33 +2618,25 @@ func (btce *BFTTargetChainExecutor) executeAptosOperations(
 		btce.logger.Printf("   Intent from: %s", aptosFromAddr)
 		btce.logger.Printf("   Intent to: %s", aptosToAddr)
 
-		// Derive owner and salt from ADI identity URL (without /data suffix).
-		// The API bridge uses the identity URL for derivation, so we must match.
-		aptosIdentityURL := legacyIntent.OrganizationADI
-		if aptosIdentityURL == "" {
-			aptosIdentityURL = strings.TrimSuffix(adiURL, "/data")
-		}
-		ownerBytes32 := DeriveAptosAccountOwnerBytes32(aptosIdentityURL)
-		salt := DeriveAptosAccountSalt(aptosIdentityURL)
+		// Use the from field directly as the user account address (matches NEAR pattern).
+		// The web app sets from to the abstract account address predicted by the API bridge.
+		userAccountAddr := aptosFromAddr
 
-		// Resolve the factory-deployed abstract account address.
-		// The intent's "from" is the user's wallet, NOT the certen abstract account.
-		// The abstract account is a resource account deployed via certen_account_factory,
-		// keyed by (owner, adi_url, salt) derived from the ADI identity URL.
-		var userAccountAddr string
-		if aptosAccountFactoryPackage != "" {
-			predicted, predictErr := aptosClient.PredictAccountAddress(ctx, ownerBytes32, aptosIdentityURL, salt)
+		// Fallback: derive via factory prediction if not available from intent
+		ownerBytes32 := DeriveAptosAccountOwnerBytes32(adiURL)
+		salt := DeriveAptosAccountSalt(adiURL)
+
+		if userAccountAddr == "" && aptosAccountFactoryPackage != "" {
+			predicted, predictErr := aptosClient.PredictAccountAddress(ctx, ownerBytes32, adiURL, salt)
 			if predictErr != nil {
 				btce.logger.Printf("⚠️ [APTOS-EXEC] Failed to predict account address: %v", predictErr)
 			} else {
 				userAccountAddr = predicted
 				btce.logger.Printf("   Abstract account (from factory): %s", userAccountAddr)
 			}
-		}
-
-		if userAccountAddr == "" {
-			btce.logger.Printf("⚠️ [APTOS-EXEC] No user account address resolved")
-			govTxHash = "gov_failed_no_account_aptos"
+		} else if userAccountAddr == "" {
+			btce.logger.Printf("⚠️ [APTOS-EXEC] No factory configured and no from address in intent")
+			govTxHash = "gov_failed_no_factory_aptos"
 		}
 
 		if userAccountAddr != "" {
@@ -2659,7 +2651,7 @@ func (btce *BFTTargetChainExecutor) executeAptosOperations(
 			if !accountExists && aptosAccountFactoryPackage != "" {
 				btce.logger.Printf("⚠️ [APTOS-EXEC] User account %s not found, auto-deploying...", userAccountAddr)
 
-				deployTx, deployErr := aptosClient.DeployAccountViaFactory(ctx, ownerBytes32, aptosIdentityURL, salt)
+				deployTx, deployErr := aptosClient.DeployAccountViaFactory(ctx, ownerBytes32, adiURL, salt)
 				if deployErr != nil {
 					btce.logger.Printf("❌ [APTOS-EXEC] Account auto-deploy failed: %v", deployErr)
 					govTxHash = "gov_failed_account_deploy_aptos"
