@@ -521,15 +521,13 @@ func (ac *AptosClient) PredictAccountAddress(
 	function := fmt.Sprintf("%s::certen_account_factory::get_address", ac.packageAddress)
 
 	// View function args are JSON values matching the Move parameter types
-	adiURLBytes := make([]interface{}, len(adiURL))
-	for i, b := range []byte(adiURL) {
-		adiURLBytes[i] = fmt.Sprintf("%d", b)
-	}
+	// vector<u8> must be passed as hex string "0x..." for the REST API
+	adiURLHex := "0x" + hex.EncodeToString([]byte(adiURL))
 
 	result, err := ac.callViewFunction(ctx, function, nil, []interface{}{
-		ac.packageAddress,    // factory_addr: address
-		owner,                // owner: address
-		adiURLBytes,          // adi_url: vector<u8> — as array of u8 values
+		ac.packageAddress,       // factory_addr: address
+		owner,                   // owner: address
+		adiURLHex,               // adi_url: vector<u8> — as hex string
 		fmt.Sprintf("%d", salt), // salt: u64
 	})
 	if err != nil {
