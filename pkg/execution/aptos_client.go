@@ -126,7 +126,7 @@ func (ac *AptosClient) CreateAnchor(
 	}
 	log.Printf("   Sequence Number: %d", seqNum)
 
-	function := fmt.Sprintf("%s::certen_anchor_v3::create_anchor", ac.packageAddress)
+	function := fmt.Sprintf("%s::certen_anchor_v4::create_anchor", ac.packageAddress)
 
 	payload := map[string]interface{}{
 		"type":           "entry_function_payload",
@@ -161,6 +161,63 @@ func (ac *AptosClient) CreateAnchor(
 
 	log.Printf("✅ [APTOS] Anchor created: txHash=%s", txHash)
 	return txHash, nil
+}
+
+// InitializeAnchorState calls initialize(owner) on the anchor module.
+// This creates the AnchorState resource on the signer's account.
+// Safe to call multiple times — returns nil if already initialized.
+func (ac *AptosClient) InitializeAnchorState(ctx context.Context) error {
+	log.Printf("📡 [APTOS] Initializing anchor state for %s...", ac.accountAddress)
+
+	seqNum, err := ac.getSequenceNumber(ctx)
+	if err != nil {
+		return fmt.Errorf("initialize: getting sequence number: %w", err)
+	}
+
+	function := fmt.Sprintf("%s::certen_anchor_v4::initialize", ac.packageAddress)
+
+	payload := map[string]interface{}{
+		"type":           "entry_function_payload",
+		"function":       function,
+		"type_arguments": []string{},
+		"arguments":      []interface{}{},
+	}
+
+	txn := map[string]interface{}{
+		"sender":                    ac.accountAddress,
+		"sequence_number":           fmt.Sprintf("%d", seqNum),
+		"max_gas_amount":            fmt.Sprintf("%d", aptosMaxGasAmount),
+		"gas_unit_price":            fmt.Sprintf("%d", aptosGasUnitPrice),
+		"expiration_timestamp_secs": fmt.Sprintf("%d", time.Now().Unix()+int64(aptosExpirationSecs)),
+		"payload":                   payload,
+	}
+
+	txHash, err := ac.signAndSubmitJSON(ctx, txn)
+	if err != nil {
+		// Check if already initialized (E_ALREADY_INITIALIZED = 2)
+		if strings.Contains(err.Error(), "ALREADY_INITIALIZED") ||
+			strings.Contains(err.Error(), "0x2") ||
+			strings.Contains(err.Error(), "Move abort") {
+			log.Printf("✅ [APTOS] Anchor state already initialized")
+			return nil
+		}
+		return fmt.Errorf("initialize failed: %w", err)
+	}
+
+	log.Printf("⏳ [APTOS] Waiting for initialize confirmation: %s", txHash)
+	waitErr := ac.WaitForConfirmation(ctx, txHash, 30*time.Second)
+	if waitErr != nil {
+		// If the tx failed with ALREADY_INITIALIZED, that's fine
+		if strings.Contains(waitErr.Error(), "ALREADY_INITIALIZED") ||
+			strings.Contains(waitErr.Error(), "0x2") {
+			log.Printf("✅ [APTOS] Anchor state already initialized (confirmed)")
+			return nil
+		}
+		return fmt.Errorf("initialize confirmation failed: %w", waitErr)
+	}
+
+	log.Printf("✅ [APTOS] Anchor state initialized successfully")
+	return nil
 }
 
 // =============================================================================
@@ -255,45 +312,45 @@ func (ac *AptosClient) submitComprehensiveProofBCS(
 	// Call the flat entry function variant that accepts all proof fields individually
 	payload := map[string]interface{}{
 		"type":          "entry_function_payload",
-		"function":      fmt.Sprintf("%s::certen_anchor_v3::execute_comprehensive_proof_flat", ac.packageAddress),
+		"function":      fmt.Sprintf("%s::certen_anchor_v4::execute_comprehensive_proof_flat", ac.packageAddress),
 		"type_arguments": []string{},
 		"arguments": []interface{}{
-			ac.accountAddress,                            // anchor_owner
-			bytes32ToU256String(anchorId),                // anchor_id
-			bytes32ToU256String(proof.TransactionHash),   // transaction_hash
-			bytes32ToU256String(proof.MerkleRoot),        // merkle_root
-			proofHashesHex,                               // proof_hashes
-			bytes32ToU256String(proof.LeafHash),          // leaf_hash
-			// Governance proof fields
-			hex.EncodeToString([]byte(proof.GovKeyBookURL)), // key_book_url
-			bytes32ToU256String(proof.GovKeyBookRoot),       // key_book_root
-			keyPageProofsHex,                                // key_page_proofs
-			proof.GovAuthorityAddress,                       // authority_address
-			fmt.Sprintf("%d", proof.GovAuthorityLevel),      // authority_level
-			fmt.Sprintf("%d", proof.GovNonce),               // nonce
-			fmt.Sprintf("%d", proof.GovRequiredSignatures),  // required_signatures
-			fmt.Sprintf("%d", proof.GovProvidedSignatures),  // provided_signatures
-			// BLS proof fields
-			hex.EncodeToString(proof.BLSProofBytes),           // proof_bytes
-			hex.EncodeToString(proof.BLSMessageHash),          // message_hash
-			hex.EncodeToString(proof.BLSPubkeyCommitment),     // pubkey_commitment
-			fmt.Sprintf("%d", proof.BLSSignedVotingPower),     // signed_voting_power
-			fmt.Sprintf("%d", proof.BLSTotalVotingPower),      // total_voting_power
-			fmt.Sprintf("%d", proof.BLSThresholdNumerator),    // threshold_numerator
-			fmt.Sprintf("%d", proof.BLSThresholdDenominator),  // threshold_denominator
-			blsValidators,                                      // validator_addresses
-			// Commitment fields
-			bytes32ToU256String(proof.CommitOperationCommitment),  // operation_commitment
-			bytes32ToU256String(proof.CommitCrossChainCommitment), // cross_chain_commitment
-			bytes32ToU256String(proof.CommitGovernanceRoot),       // governance_root
-			proof.CommitSourceChain,                                // source_chain
-			fmt.Sprintf("%d", proof.CommitSourceBlockHeight),      // source_block_height
-			bytes32ToU256String(proof.CommitSourceTxHash),          // source_tx_hash
-			proof.CommitTargetChain,                                // target_chain
-			proof.CommitTargetAddress,                              // target_address
+			ac.accountAddress,                            // anchor_owner: address
+			bytes32ToU256String(anchorId),                // anchor_id: u256
+			bytes32ToU256String(proof.TransactionHash),   // transaction_hash: u256
+			bytes32ToU256String(proof.MerkleRoot),        // merkle_root: u256
+			proofHashesHex,                               // proof_hashes: vector<u256>
+			bytes32ToU256String(proof.LeafHash),          // leaf_hash: u256
+			// GovernanceProofData fields
+			"0x" + hex.EncodeToString([]byte(proof.GovKeyBookURL)), // gov_key_book_url: vector<u8>
+			bytes32ToU256String(proof.GovKeyBookRoot),               // gov_key_book_root: u256
+			keyPageProofsHex,                                        // gov_key_page_proofs: vector<u256>
+			proof.GovAuthorityAddress,                               // gov_authority_address: address
+			fmt.Sprintf("%d", proof.GovAuthorityLevel),              // gov_authority_level: u8
+			fmt.Sprintf("%d", proof.GovNonce),                       // gov_nonce: u64
+			fmt.Sprintf("%d", proof.GovRequiredSignatures),          // gov_required_signatures: u64
+			fmt.Sprintf("%d", proof.GovProvidedSignatures),          // gov_provided_signatures: u64
+			// BLSProofData fields
+			"0x" + hex.EncodeToString(proof.BLSProofBytes),       // bls_proof_bytes: vector<u8>
+			"0x" + hex.EncodeToString(proof.BLSMessageHash),      // bls_message_hash: vector<u8>
+			"0x" + hex.EncodeToString(proof.BLSPubkeyCommitment), // bls_pubkey_commitment: vector<u8>
+			fmt.Sprintf("%d", proof.BLSSignedVotingPower),         // bls_signed_voting_power: u64
+			fmt.Sprintf("%d", proof.BLSTotalVotingPower),          // bls_total_voting_power: u64
+			fmt.Sprintf("%d", proof.BLSThresholdNumerator),        // bls_threshold_numerator: u64
+			fmt.Sprintf("%d", proof.BLSThresholdDenominator),      // bls_threshold_denominator: u64
+			blsValidators,                                          // bls_validator_addresses: vector<address>
+			// CommitmentData fields
+			bytes32ToU256String(proof.CommitOperationCommitment),  // commit_operation_commitment: u256
+			bytes32ToU256String(proof.CommitCrossChainCommitment), // commit_cross_chain_commitment: u256
+			bytes32ToU256String(proof.CommitGovernanceRoot),       // commit_governance_root: u256
+			"0x" + hex.EncodeToString([]byte(proof.CommitSourceChain)), // commit_source_chain: vector<u8>
+			fmt.Sprintf("%d", proof.CommitSourceBlockHeight),           // commit_source_block_height: u64
+			bytes32ToU256String(proof.CommitSourceTxHash),              // commit_source_tx_hash: u256
+			"0x" + hex.EncodeToString([]byte(proof.CommitTargetChain)), // commit_target_chain: vector<u8>
+			proof.CommitTargetAddress,                                  // commit_target_address: address
 			// Top-level fields
-			fmt.Sprintf("%d", proof.ExpirationTimeSecs), // expiration_time_secs
-			hex.EncodeToString(proof.Metadata),          // metadata
+			fmt.Sprintf("%d", proof.ExpirationTimeSecs),  // expiration_time_secs: u64
+			"0x" + hex.EncodeToString(proof.Metadata),    // metadata: vector<u8>
 		},
 	}
 
@@ -377,27 +434,27 @@ func (ac *AptosClient) ExecuteGovernanceProofDirect(
 		"function":      fmt.Sprintf("%s::certen_account_v2::execute_governance_proof_direct_flat", ac.packageAddress),
 		"type_arguments": []string{},
 		"arguments": []interface{}{
-			userAccountAddr,                           // account_addr
-			fmt.Sprintf("%d", operationType),          // operation_type
-			recipientAddr,                             // target
-			fmt.Sprintf("%d", amountOctas),            // value_octas
-			"0x",                                      // operation_data (empty)
+			userAccountAddr,                                      // account_addr: address
+			fmt.Sprintf("%d", operationType),                     // operation_type: u32
+			recipientAddr,                                        // target: address
+			fmt.Sprintf("%d", amountOctas),                       // value_octas: u64
+			"0x",                                                 // operation_data: vector<u8> (empty)
 			// ADIGovernanceProof fields (flattened)
-			hex.EncodeToString([]byte(proof.AdiURL)),  // adi_url
-			"0x" + hex.EncodeToString(proof.AnchorID[:]), // anchor_id
-			merkleProofHex,                            // merkle_proof
-			fmt.Sprintf("%d", proof.Timestamp),        // timestamp_secs
-			fmt.Sprintf("%d", proof.ExpiresAt),        // expires_at_secs
-			hex.EncodeToString(proof.BLSProofBytes),           // bls_proof_bytes
-			hex.EncodeToString(proof.BLSMessageHash),          // bls_message_hash
-			hex.EncodeToString(proof.BLSPubkeyCommitment),     // bls_pubkey_commitment
-			fmt.Sprintf("%d", proof.BLSSignedVotingPower),     // bls_signed_voting_power
-			fmt.Sprintf("%d", proof.BLSTotalVotingPower),      // bls_total_voting_power
-			fmt.Sprintf("%d", proof.BLSThresholdNumerator),    // bls_threshold_numerator
-			fmt.Sprintf("%d", proof.BLSThresholdDenominator),  // bls_threshold_denominator
-			blsValidators,                                      // validator_addresses
-			fmt.Sprintf("%d", proof.Nonce),                    // nonce
-			fmt.Sprintf("%d", proof.RequiredLevel),            // required_level
+			"0x" + hex.EncodeToString([]byte(proof.AdiURL)),      // adi_url: vector<u8>
+			"0x" + hex.EncodeToString(proof.AnchorID[:]),          // anchor_id: vector<u8>
+			merkleProofHex,                                        // merkle_proof: vector<vector<u8>>
+			fmt.Sprintf("%d", proof.Timestamp),                    // timestamp_secs: u64
+			fmt.Sprintf("%d", proof.ExpiresAt),                    // expires_at_secs: u64
+			"0x" + hex.EncodeToString(proof.BLSProofBytes),        // bls_proof_bytes: vector<u8>
+			"0x" + hex.EncodeToString(proof.BLSMessageHash),       // bls_message_hash: vector<u8>
+			"0x" + hex.EncodeToString(proof.BLSPubkeyCommitment),  // bls_pubkey_commitment: vector<u8>
+			fmt.Sprintf("%d", proof.BLSSignedVotingPower),         // bls_signed_voting_power: u64
+			fmt.Sprintf("%d", proof.BLSTotalVotingPower),          // bls_total_voting_power: u64
+			fmt.Sprintf("%d", proof.BLSThresholdNumerator),        // bls_threshold_numerator: u64
+			fmt.Sprintf("%d", proof.BLSThresholdDenominator),      // bls_threshold_denominator: u64
+			blsValidators,                                          // validator_addresses: vector<address>
+			fmt.Sprintf("%d", proof.Nonce),                         // nonce: u64
+			fmt.Sprintf("%d", proof.RequiredLevel),                 // required_level: u8
 		},
 	}
 
@@ -544,7 +601,7 @@ type AptosAnchorData struct {
 
 // GetAnchorData reads anchor data via the get_anchor view function.
 func (ac *AptosClient) GetAnchorData(ctx context.Context, bundleId [32]byte) (*AptosAnchorData, error) {
-	function := fmt.Sprintf("%s::certen_anchor_v3::get_anchor", ac.packageAddress)
+	function := fmt.Sprintf("%s::certen_anchor_v4::get_anchor", ac.packageAddress)
 
 	result, err := ac.callViewFunction(ctx, function, nil, []interface{}{
 		ac.accountAddress,                // anchor_owner: address

@@ -2557,6 +2557,12 @@ func (btce *BFTTargetChainExecutor) executeAptosOperations(
 		govRoot = comprehensiveProof.Commitments.GovernanceRoot
 	}
 
+	// ========== Step 0: Auto-initialize anchor state ==========
+	btce.logger.Printf("🔗 [APTOS-EXEC] Step 0: Ensuring anchor state is initialized...")
+	if initErr := aptosClient.InitializeAnchorState(ctx); initErr != nil {
+		btce.logger.Printf("⚠️ [APTOS-EXEC] Anchor initialization failed (non-fatal): %v", initErr)
+	}
+
 	// ========== Step 1: Create Anchor ==========
 	btce.logger.Printf("🔗 [APTOS-EXEC] Step 1: Creating anchor...")
 
