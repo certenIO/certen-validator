@@ -100,6 +100,7 @@ func (ac *AptosClient) GetAccountAddress() string {
 // =============================================================================
 
 // CreateAnchor calls create_anchor entry function on the anchor module.
+// Uses JSON submission via /encode_submission for reliable BCS encoding.
 func (ac *AptosClient) CreateAnchor(
 	ctx context.Context,
 	bundleId [32]byte,
@@ -110,24 +111,50 @@ func (ac *AptosClient) CreateAnchor(
 	blockHeight uint64,
 ) (string, error) {
 	log.Printf("📡 [APTOS] Creating anchor...")
+	log.Printf("   Account: %s", ac.accountAddress)
+	log.Printf("   Package: %s", ac.packageAddress)
 	log.Printf("   Bundle ID: 0x%x", bundleId[:8])
+	log.Printf("   ADI URL Hash: 0x%x", adiURLHash[:8])
+	log.Printf("   Op Commitment: 0x%x", operationCommitment[:8])
+	log.Printf("   CC Commitment: 0x%x", crossChainCommitment[:8])
+	log.Printf("   Gov Root: 0x%x", governanceRoot[:8])
+	log.Printf("   Block Height: %d", blockHeight)
 
-	// Entry function: create_anchor(validator, anchor_owner, bundle_id: u256, adi_url_hash: u256,
-	//   operation_commitment: u256, cross_chain_commitment: u256, governance_root: u256, accumulate_block_height: u64)
-	// The signer (validator) is implicit. anchor_owner = our account address.
+	seqNum, err := ac.getSequenceNumber(ctx)
+	if err != nil {
+		return "", fmt.Errorf("create_anchor failed: getting sequence number: %w", err)
+	}
+	log.Printf("   Sequence Number: %d", seqNum)
+
 	function := fmt.Sprintf("%s::certen_anchor_v3::create_anchor", ac.packageAddress)
 
-	args := [][]byte{
-		bcsAddress(ac.accountAddress),          // anchor_owner: address
-		bcsU256FromBytes32(bundleId),           // bundle_id: u256
-		bcsU256FromBytes32(adiURLHash),         // adi_url_hash: u256
-		bcsU256FromBytes32(operationCommitment),// operation_commitment: u256
-		bcsU256FromBytes32(crossChainCommitment),// cross_chain_commitment: u256
-		bcsU256FromBytes32(governanceRoot),     // governance_root: u256
-		bcsU64(blockHeight),                    // accumulate_block_height: u64
+	payload := map[string]interface{}{
+		"type":           "entry_function_payload",
+		"function":       function,
+		"type_arguments": []string{},
+		"arguments": []interface{}{
+			ac.accountAddress,                        // anchor_owner: address
+			bytes32ToU256String(bundleId),             // bundle_id: u256
+			bytes32ToU256String(adiURLHash),           // adi_url_hash: u256
+			bytes32ToU256String(operationCommitment),  // operation_commitment: u256
+			bytes32ToU256String(crossChainCommitment), // cross_chain_commitment: u256
+			bytes32ToU256String(governanceRoot),       // governance_root: u256
+			fmt.Sprintf("%d", blockHeight),            // accumulate_block_height: u64
+		},
 	}
 
-	txHash, err := ac.submitEntryFunction(ctx, function, nil, args, aptosMaxGasAmount)
+	txn := map[string]interface{}{
+		"sender":                    ac.accountAddress,
+		"sequence_number":           fmt.Sprintf("%d", seqNum),
+		"max_gas_amount":            fmt.Sprintf("%d", aptosMaxGasAmount),
+		"gas_unit_price":            fmt.Sprintf("%d", aptosGasUnitPrice),
+		"expiration_timestamp_secs": fmt.Sprintf("%d", time.Now().Unix()+int64(aptosExpirationSecs)),
+		"payload":                   payload,
+	}
+
+	log.Printf("📡 [APTOS] Submitting create_anchor via JSON/encode_submission (seqNum=%d)", seqNum)
+
+	txHash, err := ac.signAndSubmitJSON(ctx, txn)
 	if err != nil {
 		return "", fmt.Errorf("create_anchor failed: %w", err)
 	}
@@ -191,10 +218,23 @@ func (ac *AptosClient) submitComprehensiveProofBCS(
 	anchorId [32]byte,
 	proof AptosCertenProof,
 ) (string, error) {
+	log.Printf("📡 [APTOS] Step 2: Submitting comprehensive proof...")
+	log.Printf("   Anchor ID: 0x%x", anchorId[:8])
+	log.Printf("   Tx Hash: 0x%x", proof.TransactionHash[:8])
+	log.Printf("   Merkle Root: 0x%x", proof.MerkleRoot[:8])
+	log.Printf("   Proof Hashes: %d", len(proof.ProofHashes))
+	log.Printf("   Gov Key Book: %s", proof.GovKeyBookURL)
+	log.Printf("   Gov Authority: %s", proof.GovAuthorityAddress)
+	log.Printf("   BLS Proof Bytes: %d bytes", len(proof.BLSProofBytes))
+	log.Printf("   BLS Validators: %d", len(proof.BLSValidatorAddresses))
+	log.Printf("   Target Chain: %s", proof.CommitTargetChain)
+	log.Printf("   Target Address: %s", proof.CommitTargetAddress)
+
 	seqNum, err := ac.getSequenceNumber(ctx)
 	if err != nil {
 		return "", err
 	}
+	log.Printf("   Sequence Number: %d", seqNum)
 
 	// Build proof hashes vector
 	proofHashesHex := make([]string, len(proof.ProofHashes))
@@ -579,6 +619,7 @@ func (ac *AptosClient) GetAnchorData(ctx context.Context, bundleId [32]byte) (*A
 
 // WaitForConfirmation polls for transaction confirmation.
 func (ac *AptosClient) WaitForConfirmation(ctx context.Context, txHash string, timeout time.Duration) error {
+	log.Printf("⏳ [APTOS] Waiting for confirmation: %s (timeout=%v)", txHash, timeout)
 	deadline := time.Now().Add(timeout)
 
 	for time.Now().Before(deadline) {
@@ -661,6 +702,7 @@ func (ac *AptosClient) getSequenceNumber(ctx context.Context) (uint64, error) {
 	defer ac.seqNumMu.Unlock()
 
 	url := fmt.Sprintf("%s/v1/accounts/%s", ac.rpcEndpoint, ac.accountAddress)
+	log.Printf("📡 [APTOS] GET %s", url)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -869,6 +911,7 @@ func (ac *AptosClient) submitBCSTransaction(ctx context.Context, signedTxBytes [
 
 // signAndSubmitJSON signs and submits a JSON-encoded transaction via the REST API.
 // Uses the /transactions/encode_submission + sign + /transactions flow.
+// This is the most reliable approach since Aptos handles BCS encoding internally.
 func (ac *AptosClient) signAndSubmitJSON(ctx context.Context, txn map[string]interface{}) (string, error) {
 	// Step 1: Encode for signing
 	encodeURL := fmt.Sprintf("%s/v1/transactions/encode_submission", ac.rpcEndpoint)
@@ -877,6 +920,9 @@ func (ac *AptosClient) signAndSubmitJSON(ctx context.Context, txn map[string]int
 	if err != nil {
 		return "", fmt.Errorf("marshaling transaction: %w", err)
 	}
+
+	log.Printf("📡 [APTOS-JSON] Step 1/3: POST %s", encodeURL)
+	log.Printf("   Request body (%d bytes): %s", len(txnJSON), string(txnJSON[:min(len(txnJSON), 500)]))
 
 	req, err := http.NewRequestWithContext(ctx, "POST", encodeURL, bytes.NewReader(txnJSON))
 	if err != nil {
@@ -895,6 +941,8 @@ func (ac *AptosClient) signAndSubmitJSON(ctx context.Context, txn map[string]int
 		return "", fmt.Errorf("reading encode response: %w", err)
 	}
 
+	log.Printf("   encode_submission response (HTTP %d): %s", resp.StatusCode, string(body[:min(len(body), 200)]))
+
 	if resp.StatusCode != 200 {
 		return "", fmt.Errorf("encode_submission failed (HTTP %d): %s", resp.StatusCode, string(body[:min(len(body), 500)]))
 	}
@@ -910,8 +958,12 @@ func (ac *AptosClient) signAndSubmitJSON(ctx context.Context, txn map[string]int
 		return "", fmt.Errorf("decoding encoded submission: %w", err)
 	}
 
+	log.Printf("📡 [APTOS-JSON] Step 2/3: Signing %d bytes with Ed25519 (pubkey=0x%s...)", len(msgBytes), hex.EncodeToString(ac.publicKey[:8]))
+
 	// Step 2: Sign with Ed25519
 	signature := ed25519.Sign(ac.privateKey, msgBytes)
+
+	log.Printf("   Signature: 0x%s...", hex.EncodeToString(signature[:16]))
 
 	// Step 3: Submit with signature
 	txn["signature"] = map[string]interface{}{
@@ -926,6 +978,8 @@ func (ac *AptosClient) signAndSubmitJSON(ctx context.Context, txn map[string]int
 	if err != nil {
 		return "", fmt.Errorf("marshaling signed transaction: %w", err)
 	}
+
+	log.Printf("📡 [APTOS-JSON] Step 3/3: POST %s (%d bytes)", submitURL, len(submitJSON))
 
 	req2, err := http.NewRequestWithContext(ctx, "POST", submitURL, bytes.NewReader(submitJSON))
 	if err != nil {
@@ -943,6 +997,8 @@ func (ac *AptosClient) signAndSubmitJSON(ctx context.Context, txn map[string]int
 	if err != nil {
 		return "", fmt.Errorf("reading submit response: %w", err)
 	}
+
+	log.Printf("   submit response (HTTP %d): %s", resp2.StatusCode, string(body2[:min(len(body2), 300)]))
 
 	if resp2.StatusCode != 202 && resp2.StatusCode != 200 {
 		return "", fmt.Errorf("submit transaction failed (HTTP %d): %s", resp2.StatusCode, string(body2[:min(len(body2), 500)]))
