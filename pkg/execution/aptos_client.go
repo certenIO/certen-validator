@@ -511,44 +511,92 @@ func (ac *AptosClient) DeployAccountViaFactory(
 	return txHash, nil
 }
 
-// PredictAccountAddress calls get_address view function on the factory.
+// PredictAccountAddress computes the factory-deployed resource account address locally.
+// Replicates the Move logic: seed = BCS(owner) + adi_url + BCS(salt) + BCS(anchor_contract)
+// address = SHA3-256(deployer_address + seed + 0xFF)
 func (ac *AptosClient) PredictAccountAddress(
 	ctx context.Context,
 	owner string,
 	adiURL string,
 	salt uint64,
 ) (string, error) {
-	function := fmt.Sprintf("%s::certen_account_factory::get_address", ac.packageAddress)
+	// Fetch FactoryState to get deployer_address and anchor_contract
+	resourceType := fmt.Sprintf("%s::certen_account_factory::FactoryState", ac.packageAddress)
+	url := fmt.Sprintf("%s/v1/accounts/%s/resource/%s", ac.rpcEndpoint, ac.packageAddress, resourceType)
 
-	// View function args are JSON values matching the Move parameter types
-	// vector<u8> must be passed as hex string "0x..." for the REST API
-	adiURLHex := "0x" + hex.EncodeToString([]byte(adiURL))
-
-	result, err := ac.callViewFunction(ctx, function, nil, []interface{}{
-		ac.packageAddress,       // factory_addr: address
-		owner,                   // owner: address
-		adiURLHex,               // adi_url: vector<u8> — as hex string
-		fmt.Sprintf("%d", salt), // salt: u64
-	})
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
-		return "", fmt.Errorf("get_address view call failed: %w", err)
+		return "", fmt.Errorf("creating request: %w", err)
 	}
 
-	// Result is an array with one element — the address
-	var resultArr []interface{}
-	if err := json.Unmarshal(result, &resultArr); err != nil {
-		return "", fmt.Errorf("parsing view result: %w", err)
+	resp, err := ac.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("fetching FactoryState: %w", err)
 	}
-	if len(resultArr) == 0 {
-		return "", fmt.Errorf("view function returned empty result")
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("FactoryState fetch failed (HTTP %d): %s", resp.StatusCode, string(body))
 	}
 
-	addr, ok := resultArr[0].(string)
-	if !ok {
-		return "", fmt.Errorf("view function returned non-string address: %v", resultArr[0])
+	var resource struct {
+		Data struct {
+			DeployerAddress string `json:"deployer_address"`
+			AnchorContract  string `json:"anchor_contract"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &resource); err != nil {
+		return "", fmt.Errorf("parsing FactoryState: %w", err)
 	}
 
-	log.Printf("✅ [APTOS] Predicted account address: %s", addr)
+	deployerAddr := strings.TrimPrefix(resource.Data.DeployerAddress, "0x")
+	anchorContract := strings.TrimPrefix(resource.Data.AnchorContract, "0x")
+	ownerClean := strings.TrimPrefix(owner, "0x")
+
+	// Pad to 64 hex chars (32 bytes)
+	for len(deployerAddr) < 64 {
+		deployerAddr = "0" + deployerAddr
+	}
+	for len(anchorContract) < 64 {
+		anchorContract = "0" + anchorContract
+	}
+	for len(ownerClean) < 64 {
+		ownerClean = "0" + ownerClean
+	}
+
+	deployerBytes, err := hex.DecodeString(deployerAddr)
+	if err != nil {
+		return "", fmt.Errorf("decoding deployer address: %w", err)
+	}
+	ownerBytes, err := hex.DecodeString(ownerClean)
+	if err != nil {
+		return "", fmt.Errorf("decoding owner: %w", err)
+	}
+	anchorBytes, err := hex.DecodeString(anchorContract)
+	if err != nil {
+		return "", fmt.Errorf("decoding anchor contract: %w", err)
+	}
+
+	// Build seed: BCS(owner) + adi_url_raw + BCS(salt) + BCS(anchor_contract)
+	// BCS for address = 32 bytes as-is; BCS for u64 = 8 bytes little-endian
+	seed := make([]byte, 0, 32+len(adiURL)+8+32)
+	seed = append(seed, ownerBytes...)
+	seed = append(seed, []byte(adiURL)...)
+	saltBytes := make([]byte, 8)
+	binary.LittleEndian.PutUint64(saltBytes, salt)
+	seed = append(seed, saltBytes...)
+	seed = append(seed, anchorBytes...)
+
+	// create_resource_address: SHA3-256(deployer + seed + 0xFF)
+	hasher := sha3.New256()
+	hasher.Write(deployerBytes)
+	hasher.Write(seed)
+	hasher.Write([]byte{0xFF})
+	addrBytes := hasher.Sum(nil)
+
+	addr := "0x" + hex.EncodeToString(addrBytes)
+	log.Printf("✅ [APTOS] Predicted account address: %s (deployer=%s)", addr, resource.Data.DeployerAddress)
 	return addr, nil
 }
 
