@@ -326,7 +326,7 @@ func (ac *AptosClient) submitComprehensiveProofBCS(
 			bytes32ToU256String(proof.GovKeyBookRoot),               // gov_key_book_root: u256
 			keyPageProofsHex,                                        // gov_key_page_proofs: vector<u256>
 			proof.GovAuthorityAddress,                               // gov_authority_address: address
-			fmt.Sprintf("%d", proof.GovAuthorityLevel),              // gov_authority_level: u8
+			uint8(proof.GovAuthorityLevel),                           // gov_authority_level: u8 (JSON number, not string)
 			fmt.Sprintf("%d", proof.GovNonce),                       // gov_nonce: u64
 			fmt.Sprintf("%d", proof.GovRequiredSignatures),          // gov_required_signatures: u64
 			fmt.Sprintf("%d", proof.GovProvidedSignatures),          // gov_provided_signatures: u64
@@ -435,7 +435,7 @@ func (ac *AptosClient) ExecuteGovernanceProofDirect(
 		"type_arguments": []string{},
 		"arguments": []interface{}{
 			userAccountAddr,                                      // account_addr: address
-			fmt.Sprintf("%d", operationType),                     // operation_type: u32
+			uint32(operationType),                                // operation_type: u32 (JSON number, not string)
 			recipientAddr,                                        // target: address
 			fmt.Sprintf("%d", amountOctas),                       // value_octas: u64
 			"0x",                                                 // operation_data: vector<u8> (empty)
@@ -454,7 +454,7 @@ func (ac *AptosClient) ExecuteGovernanceProofDirect(
 			fmt.Sprintf("%d", proof.BLSThresholdDenominator),      // bls_threshold_denominator: u64
 			blsValidators,                                          // validator_addresses: vector<address>
 			fmt.Sprintf("%d", proof.Nonce),                         // nonce: u64
-			fmt.Sprintf("%d", proof.RequiredLevel),                 // required_level: u8
+			uint8(proof.RequiredLevel),                              // required_level: u8 (JSON number, not string)
 		},
 	}
 
