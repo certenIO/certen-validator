@@ -741,7 +741,11 @@ func (ac *AptosClient) submitEntryFunction(
 	signedBuf.Write(rawTxBytes)
 	// Authenticator: Ed25519 = variant 0
 	signedBuf.WriteByte(0) // AccountAuthenticator::Ed25519
+	// Ed25519PublicKey: BCS bytes with ULEB128 length prefix
+	bcsWriteULEB128(&signedBuf, 32)
 	signedBuf.Write(ac.publicKey[:32])
+	// Ed25519Signature: BCS bytes with ULEB128 length prefix
+	bcsWriteULEB128(&signedBuf, 64)
 	signedBuf.Write(signature[:64])
 
 	return ac.submitBCSTransaction(ctx, signedBuf.Bytes())
