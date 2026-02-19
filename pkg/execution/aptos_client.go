@@ -133,7 +133,7 @@ func (ac *AptosClient) CreateAnchor(
 		"function":       function,
 		"type_arguments": []string{},
 		"arguments": []interface{}{
-			ac.accountAddress,                        // anchor_owner: address
+			ac.packageAddress,                        // anchor_owner: address (AnchorState lives at package address)
 			bytes32ToU256String(bundleId),             // bundle_id: u256
 			bytes32ToU256String(adiURLHash),           // adi_url_hash: u256
 			bytes32ToU256String(operationCommitment),  // operation_commitment: u256
@@ -315,7 +315,7 @@ func (ac *AptosClient) submitComprehensiveProofBCS(
 		"function":      fmt.Sprintf("%s::certen_anchor_v4::execute_comprehensive_proof_flat", ac.packageAddress),
 		"type_arguments": []string{},
 		"arguments": []interface{}{
-			ac.accountAddress,                            // anchor_owner: address
+			ac.packageAddress,                            // anchor_owner: address (AnchorState lives at package address)
 			bytes32ToU256String(anchorId),                // anchor_id: u256
 			bytes32ToU256String(proof.TransactionHash),   // transaction_hash: u256
 			bytes32ToU256String(proof.MerkleRoot),        // merkle_root: u256
@@ -604,7 +604,7 @@ func (ac *AptosClient) GetAnchorData(ctx context.Context, bundleId [32]byte) (*A
 	function := fmt.Sprintf("%s::certen_anchor_v4::get_anchor", ac.packageAddress)
 
 	result, err := ac.callViewFunction(ctx, function, nil, []interface{}{
-		ac.accountAddress,                // anchor_owner: address
+		ac.packageAddress,                // anchor_owner: address (AnchorState lives at package address)
 		bytes32ToU256String(bundleId),    // bundle_id: u256
 	})
 	if err != nil {
@@ -791,11 +791,13 @@ func (ac *AptosClient) getSequenceNumber(ctx context.Context) (uint64, error) {
 	var seqNum uint64
 	fmt.Sscanf(accountInfo.SequenceNumber, "%d", &seqNum)
 
-	// Use the higher of RPC sequence number or locally tracked number
-	if ac.lastSeqNum >= seqNum {
-		seqNum = ac.lastSeqNum + 1
+	// Use the higher of RPC sequence number or locally tracked number.
+	// lastSeqNum tracks the NEXT expected seqNum after our last submission.
+	// Only override if we've submitted beyond what the RPC knows about.
+	if ac.lastSeqNum > seqNum {
+		seqNum = ac.lastSeqNum
 	}
-	ac.lastSeqNum = seqNum
+	ac.lastSeqNum = seqNum + 1
 
 	return seqNum, nil
 }
