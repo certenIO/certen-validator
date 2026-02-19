@@ -721,19 +721,18 @@ func (ac *AptosClient) submitEntryFunction(
 	// Build BCS-encoded RawTransaction
 	rawTxBytes := ac.bcsEncodeRawTransaction(seqNum, maxGas, aptosGasUnitPrice, expiration, function, typeArgs, args)
 
-	// Hash: SHA3-256(prefix + rawTxBytes)
-	// Prefix = SHA3-256("APTOS::RawTransaction")
+	// Signing message = SHA3-256("APTOS::RawTransaction") || rawTxBytes
+	// Ed25519 signs this concatenation directly (no extra hash).
 	prefixHasher := sha3.New256()
 	prefixHasher.Write([]byte("APTOS::RawTransaction"))
 	prefix := prefixHasher.Sum(nil)
 
-	txHasher := sha3.New256()
-	txHasher.Write(prefix)
-	txHasher.Write(rawTxBytes)
-	txHash := txHasher.Sum(nil)
+	var signingMsg bytes.Buffer
+	signingMsg.Write(prefix)
+	signingMsg.Write(rawTxBytes)
 
 	// Sign with Ed25519
-	signature := ed25519.Sign(ac.privateKey, txHash)
+	signature := ed25519.Sign(ac.privateKey, signingMsg.Bytes())
 
 	// Submit via REST API using BCS-encoded signed transaction
 	// Build SignedTransaction: RawTransaction + Authenticator
