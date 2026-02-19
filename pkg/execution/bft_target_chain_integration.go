@@ -2618,17 +2618,22 @@ func (btce *BFTTargetChainExecutor) executeAptosOperations(
 		btce.logger.Printf("   Intent from: %s", aptosFromAddr)
 		btce.logger.Printf("   Intent to: %s", aptosToAddr)
 
-		// Derive owner and salt from ADI URL
-		ownerBytes32 := DeriveAptosAccountOwnerBytes32(adiURL)
-		salt := DeriveAptosAccountSalt(adiURL)
+		// Derive owner and salt from ADI identity URL (without /data suffix).
+		// The API bridge uses the identity URL for derivation, so we must match.
+		aptosIdentityURL := legacyIntent.OrganizationADI
+		if aptosIdentityURL == "" {
+			aptosIdentityURL = strings.TrimSuffix(adiURL, "/data")
+		}
+		ownerBytes32 := DeriveAptosAccountOwnerBytes32(aptosIdentityURL)
+		salt := DeriveAptosAccountSalt(aptosIdentityURL)
 
 		// Resolve the factory-deployed abstract account address.
 		// The intent's "from" is the user's wallet, NOT the certen abstract account.
 		// The abstract account is a resource account deployed via certen_account_factory,
-		// keyed by (owner, adi_url, salt) derived from the ADI URL.
+		// keyed by (owner, adi_url, salt) derived from the ADI identity URL.
 		var userAccountAddr string
 		if aptosAccountFactoryPackage != "" {
-			predicted, predictErr := aptosClient.PredictAccountAddress(ctx, ownerBytes32, adiURL, salt)
+			predicted, predictErr := aptosClient.PredictAccountAddress(ctx, ownerBytes32, aptosIdentityURL, salt)
 			if predictErr != nil {
 				btce.logger.Printf("⚠️ [APTOS-EXEC] Failed to predict account address: %v", predictErr)
 			} else {
@@ -2654,7 +2659,7 @@ func (btce *BFTTargetChainExecutor) executeAptosOperations(
 			if !accountExists && aptosAccountFactoryPackage != "" {
 				btce.logger.Printf("⚠️ [APTOS-EXEC] User account %s not found, auto-deploying...", userAccountAddr)
 
-				deployTx, deployErr := aptosClient.DeployAccountViaFactory(ctx, ownerBytes32, adiURL, salt)
+				deployTx, deployErr := aptosClient.DeployAccountViaFactory(ctx, ownerBytes32, aptosIdentityURL, salt)
 				if deployErr != nil {
 					btce.logger.Printf("❌ [APTOS-EXEC] Account auto-deploy failed: %v", deployErr)
 					govTxHash = "gov_failed_account_deploy_aptos"
