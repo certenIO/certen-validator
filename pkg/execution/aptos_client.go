@@ -660,7 +660,8 @@ func (ac *AptosClient) GetAnchorData(ctx context.Context, bundleId [32]byte) (*A
 		return nil, fmt.Errorf("get_anchor view call failed: %w", err)
 	}
 
-	// Parse the Option<Anchor> result
+	// Parse the Option<Anchor> result.
+	// Aptos serializes Option<T> as {"vec": [<value>]} for Some or {"vec": []} for None.
 	var resultArr []interface{}
 	if err := json.Unmarshal(result, &resultArr); err != nil {
 		return nil, fmt.Errorf("parsing view result: %w", err)
@@ -670,10 +671,20 @@ func (ac *AptosClient) GetAnchorData(ctx context.Context, bundleId [32]byte) (*A
 		return nil, fmt.Errorf("anchor not found")
 	}
 
-	// The Option<Anchor> is returned as a struct with vec field containing 0 or 1 elements
-	anchorMap, ok := resultArr[0].(map[string]interface{})
+	// Unwrap the Option: resultArr[0] = {"vec": [<anchor_data>]}
+	optionMap, ok := resultArr[0].(map[string]interface{})
 	if !ok {
 		return nil, fmt.Errorf("unexpected anchor format: %T", resultArr[0])
+	}
+
+	vecArr, ok := optionMap["vec"].([]interface{})
+	if !ok || len(vecArr) == 0 {
+		return nil, fmt.Errorf("anchor not found (Option::None)")
+	}
+
+	anchorMap, ok := vecArr[0].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("unexpected anchor data format: %T", vecArr[0])
 	}
 
 	anchor := &AptosAnchorData{}
@@ -700,7 +711,7 @@ func (ac *AptosClient) GetAnchorData(ctx context.Context, bundleId [32]byte) (*A
 	if v, ok := anchorMap["accumulate_block_height"].(string); ok {
 		fmt.Sscanf(v, "%d", &anchor.BlockHeight)
 	}
-	if v, ok := anchorMap["timestamp"].(string); ok {
+	if v, ok := anchorMap["timestamp_secs"].(string); ok {
 		fmt.Sscanf(v, "%d", &anchor.Timestamp)
 	}
 	if v, ok := anchorMap["validator"].(string); ok {
@@ -709,8 +720,8 @@ func (ac *AptosClient) GetAnchorData(ctx context.Context, bundleId [32]byte) (*A
 	if v, ok := anchorMap["proof_executed"].(bool); ok {
 		anchor.ProofExecuted = v
 	}
-	if v, ok := anchorMap["invalidated"].(bool); ok {
-		anchor.Invalidated = v
+	if v, ok := anchorMap["valid"].(bool); ok {
+		anchor.Invalidated = !v
 	}
 
 	log.Printf("✅ [APTOS] Anchor read-back: bundleId=0x%x proofExecuted=%v",
