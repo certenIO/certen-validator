@@ -2622,15 +2622,18 @@ func (btce *BFTTargetChainExecutor) executeAptosOperations(
 		ownerBytes32 := DeriveAptosAccountOwnerBytes32(adiURL)
 		salt := DeriveAptosAccountSalt(adiURL)
 
-		// Predict user account address via factory
-		userAccountAddr := aptosFromAddr
-
-		if userAccountAddr == "" && aptosAccountFactoryPackage != "" {
+		// Resolve the factory-deployed abstract account address.
+		// The intent's "from" is the user's wallet, NOT the certen abstract account.
+		// The abstract account is a resource account deployed via certen_account_factory,
+		// keyed by (owner, adi_url, salt) derived from the ADI URL.
+		var userAccountAddr string
+		if aptosAccountFactoryPackage != "" {
 			predicted, predictErr := aptosClient.PredictAccountAddress(ctx, ownerBytes32, adiURL, salt)
 			if predictErr != nil {
 				btce.logger.Printf("⚠️ [APTOS-EXEC] Failed to predict account address: %v", predictErr)
 			} else {
 				userAccountAddr = predicted
+				btce.logger.Printf("   Abstract account (from factory): %s", userAccountAddr)
 			}
 		}
 
