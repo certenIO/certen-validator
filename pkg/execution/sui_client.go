@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -398,64 +397,21 @@ type suiCoinRef struct {
 // TRANSACTION BUILDING & SUBMISSION
 // =============================================================================
 
-// buildAndExecuteMoveCall builds a PTB with a single MoveCall, signs, and submits it.
+// buildAndExecuteMoveCall builds a MoveCall via unsafe_moveCall, signs, and submits it.
 func (sc *SuiClient) buildAndExecuteMoveCall(
 	ctx context.Context,
 	module string,
 	function string,
 	typeArgs []string,
 	sharedInputs []suiSharedInput,
-	pureArgs [][]byte,
+	args []interface{},
 	gasBudget uint64,
 ) (string, error) {
 	if err := sc.ensureSharedVersions(ctx); err != nil {
 		return "", fmt.Errorf("loading shared versions: %w", err)
 	}
 
-	// Get gas coins
-	gasCoins, err := sc.getGasCoins(ctx)
-	if err != nil {
-		return "", err
-	}
-
-	// Build the transaction via sui_dryRunTransactionBlock first to validate,
-	// then submit via sui_executeTransactionBlock.
-	// Use moveCall transaction kind with the SUI Transaction Builder JSON API.
-
-	// Build inputs array for the PTB
-	inputs := make([]interface{}, 0)
-
-	// Add shared object inputs
-	for _, shared := range sharedInputs {
-		inputs = append(inputs, map[string]interface{}{
-			"type": "object",
-			"objectType": "sharedObject",
-			"objectId":            shared.ObjectID,
-			"initialSharedVersion": shared.InitialSharedVersion,
-			"mutable":             shared.Mutable,
-		})
-	}
-
-	// Add pure value inputs
-	for _, arg := range pureArgs {
-		inputs = append(inputs, map[string]interface{}{
-			"type":  "pure",
-			"value": base64.StdEncoding.EncodeToString(arg),
-		})
-	}
-
-	// Build the move call command
-	// Input indices: shared objects first, then pure args
-	callArgs := make([]map[string]interface{}, 0)
-	for i := range sharedInputs {
-		callArgs = append(callArgs, map[string]interface{}{"Input": i})
-	}
-	for i := range pureArgs {
-		callArgs = append(callArgs, map[string]interface{}{"Input": len(sharedInputs) + i})
-	}
-
-	// Use unsafe_moveCall to build the transaction bytes
-	txBytes, err := sc.buildMoveCallTxBytes(ctx, module, function, typeArgs, sharedInputs, pureArgs, gasCoins, gasBudget)
+	txBytes, err := sc.buildMoveCallTxBytes(ctx, module, function, typeArgs, sharedInputs, args, gasBudget)
 	if err != nil {
 		return "", fmt.Errorf("building move call tx: %w", err)
 	}
@@ -469,86 +425,107 @@ type suiSharedInput struct {
 	Mutable              bool
 }
 
-// buildMoveCallTxBytes uses the SUI Transaction Builder JSON API to construct tx bytes.
+// =============================================================================
+// SuiJSON ENCODING HELPERS (for unsafe_moveCall argument format)
+// =============================================================================
+
+// suiJsonVecU8 encodes []byte as a base64 string for SuiJSON vector<u8>.
+func suiJsonVecU8(data []byte) string {
+	return base64.StdEncoding.EncodeToString(data)
+}
+
+// suiJsonVecVecU8From32 encodes [][32]byte as an array of base64 strings for SuiJSON vector<vector<u8>>.
+func suiJsonVecVecU8From32(items [][32]byte) []string {
+	result := make([]string, len(items))
+	for i, item := range items {
+		result[i] = base64.StdEncoding.EncodeToString(item[:])
+	}
+	return result
+}
+
+// suiJsonVecVecU8 encodes [][]byte as an array of base64 strings for SuiJSON vector<vector<u8>>.
+func suiJsonVecVecU8(items [][]byte) []string {
+	result := make([]string, len(items))
+	for i, item := range items {
+		result[i] = base64.StdEncoding.EncodeToString(item)
+	}
+	return result
+}
+
+// suiJsonU64 encodes a uint64 as a string number for SuiJSON u64.
+func suiJsonU64(v uint64) string {
+	return fmt.Sprintf("%d", v)
+}
+
+// suiJsonU8 encodes a uint8 as an integer for SuiJSON u8.
+func suiJsonU8(v uint8) int {
+	return int(v)
+}
+
+// suiJsonAddress normalizes a SUI address to "0x" + 64 hex chars.
+func suiJsonAddress(addr string) string {
+	addr = strings.TrimPrefix(addr, "0x")
+	if len(addr) < 64 {
+		addr = strings.Repeat("0", 64-len(addr)) + addr
+	}
+	return "0x" + addr
+}
+
+// suiJsonVecAddress encodes []string addresses for SuiJSON vector<address>.
+func suiJsonVecAddress(addrs []string) []string {
+	result := make([]string, len(addrs))
+	for i, addr := range addrs {
+		result[i] = suiJsonAddress(addr)
+	}
+	return result
+}
+
+// suiJsonVecU64 encodes []uint64 as an array of string numbers for SuiJSON vector<u64>.
+func suiJsonVecU64(values []uint64) []string {
+	result := make([]string, len(values))
+	for i, v := range values {
+		result[i] = fmt.Sprintf("%d", v)
+	}
+	return result
+}
+
+// buildMoveCallTxBytes uses unsafe_moveCall to construct transaction bytes.
+// The RPC server resolves Move types from the function signature and handles BCS
+// serialization internally; callers pass SuiJSON-formatted args.
 func (sc *SuiClient) buildMoveCallTxBytes(
 	ctx context.Context,
 	module string,
 	function string,
 	typeArgs []string,
 	sharedInputs []suiSharedInput,
-	pureArgs [][]byte,
-	gasCoins []suiCoinRef,
+	args []interface{},
 	gasBudget uint64,
 ) ([]byte, error) {
-	// Build object arguments for the move call
-	objectArgs := make([]interface{}, 0)
-	for _, shared := range sharedInputs {
-		objectArgs = append(objectArgs, map[string]interface{}{
-			"Object": map[string]interface{}{
-				"SharedObject": map[string]interface{}{
-					"objectId":              shared.ObjectID,
-					"initial_shared_version": shared.InitialSharedVersion,
-					"mutable":               shared.Mutable,
-				},
-			},
-		})
-	}
-
-	// Build pure arguments
-	pureArgsList := make([]interface{}, 0)
-	for _, arg := range pureArgs {
-		pureArgsList = append(pureArgsList, base64.StdEncoding.EncodeToString(arg))
-	}
-
-	// Merge all arguments in order: shared objects first, then pure values
-	allArgs := make([]interface{}, 0)
-	for _, shared := range sharedInputs {
-		allArgs = append(allArgs, shared.ObjectID)
-	}
-	for _, arg := range pureArgs {
-		allArgs = append(allArgs, pureArgsList[0])
-		_ = arg
-	}
-
 	if typeArgs == nil {
 		typeArgs = []string{}
 	}
 
-	// Use unsafe_moveCall to build transaction bytes
-	// This handles BCS serialization on the server side
-	gasObjIDs := make([]string, 0)
-	for _, c := range gasCoins {
-		gasObjIDs = append(gasObjIDs, c.ObjectID)
-	}
-	if len(gasObjIDs) == 0 {
-		return nil, fmt.Errorf("no gas coins available")
-	}
-
-	// Build pure args as SUI expects them (JSON-encoded values or base64 bytes)
-	suiArgs := make([]interface{}, 0)
+	// Prepend shared object IDs to the argument list
+	suiArgs := make([]interface{}, 0, len(sharedInputs)+len(args))
 	for _, shared := range sharedInputs {
 		suiArgs = append(suiArgs, shared.ObjectID)
 	}
-	for _, arg := range pureArgs {
-		suiArgs = append(suiArgs, base64.StdEncoding.EncodeToString(arg))
-	}
+	suiArgs = append(suiArgs, args...)
 
-	// Use sui_moveCall unsafe API
 	result, err := sc.rpcCall(ctx, "unsafe_moveCall", []interface{}{
-		sc.senderAddress,   // signer
-		sc.packageAddress,  // package
-		module,             // module
-		function,           // function
-		typeArgs,           // type_arguments
-		suiArgs,            // arguments
-		nil,                // gas (auto-select)
+		sc.senderAddress,            // signer
+		sc.packageAddress,           // package
+		module,                      // module
+		function,                    // function
+		typeArgs,                    // type_arguments
+		suiArgs,                     // arguments (SuiJSON format)
+		nil,                         // gas (auto-select)
 		fmt.Sprintf("%d", gasBudget), // gas_budget
 	})
 	if err != nil {
 		return nil, fmt.Errorf("unsafe_moveCall failed: %w", err)
 	}
 
-	// Parse the tx_bytes from the response
 	var txResult struct {
 		TxBytes string `json:"txBytes"`
 	}
@@ -658,19 +635,21 @@ func (sc *SuiClient) CreateAnchor(
 		{ObjectID: suiClockObjectID, InitialSharedVersion: suiClockVersion, Mutable: false},
 	}
 
-	// Pure arguments: bundle_id, adi_url_hash, op_commit, cc_commit, gov_root, block_height
-	pureArgs := [][]byte{
-		bundleId[:],
-		adiURLHash[:],
-		operationCommitment[:],
-		crossChainCommitment[:],
-		governanceRoot[:],
-		suiBcsU64(blockHeight),
+	// Pure arguments in SuiJSON format:
+	// bundle_id, adi_url_hash, op_commit, cc_commit, gov_root: vector<u8> → base64
+	// block_height: u64 → string number
+	args := []interface{}{
+		suiJsonVecU8(bundleId[:]),
+		suiJsonVecU8(adiURLHash[:]),
+		suiJsonVecU8(operationCommitment[:]),
+		suiJsonVecU8(crossChainCommitment[:]),
+		suiJsonVecU8(governanceRoot[:]),
+		suiJsonU64(blockHeight),
 	}
 
 	digest, err := sc.buildAndExecuteMoveCall(ctx,
 		"certen_anchor_v3", "create_anchor",
-		nil, sharedInputs, pureArgs, suiGasBudget,
+		nil, sharedInputs, args, suiGasBudget,
 	)
 	if err != nil {
 		return "", fmt.Errorf("create_anchor failed: %w", err)
@@ -737,68 +716,53 @@ func (sc *SuiClient) ExecuteComprehensiveProof(
 		{ObjectID: suiClockObjectID, InitialSharedVersion: suiClockVersion, Mutable: false},
 	}
 
-	// Build proof_hashes as BCS vector<vector<u8>>
-	proofHashesBytes := suiBcsVectorBytes32(proof.ProofHashes)
-
-	// Build gov key page proofs as BCS vector<vector<u8>>
-	govKeyPageProofsBytes := suiBcsVectorBytes32(proof.GovKeyPageProofs)
-
-	// Build BLS validator addresses as BCS vector<address>
+	// Default BLS validator addresses and voting powers
 	blsValidatorAddrs := proof.BLSValidatorAddresses
 	if len(blsValidatorAddrs) == 0 {
 		blsValidatorAddrs = []string{sc.senderAddress}
 	}
-	blsValidatorAddrBytes := suiBcsVectorAddress(blsValidatorAddrs)
-
-	// Build BLS voting powers as BCS vector<u64>
 	blsVotingPowers := proof.BLSVotingPowers
 	if len(blsVotingPowers) == 0 {
 		blsVotingPowers = []uint64{100}
 	}
-	blsVotingPowersBytes := suiBcsVectorU64(blsVotingPowers)
 
-	// Gov authority address as 32 bytes
-	govAuthAddr := suiAddressBytes(proof.GovAuthorityAddress)
-
-	// Target address as 32 bytes
-	targetAddr := suiAddressBytes(proof.CommitTargetAddress)
-
-	pureArgs := [][]byte{
-		anchorId[:],                                     // anchor_id_bytes
-		proof.TransactionHash[:],                        // transaction_hash_bytes
-		proof.MerkleRoot[:],                             // merkle_root_bytes
-		proofHashesBytes,                                // proof_hashes_bytes: vector<vector<u8>>
-		proof.LeafHash[:],                               // leaf_hash_bytes
-		suiBcsString(proof.GovKeyBookURL),               // gov_key_book_url: String
-		proof.GovKeyBookRoot[:],                         // gov_key_book_root_bytes
-		govKeyPageProofsBytes,                           // gov_key_page_proofs_bytes: vector<vector<u8>>
-		govAuthAddr,                                     // gov_authority_address: address
-		{proof.GovAuthorityLevel},                       // gov_authority_level: u8
-		suiBcsU64(proof.GovNonce),                       // gov_nonce: u64
-		suiBcsU64(proof.GovRequiredSignatures),          // gov_required_signatures: u64
-		suiBcsU64(proof.GovProvidedSignatures),          // gov_provided_signatures: u64
-		proof.BLSProofBytes,                             // bls_proof_points_bytes: vector<u8>
-		blsValidatorAddrBytes,                           // bls_validator_addresses: vector<address>
-		blsVotingPowersBytes,                            // bls_voting_powers: vector<u64>
-		suiBcsU64(proof.BLSTotalVotingPower),            // bls_total_voting_power: u64
-		suiBcsU64(proof.BLSSignedVotingPower),           // bls_signed_voting_power: u64
-		proof.BLSMessageHash[:],                         // bls_message_hash_bytes
-		proof.BLSPubkeyCommitment,                       // bls_pubkey_commitment: vector<u8>
-		proof.CommitOperationCommitment[:],               // commit_operation_bytes
-		proof.CommitCrossChainCommitment[:],              // commit_cross_chain_bytes
-		proof.CommitGovernanceRoot[:],                    // commit_governance_bytes
-		suiBcsString(proof.CommitSourceChain),            // commit_source_chain: String
-		suiBcsU64(proof.CommitSourceBlockHeight),         // commit_source_block_height: u64
-		proof.CommitSourceTxHash[:],                      // commit_source_tx_hash_bytes
-		suiBcsString(proof.CommitTargetChain),            // commit_target_chain: String
-		targetAddr,                                       // commit_target_address: address
-		suiBcsU64(proof.ExpirationTimeMs),                // expiration_time_ms: u64
-		proof.Metadata,                                   // metadata: vector<u8>
+	// Arguments in SuiJSON format
+	args := []interface{}{
+		suiJsonVecU8(anchorId[:]),                              // anchor_id_bytes: vector<u8>
+		suiJsonVecU8(proof.TransactionHash[:]),                 // transaction_hash_bytes: vector<u8>
+		suiJsonVecU8(proof.MerkleRoot[:]),                      // merkle_root_bytes: vector<u8>
+		suiJsonVecVecU8From32(proof.ProofHashes),               // proof_hashes_bytes: vector<vector<u8>>
+		suiJsonVecU8(proof.LeafHash[:]),                        // leaf_hash_bytes: vector<u8>
+		proof.GovKeyBookURL,                                    // gov_key_book_url: String
+		suiJsonVecU8(proof.GovKeyBookRoot[:]),                  // gov_key_book_root_bytes: vector<u8>
+		suiJsonVecVecU8From32(proof.GovKeyPageProofs),          // gov_key_page_proofs_bytes: vector<vector<u8>>
+		suiJsonAddress(proof.GovAuthorityAddress),              // gov_authority_address: address
+		suiJsonU8(proof.GovAuthorityLevel),                     // gov_authority_level: u8
+		suiJsonU64(proof.GovNonce),                             // gov_nonce: u64
+		suiJsonU64(proof.GovRequiredSignatures),                // gov_required_signatures: u64
+		suiJsonU64(proof.GovProvidedSignatures),                // gov_provided_signatures: u64
+		suiJsonVecU8(proof.BLSProofBytes),                     // bls_proof_points_bytes: vector<u8>
+		suiJsonVecAddress(blsValidatorAddrs),                   // bls_validator_addresses: vector<address>
+		suiJsonVecU64(blsVotingPowers),                         // bls_voting_powers: vector<u64>
+		suiJsonU64(proof.BLSTotalVotingPower),                  // bls_total_voting_power: u64
+		suiJsonU64(proof.BLSSignedVotingPower),                 // bls_signed_voting_power: u64
+		suiJsonVecU8(proof.BLSMessageHash[:]),                  // bls_message_hash_bytes: vector<u8>
+		suiJsonVecU8(proof.BLSPubkeyCommitment),               // bls_pubkey_commitment: vector<u8>
+		suiJsonVecU8(proof.CommitOperationCommitment[:]),       // commit_operation_bytes: vector<u8>
+		suiJsonVecU8(proof.CommitCrossChainCommitment[:]),      // commit_cross_chain_bytes: vector<u8>
+		suiJsonVecU8(proof.CommitGovernanceRoot[:]),            // commit_governance_bytes: vector<u8>
+		proof.CommitSourceChain,                                // commit_source_chain: String
+		suiJsonU64(proof.CommitSourceBlockHeight),              // commit_source_block_height: u64
+		suiJsonVecU8(proof.CommitSourceTxHash[:]),              // commit_source_tx_hash_bytes: vector<u8>
+		proof.CommitTargetChain,                                // commit_target_chain: String
+		suiJsonAddress(proof.CommitTargetAddress),              // commit_target_address: address
+		suiJsonU64(proof.ExpirationTimeMs),                     // expiration_time_ms: u64
+		suiJsonVecU8(proof.Metadata),                          // metadata: vector<u8>
 	}
 
 	digest, err := sc.buildAndExecuteMoveCall(ctx,
 		"certen_anchor_v3", "execute_comprehensive_proof",
-		nil, sharedInputs, pureArgs, suiGasBudget,
+		nil, sharedInputs, args, suiGasBudget,
 	)
 	if err != nil {
 		return "", fmt.Errorf("execute_comprehensive_proof failed: %w", err)
@@ -870,54 +834,41 @@ func (sc *SuiClient) WithdrawSuiDirect(
 		{ObjectID: suiClockObjectID, InitialSharedVersion: suiClockVersion, Mutable: false},
 	}
 
-	// Build merkle path as BCS vector<vector<u8>>
-	merklePathBytes := suiBcsVectorBytes32(proof.MerklePath)
-
-	// Build threshold signatures as BCS vector<vector<u8>>
-	threshSigsBytes := suiBcsVectorVecU8(proof.ThreshSignatures)
-
-	// Build threshold signers as BCS vector<address>
-	threshSignersBytes := suiBcsVectorAddress(proof.ThreshSigners)
-
-	// Build threshold voting powers as BCS vector<u64>
-	threshPowersBytes := suiBcsVectorU64(proof.ThreshVotingPowers)
-
-	recipientAddrBytes := suiAddressBytes(recipientAddr)
-
-	pureArgs := [][]byte{
-		recipientAddrBytes,                              // recipient: address
-		suiBcsU64(amountMist),                           // amount: u64
-		suiBcsString(proof.AdiURL),                      // proof_adi_url: String
-		proof.AnchorID[:],                               // proof_anchor_id: vector<u8>
-		merklePathBytes,                                 // proof_merkle_path: vector<vector<u8>>
-		suiBcsString(proof.KBUrl),                       // kb_url: String
-		proof.KBRoot[:],                                 // kb_root: vector<u8>
-		suiBcsU64(proof.KBDepth),                        // kb_depth: u64
-		suiBcsU64(proof.KBValidFrom),                    // kb_valid_from: u64
-		suiBcsU64(proof.KBValidUntil),                   // kb_valid_until: u64
-		{proof.RoleLevel},                               // role_level: u8
-		proof.RoleHash[:],                               // role_hash: vector<u8>
-		suiAddressBytes(proof.RoleAuthorizedBy),          // role_authorized_by: address
-		suiBcsU64(proof.RoleGrantedAt),                  // role_granted_at: u64
-		proof.RoleSignature,                             // role_signature: vector<u8>
-		suiBcsU64(proof.ThreshRequired),                 // thresh_required: u64
-		suiBcsU64(proof.ThreshActual),                   // thresh_actual: u64
-		threshSigsBytes,                                 // thresh_signatures: vector<vector<u8>>
-		threshSignersBytes,                              // thresh_signers: vector<address>
-		threshPowersBytes,                               // thresh_voting_powers: vector<u64>
-		suiBcsU64(proof.ThreshTotalPower),               // thresh_total_power: u64
-		proof.ThreshMessageHash[:],                      // thresh_message_hash: vector<u8>
-		suiBcsU64(proof.Timestamp),                      // proof_timestamp: u64
-		suiBcsU64(proof.ExpiresAt),                      // proof_expires_at: u64
-		proof.ValidatorSignatures,                       // validator_signatures: vector<u8>
-		suiBcsU64(proof.Nonce),                          // proof_nonce: u64
-		{proof.RequiredLevel},                           // required_level: u8
-		proof.OperationHash[:],                          // operation_hash: vector<u8>
+	// Arguments in SuiJSON format
+	args := []interface{}{
+		suiJsonAddress(recipientAddr),                          // recipient: address
+		suiJsonU64(amountMist),                                 // amount: u64
+		proof.AdiURL,                                           // proof_adi_url: String
+		suiJsonVecU8(proof.AnchorID[:]),                        // proof_anchor_id: vector<u8>
+		suiJsonVecVecU8From32(proof.MerklePath),                // proof_merkle_path: vector<vector<u8>>
+		proof.KBUrl,                                            // kb_url: String
+		suiJsonVecU8(proof.KBRoot[:]),                          // kb_root: vector<u8>
+		suiJsonU64(proof.KBDepth),                              // kb_depth: u64
+		suiJsonU64(proof.KBValidFrom),                          // kb_valid_from: u64
+		suiJsonU64(proof.KBValidUntil),                         // kb_valid_until: u64
+		suiJsonU8(proof.RoleLevel),                             // role_level: u8
+		suiJsonVecU8(proof.RoleHash[:]),                        // role_hash: vector<u8>
+		suiJsonAddress(proof.RoleAuthorizedBy),                 // role_authorized_by: address
+		suiJsonU64(proof.RoleGrantedAt),                        // role_granted_at: u64
+		suiJsonVecU8(proof.RoleSignature),                      // role_signature: vector<u8>
+		suiJsonU64(proof.ThreshRequired),                       // thresh_required: u64
+		suiJsonU64(proof.ThreshActual),                         // thresh_actual: u64
+		suiJsonVecVecU8(proof.ThreshSignatures),                // thresh_signatures: vector<vector<u8>>
+		suiJsonVecAddress(proof.ThreshSigners),                 // thresh_signers: vector<address>
+		suiJsonVecU64(proof.ThreshVotingPowers),                // thresh_voting_powers: vector<u64>
+		suiJsonU64(proof.ThreshTotalPower),                     // thresh_total_power: u64
+		suiJsonVecU8(proof.ThreshMessageHash[:]),               // thresh_message_hash: vector<u8>
+		suiJsonU64(proof.Timestamp),                            // proof_timestamp: u64
+		suiJsonU64(proof.ExpiresAt),                            // proof_expires_at: u64
+		suiJsonVecU8(proof.ValidatorSignatures),                // validator_signatures: vector<u8>
+		suiJsonU64(proof.Nonce),                                // proof_nonce: u64
+		suiJsonU8(proof.RequiredLevel),                         // required_level: u8
+		suiJsonVecU8(proof.OperationHash[:]),                   // operation_hash: vector<u8>
 	}
 
 	digest, err := sc.buildAndExecuteMoveCall(ctx,
 		"certen_account_v2", "withdraw_sui_direct",
-		nil, sharedInputs, pureArgs, suiGasBudget,
+		nil, sharedInputs, args, suiGasBudget,
 	)
 	if err != nil {
 		return "", fmt.Errorf("withdraw_sui_direct failed: %w", err)
@@ -950,20 +901,6 @@ func (sc *SuiClient) DeployAccountViaFactory(
 	// Factory takes: Factory (shared, mutable), Clock (shared, immutable), owner, adi_url, salt, payment (Coin<SUI>)
 	// The payment coin is handled differently — we need to split a gas coin.
 	// Use unsafe_moveCall which handles coin splitting automatically.
-
-	sharedInputs := []suiSharedInput{
-		{ObjectID: sc.factoryObject, InitialSharedVersion: sc.factoryVersion, Mutable: true},
-		{ObjectID: suiClockObjectID, InitialSharedVersion: suiClockVersion, Mutable: false},
-	}
-
-	ownerAddrBytes := suiAddressBytes(owner)
-
-	pureArgs := [][]byte{
-		ownerAddrBytes,            // owner: address
-		suiBcsString(adiURL),      // adi_url: String
-		suiBcsU64(salt),           // salt: u64
-		// payment coin is handled by the RPC — we pass a coin object reference
-	}
 
 	// For factory deployment, we need a payment coin.
 	// Use unsafe_moveCall which lets us pass a coin object ID directly.
@@ -1018,9 +955,6 @@ func (sc *SuiClient) DeployAccountViaFactory(
 	if err != nil {
 		return "", fmt.Errorf("factory deployment failed: %w", err)
 	}
-
-	_ = sharedInputs
-	_ = pureArgs
 
 	log.Printf("✅ [SUI] Account deployment submitted: digest=%s", digest)
 	return digest, nil
@@ -1095,71 +1029,63 @@ type SuiAnchorData struct {
 func (sc *SuiClient) GetAnchorData(ctx context.Context, bundleId [32]byte) (*SuiAnchorData, error) {
 	log.Printf("📡 [SUI] Reading anchor data for bundle 0x%x...", bundleId[:8])
 
-	// Use devInspectTransactionBlock to call a read-only function
-	devTarget := fmt.Sprintf("%s::certen_anchor_v3::get_anchor_data", sc.packageAddress)
-
-	// Build a transaction for dev inspect
-	txBytes, err := sc.buildDevInspectTx(ctx, devTarget, []interface{}{
+	// Build a transaction via unsafe_moveCall, then run it through devInspect
+	args := []interface{}{
 		sc.anchorStateObject,
-		base64.StdEncoding.EncodeToString(bundleId[:]),
-	})
-	if err != nil {
-		// Fallback: just return minimal data based on what we know
-		log.Printf("⚠️ [SUI] DevInspect not available, using empty anchor data")
-		return &SuiAnchorData{
-			BundleId: bundleId,
-		}, nil
+		suiJsonVecU8(bundleId[:]),
 	}
 
-	result, err := sc.rpcCall(ctx, "sui_devInspectTransactionBlock", []interface{}{
+	txResult, err := sc.rpcCall(ctx, "unsafe_moveCall", []interface{}{
 		sc.senderAddress,
-		base64.StdEncoding.EncodeToString(txBytes),
-		nil, // epoch
-		nil, // additional_args
-	})
-	if err != nil {
-		log.Printf("⚠️ [SUI] DevInspect failed: %v, using empty anchor data", err)
-		return &SuiAnchorData{
-			BundleId: bundleId,
-		}, nil
-	}
-
-	_ = result
-	// For now, return minimal data — the key fields are populated by the proof builder
-	return &SuiAnchorData{
-		BundleId: bundleId,
-	}, nil
-}
-
-// buildDevInspectTx builds a transaction for devInspect.
-func (sc *SuiClient) buildDevInspectTx(ctx context.Context, target string, args []interface{}) ([]byte, error) {
-	parts := strings.SplitN(target, "::", 3)
-	if len(parts) != 3 {
-		return nil, fmt.Errorf("invalid target format: %s", target)
-	}
-
-	result, err := sc.rpcCall(ctx, "unsafe_moveCall", []interface{}{
-		sc.senderAddress,
-		parts[0], // package
-		parts[1], // module
-		parts[2], // function
+		sc.packageAddress,
+		"certen_anchor_v3",
+		"get_anchor_data",
 		[]string{},
 		args,
 		nil,
 		fmt.Sprintf("%d", suiGasBudget),
 	})
 	if err != nil {
-		return nil, err
+		log.Printf("⚠️ [SUI] DevInspect build failed: %v, using empty anchor data", err)
+		return &SuiAnchorData{BundleId: bundleId}, nil
 	}
 
-	var txResult struct {
+	var moveCallResult struct {
 		TxBytes string `json:"txBytes"`
 	}
-	if err := json.Unmarshal(result, &txResult); err != nil {
-		return nil, err
+	if err := json.Unmarshal(txResult, &moveCallResult); err != nil {
+		log.Printf("⚠️ [SUI] DevInspect parse failed: %v, using empty anchor data", err)
+		return &SuiAnchorData{BundleId: bundleId}, nil
 	}
 
-	return base64.StdEncoding.DecodeString(txResult.TxBytes)
+	result, err := sc.rpcCall(ctx, "sui_devInspectTransactionBlock", []interface{}{
+		sc.senderAddress,
+		moveCallResult.TxBytes,
+		nil, // epoch
+		nil, // additional_args
+	})
+	if err != nil {
+		log.Printf("⚠️ [SUI] DevInspect failed: %v, using empty anchor data", err)
+		return &SuiAnchorData{BundleId: bundleId}, nil
+	}
+
+	// Check execution status
+	var inspectResult struct {
+		Effects struct {
+			Status struct {
+				Status string `json:"status"`
+				Error  string `json:"error"`
+			} `json:"status"`
+		} `json:"effects"`
+	}
+	if err := json.Unmarshal(result, &inspectResult); err == nil {
+		if inspectResult.Effects.Status.Status == "failure" {
+			log.Printf("⚠️ [SUI] DevInspect execution failed: %s", inspectResult.Effects.Status.Error)
+		}
+	}
+
+	// For now, return minimal data — the key fields are populated by the proof builder
+	return &SuiAnchorData{BundleId: bundleId}, nil
 }
 
 // =============================================================================
@@ -1219,80 +1145,6 @@ func (sc *SuiClient) WaitForConfirmation(ctx context.Context, txDigest string, t
 	}
 
 	return fmt.Errorf("transaction %s not confirmed after %v", txDigest, timeout)
-}
-
-// =============================================================================
-// BCS SERIALIZATION HELPERS (SUI-specific)
-// =============================================================================
-
-// suiBcsU64 encodes a u64 as 8 little-endian bytes.
-func suiBcsU64(v uint64) []byte {
-	b := make([]byte, 8)
-	binary.LittleEndian.PutUint64(b, v)
-	return b
-}
-
-// suiBcsString encodes a Move String (ULEB128 length + UTF-8 bytes).
-func suiBcsString(s string) []byte {
-	var buf bytes.Buffer
-	bcsWriteULEB128(&buf, uint64(len(s)))
-	buf.WriteString(s)
-	return buf.Bytes()
-}
-
-// suiBcsVectorBytes32 encodes a vector<vector<u8>> where each inner vector is 32 bytes.
-func suiBcsVectorBytes32(items [][32]byte) []byte {
-	var buf bytes.Buffer
-	bcsWriteULEB128(&buf, uint64(len(items)))
-	for _, item := range items {
-		bcsWriteULEB128(&buf, 32)
-		buf.Write(item[:])
-	}
-	return buf.Bytes()
-}
-
-// suiBcsVectorVecU8 encodes a vector<vector<u8>> from byte slices.
-func suiBcsVectorVecU8(items [][]byte) []byte {
-	var buf bytes.Buffer
-	bcsWriteULEB128(&buf, uint64(len(items)))
-	for _, item := range items {
-		bcsWriteULEB128(&buf, uint64(len(item)))
-		buf.Write(item)
-	}
-	return buf.Bytes()
-}
-
-// suiBcsVectorAddress encodes a vector<address> from hex strings.
-func suiBcsVectorAddress(addrs []string) []byte {
-	var buf bytes.Buffer
-	bcsWriteULEB128(&buf, uint64(len(addrs)))
-	for _, addr := range addrs {
-		buf.Write(suiAddressBytes(addr))
-	}
-	return buf.Bytes()
-}
-
-// suiBcsVectorU64 encodes a vector<u64>.
-func suiBcsVectorU64(values []uint64) []byte {
-	var buf bytes.Buffer
-	bcsWriteULEB128(&buf, uint64(len(values)))
-	for _, v := range values {
-		bcsWriteU64LE(&buf, v)
-	}
-	return buf.Bytes()
-}
-
-// suiAddressBytes converts a 0x+64hex SUI address to 32 bytes.
-func suiAddressBytes(addr string) []byte {
-	addr = strings.TrimPrefix(addr, "0x")
-	if len(addr) < 64 {
-		addr = strings.Repeat("0", 64-len(addr)) + addr
-	}
-	b, err := hex.DecodeString(addr)
-	if err != nil || len(b) != 32 {
-		return make([]byte, 32)
-	}
-	return b
 }
 
 // =============================================================================
