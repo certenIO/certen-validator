@@ -314,6 +314,9 @@ func (btce *BFTTargetChainExecutor) ExecuteTargetChainOperations(
 	case "aptos", "aptos testnet", "aptos-testnet", "aptos mainnet", "aptos-mainnet":
 		// Aptos uses Ed25519 signing, BCS serialization, and REST API
 		return btce.executeAptosOperations(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, targetChainID)
+	case "sui", "sui testnet", "sui-testnet", "sui mainnet", "sui-mainnet":
+		// SUI uses Ed25519 signing with BLAKE2b-256, PTB model, and JSON-RPC
+		return btce.executeSuiOperations(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, targetChainID)
 	case "ethereum", "eth", "sepolia", "arbitrum", "arb", "optimism", "op", "base", "polygon", "matic",
 		"bsc", "bsc testnet", "binance", "moonbeam", "moonbase", "moonbeam moonbase alpha":
 		return btce.executeEthereumOperations(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, targetChainID)
@@ -2955,6 +2958,545 @@ func (btce *BFTTargetChainExecutor) buildAptosResult(
 			"anchorPackage":   os.Getenv("APTOS_ANCHOR_PACKAGE"),
 			"explorerUrl":     "https://explorer.aptoslabs.com/?network=testnet",
 			"executionMethod": "aptos_rest_api",
+		},
+	}
+}
+
+// =============================================================================
+// SUI CHAIN EXECUTION
+// =============================================================================
+
+// executeSuiOperations executes anchor workflow on SUI using JSON-RPC.
+// SUI uses Ed25519 signing with BLAKE2b-256, Programmable Transaction Blocks (PTBs),
+// and shared object model. Follows the same 3-step pattern as NEAR/Aptos.
+func (btce *BFTTargetChainExecutor) executeSuiOperations(
+	ctx context.Context,
+	intentID string,
+	transactionHash string,
+	accountURL string,
+	validatorID string,
+	bundleID string,
+	anchorID string,
+	certenProof *proof.CertenProof,
+	chainID int64,
+) (*TargetChainExecutionResult, error) {
+
+	btce.logger.Printf("🔷 [SUI-EXEC] Executing SUI chain operations for intent: %s", intentID)
+
+	// Create a fresh context with generous timeout for the 3-step SUI flow.
+	suiCtx, suiCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer suiCancel()
+	ctx = suiCtx
+
+	// Load SUI config from environment
+	suiPrivateKey := os.Getenv("SUI_PRIVATE_KEY")
+	suiRPCURL := os.Getenv("SUI_TESTNET_RPC_URL")
+	suiAnchorPackage := os.Getenv("SUI_ANCHOR_PACKAGE")
+	suiAnchorStateObject := os.Getenv("SUI_ANCHOR_STATE_OBJECT")
+	suiAccountFactoryObject := os.Getenv("SUI_ACCOUNT_FACTORY_OBJECT")
+
+	if suiPrivateKey == "" || suiRPCURL == "" || suiAnchorPackage == "" || suiAnchorStateObject == "" {
+		return nil, fmt.Errorf("missing SUI config: SUI_PRIVATE_KEY=%v, SUI_TESTNET_RPC_URL=%q, SUI_ANCHOR_PACKAGE=%q, SUI_ANCHOR_STATE_OBJECT=%q",
+			suiPrivateKey != "", suiRPCURL, suiAnchorPackage, suiAnchorStateObject)
+	}
+
+	btce.logger.Printf("✅ [SUI-EXEC] Using SUI config:")
+	btce.logger.Printf("   RPC: %s", suiRPCURL)
+	btce.logger.Printf("   Anchor Package: %s", suiAnchorPackage)
+	btce.logger.Printf("   Anchor State: %s", suiAnchorStateObject)
+	btce.logger.Printf("   Factory Object: %s", suiAccountFactoryObject)
+
+	// Create SUI client
+	suiClient, err := NewSuiClient(suiRPCURL, suiPrivateKey, suiAnchorPackage, suiAnchorStateObject, suiAccountFactoryObject)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create SUI client: %w", err)
+	}
+
+	// Create EthereumContractManager for proof building (reuse commitment logic)
+	privateKey := os.Getenv("ETH_PRIVATE_KEY")
+	contractConfig := &CertenContractConfig{
+		EthereumRPC:          os.Getenv("ETHEREUM_URL"),
+		ChainID:              11155111,
+		PrivateKey:           privateKey,
+		CreationContract:     os.Getenv("CERTEN_ANCHOR_V3_ADDRESS"),
+		VerificationContract: os.Getenv("CERTEN_ANCHOR_V3_ADDRESS"),
+		GasLimit:             800000,
+		MaxGasPriceGwei:      50,
+	}
+	if contractConfig.CreationContract == "" {
+		contractConfig.CreationContract = os.Getenv("CERTEN_CONTRACT_ADDRESS")
+	}
+	if contractConfig.VerificationContract == "" {
+		contractConfig.VerificationContract = contractConfig.CreationContract
+	}
+
+	ethManager, err := NewEthereumContractManager(contractConfig)
+	if err != nil {
+		btce.logger.Printf("⚠️ [SUI-EXEC] Failed to create proof builder (non-fatal, using defaults): %v", err)
+	}
+
+	// Build legacy intent and proof data (same as EVM/TRON/NEAR/Solana/Aptos path)
+	legacyIntent := btce.convertToLegacyIntent(intentID, transactionHash, accountURL, certenProof)
+
+	var bundleIdHash [32]byte
+	var comprehensiveProof *contracts.ComprehensiveCertenProof
+	if ethManager != nil {
+		bundleIdHash = ethManager.generateAnchorID(legacyIntent, certenProof)
+		cp := ethManager.buildComprehensiveProof(legacyIntent, certenProof,
+			&anchor.AnchorResponse{AnchorID: anchorID, Success: true, Message: "BFT anchor for SUI"},
+			bundleIdHash,
+		)
+		comprehensiveProof = &cp
+	} else {
+		hash := ethcrypto.Keccak256Hash([]byte(fmt.Sprintf("certen_v3_%s_%d_%s",
+			legacyIntent.IntentID, certenProof.BlockHeight, certenProof.TransactionHash)))
+		copy(bundleIdHash[:], hash[:])
+	}
+
+	// Compute adiURLHash
+	var adiURLHash [32]byte
+	adiURL := certenProof.AccountURL
+	if adiURL == "" {
+		adiURL = fmt.Sprintf("%s/data", legacyIntent.OrganizationADI)
+	}
+	copy(adiURLHash[:], ethcrypto.Keccak256([]byte(adiURL)))
+
+	// Extract commitments
+	var opCommitment, ccCommitment, govRoot [32]byte
+	if comprehensiveProof != nil {
+		opCommitment = comprehensiveProof.Commitments.OperationCommitment
+		ccCommitment = comprehensiveProof.Commitments.CrossChainCommitment
+		govRoot = comprehensiveProof.Commitments.GovernanceRoot
+	}
+
+	// ========== Step 1: Create Anchor ==========
+	btce.logger.Printf("🔗 [SUI-EXEC] Step 1: Creating anchor...")
+
+	createTxHash, err := suiClient.CreateAnchor(ctx,
+		bundleIdHash, adiURLHash, opCommitment, ccCommitment, govRoot,
+		certenProof.BlockHeight,
+	)
+	if err != nil {
+		btce.logger.Printf("❌ [SUI-EXEC] Step 1 failed: %v", err)
+		return btce.buildSuiResult(intentID, anchorID,
+			"create_failed_sui", "", "", false), err
+	}
+
+	btce.logger.Printf("✅ [SUI-EXEC] Step 1 complete - Anchor created: %s", createTxHash)
+
+	// Wait for Step 1 confirmation
+	err = suiClient.WaitForConfirmation(ctx, createTxHash, 60*time.Second)
+	if err != nil {
+		btce.logger.Printf("⚠️ [SUI-EXEC] Step 1 confirmation issue: %v", err)
+	}
+
+	// ========== Step 2: Execute Comprehensive Proof ==========
+	btce.logger.Printf("🔗 [SUI-EXEC] Step 2: Submitting comprehensive proof...")
+
+	suiProof := btce.buildSuiCertenProof(comprehensiveProof, certenProof)
+
+	verifyTxHash, err := suiClient.ExecuteComprehensiveProof(ctx, bundleIdHash, suiProof)
+	if err != nil {
+		btce.logger.Printf("❌ [SUI-EXEC] Step 2 failed: %v", err)
+		return btce.buildSuiResult(intentID, anchorID,
+			createTxHash, "verify_failed_sui", "", false), err
+	}
+
+	btce.logger.Printf("✅ [SUI-EXEC] Step 2 complete - Proof verified: %s", verifyTxHash)
+
+	// Wait for Step 2 confirmation
+	err = suiClient.WaitForConfirmation(ctx, verifyTxHash, 60*time.Second)
+	if err != nil {
+		btce.logger.Printf("⚠️ [SUI-EXEC] Step 2 confirmation issue: %v", err)
+	}
+
+	// ========== Step 3: Execute via user's Abstract Account ==========
+	allLegs := btce.extractAllLegsFromIntent(legacyIntent)
+	govTxHash := "no_governance_needed"
+
+	if len(allLegs) > 0 {
+		btce.logger.Printf("🏦 [SUI-EXEC] Step 3: Executing withdraw_sui_direct...")
+
+		// Extract SUI addresses from CrossChainData
+		suiFromAddr := btce.extractSuiFieldFromCrossChainData(legacyIntent, "from")
+		suiToAddr := btce.extractSuiFieldFromCrossChainData(legacyIntent, "to")
+
+		btce.logger.Printf("   Intent from: %s", suiFromAddr)
+		btce.logger.Printf("   Intent to: %s", suiToAddr)
+
+		// Use the from field directly as the user account object ID (matches NEAR/Aptos pattern).
+		userAccountObjectId := suiFromAddr
+
+		// Derive owner/salt for factory operations
+		ownerBytes32 := DeriveSuiAccountOwnerBytes32(adiURL)
+		salt := DeriveSuiAccountSalt(adiURL)
+
+		if userAccountObjectId == "" {
+			btce.logger.Printf("⚠️ [SUI-EXEC] No from address in intent, cannot determine user account")
+			govTxHash = "gov_failed_no_account_sui"
+		}
+
+		if userAccountObjectId != "" {
+			btce.logger.Printf("   User account object: %s", userAccountObjectId)
+
+			// Check if account exists
+			accountExists, accountVersion, checkErr := suiClient.CheckAccountExists(ctx, userAccountObjectId)
+			if checkErr != nil {
+				btce.logger.Printf("⚠️ [SUI-EXEC] Failed to check account existence: %v", checkErr)
+			}
+
+			if !accountExists && suiAccountFactoryObject != "" {
+				btce.logger.Printf("⚠️ [SUI-EXEC] User account %s not found, auto-deploying...", userAccountObjectId)
+
+				deployTx, deployErr := suiClient.DeployAccountViaFactory(ctx, ownerBytes32, adiURL, salt)
+				if deployErr != nil {
+					btce.logger.Printf("❌ [SUI-EXEC] Account auto-deploy failed: %v", deployErr)
+					govTxHash = "gov_failed_account_deploy_sui"
+				} else {
+					btce.logger.Printf("✅ [SUI-EXEC] Account deployment tx: %s", deployTx)
+					waitErr := suiClient.WaitForConfirmation(ctx, deployTx, 60*time.Second)
+					if waitErr != nil {
+						btce.logger.Printf("⚠️ [SUI-EXEC] Account deployment confirmation failed: %v", waitErr)
+						govTxHash = "gov_failed_account_deploy_sui"
+					} else {
+						accountExists = true
+						// Re-check to get the version
+						_, accountVersion, _ = suiClient.CheckAccountExists(ctx, userAccountObjectId)
+					}
+				}
+			}
+
+			if accountExists && govTxHash == "no_governance_needed" {
+				// Read anchor data for merkle proof construction
+				anchorData, readErr := suiClient.GetAnchorData(ctx, bundleIdHash)
+				if readErr != nil {
+					btce.logger.Printf("⚠️ [SUI-EXEC] Failed to read anchor data: %v", readErr)
+					govTxHash = "gov_failed_anchor_read_sui"
+				} else {
+					// Use anchor data commitments (fall back to the ones we computed)
+					anchorOpCommit := opCommitment
+					anchorCCCommit := ccCommitment
+					anchorGovRoot := govRoot
+					if anchorData.OperationCommitment != ([32]byte{}) {
+						anchorOpCommit = anchorData.OperationCommitment
+					}
+					if anchorData.CrossChainCommitment != ([32]byte{}) {
+						anchorCCCommit = anchorData.CrossChainCommitment
+					}
+					if anchorData.GovernanceRoot != ([32]byte{}) {
+						anchorGovRoot = anchorData.GovernanceRoot
+					}
+
+					// Determine target and value from intent
+					recipientAddr := suiToAddr
+					if recipientAddr == "" && len(allLegs) > 0 {
+						recipientAddr = allLegs[0].Target.Hex()
+					}
+
+					// Convert amountWei (18 decimals) to MIST (9 decimals)
+					// EVM uses 10^18, SUI uses 10^9, so divide by 10^9
+					amountMist := uint64(1) // Default 1 MIST
+					if len(allLegs) > 0 && allLegs[0].Value != nil {
+						weiValue := new(big.Int).Set(allLegs[0].Value)
+						mistValue := new(big.Int).Div(weiValue, big.NewInt(1_000_000_000)) // / 10^9
+						if mistValue.Sign() <= 0 {
+							mistValue = big.NewInt(1) // minimum 1 MIST
+						}
+						amountMist = mistValue.Uint64()
+						btce.logger.Printf("💱 [SUI-EXEC] Value conversion: %s wei → %d MIST",
+							allLegs[0].Value.String(), amountMist)
+					}
+
+					btce.logger.Printf("💱 [SUI-EXEC] Governance: target=%s mist=%d", recipientAddr, amountMist)
+
+					// Build ADIGovernanceProof
+					accountProof := btce.buildSuiAccountProof(
+						bundleIdHash, certenProof, adiURL,
+						anchorOpCommit, anchorCCCommit, anchorGovRoot,
+						amountMist,
+					)
+
+					var govErr error
+					govTxHash, govErr = suiClient.WithdrawSuiDirect(ctx,
+						userAccountObjectId, accountVersion,
+						recipientAddr, amountMist, accountProof,
+					)
+					if govErr != nil {
+						btce.logger.Printf("⚠️ [SUI-EXEC] Step 3 failed: %v", govErr)
+						govTxHash = "gov_failed_sui"
+					}
+				}
+			}
+		}
+	}
+
+	btce.logger.Printf("🎉 [SUI-EXEC] SUI anchor workflow completed!")
+	btce.logger.Printf("   Create TX: %s", createTxHash)
+	btce.logger.Printf("   Verify TX: %s", verifyTxHash)
+	btce.logger.Printf("   Governance TX: %s", govTxHash)
+
+	return btce.buildSuiResult(intentID, anchorID, createTxHash, verifyTxHash, govTxHash, true), nil
+}
+
+// buildSuiCertenProof converts the comprehensive proof to SUI format.
+// SUI uses vector<u8> for 32-byte values and milliseconds for timestamps.
+func (btce *BFTTargetChainExecutor) buildSuiCertenProof(
+	compProof *contracts.ComprehensiveCertenProof,
+	certenProof *proof.CertenProof,
+) SuiCertenProof {
+	if compProof == nil {
+		return SuiCertenProof{
+			ExpirationTimeMs: uint64(time.Now().Add(24 * time.Hour).UnixMilli()),
+		}
+	}
+
+	proofHashes := make([][32]byte, len(compProof.ProofHashes))
+	copy(proofHashes, compProof.ProofHashes)
+
+	keyPageProofs := make([][32]byte, len(compProof.GovernanceProof.KeyPageProofs))
+	copy(keyPageProofs, compProof.GovernanceProof.KeyPageProofs)
+
+	totalVP := uint64(0)
+	if compProof.BLSProof.TotalVotingPower != nil {
+		totalVP = compProof.BLSProof.TotalVotingPower.Uint64()
+	}
+	signedVP := uint64(0)
+	if compProof.BLSProof.SignedVotingPower != nil {
+		signedVP = compProof.BLSProof.SignedVotingPower.Uint64()
+	}
+	govNonce := uint64(0)
+	if compProof.GovernanceProof.Nonce != nil {
+		govNonce = compProof.GovernanceProof.Nonce.Uint64()
+	}
+	reqSigs := uint64(0)
+	if compProof.GovernanceProof.RequiredSignatures != nil {
+		reqSigs = compProof.GovernanceProof.RequiredSignatures.Uint64()
+	}
+	provSigs := uint64(0)
+	if compProof.GovernanceProof.ProvidedSignatures != nil {
+		provSigs = compProof.GovernanceProof.ProvidedSignatures.Uint64()
+	}
+
+	// SUI uses milliseconds for timestamps
+	expirationMs := uint64(time.Now().Add(24 * time.Hour).UnixMilli())
+	if compProof.ExpirationTime != nil {
+		// ExpirationTime from EVM is in seconds — convert to milliseconds
+		expirationMs = compProof.ExpirationTime.Uint64() * 1_000
+	}
+
+	// Authority address as 0x+64hex (pad 20-byte EVM address to 32 bytes)
+	authorityAddr := "0x" + hex.EncodeToString(common.LeftPadBytes(compProof.GovernanceProof.AuthorityAddress.Bytes(), 32))
+
+	// Validator addresses as 0x+64hex
+	validatorAddrs := make([]string, len(compProof.BLSProof.ValidatorAddresses))
+	for i, addr := range compProof.BLSProof.ValidatorAddresses {
+		validatorAddrs[i] = "0x" + hex.EncodeToString(common.LeftPadBytes(addr.Bytes(), 32))
+	}
+
+	// Voting powers (default 100 each)
+	votingPowers := make([]uint64, len(validatorAddrs))
+	for i := range votingPowers {
+		votingPowers[i] = 100
+	}
+
+	// BLS aggregate signature — parse ABI bytes
+	var blsProofBytes []byte
+	var blsMessageHash [32]byte
+	var blsPubkeyCommitment []byte
+
+	if len(compProof.BLSProof.AggregateSignature) >= 448 {
+		abiBytes := compProof.BLSProof.AggregateSignature
+		blsProofBytes = abiBytes[0:256]
+		copy(blsMessageHash[:], abiBytes[256:288])
+		blsPubkeyCommitment = abiBytes[288:320]
+		signedVP = new(big.Int).SetBytes(abiBytes[320:352]).Uint64()
+		totalVP = new(big.Int).SetBytes(abiBytes[352:384]).Uint64()
+	} else {
+		blsMessageHash = compProof.BLSProof.MessageHash
+	}
+
+	// Source block height
+	sourceBlockHeight := uint64(0)
+	if compProof.Commitments.SourceBlockHeight != nil {
+		sourceBlockHeight = compProof.Commitments.SourceBlockHeight.Uint64()
+	}
+
+	// Target address: pad 20-byte EVM address to 32-byte SUI address format
+	targetAddr := "0x" + hex.EncodeToString(common.LeftPadBytes(compProof.Commitments.TargetAddress.Bytes(), 32))
+
+	return SuiCertenProof{
+		TransactionHash: compProof.TransactionHash,
+		MerkleRoot:      compProof.MerkleRoot,
+		ProofHashes:     proofHashes,
+		LeafHash:        compProof.LeafHash,
+
+		GovKeyBookURL:         compProof.GovernanceProof.KeyBookURL,
+		GovKeyBookRoot:        compProof.GovernanceProof.KeyBookRoot,
+		GovKeyPageProofs:      keyPageProofs,
+		GovAuthorityAddress:   authorityAddr,
+		GovAuthorityLevel:     compProof.GovernanceProof.AuthorityLevel,
+		GovNonce:              govNonce,
+		GovRequiredSignatures: reqSigs,
+		GovProvidedSignatures: provSigs,
+
+		BLSProofBytes:        blsProofBytes,
+		BLSValidatorAddresses: validatorAddrs,
+		BLSVotingPowers:      votingPowers,
+		BLSTotalVotingPower:  totalVP,
+		BLSSignedVotingPower: signedVP,
+		BLSMessageHash:       blsMessageHash,
+		BLSPubkeyCommitment:  blsPubkeyCommitment,
+
+		CommitOperationCommitment:  compProof.Commitments.OperationCommitment,
+		CommitCrossChainCommitment: compProof.Commitments.CrossChainCommitment,
+		CommitGovernanceRoot:       compProof.Commitments.GovernanceRoot,
+		CommitSourceChain:          compProof.Commitments.SourceChain,
+		CommitSourceBlockHeight:    sourceBlockHeight,
+		CommitSourceTxHash:         compProof.Commitments.SourceTxHash,
+		CommitTargetChain:          compProof.Commitments.TargetChain,
+		CommitTargetAddress:        targetAddr,
+
+		ExpirationTimeMs: expirationMs,
+		Metadata:         compProof.Metadata,
+	}
+}
+
+// buildSuiAccountProof constructs the SuiADIGovernanceProof for Step 3.
+// Mirrors buildAptosAccountProof — computes a 4-leaf merkle proof for adiURL verification.
+func (btce *BFTTargetChainExecutor) buildSuiAccountProof(
+	bundleID [32]byte,
+	certenProof *proof.CertenProof,
+	adiURL string,
+	opCommitment [32]byte,
+	ccCommitment [32]byte,
+	govRoot [32]byte,
+	amountMist uint64,
+) SuiADIGovernanceProof {
+	requiredLevel := suiAuthorityLevelForMist(amountMist)
+	log.Printf("🔐 [SUI-AUTH] %d MIST → authority level: %d", amountMist, requiredLevel)
+
+	// Build merkle proof: same 4-leaf tree as TRON/EVM/NEAR/Solana/Aptos
+	// proof[0] = operationCommitment (sibling at level 0)
+	// proof[1] = sortedHash(ccCommitment, govRoot) (sibling at level 1)
+	hash23 := sortedHash(ccCommitment[:], govRoot[:])
+	var hash23Arr [32]byte
+	copy(hash23Arr[:], hash23)
+
+	log.Printf("🌳 [SUI-MERKLE] Built 4-leaf proof for adiURL verification:")
+	log.Printf("   adiURL: %s", adiURL)
+	log.Printf("   proof[0] (op): 0x%x", opCommitment[:8])
+	log.Printf("   proof[1] (hash23): 0x%x", hash23Arr[:8])
+
+	merkleProof := [][32]byte{opCommitment, hash23Arr}
+
+	now := time.Now()
+	proofTimestamp := uint64(now.Add(-5 * time.Minute).UnixMilli())
+	proofExpiresAt := uint64(now.Add(2 * time.Hour).UnixMilli())
+
+	// Build operation hash: keccak256("CERTEN_OP" || account_id || OP_WITHDRAW_SUI || recipient || amount)
+	var operationHash [32]byte
+
+	// BLS validator signatures: left empty for Step 3.
+	var validatorSigs []byte
+	if certenProof != nil && certenProof.BLSAggregateSignature != "" {
+		sigHex := strings.TrimPrefix(certenProof.BLSAggregateSignature, "0x")
+		sigBytes, err := hex.DecodeString(sigHex)
+		if err == nil {
+			validatorSigs = sigBytes
+		}
+	}
+	if validatorSigs == nil {
+		validatorSigs = []byte{}
+	}
+
+	return SuiADIGovernanceProof{
+		AdiURL:     adiURL,
+		AnchorID:   bundleID,
+		MerklePath: merkleProof,
+
+		KBUrl:        "",
+		KBRoot:       [32]byte{},
+		KBDepth:      0,
+		KBValidFrom:  0,
+		KBValidUntil: 0,
+
+		RoleLevel:        requiredLevel,
+		RoleHash:         [32]byte{},
+		RoleAuthorizedBy: "0x" + strings.Repeat("0", 64),
+		RoleGrantedAt:    0,
+		RoleSignature:    []byte{},
+
+		ThreshRequired:     0,
+		ThreshActual:       0,
+		ThreshSignatures:   [][]byte{},
+		ThreshSigners:      []string{},
+		ThreshVotingPowers: []uint64{},
+		ThreshTotalPower:   0,
+		ThreshMessageHash:  [32]byte{},
+
+		Timestamp:           proofTimestamp,
+		ExpiresAt:           proofExpiresAt,
+		ValidatorSignatures: validatorSigs,
+		Nonce:               1, // Must be > current nonce (starts at 0)
+		RequiredLevel:       requiredLevel,
+		OperationHash:       operationHash,
+	}
+}
+
+// extractSuiFieldFromCrossChainData extracts a SUI address field from CrossChainData.
+// Returns the field value if it looks like a SUI address (0x prefix + 64 hex chars).
+func (btce *BFTTargetChainExecutor) extractSuiFieldFromCrossChainData(legacyIntent *intent.CertenIntent, field string) string {
+	if legacyIntent == nil || len(legacyIntent.CrossChainData) == 0 {
+		return ""
+	}
+
+	var ccData struct {
+		Legs []struct {
+			From string `json:"from"`
+			To   string `json:"to"`
+		} `json:"legs"`
+	}
+	if err := json.Unmarshal(legacyIntent.CrossChainData, &ccData); err != nil || len(ccData.Legs) == 0 {
+		return ""
+	}
+
+	var value string
+	switch field {
+	case "from":
+		value = ccData.Legs[0].From
+	case "to":
+		value = ccData.Legs[0].To
+	}
+
+	// SUI addresses are 0x + 64 hex chars (32 bytes)
+	if value != "" && strings.HasPrefix(value, "0x") && len(value) == 66 {
+		_, err := hex.DecodeString(value[2:])
+		if err == nil {
+			return value
+		}
+	}
+	return ""
+}
+
+// buildSuiResult creates a TargetChainExecutionResult for SUI operations.
+func (btce *BFTTargetChainExecutor) buildSuiResult(
+	intentID, anchorID string,
+	createTxHash, verifyTxHash, govTxHash string,
+	success bool,
+) *TargetChainExecutionResult {
+	return &TargetChainExecutionResult{
+		Chain:            "sui-testnet",
+		TxHash:           createTxHash,
+		Success:          success,
+		CreateTxHash:     createTxHash,
+		VerifyTxHash:     verifyTxHash,
+		GovernanceTxHash: govTxHash,
+		Metadata: map[string]string{
+			"chain":            "sui-testnet",
+			"anchorPackage":    os.Getenv("SUI_ANCHOR_PACKAGE"),
+			"anchorState":      os.Getenv("SUI_ANCHOR_STATE_OBJECT"),
+			"explorerUrl":      "https://suiscan.xyz/testnet",
+			"executionMethod":  "sui_json_rpc",
 		},
 	}
 }

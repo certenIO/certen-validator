@@ -172,11 +172,12 @@ type AptosChainConfig struct {
 
 // SuiChainConfig contains Sui network configuration
 type SuiChainConfig struct {
-	RPCURL            string `yaml:"rpc_url"`
-	PrivateKey        string `yaml:"private_key"`
-	AnchorPackage     string `yaml:"anchor_package"`
-	AnchorStateObject string `yaml:"anchor_state_object"`
-	BLSVerifierState  string `yaml:"bls_verifier_state"`
+	RPCURL               string `yaml:"rpc_url"`
+	PrivateKey           string `yaml:"private_key"`
+	AnchorPackage        string `yaml:"anchor_package"`
+	AnchorStateObject    string `yaml:"anchor_state_object"`
+	BLSVerifierState     string `yaml:"bls_verifier_state"`
+	AccountFactoryObject string `yaml:"account_factory_object"`
 }
 
 // NEARChainConfig contains NEAR network configuration
@@ -1238,11 +1239,12 @@ func loadSuiFromEnv() *SuiChainConfig {
 		return nil
 	}
 	return &SuiChainConfig{
-		RPCURL:            rpcURL,
-		PrivateKey:        privateKey,
-		AnchorPackage:     getEnv("SUI_ANCHOR_PACKAGE", ""),
-		AnchorStateObject: getEnv("SUI_ANCHOR_STATE_OBJECT", ""),
-		BLSVerifierState:  getEnv("SUI_BLS_VERIFIER_STATE", ""),
+		RPCURL:               rpcURL,
+		PrivateKey:           privateKey,
+		AnchorPackage:        getEnv("SUI_ANCHOR_PACKAGE", ""),
+		AnchorStateObject:    getEnv("SUI_ANCHOR_STATE_OBJECT", ""),
+		BLSVerifierState:     getEnv("SUI_BLS_VERIFIER_STATE", ""),
+		AccountFactoryObject: getEnv("SUI_ACCOUNT_FACTORY_OBJECT", ""),
 	}
 }
 
