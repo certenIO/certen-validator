@@ -2469,6 +2469,12 @@ func (btce *BFTTargetChainExecutor) executeAptosOperations(
 
 	btce.logger.Printf("🔷 [APTOS-EXEC] Executing Aptos chain operations for intent: %s", intentID)
 
+	// Create a fresh context with generous timeout for the 3-step Aptos flow.
+	// The parent BFT context may have a very short deadline that's already nearly expired.
+	aptosCtx, aptosCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer aptosCancel()
+	ctx = aptosCtx
+
 	// Load Aptos config from environment
 	aptosPrivateKey := os.Getenv("APTOS_PRIVATE_KEY")
 	aptosRPCURL := os.Getenv("APTOS_TESTNET_RPC_URL")
