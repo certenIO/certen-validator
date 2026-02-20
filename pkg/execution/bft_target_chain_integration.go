@@ -3231,7 +3231,7 @@ func (btce *BFTTargetChainExecutor) executeSuiOperations(
 					accountProof := btce.buildSuiAccountProof(
 						bundleIdHash, certenProof, adiURL,
 						anchorOpCommit, anchorCCCommit, anchorGovRoot,
-						amountMist,
+						amountMist, userAccountObjectId, recipientAddr,
 					)
 
 					var govErr error
@@ -3389,6 +3389,8 @@ func (btce *BFTTargetChainExecutor) buildSuiAccountProof(
 	ccCommitment [32]byte,
 	govRoot [32]byte,
 	amountMist uint64,
+	accountObjectId string,
+	recipientAddr string,
 ) SuiADIGovernanceProof {
 	requiredLevel := suiAuthorityLevelForMist(amountMist)
 	log.Printf("🔐 [SUI-AUTH] %d MIST → authority level: %d", amountMist, requiredLevel)
@@ -3411,8 +3413,46 @@ func (btce *BFTTargetChainExecutor) buildSuiAccountProof(
 	proofTimestamp := uint64(now.Add(-5 * time.Minute).UnixMilli())
 	proofExpiresAt := uint64(now.Add(2 * time.Hour).UnixMilli())
 
-	// Build operation hash: keccak256("CERTEN_OP" || account_id || OP_WITHDRAW_SUI || recipient || amount)
+	// Build operation hash: keccak256("CERTEN_OP" || account_id || bcs(OP_WITHDRAW_SUI) || recipient || bcs(amount))
+	// Must match Move's compute_withdraw_operation_hash exactly.
 	var operationHash [32]byte
+	{
+		var opData []byte
+		opData = append(opData, []byte("CERTEN_OP")...)
+
+		// account_id: 32-byte object ID
+		acctHex := strings.TrimPrefix(accountObjectId, "0x")
+		acctBytes, err := hex.DecodeString(acctHex)
+		if err == nil {
+			// Pad/truncate to 32 bytes
+			var acctID [32]byte
+			copy(acctID[32-len(acctBytes):], acctBytes)
+			opData = append(opData, acctID[:]...)
+		}
+
+		// OP_WITHDRAW_SUI = u64(1), BCS = 8-byte little-endian
+		var opCode [8]byte
+		binary.LittleEndian.PutUint64(opCode[:], 1)
+		opData = append(opData, opCode[:]...)
+
+		// recipient: 32-byte address
+		recipHex := strings.TrimPrefix(recipientAddr, "0x")
+		recipBytes, err := hex.DecodeString(recipHex)
+		if err == nil {
+			var recipID [32]byte
+			copy(recipID[32-len(recipBytes):], recipBytes)
+			opData = append(opData, recipID[:]...)
+		}
+
+		// amount: BCS u64 = 8-byte little-endian
+		var amtBytes [8]byte
+		binary.LittleEndian.PutUint64(amtBytes[:], amountMist)
+		opData = append(opData, amtBytes[:]...)
+
+		hash := ethcrypto.Keccak256(opData)
+		copy(operationHash[:], hash)
+		log.Printf("🔑 [SUI-OP] Operation hash: 0x%x", operationHash[:])
+	}
 
 	// BLS validator signatures: left empty for Step 3.
 	var validatorSigs []byte
