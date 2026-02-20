@@ -3038,19 +3038,6 @@ func (btce *BFTTargetChainExecutor) executeSuiOperations(
 	// Build legacy intent and proof data (same as EVM/TRON/NEAR/Solana/Aptos path)
 	legacyIntent := btce.convertToLegacyIntent(intentID, transactionHash, accountURL, certenProof)
 
-	// SUI accounts store the ADI identity URL (e.g. acc://x.acme), not the data
-	// account URL (acc://x.acme/data). Override AccountURL before building the
-	// comprehensive proof so the merkle root, anchor, and governance proof all
-	// use the identity URL consistently. Neither Aptos nor NEAR perform this
-	// adi_url vs account check, but SUI does (E_ADI_URL_MISMATCH = 110).
-	origAccountURL := certenProof.AccountURL
-	if strings.HasSuffix(certenProof.AccountURL, "/data") {
-		certenProof.AccountURL = strings.TrimSuffix(certenProof.AccountURL, "/data")
-	} else if certenProof.AccountURL == "" {
-		certenProof.AccountURL = legacyIntent.OrganizationADI
-	}
-	defer func() { certenProof.AccountURL = origAccountURL }()
-
 	var bundleIdHash [32]byte
 	var comprehensiveProof *contracts.ComprehensiveCertenProof
 	if ethManager != nil {
@@ -3066,11 +3053,11 @@ func (btce *BFTTargetChainExecutor) executeSuiOperations(
 		copy(bundleIdHash[:], hash[:])
 	}
 
-	// Compute adiURLHash — uses the identity URL (without /data) for SUI
+	// Compute adiURLHash
 	var adiURLHash [32]byte
 	adiURL := certenProof.AccountURL
 	if adiURL == "" {
-		adiURL = legacyIntent.OrganizationADI
+		adiURL = fmt.Sprintf("%s/data", legacyIntent.OrganizationADI)
 	}
 	copy(adiURLHash[:], ethcrypto.Keccak256([]byte(adiURL)))
 
