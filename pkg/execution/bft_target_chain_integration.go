@@ -3260,9 +3260,13 @@ func (btce *BFTTargetChainExecutor) executeSuiOperations(
 // SUI Groth16 format conversion: gnark → Arkworks
 // =============================================================================
 
-// BN254 field modulus for Y parity checks in Arkworks compressed serialization.
+// BN254 base field modulus (Fp) for Y parity checks in Arkworks compressed serialization.
 var bn254FieldModulus, _ = new(big.Int).SetString("21888242871839275222246405745257275088696311157297823662689037894645226208583", 10)
 var bn254HalfFieldModulus = new(big.Int).Div(bn254FieldModulus, big.NewInt(2))
+
+// BN254 scalar field order (Fr) for reducing public inputs.
+// gnark internally reduces public inputs mod r; the ABI stores unreduced values.
+var bn254ScalarFieldOrder, _ = new(big.Int).SetString("21888242871839275222246405745257275088548364400416034343698204186575808495617", 10)
 
 // reverseBytes32 returns a copy of a 32-byte slice with bytes reversed (BE↔LE).
 func reverseBytes32(b []byte) []byte {
@@ -3330,12 +3334,20 @@ func convertGnarkProofToArkworks(gnarkProof []byte) ([]byte, error) {
 	return result, nil
 }
 
-// convertGnarkPublicInputToLE reverses a 32-byte big-endian gnark field element
-// to little-endian Arkworks format for SUI's groth16::public_proof_inputs_from_bytes.
-func convertGnarkPublicInputToLE(be [32]byte) [32]byte {
+// convertGnarkPublicInputToArkworksLE converts a 32-byte big-endian gnark public
+// input to Arkworks little-endian Fr format. gnark reduces public inputs mod r
+// internally, but the ABI stores the unreduced value. This function reduces mod r
+// then serializes as 32-byte LE for SUI's groth16::public_proof_inputs_from_bytes.
+func convertGnarkPublicInputToArkworksLE(be [32]byte) [32]byte {
+	// Interpret as big-endian integer
+	v := new(big.Int).SetBytes(be[:])
+	// Reduce mod scalar field order (matches gnark's internal reduction)
+	v.Mod(v, bn254ScalarFieldOrder)
+	// Serialize as 32-byte little-endian
 	var le [32]byte
-	for i := 0; i < 32; i++ {
-		le[31-i] = be[i]
+	vBytes := v.Bytes() // big-endian
+	for i, b := range vBytes {
+		le[len(vBytes)-1-i] = b
 	}
 	return le
 }
@@ -3419,15 +3431,15 @@ func (btce *BFTTargetChainExecutor) buildSuiCertenProof(
 			log.Printf("✅ [SUI-BLS] Converted gnark proof (256B) → Arkworks compressed (128B)")
 		}
 
-		// Convert message hash: BE → LE for Arkworks field element serialization
+		// Convert message hash: BE → reduce mod r → LE for Arkworks Fr serialization
 		var msgHashBE [32]byte
 		copy(msgHashBE[:], abiBytes[256:288])
-		blsMessageHash = convertGnarkPublicInputToLE(msgHashBE)
+		blsMessageHash = convertGnarkPublicInputToArkworksLE(msgHashBE)
 
-		// Convert pubkey commitment: BE → LE for Arkworks field element serialization
+		// Convert pubkey commitment: BE → reduce mod r → LE for Arkworks Fr serialization
 		var pkCommitBE [32]byte
 		copy(pkCommitBE[:], abiBytes[288:320])
-		blsPubkeyCommitmentLE := convertGnarkPublicInputToLE(pkCommitBE)
+		blsPubkeyCommitmentLE := convertGnarkPublicInputToArkworksLE(pkCommitBE)
 		blsPubkeyCommitment = blsPubkeyCommitmentLE[:]
 
 		signedVP = new(big.Int).SetBytes(abiBytes[320:352]).Uint64()
