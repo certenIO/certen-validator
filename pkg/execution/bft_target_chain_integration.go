@@ -3069,6 +3069,24 @@ func (btce *BFTTargetChainExecutor) executeSuiOperations(
 		govRoot = comprehensiveProof.Commitments.GovernanceRoot
 	}
 
+	// Debug: log values that will be used for merkle root computation
+	btce.logger.Printf("🔍 [SUI-MERKLE] Step 1 inputs:")
+	btce.logger.Printf("   bundleId:    0x%x", bundleIdHash[:])
+	btce.logger.Printf("   adiURLHash:  0x%x", adiURLHash[:])
+	btce.logger.Printf("   opCommit:    0x%x", opCommitment[:])
+	btce.logger.Printf("   ccCommit:    0x%x", ccCommitment[:])
+	btce.logger.Printf("   govRoot:     0x%x", govRoot[:])
+	btce.logger.Printf("   adiURL:      %s", adiURL)
+	if comprehensiveProof != nil {
+		btce.logger.Printf("   proof.MerkleRoot: 0x%x", comprehensiveProof.MerkleRoot[:])
+		// Recompute locally to verify
+		h01 := sortedHash(adiURLHash[:], opCommitment[:])
+		h23 := sortedHash(ccCommitment[:], govRoot[:])
+		localRoot := sortedHash(h01, h23)
+		btce.logger.Printf("   localMerkleRoot: 0x%x", localRoot)
+		btce.logger.Printf("   match: %v", fmt.Sprintf("%x", localRoot) == fmt.Sprintf("%x", comprehensiveProof.MerkleRoot[:]))
+	}
+
 	// ========== Step 1: Create Anchor ==========
 	btce.logger.Printf("🔗 [SUI-EXEC] Step 1: Creating anchor...")
 
