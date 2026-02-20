@@ -3572,18 +3572,12 @@ func (btce *BFTTargetChainExecutor) buildSuiAccountProof(
 		log.Printf("🔑 [SUI-OP] Operation hash: 0x%x", operationHash[:])
 	}
 
-	// BLS validator signatures: left empty for Step 3.
-	var validatorSigs []byte
-	if certenProof != nil && certenProof.BLSAggregateSignature != "" {
-		sigHex := strings.TrimPrefix(certenProof.BLSAggregateSignature, "0x")
-		sigBytes, err := hex.DecodeString(sigHex)
-		if err == nil {
-			validatorSigs = sigBytes
-		}
-	}
-	if validatorSigs == nil {
-		validatorSigs = []byte{}
-	}
+	// BLS validator signatures: always empty for Step 3.
+	// BLS ZK verification was already performed in Step 2 (execute_comprehensive_proof).
+	// The Step 3 contract's verify_bls_signature_view computes a different message hash
+	// on-chain and uses zero pubkey_commitment, making it incompatible with the Step 2
+	// proof. Sending empty bytes skips the conditional BLS check (matches Aptos pattern).
+	validatorSigs := []byte{}
 
 	return SuiADIGovernanceProof{
 		AdiURL:     adiURL,
