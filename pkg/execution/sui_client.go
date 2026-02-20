@@ -431,25 +431,31 @@ type suiSharedInput struct {
 // SuiJSON ENCODING HELPERS (for unsafe_moveCall argument format)
 // =============================================================================
 
-// suiJsonVecU8 encodes []byte as a base64 string for SuiJSON vector<u8>.
-func suiJsonVecU8(data []byte) string {
-	return base64.StdEncoding.EncodeToString(data)
-}
-
-// suiJsonVecVecU8From32 encodes [][32]byte as an array of base64 strings for SuiJSON vector<vector<u8>>.
-func suiJsonVecVecU8From32(items [][32]byte) []string {
-	result := make([]string, len(items))
-	for i, item := range items {
-		result[i] = base64.StdEncoding.EncodeToString(item[:])
+// suiJsonVecU8 encodes []byte as a JSON array of integers for SuiJSON vector<u8>.
+// SuiJSON treats strings as UTF-8 bytes (NOT base64), so we must use integer arrays
+// for arbitrary binary data.
+func suiJsonVecU8(data []byte) []int {
+	result := make([]int, len(data))
+	for i, b := range data {
+		result[i] = int(b)
 	}
 	return result
 }
 
-// suiJsonVecVecU8 encodes [][]byte as an array of base64 strings for SuiJSON vector<vector<u8>>.
-func suiJsonVecVecU8(items [][]byte) []string {
-	result := make([]string, len(items))
+// suiJsonVecVecU8From32 encodes [][32]byte as an array of integer arrays for SuiJSON vector<vector<u8>>.
+func suiJsonVecVecU8From32(items [][32]byte) [][]int {
+	result := make([][]int, len(items))
 	for i, item := range items {
-		result[i] = base64.StdEncoding.EncodeToString(item)
+		result[i] = suiJsonVecU8(item[:])
+	}
+	return result
+}
+
+// suiJsonVecVecU8 encodes [][]byte as an array of integer arrays for SuiJSON vector<vector<u8>>.
+func suiJsonVecVecU8(items [][]byte) [][]int {
+	result := make([][]int, len(items))
+	for i, item := range items {
+		result[i] = suiJsonVecU8(item)
 	}
 	return result
 }
