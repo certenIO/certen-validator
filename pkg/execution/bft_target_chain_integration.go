@@ -3256,6 +3256,90 @@ func (btce *BFTTargetChainExecutor) executeSuiOperations(
 	return btce.buildSuiResult(intentID, anchorID, createTxHash, verifyTxHash, govTxHash, true), nil
 }
 
+// =============================================================================
+// SUI Groth16 format conversion: gnark → Arkworks
+// =============================================================================
+
+// BN254 field modulus for Y parity checks in Arkworks compressed serialization.
+var bn254FieldModulus, _ = new(big.Int).SetString("21888242871839275222246405745257275088696311157297823662689037894645226208583", 10)
+var bn254HalfFieldModulus = new(big.Int).Div(bn254FieldModulus, big.NewInt(2))
+
+// reverseBytes32 returns a copy of a 32-byte slice with bytes reversed (BE↔LE).
+func reverseBytes32(b []byte) []byte {
+	out := make([]byte, 32)
+	for i := 0; i < 32 && i < len(b); i++ {
+		out[31-i] = b[i]
+	}
+	return out
+}
+
+// convertGnarkProofToArkworks converts a 256-byte gnark uncompressed proof
+// (ProofA(64) + ProofB(128) + ProofC(64), big-endian coordinates) to a
+// 128-byte Arkworks compressed proof (ProofA(32) + ProofB(64) + ProofC(32),
+// little-endian with Y-parity flags in top bits of last byte).
+func convertGnarkProofToArkworks(gnarkProof []byte) ([]byte, error) {
+	if len(gnarkProof) != 256 {
+		return nil, fmt.Errorf("expected 256-byte gnark proof, got %d", len(gnarkProof))
+	}
+
+	result := make([]byte, 128)
+
+	// --- ProofA (G1): gnark bytes [0:64] ---
+	aX := new(big.Int).SetBytes(gnarkProof[0:32])
+	aY := new(big.Int).SetBytes(gnarkProof[32:64])
+	copy(result[0:32], reverseBytes32(gnarkProof[0:32])) // X in LE
+	if aX.Sign() == 0 && aY.Sign() == 0 {
+		result[31] |= 0x40 // point at infinity
+	} else if aY.Cmp(bn254HalfFieldModulus) > 0 {
+		result[31] |= 0x80 // negative Y
+	}
+
+	// --- ProofB (G2): gnark bytes [64:192] ---
+	// gnark layout: X.A0(32) X.A1(32) Y.A0(32) Y.A1(32) — all BE
+	// Arkworks layout: c0(32 LE) || c1(32 LE) — flags in byte[63]
+	bY0 := new(big.Int).SetBytes(gnarkProof[128:160])
+	bY1 := new(big.Int).SetBytes(gnarkProof[160:192])
+	copy(result[32:64], reverseBytes32(gnarkProof[64:96]))  // X.c0 in LE
+	copy(result[64:96], reverseBytes32(gnarkProof[96:128])) // X.c1 in LE
+
+	bX0 := new(big.Int).SetBytes(gnarkProof[64:96])
+	bX1 := new(big.Int).SetBytes(gnarkProof[96:128])
+	isInfinity := bX0.Sign() == 0 && bX1.Sign() == 0 && bY0.Sign() == 0 && bY1.Sign() == 0
+	isNeg := false
+	if bY1.Sign() != 0 {
+		isNeg = bY1.Cmp(bn254HalfFieldModulus) > 0
+	} else {
+		isNeg = bY0.Cmp(bn254HalfFieldModulus) > 0
+	}
+	if isInfinity {
+		result[95] |= 0x40
+	} else if isNeg {
+		result[95] |= 0x80
+	}
+
+	// --- ProofC (G1): gnark bytes [192:256] ---
+	cX := new(big.Int).SetBytes(gnarkProof[192:224])
+	cY := new(big.Int).SetBytes(gnarkProof[224:256])
+	copy(result[96:128], reverseBytes32(gnarkProof[192:224])) // X in LE
+	if cX.Sign() == 0 && cY.Sign() == 0 {
+		result[127] |= 0x40
+	} else if cY.Cmp(bn254HalfFieldModulus) > 0 {
+		result[127] |= 0x80
+	}
+
+	return result, nil
+}
+
+// convertGnarkPublicInputToLE reverses a 32-byte big-endian gnark field element
+// to little-endian Arkworks format for SUI's groth16::public_proof_inputs_from_bytes.
+func convertGnarkPublicInputToLE(be [32]byte) [32]byte {
+	var le [32]byte
+	for i := 0; i < 32; i++ {
+		le[31-i] = be[i]
+	}
+	return le
+}
+
 // buildSuiCertenProof converts the comprehensive proof to SUI format.
 // SUI uses vector<u8> for 32-byte values and milliseconds for timestamps.
 func (btce *BFTTargetChainExecutor) buildSuiCertenProof(
@@ -3317,18 +3401,40 @@ func (btce *BFTTargetChainExecutor) buildSuiCertenProof(
 		votingPowers[i] = 100
 	}
 
-	// BLS aggregate signature — parse ABI bytes
+	// BLS aggregate signature — parse ABI bytes and convert to Arkworks format for SUI
 	var blsProofBytes []byte
 	var blsMessageHash [32]byte
 	var blsPubkeyCommitment []byte
 
 	if len(compProof.BLSProof.AggregateSignature) >= 448 {
 		abiBytes := compProof.BLSProof.AggregateSignature
-		blsProofBytes = abiBytes[0:256]
-		copy(blsMessageHash[:], abiBytes[256:288])
-		blsPubkeyCommitment = abiBytes[288:320]
+
+		// Convert proof points: gnark uncompressed (256 bytes BE) → Arkworks compressed (128 bytes LE)
+		arkProof, err := convertGnarkProofToArkworks(abiBytes[0:256])
+		if err != nil {
+			log.Printf("⚠️ [SUI-BLS] Failed to convert proof to Arkworks: %v, using raw", err)
+			blsProofBytes = abiBytes[0:256]
+		} else {
+			blsProofBytes = arkProof
+			log.Printf("✅ [SUI-BLS] Converted gnark proof (256B) → Arkworks compressed (128B)")
+		}
+
+		// Convert message hash: BE → LE for Arkworks field element serialization
+		var msgHashBE [32]byte
+		copy(msgHashBE[:], abiBytes[256:288])
+		blsMessageHash = convertGnarkPublicInputToLE(msgHashBE)
+
+		// Convert pubkey commitment: BE → LE for Arkworks field element serialization
+		var pkCommitBE [32]byte
+		copy(pkCommitBE[:], abiBytes[288:320])
+		blsPubkeyCommitmentLE := convertGnarkPublicInputToLE(pkCommitBE)
+		blsPubkeyCommitment = blsPubkeyCommitmentLE[:]
+
 		signedVP = new(big.Int).SetBytes(abiBytes[320:352]).Uint64()
 		totalVP = new(big.Int).SetBytes(abiBytes[352:384]).Uint64()
+
+		log.Printf("🔐 [SUI-BLS] Public inputs (LE): msgHash=%x... pkCommit=%x... signedVP=%d totalVP=%d",
+			blsMessageHash[:4], blsPubkeyCommitment[:4], signedVP, totalVP)
 	} else {
 		blsMessageHash = compProof.BLSProof.MessageHash
 	}
