@@ -189,11 +189,13 @@ func bech32mHRPExpand(hrp string) []byte {
 	return result
 }
 
-// bech32mVerifyChecksum verifies a Bech32m checksum.
+// bech32mVerifyChecksum verifies a Bech32/Bech32m checksum.
+// SUI private keys use standard Bech32 encoding (constant 1), not Bech32m (0x2bc830a3).
 func bech32mVerifyChecksum(hrp string, data []byte) bool {
 	expanded := bech32mHRPExpand(hrp)
 	values := append(expanded, data...)
-	return bech32mPolymod(values) == 0x2bc830a3 // Bech32m constant
+	polymod := bech32mPolymod(values)
+	return polymod == 1 || polymod == 0x2bc830a3
 }
 
 // convertBits converts between bit groups (e.g., 5-bit to 8-bit).
