@@ -174,7 +174,7 @@ func (btce *BFTTargetChainExecutor) ExtractExecutionParams(
 		Legs             []struct {
 			LegID   string `json:"legId"`
 			Chain   string `json:"chain"`
-			ChainID uint64 `json:"chainId"`
+			ChainID int64  `json:"chainId"`
 			From    string `json:"from"`
 			To      string `json:"to"`
 			AmountWei string `json:"amountWei"`
@@ -232,7 +232,7 @@ func (btce *BFTTargetChainExecutor) ExtractExecutionParams(
 
 	params := &ExtractedExecutionParams{
 		Chain:          leg.Chain,
-		ChainID:        int64(leg.ChainID),
+		ChainID:        leg.ChainID,
 		AnchorContract: common.HexToAddress(anchorContractAddr),
 		FinalTarget:    common.HexToAddress(leg.To),
 		FinalValue:     finalValue,
@@ -351,7 +351,7 @@ func (btce *BFTTargetChainExecutor) extractTargetChainFromCrossChainData(crossCh
 	var ccData struct {
 		Legs []struct {
 			Chain   string `json:"chain"`
-			ChainID uint64 `json:"chainId"`
+			ChainID int64  `json:"chainId"`
 		} `json:"legs"`
 	}
 
@@ -367,7 +367,7 @@ func (btce *BFTTargetChainExecutor) extractTargetChainFromCrossChainData(crossCh
 
 	// Use first leg's chain info
 	chain := ccData.Legs[0].Chain
-	chainID := int64(ccData.Legs[0].ChainID)
+	chainID := ccData.Legs[0].ChainID
 
 	// Normalize chain name
 	if chain == "" {

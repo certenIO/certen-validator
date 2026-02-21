@@ -141,7 +141,7 @@ type G2CrossChainProof struct {
 // G2ChainTarget extends ChainTarget with outcome verification
 type G2ChainTarget struct {
 	Chain            string         `json:"chain"`
-	ChainID          uint64         `json:"chain_id"`
+	ChainID          int64          `json:"chain_id"`
 	ContractAddress  common.Address `json:"contract_address"`
 	FunctionSelector [4]byte        `json:"function_selector"`
 	EncodedCallData  string         `json:"encoded_call_data"`
@@ -364,7 +364,7 @@ func (b *G2EnhancedBlockBuilder) buildG2CrossChainProof(
 
 	target := G2ChainTarget{
 		Chain:            inputs.TargetChain,
-		ChainID:          uint64(inputs.TargetChainID),
+		ChainID:          inputs.TargetChainID,
 		ContractAddress:  inputs.TargetContract,
 		FunctionSelector: inputs.FunctionSelector,
 		EncodedCallData:  hex.EncodeToString(inputs.EncodedCallData),

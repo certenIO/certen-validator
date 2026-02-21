@@ -134,7 +134,7 @@ type CCLeg struct {
 	LegID   string `json:"legId"`
 	Role    string `json:"role"`    // "source", "destination", or "intermediate"
 	Chain   string `json:"chain"`   // "ethereum"
-	ChainID uint64 `json:"chainId"` // 11155111 for Sepolia
+	ChainID int64  `json:"chainId"` // 11155111 for Sepolia, -3 for TON Testnet
 	Network string `json:"network"` // "sepolia"
 
 	Asset struct {
@@ -384,7 +384,7 @@ func (ci *CertenIntent) GetProofClass() (string, error) {
 // GetTargetChain extracts the target chain from cross-chain data legs
 // Per Unified Multi-Chain Architecture: Extract target_chain from intent legs[].chain
 // Returns the chain name (e.g., "ethereum", "sepolia", "solana") and chain ID
-func (ci *CertenIntent) GetTargetChain() (chainName string, chainID uint64, err error) {
+func (ci *CertenIntent) GetTargetChain() (chainName string, chainID int64, err error) {
 	// Parse cross-chain data
 	ccEnvelope, err := ci.ParseCrossChain()
 	if err != nil {

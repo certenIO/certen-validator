@@ -51,7 +51,7 @@ type LegRecord struct {
 	LegIndex        int          `json:"leg_index"`
 	LegExternalID   string       `json:"leg_external_id"`
 	TargetChain     string       `json:"target_chain"`
-	ChainID         uint64       `json:"chain_id"`
+	ChainID         int64        `json:"chain_id"`
 	ChainKey        string       `json:"chain_key"`          // e.g., "ethereum:1"
 	Role            string       `json:"role"`               // "source", "destination", "intermediate"
 	SequenceOrder   int          `json:"sequence_order"`
@@ -73,7 +73,7 @@ type LegRecord struct {
 type ChainGroup struct {
 	ChainKey     string       `json:"chain_key"`     // e.g., "ethereum:1"
 	TargetChain  string       `json:"target_chain"`
-	ChainID      uint64       `json:"chain_id"`
+	ChainID      int64        `json:"chain_id"`
 	LegIDs       []string     `json:"leg_ids"`
 	Status       LegStatus    `json:"status"`
 	BatchID      string       `json:"batch_id,omitempty"`

@@ -89,7 +89,7 @@ type ParsedCrossChainData struct {
 type ParsedCCLeg struct {
 	LegID          string `json:"legId"`
 	Chain          string `json:"chain"`
-	ChainID        uint64 `json:"chainId"`
+	ChainID        int64  `json:"chainId"`
 	From           string `json:"from"`
 	To             string `json:"to"`
 	AmountWei      string `json:"amountWei"`
@@ -203,7 +203,7 @@ func (b *ExecutionCommitmentBuilder) BuildFromIntent(
 		IntentID:    intentID,
 		BundleID:    bundleID,
 		TargetChain: leg.Chain,
-		ChainID:     int64(leg.ChainID),
+		ChainID:     leg.ChainID,
 		FinalTarget: finalTarget,
 		FinalValue:  finalValue,
 	}

@@ -118,7 +118,7 @@ type MerkleBranch struct {
 // ChainTarget represents a target blockchain for cross-chain operations
 type ChainTarget struct {
 	Chain            string `json:"chain"`              // [INTENT] - "ethereum"
-	ChainID          uint64 `json:"chain_id"`           // [INTENT] - 11155111 for Sepolia
+	ChainID          int64  `json:"chain_id"`           // [INTENT] - 11155111 for Sepolia, -3 for TON Testnet
 	ContractAddress  string `json:"contract_address"`   // [INTENT] - Anchor contract address
 	FunctionSelector string `json:"function_selector"`  // [INTENT] - Function selector
 	EncodedCallData  string `json:"encoded_call_data"`  // [DERIVED] - ABI encoded call data
