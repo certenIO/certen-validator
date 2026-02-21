@@ -365,12 +365,20 @@ func (tc *TonClient) runGetMethod(ctx context.Context, addr string, method strin
 // =============================================================================
 
 func (tc *TonClient) sendInternalMessage(ctx context.Context, destAddr *address.Address, amount uint64, body *cell.Cell) (string, error) {
+	// Try to get seqno — if wallet not deployed yet, use seqno=0 and include StateInit
+	needsInit := false
 	seqno, err := tc.getSeqno(ctx)
 	if err != nil {
-		return "", fmt.Errorf("getting seqno: %w", err)
+		if strings.Contains(err.Error(), "Not Found") || strings.Contains(err.Error(), "not initialized") {
+			log.Printf("📡 [TON] Wallet not yet deployed, will include StateInit (seqno=0)")
+			seqno = 0
+			needsInit = true
+		} else {
+			return "", fmt.Errorf("getting seqno: %w", err)
+		}
 	}
 
-	log.Printf("📡 [TON] Sending message: dest=%s amount=%d seqno=%d", destAddr.String(), amount, seqno)
+	log.Printf("📡 [TON] Sending message: dest=%s amount=%d seqno=%d needsInit=%v", destAddr.String(), amount, seqno, needsInit)
 
 	// Build internal message
 	internalMsg := cell.BeginCell().
@@ -387,7 +395,7 @@ func (tc *TonClient) sendInternalMessage(ctx context.Context, destAddr *address.
 	internalMsgCell := internalMsg.EndCell()
 
 	// Build WalletV4R2 transfer body
-	validUntil := uint32(time.Now().Add(60 * time.Second).Unix())
+	validUntil := uint32(time.Now().Add(120 * time.Second).Unix())
 
 	walletBody := cell.BeginCell().
 		MustStoreUInt(uint64(tc.subwalletID), 32).
@@ -408,16 +416,43 @@ func (tc *TonClient) sendInternalMessage(ctx context.Context, destAddr *address.
 		MustStoreBuilder(walletBody.ToBuilder()).
 		EndCell()
 
-	// Build external message (no state init for existing wallet)
-	extMsg := cell.BeginCell().
-		MustStoreUInt(0b10, 2).
-		MustStoreUInt(0, 2).
-		MustStoreAddr(tc.walletAddress).
-		MustStoreCoins(0).
-		MustStoreUInt(0, 1).
-		MustStoreUInt(1, 1).
-		MustStoreRef(signedBody).
-		EndCell()
+	// Build external message
+	var extMsg *cell.Cell
+	if needsInit {
+		// Include StateInit to deploy the wallet contract on first use
+		si := buildWalletV4R2StateInit(tc.publicKey, tc.subwalletID)
+		stateInitCell := cell.BeginCell().
+			MustStoreUInt(0, 2).     // split_depth: none
+			MustStoreUInt(0, 1).     // special: none
+			MustStoreUInt(1, 1).     // code: present
+			MustStoreRef(si.code).
+			MustStoreUInt(1, 1).     // data: present
+			MustStoreRef(si.data).
+			EndCell()
+
+		extMsg = cell.BeginCell().
+			MustStoreUInt(0b10, 2).       // ext_in_msg_info
+			MustStoreUInt(0, 2).          // src: addr_none
+			MustStoreAddr(tc.walletAddress).
+			MustStoreCoins(0).            // import_fee
+			MustStoreUInt(1, 1).          // state_init: present
+			MustStoreUInt(1, 1).          // state_init in ref
+			MustStoreRef(stateInitCell).
+			MustStoreUInt(1, 1).          // body in ref
+			MustStoreRef(signedBody).
+			EndCell()
+		log.Printf("📡 [TON] Built external message with StateInit (wallet deployment)")
+	} else {
+		extMsg = cell.BeginCell().
+			MustStoreUInt(0b10, 2).
+			MustStoreUInt(0, 2).
+			MustStoreAddr(tc.walletAddress).
+			MustStoreCoins(0).
+			MustStoreUInt(0, 1).    // no state_init
+			MustStoreUInt(1, 1).    // body in ref
+			MustStoreRef(signedBody).
+			EndCell()
+	}
 
 	bocBytes := extMsg.ToBOC()
 
