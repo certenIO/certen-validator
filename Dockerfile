@@ -68,10 +68,12 @@ RUN mkdir -p /app/bft-keys \
              /app/data/validator-ledger \
              /app/data/cometbft \
              /app/data/gov_proofs \
-             /app/bls_zk_keys
+             /app/bls_zk_keys \
+             /app/bls_zk_keys_bls12381
 
 # Copy BLS ZK keys (pre-generated Groth16 proving/verification keys)
 COPY --from=builder /build/bls_zk_keys/ /app/bls_zk_keys/
+COPY --from=builder /build/bls_zk_keys_bls12381/ /app/bls_zk_keys_bls12381/
 
 # Set ownership to app user
 RUN chown -R validator:validator /app
@@ -108,6 +110,7 @@ ENV GOV_PROOF_CLI_PATH=/app/govproof \
 
 # BLS ZK Prover
 ENV BLS_ZK_KEYS_DIR=/app/bls_zk_keys
+ENV BLS_ZK_KEYS_BLS12381_DIR=/app/bls_zk_keys_bls12381
 
 # Verification configuration
 ENV ENABLE_MERKLE_VERIFICATION=true \

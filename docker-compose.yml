@@ -126,7 +126,7 @@ services:
       NEAR_BLS_VERIFIER_CONTRACT: "certen-bls-verifier.testnet"
       NEAR_ACCOUNT_FACTORY: "certen-factory.testnet"
       TON_ANCHOR_CONTRACT: "kQCIMusQr3j4ExEfyX_W8c-B_n6zWQdjAkBovyKpP-wGWe7v"
-      TON_BLS_VERIFIER_CONTRACT: "kQDEy6Qaq_iptycLCngQeEGAX9f46UH_66cEQ6JjFqqi3and"
+      TON_BLS_VERIFIER_CONTRACT: "kQCEdbT7so8RjdTvpDlkgOcQaYfkYrpSmz8gBsnTpFyi4QKm"
       TON_ACCOUNT_FACTORY_CONTRACT: "kQCiF_punJ_9IQlPw18b2R9XyqwegUImJ8OgdNmfUp2rBsDB"
       LOG_LEVEL: info
       PROOF_CYCLE_WRITEBACK: "true"
@@ -143,6 +143,7 @@ services:
       - validator1_data:/app/data
       - validator1_keys:/app/bft-keys
       - ./bls_zk_keys:/app/bls_zk_keys:ro
+      - ./bls_zk_keys_bls12381:/app/bls_zk_keys_bls12381:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -256,7 +257,7 @@ services:
       NEAR_BLS_VERIFIER_CONTRACT: "certen-bls-verifier.testnet"
       NEAR_ACCOUNT_FACTORY: "certen-factory.testnet"
       TON_ANCHOR_CONTRACT: "kQCIMusQr3j4ExEfyX_W8c-B_n6zWQdjAkBovyKpP-wGWe7v"
-      TON_BLS_VERIFIER_CONTRACT: "kQDEy6Qaq_iptycLCngQeEGAX9f46UH_66cEQ6JjFqqi3and"
+      TON_BLS_VERIFIER_CONTRACT: "kQCEdbT7so8RjdTvpDlkgOcQaYfkYrpSmz8gBsnTpFyi4QKm"
       TON_ACCOUNT_FACTORY_CONTRACT: "kQCiF_punJ_9IQlPw18b2R9XyqwegUImJ8OgdNmfUp2rBsDB"
       LOG_LEVEL: info
       PROOF_CYCLE_WRITEBACK: "true"
@@ -273,6 +274,7 @@ services:
       - validator2_data:/app/data
       - validator2_keys:/app/bft-keys
       - ./bls_zk_keys:/app/bls_zk_keys:ro
+      - ./bls_zk_keys_bls12381:/app/bls_zk_keys_bls12381:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -386,7 +388,7 @@ services:
       NEAR_BLS_VERIFIER_CONTRACT: "certen-bls-verifier.testnet"
       NEAR_ACCOUNT_FACTORY: "certen-factory.testnet"
       TON_ANCHOR_CONTRACT: "kQCIMusQr3j4ExEfyX_W8c-B_n6zWQdjAkBovyKpP-wGWe7v"
-      TON_BLS_VERIFIER_CONTRACT: "kQDEy6Qaq_iptycLCngQeEGAX9f46UH_66cEQ6JjFqqi3and"
+      TON_BLS_VERIFIER_CONTRACT: "kQCEdbT7so8RjdTvpDlkgOcQaYfkYrpSmz8gBsnTpFyi4QKm"
       TON_ACCOUNT_FACTORY_CONTRACT: "kQCiF_punJ_9IQlPw18b2R9XyqwegUImJ8OgdNmfUp2rBsDB"
       LOG_LEVEL: info
       PROOF_CYCLE_WRITEBACK: "true"
@@ -403,6 +405,7 @@ services:
       - validator3_data:/app/data
       - validator3_keys:/app/bft-keys
       - ./bls_zk_keys:/app/bls_zk_keys:ro
+      - ./bls_zk_keys_bls12381:/app/bls_zk_keys_bls12381:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -516,7 +519,7 @@ services:
       NEAR_BLS_VERIFIER_CONTRACT: "certen-bls-verifier.testnet"
       NEAR_ACCOUNT_FACTORY: "certen-factory.testnet"
       TON_ANCHOR_CONTRACT: "kQCIMusQr3j4ExEfyX_W8c-B_n6zWQdjAkBovyKpP-wGWe7v"
-      TON_BLS_VERIFIER_CONTRACT: "kQDEy6Qaq_iptycLCngQeEGAX9f46UH_66cEQ6JjFqqi3and"
+      TON_BLS_VERIFIER_CONTRACT: "kQCEdbT7so8RjdTvpDlkgOcQaYfkYrpSmz8gBsnTpFyi4QKm"
       TON_ACCOUNT_FACTORY_CONTRACT: "kQCiF_punJ_9IQlPw18b2R9XyqwegUImJ8OgdNmfUp2rBsDB"
       LOG_LEVEL: info
       PROOF_CYCLE_WRITEBACK: "true"
@@ -533,6 +536,7 @@ services:
       - validator4_data:/app/data
       - validator4_keys:/app/bft-keys
       - ./bls_zk_keys:/app/bls_zk_keys:ro
+      - ./bls_zk_keys_bls12381:/app/bls_zk_keys_bls12381:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -646,7 +650,7 @@ services:
       NEAR_BLS_VERIFIER_CONTRACT: "certen-bls-verifier.testnet"
       NEAR_ACCOUNT_FACTORY: "certen-factory.testnet"
       TON_ANCHOR_CONTRACT: "kQCIMusQr3j4ExEfyX_W8c-B_n6zWQdjAkBovyKpP-wGWe7v"
-      TON_BLS_VERIFIER_CONTRACT: "kQDEy6Qaq_iptycLCngQeEGAX9f46UH_66cEQ6JjFqqi3and"
+      TON_BLS_VERIFIER_CONTRACT: "kQCEdbT7so8RjdTvpDlkgOcQaYfkYrpSmz8gBsnTpFyi4QKm"
       TON_ACCOUNT_FACTORY_CONTRACT: "kQCiF_punJ_9IQlPw18b2R9XyqwegUImJ8OgdNmfUp2rBsDB"
       LOG_LEVEL: info
       PROOF_CYCLE_WRITEBACK: "true"
@@ -663,6 +667,7 @@ services:
       - validator5_data:/app/data
       - validator5_keys:/app/bft-keys
       - ./bls_zk_keys:/app/bls_zk_keys:ro
+      - ./bls_zk_keys_bls12381:/app/bls_zk_keys_bls12381:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -776,7 +781,7 @@ services:
       NEAR_BLS_VERIFIER_CONTRACT: "certen-bls-verifier.testnet"
       NEAR_ACCOUNT_FACTORY: "certen-factory.testnet"
       TON_ANCHOR_CONTRACT: "kQCIMusQr3j4ExEfyX_W8c-B_n6zWQdjAkBovyKpP-wGWe7v"
-      TON_BLS_VERIFIER_CONTRACT: "kQDEy6Qaq_iptycLCngQeEGAX9f46UH_66cEQ6JjFqqi3and"
+      TON_BLS_VERIFIER_CONTRACT: "kQCEdbT7so8RjdTvpDlkgOcQaYfkYrpSmz8gBsnTpFyi4QKm"
       TON_ACCOUNT_FACTORY_CONTRACT: "kQCiF_punJ_9IQlPw18b2R9XyqwegUImJ8OgdNmfUp2rBsDB"
       LOG_LEVEL: info
       PROOF_CYCLE_WRITEBACK: "true"
@@ -793,6 +798,7 @@ services:
       - validator6_data:/app/data
       - validator6_keys:/app/bft-keys
       - ./bls_zk_keys:/app/bls_zk_keys:ro
+      - ./bls_zk_keys_bls12381:/app/bls_zk_keys_bls12381:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -906,7 +912,7 @@ services:
       NEAR_BLS_VERIFIER_CONTRACT: "certen-bls-verifier.testnet"
       NEAR_ACCOUNT_FACTORY: "certen-factory.testnet"
       TON_ANCHOR_CONTRACT: "kQCIMusQr3j4ExEfyX_W8c-B_n6zWQdjAkBovyKpP-wGWe7v"
-      TON_BLS_VERIFIER_CONTRACT: "kQDEy6Qaq_iptycLCngQeEGAX9f46UH_66cEQ6JjFqqi3and"
+      TON_BLS_VERIFIER_CONTRACT: "kQCEdbT7so8RjdTvpDlkgOcQaYfkYrpSmz8gBsnTpFyi4QKm"
       TON_ACCOUNT_FACTORY_CONTRACT: "kQCiF_punJ_9IQlPw18b2R9XyqwegUImJ8OgdNmfUp2rBsDB"
       LOG_LEVEL: info
       PROOF_CYCLE_WRITEBACK: "true"
@@ -923,6 +929,7 @@ services:
       - validator7_data:/app/data
       - validator7_keys:/app/bft-keys
       - ./bls_zk_keys:/app/bls_zk_keys:ro
+      - ./bls_zk_keys_bls12381:/app/bls_zk_keys_bls12381:ro
     depends_on:
       postgres:
         condition: service_healthy
