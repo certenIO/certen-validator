@@ -320,11 +320,17 @@ func (tc *TonClient) getSeqno(ctx context.Context) (uint32, error) {
 	}
 
 	var resp struct {
-		GasUsed int             `json:"gas_used"`
-		Stack   [][]interface{} `json:"stack"`
+		GasUsed  int             `json:"gas_used"`
+		ExitCode int             `json:"exit_code"`
+		Stack    [][]interface{} `json:"stack"`
 	}
 	if err := json.Unmarshal(result, &resp); err != nil {
 		return 0, fmt.Errorf("parsing seqno response: %w", err)
+	}
+
+	// exit_code != 0 means the method call failed (e.g., account not initialized)
+	if resp.ExitCode != 0 {
+		return 0, fmt.Errorf("not initialized (exit_code=%d)", resp.ExitCode)
 	}
 
 	if len(resp.Stack) == 0 {
@@ -337,6 +343,7 @@ func (tc *TonClient) getSeqno(ctx context.Context) (uint32, error) {
 			hexStr = strings.TrimPrefix(hexStr, "0x")
 			val := new(big.Int)
 			val.SetString(hexStr, 16)
+			log.Printf("📡 [TON] getSeqno: wallet=%s seqno=%d", tc.walletAddress.String(), val.Uint64())
 			return uint32(val.Uint64()), nil
 		}
 	}
