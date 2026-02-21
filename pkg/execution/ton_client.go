@@ -358,12 +358,14 @@ func (tc *TonClient) sendBoc(ctx context.Context, bocBytes []byte) error {
 }
 
 func (tc *TonClient) runGetMethod(ctx context.Context, addr string, method string, params [][]interface{}) (json.RawMessage, error) {
+	stack := params
+	if stack == nil {
+		stack = [][]interface{}{} // API requires stack field even when empty
+	}
 	reqBody := map[string]interface{}{
 		"address": addr,
 		"method":  method,
-	}
-	if len(params) > 0 {
-		reqBody["stack"] = params
+		"stack":   stack,
 	}
 
 	return tc.apiPost(ctx, "runGetMethod", reqBody)
