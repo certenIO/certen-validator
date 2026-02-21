@@ -609,11 +609,44 @@ func tonBuildProofCell(proof TonCertenProof) *cell.Cell {
 }
 
 // tonBuildMerkleProofCell: count(uint16) | hash0(uint256) | hash1(uint256) | ...
+// Chains hashes across multiple cells to stay within 1023-bit limit.
+// Each cell holds up to 3 hashes (768 bits) + optional ref to continuation.
 func tonBuildMerkleProofCell(proofHashes [][32]byte) *cell.Cell {
 	b := cell.BeginCell().MustStoreUInt(uint64(len(proofHashes)), 16)
-	for _, h := range proofHashes {
+	stored := 0
+	bitsUsed := 16 // count field
+
+	for i, h := range proofHashes {
+		if bitsUsed+256 > 1023 {
+			// Overflow: store remaining hashes in a continuation ref
+			remaining := proofHashes[i:]
+			contCell := tonBuildHashChainCell(remaining)
+			b = b.MustStoreRef(contCell)
+			break
+		}
 		hashInt := new(big.Int).SetBytes(h[:])
 		b = b.MustStoreBigUInt(hashInt, 256)
+		bitsUsed += 256
+		stored++
+	}
+	_ = stored
+	return b.EndCell()
+}
+
+// tonBuildHashChainCell stores hashes in a chain of cells (max 3 per cell, 768 bits)
+func tonBuildHashChainCell(hashes [][32]byte) *cell.Cell {
+	b := cell.BeginCell()
+	bitsUsed := 0
+	for i, h := range hashes {
+		if bitsUsed+256 > 1023 {
+			remaining := hashes[i:]
+			contCell := tonBuildHashChainCell(remaining)
+			b = b.MustStoreRef(contCell)
+			break
+		}
+		hashInt := new(big.Int).SetBytes(h[:])
+		b = b.MustStoreBigUInt(hashInt, 256)
+		bitsUsed += 256
 	}
 	return b.EndCell()
 }
@@ -652,14 +685,30 @@ func tonBuildGovernanceCell(proof TonCertenProof) *cell.Cell {
 func tonBuildBlsCell(proof TonCertenProof) *cell.Cell {
 	msgHashInt := new(big.Int).SetBytes(proof.BLSMessageHash[:])
 
+	// ZK proof is 128 bytes (1024 bits) which exceeds the 1023-bit Cell limit.
+	// Split into two 64-byte halves: first half inline, second half in a ref.
 	zkProofCell := cell.BeginCell()
 	if len(proof.BLSProofBytes) > 0 {
-		zkProofCell = zkProofCell.MustStoreSlice(proof.BLSProofBytes, uint(len(proof.BLSProofBytes)*8))
-		if len(proof.BLSPubkeyCommitment) > 0 {
-			commitCell := cell.BeginCell().
-				MustStoreSlice(proof.BLSPubkeyCommitment, uint(len(proof.BLSPubkeyCommitment)*8)).
-				EndCell()
-			zkProofCell = zkProofCell.MustStoreRef(commitCell)
+		if len(proof.BLSProofBytes) > 64 {
+			// Store first 64 bytes (512 bits) inline, rest in a continuation ref
+			zkProofCell = zkProofCell.MustStoreSlice(proof.BLSProofBytes[:64], 512)
+			contCell := cell.BeginCell().
+				MustStoreSlice(proof.BLSProofBytes[64:], uint(len(proof.BLSProofBytes[64:])*8))
+			if len(proof.BLSPubkeyCommitment) > 0 {
+				commitCell := cell.BeginCell().
+					MustStoreSlice(proof.BLSPubkeyCommitment, uint(len(proof.BLSPubkeyCommitment)*8)).
+					EndCell()
+				contCell = contCell.MustStoreRef(commitCell)
+			}
+			zkProofCell = zkProofCell.MustStoreRef(contCell.EndCell())
+		} else {
+			zkProofCell = zkProofCell.MustStoreSlice(proof.BLSProofBytes, uint(len(proof.BLSProofBytes)*8))
+			if len(proof.BLSPubkeyCommitment) > 0 {
+				commitCell := cell.BeginCell().
+					MustStoreSlice(proof.BLSPubkeyCommitment, uint(len(proof.BLSPubkeyCommitment)*8)).
+					EndCell()
+				zkProofCell = zkProofCell.MustStoreRef(commitCell)
+			}
 		}
 	}
 
