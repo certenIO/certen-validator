@@ -184,19 +184,26 @@ type walletStateInit struct {
 
 func deriveWalletV4R2Address(pubKey ed25519.PublicKey) (*address.Address, error) {
 	si := buildWalletV4R2StateInit(pubKey, 698983191)
-
-	stateCell := cell.BeginCell().
-		MustStoreUInt(0, 2).
-		MustStoreUInt(0, 1).
-		MustStoreUInt(1, 1).
-		MustStoreRef(si.code).
-		MustStoreUInt(1, 1).
-		MustStoreRef(si.data).
-		EndCell()
-
+	stateCell := buildStateInitCell(si)
 	hash := stateCell.Hash()
 	addr := address.NewAddress(0, 0, hash)
 	return addr, nil
+}
+
+// buildStateInitCell builds a StateInit cell matching the TL-B schema:
+// StateInit = _ split_depth:(Maybe (## 5)) special:(Maybe TickTock)
+//
+//	code:(Maybe ^Cell) data:(Maybe ^Cell) library:(HashmapE 256 SimpleLib)
+func buildStateInitCell(si walletStateInit) *cell.Cell {
+	return cell.BeginCell().
+		MustStoreBoolBit(false). // split_depth: none
+		MustStoreBoolBit(false). // special: none
+		MustStoreBoolBit(true).  // code: present
+		MustStoreRef(si.code).
+		MustStoreBoolBit(true).  // data: present
+		MustStoreRef(si.data).
+		MustStoreBoolBit(false). // library: empty
+		EndCell()
 }
 
 func buildWalletV4R2StateInit(pubKey ed25519.PublicKey, subwalletID uint32) walletStateInit {
@@ -421,14 +428,7 @@ func (tc *TonClient) sendInternalMessage(ctx context.Context, destAddr *address.
 	if needsInit {
 		// Include StateInit to deploy the wallet contract on first use
 		si := buildWalletV4R2StateInit(tc.publicKey, tc.subwalletID)
-		stateInitCell := cell.BeginCell().
-			MustStoreUInt(0, 2).     // split_depth: none
-			MustStoreUInt(0, 1).     // special: none
-			MustStoreUInt(1, 1).     // code: present
-			MustStoreRef(si.code).
-			MustStoreUInt(1, 1).     // data: present
-			MustStoreRef(si.data).
-			EndCell()
+		stateInitCell := buildStateInitCell(si)
 
 		extMsg = cell.BeginCell().
 			MustStoreUInt(0b10, 2).       // ext_in_msg_info
