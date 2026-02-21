@@ -79,6 +79,11 @@ type BLSProofData struct {
 
 	// Message that was signed
 	MessageHash [32]byte `json:"messageHash"`
+
+	// BLS12-381 Groth16 proof for TON chain (uses TVM native BLS12-381 opcodes)
+	// Concatenated: pi_a (48B) + pi_b (96B) + pi_c (48B) = 192 bytes
+	BLS12381ProofBytes       []byte   `json:"bls12381ProofBytes,omitempty"`
+	BLS12381PubkeyCommitment [32]byte `json:"bls12381PubkeyCommitment,omitempty"`
 }
 
 // CommitmentData contains cross-chain commitment information

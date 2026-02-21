@@ -39,6 +39,10 @@ var (
 	blsZKProver     *bls_zkp.BLSZKProver
 	blsZKProverOnce sync.Once
 	blsZKProverErr  error
+
+	bls12381Prover     *bls_zkp.BLS12381Prover
+	bls12381ProverOnce sync.Once
+	bls12381ProverErr  error
 )
 
 // GetBLSZKProver returns the singleton BLS ZK prover instance
@@ -97,6 +101,43 @@ func GetBLSZKProver() (*bls_zkp.BLSZKProver, error) {
 		}
 	})
 	return blsZKProver, blsZKProverErr
+}
+
+// GetBLS12381Prover returns the singleton BLS12-381 prover for TON chain
+func GetBLS12381Prover() (*bls_zkp.BLS12381Prover, error) {
+	bls12381ProverOnce.Do(func() {
+		bls12381Prover = bls_zkp.NewBLS12381Prover()
+
+		keysDir := os.Getenv("BLS_ZK_KEYS_BLS12381_DIR")
+		if keysDir == "" {
+			keysDir = "./bls_zk_keys_bls12381"
+		}
+
+		pkPath := keysDir + "/proving_key.bin"
+		vkPath := keysDir + "/verification_key.bin"
+		csPath := keysDir + "/constraint_system.bin"
+
+		if fileExists(pkPath) && fileExists(vkPath) && fileExists(csPath) {
+			log.Printf("🔑 [BLS12-381] Loading pre-generated keys from %s", keysDir)
+			bls12381ProverErr = bls12381Prover.InitializeFromKeys(pkPath, vkPath, csPath)
+			if bls12381ProverErr == nil {
+				log.Printf("✅ [BLS12-381] Prover initialized with pre-generated keys")
+				return
+			}
+			log.Printf("⚠️ [BLS12-381] Failed to load keys: %v", bls12381ProverErr)
+		} else {
+			log.Printf("⚠️ [BLS12-381] Pre-generated keys not found in %s", keysDir)
+		}
+
+		log.Printf("⚠️ [BLS12-381] GENERATING FRESH KEYS - proofs will NOT verify on-chain with current contract!")
+		bls12381ProverErr = bls12381Prover.Initialize()
+		if bls12381ProverErr != nil {
+			log.Printf("❌ [BLS12-381] Failed to initialize: %v", bls12381ProverErr)
+		} else {
+			log.Printf("✅ [BLS12-381] Prover initialized with FRESH keys")
+		}
+	})
+	return bls12381Prover, bls12381ProverErr
 }
 
 // fileExists checks if a file exists and is not a directory
@@ -975,6 +1016,9 @@ func (ecm *EthereumContractManager) buildComprehensiveProof(
 		MessageHash:        messageHash,
 	}
 
+	// Generate BLS12-381 proof for TON chain (uses TVM native BLS12-381 opcodes)
+	ecm.generateBLS12381Proof(&blsProof, blsSignatureBytes, messageHash, signedVotingPower, totalVotingPower)
+
 	// Build commitment data
 	var opCommitment, crossCommitment, govRoot [32]byte
 	commitmentHash := ecm.generateCommitmentHash(certenIntent, anchorResult)
@@ -1171,6 +1215,69 @@ func (ecm *EthereumContractManager) generateBLSZKProof(
 
 	log.Printf("✅ [BLS-ZK] Generated valid ZK proof: %d bytes, pubkeyCommitment: 0x%x", len(proofBytes), zkProof.PubkeyCommitment[:8])
 	return proofBytes, zkProof.PubkeyCommitment
+}
+
+// generateBLS12381Proof generates a BLS12-381 Groth16 proof for TON chain.
+// TON's TVM has native BLS12-381 opcodes, so we need a separate proof curve.
+// The proof bytes are stored in blsProof.BLS12381ProofBytes (pi_a:48 + pi_b:96 + pi_c:48 = 192 bytes)
+// and the pubkey commitment in blsProof.BLS12381PubkeyCommitment.
+func (ecm *EthereumContractManager) generateBLS12381Proof(
+	blsProof *contracts.BLSProofData,
+	blsSignatureBytes []byte,
+	messageHash [32]byte,
+	signedVotingPower *big.Int,
+	totalVotingPower *big.Int,
+) {
+	prover, err := GetBLS12381Prover()
+	if err != nil || prover == nil {
+		log.Printf("⚠️ [BLS12-381] Prover not available: %v (TON proofs will not be generated)", err)
+		return
+	}
+
+	blsKeyManager := bls.GetValidatorBLSKey()
+	if blsKeyManager == nil {
+		log.Printf("⚠️ [BLS12-381] BLS key manager not available")
+		return
+	}
+
+	pubKeyBytes := blsKeyManager.GetPublicKeyBytes()
+	if len(pubKeyBytes) < 96 {
+		log.Printf("⚠️ [BLS12-381] Invalid public key size: %d (need 96 bytes)", len(pubKeyBytes))
+		return
+	}
+
+	log.Printf("🔐 [BLS12-381] Creating witness with pubkey=%d bytes, sig=%d bytes", len(pubKeyBytes), len(blsSignatureBytes))
+
+	witness, err := bls_zkp.CreateWitnessFromBLSDataBLS12381(
+		messageHash,
+		blsSignatureBytes,
+		pubKeyBytes,
+		signedVotingPower.Uint64(),
+		totalVotingPower.Uint64(),
+	)
+	if err != nil {
+		log.Printf("⚠️ [BLS12-381] Failed to create witness: %v", err)
+		return
+	}
+
+	log.Printf("🔐 [BLS12-381] Generating Groth16 proof (BLS12-381 curve)...")
+	proof, err := prover.GenerateProof(witness)
+	if err != nil {
+		log.Printf("⚠️ [BLS12-381] Failed to generate proof: %v", err)
+		return
+	}
+
+	// Concatenate pi_a (48B) + pi_b (96B) + pi_c (48B) = 192 bytes
+	proofBytes := make([]byte, 0, 192)
+	proofBytes = append(proofBytes, proof.PiA...)
+	proofBytes = append(proofBytes, proof.PiB...)
+	proofBytes = append(proofBytes, proof.PiC...)
+
+	blsProof.BLS12381ProofBytes = proofBytes
+	blsProof.BLS12381PubkeyCommitment = proof.PubkeyCommitment
+
+	log.Printf("✅ [BLS12-381] Generated proof: %d bytes (pi_a:%d + pi_b:%d + pi_c:%d), pkCommit: 0x%x",
+		len(proofBytes), len(proof.PiA), len(proof.PiB), len(proof.PiC), proof.PubkeyCommitment[:8])
 }
 
 // generateMockBLSProof creates a mock proof for testing with MockBLSVerifier

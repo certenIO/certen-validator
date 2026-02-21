@@ -4003,50 +4003,31 @@ func (btce *BFTTargetChainExecutor) buildTonCertenProof(
 		govAuthAddr = tonaddr.NewAddress(0, 0, make([]byte, 32))
 	}
 
-	// BLS proof: convert gnark→Arkworks compressed format for Cell refs (pi_a, pi_b, pi_c)
-	// TON contract's decodeZkProof() expects 3 refs, unlike SUI's flat 128B blob.
-	// The Arkworks 128B layout is: pi_a[0:32] + pi_b[32:96] + pi_c[96:128]
+	// BLS proof: use pre-generated BLS12-381 proof (native TVM curve).
+	// The proof is already in compProof.BLSProof.BLS12381ProofBytes (192 bytes:
+	// pi_a:48 + pi_b:96 + pi_c:48 compressed BLS12-381 points).
+	// No gnark→Arkworks conversion needed — this IS the native format.
 	var blsProofBytes []byte
 	var blsMessageHash [32]byte
 	var blsPubkeyCommitment []byte
 
-	if len(compProof.BLSProof.AggregateSignature) >= 448 {
-		abiBytes := compProof.BLSProof.AggregateSignature
+	if len(compProof.BLSProof.BLS12381ProofBytes) == 192 {
+		blsProofBytes = compProof.BLSProof.BLS12381ProofBytes
+		blsPubkeyCommitment = compProof.BLSProof.BLS12381PubkeyCommitment[:]
 
-		arkProof, err := convertGnarkProofToArkworks(abiBytes[0:256])
-		if err != nil {
-			log.Printf("⚠️ [TON-BLS] Failed to convert proof to Arkworks: %v, using raw", err)
-			blsProofBytes = abiBytes[0:256]
-		} else {
-			blsProofBytes = arkProof
-			log.Printf("✅ [TON-BLS] Converted gnark proof (256B) → Arkworks compressed (128B = pi_a:32 + pi_b:64 + pi_c:32)")
-		}
-
-		// TON stores public inputs as uint256 integers in Cells (big-endian),
-		// NOT as LE byte arrays like SUI. Reduce mod r for circuit compatibility.
-		var msgHashBE [32]byte
-		copy(msgHashBE[:], abiBytes[256:288])
-		msgHashInt := new(big.Int).SetBytes(msgHashBE[:])
-		msgHashInt.Mod(msgHashInt, bn254ScalarFieldOrder) // reduce mod r
+		// MessageHash must be reduced mod BLS12-381 Fr (not BN254 Fr)
+		msgHashInt := new(big.Int).SetBytes(compProof.BLSProof.MessageHash[:])
+		bls12381Fr, _ := new(big.Int).SetString("52435875175126190479447740508185965837690552500527637822603658699938581184513", 10)
+		msgHashInt.Mod(msgHashInt, bls12381Fr)
 		msgHashReduced := msgHashInt.Bytes()
 		blsMessageHash = [32]byte{}
 		copy(blsMessageHash[32-len(msgHashReduced):], msgHashReduced) // big-endian, left-padded
 
-		var pkCommitBE [32]byte
-		copy(pkCommitBE[:], abiBytes[288:320])
-		pkCommitInt := new(big.Int).SetBytes(pkCommitBE[:])
-		pkCommitInt.Mod(pkCommitInt, bn254ScalarFieldOrder) // reduce mod r
-		pkCommitReduced := pkCommitInt.Bytes()
-		var blsPubkeyCommitmentArr [32]byte
-		copy(blsPubkeyCommitmentArr[32-len(pkCommitReduced):], pkCommitReduced)
-		blsPubkeyCommitment = blsPubkeyCommitmentArr[:]
-
-		signedVP = new(big.Int).SetBytes(abiBytes[320:352]).Uint64()
-		totalVP = new(big.Int).SetBytes(abiBytes[352:384]).Uint64()
-
-		log.Printf("🔐 [TON-BLS] Public inputs (BE, mod r): msgHash=%x... pkCommit=%x... signedVP=%d totalVP=%d",
+		log.Printf("✅ [TON-BLS12381] Using native BLS12-381 proof: %d bytes (pi_a:48 + pi_b:96 + pi_c:48)", len(blsProofBytes))
+		log.Printf("🔐 [TON-BLS12381] Public inputs: msgHash=%x... pkCommit=%x... signedVP=%d totalVP=%d",
 			blsMessageHash[:4], blsPubkeyCommitment[:4], signedVP, totalVP)
 	} else {
+		log.Printf("⚠️ [TON-BLS12381] No BLS12-381 proof available (got %d bytes, need 192)", len(compProof.BLSProof.BLS12381ProofBytes))
 		blsMessageHash = compProof.BLSProof.MessageHash
 	}
 
