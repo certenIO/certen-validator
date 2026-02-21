@@ -297,6 +297,7 @@ require (
 	github.com/vektra/mockery/v2 v2.42.3 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/xen0n/gosmopolitan v1.2.2 // indirect
+	github.com/xssnick/tonutils-go v1.15.5 // indirect
 	github.com/yagipy/maintidx v1.0.0 // indirect
 	github.com/yeya24/promlinter v0.2.0 // indirect
 	github.com/ykadowak/zerologlint v0.1.5 // indirect

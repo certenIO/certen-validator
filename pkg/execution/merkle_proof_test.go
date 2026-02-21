@@ -110,40 +110,6 @@ func TestMerkleProofForAllLeaves(t *testing.T) {
 	t.Logf("✓ All 4 leaves verified successfully")
 }
 
-// sortedHash computes keccak256(a || b) where a and b are sorted
-func sortedHash(a, b []byte) []byte {
-	var data []byte
-	if compareBytes(a, b) < 0 {
-		data = append(a, b...)
-	} else {
-		data = append(b, a...)
-	}
-	return crypto.Keccak256(data)
-}
-
-// compareBytes compares two byte slices lexicographically
-func compareBytes(a, b []byte) int {
-	minLen := len(a)
-	if len(b) < minLen {
-		minLen = len(b)
-	}
-	for i := 0; i < minLen; i++ {
-		if a[i] < b[i] {
-			return -1
-		}
-		if a[i] > b[i] {
-			return 1
-		}
-	}
-	if len(a) < len(b) {
-		return -1
-	}
-	if len(a) > len(b) {
-		return 1
-	}
-	return 0
-}
-
 // computeMerkleRoot4 computes merkle root from 4 leaves using sorted hash
 func computeMerkleRoot4(leaf0, leaf1, leaf2, leaf3 []byte) []byte {
 	hash01 := sortedHash(leaf0, leaf1)

@@ -30,6 +30,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 	"github.com/mr-tron/base58"
+	tonaddr "github.com/xssnick/tonutils-go/address"
 
 	"github.com/certen/independant-validator/pkg/anchor"
 	"github.com/certen/independant-validator/pkg/config"
@@ -317,6 +318,9 @@ func (btce *BFTTargetChainExecutor) ExecuteTargetChainOperations(
 	case "sui", "sui testnet", "sui-testnet", "sui mainnet", "sui-mainnet":
 		// SUI uses Ed25519 signing with BLAKE2b-256, PTB model, and JSON-RPC
 		return btce.executeSuiOperations(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, targetChainID)
+	case "ton", "ton testnet", "ton-testnet", "ton mainnet", "ton-mainnet":
+		// TON uses Ed25519 signing, Cell serialization, async actor model, and TON Center API v2
+		return btce.executeTonOperations(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, targetChainID)
 	case "ethereum", "eth", "sepolia", "arbitrum", "arb", "optimism", "op", "base", "polygon", "matic",
 		"bsc", "bsc testnet", "binance", "moonbeam", "moonbase", "moonbeam moonbase alpha":
 		return btce.executeEthereumOperations(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, targetChainID)
@@ -3667,6 +3671,525 @@ func (btce *BFTTargetChainExecutor) buildSuiResult(
 			"anchorState":      os.Getenv("SUI_ANCHOR_STATE_OBJECT"),
 			"explorerUrl":      "https://suiscan.xyz/testnet",
 			"executionMethod":  "sui_json_rpc",
+		},
+	}
+}
+
+// =============================================================================
+// TON CHAIN EXECUTION
+// =============================================================================
+
+// executeTonOperations executes anchor workflow on TON using TON Center API v2.
+// TON uses Ed25519 signing, Cell serialization, async actor model with BLS verifier callbacks.
+// Follows the same 3-step pattern as SUI/Aptos but with async Step 2 and Step 3.
+func (btce *BFTTargetChainExecutor) executeTonOperations(
+	ctx context.Context,
+	intentID string,
+	transactionHash string,
+	accountURL string,
+	validatorID string,
+	bundleID string,
+	anchorID string,
+	certenProof *proof.CertenProof,
+	chainID int64,
+) (*TargetChainExecutionResult, error) {
+
+	btce.logger.Printf("🔷 [TON-EXEC] Executing TON chain operations for intent: %s", intentID)
+
+	// Fresh context with generous timeout for 3-step async TON flow
+	tonCtx, tonCancel := context.WithTimeout(context.Background(), 7*time.Minute)
+	defer tonCancel()
+	ctx = tonCtx
+
+	// Load TON config from environment
+	tonMnemonic := os.Getenv("TON_WALLET_MNEMONIC")
+	tonAPIURL := os.Getenv("TON_TESTNET_API_URL")
+	tonAnchorContract := os.Getenv("TON_ANCHOR_CONTRACT")
+	tonBLSVerifier := os.Getenv("TON_BLS_VERIFIER_CONTRACT")
+	tonFactoryContract := os.Getenv("TON_ACCOUNT_FACTORY_CONTRACT")
+
+	if tonMnemonic == "" || tonAPIURL == "" || tonAnchorContract == "" || tonBLSVerifier == "" {
+		return nil, fmt.Errorf("missing TON config: TON_WALLET_MNEMONIC=%v, TON_TESTNET_API_URL=%q, TON_ANCHOR_CONTRACT=%q, TON_BLS_VERIFIER_CONTRACT=%q",
+			tonMnemonic != "", tonAPIURL, tonAnchorContract, tonBLSVerifier)
+	}
+
+	btce.logger.Printf("✅ [TON-EXEC] Using TON config:")
+	btce.logger.Printf("   API: %s", tonAPIURL)
+	btce.logger.Printf("   Anchor: %s", tonAnchorContract)
+	btce.logger.Printf("   BLS Verifier: %s", tonBLSVerifier)
+	btce.logger.Printf("   Factory: %s", tonFactoryContract)
+
+	// Create TON client
+	tonClient, err := NewTonClient(tonAPIURL, tonMnemonic, tonAnchorContract, tonBLSVerifier, tonFactoryContract)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create TON client: %w", err)
+	}
+
+	// Create EthereumContractManager for proof building (reuse commitment logic)
+	privateKey := os.Getenv("ETH_PRIVATE_KEY")
+	contractConfig := &CertenContractConfig{
+		EthereumRPC:          os.Getenv("ETHEREUM_URL"),
+		ChainID:              11155111,
+		PrivateKey:           privateKey,
+		CreationContract:     os.Getenv("CERTEN_ANCHOR_V3_ADDRESS"),
+		VerificationContract: os.Getenv("CERTEN_ANCHOR_V3_ADDRESS"),
+		GasLimit:             800000,
+		MaxGasPriceGwei:      50,
+	}
+	if contractConfig.CreationContract == "" {
+		contractConfig.CreationContract = os.Getenv("CERTEN_CONTRACT_ADDRESS")
+	}
+	if contractConfig.VerificationContract == "" {
+		contractConfig.VerificationContract = contractConfig.CreationContract
+	}
+
+	ethManager, err := NewEthereumContractManager(contractConfig)
+	if err != nil {
+		btce.logger.Printf("⚠️ [TON-EXEC] Failed to create proof builder (non-fatal): %v", err)
+	}
+
+	// Build legacy intent and proof data
+	legacyIntent := btce.convertToLegacyIntent(intentID, transactionHash, accountURL, certenProof)
+
+	var bundleIdHash [32]byte
+	var comprehensiveProof *contracts.ComprehensiveCertenProof
+	if ethManager != nil {
+		bundleIdHash = ethManager.generateAnchorID(legacyIntent, certenProof)
+		cp := ethManager.buildComprehensiveProof(legacyIntent, certenProof,
+			&anchor.AnchorResponse{AnchorID: anchorID, Success: true, Message: "BFT anchor for TON"},
+			bundleIdHash,
+		)
+		comprehensiveProof = &cp
+	} else {
+		hash := ethcrypto.Keccak256Hash([]byte(fmt.Sprintf("certen_v3_%s_%d_%s",
+			legacyIntent.IntentID, certenProof.BlockHeight, certenProof.TransactionHash)))
+		copy(bundleIdHash[:], hash[:])
+	}
+
+	// Extract commitments
+	var opCommitment, ccCommitment, govRoot [32]byte
+	if comprehensiveProof != nil {
+		opCommitment = comprehensiveProof.Commitments.OperationCommitment
+		ccCommitment = comprehensiveProof.Commitments.CrossChainCommitment
+		govRoot = comprehensiveProof.Commitments.GovernanceRoot
+	}
+
+	btce.logger.Printf("🔍 [TON-MERKLE] Step 1 inputs:")
+	btce.logger.Printf("   bundleId:    0x%x", bundleIdHash[:])
+	btce.logger.Printf("   opCommit:    0x%x", opCommitment[:])
+	btce.logger.Printf("   ccCommit:    0x%x", ccCommitment[:])
+	btce.logger.Printf("   govRoot:     0x%x", govRoot[:])
+
+	// ========== Step 1: Create Anchor ==========
+	btce.logger.Printf("🔗 [TON-EXEC] Step 1: Creating anchor on TON...")
+
+	blockHeight := uint64(0)
+	if certenProof.BlockHeight > 0 {
+		blockHeight = uint64(certenProof.BlockHeight)
+	}
+
+	createTxHash, err := tonClient.CreateAnchor(ctx, bundleIdHash, opCommitment, ccCommitment, govRoot, blockHeight)
+	if err != nil {
+		btce.logger.Printf("❌ [TON-EXEC] Step 1 failed: %v", err)
+		return btce.buildTonResult(intentID, anchorID, "create_failed_ton", "", "", false), err
+	}
+
+	btce.logger.Printf("✅ [TON-EXEC] Step 1 complete - Anchor created: %s", createTxHash)
+
+	// Wait for Step 1 confirmation
+	err = tonClient.WaitForConfirmation(ctx, createTxHash, 60*time.Second)
+	if err != nil {
+		btce.logger.Printf("⚠️ [TON-EXEC] Step 1 confirmation issue: %v", err)
+	}
+
+	// ========== Step 2: Execute Comprehensive Proof ==========
+	btce.logger.Printf("🔗 [TON-EXEC] Step 2: Submitting comprehensive proof...")
+
+	tonProof := btce.buildTonCertenProof(comprehensiveProof, certenProof)
+
+	verifyTxHash, err := tonClient.ExecuteComprehensiveProof(ctx, bundleIdHash, tonProof)
+	if err != nil {
+		btce.logger.Printf("❌ [TON-EXEC] Step 2 failed: %v", err)
+		return btce.buildTonResult(intentID, anchorID,
+			createTxHash, "verify_failed_ton", "", false), err
+	}
+
+	btce.logger.Printf("✅ [TON-EXEC] Step 2 message sent: %s", verifyTxHash)
+
+	// Wait for async BLS verification (anchor -> BLS verifier -> callback)
+	btce.logger.Printf("⏳ [TON-EXEC] Waiting for async BLS verification callback...")
+	err = tonClient.WaitForProofExecution(ctx, bundleIdHash, tonPollingTimeout)
+	if err != nil {
+		btce.logger.Printf("⚠️ [TON-EXEC] Step 2 async completion issue: %v", err)
+	} else {
+		btce.logger.Printf("✅ [TON-EXEC] Step 2 complete - Proof verified via async callback")
+	}
+
+	// ========== Step 3: Execute via user's Abstract Account ==========
+	allLegs := btce.extractAllLegsFromIntent(legacyIntent)
+	govTxHash := "no_governance_needed"
+
+	if len(allLegs) > 0 {
+		btce.logger.Printf("🏦 [TON-EXEC] Step 3: Executing governance proof direct...")
+
+		// Extract TON addresses from CrossChainData
+		tonFromAddr := btce.extractTonFieldFromCrossChainData(legacyIntent, "from")
+		tonToAddr := btce.extractTonFieldFromCrossChainData(legacyIntent, "to")
+
+		btce.logger.Printf("   Intent from: %s", tonFromAddr)
+		btce.logger.Printf("   Intent to: %s", tonToAddr)
+
+		userAccountAddr := tonFromAddr
+		adiURL := certenProof.AccountURL
+		if adiURL == "" {
+			adiURL = fmt.Sprintf("%s/data", legacyIntent.OrganizationADI)
+		}
+
+		if userAccountAddr == "" {
+			btce.logger.Printf("⚠️ [TON-EXEC] No from address in intent, cannot determine user account")
+			govTxHash = "gov_failed_no_account_ton"
+		}
+
+		if userAccountAddr != "" {
+			btce.logger.Printf("   User account: %s", userAccountAddr)
+
+			// Check if account exists
+			accountExists, checkErr := tonClient.CheckAccountExists(ctx, userAccountAddr)
+			if checkErr != nil {
+				btce.logger.Printf("⚠️ [TON-EXEC] Failed to check account: %v", checkErr)
+			}
+
+			if !accountExists && tonFactoryContract != "" {
+				btce.logger.Printf("⚠️ [TON-EXEC] Account not found, auto-deploying...")
+
+				ownerAddr := DeriveTonAccountOwner(tonClient.walletAddress)
+				salt := DeriveTonAccountSalt(adiURL)
+
+				deployTx, deployErr := tonClient.DeployAccountViaFactory(ctx, ownerAddr, adiURL, salt)
+				if deployErr != nil {
+					btce.logger.Printf("❌ [TON-EXEC] Account deploy failed: %v", deployErr)
+					govTxHash = "gov_failed_account_deploy_ton"
+				} else {
+					btce.logger.Printf("✅ [TON-EXEC] Account deployment tx: %s", deployTx)
+					waitErr := tonClient.WaitForConfirmation(ctx, deployTx, 60*time.Second)
+					if waitErr != nil {
+						btce.logger.Printf("⚠️ [TON-EXEC] Account deployment confirmation failed: %v", waitErr)
+						govTxHash = "gov_failed_account_deploy_ton"
+					} else {
+						accountExists = true
+					}
+				}
+			}
+
+			if accountExists && govTxHash == "no_governance_needed" {
+				// Read anchor data for merkle proof construction
+				anchorData, readErr := tonClient.GetAnchorData(ctx, bundleIdHash)
+				if readErr != nil {
+					btce.logger.Printf("⚠️ [TON-EXEC] Failed to read anchor data: %v", readErr)
+					govTxHash = "gov_failed_anchor_read_ton"
+				} else {
+					anchorOpCommit := opCommitment
+					anchorCCCommit := ccCommitment
+					anchorGovRoot := govRoot
+					if anchorData.OperationCommitment != ([32]byte{}) {
+						anchorOpCommit = anchorData.OperationCommitment
+					}
+					if anchorData.CrossChainCommitment != ([32]byte{}) {
+						anchorCCCommit = anchorData.CrossChainCommitment
+					}
+					if anchorData.GovernanceRoot != ([32]byte{}) {
+						anchorGovRoot = anchorData.GovernanceRoot
+					}
+
+					recipientAddr := tonToAddr
+					if recipientAddr == "" && len(allLegs) > 0 {
+						recipientAddr = allLegs[0].Target.Hex()
+					}
+
+					// Convert amountWei (18 decimals) to nanoTON (9 decimals)
+					amountNano := uint64(1) // Default 1 nanoTON
+					if len(allLegs) > 0 && allLegs[0].Value != nil {
+						weiValue := new(big.Int).Set(allLegs[0].Value)
+						nanoValue := new(big.Int).Div(weiValue, big.NewInt(1_000_000_000))
+						if nanoValue.Sign() <= 0 {
+							nanoValue = big.NewInt(1)
+						}
+						amountNano = nanoValue.Uint64()
+						btce.logger.Printf("💱 [TON-EXEC] Value conversion: %s wei → %d nanoTON",
+							allLegs[0].Value.String(), amountNano)
+					}
+
+					btce.logger.Printf("💱 [TON-EXEC] Governance: target=%s nano=%d", recipientAddr, amountNano)
+
+					// Build ADIGovernanceProof
+					accountProof := btce.buildTonAccountProof(
+						bundleIdHash, certenProof, adiURL,
+						anchorOpCommit, anchorCCCommit, anchorGovRoot,
+						amountNano, userAccountAddr, recipientAddr,
+					)
+
+					var govErr error
+					govTxHash, govErr = tonClient.ExecuteGovernanceProofDirect(ctx,
+						userAccountAddr, recipientAddr, amountNano, accountProof,
+					)
+					if govErr != nil {
+						btce.logger.Printf("⚠️ [TON-EXEC] Step 3 failed: %v", govErr)
+						govTxHash = "gov_failed_ton"
+					}
+				}
+			}
+		}
+	}
+
+	btce.logger.Printf("🎉 [TON-EXEC] TON anchor workflow completed!")
+	btce.logger.Printf("   Create TX: %s", createTxHash)
+	btce.logger.Printf("   Verify TX: %s", verifyTxHash)
+	btce.logger.Printf("   Governance TX: %s", govTxHash)
+
+	return btce.buildTonResult(intentID, anchorID, createTxHash, verifyTxHash, govTxHash, true), nil
+}
+
+// buildTonCertenProof converts the comprehensive proof to TON Cell-compatible format.
+func (btce *BFTTargetChainExecutor) buildTonCertenProof(
+	compProof *contracts.ComprehensiveCertenProof,
+	certenProof *proof.CertenProof,
+) TonCertenProof {
+	if compProof == nil {
+		return TonCertenProof{
+			ExpirationTime: uint64(time.Now().Add(24 * time.Hour).Unix()),
+		}
+	}
+
+	proofHashes := make([][32]byte, len(compProof.ProofHashes))
+	copy(proofHashes, compProof.ProofHashes)
+
+	keyPageProofs := make([][32]byte, len(compProof.GovernanceProof.KeyPageProofs))
+	copy(keyPageProofs, compProof.GovernanceProof.KeyPageProofs)
+
+	totalVP := uint64(0)
+	if compProof.BLSProof.TotalVotingPower != nil {
+		totalVP = compProof.BLSProof.TotalVotingPower.Uint64()
+	}
+	signedVP := uint64(0)
+	if compProof.BLSProof.SignedVotingPower != nil {
+		signedVP = compProof.BLSProof.SignedVotingPower.Uint64()
+	}
+	govNonce := uint64(0)
+	if compProof.GovernanceProof.Nonce != nil {
+		govNonce = compProof.GovernanceProof.Nonce.Uint64()
+	}
+	reqSigs := uint16(0)
+	if compProof.GovernanceProof.RequiredSignatures != nil {
+		reqSigs = uint16(compProof.GovernanceProof.RequiredSignatures.Uint64())
+	}
+	provSigs := uint16(0)
+	if compProof.GovernanceProof.ProvidedSignatures != nil {
+		provSigs = uint16(compProof.GovernanceProof.ProvidedSignatures.Uint64())
+	}
+
+	// TON uses seconds for timestamps (not milliseconds like SUI)
+	expirationSec := uint64(time.Now().Add(24 * time.Hour).Unix())
+	if compProof.ExpirationTime != nil {
+		expirationSec = compProof.ExpirationTime.Uint64()
+	}
+
+	// Authority address: parse EVM address to TON address (zero workchain, padded)
+	var govAuthAddr *tonaddr.Address
+	if compProof.GovernanceProof.AuthorityAddress != (common.Address{}) {
+		padded := make([]byte, 32)
+		copy(padded[12:], compProof.GovernanceProof.AuthorityAddress.Bytes())
+		govAuthAddr = tonaddr.NewAddress(0, 0, padded)
+	} else {
+		govAuthAddr = tonaddr.NewAddress(0, 0, make([]byte, 32))
+	}
+
+	// BLS proof: convert gnark→Arkworks compressed format (same as SUI)
+	var blsProofBytes []byte
+	var blsMessageHash [32]byte
+	var blsPubkeyCommitment []byte
+
+	if len(compProof.BLSProof.AggregateSignature) >= 448 {
+		abiBytes := compProof.BLSProof.AggregateSignature
+
+		arkProof, err := convertGnarkProofToArkworks(abiBytes[0:256])
+		if err != nil {
+			log.Printf("⚠️ [TON-BLS] Failed to convert proof to Arkworks: %v, using raw", err)
+			blsProofBytes = abiBytes[0:256]
+		} else {
+			blsProofBytes = arkProof
+			log.Printf("✅ [TON-BLS] Converted gnark proof (256B) → Arkworks compressed (128B)")
+		}
+
+		var msgHashBE [32]byte
+		copy(msgHashBE[:], abiBytes[256:288])
+		blsMessageHash = convertGnarkPublicInputToArkworksLE(msgHashBE)
+
+		var pkCommitBE [32]byte
+		copy(pkCommitBE[:], abiBytes[288:320])
+		blsPubkeyCommitmentLE := convertGnarkPublicInputToArkworksLE(pkCommitBE)
+		blsPubkeyCommitment = blsPubkeyCommitmentLE[:]
+
+		signedVP = new(big.Int).SetBytes(abiBytes[320:352]).Uint64()
+		totalVP = new(big.Int).SetBytes(abiBytes[352:384]).Uint64()
+
+		log.Printf("🔐 [TON-BLS] Public inputs (LE): msgHash=%x... pkCommit=%x... signedVP=%d totalVP=%d",
+			blsMessageHash[:4], blsPubkeyCommitment[:4], signedVP, totalVP)
+	} else {
+		blsMessageHash = compProof.BLSProof.MessageHash
+	}
+
+	return TonCertenProof{
+		TransactionHash: compProof.TransactionHash,
+		MerkleRoot:      compProof.MerkleRoot,
+		ProofHashes:     proofHashes,
+		LeafHash:        compProof.LeafHash,
+
+		GovKeyBookRoot:        compProof.GovernanceProof.KeyBookRoot,
+		GovAuthorityLevel:     compProof.GovernanceProof.AuthorityLevel,
+		GovNonce:              govNonce,
+		GovRequiredSignatures: reqSigs,
+		GovProvidedSignatures: provSigs,
+		GovAuthorityAddress:   govAuthAddr,
+		GovKeyPageProofs:      keyPageProofs,
+
+		BLSMessageHash:       blsMessageHash,
+		BLSThresholdMet:      signedVP > 0,
+		BLSSignedVotingPower: signedVP,
+		BLSTotalVotingPower:  totalVP,
+		BLSProofBytes:        blsProofBytes,
+		BLSPubkeyCommitment:  blsPubkeyCommitment,
+
+		CommitOperationCommitment:  compProof.Commitments.OperationCommitment,
+		CommitCrossChainCommitment: compProof.Commitments.CrossChainCommitment,
+		CommitGovernanceRoot:       compProof.Commitments.GovernanceRoot,
+
+		ExpirationTime: expirationSec,
+	}
+}
+
+// buildTonAccountProof constructs the TonADIGovernanceProof for Step 3.
+// Mirrors buildSuiAccountProof — computes a 4-leaf merkle proof for adiURL verification.
+func (btce *BFTTargetChainExecutor) buildTonAccountProof(
+	bundleID [32]byte,
+	certenProof *proof.CertenProof,
+	adiURL string,
+	opCommitment [32]byte,
+	ccCommitment [32]byte,
+	govRoot [32]byte,
+	amountNano uint64,
+	accountAddr string,
+	recipientAddr string,
+) TonADIGovernanceProof {
+	requiredLevel := tonAuthorityLevelForNano(amountNano)
+	log.Printf("🔐 [TON-AUTH] %d nanoTON → authority level: %d", amountNano, requiredLevel)
+
+	// Build merkle proof: same 4-leaf tree as EVM/TRON/NEAR/Solana/Aptos/SUI
+	hash23 := sortedHash(ccCommitment[:], govRoot[:])
+	var hash23Arr [32]byte
+	copy(hash23Arr[:], hash23)
+
+	log.Printf("🌳 [TON-MERKLE] Built 4-leaf proof for adiURL verification:")
+	log.Printf("   adiURL: %s", adiURL)
+	log.Printf("   proof[0] (op): 0x%x", opCommitment[:8])
+	log.Printf("   proof[1] (hash23): 0x%x", hash23Arr[:8])
+
+	merklePath := [][32]byte{opCommitment, hash23Arr}
+
+	now := time.Now()
+	proofTimestamp := uint64(now.Add(-5 * time.Minute).Unix())
+	proofExpiresAt := uint64(now.Add(2 * time.Hour).Unix())
+
+	// Zero address for role authorized by
+	zeroAddr := tonaddr.NewAddress(0, 0, make([]byte, 32))
+
+	return TonADIGovernanceProof{
+		AdiURL:     adiURL,
+		AnchorID:   bundleID,
+		MerklePath: merklePath,
+
+		KBUrl:        "",
+		KBRoot:       [32]byte{},
+		KBDepth:      0,
+		KBValidFrom:  0,
+		KBValidUntil: 0,
+
+		RoleLevel:        requiredLevel,
+		RoleHash:         [32]byte{},
+		RoleAuthorizedBy: zeroAddr,
+		RoleGrantedAt:    0,
+		RoleSignature:    []byte{},
+
+		ThreshRequired:     0,
+		ThreshActual:       0,
+		ThreshSigners:      []*tonaddr.Address{},
+		ThreshVotingPowers: []uint64{},
+		ThreshSignatures:   [][]byte{},
+		ThreshTotalPower:   0,
+		ThreshMessageHash:  [32]byte{},
+
+		Timestamp:           proofTimestamp,
+		ExpiresAt:           proofExpiresAt,
+		ValidatorSignatures: []byte{},
+		Nonce:               1,
+		RequiredLevel:       requiredLevel,
+		OperationHash:       [32]byte{},
+	}
+}
+
+// extractTonFieldFromCrossChainData extracts a TON address field from CrossChainData.
+// TON addresses use base64url format (e.g., "kQ..." or "EQ...").
+func (btce *BFTTargetChainExecutor) extractTonFieldFromCrossChainData(legacyIntent *intent.CertenIntent, field string) string {
+	if legacyIntent == nil || len(legacyIntent.CrossChainData) == 0 {
+		return ""
+	}
+
+	var ccData struct {
+		Legs []struct {
+			From string `json:"from"`
+			To   string `json:"to"`
+		} `json:"legs"`
+	}
+	if err := json.Unmarshal(legacyIntent.CrossChainData, &ccData); err != nil || len(ccData.Legs) == 0 {
+		return ""
+	}
+
+	var value string
+	switch field {
+	case "from":
+		value = ccData.Legs[0].From
+	case "to":
+		value = ccData.Legs[0].To
+	}
+
+	// TON addresses typically start with EQ/UQ/kQ/0Q and are ~48 chars base64url
+	if value != "" && len(value) >= 40 {
+		_, err := tonaddr.ParseAddr(value)
+		if err == nil {
+			return value
+		}
+	}
+	return ""
+}
+
+// buildTonResult creates a TargetChainExecutionResult for TON operations.
+func (btce *BFTTargetChainExecutor) buildTonResult(
+	intentID, anchorID string,
+	createTxHash, verifyTxHash, govTxHash string,
+	success bool,
+) *TargetChainExecutionResult {
+	return &TargetChainExecutionResult{
+		Chain:            "ton-testnet",
+		TxHash:           createTxHash,
+		Success:          success,
+		CreateTxHash:     createTxHash,
+		VerifyTxHash:     verifyTxHash,
+		GovernanceTxHash: govTxHash,
+		Metadata: map[string]string{
+			"chain":           "ton-testnet",
+			"anchorContract":  os.Getenv("TON_ANCHOR_CONTRACT"),
+			"blsVerifier":     os.Getenv("TON_BLS_VERIFIER_CONTRACT"),
+			"explorerUrl":     "https://testnet.tonscan.org",
+			"executionMethod": "ton_center_api_v2",
 		},
 	}
 }
