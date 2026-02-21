@@ -313,10 +313,8 @@ func (tc *TonClient) apiPost(ctx context.Context, method string, reqBody interfa
 }
 
 func (tc *TonClient) getSeqno(ctx context.Context) (uint32, error) {
-	result, err := tc.apiCall(ctx, "runGetMethod", map[string]string{
-		"address": tc.walletAddress.String(),
-		"method":  "seqno",
-	})
+	// Use POST-based runGetMethod (TON Center API v2 requires POST for this endpoint)
+	result, err := tc.runGetMethod(ctx, tc.walletAddress.String(), "seqno", nil)
 	if err != nil {
 		return 0, fmt.Errorf("getting seqno: %w", err)
 	}
