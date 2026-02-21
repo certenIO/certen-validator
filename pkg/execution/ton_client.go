@@ -127,8 +127,13 @@ func tonMnemonicToSeed(mnemonic string) ([]byte, error) {
 		return nil, fmt.Errorf("expected 24 mnemonic words, got %d", len(words))
 	}
 
+	// TON mnemonic derivation (matches @ton/crypto mnemonicToPrivateKey):
+	// Step 1: entropy = HMAC-SHA512(key=mnemonic, data="")
 	mnemonicStr := strings.Join(words, " ")
-	seed := tonPBKDF2([]byte(mnemonicStr), []byte("TON default seed"), 100000, 64)
+	entropy := tonHMACSHA512([]byte(mnemonicStr), []byte(""))
+
+	// Step 2: seed = PBKDF2-SHA512(password=entropy, salt="TON default seed", iterations=100000, keyLen=64)
+	seed := tonPBKDF2(entropy, []byte("TON default seed"), 100000, 64)
 
 	return seed, nil
 }
@@ -1040,7 +1045,7 @@ func tonAuthorityLevelForNano(nano uint64) uint8 {
 
 func getWalletV4R2Code() *cell.Cell {
 	// Standard WalletV4R2 code BOC (base64-encoded)
-	const walletV4R2CodeBOC = "te6cckECFAEAAtQAART/APSkE/S88sgLAQIBIAIDAgFIBAUE+PKDCNcYINMf0x/THwL4I7vyZO1E0NMf0x/T//QE0VFDuvKhUVG68qIF+GYCB/ABAgHOBgcCASAICQH2AFIQ0x/TB9P/0z/SANEM0x/TB9P/0z9VIG8C+GNw+GUm+ERul/gl+BV/+GTeX0/4TPhN+E/4S/hKeEr4SPhN+En4Tvhb+Fv4XPhd+F74UvhQ+FH4U/hW+FdVYPhYyPQA9ADJ7VQiCQpG8CASMBgQD/8EB4KtAhiSqAALPFszMyXP7ANDTAwFxsJJfA+D6QDAhxwCSXwPg+kAw+FLHBbCOICHTHyHAACCSMG3gIddJqhIC8qkTXwM2WzJsISDBAJKTW+CAIOBbMDJsMeDbPEDXkl8D4N4BDvhC2zxY2zwKCwwNAgEgDg8BkjB/4HAh10nCH5UwINcLH94gghAPin6luo4GM9MfAYIQD4p+pbry4IHTP/oAWWwSMROgUCPHBfLhkfgj+EL4KFjbPH/bMF8DfwwAFO1E0NQB+GPSAAHAAgMBIMcF8uGR+CP4QlhY2zwAjjt/BDAAAASAEFImHAAiNPhRIG6VMFn0WJJTESP4YeBIcIG1/wRaAfkAAfhBaAQHjM3N/hEIG6UMFn0WJJTECP4YeBSgCD0Dm+h8uBl+BLXCz+AIPhE+EvbPH/bMF8DEAAk+CP4QlhY2zwCNPhSIG6VMFn0WJJTEeIRAAwg+kAw+HYCASASEwCVoR3bPFUC+Cj4QhLIyz/LP8s/yXEhyMsBWM8WcSHIywFYzxZYzxYByMs/E8s/zMkibrOTMWwi4SCBAN0C+QBYoFigIqACEREDkTDigBAAb6TJftRNDUAfhj0gAB0x/TH9Mf0//TB20I+kAwcH/4U/hU+FX4VvhX+Fj4SfhK+Ev4TPhN+E74T/hQ+FH4UliM2Bg="
+	const walletV4R2CodeBOC = "te6cckECFAEAAtQAART/APSkE/S88sgLAQIBIAIPAgFIAwYC5tAB0NMDIXGwkl8E4CLXScEgkl8E4ALTHyGCEHBsdWe9IoIQZHN0cr2wkl8F4AP6QDAg+kQByMoHy//J0O1E0IEBQNch9AQwXIEBCPQKb6Exs5JfB+AF0z/IJYIQcGx1Z7qSODDjDQOCEGRzdHK6kl8G4w0EBQB4AfoA9AQw+CdvIjBQCqEhvvLgUIIQcGx1Z4MesXCAGFAEywUmzxZY+gIZ9ADLaRfLH1Jgyz8gyYBA+wAGAIpQBIEBCPRZMO1E0IEBQNcgyAHPFvQAye1UAXKwjiOCEGRzdHKDHrFwgBhQBcsFUAPPFiP6AhPLassfyz/JgED7AJJfA+ICASAHDgIBIAgNAgFYCQoAPbKd+1E0IEBQNch9AQwAsjKB8v/ydABgQEI9ApvoTGACASALDAAZrc52omhAIGuQ64X/wAAZrx32omhAEGuQ64WPwAARuMl+1E0NcLH4AFm9JCtvaiaECAoGuQ+gIYRw1AgIR6STfSmRDOaQPp/5g3gSgBt4EBSJhxWfMYQE+PKDCNcYINMf0x/THwL4I7vyZO1E0NMf0x/T//QE0VFDuvKhUVG68qIF+QFUEGT5EPKj+AAkpMjLH1JAyx9SMMv/UhD0AMntVPgPAdMHIcAAn2xRkyDXSpbTB9QC+wDoMOAhwAHjACHAAuMAAcADkTDjDQOkyMsfEssfy/8QERITAG7SB/oA1NQi+QAFyMoHFcv/ydB3dIAYyMsFywIizxZQBfoCFMtrEszMyXP7AMhAFIEBCPRR8qcCAHCBAQjXGPoA0z/IVCBHgQEI9FHyp4IQbm90ZXB0gBjIywXLAlAGzxZQBPoCFMtqEssfyz/Jc/sAAgBsgQEI1xj6ANM/MFIkgQEI9Fnyp4IQZHN0cnB0gBjIywXLAlAFzxZQA/oCE8tqyx8Syz/Jc/sAAAr0AMntVAj45Sg="
 
 	bocBytes, err := base64.StdEncoding.DecodeString(walletV4R2CodeBOC)
 	if err != nil {
