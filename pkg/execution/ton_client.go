@@ -40,6 +40,10 @@ type TonClient struct {
 
 	walletAddress *address.Address
 	subwalletID   uint32
+
+	// Local seqno tracking to avoid stale API reads between rapid sends
+	lastSeqno    uint32
+	seqnoKnown   bool
 }
 
 // TON constants
@@ -372,17 +376,28 @@ func (tc *TonClient) runGetMethod(ctx context.Context, addr string, method strin
 // =============================================================================
 
 func (tc *TonClient) sendInternalMessage(ctx context.Context, destAddr *address.Address, amount uint64, body *cell.Cell) (string, error) {
-	// Try to get seqno — if wallet not deployed yet, use seqno=0 and include StateInit
+	// Try to get seqno — if wallet not deployed yet, use seqno=0 and include StateInit.
+	// Use local seqno tracking to avoid stale API reads between rapid sends.
 	needsInit := false
 	seqno, err := tc.getSeqno(ctx)
 	if err != nil {
 		if strings.Contains(err.Error(), "Not Found") || strings.Contains(err.Error(), "not initialized") {
-			log.Printf("📡 [TON] Wallet not yet deployed, will include StateInit (seqno=0)")
-			seqno = 0
-			needsInit = true
+			if tc.seqnoKnown {
+				// Wallet was deployed by a previous send in this session — API is stale
+				seqno = tc.lastSeqno
+				log.Printf("📡 [TON] API stale, using tracked seqno=%d", seqno)
+			} else {
+				log.Printf("📡 [TON] Wallet not yet deployed, will include StateInit (seqno=0)")
+				seqno = 0
+				needsInit = true
+			}
 		} else {
 			return "", fmt.Errorf("getting seqno: %w", err)
 		}
+	} else if tc.seqnoKnown && tc.lastSeqno > seqno {
+		// API returned a stale (lower) seqno — use our tracked value
+		log.Printf("📡 [TON] API seqno=%d < tracked seqno=%d, using tracked", seqno, tc.lastSeqno)
+		seqno = tc.lastSeqno
 	}
 
 	log.Printf("📡 [TON] Sending message: dest=%s amount=%d seqno=%d needsInit=%v", destAddr.String(), amount, seqno, needsInit)
@@ -461,8 +476,12 @@ func (tc *TonClient) sendInternalMessage(ctx context.Context, destAddr *address.
 		return "", fmt.Errorf("sending message: %w", err)
 	}
 
+	// Track seqno locally so subsequent sends don't use stale API values
+	tc.lastSeqno = seqno + 1
+	tc.seqnoKnown = true
+
 	msgHash := hex.EncodeToString(hash)
-	log.Printf("✅ [TON] Message sent: hash=%s", msgHash)
+	log.Printf("✅ [TON] Message sent: hash=%s (next seqno=%d)", msgHash, tc.lastSeqno)
 	return msgHash, nil
 }
 
