@@ -4003,7 +4003,9 @@ func (btce *BFTTargetChainExecutor) buildTonCertenProof(
 		govAuthAddr = tonaddr.NewAddress(0, 0, make([]byte, 32))
 	}
 
-	// BLS proof: convert gnark→Arkworks compressed format (same as SUI)
+	// BLS proof: convert gnark→Arkworks compressed format for Cell refs (pi_a, pi_b, pi_c)
+	// TON contract's decodeZkProof() expects 3 refs, unlike SUI's flat 128B blob.
+	// The Arkworks 128B layout is: pi_a[0:32] + pi_b[32:96] + pi_c[96:128]
 	var blsProofBytes []byte
 	var blsMessageHash [32]byte
 	var blsPubkeyCommitment []byte
@@ -4017,22 +4019,32 @@ func (btce *BFTTargetChainExecutor) buildTonCertenProof(
 			blsProofBytes = abiBytes[0:256]
 		} else {
 			blsProofBytes = arkProof
-			log.Printf("✅ [TON-BLS] Converted gnark proof (256B) → Arkworks compressed (128B)")
+			log.Printf("✅ [TON-BLS] Converted gnark proof (256B) → Arkworks compressed (128B = pi_a:32 + pi_b:64 + pi_c:32)")
 		}
 
+		// TON stores public inputs as uint256 integers in Cells (big-endian),
+		// NOT as LE byte arrays like SUI. Reduce mod r for circuit compatibility.
 		var msgHashBE [32]byte
 		copy(msgHashBE[:], abiBytes[256:288])
-		blsMessageHash = convertGnarkPublicInputToArkworksLE(msgHashBE)
+		msgHashInt := new(big.Int).SetBytes(msgHashBE[:])
+		msgHashInt.Mod(msgHashInt, bn254ScalarFieldOrder) // reduce mod r
+		msgHashReduced := msgHashInt.Bytes()
+		blsMessageHash = [32]byte{}
+		copy(blsMessageHash[32-len(msgHashReduced):], msgHashReduced) // big-endian, left-padded
 
 		var pkCommitBE [32]byte
 		copy(pkCommitBE[:], abiBytes[288:320])
-		blsPubkeyCommitmentLE := convertGnarkPublicInputToArkworksLE(pkCommitBE)
-		blsPubkeyCommitment = blsPubkeyCommitmentLE[:]
+		pkCommitInt := new(big.Int).SetBytes(pkCommitBE[:])
+		pkCommitInt.Mod(pkCommitInt, bn254ScalarFieldOrder) // reduce mod r
+		pkCommitReduced := pkCommitInt.Bytes()
+		var blsPubkeyCommitmentArr [32]byte
+		copy(blsPubkeyCommitmentArr[32-len(pkCommitReduced):], pkCommitReduced)
+		blsPubkeyCommitment = blsPubkeyCommitmentArr[:]
 
 		signedVP = new(big.Int).SetBytes(abiBytes[320:352]).Uint64()
 		totalVP = new(big.Int).SetBytes(abiBytes[352:384]).Uint64()
 
-		log.Printf("🔐 [TON-BLS] Public inputs (LE): msgHash=%x... pkCommit=%x... signedVP=%d totalVP=%d",
+		log.Printf("🔐 [TON-BLS] Public inputs (BE, mod r): msgHash=%x... pkCommit=%x... signedVP=%d totalVP=%d",
 			blsMessageHash[:4], blsPubkeyCommitment[:4], signedVP, totalVP)
 	} else {
 		blsMessageHash = compProof.BLSProof.MessageHash

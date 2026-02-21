@@ -682,34 +682,26 @@ func tonBuildGovernanceCell(proof TonCertenProof) *cell.Cell {
 
 // tonBuildBlsCell: messageHash(256) | thresholdMet(1) | signedVP(64) | totalVP(64)
 // Refs: [zkProofCell]
+// zkProofCell must match TON contract's decodeZkProof(): refs[0]=pi_a, refs[1]=pi_b, refs[2]=pi_c
 func tonBuildBlsCell(proof TonCertenProof) *cell.Cell {
 	msgHashInt := new(big.Int).SetBytes(proof.BLSMessageHash[:])
 
-	// ZK proof is 128 bytes (1024 bits) which exceeds the 1023-bit Cell limit.
-	// Split into two 64-byte halves: first half inline, second half in a ref.
+	// Build zkProofCell with 3 refs matching decodeZkProof() in groth16_verifier.tact:
+	//   refs[0]: pi_a Cell (BN254 G1 compressed, 32 bytes = 256 bits)
+	//   refs[1]: pi_b Cell (BN254 G2 compressed, 64 bytes = 512 bits)
+	//   refs[2]: pi_c Cell (BN254 G1 compressed, 32 bytes = 256 bits)
+	// The 128-byte Arkworks compressed format: pi_a[0:32] + pi_b[32:96] + pi_c[96:128]
 	zkProofCell := cell.BeginCell()
-	if len(proof.BLSProofBytes) > 0 {
-		if len(proof.BLSProofBytes) > 64 {
-			// Store first 64 bytes (512 bits) inline, rest in a continuation ref
-			zkProofCell = zkProofCell.MustStoreSlice(proof.BLSProofBytes[:64], 512)
-			contCell := cell.BeginCell().
-				MustStoreSlice(proof.BLSProofBytes[64:], uint(len(proof.BLSProofBytes[64:])*8))
-			if len(proof.BLSPubkeyCommitment) > 0 {
-				commitCell := cell.BeginCell().
-					MustStoreSlice(proof.BLSPubkeyCommitment, uint(len(proof.BLSPubkeyCommitment)*8)).
-					EndCell()
-				contCell = contCell.MustStoreRef(commitCell)
-			}
-			zkProofCell = zkProofCell.MustStoreRef(contCell.EndCell())
-		} else {
-			zkProofCell = zkProofCell.MustStoreSlice(proof.BLSProofBytes, uint(len(proof.BLSProofBytes)*8))
-			if len(proof.BLSPubkeyCommitment) > 0 {
-				commitCell := cell.BeginCell().
-					MustStoreSlice(proof.BLSPubkeyCommitment, uint(len(proof.BLSPubkeyCommitment)*8)).
-					EndCell()
-				zkProofCell = zkProofCell.MustStoreRef(commitCell)
-			}
-		}
+	if len(proof.BLSProofBytes) >= 128 {
+		piA := cell.BeginCell().MustStoreSlice(proof.BLSProofBytes[0:32], 256).EndCell()
+		piB := cell.BeginCell().MustStoreSlice(proof.BLSProofBytes[32:96], 512).EndCell()
+		piC := cell.BeginCell().MustStoreSlice(proof.BLSProofBytes[96:128], 256).EndCell()
+		zkProofCell = zkProofCell.MustStoreRef(piA).MustStoreRef(piB).MustStoreRef(piC)
+		log.Printf("🔐 [TON-ZK] Built zkProofCell: pi_a=%dB pi_b=%dB pi_c=%dB (3 refs)", 32, 64, 32)
+	} else if len(proof.BLSProofBytes) > 0 {
+		log.Printf("⚠️ [TON-ZK] Unexpected proof size %d (expected 128), storing as single ref", len(proof.BLSProofBytes))
+		proofRef := cell.BeginCell().MustStoreSlice(proof.BLSProofBytes, uint(len(proof.BLSProofBytes)*8)).EndCell()
+		zkProofCell = zkProofCell.MustStoreRef(proofRef)
 	}
 
 	return cell.BeginCell().
