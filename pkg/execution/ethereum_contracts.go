@@ -122,6 +122,8 @@ func GetBLS12381Prover() (*bls_zkp.BLS12381Prover, error) {
 			bls12381ProverErr = bls12381Prover.InitializeFromKeys(pkPath, vkPath, csPath)
 			if bls12381ProverErr == nil {
 				log.Printf("✅ [BLS12-381] Prover initialized with pre-generated keys")
+				// Verify loaded VK matches contract constants
+				verifyBLS12381VKConstants(bls12381Prover)
 				return
 			}
 			log.Printf("⚠️ [BLS12-381] Failed to load keys: %v", bls12381ProverErr)
@@ -138,6 +140,67 @@ func GetBLS12381Prover() (*bls_zkp.BLS12381Prover, error) {
 		}
 	})
 	return bls12381Prover, bls12381ProverErr
+}
+
+// verifyBLS12381VKConstants exports the loaded VK and compares with expected contract constants
+func verifyBLS12381VKConstants(prover *bls_zkp.BLS12381Prover) {
+	vkExport, err := prover.ExportVerificationKeyHex()
+	if err != nil {
+		log.Printf("⚠️ [BLS12-381-VK] Failed to export VK: %v", err)
+		return
+	}
+
+	// Expected values from the deployed Tact contract groth16_verifier.tact
+	expectedAlpha := "975d7a60c8d4cc80d0e11fe03ac847aca8566a2489b13a24d3ee6d2196d7d7e02833a5ea180db253e53c968063c622a6"
+	expectedBeta := "805025fe46217a2bb9353df881e249f81bfc1ba35dbbae028da316d910106a64a9622235b6f62e22f965894ff753268a02a6bbbba2c9d0288e1da4f9f55fd7421304c5a930899ade7bf6b10383553983633310a9f604b3457944d77d6898c34f"
+	expectedGamma := "8f3b0f5f0294ce236480f0bc2b4c91e37a9bca7f109c72e86935c307ea31a96c2adac1e5f173c13db243eaae7eef94b106e02c98bd5f337345d495fa4af6682438547dcf6d871843d4d28b61139c31cb1a8ad8f5fecae9e1fe9a3456a9bf0cf0"
+	expectedDelta := "82c2d452b5565a58496b691bb74eacc338ab8dc2c79abb2234a8c97aa3ee13b7b26924ebd004fff475b25f67a7fa0662014c4ef0eefb6125902e7687c9de57a73b011bcf7b46d26e1aa91e8f526a41bf75f747e62cda6b4b0516a5ac15a70f5e"
+	expectedIC := []string{
+		"81e4e2b29ffd0c6a067f06733c8c471cfdf94c665802866a8f95d49b9694461ea006efd0cbdcf90d308aa0acdd72e3a8",
+		"c00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+		"a5da549892da7d7186a042f2ff9ec2f3220714d4cfd9ab88e47c524d5b0fdddc49e91d2f5b1c44200cb5f819c5998d48",
+		"a3e4bb8e12a48b821a8367d38ad86462c4301165157ca33b4eaec058f25631f5f98a50ffa3be0bf2268b40a54542ef41",
+		"80a93dd1605a8c93d3637f7b1c7446c24b8c8f849ef2d3e7e64cf6cc90766256de553bb37dae830cb060f2382c78e2b7",
+	}
+
+	allMatch := true
+	if vkExport.AlphaG1Hex != expectedAlpha {
+		log.Printf("❌ [BLS12-381-VK] ALPHA MISMATCH! loaded=%s expected=%s", vkExport.AlphaG1Hex[:16]+"...", expectedAlpha[:16]+"...")
+		allMatch = false
+	}
+	if vkExport.BetaG2Hex != expectedBeta {
+		log.Printf("❌ [BLS12-381-VK] BETA MISMATCH! loaded=%s expected=%s", vkExport.BetaG2Hex[:16]+"...", expectedBeta[:16]+"...")
+		allMatch = false
+	}
+	if vkExport.GammaG2Hex != expectedGamma {
+		log.Printf("❌ [BLS12-381-VK] GAMMA MISMATCH! loaded=%s expected=%s", vkExport.GammaG2Hex[:16]+"...", expectedGamma[:16]+"...")
+		allMatch = false
+	}
+	if vkExport.DeltaG2Hex != expectedDelta {
+		log.Printf("❌ [BLS12-381-VK] DELTA MISMATCH! loaded=%s expected=%s", vkExport.DeltaG2Hex[:16]+"...", expectedDelta[:16]+"...")
+		allMatch = false
+	}
+	for i, expected := range expectedIC {
+		if i < len(vkExport.ICG1Hex) {
+			if vkExport.ICG1Hex[i] != expected {
+				log.Printf("❌ [BLS12-381-VK] IC[%d] MISMATCH! loaded=%s expected=%s", i, vkExport.ICG1Hex[i][:16]+"...", expected[:16]+"...")
+				allMatch = false
+			}
+		} else {
+			log.Printf("❌ [BLS12-381-VK] IC[%d] MISSING in loaded VK!", i)
+			allMatch = false
+		}
+	}
+	if len(vkExport.ICG1Hex) != len(expectedIC) {
+		log.Printf("❌ [BLS12-381-VK] IC count mismatch: loaded=%d expected=%d", len(vkExport.ICG1Hex), len(expectedIC))
+		allMatch = false
+	}
+
+	if allMatch {
+		log.Printf("✅ [BLS12-381-VK] All VK constants match deployed contract!")
+	} else {
+		log.Printf("🚨 [BLS12-381-VK] VK MISMATCH DETECTED - proofs WILL fail on-chain!")
+	}
 }
 
 // fileExists checks if a file exists and is not a directory

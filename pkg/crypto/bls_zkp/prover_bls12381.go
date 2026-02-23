@@ -227,11 +227,18 @@ func (p *BLS12381Prover) GenerateProof(witness *BLSSignatureWitness) (*BLS12381P
 		TotalVotingPower:  witness.TotalVotingPower,
 	}
 
-	// Verify locally
+	// Verify locally using loaded VK
 	valid, verifyErr := p.VerifyProofLocally(result)
 	log.Printf("🔍 [BLS12-381] Local verify: result=%v err=%v", valid, verifyErr)
 	if !valid {
 		log.Printf("⚠️ [BLS12-381] Local verification failed!")
+	}
+
+	// Also verify using hardcoded contract VK constants (manual pairing)
+	manualValid := VerifyWithContractVK(result)
+	log.Printf("🔍 [BLS12-381] Manual contract VK verify: result=%v", manualValid)
+	if valid && !manualValid {
+		log.Printf("🚨 [BLS12-381] CRITICAL: Local VK passes but contract VK fails! VK MISMATCH!")
 	}
 
 	return result, nil
@@ -407,4 +414,124 @@ func CreateWitnessFromBLSDataBLS12381(
 		PubkeyY0:         pkY0,
 		PubkeyY1:         pkY1,
 	}, nil
+}
+
+// VerifyWithContractVK verifies a BLS12-381 proof using the HARDCODED contract VK constants.
+// This tests whether the proof verifies with the on-chain VK (not the loaded VK).
+func VerifyWithContractVK(proof *BLS12381Proof) bool {
+	// Hardcoded VK constants from groth16_verifier.tact
+	alphaHex := "975d7a60c8d4cc80d0e11fe03ac847aca8566a2489b13a24d3ee6d2196d7d7e02833a5ea180db253e53c968063c622a6"
+	betaHex := "805025fe46217a2bb9353df881e249f81bfc1ba35dbbae028da316d910106a64a9622235b6f62e22f965894ff753268a02a6bbbba2c9d0288e1da4f9f55fd7421304c5a930899ade7bf6b10383553983633310a9f604b3457944d77d6898c34f"
+	gammaHex := "8f3b0f5f0294ce236480f0bc2b4c91e37a9bca7f109c72e86935c307ea31a96c2adac1e5f173c13db243eaae7eef94b106e02c98bd5f337345d495fa4af6682438547dcf6d871843d4d28b61139c31cb1a8ad8f5fecae9e1fe9a3456a9bf0cf0"
+	deltaHex := "82c2d452b5565a58496b691bb74eacc338ab8dc2c79abb2234a8c97aa3ee13b7b26924ebd004fff475b25f67a7fa0662014c4ef0eefb6125902e7687c9de57a73b011bcf7b46d26e1aa91e8f526a41bf75f747e62cda6b4b0516a5ac15a70f5e"
+	icHex := []string{
+		"81e4e2b29ffd0c6a067f06733c8c471cfdf94c665802866a8f95d49b9694461ea006efd0cbdcf90d308aa0acdd72e3a8",
+		"c00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+		"a5da549892da7d7186a042f2ff9ec2f3220714d4cfd9ab88e47c524d5b0fdddc49e91d2f5b1c44200cb5f819c5998d48",
+		"a3e4bb8e12a48b821a8367d38ad86462c4301165157ca33b4eaec058f25631f5f98a50ffa3be0bf2268b40a54542ef41",
+		"80a93dd1605a8c93d3637f7b1c7446c24b8c8f849ef2d3e7e64cf6cc90766256de553bb37dae830cb060f2382c78e2b7",
+	}
+
+	// Decode VK points
+	decodeG1 := func(h string) (bls12381.G1Affine, error) {
+		b, _ := hex.DecodeString(h)
+		var p bls12381.G1Affine
+		_, err := p.SetBytes(b)
+		return p, err
+	}
+	decodeG2 := func(h string) (bls12381.G2Affine, error) {
+		b, _ := hex.DecodeString(h)
+		var p bls12381.G2Affine
+		_, err := p.SetBytes(b)
+		return p, err
+	}
+
+	alpha, err := decodeG1(alphaHex)
+	if err != nil {
+		log.Printf("⚠️ [MANUAL-VK] Failed to decode alpha: %v", err)
+		return false
+	}
+	beta, err := decodeG2(betaHex)
+	if err != nil {
+		log.Printf("⚠️ [MANUAL-VK] Failed to decode beta: %v", err)
+		return false
+	}
+	gamma, err := decodeG2(gammaHex)
+	if err != nil {
+		log.Printf("⚠️ [MANUAL-VK] Failed to decode gamma: %v", err)
+		return false
+	}
+	delta, err := decodeG2(deltaHex)
+	if err != nil {
+		log.Printf("⚠️ [MANUAL-VK] Failed to decode delta: %v", err)
+		return false
+	}
+
+	ic := make([]bls12381.G1Affine, len(icHex))
+	for i, h := range icHex {
+		ic[i], err = decodeG1(h)
+		if err != nil {
+			log.Printf("⚠️ [MANUAL-VK] Failed to decode IC[%d]: %v", i, err)
+			return false
+		}
+	}
+
+	// Decode proof points
+	var piA bls12381.G1Affine
+	if _, err := piA.SetBytes(proof.PiA); err != nil {
+		log.Printf("⚠️ [MANUAL-VK] Failed to decode piA: %v", err)
+		return false
+	}
+	var piB bls12381.G2Affine
+	if _, err := piB.SetBytes(proof.PiB); err != nil {
+		log.Printf("⚠️ [MANUAL-VK] Failed to decode piB: %v", err)
+		return false
+	}
+	var piC bls12381.G1Affine
+	if _, err := piC.SetBytes(proof.PiC); err != nil {
+		log.Printf("⚠️ [MANUAL-VK] Failed to decode piC: %v", err)
+		return false
+	}
+
+	// Compute public inputs as Fr scalars
+	msgHashInt := new(big.Int).SetBytes(proof.MessageHash[:])
+	pkCommitInt := new(big.Int).SetBytes(proof.PubkeyCommitment[:])
+	signedVPInt := new(big.Int).SetUint64(proof.SignedVotingPower)
+	totalVPInt := new(big.Int).SetUint64(proof.TotalVotingPower)
+
+	// Compute vk_x = IC[0] + msgHash*IC[1] + pkCommit*IC[2] + signedVP*IC[3] + totalVP*IC[4]
+	scalars := []*big.Int{msgHashInt, pkCommitInt, signedVPInt, totalVPInt}
+	var vkX bls12381.G1Jac
+	vkX.FromAffine(&ic[0])
+	for i := 0; i < 4; i++ {
+		var term bls12381.G1Affine
+		term.ScalarMultiplication(&ic[i+1], scalars[i])
+		var termJac bls12381.G1Jac
+		termJac.FromAffine(&term)
+		vkX.AddAssign(&termJac)
+	}
+	var vkXAff bls12381.G1Affine
+	vkXAff.FromJacobian(&vkX)
+
+	// Negate piA
+	var negA bls12381.G1Affine
+	negA.Neg(&piA)
+
+	// Pairing check: e(-A, B) * e(alpha, beta) * e(vk_x, gamma) * e(C, delta) == 1
+	ml, err := bls12381.MillerLoop(
+		[]bls12381.G1Affine{negA, alpha, vkXAff, piC},
+		[]bls12381.G2Affine{piB, beta, gamma, delta},
+	)
+	if err != nil {
+		log.Printf("⚠️ [MANUAL-VK] MillerLoop failed: %v", err)
+		return false
+	}
+	result := bls12381.FinalExponentiation(&ml)
+
+	var one bls12381.GT
+	one.SetOne()
+	isValid := result.Equal(&one)
+	log.Printf("🔍 [MANUAL-VK] Pairing check result=%v", isValid)
+
+	return isValid
 }
