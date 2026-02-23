@@ -674,6 +674,9 @@ func (tc *TonClient) ExecuteComprehensiveProof(
 	log.Printf("   Anchor ID: 0x%x", anchorId[:8])
 	log.Printf("   Tx Hash: 0x%x", proof.TransactionHash[:8])
 
+	// Test BLS verifier directly before sending (bypasses anchor, calls view getter)
+	tc.TestBLSVerifierDirect(ctx, proof)
+
 	body := tonBuildComprehensiveProofBody(anchorId, proof)
 
 	hash, err := tc.sendInternalMessage(ctx, tc.anchorContract, tonProofGas, body)
@@ -820,8 +823,26 @@ func tonBuildBlsCell(proof TonCertenProof) *cell.Cell {
 		piB := cell.BeginCell().MustStoreSlice(proof.BLSProofBytes[48:144], 768).EndCell()
 		piC := cell.BeginCell().MustStoreSlice(proof.BLSProofBytes[144:192], 384).EndCell()
 		zkProofCell = zkProofCell.MustStoreRef(piA).MustStoreRef(piB).MustStoreRef(piC)
-		log.Printf("🔐 [TON-ZK] Built zkProofCell (BLS12-381): pkCommit=0x%x... pi_a=%dB pi_b=%dB pi_c=%dB",
-			proof.BLSPubkeyCommitment[:4], 48, 96, 48)
+
+		// Comprehensive hex logging for debugging on-chain verification
+		log.Printf("🔐 [TON-ZK-DEBUG] === BLS12-381 Proof Cell Data ===")
+		log.Printf("🔐 [TON-ZK-DEBUG] messageHash    = %s", hex.EncodeToString(proof.BLSMessageHash[:]))
+		log.Printf("🔐 [TON-ZK-DEBUG] pkCommitment   = %s", hex.EncodeToString(proof.BLSPubkeyCommitment[:]))
+		log.Printf("🔐 [TON-ZK-DEBUG] signedVP=%d totalVP=%d thresholdMet=%v",
+			proof.BLSSignedVotingPower, proof.BLSTotalVotingPower, proof.BLSThresholdMet)
+		log.Printf("🔐 [TON-ZK-DEBUG] pi_a = %s", hex.EncodeToString(proof.BLSProofBytes[0:48]))
+		log.Printf("🔐 [TON-ZK-DEBUG] pi_b = %s", hex.EncodeToString(proof.BLSProofBytes[48:144]))
+		log.Printf("🔐 [TON-ZK-DEBUG] pi_c = %s", hex.EncodeToString(proof.BLSProofBytes[144:192]))
+		log.Printf("🔐 [TON-ZK-DEBUG] piA first byte: 0x%02x (flags: compress=%v infinity=%v sign=%v)",
+			proof.BLSProofBytes[0],
+			proof.BLSProofBytes[0]&0x80 != 0,
+			proof.BLSProofBytes[0]&0x40 != 0,
+			proof.BLSProofBytes[0]&0x20 != 0)
+		log.Printf("🔐 [TON-ZK-DEBUG] piB first byte: 0x%02x (flags: compress=%v infinity=%v sign=%v)",
+			proof.BLSProofBytes[48],
+			proof.BLSProofBytes[48]&0x80 != 0,
+			proof.BLSProofBytes[48]&0x40 != 0,
+			proof.BLSProofBytes[48]&0x20 != 0)
 	} else if len(proof.BLSProofBytes) > 0 {
 		log.Printf("⚠️ [TON-ZK] Unexpected proof size %d (expected 192 for BLS12-381)", len(proof.BLSProofBytes))
 		// Store as empty refs so Cell structure is valid
@@ -851,10 +872,108 @@ func tonBuildCommitmentsCell(opCommit, ccCommit, govRoot [32]byte) *cell.Cell {
 		EndCell()
 }
 
+// TestBLSVerifierDirect calls the BLS verifier's verifyBLSSignatureProofView getter
+// directly to test whether a proof verifies on-chain, bypassing the anchor contract.
+func (tc *TonClient) TestBLSVerifierDirect(ctx context.Context, proof TonCertenProof) {
+	if tc.blsVerifier == nil || len(proof.BLSProofBytes) != 192 {
+		return
+	}
+
+	// Build the same Cells that the verifier expects
+	piA := cell.BeginCell().MustStoreSlice(proof.BLSProofBytes[0:48], 384).EndCell()
+	piB := cell.BeginCell().MustStoreSlice(proof.BLSProofBytes[48:144], 768).EndCell()
+	piC := cell.BeginCell().MustStoreSlice(proof.BLSProofBytes[144:192], 384).EndCell()
+
+	msgHashInt := new(big.Int).SetBytes(proof.BLSMessageHash[:])
+	pkCommitInt := new(big.Int)
+	if len(proof.BLSPubkeyCommitment) >= 32 {
+		pkCommitInt.SetBytes(proof.BLSPubkeyCommitment[:32])
+	}
+
+	pubInputs := cell.BeginCell().
+		MustStoreBigUInt(msgHashInt, 256).
+		MustStoreBigUInt(pkCommitInt, 256).
+		MustStoreUInt(proof.BLSSignedVotingPower, 64).
+		MustStoreUInt(proof.BLSTotalVotingPower, 64).
+		EndCell()
+
+	// Serialize Cells as base64 BOC
+	piABoc := base64.StdEncoding.EncodeToString(piA.ToBOC())
+	piBBoc := base64.StdEncoding.EncodeToString(piB.ToBOC())
+	piCBoc := base64.StdEncoding.EncodeToString(piC.ToBOC())
+	pubInputsBoc := base64.StdEncoding.EncodeToString(pubInputs.ToBOC())
+
+	log.Printf("🧪 [TON-ZK-TEST] Calling verifier getter directly: %s", tc.blsVerifier.String())
+	log.Printf("🧪 [TON-ZK-TEST] pubInputs Cell hash: %x", pubInputs.Hash())
+
+	// TON Center API v2 format for Cell parameters on the stack
+	result, err := tc.runGetMethod(ctx, tc.blsVerifier.String(), "verifyBLSSignatureProofView", [][]interface{}{
+		{"cell", map[string]string{"bytes": piABoc}},
+		{"cell", map[string]string{"bytes": piBBoc}},
+		{"cell", map[string]string{"bytes": piCBoc}},
+		{"cell", map[string]string{"bytes": pubInputsBoc}},
+		{"num", fmt.Sprintf("0x%x", proof.BLSSignedVotingPower)},
+		{"num", fmt.Sprintf("0x%x", proof.BLSTotalVotingPower)},
+	})
+	if err != nil {
+		log.Printf("⚠️ [TON-ZK-TEST] Direct verifier test FAILED: %v", err)
+		return
+	}
+
+	var resp struct {
+		ExitCode int             `json:"exit_code"`
+		Stack    [][]interface{} `json:"stack"`
+	}
+	if err := json.Unmarshal(result, &resp); err != nil {
+		log.Printf("⚠️ [TON-ZK-TEST] Failed to parse verifier response: %v", err)
+		return
+	}
+
+	log.Printf("🧪 [TON-ZK-TEST] Verifier getter exit_code=%d stack=%v", resp.ExitCode, resp.Stack)
+	if resp.ExitCode != 0 {
+		log.Printf("❌ [TON-ZK-TEST] Verifier getter failed with exit_code=%d (non-zero = error)", resp.ExitCode)
+	} else if len(resp.Stack) > 0 {
+		resultVal := tonParseStackBool(resp.Stack, 0)
+		log.Printf("🧪 [TON-ZK-TEST] verifyBLSSignatureProofView result: %v", resultVal)
+	}
+}
+
+// CheckBLSVerifierStats queries the BLS verifier contract for verification statistics.
+func (tc *TonClient) CheckBLSVerifierStats(ctx context.Context) {
+	if tc.blsVerifier == nil {
+		return
+	}
+	result, err := tc.runGetMethod(ctx, tc.blsVerifier.String(), "getVerificationStats", nil)
+	if err != nil {
+		return
+	}
+	var resp struct {
+		ExitCode int             `json:"exit_code"`
+		Stack    [][]interface{} `json:"stack"`
+	}
+	if err := json.Unmarshal(result, &resp); err != nil || resp.ExitCode != 0 {
+		return
+	}
+	// Stats tuple may need flattening
+	stack := tonFlattenStack(resp.Stack)
+	if len(stack) >= 5 {
+		log.Printf("📊 [TON-VERIFIER] Stats: total=%d success=%d cache=%d thresholdFail=%d cryptoFail=%d",
+			tonParseStackUint64(stack, 0),
+			tonParseStackUint64(stack, 1),
+			tonParseStackUint64(stack, 2),
+			tonParseStackUint64(stack, 3),
+			tonParseStackUint64(stack, 4))
+	}
+}
+
 // WaitForProofExecution polls getAnchorInfo until proofExecuted == true.
 func (tc *TonClient) WaitForProofExecution(ctx context.Context, bundleId [32]byte, timeout time.Duration) error {
 	log.Printf("⏳ [TON] Waiting for proof execution (async BLS callback)...")
 	deadline := time.Now().Add(timeout)
+
+	// Check verifier stats before waiting
+	tc.CheckBLSVerifierStats(ctx)
+	pollCount := 0
 
 	for time.Now().Before(deadline) {
 		anchorData, err := tc.GetAnchorData(ctx, bundleId)
@@ -862,10 +981,16 @@ func (tc *TonClient) WaitForProofExecution(ctx context.Context, bundleId [32]byt
 			log.Printf("⚠️ [TON] Polling anchor data: %v", err)
 		} else if anchorData != nil && anchorData.ProofExecuted {
 			log.Printf("✅ [TON] Proof executed successfully!")
+			tc.CheckBLSVerifierStats(ctx)
 			return nil
 		} else if anchorData != nil {
 			log.Printf("   [TON] Proof pending: proofExecuted=%v proofPending=%v",
 				anchorData.ProofExecuted, anchorData.ProofPending)
+			// Check verifier stats periodically (every 6th poll = ~30s)
+			pollCount++
+			if pollCount%6 == 0 {
+				tc.CheckBLSVerifierStats(ctx)
+			}
 		}
 
 		select {
