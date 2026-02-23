@@ -1210,7 +1210,33 @@ func (tc *TonClient) GetAnchorData(ctx context.Context, bundleId [32]byte) (*Ton
 		return anchorData, nil
 	}
 
-	// Parse V4 Anchor struct fields from stack
+	// Tact getters returning structs produce a single tuple element on the stack.
+	// Flatten [["tuple", {elements:[...]}]] into [["num","0x..."], ...] so all
+	// downstream parsing works uniformly.
+	resp.Stack = tonFlattenStack(resp.Stack)
+
+	// Parse V4 Anchor struct fields from stack:
+	//   0:bundleId 1:merkleRoot 2:adiURLHash 3:opCommitment
+	//   4:ccCommitment 5:govRoot 6:blockHeight 7:timestamp
+	//   8:validator(addr) 9:valid 10:proofExecuted 11:proofPending
+	if len(resp.Stack) >= 2 {
+		anchorData.MerkleRoot = tonParseStackHash(resp.Stack, 1)
+	}
+	if len(resp.Stack) >= 4 {
+		anchorData.OperationCommitment = tonParseStackHash(resp.Stack, 3)
+	}
+	if len(resp.Stack) >= 5 {
+		anchorData.CrossChainCommitment = tonParseStackHash(resp.Stack, 4)
+	}
+	if len(resp.Stack) >= 6 {
+		anchorData.GovernanceRoot = tonParseStackHash(resp.Stack, 5)
+	}
+	if len(resp.Stack) >= 7 {
+		anchorData.BlockHeight = tonParseStackUint64(resp.Stack, 6)
+	}
+	if len(resp.Stack) >= 8 {
+		anchorData.Timestamp = tonParseStackUint64(resp.Stack, 7)
+	}
 	if len(resp.Stack) >= 10 {
 		anchorData.Valid = tonParseStackBool(resp.Stack, 9)
 	}
@@ -1220,6 +1246,9 @@ func (tc *TonClient) GetAnchorData(ctx context.Context, bundleId [32]byte) (*Ton
 	if len(resp.Stack) >= 12 {
 		anchorData.ProofPending = tonParseStackBool(resp.Stack, 11)
 	}
+
+	log.Printf("📊 [TON] Anchor data parsed: valid=%v proofExecuted=%v proofPending=%v blockHeight=%d",
+		anchorData.Valid, anchorData.ProofExecuted, anchorData.ProofPending, anchorData.BlockHeight)
 
 	return anchorData, nil
 }
@@ -1236,6 +1265,87 @@ func tonParseStackBool(stack [][]interface{}, index int) bool {
 	val := new(big.Int)
 	val.SetString(hexStr, 16)
 	return val.Sign() != 0
+}
+
+// tonParseStackHash extracts a [32]byte hash from a stack entry at the given index.
+func tonParseStackHash(stack [][]interface{}, index int) [32]byte {
+	var result [32]byte
+	if index >= len(stack) || len(stack[index]) < 2 {
+		return result
+	}
+	hexStr, ok := stack[index][1].(string)
+	if !ok {
+		return result
+	}
+	hexStr = strings.TrimPrefix(hexStr, "0x")
+	val := new(big.Int)
+	val.SetString(hexStr, 16)
+	valBytes := val.Bytes()
+	if len(valBytes) > 32 {
+		valBytes = valBytes[:32]
+	}
+	copy(result[32-len(valBytes):], valBytes)
+	return result
+}
+
+// tonParseStackUint64 extracts a uint64 from a stack entry at the given index.
+func tonParseStackUint64(stack [][]interface{}, index int) uint64 {
+	if index >= len(stack) || len(stack[index]) < 2 {
+		return 0
+	}
+	hexStr, ok := stack[index][1].(string)
+	if !ok {
+		return 0
+	}
+	hexStr = strings.TrimPrefix(hexStr, "0x")
+	val := new(big.Int)
+	val.SetString(hexStr, 16)
+	return val.Uint64()
+}
+
+// tonFlattenStack converts a TON API stack response from tuple format to flat format.
+// Tact getters returning structs produce [["tuple", {"elements":[...]}]] on the stack.
+// This function unwraps the tuple into [["num","0x..."], ...] for uniform parsing.
+func tonFlattenStack(stack [][]interface{}) [][]interface{} {
+	if len(stack) != 1 || len(stack[0]) < 2 {
+		return stack
+	}
+	typeStr, ok := stack[0][0].(string)
+	if !ok || typeStr != "tuple" {
+		return stack
+	}
+	tupleData, ok := stack[0][1].(map[string]interface{})
+	if !ok {
+		return stack
+	}
+	elements, ok := tupleData["elements"].([]interface{})
+	if !ok {
+		return stack
+	}
+
+	flat := make([][]interface{}, len(elements))
+	for i, elem := range elements {
+		flat[i] = []interface{}{"num", "0x0"} // default
+		elemMap, ok := elem.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		// Handle tvm.stackEntryNumber -> {"number": {"number": "..."}}
+		if numObj, ok := elemMap["number"].(map[string]interface{}); ok {
+			if numStr, ok := numObj["number"].(string); ok {
+				// Convert decimal to hex if needed
+				if !strings.HasPrefix(numStr, "0x") && !strings.HasPrefix(numStr, "-") {
+					val := new(big.Int)
+					val.SetString(numStr, 10)
+					numStr = "0x" + val.Text(16)
+				}
+				flat[i] = []interface{}{"num", numStr}
+			}
+		}
+		// Address/Cell entries stay as default "0x0" — skip gracefully
+	}
+	log.Printf("🔍 [TON] Flattened tuple stack: %d elements", len(flat))
+	return flat
 }
 
 // CheckAccountExists checks if an account contract is deployed at the address.
