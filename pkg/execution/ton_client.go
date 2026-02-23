@@ -414,12 +414,12 @@ func (tc *TonClient) sendInternalMessage(ctx context.Context, destAddr *address.
 		MustStoreUInt(0x18, 6).
 		MustStoreAddr(destAddr).
 		MustStoreCoins(amount).
-		MustStoreUInt(0, 1+4+4+64+32+1+1)
+		MustStoreUInt(0, 1+4+4+64+32+1) // other_currencies(1) + ihr_fee(4) + fwd_fee(4) + created_lt(64) + created_at(32) + init_absent(1)
 
 	if body != nil {
-		internalMsg = internalMsg.MustStoreBoolBit(true).MustStoreRef(body)
+		internalMsg = internalMsg.MustStoreBoolBit(true).MustStoreRef(body) // body_flag=1: body in ref
 	} else {
-		internalMsg = internalMsg.MustStoreBoolBit(false)
+		internalMsg = internalMsg.MustStoreBoolBit(false) // body_flag=0: no body
 	}
 	internalMsgCell := internalMsg.EndCell()
 
@@ -1132,11 +1132,17 @@ func (tc *TonClient) GetAnchorData(ctx context.Context, bundleId [32]byte) (*Ton
 	}
 
 	var existsResp struct {
-		GasUsed int             `json:"gas_used"`
-		Stack   [][]interface{} `json:"stack"`
+		GasUsed  int             `json:"gas_used"`
+		ExitCode int             `json:"exit_code"`
+		Stack    [][]interface{} `json:"stack"`
 	}
 	if err := json.Unmarshal(existsResult, &existsResp); err != nil {
 		return nil, fmt.Errorf("parsing anchorExists: %w", err)
+	}
+
+	if existsResp.ExitCode != 0 {
+		log.Printf("⚠️ [TON] anchorExists getter exit_code=%d", existsResp.ExitCode)
+		return nil, fmt.Errorf("anchorExists exit_code=%d", existsResp.ExitCode)
 	}
 
 	anchorData.Exists = tonParseStackBool(existsResp.Stack, 0)
