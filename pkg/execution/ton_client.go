@@ -590,6 +590,47 @@ func ComputeAdiURLHash(adiURL string) [32]byte {
 }
 
 // =============================================================================
+// TON-SPECIFIC MERKLE HASHING (SHA-256 cell representation, NOT Keccak256)
+// =============================================================================
+
+// TonSortedHash computes sortedHash(a,b) the same way the Tact contract does:
+// build a Cell with (smaller, larger) as two uint256, then take Cell.hash() (SHA-256).
+// This is NOT the same as the EVM Keccak256-based sortedHash.
+func TonSortedHash(a, b [32]byte) [32]byte {
+	aInt := new(big.Int).SetBytes(a[:])
+	bInt := new(big.Int).SetBytes(b[:])
+
+	var left, right *big.Int
+	if aInt.Cmp(bInt) <= 0 {
+		left, right = aInt, bInt
+	} else {
+		left, right = bInt, aInt
+	}
+
+	c := cell.BeginCell().
+		MustStoreBigUInt(left, 256).
+		MustStoreBigUInt(right, 256).
+		EndCell()
+
+	hash := c.Hash()
+	var result [32]byte
+	copy(result[:], hash)
+	return result
+}
+
+// TonComputeBoundMerkleRoot computes the 4-leaf sorted merkle root matching
+// the Tact contract's computeBoundMerkleRoot() function.
+//
+//	hash01 = tonSortedHash(adiURLHash, operationCommitment)
+//	hash23 = tonSortedHash(crossChainCommitment, governanceRoot)
+//	root   = tonSortedHash(hash01, hash23)
+func TonComputeBoundMerkleRoot(adiURLHash, opCommitment, ccCommitment, govRoot [32]byte) [32]byte {
+	hash01 := TonSortedHash(adiURLHash, opCommitment)
+	hash23 := TonSortedHash(ccCommitment, govRoot)
+	return TonSortedHash(hash01, hash23)
+}
+
+// =============================================================================
 // STEP 2: EXECUTE COMPREHENSIVE PROOF
 // =============================================================================
 

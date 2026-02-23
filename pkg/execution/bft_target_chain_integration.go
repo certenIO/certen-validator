@@ -3816,6 +3816,19 @@ func (btce *BFTTargetChainExecutor) executeTonOperations(
 
 	tonProof := btce.buildTonCertenProof(comprehensiveProof, certenProof)
 
+	// TON contract computes merkle root using SHA-256 cell hashing (not EVM Keccak256).
+	// Override the Keccak256-based values with TON-compatible ones.
+	tonMerkleRoot := TonComputeBoundMerkleRoot(adiURLHash, opCommitment, ccCommitment, govRoot)
+	btce.logger.Printf("🔑 [TON-MERKLE] Overriding proof merkle root for TON cell-hash compatibility:")
+	btce.logger.Printf("   EVM (keccak256): 0x%x", tonProof.MerkleRoot[:8])
+	btce.logger.Printf("   TON (sha256cell): 0x%x", tonMerkleRoot[:8])
+	tonProof.MerkleRoot = tonMerkleRoot
+
+	// Fix proof hash[1]: must be tonSortedHash(cc, gov) not keccak256 sortedHash
+	if len(tonProof.ProofHashes) >= 2 {
+		tonProof.ProofHashes[1] = TonSortedHash(ccCommitment, govRoot)
+	}
+
 	verifyTxHash, err := tonClient.ExecuteComprehensiveProof(ctx, bundleIdHash, tonProof)
 	if err != nil {
 		btce.logger.Printf("❌ [TON-EXEC] Step 2 failed: %v", err)
