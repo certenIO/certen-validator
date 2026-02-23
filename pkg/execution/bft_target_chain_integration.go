@@ -3774,21 +3774,30 @@ func (btce *BFTTargetChainExecutor) executeTonOperations(
 		govRoot = comprehensiveProof.Commitments.GovernanceRoot
 	}
 
-	btce.logger.Printf("🔍 [TON-MERKLE] Step 1 inputs:")
+	// V4: Compute adiURLHash for 4-leaf sorted merkle tree binding
+	adiURL := certenProof.AccountURL
+	if adiURL == "" {
+		adiURL = fmt.Sprintf("%s/data", legacyIntent.OrganizationADI)
+	}
+	adiURLHash := ComputeAdiURLHash(adiURL)
+
+	btce.logger.Printf("🔍 [TON-MERKLE] Step 1 inputs (V4):")
 	btce.logger.Printf("   bundleId:    0x%x", bundleIdHash[:])
+	btce.logger.Printf("   adiURL:      %s", adiURL)
+	btce.logger.Printf("   adiURLHash:  0x%x", adiURLHash[:])
 	btce.logger.Printf("   opCommit:    0x%x", opCommitment[:])
 	btce.logger.Printf("   ccCommit:    0x%x", ccCommitment[:])
 	btce.logger.Printf("   govRoot:     0x%x", govRoot[:])
 
 	// ========== Step 1: Create Anchor ==========
-	btce.logger.Printf("🔗 [TON-EXEC] Step 1: Creating anchor on TON...")
+	btce.logger.Printf("🔗 [TON-EXEC] Step 1: Creating anchor on TON (V4)...")
 
 	blockHeight := uint64(0)
 	if certenProof.BlockHeight > 0 {
 		blockHeight = uint64(certenProof.BlockHeight)
 	}
 
-	createTxHash, err := tonClient.CreateAnchor(ctx, bundleIdHash, opCommitment, ccCommitment, govRoot, blockHeight)
+	createTxHash, err := tonClient.CreateAnchor(ctx, bundleIdHash, adiURLHash, opCommitment, ccCommitment, govRoot, blockHeight)
 	if err != nil {
 		btce.logger.Printf("❌ [TON-EXEC] Step 1 failed: %v", err)
 		return btce.buildTonResult(intentID, anchorID, "create_failed_ton", "", "", false), err

@@ -497,19 +497,22 @@ func (tc *TonClient) sendInternalMessage(ctx context.Context, destAddr *address.
 // =============================================================================
 
 // CreateAnchor sends a CreateAnchor message to the anchor contract.
+// V4: includes adiURLHash for 4-leaf sorted merkle tree binding.
 func (tc *TonClient) CreateAnchor(
 	ctx context.Context,
 	bundleId [32]byte,
+	adiURLHash [32]byte,
 	opCommitment, ccCommitment, govRoot [32]byte,
 	blockHeight uint64,
 ) (string, error) {
-	log.Printf("📡 [TON] Step 1: Creating anchor...")
+	log.Printf("📡 [TON] Step 1: Creating anchor (V4 with adiURLHash)...")
 	log.Printf("   Wallet: %s", tc.walletAddress.String())
 	log.Printf("   Anchor Contract: %s", tc.anchorContract.String())
 	log.Printf("   Bundle ID: 0x%x", bundleId[:8])
+	log.Printf("   adiURLHash: 0x%x", adiURLHash[:8])
 	log.Printf("   Block Height: %d", blockHeight)
 
-	body := tonBuildCreateAnchorBody(bundleId, opCommitment, ccCommitment, govRoot, blockHeight)
+	body := tonBuildCreateAnchorBody(bundleId, adiURLHash, opCommitment, ccCommitment, govRoot, blockHeight)
 
 	hash, err := tc.sendInternalMessage(ctx, tc.anchorContract, tonGasAmount, body)
 	if err != nil {
@@ -520,29 +523,70 @@ func (tc *TonClient) CreateAnchor(
 	return hash, nil
 }
 
-// tonBuildCreateAnchorBody builds the Cell body for CreateAnchor.
-// Total bits: op(32) + bundleId(256) + opCommit(256) + ccCommit(256) + govRoot(256) + blockHeight(64) = 1120
-// Exceeds 1023 limit, so we use a continuation cell.
-func tonBuildCreateAnchorBody(bundleId, opCommitment, ccCommitment, govRoot [32]byte, blockHeight uint64) *cell.Cell {
+// tonBuildCreateAnchorBody builds the Cell body for V4 CreateAnchor.
+// Matches Tact serialization of CreateAnchor message:
+//   Main cell (800 bits): op(32) + bundleId(256) + adiURLHash(256) + opCommit(256)
+//   Continuation ref (576 bits): ccCommit(256) + govRoot(256) + blockHeight(64)
+func tonBuildCreateAnchorBody(bundleId, adiURLHash, opCommitment, ccCommitment, govRoot [32]byte, blockHeight uint64) *cell.Cell {
 	bundleInt := new(big.Int).SetBytes(bundleId[:])
+	adiHashInt := new(big.Int).SetBytes(adiURLHash[:])
 	opInt := new(big.Int).SetBytes(opCommitment[:])
 	ccInt := new(big.Int).SetBytes(ccCommitment[:])
 	govInt := new(big.Int).SetBytes(govRoot[:])
 
-	// Continuation cell for overflow
+	// Continuation cell: ccCommit(256) + govRoot(256) + blockHeight(64) = 576 bits
 	cont := cell.BeginCell().
+		MustStoreBigUInt(ccInt, 256).
 		MustStoreBigUInt(govInt, 256).
 		MustStoreUInt(blockHeight, 64).
 		EndCell()
 
-	// Main cell: op(32) + bundleId(256) + opCommit(256) + ccCommit(256) = 800 bits + ref
+	// Main cell: op(32) + bundleId(256) + adiURLHash(256) + opCommit(256) = 800 bits + ref
 	return cell.BeginCell().
 		MustStoreUInt(uint64(opCreateAnchor), 32).
 		MustStoreBigUInt(bundleInt, 256).
+		MustStoreBigUInt(adiHashInt, 256).
 		MustStoreBigUInt(opInt, 256).
-		MustStoreBigUInt(ccInt, 256).
 		MustStoreRef(cont).
 		EndCell()
+}
+
+// ComputeAdiURLHash computes the adiURLHash matching the TON account contract's
+// computeStringHash() / computeAdiLeaf() in verification.tact.
+//
+// On-chain Tact code:
+//
+//	fun computeStringHash(s: String): Int {
+//	    let sb = beginString();
+//	    sb.append(s);
+//	    let c = beginCell()
+//	        .storeUint(0, 8)        // domain separation prefix
+//	        .storeRef(sb.toCell())   // string as Snake cell in ref
+//	        .endCell();
+//	    return c.hash();
+//	}
+//
+// This MUST match so that AnchorVerifyRequest.adiLeaf == CreateAnchor.adiURLHash.
+func ComputeAdiURLHash(adiURL string) [32]byte {
+	// Step 1: Build the Snake cell for the string (matches beginString().append(s).toCell())
+	// Snake encoding: 0x00 prefix byte + raw UTF-8 bytes
+	snakeCell := cell.BeginCell().
+		MustStoreStringSnake(adiURL).
+		EndCell()
+
+	// Step 2: Build the main cell: storeUint(0, 8) + storeRef(snakeCell)
+	mainCell := cell.BeginCell().
+		MustStoreUInt(0, 8).
+		MustStoreRef(snakeCell).
+		EndCell()
+
+	// Step 3: Hash (Cell.hash() = SHA-256 of standard cell representation)
+	hash := mainCell.Hash()
+
+	var result [32]byte
+	copy(result[:], hash)
+	log.Printf("🔑 [TON] ComputeAdiURLHash(%q) = 0x%x", adiURL, result[:8])
+	return result
 }
 
 // =============================================================================
@@ -884,13 +928,17 @@ func tonBuildGovProofDirectBody(recipient *address.Address, amountNano uint64, p
 
 // tonBuildADIGovernanceProofCell matches decodeADIGovernanceProof() layout.
 // Main Cell (472 bits): anchorId(256) | timestamp(64) | expiresAt(64) | nonce(64) | requiredLevel(8) | merkleLen(16)
-// Refs: [adiUrlCell, merkleProofCell, keyBookCell, roleCell]
-// Continuation: [thresholdCell, validatorSignaturesCell]
+// Refs [0..3]: [adiUrlCell, merkleProofCell, keyBookCell, contCell]
+// contCell refs: [roleCell, thresholdCell, validatorSignaturesCell]
+//
+// TON cells support max 4 refs. The decoder handles this by loading 3 main refs
+// then loading a continuation cell containing role, threshold, and validator sigs.
 func tonBuildADIGovernanceProofCell(proof TonADIGovernanceProof) *cell.Cell {
 	anchorInt := new(big.Int).SetBytes(proof.AnchorID[:])
 
 	adiUrlCell := cell.BeginCell().MustStoreStringSnake(proof.AdiURL).EndCell()
-	merkleProofCell := tonBuildMerkleProofCell(proof.MerklePath)
+	// Step 3 merkle proof: NO count prefix — account's decodeMerkleProof reads raw hashes
+	merkleProofCell := tonBuildMerkleProofCellRaw(proof.MerklePath)
 	keyBookCell := tonBuildKeyBookCell(proof)
 	roleCell := tonBuildRoleCell(proof)
 	thresholdCell := tonBuildThresholdCell(proof)
@@ -900,11 +948,14 @@ func tonBuildADIGovernanceProofCell(proof TonADIGovernanceProof) *cell.Cell {
 		validatorSigsCell = validatorSigsCell.MustStoreSlice(proof.ValidatorSignatures, uint(len(proof.ValidatorSignatures)*8))
 	}
 
+	// Continuation cell with remaining refs (role + threshold + validatorSigs)
 	contCell := cell.BeginCell().
+		MustStoreRef(roleCell).
 		MustStoreRef(thresholdCell).
 		MustStoreRef(validatorSigsCell.EndCell()).
 		EndCell()
 
+	// Main cell: 472 bits + 4 refs (max allowed by TON)
 	return cell.BeginCell().
 		MustStoreBigUInt(anchorInt, 256).
 		MustStoreUInt(proof.Timestamp, 64).
@@ -915,9 +966,29 @@ func tonBuildADIGovernanceProofCell(proof TonADIGovernanceProof) *cell.Cell {
 		MustStoreRef(adiUrlCell).
 		MustStoreRef(merkleProofCell).
 		MustStoreRef(keyBookCell).
-		MustStoreRef(roleCell).
 		MustStoreRef(contCell).
 		EndCell()
+}
+
+// tonBuildMerkleProofCellRaw builds merkle proof hashes WITHOUT a count prefix.
+// Used by Step 3 (account contract's decodeMerkleProof reads raw hashes,
+// the count comes from the parent cell's merkleLen field).
+func tonBuildMerkleProofCellRaw(proofHashes [][32]byte) *cell.Cell {
+	b := cell.BeginCell()
+	bitsUsed := 0
+	for i, h := range proofHashes {
+		if bitsUsed+256 > 1023 {
+			// Overflow: remaining hashes in continuation ref
+			remaining := proofHashes[i:]
+			contCell := tonBuildHashChainCell(remaining)
+			b = b.MustStoreRef(contCell)
+			break
+		}
+		hashInt := new(big.Int).SetBytes(h[:])
+		b = b.MustStoreBigUInt(hashInt, 256)
+		bitsUsed += 256
+	}
+	return b.EndCell()
 }
 
 // tonBuildKeyBookCell: keyBookRoot(256) | depth(16) | validFrom(64) | validUntil(64) | Refs:[urlCell]
@@ -1042,13 +1113,45 @@ type TonAnchorData struct {
 	Exists               bool
 }
 
-// GetAnchorData reads anchor data via getAnchorInfo getter.
+// GetAnchorData reads anchor data using anchorExists + getAnchor getters.
+// V4 Anchor struct field order on TVM stack:
+//
+//	0: bundleId, 1: merkleRoot, 2: adiURLHash, 3: opCommitment,
+//	4: ccCommitment, 5: govRoot, 6: blockHeight, 7: timestamp,
+//	8: validator, 9: valid, 10: proofExecuted, 11: proofPending
 func (tc *TonClient) GetAnchorData(ctx context.Context, bundleId [32]byte) (*TonAnchorData, error) {
-	result, err := tc.runGetMethod(ctx, tc.anchorContract.String(), "getAnchorInfo", [][]interface{}{
-		{"num", "0x" + hex.EncodeToString(bundleId[:])},
+	bundleHex := "0x" + hex.EncodeToString(bundleId[:])
+	anchorData := &TonAnchorData{BundleId: bundleId}
+
+	// First check if anchor exists (simple Bool getter)
+	existsResult, err := tc.runGetMethod(ctx, tc.anchorContract.String(), "anchorExists", [][]interface{}{
+		{"num", bundleHex},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("getAnchorInfo failed: %w", err)
+		return nil, fmt.Errorf("anchorExists failed: %w", err)
+	}
+
+	var existsResp struct {
+		GasUsed int             `json:"gas_used"`
+		Stack   [][]interface{} `json:"stack"`
+	}
+	if err := json.Unmarshal(existsResult, &existsResp); err != nil {
+		return nil, fmt.Errorf("parsing anchorExists: %w", err)
+	}
+
+	anchorData.Exists = tonParseStackBool(existsResp.Stack, 0)
+	if !anchorData.Exists {
+		return anchorData, nil
+	}
+
+	// Anchor exists — get full data via getAnchor getter
+	result, err := tc.runGetMethod(ctx, tc.anchorContract.String(), "getAnchor", [][]interface{}{
+		{"num", bundleHex},
+	})
+	if err != nil {
+		// Anchor exists but can't read details — return partial data
+		anchorData.Valid = true
+		return anchorData, nil
 	}
 
 	var resp struct {
@@ -1056,14 +1159,11 @@ func (tc *TonClient) GetAnchorData(ctx context.Context, bundleId [32]byte) (*Ton
 		Stack   [][]interface{} `json:"stack"`
 	}
 	if err := json.Unmarshal(result, &resp); err != nil {
-		return nil, fmt.Errorf("parsing getAnchorInfo: %w", err)
+		anchorData.Valid = true
+		return anchorData, nil
 	}
 
-	anchorData := &TonAnchorData{BundleId: bundleId}
-
-	if len(resp.Stack) >= 1 {
-		anchorData.Exists = tonParseStackBool(resp.Stack, 0)
-	}
+	// Parse V4 Anchor struct fields from stack
 	if len(resp.Stack) >= 10 {
 		anchorData.Valid = tonParseStackBool(resp.Stack, 9)
 	}
