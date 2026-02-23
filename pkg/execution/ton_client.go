@@ -56,13 +56,13 @@ const (
 	tonPollingTimeout         = 2 * time.Minute
 )
 
-// Tact message op codes: CRC32C(messageName) | 0x80000000
-// Pre-computed for the messages we send.
+// Tact message op codes - extracted from compiled Tact build output.
+// These MUST match the values in tact_CertenAnchorV4Ton.ts and tact_CertenAccountFactoryTon.ts.
 const (
-	opCreateAnchor                 uint32 = 0xD0D98A6F
-	opExecuteComprehensiveProof    uint32 = 0xC0F7E3D1
-	opExecuteGovernanceProofDirect uint32 = 0xA3F2B1C4
-	opCreateAccountIfNotExists     uint32 = 0xE2C3D4A5
+	opCreateAnchor                 uint32 = 0x16F0A67E // 384840318  - CertenAnchorV4Ton
+	opExecuteComprehensiveProof    uint32 = 0xCF796743 // 3480997571 - CertenAnchorV4Ton
+	opExecuteGovernanceProofDirect uint32 = 0x7D7CAC26 // 2105530534 - CertenAccountV2Ton
+	opCreateAccountIfNotExists     uint32 = 0xCF1CC3AF // 3475342255 - CertenAccountFactoryTon
 )
 
 // NewTonClient creates a TON client from a mnemonic seed phrase.
