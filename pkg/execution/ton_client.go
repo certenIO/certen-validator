@@ -1386,7 +1386,14 @@ func tonParseStackBool(stack [][]interface{}, index int) bool {
 	if !ok {
 		return false
 	}
-	hexStr = strings.TrimPrefix(hexStr, "0x")
+	// Handle both positive (0x...) and negative (-0x...) hex prefixes.
+	// TVM represents true as -1, which the API returns as "-0x1".
+	if strings.HasPrefix(hexStr, "-0x") || strings.HasPrefix(hexStr, "-0X") {
+		hexStr = "-" + hexStr[3:]
+	} else {
+		hexStr = strings.TrimPrefix(hexStr, "0x")
+		hexStr = strings.TrimPrefix(hexStr, "0X")
+	}
 	val := new(big.Int)
 	val.SetString(hexStr, 16)
 	return val.Sign() != 0
