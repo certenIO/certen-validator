@@ -237,37 +237,52 @@ func (tc *TonClient) apiCall(ctx context.Context, method string, params map[stri
 		url += "?" + strings.Join(parts, "&")
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Accept", "application/json")
+	var lastErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		if attempt > 0 {
+			wait := time.Duration(attempt+1) * time.Second
+			log.Printf("📡 [TON] API rate limited on %s, retry %d/5 after %v...", method, attempt+1, wait)
+			time.Sleep(wait)
+		}
 
-	resp, err := tc.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("API request failed: %w", err)
-	}
-	defer resp.Body.Close()
+		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Accept", "application/json")
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("reading API response: %w", err)
-	}
+		resp, err := tc.httpClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("API request failed: %w", err)
+		}
 
-	var apiResp struct {
-		OK     bool            `json:"ok"`
-		Result json.RawMessage `json:"result"`
-		Error  string          `json:"error"`
-	}
-	if err := json.Unmarshal(body, &apiResp); err != nil {
-		return nil, fmt.Errorf("parsing API response: %w (body: %s)", err, string(body[:min(len(body), 500)]))
-	}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("reading API response: %w", err)
+		}
 
-	if !apiResp.OK {
-		return nil, fmt.Errorf("API error: %s (status=%d body=%s)", apiResp.Error, resp.StatusCode, string(body[:min(len(body), 500)]))
-	}
+		var apiResp struct {
+			OK     bool            `json:"ok"`
+			Result json.RawMessage `json:"result"`
+			Error  string          `json:"error"`
+		}
+		if err := json.Unmarshal(body, &apiResp); err != nil {
+			return nil, fmt.Errorf("parsing API response: %w (body: %s)", err, string(body[:min(len(body), 500)]))
+		}
 
-	return apiResp.Result, nil
+		if !apiResp.OK {
+			errMsg := fmt.Sprintf("API error: %s (status=%d body=%s)", apiResp.Error, resp.StatusCode, string(body[:min(len(body), 500)]))
+			if resp.StatusCode == 429 {
+				lastErr = fmt.Errorf("%s", errMsg)
+				continue
+			}
+			return nil, fmt.Errorf("%s", errMsg)
+		}
+
+		return apiResp.Result, nil
+	}
+	return nil, fmt.Errorf("API rate limited after 5 retries: %w", lastErr)
 }
 
 func (tc *TonClient) apiPost(ctx context.Context, method string, reqBody interface{}) (json.RawMessage, error) {
@@ -278,38 +293,53 @@ func (tc *TonClient) apiPost(ctx context.Context, method string, reqBody interfa
 		return nil, fmt.Errorf("marshaling request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyJSON))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
+	var lastErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		if attempt > 0 {
+			wait := time.Duration(attempt+1) * time.Second
+			log.Printf("📡 [TON] API rate limited on %s, retry %d/5 after %v...", method, attempt+1, wait)
+			time.Sleep(wait)
+		}
 
-	resp, err := tc.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("API request failed: %w", err)
-	}
-	defer resp.Body.Close()
+		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyJSON))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
 
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("reading API response: %w", err)
-	}
+		resp, err := tc.httpClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("API request failed: %w", err)
+		}
 
-	var apiResp struct {
-		OK     bool            `json:"ok"`
-		Result json.RawMessage `json:"result"`
-		Error  string          `json:"error"`
-	}
-	if err := json.Unmarshal(respBody, &apiResp); err != nil {
-		return nil, fmt.Errorf("parsing API response: %w (body: %s)", err, string(respBody[:min(len(respBody), 500)]))
-	}
+		respBody, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("reading API response: %w", err)
+		}
 
-	if !apiResp.OK {
-		return nil, fmt.Errorf("API error: %s (status=%d body=%s)", apiResp.Error, resp.StatusCode, string(respBody[:min(len(respBody), 500)]))
-	}
+		var apiResp struct {
+			OK     bool            `json:"ok"`
+			Result json.RawMessage `json:"result"`
+			Error  string          `json:"error"`
+		}
+		if err := json.Unmarshal(respBody, &apiResp); err != nil {
+			return nil, fmt.Errorf("parsing API response: %w (body: %s)", err, string(respBody[:min(len(respBody), 500)]))
+		}
 
-	return apiResp.Result, nil
+		if !apiResp.OK {
+			errMsg := fmt.Sprintf("API error: %s (status=%d body=%s)", apiResp.Error, resp.StatusCode, string(respBody[:min(len(respBody), 500)]))
+			if resp.StatusCode == 429 {
+				lastErr = fmt.Errorf("%s", errMsg)
+				continue
+			}
+			return nil, fmt.Errorf("%s", errMsg)
+		}
+
+		return apiResp.Result, nil
+	}
+	return nil, fmt.Errorf("API rate limited after 5 retries: %w", lastErr)
 }
 
 func (tc *TonClient) getSeqno(ctx context.Context) (uint32, error) {
@@ -354,26 +384,14 @@ func (tc *TonClient) getSeqno(ctx context.Context) (uint32, error) {
 func (tc *TonClient) sendBoc(ctx context.Context, bocBytes []byte) error {
 	bocB64 := base64.StdEncoding.EncodeToString(bocBytes)
 
-	var lastErr error
-	for attempt := 0; attempt < 5; attempt++ {
-		if attempt > 0 {
-			wait := time.Duration(attempt) * 2 * time.Second
-			log.Printf("📡 [TON] sendBoc retry %d/%d after %v...", attempt+1, 5, wait)
-			time.Sleep(wait)
-		}
-		_, err := tc.apiPost(ctx, "sendBoc", map[string]string{
-			"boc": bocB64,
-		})
-		if err == nil {
-			return nil
-		}
-		lastErr = err
-		if !strings.Contains(err.Error(), "429") && !strings.Contains(strings.ToLower(err.Error()), "ratelimit") {
-			return fmt.Errorf("sendBoc failed: %w", err)
-		}
-		log.Printf("📡 [TON] sendBoc rate limited (attempt %d/5)", attempt+1)
+	_, err := tc.apiPost(ctx, "sendBoc", map[string]string{
+		"boc": bocB64,
+	})
+	if err != nil {
+		return fmt.Errorf("sendBoc failed: %w", err)
 	}
-	return fmt.Errorf("sendBoc failed after retries: %w", lastErr)
+
+	return nil
 }
 
 func (tc *TonClient) runGetMethod(ctx context.Context, addr string, method string, params [][]interface{}) (json.RawMessage, error) {
@@ -489,9 +507,6 @@ func (tc *TonClient) sendInternalMessage(ctx context.Context, destAddr *address.
 	}
 
 	bocBytes := extMsg.ToBOC()
-
-	// Small delay to avoid hitting TON Center rate limits between getSeqno and sendBoc
-	time.Sleep(1 * time.Second)
 
 	err = tc.sendBoc(ctx, bocBytes)
 	if err != nil {
