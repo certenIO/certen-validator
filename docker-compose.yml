@@ -127,7 +127,7 @@ services:
       NEAR_ACCOUNT_FACTORY: "certen-factory.testnet"
       TON_ANCHOR_CONTRACT: "kQCIMusQr3j4ExEfyX_W8c-B_n6zWQdjAkBovyKpP-wGWe7v"
       TON_BLS_VERIFIER_CONTRACT: "kQDN2xzq11aUmBFRBsTpxqBR514_H0dPg0MrGku08h2VfktY"
-      TON_ACCOUNT_FACTORY_CONTRACT: "kQDFt6e4GO6HPhWUU_7XTewybzR6xdF05jyF0UAUZ0zwcya6"
+      TON_ACCOUNT_FACTORY_CONTRACT: "kQDjxthBeGX5Z-LeXPLJiZEpuRzIFoC8gjSP5Br412zRQqVJ"
       LOG_LEVEL: info
       PROOF_CYCLE_WRITEBACK: "true"
       ACCUMULATE_SIGNER_URL: "acc://certen-kermit-12.acme/book/1"
@@ -258,7 +258,7 @@ services:
       NEAR_ACCOUNT_FACTORY: "certen-factory.testnet"
       TON_ANCHOR_CONTRACT: "kQCIMusQr3j4ExEfyX_W8c-B_n6zWQdjAkBovyKpP-wGWe7v"
       TON_BLS_VERIFIER_CONTRACT: "kQDN2xzq11aUmBFRBsTpxqBR514_H0dPg0MrGku08h2VfktY"
-      TON_ACCOUNT_FACTORY_CONTRACT: "kQDFt6e4GO6HPhWUU_7XTewybzR6xdF05jyF0UAUZ0zwcya6"
+      TON_ACCOUNT_FACTORY_CONTRACT: "kQDjxthBeGX5Z-LeXPLJiZEpuRzIFoC8gjSP5Br412zRQqVJ"
       LOG_LEVEL: info
       PROOF_CYCLE_WRITEBACK: "true"
       ACCUMULATE_SIGNER_URL: "acc://certen-kermit-12.acme/book/1"
@@ -389,7 +389,7 @@ services:
       NEAR_ACCOUNT_FACTORY: "certen-factory.testnet"
       TON_ANCHOR_CONTRACT: "kQCIMusQr3j4ExEfyX_W8c-B_n6zWQdjAkBovyKpP-wGWe7v"
       TON_BLS_VERIFIER_CONTRACT: "kQDN2xzq11aUmBFRBsTpxqBR514_H0dPg0MrGku08h2VfktY"
-      TON_ACCOUNT_FACTORY_CONTRACT: "kQDFt6e4GO6HPhWUU_7XTewybzR6xdF05jyF0UAUZ0zwcya6"
+      TON_ACCOUNT_FACTORY_CONTRACT: "kQDjxthBeGX5Z-LeXPLJiZEpuRzIFoC8gjSP5Br412zRQqVJ"
       LOG_LEVEL: info
       PROOF_CYCLE_WRITEBACK: "true"
       ACCUMULATE_SIGNER_URL: "acc://certen-kermit-12.acme/book/1"
@@ -520,7 +520,7 @@ services:
       NEAR_ACCOUNT_FACTORY: "certen-factory.testnet"
       TON_ANCHOR_CONTRACT: "kQCIMusQr3j4ExEfyX_W8c-B_n6zWQdjAkBovyKpP-wGWe7v"
       TON_BLS_VERIFIER_CONTRACT: "kQDN2xzq11aUmBFRBsTpxqBR514_H0dPg0MrGku08h2VfktY"
-      TON_ACCOUNT_FACTORY_CONTRACT: "kQDFt6e4GO6HPhWUU_7XTewybzR6xdF05jyF0UAUZ0zwcya6"
+      TON_ACCOUNT_FACTORY_CONTRACT: "kQDjxthBeGX5Z-LeXPLJiZEpuRzIFoC8gjSP5Br412zRQqVJ"
       LOG_LEVEL: info
       PROOF_CYCLE_WRITEBACK: "true"
       ACCUMULATE_SIGNER_URL: "acc://certen-kermit-12.acme/book/1"
@@ -651,7 +651,7 @@ services:
       NEAR_ACCOUNT_FACTORY: "certen-factory.testnet"
       TON_ANCHOR_CONTRACT: "kQCIMusQr3j4ExEfyX_W8c-B_n6zWQdjAkBovyKpP-wGWe7v"
       TON_BLS_VERIFIER_CONTRACT: "kQDN2xzq11aUmBFRBsTpxqBR514_H0dPg0MrGku08h2VfktY"
-      TON_ACCOUNT_FACTORY_CONTRACT: "kQDFt6e4GO6HPhWUU_7XTewybzR6xdF05jyF0UAUZ0zwcya6"
+      TON_ACCOUNT_FACTORY_CONTRACT: "kQDjxthBeGX5Z-LeXPLJiZEpuRzIFoC8gjSP5Br412zRQqVJ"
       LOG_LEVEL: info
       PROOF_CYCLE_WRITEBACK: "true"
       ACCUMULATE_SIGNER_URL: "acc://certen-kermit-12.acme/book/1"
@@ -782,7 +782,7 @@ services:
       NEAR_ACCOUNT_FACTORY: "certen-factory.testnet"
       TON_ANCHOR_CONTRACT: "kQCIMusQr3j4ExEfyX_W8c-B_n6zWQdjAkBovyKpP-wGWe7v"
       TON_BLS_VERIFIER_CONTRACT: "kQDN2xzq11aUmBFRBsTpxqBR514_H0dPg0MrGku08h2VfktY"
-      TON_ACCOUNT_FACTORY_CONTRACT: "kQDFt6e4GO6HPhWUU_7XTewybzR6xdF05jyF0UAUZ0zwcya6"
+      TON_ACCOUNT_FACTORY_CONTRACT: "kQDjxthBeGX5Z-LeXPLJiZEpuRzIFoC8gjSP5Br412zRQqVJ"
       LOG_LEVEL: info
       PROOF_CYCLE_WRITEBACK: "true"
       ACCUMULATE_SIGNER_URL: "acc://certen-kermit-12.acme/book/1"
@@ -913,7 +913,7 @@ services:
       NEAR_ACCOUNT_FACTORY: "certen-factory.testnet"
       TON_ANCHOR_CONTRACT: "kQCIMusQr3j4ExEfyX_W8c-B_n6zWQdjAkBovyKpP-wGWe7v"
       TON_BLS_VERIFIER_CONTRACT: "kQDN2xzq11aUmBFRBsTpxqBR514_H0dPg0MrGku08h2VfktY"
-      TON_ACCOUNT_FACTORY_CONTRACT: "kQDFt6e4GO6HPhWUU_7XTewybzR6xdF05jyF0UAUZ0zwcya6"
+      TON_ACCOUNT_FACTORY_CONTRACT: "kQDjxthBeGX5Z-LeXPLJiZEpuRzIFoC8gjSP5Br412zRQqVJ"
       LOG_LEVEL: info
       PROOF_CYCLE_WRITEBACK: "true"
       ACCUMULATE_SIGNER_URL: "acc://certen-kermit-12.acme/book/1"
