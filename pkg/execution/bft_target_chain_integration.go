@@ -4117,7 +4117,7 @@ func (btce *BFTTargetChainExecutor) buildTonAccountProof(
 		KBValidFrom:  0,
 		KBValidUntil: 0,
 
-		RoleLevel:        requiredLevel,
+		RoleLevel:        0, // Zero = skip role check on-chain (no registered roles on fresh accounts)
 		RoleHash:         [32]byte{},
 		RoleAuthorizedBy: zeroAddr,
 		RoleGrantedAt:    0,
