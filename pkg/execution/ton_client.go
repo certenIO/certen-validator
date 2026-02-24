@@ -354,14 +354,26 @@ func (tc *TonClient) getSeqno(ctx context.Context) (uint32, error) {
 func (tc *TonClient) sendBoc(ctx context.Context, bocBytes []byte) error {
 	bocB64 := base64.StdEncoding.EncodeToString(bocBytes)
 
-	_, err := tc.apiPost(ctx, "sendBoc", map[string]string{
-		"boc": bocB64,
-	})
-	if err != nil {
-		return fmt.Errorf("sendBoc failed: %w", err)
+	var lastErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		if attempt > 0 {
+			wait := time.Duration(attempt) * 2 * time.Second
+			log.Printf("📡 [TON] sendBoc retry %d/%d after %v...", attempt+1, 5, wait)
+			time.Sleep(wait)
+		}
+		_, err := tc.apiPost(ctx, "sendBoc", map[string]string{
+			"boc": bocB64,
+		})
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if !strings.Contains(err.Error(), "429") && !strings.Contains(strings.ToLower(err.Error()), "ratelimit") {
+			return fmt.Errorf("sendBoc failed: %w", err)
+		}
+		log.Printf("📡 [TON] sendBoc rate limited (attempt %d/5)", attempt+1)
 	}
-
-	return nil
+	return fmt.Errorf("sendBoc failed after retries: %w", lastErr)
 }
 
 func (tc *TonClient) runGetMethod(ctx context.Context, addr string, method string, params [][]interface{}) (json.RawMessage, error) {
@@ -477,6 +489,9 @@ func (tc *TonClient) sendInternalMessage(ctx context.Context, destAddr *address.
 	}
 
 	bocBytes := extMsg.ToBOC()
+
+	// Small delay to avoid hitting TON Center rate limits between getSeqno and sendBoc
+	time.Sleep(1 * time.Second)
 
 	err = tc.sendBoc(ctx, bocBytes)
 	if err != nil {
@@ -673,9 +688,6 @@ func (tc *TonClient) ExecuteComprehensiveProof(
 	log.Printf("📡 [TON] Step 2: Submitting comprehensive proof...")
 	log.Printf("   Anchor ID: 0x%x", anchorId[:8])
 	log.Printf("   Tx Hash: 0x%x", proof.TransactionHash[:8])
-
-	// Test BLS verifier directly before sending (bypasses anchor, calls view getter)
-	tc.TestBLSVerifierDirect(ctx, proof)
 
 	body := tonBuildComprehensiveProofBody(anchorId, proof)
 
