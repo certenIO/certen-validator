@@ -4182,11 +4182,28 @@ func (btce *BFTTargetChainExecutor) extractTonFieldFromCrossChainData(legacyInte
 		value = ccData.Legs[0].To
 	}
 
-	// TON addresses typically start with EQ/UQ/kQ/0Q and are ~48 chars base64url
-	if value != "" && len(value) >= 40 {
+	if value == "" {
+		return ""
+	}
+
+	// Try base64url format first (EQ.../kQ.../UQ.../0Q... ~48 chars)
+	if len(value) >= 40 {
 		_, err := tonaddr.ParseAddr(value)
 		if err == nil {
 			return value
+		}
+	}
+
+	// Try raw format: "workchain:hex_hash" (e.g., "0:f863a763...")
+	if parts := strings.SplitN(value, ":", 2); len(parts) == 2 && len(parts[1]) == 64 {
+		wc := int32(0)
+		if parts[0] == "-1" {
+			wc = -1
+		}
+		hashBytes, err := hex.DecodeString(parts[1])
+		if err == nil && len(hashBytes) == 32 {
+			addr := tonaddr.NewAddress(0, byte(wc), hashBytes)
+			return addr.String()
 		}
 	}
 	return ""
