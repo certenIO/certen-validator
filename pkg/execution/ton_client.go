@@ -264,7 +264,7 @@ func (tc *TonClient) apiCall(ctx context.Context, method string, params map[stri
 	}
 
 	if !apiResp.OK {
-		return nil, fmt.Errorf("API error: %s", apiResp.Error)
+		return nil, fmt.Errorf("API error: %s (status=%d body=%s)", apiResp.Error, resp.StatusCode, string(body[:min(len(body), 500)]))
 	}
 
 	return apiResp.Result, nil
@@ -306,7 +306,7 @@ func (tc *TonClient) apiPost(ctx context.Context, method string, reqBody interfa
 	}
 
 	if !apiResp.OK {
-		return nil, fmt.Errorf("API error: %s", apiResp.Error)
+		return nil, fmt.Errorf("API error: %s (status=%d body=%s)", apiResp.Error, resp.StatusCode, string(respBody[:min(len(respBody), 500)]))
 	}
 
 	return apiResp.Result, nil
