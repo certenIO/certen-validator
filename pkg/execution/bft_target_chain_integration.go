@@ -3927,8 +3927,11 @@ func (btce *BFTTargetChainExecutor) executeTonOperations(
 					}
 
 					recipientAddr := tonToAddr
-					if recipientAddr == "" && len(allLegs) > 0 {
-						recipientAddr = allLegs[0].Target.Hex()
+					if recipientAddr == "" {
+						// No explicit "to" in CrossChainData — default to user's own account
+						// (governance proofs operate on the ADI's data account, not external transfers)
+						recipientAddr = userAccountAddr
+						btce.logger.Printf("   [TON-EXEC] No recipient in intent, using user account as recipient")
 					}
 
 					// Convert amountWei (18 decimals) to nanoTON (9 decimals)
