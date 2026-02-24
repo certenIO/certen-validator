@@ -4087,10 +4087,8 @@ func (btce *BFTTargetChainExecutor) buildTonAccountProof(
 	requiredLevel := tonAuthorityLevelForNano(amountNano)
 	log.Printf("🔐 [TON-AUTH] %d nanoTON → authority level: %d", amountNano, requiredLevel)
 
-	// Build merkle proof: same 4-leaf tree as EVM/TRON/NEAR/Solana/Aptos/SUI
-	hash23 := sortedHash(ccCommitment[:], govRoot[:])
-	var hash23Arr [32]byte
-	copy(hash23Arr[:], hash23)
+	// Build merkle proof: TON uses Cell-hash (SHA-256), NOT Keccak256
+	hash23Arr := TonSortedHash(ccCommitment, govRoot)
 
 	log.Printf("🌳 [TON-MERKLE] Built 4-leaf proof for adiURL verification:")
 	log.Printf("   adiURL: %s", adiURL)
