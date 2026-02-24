@@ -1,0 +1,72 @@
+## Certen Validator Network - Docker Compose Template
+##
+## Copy to docker-compose.yml and fill in per-validator secrets.
+## Shared config lives in .env.shared (copy from .env.shared.example).
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: certen-postgres
+    environment:
+      POSTGRES_DB: certen_proofs
+      POSTGRES_USER: certen
+      POSTGRES_PASSWORD: certen_testnet_2026
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U certen -d certen_proofs"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - certen-net
+
+  validator-1:
+    build: .
+    container_name: certen-validator-1
+    hostname: validator-1
+    ports:
+      - "8081:8080"
+      - "26656:26656"
+      - "26657:26657"
+    env_file: .env.shared
+    environment:
+      VALIDATOR_ID: validator-1
+      ETH_PRIVATE_KEY: "<VALIDATOR_1_ETH_PRIVATE_KEY>"
+      COMETBFT_P2P_SEEDS: "<COMMA_SEPARATED_PEER_LIST_EXCLUDING_SELF>"
+      ATTESTATION_PEERS: "<COMMA_SEPARATED_PEER_LIST_EXCLUDING_SELF>"
+      SOLANA_PRIVATE_KEY: "<VALIDATOR_1_SOLANA_PRIVATE_KEY>"
+      APTOS_PRIVATE_KEY: "<VALIDATOR_1_APTOS_PRIVATE_KEY>"
+      SUI_PRIVATE_KEY: "<VALIDATOR_1_SUI_PRIVATE_KEY>"
+      NEAR_SIGNER_ACCOUNT_ID: "<VALIDATOR_1_NEAR_ACCOUNT>"
+      NEAR_PRIVATE_KEY: "<VALIDATOR_1_NEAR_PRIVATE_KEY>"
+      TON_WALLET_MNEMONIC: "<VALIDATOR_1_TON_MNEMONIC>"
+    volumes:
+      - validator1_data:/app/data
+      - validator1_keys:/app/bft-keys
+      - ./bls_zk_keys:/app/bls_zk_keys:ro
+      - ./bls_zk_keys_bls12381:/app/bls_zk_keys_bls12381:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - certen-net
+
+  # Repeat for validator-2 through validator-7 with:
+  #   - Incrementing ports (8082-8087, 26666-26716)
+  #   - Unique private keys per validator
+  #   - COMETBFT_P2P_SEEDS excluding self
+  #   - ATTESTATION_PEERS excluding self
+
+volumes:
+  postgres_data:
+  validator1_data:
+  validator1_keys:
+  # ... validator2 through validator7 volumes
+
+networks:
+  certen-net:
+    driver: bridge

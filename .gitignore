@@ -6,8 +6,14 @@
 
 # Environment files (contain secrets)
 .env
+.env.shared
 .env.local
 .env.*.local
+!.env.*.example
+
+# Docker Compose (contains per-validator private keys)
+docker-compose.yml
+docker-compose.override.yml
 
 # Firebase/Google Cloud credentials (NEVER commit these!)
 firebase-service-account.json
