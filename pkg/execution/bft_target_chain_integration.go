@@ -3878,32 +3878,15 @@ func (btce *BFTTargetChainExecutor) executeTonOperations(
 		if userAccountAddr != "" {
 			btce.logger.Printf("   User account: %s", userAccountAddr)
 
-			// Check if account exists
+			// Check if account exists (deployed by api-bridge, NOT by validators)
 			accountExists, checkErr := tonClient.CheckAccountExists(ctx, userAccountAddr)
 			if checkErr != nil {
 				btce.logger.Printf("⚠️ [TON-EXEC] Failed to check account: %v", checkErr)
 			}
 
-			if !accountExists && tonFactoryContract != "" {
-				btce.logger.Printf("⚠️ [TON-EXEC] Account not found, auto-deploying...")
-
-				ownerAddr := DeriveTonAccountOwner(tonClient.walletAddress)
-				salt := DeriveTonAccountSalt(adiURL)
-
-				deployTx, deployErr := tonClient.DeployAccountViaFactory(ctx, ownerAddr, adiURL, salt)
-				if deployErr != nil {
-					btce.logger.Printf("❌ [TON-EXEC] Account deploy failed: %v", deployErr)
-					govTxHash = "gov_failed_account_deploy_ton"
-				} else {
-					btce.logger.Printf("✅ [TON-EXEC] Account deployment tx: %s", deployTx)
-					waitErr := tonClient.WaitForConfirmation(ctx, deployTx, 60*time.Second)
-					if waitErr != nil {
-						btce.logger.Printf("⚠️ [TON-EXEC] Account deployment confirmation failed: %v", waitErr)
-						govTxHash = "gov_failed_account_deploy_ton"
-					} else {
-						accountExists = true
-					}
-				}
+			if !accountExists {
+				btce.logger.Printf("❌ [TON-EXEC] Account not deployed at %s — must be created via api-bridge first", userAccountAddr)
+				govTxHash = "gov_failed_no_account_ton"
 			}
 
 			if accountExists && govTxHash == "no_governance_needed" {

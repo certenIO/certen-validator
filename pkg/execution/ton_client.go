@@ -1543,20 +1543,6 @@ func (tc *TonClient) WaitForConfirmation(ctx context.Context, msgHash string, ti
 	return nil
 }
 
-// =============================================================================
-// TON-SPECIFIC DERIVATION HELPERS
-// =============================================================================
-
-// DeriveTonAccountOwner returns the wallet address for use as account owner.
-func DeriveTonAccountOwner(walletAddr *address.Address) string {
-	return walletAddr.String()
-}
-
-// DeriveTonAccountSalt derives u64 salt from ADI URL (same as SUI).
-func DeriveTonAccountSalt(adiURL string) uint64 {
-	return DeriveSuiAccountSalt(adiURL)
-}
-
 // tonAuthorityLevelForNano returns authority level based on nanoTON amount.
 func tonAuthorityLevelForNano(nano uint64) uint8 {
 	const (
