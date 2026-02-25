@@ -4132,7 +4132,7 @@ func (btce *BFTTargetChainExecutor) buildTonAccountProof(
 		Timestamp:           proofTimestamp,
 		ExpiresAt:           proofExpiresAt,
 		ValidatorSignatures: []byte{},
-		Nonce:               1,
+		Nonce:               uint64(time.Now().Unix()), // Must be > last used nonce; use timestamp to ensure monotonic increase
 		RequiredLevel:       requiredLevel,
 		OperationHash:       [32]byte{},
 	}
