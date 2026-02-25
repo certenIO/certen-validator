@@ -1,10 +1,10 @@
 # Certen Independent Validator
 
-Byzantine Fault Tolerant consensus node for the Certen Protocol -- orchestrating multi-layer cryptographic proof generation, cross-chain state anchoring, and validator attestation.
+Byzantine Fault Tolerant consensus node for the Certen Protocol -- orchestrating multi-layer cryptographic proof generation, cross-chain state anchoring, and validator attestation across 13 blockchain networks.
 
 ## Overview
 
-The Certen Independent Validator is a BFT consensus node that forms the backbone of the Certen Protocol network. It monitors the Accumulate blockchain for transaction intents, generates multi-layer cryptographic proofs binding account state to on-chain anchors, and coordinates with peer validators to produce aggregate attestations. Anchored state roots are submitted to Ethereum (and other EVM chains) via the CertenAnchor smart contracts, enabling trustless cross-chain verification.
+The Certen Independent Validator is a BFT consensus node that forms the backbone of the Certen Protocol network. It monitors the Accumulate blockchain for transaction intents, generates multi-layer cryptographic proofs binding account state to on-chain anchors, and coordinates with peer validators to produce aggregate attestations. Anchored state roots and proofs are submitted to target chains (EVM, Solana, Aptos, Sui, NEAR, TON, TRON) via chain-specific smart contracts, enabling trustless cross-chain verification.
 
 Core functions:
 
@@ -12,7 +12,7 @@ Core functions:
 2. **Multi-Layer Proof Generation**: Produces a 9-phase proof cycle covering lite-client proofs (L1-L4), governance proofs (G0-G2), BLS aggregate signatures, and Ethereum anchoring
 3. **BFT Consensus**: Runs CometBFT consensus across the validator set, requiring 2/3+ honest participation
 4. **Batch Management**: Groups transactions into on-cadence (time-based) or on-demand (immediate) batches with Merkle root computation
-5. **Cross-Chain Anchoring**: Submits batch Merkle roots and comprehensive proofs to EVM smart contracts
+5. **Cross-Chain Anchoring**: Submits batch Merkle roots and comprehensive proofs to target chain smart contracts (EVM, Solana, Aptos, Sui, NEAR, TON, TRON)
 6. **Attestation Collection**: Broadcasts proof requests to peer validators and collects 2f+1 BLS/Ed25519 signatures
 
 ## Architecture
@@ -29,7 +29,7 @@ Core functions:
 |           |                       |                      |         |
 |           v                       v                      v         |
 |  +------------------+    +------------------+    +---------------+ |
-|  |   P2P Network    |    |   Ethereum       |    |  Peer         | |
+|  |   P2P Network    |    |   Multi-Chain    |    |  Peer         | |
 |  |   (26656/26657)  |    |   Anchoring      |    |  Validators   | |
 |  +------------------+    +------------------+    +---------------+ |
 |           |                       |                      |         |
@@ -46,8 +46,10 @@ Core functions:
 |                      External Services                            |
 +------------------------------------------------------------------+
 |  - Accumulate Network (v3 API + CometBFT RPC)                    |
-|  - Ethereum / EVM Chains (Sepolia, Arbitrum, Optimism, Base)      |
-|  - CertenAnchorV3 + BLSZKVerifier Smart Contracts                |
+|  - EVM Chains (Ethereum, Arbitrum, Optimism, Base, BSC,           |
+|    Polygon, Moonbeam — all testnets)                              |
+|  - Non-EVM Chains (Solana, Aptos, Sui, NEAR, TON, TRON)          |
+|  - CertenAnchor + BLSZKVerifier + AccountFactory contracts        |
 +------------------------------------------------------------------+
 ```
 
@@ -55,7 +57,7 @@ Core functions:
 
 - **BFT Consensus**: CometBFT-based consensus with configurable validator sets (minimum 4, recommended 7+)
 - **9-Phase Proof Cycle**: Complete cryptographic proof pipeline from account state to Ethereum anchor
-- **Multi-Chain Anchoring**: Ethereum Mainnet, Sepolia, Arbitrum, Optimism, and Base support
+- **Multi-Chain Anchoring**: 13 target chains — EVM (Ethereum, Arbitrum, Optimism, Base, BSC, Polygon, Moonbeam) and non-EVM (Solana, Aptos, Sui, NEAR, TON, TRON)
 - **BLS Aggregate Signatures**: Groth16 ZK-SNARK proofs for on-chain BLS12-381 verification
 - **Governance Proofs**: Three-level governance verification (G0 inclusion, G1 correctness, G2 outcome binding)
 - **Batch System**: On-cadence (~15 min) and on-demand batching with Merkle tree construction
@@ -200,6 +202,24 @@ The included `docker-compose.yml` deploys a complete testnet:
 | `COMETBFT_P2P_LADDR` | No | tcp://0.0.0.0:26656 | P2P listen address |
 | `COMETBFT_RPC_LADDR` | No | tcp://0.0.0.0:26657 | RPC listen address |
 
+#### Non-EVM Chains
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `SOLANA_DEVNET_RPC_URL` | No | - | Solana Devnet RPC |
+| `SOLANA_ANCHOR_PROGRAM_ID` | No | - | Solana anchor program address |
+| `APTOS_TESTNET_RPC_URL` | No | - | Aptos Testnet RPC |
+| `APTOS_ANCHOR_PACKAGE` | No | - | Aptos anchor package address |
+| `SUI_TESTNET_RPC_URL` | No | - | Sui Testnet RPC |
+| `SUI_ANCHOR_PACKAGE` | No | - | Sui anchor package address |
+| `NEAR_TESTNET_RPC_URL` | No | - | NEAR Testnet RPC |
+| `NEAR_ANCHOR_CONTRACT` | No | - | NEAR anchor contract ID |
+| `TON_TESTNET_API_URL` | No | - | TON Center API endpoint |
+| `TON_ANCHOR_CONTRACT` | No | - | TON anchor contract address |
+| `TON_BLS_VERIFIER_CONTRACT` | No | - | TON BLS ZK verifier address |
+| `TON_ACCOUNT_FACTORY_CONTRACT` | No | - | TON account factory address |
+| `TRON_SHASTA_RPC_URL` | No | - | TRON Shasta JSON-RPC endpoint |
+
 #### Attestation
 
 | Variable | Required | Default | Description |
@@ -251,7 +271,7 @@ The validator executes a 9-phase cryptographic proof cycle for each transaction:
 | G1 | Governance | Correctness | Authority and key page validation |
 | G2 | Governance | Outcome Binding | Transaction hash bound to intent |
 | BLS | Aggregation | ZK Proof | Groth16 proof of BLS12-381 aggregate signature |
-| Anchor | Ethereum | State Anchoring | Merkle root submitted to CertenAnchor contract |
+| Anchor | Target Chain | State Anchoring | Merkle root submitted to CertenAnchor contract on target chain |
 
 ### Intent Processing Pipeline
 
@@ -274,7 +294,7 @@ CometBFT Consensus (2/3+ validators sign)
 Batch Closed -> Merkle Root Computed
     |
     v
-Anchor Manager submits to Ethereum
+Anchor Manager submits to target chain
     |
     v
 Attestation Collection (2f+1 signatures)
@@ -433,12 +453,13 @@ independant_validator/
 │   ├── accumulate/                     # Accumulate network client
 │   ├── ethereum/                       # Ethereum RPC and contract bindings
 │   ├── crypto/                         # BLS12-381 and ZK-SNARK operations
+│   ├── chain/                          # Multi-chain execution strategies
+│   │   └── strategy/                   # Per-chain strategies (EVM, Solana, Aptos, Sui, NEAR, TON, TRON)
 │   ├── merkle/                         # Merkle tree construction and receipts
 │   ├── ledger/                         # Ledger state management
 │   ├── metrics/                        # Prometheus metrics
 │   ├── server/                         # HTTP API handlers
-│   ├── firestore/                      # Optional Firestore real-time sync
-│   └── strategy/                       # Multi-chain execution strategies
+│   └── firestore/                      # Optional Firestore real-time sync
 ├── scripts/                             # Deployment and setup scripts (Node.js)
 │   ├── setup_certen_identity_kermit.js
 │   ├── submit_intent_kermit.js
@@ -499,7 +520,7 @@ go run .
 ### Pre-Deployment Checklist
 
 - Generate unique Ed25519 keys per validator
-- Fund validator Ethereum wallet with gas ETH
+- Fund validator wallets with gas tokens on each target chain (ETH, SOL, APT, SUI, NEAR, TON)
 - Pre-generate BLS ZK keys via `bls-zk-setup`
 - Set `BLS_ZK_TESTING_MODE=false` for production
 - Configure `ATTESTATION_PEERS` with all peer validator URLs
@@ -586,7 +607,7 @@ Metrics available at `http://localhost:9090/metrics` for integration with Grafan
 
 | Component | Repository | Description |
 |-----------|------------|-------------|
-| Smart Contracts | `certen-contracts` | CertenAnchorV3, BLSZKVerifier, ERC-4337 accounts |
+| Smart Contracts | `certen-contracts` | EVM, Solana, Aptos, Sui, NEAR, TON, TRON contract suites |
 | Independent Miner | `independant_miner` | LXR proof-of-work audit nodes |
 | Proofs Service | `proofs_service` | Proof storage and retrieval API |
 | API Bridge | `api-bridge` | Accumulate integration REST API |
@@ -595,4 +616,4 @@ Metrics available at `http://localhost:9090/metrics` for integration with Grafan
 
 ## License
 
-Copyright 2025 Certen Protocol. All rights reserved.
+Copyright 2026 Certen Protocol. All rights reserved.
