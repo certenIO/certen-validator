@@ -82,11 +82,12 @@ type tonAPIResponse struct {
 }
 
 // tonMasterchainInfo from getMasterchainInfo
+// Note: TON Center API returns shard as a string (e.g., "-9223372036854775808")
 type tonMasterchainInfo struct {
 	Last struct {
-		Workchain int   `json:"workchain"`
-		Shard     int64 `json:"shard"`
-		Seqno     int64 `json:"seqno"`
+		Workchain int         `json:"workchain"`
+		Shard     json.Number `json:"shard"`
+		Seqno     int64       `json:"seqno"`
 	} `json:"last"`
 	StateRootHash string `json:"state_root_hash"`
 	Init          struct {
