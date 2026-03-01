@@ -174,6 +174,17 @@ type AnchorWorkflowTxHashes struct {
 	PrimaryTxHash common.Hash
 }
 
+// extractPureHexHash strips chain prefix from multi-chain tx hash strings.
+// Multi-chain execution formats tx hashes as "ChainName:0xhash..." or "ChainName:leg-N:0xhash...".
+// This extracts just the "0x..." portion for use with common.HexToHash().
+func extractPureHexHash(chainPrefixedHash string) string {
+	idx := strings.LastIndex(chainPrefixedHash, "0x")
+	if idx > 0 {
+		return chainPrefixedHash[idx:]
+	}
+	return chainPrefixedHash
+}
+
 // ProofCycleOrchestratorInterface defines the interface for proof cycle orchestration
 // This enables the BFTValidator to trigger Phase 7-9 after successful execution
 type ProofCycleOrchestratorInterface interface {
@@ -1122,11 +1133,13 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 				}
 
 				// Enhanced: Build AnchorWorkflowTxHashes with all 3 transaction hashes
+				// NOTE: anchorRes fields contain chain-prefixed strings (e.g., "Ethereum Sepolia:0x001d2db...")
+				// from multi-chain execution. Must strip prefix before parsing as common.Hash.
 				txHashes := &AnchorWorkflowTxHashes{
-					CreateTxHash:     common.HexToHash(anchorRes.CreateTxHash),
-					VerifyTxHash:     common.HexToHash(anchorRes.VerifyTxHash),
-					GovernanceTxHash: common.HexToHash(anchorRes.GovernanceTxHash),
-					PrimaryTxHash:    common.HexToHash(anchorRes.AnchorTxID),
+					CreateTxHash:     common.HexToHash(extractPureHexHash(anchorRes.CreateTxHash)),
+					VerifyTxHash:     common.HexToHash(extractPureHexHash(anchorRes.VerifyTxHash)),
+					GovernanceTxHash: common.HexToHash(extractPureHexHash(anchorRes.GovernanceTxHash)),
+					PrimaryTxHash:    common.HexToHash(extractPureHexHash(anchorRes.AnchorTxID)),
 				}
 
 				bv.logger.Printf("🔄 [PROOF-CYCLE] Triggering Phase 7-9 for intent: %s", certenIntent.IntentID)
