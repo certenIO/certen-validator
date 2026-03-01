@@ -115,9 +115,12 @@ func (ab *AuthorityBuilder) BuildAuthoritySnapshot(ctx context.Context, keyPage 
 }
 
 // getMainChainCount gets the total count of main chain entries for the given scope
-// Direct translation of Python count query logic
+// Handles both V2 and V3 Accumulate API response formats:
+//   - V2/V3 chain metadata:  { "recordType":"chain", "count": N, ... }
+//   - V3 range response:     { "type":"rangeResponse", "total": N, "records": [...] }
+//   - V3 chain state:        { "type":"chainState", "count": N, ... }
 func (ab *AuthorityBuilder) getMainChainCount(ctx context.Context, scopeURL string) (int, error) {
-	// Build count query like Python: count=0 returns total count
+	// Build count query — no range params returns chain metadata with count
 	query := ab.queryBuilder.BuildChainQuery("main", nil, nil, nil, false, &[]bool{false}[0])
 
 	// scopeURL should already be a full acc:// URL
@@ -139,10 +142,51 @@ func (ab *AuthorityBuilder) getMainChainCount(ctx context.Context, scopeURL stri
 		return 0, fmt.Errorf("failed to extract result: %v", err)
 	}
 
-	// Extract count field
+	// Try multiple field names for count (V2/V3 API compatibility)
+	// V2 and V3 chain metadata queries return "count"
 	countField := pu.CaseInsensitiveGet(result, "count")
+
+	// V3 range responses use "total" instead of "count"
 	if countField == nil {
-		return 0, ValidationError{Msg: "Missing count in chain query response"}
+		countField = pu.CaseInsensitiveGet(result, "total")
+	}
+
+	// Some V3 responses nest count inside a "range" object
+	if countField == nil {
+		if rangeObj := pu.CaseInsensitiveGet(result, "range"); rangeObj != nil {
+			if rangeMap, ok := rangeObj.(map[string]interface{}); ok {
+				countField = pu.CaseInsensitiveGet(rangeMap, "total")
+				if countField == nil {
+					countField = pu.CaseInsensitiveGet(rangeMap, "count")
+				}
+			}
+		}
+	}
+
+	// Fallback: if this is a records-based response, infer from total or records length
+	if countField == nil {
+		if records := pu.CaseInsensitiveGet(result, "records"); records != nil {
+			if recordsArray, ok := records.([]interface{}); ok {
+				// If this is a range response with records but no total field,
+				// we need to know if this is a complete result. Check for "start" field.
+				start := pu.CaseInsensitiveGet(result, "start")
+				if start == nil {
+					// No pagination — records length IS the total
+					fmt.Printf("[AUTHORITY] Using records array length (%d) as chain count\n", len(recordsArray))
+					return len(recordsArray), nil
+				}
+			}
+		}
+	}
+
+	if countField == nil {
+		// Log the actual response keys for debugging
+		var keys []string
+		for k, v := range result {
+			keys = append(keys, fmt.Sprintf("%s(%T)", k, v))
+		}
+		fmt.Printf("[AUTHORITY] [ERROR] Chain query response keys: %v\n", keys)
+		return 0, ValidationError{Msg: fmt.Sprintf("Missing count in chain query response (available fields: %v)", keys)}
 	}
 
 	var totalEntries int
@@ -153,10 +197,18 @@ func (ab *AuthorityBuilder) getMainChainCount(ctx context.Context, scopeURL stri
 		totalEntries = count
 	case int64:
 		totalEntries = int(count)
+	case string:
+		// Some API versions return count as string
+		parsed, parseErr := strconv.Atoi(count)
+		if parseErr != nil {
+			return 0, ValidationError{Msg: fmt.Sprintf("Invalid count string: %q", count)}
+		}
+		totalEntries = parsed
 	default:
 		return 0, ValidationError{Msg: fmt.Sprintf("Invalid count type: %T", countField)}
 	}
 
+	fmt.Printf("[AUTHORITY] Chain count for %s: %d\n", scopeURL, totalEntries)
 	return totalEntries, nil
 }
 

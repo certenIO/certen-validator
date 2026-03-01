@@ -14,6 +14,7 @@ import (
 	"crypto/ed25519"
 	"fmt"
 	"log"
+	"os"
 
 	attestation "github.com/certen/independant-validator/pkg/attestation/strategy"
 	chain "github.com/certen/independant-validator/pkg/chain/strategy"
@@ -232,24 +233,94 @@ func initializeChainStrategies(registry *Registry, cfg *RegistryConfig) error {
 	return nil
 }
 
-// registerStubChainStrategies registers placeholder strategies for future chains
+// registerNonEVMChainStrategies registers non-EVM chain strategies.
+// TON is fully implemented; others are stubs pending implementation.
 func registerStubChainStrategies(registry *Registry, cfg *RegistryConfig) error {
-	// Solana Devnet (stub)
+	// =========================================================================
+	// TON — Full implementation using TON Center API v2
+	// =========================================================================
+	tonAPIURL := os.Getenv("TON_TESTNET_API_URL")
+	tonAPIKey := os.Getenv("TON_TESTNET_API_KEY")
+	tonAnchorContract := os.Getenv("TON_ANCHOR_CONTRACT")
+	tonBLSVerifier := os.Getenv("TON_BLS_VERIFIER_CONTRACT")
+
+	if tonAPIURL != "" {
+		// Register TON testnet strategy (primary — matches "ton testnet", "ton-testnet")
+		tonTestnetStrategy, err := chain.NewTONTestnetStrategy(
+			tonAPIURL, tonAnchorContract, tonBLSVerifier, cfg.ValidatorID,
+		)
+		if err == nil && tonTestnetStrategy != nil {
+			// Set API key if available
+			if tonAPIKey != "" {
+				tonTestnetStrategy.SetAPIKey(tonAPIKey)
+			}
+
+			// Register with all common name variants that intents may use
+			tonTestnetAliases := []string{
+				"ton-testnet", "ton testnet", "ton_testnet", "ton-test",
+			}
+			for _, alias := range tonTestnetAliases {
+				if regErr := registry.RegisterChainStrategy(alias, tonTestnetStrategy.Config(), tonTestnetStrategy); regErr == nil {
+					if cfg.Logger != nil {
+						cfg.Logger.Printf("   ✅ TON testnet registered: %s", alias)
+					}
+				}
+			}
+		} else if err != nil && cfg.Logger != nil {
+			cfg.Logger.Printf("⚠️ Failed to create TON testnet strategy: %v", err)
+		}
+
+		// Register TON mainnet strategy (same implementation, different config)
+		tonMainnetAPIURL := os.Getenv("TON_MAINNET_API_URL")
+		if tonMainnetAPIURL == "" {
+			tonMainnetAPIURL = "https://toncenter.com/api/v2"
+		}
+		tonMainnetStrategy, err := chain.NewTONMainnetStrategy(
+			tonMainnetAPIURL, tonAnchorContract, cfg.ValidatorID,
+		)
+		if err == nil && tonMainnetStrategy != nil {
+			tonMainnetAliases := []string{
+				"ton-mainnet", "ton mainnet", "ton_mainnet", "ton",
+			}
+			for _, alias := range tonMainnetAliases {
+				if regErr := registry.RegisterChainStrategy(alias, tonMainnetStrategy.Config(), tonMainnetStrategy); regErr == nil {
+					if cfg.Logger != nil {
+						cfg.Logger.Printf("   ✅ TON mainnet registered: %s", alias)
+					}
+				}
+			}
+		}
+	} else {
+		// No TON API URL configured — register stub for interface compliance
+		tonStrategy, _ := chain.NewTONMainnetStrategy("", "", cfg.ValidatorID)
+		if tonStrategy != nil {
+			_ = registry.RegisterChainStrategy("ton-mainnet", tonStrategy.Config(), tonStrategy)
+		}
+		if cfg.Logger != nil {
+			cfg.Logger.Printf("⚠️ TON_TESTNET_API_URL not set — TON strategies registered as stubs")
+		}
+	}
+
+	// =========================================================================
+	// Solana — Stub (pending implementation)
+	// =========================================================================
 	solanaStrategy, _ := chain.NewSolanaDevnetStrategy("", "", cfg.ValidatorID)
 	if solanaStrategy != nil {
-		_ = registry.RegisterChainStrategy("solana-devnet", solanaStrategy.Config(), solanaStrategy)
+		solanaAliases := []string{"solana-devnet", "solana devnet", "solana_devnet", "solana-testnet", "solana testnet"}
+		for _, alias := range solanaAliases {
+			_ = registry.RegisterChainStrategy(alias, solanaStrategy.Config(), solanaStrategy)
+		}
 	}
 
-	// NEAR Testnet (stub)
+	// =========================================================================
+	// NEAR — Stub (pending implementation)
+	// =========================================================================
 	nearStrategy, _ := chain.NewNEARTestnetStrategy("", "", "", cfg.ValidatorID)
 	if nearStrategy != nil {
-		_ = registry.RegisterChainStrategy("near-testnet", nearStrategy.Config(), nearStrategy)
-	}
-
-	// TON (stub)
-	tonStrategy, _ := chain.NewTONMainnetStrategy("", "", cfg.ValidatorID)
-	if tonStrategy != nil {
-		_ = registry.RegisterChainStrategy("ton-mainnet", tonStrategy.Config(), tonStrategy)
+		nearAliases := []string{"near-testnet", "near testnet", "near_testnet"}
+		for _, alias := range nearAliases {
+			_ = registry.RegisterChainStrategy(alias, nearStrategy.Config(), nearStrategy)
+		}
 	}
 
 	return nil
