@@ -60,13 +60,21 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycle(
 	commitment interface{},
 ) error {
 	if a.useUnified && a.unified != nil {
+		// Extract target chain from commitment if available
+		targetChain := a.unified.config.DefaultChainID
+		if commitMap, ok := commitment.(map[string]interface{}); ok {
+			if tc, ok := commitMap["targetChain"].(string); ok && tc != "" {
+				targetChain = tc
+			}
+		}
+
 		// Create unified request
 		req := &UnifiedProofCycleRequest{
 			IntentID:    intentID,
 			BundleID:    bundleID,
 			TxHashes:    []string{executionTxHash.Hex()},
 			ProofClass:  "on_demand",
-			TargetChain: a.unified.config.DefaultChainID,
+			TargetChain: targetChain,
 		}
 
 		// Start cycle asynchronously
@@ -129,13 +137,17 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAllTxs(
 
 		fmt.Printf("[UnifiedAdapter] Extracted %d tx hashes for intent %s: %v\n", len(txHashStrs), intentID, txHashStrs)
 
-		// Extract operation commitment from commitment interface (for Merkle data)
+		// Extract operation commitment and target chain from commitment interface
 		var operationCommitment [32]byte
+		var targetChainFromCommit string
 		if commitMap, ok := commitment.(map[string]interface{}); ok {
 			if opCommitStr, ok := commitMap["operationCommitment"].(string); ok && opCommitStr != "" {
 				if decoded, err := hexStringToBytes32(opCommitStr); err == nil {
 					operationCommitment = decoded
 				}
+			}
+			if tc, ok := commitMap["targetChain"].(string); ok && tc != "" {
+				targetChainFromCommit = tc
 			}
 		}
 
@@ -146,6 +158,12 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAllTxs(
 		if operationCommitment != [32]byte{} {
 			leafHash = operationCommitment[:]
 			merkleRoot = operationCommitment
+		}
+
+		// Use target chain from commitment, fall back to default
+		targetChain := targetChainFromCommit
+		if targetChain == "" {
+			targetChain = a.unified.config.DefaultChainID
 		}
 
 		// Create unified request
@@ -159,7 +177,7 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAllTxs(
 			BundleID:            bundleID,
 			TxHashes:            txHashStrs,
 			ProofClass:          "on_demand",
-			TargetChain:         a.unified.config.DefaultChainID,
+			TargetChain:         targetChain,
 			UserID:              userIDPtr,
 			OperationCommitment: operationCommitment,
 			// Merkle inclusion proof data
@@ -169,8 +187,8 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAllTxs(
 			MerkleRoot: merkleRoot,
 		}
 
-		fmt.Printf("[UnifiedAdapter] Starting unified proof cycle for intent %s with target chain %s\n",
-			intentID, a.unified.config.DefaultChainID)
+		fmt.Printf("[UnifiedAdapter] Starting unified proof cycle for intent %s with target chain %q (from commitment: %q)\n",
+			intentID, targetChain, targetChainFromCommit)
 
 		// Start cycle asynchronously
 		go func() {
@@ -234,10 +252,15 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 			}
 		}
 
-		// Extract governance data from commitment (for G1/G2 proof levels)
+		// Extract governance data and target chain from commitment (for G1/G2 proof levels)
 		var governanceRoot, operationCommitment [32]byte
 		var keyPageThreshold, keyPageKeyCount int
+		var targetChainFromCommitment string
 		if commitMap, ok := commitment.(map[string]interface{}); ok {
+			// Extract targetChain from commitment (set by buildExecutionCommitmentFromIntent)
+			if tc, ok := commitMap["targetChain"].(string); ok && tc != "" {
+				targetChainFromCommitment = tc
+			}
 			// Extract governanceRoot (hex string -> [32]byte)
 			if govRootStr, ok := commitMap["governanceRoot"].(string); ok && govRootStr != "" {
 				if decoded, err := hexStringToBytes32(govRootStr); err == nil {
@@ -284,12 +307,21 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 			merkleRoot = operationCommitment // For single tx, merkle root = leaf
 		}
 
+		// Use target chain from commitment (set by BFT validator from intent's CrossChainData)
+		// Fall back to default chain ID only if commitment didn't include it
+		targetChain := targetChainFromCommitment
+		if targetChain == "" {
+			targetChain = a.unified.config.DefaultChainID
+		}
+		fmt.Printf("[UnifiedAdapter] Target chain for Phase 7-9: %q (from commitment: %q, default: %q)\n",
+			targetChain, targetChainFromCommitment, a.unified.config.DefaultChainID)
+
 		req := &UnifiedProofCycleRequest{
 			IntentID:             intentID,
 			BundleID:             bundleID,
 			TxHashes:             txHashStrs,
 			ProofClass:           "on_demand",
-			TargetChain:          a.unified.config.DefaultChainID,
+			TargetChain:          targetChain,
 			UserID:               userIDPtr,
 			AccumulateAccountURL: accumulateAccountURL,
 			AccumulateTxHash:     accumulateTxHash,
