@@ -19,6 +19,8 @@ package strategy
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -436,6 +438,9 @@ func (s *TONStrategy) getMasterchainInfo(ctx context.Context) (*tonMasterchainIn
 // findTransactionByHash searches for a transaction by its hash.
 // Searches recent transactions on the anchor contract address.
 // Returns (found, seqno, utime, error).
+//
+// Hash format handling: tonutils-go returns hex hashes, but TON Center API v2
+// returns base64-encoded hashes. We normalize both to raw bytes for comparison.
 func (s *TONStrategy) findTransactionByHash(ctx context.Context, hash string) (bool, int64, int64, error) {
 	contractAddr := s.config.AnchorContractAddress
 	if contractAddr == "" {
@@ -464,25 +469,26 @@ func (s *TONStrategy) findTransactionByHash(ctx context.Context, hash string) (b
 		return false, 0, 0, fmt.Errorf("getTransactions: unmarshal txns: %w", err)
 	}
 
-	// Search for matching transaction hash
-	normalizedHash := strings.ToLower(hash)
-	for _, tx := range txns {
-		txID := strings.ToLower(tx.TransactionID.Hash)
-		inMsgHash := strings.ToLower(tx.InMsg.BodyHash)
+	// Decode the input hash from hex to raw bytes for comparison
+	// (tonutils-go returns hex, TON Center API returns base64)
+	searchHashBytes := decodeHashToBytes(hash)
 
-		// Match against transaction_id.hash or in_msg body hash
-		if txID == normalizedHash || inMsgHash == normalizedHash {
-			// Estimate seqno from utime (TON ~5s blocks)
-			// For more accuracy, we'd need to query the block, but seqno from
-			// masterchain info at the time of the tx is sufficient for confirmation counting
+	// Search for matching transaction hash
+	for _, tx := range txns {
+		txIDBytes := decodeHashToBytes(tx.TransactionID.Hash)
+		bodyHashBytes := decodeHashToBytes(tx.InMsg.BodyHash)
+
+		// Match against transaction_id.hash or in_msg body hash (byte-level comparison)
+		if hashBytesEqual(searchHashBytes, txIDBytes) || hashBytesEqual(searchHashBytes, bodyHashBytes) {
+			s.logger.Printf("Transaction matched! tx_id=%s body_hash=%s",
+				tx.TransactionID.Hash, tx.InMsg.BodyHash)
+
 			mcInfo, mcErr := s.getMasterchainInfo(ctx)
 			if mcErr != nil {
 				return true, 0, tx.Utime, nil
 			}
-			// Use the current seqno as an approximation; the tx is already confirmed
-			// if it appears in getTransactions. We subtract an estimate for the age.
 			ageSeconds := time.Now().Unix() - tx.Utime
-			ageBlocks := ageSeconds / 5 // ~5s per block
+			ageBlocks := ageSeconds / 5
 			estimatedSeqno := mcInfo.Last.Seqno - ageBlocks
 			if estimatedSeqno < 1 {
 				estimatedSeqno = 1
@@ -522,10 +528,12 @@ func (s *TONStrategy) findTransactionOnAddress(ctx context.Context, address, has
 		return false, 0, 0, err
 	}
 
-	normalizedHash := strings.ToLower(hash)
+	searchHashBytes := decodeHashToBytes(hash)
 	for _, tx := range txns {
-		if strings.ToLower(tx.TransactionID.Hash) == normalizedHash ||
-			strings.ToLower(tx.InMsg.BodyHash) == normalizedHash {
+		txIDBytes := decodeHashToBytes(tx.TransactionID.Hash)
+		bodyHashBytes := decodeHashToBytes(tx.InMsg.BodyHash)
+
+		if hashBytesEqual(searchHashBytes, txIDBytes) || hashBytesEqual(searchHashBytes, bodyHashBytes) {
 			mcInfo, _ := s.getMasterchainInfo(ctx)
 			seqno := int64(0)
 			if mcInfo != nil {
@@ -628,6 +636,58 @@ func (s *TONStrategy) apiGet(ctx context.Context, url string) ([]byte, error) {
 // =============================================================================
 // HASH / UTILITY HELPERS
 // =============================================================================
+
+// decodeHashToBytes normalizes a hash string to raw bytes.
+// Handles hex (with or without 0x prefix) and base64/base64url encodings.
+// TON Center API returns base64, tonutils-go returns hex.
+func decodeHashToBytes(s string) []byte {
+	if s == "" {
+		return nil
+	}
+
+	// Try hex first (with or without 0x prefix)
+	hexStr := strings.TrimPrefix(s, "0x")
+	if b, err := hex.DecodeString(hexStr); err == nil && len(b) > 0 {
+		return b
+	}
+
+	// Try standard base64
+	if b, err := base64.StdEncoding.DecodeString(s); err == nil && len(b) > 0 {
+		return b
+	}
+
+	// Try URL-safe base64 (TON sometimes uses this)
+	if b, err := base64.URLEncoding.DecodeString(s); err == nil && len(b) > 0 {
+		return b
+	}
+
+	// Try raw (no padding) base64 variants
+	if b, err := base64.RawStdEncoding.DecodeString(s); err == nil && len(b) > 0 {
+		return b
+	}
+	if b, err := base64.RawURLEncoding.DecodeString(s); err == nil && len(b) > 0 {
+		return b
+	}
+
+	return nil
+}
+
+// hashBytesEqual compares two hash byte slices for equality.
+// Returns false if either is nil or they differ in length.
+func hashBytesEqual(a, b []byte) bool {
+	if len(a) == 0 || len(b) == 0 {
+		return false
+	}
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
 
 // computeResultHash creates a deterministic hash of the observation result
 // for attestation purposes (matches EVM observer pattern)
