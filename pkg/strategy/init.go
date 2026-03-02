@@ -203,13 +203,20 @@ func initializeChainStrategies(registry *Registry, cfg *RegistryConfig) error {
 	}
 
 	// Register well-known network name aliases for common chains
+	// Include both hyphenated and space-separated variants for intent compatibility
 	knownAliases := map[int64][]string{
 		1:        {"ethereum", "mainnet", "eth-mainnet"},
-		11155111: {"sepolia", "eth-sepolia", "ethereum-sepolia"},
+		11155111: {"sepolia", "eth-sepolia", "ethereum-sepolia", "ethereum sepolia"},
 		137:      {"polygon", "matic"},
+		80002:    {"polygon-amoy", "polygon amoy", "amoy"},
 		42161:    {"arbitrum", "arbitrum-one"},
+		421614:   {"arbitrum-sepolia", "arbitrum sepolia"},
 		10:       {"optimism", "op-mainnet"},
+		11155420: {"optimism-sepolia", "optimism sepolia", "op-sepolia"},
 		8453:     {"base", "base-mainnet"},
+		84532:    {"base-sepolia", "base sepolia"},
+		1287:     {"moonbase-alpha", "moonbase alpha", "moonbeam-testnet", "moonbeam moonbase alpha"},
+		1284:     {"moonbeam"},
 	}
 	if aliases, ok := knownAliases[int64(cfg.EthChainID)]; ok {
 		for _, alias := range aliases {

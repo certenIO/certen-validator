@@ -303,26 +303,31 @@ func (btce *BFTTargetChainExecutor) ExecuteTargetChainOperations(
 
 	// Execute based on target chain
 	switch targetChain {
-	case "tron", "tron shasta", "tron shasta testnet", "tron nile", "tron mainnet":
-		// TRON requires its own HTTP API — /jsonrpc doesn't support eth_getTransactionCount or eth_sendRawTransaction
+	case "tron", "tron-shasta", "tron-shasta-testnet", "tron-nile", "tron-mainnet",
+		"tron shasta", "tron shasta testnet", "tron nile", "tron mainnet":
 		return btce.executeTronOperations(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, targetChainID)
-	case "near", "near testnet", "near protocol", "near-testnet", "near mainnet":
-		// NEAR uses Ed25519 signing, Borsh serialization, and JSON-RPC — completely different from EVM
+	case "near", "near-testnet", "near-protocol", "near-mainnet",
+		"near testnet", "near protocol", "near mainnet":
 		return btce.executeNearOperations(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, targetChainID)
-	case "solana", "solana devnet", "solana mainnet", "solana testnet":
-		// Solana uses Ed25519 signing, Borsh-encoded Anchor instructions, and Solana JSON-RPC
+	case "solana", "solana-devnet", "solana-mainnet", "solana-testnet",
+		"solana devnet", "solana mainnet", "solana testnet":
 		return btce.executeSolanaOperations(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, targetChainID)
-	case "aptos", "aptos testnet", "aptos-testnet", "aptos mainnet", "aptos-mainnet":
-		// Aptos uses Ed25519 signing, BCS serialization, and REST API
+	case "aptos", "aptos-testnet", "aptos-mainnet",
+		"aptos testnet", "aptos mainnet":
 		return btce.executeAptosOperations(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, targetChainID)
-	case "sui", "sui testnet", "sui-testnet", "sui mainnet", "sui-mainnet":
-		// SUI uses Ed25519 signing with BLAKE2b-256, PTB model, and JSON-RPC
+	case "sui", "sui-testnet", "sui-mainnet",
+		"sui testnet", "sui mainnet":
 		return btce.executeSuiOperations(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, targetChainID)
-	case "ton", "ton testnet", "ton-testnet", "ton mainnet", "ton-mainnet":
-		// TON uses Ed25519 signing, Cell serialization, async actor model, and TON Center API v2
+	case "ton", "ton-testnet", "ton-mainnet",
+		"ton testnet", "ton mainnet":
 		return btce.executeTonOperations(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, targetChainID)
-	case "ethereum", "eth", "sepolia", "arbitrum", "arb", "optimism", "op", "base", "polygon", "matic",
-		"bsc", "bsc testnet", "binance", "moonbeam", "moonbase", "moonbeam moonbase alpha":
+	case "ethereum", "ethereum-sepolia", "eth", "eth-sepolia", "sepolia",
+		"arbitrum", "arbitrum-one", "arbitrum-sepolia", "arb",
+		"optimism", "op-mainnet", "optimism-sepolia", "op", "op-sepolia",
+		"base", "base-mainnet", "base-sepolia",
+		"polygon", "polygon-amoy", "matic", "amoy",
+		"bsc", "bsc-testnet", "binance",
+		"moonbeam", "moonbase", "moonbase-alpha", "moonbeam-moonbase-alpha":
 		return btce.executeEthereumOperations(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, targetChainID)
 	default:
 		// Try EVM execution for unknown chains if they have a valid chain ID
@@ -338,14 +343,14 @@ func (btce *BFTTargetChainExecutor) ExecuteTargetChainOperations(
 // Now properly parses the chain from intent CrossChainData
 func (btce *BFTTargetChainExecutor) extractTargetChainFromIntent(intentID string) (string, int64) {
 	// Default to Ethereum Sepolia
-	return "ethereum", 11155111
+	return "ethereum-sepolia", 11155111
 }
 
 // extractTargetChainFromCrossChainData parses the actual target chain from CrossChainData
 func (btce *BFTTargetChainExecutor) extractTargetChainFromCrossChainData(crossChainData []byte) (string, int64) {
 	if len(crossChainData) == 0 {
 		btce.logger.Printf("⚠️ [CHAIN] No CrossChainData, defaulting to Ethereum Sepolia")
-		return "ethereum", 11155111
+		return "ethereum-sepolia", 11155111
 	}
 
 	var ccData struct {
@@ -357,37 +362,52 @@ func (btce *BFTTargetChainExecutor) extractTargetChainFromCrossChainData(crossCh
 
 	if err := json.Unmarshal(crossChainData, &ccData); err != nil {
 		btce.logger.Printf("⚠️ [CHAIN] Failed to parse CrossChainData: %v, defaulting to Ethereum Sepolia", err)
-		return "ethereum", 11155111
+		return "ethereum-sepolia", 11155111
 	}
 
 	if len(ccData.Legs) == 0 {
 		btce.logger.Printf("⚠️ [CHAIN] No legs in CrossChainData, defaulting to Ethereum Sepolia")
-		return "ethereum", 11155111
+		return "ethereum-sepolia", 11155111
 	}
 
 	// Use first leg's chain info
 	chain := ccData.Legs[0].Chain
 	chainID := ccData.Legs[0].ChainID
 
-	// Normalize chain name
+	// Normalize chain name: replace spaces with hyphens, lowercase
 	if chain == "" {
-		chain = "ethereum"
+		chain = "ethereum-sepolia"
 	}
-	chain = strings.ToLower(chain)
+	chain = strings.ToLower(strings.TrimSpace(chain))
+	chain = strings.ReplaceAll(chain, " ", "-")
 
 	// Default chain ID if not specified
 	if chainID == 0 {
 		switch chain {
-		case "ethereum", "eth", "sepolia":
+		case "ethereum", "eth":
+			chainID = 1
+		case "ethereum-sepolia", "eth-sepolia", "sepolia":
 			chainID = 11155111
-		case "arbitrum", "arb":
+		case "arbitrum", "arb", "arbitrum-one":
+			chainID = 42161
+		case "arbitrum-sepolia", "arb-sepolia":
 			chainID = 421614
-		case "optimism", "op":
+		case "optimism", "op", "op-mainnet":
+			chainID = 10
+		case "optimism-sepolia", "op-sepolia":
 			chainID = 11155420
-		case "base":
+		case "base", "base-mainnet":
+			chainID = 8453
+		case "base-sepolia":
 			chainID = 84532
 		case "polygon", "matic":
+			chainID = 137
+		case "polygon-amoy", "amoy":
 			chainID = 80002
+		case "moonbeam":
+			chainID = 1284
+		case "moonbase-alpha", "moonbeam-moonbase-alpha":
+			chainID = 1287
 		default:
 			chainID = 11155111
 		}
