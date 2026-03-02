@@ -745,18 +745,32 @@ func (ecm *EthereumContractManager) ExecuteViaUserAccount(
 		return "", fmt.Errorf("failed to bind user account contract: %w", err)
 	}
 
-	// FIXED: Fetch actual commitments from the anchor instead of re-computing
+	// Fetch actual commitments from the anchor instead of re-computing.
 	// The anchor stores the exact values used during creation - we must use those
-	// for the merkle proof to verify correctly
-	anchor, err := ecm.anchor.GetAnchorFull(nil, bundleID)
-	if err != nil {
-		return "", fmt.Errorf("failed to fetch anchor for commitments: %w", err)
+	// for the merkle proof to verify correctly.
+	// On slow-RPC chains (e.g. Moonbase Alpha) the anchor tx may not be confirmed
+	// yet if WaitMined timed out, so we poll until commitments are non-zero.
+	var opCommitment, ccCommitment, govRoot [32]byte
+	var zeroHash [32]byte
+	for attempts := 0; attempts < 30; attempts++ {
+		anchorData, err := ecm.anchor.GetAnchorFull(nil, bundleID)
+		if err != nil {
+			return "", fmt.Errorf("failed to fetch anchor for commitments: %w", err)
+		}
+		opCommitment = anchorData.OperationCommitment
+		ccCommitment = anchorData.CrossChainCommitment
+		govRoot = anchorData.GovernanceRoot
+		if opCommitment != zeroHash || ccCommitment != zeroHash || govRoot != zeroHash {
+			break
+		}
+		if attempts == 0 {
+			fmt.Printf("   ⏳ Anchor not yet confirmed on-chain, waiting for mining...\n")
+		}
+		time.Sleep(2 * time.Second)
 	}
-
-	// Use the actual stored commitments from the anchor
-	opCommitment := anchor.OperationCommitment
-	ccCommitment := anchor.CrossChainCommitment
-	govRoot := anchor.GovernanceRoot
+	if opCommitment == zeroHash && ccCommitment == zeroHash && govRoot == zeroHash {
+		return "", fmt.Errorf("anchor commitments still zero after polling — tx may not have been mined")
+	}
 
 	fmt.Printf("   Fetched commitments from anchor:\n")
 	fmt.Printf("     opCommitment: 0x%x\n", opCommitment[:8])
