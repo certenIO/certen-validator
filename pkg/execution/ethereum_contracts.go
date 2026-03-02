@@ -489,6 +489,23 @@ func NewEthereumContractManager(config *CertenContractConfig) (*EthereumContract
 	}, nil
 }
 
+// refreshGasPrice updates auth.GasPrice with the current network-suggested price.
+// Called before each transaction to avoid stale gas prices causing "replacement transaction underpriced".
+func (ecm *EthereumContractManager) refreshGasPrice(ctx context.Context) {
+	gasPrice, err := ecm.client.SuggestGasPrice(ctx)
+	if err != nil {
+		return // keep existing gas price
+	}
+	// Add 20% buffer for base fee fluctuation
+	buffered := new(big.Int).Mul(gasPrice, big.NewInt(120))
+	buffered.Div(buffered, big.NewInt(100))
+	maxGasPrice := big.NewInt(ecm.config.MaxGasPriceGwei * 1e9)
+	if maxGasPrice.Sign() > 0 && buffered.Cmp(maxGasPrice) > 0 {
+		buffered = maxGasPrice
+	}
+	ecm.auth.GasPrice = buffered
+}
+
 // CreateAnchorOnChain creates an anchor on CertenAnchorV4 unified contract
 // This is Step 1 of the anchor workflow.
 // Uses CertenAnchorV4.createAnchor with 6 parameters (includes adiURLHash for account binding)
@@ -501,6 +518,7 @@ func (ecm *EthereumContractManager) CreateAnchorOnChain(
 	governanceRoot [32]byte,
 	accumulateBlockHeight *big.Int,
 ) (string, error) {
+	ecm.refreshGasPrice(ctx)
 	fmt.Printf("📡 [ETH-CREATE] Creating anchor on CertenAnchorV4...\n")
 	fmt.Printf("   Contract: %s\n", ecm.anchor.GetAddress().Hex())
 	fmt.Printf("   Bundle ID: 0x%x\n", bundleID)
@@ -550,6 +568,7 @@ func (ecm *EthereumContractManager) SubmitCertenProofToAnchor(
 	certenProof *proof.CertenProof,
 	anchorResult *anchor.AnchorResponse,
 ) (string, error) {
+	ecm.refreshGasPrice(ctx)
 
 	// Generate anchor ID from intent
 	anchorID := ecm.generateAnchorID(certenIntent, certenProof)
@@ -652,6 +671,7 @@ func (ecm *EthereumContractManager) ExecuteGovernanceWithAnchor(
 	value *big.Int,
 	callData []byte,
 ) (string, error) {
+	ecm.refreshGasPrice(ctx)
 	fmt.Printf("🏛️ [ETH-GOV-ANCHOR] Executing governance via CertenAnchorV3.executeWithGovernance...\n")
 	fmt.Printf("   Anchor ID: 0x%x\n", bundleID)
 	fmt.Printf("   Target: %s\n", target.Hex())
@@ -1782,12 +1802,6 @@ func (ecm *EthereumContractManager) generateCommitmentHash(
 
 // estimateContractGas estimates gas for a contract call
 func (ecm *EthereumContractManager) estimateContractGas(ctx context.Context, contractAddress common.Address, function string) (uint64, error) {
-	// Get the latest block to check network conditions
-	block, err := ecm.client.BlockByNumber(ctx, nil)
-	if err != nil {
-		return 0, fmt.Errorf("failed to get latest block: %w", err)
-	}
-
 	// Base gas estimates for different functions (production estimates)
 	var baseGas uint64
 	switch function {
@@ -1799,9 +1813,13 @@ func (ecm *EthereumContractManager) estimateContractGas(ctx context.Context, con
 		baseGas = 100000 // Default
 	}
 
-	// Adjust for network congestion
-	if block.GasUsed() > block.GasLimit()/2 {
-		baseGas = baseGas * 120 / 100 // 20% increase for congestion
+	// Use HeaderByNumber (works on all chains including OP Stack)
+	// BlockByNumber fails on OP Stack chains due to deposit tx type 0x7E
+	header, err := ecm.client.HeaderByNumber(ctx, nil)
+	if err == nil {
+		if header.GasUsed > header.GasLimit/2 {
+			baseGas = baseGas * 120 / 100 // 20% increase for congestion
+		}
 	}
 
 	return baseGas, nil
