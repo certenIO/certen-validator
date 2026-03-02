@@ -168,22 +168,35 @@ func (o *EVMObserver) ObserveTransaction(ctx context.Context, txHash common.Hash
 		return nil, fmt.Errorf("wait for receipt: %w", err)
 	}
 
-	// Get block information
-	block, err := o.client.BlockByHash(ctx, receipt.BlockHash)
+	// Get block header — works on all EVM chains including OP Stack (Base, Optimism)
+	// which have deposit tx types that BlockByHash can't decode
+	header, err := o.client.HeaderByHash(ctx, receipt.BlockHash)
 	if err != nil {
-		return nil, fmt.Errorf("get block: %w", err)
+		return nil, fmt.Errorf("get block header: %w", err)
 	}
 
 	// Wait for required confirmations
-	result, err := o.waitForConfirmations(ctx, receipt, block, deadline)
+	result, err := o.waitForConfirmationsFromHeader(ctx, receipt, header, deadline)
 	if err != nil {
 		return nil, fmt.Errorf("wait for confirmations: %w", err)
 	}
 
-	// Construct Merkle proofs
-	result, err = o.addMerkleProofs(ctx, result, receipt, block)
-	if err != nil {
-		return nil, fmt.Errorf("add merkle proofs: %w", err)
+	// Try full block fetch for Merkle proofs (best-effort — fails on OP Stack chains)
+	block, blockErr := o.client.BlockByHash(ctx, receipt.BlockHash)
+	if blockErr == nil {
+		result, _ = o.addMerkleProofs(ctx, result, receipt, block)
+	} else {
+		// Populate block roots from header directly
+		copy(result.StateRoot[:], header.Root.Bytes())
+		copy(result.TransactionsRoot[:], header.TxHash.Bytes())
+		copy(result.ReceiptsRoot[:], header.ReceiptHash.Bytes())
+		result.ResultHash = computeResultHash(result)
+	}
+
+	// Store raw receipt
+	rawReceipt, err := rlp.EncodeToBytes(receipt)
+	if err == nil {
+		result.RawReceipt = rawReceipt
 	}
 
 	// Set observer metadata
@@ -232,8 +245,8 @@ func (o *EVMObserver) waitForReceipt(ctx context.Context, txHash common.Hash, de
 	}
 }
 
-// waitForConfirmations waits for required block confirmations
-func (o *EVMObserver) waitForConfirmations(ctx context.Context, receipt *types.Receipt, block *types.Block, deadline time.Time) (*ObservationResult, error) {
+// waitForConfirmationsFromHeader waits for required block confirmations using a block header
+func (o *EVMObserver) waitForConfirmationsFromHeader(ctx context.Context, receipt *types.Receipt, header *types.Header, deadline time.Time) (*ObservationResult, error) {
 	ticker := time.NewTicker(o.pollingInterval)
 	defer ticker.Stop()
 
@@ -241,7 +254,7 @@ func (o *EVMObserver) waitForConfirmations(ctx context.Context, receipt *types.R
 		TxHash:                receipt.TxHash.Hex(),
 		BlockNumber:           receipt.BlockNumber.Uint64(),
 		BlockHash:             receipt.BlockHash.Hex(),
-		BlockTimestamp:        time.Unix(int64(block.Time()), 0),
+		BlockTimestamp:        time.Unix(int64(header.Time), 0),
 		Status:                uint8(receipt.Status),
 		RequiredConfirmations: o.requiredConfirmations,
 		GasUsed:               receipt.GasUsed,
