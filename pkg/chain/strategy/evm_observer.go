@@ -190,6 +190,15 @@ func (o *EVMObserver) ObserveTransaction(ctx context.Context, txHash common.Hash
 	result.ObserverValidatorID = o.validatorID
 	result.ObservedAt = time.Now().UTC()
 
+	// Fetch full transaction to get sender address
+	tx, _, err := o.client.TransactionByHash(ctx, txHash)
+	if err == nil && tx != nil {
+		signer := types.LatestSignerForChainID(big.NewInt(o.chainID))
+		if from, err := types.Sender(signer, tx); err == nil {
+			result.TxFrom = from.Hex()
+		}
+	}
+
 	// Callback
 	if o.onFinalized != nil {
 		o.onFinalized(result)

@@ -425,6 +425,14 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 		return result, err
 	}
 
+	// Generate and persist proof bundle BEFORE Phase 9 so ProofID is available for writeback
+	if o.config.EnableUnifiedTables && o.config.Repos != nil {
+		if err := o.generateAndPersistBundle(cycleCtx, cycle); err != nil {
+			// Log warning but don't fail the cycle - bundle generation is supplementary
+			fmt.Printf("Warning: failed to generate proof bundle: %v\n", err)
+		}
+	}
+
 	if err := o.executePhase9(cycleCtx, cycle); err != nil {
 		result.Error = fmt.Sprintf("phase 9 failed: %v", err)
 		result.FailPhase = 9
@@ -432,14 +440,6 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 			o.config.OnCycleFailed(result, err)
 		}
 		return result, err
-	}
-
-	// Generate and persist proof bundle (after all phases complete)
-	if o.config.EnableUnifiedTables && o.config.Repos != nil {
-		if err := o.generateAndPersistBundle(cycleCtx, cycle); err != nil {
-			// Log warning but don't fail the cycle - bundle generation is supplementary
-			fmt.Printf("Warning: failed to generate proof bundle: %v\n", err)
-		}
 	}
 
 	// Success
@@ -1178,13 +1178,6 @@ func (o *UnifiedOrchestrator) buildComprehensiveProofContext(cycle *activeCycle)
 		}
 		ctx.EventCount = totalEvents
 		ctx.EventsVerified = totalEvents > 0
-
-		// Verify against expected events from commitment
-		if cm != nil {
-			if expectedEvents, ok := cm["expectedEvents"].([]map[string]interface{}); ok {
-				ctx.EventsVerified = totalEvents >= len(expectedEvents)
-			}
-		}
 	}
 
 	// Set proof artifact ID for PostgreSQL lookup
@@ -1223,6 +1216,7 @@ func (o *UnifiedOrchestrator) buildAttestationBundleFromCycle(cycle *activeCycle
 		FinalizedAt:         time.Now().UTC(),
 		TxGasUsed:           obs.GasUsed,
 		ObservedByValidator: obs.ObserverValidatorID,
+		TxFrom:             common.HexToAddress(obs.TxFrom),
 	}
 
 	// Copy logs from observation

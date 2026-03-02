@@ -370,6 +370,9 @@ type ObservationResult struct {
 
 	// ObserverValidatorID is the validator who observed
 	ObserverValidatorID string `json:"observer_validator_id,omitempty"`
+
+	// TxFrom is the transaction sender address
+	TxFrom string `json:"tx_from,omitempty"`
 }
 
 // =============================================================================
