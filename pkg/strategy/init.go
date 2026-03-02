@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 
 	attestation "github.com/certen/independant-validator/pkg/attestation/strategy"
 	chain "github.com/certen/independant-validator/pkg/chain/strategy"
@@ -215,6 +216,8 @@ func initializeChainStrategies(registry *Registry, cfg *RegistryConfig) error {
 		11155420: {"optimism-sepolia", "optimism sepolia", "op-sepolia"},
 		8453:     {"base", "base-mainnet"},
 		84532:    {"base-sepolia", "base sepolia"},
+		97:       {"bsc-testnet", "bsc testnet", "binance-testnet"},
+		56:       {"bsc", "binance", "bsc-mainnet"},
 		1287:     {"moonbase-alpha", "moonbase alpha", "moonbeam-testnet", "moonbeam moonbase alpha"},
 		1284:     {"moonbeam"},
 	}
@@ -230,10 +233,104 @@ func initializeChainStrategies(registry *Registry, cfg *RegistryConfig) error {
 		}
 	}
 
+	// Register L2 EVM chain strategies from environment variables
+	// Each L2 chain with a configured RPC URL gets its own EVMStrategy instance
+	if err := registerL2EVMStrategies(registry, cfg, knownAliases); err != nil {
+		if cfg.Logger != nil {
+			cfg.Logger.Printf("⚠️ Some L2 EVM chain strategies failed to register: %v", err)
+		}
+	}
+
 	// Register stub strategies for other chains (future implementation)
 	if err := registerStubChainStrategies(registry, cfg); err != nil {
 		if cfg.Logger != nil {
 			cfg.Logger.Printf("⚠️ Some stub chain strategies failed to register: %v", err)
+		}
+	}
+
+	return nil
+}
+
+// l2ChainDef defines an L2 EVM chain to register
+type l2ChainDef struct {
+	chainID       int64
+	networkName   string
+	rpcEnvVar     string
+	anchorEnvVar  string
+	anchorDefault string
+	confirmations int
+}
+
+// registerL2EVMStrategies registers EVM strategies for all configured L2 chains.
+// Each chain with an RPC URL env var set gets its own EVMStrategy instance so the
+// orchestrator can observe transactions and write back proofs on any target chain.
+func registerL2EVMStrategies(registry *Registry, cfg *RegistryConfig, knownAliases map[int64][]string) error {
+	l2Chains := []l2ChainDef{
+		{421614, "arbitrum-sepolia", "ARBITRUM_SEPOLIA_RPC_URL", "ARBITRUM_SEPOLIA_ANCHORV4_ADDRESS", "0x0518ABBA8D56cC3369b3fcB826313AB1e4702f35", 2},
+		{11155420, "optimism-sepolia", "OPTIMISM_SEPOLIA_RPC_URL", "OPTIMISM_SEPOLIA_ANCHORV4_ADDRESS", "0x0518ABBA8D56cC3369b3fcB826313AB1e4702f35", 2},
+		{84532, "base-sepolia", "BASE_SEPOLIA_RPC_URL", "BASE_SEPOLIA_ANCHORV4_ADDRESS", "0x52E8e8E5d5EE35ED52BA6B7BB2Cb2dc2D2b2c952", 2},
+		{80002, "polygon-amoy", "POLYGON_AMOY_RPC_URL", "POLYGON_AMOY_ANCHORV4_ADDRESS", "0x52E8e8E5d5EE35ED52BA6B7BB2Cb2dc2D2b2c952", 2},
+		{97, "bsc-testnet", "BSC_TESTNET_RPC_URL", "BSC_TESTNET_ANCHORV4_ADDRESS", "0x52E8e8E5d5EE35ED52BA6B7BB2Cb2dc2D2b2c952", 2},
+		{1287, "moonbase-alpha", "MOONBASE_ALPHA_RPC_URL", "MOONBASE_ALPHA_ANCHORV4_ADDRESS", "0x52E8e8E5d5EE35ED52BA6B7BB2Cb2dc2D2b2c952", 2},
+	}
+
+	for _, l2 := range l2Chains {
+		// Skip if this L2 is actually the primary chain (already registered)
+		if l2.chainID == cfg.EthChainID {
+			continue
+		}
+
+		rpcURL := os.Getenv(l2.rpcEnvVar)
+		if rpcURL == "" {
+			continue
+		}
+
+		anchorAddr := os.Getenv(l2.anchorEnvVar)
+		if anchorAddr == "" {
+			anchorAddr = l2.anchorDefault
+		}
+
+		chainConfig := &chain.ChainConfig{
+			Platform:              chain.ChainPlatformEVM,
+			ChainID:               strconv.FormatInt(l2.chainID, 10),
+			NetworkName:           l2.networkName,
+			RPC:                   rpcURL,
+			ContractAddress:       anchorAddr,
+			RequiredConfirmations: l2.confirmations,
+			Enabled:               true,
+		}
+
+		l2Strategy, err := chain.NewEVMStrategyFromConfig(chainConfig, cfg.EthPrivateKey, cfg.ValidatorID)
+		if err != nil {
+			if cfg.Logger != nil {
+				cfg.Logger.Printf("⚠️ Failed to create EVM strategy for %s: %v", l2.networkName, err)
+			}
+			continue
+		}
+
+		l2ChainID := l2Strategy.ChainID()
+		if err := registry.RegisterChainStrategy(l2ChainID, l2Strategy.Config(), l2Strategy); err != nil {
+			if cfg.Logger != nil {
+				cfg.Logger.Printf("⚠️ Failed to register %s (chainID %s): %v", l2.networkName, l2ChainID, err)
+			}
+			continue
+		}
+
+		if cfg.Logger != nil {
+			cfg.Logger.Printf("✅ L2 EVM chain strategy registered: %s (chainID %s)", l2.networkName, l2ChainID)
+		}
+
+		// Register aliases
+		if aliases, ok := knownAliases[l2.chainID]; ok {
+			for _, alias := range aliases {
+				if alias != l2ChainID {
+					if err := registry.RegisterChainStrategy(alias, l2Strategy.Config(), l2Strategy); err == nil {
+						if cfg.Logger != nil {
+							cfg.Logger.Printf("   ✅ Registered alias: %s -> %s", alias, l2ChainID)
+						}
+					}
+				}
+			}
 		}
 	}
 
