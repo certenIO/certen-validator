@@ -22,6 +22,7 @@ import (
 	"io"
 	"math/big"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -233,6 +234,10 @@ type UnifiedProofCycleRequest struct {
 	// These come from the Accumulate key page that authorized the transaction
 	KeyPageThreshold int `json:"key_page_threshold,omitempty"` // M - required signatures
 	KeyPageKeyCount  int `json:"key_page_key_count,omitempty"` // N - total keys on page
+
+	// CommitmentData holds the full commitment map from BFT consensus
+	// Contains step selectors, anchor contract, intent hash, chain info, expected events
+	CommitmentData map[string]interface{} `json:"commitment_data,omitempty"`
 }
 
 // UnifiedProofCycleResult represents the result of a proof cycle
@@ -597,6 +602,7 @@ func getNetworkName(chainID string) string {
 		"11155111": "sepolia",
 		"137":      "polygon-mainnet",
 		"80001":    "polygon-mumbai",
+		"80002":    "polygon-amoy",
 		"42161":    "arbitrum-one",
 		"421614":   "arbitrum-sepolia",
 		"10":       "optimism-mainnet",
@@ -1058,27 +1064,135 @@ func (o *UnifiedOrchestrator) executePhase9(ctx context.Context, cycle *activeCy
 func (o *UnifiedOrchestrator) buildComprehensiveProofContext(cycle *activeCycle) *ComprehensiveProofContext {
 	req := cycle.Request
 	result := cycle.Result
+	cm := req.CommitmentData
 
 	ctx := &ComprehensiveProofContext{
 		IntentID:     req.IntentID,
-		IntentTxHash: req.IntentID, // Would come from original intent
+		IntentTxHash: req.AccumulateTxHash,
 		IntentBlock:  uint64(req.AccumulateHeight),
 	}
 
-	// Set bundle ID and commitment if available
+	// Extract AccumulateHeight from commitment if not set on request
+	if ctx.IntentBlock == 0 && cm != nil {
+		if h, ok := cm["accumulateBlockHeight"].(uint64); ok {
+			ctx.IntentBlock = h
+		} else if h, ok := cm["accumulateBlockHeight"].(float64); ok {
+			ctx.IntentBlock = uint64(h)
+		}
+	}
+	// Same for tx hash
+	if ctx.IntentTxHash == "" || ctx.IntentTxHash == req.IntentID {
+		if h, ok := cm["accumulateTxHash"].(string); ok && h != "" {
+			ctx.IntentTxHash = h
+		}
+	}
+
+	// Compute intent hash from tx hash
+	if ctx.IntentTxHash != "" && ctx.IntentTxHash != req.IntentID {
+		hashBytes, _ := hex.DecodeString(strings.TrimPrefix(ctx.IntentTxHash, "0x"))
+		if len(hashBytes) == 32 {
+			copy(ctx.IntentHash[:], hashBytes)
+		}
+	}
+
+	// Populate commitment from request + commitment map
 	if req.BundleID != [32]byte{} {
-		// Populate from request
 		ctx.Commitment = &ExecutionCommitment{
 			OperationID: req.MerkleRoot,
 			BundleID:    req.BundleID,
 		}
+		if cm != nil {
+			// Anchor contract
+			if ac, ok := cm["anchorContract"].(string); ok {
+				ctx.Commitment.TargetContract = common.HexToAddress(ac)
+			}
+			// Commitment hash
+			if ch, ok := cm["commitmentHash"].(string); ok {
+				if decoded, err := hex.DecodeString(ch); err == nil && len(decoded) == 32 {
+					copy(ctx.Commitment.CommitmentHash[:], decoded)
+				}
+			}
+			// Intent references on commitment
+			if txh, ok := cm["txHash"].(string); ok {
+				ctx.Commitment.IntentTxHash = txh
+			}
+			// Function selector from step1 (primary anchor call)
+			if step1, ok := cm["step1"].(map[string]interface{}); ok {
+				if s, ok := step1["selector"].(string); ok {
+					if decoded, err := hex.DecodeString(s); err == nil && len(decoded) >= 4 {
+						copy(ctx.Commitment.FunctionSelector[:], decoded[:4])
+					}
+				}
+			}
+		}
+	}
+
+	// Step 1/2/3 details from commitment map
+	if cm != nil {
+		if step1, ok := cm["step1"].(map[string]interface{}); ok {
+			if s, ok := step1["selector"].(string); ok {
+				ctx.Step1Selector = s
+			}
+			if c, ok := step1["contract"].(string); ok {
+				ctx.Step1Contract = c
+			}
+		}
+		if step2, ok := cm["step2"].(map[string]interface{}); ok {
+			if s, ok := step2["selector"].(string); ok {
+				ctx.Step2Selector = s
+			}
+			if c, ok := step2["contract"].(string); ok {
+				ctx.Step2Contract = c
+			}
+		}
+		if step3, ok := cm["step3"].(map[string]interface{}); ok {
+			if s, ok := step3["selector"].(string); ok {
+				ctx.Step3Selector = s
+			}
+			if c, ok := step3["contract"].(string); ok {
+				ctx.Step3Contract = c
+			}
+		}
+		// Final target and value
+		if ft, ok := cm["finalTarget"].(string); ok {
+			ctx.Step3FinalTarget = ft
+		}
+		if fv, ok := cm["finalValue"].(string); ok {
+			ctx.Step3FinalValue = fv
+		}
+		// Step1 intent hash (bundleID hex)
+		if bid, ok := cm["bundleID"].(string); ok {
+			ctx.Step1IntentHash = bid
+		}
+		// Governance proof ref
+		if gr, ok := cm["governanceRoot"].(string); ok && gr != "" {
+			ctx.GovernanceProofRef = gr
+		}
+	}
+
+	// Event verification from observation results
+	if len(result.ObservationResults) > 0 {
+		totalEvents := 0
+		for _, obs := range result.ObservationResults {
+			totalEvents += len(obs.Logs)
+		}
+		ctx.EventCount = totalEvents
+		ctx.EventsVerified = totalEvents > 0
+
+		// Verify against expected events from commitment
+		if cm != nil {
+			if expectedEvents, ok := cm["expectedEvents"].([]map[string]interface{}); ok {
+				ctx.EventsVerified = totalEvents >= len(expectedEvents)
+			}
+		}
 	}
 
 	// Set proof artifact ID for PostgreSQL lookup
-	ctx.ProofArtifactID = result.ProofID.String()
+	if result.ProofID != uuid.Nil {
+		ctx.ProofArtifactID = result.ProofID.String()
+	}
 
-	// Set sequence number if available
-	ctx.SequenceNumber = uint64(time.Now().UnixNano())
+	ctx.SequenceNumber = 0 // Will be set by result chain tracking (future)
 
 	return ctx
 }
@@ -1096,17 +1210,29 @@ func (o *UnifiedOrchestrator) buildAttestationBundleFromCycle(cycle *activeCycle
 
 	// Build external chain result
 	extResult := &ExternalChainResult{
-		Chain:              result.ChainID,
-		ChainID:            11155111, // Would come from chain strategy
-		TxHash:             parseHash(obs.TxHash),
-		BlockNumber:        parseBigInt(obs.BlockNumber),
-		BlockHash:          parseHash(obs.BlockHash),
-		Status:             uint64(obs.Status), // 1=success, 0=revert
-		StateRoot:          obs.StateRoot,
-		TransactionsRoot:   obs.TransactionsRoot,
-		ReceiptsRoot:       obs.ReceiptsRoot,
-		ConfirmationBlocks: obs.Confirmations,
-		FinalizedAt:        time.Now().UTC(),
+		Chain:               getNetworkName(result.ChainID),
+		ChainID:             parseChainIDInt(result.ChainID),
+		TxHash:              parseHash(obs.TxHash),
+		BlockNumber:         parseBigInt(obs.BlockNumber),
+		BlockHash:           parseHash(obs.BlockHash),
+		Status:              uint64(obs.Status), // 1=success, 0=revert
+		StateRoot:           obs.StateRoot,
+		TransactionsRoot:    obs.TransactionsRoot,
+		ReceiptsRoot:        obs.ReceiptsRoot,
+		ConfirmationBlocks:  obs.Confirmations,
+		FinalizedAt:         time.Now().UTC(),
+		TxGasUsed:           obs.GasUsed,
+		ObservedByValidator: obs.ObserverValidatorID,
+	}
+
+	// Copy logs from observation
+	for _, log := range obs.Logs {
+		extResult.Logs = append(extResult.Logs, LogEntry{
+			Address: common.HexToAddress(log.Address),
+			Topics:  parseTopics(log.Topics),
+			Data:    log.Data,
+			Index:   log.LogIndex,
+		})
 	}
 
 	// Build aggregated attestation
@@ -1116,6 +1242,7 @@ func (o *UnifiedOrchestrator) buildAttestationBundleFromCycle(cycle *activeCycle
 			MessageHash:        result.AggregatedAttestation.MessageHash,
 			AggregateSignature: result.AggregatedAttestation.AggregatedSignature,
 			ValidatorCount:     result.AggregatedAttestation.ParticipantCount,
+			SignedVotingPower:  big.NewInt(int64(result.AggregatedAttestation.ParticipantCount)),
 			ThresholdMet:       result.AggregatedAttestation.ThresholdMet,
 			Finalized:          result.AggregatedAttestation.ThresholdMet && result.AggregatedAttestation.Verified,
 			FinalizedAt:        time.Now().UTC(),
@@ -1146,6 +1273,21 @@ func parseHash(s string) common.Hash {
 // parseBigInt parses a uint64 to *big.Int
 func parseBigInt(n uint64) *big.Int {
 	return new(big.Int).SetUint64(n)
+}
+
+// parseChainIDInt parses a chain ID string to int64
+func parseChainIDInt(s string) int64 {
+	n, _ := strconv.ParseInt(s, 10, 64)
+	return n
+}
+
+// parseTopics converts string topic list to common.Hash slice
+func parseTopics(topics []string) []common.Hash {
+	result := make([]common.Hash, len(topics))
+	for i, t := range topics {
+		result[i] = common.HexToHash(t)
+	}
+	return result
 }
 
 // =============================================================================

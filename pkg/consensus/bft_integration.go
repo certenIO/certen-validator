@@ -1130,6 +1130,9 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 					if vb.OperationCommitment != "" {
 						commitMap["operationCommitment"] = vb.OperationCommitment
 					}
+					// Add Accumulate block height and transaction hash for proof context
+					commitMap["accumulateBlockHeight"] = blockHeight
+					commitMap["accumulateTxHash"] = certenIntent.TransactionHash
 				}
 
 				// Enhanced: Build AnchorWorkflowTxHashes with all 3 transaction hashes

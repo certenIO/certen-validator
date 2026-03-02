@@ -256,7 +256,8 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 		var governanceRoot, operationCommitment [32]byte
 		var keyPageThreshold, keyPageKeyCount int
 		var targetChainFromCommitment string
-		if commitMap, ok := commitment.(map[string]interface{}); ok {
+		commitMap, _ := commitment.(map[string]interface{})
+		if commitMap != nil {
 			// Extract targetChain from commitment (set by buildExecutionCommitmentFromIntent)
 			if tc, ok := commitMap["targetChain"].(string); ok && tc != "" {
 				targetChainFromCommitment = tc
@@ -334,8 +335,9 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 			// Merkle inclusion proof data (for MerkleTreeVisualization)
 			LeafHash:   leafHash,
 			LeafIndex:  0, // Single transaction, always index 0
-			MerklePath: nil, // Empty path for single leaf (leaf = root)
-			MerkleRoot: merkleRoot,
+			MerklePath:     nil, // Empty path for single leaf (leaf = root)
+			MerkleRoot:     merkleRoot,
+			CommitmentData: commitMap,
 		}
 
 		fmt.Printf("[UnifiedAdapter] Starting unified proof cycle with Accumulate ref for intent %s\n", intentID)
