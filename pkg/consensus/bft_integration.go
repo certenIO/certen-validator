@@ -1108,11 +1108,11 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 		// Phase 7-9: Trigger proof cycle for observation, attestation, and write-back
 		if bv.proofCycleOrchestrator != nil && anchorRes.AnchorTxID != "" {
 			go func() {
-				// Parse bundle ID from ValidatorBlock
+				// Parse bundle ID from ValidatorBlock (hex string → raw bytes)
 				var bundleID [32]byte
-				bundleIDBytes := []byte(vb.BundleID)
-				if len(bundleIDBytes) >= 32 {
-					copy(bundleID[:], bundleIDBytes[:32])
+				bundleIDHex := strings.TrimPrefix(vb.BundleID, "0x")
+				if decoded, err := hex.DecodeString(bundleIDHex); err == nil && len(decoded) >= 32 {
+					copy(bundleID[:], decoded[:32])
 				}
 
 				// SECURITY CRITICAL: Build execution commitment from intent's CrossChainData

@@ -613,6 +613,8 @@ func getNetworkName(chainID string) string {
 		"43113":    "avalanche-fuji",
 		"56":       "bsc-mainnet",
 		"97":       "bsc-testnet",
+		"1284":     "moonbeam",
+		"1287":     "moonbase-alpha",
 	}
 	if name, ok := networkNames[chainID]; ok {
 		return name
@@ -1122,6 +1124,12 @@ func (o *UnifiedOrchestrator) buildComprehensiveProofContext(cycle *activeCycle)
 					if decoded, err := hex.DecodeString(s); err == nil && len(decoded) >= 4 {
 						copy(ctx.Commitment.FunctionSelector[:], decoded[:4])
 					}
+				}
+			}
+			// Expected value (final transfer amount)
+			if fv, ok := cm["finalValue"].(string); ok && fv != "" && fv != "0" {
+				if val, ok := new(big.Int).SetString(fv, 10); ok {
+					ctx.Commitment.ExpectedValue = val
 				}
 			}
 		}
