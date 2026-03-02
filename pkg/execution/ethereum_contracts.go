@@ -1078,17 +1078,8 @@ func (ecm *EthereumContractManager) buildComprehensiveProof(
 	// (a Groth16 public input that binds the proof to the validators' BLS keys)
 	zkProofBytes, _ := ecm.generateBLSZKProof(blsSignatureBytes, messageHash, signedVotingPower, totalVotingPower)
 
-	// CRITICAL: Ensure non-empty proof bytes — the on-chain verifyBLSSignature()
-	// returns false immediately if signature.length == 0, causing executeComprehensiveProof
-	// to revert and leaving proofExecuted=false on the anchor.
-	// Fall back to mock proof when ZK prover is unavailable.
-	if len(zkProofBytes) == 0 {
-		log.Printf("⚠️ [BLS-ZK] ZK proof is empty, generating mock proof for on-chain verification")
-		zkProofBytes = ecm.generateMockBLSProof(messageHash, signedVotingPower, totalVotingPower)
-	}
-
 	blsProof := contracts.BLSProofData{
-		AggregateSignature: zkProofBytes, // Use ZK proof bytes (real or mock)
+		AggregateSignature: zkProofBytes, // Use ZK proof bytes, not raw signature
 		TotalVotingPower:   totalVotingPower,
 		SignedVotingPower:  signedVotingPower,
 		ThresholdMet:       signedVotingPower.Cmp(new(big.Int).Mul(totalVotingPower, big.NewInt(2)).Div(new(big.Int).Mul(totalVotingPower, big.NewInt(2)), big.NewInt(3))) >= 0,
