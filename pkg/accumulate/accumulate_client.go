@@ -32,6 +32,9 @@ type Client interface {
 	// Transaction governance data (M-of-N key page threshold)
 	GetTransactionGovernanceData(ctx context.Context, txHash string, accountURL string) (*TransactionGovernanceData, error)
 
+	// Transaction status (e.g. "delivered" with statusNo=201)
+	GetTransactionStatus(ctx context.Context, txHash string) (string, error)
+
 	// Network health and lifecycle
 	Health(ctx context.Context) error
 	Close() error

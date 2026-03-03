@@ -24,6 +24,7 @@ import (
 	"github.com/certen/independant-validator/pkg/batch"
 	"github.com/certen/independant-validator/pkg/commitment"
 	"github.com/certen/independant-validator/pkg/consensus"
+	"github.com/certen/independant-validator/pkg/database"
 	"github.com/certen/independant-validator/pkg/proof"
 )
 
@@ -93,6 +94,9 @@ type IntentDiscovery struct {
 	onDemandHandler      *batch.OnDemandHandler         // For immediate on-demand anchoring
 	batchingEnabled      bool                           // Toggle for batch system routing
 	governanceProofGen   proof.GovernanceProofGenerator // For G0/G1/G2 proof generation
+
+	// Intent lifecycle tracking (PostgreSQL)
+	repos                *database.Repositories         // For lifecycle status persistence
 
 	// Multi-leg intent support
 	legCompletionHandler *LegCompletionHandler          // For multi-leg coordination
@@ -223,6 +227,14 @@ func (id *IntentDiscovery) SetLegCompletionHandler(handler *LegCompletionHandler
 // IsMultiLegEnabled returns whether multi-leg processing is enabled
 func (id *IntentDiscovery) IsMultiLegEnabled() bool {
 	return id.multiLegEnabled
+}
+
+// SetRepositories configures database repositories for intent lifecycle tracking
+func (id *IntentDiscovery) SetRepositories(repos *database.Repositories) {
+	id.repos = repos
+	if repos != nil {
+		id.logger.Printf("✅ Intent lifecycle tracking enabled via PostgreSQL")
+	}
 }
 
 // StartMonitoring begins monitoring Accumulate blockchain for Certen intents
@@ -544,6 +556,20 @@ func (id *IntentDiscovery) processBlock(job *BlockProcessJob, workerID string) e
 			continue
 		}
 
+		// Intent lifecycle: record discovery as authorized (validator only sees delivered intents)
+		if id.repos != nil && id.repos.IntentLifecycle != nil {
+			targetChain := ""
+			if tc, _, tcErr := intent.GetTargetChain(); tcErr == nil {
+				targetChain = tc
+			}
+			if lcErr := id.repos.IntentLifecycle.UpsertOnDiscovery(
+				ctx, intent.IntentID, intent.TransactionHash,
+				int64(job.BlockHeight), intent.UserID, intent.ProofClass, targetChain,
+			); lcErr != nil {
+				id.logger.Printf("⚠️ [LIFECYCLE] Failed to upsert lifecycle for %s: %v", intent.IntentID, lcErr)
+			}
+		}
+
 		// E.4 remediation: Two-phase marking to handle processing failures
 		// Phase 1: Mark as in_progress - prevents concurrent processing
 		if !id.markInProgress(intent.IntentID) {
@@ -565,6 +591,15 @@ func (id *IntentDiscovery) processBlock(job *BlockProcessJob, workerID string) e
 			// E.4 remediation: Phase 2 (failure) - Mark as failed, allowing future retry
 			id.markFailed(intent.IntentID)
 			id.logger.Printf("   Intent %s marked as 'failed' - can be retried on next discovery", intent.IntentID)
+			// Intent lifecycle: record failure (non-fatal)
+			if id.repos != nil && id.repos.IntentLifecycle != nil {
+				if lcErr := id.repos.IntentLifecycle.UpdateStatus(ctx, intent.IntentID,
+					database.IntentLifecycleFailed,
+					database.WithErrorMessage(err.Error()),
+				); lcErr != nil {
+					id.logger.Printf("⚠️ [LIFECYCLE] Failed to update lifecycle to failed for %s: %v", intent.IntentID, lcErr)
+				}
+			}
 		} else {
 			foundIntents++
 			// E.4 remediation: Phase 2 (success) - Mark as completed

@@ -15,6 +15,7 @@ type Repositories struct {
 	Requests       *RequestRepository
 	Consensus      *ConsensusRepository // Consensus entries and batch attestations
 	Unified        *UnifiedRepository   // Multi-chain unified attestations and chain execution results
+	IntentLifecycle *IntentLifecycleRepository // Unified intent lifecycle status tracking
 }
 
 // NewRepositories creates all repositories with the given client
@@ -28,5 +29,6 @@ func NewRepositories(client *Client) *Repositories {
 		Requests:       NewRequestRepository(client),
 		Consensus:      NewConsensusRepository(client),
 		Unified:        NewUnifiedRepository(client.DB()),       // Multi-chain unified tables
+		IntentLifecycle: NewIntentLifecycleRepository(client),   // Intent lifecycle tracking
 	}
 }

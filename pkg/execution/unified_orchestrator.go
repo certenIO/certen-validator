@@ -406,6 +406,9 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 	o.activeCycles[req.CycleID] = cycle
 	o.mu.Unlock()
 
+	// Intent lifecycle: mark as in_process
+	o.updateLifecycleInProcess(ctx, req.IntentID, req.CycleID)
+
 	defer func() {
 		o.mu.Lock()
 		delete(o.activeCycles, req.CycleID)
@@ -416,6 +419,7 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 	if err := o.executePhase7(cycleCtx, cycle, chainStrategy); err != nil {
 		result.Error = fmt.Sprintf("phase 7 failed: %v", err)
 		result.FailPhase = 7
+		o.updateLifecycleFailed(ctx, req.IntentID, req.CycleID, 7, err)
 		if o.config.OnCycleFailed != nil {
 			o.config.OnCycleFailed(result, err)
 		}
@@ -425,6 +429,7 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 	if err := o.executePhase8(cycleCtx, cycle, attestStrategy); err != nil {
 		result.Error = fmt.Sprintf("phase 8 failed: %v", err)
 		result.FailPhase = 8
+		o.updateLifecycleFailed(ctx, req.IntentID, req.CycleID, 8, err)
 		if o.config.OnCycleFailed != nil {
 			o.config.OnCycleFailed(result, err)
 		}
@@ -442,6 +447,7 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 	if err := o.executePhase9(cycleCtx, cycle); err != nil {
 		result.Error = fmt.Sprintf("phase 9 failed: %v", err)
 		result.FailPhase = 9
+		o.updateLifecycleFailed(ctx, req.IntentID, req.CycleID, 9, err)
 		if o.config.OnCycleFailed != nil {
 			o.config.OnCycleFailed(result, err)
 		}
@@ -453,11 +459,66 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 	result.CompletedAt = &now
 	result.Success = true
 
+	// Intent lifecycle: mark as complete
+	o.updateLifecycleComplete(ctx, req.IntentID, req.CycleID, result.WriteBackTxHash)
+
 	if o.config.OnCycleComplete != nil {
 		o.config.OnCycleComplete(result)
 	}
 
 	return result, nil
+}
+
+// =============================================================================
+// INTENT LIFECYCLE HELPERS
+// =============================================================================
+
+// updateLifecycleInProcess marks an intent as in_process in the lifecycle table.
+// Non-fatal: logs warning on error, never blocks proof cycle.
+func (o *UnifiedOrchestrator) updateLifecycleInProcess(ctx context.Context, intentID, cycleID string) {
+	if o.config.Repos == nil || o.config.Repos.IntentLifecycle == nil || intentID == "" {
+		return
+	}
+	if err := o.config.Repos.IntentLifecycle.UpdateStatus(ctx, intentID,
+		database.IntentLifecycleInProcess,
+		database.WithCycleID(cycleID),
+	); err != nil {
+		fmt.Printf("Warning: [LIFECYCLE] failed to update %s to in_process: %v\n", intentID, err)
+	}
+}
+
+// updateLifecycleFailed marks an intent as failed in the lifecycle table.
+// Non-fatal: logs warning on error, never blocks proof cycle.
+func (o *UnifiedOrchestrator) updateLifecycleFailed(ctx context.Context, intentID, cycleID string, phase int, phaseErr error) {
+	if o.config.Repos == nil || o.config.Repos.IntentLifecycle == nil || intentID == "" {
+		return
+	}
+	errMsg := fmt.Sprintf("phase %d failed: %v", phase, phaseErr)
+	if err := o.config.Repos.IntentLifecycle.UpdateStatus(ctx, intentID,
+		database.IntentLifecycleFailed,
+		database.WithCycleID(cycleID),
+		database.WithErrorMessage(errMsg),
+	); err != nil {
+		fmt.Printf("Warning: [LIFECYCLE] failed to update %s to failed: %v\n", intentID, err)
+	}
+}
+
+// updateLifecycleComplete marks an intent as complete in the lifecycle table.
+// Non-fatal: logs warning on error, never blocks proof cycle.
+func (o *UnifiedOrchestrator) updateLifecycleComplete(ctx context.Context, intentID, cycleID, writeBackTxHash string) {
+	if o.config.Repos == nil || o.config.Repos.IntentLifecycle == nil || intentID == "" {
+		return
+	}
+	opts := []database.UpdateOption{database.WithCycleID(cycleID)}
+	if writeBackTxHash != "" {
+		opts = append(opts, database.WithWriteBackTx(writeBackTxHash))
+	}
+	if err := o.config.Repos.IntentLifecycle.UpdateStatus(ctx, intentID,
+		database.IntentLifecycleComplete,
+		opts...,
+	); err != nil {
+		fmt.Printf("Warning: [LIFECYCLE] failed to update %s to complete: %v\n", intentID, err)
+	}
 }
 
 // validateRequest validates a proof cycle request

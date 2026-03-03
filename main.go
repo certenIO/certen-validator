@@ -551,6 +551,18 @@ func main() {
         // Batch statistics endpoint
         mux.HandleFunc("/api/v1/batches/", proofHandlers.HandleGetBatchStats)
 
+        // Intent Lifecycle endpoints
+        lifecycleHandlers := server.NewIntentLifecycleHandlers(
+            batchComponents.Repos,
+            log.New(log.Writer(), "[LifecycleAPI] ", log.LstdFlags),
+        )
+        mux.HandleFunc("/api/v1/intent/tx/", lifecycleHandlers.HandleGetByTxHash)
+        mux.HandleFunc("/api/v1/intent/", lifecycleHandlers.HandleGetByIntentID)
+
+        log.Printf("✅ Intent lifecycle API endpoints configured:")
+        log.Printf("   - GET /api/v1/intent/{id}/lifecycle     (lifecycle by intent ID)")
+        log.Printf("   - GET /api/v1/intent/tx/{hash}/lifecycle (lifecycle by tx hash)")
+
         log.Printf("✅ [Phase 5] Comprehensive proof artifact API v1 endpoints configured:")
         log.Printf("   - GET  /api/v1/proofs/tx/:hash      (proof by tx hash)")
         log.Printf("   - GET  /api/v1/proofs/account/:url  (proofs by account)")
@@ -1514,6 +1526,10 @@ func startValidator(
         log.Printf("✅ [Phase 5] Batch system wired to intent discovery:")
         log.Printf("   - on_cadence intents → BatchCollector → ~$0.05/proof")
         log.Printf("   - on_demand intents → OnDemandHandler → ~$0.25/proof")
+
+        // Wire repositories for intent lifecycle tracking
+        intentDiscovery.SetRepositories(batchComponents.Repos)
+        log.Printf("✅ Intent lifecycle tracking wired to intent discovery")
     } else {
         log.Printf("⚠️ [Phase 5] Batch system not available - intents will bypass PostgreSQL")
     }

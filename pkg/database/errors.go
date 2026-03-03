@@ -29,4 +29,7 @@ var (
 
 	// ErrTransactionNotFound is returned when a batch transaction is not found
 	ErrTransactionNotFound = errors.New("transaction not found")
+
+	// ErrIntentLifecycleNotFound is returned when an intent lifecycle record is not found
+	ErrIntentLifecycleNotFound = errors.New("intent lifecycle not found")
 )
