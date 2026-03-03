@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/google/uuid"
 
 	"github.com/certen/independant-validator/pkg/accumulate"
@@ -297,6 +298,10 @@ type UnifiedOrchestrator struct {
 	// Synthetic transaction builder for write-back
 	txBuilder *SyntheticTxBuilder
 
+	// Result hash chains per chain ID (for sequence_number, previous_result_hash, anchor_proof_hash)
+	resultChains     map[string]*ResultHashChain
+	resultChainsLock sync.RWMutex
+
 	// State
 	running     bool
 	stopCh      chan struct{}
@@ -329,6 +334,7 @@ func NewUnifiedOrchestrator(config *UnifiedOrchestratorConfig) (*UnifiedOrchestr
 	orch := &UnifiedOrchestrator{
 		config:       config,
 		activeCycles: make(map[string]*activeCycle),
+		resultChains: make(map[string]*ResultHashChain),
 		stopCh:       make(chan struct{}),
 		httpClient: &http.Client{
 			Timeout: config.AttestationTimeout,
@@ -1166,10 +1172,24 @@ func (o *UnifiedOrchestrator) buildComprehensiveProofContext(cycle *activeCycle)
 			if c, ok := step3["contract"].(string); ok {
 				ctx.Step3Contract = c
 			}
+			// Also check step3 sub-keys for finalTarget
+			if ft, ok := step3["finalTarget"].(string); ok && ft != "" {
+				ctx.Step3FinalTarget = ft
+			} else if ft, ok := step3["final_target"].(string); ok && ft != "" {
+				ctx.Step3FinalTarget = ft
+			} else if ft, ok := step3["to"].(string); ok && ft != "" {
+				ctx.Step3FinalTarget = ft
+			}
 		}
-		// Final target and value
-		if ft, ok := cm["finalTarget"].(string); ok {
-			ctx.Step3FinalTarget = ft
+		// Final target and value (top-level fallback)
+		if ctx.Step3FinalTarget == "" {
+			if ft, ok := cm["finalTarget"].(string); ok {
+				ctx.Step3FinalTarget = ft
+			} else if ft, ok := cm["to"].(string); ok {
+				ctx.Step3FinalTarget = ft
+			} else if ft, ok := cm["recipient"].(string); ok {
+				ctx.Step3FinalTarget = ft
+			}
 		}
 		if fv, ok := cm["finalValue"].(string); ok {
 			ctx.Step3FinalValue = fv
@@ -1192,14 +1212,31 @@ func (o *UnifiedOrchestrator) buildComprehensiveProofContext(cycle *activeCycle)
 		}
 		ctx.EventCount = totalEvents
 		ctx.EventsVerified = totalEvents > 0
+
+		// Extract transfer_executed_hash: find the GovernanceExecuted event tx hash
+		// GovernanceExecuted is emitted in step 3 (executeWithGovernance)
+		// keccak256("GovernanceExecuted(bytes32,address,uint256,bool)") = topic0
+		govExecutedTopic := crypto.Keccak256Hash([]byte("GovernanceExecuted(bytes32,address,uint256,bool)"))
+		for _, obs := range result.ObservationResults {
+			for _, l := range obs.Logs {
+				if len(l.Topics) > 0 {
+					topicBytes := common.FromHex(l.Topics[0])
+					if len(topicBytes) == 32 && common.BytesToHash(topicBytes) == govExecutedTopic {
+						ctx.TransferExecutedHash = obs.TxHash
+						break
+					}
+				}
+			}
+			if ctx.TransferExecutedHash != "" {
+				break
+			}
+		}
 	}
 
 	// Set proof artifact ID for PostgreSQL lookup
 	if result.ProofID != uuid.Nil {
 		ctx.ProofArtifactID = result.ProofID.String()
 	}
-
-	ctx.SequenceNumber = 0 // Will be set by result chain tracking (future)
 
 	return ctx
 }
@@ -1233,15 +1270,34 @@ func (o *UnifiedOrchestrator) buildAttestationBundleFromCycle(cycle *activeCycle
 		TxFrom:             common.HexToAddress(obs.TxFrom),
 	}
 
-	// Copy logs from observation
-	for _, log := range obs.Logs {
-		extResult.Logs = append(extResult.Logs, LogEntry{
-			Address: common.HexToAddress(log.Address),
-			Topics:  parseTopics(log.Topics),
-			Data:    log.Data,
-			Index:   log.LogIndex,
-		})
+	// Copy logs from all observation results (not just primary)
+	for _, obsResult := range result.ObservationResults {
+		for _, l := range obsResult.Logs {
+			extResult.Logs = append(extResult.Logs, LogEntry{
+				Address: common.HexToAddress(l.Address),
+				Topics:  parseTopics(l.Topics),
+				Data:    l.Data,
+				Index:   l.LogIndex,
+			})
+		}
 	}
+
+	// Compute anchor proof hash from the MerkleRoot (L3→L4 binding)
+	anchorProofHash := cycle.Request.MerkleRoot
+
+	// Apply result hash chain tracking (sequence_number, previous_result_hash, anchor_proof_hash)
+	o.resultChainsLock.Lock()
+	chainKey := result.ChainID
+	if chainKey == "" {
+		chainKey = "default"
+	}
+	hashChain, exists := o.resultChains[chainKey]
+	if !exists {
+		hashChain = NewResultHashChain(chainKey, anchorProofHash)
+		o.resultChains[chainKey] = hashChain
+	}
+	_ = hashChain.AddResult(extResult) // Sets PreviousResultHash, AnchorProofHash, SequenceNumber
+	o.resultChainsLock.Unlock()
 
 	// Build aggregated attestation
 	var agg *AggregatedAttestation

@@ -247,6 +247,26 @@ func (o *EVMObserver) ObserveTransaction(ctx context.Context, txHash common.Hash
 		copy(result.TransactionsRoot[:], header.TxHash.Bytes())
 		copy(result.ReceiptsRoot[:], header.ReceiptHash.Bytes())
 		result.ResultHash = computeResultHash(result)
+	} else {
+		// Both HeaderByHash and BlockByHash failed — try raw JSON-RPC fallback for block roots
+		type rpcBlockRoots struct {
+			StateRoot        string `json:"stateRoot"`
+			TransactionsRoot string `json:"transactionsRoot"`
+			ReceiptsRoot     string `json:"receiptsRoot"`
+		}
+		var rawBlock rpcBlockRoots
+		if rpcErr := o.client.Client().CallContext(ctx, &rawBlock, "eth_getBlockByHash", receipt.BlockHash.Hex(), false); rpcErr == nil {
+			if decoded := common.FromHex(rawBlock.StateRoot); len(decoded) == 32 {
+				copy(result.StateRoot[:], decoded)
+			}
+			if decoded := common.FromHex(rawBlock.TransactionsRoot); len(decoded) == 32 {
+				copy(result.TransactionsRoot[:], decoded)
+			}
+			if decoded := common.FromHex(rawBlock.ReceiptsRoot); len(decoded) == 32 {
+				copy(result.ReceiptsRoot[:], decoded)
+			}
+			result.ResultHash = computeResultHash(result)
+		}
 	}
 
 	// Store raw receipt
