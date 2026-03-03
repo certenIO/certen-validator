@@ -517,17 +517,19 @@ func (tc *TonClient) sendInternalMessage(ctx context.Context, destAddr *address.
 	tc.lastSeqno = seqno + 1
 	tc.seqnoKnown = true
 
-	// Return the body hash (not walletBody hash) so the observer can match
-	// against in_msg.body_hash on the anchor contract's transactions.
-	// walletBody.Hash() is just the signing digest and doesn't appear on-chain.
+	// Return a composite token: body_hash + send timestamp.
+	// TON Cell.Hash() (representation hash) may not match TON Center API's
+	// body_hash due to serialization differences. The timestamp enables
+	// the observer to fall back to time-based transaction matching.
 	var trackHash []byte
 	if body != nil {
 		trackHash = body.Hash()
 	} else {
 		trackHash = extMsg.Hash()
 	}
-	msgHash := hex.EncodeToString(trackHash)
-	log.Printf("✅ [TON] Message sent: hash=%s (body_hash, next seqno=%d)", msgHash, tc.lastSeqno)
+	sendTS := time.Now().Unix()
+	msgHash := fmt.Sprintf("%s_ts_%d", hex.EncodeToString(trackHash), sendTS)
+	log.Printf("✅ [TON] Message sent: hash=%s (body_hash + timestamp, next seqno=%d)", msgHash, tc.lastSeqno)
 	return msgHash, nil
 }
 

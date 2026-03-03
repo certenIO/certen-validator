@@ -26,6 +26,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -215,7 +216,9 @@ func (s *TONStrategy) ExecuteWithGovernance(ctx context.Context, anchorID [32]by
 // masterchain blocks for safety (default 10 blocks ≈ 50 seconds).
 func (s *TONStrategy) ObserveTransaction(ctx context.Context, txHash string) (*ObservationResult, error) {
 	hash := strings.TrimPrefix(txHash, "0x")
-	s.logger.Printf("Observing TON transaction %s...", hash[:min(16, len(hash))])
+	// Extract just the hex hash (strip _ts_ suffix) for logging and result computation
+	hexOnly, _ := parseTONHashToken(hash)
+	s.logger.Printf("Observing TON transaction %s...", hexOnly[:min(16, len(hexOnly))])
 
 	if s.config.APIURL == "" {
 		return nil, fmt.Errorf("TON API URL not configured")
@@ -238,7 +241,7 @@ func (s *TONStrategy) ObserveTransaction(ctx context.Context, txHash string) (*O
 			if txFound {
 				return nil, fmt.Errorf("observation timed out waiting for confirmations (tx found at seqno %d)", txSeqno)
 			}
-			return nil, fmt.Errorf("observation timed out: transaction %s not found after %v", hash[:min(16, len(hash))], s.config.Timeout)
+			return nil, fmt.Errorf("observation timed out: transaction %s not found after %v", hexOnly[:min(16, len(hexOnly))], s.config.Timeout)
 
 		case <-ticker.C:
 			// Step 1: Get current masterchain info
@@ -272,7 +275,7 @@ func (s *TONStrategy) ObserveTransaction(ctx context.Context, txHash string) (*O
 			if confirmations >= required {
 				s.logger.Printf("Transaction finalized: %d confirmations (required %d)", confirmations, required)
 
-				resultHash := s.computeResultHash(hash, uint64(txSeqno), mcInfo.StateRootHash)
+				resultHash := s.computeResultHash(hexOnly, uint64(txSeqno), mcInfo.StateRootHash)
 
 				return &ObservationResult{
 					TxHash:                txHash,
@@ -337,13 +340,14 @@ func (s *TONStrategy) GetCurrentBlock(ctx context.Context) (uint64, error) {
 // GetTransactionReceipt retrieves transaction info without waiting for confirmations
 func (s *TONStrategy) GetTransactionReceipt(ctx context.Context, txHash string) (*ObservationResult, error) {
 	hash := strings.TrimPrefix(txHash, "0x")
+	hexOnly, _ := parseTONHashToken(hash)
 
 	found, seqno, utime, err := s.findTransactionByHash(ctx, hash)
 	if err != nil {
 		return nil, fmt.Errorf("GetTransactionReceipt: %w", err)
 	}
 	if !found {
-		return nil, fmt.Errorf("transaction %s not found", hash[:min(16, len(hash))])
+		return nil, fmt.Errorf("transaction %s not found", hexOnly[:min(16, len(hexOnly))])
 	}
 
 	mcInfo, err := s.getMasterchainInfo(ctx)
@@ -363,7 +367,7 @@ func (s *TONStrategy) GetTransactionReceipt(ctx context.Context, txHash string) 
 		Confirmations:        int(confirmations),
 		RequiredConfirmations: int(required),
 		IsFinalized:           confirmations >= required,
-		ResultHash:            s.computeResultHash(hash, uint64(seqno), mcInfo.StateRootHash),
+		ResultHash:            s.computeResultHash(hexOnly, uint64(seqno), mcInfo.StateRootHash),
 		ObservedAt:            time.Now().UTC(),
 		ObserverValidatorID:   s.config.ValidatorID,
 	}, nil
@@ -435,18 +439,39 @@ func (s *TONStrategy) getMasterchainInfo(ctx context.Context) (*tonMasterchainIn
 	return &info, nil
 }
 
+// parseTONHashToken parses a composite hash token from sendInternalMessage.
+// Format: "<hex_body_hash>_ts_<unix_timestamp>" or plain hex hash.
+// Returns the hex hash part and the send timestamp (0 if not present).
+func parseTONHashToken(token string) (string, int64) {
+	if idx := strings.Index(token, "_ts_"); idx > 0 {
+		hexPart := token[:idx]
+		tsPart := token[idx+4:]
+		ts, err := strconv.ParseInt(tsPart, 10, 64)
+		if err == nil {
+			return hexPart, ts
+		}
+	}
+	return token, 0
+}
+
 // findTransactionByHash searches for a transaction by its hash.
 // Searches recent transactions on the anchor contract address.
 // Returns (found, seqno, utime, error).
 //
-// Hash format handling: tonutils-go returns hex hashes, but TON Center API v2
-// returns base64-encoded hashes. We normalize both to raw bytes for comparison.
+// Supports composite tokens: "hex_hash_ts_timestamp" for time-based fallback.
+// Primary: match by transaction_id.hash or in_msg.body_hash (byte-level).
+// Fallback: if hash matching fails and a send timestamp is available,
+// accept any transaction on the anchor contract within ±120s of the send time.
+// This handles TON Cell.Hash() vs API body_hash serialization mismatches.
 func (s *TONStrategy) findTransactionByHash(ctx context.Context, hash string) (bool, int64, int64, error) {
 	contractAddr := s.config.AnchorContractAddress
 	if contractAddr == "" {
-		// If no contract address, try a direct lookup approach
 		return s.findTransactionDirect(ctx, hash)
 	}
+
+	// Parse composite token
+	hexHash, sendTS := parseTONHashToken(hash)
+	hexHash = strings.TrimPrefix(hexHash, "0x")
 
 	// Query recent transactions on the anchor contract
 	url := s.buildURL(fmt.Sprintf("/getTransactions?address=%s&limit=50&archival=true", contractAddr))
@@ -470,40 +495,60 @@ func (s *TONStrategy) findTransactionByHash(ctx context.Context, hash string) (b
 	}
 
 	// Decode the input hash from hex to raw bytes for comparison
-	// (tonutils-go returns hex, TON Center API returns base64)
-	searchHashBytes := decodeHashToBytes(hash)
+	searchHashBytes := decodeHashToBytes(hexHash)
 
-	// Search for matching transaction hash
+	// Pass 1: Try exact hash matching (transaction_id.hash or in_msg.body_hash)
 	for _, tx := range txns {
 		txIDBytes := decodeHashToBytes(tx.TransactionID.Hash)
 		bodyHashBytes := decodeHashToBytes(tx.InMsg.BodyHash)
 
-		// Match against transaction_id.hash or in_msg body hash (byte-level comparison)
 		if hashBytesEqual(searchHashBytes, txIDBytes) || hashBytesEqual(searchHashBytes, bodyHashBytes) {
-			s.logger.Printf("Transaction matched! tx_id=%s body_hash=%s",
+			s.logger.Printf("Transaction matched by hash! tx_id=%s body_hash=%s",
 				tx.TransactionID.Hash, tx.InMsg.BodyHash)
-
-			mcInfo, mcErr := s.getMasterchainInfo(ctx)
-			if mcErr != nil {
-				return true, 0, tx.Utime, nil
-			}
-			ageSeconds := time.Now().Unix() - tx.Utime
-			ageBlocks := ageSeconds / 5
-			estimatedSeqno := mcInfo.Last.Seqno - ageBlocks
-			if estimatedSeqno < 1 {
-				estimatedSeqno = 1
-			}
-
-			return true, estimatedSeqno, tx.Utime, nil
+			return true, s.estimateSeqno(ctx, tx.Utime), tx.Utime, nil
 		}
 	}
 
-	// Also check BLS verifier contract if configured
+	// Pass 2: Time-based fallback if we have a send timestamp
+	// TON Cell.Hash() may not match API body_hash due to serialization differences.
+	// Accept transactions within a ±120s window of the send time.
+	if sendTS > 0 {
+		for _, tx := range txns {
+			diff := tx.Utime - sendTS
+			if diff < 0 {
+				diff = -diff
+			}
+			// Transaction must be within 120s of send time and have a body
+			if diff <= 120 && tx.InMsg.BodyHash != "" {
+				s.logger.Printf("Transaction matched by timestamp! utime=%d sendTS=%d diff=%ds tx_id=%s body_hash=%s",
+					tx.Utime, sendTS, diff, tx.TransactionID.Hash, tx.InMsg.BodyHash)
+				return true, s.estimateSeqno(ctx, tx.Utime), tx.Utime, nil
+			}
+		}
+		s.logger.Printf("No timestamp match: sendTS=%d, checked %d txns", sendTS, len(txns))
+	}
+
+	// Pass 3: Also check BLS verifier contract if configured
 	if s.config.BLSVerifierAddress != "" && s.config.BLSVerifierAddress != contractAddr {
-		return s.findTransactionOnAddress(ctx, s.config.BLSVerifierAddress, hash)
+		return s.findTransactionOnAddress(ctx, s.config.BLSVerifierAddress, hexHash)
 	}
 
 	return false, 0, 0, nil
+}
+
+// estimateSeqno estimates the masterchain seqno when a transaction occurred.
+func (s *TONStrategy) estimateSeqno(ctx context.Context, txUtime int64) int64 {
+	mcInfo, err := s.getMasterchainInfo(ctx)
+	if err != nil {
+		return 0
+	}
+	ageSeconds := time.Now().Unix() - txUtime
+	ageBlocks := ageSeconds / 5
+	seqno := mcInfo.Last.Seqno - ageBlocks
+	if seqno < 1 {
+		seqno = 1
+	}
+	return seqno
 }
 
 // findTransactionOnAddress searches for a tx hash on a specific address
