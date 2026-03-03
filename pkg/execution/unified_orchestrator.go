@@ -624,6 +624,7 @@ func getNetworkName(chainID string) string {
 		"2494104990": "tron-shasta",
 		"728126428":  "tron-mainnet",
 		"103":        "solana-devnet",
+		"397":        "near-mainnet",
 		"398":        "near-testnet",
 		"2":          "aptos-testnet",
 		"-3":         "ton-testnet",
@@ -1274,6 +1275,10 @@ func (o *UnifiedOrchestrator) buildAttestationBundleFromCycle(cycle *activeCycle
 		TxGasUsed:           obs.GasUsed,
 		ObservedByValidator: obs.ObserverValidatorID,
 		TxFrom:             common.HexToAddress(obs.TxFrom),
+		// Native (non-EVM) identifiers - preserve original strings for chains like NEAR
+		NativeTxHash:    obs.TxHash,
+		NativeBlockHash: obs.BlockHash,
+		NativeTxFrom:    obs.TxFrom,
 	}
 
 	// Copy logs from all observation results (not just primary)
@@ -1308,11 +1313,19 @@ func (o *UnifiedOrchestrator) buildAttestationBundleFromCycle(cycle *activeCycle
 	// Build aggregated attestation
 	var agg *AggregatedAttestation
 	if result.AggregatedAttestation != nil {
+		validatorCount := result.AggregatedAttestation.ParticipantCount
+		if result.AggregatedAttestation.TotalWeight > 0 {
+			validatorCount = int(result.AggregatedAttestation.TotalWeight)
+		}
+		achievedWeight := int64(result.AggregatedAttestation.AchievedWeight)
+		if achievedWeight == 0 {
+			achievedWeight = int64(result.AggregatedAttestation.ParticipantCount)
+		}
 		agg = &AggregatedAttestation{
 			MessageHash:        result.AggregatedAttestation.MessageHash,
 			AggregateSignature: result.AggregatedAttestation.AggregatedSignature,
-			ValidatorCount:     result.AggregatedAttestation.ParticipantCount,
-			SignedVotingPower:  big.NewInt(int64(result.AggregatedAttestation.ParticipantCount)),
+			ValidatorCount:     validatorCount,
+			SignedVotingPower:  big.NewInt(achievedWeight),
 			ThresholdMet:       result.AggregatedAttestation.ThresholdMet,
 			Finalized:          result.AggregatedAttestation.ThresholdMet && result.AggregatedAttestation.Verified,
 			FinalizedAt:        time.Now().UTC(),
@@ -1327,12 +1340,19 @@ func (o *UnifiedOrchestrator) buildAttestationBundleFromCycle(cycle *activeCycle
 	}
 }
 
-// parseHash parses a hex string to common.Hash
+// parseHash parses a hex string to common.Hash.
+// If hex decoding fails (e.g., NEAR base58 hashes), it falls back to
+// SHA256-hashing the raw string to produce a deterministic 32-byte value.
 func parseHash(s string) common.Hash {
 	if len(s) >= 2 && s[:2] == "0x" {
 		s = s[2:]
 	}
-	b, _ := hex.DecodeString(s)
+	b, err := hex.DecodeString(s)
+	if err != nil || len(b) == 0 {
+		// Non-hex hash (e.g., NEAR base58): SHA256 the raw string for a deterministic common.Hash
+		h := sha256.Sum256([]byte(s))
+		return common.BytesToHash(h[:])
+	}
 	var h common.Hash
 	if len(b) >= 32 {
 		copy(h[:], b[:32])

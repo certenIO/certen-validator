@@ -65,6 +65,15 @@ type ExternalChainResult struct {
 	TxHash common.Hash `json:"tx_hash"`
 
 	// ==========================================================================
+	// NATIVE (NON-EVM) IDENTIFIERS
+	// For chains like NEAR that use base58 hashes or account-based addresses
+	// ==========================================================================
+
+	NativeTxHash    string `json:"native_tx_hash,omitempty"`    // base58 NEAR tx hash (or other non-hex chain hash)
+	NativeBlockHash string `json:"native_block_hash,omitempty"` // base58 NEAR block hash
+	NativeTxFrom    string `json:"native_tx_from,omitempty"`    // NEAR account ID (e.g., "certen-kermit-12.acme")
+
+	// ==========================================================================
 	// BLOCK INFORMATION
 	// ==========================================================================
 

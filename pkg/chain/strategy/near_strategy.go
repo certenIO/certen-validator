@@ -86,8 +86,10 @@ type nearRPCResponse struct {
 }
 
 type nearTxResult struct {
-	Status            interface{}      `json:"status"`
-	Transaction       interface{}      `json:"transaction"`
+	Status     interface{} `json:"status"`
+	Transaction struct {
+		SignerID string `json:"signer_id"`
+	} `json:"transaction"`
 	TransactionOutcome struct {
 		BlockHash string `json:"block_hash"`
 		ID        string `json:"id"`
@@ -266,6 +268,7 @@ func (s *NEARStrategy) ObserveTransaction(ctx context.Context, txHash string) (*
 					GasUsed:               gasUsed,
 					ObservedAt:            time.Now().UTC(),
 					ObserverValidatorID:   s.config.ValidatorID,
+					TxFrom:               txResult.Transaction.SignerID,
 				}, nil
 			}
 
@@ -352,6 +355,7 @@ func (s *NEARStrategy) GetTransactionReceipt(ctx context.Context, txHash string)
 		ResultHash:            s.computeResultHash(txHash, txBlockHeight, blockHash),
 		ObservedAt:            time.Now().UTC(),
 		ObserverValidatorID:   s.config.ValidatorID,
+		TxFrom:               txResult.Transaction.SignerID,
 	}, nil
 }
 
@@ -491,8 +495,8 @@ func NewNEARMainnetStrategy(rpcURL, contractAccount, signerAccount, validatorID 
 	config := &NEARStrategyConfig{
 		ChainConfig: &ChainConfig{
 			Platform:              ChainPlatformNEAR,
-			ChainID:               "near-mainnet",
-			NetworkName:           "near",
+			ChainID:               "397",
+			NetworkName:           "near-mainnet",
 			RPC:                   rpcURL,
 			ContractAddress:       contractAccount,
 			RequiredConfirmations: 3,
@@ -515,7 +519,7 @@ func NewNEARTestnetStrategy(rpcURL, contractAccount, signerAccount, validatorID 
 	config := &NEARStrategyConfig{
 		ChainConfig: &ChainConfig{
 			Platform:              ChainPlatformNEAR,
-			ChainID:               "near-testnet",
+			ChainID:               "398",
 			NetworkName:           "near-testnet",
 			RPC:                   rpcURL,
 			ContractAddress:       contractAccount,

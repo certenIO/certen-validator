@@ -447,6 +447,18 @@ func (b *SyntheticTxBuilder) BuildFromBundleWithContext(bundle *AttestationBundl
 		SequenceNumber:     result.SequenceNumber,
 	}
 
+	// For non-EVM chains (e.g., NEAR), use native string identifiers
+	// instead of the EVM-typed hex representations
+	if result.NativeTxHash != "" {
+		dataEntry.TxHash = result.NativeTxHash
+	}
+	if result.NativeBlockHash != "" {
+		dataEntry.BlockHash = result.NativeBlockHash
+	}
+	if result.NativeTxFrom != "" {
+		dataEntry.TxFrom = result.NativeTxFrom
+	}
+
 	// Populate signed power
 	if agg.SignedVotingPower != nil {
 		dataEntry.SignedPower = agg.SignedVotingPower.String()
