@@ -408,6 +408,18 @@ func (btce *BFTTargetChainExecutor) extractTargetChainFromCrossChainData(crossCh
 			chainID = 1284
 		case "moonbase-alpha", "moonbeam-moonbase-alpha":
 			chainID = 1287
+		case "tron", "tron-shasta", "tron-shasta-testnet", "tron-nile", "tron-mainnet":
+			chainID = 2494104990
+		case "solana", "solana-devnet", "solana-mainnet", "solana-testnet":
+			chainID = 103
+		case "near", "near-testnet", "near-mainnet":
+			chainID = 398
+		case "aptos", "aptos-testnet", "aptos-mainnet":
+			chainID = 2
+		case "sui", "sui-testnet", "sui-mainnet":
+			chainID = 2
+		case "ton", "ton-testnet", "ton-mainnet":
+			chainID = -3
 		default:
 			chainID = 11155111
 		}
@@ -998,8 +1010,15 @@ func (btce *BFTTargetChainExecutor) executeTronOperations(
 	}
 
 	chainCfg := anchorCfg.GetEVMChainConfig(chainID)
-	if chainCfg == nil || chainCfg.RPCURL == "" {
-		return nil, fmt.Errorf("no TRON chain config for chainId=%d", chainID)
+	// Defensive: if intent had wrong chainID (e.g. Sepolia 11155111 instead of TRON 2494104990),
+	// fall back to TRON Shasta's known chain ID since we're in the TRON execution path.
+	if chainCfg == nil || chainCfg.RPCURL == "" || !strings.Contains(strings.ToLower(chainCfg.Name), "tron") {
+		btce.logger.Printf("⚠️ [TRON-EXEC] chainId=%d resolved to non-TRON config (%v), falling back to TRON Shasta (2494104990)", chainID, chainCfg)
+		chainCfg = anchorCfg.GetEVMChainConfig(2494104990) // TRON Shasta
+		if chainCfg == nil || chainCfg.RPCURL == "" {
+			return nil, fmt.Errorf("no TRON chain config: tried chainId=%d and fallback 2494104990", chainID)
+		}
+		chainID = 2494104990
 	}
 
 	btce.logger.Printf("✅ [TRON-EXEC] Using TRON config for %s (chainId=%d)", chainCfg.Name, chainID)
