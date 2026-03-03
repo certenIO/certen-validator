@@ -420,13 +420,20 @@ func registerStubChainStrategies(registry *Registry, cfg *RegistryConfig) error 
 	}
 
 	// =========================================================================
-	// NEAR — Stub (pending implementation)
+	// NEAR — Full implementation using NEAR JSON-RPC
 	// =========================================================================
-	nearStrategy, _ := chain.NewNEARTestnetStrategy("", "", "", cfg.ValidatorID)
+	nearRPCURL := os.Getenv("NEAR_TESTNET_RPC_URL")
+	nearAnchorContract := os.Getenv("NEAR_ANCHOR_CONTRACT")
+	nearSignerAccount := os.Getenv("NEAR_SIGNER_ACCOUNT_ID")
+
+	nearStrategy, _ := chain.NewNEARTestnetStrategy(nearRPCURL, nearAnchorContract, nearSignerAccount, cfg.ValidatorID)
 	if nearStrategy != nil {
 		nearAliases := []string{"near-testnet", "near testnet", "near_testnet"}
 		for _, alias := range nearAliases {
 			_ = registry.RegisterChainStrategy(alias, nearStrategy.Config(), nearStrategy)
+		}
+		if cfg.Logger != nil {
+			cfg.Logger.Printf("   ✅ NEAR testnet registered: rpc=%s, contract=%s", nearRPCURL, nearAnchorContract)
 		}
 	}
 
