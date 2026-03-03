@@ -220,6 +220,7 @@ func initializeChainStrategies(registry *Registry, cfg *RegistryConfig) error {
 		56:       {"bsc", "binance", "bsc-mainnet"},
 		1287:     {"moonbase-alpha", "moonbase alpha", "moonbeam-testnet", "moonbeam moonbase alpha"},
 		1284:     {"moonbeam"},
+		2494104990: {"tron-shasta", "tron shasta", "tron-shasta-testnet", "tron shasta testnet", "tron"},
 	}
 	if aliases, ok := knownAliases[int64(cfg.EthChainID)]; ok {
 		for _, alias := range aliases {
@@ -272,6 +273,8 @@ func registerL2EVMStrategies(registry *Registry, cfg *RegistryConfig, knownAlias
 		{80002, "polygon-amoy", "POLYGON_AMOY_RPC_URL", "POLYGON_AMOY_ANCHORV4_ADDRESS", "0x52E8e8E5d5EE35ED52BA6B7BB2Cb2dc2D2b2c952", 2},
 		{97, "bsc-testnet", "BSC_TESTNET_RPC_URL", "BSC_TESTNET_ANCHORV4_ADDRESS", "0x52E8e8E5d5EE35ED52BA6B7BB2Cb2dc2D2b2c952", 2},
 		{1287, "moonbase-alpha", "MOONBASE_ALPHA_RPC_URL", "MOONBASE_ALPHA_ANCHORV4_ADDRESS", "0x52E8e8E5d5EE35ED52BA6B7BB2Cb2dc2D2b2c952", 2},
+		// TRON Shasta - EVM-compatible via /jsonrpc for observation; writes use native HTTP API in tron_client.go
+		{2494104990, "tron-shasta", "TRON_SHASTA_RPC_URL", "TRON_SHASTA_ANCHORV4_ADDRESS", "0xca04231da28aab992fdffd3c9a7f8ddcd1f26027", 1},
 	}
 
 	for _, l2 := range l2Chains {
