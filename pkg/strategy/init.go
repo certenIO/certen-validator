@@ -426,6 +426,23 @@ func registerStubChainStrategies(registry *Registry, cfg *RegistryConfig) error 
 	}
 
 	// =========================================================================
+	// Sui — Full implementation using Sui JSON-RPC
+	// =========================================================================
+	suiRPCURL := os.Getenv("SUI_TESTNET_RPC_URL")
+	suiAnchorPackage := os.Getenv("SUI_ANCHOR_PACKAGE")
+
+	suiStrategy, _ := chain.NewSuiTestnetStrategy(suiRPCURL, suiAnchorPackage, cfg.ValidatorID)
+	if suiStrategy != nil {
+		suiAliases := []string{"sui-testnet", "sui testnet", "sui_testnet"}
+		for _, alias := range suiAliases {
+			_ = registry.RegisterChainStrategy(alias, suiStrategy.Config(), suiStrategy)
+		}
+		if cfg.Logger != nil {
+			cfg.Logger.Printf("   ✅ Sui testnet registered: rpc=%s, package=%s", suiRPCURL, suiAnchorPackage)
+		}
+	}
+
+	// =========================================================================
 	// Aptos — Full implementation using Aptos REST API
 	// =========================================================================
 	aptosRPCURL := os.Getenv("APTOS_TESTNET_RPC_URL")
