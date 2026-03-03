@@ -1318,6 +1318,14 @@ func (ecm *EthereumContractManager) generateBLSZKProof(
 	}
 
 	log.Printf("✅ [BLS-ZK] Generated valid ZK proof: %d bytes, pubkeyCommitment: 0x%x", len(proofBytes), zkProof.PubkeyCommitment[:8])
+
+	// Round-trip verification: deserialize ABI bytes and verify (catches serialization bugs)
+	if roundTripOk, rtErr := prover.VerifyFromABIBytes(proofBytes); rtErr != nil {
+		log.Printf("⚠️ [BLS-ZK] ABI round-trip verification error: %v", rtErr)
+	} else {
+		log.Printf("🔍 [BLS-ZK] ABI round-trip verification (NEAR equation): %v", roundTripOk)
+	}
+
 	return proofBytes, zkProof.PubkeyCommitment
 }
 

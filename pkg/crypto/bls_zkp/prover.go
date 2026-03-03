@@ -941,6 +941,100 @@ func (p *BLSZKProver) ManualPairingCheck(zkProof *BLSZKProof) (bool, error) {
 	return ok2, nil
 }
 
+// VerifyFromABIBytes deserializes the 448-byte ABI proof back to curve points
+// and runs the EXACT same pairing equation as the NEAR contract:
+//   e(-A, B) * e(alpha, beta) * e(vk_x, gamma) * e(C, delta) = 1
+// This catches any serialization issue between Go and the on-chain verifier.
+func (p *BLSZKProver) VerifyFromABIBytes(abiBytes []byte) (bool, error) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	if !p.initialized {
+		return false, errors.New("prover not initialized")
+	}
+	if len(abiBytes) < 448 {
+		return false, fmt.Errorf("ABI bytes too short: %d", len(abiBytes))
+	}
+
+	vkBN254, ok := p.vk.(*groth16_bn254.VerifyingKey)
+	if !ok {
+		return false, errors.New("VK is not BN254 type")
+	}
+
+	// Parse proof points from ABI bytes (big-endian, same as NEAR's from_be_bytes_mod_order)
+	readBigInt := func(offset int) *big.Int {
+		return new(big.Int).SetBytes(abiBytes[offset : offset+32])
+	}
+
+	var A bn254_curve.G1Affine
+	A.X.SetBigInt(readBigInt(0))
+	A.Y.SetBigInt(readBigInt(32))
+
+	var B bn254_curve.G2Affine
+	B.X.A0.SetBigInt(readBigInt(64))
+	B.X.A1.SetBigInt(readBigInt(96))
+	B.Y.A0.SetBigInt(readBigInt(128))
+	B.Y.A1.SetBigInt(readBigInt(160))
+
+	var C bn254_curve.G1Affine
+	C.X.SetBigInt(readBigInt(192))
+	C.Y.SetBigInt(readBigInt(224))
+
+	// Parse public inputs as Fr (from_be_bytes_mod_order equivalent)
+	var inputs [4]fr.Element
+	inputs[0].SetBytes(abiBytes[256:288])
+	inputs[1].SetBytes(abiBytes[288:320])
+	inputs[2].SetBytes(abiBytes[320:352])
+	inputs[3].SetBytes(abiBytes[352:384])
+
+	// Log deserialized values
+	ax := new(big.Int)
+	A.X.BigInt(ax)
+	log.Printf("🔍 [ABI-ROUNDTRIP] A.x=%064x", ax)
+	ay := new(big.Int)
+	A.Y.BigInt(ay)
+	log.Printf("🔍 [ABI-ROUNDTRIP] A.y=%064x", ay)
+	bx0 := new(big.Int)
+	B.X.A0.BigInt(bx0)
+	log.Printf("🔍 [ABI-ROUNDTRIP] B.x.A0=%064x (c0/real)", bx0)
+
+	for i, inp := range inputs {
+		var v big.Int
+		inp.BigInt(&v)
+		log.Printf("🔍 [ABI-ROUNDTRIP] input[%d]=%064x (Fr-reduced)", i, &v)
+	}
+
+	// Compute vk_x = IC[0] + sum(inputs[i] * IC[i+1])
+	var vk_x bn254_curve.G1Jac
+	vk_x.FromAffine(&vkBN254.G1.K[0])
+	for i := 0; i < 4; i++ {
+		var scalar big.Int
+		inputs[i].BigInt(&scalar)
+		var term bn254_curve.G1Jac
+		term.FromAffine(&vkBN254.G1.K[i+1])
+		term.ScalarMultiplication(&term, &scalar)
+		vk_x.AddAssign(&term)
+	}
+	var vk_x_aff bn254_curve.G1Affine
+	vk_x_aff.FromJacobian(&vk_x)
+
+	// NEAR equation: e(-A, B) * e(alpha, beta) * e(vk_x, gamma) * e(C, delta) = 1
+	var negA bn254_curve.G1Affine
+	negA.Neg(&A)
+
+	result, err := bn254_curve.PairingCheck(
+		[]bn254_curve.G1Affine{negA, vkBN254.G1.Alpha, vk_x_aff, C},
+		[]bn254_curve.G2Affine{B, vkBN254.G2.Beta, vkBN254.G2.Gamma, vkBN254.G2.Delta},
+	)
+	if err != nil {
+		log.Printf("❌ [ABI-ROUNDTRIP] PairingCheck error: %v", err)
+		return false, err
+	}
+
+	log.Printf("🔍 [ABI-ROUNDTRIP] e(-A,B)*e(alpha,beta)*e(vk_x,gamma)*e(C,delta)=1 ? %v", result)
+	return result, nil
+}
+
 // ComputeVKHash computes a SHA256 hash of all VK component bytes for comparison
 // with the on-chain VK. Also returns the raw buffer for keccak computation.
 // The byte representation matches the Rust Solana verifier's VK ordering.
