@@ -119,6 +119,7 @@ type suiTransactionBlock struct {
 	Digest      string `json:"digest"`
 	Transaction struct {
 		Data struct {
+			Sender  string `json:"sender"`
 			GasData struct {
 				Budget string `json:"budget"`
 			} `json:"gasData"`
@@ -454,6 +455,7 @@ func (s *MoveStrategy) observeSui(ctx context.Context, txHash string) (*Observat
 			return &ObservationResult{
 				TxHash:                txHash,
 				BlockNumber:           checkpoint,
+				BlockHash:             block.Digest,
 				BlockTimestamp:        time.Unix(timestampMs/1000, (timestampMs%1000)*int64(time.Millisecond)),
 				Status:                status,
 				Confirmations:        1,
@@ -461,6 +463,7 @@ func (s *MoveStrategy) observeSui(ctx context.Context, txHash string) (*Observat
 				IsFinalized:           true,
 				ResultHash:            s.computeResultHash(txHash, checkpoint, block.Digest),
 				GasUsed:               gasUsed,
+				TxFrom:               block.Transaction.Data.Sender,
 				ObservedAt:            time.Now().UTC(),
 				ObserverValidatorID:   s.config.ValidatorID,
 			}, nil
