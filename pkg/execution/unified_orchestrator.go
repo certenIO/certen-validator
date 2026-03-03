@@ -1231,6 +1231,12 @@ func (o *UnifiedOrchestrator) buildComprehensiveProofContext(cycle *activeCycle)
 				break
 			}
 		}
+
+		// Fallback: if no GovernanceExecuted event found but 3+ observations exist,
+		// the 3rd observation IS the governance tx (executeWithGovernance)
+		if ctx.TransferExecutedHash == "" && len(result.ObservationResults) >= 3 {
+			ctx.TransferExecutedHash = result.ObservationResults[2].TxHash
+		}
 	}
 
 	// Set proof artifact ID for PostgreSQL lookup

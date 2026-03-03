@@ -31,6 +31,7 @@ import (
 	cryptoproto "github.com/cometbft/cometbft/proto/tendermint/crypto"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/mr-tron/base58"
 
 	lcproof "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof"
 
@@ -2962,7 +2963,8 @@ func (bv *BFTValidator) buildExecutionCommitmentFromIntent(certenIntent *CertenI
 	anchorContract := common.HexToAddress(anchorContractAddress)
 
 	// Extract final target (where ETH/tokens are forwarded to)
-	finalTarget := common.HexToAddress(leg.To)
+	// Uses parseChainAddress to handle both hex (0x...) and TRON base58 (T...) formats
+	finalTarget := parseChainAddress(leg.To)
 
 	// Parse value
 	finalValueStr := leg.AmountWei
@@ -3059,6 +3061,18 @@ func (bv *BFTValidator) buildExecutionCommitmentFromIntent(certenIntent *CertenI
 		certenIntent.IntentID, anchorContract.Hex(), finalTarget.Hex(), finalValueStr)
 
 	return commitment
+}
+
+// parseChainAddress parses an address that may be hex (0x...) or TRON base58 (T...).
+// TRON base58check: base58decode → 21 bytes (0x41 + 20-byte address) + 4-byte checksum.
+func parseChainAddress(addr string) common.Address {
+	if strings.HasPrefix(addr, "T") && len(addr) == 34 {
+		decoded, err := base58.Decode(addr)
+		if err == nil && len(decoded) >= 21 && decoded[0] == 0x41 {
+			return common.BytesToAddress(decoded[1:21])
+		}
+	}
+	return common.HexToAddress(addr)
 }
 
 // computeSelector computes the 4-byte function selector from signature using Keccak256
