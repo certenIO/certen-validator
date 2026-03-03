@@ -1853,11 +1853,28 @@ func (btce *BFTTargetChainExecutor) extractNearFieldFromCrossChainData(legacyInt
 		value = ccData.Legs[0].To
 	}
 
-	// If the field looks like a NEAR account ID (contains dots, no 0x prefix), use it directly
-	if value != "" && !strings.HasPrefix(value, "0x") && strings.Contains(value, ".") {
-		return value
+	// If the field looks like a NEAR account ID, use it directly.
+	// NEAR accounts: named (contains dots, like "alice.testnet") or implicit (64-char hex ed25519 pubkey)
+	if value != "" && !strings.HasPrefix(value, "0x") {
+		if strings.Contains(value, ".") {
+			return value
+		}
+		// NEAR implicit accounts: 64-char lowercase hex = ed25519 public key
+		if len(value) == 64 && isLowercaseHex(value) {
+			return value
+		}
 	}
 	return ""
+}
+
+// isLowercaseHex checks if a string contains only lowercase hex characters (0-9, a-f).
+func isLowercaseHex(s string) bool {
+	for _, c := range s {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			return false
+		}
+	}
+	return true
 }
 
 // buildNearResult creates a TargetChainExecutionResult for NEAR operations.
