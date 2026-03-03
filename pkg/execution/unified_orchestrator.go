@@ -631,6 +631,7 @@ func getNetworkName(chainID string) string {
 		"sui-testnet": "sui-testnet",
 		"sui-mainnet": "sui-mainnet",
 		"-3":          "ton-testnet",
+		"-239":        "ton-mainnet",
 	}
 	if name, ok := networkNames[chainID]; ok {
 		return name
