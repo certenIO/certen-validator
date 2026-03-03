@@ -579,10 +579,12 @@ func NewAptosMainnetStrategy(rpcURL, moduleAddress, validatorID string) (*MoveSt
 	if rpcURL == "" {
 		rpcURL = "https://fullnode.mainnet.aptoslabs.com"
 	}
+	// Strip /v1 suffix — observation methods append /v1/... paths themselves
+	rpcURL = strings.TrimSuffix(rpcURL, "/v1")
 	config := &MoveStrategyConfig{
 		ChainConfig: &ChainConfig{
 			Platform:              ChainPlatformMove,
-			ChainID:               "aptos-mainnet",
+			ChainID:               "1",
 			NetworkName:           "aptos",
 			RPC:                   rpcURL,
 			ContractAddress:       moduleAddress,
@@ -603,10 +605,12 @@ func NewAptosTestnetStrategy(rpcURL, moduleAddress, validatorID string) (*MoveSt
 	if rpcURL == "" {
 		rpcURL = "https://fullnode.testnet.aptoslabs.com"
 	}
+	// Strip /v1 suffix — observation methods append /v1/... paths themselves
+	rpcURL = strings.TrimSuffix(rpcURL, "/v1")
 	config := &MoveStrategyConfig{
 		ChainConfig: &ChainConfig{
 			Platform:              ChainPlatformMove,
-			ChainID:               "aptos-testnet",
+			ChainID:               "2",
 			NetworkName:           "aptos-testnet",
 			RPC:                   rpcURL,
 			ContractAddress:       moduleAddress,

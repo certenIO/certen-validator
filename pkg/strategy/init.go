@@ -409,13 +409,36 @@ func registerStubChainStrategies(registry *Registry, cfg *RegistryConfig) error 
 	}
 
 	// =========================================================================
-	// Solana — Stub (pending implementation)
+	// Solana — Full implementation using Solana JSON-RPC
 	// =========================================================================
-	solanaStrategy, _ := chain.NewSolanaDevnetStrategy("", "", cfg.ValidatorID)
+	solanaRPCURL := os.Getenv("SOLANA_DEVNET_RPC_URL")
+	solanaAnchorProgram := os.Getenv("SOLANA_ANCHOR_PROGRAM_ID")
+
+	solanaStrategy, _ := chain.NewSolanaDevnetStrategy(solanaRPCURL, solanaAnchorProgram, cfg.ValidatorID)
 	if solanaStrategy != nil {
 		solanaAliases := []string{"solana-devnet", "solana devnet", "solana_devnet", "solana-testnet", "solana testnet"}
 		for _, alias := range solanaAliases {
 			_ = registry.RegisterChainStrategy(alias, solanaStrategy.Config(), solanaStrategy)
+		}
+		if cfg.Logger != nil {
+			cfg.Logger.Printf("   ✅ Solana devnet registered: rpc=%s, program=%s", solanaRPCURL, solanaAnchorProgram)
+		}
+	}
+
+	// =========================================================================
+	// Aptos — Full implementation using Aptos REST API
+	// =========================================================================
+	aptosRPCURL := os.Getenv("APTOS_TESTNET_RPC_URL")
+	aptosAnchorPackage := os.Getenv("APTOS_ANCHOR_PACKAGE")
+
+	aptosStrategy, _ := chain.NewAptosTestnetStrategy(aptosRPCURL, aptosAnchorPackage, cfg.ValidatorID)
+	if aptosStrategy != nil {
+		aptosAliases := []string{"aptos-testnet", "aptos testnet", "aptos_testnet"}
+		for _, alias := range aptosAliases {
+			_ = registry.RegisterChainStrategy(alias, aptosStrategy.Config(), aptosStrategy)
+		}
+		if cfg.Logger != nil {
+			cfg.Logger.Printf("   ✅ Aptos testnet registered: rpc=%s, module=%s", aptosRPCURL, aptosAnchorPackage)
 		}
 	}
 
