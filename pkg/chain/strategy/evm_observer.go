@@ -186,8 +186,7 @@ func (o *EVMObserver) ObserveTransaction(ctx context.Context, txHash common.Hash
 			BlockTimestamp:        time.Now().UTC(), // Best approximation
 			Status:                uint8(receipt.Status),
 			RequiredConfirmations: o.requiredConfirmations,
-			Confirmations:        1, // Already mined if we have receipt
-			GasUsed:              receipt.GasUsed,
+			GasUsed:               receipt.GasUsed,
 		}
 		for _, l := range receipt.Logs {
 			topics := make([]string, len(l.Topics))
@@ -201,6 +200,34 @@ func (o *EVMObserver) ObserveTransaction(ctx context.Context, txHash common.Hash
 				LogIndex: l.Index,
 			})
 		}
+
+		// Wait for confirmations using BlockNumber() (works on TRON jsonrpc even though HeaderByHash doesn't)
+		confirmTicker := time.NewTicker(o.pollingInterval)
+		defer confirmTicker.Stop()
+		confirmed := false
+		for !confirmed {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-confirmTicker.C:
+				if time.Now().After(deadline) {
+					// Timeout — mark as finalized anyway since we have a receipt
+					log.Printf("⚠️ [EVM-OBSERVER] Confirmation timeout on non-standard chain, accepting receipt as finalized")
+					confirmed = true
+					break
+				}
+				currentBlock, err := o.client.BlockNumber(ctx)
+				if err != nil {
+					continue
+				}
+				confirmations := int(currentBlock - receipt.BlockNumber.Uint64())
+				result.Confirmations = confirmations
+				if confirmations >= o.requiredConfirmations {
+					confirmed = true
+				}
+			}
+		}
+		result.IsFinalized = true
 		result.ResultHash = computeResultHash(result)
 	} else {
 		// Wait for required confirmations
