@@ -314,6 +314,7 @@ type ProofRequest struct {
 type NewAnchorBatch struct {
 	BatchType   BatchType
 	ValidatorID string
+	TargetChain string // Target chain for anchoring (e.g., "ton-testnet", "sepolia")
 }
 
 // NewBatchTransaction is used to add a transaction to a batch

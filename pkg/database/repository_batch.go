@@ -30,6 +30,11 @@ func NewBatchRepository(client *Client) *BatchRepository {
 
 // CreateBatch creates a new anchor batch
 func (r *BatchRepository) CreateBatch(ctx context.Context, input *NewAnchorBatch) (*AnchorBatch, error) {
+	targetChain := input.TargetChain
+	if targetChain == "" {
+		targetChain = "ethereum"
+	}
+
 	batch := &AnchorBatch{
 		BatchID:     uuid.New(),
 		BatchType:   input.BatchType,
@@ -45,13 +50,13 @@ func (r *BatchRepository) CreateBatch(ctx context.Context, input *NewAnchorBatch
 	query := `
 		INSERT INTO anchor_batches (
 			id, batch_type, merkle_root, transaction_count,
-			batch_start_time, validator_id, status, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			batch_start_time, validator_id, status, target_chain, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		RETURNING id, created_at, updated_at`
 
 	err := r.client.QueryRowContext(ctx, query,
 		batch.BatchID, batch.BatchType, batch.MerkleRoot, batch.TxCount,
-		batch.StartTime, batch.ValidatorID, batch.Status, batch.CreatedAt, batch.UpdatedAt,
+		batch.StartTime, batch.ValidatorID, batch.Status, targetChain, batch.CreatedAt, batch.UpdatedAt,
 	).Scan(&batch.BatchID, &batch.CreatedAt, &batch.UpdatedAt)
 
 	if err != nil {

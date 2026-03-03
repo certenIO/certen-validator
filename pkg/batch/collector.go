@@ -154,7 +154,7 @@ func (c *Collector) AddOnCadenceTransaction(ctx context.Context, tx *Transaction
 
 	// Ensure we have an open on-cadence batch
 	if c.onCadenceBatch == nil {
-		if err := c.createBatch(ctx, database.BatchTypeOnCadence); err != nil {
+		if err := c.createBatch(ctx, database.BatchTypeOnCadence, tx.TargetChain); err != nil {
 			return nil, fmt.Errorf("failed to create on-cadence batch: %w", err)
 		}
 	}
@@ -171,7 +171,7 @@ func (c *Collector) AddOnDemandTransaction(ctx context.Context, tx *TransactionD
 
 	// Ensure we have an open on-demand batch
 	if c.onDemandBatch == nil {
-		if err := c.createBatch(ctx, database.BatchTypeOnDemand); err != nil {
+		if err := c.createBatch(ctx, database.BatchTypeOnDemand, tx.TargetChain); err != nil {
 			return nil, fmt.Errorf("failed to create on-demand batch: %w", err)
 		}
 	}
@@ -191,10 +191,11 @@ func (c *Collector) AddOnDemandTransaction(ctx context.Context, tx *TransactionD
 }
 
 // createBatch creates a new batch in the database
-func (c *Collector) createBatch(ctx context.Context, batchType database.BatchType) error {
+func (c *Collector) createBatch(ctx context.Context, batchType database.BatchType, targetChain string) error {
 	input := &database.NewAnchorBatch{
 		BatchType:   batchType,
 		ValidatorID: c.validatorID,
+		TargetChain: targetChain,
 	}
 
 	batch, err := c.repos.Batches.CreateBatch(ctx, input)

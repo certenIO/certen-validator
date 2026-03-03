@@ -120,13 +120,11 @@ func (h *OnDemandHandler) ProcessTransaction(ctx context.Context, tx *Transactio
 		reason = "batch full"
 	}
 
-	// Check time since last anchor
-	if !h.lastAnchor.IsZero() && time.Since(h.lastAnchor) >= h.maxWaitTime {
-		info := h.collector.GetOnDemandBatchInfo()
-		if info != nil && info.TxCount > 0 {
-			shouldAnchor = true
-			reason = "wait timeout"
-		}
+	// For on-demand, always anchor immediately when at least 1 tx is present
+	// This is the core behavior: on-demand = immediate anchoring
+	if !shouldAnchor && txResult.BatchSize >= 1 {
+		shouldAnchor = true
+		reason = "on_demand immediate"
 	}
 
 	if shouldAnchor {
