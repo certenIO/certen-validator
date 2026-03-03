@@ -90,7 +90,11 @@ type solanaTransactionResult struct {
 		LogMessages []string  `json:"logMessages"`
 		ComputeUnitsConsumed *uint64 `json:"computeUnitsConsumed"`
 	} `json:"meta"`
-	Transaction interface{} `json:"transaction"`
+	Transaction struct {
+		Message struct {
+			AccountKeys []string `json:"accountKeys"`
+		} `json:"message"`
+	} `json:"transaction"`
 }
 
 // =============================================================================
@@ -226,11 +230,24 @@ func (s *SolanaStrategy) ObserveTransaction(ctx context.Context, txHash string) 
 					}
 				}
 
+				// Fetch block hash for the slot
+				blockHash, err := s.getBlockHash(timeoutCtx, result.Slot)
+				if err != nil {
+					s.logger.Printf("getBlockHash failed (non-fatal): %v", err)
+				}
+
+				// Extract fee payer (first account key)
+				txFrom := ""
+				if len(result.Transaction.Message.AccountKeys) > 0 {
+					txFrom = result.Transaction.Message.AccountKeys[0]
+				}
+
 				s.logger.Printf("Transaction finalized at slot %d (%d confirmations)", result.Slot, confirmations)
 
 				return &ObservationResult{
 					TxHash:                txHash,
 					BlockNumber:           result.Slot,
+					BlockHash:             blockHash,
 					BlockTimestamp:        blockTime,
 					Status:                status,
 					Confirmations:        confirmations,
@@ -240,6 +257,7 @@ func (s *SolanaStrategy) ObserveTransaction(ctx context.Context, txHash string) 
 					GasUsed:               gasUsed,
 					ObservedAt:            time.Now().UTC(),
 					ObserverValidatorID:   s.config.ValidatorID,
+					TxFrom:               txFrom,
 				}, nil
 			}
 
@@ -321,9 +339,22 @@ func (s *SolanaStrategy) GetTransactionReceipt(ctx context.Context, txHash strin
 		blockTime = time.Unix(*result.BlockTime, 0)
 	}
 
+	// Fetch block hash for the slot
+	blockHash, err := s.getBlockHash(ctx, result.Slot)
+	if err != nil {
+		s.logger.Printf("getBlockHash failed (non-fatal): %v", err)
+	}
+
+	// Extract fee payer (first account key)
+	txFrom := ""
+	if len(result.Transaction.Message.AccountKeys) > 0 {
+		txFrom = result.Transaction.Message.AccountKeys[0]
+	}
+
 	return &ObservationResult{
 		TxHash:                txHash,
 		BlockNumber:           result.Slot,
+		BlockHash:             blockHash,
 		BlockTimestamp:        blockTime,
 		Status:                status,
 		Confirmations:        confirmations,
@@ -332,6 +363,7 @@ func (s *SolanaStrategy) GetTransactionReceipt(ctx context.Context, txHash strin
 		ResultHash:            s.computeResultHash(txHash, result.Slot),
 		ObservedAt:            time.Now().UTC(),
 		ObserverValidatorID:   s.config.ValidatorID,
+		TxFrom:               txFrom,
 	}, nil
 }
 
@@ -444,6 +476,30 @@ func (s *SolanaStrategy) rpcCall(ctx context.Context, method string, params inte
 	return &rpcResp, nil
 }
 
+// getBlockHash fetches the block hash for a given slot via getBlock RPC.
+func (s *SolanaStrategy) getBlockHash(ctx context.Context, slot uint64) (string, error) {
+	resp, err := s.rpcCall(ctx, "getBlock", []interface{}{
+		slot,
+		map[string]interface{}{
+			"commitment":         s.config.Commitment,
+			"transactionDetails": "none",
+			"rewards":            false,
+		},
+	})
+	if err != nil {
+		return "", fmt.Errorf("getBlock(%d): %w", slot, err)
+	}
+
+	var block struct {
+		Blockhash string `json:"blockhash"`
+	}
+	if err := json.Unmarshal(resp.Result, &block); err != nil {
+		return "", fmt.Errorf("getBlock(%d): unmarshal: %w", slot, err)
+	}
+
+	return block.Blockhash, nil
+}
+
 func (s *SolanaStrategy) computeResultHash(txHash string, slot uint64) [32]byte {
 	h := sha256.New()
 	h.Write([]byte(txHash))
@@ -463,7 +519,7 @@ func NewSolanaMainnetStrategy(rpcURL, programID, validatorID string) (*SolanaStr
 	config := &SolanaStrategyConfig{
 		ChainConfig: &ChainConfig{
 			Platform:              ChainPlatformSolana,
-			ChainID:               "solana-mainnet",
+			ChainID:               "101",
 			NetworkName:           "solana-mainnet",
 			RPC:                   rpcURL,
 			ContractAddress:       programID,
@@ -490,7 +546,7 @@ func NewSolanaDevnetStrategy(rpcURL, programID, validatorID string) (*SolanaStra
 	config := &SolanaStrategyConfig{
 		ChainConfig: &ChainConfig{
 			Platform:              ChainPlatformSolana,
-			ChainID:               "solana-devnet",
+			ChainID:               "103",
 			NetworkName:           "solana-devnet",
 			RPC:                   rpcURL,
 			ContractAddress:       programID,

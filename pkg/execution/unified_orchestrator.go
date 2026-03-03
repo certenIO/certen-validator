@@ -623,6 +623,7 @@ func getNetworkName(chainID string) string {
 		"1287":       "moonbase-alpha",
 		"2494104990": "tron-shasta",
 		"728126428":  "tron-mainnet",
+		"101":        "solana-mainnet",
 		"103":        "solana-devnet",
 		"397":        "near-mainnet",
 		"398":        "near-testnet",
