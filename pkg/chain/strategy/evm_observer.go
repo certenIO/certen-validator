@@ -260,11 +260,23 @@ func (o *EVMObserver) ObserveTransaction(ctx context.Context, txHash common.Hash
 	result.ObservedAt = time.Now().UTC()
 
 	// Fetch full transaction to get sender address
-	tx, _, err := o.client.TransactionByHash(ctx, txHash)
-	if err == nil && tx != nil {
+	tx, _, txErr := o.client.TransactionByHash(ctx, txHash)
+	if txErr == nil && tx != nil {
 		signer := types.LatestSignerForChainID(big.NewInt(o.chainID))
-		if from, err := types.Sender(signer, tx); err == nil {
+		if from, sErr := types.Sender(signer, tx); sErr == nil {
 			result.TxFrom = from.Hex()
+		} else {
+			log.Printf("⚠️ [EVM-OBSERVER] types.Sender failed (non-standard chain?): %v", sErr)
+		}
+	} else if txErr != nil {
+		log.Printf("⚠️ [EVM-OBSERVER] TransactionByHash failed: %v — trying raw RPC fallback for tx_from", txErr)
+		// Fallback: raw JSON-RPC call to extract "from" field (works on TRON jsonrpc)
+		type rpcTx struct {
+			From string `json:"from"`
+		}
+		var raw rpcTx
+		if rpcErr := o.client.Client().CallContext(ctx, &raw, "eth_getTransactionByHash", txHash.Hex()); rpcErr == nil && raw.From != "" {
+			result.TxFrom = raw.From
 		}
 	}
 
