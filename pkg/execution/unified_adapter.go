@@ -234,18 +234,26 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 		case []string:
 			txHashStrs = hashes
 		case *AnchorWorkflowTxHashes:
-			txHashStrs = []string{
-				hashes.CreateTxHash.Hex(),
-				hashes.VerifyTxHash.Hex(),
-				hashes.GovernanceTxHash.Hex(),
+			if len(hashes.RawTxHashes) == 3 {
+				txHashStrs = hashes.RawTxHashes
+			} else {
+				txHashStrs = []string{
+					hashes.CreateTxHash.Hex(),
+					hashes.VerifyTxHash.Hex(),
+					hashes.GovernanceTxHash.Hex(),
+				}
 			}
 		default:
 			// Handle AnchorWorkflowTxHashes from consensus package (different type due to package boundary)
 			if extracted := extractTxHashesViaReflection(txHashes); extracted != nil {
-				txHashStrs = []string{
-					extracted.CreateTxHash.Hex(),
-					extracted.VerifyTxHash.Hex(),
-					extracted.GovernanceTxHash.Hex(),
+				if len(extracted.RawTxHashes) == 3 {
+					txHashStrs = extracted.RawTxHashes
+				} else {
+					txHashStrs = []string{
+						extracted.CreateTxHash.Hex(),
+						extracted.VerifyTxHash.Hex(),
+						extracted.GovernanceTxHash.Hex(),
+					}
 				}
 			} else {
 				txHashStrs = []string{fmt.Sprintf("%v", txHashes)}

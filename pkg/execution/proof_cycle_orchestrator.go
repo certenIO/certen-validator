@@ -241,6 +241,7 @@ type AnchorWorkflowTxHashes struct {
 	VerifyTxHash     common.Hash // Step 2: executeComprehensiveProof tx
 	GovernanceTxHash common.Hash // Step 3: executeWithGovernance tx
 	PrimaryTxHash    common.Hash // For backwards compatibility
+	RawTxHashes      []string    // Native-format hashes for non-EVM chains (e.g. NEAR base58)
 }
 
 // StartProofCycleWithAllTxs initiates a complete proof cycle tracking all 3 anchor workflow transactions
@@ -1873,6 +1874,13 @@ func extractTxHashesViaReflection(txHashes interface{}) *AnchorWorkflowTxHashes 
 	// Try to get PrimaryTxHash field
 	if f := v.FieldByName("PrimaryTxHash"); f.IsValid() && f.Type() == reflect.TypeOf(common.Hash{}) {
 		result.PrimaryTxHash = f.Interface().(common.Hash)
+	}
+
+	// Try to get RawTxHashes field (native-format hashes for non-EVM chains)
+	if f := v.FieldByName("RawTxHashes"); f.IsValid() && f.Kind() == reflect.Slice {
+		if strs, ok := f.Interface().([]string); ok {
+			result.RawTxHashes = strs
+		}
 	}
 
 	return result

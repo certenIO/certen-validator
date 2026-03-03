@@ -173,6 +173,10 @@ type AnchorWorkflowTxHashes struct {
 
 	// For backwards compatibility, PrimaryTxHash points to CreateTxHash
 	PrimaryTxHash common.Hash
+
+	// RawTxHashes stores native-format tx hashes for non-EVM chains (e.g. NEAR base58).
+	// When populated, these take priority over the common.Hash fields which only work for hex hashes.
+	RawTxHashes []string
 }
 
 // extractPureHexHash strips chain prefix from multi-chain tx hash strings.
@@ -182,6 +186,17 @@ func extractPureHexHash(chainPrefixedHash string) string {
 	idx := strings.LastIndex(chainPrefixedHash, "0x")
 	if idx > 0 {
 		return chainPrefixedHash[idx:]
+	}
+	return chainPrefixedHash
+}
+
+// extractRawTxHash strips chain prefix from tx hash strings, preserving native format.
+// Works for any chain format: EVM hex ("0x..."), NEAR base58, Solana base58, etc.
+func extractRawTxHash(chainPrefixedHash string) string {
+	if idx := strings.LastIndex(chainPrefixedHash, ":"); idx >= 0 {
+		if candidate := chainPrefixedHash[idx+1:]; len(candidate) > 0 {
+			return candidate
+		}
 	}
 	return chainPrefixedHash
 }
@@ -1144,6 +1159,11 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 					VerifyTxHash:     common.HexToHash(extractPureHexHash(anchorRes.VerifyTxHash)),
 					GovernanceTxHash: common.HexToHash(extractPureHexHash(anchorRes.GovernanceTxHash)),
 					PrimaryTxHash:    common.HexToHash(extractPureHexHash(anchorRes.AnchorTxID)),
+					RawTxHashes: []string{
+						extractRawTxHash(anchorRes.CreateTxHash),
+						extractRawTxHash(anchorRes.VerifyTxHash),
+						extractRawTxHash(anchorRes.GovernanceTxHash),
+					},
 				}
 
 				bv.logger.Printf("🔄 [PROOF-CYCLE] Triggering Phase 7-9 for intent: %s", certenIntent.IntentID)
