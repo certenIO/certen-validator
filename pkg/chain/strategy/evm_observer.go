@@ -14,6 +14,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"log"
 	"math/big"
 	"sync"
 	"time"
@@ -169,24 +170,52 @@ func (o *EVMObserver) ObserveTransaction(ctx context.Context, txHash common.Hash
 	}
 
 	// Get block header — works on all EVM chains including OP Stack (Base, Optimism)
-	// which have deposit tx types that BlockByHash can't decode
-	header, err := o.client.HeaderByHash(ctx, receipt.BlockHash)
-	if err != nil {
-		return nil, fmt.Errorf("get block header: %w", err)
+	// which have deposit tx types that BlockByHash can't decode.
+	// TRON returns non-standard fields ("stateRoot":"0x") that break Go's header unmarshal,
+	// so we handle this gracefully with a receipt-only fallback.
+	header, headerErr := o.client.HeaderByHash(ctx, receipt.BlockHash)
+
+	var result *ObservationResult
+	if headerErr != nil {
+		// Fallback: build result from receipt only (TRON, non-standard EVM chains)
+		log.Printf("⚠️ [EVM-OBSERVER] HeaderByHash failed (non-standard chain): %v — using receipt-only observation", headerErr)
+		result = &ObservationResult{
+			TxHash:                receipt.TxHash.Hex(),
+			BlockNumber:           receipt.BlockNumber.Uint64(),
+			BlockHash:             receipt.BlockHash.Hex(),
+			BlockTimestamp:        time.Now().UTC(), // Best approximation
+			Status:                uint8(receipt.Status),
+			RequiredConfirmations: o.requiredConfirmations,
+			Confirmations:        1, // Already mined if we have receipt
+			GasUsed:              receipt.GasUsed,
+		}
+		for _, l := range receipt.Logs {
+			topics := make([]string, len(l.Topics))
+			for i, t := range l.Topics {
+				topics[i] = t.Hex()
+			}
+			result.Logs = append(result.Logs, EventLog{
+				Address:  l.Address.Hex(),
+				Topics:   topics,
+				Data:     l.Data,
+				LogIndex: l.Index,
+			})
+		}
+		result.ResultHash = computeResultHash(result)
+	} else {
+		// Wait for required confirmations
+		result, err = o.waitForConfirmationsFromHeader(ctx, receipt, header, deadline)
+		if err != nil {
+			return nil, fmt.Errorf("wait for confirmations: %w", err)
+		}
 	}
 
-	// Wait for required confirmations
-	result, err := o.waitForConfirmationsFromHeader(ctx, receipt, header, deadline)
-	if err != nil {
-		return nil, fmt.Errorf("wait for confirmations: %w", err)
-	}
-
-	// Try full block fetch for Merkle proofs (best-effort — fails on OP Stack chains)
+	// Try full block fetch for Merkle proofs (best-effort — fails on OP Stack and TRON chains)
 	block, blockErr := o.client.BlockByHash(ctx, receipt.BlockHash)
 	if blockErr == nil {
 		result, _ = o.addMerkleProofs(ctx, result, receipt, block)
-	} else {
-		// Populate block roots from header directly
+	} else if headerErr == nil {
+		// Populate block roots from header directly (only if we have a valid header)
 		copy(result.StateRoot[:], header.Root.Bytes())
 		copy(result.TransactionsRoot[:], header.TxHash.Bytes())
 		copy(result.ReceiptsRoot[:], header.ReceiptHash.Bytes())
