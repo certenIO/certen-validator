@@ -510,7 +510,7 @@ func NewNEARMainnetStrategy(rpcURL, contractAccount, signerAccount, validatorID 
 
 func NewNEARTestnetStrategy(rpcURL, contractAccount, signerAccount, validatorID string) (*NEARStrategy, error) {
 	if rpcURL == "" {
-		rpcURL = "https://rpc.testnet.near.org"
+		rpcURL = "https://test.rpc.fastnear.com"
 	}
 	config := &NEARStrategyConfig{
 		ChainConfig: &ChainConfig{
