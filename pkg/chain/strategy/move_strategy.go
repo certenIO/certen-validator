@@ -71,6 +71,7 @@ type aptosTransaction struct {
 	Type                string `json:"type"`
 	Version             string `json:"version"`
 	Hash                string `json:"hash"`
+	Sender              string `json:"sender"`
 	StateChangeHash     string `json:"state_change_hash"`
 	EventRootHash       string `json:"event_root_hash"`
 	StateCheckpointHash string `json:"state_checkpoint_hash"`
@@ -335,6 +336,7 @@ func (s *MoveStrategy) observeAptos(ctx context.Context, txHash string) (*Observ
 				IsFinalized:           true,
 				ResultHash:            s.computeResultHash(txHash, version, tx.StateChangeHash),
 				GasUsed:               gasUsed,
+				TxFrom:               tx.Sender,
 				ObservedAt:            time.Now().UTC(),
 				ObserverValidatorID:   s.config.ValidatorID,
 			}, nil
