@@ -10,6 +10,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/certen/independant-validator/pkg/database"
@@ -92,6 +93,103 @@ func (h *IntentLifecycleHandlers) HandleGetByTxHash(w http.ResponseWriter, r *ht
 	}
 
 	h.writeJSON(w, http.StatusOK, lc)
+}
+
+// HandleListByUser handles GET /api/v1/intent/user/{user_id}
+func (h *IntentLifecycleHandlers) HandleListByUser(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		h.writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only GET is allowed")
+		return
+	}
+
+	path := strings.TrimPrefix(r.URL.Path, "/api/v1/intent/user/")
+	userID := strings.TrimSuffix(path, "/")
+	if userID == "" {
+		h.writeError(w, http.StatusBadRequest, "INVALID_USER_ID", "User ID is required")
+		return
+	}
+
+	limit := h.parseIntParam(r, "limit", 50)
+
+	ctx := r.Context()
+	items, err := h.repos.IntentLifecycle.ListByUserEnriched(ctx, userID, limit)
+	if err != nil {
+		h.logger.Printf("Error listing lifecycles by user: %v", err)
+		h.writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to list lifecycles")
+		return
+	}
+
+	h.writeJSON(w, http.StatusOK, map[string]interface{}{
+		"intents": items,
+		"count":   len(items),
+		"user_id": userID,
+	})
+}
+
+// HandleListByStatus handles GET /api/v1/intent/status/{status}
+func (h *IntentLifecycleHandlers) HandleListByStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		h.writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only GET is allowed")
+		return
+	}
+
+	path := strings.TrimPrefix(r.URL.Path, "/api/v1/intent/status/")
+	status := strings.TrimSuffix(path, "/")
+	if status == "" {
+		h.writeError(w, http.StatusBadRequest, "INVALID_STATUS", "Status is required")
+		return
+	}
+
+	limit := h.parseIntParam(r, "limit", 50)
+
+	ctx := r.Context()
+	items, err := h.repos.IntentLifecycle.ListByStatus(ctx, database.IntentLifecycleStatus(status), limit)
+	if err != nil {
+		h.logger.Printf("Error listing lifecycles by status: %v", err)
+		h.writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to list lifecycles")
+		return
+	}
+
+	h.writeJSON(w, http.StatusOK, map[string]interface{}{
+		"intents": items,
+		"count":   len(items),
+		"status":  status,
+	})
+}
+
+// HandleListRecent handles GET /api/v1/intent/recent
+func (h *IntentLifecycleHandlers) HandleListRecent(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		h.writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only GET is allowed")
+		return
+	}
+
+	limit := h.parseIntParam(r, "limit", 50)
+
+	ctx := r.Context()
+	items, err := h.repos.IntentLifecycle.ListRecentEnriched(ctx, limit)
+	if err != nil {
+		h.logger.Printf("Error listing recent lifecycles: %v", err)
+		h.writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to list lifecycles")
+		return
+	}
+
+	h.writeJSON(w, http.StatusOK, map[string]interface{}{
+		"intents": items,
+		"count":   len(items),
+	})
+}
+
+func (h *IntentLifecycleHandlers) parseIntParam(r *http.Request, name string, defaultVal int) int {
+	valStr := r.URL.Query().Get(name)
+	if valStr == "" {
+		return defaultVal
+	}
+	val, err := strconv.Atoi(valStr)
+	if err != nil {
+		return defaultVal
+	}
+	return val
 }
 
 func (h *IntentLifecycleHandlers) writeJSON(w http.ResponseWriter, status int, data interface{}) {

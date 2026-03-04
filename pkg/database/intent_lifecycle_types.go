@@ -35,6 +35,18 @@ func (s IntentLifecycleStatus) IsTerminal() bool {
 	return s == IntentLifecycleComplete || s == IntentLifecycleFailed
 }
 
+// IntentLifecycleEnriched extends IntentLifecycle with transaction metadata from batch_transactions
+type IntentLifecycleEnriched struct {
+	IntentLifecycle
+	FromChain   *string `json:"from_chain,omitempty"`
+	ToChain     *string `json:"to_chain,omitempty"`
+	FromAddress *string `json:"from_address,omitempty"`
+	ToAddress   *string `json:"to_address,omitempty"`
+	Amount      *string `json:"amount,omitempty"`
+	TokenSymbol *string `json:"token_symbol,omitempty"`
+	AccountURL  *string `json:"account_url,omitempty"`
+}
+
 // IntentLifecycle represents a row in the intent_lifecycle table
 type IntentLifecycle struct {
 	ID            int64                 `json:"id" db:"id"`

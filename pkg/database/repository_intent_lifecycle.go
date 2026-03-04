@@ -283,6 +283,113 @@ func (r *IntentLifecycleRepository) ListByUser(ctx context.Context, userID strin
 	return r.scanRows(ctx, query, userID, limit)
 }
 
+// ListRecentEnriched returns recent lifecycle records joined with batch_transactions for UI display
+func (r *IntentLifecycleRepository) ListRecentEnriched(ctx context.Context, limit int) ([]*IntentLifecycleEnriched, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+
+	query := `
+		SELECT il.id, il.intent_id, il.accum_tx_hash, il.user_id, il.status,
+		       il.target_chain, il.proof_class, il.error_message, il.block_height,
+		       il.cycle_id, il.write_back_tx,
+		       il.created_at, il.updated_at, il.submitted_at, il.authorized_at,
+		       il.in_process_at, il.completed_at, il.failed_at,
+		       bt.from_chain, bt.to_chain, bt.from_address, bt.to_address,
+		       bt.amount, bt.token_symbol, bt.account_url
+		FROM intent_lifecycle il
+		LEFT JOIN batch_transactions bt ON bt.intent_id = il.intent_id
+		ORDER BY il.created_at DESC
+		LIMIT $1
+	`
+
+	return r.scanEnrichedRows(ctx, query, limit)
+}
+
+// ListByUserEnriched returns lifecycle records for a user joined with batch_transactions
+func (r *IntentLifecycleRepository) ListByUserEnriched(ctx context.Context, userID string, limit int) ([]*IntentLifecycleEnriched, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+
+	query := `
+		SELECT il.id, il.intent_id, il.accum_tx_hash, il.user_id, il.status,
+		       il.target_chain, il.proof_class, il.error_message, il.block_height,
+		       il.cycle_id, il.write_back_tx,
+		       il.created_at, il.updated_at, il.submitted_at, il.authorized_at,
+		       il.in_process_at, il.completed_at, il.failed_at,
+		       bt.from_chain, bt.to_chain, bt.from_address, bt.to_address,
+		       bt.amount, bt.token_symbol, bt.account_url
+		FROM intent_lifecycle il
+		LEFT JOIN batch_transactions bt ON bt.intent_id = il.intent_id
+		WHERE il.user_id = $1
+		ORDER BY il.created_at DESC
+		LIMIT $2
+	`
+
+	return r.scanEnrichedRows(ctx, query, userID, limit)
+}
+
+// scanEnrichedRows scans rows from a joined lifecycle + batch_transactions query
+func (r *IntentLifecycleRepository) scanEnrichedRows(ctx context.Context, query string, args ...interface{}) ([]*IntentLifecycleEnriched, error) {
+	rows, err := r.client.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query enriched intent lifecycles: %w", err)
+	}
+	defer rows.Close()
+
+	var results []*IntentLifecycleEnriched
+	for rows.Next() {
+		e := &IntentLifecycleEnriched{}
+		if err := rows.Scan(
+			&e.ID, &e.IntentID, &e.AccumTxHash, &e.UserID, &e.Status,
+			&e.TargetChain, &e.ProofClass, &e.ErrorMessage, &e.BlockHeight,
+			&e.CycleID, &e.WriteBackTx,
+			&e.CreatedAt, &e.UpdatedAt, &e.SubmittedAt, &e.AuthorizedAt,
+			&e.InProcessAt, &e.CompletedAt, &e.FailedAt,
+			&e.FromChain, &e.ToChain, &e.FromAddress, &e.ToAddress,
+			&e.Amount, &e.TokenSymbol, &e.AccountURL,
+		); err != nil {
+			return nil, fmt.Errorf("scan enriched intent lifecycle row: %w", err)
+		}
+		results = append(results, e)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate enriched intent lifecycle rows: %w", err)
+	}
+
+	return results, nil
+}
+
+// ListRecent returns the most recent lifecycle records regardless of user, ordered by created_at DESC
+func (r *IntentLifecycleRepository) ListRecent(ctx context.Context, limit int) ([]*IntentLifecycle, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+
+	query := `
+		SELECT id, intent_id, accum_tx_hash, user_id, status, target_chain, proof_class,
+		       error_message, block_height, cycle_id, write_back_tx,
+		       created_at, updated_at, submitted_at, authorized_at,
+		       in_process_at, completed_at, failed_at
+		FROM intent_lifecycle
+		ORDER BY created_at DESC
+		LIMIT $1
+	`
+
+	return r.scanRows(ctx, query, limit)
+}
+
 // scanRows is a helper that scans multiple lifecycle rows from a query result
 func (r *IntentLifecycleRepository) scanRows(ctx context.Context, query string, args ...interface{}) ([]*IntentLifecycle, error) {
 	rows, err := r.client.db.QueryContext(ctx, query, args...)

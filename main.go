@@ -556,10 +556,16 @@ func main() {
             batchComponents.Repos,
             log.New(log.Writer(), "[LifecycleAPI] ", log.LstdFlags),
         )
+        mux.HandleFunc("/api/v1/intent/recent", lifecycleHandlers.HandleListRecent)
+        mux.HandleFunc("/api/v1/intent/status/", lifecycleHandlers.HandleListByStatus)
+        mux.HandleFunc("/api/v1/intent/user/", lifecycleHandlers.HandleListByUser)
         mux.HandleFunc("/api/v1/intent/tx/", lifecycleHandlers.HandleGetByTxHash)
         mux.HandleFunc("/api/v1/intent/", lifecycleHandlers.HandleGetByIntentID)
 
         log.Printf("✅ Intent lifecycle API endpoints configured:")
+        log.Printf("   - GET /api/v1/intent/recent             (recent intents)")
+        log.Printf("   - GET /api/v1/intent/status/{status}    (intents by status)")
+        log.Printf("   - GET /api/v1/intent/user/{user_id}     (intents by user)")
         log.Printf("   - GET /api/v1/intent/{id}/lifecycle     (lifecycle by intent ID)")
         log.Printf("   - GET /api/v1/intent/tx/{hash}/lifecycle (lifecycle by tx hash)")
 
