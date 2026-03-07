@@ -1,36 +1,49 @@
-# Binaries
+# Binaries and compiled outputs
 *.exe
 /validator
+/validator-linux
+/validator_linux_amd64
 /govproof
 /txhash
+**/govproof
+**/txhash
 
 # Environment files (contain secrets)
 .env
 .env.shared
 .env.local
 .env.*.local
+!.env.example
 !.env.*.example
 
 # Docker Compose (contains per-validator private keys)
 docker-compose.yml
 docker-compose.override.yml
+!docker-compose.example.yml
 
-# Firebase/Google Cloud credentials (NEVER commit these!)
+# Firebase/Google Cloud credentials
 firebase-service-account.json
 *-firebase-adminsdk-*.json
 *.serviceAccountKey.json
 
-# IDE
+# IDE and editor files
 .idea/
 .vscode/
 *.swp
 *.swo
 
+# AI tool config
+.claude/
+**/CLAUDE.md
+
 # Go
 vendor/
 
-# BLS ZK keys (generated, can be large)
+# BLS keys and ZK proving keys (sensitive/large)
+bls_keys_backup*.json
 bls_zk_keys/
+bls_zk_keys_bls12381/
+bls_zk_keys.tar.gz
 
 # Data directories
 data/
@@ -39,6 +52,7 @@ bft-keys/
 # OS files
 .DS_Store
 Thumbs.db
+*.stackdump
 
 # Logs
 *.log
@@ -47,35 +61,31 @@ Thumbs.db
 test_results_*/
 coverage.out
 
-# Temporary files
+# Temporary and generated files
 tmpclaude-*
 validator-eth-keys.txt
 temp_*.json
 *temp_exec_results*.json
 *temp_data_results*.json
-
-# Build artifacts and binaries
-validator-build/
-validator-linux-fixed
 nul
-
-# BLS ZK keys tarball
-bls_zk_keys.tar.gz
 
 # Claude scratchpad files (Windows paths that get mangled)
 C*Accumulate_Stuff*
 C*Users*AppData*
 
-# Scripts directory
-/scripts/
+# Generated proof artifacts and security files
+**/consolidated_governance-proof/artifacts/
+**/consolidated_governance-proof/security/
 
-# Claude config
-.claude/
+# Generated key data
+cmd/vk_converter/vk.json
 
-# Documentation/notes
+# Build artifacts
+validator-build/
+validator-linux-fixed
+
+# Documentation that shouldn't be in the repo
 CERTEN_COMPLETE_PROOF_CYCLE_SPEC.md
 Fix-Dynamic-Partition-Discovery-Intent-Search.txt
 Kermit-testnet-Description.txt
-
-# BLS key info tool
-cmd/bls-key-info/
+REVIEW.md
