@@ -446,6 +446,13 @@ func (btce *BFTTargetChainExecutor) executeEthereumOperations(
 
 	btce.logger.Printf("🔷 [EVM-EXEC] Executing EVM chain operations for intent: %s on chainId=%d", intentID, chainID)
 
+	// Create a fresh context with generous timeout for multi-chain EVM execution.
+	// The parent BFT context may have a very short deadline that's already nearly expired
+	// after consensus rounds. Each chain's anchor workflow needs ~15-25 seconds.
+	evmCtx, evmCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer evmCancel()
+	ctx = evmCtx
+
 	// Load multi-chain configuration
 	anchorCfg, err := config.LoadAnchorConfigFromEnv()
 	if err != nil {
@@ -543,6 +550,45 @@ func (btce *BFTTargetChainExecutor) executeEthereumOperations(
 	// Execute on each target chain
 	for targetChainID, chainLegs := range legsByChain {
 		btce.logger.Printf("🔗 [MULTI-CHAIN] Processing %d legs for chainId=%d...", len(chainLegs), targetChainID)
+
+		// Check if this chain group is non-EVM and needs a different handler
+		nonEVMChainName := btce.getNonEVMChainName(targetChainID, chainLegs[0].Chain)
+		if nonEVMChainName != "" {
+			btce.logger.Printf("🔀 [MULTI-CHAIN] Chain %d (%s) is non-EVM, dispatching to %s handler",
+				targetChainID, nonEVMChainName, nonEVMChainName)
+			nonEVMResult, nonEVMErr := btce.dispatchNonEVMChain(ctx, nonEVMChainName,
+				intentID, transactionHash, accountURL, validatorID, bundleID, anchorID,
+				certenProof, targetChainID)
+			if nonEVMErr != nil {
+				btce.logger.Printf("❌ [MULTI-CHAIN] Non-EVM handler failed for %s: %v", nonEVMChainName, nonEVMErr)
+				overallSuccess = false
+				for _, leg := range chainLegs {
+					allCreateTxHashes = append(allCreateTxHashes, fmt.Sprintf("create_failed_%s", nonEVMChainName))
+					allVerifyTxHashes = append(allVerifyTxHashes, fmt.Sprintf("verify_failed_%s", nonEVMChainName))
+					allGovTxHashes = append(allGovTxHashes, fmt.Sprintf("execution_failed_%s", leg.LegID))
+				}
+			} else if nonEVMResult != nil {
+				// Merge non-EVM results
+				displayName := nonEVMChainName
+				allCreateTxHashes = append(allCreateTxHashes, fmt.Sprintf("%s:%s", displayName, nonEVMResult.CreateTxHash))
+				allVerifyTxHashes = append(allVerifyTxHashes, fmt.Sprintf("%s:%s", displayName, nonEVMResult.VerifyTxHash))
+				for i, leg := range chainLegs {
+					govTx := nonEVMResult.GovernanceTxHash
+					if !nonEVMResult.Success {
+						govTx = fmt.Sprintf("execution_failed_%s", leg.LegID)
+						overallSuccess = false
+					}
+					if i == 0 {
+						allGovTxHashes = append(allGovTxHashes, fmt.Sprintf("%s:%s:%s", displayName, leg.LegID, govTx))
+					} else {
+						allGovTxHashes = append(allGovTxHashes, fmt.Sprintf("%s:%s:%s", displayName, leg.LegID, govTx))
+					}
+				}
+				chainResults = append(chainResults, fmt.Sprintf("%s:%d_legs", displayName, len(chainLegs)))
+				btce.logger.Printf("✅ [MULTI-CHAIN] Non-EVM %s completed: success=%v", displayName, nonEVMResult.Success)
+			}
+			continue
+		}
 
 		// Get contract manager for this specific chain
 		chainEthManager, chainSpecificCfg, chainErr := btce.getContractManagerForChain(targetChainID, anchorCfg)
@@ -896,6 +942,80 @@ func (btce *BFTTargetChainExecutor) groupLegsByChain(legs []LegExecution) map[in
 	}
 
 	return grouped
+}
+
+// getNonEVMChainName checks if a chainID corresponds to a non-EVM chain.
+// Returns the normalized chain name if non-EVM, empty string if EVM.
+func (btce *BFTTargetChainExecutor) getNonEVMChainName(chainID int64, legChainName string) string {
+	// Known non-EVM chain IDs
+	switch chainID {
+	case 103: // Solana devnet
+		return "solana-devnet"
+	case 101: // Solana mainnet
+		return "solana-mainnet"
+	case 102: // Solana testnet
+		return "solana-testnet"
+	case 398: // NEAR
+		return "near-testnet"
+	case 2: // Aptos or SUI (disambiguate by chain name)
+		normalized := strings.ToLower(strings.ReplaceAll(legChainName, " ", "-"))
+		if strings.Contains(normalized, "sui") {
+			return normalized
+		}
+		if strings.Contains(normalized, "aptos") {
+			return normalized
+		}
+		return normalized
+	case -3: // TON
+		return "ton-testnet"
+	case 2494104990: // TRON
+		return "tron-shasta"
+	}
+
+	// Also check by chain name for chains with non-standard IDs
+	normalized := strings.ToLower(strings.ReplaceAll(legChainName, " ", "-"))
+	switch {
+	case strings.HasPrefix(normalized, "solana"):
+		return normalized
+	case strings.HasPrefix(normalized, "near"):
+		return normalized
+	case strings.HasPrefix(normalized, "aptos"):
+		return normalized
+	case strings.HasPrefix(normalized, "sui"):
+		return normalized
+	case strings.HasPrefix(normalized, "ton"):
+		return normalized
+	case strings.HasPrefix(normalized, "tron"):
+		return normalized
+	}
+
+	return "" // EVM chain
+}
+
+// dispatchNonEVMChain routes a non-EVM chain group to its proper execution handler.
+func (btce *BFTTargetChainExecutor) dispatchNonEVMChain(
+	ctx context.Context,
+	chainName string,
+	intentID, transactionHash, accountURL, validatorID, bundleID, anchorID string,
+	certenProof *proof.CertenProof,
+	chainID int64,
+) (*TargetChainExecutionResult, error) {
+	switch {
+	case strings.HasPrefix(chainName, "solana"):
+		return btce.executeSolanaOperations(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, chainID)
+	case strings.HasPrefix(chainName, "near"):
+		return btce.executeNearOperations(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, chainID)
+	case strings.HasPrefix(chainName, "aptos"):
+		return btce.executeAptosOperations(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, chainID)
+	case strings.HasPrefix(chainName, "sui"):
+		return btce.executeSuiOperations(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, chainID)
+	case strings.HasPrefix(chainName, "ton"):
+		return btce.executeTonOperations(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, chainID)
+	case strings.HasPrefix(chainName, "tron"):
+		return btce.executeTronOperations(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, chainID)
+	default:
+		return nil, fmt.Errorf("unsupported non-EVM chain: %s (chainId=%d)", chainName, chainID)
+	}
 }
 
 // getContractManagerForChain creates a contract manager for a specific chain
