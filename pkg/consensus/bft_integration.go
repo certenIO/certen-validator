@@ -3071,6 +3071,29 @@ func (bv *BFTValidator) buildExecutionCommitmentFromIntent(certenIntent *CertenI
 		// Verification flags
 		"verified": true,
 		"createdAt": time.Now().UTC().Format(time.RFC3339),
+
+		// Multi-leg metadata (for write-back aggregation)
+		"legCount": len(crossChainData.Legs),
+	}
+
+	// Add per-leg summaries for multi-leg write-back
+	if len(crossChainData.Legs) > 1 {
+		var legSummaries []map[string]interface{}
+		for i, l := range crossChainData.Legs {
+			legSummaries = append(legSummaries, map[string]interface{}{
+				"legIndex":  i,
+				"legId":     l.LegID,
+				"chain":     l.Chain,
+				"chainId":   l.ChainID,
+				"network":   l.Network,
+				"from":      l.From,
+				"to":        l.To,
+				"amountWei": l.AmountWei,
+				"amountEth": l.AmountEth,
+				"symbol":    l.Asset.Symbol,
+			})
+		}
+		commitment["legs"] = legSummaries
 	}
 
 	// Compute commitment hash for integrity verification

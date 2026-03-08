@@ -298,6 +298,16 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 			}
 		}
 
+		// Extract multi-leg metadata
+		var legCount int
+		if commitMap != nil {
+			if lc, ok := commitMap["legCount"].(float64); ok {
+				legCount = int(lc)
+			} else if lc, ok := commitMap["legCount"].(int); ok {
+				legCount = lc
+			}
+		}
+
 		// Create unified request with Accumulate reference data
 		var userIDPtr *string
 		if userID != "" {
@@ -346,6 +356,11 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 			MerklePath:     nil, // Empty path for single leaf (leaf = root)
 			MerkleRoot:     merkleRoot,
 			CommitmentData: commitMap,
+		}
+
+		if legCount > 1 {
+			fmt.Printf("[UnifiedAdapter] Multi-leg intent detected: %d legs for intent %s\n",
+				legCount, intentID)
 		}
 
 		fmt.Printf("[UnifiedAdapter] Starting unified proof cycle with Accumulate ref for intent %s\n", intentID)

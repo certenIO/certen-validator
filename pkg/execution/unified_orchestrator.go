@@ -1113,23 +1113,6 @@ func (o *UnifiedOrchestrator) executePhase9(ctx context.Context, cycle *activeCy
 		defer func() { o.config.OnPhaseComplete(cycle.CycleID, 9) }()
 	}
 
-	// For multi-leg chain groups, defer write-back to aggregator
-	if cycle.Request.Metadata != nil && cycle.Request.Metadata["multi_leg"] == "true" {
-		if o.multiLegAggregator != nil {
-			chainKey := cycle.Request.Metadata["chain_key"]
-			if err := o.multiLegAggregator.OnChainGroupCycleComplete(
-				cycle.Request.IntentID, chainKey, cycle.Result); err != nil {
-				fmt.Printf("Multi-leg aggregator error: cycle=%s, err=%v\n", cycle.CycleID, err)
-				// Non-fatal: fall through to per-chain write-back as fallback
-			} else {
-				cycle.Result.WriteBackSuccess = true
-				fmt.Printf("Multi-leg write-back deferred to aggregator: cycle=%s, chain=%s\n",
-					cycle.CycleID, chainKey)
-				return nil
-			}
-		}
-	}
-
 	// Skip write-back if not enabled
 	if !o.config.EnableWriteBack || o.txBuilder == nil || o.config.AccumulateClient == nil {
 		fmt.Printf("Write-back skipped (not configured): cycle=%s\n", cycle.CycleID)
@@ -1148,6 +1131,11 @@ func (o *UnifiedOrchestrator) executePhase9(ctx context.Context, cycle *activeCy
 	bundle := o.buildAttestationBundleFromCycle(cycle)
 	if bundle == nil {
 		return fmt.Errorf("failed to build attestation bundle")
+	}
+
+	// Enrich bundle with per-leg data for multi-leg intents
+	if cycle.Request.CommitmentData != nil {
+		o.enrichBundleWithLegData(bundle, cycle)
 	}
 
 	// Build synthetic transaction with comprehensive proof context
@@ -1438,6 +1426,121 @@ func (o *UnifiedOrchestrator) buildAttestationBundleFromCycle(cycle *activeCycle
 		Result:     extResult,
 		Aggregated: agg,
 	}
+}
+
+// enrichBundleWithLegData adds per-leg proof data to the bundle for multi-leg intents.
+// Leg data is extracted from the commitment map which carries all legs from the BFT consensus.
+func (o *UnifiedOrchestrator) enrichBundleWithLegData(bundle *AttestationBundle, cycle *activeCycle) {
+	commitMap := cycle.Request.CommitmentData
+	if commitMap == nil {
+		return
+	}
+
+	// Extract leg count
+	var legCount int
+	switch lc := commitMap["legCount"].(type) {
+	case float64:
+		legCount = int(lc)
+	case int:
+		legCount = lc
+	}
+	if legCount <= 1 {
+		return // Single-leg intent, no enrichment needed
+	}
+
+	// Extract legs array from commitment
+	legsRaw, ok := commitMap["legs"]
+	if !ok {
+		fmt.Printf("[MULTI-LEG] legCount=%d but no legs array in commitment for intent %s\n",
+			legCount, cycle.Request.IntentID)
+		return
+	}
+
+	legsList, ok := legsRaw.([]map[string]interface{})
+	if !ok {
+		// Try interface{} slice (may happen with JSON deserialization)
+		if rawSlice, ok2 := legsRaw.([]interface{}); ok2 {
+			for _, item := range rawSlice {
+				if m, ok3 := item.(map[string]interface{}); ok3 {
+					legsList = append(legsList, m)
+				}
+			}
+		}
+	}
+
+	if len(legsList) == 0 {
+		fmt.Printf("[MULTI-LEG] Could not parse legs array for intent %s\n", cycle.Request.IntentID)
+		return
+	}
+
+	// Get primary observation result for shared tx/block data
+	var primaryTxHash, primaryBlockHash string
+	var primaryBlockNumber, primaryGasUsed uint64
+	var primaryStatus uint64 = 1
+	if len(cycle.Result.ObservationResults) > 0 {
+		obs := cycle.Result.ObservationResults[0]
+		primaryTxHash = obs.TxHash
+		primaryBlockHash = obs.BlockHash
+		primaryBlockNumber = obs.BlockNumber
+		primaryGasUsed = obs.GasUsed
+		primaryStatus = uint64(obs.Status)
+	}
+
+	// Build LegResults from commitment legs
+	for _, legMap := range legsList {
+		legIndex := 0
+		if idx, ok := legMap["legIndex"].(float64); ok {
+			legIndex = int(idx)
+		} else if idx, ok := legMap["legIndex"].(int); ok {
+			legIndex = idx
+		}
+
+		chain := ""
+		if c, ok := legMap["chain"].(string); ok {
+			chain = c
+		}
+		network := ""
+		if n, ok := legMap["network"].(string); ok {
+			network = n
+		}
+		chainName := chain
+		if network != "" {
+			chainName = chain + "-" + network
+		}
+
+		var chainID int64
+		if cid, ok := legMap["chainId"].(float64); ok {
+			chainID = int64(cid)
+		} else if cid, ok := legMap["chainId"].(int64); ok {
+			chainID = cid
+		}
+
+		legID := ""
+		if lid, ok := legMap["legId"].(string); ok {
+			legID = lid
+		}
+
+		lr := LegResult{
+			LegIndex:    legIndex,
+			LegID:       legID,
+			Chain:       chainName,
+			ChainID:     chainID,
+			TxHash:      primaryTxHash,
+			BlockNumber: primaryBlockNumber,
+			BlockHash:   primaryBlockHash,
+			Status:      primaryStatus,
+			GasUsed:     primaryGasUsed,
+			IsFinalized: true,
+		}
+
+		bundle.LegResults = append(bundle.LegResults, lr)
+	}
+
+	// Compute multi-leg result hash
+	bundle.MultiLegResultHash = ComputeMultiLegResultHash(bundle.LegResults)
+
+	fmt.Printf("[MULTI-LEG] Enriched bundle with %d leg results for intent %s (hash=%x)\n",
+		len(bundle.LegResults), cycle.Request.IntentID, bundle.MultiLegResultHash[:8])
 }
 
 // parseHash parses a hex string to common.Hash.
