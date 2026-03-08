@@ -1,0 +1,24 @@
+{
+  "name": "certen-non-evm-keygen",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Generate keypairs for 7 validators across 5 non-EVM chains",
+  "scripts": {
+    "generate": "node generate.mjs",
+    "check-balances": "node check-balances.mjs"
+  },
+  "dependencies": {
+    "tweetnacl": "^1.0.3",
+    "bs58": "^6.0.0",
+    "@noble/hashes": "^1.7.1",
+    "bech32": "^2.0.0",
+    "@ton/crypto": "^3.3.0",
+    "@ton/ton": "^15.0.0",
+    "@ton/core": "^0.62.0",
+    "@solana/web3.js": "^1.98.0",
+    "@aptos-labs/ts-sdk": "^1.33.0",
+    "@mysten/sui": "^1.16.0",
+    "near-api-js": "^5.0.1"
+  }
+}
