@@ -39,8 +39,10 @@ firebase-service-account.json
 # Go
 vendor/
 
-# BLS ZK keys directory (non-bls12381 variants)
+# BLS keys and ZK proving keys (sensitive — SCP to server, never commit)
+bls_keys_backup*.json
 bls_zk_keys/
+bls_zk_keys_bls12381/
 bls_zk_keys.tar.gz
 
 # Data directories
@@ -76,7 +78,8 @@ C*Users*AppData*
 **/consolidated_governance-proof/artifacts/
 **/consolidated_governance-proof/security/
 
-# Generated key data (keep vk.json tracked)
+# Generated key data (sensitive — SCP to server, never commit)
+cmd/vk_converter/vk.json
 
 # Build artifacts
 validator-build/
