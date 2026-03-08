@@ -14,6 +14,7 @@ package execution
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -534,6 +535,100 @@ func (a *UnifiedOrchestratorAdapter) RegisterMultiLegIntent(
 		a.unified.multiLegAggregator.RegisterMultiLegIntent(
 			intentID, operationID, totalLegs, executionMode, legMapping)
 	}
+}
+
+// StartPerChainProofCycles implements per-chain Phase 7-9 proof cycles for multi-leg intents.
+// It registers the intent with the MultiLegAggregator, then starts a separate proof cycle
+// for each chain group. The aggregator collects results and produces a unified write-back.
+func (a *UnifiedOrchestratorAdapter) StartPerChainProofCycles(
+	ctx context.Context,
+	intentID string,
+	operationID string,
+	bundleID [32]byte,
+	chainTxHashes map[string][]string,
+	legs interface{},
+	executionMode string,
+	commitment interface{},
+) error {
+	if !a.useUnified || a.unified == nil {
+		return fmt.Errorf("per-chain proof cycles require unified orchestrator")
+	}
+
+	if a.unified.multiLegAggregator == nil {
+		return fmt.Errorf("multi-leg aggregator not initialized")
+	}
+
+	// Extract legs via JSON roundtrip to bridge consensus.ChainLegInfo → local struct.
+	// Both types have identical fields so JSON marshal/unmarshal maps cleanly.
+	type chainLegInfo struct {
+		LegIndex  int    `json:"LegIndex"`
+		LegID     string `json:"LegID"`
+		ChainKey  string `json:"ChainKey"`
+		ChainName string `json:"ChainName"`
+		ChainID   int64  `json:"ChainID"`
+	}
+
+	var legInfos []chainLegInfo
+	legsJSON, err := json.Marshal(legs)
+	if err != nil {
+		return fmt.Errorf("marshal legs: %w", err)
+	}
+	if err := json.Unmarshal(legsJSON, &legInfos); err != nil {
+		return fmt.Errorf("unmarshal legs: %w", err)
+	}
+
+	if len(legInfos) == 0 {
+		return fmt.Errorf("no leg info provided for multi-leg proof cycles")
+	}
+
+	// Build leg mapping for the aggregator
+	legMapping := make(map[int]LegChainInfo)
+	for _, leg := range legInfos {
+		legMapping[leg.LegIndex] = LegChainInfo{
+			ChainKey:  leg.ChainKey,
+			ChainName: leg.ChainName,
+			ChainID:   leg.ChainID,
+			LegID:     leg.LegID,
+		}
+	}
+
+	// Register intent with the aggregator
+	a.unified.multiLegAggregator.RegisterMultiLegIntent(
+		intentID, operationID, len(legInfos), executionMode, legMapping)
+
+	fmt.Printf("[UnifiedAdapter] Registered multi-leg intent %s with %d legs, starting per-chain proof cycles\n",
+		intentID, len(legInfos))
+
+	// Start a proof cycle for each chain group
+	for chainKey, txHashes := range chainTxHashes {
+		if len(txHashes) == 0 {
+			continue
+		}
+
+		// Determine target chain for strategy resolution
+		targetChain := chainKey
+
+		fmt.Printf("[UnifiedAdapter] Starting proof cycle for chain group %s (intent %s, %d tx hashes)\n",
+			chainKey, intentID, len(txHashes))
+
+		commitData := make(map[string]interface{})
+		if cm, ok := commitment.(map[string]interface{}); ok {
+			for k, v := range cm {
+				commitData[k] = v
+			}
+		}
+		commitData["chain_key"] = chainKey
+
+		if err := a.StartMultiLegProofCycle(
+			ctx, intentID, chainKey, len(legInfos), bundleID,
+			txHashes, targetChain, commitData,
+		); err != nil {
+			fmt.Printf("[UnifiedAdapter] WARNING: Failed to start proof cycle for chain %s: %v\n", chainKey, err)
+			// Continue with other chains - partial results are better than none
+		}
+	}
+
+	return nil
 }
 
 // =============================================================================

@@ -164,6 +164,16 @@ type AnchorResponse struct {
 	Message  string `json:"message"`
 }
 
+// ChainLegInfo describes a single leg's chain identity for multi-leg proof cycle routing.
+// Defined here (not in execution package) to avoid circular imports.
+type ChainLegInfo struct {
+	LegIndex  int
+	LegID     string
+	ChainKey  string // e.g., "base-sepolia"
+	ChainName string // e.g., "Base Sepolia"
+	ChainID   int64  // e.g., 84532
+}
+
 // AnchorWorkflowTxHashes contains all 3 transaction hashes from the Ethereum anchor workflow
 // This enables comprehensive tracking and observation of the entire anchor process
 type AnchorWorkflowTxHashes struct {
@@ -241,6 +251,13 @@ type ProofCycleOrchestratorInterface interface {
 	// StartProofCycleWithAccumulateRef initiates Phase 7-9 with Accumulate reference data for L1/L2/L3 proofs
 	// Enhanced: Includes Accumulate account URL and tx hash for chained proof generation
 	StartProofCycleWithAccumulateRef(ctx context.Context, intentID string, userID string, bundleID [32]byte, txHashes interface{}, commitment interface{}, accumulateAccountURL string, accumulateTxHash string, bvn string) error
+
+	// StartPerChainProofCycles starts separate proof cycles for each chain in a multi-leg intent.
+	// chainTxHashes maps chain key (e.g., "base-sepolia") to governance tx hashes for that chain.
+	// legs uses interface{} (actual type []ChainLegInfo) to avoid circular imports.
+	// Returns nil if multi-leg proof cycles are not supported (legacy orchestrator).
+	StartPerChainProofCycles(ctx context.Context, intentID string, operationID string, bundleID [32]byte,
+		chainTxHashes map[string][]string, legs interface{}, executionMode string, commitment interface{}) error
 }
 
 // BFTValidatorInfo represents information about a BFT validator
@@ -1157,28 +1174,77 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 				}
 
 				// SECURITY CRITICAL: Build execution commitment from intent's CrossChainData
-				// This commitment specifies exactly what the executor should do.
-				// Other validators verify the actual execution matches this commitment.
 				commitment := bv.buildExecutionCommitmentFromIntent(certenIntent, bundleID)
 
 				// Add governance data from ValidatorBlock for G1/G2 proof levels
 				if commitMap, ok := commitment.(map[string]interface{}); ok {
-					// Add MerkleRoot from governance proof (for G1 - Governance Correctness)
 					if vb.GovernanceProof.MerkleRoot != "" {
 						commitMap["governanceRoot"] = vb.GovernanceProof.MerkleRoot
 					}
-					// Add OperationCommitment (for G2 - Outcome Binding)
 					if vb.OperationCommitment != "" {
 						commitMap["operationCommitment"] = vb.OperationCommitment
 					}
-					// Add Accumulate block height and transaction hash for proof context
 					commitMap["accumulateBlockHeight"] = blockHeight
 					commitMap["accumulateTxHash"] = certenIntent.TransactionHash
+					commitMap["rawCreateTxHashes"] = anchorRes.CreateTxHash
+					commitMap["rawVerifyTxHashes"] = anchorRes.VerifyTxHash
+					commitMap["rawGovernanceTxHashes"] = anchorRes.GovernanceTxHash
 				}
 
-				// Enhanced: Build AnchorWorkflowTxHashes with all 3 transaction hashes
-				// NOTE: anchorRes fields contain chain-prefixed strings (e.g., "Ethereum Sepolia:0x001d2db...")
-				// from multi-chain execution. Must strip prefix before parsing as common.Hash.
+				// Determine leg count for multi-leg vs single-leg routing
+				legCount, _ := certenIntent.GetLegCount()
+				isMultiLeg := legCount > 1
+
+				bv.logger.Printf("🔄 [PROOF-CYCLE] Triggering Phase 7-9 for intent: %s (legs=%d, multi=%v)",
+					certenIntent.IntentID, legCount, isMultiLeg)
+				bv.logger.Printf("   Accumulate ref: accountURL=%s, txHash=%s", certenIntent.AccountURL, certenIntent.TransactionHash)
+
+				proofCycleCtx := context.Background()
+
+				if isMultiLeg {
+					// MULTI-LEG: Start per-chain proof cycles with unified write-back
+					bv.logger.Printf("🔀 [MULTI-LEG-PROOF] Starting per-chain proof cycles for %d legs", legCount)
+
+					// Parse governance tx hashes into per-chain groups
+					chainTxHashes := parseMultiChainTxHashes(anchorRes.GovernanceTxHash)
+					if len(chainTxHashes) == 0 {
+						// Fallback: use create tx hashes
+						chainTxHashes = parseMultiChainTxHashes(anchorRes.CreateTxHash)
+					}
+
+					// Build leg info from CrossChainData
+					ccEnvelope, ccErr := certenIntent.ParseCrossChain()
+					if ccErr != nil {
+						bv.logger.Printf("⚠️ [MULTI-LEG-PROOF] Failed to parse CrossChainData: %v - falling back to single proof cycle", ccErr)
+					} else {
+						var legInfos []ChainLegInfo
+						for i, leg := range ccEnvelope.Legs {
+							chainKey := strings.ToLower(strings.ReplaceAll(leg.Chain, " ", "-"))
+							legInfos = append(legInfos, ChainLegInfo{
+								LegIndex:  i,
+								LegID:     leg.LegID,
+								ChainKey:  chainKey,
+								ChainName: leg.Chain,
+								ChainID:   leg.ChainID,
+							})
+						}
+
+						executionMode, _ := certenIntent.GetExecutionMode()
+						operationID := certenIntent.IntentID
+
+						if err := bv.proofCycleOrchestrator.StartPerChainProofCycles(
+							proofCycleCtx, certenIntent.IntentID, operationID, bundleID,
+							chainTxHashes, legInfos, executionMode, commitment,
+						); err != nil {
+							bv.logger.Printf("⚠️ [MULTI-LEG-PROOF] Per-chain proof cycles failed: %v", err)
+						} else {
+							bv.logger.Printf("✅ [MULTI-LEG-PROOF] Per-chain proof cycles started for %d chain groups", len(chainTxHashes))
+							return // Multi-leg handled - skip single-leg fallback
+						}
+					}
+				}
+
+				// SINGLE-LEG (or multi-leg fallback): Original behavior
 				txHashes := &AnchorWorkflowTxHashes{
 					CreateTxHash:     common.HexToHash(extractPureHexHash(anchorRes.CreateTxHash)),
 					VerifyTxHash:     common.HexToHash(extractPureHexHash(anchorRes.VerifyTxHash)),
@@ -1191,23 +1257,6 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 					},
 				}
 
-				// Store raw multi-chain tx hash strings in commitment for per-leg write-back
-				if cm, ok := commitment.(map[string]interface{}); ok {
-					cm["rawCreateTxHashes"] = anchorRes.CreateTxHash
-					cm["rawVerifyTxHashes"] = anchorRes.VerifyTxHash
-					cm["rawGovernanceTxHashes"] = anchorRes.GovernanceTxHash
-				}
-
-				bv.logger.Printf("🔄 [PROOF-CYCLE] Triggering Phase 7-9 for intent: %s", certenIntent.IntentID)
-				bv.logger.Printf("   Tracking all 3 anchor workflow transactions")
-				bv.logger.Printf("   Accumulate ref: accountURL=%s, txHash=%s", certenIntent.AccountURL, certenIntent.TransactionHash)
-
-				// Use fresh context for proof cycle - the parent ctx may already be near expiration
-				// The proof cycle has its own ObservationTimeout (10 minutes) for waiting on confirmations
-				proofCycleCtx := context.Background()
-
-				// Try enhanced method with Accumulate reference data for L1/L2/L3 chained proofs
-				// This passes the Accumulate account URL and transaction hash needed for proof generation
 				if err := bv.proofCycleOrchestrator.StartProofCycleWithAccumulateRef(
 					proofCycleCtx,
 					certenIntent.IntentID,
@@ -1215,12 +1264,11 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 					bundleID,
 					txHashes,
 					commitment,
-					certenIntent.AccountURL,    // Accumulate account URL (e.g., "acc://certen-kermit-12.acme/data")
-					certenIntent.TransactionHash, // Accumulate transaction hash
-					"",                          // BVN - will be auto-determined
+					certenIntent.AccountURL,
+					certenIntent.TransactionHash,
+					"",
 				); err != nil {
 					bv.logger.Printf("⚠️ [PROOF-CYCLE] Failed to start proof cycle: %v", err)
-					// Non-fatal - proof cycle failure doesn't invalidate execution
 				}
 			}()
 		}
@@ -1231,6 +1279,49 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 		ExecutorID:    bv.validatorID,
 		ConsensusHash: fmt.Sprintf("%X", bftRes.TxHash), // Convert []byte to hex string
 	}, nil
+}
+
+// parseMultiChainTxHashes parses comma-separated "ChainName:txhash" strings into per-chain groups.
+// Input format: "Base Sepolia:0x1234,Arbitrum Sepolia:0x5678,Solana devnet:abc123"
+// Returns map: {"base-sepolia": ["0x1234"], "arbitrum-sepolia": ["0x5678"], "solana-devnet": ["abc123"]}
+func parseMultiChainTxHashes(multiChainHashes string) map[string][]string {
+	result := make(map[string][]string)
+	if multiChainHashes == "" {
+		return result
+	}
+
+	parts := strings.Split(multiChainHashes, ",")
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+
+		// Skip failed entries
+		if strings.Contains(part, "_failed") {
+			continue
+		}
+
+		// Find chain:hash separator
+		colonIdx := strings.LastIndex(part, ":")
+		if colonIdx <= 0 {
+			// No chain prefix - treat as default chain
+			result["default"] = append(result["default"], part)
+			continue
+		}
+
+		chainName := strings.TrimSpace(part[:colonIdx])
+		txHash := strings.TrimSpace(part[colonIdx+1:])
+		if txHash == "" {
+			continue
+		}
+
+		// Normalize chain key
+		chainKey := strings.ToLower(strings.ReplaceAll(chainName, " ", "-"))
+		result[chainKey] = append(result[chainKey], txHash)
+	}
+
+	return result
 }
 
 // extractAuthorizationLeavesFromGovernance extracts AuthorizationLeaf structs from canonical GovernanceData

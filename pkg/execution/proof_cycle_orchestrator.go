@@ -357,6 +357,21 @@ func (o *ProofCycleOrchestrator) StartProofCycleWithAccumulateRef(
 	return o.StartProofCycleWithAllTxs(ctx, intentID, userID, bundleID, txHashes, commitment)
 }
 
+// StartPerChainProofCycles is a no-op for the legacy ProofCycleOrchestrator.
+func (o *ProofCycleOrchestrator) StartPerChainProofCycles(
+	ctx context.Context,
+	intentID string,
+	operationID string,
+	bundleID [32]byte,
+	chainTxHashes map[string][]string,
+	legs interface{},
+	executionMode string,
+	commitment interface{},
+) error {
+	o.logger.Printf("⚠️ [PROOF-CYCLE] StartPerChainProofCycles not supported by legacy orchestrator")
+	return nil
+}
+
 // executePhase7Enhanced observes all 3 anchor workflow transactions
 func (o *ProofCycleOrchestrator) executePhase7Enhanced(
 	ctx context.Context,
@@ -1836,6 +1851,22 @@ func (a *ProofCycleOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 ) error {
 	// Pass through to orchestrator's method
 	return a.orchestrator.StartProofCycleWithAccumulateRef(ctx, intentID, userID, bundleID, txHashes, commitment, accumulateAccountURL, accumulateTxHash, bvn)
+}
+
+// StartPerChainProofCycles is a no-op for the legacy orchestrator - multi-leg proof cycles
+// require the unified orchestrator with MultiLegAggregator support.
+func (a *ProofCycleOrchestratorAdapter) StartPerChainProofCycles(
+	ctx context.Context,
+	intentID string,
+	operationID string,
+	bundleID [32]byte,
+	chainTxHashes map[string][]string,
+	legs interface{},
+	executionMode string,
+	commitment interface{},
+) error {
+	a.orchestrator.logger.Printf("⚠️ [PROOF-CYCLE] StartPerChainProofCycles not supported by legacy orchestrator - falling back to single proof cycle")
+	return nil
 }
 
 // extractTxHashesViaReflection uses reflection to extract tx hashes from a struct

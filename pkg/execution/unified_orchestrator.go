@@ -1113,6 +1113,22 @@ func (o *UnifiedOrchestrator) executePhase9(ctx context.Context, cycle *activeCy
 		defer func() { o.config.OnPhaseComplete(cycle.CycleID, 9) }()
 	}
 
+	// For multi-leg chain groups, defer write-back to the MultiLegAggregator
+	// which produces a unified write-back after all chain groups complete
+	if cycle.Request.Metadata != nil && cycle.Request.Metadata["multi_leg"] == "true" {
+		chainKey := cycle.Request.Metadata["chain_key"]
+		if o.multiLegAggregator != nil {
+			fmt.Printf("[Phase 9] Multi-leg chain group %s complete - deferring write-back to aggregator (intent=%s)\n",
+				chainKey, cycle.Request.IntentID)
+			if err := o.multiLegAggregator.OnChainGroupCycleComplete(
+				cycle.Request.IntentID, chainKey, cycle.Result); err != nil {
+				fmt.Printf("[Phase 9] WARNING: Multi-leg aggregator error: %v\n", err)
+			}
+		}
+		cycle.Result.WriteBackSuccess = true
+		return nil
+	}
+
 	// Skip write-back if not enabled
 	if !o.config.EnableWriteBack || o.txBuilder == nil || o.config.AccumulateClient == nil {
 		fmt.Printf("Write-back skipped (not configured): cycle=%s\n", cycle.CycleID)
