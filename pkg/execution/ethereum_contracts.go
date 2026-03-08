@@ -1220,17 +1220,11 @@ func (ecm *EthereumContractManager) generateBLSZKProof(
 	totalVotingPower *big.Int,
 ) ([]byte, [32]byte) {
 	var zeroPubkey [32]byte
-	// Check if testing mode is enabled via environment variable
-	testingMode := os.Getenv("BLS_ZK_TESTING_MODE") == "true"
 
 	// Get the BLS ZK prover - REQUIRED for proof generation
 	prover, err := GetBLSZKProver()
 	if err != nil || prover == nil {
 		log.Printf("⚠️ [BLS-ZK] ZK prover not available: %v", err)
-		if testingMode {
-			log.Printf("🧪 [BLS-ZK] TESTING MODE: Generating mock proof for MockBLSVerifier")
-			return ecm.generateMockBLSProof(messageHash, signedVotingPower, totalVotingPower), zeroPubkey
-		}
 		return nil, zeroPubkey
 	}
 
@@ -1238,10 +1232,6 @@ func (ecm *EthereumContractManager) generateBLSZKProof(
 	blsKeyManager := bls.GetValidatorBLSKey()
 	if blsKeyManager == nil {
 		log.Printf("⚠️ [BLS-ZK] BLS key manager not available")
-		if testingMode {
-			log.Printf("🧪 [BLS-ZK] TESTING MODE: Generating mock proof for MockBLSVerifier")
-			return ecm.generateMockBLSProof(messageHash, signedVotingPower, totalVotingPower), zeroPubkey
-		}
 		return nil, zeroPubkey
 	}
 
@@ -1249,10 +1239,6 @@ func (ecm *EthereumContractManager) generateBLSZKProof(
 	pubKeyBytes := blsKeyManager.GetPublicKeyBytes()
 	if len(pubKeyBytes) < 96 {
 		log.Printf("⚠️ [BLS-ZK] Invalid public key size: %d (need 96 bytes)", len(pubKeyBytes))
-		if testingMode {
-			log.Printf("🧪 [BLS-ZK] TESTING MODE: Generating mock proof for MockBLSVerifier")
-			return ecm.generateMockBLSProof(messageHash, signedVotingPower, totalVotingPower), zeroPubkey
-		}
 		return nil, zeroPubkey
 	}
 
@@ -1268,10 +1254,6 @@ func (ecm *EthereumContractManager) generateBLSZKProof(
 	)
 	if err != nil {
 		log.Printf("⚠️ [BLS-ZK] Failed to create witness: %v", err)
-		if testingMode {
-			log.Printf("🧪 [BLS-ZK] TESTING MODE: Generating mock proof for MockBLSVerifier")
-			return ecm.generateMockBLSProof(messageHash, signedVotingPower, totalVotingPower), zeroPubkey
-		}
 		return nil, zeroPubkey
 	}
 
@@ -1280,10 +1262,6 @@ func (ecm *EthereumContractManager) generateBLSZKProof(
 	zkProof, err := prover.GenerateProof(witness)
 	if err != nil {
 		log.Printf("⚠️ [BLS-ZK] Failed to generate ZK proof: %v", err)
-		if testingMode {
-			log.Printf("🧪 [BLS-ZK] TESTING MODE: Generating mock proof for MockBLSVerifier")
-			return ecm.generateMockBLSProof(messageHash, signedVotingPower, totalVotingPower), zeroPubkey
-		}
 		return nil, zeroPubkey
 	}
 
@@ -1291,18 +1269,10 @@ func (ecm *EthereumContractManager) generateBLSZKProof(
 	valid, err := prover.VerifyProofLocally(zkProof)
 	if err != nil {
 		log.Printf("⚠️ [BLS-ZK] Local verification error: %v", err)
-		if testingMode {
-			log.Printf("🧪 [BLS-ZK] TESTING MODE: Generating mock proof for MockBLSVerifier")
-			return ecm.generateMockBLSProof(messageHash, signedVotingPower, totalVotingPower), zeroPubkey
-		}
 		return nil, zeroPubkey
 	}
 	if !valid {
 		log.Printf("⚠️ [BLS-ZK] Local verification failed - proof is invalid")
-		if testingMode {
-			log.Printf("🧪 [BLS-ZK] TESTING MODE: Generating mock proof for MockBLSVerifier")
-			return ecm.generateMockBLSProof(messageHash, signedVotingPower, totalVotingPower), zeroPubkey
-		}
 		return nil, zeroPubkey
 	}
 
@@ -1310,10 +1280,6 @@ func (ecm *EthereumContractManager) generateBLSZKProof(
 	proofBytes, err := zkProof.ToSolidityCalldata()
 	if err != nil {
 		log.Printf("⚠️ [BLS-ZK] Failed to serialize proof: %v", err)
-		if testingMode {
-			log.Printf("🧪 [BLS-ZK] TESTING MODE: Generating mock proof for MockBLSVerifier")
-			return ecm.generateMockBLSProof(messageHash, signedVotingPower, totalVotingPower), zeroPubkey
-		}
 		return nil, zeroPubkey
 	}
 
@@ -1392,44 +1358,6 @@ func (ecm *EthereumContractManager) generateBLS12381Proof(
 		len(proofBytes), len(proof.PiA), len(proof.PiB), len(proof.PiC), proof.PubkeyCommitment[:8])
 }
 
-// generateMockBLSProof creates a mock proof for testing with MockBLSVerifier
-// WARNING: This is FOR TESTING ONLY and must not be used in production
-func (ecm *EthereumContractManager) generateMockBLSProof(
-	messageHash [32]byte,
-	signedVotingPower *big.Int,
-	totalVotingPower *big.Int,
-) []byte {
-	// Create a mock BLSSignatureProof structure that the MockBLSVerifier will accept
-	// The mock verifier just needs non-empty bytes - it doesn't validate the content
-	mockProof := make([]byte, 480) // Typical size for ABI-encoded BLSSignatureProof
-
-	// Copy messageHash into first 32 bytes for logging/debugging
-	copy(mockProof[0:32], messageHash[:])
-
-	// Add marker bytes to identify this as a mock proof
-	copy(mockProof[32:48], []byte("MOCK_BLS_PROOF_V1"))
-
-	// Encode voting power info for debugging
-	if signedVotingPower != nil {
-		signedBytes := signedVotingPower.Bytes()
-		if len(signedBytes) <= 32 {
-			copy(mockProof[64:96], signedBytes)
-		}
-	}
-	if totalVotingPower != nil {
-		totalBytes := totalVotingPower.Bytes()
-		if len(totalBytes) <= 32 {
-			copy(mockProof[96:128], totalBytes)
-		}
-	}
-
-	log.Printf("🧪 [BLS-ZK] Generated mock proof: %d bytes (for MockBLSVerifier)", len(mockProof))
-	return mockProof
-}
-
-// NOTE: encodeFallbackBLSProof has been REMOVED
-// Per project requirements: "no stubs, mocks, fakes, bypasses, fallbacks"
-// All BLS ZK proofs MUST be valid Groth16 proofs or the operation fails.
 
 // extractMerkleProofHashes returns an empty array for trivial Merkle verification.
 //

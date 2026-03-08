@@ -896,14 +896,7 @@ func startValidator(
         60*time.Second,
     )
     if govErr != nil {
-        log.Printf("⚠️ [GOV-PROOF] CLI governance proof generator init failed: %v (proofs will be skipped)", govErr)
-        // Fall back to in-process generator
-        governanceProofGen = proof.NewInProcessGovernanceGenerator(
-            cfg.AccumulateURL,
-            govWorkDir,
-            60*time.Second,
-        )
-        log.Printf("✅ In-process governance proof generator initialized (G0/G1/G2)")
+        log.Printf("⚠️ [GOV-PROOF] CLI governance proof generator init failed: %v (governance proofs disabled)", govErr)
     } else {
         // Set txhash path for G2 payload verification
         if txhashPath != "" {

@@ -114,14 +114,8 @@ func NewProofArtifactService(config *ArtifactServiceConfig) (*ProofArtifactServi
 			return nil, fmt.Errorf("create CLI governance proof generator: %w", err)
 		}
 		govProofGen = cliGen
-	} else {
-		// Use in-process generator (returns stub proofs until library is available)
-		govProofGen = NewInProcessGovernanceGenerator(
-			config.V3Endpoint,
-			config.GovProofWorkDir,
-			config.GeneratorTimeout,
-		)
 	}
+	// If GovProofCLIPath is not set, govProofGen remains nil — governance proofs disabled
 
 	return &ProofArtifactService{
 		liteClientGen: liteClientGen,
@@ -153,12 +147,6 @@ func NewProofArtifactServiceWithGenerator(liteClientGen *LiteClientProofGenerato
 			return nil, fmt.Errorf("create CLI governance proof generator: %w", err)
 		}
 		govProofGen = cliGen
-	} else {
-		govProofGen = NewInProcessGovernanceGenerator(
-			config.V3Endpoint,
-			config.GovProofWorkDir,
-			config.GeneratorTimeout,
-		)
 	}
 
 	return &ProofArtifactService{
