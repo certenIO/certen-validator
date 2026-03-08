@@ -506,6 +506,31 @@ func (ecm *EthereumContractManager) refreshGasPrice(ctx context.Context) {
 	ecm.auth.GasPrice = buffered
 }
 
+// acquireNonce gets the current pending nonce and sets it explicitly on auth.
+// Returns the nonce used so callers can increment for subsequent txs.
+// This prevents "replacement transaction underpriced" when a prior tx is still
+// pending in the mempool and the RPC doesn't report it via PendingNonceAt.
+func (ecm *EthereumContractManager) acquireNonce(ctx context.Context) (*big.Int, error) {
+	nonce, err := ecm.client.PendingNonceAt(ctx, ecm.auth.From)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get pending nonce: %w", err)
+	}
+	ecm.auth.Nonce = new(big.Int).SetUint64(nonce)
+	fmt.Printf("🔢 [NONCE] Acquired nonce %d for %s\n", nonce, ecm.auth.From.Hex())
+	return ecm.auth.Nonce, nil
+}
+
+// setNonce explicitly sets the nonce on auth for the next transaction.
+func (ecm *EthereumContractManager) setNonce(nonce *big.Int) {
+	ecm.auth.Nonce = new(big.Int).Set(nonce)
+	fmt.Printf("🔢 [NONCE] Set explicit nonce %s\n", nonce.String())
+}
+
+// resetNonce clears the explicit nonce, returning to auto-nonce mode.
+func (ecm *EthereumContractManager) resetNonce() {
+	ecm.auth.Nonce = nil
+}
+
 // CreateAnchorOnChain creates an anchor on CertenAnchorV4 unified contract
 // This is Step 1 of the anchor workflow.
 // Uses CertenAnchorV4.createAnchor with 6 parameters (includes adiURLHash for account binding)
@@ -904,6 +929,16 @@ func (ecm *EthereumContractManager) ExecuteUnifiedAnchorWorkflowFull(
 ) (createTxHash string, verifyTxHash string, govTxHash string, err error) {
 	fmt.Printf("🔗 [UNIFIED-FULL] Starting 3-step anchor workflow...\n")
 
+	// Acquire explicit nonce to prevent "replacement transaction underpriced" errors.
+	// When Step 1's receipt times out (tx still pending), auto-nonce may reuse the same
+	// nonce for Step 2, causing a conflict. Explicit nonce management guarantees each
+	// step gets a unique, incrementing nonce regardless of RPC pending tx visibility.
+	nonce, nonceErr := ecm.acquireNonce(ctx)
+	if nonceErr != nil {
+		return "", "", "", fmt.Errorf("failed to acquire nonce: %w", nonceErr)
+	}
+	defer ecm.resetNonce() // restore auto-nonce after workflow
+
 	// Step 1: Create anchor on Creation contract
 	bundleID := ecm.generateAnchorID(certenIntent, certenProof)
 
@@ -936,6 +971,10 @@ func (ecm *EthereumContractManager) ExecuteUnifiedAnchorWorkflowFull(
 
 	fmt.Printf("✅ [UNIFIED-FULL] Step 1 complete - Anchor created: %s\n", createTxHash)
 
+	// Increment nonce for Step 2 (even if Step 1 receipt timed out, the tx was sent)
+	nonce = new(big.Int).Add(nonce, big.NewInt(1))
+	ecm.setNonce(nonce)
+
 	// Step 2: Execute comprehensive proof on Verification contract
 	verifyTxHash, err = ecm.SubmitCertenProofToAnchor(ctx, certenIntent, certenProof, anchorResult)
 	if err != nil {
@@ -943,6 +982,10 @@ func (ecm *EthereumContractManager) ExecuteUnifiedAnchorWorkflowFull(
 	}
 
 	fmt.Printf("✅ [UNIFIED-FULL] Step 2 complete - Proof verified: %s\n", verifyTxHash)
+
+	// Increment nonce for Step 3
+	nonce = new(big.Int).Add(nonce, big.NewInt(1))
+	ecm.setNonce(nonce)
 
 	// Step 3: Execute governance operation via executeWithGovernance
 	// Per Gap Analysis: This is the MISSING step that actually triggers the intent execution!
@@ -968,6 +1011,13 @@ func (ecm *EthereumContractManager) ExecuteUnifiedAnchorWorkflow(
 	anchorResult *anchor.AnchorResponse,
 ) (createTxHash string, verifyTxHash string, err error) {
 	fmt.Printf("🔗 [UNIFIED] Starting 2-step anchor workflow (legacy)...\n")
+
+	// Acquire explicit nonce to prevent "replacement transaction underpriced" errors.
+	nonce, nonceErr := ecm.acquireNonce(ctx)
+	if nonceErr != nil {
+		return "", "", fmt.Errorf("failed to acquire nonce: %w", nonceErr)
+	}
+	defer ecm.resetNonce()
 
 	// Step 1: Create anchor on Creation contract
 	bundleID := ecm.generateAnchorID(certenIntent, certenProof)
@@ -1000,6 +1050,10 @@ func (ecm *EthereumContractManager) ExecuteUnifiedAnchorWorkflow(
 	}
 
 	fmt.Printf("✅ [UNIFIED] Step 1 complete - Anchor created: %s\n", createTxHash)
+
+	// Increment nonce for Step 2 (even if Step 1 receipt timed out, the tx was sent)
+	nonce = new(big.Int).Add(nonce, big.NewInt(1))
+	ecm.setNonce(nonce)
 
 	// Step 2: Execute comprehensive proof on Verification contract
 	verifyTxHash, err = ecm.SubmitCertenProofToAnchor(ctx, certenIntent, certenProof, anchorResult)
