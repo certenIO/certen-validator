@@ -345,12 +345,13 @@ func (s *EVMStrategy) GetTransactionReceipt(ctx context.Context, txHash string) 
 	}
 
 	result := &ObservationResult{
-		TxHash:      txHash,
-		BlockNumber: receipt.BlockNumber.Uint64(),
-		BlockHash:   receipt.BlockHash.Hex(),
-		Status:      uint8(receipt.Status),
-		GasUsed:     receipt.GasUsed,
-		ObservedAt:  time.Now().UTC(),
+		TxHash:         txHash,
+		BlockNumber:    receipt.BlockNumber.Uint64(),
+		BlockHash:      receipt.BlockHash.Hex(),
+		Status:         uint8(receipt.Status),
+		GasUsed:        receipt.GasUsed,
+		ObservedAt:     time.Now().UTC(),
+		ChainIDNumeric: s.chainID.Int64(),
 	}
 
 	// Get block for timestamp

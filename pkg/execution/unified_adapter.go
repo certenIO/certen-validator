@@ -431,6 +431,69 @@ func BatchAnchorCallbackAdapter(unified *UnifiedOrchestrator) func(
 }
 
 // =============================================================================
+// MULTI-LEG PROOF CYCLE SUPPORT
+// =============================================================================
+
+// StartMultiLegProofCycle starts a proof cycle for a chain group that is part of a multi-leg intent.
+// Sets multi-leg metadata so Phase 9 defers write-back to the MultiLegAggregator.
+func (a *UnifiedOrchestratorAdapter) StartMultiLegProofCycle(
+	ctx context.Context,
+	intentID string,
+	chainKey string,
+	totalLegs int,
+	bundleID [32]byte,
+	txHashes []string,
+	targetChain string,
+	commitmentData map[string]interface{},
+) error {
+	if !a.useUnified || a.unified == nil {
+		return fmt.Errorf("multi-leg proof cycles require unified orchestrator")
+	}
+
+	req := &UnifiedProofCycleRequest{
+		IntentID:       intentID,
+		BundleID:       bundleID,
+		TxHashes:       txHashes,
+		ProofClass:     "on_demand",
+		TargetChain:    targetChain,
+		CommitmentData: commitmentData,
+		Metadata: map[string]string{
+			"multi_leg":  "true",
+			"chain_key":  chainKey,
+			"total_legs": fmt.Sprintf("%d", totalLegs),
+			"intent_id":  intentID,
+		},
+	}
+
+	go func() {
+		result, err := a.unified.StartProofCycle(context.Background(), req)
+		if err != nil {
+			fmt.Printf("[UnifiedAdapter] Multi-leg proof cycle FAILED for %s chain %s: %v\n",
+				intentID, chainKey, err)
+		} else if result != nil {
+			fmt.Printf("[UnifiedAdapter] Multi-leg proof cycle COMPLETED for %s chain %s: success=%v\n",
+				intentID, chainKey, result.Success)
+		}
+	}()
+
+	return nil
+}
+
+// RegisterMultiLegIntent registers a multi-leg intent with the aggregator for unified write-back
+func (a *UnifiedOrchestratorAdapter) RegisterMultiLegIntent(
+	intentID string,
+	operationID string,
+	totalLegs int,
+	executionMode string,
+	legMapping map[int]LegChainInfo,
+) {
+	if a.unified != nil && a.unified.multiLegAggregator != nil {
+		a.unified.multiLegAggregator.RegisterMultiLegIntent(
+			intentID, operationID, totalLegs, executionMode, legMapping)
+	}
+}
+
+// =============================================================================
 // HELPER: Get Unified if Legacy Adapter
 // =============================================================================
 

@@ -340,6 +340,7 @@ func (s *MoveStrategy) observeAptos(ctx context.Context, txHash string) (*Observ
 				TxFrom:               tx.Sender,
 				ObservedAt:            time.Now().UTC(),
 				ObserverValidatorID:   s.config.ValidatorID,
+				ChainName:             s.NetworkName(),
 			}, nil
 		}
 	}
@@ -466,6 +467,7 @@ func (s *MoveStrategy) observeSui(ctx context.Context, txHash string) (*Observat
 				TxFrom:               block.Transaction.Data.Sender,
 				ObservedAt:            time.Now().UTC(),
 				ObserverValidatorID:   s.config.ValidatorID,
+				ChainName:             s.NetworkName(),
 			}, nil
 		}
 	}

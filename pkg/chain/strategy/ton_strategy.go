@@ -293,6 +293,7 @@ func (s *TONStrategy) ObserveTransaction(ctx context.Context, txHash string) (*O
 					ObservedAt:            time.Now().UTC(),
 					ObserverValidatorID:   s.config.ValidatorID,
 					TxFrom:               txFrom,
+					ChainName:            s.NetworkName(),
 				}, nil
 			}
 
@@ -376,6 +377,7 @@ func (s *TONStrategy) GetTransactionReceipt(ctx context.Context, txHash string) 
 		ObservedAt:            time.Now().UTC(),
 		ObserverValidatorID:   s.config.ValidatorID,
 		TxFrom:               sender,
+		ChainName:            s.NetworkName(),
 	}, nil
 }
 

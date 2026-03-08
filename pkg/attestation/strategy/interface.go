@@ -92,6 +92,10 @@ type AttestationMessage struct {
 
 	// MerkleRoot is the root of the transaction merkle tree (for batches)
 	MerkleRoot [32]byte `json:"merkle_root,omitempty"`
+
+	// Multi-leg fields (populated when intent spans multiple chains)
+	LegCount           int      `json:"leg_count,omitempty"`
+	MultiLegResultHash [32]byte `json:"multi_leg_result_hash,omitempty"`
 }
 
 // Hash computes the canonical hash of the attestation message

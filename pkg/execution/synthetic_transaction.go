@@ -227,6 +227,27 @@ type CertenDataEntry struct {
 	ConfirmationBlocks int   `json:"confirmation_blocks"` // Blocks confirmed (e.g., 12)
 	Timestamp          int64 `json:"timestamp"`           // Unix timestamp of write-back
 	FinalizedAt        int64 `json:"finalized_at"`        // Unix timestamp of finalization
+
+	// ==========================================================================
+	// MULTI-LEG PROOF DATA (Entries 51+ for multi-leg intents)
+	// ==========================================================================
+	LegCount           int             `json:"leg_count"`
+	MultiLegResultHash string          `json:"multi_leg_result_hash,omitempty"`
+	LegProofs          []LegProofEntry `json:"leg_proofs,omitempty"`
+}
+
+// LegProofEntry contains per-leg proof summary for multi-leg intents
+type LegProofEntry struct {
+	LegIndex    int    `json:"leg_index"`
+	ChainName   string `json:"chain_name"`
+	ChainID     int64  `json:"chain_id"`
+	TxHash      string `json:"tx_hash"`
+	BlockNumber uint64 `json:"block_number"`
+	BlockHash   string `json:"block_hash"`
+	Success     bool   `json:"success"`
+	GasUsed     uint64 `json:"gas_used"`
+	EventsHash  string `json:"events_hash"`
+	EventCount  int    `json:"event_count"`
 }
 
 // SyntheticSignature represents a validator's signature on the synthetic tx
@@ -503,6 +524,26 @@ func (b *SyntheticTxBuilder) BuildFromBundleWithContext(bundle *AttestationBundl
 
 		// Proof artifact ID for PostgreSQL lookup
 		dataEntry.ProofArtifactID = ctx.ProofArtifactID
+	}
+
+	// Populate multi-leg fields from bundle LegResults
+	if len(bundle.LegResults) > 1 {
+		dataEntry.LegCount = len(bundle.LegResults)
+		dataEntry.MultiLegResultHash = hex.EncodeToString(bundle.MultiLegResultHash[:])
+		for _, leg := range bundle.LegResults {
+			dataEntry.LegProofs = append(dataEntry.LegProofs, LegProofEntry{
+				LegIndex:    leg.LegIndex,
+				ChainName:   leg.Chain,
+				ChainID:     leg.ChainID,
+				TxHash:      leg.TxHash,
+				BlockNumber: leg.BlockNumber,
+				BlockHash:   leg.BlockHash,
+				Success:     leg.Status == 1,
+				GasUsed:     leg.GasUsed,
+				EventsHash:  hex.EncodeToString(leg.EventsHash[:]),
+				EventCount:  leg.EventCount,
+			})
+		}
 	}
 
 	// Build transaction body

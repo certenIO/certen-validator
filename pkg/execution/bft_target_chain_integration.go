@@ -1357,7 +1357,7 @@ func (btce *BFTTargetChainExecutor) executeNearOperations(
 	nearAccountFactory := os.Getenv("NEAR_ACCOUNT_FACTORY")
 
 	if nearSignerAccountID == "" || nearPrivateKey == "" || nearRPCURL == "" || nearAnchorContract == "" {
-		return nil, fmt.Errorf("missing NEAR config: NEAR_SIGNER_ACCOUNT_ID=%q, NEAR_PRIVATE_KEY=%q, NEAR_TESTNET_RPC_URL=%q, NEAR_ANCHOR_CONTRACT=%q",
+		return nil, fmt.Errorf("missing NEAR config: NEAR_SIGNER_ACCOUNT_ID=%q, NEAR_PRIVATE_KEY_SET=%v, NEAR_TESTNET_RPC_URL=%q, NEAR_ANCHOR_CONTRACT=%q",
 			nearSignerAccountID, nearPrivateKey != "", nearRPCURL, nearAnchorContract)
 	}
 

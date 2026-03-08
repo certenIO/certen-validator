@@ -115,11 +115,18 @@ type LegCompletionHandler struct {
 
 	// Callback for triggering leg execution
 	onLegReady func(ctx context.Context, intent *MultiLegIntentRecord, leg *LegRecord) error
+
+	// Callback for when all legs of an intent have completed
+	onIntentComplete func(ctx context.Context, intent *MultiLegIntentRecord)
 }
 
 // LegCompletionHandlerConfig contains configuration for the handler
 type LegCompletionHandlerConfig struct {
 	OnLegReady func(ctx context.Context, intent *MultiLegIntentRecord, leg *LegRecord) error
+
+	// OnIntentComplete is called when all legs of an intent have completed (or partially completed).
+	// This enables the multi-leg aggregator to trigger unified write-back.
+	OnIntentComplete func(ctx context.Context, intent *MultiLegIntentRecord)
 }
 
 // NewLegCompletionHandler creates a new leg completion handler
@@ -130,8 +137,13 @@ func NewLegCompletionHandler(config *LegCompletionHandlerConfig) *LegCompletionH
 		legs:         make(map[string]*LegRecord),
 		legsByIntent: make(map[string][]string),
 	}
-	if config != nil && config.OnLegReady != nil {
-		h.onLegReady = config.OnLegReady
+	if config != nil {
+		if config.OnLegReady != nil {
+			h.onLegReady = config.OnLegReady
+		}
+		if config.OnIntentComplete != nil {
+			h.onIntentComplete = config.OnIntentComplete
+		}
 	}
 	return h
 }
@@ -511,12 +523,20 @@ func (h *LegCompletionHandler) updateIntentStatus(intent *MultiLegIntentRecord) 
 		now := time.Now()
 		intent.CompletedAt = &now
 		h.logger.Printf("Intent %s completed (all %d legs successful)", intent.IntentID, intent.LegCount)
+		// Notify aggregator that all legs completed
+		if h.onIntentComplete != nil {
+			go h.onIntentComplete(context.Background(), intent)
+		}
 	} else if intent.LegsFailed > 0 && intent.LegsPending == 0 {
 		intent.Status = MultiLegStatusPartialComplete
 		now := time.Now()
 		intent.CompletedAt = &now
 		h.logger.Printf("Intent %s partially complete (%d completed, %d failed)",
 			intent.IntentID, intent.LegsCompleted, intent.LegsFailed)
+		// Still notify aggregator for partial results audit trail
+		if h.onIntentComplete != nil {
+			go h.onIntentComplete(context.Background(), intent)
+		}
 	} else if intent.LegsFailed == intent.LegCount {
 		intent.Status = MultiLegStatusFailed
 		now := time.Now()

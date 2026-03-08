@@ -373,6 +373,10 @@ type ObservationResult struct {
 
 	// TxFrom is the transaction sender address
 	TxFrom string `json:"tx_from,omitempty"`
+
+	// Chain identification (populated by each strategy)
+	ChainName      string `json:"chain_name,omitempty"`
+	ChainIDNumeric int64  `json:"chain_id_numeric,omitempty"`
 }
 
 // =============================================================================

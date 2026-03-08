@@ -130,6 +130,52 @@ type ExternalChainResult struct {
 	ResultHash [32]byte `json:"result_hash"`
 }
 
+// LegResult is a lightweight per-leg proof summary for multi-leg intents.
+// Uses string types (not common.Hash) for chain-agnostic compatibility
+// (EVM hex, Solana base58, NEAR accounts, Aptos hex).
+type LegResult struct {
+	LegIndex      int      `json:"leg_index"`
+	LegID         string   `json:"leg_id,omitempty"`
+	Chain         string   `json:"chain"`
+	ChainID       int64    `json:"chain_id"`
+	TxHash        string   `json:"tx_hash"`
+	BlockNumber   uint64   `json:"block_number"`
+	BlockHash     string   `json:"block_hash"`
+	Status        uint64   `json:"status"`         // 1=success, 0=revert
+	GasUsed       uint64   `json:"gas_used"`
+	TxFrom        string   `json:"tx_from"`
+	EventsHash    [32]byte `json:"events_hash"`
+	EventCount    int      `json:"event_count"`
+	IsFinalized   bool     `json:"is_finalized"`
+	Confirmations int      `json:"confirmations"`
+}
+
+// ComputeMultiLegResultHash computes a deterministic hash over sorted legs
+// using RFC8785 canonical JSON with domain separator "CERTEN_MULTI_LEG_RESULT_V1".
+// Legs are sorted by LegIndex before hashing for determinism regardless of input order.
+func ComputeMultiLegResultHash(legs []LegResult) [32]byte {
+	if len(legs) == 0 {
+		return [32]byte{}
+	}
+
+	// Sort legs by LegIndex for determinism
+	sorted := make([]LegResult, len(legs))
+	copy(sorted, legs)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].LegIndex < sorted[j].LegIndex
+	})
+
+	// Build canonical data with domain separator
+	data := map[string]interface{}{
+		"domain":    "CERTEN_MULTI_LEG_RESULT_V1",
+		"leg_count": len(sorted),
+		"legs":      sorted,
+	}
+
+	canonical := canonicalJSONMarshal(data)
+	return sha256.Sum256(canonical)
+}
+
 // LogEntry represents an event log from the transaction
 type LogEntry struct {
 	Address common.Address `json:"address"`

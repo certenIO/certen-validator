@@ -233,6 +233,7 @@ func (s *CosmWasmStrategy) ObserveTransaction(ctx context.Context, txHash string
 					GasUsed:               gasUsed,
 					ObservedAt:            time.Now().UTC(),
 					ObserverValidatorID:   s.config.ValidatorID,
+					ChainName:             s.NetworkName(),
 				}, nil
 			}
 
@@ -322,6 +323,7 @@ func (s *CosmWasmStrategy) GetTransactionReceipt(ctx context.Context, txHash str
 		GasUsed:               gasUsed,
 		ObservedAt:            time.Now().UTC(),
 		ObserverValidatorID:   s.config.ValidatorID,
+		ChainName:             s.NetworkName(),
 	}, nil
 }
 

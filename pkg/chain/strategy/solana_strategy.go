@@ -258,6 +258,7 @@ func (s *SolanaStrategy) ObserveTransaction(ctx context.Context, txHash string) 
 					ObservedAt:            time.Now().UTC(),
 					ObserverValidatorID:   s.config.ValidatorID,
 					TxFrom:               txFrom,
+					ChainName:             s.NetworkName(),
 				}, nil
 			}
 
@@ -364,6 +365,7 @@ func (s *SolanaStrategy) GetTransactionReceipt(ctx context.Context, txHash strin
 		ObservedAt:            time.Now().UTC(),
 		ObserverValidatorID:   s.config.ValidatorID,
 		TxFrom:               txFrom,
+		ChainName:             s.NetworkName(),
 	}, nil
 }
 

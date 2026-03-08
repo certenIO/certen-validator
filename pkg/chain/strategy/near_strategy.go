@@ -269,6 +269,7 @@ func (s *NEARStrategy) ObserveTransaction(ctx context.Context, txHash string) (*
 					ObservedAt:            time.Now().UTC(),
 					ObserverValidatorID:   s.config.ValidatorID,
 					TxFrom:               txResult.Transaction.SignerID,
+					ChainName:            s.NetworkName(),
 				}, nil
 			}
 
@@ -356,6 +357,7 @@ func (s *NEARStrategy) GetTransactionReceipt(ctx context.Context, txHash string)
 		ObservedAt:            time.Now().UTC(),
 		ObserverValidatorID:   s.config.ValidatorID,
 		TxFrom:               txResult.Transaction.SignerID,
+		ChainName:            s.NetworkName(),
 	}, nil
 }
 

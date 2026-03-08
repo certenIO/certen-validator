@@ -889,6 +889,10 @@ type AttestationBundle struct {
 	// External chain result that was attested
 	Result *ExternalChainResult `json:"result"`
 
+	// Multi-leg proof data (populated for multi-chain intents)
+	LegResults         []LegResult `json:"leg_results,omitempty"`
+	MultiLegResultHash [32]byte    `json:"multi_leg_result_hash,omitempty"`
+
 	// Bundle hash for verification
 	BundleHash [32]byte `json:"bundle_hash"`
 
@@ -925,6 +929,11 @@ func (b *AttestationBundle) ComputeBundleHash() [32]byte {
 	if b.Aggregated != nil {
 		aggHash := b.Aggregated.ComputeAggregateHash()
 		data = append(data, aggHash[:]...)
+	}
+
+	// Include multi-leg result hash when multiple legs are present
+	if len(b.LegResults) > 1 {
+		data = append(data, b.MultiLegResultHash[:]...)
 	}
 
 	return sha256.Sum256(data)

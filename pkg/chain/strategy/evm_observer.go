@@ -187,6 +187,7 @@ func (o *EVMObserver) ObserveTransaction(ctx context.Context, txHash common.Hash
 			Status:                uint8(receipt.Status),
 			RequiredConfirmations: o.requiredConfirmations,
 			GasUsed:               receipt.GasUsed,
+			ChainIDNumeric:        o.chainID,
 		}
 		for _, l := range receipt.Logs {
 			topics := make([]string, len(l.Topics))
@@ -346,6 +347,7 @@ func (o *EVMObserver) waitForConfirmationsFromHeader(ctx context.Context, receip
 		Status:                uint8(receipt.Status),
 		RequiredConfirmations: o.requiredConfirmations,
 		GasUsed:               receipt.GasUsed,
+		ChainIDNumeric:        o.chainID,
 	}
 
 	// Extract logs

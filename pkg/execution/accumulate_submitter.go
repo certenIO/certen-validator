@@ -378,8 +378,13 @@ func (e *CertenDataEntry) ToDoubleHashFormat() [][]byte {
 	// ==========================================================================
 	// ENTRY IDENTIFICATION (Entries 0-2)
 	// ==========================================================================
+	// Version bump for multi-leg intents
+	version := e.Version
+	if e.LegCount > 1 {
+		version = "2.1"
+	}
 	entries = append(entries, labeled("entry_type", e.EntryType))     // 0
-	entries = append(entries, labeled("version", e.Version))          // 1
+	entries = append(entries, labeled("version", version))            // 1
 	entries = append(entries, labeled("format", "certen_proof_v2"))   // 2
 
 	// ==========================================================================
@@ -461,7 +466,11 @@ func (e *CertenDataEntry) ToDoubleHashFormat() [][]byte {
 	// ==========================================================================
 	entries = append(entries, labeled("result_hash", e.ResultHash))         // 45
 	entries = append(entries, labeled("proof_cycle_hash", e.ProofCycleHash)) // 46
-	entries = append(entries, labeled("schema_version", "2.0"))              // 47
+	schemaVersion := "2.0"
+	if e.LegCount > 1 {
+		schemaVersion = "2.1"
+	}
+	entries = append(entries, labeled("schema_version", schemaVersion))    // 47
 
 	// ==========================================================================
 	// FINALIZATION (Entries 48-50)
@@ -469,6 +478,27 @@ func (e *CertenDataEntry) ToDoubleHashFormat() [][]byte {
 	entries = append(entries, labeled("confirmation_blocks", fmt.Sprintf("%d", e.ConfirmationBlocks))) // 48
 	entries = append(entries, labeled("timestamp", fmt.Sprintf("%d", e.Timestamp)))                    // 49
 	entries = append(entries, labeled("finalized_at", fmt.Sprintf("%d", e.FinalizedAt)))               // 50
+
+	// ==========================================================================
+	// MULTI-LEG PROOF DATA (Entries 51+ for multi-leg intents)
+	// ==========================================================================
+	if e.LegCount > 1 {
+		entries = append(entries, labeled("leg_count", fmt.Sprintf("%d", e.LegCount)))
+		entries = append(entries, labeled("multi_leg_result_hash", e.MultiLegResultHash))
+
+		for i, leg := range e.LegProofs {
+			prefix := fmt.Sprintf("leg_%d", i)
+			entries = append(entries, labeled(prefix+"_chain_name", leg.ChainName))
+			entries = append(entries, labeled(prefix+"_chain_id", fmt.Sprintf("%d", leg.ChainID)))
+			entries = append(entries, labeled(prefix+"_tx_hash", leg.TxHash))
+			entries = append(entries, labeled(prefix+"_block_number", fmt.Sprintf("%d", leg.BlockNumber)))
+			entries = append(entries, labeled(prefix+"_block_hash", leg.BlockHash))
+			entries = append(entries, labeled(prefix+"_success", fmt.Sprintf("%t", leg.Success)))
+			entries = append(entries, labeled(prefix+"_gas_used", fmt.Sprintf("%d", leg.GasUsed)))
+			entries = append(entries, labeled(prefix+"_events_hash", leg.EventsHash))
+			entries = append(entries, labeled(prefix+"_event_count", fmt.Sprintf("%d", leg.EventCount)))
+		}
+	}
 
 	return entries
 }

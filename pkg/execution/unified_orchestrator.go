@@ -302,6 +302,9 @@ type UnifiedOrchestrator struct {
 	resultChains     map[string]*ResultHashChain
 	resultChainsLock sync.RWMutex
 
+	// Multi-leg aggregator for unified write-back across chain groups
+	multiLegAggregator *MultiLegAggregator
+
 	// State
 	running     bool
 	stopCh      chan struct{}
@@ -350,7 +353,22 @@ func NewUnifiedOrchestrator(config *UnifiedOrchestratorConfig) (*UnifiedOrchestr
 		)
 	}
 
+	// Initialize multi-leg aggregator
+	orch.multiLegAggregator = NewMultiLegAggregator(&MultiLegAggregatorConfig{
+		TxBuilder:        orch.txBuilder,
+		Submitter:        config.AccumulateClient,
+		ResultChains:     orch.resultChains,
+		ResultChainsLock: &orch.resultChainsLock,
+		WriteBackTimeout: config.WriteBackTimeout,
+		ValidatorID:      config.ValidatorID,
+	})
+
 	return orch, nil
+}
+
+// GetMultiLegAggregator returns the multi-leg aggregator for external wiring
+func (o *UnifiedOrchestrator) GetMultiLegAggregator() *MultiLegAggregator {
+	return o.multiLegAggregator
 }
 
 // =============================================================================
@@ -1093,6 +1111,23 @@ func (o *UnifiedOrchestrator) executePhase9(ctx context.Context, cycle *activeCy
 
 	if o.config.OnPhaseComplete != nil {
 		defer func() { o.config.OnPhaseComplete(cycle.CycleID, 9) }()
+	}
+
+	// For multi-leg chain groups, defer write-back to aggregator
+	if cycle.Request.Metadata != nil && cycle.Request.Metadata["multi_leg"] == "true" {
+		if o.multiLegAggregator != nil {
+			chainKey := cycle.Request.Metadata["chain_key"]
+			if err := o.multiLegAggregator.OnChainGroupCycleComplete(
+				cycle.Request.IntentID, chainKey, cycle.Result); err != nil {
+				fmt.Printf("Multi-leg aggregator error: cycle=%s, err=%v\n", cycle.CycleID, err)
+				// Non-fatal: fall through to per-chain write-back as fallback
+			} else {
+				cycle.Result.WriteBackSuccess = true
+				fmt.Printf("Multi-leg write-back deferred to aggregator: cycle=%s, chain=%s\n",
+					cycle.CycleID, chainKey)
+				return nil
+			}
+		}
 	}
 
 	// Skip write-back if not enabled
