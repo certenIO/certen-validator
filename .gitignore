@@ -39,6 +39,9 @@ firebase-service-account.json
 # Go
 vendor/
 
+# Node
+node_modules/
+
 # BLS keys and ZK proving keys (sensitive — SCP to server, never commit)
 bls_keys_backup*.json
 bls_zk_keys/
