@@ -1248,9 +1248,10 @@ func (btce *BFTTargetChainExecutor) executeTronOperations(
 	// CORRECT FLOW: Call executeGovernanceProofDirect on the USER'S abstract account,
 	// NOT executeWithGovernance on the anchor contract.
 	allLegs := btce.extractAllLegsFromIntent(legacyIntent)
+	tronLeg := btce.findLegForChainPrefix(allLegs, "tron", 2494104990)
 	govTxHash := ""
-	if len(allLegs) > 0 && allLegs[0].SourceAddress != (common.Address{}) {
-		userAccountAddr := allLegs[0].SourceAddress
+	if tronLeg != nil && tronLeg.SourceAddress != (common.Address{}) {
+		userAccountAddr := tronLeg.SourceAddress
 		btce.logger.Printf("🏦 [TRON-EXEC] Step 3: Executing governance proof direct on user account %s", userAccountAddr.Hex())
 
 		// Pre-flight: Check if the user's abstract account contract exists on-chain
@@ -1318,14 +1319,14 @@ func (btce *BFTTargetChainExecutor) executeTronOperations(
 				)
 
 				// Value from intent is already in chain-native base units (sun for TRON)
-				btce.logger.Printf("💱 [TRON-EXEC] Governance value: %s (native base units)", allLegs[0].Value.String())
+				btce.logger.Printf("💱 [TRON-EXEC] Governance value: %s (native base units)", tronLeg.Value.String())
 
 				var govErr error
 				govTxHash, govErr = tronClient.ExecuteGovernanceProofDirect(ctx,
 					userAccountHex,
-					allLegs[0].Target.Hex(),
-					allLegs[0].Value,
-					allLegs[0].Data,
+					tronLeg.Target.Hex(),
+					tronLeg.Value,
+					tronLeg.Data,
 					accountProof,
 					feeLimit,
 				)
@@ -1957,14 +1958,40 @@ func (btce *BFTTargetChainExecutor) extractNearFieldFromCrossChainData(legacyInt
 
 	var ccData struct {
 		Legs []struct {
-			From string `json:"from"`
-			To   string `json:"to"`
+			From    string `json:"from"`
+			To      string `json:"to"`
+			Chain   string `json:"chain"`
+			ChainID int64  `json:"chainId"`
 		} `json:"legs"`
 	}
 	if err := json.Unmarshal(legacyIntent.CrossChainData, &ccData); err != nil || len(ccData.Legs) == 0 {
 		return ""
 	}
 
+	// Find the NEAR-specific leg (not just leg 0)
+	for _, leg := range ccData.Legs {
+		chainNorm := strings.ToLower(strings.ReplaceAll(leg.Chain, " ", "-"))
+		if !strings.HasPrefix(chainNorm, "near") && leg.ChainID != 398 {
+			continue
+		}
+		var value string
+		switch field {
+		case "from":
+			value = leg.From
+		case "to":
+			value = leg.To
+		}
+		if value != "" && !strings.HasPrefix(value, "0x") {
+			if strings.Contains(value, ".") {
+				return value
+			}
+			if len(value) == 64 && isLowercaseHex(value) {
+				return value
+			}
+		}
+	}
+
+	// Fallback: check leg 0 (for single-chain NEAR intents)
 	var value string
 	switch field {
 	case "from":
@@ -1972,14 +1999,10 @@ func (btce *BFTTargetChainExecutor) extractNearFieldFromCrossChainData(legacyInt
 	case "to":
 		value = ccData.Legs[0].To
 	}
-
-	// If the field looks like a NEAR account ID, use it directly.
-	// NEAR accounts: named (contains dots, like "alice.testnet") or implicit (64-char hex ed25519 pubkey)
 	if value != "" && !strings.HasPrefix(value, "0x") {
 		if strings.Contains(value, ".") {
 			return value
 		}
-		// NEAR implicit accounts: 64-char lowercase hex = ed25519 public key
 		if len(value) == 64 && isLowercaseHex(value) {
 			return value
 		}
@@ -2170,8 +2193,12 @@ func (btce *BFTTargetChainExecutor) executeSolanaOperations(
 	allLegs := btce.extractAllLegsFromIntent(legacyIntent)
 	govTxSig := "no_governance_needed"
 
-	if len(allLegs) > 0 {
+	// Find the Solana-specific leg (not leg 0 which may be a different chain)
+	solanaLeg := btce.findSolanaLeg(allLegs)
+
+	if solanaLeg != nil {
 		btce.logger.Printf("🏦 [SOLANA-EXEC] Step 3: Executing governance proof direct...")
+		btce.logger.Printf("   Using Solana leg: %s (chain=%s value=%s wei)", solanaLeg.LegID, solanaLeg.Chain, solanaLeg.Value.String())
 
 		// Extract Solana addresses from CrossChainData (matches NEAR pattern)
 		solanaFromAddr := btce.extractSolanaFieldFromCrossChainData(legacyIntent, "from")
@@ -2263,27 +2290,27 @@ func (btce *BFTTargetChainExecutor) executeSolanaOperations(
 				btce.logger.Printf("⚠️ [SOLANA-EXEC] Failed to read anchor data: %v", readErr)
 				govTxSig = "gov_failed_anchor_read_solana"
 			} else {
-				// Determine target and value from intent
+				// Determine target and value from the Solana leg (not leg 0)
 				targetValue := uint64(1) // Default 1 lamport
-				if len(allLegs) > 0 && allLegs[0].Value != nil {
+				if solanaLeg.Value != nil {
 					// Convert from EVM wei (10^18) to Solana lamports (10^9)
-					weiValue := new(big.Int).Set(allLegs[0].Value)
+					weiValue := new(big.Int).Set(solanaLeg.Value)
 					lamportsValue := new(big.Int).Div(weiValue, big.NewInt(1_000_000_000))
 					if lamportsValue.Sign() <= 0 {
 						lamportsValue = big.NewInt(1) // minimum 1 lamport
 					}
 					targetValue = lamportsValue.Uint64()
 					btce.logger.Printf("💱 [SOLANA-EXEC] Value conversion: %s wei → %d lamports",
-						allLegs[0].Value.String(), targetValue)
+						solanaLeg.Value.String(), targetValue)
 				}
 
-				// Derive recipient pubkey
+				// Derive recipient pubkey from Solana-specific CrossChainData
 				recipientAddr := ""
 				solanaToAddr := btce.extractSolanaFieldFromCrossChainData(legacyIntent, "to")
 				if solanaToAddr != "" {
 					recipientAddr = solanaToAddr
-				} else if len(allLegs) > 0 {
-					recipientAddr = allLegs[0].Target.Hex()
+				} else {
+					recipientAddr = solanaLeg.Target.Hex()
 				}
 
 				recipientPubkey, recipientErr := DeriveSolanaRecipient(recipientAddr)
@@ -2579,6 +2606,32 @@ func (btce *BFTTargetChainExecutor) buildSolanaAccountProof(
 
 // extractSolanaFieldFromCrossChainData extracts a Solana address field from CrossChainData.
 // Returns the field value if it looks like a Solana base58 address (32+ chars, no 0x prefix, no dots).
+// findLegForChainPrefix finds the first leg matching a chain name prefix from a list of legs.
+// In multi-leg intents, leg 0 may be a different chain. Falls back to leg 0 for
+// single-chain intents where the chain name might not match.
+func (btce *BFTTargetChainExecutor) findLegForChainPrefix(legs []LegExecution, prefix string, chainIDs ...int64) *LegExecution {
+	idSet := make(map[int64]bool)
+	for _, id := range chainIDs {
+		idSet[id] = true
+	}
+	for i := range legs {
+		chainNorm := strings.ToLower(strings.ReplaceAll(legs[i].Chain, " ", "-"))
+		if strings.HasPrefix(chainNorm, prefix) || idSet[legs[i].ChainID] {
+			return &legs[i]
+		}
+	}
+	// Fallback to first leg (single-chain intent)
+	if len(legs) > 0 {
+		return &legs[0]
+	}
+	return nil
+}
+
+// findSolanaLeg finds the first Solana leg from a list of legs.
+func (btce *BFTTargetChainExecutor) findSolanaLeg(legs []LegExecution) *LegExecution {
+	return btce.findLegForChainPrefix(legs, "solana", 101, 102, 103)
+}
+
 func (btce *BFTTargetChainExecutor) extractSolanaFieldFromCrossChainData(legacyIntent *intent.CertenIntent, field string) string {
 	if legacyIntent == nil || len(legacyIntent.CrossChainData) == 0 {
 		return ""
@@ -2586,25 +2639,33 @@ func (btce *BFTTargetChainExecutor) extractSolanaFieldFromCrossChainData(legacyI
 
 	var ccData struct {
 		Legs []struct {
-			From string `json:"from"`
-			To   string `json:"to"`
+			From    string `json:"from"`
+			To      string `json:"to"`
+			Chain   string `json:"chain"`
+			ChainID int64  `json:"chainId"`
 		} `json:"legs"`
 	}
 	if err := json.Unmarshal(legacyIntent.CrossChainData, &ccData); err != nil || len(ccData.Legs) == 0 {
 		return ""
 	}
 
-	var value string
-	switch field {
-	case "from":
-		value = ccData.Legs[0].From
-	case "to":
-		value = ccData.Legs[0].To
-	}
-
-	// Solana addresses are base58, 32-44 chars, no dots (unlike NEAR), no 0x prefix (unlike EVM)
-	if value != "" && !strings.HasPrefix(value, "0x") && !strings.Contains(value, ".") && len(value) >= 32 {
-		return value
+	// Find the Solana-specific leg (not just leg 0)
+	for _, leg := range ccData.Legs {
+		chainNorm := strings.ToLower(strings.ReplaceAll(leg.Chain, " ", "-"))
+		if !strings.HasPrefix(chainNorm, "solana") && leg.ChainID != 101 && leg.ChainID != 102 && leg.ChainID != 103 {
+			continue
+		}
+		var value string
+		switch field {
+		case "from":
+			value = leg.From
+		case "to":
+			value = leg.To
+		}
+		// Solana addresses are base58, 32-44 chars, no dots (unlike NEAR), no 0x prefix (unlike EVM)
+		if value != "" && !strings.HasPrefix(value, "0x") && !strings.Contains(value, ".") && len(value) >= 32 {
+			return value
+		}
 	}
 	return ""
 }

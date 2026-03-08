@@ -1556,17 +1556,36 @@ func (o *UnifiedOrchestrator) enrichBundleWithLegData(bundle *AttestationBundle,
 			txHash = govHash
 		}
 
+		// Determine success status: check for failure markers in tx hash
+		legSuccess := primaryStatus == 1
+		if strings.Contains(txHash, "failed") || strings.Contains(txHash, "error") {
+			legSuccess = false
+		}
+
+		// For non-primary legs, don't copy primary chain's block/gas data.
+		// Each leg gets its own chain-specific values (or zeros if not observed).
+		legBlockNumber := primaryBlockNumber
+		legBlockHash := primaryBlockHash
+		legGasUsed := primaryGasUsed
+		if legIndex > 0 {
+			// Non-primary legs: we don't have observation data for them,
+			// so use zero values rather than misleading primary chain data
+			legBlockNumber = 0
+			legBlockHash = ""
+			legGasUsed = 0
+		}
+
 		lr := LegResult{
 			LegIndex:    legIndex,
 			LegID:       legID,
 			Chain:       chainName,
 			ChainID:     chainID,
 			TxHash:      txHash,
-			BlockNumber: primaryBlockNumber,
-			BlockHash:   primaryBlockHash,
-			Status:      primaryStatus,
-			GasUsed:     primaryGasUsed,
-			IsFinalized: true,
+			BlockNumber: legBlockNumber,
+			BlockHash:   legBlockHash,
+			Status:      map[bool]uint64{true: 1, false: 0}[legSuccess],
+			GasUsed:     legGasUsed,
+			IsFinalized: legIndex == 0, // Only primary leg has finalization data
 		}
 
 		bundle.LegResults = append(bundle.LegResults, lr)
