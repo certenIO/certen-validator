@@ -1486,6 +1486,36 @@ func (o *UnifiedOrchestrator) enrichBundleWithLegData(bundle *AttestationBundle,
 		primaryStatus = uint64(obs.Status)
 	}
 
+	// Parse per-chain governance tx hashes from commitment
+	// Format: "Arbitrum Sepolia:leg-0:0xa72de...,Base Sepolia:leg-1:0xb4f7...,devnet:leg-2:0x8265..."
+	perLegGovTxHash := make(map[int]string) // legIndex -> governance tx hash
+	if rawGov, ok := commitMap["rawGovernanceTxHashes"].(string); ok && rawGov != "" {
+		for _, part := range strings.Split(rawGov, ",") {
+			part = strings.TrimSpace(part)
+			// Extract leg index from "ChainName:leg-N:0xhash" format
+			if legIdx := strings.Index(part, ":leg-"); legIdx >= 0 {
+				afterLeg := part[legIdx+5:] // skip ":leg-"
+				colonIdx := strings.Index(afterLeg, ":")
+				if colonIdx >= 0 {
+					if idx, err := strconv.Atoi(afterLeg[:colonIdx]); err == nil {
+						txHash := afterLeg[colonIdx+1:]
+						perLegGovTxHash[idx] = txHash
+					}
+				}
+			}
+		}
+	}
+	// Also parse create tx hashes per chain (format: "ChainName:0xhash,ChainName:0xhash,...")
+	perLegCreateTxHash := make(map[int]string)
+	if rawCreate, ok := commitMap["rawCreateTxHashes"].(string); ok && rawCreate != "" {
+		for i, part := range strings.Split(rawCreate, ",") {
+			part = strings.TrimSpace(part)
+			if colIdx := strings.LastIndex(part, ":"); colIdx >= 0 {
+				perLegCreateTxHash[i] = part[colIdx+1:]
+			}
+		}
+	}
+
 	// Build LegResults from commitment legs
 	for _, legMap := range legsList {
 		legIndex := 0
@@ -1504,7 +1534,7 @@ func (o *UnifiedOrchestrator) enrichBundleWithLegData(bundle *AttestationBundle,
 			network = n
 		}
 		chainName := chain
-		if network != "" {
+		if network != "" && chain != network {
 			chainName = chain + "-" + network
 		}
 
@@ -1520,12 +1550,18 @@ func (o *UnifiedOrchestrator) enrichBundleWithLegData(bundle *AttestationBundle,
 			legID = lid
 		}
 
+		// Use per-leg governance tx hash if available, otherwise fall back to primary
+		txHash := primaryTxHash
+		if govHash, ok := perLegGovTxHash[legIndex]; ok {
+			txHash = govHash
+		}
+
 		lr := LegResult{
 			LegIndex:    legIndex,
 			LegID:       legID,
 			Chain:       chainName,
 			ChainID:     chainID,
-			TxHash:      primaryTxHash,
+			TxHash:      txHash,
 			BlockNumber: primaryBlockNumber,
 			BlockHash:   primaryBlockHash,
 			Status:      primaryStatus,
