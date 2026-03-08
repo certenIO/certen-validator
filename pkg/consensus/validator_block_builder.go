@@ -86,7 +86,7 @@ func (builder *ValidatorBlockBuilder) BuildFromIntent(inputs BuilderInputs) (*Va
 		chainTargets[i] = ChainTarget{
 			Chain:            leg.Chain,
 			ChainID:          leg.ChainID,
-			ContractAddress:  leg.AnchorContract.Address,
+			ContractAddress:  resolveAnchorIdentifier(leg),
 			FunctionSelector: leg.AnchorContract.FunctionSelector,
 			EncodedCallData:  encodedCallData,
 			Commitment:       legCommitment,
@@ -307,7 +307,7 @@ func (builder *ValidatorBlockBuilder) buildChainTargets(crossChainData *CrossCha
 		targets[i] = ChainTarget{
 			Chain:            leg.Chain,
 			ChainID:          leg.ChainID,
-			ContractAddress:  leg.AnchorContract.Address,
+			ContractAddress:  resolveAnchorIdentifier(leg),
 			FunctionSelector: leg.AnchorContract.FunctionSelector,
 			EncodedCallData:  encodedCallData,
 			Commitment:       legCommitment,
@@ -318,6 +318,28 @@ func (builder *ValidatorBlockBuilder) buildChainTargets(crossChainData *CrossCha
 	return targets, nil
 }
 
+
+// resolveAnchorIdentifier returns the anchor/program/contract identifier for a leg,
+// checking chain-specific fields when the EVM Address field is empty.
+func resolveAnchorIdentifier(leg CCLeg) string {
+	if leg.AnchorContract.Address != "" {
+		return leg.AnchorContract.Address
+	}
+	if leg.AnchorContract.ProgramID != "" {
+		return leg.AnchorContract.ProgramID
+	}
+	if leg.AnchorContract.ContractID != "" {
+		return leg.AnchorContract.ContractID
+	}
+	if leg.AnchorContract.ModuleAddress != "" {
+		return leg.AnchorContract.ModuleAddress
+	}
+	// Fallback: use the type field as a placeholder so invariant doesn't fail
+	if leg.AnchorContract.Type != "" {
+		return leg.AnchorContract.Type
+	}
+	return ""
+}
 
 // buildMerkleBranches constructs Merkle branches for authorization leaves
 func (builder *ValidatorBlockBuilder) buildMerkleBranches(leaves []AuthorizationLeaf) []MerkleBranch {

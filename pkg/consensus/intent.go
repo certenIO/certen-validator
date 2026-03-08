@@ -160,8 +160,14 @@ type CCLeg struct {
 	AmountWei string `json:"amountWei"` // "5000000000000000"
 
 	AnchorContract struct {
-		Address          string `json:"address"`          // Contract address
-		FunctionSelector string `json:"functionSelector"` // Function selector
+		// EVM
+		Address          string `json:"address,omitempty"`          // EVM contract address
+		FunctionSelector string `json:"functionSelector,omitempty"` // EVM function selector
+		// Non-EVM identifiers (only one will be set per chain type)
+		Type             string `json:"type,omitempty"`             // "evm_contract", "solana_program", "near_contract", etc.
+		ProgramID        string `json:"programId,omitempty"`        // Solana program ID
+		ContractID       string `json:"contractId,omitempty"`       // NEAR contract ID
+		ModuleAddress    string `json:"moduleAddress,omitempty"`    // Aptos module address
 	} `json:"anchorContract"`
 
 	GasPolicy struct {
