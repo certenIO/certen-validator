@@ -39,10 +39,8 @@ firebase-service-account.json
 # Go
 vendor/
 
-# BLS keys and ZK proving keys (sensitive/large)
-bls_keys_backup*.json
+# BLS ZK keys directory (non-bls12381 variants)
 bls_zk_keys/
-bls_zk_keys_bls12381/
 bls_zk_keys.tar.gz
 
 # Data directories
@@ -68,6 +66,7 @@ temp_*.json
 *temp_exec_results*.json
 *temp_data_results*.json
 nul
+debt-todo/
 
 # Claude scratchpad files (Windows paths that get mangled)
 C*Accumulate_Stuff*
@@ -77,8 +76,7 @@ C*Users*AppData*
 **/consolidated_governance-proof/artifacts/
 **/consolidated_governance-proof/security/
 
-# Generated key data
-cmd/vk_converter/vk.json
+# Generated key data (keep vk.json tracked)
 
 # Build artifacts
 validator-build/
