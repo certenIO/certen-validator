@@ -8,9 +8,19 @@ package consensus
 import (
 	"encoding/json"
 	"fmt"
+	"sync"
+	"time"
 
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof"
 	certenproof "github.com/certen/independant-validator/pkg/proof"
+)
+
+// seenNonces tracks processed nonces to prevent replay attacks.
+// TODO: Replace with persistent storage (database) for production use.
+// In-memory map is lost on restart, so a durable store is required.
+var (
+	seenNonces   = make(map[string]bool)
+	seenNoncesMu sync.Mutex
 )
 
 // CertenIntent represents an intent that needs to be processed - canonical definition
@@ -173,11 +183,42 @@ type CCLeg struct {
 
 	// Priority allows per-leg priority override (higher = more urgent)
 	Priority int `json:"priority,omitempty"`
+
+	// SlippageTolerance is the maximum acceptable slippage (e.g. "0.5%")
+	SlippageTolerance string `json:"slippage_tolerance,omitempty"`
+
+	// DeadlineTimestamp is the unix timestamp deadline for this leg
+	DeadlineTimestamp int64 `json:"deadline_timestamp,omitempty"`
 }
 
 // ChainKey returns a unique key for this leg's target chain (e.g., "ethereum:1")
 func (leg *CCLeg) ChainKey() string {
 	return fmt.Sprintf("%s:%d", normalizeChainName(leg.Chain), leg.ChainID)
+}
+
+// ParseSlippageTolerance parses the "X%" string to a float64 (e.g. "0.5%" -> 0.5).
+// Returns an error if the format is invalid or the value is out of range [0, 100].
+func (leg *CCLeg) ParseSlippageTolerance() (float64, error) {
+	if leg.SlippageTolerance == "" {
+		return 0, nil // No slippage set
+	}
+
+	s := leg.SlippageTolerance
+	if s[len(s)-1] != '%' {
+		return 0, fmt.Errorf("slippage_tolerance must end with '%%', got '%s'", s)
+	}
+
+	var val float64
+	_, err := fmt.Sscanf(s[:len(s)-1], "%f", &val)
+	if err != nil {
+		return 0, fmt.Errorf("invalid slippage_tolerance '%s': %w", s, err)
+	}
+
+	if val < 0 || val > 100 {
+		return 0, fmt.Errorf("slippage_tolerance %.2f%% out of range [0, 100]", val)
+	}
+
+	return val, nil
 }
 
 // GovernanceData represents the parsed governance data blob
@@ -552,19 +593,47 @@ func (ci *CertenIntent) ValidateForExecution(blockHeight uint64) error {
 		return fmt.Errorf("intent validation for execution failed: no cross-chain legs defined")
 	}
 
-	// Validate replay data for expiration
+	// Validate replay data for expiration and timing
 	replayData, err := ci.ParseReplay()
 	if err != nil {
 		return fmt.Errorf("intent validation for execution failed: %w", err)
 	}
 	if replayData.ExpiresAt > 0 {
-		// Note: Time validation should be done by caller with current time
-		// This just ensures the field is present if set
 		if replayData.CreatedAt <= 0 {
 			return fmt.Errorf("intent validation for execution failed: expires_at set but created_at missing")
 		}
+		// Enforce deadline: reject expired intents
+		if time.Now().Unix() > replayData.ExpiresAt {
+			return fmt.Errorf("intent expired at %d, current time %d", replayData.ExpiresAt, time.Now().Unix())
+		}
+		// Sanity: created_at must be before expires_at
+		if replayData.CreatedAt >= replayData.ExpiresAt {
+			return fmt.Errorf("created_at (%d) must be before expires_at (%d)", replayData.CreatedAt, replayData.ExpiresAt)
+		}
 	}
 
+	// Validate nonce for replay protection
+	if err := ci.ValidateNonce(replayData); err != nil {
+		return fmt.Errorf("intent validation for execution failed: %w", err)
+	}
+
+	return nil
+}
+
+// ValidateNonce checks the replay data nonce for uniqueness to prevent replay attacks.
+// Once validated, the nonce is recorded so duplicate intents are rejected.
+func (ci *CertenIntent) ValidateNonce(replayData *ReplayData) error {
+	if replayData.Nonce == "" {
+		return fmt.Errorf("replay nonce is empty")
+	}
+
+	seenNoncesMu.Lock()
+	defer seenNoncesMu.Unlock()
+
+	if seenNonces[replayData.Nonce] {
+		return fmt.Errorf("duplicate nonce '%s': intent already processed", replayData.Nonce)
+	}
+	seenNonces[replayData.Nonce] = true
 	return nil
 }
 
@@ -791,6 +860,13 @@ func (ci *CertenIntent) ValidateMultiLeg() error {
 		// Validate role
 		if leg.Role != "source" && leg.Role != "destination" && leg.Role != "intermediate" {
 			return fmt.Errorf("multi-leg validation failed: leg %d has invalid role '%s'", i, leg.Role)
+		}
+
+		// Validate slippage tolerance if set
+		if leg.SlippageTolerance != "" {
+			if _, err := leg.ParseSlippageTolerance(); err != nil {
+				return fmt.Errorf("multi-leg validation failed: leg %d: %w", i, err)
+			}
 		}
 
 		// Validate dependencies reference existing legs
