@@ -332,6 +332,34 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 		if targetChain == "" {
 			targetChain = a.unified.config.DefaultChainID
 		}
+
+		// For multi-chain intents, the tx hashes come from the first successful chain
+		// which may differ from the commitment's targetChain (leg 0's chain).
+		// Extract the actual chain from the raw create tx hash to ensure consistency.
+		if legCount > 1 && commitMap != nil {
+			if rawCreate, ok := commitMap["rawCreateTxHashes"].(string); ok && rawCreate != "" {
+				// Format: "ChainName:0xhash,ChainName2:0xhash2,...,create_failed_ChainName3"
+				// Find the first valid (non-failed) entry
+				for _, part := range strings.Split(rawCreate, ",") {
+					part = strings.TrimSpace(part)
+					if strings.Contains(part, "_failed") {
+						continue
+					}
+					if colonIdx := strings.LastIndex(part, ":"); colonIdx > 0 {
+						chainFromTx := strings.TrimSpace(part[:colonIdx])
+						// Normalize: "Optimism Sepolia" -> "optimism-sepolia"
+						normalized := strings.ToLower(strings.ReplaceAll(chainFromTx, " ", "-"))
+						if normalized != "" && normalized != targetChain {
+							fmt.Printf("[UnifiedAdapter] Multi-chain: overriding target chain from %q to %q (matching first successful tx)\n",
+								targetChain, normalized)
+							targetChain = normalized
+						}
+						break
+					}
+				}
+			}
+		}
+
 		fmt.Printf("[UnifiedAdapter] Target chain for Phase 7-9: %q (from commitment: %q, default: %q)\n",
 			targetChain, targetChainFromCommitment, a.unified.config.DefaultChainID)
 

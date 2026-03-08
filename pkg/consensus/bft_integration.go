@@ -183,9 +183,18 @@ type AnchorWorkflowTxHashes struct {
 // Multi-chain execution formats tx hashes as "ChainName:0xhash..." or "ChainName:leg-N:0xhash...".
 // This extracts just the "0x..." portion for use with common.HexToHash().
 func extractPureHexHash(chainPrefixedHash string) string {
-	// For multi-chain results (comma-separated), use only the first chain's hash
-	if idx := strings.Index(chainPrefixedHash, ","); idx >= 0 {
-		chainPrefixedHash = chainPrefixedHash[:idx]
+	// For multi-chain results (comma-separated), find the first valid entry (skip _failed entries)
+	if strings.Contains(chainPrefixedHash, ",") {
+		for _, part := range strings.Split(chainPrefixedHash, ",") {
+			part = strings.TrimSpace(part)
+			if strings.Contains(part, "_failed") {
+				continue
+			}
+			if strings.Contains(part, "0x") {
+				chainPrefixedHash = part
+				break
+			}
+		}
 	}
 	idx := strings.LastIndex(chainPrefixedHash, "0x")
 	if idx > 0 {
@@ -196,11 +205,18 @@ func extractPureHexHash(chainPrefixedHash string) string {
 
 // extractRawTxHash strips chain prefix from tx hash strings, preserving native format.
 // Works for any chain format: EVM hex ("0x..."), NEAR base58, Solana base58, etc.
-// For multi-chain results (comma-separated), extracts only the first chain's hash.
+// For multi-chain results (comma-separated), extracts the first valid (non-failed) chain's hash.
 func extractRawTxHash(chainPrefixedHash string) string {
-	// For multi-chain results (comma-separated), use only the first chain's hash
-	if idx := strings.Index(chainPrefixedHash, ","); idx >= 0 {
-		chainPrefixedHash = chainPrefixedHash[:idx]
+	// For multi-chain results (comma-separated), find the first valid entry
+	if strings.Contains(chainPrefixedHash, ",") {
+		for _, part := range strings.Split(chainPrefixedHash, ",") {
+			part = strings.TrimSpace(part)
+			if strings.Contains(part, "_failed") {
+				continue
+			}
+			chainPrefixedHash = part
+			break
+		}
 	}
 	if idx := strings.LastIndex(chainPrefixedHash, ":"); idx >= 0 {
 		if candidate := chainPrefixedHash[idx+1:]; len(candidate) > 0 {
