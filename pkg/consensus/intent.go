@@ -8,6 +8,7 @@ package consensus
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -197,9 +198,10 @@ type CCLeg struct {
 	DeadlineTimestamp int64 `json:"deadline_timestamp,omitempty"`
 }
 
-// ChainKey returns a unique key for this leg's target chain (e.g., "ethereum:1")
+// ChainKey returns a unique key for this leg's target chain (e.g., "base-sepolia").
+// Uses NormalizeChainKey for consistent key format across the entire multi-leg pipeline.
 func (leg *CCLeg) ChainKey() string {
-	return fmt.Sprintf("%s:%d", normalizeChainName(leg.Chain), leg.ChainID)
+	return NormalizeChainKey(leg.Chain)
 }
 
 // ParseSlippageTolerance parses the "X%" string to a float64 (e.g. "0.5%" -> 0.5).
@@ -490,6 +492,15 @@ func normalizeChainName(chain string) string {
 	default:
 		return chain
 	}
+}
+
+// NormalizeChainKey creates a canonical chain key from a chain name string.
+// This is the ONLY function that should construct chain keys for use across the
+// multi-leg pipeline (GAP 15: chain key normalization).
+// Format: lowercase, spaces replaced with hyphens (e.g., "base-sepolia").
+// This matches the format used by bft_integration.go for parseMultiChainTxHashes output keys.
+func NormalizeChainKey(chain string) string {
+	return strings.ToLower(strings.ReplaceAll(chain, " ", "-"))
 }
 
 // Validate performs comprehensive validation of the CertenIntent structure

@@ -5,7 +5,11 @@
 
 package database
 
-import "time"
+import (
+	"time"
+
+	"github.com/lib/pq"
+)
 
 // IntentLifecycleStatus represents the lifecycle state of an intent
 type IntentLifecycleStatus string
@@ -60,6 +64,11 @@ type IntentLifecycle struct {
 	BlockHeight   *int64                `json:"block_height,omitempty" db:"block_height"`
 	CycleID       *string               `json:"cycle_id,omitempty" db:"cycle_id"`
 	WriteBackTx   *string               `json:"write_back_tx,omitempty" db:"write_back_tx"`
+	TargetChains  pq.StringArray        `json:"target_chains,omitempty" db:"target_chains"`
+	LegCount      *int                  `json:"leg_count,omitempty" db:"leg_count"`
+	ExecutionMode *string               `json:"execution_mode,omitempty" db:"execution_mode"`
+	LegsCompleted *int                  `json:"legs_completed,omitempty" db:"legs_completed"`
+	LegsFailed    *int                  `json:"legs_failed,omitempty" db:"legs_failed"`
 	CreatedAt     time.Time             `json:"created_at" db:"created_at"`
 	UpdatedAt     time.Time             `json:"updated_at" db:"updated_at"`
 	SubmittedAt   *time.Time            `json:"submitted_at,omitempty" db:"submitted_at"`

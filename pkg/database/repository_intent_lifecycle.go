@@ -10,6 +10,8 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
+
+	"github.com/lib/pq"
 )
 
 // IntentLifecycleRepository handles database operations for intent lifecycle tracking
@@ -186,6 +188,7 @@ func (r *IntentLifecycleRepository) GetByIntentID(ctx context.Context, intentID 
 	query := `
 		SELECT id, intent_id, accum_tx_hash, user_id, status, target_chain, proof_class,
 		       error_message, block_height, cycle_id, write_back_tx,
+		       target_chains, leg_count, execution_mode, legs_completed, legs_failed,
 		       created_at, updated_at, submitted_at, authorized_at,
 		       in_process_at, completed_at, failed_at
 		FROM intent_lifecycle
@@ -197,6 +200,7 @@ func (r *IntentLifecycleRepository) GetByIntentID(ctx context.Context, intentID 
 		&lc.ID, &lc.IntentID, &lc.AccumTxHash, &lc.UserID, &lc.Status,
 		&lc.TargetChain, &lc.ProofClass, &lc.ErrorMessage, &lc.BlockHeight,
 		&lc.CycleID, &lc.WriteBackTx,
+		&lc.TargetChains, &lc.LegCount, &lc.ExecutionMode, &lc.LegsCompleted, &lc.LegsFailed,
 		&lc.CreatedAt, &lc.UpdatedAt, &lc.SubmittedAt, &lc.AuthorizedAt,
 		&lc.InProcessAt, &lc.CompletedAt, &lc.FailedAt,
 	)
@@ -214,6 +218,7 @@ func (r *IntentLifecycleRepository) GetByTxHash(ctx context.Context, txHash stri
 	query := `
 		SELECT id, intent_id, accum_tx_hash, user_id, status, target_chain, proof_class,
 		       error_message, block_height, cycle_id, write_back_tx,
+		       target_chains, leg_count, execution_mode, legs_completed, legs_failed,
 		       created_at, updated_at, submitted_at, authorized_at,
 		       in_process_at, completed_at, failed_at
 		FROM intent_lifecycle
@@ -225,6 +230,7 @@ func (r *IntentLifecycleRepository) GetByTxHash(ctx context.Context, txHash stri
 		&lc.ID, &lc.IntentID, &lc.AccumTxHash, &lc.UserID, &lc.Status,
 		&lc.TargetChain, &lc.ProofClass, &lc.ErrorMessage, &lc.BlockHeight,
 		&lc.CycleID, &lc.WriteBackTx,
+		&lc.TargetChains, &lc.LegCount, &lc.ExecutionMode, &lc.LegsCompleted, &lc.LegsFailed,
 		&lc.CreatedAt, &lc.UpdatedAt, &lc.SubmittedAt, &lc.AuthorizedAt,
 		&lc.InProcessAt, &lc.CompletedAt, &lc.FailedAt,
 	)
@@ -249,6 +255,7 @@ func (r *IntentLifecycleRepository) ListByStatus(ctx context.Context, status Int
 	query := `
 		SELECT id, intent_id, accum_tx_hash, user_id, status, target_chain, proof_class,
 		       error_message, block_height, cycle_id, write_back_tx,
+		       target_chains, leg_count, execution_mode, legs_completed, legs_failed,
 		       created_at, updated_at, submitted_at, authorized_at,
 		       in_process_at, completed_at, failed_at
 		FROM intent_lifecycle
@@ -272,6 +279,7 @@ func (r *IntentLifecycleRepository) ListByUser(ctx context.Context, userID strin
 	query := `
 		SELECT id, intent_id, accum_tx_hash, user_id, status, target_chain, proof_class,
 		       error_message, block_height, cycle_id, write_back_tx,
+		       target_chains, leg_count, execution_mode, legs_completed, legs_failed,
 		       created_at, updated_at, submitted_at, authorized_at,
 		       in_process_at, completed_at, failed_at
 		FROM intent_lifecycle
@@ -297,6 +305,7 @@ func (r *IntentLifecycleRepository) ListRecentEnriched(ctx context.Context, limi
 		       il.id, il.intent_id, il.accum_tx_hash, il.user_id, il.status,
 		       il.target_chain, il.proof_class, il.error_message, il.block_height,
 		       il.cycle_id, il.write_back_tx,
+		       il.target_chains, il.leg_count, il.execution_mode, il.legs_completed, il.legs_failed,
 		       il.created_at, il.updated_at, il.submitted_at, il.authorized_at,
 		       il.in_process_at, il.completed_at, il.failed_at,
 		       bt.from_chain, bt.to_chain, bt.from_address, bt.to_address,
@@ -324,6 +333,7 @@ func (r *IntentLifecycleRepository) ListByUserEnriched(ctx context.Context, user
 		       il.id, il.intent_id, il.accum_tx_hash, il.user_id, il.status,
 		       il.target_chain, il.proof_class, il.error_message, il.block_height,
 		       il.cycle_id, il.write_back_tx,
+		       il.target_chains, il.leg_count, il.execution_mode, il.legs_completed, il.legs_failed,
 		       il.created_at, il.updated_at, il.submitted_at, il.authorized_at,
 		       il.in_process_at, il.completed_at, il.failed_at,
 		       bt.from_chain, bt.to_chain, bt.from_address, bt.to_address,
@@ -353,6 +363,7 @@ func (r *IntentLifecycleRepository) scanEnrichedRows(ctx context.Context, query 
 			&e.ID, &e.IntentID, &e.AccumTxHash, &e.UserID, &e.Status,
 			&e.TargetChain, &e.ProofClass, &e.ErrorMessage, &e.BlockHeight,
 			&e.CycleID, &e.WriteBackTx,
+			&e.TargetChains, &e.LegCount, &e.ExecutionMode, &e.LegsCompleted, &e.LegsFailed,
 			&e.CreatedAt, &e.UpdatedAt, &e.SubmittedAt, &e.AuthorizedAt,
 			&e.InProcessAt, &e.CompletedAt, &e.FailedAt,
 			&e.FromChain, &e.ToChain, &e.FromAddress, &e.ToAddress,
@@ -382,6 +393,7 @@ func (r *IntentLifecycleRepository) ListRecent(ctx context.Context, limit int) (
 	query := `
 		SELECT id, intent_id, accum_tx_hash, user_id, status, target_chain, proof_class,
 		       error_message, block_height, cycle_id, write_back_tx,
+		       target_chains, leg_count, execution_mode, legs_completed, legs_failed,
 		       created_at, updated_at, submitted_at, authorized_at,
 		       in_process_at, completed_at, failed_at
 		FROM intent_lifecycle
@@ -407,6 +419,7 @@ func (r *IntentLifecycleRepository) scanRows(ctx context.Context, query string, 
 			&lc.ID, &lc.IntentID, &lc.AccumTxHash, &lc.UserID, &lc.Status,
 			&lc.TargetChain, &lc.ProofClass, &lc.ErrorMessage, &lc.BlockHeight,
 			&lc.CycleID, &lc.WriteBackTx,
+			&lc.TargetChains, &lc.LegCount, &lc.ExecutionMode, &lc.LegsCompleted, &lc.LegsFailed,
 			&lc.CreatedAt, &lc.UpdatedAt, &lc.SubmittedAt, &lc.AuthorizedAt,
 			&lc.InProcessAt, &lc.CompletedAt, &lc.FailedAt,
 		); err != nil {
@@ -420,4 +433,116 @@ func (r *IntentLifecycleRepository) scanRows(ctx context.Context, query string, 
 	}
 
 	return results, nil
+}
+
+// UpsertOnDiscoveryMultiLeg inserts a new lifecycle record for a multi-leg intent.
+// Like UpsertOnDiscovery, it uses INSERT ON CONFLICT DO NOTHING for idempotency.
+// The targetChains slice and legCount capture multi-chain routing information.
+func (r *IntentLifecycleRepository) UpsertOnDiscoveryMultiLeg(
+	ctx context.Context,
+	intentID string,
+	txHash string,
+	blockHeight int64,
+	userID string,
+	proofClass string,
+	targetChain string,
+	targetChains []string,
+	legCount int,
+	executionMode string,
+) error {
+	now := time.Now().UTC()
+
+	query := `
+		INSERT INTO intent_lifecycle (
+			intent_id, accum_tx_hash, block_height, user_id, proof_class, target_chain,
+			target_chains, leg_count, execution_mode, legs_completed, legs_failed,
+			status, submitted_at, authorized_at, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+		ON CONFLICT (intent_id) DO NOTHING
+	`
+
+	var userIDPtr *string
+	if userID != "" {
+		userIDPtr = &userID
+	}
+	var proofClassPtr *string
+	if proofClass != "" {
+		proofClassPtr = &proofClass
+	}
+	var targetChainPtr *string
+	if targetChain != "" {
+		targetChainPtr = &targetChain
+	}
+	var executionModePtr *string
+	if executionMode != "" {
+		executionModePtr = &executionMode
+	}
+
+	_, err := r.client.db.ExecContext(ctx, query,
+		intentID,
+		txHash,
+		blockHeight,
+		userIDPtr,
+		proofClassPtr,
+		targetChainPtr,
+		pq.StringArray(targetChains),
+		legCount,
+		executionModePtr,
+		0, // legs_completed
+		0, // legs_failed
+		string(IntentLifecycleAuthorized),
+		now, // submitted_at
+		now, // authorized_at
+		now, // created_at
+		now, // updated_at
+	)
+	if err != nil {
+		return fmt.Errorf("upsert multi-leg intent lifecycle: %w", err)
+	}
+	return nil
+}
+
+// UpdateLegProgress updates the legs_completed and legs_failed counters for a multi-leg intent.
+// Does not update intents that are already in a terminal state (complete, failed).
+func (r *IntentLifecycleRepository) UpdateLegProgress(
+	ctx context.Context,
+	intentID string,
+	legsCompleted int,
+	legsFailed int,
+) error {
+	now := time.Now().UTC()
+
+	query := `
+		UPDATE intent_lifecycle
+		SET legs_completed = $1,
+		    legs_failed = $2,
+		    updated_at = $3
+		WHERE intent_id = $4
+		  AND status NOT IN ('complete', 'failed')
+	`
+
+	result, err := r.client.db.ExecContext(ctx, query,
+		legsCompleted,
+		legsFailed,
+		now,
+		intentID,
+	)
+	if err != nil {
+		return fmt.Errorf("update leg progress: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check rows affected: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		_, getErr := r.GetByIntentID(ctx, intentID)
+		if getErr != nil {
+			return ErrIntentLifecycleNotFound
+		}
+		// Intent exists but is in a terminal state — not an error, just a no-op
+	}
+
+	return nil
 }

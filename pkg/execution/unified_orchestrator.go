@@ -755,6 +755,19 @@ func (o *UnifiedOrchestrator) executePhase8(ctx context.Context, cycle *activeCy
 		MerkleRoot:   req.MerkleRoot,
 	}
 
+	// For multi-leg chain groups, include per-observation result hashes in the
+	// attestation message so all observations are covered by BFT signing (GAP 5).
+	if req.Metadata != nil && req.Metadata["multi_leg"] == "true" && len(result.ObservationResults) > 1 {
+		message.LegCount = len(result.ObservationResults)
+		// Compute a combined hash over all observation result hashes
+		combinedData := make([]byte, 0, 32*len(result.ObservationResults)+len("CERTEN_MULTI_OBS_V1"))
+		combinedData = append(combinedData, []byte("CERTEN_MULTI_OBS_V1")...)
+		for _, obs := range result.ObservationResults {
+			combinedData = append(combinedData, obs.ResultHash[:]...)
+		}
+		message.MultiLegResultHash = sha256.Sum256(combinedData)
+	}
+
 	// Create timeout context
 	attestCtx, cancel := context.WithTimeout(ctx, o.config.AttestationTimeout)
 	defer cancel()

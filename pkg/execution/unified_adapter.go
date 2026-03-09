@@ -609,8 +609,8 @@ func (a *UnifiedOrchestratorAdapter) StartPerChainProofCycles(
 	a.unified.multiLegAggregator.RegisterMultiLegIntent(
 		intentID, operationID, len(legInfos), executionMode, legMapping)
 
-	fmt.Printf("[UnifiedAdapter] Registered multi-leg intent %s with %d legs, starting per-chain proof cycles\n",
-		intentID, len(legInfos))
+	fmt.Printf("[UnifiedAdapter] Registered multi-leg intent %s with %d legs (mode=%s), starting per-chain proof cycles\n",
+		intentID, len(legInfos), executionMode)
 
 	// Build leg indices per chain key for positional observation matching (Workstream 1.1)
 	legIndicesByChain := make(map[string][]int)
@@ -622,9 +622,63 @@ func (a *UnifiedOrchestratorAdapter) StartPerChainProofCycles(
 		sortInts(legIndicesByChain[ck])
 	}
 
-	// Start a proof cycle for each chain group
+	// For sequential mode, build dependency info to determine which chain groups
+	// can start immediately vs which must wait (Workstream 2.4: GAP 6)
+	readyChainKeys := make(map[string]bool)
+	if executionMode == "sequential" {
+		// Extract DependsOnLegs from commitment data
+		type legDep struct {
+			LegIndex      int
+			ChainKey      string
+			SequenceOrder int
+			DependsOn     []string
+		}
+		var legDeps []legDep
+		if cm, ok := commitment.(map[string]interface{}); ok {
+			if legsRaw, ok := cm["legs_dependency_info"]; ok {
+				if depsJSON, err := json.Marshal(legsRaw); err == nil {
+					json.Unmarshal(depsJSON, &legDeps)
+				}
+			}
+		}
+
+		// Determine which chain groups have legs with no dependencies (can start immediately)
+		if len(legDeps) > 0 {
+			for _, dep := range legDeps {
+				if len(dep.DependsOn) == 0 && dep.SequenceOrder == 0 {
+					readyChainKeys[dep.ChainKey] = true
+				}
+			}
+		} else {
+			// No explicit dependency info - find chain groups containing sequence_order=0 legs
+			for _, leg := range legInfos {
+				// Without explicit deps, start all groups (parallel fallback)
+				readyChainKeys[leg.ChainKey] = true
+			}
+		}
+
+		if len(readyChainKeys) == 0 {
+			// Safety: if nothing is ready, start all (avoid deadlock)
+			for ck := range chainTxHashes {
+				readyChainKeys[ck] = true
+			}
+		}
+	} else {
+		// parallel or atomic mode: all chain groups start immediately
+		for ck := range chainTxHashes {
+			readyChainKeys[ck] = true
+		}
+	}
+
+	// Start a proof cycle for each ready chain group
 	for chainKey, txHashes := range chainTxHashes {
 		if len(txHashes) == 0 {
+			continue
+		}
+
+		// For sequential mode, skip chain groups that aren't ready yet
+		if !readyChainKeys[chainKey] {
+			fmt.Printf("[UnifiedAdapter] Deferring chain group %s (sequential mode, dependencies not met)\n", chainKey)
 			continue
 		}
 
