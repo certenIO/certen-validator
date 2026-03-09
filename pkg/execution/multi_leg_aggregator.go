@@ -49,11 +49,16 @@ type MultiLegAggregator struct {
 	resultChainsLock *sync.RWMutex
 
 	// Configuration
-	writeBackTimeout time.Duration
-	validatorID      string
+	writeBackTimeout   time.Duration
+	aggregationTimeout time.Duration
+	validatorID        string
 
 	// Callbacks
 	onUnifiedWriteBack func(intentID string, txHash string)
+	onChainGroupFailed func(intentID, chainKey string, err error)
+
+	// Timeout cancellation
+	timeoutTimers map[string]*time.Timer // intentID -> timeout timer
 
 	logger *log.Logger
 }
@@ -95,6 +100,14 @@ type MultiLegAggregatorConfig struct {
 	// PersistenceRepo enables crash recovery for multi-leg aggregation (GAP 4).
 	// If nil, aggregation state is in-memory only (original behavior).
 	PersistenceRepo *database.MultiLegRepository
+
+	// AggregationTimeout is the maximum time to wait for all chain groups to complete
+	// before producing a partial write-back (GAP 10). Default: 30 minutes.
+	AggregationTimeout time.Duration
+
+	// OnChainGroupFailed is called when a chain group fails. Allows the caller
+	// to take corrective action (e.g., cancel remaining goroutines for atomic mode).
+	OnChainGroupFailed func(intentID, chainKey string, err error)
 }
 
 // NewMultiLegAggregator creates a new multi-leg aggregator
@@ -109,16 +122,24 @@ func NewMultiLegAggregator(cfg *MultiLegAggregatorConfig) *MultiLegAggregator {
 		writeBackTimeout = 2 * time.Minute
 	}
 
+	aggregationTimeout := cfg.AggregationTimeout
+	if aggregationTimeout == 0 {
+		aggregationTimeout = 30 * time.Minute
+	}
+
 	return &MultiLegAggregator{
-		txBuilder:        cfg.TxBuilder,
-		submitter:        cfg.Submitter,
-		pending:          make(map[string]*PendingMultiLeg),
-		persistenceRepo:  cfg.PersistenceRepo,
-		resultChains:     cfg.ResultChains,
-		resultChainsLock: cfg.ResultChainsLock,
-		writeBackTimeout: writeBackTimeout,
-		validatorID:      cfg.ValidatorID,
-		logger:           logger,
+		txBuilder:          cfg.TxBuilder,
+		submitter:          cfg.Submitter,
+		pending:            make(map[string]*PendingMultiLeg),
+		persistenceRepo:    cfg.PersistenceRepo,
+		resultChains:       cfg.ResultChains,
+		resultChainsLock:   cfg.ResultChainsLock,
+		writeBackTimeout:   writeBackTimeout,
+		aggregationTimeout: aggregationTimeout,
+		validatorID:        cfg.ValidatorID,
+		onChainGroupFailed: cfg.OnChainGroupFailed,
+		timeoutTimers:      make(map[string]*time.Timer),
+		logger:             logger,
 	}
 }
 
@@ -162,6 +183,9 @@ func (a *MultiLegAggregator) RegisterMultiLegIntent(
 
 	// Persist to database for crash recovery
 	a.persistPendingState(a.pending[intentID])
+
+	// Start aggregation timeout timer (GAP 10)
+	a.startAggregationTimeout(intentID)
 }
 
 // OnChainGroupCycleComplete is called when a chain group's proof cycle finishes.
@@ -202,8 +226,9 @@ func (a *MultiLegAggregator) OnChainGroupCycleComplete(
 		return nil
 	}
 
-	// All chain groups complete - build unified write-back
+	// All chain groups complete - cancel timeout and build unified write-back
 	a.logger.Printf("All chain groups complete for intent %s, building unified write-back", intentID)
+	a.cancelAggregationTimeout(intentID)
 
 	// Copy pending data and remove from map before releasing lock
 	pendingCopy := *pending
@@ -475,6 +500,106 @@ func (a *MultiLegAggregator) GetPendingCount() int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return len(a.pending)
+}
+
+// =============================================================================
+// TIMEOUT AND FAILURE HANDLING (GAP 10, GAP 9)
+// =============================================================================
+
+// startAggregationTimeout starts a timer that triggers a partial write-back
+// if not all chain groups complete within the aggregation timeout.
+func (a *MultiLegAggregator) startAggregationTimeout(intentID string) {
+	timer := time.AfterFunc(a.aggregationTimeout, func() {
+		a.handleAggregationTimeout(intentID)
+	})
+	a.timeoutTimers[intentID] = timer
+}
+
+// cancelAggregationTimeout cancels the timeout timer for an intent.
+// Must be called with a.mu held.
+func (a *MultiLegAggregator) cancelAggregationTimeout(intentID string) {
+	if timer, ok := a.timeoutTimers[intentID]; ok {
+		timer.Stop()
+		delete(a.timeoutTimers, intentID)
+	}
+}
+
+// handleAggregationTimeout fires when the aggregation timeout expires.
+// Builds a partial write-back with whatever chain groups have completed.
+func (a *MultiLegAggregator) handleAggregationTimeout(intentID string) {
+	a.mu.Lock()
+
+	pending, ok := a.pending[intentID]
+	if !ok {
+		a.mu.Unlock()
+		return // Already completed or removed
+	}
+
+	completed := len(pending.CompletedCycles)
+	required := countUniqueChainKeys(pending.LegMapping)
+	a.logger.Printf("Aggregation timeout for intent %s: %d/%d chain groups completed, building partial write-back",
+		intentID, completed, required)
+
+	// Remove from pending and timers
+	delete(a.pending, intentID)
+	delete(a.timeoutTimers, intentID)
+	pendingCopy := *pending
+	a.mu.Unlock()
+
+	if completed == 0 {
+		a.logger.Printf("No chain groups completed for intent %s, skipping partial write-back", intentID)
+		a.deletePendingState(intentID)
+		return
+	}
+
+	// Build partial write-back with available results
+	if err := a.buildUnifiedWriteBack(&pendingCopy); err != nil {
+		a.logger.Printf("ERROR: Partial write-back failed for timed-out intent %s: %v", intentID, err)
+	} else {
+		a.logger.Printf("Partial write-back submitted for timed-out intent %s (%d/%d chain groups)",
+			intentID, completed, required)
+	}
+}
+
+// OnChainGroupFailed is called when a chain group's proof cycle fails.
+// Handles the failure based on execution mode:
+// - atomic: triggers immediate partial write-back with available results
+// - sequential/parallel: logs the failure, waits for timeout or remaining groups
+func (a *MultiLegAggregator) OnChainGroupFailed(intentID string, chainKey string, err error) {
+	a.mu.Lock()
+
+	pending, ok := a.pending[intentID]
+	if !ok {
+		a.mu.Unlock()
+		return
+	}
+
+	a.logger.Printf("Chain group %s failed for intent %s: %v", chainKey, intentID, err)
+
+	// Notify external callback if configured
+	if a.onChainGroupFailed != nil {
+		go a.onChainGroupFailed(intentID, chainKey, err)
+	}
+
+	// For atomic mode, fail fast: build partial write-back immediately
+	if pending.ExecutionMode == "atomic" {
+		a.logger.Printf("Atomic mode: failing intent %s due to chain group %s failure", intentID, chainKey)
+		a.cancelAggregationTimeout(intentID)
+		delete(a.pending, intentID)
+		pendingCopy := *pending
+		a.mu.Unlock()
+
+		if len(pendingCopy.CompletedCycles) > 0 {
+			if wbErr := a.buildUnifiedWriteBack(&pendingCopy); wbErr != nil {
+				a.logger.Printf("ERROR: Partial write-back failed for atomic-failed intent %s: %v", intentID, wbErr)
+			}
+		}
+		a.deletePendingState(intentID)
+		return
+	}
+
+	// For parallel/sequential: let remaining groups continue, timeout will handle
+	a.mu.Unlock()
 }
 
 // =============================================================================

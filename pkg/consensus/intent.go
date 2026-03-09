@@ -914,5 +914,66 @@ func (ci *CertenIntent) ValidateMultiLeg() error {
 		}
 	}
 
+	// Check for circular dependencies using DFS cycle detection (GAP 11)
+	if err := detectCircularDependencies(ccEnvelope); err != nil {
+		return fmt.Errorf("multi-leg validation failed: %w", err)
+	}
+
+	return nil
+}
+
+// detectCircularDependencies performs DFS-based cycle detection on the leg dependency graph.
+// Returns an error if any circular dependency is found (e.g., A->B->C->A).
+func detectCircularDependencies(envelope *CrossChainEnvelope) error {
+	// Build adjacency list: legID -> list of legIDs it depends on
+	adj := make(map[string][]string)
+	for _, leg := range envelope.Legs {
+		if leg.LegID == "" {
+			continue
+		}
+		adj[leg.LegID] = append(adj[leg.LegID], leg.DependsOnLegs...)
+	}
+	for _, dep := range envelope.LegDependencies {
+		adj[dep.LegID] = append(adj[dep.LegID], dep.DependsOnLegID)
+	}
+
+	// DFS states: 0=unvisited, 1=in-progress (on stack), 2=done
+	const (
+		unvisited  = 0
+		inProgress = 1
+		done       = 2
+	)
+	state := make(map[string]int)
+
+	var dfs func(node string) error
+	dfs = func(node string) error {
+		state[node] = inProgress
+		for _, dep := range adj[node] {
+			if dep == "" {
+				continue
+			}
+			switch state[dep] {
+			case inProgress:
+				return fmt.Errorf("circular dependency detected: %s -> %s", node, dep)
+			case unvisited:
+				if err := dfs(dep); err != nil {
+					return err
+				}
+			}
+		}
+		state[node] = done
+		return nil
+	}
+
+	for _, leg := range envelope.Legs {
+		if leg.LegID == "" {
+			continue
+		}
+		if state[leg.LegID] == unvisited {
+			if err := dfs(leg.LegID); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
