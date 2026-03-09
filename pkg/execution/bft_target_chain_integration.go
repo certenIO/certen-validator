@@ -301,26 +301,58 @@ func (btce *BFTTargetChainExecutor) ExecuteTargetChainOperations(
 			targetChainID, anchorCfg.GetSupportedChainIDs())
 	}
 
-	// Execute based on target chain
+	// Check if this is a multi-leg intent with chains beyond the primary
+	var additionalChainLegs []struct {
+		Chain   string
+		ChainID int64
+	}
+	if len(crossChainData) > 0 {
+		var ccPeek struct {
+			Legs []struct {
+				Chain   string `json:"chain"`
+				ChainID int64  `json:"chainId"`
+			} `json:"legs"`
+		}
+		if err := json.Unmarshal(crossChainData, &ccPeek); err == nil && len(ccPeek.Legs) > 1 {
+			for _, leg := range ccPeek.Legs[1:] {
+				legChainNorm := strings.ToLower(strings.ReplaceAll(leg.Chain, " ", "-"))
+				// Only add legs on DIFFERENT chains than primary
+				if legChainNorm != strings.ToLower(strings.ReplaceAll(targetChain, " ", "-")) {
+					additionalChainLegs = append(additionalChainLegs, struct {
+						Chain   string
+						ChainID int64
+					}{leg.Chain, leg.ChainID})
+				}
+			}
+		}
+	}
+
+	// Execute based on target chain (primary leg)
 	switch targetChain {
 	case "tron", "tron-shasta", "tron-shasta-testnet", "tron-nile", "tron-mainnet",
 		"tron shasta", "tron shasta testnet", "tron nile", "tron mainnet":
-		return btce.executeTronOperations(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, targetChainID)
+		return btce.executeNonEVMPrimaryWithAdditionalLegs(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, targetChainID,
+			btce.executeTronOperations, additionalChainLegs)
 	case "near", "near-testnet", "near-protocol", "near-mainnet",
 		"near testnet", "near protocol", "near mainnet":
-		return btce.executeNearOperations(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, targetChainID)
+		return btce.executeNonEVMPrimaryWithAdditionalLegs(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, targetChainID,
+			btce.executeNearOperations, additionalChainLegs)
 	case "solana", "solana-devnet", "solana-mainnet", "solana-testnet",
 		"solana devnet", "solana mainnet", "solana testnet":
-		return btce.executeSolanaOperations(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, targetChainID)
+		return btce.executeNonEVMPrimaryWithAdditionalLegs(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, targetChainID,
+			btce.executeSolanaOperations, additionalChainLegs)
 	case "aptos", "aptos-testnet", "aptos-mainnet",
 		"aptos testnet", "aptos mainnet":
-		return btce.executeAptosOperations(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, targetChainID)
+		return btce.executeNonEVMPrimaryWithAdditionalLegs(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, targetChainID,
+			btce.executeAptosOperations, additionalChainLegs)
 	case "sui", "sui-testnet", "sui-mainnet",
 		"sui testnet", "sui mainnet":
-		return btce.executeSuiOperations(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, targetChainID)
+		return btce.executeNonEVMPrimaryWithAdditionalLegs(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, targetChainID,
+			btce.executeSuiOperations, additionalChainLegs)
 	case "ton", "ton-testnet", "ton-mainnet",
 		"ton testnet", "ton mainnet":
-		return btce.executeTonOperations(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, targetChainID)
+		return btce.executeNonEVMPrimaryWithAdditionalLegs(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, targetChainID,
+			btce.executeTonOperations, additionalChainLegs)
 	case "ethereum", "ethereum-sepolia", "eth", "eth-sepolia", "sepolia",
 		"arbitrum", "arbitrum-one", "arbitrum-sepolia", "arb",
 		"optimism", "op-mainnet", "optimism-sepolia", "op", "op-sepolia",
@@ -427,6 +459,127 @@ func (btce *BFTTargetChainExecutor) extractTargetChainFromCrossChainData(crossCh
 
 	btce.logger.Printf("🎯 [CHAIN] Extracted target chain: %s (chainId=%d)", chain, chainID)
 	return chain, chainID
+}
+
+// nonEVMHandler is the function signature shared by all non-EVM chain executors.
+type nonEVMHandler func(
+	ctx context.Context,
+	intentID, transactionHash, accountURL, validatorID, bundleID, anchorID string,
+	certenProof *proof.CertenProof,
+	chainID int64,
+) (*TargetChainExecutionResult, error)
+
+// executeNonEVMPrimaryWithAdditionalLegs executes the primary non-EVM chain handler,
+// then dispatches any additional legs on other chains (EVM or non-EVM).
+// This fixes the bug where a non-EVM primary chain (e.g. NEAR) would skip additional
+// legs on other chains (e.g. ETH Sepolia).
+func (btce *BFTTargetChainExecutor) executeNonEVMPrimaryWithAdditionalLegs(
+	ctx context.Context,
+	intentID, transactionHash, accountURL, validatorID, bundleID, anchorID string,
+	certenProof *proof.CertenProof,
+	primaryChainID int64,
+	primaryHandler nonEVMHandler,
+	additionalLegs []struct {
+		Chain   string
+		ChainID int64
+	},
+) (*TargetChainExecutionResult, error) {
+
+	// Step 1: Execute primary non-EVM chain
+	btce.logger.Printf("🔗 [MULTI-LEG] Executing primary non-EVM chain (chainId=%d), then %d additional leg(s)",
+		primaryChainID, len(additionalLegs))
+
+	primaryResult, primaryErr := primaryHandler(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, primaryChainID)
+	if primaryErr != nil {
+		btce.logger.Printf("❌ [MULTI-LEG] Primary chain failed: %v", primaryErr)
+		// Still attempt additional legs even if primary fails — each leg is independent
+		if primaryResult == nil {
+			primaryResult = &TargetChainExecutionResult{
+				Chain:    fmt.Sprintf("chainId-%d", primaryChainID),
+				Success:  false,
+				Metadata: map[string]string{"error": primaryErr.Error()},
+			}
+		}
+	} else {
+		btce.logger.Printf("✅ [MULTI-LEG] Primary chain completed: success=%v tx=%s",
+			primaryResult.Success, primaryResult.TxHash)
+	}
+
+	// Step 2: If no additional legs, return primary result directly
+	if len(additionalLegs) == 0 {
+		return primaryResult, primaryErr
+	}
+
+	// Step 3: Execute additional legs on other chains
+	// Use a fresh context with generous timeout since primary may have consumed time
+	addCtx, addCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer addCancel()
+
+	allTxHashes := []string{}
+	if primaryResult.TxHash != "" {
+		allTxHashes = append(allTxHashes, fmt.Sprintf("%s:%s", primaryResult.Chain, primaryResult.TxHash))
+	}
+
+	overallSuccess := primaryResult.Success
+
+	for i, leg := range additionalLegs {
+		legChainNorm := strings.ToLower(strings.ReplaceAll(leg.Chain, " ", "-"))
+		btce.logger.Printf("🦵 [MULTI-LEG] Executing additional leg %d/%d: chain=%s chainId=%d",
+			i+1, len(additionalLegs), leg.Chain, leg.ChainID)
+
+		// Check if this additional leg is non-EVM or EVM
+		nonEVMName := btce.getNonEVMChainName(leg.ChainID, leg.Chain)
+		var legResult *TargetChainExecutionResult
+		var legErr error
+
+		if nonEVMName != "" {
+			// Non-EVM additional leg
+			legResult, legErr = btce.dispatchNonEVMChain(addCtx, nonEVMName,
+				intentID, transactionHash, accountURL, validatorID, bundleID, anchorID,
+				certenProof, leg.ChainID)
+		} else {
+			// EVM additional leg
+			legResult, legErr = btce.executeEthereumOperations(addCtx,
+				intentID, transactionHash, accountURL, validatorID, bundleID, anchorID,
+				certenProof, leg.ChainID)
+		}
+
+		if legErr != nil {
+			btce.logger.Printf("❌ [MULTI-LEG] Additional leg %s failed: %v", legChainNorm, legErr)
+			overallSuccess = false
+			allTxHashes = append(allTxHashes, fmt.Sprintf("%s:execution_failed", legChainNorm))
+		} else if legResult != nil {
+			btce.logger.Printf("✅ [MULTI-LEG] Additional leg %s completed: success=%v tx=%s",
+				legChainNorm, legResult.Success, legResult.TxHash)
+			if !legResult.Success {
+				overallSuccess = false
+			}
+			txHash := legResult.TxHash
+			if txHash == "" {
+				txHash = legResult.GovernanceTxHash
+			}
+			allTxHashes = append(allTxHashes, fmt.Sprintf("%s:%s", legChainNorm, txHash))
+		}
+	}
+
+	// Step 4: Merge results — primary result is the base, annotate with additional leg info
+	if primaryResult.Metadata == nil {
+		primaryResult.Metadata = make(map[string]string)
+	}
+	primaryResult.Metadata["multi_leg"] = "true"
+	primaryResult.Metadata["total_legs"] = fmt.Sprintf("%d", 1+len(additionalLegs))
+	primaryResult.Metadata["all_tx_hashes"] = strings.Join(allTxHashes, ",")
+	primaryResult.Success = overallSuccess
+
+	// Update TxHash to include all chains for proof cycle parsing
+	if len(allTxHashes) > 1 {
+		primaryResult.TxHash = strings.Join(allTxHashes, ",")
+	}
+
+	btce.logger.Printf("🎉 [MULTI-LEG] All %d legs completed: overall_success=%v",
+		1+len(additionalLegs), overallSuccess)
+
+	return primaryResult, nil
 }
 
 // executeEthereumOperations executes real operations on EVM chains using deployed contracts
