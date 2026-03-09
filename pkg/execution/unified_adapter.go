@@ -16,11 +16,15 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/google/uuid"
 )
+
+// sortInts sorts a slice of ints in ascending order
+func sortInts(s []int) { sort.Ints(s) }
 
 // =============================================================================
 // UNIFIED ORCHESTRATOR ADAPTER
@@ -494,6 +498,14 @@ func (a *UnifiedOrchestratorAdapter) StartMultiLegProofCycle(
 		return fmt.Errorf("multi-leg proof cycles require unified orchestrator")
 	}
 
+	// Build leg_indices metadata: extract leg indices for this chain key from commitmentData
+	legIndicesStr := ""
+	if liRaw, ok := commitmentData["leg_indices_"+chainKey]; ok {
+		if li, ok := liRaw.(string); ok {
+			legIndicesStr = li
+		}
+	}
+
 	req := &UnifiedProofCycleRequest{
 		IntentID:       intentID,
 		BundleID:       bundleID,
@@ -502,10 +514,11 @@ func (a *UnifiedOrchestratorAdapter) StartMultiLegProofCycle(
 		TargetChain:    targetChain,
 		CommitmentData: commitmentData,
 		Metadata: map[string]string{
-			"multi_leg":  "true",
-			"chain_key":  chainKey,
-			"total_legs": fmt.Sprintf("%d", totalLegs),
-			"intent_id":  intentID,
+			"multi_leg":   "true",
+			"chain_key":   chainKey,
+			"total_legs":  fmt.Sprintf("%d", totalLegs),
+			"intent_id":   intentID,
+			"leg_indices": legIndicesStr,
 		},
 	}
 
@@ -599,6 +612,16 @@ func (a *UnifiedOrchestratorAdapter) StartPerChainProofCycles(
 	fmt.Printf("[UnifiedAdapter] Registered multi-leg intent %s with %d legs, starting per-chain proof cycles\n",
 		intentID, len(legInfos))
 
+	// Build leg indices per chain key for positional observation matching (Workstream 1.1)
+	legIndicesByChain := make(map[string][]int)
+	for _, leg := range legInfos {
+		legIndicesByChain[leg.ChainKey] = append(legIndicesByChain[leg.ChainKey], leg.LegIndex)
+	}
+	// Sort for determinism
+	for ck := range legIndicesByChain {
+		sortInts(legIndicesByChain[ck])
+	}
+
 	// Start a proof cycle for each chain group
 	for chainKey, txHashes := range chainTxHashes {
 		if len(txHashes) == 0 {
@@ -618,6 +641,16 @@ func (a *UnifiedOrchestratorAdapter) StartPerChainProofCycles(
 			}
 		}
 		commitData["chain_key"] = chainKey
+
+		// Embed leg indices for this chain group into commitment data
+		// so StartMultiLegProofCycle can pass them as metadata
+		if indices, ok := legIndicesByChain[chainKey]; ok {
+			parts := make([]string, len(indices))
+			for i, idx := range indices {
+				parts[i] = fmt.Sprintf("%d", idx)
+			}
+			commitData["leg_indices_"+chainKey] = strings.Join(parts, ",")
+		}
 
 		if err := a.StartMultiLegProofCycle(
 			ctx, intentID, chainKey, len(legInfos), bundleID,

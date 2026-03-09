@@ -276,6 +276,9 @@ type UnifiedProofCycleResult struct {
 	ChainPlatform string `json:"chain_platform"`
 	ChainID       string `json:"chain_id"`
 	Scheme        string `json:"attestation_scheme"`
+
+	// Metadata propagated from the request (e.g., multi_leg, chain_key, leg_indices)
+	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
 // =============================================================================
@@ -391,6 +394,7 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 	result := &UnifiedProofCycleResult{
 		CycleID:   req.CycleID,
 		StartedAt: time.Now().UTC(),
+		Metadata:  req.Metadata,
 	}
 
 	// Get strategies for target chain

@@ -10,16 +10,19 @@ package execution
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"log"
 	"math/big"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 
 	chain "github.com/certen/independant-validator/pkg/chain/strategy"
+	"github.com/certen/independant-validator/pkg/database"
 )
 
 // =============================================================================
@@ -37,6 +40,9 @@ type MultiLegAggregator struct {
 
 	// Pending multi-leg intents waiting for all chain groups to complete
 	pending map[string]*PendingMultiLeg // intentID -> pending
+
+	// Persistence store for crash recovery (GAP 4)
+	persistenceRepo *database.MultiLegRepository
 
 	// Result hash chains (shared from orchestrator)
 	resultChains     map[string]*ResultHashChain
@@ -61,6 +67,11 @@ type PendingMultiLeg struct {
 	CompletedCycles map[string]*UnifiedProofCycleResult // chainKey -> result
 	LegMapping      map[int]LegChainInfo                // legIndex -> chain info
 	CreatedAt       time.Time
+
+	// LegIndicesPerChain maps chainKey -> ordered list of leg indices in that chain group.
+	// The order matches the txHashes array order in the proof cycle request,
+	// enabling positional matching of observations to legs for same-chain multi-leg intents.
+	LegIndicesPerChain map[string][]int
 }
 
 // LegChainInfo maps a leg index to its chain information
@@ -80,6 +91,10 @@ type MultiLegAggregatorConfig struct {
 	WriteBackTimeout time.Duration
 	ValidatorID      string
 	Logger           *log.Logger
+
+	// PersistenceRepo enables crash recovery for multi-leg aggregation (GAP 4).
+	// If nil, aggregation state is in-memory only (original behavior).
+	PersistenceRepo *database.MultiLegRepository
 }
 
 // NewMultiLegAggregator creates a new multi-leg aggregator
@@ -98,6 +113,7 @@ func NewMultiLegAggregator(cfg *MultiLegAggregatorConfig) *MultiLegAggregator {
 		txBuilder:        cfg.TxBuilder,
 		submitter:        cfg.Submitter,
 		pending:          make(map[string]*PendingMultiLeg),
+		persistenceRepo:  cfg.PersistenceRepo,
 		resultChains:     cfg.ResultChains,
 		resultChainsLock: cfg.ResultChainsLock,
 		writeBackTimeout: writeBackTimeout,
@@ -121,17 +137,31 @@ func (a *MultiLegAggregator) RegisterMultiLegIntent(
 		return // Already registered
 	}
 
+	// Build leg indices per chain from leg mapping
+	legIndicesPerChain := make(map[string][]int)
+	for legIdx, info := range legMapping {
+		legIndicesPerChain[info.ChainKey] = append(legIndicesPerChain[info.ChainKey], legIdx)
+	}
+	// Sort each chain's leg indices for deterministic ordering
+	for ck := range legIndicesPerChain {
+		sort.Ints(legIndicesPerChain[ck])
+	}
+
 	a.pending[intentID] = &PendingMultiLeg{
-		IntentID:        intentID,
-		OperationID:     operationID,
-		TotalLegs:       totalLegs,
-		ExecutionMode:   executionMode,
-		CompletedCycles: make(map[string]*UnifiedProofCycleResult),
-		LegMapping:      legMapping,
-		CreatedAt:       time.Now(),
+		IntentID:           intentID,
+		OperationID:        operationID,
+		TotalLegs:          totalLegs,
+		ExecutionMode:      executionMode,
+		CompletedCycles:    make(map[string]*UnifiedProofCycleResult),
+		LegMapping:         legMapping,
+		CreatedAt:          time.Now(),
+		LegIndicesPerChain: legIndicesPerChain,
 	}
 
 	a.logger.Printf("Registered multi-leg intent %s with %d legs", intentID, totalLegs)
+
+	// Persist to database for crash recovery
+	a.persistPendingState(a.pending[intentID])
 }
 
 // OnChainGroupCycleComplete is called when a chain group's proof cycle finishes.
@@ -153,6 +183,9 @@ func (a *MultiLegAggregator) OnChainGroupCycleComplete(
 	pending.CompletedCycles[chainKey] = result
 	a.logger.Printf("Chain group %s completed for intent %s (%d/%d chain groups)",
 		chainKey, intentID, len(pending.CompletedCycles), countUniqueChainKeys(pending.LegMapping))
+
+	// Persist updated completion state for crash recovery
+	a.persistCompletedCycleUpdate(intentID, pending.CompletedCycles)
 
 	// Check if all chain groups are complete
 	requiredChainKeys := getUniqueChainKeys(pending.LegMapping)
@@ -203,8 +236,10 @@ func (a *MultiLegAggregator) buildUnifiedWriteBack(pending *PendingMultiLeg) err
 			continue
 		}
 
-		// Find the observation result for this leg within the chain group's results
-		obs := findObservationForLeg(cycleResult, legIdx, legInfo)
+		// Find the observation result for this leg within the chain group's results.
+		// Pass the sorted leg indices for this chain group to enable positional matching.
+		legIndicesForChain := pending.LegIndicesPerChain[legInfo.ChainKey]
+		obs := findObservationForLeg(cycleResult, legIdx, legInfo, legIndicesForChain)
 
 		legResult := LegResult{
 			LegIndex:    legIdx,
@@ -269,6 +304,9 @@ func (a *MultiLegAggregator) buildUnifiedWriteBack(pending *PendingMultiLeg) err
 	a.logger.Printf("Multi-leg unified write-back submitted: intent=%s, legs=%d, receipt=%s",
 		pending.IntentID, len(legResults), receipt)
 
+	// Clean up persisted state after successful write-back
+	a.deletePendingState(pending.IntentID)
+
 	if a.onUnifiedWriteBack != nil {
 		a.onUnifiedWriteBack(pending.IntentID, receipt)
 	}
@@ -292,12 +330,18 @@ func (a *MultiLegAggregator) buildUnifiedAttestationBundle(
 		primaryResult = pending.CompletedCycles[primaryChainKey]
 	}
 
-	// Fallback: use first available result
+	// Fallback: use the lexicographically first chain key for determinism across validators.
+	// Non-deterministic map iteration (GAP 12) could cause validators to pick different
+	// primary results, leading to divergent write-backs.
 	if primaryResult == nil {
-		for ck, r := range pending.CompletedCycles {
-			primaryResult = r
-			primaryChainKey = ck
-			break
+		chainKeys := make([]string, 0, len(pending.CompletedCycles))
+		for ck := range pending.CompletedCycles {
+			chainKeys = append(chainKeys, ck)
+		}
+		sort.Strings(chainKeys)
+		if len(chainKeys) > 0 {
+			primaryChainKey = chainKeys[0]
+			primaryResult = pending.CompletedCycles[primaryChainKey]
 		}
 	}
 
@@ -328,8 +372,14 @@ func (a *MultiLegAggregator) buildUnifiedAttestationBundle(
 		NativeTxFrom:        obs.TxFrom,
 	}
 
-	// Collect logs from ALL chain groups
-	for _, cycleResult := range pending.CompletedCycles {
+	// Collect logs from ALL chain groups in deterministic order (sorted chain keys)
+	sortedChainKeys := make([]string, 0, len(pending.CompletedCycles))
+	for ck := range pending.CompletedCycles {
+		sortedChainKeys = append(sortedChainKeys, ck)
+	}
+	sort.Strings(sortedChainKeys)
+	for _, ck := range sortedChainKeys {
+		cycleResult := pending.CompletedCycles[ck]
 		for _, obsResult := range cycleResult.ObservationResults {
 			for _, l := range obsResult.Logs {
 				extResult.Logs = append(extResult.Logs, LogEntry{
@@ -428,40 +478,267 @@ func (a *MultiLegAggregator) GetPendingCount() int {
 }
 
 // =============================================================================
+// PERSISTENCE (GAP 4: Crash Recovery)
+// =============================================================================
+
+// persistPendingState saves the pending multi-leg state to database
+func (a *MultiLegAggregator) persistPendingState(pending *PendingMultiLeg) {
+	if a.persistenceRepo == nil {
+		return
+	}
+
+	legMappingJSON, err := json.Marshal(pending.LegMapping)
+	if err != nil {
+		a.logger.Printf("WARNING: Failed to marshal leg mapping for %s: %v", pending.IntentID, err)
+		return
+	}
+
+	legIndicesJSON, err := json.Marshal(pending.LegIndicesPerChain)
+	if err != nil {
+		a.logger.Printf("WARNING: Failed to marshal leg indices for %s: %v", pending.IntentID, err)
+		return
+	}
+
+	state := &database.MultiLegPendingState{
+		IntentID:           pending.IntentID,
+		OperationID:        pending.OperationID,
+		TotalLegs:          pending.TotalLegs,
+		ExecutionMode:      pending.ExecutionMode,
+		LegMapping:         legMappingJSON,
+		LegIndicesPerChain: legIndicesJSON,
+		CompletedCycles:    json.RawMessage("{}"),
+		CreatedAt:          pending.CreatedAt,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := a.persistenceRepo.UpsertPendingState(ctx, state); err != nil {
+		a.logger.Printf("WARNING: Failed to persist pending state for %s: %v", pending.IntentID, err)
+	}
+}
+
+// persistCompletedCycleUpdate saves updated completion state to database.
+// We store a summary (chainKey -> {success, chainID, proofID}) rather than
+// the full UnifiedProofCycleResult to keep the JSONB manageable.
+func (a *MultiLegAggregator) persistCompletedCycleUpdate(intentID string, cycles map[string]*UnifiedProofCycleResult) {
+	if a.persistenceRepo == nil {
+		return
+	}
+
+	// Build a serializable summary of completed cycles
+	type cycleSummary struct {
+		Success       bool   `json:"success"`
+		ChainID       string `json:"chain_id"`
+		ChainPlatform string `json:"chain_platform"`
+		CycleID       string `json:"cycle_id"`
+	}
+
+	summary := make(map[string]*cycleSummary)
+	for ck, r := range cycles {
+		summary[ck] = &cycleSummary{
+			Success:       r.Success,
+			ChainID:       r.ChainID,
+			ChainPlatform: r.ChainPlatform,
+			CycleID:       r.CycleID,
+		}
+	}
+
+	summaryJSON, err := json.Marshal(summary)
+	if err != nil {
+		a.logger.Printf("WARNING: Failed to marshal completed cycles for %s: %v", intentID, err)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := a.persistenceRepo.UpdateCompletedCycles(ctx, intentID, summaryJSON); err != nil {
+		a.logger.Printf("WARNING: Failed to persist completed cycles for %s: %v", intentID, err)
+	}
+}
+
+// deletePendingState removes the pending state from database after successful write-back
+func (a *MultiLegAggregator) deletePendingState(intentID string) {
+	if a.persistenceRepo == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := a.persistenceRepo.DeletePendingState(ctx, intentID); err != nil {
+		a.logger.Printf("WARNING: Failed to delete pending state for %s: %v", intentID, err)
+	}
+}
+
+// LoadPendingFromDB reloads incomplete multi-leg aggregation state from the database.
+// Called on validator startup to resume aggregation that was in-flight when the process
+// crashed or was restarted.
+func (a *MultiLegAggregator) LoadPendingFromDB() error {
+	if a.persistenceRepo == nil {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	states, err := a.persistenceRepo.LoadAllPending(ctx)
+	if err != nil {
+		return fmt.Errorf("load pending multi-leg states: %w", err)
+	}
+
+	if len(states) == 0 {
+		return nil
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	loaded := 0
+	for _, state := range states {
+		if _, exists := a.pending[state.IntentID]; exists {
+			continue // Already registered in memory
+		}
+
+		var legMapping map[int]LegChainInfo
+		if err := json.Unmarshal(state.LegMapping, &legMapping); err != nil {
+			a.logger.Printf("WARNING: Failed to unmarshal leg mapping for %s: %v", state.IntentID, err)
+			continue
+		}
+
+		var legIndicesPerChain map[string][]int
+		if err := json.Unmarshal(state.LegIndicesPerChain, &legIndicesPerChain); err != nil {
+			a.logger.Printf("WARNING: Failed to unmarshal leg indices for %s: %v", state.IntentID, err)
+			continue
+		}
+
+		a.pending[state.IntentID] = &PendingMultiLeg{
+			IntentID:           state.IntentID,
+			OperationID:        state.OperationID,
+			TotalLegs:          state.TotalLegs,
+			ExecutionMode:      state.ExecutionMode,
+			CompletedCycles:    make(map[string]*UnifiedProofCycleResult),
+			LegMapping:         legMapping,
+			CreatedAt:          state.CreatedAt,
+			LegIndicesPerChain: legIndicesPerChain,
+		}
+		loaded++
+	}
+
+	if loaded > 0 {
+		a.logger.Printf("Loaded %d pending multi-leg intents from database", loaded)
+	}
+
+	// Cleanup expired entries
+	go func() {
+		cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanCancel()
+		if n, err := a.persistenceRepo.CleanupExpired(cleanCtx); err == nil && n > 0 {
+			a.logger.Printf("Cleaned up %d expired multi-leg pending entries", n)
+		}
+	}()
+
+	return nil
+}
+
+// =============================================================================
 // HELPER FUNCTIONS
 // =============================================================================
 
 // findObservationForLeg finds the observation result for a specific leg
-// within a chain group's cycle result
+// within a chain group's cycle result.
+//
+// For same-chain multi-leg intents (multiple legs on the same chain), the chain group
+// has multiple tx hashes and thus multiple observations. We use positional matching:
+// the leg indices in the chain group are sorted, and the observation at position N
+// corresponds to the leg at position N in the sorted leg indices list.
+//
+// This fixes GAP 1 where all legs in a same-chain group would incorrectly receive
+// the same observation (observation[0]) because chain name/ID matching is ambiguous.
 func findObservationForLeg(
 	cycleResult *UnifiedProofCycleResult,
 	legIdx int,
 	legInfo LegChainInfo,
+	legIndicesForChain []int,
 ) *chain.ObservationResult {
 	if cycleResult == nil || len(cycleResult.ObservationResults) == 0 {
 		return nil
 	}
 
-	// If chain group has multiple observations, try to match by chain metadata
-	for _, obs := range cycleResult.ObservationResults {
-		if obs.ChainName == legInfo.ChainName && obs.ChainIDNumeric == legInfo.ChainID {
-			return obs
+	// Positional matching: find this leg's position within the chain group's sorted leg indices
+	if len(legIndicesForChain) > 1 && len(cycleResult.ObservationResults) > 1 {
+		for pos, idx := range legIndicesForChain {
+			if idx == legIdx && pos < len(cycleResult.ObservationResults) {
+				return cycleResult.ObservationResults[pos]
+			}
 		}
 	}
 
-	// Fallback: use first observation (single-leg chain group)
+	// Also try metadata-based leg_indices matching (from proof cycle result metadata)
+	if cycleResult.Metadata != nil {
+		if legIndicesStr, ok := cycleResult.Metadata["leg_indices"]; ok && legIndicesStr != "" {
+			indices := parseCommaSeparatedInts(legIndicesStr)
+			for pos, idx := range indices {
+				if idx == legIdx && pos < len(cycleResult.ObservationResults) {
+					return cycleResult.ObservationResults[pos]
+				}
+			}
+		}
+	}
+
+	// Single-leg chain group or fallback: use first observation
 	return cycleResult.ObservationResults[0]
 }
 
-// computeObservationEventsHash computes a hash of observation event logs
+// parseCommaSeparatedInts parses a comma-separated string of integers (e.g., "0,3,5")
+func parseCommaSeparatedInts(s string) []int {
+	parts := strings.Split(s, ",")
+	var result []int
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		var n int
+		if _, err := fmt.Sscanf(p, "%d", &n); err == nil {
+			result = append(result, n)
+		}
+	}
+	return result
+}
+
+// computeObservationEventsHash computes a deterministic hash of observation event logs.
+// Logs are sorted by (Address, Topics[0], LogIndex) before hashing to ensure
+// determinism across validators that may receive logs in different orders (GAP 13).
 func computeObservationEventsHash(logs []chain.EventLog) [32]byte {
 	if len(logs) == 0 {
 		return [32]byte{}
 	}
 
+	// Sort logs deterministically before hashing
+	sorted := make([]chain.EventLog, len(logs))
+	copy(sorted, logs)
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].Address != sorted[j].Address {
+			return sorted[i].Address < sorted[j].Address
+		}
+		ti, tj := "", ""
+		if len(sorted[i].Topics) > 0 {
+			ti = sorted[i].Topics[0]
+		}
+		if len(sorted[j].Topics) > 0 {
+			tj = sorted[j].Topics[0]
+		}
+		if ti != tj {
+			return ti < tj
+		}
+		return sorted[i].LogIndex < sorted[j].LogIndex
+	})
+
 	data := make([]byte, 0, 256)
 	data = append(data, []byte("CERTEN_OBS_EVENTS_V1")...)
-	for _, l := range logs {
+	for _, l := range sorted {
 		data = append(data, []byte(l.Address)...)
 		for _, topic := range l.Topics {
 			data = append(data, []byte(topic)...)

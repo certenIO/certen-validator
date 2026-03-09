@@ -16,6 +16,7 @@ type Repositories struct {
 	Consensus      *ConsensusRepository // Consensus entries and batch attestations
 	Unified        *UnifiedRepository   // Multi-chain unified attestations and chain execution results
 	IntentLifecycle *IntentLifecycleRepository // Unified intent lifecycle status tracking
+	MultiLeg       *MultiLegRepository  // Multi-leg aggregation state persistence (GAP 4)
 }
 
 // NewRepositories creates all repositories with the given client
@@ -30,5 +31,6 @@ func NewRepositories(client *Client) *Repositories {
 		Consensus:      NewConsensusRepository(client),
 		Unified:        NewUnifiedRepository(client.DB()),       // Multi-chain unified tables
 		IntentLifecycle: NewIntentLifecycleRepository(client),   // Intent lifecycle tracking
+		MultiLeg:       NewMultiLegRepository(client.DB()),      // Multi-leg aggregation persistence
 	}
 }
