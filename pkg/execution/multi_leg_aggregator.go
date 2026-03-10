@@ -670,6 +670,14 @@ func (a *MultiLegAggregator) buildMultiLegProofContext(
 	ctx.EventCount = totalEvents
 	ctx.EventsVerified = totalEvents > 0
 
+	// Fallback for transfer_executed_hash: if no GovernanceExecuted event found,
+	// use the primary EVM leg's tx hash. In the multi-leg anchor v4 flow,
+	// createAnchorWithLegs IS the governance execution and emits AnchorCreated/
+	// LegsAnchored events rather than GovernanceExecuted.
+	if ctx.TransferExecutedHash == "" && primaryResult != nil && len(primaryResult.ObservationResults) > 0 {
+		ctx.TransferExecutedHash = primaryResult.ObservationResults[0].TxHash
+	}
+
 	return ctx
 }
 
