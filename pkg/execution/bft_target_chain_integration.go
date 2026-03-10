@@ -1841,15 +1841,15 @@ func (btce *BFTTargetChainExecutor) executeNearOperations(
 						targetAddr = nearLeg.Target.Hex()
 					}
 
-					// Convert amountWei (18 decimals) to yoctoNEAR (24 decimals)
-					// Web app sends amounts in 18-decimal "wei" format, NEAR uses 24-decimal yoctoNEAR
+					// The web app already sends NEAR amounts in yoctoNEAR (24 decimals) via amountWei.
+					// No conversion needed — amountWei == amount_yoctoNEAR for NEAR legs.
 					targetValue := big.NewInt(1)
 					if nearLeg.Value != nil {
-						targetValue = new(big.Int).Mul(nearLeg.Value, big.NewInt(1_000_000)) // * 10^6
+						targetValue = new(big.Int).Set(nearLeg.Value)
 					}
 
-					btce.logger.Printf("💱 [NEAR-EXEC] Governance: target=%s deposit=%s yoctoNEAR (converted from %s wei)",
-						targetAddr, targetValue.String(), nearLeg.Value.String())
+					btce.logger.Printf("💱 [NEAR-EXEC] Governance: target=%s deposit=%s yoctoNEAR",
+						targetAddr, targetValue.String())
 
 					// Build ADIGovernanceProof (pass deposit so authority level matches contract thresholds)
 					accountProof := btce.buildNearAccountProof(
