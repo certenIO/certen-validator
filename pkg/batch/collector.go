@@ -61,6 +61,10 @@ type TransactionData struct {
 	TokenSymbol     string     // Token symbol (e.g., 'ACME', 'ETH')
 	AdiURL          string     // ADI URL for the account
 	CreatedAtClient *time.Time // Client-side creation timestamp
+
+	// Multi-Leg Support: Links transaction to specific leg and parent intent
+	LegID            string // UUID of the specific leg (optional)
+	MultiLegIntentID string // Intent ID for multi-leg grouping (optional)
 }
 
 // Collector manages transaction batching for anchoring
@@ -288,6 +292,12 @@ func (c *Collector) addToBatch(ctx context.Context, batch *activeBatch, tx *Tran
 	}
 	if tx.CreatedAtClient != nil {
 		dbTx.CreatedAtClient = tx.CreatedAtClient
+	}
+	if tx.LegID != "" {
+		dbTx.LegID = &tx.LegID
+	}
+	if tx.MultiLegIntentID != "" {
+		dbTx.MultiLegIntentID = &tx.MultiLegIntentID
 	}
 
 	storedTx, err := c.repos.Batches.AddTransaction(ctx, dbTx)

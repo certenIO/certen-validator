@@ -1119,6 +1119,16 @@ func (id *IntentDiscovery) processIntent(intent *CertenIntent, blockHeight uint6
 // PHASE 5: This enables PostgreSQL persistence and CertenAnchorProof assembly
 // govProof is the generated G0/G1/G2 governance proof (may be nil if not generated)
 func (id *IntentDiscovery) routeIntentToBatchSystem(intent *CertenIntent, certenProof *proof.CertenProof, govProof *proof.GovernanceProof, proofClass string, blockHeight uint64) error {
+	// Check if this is a multi-leg intent that should create per-leg batch transactions
+	if len(intent.CrossChainData) > 0 {
+		var ccEnvelope consensus.CrossChainEnvelope
+		if err := json.Unmarshal(intent.CrossChainData, &ccEnvelope); err == nil && len(ccEnvelope.Legs) > 1 {
+			id.logger.Printf("📦 [MULTI-LEG] Routing %d legs as separate batch transactions for intent %s",
+				len(ccEnvelope.Legs), intent.IntentID)
+			return id.routeMultiLegToBatchSystem(intent, ccEnvelope.Legs, certenProof, govProof, proofClass, blockHeight)
+		}
+	}
+
 	// Convert intent to batch transaction data
 	txData, err := id.convertIntentToTransactionData(intent, certenProof, govProof)
 	if err != nil {
@@ -1175,6 +1185,67 @@ func (id *IntentDiscovery) routeIntentToBatchSystem(intent *CertenIntent, certen
 		}
 	}
 
+	return nil
+}
+
+// routeMultiLegToBatchSystem creates separate batch transactions for each leg of a multi-leg intent
+func (id *IntentDiscovery) routeMultiLegToBatchSystem(
+	intent *CertenIntent,
+	legs []consensus.CCLeg,
+	certenProof *proof.CertenProof,
+	govProof *proof.GovernanceProof,
+	proofClass string,
+	blockHeight uint64,
+) error {
+	for i, leg := range legs {
+		txData, err := id.convertLegToTransactionData(intent, &leg, i, certenProof, govProof)
+		if err != nil {
+			id.logger.Printf("⚠️ [MULTI-LEG] Failed to convert leg %d: %v", i, err)
+			continue
+		}
+		// Tag with multi-leg metadata
+		txData.MultiLegIntentID = intent.IntentID
+		txData.LegID = leg.LegID
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		switch proofClass {
+		case "on_demand":
+			if id.onDemandHandler == nil {
+				cancel()
+				return fmt.Errorf("on_demand but OnDemandHandler not configured")
+			}
+			result, err := id.onDemandHandler.ProcessTransaction(ctx, txData)
+			if err != nil {
+				cancel()
+				return fmt.Errorf("on_demand handler failed for leg %d: %w", i, err)
+			}
+			if result.AnchorTriggered {
+				id.logger.Printf("⚡ [MULTI-LEG] Leg %d anchor triggered (batch: %s)", i, result.BatchResult.BatchID)
+			}
+
+		case "on_cadence":
+			if id.batchCollector == nil {
+				cancel()
+				return fmt.Errorf("on_cadence but BatchCollector not configured")
+			}
+			result, err := id.batchCollector.AddOnCadenceTransaction(ctx, txData)
+			if err != nil {
+				cancel()
+				return fmt.Errorf("batch collector failed for leg %d: %w", i, err)
+			}
+			id.logger.Printf("📦 [MULTI-LEG] Leg %d added to batch %s (chain: %s)", i, result.BatchID, leg.Chain)
+
+		default:
+			if id.batchCollector != nil {
+				_, err := id.batchCollector.AddOnCadenceTransaction(ctx, txData)
+				if err != nil {
+					cancel()
+					return fmt.Errorf("batch collector (default) failed for leg %d: %w", i, err)
+				}
+			}
+		}
+		cancel()
+	}
 	return nil
 }
 

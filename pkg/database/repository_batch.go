@@ -346,6 +346,14 @@ func (r *BatchRepository) AddTransaction(ctx context.Context, input *NewBatchTra
 		createdAtClient = sql.NullTime{Time: *input.CreatedAtClient, Valid: true}
 	}
 
+	var legID, multiLegIntentID sql.NullString
+	if input.LegID != nil {
+		legID = sql.NullString{String: *input.LegID, Valid: true}
+	}
+	if input.MultiLegIntentID != nil {
+		multiLegIntentID = sql.NullString{String: *input.MultiLegIntentID, Valid: true}
+	}
+
 	tx := &BatchTransaction{
 		BatchID:         input.BatchID,
 		AccumTxHash:     input.AccumTxHash,
@@ -369,8 +377,10 @@ func (r *BatchRepository) AddTransaction(ctx context.Context, input *NewBatchTra
 		ToAddress:       toAddress,
 		Amount:          amount,
 		TokenSymbol:     tokenSymbol,
-		AdiURL:          adiURL,
-		CreatedAtClient: createdAtClient,
+		AdiURL:           adiURL,
+		CreatedAtClient:  createdAtClient,
+		LegID:            legID,
+		MultiLegIntentID: multiLegIntentID,
 	}
 
 	query := `
@@ -380,8 +390,9 @@ func (r *BatchRepository) AddTransaction(ctx context.Context, input *NewBatchTra
 			governance_proof, governance_level, governance_valid,
 			intent_type, intent_data, user_id, intent_id,
 			from_chain, to_chain, from_address, to_address, amount, token_symbol, adi_url, created_at_client,
+			leg_id, multi_leg_intent_id,
 			created_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
 		RETURNING id, created_at`
 
 	err = r.client.QueryRowContext(ctx, query,
@@ -390,6 +401,7 @@ func (r *BatchRepository) AddTransaction(ctx context.Context, input *NewBatchTra
 		tx.GovProof, tx.GovLevel, tx.GovValid,
 		tx.IntentType, tx.IntentData, tx.UserID, tx.IntentID,
 		tx.FromChain, tx.ToChain, tx.FromAddress, tx.ToAddress, tx.Amount, tx.TokenSymbol, tx.AdiURL, tx.CreatedAtClient,
+		tx.LegID, tx.MultiLegIntentID,
 		tx.CreatedAt,
 	).Scan(&tx.ID, &tx.CreatedAt)
 

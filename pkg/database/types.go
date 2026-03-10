@@ -106,6 +106,10 @@ type BatchTransaction struct {
 	TokenSymbol     sql.NullString `db:"token_symbol" json:"token_symbol,omitempty"`
 	AdiURL          sql.NullString `db:"adi_url" json:"adi_url,omitempty"`
 	CreatedAtClient sql.NullTime   `db:"created_at_client" json:"created_at_client,omitempty"`
+
+	// Multi-Leg Support
+	LegID            sql.NullString `db:"leg_id" json:"leg_id,omitempty"`
+	MultiLegIntentID sql.NullString `db:"multi_leg_intent_id" json:"multi_leg_intent_id,omitempty"`
 }
 
 // GetMerklePath deserializes the merkle path from JSON
@@ -344,6 +348,10 @@ type NewBatchTransaction struct {
 	TokenSymbol     *string    // Token symbol (e.g., 'ACME', 'ETH')
 	AdiURL          *string    // ADI URL for the account
 	CreatedAtClient *time.Time // Client-side creation timestamp
+
+	// Multi-Leg Support
+	LegID            *string // UUID of the specific leg (optional)
+	MultiLegIntentID *string // Parent intent ID for multi-leg grouping (optional)
 }
 
 // NewAnchorRecord is used to create a new anchor record
