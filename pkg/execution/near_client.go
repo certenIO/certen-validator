@@ -448,6 +448,31 @@ func (nc *NearClient) GetAnchorData(ctx context.Context, contractID string, anch
 	return anchor, nil
 }
 
+// GetGovernanceNonce queries the current governance nonce from a user's NEAR account contract.
+// The contract tracks nonces to prevent replay attacks; each governance call must use nonce > current.
+func (nc *NearClient) GetGovernanceNonce(ctx context.Context, userAccountID string) (uint64, error) {
+	args := map[string]interface{}{}
+	argsJSON, _ := json.Marshal(args)
+
+	resultBytes, err := nc.callViewFunction(ctx, userAccountID, "get_governance_nonce", argsJSON)
+	if err != nil {
+		// If the method doesn't exist, the account may use a different contract version
+		// Fall back to nonce 0 (will produce nonce=1 in the caller)
+		log.Printf("⚠️ [NEAR] get_governance_nonce failed for %s: %v (using fallback nonce=0)", userAccountID, err)
+		return 0, nil
+	}
+
+	// Contract returns a JSON number (u64)
+	var nonce uint64
+	if err := json.Unmarshal(resultBytes, &nonce); err != nil {
+		log.Printf("⚠️ [NEAR] Failed to parse governance nonce from %s: %v (raw: %s)", userAccountID, err, string(resultBytes))
+		return 0, nil
+	}
+
+	log.Printf("📋 [NEAR] Current governance nonce for %s: %d", userAccountID, nonce)
+	return nonce, nil
+}
+
 // CheckAccountExists checks if a NEAR account exists.
 func (nc *NearClient) CheckAccountExists(ctx context.Context, accountID string) (bool, error) {
 	params := map[string]interface{}{

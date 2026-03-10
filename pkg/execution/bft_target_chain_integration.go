@@ -1851,6 +1851,13 @@ func (btce *BFTTargetChainExecutor) executeNearOperations(
 					btce.logger.Printf("💱 [NEAR-EXEC] Governance: target=%s deposit=%s yoctoNEAR",
 						targetAddr, targetValue.String())
 
+					// Query current governance nonce from user account contract
+					currentNonce, nonceErr := nearClient.GetGovernanceNonce(ctx, userAccountID)
+					if nonceErr != nil {
+						btce.logger.Printf("⚠️ [NEAR-EXEC] Failed to query governance nonce: %v (using fallback)", nonceErr)
+					}
+					nextNonce := currentNonce + 1
+
 					// Build ADIGovernanceProof (pass deposit so authority level matches contract thresholds)
 					accountProof := btce.buildNearAccountProof(
 						bundleIdHash, certenProof, adiURL,
@@ -1858,6 +1865,7 @@ func (btce *BFTTargetChainExecutor) executeNearOperations(
 						anchorData.CrossChainCommitment,
 						anchorData.GovernanceRoot,
 						targetValue,
+						nextNonce,
 					)
 
 					nearCall := NearCallJSON{
@@ -2018,6 +2026,7 @@ func nearAuthorityLevelForDeposit(depositYocto *big.Int) string {
 
 // buildNearAccountProof constructs the NearADIGovernanceProofJSON for Step 3.
 // Mirrors buildTronAccountProof — computes a 4-leaf merkle proof for adiURL verification.
+// governanceNonce must be > the contract's current nonce (queried via GetGovernanceNonce).
 func (btce *BFTTargetChainExecutor) buildNearAccountProof(
 	bundleID [32]byte,
 	certenProof *proof.CertenProof,
@@ -2026,10 +2035,11 @@ func (btce *BFTTargetChainExecutor) buildNearAccountProof(
 	ccCommitment [32]byte,
 	govRoot [32]byte,
 	depositYocto *big.Int,
+	governanceNonce uint64,
 ) NearADIGovernanceProofJSON {
 	// Calculate authority level matching contract deposit thresholds
 	requiredLevel := nearAuthorityLevelForDeposit(depositYocto)
-	log.Printf("🔐 [NEAR-AUTH] Deposit %s yoctoNEAR → authority level: %s", depositYocto.String(), requiredLevel)
+	log.Printf("🔐 [NEAR-AUTH] Deposit %s yoctoNEAR → authority level: %s, nonce: %d", depositYocto.String(), requiredLevel, governanceNonce)
 
 	// Build merkle proof: same 4-leaf tree as TRON/EVM
 	// proof[0] = operationCommitment (sibling at level 0)
@@ -2092,8 +2102,8 @@ func (btce *BFTTargetChainExecutor) buildNearAccountProof(
 		ValidatorSignatures: validatorSigs,
 		TimestampSec:        uint64(now.Unix()),
 		ExpiresAtSec:        uint64(expiresAt.Unix()),
-		Nonce:               1, // Must be > current nonce (starts at 0)
-		RequiredLevel:       requiredLevel, // Matches deposit-based contract thresholds
+		Nonce:               governanceNonce, // Must be > current nonce (queried from contract)
+		RequiredLevel:       requiredLevel,    // Matches deposit-based contract thresholds
 	}
 }
 

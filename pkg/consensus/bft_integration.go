@@ -1208,8 +1208,18 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 					// Parse governance tx hashes into per-chain groups
 					chainTxHashes := parseMultiChainTxHashes(anchorRes.GovernanceTxHash)
 					if len(chainTxHashes) == 0 {
-						// Fallback: use create tx hashes
+						// Fallback: use create tx hashes if no governance hashes at all
 						chainTxHashes = parseMultiChainTxHashes(anchorRes.CreateTxHash)
+					} else {
+						// For chains with failed governance (filtered by _failed), fall back
+						// to their create tx hashes so the proof cycle can still observe them
+						createTxHashes := parseMultiChainTxHashes(anchorRes.CreateTxHash)
+						for ck, txHashes := range createTxHashes {
+							if _, hasGov := chainTxHashes[ck]; !hasGov {
+								bv.logger.Printf("🔄 [MULTI-LEG-PROOF] Chain %s governance failed, using create tx for observation", ck)
+								chainTxHashes[ck] = txHashes
+							}
+						}
 					}
 
 					// Build leg info from CrossChainData
