@@ -20,6 +20,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/certen/independant-validator/pkg/accumulate"
 	"github.com/certen/independant-validator/pkg/batch"
 	"github.com/certen/independant-validator/pkg/commitment"
@@ -1203,9 +1205,9 @@ func (id *IntentDiscovery) routeMultiLegToBatchSystem(
 			id.logger.Printf("⚠️ [MULTI-LEG] Failed to convert leg %d: %v", i, err)
 			continue
 		}
-		// Tag with multi-leg metadata
+		// Tag with multi-leg metadata (generate UUID for leg_id since DB column is UUID type)
 		txData.MultiLegIntentID = intent.IntentID
-		txData.LegID = leg.LegID
+		txData.LegID = uuid.New().String()
 
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		switch proofClass {
