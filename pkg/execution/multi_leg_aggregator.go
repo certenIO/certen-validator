@@ -478,10 +478,85 @@ func (a *MultiLegAggregator) buildMultiLegProofContext(
 		IntentID: pending.IntentID,
 	}
 
-	// Extract data from primary chain group's request if available
+	// Extract data from the primary chain group's cycle result (leg 0's chain)
+	var primaryResult *UnifiedProofCycleResult
 	if legInfo, ok := pending.LegMapping[0]; ok {
-		if cycleResult, ok := pending.CompletedCycles[legInfo.ChainKey]; ok {
-			ctx.ProofArtifactID = cycleResult.ProofID.String()
+		if cr, ok := pending.CompletedCycles[legInfo.ChainKey]; ok {
+			primaryResult = cr
+			ctx.ProofArtifactID = cr.ProofID.String()
+		}
+	}
+
+	// If no leg-0 result, use lexicographically first chain key
+	if primaryResult == nil {
+		chainKeys := make([]string, 0, len(pending.CompletedCycles))
+		for ck := range pending.CompletedCycles {
+			chainKeys = append(chainKeys, ck)
+		}
+		sort.Strings(chainKeys)
+		if len(chainKeys) > 0 {
+			primaryResult = pending.CompletedCycles[chainKeys[0]]
+			ctx.ProofArtifactID = primaryResult.ProofID.String()
+		}
+	}
+
+	// Populate from the primary result's commitment data (passed through from BFT consensus)
+	if primaryResult != nil && primaryResult.CommitmentData != nil {
+		cm := primaryResult.CommitmentData
+
+		// Intent references
+		if txh, ok := cm["accumulateTxHash"].(string); ok && txh != "" {
+			ctx.IntentTxHash = txh
+		}
+		if h, ok := cm["accumulateBlockHeight"].(float64); ok {
+			ctx.IntentBlock = uint64(h)
+		}
+
+		// Anchor contract
+		if ac, ok := cm["anchorContract"].(string); ok && ac != "" {
+			ctx.Commitment = &ExecutionCommitment{
+				TargetContract: common.HexToAddress(ac),
+			}
+		}
+
+		// Operation ID
+		if opID, ok := cm["operationID"].(string); ok && opID != "" {
+			if ctx.Commitment == nil {
+				ctx.Commitment = &ExecutionCommitment{}
+			}
+			ctx.Commitment.IntentTxHash = opID
+		}
+
+		// Step details from commitment
+		if step1, ok := cm["step1"].(map[string]interface{}); ok {
+			if s, ok := step1["selector"].(string); ok {
+				ctx.Step1Selector = s
+			}
+			if c, ok := step1["contract"].(string); ok {
+				ctx.Step1Contract = c
+			}
+		}
+		if step2, ok := cm["step2"].(map[string]interface{}); ok {
+			if s, ok := step2["selector"].(string); ok {
+				ctx.Step2Selector = s
+			}
+			if c, ok := step2["contract"].(string); ok {
+				ctx.Step2Contract = c
+			}
+		}
+		if step3, ok := cm["step3"].(map[string]interface{}); ok {
+			if s, ok := step3["selector"].(string); ok {
+				ctx.Step3Selector = s
+			}
+			if c, ok := step3["contract"].(string); ok {
+				ctx.Step3Contract = c
+			}
+			if ft, ok := step3["finalTarget"].(string); ok {
+				ctx.Step3FinalTarget = ft
+			}
+			if fv, ok := step3["finalValue"].(string); ok {
+				ctx.Step3FinalValue = fv
+			}
 		}
 	}
 

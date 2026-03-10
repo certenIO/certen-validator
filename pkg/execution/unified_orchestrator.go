@@ -279,6 +279,9 @@ type UnifiedProofCycleResult struct {
 
 	// Metadata propagated from the request (e.g., multi_leg, chain_key, leg_indices)
 	Metadata map[string]string `json:"metadata,omitempty"`
+
+	// CommitmentData from the original request, propagated for multi-leg aggregator write-back
+	CommitmentData map[string]interface{} `json:"commitment_data,omitempty"`
 }
 
 // =============================================================================
@@ -392,9 +395,10 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 
 	// Create result
 	result := &UnifiedProofCycleResult{
-		CycleID:   req.CycleID,
-		StartedAt: time.Now().UTC(),
-		Metadata:  req.Metadata,
+		CycleID:        req.CycleID,
+		StartedAt:      time.Now().UTC(),
+		Metadata:       req.Metadata,
+		CommitmentData: req.CommitmentData,
 	}
 
 	// Get strategies for target chain
@@ -688,7 +692,7 @@ func (o *UnifiedOrchestrator) persistChainExecution(ctx context.Context, cycle *
 func getNetworkName(chainID string) string {
 	networkNames := map[string]string{
 		"1":          "ethereum-mainnet",
-		"11155111":   "sepolia",
+		"11155111":   "ethereum-sepolia",
 		"137":        "polygon-mainnet",
 		"80001":      "polygon-mumbai",
 		"80002":      "polygon-amoy",
