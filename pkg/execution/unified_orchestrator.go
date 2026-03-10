@@ -2462,18 +2462,18 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 		SignerID:         o.config.ValidatorID,
 	}
 
+	// Serialize bundle to compact JSON (same format used for compression)
+	uncompressedData, err := json.Marshal(bundle)
+	if err != nil {
+		return fmt.Errorf("serialize bundle: %w", err)
+	}
+	bundleHash := sha256.Sum256(uncompressedData)
+
 	// Compress bundle to gzipped JSON
 	compressedData, err := bundle.ToCompressedJSON()
 	if err != nil {
 		return fmt.Errorf("compress bundle: %w", err)
 	}
-
-	// Compute hash of uncompressed JSON for verification
-	uncompressedData, err := bundle.ToJSON()
-	if err != nil {
-		return fmt.Errorf("serialize bundle: %w", err)
-	}
-	bundleHash := sha256.Sum256(uncompressedData)
 
 	// Step 3: Persist to proof_bundles table
 	includesChained := bundle.ProofComponents.ChainedProof != nil
