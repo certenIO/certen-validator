@@ -10,6 +10,7 @@ package execution
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
 
 	chain "github.com/certen/independant-validator/pkg/chain/strategy"
 	"github.com/certen/independant-validator/pkg/database"
@@ -468,7 +470,9 @@ func (a *MultiLegAggregator) buildUnifiedAttestationBundle(
 	}
 }
 
-// buildMultiLegProofContext creates a ComprehensiveProofContext for multi-leg write-back
+// buildMultiLegProofContext creates a ComprehensiveProofContext for multi-leg write-back.
+// This mirrors the single-leg path in unified_orchestrator.go buildProofContextFromCycle()
+// to ensure all write-back fields are populated identically.
 func (a *MultiLegAggregator) buildMultiLegProofContext(
 	pending *PendingMultiLeg,
 	legResults []LegResult,
@@ -487,7 +491,7 @@ func (a *MultiLegAggregator) buildMultiLegProofContext(
 		}
 	}
 
-	// If no leg-0 result, use lexicographically first chain key
+	// If no leg-0 result, use lexicographically first chain key for determinism
 	if primaryResult == nil {
 		chainKeys := make([]string, 0, len(pending.CompletedCycles))
 		for ck := range pending.CompletedCycles {
@@ -500,65 +504,171 @@ func (a *MultiLegAggregator) buildMultiLegProofContext(
 		}
 	}
 
-	// Populate from the primary result's commitment data (passed through from BFT consensus)
-	if primaryResult != nil && primaryResult.CommitmentData != nil {
-		cm := primaryResult.CommitmentData
+	if primaryResult == nil {
+		return ctx
+	}
 
-		// Intent references
-		if txh, ok := cm["accumulateTxHash"].(string); ok && txh != "" {
-			ctx.IntentTxHash = txh
-		}
-		if h, ok := cm["accumulateBlockHeight"].(float64); ok {
-			ctx.IntentBlock = uint64(h)
-		}
+	cm := primaryResult.CommitmentData
+	if cm == nil {
+		cm = make(map[string]interface{})
+	}
 
-		// Anchor contract
-		if ac, ok := cm["anchorContract"].(string); ok && ac != "" {
-			ctx.Commitment = &ExecutionCommitment{
-				TargetContract: common.HexToAddress(ac),
-			}
-		}
+	// --- Intent references ---
+	if txh, ok := cm["accumulateTxHash"].(string); ok && txh != "" {
+		ctx.IntentTxHash = txh
+	}
+	// AccumulateBlockHeight may arrive as uint64 or float64 (JSON roundtrip)
+	if h, ok := cm["accumulateBlockHeight"].(uint64); ok {
+		ctx.IntentBlock = h
+	} else if h, ok := cm["accumulateBlockHeight"].(float64); ok {
+		ctx.IntentBlock = uint64(h)
+	}
 
-		// Operation ID
-		if opID, ok := cm["operationID"].(string); ok && opID != "" {
-			if ctx.Commitment == nil {
-				ctx.Commitment = &ExecutionCommitment{}
-			}
-			ctx.Commitment.IntentTxHash = opID
+	// Derive intent_hash from intent_tx_hash (hex decode to [32]byte)
+	if ctx.IntentTxHash != "" && ctx.IntentTxHash != pending.IntentID {
+		hashBytes, _ := hex.DecodeString(strings.TrimPrefix(ctx.IntentTxHash, "0x"))
+		if len(hashBytes) == 32 {
+			copy(ctx.IntentHash[:], hashBytes)
 		}
+	}
 
-		// Step details from commitment
-		if step1, ok := cm["step1"].(map[string]interface{}); ok {
-			if s, ok := step1["selector"].(string); ok {
-				ctx.Step1Selector = s
-			}
-			if c, ok := step1["contract"].(string); ok {
-				ctx.Step1Contract = c
-			}
+	// --- Execution Commitment ---
+	ctx.Commitment = &ExecutionCommitment{}
+
+	// Anchor contract
+	if ac, ok := cm["anchorContract"].(string); ok && ac != "" {
+		ctx.Commitment.TargetContract = common.HexToAddress(ac)
+	}
+
+	// Commitment hash
+	if ch, ok := cm["commitmentHash"].(string); ok && ch != "" {
+		if decoded, err := hex.DecodeString(ch); err == nil && len(decoded) == 32 {
+			copy(ctx.Commitment.CommitmentHash[:], decoded)
 		}
-		if step2, ok := cm["step2"].(map[string]interface{}); ok {
-			if s, ok := step2["selector"].(string); ok {
-				ctx.Step2Selector = s
-			}
-			if c, ok := step2["contract"].(string); ok {
-				ctx.Step2Contract = c
-			}
+	}
+
+	// Bundle ID as OperationID (matches single-leg: ctx.Commitment.OperationID = req.MerkleRoot)
+	if bid, ok := cm["bundleID"].(string); ok && bid != "" {
+		if decoded, err := hex.DecodeString(bid); err == nil && len(decoded) == 32 {
+			copy(ctx.Commitment.OperationID[:], decoded)
 		}
-		if step3, ok := cm["step3"].(map[string]interface{}); ok {
-			if s, ok := step3["selector"].(string); ok {
-				ctx.Step3Selector = s
-			}
-			if c, ok := step3["contract"].(string); ok {
-				ctx.Step3Contract = c
-			}
-			if ft, ok := step3["finalTarget"].(string); ok {
-				ctx.Step3FinalTarget = ft
-			}
-			if fv, ok := step3["finalValue"].(string); ok {
-				ctx.Step3FinalValue = fv
+	}
+
+	// Intent tx hash on commitment for traceability
+	if txh, ok := cm["txHash"].(string); ok {
+		ctx.Commitment.IntentTxHash = txh
+	}
+
+	// Function selector from step1 (primary anchor call)
+	if step1, ok := cm["step1"].(map[string]interface{}); ok {
+		if s, ok := step1["selector"].(string); ok {
+			if decoded, err := hex.DecodeString(s); err == nil && len(decoded) >= 4 {
+				copy(ctx.Commitment.FunctionSelector[:], decoded[:4])
 			}
 		}
 	}
+
+	// Expected value (final transfer amount)
+	if fv, ok := cm["finalValue"].(string); ok && fv != "" && fv != "0" {
+		if val, ok := new(big.Int).SetString(fv, 10); ok {
+			ctx.Commitment.ExpectedValue = val
+		}
+	}
+
+	// --- Step 1/2/3 details ---
+	if step1, ok := cm["step1"].(map[string]interface{}); ok {
+		if s, ok := step1["selector"].(string); ok {
+			ctx.Step1Selector = s
+		}
+		if c, ok := step1["contract"].(string); ok {
+			ctx.Step1Contract = c
+		}
+	}
+	if step2, ok := cm["step2"].(map[string]interface{}); ok {
+		if s, ok := step2["selector"].(string); ok {
+			ctx.Step2Selector = s
+		}
+		if c, ok := step2["contract"].(string); ok {
+			ctx.Step2Contract = c
+		}
+	}
+	if step3, ok := cm["step3"].(map[string]interface{}); ok {
+		if s, ok := step3["selector"].(string); ok {
+			ctx.Step3Selector = s
+		}
+		if c, ok := step3["contract"].(string); ok {
+			ctx.Step3Contract = c
+		}
+		// Final target from step3 sub-keys
+		if ft, ok := step3["finalTarget"].(string); ok && ft != "" {
+			ctx.Step3FinalTarget = ft
+		} else if ft, ok := step3["final_target"].(string); ok && ft != "" {
+			ctx.Step3FinalTarget = ft
+		} else if ft, ok := step3["to"].(string); ok && ft != "" {
+			ctx.Step3FinalTarget = ft
+		}
+	}
+
+	// Final target top-level fallback
+	if ctx.Step3FinalTarget == "" {
+		if ft, ok := cm["finalTarget"].(string); ok {
+			ctx.Step3FinalTarget = ft
+		} else if ft, ok := cm["to"].(string); ok {
+			ctx.Step3FinalTarget = ft
+		} else if ft, ok := cm["recipient"].(string); ok {
+			ctx.Step3FinalTarget = ft
+		}
+	}
+
+	// Final value
+	if fv, ok := cm["finalValue"].(string); ok {
+		ctx.Step3FinalValue = fv
+	}
+
+	// Step1 intent hash (bundleID hex)
+	if bid, ok := cm["bundleID"].(string); ok {
+		ctx.Step1IntentHash = bid
+	}
+
+	// Governance proof ref
+	if gr, ok := cm["governanceRoot"].(string); ok && gr != "" {
+		ctx.GovernanceProofRef = gr
+	}
+
+	// --- Event verification from ALL chain group observations ---
+	totalEvents := 0
+	govExecutedTopic := crypto.Keccak256Hash([]byte("GovernanceExecuted(bytes32,address,uint256,bool)"))
+
+	// Iterate chain groups in deterministic order
+	sortedChainKeys := make([]string, 0, len(pending.CompletedCycles))
+	for ck := range pending.CompletedCycles {
+		sortedChainKeys = append(sortedChainKeys, ck)
+	}
+	sort.Strings(sortedChainKeys)
+
+	for _, ck := range sortedChainKeys {
+		cycleResult := pending.CompletedCycles[ck]
+		if cycleResult == nil {
+			continue
+		}
+		for _, obs := range cycleResult.ObservationResults {
+			totalEvents += len(obs.Logs)
+			// Search for GovernanceExecuted event to set transfer_executed_hash
+			if ctx.TransferExecutedHash == "" {
+				for _, l := range obs.Logs {
+					if len(l.Topics) > 0 {
+						topicBytes := common.FromHex(l.Topics[0])
+						if len(topicBytes) == 32 && common.BytesToHash(topicBytes) == govExecutedTopic {
+							ctx.TransferExecutedHash = obs.TxHash
+							break
+						}
+					}
+				}
+			}
+		}
+	}
+	ctx.EventCount = totalEvents
+	ctx.EventsVerified = totalEvents > 0
 
 	return ctx
 }
