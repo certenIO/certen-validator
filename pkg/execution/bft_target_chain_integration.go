@@ -1758,9 +1758,10 @@ func (btce *BFTTargetChainExecutor) executeNearOperations(
 
 	// ========== Step 3: Execute via user's Abstract Account ==========
 	allLegs := btce.extractAllLegsFromIntent(legacyIntent)
+	nearLeg := btce.findLegForChainPrefix(allLegs, "near", 398)
 	govTxHash := "no_governance_needed"
 
-	if len(allLegs) > 0 {
+	if nearLeg != nil {
 		btce.logger.Printf("🏦 [NEAR-EXEC] Step 3: Executing governance proof direct...")
 
 		// Extract NEAR account IDs directly from CrossChainData (not from hex-parsed LegExecution)
@@ -1834,21 +1835,21 @@ func (btce *BFTTargetChainExecutor) executeNearOperations(
 					btce.logger.Printf("⚠️ [NEAR-EXEC] Failed to read anchor data: %v", readErr)
 					govTxHash = "gov_failed_anchor_read_near"
 				} else {
-					// Determine target and value from intent
+					// Determine target and value from the NEAR-specific leg (not allLegs[0])
 					targetAddr := nearToAccountID
-					if targetAddr == "" && len(allLegs) > 0 {
-						targetAddr = allLegs[0].Target.Hex()
+					if targetAddr == "" {
+						targetAddr = nearLeg.Target.Hex()
 					}
 
 					// Convert amountWei (18 decimals) to yoctoNEAR (24 decimals)
 					// Web app sends amounts in 18-decimal "wei" format, NEAR uses 24-decimal yoctoNEAR
 					targetValue := big.NewInt(1)
-					if len(allLegs) > 0 && allLegs[0].Value != nil {
-						targetValue = new(big.Int).Mul(allLegs[0].Value, big.NewInt(1_000_000)) // * 10^6
+					if nearLeg.Value != nil {
+						targetValue = new(big.Int).Mul(nearLeg.Value, big.NewInt(1_000_000)) // * 10^6
 					}
 
 					btce.logger.Printf("💱 [NEAR-EXEC] Governance: target=%s deposit=%s yoctoNEAR (converted from %s wei)",
-						targetAddr, targetValue.String(), allLegs[0].Value.String())
+						targetAddr, targetValue.String(), nearLeg.Value.String())
 
 					// Build ADIGovernanceProof (pass deposit so authority level matches contract thresholds)
 					accountProof := btce.buildNearAccountProof(
@@ -3003,9 +3004,10 @@ func (btce *BFTTargetChainExecutor) executeAptosOperations(
 
 	// ========== Step 3: Execute via user's Abstract Account ==========
 	allLegs := btce.extractAllLegsFromIntent(legacyIntent)
+	aptosLeg := btce.findLegForChainPrefix(allLegs, "aptos", 2) // Aptos testnet chainID=2
 	govTxHash := "no_governance_needed"
 
-	if len(allLegs) > 0 {
+	if aptosLeg != nil {
 		btce.logger.Printf("🏦 [APTOS-EXEC] Step 3: Executing governance proof direct...")
 
 		// Extract Aptos addresses from CrossChainData
@@ -3071,24 +3073,24 @@ func (btce *BFTTargetChainExecutor) executeAptosOperations(
 					btce.logger.Printf("⚠️ [APTOS-EXEC] Failed to read anchor data: %v", readErr)
 					govTxHash = "gov_failed_anchor_read_aptos"
 				} else {
-					// Determine target and value from intent
+					// Determine target and value from the Aptos-specific leg (not allLegs[0])
 					recipientAddr := aptosToAddr
-					if recipientAddr == "" && len(allLegs) > 0 {
-						recipientAddr = allLegs[0].Target.Hex()
+					if recipientAddr == "" {
+						recipientAddr = aptosLeg.Target.Hex()
 					}
 
 					// Convert amountWei (18 decimals) to octas (8 decimals)
 					// EVM uses 10^18, Aptos uses 10^8, so divide by 10^10
 					amountOctas := uint64(1) // Default 1 octa
-					if len(allLegs) > 0 && allLegs[0].Value != nil {
-						weiValue := new(big.Int).Set(allLegs[0].Value)
+					if aptosLeg.Value != nil {
+						weiValue := new(big.Int).Set(aptosLeg.Value)
 						octasValue := new(big.Int).Div(weiValue, big.NewInt(10_000_000_000)) // / 10^10
 						if octasValue.Sign() <= 0 {
 							octasValue = big.NewInt(1) // minimum 1 octa
 						}
 						amountOctas = octasValue.Uint64()
 						btce.logger.Printf("💱 [APTOS-EXEC] Value conversion: %s wei → %d octas",
-							allLegs[0].Value.String(), amountOctas)
+							aptosLeg.Value.String(), amountOctas)
 					}
 
 					btce.logger.Printf("💱 [APTOS-EXEC] Governance: target=%s octas=%d", recipientAddr, amountOctas)
@@ -3524,9 +3526,10 @@ func (btce *BFTTargetChainExecutor) executeSuiOperations(
 
 	// ========== Step 3: Execute via user's Abstract Account ==========
 	allLegs := btce.extractAllLegsFromIntent(legacyIntent)
+	suiLeg := btce.findLegForChainPrefix(allLegs, "sui", 101) // Sui testnet
 	govTxHash := "no_governance_needed"
 
-	if len(allLegs) > 0 {
+	if suiLeg != nil {
 		btce.logger.Printf("🏦 [SUI-EXEC] Step 3: Executing withdraw_sui_direct...")
 
 		// Extract SUI addresses from CrossChainData
@@ -3599,24 +3602,24 @@ func (btce *BFTTargetChainExecutor) executeSuiOperations(
 						anchorGovRoot = anchorData.GovernanceRoot
 					}
 
-					// Determine target and value from intent
+					// Determine target and value from the SUI-specific leg (not allLegs[0])
 					recipientAddr := suiToAddr
-					if recipientAddr == "" && len(allLegs) > 0 {
-						recipientAddr = allLegs[0].Target.Hex()
+					if recipientAddr == "" {
+						recipientAddr = suiLeg.Target.Hex()
 					}
 
 					// Convert amountWei (18 decimals) to MIST (9 decimals)
 					// EVM uses 10^18, SUI uses 10^9, so divide by 10^9
 					amountMist := uint64(1) // Default 1 MIST
-					if len(allLegs) > 0 && allLegs[0].Value != nil {
-						weiValue := new(big.Int).Set(allLegs[0].Value)
+					if suiLeg.Value != nil {
+						weiValue := new(big.Int).Set(suiLeg.Value)
 						mistValue := new(big.Int).Div(weiValue, big.NewInt(1_000_000_000)) // / 10^9
 						if mistValue.Sign() <= 0 {
 							mistValue = big.NewInt(1) // minimum 1 MIST
 						}
 						amountMist = mistValue.Uint64()
 						btce.logger.Printf("💱 [SUI-EXEC] Value conversion: %s wei → %d MIST",
-							allLegs[0].Value.String(), amountMist)
+							suiLeg.Value.String(), amountMist)
 					}
 
 					btce.logger.Printf("💱 [SUI-EXEC] Governance: target=%s mist=%d", recipientAddr, amountMist)
@@ -4242,9 +4245,10 @@ func (btce *BFTTargetChainExecutor) executeTonOperations(
 
 	// ========== Step 3: Execute via user's Abstract Account ==========
 	allLegs := btce.extractAllLegsFromIntent(legacyIntent)
+	tonLeg := btce.findLegForChainPrefix(allLegs, "ton", -239, -3) // TON mainnet=-239, testnet=-3
 	govTxHash := "no_governance_needed"
 
-	if len(allLegs) > 0 {
+	if tonLeg != nil {
 		btce.logger.Printf("🏦 [TON-EXEC] Step 3: Executing governance proof direct...")
 
 		// Extract TON addresses from CrossChainData
@@ -4309,15 +4313,15 @@ func (btce *BFTTargetChainExecutor) executeTonOperations(
 
 					// Convert amountWei (18 decimals) to nanoTON (9 decimals)
 					amountNano := uint64(1) // Default 1 nanoTON
-					if len(allLegs) > 0 && allLegs[0].Value != nil {
-						weiValue := new(big.Int).Set(allLegs[0].Value)
+					if tonLeg.Value != nil {
+						weiValue := new(big.Int).Set(tonLeg.Value)
 						nanoValue := new(big.Int).Div(weiValue, big.NewInt(1_000_000_000))
 						if nanoValue.Sign() <= 0 {
 							nanoValue = big.NewInt(1)
 						}
 						amountNano = nanoValue.Uint64()
 						btce.logger.Printf("💱 [TON-EXEC] Value conversion: %s wei → %d nanoTON",
-							allLegs[0].Value.String(), amountNano)
+							tonLeg.Value.String(), amountNano)
 					}
 
 					btce.logger.Printf("💱 [TON-EXEC] Governance: target=%s nano=%d", recipientAddr, amountNano)
