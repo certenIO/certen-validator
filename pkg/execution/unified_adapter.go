@@ -509,6 +509,42 @@ func (a *UnifiedOrchestratorAdapter) StartMultiLegProofCycle(
 		}
 	}
 
+	// Extract governance and merkle data from commitment (same as single-leg path)
+	var governanceRoot, operationCommitment [32]byte
+	var keyPageThreshold, keyPageKeyCount int
+	if commitmentData != nil {
+		if govRootStr, ok := commitmentData["governanceRoot"].(string); ok && govRootStr != "" {
+			if decoded, err := hexStringToBytes32(govRootStr); err == nil {
+				governanceRoot = decoded
+			}
+		}
+		if opCommitStr, ok := commitmentData["operationCommitment"].(string); ok && opCommitStr != "" {
+			if decoded, err := hexStringToBytes32(opCommitStr); err == nil {
+				operationCommitment = decoded
+			}
+		}
+		if threshold, ok := commitmentData["signatureThreshold"].(float64); ok {
+			keyPageThreshold = int(threshold)
+		}
+		if keyCount, ok := commitmentData["keyPageKeyCount"].(float64); ok {
+			keyPageKeyCount = int(keyCount)
+		}
+		if keyPageThreshold == 0 {
+			keyPageThreshold = 1
+		}
+		if keyPageKeyCount == 0 {
+			keyPageKeyCount = 1
+		}
+	}
+
+	// Compute merkle leaf/root from operation commitment (same as single-leg)
+	var leafHash []byte
+	var merkleRoot [32]byte
+	if operationCommitment != [32]byte{} {
+		leafHash = operationCommitment[:]
+		merkleRoot = operationCommitment
+	}
+
 	req := &UnifiedProofCycleRequest{
 		IntentID:             intentID,
 		BundleID:             bundleID,
@@ -519,6 +555,13 @@ func (a *UnifiedOrchestratorAdapter) StartMultiLegProofCycle(
 		AccumulateAccountURL: accumulateAccountURL,
 		AccumulateTxHash:     accumulateTxHash,
 		AccumulateBVN:        bvn,
+		GovernanceRoot:       governanceRoot,
+		OperationCommitment:  operationCommitment,
+		KeyPageThreshold:     keyPageThreshold,
+		KeyPageKeyCount:      keyPageKeyCount,
+		LeafHash:             leafHash,
+		LeafIndex:            0,
+		MerkleRoot:           merkleRoot,
 		Metadata: map[string]string{
 			"multi_leg":   "true",
 			"chain_key":   chainKey,
