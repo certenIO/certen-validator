@@ -493,6 +493,9 @@ func (a *UnifiedOrchestratorAdapter) StartMultiLegProofCycle(
 	txHashes []string,
 	targetChain string,
 	commitmentData map[string]interface{},
+	accumulateAccountURL string,
+	accumulateTxHash string,
+	bvn string,
 ) error {
 	if !a.useUnified || a.unified == nil {
 		return fmt.Errorf("multi-leg proof cycles require unified orchestrator")
@@ -507,12 +510,15 @@ func (a *UnifiedOrchestratorAdapter) StartMultiLegProofCycle(
 	}
 
 	req := &UnifiedProofCycleRequest{
-		IntentID:       intentID,
-		BundleID:       bundleID,
-		TxHashes:       txHashes,
-		ProofClass:     "on_demand",
-		TargetChain:    targetChain,
-		CommitmentData: commitmentData,
+		IntentID:             intentID,
+		BundleID:             bundleID,
+		TxHashes:             txHashes,
+		ProofClass:           "on_demand",
+		TargetChain:          targetChain,
+		CommitmentData:       commitmentData,
+		AccumulateAccountURL: accumulateAccountURL,
+		AccumulateTxHash:     accumulateTxHash,
+		AccumulateBVN:        bvn,
 		Metadata: map[string]string{
 			"multi_leg":   "true",
 			"chain_key":   chainKey,
@@ -562,6 +568,9 @@ func (a *UnifiedOrchestratorAdapter) StartPerChainProofCycles(
 	legs interface{},
 	executionMode string,
 	commitment interface{},
+	accumulateAccountURL string,
+	accumulateTxHash string,
+	bvn string,
 ) error {
 	if !a.useUnified || a.unified == nil {
 		return fmt.Errorf("per-chain proof cycles require unified orchestrator")
@@ -709,6 +718,7 @@ func (a *UnifiedOrchestratorAdapter) StartPerChainProofCycles(
 		if err := a.StartMultiLegProofCycle(
 			ctx, intentID, chainKey, len(legInfos), bundleID,
 			txHashes, targetChain, commitData,
+			accumulateAccountURL, accumulateTxHash, bvn,
 		); err != nil {
 			fmt.Printf("[UnifiedAdapter] WARNING: Failed to start proof cycle for chain %s: %v\n", chainKey, err)
 			// Continue with other chains - partial results are better than none

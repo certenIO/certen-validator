@@ -257,7 +257,8 @@ type ProofCycleOrchestratorInterface interface {
 	// legs uses interface{} (actual type []ChainLegInfo) to avoid circular imports.
 	// Returns nil if multi-leg proof cycles are not supported (legacy orchestrator).
 	StartPerChainProofCycles(ctx context.Context, intentID string, operationID string, bundleID [32]byte,
-		chainTxHashes map[string][]string, legs interface{}, executionMode string, commitment interface{}) error
+		chainTxHashes map[string][]string, legs interface{}, executionMode string, commitment interface{},
+		accumulateAccountURL string, accumulateTxHash string, bvn string) error
 }
 
 // BFTValidatorInfo represents information about a BFT validator
@@ -1245,6 +1246,7 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 						if err := bv.proofCycleOrchestrator.StartPerChainProofCycles(
 							proofCycleCtx, certenIntent.IntentID, operationID, bundleID,
 							chainTxHashes, legInfos, executionMode, commitment,
+							certenIntent.AccountURL, certenIntent.TransactionHash, "",
 						); err != nil {
 							bv.logger.Printf("⚠️ [MULTI-LEG-PROOF] Per-chain proof cycles failed: %v", err)
 						} else {

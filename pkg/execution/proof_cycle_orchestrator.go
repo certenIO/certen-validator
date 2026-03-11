@@ -367,6 +367,9 @@ func (o *ProofCycleOrchestrator) StartPerChainProofCycles(
 	legs interface{},
 	executionMode string,
 	commitment interface{},
+	accumulateAccountURL string,
+	accumulateTxHash string,
+	bvn string,
 ) error {
 	o.logger.Printf("⚠️ [PROOF-CYCLE] StartPerChainProofCycles not supported by legacy orchestrator")
 	return nil
@@ -1864,6 +1867,9 @@ func (a *ProofCycleOrchestratorAdapter) StartPerChainProofCycles(
 	legs interface{},
 	executionMode string,
 	commitment interface{},
+	accumulateAccountURL string,
+	accumulateTxHash string,
+	bvn string,
 ) error {
 	a.orchestrator.logger.Printf("⚠️ [PROOF-CYCLE] StartPerChainProofCycles not supported by legacy orchestrator - falling back to single proof cycle")
 	return nil
