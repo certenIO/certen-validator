@@ -44,6 +44,26 @@ func (builder *ValidatorBlockBuilder) BuildFromIntent(inputs BuilderInputs) (*Va
 		return nil, fmt.Errorf("CertenIntent cannot be nil")
 	}
 
+	// === HIGH-004: Enforce G2 for value-moving operations ===
+	// Parse cross-chain data to check if any leg transfers value.
+	// If so, require G2 governance level which provides full payload binding.
+	// G0 (inclusion only) and G1 (authority only) do NOT bind execution semantics.
+	if env, parseErr := inputs.Intent.ParseCrossChain(); parseErr == nil && env != nil {
+		hasValueOps := false
+		for _, leg := range env.Legs {
+			if leg.AmountWei != "" && leg.AmountWei != "0" {
+				hasValueOps = true
+				break
+			}
+		}
+		if hasValueOps && inputs.Governance.GovernanceLevel != "G2" {
+			return nil, fmt.Errorf(
+				"HIGH-004: G2 governance required for value-moving operations, got %s",
+				inputs.Governance.GovernanceLevel,
+			)
+		}
+	}
+
 	// === 3.1 Compute operationID and set OperationCommitment ===
 	opID, err := inputs.Intent.OperationID()
 	if err != nil {

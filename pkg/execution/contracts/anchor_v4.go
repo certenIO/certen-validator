@@ -56,6 +56,7 @@ type Anchor struct {
 	Valid                 bool           `json:"valid"`
 	ProofExecuted         bool           `json:"proofExecuted"`
 	GovernanceExecuted    bool           `json:"governanceExecuted"`    // CRITICAL-001
+	GovernanceLevel       uint8          `json:"governanceLevel"`       // HIGH-004: 0=G0, 1=G1, 2=G2
 }
 
 // VerificationResult contains detailed verification results
