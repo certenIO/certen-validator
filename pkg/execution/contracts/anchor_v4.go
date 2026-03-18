@@ -49,11 +49,13 @@ type Anchor struct {
 	OperationCommitment   [32]byte       `json:"operationCommitment"`
 	CrossChainCommitment  [32]byte       `json:"crossChainCommitment"`
 	GovernanceRoot        [32]byte       `json:"governanceRoot"`
+	ExecutionCommitment   [32]byte       `json:"executionCommitment"`   // CRITICAL-001
 	AccumulateBlockHeight *big.Int       `json:"accumulateBlockHeight"`
 	Timestamp             *big.Int       `json:"timestamp"`
 	Validator             common.Address `json:"validator"`
 	Valid                 bool           `json:"valid"`
 	ProofExecuted         bool           `json:"proofExecuted"`
+	GovernanceExecuted    bool           `json:"governanceExecuted"`    // CRITICAL-001
 }
 
 // VerificationResult contains detailed verification results
@@ -106,7 +108,7 @@ func (w *CertenAnchorWrapper) GetAddress() common.Address {
 // =============================================================================
 
 // CreateAnchorSimple creates a new anchor using direct parameters (simplified interface)
-// V4 UPDATE: Now requires adiURLHash to bind anchor to specific Accumulate data account
+// CRITICAL-001: Now requires executionCommitment to bind runtime execution params to anchor
 func (w *CertenAnchorWrapper) CreateAnchorSimple(
 	opts *bind.TransactOpts,
 	bundleId [32]byte,
@@ -114,9 +116,10 @@ func (w *CertenAnchorWrapper) CreateAnchorSimple(
 	operationCommitment [32]byte,
 	crossChainCommitment [32]byte,
 	governanceRoot [32]byte,
+	executionCommitment [32]byte,
 	accumulateBlockHeight *big.Int,
 ) (*types.Transaction, error) {
-	return w.CertenAnchorV4Transactor.CreateAnchor(opts, bundleId, adiURLHash, operationCommitment, crossChainCommitment, governanceRoot, accumulateBlockHeight)
+	return w.CertenAnchorV4Transactor.CreateAnchor(opts, bundleId, adiURLHash, operationCommitment, crossChainCommitment, governanceRoot, executionCommitment, accumulateBlockHeight)
 }
 
 // ExecuteComprehensiveProofSimple executes comprehensive proof verification

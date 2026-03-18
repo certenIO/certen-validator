@@ -97,6 +97,10 @@ type CommitmentData struct {
 	// Governance root (from BLS aggregate)
 	GovernanceRoot [32]byte `json:"governanceRoot"`
 
+	// CRITICAL-001: Execution commitment binding runtime params
+	// keccak256(abi.encodePacked(chainId, target, value, keccak256(data)))
+	ExecutionCommitment [32]byte `json:"executionCommitment"`
+
 	// Source chain information
 	SourceChain       string   `json:"sourceChain"`
 	SourceBlockHeight *big.Int `json:"sourceBlockHeight"`

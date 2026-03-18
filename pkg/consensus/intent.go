@@ -196,6 +196,22 @@ type CCLeg struct {
 
 	// DeadlineTimestamp is the unix timestamp deadline for this leg
 	DeadlineTimestamp int64 `json:"deadline_timestamp,omitempty"`
+
+	// CRITICAL-003: ExecutionPayload binding from user-signed Blob 1.
+	// Commits the exact on-chain execution params (target, value, calldata hash)
+	// into the intent before it's signed and written to Accumulate.
+	ExecutionPayload *ExecutionPayload `json:"executionPayload,omitempty"`
+}
+
+// ExecutionPayload contains the pre-computed execution commitment from the API bridge.
+// CRITICAL-003: This is included in the user-signed crossChainData blob and binds
+// the exact runtime parameters that the destination-chain contract will execute.
+type ExecutionPayload struct {
+	Target              string `json:"target"`              // Destination address (checksummed)
+	Value               string `json:"value"`               // Native value in wei (string)
+	DataHash            string `json:"dataHash"`            // keccak256 of calldata
+	ChainID             int64  `json:"chainId"`             // Target chain ID
+	ExecutionCommitment string `json:"executionCommitment"` // keccak256(abi.encodePacked(chainId, target, value, dataHash))
 }
 
 // ChainKey returns a unique key for this leg's target chain (e.g., "base-sepolia").

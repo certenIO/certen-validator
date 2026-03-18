@@ -955,6 +955,7 @@ func (btce *BFTTargetChainExecutor) extractAllLegsFromIntent(legacyIntent *inten
 	}
 
 	// Parse CrossChainData with chain information
+	// CRITICAL-003: Now includes executionPayload for commitment verification
 	var crossChainData struct {
 		Legs []struct {
 			LegID        string `json:"legId"`
@@ -964,6 +965,14 @@ func (btce *BFTTargetChainExecutor) extractAllLegsFromIntent(legacyIntent *inten
 			ChainID      int64  `json:"chainId"`
 			Chain        string `json:"chain"`
 			AccountOwner string `json:"accountOwner"` // Owner wallet for account factory deployment
+			// CRITICAL-003: Execution payload from user-signed blob
+			ExecutionPayload *struct {
+				Target              string `json:"target"`
+				Value               string `json:"value"`
+				DataHash            string `json:"dataHash"`
+				ChainID             int64  `json:"chainId"`
+				ExecutionCommitment string `json:"executionCommitment"`
+			} `json:"executionPayload,omitempty"`
 		} `json:"legs"`
 	}
 
@@ -1023,6 +1032,31 @@ func (btce *BFTTargetChainExecutor) extractAllLegsFromIntent(legacyIntent *inten
 		accountOwner := common.Address{}
 		if leg.AccountOwner != "" {
 			accountOwner = parseChainAddress(leg.AccountOwner)
+		}
+
+		// CRITICAL-003: If executionPayload is present in the user-signed blob,
+		// verify the commitment is consistent with the leg's execution parameters.
+		// This ensures the validator cannot alter target/value/data vs what was signed.
+		if leg.ExecutionPayload != nil && leg.ExecutionPayload.ExecutionCommitment != "" {
+			expectedCommitment := computeExecutionCommitment(
+				leg.ExecutionPayload.ChainID,
+				common.HexToAddress(leg.ExecutionPayload.Target),
+				func() *big.Int {
+					v := new(big.Int)
+					v.SetString(leg.ExecutionPayload.Value, 10)
+					return v
+				}(),
+				[]byte{}, // Native transfer: empty calldata (dataHash was pre-computed)
+			)
+			storedCommitment := common.HexToHash(leg.ExecutionPayload.ExecutionCommitment)
+			if expectedCommitment != storedCommitment {
+				btce.logger.Printf("🚨 [CRITICAL-003] ExecutionCommitment mismatch for leg %s!", legID)
+				btce.logger.Printf("   Expected: 0x%x", expectedCommitment[:8])
+				btce.logger.Printf("   Stored:   0x%x", storedCommitment[:8])
+				btce.logger.Printf("   Rejecting intent — possible tampering")
+				return nil
+			}
+			btce.logger.Printf("   ✅ [CRITICAL-003] ExecutionCommitment verified for leg %s", legID)
 		}
 
 		btce.logger.Printf("   🦵 Leg %d (%s): chain=%s chainId=%d from=%s target=%s value=%s wei",

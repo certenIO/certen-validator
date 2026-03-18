@@ -8,6 +8,7 @@ package proof
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 
 	"github.com/certen/independant-validator/pkg/commitment"
@@ -39,34 +40,42 @@ func ComputeCrossChainCommitment(crossChainJSON []byte) ([]byte, string, error) 
 	return h[:], hex.EncodeToString(h[:]), nil
 }
 
-// ComputeCanonical4BlobHash returns SHA256(canonical(intentJSON) || canonical(crossChainJSON) || canonical(governanceJSON) || canonical(replayJSON))
-// This implements the canonical 4-blob intent model and is the SINGLE SOURCE OF TRUTH for OperationID computation
-// Used by: intent discovery, BFT consensus, proof generation
+// ComputeCanonical4BlobHash computes the canonical OperationID from the 4-blob intent model.
+// This is the SINGLE SOURCE OF TRUTH for OperationID computation across all components.
+// Used by: intent discovery, BFT consensus, proof generation, API bridge
+//
+// CRITICAL-002: Uses length-prefixed canonical concatenation to prevent ambiguity.
+// Each blob is canonicalized (RFC 8785 sorted-key JSON), then prefixed with a 4-byte
+// big-endian uint32 length before concatenation. This eliminates the possibility that
+// two different blob tuples could produce the same byte stream.
+//
+// Format:
+//   SHA256(
+//     len(canon(blob0)) || canon(blob0) ||
+//     len(canon(blob1)) || canon(blob1) ||
+//     len(canon(blob2)) || canon(blob2) ||
+//     len(canon(blob3)) || canon(blob3)
+//   )
+//
+// The API bridge (TypeScript) MUST use the identical algorithm:
+//   - canonicalizeJSON: recursively sort keys alphabetically, stringify with no whitespace
+//   - 4-byte big-endian length prefix per blob
+//   - SHA-256 of the full concatenation
 func ComputeCanonical4BlobHash(intentJSON, crossChainJSON, governanceJSON, replayJSON []byte) ([]byte, string, error) {
-	// Canonicalize each blob
-	canonIntent, err := commitment.CanonicalizeJSON(intentJSON)
-	if err != nil {
-		return nil, "", err
-	}
-	canonCross, err := commitment.CanonicalizeJSON(crossChainJSON)
-	if err != nil {
-		return nil, "", err
-	}
-	canonGov, err := commitment.CanonicalizeJSON(governanceJSON)
-	if err != nil {
-		return nil, "", err
-	}
-	canonReplay, err := commitment.CanonicalizeJSON(replayJSON)
-	if err != nil {
-		return nil, "", err
-	}
+	blobs := [][]byte{intentJSON, crossChainJSON, governanceJSON, replayJSON}
 
-	// Concatenate and hash
 	h := sha256.New()
-	h.Write(canonIntent)
-	h.Write(canonCross)
-	h.Write(canonGov)
-	h.Write(canonReplay)
+	for _, blob := range blobs {
+		canon, err := commitment.CanonicalizeJSON(blob)
+		if err != nil {
+			return nil, "", err
+		}
+		// Write 4-byte big-endian length prefix before each canonicalized blob
+		lenBuf := make([]byte, 4)
+		binary.BigEndian.PutUint32(lenBuf, uint32(len(canon)))
+		h.Write(lenBuf)
+		h.Write(canon)
+	}
 
 	hashBytes := h.Sum(nil)
 	return hashBytes, hex.EncodeToString(hashBytes), nil

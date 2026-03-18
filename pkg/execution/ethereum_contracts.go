@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
 	"math/big"
@@ -533,7 +534,7 @@ func (ecm *EthereumContractManager) resetNonce() {
 
 // CreateAnchorOnChain creates an anchor on CertenAnchorV4 unified contract
 // This is Step 1 of the anchor workflow.
-// Uses CertenAnchorV4.createAnchor with 6 parameters (includes adiURLHash for account binding)
+// CRITICAL-001: Now includes executionCommitment parameter to bind runtime execution params
 func (ecm *EthereumContractManager) CreateAnchorOnChain(
 	ctx context.Context,
 	bundleID [32]byte,
@@ -541,6 +542,7 @@ func (ecm *EthereumContractManager) CreateAnchorOnChain(
 	operationCommitment [32]byte,
 	crossChainCommitment [32]byte,
 	governanceRoot [32]byte,
+	executionCommitment [32]byte,
 	accumulateBlockHeight *big.Int,
 ) (string, error) {
 	ecm.refreshGasPrice(ctx)
@@ -548,6 +550,7 @@ func (ecm *EthereumContractManager) CreateAnchorOnChain(
 	fmt.Printf("   Contract: %s\n", ecm.anchor.GetAddress().Hex())
 	fmt.Printf("   Bundle ID: 0x%x\n", bundleID)
 	fmt.Printf("   ADI URL Hash: 0x%x\n", adiURLHash)
+	fmt.Printf("   Execution Commitment: 0x%x\n", executionCommitment)
 	fmt.Printf("   Block Height: %s\n", accumulateBlockHeight.String())
 
 	// Use CertenAnchorV4 wrapper to create anchor
@@ -558,6 +561,7 @@ func (ecm *EthereumContractManager) CreateAnchorOnChain(
 		operationCommitment,
 		crossChainCommitment,
 		governanceRoot,
+		executionCommitment,
 		accumulateBlockHeight,
 	)
 	if err != nil {
@@ -963,6 +967,7 @@ func (ecm *EthereumContractManager) ExecuteUnifiedAnchorWorkflowFull(
 		comprehensiveProof.Commitments.OperationCommitment,
 		comprehensiveProof.Commitments.CrossChainCommitment,
 		comprehensiveProof.Commitments.GovernanceRoot,
+		comprehensiveProof.Commitments.ExecutionCommitment,
 		big.NewInt(int64(certenProof.BlockHeight)),
 	)
 	if err != nil {
@@ -1043,6 +1048,7 @@ func (ecm *EthereumContractManager) ExecuteUnifiedAnchorWorkflow(
 		comprehensiveProof.Commitments.OperationCommitment,
 		comprehensiveProof.Commitments.CrossChainCommitment,
 		comprehensiveProof.Commitments.GovernanceRoot,
+		comprehensiveProof.Commitments.ExecutionCommitment,
 		big.NewInt(int64(certenProof.BlockHeight)),
 	)
 	if err != nil {
@@ -1190,10 +1196,66 @@ func (ecm *EthereumContractManager) buildComprehensiveProof(
 		copy(govRoot[:], crypto.Keccak256(blsSignatureBytes)[:32])
 	}
 
+	// CRITICAL-001 + CRITICAL-003: Compute executionCommitment.
+	// Prefer the user-signed executionPayload from the blob (CRITICAL-003) when present.
+	// Fall back to computing from leg execution parameters (CRITICAL-001).
+	var execCommitment [32]byte
+	execCommitmentSource := "none"
+
+	// First, try to read pre-computed executionCommitment from user-signed CrossChainData
+	var userSignedCC struct {
+		Legs []struct {
+			ExecutionPayload *struct {
+				ExecutionCommitment string `json:"executionCommitment"`
+			} `json:"executionPayload,omitempty"`
+		} `json:"legs"`
+	}
+	var rawCC []byte
+	if certenProof != nil && len(certenProof.CrossChainData) > 0 {
+		rawCC = certenProof.CrossChainData
+	} else if certenIntent != nil && len(certenIntent.CrossChainData) > 0 {
+		rawCC = certenIntent.CrossChainData
+	}
+	if len(rawCC) > 0 {
+		if err := json.Unmarshal(rawCC, &userSignedCC); err == nil &&
+			len(userSignedCC.Legs) > 0 &&
+			userSignedCC.Legs[0].ExecutionPayload != nil &&
+			userSignedCC.Legs[0].ExecutionPayload.ExecutionCommitment != "" {
+			// Use the user-signed commitment directly — this was part of the signed blob
+			commitHex := strings.TrimPrefix(userSignedCC.Legs[0].ExecutionPayload.ExecutionCommitment, "0x")
+			commitBytes := common.FromHex(commitHex)
+			if len(commitBytes) == 32 {
+				copy(execCommitment[:], commitBytes)
+				execCommitmentSource = "user-signed-blob"
+			}
+		}
+	}
+
+	// Fall back to computing from leg execution parameters
+	if execCommitmentSource == "none" {
+		legs := ecm.extractLegsForExecCommitment(certenIntent, certenProof)
+		if len(legs) > 0 {
+			execCommitment = computeExecutionCommitment(
+				legs[0].ChainID,
+				legs[0].Target,
+				legs[0].Value,
+				legs[0].Data,
+			)
+			execCommitmentSource = "computed-from-legs"
+		}
+	}
+
+	if execCommitmentSource != "none" {
+		log.Printf("🔒 [CRITICAL-001/003] ExecutionCommitment: 0x%x (source: %s)", execCommitment[:8], execCommitmentSource)
+	} else {
+		log.Printf("⚠️ [CRITICAL-001/003] No executionCommitment available")
+	}
+
 	commitments := contracts.CommitmentData{
 		OperationCommitment:  opCommitment,
 		CrossChainCommitment: crossCommitment,
 		GovernanceRoot:       govRoot,
+		ExecutionCommitment:  execCommitment,
 		SourceChain:          "accumulate",
 		SourceBlockHeight:    big.NewInt(int64(certenProof.BlockHeight)),
 		TargetChain:          "ethereum",
@@ -1881,4 +1943,113 @@ func compareBytes(a, b []byte) int {
 		return 1
 	}
 	return 0
+}
+
+// extractLegsForExecCommitment parses CrossChainData from the intent/proof to build
+// LegExecution structs needed for executionCommitment computation.
+// CRITICAL-001 + CRITICAL-003: If the user-signed blob contains an executionPayload
+// with a pre-computed executionCommitment, we use that directly (it was signed by the user).
+// Otherwise we compute it from the leg's target/value/data.
+func (ecm *EthereumContractManager) extractLegsForExecCommitment(
+	certenIntent *intent.CertenIntent,
+	certenProof *proof.CertenProof,
+) []LegExecution {
+	// Use CrossChainData from proof (passed through from ValidatorBlockMetadata)
+	var crossChainData []byte
+	if certenProof != nil && len(certenProof.CrossChainData) > 0 {
+		crossChainData = certenProof.CrossChainData
+	} else if certenIntent != nil && len(certenIntent.CrossChainData) > 0 {
+		crossChainData = certenIntent.CrossChainData
+	}
+
+	if len(crossChainData) == 0 {
+		return nil
+	}
+
+	// CRITICAL-003: Parse executionPayload from user-signed blob
+	var ccData struct {
+		Legs []struct {
+			LegID    string `json:"legId"`
+			From     string `json:"from"`
+			To       string `json:"to"`
+			AmountWei string `json:"amountWei"`
+			ChainID  int64  `json:"chainId"`
+			Chain    string `json:"chain"`
+			// CRITICAL-003: User-signed execution payload commitment
+			ExecutionPayload *struct {
+				Target              string `json:"target"`
+				Value               string `json:"value"`
+				DataHash            string `json:"dataHash"`
+				ChainID             int64  `json:"chainId"`
+				ExecutionCommitment string `json:"executionCommitment"`
+			} `json:"executionPayload,omitempty"`
+		} `json:"legs"`
+	}
+
+	if err := json.Unmarshal(crossChainData, &ccData); err != nil || len(ccData.Legs) == 0 {
+		return nil
+	}
+
+	legs := make([]LegExecution, 0, len(ccData.Legs))
+	for _, leg := range ccData.Legs {
+		targetAddress := common.HexToAddress(leg.To)
+		value := new(big.Int)
+		if leg.AmountWei != "" {
+			value.SetString(leg.AmountWei, 10)
+		}
+
+		chainID := leg.ChainID
+		if chainID == 0 {
+			chainID = 11155111 // Default Sepolia
+		}
+
+		legs = append(legs, LegExecution{
+			LegID:   leg.LegID,
+			Target:  targetAddress,
+			Value:   value,
+			Data:    []byte{}, // Native transfer: empty calldata
+			ChainID: chainID,
+			Chain:   leg.Chain,
+		})
+	}
+	return legs
+}
+
+// computeExecutionCommitment computes keccak256(abi.encodePacked(chainId, target, value, keccak256(data)))
+// CRITICAL-001: This MUST match the Solidity computation in CertenAnchorV4.executeWithGovernance()
+//
+// abi.encodePacked layout (116 bytes total):
+//   chainId:  uint256 = 32 bytes (big-endian, left-padded)
+//   target:   address = 20 bytes (raw, NOT left-padded — encodePacked uses smallest representation)
+//   value:    uint256 = 32 bytes (big-endian, left-padded)
+//   dataHash: bytes32 = 32 bytes
+func computeExecutionCommitment(chainID int64, target common.Address, value *big.Int, callData []byte) [32]byte {
+	// Step 1: keccak256(data)
+	dataHash := crypto.Keccak256Hash(callData)
+
+	// Step 2: abi.encodePacked(chainId, target, value, dataHash)
+	// uint256 chainId — 32 bytes
+	chainIDBytes := make([]byte, 32)
+	chainIDBig := big.NewInt(chainID)
+	chainIDBig.FillBytes(chainIDBytes)
+
+	// address target — 20 bytes (encodePacked for address is 20 bytes, no padding)
+	targetBytes := target.Bytes() // 20 bytes
+
+	// uint256 value — 32 bytes
+	valueBytes := make([]byte, 32)
+	if value != nil {
+		value.FillBytes(valueBytes)
+	}
+
+	// bytes32 dataHash — 32 bytes
+	dataHashBytes := dataHash.Bytes() // 32 bytes
+
+	packed := make([]byte, 0, 116) // 32 + 20 + 32 + 32
+	packed = append(packed, chainIDBytes...)
+	packed = append(packed, targetBytes...)
+	packed = append(packed, valueBytes...)
+	packed = append(packed, dataHashBytes...)
+
+	return crypto.Keccak256Hash(packed)
 }

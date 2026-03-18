@@ -1987,25 +1987,26 @@ func (_CertenAnchorV4 *CertenAnchorV4TransactorSession) AddOperator(operator com
 	return _CertenAnchorV4.Contract.AddOperator(&_CertenAnchorV4.TransactOpts, operator)
 }
 
-// CreateAnchor is a paid mutator transaction binding the contract method 0x63e25df4.
+// CreateAnchor is a paid mutator transaction binding the contract method.
 //
-// Solidity: function createAnchor(bytes32 bundleId, bytes32 adiURLHash, bytes32 operationCommitment, bytes32 crossChainCommitment, bytes32 governanceRoot, uint256 accumulateBlockHeight) returns()
-func (_CertenAnchorV4 *CertenAnchorV4Transactor) CreateAnchor(opts *bind.TransactOpts, bundleId [32]byte, adiURLHash [32]byte, operationCommitment [32]byte, crossChainCommitment [32]byte, governanceRoot [32]byte, accumulateBlockHeight *big.Int) (*types.Transaction, error) {
-	return _CertenAnchorV4.contract.Transact(opts, "createAnchor", bundleId, adiURLHash, operationCommitment, crossChainCommitment, governanceRoot, accumulateBlockHeight)
+// Solidity: function createAnchor(bytes32 bundleId, bytes32 adiURLHash, bytes32 operationCommitment, bytes32 crossChainCommitment, bytes32 governanceRoot, bytes32 executionCommitment, uint256 accumulateBlockHeight) returns()
+// CRITICAL-001: Added executionCommitment parameter for runtime payload binding
+func (_CertenAnchorV4 *CertenAnchorV4Transactor) CreateAnchor(opts *bind.TransactOpts, bundleId [32]byte, adiURLHash [32]byte, operationCommitment [32]byte, crossChainCommitment [32]byte, governanceRoot [32]byte, executionCommitment [32]byte, accumulateBlockHeight *big.Int) (*types.Transaction, error) {
+	return _CertenAnchorV4.contract.Transact(opts, "createAnchor", bundleId, adiURLHash, operationCommitment, crossChainCommitment, governanceRoot, executionCommitment, accumulateBlockHeight)
 }
 
-// CreateAnchor is a paid mutator transaction binding the contract method 0x63e25df4.
+// CreateAnchor is a paid mutator transaction binding the contract method.
 //
-// Solidity: function createAnchor(bytes32 bundleId, bytes32 adiURLHash, bytes32 operationCommitment, bytes32 crossChainCommitment, bytes32 governanceRoot, uint256 accumulateBlockHeight) returns()
-func (_CertenAnchorV4 *CertenAnchorV4Session) CreateAnchor(bundleId [32]byte, adiURLHash [32]byte, operationCommitment [32]byte, crossChainCommitment [32]byte, governanceRoot [32]byte, accumulateBlockHeight *big.Int) (*types.Transaction, error) {
-	return _CertenAnchorV4.Contract.CreateAnchor(&_CertenAnchorV4.TransactOpts, bundleId, adiURLHash, operationCommitment, crossChainCommitment, governanceRoot, accumulateBlockHeight)
+// Solidity: function createAnchor(bytes32 bundleId, bytes32 adiURLHash, bytes32 operationCommitment, bytes32 crossChainCommitment, bytes32 governanceRoot, bytes32 executionCommitment, uint256 accumulateBlockHeight) returns()
+func (_CertenAnchorV4 *CertenAnchorV4Session) CreateAnchor(bundleId [32]byte, adiURLHash [32]byte, operationCommitment [32]byte, crossChainCommitment [32]byte, governanceRoot [32]byte, executionCommitment [32]byte, accumulateBlockHeight *big.Int) (*types.Transaction, error) {
+	return _CertenAnchorV4.Contract.CreateAnchor(&_CertenAnchorV4.TransactOpts, bundleId, adiURLHash, operationCommitment, crossChainCommitment, governanceRoot, executionCommitment, accumulateBlockHeight)
 }
 
-// CreateAnchor is a paid mutator transaction binding the contract method 0x63e25df4.
+// CreateAnchor is a paid mutator transaction binding the contract method.
 //
-// Solidity: function createAnchor(bytes32 bundleId, bytes32 adiURLHash, bytes32 operationCommitment, bytes32 crossChainCommitment, bytes32 governanceRoot, uint256 accumulateBlockHeight) returns()
-func (_CertenAnchorV4 *CertenAnchorV4TransactorSession) CreateAnchor(bundleId [32]byte, adiURLHash [32]byte, operationCommitment [32]byte, crossChainCommitment [32]byte, governanceRoot [32]byte, accumulateBlockHeight *big.Int) (*types.Transaction, error) {
-	return _CertenAnchorV4.Contract.CreateAnchor(&_CertenAnchorV4.TransactOpts, bundleId, adiURLHash, operationCommitment, crossChainCommitment, governanceRoot, accumulateBlockHeight)
+// Solidity: function createAnchor(bytes32 bundleId, bytes32 adiURLHash, bytes32 operationCommitment, bytes32 crossChainCommitment, bytes32 governanceRoot, bytes32 executionCommitment, uint256 accumulateBlockHeight) returns()
+func (_CertenAnchorV4 *CertenAnchorV4TransactorSession) CreateAnchor(bundleId [32]byte, adiURLHash [32]byte, operationCommitment [32]byte, crossChainCommitment [32]byte, governanceRoot [32]byte, executionCommitment [32]byte, accumulateBlockHeight *big.Int) (*types.Transaction, error) {
+	return _CertenAnchorV4.Contract.CreateAnchor(&_CertenAnchorV4.TransactOpts, bundleId, adiURLHash, operationCommitment, crossChainCommitment, governanceRoot, executionCommitment, accumulateBlockHeight)
 }
 
 // CreateAnchorWithLegs is a paid mutator transaction binding the contract method 0x4de02c79.
