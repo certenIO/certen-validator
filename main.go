@@ -253,6 +253,35 @@ func main() {
     }
 
     // ==========================================================================
+    // HIGH-002: Initialize Persistent Replay Protection Store
+    // Uses bbolt (pure Go) for durable nonce tracking that survives restarts.
+    // ==========================================================================
+    log.Println("🔒 [Phase 5b] Initializing persistent replay store...")
+    replayStorePath := filepath.Join("data", "replay_nonces.db")
+    replayStore, replayErr := consensus.NewBboltReplayStore(replayStorePath)
+    if replayErr != nil {
+        log.Printf("⚠️ [Phase 5b] Failed to open replay store: %v", replayErr)
+        log.Printf("⚠️ WARNING: Falling back to in-memory nonce tracking (lost on restart)")
+    } else {
+        consensus.SetReplayStore(replayStore)
+        defer replayStore.Close()
+        log.Printf("✅ [Phase 5b] Persistent replay store ready at %s", replayStorePath)
+
+        // Periodic cleanup of expired nonces (every hour)
+        go func() {
+            ticker := time.NewTicker(1 * time.Hour)
+            defer ticker.Stop()
+            for range ticker.C {
+                ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+                if err := replayStore.CleanExpired(ctx, time.Now().Unix()); err != nil {
+                    log.Printf("⚠️ [REPLAY-STORE] Cleanup error: %v", err)
+                }
+                cancel()
+            }
+        }()
+    }
+
+    // ==========================================================================
     // Initialize Firestore for Real-Time UI Sync
     // Per Data Collection & Management Plan: Sync proof cycle progress to Firestore
     // ==========================================================================

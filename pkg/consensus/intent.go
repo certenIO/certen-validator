@@ -6,6 +6,7 @@
 package consensus
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -16,13 +17,32 @@ import (
 	certenproof "github.com/certen/independant-validator/pkg/proof"
 )
 
-// seenNonces tracks processed nonces to prevent replay attacks.
-// TODO: Replace with persistent storage (database) for production use.
-// In-memory map is lost on restart, so a durable store is required.
+// HIGH-002: Package-level replay store for persistent nonce tracking.
+// Set via SetReplayStore() during initialization. Falls back to in-memory
+// map if no persistent store is configured (development mode only).
 var (
-	seenNonces   = make(map[string]bool)
-	seenNoncesMu sync.Mutex
+	globalReplayStore   ReplayStore
+	globalReplayStoreMu sync.RWMutex
+
+	// Fallback in-memory map for when no persistent store is configured
+	fallbackNonces   = make(map[string]bool)
+	fallbackNoncesMu sync.Mutex
 )
+
+// SetReplayStore sets the package-level persistent replay store.
+// Must be called during initialization before any intents are processed.
+func SetReplayStore(store ReplayStore) {
+	globalReplayStoreMu.Lock()
+	defer globalReplayStoreMu.Unlock()
+	globalReplayStore = store
+}
+
+// getReplayStore returns the current replay store (or nil if not set).
+func getReplayStore() ReplayStore {
+	globalReplayStoreMu.RLock()
+	defer globalReplayStoreMu.RUnlock()
+	return globalReplayStore
+}
 
 // CertenIntent represents an intent that needs to be processed - canonical definition
 // This is the single source of truth for CertenIntent across the entire codebase.
@@ -654,19 +674,40 @@ func (ci *CertenIntent) ValidateForExecution(blockHeight uint64) error {
 }
 
 // ValidateNonce checks the replay data nonce for uniqueness to prevent replay attacks.
+// HIGH-002: Uses persistent ReplayStore if configured, falls back to in-memory map.
 // Once validated, the nonce is recorded so duplicate intents are rejected.
 func (ci *CertenIntent) ValidateNonce(replayData *ReplayData) error {
 	if replayData.Nonce == "" {
 		return fmt.Errorf("replay nonce is empty")
 	}
 
-	seenNoncesMu.Lock()
-	defer seenNoncesMu.Unlock()
+	// HIGH-002: Use persistent replay store if available
+	if store := getReplayStore(); store != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
 
-	if seenNonces[replayData.Nonce] {
+		exists, err := store.HasNonce(ctx, replayData.Nonce)
+		if err != nil {
+			return fmt.Errorf("replay store check failed: %w", err)
+		}
+		if exists {
+			return fmt.Errorf("duplicate nonce '%s': intent already processed (persistent)", replayData.Nonce)
+		}
+
+		if err := store.MarkNonce(ctx, replayData.Nonce, replayData.ExpiresAt); err != nil {
+			return fmt.Errorf("replay store mark failed: %w", err)
+		}
+		return nil
+	}
+
+	// Fallback: in-memory map (development mode — logs warning)
+	fallbackNoncesMu.Lock()
+	defer fallbackNoncesMu.Unlock()
+
+	if fallbackNonces[replayData.Nonce] {
 		return fmt.Errorf("duplicate nonce '%s': intent already processed", replayData.Nonce)
 	}
-	seenNonces[replayData.Nonce] = true
+	fallbackNonces[replayData.Nonce] = true
 	return nil
 }
 
