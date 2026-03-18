@@ -6,7 +6,6 @@
 package execution
 
 import (
-	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -864,27 +863,46 @@ func (ecm *EthereumContractManager) buildAccountProof(
 	ccCommitment [32]byte,
 	govRoot [32]byte,
 ) contracts.AccountProof {
-	// Build 4-leaf merkle proof for adiURL verification
-	// proof[0] = sibling at level 0 (operationCommitment)
-	// proof[1] = sibling at level 1 (hash of cc + gov)
+	// LOW-001: Build 5-leaf domain-tagged merkle proof for adiURL verification
+	// Must match _computeMerkleRoot5() in CertenAnchorV4.sol
+	//
+	// Proof path for taggedAdi leaf (3 elements):
+	//   proof[0] = taggedOp           (sibling at level 0)
+	//   proof[1] = hash23             (sibling at level 1: sortedHash(taggedCC, taggedGov))
+	//   proof[2] = taggedExec         (sibling at level 2: the promoted 5th leaf)
+
+	// Fetch execution commitment from anchor on-chain
+	var execCommitment [32]byte
+	anchorData, err := ecm.anchor.GetAnchorFull(nil, bundleID)
+	if err == nil && anchorData != nil {
+		execCommitment = anchorData.ExecutionCommitment
+	}
+
+	// Domain-tag leaves (must match Solidity keccak256(abi.encodePacked("certen:TAG:", value)))
+	taggedOp := crypto.Keccak256Hash(append([]byte("certen:op:"), opCommitment[:]...))
+	taggedCC := crypto.Keccak256Hash(append([]byte("certen:cc:"), ccCommitment[:]...))
+	taggedGov := crypto.Keccak256Hash(append([]byte("certen:gov:"), govRoot[:]...))
+	taggedExec := crypto.Keccak256Hash(append([]byte("certen:exec:"), execCommitment[:]...))
+
 	var merkleProof [][32]byte
 
-	// proof[0] = operationCommitment
-	merkleProof = append(merkleProof, opCommitment)
+	// proof[0] = taggedOp (sibling at level 0)
+	merkleProof = append(merkleProof, taggedOp)
 
-	// proof[1] = sortedHash(ccCommitment, govRoot)
+	// proof[1] = sortedHash(taggedCC, taggedGov) (sibling at level 1)
+	hash23Bytes := sortedHash(taggedCC[:], taggedGov[:])
 	var hash23 [32]byte
-	if ccCommitment[0] < govRoot[0] || (ccCommitment[0] == govRoot[0] && bytes.Compare(ccCommitment[:], govRoot[:]) < 0) {
-		copy(hash23[:], crypto.Keccak256(append(ccCommitment[:], govRoot[:]...)))
-	} else {
-		copy(hash23[:], crypto.Keccak256(append(govRoot[:], ccCommitment[:]...)))
-	}
+	copy(hash23[:], hash23Bytes)
 	merkleProof = append(merkleProof, hash23)
 
-	log.Printf("🌳 [MERKLE] Built 4-leaf proof for adiURL verification:")
+	// proof[2] = taggedExec (sibling at level 2 — the promoted 5th leaf)
+	merkleProof = append(merkleProof, taggedExec)
+
+	log.Printf("🌳 [MERKLE-V5] Built 5-leaf domain-tagged proof for adiURL verification:")
 	log.Printf("   adiURL: %s", adiURL)
-	log.Printf("   proof[0] (op): 0x%x", opCommitment[:8])
+	log.Printf("   proof[0] (taggedOp): 0x%x", taggedOp[:8])
 	log.Printf("   proof[1] (hash23): 0x%x", hash23[:8])
+	log.Printf("   proof[2] (taggedExec): 0x%x", taggedExec[:8])
 
 	// Set expiration (1 hour from now)
 	expiresAt := big.NewInt(time.Now().Add(1 * time.Hour).Unix())
@@ -1272,15 +1290,18 @@ func (ecm *EthereumContractManager) buildComprehensiveProof(
 	// Build metadata for leaf hash
 	metadata := []byte(fmt.Sprintf("intent:%s,account:%s", certenIntent.IntentID, certenProof.AccountURL))
 
-	// CRITICAL V4 FIX: Compute 4-leaf merkle root with sorted hash
-	// Tree structure:
-	//           merkleRoot
-	//          /          \
-	//     hash01          hash23
-	//    /     \         /     \
-	// adiURL  opComm  ccComm  govRoot
+	// LOW-001: Compute 5-leaf domain-tagged merkle root
+	// Each leaf is tagged with a domain prefix before hashing to prevent type confusion.
+	// This MUST match _computeMerkleRoot5() in CertenAnchorV4.sol exactly.
 	//
-	// This MUST match what createAnchor() stores in the V4 contract
+	// Tree structure:
+	//                    root
+	//                   /    \
+	//              hash0123   taggedExec
+	//              /    \
+	//         hash01    hash23
+	//        /    \    /    \
+	//   tagAdi tagOp tagCC tagGov
 
 	// Compute adiURLHash from account URL
 	adiURL := certenProof.AccountURL
@@ -1289,18 +1310,27 @@ func (ecm *EthereumContractManager) buildComprehensiveProof(
 	}
 	adiURLHash := crypto.Keccak256Hash([]byte(adiURL))
 
-	// Compute 4-leaf merkle root using sorted hash
-	hash01 := sortedHash(adiURLHash[:], commitments.OperationCommitment[:])
-	hash23 := sortedHash(commitments.CrossChainCommitment[:], commitments.GovernanceRoot[:])
-	merkleRoot := sortedHash(hash01, hash23)
+	// Domain-tag each leaf (matches Solidity: keccak256(abi.encodePacked("certen:TAG:", value)))
+	taggedAdi := crypto.Keccak256Hash(append([]byte("certen:adi:"), adiURLHash[:]...))
+	taggedOp := crypto.Keccak256Hash(append([]byte("certen:op:"), commitments.OperationCommitment[:]...))
+	taggedCC := crypto.Keccak256Hash(append([]byte("certen:cc:"), commitments.CrossChainCommitment[:]...))
+	taggedGov := crypto.Keccak256Hash(append([]byte("certen:gov:"), commitments.GovernanceRoot[:]...))
+	taggedExec := crypto.Keccak256Hash(append([]byte("certen:exec:"), commitments.ExecutionCommitment[:]...))
+
+	// 5-leaf tree: pair first 4, promote 5th
+	hash01 := sortedHash(taggedAdi[:], taggedOp[:])
+	hash23 := sortedHash(taggedCC[:], taggedGov[:])
+	hash0123 := sortedHash(hash01, hash23)
+	merkleRoot := sortedHash(hash0123, taggedExec[:])
 	var merkleRootHash common.Hash
 	copy(merkleRootHash[:], merkleRoot)
 
-	log.Printf("✅ [MERKLE-V4] Computed 4-leaf merkleRoot: %x", merkleRootHash[:])
-	log.Printf("   adiURLHash: %x", adiURLHash[:8])
-	log.Printf("   OperationCommitment: %x", commitments.OperationCommitment[:8])
-	log.Printf("   CrossChainCommitment: %x", commitments.CrossChainCommitment[:8])
-	log.Printf("   GovernanceRoot: %x", commitments.GovernanceRoot[:8])
+	log.Printf("✅ [MERKLE-V5] Computed 5-leaf domain-tagged merkleRoot: %x", merkleRootHash[:])
+	log.Printf("   adiURLHash: %x → tagged: %x", adiURLHash[:8], taggedAdi[:8])
+	log.Printf("   OperationCommitment: %x → tagged: %x", commitments.OperationCommitment[:8], taggedOp[:8])
+	log.Printf("   CrossChainCommitment: %x → tagged: %x", commitments.CrossChainCommitment[:8], taggedCC[:8])
+	log.Printf("   GovernanceRoot: %x → tagged: %x", commitments.GovernanceRoot[:8], taggedGov[:8])
+	log.Printf("   ExecutionCommitment: %x → tagged: %x", commitments.ExecutionCommitment[:8], taggedExec[:8])
 
 	// CRITICAL MERKLE FIX: When proofHashes is empty, set leafHash = merkleRoot
 	// The contract's _verifyMerkleProof() computes: computedHash = leaf, then iterates proofHashes.
