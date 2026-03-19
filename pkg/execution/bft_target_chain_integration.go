@@ -1273,7 +1273,7 @@ func (btce *BFTTargetChainExecutor) convertToLegacyIntent(intentID, transactionH
 			anchorContractAddr = os.Getenv("CERTEN_CONTRACT_ADDRESS")
 		}
 		if anchorContractAddr == "" {
-			anchorContractAddr = "0xEb17eBd351D2e040a0cB3026a3D04BEc182d8b98" // Sepolia default
+			anchorContractAddr = "0x4C8F0141cE43a77D6b80276B83AB092DeCEa050B" // Sepolia default (CertenAnchorV5)
 		}
 		crossChainData = []byte(fmt.Sprintf(`{"protocol":"CERTEN","version":"1.0","legs":[{"chain":"ethereum","chainId":%d,"to":"%s","amountWei":"1"}]}`, chainID, anchorContractAddr))
 	}

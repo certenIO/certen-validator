@@ -3123,7 +3123,7 @@ func (bv *BFTValidator) buildExecutionCommitmentFromIntent(certenIntent *CertenI
 	anchorContractAddress := leg.AnchorContract.Address
 	if anchorContractAddress == "" {
 		// Fallback to known Sepolia anchor contract
-		anchorContractAddress = "0xEb17eBd351D2e040a0cB3026a3D04BEc182d8b98"
+		anchorContractAddress = "0x4C8F0141cE43a77D6b80276B83AB092DeCEa050B" // CertenAnchorV5
 	}
 	anchorContract := common.HexToAddress(anchorContractAddress)
 

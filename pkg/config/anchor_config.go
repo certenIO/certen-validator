@@ -1030,10 +1030,10 @@ func loadEVMChainsFromEnv() map[int64]*EVMChainConfig {
 			RPCTimeout:         Duration(30 * time.Second),
 			MaxConnections:     10,
 			MaxIdleConnections: 5,
-			AnchorV4Address:    getEnv("SEPOLIA_ANCHORV4_ADDRESS", "0x813e7F7EF2FfC14Aa9E86e2ababC49059495eC3C"),
+			AnchorV4Address:    getEnv("SEPOLIA_ANCHORV5_ADDRESS", getEnv("SEPOLIA_ANCHORV4_ADDRESS", "0x4C8F0141cE43a77D6b80276B83AB092DeCEa050B")),
 			AnchorV3Address:    getEnv("SEPOLIA_ANCHORV3_ADDRESS", "0xEb17eBd351D2e040a0cB3026a3D04BEc182d8b98"),
 			BLSVerifierAddress: getEnv("SEPOLIA_BLSZKVERIFIER_ADDRESS", "0x631B6444216b981561034655349F8a28962DcC5F"),
-			AccountFactory:     getEnv("SEPOLIA_ACCOUNTFACTORY_ADDRESS", "0x36d019b8218ae4fbe684Aa8FD7F3F400b2EFb589"),  // V4 Factory
+			AccountFactory:     getEnv("SEPOLIA_ACCOUNTFACTORY_V6_ADDRESS", getEnv("SEPOLIA_ACCOUNTFACTORY_ADDRESS", "0x81690a11b356E196A5caEF59792f1d2485Bde316")),
 			MaxGasPriceGwei:    getEnvInt64("SEPOLIA_MAX_GAS_PRICE_GWEI", 100),
 			MaxPriorityFeeGwei: getEnvInt64("SEPOLIA_MAX_PRIORITY_FEE_GWEI", 2),
 			GasLimitAnchor:     getEnvInt64("SEPOLIA_GAS_LIMIT_ANCHOR", 500000),

@@ -215,8 +215,8 @@ type CrossContractConfig struct {
 func DefaultCrossContractConfig() *CrossContractConfig {
 	return &CrossContractConfig{
 		EthereumRPCURL:              "https://rpc.sepolia.org",
-		CreationContractAddress:     "0xEb17eBd351D2e040a0cB3026a3D04BEc182d8b98", // CertenAnchorV3 (unified)
-		VerificationContractAddress: "0xEb17eBd351D2e040a0cB3026a3D04BEc182d8b98", // CertenAnchorV3 (unified)
+		CreationContractAddress:     "0x4C8F0141cE43a77D6b80276B83AB092DeCEa050B", // CertenAnchorV5
+		VerificationContractAddress: "0x4C8F0141cE43a77D6b80276B83AB092DeCEa050B", // CertenAnchorV5
 		AccountContractAddress:      "0xC30E74e54a54a470139b75633CEDeC8404743020",
 		RequireOnChainVerification:  true,
 		VerificationTimeout:         30 * time.Second,
