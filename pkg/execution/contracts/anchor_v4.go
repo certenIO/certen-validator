@@ -159,11 +159,14 @@ func (w *CertenAnchorWrapper) GetAnchorFull(opts *bind.CallOpts, anchorId [32]by
 		OperationCommitment:   result.OperationCommitment,
 		CrossChainCommitment:  result.CrossChainCommitment,
 		GovernanceRoot:        result.GovernanceRoot,
+		ExecutionCommitment:   result.ExecutionCommitment,
 		AccumulateBlockHeight: result.AccumulateBlockHeight,
 		Timestamp:             result.Timestamp,
 		Validator:             result.Validator,
 		Valid:                 result.Valid,
 		ProofExecuted:         result.ProofExecuted,
+		GovernanceExecuted:    result.GovernanceExecuted,
+		GovernanceLevel:       result.GovernanceLevel,
 	}, nil
 }
 

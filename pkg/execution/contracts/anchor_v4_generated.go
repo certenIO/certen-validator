@@ -315,7 +315,7 @@ func (_CertenAnchorV4 *CertenAnchorV4CallerSession) AnchorIds(arg0 *big.Int) ([3
 
 // Anchors is a free data retrieval call binding the contract method 0xb01b6d53.
 //
-// Solidity: function anchors(bytes32 ) view returns(bytes32 bundleId, bytes32 merkleRoot, bytes32 adiURLHash, bytes32 operationCommitment, bytes32 crossChainCommitment, bytes32 governanceRoot, uint256 accumulateBlockHeight, uint256 timestamp, address validator, bool valid, bool proofExecuted)
+// Solidity: function anchors(bytes32 ) view returns(bytes32 bundleId, bytes32 merkleRoot, bytes32 adiURLHash, bytes32 operationCommitment, bytes32 crossChainCommitment, bytes32 governanceRoot, bytes32 executionCommitment, uint256 accumulateBlockHeight, uint256 timestamp, address validator, bool valid, bool proofExecuted, bool governanceExecuted, uint8 governanceLevel)
 func (_CertenAnchorV4 *CertenAnchorV4Caller) Anchors(opts *bind.CallOpts, arg0 [32]byte) (struct {
 	BundleId              [32]byte
 	MerkleRoot            [32]byte
@@ -323,11 +323,14 @@ func (_CertenAnchorV4 *CertenAnchorV4Caller) Anchors(opts *bind.CallOpts, arg0 [
 	OperationCommitment   [32]byte
 	CrossChainCommitment  [32]byte
 	GovernanceRoot        [32]byte
+	ExecutionCommitment   [32]byte
 	AccumulateBlockHeight *big.Int
 	Timestamp             *big.Int
 	Validator             common.Address
 	Valid                 bool
 	ProofExecuted         bool
+	GovernanceExecuted    bool
+	GovernanceLevel       uint8
 }, error) {
 	var out []interface{}
 	err := _CertenAnchorV4.contract.Call(opts, &out, "anchors", arg0)
@@ -339,11 +342,14 @@ func (_CertenAnchorV4 *CertenAnchorV4Caller) Anchors(opts *bind.CallOpts, arg0 [
 		OperationCommitment   [32]byte
 		CrossChainCommitment  [32]byte
 		GovernanceRoot        [32]byte
+		ExecutionCommitment   [32]byte
 		AccumulateBlockHeight *big.Int
 		Timestamp             *big.Int
 		Validator             common.Address
 		Valid                 bool
 		ProofExecuted         bool
+		GovernanceExecuted    bool
+		GovernanceLevel       uint8
 	})
 	if err != nil {
 		return *outstruct, err
@@ -355,11 +361,14 @@ func (_CertenAnchorV4 *CertenAnchorV4Caller) Anchors(opts *bind.CallOpts, arg0 [
 	outstruct.OperationCommitment = *abi.ConvertType(out[3], new([32]byte)).(*[32]byte)
 	outstruct.CrossChainCommitment = *abi.ConvertType(out[4], new([32]byte)).(*[32]byte)
 	outstruct.GovernanceRoot = *abi.ConvertType(out[5], new([32]byte)).(*[32]byte)
-	outstruct.AccumulateBlockHeight = *abi.ConvertType(out[6], new(*big.Int)).(**big.Int)
-	outstruct.Timestamp = *abi.ConvertType(out[7], new(*big.Int)).(**big.Int)
-	outstruct.Validator = *abi.ConvertType(out[8], new(common.Address)).(*common.Address)
-	outstruct.Valid = *abi.ConvertType(out[9], new(bool)).(*bool)
-	outstruct.ProofExecuted = *abi.ConvertType(out[10], new(bool)).(*bool)
+	outstruct.ExecutionCommitment = *abi.ConvertType(out[6], new([32]byte)).(*[32]byte)
+	outstruct.AccumulateBlockHeight = *abi.ConvertType(out[7], new(*big.Int)).(**big.Int)
+	outstruct.Timestamp = *abi.ConvertType(out[8], new(*big.Int)).(**big.Int)
+	outstruct.Validator = *abi.ConvertType(out[9], new(common.Address)).(*common.Address)
+	outstruct.Valid = *abi.ConvertType(out[10], new(bool)).(*bool)
+	outstruct.ProofExecuted = *abi.ConvertType(out[11], new(bool)).(*bool)
+	outstruct.GovernanceExecuted = *abi.ConvertType(out[12], new(bool)).(*bool)
+	outstruct.GovernanceLevel = *abi.ConvertType(out[13], new(uint8)).(*uint8)
 
 	return *outstruct, err
 
@@ -367,7 +376,7 @@ func (_CertenAnchorV4 *CertenAnchorV4Caller) Anchors(opts *bind.CallOpts, arg0 [
 
 // Anchors is a free data retrieval call binding the contract method 0xb01b6d53.
 //
-// Solidity: function anchors(bytes32 ) view returns(bytes32 bundleId, bytes32 merkleRoot, bytes32 adiURLHash, bytes32 operationCommitment, bytes32 crossChainCommitment, bytes32 governanceRoot, uint256 accumulateBlockHeight, uint256 timestamp, address validator, bool valid, bool proofExecuted)
+// Solidity: function anchors(bytes32 ) view returns(bytes32 bundleId, bytes32 merkleRoot, bytes32 adiURLHash, bytes32 operationCommitment, bytes32 crossChainCommitment, bytes32 governanceRoot, bytes32 executionCommitment, uint256 accumulateBlockHeight, uint256 timestamp, address validator, bool valid, bool proofExecuted, bool governanceExecuted, uint8 governanceLevel)
 func (_CertenAnchorV4 *CertenAnchorV4Session) Anchors(arg0 [32]byte) (struct {
 	BundleId              [32]byte
 	MerkleRoot            [32]byte
@@ -375,18 +384,21 @@ func (_CertenAnchorV4 *CertenAnchorV4Session) Anchors(arg0 [32]byte) (struct {
 	OperationCommitment   [32]byte
 	CrossChainCommitment  [32]byte
 	GovernanceRoot        [32]byte
+	ExecutionCommitment   [32]byte
 	AccumulateBlockHeight *big.Int
 	Timestamp             *big.Int
 	Validator             common.Address
 	Valid                 bool
 	ProofExecuted         bool
+	GovernanceExecuted    bool
+	GovernanceLevel       uint8
 }, error) {
 	return _CertenAnchorV4.Contract.Anchors(&_CertenAnchorV4.CallOpts, arg0)
 }
 
 // Anchors is a free data retrieval call binding the contract method 0xb01b6d53.
 //
-// Solidity: function anchors(bytes32 ) view returns(bytes32 bundleId, bytes32 merkleRoot, bytes32 adiURLHash, bytes32 operationCommitment, bytes32 crossChainCommitment, bytes32 governanceRoot, uint256 accumulateBlockHeight, uint256 timestamp, address validator, bool valid, bool proofExecuted)
+// Solidity: function anchors(bytes32 ) view returns(bytes32 bundleId, bytes32 merkleRoot, bytes32 adiURLHash, bytes32 operationCommitment, bytes32 crossChainCommitment, bytes32 governanceRoot, bytes32 executionCommitment, uint256 accumulateBlockHeight, uint256 timestamp, address validator, bool valid, bool proofExecuted, bool governanceExecuted, uint8 governanceLevel)
 func (_CertenAnchorV4 *CertenAnchorV4CallerSession) Anchors(arg0 [32]byte) (struct {
 	BundleId              [32]byte
 	MerkleRoot            [32]byte
@@ -394,11 +406,14 @@ func (_CertenAnchorV4 *CertenAnchorV4CallerSession) Anchors(arg0 [32]byte) (stru
 	OperationCommitment   [32]byte
 	CrossChainCommitment  [32]byte
 	GovernanceRoot        [32]byte
+	ExecutionCommitment   [32]byte
 	AccumulateBlockHeight *big.Int
 	Timestamp             *big.Int
 	Validator             common.Address
 	Valid                 bool
 	ProofExecuted         bool
+	GovernanceExecuted    bool
+	GovernanceLevel       uint8
 }, error) {
 	return _CertenAnchorV4.Contract.Anchors(&_CertenAnchorV4.CallOpts, arg0)
 }
