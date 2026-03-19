@@ -58,6 +58,7 @@ type CertenAnchorV4CommitmentData struct {
 	OperationCommitment  [32]byte
 	CrossChainCommitment [32]byte
 	GovernanceRoot       [32]byte
+	ExecutionCommitment  [32]byte
 	SourceChain          string
 	SourceBlockHeight    *big.Int
 	SourceTxHash         [32]byte

@@ -340,6 +340,7 @@ func ConvertFromExtended(proof ComprehensiveCertenProof) CertenProof {
 			OperationCommitment:  proof.Commitments.OperationCommitment,
 			CrossChainCommitment: proof.Commitments.CrossChainCommitment,
 			GovernanceRoot:       proof.Commitments.GovernanceRoot,
+			ExecutionCommitment:  proof.Commitments.ExecutionCommitment,
 			SourceChain:          proof.Commitments.SourceChain,
 			SourceBlockHeight:    proof.Commitments.SourceBlockHeight,
 			SourceTxHash:         proof.Commitments.SourceTxHash,
