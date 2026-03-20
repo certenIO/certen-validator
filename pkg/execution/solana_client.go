@@ -158,6 +158,7 @@ type SolAccountMeta struct {
 
 // SolanaAnchorData holds anchor data read from the Solana anchor program.
 // Field order must match Rust AnchorAccount struct in state/anchor.rs.
+// V5: Added ExecutionCommitment, GovernanceExecuted, GovernanceLevel fields.
 type SolanaAnchorData struct {
 	BundleId             [32]byte
 	MerkleRoot           [32]byte
@@ -165,11 +166,14 @@ type SolanaAnchorData struct {
 	OperationCommitment  [32]byte
 	CrossChainCommitment [32]byte
 	GovernanceRoot       [32]byte
+	ExecutionCommitment  [32]byte // V5 CRITICAL-001
 	BlockHeight          uint64
 	Timestamp            int64
 	Validator            [32]byte
 	Valid                bool
 	ProofExecuted        bool
+	GovernanceExecuted   bool // V5 CRITICAL-001
+	GovernanceLevel      uint8 // V5 CRITICAL-001
 }
 
 // SolanaCertenProof is the Borsh-serialized proof for Step 2.
@@ -476,7 +480,8 @@ func anchorDiscriminator(methodName string) [8]byte {
 // BORSH INSTRUCTION DATA BUILDERS
 // =============================================================================
 
-func (sc *SolanaClient) buildCreateAnchorIx(bundleId, adiURLHash, opCommit, ccCommit, govRoot [32]byte, blockHeight uint64) []byte {
+// V5: Added executionCommitment (7th param) for CRITICAL-001
+func (sc *SolanaClient) buildCreateAnchorIx(bundleId, adiURLHash, opCommit, ccCommit, govRoot, execCommitment [32]byte, blockHeight uint64) []byte {
 	disc := anchorDiscriminator("create_anchor")
 	var buf bytes.Buffer
 	buf.Write(disc[:])
@@ -485,6 +490,7 @@ func (sc *SolanaClient) buildCreateAnchorIx(bundleId, adiURLHash, opCommit, ccCo
 	buf.Write(opCommit[:])
 	buf.Write(ccCommit[:])
 	buf.Write(govRoot[:])
+	buf.Write(execCommitment[:])
 	solBorshWriteU64(&buf, blockHeight)
 	return buf.Bytes()
 }
@@ -646,10 +652,11 @@ func (sc *SolanaClient) borshWriteADIGovernanceProof(buf *bytes.Buffer, p Solana
 // STEP 1: CREATE ANCHOR
 // =============================================================================
 
-// CreateAnchor calls create_anchor on the Solana Anchor V4 program.
+// CreateAnchor calls create_anchor on the Solana Anchor V5 program.
+// V5: Added executionCommitment parameter (CRITICAL-001).
 func (sc *SolanaClient) CreateAnchor(
 	ctx context.Context,
-	bundleId, adiURLHash, opCommit, ccCommit, govRoot [32]byte,
+	bundleId, adiURLHash, opCommit, ccCommit, govRoot, execCommitment [32]byte,
 	blockHeight uint64,
 ) (string, error) {
 	log.Printf("📡 [SOLANA] Creating anchor...")
@@ -662,8 +669,8 @@ func (sc *SolanaClient) CreateAnchor(
 	validatorRecordPDA, _ := sc.validatorPDA(signerPubkey)
 	anchorPDA, _ := sc.anchorPDA(bundleId)
 
-	// Build instruction data
-	ixData := sc.buildCreateAnchorIx(bundleId, adiURLHash, opCommit, ccCommit, govRoot, blockHeight)
+	// Build instruction data (V5: includes execution commitment)
+	ixData := sc.buildCreateAnchorIx(bundleId, adiURLHash, opCommit, ccCommit, govRoot, execCommitment, blockHeight)
 
 	// Build instruction with accounts in order
 	ix := SolInstruction{
