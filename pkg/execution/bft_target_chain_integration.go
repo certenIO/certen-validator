@@ -1747,11 +1747,26 @@ func (btce *BFTTargetChainExecutor) executeNearOperations(
 		govRoot = comprehensiveProof.Commitments.GovernanceRoot
 	}
 
+	// V5: CRITICAL-001 - Compute execution commitment for NEAR
+	// Matches Rust: keccak256(network_id || target || deposit_le_bytes || keccak256(method || args))
+	var execCommitment [32]byte
+	allLegsForExec := btce.extractAllLegsFromIntent(legacyIntent)
+	nearLegForExec := btce.findLegForChainPrefix(allLegsForExec, "near", 398)
+	if nearLegForExec != nil {
+		nearTargetID := btce.extractNearFieldFromCrossChainData(legacyIntent, "to")
+		nearDepositYocto := big.NewInt(1)
+		if nearLegForExec.Value != nil {
+			nearDepositYocto = new(big.Int).Set(nearLegForExec.Value)
+		}
+		execCommitment = computeNearExecutionCommitment("testnet", nearTargetID, nearDepositYocto, "transfer", []byte{})
+		btce.logger.Printf("🔒 [NEAR-EXEC] CRITICAL-001 ExecutionCommitment: 0x%x", execCommitment[:8])
+	}
+
 	// ========== Step 1: Create Anchor ==========
 	btce.logger.Printf("🔗 [NEAR-EXEC] Step 1: Creating anchor on %s...", nearAnchorContract)
 
 	createTxHash, err := nearClient.CreateAnchor(ctx, nearAnchorContract,
-		bundleIdHash, adiURLHash, opCommitment, ccCommitment, govRoot,
+		bundleIdHash, adiURLHash, opCommitment, ccCommitment, govRoot, execCommitment,
 		certenProof.BlockHeight, gasCreateAnchor,
 	)
 	if err != nil {
@@ -1892,12 +1907,13 @@ func (btce *BFTTargetChainExecutor) executeNearOperations(
 					}
 					nextNonce := currentNonce + 1
 
-					// Build ADIGovernanceProof (pass deposit so authority level matches contract thresholds)
+					// V5: Build ADIGovernanceProof with execution commitment for 5-leaf domain-tagged proof
 					accountProof := btce.buildNearAccountProof(
 						bundleIdHash, certenProof, adiURL,
 						anchorData.OperationCommitment,
 						anchorData.CrossChainCommitment,
 						anchorData.GovernanceRoot,
+						execCommitment,
 						targetValue,
 						nextNonce,
 					)
@@ -2031,6 +2047,7 @@ func (btce *BFTTargetChainExecutor) buildNearCertenProof(
 			OperationCommitment:  encodeBytes32AsBase64(proof.Commitments.OperationCommitment),
 			CrossChainCommitment: encodeBytes32AsBase64(proof.Commitments.CrossChainCommitment),
 			GovernanceRoot:       encodeBytes32AsBase64(proof.Commitments.GovernanceRoot),
+			ExecutionCommitment:  encodeBytes32AsBase64(proof.Commitments.ExecutionCommitment),
 		},
 		ExpirationTime: expirationNano,
 	}
@@ -2059,7 +2076,7 @@ func nearAuthorityLevelForDeposit(depositYocto *big.Int) string {
 }
 
 // buildNearAccountProof constructs the NearADIGovernanceProofJSON for Step 3.
-// Mirrors buildTronAccountProof — computes a 4-leaf merkle proof for adiURL verification.
+// V5: Computes a 3-element domain-tagged merkle proof for the 5-leaf tree.
 // governanceNonce must be > the contract's current nonce (queried via GetGovernanceNonce).
 func (btce *BFTTargetChainExecutor) buildNearAccountProof(
 	bundleID [32]byte,
@@ -2068,6 +2085,7 @@ func (btce *BFTTargetChainExecutor) buildNearAccountProof(
 	opCommitment [32]byte,
 	ccCommitment [32]byte,
 	govRoot [32]byte,
+	execCommitment [32]byte,
 	depositYocto *big.Int,
 	governanceNonce uint64,
 ) NearADIGovernanceProofJSON {
@@ -2075,21 +2093,33 @@ func (btce *BFTTargetChainExecutor) buildNearAccountProof(
 	requiredLevel := nearAuthorityLevelForDeposit(depositYocto)
 	log.Printf("🔐 [NEAR-AUTH] Deposit %s yoctoNEAR → authority level: %s, nonce: %d", depositYocto.String(), requiredLevel, governanceNonce)
 
-	// Build merkle proof: same 4-leaf tree as TRON/EVM
-	// proof[0] = operationCommitment (sibling at level 0)
-	// proof[1] = sortedHash(ccCommitment, govRoot) (sibling at level 1)
-	hash23 := sortedHash(ccCommitment[:], govRoot[:])
-	var hash23Arr [32]byte
-	copy(hash23Arr[:], hash23)
+	// V5: Build 3-element domain-tagged proof for 5-leaf tree
+	// Tree: root = sortedHash(sortedHash(sortedHash(tagAdi, tagOp), sortedHash(tagCC, tagGov)), tagExec)
+	// Proof for tagAdi leaf:
+	//   proof[0] = taggedOp (sibling at level 0)
+	//   proof[1] = sortedHash(taggedCC, taggedGov) (sibling at level 1)
+	//   proof[2] = taggedExec (sibling at level 2, promoted 5th leaf)
+	taggedOp := domainTagHash("certen:op:", opCommitment[:])
+	taggedCC := domainTagHash("certen:cc:", ccCommitment[:])
+	taggedGov := domainTagHash("certen:gov:", govRoot[:])
+	taggedExec := domainTagHash("certen:exec:", execCommitment[:])
 
-	log.Printf("🌳 [NEAR-MERKLE] Built 4-leaf proof for adiURL verification:")
+	hash23 := sortedHash(taggedCC, taggedGov)
+	var taggedOpArr, hash23Arr, taggedExecArr [32]byte
+	copy(taggedOpArr[:], taggedOp)
+	copy(hash23Arr[:], hash23)
+	copy(taggedExecArr[:], taggedExec)
+
+	log.Printf("🌳 [NEAR-MERKLE-V5] Built 5-leaf domain-tagged proof for adiURL verification:")
 	log.Printf("   adiURL: %s", adiURL)
-	log.Printf("   proof[0] (op): 0x%x", opCommitment[:8])
+	log.Printf("   proof[0] (taggedOp): 0x%x", taggedOpArr[:8])
 	log.Printf("   proof[1] (hash23): 0x%x", hash23Arr[:8])
+	log.Printf("   proof[2] (taggedExec): 0x%x", taggedExecArr[:8])
 
 	merkleProof := []string{
-		encodeBytes32AsBase64(opCommitment),
+		encodeBytes32AsBase64(taggedOpArr),
 		encodeBytes32AsBase64(hash23Arr),
+		encodeBytes32AsBase64(taggedExecArr),
 	}
 
 	now := time.Now()
@@ -2139,6 +2169,47 @@ func (btce *BFTTargetChainExecutor) buildNearAccountProof(
 		Nonce:               governanceNonce, // Must be > current nonce (queried from contract)
 		RequiredLevel:       requiredLevel,    // Matches deposit-based contract thresholds
 	}
+}
+
+// computeNearExecutionCommitment computes the CRITICAL-001 execution commitment for NEAR.
+// Matches Rust: keccak256(network_id || target || deposit_le_bytes || keccak256(method || args))
+func computeNearExecutionCommitment(networkID, target string, depositYocto *big.Int, method string, args []byte) [32]byte {
+	// Hash the call data (method + args)
+	dataHasher := ethcrypto.NewKeccakState()
+	dataHasher.Write([]byte(method))
+	dataHasher.Write(args)
+	dataHash := ethcrypto.HashData(dataHasher, nil)
+
+	// Compute commitment: keccak256(network_id || target || deposit_le || data_hash)
+	// Use little-endian u128 for deposit (matching Rust to_le_bytes for u128)
+	depositBytes := make([]byte, 16) // u128 = 16 bytes
+	if depositYocto != nil {
+		b := depositYocto.Bytes()
+		// Convert big-endian to little-endian
+		for i, j := 0, len(b)-1; i <= j; i, j = i+1, j-1 {
+			b[i], b[j] = b[j], b[i]
+		}
+		copy(depositBytes, b)
+	}
+
+	hasher := ethcrypto.NewKeccakState()
+	hasher.Write([]byte(networkID))
+	hasher.Write([]byte(target))
+	hasher.Write(depositBytes)
+	hasher.Write(dataHash.Bytes())
+	result := ethcrypto.HashData(hasher, nil)
+
+	var out [32]byte
+	copy(out[:], result.Bytes())
+	return out
+}
+
+// domainTagHash computes keccak256(prefix || value) for domain-tagged leaves.
+// Matches Rust: domain_tag_hash(b"certen:adi:", &value) and EVM: keccak256(abi.encodePacked("certen:adi:", value))
+func domainTagHash(prefix string, value []byte) []byte {
+	data := append([]byte(prefix), value...)
+	hash := ethcrypto.Keccak256(data)
+	return hash
 }
 
 // extractNearTargetFromCrossChainData extracts the original NEAR account ID from CrossChainData.

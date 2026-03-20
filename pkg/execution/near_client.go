@@ -94,6 +94,7 @@ func (nc *NearClient) GetSignerAccountID() string {
 // =============================================================================
 
 // CreateAnchor calls create_anchor on the NEAR anchor contract.
+// V5: Now takes executionCommitment as 6th param (7 total) for CRITICAL-001.
 func (nc *NearClient) CreateAnchor(
 	ctx context.Context,
 	contractID string,
@@ -102,6 +103,7 @@ func (nc *NearClient) CreateAnchor(
 	operationCommitment [32]byte,
 	crossChainCommitment [32]byte,
 	governanceRoot [32]byte,
+	executionCommitment [32]byte,
 	blockHeight uint64,
 	gas uint64,
 ) (string, error) {
@@ -109,11 +111,12 @@ func (nc *NearClient) CreateAnchor(
 	log.Printf("   Bundle ID: 0x%x", bundleId[:8])
 
 	args := map[string]interface{}{
-		"bundle_id":              base64.StdEncoding.EncodeToString(bundleId[:]),
-		"adi_url_hash":           base64.StdEncoding.EncodeToString(adiURLHash[:]),
-		"operation_commitment":   base64.StdEncoding.EncodeToString(operationCommitment[:]),
-		"cross_chain_commitment": base64.StdEncoding.EncodeToString(crossChainCommitment[:]),
-		"governance_root":        base64.StdEncoding.EncodeToString(governanceRoot[:]),
+		"bundle_id":               base64.StdEncoding.EncodeToString(bundleId[:]),
+		"adi_url_hash":            base64.StdEncoding.EncodeToString(adiURLHash[:]),
+		"operation_commitment":    base64.StdEncoding.EncodeToString(operationCommitment[:]),
+		"cross_chain_commitment":  base64.StdEncoding.EncodeToString(crossChainCommitment[:]),
+		"governance_root":         base64.StdEncoding.EncodeToString(governanceRoot[:]),
+		"execution_commitment":    base64.StdEncoding.EncodeToString(executionCommitment[:]),
 		"accumulate_block_height": blockHeight,
 	}
 
@@ -165,10 +168,12 @@ type NearBLSProof struct {
 }
 
 // NearCommitmentsJSON maps to Rust CommitmentDataInput.
+// V5: Added ExecutionCommitment for CRITICAL-001.
 type NearCommitmentsJSON struct {
 	OperationCommitment  string `json:"operation_commitment"`
 	CrossChainCommitment string `json:"cross_chain_commitment"`
 	GovernanceRoot       string `json:"governance_root"`
+	ExecutionCommitment  string `json:"execution_commitment,omitempty"`
 }
 
 // NearBLSSignatureProofJSON is the JSON structure for the NEAR BLS ZK verifier's
