@@ -2466,7 +2466,7 @@ func (btce *BFTTargetChainExecutor) executeSolanaOperations(
 	// ========== Step 2: Execute Comprehensive Proof ==========
 	btce.logger.Printf("🔗 [SOLANA-EXEC] Step 2: Submitting comprehensive proof...")
 
-	solanaProof := btce.buildSolanaCertenProof(comprehensiveProof, certenProof)
+	solanaProof := btce.buildSolanaCertenProof(comprehensiveProof, certenProof, adiURLHash, execCommitment)
 
 	verifyTxSig, err := solClient.ExecuteComprehensiveProof(ctx, bundleIdHash, solanaProof)
 	if err != nil {
@@ -2727,9 +2727,12 @@ func convertABIProofToBorshForSolana(abiBytes []byte) []byte {
 }
 
 // buildSolanaCertenProof converts the comprehensive proof to Solana Borsh format.
+// V5: adiURLHash and execCommitment needed to recompute 5-leaf domain-tagged merkle root.
 func (btce *BFTTargetChainExecutor) buildSolanaCertenProof(
 	compProof *contracts.ComprehensiveCertenProof,
 	certenProof *proof.CertenProof,
+	adiURLHash [32]byte,
+	execCommitment [32]byte,
 ) SolanaCertenProof {
 	if compProof == nil {
 		return SolanaCertenProof{
@@ -2810,11 +2813,27 @@ func (btce *BFTTargetChainExecutor) buildSolanaCertenProof(
 	var targetAddress [32]byte
 	copy(targetAddress[12:], compProof.Commitments.TargetAddress.Bytes())
 
+	// V5: Recompute 5-leaf domain-tagged merkle root to match on-chain anchor
+	// The proof.MerkleRoot uses the EVM format; Solana V5 uses domain-tagged 5-leaf tree
+	taggedAdi := domainTagHash("certen:adi:", adiURLHash[:])
+	taggedOp := domainTagHash("certen:op:", compProof.Commitments.OperationCommitment[:])
+	taggedCC := domainTagHash("certen:cc:", compProof.Commitments.CrossChainCommitment[:])
+	taggedGov := domainTagHash("certen:gov:", compProof.Commitments.GovernanceRoot[:])
+	taggedExec := domainTagHash("certen:exec:", execCommitment[:])
+	solHash01 := sortedHash(taggedAdi, taggedOp)
+	solHash23 := sortedHash(taggedCC, taggedGov)
+	solHash0123 := sortedHash(solHash01, solHash23)
+	solMerkleRoot := sortedHash(solHash0123, taggedExec)
+	var solMerkleRootArr [32]byte
+	copy(solMerkleRootArr[:], solMerkleRoot)
+
+	btce.logger.Printf("🌳 [SOLANA-MERKLE-V5] Recomputed 5-leaf domain-tagged merkleRoot for proof: 0x%x", solMerkleRootArr[:8])
+
 	return SolanaCertenProof{
 		TransactionHash: compProof.TransactionHash,
-		MerkleRoot:      compProof.MerkleRoot,
+		MerkleRoot:      solMerkleRootArr,
 		ProofHashes:     proofHashes,
-		LeafHash:        compProof.LeafHash,
+		LeafHash:        solMerkleRootArr,
 		GovernanceProof: SolanaGovernanceProofData{
 			KeyBookUrl:         compProof.GovernanceProof.KeyBookURL,
 			KeyBookRoot:        compProof.GovernanceProof.KeyBookRoot,
