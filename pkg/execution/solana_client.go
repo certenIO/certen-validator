@@ -1034,11 +1034,13 @@ func (sc *SolanaClient) GetAnchorData(ctx context.Context, bundleId [32]byte) (*
 	data = data[8:] // Skip discriminator
 
 	// Parse Borsh-encoded anchor data
-	// Field order must match Rust AnchorAccount struct in state/anchor.rs:
+	// V5 field order must match Rust AnchorAccount struct in state/anchor.rs:
 	// bundle_id([32]), merkle_root([32]), adi_url_hash([32]), op_commit([32]),
-	// cc_commit([32]), gov_root([32]), block_height(u64), timestamp(i64),
-	// validator([32]), valid(bool), proof_executed(bool), reserved([64])
-	expectedMinSize := 32*7 + 8 + 8 + 2
+	// cc_commit([32]), gov_root([32]), execution_commitment([32]),
+	// block_height(u64), timestamp(i64), validator([32]),
+	// valid(bool), proof_executed(bool), governance_executed(bool), governance_level(u8),
+	// reserved([64])
+	expectedMinSize := 32*8 + 8 + 8 + 4
 	if len(data) < expectedMinSize {
 		return nil, fmt.Errorf("anchor data too short: %d bytes (need >= %d)", len(data), expectedMinSize)
 	}
@@ -1052,14 +1054,17 @@ func (sc *SolanaClient) GetAnchorData(ctx context.Context, bundleId [32]byte) (*
 	copy(anchor.OperationCommitment[:], data[off:off+32]); off += 32
 	copy(anchor.CrossChainCommitment[:], data[off:off+32]); off += 32
 	copy(anchor.GovernanceRoot[:], data[off:off+32]); off += 32
+	copy(anchor.ExecutionCommitment[:], data[off:off+32]); off += 32
 	anchor.BlockHeight = binary.LittleEndian.Uint64(data[off:off+8]); off += 8
 	anchor.Timestamp = int64(binary.LittleEndian.Uint64(data[off:off+8])); off += 8
 	copy(anchor.Validator[:], data[off:off+32]); off += 32
 	anchor.Valid = data[off] != 0; off++
-	anchor.ProofExecuted = data[off] != 0
+	anchor.ProofExecuted = data[off] != 0; off++
+	anchor.GovernanceExecuted = data[off] != 0; off++
+	anchor.GovernanceLevel = data[off]
 
-	log.Printf("✅ [SOLANA] Anchor read-back: bundleId=0x%x opCommit=0x%x proofExecuted=%v",
-		anchor.BundleId[:8], anchor.OperationCommitment[:8], anchor.ProofExecuted)
+	log.Printf("✅ [SOLANA] Anchor read-back: bundleId=0x%x opCommit=0x%x execCommit=0x%x proofExecuted=%v govExecuted=%v",
+		anchor.BundleId[:8], anchor.OperationCommitment[:8], anchor.ExecutionCommitment[:8], anchor.ProofExecuted, anchor.GovernanceExecuted)
 
 	return anchor, nil
 }
