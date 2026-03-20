@@ -1786,7 +1786,7 @@ func (btce *BFTTargetChainExecutor) executeNearOperations(
 	// ========== Step 2: Execute Comprehensive Proof ==========
 	btce.logger.Printf("🔗 [NEAR-EXEC] Step 2: Submitting comprehensive proof on %s...", nearAnchorContract)
 
-	nearProof := btce.buildNearCertenProof(comprehensiveProof, certenProof, nearSignerAccountID)
+	nearProof := btce.buildNearCertenProof(comprehensiveProof, certenProof, nearSignerAccountID, adiURLHash, execCommitment)
 
 	verifyTxHash, err := nearClient.ExecuteComprehensiveProof(ctx, nearAnchorContract,
 		bundleIdHash, nearProof, gasVerifyProof,
@@ -1949,10 +1949,13 @@ func (btce *BFTTargetChainExecutor) executeNearOperations(
 
 // buildNearCertenProof converts the comprehensive proof to NEAR JSON format.
 // Must match the Rust CertenProofInput struct exactly.
+// V5: adiURLHash and execCommitment needed to recompute 5-leaf domain-tagged merkle root.
 func (btce *BFTTargetChainExecutor) buildNearCertenProof(
 	proof *contracts.ComprehensiveCertenProof,
 	certenProof *proof.CertenProof,
 	nearSignerAccountID string,
+	adiURLHash [32]byte,
+	execCommitment [32]byte,
 ) NearCertenProofInput {
 	if proof == nil {
 		return NearCertenProofInput{
@@ -2021,11 +2024,28 @@ func (btce *BFTTargetChainExecutor) buildNearCertenProof(
 	// Validator addresses must be NEAR AccountIds, not hex EVM addresses
 	validatorAddrs := []string{nearSignerAccountID}
 
+	// V5: Recompute 5-leaf domain-tagged merkle root to match on-chain anchor
+	// The proof.MerkleRoot uses the old EVM format; NEAR V5 uses domain-tagged 5-leaf tree
+	taggedAdi := domainTagHash("certen:adi:", adiURLHash[:])
+	taggedOp := domainTagHash("certen:op:", proof.Commitments.OperationCommitment[:])
+	taggedCC := domainTagHash("certen:cc:", proof.Commitments.CrossChainCommitment[:])
+	taggedGov := domainTagHash("certen:gov:", proof.Commitments.GovernanceRoot[:])
+	taggedExec := domainTagHash("certen:exec:", execCommitment[:])
+	hash01 := sortedHash(taggedAdi, taggedOp)
+	hash23 := sortedHash(taggedCC, taggedGov)
+	hash0123 := sortedHash(hash01, hash23)
+	nearMerkleRoot := sortedHash(hash0123, taggedExec)
+	var nearMerkleRootArr [32]byte
+	copy(nearMerkleRootArr[:], nearMerkleRoot)
+
+	log.Printf("🌳 [NEAR-MERKLE-V5] Recomputed 5-leaf domain-tagged merkleRoot for proof: 0x%x", nearMerkleRootArr[:8])
+
+	// LeafHash = merkleRoot for trivial verification (no separate proof path needed)
 	return NearCertenProofInput{
 		TransactionHash: encodeBytes32AsBase64(proof.TransactionHash),
 		ProofHashes:     proofHashes,
-		MerkleRoot:      encodeBytes32AsBase64(proof.MerkleRoot),
-		LeafHash:        encodeBytes32AsBase64(proof.LeafHash),
+		MerkleRoot:      encodeBytes32AsBase64(nearMerkleRootArr),
+		LeafHash:        encodeBytes32AsBase64(nearMerkleRootArr),
 		GovernanceProof: NearGovernanceProof{
 			KeyBookRoot:        encodeBytes32AsBase64(proof.GovernanceProof.KeyBookRoot),
 			KeyPageProofs:      keyPageProofs,
