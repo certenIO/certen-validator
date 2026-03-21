@@ -3157,18 +3157,42 @@ func (btce *BFTTargetChainExecutor) executeAptosOperations(
 		govRoot = comprehensiveProof.Commitments.GovernanceRoot
 	}
 
+	// ========== CRITICAL-001: Compute execution commitment ==========
+	// Matches Move: keccak256(chain_id_u8 || target_32bytes || value_u64_le || data_hash_32bytes)
+	var execCommitment [32]byte
+	allLegsForExec := btce.extractAllLegsFromIntent(legacyIntent)
+	aptosLegForExec := btce.findLegForChainPrefix(allLegsForExec, "aptos", 2)
+	if aptosLegForExec != nil {
+		aptosToAddr := btce.extractAptosFieldFromCrossChainData(legacyIntent, "to")
+		aptosDepositOctas := uint64(1)
+		if aptosLegForExec.Value != nil {
+			weiValue := new(big.Int).Set(aptosLegForExec.Value)
+			octasValue := new(big.Int).Div(weiValue, big.NewInt(10_000_000_000))
+			if octasValue.Sign() > 0 {
+				aptosDepositOctas = octasValue.Uint64()
+			}
+		}
+		execCommitment = computeAptosExecutionCommitment(aptosTestnetChainID, aptosToAddr, aptosDepositOctas, [32]byte{})
+		btce.logger.Printf("🔒 [APTOS-EXEC] CRITICAL-001 ExecutionCommitment: 0x%x", execCommitment[:8])
+	} else {
+		// No Aptos leg — use a placeholder non-zero commitment
+		h := ethcrypto.Keccak256Hash([]byte("certen:aptos:no-leg"))
+		copy(execCommitment[:], h[:])
+		btce.logger.Printf("⚠️ [APTOS-EXEC] No Aptos leg found, using placeholder exec commitment")
+	}
+
 	// ========== Step 0: Auto-initialize anchor state ==========
 	btce.logger.Printf("🔗 [APTOS-EXEC] Step 0: Ensuring anchor state is initialized...")
 	if initErr := aptosClient.InitializeAnchorState(ctx); initErr != nil {
 		btce.logger.Printf("⚠️ [APTOS-EXEC] Anchor initialization failed (non-fatal): %v", initErr)
 	}
 
-	// ========== Step 1: Create Anchor ==========
-	btce.logger.Printf("🔗 [APTOS-EXEC] Step 1: Creating anchor...")
+	// ========== Step 1: Create Anchor (V5: 9 args with exec commitment) ==========
+	btce.logger.Printf("🔗 [APTOS-EXEC] Step 1: Creating anchor (V5)...")
 
 	createTxHash, err := aptosClient.CreateAnchor(ctx,
 		bundleIdHash, adiURLHash, opCommitment, ccCommitment, govRoot,
-		certenProof.BlockHeight,
+		execCommitment, certenProof.BlockHeight,
 	)
 	if err != nil {
 		btce.logger.Printf("❌ [APTOS-EXEC] Step 1 failed: %v", err)
@@ -3187,7 +3211,7 @@ func (btce *BFTTargetChainExecutor) executeAptosOperations(
 	// ========== Step 2: Execute Comprehensive Proof ==========
 	btce.logger.Printf("🔗 [APTOS-EXEC] Step 2: Submitting comprehensive proof...")
 
-	aptosProof := btce.buildAptosCertenProof(comprehensiveProof, certenProof)
+	aptosProof := btce.buildAptosCertenProof(comprehensiveProof, certenProof, adiURLHash, execCommitment)
 
 	verifyTxHash, err := aptosClient.submitComprehensiveProofBCS(ctx, bundleIdHash, aptosProof)
 	if err != nil {
@@ -3297,12 +3321,13 @@ func (btce *BFTTargetChainExecutor) executeAptosOperations(
 
 					btce.logger.Printf("💱 [APTOS-EXEC] Governance: target=%s octas=%d", recipientAddr, amountOctas)
 
-					// Build ADIGovernanceProof
+					// Build ADIGovernanceProof (V5: includes execCommitment)
 					accountProof := btce.buildAptosAccountProof(
 						bundleIdHash, certenProof, adiURL,
 						anchorData.OperationCommitment,
 						anchorData.CrossChainCommitment,
 						anchorData.GovernanceRoot,
+						execCommitment,
 						amountOctas,
 					)
 
@@ -3328,9 +3353,12 @@ func (btce *BFTTargetChainExecutor) executeAptosOperations(
 }
 
 // buildAptosCertenProof converts the comprehensive proof to Aptos format.
+// V5: adiURLHash and execCommitment needed to recompute 5-leaf domain-tagged merkle root.
 func (btce *BFTTargetChainExecutor) buildAptosCertenProof(
 	compProof *contracts.ComprehensiveCertenProof,
 	certenProof *proof.CertenProof,
+	adiURLHash [32]byte,
+	execCommitment [32]byte,
 ) AptosCertenProof {
 	if compProof == nil {
 		return AptosCertenProof{
@@ -3408,9 +3436,24 @@ func (btce *BFTTargetChainExecutor) buildAptosCertenProof(
 	// Target address: pad 20-byte EVM address to 32-byte Aptos address format
 	targetAddr := "0x" + hex.EncodeToString(common.LeftPadBytes(compProof.Commitments.TargetAddress.Bytes(), 32))
 
+	// V5: Recompute 5-leaf domain-tagged merkle root to match on-chain anchor
+	// The proof.MerkleRoot uses the old EVM format; Aptos V5 uses domain-tagged 5-leaf tree
+	taggedAdi := domainTagHash("certen:adi:", adiURLHash[:])
+	taggedOp := domainTagHash("certen:op:", compProof.Commitments.OperationCommitment[:])
+	taggedCC := domainTagHash("certen:cc:", compProof.Commitments.CrossChainCommitment[:])
+	taggedGov := domainTagHash("certen:gov:", compProof.Commitments.GovernanceRoot[:])
+	taggedExec := domainTagHash("certen:exec:", execCommitment[:])
+	aptosHash01 := sortedHash(taggedAdi, taggedOp)
+	aptosHash23 := sortedHash(taggedCC, taggedGov)
+	aptosHash0123 := sortedHash(aptosHash01, aptosHash23)
+	aptosMerkleRoot := sortedHash(aptosHash0123, taggedExec)
+	var aptosMerkleRootArr [32]byte
+	copy(aptosMerkleRootArr[:], aptosMerkleRoot)
+	btce.logger.Printf("🌳 [APTOS-MERKLE-V5] Recomputed 5-leaf domain-tagged merkleRoot for proof: 0x%x", aptosMerkleRootArr[:8])
+
 	return AptosCertenProof{
 		TransactionHash: compProof.TransactionHash,
-		MerkleRoot:      compProof.MerkleRoot,
+		MerkleRoot:      aptosMerkleRootArr,
 		ProofHashes:     proofHashes,
 		LeafHash:        compProof.LeafHash,
 
@@ -3447,7 +3490,7 @@ func (btce *BFTTargetChainExecutor) buildAptosCertenProof(
 }
 
 // buildAptosAccountProof constructs the AptosADIGovernanceProof for Step 3.
-// Mirrors buildNearAccountProof — computes a 4-leaf merkle proof for adiURL verification.
+// V5: 3-element domain-tagged proof for 5-leaf tree [taggedOp, hash23, taggedExec].
 func (btce *BFTTargetChainExecutor) buildAptosAccountProof(
 	bundleID [32]byte,
 	certenProof *proof.CertenProof,
@@ -3455,24 +3498,36 @@ func (btce *BFTTargetChainExecutor) buildAptosAccountProof(
 	opCommitment [32]byte,
 	ccCommitment [32]byte,
 	govRoot [32]byte,
+	execCommitment [32]byte,
 	amountOctas uint64,
 ) AptosADIGovernanceProof {
 	requiredLevel := aptosAuthorityLevelForOctas(amountOctas)
 	log.Printf("🔐 [APTOS-AUTH] %d octas → authority level: %d", amountOctas, requiredLevel)
 
-	// Build merkle proof: same 4-leaf tree as TRON/EVM/NEAR/Solana
-	// proof[0] = operationCommitment (sibling at level 0)
-	// proof[1] = sortedHash(ccCommitment, govRoot) (sibling at level 1)
-	hash23 := sortedHash(ccCommitment[:], govRoot[:])
-	var hash23Arr [32]byte
+	// V5: Build 3-element domain-tagged proof for 5-leaf tree
+	// Tree: root = sortedHash(sortedHash(sortedHash(tagAdi, tagOp), sortedHash(tagCC, tagGov)), tagExec)
+	// Proof for tagAdi leaf:
+	//   proof[0] = taggedOp (sibling at level 0)
+	//   proof[1] = sortedHash(taggedCC, taggedGov) (sibling at level 1)
+	//   proof[2] = taggedExec (sibling at level 2, promoted 5th leaf)
+	taggedOp := domainTagHash("certen:op:", opCommitment[:])
+	taggedCC := domainTagHash("certen:cc:", ccCommitment[:])
+	taggedGov := domainTagHash("certen:gov:", govRoot[:])
+	taggedExec := domainTagHash("certen:exec:", execCommitment[:])
+
+	hash23 := sortedHash(taggedCC, taggedGov)
+	var taggedOpArr, hash23Arr, taggedExecArr [32]byte
+	copy(taggedOpArr[:], taggedOp)
 	copy(hash23Arr[:], hash23)
+	copy(taggedExecArr[:], taggedExec)
 
-	log.Printf("🌳 [APTOS-MERKLE] Built 4-leaf proof for adiURL verification:")
+	log.Printf("🌳 [APTOS-MERKLE-V5] Built 5-leaf domain-tagged proof for adiURL verification:")
 	log.Printf("   adiURL: %s", adiURL)
-	log.Printf("   proof[0] (op): 0x%x", opCommitment[:8])
+	log.Printf("   proof[0] (taggedOp): 0x%x", taggedOpArr[:8])
 	log.Printf("   proof[1] (hash23): 0x%x", hash23Arr[:8])
+	log.Printf("   proof[2] (taggedExec): 0x%x", taggedExecArr[:8])
 
-	merkleProof := [][32]byte{opCommitment, hash23Arr}
+	merkleProof := [][32]byte{taggedOpArr, hash23Arr, taggedExecArr}
 
 	now := time.Now()
 	proofTimestamp := uint64(now.Add(-5 * time.Minute).Unix())

@@ -99,7 +99,8 @@ func (ac *AptosClient) GetAccountAddress() string {
 // STEP 1: CREATE ANCHOR
 // =============================================================================
 
-// CreateAnchor calls create_anchor entry function on the anchor module.
+// CreateAnchor calls create_anchor entry function on the anchor V5 module.
+// V5: 9 args including executionCommitment (CRITICAL-001).
 // Uses JSON submission via /encode_submission for reliable BCS encoding.
 func (ac *AptosClient) CreateAnchor(
 	ctx context.Context,
@@ -108,9 +109,10 @@ func (ac *AptosClient) CreateAnchor(
 	operationCommitment [32]byte,
 	crossChainCommitment [32]byte,
 	governanceRoot [32]byte,
+	executionCommitment [32]byte,
 	blockHeight uint64,
 ) (string, error) {
-	log.Printf("📡 [APTOS] Creating anchor...")
+	log.Printf("📡 [APTOS] Creating anchor (V5)...")
 	log.Printf("   Account: %s", ac.accountAddress)
 	log.Printf("   Package: %s", ac.packageAddress)
 	log.Printf("   Bundle ID: 0x%x", bundleId[:8])
@@ -118,6 +120,7 @@ func (ac *AptosClient) CreateAnchor(
 	log.Printf("   Op Commitment: 0x%x", operationCommitment[:8])
 	log.Printf("   CC Commitment: 0x%x", crossChainCommitment[:8])
 	log.Printf("   Gov Root: 0x%x", governanceRoot[:8])
+	log.Printf("   Exec Commitment: 0x%x", executionCommitment[:8])
 	log.Printf("   Block Height: %d", blockHeight)
 
 	seqNum, err := ac.getSequenceNumber(ctx)
@@ -126,19 +129,20 @@ func (ac *AptosClient) CreateAnchor(
 	}
 	log.Printf("   Sequence Number: %d", seqNum)
 
-	function := fmt.Sprintf("%s::certen_anchor_v4::create_anchor", ac.packageAddress)
+	function := fmt.Sprintf("%s::certen_anchor_v5::create_anchor", ac.packageAddress)
 
 	payload := map[string]interface{}{
 		"type":           "entry_function_payload",
 		"function":       function,
 		"type_arguments": []string{},
 		"arguments": []interface{}{
-			ac.packageAddress,                        // anchor_owner: address (AnchorState lives at package address)
+			ac.packageAddress,                        // anchor_owner: address (AnchorStateV5 lives at package address)
 			bytes32ToU256String(bundleId),             // bundle_id: u256
 			bytes32ToU256String(adiURLHash),           // adi_url_hash: u256
 			bytes32ToU256String(operationCommitment),  // operation_commitment: u256
 			bytes32ToU256String(crossChainCommitment), // cross_chain_commitment: u256
 			bytes32ToU256String(governanceRoot),       // governance_root: u256
+			bytes32ToU256String(executionCommitment),  // execution_commitment: u256 (CRITICAL-001)
 			fmt.Sprintf("%d", blockHeight),            // accumulate_block_height: u64
 		},
 	}
@@ -163,24 +167,24 @@ func (ac *AptosClient) CreateAnchor(
 	return txHash, nil
 }
 
-// InitializeAnchorState calls initialize(owner) on the anchor module.
-// This creates the AnchorState resource on the signer's account.
+// InitializeAnchorState calls initialize(owner, chain_id) on the anchor V5 module.
+// This creates the AnchorStateV5 resource on the signer's account.
 // Safe to call multiple times — returns nil if already initialized.
 func (ac *AptosClient) InitializeAnchorState(ctx context.Context) error {
-	log.Printf("📡 [APTOS] Initializing anchor state for %s...", ac.accountAddress)
+	log.Printf("📡 [APTOS] Initializing anchor state V5 for %s...", ac.accountAddress)
 
 	seqNum, err := ac.getSequenceNumber(ctx)
 	if err != nil {
 		return fmt.Errorf("initialize: getting sequence number: %w", err)
 	}
 
-	function := fmt.Sprintf("%s::certen_anchor_v4::initialize", ac.packageAddress)
+	function := fmt.Sprintf("%s::certen_anchor_v5::initialize", ac.packageAddress)
 
 	payload := map[string]interface{}{
 		"type":           "entry_function_payload",
 		"function":       function,
 		"type_arguments": []string{},
-		"arguments":      []interface{}{},
+		"arguments":      []interface{}{uint8(aptosTestnetChainID)}, // chain_id: u8 (HIGH-001)
 	}
 
 	txn := map[string]interface{}{
@@ -312,7 +316,7 @@ func (ac *AptosClient) submitComprehensiveProofBCS(
 	// Call the flat entry function variant that accepts all proof fields individually
 	payload := map[string]interface{}{
 		"type":          "entry_function_payload",
-		"function":      fmt.Sprintf("%s::certen_anchor_v4::execute_comprehensive_proof_flat", ac.packageAddress),
+		"function":      fmt.Sprintf("%s::certen_anchor_v5::execute_comprehensive_proof_flat", ac.packageAddress),
 		"type_arguments": []string{},
 		"arguments": []interface{}{
 			ac.packageAddress,                            // anchor_owner: address (AnchorState lives at package address)
@@ -431,7 +435,7 @@ func (ac *AptosClient) ExecuteGovernanceProofDirect(
 
 	payload := map[string]interface{}{
 		"type":          "entry_function_payload",
-		"function":      fmt.Sprintf("%s::certen_account_v2::execute_governance_proof_direct_flat", ac.packageAddress),
+		"function":      fmt.Sprintf("%s::certen_account_v3::execute_governance_proof_direct_flat", ac.packageAddress),
 		"type_arguments": []string{},
 		"arguments": []interface{}{
 			userAccountAddr,                                      // account_addr: address
@@ -493,7 +497,7 @@ func (ac *AptosClient) DeployAccountViaFactory(
 	log.Printf("   Salt: %d", salt)
 
 	// create_account(caller, factory_addr, owner, adi_url: vector<u8>, salt: u64)
-	function := fmt.Sprintf("%s::certen_account_factory::create_account", ac.packageAddress)
+	function := fmt.Sprintf("%s::certen_account_factory_v2::create_account", ac.packageAddress)
 
 	args := [][]byte{
 		bcsAddress(ac.packageAddress), // factory_addr: address
@@ -520,8 +524,8 @@ func (ac *AptosClient) PredictAccountAddress(
 	adiURL string,
 	salt uint64,
 ) (string, error) {
-	// Fetch FactoryState to get deployer_address and anchor_contract
-	resourceType := fmt.Sprintf("%s::certen_account_factory::FactoryState", ac.packageAddress)
+	// Fetch FactoryStateV2 to get deployer_address and anchor_contract
+	resourceType := fmt.Sprintf("%s::certen_account_factory_v2::FactoryStateV2", ac.packageAddress)
 	url := fmt.Sprintf("%s/v1/accounts/%s/resource/%s", ac.rpcEndpoint, ac.packageAddress, resourceType)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
@@ -604,7 +608,7 @@ func (ac *AptosClient) PredictAccountAddress(
 // It checks for the AccountState resource, not just account existence (resource accounts
 // can exist without being initialized by the factory).
 func (ac *AptosClient) CheckAccountExists(ctx context.Context, addr string) (bool, error) {
-	resourceType := fmt.Sprintf("%s::certen_account_v2::AccountState", ac.packageAddress)
+	resourceType := fmt.Sprintf("%s::certen_account_v3::AccountStateV3", ac.packageAddress)
 	url := fmt.Sprintf("%s/v1/accounts/%s/resource/%s", ac.rpcEndpoint, addr, resourceType)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
@@ -650,7 +654,7 @@ type AptosAnchorData struct {
 
 // GetAnchorData reads anchor data via the get_anchor view function.
 func (ac *AptosClient) GetAnchorData(ctx context.Context, bundleId [32]byte) (*AptosAnchorData, error) {
-	function := fmt.Sprintf("%s::certen_anchor_v4::get_anchor", ac.packageAddress)
+	function := fmt.Sprintf("%s::certen_anchor_v5::get_anchor_v5", ac.packageAddress)
 
 	result, err := ac.callViewFunction(ctx, function, nil, []interface{}{
 		ac.packageAddress,                // anchor_owner: address (AnchorState lives at package address)
@@ -1315,5 +1319,35 @@ func aptosAuthorityLevelForOctas(octas uint64) uint8 {
 		return 2 // MANAGER
 	}
 	return 1 // OPERATOR
+}
+
+// computeAptosExecutionCommitment computes the CRITICAL-001 execution commitment for Aptos.
+// Matches Move: keccak256(chain_id_u8 || target_bcs_32bytes || value_u64_le || data_hash_32bytes)
+func computeAptosExecutionCommitment(chainID uint8, target string, valueOctas uint64, dataHash [32]byte) [32]byte {
+	var buf []byte
+
+	// chain_id as single byte
+	buf = append(buf, chainID)
+
+	// target as 32 bytes (BCS address format, left-padded)
+	targetClean := strings.TrimPrefix(target, "0x")
+	for len(targetClean) < 64 {
+		targetClean = "0" + targetClean
+	}
+	targetBytes, _ := hex.DecodeString(targetClean)
+	buf = append(buf, targetBytes...)
+
+	// value as u64 little-endian (BCS encoding)
+	valBytes := make([]byte, 8)
+	binary.LittleEndian.PutUint64(valBytes, valueOctas)
+	buf = append(buf, valBytes...)
+
+	// data_hash as 32 bytes
+	buf = append(buf, dataHash[:]...)
+
+	hash := ethcrypto.Keccak256(buf)
+	var out [32]byte
+	copy(out[:], hash)
+	return out
 }
 
