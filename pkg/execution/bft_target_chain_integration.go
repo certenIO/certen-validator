@@ -4201,13 +4201,30 @@ func (btce *BFTTargetChainExecutor) buildSuiCertenProof(
 	}
 
 	// V5: Recompute KeyPage proof using 32-byte SUI address (not 20-byte EVM address)
-	suiValidatorAddr := "0x" + hex.EncodeToString(common.LeftPadBytes(compProof.GovernanceProof.AuthorityAddress.Bytes(), 32))
-	suiAddrBytes, _ := hex.DecodeString(strings.TrimPrefix(suiValidatorAddr, "0x"))
-	suiAuthorityLeaf := ethcrypto.Keccak256(suiAddrBytes)
-	var suiAuthorityLeafArr [32]byte
-	copy(suiAuthorityLeafArr[:], suiAuthorityLeaf)
-	keyPageProofsV5 := keyPageProofs
-	log.Printf("🔑 [SUI-MERKLE] V5 KeyPage: authority=%s leaf=0x%x", suiValidatorAddr, suiAuthorityLeafArr[:8])
+	// Move's verify_governance_proof hashes bcs::to_bytes(authority_address) which is 32 bytes.
+	// The EVM proof uses keccak256(20-byte address), so we recompute for 32-byte format.
+	authority32 := common.LeftPadBytes(compProof.GovernanceProof.AuthorityAddress.Bytes(), 32)
+	suiAuthorityLeaf := ethcrypto.Keccak256(authority32)
+
+	suiGovOrgADI := compProof.GovernanceProof.KeyBookURL
+	if strings.HasSuffix(suiGovOrgADI, "/book") {
+		suiGovOrgADI = strings.TrimSuffix(suiGovOrgADI, "/book")
+	}
+	suiSentinelData := []byte(fmt.Sprintf("certen:keybook:%s:sentinel", suiGovOrgADI))
+	suiSentinelLeaf := ethcrypto.Keccak256(suiSentinelData)
+
+	suiKeyBookRoot := sortedHash(suiAuthorityLeaf, suiSentinelLeaf)
+	var suiKeyBookRootArr, suiSentinelArr [32]byte
+	copy(suiKeyBookRootArr[:], suiKeyBookRoot)
+	copy(suiSentinelArr[:], suiSentinelLeaf)
+	keyPageProofsV5 := [][32]byte{suiSentinelArr}
+
+	suiValidatorAddr := "0x" + hex.EncodeToString(authority32)
+	log.Printf("🔐 [SUI-GOV] Recomputed KeyPage proof for 32-byte SUI address:")
+	log.Printf("   Authority (32b): 0x%x", authority32[:8])
+	log.Printf("   AuthorityLeaf: 0x%x", suiAuthorityLeaf[:8])
+	log.Printf("   SentinelLeaf: 0x%x", suiSentinelLeaf[:8])
+	log.Printf("   KeyBookRoot: 0x%x", suiKeyBookRootArr[:8])
 
 	return SuiCertenProof{
 		TransactionHash: compProof.TransactionHash,
@@ -4216,9 +4233,9 @@ func (btce *BFTTargetChainExecutor) buildSuiCertenProof(
 		LeafHash:        leafHash,
 
 		GovKeyBookURL:         compProof.GovernanceProof.KeyBookURL,
-		GovKeyBookRoot:        compProof.GovernanceProof.KeyBookRoot,
+		GovKeyBookRoot:        suiKeyBookRootArr,
 		GovKeyPageProofs:      keyPageProofsV5,
-		GovAuthorityAddress:   authorityAddr,
+		GovAuthorityAddress:   suiValidatorAddr,
 		GovAuthorityLevel:     compProof.GovernanceProof.AuthorityLevel,
 		GovNonce:              govNonce,
 		GovRequiredSignatures: reqSigs,
