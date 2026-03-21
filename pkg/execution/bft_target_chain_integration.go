@@ -3369,8 +3369,31 @@ func (btce *BFTTargetChainExecutor) buildAptosCertenProof(
 	proofHashes := make([][32]byte, len(compProof.ProofHashes))
 	copy(proofHashes, compProof.ProofHashes)
 
-	keyPageProofs := make([][32]byte, len(compProof.GovernanceProof.KeyPageProofs))
-	copy(keyPageProofs, compProof.GovernanceProof.KeyPageProofs)
+	// V5: Recompute KeyPage proof for Aptos address format.
+	// Move's keccak_address() hashes bcs::to_bytes(address) which is the raw 32-byte address.
+	// The EVM proof builder computes keccak256(20-byte EVM address), so we must recompute
+	// the KeyBook proof using the 32-byte left-padded authority address to match Move.
+	authority32 := common.LeftPadBytes(compProof.GovernanceProof.AuthorityAddress.Bytes(), 32)
+	aptosAuthorityLeaf := ethcrypto.Keccak256(authority32)
+
+	aptosGovOrgADI := compProof.GovernanceProof.KeyBookURL
+	if strings.HasSuffix(aptosGovOrgADI, "/book") {
+		aptosGovOrgADI = strings.TrimSuffix(aptosGovOrgADI, "/book")
+	}
+	aptosSentinelData := []byte(fmt.Sprintf("certen:keybook:%s:sentinel", aptosGovOrgADI))
+	aptosSentinelLeaf := ethcrypto.Keccak256(aptosSentinelData)
+
+	aptosKeyBookRoot := sortedHash(aptosAuthorityLeaf, aptosSentinelLeaf)
+	var aptosKeyBookRootArr, aptosSentinelArr [32]byte
+	copy(aptosKeyBookRootArr[:], aptosKeyBookRoot)
+	copy(aptosSentinelArr[:], aptosSentinelLeaf)
+	keyPageProofs := [][32]byte{aptosSentinelArr}
+
+	btce.logger.Printf("🔐 [APTOS-GOV] Recomputed KeyPage proof for 32-byte Aptos address:")
+	btce.logger.Printf("   Authority (32b): 0x%x", authority32[:8])
+	btce.logger.Printf("   AuthorityLeaf: 0x%x", aptosAuthorityLeaf[:8])
+	btce.logger.Printf("   SentinelLeaf: 0x%x", aptosSentinelLeaf[:8])
+	btce.logger.Printf("   KeyBookRoot: 0x%x", aptosKeyBookRootArr[:8])
 
 	totalVP := uint64(0)
 	if compProof.BLSProof.TotalVotingPower != nil {
@@ -3458,8 +3481,8 @@ func (btce *BFTTargetChainExecutor) buildAptosCertenProof(
 		LeafHash:        compProof.LeafHash,
 
 		GovKeyBookURL:         compProof.GovernanceProof.KeyBookURL,
-		GovKeyBookRoot:        compProof.GovernanceProof.KeyBookRoot,
-		GovKeyPageProofs:      keyPageProofs,
+		GovKeyBookRoot:        aptosKeyBookRootArr, // V5: recomputed for 32-byte Aptos address
+		GovKeyPageProofs:      keyPageProofs,       // V5: recomputed sentinel proof
 		GovAuthorityAddress:   authorityAddr,
 		GovAuthorityLevel:     compProof.GovernanceProof.AuthorityLevel,
 		GovNonce:              govNonce,
