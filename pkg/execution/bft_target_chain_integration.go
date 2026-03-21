@@ -3474,11 +3474,20 @@ func (btce *BFTTargetChainExecutor) buildAptosCertenProof(
 	copy(aptosMerkleRootArr[:], aptosMerkleRoot)
 	btce.logger.Printf("🌳 [APTOS-MERKLE-V5] Recomputed 5-leaf domain-tagged merkleRoot for proof: 0x%x", aptosMerkleRootArr[:8])
 
+	// When proofHashes is empty, set leafHash = merkleRoot for trivial verification.
+	// The contract's verify_merkle_proof_internal computes: computed = leaf, then iterates proofHashes.
+	// If proofHashes is empty, it returns (leaf == root). So leaf must equal root.
+	aptosLeafHash := compProof.LeafHash
+	if len(proofHashes) == 0 {
+		aptosLeafHash = aptosMerkleRootArr
+		btce.logger.Printf("✅ [APTOS-MERKLE-FIX] No proofHashes - setting leafHash = merkleRoot for trivial verification")
+	}
+
 	return AptosCertenProof{
 		TransactionHash: compProof.TransactionHash,
 		MerkleRoot:      aptosMerkleRootArr,
 		ProofHashes:     proofHashes,
-		LeafHash:        compProof.LeafHash,
+		LeafHash:        aptosLeafHash,
 
 		GovKeyBookURL:         compProof.GovernanceProof.KeyBookURL,
 		GovKeyBookRoot:        aptosKeyBookRootArr, // V5: recomputed for 32-byte Aptos address
