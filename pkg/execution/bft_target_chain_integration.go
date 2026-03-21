@@ -4113,9 +4113,6 @@ func (btce *BFTTargetChainExecutor) buildSuiCertenProof(
 		expirationMs = compProof.ExpirationTime.Uint64() * 1_000
 	}
 
-	// Authority address as 0x+64hex (pad 20-byte EVM address to 32 bytes)
-	authorityAddr := "0x" + hex.EncodeToString(common.LeftPadBytes(compProof.GovernanceProof.AuthorityAddress.Bytes(), 32))
-
 	// Validator addresses as 0x+64hex
 	validatorAddrs := make([]string, len(compProof.BLSProof.ValidatorAddresses))
 	for i, addr := range compProof.BLSProof.ValidatorAddresses {
