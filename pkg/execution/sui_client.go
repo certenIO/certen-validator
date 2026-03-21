@@ -629,22 +629,23 @@ func (sc *SuiClient) CreateAnchor(
 	operationCommitment [32]byte,
 	crossChainCommitment [32]byte,
 	governanceRoot [32]byte,
+	executionCommitment [32]byte,
 	blockHeight uint64,
 ) (string, error) {
-	log.Printf("📡 [SUI] Step 1: Creating anchor...")
+	log.Printf("📡 [SUI] Step 1: Creating anchor (V5)...")
 	log.Printf("   Account: %s", sc.senderAddress)
 	log.Printf("   Package: %s", sc.packageAddress)
 	log.Printf("   Bundle ID: 0x%x", bundleId[:8])
 	log.Printf("   Block Height: %d", blockHeight)
 
-	// Shared object inputs: AnchorState (mutable), Clock (immutable)
+	// Shared object inputs: AnchorStateV5 (mutable), Clock (immutable)
 	sharedInputs := []suiSharedInput{
 		{ObjectID: sc.anchorStateObject, InitialSharedVersion: sc.anchorStateVersion, Mutable: true},
 		{ObjectID: suiClockObjectID, InitialSharedVersion: suiClockVersion, Mutable: false},
 	}
 
 	// Pure arguments in SuiJSON format:
-	// bundle_id, adi_url_hash, op_commit, cc_commit, gov_root: vector<u8> → base64
+	// bundle_id, adi_url_hash, op_commit, cc_commit, gov_root, exec_commit: vector<u8> → base64
 	// block_height: u64 → string number
 	args := []interface{}{
 		suiJsonVecU8(bundleId[:]),
@@ -652,11 +653,12 @@ func (sc *SuiClient) CreateAnchor(
 		suiJsonVecU8(operationCommitment[:]),
 		suiJsonVecU8(crossChainCommitment[:]),
 		suiJsonVecU8(governanceRoot[:]),
+		suiJsonVecU8(executionCommitment[:]),
 		suiJsonU64(blockHeight),
 	}
 
 	digest, err := sc.buildAndExecuteMoveCall(ctx,
-		"certen_anchor_v3", "create_anchor",
+		"certen_anchor_v5", "create_anchor",
 		nil, sharedInputs, args, suiGasBudget,
 	)
 	if err != nil {
@@ -769,7 +771,7 @@ func (sc *SuiClient) ExecuteComprehensiveProof(
 	}
 
 	digest, err := sc.buildAndExecuteMoveCall(ctx,
-		"certen_anchor_v3", "execute_comprehensive_proof",
+		"certen_anchor_v5", "execute_comprehensive_proof",
 		nil, sharedInputs, args, suiGasBudget,
 	)
 	if err != nil {
@@ -875,7 +877,7 @@ func (sc *SuiClient) WithdrawSuiDirect(
 	}
 
 	digest, err := sc.buildAndExecuteMoveCall(ctx,
-		"certen_account_v2", "withdraw_sui_direct",
+		"certen_account_v3", "withdraw_sui_direct",
 		nil, sharedInputs, args, suiGasBudget,
 	)
 	if err != nil {
@@ -936,7 +938,7 @@ func (sc *SuiClient) DeployAccountViaFactory(
 	result, err := sc.rpcCall(ctx, "unsafe_moveCall", []interface{}{
 		sc.senderAddress,
 		sc.packageAddress,
-		"certen_account_factory",
+		"certen_account_factory_v2",
 		"create_account",
 		[]string{},
 		suiArgs,
@@ -1002,8 +1004,9 @@ func (sc *SuiClient) CheckAccountExists(ctx context.Context, objectId string) (b
 		return false, 0, nil
 	}
 
-	// Check if it's a CertenAccountV2
-	if strings.Contains(obj.Data.Type, "certen_account_v2::CertenAccountV2") {
+	// Check if it's a CertenAccountV3 (or V2 for backwards compatibility)
+	if strings.Contains(obj.Data.Type, "certen_account_v3::CertenAccountV3") ||
+		strings.Contains(obj.Data.Type, "certen_account_v2::CertenAccountV2") {
 		return true, obj.Data.Owner.Shared.InitialSharedVersion, nil
 	}
 
@@ -1046,7 +1049,7 @@ func (sc *SuiClient) GetAnchorData(ctx context.Context, bundleId [32]byte) (*Sui
 	txResult, err := sc.rpcCall(ctx, "unsafe_moveCall", []interface{}{
 		sc.senderAddress,
 		sc.packageAddress,
-		"certen_anchor_v3",
+		"certen_anchor_v5",
 		"get_anchor_data",
 		[]string{},
 		args,

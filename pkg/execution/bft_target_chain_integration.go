@@ -3754,30 +3754,56 @@ func (btce *BFTTargetChainExecutor) executeSuiOperations(
 		govRoot = comprehensiveProof.Commitments.GovernanceRoot
 	}
 
-	// Debug: log values that will be used for merkle root computation
-	btce.logger.Printf("🔍 [SUI-MERKLE] Step 1 inputs:")
+	// CRITICAL-001: Compute execution commitment before Step 1
+	// Reuse computeAptosExecutionCommitment — same BCS encoding (u64 LE, 32-byte addresses)
+	const suiTestnetChainID uint8 = 101
+	var execCommitment [32]byte
+
+	// Find the SUI leg to compute execution commitment from
+	allLegsForExec := btce.extractAllLegsFromIntent(legacyIntent)
+	suiLegForExec := btce.findLegForChainPrefix(allLegsForExec, "sui", 101)
+
+	if suiLegForExec != nil {
+		suiToAddrExec := btce.extractSuiFieldFromCrossChainData(legacyIntent, "to")
+		if suiToAddrExec == "" {
+			suiToAddrExec = suiLegForExec.Target.Hex()
+			// Pad to 64 hex chars
+			suiToAddrExec = "0x" + hex.EncodeToString(common.LeftPadBytes(common.FromHex(suiToAddrExec), 32))
+		}
+		suiDepositMist := uint64(1)
+		if suiLegForExec.Value != nil {
+			weiValue := new(big.Int).Set(suiLegForExec.Value)
+			mistValue := new(big.Int).Div(weiValue, big.NewInt(1_000_000_000))
+			if mistValue.Sign() <= 0 {
+				mistValue = big.NewInt(1)
+			}
+			suiDepositMist = mistValue.Uint64()
+		}
+		execCommitment = computeAptosExecutionCommitment(suiTestnetChainID, suiToAddrExec, suiDepositMist, [32]byte{})
+		btce.logger.Printf("🔒 [SUI-EXEC] CRITICAL-001 ExecutionCommitment: 0x%x", execCommitment[:8])
+	} else {
+		// No SUI leg — use a placeholder non-zero commitment
+		h := ethcrypto.Keccak256Hash([]byte("certen:sui:no-leg"))
+		copy(execCommitment[:], h[:])
+		btce.logger.Printf("⚠️ [SUI-EXEC] No SUI leg found, using placeholder exec commitment")
+	}
+
+	// V5: Compute 5-leaf domain-tagged merkle root locally for verification
+	btce.logger.Printf("🔍 [SUI-MERKLE] Step 1 inputs (V5 5-leaf domain-tagged):")
 	btce.logger.Printf("   bundleId:    0x%x", bundleIdHash[:])
 	btce.logger.Printf("   adiURLHash:  0x%x", adiURLHash[:])
 	btce.logger.Printf("   opCommit:    0x%x", opCommitment[:])
 	btce.logger.Printf("   ccCommit:    0x%x", ccCommitment[:])
 	btce.logger.Printf("   govRoot:     0x%x", govRoot[:])
+	btce.logger.Printf("   execCommit:  0x%x", execCommitment[:])
 	btce.logger.Printf("   adiURL:      %s", adiURL)
-	if comprehensiveProof != nil {
-		btce.logger.Printf("   proof.MerkleRoot: 0x%x", comprehensiveProof.MerkleRoot[:])
-		// Recompute locally to verify
-		h01 := sortedHash(adiURLHash[:], opCommitment[:])
-		h23 := sortedHash(ccCommitment[:], govRoot[:])
-		localRoot := sortedHash(h01, h23)
-		btce.logger.Printf("   localMerkleRoot: 0x%x", localRoot)
-		btce.logger.Printf("   match: %v", fmt.Sprintf("%x", localRoot) == fmt.Sprintf("%x", comprehensiveProof.MerkleRoot[:]))
-	}
 
-	// ========== Step 1: Create Anchor ==========
-	btce.logger.Printf("🔗 [SUI-EXEC] Step 1: Creating anchor...")
+	// ========== Step 1: Create Anchor (V5: with execution commitment) ==========
+	btce.logger.Printf("🔗 [SUI-EXEC] Step 1: Creating anchor (V5)...")
 
 	createTxHash, err := suiClient.CreateAnchor(ctx,
 		bundleIdHash, adiURLHash, opCommitment, ccCommitment, govRoot,
-		certenProof.BlockHeight,
+		execCommitment, certenProof.BlockHeight,
 	)
 	if err != nil {
 		btce.logger.Printf("❌ [SUI-EXEC] Step 1 failed: %v", err)
@@ -3796,7 +3822,7 @@ func (btce *BFTTargetChainExecutor) executeSuiOperations(
 	// ========== Step 2: Execute Comprehensive Proof ==========
 	btce.logger.Printf("🔗 [SUI-EXEC] Step 2: Submitting comprehensive proof...")
 
-	suiProof := btce.buildSuiCertenProof(comprehensiveProof, certenProof)
+	suiProof := btce.buildSuiCertenProof(comprehensiveProof, certenProof, adiURLHash, execCommitment)
 
 	verifyTxHash, err := suiClient.ExecuteComprehensiveProof(ctx, bundleIdHash, suiProof)
 	if err != nil {
@@ -3913,11 +3939,11 @@ func (btce *BFTTargetChainExecutor) executeSuiOperations(
 
 					btce.logger.Printf("💱 [SUI-EXEC] Governance: target=%s mist=%d", recipientAddr, amountMist)
 
-					// Build ADIGovernanceProof
+					// Build ADIGovernanceProof (V5: pass execCommitment for 3-element domain-tagged proof)
 					accountProof := btce.buildSuiAccountProof(
 						bundleIdHash, certenProof, adiURL,
 						anchorOpCommit, anchorCCCommit, anchorGovRoot,
-						amountMist, userAccountObjectId, recipientAddr,
+						execCommitment, amountMist, userAccountObjectId, recipientAddr,
 					)
 
 					var govErr error
@@ -4040,9 +4066,12 @@ func convertGnarkPublicInputToArkworksLE(be [32]byte) [32]byte {
 
 // buildSuiCertenProof converts the comprehensive proof to SUI format.
 // SUI uses vector<u8> for 32-byte values and milliseconds for timestamps.
+// V5: Accepts adiURLHash and execCommitment for 5-leaf domain-tagged merkle root recomputation.
 func (btce *BFTTargetChainExecutor) buildSuiCertenProof(
 	compProof *contracts.ComprehensiveCertenProof,
 	certenProof *proof.CertenProof,
+	adiURLHash [32]byte,
+	execCommitment [32]byte,
 ) SuiCertenProof {
 	if compProof == nil {
 		return SuiCertenProof{
@@ -4146,15 +4175,49 @@ func (btce *BFTTargetChainExecutor) buildSuiCertenProof(
 	// Target address: pad 20-byte EVM address to 32-byte SUI address format
 	targetAddr := "0x" + hex.EncodeToString(common.LeftPadBytes(compProof.Commitments.TargetAddress.Bytes(), 32))
 
+	// V5: Recompute 5-leaf domain-tagged merkle root
+	// domainTagHash(prefix, value) = keccak256(prefix || value_32bytes)
+	taggedAdi := domainTagHash("certen:adi:", adiURLHash[:])
+	taggedOp := domainTagHash("certen:op:", compProof.Commitments.OperationCommitment[:])
+	taggedCC := domainTagHash("certen:cc:", compProof.Commitments.CrossChainCommitment[:])
+	taggedGov := domainTagHash("certen:gov:", compProof.Commitments.GovernanceRoot[:])
+	taggedExec := domainTagHash("certen:exec:", execCommitment[:])
+
+	hash01 := sortedHash(taggedAdi, taggedOp)
+	hash23 := sortedHash(taggedCC, taggedGov)
+	hash0123 := sortedHash(hash01, hash23)
+	merkleRoot5 := sortedHash(hash0123, taggedExec)
+
+	var merkleRoot5Arr [32]byte
+	copy(merkleRoot5Arr[:], merkleRoot5)
+
+	log.Printf("🌳 [SUI-MERKLE] V5 5-leaf domain-tagged merkle root: 0x%x", merkleRoot5Arr[:8])
+
+	// ADR-001: When proofHashes is empty, set leafHash = merkleRoot (BLS Attestation Model)
+	leafHash := compProof.LeafHash
+	if len(proofHashes) == 0 {
+		leafHash = merkleRoot5Arr
+		log.Printf("🌳 [SUI-MERKLE] ADR-001: Empty proofHashes, leafHash = merkleRoot")
+	}
+
+	// V5: Recompute KeyPage proof using 32-byte SUI address (not 20-byte EVM address)
+	suiValidatorAddr := "0x" + hex.EncodeToString(common.LeftPadBytes(compProof.GovernanceProof.AuthorityAddress.Bytes(), 32))
+	suiAddrBytes, _ := hex.DecodeString(strings.TrimPrefix(suiValidatorAddr, "0x"))
+	suiAuthorityLeaf := ethcrypto.Keccak256(suiAddrBytes)
+	var suiAuthorityLeafArr [32]byte
+	copy(suiAuthorityLeafArr[:], suiAuthorityLeaf)
+	keyPageProofsV5 := keyPageProofs
+	log.Printf("🔑 [SUI-MERKLE] V5 KeyPage: authority=%s leaf=0x%x", suiValidatorAddr, suiAuthorityLeafArr[:8])
+
 	return SuiCertenProof{
 		TransactionHash: compProof.TransactionHash,
-		MerkleRoot:      compProof.MerkleRoot,
+		MerkleRoot:      merkleRoot5Arr,
 		ProofHashes:     proofHashes,
-		LeafHash:        compProof.LeafHash,
+		LeafHash:        leafHash,
 
 		GovKeyBookURL:         compProof.GovernanceProof.KeyBookURL,
 		GovKeyBookRoot:        compProof.GovernanceProof.KeyBookRoot,
-		GovKeyPageProofs:      keyPageProofs,
+		GovKeyPageProofs:      keyPageProofsV5,
 		GovAuthorityAddress:   authorityAddr,
 		GovAuthorityLevel:     compProof.GovernanceProof.AuthorityLevel,
 		GovNonce:              govNonce,
@@ -4184,7 +4247,8 @@ func (btce *BFTTargetChainExecutor) buildSuiCertenProof(
 }
 
 // buildSuiAccountProof constructs the SuiADIGovernanceProof for Step 3.
-// Mirrors buildAptosAccountProof — computes a 4-leaf merkle proof for adiURL verification.
+// V5: Computes a 3-element domain-tagged merkle proof for adiURL verification.
+// Proof: [taggedOp, hash23, taggedExec]
 func (btce *BFTTargetChainExecutor) buildSuiAccountProof(
 	bundleID [32]byte,
 	certenProof *proof.CertenProof,
@@ -4192,6 +4256,7 @@ func (btce *BFTTargetChainExecutor) buildSuiAccountProof(
 	opCommitment [32]byte,
 	ccCommitment [32]byte,
 	govRoot [32]byte,
+	execCommitment [32]byte,
 	amountMist uint64,
 	accountObjectId string,
 	recipientAddr string,
@@ -4199,19 +4264,36 @@ func (btce *BFTTargetChainExecutor) buildSuiAccountProof(
 	requiredLevel := suiAuthorityLevelForMist(amountMist)
 	log.Printf("🔐 [SUI-AUTH] %d MIST → authority level: %d", amountMist, requiredLevel)
 
-	// Build merkle proof: same 4-leaf tree as TRON/EVM/NEAR/Solana/Aptos
-	// proof[0] = operationCommitment (sibling at level 0)
-	// proof[1] = sortedHash(ccCommitment, govRoot) (sibling at level 1)
-	hash23 := sortedHash(ccCommitment[:], govRoot[:])
-	var hash23Arr [32]byte
+	// V5: Build 3-element domain-tagged merkle proof for adiURL verification
+	// Tree structure:
+	//                     root
+	//                    /    \
+	//               hash0123  taggedExec
+	//               /    \
+	//          hash01    hash23
+	//         /    \    /    \
+	//    tagAdi tagOp tagCC tagGov
+	//
+	// Proof for tagAdi: [tagOp, hash23, taggedExec]
+	taggedOp := domainTagHash("certen:op:", opCommitment[:])
+	taggedCC := domainTagHash("certen:cc:", ccCommitment[:])
+	taggedGov := domainTagHash("certen:gov:", govRoot[:])
+	taggedExec := domainTagHash("certen:exec:", execCommitment[:])
+
+	hash23 := sortedHash(taggedCC, taggedGov)
+
+	var taggedOpArr, hash23Arr, taggedExecArr [32]byte
+	copy(taggedOpArr[:], taggedOp)
 	copy(hash23Arr[:], hash23)
+	copy(taggedExecArr[:], taggedExec)
 
-	log.Printf("🌳 [SUI-MERKLE] Built 4-leaf proof for adiURL verification:")
+	log.Printf("🌳 [SUI-MERKLE] Built V5 3-element domain-tagged proof for adiURL verification:")
 	log.Printf("   adiURL: %s", adiURL)
-	log.Printf("   proof[0] (op): 0x%x", opCommitment[:8])
+	log.Printf("   proof[0] (taggedOp): 0x%x", taggedOpArr[:8])
 	log.Printf("   proof[1] (hash23): 0x%x", hash23Arr[:8])
+	log.Printf("   proof[2] (taggedExec): 0x%x", taggedExecArr[:8])
 
-	merkleProof := [][32]byte{opCommitment, hash23Arr}
+	merkleProof := [][32]byte{taggedOpArr, hash23Arr, taggedExecArr}
 
 	now := time.Now()
 	proofTimestamp := uint64(now.Add(-5 * time.Minute).UnixMilli())
