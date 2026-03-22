@@ -5032,10 +5032,18 @@ func (btce *BFTTargetChainExecutor) extractTonFieldFromCrossChainData(legacyInte
 	}
 
 	// Try base64url format first (EQ.../kQ.../UQ.../0Q... ~48 chars)
+	// Also handle lowercase addresses from web app (case-insensitive parse)
 	if len(value) >= 40 {
 		_, err := tonaddr.ParseAddr(value)
 		if err == nil {
 			return value
+		}
+		// Try with common prefix corrections (web app may lowercase the address)
+		for _, prefix := range []string{"EQ", "kQ", "UQ", "0Q"} {
+			corrected := prefix + value[2:]
+			if parsed, pErr := tonaddr.ParseAddr(corrected); pErr == nil {
+				return parsed.String()
+			}
 		}
 	}
 
