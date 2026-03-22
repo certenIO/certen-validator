@@ -4552,30 +4552,69 @@ func (btce *BFTTargetChainExecutor) executeTonOperations(
 		govRoot = comprehensiveProof.Commitments.GovernanceRoot
 	}
 
-	// V4: Compute adiURLHash for 4-leaf sorted merkle tree binding
+	// V5: Compute adiURLHash for 5-leaf domain-tagged sorted merkle tree binding
 	adiURL := certenProof.AccountURL
 	if adiURL == "" {
 		adiURL = fmt.Sprintf("%s/data", legacyIntent.OrganizationADI)
 	}
 	adiURLHash := ComputeAdiURLHash(adiURL)
 
-	btce.logger.Printf("🔍 [TON-MERKLE] Step 1 inputs (V4):")
+	// V5 CRITICAL-001: Compute execution commitment
+	const tonTestnetChainID int32 = -3
+	var execCommitment [32]byte
+
+	allLegsForExec := btce.extractAllLegsFromIntent(legacyIntent)
+	tonLegForExec := btce.findLegForChainPrefix(allLegsForExec, "ton", -239, -3)
+
+	if tonLegForExec != nil {
+		tonToAddrExec := btce.extractTonFieldFromCrossChainData(legacyIntent, "to")
+		var targetAddr *address.Address
+		if tonToAddrExec != "" {
+			parsed, pErr := address.ParseAddr(tonToAddrExec)
+			if pErr == nil {
+				targetAddr = parsed
+			}
+		}
+		if targetAddr == nil {
+			// Fallback: use zero address
+			targetAddr = address.NewAddress(0, 0, make([]byte, 32))
+		}
+		tonDepositNano := uint64(1)
+		if tonLegForExec.Value != nil {
+			weiValue := new(big.Int).Set(tonLegForExec.Value)
+			nanoValue := new(big.Int).Div(weiValue, big.NewInt(1_000_000_000))
+			if nanoValue.Sign() <= 0 {
+				nanoValue = big.NewInt(1)
+			}
+			tonDepositNano = nanoValue.Uint64()
+		}
+		dataHash := [32]byte{} // empty data hash for simple transfer
+		execCommitment = TonComputeExecutionCommitment(tonTestnetChainID, targetAddr, tonDepositNano, dataHash)
+		btce.logger.Printf("🔒 [TON-EXEC] CRITICAL-001 ExecutionCommitment: 0x%x", execCommitment[:8])
+	} else {
+		h := ethcrypto.Keccak256Hash([]byte("certen:ton:no-leg"))
+		copy(execCommitment[:], h[:])
+		btce.logger.Printf("⚠️ [TON-EXEC] No TON leg found, using placeholder exec commitment")
+	}
+
+	btce.logger.Printf("🔍 [TON-MERKLE] Step 1 inputs (V5 5-leaf domain-tagged):")
 	btce.logger.Printf("   bundleId:    0x%x", bundleIdHash[:])
 	btce.logger.Printf("   adiURL:      %s", adiURL)
 	btce.logger.Printf("   adiURLHash:  0x%x", adiURLHash[:])
 	btce.logger.Printf("   opCommit:    0x%x", opCommitment[:])
 	btce.logger.Printf("   ccCommit:    0x%x", ccCommitment[:])
 	btce.logger.Printf("   govRoot:     0x%x", govRoot[:])
+	btce.logger.Printf("   execCommit:  0x%x", execCommitment[:])
 
 	// ========== Step 1: Create Anchor ==========
-	btce.logger.Printf("🔗 [TON-EXEC] Step 1: Creating anchor on TON (V4)...")
+	btce.logger.Printf("🔗 [TON-EXEC] Step 1: Creating anchor on TON (V5)...")
 
 	blockHeight := uint64(0)
 	if certenProof.BlockHeight > 0 {
 		blockHeight = uint64(certenProof.BlockHeight)
 	}
 
-	createTxHash, err := tonClient.CreateAnchor(ctx, bundleIdHash, adiURLHash, opCommitment, ccCommitment, govRoot, blockHeight)
+	createTxHash, err := tonClient.CreateAnchor(ctx, bundleIdHash, adiURLHash, opCommitment, ccCommitment, govRoot, execCommitment, blockHeight)
 	if err != nil {
 		btce.logger.Printf("❌ [TON-EXEC] Step 1 failed: %v", err)
 		return btce.buildTonResult(intentID, anchorID, "create_failed_ton", "", "", false), err
@@ -4594,20 +4633,59 @@ func (btce *BFTTargetChainExecutor) executeTonOperations(
 
 	tonProof := btce.buildTonCertenProof(comprehensiveProof, certenProof)
 
-	// TON contract uses SHA-256 cell hashing (not EVM Keccak256) for merkle proofs.
+	// V5: TON contract uses SHA-256 cell hashing with 5-leaf domain-tagged tree.
 	// Override the entire merkle proof with TON-compatible values.
-	tonMerkleRoot := TonComputeBoundMerkleRoot(adiURLHash, opCommitment, ccCommitment, govRoot)
-	btce.logger.Printf("🔑 [TON-MERKLE] Overriding proof for TON cell-hash compatibility:")
+	tonMerkleRoot := TonComputeBoundMerkleRoot5(adiURLHash, opCommitment, ccCommitment, govRoot, execCommitment)
+	btce.logger.Printf("🔑 [TON-MERKLE] V5 5-leaf domain-tagged proof for TON cell-hash:")
 	btce.logger.Printf("   EVM merkleRoot (keccak256): 0x%x", tonProof.MerkleRoot[:8])
 	btce.logger.Printf("   TON merkleRoot (sha256cell): 0x%x", tonMerkleRoot[:8])
 	tonProof.MerkleRoot = tonMerkleRoot
 
-	// Build proper 4-leaf tree proof: leaf=adiURLHash, siblings=[opCommitment, hash23]
-	// Verification: sortedHash(sortedHash(adiURLHash, op), hash23) == root
-	tonProof.LeafHash = adiURLHash
-	tonProof.ProofHashes = [][32]byte{
-		opCommitment,
-		TonSortedHash(ccCommitment, govRoot),
+	// V5: Build 5-leaf domain-tagged tree proof
+	// ADR-001: When proofHashes is empty, set leafHash = merkleRoot
+	if len(tonProof.ProofHashes) == 0 {
+		tonProof.LeafHash = tonMerkleRoot
+		btce.logger.Printf("🌳 [TON-MERKLE] ADR-001: Empty proofHashes, leafHash = merkleRoot")
+	} else {
+		// 3-element proof for taggedAdi leaf: [taggedOp, hash23, taggedExec]
+		taggedOp := TonComputeDomainTagHash("certen:op:", opCommitment)
+		taggedCC := TonComputeDomainTagHash("certen:cc:", ccCommitment)
+		taggedGov := TonComputeDomainTagHash("certen:gov:", govRoot)
+		taggedExec := TonComputeDomainTagHash("certen:exec:", execCommitment)
+		hash23 := TonSortedHash(taggedCC, taggedGov)
+
+		tonProof.LeafHash = TonComputeDomainTagHash("certen:adi:", adiURLHash)
+		tonProof.ProofHashes = [][32]byte{taggedOp, hash23, taggedExec}
+	}
+
+	// V5: Recompute KeyPage proof for TON address format
+	if comprehensiveProof != nil {
+		authority32 := common.LeftPadBytes(comprehensiveProof.GovernanceProof.AuthorityAddress.Bytes(), 32)
+		tonGovOrgADI := comprehensiveProof.GovernanceProof.KeyBookURL
+		if strings.HasSuffix(tonGovOrgADI, "/book") {
+			tonGovOrgADI = strings.TrimSuffix(tonGovOrgADI, "/book")
+		}
+		// For TON, authority leaf uses Cell-hash of the authority address
+		// Compute via tonutils Cell hashing
+		tonAuthorityAddr := address.NewAddress(0, 0, authority32)
+		authLeafCell := cell.BeginCell().MustStoreAddr(tonAuthorityAddr).EndCell()
+		var authLeaf [32]byte
+		copy(authLeaf[:], authLeafCell.Hash())
+
+		sentinelData := []byte(fmt.Sprintf("certen:keybook:%s:sentinel", tonGovOrgADI))
+		sentinelCell := cell.BeginCell().MustStoreStringSnake(string(sentinelData)).EndCell()
+		wrapCell := cell.BeginCell().MustStoreUInt(0, 8).MustStoreRef(sentinelCell).EndCell()
+		var sentinelLeaf [32]byte
+		copy(sentinelLeaf[:], wrapCell.Hash())
+
+		tonKeyBookRoot := TonSortedHash(authLeaf, sentinelLeaf)
+		tonProof.GovKeyBookRoot = tonKeyBookRoot
+		tonProof.GovKeyPageProofs = [][32]byte{sentinelLeaf}
+
+		btce.logger.Printf("🔐 [TON-GOV] Recomputed KeyPage proof for TON address:")
+		btce.logger.Printf("   AuthorityLeaf: 0x%x", authLeaf[:8])
+		btce.logger.Printf("   SentinelLeaf: 0x%x", sentinelLeaf[:8])
+		btce.logger.Printf("   KeyBookRoot: 0x%x", tonKeyBookRoot[:8])
 	}
 
 	verifyTxHash, err := tonClient.ExecuteComprehensiveProof(ctx, bundleIdHash, tonProof)
@@ -4711,11 +4789,11 @@ func (btce *BFTTargetChainExecutor) executeTonOperations(
 
 					btce.logger.Printf("💱 [TON-EXEC] Governance: target=%s nano=%d", recipientAddr, amountNano)
 
-					// Build ADIGovernanceProof
+					// Build ADIGovernanceProof (V5: pass execCommitment for 3-element domain-tagged proof)
 					accountProof := btce.buildTonAccountProof(
 						bundleIdHash, certenProof, adiURL,
 						anchorOpCommit, anchorCCCommit, anchorGovRoot,
-						amountNano, userAccountAddr, recipientAddr,
+						execCommitment, amountNano, userAccountAddr, recipientAddr,
 					)
 
 					var govErr error
@@ -4851,7 +4929,7 @@ func (btce *BFTTargetChainExecutor) buildTonCertenProof(
 }
 
 // buildTonAccountProof constructs the TonADIGovernanceProof for Step 3.
-// Mirrors buildSuiAccountProof — computes a 4-leaf merkle proof for adiURL verification.
+// V5: Uses 3-element domain-tagged proof [taggedOp, hash23, taggedExec].
 func (btce *BFTTargetChainExecutor) buildTonAccountProof(
 	bundleID [32]byte,
 	certenProof *proof.CertenProof,
@@ -4859,6 +4937,7 @@ func (btce *BFTTargetChainExecutor) buildTonAccountProof(
 	opCommitment [32]byte,
 	ccCommitment [32]byte,
 	govRoot [32]byte,
+	execCommitment [32]byte,
 	amountNano uint64,
 	accountAddr string,
 	recipientAddr string,
@@ -4866,15 +4945,20 @@ func (btce *BFTTargetChainExecutor) buildTonAccountProof(
 	requiredLevel := tonAuthorityLevelForNano(amountNano)
 	log.Printf("🔐 [TON-AUTH] %d nanoTON → authority level: %d", amountNano, requiredLevel)
 
-	// Build merkle proof: TON uses Cell-hash (SHA-256), NOT Keccak256
-	hash23Arr := TonSortedHash(ccCommitment, govRoot)
+	// V5: Build 3-element domain-tagged merkle proof (TON uses SHA-256 Cell hashing)
+	taggedOp := TonComputeDomainTagHash("certen:op:", opCommitment)
+	taggedCC := TonComputeDomainTagHash("certen:cc:", ccCommitment)
+	taggedGov := TonComputeDomainTagHash("certen:gov:", govRoot)
+	taggedExec := TonComputeDomainTagHash("certen:exec:", execCommitment)
+	hash23 := TonSortedHash(taggedCC, taggedGov)
 
-	log.Printf("🌳 [TON-MERKLE] Built 4-leaf proof for adiURL verification:")
+	log.Printf("🌳 [TON-MERKLE] Built V5 3-element domain-tagged proof for adiURL verification:")
 	log.Printf("   adiURL: %s", adiURL)
-	log.Printf("   proof[0] (op): 0x%x", opCommitment[:8])
-	log.Printf("   proof[1] (hash23): 0x%x", hash23Arr[:8])
+	log.Printf("   proof[0] (taggedOp): 0x%x", taggedOp[:8])
+	log.Printf("   proof[1] (hash23): 0x%x", hash23[:8])
+	log.Printf("   proof[2] (taggedExec): 0x%x", taggedExec[:8])
 
-	merklePath := [][32]byte{opCommitment, hash23Arr}
+	merklePath := [][32]byte{taggedOp, hash23, taggedExec}
 
 	now := time.Now()
 	proofTimestamp := uint64(now.Add(-5 * time.Minute).Unix())

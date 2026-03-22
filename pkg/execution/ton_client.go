@@ -59,10 +59,10 @@ const (
 // Tact message op codes - extracted from compiled Tact build output.
 // These MUST match the values in tact_CertenAnchorV4Ton.ts and tact_CertenAccountFactoryTon.ts.
 const (
-	opCreateAnchor                 uint32 = 0x16F0327E // 384840318  - CertenAnchorV4Ton
-	opExecuteComprehensiveProof    uint32 = 0xCF7BCEC3 // 3480997571 - CertenAnchorV4Ton
-	opExecuteGovernanceProofDirect uint32 = 0x7D7FD8A6 // 2105530534 - CertenAccountV2Ton
-	opCreateAccountIfNotExists     uint32 = 0xCF2583AF // 3475342255 - CertenAccountFactoryTon
+	opCreateAnchor                 uint32 = 0x5608AE97 // 1443260439 - CertenAnchorV5Ton (V5: includes executionCommitment)
+	opExecuteComprehensiveProof    uint32 = 0xCF7BCEC3 // 3480997571 - CertenAnchorV5Ton (unchanged)
+	opExecuteGovernanceProofDirect uint32 = 0x7D7FD8A6 // 2105530534 - CertenAccountV3Ton (unchanged)
+	opCreateAccountIfNotExists     uint32 = 0xCF2583AF // 3475342255 - CertenAccountFactoryV2Ton (unchanged)
 )
 
 // NewTonClient creates a TON client from a mnemonic seed phrase.
@@ -544,16 +544,17 @@ func (tc *TonClient) CreateAnchor(
 	bundleId [32]byte,
 	adiURLHash [32]byte,
 	opCommitment, ccCommitment, govRoot [32]byte,
+	executionCommitment [32]byte,
 	blockHeight uint64,
 ) (string, error) {
-	log.Printf("📡 [TON] Step 1: Creating anchor (V4 with adiURLHash)...")
+	log.Printf("📡 [TON] Step 1: Creating anchor (V5 with executionCommitment)...")
 	log.Printf("   Wallet: %s", tc.walletAddress.String())
 	log.Printf("   Anchor Contract: %s", tc.anchorContract.String())
 	log.Printf("   Bundle ID: 0x%x", bundleId[:8])
 	log.Printf("   adiURLHash: 0x%x", adiURLHash[:8])
 	log.Printf("   Block Height: %d", blockHeight)
 
-	body := tonBuildCreateAnchorBody(bundleId, adiURLHash, opCommitment, ccCommitment, govRoot, blockHeight)
+	body := tonBuildCreateAnchorBody(bundleId, adiURLHash, opCommitment, ccCommitment, govRoot, executionCommitment, blockHeight)
 
 	hash, err := tc.sendInternalMessage(ctx, tc.anchorContract, tonGasAmount, body)
 	if err != nil {
@@ -568,17 +569,19 @@ func (tc *TonClient) CreateAnchor(
 // Matches Tact serialization of CreateAnchor message:
 //   Main cell (800 bits): op(32) + bundleId(256) + adiURLHash(256) + opCommit(256)
 //   Continuation ref (576 bits): ccCommit(256) + govRoot(256) + blockHeight(64)
-func tonBuildCreateAnchorBody(bundleId, adiURLHash, opCommitment, ccCommitment, govRoot [32]byte, blockHeight uint64) *cell.Cell {
+func tonBuildCreateAnchorBody(bundleId, adiURLHash, opCommitment, ccCommitment, govRoot, executionCommitment [32]byte, blockHeight uint64) *cell.Cell {
 	bundleInt := new(big.Int).SetBytes(bundleId[:])
 	adiHashInt := new(big.Int).SetBytes(adiURLHash[:])
 	opInt := new(big.Int).SetBytes(opCommitment[:])
 	ccInt := new(big.Int).SetBytes(ccCommitment[:])
 	govInt := new(big.Int).SetBytes(govRoot[:])
+	execInt := new(big.Int).SetBytes(executionCommitment[:])
 
-	// Continuation cell: ccCommit(256) + govRoot(256) + blockHeight(64) = 576 bits
+	// V5: Continuation cell: ccCommit(256) + govRoot(256) + execCommit(256) + blockHeight(64) = 832 bits
 	cont := cell.BeginCell().
 		MustStoreBigUInt(ccInt, 256).
 		MustStoreBigUInt(govInt, 256).
+		MustStoreBigUInt(execInt, 256).
 		MustStoreUInt(blockHeight, 64).
 		EndCell()
 
@@ -669,6 +672,66 @@ func TonComputeBoundMerkleRoot(adiURLHash, opCommitment, ccCommitment, govRoot [
 	hash01 := TonSortedHash(adiURLHash, opCommitment)
 	hash23 := TonSortedHash(ccCommitment, govRoot)
 	return TonSortedHash(hash01, hash23)
+}
+
+// TonComputeDomainTagHash computes the domain-tagged hash matching the Tact
+// contract's computeDomainTagHash() function.
+// Returns SHA-256 of Cell(ref:snakeStringCell, uint256:value)
+func TonComputeDomainTagHash(prefix string, value [32]byte) [32]byte {
+	// Tact beginString().append(s).toCell() = snake encoding: 0x00 prefix + string bytes
+	strCell := cell.BeginCell().
+		MustStoreStringSnake(prefix).
+		EndCell()
+
+	c := cell.BeginCell().
+		MustStoreRef(strCell).
+		MustStoreBigUInt(new(big.Int).SetBytes(value[:]), 256).
+		EndCell()
+
+	var result [32]byte
+	copy(result[:], c.Hash())
+	return result
+}
+
+// TonComputeBoundMerkleRoot5 computes the 5-leaf domain-tagged sorted merkle root
+// matching the Tact contract's computeBoundMerkleRoot5() function.
+//
+//	taggedAdi  = computeDomainTagHash("certen:adi:", adiURLHash)
+//	taggedOp   = computeDomainTagHash("certen:op:", operationCommitment)
+//	taggedCC   = computeDomainTagHash("certen:cc:", crossChainCommitment)
+//	taggedGov  = computeDomainTagHash("certen:gov:", governanceRoot)
+//	taggedExec = computeDomainTagHash("certen:exec:", executionCommitment)
+//	hash01   = sortedHash(taggedAdi, taggedOp)
+//	hash23   = sortedHash(taggedCC, taggedGov)
+//	hash0123 = sortedHash(hash01, hash23)
+//	root     = sortedHash(hash0123, taggedExec)
+func TonComputeBoundMerkleRoot5(adiURLHash, opCommitment, ccCommitment, govRoot, execCommitment [32]byte) [32]byte {
+	taggedAdi := TonComputeDomainTagHash("certen:adi:", adiURLHash)
+	taggedOp := TonComputeDomainTagHash("certen:op:", opCommitment)
+	taggedCC := TonComputeDomainTagHash("certen:cc:", ccCommitment)
+	taggedGov := TonComputeDomainTagHash("certen:gov:", govRoot)
+	taggedExec := TonComputeDomainTagHash("certen:exec:", execCommitment)
+
+	hash01 := TonSortedHash(taggedAdi, taggedOp)
+	hash23 := TonSortedHash(taggedCC, taggedGov)
+	hash0123 := TonSortedHash(hash01, hash23)
+	return TonSortedHash(hash0123, taggedExec)
+}
+
+// TonComputeExecutionCommitment computes the execution commitment matching
+// the Tact contract's computeExecutionCommitment() function.
+// Returns SHA-256 of Cell(int32:chainId, address:target, coins:value, uint256:dataHash)
+func TonComputeExecutionCommitment(chainId int32, target *address.Address, valueNano uint64, dataHash [32]byte) [32]byte {
+	c := cell.BeginCell().
+		MustStoreInt(int64(chainId), 32).
+		MustStoreAddr(target).
+		MustStoreCoins(valueNano).
+		MustStoreBigUInt(new(big.Int).SetBytes(dataHash[:]), 256).
+		EndCell()
+
+	var result [32]byte
+	copy(result[:], c.Hash())
+	return result
 }
 
 // =============================================================================
