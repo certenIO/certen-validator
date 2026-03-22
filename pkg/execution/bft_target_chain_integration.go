@@ -31,6 +31,7 @@ import (
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 	"github.com/mr-tron/base58"
 	tonaddr "github.com/xssnick/tonutils-go/address"
+	toncell "github.com/xssnick/tonutils-go/tvm/cell"
 
 	"github.com/certen/independant-validator/pkg/anchor"
 	"github.com/certen/independant-validator/pkg/config"
@@ -4568,16 +4569,16 @@ func (btce *BFTTargetChainExecutor) executeTonOperations(
 
 	if tonLegForExec != nil {
 		tonToAddrExec := btce.extractTonFieldFromCrossChainData(legacyIntent, "to")
-		var targetAddr *address.Address
+		var targetAddr *tonaddr.Address
 		if tonToAddrExec != "" {
-			parsed, pErr := address.ParseAddr(tonToAddrExec)
+			parsed, pErr := tonaddr.ParseAddr(tonToAddrExec)
 			if pErr == nil {
 				targetAddr = parsed
 			}
 		}
 		if targetAddr == nil {
 			// Fallback: use zero address
-			targetAddr = address.NewAddress(0, 0, make([]byte, 32))
+			targetAddr = tonaddr.NewAddress(0, 0, make([]byte, 32))
 		}
 		tonDepositNano := uint64(1)
 		if tonLegForExec.Value != nil {
@@ -4667,14 +4668,14 @@ func (btce *BFTTargetChainExecutor) executeTonOperations(
 		}
 		// For TON, authority leaf uses Cell-hash of the authority address
 		// Compute via tonutils Cell hashing
-		tonAuthorityAddr := address.NewAddress(0, 0, authority32)
-		authLeafCell := cell.BeginCell().MustStoreAddr(tonAuthorityAddr).EndCell()
+		tonAuthorityAddr := tonaddr.NewAddress(0, 0, authority32)
+		authLeafCell := toncell.BeginCell().MustStoreAddr(tonAuthorityAddr).EndCell()
 		var authLeaf [32]byte
 		copy(authLeaf[:], authLeafCell.Hash())
 
 		sentinelData := []byte(fmt.Sprintf("certen:keybook:%s:sentinel", tonGovOrgADI))
-		sentinelCell := cell.BeginCell().MustStoreStringSnake(string(sentinelData)).EndCell()
-		wrapCell := cell.BeginCell().MustStoreUInt(0, 8).MustStoreRef(sentinelCell).EndCell()
+		sentinelCell := toncell.BeginCell().MustStoreStringSnake(string(sentinelData)).EndCell()
+		wrapCell := toncell.BeginCell().MustStoreUInt(0, 8).MustStoreRef(sentinelCell).EndCell()
 		var sentinelLeaf [32]byte
 		copy(sentinelLeaf[:], wrapCell.Hash())
 
