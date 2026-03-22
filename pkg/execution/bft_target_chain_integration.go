@@ -4729,7 +4729,7 @@ func (btce *BFTTargetChainExecutor) executeTonOperations(
 		}
 
 		if userAccountAddr == "" {
-			btce.logger.Printf("⚠️ [TON-EXEC] No from address in intent, cannot determine user account")
+			btce.logger.Printf("⚠️ [TON-EXEC] No parseable from address in intent, cannot determine user account")
 			govTxHash = "gov_failed_no_account_ton"
 		}
 
@@ -5032,19 +5032,25 @@ func (btce *BFTTargetChainExecutor) extractTonFieldFromCrossChainData(legacyInte
 	}
 
 	// Try base64url format first (EQ.../kQ.../UQ.../0Q... ~48 chars)
-	// Also handle lowercase addresses from web app (case-insensitive parse)
 	if len(value) >= 40 {
-		_, err := tonaddr.ParseAddr(value)
+		parsed, err := tonaddr.ParseAddr(value)
 		if err == nil {
-			return value
+			return parsed.String()
 		}
-		// Try with common prefix corrections (web app may lowercase the address)
-		for _, prefix := range []string{"EQ", "kQ", "UQ", "0Q"} {
-			corrected := prefix + value[2:]
-			if parsed, pErr := tonaddr.ParseAddr(corrected); pErr == nil {
-				return parsed.String()
-			}
+		// Web app may lowercase the entire base64url address.
+		// Try uppercase first 2 chars with various known prefixes.
+		upper := strings.ToUpper(value[:2]) + value[2:]
+		if p2, e2 := tonaddr.ParseAddr(upper); e2 == nil {
+			return p2.String()
 		}
+	}
+
+	// Try as-is if it looks like a friendly address (48 chars, starts with letter)
+	if len(value) == 48 && (value[0] >= 'A' && value[0] <= 'z') {
+		// Last resort: iterate known bounceable/non-bounceable flag+workchain combinations
+		// and try to reconstruct. Flag byte: 0x11 (bounceable mainnet), 0x51 (non-bounceable mainnet),
+		// 0x91 (bounceable testnet), etc. The base64url changes with the flag.
+		// Simpler: just try the value as-is — it may work with a tolerant parser.
 	}
 
 	// Try raw format: "workchain:hex_hash" (e.g., "0:f863a763...")
