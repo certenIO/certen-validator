@@ -552,7 +552,9 @@ func (tc *TonClient) CreateAnchor(
 	log.Printf("   Anchor Contract: %s", tc.anchorContract.String())
 	log.Printf("   Bundle ID: 0x%x", bundleId[:8])
 	log.Printf("   adiURLHash: 0x%x", adiURLHash[:8])
+	log.Printf("   execCommitment: 0x%x", executionCommitment[:8])
 	log.Printf("   Block Height: %d", blockHeight)
+	log.Printf("   OpCode: 0x%X (%d)", opCreateAnchor, opCreateAnchor)
 
 	body := tonBuildCreateAnchorBody(bundleId, adiURLHash, opCommitment, ccCommitment, govRoot, executionCommitment, blockHeight)
 
