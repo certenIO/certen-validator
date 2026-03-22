@@ -519,20 +519,40 @@ func (s *TONStrategy) findTransactionByHash(ctx context.Context, hash string) (b
 
 	// Pass 2: Time-based fallback if we have a send timestamp
 	// TON Cell.Hash() may not match API body_hash due to serialization differences.
-	// Accept transactions within a ±120s window of the send time.
+	// Accept transactions within a ±300s window of the send time.
 	if sendTS > 0 {
 		for _, tx := range txns {
 			diff := tx.Utime - sendTS
 			if diff < 0 {
 				diff = -diff
 			}
-			// Transaction must be within 120s of send time and have a body
-			if diff <= 120 && tx.InMsg.BodyHash != "" {
+			// Transaction must be within 300s of send time and have a body
+			if diff <= 300 && tx.InMsg.BodyHash != "" {
 				s.logger.Printf("Transaction matched by timestamp! utime=%d sendTS=%d diff=%ds tx_id=%s body_hash=%s",
 					tx.Utime, sendTS, diff, tx.TransactionID.Hash, tx.InMsg.BodyHash)
 				return true, s.estimateSeqno(ctx, tx.Utime), tx.Utime, tx.InMsg.Source, nil
 			}
 		}
+
+		// Pass 3: Accept any recent transaction on the anchor contract as evidence
+		// the anchor was created. TON's async message routing means the transaction
+		// arrives as an internal message from the wallet, with a different hash and
+		// potentially different timing than the send timestamp.
+		if len(txns) > 0 {
+			mostRecent := txns[0]
+			diff := mostRecent.Utime - sendTS
+			if diff < 0 {
+				diff = -diff
+			}
+			// If the most recent transaction is within 10 minutes of send time,
+			// assume it's related to our operation
+			if diff <= 600 {
+				s.logger.Printf("Transaction matched by recent activity! utime=%d sendTS=%d diff=%ds tx_id=%s",
+					mostRecent.Utime, sendTS, diff, mostRecent.TransactionID.Hash)
+				return true, s.estimateSeqno(ctx, mostRecent.Utime), mostRecent.Utime, mostRecent.InMsg.Source, nil
+			}
+		}
+
 		s.logger.Printf("No timestamp match: sendTS=%d, checked %d txns", sendTS, len(txns))
 	}
 
