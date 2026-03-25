@@ -423,7 +423,7 @@ func (o *ProofCycleOrchestrator) observeTronTransaction(ctx context.Context, txH
 		Status:              status,
 		FinalizedAt:         time.Now(),
 		ObservedByValidator: o.validatorID,
-		ConfirmationBlocks:  1,
+		ConfirmationBlocks:  19, // TRON DPoS has near-instant finality; confirmed = final
 	}, nil
 }
 
