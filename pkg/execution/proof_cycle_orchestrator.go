@@ -24,6 +24,9 @@ import (
 	"sync"
 	"time"
 
+	"strings"
+
+	"github.com/certen/independant-validator/pkg/config"
 	"github.com/certen/independant-validator/pkg/crypto/bls"
 	"github.com/certen/independant-validator/pkg/database"
 	"github.com/ethereum/go-ethereum/common"
@@ -375,6 +378,64 @@ func (o *ProofCycleOrchestrator) StartPerChainProofCycles(
 	return nil
 }
 
+// observeTronTransaction observes a TRON transaction using TRON's native HTTP API.
+// The standard EVM ethclient.TransactionReceipt doesn't work for TRON because
+// the observer uses the default EVM RPC (Alchemy/Sepolia), not TRON's endpoint.
+func (o *ProofCycleOrchestrator) observeTronTransaction(ctx context.Context, txHash common.Hash) (*ExternalChainResult, error) {
+	anchorCfg, err := config.LoadAnchorConfigFromEnv()
+	if err != nil {
+		return nil, fmt.Errorf("load anchor config: %w", err)
+	}
+	chainCfg := anchorCfg.GetEVMChainConfig(2494104990) // TRON Shasta
+	if chainCfg == nil || chainCfg.RPCURL == "" {
+		return nil, fmt.Errorf("no TRON Shasta config")
+	}
+
+	privateKey := os.Getenv("ETH_PRIVATE_KEY")
+	tronClient, err := NewTronClient(chainCfg.RPCURL, privateKey)
+	if err != nil {
+		return nil, fmt.Errorf("create TRON client: %w", err)
+	}
+
+	txID := hex.EncodeToString(txHash.Bytes())
+	info, err := tronClient.WaitForConfirmation(ctx, txID, 90*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("TRON tx not confirmed: %w", err)
+	}
+
+	blockNum := uint64(0)
+	if bn, ok := info["blockNumber"].(float64); ok {
+		blockNum = uint64(bn)
+	}
+
+	status := uint64(1) // assume success
+	if receipt, ok := info["receipt"].(map[string]interface{}); ok {
+		if result, ok := receipt["result"].(string); ok && result != "SUCCESS" && result != "" {
+			status = 0
+		}
+	}
+
+	return &ExternalChainResult{
+		Chain:               "TRON Shasta",
+		ChainID:             2494104990,
+		TxHash:              txHash,
+		BlockNumber:         new(big.Int).SetUint64(blockNum),
+		Status:              status,
+		FinalizedAt:         time.Now(),
+		ObservedByValidator: o.validatorID,
+		ConfirmationBlocks:  1,
+	}, nil
+}
+
+// isTronChain returns true if the target chain is TRON based on the commitment data.
+func isTronChain(commitment *ExecutionCommitment) bool {
+	if commitment == nil {
+		return false
+	}
+	tc := strings.ToLower(commitment.TargetChain)
+	return strings.Contains(tc, "tron")
+}
+
 // executePhase7Enhanced observes all 3 anchor workflow transactions
 func (o *ProofCycleOrchestrator) executePhase7Enhanced(
 	ctx context.Context,
@@ -385,6 +446,12 @@ func (o *ProofCycleOrchestrator) executePhase7Enhanced(
 ) {
 	o.logger.Printf("📡 [PHASE-7-ENHANCED] Observing all 3 anchor workflow transactions")
 
+	// Detect TRON chains — must use TRON HTTP API instead of EVM ethclient
+	useTronObserver := isTronChain(commitment)
+	if useTronObserver {
+		o.logger.Printf("📡 [PHASE-7] Using TRON-native observer (chain: %s)", commitment.TargetChain)
+	}
+
 	// Use timeout context - give more time since we're tracking 3 txs
 	observeCtx, cancel := context.WithTimeout(ctx, o.config.ObservationTimeout*2)
 	defer cancel()
@@ -393,17 +460,24 @@ func (o *ProofCycleOrchestrator) executePhase7Enhanced(
 	var createResult, verifyResult, govResult *ExternalChainResult
 	var createErr, verifyErr, govErr error
 
+	// Helper to observe a transaction (TRON-aware)
+	observeTx := func(txHash common.Hash, _ *ExecutionCommitment) (*ExternalChainResult, error) {
+		if useTronObserver {
+			return o.observeTronTransaction(observeCtx, txHash)
+		}
+		return o.observer.ObserveTransaction(observeCtx, txHash, nil)
+	}
+
 	// Observe all 3 transactions concurrently
 	var wg sync.WaitGroup
 	wg.Add(3)
 
 	// Step 1: Observe createAnchor transaction
-	// Note: Pass nil commitment - Step 1 uses different contract/selector than the final commitment
 	go func() {
 		defer wg.Done()
 		if txHashes.CreateTxHash != (common.Hash{}) {
-			o.logger.Printf("📡 [PHASE-7] Observing Step 1 (createAnchor): %s (commitment=nil, skipping verification)", txHashes.CreateTxHash.Hex())
-			createResult, createErr = o.observer.ObserveTransaction(observeCtx, txHashes.CreateTxHash, nil)
+			o.logger.Printf("📡 [PHASE-7] Observing Step 1 (createAnchor): %s", txHashes.CreateTxHash.Hex())
+			createResult, createErr = observeTx(txHashes.CreateTxHash, nil)
 			if createErr != nil {
 				o.logger.Printf("⚠️ [PHASE-7] Step 1 observation failed: %v", createErr)
 			} else {
@@ -418,12 +492,11 @@ func (o *ProofCycleOrchestrator) executePhase7Enhanced(
 	}()
 
 	// Step 2: Observe executeComprehensiveProof transaction
-	// Note: Pass nil commitment - Step 2 uses different contract/selector than the final commitment
 	go func() {
 		defer wg.Done()
 		if txHashes.VerifyTxHash != (common.Hash{}) {
 			o.logger.Printf("📡 [PHASE-7] Observing Step 2 (executeComprehensiveProof): %s", txHashes.VerifyTxHash.Hex())
-			verifyResult, verifyErr = o.observer.ObserveTransaction(observeCtx, txHashes.VerifyTxHash, nil)
+			verifyResult, verifyErr = observeTx(txHashes.VerifyTxHash, nil)
 			if verifyErr != nil {
 				o.logger.Printf("⚠️ [PHASE-7] Step 2 observation failed: %v", verifyErr)
 			} else {
@@ -442,7 +515,14 @@ func (o *ProofCycleOrchestrator) executePhase7Enhanced(
 		defer wg.Done()
 		if txHashes.GovernanceTxHash != (common.Hash{}) {
 			o.logger.Printf("📡 [PHASE-7] Observing Step 3 (executeWithGovernance): %s", txHashes.GovernanceTxHash.Hex())
-			govResult, govErr = o.observer.ObserveTransaction(observeCtx, txHashes.GovernanceTxHash, commitment)
+			var step3Result *ExternalChainResult
+			var step3Err error
+			if useTronObserver {
+				step3Result, step3Err = o.observeTronTransaction(observeCtx, txHashes.GovernanceTxHash)
+			} else {
+				step3Result, step3Err = o.observer.ObserveTransaction(observeCtx, txHashes.GovernanceTxHash, commitment)
+			}
+			govResult, govErr = step3Result, step3Err
 			if govErr != nil {
 				o.logger.Printf("⚠️ [PHASE-7] Step 3 observation failed: %v", govErr)
 			} else {
