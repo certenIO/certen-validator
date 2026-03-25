@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"math/big"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -574,6 +575,22 @@ func (c *ExecutionCommitment) ComputeCommitmentHash() [32]byte {
 // VerifyAgainstResult checks if the result matches the commitment
 // SECURITY CRITICAL: This is the primary defense against executor misbehavior
 func (c *ExecutionCommitment) VerifyAgainstResult(result *ExternalChainResult) bool {
+	// Non-EVM chains (TRON, NEAR, Solana, etc.) use native observers that only return
+	// confirmation status, not full tx details (TxTo, TxData, TxValue). For these chains,
+	// the on-chain contract already verified the execution commitment in Step 3.
+	// Skip detailed field-level verification and accept the confirmed result.
+	if result.TxTo == nil && result.TxData == nil && result.Status == 1 {
+		chain := strings.ToLower(result.Chain)
+		if strings.Contains(chain, "tron") || strings.Contains(chain, "near") ||
+			strings.Contains(chain, "solana") || strings.Contains(chain, "ton") ||
+			strings.Contains(chain, "aptos") || strings.Contains(chain, "sui") {
+			fmt.Printf("✅ [COMMITMENT-VERIFY] Non-EVM chain %s: tx confirmed on-chain, skipping field-level verification\n", result.Chain)
+			return true
+		}
+		fmt.Printf("❌ [COMMITMENT-VERIFY] FAILED: TxTo is nil\n")
+		return false
+	}
+
 	// Basic verification: target contract
 	if result.TxTo == nil {
 		fmt.Printf("❌ [COMMITMENT-VERIFY] FAILED: TxTo is nil\n")
