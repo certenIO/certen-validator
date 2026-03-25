@@ -1095,8 +1095,11 @@ func tronBase58ToAddress(addr string) (common.Address, error) {
 
 // parseChainAddress parses an address string that may be hex (0x...) or TRON base58 (T...).
 func parseChainAddress(addr string) common.Address {
-	if strings.HasPrefix(addr, "T") && len(addr) == 34 {
-		if parsed, err := tronBase58ToAddress(addr); err == nil {
+	// TRON Base58Check addresses start with 'T' (or lowercase 't' from some web apps)
+	if (strings.HasPrefix(addr, "T") || strings.HasPrefix(addr, "t")) && len(addr) == 34 {
+		// Uppercase the first character for Base58Check decoding (TRON canonical form)
+		canonical := strings.ToUpper(addr[:1]) + addr[1:]
+		if parsed, err := tronBase58ToAddress(canonical); err == nil {
 			return parsed
 		}
 	}
@@ -1461,7 +1464,27 @@ func (btce *BFTTargetChainExecutor) executeTronOperations(
 	// CORRECT FLOW: Call executeGovernanceProofDirect on the USER'S abstract account,
 	// NOT executeWithGovernance on the anchor contract.
 	// Note: allLegs and tronLeg were already extracted before Step 1 for execCommitment.
+	//
+	// Web apps may lowercase TRON Base58Check addresses, making them undecodable.
+	// When SourceAddress is zero but we have a TRON leg, derive the abstract account
+	// address deterministically from the ADI URL (same as factory deployment).
 	govTxHash := ""
+	if tronLeg != nil && tronLeg.SourceAddress == (common.Address{}) {
+		// Web app may lowercase TRON Base58Check addresses, making them undecodable.
+		// Derive the abstract account's deterministic CREATE2 address from the factory.
+		factoryAddr := chainCfg.AccountFactory
+		if factoryAddr != "" {
+			owner := DeriveAccountOwner(adiURL)
+			salt := DeriveAccountSalt(adiURL)
+			predicted, predErr := tronClient.GetPredictedAddress(ctx, factoryAddr, owner, adiURL, salt)
+			if predErr != nil {
+				btce.logger.Printf("⚠️ [TRON-EXEC] Failed to predict account address: %v", predErr)
+			} else if predicted != (common.Address{}) {
+				tronLeg.SourceAddress = predicted
+				btce.logger.Printf("🔧 [TRON-EXEC] SourceAddress derived from factory getAddress: %s (ADI: %s)", predicted.Hex(), adiURL)
+			}
+		}
+	}
 	if tronLeg != nil && tronLeg.SourceAddress != (common.Address{}) {
 		userAccountAddr := tronLeg.SourceAddress
 		btce.logger.Printf("🏦 [TRON-EXEC] Step 3: Executing governance proof direct on user account %s", userAccountAddr.Hex())

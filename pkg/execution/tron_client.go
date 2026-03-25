@@ -749,6 +749,79 @@ func (tc *TronClient) DeployAccountViaFactory(
 	return txID, nil
 }
 
+// GetPredictedAddress calls getAddress on the factory to get the deterministic CREATE2 address.
+// This is used when the web app lowercases TRON Base58 addresses, making them undecodable.
+func (tc *TronClient) GetPredictedAddress(ctx context.Context, factoryAddress string, owner common.Address, adiURL string, salt *big.Int) (common.Address, error) {
+	const getAddrABI = `[{"type":"function","name":"getAddress","inputs":[{"name":"accountOwner","type":"address"},{"name":"adiURL","type":"string"},{"name":"salt","type":"uint256"}],"outputs":[{"name":"","type":"address"}],"stateMutability":"view"}]`
+
+	parsedABI, err := abi.JSON(strings.NewReader(getAddrABI))
+	if err != nil {
+		return common.Address{}, fmt.Errorf("parse ABI: %w", err)
+	}
+
+	calldata, err := parsedABI.Pack("getAddress", owner, adiURL, salt)
+	if err != nil {
+		return common.Address{}, fmt.Errorf("ABI encode: %w", err)
+	}
+
+	paramHex := hex.EncodeToString(calldata[4:])
+
+	tronFactory := factoryAddress
+	if strings.HasPrefix(factoryAddress, "0x") || strings.HasPrefix(factoryAddress, "0X") {
+		tronFactory = "41" + factoryAddress[2:]
+	}
+
+	payload := map[string]interface{}{
+		"owner_address":     tc.ownerAddress,
+		"contract_address":  tronFactory,
+		"function_selector": "getAddress(address,string,uint256)",
+		"parameter":         paramHex,
+		"visible":           false,
+	}
+
+	body, _ := json.Marshal(payload)
+	req, err := http.NewRequestWithContext(ctx, "POST",
+		tc.httpEndpoint+"/wallet/triggerconstantcontract", bytes.NewReader(body))
+	if err != nil {
+		return common.Address{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := tc.httpClient.Do(req)
+	if err != nil {
+		return common.Address{}, fmt.Errorf("HTTP request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return common.Address{}, fmt.Errorf("read response: %w", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return common.Address{}, fmt.Errorf("parse response: %w", err)
+	}
+
+	constantResult, ok := result["constant_result"].([]interface{})
+	if !ok || len(constantResult) == 0 {
+		return common.Address{}, fmt.Errorf("no constant_result")
+	}
+
+	resultHex, ok := constantResult[0].(string)
+	if !ok || len(resultHex) < 64 {
+		return common.Address{}, fmt.Errorf("invalid result")
+	}
+
+	// ABI-decode address (last 20 bytes of 32-byte slot)
+	addrBytes, err := hex.DecodeString(resultHex[24:64])
+	if err != nil {
+		return common.Address{}, fmt.Errorf("decode address: %w", err)
+	}
+
+	return common.BytesToAddress(addrBytes), nil
+}
+
 // DeriveAccountOwner derives the deterministic EVM owner address from an ADI URL.
 // Matches the Bridge API's deriveEvmOwner: last 20 bytes of keccak256(adiUrl).
 // This is the "owner" used for factory deployment — NOT a user's EOA wallet.
