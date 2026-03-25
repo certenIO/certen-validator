@@ -21,6 +21,17 @@ import (
 	"github.com/certen/independant-validator/pkg/execution/contracts"
 )
 
+// tronAnchorV5ABI is a minimal ABI definition for CertenAnchorV5 on TRON.
+// TRON V5's getAnchor returns 11 values (includes executionCommitment at position 7),
+// and createAnchor takes 7 params (includes executionCommitment).
+const tronAnchorV5ABI = `[
+	{"type":"function","name":"createAnchor","inputs":[{"name":"bundleId","type":"bytes32"},{"name":"adiURLHash","type":"bytes32"},{"name":"operationCommitment","type":"bytes32"},{"name":"crossChainCommitment","type":"bytes32"},{"name":"governanceRoot","type":"bytes32"},{"name":"executionCommitment","type":"bytes32"},{"name":"accumulateBlockHeight","type":"uint256"}],"outputs":[],"stateMutability":"nonpayable"},
+	{"type":"function","name":"getAnchor","inputs":[{"name":"anchorId","type":"bytes32"}],"outputs":[{"name":"bundleId","type":"bytes32"},{"name":"merkleRoot","type":"bytes32"},{"name":"adiURLHash","type":"bytes32"},{"name":"operationCommitment","type":"bytes32"},{"name":"crossChainCommitment","type":"bytes32"},{"name":"governanceRoot","type":"bytes32"},{"name":"executionCommitment","type":"bytes32"},{"name":"accumulateBlockHeight","type":"uint256"},{"name":"timestamp","type":"uint256"},{"name":"validator","type":"address"},{"name":"valid","type":"bool"}],"stateMutability":"view"},
+	{"type":"function","name":"getExecutionCommitment","inputs":[{"name":"anchorId","type":"bytes32"}],"outputs":[{"name":"","type":"bytes32"}],"stateMutability":"view"},
+	{"type":"function","name":"executeComprehensiveProof","inputs":[{"name":"anchorId","type":"bytes32"},{"name":"proof","type":"tuple","components":[{"name":"transactionHash","type":"bytes32"},{"name":"merkleRoot","type":"bytes32"},{"name":"proofHashes","type":"bytes32[]"},{"name":"leafHash","type":"bytes32"},{"name":"governanceProof","type":"tuple","components":[{"name":"keyBookURL","type":"string"},{"name":"keyBookRoot","type":"bytes32"},{"name":"keyPageProofs","type":"bytes32[]"},{"name":"authorityAddress","type":"address"},{"name":"authorityLevel","type":"uint8"},{"name":"nonce","type":"uint256"},{"name":"requiredSignatures","type":"uint256"},{"name":"providedSignatures","type":"uint256"},{"name":"thresholdMet","type":"bool"}]},{"name":"blsProof","type":"tuple","components":[{"name":"aggregateSignature","type":"bytes"},{"name":"validatorAddresses","type":"address[]"},{"name":"votingPowers","type":"uint256[]"},{"name":"totalVotingPower","type":"uint256"},{"name":"signedVotingPower","type":"uint256"},{"name":"thresholdMet","type":"bool"},{"name":"messageHash","type":"bytes32"}]},{"name":"commitments","type":"tuple","components":[{"name":"operationCommitment","type":"bytes32"},{"name":"crossChainCommitment","type":"bytes32"},{"name":"governanceRoot","type":"bytes32"},{"name":"executionCommitment","type":"bytes32"},{"name":"sourceChain","type":"string"},{"name":"sourceBlockHeight","type":"uint256"},{"name":"sourceTxHash","type":"bytes32"},{"name":"targetChain","type":"string"},{"name":"targetAddress","type":"address"}]},{"name":"expirationTime","type":"uint256"},{"name":"metadata","type":"bytes"}]}],"outputs":[],"stateMutability":"nonpayable"},
+	{"type":"function","name":"executeWithGovernance","inputs":[{"name":"anchorId","type":"bytes32"},{"name":"target","type":"address"},{"name":"value","type":"uint256"},{"name":"data","type":"bytes"}],"outputs":[{"name":"","type":"bool"}],"stateMutability":"nonpayable"}
+]`
+
 // TronClient handles TRON blockchain interactions using TRON's HTTP API.
 // TRON's /jsonrpc endpoint does NOT support eth_getTransactionCount or
 // eth_sendRawTransaction, so we must use the native HTTP API for writes.
@@ -52,8 +63,10 @@ func NewTronClient(httpEndpoint string, privateKeyHex string) (*TronClient, erro
 	ethAddr := crypto.PubkeyToAddress(privateKey.PublicKey)
 	tronAddr := "41" + hex.EncodeToString(ethAddr.Bytes())
 
-	// Parse contract ABI for encoding function calls
-	parsedABI, err := abi.JSON(strings.NewReader(contracts.CertenAnchorV4ABI))
+	// Parse TRON V5 anchor ABI for encoding function calls.
+	// TRON V5's getAnchor returns 11 values (includes executionCommitment at position 7),
+	// diverging from EVM V5 which returns 10. We use a TRON-specific ABI definition.
+	parsedABI, err := abi.JSON(strings.NewReader(tronAnchorV5ABI))
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse anchor ABI: %w", err)
 	}
@@ -77,7 +90,8 @@ func (tc *TronClient) GetEthAddress() string {
 	return "0x" + tc.ownerAddress[2:]
 }
 
-// CreateAnchor calls createAnchor on the anchor contract via TRON HTTP API.
+// CreateAnchor calls createAnchor on the V5 anchor contract via TRON HTTP API.
+// V5: 7 params — adds executionCommitment (CRITICAL-001).
 func (tc *TronClient) CreateAnchor(
 	ctx context.Context,
 	contractAddress string,
@@ -86,17 +100,20 @@ func (tc *TronClient) CreateAnchor(
 	operationCommitment [32]byte,
 	crossChainCommitment [32]byte,
 	governanceRoot [32]byte,
+	executionCommitment [32]byte,
 	accumulateBlockHeight *big.Int,
 	feeLimit int64,
 ) (string, error) {
-	log.Printf("📡 [TRON] Creating anchor via HTTP API...")
+	log.Printf("📡 [TRON] Creating anchor via HTTP API (V5 — 7 params)...")
 	log.Printf("   Contract: %s", contractAddress)
 	log.Printf("   Bundle ID: 0x%x", bundleId[:8])
+	log.Printf("   Execution Commitment: 0x%x", executionCommitment[:8])
 
-	// ABI-encode the parameters
+	// ABI-encode the parameters (V5: includes executionCommitment)
 	calldata, err := tc.contractABI.Pack("createAnchor",
 		bundleId, adiURLHash, operationCommitment,
-		crossChainCommitment, governanceRoot, accumulateBlockHeight,
+		crossChainCommitment, governanceRoot, executionCommitment,
+		accumulateBlockHeight,
 	)
 	if err != nil {
 		return "", fmt.Errorf("ABI encoding failed: %w", err)
@@ -106,7 +123,7 @@ func (tc *TronClient) CreateAnchor(
 	paramHex := hex.EncodeToString(calldata[4:])
 
 	txResult, err := tc.triggerSmartContract(ctx, contractAddress,
-		"createAnchor(bytes32,bytes32,bytes32,bytes32,bytes32,uint256)",
+		"createAnchor(bytes32,bytes32,bytes32,bytes32,bytes32,bytes32,uint256)",
 		paramHex, feeLimit)
 	if err != nil {
 		return "", fmt.Errorf("triggerSmartContract failed: %w", err)
@@ -441,6 +458,7 @@ func (tc *TronClient) getTransactionInfo(ctx context.Context, txID string) (map[
 }
 
 // AnchorData holds anchor commitments read back from the TRON chain.
+// V5: includes ExecutionCommitment (CRITICAL-001).
 type AnchorData struct {
 	BundleId              [32]byte
 	MerkleRoot            [32]byte
@@ -448,6 +466,7 @@ type AnchorData struct {
 	OperationCommitment   [32]byte
 	CrossChainCommitment  [32]byte
 	GovernanceRoot        [32]byte
+	ExecutionCommitment   [32]byte
 	AccumulateBlockHeight *big.Int
 	Timestamp             *big.Int
 	Validator             common.Address
@@ -536,10 +555,11 @@ func (tc *TronClient) GetAnchorData(ctx context.Context, contractAddress string,
 		return nil, fmt.Errorf("decoding constant_result hex: %w", err)
 	}
 
-	// ABI-decode the getAnchor return values:
+	// ABI-decode the V5 getAnchor return values (11 fields):
 	// (bytes32 bundleId, bytes32 merkleRoot, bytes32 adiURLHash,
 	//  bytes32 operationCommitment, bytes32 crossChainCommitment, bytes32 governanceRoot,
-	//  uint256 accumulateBlockHeight, uint256 timestamp, address validator, bool valid)
+	//  bytes32 executionCommitment, uint256 accumulateBlockHeight, uint256 timestamp,
+	//  address validator, bool valid)
 	method, exists := tc.contractABI.Methods["getAnchor"]
 	if !exists {
 		return nil, fmt.Errorf("getAnchor method not found in ABI")
@@ -550,8 +570,8 @@ func (tc *TronClient) GetAnchorData(ctx context.Context, contractAddress string,
 		return nil, fmt.Errorf("ABI decoding anchor data: %w", err)
 	}
 
-	if len(values) < 10 {
-		return nil, fmt.Errorf("expected 10 return values from getAnchor, got %d", len(values))
+	if len(values) < 11 {
+		return nil, fmt.Errorf("expected 11 return values from V5 getAnchor, got %d", len(values))
 	}
 
 	anchor := &AnchorData{
@@ -561,18 +581,19 @@ func (tc *TronClient) GetAnchorData(ctx context.Context, contractAddress string,
 		OperationCommitment:   values[3].([32]byte),
 		CrossChainCommitment:  values[4].([32]byte),
 		GovernanceRoot:        values[5].([32]byte),
-		AccumulateBlockHeight: values[6].(*big.Int),
-		Timestamp:             values[7].(*big.Int),
-		Validator:             values[8].(common.Address),
-		Valid:                 values[9].(bool),
+		ExecutionCommitment:   values[6].([32]byte),
+		AccumulateBlockHeight: values[7].(*big.Int),
+		Timestamp:             values[8].(*big.Int),
+		Validator:             values[9].(common.Address),
+		Valid:                 values[10].(bool),
 	}
 
 	if !anchor.Valid {
 		return nil, fmt.Errorf("anchor not found or invalid on-chain")
 	}
 
-	log.Printf("✅ [TRON] Anchor read-back verified: bundleId=0x%x opCommit=0x%x",
-		anchor.BundleId[:8], anchor.OperationCommitment[:8])
+	log.Printf("✅ [TRON] Anchor read-back verified: bundleId=0x%x opCommit=0x%x execCommit=0x%x",
+		anchor.BundleId[:8], anchor.OperationCommitment[:8], anchor.ExecutionCommitment[:8])
 
 	return anchor, nil
 }

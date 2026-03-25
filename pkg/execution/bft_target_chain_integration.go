@@ -1381,14 +1381,39 @@ func (btce *BFTTargetChainExecutor) executeTronOperations(
 		feeLimit = 1000000000 // 1000 TRX default fee limit
 	}
 
-	// ========== Step 1: Create Anchor via TRON HTTP API ==========
-	btce.logger.Printf("🔗 [TRON-EXEC] Step 1: Creating anchor on %s...", chainCfg.Name)
+	// V5 CRITICAL-001: Compute execution commitment BEFORE anchor creation.
+	// Extract TRON leg to get target/value/data for commitment computation.
+	allLegs := btce.extractAllLegsFromIntent(legacyIntent)
+	tronLeg := btce.findLegForChainPrefix(allLegs, "tron", 2494104990)
+
+	var execCommitment [32]byte
+	if tronLeg != nil && tronLeg.Target != (common.Address{}) {
+		execCommitment = computeExecutionCommitment(
+			chainID,
+			tronLeg.Target,
+			tronLeg.Value,
+			tronLeg.Data,
+		)
+		btce.logger.Printf("🔒 [TRON-EXEC] CRITICAL-001 ExecutionCommitment: 0x%x", execCommitment[:8])
+	} else {
+		// No TRON leg with execution params — compute deterministic commitment from proof data
+		commitData := append(adiURLHash[:], comprehensiveProof.Commitments.OperationCommitment[:]...)
+		commitData = append(commitData, comprehensiveProof.Commitments.CrossChainCommitment[:]...)
+		commitData = append(commitData, comprehensiveProof.Commitments.GovernanceRoot[:]...)
+		hash := ethcrypto.Keccak256(commitData)
+		copy(execCommitment[:], hash)
+		btce.logger.Printf("🔒 [TRON-EXEC] CRITICAL-001 ExecutionCommitment (deterministic): 0x%x", execCommitment[:8])
+	}
+
+	// ========== Step 1: Create Anchor via TRON HTTP API (V5 — 7 params) ==========
+	btce.logger.Printf("🔗 [TRON-EXEC] Step 1: Creating anchor on %s (V5 with execCommitment)...", chainCfg.Name)
 
 	createTxHash, err := tronClient.CreateAnchor(ctx, anchorContract,
 		bundleIdHash, adiURLHash,
 		comprehensiveProof.Commitments.OperationCommitment,
 		comprehensiveProof.Commitments.CrossChainCommitment,
 		comprehensiveProof.Commitments.GovernanceRoot,
+		execCommitment,
 		big.NewInt(int64(certenProof.BlockHeight)),
 		feeLimit,
 	)
@@ -1435,8 +1460,7 @@ func (btce *BFTTargetChainExecutor) executeTronOperations(
 	// ========== Step 3: Execute via user's Abstract Account ==========
 	// CORRECT FLOW: Call executeGovernanceProofDirect on the USER'S abstract account,
 	// NOT executeWithGovernance on the anchor contract.
-	allLegs := btce.extractAllLegsFromIntent(legacyIntent)
-	tronLeg := btce.findLegForChainPrefix(allLegs, "tron", 2494104990)
+	// Note: allLegs and tronLeg were already extracted before Step 1 for execCommitment.
 	govTxHash := ""
 	if tronLeg != nil && tronLeg.SourceAddress != (common.Address{}) {
 		userAccountAddr := tronLeg.SourceAddress
@@ -1496,7 +1520,7 @@ func (btce *BFTTargetChainExecutor) executeTronOperations(
 				btce.logger.Printf("⚠️ [TRON-EXEC] Step 3: Failed to fetch anchor commitments: %v", err)
 				govTxHash = fmt.Sprintf("gov_failed_anchor_read_%s", chainCfg.Name)
 			} else {
-				// Build AccountProof with 4-leaf merkle proof (same logic as EVM buildAccountProof)
+				// V5: Build AccountProof with 5-leaf domain-tagged merkle proof
 				accountProof := btce.buildTronAccountProof(
 					bundleIdHash,
 					certenProof,
@@ -1504,6 +1528,7 @@ func (btce *BFTTargetChainExecutor) executeTronOperations(
 					anchorData.OperationCommitment,
 					anchorData.CrossChainCommitment,
 					anchorData.GovernanceRoot,
+					anchorData.ExecutionCommitment,
 				)
 
 				// Value from intent is already in chain-native base units (sun for TRON)
@@ -1536,18 +1561,22 @@ func (btce *BFTTargetChainExecutor) executeTronOperations(
 	return btce.buildTronResult(chainCfg, intentID, anchorID, createTxHash, verifyTxHash, govTxHash, true), nil
 }
 
-// buildTronAccountProof constructs the AccountProof struct for CertenAccountV2 on TRON.
-// Mirrors EVM's buildAccountProof — computes a 4-leaf merkle proof for adiURL verification.
+// buildTronAccountProof constructs the AccountProof struct for CertenAccountV3 on TRON.
+// V5: Uses domain-tagged 5-leaf merkle proof for adiURL verification.
+// The leaf is: keccak256("certen:adi:" || keccak256(adiURL))
+// Proof elements: [taggedOp, hash23, taggedExec] (3 elements for 5-leaf tree)
 //
 // Merkle Tree Structure:
 //
-//	          root
-//	        /      \
-//	   hash01      hash23
-//	  /    \      /    \
-//	adiHash  op   cc    gov
+//	                root
+//	              /      \
+//	        hash0123    taggedExec
+//	        /    \
+//	   hash01    hash23
+//	  /    \    /    \
+//	tagAdi tagOp tagCC tagGov
 //
-// To prove adiHash, we need: [op, hash23]
+// To prove tagAdi, we need: [taggedOp, hash23, taggedExec]
 func (btce *BFTTargetChainExecutor) buildTronAccountProof(
 	bundleID [32]byte,
 	certenProof *proof.CertenProof,
@@ -1555,21 +1584,31 @@ func (btce *BFTTargetChainExecutor) buildTronAccountProof(
 	opCommitment [32]byte,
 	ccCommitment [32]byte,
 	govRoot [32]byte,
+	execCommitment [32]byte,
 ) contracts.AccountProof {
-	// proof[0] = operationCommitment (sibling at level 0)
-	var merkleProof [][32]byte
-	merkleProof = append(merkleProof, opCommitment)
+	// V5: Build domain-tagged 5-leaf merkle proof
+	taggedOp := domainTagHash("certen:op:", opCommitment[:])
+	taggedCC := domainTagHash("certen:cc:", ccCommitment[:])
+	taggedGov := domainTagHash("certen:gov:", govRoot[:])
+	taggedExec := domainTagHash("certen:exec:", execCommitment[:])
 
-	// proof[1] = sortedHash(ccCommitment, govRoot) (sibling at level 1)
-	hash23 := sortedHash(ccCommitment[:], govRoot[:])
-	var hash23Arr [32]byte
+	hash23 := sortedHash(taggedCC, taggedGov)
+
+	var taggedOpArr, hash23Arr, taggedExecArr [32]byte
+	copy(taggedOpArr[:], taggedOp)
 	copy(hash23Arr[:], hash23)
-	merkleProof = append(merkleProof, hash23Arr)
+	copy(taggedExecArr[:], taggedExec)
 
-	log.Printf("🌳 [TRON-MERKLE] Built 4-leaf proof for adiURL verification:")
+	// proof[0] = taggedOp (sibling at level 0)
+	// proof[1] = sortedHash(taggedCC, taggedGov) (sibling at level 1)
+	// proof[2] = taggedExec (sibling at level 2, promoted 5th leaf)
+	merkleProof := [][32]byte{taggedOpArr, hash23Arr, taggedExecArr}
+
+	log.Printf("🌳 [TRON-MERKLE-V5] Built 5-leaf domain-tagged proof for adiURL verification:")
 	log.Printf("   adiURL: %s", adiURL)
-	log.Printf("   proof[0] (op): 0x%x", opCommitment[:8])
+	log.Printf("   proof[0] (taggedOp): 0x%x", taggedOpArr[:8])
 	log.Printf("   proof[1] (hash23): 0x%x", hash23Arr[:8])
+	log.Printf("   proof[2] (taggedExec): 0x%x", taggedExecArr[:8])
 
 	// Set expiration (1 hour from now)
 	expiresAt := big.NewInt(time.Now().Add(1 * time.Hour).Unix())
