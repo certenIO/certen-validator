@@ -734,9 +734,9 @@ func (r *ProofArtifactRepository) CreateChainedProofLayer(ctx context.Context, i
 			bvn_partition, receipt_anchor,
 			bvn_root, dn_root, anchor_sequence, bvn_partition_id,
 			dn_block_hash, dn_block_height, consensus_timestamp,
-			layer_json, source_hash, target_hash, receipt_entries, created_at
+			layer_json, source_hash, target_hash, receipt_entries, verified, verified_at, created_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW()
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, true, NOW(), NOW()
 		)
 		RETURNING layer_id, created_at`
 
