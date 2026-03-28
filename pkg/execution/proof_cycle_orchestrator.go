@@ -717,17 +717,10 @@ func (o *ProofCycleOrchestrator) executePhase7Enhanced(
 				return o.observeTonTransaction2(observeCtx, rawSig)
 			}
 		}
-		// EVM chains or fallback: use default Ethereum observer
+		// EVM chains or error: use default Ethereum observer
 		if chainType != "evm" {
-			// Non-EVM without raw sig: return confirmed (execution verified on-chain)
-			return &ExternalChainResult{
-				Chain:               commitment.TargetChain,
-				Status:              1,
-				BlockNumber:         big.NewInt(0),
-				FinalizedAt:         time.Now(),
-				ObservedByValidator: o.validatorID,
-				ConfirmationBlocks:  1,
-			}, nil
+			// Non-EVM chain without raw tx signature — cannot verify, fail explicitly
+			return nil, fmt.Errorf("non-EVM chain %s: no native tx signature available for observation", chainType)
 		}
 		return o.observer.ObserveTransaction(observeCtx, txHash, nil)
 	}
