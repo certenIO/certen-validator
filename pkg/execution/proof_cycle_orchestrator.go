@@ -464,14 +464,22 @@ func (o *ProofCycleOrchestrator) observeSolanaTransaction(ctx context.Context, t
 
 	solanaRPC := os.Getenv("SOLANA_RPC_URL")
 	if solanaRPC == "" {
+		solanaRPC = os.Getenv("SOLANA_DEVNET_RPC_URL")
+	}
+	if solanaRPC == "" {
 		solanaRPC = "https://api.devnet.solana.com"
+	}
+
+	factoryID := os.Getenv("SOLANA_FACTORY_PROGRAM_ID")
+	if factoryID == "" {
+		factoryID = os.Getenv("SOLANA_ACCOUNT_FACTORY_PROGRAM_ID")
 	}
 
 	solClient, err := NewSolanaClient(solanaRPC,
 		os.Getenv("SOLANA_PRIVATE_KEY"),
 		os.Getenv("SOLANA_ANCHOR_PROGRAM_ID"),
 		os.Getenv("SOLANA_BLS_VERIFIER_PROGRAM_ID"),
-		os.Getenv("SOLANA_FACTORY_PROGRAM_ID"),
+		factoryID,
 		os.Getenv("SOLANA_ACCOUNT_PROGRAM_ID"),
 	)
 	if err != nil {
@@ -502,6 +510,9 @@ func (o *ProofCycleOrchestrator) observeNearTransaction(ctx context.Context, txH
 	}
 
 	nearRPC := os.Getenv("NEAR_RPC_URL")
+	if nearRPC == "" {
+		nearRPC = os.Getenv("NEAR_TESTNET_RPC_URL")
+	}
 	if nearRPC == "" {
 		nearRPC = "https://rpc.testnet.near.org"
 	}
@@ -546,12 +557,20 @@ func (o *ProofCycleOrchestrator) observeAptosTransaction(ctx context.Context, tx
 
 	aptosRPC := os.Getenv("APTOS_RPC_URL")
 	if aptosRPC == "" {
+		aptosRPC = os.Getenv("APTOS_TESTNET_RPC_URL")
+	}
+	if aptosRPC == "" {
 		aptosRPC = "https://fullnode.testnet.aptoslabs.com/v1"
+	}
+
+	aptosPackage := os.Getenv("APTOS_PACKAGE_ADDRESS")
+	if aptosPackage == "" {
+		aptosPackage = os.Getenv("APTOS_ANCHOR_PACKAGE")
 	}
 
 	aptosClient, err := NewAptosClient(aptosRPC,
 		os.Getenv("APTOS_PRIVATE_KEY"),
-		os.Getenv("APTOS_PACKAGE_ADDRESS"),
+		aptosPackage,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create Aptos client: %w", err)
@@ -582,14 +601,27 @@ func (o *ProofCycleOrchestrator) observeSuiTransaction(ctx context.Context, txDi
 
 	suiRPC := os.Getenv("SUI_RPC_URL")
 	if suiRPC == "" {
+		suiRPC = os.Getenv("SUI_TESTNET_RPC_URL")
+	}
+	if suiRPC == "" {
 		suiRPC = "https://fullnode.testnet.sui.io:443"
+	}
+
+	suiPackage := os.Getenv("SUI_PACKAGE_ADDRESS")
+	if suiPackage == "" {
+		suiPackage = os.Getenv("SUI_ANCHOR_PACKAGE")
+	}
+
+	suiFactory := os.Getenv("SUI_FACTORY_OBJECT")
+	if suiFactory == "" {
+		suiFactory = os.Getenv("SUI_ACCOUNT_FACTORY_OBJECT")
 	}
 
 	suiClient, err := NewSuiClient(suiRPC,
 		os.Getenv("SUI_PRIVATE_KEY"),
-		os.Getenv("SUI_PACKAGE_ADDRESS"),
+		suiPackage,
 		os.Getenv("SUI_ANCHOR_STATE_OBJECT"),
-		os.Getenv("SUI_FACTORY_OBJECT"),
+		suiFactory,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create SUI client: %w", err)
@@ -620,14 +652,37 @@ func (o *ProofCycleOrchestrator) observeTonTransaction2(ctx context.Context, msg
 
 	tonAPI := os.Getenv("TON_API_URL")
 	if tonAPI == "" {
+		tonAPI = os.Getenv("TON_TESTNET_API_URL")
+	}
+	if tonAPI == "" {
 		tonAPI = "https://testnet.toncenter.com/api/v2"
 	}
 
+	tonMnemonic := os.Getenv("TON_MNEMONIC")
+	if tonMnemonic == "" {
+		tonMnemonic = os.Getenv("TON_WALLET_MNEMONIC")
+	}
+
+	tonAnchor := os.Getenv("TON_ANCHOR_ADDRESS")
+	if tonAnchor == "" {
+		tonAnchor = os.Getenv("TON_ANCHOR_CONTRACT")
+	}
+
+	tonBLS := os.Getenv("TON_BLS_VERIFIER_ADDRESS")
+	if tonBLS == "" {
+		tonBLS = os.Getenv("TON_BLS_VERIFIER_CONTRACT")
+	}
+
+	tonFactory := os.Getenv("TON_FACTORY_ADDRESS")
+	if tonFactory == "" {
+		tonFactory = os.Getenv("TON_ACCOUNT_FACTORY_CONTRACT")
+	}
+
 	tonClient, err := NewTonClient(tonAPI,
-		os.Getenv("TON_MNEMONIC"),
-		os.Getenv("TON_ANCHOR_ADDRESS"),
-		os.Getenv("TON_BLS_VERIFIER_ADDRESS"),
-		os.Getenv("TON_FACTORY_ADDRESS"),
+		tonMnemonic,
+		tonAnchor,
+		tonBLS,
+		tonFactory,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create TON client: %w", err)
