@@ -54,7 +54,7 @@ func (r *AttestationRepository) CreateAttestation(ctx context.Context, input *Ne
 	query := `
 		INSERT INTO validator_attestations (
 			attestation_id, proof_id, validator_id, validator_pubkey,
-			signature, attested_merkle_root, attested_anchor_tx_hash, attested_at
+			signature, attested_hash, anchor_tx_hash, attested_at
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING attestation_id, attested_at`
 
