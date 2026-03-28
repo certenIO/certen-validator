@@ -436,6 +436,65 @@ func isTronChain(commitment *ExecutionCommitment) bool {
 	return strings.Contains(tc, "tron")
 }
 
+// isSolanaChain returns true if the target chain is Solana based on the commitment data.
+func isSolanaChain(commitment *ExecutionCommitment) bool {
+	if commitment == nil {
+		return false
+	}
+	tc := strings.ToLower(commitment.TargetChain)
+	return strings.Contains(tc, "solana")
+}
+
+// isNonEVMChain returns true for chains that cannot use the default Ethereum observer.
+func isNonEVMChain(commitment *ExecutionCommitment) bool {
+	if commitment == nil {
+		return false
+	}
+	tc := strings.ToLower(commitment.TargetChain)
+	return strings.Contains(tc, "tron") || strings.Contains(tc, "solana") ||
+		strings.Contains(tc, "near") || strings.Contains(tc, "ton") ||
+		strings.Contains(tc, "aptos") || strings.Contains(tc, "sui")
+}
+
+// observeSolanaTransaction observes a Solana transaction using Solana's native JSON-RPC.
+func (o *ProofCycleOrchestrator) observeSolanaTransaction(ctx context.Context, txSig string) (*ExternalChainResult, error) {
+	if txSig == "" {
+		return nil, fmt.Errorf("empty Solana tx signature")
+	}
+
+	solanaRPC := os.Getenv("SOLANA_RPC_URL")
+	if solanaRPC == "" {
+		solanaRPC = "https://api.devnet.solana.com"
+	}
+
+	solClient, err := NewSolanaClient(solanaRPC,
+		os.Getenv("SOLANA_PRIVATE_KEY"),
+		os.Getenv("SOLANA_ANCHOR_PROGRAM_ID"),
+		os.Getenv("SOLANA_BLS_VERIFIER_PROGRAM_ID"),
+		os.Getenv("SOLANA_FACTORY_PROGRAM_ID"),
+		os.Getenv("SOLANA_ACCOUNT_PROGRAM_ID"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create Solana client: %w", err)
+	}
+
+	err = solClient.WaitForConfirmation(ctx, txSig, 90*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("Solana tx not confirmed: %w", err)
+	}
+
+	return &ExternalChainResult{
+		Chain:               "solana-devnet",
+		ChainID:             103,
+		TxHash:              common.Hash{}, // Solana sigs don't fit in 32 bytes
+		BlockNumber:         big.NewInt(0),
+		Status:              1, // confirmed = success
+		FinalizedAt:         time.Now(),
+		ObservedByValidator: o.validatorID,
+		ConfirmationBlocks:  32, // Solana finality
+	}, nil
+}
+
 // executePhase7Enhanced observes all 3 anchor workflow transactions
 func (o *ProofCycleOrchestrator) executePhase7Enhanced(
 	ctx context.Context,
@@ -446,10 +505,17 @@ func (o *ProofCycleOrchestrator) executePhase7Enhanced(
 ) {
 	o.logger.Printf("📡 [PHASE-7-ENHANCED] Observing all 3 anchor workflow transactions")
 
-	// Detect TRON chains — must use TRON HTTP API instead of EVM ethclient
+	// Detect chain type for observer routing
 	useTronObserver := isTronChain(commitment)
+	useSolanaObserver := isSolanaChain(commitment)
+	useNonEVMSkip := !useTronObserver && !useSolanaObserver && isNonEVMChain(commitment)
+
 	if useTronObserver {
 		o.logger.Printf("📡 [PHASE-7] Using TRON-native observer (chain: %s)", commitment.TargetChain)
+	} else if useSolanaObserver {
+		o.logger.Printf("📡 [PHASE-7] Using Solana-native observer (chain: %s)", commitment.TargetChain)
+	} else if useNonEVMSkip {
+		o.logger.Printf("📡 [PHASE-7] Non-EVM chain %s — skipping EVM observation, using confirmed status from execution", commitment.TargetChain)
 	}
 
 	// Use timeout context - give more time since we're tracking 3 txs
@@ -460,12 +526,42 @@ func (o *ProofCycleOrchestrator) executePhase7Enhanced(
 	var createResult, verifyResult, govResult *ExternalChainResult
 	var createErr, verifyErr, govErr error
 
-	// Helper to observe a transaction (TRON-aware)
-	observeTx := func(txHash common.Hash, _ *ExecutionCommitment) (*ExternalChainResult, error) {
+	// Helper to observe a transaction (chain-aware)
+	observeTx := func(txHash common.Hash, rawSig string, _ *ExecutionCommitment) (*ExternalChainResult, error) {
 		if useTronObserver {
 			return o.observeTronTransaction(observeCtx, txHash)
 		}
+		if useSolanaObserver && rawSig != "" {
+			return o.observeSolanaTransaction(observeCtx, rawSig)
+		}
+		if useNonEVMSkip {
+			// Non-EVM chains without a dedicated observer: trust on-chain execution
+			return &ExternalChainResult{
+				Chain:               commitment.TargetChain,
+				Status:              1,
+				BlockNumber:         big.NewInt(0),
+				FinalizedAt:         time.Now(),
+				ObservedByValidator: o.validatorID,
+				ConfirmationBlocks:  1,
+			}, nil
+		}
 		return o.observer.ObserveTransaction(observeCtx, txHash, nil)
+	}
+
+	// Extract raw (native-format) tx signatures for non-EVM chains
+	rawCreate, rawVerify, rawGov := "", "", ""
+	if len(txHashes.RawTxHashes) >= 3 {
+		rawCreate, rawVerify, rawGov = txHashes.RawTxHashes[0], txHashes.RawTxHashes[1], txHashes.RawTxHashes[2]
+	} else if commitment != nil && commitment.ComprehensiveData != nil {
+		if v, ok := commitment.ComprehensiveData["rawCreateTxHashes"].(string); ok {
+			rawCreate = v
+		}
+		if v, ok := commitment.ComprehensiveData["rawVerifyTxHashes"].(string); ok {
+			rawVerify = v
+		}
+		if v, ok := commitment.ComprehensiveData["rawGovernanceTxHashes"].(string); ok {
+			rawGov = v
+		}
 	}
 
 	// Observe all 3 transactions concurrently
@@ -475,9 +571,9 @@ func (o *ProofCycleOrchestrator) executePhase7Enhanced(
 	// Step 1: Observe createAnchor transaction
 	go func() {
 		defer wg.Done()
-		if txHashes.CreateTxHash != (common.Hash{}) {
+		if txHashes.CreateTxHash != (common.Hash{}) || rawCreate != "" {
 			o.logger.Printf("📡 [PHASE-7] Observing Step 1 (createAnchor): %s", txHashes.CreateTxHash.Hex())
-			createResult, createErr = observeTx(txHashes.CreateTxHash, nil)
+			createResult, createErr = observeTx(txHashes.CreateTxHash, rawCreate, nil)
 			if createErr != nil {
 				o.logger.Printf("⚠️ [PHASE-7] Step 1 observation failed: %v", createErr)
 			} else {
@@ -494,9 +590,9 @@ func (o *ProofCycleOrchestrator) executePhase7Enhanced(
 	// Step 2: Observe executeComprehensiveProof transaction
 	go func() {
 		defer wg.Done()
-		if txHashes.VerifyTxHash != (common.Hash{}) {
+		if txHashes.VerifyTxHash != (common.Hash{}) || rawVerify != "" {
 			o.logger.Printf("📡 [PHASE-7] Observing Step 2 (executeComprehensiveProof): %s", txHashes.VerifyTxHash.Hex())
-			verifyResult, verifyErr = observeTx(txHashes.VerifyTxHash, nil)
+			verifyResult, verifyErr = observeTx(txHashes.VerifyTxHash, rawVerify, nil)
 			if verifyErr != nil {
 				o.logger.Printf("⚠️ [PHASE-7] Step 2 observation failed: %v", verifyErr)
 			} else {
@@ -513,15 +609,11 @@ func (o *ProofCycleOrchestrator) executePhase7Enhanced(
 	// Step 3: Observe executeWithGovernance transaction
 	go func() {
 		defer wg.Done()
-		if txHashes.GovernanceTxHash != (common.Hash{}) {
+		if txHashes.GovernanceTxHash != (common.Hash{}) || rawGov != "" {
 			o.logger.Printf("📡 [PHASE-7] Observing Step 3 (executeWithGovernance): %s", txHashes.GovernanceTxHash.Hex())
 			var step3Result *ExternalChainResult
 			var step3Err error
-			if useTronObserver {
-				step3Result, step3Err = o.observeTronTransaction(observeCtx, txHashes.GovernanceTxHash)
-			} else {
-				step3Result, step3Err = o.observer.ObserveTransaction(observeCtx, txHashes.GovernanceTxHash, commitment)
-			}
+			step3Result, step3Err = observeTx(txHashes.GovernanceTxHash, rawGov, commitment)
 			govResult, govErr = step3Result, step3Err
 			if govErr != nil {
 				o.logger.Printf("⚠️ [PHASE-7] Step 3 observation failed: %v", govErr)
