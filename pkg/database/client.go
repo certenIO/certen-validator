@@ -24,11 +24,12 @@ import (
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
-// Client represents a database client with connection pooling
+// Client represents a database client with connection pooling and automatic reconnection
 type Client struct {
 	db     *sql.DB
 	config *config.Config
 	logger *log.Logger
+	stopCh chan struct{}
 }
 
 // ClientOption is a functional option for configuring the client
@@ -66,11 +67,19 @@ func NewClient(cfg *config.Config, opts ...ClientOption) (*Client, error) {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
-	// Configure connection pool
+	// Configure connection pool with aggressive recycling to survive DB restarts
 	db.SetMaxOpenConns(cfg.DatabaseMaxConns)
 	db.SetMaxIdleConns(cfg.DatabaseMinConns)
-	db.SetConnMaxIdleTime(time.Duration(cfg.DatabaseMaxIdleTime) * time.Second)
-	db.SetConnMaxLifetime(time.Duration(cfg.DatabaseMaxLifetime) * time.Second)
+	idleTime := time.Duration(cfg.DatabaseMaxIdleTime) * time.Second
+	if idleTime > 60*time.Second {
+		idleTime = 60 * time.Second
+	}
+	lifetime := time.Duration(cfg.DatabaseMaxLifetime) * time.Second
+	if lifetime > 5*time.Minute {
+		lifetime = 5 * time.Minute
+	}
+	db.SetConnMaxIdleTime(idleTime)
+	db.SetConnMaxLifetime(lifetime)
 
 	client.db = db
 
@@ -83,10 +92,48 @@ func NewClient(cfg *config.Config, opts ...ClientOption) (*Client, error) {
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
-	client.logger.Printf("Connected to database (max_conns=%d, min_conns=%d)",
-		cfg.DatabaseMaxConns, cfg.DatabaseMinConns)
+	client.logger.Printf("Connected to database (max_conns=%d, min_conns=%d, max_lifetime=%s, max_idle=%s)",
+		cfg.DatabaseMaxConns, cfg.DatabaseMinConns, lifetime, idleTime)
+
+	client.stopCh = make(chan struct{})
+	go client.connectionHealthMonitor()
 
 	return client, nil
+}
+
+// connectionHealthMonitor periodically pings the DB and forces pool reset on failure.
+func (c *Client) connectionHealthMonitor() {
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+
+	consecutiveFailures := 0
+
+	for {
+		select {
+		case <-c.stopCh:
+			return
+		case <-ticker.C:
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			err := c.db.PingContext(ctx)
+			cancel()
+
+			if err != nil {
+				consecutiveFailures++
+				c.logger.Printf("⚠️ [DB-HEALTH] Ping failed (%d consecutive): %v", consecutiveFailures, err)
+				if consecutiveFailures >= 2 {
+					c.logger.Printf("🔄 [DB-HEALTH] Forcing connection pool reset after %d failures", consecutiveFailures)
+					c.db.SetMaxIdleConns(0)
+					time.Sleep(100 * time.Millisecond)
+					c.db.SetMaxIdleConns(c.config.DatabaseMinConns)
+				}
+			} else {
+				if consecutiveFailures > 0 {
+					c.logger.Printf("✅ [DB-HEALTH] Connection recovered after %d failures", consecutiveFailures)
+				}
+				consecutiveFailures = 0
+			}
+		}
+	}
 }
 
 // DB returns the underlying *sql.DB for direct access
@@ -94,8 +141,11 @@ func (c *Client) DB() *sql.DB {
 	return c.db
 }
 
-// Close closes the database connection
+// Close closes the database connection and stops the health monitor
 func (c *Client) Close() error {
+	if c.stopCh != nil {
+		close(c.stopCh)
+	}
 	if c.db != nil {
 		c.logger.Println("Closing database connection")
 		return c.db.Close()
