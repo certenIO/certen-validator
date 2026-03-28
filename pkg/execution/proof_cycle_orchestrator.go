@@ -495,6 +495,161 @@ func (o *ProofCycleOrchestrator) observeSolanaTransaction(ctx context.Context, t
 	}, nil
 }
 
+// observeNearTransaction observes a NEAR transaction using NEAR's native JSON-RPC.
+func (o *ProofCycleOrchestrator) observeNearTransaction(ctx context.Context, txHash string) (*ExternalChainResult, error) {
+	if txHash == "" {
+		return nil, fmt.Errorf("empty NEAR tx hash")
+	}
+
+	nearRPC := os.Getenv("NEAR_RPC_URL")
+	if nearRPC == "" {
+		nearRPC = "https://rpc.testnet.near.org"
+	}
+
+	nearClient, err := NewNearClient(nearRPC,
+		os.Getenv("NEAR_SIGNER_ACCOUNT_ID"),
+		os.Getenv("NEAR_PRIVATE_KEY"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create NEAR client: %w", err)
+	}
+
+	info, err := nearClient.WaitForConfirmation(ctx, txHash, 90*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("NEAR tx not confirmed: %w", err)
+	}
+
+	status := uint64(1)
+	if statusObj, ok := info["status"].(map[string]interface{}); ok {
+		if _, hasFail := statusObj["Failure"]; hasFail {
+			status = 0
+		}
+	}
+
+	return &ExternalChainResult{
+		Chain:               "near-testnet",
+		ChainID:             398,
+		TxHash:              common.Hash{},
+		BlockNumber:         big.NewInt(0),
+		Status:              status,
+		FinalizedAt:         time.Now(),
+		ObservedByValidator: o.validatorID,
+		ConfirmationBlocks:  3,
+	}, nil
+}
+
+// observeAptosTransaction observes an Aptos transaction using the Aptos REST API.
+func (o *ProofCycleOrchestrator) observeAptosTransaction(ctx context.Context, txHash string) (*ExternalChainResult, error) {
+	if txHash == "" {
+		return nil, fmt.Errorf("empty Aptos tx hash")
+	}
+
+	aptosRPC := os.Getenv("APTOS_RPC_URL")
+	if aptosRPC == "" {
+		aptosRPC = "https://fullnode.testnet.aptoslabs.com/v1"
+	}
+
+	aptosClient, err := NewAptosClient(aptosRPC,
+		os.Getenv("APTOS_PRIVATE_KEY"),
+		os.Getenv("APTOS_PACKAGE_ADDRESS"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create Aptos client: %w", err)
+	}
+
+	err = aptosClient.WaitForConfirmation(ctx, txHash, 90*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("Aptos tx not confirmed: %w", err)
+	}
+
+	return &ExternalChainResult{
+		Chain:               "aptos-testnet",
+		ChainID:             2,
+		TxHash:              common.Hash{},
+		BlockNumber:         big.NewInt(0),
+		Status:              1,
+		FinalizedAt:         time.Now(),
+		ObservedByValidator: o.validatorID,
+		ConfirmationBlocks:  1,
+	}, nil
+}
+
+// observeSuiTransaction observes a SUI transaction using SUI's JSON-RPC 2.0.
+func (o *ProofCycleOrchestrator) observeSuiTransaction(ctx context.Context, txDigest string) (*ExternalChainResult, error) {
+	if txDigest == "" {
+		return nil, fmt.Errorf("empty SUI tx digest")
+	}
+
+	suiRPC := os.Getenv("SUI_RPC_URL")
+	if suiRPC == "" {
+		suiRPC = "https://fullnode.testnet.sui.io:443"
+	}
+
+	suiClient, err := NewSuiClient(suiRPC,
+		os.Getenv("SUI_PRIVATE_KEY"),
+		os.Getenv("SUI_PACKAGE_ADDRESS"),
+		os.Getenv("SUI_ANCHOR_STATE_OBJECT"),
+		os.Getenv("SUI_FACTORY_OBJECT"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create SUI client: %w", err)
+	}
+
+	err = suiClient.WaitForConfirmation(ctx, txDigest, 90*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("SUI tx not confirmed: %w", err)
+	}
+
+	return &ExternalChainResult{
+		Chain:               "sui-testnet",
+		ChainID:             101,
+		TxHash:              common.Hash{},
+		BlockNumber:         big.NewInt(0),
+		Status:              1,
+		FinalizedAt:         time.Now(),
+		ObservedByValidator: o.validatorID,
+		ConfirmationBlocks:  1,
+	}, nil
+}
+
+// observeTonTransaction2 observes a TON transaction using TON Center API v2.
+func (o *ProofCycleOrchestrator) observeTonTransaction2(ctx context.Context, msgHash string) (*ExternalChainResult, error) {
+	if msgHash == "" {
+		return nil, fmt.Errorf("empty TON msg hash")
+	}
+
+	tonAPI := os.Getenv("TON_API_URL")
+	if tonAPI == "" {
+		tonAPI = "https://testnet.toncenter.com/api/v2"
+	}
+
+	tonClient, err := NewTonClient(tonAPI,
+		os.Getenv("TON_MNEMONIC"),
+		os.Getenv("TON_ANCHOR_ADDRESS"),
+		os.Getenv("TON_BLS_VERIFIER_ADDRESS"),
+		os.Getenv("TON_FACTORY_ADDRESS"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create TON client: %w", err)
+	}
+
+	err = tonClient.WaitForConfirmation(ctx, msgHash, 90*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("TON tx not confirmed: %w", err)
+	}
+
+	return &ExternalChainResult{
+		Chain:               "ton-testnet",
+		ChainID:             65536,
+		TxHash:              common.Hash{},
+		BlockNumber:         big.NewInt(0),
+		Status:              1,
+		FinalizedAt:         time.Now(),
+		ObservedByValidator: o.validatorID,
+		ConfirmationBlocks:  1,
+	}, nil
+}
+
 // executePhase7Enhanced observes all 3 anchor workflow transactions
 func (o *ProofCycleOrchestrator) executePhase7Enhanced(
 	ctx context.Context,
@@ -506,16 +661,26 @@ func (o *ProofCycleOrchestrator) executePhase7Enhanced(
 	o.logger.Printf("📡 [PHASE-7-ENHANCED] Observing all 3 anchor workflow transactions")
 
 	// Detect chain type for observer routing
-	useTronObserver := isTronChain(commitment)
-	useSolanaObserver := isSolanaChain(commitment)
-	useNonEVMSkip := !useTronObserver && !useSolanaObserver && isNonEVMChain(commitment)
-
-	if useTronObserver {
-		o.logger.Printf("📡 [PHASE-7] Using TRON-native observer (chain: %s)", commitment.TargetChain)
-	} else if useSolanaObserver {
-		o.logger.Printf("📡 [PHASE-7] Using Solana-native observer (chain: %s)", commitment.TargetChain)
-	} else if useNonEVMSkip {
-		o.logger.Printf("📡 [PHASE-7] Non-EVM chain %s — skipping EVM observation, using confirmed status from execution", commitment.TargetChain)
+	chainType := "evm"
+	if commitment != nil {
+		tc := strings.ToLower(commitment.TargetChain)
+		switch {
+		case strings.Contains(tc, "tron"):
+			chainType = "tron"
+		case strings.Contains(tc, "solana"):
+			chainType = "solana"
+		case strings.Contains(tc, "near"):
+			chainType = "near"
+		case strings.Contains(tc, "aptos"):
+			chainType = "aptos"
+		case strings.Contains(tc, "sui"):
+			chainType = "sui"
+		case strings.Contains(tc, "ton"):
+			chainType = "ton"
+		}
+	}
+	if chainType != "evm" {
+		o.logger.Printf("📡 [PHASE-7] Using %s-native observer (chain: %s)", chainType, commitment.TargetChain)
 	}
 
 	// Use timeout context - give more time since we're tracking 3 txs
@@ -528,14 +693,33 @@ func (o *ProofCycleOrchestrator) executePhase7Enhanced(
 
 	// Helper to observe a transaction (chain-aware)
 	observeTx := func(txHash common.Hash, rawSig string, _ *ExecutionCommitment) (*ExternalChainResult, error) {
-		if useTronObserver {
+		switch chainType {
+		case "tron":
 			return o.observeTronTransaction(observeCtx, txHash)
+		case "solana":
+			if rawSig != "" {
+				return o.observeSolanaTransaction(observeCtx, rawSig)
+			}
+		case "near":
+			if rawSig != "" {
+				return o.observeNearTransaction(observeCtx, rawSig)
+			}
+		case "aptos":
+			if rawSig != "" {
+				return o.observeAptosTransaction(observeCtx, rawSig)
+			}
+		case "sui":
+			if rawSig != "" {
+				return o.observeSuiTransaction(observeCtx, rawSig)
+			}
+		case "ton":
+			if rawSig != "" {
+				return o.observeTonTransaction2(observeCtx, rawSig)
+			}
 		}
-		if useSolanaObserver && rawSig != "" {
-			return o.observeSolanaTransaction(observeCtx, rawSig)
-		}
-		if useNonEVMSkip {
-			// Non-EVM chains without a dedicated observer: trust on-chain execution
+		// EVM chains or fallback: use default Ethereum observer
+		if chainType != "evm" {
+			// Non-EVM without raw sig: return confirmed (execution verified on-chain)
 			return &ExternalChainResult{
 				Chain:               commitment.TargetChain,
 				Status:              1,

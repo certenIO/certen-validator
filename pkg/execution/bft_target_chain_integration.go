@@ -3367,17 +3367,15 @@ func (btce *BFTTargetChainExecutor) executeAptosOperations(
 						recipientAddr = aptosLeg.Target.Hex()
 					}
 
-					// Convert amountWei (18 decimals) to octas (8 decimals)
-					// EVM uses 10^18, Aptos uses 10^8, so divide by 10^10
+					// Value is already in octas (8-decimal native units) from
+					// convertToBaseUnits. Use directly — do NOT divide by 10^10.
 					amountOctas := uint64(1) // Default 1 octa
-					if aptosLeg.Value != nil {
-						weiValue := new(big.Int).Set(aptosLeg.Value)
-						octasValue := new(big.Int).Div(weiValue, big.NewInt(10_000_000_000)) // / 10^10
-						if octasValue.Sign() <= 0 {
-							octasValue = big.NewInt(1) // minimum 1 octa
+					if aptosLeg.Value != nil && aptosLeg.Value.Sign() > 0 {
+						amountOctas = aptosLeg.Value.Uint64()
+						if amountOctas == 0 {
+							amountOctas = 1 // minimum 1 octa
 						}
-						amountOctas = octasValue.Uint64()
-						btce.logger.Printf("💱 [APTOS-EXEC] Value conversion: %s wei → %d octas",
+						btce.logger.Printf("💱 [APTOS-EXEC] Value: %s octas (%d)",
 							aptosLeg.Value.String(), amountOctas)
 					}
 
@@ -3985,17 +3983,15 @@ func (btce *BFTTargetChainExecutor) executeSuiOperations(
 						recipientAddr = suiLeg.Target.Hex()
 					}
 
-					// Convert amountWei (18 decimals) to MIST (9 decimals)
-					// EVM uses 10^18, SUI uses 10^9, so divide by 10^9
+					// Value is already in MIST (9-decimal native units) from
+					// convertToBaseUnits. Use directly — do NOT divide by 10^9.
 					amountMist := uint64(1) // Default 1 MIST
-					if suiLeg.Value != nil {
-						weiValue := new(big.Int).Set(suiLeg.Value)
-						mistValue := new(big.Int).Div(weiValue, big.NewInt(1_000_000_000)) // / 10^9
-						if mistValue.Sign() <= 0 {
-							mistValue = big.NewInt(1) // minimum 1 MIST
+					if suiLeg.Value != nil && suiLeg.Value.Sign() > 0 {
+						amountMist = suiLeg.Value.Uint64()
+						if amountMist == 0 {
+							amountMist = 1 // minimum 1 MIST
 						}
-						amountMist = mistValue.Uint64()
-						btce.logger.Printf("💱 [SUI-EXEC] Value conversion: %s wei → %d MIST",
+						btce.logger.Printf("💱 [SUI-EXEC] Value: %s MIST (%d)",
 							suiLeg.Value.String(), amountMist)
 					}
 
@@ -4836,16 +4832,15 @@ func (btce *BFTTargetChainExecutor) executeTonOperations(
 						btce.logger.Printf("   [TON-EXEC] No recipient in intent, using user account as recipient")
 					}
 
-					// Convert amountWei (18 decimals) to nanoTON (9 decimals)
+					// Value is already in nanoTON (9-decimal native units) from
+					// convertToBaseUnits. Use directly — do NOT divide by 10^9.
 					amountNano := uint64(1) // Default 1 nanoTON
-					if tonLeg.Value != nil {
-						weiValue := new(big.Int).Set(tonLeg.Value)
-						nanoValue := new(big.Int).Div(weiValue, big.NewInt(1_000_000_000))
-						if nanoValue.Sign() <= 0 {
-							nanoValue = big.NewInt(1)
+					if tonLeg.Value != nil && tonLeg.Value.Sign() > 0 {
+						amountNano = tonLeg.Value.Uint64()
+						if amountNano == 0 {
+							amountNano = 1
 						}
-						amountNano = nanoValue.Uint64()
-						btce.logger.Printf("💱 [TON-EXEC] Value conversion: %s wei → %d nanoTON",
+						btce.logger.Printf("💱 [TON-EXEC] Value: %s nanoTON (%d)",
 							tonLeg.Value.String(), amountNano)
 					}
 
