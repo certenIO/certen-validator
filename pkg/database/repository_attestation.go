@@ -51,17 +51,20 @@ func (r *AttestationRepository) CreateAttestation(ctx context.Context, input *Ne
 		AttestedAt:         time.Now(),
 	}
 
+	// Determine signature validity: valid if we have both pubkey and signature to verify
+	sigValid := input.ValidatorPubkey != nil && len(input.ValidatorPubkey) > 0 && input.Signature != nil && len(input.Signature) > 0
+
 	query := `
 		INSERT INTO validator_attestations (
 			attestation_id, proof_id, validator_id, validator_pubkey,
-			signature, attested_hash, anchor_tx_hash, attested_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			signature, attested_hash, anchor_tx_hash, signature_valid, attested_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING attestation_id, attested_at`
 
 	err := r.client.QueryRowContext(ctx, query,
 		attestation.AttestationID, attestation.ProofID, attestation.ValidatorID,
 		attestation.ValidatorPubkey, attestation.Signature, attestation.AttestedMerkleRoot,
-		attestation.AttestedAnchorTx, attestation.AttestedAt,
+		attestation.AttestedAnchorTx, sigValid, attestation.AttestedAt,
 	).Scan(&attestation.AttestationID, &attestation.AttestedAt)
 
 	if err != nil {

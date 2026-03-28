@@ -1398,10 +1398,15 @@ func (o *ProofCycleOrchestrator) persistProofArtifact(cycle *ProofCycleCompletio
 
 	// Extract block number from commitment comprehensive data
 	if cycle.Commitment != nil && cycle.Commitment.ComprehensiveData != nil {
-		if block, ok := cycle.Commitment.ComprehensiveData["accumulateBlockHeight"].(float64); ok {
+		switch block := cycle.Commitment.ComprehensiveData["accumulateBlockHeight"].(type) {
+		case float64:
 			anchorBlockNumber = int64(block)
-		} else if block, ok := cycle.Commitment.ComprehensiveData["accumulateBlockHeight"].(int64); ok {
+		case int64:
 			anchorBlockNumber = block
+		case uint64:
+			anchorBlockNumber = int64(block)
+		case int:
+			anchorBlockNumber = int64(block)
 		}
 	}
 	if anchorBlockNumber == 0 {
@@ -1693,10 +1698,15 @@ func (o *ProofCycleOrchestrator) storeChainedProofLayers(ctx context.Context, pr
 	liteClientJSON, hasLiteProof := cd["liteClientProof"].(string)
 
 	var blockHeight int64
-	if bh, ok := cd["accumulateBlockHeight"].(float64); ok {
+	switch bh := cd["accumulateBlockHeight"].(type) {
+	case float64:
 		blockHeight = int64(bh)
-	} else if bh, ok := cd["accumulateBlockHeight"].(int64); ok {
+	case int64:
 		blockHeight = bh
+	case uint64:
+		blockHeight = int64(bh)
+	case int:
+		blockHeight = int64(bh)
 	}
 
 	if hasLiteProof && liteClientJSON != "" {
@@ -1897,17 +1907,30 @@ func (o *ProofCycleOrchestrator) storeAttestationRecord(ctx context.Context, pro
 		pubKey = o.config.BLSPrivateKey[:32]
 	}
 
+	// Extract BLS signature and anchor tx from commitment data for verification
 	anchorTxHash := ""
+	var blsSigBytes []byte
 	if cycle.Commitment != nil && cycle.Commitment.ComprehensiveData != nil {
-		if raw, ok := cycle.Commitment.ComprehensiveData["rawCreateTxHashes"].(string); ok {
+		cd := cycle.Commitment.ComprehensiveData
+		if raw, ok := cd["rawCreateTxHashes"].(string); ok {
 			anchorTxHash = raw
 		}
+		// Use BLS aggregate signature as the attestation signature
+		if blsSig, ok := cd["blsSignature"].(string); ok && blsSig != "" {
+			blsSigBytes, _ = hex.DecodeString(blsSig)
+		}
+	}
+
+	// Also use attestation aggregate signature if available
+	if len(blsSigBytes) == 0 && cycle.Attestation != nil && len(cycle.Attestation.AggregateSignature) > 0 {
+		blsSigBytes = cycle.Attestation.AggregateSignature
 	}
 
 	attestation := &database.NewValidatorAttestation{
 		ProofID:            proofID,
 		ValidatorID:        o.validatorID,
 		ValidatorPubkey:    pubKey,
+		Signature:          blsSigBytes,
 		AttestedAnchorTx:   anchorTxHash,
 	}
 
