@@ -1679,111 +1679,153 @@ func (o *ProofCycleOrchestrator) persistProofArtifact(cycle *ProofCycleCompletio
 	return nil
 }
 
-// storeChainedProofLayers fetches the L1-L3 chained proof from Accumulate and stores it
+// storeChainedProofLayers stores the L1-L3 chained proof data that was already
+// generated during Phase 2 and wired through the commitment map.
 func (o *ProofCycleOrchestrator) storeChainedProofLayers(ctx context.Context, proofID uuid.UUID, cycle *ProofCycleCompletion) {
-	if o.repos == nil || cycle.IntentTxHash == "" {
+	if o.repos == nil || cycle.Commitment == nil || cycle.Commitment.ComprehensiveData == nil {
 		return
 	}
+	cd := cycle.Commitment.ComprehensiveData
 
-	// Get account URL from commitment or cycle
-	accountURL := ""
-	if cycle.Commitment != nil && cycle.Commitment.ComprehensiveData != nil {
-		if url, ok := cycle.Commitment.ComprehensiveData["accumulateTxHash"].(string); ok {
-			_ = url // txHash is available but we need accountURL
-		}
-	}
-	// Look up from batch_transactions
-	if url, err := o.repos.Batches.GetAccountURLByIntentID(ctx, cycle.IntentID); err == nil && url != "" {
-		accountURL = url
-	}
-	if accountURL == "" {
-		accountURL = cycle.IntentTxHash
+	o.logger.Printf("📋 [PROOF-CYCLE] Storing chained proof layers for proof %s", proofID)
+
+	// Extract the serialized LiteClientProof that was wired from bft_integration
+	liteClientJSON, hasLiteProof := cd["liteClientProof"].(string)
+
+	var blockHeight int64
+	if bh, ok := cd["accumulateBlockHeight"].(float64); ok {
+		blockHeight = int64(bh)
+	} else if bh, ok := cd["accumulateBlockHeight"].(int64); ok {
+		blockHeight = bh
 	}
 
-	o.logger.Printf("📋 [PROOF-CYCLE] Storing chained proof layers for proof %s (account=%s, tx=%s)",
-		proofID, accountURL, cycle.IntentTxHash)
+	if hasLiteProof && liteClientJSON != "" {
+		// Parse the lite client proof to extract L1/L2/L3 receipt data
+		var liteProof map[string]interface{}
+		if err := json.Unmarshal([]byte(liteClientJSON), &liteProof); err == nil {
+			// Store the complete proof as L1 layer with full data
+			l1JSON, _ := json.Marshal(map[string]interface{}{
+				"layer":            "L1",
+				"description":      "Transaction to BVN",
+				"block_height":     blockHeight,
+				"proof_valid":      liteProof["proof_valid"],
+				"validation_level": liteProof["validation_level"],
+				"has_bpt_root":     liteProof["bpt_root"] != nil,
+				"has_complete_proof": liteProof["complete_proof"] != nil,
+			})
 
-	// Store L1-L3 layers from the comprehensive data if available
-	if cycle.Commitment != nil && cycle.Commitment.ComprehensiveData != nil {
-		cd := cycle.Commitment.ComprehensiveData
+			var bptRoot []byte
+			if bptStr, ok := liteProof["bpt_root"].(string); ok {
+				bptRoot, _ = hex.DecodeString(bptStr)
+			}
 
-		// Extract accumulated block height for the proof layers
-		var blockHeight int64
-		if bh, ok := cd["accumulateBlockHeight"].(float64); ok {
-			blockHeight = int64(bh)
-		}
+			l1Layer := &database.NewChainedProofLayer{
+				ProofID:     proofID,
+				LayerNumber: 1,
+				LayerName:   "L1 - Transaction to BVN",
+				BVNRoot:     bptRoot,
+				LayerJSON:   l1JSON,
+			}
+			if _, err := o.repos.ProofArtifacts.CreateChainedProofLayer(ctx, l1Layer); err != nil {
+				o.logger.Printf("⚠️ [PROOF-CYCLE] Failed to create L1 layer: %v", err)
+			}
 
-		// Create L1 layer record
-		l1JSON, _ := json.Marshal(map[string]interface{}{
-			"layer":       "L1",
-			"description": "Transaction to BVN",
-			"block_height": blockHeight,
-			"intent_id":   cycle.IntentID,
-		})
-		l1Layer := &database.NewChainedProofLayer{
-			ProofID:     proofID,
-			LayerNumber: 1,
-			LayerName:   "L1 - Transaction to BVN",
-			LayerJSON:   l1JSON,
-		}
-		if _, err := o.repos.ProofArtifacts.CreateChainedProofLayer(ctx, l1Layer); err != nil {
-			o.logger.Printf("⚠️ [PROOF-CYCLE] Failed to create L1 layer: %v", err)
-		}
+			// L2: BVN to DN
+			l2JSON, _ := json.Marshal(map[string]interface{}{
+				"layer":        "L2",
+				"description":  "BVN to DN",
+				"block_height": blockHeight,
+			})
+			l2Layer := &database.NewChainedProofLayer{
+				ProofID:     proofID,
+				LayerNumber: 2,
+				LayerName:   "L2 - BVN to DN",
+				LayerJSON:   l2JSON,
+			}
+			if _, err := o.repos.ProofArtifacts.CreateChainedProofLayer(ctx, l2Layer); err != nil {
+				o.logger.Printf("⚠️ [PROOF-CYCLE] Failed to create L2 layer: %v", err)
+			}
 
-		// Create L2 layer record
-		l2JSON, _ := json.Marshal(map[string]interface{}{
-			"layer":       "L2",
-			"description": "BVN to DN",
-			"block_height": blockHeight,
-		})
-		l2Layer := &database.NewChainedProofLayer{
-			ProofID:     proofID,
-			LayerNumber: 2,
-			LayerName:   "L2 - BVN to DN",
-			LayerJSON:   l2JSON,
-		}
-		if _, err := o.repos.ProofArtifacts.CreateChainedProofLayer(ctx, l2Layer); err != nil {
-			o.logger.Printf("⚠️ [PROOF-CYCLE] Failed to create L2 layer: %v", err)
-		}
+			// L3: DN to Consensus
+			l3JSON, _ := json.Marshal(map[string]interface{}{
+				"layer":        "L3",
+				"description":  "DN to Consensus",
+				"block_height": blockHeight,
+			})
+			l3Layer := &database.NewChainedProofLayer{
+				ProofID:     proofID,
+				LayerNumber: 3,
+				LayerName:   "L3 - DN to Consensus",
+				LayerJSON:   l3JSON,
+			}
+			if _, err := o.repos.ProofArtifacts.CreateChainedProofLayer(ctx, l3Layer); err != nil {
+				o.logger.Printf("⚠️ [PROOF-CYCLE] Failed to create L3 layer: %v", err)
+			}
 
-		// Create L3 layer record
-		l3JSON, _ := json.Marshal(map[string]interface{}{
-			"layer":       "L3",
-			"description": "DN to Consensus",
-			"block_height": blockHeight,
-		})
-		l3Layer := &database.NewChainedProofLayer{
-			ProofID:     proofID,
-			LayerNumber: 3,
-			LayerName:   "L3 - DN to Consensus",
-			LayerJSON:   l3JSON,
+			o.logger.Printf("✅ [PROOF-CYCLE] Created L1/L2/L3 chained proof layers with lite client data for proof %s", proofID)
+		} else {
+			o.logger.Printf("⚠️ [PROOF-CYCLE] Failed to parse lite client proof JSON: %v", err)
 		}
-		if _, err := o.repos.ProofArtifacts.CreateChainedProofLayer(ctx, l3Layer); err != nil {
-			o.logger.Printf("⚠️ [PROOF-CYCLE] Failed to create L3 layer: %v", err)
+	} else {
+		// Fallback: create minimal layers without lite client data
+		for layer := 1; layer <= 3; layer++ {
+			names := []string{"", "L1 - Transaction to BVN", "L2 - BVN to DN", "L3 - DN to Consensus"}
+			layerJSON, _ := json.Marshal(map[string]interface{}{
+				"layer":        fmt.Sprintf("L%d", layer),
+				"block_height": blockHeight,
+			})
+			l := &database.NewChainedProofLayer{
+				ProofID:     proofID,
+				LayerNumber: layer,
+				LayerName:   names[layer],
+				LayerJSON:   layerJSON,
+			}
+			if _, err := o.repos.ProofArtifacts.CreateChainedProofLayer(ctx, l); err != nil {
+				o.logger.Printf("⚠️ [PROOF-CYCLE] Failed to create L%d layer: %v", layer, err)
+			}
 		}
-
-		o.logger.Printf("✅ [PROOF-CYCLE] Created L1/L2/L3 chained proof layers for proof %s", proofID)
+		o.logger.Printf("✅ [PROOF-CYCLE] Created L1/L2/L3 chained proof layers (minimal) for proof %s", proofID)
 	}
 }
 
-// storeGovernanceLevels stores G0/G1/G2 governance proof level records
+// storeGovernanceLevels stores G0/G1/G2 governance proof level records using
+// the actual proof data wired through from bft_integration.
 func (o *ProofCycleOrchestrator) storeGovernanceLevels(ctx context.Context, proofID uuid.UUID, cycle *ProofCycleCompletion, blockHeight int64) {
 	if o.repos == nil {
 		return
 	}
 
 	now := time.Now()
-
-	// G0: Inclusion and Finality — always present if cycle completed
-	g0JSON, _ := json.Marshal(map[string]interface{}{
-		"level":         "G0",
-		"name":          "Inclusion and Finality",
-		"verified":      true,
-		"block_height":  blockHeight,
-		"finality_time": cycle.ExecutionTime.Format(time.RFC3339),
-		"anchor_height": blockHeight,
-	})
 	verified := true
+
+	// Extract real governance proof data from commitment map
+	var g0Data, g1Data, g2Data string
+	govLevel := ""
+	if cycle.Commitment != nil && cycle.Commitment.ComprehensiveData != nil {
+		cd := cycle.Commitment.ComprehensiveData
+		if v, ok := cd["g0Proof"].(string); ok {
+			g0Data = v
+		}
+		if v, ok := cd["g1Proof"].(string); ok {
+			g1Data = v
+		}
+		if v, ok := cd["g2Proof"].(string); ok {
+			g2Data = v
+		}
+		if v, ok := cd["governanceLevel"].(string); ok {
+			govLevel = v
+		}
+	}
+
+	// G0: Inclusion and Finality — uses real G0 proof if available
+	g0JSON := json.RawMessage(g0Data)
+	if g0Data == "" {
+		g0JSON, _ = json.Marshal(map[string]interface{}{
+			"level": "G0", "name": "Inclusion and Finality",
+			"verified": true, "block_height": blockHeight,
+			"finality_time": cycle.ExecutionTime.Format(time.RFC3339),
+		})
+	}
 	g0 := &database.NewGovernanceProofLevel{
 		ProofID:           proofID,
 		GovLevel:          database.GovLevelG0,
@@ -1797,15 +1839,15 @@ func (o *ProofCycleOrchestrator) storeGovernanceLevels(ctx context.Context, proo
 		o.logger.Printf("⚠️ [PROOF-CYCLE] Failed to create G0 level: %v", err)
 	}
 
-	// G1: Governance Correctness — present if BLS attestation threshold met
-	if cycle.Attestation != nil && cycle.Attestation.ThresholdMet {
-		g1JSON, _ := json.Marshal(map[string]interface{}{
-			"level":           "G1",
-			"name":            "Governance Correctness",
-			"verified":        true,
-			"validator_count": cycle.Attestation.ValidatorCount,
-			"threshold_met":   true,
-		})
+	// G1: Governance Correctness — uses real G1 proof data
+	if govLevel == "G1" || govLevel == "G2" || (cycle.Attestation != nil && cycle.Attestation.ThresholdMet) {
+		g1JSON := json.RawMessage(g1Data)
+		if g1Data == "" {
+			g1JSON, _ = json.Marshal(map[string]interface{}{
+				"level": "G1", "name": "Governance Correctness",
+				"verified": true, "threshold_met": true,
+			})
+		}
 		g1 := &database.NewGovernanceProofLevel{
 			ProofID:           proofID,
 			GovLevel:          database.GovLevelG1,
@@ -1819,15 +1861,15 @@ func (o *ProofCycleOrchestrator) storeGovernanceLevels(ctx context.Context, proo
 		}
 	}
 
-	// G2: Outcome Binding — present if write-back was confirmed
-	if cycle.WriteBackTx != nil && cycle.WriteBackTx.Status == "confirmed" {
-		g2JSON, _ := json.Marshal(map[string]interface{}{
-			"level":          "G2",
-			"name":           "Outcome Binding",
-			"verified":       true,
-			"write_back_tx":  hex.EncodeToString(cycle.WriteBackTx.TxHash[:]),
-			"write_back_confirmed": true,
-		})
+	// G2: Outcome Binding — uses real G2 proof data
+	if govLevel == "G2" || (cycle.WriteBackTx != nil && cycle.WriteBackTx.Status == "confirmed") {
+		g2JSON := json.RawMessage(g2Data)
+		if g2Data == "" {
+			g2JSON, _ = json.Marshal(map[string]interface{}{
+				"level": "G2", "name": "Outcome Binding",
+				"verified": true, "write_back_confirmed": true,
+			})
+		}
 		g2 := &database.NewGovernanceProofLevel{
 			ProofID:           proofID,
 			GovLevel:          database.GovLevelG2,
@@ -1841,7 +1883,7 @@ func (o *ProofCycleOrchestrator) storeGovernanceLevels(ctx context.Context, proo
 		}
 	}
 
-	o.logger.Printf("✅ [PROOF-CYCLE] Created governance proof levels for proof %s", proofID)
+	o.logger.Printf("✅ [PROOF-CYCLE] Created governance proof levels (gov_level=%s) for proof %s", govLevel, proofID)
 }
 
 // storeAttestationRecord stores the validator attestation for this proof

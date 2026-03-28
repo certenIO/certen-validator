@@ -1190,6 +1190,36 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 					commitMap["rawCreateTxHashes"] = anchorRes.CreateTxHash
 					commitMap["rawVerifyTxHashes"] = anchorRes.VerifyTxHash
 					commitMap["rawGovernanceTxHashes"] = anchorRes.GovernanceTxHash
+
+					// Wire L1-L3 chained proof data so persistProofArtifact can store it
+					if certenProof != nil && certenProof.LiteClientProof != nil {
+						if proofJSON, err := json.Marshal(certenProof.LiteClientProof); err == nil {
+							commitMap["liteClientProof"] = string(proofJSON)
+						}
+					}
+
+					// Wire governance proof results (G0/G1/G2)
+					if g0Proof != nil {
+						if g0JSON, err := json.Marshal(g0Proof); err == nil {
+							commitMap["g0Proof"] = string(g0JSON)
+						}
+					}
+					if g1Proof != nil {
+						if g1JSON, err := json.Marshal(g1Proof); err == nil {
+							commitMap["g1Proof"] = string(g1JSON)
+						}
+					}
+					if g2Proof != nil {
+						if g2JSON, err := json.Marshal(g2Proof); err == nil {
+							commitMap["g2Proof"] = string(g2JSON)
+						}
+					}
+
+					// Wire BLS/validator signatures
+					commitMap["blsSignature"] = blsSignature
+					commitMap["validatorSignatures"] = validatorSignatures
+					commitMap["governanceLevel"] = governanceLevel
+					commitMap["validatorID"] = bv.validatorID
 				}
 
 				// Determine leg count for multi-leg vs single-leg routing
