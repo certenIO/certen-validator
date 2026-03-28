@@ -1427,6 +1427,14 @@ func startValidator(
         // F.2 remediation: Update health status for proof cycle
         healthStatus.SetProofCycle("disabled")
     } else {
+        // Wire the chained proof generator for L1-L3 receipt entry persistence
+        if liteClientProofGen != nil && liteClientProofGen.HasRealProofBuilder() {
+            proofGenAdapterLegacy := execution.NewLiteClientProofGeneratorAdapter(liteClientProofGen)
+            orchestrator.SetProofGenerator(proofGenAdapterLegacy)
+            log.Printf("✅ [Phase 7-9] Chained Proof Generator wired to legacy orchestrator (L1/L2/L3 receipt persistence)")
+        } else {
+            log.Printf("⚠️ [Phase 7-9] No real proof builder — L1/L2/L3 receipt entries will not be persisted")
+        }
         // ==========================================================================
         // UNIFIED MULTI-CHAIN ORCHESTRATOR (Feature Flag Controlled)
         // Per Unified Multi-Chain Architecture plan

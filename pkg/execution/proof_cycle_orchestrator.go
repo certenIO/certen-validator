@@ -71,6 +71,9 @@ type ProofCycleOrchestrator struct {
 	// Database repositories for persistence
 	repos *database.Repositories
 
+	// Chained proof generator for L1-L3 receipt extraction
+	proofGenerator ChainedProofGenerator
+
 	// Logging
 	logger Logger
 }
@@ -173,6 +176,12 @@ func NewProofCycleOrchestrator(
 	writeBack.SetCallbacks(orchestrator.onWriteBackConfirmed, orchestrator.onWriteBackFailed)
 
 	return orchestrator, nil
+}
+
+// SetProofGenerator configures the chained proof generator for L1-L3 receipt extraction.
+// Must be called after creation if receipt entry persistence is desired.
+func (o *ProofCycleOrchestrator) SetProofGenerator(pg ChainedProofGenerator) {
+	o.proofGenerator = pg
 }
 
 // =============================================================================
@@ -1684,118 +1693,139 @@ func (o *ProofCycleOrchestrator) persistProofArtifact(cycle *ProofCycleCompletio
 	return nil
 }
 
-// storeChainedProofLayers stores the L1-L3 chained proof data that was already
-// generated during Phase 2 and wired through the commitment map.
+// storeChainedProofLayers fetches the L1-L3 receipt entries from Accumulate
+// (the same proof the validators already produced during Phase 2) and stores them.
 func (o *ProofCycleOrchestrator) storeChainedProofLayers(ctx context.Context, proofID uuid.UUID, cycle *ProofCycleCompletion) {
-	if o.repos == nil || cycle.Commitment == nil || cycle.Commitment.ComprehensiveData == nil {
+	if o.repos == nil {
 		return
 	}
-	cd := cycle.Commitment.ComprehensiveData
 
-	o.logger.Printf("📋 [PROOF-CYCLE] Storing chained proof layers for proof %s", proofID)
+	// Determine account URL and tx hash for proof lookup
+	accountURL := ""
+	txHash := cycle.IntentTxHash
+	bvn := ""
 
-	// Extract the serialized LiteClientProof that was wired from bft_integration
-	liteClientJSON, hasLiteProof := cd["liteClientProof"].(string)
-
-	var blockHeight int64
-	switch bh := cd["accumulateBlockHeight"].(type) {
-	case float64:
-		blockHeight = int64(bh)
-	case int64:
-		blockHeight = bh
-	case uint64:
-		blockHeight = int64(bh)
-	case int:
-		blockHeight = int64(bh)
+	if url, err := o.repos.Batches.GetAccountURLByIntentID(ctx, cycle.IntentID); err == nil && url != "" {
+		accountURL = url
+	}
+	if accountURL == "" {
+		accountURL = txHash
 	}
 
-	if hasLiteProof && liteClientJSON != "" {
-		// Parse the lite client proof to extract L1/L2/L3 receipt data
-		var liteProof map[string]interface{}
-		if err := json.Unmarshal([]byte(liteClientJSON), &liteProof); err == nil {
-			// Store the complete proof as L1 layer with full data
+	o.logger.Printf("📋 [PROOF-CYCLE] Storing chained proof layers for proof %s (account=%s, tx=%s)",
+		proofID, accountURL, txHash)
+
+	// Use the ProofGenerator to fetch the L1-L3 receipt entries from Accumulate
+	// This is the SAME proof data the validators produced during Phase 2
+	if o.proofGenerator != nil && accountURL != "" && txHash != "" {
+		chainedProof, err := o.proofGenerator.GenerateChainedProofForTx(ctx, accountURL, txHash, bvn)
+		if err != nil {
+			o.logger.Printf("⚠️ [PROOF-CYCLE] Failed to fetch chained proof for persistence: %v", err)
+			// Fall through to minimal layers below
+		} else if chainedProof != nil {
+			// L1: Transaction → BVN (with real receipt entries)
 			l1JSON, _ := json.Marshal(map[string]interface{}{
-				"layer":            "L1",
-				"description":      "Transaction to BVN",
-				"block_height":     blockHeight,
-				"proof_valid":      liteProof["proof_valid"],
-				"validation_level": liteProof["validation_level"],
-				"has_bpt_root":     liteProof["bpt_root"] != nil,
-				"has_complete_proof": liteProof["complete_proof"] != nil,
+				"layer":          "L1",
+				"description":    "Transaction to BVN",
+				"bvn_partition":  chainedProof.L1BVNPartition,
+				"receipt_anchor": hex.EncodeToString(chainedProof.L1ReceiptAnchor),
+				"source_hash":    hex.EncodeToString(chainedProof.L1SourceHash),
+				"target_hash":    hex.EncodeToString(chainedProof.L1TargetHash),
+				"path_depth":     len(chainedProof.L1ReceiptEntries),
 			})
-
-			var bptRoot []byte
-			if bptStr, ok := liteProof["bpt_root"].(string); ok {
-				bptRoot, _ = hex.DecodeString(bptStr)
-			}
-
 			l1Layer := &database.NewChainedProofLayer{
-				ProofID:     proofID,
-				LayerNumber: 1,
-				LayerName:   "L1 - Transaction to BVN",
-				BVNRoot:     bptRoot,
-				LayerJSON:   l1JSON,
+				ProofID:        proofID,
+				LayerNumber:    1,
+				LayerName:      "L1 - Transaction to BVN",
+				BVNPartition:   &chainedProof.L1BVNPartition,
+				ReceiptAnchor:  chainedProof.L1ReceiptAnchor,
+				BVNRoot:        chainedProof.L1BVNRoot,
+				SourceHash:     chainedProof.L1SourceHash,
+				TargetHash:     chainedProof.L1TargetHash,
+				ReceiptEntries: chainedProof.L1ReceiptEntries,
+				LayerJSON:      l1JSON,
 			}
 			if _, err := o.repos.ProofArtifacts.CreateChainedProofLayer(ctx, l1Layer); err != nil {
 				o.logger.Printf("⚠️ [PROOF-CYCLE] Failed to create L1 layer: %v", err)
 			}
 
-			// L2: BVN to DN
+			// L2: BVN → DN (with real receipt entries)
 			l2JSON, _ := json.Marshal(map[string]interface{}{
-				"layer":        "L2",
-				"description":  "BVN to DN",
-				"block_height": blockHeight,
+				"layer":       "L2",
+				"description": "BVN to DN",
+				"anchor_seq":  chainedProof.L2AnchorSeq,
+				"source_hash": hex.EncodeToString(chainedProof.L2SourceHash),
+				"target_hash": hex.EncodeToString(chainedProof.L2TargetHash),
+				"path_depth":  len(chainedProof.L2ReceiptEntries),
 			})
 			l2Layer := &database.NewChainedProofLayer{
-				ProofID:     proofID,
-				LayerNumber: 2,
-				LayerName:   "L2 - BVN to DN",
-				LayerJSON:   l2JSON,
+				ProofID:        proofID,
+				LayerNumber:    2,
+				LayerName:      "L2 - BVN to DN",
+				DNRoot:         chainedProof.L2DNRoot,
+				AnchorSequence: &chainedProof.L2AnchorSeq,
+				DNBlockHash:    chainedProof.L2DNBlockHash,
+				SourceHash:     chainedProof.L2SourceHash,
+				TargetHash:     chainedProof.L2TargetHash,
+				ReceiptEntries: chainedProof.L2ReceiptEntries,
+				LayerJSON:      l2JSON,
 			}
 			if _, err := o.repos.ProofArtifacts.CreateChainedProofLayer(ctx, l2Layer); err != nil {
 				o.logger.Printf("⚠️ [PROOF-CYCLE] Failed to create L2 layer: %v", err)
 			}
 
-			// L3: DN to Consensus
+			// L3: DN → Consensus (with real receipt entries)
+			consensusTS := chainedProof.L3ConsensusTimestamp
 			l3JSON, _ := json.Marshal(map[string]interface{}{
-				"layer":        "L3",
-				"description":  "DN to Consensus",
-				"block_height": blockHeight,
+				"layer":               "L3",
+				"description":         "DN to Consensus",
+				"dn_block_height":     chainedProof.L3DNBlockHeight,
+				"consensus_timestamp": chainedProof.L3ConsensusTimestamp,
+				"source_hash":         hex.EncodeToString(chainedProof.L3SourceHash),
+				"target_hash":         hex.EncodeToString(chainedProof.L3TargetHash),
+				"path_depth":          len(chainedProof.L3ReceiptEntries),
 			})
 			l3Layer := &database.NewChainedProofLayer{
-				ProofID:     proofID,
-				LayerNumber: 3,
-				LayerName:   "L3 - DN to Consensus",
-				LayerJSON:   l3JSON,
+				ProofID:            proofID,
+				LayerNumber:        3,
+				LayerName:          "L3 - DN to Consensus",
+				DNBlockHeight:      &chainedProof.L3DNBlockHeight,
+				ConsensusTimestamp: &consensusTS,
+				SourceHash:         chainedProof.L3SourceHash,
+				TargetHash:         chainedProof.L3TargetHash,
+				ReceiptEntries:     chainedProof.L3ReceiptEntries,
+				LayerJSON:          l3JSON,
 			}
 			if _, err := o.repos.ProofArtifacts.CreateChainedProofLayer(ctx, l3Layer); err != nil {
 				o.logger.Printf("⚠️ [PROOF-CYCLE] Failed to create L3 layer: %v", err)
 			}
 
-			o.logger.Printf("✅ [PROOF-CYCLE] Created L1/L2/L3 chained proof layers with lite client data for proof %s", proofID)
-		} else {
-			o.logger.Printf("⚠️ [PROOF-CYCLE] Failed to parse lite client proof JSON: %v", err)
+			o.logger.Printf("✅ [PROOF-CYCLE] Created L1/L2/L3 chained proof layers with %d+%d+%d receipt entries for proof %s",
+				len(chainedProof.L1ReceiptEntries), len(chainedProof.L2ReceiptEntries),
+				len(chainedProof.L3ReceiptEntries), proofID)
+			return
 		}
-	} else {
-		// Fallback: create minimal layers without lite client data
-		for layer := 1; layer <= 3; layer++ {
-			names := []string{"", "L1 - Transaction to BVN", "L2 - BVN to DN", "L3 - DN to Consensus"}
-			layerJSON, _ := json.Marshal(map[string]interface{}{
-				"layer":        fmt.Sprintf("L%d", layer),
-				"block_height": blockHeight,
-			})
-			l := &database.NewChainedProofLayer{
-				ProofID:     proofID,
-				LayerNumber: layer,
-				LayerName:   names[layer],
-				LayerJSON:   layerJSON,
-			}
-			if _, err := o.repos.ProofArtifacts.CreateChainedProofLayer(ctx, l); err != nil {
-				o.logger.Printf("⚠️ [PROOF-CYCLE] Failed to create L%d layer: %v", layer, err)
-			}
-		}
-		o.logger.Printf("✅ [PROOF-CYCLE] Created L1/L2/L3 chained proof layers (minimal) for proof %s", proofID)
+	} else if o.proofGenerator == nil {
+		o.logger.Printf("⚠️ [PROOF-CYCLE] ProofGenerator not configured — receipt entries will be empty")
 	}
+
+	// Fallback: create minimal layers without receipt entries
+	for layer := 1; layer <= 3; layer++ {
+		names := []string{"", "L1 - Transaction to BVN", "L2 - BVN to DN", "L3 - DN to Consensus"}
+		layerJSON, _ := json.Marshal(map[string]interface{}{
+			"layer": fmt.Sprintf("L%d", layer),
+		})
+		l := &database.NewChainedProofLayer{
+			ProofID:     proofID,
+			LayerNumber: layer,
+			LayerName:   names[layer],
+			LayerJSON:   layerJSON,
+		}
+		if _, err := o.repos.ProofArtifacts.CreateChainedProofLayer(ctx, l); err != nil {
+			o.logger.Printf("⚠️ [PROOF-CYCLE] Failed to create L%d layer: %v", layer, err)
+		}
+	}
+	o.logger.Printf("✅ [PROOF-CYCLE] Created L1/L2/L3 chained proof layers (minimal — no ProofGenerator) for proof %s", proofID)
 }
 
 // storeGovernanceLevels stores G0/G1/G2 governance proof level records using
