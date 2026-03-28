@@ -813,11 +813,12 @@ func (id *IntentDiscovery) convertIntentToTransactionData(intent *CertenIntent, 
 			txData.ToChain = leg.Chain      // Target chain from leg
 			txData.FromAddress = leg.From
 			txData.ToAddress = leg.To
-			// Prefer AmountWei, fall back to AmountEth
-			if leg.AmountWei != "" {
-				txData.Amount = leg.AmountWei
-			} else if leg.AmountEth != "" {
+			// Prefer AmountEth (human-readable) for display; AmountWei may have
+			// been computed with wrong decimals for non-EVM chains (SOL=9, not 18).
+			if leg.AmountEth != "" {
 				txData.Amount = leg.AmountEth
+			} else if leg.AmountWei != "" {
+				txData.Amount = leg.AmountWei
 			}
 			txData.TokenSymbol = leg.Asset.Symbol
 			id.logger.Printf("✅ [TX-METADATA] Extracted: %s → %s, %s %s to %s",
@@ -1584,11 +1585,11 @@ func (id *IntentDiscovery) convertLegToTransactionData(
 		TokenSymbol:  leg.Asset.Symbol,
 	}
 
-	// Set amount
-	if leg.AmountWei != "" {
-		txData.Amount = leg.AmountWei
-	} else if leg.AmountEth != "" {
+	// Set amount — prefer human-readable AmountEth for display correctness
+	if leg.AmountEth != "" {
 		txData.Amount = leg.AmountEth
+	} else if leg.AmountWei != "" {
+		txData.Amount = leg.AmountWei
 	}
 
 	// Extract ADI URL
