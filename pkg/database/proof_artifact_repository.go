@@ -434,7 +434,8 @@ func (r *ProofArtifactRepository) UpdateProofVerified(ctx context.Context, proof
 
 	query := `
 		UPDATE proof_artifacts
-		SET verification_status = $1, verified_at = NOW()
+		SET verification_status = $1, verified_at = NOW(),
+		    status = CASE WHEN $1 = 'verified' THEN 'verified' ELSE status END
 		WHERE proof_id = $2`
 
 	result, err := r.db.ExecContext(ctx, query, status, proofID)

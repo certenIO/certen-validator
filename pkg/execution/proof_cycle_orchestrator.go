@@ -1331,6 +1331,25 @@ func (o *ProofCycleOrchestrator) completeCycle(
 		o.logger.Printf("✅ [PROOF-CYCLE] Proof artifact persisted to database")
 	}
 
+	// Update intent_lifecycle status to 'complete' so the web app reflects the real state
+	if o.repos != nil && o.repos.IntentLifecycle != nil && cycle.IntentID != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		writeBackTxHash := ""
+		if cycle.WriteBackTx != nil && cycle.WriteBackTx.TxHash != ([32]byte{}) {
+			writeBackTxHash = hex.EncodeToString(cycle.WriteBackTx.TxHash[:])
+		}
+		if err := o.repos.IntentLifecycle.UpdateStatus(ctx, cycle.IntentID,
+			database.IntentLifecycleComplete,
+			database.WithWriteBackTx(writeBackTxHash),
+			database.WithCycleID(cycleID),
+		); err != nil {
+			o.logger.Printf("⚠️ [PROOF-CYCLE] Failed to update intent lifecycle to complete: %v", err)
+		} else {
+			o.logger.Printf("✅ [PROOF-CYCLE] Intent lifecycle updated to 'complete' for %s", cycle.IntentID)
+		}
+	}
+
 	if o.onCycleComplete != nil {
 		go o.onCycleComplete(cycle)
 	}
