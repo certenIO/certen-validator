@@ -1093,24 +1093,26 @@ func (ecm *EthereumContractManager) ExecuteUnifiedAnchorWorkflow(
 
 // buildComprehensiveProof creates a ComprehensiveCertenProof from CERTEN proof data
 // anchorId is used as the BLS messageHash to cryptographically bind the signature to this anchor
+//
+// anchorResult is retained in the signature for caller compatibility but is no
+// longer consulted internally — V6 derives all commitments from (intent, proof)
+// alone (see generateCommitmentHash's V5→V6 transition note). The bundle is
+// computed via the same computeV6CommitmentBundle helper that generateAnchorID
+// uses, so the proof's commitments and the bundleId the contract requires
+// derive from identical bytes.
 func (ecm *EthereumContractManager) buildComprehensiveProof(
 	certenIntent *intent.CertenIntent,
 	certenProof *proof.CertenProof,
 	anchorResult *anchor.AnchorResponse,
 	anchorId [32]byte,
 ) contracts.ComprehensiveCertenProof {
+	_ = anchorResult // intentionally unused under V6 — see doc comment above.
 
-	// Parse transaction hash
-	var txHash [32]byte
-	if certenProof.TransactionHash != "" {
-		hashStr := strings.TrimPrefix(certenProof.TransactionHash, "0x")
-		hashBytes := common.FromHex(hashStr)
-		if len(hashBytes) >= 32 {
-			copy(txHash[:], hashBytes[:32])
-		} else {
-			copy(txHash[:], hashBytes)
-		}
-	}
+	bundle := ecm.computeV6CommitmentBundle(certenIntent, certenProof)
+	txHash := bundle.TxHash
+	blsSignatureBytes := bundle.BlsSignatureBytes
+	commitments := bundle.Commitments
+	adiURLHash := bundle.AdiURLHash
 
 	// NOTE: The merkleRoot is NOT the BPT root - it's keccak256(op || cc || gov)
 	// We compute it AFTER the commitments are set, before building the final proof struct
@@ -1167,125 +1169,66 @@ func (ecm *EthereumContractManager) buildComprehensiveProof(
 		Nonce:              big.NewInt(time.Now().UnixNano()),
 	}
 
-	// Build BLS proof data with real voting power from verification status
+	// Build BLS proof data with real voting power from verification status.
+	// blsSignatureBytes was already decoded by computeV6CommitmentBundle (see
+	// bundle.BlsSignatureBytes above) — no need to redo it here.
 	totalVotingPower, signedVotingPower := ecm.extractVotingPower(certenProof)
-
-	// CRITICAL FIX: Properly decode BLS signature from hex string to bytes
-	// The BLSAggregateSignature is stored as a hex string, NOT raw bytes
-	var blsSignatureBytes []byte
-	if certenProof.BLSAggregateSignature != "" {
-		// Remove 0x prefix if present
-		sigHex := strings.TrimPrefix(certenProof.BLSAggregateSignature, "0x")
-		var decodeErr error
-		blsSignatureBytes, decodeErr = hex.DecodeString(sigHex)
-		if decodeErr != nil {
-			log.Printf("⚠️ [BLS] Failed to decode BLS signature from hex: %v", decodeErr)
-			// Fall back to empty bytes - verification will fail but won't panic
-			blsSignatureBytes = []byte{}
-		} else {
-			log.Printf("✅ [BLS] Decoded BLS signature: %d bytes", len(blsSignatureBytes))
-		}
+	if len(blsSignatureBytes) > 0 {
+		log.Printf("✅ [BLS] Using BLS signature: %d bytes", len(blsSignatureBytes))
 	}
 
-	// SECURITY: Use anchorId as BLS messageHash to bind signature to this anchor
-	// This prevents replay attacks - signatures from other anchors cannot be reused
-	// The anchorId is unique per intent (includes intentID + blockHeight + txHash)
-	messageHash := anchorId
-
-	// Generate ZK proof from BLS signature if prover is available
-	// Returns both the serialized proof bytes AND the pubkeyCommitment
-	// (a Groth16 public input that binds the proof to the validators' BLS keys)
-	zkProofBytes, _ := ecm.generateBLSZKProof(blsSignatureBytes, messageHash, signedVotingPower, totalVotingPower)
+	// EVM-NEW-001 step 6 / CRYPTO-005: BLS proof generation is split into two
+	// phases because the EVM-side and TON-side messageHash bindings are now
+	// different.
+	//
+	//   EVM (BN254, BLSZKVerifierV2 in evm/src/core/): messageHash =
+	//       keccak256("certen:bls:v1" || chainId || anchorId || executionCommitment)
+	//     This requires executionCommitment, which is computed further down in
+	//     this function — so the EVM ZK proof generation is deferred.
+	//
+	//   TON (BLS12-381 native): messageHash = anchorId, unchanged. Changing
+	//     TON's binding requires a separate TON contract upgrade and is out
+	//     of scope for the EVM-only audit fix.
+	//
+	// We initialise blsProof here with the fields TON needs and run the TON
+	// proof generator now (it has no dependency on the commitments). The
+	// EVM-specific fields (AggregateSignature, MessageHash) are populated in
+	// the second phase below, after executionCommitment is available.
+	tonMessageHash := anchorId
 
 	blsProof := contracts.BLSProofData{
-		AggregateSignature: zkProofBytes, // Use ZK proof bytes, not raw signature
-		TotalVotingPower:   totalVotingPower,
-		SignedVotingPower:  signedVotingPower,
-		ThresholdMet:       signedVotingPower.Cmp(new(big.Int).Mul(totalVotingPower, big.NewInt(2)).Div(new(big.Int).Mul(totalVotingPower, big.NewInt(2)), big.NewInt(3))) >= 0,
-		MessageHash:        messageHash,
+		TotalVotingPower:  totalVotingPower,
+		SignedVotingPower: signedVotingPower,
+		ThresholdMet:      signedVotingPower.Cmp(new(big.Int).Mul(totalVotingPower, big.NewInt(2)).Div(new(big.Int).Mul(totalVotingPower, big.NewInt(2)), big.NewInt(3))) >= 0,
 	}
 
-	// Generate BLS12-381 proof for TON chain (uses TVM native BLS12-381 opcodes)
-	ecm.generateBLS12381Proof(&blsProof, blsSignatureBytes, messageHash, signedVotingPower, totalVotingPower)
+	// Generate BLS12-381 proof for TON chain (uses TVM native BLS12-381 opcodes).
+	// This populates blsProof.BLS12381ProofBytes / BLS12381PubkeyCommitment.
+	ecm.generateBLS12381Proof(&blsProof, blsSignatureBytes, tonMessageHash, signedVotingPower, totalVotingPower)
 
-	// Build commitment data
-	var opCommitment, crossCommitment, govRoot [32]byte
-	commitmentHash := ecm.generateCommitmentHash(certenIntent, anchorResult)
-	copy(opCommitment[:], commitmentHash[:])
-
-	if certenProof.LiteClientProof != nil && len(certenProof.LiteClientProof.BPTRoot) >= 32 {
-		copy(crossCommitment[:], certenProof.LiteClientProof.BPTRoot[:32])
-	}
-	// CRITICAL FIX: Use decoded BLS bytes for governance root computation
-	if len(blsSignatureBytes) >= 32 {
-		copy(govRoot[:], crypto.Keccak256(blsSignatureBytes)[:32])
-	}
-
-	// CRITICAL-001 + CRITICAL-003: Compute executionCommitment.
-	// Prefer the user-signed executionPayload from the blob (CRITICAL-003) when present.
-	// Fall back to computing from leg execution parameters (CRITICAL-001).
-	var execCommitment [32]byte
-	execCommitmentSource := "none"
-
-	// First, try to read pre-computed executionCommitment from user-signed CrossChainData
-	var userSignedCC struct {
-		Legs []struct {
-			ExecutionPayload *struct {
-				ExecutionCommitment string `json:"executionCommitment"`
-			} `json:"executionPayload,omitempty"`
-		} `json:"legs"`
-	}
-	var rawCC []byte
-	if certenProof != nil && len(certenProof.CrossChainData) > 0 {
-		rawCC = certenProof.CrossChainData
-	} else if certenIntent != nil && len(certenIntent.CrossChainData) > 0 {
-		rawCC = certenIntent.CrossChainData
-	}
-	if len(rawCC) > 0 {
-		if err := json.Unmarshal(rawCC, &userSignedCC); err == nil &&
-			len(userSignedCC.Legs) > 0 &&
-			userSignedCC.Legs[0].ExecutionPayload != nil &&
-			userSignedCC.Legs[0].ExecutionPayload.ExecutionCommitment != "" {
-			// Use the user-signed commitment directly — this was part of the signed blob
-			commitHex := strings.TrimPrefix(userSignedCC.Legs[0].ExecutionPayload.ExecutionCommitment, "0x")
-			commitBytes := common.FromHex(commitHex)
-			if len(commitBytes) == 32 {
-				copy(execCommitment[:], commitBytes)
-				execCommitmentSource = "user-signed-blob"
-			}
-		}
-	}
-
-	// Fall back to computing from leg execution parameters
-	if execCommitmentSource == "none" {
-		legs := ecm.extractLegsForExecCommitment(certenIntent, certenProof)
-		if len(legs) > 0 {
-			execCommitment = computeExecutionCommitment(
-				legs[0].ChainID,
-				legs[0].Target,
-				legs[0].Value,
-				legs[0].Data,
-			)
-			execCommitmentSource = "computed-from-legs"
-		}
-	}
-
-	if execCommitmentSource != "none" {
-		log.Printf("🔒 [CRITICAL-001/003] ExecutionCommitment: 0x%x (source: %s)", execCommitment[:8], execCommitmentSource)
+	// Commitments and execCommitment are already in `commitments` from the
+	// computeV6CommitmentBundle call at the top of this function. Pull
+	// execCommitment out as a named local so the EVM-NEW-001 step 6 binding
+	// below reads naturally.
+	execCommitment := commitments.ExecutionCommitment
+	if execCommitment != ([32]byte{}) {
+		log.Printf("🔒 [CRITICAL-001/003] ExecutionCommitment: 0x%x", execCommitment[:8])
 	} else {
 		log.Printf("⚠️ [CRITICAL-001/003] No executionCommitment available")
 	}
 
-	commitments := contracts.CommitmentData{
-		OperationCommitment:  opCommitment,
-		CrossChainCommitment: crossCommitment,
-		GovernanceRoot:       govRoot,
-		ExecutionCommitment:  execCommitment,
-		SourceChain:          "accumulate",
-		SourceBlockHeight:    big.NewInt(int64(certenProof.BlockHeight)),
-		TargetChain:          "ethereum",
-	}
-	copy(commitments.SourceTxHash[:], txHash[:])
+	// EVM-NEW-001 step 6 / CRYPTO-005 — Phase 2 of the BLS proof generation.
+	// Now that executionCommitment is available, compute the chain-bound
+	// messageHash for the EVM verifier and generate the BN254 Groth16 proof.
+	// Formula factored into computeEvmMessageHashV6 so the wire bytes can be
+	// pinned by a unit test against CertenAnchorV6._verifyBLSProof.
+	evmMessageHash := ecm.computeEvmMessageHashV6(anchorId, execCommitment)
+	log.Printf("🔗 [EVM-BLS-V6] Chain-bound messageHash: %x (chainId=%d, anchorId=%x, exec=%x)",
+		evmMessageHash[:8], ecm.config.ChainID, anchorId[:8], execCommitment[:8])
+
+	zkProofBytes, _ := ecm.generateBLSZKProof(blsSignatureBytes, evmMessageHash, signedVotingPower, totalVotingPower)
+	blsProof.AggregateSignature = zkProofBytes
+	blsProof.MessageHash = evmMessageHash
 
 	// Build metadata for leaf hash
 	metadata := []byte(fmt.Sprintf("intent:%s,account:%s", certenIntent.IntentID, certenProof.AccountURL))
@@ -1303,47 +1246,20 @@ func (ecm *EthereumContractManager) buildComprehensiveProof(
 	//        /    \    /    \
 	//   tagAdi tagOp tagCC tagGov
 
-	// Compute adiURLHash from account URL
-	adiURL := certenProof.AccountURL
-	if adiURL == "" {
-		adiURL = fmt.Sprintf("%s/data", certenIntent.OrganizationADI)
-	}
-	adiURLHash := crypto.Keccak256Hash([]byte(adiURL))
+	// 5-leaf domain-tagged merkle tree + real 3-element merkle proof for the
+	// taggedAdi leaf. Both the tree computation and the proof construction
+	// (EVM-003 fix) are factored into computeV6MerkleProofForAdi for unit-test
+	// coverage. See CertenAnchorV6._computeMerkleRoot5 + getMerkleProofForAdiURL
+	// for the on-chain spec.
+	merkleProof := computeV6MerkleProofForAdi(adiURLHash, commitments)
+	merkleRootHash := merkleProof.MerkleRoot
 
-	// Domain-tag each leaf (matches Solidity: keccak256(abi.encodePacked("certen:TAG:", value)))
-	taggedAdi := crypto.Keccak256Hash(append([]byte("certen:adi:"), adiURLHash[:]...))
-	taggedOp := crypto.Keccak256Hash(append([]byte("certen:op:"), commitments.OperationCommitment[:]...))
-	taggedCC := crypto.Keccak256Hash(append([]byte("certen:cc:"), commitments.CrossChainCommitment[:]...))
-	taggedGov := crypto.Keccak256Hash(append([]byte("certen:gov:"), commitments.GovernanceRoot[:]...))
-	taggedExec := crypto.Keccak256Hash(append([]byte("certen:exec:"), commitments.ExecutionCommitment[:]...))
+	log.Printf("✅ [MERKLE-V6] 5-leaf domain-tagged tree + 3-element proof for taggedAdi (EVM-003)")
+	log.Printf("   merkleRoot: %x", merkleRootHash[:])
+	log.Printf("   leafHash (taggedAdi): %x", merkleProof.LeafHash[:8])
 
-	// 5-leaf tree: pair first 4, promote 5th
-	hash01 := sortedHash(taggedAdi[:], taggedOp[:])
-	hash23 := sortedHash(taggedCC[:], taggedGov[:])
-	hash0123 := sortedHash(hash01, hash23)
-	merkleRoot := sortedHash(hash0123, taggedExec[:])
-	var merkleRootHash common.Hash
-	copy(merkleRootHash[:], merkleRoot)
-
-	log.Printf("✅ [MERKLE-V5] Computed 5-leaf domain-tagged merkleRoot: %x", merkleRootHash[:])
-	log.Printf("   adiURLHash: %x → tagged: %x", adiURLHash[:8], taggedAdi[:8])
-	log.Printf("   OperationCommitment: %x → tagged: %x", commitments.OperationCommitment[:8], taggedOp[:8])
-	log.Printf("   CrossChainCommitment: %x → tagged: %x", commitments.CrossChainCommitment[:8], taggedCC[:8])
-	log.Printf("   GovernanceRoot: %x → tagged: %x", commitments.GovernanceRoot[:8], taggedGov[:8])
-	log.Printf("   ExecutionCommitment: %x → tagged: %x", commitments.ExecutionCommitment[:8], taggedExec[:8])
-
-	// CRITICAL MERKLE FIX: When proofHashes is empty, set leafHash = merkleRoot
-	// The contract's _verifyMerkleProof() computes: computedHash = leaf, then iterates proofHashes.
-	// If proofHashes is empty, it just returns (leaf == root).
-	// By setting leaf = root when we have no intermediate proofs, we satisfy the verification.
-	var leafHash common.Hash
-	if len(proofHashes) == 0 {
-		leafHash = merkleRootHash
-		log.Printf("✅ [MERKLE-FIX] No proofHashes - setting leafHash = merkleRoot for trivial verification")
-	} else {
-		leafHash = crypto.Keccak256Hash(metadata)
-		log.Printf("✅ [MERKLE] Using %d proof hashes with metadata leaf: %x", len(proofHashes), leafHash[:8])
-	}
+	proofHashes = merkleProof.ProofHashes
+	leafHash := merkleProof.LeafHash
 
 	return contracts.ComprehensiveCertenProof{
 		TransactionHash: txHash,
@@ -1512,27 +1428,28 @@ func (ecm *EthereumContractManager) generateBLS12381Proof(
 }
 
 
-// extractMerkleProofHashes returns an empty array for trivial Merkle verification.
+// extractMerkleProofHashes — DEPRECATED return value as of the EVM-003 fix.
 //
-// ARCHITECTURE DECISION: BLS Attestation Model (ADR-001)
-// See: docs/security/ADR_001_CROSS_CHAIN_VERIFICATION_MODEL.md
+// audit-reports/01-evm-VERIFIED.md:35 demonstrated that the previous "ADR-001
+// BLS Attestation Model" (return empty proofHashes; let buildComprehensiveProof
+// set leafHash = merkleRoot to satisfy _verifyMerkleProof's zero-iteration
+// short-circuit) was a trivial bypass: the contract's merkle gate performed
+// zero hashing on every legitimate proof. V6's _verifyAllComponents now derives
+// leafHash from anchor.adiURLHash and runs the walk against the stored
+// merkleRoot — so the validator MUST supply the real 3-element proof for the
+// taggedAdi leaf against the 5-leaf domain-tagged tree.
 //
-// The contract's Merkle verification uses keccak256, but Accumulate's L1-L3 ChainedProof
-// uses SHA256. These are fundamentally incompatible hash functions.
+// buildComprehensiveProof now constructs that real proof inline from the
+// taggedOp / hash23 / taggedExec values computed in the same function, and the
+// return value of this helper is overridden there. This helper is preserved
+// only for its diagnostic logging about Accumulate proof availability; its
+// returned slice is no longer consumed. New code should not depend on it.
 //
-// Security Model:
-// 1. CERTEN validators verify L1-L3 ChainedProof (SHA256) OFF-CHAIN before signing
-// 2. Validators attest to verification via BLS signatures
-// 3. Contract verifies BLS threshold is met (trustless via ZK proof)
-// 4. Contract verifies commitment binding: merkleRoot = keccak256(op || cc || gov)
-//
-// When proofHashes is empty, buildComprehensiveProof sets leafHash = merkleRoot,
-// causing _verifyMerkleProof to return (merkleRoot == merkleRoot) = true.
-//
-// The Accumulate proof data is still stored in CertenProof.LiteClientProof for:
-// - Audit and compliance purposes
-// - Off-chain verification by validators
-// - Potential future on-chain SHA256 verification enhancement
+// Off-chain audit context (unchanged): validators still verify Accumulate's
+// L1-L3 ChainedProof (SHA-256) before BLS signing — that data lives in
+// CertenProof.LiteClientProof and the BPT root flows into crossChainCommitment.
+// The merkle proof discussed here is the EVM-side keccak256 tree binding the
+// anchor's commitments together, not the Accumulate-side BPT proof.
 func (ecm *EthereumContractManager) extractMerkleProofHashes(certenProof *proof.CertenProof) [][32]byte {
 	// Return empty array for trivial verification (BLS Attestation Model)
 	// L1-L3 ChainedProof is verified OFF-CHAIN by validators before BLS signing
@@ -1750,8 +1667,12 @@ func (ecm *EthereumContractManager) convertToContractProof(
 		copy(merkleRoot[:], certenProof.LiteClientProof.BPTRoot[:32])
 	}
 
-	// Generate commitment hash
-	commitmentHash := ecm.generateCommitmentHash(certenIntent, anchorResult)
+	// Generate commitment hash. Phase 3 changed generateCommitmentHash's
+	// second argument from anchorResult to certenProof; the underlying value
+	// (anchorResult.AnchorID) was creating a bundleId→opCommitment→bundleId
+	// circularity under V6.
+	_ = anchorResult // legacy parameter; no longer consulted in this path.
+	commitmentHash := ecm.generateCommitmentHash(certenIntent, certenProof)
 
 	orgADI := certenIntent.OrganizationADI
 
@@ -1868,37 +1789,249 @@ func (ecm *EthereumContractManager) convertToADIGovernanceProof(
 	return adiProof
 }
 
-// generateAnchorID generates a unique anchor ID for the intent
-// Protocol version v3 includes the governance proof fix.
-// Uses TransactionHash for uniqueness - each Accumulate tx has a unique hash.
+// v6CommitmentBundle is the precomputed data both generateAnchorID and
+// buildComprehensiveProof need. Holding it in a struct lets the two
+// functions share one computation path so the bundleId the contract
+// requires and the commitments the proof carries can never drift apart.
+type v6CommitmentBundle struct {
+	AdiURLHash            [32]byte
+	AccumulateBlockHeight uint64
+	Commitments           contracts.CommitmentData
+	BlsSignatureBytes     []byte // decoded once; reused by buildComprehensiveProof
+	TxHash                [32]byte
+}
+
+// computeV6CommitmentBundle deterministically computes everything needed to
+// derive the V6 bundleId and to populate the CertenAnchorV6 createAnchor
+// commitments. Same (intent, proof) input always yields the same bundle.
+//
+// This consolidates logic that previously lived inline in
+// buildComprehensiveProof. By having a single source of truth, the
+// bundleId derivation (generateAnchorID) and the commitment-carrying
+// proof (buildComprehensiveProof) operate on bit-identical values — the
+// V6 contract's require(bundleId == derived) check can never fail because
+// the proof's commitments somehow disagree with what generateAnchorID hashed.
+func (ecm *EthereumContractManager) computeV6CommitmentBundle(
+	certenIntent *intent.CertenIntent,
+	certenProof *proof.CertenProof,
+) v6CommitmentBundle {
+	// Tx hash — used for opCommitment derivation and stored on the proof.
+	var txHash [32]byte
+	if certenProof != nil && certenProof.TransactionHash != "" {
+		hashStr := strings.TrimPrefix(certenProof.TransactionHash, "0x")
+		hashBytes := common.FromHex(hashStr)
+		if len(hashBytes) >= 32 {
+			copy(txHash[:], hashBytes[:32])
+		} else {
+			copy(txHash[:], hashBytes)
+		}
+	}
+
+	// adiURLHash from the Accumulate data account URL (matches the contract's
+	// CreateAnchor inputs and the merkle leaf taggedAdi = keccak256("certen:adi:", adiURLHash)).
+	var adiURLHash [32]byte
+	adiURL := ""
+	if certenProof != nil {
+		adiURL = certenProof.AccountURL
+	}
+	if adiURL == "" && certenIntent != nil {
+		adiURL = fmt.Sprintf("%s/data", certenIntent.OrganizationADI)
+	}
+	copy(adiURLHash[:], crypto.Keccak256([]byte(adiURL)))
+
+	// BLS aggregate signature bytes (hex-decoded). govRoot derives from these
+	// and the EVM ZK proof generation uses them downstream.
+	var blsSignatureBytes []byte
+	if certenProof != nil && certenProof.BLSAggregateSignature != "" {
+		sigHex := strings.TrimPrefix(certenProof.BLSAggregateSignature, "0x")
+		if decoded, err := hex.DecodeString(sigHex); err == nil {
+			blsSignatureBytes = decoded
+		}
+	}
+
+	// Commitments.
+	var opCommitment [32]byte
+	commitmentHash := ecm.generateCommitmentHash(certenIntent, certenProof)
+	copy(opCommitment[:], commitmentHash[:])
+
+	var crossCommitment [32]byte
+	if certenProof != nil && certenProof.LiteClientProof != nil && len(certenProof.LiteClientProof.BPTRoot) >= 32 {
+		copy(crossCommitment[:], certenProof.LiteClientProof.BPTRoot[:32])
+	}
+
+	var govRoot [32]byte
+	if len(blsSignatureBytes) >= 32 {
+		copy(govRoot[:], crypto.Keccak256(blsSignatureBytes)[:32])
+	}
+
+	// executionCommitment — prefer user-signed payload, fall back to leg compute.
+	execCommitment := ecm.extractExecutionCommitment(certenIntent, certenProof)
+
+	commitments := contracts.CommitmentData{
+		OperationCommitment:  opCommitment,
+		CrossChainCommitment: crossCommitment,
+		GovernanceRoot:       govRoot,
+		ExecutionCommitment:  execCommitment,
+		SourceChain:          "accumulate",
+		TargetChain:          "ethereum",
+	}
+	if certenProof != nil {
+		commitments.SourceBlockHeight = big.NewInt(int64(certenProof.BlockHeight))
+	}
+	copy(commitments.SourceTxHash[:], txHash[:])
+
+	blockHeight := uint64(0)
+	if certenProof != nil {
+		blockHeight = certenProof.BlockHeight
+	}
+
+	return v6CommitmentBundle{
+		AdiURLHash:            adiURLHash,
+		AccumulateBlockHeight: blockHeight,
+		Commitments:           commitments,
+		BlsSignatureBytes:     blsSignatureBytes,
+		TxHash:                txHash,
+	}
+}
+
+// extractExecutionCommitment isolates the execCommitment computation logic
+// previously inline in buildComprehensiveProof. Two sources, in priority order:
+//
+//   1. User-signed CrossChainData.legs[0].executionPayload.executionCommitment
+//      (CRITICAL-003) — this is the value the user actually signed, so it
+//      MUST take precedence over anything we compute from raw fields.
+//   2. Computed from the first leg's (chainID, target, value, data) via
+//      computeExecutionCommitment (CRITICAL-001 fallback).
+//
+// Returns zero [32]byte if neither source yields a value; downstream code
+// logs a warning but proceeds (CertenAnchorV6.createAnchor will then revert
+// with "executionCommitment required" — the failure is loud).
+func (ecm *EthereumContractManager) extractExecutionCommitment(
+	certenIntent *intent.CertenIntent,
+	certenProof *proof.CertenProof,
+) [32]byte {
+	var execCommitment [32]byte
+
+	var rawCC []byte
+	if certenProof != nil && len(certenProof.CrossChainData) > 0 {
+		rawCC = certenProof.CrossChainData
+	} else if certenIntent != nil && len(certenIntent.CrossChainData) > 0 {
+		rawCC = certenIntent.CrossChainData
+	}
+
+	if len(rawCC) > 0 {
+		var userSignedCC struct {
+			Legs []struct {
+				ExecutionPayload *struct {
+					ExecutionCommitment string `json:"executionCommitment"`
+				} `json:"executionPayload,omitempty"`
+			} `json:"legs"`
+		}
+		if err := json.Unmarshal(rawCC, &userSignedCC); err == nil &&
+			len(userSignedCC.Legs) > 0 &&
+			userSignedCC.Legs[0].ExecutionPayload != nil &&
+			userSignedCC.Legs[0].ExecutionPayload.ExecutionCommitment != "" {
+			commitHex := strings.TrimPrefix(userSignedCC.Legs[0].ExecutionPayload.ExecutionCommitment, "0x")
+			commitBytes := common.FromHex(commitHex)
+			if len(commitBytes) == 32 {
+				copy(execCommitment[:], commitBytes)
+				return execCommitment
+			}
+		}
+	}
+
+	legs := ecm.extractLegsForExecCommitment(certenIntent, certenProof)
+	if len(legs) > 0 {
+		execCommitment = computeExecutionCommitment(
+			legs[0].ChainID,
+			legs[0].Target,
+			legs[0].Value,
+			legs[0].Data,
+		)
+	}
+	return execCommitment
+}
+
+// generateAnchorID derives the V6-compatible bundleId for an intent.
+//
+// EVM-004 (audit-reports/01-evm-VERIFIED.md:76) requires that the bundleId
+// stored at CertenAnchorV6.createAnchor matches:
+//
+//   keccak256(abi.encodePacked(
+//     "certen:bundleid:v1", DEPLOYMENT_CHAIN_ID, adiURLHash,
+//     operationCommitment, crossChainCommitment, governanceRoot,
+//     executionCommitment, accumulateBlockHeight
+//   ))
+//
+// The pre-V6 derivation (certen_v3_{intentID}_{blockHeight}_{txHash}) was
+// not a function of the commitments, which let a rogue validator front-run
+// createAnchor under any bundleId of their choosing and plant malicious
+// commitments under it. V6 closes that vector by requiring this exact
+// derivation; the contract reverts on mismatch.
+//
+// Caller signature unchanged from the V1 generateAnchorID — the additional
+// inputs (commitments, adiURLHash) are computed inside the function from
+// the same (intent, proof) the old version took. This keeps the 12 call
+// sites untouched while moving the derivation to V6.
 func (ecm *EthereumContractManager) generateAnchorID(certenIntent *intent.CertenIntent, certenProof *proof.CertenProof) [32]byte {
-	var anchorID [32]byte
+	bundle := ecm.computeV6CommitmentBundle(certenIntent, certenProof)
+	bundleID := ecm.deriveV6BundleID(bundle.AdiURLHash, bundle.Commitments, bundle.AccumulateBlockHeight)
+
+	log.Printf("🔑 [BUNDLE-ID] V6 bundleId: %x (intent=%s chainId=%d height=%d)",
+		bundleID[:8], certenIntent.IntentID, ecm.config.ChainID, bundle.AccumulateBlockHeight)
+	return bundleID
+}
+
+// deriveV6BundleID is the wire-level keccak that must byte-match
+// CertenAnchorV6.createAnchor's `require(bundleId == ...)` check.
+func (ecm *EthereumContractManager) deriveV6BundleID(
+	adiURLHash [32]byte,
+	commitments contracts.CommitmentData,
+	accumulateBlockHeight uint64,
+) [32]byte {
+	chainIDBytes32 := make([]byte, 32)
+	big.NewInt(ecm.config.ChainID).FillBytes(chainIDBytes32)
+	heightBytes32 := make([]byte, 32)
+	new(big.Int).SetUint64(accumulateBlockHeight).FillBytes(heightBytes32)
+
+	digest := crypto.Keccak256(
+		[]byte("certen:bundleid:v1"),
+		chainIDBytes32,
+		adiURLHash[:],
+		commitments.OperationCommitment[:],
+		commitments.CrossChainCommitment[:],
+		commitments.GovernanceRoot[:],
+		commitments.ExecutionCommitment[:],
+		heightBytes32,
+	)
+	var bundleID [32]byte
+	copy(bundleID[:], digest)
+	return bundleID
+}
+
+// generateCommitmentHash produces the operationCommitment leaf for the V6
+// commitment tree.
+//
+// V5 mistake: this used to read anchorResult.AnchorID, which under V6
+// creates a fixed-point requirement (bundleId derives from opCommitment,
+// opCommitment derived from bundleId via AnchorID). V6 breaks the cycle
+// by deriving opCommitment from (intentID, blockHeight, txHash) — the same
+// data the old generateAnchorID hashed into the bundleId directly. The
+// resulting opCommitment is deterministic and independent of bundleId, so
+// the V6 derivation chain (opCommitment → bundleId) terminates.
+func (ecm *EthereumContractManager) generateCommitmentHash(
+	certenIntent *intent.CertenIntent,
+	certenProof *proof.CertenProof,
+) [32]byte {
+	var commitmentHash [32]byte
 	blockHeight := uint64(0)
 	txHash := ""
 	if certenProof != nil {
 		blockHeight = certenProof.BlockHeight
 		txHash = certenProof.TransactionHash
 	}
-	// v3 protocol version includes:
-	// - merkleRoot fix (v2)
-	// - governance proof fix (keyBookRoot, keyPageProofs, authorityAddress)
-	// - txHash for uniqueness (each Accumulate intent tx has unique hash)
-	hash := crypto.Keccak256Hash([]byte(fmt.Sprintf("certen_v3_%s_%d_%s",
+	hash := crypto.Keccak256Hash([]byte(fmt.Sprintf("certen:op:v1_%s_%d_%s",
 		certenIntent.IntentID, blockHeight, txHash)))
-	copy(anchorID[:], hash[:])
-	log.Printf("🔑 [BUNDLE-ID] Generated v3 bundleId: intent=%s block=%d txHash=%s",
-		certenIntent.IntentID, blockHeight, txHash)
-	return anchorID
-}
-
-// generateCommitmentHash generates a commitment hash for the proof
-func (ecm *EthereumContractManager) generateCommitmentHash(
-	certenIntent *intent.CertenIntent,
-	anchorResult *anchor.AnchorResponse,
-) [32]byte {
-	var commitmentHash [32]byte
-	hash := crypto.Keccak256Hash([]byte(fmt.Sprintf("commitment_%s_%s",
-		certenIntent.IntentID, anchorResult.AnchorID)))
 	copy(commitmentHash[:], hash[:])
 	return commitmentHash
 }
@@ -1945,6 +2078,97 @@ func (ecm *EthereumContractManager) encodeValidatorSignatures(sigs []ValidatorSi
 // GetContractConfig returns the contract configuration
 func (ecm *EthereumContractManager) GetContractConfig() *CertenContractConfig {
 	return ecm.config
+}
+
+// computeEvmMessageHashV6 is the EVM-side BLS messageHash binding (EVM-NEW-001
+// step 6 / CRYPTO-005). The on-chain CertenAnchorV6._verifyBLSProof recomputes
+// the same hash; the V6 contract rejects any proof whose MessageHash field
+// doesn't match. The off-chain ZK circuit (BLSSignatureCircuitV2) also
+// constrains its in-circuit MessageHash to this exact value via in-circuit
+// MapToG1, so the formula is the single point of truth on both sides.
+//
+// Wire format:
+//   keccak256(abi.encodePacked(
+//     "certen:bls:v1",
+//     DEPLOYMENT_CHAIN_ID,        // uint256, 32 bytes big-endian
+//     anchorId,                   // bytes32
+//     executionCommitment         // bytes32
+//   ))
+func (ecm *EthereumContractManager) computeEvmMessageHashV6(
+	anchorId [32]byte,
+	executionCommitment [32]byte,
+) [32]byte {
+	chainIDBytes32 := make([]byte, 32)
+	big.NewInt(ecm.config.ChainID).FillBytes(chainIDBytes32)
+	digest := crypto.Keccak256(
+		[]byte("certen:bls:v1"),
+		chainIDBytes32,
+		anchorId[:],
+		executionCommitment[:],
+	)
+	var msgHash [32]byte
+	copy(msgHash[:], digest)
+	return msgHash
+}
+
+// v6MerkleProofForAdi packages the merkle tree root, the taggedAdi leaf, and
+// the 3-element proof path that proves taggedAdi is in the 5-leaf tree. The
+// V6 contract derives leafHash from anchor.adiURLHash and only consumes
+// ProofHashes from calldata, but LeafHash / MerkleRoot are also returned so
+// V5 anchors (which DO read both from calldata) accept the same proof during
+// the V5→V6 rollout window.
+type v6MerkleProofForAdi struct {
+	LeafHash    common.Hash
+	ProofHashes [][32]byte
+	MerkleRoot  common.Hash
+}
+
+// computeV6MerkleProofForAdi builds the 5-leaf domain-tagged tree from the
+// commitments and returns the merkle proof for the taggedAdi leaf.
+//
+// Tree structure (matches CertenAnchorV6._computeMerkleRoot5):
+//
+//                    root
+//                   /    \
+//              hash0123   taggedExec
+//              /    \
+//         hash01    hash23
+//        /    \    /    \
+//   tagAdi tagOp tagCC tagGov
+//
+// Proof path for taggedAdi (matches CertenAnchorV6.getMerkleProofForAdiURL):
+//   level 0 sibling: taggedOp
+//   level 1 sibling: hash23
+//   level 2 sibling: taggedExec
+func computeV6MerkleProofForAdi(
+	adiURLHash [32]byte,
+	commitments contracts.CommitmentData,
+) v6MerkleProofForAdi {
+	taggedAdi := crypto.Keccak256Hash(append([]byte("certen:adi:"), adiURLHash[:]...))
+	taggedOp := crypto.Keccak256Hash(append([]byte("certen:op:"), commitments.OperationCommitment[:]...))
+	taggedCC := crypto.Keccak256Hash(append([]byte("certen:cc:"), commitments.CrossChainCommitment[:]...))
+	taggedGov := crypto.Keccak256Hash(append([]byte("certen:gov:"), commitments.GovernanceRoot[:]...))
+	taggedExec := crypto.Keccak256Hash(append([]byte("certen:exec:"), commitments.ExecutionCommitment[:]...))
+
+	hash01 := sortedHash(taggedAdi[:], taggedOp[:])
+	hash23 := sortedHash(taggedCC[:], taggedGov[:])
+	hash0123 := sortedHash(hash01, hash23)
+	merkleRoot := sortedHash(hash0123, taggedExec[:])
+
+	var leafHash, rootHash common.Hash
+	copy(leafHash[:], taggedAdi[:])
+	copy(rootHash[:], merkleRoot)
+
+	var taggedOpArr, hash23Arr, taggedExecArr [32]byte
+	copy(taggedOpArr[:], taggedOp[:])
+	copy(hash23Arr[:], hash23)
+	copy(taggedExecArr[:], taggedExec[:])
+
+	return v6MerkleProofForAdi{
+		LeafHash:    leafHash,
+		ProofHashes: [][32]byte{taggedOpArr, hash23Arr, taggedExecArr},
+		MerkleRoot:  rootHash,
+	}
 }
 
 // sortedHash computes keccak256(a || b) where a and b are sorted lexicographically
