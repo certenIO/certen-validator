@@ -19,6 +19,14 @@
 # Docker Compose (contains per-validator private keys)
 docker-compose.yml
 docker-compose.override.yml
+# Backups / pre-refactor copies contain old validator private keys — never commit
+docker-compose.yml.bak
+docker-compose.yml.bak2
+docker-compose.yml.bak*
+docker-compose.*.bak
+docker-compose.yml.pre-refactor
+docker-compose.yml.pre-*
+docker-compose.*.old
 !docker-compose.example.yml
 
 # Firebase/Google Cloud credentials
@@ -47,6 +55,9 @@ bls_keys_backup*.json
 bls_zk_keys/
 bls_zk_keys_bls12381/
 bls_zk_keys.tar.gz
+bls_zk_keys.bak/
+bls_zk_keys*.bak/
+bls_zk_keys*.bak2/
 
 # Data directories
 data/
@@ -93,3 +104,29 @@ CERTEN_COMPLETE_PROOF_CYCLE_SPEC.md
 Fix-Dynamic-Partition-Discovery-Intent-Search.txt
 Kermit-testnet-Description.txt
 REVIEW.md
+
+# Helper / operator scripts and planning docs — keep locally, shield from future commits.
+# Anchored with leading `/` so they only match at repo root and don't catch nested
+# directories like accumulate-lite-client-2/liteclient/scripts/.
+# Several files under /scripts/ contain hardcoded testnet keys — treat them as compromised.
+/scripts/
+/implementation-prompts/
+/implementation-planning-doc/
+/temp-docs/
+
+# Junk artifacts from accidental shell glob expansion (e.g. literal `{}` filename)
+**/{}
+
+# Misc backup / pre-refactor copies (defensive — these often contain stale secrets)
+*.bak
+*.bak2
+*.pre-refactor
+*.old
+!*.example.bak
+
+# Exceptions for the vendored accumulate-lite-client-2/liteclient/ project — its own
+# tracked files share names with our validator binaries (docker-compose.yml, txhash/)
+# but are legitimate source code in that sub-project.
+!accumulate-lite-client-2/liteclient/docker-compose.yml
+!accumulate-lite-client-2/liteclient/proof/consolidated_governance-proof/cmd/txhash/
+!accumulate-lite-client-2/liteclient/proof/consolidated_governance-proof/cmd/txhash/**
