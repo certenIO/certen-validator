@@ -26,6 +26,7 @@ import (
 	bn254_curve "github.com/consensys/gnark-crypto/ecc/bn254"
 	"github.com/consensys/gnark-crypto/ecc/bn254/fr"
 	"github.com/consensys/gnark-crypto/ecc"
+	"github.com/consensys/gnark/backend"
 	groth16_bn254 "github.com/consensys/gnark/backend/groth16/bn254"
 	"github.com/consensys/gnark/backend/groth16"
 	"github.com/consensys/gnark/constraint"
@@ -54,25 +55,62 @@ type BLSZKProver struct {
 	initialized bool
 }
 
-// BLSZKProof represents a generated proof ready for on-chain verification
+// BLSZKProof represents a generated proof ready for on-chain verification.
+//
+// V2 (BLSSignatureCircuitV2) adds two Pedersen artifacts that the V2 verifier
+// reconstructs and consumes: Commitments (one G1 point, 2 coordinates) and
+// CommitmentPok (proof-of-knowledge of the commitment, also one G1 point).
+// These are required for groth16.Verify and for serialization to the V2
+// BLSZKVerifierV2 ABI; they are zero/nil on legacy V1 proofs.
 type BLSZKProof struct {
 	// Groth16 proof components (A, B, C points)
 	ProofA [2]*big.Int   `json:"proofA"`
 	ProofB [2][2]*big.Int `json:"proofB"`
 	ProofC [2]*big.Int   `json:"proofC"`
 
-	// Public inputs (4 total - must match BLSZKVerifier.sol)
+	// V2 BSB22 Pedersen artifacts — populated by extractProofComponents from
+	// the underlying *groth16_bn254.Proof. Required by BLSZKVerifierV2Generated.
+	Commitments   [2]*big.Int `json:"commitments,omitempty"`
+	CommitmentPok [2]*big.Int `json:"commitmentPok,omitempty"`
+
+	// Public inputs (4 total - must match BLSZKVerifierV2Generated)
 	MessageHash       [32]byte `json:"messageHash"`
 	PubkeyCommitment  [32]byte `json:"pubkeyCommitment"`
 	SignedVotingPower uint64   `json:"signedVotingPower"`
 	TotalVotingPower  uint64   `json:"totalVotingPower"`
 
-	// Internal: SignatureCommitment is now a private circuit input (not public)
+	// V1 legacy: SignatureCommitment was a private circuit input on the old
+	// SimpleBLSCircuit. Unused by V2 but kept for backward-compatible JSON.
 	SignatureCommitment *big.Int `json:"signatureCommitment,omitempty"`
 
-	// Threshold parameters - required by BLSZKVerifier contract
-	ThresholdNumerator   uint64 `json:"thresholdNumerator"`   // e.g., 2 for 2/3 threshold
-	ThresholdDenominator uint64 `json:"thresholdDenominator"` // e.g., 3 for 2/3 threshold
+	// Threshold parameters — V2 ignores these (verifier reads its own stored
+	// numerator/denominator), retained for V1-shape JSON callers.
+	ThresholdNumerator   uint64 `json:"thresholdNumerator"`
+	ThresholdDenominator uint64 `json:"thresholdDenominator"`
+}
+
+// setG1Coords assigns BLS12-381 G1 coordinates from big.Ints and verifies the
+// point lies on the curve. Returns the populated point for convenient use.
+func setG1Coords(p *bls12381.G1Affine, x, y *big.Int) (bls12381.G1Affine, error) {
+	p.X.SetBigInt(x)
+	p.Y.SetBigInt(y)
+	if !p.IsOnCurve() {
+		return bls12381.G1Affine{}, errors.New("G1 point not on BLS12-381 curve")
+	}
+	return *p, nil
+}
+
+// setG2Coords assigns BLS12-381 G2 coordinates (each in Fp2) and verifies the
+// point lies on the curve.
+func setG2Coords(p *bls12381.G2Affine, x0, x1, y0, y1 *big.Int) error {
+	p.X.A0.SetBigInt(x0)
+	p.X.A1.SetBigInt(x1)
+	p.Y.A0.SetBigInt(y0)
+	p.Y.A1.SetBigInt(y1)
+	if !p.IsOnCurve() {
+		return errors.New("G2 point not on BLS12-381 curve")
+	}
+	return nil
 }
 
 // VerificationKeyExport contains the verification key in Solidity-compatible format
@@ -116,8 +154,22 @@ func NewBLSZKProver() *BLSZKProver {
 	return &BLSZKProver{}
 }
 
-// Initialize compiles the circuit and generates proving/verification keys
-// This is a one-time setup operation that can take several seconds
+// Initialize compiles the circuit and generates proving/verification keys.
+// This is a one-time setup operation that can take several minutes for V2
+// (BLSSignatureCircuitV2 has ~775k constraints because of the emulated
+// BLS12-381 pairing).
+//
+// EVM-NEW-001 (audit-reports/01-evm-VERIFIED.md:552) replaced the placeholder
+// V1 SimpleBLSCircuit (which proved only linear commitments + a threshold
+// inequality and DID NOT actually verify a BLS signature) with V2 which
+// performs the real BLS12-381 pairing inside the BN254 SNARK.
+//
+// Operator note: V1-era on-disk keys (proving_key.bin / verification_key.bin
+// / constraint_system.bin) are INCOMPATIBLE with V2 — the constraint system
+// shape differs entirely. InitializeFromKeys will return a decode error on
+// V1 key files. Run the V2 trusted setup (or use the V2 fixtures from
+// pkg/crypto/bls_zkp/testdata/v2_fixtures.json) before starting the validator
+// against a chain running V2 contracts.
 func (p *BLSZKProver) Initialize() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -126,13 +178,13 @@ func (p *BLSZKProver) Initialize() error {
 		return nil
 	}
 
-	// Define the circuit
-	var circuit SimpleBLSCircuit
+	// Define the V2 circuit (real BLS pairing inside BN254).
+	var circuit BLSSignatureCircuitV2
 
 	// Compile the circuit to R1CS
 	cs, err := frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, &circuit)
 	if err != nil {
-		return fmt.Errorf("compile circuit: %w", err)
+		return fmt.Errorf("compile V2 circuit: %w", err)
 	}
 	p.cs = cs
 
@@ -249,7 +301,21 @@ func (p *BLSZKProver) SaveKeys(pkPath, vkPath, csPath string) error {
 // PROOF GENERATION
 // =============================================================================
 
-// GenerateProof generates a ZK proof for a BLS signature
+// GenerateProof generates a V2 Groth16 proof for a BLS signature.
+//
+// Witness translation: BLSSignatureWitness stores the BLS aggregate signature
+// (G1) and the aggregate pubkey (G2) as separate big.Int coordinates that were
+// extracted in BLS12-381 Fp form by CreateWitnessFromBLSData. We rebuild the
+// native gnark-crypto bls12381.G1Affine / G2Affine values and hand them to
+// BuildV2Witness, which (a) constructs the V2 circuit witness with Signature /
+// Pubkey as sw_bls12381 emulated points and (b) computes the V2 pubkey
+// commitment (MiMC over the G2 limbs) — the legacy V1 commitment
+// PubkeyCommitment = PubkeyX + 7*PubkeyY in BLSSignatureWitness is discarded.
+//
+// Proving uses backend.WithProverHashToFieldFunction(NewKeccakToFieldHash())
+// so the BSB22 Pedersen commitment is hashed with the same keccak-mod-R the
+// on-chain BLSZKVerifierV2Generated.publicInputMSM uses; without this override
+// the off-chain proof passes gnark.Verify but the on-chain pairing check fails.
 func (p *BLSZKProver) GenerateProof(witness *BLSSignatureWitness) (*BLSZKProof, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -258,41 +324,53 @@ func (p *BLSZKProver) GenerateProof(witness *BLSSignatureWitness) (*BLSZKProof, 
 		return nil, errors.New("prover not initialized")
 	}
 
-	// Create circuit assignment with witness values
-	assignment := &SimpleBLSCircuit{
-		MessageHash:         new(big.Int).SetBytes(witness.MessageHash[:]),
-		PubkeyCommitment:    new(big.Int).SetBytes(witness.PubkeyCommitment[:]),
-		SignatureCommitment: computeCommitment(witness.SignatureX, witness.SignatureY),
-		SignedVotingPower:   witness.SignedVotingPower,
-		TotalVotingPower:    witness.TotalVotingPower,
-		SignatureX:          witness.SignatureX,
-		SignatureY:          witness.SignatureY,
-		PubkeyX:             witness.PubkeyX0,
-		PubkeyY:             witness.PubkeyY0,
+	// Rebuild the native gnark-crypto G1/G2 affine points from the witness's
+	// big.Int coordinates (which are BLS12-381 Fp values, not BN254 Fr).
+	var sigPoint bls12381.G1Affine
+	if _, err := setG1Coords(&sigPoint, witness.SignatureX, witness.SignatureY); err != nil {
+		return nil, fmt.Errorf("rebuild G1 signature point: %w", err)
 	}
 
-	// Create witness
+	var pkPoint bls12381.G2Affine
+	if err := setG2Coords(&pkPoint, witness.PubkeyX0, witness.PubkeyX1, witness.PubkeyY0, witness.PubkeyY1); err != nil {
+		return nil, fmt.Errorf("rebuild G2 pubkey point: %w", err)
+	}
+
+	// Construct the V2 circuit witness and compute the V2 pubkey commitment.
+	assignment, pkCommitmentV2, err := BuildV2Witness(
+		witness.MessageHash,
+		sigPoint,
+		pkPoint,
+		witness.SignedVotingPower,
+		witness.TotalVotingPower,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("BuildV2Witness: %w", err)
+	}
+
 	witnessData, err := frontend.NewWitness(assignment, ecc.BN254.ScalarField())
 	if err != nil {
 		return nil, fmt.Errorf("create witness: %w", err)
 	}
 
-	// Generate proof
-	proof, err := groth16.Prove(p.cs, p.pk, witnessData)
+	// Generate proof with keccak-mod-R hash override (matches on-chain BSB22).
+	proof, err := groth16.Prove(p.cs, p.pk, witnessData,
+		backend.WithProverHashToFieldFunction(NewKeccakToFieldHash()),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("generate proof: %w", err)
 	}
 
-	// Extract proof components
+	// Extract A, B, C, and the Pedersen commitments / PoK that the V2 verifier needs.
 	zkProof, err := extractProofComponents(proof)
 	if err != nil {
 		return nil, fmt.Errorf("extract proof components: %w", err)
 	}
 
-	// Set public inputs
+	// Set public inputs — note PubkeyCommitment now comes from BuildV2Witness,
+	// NOT from the V1-style witness.PubkeyCommitment field.
 	zkProof.MessageHash = witness.MessageHash
-	zkProof.PubkeyCommitment = witness.PubkeyCommitment
-	zkProof.SignatureCommitment = computeCommitment(witness.SignatureX, witness.SignatureY)
+	zkProof.PubkeyCommitment = pkCommitmentV2
 	zkProof.SignedVotingPower = witness.SignedVotingPower
 	zkProof.TotalVotingPower = witness.TotalVotingPower
 
@@ -327,9 +405,11 @@ func (p *BLSZKProver) VerifyProofLocally(proof *BLSZKProof) (bool, error) {
 		return false, errors.New("prover not initialized")
 	}
 
-	// Create public witness with only the 4 public inputs (matches on-chain verifier)
-	// SignatureCommitment is now a private input, not included in public witness
-	assignment := &SimpleBLSCircuit{
+	// V2 public witness — same 4 public inputs as V1 (MessageHash,
+	// PubkeyCommitment, SignedVotingPower, TotalVotingPower), but assigned via
+	// BLSSignatureCircuitV2 so the circuit shape matches the compiled R1CS.
+	// Signature/Pubkey are private fields; frontend.PublicOnly() strips them.
+	assignment := &BLSSignatureCircuitV2{
 		MessageHash:       new(big.Int).SetBytes(proof.MessageHash[:]),
 		PubkeyCommitment:  new(big.Int).SetBytes(proof.PubkeyCommitment[:]),
 		SignedVotingPower: proof.SignedVotingPower,
@@ -341,14 +421,20 @@ func (p *BLSZKProver) VerifyProofLocally(proof *BLSZKProof) (bool, error) {
 		return false, fmt.Errorf("create public witness: %w", err)
 	}
 
-	// Reconstruct Groth16 proof from components
+	// Reconstruct Groth16 proof from components.
+	// reconstructProof must restore the V2 Pedersen commitments / PoK from
+	// BLSZKProof.Commitments / CommitmentPok or Verify will fail with a
+	// commitment-mismatch error.
 	groth16Proof, err := reconstructProof(proof)
 	if err != nil {
 		return false, fmt.Errorf("reconstruct proof: %w", err)
 	}
 
-	// Verify
-	err = groth16.Verify(groth16Proof, p.vk, publicWitness)
+	// V2 verify uses keccak-mod-R for the BSB22 hash — matches the on-chain
+	// publicInputMSM step in BLSZKVerifierV2Generated.
+	err = groth16.Verify(groth16Proof, p.vk, publicWitness,
+		backend.WithVerifierHashToFieldFunction(NewKeccakToFieldHash()),
+	)
 	if err != nil {
 		return false, nil // Verification failed, but not an error
 	}
@@ -445,24 +531,43 @@ func (p *BLSZKProver) ExportVerificationKeyJSON() ([]byte, error) {
 // PROOF SERIALIZATION FOR ON-CHAIN SUBMISSION
 // =============================================================================
 
-// blsProofABI defines the ABI for the BLS proof struct used in Solidity
-// Matches the BLSSignatureProof struct in BLSZKVerifier.sol:
-// struct BLSSignatureProof {
-//     Groth16Proof proof;
-//     bytes32 messageHash;
-//     bytes32 pubkeyCommitment;
-//     uint256 signedVotingPower;
-//     uint256 totalVotingPower;
-//     uint256 thresholdNumerator;
-//     uint256 thresholdDenominator;
-// }
+// blsProofABI defines the ABI for the BLSSignatureProof struct used by
+// BLSZKVerifierV2 in evm/src/core/BLSZKVerifierV2.sol:
+//
+//   struct Groth16Proof {
+//       uint256[2] a;
+//       uint256[2][2] b;
+//       uint256[2] c;
+//   }
+//   struct BLSSignatureProof {
+//       Groth16Proof proof;
+//       uint256[2] commitments;
+//       uint256[2] commitmentPok;
+//       bytes32 messageHash;
+//       bytes32 pubkeyCommitment;
+//       uint256 signedVotingPower;
+//       uint256 totalVotingPower;
+//       uint256 thresholdNumerator;   // ignored by contract; kept for ABI stability
+//       uint256 thresholdDenominator; // ignored by contract; kept for ABI stability
+//   }
+//
+// V6's CertenAnchorV6 calls IBLSZKVerifier.verifyBLSSignature(bytes, bytes32);
+// BLSZKVerifierV2 then runs abi.decode(bytes, (BLSSignatureProof)). All fields
+// of BLSSignatureProof are statically sized, so abi.encode(struct) is byte-
+// equivalent to abi.encode(field1, field2, ...). Each call site below packs
+// the matching fields in order and strips the 4-byte selector — the remaining
+// bytes are exactly what BLSZKVerifierV2 decodes.
 var blsProofABI = mustParseABI(`[{
 	"name": "encodeProof",
 	"type": "function",
 	"inputs": [
-		{"name": "proofA", "type": "uint256[2]"},
-		{"name": "proofB", "type": "uint256[2][2]"},
-		{"name": "proofC", "type": "uint256[2]"},
+		{"name": "proof", "type": "tuple", "components": [
+			{"name": "a", "type": "uint256[2]"},
+			{"name": "b", "type": "uint256[2][2]"},
+			{"name": "c", "type": "uint256[2]"}
+		]},
+		{"name": "commitments", "type": "uint256[2]"},
+		{"name": "commitmentPok", "type": "uint256[2]"},
 		{"name": "messageHash", "type": "bytes32"},
 		{"name": "pubkeyCommitment", "type": "bytes32"},
 		{"name": "signedVotingPower", "type": "uint256"},
@@ -481,59 +586,69 @@ func mustParseABI(abiJSON string) abi.ABI {
 	return parsed
 }
 
-// ToSolidityCalldata converts the proof to Solidity-compatible calldata format
-// using go-ethereum's ABI encoding for proper type safety and compatibility
+// nonNilBI returns the input if non-nil, otherwise a fresh big.NewInt(0).
+// Used to defend Pack from nil *big.Int dereferences when a V1-shaped
+// BLSZKProof lacks V2 commitments.
+func nonNilBI(b *big.Int) *big.Int {
+	if b == nil {
+		return big.NewInt(0)
+	}
+	return b
+}
+
+// solGroth16Proof is the Go shape of the Groth16Proof Solidity struct. Field
+// names (A, B, C) are matched case-insensitively against the ABI components
+// (a, b, c) by go-ethereum's abi.Pack reflection path.
+type solGroth16Proof struct {
+	A [2]*big.Int
+	B [2][2]*big.Int
+	C [2]*big.Int
+}
+
+// ToSolidityCalldata converts the proof to Solidity-compatible calldata in
+// the V2 BLSSignatureProof wire format consumed by BLSZKVerifierV2:
+//
+//   abi.encode(BLSSignatureProof{
+//     proof = Groth16Proof{a, b, c},
+//     commitments, commitmentPok,
+//     messageHash, pubkeyCommitment,
+//     signedVotingPower, totalVotingPower,
+//     thresholdNumerator, thresholdDenominator
+//   })
+//
+// All fields are statically sized, so the encoding of the single struct is
+// byte-equivalent to the concatenated encodings of its fields in order.
+// Packing them as the 9 inputs of `encodeProof` and stripping the 4-byte
+// method selector therefore yields the exact bytes BLSZKVerifierV2 decodes.
 func (proof *BLSZKProof) ToSolidityCalldata() ([]byte, error) {
-	// Convert ProofA to [2]*big.Int array
-	proofA := [2]*big.Int{proof.ProofA[0], proof.ProofA[1]}
-	if proofA[0] == nil {
-		proofA[0] = big.NewInt(0)
-	}
-	if proofA[1] == nil {
-		proofA[1] = big.NewInt(0)
-	}
-
-	// Convert ProofB to [2][2]*big.Int array
-	proofB := [2][2]*big.Int{
-		{proof.ProofB[0][0], proof.ProofB[0][1]},
-		{proof.ProofB[1][0], proof.ProofB[1][1]},
-	}
-	for i := 0; i < 2; i++ {
-		for j := 0; j < 2; j++ {
-			if proofB[i][j] == nil {
-				proofB[i][j] = big.NewInt(0)
-			}
-		}
+	proofTuple := solGroth16Proof{
+		A: [2]*big.Int{nonNilBI(proof.ProofA[0]), nonNilBI(proof.ProofA[1])},
+		B: [2][2]*big.Int{
+			{nonNilBI(proof.ProofB[0][0]), nonNilBI(proof.ProofB[0][1])},
+			{nonNilBI(proof.ProofB[1][0]), nonNilBI(proof.ProofB[1][1])},
+		},
+		C: [2]*big.Int{nonNilBI(proof.ProofC[0]), nonNilBI(proof.ProofC[1])},
 	}
 
-	// Convert ProofC to [2]*big.Int array
-	proofC := [2]*big.Int{proof.ProofC[0], proof.ProofC[1]}
-	if proofC[0] == nil {
-		proofC[0] = big.NewInt(0)
-	}
-	if proofC[1] == nil {
-		proofC[1] = big.NewInt(0)
-	}
+	commitments := [2]*big.Int{nonNilBI(proof.Commitments[0]), nonNilBI(proof.Commitments[1])}
+	commitmentPok := [2]*big.Int{nonNilBI(proof.CommitmentPok[0]), nonNilBI(proof.CommitmentPok[1])}
 
-	// Convert voting power and threshold to big.Int for uint256 ABI encoding
 	signedVP := new(big.Int).SetUint64(proof.SignedVotingPower)
 	totalVP := new(big.Int).SetUint64(proof.TotalVotingPower)
+
 	thresholdNum := new(big.Int).SetUint64(proof.ThresholdNumerator)
 	thresholdDenom := new(big.Int).SetUint64(proof.ThresholdDenominator)
-
-	// Default to 2/3 threshold if not set
-	if thresholdNum.Cmp(big.NewInt(0)) == 0 {
+	if thresholdNum.Sign() == 0 {
 		thresholdNum = big.NewInt(2)
 	}
-	if thresholdDenom.Cmp(big.NewInt(0)) == 0 {
+	if thresholdDenom.Sign() == 0 {
 		thresholdDenom = big.NewInt(3)
 	}
 
-	// Pack using ABI encoding
 	encoded, err := blsProofABI.Pack("encodeProof",
-		proofA,
-		proofB,
-		proofC,
+		proofTuple,
+		commitments,
+		commitmentPok,
 		proof.MessageHash,
 		proof.PubkeyCommitment,
 		signedVP,
@@ -545,14 +660,20 @@ func (proof *BLSZKProof) ToSolidityCalldata() ([]byte, error) {
 		return nil, fmt.Errorf("abi pack proof: %w", err)
 	}
 
-	// Remove the 4-byte method selector to get just the encoded parameters
 	if len(encoded) < 4 {
 		return nil, errors.New("encoded data too short")
 	}
-
 	return encoded[4:], nil
 }
 
+// Deprecated: ToSolidityCalldataRaw produces V1-shape raw bytes (no Pedersen
+// commitments, V1 field ordering). The V2 wire format consumed by
+// BLSZKVerifierV2 is the ABI-encoded BLSSignatureProof produced by
+// ToSolidityCalldata. There are no callers of this function in the validator
+// codebase (grep `ToSolidityCalldataRaw` shows only this definition and stale
+// validator-build snapshots), and it is retained only for compatibility with
+// any out-of-tree consumer that might call it. Delete in a future cleanup.
+//
 // ToSolidityCalldataRaw converts the proof to raw byte format (without ABI struct encoding)
 // This is useful for contracts that expect raw concatenated values
 func (proof *BLSZKProof) ToSolidityCalldataRaw() []byte {
@@ -687,6 +808,35 @@ func extractProofComponents(proof groth16.Proof) (*BLSZKProof, error) {
 		ProofC: [2]*big.Int{proofCX, proofCY},
 	}
 
+	// Phase 2.1: extract the V2 BSB22 Pedersen commitment + PoK from the
+	// gnark proof. BLSSignatureCircuitV2 uses gnark's emulated BLS12-381
+	// pairing gadget, which injects exactly one Pedersen commitment per
+	// proof; the on-chain BLSZKVerifierV2Generated.verifyProof consumes
+	// (commitments[2], commitmentPok[2]) alongside (A, B, C). Without these,
+	// V6 rejects every proof with ProofInvalid / CommitmentInvalid.
+	//
+	// Defensive: V1-era code paths and unit-test fixtures may yield proofs
+	// with no commitments (e.g. plain Groth16 with no BSB22). In that case
+	// we leave Commitments / CommitmentPok zero-valued so the V1 callers
+	// (which ignore them) are unaffected.
+	commitments := [2]*big.Int{big.NewInt(0), big.NewInt(0)}
+	commitmentPok := [2]*big.Int{big.NewInt(0), big.NewInt(0)}
+	if len(proofBN254.Commitments) >= 1 {
+		cx := new(big.Int)
+		cy := new(big.Int)
+		proofBN254.Commitments[0].X.BigInt(cx)
+		proofBN254.Commitments[0].Y.BigInt(cy)
+		commitments = [2]*big.Int{cx, cy}
+
+		px := new(big.Int)
+		py := new(big.Int)
+		proofBN254.CommitmentPok.X.BigInt(px)
+		proofBN254.CommitmentPok.Y.BigInt(py)
+		commitmentPok = [2]*big.Int{px, py}
+	}
+	zkProof.Commitments = commitments
+	zkProof.CommitmentPok = commitmentPok
+
 	return zkProof, nil
 }
 
@@ -709,7 +859,32 @@ func reconstructProof(zkProof *BLSZKProof) (groth16.Proof, error) {
 	proof.Krs.X.SetBigInt(zkProof.ProofC[0])
 	proof.Krs.Y.SetBigInt(zkProof.ProofC[1])
 
+	// Phase 2.2: restore V2 BSB22 Pedersen commitment + PoK if present.
+	// Without these, groth16.Verify rejects every V2 proof (the verifier
+	// checks the commitment contribution to vk_x). A V1-era zkProof has
+	// nil/zero commitments — leave the gnark proof object with empty
+	// Commitments slice in that case, matching the gnark-native V1 shape.
+	if hasV2Commitments(zkProof) {
+		var c bn254_curve.G1Affine
+		c.X.SetBigInt(zkProof.Commitments[0])
+		c.Y.SetBigInt(zkProof.Commitments[1])
+		proof.Commitments = []bn254_curve.G1Affine{c}
+
+		proof.CommitmentPok.X.SetBigInt(zkProof.CommitmentPok[0])
+		proof.CommitmentPok.Y.SetBigInt(zkProof.CommitmentPok[1])
+	}
+
 	return proof, nil
+}
+
+// hasV2Commitments reports whether the proof carries non-zero V2 Pedersen
+// commitment data. Zero values indicate a V1-era proof; non-zero indicates
+// gnark's BSB22 commitment injection happened (i.e. V2 circuit).
+func hasV2Commitments(zkProof *BLSZKProof) bool {
+	if zkProof.Commitments[0] == nil || zkProof.Commitments[1] == nil {
+		return false
+	}
+	return zkProof.Commitments[0].Sign() != 0 || zkProof.Commitments[1].Sign() != 0
 }
 
 // padBigInt pads a big.Int to 32 bytes
@@ -941,10 +1116,49 @@ func (p *BLSZKProver) ManualPairingCheck(zkProof *BLSZKProof) (bool, error) {
 	return ok2, nil
 }
 
-// VerifyFromABIBytes deserializes the 448-byte ABI proof back to curve points
-// and runs the EXACT same pairing equation as the NEAR contract:
-//   e(-A, B) * e(alpha, beta) * e(vk_x, gamma) * e(C, delta) = 1
-// This catches any serialization issue between Go and the on-chain verifier.
+// V2 ABI byte size: 8 (A,B,C) + 2 (commitments) + 2 (commitmentPok)
+// + 4 (public inputs) + 2 (thresholds) = 18 × 32-byte slots = 576 bytes.
+// All BLSSignatureProof fields are statically sized, so abi.encode produces
+// a flat 576-byte blob with no length prefix.
+const v2ABIByteSize = 576
+
+// V2 ABI byte offsets — see ToSolidityCalldata for the encoding contract.
+const (
+	v2OffProofAX        = 0
+	v2OffProofAY        = 32
+	v2OffProofBX0       = 64
+	v2OffProofBX1       = 96
+	v2OffProofBY0       = 128
+	v2OffProofBY1       = 160
+	v2OffProofCX        = 192
+	v2OffProofCY        = 224
+	v2OffCommitmentX    = 256
+	v2OffCommitmentY    = 288
+	v2OffCommitmentPokX = 320
+	v2OffCommitmentPokY = 352
+	v2OffMessageHash    = 384
+	v2OffPubkeyCommit   = 416
+	v2OffSignedVP       = 448
+	v2OffTotalVP        = 480
+	v2OffThresholdNum   = 512
+	v2OffThresholdDenom = 544
+)
+
+// VerifyFromABIBytes deserializes the V2 BLSSignatureProof bytes and runs
+// gnark's commitment-augmented Groth16 verifier. This is the round-trip
+// diagnostic for the ToSolidityCalldata encoder — if Go-side Verify rejects
+// the bytes Go-side Pack just produced, there is a serialization bug.
+//
+// The V1 version of this function did a manual 4-pairing check matching the
+// "standard Groth16" equation used by the NEAR contract. That equation does
+// NOT apply to V2 proofs: BLSSignatureCircuitV2 uses gnark's emulated BLS12-381
+// pairing gadget, which injects a BSB22 Pedersen commitment that augments the
+// pairing equation with additional terms. Reimplementing that manually is the
+// "hand-rolled commitment-augmented verifier" the V2 contract architecture
+// explicitly avoids (see evm/src/core/BLSZKVerifierV2.sol header). We instead
+// reconstruct the gnark proof + V2 public witness and call groth16.Verify
+// with the keccak-mod-R hash override that matches the on-chain BSB22
+// challenge derivation.
 func (p *BLSZKProver) VerifyFromABIBytes(abiBytes []byte) (bool, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -952,87 +1166,61 @@ func (p *BLSZKProver) VerifyFromABIBytes(abiBytes []byte) (bool, error) {
 	if !p.initialized {
 		return false, errors.New("prover not initialized")
 	}
-	if len(abiBytes) < 448 {
-		return false, fmt.Errorf("ABI bytes too short: %d", len(abiBytes))
+	if len(abiBytes) < v2ABIByteSize {
+		return false, fmt.Errorf("V2 ABI bytes too short: %d (expected %d)", len(abiBytes), v2ABIByteSize)
 	}
 
-	vkBN254, ok := p.vk.(*groth16_bn254.VerifyingKey)
-	if !ok {
-		return false, errors.New("VK is not BN254 type")
-	}
-
-	// Parse proof points from ABI bytes (big-endian, same as NEAR's from_be_bytes_mod_order)
-	readBigInt := func(offset int) *big.Int {
+	readBI := func(offset int) *big.Int {
 		return new(big.Int).SetBytes(abiBytes[offset : offset+32])
 	}
-
-	var A bn254_curve.G1Affine
-	A.X.SetBigInt(readBigInt(0))
-	A.Y.SetBigInt(readBigInt(32))
-
-	var B bn254_curve.G2Affine
-	B.X.A0.SetBigInt(readBigInt(64))
-	B.X.A1.SetBigInt(readBigInt(96))
-	B.Y.A0.SetBigInt(readBigInt(128))
-	B.Y.A1.SetBigInt(readBigInt(160))
-
-	var C bn254_curve.G1Affine
-	C.X.SetBigInt(readBigInt(192))
-	C.Y.SetBigInt(readBigInt(224))
-
-	// Parse public inputs as Fr (from_be_bytes_mod_order equivalent)
-	var inputs [4]fr.Element
-	inputs[0].SetBytes(abiBytes[256:288])
-	inputs[1].SetBytes(abiBytes[288:320])
-	inputs[2].SetBytes(abiBytes[320:352])
-	inputs[3].SetBytes(abiBytes[352:384])
-
-	// Log deserialized values
-	ax := new(big.Int)
-	A.X.BigInt(ax)
-	log.Printf("🔍 [ABI-ROUNDTRIP] A.x=%064x", ax)
-	ay := new(big.Int)
-	A.Y.BigInt(ay)
-	log.Printf("🔍 [ABI-ROUNDTRIP] A.y=%064x", ay)
-	bx0 := new(big.Int)
-	B.X.A0.BigInt(bx0)
-	log.Printf("🔍 [ABI-ROUNDTRIP] B.x.A0=%064x (c0/real)", bx0)
-
-	for i, inp := range inputs {
-		var v big.Int
-		inp.BigInt(&v)
-		log.Printf("🔍 [ABI-ROUNDTRIP] input[%d]=%064x (Fr-reduced)", i, &v)
+	readBytes32 := func(offset int) [32]byte {
+		var out [32]byte
+		copy(out[:], abiBytes[offset:offset+32])
+		return out
 	}
 
-	// Compute vk_x = IC[0] + sum(inputs[i] * IC[i+1])
-	var vk_x bn254_curve.G1Jac
-	vk_x.FromAffine(&vkBN254.G1.K[0])
-	for i := 0; i < 4; i++ {
-		var scalar big.Int
-		inputs[i].BigInt(&scalar)
-		var term bn254_curve.G1Jac
-		term.FromAffine(&vkBN254.G1.K[i+1])
-		term.ScalarMultiplication(&term, &scalar)
-		vk_x.AddAssign(&term)
+	zkProof := &BLSZKProof{
+		ProofA: [2]*big.Int{readBI(v2OffProofAX), readBI(v2OffProofAY)},
+		ProofB: [2][2]*big.Int{
+			{readBI(v2OffProofBX0), readBI(v2OffProofBX1)},
+			{readBI(v2OffProofBY0), readBI(v2OffProofBY1)},
+		},
+		ProofC:               [2]*big.Int{readBI(v2OffProofCX), readBI(v2OffProofCY)},
+		Commitments:          [2]*big.Int{readBI(v2OffCommitmentX), readBI(v2OffCommitmentY)},
+		CommitmentPok:        [2]*big.Int{readBI(v2OffCommitmentPokX), readBI(v2OffCommitmentPokY)},
+		MessageHash:          readBytes32(v2OffMessageHash),
+		PubkeyCommitment:     readBytes32(v2OffPubkeyCommit),
+		SignedVotingPower:    readBI(v2OffSignedVP).Uint64(),
+		TotalVotingPower:     readBI(v2OffTotalVP).Uint64(),
+		ThresholdNumerator:   readBI(v2OffThresholdNum).Uint64(),
+		ThresholdDenominator: readBI(v2OffThresholdDenom).Uint64(),
 	}
-	var vk_x_aff bn254_curve.G1Affine
-	vk_x_aff.FromJacobian(&vk_x)
 
-	// NEAR equation: e(-A, B) * e(alpha, beta) * e(vk_x, gamma) * e(C, delta) = 1
-	var negA bn254_curve.G1Affine
-	negA.Neg(&A)
+	groth16Proof, err := reconstructProof(zkProof)
+	if err != nil {
+		return false, fmt.Errorf("reconstruct proof: %w", err)
+	}
 
-	result, err := bn254_curve.PairingCheck(
-		[]bn254_curve.G1Affine{negA, vkBN254.G1.Alpha, vk_x_aff, C},
-		[]bn254_curve.G2Affine{B, vkBN254.G2.Beta, vkBN254.G2.Gamma, vkBN254.G2.Delta},
+	assignment := &BLSSignatureCircuitV2{
+		MessageHash:       new(big.Int).SetBytes(zkProof.MessageHash[:]),
+		PubkeyCommitment:  new(big.Int).SetBytes(zkProof.PubkeyCommitment[:]),
+		SignedVotingPower: zkProof.SignedVotingPower,
+		TotalVotingPower:  zkProof.TotalVotingPower,
+	}
+	publicWitness, err := frontend.NewWitness(assignment, ecc.BN254.ScalarField(), frontend.PublicOnly())
+	if err != nil {
+		return false, fmt.Errorf("create public witness: %w", err)
+	}
+
+	err = groth16.Verify(groth16Proof, p.vk, publicWitness,
+		backend.WithVerifierHashToFieldFunction(NewKeccakToFieldHash()),
 	)
 	if err != nil {
-		log.Printf("❌ [ABI-ROUNDTRIP] PairingCheck error: %v", err)
-		return false, err
+		log.Printf("🔍 [V2-ABI-ROUNDTRIP] groth16.Verify rejected: %v", err)
+		return false, nil
 	}
-
-	log.Printf("🔍 [ABI-ROUNDTRIP] e(-A,B)*e(alpha,beta)*e(vk_x,gamma)*e(C,delta)=1 ? %v", result)
-	return result, nil
+	log.Printf("✅ [V2-ABI-ROUNDTRIP] groth16.Verify accepted")
+	return true, nil
 }
 
 // ComputeVKHash computes a SHA256 hash of all VK component bytes for comparison
