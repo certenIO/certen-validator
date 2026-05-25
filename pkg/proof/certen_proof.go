@@ -63,6 +63,18 @@ type CertenProof struct {
 	// Accumulate anchor reference from lite client proof
 	AccumulateAnchor *AccumulateAnchorData `json:"accumulate_anchor,omitempty"`
 
+	// A+++ governance proof outputs (V6.1 binding). Populated by the BFT
+	// signing path BEFORE the BLS aggregate is computed, so the EVM
+	// submission path can recompute the SAME messageHash the validators
+	// signed. Nil at this level means "G_n not generated for this intent"
+	// — the canonical hash for an absent level is the zero [32]byte on
+	// both sides (see contracts.CanonicalHashGovernance).
+	G0Result   *G0Result `json:"g0_result,omitempty"`
+	G1Result   *G1Result `json:"g1_result,omitempty"`
+	G2Result   *G2Result `json:"g2_result,omitempty"`
+	KeypageURL string    `json:"keypage_url,omitempty"`
+	KeybookURL string    `json:"keybook_url,omitempty"`
+
 	// Verification status
 	VerificationStatus *VerificationStatusData `json:"verification_status"`
 

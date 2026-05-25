@@ -35,7 +35,6 @@ import (
 
 	lcproof "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof"
 
-	"github.com/certen/independant-validator/pkg/crypto/bls"
 	"github.com/certen/independant-validator/pkg/database"
 	"github.com/certen/independant-validator/pkg/kvdb"
 	"github.com/certen/independant-validator/pkg/ledger"
@@ -778,6 +777,17 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	var anchorRef AccumulateAnchorReference
 	var liteClientProof *lcproof.CompleteProof
 
+	// Governance proof variables — declared OUTSIDE the if-block so the
+	// validator-block builder (further below) and on_cadence fallback both
+	// see them as nil/empty when proofs weren't generated. V6.1 A+++ requires
+	// these to be available BEFORE BLS signing, hence the move from below.
+	var g0Proof *proof.G0Result
+	var g1Proof *proof.G1Result
+	var g2Proof *proof.G2Result
+	var governanceLevel string
+	var resolvedKeyPageURL string
+	resolvedKeyBookURL := governanceData.Authorization.RequiredKeyBook
+
 	if certenProof != nil {
 		bv.logger.Printf("✅ [CANONICAL-VB] Using real proof data for intent: %s", certenIntent.IntentID)
 		blsSignature = certenProof.BLSAggregateSignature
@@ -806,13 +816,12 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 			liteClientProof = certenProof.LiteClientProof.CompleteProof
 		}
 
-		// CRITICAL: Generate initial validator signature for pre-execution
-		// For on_demand intents, we sign the operation commitment as the proposing validator
-		// Other validators will add their signatures during BFT consensus
+		// Validator's individual ed25519 signature over opID. This is for
+		// BFT consensus votes (CometBFT layer), NOT the EVM-side BLS sig.
+		// Keep signing opID here — CometBFT consensus is opID-based.
 		if len(validatorSignatures) == 0 && bv.privateKey != nil {
 			opID, err := certenIntent.OperationID()
 			if err == nil {
-				// Sign the operation commitment with our validator's ed25519 key
 				message := []byte(opID)
 				signature := ed25519.Sign(bv.privateKey, message)
 				signatureHex := hex.EncodeToString(signature)
@@ -824,24 +833,110 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 			}
 		}
 
-		// CRITICAL: Generate BLS signature for governance proof if not already set
-		// Uses the validator's BLS key to sign the governance data
-		if blsSignature == "" {
-			blsKeyManager := bls.GetValidatorBLSKey()
-			if blsKeyManager != nil {
-				opID, err := certenIntent.OperationID()
-				if err == nil {
-					// Sign the operation ID with BLS key using governance domain
-					blsSig, err := blsKeyManager.SignWithDomain([]byte(opID), bls.DomainAttestation)
-					if err == nil {
-						blsSignature = blsSig.Hex()
-						bv.logger.Printf("🔐 [BLS-SIG] Generated BLS signature for governance proof (intent %s)", certenIntent.IntentID)
-					} else {
-						bv.logger.Printf("⚠️ [BLS-SIG] Failed to generate BLS signature: %v", err)
+		// ====================================================================
+		// V6.1 A+++ ORDERING: Generate G0/G1/G2 governance proofs BEFORE the
+		// EVM-side BLS signature, so the messageHash the validator signs is
+		// bound to the same governance outputs the EVM submission path will
+		// recompute. Pre-V6.1 this block ran AFTER BLS signing, which is why
+		// govRoot was forced into a `keccak256(BLS sig)` shortcut that
+		// produced unverifiable circular hashes.
+		//
+		// Per CERTEN spec v3-governance-kpsw-exec-4.0:
+		// - G0/G1/G2 proofs are generated AFTER L1-L4 lite client proof completes
+		// - L1-L4 provides the cryptographic foundation that the transaction EXISTS
+		// - G0 extracts TXID, EXEC_MBI from the PROVEN transaction
+		// - G1 validates key page authority AT execution time
+		// - G2 verifies Accumulate intent payload authenticity and effect binding
+		// NOTE: G2 is about the Accumulate intent, NOT external chain execution
+		// ====================================================================
+		if liteClientProof != nil && bv.governanceProofGen != nil {
+			bv.logger.Printf("🔗 [GOV-PROOF] L1-L4 proof complete, generating G0/G1/G2 governance proofs for intent %s",
+				certenIntent.IntentID)
+
+			// Build governance proof request from intent data
+			keyPageURL, keyPageErr := resolveKeyPageURL(
+				governanceData.Authorization.RequiredKeyPage,
+				governanceData.Authorization.RequiredKeyBook,
+				bv.logger,
+			)
+			if keyPageErr != nil {
+				bv.logger.Printf("⚠️ [GOV-PROOF] Failed to resolve keypage URL: %v", keyPageErr)
+			}
+			resolvedKeyPageURL = keyPageURL
+			govRequest := &proof.GovernanceRequest{
+				AccountURL:      certenIntent.AccountURL,
+				TransactionHash: certenIntent.TransactionHash,
+				KeyPage:         keyPageURL,
+				Chain:           "main",
+			}
+
+			// Generate G0 proof (Inclusion & Finality)
+			g0ProofWrapper, g0Err := bv.governanceProofGen.GenerateG0(ctx, govRequest)
+			if g0Err != nil {
+				bv.logger.Printf("⚠️ [GOV-PROOF] G0 proof generation failed: %v", g0Err)
+			} else if g0ProofWrapper != nil && g0ProofWrapper.G0 != nil {
+				g0Proof = g0ProofWrapper.G0
+				governanceLevel = "G0"
+				bv.logger.Printf("✅ [GOV-PROOF] G0 proof generated: TXID=%s, ExecMBI=%d, Complete=%v",
+					g0Proof.TXID, g0Proof.ExecMBI, g0Proof.G0ProofComplete)
+
+				if govRequest.KeyPage != "" {
+					g1ProofWrapper, g1Err := bv.governanceProofGen.GenerateG1(ctx, govRequest)
+					if g1Err != nil {
+						bv.logger.Printf("⚠️ [GOV-PROOF] G1 proof generation failed: %v", g1Err)
+					} else if g1ProofWrapper != nil && g1ProofWrapper.G1 != nil {
+						g1Proof = g1ProofWrapper.G1
+						governanceLevel = "G1"
+						bv.logger.Printf("✅ [GOV-PROOF] G1 proof generated: ThresholdSatisfied=%v, UniqueKeys=%d, Complete=%v",
+							g1Proof.ThresholdSatisfied, g1Proof.UniqueValidKeys, g1Proof.G1ProofComplete)
+
+						g2ProofWrapper, g2Err := bv.governanceProofGen.GenerateG2(ctx, govRequest)
+						if g2Err != nil {
+							bv.logger.Printf("⚠️ [GOV-PROOF] G2 proof generation failed: %v", g2Err)
+						} else if g2ProofWrapper != nil && g2ProofWrapper.G2 != nil {
+							g2Proof = g2ProofWrapper.G2
+							governanceLevel = "G2"
+							bv.logger.Printf("✅ [GOV-PROOF] G2 proof generated: PayloadVerified=%v, EffectVerified=%v, Complete=%v",
+								g2Proof.PayloadVerified, g2Proof.EffectVerified, g2Proof.G2ProofComplete)
+						}
 					}
+				} else {
+					bv.logger.Printf("⚠️ [GOV-PROOF] Skipping G1/G2 proofs - no key page specified in governance data")
 				}
+			}
+		} else {
+			if liteClientProof == nil {
+				bv.logger.Printf("⚠️ [GOV-PROOF] Skipping G0/G1/G2 proofs - L1-L4 proof not available (on_cadence flow)")
+			}
+			if bv.governanceProofGen == nil {
+				bv.logger.Printf("⚠️ [GOV-PROOF] Governance proof generator not configured")
+			}
+		}
+
+		// Plumb governance proofs + authority URLs onto certenProof so the
+		// EVM submission path (pkg/execution/ethereum_contracts.go::
+		// buildComprehensiveProof) sees identical inputs and recomputes the
+		// SAME A+++ messageHash this validator is about to sign. Both sides
+		// call contracts.BuildV6_1PreExecBundleFromIntent with this proof.
+		certenProof.G0Result = g0Proof
+		certenProof.G1Result = g1Proof
+		certenProof.G2Result = g2Proof
+		certenProof.KeypageURL = resolvedKeyPageURL
+		certenProof.KeybookURL = resolvedKeyBookURL
+
+		// V6.1 A+++ BLS signing: sign the messageHash that CertenAnchorV6_1
+		// will recompute and verify. Pre-V6.1 this signed []byte(opID),
+		// which is why every TX2 reverted with "BLS signature verification
+		// failed" — the contract checked a chain-bound 6-field hash that
+		// committed exec, opID, validatorSetRoot, AND a 10-field A+++ govRoot.
+		if blsSignature == "" {
+			sig, err := signV6_1PreExecBLS(bv.logger, certenIntent, certenProof)
+			if err != nil {
+				bv.logger.Printf("⚠️ [BLS-SIG-V6.1] %v", err)
 			} else {
-				bv.logger.Printf("⚠️ [BLS-SIG] BLS key manager not initialized")
+				blsSignature = sig
+				bv.logger.Printf("🔐 [BLS-SIG-V6.1] Generated A+++ BLS signature for intent %s (gov=%s)",
+					certenIntent.IntentID, governanceLevel)
 			}
 		}
 	} else {
@@ -859,100 +954,9 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 		}
 		liteClientProof = nil
 	}
-
-	// ============================================================================
-	// GOVERNANCE PROOF GENERATION (G0/G1/G2)
-	// Per CERTEN spec v3-governance-kpsw-exec-4.0:
-	// - G0/G1/G2 proofs are generated AFTER L1-L4 lite client proof completes
-	// - L1-L4 provides the cryptographic foundation that the transaction EXISTS
-	// - G0 extracts TXID, EXEC_MBI from the PROVEN transaction
-	// - G1 validates key page authority AT execution time
-	// - G2 verifies Accumulate intent payload authenticity and effect binding
-	// NOTE: G2 is about the Accumulate intent, NOT external chain execution
-	// ============================================================================
-	var g0Proof *proof.G0Result
-	var g1Proof *proof.G1Result
-	var g2Proof *proof.G2Result
-	var governanceLevel string
-
-	// Only generate governance proofs if L1-L4 completed (liteClientProof != nil)
-	// and we have a governance proof generator configured
-	if liteClientProof != nil && bv.governanceProofGen != nil {
-		bv.logger.Printf("🔗 [GOV-PROOF] L1-L4 proof complete, generating G0/G1/G2 governance proofs for intent %s",
-			certenIntent.IntentID)
-
-		// Build governance proof request from intent data
-		// For G1+ proofs, we need the actual keypage URL, not the keybook URL
-		// Validate and resolve keypage URL to ensure it follows Accumulate conventions
-		// (keypages must end with /N where N is a number, e.g., /book/1, not /book/page)
-		keyPageURL, keyPageErr := resolveKeyPageURL(
-			governanceData.Authorization.RequiredKeyPage,
-			governanceData.Authorization.RequiredKeyBook,
-			bv.logger,
-		)
-		if keyPageErr != nil {
-			bv.logger.Printf("⚠️ [GOV-PROOF] Failed to resolve keypage URL: %v", keyPageErr)
-			// Continue without governance proofs if keypage cannot be resolved
-		}
-		govRequest := &proof.GovernanceRequest{
-			AccountURL:      certenIntent.AccountURL,
-			TransactionHash: certenIntent.TransactionHash,
-			KeyPage:         keyPageURL, // Key page URL for G1 authority validation
-			Chain:           "main",
-		}
-
-		// Generate G0 proof (Inclusion & Finality)
-		// Uses L1-L4 artifacts as cryptographic foundation
-		g0ProofWrapper, g0Err := bv.governanceProofGen.GenerateG0(ctx, govRequest)
-		if g0Err != nil {
-			bv.logger.Printf("⚠️ [GOV-PROOF] G0 proof generation failed: %v", g0Err)
-			// Continue without G0 - governance proofs enhance but are not blocking
-		} else if g0ProofWrapper != nil && g0ProofWrapper.G0 != nil {
-			g0Proof = g0ProofWrapper.G0
-			governanceLevel = "G0"
-			bv.logger.Printf("✅ [GOV-PROOF] G0 proof generated: TXID=%s, ExecMBI=%d, Complete=%v",
-				g0Proof.TXID, g0Proof.ExecMBI, g0Proof.G0ProofComplete)
-
-			// Generate G1 proof (Authority Validated)
-			// Uses G0 artifacts + validates key page authority
-			// Requires key page to be specified
-			if govRequest.KeyPage != "" {
-				g1ProofWrapper, g1Err := bv.governanceProofGen.GenerateG1(ctx, govRequest)
-				if g1Err != nil {
-					bv.logger.Printf("⚠️ [GOV-PROOF] G1 proof generation failed: %v", g1Err)
-					// Continue with G0 only
-				} else if g1ProofWrapper != nil && g1ProofWrapper.G1 != nil {
-					g1Proof = g1ProofWrapper.G1
-					governanceLevel = "G1"
-					bv.logger.Printf("✅ [GOV-PROOF] G1 proof generated: ThresholdSatisfied=%v, UniqueKeys=%d, Complete=%v",
-						g1Proof.ThresholdSatisfied, g1Proof.UniqueValidKeys, g1Proof.G1ProofComplete)
-
-					// Generate G2 proof (Outcome Binding)
-					// Uses G1 artifacts + verifies Accumulate intent payload and effect
-					// NOTE: This is about the Accumulate intent authorship, NOT external execution
-					g2ProofWrapper, g2Err := bv.governanceProofGen.GenerateG2(ctx, govRequest)
-					if g2Err != nil {
-						bv.logger.Printf("⚠️ [GOV-PROOF] G2 proof generation failed: %v", g2Err)
-						// Continue with G1 only
-					} else if g2ProofWrapper != nil && g2ProofWrapper.G2 != nil {
-						g2Proof = g2ProofWrapper.G2
-						governanceLevel = "G2"
-						bv.logger.Printf("✅ [GOV-PROOF] G2 proof generated: PayloadVerified=%v, EffectVerified=%v, Complete=%v",
-							g2Proof.PayloadVerified, g2Proof.EffectVerified, g2Proof.G2ProofComplete)
-					}
-				}
-			} else {
-				bv.logger.Printf("⚠️ [GOV-PROOF] Skipping G1/G2 proofs - no key page specified in governance data")
-			}
-		}
-	} else {
-		if liteClientProof == nil {
-			bv.logger.Printf("⚠️ [GOV-PROOF] Skipping G0/G1/G2 proofs - L1-L4 proof not available (on_cadence flow)")
-		}
-		if bv.governanceProofGen == nil {
-			bv.logger.Printf("⚠️ [GOV-PROOF] Governance proof generator not configured")
-		}
-	}
+	// Suppress "declared and not used" if the on_cadence branch left these zero.
+	_ = resolvedKeyPageURL
+	_ = resolvedKeyBookURL
 
 	// Create builder inputs STRICTLY from canonical sources
 	builderInputs := BuilderInputs{

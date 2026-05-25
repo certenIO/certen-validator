@@ -1218,14 +1218,25 @@ func (ecm *EthereumContractManager) buildComprehensiveProof(
 		log.Printf("⚠️ [CRITICAL-001/003] No executionCommitment available")
 	}
 
-	// EVM-NEW-001 step 6 / CRYPTO-005 — Phase 2 of the BLS proof generation.
-	// Now that executionCommitment is available, compute the chain-bound
-	// messageHash for the EVM verifier and generate the BN254 Groth16 proof.
-	// Formula factored into computeEvmMessageHashV6 so the wire bytes can be
-	// pinned by a unit test against CertenAnchorV6._verifyBLSProof.
-	evmMessageHash := ecm.computeEvmMessageHashV6(anchorId, execCommitment)
-	log.Printf("🔗 [EVM-BLS-V6] Chain-bound messageHash: %x (chainId=%d, anchorId=%x, exec=%x)",
-		evmMessageHash[:8], ecm.config.ChainID, anchorId[:8], execCommitment[:8])
+	// V6.1 A+++ messageHash — 6-field abi.encode binding under the v1:pre
+	// domain. MUST byte-match what the BFT signer at
+	// pkg/consensus/v6_1_signing.go produced; both sides call
+	// contracts.ComputeEvmMessageHashV6_1_Pre with primitives derived from
+	// the SAME certenProof object.
+	opIDBytes32 := contracts.DeriveOperationIDBytes32FromString(ecm.safeOperationID(certenIntent))
+	setRoot, setRootErr := contracts.GetV6_1ValidatorSetRoot()
+	if setRootErr != nil {
+		log.Printf("⚠️ [EVM-BLS-V6.1] validator-set root: %v (signing will not verify against contract)", setRootErr)
+	}
+	evmMessageHash := contracts.ComputeEvmMessageHashV6_1_Pre(
+		ecm.config.ChainID,
+		anchorId,
+		execCommitment,
+		opIDBytes32,
+		setRoot,
+	)
+	log.Printf("🔗 [EVM-BLS-V6.1] A+++ messageHash: %x (chainId=%d, anchorId=%x, exec=%x, opID=%x, setRoot=%x)",
+		evmMessageHash[:8], ecm.config.ChainID, anchorId[:8], execCommitment[:8], opIDBytes32[:8], setRoot[:8])
 
 	zkProofBytes, _ := ecm.generateBLSZKProof(blsSignatureBytes, evmMessageHash, signedVotingPower, totalVotingPower)
 	blsProof.AggregateSignature = zkProofBytes
@@ -1860,10 +1871,14 @@ func (ecm *EthereumContractManager) computeV6CommitmentBundle(
 		copy(crossCommitment[:], certenProof.LiteClientProof.BPTRoot[:32])
 	}
 
-	var govRoot [32]byte
-	if len(blsSignatureBytes) >= 32 {
-		copy(govRoot[:], crypto.Keccak256(blsSignatureBytes)[:32])
-	}
+	// V6.1 A+++ govRoot: Accumulate Total State Binding over L1-L4 + G0/G1/G2 +
+	// keypage/keybook URLs + operationID. Pre-V6.1 set this to
+	// keccak256(blsSignatureBytes) which was a circular shortcut — the BLS
+	// sig was supposed to BE OVER a hash that included govRoot, so chaining
+	// them as govRoot=H(sig) made signer and verifier compute different
+	// values and every TX2 reverted with "BLS signature verification failed".
+	// Now derived purely from intent + proof, no BLS-sig dependency.
+	govRoot := ecm.computeV6_1AccumulateGovRoot(certenIntent, certenProof)
 
 	// executionCommitment — prefer user-signed payload, fall back to leg compute.
 	execCommitment := ecm.extractExecutionCommitment(certenIntent, certenProof)
@@ -1976,11 +1991,58 @@ func (ecm *EthereumContractManager) extractExecutionCommitment(
 // sites untouched while moving the derivation to V6.
 func (ecm *EthereumContractManager) generateAnchorID(certenIntent *intent.CertenIntent, certenProof *proof.CertenProof) [32]byte {
 	bundle := ecm.computeV6CommitmentBundle(certenIntent, certenProof)
-	bundleID := ecm.deriveV6BundleID(bundle.AdiURLHash, bundle.Commitments, bundle.AccumulateBlockHeight)
+	// V6.1 hard-flip: bundleId commits operationID under the v1.1 domain tag.
+	// The V6.1 anchor contract's createAnchor recomputes this and reverts on
+	// mismatch — same logic as V6, just with operationID added to the preimage.
+	opIDBytes32 := contracts.DeriveOperationIDBytes32FromString(ecm.safeOperationID(certenIntent))
+	bundleID := ecm.deriveV6_1BundleID(bundle.AdiURLHash, bundle.Commitments, opIDBytes32, bundle.AccumulateBlockHeight)
 
-	log.Printf("🔑 [BUNDLE-ID] V6 bundleId: %x (intent=%s chainId=%d height=%d)",
-		bundleID[:8], certenIntent.IntentID, ecm.config.ChainID, bundle.AccumulateBlockHeight)
+	log.Printf("🔑 [BUNDLE-ID-V6.1] bundleId: %x (intent=%s chainId=%d height=%d opID=%x)",
+		bundleID[:8], certenIntent.IntentID, ecm.config.ChainID, bundle.AccumulateBlockHeight, opIDBytes32[:8])
 	return bundleID
+}
+
+// safeOperationID wraps certenIntent.OperationID() with a "" fallback.
+// Used by V6.1 derivations where a missing opID is treated as zero-bytes32
+// downstream (the contract then rejects createAnchor with the proper error).
+func (ecm *EthereumContractManager) safeOperationID(certenIntent *intent.CertenIntent) string {
+	if certenIntent == nil {
+		return ""
+	}
+	s, err := certenIntent.OperationID()
+	if err != nil {
+		return ""
+	}
+	return s
+}
+
+// computeV6_1AccumulateGovRoot is the A+++ govRoot derivation used at
+// EVM-submission time. MUST byte-match the value the BFT signer computed
+// (pkg/consensus/v6_1_signing.go::buildV6_1InputsFromIntent → GovRootInputs).
+// Both sides derive primitives from the SAME certenProof object (G0/G1/G2 are
+// plumbed onto certenProof by the BFT signer before signing).
+func (ecm *EthereumContractManager) computeV6_1AccumulateGovRoot(
+	certenIntent *intent.CertenIntent,
+	certenProof *proof.CertenProof,
+) [32]byte {
+	opIDBytes32 := contracts.DeriveOperationIDBytes32FromString(ecm.safeOperationID(certenIntent))
+	gb := contracts.NewAccumulateGovRootInputsBuilder().
+		SetOperationIDBytes32(opIDBytes32)
+	if certenProof != nil && certenProof.LiteClientProof != nil {
+		lc := certenProof.LiteClientProof
+		gb.SetL1AccountHash(lc.AccountHash).
+			SetL2BPTRoot(lc.BPTRoot).
+			SetL3BlockHash(lc.BlockHash).
+			SetL4ConsensusProofFromJSON(lc.ConsensusProof)
+	}
+	if certenProof != nil {
+		gb.SetG0FromJSON(certenProof.G0Result).
+			SetG1FromJSON(certenProof.G1Result).
+			SetG2FromJSON(certenProof.G2Result).
+			SetKeypageURL(certenProof.KeypageURL).
+			SetKeybookURL(certenProof.KeybookURL)
+	}
+	return contracts.ComputeAccumulateGovRoot(gb.Build())
 }
 
 // deriveV6BundleID is the wire-level keccak that must byte-match
