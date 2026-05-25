@@ -267,12 +267,12 @@ type l2ChainDef struct {
 // orchestrator can observe transactions and write back proofs on any target chain.
 func registerL2EVMStrategies(registry *Registry, cfg *RegistryConfig, knownAliases map[int64][]string) error {
 	l2Chains := []l2ChainDef{
-		{421614, "arbitrum-sepolia", "ARBITRUM_SEPOLIA_RPC_URL", "ARBITRUM_SEPOLIA_ANCHORV4_ADDRESS", "0x0518ABBA8D56cC3369b3fcB826313AB1e4702f35", 2},
-		{11155420, "optimism-sepolia", "OPTIMISM_SEPOLIA_RPC_URL", "OPTIMISM_SEPOLIA_ANCHORV4_ADDRESS", "0x0518ABBA8D56cC3369b3fcB826313AB1e4702f35", 2},
-		{84532, "base-sepolia", "BASE_SEPOLIA_RPC_URL", "BASE_SEPOLIA_ANCHORV4_ADDRESS", "0x52E8e8E5d5EE35ED52BA6B7BB2Cb2dc2D2b2c952", 2},
-		{80002, "polygon-amoy", "POLYGON_AMOY_RPC_URL", "POLYGON_AMOY_ANCHORV4_ADDRESS", "0x52E8e8E5d5EE35ED52BA6B7BB2Cb2dc2D2b2c952", 2},
-		{97, "bsc-testnet", "BSC_TESTNET_RPC_URL", "BSC_TESTNET_ANCHORV4_ADDRESS", "0x52E8e8E5d5EE35ED52BA6B7BB2Cb2dc2D2b2c952", 2},
-		{1287, "moonbase-alpha", "MOONBASE_ALPHA_RPC_URL", "MOONBASE_ALPHA_ANCHORV4_ADDRESS", "0x52E8e8E5d5EE35ED52BA6B7BB2Cb2dc2D2b2c952", 2},
+		{421614, "arbitrum-sepolia", "ARBITRUM_SEPOLIA_RPC_URL", "ARBITRUM_SEPOLIA_ANCHORV4_ADDRESS", "0xD2f19FfF59d9eADA39cf5a3737914Aa1F6B4ca12", 2},
+		{11155420, "optimism-sepolia", "OPTIMISM_SEPOLIA_RPC_URL", "OPTIMISM_SEPOLIA_ANCHORV4_ADDRESS", "0xA8CB329e6867296084f87Bf0bB800E44932feac7", 2},
+		{84532, "base-sepolia", "BASE_SEPOLIA_RPC_URL", "BASE_SEPOLIA_ANCHORV4_ADDRESS", "0x7a8c5DC01C2d2Ba498F76832dBcbf0Fe2f69a6C3", 2},
+		{80002, "polygon-amoy", "POLYGON_AMOY_RPC_URL", "POLYGON_AMOY_ANCHORV4_ADDRESS", "0x7a8c5DC01C2d2Ba498F76832dBcbf0Fe2f69a6C3", 2},
+		{97, "bsc-testnet", "BSC_TESTNET_RPC_URL", "BSC_TESTNET_ANCHORV4_ADDRESS", "0x3E7b37a517dec735e06126781A5D01d73d3c26D6", 2},
+		{1287, "moonbase-alpha", "MOONBASE_ALPHA_RPC_URL", "MOONBASE_ALPHA_ANCHORV4_ADDRESS", "0x7a8c5DC01C2d2Ba498F76832dBcbf0Fe2f69a6C3", 2},
 		// TRON Shasta - EVM-compatible via /jsonrpc for observation; writes use native HTTP API in tron_client.go
 		{2494104990, "tron-shasta", "TRON_SHASTA_RPC_URL", "TRON_SHASTA_ANCHORV4_ADDRESS", "0xca04231da28aab992fdffd3c9a7f8ddcd1f26027", 1},
 	}
@@ -288,7 +288,17 @@ func registerL2EVMStrategies(registry *Registry, cfg *RegistryConfig, knownAlias
 			continue
 		}
 
-		anchorAddr := os.Getenv(l2.anchorEnvVar)
+		// Resolve anchor address with V6 → V5 → V4 fallback so the watcher
+		// observes the newest anchor on each chain without forcing operators
+		// to rename env vars in lockstep with contract redeploys.
+		chainPrefix := l2.anchorEnvVar[:len(l2.anchorEnvVar)-len("_ANCHORV4_ADDRESS")]
+		anchorAddr := os.Getenv(chainPrefix + "_ANCHORV6_ADDRESS")
+		if anchorAddr == "" {
+			anchorAddr = os.Getenv(chainPrefix + "_ANCHORV5_ADDRESS")
+		}
+		if anchorAddr == "" {
+			anchorAddr = os.Getenv(l2.anchorEnvVar)
+		}
 		if anchorAddr == "" {
 			anchorAddr = l2.anchorDefault
 		}
