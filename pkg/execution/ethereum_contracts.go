@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -1984,6 +1985,8 @@ func (ecm *EthereumContractManager) generateAnchorID(certenIntent *intent.Certen
 
 // deriveV6BundleID is the wire-level keccak that must byte-match
 // CertenAnchorV6.createAnchor's `require(bundleId == ...)` check.
+//
+// V6.1 supersedes this — see deriveV6_1BundleID below. Kept for rollout window.
 func (ecm *EthereumContractManager) deriveV6BundleID(
 	adiURLHash [32]byte,
 	commitments contracts.CommitmentData,
@@ -2002,6 +2005,40 @@ func (ecm *EthereumContractManager) deriveV6BundleID(
 		commitments.CrossChainCommitment[:],
 		commitments.GovernanceRoot[:],
 		commitments.ExecutionCommitment[:],
+		heightBytes32,
+	)
+	var bundleID [32]byte
+	copy(bundleID[:], digest)
+	return bundleID
+}
+
+// deriveV6_1BundleID is the V6.1 bundleId derivation. Adds operationID as a
+// committed field so the bundleId is a 1:1 function of (chain, account,
+// intent payload, runtime params, height). Must byte-match
+// CertenAnchorV6_1.createAnchor's require check on
+//   keccak256(abi.encodePacked(
+//     "certen:bundleid:v1.1", chainId, adiURLHash, op, cc, gov, exec,
+//     operationID, height))
+func (ecm *EthereumContractManager) deriveV6_1BundleID(
+	adiURLHash [32]byte,
+	commitments contracts.CommitmentData,
+	operationID [32]byte,
+	accumulateBlockHeight uint64,
+) [32]byte {
+	chainIDBytes32 := make([]byte, 32)
+	big.NewInt(ecm.config.ChainID).FillBytes(chainIDBytes32)
+	heightBytes32 := make([]byte, 32)
+	new(big.Int).SetUint64(accumulateBlockHeight).FillBytes(heightBytes32)
+
+	digest := crypto.Keccak256(
+		[]byte("certen:bundleid:v1.1"),
+		chainIDBytes32,
+		adiURLHash[:],
+		commitments.OperationCommitment[:],
+		commitments.CrossChainCommitment[:],
+		commitments.GovernanceRoot[:],
+		commitments.ExecutionCommitment[:],
+		operationID[:],
 		heightBytes32,
 	)
 	var bundleID [32]byte
@@ -2080,14 +2117,14 @@ func (ecm *EthereumContractManager) GetContractConfig() *CertenContractConfig {
 	return ecm.config
 }
 
-// computeEvmMessageHashV6 is the EVM-side BLS messageHash binding (EVM-NEW-001
-// step 6 / CRYPTO-005). The on-chain CertenAnchorV6._verifyBLSProof recomputes
-// the same hash; the V6 contract rejects any proof whose MessageHash field
-// doesn't match. The off-chain ZK circuit (BLSSignatureCircuitV2) also
-// constrains its in-circuit MessageHash to this exact value via in-circuit
-// MapToG1, so the formula is the single point of truth on both sides.
+// computeEvmMessageHashV6 is the V6 EVM-side BLS messageHash binding
+// (EVM-NEW-001 step 6 / CRYPTO-005). It used abi.encodePacked over 4 fields.
 //
-// Wire format:
+// V6.1 (A++) supersedes this — see computeEvmMessageHashV6_1 below. This
+// function is kept for the V6→V6.1 rollout transition; once every chain is on
+// V6.1 it can be deleted.
+//
+// V6 wire format:
 //   keccak256(abi.encodePacked(
 //     "certen:bls:v1",
 //     DEPLOYMENT_CHAIN_ID,        // uint256, 32 bytes big-endian
@@ -2109,6 +2146,163 @@ func (ecm *EthereumContractManager) computeEvmMessageHashV6(
 	var msgHash [32]byte
 	copy(msgHash[:], digest)
 	return msgHash
+}
+
+// computeEvmMessageHashV6_1 is the V6.1 A++ messageHash binding. Six fields
+// committed under a versioned domain tag, encoded with length-prefixed
+// abi.encode (not packed). The on-chain CertenAnchorV6_1._verifyBLSProof
+// recomputes the SAME hash and rejects any proof whose MessageHash field
+// doesn't match. The off-chain ZK circuit consumes this as a public input.
+//
+// Wire format (abi.encode == 32-byte slots, no length-or-type ambiguity):
+//   keccak256(abi.encode(
+//     bytes32("certen:bls:v1:pre"),   // domain — different from Phase 8 ":post"
+//     uint256(DEPLOYMENT_CHAIN_ID),    // cross-chain replay defeat
+//     anchorId,                        // bytes32 — V6.1 commitment+opID bundleId
+//     executionCommitment,             // bytes32 — explicit value-moving binding
+//     operationID,                     // bytes32 — 4-blob intent hash on Accumulate
+//     validatorSetRoot                 // bytes32 — quorum-snapshot binding
+//   ))
+//
+// All six slots are 32 bytes. Total preimage: 192 bytes.
+//
+// This MUST match CertenAnchorV6_1.sol::_verifyBLSProof byte-for-byte.
+func (ecm *EthereumContractManager) computeEvmMessageHashV6_1(
+	anchorId [32]byte,
+	executionCommitment [32]byte,
+	operationID [32]byte,
+	validatorSetRoot [32]byte,
+) [32]byte {
+	// Domain tag: bytes32 left-aligned with the literal "certen:bls:v1:pre".
+	// "certen:bls:v1:pre" is 17 ASCII bytes; Solidity bytes32(string) pads
+	// with zeros on the RIGHT (least-significant bytes). We do the same.
+	var domain [32]byte
+	copy(domain[:], []byte("certen:bls:v1:pre"))
+
+	// uint256 chainId in 32-byte big-endian (matches Solidity's abi.encode of uint256).
+	var chainIDBE [32]byte
+	big.NewInt(ecm.config.ChainID).FillBytes(chainIDBE[:])
+
+	// abi.encode packs each argument into a 32-byte word for value types.
+	// For bytes32 and uint256 there's no length prefix; just concatenate slots.
+	preimage := make([]byte, 0, 32*6)
+	preimage = append(preimage, domain[:]...)
+	preimage = append(preimage, chainIDBE[:]...)
+	preimage = append(preimage, anchorId[:]...)
+	preimage = append(preimage, executionCommitment[:]...)
+	preimage = append(preimage, operationID[:]...)
+	preimage = append(preimage, validatorSetRoot[:]...)
+
+	var msgHash [32]byte
+	copy(msgHash[:], crypto.Keccak256(preimage))
+	return msgHash
+}
+
+// computeValidatorSetRootV6_1 produces the same validator-set commitment that
+// CertenAnchorV6_1._recomputeValidatorSetRoot() stores in
+// currentValidatorSetRoot. Off-chain callers use this to (a) verify that what
+// they're about to sign agrees with the on-chain state, and (b) embed the
+// root into messageHash_pre so any change to the set invalidates the signature.
+//
+// Wire format:
+//   keccak256(abi.encode(
+//     address[] sortedAddresses,      // sorted ASCENDING by uint160(addr)
+//     uint256[] sortedVotingPowers,   // matched to sortedAddresses by index
+//     uint256(thresholdNumerator),
+//     uint256(thresholdDenominator)
+//   ))
+//
+// abi.encode of dynamic arrays uses head-tail layout per the Solidity ABI:
+//   - 4 head slots: offset to addrs (32B), offset to powers (32B),
+//     thresholdNum (32B), thresholdDen (32B)
+//   - Then for each dynamic array: a length slot (32B) followed by the data
+//
+// Inputs must be PRE-SORTED by uint160(addr) ascending. The contract sorts
+// at recompute time; we require the caller to sort here too, so this function
+// is a pure hashing primitive (no surprise reordering).
+func ComputeValidatorSetRootV6_1(
+	sortedAddrs []common.Address,
+	sortedVotingPowers []*big.Int,
+	thresholdNumerator *big.Int,
+	thresholdDenominator *big.Int,
+) ([32]byte, error) {
+	if len(sortedAddrs) != len(sortedVotingPowers) {
+		return [32]byte{}, fmt.Errorf("sortedAddrs/sortedVotingPowers length mismatch: %d vs %d",
+			len(sortedAddrs), len(sortedVotingPowers))
+	}
+
+	// Build the ABI dynamically: encode(address[], uint256[], uint256, uint256).
+	addrArrTy, err := abi.NewType("address[]", "", nil)
+	if err != nil {
+		return [32]byte{}, fmt.Errorf("address[] abi.NewType: %w", err)
+	}
+	u256ArrTy, err := abi.NewType("uint256[]", "", nil)
+	if err != nil {
+		return [32]byte{}, fmt.Errorf("uint256[] abi.NewType: %w", err)
+	}
+	u256Ty, err := abi.NewType("uint256", "", nil)
+	if err != nil {
+		return [32]byte{}, fmt.Errorf("uint256 abi.NewType: %w", err)
+	}
+
+	args := abi.Arguments{
+		{Type: addrArrTy},
+		{Type: u256ArrTy},
+		{Type: u256Ty},
+		{Type: u256Ty},
+	}
+
+	// Copy inputs into types abi.Pack expects.
+	addrsCopy := make([]common.Address, len(sortedAddrs))
+	copy(addrsCopy, sortedAddrs)
+	powersCopy := make([]*big.Int, len(sortedVotingPowers))
+	for i, p := range sortedVotingPowers {
+		powersCopy[i] = new(big.Int).Set(p)
+	}
+
+	encoded, err := args.Pack(
+		addrsCopy,
+		powersCopy,
+		new(big.Int).Set(thresholdNumerator),
+		new(big.Int).Set(thresholdDenominator),
+	)
+	if err != nil {
+		return [32]byte{}, fmt.Errorf("abi pack validator set root: %w", err)
+	}
+
+	var root [32]byte
+	copy(root[:], crypto.Keccak256(encoded))
+	return root, nil
+}
+
+// SortValidatorsForSetRoot sorts addresses ascending by uint160 and reorders
+// the parallel votingPowers slice to match. Returns new slices (does not
+// mutate the inputs). Matches the contract's insertion sort.
+func SortValidatorsForSetRoot(
+	addrs []common.Address,
+	votingPowers []*big.Int,
+) ([]common.Address, []*big.Int) {
+	n := len(addrs)
+	sortedAddrs := make([]common.Address, n)
+	sortedPowers := make([]*big.Int, n)
+	copy(sortedAddrs, addrs)
+	for i, p := range votingPowers {
+		sortedPowers[i] = new(big.Int).Set(p)
+	}
+	// Insertion sort (same algo as Solidity; tiny N).
+	for i := 1; i < n; i++ {
+		keyA := sortedAddrs[i]
+		keyP := sortedPowers[i]
+		j := i
+		for j > 0 && new(big.Int).SetBytes(sortedAddrs[j-1].Bytes()).Cmp(new(big.Int).SetBytes(keyA.Bytes())) > 0 {
+			sortedAddrs[j] = sortedAddrs[j-1]
+			sortedPowers[j] = sortedPowers[j-1]
+			j--
+		}
+		sortedAddrs[j] = keyA
+		sortedPowers[j] = keyP
+	}
+	return sortedAddrs, sortedPowers
 }
 
 // v6MerkleProofForAdi packages the merkle tree root, the taggedAdi leaf, and
