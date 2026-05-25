@@ -126,7 +126,9 @@ REVIEW.md
 
 # Exceptions for the vendored accumulate-lite-client-2/liteclient/ project — its own
 # tracked files share names with our validator binaries (docker-compose.yml, txhash/)
-# but are legitimate source code in that sub-project.
+# but are legitimate source code in that sub-project. Narrow to *.go so that built
+# binaries (txhash.exe) and tmp artifacts (tmpclaude-*) stay ignored by the broader
+# rules above.
 !accumulate-lite-client-2/liteclient/docker-compose.yml
 !accumulate-lite-client-2/liteclient/proof/consolidated_governance-proof/cmd/txhash/
-!accumulate-lite-client-2/liteclient/proof/consolidated_governance-proof/cmd/txhash/**
+!accumulate-lite-client-2/liteclient/proof/consolidated_governance-proof/cmd/txhash/*.go
