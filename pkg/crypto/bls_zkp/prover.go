@@ -621,11 +621,18 @@ type solGroth16Proof struct {
 // Packing them as the 9 inputs of `encodeProof` and stripping the 4-byte
 // method selector therefore yields the exact bytes BLSZKVerifierV2 decodes.
 func (proof *BLSZKProof) ToSolidityCalldata() ([]byte, error) {
+	// G2 element B must be encoded in EIP-197 imag-then-real ordering for
+	// the on-chain BN254 pairing precompile (address 0x08). The proof
+	// struct stores B in gnark-native real-then-imag (A0=real, A1=imag);
+	// swap here at the serialization boundary so the bytes match what
+	// gnark.MarshalSolidity (and BLSZKVerifierV2Generated.verifyProof)
+	// expect. Without this swap, on-chain pairing fails with ProofInvalid
+	// even though the proof verifies locally.
 	proofTuple := solGroth16Proof{
 		A: [2]*big.Int{nonNilBI(proof.ProofA[0]), nonNilBI(proof.ProofA[1])},
 		B: [2][2]*big.Int{
-			{nonNilBI(proof.ProofB[0][0]), nonNilBI(proof.ProofB[0][1])},
-			{nonNilBI(proof.ProofB[1][0]), nonNilBI(proof.ProofB[1][1])},
+			{nonNilBI(proof.ProofB[0][1]), nonNilBI(proof.ProofB[0][0])}, // X.A1, X.A0
+			{nonNilBI(proof.ProofB[1][1]), nonNilBI(proof.ProofB[1][0])}, // Y.A1, Y.A0
 		},
 		C: [2]*big.Int{nonNilBI(proof.ProofC[0]), nonNilBI(proof.ProofC[1])},
 	}
@@ -799,18 +806,16 @@ func extractProofComponents(proof groth16.Proof) (*BLSZKProof, error) {
 	proofBN254.Krs.X.BigInt(proofCX)
 	proofBN254.Krs.Y.BigInt(proofCY)
 
-	// G2 element B must be encoded in EIP-197 imag-then-real ordering for
-	// the on-chain BN254 pairing precompile (address 0x08). gnark-crypto's
-	// native field layout is real-then-imag (A0=real, A1=imag) — feeding
-	// that directly to the precompile makes the pairing check fail
-	// (ProofInvalid). Swap here so ToSolidityCalldata's abi.encode produces
-	// the same byte layout gnark.MarshalSolidity does, which is what
-	// BLSZKVerifierV2Generated.verifyProof expects.
+	// Keep gnark-native real-then-imag (A0=real, A1=imag) here so the
+	// in-process gnark.Verify (VerifyProofLocally) round-trips the proof
+	// consistently. The EIP-197 imag-then-real swap required by the BN254
+	// pairing precompile is applied ONLY at the Solidity-serialization
+	// boundary (ToSolidityCalldata).
 	zkProof := &BLSZKProof{
 		ProofA: [2]*big.Int{proofAX, proofAY},
 		ProofB: [2][2]*big.Int{
-			{proofBX1, proofBX0}, // X.A1 (imag), X.A0 (real)
-			{proofBY1, proofBY0}, // Y.A1 (imag), Y.A0 (real)
+			{proofBX0, proofBX1},
+			{proofBY0, proofBY1},
 		},
 		ProofC: [2]*big.Int{proofCX, proofCY},
 	}
@@ -1186,11 +1191,16 @@ func (p *BLSZKProver) VerifyFromABIBytes(abiBytes []byte) (bool, error) {
 		return out
 	}
 
+	// Wire format encodes B in EIP-197 imag-then-real (set by
+	// ToSolidityCalldata). Swap back to gnark-native real-then-imag so
+	// reconstructProof can rebuild a gnark Proof that VerifyProofLocally
+	// accepts. Without this back-swap the in-process round-trip Verify
+	// rejects valid proofs and the validator submits empty proof bytes.
 	zkProof := &BLSZKProof{
 		ProofA: [2]*big.Int{readBI(v2OffProofAX), readBI(v2OffProofAY)},
 		ProofB: [2][2]*big.Int{
-			{readBI(v2OffProofBX0), readBI(v2OffProofBX1)},
-			{readBI(v2OffProofBY0), readBI(v2OffProofBY1)},
+			{readBI(v2OffProofBX1), readBI(v2OffProofBX0)}, // wire[imag, real] -> struct[real, imag]
+			{readBI(v2OffProofBY1), readBI(v2OffProofBY0)}, // wire[imag, real] -> struct[real, imag]
 		},
 		ProofC:               [2]*big.Int{readBI(v2OffProofCX), readBI(v2OffProofCY)},
 		Commitments:          [2]*big.Int{readBI(v2OffCommitmentX), readBI(v2OffCommitmentY)},

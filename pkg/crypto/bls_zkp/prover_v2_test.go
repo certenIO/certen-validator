@@ -145,10 +145,14 @@ func TestToSolidityCalldata_RoundTripFieldValues(t *testing.T) {
 	}{
 		{"proofA[0]", readBI(v2OffProofAX), zk.ProofA[0]},
 		{"proofA[1]", readBI(v2OffProofAY), zk.ProofA[1]},
-		{"proofB[0][0]", readBI(v2OffProofBX0), zk.ProofB[0][0]},
-		{"proofB[0][1]", readBI(v2OffProofBX1), zk.ProofB[0][1]},
-		{"proofB[1][0]", readBI(v2OffProofBY0), zk.ProofB[1][0]},
-		{"proofB[1][1]", readBI(v2OffProofBY1), zk.ProofB[1][1]},
+		// Wire format is EIP-197 imag-then-real (per ToSolidityCalldata
+		// swap), so the wire's first slot of B holds the struct's IMAG
+		// component (struct index [0][1]) and the wire's second slot
+		// holds the struct's REAL component (struct index [0][0]).
+		{"proofB[0][0] (wire imag) == struct[0][1]", readBI(v2OffProofBX0), zk.ProofB[0][1]},
+		{"proofB[0][1] (wire real) == struct[0][0]", readBI(v2OffProofBX1), zk.ProofB[0][0]},
+		{"proofB[1][0] (wire imag) == struct[1][1]", readBI(v2OffProofBY0), zk.ProofB[1][1]},
+		{"proofB[1][1] (wire real) == struct[1][0]", readBI(v2OffProofBY1), zk.ProofB[1][0]},
 		{"proofC[0]", readBI(v2OffProofCX), zk.ProofC[0]},
 		{"proofC[1]", readBI(v2OffProofCY), zk.ProofC[1]},
 		{"commitments[0]", readBI(v2OffCommitmentX), zk.Commitments[0]},
