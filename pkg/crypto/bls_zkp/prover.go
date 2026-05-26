@@ -799,11 +799,18 @@ func extractProofComponents(proof groth16.Proof) (*BLSZKProof, error) {
 	proofBN254.Krs.X.BigInt(proofCX)
 	proofBN254.Krs.Y.BigInt(proofCY)
 
+	// G2 element B must be encoded in EIP-197 imag-then-real ordering for
+	// the on-chain BN254 pairing precompile (address 0x08). gnark-crypto's
+	// native field layout is real-then-imag (A0=real, A1=imag) — feeding
+	// that directly to the precompile makes the pairing check fail
+	// (ProofInvalid). Swap here so ToSolidityCalldata's abi.encode produces
+	// the same byte layout gnark.MarshalSolidity does, which is what
+	// BLSZKVerifierV2Generated.verifyProof expects.
 	zkProof := &BLSZKProof{
 		ProofA: [2]*big.Int{proofAX, proofAY},
 		ProofB: [2][2]*big.Int{
-			{proofBX0, proofBX1},
-			{proofBY0, proofBY1},
+			{proofBX1, proofBX0}, // X.A1 (imag), X.A0 (real)
+			{proofBY1, proofBY0}, // Y.A1 (imag), Y.A0 (real)
 		},
 		ProofC: [2]*big.Int{proofCX, proofCY},
 	}
