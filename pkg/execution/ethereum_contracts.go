@@ -783,14 +783,18 @@ func (ecm *EthereumContractManager) ExecuteViaUserAccount(
 	}
 
 	// Fetch actual commitments from the anchor instead of re-computing.
-	// V6.1 hard-flip: use GetAnchorV6_1 (matches V6.1 struct layout with
-	// operationID field) instead of GetAnchorFull (V4 layout). Mixing them
-	// produces "abi: improperly encoded boolean value" because the extra
-	// operationID slot shifts every subsequent field by 32 bytes.
+	// V6.1 hard-flip: use the V4-generated GetAnchor (10 fields — calls the
+	// explicit getAnchor(bytes32) view function) rather than GetAnchorFull
+	// (15 fields via the auto-mapping accessor). V6.1's struct has an extra
+	// operationID slot that shifts subsequent fields in the mapping read but
+	// the explicit getAnchor function still returns the SAME 10-field
+	// signature as V4, so the V4-generated binding decodes V6.1 correctly
+	// via this path. (See pkg/execution/contracts/anchor_v4_generated.go
+	// for the binding; GetAnchor exists at the Caller level.)
 	var opCommitment, ccCommitment, govRoot [32]byte
 	var zeroHash [32]byte
 	for attempts := 0; attempts < 30; attempts++ {
-		anchorData, err := ecm.anchor.GetAnchorV6_1(ctx, bundleID)
+		anchorData, err := ecm.anchor.CertenAnchorV4Caller.GetAnchor(nil, bundleID)
 		if err != nil {
 			return "", fmt.Errorf("failed to fetch anchor for commitments: %w", err)
 		}
