@@ -82,6 +82,18 @@ type ValidatorBlockMetadata struct {
 	G2CanonicalJSON []byte
 	KeypageURL      string
 	KeybookURL      string
+
+	// ============ V6.1 A+++ ORIGINAL INTENT 4-BLOB SNAPSHOT ============
+	// The four blobs the BFT signer hashed to compute OperationID. The EVM
+	// submitter MUST reconstruct an intent.CertenIntent with byte-identical
+	// blobs so its OperationID() returns the same hex string the BFT signed.
+	// Without this, convertToLegacyIntent fabricates GovernanceData/
+	// ReplayData/IntentData blobs that differ from the originals — opID
+	// diverges, bundleId diverges, contract reverts (Sepolia test #2,
+	// 2026-05-26). CrossChainData is already plumbed above for executeWithGovernance.
+	IntentData     []byte
+	GovernanceData []byte
+	ReplayData     []byte
 }
 
 // BFTExecutionMetadata describes what CometBFT told us about the commit.

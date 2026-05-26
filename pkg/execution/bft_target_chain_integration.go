@@ -1282,6 +1282,28 @@ func (btce *BFTTargetChainExecutor) convertToLegacyIntent(intentID, transactionH
 		crossChainData = []byte(fmt.Sprintf(`{"protocol":"CERTEN","version":"1.0","legs":[{"chain":"ethereum","chainId":%d,"to":"%s","amountWei":"1"}]}`, chainID, anchorContractAddr))
 	}
 
+	// V6.1 A+++: prefer the ORIGINAL 4 blobs the BFT signer hashed when
+	// computing OperationID. Without these, the fabricated stubs below
+	// produce a DIFFERENT opID from what BFT signed → bundleId diverges →
+	// executeComprehensiveProof reverts (Sepolia test #2 root cause,
+	// 2026-05-26). Fallback stubs are kept for ancient pre-A+++ flows
+	// that don't plumb the originals.
+	intentData := certenProof.IntentData
+	if len(intentData) == 0 {
+		intentData = []byte(fmt.Sprintf(`{"intent_id":"%s","account_url":"%s","block_height":%d}`, intentID, accountURL, certenProof.BlockHeight))
+		btce.logger.Printf("⚠️ [CONVERT] No IntentData in proof, fabricating (opID will diverge from BFT)")
+	}
+	governanceData := certenProof.GovernanceData
+	if len(governanceData) == 0 {
+		governanceData = []byte(fmt.Sprintf(`{"organizationAdi":"%s","authorization":{"required_signers":["%s/book"]}}`, orgADI, orgADI))
+		btce.logger.Printf("⚠️ [CONVERT] No GovernanceData in proof, fabricating (opID will diverge from BFT)")
+	}
+	replayData := certenProof.ReplayData
+	if len(replayData) == 0 {
+		replayData = []byte(fmt.Sprintf(`{"nonce":"certen_bft_execution","intent_hash":"0x%s"}`, intentID))
+		btce.logger.Printf("⚠️ [CONVERT] No ReplayData in proof, fabricating (opID will diverge from BFT)")
+	}
+
 	// Create a minimal CertenIntent for contract integration
 	// IMPORTANT: CrossChainData must include "to" field for extractTargetParamsFromIntent
 	return &intent.CertenIntent{
@@ -1289,10 +1311,10 @@ func (btce *BFTTargetChainExecutor) convertToLegacyIntent(intentID, transactionH
 		TransactionHash: transactionHash,
 		AccountURL:      accountURL,
 		OrganizationADI: orgADI,
-		IntentData:      []byte(fmt.Sprintf(`{"intent_id":"%s","account_url":"%s","block_height":%d}`, intentID, accountURL, certenProof.BlockHeight)),
+		IntentData:      intentData,
 		CrossChainData:  crossChainData,
-		GovernanceData:  []byte(fmt.Sprintf(`{"organizationAdi":"%s","authorization":{"required_signers":["%s/book"]}}`, orgADI, orgADI)),
-		ReplayData:      []byte(fmt.Sprintf(`{"nonce":"certen_bft_execution","intent_hash":"0x%s"}`, intentID)),
+		GovernanceData:  governanceData,
+		ReplayData:      replayData,
 	}
 }
 

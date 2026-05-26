@@ -140,6 +140,11 @@ func (tcew *TargetChainExecutorWrapper) SubmitAnchorFromValidatorBlock(
         G2Result:   g2Result,
         KeypageURL: vb.KeypageURL,
         KeybookURL: vb.KeybookURL,
+        // V6.1 A+++ — original intent 4-blob snapshot so convertToLegacyIntent
+        // can rebuild an intent.CertenIntent whose OperationID() matches BFT's.
+        IntentData:     vb.IntentData,
+        GovernanceData: vb.GovernanceData,
+        ReplayData:     vb.ReplayData,
         // LiteClientProof with CompleteProof for Merkle proof extraction
         // CRITICAL: CompleteProof contains the full Merkle receipts (MainChainProof, BPTProof,
         // CombinedReceipt, etc.) which extractMerkleProofHashes() needs to build proofHashes[].

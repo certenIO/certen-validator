@@ -1107,6 +1107,17 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 		G2CanonicalJSON: g2JSON,
 		KeypageURL:      resolvedKeyPageURL,
 		KeybookURL:      resolvedKeyBookURL,
+
+		// V6.1 A+++ — original intent 4-blob snapshot. CrossChainData is
+		// already plumbed above for executeWithGovernance; the other three
+		// are required so the EVM submitter's intent.CertenIntent has
+		// byte-identical blobs and intent.OperationID() returns the same
+		// hex the BFT signer used. Without this, executeComprehensiveProof
+		// reverts because the contract recomputed bundleId from a
+		// different opID than what was signed.
+		IntentData:     certenIntent.IntentData,
+		GovernanceData: certenIntent.GovernanceData,
+		ReplayData:     certenIntent.ReplayData,
 	}
 
 	bftMeta := &verification.BFTExecutionMetadata{

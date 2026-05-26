@@ -86,6 +86,15 @@ type CertenProof struct {
 	// This must be passed through to ensure the correct target address (leg.To) is used,
 	// NOT the anchor contract address.
 	CrossChainData []byte `json:"cross_chain_data,omitempty"`
+
+	// V6.1 A+++ — original intent 4-blob snapshot. Required so
+	// pkg/execution/bft_target_chain_integration.go::convertToLegacyIntent
+	// can rebuild an intent.CertenIntent whose OperationID() matches what
+	// the BFT signer used. Without these, the reconstruction fabricates
+	// these blobs and opID diverges (Sepolia test #2 root cause, 2026-05-26).
+	IntentData     []byte `json:"intent_data,omitempty"`
+	GovernanceData []byte `json:"governance_data,omitempty"`
+	ReplayData     []byte `json:"replay_data,omitempty"`
 }
 
 // AccumulateAnchorData contains anchor reference data from Accumulate blockchain
