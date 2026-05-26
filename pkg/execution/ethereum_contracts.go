@@ -884,11 +884,18 @@ func (ecm *EthereumContractManager) buildAccountProof(
 	//   proof[1] = hash23             (sibling at level 1: sortedHash(taggedCC, taggedGov))
 	//   proof[2] = taggedExec         (sibling at level 2: the promoted 5th leaf)
 
-	// Fetch execution commitment from anchor on-chain
+	// Derive execution commitment directly from the user-signed CrossChainData
+	// instead of reading it back from the anchor contract. V6.1's auto-mapping
+	// accessor returns 15 fields (operationID shifted in after exec) which the
+	// V4-generated Anchor type misdecodes. V6.1's explicit getAnchor view
+	// doesn't include execCommitment at all. Since the user signed
+	// executionCommitment as part of the intent's executionPayload, the
+	// validator has it directly — and the V6.1 anchor's createAnchor already
+	// committed to that exact value on-chain (bundleId derives from it), so
+	// using the off-chain value is bit-equivalent to a clean on-chain read.
 	var execCommitment [32]byte
-	anchorData, err := ecm.anchor.GetAnchorFull(nil, bundleID)
-	if err == nil && anchorData != nil {
-		execCommitment = anchorData.ExecutionCommitment
+	if certenProof != nil && len(certenProof.CrossChainData) > 0 {
+		execCommitment = contracts.DeriveExecutionCommitmentFromCrossChainJSON(certenProof.CrossChainData)
 	}
 
 	// Domain-tag leaves (must match Solidity keccak256(abi.encodePacked("certen:TAG:", value)))
