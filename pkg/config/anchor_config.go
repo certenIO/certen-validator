@@ -1030,7 +1030,11 @@ func loadEVMChainsFromEnv() map[int64]*EVMChainConfig {
 			RPCTimeout:         Duration(30 * time.Second),
 			MaxConnections:     10,
 			MaxIdleConnections: 5,
-			AnchorV4Address:    getEnv("SEPOLIA_ANCHORV6_ADDRESS", getEnv("SEPOLIA_ANCHORV5_ADDRESS", getEnv("SEPOLIA_ANCHORV4_ADDRESS", "0x7Ff94194B1D18De3D5813690868B24006A6AeC2C"))),
+			// V6.1 A+++ binding takes precedence on Sepolia. Falls back through V6/V5/V4
+			// so an unset SEPOLIA_ANCHORV6_1_ADDRESS still resolves to a usable anchor
+			// during transition. Once all 7 chains are V6.1, the V6/V5/V4 fallbacks can
+			// be removed.
+			AnchorV4Address:    getEnv("SEPOLIA_ANCHORV6_1_ADDRESS", getEnv("SEPOLIA_ANCHORV6_ADDRESS", getEnv("SEPOLIA_ANCHORV5_ADDRESS", getEnv("SEPOLIA_ANCHORV4_ADDRESS", "0x7Ff94194B1D18De3D5813690868B24006A6AeC2C")))),
 			AnchorV3Address:    getEnv("SEPOLIA_ANCHORV3_ADDRESS", "0xEb17eBd351D2e040a0cB3026a3D04BEc182d8b98"),
 			BLSVerifierAddress: getEnv("SEPOLIA_BLS_VERIFIER_V2_ADAPTER", getEnv("SEPOLIA_BLSZKVERIFIER_ADDRESS", "0x8EEDa48f99709e90e30bE1510972b80163fd1aC7")),
 			AccountFactory:     getEnv("SEPOLIA_ACCOUNTFACTORY_V6_ADDRESS", getEnv("SEPOLIA_ACCOUNTFACTORY_ADDRESS", "0x81690a11b356E196A5caEF59792f1d2485Bde316")),
