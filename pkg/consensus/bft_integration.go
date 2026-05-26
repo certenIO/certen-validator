@@ -1089,7 +1089,19 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 		GovernanceRoot:        governanceRoot,
 		TransactionHash:       certenIntent.TransactionHash,
 		AccountURL:            certenIntent.AccountURL,
-		SourceBlockHeight:     blockHeight, // Accumulate block height, NOT CometBFT height
+		// V6.1 A+++: source block height MUST equal certenProof.BlockHeight,
+		// not the BFT workflow's `blockHeight` argument. The two differ by 1
+		// because the workflow runs at the block AFTER the intent was
+		// committed. BFT signing uses certenProof.BlockHeight, so the
+		// executor's reconstructed certenProof must read the same value
+		// or operationCommitment hash diverges → bundleId diverges → TX2
+		// reverts (Sepolia test #5 root cause, 2026-05-26).
+		SourceBlockHeight: func() uint64 {
+			if certenProof != nil && certenProof.BlockHeight > 0 {
+				return certenProof.BlockHeight
+			}
+			return blockHeight
+		}(),
 
 		// CRITICAL: Pass complete lite client proof for Merkle verification
 		// This enables extractMerkleProofHashes() to extract the actual Merkle proof path
