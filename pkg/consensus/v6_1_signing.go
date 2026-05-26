@@ -14,6 +14,7 @@ import (
 	"fmt"
 
 	"github.com/certen/independant-validator/pkg/crypto/bls"
+	"github.com/certen/independant-validator/pkg/crypto/bls_zkp"
 	"github.com/certen/independant-validator/pkg/execution/contracts"
 	"github.com/certen/independant-validator/pkg/proof"
 )
@@ -96,9 +97,18 @@ func signV6_1PreExecBLS(
 	if km == nil {
 		return "", fmt.Errorf("validator BLS key manager not initialized")
 	}
-	sig, err := km.SignWithDomain(msgHash[:], bls.DomainAttestation)
-	if err != nil {
-		return "", fmt.Errorf("BLS sign: %w", err)
+	sk := km.PrivateKey()
+	if sk == nil {
+		return "", fmt.Errorf("validator BLS private key not loaded")
+	}
+	// V6.1 A+++: sign using HashMessageToG1V2 so the resulting signature
+	// satisfies the BLSZKVerifierV2 circuit's pairing constraint. Using
+	// SignWithDomain produces a signature over a DIFFERENT G1 point
+	// (RFC-9380 ExpandMsgXmd hash-to-curve) and makes the V2 prover
+	// unsatisfiable (constraint #774716 was failing on Sepolia test #7).
+	sig := bls_zkp.SignV6_1PreExec(sk, msgHash)
+	if sig == nil {
+		return "", fmt.Errorf("V6.1 BLS sign returned nil")
 	}
 	return sig.Hex(), nil
 }

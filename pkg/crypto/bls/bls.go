@@ -255,6 +255,22 @@ func (sk *PrivateKey) SignWithDomain(message []byte, domain string) *Signature {
 	return sk.Sign(domainMsg)
 }
 
+// SignG1 signs a precomputed G1 point: sig = sk · H. Used by the V6.1 path
+// where the caller computes H = HashMessageToG1V2(messageHash) outside this
+// package (it lives in pkg/crypto/bls_zkp and avoiding the dep keeps this
+// file cycle-free). The on-chain BLSZKVerifierV2 SNARK recomputes the SAME
+// H during the pairing check, so a signature produced here is the only
+// kind the V2 prover can satisfy. The default Sign / SignWithDomain paths
+// use RFC-9380 ExpandMsgXmd which produces a different curve point and
+// causes constraint #774716 in the V2 circuit to be unsatisfiable.
+func (sk *PrivateKey) SignG1(h bls12381.G1Affine) *Signature {
+	var sig bls12381.G1Affine
+	var skBig big.Int
+	sk.scalar.BigInt(&skBig)
+	sig.ScalarMultiplication(&h, &skBig)
+	return &Signature{point: sig}
+}
+
 // =============================================================================
 // PUBLIC KEY METHODS
 // =============================================================================

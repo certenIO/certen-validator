@@ -172,6 +172,14 @@ func (km *KeyManager) SignWithDomain(message []byte, domain string) (*Signature,
 	return km.privateKey.SignWithDomain(message, domain), nil
 }
 
+// PrivateKey exposes the underlying *PrivateKey so callers that need the
+// V6.1 V2-circuit-compatible signing path (pkg/crypto/bls_zkp's
+// SignV6_1PreExec free function) can pass it in. Mid-tier callers should
+// prefer the SignWithDomain / Sign / SignG1 methods on the key directly.
+func (km *KeyManager) PrivateKey() *PrivateKey {
+	return km.privateKey
+}
+
 // =============================================================================
 // GLOBAL KEY MANAGEMENT - For use in main.go
 // =============================================================================
