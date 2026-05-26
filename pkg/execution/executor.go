@@ -145,16 +145,18 @@ func (tcew *TargetChainExecutorWrapper) SubmitAnchorFromValidatorBlock(
         IntentData:     vb.IntentData,
         GovernanceData: vb.GovernanceData,
         ReplayData:     vb.ReplayData,
-        // LiteClientProof with CompleteProof for Merkle proof extraction
+        // LiteClientProof with CompleteProof for Merkle proof extraction.
         // CRITICAL: CompleteProof contains the full Merkle receipts (MainChainProof, BPTProof,
         // CombinedReceipt, etc.) which extractMerkleProofHashes() needs to build proofHashes[].
-        // Without CompleteProof, the contract's merkleVerified check fails.
-        LiteClientProof: &proof.LiteClientProofData{
-            CompleteProof:   vb.LiteClientProof, // CRITICAL: Pass complete proof for Merkle verification
-            BPTRoot:         vb.BPTRoot,
-            ProofValid:      len(vb.BPTRoot) > 0 || vb.LiteClientProof != nil,
-            ValidationLevel: "complete_proof",
-        },
+        //
+        // V6.1 A+++: AccountHash, BlockHash, and ConsensusProof MUST be pulled
+        // through from CompleteProof so the EVM-side A+++ govRoot derivation
+        // (computeV6_1AccumulateGovRoot) reads non-zero L1/L3/L4 hashes.
+        // Pre-fix this rebuild only set BPTRoot, leaving AccountHash/BlockHash
+        // nil → L1/L3 slots in govRoot were zero on EVM but populated on BFT
+        // → govRoot diverged → executeComprehensiveProof reverted
+        // (Sepolia test #3 root cause, 2026-05-26).
+        LiteClientProof: buildLiteClientProofData(vb),
         // Verification status
         VerificationStatus: &proof.VerificationStatusData{
             OverallValid:      (len(vb.BPTRoot) > 0 || vb.LiteClientProof != nil) && len(vb.GovernanceRoot) > 0,
@@ -220,6 +222,37 @@ func (tcew *TargetChainExecutorWrapper) SubmitAnchorFromValidatorBlock(
         GovernanceBlockNumber:    result.GovernanceBlockNumber,
         AllTransactionsConfirmed: result.Success,
     }, nil
+}
+
+// buildLiteClientProofData rebuilds the LiteClientProofData for executor-side
+// certenProof, pulling AccountHash / BlockHash / ConsensusProof straight off
+// the CompleteProof that BFT committed. Required for V6.1 A+++ govRoot
+// consistency — the EVM-side derivation reads these fields and would compute
+// a different govRoot if they were left nil (which is what pre-fix Sepolia
+// test #3 hit on 2026-05-26).
+func buildLiteClientProofData(vb *verification.ValidatorBlockMetadata) *proof.LiteClientProofData {
+    out := &proof.LiteClientProofData{
+        CompleteProof:   vb.LiteClientProof,
+        BPTRoot:         vb.BPTRoot,
+        ProofValid:      len(vb.BPTRoot) > 0 || vb.LiteClientProof != nil,
+        ValidationLevel: "complete_proof",
+    }
+    if vb.LiteClientProof != nil {
+        out.AccountHash = vb.LiteClientProof.AccountHash
+        // BPTRoot from CompleteProof takes precedence when present — it's the
+        // BPT root the proof generator actually used, while vbMeta.BPTRoot
+        // may come from a different extraction path.
+        if len(vb.LiteClientProof.BPTRoot) > 0 {
+            out.BPTRoot = vb.LiteClientProof.BPTRoot
+        }
+        out.BlockHash = vb.LiteClientProof.BlockHash
+        // ConsensusProof is not a field on CompleteProof (it lives separately
+        // on LiteClientProofData and is populated by the proof adapter, not
+        // by the lite client). Both BFT and EVM sides read .ConsensusProof
+        // from LiteClientProofData; since the adapter currently doesn't set
+        // it, both sides see nil → L4 hash zero on both → matches.
+    }
+    return out
 }
 
 // =====================================
