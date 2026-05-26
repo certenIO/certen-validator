@@ -70,6 +70,26 @@ func signV6_1PreExecBLS(
 	if logger != nil {
 		logger.Printf("🔗 [BLS-SIG-V6.1] chainId=%d anchorId=0x%x govRoot=0x%x msgHash=0x%x setRoot=0x%x",
 			evmChainID, anchorId[:8], govRoot[:8], msgHash[:8], setRoot[:8])
+		// V6.1 diagnostic — emit every gov-root input + commitment primitive
+		// so divergence vs the EVM submission path (ethereum_contracts.go::
+		// computeV6_1AccumulateGovRoot) is directly identifiable.
+		logger.Printf("🧮 [BFT-GOV-INPUTS] opID=%x L1=%x L2=%x L3=%x L4=%x kp=%x kb=%x",
+			in.GovRootInputs.OperationID[:8],
+			in.GovRootInputs.L1AccountHash[:8],
+			in.GovRootInputs.L2BPTRoot[:8],
+			in.GovRootInputs.L3BlockHash[:8],
+			in.GovRootInputs.L4ConsensusProofH[:8],
+			in.GovRootInputs.KeypageURLHash[:8],
+			in.GovRootInputs.KeybookURLHash[:8],
+		)
+		logger.Printf("🧮 [BFT-PRIMITIVES] adi=%x op=%x cc=%x exec=%x opID=%x height=%d",
+			in.AdiURLHash[:8],
+			in.OperationCommitment[:8],
+			in.CrossChainCommitment[:8],
+			in.ExecutionCommitment[:8],
+			in.OperationID[:8],
+			in.AccumulateBlockHeight,
+		)
 	}
 
 	km := bls.GetValidatorBLSKey()

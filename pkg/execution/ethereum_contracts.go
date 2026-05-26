@@ -1253,6 +1253,14 @@ func (ecm *EthereumContractManager) buildComprehensiveProof(
 	)
 	log.Printf("🔗 [EVM-BLS-V6.1] A+++ messageHash: %x (chainId=%d, anchorId=%x, exec=%x, opID=%x, setRoot=%x)",
 		evmMessageHash[:8], ecm.config.ChainID, anchorId[:8], execCommitment[:8], opIDBytes32[:8], setRoot[:8])
+	log.Printf("🧮 [EVM-PRIMITIVES] adi=%x op=%x cc=%x exec=%x opID=%x height=%d",
+		adiURLHash[:8],
+		commitments.OperationCommitment[:8],
+		commitments.CrossChainCommitment[:8],
+		commitments.ExecutionCommitment[:8],
+		opIDBytes32[:8],
+		certenProof.BlockHeight,
+	)
 
 	zkProofBytes, _ := ecm.generateBLSZKProof(blsSignatureBytes, evmMessageHash, signedVotingPower, totalVotingPower)
 	blsProof.AggregateSignature = zkProofBytes
@@ -2044,21 +2052,43 @@ func (ecm *EthereumContractManager) computeV6_1AccumulateGovRoot(
 	opIDBytes32 := contracts.DeriveOperationIDBytes32FromString(ecm.safeOperationID(certenIntent))
 	gb := contracts.NewAccumulateGovRootInputsBuilder().
 		SetOperationIDBytes32(opIDBytes32)
+	var l1H, l2H, l3H, l4H [32]byte
 	if certenProof != nil && certenProof.LiteClientProof != nil {
 		lc := certenProof.LiteClientProof
 		gb.SetL1AccountHash(lc.AccountHash).
 			SetL2BPTRoot(lc.BPTRoot).
 			SetL3BlockHash(lc.BlockHash).
 			SetL4ConsensusProofFromJSON(lc.ConsensusProof)
+		if len(lc.AccountHash) >= 32 {
+			copy(l1H[:], lc.AccountHash[:32])
+		}
+		if len(lc.BPTRoot) >= 32 {
+			copy(l2H[:], lc.BPTRoot[:32])
+		}
+		if len(lc.BlockHash) >= 32 {
+			copy(l3H[:], lc.BlockHash[:32])
+		}
+		if lc.ConsensusProof != nil {
+			l4H = contracts.HashL4ConsensusProof([]byte("nonempty"))
+		}
 	}
+	var kpH, kbH [32]byte
 	if certenProof != nil {
 		gb.SetG0FromJSON(certenProof.G0Result).
 			SetG1FromJSON(certenProof.G1Result).
 			SetG2FromJSON(certenProof.G2Result).
 			SetKeypageURL(certenProof.KeypageURL).
 			SetKeybookURL(certenProof.KeybookURL)
+		kpH = contracts.HashURLString(certenProof.KeypageURL)
+		kbH = contracts.HashURLString(certenProof.KeybookURL)
 	}
-	return contracts.ComputeAccumulateGovRoot(gb.Build())
+	root := contracts.ComputeAccumulateGovRoot(gb.Build())
+	// V6.1 diagnostic — emit every gov-root input so a divergence vs the BFT
+	// signing path (pkg/consensus/v6_1_signing.go) is identifiable by direct
+	// comparison rather than guessing.
+	log.Printf("🧮 [EVM-GOV-INPUTS] opID=%x L1=%x L2=%x L3=%x L4=%x kp=%x kb=%x → govRoot=%x",
+		opIDBytes32[:8], l1H[:8], l2H[:8], l3H[:8], l4H[:8], kpH[:8], kbH[:8], root[:8])
+	return root
 }
 
 // deriveV6BundleID is the wire-level keccak that must byte-match
