@@ -1058,6 +1058,23 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	bv.logger.Printf("   BLSAggregateSignature len: %d", len(blsSignature))
 	bv.logger.Printf("   SourceBlockHeight: %d (Accumulate)", blockHeight)
 
+	// V6.1 A+++: serialize G0/G1/G2 to canonical JSON so the executor can
+	// reconstruct certenProof.G_n with byte-identical content to what BFT
+	// signed. Without this, executor.go::SubmitAnchorFromValidatorBlock
+	// builds a CertenProof with nil G_n fields, A+++ govRoot derives over
+	// zero-hashes for those slots, bundleId diverges from what BFT computed,
+	// and executeComprehensiveProof reverts with BLS verification failure.
+	var g0JSON, g1JSON, g2JSON []byte
+	if g0Proof != nil {
+		g0JSON, _ = json.Marshal(g0Proof)
+	}
+	if g1Proof != nil {
+		g1JSON, _ = json.Marshal(g1Proof)
+	}
+	if g2Proof != nil {
+		g2JSON, _ = json.Marshal(g2Proof)
+	}
+
 	vbMeta := &verification.ValidatorBlockMetadata{
 		RoundID:             roundID,
 		IntentID:            certenIntent.IntentID,
@@ -1083,6 +1100,13 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 		// CRITICAL: Pass original CrossChainData for executeWithGovernance target address
 		// This ensures the correct target address (leg.To) is used, NOT the anchor contract.
 		CrossChainData: certenIntent.CrossChainData,
+
+		// V6.1 A+++ governance plumbing — see comment above on the JSON variables.
+		G0CanonicalJSON: g0JSON,
+		G1CanonicalJSON: g1JSON,
+		G2CanonicalJSON: g2JSON,
+		KeypageURL:      resolvedKeyPageURL,
+		KeybookURL:      resolvedKeyBookURL,
 	}
 
 	bftMeta := &verification.BFTExecutionMetadata{

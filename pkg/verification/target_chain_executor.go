@@ -66,6 +66,22 @@ type ValidatorBlockMetadata struct {
 	// CRITICAL: This must be passed through to executeWithGovernance() so the
 	// correct target address (leg.To) is used, NOT the anchor contract address.
 	CrossChainData []byte
+
+	// ============ V6.1 A+++ GOVERNANCE PROOFS ============
+	// The exact G0/G1/G2 proof structs the BFT signer used when computing the
+	// A+++ pre-exec messageHash. The EVM submitter MUST recompute the same
+	// govRoot from these same bytes — otherwise the bundleId / messageHash
+	// diverges and contract verification fails (which is exactly what bit us
+	// on the first Sepolia V6.1 test on 2026-05-25).
+	//
+	// stored as canonical JSON bytes (deterministic for our types since the
+	// structs use stable field declaration order and any maps inside encode
+	// with sorted keys under Go 1.12+). Executor unmarshals into proof.G_n.
+	G0CanonicalJSON []byte
+	G1CanonicalJSON []byte
+	G2CanonicalJSON []byte
+	KeypageURL      string
+	KeybookURL      string
 }
 
 // BFTExecutionMetadata describes what CometBFT told us about the commit.

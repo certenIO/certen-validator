@@ -98,6 +98,33 @@ func (tcew *TargetChainExecutorWrapper) SubmitAnchorFromValidatorBlock(
     //
     // NOTE: We use vb.SourceBlockHeight (Accumulate block height) NOT bft.Height (CometBFT height).
     // The anchor needs the Accumulate source block for proper chain binding.
+    // V6.1 A+++: rehydrate G0/G1/G2 from the JSON snapshots the BFT signer
+    // attached to ValidatorBlockMetadata. The EVM submission path
+    // (ethereum_contracts.go::computeV6_1AccumulateGovRoot) reads these and
+    // recomputes the same A+++ govRoot the BFT signer used — anything else
+    // produces a bundleId mismatch and TX2 reverts on BLS verification.
+    var g0Result *proof.G0Result
+    var g1Result *proof.G1Result
+    var g2Result *proof.G2Result
+    if len(vb.G0CanonicalJSON) > 0 {
+        var g proof.G0Result
+        if err := json.Unmarshal(vb.G0CanonicalJSON, &g); err == nil {
+            g0Result = &g
+        }
+    }
+    if len(vb.G1CanonicalJSON) > 0 {
+        var g proof.G1Result
+        if err := json.Unmarshal(vb.G1CanonicalJSON, &g); err == nil {
+            g1Result = &g
+        }
+    }
+    if len(vb.G2CanonicalJSON) > 0 {
+        var g proof.G2Result
+        if err := json.Unmarshal(vb.G2CanonicalJSON, &g); err == nil {
+            g2Result = &g
+        }
+    }
+
     certenProof := &proof.CertenProof{
         ProofID:               fmt.Sprintf("proof-%s", intentID),
         BlockHeight:           vb.SourceBlockHeight, // Accumulate block height, NOT CometBFT height
@@ -107,6 +134,12 @@ func (tcew *TargetChainExecutorWrapper) SubmitAnchorFromValidatorBlock(
         BLSAggregateSignature: vb.BLSAggregateSignature,
         // CRITICAL: Pass original CrossChainData for executeWithGovernance target address
         CrossChainData:        vb.CrossChainData,
+        // V6.1 A+++ governance plumbing — must be identical to what BFT signed.
+        G0Result:   g0Result,
+        G1Result:   g1Result,
+        G2Result:   g2Result,
+        KeypageURL: vb.KeypageURL,
+        KeybookURL: vb.KeybookURL,
         // LiteClientProof with CompleteProof for Merkle proof extraction
         // CRITICAL: CompleteProof contains the full Merkle receipts (MainChainProof, BPTProof,
         // CombinedReceipt, etc.) which extractMerkleProofHashes() needs to build proofHashes[].
