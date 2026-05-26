@@ -783,14 +783,14 @@ func (ecm *EthereumContractManager) ExecuteViaUserAccount(
 	}
 
 	// Fetch actual commitments from the anchor instead of re-computing.
-	// The anchor stores the exact values used during creation - we must use those
-	// for the merkle proof to verify correctly.
-	// On slow-RPC chains (e.g. Moonbase Alpha) the anchor tx may not be confirmed
-	// yet if WaitMined timed out, so we poll until commitments are non-zero.
+	// V6.1 hard-flip: use GetAnchorV6_1 (matches V6.1 struct layout with
+	// operationID field) instead of GetAnchorFull (V4 layout). Mixing them
+	// produces "abi: improperly encoded boolean value" because the extra
+	// operationID slot shifts every subsequent field by 32 bytes.
 	var opCommitment, ccCommitment, govRoot [32]byte
 	var zeroHash [32]byte
 	for attempts := 0; attempts < 30; attempts++ {
-		anchorData, err := ecm.anchor.GetAnchorFull(nil, bundleID)
+		anchorData, err := ecm.anchor.GetAnchorV6_1(ctx, bundleID)
 		if err != nil {
 			return "", fmt.Errorf("failed to fetch anchor for commitments: %w", err)
 		}
