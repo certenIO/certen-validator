@@ -85,6 +85,10 @@ type ValidatorInfo struct {
 type CertenAnchorWrapper struct {
 	*CertenAnchorV4
 	address common.Address
+	// backend is stashed so the V6.1 hand-rolled binding (anchor_v6_1.go) can
+	// reach the same RPC backend the embedded V4 binding uses, without
+	// regenerating the entire abigen output.
+	backend bind.ContractBackend
 }
 
 // NewCertenAnchorWrapper creates a new V4 contract wrapper instance
@@ -96,7 +100,15 @@ func NewCertenAnchorWrapper(address common.Address, backend bind.ContractBackend
 	return &CertenAnchorWrapper{
 		CertenAnchorV4: contract,
 		address:        address,
+		backend:        backend,
 	}, nil
+}
+
+// Backend exposes the RPC backend the wrapper was constructed with. Used
+// internally by the V6.1 binding shim (CreateAnchorV6_1 / GetValidatorSetRootV6_1)
+// so its hand-rolled ABI calls reuse the same connection.
+func (w *CertenAnchorWrapper) Backend() bind.ContractBackend {
+	return w.backend
 }
 
 // GetAddress returns the contract address

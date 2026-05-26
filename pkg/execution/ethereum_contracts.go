@@ -532,9 +532,12 @@ func (ecm *EthereumContractManager) resetNonce() {
 	ecm.auth.Nonce = nil
 }
 
-// CreateAnchorOnChain creates an anchor on CertenAnchorV4 unified contract
-// This is Step 1 of the anchor workflow.
-// CRITICAL-001: Now includes executionCommitment parameter to bind runtime execution params
+// CreateAnchorOnChain creates an anchor on the configured anchor contract.
+// Step 1 of the anchor workflow.
+// V6.1 hard-flip: now calls CreateAnchorV6_1 (8 args, commits operationID).
+// The contract recomputes bundleId from the same 8 inputs and reverts on
+// mismatch — both validator and contract derive via deriveV6_1BundleID, so
+// the require check never fails on a bit drift.
 func (ecm *EthereumContractManager) CreateAnchorOnChain(
 	ctx context.Context,
 	bundleID [32]byte,
@@ -543,18 +546,22 @@ func (ecm *EthereumContractManager) CreateAnchorOnChain(
 	crossChainCommitment [32]byte,
 	governanceRoot [32]byte,
 	executionCommitment [32]byte,
+	operationID [32]byte,
 	accumulateBlockHeight *big.Int,
 ) (string, error) {
 	ecm.refreshGasPrice(ctx)
-	fmt.Printf("📡 [ETH-CREATE] Creating anchor on CertenAnchorV4...\n")
+	fmt.Printf("📡 [ETH-CREATE-V6.1] Creating anchor on CertenAnchorV6_1...\n")
 	fmt.Printf("   Contract: %s\n", ecm.anchor.GetAddress().Hex())
 	fmt.Printf("   Bundle ID: 0x%x\n", bundleID)
 	fmt.Printf("   ADI URL Hash: 0x%x\n", adiURLHash)
 	fmt.Printf("   Execution Commitment: 0x%x\n", executionCommitment)
+	fmt.Printf("   Operation ID: 0x%x\n", operationID)
 	fmt.Printf("   Block Height: %s\n", accumulateBlockHeight.String())
 
-	// Use CertenAnchorV4 wrapper to create anchor
-	tx, err := ecm.anchor.CreateAnchorSimple(
+	// V6.1 8-arg createAnchor (adds operationID). The shim in
+	// pkg/execution/contracts/anchor_v6_1.go ships a hand-rolled ABI for
+	// just this method so we don't have to regenerate the entire V4 binding.
+	tx, err := ecm.anchor.CreateAnchorV6_1(
 		ecm.auth,
 		bundleID,
 		adiURLHash,
@@ -562,6 +569,7 @@ func (ecm *EthereumContractManager) CreateAnchorOnChain(
 		crossChainCommitment,
 		governanceRoot,
 		executionCommitment,
+		operationID,
 		accumulateBlockHeight,
 	)
 	if err != nil {
@@ -979,6 +987,10 @@ func (ecm *EthereumContractManager) ExecuteUnifiedAnchorWorkflowFull(
 	copy(adiURLHash[:], crypto.Keccak256([]byte(adiURL)))
 	fmt.Printf("   ADI URL: %s\n", adiURL)
 
+	// V6.1: operationID is now committed into bundleId derivation, so it must
+	// be passed to createAnchor or the contract's require check rejects.
+	opIDBytes32 := contracts.DeriveOperationIDBytes32FromString(ecm.safeOperationID(certenIntent))
+
 	createTxHash, err = ecm.CreateAnchorOnChain(
 		ctx,
 		bundleID,
@@ -987,6 +999,7 @@ func (ecm *EthereumContractManager) ExecuteUnifiedAnchorWorkflowFull(
 		comprehensiveProof.Commitments.CrossChainCommitment,
 		comprehensiveProof.Commitments.GovernanceRoot,
 		comprehensiveProof.Commitments.ExecutionCommitment,
+		opIDBytes32,
 		big.NewInt(int64(certenProof.BlockHeight)),
 	)
 	if err != nil {
@@ -1060,6 +1073,8 @@ func (ecm *EthereumContractManager) ExecuteUnifiedAnchorWorkflow(
 	copy(adiURLHash[:], crypto.Keccak256([]byte(adiURL)))
 	fmt.Printf("   ADI URL: %s\n", adiURL)
 
+	opIDBytes32 := contracts.DeriveOperationIDBytes32FromString(ecm.safeOperationID(certenIntent))
+
 	createTxHash, err = ecm.CreateAnchorOnChain(
 		ctx,
 		bundleID,
@@ -1068,6 +1083,7 @@ func (ecm *EthereumContractManager) ExecuteUnifiedAnchorWorkflow(
 		comprehensiveProof.Commitments.CrossChainCommitment,
 		comprehensiveProof.Commitments.GovernanceRoot,
 		comprehensiveProof.Commitments.ExecutionCommitment,
+		opIDBytes32,
 		big.NewInt(int64(certenProof.BlockHeight)),
 	)
 	if err != nil {
