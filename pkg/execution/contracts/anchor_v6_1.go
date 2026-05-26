@@ -62,9 +62,9 @@ const v6_1ABIFragment = `[
   },
   {
     "type": "function",
-    "name": "anchors",
+    "name": "getAnchor",
     "stateMutability": "view",
-    "inputs": [{"name": "", "type": "bytes32"}],
+    "inputs": [{"name": "anchorId", "type": "bytes32"}],
     "outputs": [
       {"name": "bundleId",              "type": "bytes32"},
       {"name": "merkleRoot",            "type": "bytes32"},
@@ -72,25 +72,21 @@ const v6_1ABIFragment = `[
       {"name": "operationCommitment",   "type": "bytes32"},
       {"name": "crossChainCommitment",  "type": "bytes32"},
       {"name": "governanceRoot",        "type": "bytes32"},
-      {"name": "executionCommitment",   "type": "bytes32"},
-      {"name": "operationID",           "type": "bytes32"},
       {"name": "accumulateBlockHeight", "type": "uint256"},
       {"name": "timestamp",             "type": "uint256"},
       {"name": "validator",             "type": "address"},
-      {"name": "valid",                 "type": "bool"},
-      {"name": "proofExecuted",         "type": "bool"},
-      {"name": "governanceExecuted",    "type": "bool"},
-      {"name": "governanceLevel",       "type": "uint8"}
+      {"name": "valid",                 "type": "bool"}
     ]
   }
 ]`
 
-// AnchorV6_1 mirrors the V6.1 contract's Anchor storage layout (V4 binding
-// adds operationID after executionCommitment, shifting subsequent fields).
-// Reading via the V4 getAnchorFull on a V6.1 anchor produces "improperly
-// encoded boolean value" because the V4 ABI expects governanceExecuted at
-// the slot V6.1 stores operationID. This struct + GetAnchorV6_1 below fix
-// that.
+// AnchorV6_1 holds the fields returned by V6.1's explicit getAnchor() view
+// function — a 10-tuple that excludes the V6.1-only operationID and the
+// runtime status flags (proofExecuted, governanceExecuted, governanceLevel).
+// Step 3 (leg execution) only needs the commitments + validator + valid
+// fields, which are all here. If full anchor state is ever required, add a
+// dedicated ABI entry for getAnchorOperationID / getAnchorStatus and call
+// those separately.
 type AnchorV6_1 struct {
 	BundleId              [32]byte
 	MerkleRoot            [32]byte
@@ -98,15 +94,10 @@ type AnchorV6_1 struct {
 	OperationCommitment   [32]byte
 	CrossChainCommitment  [32]byte
 	GovernanceRoot        [32]byte
-	ExecutionCommitment   [32]byte
-	OperationID           [32]byte
 	AccumulateBlockHeight *big.Int
 	Timestamp             *big.Int
 	Validator             common.Address
 	Valid                 bool
-	ProofExecuted         bool
-	GovernanceExecuted    bool
-	GovernanceLevel       uint8
 }
 
 var parsedV6_1ABI abi.ABI
@@ -173,33 +164,30 @@ func (w *CertenAnchorWrapper) GetAnchorOperationIDV6_1(ctx context.Context, anch
 	return *out[0].(*[32]byte), nil
 }
 
-// GetAnchorV6_1 reads the stored Anchor struct from the V6.1 contract using
-// the correct field layout. The V4 binding's getAnchorFull misdecodes V6.1
-// data because operationID was added after executionCommitment, shifting
-// every later field. Callers that need an anchor's commitments to perform
-// step-3 leg execution MUST use this method when targeting a V6.1 contract.
+// GetAnchorV6_1 calls the V6.1 contract's explicit getAnchor(bytes32) view
+// function (10 fields) instead of the auto-generated mapping accessor
+// (15 fields including the V6.1-only operationID + runtime status). The V4
+// Go binding's GetAnchorFull misdecodes the 15-field response — operationID
+// shifts every later field by 32 bytes, manifesting as "improperly encoded
+// boolean value" or "[32]uint8 into uint8" at decode time. Using the
+// 10-field explicit getter sidesteps the layout mismatch entirely.
 func (w *CertenAnchorWrapper) GetAnchorV6_1(ctx context.Context, anchorId [32]byte) (*AnchorV6_1, error) {
 	bound := bind.NewBoundContract(w.address, parsedV6_1ABI, w.backend, nil, nil)
 	out := []interface{}{
-		new([32]byte), // bundleId
-		new([32]byte), // merkleRoot
-		new([32]byte), // adiURLHash
-		new([32]byte), // operationCommitment
-		new([32]byte), // crossChainCommitment
-		new([32]byte), // governanceRoot
-		new([32]byte), // executionCommitment
-		new([32]byte), // operationID
-		new(*big.Int), // accumulateBlockHeight
-		new(*big.Int), // timestamp
+		new([32]byte),       // bundleId
+		new([32]byte),       // merkleRoot
+		new([32]byte),       // adiURLHash
+		new([32]byte),       // operationCommitment
+		new([32]byte),       // crossChainCommitment
+		new([32]byte),       // governanceRoot
+		new(*big.Int),       // accumulateBlockHeight
+		new(*big.Int),       // timestamp
 		new(common.Address), // validator
-		new(bool),     // valid
-		new(bool),     // proofExecuted
-		new(bool),     // governanceExecuted
-		new(uint8),    // governanceLevel
+		new(bool),           // valid
 	}
 	callOpts := &bind.CallOpts{Context: ctx}
-	if err := bound.Call(callOpts, &out, "anchors", anchorId); err != nil {
-		return nil, fmt.Errorf("anchors(%x): %w", anchorId, err)
+	if err := bound.Call(callOpts, &out, "getAnchor", anchorId); err != nil {
+		return nil, fmt.Errorf("getAnchor(%x): %w", anchorId, err)
 	}
 	return &AnchorV6_1{
 		BundleId:              *out[0].(*[32]byte),
@@ -208,15 +196,10 @@ func (w *CertenAnchorWrapper) GetAnchorV6_1(ctx context.Context, anchorId [32]by
 		OperationCommitment:   *out[3].(*[32]byte),
 		CrossChainCommitment:  *out[4].(*[32]byte),
 		GovernanceRoot:        *out[5].(*[32]byte),
-		ExecutionCommitment:   *out[6].(*[32]byte),
-		OperationID:           *out[7].(*[32]byte),
-		AccumulateBlockHeight: *out[8].(**big.Int),
-		Timestamp:             *out[9].(**big.Int),
-		Validator:             *out[10].(*common.Address),
-		Valid:                 *out[11].(*bool),
-		ProofExecuted:         *out[12].(*bool),
-		GovernanceExecuted:    *out[13].(*bool),
-		GovernanceLevel:       *out[14].(*uint8),
+		AccumulateBlockHeight: *out[6].(**big.Int),
+		Timestamp:             *out[7].(**big.Int),
+		Validator:             *out[8].(*common.Address),
+		Valid:                 *out[9].(*bool),
 	}, nil
 }
 
