@@ -1143,10 +1143,11 @@ func loadEVMChainsFromEnv() map[int64]*EVMChainConfig {
 			RPCTimeout:         Duration(30 * time.Second),
 			MaxConnections:     10,
 			MaxIdleConnections: 5,
-			AnchorV4Address:    getEnv("BSC_TESTNET_ANCHORV6_ADDRESS", getEnv("BSC_TESTNET_ANCHORV5_ADDRESS", getEnv("BSC_TESTNET_ANCHORV4_ADDRESS", "0x3E7b37a517dec735e06126781A5D01d73d3c26D6"))),
+			// V6.1 A+++ binding takes precedence on BSC Testnet.
+			AnchorV4Address:    getEnv("BSC_TESTNET_ANCHORV6_1_ADDRESS", getEnv("BSC_TESTNET_ANCHORV6_ADDRESS", getEnv("BSC_TESTNET_ANCHORV5_ADDRESS", getEnv("BSC_TESTNET_ANCHORV4_ADDRESS", "0x3E7b37a517dec735e06126781A5D01d73d3c26D6")))),
 			AnchorV3Address:    getEnv("BSC_TESTNET_ANCHORV3_ADDRESS", ""),
 			BLSVerifierAddress: getEnv("BSC_TESTNET_BLS_VERIFIER_V2_ADAPTER", getEnv("BSC_TESTNET_BLSZKVERIFIER_ADDRESS", "0xC96e81bbDD57B5E3C300C4D5905813f590ce40c2")),
-			AccountFactory:     getEnv("BSC_TESTNET_ACCOUNTFACTORY_V4_ADDRESS", "0x4e8a1F68f8965C136D505737dEfB154deD34EbFb"),
+			AccountFactory:     getEnv("BSC_TESTNET_ACCOUNTFACTORY_V6_ADDRESS", getEnv("BSC_TESTNET_ACCOUNTFACTORY_V4_ADDRESS", "0x4e8a1F68f8965C136D505737dEfB154deD34EbFb")),
 			MaxGasPriceGwei:    getEnvInt64("BSC_MAX_GAS_PRICE_GWEI", 10),
 			MaxPriorityFeeGwei: getEnvInt64("BSC_MAX_PRIORITY_FEE_GWEI", 1),
 			GasLimitAnchor:     getEnvInt64("BSC_GAS_LIMIT_ANCHOR", 500000),
