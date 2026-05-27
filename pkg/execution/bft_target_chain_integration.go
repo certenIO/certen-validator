@@ -1038,7 +1038,15 @@ func (btce *BFTTargetChainExecutor) extractAllLegsFromIntent(legacyIntent *inten
 		// CRITICAL-003: If executionPayload is present in the user-signed blob,
 		// verify the commitment is consistent with the leg's execution parameters.
 		// This ensures the validator cannot alter target/value/data vs what was signed.
-		if leg.ExecutionPayload != nil && leg.ExecutionPayload.ExecutionCommitment != "" {
+		//
+		// SCOPE: only EVM-flavored legs. NEAR legs use a different commitment
+		// format (network_id || target_account_string || u128-LE deposit ||
+		// keccak256(method||args)) — the EVM recompute below would always
+		// mismatch and falsely reject every NEAR intent. The on-chain NEAR
+		// CertenAnchorV6_1::execute_with_governance recomputes its own
+		// commitment from runtime params, so NEAR doesn't lose this gate.
+		isNearLeg := strings.HasPrefix(strings.ToLower(strings.ReplaceAll(leg.Chain, " ", "-")), "near")
+		if !isNearLeg && leg.ExecutionPayload != nil && leg.ExecutionPayload.ExecutionCommitment != "" {
 			expectedCommitment := computeExecutionCommitment(
 				leg.ExecutionPayload.ChainID,
 				common.HexToAddress(leg.ExecutionPayload.Target),
