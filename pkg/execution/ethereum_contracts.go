@@ -1329,6 +1329,22 @@ func (ecm *EthereumContractManager) buildComprehensiveProof(
 	}
 }
 
+// RegenerateBLSZKProofForChain re-runs ZK proof generation with a chain-specific
+// messageHash. Needed when the target chain (e.g., NEAR) binds messageHash with
+// a different domain than the deployment chain — the validator's BLS signature
+// is already over that chain's hash, but the default ZK proof path in
+// BuildComprehensiveProof generates against the EVM/deployment-chain hash and
+// fails the gnark constraint. Returns the new ABI proof bytes and pubkey
+// commitment; caller assigns them onto BLSProof.AggregateSignature.
+func (ecm *EthereumContractManager) RegenerateBLSZKProofForChain(
+	blsSignatureBytes []byte,
+	messageHash [32]byte,
+	signedVotingPower *big.Int,
+	totalVotingPower *big.Int,
+) ([]byte, [32]byte) {
+	return ecm.generateBLSZKProof(blsSignatureBytes, messageHash, signedVotingPower, totalVotingPower)
+}
+
 // generateBLSZKProof generates a Groth16 ZK proof from a BLS signature.
 // Returns the serialized proof bytes AND the pubkeyCommitment (a public input
 // to the Groth16 circuit that binds the proof to the validators' BLS keys).

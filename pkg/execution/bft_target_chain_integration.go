@@ -1948,6 +1948,40 @@ func (btce *BFTTargetChainExecutor) executeNearOperations(
 		comprehensiveProof.BLSProof.MessageHash = nearMsgHash
 		btce.logger.Printf("🔑 [NEAR-V6.1] msgHash=0x%x setRoot=0x%x (substituted EVM-flavored msgHash with NEAR-flavored 6-field hash)",
 			nearMsgHash[:8], nearSetRoot[:8])
+
+		// Regenerate the BLS-ZK Groth16 proof against the NEAR-flavored msgHash.
+		// BuildComprehensiveProof generated the ZK proof against the EVM-flavored
+		// hash (uses ecm.config.ChainID=11155111), but the validator's BLS
+		// signature is over the NEAR-flavored hash. The gnark constraint
+		// blsVerify(sig, msgHash, pubKey) then fails (#774716) and an empty
+		// proof gets submitted, which the on-chain BLS verifier rejects, leaving
+		// proof_executed=false and breaking the V4 account's gov verify call.
+		var nearBLSSigBytes []byte
+		if certenProof != nil && certenProof.BLSAggregateSignature != "" {
+			sigHex := strings.TrimPrefix(certenProof.BLSAggregateSignature, "0x")
+			if decoded, decErr := hex.DecodeString(sigHex); decErr == nil {
+				nearBLSSigBytes = decoded
+			}
+		}
+		if len(nearBLSSigBytes) > 0 && ethManager != nil {
+			newZKBytes, newPubkeyCommit := ethManager.RegenerateBLSZKProofForChain(
+				nearBLSSigBytes,
+				nearMsgHash,
+				comprehensiveProof.BLSProof.SignedVotingPower,
+				comprehensiveProof.BLSProof.TotalVotingPower,
+			)
+			if len(newZKBytes) > 0 {
+				// PubkeyCommitment is embedded inside the ABI-encoded proof bytes
+				// via ToSolidityCalldata(), so no separate field assignment needed.
+				comprehensiveProof.BLSProof.AggregateSignature = newZKBytes
+				btce.logger.Printf("🔐 [NEAR-V6.1] Regenerated ZK proof against NEAR msgHash: %d bytes, pubkeyCommitment=0x%x",
+					len(newZKBytes), newPubkeyCommit[:8])
+			} else {
+				btce.logger.Printf("⚠️ [NEAR-V6.1] ZK proof regen returned empty bytes — TX2 BLS verify will fail")
+			}
+		} else {
+			btce.logger.Printf("⚠️ [NEAR-V6.1] Cannot regen ZK proof: blsSigLen=%d ethManager=%v", len(nearBLSSigBytes), ethManager != nil)
+		}
 	}
 
 	// ========== Step 1: Create Anchor (V6.1 — 8 args, adds operation_id) ==========
