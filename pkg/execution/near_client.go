@@ -262,13 +262,17 @@ type NearG2PointJSON struct {
 // into the JSON format expected by the NEAR BLS ZK verifier V2 contract.
 //
 // V2 ABI layout (each field 32 bytes, total 576 bytes; matches the
-// BLSSignatureProof Solidity struct encoded by prover.go::ToSolidityCalldata):
+// BLSSignatureProof Solidity struct encoded by prover.go::ToSolidityCalldata).
+// Note: B is stored on calldata in EIP-197 imag-then-real ordering (A1, A0),
+// because the BN254 pairing precompile on EVM expects that layout. arkworks
+// (used by the NEAR verifier) wants gnark-native real-then-imag (c0, c1), so
+// we un-swap when extracting B.X / B.Y for the NEAR JSON.
 //   0    A.X
 //   32   A.Y
-//   64   B.X[0]   (Fq2 c0)
-//   96   B.X[1]   (Fq2 c1)
-//   128  B.Y[0]
-//   160  B.Y[1]
+//   64   B.X.A1   (EVM calldata: imag part first)
+//   96   B.X.A0   (real part)
+//   128  B.Y.A1
+//   160  B.Y.A0
 //   192  C.X
 //   224  C.Y
 //   256  commitments.X       (V2: BSB22 Pedersen commitment)
@@ -293,14 +297,16 @@ func ConvertABIProofToNEARJSON(abiBytes []byte) (string, error) {
 		return new(big.Int).SetBytes(abiBytes[offset : offset+32]).Uint64()
 	}
 
-	// gnark's Fq2 native convention matches arkworks Fq2::new(c0, c1), so no
-	// swap is needed for the B point's x/y coordinates.
+	// Un-swap B's Fq2 components: calldata stores (A1, A0) per EIP-197 for the
+	// EVM pairing precompile, but arkworks Fq2::new(c0, c1) expects (A0, A1).
+	// Without this un-swap, NEAR's verifier rejects with "V2: proof B invalid"
+	// because the swapped coordinates don't land on the BN254 G2 curve.
 	proof := NearBLSSignatureProofJSON{
 		Proof: NearGroth16ProofJSON{
 			A: NearG1PointJSON{X: b64(0), Y: b64(32)},
 			B: NearG2PointJSON{
-				X: [2]string{b64(64), b64(96)},
-				Y: [2]string{b64(128), b64(160)},
+				X: [2]string{b64(96), b64(64)},   // (A0, A1) = (calldata[96], calldata[64])
+				Y: [2]string{b64(160), b64(128)}, // (A0, A1) = (calldata[160], calldata[128])
 			},
 			C: NearG1PointJSON{X: b64(192), Y: b64(224)},
 		},
