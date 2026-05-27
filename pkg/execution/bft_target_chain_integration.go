@@ -2143,11 +2143,15 @@ func (btce *BFTTargetChainExecutor) buildNearCertenProof(
 		}
 	}
 
-	// Convert proof hashes to base64
-	proofHashes := make([]string, len(proof.ProofHashes))
-	for i, h := range proof.ProofHashes {
-		proofHashes[i] = encodeBytes32AsBase64(h)
-	}
+	// NEAR uses the trivial-path merkle verification (LeafHash = merkleRoot
+	// below), so proofHashes MUST be empty. The contract's verify_merkle_proof
+	// iterates each sibling and sorted-hashes against the running computed
+	// value; with an empty path the computed value stays equal to the leaf,
+	// which equals the merkleRoot — verification passes. Carrying over the
+	// EVM-built 3-element tagged-adi path here would mix up the iteration
+	// and the result would no longer equal merkleRoot.
+	proofHashes := []string{}
+	_ = proof.ProofHashes // intentionally unused for NEAR; trivial-path verification
 
 	// Convert key page proofs to base64
 	keyPageProofs := make([]string, len(proof.GovernanceProof.KeyPageProofs))
