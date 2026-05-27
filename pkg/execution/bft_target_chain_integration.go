@@ -1750,6 +1750,14 @@ func (btce *BFTTargetChainExecutor) executeNearOperations(
 
 	btce.logger.Printf("🔷 [NEAR-EXEC] Executing NEAR chain operations for intent: %s", intentID)
 
+	// Fresh context with generous timeout for 3-step NEAR flow.
+	// The parent BFT context may have a very short deadline that's already
+	// nearly expired after consensus rounds — public testnet RPCs need ~30s+
+	// per call, so the inherited 2-3s context was failing TX2 immediately.
+	nearCtx, nearCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer nearCancel()
+	ctx = nearCtx
+
 	// Load NEAR config from environment
 	nearSignerAccountID := os.Getenv("NEAR_SIGNER_ACCOUNT_ID")
 	nearPrivateKey := os.Getenv("NEAR_PRIVATE_KEY")
