@@ -288,11 +288,14 @@ func registerL2EVMStrategies(registry *Registry, cfg *RegistryConfig, knownAlias
 			continue
 		}
 
-		// Resolve anchor address with V6 → V5 → V4 fallback so the watcher
-		// observes the newest anchor on each chain without forcing operators
-		// to rename env vars in lockstep with contract redeploys.
+		// Resolve anchor address with V6.1 → V6 → V5 → V4 fallback so the
+		// watcher observes the newest anchor on each chain without forcing
+		// operators to rename env vars in lockstep with contract redeploys.
 		chainPrefix := l2.anchorEnvVar[:len(l2.anchorEnvVar)-len("_ANCHORV4_ADDRESS")]
-		anchorAddr := os.Getenv(chainPrefix + "_ANCHORV6_ADDRESS")
+		anchorAddr := os.Getenv(chainPrefix + "_ANCHORV6_1_ADDRESS")
+		if anchorAddr == "" {
+			anchorAddr = os.Getenv(chainPrefix + "_ANCHORV6_ADDRESS")
+		}
 		if anchorAddr == "" {
 			anchorAddr = os.Getenv(chainPrefix + "_ANCHORV5_ADDRESS")
 		}
