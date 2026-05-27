@@ -2230,18 +2230,20 @@ func (btce *BFTTargetChainExecutor) buildNearCertenProof(
 		expirationNano = proof.ExpirationTime.Uint64() * 1_000_000_000
 	}
 
-	// Convert ABI-encoded Groth16 proof to NEAR JSON format for BLS verifier
+	// Convert ABI-encoded Groth16 proof to NEAR JSON format for BLS verifier V2.
+	// V2 layout requires 576 bytes (V1 was 448 — the extra 128 bytes carry the
+	// BSB22 Pedersen `commitments` and `commitmentPok` G1 points).
 	aggregateSigProof := ""
-	if len(proof.BLSProof.AggregateSignature) >= 448 {
+	if len(proof.BLSProof.AggregateSignature) >= 576 {
 		nearProofB64, err := ConvertABIProofToNEARJSON(proof.BLSProof.AggregateSignature)
 		if err != nil {
 			log.Printf("⚠️ [NEAR] Failed to convert BLS proof to NEAR format: %v", err)
 		} else {
 			aggregateSigProof = nearProofB64
-			log.Printf("✅ [NEAR] Converted Groth16 proof to NEAR JSON format (%d base64 chars)", len(nearProofB64))
+			log.Printf("✅ [NEAR] Converted Groth16 V2 proof to NEAR JSON format (%d base64 chars)", len(nearProofB64))
 		}
 	} else {
-		log.Printf("⚠️ [NEAR] ABI proof bytes too short (%d), using empty aggregate_signature_proof", len(proof.BLSProof.AggregateSignature))
+		log.Printf("⚠️ [NEAR] ABI proof bytes too short (%d, need 576 for V2), using empty aggregate_signature_proof", len(proof.BLSProof.AggregateSignature))
 	}
 
 	// Authority address must be base64-encoded bytes (Base64VecU8), not hex

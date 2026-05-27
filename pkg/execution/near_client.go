@@ -224,8 +224,13 @@ type NearCommitmentsJSON struct {
 // NearBLSSignatureProofJSON is the JSON structure for the NEAR BLS ZK verifier's
 // BLSSignatureProofInput. This gets JSON-encoded and then base64-encoded to become
 // the aggregate_signature_proof field in NearBLSProof.
+//
+// V2 surface (matches bls-zk-verifier-v2): adds `commitments` and
+// `commitment_pok` (BSB22 Pedersen commitment + proof of knowledge, both G1).
 type NearBLSSignatureProofJSON struct {
 	Proof                NearGroth16ProofJSON `json:"proof"`
+	Commitments          NearG1PointJSON      `json:"commitments"`
+	CommitmentPok        NearG1PointJSON      `json:"commitment_pok"`
 	MessageHash          string               `json:"message_hash"`
 	PubkeyCommitment     string               `json:"pubkey_commitment"`
 	SignedVotingPower    uint64               `json:"signed_voting_power"`
@@ -254,13 +259,31 @@ type NearG2PointJSON struct {
 }
 
 // ConvertABIProofToNEARJSON converts ABI-encoded Groth16 proof bytes (from ToSolidityCalldata)
-// into the JSON format expected by the NEAR BLS ZK verifier contract.
-// ABI layout (each 32 bytes): proofA[0], proofA[1], proofB[0][0], proofB[0][1],
-// proofB[1][0], proofB[1][1], proofC[0], proofC[1], messageHash, pubkeyCommitment,
-// signedVotingPower, totalVotingPower, thresholdNumerator, thresholdDenominator
+// into the JSON format expected by the NEAR BLS ZK verifier V2 contract.
+//
+// V2 ABI layout (each field 32 bytes, total 576 bytes; matches the
+// BLSSignatureProof Solidity struct encoded by prover.go::ToSolidityCalldata):
+//   0    A.X
+//   32   A.Y
+//   64   B.X[0]   (Fq2 c0)
+//   96   B.X[1]   (Fq2 c1)
+//   128  B.Y[0]
+//   160  B.Y[1]
+//   192  C.X
+//   224  C.Y
+//   256  commitments.X       (V2: BSB22 Pedersen commitment)
+//   288  commitments.Y
+//   320  commitmentPok.X     (V2: PoK of the commitment)
+//   352  commitmentPok.Y
+//   384  messageHash
+//   416  pubkeyCommitment
+//   448  signedVotingPower
+//   480  totalVotingPower
+//   512  thresholdNumerator
+//   544  thresholdDenominator
 func ConvertABIProofToNEARJSON(abiBytes []byte) (string, error) {
-	if len(abiBytes) < 448 {
-		return "", fmt.Errorf("ABI proof bytes too short: %d (need 448)", len(abiBytes))
+	if len(abiBytes) < 576 {
+		return "", fmt.Errorf("ABI proof bytes too short: %d (need 576 for V2 layout)", len(abiBytes))
 	}
 
 	b64 := func(offset int) string {
@@ -270,13 +293,8 @@ func ConvertABIProofToNEARJSON(abiBytes []byte) (string, error) {
 		return new(big.Int).SetBytes(abiBytes[offset : offset+32]).Uint64()
 	}
 
-	// ABI byte layout from our custom ToSolidityCalldata (prover.go):
-	//   offset 64: ProofB[0][0] = Bs.X.A0 = c0 (real)
-	//   offset 96: ProofB[0][1] = Bs.X.A1 = c1 (imaginary)
-	//   offset 128: ProofB[1][0] = Bs.Y.A0 = c0 (real)
-	//   offset 160: ProofB[1][1] = Bs.Y.A1 = c1 (imaginary)
-	// NEAR arkworks Fq2::new(x0, x1) = c0 + c1*u, so x[0]=c0, x[1]=c1.
-	// gnark's native convention matches arkworks — NO swap needed.
+	// gnark's Fq2 native convention matches arkworks Fq2::new(c0, c1), so no
+	// swap is needed for the B point's x/y coordinates.
 	proof := NearBLSSignatureProofJSON{
 		Proof: NearGroth16ProofJSON{
 			A: NearG1PointJSON{X: b64(0), Y: b64(32)},
@@ -286,12 +304,14 @@ func ConvertABIProofToNEARJSON(abiBytes []byte) (string, error) {
 			},
 			C: NearG1PointJSON{X: b64(192), Y: b64(224)},
 		},
-		MessageHash:          b64(256),
-		PubkeyCommitment:     b64(288),
-		SignedVotingPower:    u64(320),
-		TotalVotingPower:     u64(352),
-		ThresholdNumerator:   u64(384),
-		ThresholdDenominator: u64(416),
+		Commitments:          NearG1PointJSON{X: b64(256), Y: b64(288)},
+		CommitmentPok:        NearG1PointJSON{X: b64(320), Y: b64(352)},
+		MessageHash:          b64(384),
+		PubkeyCommitment:     b64(416),
+		SignedVotingPower:    u64(448),
+		TotalVotingPower:     u64(480),
+		ThresholdNumerator:   u64(512),
+		ThresholdDenominator: u64(544),
 	}
 
 	jsonBytes, err := json.Marshal(proof)
