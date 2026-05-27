@@ -1906,6 +1906,42 @@ func (btce *BFTTargetChainExecutor) executeNearOperations(
 	btce.logger.Printf("🔑 [NEAR-V6.1] bundleId=0x%x (chainID32=0x%x, opID=0x%x, height=%d)",
 		bundleIdHash[:8], deploymentChainID[:8], operationID[:8], certenProof.BlockHeight)
 
+	// V6.1: rebuild the BLS messageHash with NEAR semantics. The
+	// ethManager populates comprehensiveProof.BLSProof.MessageHash with
+	// the EVM-flavored hash (uses uint256(block.chainid) as the chain
+	// identifier slot). NEAR's anchor reconstructs the messageHash from
+	// its own deployment_chain_id + the anchor we just created, then
+	// compares to bls_proof.message_hash; if they differ
+	// execute_comprehensive_proof panics at line 1097. Override with the
+	// NEAR-flavored value so they match.
+	if comprehensiveProof != nil {
+		// NEAR setRoot — must match what the on-chain contract stores in
+		// current_validator_set_root. Production deploys register the
+		// `certen-v1..7.<network>` set, weight 100 each, 2/3 threshold —
+		// kept in lockstep with pkg/consensus/v6_1_signing.go::nearValidatorSetForChain.
+		nearSuffix := ".testnet"
+		if networkID == "mainnet" {
+			nearSuffix = ".near"
+		}
+		nearAccts := make([]string, 7)
+		nearPowers := make([]uint64, 7)
+		for i := 0; i < 7; i++ {
+			nearAccts[i] = fmt.Sprintf("certen-v%d%s", i+1, nearSuffix)
+			nearPowers[i] = 100
+		}
+		nearSetRoot := contracts.ComputeNearValidatorSetRootV6_1(nearAccts, nearPowers, 2, 3)
+		nearMsgHash := contracts.ComputeNearMessageHashV6_1_Pre(
+			deploymentChainID,
+			bundleIdHash,
+			execCommitment,
+			operationID,
+			nearSetRoot,
+		)
+		comprehensiveProof.BLSProof.MessageHash = nearMsgHash
+		btce.logger.Printf("🔑 [NEAR-V6.1] msgHash=0x%x setRoot=0x%x (substituted EVM-flavored msgHash with NEAR-flavored 6-field hash)",
+			nearMsgHash[:8], nearSetRoot[:8])
+	}
+
 	// ========== Step 1: Create Anchor (V6.1 — 8 args, adds operation_id) ==========
 	btce.logger.Printf("🔗 [NEAR-EXEC-V6.1] Step 1: Creating anchor on %s...", nearAnchorContract)
 
