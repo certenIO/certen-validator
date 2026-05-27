@@ -924,7 +924,15 @@ func (ecm *EthereumContractManager) buildAccountProof(
 	log.Printf("   proof[1] (hash23): 0x%x", hash23[:8])
 	log.Printf("   proof[2] (taggedExec): 0x%x", taggedExec[:8])
 
-	// Set expiration (1 hour from now)
+	// Set expiration (1 hour from now). Also backshift the start timestamp by
+	// 60s — CertenAccountV4 reverts with "invalid governance proof" if
+	// block.timestamp < proof.timestamp at TX3 mining time. Chains with slow
+	// block production + clock skew vs the validator host (e.g. Moonbase Alpha,
+	// where block.timestamp lags ~1s behind the validator's local clock) would
+	// otherwise reject TX3. 60s comfortably covers any production-tolerance
+	// skew without weakening the expiry check (still 59 minutes valid).
+	startSkewBuffer := int64(60)
+	startTimestamp := big.NewInt(time.Now().Unix() - startSkewBuffer)
 	expiresAt := big.NewInt(time.Now().Add(1 * time.Hour).Unix())
 
 	// Build validator signatures from BLS aggregate signature
@@ -947,7 +955,7 @@ func (ecm *EthereumContractManager) buildAccountProof(
 		KeyBookProof:        []byte{}, // Governance proof data - validated off-chain by validators
 		RoleProof:           []byte{}, // Role proof data - validated off-chain by validators
 		ThresholdProof:      []byte{}, // Threshold proof data - validated off-chain by validators
-		Timestamp:           big.NewInt(time.Now().Unix()),
+		Timestamp:           startTimestamp,
 		ExpiresAt:           expiresAt,
 		ValidatorSignatures: validatorSigs,
 		Nonce:               nonce,
