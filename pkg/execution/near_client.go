@@ -129,6 +129,51 @@ func (nc *NearClient) CreateAnchor(
 	return txHash, nil
 }
 
+// CreateAnchorV6_1 calls the V6.1 8-arg create_anchor on the NEAR
+// CertenAnchorV6_1 contract. Adds operation_id (canonical 4-blob intent
+// hash) to the V5 7-arg surface. The contract verifies the supplied
+// bundle_id matches its own DeriveNearBundleIDV6_1 derivation and rejects
+// mismatches — both sides must produce identical bytes from the same 8
+// inputs. Pre-deploy validator-side derivation lives in
+// near_v6_1.go::DeriveNearBundleIDV6_1.
+func (nc *NearClient) CreateAnchorV6_1(
+	ctx context.Context,
+	contractID string,
+	bundleId [32]byte,
+	adiURLHash [32]byte,
+	operationCommitment [32]byte,
+	crossChainCommitment [32]byte,
+	governanceRoot [32]byte,
+	executionCommitment [32]byte,
+	operationID [32]byte,
+	blockHeight uint64,
+	gas uint64,
+) (string, error) {
+	log.Printf("📡 [NEAR-V6.1] Creating anchor on %s...", contractID)
+	log.Printf("   Bundle ID:    0x%x", bundleId[:8])
+	log.Printf("   Operation ID: 0x%x", operationID[:8])
+	log.Printf("   Block height: %d", blockHeight)
+
+	args := map[string]interface{}{
+		"bundle_id":               base64.StdEncoding.EncodeToString(bundleId[:]),
+		"adi_url_hash":            base64.StdEncoding.EncodeToString(adiURLHash[:]),
+		"operation_commitment":    base64.StdEncoding.EncodeToString(operationCommitment[:]),
+		"cross_chain_commitment":  base64.StdEncoding.EncodeToString(crossChainCommitment[:]),
+		"governance_root":         base64.StdEncoding.EncodeToString(governanceRoot[:]),
+		"execution_commitment":    base64.StdEncoding.EncodeToString(executionCommitment[:]),
+		"operation_id":            base64.StdEncoding.EncodeToString(operationID[:]),
+		"accumulate_block_height": blockHeight,
+	}
+
+	txHash, err := nc.callContract(ctx, contractID, "create_anchor", args, gas, big.NewInt(0))
+	if err != nil {
+		return "", fmt.Errorf("create_anchor (V6.1) failed: %w", err)
+	}
+
+	log.Printf("✅ [NEAR-V6.1] Anchor created: txHash=%s", txHash)
+	return txHash, nil
+}
+
 // =============================================================================
 // STEP 2: EXECUTE COMPREHENSIVE PROOF
 // =============================================================================

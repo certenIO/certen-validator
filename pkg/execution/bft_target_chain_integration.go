@@ -1792,20 +1792,21 @@ func (btce *BFTTargetChainExecutor) executeNearOperations(
 	// Build legacy intent and proof data (same as EVM/TRON path)
 	legacyIntent := btce.convertToLegacyIntent(intentID, transactionHash, accountURL, certenProof)
 
-	var bundleIdHash [32]byte
+	// V6.1 NEAR: derive bundleId via DeriveNearBundleIDV6_1 (matches the
+	// on-chain CertenAnchorV6_1::compute_bundle_id_v6_1 exactly). The EVM
+	// path uses ethManager.generateAnchorID which encodes an int64 chainId;
+	// NEAR substitutes the synthesized 32-byte deployment_chain_id.
 	var comprehensiveProof *contracts.ComprehensiveCertenProof
 	if ethManager != nil {
-		bundleIdHash = ethManager.generateAnchorID(legacyIntent, certenProof)
+		// Build the comprehensive proof envelope (govRoot, commitments, etc.)
+		// Re-use the EVM builder for the body — the only NEAR-specific
+		// substitution is the bundle_id at the end, which we recompute below.
+		tmpBundleID := ethManager.generateAnchorID(legacyIntent, certenProof)
 		cp := ethManager.buildComprehensiveProof(legacyIntent, certenProof,
 			&anchor.AnchorResponse{AnchorID: anchorID, Success: true, Message: "BFT anchor for NEAR"},
-			bundleIdHash,
+			tmpBundleID,
 		)
 		comprehensiveProof = &cp
-	} else {
-		// Fallback: generate bundleIdHash manually
-		hash := ethcrypto.Keccak256Hash([]byte(fmt.Sprintf("certen_v3_%s_%d_%s",
-			legacyIntent.IntentID, certenProof.BlockHeight, certenProof.TransactionHash)))
-		copy(bundleIdHash[:], hash[:])
 	}
 
 	// Compute adiURLHash
@@ -1832,6 +1833,17 @@ func (btce *BFTTargetChainExecutor) executeNearOperations(
 		govRoot = comprehensiveProof.Commitments.GovernanceRoot
 	}
 
+	// V6.1: synthesize the NEAR deployment_chain_id and compute the V6.1
+	// bundleId from the same 8 inputs the contract will recompute at
+	// create_anchor time. Network id derived from the anchor account name
+	// suffix (testnet vs mainnet) — for the deployed contract this is
+	// "testnet" (account ends in .testnet).
+	networkID := "testnet"
+	if strings.HasSuffix(nearAnchorContract, ".near") {
+		networkID = "mainnet"
+	}
+	deploymentChainID := contracts.ComputeNearDeploymentChainIDV6_1(networkID)
+
 	// V5: CRITICAL-001 - Compute execution commitment for NEAR
 	// Matches Rust: keccak256(network_id || target || deposit_le_bytes || keccak256(method || args))
 	var execCommitment [32]byte
@@ -1843,16 +1855,39 @@ func (btce *BFTTargetChainExecutor) executeNearOperations(
 		if nearLegForExec.Value != nil {
 			nearDepositYocto = new(big.Int).Set(nearLegForExec.Value)
 		}
-		execCommitment = computeNearExecutionCommitment("testnet", nearTargetID, nearDepositYocto, "transfer", []byte{})
+		execCommitment = computeNearExecutionCommitment(networkID, nearTargetID, nearDepositYocto, "transfer", []byte{})
 		btce.logger.Printf("🔒 [NEAR-EXEC] CRITICAL-001 ExecutionCommitment: 0x%x", execCommitment[:8])
 	}
 
-	// ========== Step 1: Create Anchor ==========
-	btce.logger.Printf("🔗 [NEAR-EXEC] Step 1: Creating anchor on %s...", nearAnchorContract)
+	// V6.1: extract operation_id from intent's 4-blob hash. Same value the
+	// pre-exec BLS messageHash binds to.
+	var operationID [32]byte
+	if legacyIntent != nil {
+		if opIDStr, err := legacyIntent.OperationID(); err == nil && opIDStr != "" {
+			operationID = contracts.DeriveOperationIDBytes32FromString(opIDStr)
+		}
+	}
 
-	createTxHash, err := nearClient.CreateAnchor(ctx, nearAnchorContract,
+	// V6.1 bundleId — recomputed locally, must equal the contract's derivation.
+	bundleIdHash := contracts.DeriveNearBundleIDV6_1(
+		deploymentChainID,
+		adiURLHash,
+		opCommitment,
+		ccCommitment,
+		govRoot,
+		execCommitment,
+		operationID,
+		certenProof.BlockHeight,
+	)
+	btce.logger.Printf("🔑 [NEAR-V6.1] bundleId=0x%x (chainID32=0x%x, opID=0x%x, height=%d)",
+		bundleIdHash[:8], deploymentChainID[:8], operationID[:8], certenProof.BlockHeight)
+
+	// ========== Step 1: Create Anchor (V6.1 — 8 args, adds operation_id) ==========
+	btce.logger.Printf("🔗 [NEAR-EXEC-V6.1] Step 1: Creating anchor on %s...", nearAnchorContract)
+
+	createTxHash, err := nearClient.CreateAnchorV6_1(ctx, nearAnchorContract,
 		bundleIdHash, adiURLHash, opCommitment, ccCommitment, govRoot, execCommitment,
-		certenProof.BlockHeight, gasCreateAnchor,
+		operationID, certenProof.BlockHeight, gasCreateAnchor,
 	)
 	if err != nil {
 		btce.logger.Printf("❌ [NEAR-EXEC] Step 1 failed: %v", err)
