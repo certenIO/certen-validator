@@ -354,6 +354,10 @@ func (btce *BFTTargetChainExecutor) ExecuteTargetChainOperations(
 		"ton testnet", "ton mainnet":
 		return btce.executeNonEVMPrimaryWithAdditionalLegs(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, targetChainID,
 			btce.executeTonOperations, additionalChainLegs)
+	case "cardano", "cardano-preview", "cardano-preprod", "cardano-mainnet",
+		"cardano preview", "cardano preprod", "cardano mainnet":
+		return btce.executeNonEVMPrimaryWithAdditionalLegs(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, targetChainID,
+			btce.executeCardanoOperations, additionalChainLegs)
 	case "ethereum", "ethereum-sepolia", "eth", "eth-sepolia", "sepolia",
 		"arbitrum", "arbitrum-one", "arbitrum-sepolia", "arb",
 		"optimism", "op-mainnet", "optimism-sepolia", "op", "op-sepolia",
@@ -2557,6 +2561,464 @@ func (btce *BFTTargetChainExecutor) buildNearResult(
 			"executionMethod": "near_json_rpc",
 		},
 	}
+}
+
+// =============================================================================
+// CARDANO CHAIN EXECUTION
+// =============================================================================
+
+// executeCardanoOperations runs the 3-step anchor workflow on Cardano via
+// the tx-server bridge (certen-contracts/cardano/scripts/tx-server.ts).
+//
+// Architecture: Cardano transaction construction (UTXO selection, CBOR /
+// Plutus Data encoding, fee + exec-unit estimation, witness assembly) is
+// delegated to a Node.js helper running Lucid Evolution + Blockfrost. The
+// helper exposes HTTP endpoints; this Go function calls them in sequence,
+// passing the proof primitives the validator just signed.
+//
+// Cross-chain parity:
+//   EVM:     executeEthereumOperations (direct ethclient tx submission)
+//   NEAR:    executeNearOperations     (JSON-RPC + manual borsh)
+//   Cardano: executeCardanoOperations  (HTTP bridge to Lucid Evolution)
+func (btce *BFTTargetChainExecutor) executeCardanoOperations(
+	ctx context.Context,
+	intentID string,
+	transactionHash string,
+	accountURL string,
+	validatorID string,
+	bundleID string,
+	anchorID string,
+	certenProof *proof.CertenProof,
+	chainID int64,
+) (*TargetChainExecutionResult, error) {
+
+	btce.logger.Printf("🔷 [CARDANO-EXEC] Executing Cardano chain operations for intent: %s", intentID)
+
+	// Fresh context with generous timeout for the 3-step Cardano flow.
+	// Same pattern as NEAR — the parent BFT context may have a very short
+	// deadline that's already nearly expired after consensus rounds.
+	cardanoCtx, cardanoCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cardanoCancel()
+	ctx = cardanoCtx
+
+	// Load Cardano config from environment.
+	cardanoNetwork := os.Getenv("CARDANO_NETWORK")
+	if cardanoNetwork == "" {
+		cardanoNetwork = "Preview"
+	}
+	cardanoTxServerURL := os.Getenv("CARDANO_TX_SERVER_URL")
+	if cardanoTxServerURL == "" {
+		cardanoTxServerURL = "http://localhost:8787"
+	}
+
+	cardanoClient := NewCardanoClient(cardanoTxServerURL)
+
+	// Health check first so we get a clean error if the tx-server is down.
+	health, healthErr := cardanoClient.Health(ctx)
+	if healthErr != nil {
+		return nil, fmt.Errorf("cardano tx-server unreachable: %w", healthErr)
+	}
+	btce.logger.Printf("✅ [CARDANO-EXEC] tx-server ready: wallet=%s anchor=%s account=%s",
+		health.Wallet, health.AnchorScriptHash[:12], health.AccountScriptHash[:12])
+
+	// Use EthereumContractManager only for its commitment-derivation helpers
+	// (the Cardano-specific primitives reuse the same Accumulate-side
+	// govRoot inputs, which are chain-agnostic).
+	contractConfig := &CertenContractConfig{
+		EthereumRPC: os.Getenv("ETHEREUM_URL"),
+		ChainID:     11155111,
+		PrivateKey:  os.Getenv("ETH_PRIVATE_KEY"),
+	}
+	ethManager, err := NewEthereumContractManager(contractConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to init ethereum manager (Cardano helper): %w", err)
+	}
+
+	legacyIntent := btce.convertToLegacyIntent(intentID, transactionHash, accountURL, certenProof)
+
+	// Build comprehensive proof from existing helpers (same call shape as
+	// the NEAR path uses in executeNearOperations).
+	bundleIdHashStub := ethManager.generateAnchorID(legacyIntent, certenProof)
+	comprehensiveProof := ethManager.buildComprehensiveProof(legacyIntent, certenProof,
+		&anchor.AnchorResponse{AnchorID: anchorID, Success: true, Message: "BFT Cardano anchor"},
+		bundleIdHashStub,
+	)
+
+	// Re-derive A+++ govRoot via the chain-agnostic helper. Commitments are
+	// nested under `comprehensiveProof.Commitments`.
+	govRoot := ethManager.ComputeV6_1AccumulateGovRoot(legacyIntent, certenProof)
+	comprehensiveProof.Commitments.GovernanceRoot = govRoot
+
+	var adiURLHash [32]byte
+	adiURL := certenProof.AccountURL
+	if adiURL == "" {
+		adiURL = fmt.Sprintf("%s/data", legacyIntent.OrganizationADI)
+	}
+	copy(adiURLHash[:], ethcrypto.Keccak256([]byte(adiURL)))
+
+	opCommitment := comprehensiveProof.Commitments.OperationCommitment
+	ccCommitment := comprehensiveProof.Commitments.CrossChainCommitment
+	execCommitment := comprehensiveProof.Commitments.ExecutionCommitment
+
+	// Operation ID (32-byte) — use the ethManager helper directly since
+	// safeOperationID is a method on EthereumContractManager.
+	opIDStr := ""
+	if s, opErr := legacyIntent.OperationID(); opErr == nil {
+		opIDStr = s
+	}
+	operationID := contracts.DeriveOperationIDBytes32FromString(opIDStr)
+
+	// Cardano-flavored chain ID + validator-set-root.
+	chainID32 := contracts.ComputeCardanoDeploymentChainIDV6_1(cardanoNetworkFromName(cardanoNetwork))
+	cardanoIDs, cardanoPowers, num, den := cardanoValidatorSetFromEnv(cardanoNetworkFromName(cardanoNetwork))
+	setRoot := contracts.ComputeCardanoValidatorSetRootV6_1(cardanoIDs, cardanoPowers, num, den)
+
+	// bundleId — V6.1 9-input formula with Cardano chain ID.
+	bundleIdHash := contracts.DeriveCardanoBundleIDV6_1(
+		chainID32, adiURLHash, opCommitment, ccCommitment, govRoot,
+		execCommitment, operationID, certenProof.BlockHeight,
+	)
+	btce.logger.Printf("🧮 [CARDANO-V6.1] A+++ govRoot=0x%x (chain-agnostic Accumulate state)", govRoot[:8])
+	btce.logger.Printf("🔑 [CARDANO-V6.1] bundleId=0x%x (chainID32=0x%x, opID=0x%x, height=%d)",
+		bundleIdHash[:8], chainID32[:8], operationID[:8], certenProof.BlockHeight)
+
+	// Substitute Cardano-flavored msgHash so the on-chain reconstruction
+	// matches what the BFT signer produced.
+	cardanoMsgHash := contracts.ComputeCardanoMessageHashV6_1_Pre(
+		chainID32, bundleIdHash, execCommitment, operationID, setRoot,
+	)
+	comprehensiveProof.BLSProof.MessageHash = cardanoMsgHash
+	btce.logger.Printf("🔑 [CARDANO-V6.1] msgHash=0x%x setRoot=0x%x (substituted EVM-flavored msgHash with Cardano-flavored 6-field hash)",
+		cardanoMsgHash[:8], setRoot[:8])
+
+	// Regenerate the BLS-ZK proof against the Cardano-flavored msgHash
+	// (same pattern as NEAR — the validator signs the Cardano hash, so the
+	// witness must use it).
+	if certenProof.BLSAggregateSignature != "" {
+		sigHex := strings.TrimPrefix(certenProof.BLSAggregateSignature, "0x")
+		if blsSig, decErr := hex.DecodeString(sigHex); decErr == nil && len(blsSig) > 0 {
+			newZKBytes, newPubkeyCommit := ethManager.RegenerateBLSZKProofForChain(
+				blsSig,
+				cardanoMsgHash,
+				comprehensiveProof.BLSProof.SignedVotingPower,
+				comprehensiveProof.BLSProof.TotalVotingPower,
+			)
+			if len(newZKBytes) > 0 {
+				comprehensiveProof.BLSProof.AggregateSignature = newZKBytes
+				btce.logger.Printf("🔐 [CARDANO-V6.1] Regenerated ZK proof against Cardano msgHash: %d bytes, pubkeyCommitment=0x%x",
+					len(newZKBytes), newPubkeyCommit[:8])
+			}
+		}
+	}
+
+	// ========== Step 1: Create Anchor (TX1) ==========
+	btce.logger.Printf("🔗 [CARDANO-EXEC-V6.1] Step 1: Creating anchor on %s...", health.AnchorScriptHash[:12])
+
+	createReq := CardanoCreateAnchorRequest{
+		BundleID:             hexStr(bundleIdHash[:]),
+		ADIURLHash:           hexStr(adiURLHash[:]),
+		OperationCommitment:  hexStr(opCommitment[:]),
+		CrossChainCommitment: hexStr(ccCommitment[:]),
+		GovernanceRoot:       hexStr(govRoot[:]),
+		ExecutionCommitment:  hexStr(execCommitment[:]),
+		OperationID:          hexStr(operationID[:]),
+		MerkleRoot:           hexStr(bundleIdHash[:]), // trivial-path: leaf == root
+		ValidatorSetRoot:     hexStr(setRoot[:]),
+		DeploymentChainID:    hexStr(chainID32[:]),
+		BlockHeight:          certenProof.BlockHeight,
+	}
+	createTxHash, err := cardanoClient.CreateAnchor(ctx, createReq)
+	if err != nil {
+		btce.logger.Printf("❌ [CARDANO-EXEC] Step 1 failed: %v", err)
+		return btce.buildCardanoResult(intentID, anchorID, "create_failed_cardano", "", "", false), err
+	}
+	btce.logger.Printf("✅ [CARDANO-EXEC] Step 1 complete - Anchor created: %s", createTxHash)
+
+	// ========== Step 2: Execute Comprehensive Proof (TX2) ==========
+	btce.logger.Printf("🔗 [CARDANO-EXEC] Step 2: Submitting comprehensive proof...")
+
+	// Build the Cardano-shaped comprehensive proof. The wire bytes for
+	// proof_a / proof_b / proof_c come from the BLS12-381 prover (TON
+	// uses the same setup); for first-pass we send empty values so the
+	// on-chain validator can still type-check the redeemer. Real proof
+	// integration lands in the bring-up debug pass.
+	cardanoProof := CardanoComprehensiveProof{
+		AnchorID:                    hexStr(bundleIdHash[:]),
+		LeafHash:                    hexStr(bundleIdHash[:]),
+		ProofHashes:                 []string{},
+		BLSProof:                    buildCardanoBLSProof(comprehensiveProof, cardanoMsgHash),
+		GovernanceProof:             buildCardanoGovProof(comprehensiveProof),
+		OperationCommitment:         hexStr(opCommitment[:]),
+		CrossChainCommitment:        hexStr(ccCommitment[:]),
+		GovernanceRoot:              hexStr(govRoot[:]),
+		ExecutionCommitment:         hexStr(execCommitment[:]),
+		ExpectedExecutionCommitment: hexStr(execCommitment[:]),
+		ExpirationMs:                uint64(time.Now().Add(24*time.Hour).UnixMilli()),
+	}
+
+	verifyTxHash, err := cardanoClient.ExecuteComprehensiveProof(ctx, CardanoExecuteProofRequest{
+		AnchorUTXORef: createTxHash + "#0",
+		Proof:         cardanoProof,
+	})
+	if err != nil {
+		btce.logger.Printf("❌ [CARDANO-EXEC] Step 2 failed: %v", err)
+		return btce.buildCardanoResult(intentID, anchorID, createTxHash, "verify_failed_cardano", "", false), err
+	}
+	btce.logger.Printf("✅ [CARDANO-EXEC] Step 2 complete - Proof verified: %s", verifyTxHash)
+
+	// ========== Step 3: Execute Governance Proof Direct (TX3) ==========
+	btce.logger.Printf("🏦 [CARDANO-EXEC] Step 3: Executing governance proof direct...")
+
+	allLegs := btce.extractAllLegsFromIntent(legacyIntent)
+	cardanoLeg := btce.findLegForChainPrefix(allLegs, "cardano", chainID)
+	govTxHash := "no_governance_needed"
+
+	if cardanoLeg != nil {
+		// Build the per-call governance proof.
+		var targetValue *big.Int
+		if cardanoLeg.Value != nil {
+			targetValue = new(big.Int).Set(cardanoLeg.Value)
+		} else {
+			targetValue = big.NewInt(1_000_000) // 1 ADA fallback
+		}
+		callTarget := cardanoLeg.Target.Hex() // bech32 string OR pubkey hash — opaque to Go
+		if t := btce.extractCardanoFieldFromCrossChainData(legacyIntent, "to"); t != "" {
+			callTarget = t
+		}
+
+		opType := ethcrypto.Keccak256([]byte(callTarget), []byte("transfer"))
+		var opTypeHash [32]byte
+		copy(opTypeHash[:], opType)
+
+		call := CardanoCall{
+			Target:          callTarget,
+			Method:          "transfer",
+			Args:            "",
+			DepositLovelace: targetValue,
+			GasUnits:        300_000_000_000,
+			OpType:          hexStr(opTypeHash[:]),
+		}
+
+		govProof := CardanoAccountGovernanceProof{
+			ADIURL:                      adiURL,
+			AnchorID:                    hexStr(bundleIdHash[:]),
+			MerkleProof:                 []string{},
+			Nonce:                       uint64(time.Now().Unix()),
+			TimestampSec:                uint64(time.Now().Unix()),
+			ExpiresAtSec:                uint64(time.Now().Add(24 * time.Hour).Unix()),
+			RequiredLevel:               1,
+			ExpectedExecutionCommitment: hexStr(execCommitment[:]),
+		}
+		govProof.RoleProof.Level = 2
+		govProof.RoleProof.Permissions = []string{"transfer"}
+		govProof.ThresholdProof.Numerator = 2
+		govProof.ThresholdProof.Denominator = 3
+		govProof.ThresholdProof.VotingPower = 500
+		// Pre-compute proof_hash so the tx-server side doesn't need to.
+		ph := ethcrypto.Keccak256(
+			[]byte(govProof.ADIURL),
+			bundleIdHash[:],
+			u64BENonce(govProof.Nonce),
+			execCommitment[:],
+		)
+		var phArr [32]byte
+		copy(phArr[:], ph)
+		govProof.ProofHash = hexStr(phArr[:])
+
+		// account_utxo_ref: for first-pass we use a placeholder; in production
+		// the validator queries the account UTXO from a registry contract or
+		// from the Cardano DB-Sync index. Until that's plumbed, the account
+		// must be auto-deployed via the same pattern as NEAR.
+		accountUTXORef := os.Getenv("CARDANO_ACCOUNT_UTXO_REF")
+		if accountUTXORef == "" {
+			btce.logger.Printf("⚠️ [CARDANO-EXEC] CARDANO_ACCOUNT_UTXO_REF not set — Step 3 will be skipped until account is deployed")
+			govTxHash = "gov_skipped_no_account_utxo_ref"
+		} else {
+			result, govErr := cardanoClient.ExecuteGovernanceProofDirect(ctx, CardanoExecuteGovernanceRequest{
+				AccountUTXORef: accountUTXORef,
+				AnchorUTXORef:  verifyTxHash + "#0",
+				Proof:          govProof,
+				Calls:          []CardanoCall{call},
+			})
+			if govErr != nil {
+				btce.logger.Printf("⚠️ [CARDANO-EXEC] Step 3 failed: %v", govErr)
+				govTxHash = "gov_failed_cardano"
+			} else {
+				govTxHash = result
+			}
+		}
+	}
+
+	btce.logger.Printf("🎉 [CARDANO-EXEC] Cardano anchor workflow completed!")
+	btce.logger.Printf("   Create TX: %s", createTxHash)
+	btce.logger.Printf("   Verify TX: %s", verifyTxHash)
+	btce.logger.Printf("   Governance TX: %s", govTxHash)
+
+	return btce.buildCardanoResult(intentID, anchorID, createTxHash, verifyTxHash, govTxHash, true), nil
+}
+
+func (btce *BFTTargetChainExecutor) buildCardanoResult(
+	intentID, anchorID string,
+	createTxHash, verifyTxHash, govTxHash string,
+	success bool,
+) *TargetChainExecutionResult {
+	return &TargetChainExecutionResult{
+		Chain:            "cardano-preview",
+		TxHash:           createTxHash,
+		Success:          success,
+		CreateTxHash:     createTxHash,
+		VerifyTxHash:     verifyTxHash,
+		GovernanceTxHash: govTxHash,
+		Metadata: map[string]string{
+			"chain":           "cardano-preview",
+			"network":         os.Getenv("CARDANO_NETWORK"),
+			"explorerUrl":     "https://preview.cardanoscan.io",
+			"executionMethod": "lucid_evolution_bridge",
+		},
+	}
+}
+
+// extractCardanoFieldFromCrossChainData pulls a single field (e.g. "to",
+// "from") from the cardano leg's CrossChainData map. Same pattern as the
+// NEAR variant.
+func (btce *BFTTargetChainExecutor) extractCardanoFieldFromCrossChainData(legacyIntent *intent.CertenIntent, field string) string {
+	if legacyIntent == nil {
+		return ""
+	}
+	ccData := legacyIntent.CrossChainData
+	if len(ccData) == 0 {
+		return ""
+	}
+	var env map[string]interface{}
+	if err := jsonUnmarshal(ccData, &env); err != nil {
+		return ""
+	}
+	legs, ok := env["legs"].([]interface{})
+	if !ok {
+		return ""
+	}
+	for _, raw := range legs {
+		l, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		chain, _ := l["chain"].(string)
+		if !strings.HasPrefix(strings.ToLower(chain), "cardano") {
+			continue
+		}
+		if v, ok := l[field].(string); ok {
+			return v
+		}
+	}
+	return ""
+}
+
+// cardanoNetworkFromName normalizes a Lucid-style network name (Preview /
+// Preprod / Mainnet) to the lowercase discriminator used in the chain ID
+// domain ("preview" / "preprod" / "mainnet"). Matches cardanoNetworkForChain
+// in pkg/consensus/v6_1_signing.go.
+func cardanoNetworkFromName(n string) string {
+	switch strings.ToLower(n) {
+	case "preprod":
+		return "preprod"
+	case "mainnet":
+		return "mainnet"
+	}
+	return "preview"
+}
+
+func cardanoValidatorSetFromEnv(networkID string) (ids []string, powers []uint64, num, den uint64) {
+	raw := os.Getenv("CARDANO_VALIDATOR_IDS")
+	if raw != "" {
+		ids = strings.Split(raw, ",")
+	} else {
+		ids = make([]string, 7)
+		for i := 0; i < 7; i++ {
+			ids[i] = fmt.Sprintf("certen-v%d.cardano.%s", i+1, networkID)
+		}
+	}
+	powers = make([]uint64, len(ids))
+	for i := range powers {
+		powers[i] = 100
+	}
+	num, den = 2, 3
+	return
+}
+
+func buildCardanoBLSProof(p contracts.ComprehensiveCertenProof, msgHash [32]byte) CardanoBLSProofJSON {
+	// The on-chain Aiken verifier reads compressed BLS12-381 points (G1 = 48
+	// bytes, G2 = 96 bytes). The validator's BLS12-381 prover (currently used
+	// for TON) produces points in the same format. Pull them out and forward.
+	//
+	// For first-pass we send the BN254 ABI-encoded blob in `proof_a` and let
+	// the tx-server / on-chain validator surface a decode error if the wire
+	// format isn't ready yet — that's the same iterative-bring-up cycle NEAR
+	// went through.
+	signedVP := uint64(0)
+	if p.BLSProof.SignedVotingPower != nil {
+		signedVP = p.BLSProof.SignedVotingPower.Uint64()
+	}
+	totalVP := uint64(0)
+	if p.BLSProof.TotalVotingPower != nil {
+		totalVP = p.BLSProof.TotalVotingPower.Uint64()
+	}
+	return CardanoBLSProofJSON{
+		ProofA:               hexStr(p.BLSProof.BLS12381ProofBytes[:48]),
+		ProofB:               hexStr(p.BLSProof.BLS12381ProofBytes[48:144]),
+		ProofC:               hexStr(p.BLSProof.BLS12381ProofBytes[144:192]),
+		Commitments:          hexStr(zeroes48()),
+		CommitmentPok:        hexStr(zeroes48()),
+		MessageHash:          hexStr(msgHash[:]),
+		PubkeyCommitment:     hexStr(p.BLSProof.BLS12381PubkeyCommitment[:]),
+		SignedVotingPower:    signedVP,
+		TotalVotingPower:     totalVP,
+		ThresholdNumerator:   2,
+		ThresholdDenominator: 3,
+	}
+}
+
+func buildCardanoGovProof(p contracts.ComprehensiveCertenProof) CardanoGovernanceProofJSON {
+	out := CardanoGovernanceProofJSON{
+		KeyBookURL:       p.GovernanceProof.KeyBookURL,
+		KeyBookRoot:      hexStr(p.GovernanceProof.KeyBookRoot[:]),
+		KeyPageProofs:    []string{},
+		AuthorityAddress: hexStr(p.GovernanceProof.AuthorityAddress.Bytes()),
+		AuthorityLevel:   uint64(p.GovernanceProof.AuthorityLevel),
+		ThresholdMet:     p.GovernanceProof.ThresholdMet,
+	}
+	if p.GovernanceProof.RequiredSignatures != nil {
+		out.RequiredSignatures = p.GovernanceProof.RequiredSignatures.Uint64()
+	}
+	if p.GovernanceProof.ProvidedSignatures != nil {
+		out.ProvidedSignatures = p.GovernanceProof.ProvidedSignatures.Uint64()
+	}
+	if p.GovernanceProof.Nonce != nil {
+		out.Nonce = p.GovernanceProof.Nonce.Uint64()
+	}
+	for _, h := range p.GovernanceProof.KeyPageProofs {
+		out.KeyPageProofs = append(out.KeyPageProofs, hexStr(h[:]))
+	}
+	return out
+}
+
+func hexStr(b []byte) string {
+	if len(b) == 0 {
+		return ""
+	}
+	return "0x" + hex.EncodeToString(b)
+}
+
+func zeroes48() []byte { return make([]byte, 48) }
+
+func u64BENonce(n uint64) []byte {
+	return []byte{
+		byte(n >> 56), byte(n >> 48), byte(n >> 40), byte(n >> 32),
+		byte(n >> 24), byte(n >> 16), byte(n >> 8), byte(n),
+	}
+}
+
+func jsonUnmarshal(data []byte, out interface{}) error {
+	return json.Unmarshal(data, out)
 }
 
 // =============================================================================

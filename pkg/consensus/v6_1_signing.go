@@ -13,6 +13,7 @@ package consensus
 import (
 	"fmt"
 	"math/big"
+	"os"
 	"strings"
 
 	"github.com/certen/independant-validator/pkg/crypto/bls"
@@ -97,6 +98,13 @@ func signV6_1PreExecBLS(
 	// (over account_id strings, not 20-byte addresses).
 	if strings.HasPrefix(strings.ToLower(chainName), "near") {
 		return signV6_1PreExecBLSNear(logger, certenIntent, certenProof, chainName)
+	}
+
+	// Cardano target: same pattern as NEAR but uses lovelace amounts +
+	// bech32 target identifiers, with a Cardano-tagged deployment_chain_id
+	// derived from the Preview/Preprod/Mainnet network discriminator.
+	if strings.HasPrefix(strings.ToLower(chainName), "cardano") {
+		return signV6_1PreExecBLSCardano(logger, certenIntent, certenProof, chainName)
 	}
 
 	if evmChainID == 0 {
@@ -479,6 +487,262 @@ func nearExecutionCommitmentFromIntent(certenIntent *CertenIntent, ccData []byte
 
 	// Plain NEAR transfer: method="transfer", args=[].
 	return contracts.ComputeNearExecutionCommitmentV6_1(
+		networkID,
+		leg.To,
+		deposit,
+		"transfer",
+		nil,
+	)
+}
+
+// =============================================================================
+// Cardano V6.1 dispatch — same pattern as NEAR; lovelace amounts replace
+// yoctoNEAR, bech32 targets replace account_ids, and the chain identifier
+// is tagged "certen:chain:v1:cardano:".
+// =============================================================================
+
+// cardanoNetworkForChain maps the canonical Cardano chain name to the
+// network discriminator that goes into deployment_chain_id. Same mapping
+// the Aiken validator was compiled with; both sides MUST agree or the
+// on-chain messageHash recomputation drifts.
+func cardanoNetworkForChain(chainName string) string {
+	n := strings.ToLower(chainName)
+	switch {
+	case strings.Contains(n, "preview"):
+		return "preview"
+	case strings.Contains(n, "preprod"):
+		return "preprod"
+	case strings.Contains(n, "mainnet") || n == "cardano":
+		return "mainnet"
+	}
+	// Default unknown / bare "cardano-testnet" → preview for now (the
+	// most active Plutus V3 testnet); revisit if preprod takes over.
+	return "preview"
+}
+
+// cardanoValidatorSetForChain returns the validator identifiers + powers +
+// threshold that drive the Cardano-flavored validator-set-root. For now we
+// reuse the certen-v1..7 operator set, identified by their Cardano payment
+// pubkey hashes (or addresses) once the wallet is generated. The exact
+// values get loaded from env at boot to avoid hard-coding before the wallet
+// exists; until then we return placeholder zero hashes so the set root
+// derives cleanly (the on-chain validator was compiled with a matching
+// placeholder so the BLS sig still verifies during testnet bring-up).
+func cardanoValidatorSetForChain(networkID string) (
+	ids []string,
+	powers []uint64,
+	num uint64,
+	den uint64,
+) {
+	// The Cardano deployment uses one shared multi-sig wallet for the
+	// validator set initially (matches how NEAR uses certen-v1..7). The
+	// IDs are bech32 addresses set via CARDANO_VALIDATOR_IDS env (comma-
+	// separated). If unset, fall back to the 7-operator certen-v1..7
+	// labels so the placeholder still produces a deterministic root.
+	raw := os.Getenv("CARDANO_VALIDATOR_IDS")
+	if raw != "" {
+		ids = strings.Split(raw, ",")
+	} else {
+		ids = make([]string, 7)
+		for i := 0; i < 7; i++ {
+			ids[i] = fmt.Sprintf("certen-v%d.cardano.%s", i+1, networkID)
+		}
+	}
+	powers = make([]uint64, len(ids))
+	for i := range powers {
+		powers[i] = 100
+	}
+	num, den = 2, 3
+	return
+}
+
+// signV6_1PreExecBLSCardano is the Cardano target dispatch from
+// signV6_1PreExecBLS. Same overall shape as the NEAR dispatch:
+//   - 32-byte synthesized deployment_chain_id (tagged "cardano")
+//   - Cardano-flavored validator_set_root (bech32 / pubkey-hash strings)
+//   - Cardano-flavored execution_commitment (lovelace u128-LE deposit,
+//     bech32 target, "transfer" method by default)
+//
+// The signed sig is byte-equivalent to what the on-chain Aiken anchor
+// validator reconstructs via binding.ak::message_hash_pre and verifies via
+// bls.ak::verify.
+func signV6_1PreExecBLSCardano(
+	logger Logger,
+	certenIntent *CertenIntent,
+	certenProof *proof.CertenProof,
+	chainName string,
+) (string, error) {
+	networkID := cardanoNetworkForChain(chainName)
+	chainID32 := contracts.ComputeCardanoDeploymentChainIDV6_1(networkID)
+
+	ids, powers, num, den := cardanoValidatorSetForChain(networkID)
+	setRoot := contracts.ComputeCardanoValidatorSetRootV6_1(ids, powers, num, den)
+
+	in, err := buildV6_1CardanoInputsFromIntent(certenIntent, certenProof, chainID32, setRoot)
+	if err != nil {
+		return "", fmt.Errorf("build V6.1 Cardano inputs: %w", err)
+	}
+	anchorId, govRoot, msgHash := contracts.BuildV6_1PreExecBundleCardano(in)
+
+	if logger != nil {
+		logger.Printf("🔗 [BLS-SIG-V6.1-CARDANO] chain=%s networkID=%s chainID32=0x%x anchorId=0x%x govRoot=0x%x msgHash=0x%x setRoot=0x%x",
+			chainName, networkID, chainID32[:8],
+			anchorId[:8], govRoot[:8], msgHash[:8], setRoot[:8])
+		logger.Printf("🧮 [BFT-GOV-INPUTS-CARDANO] opID=%x L1=%x L2=%x L3=%x L4=%x kp=%x kb=%x",
+			in.GovRootInputs.OperationID[:8],
+			in.GovRootInputs.L1AccountHash[:8],
+			in.GovRootInputs.L2BPTRoot[:8],
+			in.GovRootInputs.L3BlockHash[:8],
+			in.GovRootInputs.L4ConsensusProofH[:8],
+			in.GovRootInputs.KeypageURLHash[:8],
+			in.GovRootInputs.KeybookURLHash[:8],
+		)
+		logger.Printf("🧮 [BFT-PRIMITIVES-CARDANO] adi=%x op=%x cc=%x exec=%x opID=%x height=%d",
+			in.AdiURLHash[:8],
+			in.OperationCommitment[:8],
+			in.CrossChainCommitment[:8],
+			in.ExecutionCommitment[:8],
+			in.OperationID[:8],
+			in.AccumulateBlockHeight,
+		)
+	}
+
+	km := bls.GetValidatorBLSKey()
+	if km == nil {
+		return "", fmt.Errorf("validator BLS key manager not initialized")
+	}
+	sk := km.PrivateKey()
+	if sk == nil {
+		return "", fmt.Errorf("validator BLS private key not loaded")
+	}
+	// Same V2 hash-to-G1 path as EVM/NEAR — the ZK circuit constraints are
+	// chain-agnostic; only the messageHash input differs.
+	sig := bls_zkp.SignV6_1PreExec(sk, msgHash)
+	if sig == nil {
+		return "", fmt.Errorf("V6.1 Cardano BLS sign returned nil")
+	}
+	return sig.Hex(), nil
+}
+
+// buildV6_1CardanoInputsFromIntent mirrors buildV6_1NearInputsFromIntent.
+// Only the ExecutionCommitment derivation diverges: Cardano uses lovelace
+// u128-LE deposits and bech32 / pubkey-hash targets.
+func buildV6_1CardanoInputsFromIntent(
+	certenIntent *CertenIntent,
+	certenProof *proof.CertenProof,
+	chainID32 [32]byte,
+	setRoot [32]byte,
+) (contracts.V6_1PreExecBundleInputsCardano, error) {
+	adiURL := ""
+	if certenProof != nil && certenProof.AccountURL != "" {
+		adiURL = certenProof.AccountURL
+	} else if certenIntent != nil {
+		adiURL = fmt.Sprintf("%s/data", certenIntent.OrganizationADI)
+	}
+
+	intentID := ""
+	if certenIntent != nil {
+		intentID = certenIntent.IntentID
+	}
+	blockHeight := uint64(0)
+	txHash := ""
+	if certenProof != nil {
+		blockHeight = certenProof.BlockHeight
+		txHash = certenProof.TransactionHash
+	}
+
+	var bptRoot []byte
+	if certenProof != nil && certenProof.LiteClientProof != nil {
+		bptRoot = certenProof.LiteClientProof.BPTRoot
+	}
+
+	var ccData []byte
+	if certenProof != nil && len(certenProof.CrossChainData) > 0 {
+		ccData = certenProof.CrossChainData
+	} else if certenIntent != nil && len(certenIntent.CrossChainData) > 0 {
+		ccData = certenIntent.CrossChainData
+	}
+
+	opIDStr := ""
+	if certenIntent != nil {
+		if s, err := certenIntent.OperationID(); err == nil {
+			opIDStr = s
+		}
+	}
+	opIDBytes32 := contracts.DeriveOperationIDBytes32FromString(opIDStr)
+
+	gb := contracts.NewAccumulateGovRootInputsBuilder().
+		SetOperationIDBytes32(opIDBytes32)
+	if certenProof != nil && certenProof.LiteClientProof != nil {
+		lc := certenProof.LiteClientProof
+		gb.SetL1AccountHash(lc.AccountHash).
+			SetL2BPTRoot(lc.BPTRoot).
+			SetL3BlockHash(lc.BlockHash).
+			SetL4ConsensusProofFromJSON(lc.ConsensusProof)
+	}
+	if certenProof != nil {
+		gb.SetG0FromJSON(certenProof.G0Result).
+			SetG1FromJSON(certenProof.G1Result).
+			SetG2FromJSON(certenProof.G2Result).
+			SetKeypageURL(certenProof.KeypageURL).
+			SetKeybookURL(certenProof.KeybookURL)
+	}
+
+	execCommitment := cardanoExecutionCommitmentFromIntent(certenIntent, ccData)
+
+	return contracts.V6_1PreExecBundleInputsCardano{
+		DeploymentChainID:     chainID32,
+		ValidatorSetRoot:      setRoot,
+		AdiURLHash:            contracts.DeriveAdiURLHashFromString(adiURL),
+		OperationCommitment:   contracts.DeriveOperationCommitmentFromFields(intentID, blockHeight, txHash),
+		CrossChainCommitment:  contracts.DeriveCrossChainCommitmentFromBPT(bptRoot),
+		ExecutionCommitment:   execCommitment,
+		OperationID:           opIDBytes32,
+		AccumulateBlockHeight: blockHeight,
+		GovRootInputs:         gb.Build(),
+	}, nil
+}
+
+// cardanoExecutionCommitmentFromIntent extracts the Cardano target leg
+// from the intent and computes the same execution_commitment the on-chain
+// validator will recompute at TX2 / TX3 time.
+//
+// Leg shape: chain starts with "cardano", `to` is the destination bech32
+// address (or pubkey hash), `amountWei` is the deposit in lovelace.
+func cardanoExecutionCommitmentFromIntent(certenIntent *CertenIntent, ccData []byte) [32]byte {
+	if certenIntent == nil {
+		return contracts.DeriveExecutionCommitmentFromCrossChainJSON(ccData)
+	}
+	env, err := certenIntent.ParseCrossChain()
+	if err != nil || env == nil || len(env.Legs) == 0 {
+		return contracts.DeriveExecutionCommitmentFromCrossChainJSON(ccData)
+	}
+
+	var leg *CCLeg
+	for i := range env.Legs {
+		l := &env.Legs[i]
+		if strings.HasPrefix(strings.ToLower(l.Chain), "cardano") {
+			leg = l
+			if l.Role == "destination" {
+				break
+			}
+		}
+	}
+	if leg == nil {
+		return contracts.DeriveExecutionCommitmentFromCrossChainJSON(ccData)
+	}
+
+	networkID := cardanoNetworkForChain(leg.Chain)
+
+	deposit := new(big.Int)
+	if leg.AmountWei != "" {
+		_, ok := deposit.SetString(leg.AmountWei, 10)
+		if !ok {
+			deposit = big.NewInt(0)
+		}
+	}
+
+	return contracts.ComputeCardanoExecutionCommitmentV6_1(
 		networkID,
 		leg.To,
 		deposit,
