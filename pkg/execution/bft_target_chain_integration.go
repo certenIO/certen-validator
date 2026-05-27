@@ -1796,11 +1796,15 @@ func (btce *BFTTargetChainExecutor) executeNearOperations(
 	// on-chain CertenAnchorV6_1::compute_bundle_id_v6_1 exactly). The EVM
 	// path uses ethManager.generateAnchorID which encodes an int64 chainId;
 	// NEAR substitutes the synthesized 32-byte deployment_chain_id.
+	//
+	// IMPORTANT: don't reuse ethManager.buildComprehensiveProof's
+	// GovernanceRoot directly — it's the V5-era simpler value, not the
+	// A+++ 10-field root the BFT signer computed for the messageHash. We
+	// recompute the A+++ govRoot below via ethManager.ComputeV6_1AccumulateGovRoot
+	// (chain-agnostic — same primitives the BFT signer used) so the bundleId
+	// agrees with the signed messageHash.
 	var comprehensiveProof *contracts.ComprehensiveCertenProof
 	if ethManager != nil {
-		// Build the comprehensive proof envelope (govRoot, commitments, etc.)
-		// Re-use the EVM builder for the body — the only NEAR-specific
-		// substitution is the bundle_id at the end, which we recompute below.
 		tmpBundleID := ethManager.generateAnchorID(legacyIntent, certenProof)
 		cp := ethManager.buildComprehensiveProof(legacyIntent, certenProof,
 			&anchor.AnchorResponse{AnchorID: anchorID, Success: true, Message: "BFT anchor for NEAR"},
@@ -1825,12 +1829,21 @@ func (btce *BFTTargetChainExecutor) executeNearOperations(
 		gasFactoryDeploy = 100_000_000_000_000 // 100 TGas
 	)
 
-	// Extract commitments
+	// Extract commitments. V6.1 NEAR REQUIRES the A+++ 10-field govRoot so
+	// bundleId matches what the BFT signer computed. comprehensiveProof's
+	// GovernanceRoot is the V5-era simpler value; we override with the A+++
+	// derivation when ethManager is available.
 	var opCommitment, ccCommitment, govRoot [32]byte
 	if comprehensiveProof != nil {
 		opCommitment = comprehensiveProof.Commitments.OperationCommitment
 		ccCommitment = comprehensiveProof.Commitments.CrossChainCommitment
 		govRoot = comprehensiveProof.Commitments.GovernanceRoot
+	}
+	if ethManager != nil {
+		// Replace V5-era govRoot with A+++ 10-field root so bundleId matches
+		// what the BFT signer used (single source of truth across both paths).
+		govRoot = ethManager.ComputeV6_1AccumulateGovRoot(legacyIntent, certenProof)
+		btce.logger.Printf("🧮 [NEAR-V6.1] A+++ govRoot=0x%x (chain-agnostic Accumulate state)", govRoot[:8])
 	}
 
 	// V6.1: synthesize the NEAR deployment_chain_id and compute the V6.1

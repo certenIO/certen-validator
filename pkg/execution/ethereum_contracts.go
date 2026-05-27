@@ -2059,11 +2059,22 @@ func (ecm *EthereumContractManager) safeOperationID(certenIntent *intent.CertenI
 	return s
 }
 
-// computeV6_1AccumulateGovRoot is the A+++ govRoot derivation used at
+// ComputeV6_1AccumulateGovRoot is the A+++ govRoot derivation used at
 // EVM-submission time. MUST byte-match the value the BFT signer computed
 // (pkg/consensus/v6_1_signing.go::buildV6_1InputsFromIntent → GovRootInputs).
 // Both sides derive primitives from the SAME certenProof object (G0/G1/G2 are
 // plumbed onto certenProof by the BFT signer before signing).
+//
+// Exported (capital C) so the NEAR submission path
+// (pkg/execution/bft_target_chain_integration.go) can reuse the SAME
+// derivation without duplicating logic — keeps signer and submitter in lockstep.
+func (ecm *EthereumContractManager) ComputeV6_1AccumulateGovRoot(
+	certenIntent *intent.CertenIntent,
+	certenProof *proof.CertenProof,
+) [32]byte {
+	return ecm.computeV6_1AccumulateGovRoot(certenIntent, certenProof)
+}
+
 func (ecm *EthereumContractManager) computeV6_1AccumulateGovRoot(
 	certenIntent *intent.CertenIntent,
 	certenProof *proof.CertenProof,
