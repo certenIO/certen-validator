@@ -12,6 +12,7 @@ package consensus
 
 import (
 	"fmt"
+	"math/big"
 	"strings"
 
 	"github.com/certen/independant-validator/pkg/crypto/bls"
@@ -38,19 +39,19 @@ func nearNetworkIDForChain(chainName string) string {
 
 // nearValidatorSetForChain returns the validator account_ids + powers +
 // threshold that drive the NEAR-flavored validator-set-root. Production
-// posture: same 7 operators as EVM, but expressed as NEAR account names
-// (validator-1.testnet … validator-7.testnet on testnet). Env override
-// matches the EVM operator override pattern so config can shift without
-// a rebuild.
+// posture: same 7 operators as EVM, but expressed as NEAR account names.
+// On testnet the docker-compose's NEAR_SIGNER_ACCOUNT_ID is certen-v{1..7}
+// .testnet — these are the accounts that actually CALL create_anchor /
+// execute_comprehensive_proof on the V6.1 anchor, so they're the ones
+// registered via register_validator. The locally-computed setRoot MUST be
+// derived over the same names or the BFT-signed messageHash diverges from
+// the on-chain reconstruction.
 func nearValidatorSetForChain(networkID string) (
 	accounts []string,
 	powers []uint64,
 	num uint64,
 	den uint64,
 ) {
-	// Defaults — must match what register_validator was called with on the
-	// on-chain anchor. On testnet, the 7 validator accounts deployed under
-	// near-testnet are validator-{1..7}.testnet.
 	suffix := ".testnet"
 	if networkID == "mainnet" {
 		suffix = ".near"
@@ -58,7 +59,7 @@ func nearValidatorSetForChain(networkID string) (
 	accounts = make([]string, 7)
 	powers = make([]uint64, 7)
 	for i := 0; i < 7; i++ {
-		accounts[i] = fmt.Sprintf("validator-%d%s", i+1, suffix)
+		accounts[i] = fmt.Sprintf("certen-v%d%s", i+1, suffix)
 		powers[i] = 100
 	}
 	num, den = 2, 3
@@ -331,10 +332,16 @@ func signV6_1PreExecBLSNear(
 }
 
 // buildV6_1NearInputsFromIntent mirrors buildV6_1InputsFromIntent but
-// produces the NEAR-flavored bundle inputs (32-byte chain id, NEAR set
-// root). All Accumulate-side primitives (adiURLHash, opCommitment,
-// ccCommitment, execCommitment, opID, govRoot inputs) are chain-agnostic
-// and reused verbatim.
+// produces the NEAR-flavored bundle inputs. Diverges from the EVM variant
+// in two places:
+//   - DeploymentChainID is the 32-byte synthesized value (not int64)
+//   - ExecutionCommitment is computed via ComputeNearExecutionCommitmentV6_1
+//     (network_id ‖ target_account ‖ u128-LE deposit ‖ keccak256(method‖args))
+//     instead of the EVM-style abi.encodePacked variant. This is critical:
+//     the NEAR anchor's create_anchor recomputes its own bundleId from these
+//     inputs, and rejects mismatches. Same execCommitment on both sides ⇒
+//     same bundleId ⇒ same messageHash that the contract reconstructs at
+//     execute_comprehensive_proof time.
 func buildV6_1NearInputsFromIntent(
 	certenIntent *CertenIntent,
 	certenProof *proof.CertenProof,
@@ -396,15 +403,86 @@ func buildV6_1NearInputsFromIntent(
 			SetKeybookURL(certenProof.KeybookURL)
 	}
 
+	// NEAR-flavored executionCommitment from the target leg. Falls back to
+	// the EVM-style commitment if the intent's target leg can't be parsed
+	// — but for any NEAR-routed intent the leg will be present, so the
+	// fallback is just safety.
+	execCommitment := nearExecutionCommitmentFromIntent(certenIntent, ccData)
+
 	return contracts.V6_1PreExecBundleInputsNear{
 		DeploymentChainID:     chainID32,
 		ValidatorSetRoot:      setRoot,
 		AdiURLHash:            contracts.DeriveAdiURLHashFromString(adiURL),
 		OperationCommitment:   contracts.DeriveOperationCommitmentFromFields(intentID, blockHeight, txHash),
 		CrossChainCommitment:  contracts.DeriveCrossChainCommitmentFromBPT(bptRoot),
-		ExecutionCommitment:   contracts.DeriveExecutionCommitmentFromCrossChainJSON(ccData),
+		ExecutionCommitment:   execCommitment,
 		OperationID:           opIDBytes32,
 		AccumulateBlockHeight: blockHeight,
 		GovRootInputs:         gb.Build(),
 	}, nil
+}
+
+// =============================================================================
+// NEAR execution-commitment helper.
+// =============================================================================
+
+// nearExecutionCommitmentFromIntent extracts the NEAR target leg from the
+// intent and computes the same execution_commitment the on-chain
+// CertenAnchorV6_1 will recompute at execute_with_governance time.
+//
+// The intent's CrossChainEnvelope contains 1-N legs; we pick the leg whose
+// chain prefix is "near". The leg's `to` is the destination account_id
+// and `amountWei` is the deposit in yoctoNEAR. The method is fixed to
+// "transfer" with no args (same as the validator submission path).
+//
+// If no NEAR leg is found, returns the EVM-style commitment as a fallback
+// so the function is never wrong-by-default for non-NEAR routes.
+func nearExecutionCommitmentFromIntent(certenIntent *CertenIntent, ccData []byte) [32]byte {
+	if certenIntent == nil {
+		return contracts.DeriveExecutionCommitmentFromCrossChainJSON(ccData)
+	}
+	env, err := certenIntent.ParseCrossChain()
+	if err != nil || env == nil || len(env.Legs) == 0 {
+		return contracts.DeriveExecutionCommitmentFromCrossChainJSON(ccData)
+	}
+
+	// Pick the destination NEAR leg (or first NEAR leg).
+	var leg *CCLeg
+	for i := range env.Legs {
+		l := &env.Legs[i]
+		if strings.HasPrefix(strings.ToLower(l.Chain), "near") {
+			leg = l
+			if l.Role == "destination" {
+				break
+			}
+		}
+	}
+	if leg == nil {
+		return contracts.DeriveExecutionCommitmentFromCrossChainJSON(ccData)
+	}
+
+	// network_id derived from chain name (testnet vs mainnet).
+	networkID := nearNetworkIDForChain(leg.Chain)
+	if !strings.Contains(strings.ToLower(leg.Network), "mainnet") &&
+		!strings.HasSuffix(strings.ToLower(leg.Network), ".near") {
+		// Network is a secondary signal; honor leg.Network when it's explicit.
+	}
+
+	// amountWei is the deposit (yoctoNEAR for NEAR legs).
+	deposit := new(big.Int)
+	if leg.AmountWei != "" {
+		_, ok := deposit.SetString(leg.AmountWei, 10)
+		if !ok {
+			deposit = big.NewInt(0)
+		}
+	}
+
+	// Plain NEAR transfer: method="transfer", args=[].
+	return contracts.ComputeNearExecutionCommitmentV6_1(
+		networkID,
+		leg.To,
+		deposit,
+		"transfer",
+		nil,
+	)
 }

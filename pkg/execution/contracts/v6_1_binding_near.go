@@ -12,10 +12,67 @@
 package contracts
 
 import (
+	"math/big"
 	"sort"
 
 	"github.com/ethereum/go-ethereum/crypto"
 )
+
+// ComputeNearExecutionCommitmentV6_1 reproduces
+// CertenAnchorV6_1::compute_execution_commitment on NEAR. The on-chain
+// contract recomputes this at execute_with_governance time and rejects the
+// call if the runtime params don't match. The validator's local
+// computation MUST be byte-identical or TX3 reverts with
+// "Execution commitment mismatch".
+//
+// Wire format (matches the Rust contract exactly):
+//
+//     data_hash   = keccak256(method || args)
+//     commitment  = keccak256(
+//                     network_id_bytes
+//                     ‖ target_account_bytes
+//                     ‖ u128-LE(deposit_yocto)    // 16 bytes
+//                     ‖ data_hash                  // 32 bytes
+//                   )
+//
+// For a plain NEAR transfer the call shape is method="transfer" and args=[];
+// the BFT signing path passes the same (target, deposit, method, args) so
+// the result lines up with what the contract computes from its stored
+// values at execute time.
+func ComputeNearExecutionCommitmentV6_1(
+	networkID string,
+	target string,
+	depositYocto *big.Int,
+	method string,
+	args []byte,
+) [32]byte {
+	// data_hash = keccak256(method || args)
+	dataHasher := crypto.NewKeccakState()
+	_, _ = dataHasher.Write([]byte(method))
+	_, _ = dataHasher.Write(args)
+	var dataHash [32]byte
+	_, _ = dataHasher.Read(dataHash[:])
+
+	// Little-endian 16-byte deposit (matches Rust to_le_bytes() for u128).
+	depositLE := make([]byte, 16)
+	if depositYocto != nil {
+		be := depositYocto.Bytes()
+		// Reverse big-endian → little-endian, copy into the first
+		// len(be) bytes of the 16-byte slot.
+		for i, b := range be {
+			depositLE[len(be)-1-i] = b
+		}
+	}
+
+	hasher := crypto.NewKeccakState()
+	_, _ = hasher.Write([]byte(networkID))
+	_, _ = hasher.Write([]byte(target))
+	_, _ = hasher.Write(depositLE)
+	_, _ = hasher.Write(dataHash[:])
+	var out [32]byte
+	_, _ = hasher.Read(out[:])
+	return out
+}
 
 // NEAR V6.1 BLS messageHash domain constants — right-padded to 32 bytes
 // (matches what the Rust contract does via pad_bytes32 on the same labels).

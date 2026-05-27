@@ -1855,7 +1855,10 @@ func (btce *BFTTargetChainExecutor) executeNearOperations(
 		if nearLegForExec.Value != nil {
 			nearDepositYocto = new(big.Int).Set(nearLegForExec.Value)
 		}
-		execCommitment = computeNearExecutionCommitment(networkID, nearTargetID, nearDepositYocto, "transfer", []byte{})
+		// V6.1: use the contracts package helper so the BFT signing side
+		// (which can't import this package) and this submission side
+		// compute byte-identical execution_commitments.
+		execCommitment = contracts.ComputeNearExecutionCommitmentV6_1(networkID, nearTargetID, nearDepositYocto, "transfer", nil)
 		btce.logger.Printf("🔒 [NEAR-EXEC] CRITICAL-001 ExecutionCommitment: 0x%x", execCommitment[:8])
 	}
 
