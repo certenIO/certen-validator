@@ -170,6 +170,25 @@ func ComputePubkeyCommitmentV2BLS381(pk bls12381.G2Affine) ([32]byte, error) {
 	return out, nil
 }
 
+// HashMessageToG1V2BLS381 is the off-circuit counterpart of the BLS12-381 V2
+// circuit's in-circuit MapToG1. It reduces the messageHash mod BLS12-381 Fr
+// (NOT BN254 Fr — the BLS12-381 V2 circuit's native field is BLS12-381 Fr),
+// then lifts to Fp and maps to G1. Validators signing for the Cardano V2
+// verifier MUST use this exact function so the in-circuit pairing check is
+// satisfiable.
+func HashMessageToG1V2BLS381(messageHash [32]byte) bls12381.G1Affine {
+	var asInt big.Int
+	asInt.SetBytes(messageHash[:])
+	var frEl bls12381fr.Element
+	frEl.SetBigInt(&asInt)
+	var frBI big.Int
+	frEl.BigInt(&frBI)
+
+	var u bls12381fp.Element
+	u.SetBigInt(&frBI)
+	return bls12381.MapToG1(u)
+}
+
 // BuildV2WitnessBLS381 constructs the BLS12-381 V2 circuit witness. Mirrors
 // BuildV2Witness but reduces the messageHash mod BLS12-381 Fr and uses the
 // BLS12-381 pubkey commitment.
