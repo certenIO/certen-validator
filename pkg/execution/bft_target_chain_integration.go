@@ -2824,12 +2824,17 @@ func (btce *BFTTargetChainExecutor) executeCardanoOperations(
 		} else {
 			targetValue = big.NewInt(1_000_000) // 1 ADA fallback
 		}
-		callTarget := cardanoLeg.Target.Hex() // bech32 string OR pubkey hash — opaque to Go
+		callTarget := cardanoLeg.Target.Hex() // overridden below with the real target
 		if t := btce.extractCardanoFieldFromCrossChainData(legacyIntent, "to"); t != "" {
 			callTarget = t
 		}
 
-		opType := ethcrypto.Keccak256([]byte(callTarget), []byte("transfer"))
+		// call.target is the destination's 28-byte payment-credential hash (hex).
+		// op_type = keccak256(target_raw_bytes || method) — must hash the RAW
+		// bytes to match the on-chain certen_account_v4 recomputation (the
+		// redeemer ByteArray decodes to 28 raw bytes), not the hex string.
+		targetRaw := common.FromHex(callTarget)
+		opType := ethcrypto.Keccak256(targetRaw, []byte("transfer"))
 		var opTypeHash [32]byte
 		copy(opTypeHash[:], opType)
 
