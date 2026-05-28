@@ -166,9 +166,11 @@ func (p *BLS12381V2Prover) GenerateProof(
 		return nil, fmt.Errorf("new witness: %w", err)
 	}
 
-	// Same keccak-mod-R hash-to-field the on-chain BSB22 Pedersen check uses.
+	// Cardano-compatible BSB22 commitment hash: publicCommitment =
+	// keccak256(compressed(commitment)) mod BLS12-381 Fr — derivable on-chain
+	// via bls12_381_g1_compress (CIP-381 can't read raw coordinates).
 	proof, err := groth16.Prove(p.cs, p.pk, witnessData,
-		backend.WithProverHashToFieldFunction(NewKeccakToFieldHash()),
+		backend.WithProverHashToFieldFunction(NewKeccakToFieldHashBLS12381Compressed()),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("prove: %w", err)
@@ -247,7 +249,7 @@ func (p *BLS12381V2Prover) VerifyLocally(proof *BLS12381V2Proof) (bool, error) {
 		return false, fmt.Errorf("public witness: %w", err)
 	}
 	if err := groth16.Verify(gp, p.vk, pubWitness,
-		backend.WithVerifierHashToFieldFunction(NewKeccakToFieldHash()),
+		backend.WithVerifierHashToFieldFunction(NewKeccakToFieldHashBLS12381Compressed()),
 	); err != nil {
 		return false, nil
 	}

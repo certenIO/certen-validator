@@ -659,9 +659,12 @@ func signV6_1PreExecBLSCardano(
 	if sk == nil {
 		return "", fmt.Errorf("validator BLS private key not loaded")
 	}
-	// Same V2 hash-to-G1 path as EVM/NEAR — the ZK circuit constraints are
-	// chain-agnostic; only the messageHash input differs.
-	sig := bls_zkp.SignV6_1PreExec(sk, msgHash)
+	// Cardano uses the BLS12-381 V2 hash-to-G1 (reduces messageHash mod
+	// BLS12-381 Fr, matching BLSSignatureCircuitV2BLS381's in-circuit
+	// MapToG1). EVM/NEAR use the BN254-reduced variant; the curves differ so
+	// the H(m) point differs — signing with the wrong one makes the on-chain
+	// Cardano pairing check unsatisfiable.
+	sig := bls_zkp.SignV6_1PreExecBLS12381(sk, msgHash)
 	if sig == nil {
 		return "", fmt.Errorf("V6.1 Cardano BLS sign returned nil")
 	}

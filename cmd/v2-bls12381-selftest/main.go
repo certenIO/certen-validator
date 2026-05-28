@@ -50,4 +50,24 @@ func main() {
 	if !ok {
 		log.Fatal("proof did NOT verify")
 	}
+
+	// 5. Dump proof fields as hex for the Aiken on-chain verify test.
+	hx := func(b []byte) string {
+		const d = "0123456789abcdef"
+		o := make([]byte, len(b)*2)
+		for i, c := range b {
+			o[i*2] = d[c>>4]
+			o[i*2+1] = d[c&0xf]
+		}
+		return string(o)
+	}
+	fmt.Println("=== AIKEN-PROOF ===")
+	fmt.Printf("proof_a=%s\n", hx(proof.ProofA))
+	fmt.Printf("proof_b=%s\n", hx(proof.ProofB))
+	fmt.Printf("proof_c=%s\n", hx(proof.ProofC))
+	fmt.Printf("commitments=%s\n", hx(proof.Commitments))
+	fmt.Printf("commitment_pok=%s\n", hx(proof.CommitmentPok))
+	fmt.Printf("message_hash=%s\n", hx(proof.MessageHash[:]))
+	fmt.Printf("pubkey_commitment=%s\n", hx(proof.PubkeyCommitment[:]))
+	fmt.Printf("signed_vp=%d total_vp=%d\n", proof.SignedVP, proof.TotalVP)
 }

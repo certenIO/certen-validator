@@ -35,6 +35,8 @@ import (
 
 	"github.com/certen/independant-validator/pkg/anchor"
 	"github.com/certen/independant-validator/pkg/config"
+	"github.com/certen/independant-validator/pkg/crypto/bls"
+	"github.com/certen/independant-validator/pkg/crypto/bls_zkp"
 	"github.com/certen/independant-validator/pkg/execution/contracts"
 	"github.com/certen/independant-validator/pkg/intent"
 	"github.com/certen/independant-validator/pkg/proof"
@@ -2699,24 +2701,52 @@ func (btce *BFTTargetChainExecutor) executeCardanoOperations(
 	btce.logger.Printf("🔑 [CARDANO-V6.1] msgHash=0x%x setRoot=0x%x (substituted EVM-flavored msgHash with Cardano-flavored 6-field hash)",
 		cardanoMsgHash[:8], setRoot[:8])
 
-	// Regenerate the BLS-ZK proof against the Cardano-flavored msgHash
-	// (same pattern as NEAR — the validator signs the Cardano hash, so the
-	// witness must use it).
+	// Generate the BLS12-381 V2 Groth16 proof against the Cardano-flavored
+	// msgHash. This is the messageHash-bound, BSB22-augmented proof the
+	// Cardano on-chain V2 verifier requires (full parity with EVM/NEAR).
+	// The executor signed cardanoMsgHash via SignV6_1PreExecBLS12381 during
+	// BFT consensus, so the signature satisfies the in-circuit pairing.
+	var cardanoV2Proof *bls_zkp.BLS12381V2Proof
 	if certenProof.BLSAggregateSignature != "" {
 		sigHex := strings.TrimPrefix(certenProof.BLSAggregateSignature, "0x")
-		if blsSig, decErr := hex.DecodeString(sigHex); decErr == nil && len(blsSig) > 0 {
-			newZKBytes, newPubkeyCommit := ethManager.RegenerateBLSZKProofForChain(
-				blsSig,
-				cardanoMsgHash,
-				comprehensiveProof.BLSProof.SignedVotingPower,
-				comprehensiveProof.BLSProof.TotalVotingPower,
-			)
-			if len(newZKBytes) > 0 {
-				comprehensiveProof.BLSProof.AggregateSignature = newZKBytes
-				btce.logger.Printf("🔐 [CARDANO-V6.1] Regenerated ZK proof against Cardano msgHash: %d bytes, pubkeyCommitment=0x%x",
-					len(newZKBytes), newPubkeyCommit[:8])
-			}
+		blsSig, decErr := hex.DecodeString(sigHex)
+		if decErr != nil || len(blsSig) < 48 {
+			return nil, fmt.Errorf("cardano: invalid BLS signature (len=%d): %v", len(blsSig), decErr)
 		}
+		km := bls.GetValidatorBLSKey()
+		if km == nil {
+			return nil, fmt.Errorf("cardano: validator BLS key manager not available")
+		}
+		pubKeyBytes := km.GetPublicKeyBytes()
+		if len(pubKeyBytes) < 96 {
+			return nil, fmt.Errorf("cardano: validator pubkey too short (%d, need 96)", len(pubKeyBytes))
+		}
+		v2Prover, perr := bls_zkp.GetBLS12381V2Prover()
+		if perr != nil {
+			return nil, fmt.Errorf("cardano: BLS12-381 V2 prover unavailable: %w", perr)
+		}
+		signedVP := uint64(0)
+		if comprehensiveProof.BLSProof.SignedVotingPower != nil {
+			signedVP = comprehensiveProof.BLSProof.SignedVotingPower.Uint64()
+		}
+		totalVP := uint64(0)
+		if comprehensiveProof.BLSProof.TotalVotingPower != nil {
+			totalVP = comprehensiveProof.BLSProof.TotalVotingPower.Uint64()
+		}
+		v2Proof, gerr := v2Prover.GenerateProof(cardanoMsgHash, blsSig[:48], pubKeyBytes[:96], signedVP, totalVP)
+		if gerr != nil {
+			return nil, fmt.Errorf("cardano: BLS12-381 V2 proof generation failed: %w", gerr)
+		}
+		// Local sanity check before submitting on-chain.
+		if ok, verr := v2Prover.VerifyLocally(v2Proof); verr != nil || !ok {
+			return nil, fmt.Errorf("cardano: V2 proof failed local verification (ok=%v err=%v)", ok, verr)
+		}
+		cardanoV2Proof = v2Proof
+		btce.logger.Printf("🔐 [CARDANO-V6.1] Generated BLS12-381 V2 proof against Cardano msgHash: A=%d B=%d C=%d commit=%d pok=%d pkCommit=0x%x (local verify OK)",
+			len(v2Proof.ProofA), len(v2Proof.ProofB), len(v2Proof.ProofC),
+			len(v2Proof.Commitments), len(v2Proof.CommitmentPok), v2Proof.PubkeyCommitment[:8])
+	} else {
+		return nil, fmt.Errorf("cardano: certenProof.BLSAggregateSignature empty — cannot build V2 proof")
 	}
 
 	// ========== Step 1: Create Anchor (TX1) ==========
@@ -2745,16 +2775,13 @@ func (btce *BFTTargetChainExecutor) executeCardanoOperations(
 	// ========== Step 2: Execute Comprehensive Proof (TX2) ==========
 	btce.logger.Printf("🔗 [CARDANO-EXEC] Step 2: Submitting comprehensive proof...")
 
-	// Build the Cardano-shaped comprehensive proof. The wire bytes for
-	// proof_a / proof_b / proof_c come from the BLS12-381 prover (TON
-	// uses the same setup); for first-pass we send empty values so the
-	// on-chain validator can still type-check the redeemer. Real proof
-	// integration lands in the bring-up debug pass.
+	// Build the Cardano-shaped comprehensive proof from the BLS12-381 V2
+	// proof generated above (messageHash-bound, BSB22 commitments).
 	cardanoProof := CardanoComprehensiveProof{
 		AnchorID:                    hexStr(bundleIdHash[:]),
 		LeafHash:                    hexStr(bundleIdHash[:]),
 		ProofHashes:                 []string{},
-		BLSProof:                    buildCardanoBLSProof(comprehensiveProof, cardanoMsgHash),
+		BLSProof:                    buildCardanoBLSProofV2(cardanoV2Proof),
 		GovernanceProof:             buildCardanoGovProof(comprehensiveProof),
 		OperationCommitment:         hexStr(opCommitment[:]),
 		CrossChainCommitment:        hexStr(ccCommitment[:]),
@@ -2953,33 +2980,22 @@ func cardanoValidatorSetFromEnv(networkID string) (ids []string, powers []uint64
 	return
 }
 
-func buildCardanoBLSProof(p contracts.ComprehensiveCertenProof, msgHash [32]byte) CardanoBLSProofJSON {
-	// The on-chain Aiken verifier reads compressed BLS12-381 points (G1 = 48
-	// bytes, G2 = 96 bytes). The validator's BLS12-381 prover (currently used
-	// for TON) produces points in the same format. Pull them out and forward.
-	//
-	// For first-pass we send the BN254 ABI-encoded blob in `proof_a` and let
-	// the tx-server / on-chain validator surface a decode error if the wire
-	// format isn't ready yet — that's the same iterative-bring-up cycle NEAR
-	// went through.
-	signedVP := uint64(0)
-	if p.BLSProof.SignedVotingPower != nil {
-		signedVP = p.BLSProof.SignedVotingPower.Uint64()
-	}
-	totalVP := uint64(0)
-	if p.BLSProof.TotalVotingPower != nil {
-		totalVP = p.BLSProof.TotalVotingPower.Uint64()
-	}
+// buildCardanoBLSProofV2 shapes the BLS12-381 V2 proof (messageHash-bound,
+// BSB22-augmented) for the on-chain Aiken V2 verifier. All point fields are
+// compressed BLS12-381 (G1 = 48 bytes, G2 = 96 bytes). The commitments +
+// commitment_pok are the REAL BSB22 Pedersen artifacts from the V2 prover,
+// not placeholders.
+func buildCardanoBLSProofV2(p *bls_zkp.BLS12381V2Proof) CardanoBLSProofJSON {
 	return CardanoBLSProofJSON{
-		ProofA:               hexStr(p.BLSProof.BLS12381ProofBytes[:48]),
-		ProofB:               hexStr(p.BLSProof.BLS12381ProofBytes[48:144]),
-		ProofC:               hexStr(p.BLSProof.BLS12381ProofBytes[144:192]),
-		Commitments:          hexStr(zeroes48()),
-		CommitmentPok:        hexStr(zeroes48()),
-		MessageHash:          hexStr(msgHash[:]),
-		PubkeyCommitment:     hexStr(p.BLSProof.BLS12381PubkeyCommitment[:]),
-		SignedVotingPower:    signedVP,
-		TotalVotingPower:     totalVP,
+		ProofA:               hexStr(p.ProofA),
+		ProofB:               hexStr(p.ProofB),
+		ProofC:               hexStr(p.ProofC),
+		Commitments:          hexStr(p.Commitments),
+		CommitmentPok:        hexStr(p.CommitmentPok),
+		MessageHash:          hexStr(p.MessageHash[:]),
+		PubkeyCommitment:     hexStr(p.PubkeyCommitment[:]),
+		SignedVotingPower:    p.SignedVP,
+		TotalVotingPower:     p.TotalVP,
 		ThresholdNumerator:   2,
 		ThresholdDenominator: 3,
 	}

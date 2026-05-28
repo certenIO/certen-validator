@@ -37,3 +37,20 @@ func SignV6_1PreExec(sk *bls.PrivateKey, messageHash [32]byte) *bls.Signature {
 	h := HashMessageToG1V2(messageHash)
 	return sk.SignG1(h)
 }
+
+// SignV6_1PreExecBLS12381 is the Cardano-parity signing helper. It computes
+// sig = sk · HashMessageToG1V2BLS381(messageHash), where the hash-to-G1
+// reduces the messageHash mod BLS12-381 Fr (NOT BN254 Fr). This matches the
+// in-circuit MapToG1 of BLSSignatureCircuitV2BLS381, so the signature
+// satisfies the pairing constraint the Cardano on-chain V2 verifier checks.
+//
+// Pairs with: e(sig, G2) == e(HashMessageToG1V2BLS381(messageHash), pk).
+//
+// Returns nil if sk is nil — callers MUST check.
+func SignV6_1PreExecBLS12381(sk *bls.PrivateKey, messageHash [32]byte) *bls.Signature {
+	if sk == nil {
+		return nil
+	}
+	h := HashMessageToG1V2BLS381(messageHash)
+	return sk.SignG1(h)
+}
