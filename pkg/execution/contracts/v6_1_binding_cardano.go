@@ -17,11 +17,29 @@
 package contracts
 
 import (
+	"encoding/hex"
 	"math/big"
 	"sort"
+	"strings"
 
 	"github.com/ethereum/go-ethereum/crypto"
 )
+
+// cardanoTargetBytes decodes a target identifier into the raw bytes that go
+// into execution_commitment. On Cardano the target is the destination's
+// 28-byte payment-credential hash, carried as a hex string; the on-chain
+// validator sees it as a 28-byte ByteArray, so we hash the DECODED bytes (not
+// the hex characters). Falls back to the raw string bytes if not valid hex
+// (defensive — e.g. a legacy bech32 target).
+func cardanoTargetBytes(target string) []byte {
+	s := strings.TrimPrefix(target, "0x")
+	if len(s) > 0 && len(s)%2 == 0 {
+		if raw, err := hex.DecodeString(s); err == nil {
+			return raw
+		}
+	}
+	return []byte(target)
+}
 
 // ============================================================================
 // Domain tags — keep in lockstep with cardano/lib/certen/binding.ak
@@ -247,7 +265,7 @@ func ComputeCardanoExecutionCommitmentV6_1(
 	hasher := crypto.NewKeccakState()
 	_, _ = hasher.Write(cardanoV6_1ExecDomain)
 	_, _ = hasher.Write([]byte(network))
-	_, _ = hasher.Write([]byte(target))
+	_, _ = hasher.Write(cardanoTargetBytes(target))
 	_, _ = hasher.Write(depositLE)
 	_, _ = hasher.Write(dataHash[:])
 	var out [32]byte
