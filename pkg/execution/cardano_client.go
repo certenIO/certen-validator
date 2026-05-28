@@ -153,6 +153,65 @@ func (c *CardanoClient) ExecuteComprehensiveProof(ctx context.Context, req Carda
 }
 
 // =============================================================================
+// Account factory (per-ADI): account-info + create-account
+// =============================================================================
+
+type CardanoAccountInfo struct {
+	OK         bool   `json:"ok"`
+	Address    string `json:"address"`
+	ScriptHash string `json:"script_hash"`
+	Exists     bool   `json:"exists"`
+	UTXORef    string `json:"utxo_ref"`
+	Error      string `json:"error,omitempty"`
+}
+
+// AccountInfo returns the per-ADI account address and whether its state UTXO
+// already exists on-chain.
+func (c *CardanoClient) AccountInfo(ctx context.Context, adiURL string) (*CardanoAccountInfo, error) {
+	raw, err := c.postRaw(ctx, "/tx/account-info", map[string]string{"adi_url": adiURL})
+	if err != nil {
+		return nil, err
+	}
+	var out CardanoAccountInfo
+	if jerr := json.Unmarshal(raw, &out); jerr != nil {
+		return nil, fmt.Errorf("decode account-info: %w (body=%q)", jerr, string(raw))
+	}
+	if !out.OK {
+		return nil, fmt.Errorf("account-info: %s", out.Error)
+	}
+	return &out, nil
+}
+
+type CardanoCreateAccountResult struct {
+	OK      bool   `json:"ok"`
+	Created bool   `json:"created"`
+	Address string `json:"address"`
+	UTXORef string `json:"utxo_ref"`
+	TxHash  string `json:"txHash"`
+	Error   string `json:"error,omitempty"`
+}
+
+// CreateAccount creates (deploys) the ADI's per-ADI account UTXO via the
+// factory. Idempotent: returns created=false if it already exists.
+func (c *CardanoClient) CreateAccount(ctx context.Context, adiURL, ownerEth string) (*CardanoCreateAccountResult, error) {
+	raw, err := c.postRaw(ctx, "/tx/create-account", map[string]string{
+		"adi_url":   adiURL,
+		"owner_eth": ownerEth,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var out CardanoCreateAccountResult
+	if jerr := json.Unmarshal(raw, &out); jerr != nil {
+		return nil, fmt.Errorf("decode create-account: %w (body=%q)", jerr, string(raw))
+	}
+	if !out.OK {
+		return nil, fmt.Errorf("create-account: %s", out.Error)
+	}
+	return &out, nil
+}
+
+// =============================================================================
 // TX3: execute_governance_proof_direct
 // =============================================================================
 
@@ -198,10 +257,10 @@ type CardanoAccountGovernanceProof struct {
 }
 
 type CardanoExecuteGovernanceRequest struct {
-	AccountUTXORef string                        `json:"account_utxo_ref"`
-	AnchorUTXORef  string                        `json:"anchor_utxo_ref"`
-	Proof          CardanoAccountGovernanceProof `json:"proof"`
-	Calls          []CardanoCall                 `json:"calls"`
+	ADIURL        string                        `json:"adi_url"`
+	AnchorUTXORef string                        `json:"anchor_utxo_ref"`
+	Proof         CardanoAccountGovernanceProof `json:"proof"`
+	Calls         []CardanoCall                 `json:"calls"`
 }
 
 func (c *CardanoClient) ExecuteGovernanceProofDirect(ctx context.Context, req CardanoExecuteGovernanceRequest) (string, error) {
@@ -226,6 +285,26 @@ type cardanoTxResponse struct {
 	OK     bool   `json:"ok"`
 	TxHash string `json:"txHash"`
 	Error  string `json:"error,omitempty"`
+}
+
+// postRaw POSTs JSON and returns the raw response body (for endpoints whose
+// response shape differs from cardanoTxResponse).
+func (c *CardanoClient) postRaw(ctx context.Context, path string, payload interface{}) ([]byte, error) {
+	bs, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+path, bytes.NewReader(bs))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("tx-server POST %s: %w", path, err)
+	}
+	defer resp.Body.Close()
+	return io.ReadAll(resp.Body)
 }
 
 func (c *CardanoClient) post(ctx context.Context, path string, payload interface{}) (*cardanoTxResponse, error) {

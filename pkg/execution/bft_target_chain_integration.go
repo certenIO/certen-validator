@@ -2860,26 +2860,45 @@ func (btce *BFTTargetChainExecutor) executeCardanoOperations(
 		copy(phArr[:], ph)
 		govProof.ProofHash = hexStr(phArr[:])
 
-		// account_utxo_ref: for first-pass we use a placeholder; in production
-		// the validator queries the account UTXO from a registry contract or
-		// from the Cardano DB-Sync index. Until that's plumbed, the account
-		// must be auto-deployed via the same pattern as NEAR.
-		accountUTXORef := os.Getenv("CARDANO_ACCOUNT_UTXO_REF")
-		if accountUTXORef == "" {
-			btce.logger.Printf("⚠️ [CARDANO-EXEC] CARDANO_ACCOUNT_UTXO_REF not set — Step 3 will be skipped until account is deployed")
-			govTxHash = "gov_skipped_no_account_utxo_ref"
+		// Per-ADI account: derive/look up the ADI's account UTXO. Mirrors the
+		// NEAR flow — check existence, deploy via the factory if missing, then
+		// execute. The account address is a deterministic function of the ADI
+		// URL (CREATE2 analog); the tx-server owns the derivation + creation.
+		ownerEth := ""
+		if cardanoLeg.SourceAddress != (common.Address{}) {
+			ownerEth = hexStr(cardanoLeg.SourceAddress.Bytes())
+		}
+
+		info, infoErr := cardanoClient.AccountInfo(ctx, adiURL)
+		if infoErr != nil {
+			btce.logger.Printf("⚠️ [CARDANO-EXEC] Step 3: account-info failed: %v", infoErr)
+			govTxHash = "gov_failed_account_info_cardano"
 		} else {
-			result, govErr := cardanoClient.ExecuteGovernanceProofDirect(ctx, CardanoExecuteGovernanceRequest{
-				AccountUTXORef: accountUTXORef,
-				AnchorUTXORef:  verifyTxHash + "#0",
-				Proof:          govProof,
-				Calls:          []CardanoCall{call},
-			})
-			if govErr != nil {
-				btce.logger.Printf("⚠️ [CARDANO-EXEC] Step 3 failed: %v", govErr)
-				govTxHash = "gov_failed_cardano"
-			} else {
-				govTxHash = result
+			if !info.Exists {
+				btce.logger.Printf("🏭 [CARDANO-EXEC] Step 3: account not found at %s — deploying via factory", info.Address)
+				created, createErr := cardanoClient.CreateAccount(ctx, adiURL, ownerEth)
+				if createErr != nil {
+					btce.logger.Printf("⚠️ [CARDANO-EXEC] Step 3: account creation failed: %v", createErr)
+					govTxHash = "gov_failed_account_deploy_cardano"
+				} else {
+					btce.logger.Printf("✅ [CARDANO-EXEC] Step 3: account deployed at %s (tx=%s)", created.Address, created.TxHash)
+				}
+			}
+
+			if !strings.HasPrefix(govTxHash, "gov_failed") {
+				result, govErr := cardanoClient.ExecuteGovernanceProofDirect(ctx, CardanoExecuteGovernanceRequest{
+					ADIURL:        adiURL,
+					AnchorUTXORef: verifyTxHash + "#0",
+					Proof:         govProof,
+					Calls:         []CardanoCall{call},
+				})
+				if govErr != nil {
+					btce.logger.Printf("⚠️ [CARDANO-EXEC] Step 3 failed: %v", govErr)
+					govTxHash = "gov_failed_cardano"
+				} else {
+					govTxHash = result
+					btce.logger.Printf("✅ [CARDANO-EXEC] Step 3 complete - Governance executed: %s", govTxHash)
+				}
 			}
 		}
 	}
