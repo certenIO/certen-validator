@@ -2672,6 +2672,14 @@ func (btce *BFTTargetChainExecutor) executeCardanoOperations(
 	chainID32 := contracts.ComputeCardanoDeploymentChainIDV6_1(cardanoNetworkFromName(cardanoNetwork))
 	cardanoIDs, cardanoPowers, num, den := cardanoValidatorSetFromEnv(cardanoNetworkFromName(cardanoNetwork))
 	setRoot := contracts.ComputeCardanoValidatorSetRootV6_1(cardanoIDs, cardanoPowers, num, den)
+	if override := os.Getenv("CARDANO_VALIDATOR_SET_ROOT"); override != "" {
+		clean := strings.TrimPrefix(override, "0x")
+		if len(clean) == 64 {
+			if bs, decErr := hex.DecodeString(clean); decErr == nil && len(bs) == 32 {
+				copy(setRoot[:], bs)
+			}
+		}
+	}
 
 	// bundleId — V6.1 9-input formula with Cardano chain ID.
 	bundleIdHash := contracts.DeriveCardanoBundleIDV6_1(

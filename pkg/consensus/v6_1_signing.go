@@ -556,6 +556,47 @@ func cardanoValidatorSetForChain(networkID string) (
 	return
 }
 
+// cardanoValidatorSetRootOverride returns the 32-byte validator_set_root
+// value to bind into the messageHash, taking the CARDANO_VALIDATOR_SET_ROOT
+// env var (hex) when set so the off-chain hash matches the on-chain script
+// parameter the anchor validator was deployed with. Returns (root, true)
+// when the override is in effect, (_, false) to fall back to the computed
+// root. The current Preview deployment uses an all-zero placeholder, so
+// we set CARDANO_VALIDATOR_SET_ROOT=000...000 in .env.shared during
+// bring-up; when the real validator-set wallet bootstrap happens, drop
+// the override and the computed root takes over (alongside a script
+// re-deploy with the matching value baked in).
+func cardanoValidatorSetRootOverride() ([32]byte, bool) {
+	raw := os.Getenv("CARDANO_VALIDATOR_SET_ROOT")
+	if raw == "" {
+		return [32]byte{}, false
+	}
+	clean := strings.TrimPrefix(raw, "0x")
+	if len(clean) != 64 {
+		return [32]byte{}, false
+	}
+	var out [32]byte
+	for i := 0; i < 32; i++ {
+		var hi, lo byte
+		hi = hexNibble(clean[2*i])
+		lo = hexNibble(clean[2*i+1])
+		out[i] = hi<<4 | lo
+	}
+	return out, true
+}
+
+func hexNibble(c byte) byte {
+	switch {
+	case c >= '0' && c <= '9':
+		return c - '0'
+	case c >= 'a' && c <= 'f':
+		return c - 'a' + 10
+	case c >= 'A' && c <= 'F':
+		return c - 'A' + 10
+	}
+	return 0
+}
+
 // signV6_1PreExecBLSCardano is the Cardano target dispatch from
 // signV6_1PreExecBLS. Same overall shape as the NEAR dispatch:
 //   - 32-byte synthesized deployment_chain_id (tagged "cardano")
@@ -577,6 +618,9 @@ func signV6_1PreExecBLSCardano(
 
 	ids, powers, num, den := cardanoValidatorSetForChain(networkID)
 	setRoot := contracts.ComputeCardanoValidatorSetRootV6_1(ids, powers, num, den)
+	if override, ok := cardanoValidatorSetRootOverride(); ok {
+		setRoot = override
+	}
 
 	in, err := buildV6_1CardanoInputsFromIntent(certenIntent, certenProof, chainID32, setRoot)
 	if err != nil {
