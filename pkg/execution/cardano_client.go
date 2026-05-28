@@ -45,11 +45,11 @@ func NewCardanoClient(baseURL string) *CardanoClient {
 // =============================================================================
 
 type CardanoHealth struct {
-	OK                 bool   `json:"ok"`
-	Network            string `json:"network"`
-	Wallet             string `json:"wallet"`
-	AnchorScriptHash   string `json:"anchor_script_hash"`
-	AccountScriptHash  string `json:"account_script_hash"`
+	OK               bool   `json:"ok"`
+	Network          string `json:"network"`
+	Wallet           string `json:"wallet"`
+	AnchorScriptHash string `json:"anchor_script_hash"`
+	AccountModel     string `json:"account_model"`
 }
 
 func (c *CardanoClient) Health(ctx context.Context) (*CardanoHealth, error) {

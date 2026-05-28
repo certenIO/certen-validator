@@ -2620,8 +2620,9 @@ func (btce *BFTTargetChainExecutor) executeCardanoOperations(
 	if healthErr != nil {
 		return nil, fmt.Errorf("cardano tx-server unreachable: %w", healthErr)
 	}
-	btce.logger.Printf("✅ [CARDANO-EXEC] tx-server ready: wallet=%s anchor=%s account=%s",
-		health.Wallet, health.AnchorScriptHash[:12], health.AccountScriptHash[:12])
+	// Account is per-ADI now (no single account script hash in /health).
+	btce.logger.Printf("✅ [CARDANO-EXEC] tx-server ready: wallet=%s anchor=%s account=per-ADI",
+		health.Wallet, safeHexPrefix(health.AnchorScriptHash, 12))
 
 	// Use EthereumContractManager only for its commitment-derivation helpers
 	// (the Cardano-specific primitives reuse the same Accumulate-side
@@ -2750,7 +2751,7 @@ func (btce *BFTTargetChainExecutor) executeCardanoOperations(
 	}
 
 	// ========== Step 1: Create Anchor (TX1) ==========
-	btce.logger.Printf("🔗 [CARDANO-EXEC-V6.1] Step 1: Creating anchor on %s...", health.AnchorScriptHash[:12])
+	btce.logger.Printf("🔗 [CARDANO-EXEC-V6.1] Step 1: Creating anchor on %s...", safeHexPrefix(health.AnchorScriptHash, 12))
 
 	createReq := CardanoCreateAnchorRequest{
 		BundleID:             hexStr(bundleIdHash[:]),
@@ -2909,6 +2910,15 @@ func (btce *BFTTargetChainExecutor) executeCardanoOperations(
 	btce.logger.Printf("   Governance TX: %s", govTxHash)
 
 	return btce.buildCardanoResult(intentID, anchorID, createTxHash, verifyTxHash, govTxHash, true), nil
+}
+
+// safeHexPrefix returns the first n chars of s, or all of s if shorter.
+// Guards log statements against panicking on short/empty hashes.
+func safeHexPrefix(s string, n int) string {
+	if len(s) < n {
+		return s
+	}
+	return s[:n]
 }
 
 func (btce *BFTTargetChainExecutor) buildCardanoResult(
