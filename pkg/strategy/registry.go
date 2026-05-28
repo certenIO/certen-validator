@@ -58,6 +58,7 @@ func NewRegistry() *Registry {
 			chain.ChainPlatformMove:     attestation.AttestationSchemeEd25519,
 			chain.ChainPlatformTON:      attestation.AttestationSchemeEd25519,
 			chain.ChainPlatformNEAR:     attestation.AttestationSchemeEd25519,
+			chain.ChainPlatformCardano:  attestation.AttestationSchemeEd25519,
 		},
 	}
 }

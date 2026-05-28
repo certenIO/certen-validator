@@ -490,5 +490,24 @@ func registerStubChainStrategies(registry *Registry, cfg *RegistryConfig) error 
 		}
 	}
 
+	// =========================================================================
+	// Cardano — Full implementation using Blockfrost HTTP API.
+	// On-chain proof verification is BLS12-381 Groth16+BSB22 (A+++ parity).
+	// Phase 7-9 observation watches tx finality via Blockfrost.
+	// =========================================================================
+	cardanoProjectID := os.Getenv("BLOCKFROST_PROJECT_ID")
+	cardanoAnchorAddr := os.Getenv("CARDANO_PREVIEW_ANCHOR_ADDRESS")
+
+	cardanoStrategy, _ := chain.NewCardanoPreviewStrategy(cardanoProjectID, cardanoAnchorAddr, cfg.ValidatorID)
+	if cardanoStrategy != nil {
+		cardanoAliases := []string{"cardano-preview", "cardano preview", "cardano_preview", "cardano"}
+		for _, alias := range cardanoAliases {
+			_ = registry.RegisterChainStrategy(alias, cardanoStrategy.Config(), cardanoStrategy)
+		}
+		if cfg.Logger != nil {
+			cfg.Logger.Printf("   ✅ Cardano Preview registered: blockfrost=%t, anchor=%s", cardanoProjectID != "", cardanoAnchorAddr)
+		}
+	}
+
 	return nil
 }

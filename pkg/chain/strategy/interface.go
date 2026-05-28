@@ -47,6 +47,9 @@ const (
 
 	// ChainPlatformNEAR for NEAR Protocol
 	ChainPlatformNEAR ChainPlatform = "near"
+
+	// ChainPlatformCardano for Cardano (Plutus V3 / Aiken)
+	ChainPlatformCardano ChainPlatform = "cardano"
 )
 
 // String returns the string representation of the platform
@@ -58,7 +61,8 @@ func (p ChainPlatform) String() string {
 func (p ChainPlatform) IsValid() bool {
 	switch p {
 	case ChainPlatformEVM, ChainPlatformCosmWasm, ChainPlatformSolana,
-		ChainPlatformMove, ChainPlatformTON, ChainPlatformNEAR:
+		ChainPlatformMove, ChainPlatformTON, ChainPlatformNEAR,
+		ChainPlatformCardano:
 		return true
 	default:
 		return false
@@ -72,7 +76,7 @@ func (p ChainPlatform) DefaultAttestationScheme() attestation.AttestationScheme 
 		// BLS for EVM - ZK-verified on-chain
 		return attestation.AttestationSchemeBLS12381
 	case ChainPlatformCosmWasm, ChainPlatformSolana, ChainPlatformMove,
-		ChainPlatformTON, ChainPlatformNEAR:
+		ChainPlatformTON, ChainPlatformNEAR, ChainPlatformCardano:
 		// Ed25519 - native support, low cost
 		return attestation.AttestationSchemeEd25519
 	default:
@@ -524,6 +528,12 @@ var SupportedChains = map[string]ChainPlatform{
 	"near":         ChainPlatformNEAR,
 	"near-mainnet": ChainPlatformNEAR,
 	"near-testnet": ChainPlatformNEAR,
+
+	// Cardano
+	"cardano":         ChainPlatformCardano,
+	"cardano-preview": ChainPlatformCardano,
+	"cardano-preprod": ChainPlatformCardano,
+	"cardano-mainnet": ChainPlatformCardano,
 }
 
 // GetPlatformForChain returns the platform for a chain identifier
