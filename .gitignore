@@ -132,3 +132,4 @@ REVIEW.md
 !accumulate-lite-client-2/liteclient/docker-compose.yml
 !accumulate-lite-client-2/liteclient/proof/consolidated_governance-proof/cmd/txhash/
 !accumulate-lite-client-2/liteclient/proof/consolidated_governance-proof/cmd/txhash/*.go
+bls_zk_keys_bls12381_v2/
