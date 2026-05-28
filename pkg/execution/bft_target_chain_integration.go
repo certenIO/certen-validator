@@ -1051,8 +1051,15 @@ func (btce *BFTTargetChainExecutor) extractAllLegsFromIntent(legacyIntent *inten
 		// mismatch and falsely reject every NEAR intent. The on-chain NEAR
 		// CertenAnchorV6_1::execute_with_governance recomputes its own
 		// commitment from runtime params, so NEAR doesn't lose this gate.
-		isNearLeg := strings.HasPrefix(strings.ToLower(strings.ReplaceAll(leg.Chain, " ", "-")), "near")
-		if !isNearLeg && leg.ExecutionPayload != nil && leg.ExecutionPayload.ExecutionCommitment != "" {
+		legChainNorm := strings.ToLower(strings.ReplaceAll(leg.Chain, " ", "-"))
+		isNearLeg := strings.HasPrefix(legChainNorm, "near")
+		// Cardano uses a Cardano-flavored execution_commitment (network ||
+		// target || u128-LE deposit || keccak(method||args)); the EVM recompute
+		// below would always mismatch and falsely reject every Cardano intent.
+		// The on-chain certen_account_v4 re-derives its own commitment from
+		// runtime params, so the gate isn't lost — same rationale as NEAR.
+		isCardanoLeg := strings.HasPrefix(legChainNorm, "cardano")
+		if !isNearLeg && !isCardanoLeg && leg.ExecutionPayload != nil && leg.ExecutionPayload.ExecutionCommitment != "" {
 			expectedCommitment := computeExecutionCommitment(
 				leg.ExecutionPayload.ChainID,
 				common.HexToAddress(leg.ExecutionPayload.Target),
