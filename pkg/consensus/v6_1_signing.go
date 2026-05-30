@@ -107,6 +107,14 @@ func signV6_1PreExecBLS(
 		return signV6_1PreExecBLSCardano(logger, certenIntent, certenProof, chainName)
 	}
 
+	// Solana target: 32-byte synthesized deployment_chain_id tagged "solana",
+	// a Solana-flavored validator-set-root (over 32-byte pubkeys), and the
+	// opaque Solana execution-commitment stub. The signed sig is byte-equivalent
+	// to what CertenAnchorV6_1 reconstructs in execute_comprehensive_proof.
+	if strings.HasPrefix(strings.ToLower(chainName), "solana") {
+		return signV6_1PreExecBLSSolana(logger, certenIntent, certenProof, chainName)
+	}
+
 	if evmChainID == 0 {
 		return "", fmt.Errorf("intent has zero EVM chain ID (target leg malformed)")
 	}
@@ -493,6 +501,148 @@ func nearExecutionCommitmentFromIntent(certenIntent *CertenIntent, ccData []byte
 		"transfer",
 		nil,
 	)
+}
+
+// =============================================================================
+// Solana V6.1 dispatch — 32-byte synthesized deployment_chain_id tagged
+// "solana", validator-set-root over 32-byte pubkeys, and the opaque Solana
+// execution-commitment stub. Cluster + set-root resolved via the shared
+// contracts helpers so this signed value matches the submission path.
+// =============================================================================
+
+func signV6_1PreExecBLSSolana(
+	logger Logger,
+	certenIntent *CertenIntent,
+	certenProof *proof.CertenProof,
+	chainName string,
+) (string, error) {
+	cluster := contracts.SolanaClusterFromEnv()
+	chainID32 := contracts.ComputeSolanaDeploymentChainIDV6_1(cluster)
+
+	// Solana-flavored validator-set-root. During bring-up this is the
+	// empty-set root (matches a freshly-initialized contract); once validators
+	// are registered on-chain, pin SOLANA_VALIDATOR_SET_ROOT to the program's
+	// get_validator_set_root value. 2/3 threshold matches the contract default.
+	setRoot := contracts.SolanaValidatorSetRootFromEnvOrEmpty(2, 3)
+
+	in, err := buildV6_1SolanaInputsFromIntent(certenIntent, certenProof, chainID32, setRoot)
+	if err != nil {
+		return "", fmt.Errorf("build V6.1 Solana inputs: %w", err)
+	}
+	anchorId, govRoot, msgHash := contracts.BuildV6_1PreExecBundleSolana(in)
+
+	if logger != nil {
+		logger.Printf("🔗 [BLS-SIG-V6.1-SOLANA] chain=%s cluster=%s chainID32=0x%x anchorId=0x%x govRoot=0x%x msgHash=0x%x setRoot=0x%x",
+			chainName, cluster, chainID32[:8],
+			anchorId[:8], govRoot[:8], msgHash[:8], setRoot[:8])
+		logger.Printf("🧮 [BFT-PRIMITIVES-SOLANA] adi=%x op=%x cc=%x exec=%x opID=%x height=%d",
+			in.AdiURLHash[:8],
+			in.OperationCommitment[:8],
+			in.CrossChainCommitment[:8],
+			in.ExecutionCommitment[:8],
+			in.OperationID[:8],
+			in.AccumulateBlockHeight,
+		)
+	}
+
+	km := bls.GetValidatorBLSKey()
+	if km == nil {
+		return "", fmt.Errorf("validator BLS key manager not initialized")
+	}
+	sk := km.PrivateKey()
+	if sk == nil {
+		return "", fmt.Errorf("validator BLS private key not loaded")
+	}
+	sig := bls_zkp.SignV6_1PreExec(sk, msgHash)
+	if sig == nil {
+		return "", fmt.Errorf("V6.1 Solana BLS sign returned nil")
+	}
+	return sig.Hex(), nil
+}
+
+// buildV6_1SolanaInputsFromIntent mirrors buildV6_1NearInputsFromIntent but
+// produces Solana-flavored bundle inputs. The only divergence is the
+// ExecutionCommitment: Solana uses the opaque stub (shared with the submission
+// path via contracts.SolanaExecutionCommitmentStubV6_1) because the value-moving
+// target/amount aren't known at anchor time. govRoot is computed here first so
+// the stub binds it; BuildV6_1PreExecBundleSolana recomputes the identical
+// govRoot from GovRootInputs.
+func buildV6_1SolanaInputsFromIntent(
+	certenIntent *CertenIntent,
+	certenProof *proof.CertenProof,
+	chainID32 [32]byte,
+	setRoot [32]byte,
+) (contracts.V6_1PreExecBundleInputsSolana, error) {
+	adiURL := ""
+	if certenProof != nil && certenProof.AccountURL != "" {
+		adiURL = certenProof.AccountURL
+	} else if certenIntent != nil {
+		adiURL = fmt.Sprintf("%s/data", certenIntent.OrganizationADI)
+	}
+
+	intentID := ""
+	if certenIntent != nil {
+		intentID = certenIntent.IntentID
+	}
+	blockHeight := uint64(0)
+	txHash := ""
+	if certenProof != nil {
+		blockHeight = certenProof.BlockHeight
+		txHash = certenProof.TransactionHash
+	}
+
+	var bptRoot []byte
+	if certenProof != nil && certenProof.LiteClientProof != nil {
+		bptRoot = certenProof.LiteClientProof.BPTRoot
+	}
+
+	opIDStr := ""
+	if certenIntent != nil {
+		if s, err := certenIntent.OperationID(); err == nil {
+			opIDStr = s
+		}
+	}
+	opIDBytes32 := contracts.DeriveOperationIDBytes32FromString(opIDStr)
+
+	gb := contracts.NewAccumulateGovRootInputsBuilder().
+		SetOperationIDBytes32(opIDBytes32)
+	if certenProof != nil && certenProof.LiteClientProof != nil {
+		lc := certenProof.LiteClientProof
+		gb.SetL1AccountHash(lc.AccountHash).
+			SetL2BPTRoot(lc.BPTRoot).
+			SetL3BlockHash(lc.BlockHash).
+			SetL4ConsensusProofFromJSON(lc.ConsensusProof)
+	}
+	if certenProof != nil {
+		gb.SetG0FromJSON(certenProof.G0Result).
+			SetG1FromJSON(certenProof.G1Result).
+			SetG2FromJSON(certenProof.G2Result).
+			SetKeypageURL(certenProof.KeypageURL).
+			SetKeybookURL(certenProof.KeybookURL)
+	}
+	govInputs := gb.Build()
+
+	adiURLHash := contracts.DeriveAdiURLHashFromString(adiURL)
+	opCommitment := contracts.DeriveOperationCommitmentFromFields(intentID, blockHeight, txHash)
+	ccCommitment := contracts.DeriveCrossChainCommitmentFromBPT(bptRoot)
+	govRoot := contracts.ComputeAccumulateGovRoot(govInputs)
+
+	// Opaque Solana execution-commitment stub — identical to the submission path.
+	execCommitment := contracts.SolanaExecutionCommitmentStubV6_1(
+		adiURLHash, opCommitment, ccCommitment, govRoot,
+	)
+
+	return contracts.V6_1PreExecBundleInputsSolana{
+		DeploymentChainID:     chainID32,
+		ValidatorSetRoot:      setRoot,
+		AdiURLHash:            adiURLHash,
+		OperationCommitment:   opCommitment,
+		CrossChainCommitment:  ccCommitment,
+		ExecutionCommitment:   execCommitment,
+		OperationID:           opIDBytes32,
+		AccumulateBlockHeight: blockHeight,
+		GovRootInputs:         govInputs,
+	}, nil
 }
 
 // =============================================================================

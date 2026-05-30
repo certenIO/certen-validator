@@ -480,8 +480,9 @@ func anchorDiscriminator(methodName string) [8]byte {
 // BORSH INSTRUCTION DATA BUILDERS
 // =============================================================================
 
-// V5: Added executionCommitment (7th param) for CRITICAL-001
-func (sc *SolanaClient) buildCreateAnchorIx(bundleId, adiURLHash, opCommit, ccCommit, govRoot, execCommitment [32]byte, blockHeight uint64) []byte {
+// V6.1: Added operationID (8th param, before blockHeight) — the create_anchor arg
+// order is (bundle_id, adi, op, cc, gov, exec, operation_id, block_height).
+func (sc *SolanaClient) buildCreateAnchorIx(bundleId, adiURLHash, opCommit, ccCommit, govRoot, execCommitment, operationID [32]byte, blockHeight uint64) []byte {
 	disc := anchorDiscriminator("create_anchor")
 	var buf bytes.Buffer
 	buf.Write(disc[:])
@@ -491,6 +492,7 @@ func (sc *SolanaClient) buildCreateAnchorIx(bundleId, adiURLHash, opCommit, ccCo
 	buf.Write(ccCommit[:])
 	buf.Write(govRoot[:])
 	buf.Write(execCommitment[:])
+	buf.Write(operationID[:])
 	solBorshWriteU64(&buf, blockHeight)
 	return buf.Bytes()
 }
@@ -652,15 +654,16 @@ func (sc *SolanaClient) borshWriteADIGovernanceProof(buf *bytes.Buffer, p Solana
 // STEP 1: CREATE ANCHOR
 // =============================================================================
 
-// CreateAnchor calls create_anchor on the Solana Anchor V5 program.
-// V5: Added executionCommitment parameter (CRITICAL-001).
+// CreateAnchor calls create_anchor on the Solana CertenAnchorV6_1 program.
+// V6.1: Added operationID parameter. bundleId MUST be the V6.1 derivation
+// (DeriveSolanaBundleIDV6_1) or the contract reverts with BundleIdMismatch.
 func (sc *SolanaClient) CreateAnchor(
 	ctx context.Context,
-	bundleId, adiURLHash, opCommit, ccCommit, govRoot, execCommitment [32]byte,
+	bundleId, adiURLHash, opCommit, ccCommit, govRoot, execCommitment, operationID [32]byte,
 	blockHeight uint64,
 ) (string, error) {
-	log.Printf("📡 [SOLANA] Creating anchor...")
-	log.Printf("   Bundle ID: 0x%x", bundleId[:8])
+	log.Printf("📡 [SOLANA] Creating anchor (V6.1)...")
+	log.Printf("   Bundle ID: 0x%x  opID: 0x%x", bundleId[:8], operationID[:8])
 
 	signerPubkey := sc.GetSignerPubkey()
 
@@ -669,8 +672,8 @@ func (sc *SolanaClient) CreateAnchor(
 	validatorRecordPDA, _ := sc.validatorPDA(signerPubkey)
 	anchorPDA, _ := sc.anchorPDA(bundleId)
 
-	// Build instruction data (V5: includes execution commitment)
-	ixData := sc.buildCreateAnchorIx(bundleId, adiURLHash, opCommit, ccCommit, govRoot, execCommitment, blockHeight)
+	// Build instruction data (V6.1: includes execution commitment + operation_id)
+	ixData := sc.buildCreateAnchorIx(bundleId, adiURLHash, opCommit, ccCommit, govRoot, execCommitment, operationID, blockHeight)
 
 	// Build instruction with accounts in order
 	ix := SolInstruction{

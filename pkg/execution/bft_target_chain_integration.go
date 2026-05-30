@@ -3193,15 +3193,47 @@ func (btce *BFTTargetChainExecutor) executeSolanaOperations(
 	}
 
 	// ========== V5 CRITICAL-001: Compute Execution Commitment ==========
-	execCommitment := btce.computeSolanaExecutionCommitment(
-		solClient, adiURLHash, opCommitment, ccCommitment, govRoot,
+	// Opaque Solana execution-commitment stub — shared with the BFT signing side
+	// (pkg/consensus/v6_1_signing.go) via the contracts helper so both compute the
+	// identical value that feeds bundle_id derivation and the V6.1 messageHash.
+	execCommitment := contracts.SolanaExecutionCommitmentStubV6_1(
+		adiURLHash, opCommitment, ccCommitment, govRoot,
 	)
 
-	// ========== Step 1: Create Anchor ==========
+	// ========== V6.1: Solana deployment_chain_id, operation_id, bundleId, messageHash ==========
+	// Replaces the EVM-style anchorID with the on-chain V6.1 derivation. Without
+	// this, create_anchor reverts with BundleIdMismatch (6056) and
+	// execute_comprehensive_proof reverts with MessageHashMismatch (6057).
+	solCluster := contracts.SolanaClusterFromEnv()
+	solDeploymentChainID := contracts.ComputeSolanaDeploymentChainIDV6_1(solCluster)
+	var solOperationID [32]byte
+	if legacyIntent != nil {
+		if opIDStr, oerr := legacyIntent.OperationID(); oerr == nil && opIDStr != "" {
+			solOperationID = contracts.DeriveOperationIDBytes32FromString(opIDStr)
+		}
+	}
+	solValidatorSetRoot := contracts.SolanaValidatorSetRootFromEnvOrEmpty(2, 3)
+	bundleIdHash = contracts.DeriveSolanaBundleIDV6_1(
+		solDeploymentChainID, adiURLHash, opCommitment, ccCommitment, govRoot,
+		execCommitment, solOperationID, certenProof.BlockHeight,
+	)
+	solMsgHash := contracts.ComputeSolanaMessageHashV6_1_Pre(
+		solDeploymentChainID, bundleIdHash, execCommitment, solOperationID, solValidatorSetRoot,
+	)
+	if comprehensiveProof != nil {
+		// The ethManager populated the EVM-flavored messageHash; the Solana anchor
+		// reconstructs its own 6-field hash from deployment_chain_id + the anchor,
+		// so override with the Solana-flavored value or the gate rejects it.
+		comprehensiveProof.BLSProof.MessageHash = solMsgHash
+	}
+	btce.logger.Printf("🔑 [SOLANA-V6.1] bundleId=0x%x opID=0x%x msgHash=0x%x setRoot=0x%x chainID=0x%x cluster=%s",
+		bundleIdHash[:8], solOperationID[:8], solMsgHash[:8], solValidatorSetRoot[:8], solDeploymentChainID[:8], solCluster)
+
+	// ========== Step 1: Create Anchor (V6.1 — 8 args, adds operation_id) ==========
 	btce.logger.Printf("🔗 [SOLANA-EXEC] Step 1: Creating anchor...")
 
 	createTxSig, err := solClient.CreateAnchor(ctx,
-		bundleIdHash, adiURLHash, opCommitment, ccCommitment, govRoot, execCommitment,
+		bundleIdHash, adiURLHash, opCommitment, ccCommitment, govRoot, execCommitment, solOperationID,
 		certenProof.BlockHeight,
 	)
 	if err != nil {
