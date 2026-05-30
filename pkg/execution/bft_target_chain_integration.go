@@ -1059,7 +1059,14 @@ func (btce *BFTTargetChainExecutor) extractAllLegsFromIntent(legacyIntent *inten
 		// The on-chain certen_account_v4 re-derives its own commitment from
 		// runtime params, so the gate isn't lost — same rationale as NEAR.
 		isCardanoLeg := strings.HasPrefix(legChainNorm, "cardano")
-		if !isNearLeg && !isCardanoLeg && leg.ExecutionPayload != nil && leg.ExecutionPayload.ExecutionCommitment != "" {
+		// Solana uses an opaque execution_commitment stub (keccak(adiURLHash || op ||
+		// cc || gov)) and a base58 target, not an EVM hex address — the EVM recompute
+		// below (common.HexToAddress + keccak(chainId,target,value,dataHash)) would
+		// always mismatch and falsely skip Step 3. The V6.1 messageHash gate +
+		// proof_executed already bind the anchor, so the gate isn't lost — same
+		// rationale as NEAR/Cardano.
+		isSolanaLeg := strings.HasPrefix(legChainNorm, "solana")
+		if !isNearLeg && !isCardanoLeg && !isSolanaLeg && leg.ExecutionPayload != nil && leg.ExecutionPayload.ExecutionCommitment != "" {
 			expectedCommitment := computeExecutionCommitment(
 				leg.ExecutionPayload.ChainID,
 				common.HexToAddress(leg.ExecutionPayload.Target),
