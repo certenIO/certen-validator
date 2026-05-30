@@ -14,6 +14,7 @@ import (
 	"log"
 	"math/big"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -394,6 +395,97 @@ func (tc *TonClient) sendBoc(ctx context.Context, bocBytes []byte) error {
 	return nil
 }
 
+// tonTxLite is a minimal projection of a TON Center getTransactions entry.
+type tonTxLite struct {
+	TransactionID struct {
+		Lt   string `json:"lt"`
+		Hash string `json:"hash"`
+	} `json:"transaction_id"`
+	InMsg struct {
+		Source string `json:"source"`
+	} `json:"in_msg"`
+	Utime int64 `json:"utime"`
+}
+
+// topTxLt returns the logical time (lt) of the newest transaction on addr, or 0.
+// Used to snapshot a contract's state before a send so the resulting transaction
+// can be distinguished by lt afterwards.
+func (tc *TonClient) topTxLt(ctx context.Context, addr string) uint64 {
+	res, err := tc.apiPost(ctx, "getTransactions", map[string]interface{}{"address": addr, "limit": 1})
+	if err != nil {
+		return 0
+	}
+	var txs []tonTxLite
+	if json.Unmarshal(res, &txs) != nil || len(txs) == 0 {
+		return 0
+	}
+	lt, _ := strconv.ParseUint(txs[0].TransactionID.Lt, 10, 64)
+	return lt
+}
+
+// waitForSeqnoAdvance polls the wallet seqno until it advances past fromSeqno,
+// confirming the wallet actually processed our external message. This SERIALIZES
+// rapid sends: WalletV4R2 rejects a message whose seqno != the current on-chain
+// seqno, so we must not send the next message until the wallet has advanced.
+func (tc *TonClient) waitForSeqnoAdvance(ctx context.Context, fromSeqno uint32, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		s, err := tc.getSeqno(ctx)
+		if err == nil && s > fromSeqno {
+			tc.lastSeqno = s
+			tc.seqnoKnown = true
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(3 * time.Second):
+		}
+	}
+	return fmt.Errorf("wallet seqno did not advance past %d within %v", fromSeqno, timeout)
+}
+
+// resolveResultTx polls the target contract for the new transaction produced by
+// our message (lt strictly greater than the pre-send snapshot afterLt) and
+// returns its REAL on-chain hash (hex) and lt. This replaces the synthetic
+// body-hash token so the Phase 7 observer can resolve the tx by exact hash.
+func (tc *TonClient) resolveResultTx(ctx context.Context, addr string, afterLt uint64, timeout time.Duration) (string, uint64, error) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		res, err := tc.apiPost(ctx, "getTransactions", map[string]interface{}{"address": addr, "limit": 8})
+		if err == nil {
+			var txs []tonTxLite
+			if json.Unmarshal(res, &txs) == nil {
+				// getTransactions returns newest-first; the first tx with lt > afterLt is ours.
+				for _, tx := range txs {
+					lt, _ := strconv.ParseUint(tx.TransactionID.Lt, 10, 64)
+					if lt > afterLt {
+						return tonResultHashToHex(tx.TransactionID.Hash), lt, nil
+					}
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return "", 0, ctx.Err()
+		case <-time.After(3 * time.Second):
+		}
+	}
+	return "", 0, fmt.Errorf("no new tx on %s after lt %d within %v", addr, afterLt, timeout)
+}
+
+// tonResultHashToHex converts a TON Center transaction hash (base64, std or
+// url-safe) to lowercase hex; passes through values already in hex.
+func tonResultHashToHex(h string) string {
+	if raw, err := base64.StdEncoding.DecodeString(h); err == nil && len(raw) == 32 {
+		return hex.EncodeToString(raw)
+	}
+	if raw, err := base64.URLEncoding.DecodeString(h); err == nil && len(raw) == 32 {
+		return hex.EncodeToString(raw)
+	}
+	return strings.TrimPrefix(h, "0x")
+}
+
 func (tc *TonClient) runGetMethod(ctx context.Context, addr string, method string, params [][]interface{}) (json.RawMessage, error) {
 	stack := params
 	if stack == nil {
@@ -508,28 +600,45 @@ func (tc *TonClient) sendInternalMessage(ctx context.Context, destAddr *address.
 
 	bocBytes := extMsg.ToBOC()
 
+	// Snapshot the target's newest tx lt BEFORE sending so we can identify the
+	// transaction our message produces.
+	targetPrevLt := tc.topTxLt(ctx, destAddr.String())
+
 	err = tc.sendBoc(ctx, bocBytes)
 	if err != nil {
 		return "", fmt.Errorf("sending message: %w", err)
 	}
+	sendTS := time.Now().Unix()
 
-	// Track seqno locally so subsequent sends don't use stale API values
-	tc.lastSeqno = seqno + 1
-	tc.seqnoKnown = true
+	// SERIALIZE: wait for the wallet's on-chain seqno to advance past `seqno`,
+	// confirming the wallet actually processed and forwarded our message. Without
+	// this, a rapid follow-up send would carry a future seqno the wallet rejects
+	// (the cause of the dropped Step-3 governance message).
+	if waitErr := tc.waitForSeqnoAdvance(ctx, seqno, 90*time.Second); waitErr != nil {
+		log.Printf("⚠️ [TON] seqno did not advance after send: %v (continuing, using local tracking)", waitErr)
+		tc.lastSeqno = seqno + 1
+		tc.seqnoKnown = true
+	}
 
-	// Return a composite token: body_hash + send timestamp.
-	// TON Cell.Hash() (representation hash) may not match TON Center API's
-	// body_hash due to serialization differences. The timestamp enables
-	// the observer to fall back to time-based transaction matching.
+	// Resolve the REAL resulting transaction on the target contract so the Phase 7
+	// observer can find it by exact hash. Fall back to the legacy body-hash token
+	// only if resolution fails.
+	if realHash, realLt, rerr := tc.resolveResultTx(ctx, destAddr.String(), targetPrevLt, 90*time.Second); rerr == nil {
+		token := fmt.Sprintf("%s_ts_%d", realHash, sendTS)
+		log.Printf("✅ [TON] Message landed: dest=%s realTxHash=%s lt=%d (next seqno=%d)", destAddr.String(), realHash, realLt, tc.lastSeqno)
+		return token, nil
+	} else {
+		log.Printf("⚠️ [TON] Could not resolve result tx on %s: %v (falling back to body-hash token)", destAddr.String(), rerr)
+	}
+
 	var trackHash []byte
 	if body != nil {
 		trackHash = body.Hash()
 	} else {
 		trackHash = extMsg.Hash()
 	}
-	sendTS := time.Now().Unix()
 	msgHash := fmt.Sprintf("%s_ts_%d", hex.EncodeToString(trackHash), sendTS)
-	log.Printf("✅ [TON] Message sent: hash=%s (body_hash + timestamp, next seqno=%d)", msgHash, tc.lastSeqno)
+	log.Printf("✅ [TON] Message sent (fallback token): hash=%s (next seqno=%d)", msgHash, tc.lastSeqno)
 	return msgHash, nil
 }
 
