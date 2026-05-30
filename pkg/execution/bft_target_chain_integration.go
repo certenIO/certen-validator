@@ -3625,6 +3625,12 @@ func (btce *BFTTargetChainExecutor) buildSolanaCertenProof(
 
 	btce.logger.Printf("🌳 [SOLANA-MERKLE-V5] Recomputed 5-leaf domain-tagged merkleRoot for proof: 0x%x", solMerkleRootArr[:8])
 
+	// Degenerate merkle inclusion: LeafHash == MerkleRoot ⇒ the path MUST be empty
+	// (the on-chain verify_merkle_proof returns leaf == root with no siblings).
+	// The EVM-derived branches in proofHashes hash to the EVM root, not the Solana
+	// 5-leaf domain-tagged root, and would fail with ProofVerificationFailed (6018).
+	proofHashes = nil
+
 	return SolanaCertenProof{
 		TransactionHash: compProof.TransactionHash,
 		MerkleRoot:      solMerkleRootArr,
