@@ -4062,25 +4062,35 @@ func (btce *BFTTargetChainExecutor) executeAptosOperations(
 		btce.logger.Printf("   Intent from: %s", aptosFromAddr)
 		btce.logger.Printf("   Intent to: %s", aptosToAddr)
 
-		// Use the from field directly as the user account address (matches NEAR pattern).
-		// The web app sets from to the abstract account address predicted by the API bridge.
-		userAccountAddr := aptosFromAddr
-
-		// Fallback: derive via factory prediction if not available from intent
+		// ALWAYS derive the abstract account from the factory using the ADI-derived owner +
+		// salt — this is the resource account the factory created and initialized with
+		// CertenAccount state. The intent's "from" field is a placeholder the web app fills
+		// in and cannot be trusted as the governance target (it was the package address,
+		// which has no CertenAccount → E_NOT_INITIALIZED on executeGovernanceProofDirect).
+		// We only fall back to the intent "from" if the factory is unconfigured/unreachable.
 		ownerBytes32 := DeriveAptosAccountOwnerBytes32(adiURL)
 		salt := DeriveAptosAccountSalt(adiURL)
 
-		if userAccountAddr == "" && aptosAccountFactoryPackage != "" {
+		userAccountAddr := ""
+		if aptosAccountFactoryPackage != "" {
 			predicted, predictErr := aptosClient.PredictAccountAddress(ctx, ownerBytes32, adiURL, salt)
 			if predictErr != nil {
 				btce.logger.Printf("⚠️ [APTOS-EXEC] Failed to predict account address: %v", predictErr)
 			} else {
 				userAccountAddr = predicted
-				btce.logger.Printf("   Abstract account (from factory): %s", userAccountAddr)
+				btce.logger.Printf("   Abstract account (ADI-derived from factory): %s", userAccountAddr)
 			}
-		} else if userAccountAddr == "" {
-			btce.logger.Printf("⚠️ [APTOS-EXEC] No factory configured and no from address in intent")
-			govTxHash = "gov_failed_no_factory_aptos"
+		}
+
+		// Fallback only when the factory could not give us an address.
+		if userAccountAddr == "" {
+			if aptosFromAddr != "" {
+				userAccountAddr = aptosFromAddr
+				btce.logger.Printf("   Abstract account (intent from fallback): %s", userAccountAddr)
+			} else {
+				btce.logger.Printf("⚠️ [APTOS-EXEC] No factory configured and no from address in intent")
+				govTxHash = "gov_failed_no_factory_aptos"
+			}
 		}
 
 		if userAccountAddr != "" {
@@ -4183,8 +4193,11 @@ func (btce *BFTTargetChainExecutor) buildAptosCertenProof(
 		}
 	}
 
-	proofHashes := make([][32]byte, len(compProof.ProofHashes))
-	copy(proofHashes, compProof.ProofHashes)
+	// Aptos uses a degenerate single-leaf inclusion (leaf == merkle root), mirroring the
+	// Solana comprehensive-proof fix (commit f4c3377): the EVM-flavored branch hashes in
+	// compProof.ProofHashes do not apply to the Move 5-leaf domain-tagged tree, so we drop
+	// them here and let the leaf==root path below verify trivially against the recomputed root.
+	proofHashes := [][32]byte{}
 
 	// V5: Recompute KeyPage proof for Aptos address format.
 	// Move's keccak_address() hashes bcs::to_bytes(address) which is the raw 32-byte address.
