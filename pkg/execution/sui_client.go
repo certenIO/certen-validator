@@ -630,12 +630,14 @@ func (sc *SuiClient) CreateAnchor(
 	crossChainCommitment [32]byte,
 	governanceRoot [32]byte,
 	executionCommitment [32]byte,
+	operationID [32]byte,
 	blockHeight uint64,
 ) (string, error) {
-	log.Printf("📡 [SUI] Step 1: Creating anchor (V5)...")
+	log.Printf("📡 [SUI] Step 1: Creating anchor (V6.1)...")
 	log.Printf("   Account: %s", sc.senderAddress)
 	log.Printf("   Package: %s", sc.packageAddress)
 	log.Printf("   Bundle ID: 0x%x", bundleId[:8])
+	log.Printf("   Operation ID: 0x%x", operationID[:8])
 	log.Printf("   Block Height: %d", blockHeight)
 
 	// Shared object inputs: AnchorStateV5 (mutable), Clock (immutable)
@@ -645,7 +647,7 @@ func (sc *SuiClient) CreateAnchor(
 	}
 
 	// Pure arguments in SuiJSON format:
-	// bundle_id, adi_url_hash, op_commit, cc_commit, gov_root, exec_commit: vector<u8> → base64
+	// bundle_id, adi_url_hash, op_commit, cc_commit, gov_root, exec_commit, operation_id: vector<u8> → base64
 	// block_height: u64 → string number
 	args := []interface{}{
 		suiJsonVecU8(bundleId[:]),
@@ -654,11 +656,12 @@ func (sc *SuiClient) CreateAnchor(
 		suiJsonVecU8(crossChainCommitment[:]),
 		suiJsonVecU8(governanceRoot[:]),
 		suiJsonVecU8(executionCommitment[:]),
+		suiJsonVecU8(operationID[:]),
 		suiJsonU64(blockHeight),
 	}
 
 	digest, err := sc.buildAndExecuteMoveCall(ctx,
-		"certen_anchor_v5", "create_anchor",
+		"certen_anchor_v6_1", "create_anchor",
 		nil, sharedInputs, args, suiGasBudget,
 	)
 	if err != nil {
@@ -771,7 +774,7 @@ func (sc *SuiClient) ExecuteComprehensiveProof(
 	}
 
 	digest, err := sc.buildAndExecuteMoveCall(ctx,
-		"certen_anchor_v5", "execute_comprehensive_proof",
+		"certen_anchor_v6_1", "execute_comprehensive_proof",
 		nil, sharedInputs, args, suiGasBudget,
 	)
 	if err != nil {
@@ -877,7 +880,7 @@ func (sc *SuiClient) WithdrawSuiDirect(
 	}
 
 	digest, err := sc.buildAndExecuteMoveCall(ctx,
-		"certen_account_v3", "withdraw_sui_direct",
+		"certen_account_v4", "withdraw_sui_direct",
 		nil, sharedInputs, args, suiGasBudget,
 	)
 	if err != nil {
@@ -938,7 +941,7 @@ func (sc *SuiClient) DeployAccountViaFactory(
 	result, err := sc.rpcCall(ctx, "unsafe_moveCall", []interface{}{
 		sc.senderAddress,
 		sc.packageAddress,
-		"certen_account_factory_v2",
+		"certen_account_factory_v3",
 		"create_account",
 		[]string{},
 		suiArgs,
@@ -1004,8 +1007,10 @@ func (sc *SuiClient) CheckAccountExists(ctx context.Context, objectId string) (b
 		return false, 0, nil
 	}
 
-	// Check if it's a CertenAccountV3 (or V2 for backwards compatibility)
-	if strings.Contains(obj.Data.Type, "certen_account_v3::CertenAccountV3") ||
+	// Check if it's a CertenAccountV3 (V6.1 keeps the struct name in certen_account_v4;
+	// also accept the older module paths for backwards compatibility)
+	if strings.Contains(obj.Data.Type, "certen_account_v4::CertenAccountV3") ||
+		strings.Contains(obj.Data.Type, "certen_account_v3::CertenAccountV3") ||
 		strings.Contains(obj.Data.Type, "certen_account_v2::CertenAccountV2") {
 		return true, obj.Data.Owner.Shared.InitialSharedVersion, nil
 	}
@@ -1049,7 +1054,7 @@ func (sc *SuiClient) GetAnchorData(ctx context.Context, bundleId [32]byte) (*Sui
 	txResult, err := sc.rpcCall(ctx, "unsafe_moveCall", []interface{}{
 		sc.senderAddress,
 		sc.packageAddress,
-		"certen_anchor_v5",
+		"certen_anchor_v6_1",
 		"get_anchor_data",
 		[]string{},
 		args,
@@ -1097,6 +1102,93 @@ func (sc *SuiClient) GetAnchorData(ctx context.Context, bundleId [32]byte) (*Sui
 
 	// For now, return minimal data — the key fields are populated by the proof builder
 	return &SuiAnchorData{BundleId: bundleId}, nil
+}
+
+// GetAccountForAdiHash looks up the ADI-derived account object ID from the
+// factory's adi_to_account registry via the get_account_for_adi_hash view
+// (returns Option<address>). This is the V6.1 source of truth for the Step 3
+// account — Sui object IDs are assigned at creation (not deterministically
+// predictable like Aptos resource accounts), so the factory registry is the only
+// reliable mapping from an ADI to its account object. Returns ("", false, nil)
+// when the ADI is not yet registered.
+func (sc *SuiClient) GetAccountForAdiHash(ctx context.Context, adiHash [32]byte) (string, bool, error) {
+	if sc.factoryObject == "" {
+		return "", false, fmt.Errorf("no factory object configured")
+	}
+	adiHashHex := "0x" + hex.EncodeToString(adiHash[:])
+
+	// Build the view call: get_account_for_adi_hash(factory: &FactoryV2, adi_hash: address)
+	txResult, err := sc.rpcCall(ctx, "unsafe_moveCall", []interface{}{
+		sc.senderAddress,
+		sc.packageAddress,
+		"certen_account_factory_v3",
+		"get_account_for_adi_hash",
+		[]string{},
+		[]interface{}{sc.factoryObject, adiHashHex},
+		nil,
+		fmt.Sprintf("%d", suiGasBudget),
+	})
+	if err != nil {
+		return "", false, fmt.Errorf("build get_account_for_adi_hash call: %w", err)
+	}
+	var moveCallResult struct {
+		TxBytes string `json:"txBytes"`
+	}
+	if err := json.Unmarshal(txResult, &moveCallResult); err != nil {
+		return "", false, fmt.Errorf("parse moveCall result: %w", err)
+	}
+
+	result, err := sc.rpcCall(ctx, "sui_devInspectTransactionBlock", []interface{}{
+		sc.senderAddress,
+		moveCallResult.TxBytes,
+		nil,
+		nil,
+	})
+	if err != nil {
+		return "", false, fmt.Errorf("devInspect get_account_for_adi_hash: %w", err)
+	}
+
+	// Parse the returnValue: results[0].returnValues[0] = [ [bcs bytes...], type ].
+	// BCS of Option<address>: 0x00 = None; 0x01 || 32-byte address = Some(addr).
+	var inspect struct {
+		Results []struct {
+			ReturnValues []json.RawMessage `json:"returnValues"`
+		} `json:"results"`
+		Effects struct {
+			Status struct {
+				Status string `json:"status"`
+				Error  string `json:"error"`
+			} `json:"status"`
+		} `json:"effects"`
+	}
+	if err := json.Unmarshal(result, &inspect); err != nil {
+		return "", false, fmt.Errorf("parse devInspect result: %w", err)
+	}
+	if inspect.Effects.Status.Status == "failure" {
+		return "", false, fmt.Errorf("devInspect failed: %s", inspect.Effects.Status.Error)
+	}
+	if len(inspect.Results) == 0 || len(inspect.Results[0].ReturnValues) == 0 {
+		return "", false, fmt.Errorf("no return values from get_account_for_adi_hash")
+	}
+
+	// Each returnValue is a 2-tuple [ [byte...], "0x1::option::Option<address>" ].
+	var rv []json.RawMessage
+	if err := json.Unmarshal(inspect.Results[0].ReturnValues[0], &rv); err != nil || len(rv) < 1 {
+		return "", false, fmt.Errorf("parse returnValue tuple: %w", err)
+	}
+	var bcsBytes []byte
+	if err := json.Unmarshal(rv[0], &bcsBytes); err != nil {
+		return "", false, fmt.Errorf("parse bcs bytes: %w", err)
+	}
+	if len(bcsBytes) == 0 || bcsBytes[0] == 0x00 {
+		return "", false, nil // None — ADI not registered
+	}
+	if len(bcsBytes) < 33 {
+		return "", false, fmt.Errorf("Some(address) too short: %d bytes", len(bcsBytes))
+	}
+	objectID := "0x" + hex.EncodeToString(bcsBytes[1:33])
+	log.Printf("📡 [SUI] Factory registry: adi_hash=0x%x → account=%s", adiHash[:8], objectID)
+	return objectID, true, nil
 }
 
 // =============================================================================

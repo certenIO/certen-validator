@@ -1069,7 +1069,10 @@ func (btce *BFTTargetChainExecutor) extractAllLegsFromIntent(legacyIntent *inten
 		// Aptos uses an opaque execution-commitment stub + a 32-byte account-address
 		// target, not an EVM hex address — same rationale as NEAR/Cardano/Solana.
 		isAptosLeg := strings.HasPrefix(legChainNorm, "aptos")
-		if !isNearLeg && !isCardanoLeg && !isSolanaLeg && !isAptosLeg && leg.ExecutionPayload != nil && leg.ExecutionPayload.ExecutionCommitment != "" {
+		// Sui uses an opaque execution-commitment stub + a 32-byte object/address
+		// target, not an EVM hex address — same rationale as NEAR/Cardano/Solana/Aptos.
+		isSuiLeg := strings.HasPrefix(legChainNorm, "sui")
+		if !isNearLeg && !isCardanoLeg && !isSolanaLeg && !isAptosLeg && !isSuiLeg && leg.ExecutionPayload != nil && leg.ExecutionPayload.ExecutionCommitment != "" {
 			expectedCommitment := computeExecutionCommitment(
 				leg.ExecutionPayload.ChainID,
 				common.HexToAddress(leg.ExecutionPayload.Target),
@@ -4584,56 +4587,43 @@ func (btce *BFTTargetChainExecutor) executeSuiOperations(
 		govRoot = comprehensiveProof.Commitments.GovernanceRoot
 	}
 
-	// CRITICAL-001: Compute execution commitment before Step 1
-	// Reuse computeAptosExecutionCommitment — same BCS encoding (u64 LE, 32-byte addresses)
-	const suiTestnetChainID uint8 = 101
-	var execCommitment [32]byte
+	// ========== Execution commitment (opaque stub, shared with the BFT signer) ==========
+	execCommitment := contracts.SuiExecutionCommitmentStubV6_1(
+		adiURLHash, opCommitment, ccCommitment, govRoot,
+	)
 
-	// Find the SUI leg to compute execution commitment from
-	allLegsForExec := btce.extractAllLegsFromIntent(legacyIntent)
-	suiLegForExec := btce.findLegForChainPrefix(allLegsForExec, "sui", 101)
-
-	if suiLegForExec != nil {
-		suiToAddrExec := btce.extractSuiFieldFromCrossChainData(legacyIntent, "to")
-		if suiToAddrExec == "" {
-			suiToAddrExec = suiLegForExec.Target.Hex()
-			// Pad to 64 hex chars
-			suiToAddrExec = "0x" + hex.EncodeToString(common.LeftPadBytes(common.FromHex(suiToAddrExec), 32))
+	// ========== V6.1: Sui deployment_chain_id, operation_id, bundleId, messageHash ==========
+	// Replaces the EVM-style anchorID with the on-chain V6.1 derivation, or
+	// create_anchor reverts with E_BUNDLE_ID_MISMATCH (56) and the proof reverts
+	// with E_MESSAGE_HASH_MISMATCH (57).
+	suiNetwork := contracts.SuiNetworkFromEnv()
+	suiDeploymentChainID := contracts.ComputeSuiDeploymentChainIDV6_1(suiNetwork)
+	var suiOperationID [32]byte
+	if legacyIntent != nil {
+		if opIDStr, oerr := legacyIntent.OperationID(); oerr == nil && opIDStr != "" {
+			suiOperationID = contracts.DeriveOperationIDBytes32FromString(opIDStr)
 		}
-		suiDepositMist := uint64(1)
-		if suiLegForExec.Value != nil {
-			weiValue := new(big.Int).Set(suiLegForExec.Value)
-			mistValue := new(big.Int).Div(weiValue, big.NewInt(1_000_000_000))
-			if mistValue.Sign() <= 0 {
-				mistValue = big.NewInt(1)
-			}
-			suiDepositMist = mistValue.Uint64()
-		}
-		execCommitment = computeAptosExecutionCommitment(suiTestnetChainID, suiToAddrExec, suiDepositMist, [32]byte{})
-		btce.logger.Printf("🔒 [SUI-EXEC] CRITICAL-001 ExecutionCommitment: 0x%x", execCommitment[:8])
-	} else {
-		// No SUI leg — use a placeholder non-zero commitment
-		h := ethcrypto.Keccak256Hash([]byte("certen:sui:no-leg"))
-		copy(execCommitment[:], h[:])
-		btce.logger.Printf("⚠️ [SUI-EXEC] No SUI leg found, using placeholder exec commitment")
 	}
+	suiValidatorSetRoot := contracts.SuiValidatorSetRootFromEnvOrEmpty(2, 3)
+	bundleIdHash = contracts.DeriveSuiBundleIDV6_1(
+		suiDeploymentChainID, adiURLHash, opCommitment, ccCommitment, govRoot,
+		execCommitment, suiOperationID, certenProof.BlockHeight,
+	)
+	suiMsgHash := contracts.ComputeSuiMessageHashV6_1_Pre(
+		suiDeploymentChainID, bundleIdHash, execCommitment, suiOperationID, suiValidatorSetRoot,
+	)
+	if comprehensiveProof != nil {
+		comprehensiveProof.BLSProof.MessageHash = suiMsgHash
+	}
+	btce.logger.Printf("🔑 [SUI-V6.1] bundleId=0x%x opID=0x%x msgHash=0x%x setRoot=0x%x chainID=0x%x network=%s",
+		bundleIdHash[:8], suiOperationID[:8], suiMsgHash[:8], suiValidatorSetRoot[:8], suiDeploymentChainID[:8], suiNetwork)
 
-	// V5: Compute 5-leaf domain-tagged merkle root locally for verification
-	btce.logger.Printf("🔍 [SUI-MERKLE] Step 1 inputs (V5 5-leaf domain-tagged):")
-	btce.logger.Printf("   bundleId:    0x%x", bundleIdHash[:])
-	btce.logger.Printf("   adiURLHash:  0x%x", adiURLHash[:])
-	btce.logger.Printf("   opCommit:    0x%x", opCommitment[:])
-	btce.logger.Printf("   ccCommit:    0x%x", ccCommitment[:])
-	btce.logger.Printf("   govRoot:     0x%x", govRoot[:])
-	btce.logger.Printf("   execCommit:  0x%x", execCommitment[:])
-	btce.logger.Printf("   adiURL:      %s", adiURL)
-
-	// ========== Step 1: Create Anchor (V5: with execution commitment) ==========
-	btce.logger.Printf("🔗 [SUI-EXEC] Step 1: Creating anchor (V5)...")
+	// ========== Step 1: Create Anchor (V6.1: adds operation_id) ==========
+	btce.logger.Printf("🔗 [SUI-EXEC] Step 1: Creating anchor (V6.1)...")
 
 	createTxHash, err := suiClient.CreateAnchor(ctx,
 		bundleIdHash, adiURLHash, opCommitment, ccCommitment, govRoot,
-		execCommitment, certenProof.BlockHeight,
+		execCommitment, suiOperationID, certenProof.BlockHeight,
 	)
 	if err != nil {
 		btce.logger.Printf("❌ [SUI-EXEC] Step 1 failed: %v", err)
@@ -4677,55 +4667,72 @@ func (btce *BFTTargetChainExecutor) executeSuiOperations(
 	if suiLeg != nil {
 		btce.logger.Printf("🏦 [SUI-EXEC] Step 3: Executing withdraw_sui_direct...")
 
-		// Extract SUI addresses from CrossChainData
-		suiFromAddr := btce.extractSuiFieldFromCrossChainData(legacyIntent, "from")
+		// Extract SUI recipient from CrossChainData
 		suiToAddr := btce.extractSuiFieldFromCrossChainData(legacyIntent, "to")
-
-		btce.logger.Printf("   Intent from: %s", suiFromAddr)
 		btce.logger.Printf("   Intent to: %s", suiToAddr)
 
-		// Use the from field directly as the user account object ID (matches NEAR/Aptos pattern).
-		userAccountObjectId := suiFromAddr
-
-		// Derive owner/salt for factory operations
+		// ALWAYS resolve the abstract account object from the factory's adi_to_account
+		// registry (keyed by keccak256(adiURL)). Sui object IDs are assigned at creation
+		// and are NOT deterministically predictable (unlike Aptos resource accounts), so
+		// the registry is the only reliable ADI→account mapping. The intent's "from" is an
+		// untrusted placeholder, used only as a last resort if the registry is unreachable.
 		ownerBytes32 := DeriveSuiAccountOwnerBytes32(adiURL)
 		salt := DeriveSuiAccountSalt(adiURL)
+		var adiHash [32]byte
+		copy(adiHash[:], ethcrypto.Keccak256([]byte(adiURL)))
 
-		if userAccountObjectId == "" {
-			btce.logger.Printf("⚠️ [SUI-EXEC] No from address in intent, cannot determine user account")
-			govTxHash = "gov_failed_no_account_sui"
-		}
-
-		if userAccountObjectId != "" {
-			btce.logger.Printf("   User account object: %s", userAccountObjectId)
-
-			// Check if account exists
-			accountExists, accountVersion, checkErr := suiClient.CheckAccountExists(ctx, userAccountObjectId)
-			if checkErr != nil {
-				btce.logger.Printf("⚠️ [SUI-EXEC] Failed to check account existence: %v", checkErr)
-			}
-
-			if !accountExists && suiAccountFactoryObject != "" {
-				btce.logger.Printf("⚠️ [SUI-EXEC] User account %s not found, auto-deploying...", userAccountObjectId)
-
+		userAccountObjectId := ""
+		if suiAccountFactoryObject != "" {
+			objID, found, lookupErr := suiClient.GetAccountForAdiHash(ctx, adiHash)
+			if lookupErr != nil {
+				btce.logger.Printf("⚠️ [SUI-EXEC] Factory registry lookup failed: %v", lookupErr)
+			} else if found {
+				userAccountObjectId = objID
+				btce.logger.Printf("   Abstract account (ADI-derived from factory registry): %s", userAccountObjectId)
+			} else {
+				// Not registered yet — deploy via factory, then re-lookup the object ID.
+				btce.logger.Printf("⚠️ [SUI-EXEC] ADI not registered, deploying account via factory...")
 				deployTx, deployErr := suiClient.DeployAccountViaFactory(ctx, ownerBytes32, adiURL, salt)
 				if deployErr != nil {
 					btce.logger.Printf("❌ [SUI-EXEC] Account auto-deploy failed: %v", deployErr)
 					govTxHash = "gov_failed_account_deploy_sui"
 				} else {
 					btce.logger.Printf("✅ [SUI-EXEC] Account deployment tx: %s", deployTx)
-					waitErr := suiClient.WaitForConfirmation(ctx, deployTx, 60*time.Second)
-					if waitErr != nil {
+					if waitErr := suiClient.WaitForConfirmation(ctx, deployTx, 60*time.Second); waitErr != nil {
 						btce.logger.Printf("⚠️ [SUI-EXEC] Account deployment confirmation failed: %v", waitErr)
-						govTxHash = "gov_failed_account_deploy_sui"
-					} else {
-						accountExists = true
-						// Re-check to get the version
-						_, accountVersion, _ = suiClient.CheckAccountExists(ctx, userAccountObjectId)
+					}
+					if objID2, found2, _ := suiClient.GetAccountForAdiHash(ctx, adiHash); found2 {
+						userAccountObjectId = objID2
+						btce.logger.Printf("   Abstract account (deployed, from registry): %s", userAccountObjectId)
 					}
 				}
 			}
+		}
 
+		// Last-resort fallback to the intent's from placeholder.
+		if userAccountObjectId == "" {
+			suiFromAddr := btce.extractSuiFieldFromCrossChainData(legacyIntent, "from")
+			if suiFromAddr != "" {
+				userAccountObjectId = suiFromAddr
+				btce.logger.Printf("   Abstract account (intent from fallback): %s", userAccountObjectId)
+			} else if govTxHash == "no_governance_needed" {
+				btce.logger.Printf("⚠️ [SUI-EXEC] No factory account and no from address in intent")
+				govTxHash = "gov_failed_no_account_sui"
+			}
+		}
+
+		accountExists := false
+		accountVersion := uint64(0)
+		if userAccountObjectId != "" {
+			btce.logger.Printf("   User account object: %s", userAccountObjectId)
+			var checkErr error
+			accountExists, accountVersion, checkErr = suiClient.CheckAccountExists(ctx, userAccountObjectId)
+			if checkErr != nil {
+				btce.logger.Printf("⚠️ [SUI-EXEC] Failed to check account existence: %v", checkErr)
+			}
+		}
+
+		{
 			if accountExists && govTxHash == "no_governance_needed" {
 				// Read anchor data for merkle proof construction
 				anchorData, readErr := suiClient.GetAnchorData(ctx, bundleIdHash)
@@ -4907,8 +4914,11 @@ func (btce *BFTTargetChainExecutor) buildSuiCertenProof(
 		}
 	}
 
-	proofHashes := make([][32]byte, len(compProof.ProofHashes))
-	copy(proofHashes, compProof.ProofHashes)
+	// Sui uses a degenerate single-leaf inclusion (leaf == merkle root), mirroring the
+	// Solana/Aptos comprehensive-proof fix: the EVM-flavored branch hashes do not apply
+	// to the Move 5-leaf domain-tagged tree, so we drop them and let the leaf==root path
+	// below verify trivially against the recomputed root.
+	proofHashes := [][32]byte{}
 
 	keyPageProofs := make([][32]byte, len(compProof.GovernanceProof.KeyPageProofs))
 	copy(keyPageProofs, compProof.GovernanceProof.KeyPageProofs)
@@ -4990,6 +5000,15 @@ func (btce *BFTTargetChainExecutor) buildSuiCertenProof(
 	} else {
 		blsMessageHash = compProof.BLSProof.MessageHash
 	}
+
+	// V6.1: the on-chain anchor checks bls_proof.message_hash against the reconstructed
+	// 6-field pre-exec message hash (raw keccak256, big-endian, as an `address`). BLS ZK
+	// verification is disabled on this V6.1 deployment (like Aptos/Solana), so the proof
+	// must carry the RAW V6.1 messageHash, not the Arkworks-LE-reduced Groth16 public
+	// input. comprehensiveProof.BLSProof.MessageHash was set to the V6.1 pre-exec hash by
+	// executeSuiOperations before this builder ran.
+	blsMessageHash = compProof.BLSProof.MessageHash
+	log.Printf("🔐 [SUI-V6.1] Submitting raw V6.1 messageHash: 0x%x", blsMessageHash[:8])
 
 	// Source block height
 	sourceBlockHeight := uint64(0)
