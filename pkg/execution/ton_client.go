@@ -59,8 +59,8 @@ const (
 // Tact message op codes - extracted from compiled Tact build output.
 // These MUST match the values in tact_CertenAnchorV4Ton.ts and tact_CertenAccountFactoryTon.ts.
 const (
-	opCreateAnchor                 uint32 = 0x56066817 // 1443260439 - CertenAnchorV5Ton (V5: includes executionCommitment)
-	opExecuteComprehensiveProof    uint32 = 0xCF7BCEC3 // 3480997571 - CertenAnchorV5Ton (unchanged)
+	opCreateAnchor                 uint32 = 0xCEB26CA1 // 3467799713 - CertenAnchorV6_1Ton (V6.1: adds operation_id, Tact-derived from new signature)
+	opExecuteComprehensiveProof    uint32 = 0xCF7BCEC3 // 3480997571 - CertenAnchorV6_1Ton (unchanged message struct: anchorId + proof)
 	opExecuteGovernanceProofDirect uint32 = 0x7D7FD8A6 // 2105530534 - CertenAccountV3Ton (unchanged)
 	opCreateAccountIfNotExists     uint32 = 0xCF2583AF // 3475342255 - CertenAccountFactoryV2Ton (unchanged)
 )
