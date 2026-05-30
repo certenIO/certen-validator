@@ -1090,31 +1090,100 @@ func (o *UnifiedOrchestrator) requestAttestationFromPeer(
 	return &attResp, nil
 }
 
-// HandlePeerAttestationRequest processes an attestation request from a peer validator
-// This is called by the HTTP handler when receiving requests from peers
+// Phase 8 peer-attestation request bounds (replay / freshness protection).
+const (
+	peerAttestationMaxAgeSec  = 600 // reject messages older than 10 minutes
+	peerAttestationMaxSkewSec = 120 // tolerate 2 minutes of clock skew (future-dated)
+)
+
+// HandlePeerAttestationRequest processes an attestation request from a peer
+// validator and is invoked by the /api/unified/attestation/request HTTP handler.
+//
+// SECURITY: a validator must NEVER blind-sign whatever a caller posts. This
+// validator only attests to a result it can INDEPENDENTLY confirm on the target
+// chain — the core of a meaningful multi-validator quorum
+// ("each validator independently observes and attests", result_attestation.go).
+// Before signing it: (1) structurally validates the message, (2) enforces
+// freshness (replay protection), and (3) re-observes the anchor transaction via
+// the same chain strategy used in Phase 7 and requires it to be finalized,
+// successful, AND to recompute to the exact ResultHash claimed. The result hash
+// is a deterministic function of on-chain facts (e.g. Solana sha256(txHash||slot||
+// "solana")), so an honest peer's recomputation matches while a fabricated or
+// non-existent result is rejected.
 func (o *UnifiedOrchestrator) HandlePeerAttestationRequest(
 	ctx context.Context,
 	req *PeerAttestationRequest,
 ) (*PeerAttestationResponse, error) {
-	// Get the attestation strategy for the requested scheme
-	attestStrategy, err := o.config.Registry.GetAttestationStrategy(req.Scheme)
-	if err != nil {
-		return &PeerAttestationResponse{
-			CycleID: req.CycleID,
-			Success: false,
-			Error:   fmt.Sprintf("unsupported scheme: %v", err),
-		}, nil
+	fail := func(msg string) (*PeerAttestationResponse, error) {
+		cid := ""
+		if req != nil {
+			cid = req.CycleID
+		}
+		fmt.Printf("[Phase 8] Rejecting peer attestation request (cycle=%s): %s\n", cid, msg)
+		return &PeerAttestationResponse{CycleID: cid, Success: false, Error: msg}, nil
 	}
 
-	// Create our attestation
-	att, err := attestStrategy.Sign(ctx, req.Message)
-	if err != nil {
-		return &PeerAttestationResponse{
-			CycleID: req.CycleID,
-			Success: false,
-			Error:   fmt.Sprintf("sign failed: %v", err),
-		}, nil
+	// 1. Structural validation.
+	if req == nil || req.Message == nil {
+		return fail("missing attestation message")
 	}
+	if req.RequestingID == "" {
+		return fail("missing requesting validator id")
+	}
+	msg := req.Message
+	if msg.TargetChain == "" || msg.AnchorTxHash == "" {
+		return fail("attestation message missing target_chain/anchor_tx_hash")
+	}
+	if msg.ResultHash == ([32]byte{}) {
+		return fail("attestation message has zero result_hash")
+	}
+
+	// 2. Freshness — reject stale (replay) or future-dated messages.
+	if msg.Timestamp != 0 {
+		age := time.Now().Unix() - msg.Timestamp
+		if age > peerAttestationMaxAgeSec {
+			return fail(fmt.Sprintf("attestation message too old (%ds)", age))
+		}
+		if age < -peerAttestationMaxSkewSec {
+			return fail("attestation message timestamp is in the future")
+		}
+	}
+
+	// 3. Independent re-observation on the target chain (the trust anchor).
+	chainStrategy, _, err := o.config.Registry.GetStrategiesForChain(msg.TargetChain)
+	if err != nil {
+		return fail(fmt.Sprintf("unsupported target chain %q: %v", msg.TargetChain, err))
+	}
+	obsCtx, cancel := context.WithTimeout(ctx, o.config.ObservationTimeout)
+	defer cancel()
+	obs, err := chainStrategy.ObserveTransaction(obsCtx, msg.AnchorTxHash)
+	if err != nil {
+		return fail(fmt.Sprintf("independent observation of %s failed: %v", msg.AnchorTxHash, err))
+	}
+	if !obs.IsFinalized {
+		return fail("anchor transaction not finalized on independent observation")
+	}
+	if obs.Status != 1 { // 0=pending, 1=success, 2=failed
+		return fail(fmt.Sprintf("anchor transaction not successful (status=%d)", obs.Status))
+	}
+	if obs.ResultHash != msg.ResultHash {
+		return fail("independently-observed result hash does not match requested message — refusing to attest")
+	}
+
+	// 4. Verified — sign with the requested scheme so the signature aggregates
+	//    with the executor's self-attestation.
+	attestStrategy, err := o.config.Registry.GetAttestationStrategy(req.Scheme)
+	if err != nil {
+		return fail(fmt.Sprintf("unsupported scheme: %v", err))
+	}
+	att, err := attestStrategy.Sign(obsCtx, msg)
+	if err != nil {
+		return fail(fmt.Sprintf("sign failed: %v", err))
+	}
+
+	fmt.Printf("[Phase 8] Independently verified + attested for cycle %s (requester=%s chain=%s tx=%s)\n",
+		req.CycleID, req.RequestingID, msg.TargetChain,
+		msg.AnchorTxHash[:min(12, len(msg.AnchorTxHash))])
 
 	return &PeerAttestationResponse{
 		CycleID:     req.CycleID,
