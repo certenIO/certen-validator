@@ -545,18 +545,20 @@ func (tc *TonClient) CreateAnchor(
 	adiURLHash [32]byte,
 	opCommitment, ccCommitment, govRoot [32]byte,
 	executionCommitment [32]byte,
+	operationID [32]byte,
 	blockHeight uint64,
 ) (string, error) {
-	log.Printf("📡 [TON] Step 1: Creating anchor (V5 with executionCommitment)...")
+	log.Printf("📡 [TON] Step 1: Creating anchor (V6.1 with operation_id)...")
 	log.Printf("   Wallet: %s", tc.walletAddress.String())
 	log.Printf("   Anchor Contract: %s", tc.anchorContract.String())
 	log.Printf("   Bundle ID: 0x%x", bundleId[:8])
 	log.Printf("   adiURLHash: 0x%x", adiURLHash[:8])
 	log.Printf("   execCommitment: 0x%x", executionCommitment[:8])
+	log.Printf("   operationID: 0x%x", operationID[:8])
 	log.Printf("   Block Height: %d", blockHeight)
 	log.Printf("   OpCode: 0x%X (%d)", opCreateAnchor, opCreateAnchor)
 
-	body := tonBuildCreateAnchorBody(bundleId, adiURLHash, opCommitment, ccCommitment, govRoot, executionCommitment, blockHeight)
+	body := tonBuildCreateAnchorBody(bundleId, adiURLHash, opCommitment, ccCommitment, govRoot, executionCommitment, operationID, blockHeight)
 
 	hash, err := tc.sendInternalMessage(ctx, tc.anchorContract, tonGasAmount, body)
 	if err != nil {
@@ -567,27 +569,38 @@ func (tc *TonClient) CreateAnchor(
 	return hash, nil
 }
 
-// tonBuildCreateAnchorBody builds the Cell body for V4 CreateAnchor.
-// Matches Tact serialization of CreateAnchor message:
-//   Main cell (800 bits): op(32) + bundleId(256) + adiURLHash(256) + opCommit(256)
-//   Continuation ref (576 bits): ccCommit(256) + govRoot(256) + blockHeight(64)
-func tonBuildCreateAnchorBody(bundleId, adiURLHash, opCommitment, ccCommitment, govRoot, executionCommitment [32]byte, blockHeight uint64) *cell.Cell {
+// tonBuildCreateAnchorBody builds the Cell body for the V6.1 CreateAnchor message.
+// Matches Tact's greedy serialization of the CreateAnchor message (fields in
+// declaration order, packed into the root cell then spilled to refs):
+//   Root cell (800 bits): op(32) + bundleId(256) + adiURLHash(256) + opCommit(256), ref→cont
+//   Cont cell (832 bits): ccCommit(256) + govRoot(256) + execCommit(256) + blockHeight(64), ref→cont2
+//   Cont2 cell (256 bits): operationId(256)
+// operationId is the LAST field of the message struct, so it spills past the
+// 1023-bit cont cell into a second ref.
+func tonBuildCreateAnchorBody(bundleId, adiURLHash, opCommitment, ccCommitment, govRoot, executionCommitment, operationID [32]byte, blockHeight uint64) *cell.Cell {
 	bundleInt := new(big.Int).SetBytes(bundleId[:])
 	adiHashInt := new(big.Int).SetBytes(adiURLHash[:])
 	opInt := new(big.Int).SetBytes(opCommitment[:])
 	ccInt := new(big.Int).SetBytes(ccCommitment[:])
 	govInt := new(big.Int).SetBytes(govRoot[:])
 	execInt := new(big.Int).SetBytes(executionCommitment[:])
+	opIDInt := new(big.Int).SetBytes(operationID[:])
 
-	// V5: Continuation cell: ccCommit(256) + govRoot(256) + execCommit(256) + blockHeight(64) = 832 bits
+	// Cont2: operationId(256)
+	cont2 := cell.BeginCell().
+		MustStoreBigUInt(opIDInt, 256).
+		EndCell()
+
+	// Cont: ccCommit(256) + govRoot(256) + execCommit(256) + blockHeight(64) = 832 bits, ref→cont2
 	cont := cell.BeginCell().
 		MustStoreBigUInt(ccInt, 256).
 		MustStoreBigUInt(govInt, 256).
 		MustStoreBigUInt(execInt, 256).
 		MustStoreUInt(blockHeight, 64).
+		MustStoreRef(cont2).
 		EndCell()
 
-	// Main cell: op(32) + bundleId(256) + adiURLHash(256) + opCommit(256) = 800 bits + ref
+	// Root: op(32) + bundleId(256) + adiURLHash(256) + opCommit(256) = 800 bits + ref
 	return cell.BeginCell().
 		MustStoreUInt(uint64(opCreateAnchor), 32).
 		MustStoreBigUInt(bundleInt, 256).

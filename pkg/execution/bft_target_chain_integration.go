@@ -1072,7 +1072,10 @@ func (btce *BFTTargetChainExecutor) extractAllLegsFromIntent(legacyIntent *inten
 		// Sui uses an opaque execution-commitment stub + a 32-byte object/address
 		// target, not an EVM hex address — same rationale as NEAR/Cardano/Solana/Aptos.
 		isSuiLeg := strings.HasPrefix(legChainNorm, "sui")
-		if !isNearLeg && !isCardanoLeg && !isSolanaLeg && !isAptosLeg && !isSuiLeg && leg.ExecutionPayload != nil && leg.ExecutionPayload.ExecutionCommitment != "" {
+		// TON uses an opaque cell-hash execution-commitment stub + a workchain:address
+		// target, not an EVM hex address — same rationale as the other non-EVM chains.
+		isTonLeg := strings.HasPrefix(legChainNorm, "ton")
+		if !isNearLeg && !isCardanoLeg && !isSolanaLeg && !isAptosLeg && !isSuiLeg && !isTonLeg && leg.ExecutionPayload != nil && leg.ExecutionPayload.ExecutionCommitment != "" {
 			expectedCommitment := computeExecutionCommitment(
 				leg.ExecutionPayload.ChainID,
 				common.HexToAddress(leg.ExecutionPayload.Target),
@@ -5406,45 +5409,44 @@ func (btce *BFTTargetChainExecutor) executeTonOperations(
 	}
 	adiURLHash := ComputeAdiURLHash(adiURL)
 
-	// V5 CRITICAL-001: Compute execution commitment
-	const tonTestnetChainID int32 = -3
-	var execCommitment [32]byte
+	// ========== Execution commitment (opaque stub, shared with the BFT signer) ==========
+	// TON cell-hash chain over (adi, op, cc, gov) — never recomputed by the V6.1 gates.
+	execCommitment := contracts.TonExecutionCommitmentStubV6_1(
+		adiURLHash, opCommitment, ccCommitment, govRoot,
+	)
 
-	allLegsForExec := btce.extractAllLegsFromIntent(legacyIntent)
-	tonLegForExec := btce.findLegForChainPrefix(allLegsForExec, "ton", -239, -3)
-
-	if tonLegForExec != nil {
-		tonToAddrExec := btce.extractTonFieldFromCrossChainData(legacyIntent, "to")
-		var targetAddr *tonaddr.Address
-		if tonToAddrExec != "" {
-			parsed, pErr := tonaddr.ParseAddr(tonToAddrExec)
-			if pErr == nil {
-				targetAddr = parsed
-			}
+	// ========== V6.1: TON deployment_chain_id, operation_id, bundleId, messageHash ==========
+	// All TON cell-hashes (Cell.hash = SHA-256 of cell representation), NOT keccak256.
+	// Replaces the EVM-style anchorID with the on-chain V6.1 cell-hash derivation, or
+	// create_anchor reverts ("bundle_id derivation mismatch") and the proof reverts
+	// ("V6.1 message hash mismatch").
+	tonNetwork := contracts.TonNetworkFromEnv()
+	tonDeploymentChainID := contracts.ComputeTonDeploymentChainIDV6_1(tonNetwork)
+	var tonOperationID [32]byte
+	if legacyIntent != nil {
+		if opIDStr, oerr := legacyIntent.OperationID(); oerr == nil && opIDStr != "" {
+			tonOperationID = contracts.DeriveOperationIDBytes32FromString(opIDStr)
 		}
-		if targetAddr == nil {
-			// Fallback: use zero address
-			targetAddr = tonaddr.NewAddress(0, 0, make([]byte, 32))
-		}
-		tonDepositNano := uint64(1)
-		if tonLegForExec.Value != nil {
-			weiValue := new(big.Int).Set(tonLegForExec.Value)
-			nanoValue := new(big.Int).Div(weiValue, big.NewInt(1_000_000_000))
-			if nanoValue.Sign() <= 0 {
-				nanoValue = big.NewInt(1)
-			}
-			tonDepositNano = nanoValue.Uint64()
-		}
-		dataHash := [32]byte{} // empty data hash for simple transfer
-		execCommitment = TonComputeExecutionCommitment(tonTestnetChainID, targetAddr, tonDepositNano, dataHash)
-		btce.logger.Printf("🔒 [TON-EXEC] CRITICAL-001 ExecutionCommitment: 0x%x", execCommitment[:8])
-	} else {
-		h := ethcrypto.Keccak256Hash([]byte("certen:ton:no-leg"))
-		copy(execCommitment[:], h[:])
-		btce.logger.Printf("⚠️ [TON-EXEC] No TON leg found, using placeholder exec commitment")
 	}
+	tonValidatorSetRoot := contracts.TonValidatorSetRootFromEnvOrEmpty(2, 3)
+	tonBlockHeightForBundle := uint64(0)
+	if certenProof.BlockHeight > 0 {
+		tonBlockHeightForBundle = uint64(certenProof.BlockHeight)
+	}
+	bundleIdHash = contracts.DeriveTonBundleIDV6_1(
+		tonDeploymentChainID, adiURLHash, opCommitment, ccCommitment, govRoot,
+		execCommitment, tonOperationID, tonBlockHeightForBundle,
+	)
+	tonMsgHash := contracts.ComputeTonMessageHashV6_1_Pre(
+		tonDeploymentChainID, bundleIdHash, execCommitment, tonOperationID, tonValidatorSetRoot,
+	)
+	if comprehensiveProof != nil {
+		comprehensiveProof.BLSProof.MessageHash = tonMsgHash
+	}
+	btce.logger.Printf("🔑 [TON-V6.1] bundleId=0x%x opID=0x%x msgHash=0x%x setRoot=0x%x chainID=0x%x network=%s",
+		bundleIdHash[:8], tonOperationID[:8], tonMsgHash[:8], tonValidatorSetRoot[:8], tonDeploymentChainID[:8], tonNetwork)
 
-	btce.logger.Printf("🔍 [TON-MERKLE] Step 1 inputs (V5 5-leaf domain-tagged):")
+	btce.logger.Printf("🔍 [TON-MERKLE] Step 1 inputs (V6.1 5-leaf domain-tagged):")
 	btce.logger.Printf("   bundleId:    0x%x", bundleIdHash[:])
 	btce.logger.Printf("   adiURL:      %s", adiURL)
 	btce.logger.Printf("   adiURLHash:  0x%x", adiURLHash[:])
@@ -5453,15 +5455,12 @@ func (btce *BFTTargetChainExecutor) executeTonOperations(
 	btce.logger.Printf("   govRoot:     0x%x", govRoot[:])
 	btce.logger.Printf("   execCommit:  0x%x", execCommitment[:])
 
-	// ========== Step 1: Create Anchor ==========
-	btce.logger.Printf("🔗 [TON-EXEC] Step 1: Creating anchor on TON (V5)...")
+	// ========== Step 1: Create Anchor (V6.1: adds operation_id) ==========
+	btce.logger.Printf("🔗 [TON-EXEC] Step 1: Creating anchor on TON (V6.1)...")
 
-	blockHeight := uint64(0)
-	if certenProof.BlockHeight > 0 {
-		blockHeight = uint64(certenProof.BlockHeight)
-	}
+	blockHeight := tonBlockHeightForBundle
 
-	createTxHash, err := tonClient.CreateAnchor(ctx, bundleIdHash, adiURLHash, opCommitment, ccCommitment, govRoot, execCommitment, blockHeight)
+	createTxHash, err := tonClient.CreateAnchor(ctx, bundleIdHash, adiURLHash, opCommitment, ccCommitment, govRoot, execCommitment, tonOperationID, blockHeight)
 	if err != nil {
 		btce.logger.Printf("❌ [TON-EXEC] Step 1 failed: %v", err)
 		return btce.buildTonResult(intentID, anchorID, "create_failed_ton", "", "", false), err
@@ -5534,6 +5533,13 @@ func (btce *BFTTargetChainExecutor) executeTonOperations(
 		btce.logger.Printf("   SentinelLeaf: 0x%x", sentinelLeaf[:8])
 		btce.logger.Printf("   KeyBookRoot: 0x%x", tonKeyBookRoot[:8])
 	}
+
+	// V6.1: the on-chain anchor checks bls.messageHash against the reconstructed
+	// 6-field cell-hash message hash. BLS ZK verification is disabled on this V6.1
+	// deployment (the contract finalizes synchronously after the message-hash gate),
+	// so submit the RAW V6.1 cell-hash, not a BLS-Fr-reduced public input.
+	tonProof.BLSMessageHash = tonMsgHash
+	btce.logger.Printf("🔐 [TON-V6.1] Submitting raw V6.1 messageHash: 0x%x", tonMsgHash[:8])
 
 	verifyTxHash, err := tonClient.ExecuteComprehensiveProof(ctx, bundleIdHash, tonProof)
 	if err != nil {
