@@ -3107,6 +3107,16 @@ func (btce *BFTTargetChainExecutor) executeSolanaOperations(
 
 	btce.logger.Printf("🔷 [SOLANA-EXEC] Executing Solana chain operations for intent: %s", intentID)
 
+	// The parent BFT context may have a very short deadline that's already nearly
+	// expired after consensus rounds. The Solana workflow (create_anchor +
+	// proof-buffer init/chunk/execute + governance) needs ~30-60s of sequential
+	// confirmations, and the comprehensive-proof ZK generation alone takes ~15-20s.
+	// Use a fresh generous deadline (matches the EVM/NEAR/Cardano paths) so the
+	// buffer-upload confirmations don't die on "context deadline exceeded".
+	solCtx, solCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer solCancel()
+	ctx = solCtx
+
 	// Load Solana config from environment
 	solanaPrivateKey := os.Getenv("SOLANA_PRIVATE_KEY")
 	solanaRPCURL := os.Getenv("SOLANA_DEVNET_RPC_URL")
