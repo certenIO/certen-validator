@@ -110,9 +110,10 @@ func (ac *AptosClient) CreateAnchor(
 	crossChainCommitment [32]byte,
 	governanceRoot [32]byte,
 	executionCommitment [32]byte,
+	operationID [32]byte,
 	blockHeight uint64,
 ) (string, error) {
-	log.Printf("📡 [APTOS] Creating anchor (V5)...")
+	log.Printf("📡 [APTOS] Creating anchor (V6.1)...")
 	log.Printf("   Account: %s", ac.accountAddress)
 	log.Printf("   Package: %s", ac.packageAddress)
 	log.Printf("   Bundle ID: 0x%x", bundleId[:8])
@@ -129,7 +130,7 @@ func (ac *AptosClient) CreateAnchor(
 	}
 	log.Printf("   Sequence Number: %d", seqNum)
 
-	function := fmt.Sprintf("%s::certen_anchor_v5::create_anchor", ac.packageAddress)
+	function := fmt.Sprintf("%s::certen_anchor_v6_1::create_anchor", ac.packageAddress)
 
 	payload := map[string]interface{}{
 		"type":           "entry_function_payload",
@@ -143,6 +144,7 @@ func (ac *AptosClient) CreateAnchor(
 			bytes32ToU256String(crossChainCommitment), // cross_chain_commitment: u256
 			bytes32ToU256String(governanceRoot),       // governance_root: u256
 			bytes32ToU256String(executionCommitment),  // execution_commitment: u256 (CRITICAL-001)
+			bytes32ToU256String(operationID),          // operation_id: u256 (V6.1)
 			fmt.Sprintf("%d", blockHeight),            // accumulate_block_height: u64
 		},
 	}
@@ -167,24 +169,25 @@ func (ac *AptosClient) CreateAnchor(
 	return txHash, nil
 }
 
-// InitializeAnchorState calls initialize(owner, chain_id) on the anchor V5 module.
-// This creates the AnchorStateV5 resource on the signer's account.
+// InitializeAnchorState calls initialize(owner, network) on the anchor V6.1 module.
+// V6.1: network is a vector<u8> ("testnet"/"mainnet") from which the contract
+// derives deployment_chain_id = keccak256("certen:chain:v1:aptos:" || network).
 // Safe to call multiple times — returns nil if already initialized.
 func (ac *AptosClient) InitializeAnchorState(ctx context.Context) error {
-	log.Printf("📡 [APTOS] Initializing anchor state V5 for %s...", ac.accountAddress)
+	log.Printf("📡 [APTOS] Initializing anchor state V6.1 for %s...", ac.accountAddress)
 
 	seqNum, err := ac.getSequenceNumber(ctx)
 	if err != nil {
 		return fmt.Errorf("initialize: getting sequence number: %w", err)
 	}
 
-	function := fmt.Sprintf("%s::certen_anchor_v5::initialize", ac.packageAddress)
+	function := fmt.Sprintf("%s::certen_anchor_v6_1::initialize", ac.packageAddress)
 
 	payload := map[string]interface{}{
 		"type":           "entry_function_payload",
 		"function":       function,
 		"type_arguments": []string{},
-		"arguments":      []interface{}{uint8(aptosTestnetChainID)}, // chain_id: u8 (HIGH-001)
+		"arguments":      []interface{}{"0x" + hex.EncodeToString([]byte("testnet"))}, // network: vector<u8> (V6.1)
 	}
 
 	txn := map[string]interface{}{
@@ -316,7 +319,7 @@ func (ac *AptosClient) submitComprehensiveProofBCS(
 	// Call the flat entry function variant that accepts all proof fields individually
 	payload := map[string]interface{}{
 		"type":          "entry_function_payload",
-		"function":      fmt.Sprintf("%s::certen_anchor_v5::execute_comprehensive_proof_flat", ac.packageAddress),
+		"function":      fmt.Sprintf("%s::certen_anchor_v6_1::execute_comprehensive_proof_flat", ac.packageAddress),
 		"type_arguments": []string{},
 		"arguments": []interface{}{
 			ac.packageAddress,                            // anchor_owner: address (AnchorState lives at package address)
@@ -435,7 +438,7 @@ func (ac *AptosClient) ExecuteGovernanceProofDirect(
 
 	payload := map[string]interface{}{
 		"type":          "entry_function_payload",
-		"function":      fmt.Sprintf("%s::certen_account_v3::execute_governance_proof_direct_flat", ac.packageAddress),
+		"function":      fmt.Sprintf("%s::certen_account_v4::execute_governance_proof_direct_flat", ac.packageAddress),
 		"type_arguments": []string{},
 		"arguments": []interface{}{
 			userAccountAddr,                                      // account_addr: address
@@ -497,7 +500,7 @@ func (ac *AptosClient) DeployAccountViaFactory(
 	log.Printf("   Salt: %d", salt)
 
 	// create_account(caller, factory_addr, owner, adi_url: vector<u8>, salt: u64)
-	function := fmt.Sprintf("%s::certen_account_factory_v2::create_account", ac.packageAddress)
+	function := fmt.Sprintf("%s::certen_account_factory_v3::create_account", ac.packageAddress)
 
 	args := [][]byte{
 		bcsAddress(ac.packageAddress), // factory_addr: address
@@ -525,7 +528,7 @@ func (ac *AptosClient) PredictAccountAddress(
 	salt uint64,
 ) (string, error) {
 	// Fetch FactoryStateV2 to get deployer_address and anchor_contract
-	resourceType := fmt.Sprintf("%s::certen_account_factory_v2::FactoryStateV2", ac.packageAddress)
+	resourceType := fmt.Sprintf("%s::certen_account_factory_v3::FactoryStateV2", ac.packageAddress)
 	url := fmt.Sprintf("%s/v1/accounts/%s/resource/%s", ac.rpcEndpoint, ac.packageAddress, resourceType)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
@@ -608,7 +611,7 @@ func (ac *AptosClient) PredictAccountAddress(
 // It checks for the AccountState resource, not just account existence (resource accounts
 // can exist without being initialized by the factory).
 func (ac *AptosClient) CheckAccountExists(ctx context.Context, addr string) (bool, error) {
-	resourceType := fmt.Sprintf("%s::certen_account_v3::AccountStateV3", ac.packageAddress)
+	resourceType := fmt.Sprintf("%s::certen_account_v4::AccountStateV3", ac.packageAddress)
 	url := fmt.Sprintf("%s/v1/accounts/%s/resource/%s", ac.rpcEndpoint, addr, resourceType)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
@@ -654,7 +657,7 @@ type AptosAnchorData struct {
 
 // GetAnchorData reads anchor data via the get_anchor view function.
 func (ac *AptosClient) GetAnchorData(ctx context.Context, bundleId [32]byte) (*AptosAnchorData, error) {
-	function := fmt.Sprintf("%s::certen_anchor_v5::get_anchor_v5", ac.packageAddress)
+	function := fmt.Sprintf("%s::certen_anchor_v6_1::get_anchor_v5", ac.packageAddress)
 
 	result, err := ac.callViewFunction(ctx, function, nil, []interface{}{
 		ac.packageAddress,                // anchor_owner: address (AnchorState lives at package address)

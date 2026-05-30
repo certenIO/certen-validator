@@ -1066,7 +1066,10 @@ func (btce *BFTTargetChainExecutor) extractAllLegsFromIntent(legacyIntent *inten
 		// proof_executed already bind the anchor, so the gate isn't lost — same
 		// rationale as NEAR/Cardano.
 		isSolanaLeg := strings.HasPrefix(legChainNorm, "solana")
-		if !isNearLeg && !isCardanoLeg && !isSolanaLeg && leg.ExecutionPayload != nil && leg.ExecutionPayload.ExecutionCommitment != "" {
+		// Aptos uses an opaque execution-commitment stub + a 32-byte account-address
+		// target, not an EVM hex address — same rationale as NEAR/Cardano/Solana.
+		isAptosLeg := strings.HasPrefix(legChainNorm, "aptos")
+		if !isNearLeg && !isCardanoLeg && !isSolanaLeg && !isAptosLeg && leg.ExecutionPayload != nil && leg.ExecutionPayload.ExecutionCommitment != "" {
 			expectedCommitment := computeExecutionCommitment(
 				leg.ExecutionPayload.ChainID,
 				common.HexToAddress(leg.ExecutionPayload.Target),
@@ -3966,29 +3969,36 @@ func (btce *BFTTargetChainExecutor) executeAptosOperations(
 		govRoot = comprehensiveProof.Commitments.GovernanceRoot
 	}
 
-	// ========== CRITICAL-001: Compute execution commitment ==========
-	// Matches Move: keccak256(chain_id_u8 || target_32bytes || value_u64_le || data_hash_32bytes)
-	var execCommitment [32]byte
-	allLegsForExec := btce.extractAllLegsFromIntent(legacyIntent)
-	aptosLegForExec := btce.findLegForChainPrefix(allLegsForExec, "aptos", 2)
-	if aptosLegForExec != nil {
-		aptosToAddr := btce.extractAptosFieldFromCrossChainData(legacyIntent, "to")
-		aptosDepositOctas := uint64(1)
-		if aptosLegForExec.Value != nil {
-			weiValue := new(big.Int).Set(aptosLegForExec.Value)
-			octasValue := new(big.Int).Div(weiValue, big.NewInt(10_000_000_000))
-			if octasValue.Sign() > 0 {
-				aptosDepositOctas = octasValue.Uint64()
-			}
+	// ========== Execution commitment (opaque stub, shared with the BFT signer) ==========
+	execCommitment := contracts.AptosExecutionCommitmentStubV6_1(
+		adiURLHash, opCommitment, ccCommitment, govRoot,
+	)
+
+	// ========== V6.1: Aptos deployment_chain_id, operation_id, bundleId, messageHash ==========
+	// Replaces the EVM-style anchorID with the on-chain V6.1 derivation, or
+	// create_anchor reverts with E_BUNDLE_ID_MISMATCH (56) and the proof reverts
+	// with E_MESSAGE_HASH_MISMATCH (57).
+	aptosNetwork := contracts.AptosNetworkFromEnv()
+	aptosDeploymentChainID := contracts.ComputeAptosDeploymentChainIDV6_1(aptosNetwork)
+	var aptosOperationID [32]byte
+	if legacyIntent != nil {
+		if opIDStr, oerr := legacyIntent.OperationID(); oerr == nil && opIDStr != "" {
+			aptosOperationID = contracts.DeriveOperationIDBytes32FromString(opIDStr)
 		}
-		execCommitment = computeAptosExecutionCommitment(aptosTestnetChainID, aptosToAddr, aptosDepositOctas, [32]byte{})
-		btce.logger.Printf("🔒 [APTOS-EXEC] CRITICAL-001 ExecutionCommitment: 0x%x", execCommitment[:8])
-	} else {
-		// No Aptos leg — use a placeholder non-zero commitment
-		h := ethcrypto.Keccak256Hash([]byte("certen:aptos:no-leg"))
-		copy(execCommitment[:], h[:])
-		btce.logger.Printf("⚠️ [APTOS-EXEC] No Aptos leg found, using placeholder exec commitment")
 	}
+	aptosValidatorSetRoot := contracts.AptosValidatorSetRootFromEnvOrEmpty(2, 3)
+	bundleIdHash = contracts.DeriveAptosBundleIDV6_1(
+		aptosDeploymentChainID, adiURLHash, opCommitment, ccCommitment, govRoot,
+		execCommitment, aptosOperationID, certenProof.BlockHeight,
+	)
+	aptosMsgHash := contracts.ComputeAptosMessageHashV6_1_Pre(
+		aptosDeploymentChainID, bundleIdHash, execCommitment, aptosOperationID, aptosValidatorSetRoot,
+	)
+	if comprehensiveProof != nil {
+		comprehensiveProof.BLSProof.MessageHash = aptosMsgHash
+	}
+	btce.logger.Printf("🔑 [APTOS-V6.1] bundleId=0x%x opID=0x%x msgHash=0x%x setRoot=0x%x chainID=0x%x network=%s",
+		bundleIdHash[:8], aptosOperationID[:8], aptosMsgHash[:8], aptosValidatorSetRoot[:8], aptosDeploymentChainID[:8], aptosNetwork)
 
 	// ========== Step 0: Auto-initialize anchor state ==========
 	btce.logger.Printf("🔗 [APTOS-EXEC] Step 0: Ensuring anchor state is initialized...")
@@ -3996,12 +4006,12 @@ func (btce *BFTTargetChainExecutor) executeAptosOperations(
 		btce.logger.Printf("⚠️ [APTOS-EXEC] Anchor initialization failed (non-fatal): %v", initErr)
 	}
 
-	// ========== Step 1: Create Anchor (V5: 9 args with exec commitment) ==========
-	btce.logger.Printf("🔗 [APTOS-EXEC] Step 1: Creating anchor (V5)...")
+	// ========== Step 1: Create Anchor (V6.1: adds operation_id) ==========
+	btce.logger.Printf("🔗 [APTOS-EXEC] Step 1: Creating anchor (V6.1)...")
 
 	createTxHash, err := aptosClient.CreateAnchor(ctx,
 		bundleIdHash, adiURLHash, opCommitment, ccCommitment, govRoot,
-		execCommitment, certenProof.BlockHeight,
+		execCommitment, aptosOperationID, certenProof.BlockHeight,
 	)
 	if err != nil {
 		btce.logger.Printf("❌ [APTOS-EXEC] Step 1 failed: %v", err)
