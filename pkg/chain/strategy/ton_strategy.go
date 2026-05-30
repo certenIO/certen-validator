@@ -482,7 +482,7 @@ func (s *TONStrategy) findTransactionByHash(ctx context.Context, hash string) (b
 	hexHash = strings.TrimPrefix(hexHash, "0x")
 
 	// Query recent transactions on the anchor contract
-	url := s.buildURL(fmt.Sprintf("/getTransactions?address=%s&limit=50&archival=true", contractAddr))
+	url := s.buildURL(fmt.Sprintf("/getTransactions?address=%s&limit=50", contractAddr))
 
 	body, err := s.apiGet(ctx, url)
 	if err != nil {
@@ -581,7 +581,7 @@ func (s *TONStrategy) estimateSeqno(ctx context.Context, txUtime int64) int64 {
 
 // findTransactionOnAddress searches for a tx hash on a specific address
 func (s *TONStrategy) findTransactionOnAddress(ctx context.Context, address, hash string) (bool, int64, int64, string, error) {
-	url := s.buildURL(fmt.Sprintf("/getTransactions?address=%s&limit=50&archival=true", address))
+	url := s.buildURL(fmt.Sprintf("/getTransactions?address=%s&limit=50", address))
 
 	body, err := s.apiGet(ctx, url)
 	if err != nil {

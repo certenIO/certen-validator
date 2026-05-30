@@ -49,10 +49,15 @@ type TonClient struct {
 
 // TON constants
 const (
-	tonGasAmount       uint64 = 200_000_000 // 0.2 TON for message forwarding
-	tonDeployGas       uint64 = 500_000_000 // 0.5 TON for deployment
-	tonProofGas        uint64 = 300_000_000 // 0.3 TON for proof execution
-	tonGovGas          uint64 = 300_000_000 // 0.3 TON for governance execution
+	// Message values only need to cover gas/forwarding — the abstract account pays
+	// the actual transfer from its OWN balance, and BLS-ZK is disabled (the V6.1
+	// proof verification finalizes synchronously, with no async BLS forwarding). The
+	// old 0.2/0.3/0.3 TON values drained the validator wallet across 3 serialized
+	// sends (Step 3 then failed on insufficient balance). Right-sized below.
+	tonGasAmount       uint64 = 50_000_000  // 0.05 TON for create_anchor
+	tonDeployGas       uint64 = 500_000_000 // 0.5 TON for factory account deployment (forwards 0.5 to child)
+	tonProofGas        uint64 = 80_000_000  // 0.08 TON for proof execution (synchronous, BLS disabled)
+	tonGovGas          uint64 = 150_000_000 // 0.15 TON for governance (covers the AnchorVerify round-trip)
 	tonPollingInterval        = 5 * time.Second
 	tonPollingTimeout         = 2 * time.Minute
 )
