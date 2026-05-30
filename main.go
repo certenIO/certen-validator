@@ -16,6 +16,7 @@ import (
     "path/filepath"
     "strings"
     "sync"
+    "sync/atomic"
     "syscall"
     "time"
 
@@ -176,6 +177,12 @@ func (h *HealthStatus) ToJSON() []byte {
     data, _ := json.Marshal(h)
     return data
 }
+
+// unifiedOrchestratorForAttestation bridges the unified orchestrator (created in
+// startValidator) to main()'s HTTP mux so the Phase 8 peer-attestation endpoint
+// (/api/unified/attestation/request) can route to it. Atomic because the HTTP
+// server goroutine and startValidator run concurrently.
+var unifiedOrchestratorForAttestation atomic.Pointer[execution.UnifiedOrchestrator]
 
 func main() {
     // Configure logging
@@ -357,6 +364,35 @@ func main() {
 
     // HTTP server with ledger query endpoints
     mux := http.NewServeMux()
+
+    // Phase 8 unified-orchestrator peer attestation endpoint (registered unconditionally
+    // so the multi-validator quorum works regardless of legacy-attestation config). The
+    // orchestrator is created later in startValidator and published via the atomic pointer;
+    // this closure reads it at request time. Without this route, peers' POSTs to
+    // /api/unified/attestation/request 404'd and the cycle fell back to one self-attestation.
+    mux.HandleFunc("/api/unified/attestation/request", func(w http.ResponseWriter, r *http.Request) {
+        if r.Method != http.MethodPost {
+            http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+            return
+        }
+        uo := unifiedOrchestratorForAttestation.Load()
+        if uo == nil {
+            http.Error(w, "unified orchestrator not ready", http.StatusServiceUnavailable)
+            return
+        }
+        var par execution.PeerAttestationRequest
+        if decErr := json.NewDecoder(r.Body).Decode(&par); decErr != nil {
+            http.Error(w, "bad request: "+decErr.Error(), http.StatusBadRequest)
+            return
+        }
+        resp, hErr := uo.HandlePeerAttestationRequest(r.Context(), &par)
+        if hErr != nil {
+            http.Error(w, "attestation failed: "+hErr.Error(), http.StatusInternalServerError)
+            return
+        }
+        w.Header().Set("Content-Type", "application/json")
+        _ = json.NewEncoder(w).Encode(resp)
+    })
 
     // Health endpoint - Per E.2 remediation: Shows degraded status if database disconnected
     mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -1502,6 +1538,14 @@ func startValidator(
                     // Wire adapter to validator (implements same interface as legacy)
                     validator.SetProofCycleOrchestrator(adapter)
                     log.Printf("✅ [Unified] Unified Multi-Chain Orchestrator initialized and wired to validator")
+
+                    // Phase 8 quorum: publish the orchestrator so main()'s HTTP mux can route
+                    // peer attestation requests to it. The handler logic already exists
+                    // (UnifiedOrchestrator.HandlePeerAttestationRequest); it was never routed,
+                    // so peers' POSTs to /api/unified/attestation/request 404'd and the cycle
+                    // fell back to a single self-attestation.
+                    unifiedOrchestratorForAttestation.Store(unifiedOrchestrator)
+                    log.Printf("✅ [Unified] Phase 8 peer attestation handler published for HTTP routing")
                     log.Printf("   - Strategy Registry: %d attestation schemes, %d chains",
                         len(strategyRegistry.ListAttestationSchemes()),
                         len(strategyRegistry.ListChainIDs()))
