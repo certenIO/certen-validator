@@ -1105,88 +1105,79 @@ func (sc *SuiClient) GetAnchorData(ctx context.Context, bundleId [32]byte) (*Sui
 }
 
 // GetAccountForAdiHash looks up the ADI-derived account object ID from the
-// factory's adi_to_account registry via the get_account_for_adi_hash view
-// (returns Option<address>). This is the V6.1 source of truth for the Step 3
-// account — Sui object IDs are assigned at creation (not deterministically
-// predictable like Aptos resource accounts), so the factory registry is the only
-// reliable mapping from an ADI to its account object. Returns ("", false, nil)
-// when the ADI is not yet registered.
+// factory's adi_to_account registry (a Table<address,address>). This is the V6.1
+// source of truth for the Step 3 account — Sui object IDs are assigned at creation
+// (not deterministically predictable like Aptos resource accounts), so the factory
+// registry is the only reliable mapping from an ADI to its account object.
+//
+// Reads the Table entry directly via suix_getDynamicFieldObject (a Move Table
+// stores each entry as a dynamic field keyed by the BCS of the key). This avoids
+// the devInspect/unsafe_moveCall path, which mis-encodes shared-object args.
+// Returns ("", false, nil) when the ADI is not yet registered.
 func (sc *SuiClient) GetAccountForAdiHash(ctx context.Context, adiHash [32]byte) (string, bool, error) {
 	if sc.factoryObject == "" {
 		return "", false, fmt.Errorf("no factory object configured")
 	}
+
+	// 1. Resolve the adi_to_account Table's UID from the factory object content.
+	factoryRes, err := sc.rpcCall(ctx, "sui_getObject", []interface{}{
+		sc.factoryObject,
+		map[string]interface{}{"showContent": true},
+	})
+	if err != nil {
+		return "", false, fmt.Errorf("read factory object: %w", err)
+	}
+	var fo struct {
+		Data struct {
+			Content struct {
+				Fields struct {
+					AdiToAccount struct {
+						Fields struct {
+							ID struct {
+								ID string `json:"id"`
+							} `json:"id"`
+						} `json:"fields"`
+					} `json:"adi_to_account"`
+				} `json:"fields"`
+			} `json:"content"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(factoryRes, &fo); err != nil {
+		return "", false, fmt.Errorf("parse factory content: %w", err)
+	}
+	tableID := fo.Data.Content.Fields.AdiToAccount.Fields.ID.ID
+	if tableID == "" {
+		return "", false, fmt.Errorf("could not resolve adi_to_account table id")
+	}
+
+	// 2. Read the dynamic field keyed by the adi_hash address.
 	adiHashHex := "0x" + hex.EncodeToString(adiHash[:])
-
-	// Build the view call: get_account_for_adi_hash(factory: &FactoryV2, adi_hash: address)
-	txResult, err := sc.rpcCall(ctx, "unsafe_moveCall", []interface{}{
-		sc.senderAddress,
-		sc.packageAddress,
-		"certen_account_factory_v3",
-		"get_account_for_adi_hash",
-		[]string{},
-		[]interface{}{sc.factoryObject, adiHashHex},
-		nil,
-		fmt.Sprintf("%d", suiGasBudget),
+	dfRes, err := sc.rpcCall(ctx, "suix_getDynamicFieldObject", []interface{}{
+		tableID,
+		map[string]interface{}{"type": "address", "value": adiHashHex},
 	})
 	if err != nil {
-		return "", false, fmt.Errorf("build get_account_for_adi_hash call: %w", err)
+		return "", false, fmt.Errorf("read dynamic field: %w", err)
 	}
-	var moveCallResult struct {
-		TxBytes string `json:"txBytes"`
+	var df struct {
+		Error *struct {
+			Code string `json:"code"`
+		} `json:"error"`
+		Data *struct {
+			Content struct {
+				Fields struct {
+					Value string `json:"value"`
+				} `json:"fields"`
+			} `json:"content"`
+		} `json:"data"`
 	}
-	if err := json.Unmarshal(txResult, &moveCallResult); err != nil {
-		return "", false, fmt.Errorf("parse moveCall result: %w", err)
+	if err := json.Unmarshal(dfRes, &df); err != nil {
+		return "", false, fmt.Errorf("parse dynamic field: %w", err)
 	}
-
-	result, err := sc.rpcCall(ctx, "sui_devInspectTransactionBlock", []interface{}{
-		sc.senderAddress,
-		moveCallResult.TxBytes,
-		nil,
-		nil,
-	})
-	if err != nil {
-		return "", false, fmt.Errorf("devInspect get_account_for_adi_hash: %w", err)
+	if df.Data == nil || df.Data.Content.Fields.Value == "" {
+		return "", false, nil // not registered
 	}
-
-	// Parse the returnValue: results[0].returnValues[0] = [ [bcs bytes...], type ].
-	// BCS of Option<address>: 0x00 = None; 0x01 || 32-byte address = Some(addr).
-	var inspect struct {
-		Results []struct {
-			ReturnValues []json.RawMessage `json:"returnValues"`
-		} `json:"results"`
-		Effects struct {
-			Status struct {
-				Status string `json:"status"`
-				Error  string `json:"error"`
-			} `json:"status"`
-		} `json:"effects"`
-	}
-	if err := json.Unmarshal(result, &inspect); err != nil {
-		return "", false, fmt.Errorf("parse devInspect result: %w", err)
-	}
-	if inspect.Effects.Status.Status == "failure" {
-		return "", false, fmt.Errorf("devInspect failed: %s", inspect.Effects.Status.Error)
-	}
-	if len(inspect.Results) == 0 || len(inspect.Results[0].ReturnValues) == 0 {
-		return "", false, fmt.Errorf("no return values from get_account_for_adi_hash")
-	}
-
-	// Each returnValue is a 2-tuple [ [byte...], "0x1::option::Option<address>" ].
-	var rv []json.RawMessage
-	if err := json.Unmarshal(inspect.Results[0].ReturnValues[0], &rv); err != nil || len(rv) < 1 {
-		return "", false, fmt.Errorf("parse returnValue tuple: %w", err)
-	}
-	var bcsBytes []byte
-	if err := json.Unmarshal(rv[0], &bcsBytes); err != nil {
-		return "", false, fmt.Errorf("parse bcs bytes: %w", err)
-	}
-	if len(bcsBytes) == 0 || bcsBytes[0] == 0x00 {
-		return "", false, nil // None — ADI not registered
-	}
-	if len(bcsBytes) < 33 {
-		return "", false, fmt.Errorf("Some(address) too short: %d bytes", len(bcsBytes))
-	}
-	objectID := "0x" + hex.EncodeToString(bcsBytes[1:33])
+	objectID := df.Data.Content.Fields.Value
 	log.Printf("📡 [SUI] Factory registry: adi_hash=0x%x → account=%s", adiHash[:8], objectID)
 	return objectID, true, nil
 }
