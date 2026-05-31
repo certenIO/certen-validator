@@ -1447,6 +1447,40 @@ func (sc *SolanaClient) getAccountData(ctx context.Context, pubkey [32]byte) ([]
 	return data, nil
 }
 
+// GetSolBalance returns the SOL balance (lamports) of an address via getBalance.
+func (sc *SolanaClient) GetSolBalance(ctx context.Context, addr string) (uint64, error) {
+	res, err := sc.rpcCall(ctx, "getBalance", []interface{}{addr})
+	if err != nil {
+		return 0, err
+	}
+	var r struct {
+		Value uint64 `json:"value"`
+	}
+	if err := json.Unmarshal(res, &r); err != nil {
+		return 0, fmt.Errorf("parse SOL balance: %w", err)
+	}
+	return r.Value, nil
+}
+
+// ConfirmRecipientCredited cryptographically confirms the Step-3 transfer credited
+// the recipient by polling its SOL balance until it rises at least minDelta lamports
+// above the pre-transfer baseline — the on-chain proof the funds actually moved.
+func (sc *SolanaClient) ConfirmRecipientCredited(ctx context.Context, recipientAddr string, baseline uint64, minDelta uint64, timeout time.Duration) (uint64, error) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		bal, err := sc.GetSolBalance(ctx, recipientAddr)
+		if err == nil && bal >= baseline+minDelta {
+			return bal, nil
+		}
+		select {
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		case <-time.After(3 * time.Second):
+		}
+	}
+	return 0, fmt.Errorf("recipient %s SOL balance did not rise by >= %d lamports above %d within %v", recipientAddr, minDelta, baseline, timeout)
+}
+
 // =============================================================================
 // PRIVATE: JSON-RPC
 // =============================================================================

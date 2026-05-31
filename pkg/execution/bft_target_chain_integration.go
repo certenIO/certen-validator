@@ -3302,6 +3302,8 @@ func (btce *BFTTargetChainExecutor) executeSolanaOperations(
 
 	// Find the Solana-specific leg (not leg 0 which may be a different chain)
 	solanaLeg := btce.findSolanaLeg(allLegs)
+	step3Required := solanaLeg != nil
+	step3Confirmed := false
 
 	if solanaLeg != nil {
 		btce.logger.Printf("🏦 [SOLANA-EXEC] Step 3: Executing governance proof direct...")
@@ -3444,24 +3446,50 @@ func (btce *BFTTargetChainExecutor) executeSolanaOperations(
 					binary.LittleEndian.PutUint32(transferIxData[0:4], 2) // SystemInstruction::Transfer
 					binary.LittleEndian.PutUint64(transferIxData[4:12], targetValue)
 
+					recipientB58 := base58.Encode(recipientPubkey[:])
+					recipientBaseline, _ := solClient.GetSolBalance(ctx, recipientB58)
+
 					var govErr error
 					govTxSig, govErr = solClient.ExecuteGovernanceProofDirect(ctx,
 						ownerPubkey, targetValue, transferIxData, accountProof, recipientPubkey,
 					)
 					if govErr != nil {
-						btce.logger.Printf("⚠️ [SOLANA-EXEC] Step 3 failed: %v", govErr)
+						btce.logger.Printf("❌ [SOLANA-EXEC] Step 3 governance tx failed: %v", govErr)
 						govTxSig = "gov_failed_solana"
+					} else {
+						// Cryptographically confirm the recipient was credited on-chain.
+						btce.logger.Printf("⏳ [SOLANA-EXEC] Confirming recipient %s credited (baseline %d lamports, need +%d)...", recipientB58, recipientBaseline, targetValue)
+						newBal, confErr := solClient.ConfirmRecipientCredited(ctx, recipientB58, recipientBaseline, targetValue, 90*time.Second)
+						if confErr != nil {
+							btce.logger.Printf("❌ [SOLANA-EXEC] Step 3 transfer NOT confirmed on-chain: %v", confErr)
+							govTxSig = "gov_unconfirmed_solana"
+						} else {
+							step3Confirmed = true
+							btce.logger.Printf("✅ [SOLANA-EXEC] Step 3 transfer CONFIRMED on-chain: recipient credited (balance %d lamports, +%d)", newBal, newBal-recipientBaseline)
+						}
 					}
 				}
 			}
 		}
 	}
 
-	btce.logger.Printf("🎉 [SOLANA-EXEC] Solana anchor workflow completed!")
 	btce.logger.Printf("   Create TX: %s", createTxSig)
 	btce.logger.Printf("   Verify TX: %s", verifyTxSig)
 	btce.logger.Printf("   Governance TX: %s", govTxSig)
 
+	// ========== CRYPTOGRAPHIC GATE ==========
+	if step3Required && !step3Confirmed {
+		resultErr := fmt.Sprintf("step 3 not proven: recipient transfer not confirmed on-chain (govTxSig=%s)", govTxSig)
+		btce.logger.Printf("⛔ [SOLANA-EXEC] Execution NOT fully proven — halting cycle (no observation/attestation/writeback): %s", resultErr)
+		r := btce.buildSolanaResult(intentID, anchorID, createTxSig, verifyTxSig, govTxSig, false)
+		if r.Metadata == nil {
+			r.Metadata = map[string]string{}
+		}
+		r.Metadata["failureReason"] = resultErr
+		return r, fmt.Errorf("solana execution not fully proven: %s", resultErr)
+	}
+
+	btce.logger.Printf("🎉 [SOLANA-EXEC] Solana anchor workflow fully proven on-chain (create + proof + transfer)!")
 	return btce.buildSolanaResult(intentID, anchorID, createTxSig, verifyTxSig, govTxSig, true), nil
 }
 
