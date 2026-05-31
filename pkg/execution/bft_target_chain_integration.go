@@ -5324,8 +5324,10 @@ func (btce *BFTTargetChainExecutor) executeTonOperations(
 
 	btce.logger.Printf("🔷 [TON-EXEC] Executing TON chain operations for intent: %s", intentID)
 
-	// Fresh context with generous timeout for 3-step async TON flow
-	tonCtx, tonCancel := context.WithTimeout(context.Background(), 7*time.Minute)
+	// Fresh context with generous timeout for the 3-step async TON flow plus the
+	// multi-hop Step-3 settlement (gov → anchor-verify round-trip → recipient), which
+	// on testnet can take several minutes to finalize and must be fully confirmed.
+	tonCtx, tonCancel := context.WithTimeout(context.Background(), 12*time.Minute)
 	defer tonCancel()
 	ctx = tonCtx
 
@@ -5666,7 +5668,7 @@ func (btce *BFTTargetChainExecutor) executeTonOperations(
 						// Cryptographically confirm the value actually reached the recipient
 						// (the account → anchor-verify round-trip → recipient is async).
 						btce.logger.Printf("⏳ [TON-EXEC] Confirming value reached recipient %s on-chain...", recipientAddr)
-						newLt, _, confErr := tonClient.ConfirmRecipientReceived(ctx, recipientAddr, recipientPrevLt, 3*time.Minute)
+						newLt, _, confErr := tonClient.ConfirmRecipientReceived(ctx, recipientAddr, recipientPrevLt, 7*time.Minute)
 						if confErr != nil {
 							btce.logger.Printf("❌ [TON-EXEC] Step 3 transfer NOT confirmed on-chain: %v", confErr)
 							govTxHash = "gov_unconfirmed_ton"
