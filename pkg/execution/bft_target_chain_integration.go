@@ -4703,6 +4703,8 @@ func (btce *BFTTargetChainExecutor) executeSuiOperations(
 	allLegs := btce.extractAllLegsFromIntent(legacyIntent)
 	suiLeg := btce.findLegForChainPrefix(allLegs, "sui", 101) // Sui testnet
 	govTxHash := "no_governance_needed"
+	step3Required := suiLeg != nil
+	step3Confirmed := false
 
 	if suiLeg != nil {
 		btce.logger.Printf("🏦 [SUI-EXEC] Step 3: Executing withdraw_sui_direct...")
@@ -4821,25 +4823,53 @@ func (btce *BFTTargetChainExecutor) executeSuiOperations(
 						execCommitment, amountMist, userAccountObjectId, recipientAddr,
 					)
 
+					recipientBaseline, _ := suiClient.GetSuiBalance(ctx, recipientAddr)
+
 					var govErr error
 					govTxHash, govErr = suiClient.WithdrawSuiDirect(ctx,
 						userAccountObjectId, accountVersion,
 						recipientAddr, amountMist, accountProof,
 					)
 					if govErr != nil {
-						btce.logger.Printf("⚠️ [SUI-EXEC] Step 3 failed: %v", govErr)
+						btce.logger.Printf("❌ [SUI-EXEC] Step 3 withdraw tx failed: %v", govErr)
 						govTxHash = "gov_failed_sui"
+					} else {
+						// Cryptographically confirm the recipient was credited on-chain.
+						btce.logger.Printf("⏳ [SUI-EXEC] Confirming recipient %s credited (baseline %d MIST, need +%d)...", recipientAddr, recipientBaseline, amountMist)
+						newBal, confErr := suiClient.ConfirmRecipientCredited(ctx, recipientAddr, recipientBaseline, amountMist, 90*time.Second)
+						if confErr != nil {
+							btce.logger.Printf("❌ [SUI-EXEC] Step 3 transfer NOT confirmed on-chain: %v", confErr)
+							govTxHash = "gov_unconfirmed_sui"
+						} else {
+							step3Confirmed = true
+							btce.logger.Printf("✅ [SUI-EXEC] Step 3 transfer CONFIRMED on-chain: recipient credited (balance %d MIST, +%d)", newBal, newBal-recipientBaseline)
+						}
 					}
 				}
 			}
 		}
 	}
 
-	btce.logger.Printf("🎉 [SUI-EXEC] SUI anchor workflow completed!")
 	btce.logger.Printf("   Create TX: %s", createTxHash)
 	btce.logger.Printf("   Verify TX: %s", verifyTxHash)
 	btce.logger.Printf("   Governance TX: %s", govTxHash)
 
+	// ========== CRYPTOGRAPHIC GATE ==========
+	// Only report success (allowing Phase 7-9) when the value transfer is PROVEN
+	// on-chain (recipient credited). Step 1/2 already hard-return on tx failure, and
+	// the Move V6.1 gates abort the tx on a bad bundle_id/message_hash.
+	if step3Required && !step3Confirmed {
+		resultErr := fmt.Sprintf("step 3 not proven: recipient transfer not confirmed on-chain (govTxHash=%s)", govTxHash)
+		btce.logger.Printf("⛔ [SUI-EXEC] Execution NOT fully proven — halting cycle (no observation/attestation/writeback): %s", resultErr)
+		r := btce.buildSuiResult(intentID, anchorID, createTxHash, verifyTxHash, govTxHash, false)
+		if r.Metadata == nil {
+			r.Metadata = map[string]string{}
+		}
+		r.Metadata["failureReason"] = resultErr
+		return r, fmt.Errorf("sui execution not fully proven: %s", resultErr)
+	}
+
+	btce.logger.Printf("🎉 [SUI-EXEC] SUI anchor workflow fully proven on-chain (create + proof + transfer)!")
 	return btce.buildSuiResult(intentID, anchorID, createTxHash, verifyTxHash, govTxHash, true), nil
 }
 

@@ -12,6 +12,7 @@ import (
 	"log"
 	"math/big"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -87,6 +88,44 @@ func NewSuiClient(rpcEndpoint, privateKeyBech32, packageAddress, anchorStateObje
 // GetSenderAddress returns the derived sender address.
 func (sc *SuiClient) GetSenderAddress() string {
 	return sc.senderAddress
+}
+
+// GetSuiBalance returns the SUI balance (in MIST) of an address via suix_getBalance.
+func (sc *SuiClient) GetSuiBalance(ctx context.Context, addr string) (uint64, error) {
+	res, err := sc.rpcCall(ctx, "suix_getBalance", []interface{}{addr})
+	if err != nil {
+		return 0, err
+	}
+	var bal struct {
+		TotalBalance string `json:"totalBalance"`
+	}
+	if err := json.Unmarshal(res, &bal); err != nil {
+		return 0, fmt.Errorf("parse SUI balance: %w", err)
+	}
+	v, err := strconv.ParseUint(strings.TrimSpace(bal.TotalBalance), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("SUI balance %q not numeric: %w", bal.TotalBalance, err)
+	}
+	return v, nil
+}
+
+// ConfirmRecipientCredited cryptographically confirms the Step-3 withdraw credited
+// the recipient by polling its SUI balance until it rises at least minDelta MIST
+// above the pre-transfer baseline — the on-chain proof the funds actually moved.
+func (sc *SuiClient) ConfirmRecipientCredited(ctx context.Context, recipientAddr string, baseline uint64, minDelta uint64, timeout time.Duration) (uint64, error) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		bal, err := sc.GetSuiBalance(ctx, recipientAddr)
+		if err == nil && bal >= baseline+minDelta {
+			return bal, nil
+		}
+		select {
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		case <-time.After(3 * time.Second):
+		}
+	}
+	return 0, fmt.Errorf("recipient %s SUI balance did not rise by >= %d MIST above %d within %v", recipientAddr, minDelta, baseline, timeout)
 }
 
 // =============================================================================
