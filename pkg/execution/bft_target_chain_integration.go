@@ -5688,11 +5688,26 @@ func (btce *BFTTargetChainExecutor) executeTonOperations(
 	}
 	adiURLHash := ComputeAdiURLHash(adiURL)
 
-	// ========== Execution commitment (opaque stub, shared with the BFT signer) ==========
-	// TON cell-hash chain over (adi, op, cc, gov) — never recomputed by the V6.1 gates.
-	execCommitment := contracts.TonExecutionCommitmentStubV6_1(
-		adiURLHash, opCommitment, ccCommitment, govRoot,
-	)
+	// ========== Execution commitment (CRITICAL-001 value-bound, shared with the BFT signer) ==========
+	// For an EXTERNAL transfer (the leg carries a "to"), bind the EXACT (recipient,
+	// value) via a TON cell-hash that the on-chain certen_account_v3 recomputes and
+	// the anchor asserts at verify time. For a self/governance op (no "to"), keep the
+	// opaque stub — the on-chain check is skipped when target == the account itself
+	// (target != myAddress() guard), and create_anchor requires a non-zero commitment.
+	tonCommitToAddr := btce.extractTonFieldFromCrossChainData(legacyIntent, "to")
+	tonCommitLeg := btce.findLegForChainPrefix(btce.extractAllLegsFromIntent(legacyIntent), "ton", -239, -3)
+	var execCommitment [32]byte
+	if tonCommitToAddr != "" {
+		commitVal := big.NewInt(1)
+		if tonCommitLeg != nil && tonCommitLeg.Value != nil && tonCommitLeg.Value.Sign() > 0 {
+			commitVal = new(big.Int).Set(tonCommitLeg.Value)
+		}
+		execCommitment = contracts.TonExecutionCommitmentV6_1(tonCommitToAddr, commitVal)
+	} else {
+		execCommitment = contracts.TonExecutionCommitmentStubV6_1(
+			adiURLHash, opCommitment, ccCommitment, govRoot,
+		)
+	}
 
 	// ========== V6.1: TON deployment_chain_id, operation_id, bundleId, messageHash ==========
 	// All TON cell-hashes (Cell.hash = SHA-256 of cell representation), NOT keccak256.

@@ -22,6 +22,7 @@ import (
 	"math/big"
 	"sort"
 
+	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
@@ -47,6 +48,36 @@ func tonCellHashChain(values [][32]byte) [32]byte {
 	}
 	var out [32]byte
 	copy(out[:], child.Hash())
+	return out
+}
+
+// TonExecutionCommitmentV6_1 is the CRITICAL-001 value-bound execution commitment
+// that binds the EXACT transfer (recipient + nanoTON value), REPLACING the opaque
+// stub TonExecutionCommitmentStubV6_1. The on-chain certen_account_v3 recomputes it
+// via computeExecutionCommitmentValueBound(target, value) =
+// beginCell().storeAddress(target).storeCoins(value).endCell().hash() and passes it
+// to the anchor's AnchorVerifyRequest; the anchor rejects the verify if it does not
+// equal the value locked at create_anchor. This builder MUST produce the identical
+// cell: StoreAddr(target) then StoreBigCoins(value), then Cell.hash().
+//
+// target accepts the raw "wc:hex" form or the user-friendly EQ/UQ base64 form — both
+// resolve to the same workchain+hash, so the stored MsgAddress bits (and the hash)
+// are identical. Returns the zero array on a parse error (a zero commitment can't
+// match any real anchor value, so the cycle fails closed).
+func TonExecutionCommitmentV6_1(target string, value *big.Int) [32]byte {
+	var out [32]byte
+	addr, err := address.ParseAddr(target)
+	if err != nil {
+		addr, err = address.ParseRawAddr(target)
+		if err != nil {
+			return out
+		}
+	}
+	if value == nil {
+		value = big.NewInt(0)
+	}
+	c := cell.BeginCell().MustStoreAddr(addr).MustStoreBigCoins(value).EndCell()
+	copy(out[:], c.Hash())
 	return out
 }
 

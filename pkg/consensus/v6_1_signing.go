@@ -527,6 +527,40 @@ func nearExecutionCommitmentFromIntent(certenIntent *CertenIntent, ccData []byte
 	)
 }
 
+// tonExecutionCommitmentFromIntent reproduces the executor's TON execution-commitment
+// choice: value-bound cell-hash over the destination TON leg's (recipient, value) when
+// the leg carries a "to", else the opaque stub. MUST match the executor exactly or
+// Step 2 reverts on the V6.1 messageHash.
+func tonExecutionCommitmentFromIntent(certenIntent *CertenIntent, adiURLHash, opCommitment, ccCommitment, govRoot [32]byte) [32]byte {
+	to := ""
+	value := big.NewInt(1)
+	if certenIntent != nil {
+		if env, err := certenIntent.ParseCrossChain(); err == nil && env != nil {
+			for i := range env.Legs {
+				l := &env.Legs[i]
+				if !strings.HasPrefix(strings.ToLower(l.Chain), "ton") {
+					continue
+				}
+				if l.To != "" {
+					to = l.To
+				}
+				if l.AmountWei != "" {
+					if v, ok := new(big.Int).SetString(l.AmountWei, 10); ok && v.Sign() > 0 {
+						value = v
+					}
+				}
+				if l.Role == "destination" || l.Role == "payment" {
+					break
+				}
+			}
+		}
+	}
+	if to != "" {
+		return contracts.TonExecutionCommitmentV6_1(to, value)
+	}
+	return contracts.TonExecutionCommitmentStubV6_1(adiURLHash, opCommitment, ccCommitment, govRoot)
+}
+
 // solanaExecutionCommitmentFromIntent reproduces, on the consensus signer side, the
 // value-bound Solana execution_commitment the executor anchors
 // (contracts.SolanaExecutionCommitmentV6_1 over the destination Solana leg's recipient
@@ -1124,9 +1158,10 @@ func buildV6_1TonInputsFromIntent(
 	ccCommitment := contracts.DeriveCrossChainCommitmentFromBPT(bptRoot)
 	govRoot := contracts.ComputeAccumulateGovRoot(govInputs)
 
-	execCommitment := contracts.TonExecutionCommitmentStubV6_1(
-		adiURLHash, opCommitment, ccCommitment, govRoot,
-	)
+	// CRITICAL-001 parity: for an external transfer (leg carries a "to"), bind the
+	// EXACT (recipient, value); else keep the opaque stub (the on-chain check is
+	// skipped for self-ops). MUST match the executor's choice byte-for-byte.
+	execCommitment := tonExecutionCommitmentFromIntent(certenIntent, adiURLHash, opCommitment, ccCommitment, govRoot)
 
 	return contracts.V6_1PreExecBundleInputsTon{
 		DeploymentChainID:     chainID32,
