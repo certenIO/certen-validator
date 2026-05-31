@@ -232,6 +232,7 @@ func (s *TONStrategy) ObserveTransaction(ctx context.Context, txHash string) (*O
 
 	// Track the block at which we first saw the transaction
 	var txSeqno int64
+	var txUtime int64
 	var txFound bool
 	var txTimestamp time.Time
 	var txFrom string
@@ -265,6 +266,7 @@ func (s *TONStrategy) ObserveTransaction(ctx context.Context, txHash string) (*O
 				}
 				txFound = true
 				txSeqno = seqno
+				txUtime = utime
 				txTimestamp = time.Unix(utime, 0)
 				txFrom = sender
 				s.logger.Printf("Transaction found! seqno=%d, utime=%d, from=%s", txSeqno, utime, sender)
@@ -277,8 +279,10 @@ func (s *TONStrategy) ObserveTransaction(ctx context.Context, txHash string) (*O
 			if confirmations >= required {
 				s.logger.Printf("Transaction finalized: %d confirmations (required %d)", confirmations, required)
 
+				// ResultHash is deterministic (txHash + utime); the masterchain
+				// state-root below is only reported as observation metadata.
 				blockHashHex := tonBase64ToHex(mcInfo.StateRootHash)
-				resultHash := s.computeResultHash(hexOnly, uint64(txSeqno), blockHashHex)
+				resultHash := s.computeResultHash(hexOnly, txUtime)
 
 				return &ObservationResult{
 					TxHash:                hexOnly,
@@ -373,7 +377,7 @@ func (s *TONStrategy) GetTransactionReceipt(ctx context.Context, txHash string) 
 		Confirmations:        int(confirmations),
 		RequiredConfirmations: int(required),
 		IsFinalized:           confirmations >= required,
-		ResultHash:            s.computeResultHash(hexOnly, uint64(seqno), blockHashHex),
+		ResultHash:            s.computeResultHash(hexOnly, utime),
 		ObservedAt:            time.Now().UTC(),
 		ObserverValidatorID:   s.config.ValidatorID,
 		TxFrom:               sender,
@@ -782,11 +786,17 @@ func hashBytesEqual(a, b []byte) bool {
 
 // computeResultHash creates a deterministic hash of the observation result
 // for attestation purposes (matches EVM observer pattern)
-func (s *TONStrategy) computeResultHash(txHash string, seqno uint64, stateRoot string) [32]byte {
+// computeResultHash derives the cross-validator ResultHash from ONLY deterministic
+// facts of the transaction itself — its hash and its on-chain block time (utime).
+// It MUST NOT mix in observation-time masterchain state (the current tip seqno or
+// state-root), because those differ per validator and would make every observer
+// compute a different ResultHash, so peers refuse to attest (the cause of the
+// attestations=1 quorum failure). All validators resolve the same tx by exact
+// hash, so txHash+utime are identical for everyone.
+func (s *TONStrategy) computeResultHash(txHash string, utime int64) [32]byte {
 	h := sha256.New()
-	h.Write([]byte(txHash))
-	h.Write([]byte(fmt.Sprintf("%d", seqno)))
-	h.Write([]byte(stateRoot))
+	h.Write([]byte(strings.TrimPrefix(txHash, "0x")))
+	h.Write([]byte(fmt.Sprintf("%d", utime)))
 	h.Write([]byte("ton"))
 
 	var result [32]byte
