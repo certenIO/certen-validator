@@ -2909,6 +2909,12 @@ func (btce *BFTTargetChainExecutor) executeCardanoOperations(
 	cardanoLeg := btce.findLegForChainPrefix(allLegs, "cardano", chainID)
 	govTxHash := "no_governance_needed"
 
+	// Transfer-proof gating: a Cardano leg requires the recipient to actually
+	// be credited on-chain before the cycle may attest. step3Confirmed flips
+	// true only after ConfirmRecipientCredited observes the lovelace delta.
+	step3Required := cardanoLeg != nil
+	step3Confirmed := false
+
 	if cardanoLeg != nil {
 		// Build the per-call governance proof.
 		var targetValue *big.Int
@@ -2992,6 +2998,12 @@ func (btce *BFTTargetChainExecutor) executeCardanoOperations(
 			}
 
 			if !strings.HasPrefix(govTxHash, "gov_failed") {
+				// Snapshot recipient balance before governance so we can prove the credit.
+				recipientBaseline, balErr := cardanoClient.GetLovelaceBalance(ctx, callTarget)
+				if balErr != nil {
+					btce.logger.Printf("⚠️ [CARDANO-EXEC] could not read recipient baseline balance: %v", balErr)
+				}
+
 				result, govErr := cardanoClient.ExecuteGovernanceProofDirect(ctx, CardanoExecuteGovernanceRequest{
 					ADIURL:        adiURL,
 					AnchorUTXORef: verifyTxHash + "#0",
@@ -3004,6 +3016,27 @@ func (btce *BFTTargetChainExecutor) executeCardanoOperations(
 				} else {
 					govTxHash = result
 					btce.logger.Printf("✅ [CARDANO-EXEC] Step 3 complete - Governance executed: %s", govTxHash)
+
+					if balErr == nil {
+						// Require at least half the intended value to land (covers fees/min-ADA rounding).
+						minDelta := new(big.Int).Div(targetValue, big.NewInt(2))
+						if minDelta.Sign() <= 0 {
+							minDelta = big.NewInt(1)
+						}
+						btce.logger.Printf("🔎 [CARDANO-EXEC] Confirming recipient credited (baseline %s lovelace, need +%s)...",
+							recipientBaseline.String(), minDelta.String())
+						_, credited, confErr := cardanoClient.ConfirmRecipientCredited(ctx, callTarget,
+							recipientBaseline, minDelta, 3*time.Minute)
+						if confErr != nil {
+							btce.logger.Printf("⚠️ [CARDANO-EXEC] confirmation error: %v", confErr)
+						}
+						if credited {
+							step3Confirmed = true
+							btce.logger.Printf("✅ [CARDANO-EXEC] Step 3 transfer CONFIRMED on-chain: recipient credited")
+						} else {
+							btce.logger.Printf("⛔ [CARDANO-EXEC] Step 3 transfer NOT confirmed on-chain (recipient not credited within window)")
+						}
+					}
 				}
 			}
 		}
@@ -3013,6 +3046,17 @@ func (btce *BFTTargetChainExecutor) executeCardanoOperations(
 	btce.logger.Printf("   Create TX: %s", createTxHash)
 	btce.logger.Printf("   Verify TX: %s", verifyTxHash)
 	btce.logger.Printf("   Governance TX: %s", govTxHash)
+
+	if step3Required && !step3Confirmed {
+		resultErr := fmt.Sprintf("step 3 not proven: recipient transfer not confirmed on-chain (govTxHash=%s)", govTxHash)
+		btce.logger.Printf("⛔ [CARDANO-EXEC] Execution NOT fully proven — halting cycle (no attestation/writeback): %s", resultErr)
+		r := btce.buildCardanoResult(intentID, anchorID, createTxHash, verifyTxHash, govTxHash, false)
+		if r.Metadata == nil {
+			r.Metadata = map[string]string{}
+		}
+		r.Metadata["failureReason"] = resultErr
+		return r, fmt.Errorf("cardano execution not fully proven: %s", resultErr)
+	}
 
 	return btce.buildCardanoResult(intentID, anchorID, createTxHash, verifyTxHash, govTxHash, true), nil
 }

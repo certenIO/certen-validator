@@ -278,6 +278,68 @@ func (c *CardanoClient) ExecuteGovernanceProofDirect(ctx context.Context, req Ca
 }
 
 // =============================================================================
+// Balance / transfer-proof confirmation
+// =============================================================================
+
+type cardanoBalanceResponse struct {
+	OK       bool   `json:"ok"`
+	Address  string `json:"address"`
+	Lovelace string `json:"lovelace"`
+	Error    string `json:"error,omitempty"`
+}
+
+// GetLovelaceBalance returns the total lovelace at a recipient. paymentCred is
+// the 28-byte payment-credential hash (hex, the same value used as call.target);
+// the tx-server resolves it to the enterprise address the governance tx pays to,
+// then sums UTXO lovelace.
+func (c *CardanoClient) GetLovelaceBalance(ctx context.Context, paymentCred string) (*big.Int, error) {
+	raw, err := c.postRaw(ctx, "/tx/balance", map[string]string{"payment_cred": paymentCred})
+	if err != nil {
+		return nil, err
+	}
+	var out cardanoBalanceResponse
+	if jerr := json.Unmarshal(raw, &out); jerr != nil {
+		return nil, fmt.Errorf("decode balance: %w (body=%q)", jerr, string(raw))
+	}
+	if !out.OK {
+		return nil, fmt.Errorf("balance: %s", out.Error)
+	}
+	bal, ok := new(big.Int).SetString(out.Lovelace, 10)
+	if !ok {
+		return nil, fmt.Errorf("balance: unparseable lovelace %q", out.Lovelace)
+	}
+	return bal, nil
+}
+
+// ConfirmRecipientCredited polls the recipient's lovelace balance until it has
+// risen by at least minDelta relative to baseline, or the timeout elapses.
+// This is the transfer-proof gate for Cardano: a Step-3 governance tx that
+// reports success but does not actually move value will never satisfy this
+// check, so the proof cycle halts instead of falsely attesting.
+func (c *CardanoClient) ConfirmRecipientCredited(ctx context.Context, paymentCred string, baseline, minDelta *big.Int, timeout time.Duration) (*big.Int, bool, error) {
+	deadline := time.Now().Add(timeout)
+	target := new(big.Int).Add(baseline, minDelta)
+	last := new(big.Int).Set(baseline)
+	for {
+		bal, err := c.GetLovelaceBalance(ctx, paymentCred)
+		if err == nil {
+			last = bal
+			if bal.Cmp(target) >= 0 {
+				return bal, true, nil
+			}
+		}
+		if time.Now().After(deadline) {
+			return last, false, nil
+		}
+		select {
+		case <-ctx.Done():
+			return last, false, ctx.Err()
+		case <-time.After(5 * time.Second):
+		}
+	}
+}
+
+// =============================================================================
 // Internal HTTP helper
 // =============================================================================
 
