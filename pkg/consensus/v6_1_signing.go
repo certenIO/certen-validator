@@ -527,6 +527,38 @@ func nearExecutionCommitmentFromIntent(certenIntent *CertenIntent, ccData []byte
 	)
 }
 
+// suiExecutionCommitmentFromIntent reproduces, on the consensus signer side, the
+// value-bound Sui execution_commitment the executor anchors
+// (contracts.SuiExecutionCommitmentV6_1 over the destination Sui leg's recipient +
+// amount). The signed messageHash folds this commitment, so it MUST equal what the
+// executor stores at create_anchor or Step 2 reverts with E_MESSAGE_HASH_MISMATCH.
+func suiExecutionCommitmentFromIntent(certenIntent *CertenIntent) [32]byte {
+	var recipient [32]byte
+	amount := uint64(1)
+	if certenIntent != nil {
+		if env, err := certenIntent.ParseCrossChain(); err == nil && env != nil {
+			for i := range env.Legs {
+				l := &env.Legs[i]
+				if !strings.HasPrefix(strings.ToLower(l.Chain), "sui") {
+					continue
+				}
+				if l.To != "" {
+					recipient = contracts.SuiRecipient32(l.To)
+				}
+				if l.AmountWei != "" {
+					if v, ok := new(big.Int).SetString(l.AmountWei, 10); ok && v.Sign() > 0 {
+						amount = v.Uint64()
+					}
+				}
+				if l.Role == "destination" || l.Role == "payment" {
+					break
+				}
+			}
+		}
+	}
+	return contracts.SuiExecutionCommitmentV6_1(recipient, amount)
+}
+
 // =============================================================================
 // Solana V6.1 dispatch — 32-byte synthesized deployment_chain_id tagged
 // "solana", validator-set-root over 32-byte pubkeys, and the opaque Solana
@@ -902,11 +934,12 @@ func buildV6_1SuiInputsFromIntent(
 	adiURLHash := contracts.DeriveAdiURLHashFromString(adiURL)
 	opCommitment := contracts.DeriveOperationCommitmentFromFields(intentID, blockHeight, txHash)
 	ccCommitment := contracts.DeriveCrossChainCommitmentFromBPT(bptRoot)
-	govRoot := contracts.ComputeAccumulateGovRoot(govInputs)
 
-	execCommitment := contracts.SuiExecutionCommitmentStubV6_1(
-		adiURLHash, opCommitment, ccCommitment, govRoot,
-	)
+	// CRITICAL-001 parity: bind the EXACT transfer (recipient + amount) the intent
+	// authorizes. MUST match the executor's contracts.SuiExecutionCommitmentV6_1.
+	// (govRoot is no longer needed standalone — the bundle builder recomputes it
+	// from GovRootInputs.)
+	execCommitment := suiExecutionCommitmentFromIntent(certenIntent)
 
 	return contracts.V6_1PreExecBundleInputsSui{
 		DeploymentChainID:     chainID32,

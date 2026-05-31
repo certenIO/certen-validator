@@ -4776,10 +4776,28 @@ func (btce *BFTTargetChainExecutor) executeSuiOperations(
 		govRoot = comprehensiveProof.Commitments.GovernanceRoot
 	}
 
-	// ========== Execution commitment (opaque stub, shared with the BFT signer) ==========
-	execCommitment := contracts.SuiExecutionCommitmentStubV6_1(
-		adiURLHash, opCommitment, ccCommitment, govRoot,
-	)
+	// Extract the Sui leg's recipient + amount EARLY (before create_anchor) so the
+	// execution_commitment binds the EXACT transfer the intent authorizes. The
+	// on-chain certen_account_v4::withdraw_sui_direct recomputes this from the
+	// runtime (recipient, amount) and asserts equality (CRITICAL-001 parity).
+	allLegs := btce.extractAllLegsFromIntent(legacyIntent)
+	suiLeg := btce.findLegForChainPrefix(allLegs, "sui", 101) // Sui testnet
+	suiToAddr := btce.extractSuiFieldFromCrossChainData(legacyIntent, "to")
+	var commitRecipient [32]byte
+	commitAmount := uint64(1)
+	if suiLeg != nil {
+		r := suiToAddr
+		if r == "" {
+			r = suiLeg.Target.Hex()
+		}
+		commitRecipient = contracts.SuiRecipient32(r)
+		if suiLeg.Value != nil && suiLeg.Value.Uint64() > 0 {
+			commitAmount = suiLeg.Value.Uint64()
+		}
+	}
+
+	// ========== Execution commitment (value-bound, shared with the BFT signer) ==========
+	execCommitment := contracts.SuiExecutionCommitmentV6_1(commitRecipient, commitAmount)
 
 	// ========== V6.1: Sui deployment_chain_id, operation_id, bundleId, messageHash ==========
 	// Replaces the EVM-style anchorID with the on-chain V6.1 derivation, or
@@ -4849,17 +4867,14 @@ func (btce *BFTTargetChainExecutor) executeSuiOperations(
 	}
 
 	// ========== Step 3: Execute via user's Abstract Account ==========
-	allLegs := btce.extractAllLegsFromIntent(legacyIntent)
-	suiLeg := btce.findLegForChainPrefix(allLegs, "sui", 101) // Sui testnet
+	// allLegs / suiLeg / suiToAddr were resolved early (above) so the
+	// execution_commitment could bind the exact transfer.
 	govTxHash := "no_governance_needed"
 	step3Required := suiLeg != nil
 	step3Confirmed := false
 
 	if suiLeg != nil {
 		btce.logger.Printf("🏦 [SUI-EXEC] Step 3: Executing withdraw_sui_direct...")
-
-		// Extract SUI recipient from CrossChainData
-		suiToAddr := btce.extractSuiFieldFromCrossChainData(legacyIntent, "to")
 		btce.logger.Printf("   Intent to: %s", suiToAddr)
 
 		// ALWAYS resolve the abstract account object from the factory's adi_to_account
@@ -5455,9 +5470,14 @@ func (btce *BFTTargetChainExecutor) buildSuiAccountProof(
 		Timestamp:           proofTimestamp,
 		ExpiresAt:           proofExpiresAt,
 		ValidatorSignatures: validatorSigs,
-		Nonce:               1, // Must be > current nonce (starts at 0)
-		RequiredLevel:       requiredLevel,
-		OperationHash:       operationHash,
+		// Monotonic per-(adi,op) replay nonce. The on-chain account stores a
+		// counter that increments by 1 on every withdraw and asserts
+		// proof.nonce > stored (E_NONCE_INVALID). A fixed 1 only passes the
+		// FIRST withdraw ever; use the Unix timestamp so each cycle's nonce is
+		// strictly greater than the small on-chain counter for years to come.
+		Nonce:         uint64(time.Now().Unix()),
+		RequiredLevel: requiredLevel,
+		OperationHash: operationHash,
 	}
 }
 
