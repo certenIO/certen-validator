@@ -506,13 +506,16 @@ func (sc *SolanaClient) buildExecuteComprehensiveProofIx(anchorId [32]byte, proo
 	return buf.Bytes()
 }
 
-func (sc *SolanaClient) buildExecuteGovernanceProofDirectIx(lamportsValue uint64, instructionData []byte, proof SolanaADIGovernanceProof) []byte {
+func (sc *SolanaClient) buildExecuteGovernanceProofDirectIx(lamportsValue uint64, instructionData []byte, proof SolanaADIGovernanceProof, expectedRecipient [32]byte) []byte {
 	disc := anchorDiscriminator("execute_governance_proof_direct")
 	var buf bytes.Buffer
 	buf.Write(disc[:])
 	solBorshWriteU64(&buf, lamportsValue)
 	solBorshWriteVecU8(&buf, instructionData)
 	sc.borshWriteADIGovernanceProof(&buf, proof)
+	// CRITICAL-001: expected_recipient: Pubkey (32 raw bytes, last arg). Bound to
+	// the anchor execution_commitment + asserted as the System-Transfer destination.
+	buf.Write(expectedRecipient[:])
 	return buf.Bytes()
 }
 
@@ -908,7 +911,7 @@ func (sc *SolanaClient) ExecuteGovernanceProofDirect(
 	blsVkPDA, _ := sc.blsVerifierVkPDA()
 
 	// Build instruction data
-	ixData := sc.buildExecuteGovernanceProofDirectIx(lamportsValue, instructionData, proof)
+	ixData := sc.buildExecuteGovernanceProofDirectIx(lamportsValue, instructionData, proof, recipientPubkey)
 
 	// Accounts in order per the Anchor program
 	accounts := []SolAccountMeta{

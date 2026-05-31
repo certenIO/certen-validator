@@ -7,10 +7,13 @@
 package contracts
 
 import (
+	"encoding/binary"
+	"encoding/hex"
 	"os"
 	"strings"
 
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/mr-tron/base58"
 )
 
 // SolanaClusterFromEnv returns the deployment cluster name the on-chain
@@ -97,5 +100,54 @@ func SolanaExecutionCommitmentStubV6_1(
 	preimage = append(preimage, governanceRoot[:]...)
 	var out [32]byte
 	copy(out[:], crypto.Keccak256(preimage))
+	return out
+}
+
+// SolanaExecutionCommitmentV6_1 is the CRITICAL-001 value-bound execution commitment
+// that binds the EXACT transfer (recipient + lamports) the intent authorizes,
+// REPLACING the opaque stub above. The on-chain certen_account_v2 execute_direct
+// handler recomputes this from the runtime (expected_recipient, lamports_value) and
+// asserts equality with the anchor's stored execution_commitment (EVM CertenAccountV4
+// CRITICAL-001 parity), then also asserts expected_recipient is the System-Transfer
+// destination so funds cannot be redirected.
+//
+// Byte layout (MUST match the Rust twin exactly):
+//
+//	keccak256("certen:exec:solana" || recipient(32B pubkey) || lamports(u64 LE, 8B))
+//
+// A native SOL transfer carries no extra calldata, so data is omitted on both sides.
+// BOTH off-chain sides (consensus signer + executor) MUST call this so the signed
+// messageHash, the bundle_id, and the anchored commitment all agree.
+func SolanaExecutionCommitmentV6_1(recipient [32]byte, lamports uint64) [32]byte {
+	preimage := make([]byte, 0, 18+32+8)
+	preimage = append(preimage, []byte("certen:exec:solana")...)
+	preimage = append(preimage, recipient[:]...)
+	amt := make([]byte, 8)
+	binary.LittleEndian.PutUint64(amt, lamports)
+	preimage = append(preimage, amt...)
+	var out [32]byte
+	copy(out[:], crypto.Keccak256(preimage))
+	return out
+}
+
+// SolanaRecipient32 decodes a Solana recipient (base58 pubkey, or 0x-hex right-
+// aligned) into a 32-byte array — the form the on-chain Pubkey and
+// SolanaExecutionCommitmentV6_1 expect. Mirrors execution.DeriveSolanaRecipient so
+// the consensus signer and the executor derive the recipient identically. Returns
+// the zero array on a decode error (a zero recipient simply can't match any real
+// anchor commitment, so the cycle fails closed).
+func SolanaRecipient32(addr string) [32]byte {
+	var out [32]byte
+	addr = strings.TrimSpace(addr)
+	if strings.HasPrefix(addr, "0x") || strings.HasPrefix(addr, "0X") {
+		b, err := hex.DecodeString(strings.TrimPrefix(strings.TrimPrefix(addr, "0x"), "0X"))
+		if err == nil && len(b) <= 32 {
+			copy(out[32-len(b):], b)
+		}
+		return out
+	}
+	if b, err := base58.Decode(addr); err == nil && len(b) == 32 {
+		copy(out[:], b)
+	}
 	return out
 }

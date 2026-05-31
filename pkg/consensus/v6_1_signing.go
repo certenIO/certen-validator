@@ -527,6 +527,37 @@ func nearExecutionCommitmentFromIntent(certenIntent *CertenIntent, ccData []byte
 	)
 }
 
+// solanaExecutionCommitmentFromIntent reproduces, on the consensus signer side, the
+// value-bound Solana execution_commitment the executor anchors
+// (contracts.SolanaExecutionCommitmentV6_1 over the destination Solana leg's recipient
+// + lamports). MUST equal the executor's value or Step 2 reverts E_MESSAGE_HASH_MISMATCH.
+func solanaExecutionCommitmentFromIntent(certenIntent *CertenIntent) [32]byte {
+	var recipient [32]byte
+	lamports := uint64(1)
+	if certenIntent != nil {
+		if env, err := certenIntent.ParseCrossChain(); err == nil && env != nil {
+			for i := range env.Legs {
+				l := &env.Legs[i]
+				if !strings.HasPrefix(strings.ToLower(l.Chain), "solana") {
+					continue
+				}
+				if l.To != "" {
+					recipient = contracts.SolanaRecipient32(l.To)
+				}
+				if l.AmountWei != "" {
+					if v, ok := new(big.Int).SetString(l.AmountWei, 10); ok && v.Sign() > 0 {
+						lamports = v.Uint64()
+					}
+				}
+				if l.Role == "destination" || l.Role == "payment" {
+					break
+				}
+			}
+		}
+	}
+	return contracts.SolanaExecutionCommitmentV6_1(recipient, lamports)
+}
+
 // aptosExecutionCommitmentFromIntent reproduces, on the consensus signer side,
 // the value-bound Aptos execution_commitment the executor anchors
 // (contracts.AptosExecutionCommitmentV6_1 over the destination Aptos leg's target +
@@ -712,12 +743,11 @@ func buildV6_1SolanaInputsFromIntent(
 	adiURLHash := contracts.DeriveAdiURLHashFromString(adiURL)
 	opCommitment := contracts.DeriveOperationCommitmentFromFields(intentID, blockHeight, txHash)
 	ccCommitment := contracts.DeriveCrossChainCommitmentFromBPT(bptRoot)
-	govRoot := contracts.ComputeAccumulateGovRoot(govInputs)
 
-	// Opaque Solana execution-commitment stub — identical to the submission path.
-	execCommitment := contracts.SolanaExecutionCommitmentStubV6_1(
-		adiURLHash, opCommitment, ccCommitment, govRoot,
-	)
+	// CRITICAL-001 parity: bind the EXACT transfer (recipient + lamports) the intent
+	// authorizes. MUST match the executor's contracts.SolanaExecutionCommitmentV6_1.
+	// (govRoot is recomputed from GovRootInputs by the bundle builder.)
+	execCommitment := solanaExecutionCommitmentFromIntent(certenIntent)
 
 	return contracts.V6_1PreExecBundleInputsSolana{
 		DeploymentChainID:     chainID32,

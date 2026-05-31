@@ -3342,13 +3342,33 @@ func (btce *BFTTargetChainExecutor) executeSolanaOperations(
 		govRoot = comprehensiveProof.Commitments.GovernanceRoot
 	}
 
-	// ========== V5 CRITICAL-001: Compute Execution Commitment ==========
-	// Opaque Solana execution-commitment stub — shared with the BFT signing side
-	// (pkg/consensus/v6_1_signing.go) via the contracts helper so both compute the
-	// identical value that feeds bundle_id derivation and the V6.1 messageHash.
-	execCommitment := contracts.SolanaExecutionCommitmentStubV6_1(
-		adiURLHash, opCommitment, ccCommitment, govRoot,
-	)
+	// ========== V6.1 CRITICAL-001: value-bound Execution Commitment ==========
+	// Extract the Solana leg's recipient + lamports EARLY (before create_anchor) so
+	// the execution_commitment binds the EXACT transfer the intent authorizes. The
+	// on-chain certen_account_v2 execute_direct recomputes it from the runtime
+	// (expected_recipient, lamports) and asserts equality, then asserts the recipient
+	// is the System-Transfer destination. Shared with the BFT signing side via the
+	// contracts helper so both compute the identical value that feeds bundle_id +
+	// the V6.1 messageHash.
+	solCommitLeg := btce.findSolanaLeg(btce.extractAllLegsFromIntent(legacyIntent))
+	var commitRecipient [32]byte
+	commitLamports := uint64(1)
+	if solCommitLeg != nil {
+		r := btce.extractSolanaFieldFromCrossChainData(legacyIntent, "to")
+		if r == "" {
+			r = solCommitLeg.Target.Hex()
+		}
+		if rp, derr := DeriveSolanaRecipient(r); derr == nil {
+			commitRecipient = rp
+		}
+		if solCommitLeg.Value != nil && solCommitLeg.Value.Sign() > 0 {
+			commitLamports = solCommitLeg.Value.Uint64()
+			if commitLamports == 0 {
+				commitLamports = 1
+			}
+		}
+	}
+	execCommitment := contracts.SolanaExecutionCommitmentV6_1(commitRecipient, commitLamports)
 
 	// ========== V6.1: Solana deployment_chain_id, operation_id, bundleId, messageHash ==========
 	// Replaces the EVM-style anchorID with the on-chain V6.1 derivation. Without
