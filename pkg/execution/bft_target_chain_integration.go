@@ -5550,19 +5550,22 @@ func (btce *BFTTargetChainExecutor) executeTonOperations(
 
 	btce.logger.Printf("✅ [TON-EXEC] Step 2 message sent: %s", verifyTxHash)
 
-	// Wait for async BLS verification (anchor -> BLS verifier -> callback)
-	btce.logger.Printf("⏳ [TON-EXEC] Waiting for async BLS verification callback...")
-	err = tonClient.WaitForProofExecution(ctx, bundleIdHash, tonPollingTimeout)
-	if err != nil {
-		btce.logger.Printf("⚠️ [TON-EXEC] Step 2 async completion issue: %v", err)
+	// Confirm the anchor's proof_executed flag flipped on-chain (the V6.1 message-hash
+	// gate passed and the proof finalized). This is the on-chain proof of Step 2 — it
+	// is REQUIRED, not advisory.
+	verifyProofExecuted := tonClient.WaitForProofExecution(ctx, bundleIdHash, tonPollingTimeout) == nil
+	if verifyProofExecuted {
+		btce.logger.Printf("✅ [TON-EXEC] Step 2 complete - proof_executed confirmed on-chain")
 	} else {
-		btce.logger.Printf("✅ [TON-EXEC] Step 2 complete - Proof verified via async callback")
+		btce.logger.Printf("❌ [TON-EXEC] Step 2 NOT confirmed - anchor proof_executed != true")
 	}
 
 	// ========== Step 3: Execute via user's Abstract Account ==========
 	allLegs := btce.extractAllLegsFromIntent(legacyIntent)
 	tonLeg := btce.findLegForChainPrefix(allLegs, "ton", -239, -3) // TON mainnet=-239, testnet=-3
 	govTxHash := "no_governance_needed"
+	step3Required := tonLeg != nil
+	step3Confirmed := false
 
 	if tonLeg != nil {
 		btce.logger.Printf("🏦 [TON-EXEC] Step 3: Executing governance proof direct...")
@@ -5648,24 +5651,65 @@ func (btce *BFTTargetChainExecutor) executeTonOperations(
 						execCommitment, amountNano, userAccountAddr, recipientAddr,
 					)
 
+					// Snapshot the recipient's newest tx BEFORE the transfer so we can
+					// prove a NEW inbound transfer arrived afterwards.
+					recipientPrevLt := tonClient.topTxLt(ctx, recipientAddr)
+
 					var govErr error
 					govTxHash, govErr = tonClient.ExecuteGovernanceProofDirect(ctx,
 						userAccountAddr, recipientAddr, amountNano, accountProof,
 					)
 					if govErr != nil {
-						btce.logger.Printf("⚠️ [TON-EXEC] Step 3 failed: %v", govErr)
+						btce.logger.Printf("❌ [TON-EXEC] Step 3 governance send not confirmed landed: %v", govErr)
 						govTxHash = "gov_failed_ton"
+					} else {
+						// Cryptographically confirm the value actually reached the recipient
+						// (the account → anchor-verify round-trip → recipient is async).
+						btce.logger.Printf("⏳ [TON-EXEC] Confirming value reached recipient %s on-chain...", recipientAddr)
+						newLt, _, confErr := tonClient.ConfirmRecipientReceived(ctx, recipientAddr, recipientPrevLt, 3*time.Minute)
+						if confErr != nil {
+							btce.logger.Printf("❌ [TON-EXEC] Step 3 transfer NOT confirmed on-chain: %v", confErr)
+							govTxHash = "gov_unconfirmed_ton"
+						} else {
+							step3Confirmed = true
+							btce.logger.Printf("✅ [TON-EXEC] Step 3 transfer CONFIRMED on-chain: recipient received value (tx lt=%d)", newLt)
+						}
 					}
 				}
 			}
 		}
 	}
 
-	btce.logger.Printf("🎉 [TON-EXEC] TON anchor workflow completed!")
 	btce.logger.Printf("   Create TX: %s", createTxHash)
 	btce.logger.Printf("   Verify TX: %s", verifyTxHash)
 	btce.logger.Printf("   Governance TX: %s", govTxHash)
 
+	// ========== CRYPTOGRAPHIC GATE ==========
+	// The execution may only report success — and thus allow the proof cycle to
+	// proceed to Phase 7-9 (observation → attestation → writeback) via the gate in
+	// bft_integration.go — if EVERY executed step is proven on-chain:
+	//   - Step 1 create_anchor landed (else we already returned an error above)
+	//   - Step 2 proof_executed == true on the anchor
+	//   - Step 3 (when a value leg exists) the transfer actually reached the recipient
+	// A step that cannot be cryptographically confirmed makes the whole cycle FAIL —
+	// no false attestation or writeback is ever produced.
+	resultErr := ""
+	if !verifyProofExecuted {
+		resultErr = "step 2 not proven: anchor proof_executed != true"
+	} else if step3Required && !step3Confirmed {
+		resultErr = fmt.Sprintf("step 3 not proven: value transfer to recipient not confirmed on-chain (govTxHash=%s)", govTxHash)
+	}
+	if resultErr != "" {
+		btce.logger.Printf("⛔ [TON-EXEC] Execution NOT fully proven — halting cycle (no observation/attestation/writeback): %s", resultErr)
+		r := btce.buildTonResult(intentID, anchorID, createTxHash, verifyTxHash, govTxHash, false)
+		if r.Metadata == nil {
+			r.Metadata = map[string]string{}
+		}
+		r.Metadata["failureReason"] = resultErr
+		return r, fmt.Errorf("ton execution not fully proven: %s", resultErr)
+	}
+
+	btce.logger.Printf("🎉 [TON-EXEC] TON anchor workflow fully proven on-chain (create + proof + transfer)!")
 	return btce.buildTonResult(intentID, anchorID, createTxHash, verifyTxHash, govTxHash, true), nil
 }
 

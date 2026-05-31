@@ -479,6 +479,36 @@ func (tc *TonClient) resolveResultTx(ctx context.Context, addr string, afterLt u
 	return "", 0, fmt.Errorf("no new tx on %s after lt %d within %v", addr, afterLt, timeout)
 }
 
+// ConfirmRecipientReceived cryptographically confirms the value transfer reached
+// the recipient: it polls the recipient address for a NEW transaction (lt strictly
+// greater than the pre-transfer snapshot afterLt) carrying an incoming message.
+// The Step-3 value-move is an async multi-hop (account → anchor verify round-trip
+// → account → recipient), so this is the on-chain proof the funds actually moved.
+// Returns the new tx's lt + incoming value (nanoTON), or an error on timeout.
+func (tc *TonClient) ConfirmRecipientReceived(ctx context.Context, recipientAddr string, afterLt uint64, timeout time.Duration) (uint64, uint64, error) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		res, err := tc.apiPost(ctx, "getTransactions", map[string]interface{}{"address": recipientAddr, "limit": 8})
+		if err == nil {
+			var txs []tonTxLite
+			if json.Unmarshal(res, &txs) == nil {
+				for _, tx := range txs {
+					lt, _ := strconv.ParseUint(tx.TransactionID.Lt, 10, 64)
+					if lt > afterLt && tx.InMsg.Source != "" {
+						return lt, 0, nil
+					}
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return 0, 0, ctx.Err()
+		case <-time.After(4 * time.Second):
+		}
+	}
+	return 0, 0, fmt.Errorf("recipient %s received no new transfer after lt %d within %v", recipientAddr, afterLt, timeout)
+}
+
 // tonResultHashToHex converts a TON Center transaction hash (base64, std or
 // url-safe) to lowercase hex; passes through values already in hex.
 func tonResultHashToHex(h string) string {
@@ -509,142 +539,121 @@ func (tc *TonClient) runGetMethod(ctx context.Context, addr string, method strin
 // WALLET V4R2 MESSAGE BUILDING & SIGNING
 // =============================================================================
 
+// sendInternalMessage sends a signed WalletV4R2 external message and returns ONLY
+// after cryptographically confirming the resulting transaction landed on the
+// target contract (returning its real on-chain tx hash). It NEVER returns a
+// synthetic "success" token: if the message cannot be proven to have landed it
+// returns an error, so the caller (and the Phase-6→7 gate) treats the step as
+// failed. Retries re-send ONLY when the wallet rejected the message (seqno did
+// not advance), so no duplicate on-chain effects are produced.
 func (tc *TonClient) sendInternalMessage(ctx context.Context, destAddr *address.Address, amount uint64, body *cell.Cell) (string, error) {
-	// Try to get seqno — if wallet not deployed yet, use seqno=0 and include StateInit.
-	// Use local seqno tracking to avoid stale API reads between rapid sends.
-	needsInit := false
-	seqno, err := tc.getSeqno(ctx)
-	if err != nil {
-		if strings.Contains(err.Error(), "Not Found") || strings.Contains(err.Error(), "not initialized") {
-			if tc.seqnoKnown {
-				// Wallet was deployed by a previous send in this session — API is stale
-				seqno = tc.lastSeqno
-				log.Printf("📡 [TON] API stale, using tracked seqno=%d", seqno)
-			} else {
-				log.Printf("📡 [TON] Wallet not yet deployed, will include StateInit (seqno=0)")
-				seqno = 0
-				needsInit = true
-			}
-		} else {
-			return "", fmt.Errorf("getting seqno: %w", err)
-		}
-	} else if tc.seqnoKnown && tc.lastSeqno > seqno {
-		// API returned a stale (lower) seqno — use our tracked value
-		log.Printf("📡 [TON] API seqno=%d < tracked seqno=%d, using tracked", seqno, tc.lastSeqno)
-		seqno = tc.lastSeqno
-	}
-
-	log.Printf("📡 [TON] Sending message: dest=%s amount=%d seqno=%d needsInit=%v", destAddr.String(), amount, seqno, needsInit)
-
-	// Build internal message
+	// The internal (outgoing) message cell does not depend on seqno — build once.
 	internalMsg := cell.BeginCell().
 		MustStoreUInt(0x18, 6).
 		MustStoreAddr(destAddr).
 		MustStoreCoins(amount).
-		MustStoreUInt(0, 1+4+4+64+32+1) // other_currencies(1) + ihr_fee(4) + fwd_fee(4) + created_lt(64) + created_at(32) + init_absent(1)
-
+		MustStoreUInt(0, 1+4+4+64+32+1)
 	if body != nil {
-		internalMsg = internalMsg.MustStoreBoolBit(true).MustStoreRef(body) // body_flag=1: body in ref
+		internalMsg = internalMsg.MustStoreBoolBit(true).MustStoreRef(body)
 	} else {
-		internalMsg = internalMsg.MustStoreBoolBit(false) // body_flag=0: no body
+		internalMsg = internalMsg.MustStoreBoolBit(false)
 	}
 	internalMsgCell := internalMsg.EndCell()
 
-	// Build WalletV4R2 transfer body
-	validUntil := uint32(time.Now().Add(120 * time.Second).Unix())
+	const maxAttempts = 3
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		// Read the TRUE on-chain seqno fresh each attempt. No stale local override
+		// (that was the cause of future-seqno rejections); waitForSeqnoAdvance below
+		// guarantees the API reflects the previous send before we read again.
+		needsInit := false
+		seqno, err := tc.getSeqno(ctx)
+		if err != nil {
+			if strings.Contains(err.Error(), "Not Found") || strings.Contains(err.Error(), "not initialized") {
+				seqno = 0
+				needsInit = true
+			} else {
+				lastErr = fmt.Errorf("getting seqno: %w", err)
+				time.Sleep(3 * time.Second)
+				continue
+			}
+		}
 
-	walletBody := cell.BeginCell().
-		MustStoreUInt(uint64(tc.subwalletID), 32).
-		MustStoreUInt(uint64(validUntil), 32).
-		MustStoreUInt(uint64(seqno), 32).
-		MustStoreUInt(0, 8).
-		MustStoreUInt(3, 8).
-		MustStoreRef(internalMsgCell).
-		EndCell()
+		log.Printf("📡 [TON] Send attempt %d/%d: dest=%s amount=%d seqno=%d needsInit=%v", attempt, maxAttempts, destAddr.String(), amount, seqno, needsInit)
 
-	// Sign
-	hash := walletBody.Hash()
-	signature := ed25519.Sign(tc.privateKey, hash)
-
-	// Build signed body
-	signedBody := cell.BeginCell().
-		MustStoreSlice(signature, 512).
-		MustStoreBuilder(walletBody.ToBuilder()).
-		EndCell()
-
-	// Build external message
-	var extMsg *cell.Cell
-	if needsInit {
-		// Include StateInit to deploy the wallet contract on first use
-		si := buildWalletV4R2StateInit(tc.publicKey, tc.subwalletID)
-		stateInitCell := buildStateInitCell(si)
-
-		extMsg = cell.BeginCell().
-			MustStoreUInt(0b10, 2).       // ext_in_msg_info
-			MustStoreUInt(0, 2).          // src: addr_none
-			MustStoreAddr(tc.walletAddress).
-			MustStoreCoins(0).            // import_fee
-			MustStoreUInt(1, 1).          // state_init: present
-			MustStoreUInt(1, 1).          // state_init in ref
-			MustStoreRef(stateInitCell).
-			MustStoreUInt(1, 1).          // body in ref
-			MustStoreRef(signedBody).
+		validUntil := uint32(time.Now().Add(120 * time.Second).Unix())
+		walletBody := cell.BeginCell().
+			MustStoreUInt(uint64(tc.subwalletID), 32).
+			MustStoreUInt(uint64(validUntil), 32).
+			MustStoreUInt(uint64(seqno), 32).
+			MustStoreUInt(0, 8).
+			MustStoreUInt(3, 8).
+			MustStoreRef(internalMsgCell).
 			EndCell()
-		log.Printf("📡 [TON] Built external message with StateInit (wallet deployment)")
-	} else {
-		extMsg = cell.BeginCell().
-			MustStoreUInt(0b10, 2).
-			MustStoreUInt(0, 2).
-			MustStoreAddr(tc.walletAddress).
-			MustStoreCoins(0).
-			MustStoreUInt(0, 1).    // no state_init
-			MustStoreUInt(1, 1).    // body in ref
-			MustStoreRef(signedBody).
+		signature := ed25519.Sign(tc.privateKey, walletBody.Hash())
+		signedBody := cell.BeginCell().
+			MustStoreSlice(signature, 512).
+			MustStoreBuilder(walletBody.ToBuilder()).
 			EndCell()
+
+		var extMsg *cell.Cell
+		if needsInit {
+			si := buildWalletV4R2StateInit(tc.publicKey, tc.subwalletID)
+			stateInitCell := buildStateInitCell(si)
+			extMsg = cell.BeginCell().
+				MustStoreUInt(0b10, 2).
+				MustStoreUInt(0, 2).
+				MustStoreAddr(tc.walletAddress).
+				MustStoreCoins(0).
+				MustStoreUInt(1, 1).
+				MustStoreUInt(1, 1).
+				MustStoreRef(stateInitCell).
+				MustStoreUInt(1, 1).
+				MustStoreRef(signedBody).
+				EndCell()
+		} else {
+			extMsg = cell.BeginCell().
+				MustStoreUInt(0b10, 2).
+				MustStoreUInt(0, 2).
+				MustStoreAddr(tc.walletAddress).
+				MustStoreCoins(0).
+				MustStoreUInt(0, 1).
+				MustStoreUInt(1, 1).
+				MustStoreRef(signedBody).
+				EndCell()
+		}
+
+		// Snapshot the target's newest tx lt BEFORE sending so we can identify the
+		// transaction our message produces.
+		targetPrevLt := tc.topTxLt(ctx, destAddr.String())
+		sendTS := time.Now().Unix()
+		if err := tc.sendBoc(ctx, extMsg.ToBOC()); err != nil {
+			lastErr = fmt.Errorf("sendBoc: %w", err)
+			time.Sleep(3 * time.Second)
+			continue
+		}
+
+		// Did the wallet accept + process our external message? (seqno advances only
+		// if it did). If not, the message was REJECTED (e.g. transient seqno race) and
+		// it is safe to re-send with a fresh seqno — no on-chain effect occurred.
+		if waitErr := tc.waitForSeqnoAdvance(ctx, seqno, 90*time.Second); waitErr != nil {
+			log.Printf("⚠️ [TON] attempt %d: wallet seqno did not advance (message rejected): %v — retrying", attempt, waitErr)
+			lastErr = waitErr
+			continue
+		}
+
+		// The wallet processed our message, so the target MUST have a new transaction.
+		// Resolve its real on-chain hash. If we cannot (persistent API issue) we do NOT
+		// re-send (the message already landed — re-sending would duplicate); we return
+		// an error so the step is treated as unproven rather than falsely successful.
+		realHash, realLt, rerr := tc.resolveResultTx(ctx, destAddr.String(), targetPrevLt, 120*time.Second)
+		if rerr != nil {
+			return "", fmt.Errorf("message processed by wallet but could not confirm tx on %s: %w", destAddr.String(), rerr)
+		}
+		log.Printf("✅ [TON] Message landed: dest=%s realTxHash=%s lt=%d (attempt %d)", destAddr.String(), realHash, realLt, attempt)
+		return fmt.Sprintf("%s_ts_%d", realHash, sendTS), nil
 	}
-
-	bocBytes := extMsg.ToBOC()
-
-	// Snapshot the target's newest tx lt BEFORE sending so we can identify the
-	// transaction our message produces.
-	targetPrevLt := tc.topTxLt(ctx, destAddr.String())
-
-	err = tc.sendBoc(ctx, bocBytes)
-	if err != nil {
-		return "", fmt.Errorf("sending message: %w", err)
-	}
-	sendTS := time.Now().Unix()
-
-	// SERIALIZE: wait for the wallet's on-chain seqno to advance past `seqno`,
-	// confirming the wallet actually processed and forwarded our message. Without
-	// this, a rapid follow-up send would carry a future seqno the wallet rejects
-	// (the cause of the dropped Step-3 governance message).
-	if waitErr := tc.waitForSeqnoAdvance(ctx, seqno, 90*time.Second); waitErr != nil {
-		log.Printf("⚠️ [TON] seqno did not advance after send: %v (continuing, using local tracking)", waitErr)
-		tc.lastSeqno = seqno + 1
-		tc.seqnoKnown = true
-	}
-
-	// Resolve the REAL resulting transaction on the target contract so the Phase 7
-	// observer can find it by exact hash. Fall back to the legacy body-hash token
-	// only if resolution fails.
-	if realHash, realLt, rerr := tc.resolveResultTx(ctx, destAddr.String(), targetPrevLt, 90*time.Second); rerr == nil {
-		token := fmt.Sprintf("%s_ts_%d", realHash, sendTS)
-		log.Printf("✅ [TON] Message landed: dest=%s realTxHash=%s lt=%d (next seqno=%d)", destAddr.String(), realHash, realLt, tc.lastSeqno)
-		return token, nil
-	} else {
-		log.Printf("⚠️ [TON] Could not resolve result tx on %s: %v (falling back to body-hash token)", destAddr.String(), rerr)
-	}
-
-	var trackHash []byte
-	if body != nil {
-		trackHash = body.Hash()
-	} else {
-		trackHash = extMsg.Hash()
-	}
-	msgHash := fmt.Sprintf("%s_ts_%d", hex.EncodeToString(trackHash), sendTS)
-	log.Printf("✅ [TON] Message sent (fallback token): hash=%s (next seqno=%d)", msgHash, tc.lastSeqno)
-	return msgHash, nil
+	return "", fmt.Errorf("message to %s not confirmed landed after %d attempts: %w", destAddr.String(), maxAttempts, lastErr)
 }
 
 // =============================================================================
