@@ -598,6 +598,84 @@ func (tc *TronClient) GetAnchorData(ctx context.Context, contractAddress string,
 	return anchor, nil
 }
 
+// GetTrxBalance reads the TRX balance (in sun) of an address via TRON's
+// /wallet/getaccount HTTP API. The address may be supplied as 0x-prefixed
+// EVM hex or 41-prefixed TRON hex; it is normalized to 41-prefix here.
+// A non-existent account returns 0 with no error (TRON omits the balance field).
+func (tc *TronClient) GetTrxBalance(ctx context.Context, address string) (uint64, error) {
+	tronAddr := address
+	if strings.HasPrefix(address, "0x") || strings.HasPrefix(address, "0X") {
+		tronAddr = "41" + address[2:]
+	}
+
+	payload := map[string]interface{}{
+		"address": tronAddr,
+		"visible": false,
+	}
+	body, _ := json.Marshal(payload)
+	req, err := http.NewRequestWithContext(ctx, "POST",
+		tc.httpEndpoint+"/wallet/getaccount", bytes.NewReader(body))
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := tc.httpClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("HTTP request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, fmt.Errorf("reading response: %w", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return 0, fmt.Errorf("parsing response: %w", err)
+	}
+
+	// A fresh/unfunded account returns {} (no "balance" field) → 0 balance.
+	bal, ok := result["balance"].(float64)
+	if !ok {
+		return 0, nil
+	}
+	return uint64(bal), nil
+}
+
+// ConfirmRecipientCredited polls the recipient's TRX balance until it has
+// risen by at least minDelta sun relative to baseline, or the timeout elapses.
+// This is the cryptographic transfer-proof gate for TRON: a Step-3 governance
+// tx that reports success but does not actually move value will never satisfy
+// this check, so the proof cycle halts instead of falsely attesting.
+func (tc *TronClient) ConfirmRecipientCredited(ctx context.Context, recipientAddr string, baseline, minDelta uint64, timeout time.Duration) (uint64, bool, error) {
+	deadline := time.Now().Add(timeout)
+	target := baseline + minDelta
+	var last uint64
+	for {
+		bal, err := tc.GetTrxBalance(ctx, recipientAddr)
+		if err != nil {
+			log.Printf("⚠️ [TRON] balance poll error (will retry): %v", err)
+		} else {
+			last = bal
+			if bal >= target {
+				log.Printf("✅ [TRON] recipient credited: balance %d (baseline %d, +%d ≥ +%d)",
+					bal, baseline, bal-baseline, minDelta)
+				return bal, true, nil
+			}
+		}
+		if time.Now().After(deadline) {
+			return last, false, nil
+		}
+		select {
+		case <-ctx.Done():
+			return last, false, ctx.Err()
+		case <-time.After(5 * time.Second):
+		}
+	}
+}
+
 // CheckContractExists checks if a contract is deployed at the given address
 // using TRON's getcontract API. Returns true if bytecode exists.
 func (tc *TronClient) CheckContractExists(ctx context.Context, address string) (bool, error) {

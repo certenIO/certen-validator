@@ -1448,6 +1448,12 @@ func (btce *BFTTargetChainExecutor) executeTronOperations(
 	allLegs := btce.extractAllLegsFromIntent(legacyIntent)
 	tronLeg := btce.findLegForChainPrefix(allLegs, "tron", 2494104990)
 
+	// Transfer-proof gating: a TRON leg requires that the recipient is actually
+	// credited on-chain before the cycle may attest. step3Confirmed flips true
+	// only after ConfirmRecipientCredited observes the balance delta.
+	step3Required := tronLeg != nil && tronLeg.Target != (common.Address{})
+	step3Confirmed := false
+
 	var execCommitment [32]byte
 	if tronLeg != nil && tronLeg.Target != (common.Address{}) {
 		execCommitment = computeExecutionCommitment(
@@ -1616,10 +1622,17 @@ func (btce *BFTTargetChainExecutor) executeTronOperations(
 				// Value from intent is already in chain-native base units (sun for TRON)
 				btce.logger.Printf("💱 [TRON-EXEC] Governance value: %s (native base units)", tronLeg.Value.String())
 
+				// Snapshot recipient balance before governance so we can prove the credit.
+				recipientAddr := tronLeg.Target.Hex()
+				recipientBaseline, balErr := tronClient.GetTrxBalance(ctx, recipientAddr)
+				if balErr != nil {
+					btce.logger.Printf("⚠️ [TRON-EXEC] could not read recipient baseline balance: %v", balErr)
+				}
+
 				var govErr error
 				govTxHash, govErr = tronClient.ExecuteGovernanceProofDirect(ctx,
 					userAccountHex,
-					tronLeg.Target.Hex(),
+					recipientAddr,
 					tronLeg.Value,
 					tronLeg.Data,
 					accountProof,
@@ -1628,6 +1641,25 @@ func (btce *BFTTargetChainExecutor) executeTronOperations(
 				if govErr != nil {
 					btce.logger.Printf("⚠️ [TRON-EXEC] Step 3 failed: %v", govErr)
 					govTxHash = fmt.Sprintf("gov_failed_%s", chainCfg.Name)
+				} else if balErr == nil {
+					// Require at least half the intended value to land (covers any fees/rounding).
+					minDelta := new(big.Int).Div(tronLeg.Value, big.NewInt(2))
+					if minDelta.Sign() <= 0 {
+						minDelta = big.NewInt(1)
+					}
+					btce.logger.Printf("🔎 [TRON-EXEC] Confirming recipient credited (baseline %d sun, need +%s sun)...",
+						recipientBaseline, minDelta.String())
+					_, credited, confErr := tronClient.ConfirmRecipientCredited(ctx, recipientAddr,
+						recipientBaseline, minDelta.Uint64(), 3*time.Minute)
+					if confErr != nil {
+						btce.logger.Printf("⚠️ [TRON-EXEC] confirmation error: %v", confErr)
+					}
+					if credited {
+						step3Confirmed = true
+						btce.logger.Printf("✅ [TRON-EXEC] Step 3 transfer CONFIRMED on-chain: recipient credited")
+					} else {
+						btce.logger.Printf("⛔ [TRON-EXEC] Step 3 transfer NOT confirmed on-chain (recipient not credited within window)")
+					}
 				}
 			}
 		}
@@ -1638,6 +1670,17 @@ func (btce *BFTTargetChainExecutor) executeTronOperations(
 	btce.logger.Printf("🎉 [TRON-EXEC] TRON anchor workflow completed for %s!", chainCfg.Name)
 	if chainCfg.ExplorerURL != "" {
 		btce.logger.Printf("   View on Tronscan: %s/#/transaction/%s", chainCfg.ExplorerURL, createTxHash)
+	}
+
+	if step3Required && !step3Confirmed {
+		resultErr := fmt.Sprintf("step 3 not proven: recipient transfer not confirmed on-chain (govTxHash=%s)", govTxHash)
+		btce.logger.Printf("⛔ [TRON-EXEC] Execution NOT fully proven — halting cycle (no attestation/writeback): %s", resultErr)
+		r := btce.buildTronResult(chainCfg, intentID, anchorID, createTxHash, verifyTxHash, govTxHash, false)
+		if r.Metadata == nil {
+			r.Metadata = map[string]string{}
+		}
+		r.Metadata["failureReason"] = resultErr
+		return r, fmt.Errorf("tron execution not fully proven: %s", resultErr)
 	}
 
 	return btce.buildTronResult(chainCfg, intentID, anchorID, createTxHash, verifyTxHash, govTxHash, true), nil
