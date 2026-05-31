@@ -4057,6 +4057,8 @@ func (btce *BFTTargetChainExecutor) executeAptosOperations(
 	allLegs := btce.extractAllLegsFromIntent(legacyIntent)
 	aptosLeg := btce.findLegForChainPrefix(allLegs, "aptos", 2) // Aptos testnet chainID=2
 	govTxHash := "no_governance_needed"
+	step3Required := aptosLeg != nil
+	step3Confirmed := false
 
 	if aptosLeg != nil {
 		btce.logger.Printf("🏦 [APTOS-EXEC] Step 3: Executing governance proof direct...")
@@ -4164,24 +4166,59 @@ func (btce *BFTTargetChainExecutor) executeAptosOperations(
 						amountOctas,
 					)
 
+					// Snapshot recipient APT balance before the transfer. execute_apt_transfer
+					// returns false (no abort) on insufficient balance, so a successful tx does
+					// NOT prove the funds moved — the recipient balance delta does.
+					recipientBaseline, _ := aptosClient.GetAPTBalance(ctx, recipientAddr)
+					minDelta := amountOctas // Aptos transfers the exact amount (no forward fee on the recipient)
+
 					var govErr error
 					govTxHash, govErr = aptosClient.ExecuteGovernanceProofDirect(ctx,
 						userAccountAddr, recipientAddr, amountOctas, accountProof,
 					)
 					if govErr != nil {
-						btce.logger.Printf("⚠️ [APTOS-EXEC] Step 3 failed: %v", govErr)
+						btce.logger.Printf("❌ [APTOS-EXEC] Step 3 governance tx failed: %v", govErr)
 						govTxHash = "gov_failed_aptos"
+					} else {
+						// Cryptographically confirm the recipient was credited on-chain.
+						btce.logger.Printf("⏳ [APTOS-EXEC] Confirming recipient %s credited (baseline %d octas, need +%d)...", recipientAddr, recipientBaseline, minDelta)
+						newBal, confErr := aptosClient.ConfirmRecipientCredited(ctx, recipientAddr, recipientBaseline, minDelta, 90*time.Second)
+						if confErr != nil {
+							btce.logger.Printf("❌ [APTOS-EXEC] Step 3 transfer NOT confirmed on-chain: %v", confErr)
+							govTxHash = "gov_unconfirmed_aptos"
+						} else {
+							step3Confirmed = true
+							btce.logger.Printf("✅ [APTOS-EXEC] Step 3 transfer CONFIRMED on-chain: recipient credited (balance %d octas, +%d)", newBal, newBal-recipientBaseline)
+						}
 					}
 				}
 			}
 		}
 	}
 
-	btce.logger.Printf("🎉 [APTOS-EXEC] Aptos anchor workflow completed!")
 	btce.logger.Printf("   Create TX: %s", createTxHash)
 	btce.logger.Printf("   Verify TX: %s", verifyTxHash)
 	btce.logger.Printf("   Governance TX: %s", govTxHash)
 
+	// ========== CRYPTOGRAPHIC GATE ==========
+	// Only report success (allowing Phase 7-9 observation/attestation/writeback) when
+	// the value transfer is PROVEN on-chain. Step 1 create_anchor and Step 2
+	// execute_comprehensive_proof already hard-return on tx failure above (and the
+	// Move V6.1 gates ABORT the tx on a bad bundle_id/message_hash, so a successful
+	// proof tx implies proof_executed); the remaining requirement is the recipient
+	// actually being credited.
+	if step3Required && !step3Confirmed {
+		resultErr := fmt.Sprintf("step 3 not proven: recipient transfer not confirmed on-chain (govTxHash=%s)", govTxHash)
+		btce.logger.Printf("⛔ [APTOS-EXEC] Execution NOT fully proven — halting cycle (no observation/attestation/writeback): %s", resultErr)
+		r := btce.buildAptosResult(intentID, anchorID, createTxHash, verifyTxHash, govTxHash, false)
+		if r.Metadata == nil {
+			r.Metadata = map[string]string{}
+		}
+		r.Metadata["failureReason"] = resultErr
+		return r, fmt.Errorf("aptos execution not fully proven: %s", resultErr)
+	}
+
+	btce.logger.Printf("🎉 [APTOS-EXEC] Aptos anchor workflow fully proven on-chain (create + proof + transfer)!")
 	return btce.buildAptosResult(intentID, anchorID, createTxHash, verifyTxHash, govTxHash, true), nil
 }
 

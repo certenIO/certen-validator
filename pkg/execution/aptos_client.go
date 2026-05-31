@@ -12,6 +12,7 @@ import (
 	"log"
 	"math/big"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -634,6 +635,49 @@ func (ac *AptosClient) CheckAccountExists(ctx context.Context, addr string) (boo
 	}
 
 	return true, nil
+}
+
+// GetAPTBalance returns the address's APT balance in octas via the migration-aware
+// 0x1::coin::balance view (handles both CoinStore and the fungible-asset primary
+// store). Used to cryptographically confirm the Step-3 transfer credited the
+// recipient — note execute_apt_transfer returns false (no abort) on insufficient
+// balance, so a "successful" tx alone does NOT prove the funds moved; the recipient
+// balance delta does.
+func (ac *AptosClient) GetAPTBalance(ctx context.Context, addr string) (uint64, error) {
+	res, err := ac.callViewFunction(ctx, "0x1::coin::balance", []string{"0x1::aptos_coin::AptosCoin"}, []interface{}{addr})
+	if err != nil {
+		return 0, err
+	}
+	var arr []string
+	if err := json.Unmarshal(res, &arr); err != nil || len(arr) == 0 {
+		return 0, fmt.Errorf("parse APT balance: %w", err)
+	}
+	bal, err := strconv.ParseUint(strings.TrimSpace(arr[0]), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("APT balance %q not numeric: %w", arr[0], err)
+	}
+	return bal, nil
+}
+
+// ConfirmRecipientCredited cryptographically confirms the Step-3 transfer credited
+// the recipient by polling its APT balance until it rises at least minDelta octas
+// above the pre-transfer baseline. This is the on-chain proof the funds actually
+// moved (the governance tx can succeed without transferring when the account's
+// balance is insufficient).
+func (ac *AptosClient) ConfirmRecipientCredited(ctx context.Context, recipientAddr string, baseline uint64, minDelta uint64, timeout time.Duration) (uint64, error) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		bal, err := ac.GetAPTBalance(ctx, recipientAddr)
+		if err == nil && bal >= baseline+minDelta {
+			return bal, nil
+		}
+		select {
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		case <-time.After(3 * time.Second):
+		}
+	}
+	return 0, fmt.Errorf("recipient %s APT balance did not rise by >= %d octas above %d within %v", recipientAddr, minDelta, baseline, timeout)
 }
 
 // =============================================================================
