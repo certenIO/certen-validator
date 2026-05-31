@@ -893,6 +893,50 @@ func (nc *NearClient) callViewFunction(ctx context.Context, contractID, method s
 	return viewResult.Result, nil
 }
 
+// GetNearBalance returns the account's NEAR balance (yoctoNEAR, a big.Int — far
+// beyond uint64) via a view_account query.
+func (nc *NearClient) GetNearBalance(ctx context.Context, accountID string) (*big.Int, error) {
+	res, err := nc.rpcCall(ctx, "query", map[string]interface{}{
+		"request_type": "view_account",
+		"finality":     "final",
+		"account_id":   accountID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var r struct {
+		Amount string `json:"amount"`
+	}
+	if err := json.Unmarshal(res, &r); err != nil {
+		return nil, fmt.Errorf("parse NEAR balance: %w", err)
+	}
+	bal, ok := new(big.Int).SetString(strings.TrimSpace(r.Amount), 10)
+	if !ok {
+		return nil, fmt.Errorf("NEAR balance %q not numeric", r.Amount)
+	}
+	return bal, nil
+}
+
+// ConfirmRecipientCredited cryptographically confirms the Step-3 transfer credited
+// the recipient by polling its NEAR balance until it rises at least minDelta
+// yoctoNEAR above the pre-transfer baseline — the on-chain proof the funds moved.
+func (nc *NearClient) ConfirmRecipientCredited(ctx context.Context, accountID string, baseline, minDelta *big.Int, timeout time.Duration) (*big.Int, error) {
+	threshold := new(big.Int).Add(baseline, minDelta)
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		bal, err := nc.GetNearBalance(ctx, accountID)
+		if err == nil && bal.Cmp(threshold) >= 0 {
+			return bal, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(3 * time.Second):
+		}
+	}
+	return nil, fmt.Errorf("recipient %s NEAR balance did not rise by >= %s yoctoNEAR above %s within %v", accountID, minDelta, baseline, timeout)
+}
+
 // =============================================================================
 // PRIVATE: JSON-RPC
 // =============================================================================

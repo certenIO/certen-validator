@@ -2060,6 +2060,8 @@ func (btce *BFTTargetChainExecutor) executeNearOperations(
 	allLegs := btce.extractAllLegsFromIntent(legacyIntent)
 	nearLeg := btce.findLegForChainPrefix(allLegs, "near", 398)
 	govTxHash := "no_governance_needed"
+	step3Required := nearLeg != nil
+	step3Confirmed := false
 
 	if nearLeg != nil {
 		btce.logger.Printf("🏦 [NEAR-EXEC] Step 3: Executing governance proof direct...")
@@ -2177,24 +2179,56 @@ func (btce *BFTTargetChainExecutor) executeNearOperations(
 						GasTgas: 30,
 					}
 
+					recipientBaseline, _ := nearClient.GetNearBalance(ctx, targetAddr)
+					minDelta := new(big.Int).Div(targetValue, big.NewInt(2)) // >= half the deposit
+					if minDelta.Sign() <= 0 {
+						minDelta = big.NewInt(1)
+					}
+
 					var govErr error
 					govTxHash, govErr = nearClient.ExecuteGovernanceProofDirect(ctx,
 						userAccountID, nearCall, accountProof, gasGovernance,
 					)
 					if govErr != nil {
-						btce.logger.Printf("⚠️ [NEAR-EXEC] Step 3 failed: %v", govErr)
+						btce.logger.Printf("❌ [NEAR-EXEC] Step 3 governance tx failed: %v", govErr)
 						govTxHash = "gov_failed_near"
+					} else if recipientBaseline == nil {
+						btce.logger.Printf("❌ [NEAR-EXEC] Step 3 could not read recipient baseline balance")
+						govTxHash = "gov_unconfirmed_near"
+					} else {
+						// Cryptographically confirm the recipient was credited on-chain.
+						btce.logger.Printf("⏳ [NEAR-EXEC] Confirming recipient %s credited (need +%s yoctoNEAR)...", targetAddr, minDelta)
+						newBal, confErr := nearClient.ConfirmRecipientCredited(ctx, targetAddr, recipientBaseline, minDelta, 90*time.Second)
+						if confErr != nil {
+							btce.logger.Printf("❌ [NEAR-EXEC] Step 3 transfer NOT confirmed on-chain: %v", confErr)
+							govTxHash = "gov_unconfirmed_near"
+						} else {
+							step3Confirmed = true
+							btce.logger.Printf("✅ [NEAR-EXEC] Step 3 transfer CONFIRMED on-chain: recipient credited (balance %s yoctoNEAR)", newBal)
+						}
 					}
 				}
 			}
 		}
 	}
 
-	btce.logger.Printf("🎉 [NEAR-EXEC] NEAR anchor workflow completed!")
 	btce.logger.Printf("   Create TX: %s", createTxHash)
 	btce.logger.Printf("   Verify TX: %s", verifyTxHash)
 	btce.logger.Printf("   Governance TX: %s", govTxHash)
 
+	// ========== CRYPTOGRAPHIC GATE ==========
+	if step3Required && !step3Confirmed {
+		resultErr := fmt.Sprintf("step 3 not proven: recipient transfer not confirmed on-chain (govTxHash=%s)", govTxHash)
+		btce.logger.Printf("⛔ [NEAR-EXEC] Execution NOT fully proven — halting cycle (no observation/attestation/writeback): %s", resultErr)
+		r := btce.buildNearResult(intentID, anchorID, createTxHash, verifyTxHash, govTxHash, false)
+		if r.Metadata == nil {
+			r.Metadata = map[string]string{}
+		}
+		r.Metadata["failureReason"] = resultErr
+		return r, fmt.Errorf("near execution not fully proven: %s", resultErr)
+	}
+
+	btce.logger.Printf("🎉 [NEAR-EXEC] NEAR anchor workflow fully proven on-chain (create + proof + transfer)!")
 	return btce.buildNearResult(intentID, anchorID, createTxHash, verifyTxHash, govTxHash, true), nil
 }
 
