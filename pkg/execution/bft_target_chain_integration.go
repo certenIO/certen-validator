@@ -2196,12 +2196,15 @@ func (btce *BFTTargetChainExecutor) executeNearOperations(
 					btce.logger.Printf("💱 [NEAR-EXEC] Governance: target=%s deposit=%s yoctoNEAR",
 						targetAddr, targetValue.String())
 
-					// Query current governance nonce from user account contract
-					currentNonce, nonceErr := nearClient.GetGovernanceNonce(ctx, userAccountID)
-					if nonceErr != nil {
-						btce.logger.Printf("⚠️ [NEAR-EXEC] Failed to query governance nonce: %v (using fallback)", nonceErr)
-					}
-					nextNonce := currentNonce + 1
+					// Monotonic replay nonce. The on-chain verify_nonce requires
+					// proof.nonce > the per-op_type stored counter (which increments
+					// by 1 each exec). get_governance_nonce can't be read correctly
+					// without recomputing the op_type hash, so a queried/hardcoded
+					// small nonce only passes the FIRST exec (then 1 <= 1 fails,
+					// E304). A Unix-seconds nonce is always greater than the small
+					// counter, and the nonce is NOT BLS-checked at Step 3
+					// (verify_proof_bundle_v6_1 ignores the governance message hash).
+					nextNonce := uint64(time.Now().Unix())
 
 					// V5: Build ADIGovernanceProof with execution commitment for 5-leaf domain-tagged proof
 					accountProof := btce.buildNearAccountProof(
