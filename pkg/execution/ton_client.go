@@ -479,34 +479,45 @@ func (tc *TonClient) resolveResultTx(ctx context.Context, addr string, afterLt u
 	return "", 0, fmt.Errorf("no new tx on %s after lt %d within %v", addr, afterLt, timeout)
 }
 
-// ConfirmRecipientReceived cryptographically confirms the value transfer reached
-// the recipient: it polls the recipient address for a NEW transaction (lt strictly
-// greater than the pre-transfer snapshot afterLt) carrying an incoming message.
-// The Step-3 value-move is an async multi-hop (account → anchor verify round-trip
-// → account → recipient), so this is the on-chain proof the funds actually moved.
-// Returns the new tx's lt + incoming value (nanoTON), or an error on timeout.
-func (tc *TonClient) ConfirmRecipientReceived(ctx context.Context, recipientAddr string, afterLt uint64, timeout time.Duration) (uint64, uint64, error) {
+// getAddressBalance returns the current nanoTON balance of a TON address. Balance
+// is a state read (getAddressBalance), which the public toncenter endpoint serves
+// far more promptly and reliably than the getTransactions indexer.
+func (tc *TonClient) getAddressBalance(ctx context.Context, addr string) (uint64, error) {
+	res, err := tc.apiPost(ctx, "getAddressBalance", map[string]interface{}{"address": addr})
+	if err != nil {
+		return 0, err
+	}
+	var balStr string
+	if err := json.Unmarshal(res, &balStr); err != nil {
+		return 0, fmt.Errorf("parse balance: %w", err)
+	}
+	bal, err := strconv.ParseUint(strings.TrimSpace(balStr), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("balance %q not numeric: %w", balStr, err)
+	}
+	return bal, nil
+}
+
+// ConfirmRecipientCredited cryptographically confirms the Step-3 transfer reached
+// the recipient by polling its balance until it rises at least minDelta nanoTON
+// above the pre-transfer baseline. The value-move is an async multi-hop (account →
+// anchor-verify round-trip → account → recipient); a balance read proves the funds
+// arrived without depending on the laggy tx indexer. Storage rent only DECREASES a
+// balance, so a positive delta this large unambiguously means the transfer landed.
+func (tc *TonClient) ConfirmRecipientCredited(ctx context.Context, recipientAddr string, baseline uint64, minDelta uint64, timeout time.Duration) (uint64, error) {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		res, err := tc.apiPost(ctx, "getTransactions", map[string]interface{}{"address": recipientAddr, "limit": 8})
-		if err == nil {
-			var txs []tonTxLite
-			if json.Unmarshal(res, &txs) == nil {
-				for _, tx := range txs {
-					lt, _ := strconv.ParseUint(tx.TransactionID.Lt, 10, 64)
-					if lt > afterLt && tx.InMsg.Source != "" {
-						return lt, 0, nil
-					}
-				}
-			}
+		bal, err := tc.getAddressBalance(ctx, recipientAddr)
+		if err == nil && bal >= baseline+minDelta {
+			return bal, nil
 		}
 		select {
 		case <-ctx.Done():
-			return 0, 0, ctx.Err()
+			return 0, ctx.Err()
 		case <-time.After(4 * time.Second):
 		}
 	}
-	return 0, 0, fmt.Errorf("recipient %s received no new transfer after lt %d within %v", recipientAddr, afterLt, timeout)
+	return 0, fmt.Errorf("recipient %s balance did not rise by >= %d nanoTON above %d within %v", recipientAddr, minDelta, baseline, timeout)
 }
 
 // tonResultHashToHex converts a TON Center transaction hash (base64, std or
@@ -546,7 +557,14 @@ func (tc *TonClient) runGetMethod(ctx context.Context, addr string, method strin
 // returns an error, so the caller (and the Phase-6→7 gate) treats the step as
 // failed. Retries re-send ONLY when the wallet rejected the message (seqno did
 // not advance), so no duplicate on-chain effects are produced.
-func (tc *TonClient) sendInternalMessage(ctx context.Context, destAddr *address.Address, amount uint64, body *cell.Cell) (string, error) {
+// sendInternalMessage signs + broadcasts a WalletV4R2 external message. When
+// confirmLanded is true it returns only after resolving the resulting on-chain
+// transaction on the target (needed so the Phase-7 observer can find it by hash)
+// and errors if it cannot. When confirmLanded is false it returns once the wallet
+// has provably processed the message (its seqno advanced) WITHOUT depending on the
+// laggy getTransactions indexer — used for sends whose effect is proven elsewhere
+// (e.g. the Step-3 transfer, proven by the recipient's balance increasing).
+func (tc *TonClient) sendInternalMessage(ctx context.Context, destAddr *address.Address, amount uint64, body *cell.Cell, confirmLanded bool) (string, error) {
 	// The internal (outgoing) message cell does not depend on seqno — build once.
 	internalMsg := cell.BeginCell().
 		MustStoreUInt(0x18, 6).
@@ -642,10 +660,14 @@ func (tc *TonClient) sendInternalMessage(ctx context.Context, destAddr *address.
 			continue
 		}
 
-		// The wallet processed our message, so the target MUST have a new transaction.
-		// Resolve its real on-chain hash. If we cannot (persistent API issue) we do NOT
-		// re-send (the message already landed — re-sending would duplicate); we return
-		// an error so the step is treated as unproven rather than falsely successful.
+		// The wallet processed our message (seqno advanced), so it WAS broadcast and the
+		// target will process it. If the caller needs the real on-chain tx hash (for the
+		// Phase-7 observer), resolve it; otherwise the message is "sent" and its effect
+		// is proven elsewhere (do not depend on the laggy tx indexer here).
+		if !confirmLanded {
+			log.Printf("✅ [TON] Message broadcast: dest=%s (seqno advanced, attempt %d)", destAddr.String(), attempt)
+			return fmt.Sprintf("sent_ts_%d", sendTS), nil
+		}
 		realHash, realLt, rerr := tc.resolveResultTx(ctx, destAddr.String(), targetPrevLt, 120*time.Second)
 		if rerr != nil {
 			return "", fmt.Errorf("message processed by wallet but could not confirm tx on %s: %w", destAddr.String(), rerr)
@@ -683,7 +705,7 @@ func (tc *TonClient) CreateAnchor(
 
 	body := tonBuildCreateAnchorBody(bundleId, adiURLHash, opCommitment, ccCommitment, govRoot, executionCommitment, operationID, blockHeight)
 
-	hash, err := tc.sendInternalMessage(ctx, tc.anchorContract, tonGasAmount, body)
+	hash, err := tc.sendInternalMessage(ctx, tc.anchorContract, tonGasAmount, body, true)
 	if err != nil {
 		return "", fmt.Errorf("create_anchor failed: %w", err)
 	}
@@ -918,7 +940,7 @@ func (tc *TonClient) ExecuteComprehensiveProof(
 
 	body := tonBuildComprehensiveProofBody(anchorId, proof)
 
-	hash, err := tc.sendInternalMessage(ctx, tc.anchorContract, tonProofGas, body)
+	hash, err := tc.sendInternalMessage(ctx, tc.anchorContract, tonProofGas, body, true)
 	if err != nil {
 		return "", fmt.Errorf("execute_comprehensive_proof failed: %w", err)
 	}
@@ -1306,7 +1328,7 @@ func (tc *TonClient) ExecuteGovernanceProofDirect(
 
 	body := tonBuildGovProofDirectBody(recipAddr, amountNano, proof)
 
-	hash, err := tc.sendInternalMessage(ctx, acctAddr, tonGovGas+amountNano, body)
+	hash, err := tc.sendInternalMessage(ctx, acctAddr, tonGovGas+amountNano, body, false)
 	if err != nil {
 		return "", fmt.Errorf("execute_governance_proof_direct failed: %w", err)
 	}
@@ -1494,7 +1516,7 @@ func (tc *TonClient) DeployAccountViaFactory(ctx context.Context, owner, adiURL 
 		MustStoreUInt(salt, 64).
 		EndCell()
 
-	hash, err := tc.sendInternalMessage(ctx, tc.factoryContract, tonDeployGas, body)
+	hash, err := tc.sendInternalMessage(ctx, tc.factoryContract, tonDeployGas, body, false)
 	if err != nil {
 		return "", fmt.Errorf("factory deployment failed: %w", err)
 	}

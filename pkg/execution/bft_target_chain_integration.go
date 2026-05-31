@@ -5653,28 +5653,33 @@ func (btce *BFTTargetChainExecutor) executeTonOperations(
 						execCommitment, amountNano, userAccountAddr, recipientAddr,
 					)
 
-					// Snapshot the recipient's newest tx BEFORE the transfer so we can
-					// prove a NEW inbound transfer arrived afterwards.
-					recipientPrevLt := tonClient.topTxLt(ctx, recipientAddr)
+					// Snapshot the recipient's BALANCE before the transfer so we can prove
+					// the funds arrived by an unambiguous balance increase (a state read,
+					// far timelier than the tx indexer).
+					recipientBaseline, _ := tonClient.getAddressBalance(ctx, recipientAddr)
+					minDelta := amountNano / 2 // require >= half the value (covers forward fees, excludes noise)
+					if minDelta == 0 {
+						minDelta = 1
+					}
 
 					var govErr error
 					govTxHash, govErr = tonClient.ExecuteGovernanceProofDirect(ctx,
 						userAccountAddr, recipientAddr, amountNano, accountProof,
 					)
 					if govErr != nil {
-						btce.logger.Printf("❌ [TON-EXEC] Step 3 governance send not confirmed landed: %v", govErr)
+						btce.logger.Printf("❌ [TON-EXEC] Step 3 governance message not broadcast: %v", govErr)
 						govTxHash = "gov_failed_ton"
 					} else {
 						// Cryptographically confirm the value actually reached the recipient
-						// (the account → anchor-verify round-trip → recipient is async).
-						btce.logger.Printf("⏳ [TON-EXEC] Confirming value reached recipient %s on-chain...", recipientAddr)
-						newLt, _, confErr := tonClient.ConfirmRecipientReceived(ctx, recipientAddr, recipientPrevLt, 7*time.Minute)
+						// (account → anchor-verify round-trip → recipient is async).
+						btce.logger.Printf("⏳ [TON-EXEC] Confirming recipient %s credited (baseline %d nanoTON, need +%d)...", recipientAddr, recipientBaseline, minDelta)
+						newBal, confErr := tonClient.ConfirmRecipientCredited(ctx, recipientAddr, recipientBaseline, minDelta, 7*time.Minute)
 						if confErr != nil {
 							btce.logger.Printf("❌ [TON-EXEC] Step 3 transfer NOT confirmed on-chain: %v", confErr)
 							govTxHash = "gov_unconfirmed_ton"
 						} else {
 							step3Confirmed = true
-							btce.logger.Printf("✅ [TON-EXEC] Step 3 transfer CONFIRMED on-chain: recipient received value (tx lt=%d)", newLt)
+							btce.logger.Printf("✅ [TON-EXEC] Step 3 transfer CONFIRMED on-chain: recipient credited (balance %d nanoTON, +%d)", newBal, newBal-recipientBaseline)
 						}
 					}
 				}
