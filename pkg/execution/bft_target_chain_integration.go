@@ -4124,10 +4124,28 @@ func (btce *BFTTargetChainExecutor) executeAptosOperations(
 		govRoot = comprehensiveProof.Commitments.GovernanceRoot
 	}
 
-	// ========== Execution commitment (opaque stub, shared with the BFT signer) ==========
-	execCommitment := contracts.AptosExecutionCommitmentStubV6_1(
-		adiURLHash, opCommitment, ccCommitment, govRoot,
-	)
+	// Extract the Aptos leg's recipient + amount EARLY (before create_anchor) so the
+	// execution_commitment binds the EXACT transfer the intent authorizes. The
+	// on-chain certen_account_v4::execute_with_governance_proof recomputes it from
+	// the runtime (target, value_octas) and asserts equality (CRITICAL-001 parity).
+	aptosAllLegs := btce.extractAllLegsFromIntent(legacyIntent)
+	aptosCommitLeg := btce.findLegForChainPrefix(aptosAllLegs, "aptos", 2)
+	aptosCommitToAddr := btce.extractAptosFieldFromCrossChainData(legacyIntent, "to")
+	var commitTarget [32]byte
+	commitAmount := uint64(1)
+	if aptosCommitLeg != nil {
+		r := aptosCommitToAddr
+		if r == "" {
+			r = aptosCommitLeg.Target.Hex()
+		}
+		commitTarget = contracts.AptosRecipient32(r)
+		if aptosCommitLeg.Value != nil && aptosCommitLeg.Value.Sign() > 0 {
+			commitAmount = aptosCommitLeg.Value.Uint64()
+		}
+	}
+
+	// ========== Execution commitment (value-bound, shared with the BFT signer) ==========
+	execCommitment := contracts.AptosExecutionCommitmentV6_1(commitTarget, commitAmount)
 
 	// ========== V6.1: Aptos deployment_chain_id, operation_id, bundleId, messageHash ==========
 	// Replaces the EVM-style anchorID with the on-chain V6.1 derivation, or

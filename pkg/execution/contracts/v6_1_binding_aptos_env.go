@@ -8,9 +8,11 @@
 package contracts
 
 import (
+	"encoding/binary"
 	"os"
 	"strings"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 )
 
@@ -60,4 +62,40 @@ func AptosExecutionCommitmentStubV6_1(
 	var out [32]byte
 	copy(out[:], crypto.Keccak256(preimage))
 	return out
+}
+
+// AptosExecutionCommitmentV6_1 is the CRITICAL-001 value-bound execution commitment
+// that binds the EXACT transfer (target + amount in octas) the intent authorizes,
+// REPLACING the opaque stub above. The on-chain
+// certen_account_v4::compute_aptos_execution_commitment recomputes this from the
+// runtime (target, value_octas) at execute time and asserts equality with the
+// anchor's stored execution_commitment (EVM CertenAccountV4.sol CRITICAL-001 parity).
+//
+// Byte layout (MUST match the Move twin exactly):
+//
+//	keccak256("certen:exec:aptos" || target(32B) || amount(u64 little-endian, 8B))
+//
+// target is the 32-byte Aptos address (== Move bcs(address)); amount is LE because
+// Move bcs::to_bytes(&u64) is LE. The Move side folds the keccak through
+// bytes32_to_u256 (big-endian) into the u256 execution_commitment, matching how the
+// off-chain CreateAnchor encodes this [32]byte as a u256. BOTH off-chain sides
+// (consensus signer + executor) MUST call this so all derivations agree.
+func AptosExecutionCommitmentV6_1(target [32]byte, amount uint64) [32]byte {
+	preimage := make([]byte, 0, 17+32+8)
+	preimage = append(preimage, []byte("certen:exec:aptos")...)
+	preimage = append(preimage, target[:]...)
+	amt := make([]byte, 8)
+	binary.LittleEndian.PutUint64(amt, amount)
+	preimage = append(preimage, amt...)
+	var out [32]byte
+	copy(out[:], crypto.Keccak256(preimage))
+	return out
+}
+
+// AptosRecipient32 normalizes an Aptos address (hex, optionally 0x-prefixed and
+// possibly short due to leading-zero stripping) into a left-padded 32-byte array —
+// the form Move bcs(address) and AptosExecutionCommitmentV6_1 expect. Both the
+// consensus signer and the executor MUST derive the target through this.
+func AptosRecipient32(addr string) [32]byte {
+	return common.HexToHash(strings.TrimSpace(addr))
 }

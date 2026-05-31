@@ -527,6 +527,37 @@ func nearExecutionCommitmentFromIntent(certenIntent *CertenIntent, ccData []byte
 	)
 }
 
+// aptosExecutionCommitmentFromIntent reproduces, on the consensus signer side,
+// the value-bound Aptos execution_commitment the executor anchors
+// (contracts.AptosExecutionCommitmentV6_1 over the destination Aptos leg's target +
+// octas). MUST equal the executor's value or Step 2 reverts E_MESSAGE_HASH_MISMATCH.
+func aptosExecutionCommitmentFromIntent(certenIntent *CertenIntent) [32]byte {
+	var target [32]byte
+	amount := uint64(1)
+	if certenIntent != nil {
+		if env, err := certenIntent.ParseCrossChain(); err == nil && env != nil {
+			for i := range env.Legs {
+				l := &env.Legs[i]
+				if !strings.HasPrefix(strings.ToLower(l.Chain), "aptos") {
+					continue
+				}
+				if l.To != "" {
+					target = contracts.AptosRecipient32(l.To)
+				}
+				if l.AmountWei != "" {
+					if v, ok := new(big.Int).SetString(l.AmountWei, 10); ok && v.Sign() > 0 {
+						amount = v.Uint64()
+					}
+				}
+				if l.Role == "destination" || l.Role == "payment" {
+					break
+				}
+			}
+		}
+	}
+	return contracts.AptosExecutionCommitmentV6_1(target, amount)
+}
+
 // suiExecutionCommitmentFromIntent reproduces, on the consensus signer side, the
 // value-bound Sui execution_commitment the executor anchors
 // (contracts.SuiExecutionCommitmentV6_1 over the destination Sui leg's recipient +
@@ -808,11 +839,11 @@ func buildV6_1AptosInputsFromIntent(
 	adiURLHash := contracts.DeriveAdiURLHashFromString(adiURL)
 	opCommitment := contracts.DeriveOperationCommitmentFromFields(intentID, blockHeight, txHash)
 	ccCommitment := contracts.DeriveCrossChainCommitmentFromBPT(bptRoot)
-	govRoot := contracts.ComputeAccumulateGovRoot(govInputs)
 
-	execCommitment := contracts.AptosExecutionCommitmentStubV6_1(
-		adiURLHash, opCommitment, ccCommitment, govRoot,
-	)
+	// CRITICAL-001 parity: bind the EXACT transfer (target + octas) the intent
+	// authorizes. MUST match the executor's contracts.AptosExecutionCommitmentV6_1.
+	// (govRoot is recomputed from GovRootInputs by the bundle builder.)
+	execCommitment := aptosExecutionCommitmentFromIntent(certenIntent)
 
 	return contracts.V6_1PreExecBundleInputsAptos{
 		DeploymentChainID:     chainID32,
