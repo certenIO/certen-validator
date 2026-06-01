@@ -366,7 +366,8 @@ func (btce *BFTTargetChainExecutor) ExecuteTargetChainOperations(
 		"base", "base-mainnet", "base-sepolia",
 		"polygon", "polygon-amoy", "matic", "amoy",
 		"bsc", "bsc-testnet", "binance",
-		"moonbeam", "moonbase", "moonbase-alpha", "moonbeam-moonbase-alpha":
+		"moonbeam", "moonbase", "moonbase-alpha", "moonbeam-moonbase-alpha",
+		"hedera", "hedera-testnet", "hedera-mainnet":
 		return btce.executeEthereumOperations(ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof, targetChainID)
 	default:
 		// Try EVM execution for unknown chains if they have a valid chain ID
@@ -447,6 +448,10 @@ func (btce *BFTTargetChainExecutor) extractTargetChainFromCrossChainData(crossCh
 			chainID = 1284
 		case "moonbase-alpha", "moonbeam-moonbase-alpha":
 			chainID = 1287
+		case "hedera", "hedera-testnet":
+			chainID = 296
+		case "hedera-mainnet":
+			chainID = 295
 		case "tron", "tron-shasta", "tron-shasta-testnet", "tron-nile", "tron-mainnet":
 			chainID = 2494104990
 		case "solana", "solana-devnet", "solana-mainnet", "solana-testnet":

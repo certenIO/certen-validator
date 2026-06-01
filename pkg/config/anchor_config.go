@@ -1112,6 +1112,31 @@ func loadEVMChainsFromEnv() map[int64]*EVMChainConfig {
 		}
 	}
 
+	// Hedera Testnet (296) - EVM-compatible Smart Contract Service via JSON-RPC relay.
+	// Hedera's eth_estimateGas returns INSUFFICIENT_TX_FEE, but the EVM client falls
+	// back to GasLimitAnchor on estimate failure and auth.GasLimit is always explicit,
+	// so no estimation happens at submit. Gas price is ~920 gwei; cap well above it.
+	if rpc := getEnv("HEDERA_TESTNET_RPC_URL", ""); rpc != "" {
+		chains[296] = &EVMChainConfig{
+			Name:               "Hedera Testnet",
+			ChainID:            296,
+			RPCURL:             rpc,
+			WSURL:              getEnv("HEDERA_TESTNET_WS_URL", ""),
+			RPCTimeout:         Duration(30 * time.Second),
+			MaxConnections:     10,
+			MaxIdleConnections: 5,
+			// V6.1 A+++ binding takes precedence on Hedera Testnet.
+			AnchorV4Address:    getEnv("HEDERA_TESTNET_ANCHORV6_1_ADDRESS", getEnv("HEDERA_TESTNET_ANCHORV6_ADDRESS", getEnv("HEDERA_TESTNET_ANCHORV5_ADDRESS", getEnv("HEDERA_TESTNET_ANCHORV4_ADDRESS", "")))),
+			AnchorV3Address:    getEnv("HEDERA_TESTNET_ANCHORV3_ADDRESS", ""),
+			BLSVerifierAddress: getEnv("HEDERA_TESTNET_BLS_VERIFIER_V2_ADAPTER", getEnv("HEDERA_TESTNET_BLSZKVERIFIER_ADDRESS", "")),
+			AccountFactory:     getEnv("HEDERA_TESTNET_ACCOUNTFACTORY_V6_ADDRESS", getEnv("HEDERA_TESTNET_ACCOUNTFACTORY_ADDRESS", "")),
+			MaxGasPriceGwei:    getEnvInt64("HEDERA_MAX_GAS_PRICE_GWEI", 2500),
+			MaxPriorityFeeGwei: getEnvInt64("HEDERA_MAX_PRIORITY_FEE_GWEI", 0),
+			GasLimitAnchor:     getEnvInt64("HEDERA_GAS_LIMIT_ANCHOR", 8000000),
+			ExplorerURL:        "https://hashscan.io/testnet",
+		}
+	}
+
 	// Polygon Amoy (80002) - Updated 2026-02-08
 	if rpc := getEnv("POLYGON_AMOY_RPC_URL", ""); rpc != "" {
 		chains[80002] = &EVMChainConfig{
