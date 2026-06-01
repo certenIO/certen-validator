@@ -221,6 +221,8 @@ func initializeChainStrategies(registry *Registry, cfg *RegistryConfig) error {
 		1287:     {"moonbase-alpha", "moonbase alpha", "moonbeam-testnet", "moonbeam moonbase alpha"},
 		1284:     {"moonbeam"},
 		2494104990: {"tron-shasta", "tron shasta", "tron-shasta-testnet", "tron shasta testnet", "tron"},
+		296:      {"hedera", "hedera-testnet", "hedera testnet"},
+		295:      {"hedera-mainnet", "hedera mainnet"},
 	}
 	if aliases, ok := knownAliases[int64(cfg.EthChainID)]; ok {
 		for _, alias := range aliases {
@@ -275,6 +277,8 @@ func registerL2EVMStrategies(registry *Registry, cfg *RegistryConfig, knownAlias
 		{1287, "moonbase-alpha", "MOONBASE_ALPHA_RPC_URL", "MOONBASE_ALPHA_ANCHORV4_ADDRESS", "0x7a8c5DC01C2d2Ba498F76832dBcbf0Fe2f69a6C3", 2},
 		// TRON Shasta - EVM-compatible via /jsonrpc for observation; writes use native HTTP API in tron_client.go
 		{2494104990, "tron-shasta", "TRON_SHASTA_RPC_URL", "TRON_SHASTA_ANCHORV4_ADDRESS", "0xca04231da28aab992fdffd3c9a7f8ddcd1f26027", 1},
+		// Hedera Testnet - EVM chain 296 via JSON-RPC relay; full A+++/V6.1 parity (BN254 BLS verify on-chain)
+		{296, "hedera-testnet", "HEDERA_TESTNET_RPC_URL", "HEDERA_TESTNET_ANCHORV4_ADDRESS", "0xca67409d872B04cc2a13dEAb2eaa2AD070029F59", 1},
 	}
 
 	for _, l2 := range l2Chains {
