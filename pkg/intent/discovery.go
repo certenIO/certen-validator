@@ -203,6 +203,23 @@ func NewIntentDiscovery(
 		config = DefaultIntentDiscoveryConfig()
 	}
 
+	// Defensive defaults: callers that build IntentDiscoveryConfig directly (not via
+	// DefaultIntentDiscoveryConfig) leave the on_demand proof-retry fields zero, which would
+	// neuter the retry path to a single attempt. Backfill so on_demand intents always get the
+	// full in-line + decoupled requeue policy regardless of how the config was constructed.
+	if config.ChainedProofInlineRetries <= 0 {
+		config.ChainedProofInlineRetries = 3
+	}
+	if config.ChainedProofInlineBackoff <= 0 {
+		config.ChainedProofInlineBackoff = 2 * time.Second
+	}
+	if config.ChainedProofRequeueAttempts <= 0 {
+		config.ChainedProofRequeueAttempts = 10
+	}
+	if config.ChainedProofRequeueBackoff <= 0 {
+		config.ChainedProofRequeueBackoff = 10 * time.Second
+	}
+
 	return &IntentDiscovery{
 		client:           client,
 		accumulateURL:    accumulateURL,

@@ -114,6 +114,30 @@ func TestEnqueueRetry_NonBlockingAndNilSafe(t *testing.T) {
 	}
 }
 
+// A config built directly (not via DefaultIntentDiscoveryConfig) leaves the retry fields zero;
+// NewIntentDiscovery must backfill them so on_demand intents are never neutered to 1 attempt.
+func TestNewIntentDiscovery_BackfillsRetryDefaults(t *testing.T) {
+	// Zero-valued retry fields, as a hand-built config would have.
+	cfg := &IntentDiscoveryConfig{
+		BlockPollInterval:   5 * time.Second,
+		BFTTimeout:          60 * time.Second,
+		MaxConcurrentBlocks: 8,
+		IntentBatchSize:     5,
+		MinStartHeight:      1,
+	}
+	id := NewIntentDiscovery(nil, "", cfg, nil, nil, "test")
+
+	if id.config.ChainedProofInlineRetries < 2 {
+		t.Errorf("inline retries must be backfilled (>1), got %d", id.config.ChainedProofInlineRetries)
+	}
+	if id.config.ChainedProofRequeueAttempts < 2 {
+		t.Errorf("requeue attempts must be backfilled (>1), got %d", id.config.ChainedProofRequeueAttempts)
+	}
+	if id.config.ChainedProofInlineBackoff <= 0 || id.config.ChainedProofRequeueBackoff <= 0 {
+		t.Error("retry backoffs must be backfilled positive")
+	}
+}
+
 // The default config must enable retry (non-zero attempts/backoff) so on_demand intents are
 // never left without a retry path.
 func TestDefaultConfig_RetryEnabled(t *testing.T) {
