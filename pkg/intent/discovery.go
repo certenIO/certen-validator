@@ -14,6 +14,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -52,6 +53,36 @@ type IntentDiscoveryConfig struct {
 	MaxConcurrentBlocks int           `json:"max_concurrent_blocks"`
 	IntentBatchSize     int           `json:"intent_batch_size"`
 	MinStartHeight      uint64        `json:"min_start_height"`  // Minimum starting height fallback
+
+	// on_demand consensus-bound proof retry policy.
+	// on_demand (financial) intents REQUIRE the L1-L3 consensus-bound chained proof and
+	// must never silently downgrade to a basic account proof. The dominant failure mode is
+	// benign DN-anchoring latency / transient DN-BVN CometBFT RPC blips, so a failed chained
+	// proof is retried — first in-line (absorbs the common few-second anchoring lag without
+	// holding state), then off the block-worker critical path via a decoupled retry queue.
+	ChainedProofInlineRetries   int           `json:"chained_proof_inline_retries"`   // in-line attempts per pass (on_demand only)
+	ChainedProofInlineBackoff   time.Duration `json:"chained_proof_inline_backoff"`   // base in-line backoff (exponential, capped)
+	ChainedProofRequeueAttempts int           `json:"chained_proof_requeue_attempts"` // decoupled requeue attempts before terminal fail
+	ChainedProofRequeueBackoff  time.Duration `json:"chained_proof_requeue_backoff"`  // base requeue backoff (exponential, capped 5m)
+}
+
+// errChainedProofUnavailable marks a RETRYABLE failure to build the consensus-bound L1-L3
+// chained proof for an on_demand intent (typically DN-anchoring latency or a transient
+// DN/BVN CometBFT RPC blip). It is returned BEFORE any execution/anchor side effect, so the
+// intent is safely requeued with backoff. See processIntent.
+var errChainedProofUnavailable = errors.New("consensus-bound chained proof unavailable (retryable)")
+
+// errChainedProofTerminal marks a NON-retryable inability to build the chained proof for an
+// on_demand intent (no real proof builder configured, or the intent lacks a txHash/partition).
+// Retrying cannot help; the intent fails closed.
+var errChainedProofTerminal = errors.New("consensus-bound chained proof unattainable (terminal)")
+
+// intentRetryJob carries an on_demand intent whose consensus-bound proof was not yet available,
+// for decoupled retry off the block-worker critical path.
+type intentRetryJob struct {
+	intent      *CertenIntent
+	blockHeight uint64
+	attempts    int
 }
 
 // IntentStatus represents the processing state of an intent
@@ -117,6 +148,12 @@ type IntentDiscovery struct {
 	// Intent tracking - E.4 remediation: Two-phase status tracking
 	intentStatus       map[string]IntentStatus // Tracks status of each intent
 	intentCount        int64                   // Total intents discovered
+
+	// on_demand consensus-bound proof retry queue (decoupled from block workers).
+	// In-session only: across restart the persisted watermark prevents block re-scan and the
+	// queue is empty, so no double-execution is possible; failed records remain lifecycle=failed
+	// in PostgreSQL for alerting.
+	retryCh chan *intentRetryJob
 }
 
 // LedgerStoreInterface defines the interface for ledger operations needed by intent discovery
@@ -143,6 +180,13 @@ func DefaultIntentDiscoveryConfig() *IntentDiscoveryConfig {
 		MaxConcurrentBlocks: MAX_CONCURRENT_BLOCKS,
 		IntentBatchSize:     INTENT_BATCH_SIZE,
 		MinStartHeight:      946000,  // Current testnet baseline
+		// Short in-line retry catches the common few-second DN-anchoring lag without holding
+		// a block worker long; the decoupled queue (10 attempts, 10s→5m exp backoff ≈ ~25min)
+		// absorbs longer transient DN/BVN RPC outages off the critical path.
+		ChainedProofInlineRetries:   3,
+		ChainedProofInlineBackoff:   2 * time.Second,
+		ChainedProofRequeueAttempts: 10,
+		ChainedProofRequeueBackoff:  10 * time.Second,
 	}
 }
 
@@ -253,6 +297,7 @@ func (id *IntentDiscovery) StartMonitoring() {
 	id.isMonitoring = true
 	id.stopCh = make(chan struct{})
 	id.blockProcessCh = make(chan *BlockProcessJob, id.config.MaxConcurrentBlocks)
+	id.retryCh = make(chan *intentRetryJob, 256)
 	id.processedBlocks = make(map[uint64]bool)
 	id.lastQueuedBlock = id.lastProcessedBlock // reset queue tracker to current watermark
 	// Keep intent status across restarts to avoid reprocessing
@@ -280,10 +325,13 @@ func (id *IntentDiscovery) StartMonitoring() {
 		go id.blockProcessor(workerID)
 	}
 
+	// Start the decoupled on_demand consensus-bound proof retry worker
+	go id.retryWorker()
+
 	// Start main monitoring loop
 	go id.monitoringLoop()
 
-	id.logger.Printf("✅ Intent discovery service started successfully with 3 workers")
+	id.logger.Printf("✅ Intent discovery service started successfully with 3 workers + retry worker")
 }
 
 // StopMonitoring stops the intent discovery service
@@ -590,16 +638,26 @@ func (id *IntentDiscovery) processBlock(job *BlockProcessJob, workerID string) e
 		// Process the intent through consensus
 		if err := id.processIntent(intent, job.BlockHeight); err != nil {
 			id.logger.Printf("❌ Failed to process intent %s: %v", intent.IntentID, err)
-			// E.4 remediation: Phase 2 (failure) - Mark as failed, allowing future retry
+			// E.4 remediation: Phase 2 (failure) - Mark as failed (allows re-acquire on retry)
 			id.markFailed(intent.IntentID)
-			id.logger.Printf("   Intent %s marked as 'failed' - can be retried on next discovery", intent.IntentID)
-			// Intent lifecycle: record failure (non-fatal)
-			if id.repos != nil && id.repos.IntentLifecycle != nil {
-				if lcErr := id.repos.IntentLifecycle.UpdateStatus(ctx, intent.IntentID,
-					database.IntentLifecycleFailed,
-					database.WithErrorMessage(err.Error()),
-				); lcErr != nil {
-					id.logger.Printf("⚠️ [LIFECYCLE] Failed to update lifecycle to failed for %s: %v", intent.IntentID, lcErr)
+
+			// on_demand consensus-bound proof not yet available (benign DN-anchoring latency or a
+			// transient DN/BVN CometBFT RPC blip): requeue off the block-worker critical path
+			// instead of dropping the intent or silently downgrading to a basic proof. The error
+			// is returned before any execution/anchor side effect, so the retry is replay-safe.
+			if errors.Is(err, errChainedProofUnavailable) {
+				id.logger.Printf("🔁 Intent %s requeued for consensus-bound proof retry", intent.IntentID)
+				id.enqueueRetry(&intentRetryJob{intent: intent, blockHeight: job.BlockHeight})
+			} else {
+				id.logger.Printf("   Intent %s marked as 'failed'", intent.IntentID)
+				// Intent lifecycle: record terminal failure (non-fatal)
+				if id.repos != nil && id.repos.IntentLifecycle != nil {
+					if lcErr := id.repos.IntentLifecycle.UpdateStatus(ctx, intent.IntentID,
+						database.IntentLifecycleFailed,
+						database.WithErrorMessage(err.Error()),
+					); lcErr != nil {
+						id.logger.Printf("⚠️ [LIFECYCLE] Failed to update lifecycle to failed for %s: %v", intent.IntentID, lcErr)
+					}
 				}
 			}
 		} else {
@@ -903,6 +961,178 @@ func (id *IntentDiscovery) convertIntentToTransactionData(intent *CertenIntent, 
 // processIntent triggers consensus for the discovered intent
 // PHASE 5: Now routes to batch system based on proofClass for PostgreSQL persistence
 // Multi-Leg: Detects multi-leg intents and routes to chain-grouped leg processing
+// chainedRetryBackoff returns an exponential backoff of base * 2^min(step, maxShift), capped
+// at capDur. step is 0-based (first retry = step 0). Pure + bounded for deterministic testing.
+func chainedRetryBackoff(base time.Duration, step, maxShift int, capDur time.Duration) time.Duration {
+	if base <= 0 {
+		base = time.Second
+	}
+	if step < 0 {
+		step = 0
+	}
+	if step > maxShift {
+		step = maxShift
+	}
+	d := base * time.Duration(1<<uint(step))
+	if capDur > 0 && d > capDur {
+		d = capDur
+	}
+	return d
+}
+
+// buildChainedCertenProof builds the L1-L3 consensus-bound CertenProof, retrying up to
+// maxAttempts with exponential backoff to absorb DN-anchoring latency and transient DN/BVN
+// CometBFT RPC failures. Fail-closed: returns the last error if every attempt fails (the
+// underlying ProofBuilder is itself fail-closed — it recomputes each Merkle receipt and binds
+// the BVN+DN consensus app_hash, so a returned proof is already cryptographically verified).
+func (id *IntentDiscovery) buildChainedCertenProof(ctx context.Context, accountURL, txHash, partition, intentID string, maxAttempts int) (*proof.CertenProof, error) {
+	if maxAttempts < 1 {
+		maxAttempts = 1
+	}
+	base := id.config.ChainedProofInlineBackoff
+	if base <= 0 {
+		base = 2 * time.Second
+	}
+
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		chainedProof, err := id.proofGenerator.GenerateChainedProof(ctx, accountURL, txHash, partition)
+		if err == nil {
+			complete := proof.ChainedProofToCompleteProof(chainedProof)
+			id.logger.Printf("✅ [REAL-PROOF] L1-L3 chained proof generated for %s (attempt %d/%d):",
+				intentID, attempt, maxAttempts)
+			id.logger.Printf("   L1: TxChainIndex=%d, BVNMinorBlockIndex=%d",
+				chainedProof.Layer1.TxChainIndex, chainedProof.Layer1.BVNMinorBlockIndex)
+			id.logger.Printf("   L2: DNMinorBlockIndex=%d", chainedProof.Layer2.DNMinorBlockIndex)
+			id.logger.Printf("   L3: DNConsensusHeight=%d", chainedProof.Layer3.DNConsensusHeight)
+
+			req := &proof.ProofRequest{
+				RequestID:       fmt.Sprintf("intent_%s", intentID),
+				ProofType:       "chained_l1_l2_l3",
+				TransactionHash: txHash,
+				AccountURL:      accountURL,
+			}
+			adapter := proof.NewCertenProofAdapter(complete, req, id.validatorID)
+			certenProof := adapter.ToCertenProof()
+			if certenProof == nil {
+				return nil, fmt.Errorf("chained proof adapter returned nil CertenProof for %s", intentID)
+			}
+			return certenProof, nil
+		}
+
+		lastErr = err
+		if attempt < maxAttempts {
+			wait := chainedRetryBackoff(base, attempt-1, 30, 30*time.Second)
+			id.logger.Printf("⏳ [REAL-PROOF] chained proof attempt %d/%d failed for %s: %v — retrying in %v",
+				attempt, maxAttempts, intentID, err, wait)
+			select {
+			case <-time.After(wait):
+			case <-ctx.Done():
+				return nil, fmt.Errorf("chained proof retry aborted for %s: %w", intentID, ctx.Err())
+			case <-id.stopCh:
+				return nil, fmt.Errorf("chained proof retry aborted for %s: shutting down", intentID)
+			}
+		}
+	}
+	return nil, lastErr
+}
+
+// enqueueRetry submits an on_demand intent for decoupled retry. Non-blocking: if the queue is
+// full the retry is dropped and the intent remains failed (lifecycle=failed) for alerting.
+func (id *IntentDiscovery) enqueueRetry(job *intentRetryJob) {
+	if id.retryCh == nil {
+		return
+	}
+	select {
+	case id.retryCh <- job:
+	default:
+		id.logger.Printf("⚠️ [RETRY] retry queue full — dropping retry for on_demand intent %s (remains failed)", job.intent.IntentID)
+	}
+}
+
+// retryWorker drains the decoupled on_demand retry queue, re-attempting consensus-bound proof
+// generation off the block-worker critical path. Safe to retry: the retryable error is returned
+// before any execution/anchor side effect, and markInProgress + the persisted watermark prevent
+// double-execution.
+func (id *IntentDiscovery) retryWorker() {
+	defer func() {
+		if r := recover(); r != nil {
+			id.logger.Printf("🚨 PANIC in intent retry worker: %v", r)
+		}
+		id.logger.Printf("🛑 Intent retry worker exited")
+	}()
+	id.logger.Printf("🔁 Intent retry worker started (on_demand consensus-bound proof requeue)")
+
+	for {
+		select {
+		case <-id.stopCh:
+			return
+		case job := <-id.retryCh:
+			id.handleRetryJob(job)
+		}
+	}
+}
+
+// handleRetryJob waits out the backoff for one retry job, re-processes the intent, and either
+// marks it complete, re-enqueues it (if still retryable and attempts remain), or fails it closed.
+func (id *IntentDiscovery) handleRetryJob(job *intentRetryJob) {
+	job.attempts++
+	maxAttempts := id.config.ChainedProofRequeueAttempts
+	if maxAttempts < 1 {
+		maxAttempts = 1
+	}
+	base := id.config.ChainedProofRequeueBackoff
+	if base <= 0 {
+		base = 10 * time.Second
+	}
+	backoff := chainedRetryBackoff(base, job.attempts-1, 5, 5*time.Minute)
+
+	select {
+	case <-time.After(backoff):
+	case <-id.stopCh:
+		return
+	}
+
+	// Idempotency: skip if the intent already completed via any path.
+	if id.getIntentStatus(job.intent.IntentID) == IntentStatusCompleted {
+		return
+	}
+	if !id.markInProgress(job.intent.IntentID) {
+		// Already in progress or completed elsewhere — do not double-process.
+		return
+	}
+
+	id.logger.Printf("🔁 [RETRY %d/%d] Re-processing on_demand intent %s", job.attempts, maxAttempts, job.intent.IntentID)
+	err := id.processIntent(job.intent, job.blockHeight)
+	if err == nil {
+		id.markCompleted(job.intent.IntentID)
+		id.logger.Printf("✅ [RETRY] on_demand intent %s succeeded on retry %d/%d", job.intent.IntentID, job.attempts, maxAttempts)
+		return
+	}
+
+	id.markFailed(job.intent.IntentID)
+	if errors.Is(err, errChainedProofUnavailable) && job.attempts < maxAttempts {
+		id.logger.Printf("⏳ [RETRY] on_demand intent %s proof still unavailable (attempt %d/%d): %v",
+			job.intent.IntentID, job.attempts, maxAttempts, err)
+		id.enqueueRetry(job)
+		return
+	}
+
+	// Exhausted retries or terminal error — fail closed and record for alerting.
+	id.logger.Printf("❌ [RETRY] on_demand intent %s PERMANENTLY FAILED after %d attempt(s): %v",
+		job.intent.IntentID, job.attempts, err)
+	if id.repos != nil && id.repos.IntentLifecycle != nil {
+		lctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if lcErr := id.repos.IntentLifecycle.UpdateStatus(lctx, job.intent.IntentID,
+			database.IntentLifecycleFailed,
+			database.WithErrorMessage(err.Error()),
+		); lcErr != nil {
+			id.logger.Printf("⚠️ [LIFECYCLE] Failed to mark retry-exhausted intent %s failed: %v", job.intent.IntentID, lcErr)
+		}
+		cancel()
+	}
+}
+
 func (id *IntentDiscovery) processIntent(intent *CertenIntent, blockHeight uint64) error {
 	id.logger.Printf("🚀 Processing Certen intent: %s", intent.IntentID)
 
@@ -938,41 +1168,41 @@ func (id *IntentDiscovery) processIntent(intent *CertenIntent, blockHeight uint6
 		ctx, cancel := context.WithTimeout(context.Background(), id.config.BFTTimeout)
 		defer cancel()
 
-		// Try REAL L1-L3 chained proof first (requires txHash, partition, and CometBFT binding)
-		if id.proofGenerator.HasRealProofBuilder() && intent.TransactionHash != "" && intent.Partition != "" {
-			id.logger.Printf("🔗 [REAL-PROOF] Generating L1-L3 chained proof for %s (txHash=%s, partition=%s)",
-				intent.IntentID, intent.TransactionHash[:16]+"...", intent.Partition)
+		// REAL L1-L3 consensus-bound chained proof (requires txHash, partition, CometBFT binding).
+		realProofApplicable := id.proofGenerator.HasRealProofBuilder() && intent.TransactionHash != "" && intent.Partition != ""
+		if realProofApplicable {
+			// on_demand (financial) gets in-line retry to absorb DN-anchoring latency / transient
+			// DN-BVN RPC blips; on_cadence makes a single attempt and may fall back to a basic proof.
+			inlineAttempts := 1
+			if proofClass == "on_demand" {
+				inlineAttempts = id.config.ChainedProofInlineRetries
+			}
+			id.logger.Printf("🔗 [REAL-PROOF] Generating L1-L3 chained proof for %s (txHash=%s, partition=%s, attempts=%d)",
+				intent.IntentID, intent.TransactionHash[:16]+"...", intent.Partition, inlineAttempts)
 
-			chainedProof, err := id.proofGenerator.GenerateChainedProof(ctx, accountURL, intent.TransactionHash, intent.Partition)
-			if err != nil {
-				id.logger.Printf("⚠️ [REAL-PROOF] L1-L3 chained proof failed for %s: %v", intent.IntentID, err)
-				// Fall through to basic proof
+			cp, perr := id.buildChainedCertenProof(ctx, accountURL, intent.TransactionHash, intent.Partition, intent.IntentID, inlineAttempts)
+			if perr != nil {
+				id.logger.Printf("⚠️ [REAL-PROOF] L1-L3 chained proof unavailable for %s: %v", intent.IntentID, perr)
 			} else {
-				// Convert ChainedProof to CompleteProof for adapter
-				complete := proof.ChainedProofToCompleteProof(chainedProof)
-				id.logger.Printf("✅ [REAL-PROOF] L1-L3 chained proof generated for %s:", intent.IntentID)
-				id.logger.Printf("   L1: TxChainIndex=%d, BVNMinorBlockIndex=%d",
-					chainedProof.Layer1.TxChainIndex, chainedProof.Layer1.BVNMinorBlockIndex)
-				id.logger.Printf("   L2: DNMinorBlockIndex=%d", chainedProof.Layer2.DNMinorBlockIndex)
-				id.logger.Printf("   L3: DNConsensusHeight=%d", chainedProof.Layer3.DNConsensusHeight)
-
-				// Build ProofRequest for adapter
-				req := &proof.ProofRequest{
-					RequestID:       fmt.Sprintf("intent_%s", intent.IntentID),
-					ProofType:       "chained_l1_l2_l3",
-					TransactionHash: intent.TransactionHash,
-					AccountURL:      accountURL,
-				}
-
-				adapter := proof.NewCertenProofAdapter(complete, req, id.validatorID)
-				certenProof = adapter.ToCertenProof()
-				if certenProof != nil {
-					id.logger.Printf("✅ [REAL-PROOF] CertenProof created with L1-L3 chained proof for %s", intent.IntentID)
-				}
+				certenProof = cp
+				id.logger.Printf("✅ [REAL-PROOF] CertenProof created with L1-L3 chained proof for %s", intent.IntentID)
 			}
 		}
 
-		// Fallback: Basic proof if real L1-L3 proof not available
+		// on_demand (financial) intents REQUIRE the consensus-bound chained proof and must NEVER
+		// silently downgrade to a basic account proof. If it is unavailable, fail closed HERE —
+		// before any execution/anchor side effect — so the caller can requeue (retryable, e.g.
+		// DN-anchoring latency / transient RPC) or surface a terminal failure (misconfig).
+		if certenProof == nil && proofClass == "on_demand" {
+			if !realProofApplicable {
+				return fmt.Errorf("on_demand intent %s: %w (realBuilder=%v txHash=%q partition=%q)",
+					intent.IntentID, errChainedProofTerminal,
+					id.proofGenerator.HasRealProofBuilder(), intent.TransactionHash, intent.Partition)
+			}
+			return fmt.Errorf("on_demand intent %s: %w", intent.IntentID, errChainedProofUnavailable)
+		}
+
+		// Fallback: Basic proof (on_cadence only — on_demand returned above).
 		if certenProof == nil {
 			id.logger.Printf("📋 [BASIC-PROOF] Falling back to basic proof for %s", intent.IntentID)
 			complete, err := id.proofGenerator.GenerateProofForIntent(ctx, accountURL)
@@ -1318,28 +1548,36 @@ func (id *IntentDiscovery) processMultiLegIntent(intent *CertenIntent, blockHeig
 		ctx, cancel := context.WithTimeout(context.Background(), id.config.BFTTimeout)
 		defer cancel()
 
-		// Try L1-L3 chained proof
-		if id.proofGenerator.HasRealProofBuilder() && intent.TransactionHash != "" && intent.Partition != "" {
-			id.logger.Printf("🔗 [MULTI-LEG] Generating L1-L3 chained proof for %s", intent.IntentID)
+		// REAL L1-L3 consensus-bound chained proof (same fail-closed policy as single-leg).
+		realProofApplicable := id.proofGenerator.HasRealProofBuilder() && intent.TransactionHash != "" && intent.Partition != ""
+		if realProofApplicable {
+			inlineAttempts := 1
+			if proofClass == "on_demand" {
+				inlineAttempts = id.config.ChainedProofInlineRetries
+			}
+			id.logger.Printf("🔗 [MULTI-LEG] Generating L1-L3 chained proof for %s (attempts=%d)", intent.IntentID, inlineAttempts)
 
-			chainedProof, err := id.proofGenerator.GenerateChainedProof(ctx, accountURL, intent.TransactionHash, intent.Partition)
-			if err != nil {
-				id.logger.Printf("⚠️ [MULTI-LEG] L1-L3 proof failed: %v", err)
+			cp, perr := id.buildChainedCertenProof(ctx, accountURL, intent.TransactionHash, intent.Partition, intent.IntentID, inlineAttempts)
+			if perr != nil {
+				id.logger.Printf("⚠️ [MULTI-LEG] L1-L3 chained proof unavailable for %s: %v", intent.IntentID, perr)
 			} else {
-				complete := proof.ChainedProofToCompleteProof(chainedProof)
-				req := &proof.ProofRequest{
-					RequestID:       fmt.Sprintf("multileg_%s", intent.IntentID),
-					ProofType:       "chained_l1_l2_l3",
-					TransactionHash: intent.TransactionHash,
-					AccountURL:      accountURL,
-				}
-				adapter := proof.NewCertenProofAdapter(complete, req, id.validatorID)
-				certenProof = adapter.ToCertenProof()
-				id.logger.Printf("✅ [MULTI-LEG] CertenProof created for all legs")
+				certenProof = cp
+				id.logger.Printf("✅ [MULTI-LEG] CertenProof created for all legs of %s", intent.IntentID)
 			}
 		}
 
-		// Fallback to basic proof
+		// on_demand multi-leg REQUIRES the consensus-bound chained proof — no silent downgrade.
+		// Fail closed here; RegisterIntent (above) is idempotent so the requeue is replay-safe.
+		if certenProof == nil && proofClass == "on_demand" {
+			if !realProofApplicable {
+				return fmt.Errorf("on_demand multi-leg intent %s: %w (realBuilder=%v txHash=%q partition=%q)",
+					intent.IntentID, errChainedProofTerminal,
+					id.proofGenerator.HasRealProofBuilder(), intent.TransactionHash, intent.Partition)
+			}
+			return fmt.Errorf("on_demand multi-leg intent %s: %w", intent.IntentID, errChainedProofUnavailable)
+		}
+
+		// Fallback to basic proof (on_cadence only — on_demand returned above).
 		if certenProof == nil {
 			id.logger.Printf("📋 [MULTI-LEG] Using basic proof for %s", intent.IntentID)
 			complete, err := id.proofGenerator.GenerateProofForIntent(ctx, accountURL)
@@ -1356,6 +1594,9 @@ func (id *IntentDiscovery) processMultiLegIntent(intent *CertenIntent, blockHeig
 				certenProof = adapter.ToCertenProof()
 			}
 		}
+	} else if proofClass == "on_demand" {
+		// No proof generator configured at all — on_demand cannot proceed without a proof.
+		return fmt.Errorf("on_demand multi-leg intent %s requires ProofGenerator but none configured", intent.IntentID)
 	}
 
 	// Generate governance proof if available
