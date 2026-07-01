@@ -609,7 +609,134 @@ func (o *UnifiedOrchestrator) executePhase7(ctx context.Context, cycle *activeCy
 	result.ObservationResults = observationResults
 	result.ChainExecutionIDs = chainExecutionIDs
 
+	// RB-2/RB-4/RB-5: cryptographic attestation gate for proof-gated contract calls.
+	// Refuses the cycle (⇒ no attestation / write-back) unless the executed call's
+	// inclusion proof verifies AND every committed event/state is proven on-chain.
+	if err := o.verifyContractCallGate(observeCtx, cycle, chainStrategy); err != nil {
+		return fmt.Errorf("RB contract-call verification gate failed: %w", err)
+	}
+
 	return nil
+}
+
+// verifyContractCallGate (RB-2/RB-4/RB-5) cryptographically verifies a proof-gated
+// contract call before attestation. For contract-call intents it independently
+// re-observes the governance execution tx, verifies the tx+receipt inclusion proofs
+// against the block header roots (RB-2), requires every committed event to appear in the
+// inclusion-proven logs (RB-4), and — if committed — proves each storage slot took the
+// committed value against the finalized stateRoot (RB-5). Any failure returns an error
+// so the caller aborts the cycle. Native transfers (no calldata) are a no-op here (the
+// CRITICAL-003 commitment check already binds them).
+func (o *UnifiedOrchestrator) verifyContractCallGate(ctx context.Context, cycle *activeCycle, chainStrategy chain.ChainExecutionStrategy) error {
+	cm := cycle.Request.CommitmentData
+	if cm == nil {
+		return nil
+	}
+	if isCall, _ := cm["rbContractCall"].(bool); !isCall {
+		return nil
+	}
+	execTx, _ := cm["rbExecutionTxHash"].(string)
+	if strings.TrimSpace(execTx) == "" {
+		return fmt.Errorf("contract-call intent missing execution tx hash")
+	}
+	events := parseRBExpectedEvents(cm["rbExpectedEvents"])
+	state := parseRBExpectedState(cm["rbExpectedState"])
+	if len(events) == 0 {
+		return fmt.Errorf("contract-call intent committed no events — refusing to attest (success would be indistinguishable from a no-op non-revert)")
+	}
+
+	cfg := chainStrategy.Config()
+	if cfg == nil || cfg.RPC == "" {
+		return fmt.Errorf("no RPC endpoint for chain %s to verify contract call", chainStrategy.ChainID())
+	}
+	chainID, _ := strconv.ParseInt(chainStrategy.ChainID(), 10, 64)
+
+	observer, err := NewExternalChainObserver(&ExternalChainObserverConfig{
+		EthereumRPC:           cfg.RPC,
+		ChainID:               chainID,
+		ValidatorID:           o.config.ValidatorID,
+		RequiredConfirmations: 1,
+		Timeout:               90 * time.Second,
+	})
+	if err != nil {
+		return fmt.Errorf("build observer for contract-call gate: %w", err)
+	}
+
+	fmt.Printf("🔒 [RB-GATE] Verifying proof-gated contract call: tx=%s events=%d state=%d chain=%s\n",
+		execTx, len(events), len(state), chainStrategy.ChainID())
+	result, err := observer.VerifyExecutedCall(ctx, common.HexToHash(execTx), events, state)
+	if err != nil {
+		fmt.Printf("❌ [RB-GATE] Contract-call verification FAILED: %v\n", err)
+		return err
+	}
+	stateNote := ""
+	if len(state) > 0 {
+		stateNote = " + RB-5 state"
+	}
+	fmt.Printf("✅ [RB-GATE] Contract-call verified (RB-2 inclusion + RB-4 events%s): tx=%s block=%s logs=%d\n",
+		stateNote, execTx, result.BlockNumber.String(), len(result.Logs))
+	return nil
+}
+
+// parseRBExpectedEvents reconstructs []ExpectedEvent from the commitment-map form,
+// tolerating both []map[string]interface{} (same-process) and []interface{} (JSON roundtrip).
+func parseRBExpectedEvents(v interface{}) []ExpectedEvent {
+	var maps []map[string]interface{}
+	switch t := v.(type) {
+	case []map[string]interface{}:
+		maps = t
+	case []interface{}:
+		for _, item := range t {
+			if m, ok := item.(map[string]interface{}); ok {
+				maps = append(maps, m)
+			}
+		}
+	default:
+		return nil
+	}
+	out := make([]ExpectedEvent, 0, len(maps))
+	for _, m := range maps {
+		contract, _ := m["contract"].(string)
+		topic0, _ := m["topic0"].(string)
+		if topic0 == "" {
+			continue
+		}
+		ev := ExpectedEvent{Contract: common.HexToAddress(contract), Topic0: common.HexToHash(topic0)}
+		if dh, _ := m["dataHash"].(string); dh != "" {
+			ev.DataHash = [32]byte(common.HexToHash(dh))
+		}
+		out = append(out, ev)
+	}
+	return out
+}
+
+// parseRBExpectedState reconstructs []ExpectedStateSlot from the commitment-map form.
+func parseRBExpectedState(v interface{}) []ExpectedStateSlot {
+	var maps []map[string]interface{}
+	switch t := v.(type) {
+	case []map[string]interface{}:
+		maps = t
+	case []interface{}:
+		for _, item := range t {
+			if m, ok := item.(map[string]interface{}); ok {
+				maps = append(maps, m)
+			}
+		}
+	default:
+		return nil
+	}
+	out := make([]ExpectedStateSlot, 0, len(maps))
+	for _, m := range maps {
+		account, _ := m["account"].(string)
+		slot, _ := m["slot"].(string)
+		value, _ := m["value"].(string)
+		out = append(out, ExpectedStateSlot{
+			Account: common.HexToAddress(account),
+			Slot:    common.HexToHash(slot),
+			Value:   common.HexToHash(value),
+		})
+	}
+	return out
 }
 
 // persistChainExecution persists a chain execution result to the database

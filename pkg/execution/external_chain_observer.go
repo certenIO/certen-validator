@@ -484,6 +484,62 @@ func (o *ExternalChainObserver) fetchStateProofs(ctx context.Context, blockNumbe
 	return proofs
 }
 
+// VerifyExecutedCall is the RB-2/RB-4/RB-5 attestation gate for a proof-gated contract
+// call. It independently re-observes the executed governance transaction and:
+//   - RB-2: rebuilds the tx & receipt inclusion proofs (canonical encoding, header-bound)
+//           and verifies them via go-ethereum trie.VerifyProof against the block roots;
+//   - RB-4: requires every committed event to appear in the inclusion-proven receipt logs
+//           (the call's effect — an internal-call event by the target — not just non-revert);
+//   - RB-5: if committed state slots are present, fetches eth_getProof and verifies each
+//           slot holds the committed value against the finalized stateRoot.
+//
+// Returns an error (⇒ caller must refuse to attest / write back) on any failure. The
+// outer tx targets the abstract account, not the call target, so this deliberately does
+// NOT use VerifyAgainstResult (which checks the outer target/selector); it checks the
+// receipt logs directly, which capture the target's event via the internal call.
+func (o *ExternalChainObserver) VerifyExecutedCall(
+	ctx context.Context,
+	txHash common.Hash,
+	expectedEvents []ExpectedEvent,
+	expectedState []ExpectedStateSlot,
+) (*ExternalChainResult, error) {
+	// Observe (nil commitment ⇒ build result + inclusion proofs, skip outer-target checks).
+	result, err := o.ObserveTransaction(ctx, txHash, nil)
+	if err != nil {
+		return nil, fmt.Errorf("observe executed call tx %s: %w", txHash.Hex(), err)
+	}
+	if result.Status != 1 {
+		return nil, fmt.Errorf("executed call tx %s failed (status=%d)", txHash.Hex(), result.Status)
+	}
+
+	// RB-2: independently verify tx + receipt inclusion against the header roots.
+	if result.TxInclusionProof == nil || !result.TxInclusionProof.Verify() {
+		return nil, fmt.Errorf("RB-2: tx inclusion proof failed to verify for %s", txHash.Hex())
+	}
+	if result.ReceiptInclusionProof == nil || !result.ReceiptInclusionProof.Verify() {
+		return nil, fmt.Errorf("RB-2: receipt inclusion proof failed to verify for %s", txHash.Hex())
+	}
+
+	gate := &ExecutionCommitment{ExpectedCallEvents: expectedEvents, ExpectedState: expectedState}
+
+	// RB-4: the committed event(s) must be present in the inclusion-proven receipt logs.
+	if len(expectedEvents) > 0 {
+		if !gate.verifyExpectedEventsStrict(result, expectedEvents) {
+			return nil, fmt.Errorf("RB-4: committed event(s) not found in inclusion-proven logs for %s", txHash.Hex())
+		}
+	}
+
+	// RB-5: optional storage-slot state proofs against the finalized stateRoot.
+	if len(expectedState) > 0 {
+		result.StateProofs = o.fetchStateProofs(ctx, result.BlockNumber, expectedState)
+		if !gate.verifyExpectedState(result) {
+			return nil, fmt.Errorf("RB-5: committed state slot(s) not proven for %s", txHash.Hex())
+		}
+	}
+
+	return result, nil
+}
+
 // =============================================================================
 // MERKLE PROOF COLLECTOR (implements ethdb.KeyValueWriter for trie.Prove)
 // =============================================================================

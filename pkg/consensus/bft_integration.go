@@ -1242,6 +1242,35 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 					commitMap["rawVerifyTxHashes"] = anchorRes.VerifyTxHash
 					commitMap["rawGovernanceTxHashes"] = anchorRes.GovernanceTxHash
 
+					// RB-2/RB-4/RB-5: surface the user-signed executionPayload (raw calldata +
+					// committed events/state) so the Phase 7 attestation gate can cryptographically
+					// verify the executed contract call. Only for contract-call legs (non-empty
+					// calldata). The governance tx is where target.call{value}(callData) ran, and
+					// its receipt logs carry the target's committed event via the internal call.
+					if ccEnv, ccErr := certenIntent.ParseCrossChain(); ccErr == nil && len(ccEnv.Legs) > 0 {
+						if ep := ccEnv.Legs[0].ExecutionPayload; ep != nil {
+							cd := strings.TrimSpace(ep.CallData)
+							if cd != "" && cd != "0x" && cd != "0X" {
+								commitMap["rbContractCall"] = true
+								commitMap["rbCallTarget"] = ep.Target
+								commitMap["rbCallValue"] = ep.Value
+								commitMap["rbExecutionTxHash"] = extractRawTxHash(anchorRes.GovernanceTxHash)
+								evs := make([]map[string]interface{}, 0, len(ep.ExpectedEvents))
+								for _, e := range ep.ExpectedEvents {
+									evs = append(evs, map[string]interface{}{"contract": e.Contract, "topic0": e.Topic0, "dataHash": e.DataHash})
+								}
+								commitMap["rbExpectedEvents"] = evs
+								sts := make([]map[string]interface{}, 0, len(ep.ExpectedState))
+								for _, s := range ep.ExpectedState {
+									sts = append(sts, map[string]interface{}{"account": s.Account, "slot": s.Slot, "value": s.Value})
+								}
+								commitMap["rbExpectedState"] = sts
+								bv.logger.Printf("🔒 [RB-GATE] Contract-call leg: Phase 7 will verify %d committed event(s) + %d state slot(s) on exec tx %v",
+									len(evs), len(sts), commitMap["rbExecutionTxHash"])
+							}
+						}
+					}
+
 					// Wire L1-L3 chained proof data so persistProofArtifact can store it
 					if certenProof != nil && certenProof.LiteClientProof != nil {
 						if proofJSON, err := json.Marshal(certenProof.LiteClientProof); err == nil {

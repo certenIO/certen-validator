@@ -229,9 +229,28 @@ type CCLeg struct {
 type ExecutionPayload struct {
 	Target              string `json:"target"`              // Destination address (checksummed)
 	Value               string `json:"value"`               // Native value in wei (string)
+	CallData            string `json:"callData"`            // RB-0/RB-1: raw calldata (0x-hex); "0x"/absent = native transfer
 	DataHash            string `json:"dataHash"`            // keccak256 of calldata
 	ChainID             int64  `json:"chainId"`             // Target chain ID
 	ExecutionCommitment string `json:"executionCommitment"` // keccak256(abi.encodePacked(chainId, target, value, dataHash))
+	// RB-4: events the contract call must emit for the validator to attest success.
+	ExpectedEvents []ExpectedEventPayload `json:"expectedEvents,omitempty"`
+	// RB-5: storage-slot effects the call must produce, proven against stateRoot.
+	ExpectedState []ExpectedStatePayload `json:"expectedState,omitempty"`
+}
+
+// ExpectedEventPayload is a committed event the call must emit (RB-4).
+type ExpectedEventPayload struct {
+	Contract string `json:"contract"`
+	Topic0   string `json:"topic0"`
+	DataHash string `json:"dataHash,omitempty"`
+}
+
+// ExpectedStatePayload is a committed storage-slot effect (RB-5).
+type ExpectedStatePayload struct {
+	Account string `json:"account"`
+	Slot    string `json:"slot"`
+	Value   string `json:"value"`
 }
 
 // ChainKey returns a unique key for this leg's target chain (e.g., "base-sepolia").
