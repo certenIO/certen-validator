@@ -204,58 +204,37 @@ func TestMerkleProof_Verification(t *testing.T) {
 	copy(proofHash[:], leaf1)
 	proof.ProofHashes = [][32]byte{proofHash}
 
-	t.Run("ValidConstructionTimeFlag", func(t *testing.T) {
-		// Verified=true signals "the trie root matched the block header at
-		// construction time" — the documented trust model. Verify() honours it.
+	t.Run("FlagAloneIsNotTrusted", func(t *testing.T) {
+		// RB-2: Verify() no longer trusts the construction-time Verified flag. Without
+		// the raw proof node set it cannot independently re-verify, so it fails closed
+		// even when Verified=true. (Real positive/negative verification against a live
+		// trie is covered by merkle_inclusion_rb2_test.go.)
 		proof.Verified = true
-		if !proof.Verify() {
-			t.Errorf("Verify() must return true when Verified=true")
-		}
-	})
-
-	t.Run("UnverifiedRejected", func(t *testing.T) {
-		// Verified=false means the proof has not been validated against any
-		// block header. Verify() refuses to fabricate trust by attempting a
-		// fragile binary re-walk over Patricia nodes.
-		proof.Verified = false
 		if proof.Verify() {
-			t.Errorf("Verify() must return false when Verified=false")
+			t.Errorf("Verify() must NOT trust the Verified flag without a proof node set")
 		}
 	})
 
-	t.Run("MalformedStructureRejected", func(t *testing.T) {
-		// Even with Verified=false the fallback path runs basic structural
-		// checks. ProofHashes/ProofDirections length mismatch is a clearly
-		// broken proof and must reject.
-		malformed := *proof
-		malformed.Verified = false
-		malformed.ProofHashes = [][32]byte{proofHash, proofHash} // 2 hashes vs 1 direction
-		if malformed.Verify() {
-			t.Errorf("Verify() must reject ProofHashes/ProofDirections length mismatch")
+	t.Run("EmptyProofSetRejected", func(t *testing.T) {
+		proof.Verified = false
+		proof.ProofNodes = nil
+		if proof.Verify() {
+			t.Errorf("Verify() must return false when there is no proof set to verify")
 		}
 	})
 
-	t.Logf("PASS: Verify() honours the construction-time Verified flag")
+	t.Logf("PASS: Verify() performs independent verification and does not trust a flag")
 }
 
-// TestMerkleProof_TamperDetection — superseded.
+// TestMerkleProof_TamperDetection — RB-2.
 //
-// The previous version asserted that Verify() detects tampered LeafHash /
-// ProofHashes / ExpectedRoot. This is impossible by design: Verify() is a
-// Patricia-trie wrapper that trusts the construction-time Verified flag
-// (see TestMerkleProof_Verification doc). When Verified=true, Verify()
-// returns true regardless of post-construction byte tampering — re-running
-// the binary walk would always reject Patricia nodes, so there is no honest
-// re-verification path that could detect tampering.
-//
-// Tamper detection that DOES matter on the V6 EVM submission path:
-// computeV6MerkleProofForAdi + walking it via sortedHash. Those properties
-// are covered byTestComputeV6MerkleProofForAdi_TamperedProofRejectsWalk in
-// bundleid_v6_test.go.
+// Verify() now performs independent go-ethereum trie.VerifyProof over the raw proof
+// node set, so post-construction tampering IS detected (unlike the old flag-trusting
+// wrapper). The concrete tamper cases — flipped proof node, swapped leaf, wrong
+// ExpectedRoot, empty proof set — are covered against a real Patricia trie in
+// merkle_inclusion_rb2_test.go. This placeholder documents that the property now holds.
 func TestMerkleProof_TamperDetection(t *testing.T) {
-	t.Skip("MerkleInclusionProof.Verify() is a Patricia-trie wrapper that " +
-		"trusts the construction-time Verified flag; tamper detection on the " +
-		"V6 path is covered by TestComputeV6MerkleProofForAdi_TamperedProofRejectsWalk")
+	t.Log("tamper detection asserted in merkle_inclusion_rb2_test.go (RB-2 trustless Verify)")
 }
 
 // =============================================================================

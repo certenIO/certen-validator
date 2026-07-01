@@ -97,6 +97,14 @@ type ParsedCCLeg struct {
 		Address          string `json:"address"`
 		FunctionSelector string `json:"functionSelector"`
 	} `json:"anchorContract"`
+	// RB-1: user-signed executionPayload carrying the raw calldata for arbitrary
+	// contract calls (empty/"0x" ⇒ native transfer). keccak256(callData)==dataHash.
+	ExecutionPayload *struct {
+		Target   string `json:"target"`
+		Value    string `json:"value"`
+		CallData string `json:"callData"`
+		DataHash string `json:"dataHash"`
+	} `json:"executionPayload,omitempty"`
 }
 
 // =============================================================================
@@ -199,13 +207,27 @@ func (b *ExecutionCommitmentBuilder) BuildFromIntent(
 		}
 	}
 
+	// RB-1: decode the user-signed calldata (empty for native transfers) so the
+	// commitment binds keccak256(callData) rather than a zero hash.
+	var finalCallData []byte
+	if leg.ExecutionPayload != nil && leg.ExecutionPayload.CallData != "" {
+		decoded, err := decodeHexBytes(leg.ExecutionPayload.CallData)
+		if err != nil {
+			return nil, fmt.Errorf("invalid executionPayload.callData hex: %w", err)
+		}
+		finalCallData = decoded
+	}
+	var callDataHash [32]byte
+	copy(callDataHash[:], crypto.Keccak256(finalCallData))
+
 	commitment := &FullExecutionCommitment{
-		IntentID:    intentID,
-		BundleID:    bundleID,
-		TargetChain: leg.Chain,
-		ChainID:     leg.ChainID,
-		FinalTarget: finalTarget,
-		FinalValue:  finalValue,
+		IntentID:      intentID,
+		BundleID:      bundleID,
+		TargetChain:   leg.Chain,
+		ChainID:       leg.ChainID,
+		FinalTarget:   finalTarget,
+		FinalValue:    finalValue,
+		FinalCallData: finalCallData, // RB-1: real calldata (empty for native)
 	}
 
 	// Build Step 1: createAnchor commitment
@@ -227,12 +249,17 @@ func (b *ExecutionCommitmentBuilder) BuildFromIntent(
 	}
 
 	// Build Step 3: executeWithGovernance commitment
+	// RB-1: FunctionSelector stays the OUTER executeWithGovernance selector (used by
+	// VerifyAgainstResults to match the on-chain tx). CallDataHash binds the INNER
+	// calldata (keccak256 includes its 4-byte selector), so tampering with the executed
+	// call changes the commitment hash — strictly stronger than binding just callData[:4].
 	commitment.ExecuteGovernanceCommitment = &StepCommitment{
 		StepNumber:       3,
 		StepName:         "executeWithGovernance",
 		TargetContract:   anchorContract,
 		FunctionSelector: b.functionSelectors["executeWithGovernance"],
-		ExpectedValue:    finalValue, // This is where ETH is forwarded
+		ExpectedValue:    finalValue,   // This is where ETH is forwarded
+		CallDataHash:     callDataHash, // RB-1: keccak256(inner calldata); was always zero before
 	}
 
 	// Build expected events

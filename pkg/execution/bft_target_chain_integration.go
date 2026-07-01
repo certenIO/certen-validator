@@ -185,6 +185,13 @@ func (btce *BFTTargetChainExecutor) ExtractExecutionParams(
 				Address          string `json:"address"`
 				FunctionSelector string `json:"functionSelector"`
 			} `json:"anchorContract"`
+			// RB-1: carry the user-signed calldata for arbitrary contract calls.
+			ExecutionPayload *struct {
+				Target   string `json:"target"`
+				Value    string `json:"value"`
+				CallData string `json:"callData"`
+				DataHash string `json:"dataHash"`
+			} `json:"executionPayload,omitempty"`
 		} `json:"legs"`
 	}
 
@@ -233,13 +240,23 @@ func (btce *BFTTargetChainExecutor) ExtractExecutionParams(
 		return nil, fmt.Errorf("no anchor contract address in intent or environment")
 	}
 
+	// RB-1: real calldata for arbitrary contract calls; empty for native transfers.
+	callData := []byte{}
+	if leg.ExecutionPayload != nil && leg.ExecutionPayload.CallData != "" {
+		decoded, err := decodeHexBytes(leg.ExecutionPayload.CallData)
+		if err != nil {
+			return nil, fmt.Errorf("invalid executionPayload.callData hex: %w", err)
+		}
+		callData = decoded
+	}
+
 	params := &ExtractedExecutionParams{
 		Chain:          leg.Chain,
 		ChainID:        leg.ChainID,
 		AnchorContract: common.HexToAddress(anchorContractAddr),
 		FinalTarget:    common.HexToAddress(leg.To),
 		FinalValue:     finalValue,
-		CallData:       []byte{}, // ETH transfer has empty calldata
+		CallData:       callData, // RB-1: real calldata (empty for native ETH transfer)
 		SourceAddress:  common.HexToAddress(leg.From),
 	}
 
@@ -951,6 +968,17 @@ type LegExecution struct {
 	Chain         string         // Chain name (e.g., "ethereum sepolia", "arbitrum sepolia")
 	SourceAddress common.Address // User's Abstract Account address (from leg.From)
 	AccountOwner  common.Address // Owner wallet address for account factory deployment
+	// RB-4: events the user signed as required proof of a contract call's success.
+	// Present only for contract-call legs (Data non-empty). The validator refuses to
+	// attest success unless every one appears in the inclusion-proven receipt logs.
+	ExpectedEvents []ExpectedEvent
+}
+
+// IsContractCall reports whether this leg executes arbitrary calldata (a contract
+// call) rather than a plain native/ERC-20 value transfer. RB-4: contract calls are
+// gated on their committed events, not merely on non-revert.
+func (l LegExecution) IsContractCall() bool {
+	return len(l.Data) > 0
 }
 
 // extractAllLegsFromIntent extracts ALL legs from intent for multi-leg execution
@@ -981,9 +1009,18 @@ func (btce *BFTTargetChainExecutor) extractAllLegsFromIntent(legacyIntent *inten
 			ExecutionPayload *struct {
 				Target              string `json:"target"`
 				Value               string `json:"value"`
+				// RB-1: raw calldata (0x-hex) executed verbatim via target.call{value}(data).
+				// "0x"/absent ⇒ native transfer (empty calldata). keccak256(callData)==dataHash.
+				CallData            string `json:"callData"`
 				DataHash            string `json:"dataHash"`
 				ChainID             int64  `json:"chainId"`
 				ExecutionCommitment string `json:"executionCommitment"`
+				// RB-4: events the call must emit for the validator to attest success.
+				ExpectedEvents []struct {
+					Contract string `json:"contract"`
+					Topic0   string `json:"topic0"`
+					DataHash string `json:"dataHash"`
+				} `json:"expectedEvents,omitempty"`
 			} `json:"executionPayload,omitempty"`
 		} `json:"legs"`
 	}
@@ -1046,6 +1083,29 @@ func (btce *BFTTargetChainExecutor) extractAllLegsFromIntent(legacyIntent *inten
 			accountOwner = parseChainAddress(leg.AccountOwner)
 		}
 
+		// RB-1: Decode the raw calldata carried in the user-signed executionPayload.
+		// These are the EXACT bytes executed on-chain via target.call{value}(data), and
+		// keccak256(callData) is what the executionCommitment binds. Empty/"0x"/absent ⇒
+		// native transfer (empty calldata), preserving prior behavior for native legs.
+		var legData []byte
+		if leg.ExecutionPayload != nil && leg.ExecutionPayload.CallData != "" {
+			decoded, err := decodeHexBytes(leg.ExecutionPayload.CallData)
+			if err != nil {
+				btce.logger.Printf("🚨 [CRITICAL-003] Invalid callData hex for leg %s: %v — rejecting intent", legID, err)
+				return nil
+			}
+			legData = decoded
+		}
+
+		// Feature gate: arbitrary contract calls (non-empty inner calldata) are OFF by
+		// default. Unless CERTEN_ALLOW_CONTRACT_CALLS is enabled, refuse to execute a
+		// leg carrying calldata — the validator only performs native/ERC-20 transfers.
+		// This fails closed so enabling proof-gated calls is a deliberate deployment act.
+		if len(legData) > 0 && !contractCallsAllowed() {
+			btce.logger.Printf("🚫 [FEATURE-GATE] Leg %s carries contract calldata but CERTEN_ALLOW_CONTRACT_CALLS is disabled — rejecting intent", legID)
+			return nil
+		}
+
 		// CRITICAL-003: If executionPayload is present in the user-signed blob,
 		// verify the commitment is consistent with the leg's execution parameters.
 		// This ensures the validator cannot alter target/value/data vs what was signed.
@@ -1089,7 +1149,7 @@ func (btce *BFTTargetChainExecutor) extractAllLegsFromIntent(legacyIntent *inten
 					v.SetString(leg.ExecutionPayload.Value, 10)
 					return v
 				}(),
-				[]byte{}, // Native transfer: empty calldata (dataHash was pre-computed)
+				legData, // RB-1: real calldata (empty for native); keccak256(legData) must match producer's dataHash
 			)
 			storedCommitment := common.HexToHash(leg.ExecutionPayload.ExecutionCommitment)
 			if expectedCommitment != storedCommitment {
@@ -1107,15 +1167,34 @@ func (btce *BFTTargetChainExecutor) extractAllLegsFromIntent(legacyIntent *inten
 		if accountOwner != (common.Address{}) {
 			btce.logger.Printf("      accountOwner=%s", accountOwner.Hex())
 		}
+		// RB-4: carry the user-signed expected events for contract-call legs.
+		var expectedEvents []ExpectedEvent
+		if leg.ExecutionPayload != nil {
+			for _, ev := range leg.ExecutionPayload.ExpectedEvents {
+				if ev.Topic0 == "" {
+					continue
+				}
+				ee := ExpectedEvent{
+					Contract: common.HexToAddress(ev.Contract),
+					Topic0:   common.HexToHash(ev.Topic0),
+				}
+				if ev.DataHash != "" {
+					ee.DataHash = [32]byte(common.HexToHash(ev.DataHash))
+				}
+				expectedEvents = append(expectedEvents, ee)
+			}
+		}
+
 		legs = append(legs, LegExecution{
-			LegID:         legID,
-			Target:        targetAddress,
-			Value:         value,
-			Data:          []byte{},
-			ChainID:       chainID,
-			Chain:         chainName,
-			SourceAddress: sourceAddress,
-			AccountOwner:  accountOwner,
+			LegID:          legID,
+			Target:         targetAddress,
+			Value:          value,
+			Data:           legData, // RB-1: real calldata (empty for native transfers)
+			ChainID:        chainID,
+			Chain:          chainName,
+			SourceAddress:  sourceAddress,
+			AccountOwner:   accountOwner,
+			ExpectedEvents: expectedEvents, // RB-4
 		})
 	}
 
@@ -1146,6 +1225,33 @@ func parseChainAddress(addr string) common.Address {
 		}
 	}
 	return common.HexToAddress(addr)
+}
+
+// contractCallsAllowed reports whether the validator is configured to execute arbitrary
+// contract calls (non-empty inner calldata). Default OFF — proof-gated arbitrary calls
+// (RB-0..RB-5) are a deliberate opt-in per deployment via CERTEN_ALLOW_CONTRACT_CALLS.
+// The complementary on-chain control is the per-(target,selector) authority allowlist on
+// CertenAccountV4 (setOperationRequirement), which scopes WHICH calls an account may make.
+func contractCallsAllowed() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("CERTEN_ALLOW_CONTRACT_CALLS"))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+// decodeHexBytes decodes a hex string (with or without "0x" prefix) into bytes.
+// "" and "0x" decode to an empty (non-nil) slice. RB-1: used to parse the raw
+// executionPayload.callData so keccak256(result) matches the producer's dataHash.
+func decodeHexBytes(s string) ([]byte, error) {
+	s = strings.TrimSpace(s)
+	s = strings.TrimPrefix(s, "0x")
+	s = strings.TrimPrefix(s, "0X")
+	if s == "" {
+		return []byte{}, nil
+	}
+	return hex.DecodeString(s)
 }
 
 // extractTargetParamsFromIntent extracts target address, value, and calldata from intent (first leg only)

@@ -9,6 +9,7 @@
 package execution
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -20,6 +21,10 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/ethdb/memorydb"
+	"github.com/ethereum/go-ethereum/rlp"
+	"github.com/ethereum/go-ethereum/trie"
 )
 
 // =============================================================================
@@ -93,6 +98,9 @@ type ExternalChainResult struct {
 
 	TxInclusionProof      *MerkleInclusionProof `json:"tx_inclusion_proof"`
 	ReceiptInclusionProof *MerkleInclusionProof `json:"receipt_inclusion_proof"`
+
+	// RB-5: optional storage-slot state proofs, independently verifiable against StateRoot.
+	StateProofs []*StateProof `json:"state_proofs,omitempty"`
 
 	// ==========================================================================
 	// TRANSACTION DETAILS
@@ -204,6 +212,16 @@ type MerkleInclusionProof struct {
 
 	// Verified flag (set after verification)
 	Verified bool `json:"verified"`
+
+	// RB-2: the raw RLP-encoded Patricia-trie proof nodes (the proof set), enabling
+	// INDEPENDENT re-verification off the original RPC via go-ethereum trie.VerifyProof.
+	// Nodes are keyed on verify by keccak256(node) — the construction-time key is never
+	// trusted. Empty ⇒ Verify() fails closed (cannot trustlessly verify).
+	ProofNodes [][]byte `json:"proof_nodes,omitempty"`
+
+	// RB-2: the exact leaf value (RLP(tx) or RLP(receipt)) the proof must resolve to
+	// at the key. VerifyProof's returned value is asserted byte-equal to this.
+	LeafValue []byte `json:"leaf_value,omitempty"`
 }
 
 // =============================================================================
@@ -369,33 +387,61 @@ func (r *ExternalChainResult) GetLogsByTopic(topic common.Hash) []LogEntry {
 // MERKLE PROOF VERIFICATION
 // =============================================================================
 
-// Verify verifies the Merkle inclusion proof
+// Verify independently verifies the Ethereum Patricia-Merkle-trie inclusion proof.
 //
-// Note: Ethereum uses Patricia Merkle Tries (not simple binary Merkle trees).
-// The proof is validated during construction when the trie root matches the
-// block's TxHash/ReceiptHash. Re-verification is complex and would require
-// full Patricia trie verification using go-ethereum's trie.VerifyProof.
+// RB-2: This no longer trusts a construction-time flag. It rebuilds the proof node
+// set in-memory (keyed by keccak256(node), recomputed from the node bytes so a
+// caller-supplied key is never trusted) and runs go-ethereum's trie.VerifyProof,
+// which walks from ExpectedRoot and errors if any node is missing/altered or the
+// path doesn't reconcile to the root. The returned leaf value is then asserted to
+// equal the exact tx/receipt RLP (LeafValue) and to hash to LeafHash.
 //
-// For the current trust model (trusted Ethereum RPC node + 12 confirmations),
-// we trust the construction-time verification. The `Verified` flag is set
-// to true during construction if the proof was successfully generated from
-// the block's actual transaction/receipt trie.
+// Trustlessness depends on ExpectedRoot being bound to the block header's
+// TxHash/ReceiptHash (done at construction in constructTx/ReceiptInclusionProof),
+// and the header itself being bound to receipt.BlockHash (checked in
+// FromEthereumReceipt). Fails closed on any error or missing proof set.
 func (p *MerkleInclusionProof) Verify() bool {
-	// Trust construction-time verification for Patricia Merkle Tries
-	// The proof was validated during construction when trie root matched block header
-	// A binary Merkle verification algorithm would be incorrect for Patricia tries
-	if p.Verified {
-		return true
-	}
-
-	// Fallback: if proof wasn't verified during construction, check basic structure
-	if len(p.ProofHashes) != len(p.ProofDirections) {
+	// Without the raw proof node set we cannot trustlessly verify. Fail closed.
+	if len(p.ProofNodes) == 0 {
 		return false
 	}
 
-	// For unverified proofs, we cannot re-verify Patricia tries with binary algorithm
-	// Return false to indicate verification was not completed during construction
-	return false
+	// Rebuild the trie node DB, recomputing every key as keccak256(node) so we
+	// never trust caller-provided node keys.
+	proofDB := memorydb.New()
+	for _, node := range p.ProofNodes {
+		if len(node) == 0 {
+			return false
+		}
+		key := crypto.Keccak256(node)
+		if err := proofDB.Put(key, node); err != nil {
+			return false
+		}
+	}
+
+	// The trie key is the RLP encoding of the leaf index (tx/receipt index in block),
+	// matching how the trie was built and proven at construction time.
+	key, err := rlp.EncodeToBytes(uint(p.LeafIndex))
+	if err != nil {
+		return false
+	}
+
+	// Independent Patricia-trie verification against the expected (header-bound) root.
+	value, err := trie.VerifyProof(common.Hash(p.ExpectedRoot), key, proofDB)
+	if err != nil || value == nil {
+		return false
+	}
+
+	// The proven value must be the exact tx/receipt RLP we committed to...
+	if p.LeafValue != nil && !bytes.Equal(value, p.LeafValue) {
+		return false
+	}
+	// ...and must hash to the committed leaf hash.
+	if crypto.Keccak256Hash(value) != common.Hash(p.LeafHash) {
+		return false
+	}
+
+	return true
 }
 
 // =============================================================================
@@ -524,6 +570,15 @@ type ExpectedEvent struct {
 	DataHash [32]byte       `json:"data_hash,omitempty"` // Optional: hash of expected data
 }
 
+// ExpectedStateSlot is a committed storage-slot effect (RB-5): after execution, the
+// contract `Account`'s storage slot `Slot` must hold `Value`, proven against the
+// finalized block stateRoot.
+type ExpectedStateSlot struct {
+	Account common.Address `json:"account"`
+	Slot    common.Hash    `json:"slot"`
+	Value   common.Hash    `json:"value"`
+}
+
 // =============================================================================
 // EXECUTION COMMITMENT
 // =============================================================================
@@ -545,6 +600,19 @@ type ExecutionCommitment struct {
 	FunctionSelector [4]byte       `json:"function_selector"`
 	CallDataHash    [32]byte       `json:"call_data_hash"`
 	ExpectedValue   *big.Int       `json:"expected_value"`
+
+	// RB-4: contract-call event gate. IsContractCall is true when the leg executes a
+	// non-empty inner calldata (target.call{value}(data)). For such legs the validator
+	// refuses to attest success unless EVERY ExpectedCallEvent appears in the (inclusion-
+	// proven, quorum-attested) receipt logs — non-revert alone is insufficient. Native
+	// value transfers leave these unset and keep the exact-value check.
+	IsContractCall    bool            `json:"is_contract_call,omitempty"`
+	ExpectedCallEvents []ExpectedEvent `json:"expected_call_events,omitempty"`
+
+	// RB-5: optional committed storage-slot effects. When present, the validator refuses
+	// to attest unless a state proof shows each slot took the committed value at the
+	// finalized stateRoot. Opt-in per intent — the strongest effect proof.
+	ExpectedState []ExpectedStateSlot `json:"expected_state,omitempty"`
 
 	// Commitment hash (computed from above)
 	CommitmentHash  [32]byte `json:"commitment_hash"`
@@ -625,6 +693,36 @@ func (c *ExecutionCommitment) VerifyAgainstResult(result *ExternalChainResult) b
 			return false
 		}
 		fmt.Printf("✅ [COMMITMENT-VERIFY] Value matches: %s\n", c.ExpectedValue.String())
+	}
+
+	// RB-4: enforce the committed event(s) for contract calls. A call "succeeds" only if
+	// the effect it authorized (an emitted event) is present in the receipt logs; a
+	// status==1 non-revert is necessary but NOT sufficient. These logs are bound by
+	// logs_hash inside the quorum-attested ResultHash and are inclusion-proven (RB-2),
+	// so requiring the event here makes success cryptographically meaningful.
+	if c.isContractCallExpected() {
+		events := c.expectedEventsForGate()
+		if len(events) == 0 {
+			fmt.Printf("❌ [COMMITMENT-VERIFY] FAILED: contract call has no committed expected events — refusing to attest\n")
+			return false
+		}
+		if !c.verifyExpectedEventsStrict(result, events) {
+			fmt.Printf("❌ [COMMITMENT-VERIFY] FAILED: committed contract-call event(s) not found in inclusion-proven logs\n")
+			return false
+		}
+		fmt.Printf("✅ [COMMITMENT-VERIFY] Committed contract-call event(s) verified in logs\n")
+	}
+
+	// RB-5: enforce committed storage-slot effects (opt-in). Each committed slot must be
+	// proven — against the finalized block stateRoot — to hold exactly the committed
+	// value. This is the strongest effect proof: it binds the on-chain state itself, not
+	// just an emitted event.
+	if len(c.ExpectedState) > 0 {
+		if !c.verifyExpectedState(result) {
+			fmt.Printf("❌ [COMMITMENT-VERIFY] FAILED: committed state slot(s) not proven at stateRoot\n")
+			return false
+		}
+		fmt.Printf("✅ [COMMITMENT-VERIFY] Committed state slot(s) proven against stateRoot\n")
 	}
 
 	// If comprehensive data is available, perform enhanced verification
@@ -765,6 +863,128 @@ func (c *ExecutionCommitment) verifyExpectedEvents(result *ExternalChainResult, 
 		}
 	}
 
+	return true
+}
+
+// =============================================================================
+// RB-4: CONTRACT-CALL EVENT GATE
+// =============================================================================
+
+// isContractCallExpected reports whether this commitment is for an arbitrary contract
+// call whose success must be proven by an emitted event. Reads the typed flag, or the
+// ComprehensiveData["isContractCall"] map fallback for the map-driven flows.
+func (c *ExecutionCommitment) isContractCallExpected() bool {
+	if c.IsContractCall {
+		return true
+	}
+	if c.ComprehensiveData != nil {
+		if b, ok := c.ComprehensiveData["isContractCall"].(bool); ok {
+			return b
+		}
+	}
+	return false
+}
+
+// expectedEventsForGate returns the committed events to enforce, from the typed field
+// or the ComprehensiveData["expectedEvents"] map fallback (which the producer emits in
+// the user-signed executionPayload).
+func (c *ExecutionCommitment) expectedEventsForGate() []ExpectedEvent {
+	if len(c.ExpectedCallEvents) > 0 {
+		return c.ExpectedCallEvents
+	}
+	if c.ComprehensiveData != nil {
+		if raw, ok := c.ComprehensiveData["expectedEvents"].([]interface{}); ok {
+			return parseExpectedEventsFromMap(raw)
+		}
+	}
+	return nil
+}
+
+// parseExpectedEventsFromMap converts the JSON-roundtripped []{contract,topic0,dataHash}
+// into typed ExpectedEvent values. Entries lacking a topic0 are skipped.
+func parseExpectedEventsFromMap(raw []interface{}) []ExpectedEvent {
+	out := make([]ExpectedEvent, 0, len(raw))
+	for _, item := range raw {
+		m, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		topic0, _ := m["topic0"].(string)
+		if topic0 == "" {
+			continue
+		}
+		contract, _ := m["contract"].(string)
+		ev := ExpectedEvent{
+			Contract: common.HexToAddress(contract),
+			Topic0:   common.HexToHash(topic0),
+		}
+		if dh, _ := m["dataHash"].(string); dh != "" {
+			ev.DataHash = [32]byte(common.HexToHash(dh))
+		}
+		out = append(out, ev)
+	}
+	return out
+}
+
+// verifyExpectedEventsStrict requires EVERY committed event to be present in the receipt
+// logs, matched on emitting contract + topic0 (+ optional keccak256 of the non-indexed
+// data). Missing any committed event ⇒ the call is NOT considered successful.
+func (c *ExecutionCommitment) verifyExpectedEventsStrict(result *ExternalChainResult, events []ExpectedEvent) bool {
+	var zeroHash [32]byte
+	for _, exp := range events {
+		found := false
+		for _, lg := range result.Logs {
+			if len(lg.Topics) == 0 {
+				continue
+			}
+			if lg.Address != exp.Contract {
+				continue
+			}
+			if lg.Topics[0] != exp.Topic0 {
+				continue
+			}
+			// Optional: bind the non-indexed event data.
+			if exp.DataHash != zeroHash {
+				if crypto.Keccak256Hash(lg.Data) != common.Hash(exp.DataHash) {
+					continue
+				}
+			}
+			found = true
+			break
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+// verifyExpectedState (RB-5) requires, for every committed slot, a StateProof in the
+// result that verifies against the block stateRoot AND proves the committed value.
+// Missing proof, failed verification, or value mismatch ⇒ reject.
+func (c *ExecutionCommitment) verifyExpectedState(result *ExternalChainResult) bool {
+	for _, want := range c.ExpectedState {
+		var proof *StateProof
+		for _, sp := range result.StateProofs {
+			if sp != nil && sp.Account == want.Account && sp.Slot == want.Slot {
+				proof = sp
+				break
+			}
+		}
+		if proof == nil {
+			fmt.Printf("❌ [STATE-PROOF] No proof for account %s slot %s\n", want.Account.Hex(), want.Slot.Hex())
+			return false
+		}
+		if proof.Value != want.Value {
+			fmt.Printf("❌ [STATE-PROOF] Value mismatch for %s[%s]: committed %s, proven %s\n",
+				want.Account.Hex(), want.Slot.Hex(), want.Value.Hex(), proof.Value.Hex())
+			return false
+		}
+		if !proof.Verify(result.StateRoot) {
+			fmt.Printf("❌ [STATE-PROOF] Proof failed to verify against stateRoot %s\n", result.StateRoot.Hex())
+			return false
+		}
+	}
 	return true
 }
 

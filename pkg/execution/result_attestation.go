@@ -14,6 +14,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"math/big"
 	"sort"
 	"sync"
@@ -158,6 +159,20 @@ func (a *AggregatedAttestation) CheckThreshold() bool {
 
 	a.ThresholdMet = a.SignedVotingPower.Cmp(threshold) >= 0
 	return a.ThresholdMet
+}
+
+// MeetsSupermajority reports whether the signed voting power is at least 2/3 of the
+// total — the BFT quorum required to treat a result as quorum-attested. RB-3 gates
+// finalization on this hard floor in addition to the configured threshold, so a
+// forked minority (< 1/3) can never produce a finalized attestation for its result.
+func (a *AggregatedAttestation) MeetsSupermajority() bool {
+	if a.TotalVotingPower == nil || a.SignedVotingPower == nil || a.TotalVotingPower.Sign() == 0 {
+		return false
+	}
+	// signed >= total * 2/3  ⇔  signed*3 >= total*2
+	lhs := new(big.Int).Mul(a.SignedVotingPower, big.NewInt(3))
+	rhs := new(big.Int).Mul(a.TotalVotingPower, big.NewInt(2))
+	return lhs.Cmp(rhs) >= 0
 }
 
 // ToHex returns a hex representation for logging
@@ -463,6 +478,13 @@ func (c *AttestationCollector) AddAttestation(attestation *ResultAttestation) er
 	attestation.Verified = true
 	c.attestations[attestation.ResultHash][attestation.ValidatorID] = attestation
 
+	// RB-3: fork detection — surface when a bundle has attestations for more than one
+	// distinct ResultHash (validators disagree on the external result). Only a >=2/3
+	// quorum on a single ResultHash can finalize, so this is a warning, not a failure.
+	if distinct := c.countDistinctResultsForBundleLocked(attestation.BundleID); distinct > 1 {
+		log.Printf("⚠️ [ATTEST] Bundle %x has %d divergent result hashes — no single-RPC result can finalize without a >=2/3 quorum", attestation.BundleID[:8], distinct)
+	}
+
 	// Try to aggregate
 	agg, thresholdMet := c.tryAggregate(attestation.ResultHash)
 	if thresholdMet && c.onThresholdMet != nil {
@@ -522,8 +544,21 @@ func (c *AttestationCollector) tryAggregate(resultHash [32]byte) (*AggregatedAtt
 	}
 	agg.MessageConsistencyVerified = messageConsistent
 
-	// Collect signatures and compute aggregate
+	// RB-3: HARD-FAIL on any divergence in the signed message. Every attestation in
+	// this bucket already shares the same ResultHash (the map key), which binds
+	// block_hash+receipts_root+state_root+status; an inconsistent MessageHash means
+	// bundleID/blockNumber disagreement. Aggregating BLS signatures over divergent
+	// messages would produce a cryptographically meaningless aggregate, so we refuse
+	// to build one and never finalize this bucket.
+	if !messageConsistent {
+		log.Printf("🚨 [ATTEST] Divergent message hashes for result %x — refusing to aggregate (possible forked RPC / tampering)", resultHash[:8])
+		agg.Finalized = false
+		return agg, false
+	}
+
+	// Collect signatures, public keys, and voting power for the consistent set.
 	var signatures [][]byte
+	var publicKeys [][]byte
 	var validators []common.Address
 	signedPower := big.NewInt(0)
 	bitfield := make([]byte, (c.validatorSet.ValidatorCount+7)/8)
@@ -544,6 +579,7 @@ func (c *AttestationCollector) tryAggregate(resultHash [32]byte) (*AggregatedAtt
 		}
 
 		signatures = append(signatures, att.BLSSignature)
+		publicKeys = append(publicKeys, validator.BLSPublicKey)
 		validators = append(validators, att.ValidatorAddress)
 
 		// Set bit in bitfield
@@ -567,18 +603,71 @@ func (c *AttestationCollector) tryAggregate(resultHash [32]byte) (*AggregatedAtt
 		agg.Attestations[i] = *a
 	}
 
-	// Check threshold
-	wasMetBefore := agg.ThresholdMet
-	thresholdMet := agg.CheckThreshold()
+	// RB-3: require a BFT supermajority (>= 2/3 voting power) — not merely the configured
+	// threshold — before a quorum-attested result can finalize. Reaching this over a
+	// ResultHash bucket means >= 2/3 of power independently agreed on the exact
+	// block_hash + receipts_root + status, with no trusted single RPC.
+	// Guard on the actual finalization state (not CheckThreshold's side-effect flag,
+	// which may already be true at the configured threshold before supermajority holds),
+	// so finalization fires exactly once when the 2/3 quorum is first reached.
+	wasFinalizedBefore := agg.Finalized
+	thresholdMet := agg.CheckThreshold() && agg.MeetsSupermajority()
 
-	// Only finalize if threshold met AND message consistency verified
-	if thresholdMet && messageConsistent && !wasMetBefore {
+	// RB-3: defense-in-depth — the aggregate BLS signature MUST verify against the
+	// single agreed messageHash under the signing set's public keys before we treat
+	// the result as quorum-attested. This catches a forged/garbage aggregate even if
+	// the voting-power bookkeeping were somehow satisfied.
+	blsValid := false
+	if thresholdMet {
+		ok, err := VerifyAggregatedBLSSignature(agg.AggregateSignature, agg.MessageHash, publicKeys)
+		blsValid = ok && err == nil
+		if !blsValid {
+			log.Printf("🚨 [ATTEST] Aggregate BLS signature failed to verify for result %x: err=%v", resultHash[:8], err)
+		}
+	}
+
+	if thresholdMet && blsValid && !wasFinalizedBefore {
 		agg.Finalized = true
 		agg.FinalizedAt = time.Now()
 		return agg, true
 	}
 
 	return agg, false
+}
+
+// countDistinctResultsForBundleLocked counts the distinct ResultHashes attested for a
+// bundleID. Callers must hold c.mu. RB-3: >1 means validators diverged on the external
+// result (e.g. a forked/lying RPC); by construction only one such result can gather a
+// 2/3 quorum, so divergence is observable but never finalizes a forked result.
+func (c *AttestationCollector) countDistinctResultsForBundleLocked(bundleID [32]byte) int {
+	distinct := 0
+	for rh, byValidator := range c.attestations {
+		_ = rh
+		for _, att := range byValidator {
+			if att.BundleID == bundleID {
+				distinct++
+				break
+			}
+		}
+	}
+	return distinct
+}
+
+// DivergentResultHashes returns the distinct ResultHashes attested for a bundleID.
+// Length > 1 indicates cross-validator divergence on the external-chain result.
+func (c *AttestationCollector) DivergentResultHashes(bundleID [32]byte) [][32]byte {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	var out [][32]byte
+	for rh, byValidator := range c.attestations {
+		for _, att := range byValidator {
+			if att.BundleID == bundleID {
+				out = append(out, rh)
+				break
+			}
+		}
+	}
+	return out
 }
 
 // findValidator finds a validator by ID
