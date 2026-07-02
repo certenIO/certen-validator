@@ -1242,32 +1242,51 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 					commitMap["rawVerifyTxHashes"] = anchorRes.VerifyTxHash
 					commitMap["rawGovernanceTxHashes"] = anchorRes.GovernanceTxHash
 
-					// RB-2/RB-4/RB-5: surface the user-signed executionPayload (raw calldata +
-					// committed events/state) so the Phase 7 attestation gate can cryptographically
-					// verify the executed contract call. Only for contract-call legs (non-empty
-					// calldata). The governance tx is where target.call{value}(callData) ran, and
-					// its receipt logs carry the target's committed event via the internal call.
+					// RB-2/RB-4/RB-5: surface per-leg contract-call verification data so the
+					// Phase 7 attestation gate can cryptographically verify EACH executed call.
+					// Inspect ALL legs (not just leg 0) so a contract-call leg anywhere in a
+					// multi-leg intent is gated — otherwise a native leg 0 + call leg 1 would slip
+					// through. Each entry carries its chain (for per-chain-group matching), target,
+					// and committed events/state; the gate verifies the effect against that chain
+					// group's inclusion-proven receipt(s).
 					if ccEnv, ccErr := certenIntent.ParseCrossChain(); ccErr == nil && len(ccEnv.Legs) > 0 {
-						if ep := ccEnv.Legs[0].ExecutionPayload; ep != nil {
-							cd := strings.TrimSpace(ep.CallData)
-							if cd != "" && cd != "0x" && cd != "0X" {
-								commitMap["rbContractCall"] = true
-								commitMap["rbCallTarget"] = ep.Target
-								commitMap["rbCallValue"] = ep.Value
-								commitMap["rbExecutionTxHash"] = extractRawTxHash(anchorRes.GovernanceTxHash)
-								evs := make([]map[string]interface{}, 0, len(ep.ExpectedEvents))
-								for _, e := range ep.ExpectedEvents {
-									evs = append(evs, map[string]interface{}{"contract": e.Contract, "topic0": e.Topic0, "dataHash": e.DataHash})
-								}
-								commitMap["rbExpectedEvents"] = evs
-								sts := make([]map[string]interface{}, 0, len(ep.ExpectedState))
-								for _, s := range ep.ExpectedState {
-									sts = append(sts, map[string]interface{}{"account": s.Account, "slot": s.Slot, "value": s.Value})
-								}
-								commitMap["rbExpectedState"] = sts
-								bv.logger.Printf("🔒 [RB-GATE] Contract-call leg: Phase 7 will verify %d committed event(s) + %d state slot(s) on exec tx %v",
-									len(evs), len(sts), commitMap["rbExecutionTxHash"])
+						govByChain := parseMultiChainTxHashes(anchorRes.GovernanceTxHash)
+						rbLegs := make([]map[string]interface{}, 0, len(ccEnv.Legs))
+						for _, leg := range ccEnv.Legs {
+							ep := leg.ExecutionPayload
+							if ep == nil {
+								continue
 							}
+							cd := strings.TrimSpace(ep.CallData)
+							if cd == "" || cd == "0x" || cd == "0X" {
+								continue // native/ERC-20 leg — CRITICAL-003 already binds it, no event gate
+							}
+							chainKey := strings.ToLower(strings.ReplaceAll(leg.Chain, " ", "-"))
+							execTx := extractRawTxHash(anchorRes.GovernanceTxHash) // single-leg default
+							if hs := govByChain[chainKey]; len(hs) > 0 {
+								execTx = extractRawTxHash(hs[len(hs)-1]) // per-chain governance tx (last)
+							}
+							evs := make([]map[string]interface{}, 0, len(ep.ExpectedEvents))
+							for _, e := range ep.ExpectedEvents {
+								evs = append(evs, map[string]interface{}{"contract": e.Contract, "topic0": e.Topic0, "dataHash": e.DataHash})
+							}
+							sts := make([]map[string]interface{}, 0, len(ep.ExpectedState))
+							for _, s := range ep.ExpectedState {
+								sts = append(sts, map[string]interface{}{"account": s.Account, "slot": s.Slot, "value": s.Value})
+							}
+							rbLegs = append(rbLegs, map[string]interface{}{
+								"chainKey":       chainKey,
+								"target":         ep.Target,
+								"value":          ep.Value,
+								"execTxHash":     execTx,
+								"expectedEvents": evs,
+								"expectedState":  sts,
+							})
+						}
+						if len(rbLegs) > 0 {
+							commitMap["rbContractCall"] = true
+							commitMap["rbContractCallLegs"] = rbLegs
+							bv.logger.Printf("🔒 [RB-GATE] %d contract-call leg(s) flagged for Phase 7 verification", len(rbLegs))
 						}
 					}
 

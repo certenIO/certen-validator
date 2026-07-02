@@ -40,6 +40,38 @@ func TestRBGate_ParseExpectedEvents(t *testing.T) {
 	}
 }
 
+// Locks the per-leg descriptor parse used by the multi-leg gate: multiple contract-call
+// legs (one native leg omitted upstream), each with its own chain, events, and state,
+// survive a JSON roundtrip and reconstruct correctly.
+func TestRBGate_ParseContractCallLegs(t *testing.T) {
+	topic0 := crypto.Keccak256Hash([]byte("Pinged(bytes32,address,uint256)")).Hex()
+	legs := []interface{}{
+		map[string]interface{}{
+			"chainKey": "ethereum-sepolia", "target": "0xE3b7678231642e4de600C601Ff422654D17203f3",
+			"execTxHash": "0xaaaa", "expectedEvents": []interface{}{map[string]interface{}{"contract": "0xE3b7678231642e4de600C601Ff422654D17203f3", "topic0": topic0}},
+			"expectedState": []interface{}{},
+		},
+		map[string]interface{}{
+			"chainKey": "base-sepolia", "target": "0x000000000000000000000000000000000000bEEF",
+			"execTxHash": "0xbbbb", "expectedEvents": []interface{}{map[string]interface{}{"contract": "0x000000000000000000000000000000000000bEEF", "topic0": topic0}},
+			"expectedState": []interface{}{map[string]interface{}{"account": "0x000000000000000000000000000000000000bEEF", "slot": "0x07", "value": "0x01"}},
+		},
+	}
+	got := parseRBContractCallLegs(legs)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 legs, got %d", len(got))
+	}
+	if got[0].chainKey != "ethereum-sepolia" || got[0].execTxHash != "0xaaaa" || len(got[0].events) != 1 {
+		t.Errorf("leg0 parse wrong: %+v", got[0])
+	}
+	if got[1].chainKey != "base-sepolia" || len(got[1].events) != 1 || len(got[1].state) != 1 {
+		t.Errorf("leg1 parse wrong: %+v", got[1])
+	}
+	if normalizeRBChainKey("Ethereum Sepolia") != "ethereum-sepolia" {
+		t.Errorf("chain-key normalization wrong: %s", normalizeRBChainKey("Ethereum Sepolia"))
+	}
+}
+
 func TestRBGate_ParseExpectedState(t *testing.T) {
 	acct := "0x5FbDB2315678afecb367f032d93F642f64180aa3"
 	slot := "0x0000000000000000000000000000000000000000000000000000000000000007"

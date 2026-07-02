@@ -635,14 +635,30 @@ func (o *UnifiedOrchestrator) verifyContractCallGate(ctx context.Context, cycle 
 	if isCall, _ := cm["rbContractCall"].(bool); !isCall {
 		return nil
 	}
-	execTx, _ := cm["rbExecutionTxHash"].(string)
-	if strings.TrimSpace(execTx) == "" {
-		return fmt.Errorf("contract-call intent missing execution tx hash")
+	legs := parseRBContractCallLegs(cm["rbContractCallLegs"])
+	if len(legs) == 0 {
+		return nil
 	}
-	events := parseRBExpectedEvents(cm["rbExpectedEvents"])
-	state := parseRBExpectedState(cm["rbExpectedState"])
-	if len(events) == 0 {
-		return fmt.Errorf("contract-call intent committed no events — refusing to attest (success would be indistinguishable from a no-op non-revert)")
+
+	// Select the contract-call leg(s) that belong to THIS chain group's cycle. Match by
+	// normalized chain key OR by the leg's exec tx being one this cycle observed; a lone
+	// call leg (single-leg intent) always applies. A chain group with no call leg (e.g. a
+	// native leg on this chain) is a legitimate no-op here.
+	targetChain := normalizeRBChainKey(cycle.Request.TargetChain)
+	txSet := make(map[string]bool)
+	for _, h := range cycle.Request.TxHashes {
+		txSet[strings.ToLower(strings.TrimPrefix(h, "0x"))] = true
+	}
+	var applicable []rbCallLeg
+	for _, l := range legs {
+		matchChain := l.chainKey != "" && normalizeRBChainKey(l.chainKey) == targetChain
+		matchTx := l.execTxHash != "" && txSet[strings.ToLower(strings.TrimPrefix(l.execTxHash, "0x"))]
+		if matchChain || matchTx || len(legs) == 1 {
+			applicable = append(applicable, l)
+		}
+	}
+	if len(applicable) == 0 {
+		return nil
 	}
 
 	cfg := chainStrategy.Config()
@@ -650,7 +666,6 @@ func (o *UnifiedOrchestrator) verifyContractCallGate(ctx context.Context, cycle 
 		return fmt.Errorf("no RPC endpoint for chain %s to verify contract call", chainStrategy.ChainID())
 	}
 	chainID, _ := strconv.ParseInt(chainStrategy.ChainID(), 10, 64)
-
 	observer, err := NewExternalChainObserver(&ExternalChainObserverConfig{
 		EthereumRPC:           cfg.RPC,
 		ChainID:               chainID,
@@ -662,20 +677,97 @@ func (o *UnifiedOrchestrator) verifyContractCallGate(ctx context.Context, cycle 
 		return fmt.Errorf("build observer for contract-call gate: %w", err)
 	}
 
-	fmt.Printf("🔒 [RB-GATE] Verifying proof-gated contract call: tx=%s events=%d state=%d chain=%s\n",
-		execTx, len(events), len(state), chainStrategy.ChainID())
-	result, err := observer.VerifyExecutedCall(ctx, common.HexToHash(execTx), events, state)
-	if err != nil {
-		fmt.Printf("❌ [RB-GATE] Contract-call verification FAILED: %v\n", err)
-		return err
+	// Verify EVERY applicable call leg. Candidate txs: the leg's declared exec tx first,
+	// then all of this chain group's observed txs (robust to imperfect exec-tx threading —
+	// the create/verify txs simply fail the event check and we move on to the real one).
+	for _, l := range applicable {
+		if len(l.events) == 0 {
+			return fmt.Errorf("contract-call leg (chain=%s) committed no events — refusing to attest (success would be indistinguishable from a no-op non-revert)", l.chainKey)
+		}
+		candidates := make([]string, 0, len(cycle.Request.TxHashes)+1)
+		if l.execTxHash != "" {
+			candidates = append(candidates, l.execTxHash)
+		}
+		candidates = append(candidates, cycle.Request.TxHashes...)
+
+		verified := false
+		seen := make(map[string]bool)
+		var lastErr error
+		for _, tx := range candidates {
+			key := strings.ToLower(strings.TrimPrefix(tx, "0x"))
+			if tx == "" || seen[key] {
+				continue
+			}
+			seen[key] = true
+			fmt.Printf("🔒 [RB-GATE] Verifying contract call (chain=%s) tx=%s events=%d state=%d\n",
+				l.chainKey, tx, len(l.events), len(l.state))
+			result, verr := observer.VerifyExecutedCall(ctx, common.HexToHash(tx), l.events, l.state)
+			if verr == nil {
+				fmt.Printf("✅ [RB-GATE] Contract-call verified (RB-2 inclusion + RB-4 events%s): chain=%s tx=%s block=%s logs=%d\n",
+					rbStateNote(l.state), l.chainKey, tx, result.BlockNumber.String(), len(result.Logs))
+				verified = true
+				break
+			}
+			lastErr = verr
+		}
+		if !verified {
+			fmt.Printf("❌ [RB-GATE] Contract-call verification FAILED (chain=%s): %v\n", l.chainKey, lastErr)
+			return fmt.Errorf("contract-call verification failed (chain=%s): %w", l.chainKey, lastErr)
+		}
 	}
-	stateNote := ""
-	if len(state) > 0 {
-		stateNote = " + RB-5 state"
-	}
-	fmt.Printf("✅ [RB-GATE] Contract-call verified (RB-2 inclusion + RB-4 events%s): tx=%s block=%s logs=%d\n",
-		stateNote, execTx, result.BlockNumber.String(), len(result.Logs))
 	return nil
+}
+
+// rbCallLeg is a per-leg contract-call verification descriptor carried in CommitmentData.
+type rbCallLeg struct {
+	chainKey   string
+	target     string
+	execTxHash string
+	events     []ExpectedEvent
+	state      []ExpectedStateSlot
+}
+
+func normalizeRBChainKey(s string) string {
+	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(s), " ", "-"))
+}
+
+func rbStateNote(state []ExpectedStateSlot) string {
+	if len(state) > 0 {
+		return " + RB-5 state"
+	}
+	return ""
+}
+
+// parseRBContractCallLegs reconstructs the per-leg gate descriptors from CommitmentData,
+// tolerating both []map[string]interface{} (same-process) and []interface{} (JSON roundtrip).
+func parseRBContractCallLegs(v interface{}) []rbCallLeg {
+	var maps []map[string]interface{}
+	switch t := v.(type) {
+	case []map[string]interface{}:
+		maps = t
+	case []interface{}:
+		for _, it := range t {
+			if m, ok := it.(map[string]interface{}); ok {
+				maps = append(maps, m)
+			}
+		}
+	default:
+		return nil
+	}
+	out := make([]rbCallLeg, 0, len(maps))
+	for _, m := range maps {
+		ck, _ := m["chainKey"].(string)
+		tgt, _ := m["target"].(string)
+		etx, _ := m["execTxHash"].(string)
+		out = append(out, rbCallLeg{
+			chainKey:   ck,
+			target:     tgt,
+			execTxHash: etx,
+			events:     parseRBExpectedEvents(m["expectedEvents"]),
+			state:      parseRBExpectedState(m["expectedState"]),
+		})
+	}
+	return out
 }
 
 // parseRBExpectedEvents reconstructs []ExpectedEvent from the commitment-map form,
