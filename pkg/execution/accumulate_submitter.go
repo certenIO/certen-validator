@@ -453,17 +453,6 @@ func (e *CertenDataEntry) ToDoubleHashFormat() [][]byte {
 	entries = append(entries, labeled("governance_proof_ref", e.GovernanceProofRef))          // 39
 	entries = append(entries, labeled("threshold_met", fmt.Sprintf("%t", e.ThresholdMet)))    // 40
 
-	// SEC-14: the VERIFIABLE quorum aggregate. Writing these lets any consumer independently
-	// verify the ≥2/3 BLS aggregate against the validator set instead of trusting threshold_met.
-	entries = append(entries, labeled("aggregate_signature", e.AggregateSignature))
-	entries = append(entries, labeled("attestation_message_hash", e.AttestationMessageHash))
-	entries = append(entries, labeled("validator_set_root", e.ValidatorSetRoot))
-	entries = append(entries, labeled("attestation_snapshot_id", e.AttestationSnapshotID))
-	entries = append(entries, labeled("validator_bitfield", e.ValidatorBitfield))
-	entries = append(entries, labeled("total_power", e.TotalPower))
-	entries = append(entries, labeled("threshold_numerator", fmt.Sprintf("%d", e.ThresholdNumerator)))
-	entries = append(entries, labeled("threshold_denominator", fmt.Sprintf("%d", e.ThresholdDenominator)))
-
 	// ==========================================================================
 	// AUDIT REFERENCES (Entries 41-44)
 	// ==========================================================================
@@ -510,6 +499,20 @@ func (e *CertenDataEntry) ToDoubleHashFormat() [][]byte {
 			entries = append(entries, labeled(prefix+"_event_count", fmt.Sprintf("%d", leg.EventCount)))
 		}
 	}
+
+	// SEC-14: the VERIFIABLE quorum aggregate, APPENDED at the end so the fixed positional
+	// layout (entries 0-50 and the multi-leg block) stays backward-compatible. These are
+	// key=value like every other entry, so consumers locate them by key. Writing them lets a
+	// consumer independently verify the >=2/3 BLS aggregate against the validator set instead
+	// of trusting the self-reported threshold_met boolean.
+	entries = append(entries, labeled("aggregate_signature", e.AggregateSignature))
+	entries = append(entries, labeled("attestation_message_hash", e.AttestationMessageHash))
+	entries = append(entries, labeled("validator_set_root", e.ValidatorSetRoot))
+	entries = append(entries, labeled("attestation_snapshot_id", e.AttestationSnapshotID))
+	entries = append(entries, labeled("validator_bitfield", e.ValidatorBitfield))
+	entries = append(entries, labeled("total_power", e.TotalPower))
+	entries = append(entries, labeled("threshold_numerator", fmt.Sprintf("%d", e.ThresholdNumerator)))
+	entries = append(entries, labeled("threshold_denominator", fmt.Sprintf("%d", e.ThresholdDenominator)))
 
 	return entries
 }
