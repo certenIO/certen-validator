@@ -150,6 +150,36 @@ re‑derivation + verification.
 ⇒ peer refuses. Multi‑validator live — a modified executor that skips its own gate cannot reach
 threshold because honest peers refuse (see Global Acceptance).
 
+### CONCRETE DESIGN (verified plumbing — 2026‑07‑02)
+Trust anchor a peer independently has: **Accumulate itself** (the signed intent) + `msg.IntentID`
+(a user can't forge a signed intent bearing another user's `intent_id`). Sound flow:
+1. Extend `AccumulateQueryClient` (`unified_orchestrator.go:119`) with
+   `GetIntentBlobs(ctx, txHash, accountURL) ([][]byte, error)` — implement on `LiteClientAdapter`
+   (`pkg/accumulate/liteclient_adapter.go`, mirror `GetTransactionGovernanceData`: query
+   `scope=acc://<txHash>@<accountURL>`, navigate `transaction.body.entry.data` (doubleHash blob
+   array — see `:405`), hex‑decode → `[[intentData],[crossChainData],[governanceData],[replayData]]`).
+   Update any test mocks of the interface.
+2. Add `AccumulateTxHash` + `AccumulateAccountURL` to `AttestationMessage`
+   (`pkg/attestation/strategy/interface.go`) as fetch **hints** (they need NOT be in `Hash()`; the
+   binding is via `intent_id`, below). Populate them in `executePhase8` from `cycle.Request`.
+3. In `HandlePeerAttestationRequest` (`unified_orchestrator.go:1332`), after the existing
+   finality/status/ResultHash checks: fetch blobs via `GetIntentBlobs(msg.AccumulateTxHash,
+   msg.AccumulateAccountURL)`. **Bind:** parse `intentData` and require its `intent_id ==
+   msg.IntentID` — else refuse (executor pointed at the wrong/forged intent). Parse
+   `crossChainData` for the contract‑call leg(s) on `msg.TargetChain` (calldata‑derived; a peer
+   determines "is a call" from the FETCHED signed data, never from the request). If any such leg
+   exists, run `observer.VerifyExecutedCall(msg.AnchorTxHash, events, state)` + the RB‑SEC‑3
+   commitment binding; sign only if all pass. If fetch/parse fails ⇒ **refuse** (fail closed).
+   No‑calldata (native) legs keep the existing finality+ResultHash check.
+**Import‑cycle note:** `pkg/execution` cannot import `pkg/consensus` (consensus imports execution),
+so the peer's crossChainData parser must use a local anonymous struct in `pkg/execution` (mirror
+`extractAllLegsFromIntent`'s parse) — do NOT import `consensus.CrossChainEnvelope`.
+**Why sound:** the committed events come from the Accumulate‑fetched signed intent bound to
+`msg.IntentID`; a malicious executor can neither forge that intent nor point at a benign intent
+(its committed events won't appear in the malicious `AnchorTxHash`'s inclusion‑proven logs).
+**Live test:** build a validator with its Phase‑7 gate disabled; it must NOT reach quorum on a
+fabricated‑effect call because honest peers on `dc02877`+this fix refuse.
+
 ---
 
 # WORKSTREAM 3 — Alternate paths & fail‑open cleanups (#6, #7, #8, #10, #11, #12, #13)
