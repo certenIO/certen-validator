@@ -2083,6 +2083,60 @@ func (l *LiteClientAdapter) GetSignerNonce(ctx context.Context, signerURL string
 // Extracts key page M-of-N threshold from Accumulate transaction signatureBooks
 // =============================================================================
 
+// GetIntentBlobs fetches the four signed intent blobs (intentData, crossChainData,
+// governanceData, replayData) for a CERTEN_INTENT writeData transaction on Accumulate.
+//
+// RB-SEC-1: this lets a peer validator INDEPENDENTLY obtain the user-signed intent from
+// Accumulate (the source of truth) and re-derive the committed contract-call effects,
+// instead of trusting the executor's attestation request. Response shape (v3 query):
+//   result.message.transaction.body{type:writeData}.entry{type:doubleHash}.data = [hex,...]
+func (l *LiteClientAdapter) GetIntentBlobs(ctx context.Context, txHash string, accountURL string) ([][]byte, error) {
+	if txHash == "" || accountURL == "" {
+		return nil, fmt.Errorf("txHash and accountURL are required")
+	}
+	scope := fmt.Sprintf("acc://%s@%s", txHash, strings.TrimPrefix(accountURL, "acc://"))
+	result, err := l.queryV3API(ctx, "query", map[string]interface{}{"scope": scope})
+	if err != nil {
+		return nil, fmt.Errorf("query intent tx: %w", err)
+	}
+	msg, ok := result["message"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("intent tx response missing message")
+	}
+	tx, ok := msg["transaction"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("intent tx response missing transaction")
+	}
+	body, ok := tx["body"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("transaction missing body")
+	}
+	if bt, _ := body["type"].(string); bt != "writeData" {
+		return nil, fmt.Errorf("not a writeData transaction (type=%v)", body["type"])
+	}
+	entry, ok := body["entry"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("writeData missing entry")
+	}
+	data, ok := entry["data"].([]interface{})
+	if !ok || len(data) == 0 {
+		return nil, fmt.Errorf("data entry has no blobs")
+	}
+	blobs := make([][]byte, 0, len(data))
+	for i, d := range data {
+		s, ok := d.(string)
+		if !ok {
+			return nil, fmt.Errorf("data[%d] is not a hex string", i)
+		}
+		b, err := hex.DecodeString(strings.TrimPrefix(s, "0x"))
+		if err != nil {
+			return nil, fmt.Errorf("decode data[%d]: %w", i, err)
+		}
+		blobs = append(blobs, b)
+	}
+	return blobs, nil
+}
+
 // GetTransactionGovernanceData queries a transaction by txid and extracts the key page governance data
 // This returns the M-of-N multi-sig threshold from the signatureBooks field
 func (l *LiteClientAdapter) GetTransactionGovernanceData(ctx context.Context, txHash string, accountURL string) (*TransactionGovernanceData, error) {

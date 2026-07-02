@@ -96,6 +96,17 @@ type AttestationMessage struct {
 	// Multi-leg fields (populated when intent spans multiple chains)
 	LegCount           int      `json:"leg_count,omitempty"`
 	MultiLegResultHash [32]byte `json:"multi_leg_result_hash,omitempty"`
+
+	// RB-SEC-1: contract-call verification binding. ExecutionTxHash is the governance
+	// (execution) tx where target.call{value}(calldata) ran — its receipt carries the
+	// committed event(s). AnchorTxHash above is the createAnchor tx, whose ResultHash does
+	// NOT cover the call's effect, so peers must re-verify ExecutionTxHash independently.
+	// AccumulateTxHash/AccountURL let a peer fetch the user-signed intent from Accumulate to
+	// re-derive the committed effects (never trusting this request). All are part of the
+	// signed message (ComputeMessageHash = sha256(json)), so the quorum binds them.
+	ExecutionTxHash      string `json:"execution_tx_hash,omitempty"`
+	AccumulateTxHash     string `json:"accumulate_tx_hash,omitempty"`
+	AccumulateAccountURL string `json:"accumulate_account_url,omitempty"`
 }
 
 // Hash computes the canonical hash of the attestation message

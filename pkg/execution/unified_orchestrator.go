@@ -120,6 +120,10 @@ type AccumulateQueryClient interface {
 	// GetTransactionGovernanceData queries a transaction and extracts key page governance data
 	// Returns ThresholdM (signatures collected) and ThresholdN (signatures required)
 	GetTransactionGovernanceData(ctx context.Context, txHash, accountURL string) (*accumulate.TransactionGovernanceData, error)
+	// GetIntentBlobs fetches the 4 signed intent blobs (intentData, crossChainData,
+	// governanceData, replayData) so a peer can INDEPENDENTLY re-derive committed effects
+	// from the user-signed intent (RB-SEC-1).
+	GetIntentBlobs(ctx context.Context, txHash, accountURL string) ([][]byte, error)
 }
 
 // ChainedProofResult contains the L1/L2/L3 proof chain
@@ -831,6 +835,168 @@ func parseRBExpectedState(v interface{}) []ExpectedStateSlot {
 	return out
 }
 
+// executionTxHashForChain returns the governance/execution tx hash to bind into the
+// attestation message for the current chain group (the tx where the contract call ran).
+func (o *UnifiedOrchestrator) executionTxHashForChain(req *UnifiedProofCycleRequest) string {
+	if req.CommitmentData != nil {
+		if isCall, _ := req.CommitmentData["rbContractCall"].(bool); isCall {
+			legs := parseRBContractCallLegs(req.CommitmentData["rbContractCallLegs"])
+			target := normalizeRBChainKey(req.TargetChain)
+			for _, l := range legs {
+				if l.execTxHash != "" && (normalizeRBChainKey(l.chainKey) == target || len(legs) == 1) {
+					return l.execTxHash
+				}
+			}
+		}
+	}
+	// Fallback: the governance/execution tx is the last observed tx for this chain group.
+	if n := len(req.TxHashes); n > 0 {
+		return req.TxHashes[n-1]
+	}
+	return ""
+}
+
+// peerVerifyCommittedEffect (RB-SEC-1) independently verifies a contract-call intent's
+// committed effect before this peer signs, using the USER-SIGNED intent fetched from
+// Accumulate — never trusting the executor's request. Fails closed on any doubt.
+func (o *UnifiedOrchestrator) peerVerifyCommittedEffect(ctx context.Context, msg *attestation.AttestationMessage, chainStrategy chain.ChainExecutionStrategy) error {
+	// Without an Accumulate query client we cannot independently verify. Fail closed iff
+	// contract calls are enabled (a native-only deployment has nothing to verify here).
+	if o.config.AccumulateQueryClient == nil {
+		if contractCallsAllowed() {
+			return fmt.Errorf("no Accumulate query client (contract calls enabled)")
+		}
+		return nil
+	}
+	if msg.AccumulateTxHash == "" || msg.AccumulateAccountURL == "" {
+		if contractCallsAllowed() {
+			return fmt.Errorf("attestation missing Accumulate intent pointer")
+		}
+		return nil
+	}
+
+	blobs, err := o.config.AccumulateQueryClient.GetIntentBlobs(ctx, msg.AccumulateTxHash, msg.AccumulateAccountURL)
+	if err != nil || len(blobs) < 2 {
+		return fmt.Errorf("fetch signed intent: %v", err)
+	}
+	// Bind: the fetched signed intent MUST be the one being attested. A user cannot forge a
+	// signed intent bearing another intent's id, so intent_id equality anchors trust.
+	if got := intentIDFromBlob(blobs[0]); got != msg.IntentID {
+		return fmt.Errorf("fetched intent_id %q != attested %q", got, msg.IntentID)
+	}
+
+	// Committed contract-call leg(s) for this chain group (derived from the SIGNED intent).
+	target := normalizeRBChainKey(msg.TargetChain)
+	var applicable []rbCallLeg
+	legs := parseCommittedCallLegs(blobs[1])
+	for _, l := range legs {
+		if normalizeRBChainKey(l.chainKey) == target || len(legs) == 1 {
+			applicable = append(applicable, l)
+		}
+	}
+	if len(applicable) == 0 {
+		return nil // no contract call on this chain group — native path already verified
+	}
+
+	// A contract call requires the execution tx + a chain RPC to independently re-verify.
+	if msg.ExecutionTxHash == "" {
+		return fmt.Errorf("contract-call attestation missing execution tx hash")
+	}
+	cfg := chainStrategy.Config()
+	if cfg == nil || cfg.RPC == "" {
+		return fmt.Errorf("no RPC for chain %s", chainStrategy.ChainID())
+	}
+	chainID, _ := strconv.ParseInt(chainStrategy.ChainID(), 10, 64)
+	observer, err := NewExternalChainObserver(&ExternalChainObserverConfig{
+		EthereumRPC:           cfg.RPC,
+		ChainID:               chainID,
+		ValidatorID:           o.config.ValidatorID,
+		RequiredConfirmations: 1,
+		Timeout:               90 * time.Second,
+	})
+	if err != nil {
+		return fmt.Errorf("build observer: %w", err)
+	}
+	for _, l := range applicable {
+		if len(l.events) == 0 {
+			return fmt.Errorf("committed contract call has no events — refusing")
+		}
+		if _, verr := observer.VerifyExecutedCall(ctx, common.HexToHash(msg.ExecutionTxHash), l.events, l.state); verr != nil {
+			return fmt.Errorf("committed effect not proven on %s: %w", msg.ExecutionTxHash, verr)
+		}
+	}
+	fmt.Printf("✅ [RB-SEC-1] Peer independently verified committed effect for intent %s (chain=%s tx=%s)\n",
+		msg.IntentID, msg.TargetChain, msg.ExecutionTxHash)
+	return nil
+}
+
+// intentIDFromBlob extracts intent_id from the signed intentData blob.
+func intentIDFromBlob(b []byte) string {
+	var m struct {
+		IntentID string `json:"intent_id"`
+	}
+	_ = json.Unmarshal(b, &m)
+	return m.IntentID
+}
+
+// parseCommittedCallLegs parses the signed crossChainData blob into contract-call legs
+// (calldata-derived). Local struct — pkg/execution cannot import pkg/consensus (cycle).
+func parseCommittedCallLegs(crossChainData []byte) []rbCallLeg {
+	var ccd struct {
+		Legs []struct {
+			Chain            string `json:"chain"`
+			ExecutionPayload *struct {
+				CallData       string `json:"callData"`
+				ExpectedEvents []struct {
+					Contract string `json:"contract"`
+					Topic0   string `json:"topic0"`
+					DataHash string `json:"dataHash"`
+				} `json:"expectedEvents"`
+				ExpectedState []struct {
+					Account string `json:"account"`
+					Slot    string `json:"slot"`
+					Value   string `json:"value"`
+				} `json:"expectedState"`
+			} `json:"executionPayload"`
+		} `json:"legs"`
+	}
+	if json.Unmarshal(crossChainData, &ccd) != nil {
+		return nil
+	}
+	var out []rbCallLeg
+	for _, leg := range ccd.Legs {
+		ep := leg.ExecutionPayload
+		if ep == nil {
+			continue
+		}
+		cd := strings.TrimSpace(ep.CallData)
+		if cd == "" || cd == "0x" || cd == "0X" {
+			continue
+		}
+		var events []ExpectedEvent
+		for _, e := range ep.ExpectedEvents {
+			if e.Topic0 == "" {
+				continue
+			}
+			ee := ExpectedEvent{Contract: common.HexToAddress(e.Contract), Topic0: common.HexToHash(e.Topic0)}
+			if e.DataHash != "" {
+				ee.DataHash = [32]byte(common.HexToHash(e.DataHash))
+			}
+			events = append(events, ee)
+		}
+		var state []ExpectedStateSlot
+		for _, s := range ep.ExpectedState {
+			state = append(state, ExpectedStateSlot{
+				Account: common.HexToAddress(s.Account),
+				Slot:    common.HexToHash(s.Slot),
+				Value:   common.HexToHash(s.Value),
+			})
+		}
+		out = append(out, rbCallLeg{chainKey: normalizeRBChainKey(leg.Chain), events: events, state: state})
+	}
+	return out
+}
+
 // persistChainExecution persists a chain execution result to the database
 func (o *UnifiedOrchestrator) persistChainExecution(ctx context.Context, cycle *activeCycle, obs *chain.ObservationResult, step int) (uuid.UUID, error) {
 	if o.config.UnifiedRepo == nil {
@@ -976,6 +1142,11 @@ func (o *UnifiedOrchestrator) executePhase8(ctx context.Context, cycle *activeCy
 		CycleID:      cycle.CycleID,
 		BundleID:     req.BundleID,
 		MerkleRoot:   req.MerkleRoot,
+		// RB-SEC-1: bind the execution (governance) tx + Accumulate pointer so peers can
+		// independently re-verify the committed effect against the signed intent.
+		ExecutionTxHash:      o.executionTxHashForChain(req),
+		AccumulateTxHash:     req.AccumulateTxHash,
+		AccumulateAccountURL: req.AccumulateAccountURL,
 	}
 
 	// For multi-leg chain groups, include per-observation result hashes in the
@@ -1387,6 +1558,13 @@ func (o *UnifiedOrchestrator) HandlePeerAttestationRequest(
 	}
 	if obs.ResultHash != msg.ResultHash {
 		return fail("independently-observed result hash does not match requested message — refusing to attest")
+	}
+
+	// 3b. RB-SEC-1: independently verify the committed CONTRACT-CALL effect from the
+	//     USER-SIGNED intent (fetched from Accumulate), so the quorum — not just the
+	//     executor — enforces RB-2/RB-4/RB-5. Fails closed on any doubt.
+	if err := o.peerVerifyCommittedEffect(ctx, msg, chainStrategy); err != nil {
+		return fail(fmt.Sprintf("committed-effect verification failed: %v", err))
 	}
 
 	// 4. Verified — sign with the requested scheme so the signature aggregates
