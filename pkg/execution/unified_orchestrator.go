@@ -450,6 +450,7 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 		result.Error = fmt.Sprintf("phase 7 failed: %v", err)
 		result.FailPhase = 7
 		o.updateLifecycleFailed(ctx, req.IntentID, req.CycleID, 7, err)
+		o.notifyMultiLegGroupFailed(cycle, err)
 		if o.config.OnCycleFailed != nil {
 			o.config.OnCycleFailed(result, err)
 		}
@@ -460,6 +461,7 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 		result.Error = fmt.Sprintf("phase 8 failed: %v", err)
 		result.FailPhase = 8
 		o.updateLifecycleFailed(ctx, req.IntentID, req.CycleID, 8, err)
+		o.notifyMultiLegGroupFailed(cycle, err)
 		if o.config.OnCycleFailed != nil {
 			o.config.OnCycleFailed(result, err)
 		}
@@ -478,6 +480,7 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 		result.Error = fmt.Sprintf("phase 9 failed: %v", err)
 		result.FailPhase = 9
 		o.updateLifecycleFailed(ctx, req.IntentID, req.CycleID, 9, err)
+		o.notifyMultiLegGroupFailed(cycle, err)
 		if o.config.OnCycleFailed != nil {
 			o.config.OnCycleFailed(result, err)
 		}
@@ -639,9 +642,13 @@ func (o *UnifiedOrchestrator) verifyContractCallGate(ctx context.Context, cycle 
 	if isCall, _ := cm["rbContractCall"].(bool); !isCall {
 		return nil
 	}
+	// SEC-11: rbContractCall is asserted true, so this cycle DID execute a proof-gated call.
+	// If the committed leg descriptors are missing/malformed and parse to zero, we cannot
+	// verify the effect — fail CLOSED rather than no-op (a nil/garbage rbContractCallLegs must
+	// never neuter the gate for a cycle flagged as a contract call).
 	legs := parseRBContractCallLegs(cm["rbContractCallLegs"])
 	if len(legs) == 0 {
-		return nil
+		return fmt.Errorf("cycle flagged rbContractCall but no committed call legs could be parsed — refusing to attest")
 	}
 
 	// Select the contract-call leg(s) that belong to THIS chain group's cycle. Match by
@@ -1633,6 +1640,20 @@ func (o *UnifiedOrchestrator) HandlePeerAttestationRequest(
 // =============================================================================
 // PHASE 9: RESULT WRITE-BACK
 // =============================================================================
+
+// notifyMultiLegGroupFailed tells the multi-leg aggregator that this chain group's proof
+// cycle failed, so it can abort the intent (atomic) or skip a partial write-back (parallel/
+// sequential) instead of silently timing out into a write-back that omits the failed leg.
+// No-op for single-leg cycles. SEC-10.
+func (o *UnifiedOrchestrator) notifyMultiLegGroupFailed(cycle *activeCycle, err error) {
+	if cycle == nil || cycle.Request == nil || cycle.Request.Metadata == nil {
+		return
+	}
+	if cycle.Request.Metadata["multi_leg"] != "true" || o.multiLegAggregator == nil {
+		return
+	}
+	o.multiLegAggregator.OnChainGroupFailed(cycle.Request.IntentID, cycle.Request.Metadata["chain_key"], err)
+}
 
 func (o *UnifiedOrchestrator) executePhase9(ctx context.Context, cycle *activeCycle) error {
 	cycle.Phase = 9

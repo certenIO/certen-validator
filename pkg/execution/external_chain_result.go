@@ -867,14 +867,19 @@ func (c *ExecutionCommitment) verifyExpectedEvents(result *ExternalChainResult, 
 		topic0Hex, _ := eventMap["topic0"].(string)
 		contractHex, _ := eventMap["contract"].(string)
 
+		// SEC-12: a committed event that cannot be validated must FAIL, never be skipped.
+		// Previously an empty or malformed topic0 was `continue`d — i.e. silently treated as
+		// satisfied — which lets a producer/executor neuter the event gate by committing a
+		// blank/garbage topic0. A committed event with no usable topic0 is a hard error.
+		topic0Hex = strings.TrimPrefix(strings.TrimPrefix(topic0Hex, "0x"), "0X")
 		if topic0Hex == "" {
-			continue
+			fmt.Printf("❌ [COMPREHENSIVE] FAILED: committed event %q has empty topic0 — refusing\n", eventName)
+			return false
 		}
-
-		// Decode topic0
 		topic0Bytes, err := hex.DecodeString(topic0Hex)
 		if err != nil {
-			continue
+			fmt.Printf("❌ [COMPREHENSIVE] FAILED: committed event %q has malformed topic0 %q: %v — refusing\n", eventName, topic0Hex, err)
+			return false
 		}
 
 		expectedTopic0 := common.BytesToHash(topic0Bytes)

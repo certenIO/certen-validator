@@ -75,6 +75,12 @@ type PendingMultiLeg struct {
 	LegMapping      map[int]LegChainInfo                // legIndex -> chain info
 	CreatedAt       time.Time
 
+	// FailedChainGroups records chain groups whose proof cycle HARD-FAILED (quorum not met,
+	// effect not proven, phase error). A hard failure is distinct from a slow group: it means
+	// the intent cannot be completed as committed, so the timeout path must NOT emit a partial
+	// write-back that silently omits the failed leg (SEC-10).
+	FailedChainGroups map[string]bool
+
 	// LegIndicesPerChain maps chainKey -> ordered list of leg indices in that chain group.
 	// The order matches the txHashes array order in the proof cycle request,
 	// enabling positional matching of observations to legs for same-chain multi-leg intents.
@@ -179,6 +185,7 @@ func (a *MultiLegAggregator) RegisterMultiLegIntent(
 		LegMapping:         legMapping,
 		CreatedAt:          time.Now(),
 		LegIndicesPerChain: legIndicesPerChain,
+		FailedChainGroups:  make(map[string]bool),
 	}
 
 	a.logger.Printf("Registered multi-leg intent %s with %d legs", intentID, totalLegs)
@@ -730,14 +737,26 @@ func (a *MultiLegAggregator) handleAggregationTimeout(intentID string) {
 
 	completed := len(pending.CompletedCycles)
 	required := countUniqueChainKeys(pending.LegMapping)
-	a.logger.Printf("Aggregation timeout for intent %s: %d/%d chain groups completed, building partial write-back",
-		intentID, completed, required)
+	failedCount := len(pending.FailedChainGroups)
 
 	// Remove from pending and timers
 	delete(a.pending, intentID)
 	delete(a.timeoutTimers, intentID)
 	pendingCopy := *pending
 	a.mu.Unlock()
+
+	// SEC-10: a hard failure on any group means the intent cannot complete as committed.
+	// Never emit a partial write-back in that case — it would report the surviving legs as
+	// successful while silently dropping the leg whose proof failed.
+	if failedCount > 0 {
+		a.logger.Printf("Aggregation timeout for intent %s: %d/%d completed but %d group(s) HARD-FAILED — skipping write-back (not partial-completable)",
+			intentID, completed, required, failedCount)
+		a.deletePendingState(intentID)
+		return
+	}
+
+	a.logger.Printf("Aggregation timeout for intent %s: %d/%d chain groups completed, building partial write-back",
+		intentID, completed, required)
 
 	if completed == 0 {
 		a.logger.Printf("No chain groups completed for intent %s, skipping partial write-back", intentID)
@@ -769,29 +788,33 @@ func (a *MultiLegAggregator) OnChainGroupFailed(intentID string, chainKey string
 
 	a.logger.Printf("Chain group %s failed for intent %s: %v", chainKey, intentID, err)
 
+	// SEC-10: record the hard failure so the timeout path can distinguish a FAILED group
+	// (intent cannot complete as committed) from a merely slow one, and never emit a partial
+	// write-back that omits the failed leg.
+	if pending.FailedChainGroups == nil {
+		pending.FailedChainGroups = make(map[string]bool)
+	}
+	pending.FailedChainGroups[chainKey] = true
+
 	// Notify external callback if configured
 	if a.onChainGroupFailed != nil {
 		go a.onChainGroupFailed(intentID, chainKey, err)
 	}
 
-	// For atomic mode, fail fast: build partial write-back immediately
+	// SEC-10: for atomic mode, ABORT the whole intent — an atomic bundle is all-or-nothing,
+	// so a failed leg must never yield a partial write-back reporting the other legs as done.
 	if pending.ExecutionMode == "atomic" {
-		a.logger.Printf("Atomic mode: failing intent %s due to chain group %s failure", intentID, chainKey)
+		a.logger.Printf("Atomic mode: aborting intent %s due to chain group %s failure (no partial write-back)", intentID, chainKey)
 		a.cancelAggregationTimeout(intentID)
 		delete(a.pending, intentID)
-		pendingCopy := *pending
+		delete(a.timeoutTimers, intentID)
 		a.mu.Unlock()
-
-		if len(pendingCopy.CompletedCycles) > 0 {
-			if wbErr := a.buildUnifiedWriteBack(&pendingCopy); wbErr != nil {
-				a.logger.Printf("ERROR: Partial write-back failed for atomic-failed intent %s: %v", intentID, wbErr)
-			}
-		}
 		a.deletePendingState(intentID)
 		return
 	}
 
-	// For parallel/sequential: let remaining groups continue, timeout will handle
+	// For parallel/sequential: let remaining groups continue; the timeout path will now skip
+	// the partial write-back because a hard failure is recorded.
 	a.mu.Unlock()
 }
 
