@@ -1211,9 +1211,15 @@ func (o *UnifiedOrchestrator) executePhase8(ctx context.Context, cycle *activeCy
 		thresholdConfig = attestation.DefaultThresholdConfig()
 	}
 
-	aggAttestation.TotalWeight = aggAttestation.AchievedWeight // Simplified: assume all validators have equal weight
+	// RB-SEC-1: TotalWeight is the FULL validator set (self + peers), so the ≥2/3 threshold
+	// is meaningful. Previously this was set to AchievedWeight, which made ANY single
+	// attestation "meet" threshold — a quorum-enforcement bypass (a lone executor could
+	// write back with no peer agreement).
+	aggAttestation.TotalWeight = int64(len(o.config.AttestationPeers) + 1)
 	aggAttestation.ThresholdWeight = thresholdConfig.CalculateThresholdWeight(aggAttestation.TotalWeight)
 	aggAttestation.ThresholdMet = thresholdConfig.IsThresholdMet(aggAttestation.AchievedWeight, aggAttestation.TotalWeight)
+	fmt.Printf("[Phase 8] Attestation threshold: achieved=%d total=%d required=%d met=%v\n",
+		aggAttestation.AchievedWeight, aggAttestation.TotalWeight, aggAttestation.ThresholdWeight, aggAttestation.ThresholdMet)
 
 	// Verify aggregated attestation
 	valid, err := attestStrategy.VerifyAggregated(attestCtx, aggAttestation)
@@ -1598,6 +1604,18 @@ func (o *UnifiedOrchestrator) executePhase9(ctx context.Context, cycle *activeCy
 
 	if o.config.OnPhaseComplete != nil {
 		defer func() { o.config.OnPhaseComplete(cycle.CycleID, 9) }()
+	}
+
+	// RB-SEC-1: QUORUM ENFORCEMENT (fail closed). Never write back — or contribute a
+	// "success" to the multi-leg aggregator — unless the attestation aggregate met the
+	// ≥2/3 threshold in Phase 8. Without this a lone/malicious executor could write back
+	// with only its own attestation (peers refusing via RB-SEC-1 would then be moot).
+	if cycle.Result == nil || !cycle.Result.ThresholdMet {
+		fmt.Printf("🚫 [Phase 9] Attestation threshold NOT met for cycle %s — refusing write-back (quorum enforcement)\n", cycle.CycleID)
+		if cycle.Result != nil {
+			cycle.Result.WriteBackSuccess = false
+		}
+		return fmt.Errorf("attestation threshold not met — refusing write-back")
 	}
 
 	// For multi-leg chain groups, defer write-back to the MultiLegAggregator

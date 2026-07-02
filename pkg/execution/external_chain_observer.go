@@ -382,15 +382,17 @@ func (o *ExternalChainObserver) constructReceiptInclusionProof(
 	receipt *types.Receipt,
 ) (*MerkleInclusionProof, error) {
 
-	// Get all receipts in the block by fetching each transaction's receipt
+	// RB-2 / RB-SEC-1: fetch ALL receipts in ONE call (eth_getBlockReceipts) instead of one
+	// RPC per tx. Under concurrent peer verification, N-per-tx fetches across the fleet
+	// rate-limit the shared RPC and cause spurious proof-construction failures (nil proof →
+	// honest peers wrongly refuse valid calls).
 	txs := block.Transactions()
-	receipts := make([]*types.Receipt, len(txs))
-	for i, tx := range txs {
-		r, err := o.ethClient.TransactionReceipt(ctx, tx.Hash())
-		if err != nil {
-			return nil, fmt.Errorf("get receipt for tx %d: %w", i, err)
-		}
-		receipts[i] = r
+	receipts, err := o.ethClient.BlockReceipts(ctx, rpc.BlockNumberOrHashWithHash(block.Hash(), false))
+	if err != nil {
+		return nil, fmt.Errorf("get block receipts: %w", err)
+	}
+	if len(receipts) != len(txs) {
+		return nil, fmt.Errorf("block receipts count %d != tx count %d", len(receipts), len(txs))
 	}
 
 	if int(receipt.TransactionIndex) >= len(receipts) {
