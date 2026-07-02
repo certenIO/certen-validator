@@ -183,15 +183,13 @@ func TestRB4_LegParsesExpectedEvents(t *testing.T) {
 			"callData":            callData,
 			"dataHash":            crypto.Keccak256Hash(common.FromHex(callData)).Hex(),
 			"chainId":             11155111,
-			"executionCommitment": common.HexToHash("0x00").Hex(), // no commitment gate for this parse test
+			"executionCommitment": common.Hash(computeExecutionCommitment(11155111, rb4Target, big.NewInt(0), common.FromHex(callData))).Hex(),
 			"expectedEvents": []interface{}{
 				map[string]interface{}{"contract": rb4Target.Hex(), "topic0": rb4Topic0.Hex()},
 			},
 		},
 	}
 	blob := map[string]interface{}{"protocol": "CERTEN", "version": "2.0", "legs": []interface{}{leg}}
-	// Remove executionCommitment so the CRITICAL-003 gate is skipped (empty string).
-	leg["executionPayload"].(map[string]interface{})["executionCommitment"] = ""
 	ccd, _ := json.Marshal(blob)
 
 	t.Setenv("CERTEN_ALLOW_CONTRACT_CALLS", "true") // opt in to arbitrary calls for this test

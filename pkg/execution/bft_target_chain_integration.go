@@ -1106,60 +1106,61 @@ func (btce *BFTTargetChainExecutor) extractAllLegsFromIntent(legacyIntent *inten
 			return nil
 		}
 
-		// CRITICAL-003: If executionPayload is present in the user-signed blob,
-		// verify the commitment is consistent with the leg's execution parameters.
-		// This ensures the validator cannot alter target/value/data vs what was signed.
-		//
-		// SCOPE: only EVM-flavored legs. NEAR legs use a different commitment
-		// format (network_id || target_account_string || u128-LE deposit ||
-		// keccak256(method||args)) — the EVM recompute below would always
-		// mismatch and falsely reject every NEAR intent. The on-chain NEAR
-		// CertenAnchorV6_1::execute_with_governance recomputes its own
-		// commitment from runtime params, so NEAR doesn't lose this gate.
+		// ── WORKSTREAM 1: single choke point — bind executed (target,value,calldata) ──
+		// RB-SEC-5: classification is by NAME prefix only to decide whether a leg is a
+		// genuine NON-EVM *native* leg (which uses a chain-specific commitment format and
+		// its own executor). A leg carrying EVM calldata is, by definition, an EVM
+		// contract call and MUST be bound here regardless of its chain-name string — this
+		// closes the "cardano-*"+EVM-chainId route-to-EVM-while-skipping-check bypass.
 		legChainNorm := strings.ToLower(strings.ReplaceAll(leg.Chain, " ", "-"))
-		isNearLeg := strings.HasPrefix(legChainNorm, "near")
-		// Cardano uses a Cardano-flavored execution_commitment (network ||
-		// target || u128-LE deposit || keccak(method||args)); the EVM recompute
-		// below would always mismatch and falsely reject every Cardano intent.
-		// The on-chain certen_account_v4 re-derives its own commitment from
-		// runtime params, so the gate isn't lost — same rationale as NEAR.
-		isCardanoLeg := strings.HasPrefix(legChainNorm, "cardano")
-		// Solana uses an opaque execution_commitment stub (keccak(adiURLHash || op ||
-		// cc || gov)) and a base58 target, not an EVM hex address — the EVM recompute
-		// below (common.HexToAddress + keccak(chainId,target,value,dataHash)) would
-		// always mismatch and falsely skip Step 3. The V6.1 messageHash gate +
-		// proof_executed already bind the anchor, so the gate isn't lost — same
-		// rationale as NEAR/Cardano.
-		isSolanaLeg := strings.HasPrefix(legChainNorm, "solana")
-		// Aptos uses an opaque execution-commitment stub + a 32-byte account-address
-		// target, not an EVM hex address — same rationale as NEAR/Cardano/Solana.
-		isAptosLeg := strings.HasPrefix(legChainNorm, "aptos")
-		// Sui uses an opaque execution-commitment stub + a 32-byte object/address
-		// target, not an EVM hex address — same rationale as NEAR/Cardano/Solana/Aptos.
-		isSuiLeg := strings.HasPrefix(legChainNorm, "sui")
-		// TON uses an opaque cell-hash execution-commitment stub + a workchain:address
-		// target, not an EVM hex address — same rationale as the other non-EVM chains.
-		isTonLeg := strings.HasPrefix(legChainNorm, "ton")
-		if !isNearLeg && !isCardanoLeg && !isSolanaLeg && !isAptosLeg && !isSuiLeg && !isTonLeg && leg.ExecutionPayload != nil && leg.ExecutionPayload.ExecutionCommitment != "" {
-			expectedCommitment := computeExecutionCommitment(
-				leg.ExecutionPayload.ChainID,
-				common.HexToAddress(leg.ExecutionPayload.Target),
-				func() *big.Int {
-					v := new(big.Int)
-					v.SetString(leg.ExecutionPayload.Value, 10)
-					return v
-				}(),
-				legData, // RB-1: real calldata (empty for native); keccak256(legData) must match producer's dataHash
-			)
-			storedCommitment := common.HexToHash(leg.ExecutionPayload.ExecutionCommitment)
-			if expectedCommitment != storedCommitment {
-				btce.logger.Printf("🚨 [CRITICAL-003] ExecutionCommitment mismatch for leg %s!", legID)
-				btce.logger.Printf("   Expected: 0x%x", expectedCommitment[:8])
-				btce.logger.Printf("   Stored:   0x%x", storedCommitment[:8])
-				btce.logger.Printf("   Rejecting intent — possible tampering")
+		isNonEVMName := strings.HasPrefix(legChainNorm, "near") ||
+			strings.HasPrefix(legChainNorm, "cardano") ||
+			strings.HasPrefix(legChainNorm, "solana") ||
+			strings.HasPrefix(legChainNorm, "aptos") ||
+			strings.HasPrefix(legChainNorm, "sui") ||
+			strings.HasPrefix(legChainNorm, "ton") ||
+			strings.HasPrefix(legChainNorm, "tron")
+		isContractCall := len(legData) > 0
+
+		// RB-SEC-9: a leg is a contract call iff it carries committed calldata (ground
+		// truth), not an opt-in flag. A non-EVM leg must never carry EVM calldata.
+		if isContractCall && isNonEVMName {
+			btce.logger.Printf("🚨 [CRITICAL-003] Non-EVM leg %s (chain=%s) carries EVM calldata — rejecting intent (ambiguous routing)", legID, leg.Chain)
+			return nil
+		}
+
+		// Skip the EVM commitment ONLY for genuine non-EVM NATIVE legs (no EVM calldata);
+		// those are bound by their own chain's commitment format + on-chain contract.
+		skipEVMCommitment := isNonEVMName && !isContractCall
+		if !skipEVMCommitment {
+			ep := leg.ExecutionPayload
+			// RB-SEC-4: a contract call MUST carry a full, verifiable commitment. Empty
+			// executionCommitment/dataHash on a calldata leg ⇒ reject (never skip-then-run).
+			if isContractCall && (ep == nil || ep.ExecutionCommitment == "" || ep.DataHash == "") {
+				btce.logger.Printf("🚨 [CRITICAL-003] Contract-call leg %s missing executionCommitment/dataHash — rejecting intent", legID)
 				return nil
 			}
-			btce.logger.Printf("   ✅ [CRITICAL-003] ExecutionCommitment verified for leg %s", legID)
+			if ep != nil && ep.ExecutionCommitment != "" {
+				// RB-SEC-3: keccak256(callData) must equal the committed dataHash.
+				if ep.DataHash != "" && ethcrypto.Keccak256Hash(legData) != common.HexToHash(ep.DataHash) {
+					btce.logger.Printf("🚨 [CRITICAL-003] callData hash mismatch for leg %s — rejecting intent", legID)
+					return nil
+				}
+				epTarget := common.HexToAddress(ep.Target)
+				epValue := new(big.Int)
+				if _, ok := epValue.SetString(strings.TrimSpace(ep.Value), 10); !ok {
+					epValue = big.NewInt(0)
+				}
+				if computeExecutionCommitment(ep.ChainID, epTarget, epValue, legData) != common.HexToHash(ep.ExecutionCommitment) {
+					btce.logger.Printf("🚨 [CRITICAL-003] ExecutionCommitment mismatch for leg %s — rejecting intent (possible tampering)", legID)
+					return nil
+				}
+				// RB-SEC-3: execute the COMMITTED target/value — NOT top-level leg.To/AmountWei.
+				targetAddress = epTarget
+				value = epValue
+				btce.logger.Printf("   ✅ [CRITICAL-003] Commitment verified for leg %s (target=%s value=%s callDataLen=%d)",
+					legID, epTarget.Hex(), epValue.String(), len(legData))
+			}
 		}
 
 		btce.logger.Printf("   🦵 Leg %d (%s): chain=%s chainId=%d from=%s target=%s value=%s wei",
