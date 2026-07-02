@@ -333,3 +333,80 @@ legacy/batch), `bft_target_chain_integration.go` (choke‑point binding, chain c
 `external_chain_result.go` (VerifyAgainstResult chain keying, strict events),
 `certen-contracts` Foundry tests for the on‑chain commitment enforcement. Keep cross‑language
 commitment vectors byte‑identical across producer/validator/contract.
+
+---
+
+# RE‑AUDIT ADDENDUM (2026‑07) — post‑Workstream‑1 findings
+
+A 4‑agent adversarial re‑audit of `main` after the first remediation pass surfaced new/residual
+findings. Track‑1 (validator repo) items below are **IMPLEMENTED + tested + pushed**
+(commits `b2e5d61`, `b7348b0`, `5769783`, `93958f0`). Track‑2 items need a deploy/cross‑repo
+decision and are **specified but not yet applied**.
+
+## Track‑1 — DONE (validator repo)
+| ID | Sev | Fix | Test |
+|----|-----|-----|------|
+| #7 | CRIT | `VerifyAgainstResult` binds observed→committed chain; refuses non‑EVM contract calls; non‑EVM confirmation‑only branch reachable only for genuine non‑EVM *native* on the committed chain | `result_chain_bind_sec7_test.go` |
+| H1 | HIGH | `peerVerifyCommittedEffect`: reject empty `IntentID`; cross‑check "native" claim against on‑chain execution calldata (`TxHasCalldata`) so a forged empty‑legs intent pointer can't skip the effect gate | `rb_sec1_peer_test.go` |
+| H2 | HIGH | Quorum floor: `IsThresholdMet` + RB‑3 collector require ≥`MinValidators`(=3) distinct signers, so a single‑node/empty‑peer set can't trivially meet 2/3 | `threshold_floor_test.go` |
+| M1 | MED | Commitment bound to the **routed** `leg.ChainID`, with `ep.ChainID==chainID` assertion (no chain‑redirect) | `workstream1_choke_point_test.go::TestWS1_RejectsChainIDRedirect` |
+| #8 | HIGH | `VerifyAndAttest` requires tx+receipt inclusion proofs (nil ⇒ refuse), except genuine non‑EVM native | (covered via VerifyExecutedCall + attest path) |
+| #12 | MED | `verifyExpectedEvents` fails on empty/malformed committed topic0 (was `continue`) | `comprehensive_event_sec12_test.go` |
+| #10 | MED | Failed multi‑leg group notifies aggregator (`OnChainGroupFailed` wired); atomic aborts; timeout skips partial write‑back when a group hard‑failed | (aggregator logic) |
+| #11 | MED | `verifyContractCallGate` fails closed when `rbContractCall=true` but legs parse to zero | `rb_gate_failclosed_sec11_test.go` |
+| #14‑producer | — | Verifiable BLS aggregate (sig, message hash, validator‑set root, snapshot id, bitfield, total power, threshold ratio) appended to the Accumulate write‑back | `writeback_aggregate_sec14_test.go` |
+
+#13 already closed (RB‑3 verifies the aggregate BLS sig before finalize). #6/H3 (legacy path)
+substantially closed: it shares `VerifyAgainstResult`/`VerifyAndAttest`/the RB‑3 collector, so it
+inherits #7/#8/#12/H2.
+
+## Track‑2 — SPECIFIED, needs decision
+
+### FINDING B (CRIT, on‑chain, LIVE) — permissionless replay/drain of an anchored effect
+`certen-contracts/evm/src/account/CertenAccountV4.sol`.
+`executeGovernanceProofDirect` (≈L291) is permissionless (only `validGovernanceProof /
+sufficientAuthority / nonReentrant`). The only durable single‑use gate is
+`_usedProofs[_getProofHash(proof)]`, and `_getProofHash` (≈L586) =
+`keccak256(adiURL, anchorId, timestamp, nonce, requiredLevel)` where **timestamp, nonce, and
+requiredLevel are caller‑supplied and NOT anchor‑bound** (nonce=0 skips the nonce gate; timestamp
+only bounded `timestamp ≤ block.timestamp ≤ expiresAt`). An attacker replays the exact committed
+`(target,value,data)` — which passes the CRITICAL‑001 commitment check — with a fresh `timestamp`
+each call ⇒ new proof hash ⇒ `_usedProofs` never trips ⇒ the anchored transfer/call re‑executes
+unboundedly. The commitment check binds *what* executes but not *how many times*.
+
+**Fix (choose one; A preferred):**
+- **A. Key single‑use to the anchor identity.** Change `_getProofHash` (or add an
+  `_anchorConsumed[anchorId]` check‑and‑set consumed in `executeGovernanceProofDirect` /
+  `executeWithGovernanceProof` / `batchExecuteWithGovernanceProof`) so replay protection keys on
+  `proof.anchorId` alone (each anchor commits to exactly one `executionCommitment` = one
+  `(target,value,data)`, so one execution per anchor is the correct invariant). Malleable
+  timestamp/nonce/level can then no longer mint fresh proof hashes.
+- **B. Consume the anchor's on‑chain flag.** Mirror `CertenAnchorV6_1.executeWithGovernance`
+  (check‑and‑set `governanceExecuted` on the anchor) from the account path.
+
+**Also (MED):** `proof.requiredLevel` is caller‑supplied and only checked `>= computedLevel`;
+bind it to the anchor (`anchor.governanceLevel`) or drop the caller‑supplied level.
+
+**Test plan (Foundry, `certen-contracts/evm/test/`):**
+1. `test_ReplayDrainBlocked`: create anchor for `(target,value,data)`, call
+   `executeGovernanceProofDirect` once (succeeds), call again with a different `proof.timestamp`
+   ⇒ MUST revert (single‑use by anchor).
+2. `test_PermissionlessCallerStillBoundToCommitment`: a non‑owner caller can only execute the
+   exact committed `(target,value,data)` (unchanged) — and only once.
+3. `test_BatchDistinctLegs`: document/behave for the batch path (currently reverts unless legs are
+   byte‑identical — separate LOW correctness item E).
+
+**Deploy:** requires redeploying `CertenAccountV4` across chains — **needs explicit authorization**
+given the operator/BLS identity blast radius. Do NOT deploy from this workstream without sign‑off.
+
+### #14‑consumer (audit layer) — web‑app must verify the aggregate
+`certen-web-app` `TransactionStatusPollingService.ts` currently trusts `threshold_met==='true'`.
+Now that the write‑back carries the verifiable aggregate (see #14‑producer), the consumer should
+recompute `signed/total ≥ threshold_numerator/threshold_denominator` AND verify the aggregate BLS
+signature over `attestation_message_hash` under the validator set at `validator_set_root` before
+displaying "quorum verified". Separate repo.
+
+### M2 (product) — non‑EVM contract calls
+The choke point + `VerifyAgainstResult` now REJECT non‑EVM legs carrying calldata (fail‑closed),
+consistent with "EVM legs do native/contract calls; non‑EVM is native‑only for now." Confirm this
+is the intended stance, or scope trustless non‑EVM effect proofs before enabling non‑EVM calldata.
