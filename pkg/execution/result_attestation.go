@@ -147,6 +147,12 @@ func (a *AggregatedAttestation) ComputeAggregateHash() [32]byte {
 	return sha256.Sum256(data)
 }
 
+// minQuorumDistinctSigners is the hard floor on the number of DISTINCT validators whose
+// signatures must back a result before it can finalize, independent of the fractional
+// supermajority. It prevents a single-node / empty-peer set from trivially "meeting" a
+// 2/3 threshold (SEC-H2). Kept in step with attestation.ThresholdConfig.MinValidators.
+const minQuorumDistinctSigners = 3
+
 // CheckThreshold verifies if the attestation meets the required threshold
 func (a *AggregatedAttestation) CheckThreshold() bool {
 	if a.TotalVotingPower == nil || a.SignedVotingPower == nil {
@@ -611,7 +617,16 @@ func (c *AttestationCollector) tryAggregate(resultHash [32]byte) (*AggregatedAtt
 	// which may already be true at the configured threshold before supermajority holds),
 	// so finalization fires exactly once when the 2/3 quorum is first reached.
 	wasFinalizedBefore := agg.Finalized
-	thresholdMet := agg.CheckThreshold() && agg.MeetsSupermajority()
+	// SEC-H2: distinct-signer floor. With a single-validator (or empty-peer) set, both
+	// CheckThreshold and MeetsSupermajority are trivially satisfied (signed=total=1:
+	// 1*3 >= 1*2), letting a lone node finalize its own result with no quorum. Require a
+	// minimum number of DISTINCT signers before finalization; this only ever adds
+	// restriction and stays well below the 2/3 supermajority a correctly-sized fleet needs.
+	meetsSignerFloor := agg.ValidatorCount >= minQuorumDistinctSigners
+	if !meetsSignerFloor {
+		log.Printf("⚠️ [ATTEST] Result %x has %d distinct signer(s) < floor %d — refusing to finalize (quorum too small)", resultHash[:8], agg.ValidatorCount, minQuorumDistinctSigners)
+	}
+	thresholdMet := meetsSignerFloor && agg.CheckThreshold() && agg.MeetsSupermajority()
 
 	// RB-3: defense-in-depth — the aggregate BLS signature MUST verify against the
 	// single agreed messageHash under the signing set's public keys before we treat
@@ -885,15 +900,19 @@ func (v *ResultVerifier) VerifyAndAttest(
 		return nil, errors.New("transaction execution failed")
 	}
 
-	// Verify Merkle proofs
-	if result.TxInclusionProof != nil {
-		if !result.TxInclusionProof.Verify() {
-			return nil, errors.New("transaction inclusion proof invalid")
+	// SEC-8: inclusion proofs are MANDATORY — a nil proof must never be silently skipped
+	// (the observer leaves them nil on construction error and "continues from receipt",
+	// which without this check would attest an unproven inclusion). The only exception is a
+	// genuine non-EVM NATIVE transfer, whose native observer cannot produce an EVM MPT proof
+	// — a scoped limitation mirrored in VerifyAgainstResult; a non-EVM CONTRACT CALL is
+	// already refused there.
+	nonEVMNative := isNonEVMChainKey(commitment.TargetChain) && !commitment.isContractCallExpected()
+	if !nonEVMNative {
+		if result.TxInclusionProof == nil || !result.TxInclusionProof.Verify() {
+			return nil, errors.New("transaction inclusion proof missing or invalid — attestation refused")
 		}
-	}
-	if result.ReceiptInclusionProof != nil {
-		if !result.ReceiptInclusionProof.Verify() {
-			return nil, errors.New("receipt inclusion proof invalid")
+		if result.ReceiptInclusionProof == nil || !result.ReceiptInclusionProof.Verify() {
+			return nil, errors.New("receipt inclusion proof missing or invalid — attestation refused")
 		}
 	}
 

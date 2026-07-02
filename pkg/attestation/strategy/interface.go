@@ -340,7 +340,19 @@ func (c *ThresholdConfig) CalculateThresholdWeight(totalWeight int64) int64 {
 	return (totalWeight*int64(c.Numerator))/int64(c.Denominator) + 1
 }
 
-// IsThresholdMet checks if achieved weight meets the threshold
+// IsThresholdMet checks if achieved weight meets the threshold.
+//
+// SEC-H2: a genuine quorum requires a minimum-size validator set AND at least that many
+// independent signatures. Without this floor, a single-node / empty-peer deployment
+// trivially "meets" a 2/3 threshold (total=1 → required=(1*2/3)+1=1, achieved=1=self),
+// giving a lone executor full write-back authority with no peer agreement — the exact
+// scenario the quorum is meant to prevent. The floor only ever ADDS restriction, so it
+// cannot weaken the fractional threshold for correctly-sized fleets.
 func (c *ThresholdConfig) IsThresholdMet(achievedWeight, totalWeight int64) bool {
+	if c.MinValidators > 0 {
+		if totalWeight < int64(c.MinValidators) || achievedWeight < int64(c.MinValidators) {
+			return false
+		}
+	}
 	return achievedWeight >= c.CalculateThresholdWeight(totalWeight)
 }

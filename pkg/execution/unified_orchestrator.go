@@ -860,19 +860,46 @@ func (o *UnifiedOrchestrator) executionTxHashForChain(req *UnifiedProofCycleRequ
 // committed effect before this peer signs, using the USER-SIGNED intent fetched from
 // Accumulate — never trusting the executor's request. Fails closed on any doubt.
 func (o *UnifiedOrchestrator) peerVerifyCommittedEffect(ctx context.Context, msg *attestation.AttestationMessage, chainStrategy chain.ChainExecutionStrategy) error {
-	// Without an Accumulate query client we cannot independently verify. Fail closed iff
-	// contract calls are enabled (a native-only deployment has nothing to verify here).
-	if o.config.AccumulateQueryClient == nil {
-		if contractCallsAllowed() {
-			return fmt.Errorf("no Accumulate query client (contract calls enabled)")
-		}
+	// Native-only deployments have no contract-call effects to independently verify here
+	// (the native value transfer is verified on the normal observation path). Everything
+	// below concerns the CERTEN_ALLOW_CONTRACT_CALLS regime.
+	if !contractCallsAllowed() {
 		return nil
 	}
+
+	// Without an Accumulate query client we cannot independently verify — fail closed.
+	if o.config.AccumulateQueryClient == nil {
+		return fmt.Errorf("no Accumulate query client (contract calls enabled)")
+	}
+	// H1: an empty intent id would let a non-JSON/benign blob satisfy the binding below via
+	// intentIDFromBlob("")=="" — refuse. A real contract-call attestation always carries one.
+	if msg.IntentID == "" {
+		return fmt.Errorf("contract-call attestation missing intent id")
+	}
 	if msg.AccumulateTxHash == "" || msg.AccumulateAccountURL == "" {
-		if contractCallsAllowed() {
-			return fmt.Errorf("attestation missing Accumulate intent pointer")
+		return fmt.Errorf("attestation missing Accumulate intent pointer")
+	}
+
+	// An observer (chain RPC) is required to independently re-observe execution, but ONLY
+	// when there is actually something on-chain to check (a contract-call leg, or an exec tx
+	// to cross-check). A genuinely native intent with no execution tx needs no observer, so
+	// build it lazily and fail closed if it is needed but unavailable.
+	buildObserver := func() (*ExternalChainObserver, error) {
+		if chainStrategy == nil {
+			return nil, fmt.Errorf("no chain strategy for %s (cannot independently verify)", msg.TargetChain)
 		}
-		return nil
+		cfg := chainStrategy.Config()
+		if cfg == nil || cfg.RPC == "" {
+			return nil, fmt.Errorf("no RPC for chain %s", chainStrategy.ChainID())
+		}
+		chainID, _ := strconv.ParseInt(chainStrategy.ChainID(), 10, 64)
+		return NewExternalChainObserver(&ExternalChainObserverConfig{
+			EthereumRPC:           cfg.RPC,
+			ChainID:               chainID,
+			ValidatorID:           o.config.ValidatorID,
+			RequiredConfirmations: 1,
+			Timeout:               90 * time.Second,
+		})
 	}
 
 	blobs, err := o.config.AccumulateQueryClient.GetIntentBlobs(ctx, msg.AccumulateTxHash, msg.AccumulateAccountURL)
@@ -895,27 +922,35 @@ func (o *UnifiedOrchestrator) peerVerifyCommittedEffect(ctx context.Context, msg
 		}
 	}
 	if len(applicable) == 0 {
-		return nil // no contract call on this chain group — native path already verified
+		// H1: the intent pointer is executor-supplied, so a malicious executor could point
+		// peers at a self-authored blob with EMPTY legs to make effect verification a no-op.
+		// Ground-truth the classification against the on-chain execution: if the execution tx
+		// actually carries calldata, this WAS a contract call and the "native" classification
+		// is a forgery — refuse. A genuinely native transfer has empty input and passes.
+		if msg.ExecutionTxHash == "" {
+			return nil // nothing executed on this chain group to cross-check
+		}
+		observer, oerr := buildObserver()
+		if oerr != nil {
+			return fmt.Errorf("cross-check execution calldata: %w", oerr) // fail closed
+		}
+		hasCalldata, cderr := observer.TxHasCalldata(ctx, common.HexToHash(msg.ExecutionTxHash))
+		if cderr != nil {
+			return fmt.Errorf("cross-check execution calldata: %w", cderr) // fail closed
+		}
+		if hasCalldata {
+			return fmt.Errorf("execution tx %s carries calldata but committed intent has no contract-call leg for %s — refusing (possible forged intent pointer)", msg.ExecutionTxHash, msg.TargetChain)
+		}
+		return nil // genuinely native — no contract-call effect to verify
 	}
 
-	// A contract call requires the execution tx + a chain RPC to independently re-verify.
+	// A contract call requires the execution tx to independently re-verify.
 	if msg.ExecutionTxHash == "" {
 		return fmt.Errorf("contract-call attestation missing execution tx hash")
 	}
-	cfg := chainStrategy.Config()
-	if cfg == nil || cfg.RPC == "" {
-		return fmt.Errorf("no RPC for chain %s", chainStrategy.ChainID())
-	}
-	chainID, _ := strconv.ParseInt(chainStrategy.ChainID(), 10, 64)
-	observer, err := NewExternalChainObserver(&ExternalChainObserverConfig{
-		EthereumRPC:           cfg.RPC,
-		ChainID:               chainID,
-		ValidatorID:           o.config.ValidatorID,
-		RequiredConfirmations: 1,
-		Timeout:               90 * time.Second,
-	})
-	if err != nil {
-		return fmt.Errorf("build observer: %w", err)
+	observer, oerr := buildObserver()
+	if oerr != nil {
+		return oerr // fail closed — cannot independently verify without an observer
 	}
 	for _, l := range applicable {
 		if len(l.events) == 0 {

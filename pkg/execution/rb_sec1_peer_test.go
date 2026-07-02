@@ -120,6 +120,42 @@ func TestRBSec1_NativeIntentPasses(t *testing.T) {
 	}
 }
 
+// H1: an empty IntentID must be refused — otherwise a non-JSON/benign blob makes
+// intentIDFromBlob("")=="" satisfy the binding, letting a forged pointer through.
+func TestRBSec1_EmptyIntentIDRefused(t *testing.T) {
+	t.Setenv("CERTEN_ALLOW_CONTRACT_CALLS", "true")
+	qc := &mockQueryClient{blobs: [][]byte{intentBlob(""), ccdBlobNative("ethereum-sepolia")}}
+	o := orch(qc)
+	msg := &attestation.AttestationMessage{IntentID: "", TargetChain: "ethereum-sepolia", AccumulateTxHash: "h", AccumulateAccountURL: "a"}
+	if err := o.peerVerifyCommittedEffect(context.Background(), msg, nil); err == nil {
+		t.Error("must refuse a contract-call attestation with an empty intent id")
+	}
+}
+
+// H1: a native intent (no applicable call legs) with NO execution tx needs no observer and
+// must pass even when no chain strategy is available — a genuinely native path.
+func TestRBSec1_NativeNoExecTxNoObserverPasses(t *testing.T) {
+	t.Setenv("CERTEN_ALLOW_CONTRACT_CALLS", "true")
+	qc := &mockQueryClient{blobs: [][]byte{intentBlob("x"), ccdBlobNative("ethereum-sepolia")}}
+	o := orch(qc)
+	msg := &attestation.AttestationMessage{IntentID: "x", TargetChain: "ethereum-sepolia", AccumulateTxHash: "h", AccumulateAccountURL: "a", ExecutionTxHash: ""}
+	if err := o.peerVerifyCommittedEffect(context.Background(), msg, nil); err != nil {
+		t.Errorf("native intent with no exec tx must pass without an observer, got %v", err)
+	}
+}
+
+// H1: applicable==0 (executor claims "native") but an execution tx IS present, with no chain
+// strategy to cross-check its calldata ⇒ fail closed rather than silently skip.
+func TestRBSec1_NativeClaimWithExecTxNoObserverFailsClosed(t *testing.T) {
+	t.Setenv("CERTEN_ALLOW_CONTRACT_CALLS", "true")
+	qc := &mockQueryClient{blobs: [][]byte{intentBlob("x"), ccdBlobNative("ethereum-sepolia")}}
+	o := orch(qc)
+	msg := &attestation.AttestationMessage{IntentID: "x", TargetChain: "ethereum-sepolia", AccumulateTxHash: "h", AccumulateAccountURL: "a", ExecutionTxHash: "0xabc"}
+	if err := o.peerVerifyCommittedEffect(context.Background(), msg, nil); err == nil {
+		t.Error("must fail closed when an execution tx exists but calldata cannot be cross-checked")
+	}
+}
+
 // Contract-call leg present but ExecutionTxHash missing ⇒ refuse.
 func TestRBSec1_CallMissingExecTxRefused(t *testing.T) {
 	t.Setenv("CERTEN_ALLOW_CONTRACT_CALLS", "true")

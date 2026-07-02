@@ -640,22 +640,67 @@ func (c *ExecutionCommitment) ComputeCommitmentHash() [32]byte {
 	return sha256.Sum256(data)
 }
 
+// isNonEVMChainKey reports whether a chain identifier names a non-EVM chain whose legs use
+// a chain-specific commitment format and a native observer (no EVM MPT / typed-receipt
+// proof available yet). Classification is by NAME prefix only — an EVM contract call must
+// never be routed here. Kept in lock-step with the executor choke point in
+// bft_target_chain_integration.go.
+func isNonEVMChainKey(chain string) bool {
+	c := normalizeRBChainKey(chain)
+	return strings.HasPrefix(c, "near") ||
+		strings.HasPrefix(c, "cardano") ||
+		strings.HasPrefix(c, "solana") ||
+		strings.HasPrefix(c, "aptos") ||
+		strings.HasPrefix(c, "sui") ||
+		strings.HasPrefix(c, "ton") ||
+		strings.HasPrefix(c, "tron")
+}
+
+// chainKeysEquivalent reports whether two chain identifiers refer to the same chain after
+// normalization. Used to bind an observed result to the COMMITTED target chain so an
+// executor cannot satisfy a commitment for one chain with a result labelled as another.
+func chainKeysEquivalent(a, b string) bool {
+	na, nb := normalizeRBChainKey(a), normalizeRBChainKey(b)
+	return na != "" && na == nb
+}
+
 // VerifyAgainstResult checks if the result matches the commitment
 // SECURITY CRITICAL: This is the primary defense against executor misbehavior
 func (c *ExecutionCommitment) VerifyAgainstResult(result *ExternalChainResult) bool {
-	// Non-EVM chains (TRON, NEAR, Solana, etc.) use native observers that only return
-	// confirmation status, not full tx details (TxTo, TxData, TxValue). For these chains,
-	// the on-chain contract already verified the execution commitment in Step 3.
-	// Skip detailed field-level verification and accept the confirmed result.
+	// SEC-7: bind the OBSERVED chain to the COMMITTED chain. Without this, an executor could
+	// satisfy an Ethereum commitment with a result it labels "solana" (and vice-versa), and
+	// the non-EVM confirmation-only branch below keyed off the executor-reported chain string
+	// rather than the committed one. Chain identity must match before any effect check.
+	if c.TargetChain != "" && !chainKeysEquivalent(c.TargetChain, result.Chain) {
+		fmt.Printf("❌ [COMMITMENT-VERIFY] FAILED: observed chain %q != committed chain %q\n", result.Chain, c.TargetChain)
+		return false
+	}
+
+	committedNonEVM := isNonEVMChainKey(c.TargetChain)
+
+	// SEC-7: a committed CONTRACT CALL can never be accepted on confirmation alone — its
+	// effect (event / state) must be cryptographically bound. Non-EVM contract calls are not
+	// yet trustlessly effect-verifiable, so they are refused outright here, mirroring the
+	// executor choke point which rejects non-EVM legs carrying calldata. EVM contract calls
+	// fall through to the strict field + event + state verification below.
+	if c.isContractCallExpected() || c.IsContractCall {
+		if committedNonEVM {
+			fmt.Printf("❌ [COMMITMENT-VERIFY] FAILED: non-EVM contract call cannot be trustlessly effect-verified — refusing\n")
+			return false
+		}
+	}
+
+	// Non-EVM chains use native observers that return confirmation status only (no TxTo /
+	// TxData / TxValue, no MPT inclusion proof). This branch is now reachable ONLY for a
+	// genuine non-EVM NATIVE transfer whose committed chain matches the observed chain (both
+	// enforced above). It remains a scoped, explicitly-logged limitation for native transfers
+	// until non-EVM inclusion proofs exist; it can never rubber-stamp a contract call.
 	if result.TxTo == nil && result.TxData == nil && result.Status == 1 {
-		chain := strings.ToLower(result.Chain)
-		if strings.Contains(chain, "tron") || strings.Contains(chain, "near") ||
-			strings.Contains(chain, "solana") || strings.Contains(chain, "ton") ||
-			strings.Contains(chain, "aptos") || strings.Contains(chain, "sui") {
-			fmt.Printf("✅ [COMMITMENT-VERIFY] Non-EVM chain %s: tx confirmed on-chain, skipping field-level verification\n", result.Chain)
+		if committedNonEVM && !c.isContractCallExpected() && !c.IsContractCall {
+			fmt.Printf("⚠️ [COMMITMENT-VERIFY] Non-EVM native transfer on %s (committed=%s): accepted on confirmation — effect not trustlessly verifiable yet\n", result.Chain, c.TargetChain)
 			return true
 		}
-		fmt.Printf("❌ [COMMITMENT-VERIFY] FAILED: TxTo is nil\n")
+		fmt.Printf("❌ [COMMITMENT-VERIFY] FAILED: TxTo is nil for a chain that must be field-verified\n")
 		return false
 	}
 

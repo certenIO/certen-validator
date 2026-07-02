@@ -542,6 +542,23 @@ func (o *ExternalChainObserver) VerifyExecutedCall(
 	return result, nil
 }
 
+// TxHasCalldata reports whether the on-chain execution tx carries non-empty input data,
+// i.e. it is a contract call rather than a native value transfer. This is executor-
+// INDEPENDENT ground truth (read straight from the chain), used by peer verification to
+// cross-check the "is contract call" classification against what actually executed —
+// closing the forged-intent-pointer bypass where an executor claims a call was "native".
+// Fails closed: any RPC/lookup error is returned to the caller to refuse on.
+func (o *ExternalChainObserver) TxHasCalldata(ctx context.Context, txHash common.Hash) (bool, error) {
+	tx, _, err := o.ethClient.TransactionByHash(ctx, txHash)
+	if err != nil {
+		return false, fmt.Errorf("fetch execution tx %s: %w", txHash.Hex(), err)
+	}
+	if tx == nil {
+		return false, fmt.Errorf("execution tx %s not found", txHash.Hex())
+	}
+	return len(tx.Data()) > 0, nil
+}
+
 // =============================================================================
 // MERKLE PROOF COLLECTOR (implements ethdb.KeyValueWriter for trie.Prove)
 // =============================================================================

@@ -126,6 +126,18 @@ func TestWS1_RejectsNonEVMNameWithCalldata(t *testing.T) {
 	}
 }
 
+// SEC-M1: a leg whose executionPayload.chainId differs from the routed (top-level) chainId
+// must be rejected — even with a commitment valid for ep.ChainID — so the commitment always
+// binds the chain we actually execute on (no chain-redirect via the on-chain backstop alone).
+func TestWS1_RejectsChainIDRedirect(t *testing.T) {
+	cd := ws1CallData()
+	// Commitment is valid for chainId=1, but the leg is routed to chainId=11155111.
+	ep := validCallEP(1, ws1Emitter, big.NewInt(0), cd)
+	if legs := ws1Extract(t, ws1Leg("ethereum-sepolia", 11155111, ws1Emitter, ep)); legs != nil {
+		t.Errorf("ep.chainId != routed chainId must reject (chain-redirect), got %d legs", len(legs))
+	}
+}
+
 // RB-SEC-3 (native): an EVM native leg also executes the committed target, not leg.To.
 func TestWS1_NativeExecutesCommittedTarget(t *testing.T) {
 	recipient := "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"

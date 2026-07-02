@@ -1151,7 +1151,17 @@ func (btce *BFTTargetChainExecutor) extractAllLegsFromIntent(legacyIntent *inten
 				if _, ok := epValue.SetString(strings.TrimSpace(ep.Value), 10); !ok {
 					epValue = big.NewInt(0)
 				}
-				if computeExecutionCommitment(ep.ChainID, epTarget, epValue, legData) != common.HexToHash(ep.ExecutionCommitment) {
+				// SEC-M1: the commitment MUST be bound to the chain we actually route/execute
+				// on (chainID), not the self-referential ep.ChainID. Otherwise an intent whose
+				// ep.ChainID differs from the routed chainID — but whose executionCommitment was
+				// crafted to match computeExecutionCommitment(ep.ChainID,...) — would pass this
+				// local check yet execute on a DIFFERENT chain, relying solely on the on-chain
+				// block.chainid backstop. Reject any such divergence, then bind to chainID.
+				if ep.ChainID != 0 && ep.ChainID != chainID {
+					btce.logger.Printf("🚨 [CRITICAL-003] Leg %s executionPayload.chainId=%d != routed chainId=%d — rejecting intent (chain-redirect)", legID, ep.ChainID, chainID)
+					return nil
+				}
+				if computeExecutionCommitment(chainID, epTarget, epValue, legData) != common.HexToHash(ep.ExecutionCommitment) {
 					btce.logger.Printf("🚨 [CRITICAL-003] ExecutionCommitment mismatch for leg %s — rejecting intent (possible tampering)", legID)
 					return nil
 				}
