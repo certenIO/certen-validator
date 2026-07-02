@@ -461,6 +461,10 @@ func (a *MultiLegAggregator) buildUnifiedAttestationBundle(
 			ThresholdMet:       primaryResult.AggregatedAttestation.ThresholdMet,
 			Finalized:          primaryResult.AggregatedAttestation.ThresholdMet && primaryResult.AggregatedAttestation.Verified,
 			FinalizedAt:        time.Now().UTC(),
+			// SEC-14: carry the verifiable aggregate core into the multi-leg write-back too.
+			// (ValidatorRoot/SnapshotID are execution-layer only and not threaded here.)
+			ValidatorBitfield: primaryResult.AggregatedAttestation.ValidatorBitfield,
+			TotalVotingPower:  big.NewInt(primaryResult.AggregatedAttestation.TotalWeight),
 		}
 	}
 

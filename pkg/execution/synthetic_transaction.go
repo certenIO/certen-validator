@@ -207,6 +207,22 @@ type CertenDataEntry struct {
 	GovernanceProofRef string `json:"governance_proof_ref"` // Reference to full governance proof (BLS, ZK)
 	ThresholdMet       bool   `json:"threshold_met"`        // True if attestation threshold met
 
+	// SEC-14: the VERIFIABLE quorum aggregate. Previously the write-back carried only the
+	// self-reported booleans above, so no consumer could independently verify the ≥2/3 BLS
+	// aggregate — a lone/malicious executor could fabricate `threshold_met=true`. These fields
+	// carry the aggregate BLS signature, the exact message the quorum signed, the validator
+	// set root/snapshot it was signed under, the participation bitfield, and the threshold
+	// ratio + total power, so a consumer can recompute and verify the aggregate against the
+	// validator set rather than trusting a boolean. See [[project_onchain_verification_findings]].
+	AggregateSignature   string `json:"aggregate_signature,omitempty"`    // hex BLS aggregate signature
+	AttestationMessageHash string `json:"attestation_message_hash,omitempty"` // hex message all validators signed
+	ValidatorSetRoot     string `json:"validator_set_root,omitempty"`     // hex merkle root of the signing validator set
+	AttestationSnapshotID string `json:"attestation_snapshot_id,omitempty"` // hex validator-set snapshot id (replay binding)
+	ValidatorBitfield    string `json:"validator_bitfield,omitempty"`     // hex bitmap of participating validators
+	TotalPower           string `json:"total_power,omitempty"`            // total voting power in the set (big.Int)
+	ThresholdNumerator   uint64 `json:"threshold_numerator,omitempty"`    // e.g. 2
+	ThresholdDenominator uint64 `json:"threshold_denominator,omitempty"`  // e.g. 3
+
 	// ==========================================================================
 	// AUDIT REFERENCES (Entries 41-44) - Links for independent verification
 	// ==========================================================================
@@ -452,6 +468,15 @@ func (b *SyntheticTxBuilder) BuildFromBundleWithContext(bundle *AttestationBundl
 		ValidatorCount: agg.ValidatorCount,
 		ThresholdMet:   agg.ThresholdMet,
 
+		// SEC-14: verifiable quorum aggregate (see field docs on CertenDataEntry).
+		AggregateSignature:     hex.EncodeToString(agg.AggregateSignature),
+		AttestationMessageHash: hex.EncodeToString(agg.MessageHash[:]),
+		ValidatorSetRoot:       hex.EncodeToString(agg.ValidatorRoot[:]),
+		AttestationSnapshotID:  hex.EncodeToString(agg.SnapshotID[:]),
+		ValidatorBitfield:      hex.EncodeToString(agg.ValidatorBitfield),
+		ThresholdNumerator:     agg.ThresholdNumerator,
+		ThresholdDenominator:   agg.ThresholdDenominator,
+
 		// Result hashes
 		BundleID:       hex.EncodeToString(bundle.BundleID[:]),
 		ResultHash:     hex.EncodeToString(bundle.ResultHash[:]),
@@ -483,6 +508,10 @@ func (b *SyntheticTxBuilder) BuildFromBundleWithContext(bundle *AttestationBundl
 	// Populate signed power
 	if agg.SignedVotingPower != nil {
 		dataEntry.SignedPower = agg.SignedVotingPower.String()
+	}
+	// SEC-14: total voting power, so a consumer can compute signed/total >= 2/3 itself.
+	if agg.TotalVotingPower != nil {
+		dataEntry.TotalPower = agg.TotalVotingPower.String()
 	}
 
 	// If comprehensive context is provided, populate additional fields
