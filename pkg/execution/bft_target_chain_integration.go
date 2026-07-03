@@ -2163,6 +2163,7 @@ func (btce *BFTTargetChainExecutor) executeNearOperations(
 				nearMsgHash,
 				comprehensiveProof.BLSProof.SignedVotingPower,
 				comprehensiveProof.BLSProof.TotalVotingPower,
+				certenProof.BLSValidatorSetPubKey,
 			)
 			if len(newZKBytes) > 0 {
 				// PubkeyCommitment is embedded inside the ABI-encoded proof bytes

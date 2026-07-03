@@ -40,6 +40,14 @@ type ValidatorBlockMetadata struct {
 	// This is the hex-encoded BLS12-381 aggregate signature from validator attestations.
 	BLSAggregateSignature string
 
+	// BLSValidatorSetPubKey is the hex-encoded public key of the validator that
+	// produced BLSAggregateSignature (the BFT block signer). Carried as a matched
+	// pair with the signature so the executor's ZK prover verifies the signature
+	// against the signer's key rather than the executor's own — required when the
+	// BFT proposer differs from the executor, else the BLS constraint fails
+	// (#774716). Sourced from the ValidatorBlock's GovernanceProof.
+	BLSValidatorSetPubKey string
+
 	// GovernanceRoot computed from the ValidatorBlock's GovernanceProof
 	// This is the Merkle root of authorization leaves signed by validators.
 	GovernanceRoot []byte

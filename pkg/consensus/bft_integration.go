@@ -1086,6 +1086,10 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 		BPTRoot:               bptRoot,
 		CrossChainCommitment:  crossChainCommitment,
 		BLSAggregateSignature: blsSignature,
+		// Matched pair with the signature: the block signer's public key, so the
+		// executor proves the BLS signature against the key that produced it
+		// (fixes #774716 when the BFT proposer/signer differs from the executor).
+		BLSValidatorSetPubKey: vb.GovernanceProof.BLSValidatorSetPubKey,
 		GovernanceRoot:        governanceRoot,
 		TransactionHash:       certenIntent.TransactionHash,
 		AccountURL:            certenIntent.AccountURL,

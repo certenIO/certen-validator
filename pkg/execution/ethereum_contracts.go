@@ -1240,7 +1240,7 @@ func (ecm *EthereumContractManager) buildComprehensiveProof(
 
 	// Generate BLS12-381 proof for TON chain (uses TVM native BLS12-381 opcodes).
 	// This populates blsProof.BLS12381ProofBytes / BLS12381PubkeyCommitment.
-	ecm.generateBLS12381Proof(&blsProof, blsSignatureBytes, tonMessageHash, signedVotingPower, totalVotingPower)
+	ecm.generateBLS12381Proof(&blsProof, blsSignatureBytes, tonMessageHash, signedVotingPower, totalVotingPower, certenProof.BLSValidatorSetPubKey)
 
 	// Commitments and execCommitment are already in `commitments` from the
 	// computeV6CommitmentBundle call at the top of this function. Pull
@@ -1281,7 +1281,7 @@ func (ecm *EthereumContractManager) buildComprehensiveProof(
 		certenProof.BlockHeight,
 	)
 
-	zkProofBytes, _ := ecm.generateBLSZKProof(blsSignatureBytes, evmMessageHash, signedVotingPower, totalVotingPower)
+	zkProofBytes, _ := ecm.generateBLSZKProof(blsSignatureBytes, evmMessageHash, signedVotingPower, totalVotingPower, certenProof.BLSValidatorSetPubKey)
 	blsProof.AggregateSignature = zkProofBytes
 	blsProof.MessageHash = evmMessageHash
 
@@ -1341,8 +1341,29 @@ func (ecm *EthereumContractManager) RegenerateBLSZKProofForChain(
 	messageHash [32]byte,
 	signedVotingPower *big.Int,
 	totalVotingPower *big.Int,
+	blockPubKeyHex string,
 ) ([]byte, [32]byte) {
-	return ecm.generateBLSZKProof(blsSignatureBytes, messageHash, signedVotingPower, totalVotingPower)
+	return ecm.generateBLSZKProof(blsSignatureBytes, messageHash, signedVotingPower, totalVotingPower, blockPubKeyHex)
+}
+
+// resolveProverPubKey picks the public key the ZK/BLS witness must be built
+// against. The BLS signature carried in a ValidatorBlock was produced by that
+// block's signer (the BFT proposer), which is NOT necessarily this executor.
+// The pairing check e(sig,g2)==e(H(msg),pubKey) only holds for the key that
+// actually signed, so we prefer the block signer's key (blockPubKeyHex, hex,
+// same 96-byte encoding as KeyManager.GetPublicKeyBytes). We fall back to this
+// executor's own key only when the block omits a pubkey (legacy self-signed
+// path). Threading the correct key is the fix for constraint #774716 when the
+// elected executor differs from the block signer.
+func resolveProverPubKey(blockPubKeyHex string, fallback []byte) []byte {
+	if h := strings.TrimPrefix(blockPubKeyHex, "0x"); h != "" {
+		if decoded, err := hex.DecodeString(h); err == nil && len(decoded) >= 96 {
+			log.Printf("🔑 [BLS-ZK] Proving against block signer's pubkey (%d bytes) from ValidatorBlock", len(decoded))
+			return decoded
+		}
+		log.Printf("⚠️ [BLS-ZK] Block pubkey present but undecodable/short (%q); falling back to executor's own key", blockPubKeyHex)
+	}
+	return fallback
 }
 
 // generateBLSZKProof generates a Groth16 ZK proof from a BLS signature.
@@ -1358,6 +1379,7 @@ func (ecm *EthereumContractManager) generateBLSZKProof(
 	messageHash [32]byte,
 	signedVotingPower *big.Int,
 	totalVotingPower *big.Int,
+	blockPubKeyHex string,
 ) ([]byte, [32]byte) {
 	var zeroPubkey [32]byte
 
@@ -1375,8 +1397,12 @@ func (ecm *EthereumContractManager) generateBLSZKProof(
 		return nil, zeroPubkey
 	}
 
-	// Get aggregated public key (for now, just our key)
-	pubKeyBytes := blsKeyManager.GetPublicKeyBytes()
+	// Prove against the BLOCK SIGNER's public key (carried in the ValidatorBlock),
+	// falling back to this executor's own key only when the block omits it. The
+	// BLS signature was produced by whichever validator proposed the block; when
+	// that is not this executor, pairing the signature against the executor's key
+	// fails the gnark BLS constraint (#774716). See resolveProverPubKey.
+	pubKeyBytes := resolveProverPubKey(blockPubKeyHex, blsKeyManager.GetPublicKeyBytes())
 	if len(pubKeyBytes) < 96 {
 		log.Printf("⚠️ [BLS-ZK] Invalid public key size: %d (need 96 bytes)", len(pubKeyBytes))
 		return nil, zeroPubkey
@@ -1445,6 +1471,7 @@ func (ecm *EthereumContractManager) generateBLS12381Proof(
 	messageHash [32]byte,
 	signedVotingPower *big.Int,
 	totalVotingPower *big.Int,
+	blockPubKeyHex string,
 ) {
 	prover, err := GetBLS12381Prover()
 	if err != nil || prover == nil {
@@ -1458,7 +1485,8 @@ func (ecm *EthereumContractManager) generateBLS12381Proof(
 		return
 	}
 
-	pubKeyBytes := blsKeyManager.GetPublicKeyBytes()
+	// Prove against the block signer's key (see resolveProverPubKey / #774716).
+	pubKeyBytes := resolveProverPubKey(blockPubKeyHex, blsKeyManager.GetPublicKeyBytes())
 	if len(pubKeyBytes) < 96 {
 		log.Printf("⚠️ [BLS12-381] Invalid public key size: %d (need 96 bytes)", len(pubKeyBytes))
 		return

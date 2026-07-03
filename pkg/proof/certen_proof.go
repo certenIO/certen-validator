@@ -60,6 +60,16 @@ type CertenProof struct {
 	BLSAggregateSignature string   `json:"bls_aggregate_signature,omitempty"` // From governance authorization
 	ValidatorSignatures   []string `json:"validator_signatures,omitempty"`   // From BFT consensus pre-execution
 
+	// BLSValidatorSetPubKey is the hex-encoded public key of the validator that
+	// actually produced BLSAggregateSignature (the BFT block signer). It is a
+	// MATCHED PAIR with BLSAggregateSignature — both are copied out of the same
+	// ValidatorBlock GovernanceProof. The EVM/ZK prover MUST build its witness
+	// against THIS key, not the executor's own key: when the BFT proposer (signer)
+	// differs from the executor, pairing the signer's signature against the
+	// executor's key fails the gnark BLS constraint (#774716). Empty only on the
+	// legacy self-signed path, where the prover falls back to the executor's key.
+	BLSValidatorSetPubKey string `json:"bls_validator_set_pubkey,omitempty"`
+
 	// Accumulate anchor reference from lite client proof
 	AccumulateAnchor *AccumulateAnchorData `json:"accumulate_anchor,omitempty"`
 

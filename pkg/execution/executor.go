@@ -132,6 +132,11 @@ func (tcew *TargetChainExecutorWrapper) SubmitAnchorFromValidatorBlock(
         AccountURL:            vb.AccountURL,
         GeneratedAt:           bft.CommittedAt,
         BLSAggregateSignature: vb.BLSAggregateSignature,
+        // Matched pair with the signature above: the BFT block signer's own
+        // public key. Threaded so the ZK prover verifies the signature against
+        // the key that produced it, not this executor's key (fixes #774716 when
+        // executor != signer). See proof.CertenProof.BLSValidatorSetPubKey.
+        BLSValidatorSetPubKey: vb.BLSValidatorSetPubKey,
         // CRITICAL: Pass original CrossChainData for executeWithGovernance target address
         CrossChainData:        vb.CrossChainData,
         // V6.1 A+++ governance plumbing — must be identical to what BFT signed.

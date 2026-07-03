@@ -124,6 +124,11 @@ type G2GovernanceProofBlock struct {
 	// BLS aggregate signature
 	BLSAggregateSignature string `json:"bls_aggregate_signature"`
 
+	// BLSValidatorSetPubKey is the block signer's public key (hex). Distinct from
+	// the signature above — keeping them in separate fields prevents the
+	// type-confusion that mislabelled the pubkey as a signature.
+	BLSValidatorSetPubKey string `json:"bls_validator_set_pubkey"`
+
 	// Full proof reference (hash)
 	ProofHash           [32]byte `json:"proof_hash"`
 }
@@ -415,7 +420,8 @@ func (b *G2EnhancedBlockBuilder) buildG2GovernanceProofBlock(
 		Level:               "G2",
 		SpecVersion:         proof.GovernanceSpecVersion,
 		OrganizationADI:     inputs.OrganizationADI,
-		BLSAggregateSignature: b.config.BLSValidatorSetPubKey,
+		// Carry the signer's pubkey in its own field — it is NOT the signature.
+		BLSValidatorSetPubKey: b.config.BLSValidatorSetPubKey,
 	}
 
 	// Copy G1 fields if available
