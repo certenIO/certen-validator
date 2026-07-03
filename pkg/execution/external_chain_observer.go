@@ -26,7 +26,14 @@ import (
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/ethereum/go-ethereum/trie"
+
+	"github.com/certen/independant-validator/pkg/execution/contracts"
 )
+
+// certenAccountABI is parsed once for decoding the V6.1 abstract-account execution wrapper
+// (executeGovernanceProofDirect). Nil only if the generated metadata fails to parse, in which
+// case EffectHasCalldata falls back to the raw-tx check.
+var certenAccountABI, _ = contracts.CertenAccountV2MetaData.GetAbi()
 
 // =============================================================================
 // EXTERNAL CHAIN OBSERVER
@@ -557,6 +564,73 @@ func (o *ExternalChainObserver) TxHasCalldata(ctx context.Context, txHash common
 		return false, fmt.Errorf("execution tx %s not found", txHash.Hex())
 	}
 	return len(tx.Data()) > 0, nil
+}
+
+// EffectHasCalldata reports whether the EXECUTED EFFECT carried calldata — i.e. whether the
+// value-moving call was a contract call rather than a native transfer. This is the correct
+// signal for RB-SEC-1's "native classification" cross-check.
+//
+// In the V6.1 model the execution tx is a call to the user's abstract account via
+//
+//	executeGovernanceProofDirect(address target, uint256 value, bytes data, <proof>)
+//
+// so the OUTER tx input is ALWAYS non-empty (it is the account-method call itself). Using
+// len(tx.Data())>0 there would flag every native transfer as a contract call and make peers
+// refuse to attest (the Phase-8 quorum failure). The real effect is the INNER `data` the
+// account forwards to `target`; this decodes that argument via the account ABI. For any
+// non-wrapper (legacy direct-call) execution shape it falls back to the raw tx calldata.
+func (o *ExternalChainObserver) EffectHasCalldata(ctx context.Context, txHash common.Hash) (bool, error) {
+	tx, _, err := o.ethClient.TransactionByHash(ctx, txHash)
+	if err != nil {
+		return false, fmt.Errorf("fetch execution tx %s: %w", txHash.Hex(), err)
+	}
+	if tx == nil {
+		return false, fmt.Errorf("execution tx %s not found", txHash.Hex())
+	}
+	input := tx.Data()
+
+	inner, matched, derr := decodeAbstractAccountEffectCalldata(input)
+	if derr != nil {
+		// Selector matched the wrapper but the body won't decode — anomalous; fail closed so
+		// the caller refuses rather than silently treating it as native.
+		return false, fmt.Errorf("cross-check %s: %w", txHash.Hex(), derr)
+	}
+	if matched {
+		return inner, nil
+	}
+
+	// Legacy / direct execution: the tx input IS the effect calldata.
+	return len(input) > 0, nil
+}
+
+// decodeAbstractAccountEffectCalldata inspects a raw execution-tx input. If it is the V6.1
+// abstract-account executeGovernanceProofDirect(target,value,data,proof) wrapper, it returns
+// (innerHasCalldata, true, nil) — where innerHasCalldata reflects the INNER `data` the account
+// forwards to `target`. If the input is not that wrapper, it returns (false, false, nil) and the
+// caller should use the raw-input length. If it IS the wrapper but the body won't decode, it
+// returns (false, true, err) so the caller fails closed. Pure/uses only the parsed ABI so it is
+// unit-testable without an RPC.
+func decodeAbstractAccountEffectCalldata(input []byte) (innerHasCalldata bool, matched bool, err error) {
+	if certenAccountABI == nil || len(input) < 4 {
+		return false, false, nil
+	}
+	m, mErr := certenAccountABI.MethodById(input[:4])
+	if mErr != nil || m.Name != "executeGovernanceProofDirect" {
+		return false, false, nil
+	}
+	args, uErr := m.Inputs.Unpack(input[4:])
+	if uErr != nil {
+		return false, true, fmt.Errorf("decode %s wrapper: %w", m.Name, uErr)
+	}
+	// Signature: (target address, value uint256, data bytes, proof tuple) — data is index 2.
+	if len(args) < 3 {
+		return false, true, fmt.Errorf("unexpected %s arg count (%d)", m.Name, len(args))
+	}
+	data, ok := args[2].([]byte)
+	if !ok {
+		return false, true, fmt.Errorf("unexpected inner data type in %s", m.Name)
+	}
+	return len(data) > 0, true, nil
 }
 
 // =============================================================================

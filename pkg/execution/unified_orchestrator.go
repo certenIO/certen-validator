@@ -931,9 +931,14 @@ func (o *UnifiedOrchestrator) peerVerifyCommittedEffect(ctx context.Context, msg
 	if len(applicable) == 0 {
 		// H1: the intent pointer is executor-supplied, so a malicious executor could point
 		// peers at a self-authored blob with EMPTY legs to make effect verification a no-op.
-		// Ground-truth the classification against the on-chain execution: if the execution tx
-		// actually carries calldata, this WAS a contract call and the "native" classification
-		// is a forgery — refuse. A genuinely native transfer has empty input and passes.
+		// Ground-truth the classification against the on-chain execution: if the executed
+		// EFFECT actually carried calldata, this WAS a contract call and the "native"
+		// classification is a forgery — refuse. A genuinely native transfer has empty effect
+		// calldata and passes. NOTE: in the V6.1 abstract-account model the execution tx is
+		// executeGovernanceProofDirect(target,value,data,proof), whose OUTER input is always
+		// non-empty; EffectHasCalldata decodes the INNER `data` the account forwards so a
+		// native transfer isn't misread as a contract call (that false positive was making
+		// every peer refuse to attest — the Phase-8 quorum failure).
 		if msg.ExecutionTxHash == "" {
 			return nil // nothing executed on this chain group to cross-check
 		}
@@ -941,7 +946,7 @@ func (o *UnifiedOrchestrator) peerVerifyCommittedEffect(ctx context.Context, msg
 		if oerr != nil {
 			return fmt.Errorf("cross-check execution calldata: %w", oerr) // fail closed
 		}
-		hasCalldata, cderr := observer.TxHasCalldata(ctx, common.HexToHash(msg.ExecutionTxHash))
+		hasCalldata, cderr := observer.EffectHasCalldata(ctx, common.HexToHash(msg.ExecutionTxHash))
 		if cderr != nil {
 			return fmt.Errorf("cross-check execution calldata: %w", cderr) // fail closed
 		}
