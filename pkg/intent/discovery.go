@@ -138,6 +138,7 @@ type IntentDiscovery struct {
 	// Block monitoring state
 	lastProcessedBlock  uint64
 	lastQueuedBlock    uint64             // highest block sent to workers (prevents re-queuing)
+	finalizeCeiling    uint64             // watermark is not finalized past this (= latest - confirmLag); the last few heights stay re-scannable
 	isMonitoring       bool
 	stopCh             chan struct{}
 	blockProcessCh     chan *BlockProcessJob
@@ -453,80 +454,96 @@ func (id *IntentDiscovery) initializeStartingHeight(ctx context.Context) error {
 	}
 
 	id.lastProcessedBlock = startHeight
+	id.lastQueuedBlock = startHeight
+	id.finalizeCeiling = startHeight
 	return nil
 }
 
-// checkForNewBlocks checks for new blocks and queues them for processing.
+// checkForNewBlocks scans every block from the watermark up to the latest directory
+// height and queues each for processing. It MUST NOT advance the watermark past a
+// height it has not searched.
 //
-// IMPORTANT: Accumulate's directoryHeight is the CometBFT consensus round counter,
-// which increments every ~2 seconds. However, actual Accumulate minor blocks are
-// extremely sparse — only produced when there are real transactions. On Kermit testnet,
-// only ~7 actual DN blocks exist across 500K+ heights. Iterating through every height
-// would waste 99.99% of API calls on nonexistent blocks.
+// The previous implementation queried only the single latest directoryHeight per tick
+// and jumped the watermark past every intermediate height, assuming those were empty
+// CometBFT rounds. That is wrong for this network: Accumulate is event-driven
+// (create_empty_blocks=false), and its DN minor blocks are dense/contiguous (verified
+// against the v3 minor-block range query). The "skipped" heights are the REAL blocks
+// that carry intents, so skipping them silently dropped any intent whose block was not
+// exactly the latest height at poll time — the operator's "first intent after idle is
+// not executed; a second submission is needed" symptom.
 //
-// Instead, we query ONLY the latest directoryHeight each tick. Since actual blocks are
-// rare (minutes to hours apart), 5-second polling will never miss a block.
+// A height with no Certen intent — or one that transiently fails to query — is a cheap
+// no-op: SearchCertenTransactions catches per-partition errors and returns nothing, so
+// the block simply advances. Because DN blocks are dense there is no efficiency loss
+// versus enumerating them; a per-tick cap bounds the rare large catch-up.
 func (id *IntentDiscovery) checkForNewBlocks(ctx context.Context) error {
 	latestBlock, err := id.client.GetLatestBlock(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get latest block: %w", err)
 	}
+	latest := latestBlock.Height
+
+	id.watermarkMu.Lock()
 
 	// Network switch detection (e.g., DevNet vs Kermit/Mainnet)
-	if latestBlock.Height < id.lastProcessedBlock {
-		id.logger.Printf("🔄 Network switch detected: current height %d < last processed %d", latestBlock.Height, id.lastProcessedBlock)
-
-		id.watermarkMu.Lock()
-		id.lastProcessedBlock = latestBlock.Height
-		id.lastQueuedBlock = latestBlock.Height
+	if latest < id.lastProcessedBlock {
+		id.logger.Printf("🔄 Network switch detected: current height %d < last processed %d", latest, id.lastProcessedBlock)
+		id.lastProcessedBlock = latest
+		id.lastQueuedBlock = latest
+		id.finalizeCeiling = latest
 		id.processedBlocks = make(map[uint64]bool)
 		id.watermarkMu.Unlock()
-
 		if id.ledgerStore != nil {
-			if err := id.ledgerStore.SaveIntentLastBlock(latestBlock.Height); err != nil {
+			if err := id.ledgerStore.SaveIntentLastBlock(latest); err != nil {
 				id.logger.Printf("⚠️ Failed to persist reset height: %v", err)
 			}
 		}
 		return nil
 	}
 
-	// Already processed or queued this height — nothing to do
-	id.watermarkMu.Lock()
-	alreadyHandled := latestBlock.Height <= id.lastProcessedBlock || latestBlock.Height <= id.lastQueuedBlock
+	// Confirmation lag: finalize the watermark only up to (latest - confirmLag). The
+	// last few heights stay unfinalized and are re-scanned on subsequent ticks, so an
+	// intent whose block became queryable a tick after we first looked — or whose
+	// search hit a transient per-partition error — is still caught. Re-scanning is
+	// safe: discovered intents are de-duped by markInProgress/markCompleted, so a
+	// re-scan can never re-execute an intent.
+	const confirmLag = uint64(2)
+	ceiling := latest
+	if latest > confirmLag {
+		ceiling = latest - confirmLag
+	}
+	id.finalizeCeiling = ceiling
+
+	from := id.lastProcessedBlock + 1
+
+	// Bound the burst on a large catch-up (cold start / long idle); the remaining
+	// heights are picked up on subsequent ticks as the watermark advances.
+	const maxPerTick = uint64(2000)
+	hi := latest
+	if from <= latest && hi-from+1 > maxPerTick {
+		hi = from + maxPerTick - 1
+	}
+	id.lastQueuedBlock = latest
 	id.watermarkMu.Unlock()
 
-	if alreadyHandled {
+	if from > latest {
 		return nil
 	}
-
-	// Skip all intermediate empty heights and jump directly to the latest.
-	// Accumulate's directoryHeight increments with CometBFT rounds (~every 2s),
-	// but actual blocks with transactions are extremely sparse. Only the height
-	// returned by GetLatestBlock (the current directoryHeight) is guaranteed to
-	// be a real, queryable block.
-	skipped := latestBlock.Height - id.lastProcessedBlock - 1
-	if skipped > 0 {
-		id.logger.Printf("⏩ Skipping %d empty heights (%d -> %d), queuing latest block %d",
-			skipped, id.lastProcessedBlock, latestBlock.Height-1, latestBlock.Height)
+	// Only log genuine forward progress (more than just the re-scan window), to avoid
+	// per-tick noise while idle.
+	if hi-from+1 > confirmLag+1 {
+		id.logger.Printf("🔎 Scanning blocks [%d -> %d] (latest %d, finalize<=%d)", from, hi, latest, ceiling)
 	}
 
-	// Advance past all empty intermediate heights
-	id.watermarkMu.Lock()
-	id.lastProcessedBlock = latestBlock.Height - 1
-	id.watermarkMu.Unlock()
-
-	// Queue only the latest block for processing
-	select {
-	case id.blockProcessCh <- &BlockProcessJob{
-		PartitionURL: "acc://dn.acme",
-		BlockHeight:  latestBlock.Height,
-		BlockData:    latestBlock,
-	}:
-		id.watermarkMu.Lock()
-		id.lastQueuedBlock = latestBlock.Height
-		id.watermarkMu.Unlock()
-	case <-id.stopCh:
-		return nil
+	for h := from; h <= hi; h++ {
+		select {
+		case id.blockProcessCh <- &BlockProcessJob{
+			PartitionURL: "acc://dn.acme",
+			BlockHeight:  h,
+		}:
+		case <-id.stopCh:
+			return nil
+		}
 	}
 
 	return nil
@@ -576,9 +593,12 @@ func (id *IntentDiscovery) advanceWatermark(height uint64) {
 
 	id.processedBlocks[height] = true
 
-	// Advance lastProcessedBlock through contiguous completed blocks
+	// Advance lastProcessedBlock through contiguous completed blocks, but never past
+	// the finalize ceiling (latest - confirmLag). Heights above the ceiling are left
+	// unfinalized on purpose so they are re-scanned on subsequent ticks (safe: intents
+	// are de-duped, so a re-scan cannot re-execute one).
 	advanced := false
-	for id.processedBlocks[id.lastProcessedBlock+1] {
+	for id.lastProcessedBlock+1 <= id.finalizeCeiling && id.processedBlocks[id.lastProcessedBlock+1] {
 		delete(id.processedBlocks, id.lastProcessedBlock+1)
 		id.lastProcessedBlock++
 		advanced = true
