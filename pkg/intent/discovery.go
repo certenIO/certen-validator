@@ -814,6 +814,23 @@ func (id *IntentDiscovery) convertCertenTransactionToIntent(certenTx *accumulate
 		intent.Partition = strings.ToLower(certenTx.Partition)
 	}
 
+	// Authoritative account: prefer the REAL transaction principal (the account the
+	// writeData provably lives on, extracted from header.principal during discovery)
+	// over the intent's self-declared organizationAdi. A malformed or spoofed intent
+	// can declare a wrong / non-existent org ADI (e.g. "acc://o.acme"); trusting it
+	// sends the L1 chained-proof lookup to an account that has no such entry, which
+	// then stalls forever as "chained proof unavailable (retryable)". The discovered
+	// principal (already including the /data suffix) is the source of truth.
+	if certenTx.AccountURL != "" {
+		derived := intent.AccountURL
+		intent.AccountURL = certenTx.AccountURL
+		intent.OrganizationADI = strings.TrimSuffix(certenTx.AccountURL, "/data")
+		if derived != "" && derived != certenTx.AccountURL {
+			id.logger.Printf("🔗 [ACCOUNT] Proof account corrected to discovered principal %s (declared derived %q)",
+				certenTx.AccountURL, derived)
+		}
+	}
+
 	// Additional validation - ensure we have a proper intent ID
 	if intent.IntentID == "" {
 		return nil, fmt.Errorf("transaction %s produced invalid intent with empty IntentID", certenTx.Hash)
