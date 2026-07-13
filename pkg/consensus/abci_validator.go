@@ -45,6 +45,18 @@ type ValidatorApp struct {
 
 	// Validator count for quorum calculation
 	validatorCount int
+
+	// Optional block-checkpoint hook (P3): invoked non-blocking after each committed block so a
+	// single designated writer can mirror block roots to Accumulate. nil unless wired in main.go.
+	checkpointHook func(height int64, blockHash string, appHash []byte, ts time.Time)
+}
+
+// SetCheckpointHook installs the (non-blocking) per-commit checkpoint callback. The callback
+// MUST NOT block — it is called on the consensus commit path and is expected to enqueue only.
+func (app *ValidatorApp) SetCheckpointHook(fn func(height int64, blockHash string, appHash []byte, ts time.Time)) {
+	app.mu.Lock()
+	defer app.mu.Unlock()
+	app.checkpointHook = fn
 }
 
 // NewValidatorApp creates a new ABCI application for validator consensus.
@@ -354,6 +366,11 @@ func (app *ValidatorApp) Commit(ctx context.Context, req *abcitypes.RequestCommi
 		LastBlockAppHash: appHash,
 	}); err != nil {
 		app.logger.Printf("❌ Failed to persist ABCI state: %v", err)
+	}
+
+	// P3: mirror this committed block's roots to Accumulate (non-blocking; hook only enqueues).
+	if app.checkpointHook != nil {
+		app.checkpointHook(app.latestHeight, app.currentBlockHash, appHash, app.currentBlockTime)
 	}
 
 	// Persist consensus entries and batch attestations to postgres

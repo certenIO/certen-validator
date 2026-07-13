@@ -915,6 +915,45 @@ func startValidator(
         return nil, nil, fmt.Errorf("failed to create unified CometBFT engine: %w", err)
     }
 
+    // P3: optional async Accumulate block-checkpoint anchor. Gated OFF by default. A single
+    // designated writer validator mirrors each committed block's roots to a Certen data account
+    // (e.g. acc://certen-protocol.acme/block-history) for external tamper-evidence / audit.
+    if os.Getenv("CHECKPOINT_ANCHOR_ENABLED") == "true" {
+        writer := os.Getenv("CHECKPOINT_WRITER_VALIDATOR")
+        if writer == "" {
+            writer = "validator-1"
+        }
+        cpAccount := os.Getenv("CHECKPOINT_DATA_ACCOUNT") // acc://certen-protocol.acme/block-history
+        cpSigner := os.Getenv("CHECKPOINT_SIGNER_URL")    // acc://certen-protocol.acme/book/1
+        if cfg.ValidatorID != writer {
+            log.Printf("ℹ️ [CHECKPOINT] anchor enabled but this node (%s) is not the designated writer (%s) — skipping", cfg.ValidatorID, writer)
+        } else if cpAccount == "" || cpSigner == "" {
+            log.Printf("⚠️ [CHECKPOINT] anchor enabled but CHECKPOINT_DATA_ACCOUNT/CHECKPOINT_SIGNER_URL not set — disabled")
+        } else if va := cometEngine.GetValidatorApp(); va == nil {
+            log.Printf("⚠️ [CHECKPOINT] anchor enabled but ValidatorApp not available on engine — disabled")
+        } else {
+            cpSub, cpErr := execution.NewAccumulateSubmitter(&execution.AccumulateSubmitterConfig{
+                Client:              liteClientAdapter,
+                PrivateKey:          privateKey,
+                AccountURL:          cpAccount,
+                SignerURL:           cpSigner,
+                KeyPageIndex:        1,
+                KeyIndex:            0,
+                ConfirmationTimeout: 30 * time.Second,
+                MaxRetries:          3,
+                RetryDelay:          3 * time.Second,
+                Logger:              log.New(log.Writer(), "[CheckpointSubmitter] ", log.LstdFlags),
+            })
+            if cpErr != nil {
+                log.Printf("⚠️ [CHECKPOINT] failed to create submitter: %v (anchor disabled)", cpErr)
+            } else {
+                anchor := execution.NewCheckpointAnchor(cpSub, cfg.ValidatorID, 256, log.New(log.Writer(), "[CHECKPOINT] ", log.LstdFlags))
+                va.SetCheckpointHook(anchor.Enqueue)
+                log.Printf("⚓ [CHECKPOINT] block-checkpoint anchor ENABLED: writer=%s account=%s", writer, cpAccount)
+            }
+        }
+    }
+
     // Initialize BLS key for validator consensus
     // Keys are derived deterministically from validator ID or loaded from file
     // Key storage path can be set via BLS_KEY_PATH env var, defaults to ./data/bls_key.hex

@@ -196,6 +196,46 @@ func (s *AccumulateSubmitterImpl) SubmitTransaction(ctx context.Context, tx *Syn
 	return txHash, nil
 }
 
+// SubmitRawWriteData writes arbitrary pre-serialized data entries as a WriteData transaction
+// to the submitter's configured account, reusing the same signing/submit path as
+// SubmitTransaction. It is intended for lightweight writers (e.g. the block-checkpoint anchor)
+// that do not need the full proof-result SyntheticTransaction envelope.
+func (s *AccumulateSubmitterImpl) SubmitRawWriteData(ctx context.Context, entries [][]byte) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(entries) == 0 {
+		return "", fmt.Errorf("no data entries to write")
+	}
+
+	principal, err := url.Parse(s.accountURL)
+	if err != nil {
+		return "", fmt.Errorf("invalid account URL %q: %w", s.accountURL, err)
+	}
+
+	accTx := &protocol.Transaction{
+		Header: protocol.TransactionHeader{Principal: principal},
+		Body:   &protocol.WriteData{Entry: &protocol.DoubleHashDataEntry{Data: entries}},
+	}
+
+	timestamp := uint64(time.Now().UnixMicro())
+	sig, err := s.createAndSignSignature(ctx, accTx, timestamp)
+	if err != nil {
+		return "", fmt.Errorf("failed to sign raw write-data: %w", err)
+	}
+
+	envelope := &messaging.Envelope{
+		Transaction: []*protocol.Transaction{accTx},
+		Signatures:  []protocol.Signature{sig},
+	}
+
+	txHash, err := s.submitEnvelope(ctx, envelope)
+	if err != nil {
+		return "", fmt.Errorf("failed to submit raw write-data: %w", err)
+	}
+	return txHash, nil
+}
+
 // createAccumulateTransaction creates a proper Accumulate protocol Transaction
 func (s *AccumulateSubmitterImpl) createAccumulateTransaction(tx *SyntheticTransaction) (*protocol.Transaction, error) {
 	// Parse the account URL
