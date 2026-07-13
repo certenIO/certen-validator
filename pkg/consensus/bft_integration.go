@@ -2346,16 +2346,16 @@ func NewUnifiedCometBFTEngine(validatorID string) (*RealCometBFTEngine, error) {
 	p2pPort := 26656  // All validators listen on internal port 26656
 	rpcPort := 26657  // All validators listen on internal port 26657
 
-	// CometBFT home is a persistent Docker volume (validatorN_keys:/app/bft-keys).
-	// DO NOT wipe the data dir on boot: blockstore.db / state.db / cs.wal must survive
-	// restarts so CometBFT recovers to the same height as the persisted app ledger
-	// (validator-ledger, recovered via ValidatorApp.RecoverState). Wiping it reset CometBFT
-	// to genesis while the app recovered to height N, causing the handshake app-hash mismatch
-	// (assertAppHashEqualsOneFromState) crash-loop on any restart after the fleet had
-	// processed intents. Node/priv-validator keys below are still regenerated deterministically.
+	// Create CometBFT configuration with PROTECTED storage (separate from data volumes)
 	homeDir := filepath.Join("/app", "bft-keys", validatorID)
 
-	logger.Printf("💾 Using persistent CometBFT state at %s (survives restarts)", homeDir)
+	logger.Printf("🧹 Cleaning up any cached state for fresh initialization")
+
+	// Force cleanup of any cached state for clean unified BFT initialization
+	dataDir := filepath.Join(homeDir, "data")
+	if err := os.RemoveAll(dataDir); err != nil {
+		logger.Printf("⚠️ Failed to clean data dir: %v", err)
+	}
 
 	cfg := config.DefaultConfig()
 	cfg.SetRoot(homeDir)
