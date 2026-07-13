@@ -26,6 +26,7 @@ type ValidatorApp struct {
 	logger          *log.Logger
 	latestHeight    int64
 	lastCommitHash  []byte
+	pendingAppHash  []byte                     // app-hash computed in FinalizeBlock, persisted verbatim in Commit so CometBFT and the app agree
 	validatorBlocks map[string]*ValidatorBlock // Store by bundle_id
 	mu              sync.RWMutex
 
@@ -292,10 +293,18 @@ func (app *ValidatorApp) FinalizeBlock(ctx context.Context, req *abcitypes.Reque
 		txResults[i] = &result
 	}
 
-	app.logger.Printf("🔄 Finalized validator block %d with %d ValidatorBlock transactions", req.Height, len(req.Txs))
+	// Compute this block's app-hash from post-tx state and RETURN it. In ABCI 0.38 the block's
+	// app-hash comes from ResponseFinalizeBlock.AppHash; returning it empty (as before) made
+	// CometBFT record an empty app-hash while Commit persisted generateAppHash() — a guaranteed
+	// mismatch on restart (assertAppHashEqualsOneFromState). Commit persists this exact value.
+	app.pendingAppHash = app.generateAppHash()
+
+	app.logger.Printf("🔄 Finalized validator block %d with %d ValidatorBlock transactions (appHash=%x)",
+		req.Height, len(req.Txs), app.pendingAppHash[:min(8, len(app.pendingAppHash))])
 
 	return &abcitypes.ResponseFinalizeBlock{
 		TxResults: txResults,
+		AppHash:   app.pendingAppHash,
 	}, nil
 }
 
@@ -327,8 +336,14 @@ func (app *ValidatorApp) Commit(ctx context.Context, req *abcitypes.RequestCommi
 		app.logger.Printf("✅ Updated system ledger for block %d", height)
 	}
 
-	// Generate application hash from current state
-	appHash := app.generateAppHash()
+	// Use the app-hash computed in FinalizeBlock for this block so the persisted value is
+	// byte-identical to what CometBFT recorded from ResponseFinalizeBlock.AppHash. Fall back
+	// to a fresh computation only if FinalizeBlock didn't run (defensive; normal ABCI flow
+	// always calls FinalizeBlock before Commit).
+	appHash := app.pendingAppHash
+	if appHash == nil {
+		appHash = app.generateAppHash()
+	}
 	app.lastCommitHash = appHash
 
 	// CRITICAL: Persist ABCI state for CometBFT recovery after restart
