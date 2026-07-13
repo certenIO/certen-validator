@@ -998,9 +998,14 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	bv.logger.Printf("✅ [CANONICAL-VB] Built ValidatorBlock with real artifacts: bundle=%s op=%s",
 		vb.BundleID, vb.OperationCommitment)
 
-	// 2) Submit to ValidatorApp via CometBFT for invariant verification
-	// Timeout must accommodate retry logic: 30s + 45s + 60s + delays = ~3 minutes
-	bftCtx, bftCancel := context.WithTimeout(ctx, 3*time.Minute)
+	// 2) Submit to ValidatorApp via CometBFT for invariant verification.
+	// Use a FRESH root context, NOT the intent ctx: the ValidatorBlock is fully built and
+	// signed by this point, and the consensus broadcast must not inherit a deadline already
+	// exhausted upstream by proof generation (e.g. a slow/hung G1 gov-proof, whose failure is
+	// tolerated). Deriving from the intent ctx made context.WithTimeout return an already-expired
+	// context, so BroadcastTxSync failed in <1ms with "context deadline exceeded" even though the
+	// fleet was healthy. Timeout accommodates retry logic: 30s + 45s + 60s + delays ≈ 3 minutes.
+	bftCtx, bftCancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer bftCancel()
 
 	bftRes, err := bv.engine.BroadcastValidatorBlockCommit(bftCtx, vb)
