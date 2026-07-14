@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"sort"
 	"sync"
 	"time"
 
@@ -28,7 +27,14 @@ type ValidatorApp struct {
 	lastCommitHash  []byte
 	pendingAppHash  []byte                     // app-hash computed in FinalizeBlock, persisted verbatim in Commit so CometBFT and the app agree
 	validatorBlocks map[string]*ValidatorBlock // Store by bundle_id
-	mu              sync.RWMutex
+	// accumHash is the running app-hash: XOR of every unique VB bundle-id ever committed. The
+	// validatorBlocks map is in-memory only (not restored on restart), so app-hash MUST be
+	// derived from this incremental accumulator — seeded from the persisted app-hash on restart —
+	// or a restarted node recomputes wrong app-hashes and cannot catch up (blocksync rejects).
+	// Values are identical to the old full-map XOR, so this is NOT a consensus change.
+	accumHash    [32]byte
+	accumSeeded  bool // true once >=1 VB has been accumulated (or seeded from a persisted hash)
+	mu           sync.RWMutex
 
 	// Ledger integration
 	ledgerStore *ledger.LedgerStore
@@ -78,6 +84,7 @@ func NewValidatorApp(ledgerStore *ledger.LedgerStore, chainID string) *Validator
 		} else if state != nil {
 			app.latestHeight = state.LastBlockHeight
 			app.lastCommitHash = state.LastBlockAppHash
+			app.seedAccumFromHash(state.LastBlockAppHash)
 			app.logger.Printf("✅ Restored ABCI state: height=%d, appHash=%x",
 				app.latestHeight, app.lastCommitHash[:min(8, len(app.lastCommitHash))])
 		}
@@ -208,6 +215,11 @@ func (app *ValidatorApp) processValidatorTransaction(tx []byte) abcitypes.ExecTx
 	// Store ValidatorBlock with basic memory retention
 	// NOTE: No mutex lock here - FinalizeBlock already holds app.mu.Lock()
 	// Adding a lock here would cause a deadlock (sync.Mutex is not reentrant)
+	// Fold each NEW unique bundle-id into the incremental app-hash accumulator (folding on
+	// overwrite would double-count and diverge from the map-based hash).
+	if _, exists := app.validatorBlocks[vb.BundleID]; !exists {
+		app.xorBundleIntoAccum(vb.BundleID)
+	}
 	app.validatorBlocks[vb.BundleID] = &vb
 
 	// Height-based VB in-memory cache retention (keep last 1000 blocks)
@@ -476,33 +488,37 @@ func (app *ValidatorApp) validateValidatorBlock(vb *ValidatorBlock) error {
 }
 
 
-// generateAppHash creates a deterministic hash of current application state
+// seedAccumFromHash initializes the incremental app-hash accumulator from a persisted app-hash so
+// the app-hash chain continues correctly after a restart. A 32-byte value is the XOR accumulator;
+// the "empty_validator_state" placeholder (or any non-32-byte value) means nothing accumulated yet.
+func (app *ValidatorApp) seedAccumFromHash(h []byte) {
+	if len(h) == 32 {
+		copy(app.accumHash[:], h)
+		app.accumSeeded = true
+	}
+}
+
+// xorBundleIntoAccum folds one bundle-id into the running app-hash accumulator, matching the
+// original per-bundle XOR (first 32 bytes of the bundle-id string). Because XOR is commutative,
+// the accumulated result is independent of order and equals the full-map XOR.
+func (app *ValidatorApp) xorBundleIntoAccum(bundleID string) {
+	b := []byte(bundleID)
+	for i := 0; i < len(b) && i < 32; i++ {
+		app.accumHash[i] ^= b[i]
+	}
+	app.accumSeeded = true
+}
+
+// generateAppHash returns the current app-hash from the incremental accumulator. It is reproducible
+// after a restart (seeded from the persisted app-hash) — unlike recomputing from the in-memory
+// validatorBlocks map, which is empty after a restart and would yield a wrong hash.
 func (app *ValidatorApp) generateAppHash() []byte {
-	if len(app.validatorBlocks) == 0 {
+	if !app.accumSeeded {
 		return []byte("empty_validator_state")
 	}
-
-	// Sort bundleID keys for deterministic iteration
-	bundleIDs := make([]string, 0, len(app.validatorBlocks))
-	for bundleID := range app.validatorBlocks {
-		bundleIDs = append(bundleIDs, bundleID)
-	}
-	sort.Strings(bundleIDs)
-
-	// Create deterministic hash from ValidatorBlocks in sorted order
-	hash := [32]byte{}
-	for _, bundleID := range bundleIDs {
-		vb := app.validatorBlocks[bundleID]
-		// XOR bundleID bytes into hash in deterministic order
-		bundleBytes := []byte(vb.BundleID)
-		for i, b := range bundleBytes {
-			if i < 32 {
-				hash[i] ^= b
-			}
-		}
-	}
-
-	return hash[:]
+	out := make([]byte, 32)
+	copy(out, app.accumHash[:])
+	return out
 }
 
 // querySystemLedger handles system ledger query requests
@@ -655,6 +671,7 @@ func (app *ValidatorApp) RecoverState() error {
 		// Use ledger state as source of truth
 		app.latestHeight = state.LastBlockHeight
 		app.lastCommitHash = state.LastBlockAppHash
+		app.seedAccumFromHash(state.LastBlockAppHash)
 
 		app.logger.Printf("✅ [RECOVERY] Restored state from ledger: height=%d, hash=%x",
 			app.latestHeight, app.lastCommitHash[:min(8, len(app.lastCommitHash))])

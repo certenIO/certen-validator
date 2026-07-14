@@ -76,6 +76,42 @@ func TestAppHashConsistencyAcrossRestart(t *testing.T) {
 	}
 }
 
+// TestAppHashAccumulatorReproducibleAcrossRestart proves the app-hash a node computes after
+// restarting mid-chain (seeded from its persisted hash, then folding in the blocks it missed)
+// equals the app-hash a node computes having processed every block from genesis. Without the
+// seeded accumulator a restarted node recomputes wrong hashes from an empty map and cannot catch up.
+func TestAppHashAccumulatorReproducibleAcrossRestart(t *testing.T) {
+	bundles := []string{
+		"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		"0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+		"0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+	}
+
+	// Reference: one node folds in every bundle from genesis.
+	full := NewValidatorApp(newInMemLedger(), "t")
+	for _, b := range bundles {
+		full.xorBundleIntoAccum(b)
+	}
+	fullHash := full.generateAppHash()
+
+	// Node processes the first two, persists that app-hash, then "restarts": a fresh app seeded
+	// from the persisted hash folds in only the blocks it missed.
+	part := NewValidatorApp(newInMemLedger(), "t")
+	part.xorBundleIntoAccum(bundles[0])
+	part.xorBundleIntoAccum(bundles[1])
+	persisted := part.generateAppHash()
+
+	restarted := NewValidatorApp(newInMemLedger(), "t")
+	restarted.seedAccumFromHash(persisted)
+	restarted.xorBundleIntoAccum(bundles[2])
+	restarted.xorBundleIntoAccum(bundles[3])
+
+	if !bytes.Equal(restarted.generateAppHash(), fullHash) {
+		t.Fatalf("restart-seeded app-hash %x != from-scratch %x", restarted.generateAppHash(), fullHash)
+	}
+}
+
 // TestFinalizeBlockAppHashMatchesCommit checks byte-identity between the app-hash returned to
 // CometBFT in FinalizeBlock and the one persisted in Commit across several sequential blocks.
 func TestFinalizeBlockAppHashMatchesCommit(t *testing.T) {
