@@ -932,9 +932,25 @@ func startValidator(
         } else if va := cometEngine.GetValidatorApp(); va == nil {
             log.Printf("⚠️ [CHECKPOINT] anchor enabled but ValidatorApp not available on engine — disabled")
         } else {
+            // The checkpoint account lives under the same ADI as Phase-9 write-back
+            // (acc://certen-protocol.acme), so sign with the write-back key authorized on that
+            // key page — NOT the validator's local ed25519 key. Prefer a dedicated override,
+            // else the Phase-9 write-back key, else fall back to the validator key.
+            cpKey := privateKey
+            cpKeyHex := os.Getenv("CHECKPOINT_WRITEBACK_PRIV_KEY")
+            if cpKeyHex == "" {
+                cpKeyHex = os.Getenv("ACCUMULATE_WRITEBACK_PRIV_KEY")
+            }
+            if cpKeyHex != "" {
+                if kb, decErr := hex.DecodeString(strings.TrimSpace(cpKeyHex)); decErr == nil && len(kb) == ed25519.PrivateKeySize {
+                    cpKey = ed25519.PrivateKey(kb)
+                } else {
+                    log.Printf("⚠️ [CHECKPOINT] invalid checkpoint write-back key — falling back to validator key")
+                }
+            }
             cpSub, cpErr := execution.NewAccumulateSubmitter(&execution.AccumulateSubmitterConfig{
                 Client:              liteClientAdapter,
-                PrivateKey:          privateKey,
+                PrivateKey:          cpKey,
                 AccountURL:          cpAccount,
                 SignerURL:           cpSigner,
                 KeyPageIndex:        1,
