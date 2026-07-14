@@ -17,9 +17,12 @@ package execution
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"log"
+	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -31,13 +34,17 @@ type RawWriteDataSubmitter interface {
 }
 
 // CheckpointRecord is the compact checkpoint serialized into a single Accumulate data entry.
+// The `Prev` field makes the on-chain log a tamper-evident hash chain: Prev = hex(SHA256(the
+// exact bytes of the previous entry)). A verifier reads each entry's raw bytes, hashes them, and
+// checks the next entry's Prev — walking back to the origin (Prev==""). Continuity survives
+// restarts via a locally-persisted chain head (see CheckpointAnchor.stateFile).
 type CheckpointRecord struct {
 	Version     string `json:"v"`
 	ValidatorID string `json:"validator"`
 	Height      int64  `json:"height"`
 	BlockHash   string `json:"block_hash"`
 	AppHash     string `json:"app_hash"`
-	PrevAppHash string `json:"prev_app_hash"` // hash-chain to the previously written checkpoint
+	Prev        string `json:"prev"` // hex(SHA256(previous entry bytes)); "" for the first entry
 	TimestampMs int64  `json:"ts_ms"`
 }
 
@@ -45,22 +52,24 @@ type CheckpointRecord struct {
 type CheckpointAnchor struct {
 	submitter    RawWriteDataSubmitter
 	validatorID  string
+	stateFile    string // persists the chain head (hex SHA256 of last written entry) across restarts
 	ch           chan CheckpointRecord
 	logger       *log.Logger
 	writeTimeout time.Duration
 
-	mu          sync.Mutex
-	prevAppHash string
-	dropped     uint64
-	written     uint64
+	mu       sync.Mutex
+	prevHash string // hex(SHA256(last written entry bytes)); seeds the next entry's Prev
+	dropped  uint64
+	written  uint64
 
 	done chan struct{}
 	wg   sync.WaitGroup
 }
 
-// NewCheckpointAnchor starts the background writer and returns the anchor.
-// bufSize <= 0 defaults to 256.
-func NewCheckpointAnchor(submitter RawWriteDataSubmitter, validatorID string, bufSize int, logger *log.Logger) *CheckpointAnchor {
+// NewCheckpointAnchor starts the background writer and returns the anchor. bufSize <= 0 defaults
+// to 256. stateFile (may be "") persists the chain head so the hash chain continues unbroken
+// across restarts; it lives in the validator data dir and is cleared only by a genesis reset.
+func NewCheckpointAnchor(submitter RawWriteDataSubmitter, validatorID, stateFile string, bufSize int, logger *log.Logger) *CheckpointAnchor {
 	if bufSize <= 0 {
 		bufSize = 256
 	}
@@ -70,14 +79,31 @@ func NewCheckpointAnchor(submitter RawWriteDataSubmitter, validatorID string, bu
 	a := &CheckpointAnchor{
 		submitter:    submitter,
 		validatorID:  validatorID,
+		stateFile:    stateFile,
 		ch:           make(chan CheckpointRecord, bufSize),
 		logger:       logger,
 		writeTimeout: 30 * time.Second,
 		done:         make(chan struct{}),
 	}
+	// Seed the chain head from the persisted state file so the chain continues unbroken.
+	if stateFile != "" {
+		if b, err := os.ReadFile(stateFile); err == nil {
+			a.prevHash = strings.TrimSpace(string(b))
+			if a.prevHash != "" {
+				a.logger.Printf("🔗 [CHECKPOINT] resuming chain from persisted head %s…", head8(a.prevHash))
+			}
+		}
+	}
 	a.wg.Add(1)
 	go a.run()
 	return a
+}
+
+func head8(s string) string {
+	if len(s) > 8 {
+		return s[:8]
+	}
+	return s
 }
 
 // Enqueue records a checkpoint for a committed block. It NEVER blocks: on a full buffer the
@@ -117,7 +143,7 @@ func (a *CheckpointAnchor) run() {
 
 func (a *CheckpointAnchor) write(rec CheckpointRecord) {
 	a.mu.Lock()
-	rec.PrevAppHash = a.prevAppHash
+	rec.Prev = a.prevHash
 	a.mu.Unlock()
 
 	payload, err := json.Marshal(rec)
@@ -135,12 +161,32 @@ func (a *CheckpointAnchor) write(rec CheckpointRecord) {
 		return
 	}
 
+	// Advance the chain head to hex(SHA256(this entry's exact bytes)) and persist it so the
+	// hash chain continues unbroken across restarts.
+	sum := sha256.Sum256(payload)
+	next := hex.EncodeToString(sum[:])
 	a.mu.Lock()
-	a.prevAppHash = rec.AppHash
+	a.prevHash = next
 	a.written++
 	w := a.written
 	a.mu.Unlock()
-	a.logger.Printf("⚓ [CHECKPOINT] height=%d appHash=%s -> %s (total written=%d)", rec.Height, rec.AppHash, txID, w)
+	a.persistHead(next)
+	a.logger.Printf("⚓ [CHECKPOINT] height=%d appHash=%s prev=%s -> %s (total written=%d)", rec.Height, rec.AppHash, head8(rec.Prev), txID, w)
+}
+
+// persistHead atomically writes the chain head to the state file (best effort).
+func (a *CheckpointAnchor) persistHead(head string) {
+	if a.stateFile == "" {
+		return
+	}
+	tmp := a.stateFile + ".tmp"
+	if err := os.WriteFile(tmp, []byte(head), 0600); err != nil {
+		a.logger.Printf("⚠️ [CHECKPOINT] persist chain head failed: %v", err)
+		return
+	}
+	if err := os.Rename(tmp, a.stateFile); err != nil {
+		a.logger.Printf("⚠️ [CHECKPOINT] rename chain head failed: %v", err)
+	}
 }
 
 // Stats returns counts of written and dropped checkpoints (for health/metrics).

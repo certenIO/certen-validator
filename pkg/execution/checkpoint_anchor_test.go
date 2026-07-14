@@ -2,10 +2,14 @@ package execution
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -53,11 +57,11 @@ func waitFor(t *testing.T, cond func() bool) {
 	t.Fatal("condition not met in time")
 }
 
-// TestCheckpointAnchorWritesAndChains verifies checkpoints are written with embedded height,
-// hex app-hash, and a prev_app_hash chain across consecutive blocks.
+// TestCheckpointAnchorWritesAndChains verifies each entry carries embedded height + hex app-hash,
+// and that entry N+1.Prev == SHA256(entry N bytes) — a walkable tamper-evident hash chain.
 func TestCheckpointAnchorWritesAndChains(t *testing.T) {
 	sub := &fakeSubmitter{}
-	a := NewCheckpointAnchor(sub, "validator-1", 16, log.New(log.Writer(), "", 0))
+	a := NewCheckpointAnchor(sub, "validator-1", "", 16, log.New(log.Writer(), "", 0))
 	defer a.Close()
 
 	ts := time.UnixMilli(1_700_000_000_000)
@@ -77,34 +81,64 @@ func TestCheckpointAnchorWritesAndChains(t *testing.T) {
 	if r1.Height != 1 || r1.AppHash != "aabb" || r1.BlockHash != "BLOCKHASH1" {
 		t.Fatalf("r1 unexpected: %+v", r1)
 	}
-	if r1.PrevAppHash != "" {
-		t.Fatalf("first checkpoint should have empty prev_app_hash, got %q", r1.PrevAppHash)
+	if r1.Prev != "" {
+		t.Fatalf("first checkpoint should have empty prev, got %q", r1.Prev)
 	}
 	if r2.Height != 2 || r2.AppHash != "ccdd" {
 		t.Fatalf("r2 unexpected: %+v", r2)
 	}
-	// Chain: r2.prev must equal r1.app
-	if r2.PrevAppHash != r1.AppHash {
-		t.Fatalf("chain broken: r2.prev=%q r1.app=%q", r2.PrevAppHash, r1.AppHash)
+	// Chain: r2.Prev must equal SHA256(entry-1 raw bytes).
+	want := sha256.Sum256(sub.entries[0])
+	if r2.Prev != hex.EncodeToString(want[:]) {
+		t.Fatalf("chain broken: r2.prev=%q want=%x", r2.Prev, want)
 	}
 	if r1.ValidatorID != "validator-1" || r1.TimestampMs != 1_700_000_000_000 {
 		t.Fatalf("metadata unexpected: %+v", r1)
 	}
 }
 
+// TestCheckpointAnchorSeedsFromStateFile verifies the chain continues unbroken across a restart:
+// a new anchor seeded from the persisted head chains its first entry to that head, and advances
+// the persisted head to SHA256(the new entry).
+func TestCheckpointAnchorSeedsFromStateFile(t *testing.T) {
+	sf := filepath.Join(t.TempDir(), "head")
+	seed := "deadbeef" + strings.Repeat("00", 28) // 64 hex chars, as if left by a prior run
+	if err := os.WriteFile(sf, []byte(seed), 0600); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+
+	sub := &fakeSubmitter{}
+	a := NewCheckpointAnchor(sub, "validator-1", sf, 8, log.New(log.Writer(), "", 0))
+	defer a.Close()
+
+	a.Enqueue(9, "H9", []byte{0x01}, time.UnixMilli(0))
+	waitFor(t, func() bool { return sub.count() == 1 })
+
+	var r CheckpointRecord
+	if err := json.Unmarshal(sub.entries[0], &r); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if r.Prev != seed {
+		t.Fatalf("first entry after restart must chain to persisted head %q, got %q", seed, r.Prev)
+	}
+	// State file must now hold SHA256(this entry) for the next run.
+	b, _ := os.ReadFile(sf)
+	sum := sha256.Sum256(sub.entries[0])
+	if strings.TrimSpace(string(b)) != hex.EncodeToString(sum[:]) {
+		t.Fatalf("state file not advanced: got %q want %x", strings.TrimSpace(string(b)), sum)
+	}
+}
+
 // TestCheckpointAnchorNeverBlocks verifies Enqueue drops (does not block) when the writer is
 // stalled and the buffer is full — consensus must never be gated by the anchor.
 func TestCheckpointAnchorNeverBlocks(t *testing.T) {
-	sub := &fakeSubmitter{block: make(chan struct{})} // writer blocks until we release
-	a := NewCheckpointAnchor(sub, "validator-1", 2, log.New(log.Writer(), "", 0))
+	sub := &fakeSubmitter{block: make(chan struct{})}
+	a := NewCheckpointAnchor(sub, "validator-1", "", 2, log.New(log.Writer(), "", 0))
 	defer func() {
-		// release the (possibly) in-flight write so Close can drain
 		close(sub.block)
 		a.Close()
 	}()
 
-	// The first Enqueue is picked up by the goroutine and blocks in the submitter; the buffer
-	// (size 2) then fills, and further Enqueues must be dropped, never block.
 	done := make(chan struct{})
 	go func() {
 		for i := 0; i < 50; i++ {
@@ -115,13 +149,11 @@ func TestCheckpointAnchorNeverBlocks(t *testing.T) {
 
 	select {
 	case <-done:
-		// good: all Enqueues returned without blocking
 	case <-time.After(2 * time.Second):
 		t.Fatal("Enqueue blocked — anchor must never block the commit path")
 	}
 
-	_, dropped := a.Stats()
-	if dropped == 0 {
+	if _, dropped := a.Stats(); dropped == 0 {
 		t.Fatal("expected some dropped checkpoints under a stalled writer with a full buffer")
 	}
 }

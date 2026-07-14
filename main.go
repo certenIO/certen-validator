@@ -963,7 +963,12 @@ func startValidator(
             if cpErr != nil {
                 log.Printf("⚠️ [CHECKPOINT] failed to create submitter: %v (anchor disabled)", cpErr)
             } else {
-                anchor := execution.NewCheckpointAnchor(cpSub, cfg.ValidatorID, 256, log.New(log.Writer(), "[CHECKPOINT] ", log.LstdFlags))
+                cpDataDir := cfg.DataDir
+                if cpDataDir == "" {
+                    cpDataDir = "data"
+                }
+                cpStateFile := filepath.Join(cpDataDir, "checkpoint_chain_head")
+                anchor := execution.NewCheckpointAnchor(cpSub, cfg.ValidatorID, cpStateFile, 256, log.New(log.Writer(), "[CHECKPOINT] ", log.LstdFlags))
                 va.SetCheckpointHook(anchor.Enqueue)
                 log.Printf("⚓ [CHECKPOINT] block-checkpoint anchor ENABLED: writer=%s account=%s", writer, cpAccount)
             }
