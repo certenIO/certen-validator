@@ -78,10 +78,9 @@ func TestAppHashConsistencyAcrossRestart(t *testing.T) {
 
 // applyBlock stages a block's bundles then promotes (what Commit does), returning the app-hash.
 func applyBlock(app *ValidatorApp, bundles []string) []byte {
-	staged, seeded := app.stageAccum(bundles)
-	app.committedAccum = staged
-	app.committedSeeded = seeded
-	return appHashFromAccum(staged, seeded)
+	staged := app.stageAppHash(bundles)
+	app.committedAppHash = staged
+	return staged
 }
 
 var testBundles = []string{
@@ -115,7 +114,7 @@ func TestAppHashAccumulatorReproducibleAcrossRestart(t *testing.T) {
 	persisted := applyBlock(part, blocks[0])
 
 	restarted := NewValidatorApp(newInMemLedger(), "t")
-	restarted.seedAccumFromHash(persisted)
+	restarted.seedAppHash(persisted)
 	var restartedHash []byte
 	for _, blk := range blocks[1:] {
 		restartedHash = applyBlock(restarted, blk)
@@ -126,59 +125,85 @@ func TestAppHashAccumulatorReproducibleAcrossRestart(t *testing.T) {
 	}
 }
 
-// TestStageAccumIdempotentAndPure is the core idempotency guarantee: stageAccum never mutates
+// TestStageAppHashIdempotentAndPure is the core idempotency guarantee: stageAppHash never mutates
 // committed state, returns the identical result when called repeatedly (rejected block / blocksync
-// retry / handshake replay), and folds duplicate bundle-ids within a block only once.
-func TestStageAccumIdempotentAndPure(t *testing.T) {
+// retry / handshake replay), dedups duplicate bundle-ids within a block, and is order-independent
+// within a block (bundles are sorted). Output is always a 32-byte SHA256.
+func TestStageAppHashIdempotentAndPure(t *testing.T) {
 	app := NewValidatorApp(newInMemLedger(), "t")
-	app.seedAccumFromHash(bytes.Repeat([]byte{0x11}, 32)) // non-empty committed state
-	before := app.committedAccum
-	beforeSeeded := app.committedSeeded
+	app.seedAppHash(bytes.Repeat([]byte{0x11}, 32)) // non-empty committed head
+	before := append([]byte(nil), app.committedAppHash...)
 
 	block := []string{testBundles[0], testBundles[1], testBundles[0]} // note duplicate
 
-	s1, seeded1 := app.stageAccum(block)
-
-	// Purity: committed state untouched by FinalizeBlock-equivalent staging.
-	if app.committedAccum != before || app.committedSeeded != beforeSeeded {
-		t.Fatal("stageAccum mutated committed state")
+	s1 := app.stageAppHash(block)
+	if len(s1) != 32 {
+		t.Fatalf("app-hash must be 32 bytes, got %d", len(s1))
 	}
-	// Idempotency: same inputs -> same output (this is what FinalizeBlock relies on under replay).
-	s2, seeded2 := app.stageAccum(block)
-	if s1 != s2 || seeded1 != seeded2 {
-		t.Fatalf("stageAccum not idempotent: %x/%v vs %x/%v", s1, seeded1, s2, seeded2)
+	// Purity: committed state untouched.
+	if !bytes.Equal(app.committedAppHash, before) {
+		t.Fatal("stageAppHash mutated committed state")
 	}
-	// Duplicate folded once: staging {a,b,a} == staging {a,b}.
-	s3, _ := app.stageAccum([]string{testBundles[0], testBundles[1]})
-	if s1 != s3 {
-		t.Fatalf("duplicate bundle not deduped within block: %x vs %x", s1, s3)
+	// Idempotency: same inputs -> same output (what FinalizeBlock relies on under replay).
+	if s2 := app.stageAppHash(block); !bytes.Equal(s1, s2) {
+		t.Fatalf("stageAppHash not idempotent: %x vs %x", s1, s2)
+	}
+	// Duplicate deduped: {a,b,a} == {a,b}.
+	if s3 := app.stageAppHash([]string{testBundles[0], testBundles[1]}); !bytes.Equal(s1, s3) {
+		t.Fatalf("duplicate not deduped: %x vs %x", s1, s3)
+	}
+	// Order-independent within a block (sorted): {a,b} == {b,a}.
+	if s4 := app.stageAppHash([]string{testBundles[1], testBundles[0]}); !bytes.Equal(s1, s4) {
+		t.Fatalf("not order-independent within block: %x vs %x", s1, s4)
 	}
 }
 
-// TestFinalizeWithoutCommitLeavesCommittedUnchanged proves that a block finalized but never
-// committed (e.g. rejected during blocksync) does not advance committed state, so the next
-// FinalizeBlock for the real next block starts from the correct base (no double-count).
+// TestFinalizeWithoutCommitLeavesCommittedUnchanged proves a block finalized but never committed
+// (rejected during blocksync) does not advance committed state, so the retried+committed block
+// matches a from-scratch reference (no double-count / no corruption).
 func TestFinalizeWithoutCommitLeavesCommittedUnchanged(t *testing.T) {
 	app := NewValidatorApp(newInMemLedger(), "t")
+	base := append([]byte(nil), app.committedAppHash...) // nil at genesis
 
-	// Genesis committed state, then finalize a block WITHOUT committing (simulate rejection).
-	base := app.committedAccum
-	rejected, _ := app.stageAccum([]string{testBundles[0]})
-	app.pendingAccum = rejected // FinalizeBlock stages into pending; Commit never runs
-	if app.committedAccum != base {
+	app.pendingAppHash = app.stageAppHash([]string{testBundles[0]}) // FinalizeBlock, no Commit
+	if !bytes.Equal(app.committedAppHash, base) {
 		t.Fatal("committed advanced without Commit")
 	}
 
-	// The real next block is the SAME height retried and committed. Staging again from the
-	// (still-genesis) committed base yields the correct result, and Commit promotes it once.
-	staged, seeded := app.stageAccum([]string{testBundles[0]})
-	app.committedAccum, app.committedSeeded = staged, seeded // Commit
+	// Retry the same block and commit.
+	staged := app.stageAppHash([]string{testBundles[0]})
+	app.committedAppHash = staged // Commit
 
-	// A from-scratch node that applied exactly one block with testBundles[0] must match.
 	ref := NewValidatorApp(newInMemLedger(), "t")
 	refHash := applyBlock(ref, []string{testBundles[0]})
 	if !bytes.Equal(app.generateAppHash(), refHash) {
 		t.Fatalf("post-retry app-hash %x != single-block reference %x", app.generateAppHash(), refHash)
+	}
+}
+
+// TestAppHashCommitsToOrderAndCount is the integrity improvement over XOR: the SAME bundles grouped
+// into different blocks yield DIFFERENT app-hashes (the chain commits to per-block grouping / order),
+// and a one-bundle block differs from an empty block. XOR-of-bundle-ids would collide in both cases.
+func TestAppHashCommitsToOrderAndCount(t *testing.T) {
+	// {A},{B} across two blocks vs {A,B} in one block — XOR gives base^A^B either way.
+	two := NewValidatorApp(newInMemLedger(), "t")
+	applyBlock(two, []string{testBundles[0]})
+	twoHash := applyBlock(two, []string{testBundles[1]})
+
+	one := NewValidatorApp(newInMemLedger(), "t")
+	oneHash := applyBlock(one, []string{testBundles[0], testBundles[1]})
+
+	if bytes.Equal(twoHash, oneHash) {
+		t.Fatal("two blocks {A},{B} collided with one block {A,B} — chain must commit to grouping")
+	}
+
+	// A single-bundle block must differ from an empty block.
+	nonEmpty := NewValidatorApp(newInMemLedger(), "t")
+	neHash := applyBlock(nonEmpty, []string{testBundles[0]})
+	empty := NewValidatorApp(newInMemLedger(), "t")
+	eHash := applyBlock(empty, []string{})
+	if bytes.Equal(neHash, eHash) {
+		t.Fatal("single-bundle block collided with empty block")
 	}
 }
 

@@ -7,10 +7,12 @@ package consensus
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
 	"sync"
 	"time"
 
@@ -27,22 +29,21 @@ type ValidatorApp struct {
 	lastCommitHash  []byte
 	pendingAppHash  []byte                     // app-hash computed in FinalizeBlock, persisted verbatim in Commit so CometBFT and the app agree
 	validatorBlocks map[string]*ValidatorBlock // Store by bundle_id
-	// App-hash accumulator: XOR of every committed VB bundle-id. It is derived from persisted state
-	// (seeded from the persisted app-hash on restart), NOT from the in-memory validatorBlocks map
-	// (which is not restored on restart and is pruned), so a restarted node reproduces correct
-	// app-hashes and can catch up. Values are identical to the legacy at current scale, so this is
-	// not a consensus change.
+	// App-hash: a SHA256 hash chain over committed ValidatorBlocks:
+	//     appHash(H) = SHA256( appHash(H-1) || sorted(unique bundle-ids in block H) )
+	// (genesis base = nil; an empty block advances the chain as SHA256(prev)). This is collision-
+	// resistant and commits to the ORDER and COUNT of committed VBs — unlike the legacy XOR. It is
+	// derived from persisted state (committedAppHash is seeded from the persisted app-hash on
+	// restart), NOT from the in-memory validatorBlocks map (which is pruned and not restored), so a
+	// restarted/catch-up node reproduces correct app-hashes.
 	//
-	// TRANSACTIONALITY (idempotency): committedAccum is mutated ONLY by Commit. FinalizeBlock stages
-	// its result into pendingAccum, computed from committedAccum WITHOUT mutating it. ABCI may call
-	// FinalizeBlock without a following Commit (rejected block, blocksync retry) or replay it — this
-	// design makes every such call recompute the same result instead of corrupting committed state.
-	committedAccum  [32]byte
-	committedSeeded bool
-	pendingAccum    [32]byte
-	pendingSeeded   bool
-	blockBundles    []string // bundle-ids seen during the current FinalizeBlock (reset each block)
-	mu              sync.RWMutex
+	// TRANSACTIONALITY (idempotency): committedAppHash is mutated ONLY by Commit. FinalizeBlock stages
+	// its result into pendingAppHash, computed from committedAppHash WITHOUT mutating it. ABCI may
+	// call FinalizeBlock without a following Commit (rejected block, blocksync retry) or replay it —
+	// this design makes every such call recompute the same result instead of corrupting committed state.
+	committedAppHash []byte   // chain head as of the last Commit (nil = genesis); mutated only by Commit
+	blockBundles     []string // bundle-ids seen during the current FinalizeBlock (reset each block)
+	mu               sync.RWMutex
 
 	// Ledger integration
 	ledgerStore *ledger.LedgerStore
@@ -92,7 +93,7 @@ func NewValidatorApp(ledgerStore *ledger.LedgerStore, chainID string) *Validator
 		} else if state != nil {
 			app.latestHeight = state.LastBlockHeight
 			app.lastCommitHash = state.LastBlockAppHash
-			app.seedAccumFromHash(state.LastBlockAppHash)
+			app.seedAppHash(state.LastBlockAppHash)
 			app.logger.Printf("✅ Restored ABCI state: height=%d, appHash=%x",
 				app.latestHeight, app.lastCommitHash[:min(8, len(app.lastCommitHash))])
 		}
@@ -329,10 +330,7 @@ func (app *ValidatorApp) FinalizeBlock(ctx context.Context, req *abcitypes.Reque
 	// again for the same block (rejected block, blocksync retry, handshake replay) recomputes the
 	// identical result instead of corrupting state. In ABCI 0.38 the block's app-hash comes from
 	// ResponseFinalizeBlock.AppHash; Commit persists this exact staged value.
-	staged, stagedSeeded := app.stageAccum(app.blockBundles)
-	app.pendingAccum = staged
-	app.pendingSeeded = stagedSeeded
-	app.pendingAppHash = appHashFromAccum(staged, stagedSeeded)
+	app.pendingAppHash = app.stageAppHash(app.blockBundles)
 
 	app.logger.Printf("🔄 Finalized validator block %d with %d ValidatorBlock transactions (appHash=%x)",
 		req.Height, len(req.Txs), app.pendingAppHash[:min(8, len(app.pendingAppHash))])
@@ -377,8 +375,7 @@ func (app *ValidatorApp) Commit(ctx context.Context, req *abcitypes.RequestCommi
 	// FinalizeBlock's ResponseFinalizeBlock.AppHash.
 	appHash := app.pendingAppHash
 	if appHash != nil {
-		app.committedAccum = app.pendingAccum
-		app.committedSeeded = app.pendingSeeded
+		app.committedAppHash = appHash // promote staged -> committed (the ONLY mutation of committed)
 	} else {
 		// Defensive: FinalizeBlock didn't run (should not happen in the normal ABCI flow).
 		appHash = app.generateAppHash()
@@ -503,60 +500,51 @@ func (app *ValidatorApp) validateValidatorBlock(vb *ValidatorBlock) error {
 }
 
 
-// seedAccumFromHash initializes the COMMITTED app-hash accumulator from a persisted app-hash so the
-// app-hash chain continues correctly after a restart. A 32-byte value is the XOR accumulator; the
-// "empty_validator_state" placeholder (or any non-32-byte value) means nothing accumulated yet.
-func (app *ValidatorApp) seedAccumFromHash(h []byte) {
-	if len(h) == 32 {
-		copy(app.committedAccum[:], h)
-		app.committedSeeded = true
+// seedAppHash initializes the COMMITTED chain head from a persisted app-hash so the app-hash chain
+// continues correctly (and identically) after a restart.
+func (app *ValidatorApp) seedAppHash(h []byte) {
+	if len(h) > 0 {
+		app.committedAppHash = append([]byte(nil), h...)
 	}
 }
 
-// xorBundleInto folds one bundle-id into the given accumulator (first 32 bytes of the bundle-id
-// string). XOR is commutative, so the result is order-independent.
-func xorBundleInto(dst *[32]byte, bundleID string) {
-	b := []byte(bundleID)
-	for i := 0; i < len(b) && i < 32; i++ {
-		dst[i] ^= b[i]
-	}
-}
-
-// appHashFromAccum renders an accumulator as the app-hash bytes ("empty_validator_state" when nothing
-// has been accumulated yet, matching the legacy empty-state sentinel).
-func appHashFromAccum(accum [32]byte, seeded bool) []byte {
-	if !seeded {
-		return []byte("empty_validator_state")
-	}
-	out := make([]byte, 32)
-	copy(out, accum[:])
-	return out
-}
-
-// stageAccum folds a block's bundle-ids onto the COMMITTED accumulator WITHOUT mutating it, and
-// returns the staged accumulator. It is pure w.r.t. committed state, so calling it repeatedly for
-// the same block (rejected block, blocksync retry, handshake replay) yields the identical result —
-// the property that makes FinalizeBlock idempotent. Duplicate bundle-ids within the block are folded
-// once (XOR is self-inverse, so folding twice would cancel).
-func (app *ValidatorApp) stageAccum(bundles []string) (staged [32]byte, seeded bool) {
-	staged = app.committedAccum
-	seeded = app.committedSeeded
+// stageAppHash computes this block's app-hash by extending the COMMITTED chain head with the block's
+// unique, sorted bundle-ids, WITHOUT mutating committed state:
+//
+//	appHash(H) = SHA256( appHash(H-1) || sorted(unique bundle-ids in block H) )
+//
+// Sorting makes it independent of tx order within the block while still committing to the SET; the
+// chain over appHash(H-1) commits to order and count ACROSS blocks; SHA256 makes it collision-
+// resistant. It is pure w.r.t. committed state, so calling it repeatedly for the same block (rejected
+// block, blocksync retry, handshake replay) yields the identical result — the property that makes
+// FinalizeBlock idempotent. An empty block advances the chain as SHA256(prev).
+func (app *ValidatorApp) stageAppHash(bundles []string) []byte {
+	uniq := make([]string, 0, len(bundles))
 	seen := make(map[string]struct{}, len(bundles))
 	for _, bid := range bundles {
 		if _, dup := seen[bid]; dup {
 			continue
 		}
 		seen[bid] = struct{}{}
-		xorBundleInto(&staged, bid)
-		seeded = true
+		uniq = append(uniq, bid)
 	}
-	return staged, seeded
+	sort.Strings(uniq)
+
+	h := sha256.New()
+	h.Write(app.committedAppHash) // nil at genesis writes nothing
+	for _, bid := range uniq {
+		h.Write([]byte(bid))
+	}
+	return h.Sum(nil)
 }
 
-// generateAppHash returns the app-hash from the COMMITTED accumulator (used by Info() and as a
-// defensive fallback). The per-block value comes from the staged accumulator via FinalizeBlock.
+// generateAppHash returns the COMMITTED app-hash (used by Info() and as a defensive fallback). The
+// per-block value comes from stageAppHash via FinalizeBlock.
 func (app *ValidatorApp) generateAppHash() []byte {
-	return appHashFromAccum(app.committedAccum, app.committedSeeded)
+	if app.committedAppHash == nil {
+		return nil
+	}
+	return append([]byte(nil), app.committedAppHash...)
 }
 
 // querySystemLedger handles system ledger query requests
@@ -709,7 +697,7 @@ func (app *ValidatorApp) RecoverState() error {
 		// Use ledger state as source of truth
 		app.latestHeight = state.LastBlockHeight
 		app.lastCommitHash = state.LastBlockAppHash
-		app.seedAccumFromHash(state.LastBlockAppHash)
+		app.seedAppHash(state.LastBlockAppHash)
 
 		app.logger.Printf("✅ [RECOVERY] Restored state from ledger: height=%d, hash=%x",
 			app.latestHeight, app.lastCommitHash[:min(8, len(app.lastCommitHash))])

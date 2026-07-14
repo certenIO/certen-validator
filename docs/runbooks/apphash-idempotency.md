@@ -1,6 +1,16 @@
-# Runbook: App-Hash Idempotency Fix (transactional accumulator)
+# Runbook: App-Hash — transactional idempotency + SHA256 hash chain
 
-**Status:** implemented + unit-tested, ready to deploy · **Scope:** `pkg/consensus/abci_validator.go` · **Consensus-value impact:** none at current scale (identical app-hashes) · **Reset required:** no
+**Scope:** `pkg/consensus/abci_validator.go`
+
+This runbook covers two related changes to the ABCI app-hash:
+
+1. **Transactional idempotency** (deployed, value-identical, no reset) — `FinalizeBlock` stages;
+   only `Commit` mutates committed state. §1–§9 below.
+2. **SHA256 hash chain** (the current head) — replaces the weak XOR state commitment with
+   `appHash(H) = SHA256(appHash(H-1) || sorted(unique block bundle-ids))`. This **changes app-hash
+   values → it IS a consensus change → coordinated all-node deploy + genesis reset** (§6-CHAIN).
+   It keeps the exact staged/committed machinery, so idempotency + restart-reproducibility are
+   preserved.
 
 ---
 
@@ -120,6 +130,40 @@ docker logs --since 2m certen-validator-2 2>&1 | grep -c "wrong Block.Header.App
 **Pass criteria:** the restarted node returns to `catching_up: False` at the network height with
 `0` app-hash mismatches — no genesis reset needed.
 
+## 6-CHAIN. Deploying the SHA256 hash chain (consensus change → reset)
+
+Unlike the idempotency fix, the SHA256 chain **changes app-hash values**, so old and new binaries
+disagree from block 1. Deploy **all nodes together from a genesis reset** — do NOT roll it in
+partially (a mixed fleet would fail to agree, exactly like a stuck minority node).
+
+Why this is safe/cheap now: the testnet is small (tens of blocks), so a genesis reset costs ~2
+minutes and loses no durable value (proofs live on external chains + Accumulate; the local
+ValidatorBlock chain is re-derivable). On a large/mainnet chain this would instead be a planned
+state migration — do it while small.
+
+```bash
+cd /root/certen-validators
+git pull origin main            # includes the SHA256 hash-chain commit
+docker compose build            # recompile all
+docker compose down
+
+# key-safe genesis reset on ALL 7 (clears app-ledger + CometBFT chain state; KEEPS keys)
+for n in 1 2 3 4 5 6 7; do
+  docker run --rm \
+    -v certen-validators_validator${n}_data:/d \
+    -v certen-validators_validator${n}_keys:/k alpine \
+    sh -c 'rm -rf /d/validator-ledger /d/gov_proofs /d/checkpoint_chain_head /k/validator-'$n'/data; \
+           echo "v'$n' kept: $(ls /d) | $(ls /k/validator-'$n')"'
+done
+
+docker compose up -d
+```
+
+**Verify:** all 7 healthy; consensus forms and advances (`catching_up:false`); `0` app-hash
+mismatches fleet-wide; then run §7 (restart a validator mid-activity → clean catch-up). If P3 is
+enabled, checkpoints resume (the block-history chain restarts cleanly — its `prev` re-seeds empty on
+the fresh genesis, which is the honest reset semantic).
+
 ## 8. Rollback
 
 The change is value-identical, so rollback is a normal redeploy — no reset:
@@ -157,9 +201,10 @@ operation — this remains only as a break-glass for an already-corrupted node.
 
 ## 10. Notes / future
 
-- If the testnet is ever expected to exceed the legacy map-prune window (~1000 VBs) with **mixed**
-  binary versions in the fleet, upgrade all nodes first — the accumulator (all-VB) and the legacy
-  (pruned-window) hashes diverge beyond that point. At current scale this is moot; after a full-fleet
-  upgrade it's permanently moot.
+- **The ~1000-VB mixed-version caveat is RESOLVED by the SHA256 chain:** old (XOR) and new (SHA256)
+  app-hashes differ from block 1, so a stale binary is rejected immediately and loudly at any scale
+  rather than silently working until the prune window — no latent trap.
+- The SHA256 chain is a proper cryptographic commitment: collision-resistant, and it commits to the
+  **order and count** of committed VBs (via the chain over `appHash(H-1)` and per-block sorting).
 - The `validatorBlocks` map prune (`maxCachedBlocks = 1000`) is now purely a query-cache concern and
   can be tuned or replaced with a persistent store independently of consensus.
