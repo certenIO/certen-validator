@@ -27,12 +27,17 @@ func TestAppHashConsistencyAcrossRestart(t *testing.T) {
 	ctx := context.Background()
 	store := newInMemLedger()
 	app := NewValidatorApp(store, "validator-chain-test")
+	// Seed a committed app-hash (as if VBs were committed earlier) so the empty block below carries a
+	// non-nil hash. Empty blocks legitimately leave the app-hash UNCHANGED (see
+	// TestEmptyBlockDoesNotChangeAppHash); this test checks FinalizeBlock/Commit/Info agree + survive
+	// restart on that stable hash.
+	app.seedAppHash(bytes.Repeat([]byte{0x22}, 32))
 
 	if _, err := app.InitChain(ctx, &abcitypes.RequestInitChain{ChainId: "validator-chain-test"}); err != nil {
 		t.Fatalf("InitChain: %v", err)
 	}
 
-	// Height 1: an empty block (no ValidatorBlock txs) — the exact first-after-idle scenario.
+	// Height 1: an empty block (no ValidatorBlock txs) — must carry the unchanged committed hash.
 	fb, err := app.FinalizeBlock(ctx, &abcitypes.RequestFinalizeBlock{Height: 1, Hash: bytes.Repeat([]byte{0xAB}, 32)})
 	if err != nil {
 		t.Fatalf("FinalizeBlock: %v", err)
@@ -209,6 +214,26 @@ func TestAppHashCommitsToOrderAndCount(t *testing.T) {
 
 // TestFinalizeBlockAppHashMatchesCommit checks byte-identity between the app-hash returned to
 
+// TestEmptyBlockDoesNotChangeAppHash is the guard against the empty/timed-block runaway: an empty
+// block (no VBs) MUST leave the app-hash unchanged. If it advanced the hash, CometBFT's
+// needProofBlock rule (with create_empty_blocks=false) would emit an endless stream of empty blocks.
+func TestEmptyBlockDoesNotChangeAppHash(t *testing.T) {
+	app := NewValidatorApp(newInMemLedger(), "t")
+	applyBlock(app, []string{testBundles[0]}) // commit a real VB
+	h1 := append([]byte(nil), app.committedAppHash...)
+
+	// Several empty blocks must all yield the SAME app-hash as h1.
+	for i := 0; i < 3; i++ {
+		if h := applyBlock(app, []string{}); !bytes.Equal(h, h1) {
+			t.Fatalf("empty block %d changed app-hash %x -> %x (would cause endless empty blocks)", i, h1, h)
+		}
+	}
+	// A subsequent real VB must still advance the hash (chain not frozen).
+	if h := applyBlock(app, []string{testBundles[1]}); bytes.Equal(h, h1) {
+		t.Fatal("real VB after empty blocks did not advance the app-hash")
+	}
+}
+
 // TestFinalizeBlockAppHashMatchesCommit checks byte-identity between the app-hash returned to
 // CometBFT in FinalizeBlock and the one persisted in Commit across several sequential blocks.
 func TestFinalizeBlockAppHashMatchesCommit(t *testing.T) {
@@ -218,6 +243,9 @@ func TestFinalizeBlockAppHashMatchesCommit(t *testing.T) {
 	if _, err := app.InitChain(ctx, &abcitypes.RequestInitChain{ChainId: "validator-chain-test"}); err != nil {
 		t.Fatalf("InitChain: %v", err)
 	}
+	// Seed a committed hash so these (empty) blocks carry a stable non-nil app-hash — empty blocks
+	// leave the hash unchanged; this test checks FinalizeBlock's AppHash == the value Commit persists.
+	app.seedAppHash(bytes.Repeat([]byte{0x33}, 32))
 
 	for h := int64(1); h <= 5; h++ {
 		fb, err := app.FinalizeBlock(ctx, &abcitypes.RequestFinalizeBlock{Height: h, Hash: bytes.Repeat([]byte{0xAB}, 32)})

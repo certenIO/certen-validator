@@ -528,8 +528,19 @@ func (app *ValidatorApp) stageAppHash(bundles []string) []byte {
 		seen[bid] = struct{}{}
 		uniq = append(uniq, bid)
 	}
-	sort.Strings(uniq)
 
+	// Empty block: NO committed-state change, so the app-hash MUST stay unchanged. Advancing it on
+	// empty blocks (e.g. SHA256(prev)) makes the app-hash change every block, and with
+	// create_empty_blocks=false CometBFT emits a "proof" block whenever the app-hash changes
+	// (needProofBlock) — which changes it again, producing an endless stream of empty timed blocks.
+	// Returning the unchanged committed hash keeps the chain event-driven: blocks are produced only
+	// for real ValidatorBlock transactions. The chain still commits to the order+count of VB-bearing
+	// blocks (each such block advances the hash); empty filler blocks simply don't exist.
+	if len(uniq) == 0 {
+		return append([]byte(nil), app.committedAppHash...)
+	}
+
+	sort.Strings(uniq)
 	h := sha256.New()
 	h.Write(app.committedAppHash) // nil at genesis writes nothing
 	for _, bid := range uniq {
