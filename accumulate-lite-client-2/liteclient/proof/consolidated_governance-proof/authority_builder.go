@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // CERTEN Governance Proof - Authority Snapshot Builder
@@ -296,8 +297,17 @@ func (ab *AuthorityBuilder) classifyGovernanceEvents(entries []map[string]interf
 		fmt.Printf("[AUTHORITY] [DEBUG] Expanding entry %s...\n", entryHash[:16])
 		expandedEntry, err := ab.expandSingleEntry(entryHash, keyPageScope)
 		if err != nil {
-			fmt.Printf("[AUTHORITY] [WARN] Failed to expand entry %s: %v\n", entryHash[:16], err)
-			continue
+			// GRACEFUL DEGRADATION: the by-hash+receipt expand can hang on an OLD anchor (a Kermit
+			// limitation). Fall back to a ranged (by-index) expand — served instantly at any chain
+			// age — and proceed with a degraded (localBlock-only) receipt so G1 completes as
+			// partial, never collapsing to G0.
+			idx := ab.entryIndexOf(entry, i)
+			fmt.Printf("[AUTHORITY] [DEGRADED] Entry %s by-hash expand failed (%v); ranged fallback at index %d\n", entryHash[:16], err, idx)
+			expandedEntry, err = ab.expandEntryByIndexRanged(idx, keyPageScope)
+			if err != nil {
+				fmt.Printf("[AUTHORITY] [WARN] Ranged fallback also failed for entry %s: %v\n", entryHash[:16], err)
+				continue
+			}
 		}
 
 		// Extract receipt from expanded entry for timing validation
@@ -496,7 +506,9 @@ func (ab *AuthorityBuilder) getTransactionType(msg interface{}) string {
 	return fmt.Sprintf("%v", bodyType)
 }
 
-// expandSingleEntry expands a chain entry to get full transaction details
+// expandSingleEntry expands a chain entry to get full transaction details (with receipt).
+// Bounded by a timeout: on Kermit an anchored receipt for an OLD entry can hang indefinitely,
+// so the caller falls back to a receipt-free ranged expand (graceful degradation).
 func (ab *AuthorityBuilder) expandSingleEntry(entryHash, scopeURL string) (map[string]interface{}, error) {
 	// Build query for individual chain entry with expansion (aligned with Python approach)
 	query := map[string]interface{}{
@@ -507,9 +519,12 @@ func (ab *AuthorityBuilder) expandSingleEntry(entryHash, scopeURL string) (map[s
 		"includeReceipt": true,
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+
 	// Execute query
 	response, err := ab.client.Query(
-		context.Background(),
+		ctx,
 		scopeURL,
 		query,
 	)
@@ -533,6 +548,88 @@ func (ab *AuthorityBuilder) expandSingleEntry(entryHash, scopeURL string) (map[s
 	}
 
 	return dataMap, nil
+}
+
+// expandEntryByIndexRanged expands a chain entry by INDEX via a ranged query. Ranged
+// (receipt-free) chain queries are served instantly at any chain length or anchor age — unlike a
+// by-hash query that requests an anchored receipt, which can hang indefinitely on an old anchor.
+// This is the graceful-degradation path: it returns the expanded entry with a DEGRADED receipt
+// (localBlock only, no anchor) so G1 can proceed as partial rather than failing to G0.
+func (ab *AuthorityBuilder) expandEntryByIndexRanged(index int, scopeURL string) (map[string]interface{}, error) {
+	query := map[string]interface{}{
+		"queryType": "chain",
+		"name":      "main",
+		"range":     map[string]interface{}{"start": index, "count": 1, "expand": true},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	response, err := ab.client.Query(ctx, scopeURL, query)
+	if err != nil {
+		return nil, fmt.Errorf("ranged expand failed: %v", err)
+	}
+
+	pu := ProofUtilities{}
+	data := pu.CaseInsensitiveGet(response, "result")
+	if data == nil {
+		data = pu.CaseInsensitiveGet(response, "data")
+	}
+	dataMap, ok := data.(map[string]interface{})
+	if !ok {
+		return nil, ValidationError{Msg: "ranged response missing result"}
+	}
+	records, ok := pu.CaseInsensitiveGet(dataMap, "records").([]interface{})
+	if !ok || len(records) == 0 {
+		return nil, ValidationError{Msg: "ranged response has no records"}
+	}
+	rec, ok := records[0].(map[string]interface{})
+	if !ok {
+		return nil, ValidationError{Msg: "ranged record is not an object"}
+	}
+
+	// Synthesize a degraded receipt (localBlock from value.received) so extractReceiptFromEntry and
+	// the timing checks work. The anchor is intentionally empty: this entry's full anchored receipt
+	// was unobtainable, so the resulting proof is G1-partial for this event.
+	rec["receipt"] = map[string]interface{}{
+		"start":      "",
+		"anchor":     "",
+		"localBlock": ab.localBlockFromValue(rec),
+		"degraded":   true,
+	}
+	return rec, nil
+}
+
+// entryIndexOf returns the chain index of an enumerated entry record, falling back to the loop
+// position if the record carries no explicit index.
+func (ab *AuthorityBuilder) entryIndexOf(entry map[string]interface{}, fallback int) int {
+	pu := ProofUtilities{}
+	switch v := pu.CaseInsensitiveGet(entry, "index").(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	case int64:
+		return int(v)
+	}
+	return fallback
+}
+
+// localBlockFromValue extracts the transaction's block (value.received) from an expanded record,
+// used as the degraded receipt's localBlock when a full receipt is unobtainable.
+func (ab *AuthorityBuilder) localBlockFromValue(rec map[string]interface{}) float64 {
+	pu := ProofUtilities{}
+	if value, ok := pu.CaseInsensitiveGet(rec, "value").(map[string]interface{}); ok {
+		switch v := pu.CaseInsensitiveGet(value, "received").(type) {
+		case float64:
+			return v
+		case int:
+			return float64(v)
+		case int64:
+			return float64(v)
+		}
+	}
+	return 0
 }
 
 // isSyntheticCreateIdentity checks if the message value represents a syntheticCreateIdentity transaction
