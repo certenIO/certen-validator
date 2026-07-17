@@ -1328,7 +1328,10 @@ func (id *IntentDiscovery) processIntent(intent *CertenIntent, blockHeight uint6
 			Chain:           "main",
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		// G0→G1→G2 are generated in sequence below; each CLI level re-derives its predecessors,
+		// so the full sequence needs ~90s. 30s cut off G1/G2 and committed G0-only. This budget is
+		// independent of the consensus broadcast (which has its own context), so it can be generous.
+		ctx, cancel := context.WithTimeout(context.Background(), 150*time.Second)
 		// Generate G0 proof (Inclusion & Finality)
 		g0Wrapper, g0Err := id.governanceProofGen.GenerateG0(ctx, govRequest)
 		if g0Err != nil {

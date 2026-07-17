@@ -1018,7 +1018,9 @@ func startValidator(
         govProofPath,
         cfg.AccumulateURL,
         govWorkDir,
-        60*time.Second,
+        // A full G0→G1→G2 chain (authority snapshot via anchored key-page receipts) takes ~55s;
+        // 60s cut G2 off, leaving G0-only. Give each CLI level generous headroom.
+        120*time.Second,
     )
     if govErr != nil {
         log.Printf("⚠️ [GOV-PROOF] CLI governance proof generator init failed: %v (governance proofs disabled)", govErr)
