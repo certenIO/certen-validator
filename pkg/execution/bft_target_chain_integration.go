@@ -290,7 +290,39 @@ func (btce *BFTTargetChainExecutor) GetCommitment() *ExecutionCommitmentBuilder 
 
 // ExecuteTargetChainOperations executes real smart contract operations on target chains
 // MULTI-CHAIN: Now extracts target chain from CrossChainData and routes to correct EVM chain
+// ExecuteTargetChainOperations runs the per-intent legs on the target chain and
+// then reports what they COST.
+//
+// Cost reporting is wrapped around the whole dispatcher rather than bolted onto
+// each of the nine per-chain paths: every chain funnels through here and every
+// chain returns the same TargetChainExecutionResult, so one hook covers the
+// fleet and cannot be forgotten when a tenth chain is added.
+//
+// It runs on the result even when execution FAILED. A reverted or half-executed
+// intent still burned real gas, and that is exactly the case the charge policy
+// needs measured (CERTEN eats the platform fee but recovers gas actually spent).
 func (btce *BFTTargetChainExecutor) ExecuteTargetChainOperations(
+	ctx context.Context,
+	intentID string,
+	transactionHash string,
+	accountURL string,
+	validatorID string,
+	bundleID string,
+	anchorID string,
+	certenProof *proof.CertenProof,
+) (*TargetChainExecutionResult, error) {
+	result, err := btce.executeTargetChainOperationsInner(
+		ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof)
+
+	// Detached and non-blocking: a slow or unreachable gateway must never
+	// affect whether an intent completed.
+	if result != nil {
+		btce.reportExecutionCosts(intentID, result)
+	}
+	return result, err
+}
+
+func (btce *BFTTargetChainExecutor) executeTargetChainOperationsInner(
 	ctx context.Context,
 	intentID string,
 	transactionHash string,
