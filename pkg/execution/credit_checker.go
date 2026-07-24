@@ -23,23 +23,77 @@ import (
 // CREDIT CONSTANTS
 // =============================================================================
 
+// UNITS — read this before changing any constant below.
+//
+// Accumulate stores credits at a precision of 1/100 credit (protocol.CreditPrecision
+// = 100), and the protocol fee schedule is denominated in those same units. So:
+//
+//	1 credit        = 100 credit units = $0.01   (CreditsPerDollar = 100, dollar-pegged)
+//	1 credit unit   = $0.0001
+//
+// The balance returned by LiteClientAdapter.GetCreditBalance is the raw
+// `account.creditBalance` field — i.e. credit UNITS, not credits. Every constant and
+// every estimate in this file is therefore in credit units so the comparison against
+// that balance is apples-to-apples.
+//
+// Historically these constants were written as if they were whole credits and then
+// compared against a unit-denominated balance, which over-estimated the cost of a
+// WriteData by ~100x and drove the (equally over-sized) sponsored credit grants on the
+// gateway side. The protocol-true values from protocol/fee_schedule.go are below.
 const (
-	// MinCreditsForWriteData is the minimum credits needed for a WriteData transaction
-	// WriteData costs approximately 100 credits per entry
-	MinCreditsForWriteData uint64 = 1000
+	// CreditUnitsPerCredit is the protocol's credit precision (protocol.CreditPrecision).
+	CreditUnitsPerCredit uint64 = 100
 
-	// MinCreditsLowThreshold triggers a warning when credits fall below this level
+	// FeeDataPerChunk is protocol FeeData: 10 credit units (= 0.1 credit = $0.001) per
+	// 256-byte chunk of the transaction body.
+	FeeDataPerChunk uint64 = 10
+
+	// DataChunkBytes is the body size, in bytes, covered by one FeeDataPerChunk charge.
+	DataChunkBytes int = 256
+
+	// FeeSignature is protocol FeeSignature: 1 credit unit (= 0.01 credit) per signature.
+	FeeSignature uint64 = 1
+
+	// WriteDataBaseCost is the protocol-true cost of a minimal (<=256 B) WriteData plus
+	// its signature: 10 + 1 = 11 credit units = 0.11 credit = $0.0011.
+	WriteDataBaseCost uint64 = FeeDataPerChunk + FeeSignature
+
+	// WriteDataPerChunkCost is the marginal cost of each additional 256-byte chunk.
+	WriteDataPerChunkCost uint64 = FeeDataPerChunk
+
+	// CreditSafetyMultiple pads every estimate to absorb body-size growth and the
+	// WriteToState 2x multiplier. 10x of the true cost, not 1000x.
+	CreditSafetyMultiple uint64 = 10
+
+	// MinCreditsForWriteData is the pre-flight floor for submitting one WriteData:
+	// 110 credit units = 1.1 credits = $0.011. Below this we refuse to submit rather
+	// than have the transaction rejected on-chain.
+	MinCreditsForWriteData uint64 = WriteDataBaseCost * CreditSafetyMultiple
+
+	// MinCreditsLowThreshold triggers a top-up warning. 5,000 credit units = 50 credits
+	// = $0.50, roughly 450 further write-backs of headroom.
 	MinCreditsLowThreshold uint64 = 5000
 
-	// CreditsPerACME is the approximate conversion rate (varies by oracle)
-	CreditsPerACME uint64 = 100000
-
-	// WriteDataBaseCost is the base cost for a WriteData transaction
-	WriteDataBaseCost uint64 = 100
-
-	// WriteDataPerEntryCost is the cost per data entry field
-	WriteDataPerEntryCost uint64 = 10
+	// DefaultACMEPriceUSD is the fallback ACME price used to convert a credit shortfall
+	// into an ACME amount when no oracle price has been supplied. Credits are
+	// dollar-pegged; only this conversion floats.
+	DefaultACMEPriceUSD float64 = 0.03
 )
+
+// CreditUnitsToUSD converts credit units to dollars. Credits are dollar-pegged by
+// protocol, so this is exact.
+func CreditUnitsToUSD(units uint64) float64 {
+	return float64(units) / float64(CreditUnitsPerCredit) / 100.0
+}
+
+// CreditUnitsToACME converts a credit-unit amount to the ACME needed to buy it at the
+// given oracle price. Falls back to DefaultACMEPriceUSD when price <= 0.
+func CreditUnitsToACME(units uint64, acmePriceUSD float64) float64 {
+	if acmePriceUSD <= 0 {
+		acmePriceUSD = DefaultACMEPriceUSD
+	}
+	return CreditUnitsToUSD(units) / acmePriceUSD
+}
 
 // =============================================================================
 // CREDIT CHECKER
@@ -55,10 +109,13 @@ type CreditChecker struct {
 	// Accumulate client for querying credits
 	client *accumulate.LiteClientAdapter
 
-	// Cached credit balance
+	// Cached credit balance, in credit units (1/100 credit) — see the UNITS note above.
 	cachedBalance     uint64
 	lastBalanceQuery  time.Time
 	cacheValidDuration time.Duration
+
+	// Oracle ACME price (USD) for credit->ACME conversion; 0 means use the default.
+	acmePriceUSD float64
 
 	// Low credit callback
 	onLowCredits func(balance uint64)
@@ -158,20 +215,29 @@ func (c *CreditChecker) GetCreditBalance(ctx context.Context) (uint64, error) {
 	return balance, nil
 }
 
-// EstimateTransactionCost estimates the credit cost for a synthetic transaction
+// EstimateTransactionCost estimates the credit-unit cost of a synthetic transaction.
+//
+// Protocol charges FeeDataPerChunk per 256-byte chunk of the body plus FeeSignature
+// per signature — it is a function of SIZE, not of how many fields the entry happens
+// to be split into. The entries are carried as hex, so raw body size is half the hex
+// length.
 func (c *CreditChecker) EstimateTransactionCost(tx *SyntheticTransaction) uint64 {
 	if tx == nil || tx.Body == nil {
 		return WriteDataBaseCost
 	}
 
-	// Base cost
-	cost := WriteDataBaseCost
+	hexBytes := 0
+	for _, entry := range tx.Body.DataEntry.ToAccumulateFormat() {
+		hexBytes += len(entry)
+	}
+	rawBytes := hexBytes / 2
 
-	// Add per-entry cost
-	entryCount := len(tx.Body.DataEntry.ToAccumulateFormat())
-	cost += uint64(entryCount) * WriteDataPerEntryCost
+	chunks := uint64(1)
+	if rawBytes > DataChunkBytes {
+		chunks = uint64((rawBytes + DataChunkBytes - 1) / DataChunkBytes)
+	}
 
-	return cost
+	return chunks*FeeDataPerChunk + FeeSignature
 }
 
 // SetOnLowCredits sets the callback for low credits warning
@@ -207,17 +273,27 @@ type CreditPurchaseEstimate struct {
 	OraclePrice     float64 `json:"oracle_price"`
 }
 
-// EstimateCreditsNeeded estimates how many credits are needed for N transactions
-func (c *CreditChecker) EstimateCreditsNeeded(txCount int, avgEntriesPerTx int) *CreditPurchaseEstimate {
+// EstimateCreditsNeeded estimates the credit units needed for N write-backs.
+//
+// avgChunksPerTx is the average number of 256-byte body chunks per transaction; pass 1
+// for the typical CERTEN write-back, which fits in a single chunk.
+func (c *CreditChecker) EstimateCreditsNeeded(txCount int, avgChunksPerTx int) *CreditPurchaseEstimate {
 	c.mu.RLock()
 	currentBalance := c.cachedBalance
+	acmePrice := c.acmePriceUSD
 	c.mu.RUnlock()
 
-	// Calculate required credits
-	perTxCost := WriteDataBaseCost + uint64(avgEntriesPerTx)*WriteDataPerEntryCost
+	if avgChunksPerTx < 1 {
+		avgChunksPerTx = 1
+	}
+	if acmePrice <= 0 {
+		acmePrice = DefaultACMEPriceUSD
+	}
+
+	perTxCost := uint64(avgChunksPerTx)*FeeDataPerChunk + FeeSignature
 	requiredCredits := uint64(txCount) * perTxCost
 
-	// Add safety margin (10%)
+	// Safety margin (10%) on top of the protocol-true cost.
 	requiredCredits = requiredCredits * 110 / 100
 
 	shortfall := uint64(0)
@@ -229,9 +305,16 @@ func (c *CreditChecker) EstimateCreditsNeeded(txCount int, avgEntriesPerTx int) 
 		CurrentBalance:  currentBalance,
 		RequiredCredits: requiredCredits,
 		Shortfall:       shortfall,
-		EstimatedACME:   float64(shortfall) / float64(CreditsPerACME),
-		OraclePrice:     0.0, // Would need oracle query
+		EstimatedACME:   CreditUnitsToACME(shortfall, acmePrice),
+		OraclePrice:     acmePrice,
 	}
+}
+
+// SetACMEPrice supplies the oracle ACME price (USD) used for credit->ACME conversion.
+func (c *CreditChecker) SetACMEPrice(priceUSD float64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.acmePriceUSD = priceUSD
 }
 
 // =============================================================================
