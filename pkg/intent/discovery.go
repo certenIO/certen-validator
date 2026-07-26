@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/certen/independant-validator/pkg/entitlement"
 	"log"
 	"strings"
 	"sync"
@@ -41,9 +42,9 @@ type BFTConsensusProtocol interface {
 }
 
 const (
-	CERTEN_INTENT_MEMO     = "CERTEN_INTENT"
-	MAX_CONCURRENT_BLOCKS  = 2000  // Increased to handle large block gaps during restarts
-	INTENT_BATCH_SIZE      = 5
+	CERTEN_INTENT_MEMO    = "CERTEN_INTENT"
+	MAX_CONCURRENT_BLOCKS = 2000 // Increased to handle large block gaps during restarts
+	INTENT_BATCH_SIZE     = 5
 )
 
 // IntentDiscoveryConfig contains configuration for intent discovery
@@ -52,7 +53,7 @@ type IntentDiscoveryConfig struct {
 	BFTTimeout          time.Duration `json:"bft_timeout"`
 	MaxConcurrentBlocks int           `json:"max_concurrent_blocks"`
 	IntentBatchSize     int           `json:"intent_batch_size"`
-	MinStartHeight      uint64        `json:"min_start_height"`  // Minimum starting height fallback
+	MinStartHeight      uint64        `json:"min_start_height"` // Minimum starting height fallback
 
 	// on_demand consensus-bound proof retry policy.
 	// on_demand (financial) intents REQUIRE the L1-L3 consensus-bound chained proof and
@@ -113,42 +114,47 @@ func (s IntentStatus) String() string {
 
 // IntentDiscovery monitors Accumulate blockchain for Certen transaction intents
 type IntentDiscovery struct {
-	client          accumulate.Client
-	accumulateURL   string
-	config          *IntentDiscoveryConfig
-	ledgerStore     LedgerStoreInterface  // For persistence
-	logger          *log.Logger
-	bftConsensus    BFTConsensusProtocol
-	proofGenerator  *proof.LiteClientProofGenerator
-	validatorID     string
+	client         accumulate.Client
+	accumulateURL  string
+	config         *IntentDiscoveryConfig
+	ledgerStore    LedgerStoreInterface // For persistence
+	logger         *log.Logger
+	bftConsensus   BFTConsensusProtocol
+	proofGenerator *proof.LiteClientProofGenerator
+	validatorID    string
 
 	// PHASE 5: Batch system integration for PostgreSQL persistence and proof assembly
-	batchCollector       *batch.Collector               // For on-cadence batching
-	onDemandHandler      *batch.OnDemandHandler         // For immediate on-demand anchoring
-	batchingEnabled      bool                           // Toggle for batch system routing
-	governanceProofGen   proof.GovernanceProofGenerator // For G0/G1/G2 proof generation
+	batchCollector     *batch.Collector               // For on-cadence batching
+	onDemandHandler    *batch.OnDemandHandler         // For immediate on-demand anchoring
+	batchingEnabled    bool                           // Toggle for batch system routing
+	governanceProofGen proof.GovernanceProofGenerator // For G0/G1/G2 proof generation
 
 	// Intent lifecycle tracking (PostgreSQL)
-	repos                *database.Repositories         // For lifecycle status persistence
+	repos *database.Repositories // For lifecycle status persistence
 
 	// Multi-leg intent support
-	legCompletionHandler *LegCompletionHandler          // For multi-leg coordination
-	multiLegEnabled      bool                           // Toggle for multi-leg processing
+	legCompletionHandler *LegCompletionHandler // For multi-leg coordination
+	multiLegEnabled      bool                  // Toggle for multi-leg processing
 
 	// Block monitoring state
-	lastProcessedBlock  uint64
-	lastQueuedBlock    uint64             // highest block sent to workers (prevents re-queuing)
-	finalizeCeiling    uint64             // watermark is not finalized past this (= latest - confirmLag); the last few heights stay re-scannable
+	lastProcessedBlock uint64
+	lastQueuedBlock    uint64 // highest block sent to workers (prevents re-queuing)
+	finalizeCeiling    uint64 // watermark is not finalized past this (= latest - confirmLag); the last few heights stay re-scannable
 	isMonitoring       bool
 	stopCh             chan struct{}
 	blockProcessCh     chan *BlockProcessJob
-	processedBlocks    map[uint64]bool    // tracks out-of-order block completions for watermark
-	watermarkMu        sync.Mutex         // protects lastProcessedBlock, lastQueuedBlock, processedBlocks
+	processedBlocks    map[uint64]bool // tracks out-of-order block completions for watermark
+	watermarkMu        sync.Mutex      // protects lastProcessedBlock, lastQueuedBlock, processedBlocks
 	mu                 sync.RWMutex
 
 	// Intent tracking - E.4 remediation: Two-phase status tracking
-	intentStatus       map[string]IntentStatus // Tracks status of each intent
-	intentCount        int64                   // Total intents discovered
+	intentStatus map[string]IntentStatus // Tracks status of each intent
+	intentCount  int64                   // Total intents discovered
+
+	// Entitlement pre-screen (see entitlement_prescreen.go). Advisory only —
+	// declines work this node would otherwise do, never admits anything.
+	entitlementStore   *entitlement.Store
+	entitlementEnforce bool
 
 	// on_demand consensus-bound proof retry queue (decoupled from block workers).
 	// In-session only: across restart the persisted watermark prevents block re-scan and the
@@ -177,10 +183,10 @@ type BlockProcessJob struct {
 func DefaultIntentDiscoveryConfig() *IntentDiscoveryConfig {
 	return &IntentDiscoveryConfig{
 		BlockPollInterval:   5 * time.Second,
-		BFTTimeout:          60 * time.Second,  // Increased from 30s for WAN latency
+		BFTTimeout:          60 * time.Second, // Increased from 30s for WAN latency
 		MaxConcurrentBlocks: MAX_CONCURRENT_BLOCKS,
 		IntentBatchSize:     INTENT_BATCH_SIZE,
-		MinStartHeight:      946000,  // Current testnet baseline
+		MinStartHeight:      946000, // Current testnet baseline
 		// Short in-line retry catches the common few-second DN-anchoring lag without holding
 		// a block worker long; the decoupled queue (10 attempts, 10s→5m exp backoff ≈ ~25min)
 		// absorbs longer transient DN/BVN RPC outages off the critical path.
@@ -222,14 +228,14 @@ func NewIntentDiscovery(
 	}
 
 	return &IntentDiscovery{
-		client:           client,
-		accumulateURL:    accumulateURL,
-		config:           config,
-		ledgerStore:      ledgerStore,
-		logger:           log.New(log.Writer(), "[INTENT-DISCOVERY] ", log.LstdFlags),
-		proofGenerator:   proofGen,
-		validatorID:      validatorID,
-		intentStatus:     make(map[string]IntentStatus), // E.4 remediation: Two-phase status tracking
+		client:             client,
+		accumulateURL:      accumulateURL,
+		config:             config,
+		ledgerStore:        ledgerStore,
+		logger:             log.New(log.Writer(), "[INTENT-DISCOVERY] ", log.LstdFlags),
+		proofGenerator:     proofGen,
+		validatorID:        validatorID,
+		intentStatus:       make(map[string]IntentStatus), // E.4 remediation: Two-phase status tracking
 		lastProcessedBlock: 0,
 	}
 }
@@ -629,7 +635,7 @@ func (id *IntentDiscovery) processBlock(job *BlockProcessJob, workerID string) e
 
 	for _, certenTx := range certenTransactions {
 		// Filter to transactions in this specific block
-		if certenTx.BlockHeight != int64(job.BlockHeight) {  // Fixed: compare int64 to uint64
+		if certenTx.BlockHeight != int64(job.BlockHeight) { // Fixed: compare int64 to uint64
 			continue
 		}
 
@@ -902,16 +908,16 @@ func (id *IntentDiscovery) convertIntentToTransactionData(intent *CertenIntent, 
 
 	// Build TransactionData for the batch system
 	txData := &batch.TransactionData{
-		AccumTxHash:  intent.TransactionHash,
-		AccountURL:   intent.AccountURL,
-		TxHash:       txHash[:],
-		IntentType:   "certen_intent",
-		IntentData:   intent.IntentData,
+		AccumTxHash: intent.TransactionHash,
+		AccountURL:  intent.AccountURL,
+		TxHash:      txHash[:],
+		IntentType:  "certen_intent",
+		IntentData:  intent.IntentData,
 		// Intent tracking: links validator proofs back to Firestore intents
-		UserID:       intent.UserID,   // From intent_data.created_by
-		IntentID:     intent.IntentID, // From intent_data.intent_id
+		UserID:   intent.UserID,   // From intent_data.created_by
+		IntentID: intent.IntentID, // From intent_data.intent_id
 		// Multi-Chain Support: Target chain for anchoring
-		TargetChain:  targetChain,
+		TargetChain: targetChain,
 	}
 
 	// Extract Transaction Center metadata from CrossChainData
@@ -1189,6 +1195,21 @@ func (id *IntentDiscovery) handleRetryJob(job *intentRetryJob) {
 
 func (id *IntentDiscovery) processIntent(intent *CertenIntent, blockHeight uint64) error {
 	id.logger.Printf("🚀 Processing Certen intent: %s", intent.IntentID)
+
+	// ENTITLEMENT PRE-SCREEN.
+	//
+	// Cheap, local, and purely an optimisation — the authoritative gate is the
+	// consensus rule in the ABCI app, which every validator runs and none can
+	// skip. This one exists because building an L1-L4 chained proof is real CPU
+	// (and, for on_demand, retries against Accumulate), and doing that work for
+	// an intent that can never execute is free denial-of-service.
+	//
+	// Deliberately NOT a security boundary: it reads this node's cached
+	// entitlement snapshot, which may lag. It only ever declines work this node
+	// would otherwise do; it can never admit anything.
+	if !id.entitlementPreScreen(intent) {
+		return nil // refused; nothing spent, nothing to retry
+	}
 
 	// Detect if this is a multi-leg intent
 	isMultiLeg, err := intent.IsMultiLeg()
@@ -1868,19 +1889,19 @@ func (id *IntentDiscovery) convertLegToTransactionData(
 
 	// Build TransactionData for this leg
 	txData := &batch.TransactionData{
-		AccumTxHash:  intent.TransactionHash,
-		AccountURL:   intent.AccountURL,
-		TxHash:       txHash[:],
-		IntentType:   "certen_intent",
-		IntentData:   intent.IntentData,
-		UserID:       intent.UserID,
-		IntentID:     intent.IntentID,
-		TargetChain:  leg.Chain,
-		FromChain:    "accumulate",
-		ToChain:      leg.Chain,
-		FromAddress:  leg.From,
-		ToAddress:    leg.To,
-		TokenSymbol:  leg.Asset.Symbol,
+		AccumTxHash: intent.TransactionHash,
+		AccountURL:  intent.AccountURL,
+		TxHash:      txHash[:],
+		IntentType:  "certen_intent",
+		IntentData:  intent.IntentData,
+		UserID:      intent.UserID,
+		IntentID:    intent.IntentID,
+		TargetChain: leg.Chain,
+		FromChain:   "accumulate",
+		ToChain:     leg.Chain,
+		FromAddress: leg.From,
+		ToAddress:   leg.To,
+		TokenSymbol: leg.Asset.Symbol,
 	}
 
 	// Set amount — prefer human-readable AmountEth for display correctness
@@ -2017,7 +2038,6 @@ func (id *IntentDiscovery) markIntentProcessed(intentID string) {
 	id.markCompleted(intentID)
 }
 
-
 // GetMetrics returns discovery service metrics
 func (id *IntentDiscovery) GetMetrics() map[string]interface{} {
 	id.mu.RLock()
@@ -2102,4 +2122,3 @@ func (id *IntentDiscovery) isReplayData(data map[string]interface{}) bool {
 
 	return hasNonce || hasClientNonce || hasClientOperationId || hasCreatedAt || hasNotBefore || hasExpiresAt || hasReplayProtection || hasMaxExecutionDelay
 }
-
