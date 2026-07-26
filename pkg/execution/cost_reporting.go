@@ -98,25 +98,103 @@ func (btce *BFTTargetChainExecutor) reportExecutionCosts(
 		{billing.LegVaultExecute, result.GovernanceTxHash},
 	}
 
+	// Fall back to the primary TxHash when the per-leg fields are empty.
+	//
+	// Not every executor path fills the three leg fields. Several populate only
+	// `TxHash`, and the multi-chain path packs all of them as comma-joined,
+	// chain-prefixed strings. The hook previously read the three fields verbatim,
+	// so on those paths every candidate filtered out and NOTHING was reported —
+	// silently, because "no legs" looked identical to "nothing to do". The chain
+	// then never accumulated measured cost data and stayed permanently
+	// unpriceable, with no error anywhere to explain why.
+	//
+	// Attribute the fallback to the anchor leg: it is the one leg that always
+	// exists, and mislabelling is far better than dropping the measurement.
+	if !anyMeasurable(legs) && looksLikeTxHash(result.TxHash) {
+		legs = append(legs, struct {
+			leg    string
+			txHash string
+		}{billing.LegAnchor, result.TxHash})
+	}
+
+	reported := 0
 	for _, l := range legs {
-		if !looksLikeTxHash(l.txHash) {
+		// One field can carry several hashes (multi-chain: "Chain:leg-N:0x…,…").
+		for _, h := range extractTxHashes(l.txHash) {
+			reporter.ObserveAndReport(
+				context.Background(),
+				billing.ProbeConfig{
+					Chain:   chain,
+					ChainID: chainID,
+					RPCURL:  rpcURL,
+					APIKey:  apiKey,
+					Leg:     l.leg,
+				},
+				intentID,
+				"", // org attribution happens gateway-side from the intent
+				h,
+				nil,
+			)
+			reported++
+		}
+	}
+
+	// Never fail silently. An executed intent with nothing measurable is a bug
+	// in leg plumbing, and the only symptom downstream is a chain that quietly
+	// refuses to be priced.
+	if reported == 0 {
+		btce.logger.Printf("⚠️ [COST] %s intent %s executed but no measurable tx hash was found "+
+			"(create=%q verify=%q governance=%q primary=%q); this intent will be unmeasured",
+			chain, intentID, result.CreateTxHash, result.VerifyTxHash, result.GovernanceTxHash, result.TxHash)
+	}
+}
+
+func anyMeasurable(legs []struct {
+	leg    string
+	txHash string
+}) bool {
+	for _, l := range legs {
+		if len(extractTxHashes(l.txHash)) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// extractTxHashes pulls every real transaction hash out of an executor result
+// field.
+//
+// Executors write these in three shapes depending on the path taken:
+//
+//	"0xabc…"                              a bare hash
+//	"Ethereum Sepolia:0xabc…"             chain-prefixed
+//	"Ethereum Sepolia:leg-1:0xabc…,…"     chain+leg prefixed, comma-joined
+//
+// and non-EVM chains use native encodings (base58 Solana signatures), so the
+// hash is taken as the last colon-separated segment rather than by matching
+// "0x". Failure sentinels ("create_failed_base") are dropped.
+func extractTxHashes(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
 			continue
 		}
-		reporter.ObserveAndReport(
-			context.Background(),
-			billing.ProbeConfig{
-				Chain:   chain,
-				ChainID: chainID,
-				RPCURL:  rpcURL,
-				APIKey:  apiKey,
-				Leg:     l.leg,
-			},
-			intentID,
-			"", // org attribution happens gateway-side from the intent
-			l.txHash,
-			nil,
-		)
+		// Strip any "Chain:" / "Chain:leg-N:" prefix.
+		if idx := strings.LastIndex(part, ":"); idx >= 0 && idx+1 < len(part) {
+			part = part[idx+1:]
+		}
+		if !looksLikeTxHash(part) || seen[part] {
+			continue
+		}
+		seen[part] = true
+		out = append(out, part)
 	}
+	return out
 }
 
 // looksLikeTxHash filters out the failure placeholders the executor puts in
