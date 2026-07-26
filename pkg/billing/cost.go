@@ -192,6 +192,20 @@ func NativeSymbolFor(chain string) string {
 // "ethereum" all resolve to one fee model.
 func normalizeChain(chain string) string {
 	c := strings.ToLower(strings.TrimSpace(chain))
+	// Canonicalize the separator BEFORE trimming network suffixes.
+	//
+	// Chain names reach this function in whatever form the caller happens to
+	// hold: the slug "ethereum-sepolia", the env-var style "ETHEREUM_SEPOLIA",
+	// or the human display name "Ethereum Sepolia". The suffix list below is
+	// hyphenated, so a spaced or underscored name matched nothing, fell through
+	// to the default, and produced "no fee model implemented for chain
+	// \"Ethereum Sepolia\"" — every cost event for that leg was dropped before
+	// it was ever sent, and the chain stayed permanently unpriceable.
+	c = strings.NewReplacer(" ", "-", "_", "-").Replace(c)
+	// Collapse repeats so "ethereum  sepolia" and "ethereum_-sepolia" agree.
+	for strings.Contains(c, "--") {
+		c = strings.ReplaceAll(c, "--", "-")
+	}
 	for _, suffix := range []string{
 		"-mainnet", "-testnet", "-devnet", "-sepolia", "-shasta", "-nile",
 		"-preview", "-preprod", "-one", "-goerli",
