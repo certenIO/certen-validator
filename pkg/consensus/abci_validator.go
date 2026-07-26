@@ -331,8 +331,11 @@ func (app *ValidatorApp) FinalizeBlock(ctx context.Context, req *abcitypes.Reque
 	app.currentBlockTime = req.Time
 	// Note: currentAccAnchor is now set per ValidatorBlock transaction in processValidatorTransaction
 
+	// Bounded: an empty/short block hash must not panic FinalizeBlock.
 	app.logger.Printf("🚀 FinalizeBlock: Height %d, Hash: %s, Time: %s",
-		app.currentBlockHeight, app.currentBlockHash[:8], app.currentBlockTime.Format(time.RFC3339))
+		app.currentBlockHeight,
+		app.currentBlockHash[:min(8, len(app.currentBlockHash))],
+		app.currentBlockTime.Format(time.RFC3339))
 
 	txResults := make([]*abcitypes.ExecTxResult, len(req.Txs))
 	app.blockBundles = app.blockBundles[:0] // reset per-block bundle list; txs append to it
@@ -398,6 +401,26 @@ func (app *ValidatorApp) Commit(ctx context.Context, req *abcitypes.RequestCommi
 		// Defensive: FinalizeBlock didn't run (should not happen in the normal ABCI flow).
 		appHash = app.generateAppHash()
 	}
+
+	// An app hash must never be empty.
+	//
+	// Two things break if it is. Logging slices it (`appHash[:8]`), which
+	// panics on a zero-capacity slice and aborts Commit — taking the
+	// SaveABCIState call below down with it, so the app's height is never
+	// persisted. Every subsequent restart then reports height 0 and CometBFT
+	// replays from genesis; once the block store is pruned that replay is
+	// impossible and the node can never start again:
+	//
+	//   error on replay: app block height (0) is too far below block store base (4)
+	//
+	// which is exactly how a routine restart took the whole validator set down.
+	// A stable zero hash keeps consensus deterministic across validators while
+	// removing the panic.
+	if len(appHash) == 0 {
+		app.logger.Printf("⚠️ Empty app hash at height %d — substituting the zero hash "+
+			"so Commit cannot abort before persisting state", app.latestHeight)
+		appHash = make([]byte, 32)
+	}
 	app.lastCommitHash = appHash
 
 	// CRITICAL: Persist ABCI state for CometBFT recovery after restart
@@ -421,8 +444,9 @@ func (app *ValidatorApp) Commit(ctx context.Context, req *abcitypes.RequestCommi
 	}
 
 	blockCount := len(app.validatorBlocks)
+	// Bounded slice: a log line must never be able to abort a commit.
 	app.logger.Printf("📦 Committed validator block %d with %d ValidatorBlocks (hash: %x)",
-		app.latestHeight, blockCount, appHash[:8])
+		app.latestHeight, blockCount, appHash[:min(8, len(appHash))])
 
 	// Guard RetainHeight against negative values
 	retainHeight := app.latestHeight - 100
