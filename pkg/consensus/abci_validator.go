@@ -19,9 +19,9 @@ import (
 	"sync"
 	"time"
 
-	abcitypes "github.com/cometbft/cometbft/abci/types"
 	"github.com/certen/independant-validator/pkg/database"
 	"github.com/certen/independant-validator/pkg/ledger"
+	abcitypes "github.com/cometbft/cometbft/abci/types"
 	"github.com/google/uuid"
 )
 
@@ -51,6 +51,11 @@ type ValidatorApp struct {
 	// Ledger integration
 	ledgerStore *ledger.LedgerStore
 	chainID     string
+
+	// Entitlement gate. Read once at construction: a consensus rule must not
+	// change under a running node, and re-reading the environment per block
+	// would let two validators evaluate the same block differently.
+	entitlement EntitlementConfig
 
 	// Current block tracking for ledger updates
 	currentBlockHeight uint64
@@ -110,6 +115,18 @@ func NewValidatorApp(ledgerStore *ledger.LedgerStore, chainID string) *Validator
 		chainID:         chainID,
 		blockRetention:  blockRetentionFromEnv(),
 	}
+
+	// Entitlement gate. A misconfiguration here is fatal on purpose: starting
+	// with a silently-off gate that the operator believes is enforcing is worse
+	// than not starting, and starting in enforce mode with a key set that
+	// differs from the rest of the fleet would fork the chain.
+	entCfg, err := EntitlementConfigFromEnv()
+	if err != nil {
+		app.logger.Fatalf("invalid entitlement gate configuration: %v", err)
+	}
+	app.entitlement = entCfg
+	app.logger.Printf("🔐 [ENTITLEMENT] gate mode=%s trusted_keys=%d",
+		entCfg.Mode, len(entCfg.Keys))
 
 	// Restore persisted ABCI state for CometBFT recovery
 	if ledgerStore != nil {
@@ -219,6 +236,31 @@ func (app *ValidatorApp) CheckTx(ctx context.Context, req *abcitypes.RequestChec
 		}, nil
 	}
 
+	// Entitlement gate — MEMPOOL FILTER, not the authority.
+	//
+	// CheckTx runs before a block exists, so there is no ABCI block time to
+	// judge freshness against. The last committed block time is used instead:
+	// close enough to reject obvious garbage early and save the fleet a gossip
+	// round, and NOT consensus, so a disagreement here is harmless. The
+	// authoritative, deterministic check is in processValidatorTransaction.
+	app.mu.RLock()
+	approxNow := app.currentBlockTime
+	app.mu.RUnlock()
+	if approxNow.IsZero() {
+		approxNow = time.Now().UTC()
+	}
+	if reason, err := VerifyEntitlement(&vb, PrincipalOf(&vb), approxNow.Unix(), app.entitlement); err != nil {
+		app.logger.Printf("🚫 [ENTITLEMENT] CheckTx rejecting bundle=%s principal=%q reason=%s",
+			vb.BundleID, PrincipalOf(&vb), reason)
+		return &abcitypes.ResponseCheckTx{
+			Code: 4,
+			Log:  "entitlement check failed: " + err.Error(),
+		}, nil
+	} else if reason != "" {
+		app.logger.Printf("👁️ [ENTITLEMENT] OBSERVE CheckTx would reject bundle=%s principal=%q reason=%s",
+			vb.BundleID, PrincipalOf(&vb), reason)
+	}
+
 	app.logger.Printf("✅ CheckTx: Valid ValidatorBlock - Bundle: %s, Height: %d",
 		vb.BundleID, vb.BlockHeight)
 
@@ -264,6 +306,28 @@ func (app *ValidatorApp) processValidatorTransaction(tx []byte) abcitypes.ExecTx
 		}
 	}
 
+	// Entitlement gate — THE AUTHORITY.
+	//
+	// This is the consensus-enforced point: every validator runs it on every
+	// ValidatorBlock, so a block rejected here cannot commit anywhere, no matter
+	// what any individual node chose to sign earlier.
+	//
+	// app.currentBlockTime, never time.Now(): ABCI hands every validator the
+	// same block time, and freshness judged against wall time would make nodes
+	// disagree about expiry and halt the chain.
+	principal := PrincipalOf(&vb)
+	if reason, err := VerifyEntitlement(&vb, principal, app.currentBlockTime.UTC().Unix(), app.entitlement); err != nil {
+		app.logger.Printf("🚫 [ENTITLEMENT] REJECTED bundle=%s principal=%q reason=%s height=%d",
+			vb.BundleID, principal, reason, app.currentBlockHeight)
+		return abcitypes.ExecTxResult{
+			Code: 4,
+			Log:  "entitlement check failed: " + err.Error(),
+		}
+	} else if reason != "" {
+		app.logger.Printf("👁️ [ENTITLEMENT] OBSERVE would reject bundle=%s principal=%q reason=%s height=%d",
+			vb.BundleID, principal, reason, app.currentBlockHeight)
+	}
+
 	// Store ValidatorBlock with basic memory retention (query cache ONLY — it no longer feeds the
 	// app-hash, so its pruning/restart-volatility can't affect consensus).
 	// NOTE: No mutex lock here - FinalizeBlock already holds app.mu.Lock().
@@ -302,7 +366,7 @@ func (app *ValidatorApp) processValidatorTransaction(tx []byte) abcitypes.ExecTx
 	if anchorRef.TxHash != "" && anchorRef.BlockHeight > 0 {
 		app.currentAccAnchor = &ledger.SystemAccumulateAnchorRef{
 			TxHash:     anchorRef.TxHash,
-			AccountURL: anchorRef.AccountURL, // Use AccountURL from the anchor reference
+			AccountURL: anchorRef.AccountURL,  // Use AccountURL from the anchor reference
 			MinorIndex: anchorRef.BlockHeight, // Use block height as minor index for now
 			MajorIndex: 0,                     // Default to 0, can be enhanced later
 		}
@@ -340,7 +404,6 @@ func (app *ValidatorApp) processValidatorTransaction(tx []byte) abcitypes.ExecTx
 		Events: events,
 	}
 }
-
 
 // FinalizeBlock processes the entire block (CometBFT v0.38+)
 func (app *ValidatorApp) FinalizeBlock(ctx context.Context, req *abcitypes.RequestFinalizeBlock) (*abcitypes.ResponseFinalizeBlock, error) {
@@ -603,7 +666,6 @@ func (app *ValidatorApp) validateValidatorBlock(vb *ValidatorBlock) error {
 
 	return nil
 }
-
 
 // seedAppHash initializes the COMMITTED chain head from a persisted app-hash so the app-hash chain
 // continues correctly (and identically) after a restart.
@@ -983,7 +1045,7 @@ func (app *ValidatorApp) persistConsensusData(ctx context.Context) {
 			BlockNumber:        int64(vb.BlockHeight),
 			TxCount:            len(vb.SyntheticTransactions),
 			State:              state,
-			AttestationCount:   1, // Self-attestation
+			AttestationCount:   1,                                // Self-attestation
 			RequiredCount:      (app.validatorCount * 2 / 3) + 1, // 2/3 + 1 for BFT quorum
 			QuorumFraction:     quorumFraction,
 			AggregateSignature: blsSigBytes,

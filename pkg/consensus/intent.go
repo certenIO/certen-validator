@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/certen/independant-validator/pkg/entitlement"
 	"strings"
 	"sync"
 	"time"
@@ -78,85 +79,85 @@ type CertenIntent struct {
 
 	// CRITICAL: Proof class determines execution routing per FIRST_PRINCIPLES 2.5
 	// On-demand vs on-cadence proofs are NEVER interchangeable
-	ProofClass      string `json:"proofClass"` // "on_demand" | "on_cadence" - extracted from IntentData
+	ProofClass string `json:"proofClass"` // "on_demand" | "on_cadence" - extracted from IntentData
 }
 
 // IntentData represents the parsed intent data blob
 type IntentData struct {
-	Kind                     string                 `json:"kind"`           // "CERTEN_INTENT"
-	Version                  string                 `json:"version"`        // "1.0"
-	IntentType               string                 `json:"intentType"`     // "single_leg_cross_chain_transfer"
-	Description              string                 `json:"description"`
-	OrganizationAdi          string                 `json:"organizationAdi"`
-	IntentID                 string                 `json:"intent_id"`
-	CreatedBy                string                 `json:"created_by"`
-	CreatedAt                string                 `json:"created_at"`
-	IntentClass              string                 `json:"intent_class"`
-	RegulatoryJurisdiction   string                 `json:"regulatory_jurisdiction"`
-	Tags                     []string               `json:"tags"`
-	Initiator                map[string]interface{} `json:"initiator"`
-	Priority                 string                 `json:"priority"`
-	RiskLevel                string                 `json:"risk_level"`
-	ComplianceRequired       bool                   `json:"compliance_required"`
+	Kind                   string                 `json:"kind"`       // "CERTEN_INTENT"
+	Version                string                 `json:"version"`    // "1.0"
+	IntentType             string                 `json:"intentType"` // "single_leg_cross_chain_transfer"
+	Description            string                 `json:"description"`
+	OrganizationAdi        string                 `json:"organizationAdi"`
+	IntentID               string                 `json:"intent_id"`
+	CreatedBy              string                 `json:"created_by"`
+	CreatedAt              string                 `json:"created_at"`
+	IntentClass            string                 `json:"intent_class"`
+	RegulatoryJurisdiction string                 `json:"regulatory_jurisdiction"`
+	Tags                   []string               `json:"tags"`
+	Initiator              map[string]interface{} `json:"initiator"`
+	Priority               string                 `json:"priority"`
+	RiskLevel              string                 `json:"risk_level"`
+	ComplianceRequired     bool                   `json:"compliance_required"`
 
 	// CRITICAL: ProofClass determines execution routing - never interchangeable
-	ProofClass               string                 `json:"proof_class"` // "on_demand" | "on_cadence"
-	EstimatedGas             string                 `json:"estimated_gas"`
-	EstimatedFees            map[string]interface{} `json:"estimated_fees"`
+	ProofClass    string                 `json:"proof_class"` // "on_demand" | "on_cadence"
+	EstimatedGas  string                 `json:"estimated_gas"`
+	EstimatedFees map[string]interface{} `json:"estimated_fees"`
 
 	// OrganizationADI is a legacy field; OrganizationAdi is canonical.
-	OrganizationADI          string                 `json:"organizationADI,omitempty"`
+	OrganizationADI string `json:"organizationADI,omitempty"`
 }
 
 // CrossChainEnvelope represents the parsed cross-chain data blob
 type CrossChainEnvelope struct {
-	Protocol               string                 `json:"protocol"`        // "CERTEN"
-	Version                string                 `json:"version"`         // "1.0" (single-leg) or "2.0" (multi-leg)
-	OperationGroupId       string                 `json:"operationGroupId"`
-	Legs                   []CCLeg                `json:"legs"`            // 1-N legs for multi-leg support
-	Atomicity              map[string]interface{} `json:"atomicity"`
-	ExecutionConstraints   map[string]interface{} `json:"execution_constraints"`
-	CrossChainRouting      map[string]interface{} `json:"cross_chain_routing"`
+	Protocol             string                 `json:"protocol"` // "CERTEN"
+	Version              string                 `json:"version"`  // "1.0" (single-leg) or "2.0" (multi-leg)
+	OperationGroupId     string                 `json:"operationGroupId"`
+	Legs                 []CCLeg                `json:"legs"` // 1-N legs for multi-leg support
+	Atomicity            map[string]interface{} `json:"atomicity"`
+	ExecutionConstraints map[string]interface{} `json:"execution_constraints"`
+	CrossChainRouting    map[string]interface{} `json:"cross_chain_routing"`
 
 	// Multi-leg coordination (Version 2.0+)
 	// ExecutionMode determines how legs are executed:
 	// - "sequential": Legs execute in sequence_order, one chain group at a time
 	// - "parallel": All chain groups execute simultaneously
 	// - "atomic": All legs must succeed or all are rolled back
-	ExecutionMode          string                 `json:"execution_mode,omitempty"`
+	ExecutionMode string `json:"execution_mode,omitempty"`
 
 	// LegDependencies explicitly define which legs depend on others
-	LegDependencies        []LegDependency        `json:"leg_dependencies,omitempty"`
+	LegDependencies []LegDependency `json:"leg_dependencies,omitempty"`
 
 	// RollbackPolicy defines behavior when a leg fails in atomic mode
-	RollbackPolicy         *RollbackPolicy        `json:"rollback_policy,omitempty"`
+	RollbackPolicy *RollbackPolicy `json:"rollback_policy,omitempty"`
 
 	// TimeoutPolicy defines global timeout behavior for multi-leg intent
-	TimeoutPolicy          *TimeoutPolicy         `json:"timeout_policy,omitempty"`
+	TimeoutPolicy *TimeoutPolicy `json:"timeout_policy,omitempty"`
 
 	// OperationGroup is a legacy field; OperationGroupId is canonical.
-	OperationGroup         string                 `json:"operationGroup,omitempty"`
+	OperationGroup string `json:"operationGroup,omitempty"`
 }
 
 // LegDependency defines an explicit dependency between legs
 type LegDependency struct {
-	LegID          string `json:"leg_id"`           // The leg that has the dependency
+	LegID          string `json:"leg_id"`            // The leg that has the dependency
 	DependsOnLegID string `json:"depends_on_leg_id"` // The leg it depends on
 	ConditionType  string `json:"condition_type"`    // "success", "completion", "confirmation"
 }
 
 // RollbackPolicy defines rollback behavior for atomic multi-leg intents
 type RollbackPolicy struct {
-	Enabled           bool   `json:"enabled"`             // Whether rollback is enabled
-	RollbackOnFailure bool   `json:"rollback_on_failure"` // Rollback all legs if one fails
-	RollbackOnTimeout bool   `json:"rollback_on_timeout"` // Rollback if timeout exceeded
-	MaxRollbackLegs   int    `json:"max_rollback_legs"`   // Maximum legs to attempt rollback (0 = all)
+	Enabled           bool `json:"enabled"`             // Whether rollback is enabled
+	RollbackOnFailure bool `json:"rollback_on_failure"` // Rollback all legs if one fails
+	RollbackOnTimeout bool `json:"rollback_on_timeout"` // Rollback if timeout exceeded
+	MaxRollbackLegs   int  `json:"max_rollback_legs"`   // Maximum legs to attempt rollback (0 = all)
 }
 
 // TimeoutPolicy defines timeout behavior for multi-leg execution
 type TimeoutPolicy struct {
-	GlobalTimeoutSeconds int `json:"global_timeout_seconds"` // Max time for entire intent
-	PerLegTimeoutSeconds int `json:"per_leg_timeout_seconds"` // Max time per leg
+	GlobalTimeoutSeconds   int `json:"global_timeout_seconds"`    // Max time for entire intent
+	PerLegTimeoutSeconds   int `json:"per_leg_timeout_seconds"`   // Max time per leg
 	PerChainTimeoutSeconds int `json:"per_chain_timeout_seconds"` // Max time per chain group
 }
 
@@ -169,9 +170,9 @@ type CCLeg struct {
 	Network string `json:"network"` // "sepolia"
 
 	Asset struct {
-		Symbol   string `json:"symbol"`   // "ETH"
-		Decimals uint8  `json:"decimals"` // 18
-		Native   bool   `json:"native"`   // true
+		Symbol   string `json:"symbol"`            // "ETH"
+		Decimals uint8  `json:"decimals"`          // 18
+		Native   bool   `json:"native"`            // true
 		Address  string `json:"address,omitempty"` // Token contract address (for non-native)
 	} `json:"asset"`
 
@@ -185,10 +186,10 @@ type CCLeg struct {
 		Address          string `json:"address,omitempty"`          // EVM contract address
 		FunctionSelector string `json:"functionSelector,omitempty"` // EVM function selector
 		// Non-EVM identifiers (only one will be set per chain type)
-		Type             string `json:"type,omitempty"`             // "evm_contract", "solana_program", "near_contract", etc.
-		ProgramID        string `json:"programId,omitempty"`        // Solana program ID
-		ContractID       string `json:"contractId,omitempty"`       // NEAR contract ID
-		ModuleAddress    string `json:"moduleAddress,omitempty"`    // Aptos module address
+		Type          string `json:"type,omitempty"`          // "evm_contract", "solana_program", "near_contract", etc.
+		ProgramID     string `json:"programId,omitempty"`     // Solana program ID
+		ContractID    string `json:"contractId,omitempty"`    // NEAR contract ID
+		ModuleAddress string `json:"moduleAddress,omitempty"` // Aptos module address
 	} `json:"anchorContract"`
 
 	GasPolicy struct {
@@ -289,11 +290,11 @@ type GovernanceData struct {
 	OrganizationAdi string `json:"organizationAdi"`
 
 	Authorization struct {
-		RequiredKeyBook      string   `json:"required_key_book"`
-		RequiredKeyPage      string   `json:"required_key_page"`
-		SignatureThreshold   int      `json:"signature_threshold"`
-		RequiredSigners      []string `json:"required_signers"`
-		AuthorizationHash    string   `json:"authorization_hash"`
+		RequiredKeyBook    string   `json:"required_key_book"`
+		RequiredKeyPage    string   `json:"required_key_page"`
+		SignatureThreshold int      `json:"signature_threshold"`
+		RequiredSigners    []string `json:"required_signers"`
+		AuthorizationHash  string   `json:"authorization_hash"`
 
 		// Optional: explicit role mapping
 		Roles []struct {
@@ -302,28 +303,28 @@ type GovernanceData struct {
 		} `json:"roles"`
 	} `json:"authorization"`
 
-	ValidationRules   map[string]interface{} `json:"validation_rules"`
-	ComplianceChecks  map[string]interface{} `json:"compliance_checks"`
+	ValidationRules  map[string]interface{} `json:"validation_rules"`
+	ComplianceChecks map[string]interface{} `json:"compliance_checks"`
 
 	// OrganizationADI is a legacy field; OrganizationAdi is canonical.
-	OrganizationADI   string                 `json:"organizationADI,omitempty"`
+	OrganizationADI string `json:"organizationADI,omitempty"`
 }
 
 // ReplayData represents the parsed replay protection data blob
 type ReplayData struct {
-	Nonce                    string                 `json:"nonce"`
-	CreatedAt                int64                  `json:"created_at"`  // Unix timestamp in SECONDS (not ms) since epoch
-	ExpiresAt                int64                  `json:"expires_at"`  // Unix timestamp in SECONDS (not ms) since epoch
-	IntentHash               string                 `json:"intent_hash"`
-	ChainNonces              map[string]interface{} `json:"chain_nonces"`
-	ExecutionWindow          map[string]interface{} `json:"execution_window"`
-	Security                 map[string]interface{} `json:"security"`
+	Nonce           string                 `json:"nonce"`
+	CreatedAt       int64                  `json:"created_at"` // Unix timestamp in SECONDS (not ms) since epoch
+	ExpiresAt       int64                  `json:"expires_at"` // Unix timestamp in SECONDS (not ms) since epoch
+	IntentHash      string                 `json:"intent_hash"`
+	ChainNonces     map[string]interface{} `json:"chain_nonces"`
+	ExecutionWindow map[string]interface{} `json:"execution_window"`
+	Security        map[string]interface{} `json:"security"`
 
 	// Legacy fields for backward compatibility
-	ClientOperationID        string `json:"clientOperationId,omitempty"`
-	ClientNonce              int64  `json:"clientNonce,omitempty"`
-	NotBefore                string `json:"notBefore,omitempty"`  // ISO-8601
-	MaxExecutionDelaySeconds int64  `json:"maxExecutionDelaySeconds,omitempty"`
+	ClientOperationID        string                 `json:"clientOperationId,omitempty"`
+	ClientNonce              int64                  `json:"clientNonce,omitempty"`
+	NotBefore                string                 `json:"notBefore,omitempty"` // ISO-8601
+	MaxExecutionDelaySeconds int64                  `json:"maxExecutionDelaySeconds,omitempty"`
 	ReplayProtection         map[string]interface{} `json:"replayProtection,omitempty"`
 }
 
@@ -340,6 +341,13 @@ type BuilderInputs struct {
 	// Lite client proof - complete cryptographic proof chain
 	// from account state to network consensus via the Accumulate lite client
 	LiteClientProof *proof.CompleteProof `json:"lite_client_proof,omitempty"`
+
+	// EntitlementEvidence proves the submitting ADI may have CERTEN spend on
+	// this intent. Built by the proposer from its cached entitlement snapshot
+	// and carried into the block, because the verifier runs inside a consensus
+	// rule and may not look anything up. nil means "could not prove entitled",
+	// which the gate refuses in enforce mode.
+	EntitlementEvidence *entitlement.Evidence `json:"entitlement_evidence,omitempty"`
 }
 
 // GovernanceInputs are supplied from chain state & signatures
@@ -368,12 +376,12 @@ type GovernanceInputs struct {
 
 // ExecutionInputs captures current execution stage (pre or post)
 type ExecutionInputs struct {
-	Stage               string                // "pre-execution" or "post-execution"
+	Stage               string // "pre-execution" or "post-execution"
 	ValidatorSignatures []string
 	ExternalResults     []ExternalChainResult
 
 	// CRITICAL: ProofClass routing per FIRST_PRINCIPLES 2.5
-	ProofClass          string                // "on_demand" | "on_cadence" - flows to ExecutionProof
+	ProofClass string // "on_demand" | "on_cadence" - flows to ExecutionProof
 }
 
 // AccumulateAnchorReference represents the Accumulate blockchain anchor

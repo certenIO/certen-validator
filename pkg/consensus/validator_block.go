@@ -7,22 +7,23 @@ package consensus
 
 import (
 	lcproof "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof"
+	"github.com/certen/independant-validator/pkg/entitlement"
 	govproof "github.com/certen/independant-validator/pkg/proof"
 )
 
 // ValidatorBlock represents the canonical proof bundle stored in the validator CometBFT chain.
 type ValidatorBlock struct {
 	// === CORE METADATA ===
-	BlockHeight   uint64 `json:"block_height"`        // [DERIVED]
-	Timestamp     string `json:"timestamp"`           // [DERIVED] - RFC3339 format
-	ValidatorID   string `json:"validator_id"`        // [CONFIG]
-	BundleID      string `json:"bundle_id"`           // [DERIVED] - commitment.ComputeBundleID(GovernanceProof, CrossChainProof)
+	BlockHeight uint64 `json:"block_height"` // [DERIVED]
+	Timestamp   string `json:"timestamp"`    // [DERIVED] - RFC3339 format
+	ValidatorID string `json:"validator_id"` // [CONFIG]
+	BundleID    string `json:"bundle_id"`    // [DERIVED] - commitment.ComputeBundleID(GovernanceProof, CrossChainProof)
 
 	// Reference to the Accumulate anchor the intent originated from.
 	AccumulateAnchorReference AccumulateAnchorReference `json:"accumulate_anchor_reference"`
 
 	// === COMMITMENTS ===
-	OperationCommitment string `json:"operation_commitment"`  // [DERIVED] - Final commitment hash
+	OperationCommitment string `json:"operation_commitment"` // [DERIVED] - Final commitment hash
 
 	// === GOVERNANCE PROOF ===
 	GovernanceProof GovernanceProof `json:"governance_proof"`
@@ -43,6 +44,21 @@ type ValidatorBlock struct {
 	// Complete cryptographic proof chain from account state to network consensus
 	// via the Accumulate lite client - provides L1-L4 validation
 	LiteClientProof *lcproof.CompleteProof `json:"lite_client_proof,omitempty"`
+
+	// === ENTITLEMENT EVIDENCE ===
+	//
+	// Proof that the ADI which submitted this intent is entitled to have CERTEN
+	// spend its own money executing it.
+	//
+	// Carried IN the block rather than looked up during verification, because
+	// the verifier runs inside FinalizeBlock: a consensus rule may not perform
+	// I/O and may not depend on per-node state, or validators diverge and the
+	// chain halts. Everything needed to check this is self-contained here.
+	//
+	// omitempty, and nil means "no evidence" — which fails closed in enforce
+	// mode. That is deliberate: an unentitled account has nothing to attach, so
+	// absence IS the refusal, and no non-inclusion proof is required.
+	EntitlementEvidence *entitlement.Evidence `json:"entitlement_evidence,omitempty"`
 }
 
 // GovernanceProof represents the governance verification and authorization
@@ -86,19 +102,19 @@ type GovernanceProof struct {
 
 // CrossChainProof represents the cross-chain operation verification
 type CrossChainProof struct {
-	OperationID          string        `json:"operation_id"`            // [DERIVED] - Hash of 4 intent blobs
-	ChainTargets         []ChainTarget `json:"chain_targets"`           // [INTENT + DERIVED] - Per-leg operations
-	CrossChainCommitment string        `json:"cross_chain_commitment"`  // [DERIVED] - Hash of operation + commitments
+	OperationID          string        `json:"operation_id"`           // [DERIVED] - Hash of 4 intent blobs
+	ChainTargets         []ChainTarget `json:"chain_targets"`          // [INTENT + DERIVED] - Per-leg operations
+	CrossChainCommitment string        `json:"cross_chain_commitment"` // [DERIVED] - Hash of operation + commitments
 }
 
 // ExecutionProof represents the execution stage and results
 type ExecutionProof struct {
-	Stage               string                `json:"stage"`                            // [DERIVED] - one of "", ExecutionStagePre, ExecutionStagePost
-	ValidatorSignatures []string              `json:"validator_signatures,omitempty"`  // [DERIVED] - Consensus signatures
+	Stage                string                `json:"stage"`                            // [DERIVED] - one of "", ExecutionStagePre, ExecutionStagePost
+	ValidatorSignatures  []string              `json:"validator_signatures,omitempty"`   // [DERIVED] - Consensus signatures
 	ExternalChainResults []ExternalChainResult `json:"external_chain_results,omitempty"` // [OBSERVED] - External execution results
 
 	// CRITICAL: ProofClass routing per FIRST_PRINCIPLES 2.5 - on-demand vs on-cadence never interchangeable
-	ProofClass          string                `json:"proof_class,omitempty"`            // [CANONICAL] - "on_demand" | "on_cadence" from IntentData
+	ProofClass string `json:"proof_class,omitempty"` // [CANONICAL] - "on_demand" | "on_cadence" from IntentData
 }
 
 // AuthorizationLeaf represents a single authorization in the governance proof
@@ -117,24 +133,24 @@ type MerkleBranch struct {
 
 // ChainTarget represents a target blockchain for cross-chain operations
 type ChainTarget struct {
-	Chain            string `json:"chain"`              // [INTENT] - "ethereum"
-	ChainID          int64  `json:"chain_id"`           // [INTENT] - 11155111 for Sepolia, -3 for TON Testnet
-	ContractAddress  string `json:"contract_address"`   // [INTENT] - Anchor contract address
-	FunctionSelector string `json:"function_selector"`  // [INTENT] - Function selector
-	EncodedCallData  string `json:"encoded_call_data"`  // [DERIVED] - ABI encoded call data
-	Commitment       string `json:"commitment"`         // [DERIVED] - Per-leg commitment hash
-	Expiry           string `json:"expiry"`             // [DERIVED FROM INTENT] - RFC3339 from ReplayData.ExpiresAt
+	Chain            string `json:"chain"`             // [INTENT] - "ethereum"
+	ChainID          int64  `json:"chain_id"`          // [INTENT] - 11155111 for Sepolia, -3 for TON Testnet
+	ContractAddress  string `json:"contract_address"`  // [INTENT] - Anchor contract address
+	FunctionSelector string `json:"function_selector"` // [INTENT] - Function selector
+	EncodedCallData  string `json:"encoded_call_data"` // [DERIVED] - ABI encoded call data
+	Commitment       string `json:"commitment"`        // [DERIVED] - Per-leg commitment hash
+	Expiry           string `json:"expiry"`            // [DERIVED FROM INTENT] - RFC3339 from ReplayData.ExpiresAt
 }
 
 // ExternalChainResult represents the result of an external chain operation
 type ExternalChainResult struct {
-	Chain        string      `json:"chain"`
-	TxHash       string      `json:"tx_hash"`
-	BlockHash    string      `json:"block_hash"`
-	BlockNumber  uint64      `json:"block_number"`
-	LogsRoot     string      `json:"logs_root"`
-	InclusionProof []string  `json:"proof_of_inclusion"`
-	Status       interface{} `json:"status,omitempty"` // Can be string, int, or bool
+	Chain          string      `json:"chain"`
+	TxHash         string      `json:"tx_hash"`
+	BlockHash      string      `json:"block_hash"`
+	BlockNumber    uint64      `json:"block_number"`
+	LogsRoot       string      `json:"logs_root"`
+	InclusionProof []string    `json:"proof_of_inclusion"`
+	Status         interface{} `json:"status,omitempty"` // Can be string, int, or bool
 }
 
 // SyntheticTx represents a synthetic transaction generated during validation

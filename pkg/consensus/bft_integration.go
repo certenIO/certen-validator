@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/certen/independant-validator/pkg/entitlement"
 	"log"
 	"os"
 	"path/filepath"
@@ -16,19 +17,19 @@ import (
 	"sync"
 	"time"
 
+	dbm "github.com/cometbft/cometbft-db"
 	abcitypes "github.com/cometbft/cometbft/abci/types"
 	"github.com/cometbft/cometbft/config"
-	dbm "github.com/cometbft/cometbft-db"
+	cmted25519 "github.com/cometbft/cometbft/crypto/ed25519"
 	cmtlog "github.com/cometbft/cometbft/libs/log"
 	"github.com/cometbft/cometbft/node"
 	"github.com/cometbft/cometbft/p2p"
 	"github.com/cometbft/cometbft/privval"
+	cryptoproto "github.com/cometbft/cometbft/proto/tendermint/crypto"
 	"github.com/cometbft/cometbft/proxy"
 	cmthttp "github.com/cometbft/cometbft/rpc/client/http"
 	coretypes "github.com/cometbft/cometbft/rpc/core/types"
 	cmttypes "github.com/cometbft/cometbft/types"
-	cmted25519 "github.com/cometbft/cometbft/crypto/ed25519"
-	cryptoproto "github.com/cometbft/cometbft/proto/tendermint/crypto"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/mr-tron/base58"
@@ -279,15 +280,15 @@ type ConsensusParams struct {
 
 // ConsensusResult represents the result of a consensus operation
 type ConsensusResult struct {
-	Success          bool              `json:"success"`
-	SelectedExecutor string            `json:"selected_executor"`
-	VotingResults    map[string]string `json:"voting_results"`
-	ProofValidated   bool              `json:"proof_validated"`
-	ExecutionStatus  string            `json:"execution_status"`
-	Error            string            `json:"error,omitempty"`
+	Success          bool                   `json:"success"`
+	SelectedExecutor string                 `json:"selected_executor"`
+	VotingResults    map[string]string      `json:"voting_results"`
+	ProofValidated   bool                   `json:"proof_validated"`
+	ExecutionStatus  string                 `json:"execution_status"`
+	Error            string                 `json:"error,omitempty"`
 	Metadata         map[string]interface{} `json:"metadata,omitempty"`
-	RoundID          string            `json:"round_id,omitempty"`
-	Result           string            `json:"result,omitempty"`
+	RoundID          string                 `json:"round_id,omitempty"`
+	Result           string                 `json:"result,omitempty"`
 }
 
 // Use the real proof types from the proof package
@@ -332,29 +333,52 @@ type AnchorScheduler interface {
 // BFTValidator represents a decentralized BFT validator with elected executor consensus
 // Phase 3: BFTValidator now uses only CometBFT for consensus (no ExecutionConsensus)
 type BFTValidator struct {
-	engine                 BFTConsensusEngine
-	anchorManager          AnchorManager
-	proofGenerator         ProofGenerator
-	governanceProofGen     GovernanceProofGenerator // G0/G1/G2 proof generator (runs AFTER L1-L4)
-	targets                verification.TargetChainExecutor
-	validatorBlockBuilder  *ValidatorBlockBuilder
-	logger                 Logger
-	validatorID            string
-	chainID                string // CometBFT chain ID (e.g., "certen-validator")
-	privateKey             ed25519.PrivateKey
-	executionQueue         chan *ExecutionTask
-	ctx                    context.Context
-	cancel                 context.CancelFunc
+	engine                BFTConsensusEngine
+	anchorManager         AnchorManager
+	proofGenerator        ProofGenerator
+	governanceProofGen    GovernanceProofGenerator // G0/G1/G2 proof generator (runs AFTER L1-L4)
+	targets               verification.TargetChainExecutor
+	validatorBlockBuilder *ValidatorBlockBuilder
+	logger                Logger
+	validatorID           string
+	chainID               string // CometBFT chain ID (e.g., "certen-validator")
+	privateKey            ed25519.PrivateKey
+	executionQueue        chan *ExecutionTask
+	ctx                   context.Context
+	cancel                context.CancelFunc
 
 	// BFT coordination fields
-	mu                     sync.RWMutex
+	mu sync.RWMutex
 
 	// Proof Cycle Orchestrator for Phase 7-9 (observation, attestation, write-back)
 	proofCycleOrchestrator ProofCycleOrchestratorInterface
 
 	// Anchor Scheduler for on_cadence batching per FIRST_PRINCIPLES 2.5
 	// When set, on_cadence intents are queued for batched execution instead of immediate
-	anchorScheduler        AnchorScheduler
+	anchorScheduler AnchorScheduler
+
+	// Entitlement store, used at Phase 3 to attach proof that the submitting ADI
+	// may have CERTEN spend on this intent. nil when the gate is not configured,
+	// in which case no evidence is attached and the (off-by-default) consensus
+	// gate lets blocks through unchanged.
+	//
+	// Read-only cache lookup — never performs I/O on this path.
+	entitlementStore *entitlement.Store
+
+	// Entitlement gate mode, so the proposer can decline to sign locally rather
+	// than build a block the fleet will reject anyway. Purely an optimisation:
+	// the authority is the consensus rule in abci_validator.go.
+	entitlementMode EntitlementMode
+}
+
+// SetEntitlementStore wires the entitlement snapshot used to build evidence at
+// Phase 3. Safe to leave unset: the proposer then attaches nothing, which is
+// refused only if the consensus gate is enforcing.
+func (bv *BFTValidator) SetEntitlementStore(store *entitlement.Store, mode EntitlementMode) {
+	bv.mu.Lock()
+	defer bv.mu.Unlock()
+	bv.entitlementStore = store
+	bv.entitlementMode = mode
 }
 
 // Intent represents an intent to be executed
@@ -367,9 +391,9 @@ type Intent struct {
 
 // ExecutionTask represents a task for BFT consensus execution
 type ExecutionTask struct {
-	Intent      *Intent                  `json:"intent"`
-	RoundID     string                   `json:"round_id"`
-	BlockHeight uint64                   `json:"block_height"`
+	Intent      *Intent                   `json:"intent"`
+	RoundID     string                    `json:"round_id"`
+	BlockHeight uint64                    `json:"block_height"`
 	ResultChan  chan *ExecutionTaskResult `json:"-"`
 }
 
@@ -693,7 +717,7 @@ func (bv *BFTValidator) executeTask(task *ExecutionTask) {
 // This is the Golden Spec compliant method that consumes canonical artifacts, never reconstructs them
 func (bv *BFTValidator) ExecuteCanonicalIntentWithBFTConsensus(
 	ctx context.Context,
-	certenIntent *CertenIntent,     // canonical 4 blobs from IntentDiscovery
+	certenIntent *CertenIntent, // canonical 4 blobs from IntentDiscovery
 	certenProof *proof.CertenProof, // from ProofGenerator / lite client
 	blockHeight uint64,
 ) error {
@@ -958,6 +982,48 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	_ = resolvedKeyPageURL
 	_ = resolvedKeyBookURL
 
+	// ====================================================================
+	// PHASE 3 ENTITLEMENT — does CERTEN agree to spend on this intent?
+	//
+	// Placed here deliberately. Phases 1-2 (discovery, L1-L4 proof) cost
+	// nothing but CPU, so establishing that the intent is REAL before asking
+	// who owns it wastes nothing and means a refusal is issued against a
+	// cryptographically established intent. Everything after this point leads
+	// to money: TX1 anchor, TX2 BLS-ZK verify, TX3 execution.
+	//
+	// The evidence is keyed on certenIntent.AccountURL — the discovered
+	// Accumulate principal. That is the ONLY field a submitter cannot forge;
+	// discovery overwrites the self-declared organizationAdi with it precisely
+	// because the declared value is attacker-controlled.
+	//
+	// This is a cache read, never a network call.
+	// ====================================================================
+	principal := strings.TrimSpace(certenIntent.AccountURL)
+	var entEvidence *entitlement.Evidence
+	if bv.entitlementStore != nil {
+		entEvidence = bv.entitlementStore.BuildEvidence(principal)
+	}
+
+	if bv.entitlementMode == EntitlementEnforce && entEvidence == nil {
+		// Decline locally rather than build a block the fleet will reject.
+		//
+		// An optimisation, NOT the enforcement point: this validator could be
+		// modified to skip it. The authority is VerifyEntitlement inside
+		// CheckTx/FinalizeBlock, which every validator runs and none can skip.
+		bv.logger.Printf("🚫 [ENTITLEMENT] refusing intent %s: principal %q has no entitlement evidence (no gas will be spent)",
+			certenIntent.IntentID, principal)
+		return &ExecutionTaskResult{
+			Success:    false,
+			ExecutorID: bv.validatorID,
+			Error: fmt.Errorf("intent %s refused: principal %q is not entitled to CERTEN execution",
+				certenIntent.IntentID, principal),
+		}, nil
+	}
+	if bv.entitlementMode == EntitlementObserve && entEvidence == nil {
+		bv.logger.Printf("👁️ [ENTITLEMENT] OBSERVE would refuse intent %s: principal %q has no entitlement evidence",
+			certenIntent.IntentID, principal)
+	}
+
 	// Create builder inputs STRICTLY from canonical sources
 	builderInputs := BuilderInputs{
 		Intent: certenIntent, // canonical 4 blobs from IntentDiscovery
@@ -979,9 +1045,13 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 			ValidatorSignatures: validatorSignatures, // from BFT consensus or fallback
 			ProofClass:          proofClass,          // CRITICAL: preserve proof class for routing
 		},
-		AnchorRef:       anchorRef,       // from proof or fallback values
+		AnchorRef:       anchorRef, // from proof or fallback values
 		BlockHeight:     blockHeight,
 		LiteClientProof: liteClientProof, // Complete cryptographic proof chain or nil
+
+		// Carried into the block so every validator can verify entitlement
+		// without performing I/O inside a consensus rule.
+		EntitlementEvidence: entEvidence,
 	}
 
 	// Build ValidatorBlock using canonical method
@@ -1698,15 +1768,15 @@ type Logger interface {
 // RealCometBFTEngine is the production BFT engine that runs an in-process
 // CometBFT node and uses RPC to BroadcastTxCommit.
 type RealCometBFTEngine struct {
-	cometCfg  *config.Config
-	app       abcitypes.Application
-	logger    *log.Logger
+	cometCfg *config.Config
+	app      abcitypes.Application
+	logger   *log.Logger
 
 	node      *node.Node
 	rpcClient *cmthttp.HTTP
 
-	mu        sync.RWMutex
-	started   bool
+	mu      sync.RWMutex
+	started bool
 
 	// Validator identification
 	validatorID string
@@ -1836,37 +1906,37 @@ func NewRealCometBFTEngine(
 
 // SimpleBFTValidator represents a real validator in the network
 type SimpleBFTValidator struct {
-	ID        string
-	PublicKey []byte  // Store as bytes to handle different key types
+	ID          string
+	PublicKey   []byte // Store as bytes to handle different key types
 	VotingPower int
-	IsActive  bool
+	IsActive    bool
 }
 
 // CertenApplication implements the ABCI application interface for CometBFT
 type CertenApplication struct {
-	logger          *log.Logger
-	engine          *RealCometBFTEngine
-	pendingTxs      map[string]*ProofVerificationRequest
-	mu              sync.RWMutex
+	logger     *log.Logger
+	engine     *RealCometBFTEngine
+	pendingTxs map[string]*ProofVerificationRequest
+	mu         sync.RWMutex
 
 	// App state for tracking consensus
-	ballotState     map[string]*BallotInfo     // roundID -> ballot status
-	proofState      map[string]*ProofRecord    // requestID -> proof verification
-	executionState  map[string]*ExecutionRecord // roundID -> execution result
-	intentState     map[string]*IntentRecord   // intentID -> intent tracking
+	ballotState    map[string]*BallotInfo      // roundID -> ballot status
+	proofState     map[string]*ProofRecord     // requestID -> proof verification
+	executionState map[string]*ExecutionRecord // roundID -> execution result
+	intentState    map[string]*IntentRecord    // intentID -> intent tracking
 
 	// Block height tracking
-	currentHeight   int64
-	currentTime     time.Time
-	appHash         []byte
+	currentHeight int64
+	currentTime   time.Time
+	appHash       []byte
 
 	// BFT Validator reference for callback functionality
 	validator *BFTValidator
 
 	// Ledger integration with persistent storage
-	cmtDB           dbm.DB                    // CometBFT database for persistence
-	ledgerStore     *ledger.LedgerStore       // Ledger store for system/anchor tracking
-	chainID         string
+	cmtDB            dbm.DB              // CometBFT database for persistence
+	ledgerStore      *ledger.LedgerStore // Ledger store for system/anchor tracking
+	chainID          string
 	currentAccAnchor *ledger.SystemAccumulateAnchorRef // Current Accumulate anchor reference
 
 	// Version info for system ledger
@@ -1921,20 +1991,20 @@ func NewCertenApplicationWithDB(engine *RealCometBFTEngine, cfg *config.Config, 
 	ledgerStore := ledger.NewLedgerStore(kvAdapter)
 
 	app := &CertenApplication{
-		logger:           logger,
-		engine:           engine,
-		pendingTxs:       make(map[string]*ProofVerificationRequest),
-		ballotState:      make(map[string]*BallotInfo),
-		proofState:       make(map[string]*ProofRecord),
-		executionState:   make(map[string]*ExecutionRecord),
-		intentState:      make(map[string]*IntentRecord),
-		currentHeight:    0,
-		appHash:          []byte("certen_v1"),
-		validator:        nil, // Will be set via SetValidatorRef
-		cmtDB:            cmtDB,
-		ledgerStore:      ledgerStore,
-		chainID:          getChainIDFromEnv(), // Use consistent chainID across all validators
-		executorVersion:  Version, // Set from package-level Version variable (can be overridden at build time)
+		logger:          logger,
+		engine:          engine,
+		pendingTxs:      make(map[string]*ProofVerificationRequest),
+		ballotState:     make(map[string]*BallotInfo),
+		proofState:      make(map[string]*ProofRecord),
+		executionState:  make(map[string]*ExecutionRecord),
+		intentState:     make(map[string]*IntentRecord),
+		currentHeight:   0,
+		appHash:         []byte("certen_v1"),
+		validator:       nil, // Will be set via SetValidatorRef
+		cmtDB:           cmtDB,
+		ledgerStore:     ledgerStore,
+		chainID:         getChainIDFromEnv(), // Use consistent chainID across all validators
+		executorVersion: Version,             // Set from package-level Version variable (can be overridden at build time)
 		upstreamVersions: []ledger.UpstreamExecutor{
 			// Accumulate upstream executor - version populated when lite client connects
 			{
@@ -2000,7 +2070,6 @@ func (app *CertenApplication) Info(ctx context.Context, req *abcitypes.RequestIn
 		LastBlockAppHash: app.appHash,
 	}, nil
 }
-
 
 func (app *CertenApplication) InitChain(ctx context.Context, req *abcitypes.RequestInitChain) (*abcitypes.ResponseInitChain, error) {
 	app.logger.Printf("🚀 [CERTEN-ABCI] Initializing chain with %d validators", len(req.Validators))
@@ -2209,7 +2278,6 @@ func (app *CertenApplication) processProofVerification(txData map[string]interfa
 	}
 }
 
-
 func (app *CertenApplication) processExecutionResult(txData map[string]interface{}) {
 	if roundID, ok := txData["round_id"].(string); ok {
 		if intentID, ok := txData["intent_id"].(string); ok {
@@ -2284,7 +2352,6 @@ func (app *CertenApplication) processExecutorSelection(txData map[string]interfa
 	}
 }
 
-
 func (app *CertenApplication) computeAppHash() []byte {
 	// Enhanced hash based on current state
 	hash := sha256.New()
@@ -2320,8 +2387,8 @@ func generateDeterministicNodeKey(validatorID string) cmted25519.PrivKey {
 
 	// CometBFT expects 64-byte format: private key seed (32) + public key (32)
 	combined := make([]byte, 64)
-	copy(combined[:32], privateKey[:32])  // First 32 bytes: private key
-	copy(combined[32:], publicKey)        // Last 32 bytes: public key
+	copy(combined[:32], privateKey[:32]) // First 32 bytes: private key
+	copy(combined[32:], publicKey)       // Last 32 bytes: public key
 
 	return cmted25519.PrivKey(combined)
 }
@@ -2348,8 +2415,8 @@ func NewUnifiedCometBFTEngine(validatorID string) (*RealCometBFTEngine, error) {
 	logger := log.New(os.Stdout, fmt.Sprintf("[CometBFT-%s] ", validatorID), log.LstdFlags|log.Lmicroseconds)
 
 	// All validators use the same internal container ports - Docker handles external mapping
-	p2pPort := 26656  // All validators listen on internal port 26656
-	rpcPort := 26657  // All validators listen on internal port 26657
+	p2pPort := 26656 // All validators listen on internal port 26656
+	rpcPort := 26657 // All validators listen on internal port 26657
 
 	// CometBFT home is a persistent Docker volume (validatorN_keys:/app/bft-keys).
 	// DO NOT wipe the data dir on boot: blockstore.db / state.db / cs.wal must survive
@@ -2408,13 +2475,13 @@ func NewUnifiedCometBFTEngine(validatorID string) (*RealCometBFTEngine, error) {
 
 	// P2P network configuration to prevent pong timeouts and connection drops
 	// These settings are critical for stable multi-validator consensus in Docker networks
-	cfg.P2P.SendRate = 20000000        // 20 MB/s - increase from default 512KB/s
-	cfg.P2P.RecvRate = 20000000        // 20 MB/s - increase from default 512KB/s
+	cfg.P2P.SendRate = 20000000 // 20 MB/s - increase from default 512KB/s
+	cfg.P2P.RecvRate = 20000000 // 20 MB/s - increase from default 512KB/s
 	cfg.P2P.FlushThrottleTimeout = 100 * time.Millisecond
-	cfg.P2P.MaxPacketMsgPayloadSize = 1400     // Default is 1024, increase for larger messages
-	cfg.P2P.HandshakeTimeout = 30 * time.Second  // Increase from default 20s
-	cfg.P2P.DialTimeout = 10 * time.Second       // Increase from default 3s
-	cfg.P2P.AllowDuplicateIP = true              // Allow duplicate IPs in Docker network
+	cfg.P2P.MaxPacketMsgPayloadSize = 1400                  // Default is 1024, increase for larger messages
+	cfg.P2P.HandshakeTimeout = 30 * time.Second             // Increase from default 20s
+	cfg.P2P.DialTimeout = 10 * time.Second                  // Increase from default 3s
+	cfg.P2P.AllowDuplicateIP = true                         // Allow duplicate IPs in Docker network
 	cfg.P2P.PersistentPeersMaxDialPeriod = 60 * time.Second // Keep trying persistent peers
 
 	// Generate deterministic node key (always overwrite existing)
@@ -2955,7 +3022,6 @@ func (engine *RealCometBFTEngine) SetValidatorRef(validator *BFTValidator) {
 	}
 }
 
-
 // GetChainID returns the chain ID from the ABCI application
 func (app *CertenApplication) GetChainID() string {
 	return app.chainID
@@ -2987,7 +3053,6 @@ func (app *CertenApplication) GetMetrics() map[string]interface{} {
 // Interface compliance verification
 var _ ConsensusEngine = (*RealCometBFTEngine)(nil)
 
-
 // =============================================================================
 // STATEFUL CERTEN APPLICATION FOR REAL CONSENSUS TRACKING
 // =============================================================================
@@ -3004,23 +3069,23 @@ type BallotInfo struct {
 
 // ProofRecord tracks proof verification state
 type ProofRecord struct {
-	RequestID    string
-	RoundID      string
-	IntentID     string
-	Status       string
-	ValidatorID  string
-	Timestamp    int64
+	RequestID   string
+	RoundID     string
+	IntentID    string
+	Status      string
+	ValidatorID string
+	Timestamp   int64
 }
 
 // ExecutionRecord tracks execution results
 type ExecutionRecord struct {
-	RoundID      string
-	IntentID     string
-	Success      bool
-	ExecutorID   string
-	AnchorID     string
-	Result       string
-	Timestamp    int64
+	RoundID    string
+	IntentID   string
+	Success    bool
+	ExecutorID string
+	AnchorID   string
+	Result     string
+	Timestamp  int64
 }
 
 // IntentRecord tracks intent processing
@@ -3031,11 +3096,9 @@ type IntentRecord struct {
 	Timestamp    int64
 }
 
-
 // =============================================================================
 // ABCI STATE BROADCASTING METHODS
 // =============================================================================
-
 
 // broadcastExecutionResult broadcasts execution results to CometBFT for app state tracking
 func (bv *BFTValidator) broadcastExecutionResult(roundID, intentID string, success bool, executorID string) error {
@@ -3131,7 +3194,6 @@ func (bv *BFTValidator) broadcastExecutorSelection(roundID, executorID string) e
 
 	return bv.broadcastBFTTransaction(txBytes, "executor_selection")
 }
-
 
 // generateConsensusHash creates a consensus hash for execution results (Phase 3)
 func (bv *BFTValidator) generateConsensusHash(roundID, executorID string) string {
@@ -3253,20 +3315,20 @@ func (bv *BFTValidator) buildExecutionCommitmentFromIntent(certenIntent *CertenI
 		bv.logger.Printf("⚠️ [COMMITMENT] Failed to parse CrossChainData: %v", err)
 		// Return minimal commitment with error flag
 		return map[string]interface{}{
-			"bundleID":     hex.EncodeToString(bundleID[:]),
-			"intentID":     certenIntent.IntentID,
-			"error":        fmt.Sprintf("failed to parse CrossChainData: %v", err),
-			"verified":     false,
+			"bundleID": hex.EncodeToString(bundleID[:]),
+			"intentID": certenIntent.IntentID,
+			"error":    fmt.Sprintf("failed to parse CrossChainData: %v", err),
+			"verified": false,
 		}
 	}
 
 	if len(crossChainData.Legs) == 0 {
 		bv.logger.Printf("⚠️ [COMMITMENT] No legs in CrossChainData")
 		return map[string]interface{}{
-			"bundleID":     hex.EncodeToString(bundleID[:]),
-			"intentID":     certenIntent.IntentID,
-			"error":        "no legs in CrossChainData",
-			"verified":     false,
+			"bundleID": hex.EncodeToString(bundleID[:]),
+			"intentID": certenIntent.IntentID,
+			"error":    "no legs in CrossChainData",
+			"verified": false,
 		}
 	}
 
@@ -3305,14 +3367,14 @@ func (bv *BFTValidator) buildExecutionCommitmentFromIntent(certenIntent *CertenI
 	// Build comprehensive commitment
 	commitment := map[string]interface{}{
 		// Identity
-		"bundleID":     hex.EncodeToString(bundleID[:]),
-		"intentID":     certenIntent.IntentID,
-		"txHash":       certenIntent.TransactionHash,
+		"bundleID": hex.EncodeToString(bundleID[:]),
+		"intentID": certenIntent.IntentID,
+		"txHash":   certenIntent.TransactionHash,
 
 		// Chain info
-		"targetChain":  leg.Chain,
-		"chainID":      leg.ChainID,
-		"network":      leg.Network,
+		"targetChain": leg.Chain,
+		"chainID":     leg.ChainID,
+		"network":     leg.Network,
 
 		// Contract addresses
 		"anchorContract": anchorContract.Hex(),
@@ -3321,28 +3383,28 @@ func (bv *BFTValidator) buildExecutionCommitmentFromIntent(certenIntent *CertenI
 
 		// Step 1: createAnchor
 		"step1": map[string]interface{}{
-			"name":           "createAnchor",
-			"contract":       anchorContract.Hex(),
-			"selector":       hex.EncodeToString(createAnchorSelector),
-			"expectedValue":  "0", // No ETH transfer
+			"name":          "createAnchor",
+			"contract":      anchorContract.Hex(),
+			"selector":      hex.EncodeToString(createAnchorSelector),
+			"expectedValue": "0", // No ETH transfer
 		},
 
 		// Step 2: executeComprehensiveProof
 		"step2": map[string]interface{}{
-			"name":           "executeComprehensiveProof",
-			"contract":       anchorContract.Hex(),
-			"selector":       hex.EncodeToString(executeProofSelector),
-			"expectedValue":  "0", // No ETH transfer
+			"name":          "executeComprehensiveProof",
+			"contract":      anchorContract.Hex(),
+			"selector":      hex.EncodeToString(executeProofSelector),
+			"expectedValue": "0", // No ETH transfer
 		},
 
 		// Step 3: executeWithGovernance
 		// NOTE: expectedValue is "0" because the anchor contract handles value transfer internally
 		// The finalValue is transferred FROM the anchor TO the target, not via msg.value
 		"step3": map[string]interface{}{
-			"name":           "executeWithGovernance",
-			"contract":       anchorContract.Hex(),
-			"selector":       hex.EncodeToString(executeGovSelector),
-			"expectedValue":  "0", // Anchor contract transfers value internally, not via msg.value
+			"name":          "executeWithGovernance",
+			"contract":      anchorContract.Hex(),
+			"selector":      hex.EncodeToString(executeGovSelector),
+			"expectedValue": "0", // Anchor contract transfers value internally, not via msg.value
 		},
 
 		// Expected events
@@ -3368,7 +3430,7 @@ func (bv *BFTValidator) buildExecutionCommitmentFromIntent(certenIntent *CertenI
 		},
 
 		// Verification flags
-		"verified": true,
+		"verified":  true,
 		"createdAt": time.Now().UTC().Format(time.RFC3339),
 
 		// Multi-leg metadata (for write-back aggregation)
@@ -3514,13 +3576,13 @@ func extractIntentMetadata(rawMetadata map[string]interface{}) *IntentMetadata {
 
 // EngineConfig provides structured configuration for production CometBFT engines
 type EngineConfig struct {
-	ValidatorID     string
-	HomeDir         string
-	P2PPort         int
-	RPCPort         int
-	Seeds           []string
-	PersistentPeers []string
-	ChainID         string
+	ValidatorID       string
+	HomeDir           string
+	P2PPort           int
+	RPCPort           int
+	Seeds             []string
+	PersistentPeers   []string
+	ChainID           string
 	CreateEmptyBlocks bool
 }
 

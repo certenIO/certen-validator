@@ -260,14 +260,13 @@ func (builder *ValidatorBlockBuilder) BuildFromIntent(inputs BuilderInputs) (*Va
 		SyntheticTransactions:     inputs.SyntheticTxs,
 		ResultAttestations:        inputs.ResultAtts,
 		LiteClientProof:           inputs.LiteClientProof,
+		EntitlementEvidence:       inputs.EntitlementEvidence,
 	}
 
 	return vb, nil
 }
 
 // Legacy BuildValidatorBlock method removed - use BuildFromIntent with CertenIntent
-
-
 
 // ==================================
 // Intent-Centric Helper Methods
@@ -337,7 +336,6 @@ func (builder *ValidatorBlockBuilder) buildChainTargets(crossChainData *CrossCha
 
 	return targets, nil
 }
-
 
 // resolveAnchorIdentifier returns the anchor/program/contract identifier for a leg,
 // checking chain-specific fields when the EVM Address field is empty.
