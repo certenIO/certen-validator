@@ -260,7 +260,7 @@ func TestNewCostEventRejectsUnattributableCost(t *testing.T) {
 func TestCostEventCarriesFactsNotPrices(t *testing.T) {
 	// The validator must never send a USD amount: pricing belongs to the
 	// gateway, using its own signed FX observation.
-	event, err := NewCostEvent("i", "org", sampleCost("base", "0x1", LegVaultExecute), nil)
+	event, err := NewCostEvent("i", "org", "", sampleCost("base", "0x1", LegVaultExecute), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
