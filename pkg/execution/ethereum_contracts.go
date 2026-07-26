@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"math/big"
 	"os"
 	"reflect"
@@ -19,17 +20,17 @@ import (
 	"sync"
 	"time"
 
+	"github.com/certen/independant-validator/pkg/anchor"
+	"github.com/certen/independant-validator/pkg/crypto/bls"
+	"github.com/certen/independant-validator/pkg/crypto/bls_zkp"
+	"github.com/certen/independant-validator/pkg/execution/contracts"
+	"github.com/certen/independant-validator/pkg/intent"
+	"github.com/certen/independant-validator/pkg/proof"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
-	"github.com/certen/independant-validator/pkg/anchor"
-	"github.com/certen/independant-validator/pkg/crypto/bls"
-	"github.com/certen/independant-validator/pkg/crypto/bls_zkp"
-	"github.com/certen/independant-validator/pkg/intent"
-	"github.com/certen/independant-validator/pkg/proof"
-	"github.com/certen/independant-validator/pkg/execution/contracts"
 )
 
 // =============================================================================
@@ -214,7 +215,7 @@ func fileExists(path string) bool {
 }
 
 // Aliases for contract struct types to avoid naming conflicts
-type AnchorProofStruct = contracts.AnchorProof // From anchor contract binding
+type AnchorProofStruct = contracts.AnchorProof   // From anchor contract binding
 type AccountProofStruct = contracts.AccountProof // From account contract binding
 
 // Type aliases for clarity
@@ -228,9 +229,9 @@ type CertenContractConfig struct {
 	EthereumRPC          string `json:"ethereum_rpc"`
 	ChainID              int64  `json:"chain_id"`
 	PrivateKey           string `json:"private_key"`
-	CreationContract     string `json:"creation_contract"`    // CertenAnchorV3 - unified contract
-	VerificationContract string `json:"verification_contract"`// CertenAnchorV3 - same unified contract
-	AccountContract      string `json:"account_contract"`     // 0xC30E74e54a54a470139b75633CEDeC8404743020
+	CreationContract     string `json:"creation_contract"`     // CertenAnchorV3 - unified contract
+	VerificationContract string `json:"verification_contract"` // CertenAnchorV3 - same unified contract
+	AccountContract      string `json:"account_contract"`      // 0xC30E74e54a54a470139b75633CEDeC8404743020
 	GasLimit             uint64 `json:"gas_limit"`
 	MaxGasPriceGwei      int64  `json:"max_gas_price_gwei"`
 
@@ -243,94 +244,94 @@ type CertenContractConfig struct {
 //   - createAnchor(): 5-parameter anchor creation
 //   - executeComprehensiveProof(): BLS verification
 type EthereumContractManager struct {
-	client                     *ethclient.Client
-	auth                       *bind.TransactOpts
-	config                     *CertenContractConfig
-	creationContractAddr       common.Address                    // CertenAnchorV3 unified contract
-	verificationContract       *CertenAnchorV2Contract           // Legacy V2 binding (deprecated)
-	verificationContractExt    *contracts.CertenAnchorV2Extended // Legacy V2 extended (deprecated)
-	anchor                   *contracts.CertenAnchorWrapper  // CertenAnchorV3 - Primary contract for all operations
-	acctContract               *CertenAccountV2Contract
+	client                  *ethclient.Client
+	auth                    *bind.TransactOpts
+	config                  *CertenContractConfig
+	creationContractAddr    common.Address                    // CertenAnchorV3 unified contract
+	verificationContract    *CertenAnchorV2Contract           // Legacy V2 binding (deprecated)
+	verificationContractExt *contracts.CertenAnchorV2Extended // Legacy V2 extended (deprecated)
+	anchor                  *contracts.CertenAnchorWrapper    // CertenAnchorV3 - Primary contract for all operations
+	acctContract            *CertenAccountV2Contract
 }
 
 // CertenProofStruct matches the Solidity CertenProof structure
 type CertenProofStruct struct {
-	TransactionHash   [32]byte   `json:"transactionHash"`
-	MerkleRoot        [32]byte   `json:"merkleRoot"`
-	MerkleProofHashes [][32]byte `json:"merkleProofHashes"`
-	LeafIndex         *big.Int   `json:"leafIndex"`
+	TransactionHash   [32]byte              `json:"transactionHash"`
+	MerkleRoot        [32]byte              `json:"merkleRoot"`
+	MerkleProofHashes [][32]byte            `json:"merkleProofHashes"`
+	LeafIndex         *big.Int              `json:"leafIndex"`
 	GovernanceProof   GovernanceProofStruct `json:"governanceProof"`
 	BlsSignature      BlsSignatureStruct    `json:"blsSignature"`
-	CommitmentHash    [32]byte   `json:"commitmentHash"`
-	ExpirationTime    *big.Int   `json:"expirationTime"`
-	Metadata          []byte     `json:"metadata"`
+	CommitmentHash    [32]byte              `json:"commitmentHash"`
+	ExpirationTime    *big.Int              `json:"expirationTime"`
+	Metadata          []byte                `json:"metadata"`
 }
 
 // GovernanceProofStruct matches the Solidity governance proof structure
 type GovernanceProofStruct struct {
-	KeyBookURL        string     `json:"keyBookURL"`
-	KeyBookRoot       [32]byte   `json:"keyBookRoot"`
-	KeyPageProof      [][32]byte `json:"keyPageProof"`
-	SignatureProof    [][32]byte `json:"signatureProof"`
-	ThresholdMet      bool       `json:"thresholdMet"`
-	ValidatorCount    *big.Int   `json:"validatorCount"`
-	RequiredSigs      *big.Int   `json:"requiredSigs"`
+	KeyBookURL     string     `json:"keyBookURL"`
+	KeyBookRoot    [32]byte   `json:"keyBookRoot"`
+	KeyPageProof   [][32]byte `json:"keyPageProof"`
+	SignatureProof [][32]byte `json:"signatureProof"`
+	ThresholdMet   bool       `json:"thresholdMet"`
+	ValidatorCount *big.Int   `json:"validatorCount"`
+	RequiredSigs   *big.Int   `json:"requiredSigs"`
 }
 
 // BlsSignatureStruct matches the Solidity BLS signature structure
 type BlsSignatureStruct struct {
-	Signature      []byte     `json:"signature"`
-	PublicKeys     [][]byte   `json:"publicKeys"`
-	VotingPowers   []*big.Int `json:"votingPowers"`
-	TotalPower     *big.Int   `json:"totalPower"`
-	SignedPower    *big.Int   `json:"signedPower"`
-	ThresholdMet   bool       `json:"thresholdMet"`
+	Signature    []byte     `json:"signature"`
+	PublicKeys   [][]byte   `json:"publicKeys"`
+	VotingPowers []*big.Int `json:"votingPowers"`
+	TotalPower   *big.Int   `json:"totalPower"`
+	SignedPower  *big.Int   `json:"signedPower"`
+	ThresholdMet bool       `json:"thresholdMet"`
 }
 
 // ADIGovernanceProofStruct matches the Solidity ADI governance structure
 type ADIGovernanceProofStruct struct {
-	AdiURL            string     `json:"adiURL"`
-	AnchorID          [32]byte   `json:"anchorID"`
-	MerkleProof       [][32]byte `json:"merkleProof"`
-	KeyBookProof      KeyBookProofStruct `json:"keyBookProof"`
-	RoleProof         RoleProofStruct    `json:"roleProof"`
-	ThresholdProof    ThresholdProofStruct `json:"thresholdProof"`
-	Timestamp         *big.Int   `json:"timestamp"`
-	ValidatorSigs     []ValidatorSignatureStruct `json:"validatorSigs"`
+	AdiURL         string                     `json:"adiURL"`
+	AnchorID       [32]byte                   `json:"anchorID"`
+	MerkleProof    [][32]byte                 `json:"merkleProof"`
+	KeyBookProof   KeyBookProofStruct         `json:"keyBookProof"`
+	RoleProof      RoleProofStruct            `json:"roleProof"`
+	ThresholdProof ThresholdProofStruct       `json:"thresholdProof"`
+	Timestamp      *big.Int                   `json:"timestamp"`
+	ValidatorSigs  []ValidatorSignatureStruct `json:"validatorSigs"`
 }
 
 // KeyBookProofStruct for ADI governance
 type KeyBookProofStruct struct {
-	KeyBookURL    string     `json:"keyBookURL"`
-	KeyBookRoot   [32]byte   `json:"keyBookRoot"`
-	PageCount     *big.Int   `json:"pageCount"`
-	ThresholdMet  bool       `json:"thresholdMet"`
+	KeyBookURL   string   `json:"keyBookURL"`
+	KeyBookRoot  [32]byte `json:"keyBookRoot"`
+	PageCount    *big.Int `json:"pageCount"`
+	ThresholdMet bool     `json:"thresholdMet"`
 }
 
 // RoleProofStruct for ADI governance
 type RoleProofStruct struct {
-	UserAddress   common.Address `json:"userAddress"`
-	AuthLevel     uint8          `json:"authLevel"`
-	ValidFrom     *big.Int       `json:"validFrom"`
-	ValidUntil    *big.Int       `json:"validUntil"`
-	ProofHashes   [][32]byte     `json:"proofHashes"`
+	UserAddress common.Address `json:"userAddress"`
+	AuthLevel   uint8          `json:"authLevel"`
+	ValidFrom   *big.Int       `json:"validFrom"`
+	ValidUntil  *big.Int       `json:"validUntil"`
+	ProofHashes [][32]byte     `json:"proofHashes"`
 }
 
 // ThresholdProofStruct for ADI governance
 type ThresholdProofStruct struct {
-	RequiredSigs  *big.Int   `json:"requiredSigs"`
-	ProvidedSigs  *big.Int   `json:"providedSigs"`
-	ThresholdMet  bool       `json:"thresholdMet"`
-	SignatureData [][]byte   `json:"signatureData"`
+	RequiredSigs  *big.Int `json:"requiredSigs"`
+	ProvidedSigs  *big.Int `json:"providedSigs"`
+	ThresholdMet  bool     `json:"thresholdMet"`
+	SignatureData [][]byte `json:"signatureData"`
 }
 
 // ValidatorSignatureStruct for ADI governance
 type ValidatorSignatureStruct struct {
-	ValidatorID   string     `json:"validatorID"`
-	PublicKey     []byte     `json:"publicKey"`
-	Signature     []byte     `json:"signature"`
-	VotingPower   *big.Int   `json:"votingPower"`
-	SignedAt      *big.Int   `json:"signedAt"`
+	ValidatorID string   `json:"validatorID"`
+	PublicKey   []byte   `json:"publicKey"`
+	Signature   []byte   `json:"signature"`
+	VotingPower *big.Int `json:"votingPower"`
+	SignedAt    *big.Int `json:"signedAt"`
 }
 
 // loadContractConfigFromEnv loads contract configuration from environment variables
@@ -342,9 +343,9 @@ func loadContractConfigFromEnv() *CertenContractConfig {
 		CreationContract:     os.Getenv("ANCHOR_CREATION_CONTRACT"),     // 0x8398D7EB594bCc608a0210cf206b392d35Ed5339
 		VerificationContract: os.Getenv("ANCHOR_VERIFICATION_CONTRACT"), // 0x9B29771EFA2C6645071C589239590b81ae2C5825
 		AccountContract:      os.Getenv("ACCOUNT_ABSTRACTION_ADDRESS"),  // 0xC30E74e54a54a470139b75633CEDeC8404743020
-		ChainID:              11155111, // Sepolia default
-		GasLimit:             800000,   // Default gas limit (high for Groth16 verification)
-		MaxGasPriceGwei:      50,       // Default max gas price
+		ChainID:              11155111,                                  // Sepolia default
+		GasLimit:             800000,                                    // Default gas limit (high for Groth16 verification)
+		MaxGasPriceGwei:      50,                                        // Default max gas price
 	}
 
 	// Fallback to legacy env var if new vars not set
@@ -485,26 +486,237 @@ func NewEthereumContractManager(config *CertenContractConfig) (*EthereumContract
 		creationContractAddr:    creationAddr,
 		verificationContract:    verificationContract,
 		verificationContractExt: verificationContractExt,
-		anchor:                anchor,
+		anchor:                  anchor,
 		acctContract:            acctContract,
 	}, nil
 }
 
+// ErrGasCeilingExceeded is returned when the network requires a higher gas price
+// than this deployment is willing to pay. Callers MUST abandon the transaction.
+//
+// It is a distinct error type so the settlement path can tell "we refused on
+// price" (retryable when gas subsides, customer not at fault, no gas spent) from
+// "the transaction failed" (possibly gas spent).
+type ErrGasCeilingExceeded struct {
+	ChainID       int64
+	SuggestedGwei float64
+	CeilingGwei   int64
+}
+
+func (e *ErrGasCeilingExceeded) Error() string {
+	return fmt.Sprintf(
+		"gas price ceiling exceeded on chain %d: network suggests %.4f gwei, ceiling is %d gwei - refusing to submit",
+		e.ChainID, e.SuggestedGwei, e.CeilingGwei,
+	)
+}
+
+// gasCeilingEnforced reports whether exceeding MaxGasPriceGwei aborts the
+// transaction. Default TRUE — refusing is the safe behaviour under Model B,
+// where CERTEN fronts the gas. Set CERTEN_GAS_CEILING_ENFORCE=false to restore
+// the legacy clamp-and-send behaviour for a deployment that needs it.
+func gasCeilingEnforced() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("CERTEN_GAS_CEILING_ENFORCE"))) {
+	case "false", "0", "no":
+		return false
+	default:
+		return true
+	}
+}
+
+// Defaults for the cost ceiling.
+//
+// CERTEN_MAX_TX_COST_USD bounds the worst-case dollar cost of any single
+// transaction CERTEN submits. $25 is deliberately generous relative to testnet
+// (where a leg costs fractions of a cent) and still catches a genuine mainnet
+// spike. It is a backstop, not a price.
+//
+// CERTEN_NATIVE_USD is the price of the chain's native token. All four in-scope
+// chains (ethereum/base/optimism/arbitrum sepolia) settle in ETH, so one value
+// covers them.
+//
+// The unset default is deliberately HIGH. Over-stating the token price makes
+// every transaction look more expensive, so the ceiling refuses SOONER. That is
+// the safe direction to be wrong in: a conservative default cannot silently
+// permit an expensive transaction, it can only refuse a cheap one, which is
+// visible and recoverable.
+const (
+	defaultMaxTxCostUSD   = 25.0
+	defaultNativeUSDPrice = 10000.0 // intentionally above any plausible ETH price
+)
+
+func maxTxCostMicroUSD() int64 {
+	if v := strings.TrimSpace(os.Getenv("CERTEN_MAX_TX_COST_USD")); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 {
+			return int64(f * 1e6)
+		}
+	}
+	return int64(defaultMaxTxCostUSD * 1e6)
+}
+
+func nativeUSDMicro() int64 {
+	if v := strings.TrimSpace(os.Getenv("CERTEN_NATIVE_USD")); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
+			return int64(f * 1e6)
+		}
+	}
+	return int64(defaultNativeUSDPrice * 1e6)
+}
+
 // refreshGasPrice updates auth.GasPrice with the current network-suggested price.
-// Called before each transaction to avoid stale gas prices causing "replacement transaction underpriced".
-func (ecm *EthereumContractManager) refreshGasPrice(ctx context.Context) {
+// Called before each transaction to avoid stale gas prices causing "replacement
+// transaction underpriced".
+//
+// REFUSES rather than clamps when the network price exceeds MaxGasPriceGwei.
+//
+// The previous behaviour lowered the bid to the ceiling and submitted anyway,
+// which is the worst of both outcomes: CERTEN still pays, and an underpriced
+// transaction may never land — leaving a stuck nonce and, for a multi-leg
+// intent, a half-executed cycle. Under Model B, where CERTEN fronts native gas
+// on every leg, an unbounded gas price is an unbounded loss. A refusal is
+// recoverable; the intent retries when gas subsides.
+//
+// Note the asymmetry between the network price and our own buffer:
+//   - the NETWORK-SUGGESTED price exceeding the ceiling is a genuine refusal
+//     signal — the chain is telling us what it costs to land;
+//   - the +20% buffer is OUR optional headroom, so it is clamped to the ceiling
+//     rather than treated as a breach. Refusing at 83% of the ceiling (the naive
+//     buffered comparison) would reject perfectly affordable transactions.
+func (ecm *EthereumContractManager) refreshGasPrice(ctx context.Context) error {
 	gasPrice, err := ecm.client.SuggestGasPrice(ctx)
 	if err != nil {
-		return // keep existing gas price
+		return nil // keep existing gas price; RPC hiccup is not a ceiling breach
 	}
-	// Add 20% buffer for base fee fluctuation
-	buffered := new(big.Int).Mul(gasPrice, big.NewInt(120))
-	buffered.Div(buffered, big.NewInt(100))
-	maxGasPrice := big.NewInt(ecm.config.MaxGasPriceGwei * 1e9)
-	if maxGasPrice.Sign() > 0 && buffered.Cmp(maxGasPrice) > 0 {
-		buffered = maxGasPrice
+
+	bid, err := evaluateGasPrice(gasPrice, ecm.config.MaxGasPriceGwei, ecm.config.ChainID, gasCeilingEnforced())
+	if err != nil {
+		fmt.Printf("[GAS-CEILING] %v\n", err)
+		return err
 	}
-	ecm.auth.GasPrice = buffered
+
+	// The ceiling that actually bounds the money. The gwei check above is a
+	// backstop against an absurd RPC response; this is the policy.
+	if gasCeilingEnforced() {
+		if err := checkTxCostCeiling(
+			ecm.auth.GasLimit, bid, nativeUSDMicro(), maxTxCostMicroUSD(), ecm.config.ChainID,
+		); err != nil {
+			fmt.Printf("[COST-CEILING] %v\n", err)
+			return err
+		}
+	}
+
+	ecm.auth.GasPrice = bid
+	return nil
+}
+
+// ErrTxCostCeilingExceeded is returned when the WORST-CASE dollar cost of a
+// transaction exceeds what this deployment (or, later, the paying account) will
+// spend. Distinct from ErrGasCeilingExceeded: that one is about the price per
+// unit of gas, this one is about the money.
+type ErrTxCostCeilingExceeded struct {
+	ChainID      int64
+	EstimatedUSD float64
+	CeilingUSD   float64
+	GasLimit     uint64
+	BidGwei      float64
+}
+
+func (e *ErrTxCostCeilingExceeded) Error() string {
+	return fmt.Sprintf(
+		"transaction cost ceiling exceeded on chain %d: worst case $%.4f (%d gas @ %.4f gwei) exceeds the $%.4f cap - refusing to submit",
+		e.ChainID, e.EstimatedUSD, e.GasLimit, e.BidGwei, e.CeilingUSD,
+	)
+}
+
+// estimateTxCostMicroUSD returns the WORST-CASE cost of a transaction in
+// micro-USD: gasLimit * bidWei * usdPerNative.
+//
+// gasLimit, not expected usage, on purpose. A ceiling exists to bound the bad
+// case; estimating with the typical case would let the bad case through.
+func estimateTxCostMicroUSD(gasLimit uint64, bidWei *big.Int, usdPerNativeMicro int64) int64 {
+	if gasLimit == 0 || bidWei == nil || bidWei.Sign() <= 0 || usdPerNativeMicro <= 0 {
+		return 0
+	}
+	// wei = gasLimit * bid
+	wei := new(big.Int).Mul(new(big.Int).SetUint64(gasLimit), bidWei)
+	// microUSD = wei * usdPerNativeMicro / 1e18
+	num := new(big.Int).Mul(wei, big.NewInt(usdPerNativeMicro))
+	cost := new(big.Int).Quo(num, new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil))
+	if !cost.IsInt64() {
+		return math.MaxInt64 // absurd — treat as infinitely expensive, i.e. refuse
+	}
+	return cost.Int64()
+}
+
+// checkTxCostCeiling refuses a transaction whose worst-case dollar cost exceeds
+// the cap.
+//
+// This is the ceiling that matters. A gwei price cap is a proxy: it cannot see a
+// gas-USAGE blowup (a larger proof, more legs) and it means something different
+// on every chain. Cost in micro-USD is the same unit the fee layer bills in, so
+// this function composes directly with the account's entitlement ceiling once
+// that exists - `maxCostMicroUSD` simply comes from the entitlement leaf instead
+// of from configuration. Same gate, better input.
+//
+// A ceiling of 0 means unset: no cap, no refusal.
+func checkTxCostCeiling(
+	gasLimit uint64,
+	bidWei *big.Int,
+	usdPerNativeMicro int64,
+	maxCostMicroUSD int64,
+	chainID int64,
+) error {
+	if maxCostMicroUSD <= 0 || usdPerNativeMicro <= 0 {
+		return nil
+	}
+	cost := estimateTxCostMicroUSD(gasLimit, bidWei, usdPerNativeMicro)
+	if cost <= maxCostMicroUSD {
+		return nil
+	}
+	bidGwei, _ := new(big.Float).Quo(new(big.Float).SetInt(bidWei), big.NewFloat(1e9)).Float64()
+	return &ErrTxCostCeilingExceeded{
+		ChainID:      chainID,
+		EstimatedUSD: float64(cost) / 1e6,
+		CeilingUSD:   float64(maxCostMicroUSD) / 1e6,
+		GasLimit:     gasLimit,
+		BidGwei:      bidGwei,
+	}
+}
+
+// evaluateGasPrice decides what to bid, or refuses.
+//
+// Pure so the decision can be tested without an RPC client — this is the
+// function that stands between CERTEN and an unbounded gas bill, and it should
+// be provable in a unit test rather than only in production.
+//
+// Returns the price to bid, or ErrGasCeilingExceeded when the network wants more
+// than this deployment will pay and enforcement is on.
+func evaluateGasPrice(suggested *big.Int, maxGwei int64, chainID int64, enforce bool) (*big.Int, error) {
+	maxWei := big.NewInt(maxGwei * 1e9)
+
+	// A ceiling of 0 means "unset" — no ceiling to breach.
+	if maxWei.Sign() > 0 && suggested.Cmp(maxWei) > 0 {
+		gwei, _ := new(big.Float).Quo(
+			new(big.Float).SetInt(suggested), big.NewFloat(1e9),
+		).Float64()
+		refusal := &ErrGasCeilingExceeded{
+			ChainID:       chainID,
+			SuggestedGwei: gwei,
+			CeilingGwei:   maxGwei,
+		}
+		if enforce {
+			return nil, refusal
+		}
+		// Legacy behaviour, retained behind the flag: clamp and send.
+	}
+
+	// Our own +20% headroom, clamped to the ceiling. The buffer exceeding the
+	// ceiling is NOT a breach — only the network's own price is.
+	bid := new(big.Int).Mul(suggested, big.NewInt(120))
+	bid.Div(bid, big.NewInt(100))
+	if maxWei.Sign() > 0 && bid.Cmp(maxWei) > 0 {
+		bid = maxWei
+	}
+	return bid, nil
 }
 
 // acquireNonce gets the current pending nonce and sets it explicitly on auth.
@@ -549,7 +761,10 @@ func (ecm *EthereumContractManager) CreateAnchorOnChain(
 	operationID [32]byte,
 	accumulateBlockHeight *big.Int,
 ) (string, error) {
-	ecm.refreshGasPrice(ctx)
+	// TX1 (anchor). Refuse before anything is spent.
+	if err := ecm.refreshGasPrice(ctx); err != nil {
+		return "", err
+	}
 	fmt.Printf("📡 [ETH-CREATE-V6.1] Creating anchor on CertenAnchorV6_1...\n")
 	fmt.Printf("   Contract: %s\n", ecm.anchor.GetAddress().Hex())
 	fmt.Printf("   Bundle ID: 0x%x\n", bundleID)
@@ -605,7 +820,9 @@ func (ecm *EthereumContractManager) SubmitCertenProofToAnchor(
 	certenProof *proof.CertenProof,
 	anchorResult *anchor.AnchorResponse,
 ) (string, error) {
-	ecm.refreshGasPrice(ctx)
+	if err := ecm.refreshGasPrice(ctx); err != nil {
+		return "", err // TX2: refuse before the BLS-ZK verify call
+	}
 
 	// Generate anchor ID from intent
 	anchorID := ecm.generateAnchorID(certenIntent, certenProof)
@@ -708,7 +925,10 @@ func (ecm *EthereumContractManager) ExecuteGovernanceWithAnchor(
 	value *big.Int,
 	callData []byte,
 ) (string, error) {
-	ecm.refreshGasPrice(ctx)
+	// TX3 (value-moving execution). Refuse before anything is spent.
+	if err := ecm.refreshGasPrice(ctx); err != nil {
+		return "", err
+	}
 	fmt.Printf("🏛️ [ETH-GOV-ANCHOR] Executing governance via CertenAnchorV3.executeWithGovernance...\n")
 	fmt.Printf("   Anchor ID: 0x%x\n", bundleID)
 	fmt.Printf("   Target: %s\n", target.Hex())
@@ -861,11 +1081,12 @@ func (ecm *EthereumContractManager) ExecuteViaUserAccount(
 // V4 UPDATE: Computes correct 4-leaf merkle proof for adiURL verification
 //
 // Merkle Tree Structure:
-//                     root
-//                   /      \
-//              hash01      hash23
-//             /    \      /    \
-//        adiHash   op   cc    gov
+//
+//	             root
+//	           /      \
+//	      hash01      hash23
+//	     /    \      /    \
+//	adiHash   op   cc    gov
 //
 // To prove adiHash, we need: [op, hash23]
 func (ecm *EthereumContractManager) buildAccountProof(
@@ -1195,10 +1416,10 @@ func (ecm *EthereumContractManager) buildComprehensiveProof(
 
 	govProof := contracts.GovernanceProofData{
 		KeyBookURL:         fmt.Sprintf("%s/book", orgADI),
-		KeyBookRoot:        keyBookRoot,        // CRITICAL: Must be non-zero for G1+
-		KeyPageProofs:      keyPageProofs,      // CRITICAL: Merkle proof path
-		AuthorityAddress:   ecm.auth.From,      // CRITICAL: Must be non-zero for authorityLevel > 0
-		AuthorityLevel:     2,                  // ADMIN level (G2)
+		KeyBookRoot:        keyBookRoot,   // CRITICAL: Must be non-zero for G1+
+		KeyPageProofs:      keyPageProofs, // CRITICAL: Merkle proof path
+		AuthorityAddress:   ecm.auth.From, // CRITICAL: Must be non-zero for authorityLevel > 0
+		AuthorityLevel:     2,             // ADMIN level (G2)
 		RequiredSignatures: big.NewInt(2),
 		ProvidedSignatures: big.NewInt(3),
 		ThresholdMet:       true,
@@ -1526,7 +1747,6 @@ func (ecm *EthereumContractManager) generateBLS12381Proof(
 		len(proofBytes), len(proof.PiA), len(proof.PiB), len(proof.PiC), proof.PubkeyCommitment[:8])
 }
 
-
 // extractMerkleProofHashes — DEPRECATED return value as of the EVM-003 fix.
 //
 // audit-reports/01-evm-VERIFIED.md:35 demonstrated that the previous "ADR-001
@@ -1655,8 +1875,8 @@ func extractReceiptHashes(receipt interface{}) [][32]byte {
 func (ecm *EthereumContractManager) extractVotingPower(certenProof *proof.CertenProof) (*big.Int, *big.Int) {
 	// Default voting power values based on validator count
 	// In production, this comes from the actual validator set
-	defaultTotal := big.NewInt(300)   // 3 validators * 100 power each
-	defaultSigned := big.NewInt(200)  // 2/3 threshold met
+	defaultTotal := big.NewInt(300)  // 3 validators * 100 power each
+	defaultSigned := big.NewInt(200) // 2/3 threshold met
 
 	// Check if verification status has component details with voting power info
 	if certenProof.VerificationStatus != nil && certenProof.VerificationStatus.Details != nil {
@@ -1716,7 +1936,7 @@ func (ecm *EthereumContractManager) SubmitGovernanceProofToAccount(
 		RoleProof:           []byte(fmt.Sprintf("role:%d", govProof.RoleProof.AuthLevel)),
 		ThresholdProof:      []byte(fmt.Sprintf("threshold:%d", govProof.ThresholdProof.RequiredSigs.Int64())),
 		Timestamp:           govProof.Timestamp,
-		ExpiresAt:           big.NewInt(time.Now().Add(24*time.Hour).Unix()),
+		ExpiresAt:           big.NewInt(time.Now().Add(24 * time.Hour).Unix()),
 		ValidatorSignatures: ecm.encodeValidatorSignatures(govProof.ValidatorSigs),
 		Nonce:               big.NewInt(time.Now().UnixNano()),
 		RequiredLevel:       govProof.RoleProof.AuthLevel,
@@ -1848,7 +2068,7 @@ func (ecm *EthereumContractManager) convertToADIGovernanceProof(
 		UserAddress: common.HexToAddress(ecm.config.AccountContract),
 		AuthLevel:   2, // ADMIN level
 		ValidFrom:   big.NewInt(time.Now().Unix()),
-		ValidUntil:  big.NewInt(time.Now().Add(365*24*time.Hour).Unix()),
+		ValidUntil:  big.NewInt(time.Now().Add(365 * 24 * time.Hour).Unix()),
 	}
 
 	thresholdProof := ThresholdProofStruct{
@@ -2000,11 +2220,11 @@ func (ecm *EthereumContractManager) computeV6CommitmentBundle(
 // extractExecutionCommitment isolates the execCommitment computation logic
 // previously inline in buildComprehensiveProof. Two sources, in priority order:
 //
-//   1. User-signed CrossChainData.legs[0].executionPayload.executionCommitment
-//      (CRITICAL-003) — this is the value the user actually signed, so it
-//      MUST take precedence over anything we compute from raw fields.
-//   2. Computed from the first leg's (chainID, target, value, data) via
-//      computeExecutionCommitment (CRITICAL-001 fallback).
+//  1. User-signed CrossChainData.legs[0].executionPayload.executionCommitment
+//     (CRITICAL-003) — this is the value the user actually signed, so it
+//     MUST take precedence over anything we compute from raw fields.
+//  2. Computed from the first leg's (chainID, target, value, data) via
+//     computeExecutionCommitment (CRITICAL-001 fallback).
 //
 // Returns zero [32]byte if neither source yields a value; downstream code
 // logs a warning but proceeds (CertenAnchorV6.createAnchor will then revert
@@ -2060,11 +2280,11 @@ func (ecm *EthereumContractManager) extractExecutionCommitment(
 // EVM-004 (audit-reports/01-evm-VERIFIED.md:76) requires that the bundleId
 // stored at CertenAnchorV6.createAnchor matches:
 //
-//   keccak256(abi.encodePacked(
-//     "certen:bundleid:v1", DEPLOYMENT_CHAIN_ID, adiURLHash,
-//     operationCommitment, crossChainCommitment, governanceRoot,
-//     executionCommitment, accumulateBlockHeight
-//   ))
+//	keccak256(abi.encodePacked(
+//	  "certen:bundleid:v1", DEPLOYMENT_CHAIN_ID, adiURLHash,
+//	  operationCommitment, crossChainCommitment, governanceRoot,
+//	  executionCommitment, accumulateBlockHeight
+//	))
 //
 // The pre-V6 derivation (certen_v3_{intentID}_{blockHeight}_{txHash}) was
 // not a function of the commitments, which let a rogue validator front-run
@@ -2198,9 +2418,10 @@ func (ecm *EthereumContractManager) deriveV6BundleID(
 // committed field so the bundleId is a 1:1 function of (chain, account,
 // intent payload, runtime params, height). Must byte-match
 // CertenAnchorV6_1.createAnchor's require check on
-//   keccak256(abi.encodePacked(
-//     "certen:bundleid:v1.1", chainId, adiURLHash, op, cc, gov, exec,
-//     operationID, height))
+//
+//	keccak256(abi.encodePacked(
+//	  "certen:bundleid:v1.1", chainId, adiURLHash, op, cc, gov, exec,
+//	  operationID, height))
 func (ecm *EthereumContractManager) deriveV6_1BundleID(
 	adiURLHash [32]byte,
 	commitments contracts.CommitmentData,
@@ -2307,12 +2528,13 @@ func (ecm *EthereumContractManager) GetContractConfig() *CertenContractConfig {
 // V6.1 it can be deleted.
 //
 // V6 wire format:
-//   keccak256(abi.encodePacked(
-//     "certen:bls:v1",
-//     DEPLOYMENT_CHAIN_ID,        // uint256, 32 bytes big-endian
-//     anchorId,                   // bytes32
-//     executionCommitment         // bytes32
-//   ))
+//
+//	keccak256(abi.encodePacked(
+//	  "certen:bls:v1",
+//	  DEPLOYMENT_CHAIN_ID,        // uint256, 32 bytes big-endian
+//	  anchorId,                   // bytes32
+//	  executionCommitment         // bytes32
+//	))
 func (ecm *EthereumContractManager) computeEvmMessageHashV6(
 	anchorId [32]byte,
 	executionCommitment [32]byte,
@@ -2337,14 +2559,15 @@ func (ecm *EthereumContractManager) computeEvmMessageHashV6(
 // doesn't match. The off-chain ZK circuit consumes this as a public input.
 //
 // Wire format (abi.encode == 32-byte slots, no length-or-type ambiguity):
-//   keccak256(abi.encode(
-//     bytes32("certen:bls:v1:pre"),   // domain — different from Phase 8 ":post"
-//     uint256(DEPLOYMENT_CHAIN_ID),    // cross-chain replay defeat
-//     anchorId,                        // bytes32 — V6.1 commitment+opID bundleId
-//     executionCommitment,             // bytes32 — explicit value-moving binding
-//     operationID,                     // bytes32 — 4-blob intent hash on Accumulate
-//     validatorSetRoot                 // bytes32 — quorum-snapshot binding
-//   ))
+//
+//	keccak256(abi.encode(
+//	  bytes32("certen:bls:v1:pre"),   // domain — different from Phase 8 ":post"
+//	  uint256(DEPLOYMENT_CHAIN_ID),    // cross-chain replay defeat
+//	  anchorId,                        // bytes32 — V6.1 commitment+opID bundleId
+//	  executionCommitment,             // bytes32 — explicit value-moving binding
+//	  operationID,                     // bytes32 — 4-blob intent hash on Accumulate
+//	  validatorSetRoot                 // bytes32 — quorum-snapshot binding
+//	))
 //
 // All six slots are 32 bytes. Total preimage: 192 bytes.
 //
@@ -2387,12 +2610,13 @@ func (ecm *EthereumContractManager) computeEvmMessageHashV6_1(
 // root into messageHash_pre so any change to the set invalidates the signature.
 //
 // Wire format:
-//   keccak256(abi.encode(
-//     address[] sortedAddresses,      // sorted ASCENDING by uint160(addr)
-//     uint256[] sortedVotingPowers,   // matched to sortedAddresses by index
-//     uint256(thresholdNumerator),
-//     uint256(thresholdDenominator)
-//   ))
+//
+//	keccak256(abi.encode(
+//	  address[] sortedAddresses,      // sorted ASCENDING by uint160(addr)
+//	  uint256[] sortedVotingPowers,   // matched to sortedAddresses by index
+//	  uint256(thresholdNumerator),
+//	  uint256(thresholdDenominator)
+//	))
 //
 // abi.encode of dynamic arrays uses head-tail layout per the Solidity ABI:
 //   - 4 head slots: offset to addrs (32B), offset to powers (32B),
@@ -2504,18 +2728,19 @@ type v6MerkleProofForAdi struct {
 //
 // Tree structure (matches CertenAnchorV6._computeMerkleRoot5):
 //
-//                    root
-//                   /    \
-//              hash0123   taggedExec
-//              /    \
-//         hash01    hash23
-//        /    \    /    \
-//   tagAdi tagOp tagCC tagGov
+//	                 root
+//	                /    \
+//	           hash0123   taggedExec
+//	           /    \
+//	      hash01    hash23
+//	     /    \    /    \
+//	tagAdi tagOp tagCC tagGov
 //
 // Proof path for taggedAdi (matches CertenAnchorV6.getMerkleProofForAdiURL):
-//   level 0 sibling: taggedOp
-//   level 1 sibling: hash23
-//   level 2 sibling: taggedExec
+//
+//	level 0 sibling: taggedOp
+//	level 1 sibling: hash23
+//	level 2 sibling: taggedExec
 func computeV6MerkleProofForAdi(
 	adiURLHash [32]byte,
 	commitments contracts.CommitmentData,
@@ -2606,12 +2831,12 @@ func (ecm *EthereumContractManager) extractLegsForExecCommitment(
 	// CRITICAL-003: Parse executionPayload from user-signed blob
 	var ccData struct {
 		Legs []struct {
-			LegID    string `json:"legId"`
-			From     string `json:"from"`
-			To       string `json:"to"`
+			LegID     string `json:"legId"`
+			From      string `json:"from"`
+			To        string `json:"to"`
 			AmountWei string `json:"amountWei"`
-			ChainID  int64  `json:"chainId"`
-			Chain    string `json:"chain"`
+			ChainID   int64  `json:"chainId"`
+			Chain     string `json:"chain"`
 			// CRITICAL-003: User-signed execution payload commitment
 			ExecutionPayload *struct {
 				Target              string `json:"target"`
@@ -2656,10 +2881,11 @@ func (ecm *EthereumContractManager) extractLegsForExecCommitment(
 // CRITICAL-001: This MUST match the Solidity computation in CertenAnchorV4.executeWithGovernance()
 //
 // abi.encodePacked layout (116 bytes total):
-//   chainId:  uint256 = 32 bytes (big-endian, left-padded)
-//   target:   address = 20 bytes (raw, NOT left-padded — encodePacked uses smallest representation)
-//   value:    uint256 = 32 bytes (big-endian, left-padded)
-//   dataHash: bytes32 = 32 bytes
+//
+//	chainId:  uint256 = 32 bytes (big-endian, left-padded)
+//	target:   address = 20 bytes (raw, NOT left-padded — encodePacked uses smallest representation)
+//	value:    uint256 = 32 bytes (big-endian, left-padded)
+//	dataHash: bytes32 = 32 bytes
 func computeExecutionCommitment(chainID int64, target common.Address, value *big.Int, callData []byte) [32]byte {
 	// Step 1: keccak256(data)
 	dataHash := crypto.Keccak256Hash(callData)
