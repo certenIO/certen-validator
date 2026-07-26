@@ -14,33 +14,35 @@
 package intent
 
 import (
-    "encoding/json"
-    "fmt"
+	"encoding/json"
+	"fmt"
+	"os"
+	"strings"
 )
 
 // rawIntentMeta represents the structure for parsing intent metadata blob
 type rawIntentMeta struct {
-    Kind         string `json:"kind,omitempty"`
-    Version      string `json:"version,omitempty"`
-    IntentType   string `json:"intentType,omitempty"`
-    Organization string `json:"organizationAdi,omitempty"`
-    IntentID     string `json:"intent_id,omitempty"`
-    CreatedBy    string `json:"created_by,omitempty"`     // User who created the intent
-    CreatedAt    string `json:"created_at,omitempty"`
-    ProofClass   string `json:"proof_class,omitempty"`    // CRITICAL for routing
+	Kind         string `json:"kind,omitempty"`
+	Version      string `json:"version,omitempty"`
+	IntentType   string `json:"intentType,omitempty"`
+	Organization string `json:"organizationAdi,omitempty"`
+	IntentID     string `json:"intent_id,omitempty"`
+	CreatedBy    string `json:"created_by,omitempty"` // User who created the intent
+	CreatedAt    string `json:"created_at,omitempty"`
+	ProofClass   string `json:"proof_class,omitempty"` // CRITICAL for routing
 }
 
 // rawGovernance represents the structure for parsing governance blob
 type rawGovernance struct {
-    OrganizationAdi string `json:"organizationAdi,omitempty"`
+	OrganizationAdi string `json:"organizationAdi,omitempty"`
 }
 
 // rawReplay represents the structure for parsing replay protection blob.
 // NOTE: The actual expiry semantics are enforced later via ReplayData.ExpiresAt.
 // Here we only decode for potential validation if needed.
 type rawReplay struct {
-    // Unix timestamp in SECONDS (not ms) since epoch.
-    ExpiresAt int64 `json:"expires_at,omitempty"`
+	// Unix timestamp in SECONDS (not ms) since epoch.
+	ExpiresAt int64 `json:"expires_at,omitempty"`
 }
 
 // BuildCertenIntent builds a canonical CertenIntent from the 4 JSON blobs.
@@ -58,127 +60,150 @@ type rawReplay struct {
 //   - Marshals each blob to raw JSON []byte and stores them on CertenIntent
 //   - Leaves canonicalization + operation_id hashing to the consensus builder
 func BuildCertenIntent(
-    txHash string,
-    intentBlob, crossBlob, govBlob, replayBlob map[string]interface{},
+	txHash string,
+	intentBlob, crossBlob, govBlob, replayBlob map[string]interface{},
 ) (*CertenIntent, error) {
-    // Decode metadata from intent blob
-    var im rawIntentMeta
-    if err := mapToStruct(intentBlob, &im); err != nil {
-        return nil, fmt.Errorf("decode intent metadata: %w", err)
-    }
+	// Decode metadata from intent blob
+	var im rawIntentMeta
+	if err := mapToStruct(intentBlob, &im); err != nil {
+		return nil, fmt.Errorf("decode intent metadata: %w", err)
+	}
 
-    // Decode governance to extract org ADI if present there
-    var gv rawGovernance
-    if err := mapToStruct(govBlob, &gv); err != nil {
-        return nil, fmt.Errorf("decode governance data: %w", err)
-    }
+	// Decode governance to extract org ADI if present there
+	var gv rawGovernance
+	if err := mapToStruct(govBlob, &gv); err != nil {
+		return nil, fmt.Errorf("decode governance data: %w", err)
+	}
 
-    // Optional: decode replay protection for sanity checking (not required here)
-    // We keep this in case you want to add validation hooks later.
-    var _rp rawReplay
-    _ = mapToStruct(replayBlob, &_rp)
+	// Optional: decode replay protection for sanity checking (not required here)
+	// We keep this in case you want to add validation hooks later.
+	var _rp rawReplay
+	_ = mapToStruct(replayBlob, &_rp)
 
-    // Compute OrganizationADI using governance first, then intent
-    orgADI := firstNonEmpty(gv.OrganizationAdi, im.Organization)
+	// Compute OrganizationADI using governance first, then intent
+	orgADI := firstNonEmpty(gv.OrganizationAdi, im.Organization)
 
-    // Extract ProofClass from intent blob - CRITICAL for routing
-    proofClass := firstNonEmpty(im.ProofClass, extractProofClassFromBlob(intentBlob))
+	// Extract ProofClass from intent blob - CRITICAL for routing
+	proofClass := firstNonEmpty(im.ProofClass, extractProofClassFromBlob(intentBlob))
 
-    // Derive principal account URL (where the writeData TX lives)
-    // Convention: <orgAdi>/data
-    accountURL := ""
-    if orgADI != "" {
-        accountURL = fmt.Sprintf("%s/data", orgADI)
-    }
+	// Derive principal account URL (where the writeData TX lives)
+	// Convention: <orgAdi>/data
+	accountURL := ""
+	if orgADI != "" {
+		accountURL = fmt.Sprintf("%s/data", orgADI)
+	}
 
-    // Marshal each logical blob to raw JSON bytes.
-    // These are the "raw" (non-canonical) blobs; downstream code is free
-    // to canonicalize them as needed when building commitments/proofs.
-    intentBytes, err := json.Marshal(intentBlob)
-    if err != nil {
-        return nil, fmt.Errorf("marshal intent blob: %w", err)
-    }
+	// Marshal each logical blob to raw JSON bytes.
+	// These are the "raw" (non-canonical) blobs; downstream code is free
+	// to canonicalize them as needed when building commitments/proofs.
+	intentBytes, err := json.Marshal(intentBlob)
+	if err != nil {
+		return nil, fmt.Errorf("marshal intent blob: %w", err)
+	}
 
-    crossBytes, err := json.Marshal(crossBlob)
-    if err != nil {
-        return nil, fmt.Errorf("marshal cross-chain blob: %w", err)
-    }
+	crossBytes, err := json.Marshal(crossBlob)
+	if err != nil {
+		return nil, fmt.Errorf("marshal cross-chain blob: %w", err)
+	}
 
-    govBytes, err := json.Marshal(govBlob)
-    if err != nil {
-        return nil, fmt.Errorf("marshal governance blob: %w", err)
-    }
+	govBytes, err := json.Marshal(govBlob)
+	if err != nil {
+		return nil, fmt.Errorf("marshal governance blob: %w", err)
+	}
 
-    replayBytes, err := json.Marshal(replayBlob)
-    if err != nil {
-        return nil, fmt.Errorf("marshal replay blob: %w", err)
-    }
+	replayBytes, err := json.Marshal(replayBlob)
+	if err != nil {
+		return nil, fmt.Errorf("marshal replay blob: %w", err)
+	}
 
-    // Build the canonical CertenIntent struct (as defined in pkg/consensus/intent.go)
-    ci := &CertenIntent{
-        IntentID:        im.IntentID,
-        UserID:          im.CreatedBy,  // User who created the intent (from created_by field)
-        TransactionHash: txHash,
-        AccountURL:      accountURL,
-        OrganizationADI: orgADI,
-        ProofClass:      proofClass,  // CRITICAL: drives routing ("on_demand" vs "on_cadence")
-        IntentData:      intentBytes,
-        CrossChainData:  crossBytes,
-        GovernanceData:  govBytes,
-        ReplayData:      replayBytes,
-    }
+	// Build the canonical CertenIntent struct (as defined in pkg/consensus/intent.go)
+	ci := &CertenIntent{
+		IntentID:        im.IntentID,
+		UserID:          im.CreatedBy, // User who created the intent (from created_by field)
+		TransactionHash: txHash,
+		AccountURL:      accountURL,
+		OrganizationADI: orgADI,
+		ProofClass:      proofClass, // CRITICAL: drives routing ("on_demand" vs "on_cadence")
+		IntentData:      intentBytes,
+		CrossChainData:  crossBytes,
+		GovernanceData:  govBytes,
+		ReplayData:      replayBytes,
+	}
 
-    return ci, nil
+	return ci, nil
 }
 
 // mapToStruct converts a map[string]interface{} to a struct using JSON marshaling
 func mapToStruct(m map[string]interface{}, out interface{}) error {
-    if m == nil {
-        // Nothing to decode; caller should handle zero-value structs.
-        return nil
-    }
+	if m == nil {
+		// Nothing to decode; caller should handle zero-value structs.
+		return nil
+	}
 
-    b, err := json.Marshal(m)
-    if err != nil {
-        return err
-    }
-    return json.Unmarshal(b, out)
+	b, err := json.Marshal(m)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(b, out)
 }
 
 // firstNonEmpty returns the first non-empty string
 func firstNonEmpty(s1, s2 string) string {
-    if s1 != "" {
-        return s1
-    }
-    return s2
+	if s1 != "" {
+		return s1
+	}
+	return s2
 }
 
 // extractProofClassFromBlob extracts proof_class from intent blob map
 func extractProofClassFromBlob(intentBlob map[string]interface{}) string {
-    if intentBlob == nil {
-        return ""
-    }
+	if intentBlob == nil {
+		return ""
+	}
 
-    // Try proof_class field (snake_case)
-    if pc, ok := intentBlob["proof_class"].(string); ok {
-        return pc
-    }
+	// Try proof_class field (snake_case)
+	if pc, ok := intentBlob["proof_class"].(string); ok {
+		return pc
+	}
 
-    // Try proofClass field (camelCase)
-    if pc, ok := intentBlob["proofClass"].(string); ok {
-        return pc
-    }
+	// Try proofClass field (camelCase)
+	if pc, ok := intentBlob["proofClass"].(string); ok {
+		return pc
+	}
 
-    // Legacy: infer from priority field
-    if priority, ok := intentBlob["priority"].(string); ok {
-        switch priority {
-        case "high", "urgent":
-            return "on_demand"
-        case "low", "normal":
-            return "on_cadence"
-        }
-    }
+	// Legacy: infer from priority field
+	if priority, ok := intentBlob["priority"].(string); ok {
+		switch priority {
+		case "high", "urgent":
+			return "on_demand"
+		case "low", "normal":
+			return "on_cadence"
+		}
+	}
 
-    // Default fallback
-    return "on_demand"
+	// Default fallback.
+	//
+	// Deliberately on_cadence, NOT on_demand.
+	//
+	// on_demand is the immediate, most expensive path: it forces a full chained
+	// L1-L3 proof and routes straight to an immediate anchor, so an intent that
+	// simply OMITS proof_class used to select the costliest behaviour CERTEN
+	// offers. Under Model B, where CERTEN fronts the gas, defaulting an absent
+	// field to the expensive option is the wrong direction to fail — and it is
+	// reachable by anyone submitting a writeData directly to Accumulate.
+	//
+	// on_cadence batches, which is the conservative default. A caller who wants
+	// immediate execution can say so explicitly; a caller who says nothing gets
+	// the cheap path.
+	return defaultProofClass()
+}
+
+// defaultProofClass returns the proof class used when an intent does not
+// specify one. Overridable via CERTEN_DEFAULT_PROOF_CLASS for a deployment that
+// genuinely wants the legacy behaviour, but the safe default is the cheap path.
+func defaultProofClass() string {
+	if v := strings.ToLower(strings.TrimSpace(os.Getenv("CERTEN_DEFAULT_PROOF_CLASS"))); v == "on_demand" {
+		return "on_demand"
+	}
+	return "on_cadence"
 }
