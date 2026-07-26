@@ -317,7 +317,17 @@ func (btce *BFTTargetChainExecutor) ExecuteTargetChainOperations(
 	// Detached and non-blocking: a slow or unreachable gateway must never
 	// affect whether an intent completed.
 	if result != nil {
-		btce.reportExecutionCosts(intentID, transactionHash, result)
+		// certenProof.TransactionHash, NOT the `transactionHash` parameter: that
+		// parameter carries the OPERATION COMMITMENT (see executor.go, which
+		// passes vb.OperationCommitment), which is a derived hash that exists
+		// nowhere in the gateway. The proof's TransactionHash is the Accumulate
+		// transaction the intent came from — the identifier the gateway stores
+		// on the intent — and is what makes a measured cost attributable.
+		accumTxHash := ""
+		if certenProof != nil {
+			accumTxHash = certenProof.TransactionHash
+		}
+		btce.reportExecutionCosts(intentID, accumTxHash, result)
 	}
 	return result, err
 }
