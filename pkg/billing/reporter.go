@@ -31,7 +31,16 @@ import (
 // its own signed FX observation, so "what CERTEN spent" is never an assertion
 // by whichever process happened to report it.
 type CostEvent struct {
-	IntentID             string            `json:"intent_id"`
+	IntentID string `json:"intent_id"`
+	// AccumTxHash correlates this cost back to the gateway's intent.
+	//
+	// IntentID is the VALIDATOR's own identifier and means nothing to the
+	// gateway, whose intents are keyed by their own UUID. Without a shared key
+	// the gateway could store cost events but never join them to an intent, so
+	// measured gas never reached settlement and no intent could be shown to
+	// have executed. The Accumulate transaction hash is the one identifier both
+	// sides already hold.
+	AccumTxHash          string            `json:"accum_tx_hash,omitempty"`
 	OrgID                string            `json:"org_id,omitempty"`
 	Chain                string            `json:"chain"`
 	ChainID              int64             `json:"chain_id,omitempty"`
@@ -50,7 +59,7 @@ type CostEvent struct {
 }
 
 // NewCostEvent converts a measured ChainCost into the wire payload.
-func NewCostEvent(intentID, orgID string, c *ChainCost, inclusionProof interface{}) (*CostEvent, error) {
+func NewCostEvent(intentID, orgID, accumTxHash string, c *ChainCost, inclusionProof interface{}) (*CostEvent, error) {
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
@@ -59,6 +68,7 @@ func NewCostEvent(intentID, orgID string, c *ChainCost, inclusionProof interface
 	}
 	return &CostEvent{
 		IntentID:             intentID,
+		AccumTxHash:          accumTxHash,
 		OrgID:                orgID,
 		Chain:                c.Chain,
 		ChainID:              c.ChainID,
@@ -234,7 +244,7 @@ func (r *Reporter) Report(event *CostEvent) {
 func (r *Reporter) ObserveAndReport(
 	ctx context.Context,
 	probeCfg ProbeConfig,
-	intentID, orgID, txHash string,
+	intentID, orgID, accumTxHash, txHash string,
 	inclusionProof interface{},
 ) {
 	if r == nil {
@@ -276,7 +286,7 @@ func (r *Reporter) ObserveAndReport(
 			return
 		}
 
-		event, err := NewCostEvent(intentID, orgID, cost, inclusionProof)
+		event, err := NewCostEvent(intentID, orgID, accumTxHash, cost, inclusionProof)
 		if err != nil {
 			r.logger.Printf("❌ Rejecting malformed cost event for %s/%s: %v", probeCfg.Chain, txHash, err)
 			return

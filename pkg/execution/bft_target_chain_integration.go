@@ -317,7 +317,7 @@ func (btce *BFTTargetChainExecutor) ExecuteTargetChainOperations(
 	// Detached and non-blocking: a slow or unreachable gateway must never
 	// affect whether an intent completed.
 	if result != nil {
-		btce.reportExecutionCosts(intentID, result)
+		btce.reportExecutionCosts(intentID, transactionHash, result)
 	}
 	return result, err
 }

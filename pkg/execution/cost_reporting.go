@@ -57,8 +57,14 @@ func firstNonEmpty(vals ...string) string {
 // validator-exclusive and always ours, while the vault leg is the one Model B
 // adds over Model A. Reporting them as an undifferentiated total would make it
 // impossible to price the "customer relays their own leg 4" discount later.
+// accumTxHash is the Accumulate transaction that carried the intent. It is the
+// ONLY identifier the gateway and the validator both hold: intentID here is the
+// validator's own, and the gateway keys intents by a different UUID entirely.
+// Without it the gateway can store a cost event but never join it to an intent,
+// so measured gas never reaches settlement.
 func (btce *BFTTargetChainExecutor) reportExecutionCosts(
 	intentID string,
+	accumTxHash string,
 	result *TargetChainExecutionResult,
 ) {
 	reporter := CostReporter()
@@ -132,6 +138,7 @@ func (btce *BFTTargetChainExecutor) reportExecutionCosts(
 				},
 				intentID,
 				"", // org attribution happens gateway-side from the intent
+				accumTxHash,
 				h,
 				nil,
 			)

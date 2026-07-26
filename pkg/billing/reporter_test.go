@@ -1,4 +1,4 @@
-package billing
+﻿package billing
 
 import (
 	"context"
@@ -55,7 +55,7 @@ func TestReporterDisabledWithoutConfig(t *testing.T) {
 	nilReporter.Report(&CostEvent{})
 	nilReporter.Start(context.Background())
 	nilReporter.Stop(time.Millisecond)
-	nilReporter.ObserveAndReport(context.Background(), ProbeConfig{}, "i", "o", "t", nil)
+	nilReporter.ObserveAndReport(context.Background(), ProbeConfig{}, "i", "o", "acc", "t", nil)
 	if stats := nilReporter.Stats(); stats["enabled"] != false {
 		t.Fatal("nil reporter stats should report disabled")
 	}
@@ -66,7 +66,7 @@ func TestReportWritesWALBeforeDelivery(t *testing.T) {
 	// any network call. A crash in between otherwise loses a cost the chain
 	// already charged us for.
 	r := testReporter(t, "http://127.0.0.1:1") // unreachable on purpose
-	event, err := NewCostEvent("intent-1", "", sampleCost("base", "0xaaa", LegAnchor), nil)
+	event, err := NewCostEvent("intent-1", "", "", sampleCost("base", "0xaaa", LegAnchor), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestDeliverySucceedsAndClearsWAL(t *testing.T) {
 	defer srv.Close()
 
 	r := testReporter(t, srv.URL)
-	event, _ := NewCostEvent("intent-2", "", sampleCost("base", "0xbbb", LegVerify), nil)
+	event, _ := NewCostEvent("intent-2", "", "", sampleCost("base", "0xbbb", LegVerify), nil)
 	r.Report(event)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -124,8 +124,8 @@ func TestDuplicateReportIsIdempotent(t *testing.T) {
 	// retry loop would deliver the same cost repeatedly and inflate COGS.
 	r := testReporter(t, "http://127.0.0.1:1")
 	cost := sampleCost("base", "0xccc", LegAnchor)
-	e1, _ := NewCostEvent("i", "", cost, nil)
-	e2, _ := NewCostEvent("i", "", cost, nil)
+	e1, _ := NewCostEvent("i", "", "", cost, nil)
+	e2, _ := NewCostEvent("i", "", "", cost, nil)
 	if e1.IdempotencyKey != e2.IdempotencyKey {
 		t.Fatalf("idempotency keys differ: %s vs %s", e1.IdempotencyKey, e2.IdempotencyKey)
 	}
@@ -145,7 +145,7 @@ func TestWALSurvivesRestart(t *testing.T) {
 		GatewayURL: "http://127.0.0.1:1", ServiceTokenSecret: "s",
 		WALDir: dir, Logger: log.New(io.Discard, "", 0),
 	})
-	event, _ := NewCostEvent("intent-3", "", sampleCost("solana", "sig123", LegAnchor), nil)
+	event, _ := NewCostEvent("intent-3", "", "", sampleCost("solana", "sig123", LegAnchor), nil)
 	first.Report(event)
 	if first.pendingCount() != 1 {
 		t.Fatal("event should be on disk")
@@ -183,7 +183,7 @@ func TestGatewayAcceptedAsIdempotentReplayClearsWAL(t *testing.T) {
 	defer srv.Close()
 
 	r := testReporter(t, srv.URL)
-	event, _ := NewCostEvent("i", "", sampleCost("base", "0xddd", LegAnchor), nil)
+	event, _ := NewCostEvent("i", "", "", sampleCost("base", "0xddd", LegAnchor), nil)
 	r.Report(event)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -204,7 +204,7 @@ func TestAuthRejectionParksInsteadOfRetryingForever(t *testing.T) {
 	defer srv.Close()
 
 	r := testReporter(t, srv.URL)
-	event, _ := NewCostEvent("i", "", sampleCost("base", "0xeee", LegAnchor), nil)
+	event, _ := NewCostEvent("i", "", "", sampleCost("base", "0xeee", LegAnchor), nil)
 	r.Report(event)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -233,7 +233,7 @@ func TestReportNeverBlocksWhenQueueIsFull(t *testing.T) {
 	go func() {
 		for i := 0; i < 50; i++ {
 			c := sampleCost("base", "0x"+string(rune('a'+i%26))+string(rune('a'+i/26)), LegAnchor)
-			e, _ := NewCostEvent("i", "", c, nil)
+			e, _ := NewCostEvent("i", "", "", c, nil)
 			r.Report(e)
 		}
 		close(done)
@@ -241,7 +241,7 @@ func TestReportNeverBlocksWhenQueueIsFull(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
-		t.Fatal("Report blocked when the queue was full — it must never block the executor")
+		t.Fatal("Report blocked when the queue was full â€” it must never block the executor")
 	}
 	// Overflow still reaches disk, so nothing is lost; the sweep picks it up.
 	if r.pendingCount() == 0 {
@@ -252,7 +252,7 @@ func TestReportNeverBlocksWhenQueueIsFull(t *testing.T) {
 func TestNewCostEventRejectsUnattributableCost(t *testing.T) {
 	// A cost with no intent cannot be reconciled or billed; recording it would
 	// create an orphan that inflates COGS with no matching charge.
-	if _, err := NewCostEvent("", "", sampleCost("base", "0xf", LegAnchor), nil); err == nil {
+	if _, err := NewCostEvent("", "", "", sampleCost("base", "0xf", LegAnchor), nil); err == nil {
 		t.Fatal("expected rejection of a cost event without an intent id")
 	}
 }
