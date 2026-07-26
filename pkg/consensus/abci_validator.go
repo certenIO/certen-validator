@@ -378,6 +378,22 @@ func (app *ValidatorApp) FinalizeBlock(ctx context.Context, req *abcitypes.Reque
 	// ResponseFinalizeBlock.AppHash; Commit persists this exact staged value.
 	app.pendingAppHash = app.stageAppHash(app.blockBundles)
 
+	// Normalize an empty app hash HERE, not in Commit.
+	//
+	// CometBFT records the app hash from FinalizeBlock's response and replays
+	// against it on restart. Substituting a value later in Commit makes the
+	// persisted hash disagree with what CometBFT stored, and the node dies on
+	// the next handshake with:
+	//
+	//   panic: state.AppHash does not match AppHash after replay
+	//
+	// Doing it here keeps one value flowing through FinalizeBlock -> CometBFT
+	// state -> Commit -> ledger, so every party holds the same bytes. The
+	// substitution is deterministic, so validators cannot diverge.
+	if len(app.pendingAppHash) == 0 {
+		app.pendingAppHash = make([]byte, 32)
+	}
+
 	app.logger.Printf("🔄 Finalized validator block %d with %d ValidatorBlock transactions (appHash=%x)",
 		req.Height, len(req.Txs), app.pendingAppHash[:min(8, len(app.pendingAppHash))])
 
@@ -427,23 +443,19 @@ func (app *ValidatorApp) Commit(ctx context.Context, req *abcitypes.RequestCommi
 		appHash = app.generateAppHash()
 	}
 
-	// An app hash must never be empty.
+	// Persist EXACTLY what FinalizeBlock reported to CometBFT.
 	//
-	// Two things break if it is. Logging slices it (`appHash[:8]`), which
-	// panics on a zero-capacity slice and aborts Commit — taking the
-	// SaveABCIState call below down with it, so the app's height is never
-	// persisted. Every subsequent restart then reports height 0 and CometBFT
-	// replays from genesis; once the block store is pruned that replay is
-	// impossible and the node can never start again:
+	// Any normalization must happen in FinalizeBlock, because that response is
+	// what CometBFT stores and replays against. Changing the value here would
+	// make the ledger disagree with CometBFT's state and kill the node on the
+	// next handshake ("state.AppHash does not match AppHash after replay").
 	//
-	//   error on replay: app block height (0) is too far below block store base (4)
-	//
-	// which is exactly how a routine restart took the whole validator set down.
-	// A stable zero hash keeps consensus deterministic across validators while
-	// removing the panic.
+	// The defensive branch below only covers a path where FinalizeBlock never
+	// ran at all; it must not silently rewrite a hash CometBFT already has.
 	if len(appHash) == 0 {
-		app.logger.Printf("⚠️ Empty app hash at height %d — substituting the zero hash "+
-			"so Commit cannot abort before persisting state", app.latestHeight)
+		app.logger.Printf("⚠️ Empty app hash at height %d with no FinalizeBlock result — "+
+			"using the zero hash to keep Commit from aborting before state is persisted",
+			app.latestHeight)
 		appHash = make([]byte, 32)
 	}
 	app.lastCommitHash = appHash

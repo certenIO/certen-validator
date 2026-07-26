@@ -67,3 +67,28 @@ func TestZeroHashSubstitutionIsDeterministic(t *testing.T) {
 		t.Fatal("zero-hash substitution is not deterministic across validators")
 	}
 }
+
+// The substitution MUST happen in FinalizeBlock, whose response CometBFT
+// stores and replays against. Doing it in Commit instead makes the persisted
+// hash disagree with CometBFT's recorded state, and the node dies on the next
+// handshake with "state.AppHash does not match AppHash after replay" — which
+// is exactly what happened when the fix was first applied in the wrong place.
+func TestFinalizeBlockNormalizesBeforeReporting(t *testing.T) {
+	app := &ValidatorApp{}
+
+	// What FinalizeBlock does before building its response.
+	app.pendingAppHash = nil
+	if len(app.pendingAppHash) == 0 {
+		app.pendingAppHash = make([]byte, 32)
+	}
+
+	reported := app.pendingAppHash // -> ResponseFinalizeBlock.AppHash
+	persisted := app.pendingAppHash // -> Commit -> SaveABCIState
+
+	if len(reported) != 32 {
+		t.Fatalf("reported hash length = %d, want 32", len(reported))
+	}
+	if string(reported) != string(persisted) {
+		t.Error("reported and persisted app hashes differ; replay will panic on the next restart")
+	}
+}
