@@ -125,28 +125,46 @@ func (app *ValidatorApp) SetValidatorCount(count int) {
 // Info returns application information
 // Per BFT Resiliency Task 3: Includes height mismatch detection and recovery logging
 func (app *ValidatorApp) Info(ctx context.Context, req *abcitypes.RequestInfo) (*abcitypes.ResponseInfo, error) {
-	app.mu.RLock()
-	defer app.mu.RUnlock()
+	// WRITE lock: Info() is the handshake entry point and is where persisted
+	// state must be restored, so it has to be able to mutate.
+	app.mu.Lock()
+	defer app.mu.Unlock()
 
-	// Log startup info for debugging state recovery issues
-	app.logger.Printf("📋 Info() called - App height: %d, AppHash: %x",
-		app.latestHeight, app.lastCommitHash[:min(8, len(app.lastCommitHash))])
-
-	// Check for potential state inconsistency with ledger
+	// Restore height and app hash from the ledger before answering.
+	//
+	// `latestHeight` lives in memory and is therefore 0 in a fresh process. The
+	// previous code noticed the mismatch and only logged it ("Can't modify
+	// state here (RLock)"), so every restart told CometBFT the app was at
+	// height 0 and forced a replay from genesis.
+	//
+	// That was survivable only while block 1 still existed. Once CometBFT
+	// pruned the block store, replay from 0 became impossible and the node
+	// could never start again:
+	//
+	//   error on replay: app block height (0) is too far below block store base (4)
+	//
+	// which took the whole validator set down on a routine restart. The ledger
+	// is the source of truth for what this app has committed, so read it.
 	if app.ledgerStore != nil {
 		if state, err := app.ledgerStore.LoadABCIState(); err == nil && state != nil {
-			if state.LastBlockHeight != app.latestHeight {
-				app.logger.Printf("⚠️ Height mismatch detected: Memory=%d, Ledger=%d - recovery may be needed",
+			if state.LastBlockHeight > app.latestHeight {
+				app.logger.Printf("🔄 Restoring app state from ledger: height %d -> %d",
 					app.latestHeight, state.LastBlockHeight)
-				// Reconcile with ledger state (ledger is source of truth)
-				if state.LastBlockHeight > app.latestHeight {
-					app.logger.Printf("🔄 Fast-forwarding app state from %d to %d",
-						app.latestHeight, state.LastBlockHeight)
-					// Note: Can't modify state here (RLock), but log for investigation
+				app.latestHeight = state.LastBlockHeight
+				if len(state.LastBlockAppHash) > 0 {
+					app.lastCommitHash = state.LastBlockAppHash
 				}
 			}
+		} else if err != nil {
+			// Do NOT silently answer 0 — that triggers a full replay and, on a
+			// pruned store, an unrecoverable node. Surface it loudly instead.
+			app.logger.Printf("❌ Could not load persisted ABCI state (%v); "+
+				"reporting height %d, which will force a replay", err, app.latestHeight)
 		}
 	}
+
+	app.logger.Printf("📋 Info() called - App height: %d, AppHash: %x",
+		app.latestHeight, app.lastCommitHash[:min(8, len(app.lastCommitHash))])
 
 	return &abcitypes.ResponseInfo{
 		Data:             "Certen Validator Consensus Application",
