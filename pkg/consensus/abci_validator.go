@@ -12,7 +12,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -64,6 +67,10 @@ type ValidatorApp struct {
 	// Optional block-checkpoint hook (P3): invoked non-blocking after each committed block so a
 	// single designated writer can mirror block roots to Accumulate. nil unless wired in main.go.
 	checkpointHook func(height int64, blockHash string, appHash []byte, ts time.Time)
+
+	// How many blocks of consensus history CometBFT keeps. <= 0 retains all,
+	// which is the default; see retainHeightFor for why pruning is opt-in.
+	blockRetention int64
 }
 
 // SetCheckpointHook installs the (non-blocking) per-commit checkpoint callback. The callback
@@ -72,6 +79,23 @@ func (app *ValidatorApp) SetCheckpointHook(fn func(height int64, blockHash strin
 	app.mu.Lock()
 	defer app.mu.Unlock()
 	app.checkpointHook = fn
+}
+
+// blockRetentionFromEnv reads CERTEN_BLOCK_RETENTION.
+//
+// Unset, zero or unparseable means retain ALL consensus history — the safe
+// default. Pruning is opt-in because losing old blocks both destroys the BFT
+// quorum record and makes a mismatched volume reset unrecoverable.
+func blockRetentionFromEnv() int64 {
+	raw := strings.TrimSpace(os.Getenv("CERTEN_BLOCK_RETENTION"))
+	if raw == "" {
+		return 0
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
 }
 
 // NewValidatorApp creates a new ABCI application for validator consensus.
@@ -84,6 +108,7 @@ func NewValidatorApp(ledgerStore *ledger.LedgerStore, chainID string) *Validator
 		validatorBlocks: make(map[string]*ValidatorBlock),
 		ledgerStore:     ledgerStore,
 		chainID:         chainID,
+		blockRetention:  blockRetentionFromEnv(),
 	}
 
 	// Restore persisted ABCI state for CometBFT recovery
@@ -448,15 +473,41 @@ func (app *ValidatorApp) Commit(ctx context.Context, req *abcitypes.RequestCommi
 	app.logger.Printf("📦 Committed validator block %d with %d ValidatorBlocks (hash: %x)",
 		app.latestHeight, blockCount, appHash[:min(8, len(appHash))])
 
-	// Guard RetainHeight against negative values
-	retainHeight := app.latestHeight - 100
-	if retainHeight < 0 {
-		retainHeight = 0
-	}
-
 	return &abcitypes.ResponseCommit{
-		RetainHeight: retainHeight, // Keep recent 100 blocks, but guard against negative
+		RetainHeight: app.retainHeightFor(app.latestHeight),
 	}, nil
+}
+
+// retainHeightFor decides how much consensus history CometBFT keeps.
+//
+// Returning 0 means RETAIN EVERYTHING, and that is the default. The previous
+// behaviour — prune everything below `height - 100` — was costly in a way that
+// was invisible until it wasn't:
+//
+//   - Operationally it is a trap. The app's state and CometBFT's blocks live in
+//     separate volumes, so resetting one and not the other leaves the app at
+//     height 0 against a pruned store. Replay from genesis is then impossible
+//     and NO validator can start:
+//     "app block height (0) is too far below block store base (4)".
+//     That took the whole set down after the chain first passed height 100.
+//
+//   - Evidentially it discards the BFT precommit history — the proof that a
+//     quorum agreed at a given height. Customer-facing evidence lives on
+//     Accumulate and the destination chains and is unaffected, but our own
+//     ability to re-derive quorum from the chain is not. Until block roots are
+//     anchored externally, these blocks are the only copy of that.
+//
+// Disk is cheap and these blocks are small; keeping them is the safe default.
+// Set CERTEN_BLOCK_RETENTION to a positive number of blocks to prune anyway.
+func (app *ValidatorApp) retainHeightFor(height int64) int64 {
+	if app.blockRetention <= 0 {
+		return 0 // retain all history
+	}
+	retain := height - app.blockRetention
+	if retain < 0 {
+		return 0
+	}
+	return retain
 }
 
 // Query handles application state queries
