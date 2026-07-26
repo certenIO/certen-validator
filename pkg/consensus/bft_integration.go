@@ -1024,6 +1024,31 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 			certenIntent.IntentID, principal)
 	}
 
+	// ====================================================================
+	// EXECUTION VALIDATION — expiry, structure, and REPLAY PROTECTION.
+	//
+	// ValidateForExecution has existed and been correct for a long time, and
+	// has never had a caller: grep found only its own definition. So the nonce
+	// check inside it (ValidateNonce) has never run, and a replayed intent —
+	// the same 4 blobs written to Accumulate a second time — was executed again
+	// at CERTEN's expense.
+	//
+	// Placed after the entitlement check and before any money is spent. Uses
+	// wall time for expiry, which is fine HERE (a proposer's local decision) and
+	// would not be fine in the consensus invariant, where it would make
+	// validators disagree.
+	// ====================================================================
+	if executionValidationEnabled() {
+		if err := certenIntent.ValidateForExecution(blockHeight); err != nil {
+			bv.logger.Printf("🚫 [EXEC-VALIDATION] refusing intent %s: %v", certenIntent.IntentID, err)
+			return &ExecutionTaskResult{
+				Success:    false,
+				ExecutorID: bv.validatorID,
+				Error:      fmt.Errorf("intent %s failed execution validation: %w", certenIntent.IntentID, err),
+			}, nil
+		}
+	}
+
 	// Create builder inputs STRICTLY from canonical sources
 	builderInputs := BuilderInputs{
 		Intent: certenIntent, // canonical 4 blobs from IntentDiscovery

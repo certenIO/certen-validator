@@ -95,6 +95,48 @@ func (s *BboltReplayStore) MarkNonce(_ context.Context, nonce string, expiresAt 
 	})
 }
 
+// ClaimNonce atomically claims a nonce for an owner, idempotently.
+//
+// Stored value is 8 bytes of big-endian expires_at followed by the owner string.
+// The legacy MarkNonce format is exactly the first 8 bytes, so a record written
+// before this existed reads back with an empty owner — and an empty owner never
+// matches a real one, so a pre-existing nonce stays refused rather than being
+// silently adoptable by whoever asks first.
+func (s *BboltReplayStore) ClaimNonce(_ context.Context, nonce, owner string, expiresAt int64) (ClaimResult, error) {
+	var out ClaimResult
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(nonceBucket)
+		if b == nil {
+			return fmt.Errorf("nonces bucket missing")
+		}
+		key := []byte(nonce)
+
+		if existing := b.Get(key); existing != nil {
+			var holder string
+			if len(existing) > 8 {
+				holder = string(existing[8:])
+			}
+			if holder != "" && holder == owner {
+				// Same transaction re-entering: a retry, not a replay.
+				out = ClaimResult{OK: true, Owner: holder, Reclaimed: true}
+				return nil
+			}
+			out = ClaimResult{OK: false, Owner: holder}
+			return nil
+		}
+
+		val := make([]byte, 8, 8+len(owner))
+		binary.BigEndian.PutUint64(val, uint64(expiresAt))
+		val = append(val, owner...)
+		if err := b.Put(key, val); err != nil {
+			return err
+		}
+		out = ClaimResult{OK: true, Owner: owner}
+		return nil
+	})
+	return out, err
+}
+
 // CleanExpired removes all nonces whose expires_at is before beforeTimestamp.
 func (s *BboltReplayStore) CleanExpired(_ context.Context, beforeTimestamp int64) error {
 	var cleaned int

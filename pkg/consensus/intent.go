@@ -692,11 +692,60 @@ func (ci *CertenIntent) ValidateForExecution(blockHeight uint64) error {
 		}
 	}
 
-	// Validate nonce for replay protection
-	if err := ci.ValidateNonce(replayData); err != nil {
+	// Validate nonce for replay protection.
+	//
+	// Owner-aware: the claim is keyed by nonce and remembers the Accumulate
+	// transaction that made it, so re-processing THIS intent (the on-demand
+	// chained-proof retry, a restart re-queue) is idempotent while a different
+	// transaction reusing the nonce is refused. Plain MarkNonce would burn the
+	// nonce on the first attempt and then refuse every legitimate retry.
+	if err := ci.ValidateNonceForOwner(replayData, ci.TransactionHash); err != nil {
 		return fmt.Errorf("intent validation for execution failed: %w", err)
 	}
 
+	return nil
+}
+
+// ValidateNonceForOwner is ValidateNonce with retry-safe semantics.
+//
+// `owner` must identify the specific on-chain submission — the Accumulate
+// transaction hash. An attacker replaying an intent necessarily writes a NEW
+// transaction and therefore presents a different owner, so they are refused;
+// this validator re-examining the same transaction presents the same owner and
+// proceeds.
+//
+// Falls back to the plain ValidateNonce behaviour when the configured store
+// predates the owner-aware interface, so an older deployment still gets replay
+// protection — just without retry idempotency.
+func (ci *CertenIntent) ValidateNonceForOwner(replayData *ReplayData, owner string) error {
+	if replayData.Nonce == "" {
+		return fmt.Errorf("replay nonce is empty")
+	}
+	if owner == "" {
+		// With no owner we cannot distinguish a retry from a replay. Refusing
+		// is the safe direction: an intent with no transaction hash has not
+		// been established on chain, so there is nothing to execute for.
+		return fmt.Errorf("cannot validate nonce: intent has no transaction hash to attribute it to")
+	}
+
+	store := getReplayStore()
+	claimer, ok := store.(NonceClaimer)
+	if store == nil || !ok {
+		return ci.ValidateNonce(replayData)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	res, err := claimer.ClaimNonce(ctx, replayData.Nonce, owner, replayData.ExpiresAt)
+	if err != nil {
+		return fmt.Errorf("replay store claim failed: %w", err)
+	}
+	if !res.OK {
+		return fmt.Errorf(
+			"duplicate nonce %q: already claimed by transaction %q, this is transaction %q",
+			replayData.Nonce, res.Owner, owner)
+	}
 	return nil
 }
 

@@ -119,6 +119,26 @@ func EntitlementConfigFromEnv() (EntitlementConfig, error) {
 	return cfg, nil
 }
 
+// executionValidationEnabled reports whether ValidateForExecution runs before
+// an intent is worked on.
+//
+// Defaults ON. It enforces expiry, structural completeness and — the part that
+// has never actually run — nonce replay protection, and every one of those is a
+// correctness property rather than a policy choice.
+//
+// The escape hatch exists because turning on a check that has been dead since it
+// was written can surface pre-existing malformed intents. Set
+// CERTEN_EXEC_VALIDATION=false to restore the old behaviour without redeploying
+// a binary; expect replayed and expired intents to execute again if you do.
+func executionValidationEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("CERTEN_EXEC_VALIDATION"))) {
+	case "false", "0", "no":
+		return false
+	default:
+		return true
+	}
+}
+
 // VerifyEntitlement is the gate.
 //
 // nowUnix MUST be the ABCI block time when called from FinalizeBlock. Passing
