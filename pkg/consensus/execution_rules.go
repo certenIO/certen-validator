@@ -65,8 +65,20 @@ const (
 	// silent tightening.
 	executionRulesV4 uint64 = 4
 
+	// v5 — MinActivationDelay lowered from 200 to 10. This changes which
+	// PolicyUpdate transactions VerifyPolicyUpdate accepts, and acceptance
+	// contributes the update's id to the app hash, so it is a consensus rule
+	// like any other.
+	//
+	// No policy update had been committed when this landed, so no existing
+	// history could replay differently — but the version is bumped regardless.
+	// Deciding case by case whether a rule change "really" needs a bump is how
+	// the discipline erodes, and the cost of a needless bump is one coordinated
+	// restart against an outage that looks like data corruption.
+	executionRulesV5 uint64 = 5
+
 	// CurrentExecutionRulesVersion is what THIS binary implements.
-	CurrentExecutionRulesVersion = executionRulesV4
+	CurrentExecutionRulesVersion = executionRulesV5
 )
 
 // ExecutionRulesMismatchError explains a refusal to start in terms an operator
