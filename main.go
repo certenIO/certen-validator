@@ -32,6 +32,7 @@ import (
 	"github.com/certen/independant-validator/pkg/consensus"
 	"github.com/certen/independant-validator/pkg/crypto/bls"
 	"github.com/certen/independant-validator/pkg/database"
+	"github.com/certen/independant-validator/pkg/entitlement"
 	"github.com/certen/independant-validator/pkg/ethereum"
 	"github.com/certen/independant-validator/pkg/execution"
 	"github.com/certen/independant-validator/pkg/firestore"
@@ -1660,6 +1661,39 @@ func startValidator(
 	// BFTValidator.ExecuteCanonicalIntentWithBFTConsensus(ctx, certenIntent, certenProof, blockHeight)
 	// with properly structured CertenIntent (4-blob canonical) and CertenProof from lite client
 	intentDiscovery.SetBFTConsensus(validator)
+
+	// ENTITLEMENT — wire the epoch snapshot to the two places that consume it.
+	//
+	// The gate inside the ABCI validator only VERIFIES evidence; something has
+	// to PRODUCE it. Without this the proposer attaches nothing to every
+	// ValidatorBlock, and the gate reports NO_ENTITLEMENT_EVIDENCE for
+	// everything — indistinguishable from a genuinely unentitled principal, and
+	// in enforce mode it would refuse the entire fleet's work.
+	//
+	// Mode comes from the SAME parse the gate uses, so the producer and the
+	// verifier can never disagree about whether the gate is on.
+	if entGateCfg, err := consensus.EntitlementConfigFromEnv(); err != nil {
+		log.Fatalf("invalid entitlement configuration: %v", err)
+	} else {
+		entStore := entitlement.NewStore(
+			entitlement.StoreConfigFromEnv(),
+			entGateCfg.Keys,
+			log.New(log.Writer(), "[Entitlement] ", log.LstdFlags),
+		)
+		// Start is non-blocking and a failed first refresh is not fatal: a
+		// validator must boot while the gateway is down. Background context to
+		// match the other long-lived services started here (bftScheduler,
+		// batchScheduler) — the refresher lives for the process lifetime.
+		entStore.Start(context.Background())
+
+		validator.SetEntitlementStore(entStore, entGateCfg.Mode)
+		// Pre-screen only declines work when the gate is actually enforcing;
+		// in observe mode a decline would drop intents the gate would admit.
+		intentDiscovery.SetEntitlementScreen(entStore, entGateCfg.Mode == consensus.EntitlementEnforce)
+
+		log.Printf("✅ [ENTITLEMENT] store wired: mode=%s enabled=%t keys=%d",
+			entGateCfg.Mode, entStore.Enabled(), len(entGateCfg.Keys))
+	}
 
 	// PHASE 5: Wire batch system to intent discovery for PostgreSQL persistence
 	// This enables routing intents based on proofClass (on_demand vs on_cadence)
