@@ -79,7 +79,7 @@ func TestCurrentVersionIsSet(t *testing.T) {
 	if CurrentExecutionRulesVersion == 0 {
 		t.Fatal("CurrentExecutionRulesVersion is 0, which disables every check")
 	}
-	if CurrentExecutionRulesVersion != executionRulesV3 {
+	if CurrentExecutionRulesVersion != executionRulesV4 {
 		t.Fatalf("current = %d; if rules changed, bump the constant AND add a "+
 			"changelog entry in execution_rules.go", CurrentExecutionRulesVersion)
 	}

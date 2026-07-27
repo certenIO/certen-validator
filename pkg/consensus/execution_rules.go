@@ -53,8 +53,20 @@ const (
 	// rather than on a fixed rule.
 	executionRulesV3 uint64 = 3
 
+	// v4 — principal binding. A ValidatorBlock whose
+	// accumulate_anchor_reference.account_url names a different IDENTITY from
+	// governance_proof.organization_adi is rejected. Before v4 those two fields
+	// could be set independently, so a proposer could name an entitled account
+	// while the governance proof described an unentitled one, attach that
+	// account's public evidence, and have the gate accept it.
+	//
+	// This rejects blocks v3 accepted, so it changes the app hash of any block
+	// carrying such a ValidatorBlock — hence a version bump rather than a
+	// silent tightening.
+	executionRulesV4 uint64 = 4
+
 	// CurrentExecutionRulesVersion is what THIS binary implements.
-	CurrentExecutionRulesVersion = executionRulesV3
+	CurrentExecutionRulesVersion = executionRulesV4
 )
 
 // ExecutionRulesMismatchError explains a refusal to start in terms an operator
