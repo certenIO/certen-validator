@@ -523,43 +523,49 @@ func gasCeilingEnforced() bool {
 	}
 }
 
-// Defaults for the cost ceiling.
+// Cost ceiling configuration.
 //
-// CERTEN_MAX_TX_COST_USD bounds the worst-case dollar cost of any single
-// transaction CERTEN submits. $25 is deliberately generous relative to testnet
-// (where a leg costs fractions of a cent) and still catches a genuine mainnet
-// spike. It is a backstop, not a price.
+//	CERTEN_MAX_TX_COST_USD  worst-case dollar cost allowed for one transaction
+//	CERTEN_NATIVE_USD       price of the chain's native token
 //
-// CERTEN_NATIVE_USD is the price of the chain's native token. All four in-scope
-// chains (ethereum/base/optimism/arbitrum sepolia) settle in ETH, so one value
-// covers them.
+// BOTH must be set for the dollar ceiling to apply. Unset means INACTIVE, and
+// the gwei ceiling alone governs.
 //
-// The unset default is deliberately HIGH. Over-stating the token price makes
-// every transaction look more expensive, so the ceiling refuses SOONER. That is
-// the safe direction to be wrong in: a conservative default cannot silently
-// permit an expensive transaction, it can only refuse a cheap one, which is
-// visible and recoverable.
-const (
-	defaultMaxTxCostUSD   = 25.0
-	defaultNativeUSDPrice = 10000.0 // intentionally above any plausible ETH price
-)
+// An earlier version defaulted the token price to a deliberately HIGH figure on
+// the theory that over-stating it refuses sooner, which is "the safe direction".
+// That reasoning was wrong. On a testnet fleet, where the native token is
+// worthless but gas PRICES are mainnet-like, a 500k-gas transaction at 20 gwei
+// priced against a notional $10,000/ETH computes to ~$120 and blows through any
+// sane cap — so the conservative default refused all legitimate work. A default
+// that causes an outage is not conservative; it is just broken in a direction
+// that feels responsible.
+//
+// Refusing to guess is the actual safe behaviour: an operator who wants a dollar
+// ceiling states what a token is worth, and one who has not said cannot be
+// silently held to a number nobody chose.
+const defaultMaxTxCostUSD = 25.0
 
+// maxTxCostMicroUSD returns the per-transaction dollar cap, or 0 for no cap.
 func maxTxCostMicroUSD() int64 {
 	if v := strings.TrimSpace(os.Getenv("CERTEN_MAX_TX_COST_USD")); v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 {
-			return int64(f * 1e6)
+			return int64(f * 1e6) // 0 explicitly disables
 		}
 	}
+	// A cap is only meaningful alongside a price. With no price configured the
+	// ceiling is inactive regardless, so the default here never stands alone.
 	return int64(defaultMaxTxCostUSD * 1e6)
 }
 
+// nativeUSDMicro returns the native token price, or 0 when unconfigured — which
+// leaves the dollar ceiling inactive rather than enforcing an invented figure.
 func nativeUSDMicro() int64 {
 	if v := strings.TrimSpace(os.Getenv("CERTEN_NATIVE_USD")); v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
 			return int64(f * 1e6)
 		}
 	}
-	return int64(defaultNativeUSDPrice * 1e6)
+	return 0
 }
 
 // refreshGasPrice updates auth.GasPrice with the current network-suggested price.

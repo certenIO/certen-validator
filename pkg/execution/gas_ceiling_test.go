@@ -164,19 +164,51 @@ func TestUnknownNativePriceDoesNotSilentlyPass(t *testing.T) {
 	}
 }
 
-func TestCostDefaultsAreConservative(t *testing.T) {
+// An unconfigured price must leave the dollar ceiling INACTIVE, not enforce an
+// invented figure.
+//
+// The first version defaulted the price to $10,000/ETH, reasoning that
+// over-stating it refuses sooner and is therefore the safe direction. On a
+// testnet fleet that is an outage: the native token is worthless but gas PRICES
+// are mainnet-like, so a 500k-gas transaction at 20 gwei prices at ~$120 against
+// a notional $10,000/ETH and blows through any sane cap. Every legitimate intent
+// would have been refused by a default nobody chose.
+func TestUnconfiguredPriceLeavesTheDollarCeilingInactive(t *testing.T) {
 	t.Setenv("CERTEN_NATIVE_USD", "")
 	t.Setenv("CERTEN_MAX_TX_COST_USD", "")
 
-	// The native-price default must be HIGH: over-stating the token price makes
-	// transactions look more expensive, so the ceiling refuses SOONER. Being
-	// wrong in that direction can only refuse a cheap transaction (visible,
-	// recoverable) — never silently permit an expensive one.
-	if got := nativeUSDMicro(); got < 5000*usd {
-		t.Fatalf("native price default %d is not conservative; must over-state, not under-state", got)
+	if got := nativeUSDMicro(); got != 0 {
+		t.Fatalf("an unconfigured token price must be 0 (inactive), got %d", got)
 	}
-	if got := maxTxCostMicroUSD(); got <= 0 {
-		t.Fatal("cost cap must default to a real limit, never unlimited")
+
+	// The realistic testnet case that the old default refused.
+	err := checkTxCostCeiling(500_000, big.NewInt(24*gwei), nativeUSDMicro(), maxTxCostMicroUSD(), 11155111)
+	if err != nil {
+		t.Fatalf("an unconfigured deployment must not refuse ordinary work: %v", err)
+	}
+}
+
+func TestConfiguringBothActivatesTheDollarCeiling(t *testing.T) {
+	t.Setenv("CERTEN_NATIVE_USD", "3000")
+	t.Setenv("CERTEN_MAX_TX_COST_USD", "25")
+
+	if nativeUSDMicro() != 3000*usd || maxTxCostMicroUSD() != 25*usd {
+		t.Fatal("explicit configuration should be honoured")
+	}
+	// 2.5M gas at 50 gwei with ETH at $3,000 = $375. Refused.
+	if err := checkTxCostCeiling(2_500_000, big.NewInt(50*gwei), nativeUSDMicro(), maxTxCostMicroUSD(), 1); err == nil {
+		t.Fatal("a configured ceiling must still refuse a genuinely expensive transaction")
+	}
+}
+
+func TestExplicitZeroCapDisablesTheDollarCeiling(t *testing.T) {
+	t.Setenv("CERTEN_NATIVE_USD", "3000")
+	t.Setenv("CERTEN_MAX_TX_COST_USD", "0")
+
+	// An operator on a testnet, where a dollar ceiling is meaningless, must be
+	// able to turn it off without also giving up the gwei ceiling.
+	if err := checkTxCostCeiling(10_000_000, big.NewInt(500*gwei), nativeUSDMicro(), maxTxCostMicroUSD(), 1); err != nil {
+		t.Fatalf("an explicit zero cap must disable the dollar ceiling: %v", err)
 	}
 }
 
