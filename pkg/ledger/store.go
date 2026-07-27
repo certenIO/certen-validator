@@ -48,6 +48,11 @@ var (
 
 	// ABCI state keys (for CometBFT state recovery)
 	keyABCIState = []byte("abci:state") // -> ABCIState (height + appHash)
+
+	// Entitlement policy: the consensus rule the gate applies. Sealed at
+	// genesis from the environment and immutable afterwards, so a node can
+	// never disagree with its own committed past about which rule was in force.
+	keyEntitlementPolicy = []byte("entitlement:policy") // -> EntitlementPolicyState
 )
 
 // systemBlockKey generates a KV key for a specific system ledger block
@@ -391,6 +396,36 @@ func (s *LedgerStore) LoadABCIState() (*ABCIState, error) {
 		return nil, fmt.Errorf("failed to unmarshal ABCIState: %w", err)
 	}
 	return &state, nil
+}
+
+// ====== Entitlement policy (the consensus rule the gate applies) ======
+
+// SaveEntitlementPolicy seals the policy for the life of the chain.
+//
+// Called exactly once, when a chain first starts with no policy recorded. It is
+// deliberately not an update path: changing the rule on a running chain is what
+// produced an unrecoverable app-hash divergence on 2026-07-27, because replayed
+// history was judged by a rule that had not committed it.
+func (s *LedgerStore) SaveEntitlementPolicy(p *EntitlementPolicyState) error {
+	b, err := json.Marshal(p)
+	if err != nil {
+		return fmt.Errorf("failed to marshal EntitlementPolicyState: %w", err)
+	}
+	return s.kv.Set(keyEntitlementPolicy, b)
+}
+
+// LoadEntitlementPolicy returns the sealed policy, or nil if this chain has
+// none yet (genesis).
+func (s *LedgerStore) LoadEntitlementPolicy() (*EntitlementPolicyState, error) {
+	b, err := s.kv.Get(keyEntitlementPolicy)
+	if err != nil || len(b) == 0 {
+		return nil, nil // no policy sealed yet - genesis
+	}
+	var p EntitlementPolicyState
+	if err := json.Unmarshal(b, &p); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal EntitlementPolicyState: %w", err)
+	}
+	return &p, nil
 }
 
 // ====== Historical System Ledger Queries ======

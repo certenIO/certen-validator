@@ -125,9 +125,19 @@ func NewValidatorApp(ledgerStore *ledger.LedgerStore, chainID string) *Validator
 	// with a silently-off gate that the operator believes is enforcing is worse
 	// than not starting, and starting in enforce mode with a key set that
 	// differs from the rest of the fleet would fork the chain.
-	entCfg, err := EntitlementConfigFromEnv()
+	envCfg, err := EntitlementConfigFromEnv()
 	if err != nil {
 		app.logger.Fatalf("invalid entitlement gate configuration: %v", err)
+	}
+
+	// The environment is only the GENESIS SEED. On a chain that already sealed a
+	// policy, the sealed value wins and the environment is ignored — because the
+	// gate's verdict feeds the app hash, and a rule that can change between two
+	// runs lets a node disagree with its own committed past. That disagreement
+	// is unrecoverable, and it is what took the fleet down on 2026-07-27.
+	entCfg, err := ResolveEntitlementPolicy(ledgerStore, envCfg, app.logger)
+	if err != nil {
+		app.logger.Fatalf("entitlement policy could not be resolved: %v", err)
 	}
 	app.entitlement = entCfg
 	app.logger.Printf("🔐 [ENTITLEMENT] gate mode=%s trusted_keys=%d",

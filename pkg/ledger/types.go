@@ -145,6 +145,33 @@ type ABCIState struct {
 	ExecutionRulesVersion uint64 `json:"executionRulesVersion,omitempty"`
 }
 
+// EntitlementPolicyState is the entitlement rule this chain applies, sealed at
+// genesis and immutable thereafter.
+//
+// It lives in committed state rather than the environment because the gate's
+// verdict decides whether a ValidatorBlock is accepted, and acceptance feeds
+// the app hash. A rule that can change between two runs of the same binary lets
+// a node disagree with its own committed past, which is unrecoverable: replay
+// produces a different app hash than CometBFT recorded, and the node panics at
+// handshake before it can serve.
+//
+// Keys are stored alongside the mode for the same reason — a node verifying
+// with a different key set reaches a different verdict, which is the same
+// divergence by another route.
+type EntitlementPolicyState struct {
+	Mode string `json:"mode"` // off | observe | enforce
+
+	// Keys maps keyID -> hex-encoded ed25519 public key.
+	Keys map[string]string `json:"keys,omitempty"`
+
+	// SealedAtHeight records when the policy was fixed; 0 = genesis.
+	SealedAtHeight int64 `json:"sealedAtHeight"`
+
+	// Version is reserved for the PolicyUpdate mechanism (Layer 2), which will
+	// allow the rule to change at an agreed activation height instead of never.
+	Version uint64 `json:"version"`
+}
+
 // ====== Anchor Targets Configuration ======
 
 // AnchorTargets contains the fixed list of known anchor targets for iteration
