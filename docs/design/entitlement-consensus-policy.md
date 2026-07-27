@@ -1,6 +1,6 @@
 # Making the entitlement gate safe to switch on
 
-**Status:** proposal · **Written:** 2026-07-27, after the enforce rollout bricked
+**Status:** IMPLEMENTED (Layers 1-3) · **Written:** 2026-07-27, after the enforce rollout bricked
 the fleet for ~2 hours and cost the CERTEN chain its history.
 
 ---
@@ -204,6 +204,38 @@ because it always returns nil — which is precisely why it was the right place 
 start, and why the mistake was leaving it.
 
 ---
+
+## 6a. What implementation changed about the design
+
+Layer 2 was built as specified, with one correction the cross-boundary test
+forced.
+
+The first implementation stored a *pending* change and, at the activation
+height, MUTATED the policy into its new value. That is wrong, and wrong in
+exactly the original way: a mutated "current mode" reflects how far the chain
+has progressed, so replaying block 10 after the chain reached block 210 judged
+block 10 by the rule active at 210. The replay test caught it immediately.
+
+The correct shape is an APPEND-ONLY SCHEDULE with the active rule DERIVED:
+
+    activePolicy(H) = latest scheduled change whose ActivationHeight <= H,
+                      else the genesis policy
+
+`ActivePolicyAt` is pure in `(schedule, height)`, so block 10 is judged
+identically however many times it is executed and in whatever order. Two
+consequences fall out that mutation could not provide:
+
+- **Idempotent application.** Re-executing the block carrying an update finds
+  the version already scheduled and changes nothing. Crucially it is still
+  ACCEPTED, so its id still reaches the app hash — rejecting it as stale would
+  itself diverge.
+- **Order independence.** The schedule is a set; `latest activation at or below
+  H` does not depend on insertion order.
+
+The general form of the lesson, which is also the original bug: **derive
+consensus-relevant state from committed history, never accumulate it by
+mutation.** Mutation encodes "when did I last run", and replay is precisely the
+case where that is not the answer.
 
 ## 7. The general lesson
 

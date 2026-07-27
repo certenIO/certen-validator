@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/certen/independant-validator/pkg/entitlement"
@@ -46,6 +47,66 @@ const (
 	// EntitlementEnforce rejects ValidatorBlocks lacking valid entitlement.
 	EntitlementEnforce EntitlementMode = "enforce"
 )
+
+// AdminKeys and AdminThreshold seed who may later change this chain's policy.
+//
+//	CERTEN_ENTITLEMENT_ADMIN_KEYS      = <keyID>:<hex pubkey>[,...]
+//	CERTEN_ENTITLEMENT_ADMIN_THRESHOLD = <n>   (default: all sealed admin keys)
+//
+// Read ONLY at genesis, like the rest of the policy. A chain sealed with no
+// admin keys has an immutable rule for its whole life — which is a legitimate
+// posture, and the safe default, since it makes the outage of 2026-07-27
+// impossible by construction rather than by discipline.
+type adminSeed struct {
+	Keys      map[string]string
+	Threshold int
+}
+
+// AdminSeedFromEnv parses the admin key set. An unparseable entry is fatal
+// rather than skipped: silently sealing a smaller admin set than the operator
+// intended would lower the bar for changing a consensus rule.
+func AdminSeedFromEnv() (adminSeed, error) {
+	seed := adminSeed{Keys: map[string]string{}}
+
+	raw := strings.TrimSpace(os.Getenv("CERTEN_ENTITLEMENT_ADMIN_KEYS"))
+	if raw != "" {
+		for _, entry := range strings.Split(raw, ",") {
+			entry = strings.TrimSpace(entry)
+			if entry == "" {
+				continue
+			}
+			id, hexKey, ok := strings.Cut(entry, ":")
+			id, hexKey = strings.TrimSpace(id), strings.TrimSpace(hexKey)
+			if !ok || id == "" || hexKey == "" {
+				return seed, fmt.Errorf("CERTEN_ENTITLEMENT_ADMIN_KEYS entry %q is not <keyID>:<hexPubKey>", entry)
+			}
+			b, err := hex.DecodeString(hexKey)
+			if err != nil || len(b) != ed25519.PublicKeySize {
+				return seed, fmt.Errorf(
+					"CERTEN_ENTITLEMENT_ADMIN_KEYS entry %q: public key must be %d hex-encoded bytes",
+					id, ed25519.PublicKeySize)
+			}
+			seed.Keys[id] = hexKey
+		}
+	}
+
+	// Default to unanimity. A threshold is a security control, so the default
+	// is the strict end; an operator who wants m-of-n states it.
+	seed.Threshold = len(seed.Keys)
+	if v := strings.TrimSpace(os.Getenv("CERTEN_ENTITLEMENT_ADMIN_THRESHOLD")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return seed, fmt.Errorf("CERTEN_ENTITLEMENT_ADMIN_THRESHOLD=%q must be a positive integer", v)
+		}
+		if n > len(seed.Keys) {
+			return seed, fmt.Errorf(
+				"CERTEN_ENTITLEMENT_ADMIN_THRESHOLD=%d exceeds the %d admin keys configured; "+
+					"the policy could never be updated", n, len(seed.Keys))
+		}
+		seed.Threshold = n
+	}
+	return seed, nil
+}
 
 // EntitlementConfig is the pinned, node-local configuration for the gate.
 //

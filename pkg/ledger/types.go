@@ -167,9 +167,52 @@ type EntitlementPolicyState struct {
 	// SealedAtHeight records when the policy was fixed; 0 = genesis.
 	SealedAtHeight int64 `json:"sealedAtHeight"`
 
-	// Version is reserved for the PolicyUpdate mechanism (Layer 2), which will
-	// allow the rule to change at an agreed activation height instead of never.
+	// Version increases with every accepted PolicyUpdate. It is what makes an
+	// update non-replayable: an update carrying a version already applied is
+	// refused.
 	Version uint64 `json:"version"`
+
+	// AdminKeys are the operator keys permitted to propose a PolicyUpdate,
+	// keyID -> hex ed25519 public key. Sealed at genesis with everything else:
+	// a chain whose admin set could be edited locally would let one node
+	// authorise a rule change the others never agreed to.
+	AdminKeys map[string]string `json:"adminKeys,omitempty"`
+
+	// AdminThreshold is how many distinct admin signatures an update needs.
+	// Turning enforcement on is as consequential as the payments it gates, so
+	// it should not rest on a single key.
+	AdminThreshold int `json:"adminThreshold,omitempty"`
+
+	// Schedule is the APPEND-ONLY list of accepted rule changes.
+	//
+	// The rule in force at height H is DERIVED from this list — the latest entry
+	// whose ActivationHeight <= H, or the genesis Mode/Keys above if there is
+	// none. It is deliberately not a mutated "current mode" field.
+	//
+	// That distinction is the whole correctness argument. A mutated current
+	// value reflects how far the chain has progressed, so replaying block 10
+	// after the chain reached block 210 would judge block 10 by the rule active
+	// at 210 — the same divergence that caused the 2026-07-27 outage, merely
+	// relocated. A derived value depends only on (schedule, height), so block 10
+	// is judged identically no matter when it is executed.
+	//
+	// Append-only also makes re-applying an update idempotent, which replay
+	// requires: the second application finds the version already present and
+	// changes nothing.
+	Schedule []ScheduledPolicyChange `json:"schedule,omitempty"`
+}
+
+// ScheduledPolicyChange is one accepted rule change in the append-only schedule.
+type ScheduledPolicyChange struct {
+	Mode             string            `json:"mode"`
+	Keys             map[string]string `json:"keys,omitempty"`
+	ActivationHeight int64             `json:"activationHeight"`
+	Version          uint64            `json:"version"`
+
+	// ProposedAtHeight is where the update was accepted, kept for audit: "when
+	// did enforcement begin and who authorised it" should be answerable from
+	// the chain rather than from shell history.
+	ProposedAtHeight int64 `json:"proposedAtHeight"`
 }
 
 // ====== Anchor Targets Configuration ======

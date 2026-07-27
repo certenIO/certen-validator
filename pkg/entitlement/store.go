@@ -59,7 +59,10 @@ type Store struct {
 	cfg    StoreConfig
 	keys   KeySet
 	client *http.Client
-	logger *log.Logger
+
+	// lastMissRefetch rate-limits miss-triggered refreshes (see refetchOnMiss).
+	lastMissRefetch time.Time
+	logger          *log.Logger
 
 	// Observability. A silently empty store looks identical to a working one
 	// until intents start being refused, so the counters are part of the design.
@@ -305,7 +308,34 @@ func (s *Store) BuildEvidence(adiURL string) *Evidence {
 
 	proof, leaf, ok := set.BuildProof(adiURL)
 	if !ok {
-		return nil
+		// THE ONBOARDING WINDOW.
+		//
+		// A newly created identity is absent from every epoch this node holds
+		// until the gateway republishes AND this node refetches — up to
+		// publish_interval + refresh_interval. Under enforce, that window
+		// refuses a legitimate customer's very first intent, which is the worst
+		// possible first impression and looks like a billing fault.
+		//
+		// A miss is therefore worth one immediate refetch. This is
+		// proposer-side work: it decides whether to ATTACH evidence, never
+		// whether to accept a block, so a non-deterministic outcome here cannot
+		// diverge the fleet. The verifier remains a pure function of the block.
+		//
+		// Rate-limited so a flood of genuinely unknown principals — the direct
+		// -submission bypass, say — cannot turn every intent into an HTTP
+		// request against the gateway.
+		if s.refetchOnMiss() {
+			proof, leaf, ok = s.lookupAfterRefresh(adiURL)
+		}
+		if !ok {
+			return nil
+		}
+		s.mu.RLock()
+		header = s.header
+		s.mu.RUnlock()
+		if header == nil {
+			return nil
+		}
 	}
 	return &Evidence{Header: *header, Leaf: leaf, Proof: proof}
 }
@@ -367,4 +397,52 @@ func (s *Store) Health() Snapshot {
 		snap.Stale = true
 	}
 	return snap
+}
+
+// MinRefetchInterval bounds how often a cache miss may trigger an out-of-band
+// refresh. Short enough to close the onboarding window in practice, long enough
+// that unknown principals cannot be used to hammer the gateway.
+const MinRefetchInterval = 3 * time.Second
+
+// refetchOnMiss reports whether this miss may trigger a refresh, and records the
+// attempt. Rate limiting is per-store, not per-principal: the cost being bounded
+// is the request to the gateway, which is shared.
+func (s *Store) refetchOnMiss() bool {
+	if !s.Enabled() {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.lastMissRefetch.IsZero() && time.Since(s.lastMissRefetch) < MinRefetchInterval {
+		return false
+	}
+	s.lastMissRefetch = time.Now()
+	return true
+}
+
+// lookupAfterRefresh fetches one epoch and retries the lookup.
+//
+// A failed refresh is not an error here: the caller simply attaches no evidence,
+// exactly as before. Nothing about correctness depends on this succeeding — it
+// only shortens a delay.
+func (s *Store) lookupAfterRefresh(adiURL string) ([]ProofStep, Leaf, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.Timeout)
+	defer cancel()
+
+	if err := s.Refresh(ctx); err != nil {
+		s.logger.Printf("entitlement refetch after a miss on %s failed: %v", adiURL, err)
+		return nil, Leaf{}, false
+	}
+	s.mu.RLock()
+	set := s.set
+	s.mu.RUnlock()
+	if set == nil {
+		return nil, Leaf{}, false
+	}
+	proof, leaf, ok := set.BuildProof(adiURL)
+	if ok {
+		s.logger.Printf("✅ entitlement refetch resolved %s that was missing from the cached epoch "+
+			"(newly onboarded account)", adiURL)
+	}
+	return proof, leaf, ok
 }

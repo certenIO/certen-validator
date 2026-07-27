@@ -471,11 +471,25 @@ func (app *ValidatorApp) FinalizeBlock(ctx context.Context, req *abcitypes.Reque
 		app.currentBlockHash[:min(8, len(app.currentBlockHash))],
 		app.currentBlockTime.Format(time.RFC3339))
 
+	// POLICY ACTIVATION — before any transaction is judged.
+	//
+	// A scheduled rule change takes effect at its activation height, and it must
+	// take effect for the WHOLE block: judging some transactions in a block by
+	// the old rule and others by the new one would make the outcome depend on
+	// ordering. Promotion is a pure function of committed state and height, so
+	// every node does it at the same height and replay reproduces it exactly.
+	app.activatePolicyForHeight(req.Height)
+
 	txResults := make([]*abcitypes.ExecTxResult, len(req.Txs))
 	app.blockBundles = app.blockBundles[:0] // reset per-block bundle list; txs append to it
 
 	for i, tx := range req.Txs {
-		// Process each ValidatorBlock transaction
+		// A policy update is not a ValidatorBlock and must not be judged as one.
+		if pu, ok := DecodePolicyUpdate(tx); ok {
+			result := app.processPolicyUpdate(pu, req.Height)
+			txResults[i] = &result
+			continue
+		}
 		result := app.processValidatorTransaction(tx)
 		txResults[i] = &result
 	}

@@ -47,8 +47,14 @@ const (
 	// which withholds its bundle-id from the app hash). Landed in 55416dc.
 	executionRulesV2 uint64 = 2
 
+	// v3 — PolicyUpdate transactions are a recognised type. They contribute an
+	// id to the app hash when accepted, and the entitlement rule can now change
+	// at an activation height, so acceptance depends on committed policy state
+	// rather than on a fixed rule.
+	executionRulesV3 uint64 = 3
+
 	// CurrentExecutionRulesVersion is what THIS binary implements.
-	CurrentExecutionRulesVersion = executionRulesV2
+	CurrentExecutionRulesVersion = executionRulesV3
 )
 
 // ExecutionRulesMismatchError explains a refusal to start in terms an operator

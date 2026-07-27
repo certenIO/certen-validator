@@ -72,13 +72,23 @@ func ResolveEntitlementPolicy(
 	}
 
 	if sealed == nil {
+		admin, err := AdminSeedFromEnv()
+		if err != nil {
+			return EntitlementConfig{}, fmt.Errorf("admin key seed: %w", err)
+		}
 		state := policyStateFrom(envCfg)
+		state.AdminKeys = admin.Keys
+		state.AdminThreshold = admin.Threshold
 		if err := store.SaveEntitlementPolicy(state); err != nil {
 			return EntitlementConfig{}, fmt.Errorf("seal entitlement policy: %w", err)
 		}
-		logger.Printf("🔏 [ENTITLEMENT] policy SEALED at genesis: mode=%s keys=%d fingerprint=%s "+
-			"(the environment is not consulted again on this chain)",
-			envCfg.Mode, len(envCfg.Keys), PolicyFingerprint(state))
+		mutability := fmt.Sprintf("%d admin keys, threshold %d", len(admin.Keys), admin.Threshold)
+		if len(admin.Keys) == 0 {
+			mutability = "NO admin keys — this chain's rule is immutable for its whole life"
+		}
+		logger.Printf("🔏 [ENTITLEMENT] policy SEALED at genesis: mode=%s keys=%d fingerprint=%s (%s). "+
+			"The environment is not consulted again on this chain.",
+			envCfg.Mode, len(envCfg.Keys), PolicyFingerprint(state), mutability)
 		return envCfg, nil
 	}
 
