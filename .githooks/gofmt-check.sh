@@ -22,7 +22,11 @@ if [ "$1" = "--staged" ]; then
     files=$(git diff --cached --name-only --diff-filter=ACM -- '*.go' |
         grep -v '^accumulate-lite-client-2/' || true)
 else
-    files=$(git ls-files '*.go' | grep -v '^accumulate-lite-client-2/' || true)
+    # Tracked files PLUS untracked new ones: a brand-new .go file is invisible
+    # to `git ls-files`, so a whole-repo check would report clean while the
+    # pre-commit hook rejects the very next commit.
+    files=$( { git ls-files '*.go'; git ls-files --others --exclude-standard '*.go'; } |
+        grep -v '^accumulate-lite-client-2/' | sort -u || true)
 fi
 
 [ -z "$files" ] && exit 0

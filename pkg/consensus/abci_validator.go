@@ -57,6 +57,11 @@ type ValidatorApp struct {
 	// would let two validators evaluate the same block differently.
 	entitlement EntitlementConfig
 
+	// executionRulesVersion is the rules version that produced the committed
+	// state, persisted beside the app hash so a later binary can detect that it
+	// would replay history under rules that did not commit it.
+	executionRulesVersion uint64
+
 	// Current block tracking for ledger updates
 	currentBlockHeight uint64
 	currentBlockHash   string
@@ -133,11 +138,24 @@ func NewValidatorApp(ledgerStore *ledger.LedgerStore, chainID string) *Validator
 		if state, err := ledgerStore.LoadABCIState(); err != nil {
 			app.logger.Printf("⚠️ Failed to load ABCI state: %v (starting fresh)", err)
 		} else if state != nil {
+			// Execution-rules check, BEFORE adopting the state.
+			//
+			// Fatal on purpose. Starting under rules that differ from the ones
+			// that committed this state replays history to a different app hash
+			// and panics inside CometBFT's handshake — a failure that names
+			// nothing and cannot self-recover. Refusing here costs a restart
+			// and says exactly what to do.
+			ver, err := checkExecutionRulesVersion(state.ExecutionRulesVersion, state.LastBlockHeight)
+			if err != nil {
+				app.logger.Fatalf("❌ %v", err)
+			}
+			app.executionRulesVersion = ver
+
 			app.latestHeight = state.LastBlockHeight
 			app.lastCommitHash = state.LastBlockAppHash
 			app.seedAppHash(state.LastBlockAppHash)
-			app.logger.Printf("✅ Restored ABCI state: height=%d, appHash=%x",
-				app.latestHeight, app.lastCommitHash[:min(8, len(app.lastCommitHash))])
+			app.logger.Printf("✅ Restored ABCI state: height=%d, appHash=%x, rules=v%d",
+				app.latestHeight, app.lastCommitHash[:min(8, len(app.lastCommitHash))], ver)
 		}
 	}
 
@@ -189,6 +207,16 @@ func (app *ValidatorApp) Info(ctx context.Context, req *abcitypes.RequestInfo) (
 	// is the source of truth for what this app has committed, so read it.
 	if app.ledgerStore != nil {
 		if state, err := app.ledgerStore.LoadABCIState(); err == nil && state != nil {
+			// Re-check the execution rules HERE, not only at construction.
+			//
+			// Info is the handshake entry point and the last moment before
+			// CometBFT compares our app hash against its own. The constructor
+			// check can be bypassed — a nil ledger store at construction, or
+			// state written between construction and handshake — and a bypass
+			// costs the outage this whole mechanism exists to prevent.
+			if _, err := checkExecutionRulesVersion(state.ExecutionRulesVersion, state.LastBlockHeight); err != nil {
+				app.logger.Fatalf("❌ %v", err)
+			}
 			if state.LastBlockHeight > app.latestHeight {
 				app.logger.Printf("🔄 Restoring app state from ledger: height %d -> %d",
 					app.latestHeight, state.LastBlockHeight)
@@ -209,9 +237,11 @@ func (app *ValidatorApp) Info(ctx context.Context, req *abcitypes.RequestInfo) (
 		app.latestHeight, app.lastCommitHash[:min(8, len(app.lastCommitHash))])
 
 	return &abcitypes.ResponseInfo{
-		Data:             "Certen Validator Consensus Application",
-		Version:          "1.0.0",
-		AppVersion:       1,
+		Data:    "Certen Validator Consensus Application",
+		Version: "1.0.0",
+		// Report the execution rules this binary implements rather than a
+		// hardcoded constant, so "what rules does this node run" has one answer.
+		AppVersion:       CurrentExecutionRulesVersion,
 		LastBlockHeight:  app.latestHeight,
 		LastBlockAppHash: app.lastCommitHash,
 	}, nil
@@ -535,6 +565,9 @@ func (app *ValidatorApp) Commit(ctx context.Context, req *abcitypes.RequestCommi
 	if err := app.ledgerStore.SaveABCIState(&ledger.ABCIState{
 		LastBlockHeight:  app.latestHeight,
 		LastBlockAppHash: appHash,
+		// Stamp the rules that produced this hash, so a future binary can tell
+		// whether it is able to replay this state at all.
+		ExecutionRulesVersion: CurrentExecutionRulesVersion,
 	}); err != nil {
 		app.logger.Printf("❌ Failed to persist ABCI state: %v", err)
 	}

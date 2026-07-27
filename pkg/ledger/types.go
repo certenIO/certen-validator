@@ -131,6 +131,18 @@ type SystemLedgerQueryParams struct {
 type ABCIState struct {
 	LastBlockHeight  int64  `json:"lastBlockHeight"`
 	LastBlockAppHash []byte `json:"lastBlockAppHash"`
+
+	// ExecutionRulesVersion records WHICH rules produced the app hash above.
+	//
+	// The app hash depends on which transactions were accepted, so any change to
+	// accept/reject semantics changes it. Replaying history under different
+	// rules than committed it yields a different hash and CometBFT panics at
+	// handshake before the node can serve — with no self-recovery. Persisting
+	// the version lets a node detect that at startup and say so, instead of
+	// dying on a hash comparison that names nothing.
+	//
+	// Zero means "written before this field existed"; treat as adopt-current.
+	ExecutionRulesVersion uint64 `json:"executionRulesVersion,omitempty"`
 }
 
 // ====== Anchor Targets Configuration ======
