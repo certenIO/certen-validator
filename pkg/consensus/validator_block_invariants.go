@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/certen/independant-validator/pkg/commitment"
+	"github.com/certen/independant-validator/pkg/entitlement"
 )
 
 // VerifyValidatorBlockInvariants verifies that a ValidatorBlock satisfies the
@@ -230,6 +231,42 @@ func VerifyValidatorBlockInvariants(vb *ValidatorBlock) error {
 	}
 	if vb.AccumulateAnchorReference.BlockHeight == 0 {
 		add("accumulate_anchor_reference.block_height must be > 0")
+	}
+
+	// PRINCIPAL BINDING.
+	//
+	// The entitlement gate keys on accumulate_anchor_reference.account_url — it
+	// decides whether CERTEN spends on this intent. Left unconstrained, that
+	// field is a free-form claim: a proposer could name a genuinely entitled
+	// account while the governance proof describes a different, unentitled
+	// submitter, attach that account's (public, unauthenticated) evidence, and
+	// the gate would be satisfied. The result is CERTEN paying gas for work it
+	// was never owed.
+	//
+	// Requiring agreement with governance_proof.organization_adi binds the
+	// principal into ComputeBundleID(gov, cc) — which is recomputed and compared
+	// above, and whose bundle id feeds the app hash. The claim can no longer be
+	// varied independently of the proof it is supposed to describe.
+	//
+	// This does NOT prove the principal is the true on-chain submitter. That
+	// requires verifying the lite-client proof carried in the block, which is
+	// not yet checked here. What it does is remove the trivial substitution and
+	// force any forgery to be internally coherent across the whole block.
+	//
+	// SameIDENTITY, not SameADI. An honest block carries the bare ADI in the
+	// governance proof and the DATA ACCOUNT in the anchor reference — verified
+	// against production, where organization_adi is acc://carp-seller-91503.acme
+	// and account_url is acc://carp-seller-91503.acme/data. Demanding string
+	// equality would refuse every legitimate block; demanding nothing would let
+	// a proposer name an entitled stranger. The identity root is the property
+	// that must agree.
+	if gov.OrganizationADI != "" && vb.AccumulateAnchorReference.AccountURL != "" {
+		if !entitlement.SameIdentity(vb.AccumulateAnchorReference.AccountURL, gov.OrganizationADI) {
+			add(fmt.Sprintf(
+				"accumulate_anchor_reference.account_url (%s) must be the same account as "+
+					"governance_proof.organization_adi (%s); the entitlement gate keys on the former",
+				vb.AccumulateAnchorReference.AccountURL, gov.OrganizationADI))
+		}
 	}
 
 	// ExternalChainResult shape validation for post-execution

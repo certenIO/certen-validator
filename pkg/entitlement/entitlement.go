@@ -262,7 +262,7 @@ func Verify(ev *Evidence, principal string, nowUnix int64, keys KeySet) error {
 	// 3. The leaf must be the principal's. Compared case-insensitively on the
 	// normalized URL because Accumulate URLs are case-insensitive, and a
 	// case-only mismatch must not be exploitable in either direction.
-	if !sameADI(ev.Leaf.ADIURL, principal) {
+	if !SameADI(ev.Leaf.ADIURL, principal) {
 		return &VerifyError{Reason: ReasonPrincipalMatch, Detail: fmt.Sprintf(
 			"evidence is for %q but the intent principal is %q", ev.Leaf.ADIURL, principal)}
 	}
@@ -281,13 +281,19 @@ func Verify(ev *Evidence, principal string, nowUnix int64, keys KeySet) error {
 	return nil
 }
 
-// sameADI compares two Accumulate account URLs for identity.
+// SameADI compares two Accumulate account URLs for identity.
+//
+// Exported because the consensus layer must apply the IDENTICAL rule when it
+// checks that a block's declared principal agrees with its governance proof. Two
+// normalizations that disagreed would be a bypass in their own right: a block
+// the invariant considers consistent but the gate considers a different account,
+// or the reverse.
 //
 // Normalizes case, surrounding whitespace and a trailing slash. Does NOT strip
 // path components: acc://foo.acme/data and acc://foo.acme are different
 // accounts, and treating them as one would let an entitlement for a data
 // account authorize spending for the identity, or vice versa.
-func sameADI(a, b string) bool {
+func SameADI(a, b string) bool {
 	norm := func(s string) string {
 		s = strings.ToLower(strings.TrimSpace(s))
 		return strings.TrimSuffix(s, "/")
@@ -402,7 +408,7 @@ func (s *Set) BuildProof(adiURL string) ([]ProofStep, Leaf, bool) {
 	s.Normalize()
 	idx := -1
 	for i, l := range s.Leaves {
-		if sameADI(l.ADIURL, adiURL) {
+		if SameADI(l.ADIURL, adiURL) {
 			idx = i
 			break
 		}
@@ -447,9 +453,47 @@ func (s *Set) BuildProof(adiURL string) ([]ProofStep, Leaf, bool) {
 // Lookup returns an account's leaf.
 func (s *Set) Lookup(adiURL string) (Leaf, bool) {
 	for _, l := range s.Leaves {
-		if sameADI(l.ADIURL, adiURL) {
+		if SameADI(l.ADIURL, adiURL) {
 			return l, true
 		}
 	}
 	return Leaf{}, false
+}
+
+// SameIdentity reports whether two Accumulate URLs belong to the same ADI,
+// ignoring any sub-account path.
+//
+// acc://acme.acme and acc://acme.acme/data are the same IDENTITY but different
+// ACCOUNTS. Both distinctions matter, in different places:
+//
+//   - Entitlement is per ACCOUNT: the epoch publishes data-account URLs, and
+//     SameADI is used there, because an entitlement for one account must not
+//     authorize another.
+//   - Principal binding is per IDENTITY: a ValidatorBlock legitimately carries
+//     the bare ADI in its governance proof and the data account in its anchor
+//     reference. Requiring those to be string-equal would reject every honest
+//     block, while requiring nothing would let a proposer name an entitled
+//     stranger.
+//
+// Verified against production: governance_proof.organization_adi is
+// `acc://carp-seller-91503.acme` while accumulate_anchor_reference.account_url
+// is `acc://carp-seller-91503.acme/data`.
+func SameIdentity(a, b string) bool {
+	ia, ib := identityOf(a), identityOf(b)
+	return ia != "" && ia == ib
+}
+
+// identityOf strips any sub-account path, leaving the bare ADI.
+func identityOf(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	s = strings.TrimSuffix(s, "/")
+	const scheme = "acc://"
+	rest := strings.TrimPrefix(s, scheme)
+	if i := strings.IndexByte(rest, '/'); i >= 0 {
+		rest = rest[:i]
+	}
+	if rest == "" {
+		return ""
+	}
+	return scheme + rest
 }
