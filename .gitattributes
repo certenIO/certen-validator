@@ -1,0 +1,8 @@
+# Go sources are stored and checked out with LF on every platform.
+#
+# Without this, core.autocrlf=true on Windows checks out CRLF while gofmt
+# writes LF, so every formatted file looks modified and line endings leak
+# into diffs. Pinning eol here removes that whole class of churn.
+*.go text eol=lf
+go.mod text eol=lf
+go.sum text eol=lf
