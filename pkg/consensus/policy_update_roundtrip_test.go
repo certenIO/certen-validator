@@ -1,11 +1,15 @@
 package consensus
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"testing"
+	"time"
+
+	abcitypes "github.com/cometbft/cometbft/abci/types"
 
 	"github.com/certen/independant-validator/pkg/ledger"
 )
@@ -160,4 +164,55 @@ func mustDecode(t *testing.T, b []byte) *PolicyUpdateTx {
 		t.Fatal("failed to decode a policy update")
 	}
 	return tx
+}
+
+// CheckTx must let a policy update through.
+//
+// It did not, and the omission made the entire governance mechanism
+// unreachable: CheckTx parsed the update as a ValidatorBlock, it failed all 13
+// structural invariants, and it was refused before entering the mempool — so
+// FinalizeBlock, which has always handled updates correctly, never saw one. The
+// rule could not be changed at all.
+func TestCheckTxAcceptsAPolicyUpdate(t *testing.T) {
+	adminPub, adminPriv, _ := ed25519.GenerateKey(rand.Reader)
+	epochPub, _, _ := ed25519.GenerateKey(rand.Reader)
+
+	tx := &PolicyUpdateTx{
+		Kind: PolicyUpdateKind, Mode: string(EntitlementEnforce),
+		Keys:             map[string]string{"entitlement-v1": hex.EncodeToString(epochPub)},
+		ActivationHeight: 5000, Version: 2,
+	}
+	tx.Signatures = []PolicySignature{{
+		KeyID: "ops-1", Signature: hex.EncodeToString(ed25519.Sign(adminPriv, tx.SigningBytes())),
+	}}
+	_ = adminPub
+
+	wire, err := json.Marshal(tx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	app := newGateTestApp(EntitlementConfig{Mode: EntitlementObserve}, nil, time.Unix(gateNow, 0).UTC())
+	resp, err := app.CheckTx(context.Background(), &abcitypes.RequestCheckTx{Tx: wire})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Code != 0 {
+		t.Fatalf("CheckTx refused a policy update (code %d): %s\n"+
+			"The update can never reach FinalizeBlock, so the rule cannot be changed.",
+			resp.Code, resp.Log)
+	}
+}
+
+// A malformed ValidatorBlock must still be refused by CheckTx — the new branch
+// must not become a way to smuggle anything past the mempool filter.
+func TestCheckTxStillRefusesAMalformedValidatorBlock(t *testing.T) {
+	app := newGateTestApp(EntitlementConfig{Mode: EntitlementObserve}, nil, time.Unix(gateNow, 0).UTC())
+	resp, err := app.CheckTx(context.Background(), &abcitypes.RequestCheckTx{Tx: []byte(`{"validator_id":""}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Code == 0 {
+		t.Fatal("CheckTx accepted a structurally invalid ValidatorBlock")
+	}
 }

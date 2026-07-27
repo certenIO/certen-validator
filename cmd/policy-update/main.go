@@ -279,8 +279,28 @@ func submit(args []string) error {
 	out, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 
 	fmt.Println(string(out))
-	if bytes.Contains(out, []byte(`"code":5`)) {
-		return fmt.Errorf("the chain rejected this update; the log above says why")
+
+	// ANY non-zero code is a rejection. Matching only one specific code once
+	// reported "accepted" for a transaction the chain had refused outright,
+	// which is the worst possible lie for this tool to tell.
+	var rpcResp struct {
+		Result struct {
+			Code uint32 `json:"code"`
+			Log  string `json:"log"`
+		} `json:"result"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(out, &rpcResp); err != nil {
+		return fmt.Errorf("could not read the node's reply: %w", err)
+	}
+	if rpcResp.Error != nil {
+		return fmt.Errorf("the node returned an RPC error: %s", rpcResp.Error.Message)
+	}
+	if rpcResp.Result.Code != 0 {
+		return fmt.Errorf("the chain REJECTED this update (code %d): %s",
+			rpcResp.Result.Code, rpcResp.Result.Log)
 	}
 	fmt.Fprintln(os.Stderr, "\nAccepted into the mempool. It is SCHEDULED, not active: the rule "+
 		"changes at the activation height, on every node at once.")

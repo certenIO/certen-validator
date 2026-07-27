@@ -259,6 +259,20 @@ func (app *ValidatorApp) Info(ctx context.Context, req *abcitypes.RequestInfo) (
 
 // CheckTx validates incoming ValidatorBlock transactions
 func (app *ValidatorApp) CheckTx(ctx context.Context, req *abcitypes.RequestCheckTx) (*abcitypes.ResponseCheckTx, error) {
+	// A policy update is not a ValidatorBlock. Without this branch it is parsed
+	// as one, fails every structural invariant, and is refused before it can
+	// enter the mempool — so it never reaches FinalizeBlock, and the entitlement
+	// rule can never be changed at all. FinalizeBlock has always had the
+	// equivalent branch; this is the half that was missing.
+	//
+	// Only shape is checked here. Signatures, quorum, version and activation
+	// height are verified in FinalizeBlock, which is the authority: CheckTx is a
+	// mempool filter, and a lenient filter costs a wasted block, while a strict
+	// one costs the ability to govern the chain.
+	if _, ok := DecodePolicyUpdate(req.Tx); ok {
+		return &abcitypes.ResponseCheckTx{Code: 0, GasWanted: 1, GasUsed: 1}, nil
+	}
+
 	// Parse ValidatorBlock from transaction bytes
 	var vb ValidatorBlock
 	if err := json.Unmarshal(req.Tx, &vb); err != nil {
