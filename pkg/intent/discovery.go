@@ -95,6 +95,10 @@ const (
 	IntentStatusInProgress                     // Currently being processed
 	IntentStatusCompleted                      // Successfully processed
 	IntentStatusFailed                         // Processing failed, can be retried
+	// IntentStatusFailedPermanent marks a failure no retry can fix — a
+	// structural defect in bytes that are already final on Accumulate.
+	// Terminal: never reprocessed.
+	IntentStatusFailedPermanent
 )
 
 func (s IntentStatus) String() string {
@@ -107,6 +111,8 @@ func (s IntentStatus) String() string {
 		return "completed"
 	case IntentStatusFailed:
 		return "failed"
+	case IntentStatusFailedPermanent:
+		return "failed_permanent"
 	default:
 		return "unknown"
 	}
@@ -681,8 +687,9 @@ func (id *IntentDiscovery) processBlock(job *BlockProcessJob, workerID string) e
 		// Process the intent through consensus
 		if err := id.processIntent(intent, job.BlockHeight); err != nil {
 			id.logger.Printf("❌ Failed to process intent %s: %v", intent.IntentID, err)
-			// E.4 remediation: Phase 2 (failure) - Mark as failed (allows re-acquire on retry)
-			id.markFailed(intent.IntentID)
+			// E.4 remediation: Phase 2 (failure) - Mark as failed (allows re-acquire on retry),
+			// unless the failure is structural and therefore final.
+			id.markFailedClassified(intent.IntentID, err)
 
 			// on_demand consensus-bound proof not yet available (benign DN-anchoring latency or a
 			// transient DN/BVN CometBFT RPC blip): requeue off the block-worker critical path
@@ -1170,7 +1177,7 @@ func (id *IntentDiscovery) handleRetryJob(job *intentRetryJob) {
 		return
 	}
 
-	id.markFailed(job.intent.IntentID)
+	id.markFailedClassified(job.intent.IntentID, err)
 	if errors.Is(err, errChainedProofUnavailable) && job.attempts < maxAttempts {
 		id.logger.Printf("⏳ [RETRY] on_demand intent %s proof still unavailable (attempt %d/%d): %v",
 			job.intent.IntentID, job.attempts, maxAttempts, err)
@@ -1985,10 +1992,14 @@ func (id *IntentDiscovery) markInProgress(intentID string) bool {
 
 	status, exists := id.intentStatus[intentID]
 	if exists {
-		// Only allow processing if not already in_progress or completed
-		// Failed intents CAN be retried
-		if status == IntentStatusInProgress || status == IntentStatusCompleted {
-			return false // Already being processed or completed
+		// Only allow processing if not already in_progress or completed.
+		// Failed intents CAN be retried — EXCEPT permanently invalid ones,
+		// which no retry can fix and which would otherwise be rediscovered and
+		// re-refused on every poll for the life of the process.
+		if status == IntentStatusInProgress ||
+			status == IntentStatusCompleted ||
+			status == IntentStatusFailedPermanent {
+			return false // Already being processed, completed, or unfixable
 		}
 	}
 
@@ -2007,10 +2018,32 @@ func (id *IntentDiscovery) markCompleted(intentID string) {
 
 // markFailed marks an intent as failed (can be retried later)
 // E.4 remediation: Two-phase marking - failure state allows retry
+//
+// A permanently invalid intent is recorded as terminal instead, so it is not
+// rediscovered and re-refused on every subsequent poll.
 func (id *IntentDiscovery) markFailed(intentID string) {
 	id.mu.Lock()
 	defer id.mu.Unlock()
 	id.intentStatus[intentID] = IntentStatusFailed
+}
+
+// markFailedTerminal records a failure that no retry can fix.
+func (id *IntentDiscovery) markFailedTerminal(intentID string) {
+	id.mu.Lock()
+	defer id.mu.Unlock()
+	id.intentStatus[intentID] = IntentStatusFailedPermanent
+}
+
+// markFailedClassified routes an intent to the retryable or terminal failure
+// state based on the error. Classification lives here rather than at each call
+// site so a new terminal condition only has to be wrapped, not wired.
+func (id *IntentDiscovery) markFailedClassified(intentID string, err error) {
+	if errors.Is(err, consensus.ErrIntentPermanentlyInvalid) {
+		id.logger.Printf("⛔ Intent %s is permanently invalid; will not be retried: %v", intentID, err)
+		id.markFailedTerminal(intentID)
+		return
+	}
+	id.markFailed(intentID)
 }
 
 // getIntentStatus returns the current status of an intent

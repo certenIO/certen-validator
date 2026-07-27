@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/certen/independant-validator/pkg/entitlement"
 	"log"
@@ -42,6 +43,19 @@ import (
 	"github.com/certen/independant-validator/pkg/proof"
 	"github.com/certen/independant-validator/pkg/verification"
 )
+
+// ErrIntentPermanentlyInvalid marks a failure that no later attempt can fix.
+//
+// An intent's bytes are final on Accumulate before CERTEN ever sees them, so a
+// structural defect is a property of the record, not of the moment it was read.
+// Retrying is not merely useless, it is harmful: discovery rediscovers the
+// intent every poll and the whole fleet re-refuses it forever, which is real
+// CPU spent to reach the same answer.
+//
+// Wrap ONLY genuinely permanent conditions. A transient failure marked
+// permanent silently drops a customer's work, which is far worse than a wasted
+// retry — so when in doubt, leave it retryable.
+var ErrIntentPermanentlyInvalid = errors.New("intent is permanently invalid")
 
 // Version information - can be set at build time via ldflags:
 // go build -ldflags "-X github.com/certen/independant-validator/pkg/consensus.Version=v1.0.0"
@@ -731,7 +745,11 @@ func (bv *BFTValidator) ExecuteCanonicalIntentWithBFTConsensus(
 	}
 
 	if !result.Success {
-		return fmt.Errorf("canonical BFT execution unsuccessful: %v", result.Error)
+		// %w, not %v: callers classify retryable vs permanent failure with
+		// errors.Is, and %v flattens the chain to a string that nothing can
+		// match against. A permanent failure reported as an opaque string gets
+		// retried forever.
+		return fmt.Errorf("canonical BFT execution unsuccessful: %w", result.Error)
 	}
 
 	bv.logger.Printf("✅ [BFT-CANONICAL] Canonical intent executed successfully: %s", certenIntent.IntentID)
@@ -1044,7 +1062,13 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 			return &ExecutionTaskResult{
 				Success:    false,
 				ExecutorID: bv.validatorID,
-				Error:      fmt.Errorf("intent %s failed execution validation: %w", certenIntent.IntentID, err),
+				// PERMANENT. The intent's bytes are already final on
+				// Accumulate, so a structural defect — a missing created_at, a
+				// malformed field, an expiry that already passed — cannot
+				// become valid on a later pass. Marking it retryable makes the
+				// fleet rediscover and re-refuse it every poll, forever.
+				Error: fmt.Errorf("intent %s failed execution validation: %w: %w",
+					certenIntent.IntentID, ErrIntentPermanentlyInvalid, err),
 			}, nil
 		}
 	}
