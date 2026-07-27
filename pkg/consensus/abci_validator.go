@@ -239,16 +239,22 @@ func (app *ValidatorApp) CheckTx(ctx context.Context, req *abcitypes.RequestChec
 	// Entitlement gate — MEMPOOL FILTER, not the authority.
 	//
 	// CheckTx runs before a block exists, so there is no ABCI block time to
-	// judge freshness against. The last committed block time is used instead:
-	// close enough to reject obvious garbage early and save the fleet a gossip
-	// round, and NOT consensus, so a disagreement here is harmless. The
-	// authoritative, deterministic check is in processValidatorTransaction.
-	app.mu.RLock()
-	approxNow := app.currentBlockTime
-	app.mu.RUnlock()
-	if approxNow.IsZero() {
-		approxNow = time.Now().UTC()
-	}
+	// judge freshness against. Use the WALL CLOCK. CheckTx is explicitly not
+	// consensus — a disagreement here costs a gossip round, not a fork — so it
+	// is free to read a non-deterministic clock, and it is the only clock that
+	// tracks the publisher's issued_at.
+	//
+	// This used to read the last committed block time, which DEADLOCKS an idle
+	// chain (observed in production 2026-07-27, intent a45ee049): block time
+	// only advances when a ValidatorBlock commits, so after ~5 minutes of quiet
+	// every freshly published epoch looks future-dated, CheckTx refuses it as
+	// ENTITLEMENT_STALE, and the refused block is precisely the one that would
+	// have advanced the clock. Nothing recovers on its own.
+	//
+	// The authoritative, deterministic check stays in
+	// processValidatorTransaction, which judges against req.Time — the time of
+	// the block BEING finalized, which is current by construction.
+	approxNow := time.Now().UTC()
 	if reason, err := VerifyEntitlement(&vb, PrincipalOf(&vb), approxNow.Unix(), app.entitlement); err != nil {
 		app.logger.Printf("🚫 [ENTITLEMENT] CheckTx rejecting bundle=%s principal=%q reason=%s",
 			vb.BundleID, PrincipalOf(&vb), reason)
