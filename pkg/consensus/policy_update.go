@@ -42,10 +42,26 @@ import (
 // versioned string so a future format cannot be mistaken for this one.
 const PolicyUpdateKind = "certen.policy.update/v1"
 
-// MinActivationDelay is how far ahead an update must activate. Roughly a few
-// minutes of blocks: long enough that every honest node has committed the
-// change, short enough to be operationally usable.
-const MinActivationDelay = 200
+// MinActivationDelay is the FLOOR on how far ahead an update may activate.
+//
+// Correctness does not depend on its size. Activation is derived from committed
+// state, so a node executing block H has already executed any update that
+// committed before H — true even at a delay of one. What the delay buys is
+// OPERATIONAL: a window in which a scheduled change is visible and can be
+// superseded before it takes effect.
+//
+// The value is 10, not the 200 first chosen by analogy with Ethereum fork
+// blocks and the Cosmos upgrade module. Those chains produce blocks every few
+// seconds, so 200 blocks is minutes. THIS chain runs with empty-block
+// production disabled and advances only on real ValidatorBlock transactions —
+// it reached height 7 in a full day of operation. At that rate 200 blocks is
+// weeks, or never if traffic stops, and an update scheduled that far out would
+// simply never activate.
+//
+// A block count is a poor proxy for elapsed time on an event-driven chain.
+// Treat this as a floor and choose an activation height with real headroom for
+// the traffic the chain is actually seeing.
+const MinActivationDelay = 10
 
 // PolicySignature is one operator's endorsement of an update.
 type PolicySignature struct {
