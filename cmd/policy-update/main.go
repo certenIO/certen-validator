@@ -184,8 +184,10 @@ func propose(args []string) error {
 	}}
 
 	fmt.Fprintf(os.Stderr,
-		"Activation must be at least %d blocks ahead of the block that carries this "+
-			"update, or validators will refuse it.\n", consensus.MinActivationDelay)
+		"Activates at unix %d (%s), %ds from now. Validators refuse anything nearer than "+
+			"%ds of BLOCK time — which advances only when the chain produces blocks.\n",
+		activation, time.Unix(activation, 0).UTC().Format(time.RFC3339),
+		activation-time.Now().UTC().Unix(), consensus.MinActivationDelay)
 	return writeTx(tx, *out)
 }
 
