@@ -8,15 +8,16 @@
 // you MUST update both sides and bump the version suffix in the domain tag.
 //
 // Domain tags in use:
-//   "certen:bls:v1:pre"     — pre-execution BLS messageHash (Phase 3/4 sign,
-//                              Phase 6 EVM-side ZK verify)
-//   "certen:bls:v1:post"    — post-execution BLS messageHash (Phase 8 sign)
-//   "certen:bundleid:v1.1"  — V6.1 bundleId (anchorId) derivation
-//   "certen:govroot:v1.1"   — A+++ Accumulate governance root
-//   "certen:g0:v1"          — G0 canonical hash
-//   "certen:g1:v1"          — G1 canonical hash
-//   "certen:g2:v1"          — G2 canonical hash
-//   "certen:l4:v1"          — L4 consensus proof canonical hash
+//
+//	"certen:bls:v1:pre"     — pre-execution BLS messageHash (Phase 3/4 sign,
+//	                           Phase 6 EVM-side ZK verify)
+//	"certen:bls:v1:post"    — post-execution BLS messageHash (Phase 8 sign)
+//	"certen:bundleid:v1.1"  — V6.1 bundleId (anchorId) derivation
+//	"certen:govroot:v1.1"   — A+++ Accumulate governance root
+//	"certen:g0:v1"          — G0 canonical hash
+//	"certen:g1:v1"          — G1 canonical hash
+//	"certen:g2:v1"          — G2 canonical hash
+//	"certen:l4:v1"          — L4 consensus proof canonical hash
 //
 // Version suffixes are intentional — bumping any of them invalidates every
 // existing aggregate signature derived under the old domain, which is the
@@ -44,14 +45,15 @@ import (
 // Validators sign this; the V6.1 anchor recomputes it during verification.
 //
 // Wire format (abi.encode == 32-byte slots, no length-or-type ambiguity):
-//   keccak256(abi.encode(
-//     bytes32("certen:bls:v1:pre"),   // domain — different from Phase 8 ":post"
-//     uint256(chainId),                // cross-chain replay defeat
-//     anchorId,                        // bytes32 — V6.1 commitment+opID bundleId
-//     executionCommitment,             // bytes32 — explicit value-moving binding
-//     operationID,                     // bytes32 — 4-blob intent hash on Accumulate
-//     validatorSetRoot                 // bytes32 — quorum-snapshot binding
-//   ))
+//
+//	keccak256(abi.encode(
+//	  bytes32("certen:bls:v1:pre"),   // domain — different from Phase 8 ":post"
+//	  uint256(chainId),                // cross-chain replay defeat
+//	  anchorId,                        // bytes32 — V6.1 commitment+opID bundleId
+//	  executionCommitment,             // bytes32 — explicit value-moving binding
+//	  operationID,                     // bytes32 — 4-blob intent hash on Accumulate
+//	  validatorSetRoot                 // bytes32 — quorum-snapshot binding
+//	))
 //
 // Total preimage: 192 bytes (6 × 32).
 func ComputeEvmMessageHashV6_1_Pre(
@@ -122,14 +124,15 @@ type V6_1Commitments struct {
 // uses the v1.1 domain tag.
 //
 // Wire format:
-//   keccak256(abi.encodePacked(
-//     "certen:bundleid:v1.1",
-//     uint256(chainId),
-//     bytes32(adiURLHash),
-//     bytes32(op), bytes32(cc), bytes32(gov), bytes32(exec),
-//     bytes32(operationID),
-//     uint256(accumulateBlockHeight)
-//   ))
+//
+//	keccak256(abi.encodePacked(
+//	  "certen:bundleid:v1.1",
+//	  uint256(chainId),
+//	  bytes32(adiURLHash),
+//	  bytes32(op), bytes32(cc), bytes32(gov), bytes32(exec),
+//	  bytes32(operationID),
+//	  uint256(accumulateBlockHeight)
+//	))
 func DeriveV6_1BundleID(
 	chainID int64,
 	adiURLHash [32]byte,
@@ -183,6 +186,7 @@ type V6_1PreExecBundleInputs struct {
 // pre-execution binding. Both:
 //   - pkg/consensus/bft_integration.go (BFT signing path)
 //   - pkg/execution/ethereum_contracts.go (EVM submission path)
+//
 // call this with primitives derived from the same (intent, proof). Because
 // the derivation is deterministic and the function is pure, validator and
 // submitter compute byte-identical anchorId + messageHash.
@@ -223,16 +227,16 @@ func BuildV6_1PreExecBundle(in V6_1PreExecBundleInputs) (anchorId, govRoot, mess
 // semantic interpretation. Both sides must agree on which fields were
 // populated, which is enforced by the canonicalization helpers in this file.
 type AccumulateGovRootInputs struct {
-	L1AccountHash       [32]byte // L1 — Accumulate account state hash
-	L2BPTRoot           [32]byte // L2 — Binary Patricia Trie root
-	L3BlockHash         [32]byte // L3 — Accumulate block hash containing TX
-	L4ConsensusProofH   [32]byte // L4 — hash of consensus proof bytes
-	G0CanonicalHash     [32]byte // G0 — canonical hash of G0Result
-	G1CanonicalHash     [32]byte // G1 — canonical hash of G1Result
-	G2CanonicalHash     [32]byte // G2 — canonical hash of G2Result
-	KeypageURLHash      [32]byte // keccak256(keypage URL string)
-	KeybookURLHash      [32]byte // keccak256(keybook URL string)
-	OperationID         [32]byte // intent operationID (4-blob hash)
+	L1AccountHash     [32]byte // L1 — Accumulate account state hash
+	L2BPTRoot         [32]byte // L2 — Binary Patricia Trie root
+	L3BlockHash       [32]byte // L3 — Accumulate block hash containing TX
+	L4ConsensusProofH [32]byte // L4 — hash of consensus proof bytes
+	G0CanonicalHash   [32]byte // G0 — canonical hash of G0Result
+	G1CanonicalHash   [32]byte // G1 — canonical hash of G1Result
+	G2CanonicalHash   [32]byte // G2 — canonical hash of G2Result
+	KeypageURLHash    [32]byte // keccak256(keypage URL string)
+	KeybookURLHash    [32]byte // keccak256(keybook URL string)
+	OperationID       [32]byte // intent operationID (4-blob hash)
 }
 
 // ComputeAccumulateGovRoot is the A+++ 10-field govRoot. Binds every piece
@@ -241,19 +245,21 @@ type AccumulateGovRootInputs struct {
 // BLS aggregate via anchorId.
 //
 // Wire format:
-//   keccak256(
-//     bytes32("certen:govroot:v1.1")  ||  // domain
-//     L1AccountHash                  ||  // 32B
-//     L2BPTRoot                      ||  // 32B
-//     L3BlockHash                    ||  // 32B
-//     L4ConsensusProofH              ||  // 32B
-//     G0CanonicalHash                ||  // 32B
-//     G1CanonicalHash                ||  // 32B
-//     G2CanonicalHash                ||  // 32B
-//     KeypageURLHash                 ||  // 32B
-//     KeybookURLHash                 ||  // 32B
-//     OperationID                        // 32B
-//   )
+//
+//	keccak256(
+//	  bytes32("certen:govroot:v1.1")  ||  // domain
+//	  L1AccountHash                  ||  // 32B
+//	  L2BPTRoot                      ||  // 32B
+//	  L3BlockHash                    ||  // 32B
+//	  L4ConsensusProofH              ||  // 32B
+//	  G0CanonicalHash                ||  // 32B
+//	  G1CanonicalHash                ||  // 32B
+//	  G2CanonicalHash                ||  // 32B
+//	  KeypageURLHash                 ||  // 32B
+//	  KeybookURLHash                 ||  // 32B
+//	  OperationID                        // 32B
+//	)
+//
 // Total preimage: 32 (domain) + 10 × 32 (fields) = 352 bytes.
 func ComputeAccumulateGovRoot(inp AccumulateGovRootInputs) [32]byte {
 	var domain [32]byte
@@ -366,12 +372,13 @@ func HashURLString(url string) [32]byte {
 // sorted ascending by uint160(addr); use SortValidatorsForSetRoot if needed.
 //
 // Wire format:
-//   keccak256(abi.encode(
-//     address[] sortedAddresses,
-//     uint256[] sortedVotingPowers,
-//     uint256(thresholdNumerator),
-//     uint256(thresholdDenominator)
-//   ))
+//
+//	keccak256(abi.encode(
+//	  address[] sortedAddresses,
+//	  uint256[] sortedVotingPowers,
+//	  uint256(thresholdNumerator),
+//	  uint256(thresholdDenominator)
+//	))
 func ComputeValidatorSetRootV6_1(
 	sortedAddrs []common.Address,
 	sortedVotingPowers []*big.Int,

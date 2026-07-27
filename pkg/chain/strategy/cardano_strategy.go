@@ -52,14 +52,14 @@ type CardanoStrategyConfig struct {
 // =============================================================================
 
 type blockfrostTx struct {
-	Hash        string `json:"hash"`
-	Block       string `json:"block"`
-	BlockHeight uint64 `json:"block_height"`
-	BlockTime   int64  `json:"block_time"` // POSIX seconds
-	Slot        uint64 `json:"slot"`
-	Index       int    `json:"index"`
-	Fees        string `json:"fees"`
-	ValidContract bool `json:"valid_contract"`
+	Hash          string `json:"hash"`
+	Block         string `json:"block"`
+	BlockHeight   uint64 `json:"block_height"`
+	BlockTime     int64  `json:"block_time"` // POSIX seconds
+	Slot          uint64 `json:"slot"`
+	Index         int    `json:"index"`
+	Fees          string `json:"fees"`
+	ValidContract bool   `json:"valid_contract"`
 }
 
 type blockfrostBlockLatest struct {

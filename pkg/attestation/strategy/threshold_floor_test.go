@@ -9,9 +9,9 @@ func TestIsThresholdMet_MinValidatorsFloor(t *testing.T) {
 	c := DefaultThresholdConfig() // 2/3, MinValidators=3
 
 	cases := []struct {
-		name              string
-		achieved, total   int64
-		want              bool
+		name            string
+		achieved, total int64
+		want            bool
 	}{
 		{"single-node self-attest is refused", 1, 1, false},
 		{"two-node set is refused (below floor)", 2, 2, false},

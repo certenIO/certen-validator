@@ -11,20 +11,20 @@ import (
 // Config holds all configuration for the Certen validator service
 type Config struct {
 	// Network Configuration
-	AccumulateURL      string
-	AccumulateCometDN  string // CometBFT endpoint for DN (e.g., http://127.0.0.1:26657)
+	AccumulateURL       string
+	AccumulateCometDN   string // CometBFT endpoint for DN (e.g., http://127.0.0.1:26657)
 	AccumulateCometBVN  string // CometBFT endpoint for BVN (e.g., http://127.0.0.1:26757) - legacy single BVN
 	AccumulateCometBVN0 string // CometBFT endpoint for BVN0
 	AccumulateCometBVN1 string // CometBFT endpoint for BVN1
 	AccumulateCometBVN2 string // CometBFT endpoint for BVN2
 	AccumulateCometBVN3 string // CometBFT endpoint for BVN3 (Kermit network)
-	EthereumURL        string
-	EthChainID         int64
+	EthereumURL         string
+	EthChainID          int64
 
 	// Server Configuration
-	ListenAddr   string
-	MetricsAddr  string
-	HealthAddr   string
+	ListenAddr  string
+	MetricsAddr string
+	HealthAddr  string
 
 	// Database Configuration (URL-based, legacy)
 	DatabaseURL         string
@@ -35,14 +35,14 @@ type Config struct {
 	DatabaseRequired    bool // If true, startup fails if database connection fails
 
 	// Database Configuration (individual fields for client.go)
-	DBHost           string
-	DBPort           int
-	DBUser           string
-	DBPassword       string
-	DBName           string
-	DBSSLMode        string
-	DBMaxOpenConns   int
-	DBMaxIdleConns   int
+	DBHost            string
+	DBPort            int
+	DBUser            string
+	DBPassword        string
+	DBName            string
+	DBSSLMode         string
+	DBMaxOpenConns    int
+	DBMaxIdleConns    int
 	DBConnMaxLifetime time.Duration
 
 	// Blockchain Configuration
@@ -118,15 +118,15 @@ type Config struct {
 func Load() (*Config, error) {
 	cfg := &Config{
 		// Network Configuration - REQUIRED, no defaults for production security
-		AccumulateURL:      getEnv("ACCUMULATE_URL", ""),
-		AccumulateCometDN:  getEnv("ACCUMULATE_COMET_DN", ""),  // DN CometBFT for L1-L3 proofs (optional, enables real proofs)
+		AccumulateURL:       getEnv("ACCUMULATE_URL", ""),
+		AccumulateCometDN:   getEnv("ACCUMULATE_COMET_DN", ""),   // DN CometBFT for L1-L3 proofs (optional, enables real proofs)
 		AccumulateCometBVN:  getEnv("ACCUMULATE_COMET_BVN", ""),  // BVN CometBFT for L1-L3 proofs (legacy single BVN)
 		AccumulateCometBVN0: getEnv("ACCUMULATE_COMET_BVN0", ""), // BVN0 CometBFT endpoint
 		AccumulateCometBVN1: getEnv("ACCUMULATE_COMET_BVN1", ""), // BVN1 CometBFT endpoint
 		AccumulateCometBVN2: getEnv("ACCUMULATE_COMET_BVN2", ""), // BVN2 CometBFT endpoint
 		AccumulateCometBVN3: getEnv("ACCUMULATE_COMET_BVN3", ""), // BVN3 CometBFT endpoint (Kermit)
-		EthereumURL:        getEnv("ETHEREUM_URL", ""),
-		EthChainID:         getEnvInt64("ETH_CHAIN_ID", 11155111),
+		EthereumURL:         getEnv("ETHEREUM_URL", ""),
+		EthChainID:          getEnvInt64("ETH_CHAIN_ID", 11155111),
 
 		// Server Configuration - safe defaults
 		ListenAddr:  getEnv("API_HOST", "0.0.0.0") + ":" + getEnv("API_PORT", "8080"),
@@ -137,7 +137,7 @@ func Load() (*Config, error) {
 		DatabaseURL:         getEnv("DATABASE_URL", ""),
 		DatabaseMaxConns:    getEnvInt("DATABASE_MAX_CONNS", 25),
 		DatabaseMinConns:    getEnvInt("DATABASE_MIN_CONNS", 5),
-		DatabaseMaxIdleTime: getEnvInt("DATABASE_MAX_IDLE_TIME", 300),  // 5 minutes
+		DatabaseMaxIdleTime: getEnvInt("DATABASE_MAX_IDLE_TIME", 300), // 5 minutes
 		DatabaseMaxLifetime: getEnvInt("DATABASE_MAX_LIFETIME", 3600), // 1 hour
 		DatabaseRequired:    getEnvBool("DATABASE_REQUIRED", false),   // If true, fail startup on DB error
 
@@ -157,8 +157,8 @@ func Load() (*Config, error) {
 		EthAccountAddress: getEnv("ETH_ACCOUNT_ADDRESS", ""),
 
 		// Ed25519 Key Configuration (E.5 remediation: Secure key management)
-		Ed25519KeyPath: getEnv("ED25519_KEY_PATH", ""),         // Optional: Custom path to Ed25519 key file
-		DataDir:        getEnv("DATA_DIR", "./data"),           // Base directory for data files
+		Ed25519KeyPath: getEnv("ED25519_KEY_PATH", ""), // Optional: Custom path to Ed25519 key file
+		DataDir:        getEnv("DATA_DIR", "./data"),   // Base directory for data files
 
 		// Contract Addresses
 		AnchorContractAddress:     getEnv("ANCHOR_CONTRACT_ADDRESS", ""),
@@ -323,7 +323,6 @@ func getEnvInt64(key string, defaultValue int64) int64 {
 	}
 	return defaultValue
 }
-
 
 func getEnvBool(key string, defaultValue bool) bool {
 	if value := os.Getenv(key); value != "" {

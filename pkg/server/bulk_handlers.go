@@ -86,31 +86,31 @@ func NewBulkHandlers(
 
 // ExportJob represents a bulk export job
 type ExportJob struct {
-	JobID          uuid.UUID              `json:"job_id"`
-	Status         string                 `json:"status"` // pending, processing, completed, failed
-	Format         string                 `json:"format"` // json_lines, csv, parquet
-	Request        *BulkExportRequest     `json:"request"`
-	TotalCount     int                    `json:"total_count"`
-	ProcessedCount int                    `json:"processed_count"`
-	FileSizeBytes  int64                  `json:"file_size_bytes"`
-	FileData       []byte                 `json:"-"` // Not serialized
-	Error          string                 `json:"error,omitempty"`
-	CreatedAt      time.Time              `json:"created_at"`
-	CompletedAt    *time.Time             `json:"completed_at,omitempty"`
-	ExpiresAt      time.Time              `json:"expires_at"`
+	JobID          uuid.UUID          `json:"job_id"`
+	Status         string             `json:"status"` // pending, processing, completed, failed
+	Format         string             `json:"format"` // json_lines, csv, parquet
+	Request        *BulkExportRequest `json:"request"`
+	TotalCount     int                `json:"total_count"`
+	ProcessedCount int                `json:"processed_count"`
+	FileSizeBytes  int64              `json:"file_size_bytes"`
+	FileData       []byte             `json:"-"` // Not serialized
+	Error          string             `json:"error,omitempty"`
+	CreatedAt      time.Time          `json:"created_at"`
+	CompletedAt    *time.Time         `json:"completed_at,omitempty"`
+	ExpiresAt      time.Time          `json:"expires_at"`
 }
 
 // BulkExportRequest represents a bulk export request
 type BulkExportRequest struct {
-	AccountURLs     []string               `json:"account_urls,omitempty"`
-	DateRange       *DateRange             `json:"date_range,omitempty"`
-	ProofTypes      []string               `json:"proof_types,omitempty"`
-	GovernanceLevels []string              `json:"governance_levels,omitempty"`
-	Status          []string               `json:"status,omitempty"`
-	Format          string                 `json:"format"` // json_lines, csv
-	IncludeArtifacts bool                  `json:"include_artifacts"`
-	IncludeAttestations bool               `json:"include_attestations"`
-	Limit           int                    `json:"limit,omitempty"`
+	AccountURLs         []string   `json:"account_urls,omitempty"`
+	DateRange           *DateRange `json:"date_range,omitempty"`
+	ProofTypes          []string   `json:"proof_types,omitempty"`
+	GovernanceLevels    []string   `json:"governance_levels,omitempty"`
+	Status              []string   `json:"status,omitempty"`
+	Format              string     `json:"format"` // json_lines, csv
+	IncludeArtifacts    bool       `json:"include_artifacts"`
+	IncludeAttestations bool       `json:"include_attestations"`
+	Limit               int        `json:"limit,omitempty"`
 }
 
 // DateRange represents a date range for filtering
@@ -309,21 +309,21 @@ type BulkVerifyRequest struct {
 
 // BulkVerifyResponse represents bulk verification results
 type BulkVerifyResponse struct {
-	Results     []ProofVerificationResult `json:"results"`
-	TotalCount  int                       `json:"total_count"`
-	ValidCount  int                       `json:"valid_count"`
-	InvalidCount int                      `json:"invalid_count"`
-	ErrorCount  int                       `json:"error_count"`
-	VerifiedAt  time.Time                 `json:"verified_at"`
+	Results      []ProofVerificationResult `json:"results"`
+	TotalCount   int                       `json:"total_count"`
+	ValidCount   int                       `json:"valid_count"`
+	InvalidCount int                       `json:"invalid_count"`
+	ErrorCount   int                       `json:"error_count"`
+	VerifiedAt   time.Time                 `json:"verified_at"`
 }
 
 // ProofVerificationResult represents a single proof verification result
 type ProofVerificationResult struct {
-	ProofID       string `json:"proof_id"`
-	Status        string `json:"status"` // valid, invalid, error
-	IntegrityValid bool  `json:"integrity_valid"`
-	QuorumMet     bool   `json:"quorum_met"`
-	ErrorMessage  string `json:"error_message,omitempty"`
+	ProofID        string `json:"proof_id"`
+	Status         string `json:"status"` // valid, invalid, error
+	IntegrityValid bool   `json:"integrity_valid"`
+	QuorumMet      bool   `json:"quorum_met"`
+	ErrorMessage   string `json:"error_message,omitempty"`
 }
 
 // HandleBulkVerify handles POST /api/v1/proofs/bulk/verify
@@ -420,28 +420,28 @@ func (h *BulkHandlers) HandleBulkVerify(w http.ResponseWriter, r *http.Request) 
 
 // ProofStatistics represents proof statistics
 type ProofStatistics struct {
-	TotalProofs         int64                  `json:"total_proofs"`
-	ProofsByStatus      map[string]int64       `json:"proofs_by_status"`
-	ProofsByType        map[string]int64       `json:"proofs_by_type"`
-	ProofsByGovLevel    map[string]int64       `json:"proofs_by_gov_level"`
-	AttestationStats    AttestationStatistics  `json:"attestation_stats"`
-	Last24HourStats     TimeWindowStats        `json:"last_24h"`
-	Last7DayStats       TimeWindowStats        `json:"last_7d"`
-	GeneratedAt         time.Time              `json:"generated_at"`
+	TotalProofs      int64                 `json:"total_proofs"`
+	ProofsByStatus   map[string]int64      `json:"proofs_by_status"`
+	ProofsByType     map[string]int64      `json:"proofs_by_type"`
+	ProofsByGovLevel map[string]int64      `json:"proofs_by_gov_level"`
+	AttestationStats AttestationStatistics `json:"attestation_stats"`
+	Last24HourStats  TimeWindowStats       `json:"last_24h"`
+	Last7DayStats    TimeWindowStats       `json:"last_7d"`
+	GeneratedAt      time.Time             `json:"generated_at"`
 }
 
 // AttestationStatistics represents attestation-related statistics
 type AttestationStatistics struct {
-	TotalAttestations   int64   `json:"total_attestations"`
-	ValidAttestations   int64   `json:"valid_attestations"`
-	QuorumReachedCount  int64   `json:"quorum_reached_count"`
-	AveragePerProof     float64 `json:"average_per_proof"`
+	TotalAttestations  int64   `json:"total_attestations"`
+	ValidAttestations  int64   `json:"valid_attestations"`
+	QuorumReachedCount int64   `json:"quorum_reached_count"`
+	AveragePerProof    float64 `json:"average_per_proof"`
 }
 
 // TimeWindowStats represents statistics for a time window
 type TimeWindowStats struct {
-	ProofsCreated    int64 `json:"proofs_created"`
-	ProofsVerified   int64 `json:"proofs_verified"`
+	ProofsCreated     int64 `json:"proofs_created"`
+	ProofsVerified    int64 `json:"proofs_verified"`
 	BundlesDownloaded int64 `json:"bundles_downloaded"`
 }
 
@@ -523,27 +523,27 @@ func (h *BulkHandlers) HandleGetProofStats(w http.ResponseWriter, r *http.Reques
 
 // SystemHealth represents system health status
 type SystemHealth struct {
-	Status           string                 `json:"status"` // healthy, degraded, unhealthy
-	ValidatorID      string                 `json:"validator_id"`
-	DatabaseStatus   string                 `json:"database_status"`
-	Services         map[string]ServiceStatus `json:"services"`
-	Metrics          SystemMetrics          `json:"metrics"`
-	LastCheckedAt    time.Time              `json:"last_checked_at"`
+	Status         string                   `json:"status"` // healthy, degraded, unhealthy
+	ValidatorID    string                   `json:"validator_id"`
+	DatabaseStatus string                   `json:"database_status"`
+	Services       map[string]ServiceStatus `json:"services"`
+	Metrics        SystemMetrics            `json:"metrics"`
+	LastCheckedAt  time.Time                `json:"last_checked_at"`
 }
 
 // ServiceStatus represents a service's health status
 type ServiceStatus struct {
-	Status      string `json:"status"`
-	Message     string `json:"message,omitempty"`
+	Status       string    `json:"status"`
+	Message      string    `json:"message,omitempty"`
 	LastActivity time.Time `json:"last_activity,omitempty"`
 }
 
 // SystemMetrics represents system-level metrics
 type SystemMetrics struct {
-	ActiveExportJobs    int     `json:"active_export_jobs"`
-	PendingProofRequests int    `json:"pending_proof_requests"`
-	RequestsPerMinute   float64 `json:"requests_per_minute"`
-	AverageLatencyMs    float64 `json:"average_latency_ms"`
+	ActiveExportJobs     int     `json:"active_export_jobs"`
+	PendingProofRequests int     `json:"pending_proof_requests"`
+	RequestsPerMinute    float64 `json:"requests_per_minute"`
+	AverageLatencyMs     float64 `json:"average_latency_ms"`
 }
 
 // HandleGetSystemHealth handles GET /api/v1/stats/system
@@ -692,17 +692,17 @@ func (h *BulkHandlers) writeJSONLinesExport(w io.Writer, proofs []database.Proof
 
 	for _, proof := range proofs {
 		record := map[string]interface{}{
-			"proof_id":           proof.ProofID,
-			"proof_type":         string(proof.ProofType),
-			"accum_tx_hash":      proof.AccumTxHash,
-			"account_url":        proof.AccountURL,
-			"gov_level":          govLevelToString(proof.GovLevel),
-			"status":             string(proof.Status),
-			"created_at":         proof.CreatedAt,
-			"anchored_at":        proof.AnchoredAt,
-			"verified_at":        proof.VerifiedAt,
-			"anchor_chain":       stringPtrOrEmpty(proof.AnchorChain),
-			"anchor_tx_hash":     stringPtrOrEmpty(proof.AnchorTxHash),
+			"proof_id":            proof.ProofID,
+			"proof_type":          string(proof.ProofType),
+			"accum_tx_hash":       proof.AccumTxHash,
+			"account_url":         proof.AccountURL,
+			"gov_level":           govLevelToString(proof.GovLevel),
+			"status":              string(proof.Status),
+			"created_at":          proof.CreatedAt,
+			"anchored_at":         proof.AnchoredAt,
+			"verified_at":         proof.VerifiedAt,
+			"anchor_chain":        stringPtrOrEmpty(proof.AnchorChain),
+			"anchor_tx_hash":      stringPtrOrEmpty(proof.AnchorTxHash),
 			"anchor_block_number": int64PtrOrZero(proof.AnchorBlockNumber),
 		}
 

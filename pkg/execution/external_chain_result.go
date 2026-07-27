@@ -106,21 +106,21 @@ type ExternalChainResult struct {
 	// TRANSACTION DETAILS
 	// ==========================================================================
 
-	TxIndex   uint           `json:"tx_index"`   // Position in block
-	TxFrom    common.Address `json:"tx_from"`    // Sender
-	TxTo      *common.Address `json:"tx_to"`     // Recipient (nil for contract creation)
-	TxValue   *big.Int       `json:"tx_value"`   // Value transferred
-	TxData    []byte         `json:"tx_data"`    // Input data
-	TxGasUsed uint64         `json:"tx_gas_used"` // Gas consumed
+	TxIndex   uint            `json:"tx_index"`    // Position in block
+	TxFrom    common.Address  `json:"tx_from"`     // Sender
+	TxTo      *common.Address `json:"tx_to"`       // Recipient (nil for contract creation)
+	TxValue   *big.Int        `json:"tx_value"`    // Value transferred
+	TxData    []byte          `json:"tx_data"`     // Input data
+	TxGasUsed uint64          `json:"tx_gas_used"` // Gas consumed
 
 	// ==========================================================================
 	// EXECUTION OUTCOME
 	// ==========================================================================
 
-	Status          uint64          `json:"status"` // 1=success, 0=revert
+	Status          uint64          `json:"status"`                     // 1=success, 0=revert
 	ContractAddress *common.Address `json:"contract_address,omitempty"` // For contract creation
-	Logs            []LogEntry      `json:"logs"`   // Event logs emitted
-	ReturnData      []byte          `json:"return_data,omitempty"` // Return data (if available)
+	Logs            []LogEntry      `json:"logs"`                       // Event logs emitted
+	ReturnData      []byte          `json:"return_data,omitempty"`      // Return data (if available)
 
 	// ==========================================================================
 	// FINALIZATION PROOF
@@ -150,7 +150,7 @@ type LegResult struct {
 	TxHash        string   `json:"tx_hash"`
 	BlockNumber   uint64   `json:"block_number"`
 	BlockHash     string   `json:"block_hash"`
-	Status        uint64   `json:"status"`         // 1=success, 0=revert
+	Status        uint64   `json:"status"` // 1=success, 0=revert
 	GasUsed       uint64   `json:"gas_used"`
 	TxFrom        string   `json:"tx_from"`
 	EventsHash    [32]byte `json:"events_hash"`
@@ -273,10 +273,10 @@ func (r *ExternalChainResult) ComputeResultHash() [32]byte {
 		"state_root":        r.StateRoot.Hex(),
 
 		// Execution outcome
-		"status":     r.Status,
-		"tx_index":   r.TxIndex,
+		"status":      r.Status,
+		"tx_index":    r.TxIndex,
 		"tx_gas_used": r.TxGasUsed,
-		"logs_hash":  hex.EncodeToString(logsHash[:]),
+		"logs_hash":   hex.EncodeToString(logsHash[:]),
 	})
 
 	return sha256.Sum256(canonicalData)
@@ -541,8 +541,8 @@ func (r *ExternalChainResult) ToHex() string {
 // PendingExecution tracks an execution that's waiting for finalization
 type PendingExecution struct {
 	// Original intent data
-	IntentID        string    `json:"intent_id"`
-	OperationID     [32]byte  `json:"operation_id"`
+	IntentID         string   `json:"intent_id"`
+	OperationID      [32]byte `json:"operation_id"`
 	ValidatorBlockID string   `json:"validator_block_id"`
 
 	// Ethereum transaction
@@ -550,14 +550,14 @@ type PendingExecution struct {
 	SubmittedAt time.Time   `json:"submitted_at"`
 
 	// Expected outcome
-	ExpectedTarget   common.Address `json:"expected_target"`
-	ExpectedValue    *big.Int       `json:"expected_value"`
-	ExpectedEvents   []ExpectedEvent `json:"expected_events"`
+	ExpectedTarget common.Address  `json:"expected_target"`
+	ExpectedValue  *big.Int        `json:"expected_value"`
+	ExpectedEvents []ExpectedEvent `json:"expected_events"`
 
 	// Tracking
-	CurrentConfirmations int       `json:"current_confirmations"`
-	RequiredConfirmations int      `json:"required_confirmations"`
-	LastCheckedAt        time.Time `json:"last_checked_at"`
+	CurrentConfirmations  int       `json:"current_confirmations"`
+	RequiredConfirmations int       `json:"required_confirmations"`
+	LastCheckedAt         time.Time `json:"last_checked_at"`
 
 	// Status
 	Status string `json:"status"` // pending, finalized, failed, timeout
@@ -566,7 +566,7 @@ type PendingExecution struct {
 // ExpectedEvent defines an event we expect to see in the logs
 type ExpectedEvent struct {
 	Contract common.Address `json:"contract"`
-	Topic0   common.Hash    `json:"topic0"` // Event signature
+	Topic0   common.Hash    `json:"topic0"`              // Event signature
 	DataHash [32]byte       `json:"data_hash,omitempty"` // Optional: hash of expected data
 }
 
@@ -587,26 +587,26 @@ type ExpectedStateSlot struct {
 // This is computed BEFORE execution and verified AFTER
 type ExecutionCommitment struct {
 	// From ValidatorBlock
-	OperationID     [32]byte `json:"operation_id"`
-	BundleID        [32]byte `json:"bundle_id"`
+	OperationID [32]byte `json:"operation_id"`
+	BundleID    [32]byte `json:"bundle_id"`
 
 	// Intent reference from Accumulate (for write-back traceability)
-	IntentTxHash    string   `json:"intent_tx_hash,omitempty"`
-	IntentBlock     uint64   `json:"intent_block,omitempty"`
+	IntentTxHash string `json:"intent_tx_hash,omitempty"`
+	IntentBlock  uint64 `json:"intent_block,omitempty"`
 
 	// Target chain execution details
-	TargetChain     string         `json:"target_chain"`
-	TargetContract  common.Address `json:"target_contract"`
-	FunctionSelector [4]byte       `json:"function_selector"`
-	CallDataHash    [32]byte       `json:"call_data_hash"`
-	ExpectedValue   *big.Int       `json:"expected_value"`
+	TargetChain      string         `json:"target_chain"`
+	TargetContract   common.Address `json:"target_contract"`
+	FunctionSelector [4]byte        `json:"function_selector"`
+	CallDataHash     [32]byte       `json:"call_data_hash"`
+	ExpectedValue    *big.Int       `json:"expected_value"`
 
 	// RB-4: contract-call event gate. IsContractCall is true when the leg executes a
 	// non-empty inner calldata (target.call{value}(data)). For such legs the validator
 	// refuses to attest success unless EVERY ExpectedCallEvent appears in the (inclusion-
 	// proven, quorum-attested) receipt logs — non-revert alone is insufficient. Native
 	// value transfers leave these unset and keep the exact-value check.
-	IsContractCall    bool            `json:"is_contract_call,omitempty"`
+	IsContractCall     bool            `json:"is_contract_call,omitempty"`
 	ExpectedCallEvents []ExpectedEvent `json:"expected_call_events,omitempty"`
 
 	// RB-5: optional committed storage-slot effects. When present, the validator refuses
@@ -615,7 +615,7 @@ type ExecutionCommitment struct {
 	ExpectedState []ExpectedStateSlot `json:"expected_state,omitempty"`
 
 	// Commitment hash (computed from above)
-	CommitmentHash  [32]byte `json:"commitment_hash"`
+	CommitmentHash [32]byte `json:"commitment_hash"`
 
 	// ComprehensiveData contains the full verification data from the BFT flow
 	// This includes all 3-step execution data and expected events for complete verification

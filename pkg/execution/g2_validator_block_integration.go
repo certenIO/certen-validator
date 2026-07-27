@@ -19,8 +19,8 @@ import (
 	"math/big"
 	"time"
 
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/certen/independant-validator/pkg/proof"
+	"github.com/ethereum/go-ethereum/common"
 )
 
 // =============================================================================
@@ -30,18 +30,18 @@ import (
 // G2EnhancedBuilderInputs extends the standard BuilderInputs with G2 outcome binding
 type G2EnhancedBuilderInputs struct {
 	// Standard builder inputs (from consensus package)
-	IntentID          string `json:"intent_id"`
-	TransactionHash   string `json:"transaction_hash"`
-	AccountURL        string `json:"account_url"`
-	OrganizationADI   string `json:"organization_adi"`
+	IntentID        string `json:"intent_id"`
+	TransactionHash string `json:"transaction_hash"`
+	AccountURL      string `json:"account_url"`
+	OrganizationADI string `json:"organization_adi"`
 
 	// Cross-chain target details
-	TargetChain     string         `json:"target_chain"`
-	TargetChainID   int64          `json:"target_chain_id"`
-	TargetContract  common.Address `json:"target_contract"`
-	FunctionSelector [4]byte       `json:"function_selector"`
-	EncodedCallData []byte         `json:"encoded_call_data"`
-	Value           *big.Int       `json:"value"`
+	TargetChain      string         `json:"target_chain"`
+	TargetChainID    int64          `json:"target_chain_id"`
+	TargetContract   common.Address `json:"target_contract"`
+	FunctionSelector [4]byte        `json:"function_selector"`
+	EncodedCallData  []byte         `json:"encoded_call_data"`
+	Value            *big.Int       `json:"value"`
 
 	// Governance proofs
 	G1Proof *proof.G1Result `json:"g1_proof,omitempty"`
@@ -94,9 +94,9 @@ type G2EnhancedValidatorBlock struct {
 	ResultAttestations *AggregatedAttestation `json:"result_attestations,omitempty"`
 
 	// Computed hashes
-	BlockHash        [32]byte `json:"block_hash"`
-	OutcomeLeafHash  [32]byte `json:"outcome_leaf_hash"`
-	G2BindingHash    [32]byte `json:"g2_binding_hash"`
+	BlockHash       [32]byte `json:"block_hash"`
+	OutcomeLeafHash [32]byte `json:"outcome_leaf_hash"`
+	G2BindingHash   [32]byte `json:"g2_binding_hash"`
 }
 
 // G2GovernanceProofBlock contains governance proof at G2 level
@@ -106,20 +106,20 @@ type G2GovernanceProofBlock struct {
 	SpecVersion string `json:"spec_version"`
 
 	// Core G1 fields
-	OrganizationADI     string `json:"organization_adi"`
-	KeyBookURL          string `json:"key_book_url"`
-	ThresholdSatisfied  bool   `json:"threshold_satisfied"`
-	UniqueValidKeys     int    `json:"unique_valid_keys"`
-	RequiredThreshold   uint64 `json:"required_threshold"`
+	OrganizationADI    string `json:"organization_adi"`
+	KeyBookURL         string `json:"key_book_url"`
+	ThresholdSatisfied bool   `json:"threshold_satisfied"`
+	UniqueValidKeys    int    `json:"unique_valid_keys"`
+	RequiredThreshold  uint64 `json:"required_threshold"`
 
 	// G2 specific fields
-	PayloadVerified     bool   `json:"payload_verified"`
-	EffectVerified      bool   `json:"effect_verified"`
-	G2ProofComplete     bool   `json:"g2_proof_complete"`
-	SecurityLevel       string `json:"security_level"`
+	PayloadVerified bool   `json:"payload_verified"`
+	EffectVerified  bool   `json:"effect_verified"`
+	G2ProofComplete bool   `json:"g2_proof_complete"`
+	SecurityLevel   string `json:"security_level"`
 
 	// Merkle root of authorization leaves
-	MerkleRoot          string `json:"merkle_root"`
+	MerkleRoot string `json:"merkle_root"`
 
 	// BLS aggregate signature
 	BLSAggregateSignature string `json:"bls_aggregate_signature"`
@@ -130,17 +130,17 @@ type G2GovernanceProofBlock struct {
 	BLSValidatorSetPubKey string `json:"bls_validator_set_pubkey"`
 
 	// Full proof reference (hash)
-	ProofHash           [32]byte `json:"proof_hash"`
+	ProofHash [32]byte `json:"proof_hash"`
 }
 
 // G2CrossChainProof contains cross-chain proof with outcome binding
 type G2CrossChainProof struct {
-	OperationID          string        `json:"operation_id"`
-	CrossChainCommitment string        `json:"cross_chain_commitment"`
+	OperationID          string          `json:"operation_id"`
+	CrossChainCommitment string          `json:"cross_chain_commitment"`
 	ChainTargets         []G2ChainTarget `json:"chain_targets"`
 
 	// Outcome binding extension
-	OutcomeCommitment    [32]byte `json:"outcome_commitment"`
+	OutcomeCommitment [32]byte `json:"outcome_commitment"`
 }
 
 // G2ChainTarget extends ChainTarget with outcome verification
@@ -154,10 +154,10 @@ type G2ChainTarget struct {
 	Expiry           string         `json:"expiry"`
 
 	// G2 outcome verification
-	PayloadVerified bool     `json:"payload_verified"`
-	EffectVerified  bool     `json:"effect_verified"`
-	ExecutionTxHash string   `json:"execution_tx_hash,omitempty"`
-	ExecutionBlock  uint64   `json:"execution_block,omitempty"`
+	PayloadVerified bool   `json:"payload_verified"`
+	EffectVerified  bool   `json:"effect_verified"`
+	ExecutionTxHash string `json:"execution_tx_hash,omitempty"`
+	ExecutionBlock  uint64 `json:"execution_block,omitempty"`
 }
 
 // G2ExecutionProof contains execution proof with G2 outcome binding
@@ -191,9 +191,9 @@ type G2OutcomeBindingBlock struct {
 	OutcomeLeaf *proof.OutcomeLeaf `json:"outcome_leaf"`
 
 	// Cryptographic binding
-	BindingHash     [32]byte  `json:"binding_hash"`
-	VerifiedAt      time.Time `json:"verified_at"`
-	VerificationMs  int64     `json:"verification_ms"`
+	BindingHash    [32]byte  `json:"binding_hash"`
+	VerifiedAt     time.Time `json:"verified_at"`
+	VerificationMs int64     `json:"verification_ms"`
 }
 
 // =============================================================================
@@ -417,9 +417,9 @@ func (b *G2EnhancedBlockBuilder) buildG2GovernanceProofBlock(
 ) *G2GovernanceProofBlock {
 
 	block := &G2GovernanceProofBlock{
-		Level:               "G2",
-		SpecVersion:         proof.GovernanceSpecVersion,
-		OrganizationADI:     inputs.OrganizationADI,
+		Level:           "G2",
+		SpecVersion:     proof.GovernanceSpecVersion,
+		OrganizationADI: inputs.OrganizationADI,
 		// Carry the signer's pubkey in its own field — it is NOT the signature.
 		BLSValidatorSetPubKey: b.config.BLSValidatorSetPubKey,
 	}

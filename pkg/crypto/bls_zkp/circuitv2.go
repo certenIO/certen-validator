@@ -241,11 +241,14 @@ func HashMessageToG1V2(messageHash [32]byte) bls12381.G1Affine {
 // Horner-style polynomial fold over the BLS12-381 Fp limbs of the public key.
 //
 // In-circuit recurrence (in pubkeyCommitmentMixer = 251):
-//   commitment_0 = 0
-//   commitment_{i+1} = commitment_i * mixer + limb_i   (mod BN254 Fr)
+//
+//	commitment_0 = 0
+//	commitment_{i+1} = commitment_i * mixer + limb_i   (mod BN254 Fr)
 //
 // We absorb the 24 limbs in the order:
-//   X.A0[0..5], X.A1[0..5], Y.A0[0..5], Y.A1[0..5]
+//
+//	X.A0[0..5], X.A1[0..5], Y.A0[0..5], Y.A1[0..5]
+//
 // matching emulated.BLS12381Fp's little-endian, 6-limbs-of-64-bits decomposition.
 // The result is a single BN254 Fr scalar suitable as a SNARK public input and
 // as the Solidity uint256 PubkeyCommitment.

@@ -23,9 +23,9 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/certen/independant-validator/pkg/proof"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
-	"github.com/certen/independant-validator/pkg/proof"
 )
 
 // =============================================================================
@@ -121,12 +121,12 @@ type IntentOutcomeData struct {
 	TransactionHash string `json:"transaction_hash"`
 
 	// Target operation details
-	TargetChain     string         `json:"target_chain"`
-	TargetChainID   int64          `json:"target_chain_id"`
-	TargetContract  common.Address `json:"target_contract"`
-	FunctionSelector [4]byte       `json:"function_selector"`
-	EncodedCallData []byte         `json:"encoded_call_data"`
-	Value           *big.Int       `json:"value"`
+	TargetChain      string         `json:"target_chain"`
+	TargetChainID    int64          `json:"target_chain_id"`
+	TargetContract   common.Address `json:"target_contract"`
+	FunctionSelector [4]byte        `json:"function_selector"`
+	EncodedCallData  []byte         `json:"encoded_call_data"`
+	Value            *big.Int       `json:"value"`
 
 	// Expected execution hash (computed from intent)
 	ExpectedPayloadHash [32]byte `json:"expected_payload_hash"`
@@ -174,8 +174,8 @@ type G2BindingResult struct {
 	BindingHash [32]byte `json:"binding_hash"`
 
 	// Timing
-	VerifiedAt    time.Time     `json:"verified_at"`
-	VerificationMs int64        `json:"verification_ms"`
+	VerifiedAt     time.Time `json:"verified_at"`
+	VerificationMs int64     `json:"verification_ms"`
 
 	// Errors if any
 	Errors []string `json:"errors,omitempty"`
@@ -246,7 +246,7 @@ func (s *G2OutcomeBindingService) VerifyOutcomeBinding(
 
 	// Determine overall success
 	result.Success = payloadResult.Verified && effectResult.Verified &&
-	                 receiptResult.Verified && witnessResult.Verified
+		receiptResult.Verified && witnessResult.Verified
 
 	result.VerificationMs = time.Since(startTime).Milliseconds()
 
@@ -708,7 +708,7 @@ func (s *G2OutcomeBindingService) buildG2ProofResult(
 ) *proof.G2Result {
 
 	g2Complete := payloadResult.Verified && effectResult.Verified &&
-	              outcomeLeaf.ReceiptBinding.Verified && outcomeLeaf.WitnessConsistency.Verified
+		outcomeLeaf.ReceiptBinding.Verified && outcomeLeaf.WitnessConsistency.Verified
 
 	securityLevel := "G2-standard"
 	if g2Complete {

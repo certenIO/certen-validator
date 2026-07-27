@@ -34,11 +34,11 @@ const (
 
 // PricingTier defines the cost and delay for each anchor class
 type PricingTier struct {
-	TierID            string        `json:"tier_id"`
-	TierName          string        `json:"tier_name"`
-	BaseCostUSD       float64       `json:"base_cost_usd"`
-	BatchDelaySeconds int           `json:"batch_delay_seconds"`
-	Priority          int           `json:"priority"`
+	TierID            string  `json:"tier_id"`
+	TierName          string  `json:"tier_name"`
+	BaseCostUSD       float64 `json:"base_cost_usd"`
+	BatchDelaySeconds int     `json:"batch_delay_seconds"`
+	Priority          int     `json:"priority"`
 }
 
 // DefaultPricingTiers returns the default pricing configuration
@@ -85,16 +85,16 @@ type ScheduledAnchorRequest struct {
 
 // ScheduledAnchorBatch represents a batch of anchor requests
 type ScheduledAnchorBatch struct {
-	BatchID       uuid.UUID                 `json:"batch_id"`
-	TargetChain   string                    `json:"target_chain"`
-	AnchorClass   AnchorClass               `json:"anchor_class"`
-	Requests      []*ScheduledAnchorRequest `json:"requests"`
-	ScheduledFor  time.Time                 `json:"scheduled_for"`
-	Status        string                    `json:"status"` // "pending", "processing", "completed", "failed"
-	AnchorTxHash  string                    `json:"anchor_tx_hash,omitempty"`
-	AnchorBlockNum int64                    `json:"anchor_block_num,omitempty"`
-	ProcessedAt   *time.Time                `json:"processed_at,omitempty"`
-	Error         string                    `json:"error,omitempty"`
+	BatchID        uuid.UUID                 `json:"batch_id"`
+	TargetChain    string                    `json:"target_chain"`
+	AnchorClass    AnchorClass               `json:"anchor_class"`
+	Requests       []*ScheduledAnchorRequest `json:"requests"`
+	ScheduledFor   time.Time                 `json:"scheduled_for"`
+	Status         string                    `json:"status"` // "pending", "processing", "completed", "failed"
+	AnchorTxHash   string                    `json:"anchor_tx_hash,omitempty"`
+	AnchorBlockNum int64                     `json:"anchor_block_num,omitempty"`
+	ProcessedAt    *time.Time                `json:"processed_at,omitempty"`
+	Error          string                    `json:"error,omitempty"`
 }
 
 // =============================================================================
@@ -132,23 +132,23 @@ type AnchorSchedulerService struct {
 // SchedulerConfig contains scheduler configuration
 type SchedulerConfig struct {
 	// Batch settings
-	DefaultBatchSize     int           `json:"default_batch_size"`
-	MaxBatchSize         int           `json:"max_batch_size"`
-	BatchCheckInterval   time.Duration `json:"batch_check_interval"`
+	DefaultBatchSize   int           `json:"default_batch_size"`
+	MaxBatchSize       int           `json:"max_batch_size"`
+	BatchCheckInterval time.Duration `json:"batch_check_interval"`
 
 	// On-cadence settings
-	OnCadenceInterval    time.Duration `json:"on_cadence_interval"` // ~15 minutes
-	OnCadenceMinBatch    int           `json:"on_cadence_min_batch"` // Minimum to trigger
+	OnCadenceInterval time.Duration `json:"on_cadence_interval"`  // ~15 minutes
+	OnCadenceMinBatch int           `json:"on_cadence_min_batch"` // Minimum to trigger
 
 	// On-demand settings
-	OnDemandMaxDelay     time.Duration `json:"on_demand_max_delay"` // Max wait for on-demand
+	OnDemandMaxDelay time.Duration `json:"on_demand_max_delay"` // Max wait for on-demand
 
 	// Retry settings
-	MaxRetries           int           `json:"max_retries"`
-	RetryDelay           time.Duration `json:"retry_delay"`
+	MaxRetries int           `json:"max_retries"`
+	RetryDelay time.Duration `json:"retry_delay"`
 
 	// Supported chains
-	SupportedChains      []string      `json:"supported_chains"`
+	SupportedChains []string `json:"supported_chains"`
 }
 
 // DefaultSchedulerConfig returns default configuration
@@ -168,16 +168,16 @@ func DefaultSchedulerConfig() *SchedulerConfig {
 
 // SchedulerMetrics tracks scheduler metrics
 type SchedulerMetrics struct {
-	RequestsReceived   int64
-	RequestsProcessed  int64
-	RequestsFailed     int64
-	BatchesCreated     int64
-	BatchesCompleted   int64
-	BatchesFailed      int64
-	OnCadenceRequests  int64
-	OnDemandRequests   int64
-	LastBatchAt        time.Time
-	AverageBatchSize   float64
+	RequestsReceived  int64
+	RequestsProcessed int64
+	RequestsFailed    int64
+	BatchesCreated    int64
+	BatchesCompleted  int64
+	BatchesFailed     int64
+	OnCadenceRequests int64
+	OnDemandRequests  int64
+	LastBatchAt       time.Time
+	AverageBatchSize  float64
 }
 
 // NewAnchorSchedulerService creates a new scheduler service
@@ -354,7 +354,7 @@ func (s *AnchorSchedulerService) checkAndCreateBatches() {
 
 			// Create batch if we have enough or if batch is due
 			if len(dueRequests) >= s.config.OnCadenceMinBatch ||
-			   (len(dueRequests) > 0 && time.Since(dueRequests[0].RequestedAt) > s.config.OnCadenceInterval) {
+				(len(dueRequests) > 0 && time.Since(dueRequests[0].RequestedAt) > s.config.OnCadenceInterval) {
 				batch := s.createBatch(chain, ClassOnCadence, dueRequests)
 				s.queues[chain][ClassOnCadence] = remaining
 

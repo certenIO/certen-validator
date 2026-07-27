@@ -1691,28 +1691,28 @@ func (r *ProofArtifactRepository) SaveExternalChainResult(ctx context.Context, i
 
 // ExternalChainResultInput matches the actual database schema for external_chain_results
 type ExternalChainResultInput struct {
-	ProofID              *uuid.UUID // Optional FK to proof_artifacts
-	BundleID             []byte
-	OperationID          []byte
-	ChainType            string // ethereum, bitcoin, solana, polygon
-	ChainID              int64
-	NetworkName          string
-	TxHash               []byte
-	TxIndex              int
-	TxGasUsed            int64
-	TxFromAddress        []byte
-	TxToAddress          []byte
-	BlockNumber          int64
-	BlockHash            []byte
-	BlockTimestamp       time.Time
-	StateRoot            []byte
-	TransactionsRoot     []byte
-	ReceiptsRoot         []byte
-	ExecutionStatus      int // 0 or 1
-	ExecutionSuccess     bool
-	RevertReason         string
-	ContractAddress      []byte
-	LogsJSON             json.RawMessage
+	ProofID               *uuid.UUID // Optional FK to proof_artifacts
+	BundleID              []byte
+	OperationID           []byte
+	ChainType             string // ethereum, bitcoin, solana, polygon
+	ChainID               int64
+	NetworkName           string
+	TxHash                []byte
+	TxIndex               int
+	TxGasUsed             int64
+	TxFromAddress         []byte
+	TxToAddress           []byte
+	BlockNumber           int64
+	BlockHash             []byte
+	BlockTimestamp        time.Time
+	StateRoot             []byte
+	TransactionsRoot      []byte
+	ReceiptsRoot          []byte
+	ExecutionStatus       int // 0 or 1
+	ExecutionSuccess      bool
+	RevertReason          string
+	ContractAddress       []byte
+	LogsJSON              json.RawMessage
 	ConfirmationBlocks    int
 	RequiredConfirmations int
 	IsFinalized           bool
@@ -3156,20 +3156,20 @@ func (r *ProofArtifactRepository) GetUnfinalizedExternalChainResults(ctx context
 
 // NewBLSResultAttestation is the input for creating a BLS result attestation
 type NewBLSResultAttestation struct {
-	ResultID             uuid.UUID
-	ResultHash           []byte
-	BundleID             []byte
-	MessageHash          []byte
-	ValidatorID          string
-	ValidatorAddress     []byte
-	ValidatorIndex       int
-	BLSSignature         []byte
-	BLSPublicKey         []byte
-	SignatureDomain      string
-	AttestedBlockNumber  int64
-	AttestedBlockHash    []byte
+	ResultID              uuid.UUID
+	ResultHash            []byte
+	BundleID              []byte
+	MessageHash           []byte
+	ValidatorID           string
+	ValidatorAddress      []byte
+	ValidatorIndex        int
+	BLSSignature          []byte
+	BLSPublicKey          []byte
+	SignatureDomain       string
+	AttestedBlockNumber   int64
+	AttestedBlockHash     []byte
 	ConfirmationsAtAttest int
-	AttestationTime      time.Time
+	AttestationTime       time.Time
 }
 
 // BLSResultAttestationRecord represents a stored BLS result attestation

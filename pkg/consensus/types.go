@@ -25,32 +25,32 @@ const (
 
 // ValidatorInfo contains information about a validator in the network
 type ValidatorInfo struct {
-	ValidatorID     string        `json:"validator_id"`
-	PublicKey       string        `json:"public_key"`
-	NetworkAddress  string        `json:"network_address"`
-	VotingPower     int64         `json:"voting_power"`
-	Role            ValidatorRole `json:"role"`
-	LastHeartbeat   time.Time     `json:"last_heartbeat"`
-	IsActive        bool          `json:"is_active"`
-	JoinedAt        time.Time     `json:"joined_at"`
-	Reputation      float64       `json:"reputation"`
+	ValidatorID    string        `json:"validator_id"`
+	PublicKey      string        `json:"public_key"`
+	NetworkAddress string        `json:"network_address"`
+	VotingPower    int64         `json:"voting_power"`
+	Role           ValidatorRole `json:"role"`
+	LastHeartbeat  time.Time     `json:"last_heartbeat"`
+	IsActive       bool          `json:"is_active"`
+	JoinedAt       time.Time     `json:"joined_at"`
+	Reputation     float64       `json:"reputation"`
 }
 
 // ProofBundle represents a complete bundle of proofs for business processing
 type ProofBundle struct {
-	BundleID         string                     `json:"bundle_id"`
-	CreatedAt        time.Time                  `json:"created_at"`
-	IntentRequests   []*ProofVerificationRequest `json:"intent_requests"`
-	ValidatorProofs  []string                   `json:"validator_proofs"`
-	SyntheticTxs     []string                   `json:"synthetic_txs"`
-	TargetChainResults []string                 `json:"target_chain_results"`
-	BundleHash       string                     `json:"bundle_hash"`
+	BundleID           string                      `json:"bundle_id"`
+	CreatedAt          time.Time                   `json:"created_at"`
+	IntentRequests     []*ProofVerificationRequest `json:"intent_requests"`
+	ValidatorProofs    []string                    `json:"validator_proofs"`
+	SyntheticTxs       []string                    `json:"synthetic_txs"`
+	TargetChainResults []string                    `json:"target_chain_results"`
+	BundleHash         string                      `json:"bundle_hash"`
 }
 
 // ProofVerificationRequest represents a business-level request for proof verification
 type ProofVerificationRequest struct {
 	RequestID       string                 `json:"request_id"`
-	ProofType       string                 `json:"proof_type"`       // includes "certen_intent"
+	ProofType       string                 `json:"proof_type"` // includes "certen_intent"
 	AccountURL      string                 `json:"account_url"`
 	ProofData       interface{}            `json:"proof_data"`
 	RequesterID     string                 `json:"requester_id"`
@@ -118,5 +118,5 @@ func CalculateRequiredCount(total int, threshold float64) int {
 // IsByzantineFaultTolerant checks if the validator set can tolerate Byzantine faults
 func IsByzantineFaultTolerant(totalValidators, maxFaults int) bool {
 	// For Byzantine fault tolerance: n >= 3f + 1
-	return totalValidators >= 3*maxFaults + 1
+	return totalValidators >= 3*maxFaults+1
 }

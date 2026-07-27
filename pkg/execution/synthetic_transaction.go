@@ -84,18 +84,18 @@ type ProofCycleResult struct {
 	IntentTxHash string   `json:"intent_tx_hash"`
 
 	// Execution binding
-	OperationID   [32]byte `json:"operation_id"`
-	BundleID      [32]byte `json:"bundle_id"`
+	OperationID    [32]byte `json:"operation_id"`
+	BundleID       [32]byte `json:"bundle_id"`
 	CommitmentHash [32]byte `json:"commitment_hash"`
 
 	// External chain execution
-	TargetChain         string      `json:"target_chain"`
-	TargetChainID       int64       `json:"target_chain_id"`
-	ExecutionTxHash     common.Hash `json:"execution_tx_hash"`
-	ExecutionBlockNumber *big.Int   `json:"execution_block_number"`
-	ExecutionBlockHash  common.Hash `json:"execution_block_hash"`
-	ExecutionSuccess    bool        `json:"execution_success"`
-	ExecutionGasUsed    uint64      `json:"execution_gas_used"`
+	TargetChain          string      `json:"target_chain"`
+	TargetChainID        int64       `json:"target_chain_id"`
+	ExecutionTxHash      common.Hash `json:"execution_tx_hash"`
+	ExecutionBlockNumber *big.Int    `json:"execution_block_number"`
+	ExecutionBlockHash   common.Hash `json:"execution_block_hash"`
+	ExecutionSuccess     bool        `json:"execution_success"`
+	ExecutionGasUsed     uint64      `json:"execution_gas_used"`
 
 	// State binding
 	StateRoot        common.Hash `json:"state_root"`
@@ -103,9 +103,9 @@ type ProofCycleResult struct {
 	ReceiptsRoot     common.Hash `json:"receipts_root"`
 
 	// Attestation summary
-	AttestationCount    int      `json:"attestation_count"`
-	AttestationPower    *big.Int `json:"attestation_power"`
-	AttestationThreshold bool    `json:"attestation_threshold"`
+	AttestationCount     int      `json:"attestation_count"`
+	AttestationPower     *big.Int `json:"attestation_power"`
+	AttestationThreshold bool     `json:"attestation_threshold"`
 
 	// Final proof hash
 	ProofCycleHash [32]byte `json:"proof_cycle_hash"`
@@ -136,10 +136,10 @@ type CertenDataEntry struct {
 	// ==========================================================================
 	// INTENT REFERENCE (Entries 3-6) - Links back to original Accumulate intent
 	// ==========================================================================
-	IntentID       string `json:"intent_id"`        // Intent operation group ID
-	IntentHash     string `json:"intent_hash"`      // Hex-encoded intent hash
-	IntentTxHash   string `json:"intent_tx_hash"`   // Original Accumulate transaction ID
-	IntentBlock    uint64 `json:"intent_block"`     // Accumulate block containing intent
+	IntentID     string `json:"intent_id"`      // Intent operation group ID
+	IntentHash   string `json:"intent_hash"`    // Hex-encoded intent hash
+	IntentTxHash string `json:"intent_tx_hash"` // Original Accumulate transaction ID
+	IntentBlock  uint64 `json:"intent_block"`   // Accumulate block containing intent
 
 	// ==========================================================================
 	// EXECUTION COMMITMENT (Entries 7-12) - Pre-execution cryptographic binding
@@ -214,14 +214,14 @@ type CertenDataEntry struct {
 	// set root/snapshot it was signed under, the participation bitfield, and the threshold
 	// ratio + total power, so a consumer can recompute and verify the aggregate against the
 	// validator set rather than trusting a boolean. See [[project_onchain_verification_findings]].
-	AggregateSignature   string `json:"aggregate_signature,omitempty"`    // hex BLS aggregate signature
+	AggregateSignature     string `json:"aggregate_signature,omitempty"`      // hex BLS aggregate signature
 	AttestationMessageHash string `json:"attestation_message_hash,omitempty"` // hex message all validators signed
-	ValidatorSetRoot     string `json:"validator_set_root,omitempty"`     // hex merkle root of the signing validator set
-	AttestationSnapshotID string `json:"attestation_snapshot_id,omitempty"` // hex validator-set snapshot id (replay binding)
-	ValidatorBitfield    string `json:"validator_bitfield,omitempty"`     // hex bitmap of participating validators
-	TotalPower           string `json:"total_power,omitempty"`            // total voting power in the set (big.Int)
-	ThresholdNumerator   uint64 `json:"threshold_numerator,omitempty"`    // e.g. 2
-	ThresholdDenominator uint64 `json:"threshold_denominator,omitempty"`  // e.g. 3
+	ValidatorSetRoot       string `json:"validator_set_root,omitempty"`       // hex merkle root of the signing validator set
+	AttestationSnapshotID  string `json:"attestation_snapshot_id,omitempty"`  // hex validator-set snapshot id (replay binding)
+	ValidatorBitfield      string `json:"validator_bitfield,omitempty"`       // hex bitmap of participating validators
+	TotalPower             string `json:"total_power,omitempty"`              // total voting power in the set (big.Int)
+	ThresholdNumerator     uint64 `json:"threshold_numerator,omitempty"`      // e.g. 2
+	ThresholdDenominator   uint64 `json:"threshold_denominator,omitempty"`    // e.g. 3
 
 	// ==========================================================================
 	// AUDIT REFERENCES (Entries 41-44) - Links for independent verification
@@ -355,13 +355,13 @@ type ComprehensiveProofContext struct {
 	Commitment *ExecutionCommitment `json:"commitment"`
 
 	// 3-step transaction details (from BFT flow)
-	Step1Selector   string `json:"step1_selector"`
-	Step1Contract   string `json:"step1_contract"`
-	Step1IntentHash string `json:"step1_intent_hash"`
-	Step2Selector   string `json:"step2_selector"`
-	Step2Contract   string `json:"step2_contract"`
-	Step3Selector   string `json:"step3_selector"`
-	Step3Contract   string `json:"step3_contract"`
+	Step1Selector    string `json:"step1_selector"`
+	Step1Contract    string `json:"step1_contract"`
+	Step1IntentHash  string `json:"step1_intent_hash"`
+	Step2Selector    string `json:"step2_selector"`
+	Step2Contract    string `json:"step2_contract"`
+	Step3Selector    string `json:"step3_selector"`
+	Step3Contract    string `json:"step3_contract"`
 	Step3FinalTarget string `json:"step3_final_target"`
 	Step3FinalValue  string `json:"step3_final_value"`
 
@@ -723,9 +723,9 @@ type ResultWriteBack struct {
 	submitted map[[32]byte]*SyntheticTransaction
 
 	// Configuration
-	retryInterval   time.Duration
-	maxRetries      int
-	confirmTimeout  time.Duration
+	retryInterval  time.Duration
+	maxRetries     int
+	confirmTimeout time.Duration
 
 	// Callbacks
 	onConfirmed func(*SyntheticTransaction)
@@ -919,11 +919,11 @@ func (w *ResultWriteBack) GetSubmittedCount() int {
 // ProofCycleCompletion represents the complete proof cycle from intent to write-back
 type ProofCycleCompletion struct {
 	// Original intent
-	IntentID      string   `json:"intent_id"`
-	UserID        string   `json:"user_id"`        // User who created the intent
-	IntentTxHash  string   `json:"intent_tx_hash"`
-	IntentBlock   uint64   `json:"intent_block"`
-	IntentHash    [32]byte `json:"intent_hash"`
+	IntentID     string   `json:"intent_id"`
+	UserID       string   `json:"user_id"` // User who created the intent
+	IntentTxHash string   `json:"intent_tx_hash"`
+	IntentBlock  uint64   `json:"intent_block"`
+	IntentHash   [32]byte `json:"intent_hash"`
 
 	// Validator block binding
 	ValidatorBlockID string   `json:"validator_block_id"`
@@ -969,11 +969,11 @@ type ProofCycleCompletion struct {
 	CycleHash [32]byte `json:"cycle_hash"`
 
 	// Timing
-	IntentTime     time.Time `json:"intent_time"`
-	ExecutionTime  time.Time `json:"execution_time"`
-	AttestationTime time.Time `json:"attestation_time"`
-	WriteBackTime  time.Time `json:"write_back_time"`
-	TotalDuration  time.Duration `json:"total_duration"`
+	IntentTime      time.Time     `json:"intent_time"`
+	ExecutionTime   time.Time     `json:"execution_time"`
+	AttestationTime time.Time     `json:"attestation_time"`
+	WriteBackTime   time.Time     `json:"write_back_time"`
+	TotalDuration   time.Duration `json:"total_duration"`
 
 	// Status
 	Complete bool `json:"complete"`

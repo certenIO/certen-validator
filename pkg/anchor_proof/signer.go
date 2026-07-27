@@ -217,9 +217,9 @@ func (v *AttestationVerifier) VerifyAttestation(att *ValidatorAttestation) (*Att
 // VerifyAttestations verifies multiple attestations
 func (v *AttestationVerifier) VerifyAttestations(attestations []ValidatorAttestation) (*BatchAttestationVerifyResult, error) {
 	result := &BatchAttestationVerifyResult{
-		Results:     make([]*AttestationVerifyResult, len(attestations)),
-		TotalCount:  len(attestations),
-		VerifiedAt:  time.Now(),
+		Results:    make([]*AttestationVerifyResult, len(attestations)),
+		TotalCount: len(attestations),
+		VerifiedAt: time.Now(),
 	}
 
 	validatorsSeen := make(map[string]bool)

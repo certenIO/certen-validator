@@ -9,10 +9,10 @@ import (
 	"os"
 	"sync"
 
-	bls12381 "github.com/consensys/gnark-crypto/ecc/bls12-381"
 	"github.com/consensys/gnark-crypto/ecc"
-	groth16_bls12381 "github.com/consensys/gnark/backend/groth16/bls12-381"
+	bls12381 "github.com/consensys/gnark-crypto/ecc/bls12-381"
 	"github.com/consensys/gnark/backend/groth16"
+	groth16_bls12381 "github.com/consensys/gnark/backend/groth16/bls12-381"
 	"github.com/consensys/gnark/constraint"
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/frontend/cs/r1cs"
@@ -188,8 +188,8 @@ func (p *BLS12381Prover) GenerateProof(witness *BLSSignatureWitness) (*BLS12381P
 		TotalVotingPower:    witness.TotalVotingPower,
 		SignatureX:          witness.SignatureX,
 		SignatureY:          witness.SignatureY,
-		PubkeyX:            witness.PubkeyX0,
-		PubkeyY:            witness.PubkeyY0,
+		PubkeyX:             witness.PubkeyX0,
+		PubkeyY:             witness.PubkeyY0,
 	}
 
 	witnessData, err := frontend.NewWitness(assignment, ecc.BLS12_381.ScalarField())
@@ -409,10 +409,10 @@ func CreateWitnessFromBLSDataBLS12381(
 		TotalVotingPower:  totalVotingPower,
 		SignatureX:        sigX,
 		SignatureY:        sigY,
-		PubkeyX0:         pkX0,
-		PubkeyX1:         pkX1,
-		PubkeyY0:         pkY0,
-		PubkeyY1:         pkY1,
+		PubkeyX0:          pkX0,
+		PubkeyX1:          pkX1,
+		PubkeyY0:          pkY0,
+		PubkeyY1:          pkY1,
 	}, nil
 }
 

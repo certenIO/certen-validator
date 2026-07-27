@@ -18,12 +18,12 @@ import (
 
 // BatchStatusInfo provides detailed status information for a batch
 type BatchStatusInfo struct {
-	Status              database.BatchStatus `json:"status"`
-	StatusMessage       string               `json:"status_message"`
-	IsDelayExpected     bool                 `json:"is_delay_expected"`
-	ExpectedCompletionAt *time.Time          `json:"expected_completion_at,omitempty"`
-	PriceTier           string               `json:"price_tier"`
-	BatchType           database.BatchType   `json:"batch_type"`
+	Status               database.BatchStatus `json:"status"`
+	StatusMessage        string               `json:"status_message"`
+	IsDelayExpected      bool                 `json:"is_delay_expected"`
+	ExpectedCompletionAt *time.Time           `json:"expected_completion_at,omitempty"`
+	PriceTier            string               `json:"price_tier"`
+	BatchType            database.BatchType   `json:"batch_type"`
 }
 
 // Pricing constants per whitepaper Section 3.4.2

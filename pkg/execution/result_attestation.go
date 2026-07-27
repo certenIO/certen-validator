@@ -46,8 +46,8 @@ type ResultAttestation struct {
 
 	// Attestation metadata
 	AttestationTime time.Time `json:"attestation_time"`
-	BlockNumber     *big.Int  `json:"block_number"`      // External chain block observed
-	Confirmations   int       `json:"confirmations"`     // Block confirmations at attestation time
+	BlockNumber     *big.Int  `json:"block_number"`  // External chain block observed
+	Confirmations   int       `json:"confirmations"` // Block confirmations at attestation time
 
 	// Verification status
 	Verified bool `json:"verified"`
@@ -100,10 +100,10 @@ type AggregatedAttestation struct {
 	ValidatorAddresses []common.Address `json:"validator_addresses"` // Ordered list of attestors
 
 	// Voting power tracking
-	TotalVotingPower     *big.Int `json:"total_voting_power"`     // Total power in validator set
-	SignedVotingPower    *big.Int `json:"signed_voting_power"`    // Power of attestors
-	ThresholdNumerator   uint64   `json:"threshold_numerator"`    // e.g., 2
-	ThresholdDenominator uint64   `json:"threshold_denominator"`  // e.g., 3
+	TotalVotingPower     *big.Int `json:"total_voting_power"`    // Total power in validator set
+	SignedVotingPower    *big.Int `json:"signed_voting_power"`   // Power of attestors
+	ThresholdNumerator   uint64   `json:"threshold_numerator"`   // e.g., 2
+	ThresholdDenominator uint64   `json:"threshold_denominator"` // e.g., 3
 
 	// Timing
 	FirstAttestation time.Time `json:"first_attestation"`
@@ -196,9 +196,9 @@ type AttestationCollector struct {
 	mu sync.RWMutex
 
 	// Configuration
-	validatorSet    *ValidatorSet
-	thresholdNum    uint64
-	thresholdDenom  uint64
+	validatorSet   *ValidatorSet
+	thresholdNum   uint64
+	thresholdDenom uint64
 
 	// Validator set snapshot (Phase 2.2)
 	// Captured at collector creation for binding attestations
@@ -518,15 +518,15 @@ func (c *AttestationCollector) tryAggregate(resultHash [32]byte) (*AggregatedAtt
 		}
 
 		agg = &AggregatedAttestation{
-			ResultHash:          resultHash,
-			BundleID:            first.BundleID,
-			BlockNumber:         first.BlockNumber,
-			MessageHash:         first.MessageHash,
-			TotalVotingPower:    c.validatorSet.TotalVotingPower,
-			SignedVotingPower:   big.NewInt(0),
-			ThresholdNumerator:  c.thresholdNum,
+			ResultHash:           resultHash,
+			BundleID:             first.BundleID,
+			BlockNumber:          first.BlockNumber,
+			MessageHash:          first.MessageHash,
+			TotalVotingPower:     c.validatorSet.TotalVotingPower,
+			SignedVotingPower:    big.NewInt(0),
+			ThresholdNumerator:   c.thresholdNum,
 			ThresholdDenominator: c.thresholdDenom,
-			FirstAttestation:    time.Now(),
+			FirstAttestation:     time.Now(),
 		}
 
 		// Bind validator set snapshot (Phase 2.2)
@@ -988,8 +988,8 @@ func (v *ResultVerifier) GetBLSPublicKey() []byte {
 // AttestationBundle represents a complete bundle of attestations for submission
 type AttestationBundle struct {
 	// Core identification
-	BundleID    [32]byte `json:"bundle_id"`
-	ResultHash  [32]byte `json:"result_hash"`
+	BundleID   [32]byte `json:"bundle_id"`
+	ResultHash [32]byte `json:"result_hash"`
 
 	// The aggregated attestation
 	Aggregated *AggregatedAttestation `json:"aggregated"`

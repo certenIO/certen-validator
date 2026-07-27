@@ -49,14 +49,14 @@ type Anchor struct {
 	OperationCommitment   [32]byte       `json:"operationCommitment"`
 	CrossChainCommitment  [32]byte       `json:"crossChainCommitment"`
 	GovernanceRoot        [32]byte       `json:"governanceRoot"`
-	ExecutionCommitment   [32]byte       `json:"executionCommitment"`   // CRITICAL-001
+	ExecutionCommitment   [32]byte       `json:"executionCommitment"` // CRITICAL-001
 	AccumulateBlockHeight *big.Int       `json:"accumulateBlockHeight"`
 	Timestamp             *big.Int       `json:"timestamp"`
 	Validator             common.Address `json:"validator"`
 	Valid                 bool           `json:"valid"`
 	ProofExecuted         bool           `json:"proofExecuted"`
-	GovernanceExecuted    bool           `json:"governanceExecuted"`    // CRITICAL-001
-	GovernanceLevel       uint8          `json:"governanceLevel"`       // HIGH-004: 0=G0, 1=G1, 2=G2
+	GovernanceExecuted    bool           `json:"governanceExecuted"` // CRITICAL-001
+	GovernanceLevel       uint8          `json:"governanceLevel"`    // HIGH-004: 0=G0, 1=G1, 2=G2
 }
 
 // VerificationResult contains detailed verification results

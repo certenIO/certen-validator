@@ -251,4 +251,3 @@ func (g *CLIGovernanceProofGenerator) parseOutput(level GovernanceLevel, output 
 
 	return govProof, nil
 }
-

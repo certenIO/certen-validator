@@ -181,14 +181,14 @@ func (nc *NearClient) CreateAnchorV6_1(
 // NearCertenProofInput is the JSON structure for the NEAR anchor contract's
 // execute_comprehensive_proof method. Maps to Rust CertenProofInput.
 type NearCertenProofInput struct {
-	TransactionHash string               `json:"transaction_hash"`
-	ProofHashes     []string             `json:"proof_hashes"`
-	MerkleRoot      string               `json:"merkle_root"`
-	LeafHash        string               `json:"leaf_hash"`
-	GovernanceProof NearGovernanceProof   `json:"governance_proof"`
-	BlsProof        NearBLSProof          `json:"bls_proof"`
-	Commitments     NearCommitmentsJSON   `json:"commitments"`
-	ExpirationTime  uint64                `json:"expiration_time"`
+	TransactionHash string              `json:"transaction_hash"`
+	ProofHashes     []string            `json:"proof_hashes"`
+	MerkleRoot      string              `json:"merkle_root"`
+	LeafHash        string              `json:"leaf_hash"`
+	GovernanceProof NearGovernanceProof `json:"governance_proof"`
+	BlsProof        NearBLSProof        `json:"bls_proof"`
+	Commitments     NearCommitmentsJSON `json:"commitments"`
+	ExpirationTime  uint64              `json:"expiration_time"`
 }
 
 // NearGovernanceProof maps to Rust GovernanceProofDataInput.
@@ -267,24 +267,25 @@ type NearG2PointJSON struct {
 // because the BN254 pairing precompile on EVM expects that layout. arkworks
 // (used by the NEAR verifier) wants gnark-native real-then-imag (c0, c1), so
 // we un-swap when extracting B.X / B.Y for the NEAR JSON.
-//   0    A.X
-//   32   A.Y
-//   64   B.X.A1   (EVM calldata: imag part first)
-//   96   B.X.A0   (real part)
-//   128  B.Y.A1
-//   160  B.Y.A0
-//   192  C.X
-//   224  C.Y
-//   256  commitments.X       (V2: BSB22 Pedersen commitment)
-//   288  commitments.Y
-//   320  commitmentPok.X     (V2: PoK of the commitment)
-//   352  commitmentPok.Y
-//   384  messageHash
-//   416  pubkeyCommitment
-//   448  signedVotingPower
-//   480  totalVotingPower
-//   512  thresholdNumerator
-//   544  thresholdDenominator
+//
+//	0    A.X
+//	32   A.Y
+//	64   B.X.A1   (EVM calldata: imag part first)
+//	96   B.X.A0   (real part)
+//	128  B.Y.A1
+//	160  B.Y.A0
+//	192  C.X
+//	224  C.Y
+//	256  commitments.X       (V2: BSB22 Pedersen commitment)
+//	288  commitments.Y
+//	320  commitmentPok.X     (V2: PoK of the commitment)
+//	352  commitmentPok.Y
+//	384  messageHash
+//	416  pubkeyCommitment
+//	448  signedVotingPower
+//	480  totalVotingPower
+//	512  thresholdNumerator
+//	544  thresholdDenominator
 func ConvertABIProofToNEARJSON(abiBytes []byte) (string, error) {
 	if len(abiBytes) < 576 {
 		return "", fmt.Errorf("ABI proof bytes too short: %d (need 576 for V2 layout)", len(abiBytes))
@@ -360,26 +361,26 @@ func (nc *NearClient) ExecuteComprehensiveProof(
 
 // NearCallJSON maps to Rust's NearCall struct on the user account contract.
 type NearCallJSON struct {
-	Target   string `json:"target"`
-	Method   string `json:"method"`
-	Args     string `json:"args"`
-	Deposit  string `json:"deposit"`
-	GasTgas  uint64 `json:"gas_tgas"`
+	Target  string `json:"target"`
+	Method  string `json:"method"`
+	Args    string `json:"args"`
+	Deposit string `json:"deposit"`
+	GasTgas uint64 `json:"gas_tgas"`
 }
 
 // NearADIGovernanceProofJSON maps to Rust's ADIGovernanceProof on the user account contract.
 type NearADIGovernanceProofJSON struct {
-	AdiURL              string                    `json:"adi_url"`
-	AnchorID            string                    `json:"anchor_id"`
-	MerkleProof         []string                  `json:"merkle_proof"`
-	KeyBookProof        NearKeyBookProofJSON      `json:"key_book_proof"`
-	RoleProof           NearRoleProofJSON         `json:"role_proof"`
-	ThresholdProof      NearThresholdProofJSON    `json:"threshold_proof"`
-	ValidatorSignatures string                    `json:"validator_signatures"`
-	TimestampSec        uint64                    `json:"timestamp_sec"`
-	ExpiresAtSec        uint64                    `json:"expires_at_sec"`
-	Nonce               uint64                    `json:"nonce"`
-	RequiredLevel       string                    `json:"required_level"`
+	AdiURL              string                 `json:"adi_url"`
+	AnchorID            string                 `json:"anchor_id"`
+	MerkleProof         []string               `json:"merkle_proof"`
+	KeyBookProof        NearKeyBookProofJSON   `json:"key_book_proof"`
+	RoleProof           NearRoleProofJSON      `json:"role_proof"`
+	ThresholdProof      NearThresholdProofJSON `json:"threshold_proof"`
+	ValidatorSignatures string                 `json:"validator_signatures"`
+	TimestampSec        uint64                 `json:"timestamp_sec"`
+	ExpiresAtSec        uint64                 `json:"expires_at_sec"`
+	Nonce               uint64                 `json:"nonce"`
+	RequiredLevel       string                 `json:"required_level"`
 }
 
 // NearKeyBookProofJSON is the key book proof section.
@@ -449,17 +450,17 @@ func (nc *NearClient) ExecuteGovernanceProofDirect(
 
 // NearAnchorData holds anchor data read from the NEAR anchor contract.
 type NearAnchorData struct {
-	BundleId              [32]byte
-	MerkleRoot            [32]byte
-	AdiURLHash            [32]byte
-	OperationCommitment   [32]byte
-	CrossChainCommitment  [32]byte
-	GovernanceRoot        [32]byte
-	BlockHeight           uint64
-	Timestamp             uint64
-	Validator             string
-	ProofExecuted         bool
-	Invalidated           bool
+	BundleId             [32]byte
+	MerkleRoot           [32]byte
+	AdiURLHash           [32]byte
+	OperationCommitment  [32]byte
+	CrossChainCommitment [32]byte
+	GovernanceRoot       [32]byte
+	BlockHeight          uint64
+	Timestamp            uint64
+	Validator            string
+	ProofExecuted        bool
+	Invalidated          bool
 }
 
 // GetAnchorData reads anchor data from the contract via a view call.
@@ -883,7 +884,7 @@ func (nc *NearClient) callViewFunction(ctx context.Context, contractID, method s
 	}
 
 	var viewResult struct {
-		Result []byte `json:"result"`
+		Result []byte   `json:"result"`
 		Logs   []string `json:"logs"`
 	}
 	if err := json.Unmarshal(result, &viewResult); err != nil {
@@ -973,7 +974,7 @@ func (nc *NearClient) rpcCall(ctx context.Context, method string, params interfa
 	}
 
 	var rpcResp struct {
-		Result json.RawMessage        `json:"result"`
+		Result json.RawMessage `json:"result"`
 		Error  *struct {
 			Code    int             `json:"code"`
 			Message string          `json:"message"`
@@ -1082,4 +1083,3 @@ func encodeBytesAsBase64(data []byte) string {
 func encodeAddressAsHex(addr common.Address) string {
 	return "0x" + hex.EncodeToString(addr.Bytes())
 }
-

@@ -22,13 +22,13 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/consensys/gnark-crypto/ecc"
 	bls12381 "github.com/consensys/gnark-crypto/ecc/bls12-381"
 	bn254_curve "github.com/consensys/gnark-crypto/ecc/bn254"
 	"github.com/consensys/gnark-crypto/ecc/bn254/fr"
-	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark/backend"
-	groth16_bn254 "github.com/consensys/gnark/backend/groth16/bn254"
 	"github.com/consensys/gnark/backend/groth16"
+	groth16_bn254 "github.com/consensys/gnark/backend/groth16/bn254"
 	"github.com/consensys/gnark/constraint"
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/frontend/cs/r1cs"
@@ -64,9 +64,9 @@ type BLSZKProver struct {
 // BLSZKVerifierV2 ABI; they are zero/nil on legacy V1 proofs.
 type BLSZKProof struct {
 	// Groth16 proof components (A, B, C points)
-	ProofA [2]*big.Int   `json:"proofA"`
+	ProofA [2]*big.Int    `json:"proofA"`
 	ProofB [2][2]*big.Int `json:"proofB"`
-	ProofC [2]*big.Int   `json:"proofC"`
+	ProofC [2]*big.Int    `json:"proofC"`
 
 	// V2 BSB22 Pedersen artifacts — populated by extractProofComponents from
 	// the underlying *groth16_bn254.Proof. Required by BLSZKVerifierV2Generated.
@@ -115,7 +115,7 @@ func setG2Coords(p *bls12381.G2Affine, x0, x1, y0, y1 *big.Int) error {
 
 // VerificationKeyExport contains the verification key in Solidity-compatible format
 type VerificationKeyExport struct {
-	Alpha1 [2]*big.Int   `json:"alpha1"`
+	Alpha1 [2]*big.Int    `json:"alpha1"`
 	Beta2  [2][2]*big.Int `json:"beta2"`
 	Gamma2 [2][2]*big.Int `json:"gamma2"`
 	Delta2 [2][2]*big.Int `json:"delta2"`
@@ -534,22 +534,22 @@ func (p *BLSZKProver) ExportVerificationKeyJSON() ([]byte, error) {
 // blsProofABI defines the ABI for the BLSSignatureProof struct used by
 // BLSZKVerifierV2 in evm/src/core/BLSZKVerifierV2.sol:
 //
-//   struct Groth16Proof {
-//       uint256[2] a;
-//       uint256[2][2] b;
-//       uint256[2] c;
-//   }
-//   struct BLSSignatureProof {
-//       Groth16Proof proof;
-//       uint256[2] commitments;
-//       uint256[2] commitmentPok;
-//       bytes32 messageHash;
-//       bytes32 pubkeyCommitment;
-//       uint256 signedVotingPower;
-//       uint256 totalVotingPower;
-//       uint256 thresholdNumerator;   // ignored by contract; kept for ABI stability
-//       uint256 thresholdDenominator; // ignored by contract; kept for ABI stability
-//   }
+//	struct Groth16Proof {
+//	    uint256[2] a;
+//	    uint256[2][2] b;
+//	    uint256[2] c;
+//	}
+//	struct BLSSignatureProof {
+//	    Groth16Proof proof;
+//	    uint256[2] commitments;
+//	    uint256[2] commitmentPok;
+//	    bytes32 messageHash;
+//	    bytes32 pubkeyCommitment;
+//	    uint256 signedVotingPower;
+//	    uint256 totalVotingPower;
+//	    uint256 thresholdNumerator;   // ignored by contract; kept for ABI stability
+//	    uint256 thresholdDenominator; // ignored by contract; kept for ABI stability
+//	}
 //
 // V6's CertenAnchorV6 calls IBLSZKVerifier.verifyBLSSignature(bytes, bytes32);
 // BLSZKVerifierV2 then runs abi.decode(bytes, (BLSSignatureProof)). All fields
@@ -608,13 +608,13 @@ type solGroth16Proof struct {
 // ToSolidityCalldata converts the proof to Solidity-compatible calldata in
 // the V2 BLSSignatureProof wire format consumed by BLSZKVerifierV2:
 //
-//   abi.encode(BLSSignatureProof{
-//     proof = Groth16Proof{a, b, c},
-//     commitments, commitmentPok,
-//     messageHash, pubkeyCommitment,
-//     signedVotingPower, totalVotingPower,
-//     thresholdNumerator, thresholdDenominator
-//   })
+//	abi.encode(BLSSignatureProof{
+//	  proof = Groth16Proof{a, b, c},
+//	  commitments, commitmentPok,
+//	  messageHash, pubkeyCommitment,
+//	  signedVotingPower, totalVotingPower,
+//	  thresholdNumerator, thresholdDenominator
+//	})
 //
 // All fields are statically sized, so the encoding of the single struct is
 // byte-equivalent to the concatenated encodings of its fields in order.
@@ -943,9 +943,9 @@ func ComputePubkeyCommitmentFromBytes(pubkeys [][]byte) ([32]byte, error) {
 // Uses gnark-crypto's native BLS12-381 point deserialization for correctness.
 //
 // BLS12-381 Point Formats (per gnark-crypto):
-// - G1 point (signature): 48 bytes compressed (serialized with SetBytes/Bytes)
-// - G2 point (pubkey): 96 bytes compressed (serialized with SetBytes/Bytes)
-//   gnark-crypto handles decompression internally using proper curve arithmetic.
+//   - G1 point (signature): 48 bytes compressed (serialized with SetBytes/Bytes)
+//   - G2 point (pubkey): 96 bytes compressed (serialized with SetBytes/Bytes)
+//     gnark-crypto handles decompression internally using proper curve arithmetic.
 //
 // The pubkey commitment MUST match the circuit's computation exactly.
 func CreateWitnessFromBLSData(

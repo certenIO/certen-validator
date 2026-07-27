@@ -82,13 +82,13 @@ type solanaRPCResponse struct {
 }
 
 type solanaTransactionResult struct {
-	Slot        uint64 `json:"slot"`
-	BlockTime   *int64 `json:"blockTime"`
-	Meta        *struct {
-		Err       interface{} `json:"err"`
-		Fee       uint64      `json:"fee"`
-		LogMessages []string  `json:"logMessages"`
-		ComputeUnitsConsumed *uint64 `json:"computeUnitsConsumed"`
+	Slot      uint64 `json:"slot"`
+	BlockTime *int64 `json:"blockTime"`
+	Meta      *struct {
+		Err                  interface{} `json:"err"`
+		Fee                  uint64      `json:"fee"`
+		LogMessages          []string    `json:"logMessages"`
+		ComputeUnitsConsumed *uint64     `json:"computeUnitsConsumed"`
 	} `json:"meta"`
 	Transaction struct {
 		Message struct {
@@ -250,14 +250,14 @@ func (s *SolanaStrategy) ObserveTransaction(ctx context.Context, txHash string) 
 					BlockHash:             blockHash,
 					BlockTimestamp:        blockTime,
 					Status:                status,
-					Confirmations:        confirmations,
+					Confirmations:         confirmations,
 					RequiredConfirmations: required,
 					IsFinalized:           true,
 					ResultHash:            s.computeResultHash(txHash, result.Slot),
 					GasUsed:               gasUsed,
 					ObservedAt:            time.Now().UTC(),
 					ObserverValidatorID:   s.config.ValidatorID,
-					TxFrom:               txFrom,
+					TxFrom:                txFrom,
 					ChainName:             s.NetworkName(),
 				}, nil
 			}
@@ -358,13 +358,13 @@ func (s *SolanaStrategy) GetTransactionReceipt(ctx context.Context, txHash strin
 		BlockHash:             blockHash,
 		BlockTimestamp:        blockTime,
 		Status:                status,
-		Confirmations:        confirmations,
+		Confirmations:         confirmations,
 		RequiredConfirmations: s.GetRequiredConfirmations(),
 		IsFinalized:           confirmations >= s.GetRequiredConfirmations(),
 		ResultHash:            s.computeResultHash(txHash, result.Slot),
 		ObservedAt:            time.Now().UTC(),
 		ObserverValidatorID:   s.config.ValidatorID,
-		TxFrom:               txFrom,
+		TxFrom:                txFrom,
 		ChainName:             s.NetworkName(),
 	}, nil
 }
@@ -565,4 +565,3 @@ func NewSolanaDevnetStrategy(rpcURL, programID, validatorID string) (*SolanaStra
 
 	return NewSolanaStrategy(config)
 }
-

@@ -44,9 +44,9 @@ type SuiClient struct {
 
 // SUI constants
 const (
-	suiGasBudget       uint64 = 50_000_000 // 50M MIST = 0.05 SUI
-	suiClockObjectID          = "0x0000000000000000000000000000000000000000000000000000000000000006"
-	suiClockVersion    uint64 = 1
+	suiGasBudget     uint64 = 50_000_000 // 50M MIST = 0.05 SUI
+	suiClockObjectID        = "0x0000000000000000000000000000000000000000000000000000000000000006"
+	suiClockVersion  uint64 = 1
 )
 
 // NewSuiClient creates a SUI client from an RPC endpoint and Bech32m-encoded private key.
@@ -560,13 +560,13 @@ func (sc *SuiClient) buildMoveCallTxBytes(
 	suiArgs = append(suiArgs, args...)
 
 	result, err := sc.rpcCall(ctx, "unsafe_moveCall", []interface{}{
-		sc.senderAddress,            // signer
-		sc.packageAddress,           // package
-		module,                      // module
-		function,                    // function
-		typeArgs,                    // type_arguments
-		suiArgs,                     // arguments (SuiJSON format)
-		nil,                         // gas (auto-select)
+		sc.senderAddress,             // signer
+		sc.packageAddress,            // package
+		module,                       // module
+		function,                     // function
+		typeArgs,                     // type_arguments
+		suiArgs,                      // arguments (SuiJSON format)
+		nil,                          // gas (auto-select)
 		fmt.Sprintf("%d", gasBudget), // gas_budget
 	})
 	if err != nil {
@@ -731,13 +731,13 @@ type SuiCertenProof struct {
 	GovRequiredSignatures uint64
 	GovProvidedSignatures uint64
 
-	BLSProofBytes        []byte
+	BLSProofBytes         []byte
 	BLSValidatorAddresses []string // 0x+64hex SUI addresses
-	BLSVotingPowers      []uint64
-	BLSTotalVotingPower  uint64
-	BLSSignedVotingPower uint64
-	BLSMessageHash       [32]byte
-	BLSPubkeyCommitment  []byte
+	BLSVotingPowers       []uint64
+	BLSTotalVotingPower   uint64
+	BLSSignedVotingPower  uint64
+	BLSMessageHash        [32]byte
+	BLSPubkeyCommitment   []byte
 
 	CommitOperationCommitment  [32]byte
 	CommitCrossChainCommitment [32]byte
@@ -780,36 +780,36 @@ func (sc *SuiClient) ExecuteComprehensiveProof(
 
 	// Arguments in SuiJSON format
 	args := []interface{}{
-		suiJsonVecU8(anchorId[:]),                              // anchor_id_bytes: vector<u8>
-		suiJsonVecU8(proof.TransactionHash[:]),                 // transaction_hash_bytes: vector<u8>
-		suiJsonVecU8(proof.MerkleRoot[:]),                      // merkle_root_bytes: vector<u8>
-		suiJsonVecVecU8From32(proof.ProofHashes),               // proof_hashes_bytes: vector<vector<u8>>
-		suiJsonVecU8(proof.LeafHash[:]),                        // leaf_hash_bytes: vector<u8>
-		proof.GovKeyBookURL,                                    // gov_key_book_url: String
-		suiJsonVecU8(proof.GovKeyBookRoot[:]),                  // gov_key_book_root_bytes: vector<u8>
-		suiJsonVecVecU8From32(proof.GovKeyPageProofs),          // gov_key_page_proofs_bytes: vector<vector<u8>>
-		suiJsonAddress(proof.GovAuthorityAddress),              // gov_authority_address: address
-		suiJsonU8(proof.GovAuthorityLevel),                     // gov_authority_level: u8
-		suiJsonU64(proof.GovNonce),                             // gov_nonce: u64
-		suiJsonU64(proof.GovRequiredSignatures),                // gov_required_signatures: u64
-		suiJsonU64(proof.GovProvidedSignatures),                // gov_provided_signatures: u64
-		suiJsonVecU8(proof.BLSProofBytes),                     // bls_proof_points_bytes: vector<u8>
-		suiJsonVecAddress(blsValidatorAddrs),                   // bls_validator_addresses: vector<address>
-		suiJsonVecU64(blsVotingPowers),                         // bls_voting_powers: vector<u64>
-		suiJsonU64(proof.BLSTotalVotingPower),                  // bls_total_voting_power: u64
-		suiJsonU64(proof.BLSSignedVotingPower),                 // bls_signed_voting_power: u64
-		suiJsonVecU8(proof.BLSMessageHash[:]),                  // bls_message_hash_bytes: vector<u8>
-		suiJsonVecU8(proof.BLSPubkeyCommitment),               // bls_pubkey_commitment: vector<u8>
-		suiJsonVecU8(proof.CommitOperationCommitment[:]),       // commit_operation_bytes: vector<u8>
-		suiJsonVecU8(proof.CommitCrossChainCommitment[:]),      // commit_cross_chain_bytes: vector<u8>
-		suiJsonVecU8(proof.CommitGovernanceRoot[:]),            // commit_governance_bytes: vector<u8>
-		proof.CommitSourceChain,                                // commit_source_chain: String
-		suiJsonU64(proof.CommitSourceBlockHeight),              // commit_source_block_height: u64
-		suiJsonVecU8(proof.CommitSourceTxHash[:]),              // commit_source_tx_hash_bytes: vector<u8>
-		proof.CommitTargetChain,                                // commit_target_chain: String
-		suiJsonAddress(proof.CommitTargetAddress),              // commit_target_address: address
-		suiJsonU64(proof.ExpirationTimeMs),                     // expiration_time_ms: u64
-		suiJsonVecU8(proof.Metadata),                          // metadata: vector<u8>
+		suiJsonVecU8(anchorId[:]),                         // anchor_id_bytes: vector<u8>
+		suiJsonVecU8(proof.TransactionHash[:]),            // transaction_hash_bytes: vector<u8>
+		suiJsonVecU8(proof.MerkleRoot[:]),                 // merkle_root_bytes: vector<u8>
+		suiJsonVecVecU8From32(proof.ProofHashes),          // proof_hashes_bytes: vector<vector<u8>>
+		suiJsonVecU8(proof.LeafHash[:]),                   // leaf_hash_bytes: vector<u8>
+		proof.GovKeyBookURL,                               // gov_key_book_url: String
+		suiJsonVecU8(proof.GovKeyBookRoot[:]),             // gov_key_book_root_bytes: vector<u8>
+		suiJsonVecVecU8From32(proof.GovKeyPageProofs),     // gov_key_page_proofs_bytes: vector<vector<u8>>
+		suiJsonAddress(proof.GovAuthorityAddress),         // gov_authority_address: address
+		suiJsonU8(proof.GovAuthorityLevel),                // gov_authority_level: u8
+		suiJsonU64(proof.GovNonce),                        // gov_nonce: u64
+		suiJsonU64(proof.GovRequiredSignatures),           // gov_required_signatures: u64
+		suiJsonU64(proof.GovProvidedSignatures),           // gov_provided_signatures: u64
+		suiJsonVecU8(proof.BLSProofBytes),                 // bls_proof_points_bytes: vector<u8>
+		suiJsonVecAddress(blsValidatorAddrs),              // bls_validator_addresses: vector<address>
+		suiJsonVecU64(blsVotingPowers),                    // bls_voting_powers: vector<u64>
+		suiJsonU64(proof.BLSTotalVotingPower),             // bls_total_voting_power: u64
+		suiJsonU64(proof.BLSSignedVotingPower),            // bls_signed_voting_power: u64
+		suiJsonVecU8(proof.BLSMessageHash[:]),             // bls_message_hash_bytes: vector<u8>
+		suiJsonVecU8(proof.BLSPubkeyCommitment),           // bls_pubkey_commitment: vector<u8>
+		suiJsonVecU8(proof.CommitOperationCommitment[:]),  // commit_operation_bytes: vector<u8>
+		suiJsonVecU8(proof.CommitCrossChainCommitment[:]), // commit_cross_chain_bytes: vector<u8>
+		suiJsonVecU8(proof.CommitGovernanceRoot[:]),       // commit_governance_bytes: vector<u8>
+		proof.CommitSourceChain,                           // commit_source_chain: String
+		suiJsonU64(proof.CommitSourceBlockHeight),         // commit_source_block_height: u64
+		suiJsonVecU8(proof.CommitSourceTxHash[:]),         // commit_source_tx_hash_bytes: vector<u8>
+		proof.CommitTargetChain,                           // commit_target_chain: String
+		suiJsonAddress(proof.CommitTargetAddress),         // commit_target_address: address
+		suiJsonU64(proof.ExpirationTimeMs),                // expiration_time_ms: u64
+		suiJsonVecU8(proof.Metadata),                      // metadata: vector<u8>
 	}
 
 	digest, err := sc.buildAndExecuteMoveCall(ctx,
@@ -830,9 +830,9 @@ func (sc *SuiClient) ExecuteComprehensiveProof(
 
 // SuiADIGovernanceProof holds the governance proof for Step 3.
 type SuiADIGovernanceProof struct {
-	AdiURL        string
-	AnchorID      [32]byte
-	MerklePath    [][32]byte
+	AdiURL     string
+	AnchorID   [32]byte
+	MerklePath [][32]byte
 
 	// Key Book Proof
 	KBUrl        string
@@ -849,20 +849,20 @@ type SuiADIGovernanceProof struct {
 	RoleSignature    []byte
 
 	// Threshold proof
-	ThreshRequired    uint64
-	ThreshActual      uint64
-	ThreshSignatures  [][]byte
-	ThreshSigners     []string // 0x+64hex
+	ThreshRequired     uint64
+	ThreshActual       uint64
+	ThreshSignatures   [][]byte
+	ThreshSigners      []string // 0x+64hex
 	ThreshVotingPowers []uint64
-	ThreshTotalPower  uint64
-	ThreshMessageHash [32]byte
+	ThreshTotalPower   uint64
+	ThreshMessageHash  [32]byte
 
-	Timestamp          uint64
-	ExpiresAt          uint64
+	Timestamp           uint64
+	ExpiresAt           uint64
 	ValidatorSignatures []byte
-	Nonce              uint64
-	RequiredLevel      uint8
-	OperationHash      [32]byte
+	Nonce               uint64
+	RequiredLevel       uint8
+	OperationHash       [32]byte
 }
 
 // WithdrawSuiDirect calls withdraw_sui_direct on the user's CertenAccountV2.
@@ -888,34 +888,34 @@ func (sc *SuiClient) WithdrawSuiDirect(
 
 	// Arguments in SuiJSON format
 	args := []interface{}{
-		suiJsonAddress(recipientAddr),                          // recipient: address
-		suiJsonU64(amountMist),                                 // amount: u64
-		proof.AdiURL,                                           // proof_adi_url: String
-		suiJsonVecU8(proof.AnchorID[:]),                        // proof_anchor_id: vector<u8>
-		suiJsonVecVecU8From32(proof.MerklePath),                // proof_merkle_path: vector<vector<u8>>
-		proof.KBUrl,                                            // kb_url: String
-		suiJsonVecU8(proof.KBRoot[:]),                          // kb_root: vector<u8>
-		suiJsonU64(proof.KBDepth),                              // kb_depth: u64
-		suiJsonU64(proof.KBValidFrom),                          // kb_valid_from: u64
-		suiJsonU64(proof.KBValidUntil),                         // kb_valid_until: u64
-		suiJsonU8(proof.RoleLevel),                             // role_level: u8
-		suiJsonVecU8(proof.RoleHash[:]),                        // role_hash: vector<u8>
-		suiJsonAddress(proof.RoleAuthorizedBy),                 // role_authorized_by: address
-		suiJsonU64(proof.RoleGrantedAt),                        // role_granted_at: u64
-		suiJsonVecU8(proof.RoleSignature),                      // role_signature: vector<u8>
-		suiJsonU64(proof.ThreshRequired),                       // thresh_required: u64
-		suiJsonU64(proof.ThreshActual),                         // thresh_actual: u64
-		suiJsonVecVecU8(proof.ThreshSignatures),                // thresh_signatures: vector<vector<u8>>
-		suiJsonVecAddress(proof.ThreshSigners),                 // thresh_signers: vector<address>
-		suiJsonVecU64(proof.ThreshVotingPowers),                // thresh_voting_powers: vector<u64>
-		suiJsonU64(proof.ThreshTotalPower),                     // thresh_total_power: u64
-		suiJsonVecU8(proof.ThreshMessageHash[:]),               // thresh_message_hash: vector<u8>
-		suiJsonU64(proof.Timestamp),                            // proof_timestamp: u64
-		suiJsonU64(proof.ExpiresAt),                            // proof_expires_at: u64
-		suiJsonVecU8(proof.ValidatorSignatures),                // validator_signatures: vector<u8>
-		suiJsonU64(proof.Nonce),                                // proof_nonce: u64
-		suiJsonU8(proof.RequiredLevel),                         // required_level: u8
-		suiJsonVecU8(proof.OperationHash[:]),                   // operation_hash: vector<u8>
+		suiJsonAddress(recipientAddr),            // recipient: address
+		suiJsonU64(amountMist),                   // amount: u64
+		proof.AdiURL,                             // proof_adi_url: String
+		suiJsonVecU8(proof.AnchorID[:]),          // proof_anchor_id: vector<u8>
+		suiJsonVecVecU8From32(proof.MerklePath),  // proof_merkle_path: vector<vector<u8>>
+		proof.KBUrl,                              // kb_url: String
+		suiJsonVecU8(proof.KBRoot[:]),            // kb_root: vector<u8>
+		suiJsonU64(proof.KBDepth),                // kb_depth: u64
+		suiJsonU64(proof.KBValidFrom),            // kb_valid_from: u64
+		suiJsonU64(proof.KBValidUntil),           // kb_valid_until: u64
+		suiJsonU8(proof.RoleLevel),               // role_level: u8
+		suiJsonVecU8(proof.RoleHash[:]),          // role_hash: vector<u8>
+		suiJsonAddress(proof.RoleAuthorizedBy),   // role_authorized_by: address
+		suiJsonU64(proof.RoleGrantedAt),          // role_granted_at: u64
+		suiJsonVecU8(proof.RoleSignature),        // role_signature: vector<u8>
+		suiJsonU64(proof.ThreshRequired),         // thresh_required: u64
+		suiJsonU64(proof.ThreshActual),           // thresh_actual: u64
+		suiJsonVecVecU8(proof.ThreshSignatures),  // thresh_signatures: vector<vector<u8>>
+		suiJsonVecAddress(proof.ThreshSigners),   // thresh_signers: vector<address>
+		suiJsonVecU64(proof.ThreshVotingPowers),  // thresh_voting_powers: vector<u64>
+		suiJsonU64(proof.ThreshTotalPower),       // thresh_total_power: u64
+		suiJsonVecU8(proof.ThreshMessageHash[:]), // thresh_message_hash: vector<u8>
+		suiJsonU64(proof.Timestamp),              // proof_timestamp: u64
+		suiJsonU64(proof.ExpiresAt),              // proof_expires_at: u64
+		suiJsonVecU8(proof.ValidatorSignatures),  // validator_signatures: vector<u8>
+		suiJsonU64(proof.Nonce),                  // proof_nonce: u64
+		suiJsonU8(proof.RequiredLevel),           // required_level: u8
+		suiJsonVecU8(proof.OperationHash[:]),     // operation_hash: vector<u8>
 	}
 
 	digest, err := sc.buildAndExecuteMoveCall(ctx,
@@ -970,12 +970,12 @@ func (sc *SuiClient) DeployAccountViaFactory(
 
 	// Build arguments for unsafe_moveCall (mix of objects and pure values)
 	suiArgs := make([]interface{}, 0)
-	suiArgs = append(suiArgs, sc.factoryObject)   // factory object
-	suiArgs = append(suiArgs, suiClockObjectID)    // clock object
-	suiArgs = append(suiArgs, owner)               // owner address (pure)
-	suiArgs = append(suiArgs, adiURL)              // adi_url string (pure)
+	suiArgs = append(suiArgs, sc.factoryObject)        // factory object
+	suiArgs = append(suiArgs, suiClockObjectID)        // clock object
+	suiArgs = append(suiArgs, owner)                   // owner address (pure)
+	suiArgs = append(suiArgs, adiURL)                  // adi_url string (pure)
 	suiArgs = append(suiArgs, fmt.Sprintf("%d", salt)) // salt (pure)
-	suiArgs = append(suiArgs, paymentCoinID)       // payment coin object
+	suiArgs = append(suiArgs, paymentCoinID)           // payment coin object
 
 	result, err := sc.rpcCall(ctx, "unsafe_moveCall", []interface{}{
 		sc.senderAddress,

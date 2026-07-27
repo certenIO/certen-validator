@@ -218,18 +218,18 @@ type G0Result struct {
 
 // G1Result represents G1 proof result with cryptographic verification
 type G1Result struct {
-	G0Result                          // Inherit all G0 results
-	AuthoritySnapshot   AuthoritySnapshot    `json:"authority_snapshot"`    // KPSW-EXEC snapshot
-	ValidatedSignatures []ValidatedSignature `json:"validated_signatures"`  // All validated signatures
-	UniqueValidKeys     int                  `json:"unique_valid_keys"`     // Unique valid key count
-	RequiredThreshold   uint64               `json:"required_threshold"`    // Required threshold
-	ThresholdSatisfied  bool                 `json:"threshold_satisfied"`   // Threshold satisfaction
-	ExecutionSuccess    bool                 `json:"execution_success"`     // Execution success
-	TimingValid         bool                 `json:"timing_valid"`          // Timing validation
-	G1ProofComplete     bool                 `json:"g1_proof_complete"`     // G1 proof complete
-	ConcurrencyEnabled  bool                 `json:"concurrency_enabled"`   // Concurrency was used
-	WorkerCount         int                  `json:"worker_count"`          // Number of workers used
-	ProcessingTimeMs    int64                `json:"processing_time_ms"`    // Total processing time
+	G0Result                                 // Inherit all G0 results
+	AuthoritySnapshot   AuthoritySnapshot    `json:"authority_snapshot"`   // KPSW-EXEC snapshot
+	ValidatedSignatures []ValidatedSignature `json:"validated_signatures"` // All validated signatures
+	UniqueValidKeys     int                  `json:"unique_valid_keys"`    // Unique valid key count
+	RequiredThreshold   uint64               `json:"required_threshold"`   // Required threshold
+	ThresholdSatisfied  bool                 `json:"threshold_satisfied"`  // Threshold satisfaction
+	ExecutionSuccess    bool                 `json:"execution_success"`    // Execution success
+	TimingValid         bool                 `json:"timing_valid"`         // Timing validation
+	G1ProofComplete     bool                 `json:"g1_proof_complete"`    // G1 proof complete
+	ConcurrencyEnabled  bool                 `json:"concurrency_enabled"`  // Concurrency was used
+	WorkerCount         int                  `json:"worker_count"`         // Number of workers used
+	ProcessingTimeMs    int64                `json:"processing_time_ms"`   // Total processing time
 
 	// Enhanced cryptographic security fields
 	CryptographicSecurity bool            `json:"cryptographic_security"` // Enhanced crypto enabled
@@ -241,7 +241,7 @@ type G1Result struct {
 
 // G2Result represents G2 proof result (Governance + Outcome Binding)
 type G2Result struct {
-	G1Result                         // Inherit all G1 results
+	G1Result                    // Inherit all G1 results
 	OutcomeLeaf     OutcomeLeaf `json:"outcome_leaf"`      // Outcome leaf with payload binding
 	PayloadVerified bool        `json:"payload_verified"`  // Payload authenticity verified
 	EffectVerified  bool        `json:"effect_verified"`   // Transaction effect verified

@@ -139,7 +139,7 @@ type PortableAttestation struct {
 	ValidatorPubkey string `json:"validator_pubkey"` // Hex-encoded
 	MerkleRoot      string `json:"merkle_root"`      // Hex-encoded
 	AnchorTxHash    string `json:"anchor_tx_hash"`
-	Signature       string `json:"signature"` // Hex-encoded
+	Signature       string `json:"signature"`   // Hex-encoded
 	AttestedAt      string `json:"attested_at"` // RFC3339
 }
 
@@ -323,16 +323,16 @@ func (p *CertenAnchorProof) ToPortableJSONPretty() ([]byte, error) {
 
 // CompactProof is a minimal proof format for lightweight verification
 type CompactProof struct {
-	ProofID    string              `json:"proof_id"`
-	TxHash     string              `json:"tx_hash"`
-	MerkleRoot string              `json:"merkle_root"`
+	ProofID    string               `json:"proof_id"`
+	TxHash     string               `json:"tx_hash"`
+	MerkleRoot string               `json:"merkle_root"`
 	MerklePath []PortableMerkleNode `json:"merkle_path"`
-	AnchorTx   string              `json:"anchor_tx"`
-	AnchorBlk  int64               `json:"anchor_blk"`
-	Chain      string              `json:"chain"`
-	Confirms   int                 `json:"confirms"`
-	GovLevel   string              `json:"gov_level,omitempty"`
-	Sigs       []string            `json:"sigs,omitempty"` // Base64-encoded signatures
+	AnchorTx   string               `json:"anchor_tx"`
+	AnchorBlk  int64                `json:"anchor_blk"`
+	Chain      string               `json:"chain"`
+	Confirms   int                  `json:"confirms"`
+	GovLevel   string               `json:"gov_level,omitempty"`
+	Sigs       []string             `json:"sigs,omitempty"` // Base64-encoded signatures
 }
 
 // ToCompact converts to compact format

@@ -51,12 +51,12 @@ type Probe interface {
 
 // ProbeConfig is everything a probe needs to reach a chain.
 type ProbeConfig struct {
-	Chain    string
-	ChainID  int64
-	RPCURL   string
-	APIKey   string // toncenter and some providers
-	HTTP     *http.Client
-	Leg      string
+	Chain   string
+	ChainID int64
+	RPCURL  string
+	APIKey  string // toncenter and some providers
+	HTTP    *http.Client
+	Leg     string
 }
 
 // NewProbe selects the fee model for a chain. Returns an error for unknown
@@ -277,9 +277,9 @@ func (p *solanaProbe) ObservedCost(ctx context.Context, txSig string) (*ChainCos
 	var t struct {
 		Slot uint64 `json:"slot"`
 		Meta *struct {
-			Fee          uint64   `json:"fee"`
-			PreBalances  []uint64 `json:"preBalances"`
-			PostBalances []uint64 `json:"postBalances"`
+			Fee          uint64           `json:"fee"`
+			PreBalances  []uint64         `json:"preBalances"`
+			PostBalances []uint64         `json:"postBalances"`
 			Err          *json.RawMessage `json:"err"`
 		} `json:"meta"`
 	}
@@ -382,12 +382,12 @@ type aptosProbe struct{ cfg ProbeConfig }
 func (p *aptosProbe) ObservedCost(ctx context.Context, txHash string) (*ChainCost, error) {
 	url := fmt.Sprintf("%s/v1/transactions/by_hash/%s", strings.TrimSuffix(p.cfg.RPCURL, "/"), txHash)
 	var t struct {
-		Version             string `json:"version"`
-		GasUsed             string `json:"gas_used"`
-		GasUnitPrice        string `json:"gas_unit_price"`
-		Success             bool   `json:"success"`
-		StorageFeeOctas     string `json:"storage_fee_octas"`
-		StorageFeeRefund    string `json:"storage_fee_refund_octas"`
+		Version          string `json:"version"`
+		GasUsed          string `json:"gas_used"`
+		GasUnitPrice     string `json:"gas_unit_price"`
+		Success          bool   `json:"success"`
+		StorageFeeOctas  string `json:"storage_fee_octas"`
+		StorageFeeRefund string `json:"storage_fee_refund_octas"`
 	}
 	if err := httpGetJSON(ctx, p.cfg.HTTP, url, nil, &t); err != nil {
 		return nil, fmt.Errorf("aptos: %w", err)
@@ -566,11 +566,11 @@ func (p *tronProbe) ObservedCost(ctx context.Context, txID string) (*ChainCost, 
 		Fee         int64  `json:"fee"`
 		BlockNumber int64  `json:"blockNumber"`
 		Receipt     struct {
-			EnergyUsage      int64  `json:"energy_usage"`       // covered by stake (free)
-			EnergyFee        int64  `json:"energy_fee"`         // TRX burned for energy
+			EnergyUsage      int64  `json:"energy_usage"` // covered by stake (free)
+			EnergyFee        int64  `json:"energy_fee"`   // TRX burned for energy
 			EnergyUsageTotal int64  `json:"energy_usage_total"`
-			NetUsage         int64  `json:"net_usage"`          // bandwidth from stake (free)
-			NetFee           int64  `json:"net_fee"`            // TRX burned for bandwidth
+			NetUsage         int64  `json:"net_usage"` // bandwidth from stake (free)
+			NetFee           int64  `json:"net_fee"`   // TRX burned for bandwidth
 			Result           string `json:"result"`
 		} `json:"receipt"`
 	}
@@ -621,11 +621,11 @@ func (p *cardanoProbe) ObservedCost(ctx context.Context, txHash string) (*ChainC
 		headers["project_id"] = p.cfg.APIKey // Blockfrost-style
 	}
 	var t struct {
-		Hash       string `json:"hash"`
-		Fees       string `json:"fees"`
-		Deposit    string `json:"deposit"`
-		Size       int64  `json:"size"`
-		BlockHeight int64 `json:"block_height"`
+		Hash        string `json:"hash"`
+		Fees        string `json:"fees"`
+		Deposit     string `json:"deposit"`
+		Size        int64  `json:"size"`
+		BlockHeight int64  `json:"block_height"`
 	}
 	if err := httpGetJSON(ctx, p.cfg.HTTP, url, headers, &t); err != nil {
 		return nil, fmt.Errorf("cardano: %w", err)

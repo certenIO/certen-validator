@@ -14,7 +14,7 @@ var halfFieldModulus = new(big.Int).Div(fieldModulus, big.NewInt(2))
 
 // VK JSON structure matching the export format
 type VKExport struct {
-	Alpha1 [2]json.Number   `json:"alpha1"`
+	Alpha1 [2]json.Number    `json:"alpha1"`
 	Beta2  [2][2]json.Number `json:"beta2"`
 	Gamma2 [2][2]json.Number `json:"gamma2"`
 	Delta2 [2][2]json.Number `json:"delta2"`

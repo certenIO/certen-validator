@@ -121,9 +121,9 @@ type StateProofReference struct {
 	NetworkRootHash [32]byte `json:"network_root_hash"`
 
 	// Metadata for context (not used in verification)
-	BVN               string `json:"bvn,omitempty"`
-	BlockHeight       int64  `json:"block_height,omitempty"`
-	NetworkBlockHeight int64 `json:"network_block_height,omitempty"`
+	BVN                string `json:"bvn,omitempty"`
+	BlockHeight        int64  `json:"block_height,omitempty"`
+	NetworkBlockHeight int64  `json:"network_block_height,omitempty"`
 
 	// Legacy fields for backward compatibility (deprecated, use receipts)
 	// These are computed from receipt validation, not trusted inputs
@@ -424,8 +424,8 @@ type AnchorBinding struct {
 	BindingHash [32]byte `json:"binding_hash"`
 
 	// Coordinator signature over binding hash
-	CoordinatorSig []byte   `json:"coordinator_sig"` // 64 bytes Ed25519
-	CoordinatorKey []byte   `json:"coordinator_key"` // 32 bytes Ed25519 public key
+	CoordinatorSig []byte `json:"coordinator_sig"` // 64 bytes Ed25519
+	CoordinatorKey []byte `json:"coordinator_key"` // 32 bytes Ed25519 public key
 
 	// Timestamp of binding
 	CreatedAt time.Time `json:"created_at"`
@@ -592,11 +592,11 @@ type VerifyResult struct {
 	Message string `json:"message,omitempty"`
 
 	// Component-level results
-	TransactionInclusionValid bool   `json:"transaction_inclusion_valid"`
-	AnchorReferenceValid      bool   `json:"anchor_reference_valid"`
-	StateProofValid           bool   `json:"state_proof_valid"`
-	AuthorityProofValid       bool   `json:"authority_proof_valid"`
-	AttestationsValid         bool   `json:"attestations_valid"`
+	TransactionInclusionValid bool `json:"transaction_inclusion_valid"`
+	AnchorReferenceValid      bool `json:"anchor_reference_valid"`
+	StateProofValid           bool `json:"state_proof_valid"`
+	AuthorityProofValid       bool `json:"authority_proof_valid"`
+	AttestationsValid         bool `json:"attestations_valid"`
 
 	// Detailed errors if any
 	Errors []string `json:"errors,omitempty"`

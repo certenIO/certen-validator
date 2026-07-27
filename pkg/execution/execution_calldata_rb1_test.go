@@ -23,8 +23,8 @@ import (
 
 type rb1Vector struct {
 	Description string `json:"description"`
-	ChainID    int64  `json:"chainId"`
-	Leg        struct {
+	ChainID     int64  `json:"chainId"`
+	Leg         struct {
 		ToAddress    string      `json:"toAddress"`
 		AmountWei    string      `json:"amountWei"`
 		TokenAddress interface{} `json:"tokenAddress"`

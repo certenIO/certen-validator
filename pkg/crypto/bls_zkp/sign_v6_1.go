@@ -27,7 +27,8 @@ import (
 // "certen:bls:v1:pre" bytes32 inside the messageHash preimage.
 //
 // Pairs with the on-chain BLSZKVerifierV2 pairing check:
-//   e(sig, G2) == e(HashMessageToG1V2(messageHash), pk_aggregate)
+//
+//	e(sig, G2) == e(HashMessageToG1V2(messageHash), pk_aggregate)
 //
 // Returns nil if sk is nil — callers MUST check.
 func SignV6_1PreExec(sk *bls.PrivateKey, messageHash [32]byte) *bls.Signature {

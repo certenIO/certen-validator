@@ -50,12 +50,13 @@ func ComputeCrossChainCommitment(crossChainJSON []byte) ([]byte, string, error) 
 // two different blob tuples could produce the same byte stream.
 //
 // Format:
-//   SHA256(
-//     len(canon(blob0)) || canon(blob0) ||
-//     len(canon(blob1)) || canon(blob1) ||
-//     len(canon(blob2)) || canon(blob2) ||
-//     len(canon(blob3)) || canon(blob3)
-//   )
+//
+//	SHA256(
+//	  len(canon(blob0)) || canon(blob0) ||
+//	  len(canon(blob1)) || canon(blob1) ||
+//	  len(canon(blob2)) || canon(blob2) ||
+//	  len(canon(blob3)) || canon(blob3)
+//	)
 //
 // The API bridge (TypeScript) MUST use the identical algorithm:
 //   - canonicalizeJSON: recursively sort keys alphabetically, stringify with no whitespace

@@ -59,11 +59,11 @@ func TestCreateProofArtifact(t *testing.T) {
 	artifactJSON := json.RawMessage(`{"test": "data", "merkle": {"root": "abc123"}}`)
 
 	input := &NewProofArtifact{
-		ProofType:   ProofTypeCertenAnchor,
-		AccumTxHash: "test_tx_" + uuid.New().String()[:8],
-		AccountURL:  "acc://test.acme/tokens",
-		ProofClass:  ProofClassOnCadence,
-		ValidatorID: "test-validator-1",
+		ProofType:    ProofTypeCertenAnchor,
+		AccumTxHash:  "test_tx_" + uuid.New().String()[:8],
+		AccountURL:   "acc://test.acme/tokens",
+		ProofClass:   ProofClassOnCadence,
+		ValidatorID:  "test-validator-1",
 		ArtifactJSON: artifactJSON,
 	}
 

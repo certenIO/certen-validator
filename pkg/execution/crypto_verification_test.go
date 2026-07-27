@@ -35,17 +35,17 @@ import (
 func TestCanonicalJSON_DeterministicOrdering(t *testing.T) {
 	// Same data, different input order
 	data1 := map[string]interface{}{
-		"zebra":    1,
-		"apple":    2,
-		"banana":   3,
-		"cherry":   4,
+		"zebra":  1,
+		"apple":  2,
+		"banana": 3,
+		"cherry": 4,
 	}
 
 	data2 := map[string]interface{}{
-		"apple":    2,
-		"cherry":   4,
-		"banana":   3,
-		"zebra":    1,
+		"apple":  2,
+		"cherry": 4,
+		"banana": 3,
+		"zebra":  1,
 	}
 
 	result1 := canonicalJSONMarshal(data1)
@@ -118,7 +118,7 @@ func TestCanonicalJSON_HashDeterminism(t *testing.T) {
 		hash := sha256.Sum256(result)
 
 		expectedHash := "cb5c3c7c0a43f3e6e5e5c7e8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8" // Pre-computed
-		_ = expectedHash // Placeholder - in real test, verify against known value
+		_ = expectedHash                                                                   // Placeholder - in real test, verify against known value
 
 		if i == 0 {
 			t.Logf("First hash: %x", hash[:8])

@@ -45,18 +45,18 @@ type AnchorCreator interface {
 // ExecuteProofRequest is the request to execute a comprehensive proof
 // This bridges batch processor data to the anchor manager's proof execution
 type ExecuteProofRequest struct {
-	AnchorID             string    `json:"anchor_id"`               // The bundleId from CreateBatchAnchor
-	BatchID              string    `json:"batch_id"`                // Batch identifier
-	ValidatorID          string    `json:"validator_id"`            // This validator's ID
-	TransactionHash      [32]byte  `json:"transaction_hash"`        // Representative tx hash
-	MerkleRoot           [32]byte  `json:"merkle_root"`             // Batch Merkle root
-	ProofHashes          [][32]byte `json:"proof_hashes"`           // Merkle proof path
-	LeafHash             [32]byte  `json:"leaf_hash"`               // Leaf being proven
-	OperationCommitment  [32]byte  `json:"operation_commitment"`    // = MerkleRoot
-	CrossChainCommitment [32]byte  `json:"cross_chain_commitment"`  // BPT root from Accumulate
-	GovernanceRoot       [32]byte  `json:"governance_root"`         // Root of governance proofs
-	BLSSignature         []byte    `json:"bls_signature,omitempty"` // Aggregate BLS signature
-	Timestamp            int64     `json:"timestamp"`               // Proof creation time
+	AnchorID             string     `json:"anchor_id"`               // The bundleId from CreateBatchAnchor
+	BatchID              string     `json:"batch_id"`                // Batch identifier
+	ValidatorID          string     `json:"validator_id"`            // This validator's ID
+	TransactionHash      [32]byte   `json:"transaction_hash"`        // Representative tx hash
+	MerkleRoot           [32]byte   `json:"merkle_root"`             // Batch Merkle root
+	ProofHashes          [][32]byte `json:"proof_hashes"`            // Merkle proof path
+	LeafHash             [32]byte   `json:"leaf_hash"`               // Leaf being proven
+	OperationCommitment  [32]byte   `json:"operation_commitment"`    // = MerkleRoot
+	CrossChainCommitment [32]byte   `json:"cross_chain_commitment"`  // BPT root from Accumulate
+	GovernanceRoot       [32]byte   `json:"governance_root"`         // Root of governance proofs
+	BLSSignature         []byte     `json:"bls_signature,omitempty"` // Aggregate BLS signature
+	Timestamp            int64      `json:"timestamp"`               // Proof creation time
 }
 
 // ExecuteProofResult is the result from comprehensive proof execution
@@ -107,17 +107,17 @@ type BatchAnchorRequest struct {
 
 // BatchAnchorResult is the result of anchoring a batch
 type BatchAnchorResult struct {
-	AnchorID        uuid.UUID `json:"anchor_id"`
-	BatchID         uuid.UUID `json:"batch_id"`
-	TargetChain     string    `json:"target_chain"`
-	TxHash          string    `json:"tx_hash"`
-	BlockNumber     int64     `json:"block_number"`
-	BlockHash       string    `json:"block_hash"`
-	GasUsed         int64     `json:"gas_used"`
-	GasPriceWei     string    `json:"gas_price_wei"`
-	TotalCostWei    string    `json:"total_cost_wei"`
-	Success         bool      `json:"success"`
-	Timestamp       time.Time `json:"timestamp"`
+	AnchorID     uuid.UUID `json:"anchor_id"`
+	BatchID      uuid.UUID `json:"batch_id"`
+	TargetChain  string    `json:"target_chain"`
+	TxHash       string    `json:"tx_hash"`
+	BlockNumber  int64     `json:"block_number"`
+	BlockHash    string    `json:"block_hash"`
+	GasUsed      int64     `json:"gas_used"`
+	GasPriceWei  string    `json:"gas_price_wei"`
+	TotalCostWei string    `json:"total_cost_wei"`
+	Success      bool      `json:"success"`
+	Timestamp    time.Time `json:"timestamp"`
 }
 
 // OnAnchorCallback is called when a batch is successfully anchored
@@ -137,11 +137,11 @@ type Processor struct {
 	govGenerator *proof.NativeGovernanceProofGenerator
 
 	// Configuration
-	validatorID    string
-	targetChain    string // Default target chain
-	chainID        string
-	networkName    string
-	contractAddr   string
+	validatorID  string
+	targetChain  string // Default target chain
+	chainID      string
+	networkName  string
+	contractAddr string
 
 	// Governance proof configuration
 	defaultGovLevel proof.GovernanceLevel // Default governance level for batch proofs
@@ -152,7 +152,7 @@ type Processor struct {
 	validatorSet []string // List of all validators in consensus (sorted)
 
 	// Processing state
-	processing   map[uuid.UUID]bool // Batches currently being processed
+	processing map[uuid.UUID]bool // Batches currently being processed
 
 	// PHASE 5: Attestation callback for multi-validator consensus
 	onAnchorCallback OnAnchorCallback
@@ -174,13 +174,13 @@ type ProcessorConfig struct {
 	Logger          *log.Logger
 
 	// Phase 2: Governance proof configuration
-	GovernanceLevel    proof.GovernanceLevel // Default governance level (G0, G1, G2)
-	V3Endpoint         string                // Accumulate V3 API endpoint
-	ValidatorKey       []byte                // Ed25519 private key for signing governance proofs
+	GovernanceLevel proof.GovernanceLevel // Default governance level (G0, G1, G2)
+	V3Endpoint      string                // Accumulate V3 API endpoint
+	ValidatorKey    []byte                // Ed25519 private key for signing governance proofs
 
 	// CONSENSUS FIX: Validator set for executor selection
 	// This list must be the SAME on all validators to ensure consistent election
-	ValidatorSet       []string              // List of validator IDs (e.g., ["validator-1", "validator-2", ...])
+	ValidatorSet []string // List of validator IDs (e.g., ["validator-1", "validator-2", ...])
 }
 
 // DefaultProcessorConfig returns default configuration
@@ -194,7 +194,7 @@ func DefaultProcessorConfig() *ProcessorConfig {
 		GovernanceLevel: proof.GovLevelG1, // Default to G1 (governance correctness)
 		V3Endpoint:      "",               // Must be configured for real governance proofs
 		// CONSENSUS FIX: Default validator set - MUST be configured with actual validators
-		ValidatorSet:    []string{"validator-1", "validator-2", "validator-3", "validator-4", "validator-5", "validator-6", "validator-7"},
+		ValidatorSet: []string{"validator-1", "validator-2", "validator-3", "validator-4", "validator-5", "validator-6", "validator-7"},
 	}
 }
 
@@ -496,19 +496,19 @@ func (p *Processor) ProcessClosedBatch(ctx context.Context, result *ClosedBatchR
 	var anchorID uuid.UUID
 	if anchorResult != nil {
 		anchorRecord := &database.NewAnchorRecord{
-			BatchID:         result.BatchID,
-			TargetChain:     database.TargetChain(p.targetChain),
-			ChainID:         p.chainID,
-			NetworkName:     p.networkName,
-			ContractAddress: p.contractAddr,
-			AnchorTxHash:    anchorResult.TxHash,
+			BatchID:           result.BatchID,
+			TargetChain:       database.TargetChain(p.targetChain),
+			ChainID:           p.chainID,
+			NetworkName:       p.networkName,
+			ContractAddress:   p.contractAddr,
+			AnchorTxHash:      anchorResult.TxHash,
 			AnchorBlockNumber: anchorResult.BlockNumber,
-			AnchorBlockHash: anchorResult.BlockHash,
-			MerkleRoot:      result.MerkleRoot,
-			ValidatorID:     p.validatorID,
-			GasUsed:         anchorResult.GasUsed,
-			GasPriceWei:     anchorResult.GasPriceWei,
-			TotalCostWei:    anchorResult.TotalCostWei,
+			AnchorBlockHash:   anchorResult.BlockHash,
+			MerkleRoot:        result.MerkleRoot,
+			ValidatorID:       p.validatorID,
+			GasUsed:           anchorResult.GasUsed,
+			GasPriceWei:       anchorResult.GasPriceWei,
+			TotalCostWei:      anchorResult.TotalCostWei,
 		}
 
 		anchor, err := p.repos.Anchors.CreateAnchor(ctx, anchorRecord)
@@ -743,17 +743,17 @@ func (p *Processor) buildProofArtifact(
 ) *database.NewProofArtifact {
 	// Build artifact JSON containing all proof components
 	artifact := map[string]interface{}{
-		"proof_id":          certenProof.ProofID.String(),
-		"batch_id":          result.BatchID.String(),
-		"accum_tx_hash":     tx.AccumTxHash,
-		"account_url":       tx.AccountURL,
-		"merkle_root":       hex.EncodeToString(result.MerkleRoot),
-		"anchor_chain":      p.targetChain,
-		"anchor_tx_hash":    anchorResult.TxHash,
-		"anchor_block":      anchorResult.BlockNumber,
-		"validator_id":      p.validatorID,
-		"proof_version":     database.CurrentProofVersion,
-		"created_at":        time.Now().Format(time.RFC3339),
+		"proof_id":       certenProof.ProofID.String(),
+		"batch_id":       result.BatchID.String(),
+		"accum_tx_hash":  tx.AccumTxHash,
+		"account_url":    tx.AccountURL,
+		"merkle_root":    hex.EncodeToString(result.MerkleRoot),
+		"anchor_chain":   p.targetChain,
+		"anchor_tx_hash": anchorResult.TxHash,
+		"anchor_block":   anchorResult.BlockNumber,
+		"validator_id":   p.validatorID,
+		"proof_version":  database.CurrentProofVersion,
+		"created_at":     time.Now().Format(time.RFC3339),
 	}
 
 	// Add chained proof if present

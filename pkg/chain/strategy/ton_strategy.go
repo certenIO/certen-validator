@@ -106,10 +106,10 @@ type tonTransaction struct {
 		Lt   string `json:"lt"`
 		Hash string `json:"hash"`
 	} `json:"transaction_id"`
-	Fee       string `json:"fee"`
+	Fee        string `json:"fee"`
 	StorageFee string `json:"storage_fee"`
-	OtherFee  string `json:"other_fee"`
-	InMsg     struct {
+	OtherFee   string `json:"other_fee"`
+	InMsg      struct {
 		Source      string `json:"source"`
 		Destination string `json:"destination"`
 		Value       string `json:"value"`
@@ -290,14 +290,14 @@ func (s *TONStrategy) ObserveTransaction(ctx context.Context, txHash string) (*O
 					BlockHash:             blockHashHex,
 					BlockTimestamp:        txTimestamp,
 					Status:                1, // Success
-					Confirmations:        int(confirmations),
+					Confirmations:         int(confirmations),
 					RequiredConfirmations: int(required),
 					IsFinalized:           true,
 					ResultHash:            resultHash,
 					ObservedAt:            time.Now().UTC(),
 					ObserverValidatorID:   s.config.ValidatorID,
-					TxFrom:               txFrom,
-					ChainName:            s.NetworkName(),
+					TxFrom:                txFrom,
+					ChainName:             s.NetworkName(),
 				}, nil
 			}
 
@@ -374,14 +374,14 @@ func (s *TONStrategy) GetTransactionReceipt(ctx context.Context, txHash string) 
 		BlockHash:             blockHashHex,
 		BlockTimestamp:        time.Unix(utime, 0),
 		Status:                1,
-		Confirmations:        int(confirmations),
+		Confirmations:         int(confirmations),
 		RequiredConfirmations: int(required),
 		IsFinalized:           confirmations >= required,
 		ResultHash:            s.computeResultHash(hexOnly, utime),
 		ObservedAt:            time.Now().UTC(),
 		ObserverValidatorID:   s.config.ValidatorID,
-		TxFrom:               sender,
-		ChainName:            s.NetworkName(),
+		TxFrom:                sender,
+		ChainName:             s.NetworkName(),
 	}, nil
 }
 
@@ -858,4 +858,3 @@ func NewTONTestnetStrategy(apiURL, contractAddress, blsVerifierAddress, validato
 
 	return NewTONStrategy(config)
 }
-

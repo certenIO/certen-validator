@@ -36,12 +36,12 @@ type RegistryConfig struct {
 	Ed25519PrivateKey ed25519.PrivateKey
 
 	// Ethereum configuration
-	EthereumRPC      string
-	EthPrivateKey    string
-	EthChainID       int64
-	AnchorContract   string
-	CertenContract   string
-	NetworkName      string
+	EthereumRPC    string
+	EthPrivateKey  string
+	EthChainID     int64
+	AnchorContract string
+	CertenContract string
+	NetworkName    string
 
 	// Logger
 	Logger *log.Logger
@@ -206,23 +206,23 @@ func initializeChainStrategies(registry *Registry, cfg *RegistryConfig) error {
 	// Register well-known network name aliases for common chains
 	// Include both hyphenated and space-separated variants for intent compatibility
 	knownAliases := map[int64][]string{
-		1:        {"ethereum", "mainnet", "eth-mainnet"},
-		11155111: {"sepolia", "eth-sepolia", "ethereum-sepolia", "ethereum sepolia"},
-		137:      {"polygon", "matic"},
-		80002:    {"polygon-amoy", "polygon amoy", "amoy"},
-		42161:    {"arbitrum", "arbitrum-one"},
-		421614:   {"arbitrum-sepolia", "arbitrum sepolia"},
-		10:       {"optimism", "op-mainnet"},
-		11155420: {"optimism-sepolia", "optimism sepolia", "op-sepolia"},
-		8453:     {"base", "base-mainnet"},
-		84532:    {"base-sepolia", "base sepolia"},
-		97:       {"bsc-testnet", "bsc testnet", "binance-testnet"},
-		56:       {"bsc", "binance", "bsc-mainnet"},
-		1287:     {"moonbase-alpha", "moonbase alpha", "moonbeam-testnet", "moonbeam moonbase alpha"},
-		1284:     {"moonbeam"},
+		1:          {"ethereum", "mainnet", "eth-mainnet"},
+		11155111:   {"sepolia", "eth-sepolia", "ethereum-sepolia", "ethereum sepolia"},
+		137:        {"polygon", "matic"},
+		80002:      {"polygon-amoy", "polygon amoy", "amoy"},
+		42161:      {"arbitrum", "arbitrum-one"},
+		421614:     {"arbitrum-sepolia", "arbitrum sepolia"},
+		10:         {"optimism", "op-mainnet"},
+		11155420:   {"optimism-sepolia", "optimism sepolia", "op-sepolia"},
+		8453:       {"base", "base-mainnet"},
+		84532:      {"base-sepolia", "base sepolia"},
+		97:         {"bsc-testnet", "bsc testnet", "binance-testnet"},
+		56:         {"bsc", "binance", "bsc-mainnet"},
+		1287:       {"moonbase-alpha", "moonbase alpha", "moonbeam-testnet", "moonbeam moonbase alpha"},
+		1284:       {"moonbeam"},
 		2494104990: {"tron-shasta", "tron shasta", "tron-shasta-testnet", "tron shasta testnet", "tron"},
-		296:      {"hedera", "hedera-testnet", "hedera testnet"},
-		295:      {"hedera-mainnet", "hedera mainnet"},
+		296:        {"hedera", "hedera-testnet", "hedera testnet"},
+		295:        {"hedera-mainnet", "hedera mainnet"},
 	}
 	if aliases, ok := knownAliases[int64(cfg.EthChainID)]; ok {
 		for _, alias := range aliases {

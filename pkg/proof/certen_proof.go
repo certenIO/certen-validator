@@ -33,7 +33,7 @@ type ProofConfig struct {
 // ProofRequest represents a simplified proof request
 type ProofRequest struct {
 	RequestID       string `json:"request_id"`
-	ProofType       string `json:"proof_type"`        // "transaction", "account"
+	ProofType       string `json:"proof_type"` // "transaction", "account"
 	TransactionHash string `json:"transaction_hash,omitempty"`
 	AccountURL      string `json:"account_url,omitempty"`
 }
@@ -41,12 +41,12 @@ type ProofRequest struct {
 // CertenProof represents the lite-client-only proof format
 type CertenProof struct {
 	// Basic identification
-	ProofID         string    `json:"proof_id"`
-	ProofVersion    string    `json:"proof_version"`
-	ProofType       string    `json:"proof_type"`
-	GeneratedAt     time.Time `json:"generated_at"`
-	ValidatorID     string    `json:"validator_id"`
-	Environment     string    `json:"environment"`
+	ProofID      string    `json:"proof_id"`
+	ProofVersion string    `json:"proof_version"`
+	ProofType    string    `json:"proof_type"`
+	GeneratedAt  time.Time `json:"generated_at"`
+	ValidatorID  string    `json:"validator_id"`
+	Environment  string    `json:"environment"`
 
 	// Target information
 	TransactionHash string `json:"transaction_hash,omitempty"`
@@ -58,7 +58,7 @@ type CertenProof struct {
 
 	// BFT consensus components for ValidatorBlock building
 	BLSAggregateSignature string   `json:"bls_aggregate_signature,omitempty"` // From governance authorization
-	ValidatorSignatures   []string `json:"validator_signatures,omitempty"`   // From BFT consensus pre-execution
+	ValidatorSignatures   []string `json:"validator_signatures,omitempty"`    // From BFT consensus pre-execution
 
 	// BLSValidatorSetPubKey is the hex-encoded public key of the validator that
 	// actually produced BLSAggregateSignature (the BFT block signer). It is a
@@ -149,21 +149,21 @@ type VerificationStatusData struct {
 
 // VerificationStep represents a step in verification
 type VerificationStep struct {
-	StepName  string        `json:"step_name"`
-	StepType  string        `json:"step_type"`
-	Valid     bool          `json:"valid"`
-	Duration  time.Duration `json:"duration"`
-	Error     string        `json:"error,omitempty"`
-	Details   map[string]interface{} `json:"details,omitempty"`
+	StepName string                 `json:"step_name"`
+	StepType string                 `json:"step_type"`
+	Valid    bool                   `json:"valid"`
+	Duration time.Duration          `json:"duration"`
+	Error    string                 `json:"error,omitempty"`
+	Details  map[string]interface{} `json:"details,omitempty"`
 }
 
 // ProofGenerationMetrics contains metrics about proof generation
 type ProofGenerationMetrics struct {
-	TotalTime    time.Duration `json:"total_time"`
-	ProofSize    int           `json:"proof_size"`
-	CacheHits    int           `json:"cache_hits"`
-	CacheMisses  int           `json:"cache_misses"`
-	Steps        []VerificationStep `json:"steps,omitempty"`
+	TotalTime   time.Duration      `json:"total_time"`
+	ProofSize   int                `json:"proof_size"`
+	CacheHits   int                `json:"cache_hits"`
+	CacheMisses int                `json:"cache_misses"`
+	Steps       []VerificationStep `json:"steps,omitempty"`
 }
 
 // NewProofGenerator creates a new proof generator

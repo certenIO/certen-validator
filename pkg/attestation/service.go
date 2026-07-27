@@ -56,12 +56,12 @@ type Service struct {
 
 // Config holds service configuration
 type Config struct {
-	ValidatorID     string
-	PrivateKey      ed25519.PrivateKey
-	PeerEndpoints   []string
-	RequiredCount   int // Number of attestations required (e.g., 3 for 4 validators with f=1)
-	Timeout         time.Duration
-	Logger          *log.Logger
+	ValidatorID   string
+	PrivateKey    ed25519.PrivateKey
+	PeerEndpoints []string
+	RequiredCount int // Number of attestations required (e.g., 3 for 4 validators with f=1)
+	Timeout       time.Duration
+	Logger        *log.Logger
 }
 
 // DefaultConfig returns default configuration
@@ -113,8 +113,8 @@ type AttestationRequest struct {
 	RequestID uuid.UUID `json:"request_id"`
 
 	// Proof identification
-	ProofID  uuid.UUID `json:"proof_id"`
-	BatchID  uuid.UUID `json:"batch_id"`
+	ProofID uuid.UUID `json:"proof_id"`
+	BatchID uuid.UUID `json:"batch_id"`
 
 	// What to attest to
 	MerkleRoot   []byte `json:"merkle_root"`
@@ -132,9 +132,9 @@ type AttestationRequest struct {
 
 // AttestationResponse is the response from a peer validator
 type AttestationResponse struct {
-	RequestID   uuid.UUID                       `json:"request_id"`
-	Success     bool                            `json:"success"`
-	Error       string                          `json:"error,omitempty"`
+	RequestID   uuid.UUID                          `json:"request_id"`
+	Success     bool                               `json:"success"`
+	Error       string                             `json:"error,omitempty"`
 	Attestation *anchor_proof.ValidatorAttestation `json:"attestation,omitempty"`
 }
 

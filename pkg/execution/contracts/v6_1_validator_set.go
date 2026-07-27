@@ -5,13 +5,13 @@
 // what the contract verifies, the validator MUST locally compute the SAME
 // setRoot the contract holds. Two ways to get it:
 //
-//   1. Fetch on-chain via getValidatorSetRoot() at startup. Reliable but adds
-//      an RPC dependency to BFT signing and a per-chain cache.
-//   2. Compute locally from operator config (this file). Same 7 addresses +
-//      voting powers + threshold the deploy script registered → same root.
-//      The user's deployment posture is "single shared root across all 7
-//      chains" (same operator set, same powers, same threshold), so one
-//      cached root serves every chain.
+//  1. Fetch on-chain via getValidatorSetRoot() at startup. Reliable but adds
+//     an RPC dependency to BFT signing and a per-chain cache.
+//  2. Compute locally from operator config (this file). Same 7 addresses +
+//     voting powers + threshold the deploy script registered → same root.
+//     The user's deployment posture is "single shared root across all 7
+//     chains" (same operator set, same powers, same threshold), so one
+//     cached root serves every chain.
 //
 // We use option 2 with optional on-chain verification at startup (see
 // VerifyAgainstChain). If env config drifts from what's actually registered
@@ -60,8 +60,8 @@ const defaultThresholdDen int64 = 3
 
 // Env var names for operator-override of the V6.1 validator set.
 const (
-	envValidatorSetAddrs        = "CERTEN_V6_1_VALIDATOR_ADDRESSES"   // comma-separated 0x hex
-	envValidatorSetPowers       = "CERTEN_V6_1_VALIDATOR_POWERS"      // comma-separated ints
+	envValidatorSetAddrs        = "CERTEN_V6_1_VALIDATOR_ADDRESSES"     // comma-separated 0x hex
+	envValidatorSetPowers       = "CERTEN_V6_1_VALIDATOR_POWERS"        // comma-separated ints
 	envValidatorSetThresholdNum = "CERTEN_V6_1_VALIDATOR_THRESHOLD_NUM" // default 2
 	envValidatorSetThresholdDen = "CERTEN_V6_1_VALIDATOR_THRESHOLD_DEN" // default 3
 )

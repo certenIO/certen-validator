@@ -1518,9 +1518,9 @@ func (o *ProofCycleOrchestrator) persistProofArtifact(cycle *ProofCycleCompletio
 	// Add attestation details (BLS aggregate signature)
 	if cycle.Attestation != nil {
 		attestationData := map[string]interface{}{
-			"validator_count":     cycle.Attestation.ValidatorCount,
-			"threshold_met":       cycle.Attestation.ThresholdMet,
-			"result_hash":         hex.EncodeToString(cycle.Attestation.ResultHash[:]),
+			"validator_count": cycle.Attestation.ValidatorCount,
+			"threshold_met":   cycle.Attestation.ThresholdMet,
+			"result_hash":     hex.EncodeToString(cycle.Attestation.ResultHash[:]),
 		}
 		if cycle.Attestation.SignedVotingPower != nil {
 			attestationData["signed_voting_power"] = cycle.Attestation.SignedVotingPower.String()
@@ -2074,11 +2074,11 @@ func (o *ProofCycleOrchestrator) storeAttestationRecord(ctx context.Context, pro
 	}
 
 	attestation := &database.NewValidatorAttestation{
-		ProofID:            proofID,
-		ValidatorID:        o.validatorID,
-		ValidatorPubkey:    pubKey,
-		Signature:          blsSigBytes,
-		AttestedAnchorTx:   anchorTxHash,
+		ProofID:          proofID,
+		ValidatorID:      o.validatorID,
+		ValidatorPubkey:  pubKey,
+		Signature:        blsSigBytes,
+		AttestedAnchorTx: anchorTxHash,
 	}
 
 	if _, err := o.repos.Attestations.CreateAttestation(ctx, attestation); err != nil {

@@ -43,8 +43,8 @@ type TonClient struct {
 	subwalletID   uint32
 
 	// Local seqno tracking to avoid stale API reads between rapid sends
-	lastSeqno    uint32
-	seqnoKnown   bool
+	lastSeqno  uint32
+	seqnoKnown bool
 }
 
 // TON constants
@@ -210,7 +210,7 @@ func buildStateInitCell(si walletStateInit) *cell.Cell {
 		MustStoreBoolBit(false). // special: none
 		MustStoreBoolBit(true).  // code: present
 		MustStoreRef(si.code).
-		MustStoreBoolBit(true).  // data: present
+		MustStoreBoolBit(true). // data: present
 		MustStoreRef(si.data).
 		MustStoreBoolBit(false). // library: empty
 		EndCell()
@@ -717,9 +717,11 @@ func (tc *TonClient) CreateAnchor(
 // tonBuildCreateAnchorBody builds the Cell body for the V6.1 CreateAnchor message.
 // Matches Tact's greedy serialization of the CreateAnchor message (fields in
 // declaration order, packed into the root cell then spilled to refs):
-//   Root cell (800 bits): op(32) + bundleId(256) + adiURLHash(256) + opCommit(256), ref→cont
-//   Cont cell (832 bits): ccCommit(256) + govRoot(256) + execCommit(256) + blockHeight(64), ref→cont2
-//   Cont2 cell (256 bits): operationId(256)
+//
+//	Root cell (800 bits): op(32) + bundleId(256) + adiURLHash(256) + opCommit(256), ref→cont
+//	Cont cell (832 bits): ccCommit(256) + govRoot(256) + execCommit(256) + blockHeight(64), ref→cont2
+//	Cont2 cell (256 bits): operationId(256)
+//
 // operationId is the LAST field of the message struct, so it spills past the
 // 1023-bit cont cell into a second ref.
 func tonBuildCreateAnchorBody(bundleId, adiURLHash, opCommitment, ccCommitment, govRoot, executionCommitment, operationID [32]byte, blockHeight uint64) *cell.Cell {

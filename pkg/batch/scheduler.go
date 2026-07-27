@@ -21,9 +21,9 @@ import (
 type SchedulerState string
 
 const (
-	SchedulerStateStopped  SchedulerState = "stopped"
-	SchedulerStateRunning  SchedulerState = "running"
-	SchedulerStatePaused   SchedulerState = "paused"
+	SchedulerStateStopped SchedulerState = "stopped"
+	SchedulerStateRunning SchedulerState = "running"
+	SchedulerStatePaused  SchedulerState = "paused"
 )
 
 // BatchReadyCallback is called when a batch is ready for anchoring
@@ -38,14 +38,14 @@ type Scheduler struct {
 	callback  BatchReadyCallback
 
 	// Configuration
-	interval time.Duration // Batch interval (~15 min)
+	interval      time.Duration // Batch interval (~15 min)
 	checkInterval time.Duration // How often to check (1 min)
 
 	// State
-	state     SchedulerState
-	timer     *time.Timer
-	stopCh    chan struct{}
-	doneCh    chan struct{}
+	state  SchedulerState
+	timer  *time.Timer
+	stopCh chan struct{}
+	doneCh chan struct{}
 
 	// Accumulate state provider
 	getAccumState func() (height int64, hash string)
@@ -56,9 +56,9 @@ type Scheduler struct {
 
 // SchedulerConfig holds scheduler configuration
 type SchedulerConfig struct {
-	Interval      time.Duration     // Main batch interval (~15 min)
-	CheckInterval time.Duration     // How often to check for ready batches
-	Callback      BatchReadyCallback // Called when batch is ready
+	Interval      time.Duration          // Main batch interval (~15 min)
+	CheckInterval time.Duration          // How often to check for ready batches
+	Callback      BatchReadyCallback     // Called when batch is ready
 	GetAccumState func() (int64, string) // Gets current Accumulate state
 	Logger        *log.Logger
 }

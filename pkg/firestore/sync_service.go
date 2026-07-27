@@ -25,9 +25,9 @@ type SyncService struct {
 	logger      *log.Logger
 
 	// Intent mapping cache (accumTxHash -> userID, intentID)
-	intentCache     map[string]intentMapping
-	intentCacheMu   sync.RWMutex
-	intentCacheTTL  time.Duration
+	intentCache    map[string]intentMapping
+	intentCacheMu  sync.RWMutex
+	intentCacheTTL time.Duration
 
 	// Audit trail hash chain state per user
 	auditChains   map[string]string // userID -> latest entry hash
@@ -36,9 +36,9 @@ type SyncService struct {
 
 // intentMapping caches the mapping from Accumulate tx hash to user intent
 type intentMapping struct {
-	UserID    string
-	IntentID  string
-	CachedAt  time.Time
+	UserID   string
+	IntentID string
+	CachedAt time.Time
 }
 
 // SyncServiceConfig holds configuration for the sync service
@@ -246,8 +246,8 @@ func (s *SyncService) OnProofGenerated(ctx context.Context, data *ProofGenerated
 type ProofGeneratedEvent struct {
 	AccumTxHash      string
 	ProofID          string
-	ChainedLayers    int  // Number of L layers (1-3)
-	GovernanceLevels int  // Number of G levels (0-2)
+	ChainedLayers    int // Number of L layers (1-3)
+	GovernanceLevels int // Number of G levels (0-2)
 	L1Generated      bool
 	L2Generated      bool
 	L3Generated      bool

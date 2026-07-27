@@ -36,18 +36,18 @@ import (
 
 // Attestation represents a validator's attestation to a proof
 type Attestation struct {
-	AttestationID   uuid.UUID `json:"attestation_id"`
-	ProofID         uuid.UUID `json:"proof_id"`
+	AttestationID   uuid.UUID  `json:"attestation_id"`
+	ProofID         uuid.UUID  `json:"proof_id"`
 	BatchID         *uuid.UUID `json:"batch_id,omitempty"`
-	ValidatorID     string    `json:"validator_id"`
-	ValidatorPubKey []byte    `json:"validator_pubkey"` // Ed25519 public key (32 bytes)
-	AttestedHash    []byte    `json:"attested_hash"`    // SHA256 hash being attested
-	Signature       []byte    `json:"signature"`        // Ed25519 signature (64 bytes)
-	AnchorTxHash    string    `json:"anchor_tx_hash,omitempty"`
-	MerkleRoot      []byte    `json:"merkle_root,omitempty"`
-	BlockNumber     int64     `json:"block_number,omitempty"`
-	AttestedAt      time.Time `json:"attested_at"`
-	SignatureValid  bool      `json:"signature_valid"`
+	ValidatorID     string     `json:"validator_id"`
+	ValidatorPubKey []byte     `json:"validator_pubkey"` // Ed25519 public key (32 bytes)
+	AttestedHash    []byte     `json:"attested_hash"`    // SHA256 hash being attested
+	Signature       []byte     `json:"signature"`        // Ed25519 signature (64 bytes)
+	AnchorTxHash    string     `json:"anchor_tx_hash,omitempty"`
+	MerkleRoot      []byte     `json:"merkle_root,omitempty"`
+	BlockNumber     int64      `json:"block_number,omitempty"`
+	AttestedAt      time.Time  `json:"attested_at"`
+	SignatureValid  bool       `json:"signature_valid"`
 	VerifiedAt      *time.Time `json:"verified_at,omitempty"`
 }
 
@@ -63,12 +63,12 @@ type AttestationMessage struct {
 
 // QuorumStatus represents the current attestation quorum status
 type QuorumStatus struct {
-	ProofID            uuid.UUID `json:"proof_id"`
-	TotalValidators    int       `json:"total_validators"`
-	RequiredQuorum     int       `json:"required_quorum"`
-	CollectedCount     int       `json:"collected_count"`
-	ValidCount         int       `json:"valid_count"`
-	QuorumReached      bool      `json:"quorum_reached"`
+	ProofID            uuid.UUID           `json:"proof_id"`
+	TotalValidators    int                 `json:"total_validators"`
+	RequiredQuorum     int                 `json:"required_quorum"`
+	CollectedCount     int                 `json:"collected_count"`
+	ValidCount         int                 `json:"valid_count"`
+	QuorumReached      bool                `json:"quorum_reached"`
 	AttestationDetails []AttestationDetail `json:"attestation_details"`
 }
 
@@ -89,9 +89,9 @@ type AttestationCollectorService struct {
 	config *AttestationConfig
 
 	// Validator identity
-	validatorID     string
-	privateKey      ed25519.PrivateKey
-	publicKey       ed25519.PublicKey
+	validatorID string
+	privateKey  ed25519.PrivateKey
+	publicKey   ed25519.PublicKey
 
 	// Known validators
 	knownValidators map[string]ed25519.PublicKey
@@ -118,12 +118,12 @@ type AttestationCollectorService struct {
 
 // AttestationConfig contains service configuration
 type AttestationConfig struct {
-	TotalValidators      int           `json:"total_validators"`
-	QuorumThreshold      float64       `json:"quorum_threshold"` // Default 2/3
-	AttestationTimeout   time.Duration `json:"attestation_timeout"`
-	BroadcastInterval    time.Duration `json:"broadcast_interval"`
-	RetryAttempts        int           `json:"retry_attempts"`
-	VerifyOnReceive      bool          `json:"verify_on_receive"`
+	TotalValidators    int           `json:"total_validators"`
+	QuorumThreshold    float64       `json:"quorum_threshold"` // Default 2/3
+	AttestationTimeout time.Duration `json:"attestation_timeout"`
+	BroadcastInterval  time.Duration `json:"broadcast_interval"`
+	RetryAttempts      int           `json:"retry_attempts"`
+	VerifyOnReceive    bool          `json:"verify_on_receive"`
 }
 
 // AttestationMessageHandler handles incoming attestation messages

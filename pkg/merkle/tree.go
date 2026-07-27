@@ -56,12 +56,12 @@ type InclusionProof struct {
 
 // Tree represents a Merkle tree
 type Tree struct {
-	mu       sync.RWMutex
-	leaves   [][]byte   // Original leaf hashes (32 bytes each)
-	nodes    [][]byte   // All nodes in the tree (level by level)
-	levels   [][][]byte // Tree organized by levels (for proof generation)
-	root     []byte     // The Merkle root (32 bytes)
-	built    bool       // Whether the tree has been built
+	mu     sync.RWMutex
+	leaves [][]byte   // Original leaf hashes (32 bytes each)
+	nodes  [][]byte   // All nodes in the tree (level by level)
+	levels [][][]byte // Tree organized by levels (for proof generation)
+	root   []byte     // The Merkle root (32 bytes)
+	built  bool       // Whether the tree has been built
 }
 
 // NewTree creates a new empty Merkle tree

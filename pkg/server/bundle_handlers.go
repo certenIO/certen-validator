@@ -91,7 +91,7 @@ func NewBundleHandlers(
 type ProofRequestInput struct {
 	AccumTxHash     string  `json:"accum_tx_hash,omitempty"`
 	AccountURL      string  `json:"account_url,omitempty"`
-	ProofClass      string  `json:"proof_class"` // "on_cadence" or "on_demand"
+	ProofClass      string  `json:"proof_class"`                // "on_cadence" or "on_demand"
 	GovernanceLevel string  `json:"governance_level,omitempty"` // "G0", "G1", "G2"
 	CallbackURL     *string `json:"callback_url,omitempty"`
 	Priority        int     `json:"priority,omitempty"`
@@ -99,11 +99,11 @@ type ProofRequestInput struct {
 
 // ProofRequestResponse represents the response to a proof request
 type ProofRequestResponse struct {
-	RequestID       uuid.UUID `json:"request_id"`
-	Status          string    `json:"status"`
-	EstimatedTimeMs int64     `json:"estimated_time_ms,omitempty"`
+	RequestID       uuid.UUID  `json:"request_id"`
+	Status          string     `json:"status"`
+	EstimatedTimeMs int64      `json:"estimated_time_ms,omitempty"`
 	ProofID         *uuid.UUID `json:"proof_id,omitempty"`
-	Message         string    `json:"message,omitempty"`
+	Message         string     `json:"message,omitempty"`
 }
 
 // HandleRequestProof handles POST /api/v1/proofs/request
@@ -368,7 +368,7 @@ func (h *BundleHandlers) HandleDownloadBundle(w http.ResponseWriter, r *http.Req
 
 	// Set response headers
 	w.Header().Set("X-Bundle-ID", bundle.BundleID.String())
-	w.Header().Set("X-Bundle-Hash", "sha256:" + hex.EncodeToString(bundle.BundleHash))
+	w.Header().Set("X-Bundle-Hash", "sha256:"+hex.EncodeToString(bundle.BundleHash))
 	w.Header().Set("X-Bundle-Format", bundle.BundleFormat)
 	w.Header().Set("X-Bundle-Version", bundle.BundleVersion)
 	w.Header().Set("X-Attestation-Count", fmt.Sprintf("%d", bundle.AttestationCount))
@@ -410,20 +410,20 @@ func (h *BundleHandlers) HandleDownloadBundle(w http.ResponseWriter, r *http.Req
 
 // BundleVerificationResponse represents bundle verification results
 type BundleVerificationResponse struct {
-	BundleValid  bool                        `json:"bundle_valid"`
-	HashValid    bool                        `json:"hash_valid"`
-	Components   map[string]bool             `json:"components"`
-	Attestations BundleAttestationStatus     `json:"attestations"`
-	VerifiedAt   time.Time                   `json:"verified_at"`
-	Details      map[string]interface{}      `json:"details,omitempty"`
+	BundleValid  bool                    `json:"bundle_valid"`
+	HashValid    bool                    `json:"hash_valid"`
+	Components   map[string]bool         `json:"components"`
+	Attestations BundleAttestationStatus `json:"attestations"`
+	VerifiedAt   time.Time               `json:"verified_at"`
+	Details      map[string]interface{}  `json:"details,omitempty"`
 }
 
 // BundleAttestationStatus represents attestation verification status
 type BundleAttestationStatus struct {
-	Total       int  `json:"total"`
-	Valid       int  `json:"valid"`
-	QuorumMet   bool `json:"quorum_met"`
-	Required    int  `json:"required"`
+	Total     int  `json:"total"`
+	Valid     int  `json:"valid"`
+	QuorumMet bool `json:"quorum_met"`
+	Required  int  `json:"required"`
 }
 
 // HandleVerifyBundle handles GET /api/v1/proofs/{proof_id}/bundle/verify
@@ -572,11 +572,11 @@ func (h *BundleHandlers) HandleGetCustodyChain(w http.ResponseWriter, r *http.Re
 	}
 
 	h.writeJSON(w, http.StatusOK, map[string]interface{}{
-		"proof_id":      proofID,
-		"events":        events,
-		"count":         len(events),
-		"chain_valid":   chainValid,
-		"retrieved_at":  time.Now().UTC(),
+		"proof_id":     proofID,
+		"events":       events,
+		"count":        len(events),
+		"chain_valid":  chainValid,
+		"retrieved_at": time.Now().UTC(),
 	})
 }
 
@@ -586,10 +586,10 @@ func (h *BundleHandlers) HandleGetCustodyChain(w http.ResponseWriter, r *http.Re
 
 // MerkleVerificationRequest represents a merkle proof verification request
 type MerkleVerificationRequest struct {
-	MerkleRoot   string   `json:"merkle_root"`
-	LeafHash     string   `json:"leaf_hash"`
-	LeafIndex    int      `json:"leaf_index"`
-	MerklePath   []MerklePathEntry `json:"merkle_path"`
+	MerkleRoot string            `json:"merkle_root"`
+	LeafHash   string            `json:"leaf_hash"`
+	LeafIndex  int               `json:"leaf_index"`
+	MerklePath []MerklePathEntry `json:"merkle_path"`
 }
 
 // MerklePathEntry represents a single entry in the merkle path
@@ -600,10 +600,10 @@ type MerklePathEntry struct {
 
 // MerkleVerificationResponse represents merkle verification result
 type MerkleVerificationResponse struct {
-	Valid          bool      `json:"valid"`
-	ComputedRoot   string    `json:"computed_root"`
-	ExpectedRoot   string    `json:"expected_root"`
-	VerifiedAt     time.Time `json:"verified_at"`
+	Valid        bool      `json:"valid"`
+	ComputedRoot string    `json:"computed_root"`
+	ExpectedRoot string    `json:"expected_root"`
+	VerifiedAt   time.Time `json:"verified_at"`
 }
 
 // HandleVerifyMerkle handles POST /api/v1/proofs/verify/merkle
@@ -668,17 +668,17 @@ func (h *BundleHandlers) HandleVerifyMerkle(w http.ResponseWriter, r *http.Reque
 
 // GovernanceVerificationRequest represents a governance proof verification request
 type GovernanceVerificationRequest struct {
-	ProofID         string                   `json:"proof_id"`
-	GovernanceLevel string                   `json:"governance_level"` // G0, G1, G2
-	ProofData       map[string]interface{}   `json:"proof_data"`
+	ProofID         string                 `json:"proof_id"`
+	GovernanceLevel string                 `json:"governance_level"` // G0, G1, G2
+	ProofData       map[string]interface{} `json:"proof_data"`
 }
 
 // GovernanceVerificationResponse represents governance verification result
 type GovernanceVerificationResponse struct {
-	Valid           bool                   `json:"valid"`
-	Level           string                 `json:"level"`
-	Details         map[string]interface{} `json:"details"`
-	VerifiedAt      time.Time              `json:"verified_at"`
+	Valid      bool                   `json:"valid"`
+	Level      string                 `json:"level"`
+	Details    map[string]interface{} `json:"details"`
+	VerifiedAt time.Time              `json:"verified_at"`
 }
 
 // HandleVerifyGovernance handles POST /api/v1/proofs/verify/governance
@@ -771,9 +771,9 @@ func (h *BundleHandlers) HandleVerifyGovernance(w http.ResponseWriter, r *http.R
 
 // RateLimiter implements a simple token bucket rate limiter
 type RateLimiter struct {
-	buckets     map[string]*tokenBucket
-	mu          sync.RWMutex
-	ratePerMin  int
+	buckets    map[string]*tokenBucket
+	mu         sync.RWMutex
+	ratePerMin int
 }
 
 type tokenBucket struct {
@@ -826,10 +826,10 @@ func (rl *RateLimiter) Allow(clientID string) bool {
 
 // APIKeyValidator validates API keys
 type APIKeyValidator struct {
-	repos     *database.Repositories
-	cache     map[string]*database.APIKey
-	cacheMu   sync.RWMutex
-	cacheTTL  time.Duration
+	repos    *database.Repositories
+	cache    map[string]*database.APIKey
+	cacheMu  sync.RWMutex
+	cacheTTL time.Duration
 }
 
 // NewAPIKeyValidator creates a new API key validator

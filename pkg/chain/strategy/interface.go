@@ -452,22 +452,22 @@ type AnchorWorkflowState struct {
 	AnchorID [32]byte `json:"anchor_id"`
 
 	// Step1 (Create) result
-	Step1TxHash string       `json:"step1_tx_hash,omitempty"`
+	Step1TxHash string        `json:"step1_tx_hash,omitempty"`
 	Step1Result *AnchorResult `json:"step1_result,omitempty"`
 	Step1Done   bool          `json:"step1_done"`
 
 	// Step2 (Verify) result
-	Step2TxHash string       `json:"step2_tx_hash,omitempty"`
+	Step2TxHash string        `json:"step2_tx_hash,omitempty"`
 	Step2Result *AnchorResult `json:"step2_result,omitempty"`
 	Step2Done   bool          `json:"step2_done"`
 
 	// Step3 (Governance) result
-	Step3TxHash string       `json:"step3_tx_hash,omitempty"`
+	Step3TxHash string        `json:"step3_tx_hash,omitempty"`
 	Step3Result *AnchorResult `json:"step3_result,omitempty"`
 	Step3Done   bool          `json:"step3_done"`
 
 	// Workflow status
-	Started    time.Time `json:"started"`
+	Started    time.Time  `json:"started"`
 	Completed  *time.Time `json:"completed,omitempty"`
 	Failed     bool       `json:"failed"`
 	FailReason string     `json:"fail_reason,omitempty"`
@@ -500,11 +500,11 @@ var SupportedChains = map[string]ChainPlatform{
 	"tron-shasta":      ChainPlatformEVM,
 
 	// CosmWasm Chains
-	"osmosis":    ChainPlatformCosmWasm,
-	"neutron":    ChainPlatformCosmWasm,
-	"injective":  ChainPlatformCosmWasm,
-	"cosmoshub":  ChainPlatformCosmWasm,
-	"juno":       ChainPlatformCosmWasm,
+	"osmosis":   ChainPlatformCosmWasm,
+	"neutron":   ChainPlatformCosmWasm,
+	"injective": ChainPlatformCosmWasm,
+	"cosmoshub": ChainPlatformCosmWasm,
+	"juno":      ChainPlatformCosmWasm,
 
 	// Solana
 	"solana":         ChainPlatformSolana,
@@ -512,17 +512,17 @@ var SupportedChains = map[string]ChainPlatform{
 	"solana-devnet":  ChainPlatformSolana,
 
 	// Move Chains
-	"aptos":       ChainPlatformMove,
-	"sui":         ChainPlatformMove,
-	"aptos-mainnet":  ChainPlatformMove,
-	"aptos-testnet":  ChainPlatformMove,
-	"sui-mainnet":    ChainPlatformMove,
-	"sui-testnet":    ChainPlatformMove,
+	"aptos":         ChainPlatformMove,
+	"sui":           ChainPlatformMove,
+	"aptos-mainnet": ChainPlatformMove,
+	"aptos-testnet": ChainPlatformMove,
+	"sui-mainnet":   ChainPlatformMove,
+	"sui-testnet":   ChainPlatformMove,
 
 	// TON
-	"ton":          ChainPlatformTON,
-	"ton-mainnet":  ChainPlatformTON,
-	"ton-testnet":  ChainPlatformTON,
+	"ton":         ChainPlatformTON,
+	"ton-mainnet": ChainPlatformTON,
+	"ton-testnet": ChainPlatformTON,
 
 	// NEAR
 	"near":         ChainPlatformNEAR,

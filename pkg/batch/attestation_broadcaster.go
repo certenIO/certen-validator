@@ -36,50 +36,50 @@ import (
 
 // BatchAttestation represents a validator's signed attestation of a batch
 type BatchAttestation struct {
-	BatchID        uuid.UUID `json:"batch_id"`
-	ValidatorID    string    `json:"validator_id"`
-	MerkleRoot     []byte    `json:"merkle_root"`
-	Signature      []byte    `json:"signature"`       // BLS signature over attestation data
-	PublicKey      []byte    `json:"public_key"`      // Validator's BLS public key
-	TxCount        int       `json:"tx_count"`
-	BlockHeight    int64     `json:"block_height"`
-	Timestamp      time.Time `json:"timestamp"`
-	AttestationID  string    `json:"attestation_id"`
+	BatchID       uuid.UUID `json:"batch_id"`
+	ValidatorID   string    `json:"validator_id"`
+	MerkleRoot    []byte    `json:"merkle_root"`
+	Signature     []byte    `json:"signature"`  // BLS signature over attestation data
+	PublicKey     []byte    `json:"public_key"` // Validator's BLS public key
+	TxCount       int       `json:"tx_count"`
+	BlockHeight   int64     `json:"block_height"`
+	Timestamp     time.Time `json:"timestamp"`
+	AttestationID string    `json:"attestation_id"`
 }
 
 // AttestationRequest is sent to peers requesting attestation of a batch
 type AttestationRequest struct {
-	BatchID        uuid.UUID `json:"batch_id"`
-	MerkleRoot     []byte    `json:"merkle_root"`
-	TxHashes       [][]byte  `json:"tx_hashes"`
-	TxCount        int       `json:"tx_count"`
-	BlockHeight    int64     `json:"block_height"`
-	RequesterID    string    `json:"requester_id"`
-	Timestamp      time.Time `json:"timestamp"`
-	ExpiresAt      time.Time `json:"expires_at"`
+	BatchID     uuid.UUID `json:"batch_id"`
+	MerkleRoot  []byte    `json:"merkle_root"`
+	TxHashes    [][]byte  `json:"tx_hashes"`
+	TxCount     int       `json:"tx_count"`
+	BlockHeight int64     `json:"block_height"`
+	RequesterID string    `json:"requester_id"`
+	Timestamp   time.Time `json:"timestamp"`
+	ExpiresAt   time.Time `json:"expires_at"`
 }
 
 // AttestationResult contains the outcome of attestation collection
 type AttestationResult struct {
-	BatchID              uuid.UUID            `json:"batch_id"`
-	Attestations         []*BatchAttestation  `json:"attestations"`
-	QuorumReached        bool                 `json:"quorum_reached"`
-	AttestationCount     int                  `json:"attestation_count"`
-	RequiredCount        int                  `json:"required_count"`
-	AggregatedSignature  []byte               `json:"aggregated_signature,omitempty"`
-	AggregatedPublicKey  []byte               `json:"aggregated_public_key,omitempty"`
-	Timestamp            time.Time            `json:"timestamp"`
-	CollectionDuration   time.Duration        `json:"collection_duration"`
+	BatchID             uuid.UUID           `json:"batch_id"`
+	Attestations        []*BatchAttestation `json:"attestations"`
+	QuorumReached       bool                `json:"quorum_reached"`
+	AttestationCount    int                 `json:"attestation_count"`
+	RequiredCount       int                 `json:"required_count"`
+	AggregatedSignature []byte              `json:"aggregated_signature,omitempty"`
+	AggregatedPublicKey []byte              `json:"aggregated_public_key,omitempty"`
+	Timestamp           time.Time           `json:"timestamp"`
+	CollectionDuration  time.Duration       `json:"collection_duration"`
 }
 
 // ValidatorPeer represents a peer validator in the network
 type ValidatorPeer struct {
-	ValidatorID   string    `json:"validator_id"`
-	PublicKey     []byte    `json:"public_key"`
-	Endpoint      string    `json:"endpoint"`
-	VotingPower   int64     `json:"voting_power"`
-	LastSeen      time.Time `json:"last_seen"`
-	IsActive      bool      `json:"is_active"`
+	ValidatorID string    `json:"validator_id"`
+	PublicKey   []byte    `json:"public_key"`
+	Endpoint    string    `json:"endpoint"`
+	VotingPower int64     `json:"voting_power"`
+	LastSeen    time.Time `json:"last_seen"`
+	IsActive    bool      `json:"is_active"`
 }
 
 // =============================================================================
@@ -246,7 +246,7 @@ func (ab *AttestationBroadcaster) BroadcastAndCollect(
 	// Collect responses with timeout
 	deadline := time.After(ab.timeout)
 
-	collectLoop:
+collectLoop:
 	for {
 		select {
 		case att, ok := <-responses:

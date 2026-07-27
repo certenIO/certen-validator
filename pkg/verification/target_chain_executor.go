@@ -115,9 +115,10 @@ type BFTExecutionMetadata struct {
 
 // AnchorExecutionResult summarises what happened on the target chain(s).
 // Enhanced to track all 3 transactions in the Ethereum anchor workflow:
-//   Step 1: CreateAnchor - stores anchor data on-chain
-//   Step 2: ExecuteComprehensiveProof - submits BLS proof for verification
-//   Step 3: ExecuteWithGovernance - executes the actual value transfer
+//
+//	Step 1: CreateAnchor - stores anchor data on-chain
+//	Step 2: ExecuteComprehensiveProof - submits BLS proof for verification
+//	Step 3: ExecuteWithGovernance - executes the actual value transfer
 type AnchorExecutionResult struct {
 	AnchorTxID  string // Primary tx (createAnchor) for backwards compatibility
 	Network     string

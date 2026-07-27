@@ -78,8 +78,8 @@ func TestComputeAccumulateGovRoot_EveryFieldMatters(t *testing.T) {
 	original := ComputeAccumulateGovRoot(base)
 
 	cases := []struct {
-		name  string
-		mut   func(*AccumulateGovRootInputs)
+		name string
+		mut  func(*AccumulateGovRootInputs)
 	}{
 		{"L1", func(i *AccumulateGovRootInputs) { i.L1AccountHash = bytes32From("0xff") }},
 		{"L2", func(i *AccumulateGovRootInputs) { i.L2BPTRoot = bytes32From("0xff") }},

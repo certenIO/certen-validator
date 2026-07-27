@@ -66,10 +66,10 @@ func TestExecutionCommitment_MatchesSolidity(t *testing.T) {
 			}
 
 			packed := make([]byte, 0, 116)
-			packed = append(packed, chainIDBytes...)     // uint256 = 32 bytes
+			packed = append(packed, chainIDBytes...)      // uint256 = 32 bytes
 			packed = append(packed, tt.target.Bytes()...) // address = 20 bytes
-			packed = append(packed, valueBytes...)         // uint256 = 32 bytes
-			packed = append(packed, dataHash.Bytes()...)   // bytes32 = 32 bytes
+			packed = append(packed, valueBytes...)        // uint256 = 32 bytes
+			packed = append(packed, dataHash.Bytes()...)  // bytes32 = 32 bytes
 
 			if len(packed) != 116 {
 				t.Fatalf("packed length = %d, want 116", len(packed))

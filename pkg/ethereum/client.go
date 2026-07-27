@@ -8,13 +8,13 @@ import (
 	"strings"
 	"time"
 
+	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
-	ethereum "github.com/ethereum/go-ethereum"
 )
 
 // Client represents an Ethereum client
@@ -357,8 +357,8 @@ func (c *Client) SendContractTransactionWithRetry(ctx context.Context, contractA
 			errStr := err.Error()
 			// Check if this is a retryable error
 			if strings.Contains(errStr, "replacement transaction underpriced") ||
-			   strings.Contains(errStr, "nonce too low") ||
-			   strings.Contains(errStr, "already known") {
+				strings.Contains(errStr, "nonce too low") ||
+				strings.Contains(errStr, "already known") {
 				if attempt < maxRetries-1 {
 					time.Sleep(2 * time.Second)
 					continue

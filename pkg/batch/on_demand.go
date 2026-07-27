@@ -28,8 +28,8 @@ type OnDemandHandler struct {
 	callback  BatchReadyCallback
 
 	// Configuration
-	maxBatchSize   int           // Max transactions before auto-anchor (default 5)
-	maxWaitTime    time.Duration // Max wait time before auto-anchor (default 30s)
+	maxBatchSize int           // Max transactions before auto-anchor (default 5)
+	maxWaitTime  time.Duration // Max wait time before auto-anchor (default 30s)
 
 	// State
 	processing bool
@@ -44,18 +44,18 @@ type OnDemandHandler struct {
 
 // OnDemandConfig holds configuration for on-demand handler
 type OnDemandConfig struct {
-	MaxBatchSize   int
-	MaxWaitTime    time.Duration
-	Callback       BatchReadyCallback
-	GetAccumState  func() (int64, string)
-	Logger         *log.Logger
+	MaxBatchSize  int
+	MaxWaitTime   time.Duration
+	Callback      BatchReadyCallback
+	GetAccumState func() (int64, string)
+	Logger        *log.Logger
 }
 
 // DefaultOnDemandConfig returns default configuration
 func DefaultOnDemandConfig() *OnDemandConfig {
 	return &OnDemandConfig{
-		MaxBatchSize: 5,                  // Small batches for fast anchoring
-		MaxWaitTime:  30 * time.Second,   // Don't wait too long
+		MaxBatchSize: 5,                // Small batches for fast anchoring
+		MaxWaitTime:  30 * time.Second, // Don't wait too long
 		Logger:       log.New(log.Writer(), "[OnDemand] ", log.LstdFlags),
 	}
 }

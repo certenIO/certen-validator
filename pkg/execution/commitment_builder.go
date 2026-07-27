@@ -79,10 +79,10 @@ func computeFunctionSelector(signature string) [4]byte {
 
 // ParsedCrossChainData represents parsed cross-chain data from intent
 type ParsedCrossChainData struct {
-	Protocol         string            `json:"protocol"`
-	Version          string            `json:"version"`
-	OperationGroupID string            `json:"operationGroupId"`
-	Legs             []ParsedCCLeg     `json:"legs"`
+	Protocol         string        `json:"protocol"`
+	Version          string        `json:"version"`
+	OperationGroupID string        `json:"operationGroupId"`
+	Legs             []ParsedCCLeg `json:"legs"`
 }
 
 // ParsedCCLeg represents a parsed cross-chain leg
@@ -135,9 +135,9 @@ type FullExecutionCommitment struct {
 	ExpectedEvents []ExpectedEventCommitment `json:"expected_events"`
 
 	// Final target (where ETH/tokens actually go)
-	FinalTarget     common.Address `json:"final_target"`
-	FinalValue      *big.Int       `json:"final_value"`
-	FinalCallData   []byte         `json:"final_call_data"`
+	FinalTarget   common.Address `json:"final_target"`
+	FinalValue    *big.Int       `json:"final_value"`
+	FinalCallData []byte         `json:"final_call_data"`
 
 	// Commitment hash (computed from all above)
 	CommitmentHash [32]byte `json:"commitment_hash"`
@@ -155,9 +155,9 @@ type StepCommitment struct {
 
 // ExpectedEventCommitment represents an expected event
 type ExpectedEventCommitment struct {
-	Contract   common.Address `json:"contract"`
-	EventName  string         `json:"event_name"`
-	Topic0     common.Hash    `json:"topic0"`
+	Contract  common.Address `json:"contract"`
+	EventName string         `json:"event_name"`
+	Topic0    common.Hash    `json:"topic0"`
 	// Indexed parameters to verify
 	IndexedParams []common.Hash `json:"indexed_params,omitempty"`
 }
@@ -360,13 +360,13 @@ func (s *StepCommitment) Hash() [32]byte {
 
 // VerificationResult contains the result of commitment verification
 type VerificationResult struct {
-	Verified       bool                    `json:"verified"`
-	Step1Verified  bool                    `json:"step1_verified"`
-	Step2Verified  bool                    `json:"step2_verified"`
-	Step3Verified  bool                    `json:"step3_verified"`
-	EventsVerified bool                    `json:"events_verified"`
-	Errors         []string                `json:"errors,omitempty"`
-	Details        map[string]interface{}  `json:"details"`
+	Verified       bool                   `json:"verified"`
+	Step1Verified  bool                   `json:"step1_verified"`
+	Step2Verified  bool                   `json:"step2_verified"`
+	Step3Verified  bool                   `json:"step3_verified"`
+	EventsVerified bool                   `json:"events_verified"`
+	Errors         []string               `json:"errors,omitempty"`
+	Details        map[string]interface{} `json:"details"`
 }
 
 // VerifyAgainstResults verifies the commitment against actual execution results

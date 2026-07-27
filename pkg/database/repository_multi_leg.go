@@ -15,16 +15,16 @@ import (
 
 // MultiLegPendingState represents a persisted multi-leg aggregation entry
 type MultiLegPendingState struct {
-	IntentID          string            `json:"intent_id"`
-	OperationID       string            `json:"operation_id"`
-	TotalLegs         int               `json:"total_legs"`
-	ExecutionMode     string            `json:"execution_mode"`
-	LegMapping        json.RawMessage   `json:"leg_mapping"`
-	LegIndicesPerChain json.RawMessage  `json:"leg_indices_per_chain"`
-	CompletedCycles   json.RawMessage   `json:"completed_cycles"`
-	CreatedAt         time.Time         `json:"created_at"`
-	UpdatedAt         time.Time         `json:"updated_at"`
-	ExpiresAt         time.Time         `json:"expires_at"`
+	IntentID           string          `json:"intent_id"`
+	OperationID        string          `json:"operation_id"`
+	TotalLegs          int             `json:"total_legs"`
+	ExecutionMode      string          `json:"execution_mode"`
+	LegMapping         json.RawMessage `json:"leg_mapping"`
+	LegIndicesPerChain json.RawMessage `json:"leg_indices_per_chain"`
+	CompletedCycles    json.RawMessage `json:"completed_cycles"`
+	CreatedAt          time.Time       `json:"created_at"`
+	UpdatedAt          time.Time       `json:"updated_at"`
+	ExpiresAt          time.Time       `json:"expires_at"`
 }
 
 // MultiLegRepository provides persistence for multi-leg aggregation state

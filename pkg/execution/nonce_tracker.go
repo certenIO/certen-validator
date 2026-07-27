@@ -47,9 +47,9 @@ type NonceTracker struct {
 
 // NonceState tracks the state of a nonce
 type NonceState struct {
-	Nonce      uint64
-	Status     string // "reserved", "submitted", "confirmed", "failed"
-	ReservedAt time.Time
+	Nonce       uint64
+	Status      string // "reserved", "submitted", "confirmed", "failed"
+	ReservedAt  time.Time
 	SubmittedAt time.Time
 	ConfirmedAt time.Time
 }

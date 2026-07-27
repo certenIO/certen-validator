@@ -226,7 +226,7 @@ func (s *CosmWasmStrategy) ObserveTransaction(ctx context.Context, txHash string
 					BlockHash:             "", // Would need separate block query
 					BlockTimestamp:        txTime,
 					Status:                status,
-					Confirmations:        confirmations,
+					Confirmations:         confirmations,
 					RequiredConfirmations: required,
 					IsFinalized:           true,
 					ResultHash:            s.computeResultHash(txHash, txHeight),
@@ -316,7 +316,7 @@ func (s *CosmWasmStrategy) GetTransactionReceipt(ctx context.Context, txHash str
 		BlockNumber:           txHeight,
 		BlockTimestamp:        txTime,
 		Status:                status,
-		Confirmations:        confirmations,
+		Confirmations:         confirmations,
 		RequiredConfirmations: s.GetRequiredConfirmations(),
 		IsFinalized:           confirmations >= s.GetRequiredConfirmations(),
 		ResultHash:            s.computeResultHash(txHash, txHeight),

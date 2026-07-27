@@ -58,37 +58,37 @@ type ContractSettings struct {
 
 // VerificationSettings contains proof verification requirements
 type VerificationSettings struct {
-	RequireBLSZK                 bool   `yaml:"require_bls_zk"`
-	RequireGovernanceProof       bool   `yaml:"require_governance_proof"`
-	GovernanceVerifier           string `yaml:"governance_verifier"`
+	RequireBLSZK                  bool   `yaml:"require_bls_zk"`
+	RequireGovernanceProof        bool   `yaml:"require_governance_proof"`
+	GovernanceVerifier            string `yaml:"governance_verifier"`
 	RequireCrossChainVerification bool   `yaml:"require_cross_chain_verification"`
-	MinGovernanceLevel           string `yaml:"min_governance_level"`
-	StrictMerkleVerification     bool   `yaml:"strict_merkle_verification"`
+	MinGovernanceLevel            string `yaml:"min_governance_level"`
+	StrictMerkleVerification      bool   `yaml:"strict_merkle_verification"`
 }
 
 // ConsensusSettings contains multi-validator consensus configuration
 type ConsensusSettings struct {
-	RequireQuorum              bool          `yaml:"require_quorum"`
-	ValidatorCount             int           `yaml:"validator_count"`
-	QuorumSize                 int           `yaml:"quorum_size"`
-	QuorumFraction             float64       `yaml:"quorum_fraction"`
-	AttestationTimeout         Duration      `yaml:"attestation_timeout"`
-	AttestationRetryCount      int           `yaml:"attestation_retry_count"`
-	AttestationRetryDelay      Duration      `yaml:"attestation_retry_delay"`
-	EnableSignatureAggregation bool          `yaml:"enable_signature_aggregation"`
-	BLSDomainAttestation       string        `yaml:"bls_domain_attestation"`
+	RequireQuorum              bool     `yaml:"require_quorum"`
+	ValidatorCount             int      `yaml:"validator_count"`
+	QuorumSize                 int      `yaml:"quorum_size"`
+	QuorumFraction             float64  `yaml:"quorum_fraction"`
+	AttestationTimeout         Duration `yaml:"attestation_timeout"`
+	AttestationRetryCount      int      `yaml:"attestation_retry_count"`
+	AttestationRetryDelay      Duration `yaml:"attestation_retry_delay"`
+	EnableSignatureAggregation bool     `yaml:"enable_signature_aggregation"`
+	BLSDomainAttestation       string   `yaml:"bls_domain_attestation"`
 }
 
 // GasSettings contains gas management configuration
 type GasSettings struct {
-	MaxGasPriceGwei     int64   `yaml:"max_gas_price_gwei"`
-	GasLimitAnchor      int64   `yaml:"gas_limit_anchor"`
-	GasLimitProof       int64   `yaml:"gas_limit_proof"`
-	GasLimitGovernance  int64   `yaml:"gas_limit_governance"`
-	EIP1559Enabled      bool    `yaml:"eip1559_enabled"`
-	MaxPriorityFeeGwei  int64   `yaml:"max_priority_fee_gwei"`
-	GasPriceMultiplier  float64 `yaml:"gas_price_multiplier"`
-	MinGasPriceGwei     int64   `yaml:"min_gas_price_gwei"`
+	MaxGasPriceGwei    int64   `yaml:"max_gas_price_gwei"`
+	GasLimitAnchor     int64   `yaml:"gas_limit_anchor"`
+	GasLimitProof      int64   `yaml:"gas_limit_proof"`
+	GasLimitGovernance int64   `yaml:"gas_limit_governance"`
+	EIP1559Enabled     bool    `yaml:"eip1559_enabled"`
+	MaxPriorityFeeGwei int64   `yaml:"max_priority_fee_gwei"`
+	GasPriceMultiplier float64 `yaml:"gas_price_multiplier"`
+	MinGasPriceGwei    int64   `yaml:"min_gas_price_gwei"`
 }
 
 // BatchSettings contains batch processing configuration
@@ -155,9 +155,9 @@ type EVMChainConfig struct {
 
 // SolanaChainConfig contains Solana network configuration
 type SolanaChainConfig struct {
-	RPCURL              string `yaml:"rpc_url"`
-	PrivateKey          string `yaml:"private_key"`
-	AnchorProgramID     string `yaml:"anchor_program_id"`
+	RPCURL               string `yaml:"rpc_url"`
+	PrivateKey           string `yaml:"private_key"`
+	AnchorProgramID      string `yaml:"anchor_program_id"`
 	BLSVerifierProgramID string `yaml:"bls_verifier_program_id"`
 }
 
@@ -211,11 +211,11 @@ type EthereumNetworkSettings struct {
 
 // AccumulateNetworkSettings contains Accumulate network configuration
 type AccumulateNetworkSettings struct {
-	APIURL     string   `yaml:"api_url"`
-	CometDNURL string   `yaml:"comet_dn_url"`
+	APIURL      string   `yaml:"api_url"`
+	CometDNURL  string   `yaml:"comet_dn_url"`
 	CometBVNURL string   `yaml:"comet_bvn_url"`
-	Network    string   `yaml:"network"`
-	APITimeout Duration `yaml:"api_timeout"`
+	Network     string   `yaml:"network"`
+	APITimeout  Duration `yaml:"api_timeout"`
 }
 
 // ValidatorSettings contains validator-specific configuration
@@ -320,10 +320,10 @@ type TracingSettings struct {
 
 // CometBFTSettings contains CometBFT configuration
 type CometBFTSettings struct {
-	Enabled   bool                   `yaml:"enabled"`
-	ChainID   string                 `yaml:"chain_id"`
-	P2P       CometBFTP2PSettings    `yaml:"p2p"`
-	RPC       CometBFTRPCSettings    `yaml:"rpc"`
+	Enabled   bool                      `yaml:"enabled"`
+	ChainID   string                    `yaml:"chain_id"`
+	P2P       CometBFTP2PSettings       `yaml:"p2p"`
+	RPC       CometBFTRPCSettings       `yaml:"rpc"`
 	Consensus CometBFTConsensusSettings `yaml:"consensus"`
 }
 
@@ -830,12 +830,12 @@ func LoadAnchorConfigFromEnv() (*AnchorConfig, error) {
 				ABIVersion: "v3",
 			},
 			Verification: VerificationSettings{
-				RequireBLSZK:                 getEnvBool("REQUIRE_BLS_ZK", true),
-				RequireGovernanceProof:       getEnvBool("REQUIRE_GOVERNANCE_PROOF", true),
-				GovernanceVerifier:           getEnv("GOVERNANCE_VERIFIER_ADDRESS", ""),
+				RequireBLSZK:                  getEnvBool("REQUIRE_BLS_ZK", true),
+				RequireGovernanceProof:        getEnvBool("REQUIRE_GOVERNANCE_PROOF", true),
+				GovernanceVerifier:            getEnv("GOVERNANCE_VERIFIER_ADDRESS", ""),
 				RequireCrossChainVerification: getEnvBool("REQUIRE_CROSS_CHAIN_VERIFICATION", true),
-				MinGovernanceLevel:           getEnv("MIN_GOVERNANCE_LEVEL", "G0"),
-				StrictMerkleVerification:     getEnvBool("STRICT_MERKLE_VERIFICATION", true),
+				MinGovernanceLevel:            getEnv("MIN_GOVERNANCE_LEVEL", "G0"),
+				StrictMerkleVerification:      getEnvBool("STRICT_MERKLE_VERIFICATION", true),
 			},
 			Consensus: ConsensusSettings{
 				RequireQuorum:              getEnvBool("REQUIRE_QUORUM", true),
@@ -889,11 +889,11 @@ func LoadAnchorConfigFromEnv() (*AnchorConfig, error) {
 				MaxIdleConnections: 5,
 			},
 			Accumulate: AccumulateNetworkSettings{
-				APIURL:     getEnv("ACCUMULATE_URL", ""),
-				CometDNURL: getEnv("ACCUMULATE_COMET_DN", ""),
+				APIURL:      getEnv("ACCUMULATE_URL", ""),
+				CometDNURL:  getEnv("ACCUMULATE_COMET_DN", ""),
 				CometBVNURL: getEnv("ACCUMULATE_COMET_BVN", ""),
-				Network:    getEnv("ACCUMULATE_NETWORK", "devnet"),
-				APITimeout: Duration(30 * time.Second),
+				Network:     getEnv("ACCUMULATE_NETWORK", "devnet"),
+				APITimeout:  Duration(30 * time.Second),
 			},
 			// Multi-chain EVM support
 			EVMChains: loadEVMChainsFromEnv(),

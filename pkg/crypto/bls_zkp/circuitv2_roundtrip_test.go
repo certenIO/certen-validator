@@ -33,10 +33,10 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/consensys/gnark-crypto/ecc"
 	bls12381 "github.com/consensys/gnark-crypto/ecc/bls12-381"
 	bls12381fr "github.com/consensys/gnark-crypto/ecc/bls12-381/fr"
 	bn254curve "github.com/consensys/gnark-crypto/ecc/bn254"
-	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark/backend"
 	"github.com/consensys/gnark/backend/groth16"
 	groth16_bn254 "github.com/consensys/gnark/backend/groth16/bn254"
@@ -113,8 +113,8 @@ type fixtureV2 struct {
 	Commitments   [2]string `json:"commitments"`
 	CommitmentPok [2]string `json:"commitment_pok"`
 
-	MessageHash       string `json:"message_hash"`       // bytes32 hex
-	PubkeyCommitment  string `json:"pubkey_commitment"`  // bytes32 hex
+	MessageHash       string `json:"message_hash"`      // bytes32 hex
+	PubkeyCommitment  string `json:"pubkey_commitment"` // bytes32 hex
 	SignedVotingPower uint64 `json:"signed_voting_power"`
 	TotalVotingPower  uint64 `json:"total_voting_power"`
 }
@@ -371,7 +371,9 @@ func buildFixture(
 }
 
 // computeExpectedVKHash mirrors the Solidity
-//   keccak256(abi.encode(alpha1, beta2, gamma2, delta2, ic_x, ic_y))
+//
+//	keccak256(abi.encode(alpha1, beta2, gamma2, delta2, ic_x, ic_y))
+//
 // computation, so the off-chain fixture's hash equals what
 // BLSZKVerifierV2.EXPECTED_VK_HASH must be set to in its constructor.
 //

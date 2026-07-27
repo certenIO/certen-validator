@@ -384,8 +384,8 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 			KeyPageThreshold: keyPageThreshold,
 			KeyPageKeyCount:  keyPageKeyCount,
 			// Merkle inclusion proof data (for MerkleTreeVisualization)
-			LeafHash:   leafHash,
-			LeafIndex:  0, // Single transaction, always index 0
+			LeafHash:       leafHash,
+			LeafIndex:      0,   // Single transaction, always index 0
 			MerklePath:     nil, // Empty path for single leaf (leaf = root)
 			MerkleRoot:     merkleRoot,
 			CommitmentData: commitMap,

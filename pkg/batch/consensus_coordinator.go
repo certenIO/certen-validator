@@ -34,54 +34,54 @@ import (
 
 // ConsensusResult represents the outcome of multi-validator consensus
 type ConsensusResult struct {
-	BatchID            uuid.UUID `json:"batch_id"`
-	MerkleRoot         []byte    `json:"merkle_root"`
-	AnchorTxHash       string    `json:"anchor_tx_hash"`
-	BlockNumber        int64     `json:"block_number"`
+	BatchID      uuid.UUID `json:"batch_id"`
+	MerkleRoot   []byte    `json:"merkle_root"`
+	AnchorTxHash string    `json:"anchor_tx_hash"`
+	BlockNumber  int64     `json:"block_number"`
 
 	// Attestation data
-	AttestationCount   int       `json:"attestation_count"`
-	ValidatorCount     int       `json:"validator_count"`
-	QuorumReached      bool      `json:"quorum_reached"`
-	QuorumFraction     float64   `json:"quorum_fraction"`
+	AttestationCount int     `json:"attestation_count"`
+	ValidatorCount   int     `json:"validator_count"`
+	QuorumReached    bool    `json:"quorum_reached"`
+	QuorumFraction   float64 `json:"quorum_fraction"`
 
 	// BLS aggregate signature
-	AggregateSignature []byte    `json:"aggregate_signature,omitempty"`
-	AggregatePubKey    []byte    `json:"aggregate_pubkey,omitempty"`
+	AggregateSignature []byte `json:"aggregate_signature,omitempty"`
+	AggregatePubKey    []byte `json:"aggregate_pubkey,omitempty"`
 
 	// Timing
-	StartTime          time.Time `json:"start_time"`
-	EndTime            time.Time `json:"end_time"`
-	Duration           time.Duration `json:"duration"`
+	StartTime time.Time     `json:"start_time"`
+	EndTime   time.Time     `json:"end_time"`
+	Duration  time.Duration `json:"duration"`
 
 	// Errors (if any)
-	Errors             []string  `json:"errors,omitempty"`
+	Errors []string `json:"errors,omitempty"`
 }
 
 // ConsensusState tracks the state of consensus for a batch
 type ConsensusState string
 
 const (
-	ConsensusStateInitiated   ConsensusState = "initiated"
-	ConsensusStateCollecting  ConsensusState = "collecting"
-	ConsensusStateQuorumMet   ConsensusState = "quorum_met"
-	ConsensusStateCompleted   ConsensusState = "completed"
-	ConsensusStateFailed      ConsensusState = "failed"
-	ConsensusStateTimeout     ConsensusState = "timeout"
+	ConsensusStateInitiated  ConsensusState = "initiated"
+	ConsensusStateCollecting ConsensusState = "collecting"
+	ConsensusStateQuorumMet  ConsensusState = "quorum_met"
+	ConsensusStateCompleted  ConsensusState = "completed"
+	ConsensusStateFailed     ConsensusState = "failed"
+	ConsensusStateTimeout    ConsensusState = "timeout"
 )
 
 // ConsensusEntry tracks consensus state for a single batch
 type ConsensusEntry struct {
-	BatchID        uuid.UUID
-	MerkleRoot     []byte
-	AnchorTxHash   string
-	BlockNumber    int64
-	TxCount        int
-	State          ConsensusState
-	Result         *ConsensusResult
-	Attestations   []*BatchAttestation
-	StartTime      time.Time
-	LastUpdate     time.Time
+	BatchID      uuid.UUID
+	MerkleRoot   []byte
+	AnchorTxHash string
+	BlockNumber  int64
+	TxCount      int
+	State        ConsensusState
+	Result       *ConsensusResult
+	Attestations []*BatchAttestation
+	StartTime    time.Time
+	LastUpdate   time.Time
 }
 
 // =============================================================================
@@ -95,24 +95,24 @@ type ConsensusCoordinatorConfig struct {
 	ValidatorPubKey []byte
 
 	// BLS key pair for signing
-	BLSPrivateKey   []byte
-	BLSPublicKey    []byte
+	BLSPrivateKey []byte
+	BLSPublicKey  []byte
 
 	// Quorum settings
-	QuorumFraction  float64       // Default: 0.667 (2/3+1)
-	QuorumTimeout   time.Duration // Default: 30 seconds
+	QuorumFraction float64       // Default: 0.667 (2/3+1)
+	QuorumTimeout  time.Duration // Default: 30 seconds
 
 	// Event watcher settings
 	EventWatcherConfig *anchor.EventWatcherConfig
 
 	// Retry settings
-	RetryAttempts   int
-	RetryDelay      time.Duration
+	RetryAttempts int
+	RetryDelay    time.Duration
 
 	// Cleanup settings
-	EntryTTL        time.Duration // How long to keep consensus entries
+	EntryTTL time.Duration // How long to keep consensus entries
 
-	Logger          *log.Logger
+	Logger *log.Logger
 }
 
 // DefaultConsensusCoordinatorConfig returns default configuration
@@ -135,16 +135,16 @@ type ConsensusCoordinator struct {
 	config *ConsensusCoordinatorConfig
 
 	// Components
-	broadcaster   *AttestationBroadcaster
-	eventWatcher  *anchor.EventWatcher
-	processor     *Processor
+	broadcaster  *AttestationBroadcaster
+	eventWatcher *anchor.EventWatcher
+	processor    *Processor
 
 	// Database access for Phase 5 updates
 	repos *database.Repositories
 
 	// Consensus tracking
-	entries    map[uuid.UUID]*ConsensusEntry
-	entriesMu  sync.RWMutex
+	entries   map[uuid.UUID]*ConsensusEntry
+	entriesMu sync.RWMutex
 
 	// Event handlers
 	onConsensusReached OnConsensusCallback
@@ -450,15 +450,15 @@ func (cc *ConsensusCoordinator) handleConsensusFailure(entry *ConsensusEntry, re
 
 	// Build failure result
 	consensusResult := &ConsensusResult{
-		BatchID:          entry.BatchID,
-		MerkleRoot:       entry.MerkleRoot,
-		AnchorTxHash:     entry.AnchorTxHash,
-		BlockNumber:      entry.BlockNumber,
-		QuorumReached:    false,
-		StartTime:        entry.StartTime,
-		EndTime:          time.Now(),
-		Duration:         time.Since(entry.StartTime),
-		Errors:           []string{reason},
+		BatchID:       entry.BatchID,
+		MerkleRoot:    entry.MerkleRoot,
+		AnchorTxHash:  entry.AnchorTxHash,
+		BlockNumber:   entry.BlockNumber,
+		QuorumReached: false,
+		StartTime:     entry.StartTime,
+		EndTime:       time.Now(),
+		Duration:      time.Since(entry.StartTime),
+		Errors:        []string{reason},
 	}
 
 	// Store result
@@ -623,13 +623,13 @@ func (cc *ConsensusCoordinator) GetConsensusStats() map[string]int {
 	defer cc.entriesMu.RUnlock()
 
 	stats := map[string]int{
-		"total":     len(cc.entries),
-		"initiated": 0,
+		"total":      len(cc.entries),
+		"initiated":  0,
 		"collecting": 0,
 		"quorum_met": 0,
-		"completed": 0,
-		"failed":    0,
-		"timeout":   0,
+		"completed":  0,
+		"failed":     0,
+		"timeout":    0,
 	}
 
 	for _, entry := range cc.entries {

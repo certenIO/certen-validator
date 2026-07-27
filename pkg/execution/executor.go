@@ -12,17 +12,17 @@
 package execution
 
 import (
-    "context"
-    "encoding/json"
-    "fmt"
-    "log"
-    "net/http"
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
 
-    "github.com/certen/independant-validator/pkg/verification"
+	"github.com/certen/independant-validator/pkg/verification"
 
-    "github.com/certen/independant-validator/pkg/anchor"
-    "github.com/certen/independant-validator/pkg/consensus"
-    "github.com/certen/independant-validator/pkg/proof"
+	"github.com/certen/independant-validator/pkg/anchor"
+	"github.com/certen/independant-validator/pkg/consensus"
+	"github.com/certen/independant-validator/pkg/proof"
 )
 
 // =====================================
@@ -31,202 +31,202 @@ import (
 
 // AnchorManagerWrapper adapts anchor.AnchorManager to consensus.AnchorManager interface
 type AnchorManagerWrapper struct {
-    manager *anchor.AnchorManager
+	manager *anchor.AnchorManager
 }
 
 func NewAnchorManagerWrapper(manager *anchor.AnchorManager) *AnchorManagerWrapper {
-    return &AnchorManagerWrapper{manager: manager}
+	return &AnchorManagerWrapper{manager: manager}
 }
 
 func (amw *AnchorManagerWrapper) CreateAnchor(ctx context.Context, req *consensus.AnchorRequest) (*consensus.AnchorResponse, error) {
-    // Convert consensus types to anchor types
-    anchorReq := &anchor.AnchorRequest{
-        RequestID:       req.RequestID,
-        TargetChains:    req.TargetChains,
-        Priority:        req.Priority,
-        TransactionHash: req.TransactionHash,
-        AccountURL:      req.AccountURL,
-    }
+	// Convert consensus types to anchor types
+	anchorReq := &anchor.AnchorRequest{
+		RequestID:       req.RequestID,
+		TargetChains:    req.TargetChains,
+		Priority:        req.Priority,
+		TransactionHash: req.TransactionHash,
+		AccountURL:      req.AccountURL,
+	}
 
-    // Call the actual anchor manager
-    resp, err := amw.manager.CreateAnchor(ctx, anchorReq)
-    if err != nil {
-        return nil, err
-    }
+	// Call the actual anchor manager
+	resp, err := amw.manager.CreateAnchor(ctx, anchorReq)
+	if err != nil {
+		return nil, err
+	}
 
-    // Convert response back to consensus types
-    return &consensus.AnchorResponse{
-        AnchorID: resp.AnchorID,
-        Success:  resp.Success,
-        Message:  resp.Message,
-    }, nil
+	// Convert response back to consensus types
+	return &consensus.AnchorResponse{
+		AnchorID: resp.AnchorID,
+		Success:  resp.Success,
+		Message:  resp.Message,
+	}, nil
 }
 
 // TargetChainExecutorWrapper adapts BFTTargetChainExecutor to verification.TargetChainExecutor interface
 type TargetChainExecutorWrapper struct {
-    executor    *BFTTargetChainExecutor
-    validatorID string
+	executor    *BFTTargetChainExecutor
+	validatorID string
 }
 
 // NewTargetChainExecutorWrapper creates a new wrapper with the given validator ID
 func NewTargetChainExecutorWrapper(executor *BFTTargetChainExecutor, validatorID string) *TargetChainExecutorWrapper {
-    if validatorID == "" {
-        validatorID = "bft-validator" // Fallback default
-    }
-    return &TargetChainExecutorWrapper{
-        executor:    executor,
-        validatorID: validatorID,
-    }
+	if validatorID == "" {
+		validatorID = "bft-validator" // Fallback default
+	}
+	return &TargetChainExecutorWrapper{
+		executor:    executor,
+		validatorID: validatorID,
+	}
 }
 
 // SubmitAnchorFromValidatorBlock implements verification.TargetChainExecutor
 func (tcew *TargetChainExecutorWrapper) SubmitAnchorFromValidatorBlock(
-    ctx context.Context,
-    vb *verification.ValidatorBlockMetadata,
-    bft *verification.BFTExecutionMetadata,
+	ctx context.Context,
+	vb *verification.ValidatorBlockMetadata,
+	bft *verification.BFTExecutionMetadata,
 ) (*verification.AnchorExecutionResult, error) {
-    // Extract data from the sanitized metadata types
-    intentID := vb.IntentID
-    validatorID := tcew.validatorID // From wrapper configuration
-    bundleID := vb.RoundID
-    anchorID := fmt.Sprintf("anchor-%d", bft.Height)
+	// Extract data from the sanitized metadata types
+	intentID := vb.IntentID
+	validatorID := tcew.validatorID // From wrapper configuration
+	bundleID := vb.RoundID
+	anchorID := fmt.Sprintf("anchor-%d", bft.Height)
 
-    // Create COMPLETE proof structure with all proof data from ValidatorBlockMetadata
-    // CRITICAL: The previous "minimal" proof was missing LiteClientProof.BPTRoot and
-    // BLSAggregateSignature, causing createAnchor() to receive zeros for crossChainCommitment
-    // and governanceRoot. This fix populates all proof data.
-    //
-    // NOTE: We use vb.SourceBlockHeight (Accumulate block height) NOT bft.Height (CometBFT height).
-    // The anchor needs the Accumulate source block for proper chain binding.
-    // V6.1 A+++: rehydrate G0/G1/G2 from the JSON snapshots the BFT signer
-    // attached to ValidatorBlockMetadata. The EVM submission path
-    // (ethereum_contracts.go::computeV6_1AccumulateGovRoot) reads these and
-    // recomputes the same A+++ govRoot the BFT signer used — anything else
-    // produces a bundleId mismatch and TX2 reverts on BLS verification.
-    var g0Result *proof.G0Result
-    var g1Result *proof.G1Result
-    var g2Result *proof.G2Result
-    if len(vb.G0CanonicalJSON) > 0 {
-        var g proof.G0Result
-        if err := json.Unmarshal(vb.G0CanonicalJSON, &g); err == nil {
-            g0Result = &g
-        }
-    }
-    if len(vb.G1CanonicalJSON) > 0 {
-        var g proof.G1Result
-        if err := json.Unmarshal(vb.G1CanonicalJSON, &g); err == nil {
-            g1Result = &g
-        }
-    }
-    if len(vb.G2CanonicalJSON) > 0 {
-        var g proof.G2Result
-        if err := json.Unmarshal(vb.G2CanonicalJSON, &g); err == nil {
-            g2Result = &g
-        }
-    }
+	// Create COMPLETE proof structure with all proof data from ValidatorBlockMetadata
+	// CRITICAL: The previous "minimal" proof was missing LiteClientProof.BPTRoot and
+	// BLSAggregateSignature, causing createAnchor() to receive zeros for crossChainCommitment
+	// and governanceRoot. This fix populates all proof data.
+	//
+	// NOTE: We use vb.SourceBlockHeight (Accumulate block height) NOT bft.Height (CometBFT height).
+	// The anchor needs the Accumulate source block for proper chain binding.
+	// V6.1 A+++: rehydrate G0/G1/G2 from the JSON snapshots the BFT signer
+	// attached to ValidatorBlockMetadata. The EVM submission path
+	// (ethereum_contracts.go::computeV6_1AccumulateGovRoot) reads these and
+	// recomputes the same A+++ govRoot the BFT signer used — anything else
+	// produces a bundleId mismatch and TX2 reverts on BLS verification.
+	var g0Result *proof.G0Result
+	var g1Result *proof.G1Result
+	var g2Result *proof.G2Result
+	if len(vb.G0CanonicalJSON) > 0 {
+		var g proof.G0Result
+		if err := json.Unmarshal(vb.G0CanonicalJSON, &g); err == nil {
+			g0Result = &g
+		}
+	}
+	if len(vb.G1CanonicalJSON) > 0 {
+		var g proof.G1Result
+		if err := json.Unmarshal(vb.G1CanonicalJSON, &g); err == nil {
+			g1Result = &g
+		}
+	}
+	if len(vb.G2CanonicalJSON) > 0 {
+		var g proof.G2Result
+		if err := json.Unmarshal(vb.G2CanonicalJSON, &g); err == nil {
+			g2Result = &g
+		}
+	}
 
-    certenProof := &proof.CertenProof{
-        ProofID:               fmt.Sprintf("proof-%s", intentID),
-        BlockHeight:           vb.SourceBlockHeight, // Accumulate block height, NOT CometBFT height
-        TransactionHash:       vb.TransactionHash,
-        AccountURL:            vb.AccountURL,
-        GeneratedAt:           bft.CommittedAt,
-        BLSAggregateSignature: vb.BLSAggregateSignature,
-        // Matched pair with the signature above: the BFT block signer's own
-        // public key. Threaded so the ZK prover verifies the signature against
-        // the key that produced it, not this executor's key (fixes #774716 when
-        // executor != signer). See proof.CertenProof.BLSValidatorSetPubKey.
-        BLSValidatorSetPubKey: vb.BLSValidatorSetPubKey,
-        // CRITICAL: Pass original CrossChainData for executeWithGovernance target address
-        CrossChainData:        vb.CrossChainData,
-        // V6.1 A+++ governance plumbing — must be identical to what BFT signed.
-        G0Result:   g0Result,
-        G1Result:   g1Result,
-        G2Result:   g2Result,
-        KeypageURL: vb.KeypageURL,
-        KeybookURL: vb.KeybookURL,
-        // V6.1 A+++ — original intent 4-blob snapshot so convertToLegacyIntent
-        // can rebuild an intent.CertenIntent whose OperationID() matches BFT's.
-        IntentData:     vb.IntentData,
-        GovernanceData: vb.GovernanceData,
-        ReplayData:     vb.ReplayData,
-        // LiteClientProof with CompleteProof for Merkle proof extraction.
-        // CRITICAL: CompleteProof contains the full Merkle receipts (MainChainProof, BPTProof,
-        // CombinedReceipt, etc.) which extractMerkleProofHashes() needs to build proofHashes[].
-        //
-        // V6.1 A+++: AccountHash, BlockHash, and ConsensusProof MUST be pulled
-        // through from CompleteProof so the EVM-side A+++ govRoot derivation
-        // (computeV6_1AccumulateGovRoot) reads non-zero L1/L3/L4 hashes.
-        // Pre-fix this rebuild only set BPTRoot, leaving AccountHash/BlockHash
-        // nil → L1/L3 slots in govRoot were zero on EVM but populated on BFT
-        // → govRoot diverged → executeComprehensiveProof reverted
-        // (Sepolia test #3 root cause, 2026-05-26).
-        LiteClientProof: buildLiteClientProofData(vb),
-        // Verification status
-        VerificationStatus: &proof.VerificationStatusData{
-            OverallValid:      (len(vb.BPTRoot) > 0 || vb.LiteClientProof != nil) && len(vb.GovernanceRoot) > 0,
-            Confidence:        1.0,
-            VerificationLevel: "complete",
-            VerifiedAt:        bft.CommittedAt,
-            ComponentStatus: map[string]bool{
-                "bpt_root":               len(vb.BPTRoot) > 0,
-                "governance_root":        len(vb.GovernanceRoot) > 0,
-                "cross_chain_commitment": len(vb.CrossChainCommitment) > 0,
-                "bls_signature":          len(vb.BLSAggregateSignature) > 0,
-                "complete_proof":         vb.LiteClientProof != nil, // CRITICAL: tracks if Merkle proofs available
-            },
-        },
-    }
+	certenProof := &proof.CertenProof{
+		ProofID:               fmt.Sprintf("proof-%s", intentID),
+		BlockHeight:           vb.SourceBlockHeight, // Accumulate block height, NOT CometBFT height
+		TransactionHash:       vb.TransactionHash,
+		AccountURL:            vb.AccountURL,
+		GeneratedAt:           bft.CommittedAt,
+		BLSAggregateSignature: vb.BLSAggregateSignature,
+		// Matched pair with the signature above: the BFT block signer's own
+		// public key. Threaded so the ZK prover verifies the signature against
+		// the key that produced it, not this executor's key (fixes #774716 when
+		// executor != signer). See proof.CertenProof.BLSValidatorSetPubKey.
+		BLSValidatorSetPubKey: vb.BLSValidatorSetPubKey,
+		// CRITICAL: Pass original CrossChainData for executeWithGovernance target address
+		CrossChainData: vb.CrossChainData,
+		// V6.1 A+++ governance plumbing — must be identical to what BFT signed.
+		G0Result:   g0Result,
+		G1Result:   g1Result,
+		G2Result:   g2Result,
+		KeypageURL: vb.KeypageURL,
+		KeybookURL: vb.KeybookURL,
+		// V6.1 A+++ — original intent 4-blob snapshot so convertToLegacyIntent
+		// can rebuild an intent.CertenIntent whose OperationID() matches BFT's.
+		IntentData:     vb.IntentData,
+		GovernanceData: vb.GovernanceData,
+		ReplayData:     vb.ReplayData,
+		// LiteClientProof with CompleteProof for Merkle proof extraction.
+		// CRITICAL: CompleteProof contains the full Merkle receipts (MainChainProof, BPTProof,
+		// CombinedReceipt, etc.) which extractMerkleProofHashes() needs to build proofHashes[].
+		//
+		// V6.1 A+++: AccountHash, BlockHash, and ConsensusProof MUST be pulled
+		// through from CompleteProof so the EVM-side A+++ govRoot derivation
+		// (computeV6_1AccumulateGovRoot) reads non-zero L1/L3/L4 hashes.
+		// Pre-fix this rebuild only set BPTRoot, leaving AccountHash/BlockHash
+		// nil → L1/L3 slots in govRoot were zero on EVM but populated on BFT
+		// → govRoot diverged → executeComprehensiveProof reverted
+		// (Sepolia test #3 root cause, 2026-05-26).
+		LiteClientProof: buildLiteClientProofData(vb),
+		// Verification status
+		VerificationStatus: &proof.VerificationStatusData{
+			OverallValid:      (len(vb.BPTRoot) > 0 || vb.LiteClientProof != nil) && len(vb.GovernanceRoot) > 0,
+			Confidence:        1.0,
+			VerificationLevel: "complete",
+			VerifiedAt:        bft.CommittedAt,
+			ComponentStatus: map[string]bool{
+				"bpt_root":               len(vb.BPTRoot) > 0,
+				"governance_root":        len(vb.GovernanceRoot) > 0,
+				"cross_chain_commitment": len(vb.CrossChainCommitment) > 0,
+				"bls_signature":          len(vb.BLSAggregateSignature) > 0,
+				"complete_proof":         vb.LiteClientProof != nil, // CRITICAL: tracks if Merkle proofs available
+			},
+		},
+	}
 
-    // Log proof data including the critical CompleteProof
-    hasCompleteProof := vb.LiteClientProof != nil
-    var merkleReceiptCount int
-    if hasCompleteProof {
-        if vb.LiteClientProof.MainChainProof != nil {
-            merkleReceiptCount++
-        }
-        if vb.LiteClientProof.BPTProof != nil {
-            merkleReceiptCount++
-        }
-        if vb.LiteClientProof.CombinedReceipt != nil {
-            merkleReceiptCount++
-        }
-    }
+	// Log proof data including the critical CompleteProof
+	hasCompleteProof := vb.LiteClientProof != nil
+	var merkleReceiptCount int
+	if hasCompleteProof {
+		if vb.LiteClientProof.MainChainProof != nil {
+			merkleReceiptCount++
+		}
+		if vb.LiteClientProof.BPTProof != nil {
+			merkleReceiptCount++
+		}
+		if vb.LiteClientProof.CombinedReceipt != nil {
+			merkleReceiptCount++
+		}
+	}
 
-    log.Printf("📦 [EXECUTOR] Created proof with real data:")
-    log.Printf("   BPTRoot: %d bytes", len(vb.BPTRoot))
-    log.Printf("   CrossChainCommitment: %d bytes", len(vb.CrossChainCommitment))
-    log.Printf("   GovernanceRoot: %d bytes", len(vb.GovernanceRoot))
-    log.Printf("   BLSAggregateSignature: %d chars", len(vb.BLSAggregateSignature))
-    log.Printf("   SourceBlockHeight: %d (Accumulate)", vb.SourceBlockHeight)
-    log.Printf("   CompleteProof present: %v (Merkle receipts: %d)", hasCompleteProof, merkleReceiptCount)
+	log.Printf("📦 [EXECUTOR] Created proof with real data:")
+	log.Printf("   BPTRoot: %d bytes", len(vb.BPTRoot))
+	log.Printf("   CrossChainCommitment: %d bytes", len(vb.CrossChainCommitment))
+	log.Printf("   GovernanceRoot: %d bytes", len(vb.GovernanceRoot))
+	log.Printf("   BLSAggregateSignature: %d chars", len(vb.BLSAggregateSignature))
+	log.Printf("   SourceBlockHeight: %d (Accumulate)", vb.SourceBlockHeight)
+	log.Printf("   CompleteProof present: %v (Merkle receipts: %d)", hasCompleteProof, merkleReceiptCount)
 
-    // Call the legacy ExecuteTargetChainOperations method
-    result, err := tcew.executor.ExecuteTargetChainOperations(
-        ctx, intentID, string(vb.OperationCommitment), vb.AccountURL,
-        validatorID, bundleID, anchorID, certenProof,
-    )
-    if err != nil {
-        return nil, err
-    }
+	// Call the legacy ExecuteTargetChainOperations method
+	result, err := tcew.executor.ExecuteTargetChainOperations(
+		ctx, intentID, string(vb.OperationCommitment), vb.AccountURL,
+		validatorID, bundleID, anchorID, certenProof,
+	)
+	if err != nil {
+		return nil, err
+	}
 
-    // Convert result to new verification format
-    // Enhanced: Now includes all 3 transaction hashes from the anchor workflow
-    return &verification.AnchorExecutionResult{
-        AnchorTxID:  result.TxHash, // Primary tx (createAnchor)
-        Network:     result.Chain,
-        Height:      result.BlockNumber,
-        ConfirmedAt: bft.CommittedAt,
+	// Convert result to new verification format
+	// Enhanced: Now includes all 3 transaction hashes from the anchor workflow
+	return &verification.AnchorExecutionResult{
+		AnchorTxID:  result.TxHash, // Primary tx (createAnchor)
+		Network:     result.Chain,
+		Height:      result.BlockNumber,
+		ConfirmedAt: bft.CommittedAt,
 
-        // Enhanced: All 3 tx hashes for comprehensive tracking
-        CreateTxHash:             result.CreateTxHash,
-        VerifyTxHash:             result.VerifyTxHash,
-        GovernanceTxHash:         result.GovernanceTxHash,
-        CreateBlockNumber:        result.CreateBlockNumber,
-        VerifyBlockNumber:        result.VerifyBlockNumber,
-        GovernanceBlockNumber:    result.GovernanceBlockNumber,
-        AllTransactionsConfirmed: result.Success,
-    }, nil
+		// Enhanced: All 3 tx hashes for comprehensive tracking
+		CreateTxHash:             result.CreateTxHash,
+		VerifyTxHash:             result.VerifyTxHash,
+		GovernanceTxHash:         result.GovernanceTxHash,
+		CreateBlockNumber:        result.CreateBlockNumber,
+		VerifyBlockNumber:        result.VerifyBlockNumber,
+		GovernanceBlockNumber:    result.GovernanceBlockNumber,
+		AllTransactionsConfirmed: result.Success,
+	}, nil
 }
 
 // buildLiteClientProofData rebuilds the LiteClientProofData for executor-side
@@ -236,28 +236,28 @@ func (tcew *TargetChainExecutorWrapper) SubmitAnchorFromValidatorBlock(
 // a different govRoot if they were left nil (which is what pre-fix Sepolia
 // test #3 hit on 2026-05-26).
 func buildLiteClientProofData(vb *verification.ValidatorBlockMetadata) *proof.LiteClientProofData {
-    out := &proof.LiteClientProofData{
-        CompleteProof:   vb.LiteClientProof,
-        BPTRoot:         vb.BPTRoot,
-        ProofValid:      len(vb.BPTRoot) > 0 || vb.LiteClientProof != nil,
-        ValidationLevel: "complete_proof",
-    }
-    if vb.LiteClientProof != nil {
-        out.AccountHash = vb.LiteClientProof.AccountHash
-        // BPTRoot from CompleteProof takes precedence when present — it's the
-        // BPT root the proof generator actually used, while vbMeta.BPTRoot
-        // may come from a different extraction path.
-        if len(vb.LiteClientProof.BPTRoot) > 0 {
-            out.BPTRoot = vb.LiteClientProof.BPTRoot
-        }
-        out.BlockHash = vb.LiteClientProof.BlockHash
-        // ConsensusProof is not a field on CompleteProof (it lives separately
-        // on LiteClientProofData and is populated by the proof adapter, not
-        // by the lite client). Both BFT and EVM sides read .ConsensusProof
-        // from LiteClientProofData; since the adapter currently doesn't set
-        // it, both sides see nil → L4 hash zero on both → matches.
-    }
-    return out
+	out := &proof.LiteClientProofData{
+		CompleteProof:   vb.LiteClientProof,
+		BPTRoot:         vb.BPTRoot,
+		ProofValid:      len(vb.BPTRoot) > 0 || vb.LiteClientProof != nil,
+		ValidationLevel: "complete_proof",
+	}
+	if vb.LiteClientProof != nil {
+		out.AccountHash = vb.LiteClientProof.AccountHash
+		// BPTRoot from CompleteProof takes precedence when present — it's the
+		// BPT root the proof generator actually used, while vbMeta.BPTRoot
+		// may come from a different extraction path.
+		if len(vb.LiteClientProof.BPTRoot) > 0 {
+			out.BPTRoot = vb.LiteClientProof.BPTRoot
+		}
+		out.BlockHash = vb.LiteClientProof.BlockHash
+		// ConsensusProof is not a field on CompleteProof (it lives separately
+		// on LiteClientProofData and is populated by the proof adapter, not
+		// by the lite client). Both BFT and EVM sides read .ConsensusProof
+		// from LiteClientProofData; since the adapter currently doesn't set
+		// it, both sides see nil → L4 hash zero on both → matches.
+	}
+	return out
 }
 
 // =====================================
@@ -267,33 +267,33 @@ func buildLiteClientProofData(vb *verification.ValidatorBlockMetadata) *proof.Li
 // BFTExecutionHandler provides HTTP/API endpoints that delegate to BFTValidator.
 // This is a thin adapter - all execution logic is in the consensus package.
 type BFTExecutionHandler struct {
-    validator *consensus.BFTValidator
-    logger    *log.Logger
+	validator *consensus.BFTValidator
+	logger    *log.Logger
 }
 
 // ExecuteIntentRequest represents an API request to execute an intent
 type ExecuteIntentRequest struct {
-    IntentID        string                 `json:"intent_id"`
-    TransactionHash string                 `json:"transaction_hash"`
-    AccountURL      string                 `json:"account_url"`
-    BlockHeight     uint64                 `json:"block_height"`
-    Metadata        map[string]interface{} `json:"metadata,omitempty"`
+	IntentID        string                 `json:"intent_id"`
+	TransactionHash string                 `json:"transaction_hash"`
+	AccountURL      string                 `json:"account_url"`
+	BlockHeight     uint64                 `json:"block_height"`
+	Metadata        map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // ExecuteIntentResponse represents the API response
 type ExecuteIntentResponse struct {
-    Success   bool   `json:"success"`
-    Message   string `json:"message"`
-    RequestID string `json:"request_id,omitempty"`
+	Success   bool   `json:"success"`
+	Message   string `json:"message"`
+	RequestID string `json:"request_id,omitempty"`
 }
 
 // NewBFTExecutionHandler creates a new BFT execution handler.
 // This is the canonical constructor for production intent execution.
 func NewBFTExecutionHandler(validator *consensus.BFTValidator, logger *log.Logger) *BFTExecutionHandler {
-    return &BFTExecutionHandler{
-        validator: validator,
-        logger:    logger,
-    }
+	return &BFTExecutionHandler{
+		validator: validator,
+		logger:    logger,
+	}
 }
 
 // HandleExecuteIntent provides HTTP endpoint for intent execution.
@@ -302,56 +302,56 @@ func NewBFTExecutionHandler(validator *consensus.BFTValidator, logger *log.Logge
 // with properly structured CertenIntent (4-blob) and CertenProof from lite client.
 // HTTP-triggered execution cannot provide canonical proof artifacts and violates the Golden Spec.
 func (h *BFTExecutionHandler) HandleExecuteIntent(w http.ResponseWriter, r *http.Request) {
-    h.logger.Printf("⚠️ [BFT-HANDLER] DEPRECATED: HTTP intent execution endpoint called - this path is no longer supported")
-    h.logger.Printf("   Intents must flow through IntentDiscovery → ExecuteCanonicalIntentWithBFTConsensus")
+	h.logger.Printf("⚠️ [BFT-HANDLER] DEPRECATED: HTTP intent execution endpoint called - this path is no longer supported")
+	h.logger.Printf("   Intents must flow through IntentDiscovery → ExecuteCanonicalIntentWithBFTConsensus")
 
-    // Return deprecation error
-    resp := ExecuteIntentResponse{
-        Success: false,
-        Message: "DEPRECATED: HTTP intent execution is no longer supported. Intents must be discovered from Accumulate blockchain via IntentDiscovery, which provides canonical CertenIntent (4-blob structure) and CertenProof from lite client. Direct HTTP-triggered execution cannot provide these canonical proof artifacts and violates the Golden Spec.",
-    }
+	// Return deprecation error
+	resp := ExecuteIntentResponse{
+		Success: false,
+		Message: "DEPRECATED: HTTP intent execution is no longer supported. Intents must be discovered from Accumulate blockchain via IntentDiscovery, which provides canonical CertenIntent (4-blob structure) and CertenProof from lite client. Direct HTTP-triggered execution cannot provide these canonical proof artifacts and violates the Golden Spec.",
+	}
 
-    w.Header().Set("Content-Type", "application/json")
-    w.WriteHeader(http.StatusGone) // 410 Gone - resource no longer available
-    json.NewEncoder(w).Encode(resp)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusGone) // 410 Gone - resource no longer available
+	json.NewEncoder(w).Encode(resp)
 }
 
 // GetMetrics returns BFT execution metrics
 func (h *BFTExecutionHandler) GetMetrics(w http.ResponseWriter, r *http.Request) {
-    // Delegate to BFT validator for metrics
-    metrics := h.validator.GetMetrics()
+	// Delegate to BFT validator for metrics
+	metrics := h.validator.GetMetrics()
 
-    w.Header().Set("Content-Type", "application/json")
-    json.NewEncoder(w).Encode(metrics)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(metrics)
 }
 
 // GetStatus returns BFT execution status
 func (h *BFTExecutionHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
-    status := map[string]interface{}{
-        "status":        "running",
-        "pipeline_type": "bft_consensus",
-        "validator_id":  h.validator.GetValidatorID(),
-    }
+	status := map[string]interface{}{
+		"status":        "running",
+		"pipeline_type": "bft_consensus",
+		"validator_id":  h.validator.GetValidatorID(),
+	}
 
-    w.Header().Set("Content-Type", "application/json")
-    json.NewEncoder(w).Encode(status)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(status)
 }
 
 // respondWithError is a helper for consistent error responses
 func (h *BFTExecutionHandler) respondWithError(w http.ResponseWriter, statusCode int, message string, err error) {
-    resp := ExecuteIntentResponse{
-        Success: false,
-        Message: message,
-    }
+	resp := ExecuteIntentResponse{
+		Success: false,
+		Message: message,
+	}
 
-    if err != nil {
-        h.logger.Printf("❌ [BFT-HANDLER] Error: %s - %v", message, err)
-        resp.Message = fmt.Sprintf("%s: %v", message, err)
-    }
+	if err != nil {
+		h.logger.Printf("❌ [BFT-HANDLER] Error: %s - %v", message, err)
+		resp.Message = fmt.Sprintf("%s: %v", message, err)
+	}
 
-    w.Header().Set("Content-Type", "application/json")
-    w.WriteHeader(statusCode)
-    json.NewEncoder(w).Encode(resp)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	json.NewEncoder(w).Encode(resp)
 }
 
 // =====================================

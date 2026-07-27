@@ -29,7 +29,9 @@ func (m *mockQueryClient) GetIntentBlobs(ctx context.Context, txHash, accountURL
 	return m.blobs, m.err
 }
 
-func rbTopic0() common.Hash { return ethcrypto.Keccak256Hash([]byte("Pinged(bytes32,address,uint256)")) }
+func rbTopic0() common.Hash {
+	return ethcrypto.Keccak256Hash([]byte("Pinged(bytes32,address,uint256)"))
+}
 
 func intentBlob(id string) []byte {
 	b, _ := json.Marshal(map[string]interface{}{"intent_id": id})

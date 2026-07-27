@@ -42,10 +42,10 @@ var certenAccountABI, _ = contracts.CertenAccountV2MetaData.GetAbi()
 // ExternalChainObserver watches external chains for transaction finalization
 // and constructs cryptographic proofs of execution
 type ExternalChainObserver struct {
-	ethClient       *ethclient.Client
-	rpcClient       *rpc.Client // RB-5: raw client for eth_getProof (storage-slot state proofs)
-	chainID         int64
-	validatorID     string
+	ethClient   *ethclient.Client
+	rpcClient   *rpc.Client // RB-5: raw client for eth_getProof (storage-slot state proofs)
+	chainID     int64
+	validatorID string
 
 	// Configuration
 	requiredConfirmations int           // Number of blocks required for finalization
@@ -68,15 +68,15 @@ type ExternalChainObserver struct {
 
 // ExternalChainObserverConfig contains configuration for the observer
 type ExternalChainObserverConfig struct {
-	EthereumRPC            string
-	ChainID                int64
-	ValidatorID            string
-	RequiredConfirmations  int           // Default: 12 for Ethereum mainnet, 2 for testnets
-	PollingInterval        time.Duration // Default: 12 seconds (1 block time)
-	Timeout                time.Duration // Default: 30 minutes
-	OnFinalized            func(*ExternalChainResult)
-	OnFailed               func(*PendingExecution, error)
-	Logger                 Logger
+	EthereumRPC           string
+	ChainID               int64
+	ValidatorID           string
+	RequiredConfirmations int           // Default: 12 for Ethereum mainnet, 2 for testnets
+	PollingInterval       time.Duration // Default: 12 seconds (1 block time)
+	Timeout               time.Duration // Default: 30 minutes
+	OnFinalized           func(*ExternalChainResult)
+	OnFailed              func(*PendingExecution, error)
+	Logger                Logger
 }
 
 // NewExternalChainObserver creates a new external chain observer
@@ -496,11 +496,11 @@ func (o *ExternalChainObserver) fetchStateProofs(ctx context.Context, blockNumbe
 // VerifyExecutedCall is the RB-2/RB-4/RB-5 attestation gate for a proof-gated contract
 // call. It independently re-observes the executed governance transaction and:
 //   - RB-2: rebuilds the tx & receipt inclusion proofs (canonical encoding, header-bound)
-//           and verifies them via go-ethereum trie.VerifyProof against the block roots;
+//     and verifies them via go-ethereum trie.VerifyProof against the block roots;
 //   - RB-4: requires every committed event to appear in the inclusion-proven receipt logs
-//           (the call's effect — an internal-call event by the target — not just non-revert);
+//     (the call's effect — an internal-call event by the target — not just non-revert);
 //   - RB-5: if committed state slots are present, fetches eth_getProof and verifies each
-//           slot holds the committed value against the finalized stateRoot.
+//     slot holds the committed value against the finalized stateRoot.
 //
 // Returns an error (⇒ caller must refuse to attest / write back) on any failure. The
 // outer tx targets the abstract account, not the call target, so this deliberately does

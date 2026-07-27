@@ -29,11 +29,11 @@ import (
 // Mirrors NearClient pattern but uses Solana transaction format and Borsh-encoded
 // Anchor instructions instead of JSON args.
 type SolanaClient struct {
-	rpcEndpoint string
-	privateKey  ed25519.PrivateKey // 64-byte Ed25519
-	publicKey   ed25519.PublicKey  // 32-byte
-	publicKeyB58 string            // Base58 Solana address
-	httpClient  *http.Client
+	rpcEndpoint  string
+	privateKey   ed25519.PrivateKey // 64-byte Ed25519
+	publicKey    ed25519.PublicKey  // 32-byte
+	publicKeyB58 string             // Base58 Solana address
+	httpClient   *http.Client
 
 	// Program IDs (Pubkey = [32]byte)
 	anchorProgramID      [32]byte
@@ -172,7 +172,7 @@ type SolanaAnchorData struct {
 	Validator            [32]byte
 	Valid                bool
 	ProofExecuted        bool
-	GovernanceExecuted   bool // V5 CRITICAL-001
+	GovernanceExecuted   bool  // V5 CRITICAL-001
 	GovernanceLevel      uint8 // V5 CRITICAL-001
 }
 
@@ -1054,19 +1054,32 @@ func (sc *SolanaClient) GetAnchorData(ctx context.Context, bundleId [32]byte) (*
 	anchor := &SolanaAnchorData{}
 	off := 0
 
-	copy(anchor.BundleId[:], data[off:off+32]); off += 32
-	copy(anchor.MerkleRoot[:], data[off:off+32]); off += 32
-	copy(anchor.AdiURLHash[:], data[off:off+32]); off += 32
-	copy(anchor.OperationCommitment[:], data[off:off+32]); off += 32
-	copy(anchor.CrossChainCommitment[:], data[off:off+32]); off += 32
-	copy(anchor.GovernanceRoot[:], data[off:off+32]); off += 32
-	copy(anchor.ExecutionCommitment[:], data[off:off+32]); off += 32
-	anchor.BlockHeight = binary.LittleEndian.Uint64(data[off:off+8]); off += 8
-	anchor.Timestamp = int64(binary.LittleEndian.Uint64(data[off:off+8])); off += 8
-	copy(anchor.Validator[:], data[off:off+32]); off += 32
-	anchor.Valid = data[off] != 0; off++
-	anchor.ProofExecuted = data[off] != 0; off++
-	anchor.GovernanceExecuted = data[off] != 0; off++
+	copy(anchor.BundleId[:], data[off:off+32])
+	off += 32
+	copy(anchor.MerkleRoot[:], data[off:off+32])
+	off += 32
+	copy(anchor.AdiURLHash[:], data[off:off+32])
+	off += 32
+	copy(anchor.OperationCommitment[:], data[off:off+32])
+	off += 32
+	copy(anchor.CrossChainCommitment[:], data[off:off+32])
+	off += 32
+	copy(anchor.GovernanceRoot[:], data[off:off+32])
+	off += 32
+	copy(anchor.ExecutionCommitment[:], data[off:off+32])
+	off += 32
+	anchor.BlockHeight = binary.LittleEndian.Uint64(data[off : off+8])
+	off += 8
+	anchor.Timestamp = int64(binary.LittleEndian.Uint64(data[off : off+8]))
+	off += 8
+	copy(anchor.Validator[:], data[off:off+32])
+	off += 32
+	anchor.Valid = data[off] != 0
+	off++
+	anchor.ProofExecuted = data[off] != 0
+	off++
+	anchor.GovernanceExecuted = data[off] != 0
+	off++
 	anchor.GovernanceLevel = data[off]
 
 	log.Printf("✅ [SOLANA] Anchor read-back: bundleId=0x%x opCommit=0x%x execCommit=0x%x proofExecuted=%v govExecuted=%v",
@@ -1351,10 +1364,10 @@ func (sc *SolanaClient) signAndSend(ctx context.Context, messageBytes []byte) (s
 	params := []interface{}{
 		txBase64,
 		map[string]interface{}{
-			"encoding":                "base64",
-			"skipPreflight":           false,
-			"preflightCommitment":     "confirmed",
-			"maxRetries":              3,
+			"encoding":            "base64",
+			"skipPreflight":       false,
+			"preflightCommitment": "confirmed",
+			"maxRetries":          3,
 		},
 	}
 

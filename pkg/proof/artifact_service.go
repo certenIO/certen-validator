@@ -20,8 +20,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	lcproof "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof"
+	"github.com/google/uuid"
 )
 
 // =============================================================================
@@ -46,19 +46,19 @@ type ProofArtifactService struct {
 // ArtifactServiceConfig contains service configuration
 type ArtifactServiceConfig struct {
 	// Generator settings
-	V3Endpoint        string        `json:"v3_endpoint"`
-	GeneratorTimeout  time.Duration `json:"generator_timeout"`
+	V3Endpoint       string        `json:"v3_endpoint"`
+	GeneratorTimeout time.Duration `json:"generator_timeout"`
 
 	// Governance proof settings
-	GovProofCLIPath   string `json:"gov_proof_cli_path"` // Path to govproof CLI binary (optional)
-	GovProofWorkDir   string `json:"gov_proof_work_dir"` // Working directory for gov proof artifacts
+	GovProofCLIPath string `json:"gov_proof_cli_path"` // Path to govproof CLI binary (optional)
+	GovProofWorkDir string `json:"gov_proof_work_dir"` // Working directory for gov proof artifacts
 
 	// Bundle settings
-	DefaultGovLevel   GovernanceLevel `json:"default_gov_level"`
-	IncludeAllLayers  bool            `json:"include_all_layers"`
+	DefaultGovLevel  GovernanceLevel `json:"default_gov_level"`
+	IncludeAllLayers bool            `json:"include_all_layers"`
 
 	// Validation settings
-	ValidateOnCreate  bool `json:"validate_on_create"`
+	ValidateOnCreate     bool `json:"validate_on_create"`
 	RequireAllComponents bool `json:"require_all_components"`
 
 	// Coordinator identity
@@ -67,24 +67,24 @@ type ArtifactServiceConfig struct {
 
 // ArtifactMetrics tracks service metrics
 type ArtifactMetrics struct {
-	BundlesCreated     int64
-	BundlesComplete    int64
-	BundlesIncomplete  int64
-	GenerationErrors   int64
-	TotalGenerationMs  int64
-	LastGenerationAt   time.Time
+	BundlesCreated    int64
+	BundlesComplete   int64
+	BundlesIncomplete int64
+	GenerationErrors  int64
+	TotalGenerationMs int64
+	LastGenerationAt  time.Time
 }
 
 // DefaultArtifactServiceConfig returns default configuration
 func DefaultArtifactServiceConfig() *ArtifactServiceConfig {
 	return &ArtifactServiceConfig{
-		V3Endpoint:       "https://mainnet.accumulatenetwork.io/v3",
-		GeneratorTimeout: 30 * time.Second,
-		DefaultGovLevel:  GovLevelG1,
-		IncludeAllLayers: true,
-		ValidateOnCreate: true,
+		V3Endpoint:           "https://mainnet.accumulatenetwork.io/v3",
+		GeneratorTimeout:     30 * time.Second,
+		DefaultGovLevel:      GovLevelG1,
+		IncludeAllLayers:     true,
+		ValidateOnCreate:     true,
 		RequireAllComponents: false,
-		ValidatorID:     "validator-default",
+		ValidatorID:          "validator-default",
 	}
 }
 
@@ -179,8 +179,8 @@ type ArtifactRequest struct {
 	IncludeGov      bool            `json:"include_governance"`
 
 	// Batch context (if part of a batch)
-	BatchID     string `json:"batch_id,omitempty"`
-	BatchIndex  int64  `json:"batch_index,omitempty"`
+	BatchID    string `json:"batch_id,omitempty"`
+	BatchIndex int64  `json:"batch_index,omitempty"`
 
 	// Anchor context (if already anchored)
 	AnchorChain    string `json:"anchor_chain,omitempty"`
@@ -198,9 +198,9 @@ type ArtifactResponse struct {
 	Bundle *CertenProofBundle `json:"bundle"`
 
 	// Collection status
-	Success       bool     `json:"success"`
-	Errors        []string `json:"errors,omitempty"`
-	Warnings      []string `json:"warnings,omitempty"`
+	Success  bool     `json:"success"`
+	Errors   []string `json:"errors,omitempty"`
+	Warnings []string `json:"warnings,omitempty"`
 
 	// Component status
 	ComponentsCollected map[string]bool `json:"components_collected"`

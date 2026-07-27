@@ -50,11 +50,11 @@ type VerifierConfig struct {
 // DefaultVerifierConfig returns default configuration
 func DefaultVerifierConfig() VerifierConfig {
 	return VerifierConfig{
-		MinConfirmations:      12,           // 12 confirmations for Ethereum
-		RequiredAttestations:  1,            // At least 1 attestation
+		MinConfirmations:      12, // 12 confirmations for Ethereum
+		RequiredAttestations:  1,  // At least 1 attestation
 		VerifyAttestations:    true,
-		RequireStateProof:     false,        // Optional by default
-		RequireAuthorityProof: false,        // Optional by default
+		RequireStateProof:     false, // Optional by default
+		RequireAuthorityProof: false, // Optional by default
 		MinGovernanceLevel:    GovLevelNone,
 	}
 }

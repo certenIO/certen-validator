@@ -77,7 +77,7 @@ type nearRPCResponse struct {
 	Error   *struct {
 		Name  string `json:"name"`
 		Cause struct {
-			Name string `json:"name"`
+			Name string      `json:"name"`
 			Info interface{} `json:"info"`
 		} `json:"cause"`
 		Code    int    `json:"code"`
@@ -86,7 +86,7 @@ type nearRPCResponse struct {
 }
 
 type nearTxResult struct {
-	Status     interface{} `json:"status"`
+	Status      interface{} `json:"status"`
 	Transaction struct {
 		SignerID string `json:"signer_id"`
 	} `json:"transaction"`
@@ -94,9 +94,9 @@ type nearTxResult struct {
 		BlockHash string `json:"block_hash"`
 		ID        string `json:"id"`
 		Outcome   struct {
-			GasBurnt  uint64 `json:"gas_burnt"`
-			Status    interface{} `json:"status"`
-			Logs      []string `json:"logs"`
+			GasBurnt uint64      `json:"gas_burnt"`
+			Status   interface{} `json:"status"`
+			Logs     []string    `json:"logs"`
 		} `json:"outcome"`
 	} `json:"transaction_outcome"`
 	ReceiptsOutcome []struct {
@@ -261,15 +261,15 @@ func (s *NEARStrategy) ObserveTransaction(ctx context.Context, txHash string) (*
 					BlockHash:             blockHash,
 					BlockTimestamp:        time.Now(), // NEAR block timestamp requires additional query
 					Status:                status,
-					Confirmations:        confirmations,
+					Confirmations:         confirmations,
 					RequiredConfirmations: required,
 					IsFinalized:           true,
 					ResultHash:            s.computeResultHash(txHash, txBlockHeight, blockHash),
 					GasUsed:               gasUsed,
 					ObservedAt:            time.Now().UTC(),
 					ObserverValidatorID:   s.config.ValidatorID,
-					TxFrom:               txResult.Transaction.SignerID,
-					ChainName:            s.NetworkName(),
+					TxFrom:                txResult.Transaction.SignerID,
+					ChainName:             s.NetworkName(),
 				}, nil
 			}
 
@@ -350,14 +350,14 @@ func (s *NEARStrategy) GetTransactionReceipt(ctx context.Context, txHash string)
 		BlockNumber:           txBlockHeight,
 		BlockHash:             blockHash,
 		Status:                status,
-		Confirmations:        confirmations,
+		Confirmations:         confirmations,
 		RequiredConfirmations: s.GetRequiredConfirmations(),
 		IsFinalized:           confirmations >= s.GetRequiredConfirmations(),
 		ResultHash:            s.computeResultHash(txHash, txBlockHeight, blockHash),
 		ObservedAt:            time.Now().UTC(),
 		ObserverValidatorID:   s.config.ValidatorID,
-		TxFrom:               txResult.Transaction.SignerID,
-		ChainName:            s.NetworkName(),
+		TxFrom:                txResult.Transaction.SignerID,
+		ChainName:             s.NetworkName(),
 	}, nil
 }
 
@@ -537,4 +537,3 @@ func NewNEARTestnetStrategy(rpcURL, contractAccount, signerAccount, validatorID 
 	}
 	return NewNEARStrategy(config)
 }
-

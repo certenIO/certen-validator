@@ -1,6 +1,6 @@
 // services/validator/pkg/execution/bft_target_chain_integration.go
 //
-// BFT Target Chain Integration - Canonical Target Chain Executor Implementation
+// # BFT Target Chain Integration - Canonical Target Chain Executor Implementation
 //
 // This file contains the canonical implementation of consensus.TargetChainExecutor
 // for Ethereum/Sepolia target chains. Production deployments should plug this
@@ -67,12 +67,13 @@ func getTargetChainConfig(accountURL string) (string, int64) {
 
 // TargetChainExecutionResult represents the result of target chain operations
 // Enhanced to track all 3 transactions in the anchor workflow:
-//   Step 1: CreateAnchor - stores the anchor data on-chain
-//   Step 2: ExecuteComprehensiveProof - submits BLS proof verification
-//   Step 3: ExecuteWithGovernance - executes the actual value transfer
+//
+//	Step 1: CreateAnchor - stores the anchor data on-chain
+//	Step 2: ExecuteComprehensiveProof - submits BLS proof verification
+//	Step 3: ExecuteWithGovernance - executes the actual value transfer
 type TargetChainExecutionResult struct {
 	Chain       string            `json:"chain"`
-	TxHash      string            `json:"tx_hash"`       // Primary tx (governance) for backwards compatibility
+	TxHash      string            `json:"tx_hash"` // Primary tx (governance) for backwards compatibility
 	BlockNumber uint64            `json:"block_number"`
 	Success     bool              `json:"success"`
 	RawLogs     []byte            `json:"raw_logs"`
@@ -115,8 +116,9 @@ func (tcr *TargetChainExecutionResult) GetMetadata() map[string]string {
 // including proof submission and governance execution.
 //
 // This executor should be injected into BFTValidator during bootstrap:
-//   targetExec := execution.NewBFTTargetChainExecutor(logger)
-//   bftValidator := consensus.NewBFTValidator(..., targetExec, ...)
+//
+//	targetExec := execution.NewBFTTargetChainExecutor(logger)
+//	bftValidator := consensus.NewBFTValidator(..., targetExec, ...)
 type BFTTargetChainExecutor struct {
 	logger            Logger
 	commitmentBuilder *ExecutionCommitmentBuilder
@@ -175,12 +177,12 @@ func (btce *BFTTargetChainExecutor) ExtractExecutionParams(
 		Version          string `json:"version"`
 		OperationGroupID string `json:"operationGroupId"`
 		Legs             []struct {
-			LegID   string `json:"legId"`
-			Chain   string `json:"chain"`
-			ChainID int64  `json:"chainId"`
-			From    string `json:"from"`
-			To      string `json:"to"`
-			AmountWei string `json:"amountWei"`
+			LegID          string `json:"legId"`
+			Chain          string `json:"chain"`
+			ChainID        int64  `json:"chainId"`
+			From           string `json:"from"`
+			To             string `json:"to"`
+			AmountWei      string `json:"amountWei"`
 			AnchorContract struct {
 				Address          string `json:"address"`
 				FunctionSelector string `json:"functionSelector"`
@@ -1041,7 +1043,7 @@ func (btce *BFTTargetChainExecutor) extractAllLegsFromIntent(legacyIntent *inten
 	var crossChainData struct {
 		Legs []struct {
 			LegID        string `json:"legId"`
-			From         string `json:"from"`         // User's Abstract Account address
+			From         string `json:"from"` // User's Abstract Account address
 			To           string `json:"to"`
 			AmountWei    string `json:"amountWei"`
 			ChainID      int64  `json:"chainId"`
@@ -1049,8 +1051,8 @@ func (btce *BFTTargetChainExecutor) extractAllLegsFromIntent(legacyIntent *inten
 			AccountOwner string `json:"accountOwner"` // Owner wallet for account factory deployment
 			// CRITICAL-003: Execution payload from user-signed blob
 			ExecutionPayload *struct {
-				Target              string `json:"target"`
-				Value               string `json:"value"`
+				Target string `json:"target"`
+				Value  string `json:"value"`
 				// RB-1: raw calldata (0x-hex) executed verbatim via target.call{value}(data).
 				// "0x"/absent ⇒ native transfer (empty calldata). keccak256(callData)==dataHash.
 				CallData            string `json:"callData"`
@@ -2455,7 +2457,7 @@ func (btce *BFTTargetChainExecutor) buildNearCertenProof(
 ) NearCertenProofInput {
 	if proof == nil {
 		return NearCertenProofInput{
-			ExpirationTime: uint64(time.Now().Add(24*time.Hour).UnixNano()),
+			ExpirationTime: uint64(time.Now().Add(24 * time.Hour).UnixNano()),
 		}
 	}
 
@@ -2689,7 +2691,7 @@ func (btce *BFTTargetChainExecutor) buildNearAccountProof(
 		TimestampSec:        uint64(now.Unix()),
 		ExpiresAtSec:        uint64(expiresAt.Unix()),
 		Nonce:               governanceNonce, // Must be > current nonce (queried from contract)
-		RequiredLevel:       requiredLevel,    // Matches deposit-based contract thresholds
+		RequiredLevel:       requiredLevel,   // Matches deposit-based contract thresholds
 	}
 }
 
@@ -2847,9 +2849,10 @@ func (btce *BFTTargetChainExecutor) buildNearResult(
 // passing the proof primitives the validator just signed.
 //
 // Cross-chain parity:
-//   EVM:     executeEthereumOperations (direct ethclient tx submission)
-//   NEAR:    executeNearOperations     (JSON-RPC + manual borsh)
-//   Cardano: executeCardanoOperations  (HTTP bridge to Lucid Evolution)
+//
+//	EVM:     executeEthereumOperations (direct ethclient tx submission)
+//	NEAR:    executeNearOperations     (JSON-RPC + manual borsh)
+//	Cardano: executeCardanoOperations  (HTTP bridge to Lucid Evolution)
 func (btce *BFTTargetChainExecutor) executeCardanoOperations(
 	ctx context.Context,
 	intentID string,
@@ -3057,7 +3060,7 @@ func (btce *BFTTargetChainExecutor) executeCardanoOperations(
 		GovernanceRoot:              hexStr(govRoot[:]),
 		ExecutionCommitment:         hexStr(execCommitment[:]),
 		ExpectedExecutionCommitment: hexStr(execCommitment[:]),
-		ExpirationMs:                uint64(time.Now().Add(24*time.Hour).UnixMilli()),
+		ExpirationMs:                uint64(time.Now().Add(24 * time.Hour).UnixMilli()),
 	}
 
 	verifyTxHash, err := cardanoClient.ExecuteComprehensiveProof(ctx, CardanoExecuteProofRequest{
@@ -4195,10 +4198,10 @@ func (btce *BFTTargetChainExecutor) buildSolanaResult(
 		VerifyTxHash:     verifyTxSig,
 		GovernanceTxHash: govTxSig,
 		Metadata: map[string]string{
-			"chain":            "solana-devnet",
-			"anchorProgram":    os.Getenv("SOLANA_ANCHOR_PROGRAM_ID"),
-			"explorerUrl":      "https://explorer.solana.com/?cluster=devnet",
-			"executionMethod":  "solana_json_rpc",
+			"chain":           "solana-devnet",
+			"anchorProgram":   os.Getenv("SOLANA_ANCHOR_PROGRAM_ID"),
+			"explorerUrl":     "https://explorer.solana.com/?cluster=devnet",
+			"executionMethod": "solana_json_rpc",
 		},
 	}
 }
@@ -4667,8 +4670,8 @@ func (btce *BFTTargetChainExecutor) buildAptosCertenProof(
 
 	if len(compProof.BLSProof.AggregateSignature) >= 448 {
 		abiBytes := compProof.BLSProof.AggregateSignature
-		blsProofBytes = abiBytes[0:256]      // proof_a(64) + proof_b(128) + proof_c(64)
-		blsMessageHash = abiBytes[256:288]    // message_hash (32)
+		blsProofBytes = abiBytes[0:256]         // proof_a(64) + proof_b(128) + proof_c(64)
+		blsMessageHash = abiBytes[256:288]      // message_hash (32)
 		blsPubkeyCommitment = abiBytes[288:320] // pubkey_commitment (32)
 		blsSignedVP = new(big.Int).SetBytes(abiBytes[320:352]).Uint64()
 		blsTotalVP = new(big.Int).SetBytes(abiBytes[352:384]).Uint64()
@@ -4798,12 +4801,12 @@ func (btce *BFTTargetChainExecutor) buildAptosAccountProof(
 	var blsProofBytes, blsMessageHash, blsPubkeyCommitment []byte
 
 	return AptosADIGovernanceProof{
-		AdiURL:      adiURL,
-		AnchorID:    bundleID,
-		MerkleProof: merkleProof,
-		Timestamp:   proofTimestamp,
-		ExpiresAt:   proofExpiresAt,
-		Nonce:       1, // Must be > current nonce (starts at 0)
+		AdiURL:        adiURL,
+		AnchorID:      bundleID,
+		MerkleProof:   merkleProof,
+		Timestamp:     proofTimestamp,
+		ExpiresAt:     proofExpiresAt,
+		Nonce:         1, // Must be > current nonce (starts at 0)
 		RequiredLevel: requiredLevel,
 
 		BLSProofBytes:           blsProofBytes,
@@ -5525,13 +5528,13 @@ func (btce *BFTTargetChainExecutor) buildSuiCertenProof(
 		GovRequiredSignatures: reqSigs,
 		GovProvidedSignatures: provSigs,
 
-		BLSProofBytes:        blsProofBytes,
+		BLSProofBytes:         blsProofBytes,
 		BLSValidatorAddresses: validatorAddrs,
-		BLSVotingPowers:      votingPowers,
-		BLSTotalVotingPower:  totalVP,
-		BLSSignedVotingPower: signedVP,
-		BLSMessageHash:       blsMessageHash,
-		BLSPubkeyCommitment:  blsPubkeyCommitment,
+		BLSVotingPowers:       votingPowers,
+		BLSTotalVotingPower:   totalVP,
+		BLSSignedVotingPower:  signedVP,
+		BLSMessageHash:        blsMessageHash,
+		BLSPubkeyCommitment:   blsPubkeyCommitment,
 
 		CommitOperationCommitment:  compProof.Commitments.OperationCommitment,
 		CommitCrossChainCommitment: compProof.Commitments.CrossChainCommitment,
@@ -5736,11 +5739,11 @@ func (btce *BFTTargetChainExecutor) buildSuiResult(
 		VerifyTxHash:     verifyTxHash,
 		GovernanceTxHash: govTxHash,
 		Metadata: map[string]string{
-			"chain":            "sui-testnet",
-			"anchorPackage":    os.Getenv("SUI_ANCHOR_PACKAGE"),
-			"anchorState":      os.Getenv("SUI_ANCHOR_STATE_OBJECT"),
-			"explorerUrl":      "https://suiscan.xyz/testnet",
-			"executionMethod":  "sui_json_rpc",
+			"chain":           "sui-testnet",
+			"anchorPackage":   os.Getenv("SUI_ANCHOR_PACKAGE"),
+			"anchorState":     os.Getenv("SUI_ANCHOR_STATE_OBJECT"),
+			"explorerUrl":     "https://suiscan.xyz/testnet",
+			"executionMethod": "sui_json_rpc",
 		},
 	}
 }
@@ -6449,4 +6452,3 @@ func (btce *BFTTargetChainExecutor) buildTonResult(
 		},
 	}
 }
-

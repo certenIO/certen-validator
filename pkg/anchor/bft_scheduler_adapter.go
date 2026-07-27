@@ -29,19 +29,19 @@ type QueuedIntent struct {
 // BFTSchedulerAdapter implements consensus.AnchorScheduler interface
 // It bridges the BFTValidator to the AnchorSchedulerService for on_cadence batching
 type BFTSchedulerAdapter struct {
-	scheduler       *AnchorSchedulerService
-	targetExecutor  verification.TargetChainExecutor
-	logger          *log.Logger
+	scheduler      *AnchorSchedulerService
+	targetExecutor verification.TargetChainExecutor
+	logger         *log.Logger
 
 	// Queued intents waiting for batch execution
-	queuedIntents   map[string]*QueuedIntent
-	mu              sync.RWMutex
+	queuedIntents map[string]*QueuedIntent
+	mu            sync.RWMutex
 
 	// Batch processing
-	batchInterval   time.Duration
-	nextBatchTime   time.Time
-	stopChan        chan struct{}
-	running         bool
+	batchInterval time.Duration
+	nextBatchTime time.Time
+	stopChan      chan struct{}
+	running       bool
 }
 
 // BFTSchedulerConfig contains configuration for the BFT scheduler adapter

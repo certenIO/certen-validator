@@ -205,8 +205,8 @@ func (a *AuditTrailService) RecordManualIntervention(ctx context.Context, userID
 		Phase:         "manual_intervention",
 		Action:        fmt.Sprintf("Manual intervention: %s", reason),
 		Details: map[string]interface{}{
-			"reason":      reason,
-			"operator":    operator,
+			"reason":           reason,
+			"operator":         operator,
 			"interventionTime": time.Now().Format(time.RFC3339),
 		},
 	})

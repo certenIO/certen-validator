@@ -19,16 +19,16 @@ import (
 type LegStatus string
 
 const (
-	LegStatusPending    LegStatus = "pending"     // Waiting for dependencies or processing
-	LegStatusReady      LegStatus = "ready"       // Dependencies satisfied, ready to execute
-	LegStatusProcessing LegStatus = "processing"  // Currently being processed
-	LegStatusBatched    LegStatus = "batched"     // Added to anchor batch
-	LegStatusAnchored   LegStatus = "anchored"    // Anchor written to target chain
-	LegStatusConfirmed  LegStatus = "confirmed"   // Anchor confirmed on target chain
-	LegStatusExecuted   LegStatus = "executed"    // Transaction executed on target chain
-	LegStatusCompleted  LegStatus = "completed"   // Full cycle complete
-	LegStatusFailed     LegStatus = "failed"      // Execution failed
-	LegStatusSkipped    LegStatus = "skipped"     // Skipped due to atomic rollback
+	LegStatusPending    LegStatus = "pending"    // Waiting for dependencies or processing
+	LegStatusReady      LegStatus = "ready"      // Dependencies satisfied, ready to execute
+	LegStatusProcessing LegStatus = "processing" // Currently being processed
+	LegStatusBatched    LegStatus = "batched"    // Added to anchor batch
+	LegStatusAnchored   LegStatus = "anchored"   // Anchor written to target chain
+	LegStatusConfirmed  LegStatus = "confirmed"  // Anchor confirmed on target chain
+	LegStatusExecuted   LegStatus = "executed"   // Transaction executed on target chain
+	LegStatusCompleted  LegStatus = "completed"  // Full cycle complete
+	LegStatusFailed     LegStatus = "failed"     // Execution failed
+	LegStatusSkipped    LegStatus = "skipped"    // Skipped due to atomic rollback
 )
 
 // IntentStatus represents the overall status of a multi-leg intent
@@ -46,72 +46,72 @@ const (
 
 // LegRecord tracks the state of a single leg within an intent
 type LegRecord struct {
-	LegID           string       `json:"leg_id"`
-	IntentID        string       `json:"intent_id"`
-	LegIndex        int          `json:"leg_index"`
-	LegExternalID   string       `json:"leg_external_id"`
-	TargetChain     string       `json:"target_chain"`
-	ChainID         int64        `json:"chain_id"`
-	ChainKey        string       `json:"chain_key"`          // e.g., "ethereum:1"
-	Role            string       `json:"role"`               // "source", "destination", "intermediate"
-	SequenceOrder   int          `json:"sequence_order"`
-	DependsOnLegs   []string     `json:"depends_on_legs"`
-	Status          LegStatus    `json:"status"`
-	ExecutionTxHash string       `json:"execution_tx_hash,omitempty"`
-	ExecutionBlock  uint64       `json:"execution_block,omitempty"`
-	ExecutionError  string       `json:"execution_error,omitempty"`
-	BatchID         string       `json:"batch_id,omitempty"`
-	AnchorID        string       `json:"anchor_id,omitempty"`
-	ProofID         string       `json:"proof_id,omitempty"`
-	RetryCount      int          `json:"retry_count"`
-	MaxRetries      int          `json:"max_retries"`
-	CreatedAt       time.Time    `json:"created_at"`
-	CompletedAt     *time.Time   `json:"completed_at,omitempty"`
+	LegID           string     `json:"leg_id"`
+	IntentID        string     `json:"intent_id"`
+	LegIndex        int        `json:"leg_index"`
+	LegExternalID   string     `json:"leg_external_id"`
+	TargetChain     string     `json:"target_chain"`
+	ChainID         int64      `json:"chain_id"`
+	ChainKey        string     `json:"chain_key"` // e.g., "ethereum:1"
+	Role            string     `json:"role"`      // "source", "destination", "intermediate"
+	SequenceOrder   int        `json:"sequence_order"`
+	DependsOnLegs   []string   `json:"depends_on_legs"`
+	Status          LegStatus  `json:"status"`
+	ExecutionTxHash string     `json:"execution_tx_hash,omitempty"`
+	ExecutionBlock  uint64     `json:"execution_block,omitempty"`
+	ExecutionError  string     `json:"execution_error,omitempty"`
+	BatchID         string     `json:"batch_id,omitempty"`
+	AnchorID        string     `json:"anchor_id,omitempty"`
+	ProofID         string     `json:"proof_id,omitempty"`
+	RetryCount      int        `json:"retry_count"`
+	MaxRetries      int        `json:"max_retries"`
+	CreatedAt       time.Time  `json:"created_at"`
+	CompletedAt     *time.Time `json:"completed_at,omitempty"`
 }
 
 // ChainGroup represents a group of legs targeting the same chain
 type ChainGroup struct {
-	ChainKey     string       `json:"chain_key"`     // e.g., "ethereum:1"
-	TargetChain  string       `json:"target_chain"`
-	ChainID      int64        `json:"chain_id"`
-	LegIDs       []string     `json:"leg_ids"`
-	Status       LegStatus    `json:"status"`
-	BatchID      string       `json:"batch_id,omitempty"`
-	AnchorID     string       `json:"anchor_id,omitempty"`
-	AnchorTxHash string       `json:"anchor_tx_hash,omitempty"`
+	ChainKey     string    `json:"chain_key"` // e.g., "ethereum:1"
+	TargetChain  string    `json:"target_chain"`
+	ChainID      int64     `json:"chain_id"`
+	LegIDs       []string  `json:"leg_ids"`
+	Status       LegStatus `json:"status"`
+	BatchID      string    `json:"batch_id,omitempty"`
+	AnchorID     string    `json:"anchor_id,omitempty"`
+	AnchorTxHash string    `json:"anchor_tx_hash,omitempty"`
 }
 
 // MultiLegIntentRecord tracks the overall state of a multi-leg intent
 type MultiLegIntentRecord struct {
-	IntentID         string               `json:"intent_id"`
-	OperationID      string               `json:"operation_id"`
-	UserID           string               `json:"user_id,omitempty"`
-	OrganizationADI  string               `json:"organization_adi,omitempty"`
-	AccumulateTxHash string               `json:"accumulate_tx_hash"`
-	LegCount         int                  `json:"leg_count"`
-	ExecutionMode    string               `json:"execution_mode"` // "sequential", "parallel", "atomic"
-	ProofClass       string               `json:"proof_class"`    // "on_demand", "on_cadence"
-	Status           MultiLegIntentStatus `json:"status"`
-	CurrentLegIndex  int                  `json:"current_leg_index"`
-	LegsCompleted    int                  `json:"legs_completed"`
-	LegsFailed       int                  `json:"legs_failed"`
-	LegsPending      int                  `json:"legs_pending"`
+	IntentID         string                 `json:"intent_id"`
+	OperationID      string                 `json:"operation_id"`
+	UserID           string                 `json:"user_id,omitempty"`
+	OrganizationADI  string                 `json:"organization_adi,omitempty"`
+	AccumulateTxHash string                 `json:"accumulate_tx_hash"`
+	LegCount         int                    `json:"leg_count"`
+	ExecutionMode    string                 `json:"execution_mode"` // "sequential", "parallel", "atomic"
+	ProofClass       string                 `json:"proof_class"`    // "on_demand", "on_cadence"
+	Status           MultiLegIntentStatus   `json:"status"`
+	CurrentLegIndex  int                    `json:"current_leg_index"`
+	LegsCompleted    int                    `json:"legs_completed"`
+	LegsFailed       int                    `json:"legs_failed"`
+	LegsPending      int                    `json:"legs_pending"`
 	ChainGroups      map[string]*ChainGroup `json:"chain_groups"` // keyed by chain_key
 	Legs             map[string]*LegRecord  `json:"legs"`         // keyed by leg_external_id
-	CreatedAt        time.Time            `json:"created_at"`
-	CompletedAt      *time.Time           `json:"completed_at,omitempty"`
-	ErrorMessage     string               `json:"error_message,omitempty"`
+	CreatedAt        time.Time              `json:"created_at"`
+	CompletedAt      *time.Time             `json:"completed_at,omitempty"`
+	ErrorMessage     string                 `json:"error_message,omitempty"`
 }
 
 // LegCompletionHandler manages leg execution coordination for multi-leg intents
 type LegCompletionHandler struct {
-	logger     *log.Logger
+	logger *log.Logger
 
 	// In-memory tracking (can be extended to use PostgreSQL via LegStore interface)
-	intents    map[string]*MultiLegIntentRecord // keyed by intent_id
-	legs       map[string]*LegRecord            // keyed by leg_id (UUID)
-	legsByIntent map[string][]string            // intent_id -> []leg_id
-	mu         sync.RWMutex
+	intents      map[string]*MultiLegIntentRecord // keyed by intent_id
+	legs         map[string]*LegRecord            // keyed by leg_id (UUID)
+	legsByIntent map[string][]string              // intent_id -> []leg_id
+	mu           sync.RWMutex
 
 	// Callback for triggering leg execution
 	onLegReady func(ctx context.Context, intent *MultiLegIntentRecord, leg *LegRecord) error

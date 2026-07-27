@@ -42,18 +42,18 @@ type AnchorManagerInterface interface {
 // ExecuteProofOnChainRequest is the request for comprehensive proof execution
 // This is the on-chain format that bridges batch processor to anchor manager
 type ExecuteProofOnChainRequest struct {
-	AnchorID             string   `json:"anchor_id"`
-	BatchID              string   `json:"batch_id"`
-	ValidatorID          string   `json:"validator_id"`
-	TransactionHash      [32]byte `json:"transaction_hash"`
-	MerkleRoot           [32]byte `json:"merkle_root"`
+	AnchorID             string     `json:"anchor_id"`
+	BatchID              string     `json:"batch_id"`
+	ValidatorID          string     `json:"validator_id"`
+	TransactionHash      [32]byte   `json:"transaction_hash"`
+	MerkleRoot           [32]byte   `json:"merkle_root"`
 	ProofHashes          [][32]byte `json:"proof_hashes"`
-	LeafHash             [32]byte `json:"leaf_hash"`
-	OperationCommitment  [32]byte `json:"operation_commitment"`
-	CrossChainCommitment [32]byte `json:"cross_chain_commitment"`
-	GovernanceRoot       [32]byte `json:"governance_root"`
-	BLSSignature         []byte   `json:"bls_signature,omitempty"`
-	Timestamp            int64    `json:"timestamp"`
+	LeafHash             [32]byte   `json:"leaf_hash"`
+	OperationCommitment  [32]byte   `json:"operation_commitment"`
+	CrossChainCommitment [32]byte   `json:"cross_chain_commitment"`
+	GovernanceRoot       [32]byte   `json:"governance_root"`
+	BLSSignature         []byte     `json:"bls_signature,omitempty"`
+	Timestamp            int64      `json:"timestamp"`
 }
 
 // ExecuteProofOnChainResult is the result from comprehensive proof execution

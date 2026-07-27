@@ -110,8 +110,8 @@ type CreditChecker struct {
 	client *accumulate.LiteClientAdapter
 
 	// Cached credit balance, in credit units (1/100 credit) — see the UNITS note above.
-	cachedBalance     uint64
-	lastBalanceQuery  time.Time
+	cachedBalance      uint64
+	lastBalanceQuery   time.Time
 	cacheValidDuration time.Duration
 
 	// Oracle ACME price (USD) for credit->ACME conversion; 0 means use the default.

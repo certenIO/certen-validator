@@ -451,9 +451,9 @@ func (h *ProofHandlers) HandleVerifyProofIntegrity(w http.ResponseWriter, r *htt
 	}
 
 	h.writeJSON(w, http.StatusOK, map[string]interface{}{
-		"proof_id":         proofID,
-		"integrity_valid":  valid,
-		"verified_at":      time.Now().UTC(),
+		"proof_id":        proofID,
+		"integrity_valid": valid,
+		"verified_at":     time.Now().UTC(),
 	})
 }
 

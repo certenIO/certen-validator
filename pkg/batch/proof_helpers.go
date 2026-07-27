@@ -13,8 +13,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/certen/independant-validator/pkg/proof"
 	chained_proof "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/working-proof_do_not_edit"
+	"github.com/certen/independant-validator/pkg/proof"
 )
 
 // TransactionDataFromProofBundle creates a TransactionData from a proof bundle

@@ -423,9 +423,9 @@ func (e *CertenDataEntry) ToDoubleHashFormat() [][]byte {
 	if e.LegCount > 1 {
 		version = "2.1"
 	}
-	entries = append(entries, labeled("entry_type", e.EntryType))     // 0
-	entries = append(entries, labeled("version", version))            // 1
-	entries = append(entries, labeled("format", "certen_proof_v2"))   // 2
+	entries = append(entries, labeled("entry_type", e.EntryType))   // 0
+	entries = append(entries, labeled("version", version))          // 1
+	entries = append(entries, labeled("format", "certen_proof_v2")) // 2
 
 	// ==========================================================================
 	// INTENT REFERENCE (Entries 3-6)
@@ -438,51 +438,51 @@ func (e *CertenDataEntry) ToDoubleHashFormat() [][]byte {
 	// ==========================================================================
 	// EXECUTION COMMITMENT (Entries 7-12)
 	// ==========================================================================
-	entries = append(entries, labeled("operation_id", e.OperationID))       // 7
-	entries = append(entries, labeled("bundle_id", e.BundleID))             // 8
-	entries = append(entries, labeled("commitment_hash", e.CommitmentHash)) // 9
-	entries = append(entries, labeled("anchor_contract", e.AnchorContract)) // 10
+	entries = append(entries, labeled("operation_id", e.OperationID))           // 7
+	entries = append(entries, labeled("bundle_id", e.BundleID))                 // 8
+	entries = append(entries, labeled("commitment_hash", e.CommitmentHash))     // 9
+	entries = append(entries, labeled("anchor_contract", e.AnchorContract))     // 10
 	entries = append(entries, labeled("function_selector", e.FunctionSelector)) // 11
-	entries = append(entries, labeled("expected_value", e.ExpectedValue))   // 12
+	entries = append(entries, labeled("expected_value", e.ExpectedValue))       // 12
 
 	// ==========================================================================
 	// 3-STEP TRANSACTION DETAILS (Entries 13-21)
 	// ==========================================================================
-	entries = append(entries, labeled("step1_selector", e.Step1Selector))       // 13
-	entries = append(entries, labeled("step1_contract", e.Step1Contract))       // 14
-	entries = append(entries, labeled("step1_intent_hash", e.Step1IntentHash))  // 15
-	entries = append(entries, labeled("step2_selector", e.Step2Selector))       // 16
-	entries = append(entries, labeled("step2_contract", e.Step2Contract))       // 17
-	entries = append(entries, labeled("step3_selector", e.Step3Selector))       // 18
-	entries = append(entries, labeled("step3_contract", e.Step3Contract))       // 19
+	entries = append(entries, labeled("step1_selector", e.Step1Selector))        // 13
+	entries = append(entries, labeled("step1_contract", e.Step1Contract))        // 14
+	entries = append(entries, labeled("step1_intent_hash", e.Step1IntentHash))   // 15
+	entries = append(entries, labeled("step2_selector", e.Step2Selector))        // 16
+	entries = append(entries, labeled("step2_contract", e.Step2Contract))        // 17
+	entries = append(entries, labeled("step3_selector", e.Step3Selector))        // 18
+	entries = append(entries, labeled("step3_contract", e.Step3Contract))        // 19
 	entries = append(entries, labeled("step3_final_target", e.Step3FinalTarget)) // 20
 	entries = append(entries, labeled("step3_final_value", e.Step3FinalValue))   // 21
 
 	// ==========================================================================
 	// ACTUAL EXECUTION RESULT (Entries 22-29)
 	// ==========================================================================
-	entries = append(entries, labeled("chain_name", e.ChainName))                      // 22
-	entries = append(entries, labeled("chain_id", fmt.Sprintf("%d", e.ChainID)))       // 23
-	entries = append(entries, labeled("tx_hash", e.TxHash))                            // 24
+	entries = append(entries, labeled("chain_name", e.ChainName))                        // 22
+	entries = append(entries, labeled("chain_id", fmt.Sprintf("%d", e.ChainID)))         // 23
+	entries = append(entries, labeled("tx_hash", e.TxHash))                              // 24
 	entries = append(entries, labeled("block_number", fmt.Sprintf("%d", e.BlockNumber))) // 25
-	entries = append(entries, labeled("block_hash", e.BlockHash))                       // 26
-	entries = append(entries, labeled("success", fmt.Sprintf("%t", e.Success)))         // 27
-	entries = append(entries, labeled("gas_used", fmt.Sprintf("%d", e.GasUsed)))        // 28
-	entries = append(entries, labeled("tx_from", e.TxFrom))                             // 29
+	entries = append(entries, labeled("block_hash", e.BlockHash))                        // 26
+	entries = append(entries, labeled("success", fmt.Sprintf("%t", e.Success)))          // 27
+	entries = append(entries, labeled("gas_used", fmt.Sprintf("%d", e.GasUsed)))         // 28
+	entries = append(entries, labeled("tx_from", e.TxFrom))                              // 29
 
 	// ==========================================================================
 	// EVENT VERIFICATION (Entries 30-33)
 	// ==========================================================================
-	entries = append(entries, labeled("events_hash", e.EventsHash))                       // 30
-	entries = append(entries, labeled("event_count", fmt.Sprintf("%d", e.EventCount)))    // 31
-	entries = append(entries, labeled("transfer_executed_hash", e.TransferExecutedHash))  // 32
+	entries = append(entries, labeled("events_hash", e.EventsHash))                            // 30
+	entries = append(entries, labeled("event_count", fmt.Sprintf("%d", e.EventCount)))         // 31
+	entries = append(entries, labeled("transfer_executed_hash", e.TransferExecutedHash))       // 32
 	entries = append(entries, labeled("events_verified", fmt.Sprintf("%t", e.EventsVerified))) // 33
 
 	// ==========================================================================
 	// STATE BINDING (Entries 34-36)
 	// ==========================================================================
-	entries = append(entries, labeled("state_root", e.StateRoot))             // 34
-	entries = append(entries, labeled("receipts_root", e.ReceiptsRoot))       // 35
+	entries = append(entries, labeled("state_root", e.StateRoot))               // 34
+	entries = append(entries, labeled("receipts_root", e.ReceiptsRoot))         // 35
 	entries = append(entries, labeled("transactions_root", e.TransactionsRoot)) // 36
 
 	// ==========================================================================
@@ -490,27 +490,27 @@ func (e *CertenDataEntry) ToDoubleHashFormat() [][]byte {
 	// ==========================================================================
 	entries = append(entries, labeled("validator_count", fmt.Sprintf("%d", e.ValidatorCount))) // 37
 	entries = append(entries, labeled("signed_power", e.SignedPower))                          // 38
-	entries = append(entries, labeled("governance_proof_ref", e.GovernanceProofRef))          // 39
-	entries = append(entries, labeled("threshold_met", fmt.Sprintf("%t", e.ThresholdMet)))    // 40
+	entries = append(entries, labeled("governance_proof_ref", e.GovernanceProofRef))           // 39
+	entries = append(entries, labeled("threshold_met", fmt.Sprintf("%t", e.ThresholdMet)))     // 40
 
 	// ==========================================================================
 	// AUDIT REFERENCES (Entries 41-44)
 	// ==========================================================================
-	entries = append(entries, labeled("proof_artifact_id", e.ProofArtifactID))             // 41
-	entries = append(entries, labeled("anchor_proof_hash", e.AnchorProofHash))             // 42
-	entries = append(entries, labeled("previous_result_hash", e.PreviousResultHash))       // 43
+	entries = append(entries, labeled("proof_artifact_id", e.ProofArtifactID))                 // 41
+	entries = append(entries, labeled("anchor_proof_hash", e.AnchorProofHash))                 // 42
+	entries = append(entries, labeled("previous_result_hash", e.PreviousResultHash))           // 43
 	entries = append(entries, labeled("sequence_number", fmt.Sprintf("%d", e.SequenceNumber))) // 44
 
 	// ==========================================================================
 	// RESULT HASHES (Entries 45-47)
 	// ==========================================================================
-	entries = append(entries, labeled("result_hash", e.ResultHash))         // 45
+	entries = append(entries, labeled("result_hash", e.ResultHash))          // 45
 	entries = append(entries, labeled("proof_cycle_hash", e.ProofCycleHash)) // 46
 	schemaVersion := "2.0"
 	if e.LegCount > 1 {
 		schemaVersion = "2.1"
 	}
-	entries = append(entries, labeled("schema_version", schemaVersion))    // 47
+	entries = append(entries, labeled("schema_version", schemaVersion)) // 47
 
 	// ==========================================================================
 	// FINALIZATION (Entries 48-50)

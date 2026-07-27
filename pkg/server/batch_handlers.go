@@ -114,9 +114,9 @@ type BatchInfoResponse struct {
 	BatchType string `json:"batch_type"` // "on_cadence" or "on_demand"
 
 	// Batch state
-	Status         string `json:"status"`
-	StatusMessage  string `json:"status_message"`
-	TransactionCount int  `json:"transaction_count"`
+	Status           string `json:"status"`
+	StatusMessage    string `json:"status_message"`
+	TransactionCount int    `json:"transaction_count"`
 
 	// Timing information
 	StartTime            string  `json:"start_time"`
@@ -133,12 +133,12 @@ type BatchInfoResponse struct {
 
 // CurrentBatchesResponse is the enhanced response for /api/batches/current
 type CurrentBatchesResponse struct {
-	ValidatorID      string             `json:"validator_id"`
-	Timestamp        string             `json:"timestamp"`
-	OnCadenceBatch   *BatchInfoResponse `json:"on_cadence_batch,omitempty"`
-	OnDemandBatch    *BatchInfoResponse `json:"on_demand_batch,omitempty"`
-	OnDemandStats    interface{}        `json:"on_demand_stats,omitempty"`
-	SystemHealth     *BatchHealthInfo   `json:"system_health"`
+	ValidatorID    string             `json:"validator_id"`
+	Timestamp      string             `json:"timestamp"`
+	OnCadenceBatch *BatchInfoResponse `json:"on_cadence_batch,omitempty"`
+	OnDemandBatch  *BatchInfoResponse `json:"on_demand_batch,omitempty"`
+	OnDemandStats  interface{}        `json:"on_demand_stats,omitempty"`
+	SystemHealth   *BatchHealthInfo   `json:"system_health"`
 }
 
 // BatchHealthInfo provides batch system health status

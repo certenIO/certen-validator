@@ -49,9 +49,9 @@ type NativeGovernanceProofGenerator struct {
 	mu           sync.RWMutex
 
 	// Cache for KeyPage lookups to avoid redundant queries
-	keyPageCache    map[string]*CachedKeyPage
-	cacheTTL        time.Duration
-	lastCacheClean  time.Time
+	keyPageCache   map[string]*CachedKeyPage
+	cacheTTL       time.Duration
+	lastCacheClean time.Time
 }
 
 // CachedKeyPage represents a cached KeyPage with TTL
@@ -792,12 +792,12 @@ func (b *BatchGovernanceProof) ToContractGovernanceData() *ContractGovernanceDat
 	firstProof := b.Proofs[0]
 
 	data := &ContractGovernanceData{
-		Level:           string(b.Level),
-		ProofCount:      len(b.Proofs),
-		GovernanceRoot:  b.BatchRoot,
-		SpecVersion:     GovernanceSpecVersion,
-		GeneratedAt:     time.Now().Unix(),
-		ThresholdMet:    true,
+		Level:          string(b.Level),
+		ProofCount:     len(b.Proofs),
+		GovernanceRoot: b.BatchRoot,
+		SpecVersion:    GovernanceSpecVersion,
+		GeneratedAt:    time.Now().Unix(),
+		ThresholdMet:   true,
 	}
 
 	// Extract KeyPage data from G1 proof

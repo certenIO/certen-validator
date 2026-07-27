@@ -46,10 +46,10 @@ func cardanoTargetBytes(target string) []byte {
 // ============================================================================
 
 var (
-	cardanoV6_1BLSPreDomain  = []byte("certen:bls:v1:pre")
-	cardanoV6_1ChainDomain   = []byte("certen:chain:v1:cardano:")
+	cardanoV6_1BLSPreDomain   = []byte("certen:bls:v1:pre")
+	cardanoV6_1ChainDomain    = []byte("certen:chain:v1:cardano:")
 	cardanoV6_1BundleIDDomain = []byte("certen:bundleid:v1.1")
-	cardanoV6_1ExecDomain    = []byte("certen:exec:v1:cardano:")
+	cardanoV6_1ExecDomain     = []byte("certen:exec:v1:cardano:")
 )
 
 // ============================================================================
@@ -58,7 +58,7 @@ var (
 //
 // Synthesized 32-byte chain identifier:
 //
-//   chain_id = keccak256("certen:chain:v1:cardano:" || network)
+//	chain_id = keccak256("certen:chain:v1:cardano:" || network)
 //
 // network is the Cardano network discriminator ("preview", "preprod",
 // "mainnet"). Tagged so it can never collide with NEAR's
@@ -76,14 +76,14 @@ func ComputeCardanoDeploymentChainIDV6_1(network string) [32]byte {
 // Validators sign this; the Cardano anchor validator reconstructs it from
 // datum + script params and rejects any mismatch:
 //
-//   keccak256(
-//       "certen:bls:v1:pre"
-//     ‖ deployment_chain_id
-//     ‖ anchor_id
-//     ‖ execution_commitment
-//     ‖ operation_id
-//     ‖ validator_set_root
-//   )
+//	keccak256(
+//	    "certen:bls:v1:pre"
+//	  ‖ deployment_chain_id
+//	  ‖ anchor_id
+//	  ‖ execution_commitment
+//	  ‖ operation_id
+//	  ‖ validator_set_root
+//	)
 func ComputeCardanoMessageHashV6_1_Pre(
 	deploymentChainID [32]byte,
 	anchorID [32]byte,
@@ -110,17 +110,17 @@ func ComputeCardanoMessageHashV6_1_Pre(
 // Same field ordering as DeriveV6_1BundleID (EVM) and DeriveNearBundleIDV6_1
 // (NEAR); chain_id slot carries the Cardano-synthesized value.
 //
-//   keccak256(
-//       "certen:bundleid:v1.1"
-//     ‖ deployment_chain_id      (32 bytes)
-//     ‖ adi_url_hash             (32 bytes)
-//     ‖ operation_commitment     (32 bytes)
-//     ‖ cross_chain_commitment   (32 bytes)
-//     ‖ governance_root          (32 bytes)
-//     ‖ execution_commitment     (32 bytes)
-//     ‖ operation_id             (32 bytes)
-//     ‖ u256-BE(block_height)    (32 bytes)
-//   )
+//	keccak256(
+//	    "certen:bundleid:v1.1"
+//	  ‖ deployment_chain_id      (32 bytes)
+//	  ‖ adi_url_hash             (32 bytes)
+//	  ‖ operation_commitment     (32 bytes)
+//	  ‖ cross_chain_commitment   (32 bytes)
+//	  ‖ governance_root          (32 bytes)
+//	  ‖ execution_commitment     (32 bytes)
+//	  ‖ operation_id             (32 bytes)
+//	  ‖ u256-BE(block_height)    (32 bytes)
+//	)
 func DeriveCardanoBundleIDV6_1(
 	deploymentChainID [32]byte,
 	adiURLHash [32]byte,
@@ -164,14 +164,14 @@ func DeriveCardanoBundleIDV6_1(
 // Wire format — byte-equivalent to ComputeNearValidatorSetRootV6_1 so
 // cross-chain audits use the same canonicalization:
 //
-//   For each (id, power) sorted ASC by id bytes:
-//     u32-BE(len(id))    (4 bytes)
-//     id_bytes           (variable)
-//     u64-BE(power)      (8 bytes)
-//   Then appended at the end:
-//     u64-BE(threshold_num)
-//     u64-BE(threshold_den)
-//   keccak256 over the concatenated bytes.
+//	For each (id, power) sorted ASC by id bytes:
+//	  u32-BE(len(id))    (4 bytes)
+//	  id_bytes           (variable)
+//	  u64-BE(power)      (8 bytes)
+//	Then appended at the end:
+//	  u64-BE(threshold_num)
+//	  u64-BE(threshold_den)
+//	keccak256 over the concatenated bytes.
 //
 // Cardano validators are identified by their wallet's bech32 string (or
 // any canonical form the deployment chose). Sorting is done internally so
@@ -229,12 +229,14 @@ func ComputeCardanoValidatorSetRootV6_1(
 // ============================================================================
 //
 // keccak256(
-//     "certen:exec:v1:cardano:"
-//   ‖ network
-//   ‖ target_address    (raw bytes — bech32 string OR pubkey hash bytes;
-//                       caller decides, but must match Aiken side)
-//   ‖ u128-LE(deposit_lovelace)
-//   ‖ keccak256(method ‖ args)
+//
+//	  "certen:exec:v1:cardano:"
+//	‖ network
+//	‖ target_address    (raw bytes — bech32 string OR pubkey hash bytes;
+//	                    caller decides, but must match Aiken side)
+//	‖ u128-LE(deposit_lovelace)
+//	‖ keccak256(method ‖ args)
+//
 // )
 //
 // For a plain ADA transfer: method="transfer", args=[]. The validator

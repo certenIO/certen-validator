@@ -111,35 +111,35 @@ func (h *LedgerHandlers) HandleLedgerStatus(w http.ResponseWriter, r *http.Reque
 	anchorState, anchorErr := h.ledgerStore.GetAnchorLedger(h.chainID)
 
 	status := map[string]interface{}{
-		"chainId": h.chainID,
+		"chainId":   h.chainID,
 		"timestamp": fmt.Sprintf("%d", h.getCurrentUnixTime()),
 	}
 
 	if systemErr == nil && systemState != nil {
 		status["systemLedger"] = map[string]interface{}{
-			"available": true,
-			"latestHeight": systemState.Data.Index,
-			"lastBlockTime": systemState.LastBlockTime,
+			"available":       true,
+			"latestHeight":    systemState.Data.Index,
+			"lastBlockTime":   systemState.LastBlockTime,
 			"executorVersion": systemState.Data.ExecutorVersion,
 		}
 	} else {
 		status["systemLedger"] = map[string]interface{}{
 			"available": false,
-			"error": systemErr.Error(),
+			"error":     systemErr.Error(),
 		}
 	}
 
 	if anchorErr == nil && anchorState != nil {
 		status["anchorLedger"] = map[string]interface{}{
-			"available": true,
-			"sequenceNumber": anchorState.Data.MinorBlockSequenceNumber,
+			"available":       true,
+			"sequenceNumber":  anchorState.Data.MinorBlockSequenceNumber,
 			"majorBlockIndex": anchorState.Data.MajorBlockIndex,
-			"lastBlockTime": anchorState.LastBlockTime,
+			"lastBlockTime":   anchorState.LastBlockTime,
 		}
 	} else {
 		status["anchorLedger"] = map[string]interface{}{
 			"available": false,
-			"error": anchorErr.Error(),
+			"error":     anchorErr.Error(),
 		}
 	}
 

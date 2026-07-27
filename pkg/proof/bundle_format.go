@@ -58,9 +58,9 @@ type CertenProofBundle struct {
 
 // TransactionReference identifies the transaction being proven
 type TransactionReference struct {
-	AccumTxHash     string `json:"accum_tx_hash"`      // 64-char hex Accumulate tx hash
-	AccountURL      string `json:"account_url"`        // acc://... URL
-	TransactionType string `json:"transaction_type"`   // e.g., "sendTokens", "writeData"
+	AccumTxHash     string `json:"accum_tx_hash"`       // 64-char hex Accumulate tx hash
+	AccountURL      string `json:"account_url"`         // acc://... URL
+	TransactionType string `json:"transaction_type"`    // e.g., "sendTokens", "writeData"
 	Principal       string `json:"principal,omitempty"` // Principal account URL
 }
 
@@ -109,7 +109,7 @@ type AnchorReferenceProof struct {
 	AnchorTxHash      string    `json:"anchor_tx_hash"`      // External chain tx hash
 	AnchorBlockNumber uint64    `json:"anchor_block_number"` // Block containing anchor
 	AnchorBlockHash   string    `json:"anchor_block_hash,omitempty"`
-	Confirmations     int       `json:"confirmations"`        // Current confirmations
+	Confirmations     int       `json:"confirmations"`          // Current confirmations
 	RequiredConfs     int       `json:"required_confirmations"` // Required for finality
 	AnchoredAt        time.Time `json:"anchored_at"`
 	ContractAddress   string    `json:"contract_address,omitempty"` // CertenAnchor contract
@@ -148,16 +148,16 @@ type ReceiptData struct {
 
 // ProofLayer represents a single layer in the chained proof
 type ProofLayer struct {
-	LayerName    string       `json:"layer_name,omitempty"` // Layer description
-	SourceHash   string       `json:"source_hash"`          // Starting hash
-	TargetHash   string       `json:"target_hash"`          // Ending hash
-	Receipt      *ReceiptData `json:"receipt,omitempty"`    // Receipt with entries (web app format)
-	ReceiptPath  []MerklePathEntry `json:"receipt_path,omitempty"` // Legacy: direct path (deprecated)
-	BlockHeight  uint64       `json:"block_height"`
-	BlockHash    string       `json:"block_hash,omitempty"`
-	PartitionID  string       `json:"partition_id,omitempty"` // BVN/DN identifier
-	Verified     bool         `json:"verified"`
-	VerifiedAt   time.Time    `json:"verified_at,omitempty"`
+	LayerName   string            `json:"layer_name,omitempty"`   // Layer description
+	SourceHash  string            `json:"source_hash"`            // Starting hash
+	TargetHash  string            `json:"target_hash"`            // Ending hash
+	Receipt     *ReceiptData      `json:"receipt,omitempty"`      // Receipt with entries (web app format)
+	ReceiptPath []MerklePathEntry `json:"receipt_path,omitempty"` // Legacy: direct path (deprecated)
+	BlockHeight uint64            `json:"block_height"`
+	BlockHash   string            `json:"block_hash,omitempty"`
+	PartitionID string            `json:"partition_id,omitempty"` // BVN/DN identifier
+	Verified    bool              `json:"verified"`
+	VerifiedAt  time.Time         `json:"verified_at,omitempty"`
 }
 
 // =============================================================================
@@ -166,12 +166,12 @@ type ProofLayer struct {
 
 // ValidatorAttestation represents a validator's attestation to the proof
 type ValidatorAttestation struct {
-	ValidatorID   string    `json:"validator_id"`
-	ValidatorKey  string    `json:"validator_key,omitempty"` // Public key hex
-	Signature     string    `json:"signature"`               // 64-byte Ed25519 hex
-	SignedHash    string    `json:"signed_hash"`             // Hash that was signed
-	AttestedAt    time.Time `json:"attested_at"`
-	AttestType    string    `json:"attest_type"`             // "proof_valid", "batch_complete"
+	ValidatorID  string    `json:"validator_id"`
+	ValidatorKey string    `json:"validator_key,omitempty"` // Public key hex
+	Signature    string    `json:"signature"`               // 64-byte Ed25519 hex
+	SignedHash   string    `json:"signed_hash"`             // Hash that was signed
+	AttestedAt   time.Time `json:"attested_at"`
+	AttestType   string    `json:"attest_type"` // "proof_valid", "batch_complete"
 }
 
 // =============================================================================

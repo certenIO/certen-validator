@@ -41,18 +41,18 @@ var _ Client = (*LiteClientAdapter)(nil)
 
 // LiteClientConfig contains configuration for lite client integration
 type LiteClientConfig struct {
-	NetworkURL     string              `json:"network_url"`
-	EnableCaching  bool                `json:"enable_caching"`
+	NetworkURL    string `json:"network_url"`
+	EnableCaching bool   `json:"enable_caching"`
 	// ProofStrategy  proof.ProofStrategy `json:"proof_strategy"` // Removed - not available in production lite client
-	RequestTimeout time.Duration       `json:"request_timeout"`
+	RequestTimeout time.Duration `json:"request_timeout"`
 }
 
 // NewLiteClientAdapter creates a new adapter for the Accumulate lite client
 func NewLiteClientAdapter(config *LiteClientConfig) (*LiteClientAdapter, error) {
 	if config == nil {
 		config = &LiteClientConfig{
-			NetworkURL:     "http://localhost:26660", // Default to local devnet
-			EnableCaching:  true,
+			NetworkURL:    "http://localhost:26660", // Default to local devnet
+			EnableCaching: true,
 			// ProofStrategy:  proof.StrategyComplete, // Removed - not available in production lite client
 			RequestTimeout: 30 * time.Second,
 		}
@@ -274,7 +274,7 @@ func (l *LiteClientAdapter) SearchCertenTransactions(ctx context.Context, blockH
 type CertenTransaction struct {
 	Hash            string                 `json:"hash"`
 	AccountURL      string                 `json:"account_url"`
-	BlockHeight     int64                  `json:"block_height"`  // Fixed: use int64 like legacy
+	BlockHeight     int64                  `json:"block_height"` // Fixed: use int64 like legacy
 	Timestamp       time.Time              `json:"timestamp"`
 	IntentData      map[string]interface{} `json:"intent_data"`
 	TransactionType string                 `json:"transaction_type"`
@@ -555,7 +555,7 @@ func (l *LiteClientAdapter) parseCertenTransaction(entry BlockEntry, block *Mino
 	certenTx := &CertenTransaction{
 		Hash:        hash,
 		AccountURL:  accountURL,
-		BlockHeight: block.Height,  // Fixed: direct assignment since both are int64
+		BlockHeight: block.Height, // Fixed: direct assignment since both are int64
 		Partition:   partition,
 		Timestamp:   block.Time,
 		RawTx:       entry.Data,
@@ -678,9 +678,9 @@ func (l *LiteClientAdapter) parseCertenTransaction(entry BlockEntry, block *Mino
 func (l *LiteClientAdapter) GetTransaction(ctx context.Context, hash string) (*Transaction, error) {
 	// Query the transaction using v3 API with proper txid lookup
 	queryParams := map[string]interface{}{
-		"scope":     "acc://dn",  // Query the DN for transaction records
-		"queryType": "txid",      // Look up by transaction ID
-		"txid":      hash,        // The transaction hash/ID to find
+		"scope":     "acc://dn", // Query the DN for transaction records
+		"queryType": "txid",     // Look up by transaction ID
+		"txid":      hash,       // The transaction hash/ID to find
 	}
 
 	response, err := l.queryV3API(ctx, "query", queryParams)
@@ -1511,7 +1511,6 @@ func (l *LiteClientAdapter) VerifySignature(ctx context.Context, message, signat
 
 // Helper methods
 
-
 // extractProofPath extracts the Merkle proof path from raw receipt data
 func (l *LiteClientAdapter) extractProofPath(rawReceipt interface{}) []string {
 	// Extract proof path from the raw receipt data from the Accumulate lite client
@@ -2089,7 +2088,8 @@ func (l *LiteClientAdapter) GetSignerNonce(ctx context.Context, signerURL string
 // RB-SEC-1: this lets a peer validator INDEPENDENTLY obtain the user-signed intent from
 // Accumulate (the source of truth) and re-derive the committed contract-call effects,
 // instead of trusting the executor's attestation request. Response shape (v3 query):
-//   result.message.transaction.body{type:writeData}.entry{type:doubleHash}.data = [hex,...]
+//
+//	result.message.transaction.body{type:writeData}.entry{type:doubleHash}.data = [hex,...]
 func (l *LiteClientAdapter) GetIntentBlobs(ctx context.Context, txHash string, accountURL string) ([][]byte, error) {
 	if txHash == "" || accountURL == "" {
 		return nil, fmt.Errorf("txHash and accountURL are required")

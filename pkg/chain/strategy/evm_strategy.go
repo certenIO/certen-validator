@@ -46,8 +46,8 @@ type EVMStrategyConfig struct {
 	MaxGasPriceGwei int64
 
 	// Timeouts
-	TxTimeout      time.Duration // Timeout for transaction submission
-	ReceiptTimeout time.Duration // Timeout for receipt confirmation
+	TxTimeout       time.Duration // Timeout for transaction submission
+	ReceiptTimeout  time.Duration // Timeout for receipt confirmation
 	PollingInterval time.Duration // Interval for polling receipts
 
 	// ValidatorID for logging
@@ -392,7 +392,7 @@ func (s *EVMStrategy) EstimateGas(ctx context.Context, req *AnchorRequest) (uint
 	msg := ethereum.CallMsg{
 		From: s.auth.From,
 		To:   &s.anchorContract,
-		Gas:  0, // Let estimation figure it out
+		Gas:  0,   // Let estimation figure it out
 		Data: nil, // Would be encoded call data
 	}
 

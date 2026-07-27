@@ -34,14 +34,14 @@ import (
 type EventType string
 
 const (
-	EventTypeAnchorCreated          EventType = "AnchorCreated"
-	EventTypeProofExecuted          EventType = "ProofExecuted"
+	EventTypeAnchorCreated           EventType = "AnchorCreated"
+	EventTypeProofExecuted           EventType = "ProofExecuted"
 	EventTypeProofVerificationFailed EventType = "ProofVerificationFailed"
-	EventTypeGovernanceExecuted     EventType = "GovernanceExecuted"
-	EventTypeValidatorRegistered    EventType = "ValidatorRegistered"
-	EventTypeValidatorRemoved       EventType = "ValidatorRemoved"
-	EventTypeThresholdUpdated       EventType = "ThresholdUpdated"
-	EventTypeUnknown                EventType = "Unknown"
+	EventTypeGovernanceExecuted      EventType = "GovernanceExecuted"
+	EventTypeValidatorRegistered     EventType = "ValidatorRegistered"
+	EventTypeValidatorRemoved        EventType = "ValidatorRemoved"
+	EventTypeThresholdUpdated        EventType = "ThresholdUpdated"
+	EventTypeUnknown                 EventType = "Unknown"
 )
 
 // =============================================================================
@@ -73,19 +73,19 @@ type AnchorCreatedEvent struct {
 	ParsedAt    time.Time `json:"parsed_at"`
 }
 
-func (e *AnchorCreatedEvent) GetEventType() EventType   { return EventTypeAnchorCreated }
-func (e *AnchorCreatedEvent) GetBlockNumber() uint64    { return e.BlockNumber }
-func (e *AnchorCreatedEvent) GetTxHash() string         { return e.TxHash }
-func (e *AnchorCreatedEvent) GetTimestamp() time.Time   { return e.ParsedAt }
+func (e *AnchorCreatedEvent) GetEventType() EventType { return EventTypeAnchorCreated }
+func (e *AnchorCreatedEvent) GetBlockNumber() uint64  { return e.BlockNumber }
+func (e *AnchorCreatedEvent) GetTxHash() string       { return e.TxHash }
+func (e *AnchorCreatedEvent) GetTimestamp() time.Time { return e.ParsedAt }
 
 // ProofExecutedEvent represents the ProofExecuted event from CertenAnchorV3
 type ProofExecutedEvent struct {
-	AnchorID            [32]byte `json:"anchor_id"`
-	TransactionHash     [32]byte `json:"transaction_hash"`
-	MerkleVerified      bool     `json:"merkle_verified"`
-	BLSVerified         bool     `json:"bls_verified"`
-	GovernanceVerified  bool     `json:"governance_verified"`
-	Timestamp           *big.Int `json:"timestamp"`
+	AnchorID           [32]byte `json:"anchor_id"`
+	TransactionHash    [32]byte `json:"transaction_hash"`
+	MerkleVerified     bool     `json:"merkle_verified"`
+	BLSVerified        bool     `json:"bls_verified"`
+	GovernanceVerified bool     `json:"governance_verified"`
+	Timestamp          *big.Int `json:"timestamp"`
 
 	// Metadata
 	BlockNumber uint64    `json:"block_number"`
@@ -94,21 +94,21 @@ type ProofExecutedEvent struct {
 	ParsedAt    time.Time `json:"parsed_at"`
 }
 
-func (e *ProofExecutedEvent) GetEventType() EventType   { return EventTypeProofExecuted }
-func (e *ProofExecutedEvent) GetBlockNumber() uint64    { return e.BlockNumber }
-func (e *ProofExecutedEvent) GetTxHash() string         { return e.TxHash }
-func (e *ProofExecutedEvent) GetTimestamp() time.Time   { return e.ParsedAt }
+func (e *ProofExecutedEvent) GetEventType() EventType { return EventTypeProofExecuted }
+func (e *ProofExecutedEvent) GetBlockNumber() uint64  { return e.BlockNumber }
+func (e *ProofExecutedEvent) GetTxHash() string       { return e.TxHash }
+func (e *ProofExecutedEvent) GetTimestamp() time.Time { return e.ParsedAt }
 
 // ProofVerificationFailedEvent represents the ProofVerificationFailed event
 type ProofVerificationFailedEvent struct {
-	AnchorID             [32]byte `json:"anchor_id"`
-	TransactionHash      [32]byte `json:"transaction_hash"`
-	MerkleVerified       bool     `json:"merkle_verified"`
-	BLSVerified          bool     `json:"bls_verified"`
-	GovernanceVerified   bool     `json:"governance_verified"`
-	CommitmentVerified   bool     `json:"commitment_verified"`
-	Reason               string   `json:"reason"`
-	Timestamp            *big.Int `json:"timestamp"`
+	AnchorID           [32]byte `json:"anchor_id"`
+	TransactionHash    [32]byte `json:"transaction_hash"`
+	MerkleVerified     bool     `json:"merkle_verified"`
+	BLSVerified        bool     `json:"bls_verified"`
+	GovernanceVerified bool     `json:"governance_verified"`
+	CommitmentVerified bool     `json:"commitment_verified"`
+	Reason             string   `json:"reason"`
+	Timestamp          *big.Int `json:"timestamp"`
 
 	// Metadata
 	BlockNumber uint64    `json:"block_number"`
@@ -117,7 +117,9 @@ type ProofVerificationFailedEvent struct {
 	ParsedAt    time.Time `json:"parsed_at"`
 }
 
-func (e *ProofVerificationFailedEvent) GetEventType() EventType { return EventTypeProofVerificationFailed }
+func (e *ProofVerificationFailedEvent) GetEventType() EventType {
+	return EventTypeProofVerificationFailed
+}
 func (e *ProofVerificationFailedEvent) GetBlockNumber() uint64  { return e.BlockNumber }
 func (e *ProofVerificationFailedEvent) GetTxHash() string       { return e.TxHash }
 func (e *ProofVerificationFailedEvent) GetTimestamp() time.Time { return e.ParsedAt }
@@ -253,13 +255,13 @@ const CertenAnchorV3EventsABI = `[
 
 var (
 	// Pre-computed topic hashes for event filtering
-	TopicAnchorCreated          common.Hash
-	TopicProofExecuted          common.Hash
+	TopicAnchorCreated           common.Hash
+	TopicProofExecuted           common.Hash
 	TopicProofVerificationFailed common.Hash
-	TopicGovernanceExecuted     common.Hash
-	TopicValidatorRegistered    common.Hash
-	TopicValidatorRemoved       common.Hash
-	TopicThresholdUpdated       common.Hash
+	TopicGovernanceExecuted      common.Hash
+	TopicValidatorRegistered     common.Hash
+	TopicValidatorRemoved        common.Hash
+	TopicThresholdUpdated        common.Hash
 )
 
 func init() {
@@ -302,7 +304,7 @@ type EventWatcherConfig struct {
 	ChainID     int64
 
 	// Polling configuration (for networks without WebSocket support)
-	PollInterval time.Duration
+	PollInterval  time.Duration
 	BlockLookback uint64 // How many blocks back to scan on start
 
 	// Filter configuration
@@ -341,11 +343,11 @@ type EventWatcher struct {
 	mu                 sync.RWMutex
 
 	// Lifecycle management
-	ctx        context.Context
-	cancel     context.CancelFunc
-	wg         sync.WaitGroup
-	running    bool
-	runningMu  sync.Mutex
+	ctx       context.Context
+	cancel    context.CancelFunc
+	wg        sync.WaitGroup
+	running   bool
+	runningMu sync.Mutex
 
 	// Handlers
 	handlers   map[EventType][]EventHandler

@@ -27,13 +27,13 @@ import (
 //
 // Wire format (matches the Rust contract exactly):
 //
-//     data_hash   = keccak256(method || args)
-//     commitment  = keccak256(
-//                     network_id_bytes
-//                     ‖ target_account_bytes
-//                     ‖ u128-LE(deposit_yocto)    // 16 bytes
-//                     ‖ data_hash                  // 32 bytes
-//                   )
+//	data_hash   = keccak256(method || args)
+//	commitment  = keccak256(
+//	                network_id_bytes
+//	                ‖ target_account_bytes
+//	                ‖ u128-LE(deposit_yocto)    // 16 bytes
+//	                ‖ data_hash                  // 32 bytes
+//	              )
 //
 // For a plain NEAR transfer the call shape is method="transfer" and args=[];
 // the BFT signing path passes the same (target, deposit, method, args) so
@@ -101,14 +101,15 @@ func ComputeNearDeploymentChainIDV6_1(networkID string) [32]byte {
 // compute_v6_1_message_hash in the NEAR contract.
 //
 // Wire format (192 bytes, six 32-byte slots):
-//   keccak256(
-//       bytes32("certen:bls:v1:pre")  ||
-//       deployment_chain_id           ||
-//       anchor_id                     ||
-//       execution_commitment          ||
-//       operation_id                  ||
-//       validator_set_root
-//   )
+//
+//	keccak256(
+//	    bytes32("certen:bls:v1:pre")  ||
+//	    deployment_chain_id           ||
+//	    anchor_id                     ||
+//	    execution_commitment          ||
+//	    operation_id                  ||
+//	    validator_set_root
+//	)
 func ComputeNearMessageHashV6_1_Pre(
 	deploymentChainID [32]byte,
 	anchorID [32]byte,
@@ -174,17 +175,17 @@ func computeNearMessageHashV6_1(
 // Wire format (same field ordering and slot widths as EVM
 // DeriveV6_1BundleID; NEAR substitutes its synthesized 32-byte chain id):
 //
-//   keccak256(
-//     "certen:bundleid:v1.1"  (20 bytes)
-//     deployment_chain_id     (32 bytes)
-//     adi_url_hash            (32 bytes)
-//     operation_commitment    (32 bytes)
-//     cross_chain_commitment  (32 bytes)
-//     governance_root         (32 bytes)
-//     execution_commitment    (32 bytes)
-//     operation_id            (32 bytes)
-//     block_height            (32 bytes, big-endian uint256)
-//   )
+//	keccak256(
+//	  "certen:bundleid:v1.1"  (20 bytes)
+//	  deployment_chain_id     (32 bytes)
+//	  adi_url_hash            (32 bytes)
+//	  operation_commitment    (32 bytes)
+//	  cross_chain_commitment  (32 bytes)
+//	  governance_root         (32 bytes)
+//	  execution_commitment    (32 bytes)
+//	  operation_id            (32 bytes)
+//	  block_height            (32 bytes, big-endian uint256)
+//	)
 func DeriveNearBundleIDV6_1(
 	deploymentChainID [32]byte,
 	adiURLHash [32]byte,
@@ -227,14 +228,15 @@ func DeriveNearBundleIDV6_1(
 // the wire format differs from EVM's ComputeValidatorSetRootV6_1.
 //
 // Wire format:
-//   For each (acct, power) sorted ASC by acct bytes:
-//     u32-BE(len(acct))    (4 bytes)
-//     acct_bytes           (variable)
-//     u64-BE(power)        (8 bytes)
-//   Then:
-//     u64-BE(threshold_num)
-//     u64-BE(threshold_den)
-//   keccak256 over the concatenated bytes.
+//
+//	For each (acct, power) sorted ASC by acct bytes:
+//	  u32-BE(len(acct))    (4 bytes)
+//	  acct_bytes           (variable)
+//	  u64-BE(power)        (8 bytes)
+//	Then:
+//	  u64-BE(threshold_num)
+//	  u64-BE(threshold_den)
+//	keccak256 over the concatenated bytes.
 //
 // Caller passes accounts + powers in any order; this function sorts
 // internally before hashing.

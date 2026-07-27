@@ -32,32 +32,32 @@ type ConsensusHealthMonitor struct {
 	lastBlockTime   time.Time
 
 	// Configuration
-	stallThreshold     time.Duration // Alert if no block for this duration
-	minPeers           int           // Minimum required peers
-	checkInterval      time.Duration // How often to check health
+	stallThreshold time.Duration // Alert if no block for this duration
+	minPeers       int           // Minimum required peers
+	checkInterval  time.Duration // How often to check health
 
 	// Status tracking
-	isStalled          bool
-	stallStartTime     time.Time
-	consecutiveStalls  int
-	lastCheckTime      time.Time
-	connectedPeers     int
+	isStalled         bool
+	stallStartTime    time.Time
+	consecutiveStalls int
+	lastCheckTime     time.Time
+	connectedPeers    int
 
 	// Callbacks
-	onStallDetected    func(height int64, stallDuration time.Duration)
-	onRecovery         func(height int64)
-	onPeerCountLow     func(count int)
+	onStallDetected func(height int64, stallDuration time.Duration)
+	onRecovery      func(height int64)
+	onPeerCountLow  func(count int)
 
 	// CometBFT status fetcher (injected)
-	statusFetcher      StatusFetcher
+	statusFetcher StatusFetcher
 
 	// Logger
-	logger             *log.Logger
+	logger *log.Logger
 
 	// Control
-	ctx                context.Context
-	cancel             context.CancelFunc
-	running            bool
+	ctx     context.Context
+	cancel  context.CancelFunc
+	running bool
 }
 
 // StatusFetcher interface for getting CometBFT status
@@ -76,17 +76,17 @@ type ConsensusStatus struct {
 
 // HealthMonitorConfig configures the health monitor
 type HealthMonitorConfig struct {
-	StallThreshold  time.Duration // Default: 2 minutes
-	MinPeers        int           // Default: 2
-	CheckInterval   time.Duration // Default: 10 seconds
+	StallThreshold time.Duration // Default: 2 minutes
+	MinPeers       int           // Default: 2
+	CheckInterval  time.Duration // Default: 10 seconds
 }
 
 // DefaultHealthMonitorConfig returns default configuration
 func DefaultHealthMonitorConfig() HealthMonitorConfig {
 	return HealthMonitorConfig{
-		StallThreshold:  2 * time.Minute,
-		MinPeers:        2,
-		CheckInterval:   10 * time.Second,
+		StallThreshold: 2 * time.Minute,
+		MinPeers:       2,
+		CheckInterval:  10 * time.Second,
 	}
 }
 
@@ -95,13 +95,13 @@ func NewConsensusHealthMonitor(cfg HealthMonitorConfig, fetcher StatusFetcher) *
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &ConsensusHealthMonitor{
-		stallThreshold:   cfg.StallThreshold,
-		minPeers:         cfg.MinPeers,
-		checkInterval:    cfg.CheckInterval,
-		statusFetcher:    fetcher,
-		logger:           log.New(log.Writer(), "[HealthMonitor] ", log.LstdFlags),
-		ctx:              ctx,
-		cancel:           cancel,
+		stallThreshold: cfg.StallThreshold,
+		minPeers:       cfg.MinPeers,
+		checkInterval:  cfg.CheckInterval,
+		statusFetcher:  fetcher,
+		logger:         log.New(log.Writer(), "[HealthMonitor] ", log.LstdFlags),
+		ctx:            ctx,
+		cancel:         cancel,
 	}
 }
 

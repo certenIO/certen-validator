@@ -65,8 +65,8 @@ var ValidTransitions = []StateTransition{
 
 // ProofLifecycleManager manages proof state transitions and custody chain
 type ProofLifecycleManager struct {
-	repo           *database.ProofArtifactRepository
-	validatorID    string
+	repo            *database.ProofArtifactRepository
+	validatorID     string
 	totalValidators int
 
 	// State change listeners
@@ -219,8 +219,8 @@ func (m *ProofLifecycleManager) MarkAnchored(ctx context.Context, proofID uuid.U
 // MarkAttested marks a proof as having sufficient attestations
 func (m *ProofLifecycleManager) MarkAttested(ctx context.Context, proofID uuid.UUID, attestationCount int) error {
 	return m.TransitionState(ctx, proofID, StateAttested, map[string]interface{}{
-		"attestation_count":   attestationCount,
-		"required_quorum":     m.calculateQuorum(),
+		"attestation_count": attestationCount,
+		"required_quorum":   m.calculateQuorum(),
 	})
 }
 

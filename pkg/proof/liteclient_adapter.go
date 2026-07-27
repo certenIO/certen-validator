@@ -16,11 +16,11 @@ import (
 	"strings"
 	"time"
 
-	comethttp "github.com/cometbft/cometbft/rpc/client/http"
 	lcbackend "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/backend"
 	lcproof "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof"
 	chained_proof "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/working-proof_do_not_edit"
 	lctypes "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/types"
+	comethttp "github.com/cometbft/cometbft/rpc/client/http"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3/jsonrpc"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/database/merkle"
 )
@@ -40,7 +40,7 @@ type LiteClientProofGenerator struct {
 	proofBuilder *chained_proof.ProofBuilder
 	endpoint     string
 	dnEndpoint   string
-	bvnEndpoint  string // Legacy single BVN endpoint
+	bvnEndpoint  string            // Legacy single BVN endpoint
 	bvnEndpoints map[string]string // Map of BVN name to endpoint (bvn0, bvn1, bvn2, bvn3)
 	timeout      time.Duration
 }

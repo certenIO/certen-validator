@@ -355,8 +355,8 @@ func (c *Client) MigrationStatus(ctx context.Context) ([]MigrationInfo, error) {
 	var status []MigrationInfo
 	for _, m := range migrations {
 		status = append(status, MigrationInfo{
-			Version:  m.Version,
-			Applied:  applied[m.Version],
+			Version: m.Version,
+			Applied: applied[m.Version],
 		})
 	}
 

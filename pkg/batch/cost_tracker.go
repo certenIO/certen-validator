@@ -248,23 +248,23 @@ func (t *CostTracker) EstimateCost(batchType string, txCount int) *CostEstimate 
 	}
 
 	return &CostEstimate{
-		BatchType:     batchType,
-		TxCount:       txCount,
-		PerProofCost:  perProofCost,
-		TotalCostUSD:  totalCost,
-		EstimatedGas:  estimatedGas,
-		EthPriceUSD:   t.currentEthPriceUSD,
+		BatchType:    batchType,
+		TxCount:      txCount,
+		PerProofCost: perProofCost,
+		TotalCostUSD: totalCost,
+		EstimatedGas: estimatedGas,
+		EthPriceUSD:  t.currentEthPriceUSD,
 	}
 }
 
 // CostEstimate provides a cost estimate for an anchor
 type CostEstimate struct {
-	BatchType     string  `json:"batch_type"`
-	TxCount       int     `json:"tx_count"`
-	PerProofCost  float64 `json:"per_proof_cost_usd"`
-	TotalCostUSD  float64 `json:"total_cost_usd"`
-	EstimatedGas  int64   `json:"estimated_gas"`
-	EthPriceUSD   float64 `json:"eth_price_usd"`
+	BatchType    string  `json:"batch_type"`
+	TxCount      int     `json:"tx_count"`
+	PerProofCost float64 `json:"per_proof_cost_usd"`
+	TotalCostUSD float64 `json:"total_cost_usd"`
+	EstimatedGas int64   `json:"estimated_gas"`
+	EthPriceUSD  float64 `json:"eth_price_usd"`
 }
 
 // GetCostBreakdown returns a detailed cost breakdown for display

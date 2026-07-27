@@ -82,7 +82,7 @@ func TestFinalizeBlockNormalizesBeforeReporting(t *testing.T) {
 		app.pendingAppHash = make([]byte, 32)
 	}
 
-	reported := app.pendingAppHash // -> ResponseFinalizeBlock.AppHash
+	reported := app.pendingAppHash  // -> ResponseFinalizeBlock.AppHash
 	persisted := app.pendingAppHash // -> Commit -> SaveABCIState
 
 	if len(reported) != 32 {

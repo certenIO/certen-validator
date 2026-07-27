@@ -35,19 +35,19 @@ func NewLedgerStore(kv KV) *LedgerStore {
 
 var (
 	// System ledger keys
-	keySysMeta        = []byte("sysledger:meta")              // -> SystemLedgerMeta
-	keySysLatestBlock = []byte("sysledger:latest_block")      // -> SystemLedgerBlockMeta
-	keySysBlockPrefix = []byte("sysledger:block:")            // + big-endian height -> SystemLedgerBlockMeta
+	keySysMeta        = []byte("sysledger:meta")         // -> SystemLedgerMeta
+	keySysLatestBlock = []byte("sysledger:latest_block") // -> SystemLedgerBlockMeta
+	keySysBlockPrefix = []byte("sysledger:block:")       // + big-endian height -> SystemLedgerBlockMeta
 
 	// Anchor ledger keys
-	keyAnchorMeta         = []byte("anchorledger:meta")         // -> AnchorLedgerMeta
-	keyAnchorTargetPrefix = []byte("anchorledger:target:")     // + targetURL -> AnchorTargetState
+	keyAnchorMeta         = []byte("anchorledger:meta")    // -> AnchorLedgerMeta
+	keyAnchorTargetPrefix = []byte("anchorledger:target:") // + targetURL -> AnchorTargetState
 
 	// Intent discovery state keys
-	keyIntentLastBlock = []byte("intent:last_block")          // -> uint64 (last processed block height)
+	keyIntentLastBlock = []byte("intent:last_block") // -> uint64 (last processed block height)
 
 	// ABCI state keys (for CometBFT state recovery)
-	keyABCIState = []byte("abci:state")                       // -> ABCIState (height + appHash)
+	keyABCIState = []byte("abci:state") // -> ABCIState (height + appHash)
 )
 
 // systemBlockKey generates a KV key for a specific system ledger block
@@ -243,8 +243,8 @@ func (s *LedgerStore) MarkAnchorProduced(
 	targetURL string,
 	txid string,
 	t time.Time,
-	majorIndex uint64,    // Accumulate major block index, if applicable
-	majorTime time.Time,  // Accumulate major block time, if applicable
+	majorIndex uint64, // Accumulate major block index, if applicable
+	majorTime time.Time, // Accumulate major block time, if applicable
 ) error {
 	meta, err := s.loadAnchorMeta()
 	if err != nil {
@@ -422,8 +422,8 @@ func (s *LedgerStore) buildSystemLedgerStateFromBlock(chainID string, blockMeta 
 	}
 	if sysMeta == nil {
 		sysMeta = &SystemLedgerMeta{
-			ExecutorVersion:   "1.0.0",
-			UpstreamVersions:  []UpstreamExecutor{},
+			ExecutorVersion:  "1.0.0",
+			UpstreamVersions: []UpstreamExecutor{},
 		}
 	}
 

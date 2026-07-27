@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	chain "github.com/certen/independant-validator/pkg/chain/strategy"
 	attestation "github.com/certen/independant-validator/pkg/attestation/strategy"
+	chain "github.com/certen/independant-validator/pkg/chain/strategy"
 	"github.com/google/uuid"
 )
 
@@ -105,9 +105,9 @@ func TestMultiLegAggregator_4ChainIntent(t *testing.T) {
 					IsFinalized:         true,
 					GasUsed:             uint64(21000 + i*1000),
 					ObserverValidatorID: "validator-1",
-					TxFrom:             "0xexecutor",
-					ChainName:          legMapping[i].ChainName,
-					ChainIDNumeric:     legMapping[i].ChainID,
+					TxFrom:              "0xexecutor",
+					ChainName:           legMapping[i].ChainName,
+					ChainIDNumeric:      legMapping[i].ChainID,
 				},
 			},
 			AggregatedAttestation: &attestation.AggregatedAttestation{
@@ -180,10 +180,10 @@ func TestMultiLegAggregator_4ChainIntent(t *testing.T) {
 			copy(eventsHash[:], decoded[:32])
 		}
 		legResults = append(legResults, LegResult{
-			LegIndex:  lp.LegIndex,
-			Chain:     lp.ChainName,
-			ChainID:   lp.ChainID,
-			TxHash:    lp.TxHash,
+			LegIndex: lp.LegIndex,
+			Chain:    lp.ChainName,
+			ChainID:  lp.ChainID,
+			TxHash:   lp.TxHash,
 		})
 	}
 

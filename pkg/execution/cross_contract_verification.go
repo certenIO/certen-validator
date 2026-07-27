@@ -43,27 +43,27 @@ type CrossContractVerification struct {
 	AccountAbstractionContract common.Address `json:"account_abstraction_contract"`
 
 	// Anchor data
-	AnchorID           [32]byte `json:"anchor_id"`
-	BundleID           [32]byte `json:"bundle_id"`
-	OperationCommitment [32]byte `json:"operation_commitment"`
+	AnchorID             [32]byte `json:"anchor_id"`
+	BundleID             [32]byte `json:"bundle_id"`
+	OperationCommitment  [32]byte `json:"operation_commitment"`
 	CrossChainCommitment [32]byte `json:"cross_chain_commitment"`
-	GovernanceRoot     [32]byte `json:"governance_root"`
+	GovernanceRoot       [32]byte `json:"governance_root"`
 
 	// Verification status
-	AnchorExistsOnChain      bool `json:"anchor_exists_on_chain"`
-	AnchorVerifiedOnChain    bool `json:"anchor_verified_on_chain"`
-	ProofExecutedOnChain     bool `json:"proof_executed_on_chain"`
-	GovernanceProofValid     bool `json:"governance_proof_valid"`
+	AnchorExistsOnChain   bool `json:"anchor_exists_on_chain"`
+	AnchorVerifiedOnChain bool `json:"anchor_verified_on_chain"`
+	ProofExecutedOnChain  bool `json:"proof_executed_on_chain"`
+	GovernanceProofValid  bool `json:"governance_proof_valid"`
 
 	// Cross-contract state
-	CreationBlockNumber      *big.Int  `json:"creation_block_number"`
-	VerificationBlockNumber  *big.Int  `json:"verification_block_number,omitempty"`
-	ExecutionBlockNumber     *big.Int  `json:"execution_block_number,omitempty"`
+	CreationBlockNumber     *big.Int `json:"creation_block_number"`
+	VerificationBlockNumber *big.Int `json:"verification_block_number,omitempty"`
+	ExecutionBlockNumber    *big.Int `json:"execution_block_number,omitempty"`
 
 	// Events captured
-	AnchorCreatedEvent       *AnchorCreatedEvent       `json:"anchor_created_event,omitempty"`
-	ProofExecutedEvent       *ProofExecutedEvent       `json:"proof_executed_event,omitempty"`
-	GovernanceExecutedEvent  *GovernanceExecutedEvent  `json:"governance_executed_event,omitempty"`
+	AnchorCreatedEvent      *AnchorCreatedEvent      `json:"anchor_created_event,omitempty"`
+	ProofExecutedEvent      *ProofExecutedEvent      `json:"proof_executed_event,omitempty"`
+	GovernanceExecutedEvent *GovernanceExecutedEvent `json:"governance_executed_event,omitempty"`
 
 	// Verification hash (cryptographic binding)
 	VerificationHash [32]byte `json:"verification_hash"`
@@ -74,41 +74,41 @@ type CrossContractVerification struct {
 
 // AnchorCreatedEvent represents the AnchorCreated event from the Creation contract
 type AnchorCreatedEvent struct {
-	AnchorID            [32]byte       `json:"anchor_id"`
-	BundleID            [32]byte       `json:"bundle_id"`
-	OperationCommitment [32]byte       `json:"operation_commitment"`
-	CrossChainCommitment [32]byte      `json:"cross_chain_commitment"`
-	GovernanceRoot      [32]byte       `json:"governance_root"`
-	BlockHeight         *big.Int       `json:"block_height"`
-	Validator           common.Address `json:"validator"`
-	Timestamp           *big.Int       `json:"timestamp"`
-	TxHash              common.Hash    `json:"tx_hash"`
-	LogIndex            uint           `json:"log_index"`
+	AnchorID             [32]byte       `json:"anchor_id"`
+	BundleID             [32]byte       `json:"bundle_id"`
+	OperationCommitment  [32]byte       `json:"operation_commitment"`
+	CrossChainCommitment [32]byte       `json:"cross_chain_commitment"`
+	GovernanceRoot       [32]byte       `json:"governance_root"`
+	BlockHeight          *big.Int       `json:"block_height"`
+	Validator            common.Address `json:"validator"`
+	Timestamp            *big.Int       `json:"timestamp"`
+	TxHash               common.Hash    `json:"tx_hash"`
+	LogIndex             uint           `json:"log_index"`
 }
 
 // ProofExecutedEvent represents the ProofExecuted event from Verification V2
 type ProofExecutedEvent struct {
-	AnchorID          [32]byte    `json:"anchor_id"`
-	ProofHash         [32]byte    `json:"proof_hash"`
-	MerkleVerified    bool        `json:"merkle_verified"`
-	GovernanceVerified bool       `json:"governance_verified"`
-	BLSVerified       bool        `json:"bls_verified"`
-	ExecutedAt        *big.Int    `json:"executed_at"`
-	TxHash            common.Hash `json:"tx_hash"`
-	LogIndex          uint        `json:"log_index"`
+	AnchorID           [32]byte    `json:"anchor_id"`
+	ProofHash          [32]byte    `json:"proof_hash"`
+	MerkleVerified     bool        `json:"merkle_verified"`
+	GovernanceVerified bool        `json:"governance_verified"`
+	BLSVerified        bool        `json:"bls_verified"`
+	ExecutedAt         *big.Int    `json:"executed_at"`
+	TxHash             common.Hash `json:"tx_hash"`
+	LogIndex           uint        `json:"log_index"`
 }
 
 // GovernanceExecutedEvent represents execution from Account Abstraction
 type GovernanceExecutedEvent struct {
-	AnchorID       [32]byte       `json:"anchor_id"`
-	Target         common.Address `json:"target"`
-	Value          *big.Int       `json:"value"`
-	Data           []byte         `json:"data"`
-	Success        bool           `json:"success"`
-	ReturnData     []byte         `json:"return_data"`
-	ExecutedAt     *big.Int       `json:"executed_at"`
-	TxHash         common.Hash    `json:"tx_hash"`
-	LogIndex       uint           `json:"log_index"`
+	AnchorID   [32]byte       `json:"anchor_id"`
+	Target     common.Address `json:"target"`
+	Value      *big.Int       `json:"value"`
+	Data       []byte         `json:"data"`
+	Success    bool           `json:"success"`
+	ReturnData []byte         `json:"return_data"`
+	ExecutedAt *big.Int       `json:"executed_at"`
+	TxHash     common.Hash    `json:"tx_hash"`
+	LogIndex   uint           `json:"log_index"`
 }
 
 // =============================================================================
@@ -118,10 +118,10 @@ type GovernanceExecutedEvent struct {
 // ResultCaptureEvent represents a captured result for Merkle proof generation
 type ResultCaptureEvent struct {
 	// Event identification
-	EventType string      `json:"event_type"` // "anchor_created", "proof_executed", "governance_executed"
-	TxHash    common.Hash `json:"tx_hash"`
-	BlockNumber *big.Int  `json:"block_number"`
-	LogIndex  uint        `json:"log_index"`
+	EventType   string      `json:"event_type"` // "anchor_created", "proof_executed", "governance_executed"
+	TxHash      common.Hash `json:"tx_hash"`
+	BlockNumber *big.Int    `json:"block_number"`
+	LogIndex    uint        `json:"log_index"`
 
 	// Event data hash for Merkle inclusion
 	EventDataHash [32]byte `json:"event_data_hash"`
@@ -148,9 +148,9 @@ type ResultCaptureBundle struct {
 	BundleID    [32]byte `json:"bundle_id"`
 
 	// Captured events
-	AnchorEvent      *ResultCaptureEvent `json:"anchor_event,omitempty"`
-	ProofEvent       *ResultCaptureEvent `json:"proof_event,omitempty"`
-	GovernanceEvent  *ResultCaptureEvent `json:"governance_event,omitempty"`
+	AnchorEvent     *ResultCaptureEvent `json:"anchor_event,omitempty"`
+	ProofEvent      *ResultCaptureEvent `json:"proof_event,omitempty"`
+	GovernanceEvent *ResultCaptureEvent `json:"governance_event,omitempty"`
 
 	// Combined bundle hash
 	BundleHash [32]byte `json:"bundle_hash"`
@@ -160,7 +160,7 @@ type ResultCaptureBundle struct {
 	AllEventsVerified bool `json:"all_events_verified"`
 
 	// Timing
-	CreatedAt  time.Time `json:"created_at"`
+	CreatedAt   time.Time `json:"created_at"`
 	CompletedAt time.Time `json:"completed_at,omitempty"`
 }
 
@@ -179,9 +179,9 @@ type CrossContractVerifier struct {
 	accountContract      common.Address
 
 	// Contract ABIs for encoding/decoding
-	anchorABI      abi.ABI
+	anchorABI       abi.ABI
 	verificationABI abi.ABI
-	accountABI     abi.ABI
+	accountABI      abi.ABI
 
 	// Configuration
 	config *CrossContractConfig
@@ -222,9 +222,9 @@ func DefaultCrossContractConfig() *CrossContractConfig {
 		VerificationTimeout:         30 * time.Second,
 		// Event topic hashes (keccak256 of event signatures)
 		// AnchorCreated(bytes32 indexed anchorId, bytes32 indexed bundleId, address validator, uint256 timestamp)
-		AnchorCreatedTopic:      common.HexToHash("0xc9f0e08de3e90bd3d08c5a5d8a1fe178c8f68a47aadc3ba8e7a3d56e2a1c8b35"),
+		AnchorCreatedTopic: common.HexToHash("0xc9f0e08de3e90bd3d08c5a5d8a1fe178c8f68a47aadc3ba8e7a3d56e2a1c8b35"),
 		// ProofExecuted(bytes32 indexed anchorId, bool merkleValid, bool govValid, bool blsValid)
-		ProofExecutedTopic:      common.HexToHash("0xd6f0e18de4e90bd4d18c6a6d9a2fe279c9f79a48abdc4ba9e8a4d67e3b2d9c46"),
+		ProofExecutedTopic: common.HexToHash("0xd6f0e18de4e90bd4d18c6a6d9a2fe279c9f79a48abdc4ba9e8a4d67e3b2d9c46"),
 		// GovernanceExecuted(bytes32 indexed anchorId, address target, uint256 value, bool success)
 		GovernanceExecutedTopic: common.HexToHash("0xe7f1e29de5e91bd5d29c7a7d0b3fe380d0f80a59bcec5ba0f9a5d78e4c3e0d57"),
 	}

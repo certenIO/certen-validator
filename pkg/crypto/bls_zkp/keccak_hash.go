@@ -84,7 +84,9 @@ func (h *keccakToFieldHash) BlockSize() int { return 32 }
 // bytes — exactly what bls12_381_g1_compress yields on-chain), keccak256's
 // that, and reduces mod the BLS12-381 scalar field. The Aiken verifier
 // computes the identical value via
-//   reduce_be(keccak_256(bls12_381_g1_compress(commitments)))
+//
+//	reduce_be(keccak_256(bls12_381_g1_compress(commitments)))
+//
 // giving sound BSB22 (publicCommitment bound to the commitment) on Cardano.
 type keccakToFieldHashBLS12381 struct {
 	buf []byte

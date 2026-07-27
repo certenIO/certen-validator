@@ -50,13 +50,13 @@ func TestNegativeRetentionIsTreatedAsRetainAll(t *testing.T) {
 
 func TestBlockRetentionFromEnv(t *testing.T) {
 	cases := map[string]int64{
-		"":       0,
-		"0":      0,
-		"  ":     0,
-		"abc":    0,  // unparseable must not silently enable pruning
-		"-10":    0,  // negative must not silently enable pruning
-		"100":    100,
-		" 250 ":  250,
+		"":      0,
+		"0":     0,
+		"  ":    0,
+		"abc":   0, // unparseable must not silently enable pruning
+		"-10":   0, // negative must not silently enable pruning
+		"100":   100,
+		" 250 ": 250,
 	}
 	for raw, want := range cases {
 		t.Setenv("CERTEN_BLOCK_RETENTION", raw)

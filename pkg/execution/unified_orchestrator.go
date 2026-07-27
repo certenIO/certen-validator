@@ -67,9 +67,9 @@ type UnifiedOrchestratorConfig struct {
 	ThresholdConfig *attestation.ThresholdConfig
 
 	// Timeouts
-	ObservationTimeout  time.Duration
-	AttestationTimeout  time.Duration
-	WriteBackTimeout    time.Duration
+	ObservationTimeout time.Duration
+	AttestationTimeout time.Duration
+	WriteBackTimeout   time.Duration
 
 	// Peer attestation collection
 	// Per Whitepaper Section 3.4.1 Component 4: Validator attestations
@@ -79,9 +79,9 @@ type UnifiedOrchestratorConfig struct {
 
 	// Write-back configuration
 	// Per CERTEN_COMPLETE_PROOF_CYCLE_SPEC.md Phase 9
-	AccumulateClient AccumulateSubmitter    // Client for submitting to Accumulate
-	ResultsPrincipal string                 // Accumulate URL for results (e.g., "acc://certen.acme/results")
-	Ed25519Key       []byte                 // Ed25519 signing key for write-back transactions
+	AccumulateClient AccumulateSubmitter // Client for submitting to Accumulate
+	ResultsPrincipal string              // Accumulate URL for results (e.g., "acc://certen.acme/results")
+	Ed25519Key       []byte              // Ed25519 signing key for write-back transactions
 
 	// Accumulate query client for fetching transaction governance data (M-of-N threshold)
 	// This is used to query signatureBooks from transactions for accurate governance_proof_levels
@@ -93,10 +93,10 @@ type UnifiedOrchestratorConfig struct {
 	OnPhaseComplete func(cycleID string, phase int)
 
 	// Feature flags
-	EnableMultiChain       bool
-	EnableUnifiedTables    bool
-	FallbackToLegacy       bool
-	EnableWriteBack        bool // Enable Phase 9 write-back to Accumulate
+	EnableMultiChain    bool
+	EnableUnifiedTables bool
+	FallbackToLegacy    bool
+	EnableWriteBack     bool // Enable Phase 9 write-back to Accumulate
 
 	// Chained proof generator for L1/L2/L3 proofs
 	// Used to fetch Accumulate proof chain: Transaction → BVN → DN → Consensus
@@ -132,23 +132,23 @@ type ChainedProofResult struct {
 	L1ReceiptAnchor  []byte
 	L1BVNRoot        []byte
 	L1BVNPartition   string
-	L1SourceHash     []byte                   // Receipt start hash
-	L1TargetHash     []byte                   // Receipt anchor hash
+	L1SourceHash     []byte                    // Receipt start hash
+	L1TargetHash     []byte                    // Receipt anchor hash
 	L1ReceiptEntries []database.MerklePathNode // Receipt path entries
 
 	// L2: BVN to DN
 	L2DNRoot         []byte
 	L2AnchorSeq      int64
 	L2DNBlockHash    []byte
-	L2SourceHash     []byte                   // Receipt start hash
-	L2TargetHash     []byte                   // Receipt anchor hash
+	L2SourceHash     []byte                    // Receipt start hash
+	L2TargetHash     []byte                    // Receipt anchor hash
 	L2ReceiptEntries []database.MerklePathNode // Receipt path entries
 
 	// L3: DN to Consensus
 	L3ConsensusTimestamp time.Time
 	L3DNBlockHeight      int64
-	L3SourceHash         []byte                   // Receipt start hash
-	L3TargetHash         []byte                   // Receipt anchor hash
+	L3SourceHash         []byte                    // Receipt start hash
+	L3TargetHash         []byte                    // Receipt anchor hash
 	L3ReceiptEntries     []database.MerklePathNode // Receipt path entries
 
 	// Complete proof data
@@ -218,8 +218,8 @@ type UnifiedProofCycleRequest struct {
 	BundleID            [32]byte `json:"bundle_id"`
 
 	// Merkle inclusion proof details (for MerkleTreeVisualization)
-	LeafHash   []byte                   `json:"leaf_hash,omitempty"`   // The leaf (transaction) hash
-	LeafIndex  int                      `json:"leaf_index,omitempty"`  // Position in the tree (0-indexed)
+	LeafHash   []byte                    `json:"leaf_hash,omitempty"`   // The leaf (transaction) hash
+	LeafIndex  int                       `json:"leaf_index,omitempty"`  // Position in the tree (0-indexed)
 	MerklePath []database.MerklePathNode `json:"merkle_path,omitempty"` // Sibling hashes for proof
 
 	// Additional context
@@ -263,13 +263,13 @@ type UnifiedProofCycleResult struct {
 	ChainExecutionIDs  []uuid.UUID                `json:"chain_execution_ids,omitempty"`
 
 	// Phase 8 results
-	Attestations          []*attestation.Attestation          `json:"attestations,omitempty"`
+	Attestations          []*attestation.Attestation         `json:"attestations,omitempty"`
 	AggregatedAttestation *attestation.AggregatedAttestation `json:"aggregated_attestation,omitempty"`
-	AttestationID         *uuid.UUID                          `json:"attestation_id,omitempty"`
-	ThresholdMet          bool                                `json:"threshold_met"`
+	AttestationID         *uuid.UUID                         `json:"attestation_id,omitempty"`
+	ThresholdMet          bool                               `json:"threshold_met"`
 
 	// Phase 9 results
-	WriteBackTxHash string `json:"write_back_tx_hash,omitempty"`
+	WriteBackTxHash  string `json:"write_back_tx_hash,omitempty"`
 	WriteBackSuccess bool   `json:"write_back_success"`
 
 	// Timing
@@ -316,8 +316,8 @@ type UnifiedOrchestrator struct {
 	multiLegAggregator *MultiLegAggregator
 
 	// State
-	running     bool
-	stopCh      chan struct{}
+	running bool
+	stopCh  chan struct{}
 }
 
 // activeCycle tracks a running proof cycle
@@ -1123,29 +1123,29 @@ func (o *UnifiedOrchestrator) persistChainExecution(ctx context.Context, cycle *
 // getNetworkName returns human-readable network name from chain ID
 func getNetworkName(chainID string) string {
 	networkNames := map[string]string{
-		"1":          "ethereum-mainnet",
-		"11155111":   "ethereum-sepolia",
-		"137":        "polygon-mainnet",
-		"80001":      "polygon-mumbai",
-		"80002":      "polygon-amoy",
-		"42161":      "arbitrum-one",
-		"421614":     "arbitrum-sepolia",
-		"10":         "optimism-mainnet",
-		"11155420":   "optimism-sepolia",
-		"8453":       "base-mainnet",
-		"84532":      "base-sepolia",
-		"43114":      "avalanche-mainnet",
-		"43113":      "avalanche-fuji",
-		"56":         "bsc-mainnet",
-		"97":         "bsc-testnet",
-		"1284":       "moonbeam",
-		"1287":       "moonbase-alpha",
-		"2494104990": "tron-shasta",
-		"728126428":  "tron-mainnet",
-		"101":        "solana-mainnet",
-		"103":        "solana-devnet",
-		"397":        "near-mainnet",
-		"398":        "near-testnet",
+		"1":           "ethereum-mainnet",
+		"11155111":    "ethereum-sepolia",
+		"137":         "polygon-mainnet",
+		"80001":       "polygon-mumbai",
+		"80002":       "polygon-amoy",
+		"42161":       "arbitrum-one",
+		"421614":      "arbitrum-sepolia",
+		"10":          "optimism-mainnet",
+		"11155420":    "optimism-sepolia",
+		"8453":        "base-mainnet",
+		"84532":       "base-sepolia",
+		"43114":       "avalanche-mainnet",
+		"43113":       "avalanche-fuji",
+		"56":          "bsc-mainnet",
+		"97":          "bsc-testnet",
+		"1284":        "moonbeam",
+		"1287":        "moonbase-alpha",
+		"2494104990":  "tron-shasta",
+		"728126428":   "tron-mainnet",
+		"101":         "solana-mainnet",
+		"103":         "solana-devnet",
+		"397":         "near-mainnet",
+		"398":         "near-testnet",
 		"2":           "aptos-testnet",
 		"sui-testnet": "sui-testnet",
 		"sui-mainnet": "sui-mainnet",
@@ -1401,18 +1401,18 @@ func (o *UnifiedOrchestrator) persistAggregatedAttestation(ctx context.Context, 
 
 // PeerAttestationRequest is sent to peer validators requesting attestation
 type PeerAttestationRequest struct {
-	CycleID      string                        `json:"cycle_id"`
+	CycleID      string                          `json:"cycle_id"`
 	Message      *attestation.AttestationMessage `json:"message"`
-	Scheme       attestation.AttestationScheme `json:"scheme"`
-	RequestingID string                        `json:"requesting_validator"`
-	RequestedAt  time.Time                     `json:"requested_at"`
+	Scheme       attestation.AttestationScheme   `json:"scheme"`
+	RequestingID string                          `json:"requesting_validator"`
+	RequestedAt  time.Time                       `json:"requested_at"`
 }
 
 // PeerAttestationResponse is the response from a peer validator
 type PeerAttestationResponse struct {
-	CycleID     string                    `json:"cycle_id"`
-	Success     bool                      `json:"success"`
-	Error       string                    `json:"error,omitempty"`
+	CycleID     string                   `json:"cycle_id"`
+	Success     bool                     `json:"success"`
+	Error       string                   `json:"error,omitempty"`
 	Attestation *attestation.Attestation `json:"attestation,omitempty"`
 }
 
@@ -1944,7 +1944,7 @@ func (o *UnifiedOrchestrator) buildAttestationBundleFromCycle(cycle *activeCycle
 		FinalizedAt:         time.Now().UTC(),
 		TxGasUsed:           obs.GasUsed,
 		ObservedByValidator: obs.ObserverValidatorID,
-		TxFrom:             common.HexToAddress(obs.TxFrom),
+		TxFrom:              common.HexToAddress(obs.TxFrom),
 		// Native (non-EVM) identifiers - preserve original strings for chains like NEAR
 		NativeTxHash:    obs.TxHash,
 		NativeBlockHash: obs.BlockHash,
@@ -2347,8 +2347,8 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 		AccountURL:   req.AccumulateAccountURL, // Use actual Accumulate account URL (ADI)
 		BatchID:      req.BatchID,
 		MerkleRoot:   req.MerkleRoot[:],
-		LeafHash:     req.LeafHash,   // Transaction hash (leaf in Merkle tree)
-		LeafIndex:    leafIndexPtr,   // Position in the tree
+		LeafHash:     req.LeafHash, // Transaction hash (leaf in Merkle tree)
+		LeafIndex:    leafIndexPtr, // Position in the tree
 		ProofClass:   proofClass,
 		ValidatorID:  o.config.ValidatorID,
 		ArtifactJSON: artifactJSON,
@@ -2702,11 +2702,11 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 
 				// Record the failure in chained_proof_layers so we have a record of the attempt
 				failJSON, _ := json.Marshal(map[string]interface{}{
-					"status":      "failed",
-					"error":       err.Error(),
-					"account_url": accountURL,
-					"tx_hash":     txHash,
-					"bvn":         bvn,
+					"status":       "failed",
+					"error":        err.Error(),
+					"account_url":  accountURL,
+					"tx_hash":      txHash,
+					"bvn":          bvn,
 					"attempted_at": time.Now().UTC(),
 				})
 				failLayer := &database.NewChainedProofLayer{
@@ -2722,87 +2722,87 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 					fmt.Printf("Recorded chained proof generation failure for proof_id=%s\n", proofArtifact.ProofID)
 				}
 			} else if chainedProof != nil {
-			// Store for bundle creation later
-			storedChainedProof = chainedProof
+				// Store for bundle creation later
+				storedChainedProof = chainedProof
 
-			// L1: Transaction → BVN
-			l1JSON, _ := json.Marshal(map[string]interface{}{
-				"layer":          "L1",
-				"description":    "Transaction to BVN",
-				"bvn_partition":  chainedProof.L1BVNPartition,
-				"receipt_anchor": hex.EncodeToString(chainedProof.L1ReceiptAnchor),
-				"source_hash":    hex.EncodeToString(chainedProof.L1SourceHash),
-				"target_hash":    hex.EncodeToString(chainedProof.L1TargetHash),
-				"path_depth":     len(chainedProof.L1ReceiptEntries),
-			})
-			l1Layer := &database.NewChainedProofLayer{
-				ProofID:        proofArtifact.ProofID,
-				LayerNumber:    1,
-				LayerName:      "L1 - Transaction to BVN",
-				BVNPartition:   &chainedProof.L1BVNPartition,
-				ReceiptAnchor:  chainedProof.L1ReceiptAnchor,
-				BVNRoot:        chainedProof.L1BVNRoot,
-				SourceHash:     chainedProof.L1SourceHash,
-				TargetHash:     chainedProof.L1TargetHash,
-				ReceiptEntries: chainedProof.L1ReceiptEntries,
-				LayerJSON:      l1JSON,
-			}
-			if _, err := o.config.Repos.ProofArtifacts.CreateChainedProofLayer(ctx, l1Layer); err != nil {
-				fmt.Printf("Warning: failed to create L1 chained layer: %v\n", err)
-			}
+				// L1: Transaction → BVN
+				l1JSON, _ := json.Marshal(map[string]interface{}{
+					"layer":          "L1",
+					"description":    "Transaction to BVN",
+					"bvn_partition":  chainedProof.L1BVNPartition,
+					"receipt_anchor": hex.EncodeToString(chainedProof.L1ReceiptAnchor),
+					"source_hash":    hex.EncodeToString(chainedProof.L1SourceHash),
+					"target_hash":    hex.EncodeToString(chainedProof.L1TargetHash),
+					"path_depth":     len(chainedProof.L1ReceiptEntries),
+				})
+				l1Layer := &database.NewChainedProofLayer{
+					ProofID:        proofArtifact.ProofID,
+					LayerNumber:    1,
+					LayerName:      "L1 - Transaction to BVN",
+					BVNPartition:   &chainedProof.L1BVNPartition,
+					ReceiptAnchor:  chainedProof.L1ReceiptAnchor,
+					BVNRoot:        chainedProof.L1BVNRoot,
+					SourceHash:     chainedProof.L1SourceHash,
+					TargetHash:     chainedProof.L1TargetHash,
+					ReceiptEntries: chainedProof.L1ReceiptEntries,
+					LayerJSON:      l1JSON,
+				}
+				if _, err := o.config.Repos.ProofArtifacts.CreateChainedProofLayer(ctx, l1Layer); err != nil {
+					fmt.Printf("Warning: failed to create L1 chained layer: %v\n", err)
+				}
 
-			// L2: BVN → DN
-			l2JSON, _ := json.Marshal(map[string]interface{}{
-				"layer":       "L2",
-				"description": "BVN to DN",
-				"anchor_seq":  chainedProof.L2AnchorSeq,
-				"source_hash": hex.EncodeToString(chainedProof.L2SourceHash),
-				"target_hash": hex.EncodeToString(chainedProof.L2TargetHash),
-				"path_depth":  len(chainedProof.L2ReceiptEntries),
-			})
-			l2Layer := &database.NewChainedProofLayer{
-				ProofID:        proofArtifact.ProofID,
-				LayerNumber:    2,
-				LayerName:      "L2 - BVN to DN",
-				DNRoot:         chainedProof.L2DNRoot,
-				AnchorSequence: &chainedProof.L2AnchorSeq,
-				DNBlockHash:    chainedProof.L2DNBlockHash,
-				SourceHash:     chainedProof.L2SourceHash,
-				TargetHash:     chainedProof.L2TargetHash,
-				ReceiptEntries: chainedProof.L2ReceiptEntries,
-				LayerJSON:      l2JSON,
-			}
-			if _, err := o.config.Repos.ProofArtifacts.CreateChainedProofLayer(ctx, l2Layer); err != nil {
-				fmt.Printf("Warning: failed to create L2 chained layer: %v\n", err)
-			}
+				// L2: BVN → DN
+				l2JSON, _ := json.Marshal(map[string]interface{}{
+					"layer":       "L2",
+					"description": "BVN to DN",
+					"anchor_seq":  chainedProof.L2AnchorSeq,
+					"source_hash": hex.EncodeToString(chainedProof.L2SourceHash),
+					"target_hash": hex.EncodeToString(chainedProof.L2TargetHash),
+					"path_depth":  len(chainedProof.L2ReceiptEntries),
+				})
+				l2Layer := &database.NewChainedProofLayer{
+					ProofID:        proofArtifact.ProofID,
+					LayerNumber:    2,
+					LayerName:      "L2 - BVN to DN",
+					DNRoot:         chainedProof.L2DNRoot,
+					AnchorSequence: &chainedProof.L2AnchorSeq,
+					DNBlockHash:    chainedProof.L2DNBlockHash,
+					SourceHash:     chainedProof.L2SourceHash,
+					TargetHash:     chainedProof.L2TargetHash,
+					ReceiptEntries: chainedProof.L2ReceiptEntries,
+					LayerJSON:      l2JSON,
+				}
+				if _, err := o.config.Repos.ProofArtifacts.CreateChainedProofLayer(ctx, l2Layer); err != nil {
+					fmt.Printf("Warning: failed to create L2 chained layer: %v\n", err)
+				}
 
-			// L3: DN → Consensus
-			l3JSON, _ := json.Marshal(map[string]interface{}{
-				"layer":               "L3",
-				"description":         "DN to Consensus",
-				"dn_block_height":     chainedProof.L3DNBlockHeight,
-				"consensus_timestamp": chainedProof.L3ConsensusTimestamp,
-				"source_hash":         hex.EncodeToString(chainedProof.L3SourceHash),
-				"target_hash":         hex.EncodeToString(chainedProof.L3TargetHash),
-				"path_depth":          len(chainedProof.L3ReceiptEntries),
-			})
-			consensusTS := chainedProof.L3ConsensusTimestamp
-			l3Layer := &database.NewChainedProofLayer{
-				ProofID:            proofArtifact.ProofID,
-				LayerNumber:        3,
-				LayerName:          "L3 - DN to Consensus",
-				DNBlockHeight:      &chainedProof.L3DNBlockHeight,
-				ConsensusTimestamp: &consensusTS,
-				SourceHash:         chainedProof.L3SourceHash,
-				TargetHash:         chainedProof.L3TargetHash,
-				ReceiptEntries:     chainedProof.L3ReceiptEntries,
-				LayerJSON:          l3JSON,
-			}
-			if _, err := o.config.Repos.ProofArtifacts.CreateChainedProofLayer(ctx, l3Layer); err != nil {
-				fmt.Printf("Warning: failed to create L3 chained layer: %v\n", err)
-			}
+				// L3: DN → Consensus
+				l3JSON, _ := json.Marshal(map[string]interface{}{
+					"layer":               "L3",
+					"description":         "DN to Consensus",
+					"dn_block_height":     chainedProof.L3DNBlockHeight,
+					"consensus_timestamp": chainedProof.L3ConsensusTimestamp,
+					"source_hash":         hex.EncodeToString(chainedProof.L3SourceHash),
+					"target_hash":         hex.EncodeToString(chainedProof.L3TargetHash),
+					"path_depth":          len(chainedProof.L3ReceiptEntries),
+				})
+				consensusTS := chainedProof.L3ConsensusTimestamp
+				l3Layer := &database.NewChainedProofLayer{
+					ProofID:            proofArtifact.ProofID,
+					LayerNumber:        3,
+					LayerName:          "L3 - DN to Consensus",
+					DNBlockHeight:      &chainedProof.L3DNBlockHeight,
+					ConsensusTimestamp: &consensusTS,
+					SourceHash:         chainedProof.L3SourceHash,
+					TargetHash:         chainedProof.L3TargetHash,
+					ReceiptEntries:     chainedProof.L3ReceiptEntries,
+					LayerJSON:          l3JSON,
+				}
+				if _, err := o.config.Repos.ProofArtifacts.CreateChainedProofLayer(ctx, l3Layer); err != nil {
+					fmt.Printf("Warning: failed to create L3 chained layer: %v\n", err)
+				}
 
-			fmt.Printf("Created chained_proof_layers L1/L2/L3 for proof_id=%s\n", proofArtifact.ProofID)
+				fmt.Printf("Created chained_proof_layers L1/L2/L3 for proof_id=%s\n", proofArtifact.ProofID)
 			}
 		} else {
 			fmt.Printf("Note: Cannot generate chained proof - missing accountURL or txHash\n")
@@ -3151,9 +3151,9 @@ func (o *UnifiedOrchestrator) generateBatchProofArtifacts(ctx context.Context, c
 			AccountURL:   batchTx.AccountURL,
 			BatchID:      req.BatchID,
 			MerkleRoot:   req.MerkleRoot[:],
-			LeafHash:     batchTx.TxHash,   // Transaction hash is the leaf
-			LeafIndex:    leafIndexPtr,     // Position in the Merkle tree
-			MerklePath:   merklePath,       // Merkle path for visualization
+			LeafHash:     batchTx.TxHash, // Transaction hash is the leaf
+			LeafIndex:    leafIndexPtr,   // Position in the Merkle tree
+			MerklePath:   merklePath,     // Merkle path for visualization
 			ProofClass:   proofClass,
 			ValidatorID:  o.config.ValidatorID,
 			ArtifactJSON: artifactJSON,

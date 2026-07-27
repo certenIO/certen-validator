@@ -100,16 +100,16 @@ func (c *CardanoClient) CreateAnchor(ctx context.Context, req CardanoCreateAncho
 // =============================================================================
 
 type CardanoBLSProofJSON struct {
-	ProofA              string `json:"proof_a"`
-	ProofB              string `json:"proof_b"`
-	ProofC              string `json:"proof_c"`
-	Commitments         string `json:"commitments"`
-	CommitmentPok       string `json:"commitment_pok"`
-	MessageHash         string `json:"message_hash"`
-	PubkeyCommitment    string `json:"pubkey_commitment"`
-	SignedVotingPower   uint64 `json:"signed_voting_power"`
-	TotalVotingPower    uint64 `json:"total_voting_power"`
-	ThresholdNumerator  uint64 `json:"threshold_numerator"`
+	ProofA               string `json:"proof_a"`
+	ProofB               string `json:"proof_b"`
+	ProofC               string `json:"proof_c"`
+	Commitments          string `json:"commitments"`
+	CommitmentPok        string `json:"commitment_pok"`
+	MessageHash          string `json:"message_hash"`
+	PubkeyCommitment     string `json:"pubkey_commitment"`
+	SignedVotingPower    uint64 `json:"signed_voting_power"`
+	TotalVotingPower     uint64 `json:"total_voting_power"`
+	ThresholdNumerator   uint64 `json:"threshold_numerator"`
 	ThresholdDenominator uint64 `json:"threshold_denominator"`
 }
 
@@ -226,10 +226,10 @@ type CardanoCall struct {
 }
 
 type CardanoAccountGovernanceProof struct {
-	ADIURL                      string   `json:"adi_url"`
-	AnchorID                    string   `json:"anchor_id"`
-	MerkleProof                 []string `json:"merkle_proof"`
-	KeyBookProof                struct {
+	ADIURL       string   `json:"adi_url"`
+	AnchorID     string   `json:"anchor_id"`
+	MerkleProof  []string `json:"merkle_proof"`
+	KeyBookProof struct {
 		KeyBookURL     string `json:"key_book_url"`
 		KeyBookRoot    string `json:"key_book_root"`
 		HierarchyDepth uint64 `json:"hierarchy_depth"`

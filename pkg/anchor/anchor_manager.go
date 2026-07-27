@@ -15,13 +15,13 @@ import (
 	"math/big"
 	"time"
 
-	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/certen/independant-validator/pkg/accumulate"
 	"github.com/certen/independant-validator/pkg/config"
 	"github.com/certen/independant-validator/pkg/ethereum"
 	"github.com/certen/independant-validator/pkg/ledger"
 	"github.com/certen/independant-validator/pkg/proof"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
 )
 
 // CertenAnchor contract ABI - canonical anchor format with three commitments
@@ -259,7 +259,7 @@ const certenAnchorV3ABI = certenAnchorABI + `[
 // This is a thin orchestration layer that uses the low-level ethereum.Client
 type AnchorManager struct {
 	liteClient     *accumulate.LiteClientAdapter // Temporarily concrete type for proof generator compatibility
-	ethereumClient *ethereum.Client     // Low-level EVM/contract client
+	ethereumClient *ethereum.Client              // Low-level EVM/contract client
 	chains         map[string]Chain
 	config         *config.Config
 	batchScheduler *BatchScheduler
@@ -291,32 +291,32 @@ type Chain interface {
 
 // AnchorData represents canonical data to be anchored cross-chain
 type AnchorData struct {
-	AnchorID              string                 `json:"anchor_id"` // bundleId / validatorBlockID
-	AccumulateBlockHeight uint64                 `json:"accumulate_block_height"`
-	AccumulateBlockHash   string                 `json:"accumulate_block_hash"`
+	AnchorID              string `json:"anchor_id"` // bundleId / validatorBlockID
+	AccumulateBlockHeight uint64 `json:"accumulate_block_height"`
+	AccumulateBlockHash   string `json:"accumulate_block_hash"`
 
 	// Canonical commitments derived from Intent + ValidatorBlock
-	OperationCommitment   []byte                 `json:"operation_commitment"`   // 32 bytes
-	CrossChainCommitment  []byte                 `json:"cross_chain_commitment"` // 32 bytes
-	GovernanceRoot        []byte                 `json:"governance_root"`        // 32 bytes
+	OperationCommitment  []byte `json:"operation_commitment"`   // 32 bytes
+	CrossChainCommitment []byte `json:"cross_chain_commitment"` // 32 bytes
+	GovernanceRoot       []byte `json:"governance_root"`        // 32 bytes
 
-	ProofData             *proof.CertenProof     `json:"proof_data,omitempty"`
-	ValidatorID           string                 `json:"validator_id"`
-	Timestamp             time.Time              `json:"timestamp"`
-	BatchID               string    `json:"batch_id,omitempty"`
+	ProofData   *proof.CertenProof `json:"proof_data,omitempty"`
+	ValidatorID string             `json:"validator_id"`
+	Timestamp   time.Time          `json:"timestamp"`
+	BatchID     string             `json:"batch_id,omitempty"`
 }
 
 // AnchorResult represents the result of an anchoring operation
 type AnchorResult struct {
-	AnchorID        string    `json:"anchor_id"`
-	TransactionHash string    `json:"transaction_hash"`
-	BlockNumber     uint64    `json:"block_number"`
-	BlockHash       string    `json:"block_hash"`
-	GasUsed         uint64    `json:"gas_used"`
-	GasCost         *big.Int  `json:"gas_cost"`
-	Success         bool      `json:"success"`
-	Timestamp       time.Time `json:"timestamp"`
-	ChainName       string    `json:"chain_name"`
+	AnchorID         string        `json:"anchor_id"`
+	TransactionHash  string        `json:"transaction_hash"`
+	BlockNumber      uint64        `json:"block_number"`
+	BlockHash        string        `json:"block_hash"`
+	GasUsed          uint64        `json:"gas_used"`
+	GasCost          *big.Int      `json:"gas_cost"`
+	Success          bool          `json:"success"`
+	Timestamp        time.Time     `json:"timestamp"`
+	ChainName        string        `json:"chain_name"`
 	ConfirmationTime time.Duration `json:"confirmation_time"`
 }
 
@@ -339,11 +339,11 @@ type Anchor struct {
 
 // GasEstimate represents gas cost estimation for anchoring
 type GasEstimate struct {
-	GasLimit    uint64   `json:"gas_limit"`
-	GasPrice    *big.Int `json:"gas_price"`
-	TotalCost   *big.Int `json:"total_cost"`
-	USDCost     float64  `json:"usd_cost,omitempty"`
-	ChainName   string   `json:"chain_name"`
+	GasLimit    uint64    `json:"gas_limit"`
+	GasPrice    *big.Int  `json:"gas_price"`
+	TotalCost   *big.Int  `json:"total_cost"`
+	USDCost     float64   `json:"usd_cost,omitempty"`
+	ChainName   string    `json:"chain_name"`
 	EstimatedAt time.Time `json:"estimated_at"`
 }
 
@@ -382,7 +382,7 @@ type LegData struct {
 type MultiLegAnchorRequest struct {
 	IntentID          string     `json:"intent_id"`
 	OperationID       string     `json:"operation_id"`
-	ProofRoot         []byte     `json:"proof_root"`         // 32 bytes - single proof for all legs
+	ProofRoot         []byte     `json:"proof_root"`           // 32 bytes - single proof for all legs
 	TotalLegsInIntent int        `json:"total_legs_in_intent"` // Total legs across ALL chains
 	Legs              []*LegData `json:"legs"`                 // Legs for THIS chain only
 	TargetChain       string     `json:"target_chain"`
@@ -407,8 +407,8 @@ type MultiLegAnchorResult struct {
 type ChainGroupAnchorRequest struct {
 	IntentID          string                 `json:"intent_id"`
 	OperationID       string                 `json:"operation_id"`
-	ChainKey          string                 `json:"chain_key"`   // e.g., "ethereum:1"
-	ProofRoot         []byte                 `json:"proof_root"`  // Single proof for entire intent
+	ChainKey          string                 `json:"chain_key"`  // e.g., "ethereum:1"
+	ProofRoot         []byte                 `json:"proof_root"` // Single proof for entire intent
 	TotalLegsInIntent int                    `json:"total_legs_in_intent"`
 	Legs              []*LegData             `json:"legs"`
 	ExecutionMode     string                 `json:"execution_mode"` // "sequential", "parallel", "atomic"
@@ -419,27 +419,27 @@ type ChainGroupAnchorRequest struct {
 
 // IntentAnchorStatus tracks the anchoring status for a multi-leg intent
 type IntentAnchorStatus struct {
-	IntentID           string                        `json:"intent_id"`
-	TotalLegs          int                           `json:"total_legs"`
-	ChainGroups        map[string]*ChainGroupStatus  `json:"chain_groups"`
-	AllChainsAnchored  bool                          `json:"all_chains_anchored"`
-	AllChainsVerified  bool                          `json:"all_chains_verified"`
-	ExecutionMode      string                        `json:"execution_mode"`
-	CreatedAt          time.Time                     `json:"created_at"`
-	CompletedAt        *time.Time                    `json:"completed_at,omitempty"`
+	IntentID          string                       `json:"intent_id"`
+	TotalLegs         int                          `json:"total_legs"`
+	ChainGroups       map[string]*ChainGroupStatus `json:"chain_groups"`
+	AllChainsAnchored bool                         `json:"all_chains_anchored"`
+	AllChainsVerified bool                         `json:"all_chains_verified"`
+	ExecutionMode     string                       `json:"execution_mode"`
+	CreatedAt         time.Time                    `json:"created_at"`
+	CompletedAt       *time.Time                   `json:"completed_at,omitempty"`
 }
 
 // ChainGroupStatus tracks anchoring status for a specific chain group
 type ChainGroupStatus struct {
-	ChainKey      string    `json:"chain_key"`
-	LegsCount     int       `json:"legs_count"`
-	Anchored      bool      `json:"anchored"`
-	Verified      bool      `json:"verified"`
-	TxHash        string    `json:"tx_hash,omitempty"`
-	BlockNumber   int64     `json:"block_number,omitempty"`
-	AnchoredAt    time.Time `json:"anchored_at,omitempty"`
-	VerifiedAt    *time.Time `json:"verified_at,omitempty"`
-	Error         string    `json:"error,omitempty"`
+	ChainKey    string     `json:"chain_key"`
+	LegsCount   int        `json:"legs_count"`
+	Anchored    bool       `json:"anchored"`
+	Verified    bool       `json:"verified"`
+	TxHash      string     `json:"tx_hash,omitempty"`
+	BlockNumber int64      `json:"block_number,omitempty"`
+	AnchoredAt  time.Time  `json:"anchored_at,omitempty"`
+	VerifiedAt  *time.Time `json:"verified_at,omitempty"`
+	Error       string     `json:"error,omitempty"`
 }
 
 // NewAnchorManager creates a new unified anchor manager with shared proof generator
@@ -712,13 +712,13 @@ func (am *AnchorManager) CreateAnchor(ctx context.Context, req *AnchorRequest) (
 
 	// Create response
 	response := &AnchorResponse{
-		AnchorID:     anchorData.AnchorID,
-		RequestID:    req.RequestID,
-		Success:      true,
-		Results:      results,
-		ProofData:    certenProof,
-		CreatedAt:    time.Now(),
-		ValidatorID:  am.config.ValidatorID,
+		AnchorID:    anchorData.AnchorID,
+		RequestID:   req.RequestID,
+		Success:     true,
+		Results:     results,
+		ProofData:   certenProof,
+		CreatedAt:   time.Now(),
+		ValidatorID: am.config.ValidatorID,
 	}
 
 	return response, nil
@@ -754,8 +754,8 @@ func (am *AnchorManager) VerifyAnchor(ctx context.Context, anchorID string) (*An
 		}
 
 		verification.ChainResults[chainName] = &ChainVerificationResult{
-			ChainName: chainName,
-			Valid:     isValid,
+			ChainName:  chainName,
+			Valid:      isValid,
 			VerifiedAt: time.Now(),
 		}
 
@@ -802,12 +802,12 @@ func (am *AnchorManager) initializeChains() error {
 		case "ethereum":
 			// Use the already-initialized ethereum client instead of creating a new connection
 			ethChain, err := NewEthereumChain(&EthereumConfig{
-				URL:            am.config.EthereumURL,
-				ChainID:        am.config.EthChainID,
-				PrivateKey:     am.config.EthPrivateKey,
+				URL:             am.config.EthereumURL,
+				ChainID:         am.config.EthChainID,
+				PrivateKey:      am.config.EthPrivateKey,
 				ContractAddress: am.config.AnchorContractAddress,
-				GasLimit:       am.batchScheduler.batchConfig.GasLimit,
-				GasPrice:       am.batchScheduler.batchConfig.GasPrice,
+				GasLimit:        am.batchScheduler.batchConfig.GasLimit,
+				GasPrice:        am.batchScheduler.batchConfig.GasPrice,
 			}, am.ethereumClient) // Pass the low-level client
 			if err != nil {
 				return fmt.Errorf("failed to initialize Ethereum chain: %w", err)
@@ -830,26 +830,26 @@ type AnchorRequest struct {
 	AccountURL        string   `json:"account_url,omitempty"`
 	TransactionHash   string   `json:"transaction_hash,omitempty"`
 	TargetChains      []string `json:"target_chains,omitempty"`
-	Priority          string   `json:"priority,omitempty"` // "low", "normal", "high"
+	Priority          string   `json:"priority,omitempty"`            // "low", "normal", "high"
 	CertenBlockHeight uint64   `json:"certen_block_height,omitempty"` // Current Certen validator block height
 }
 
 type AnchorResponse struct {
-	AnchorID     string                    `json:"anchor_id"`
-	RequestID    string                    `json:"request_id"`
-	Success      bool                      `json:"success"`
-	Results      map[string]*AnchorResult  `json:"results"`
-	ProofData    *proof.CertenProof        `json:"proof_data,omitempty"`
-	CreatedAt    time.Time                 `json:"created_at"`
-	ValidatorID  string                    `json:"validator_id"`
-	Message      string                    `json:"message,omitempty"`
+	AnchorID    string                   `json:"anchor_id"`
+	RequestID   string                   `json:"request_id"`
+	Success     bool                     `json:"success"`
+	Results     map[string]*AnchorResult `json:"results"`
+	ProofData   *proof.CertenProof       `json:"proof_data,omitempty"`
+	CreatedAt   time.Time                `json:"created_at"`
+	ValidatorID string                   `json:"validator_id"`
+	Message     string                   `json:"message,omitempty"`
 }
 
 type AnchorVerification struct {
-	AnchorID     string                            `json:"anchor_id"`
-	OverallValid bool                              `json:"overall_valid"`
+	AnchorID     string                              `json:"anchor_id"`
+	OverallValid bool                                `json:"overall_valid"`
 	ChainResults map[string]*ChainVerificationResult `json:"chain_results"`
-	VerifiedAt   time.Time                         `json:"verified_at"`
+	VerifiedAt   time.Time                           `json:"verified_at"`
 }
 
 type ChainVerificationResult struct {
@@ -867,7 +867,7 @@ type AnchorInfo struct {
 
 // EthereumChain implementation
 type EthereumChain struct {
-	ethereumClient *ethereum.Client  // Use low-level client instead
+	ethereumClient *ethereum.Client // Use low-level client instead
 	config         *EthereumConfig
 }
 
@@ -1253,8 +1253,8 @@ func (ec *EthereumChain) CreateAnchorWithLegs(ctx context.Context, req *MultiLeg
 		certenAnchorV4ABI,
 		ec.config.PrivateKey,
 		"createAnchorWithLegs",
-		ec.config.GasLimit * 2, // Higher gas limit for multi-leg
-		5, // maxRetries
+		ec.config.GasLimit*2, // Higher gas limit for multi-leg
+		5,                    // maxRetries
 		intentID,
 		operationID,
 		proofRoot,
@@ -1331,8 +1331,8 @@ func (ec *EthereumChain) ExecuteLegs(ctx context.Context, intentID string, merkl
 		certenAnchorV4ABI,
 		ec.config.PrivateKey,
 		"executeLegs",
-		ec.config.GasLimit * 3, // Higher gas limit for proof execution
-		5, // maxRetries
+		ec.config.GasLimit*3, // Higher gas limit for proof execution
+		5,                    // maxRetries
 		intentIDBytes,
 		merkleProof,
 		blsSignature,
@@ -1410,11 +1410,11 @@ func (ec *EthereumChain) GetIntentAnchorStatus(ctx context.Context, intentID str
 		TotalLegs: int(totalLegs),
 		ChainGroups: map[string]*ChainGroupStatus{
 			"ethereum": {
-				ChainKey:    "ethereum",
-				LegsCount:   int(legsOnChain),
-				Anchored:    createdAt.Int64() > 0,
-				Verified:    verified,
-				AnchoredAt:  time.Unix(createdAt.Int64(), 0),
+				ChainKey:   "ethereum",
+				LegsCount:  int(legsOnChain),
+				Anchored:   createdAt.Int64() > 0,
+				Verified:   verified,
+				AnchoredAt: time.Unix(createdAt.Int64(), 0),
 			},
 		},
 		AllChainsAnchored: createdAt.Int64() > 0,
@@ -1733,8 +1733,8 @@ func (ec *EthereumChain) ExecuteComprehensiveProof(ctx context.Context, anchorID
 		certenAnchorABI,
 		ec.config.PrivateKey,
 		"executeComprehensiveProof",
-		ec.config.GasLimit * 5, // Higher gas limit for proof execution
-		5, // maxRetries
+		ec.config.GasLimit*5, // Higher gas limit for proof execution
+		5,                    // maxRetries
 		anchorID,
 		proof,
 	)

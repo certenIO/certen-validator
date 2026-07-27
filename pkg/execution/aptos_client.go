@@ -42,7 +42,7 @@ type AptosClient struct {
 
 // Aptos constants
 const (
-	aptosTestnetChainID uint8 = 2
+	aptosTestnetChainID uint8  = 2
 	aptosMaxGasAmount   uint64 = 500_000
 	aptosGasUnitPrice   uint64 = 100
 	aptosExpirationSecs uint64 = 600 // 10 minutes
@@ -138,7 +138,7 @@ func (ac *AptosClient) CreateAnchor(
 		"function":       function,
 		"type_arguments": []string{},
 		"arguments": []interface{}{
-			ac.packageAddress,                        // anchor_owner: address (AnchorStateV5 lives at package address)
+			ac.packageAddress,                         // anchor_owner: address (AnchorStateV5 lives at package address)
 			bytes32ToU256String(bundleId),             // bundle_id: u256
 			bytes32ToU256String(adiURLHash),           // adi_url_hash: u256
 			bytes32ToU256String(operationCommitment),  // operation_commitment: u256
@@ -251,14 +251,14 @@ type AptosCertenProof struct {
 	GovProvidedSignatures uint64
 
 	// BLSProofData fields
-	BLSProofBytes          []byte
-	BLSMessageHash         []byte
-	BLSPubkeyCommitment    []byte
-	BLSSignedVotingPower   uint64
-	BLSTotalVotingPower    uint64
-	BLSThresholdNumerator  uint64
+	BLSProofBytes           []byte
+	BLSMessageHash          []byte
+	BLSPubkeyCommitment     []byte
+	BLSSignedVotingPower    uint64
+	BLSTotalVotingPower     uint64
+	BLSThresholdNumerator   uint64
 	BLSThresholdDenominator uint64
-	BLSValidatorAddresses  []string // 0x+64hex addresses
+	BLSValidatorAddresses   []string // 0x+64hex addresses
 
 	// CommitmentData fields
 	CommitOperationCommitment  [32]byte
@@ -319,56 +319,56 @@ func (ac *AptosClient) submitComprehensiveProofBCS(
 
 	// Call the flat entry function variant that accepts all proof fields individually
 	payload := map[string]interface{}{
-		"type":          "entry_function_payload",
-		"function":      fmt.Sprintf("%s::certen_anchor_v6_1::execute_comprehensive_proof_flat", ac.packageAddress),
+		"type":           "entry_function_payload",
+		"function":       fmt.Sprintf("%s::certen_anchor_v6_1::execute_comprehensive_proof_flat", ac.packageAddress),
 		"type_arguments": []string{},
 		"arguments": []interface{}{
-			ac.packageAddress,                            // anchor_owner: address (AnchorState lives at package address)
-			bytes32ToU256String(anchorId),                // anchor_id: u256
-			bytes32ToU256String(proof.TransactionHash),   // transaction_hash: u256
-			bytes32ToU256String(proof.MerkleRoot),        // merkle_root: u256
-			proofHashesHex,                               // proof_hashes: vector<u256>
-			bytes32ToU256String(proof.LeafHash),          // leaf_hash: u256
+			ac.packageAddress,                          // anchor_owner: address (AnchorState lives at package address)
+			bytes32ToU256String(anchorId),              // anchor_id: u256
+			bytes32ToU256String(proof.TransactionHash), // transaction_hash: u256
+			bytes32ToU256String(proof.MerkleRoot),      // merkle_root: u256
+			proofHashesHex,                             // proof_hashes: vector<u256>
+			bytes32ToU256String(proof.LeafHash),        // leaf_hash: u256
 			// GovernanceProofData fields
 			"0x" + hex.EncodeToString([]byte(proof.GovKeyBookURL)), // gov_key_book_url: vector<u8>
-			bytes32ToU256String(proof.GovKeyBookRoot),               // gov_key_book_root: u256
-			keyPageProofsHex,                                        // gov_key_page_proofs: vector<u256>
-			proof.GovAuthorityAddress,                               // gov_authority_address: address
-			uint8(proof.GovAuthorityLevel),                           // gov_authority_level: u8 (JSON number, not string)
-			fmt.Sprintf("%d", proof.GovNonce),                       // gov_nonce: u64
-			fmt.Sprintf("%d", proof.GovRequiredSignatures),          // gov_required_signatures: u64
-			fmt.Sprintf("%d", proof.GovProvidedSignatures),          // gov_provided_signatures: u64
+			bytes32ToU256String(proof.GovKeyBookRoot),              // gov_key_book_root: u256
+			keyPageProofsHex,                               // gov_key_page_proofs: vector<u256>
+			proof.GovAuthorityAddress,                      // gov_authority_address: address
+			uint8(proof.GovAuthorityLevel),                 // gov_authority_level: u8 (JSON number, not string)
+			fmt.Sprintf("%d", proof.GovNonce),              // gov_nonce: u64
+			fmt.Sprintf("%d", proof.GovRequiredSignatures), // gov_required_signatures: u64
+			fmt.Sprintf("%d", proof.GovProvidedSignatures), // gov_provided_signatures: u64
 			// BLSProofData fields
 			"0x" + hex.EncodeToString(proof.BLSProofBytes),       // bls_proof_bytes: vector<u8>
 			"0x" + hex.EncodeToString(proof.BLSMessageHash),      // bls_message_hash: vector<u8>
 			"0x" + hex.EncodeToString(proof.BLSPubkeyCommitment), // bls_pubkey_commitment: vector<u8>
-			fmt.Sprintf("%d", proof.BLSSignedVotingPower),         // bls_signed_voting_power: u64
-			fmt.Sprintf("%d", proof.BLSTotalVotingPower),          // bls_total_voting_power: u64
-			fmt.Sprintf("%d", proof.BLSThresholdNumerator),        // bls_threshold_numerator: u64
-			fmt.Sprintf("%d", proof.BLSThresholdDenominator),      // bls_threshold_denominator: u64
-			blsValidators,                                          // bls_validator_addresses: vector<address>
+			fmt.Sprintf("%d", proof.BLSSignedVotingPower),        // bls_signed_voting_power: u64
+			fmt.Sprintf("%d", proof.BLSTotalVotingPower),         // bls_total_voting_power: u64
+			fmt.Sprintf("%d", proof.BLSThresholdNumerator),       // bls_threshold_numerator: u64
+			fmt.Sprintf("%d", proof.BLSThresholdDenominator),     // bls_threshold_denominator: u64
+			blsValidators, // bls_validator_addresses: vector<address>
 			// CommitmentData fields
-			bytes32ToU256String(proof.CommitOperationCommitment),  // commit_operation_commitment: u256
-			bytes32ToU256String(proof.CommitCrossChainCommitment), // commit_cross_chain_commitment: u256
-			bytes32ToU256String(proof.CommitGovernanceRoot),       // commit_governance_root: u256
+			bytes32ToU256String(proof.CommitOperationCommitment),       // commit_operation_commitment: u256
+			bytes32ToU256String(proof.CommitCrossChainCommitment),      // commit_cross_chain_commitment: u256
+			bytes32ToU256String(proof.CommitGovernanceRoot),            // commit_governance_root: u256
 			"0x" + hex.EncodeToString([]byte(proof.CommitSourceChain)), // commit_source_chain: vector<u8>
 			fmt.Sprintf("%d", proof.CommitSourceBlockHeight),           // commit_source_block_height: u64
 			bytes32ToU256String(proof.CommitSourceTxHash),              // commit_source_tx_hash: u256
 			"0x" + hex.EncodeToString([]byte(proof.CommitTargetChain)), // commit_target_chain: vector<u8>
 			proof.CommitTargetAddress,                                  // commit_target_address: address
 			// Top-level fields
-			fmt.Sprintf("%d", proof.ExpirationTimeSecs),  // expiration_time_secs: u64
-			"0x" + hex.EncodeToString(proof.Metadata),    // metadata: vector<u8>
+			fmt.Sprintf("%d", proof.ExpirationTimeSecs), // expiration_time_secs: u64
+			"0x" + hex.EncodeToString(proof.Metadata),   // metadata: vector<u8>
 		},
 	}
 
 	txn := map[string]interface{}{
-		"sender":                  ac.accountAddress,
-		"sequence_number":         fmt.Sprintf("%d", seqNum),
-		"max_gas_amount":          fmt.Sprintf("%d", aptosMaxGasAmount),
-		"gas_unit_price":          fmt.Sprintf("%d", aptosGasUnitPrice),
+		"sender":                    ac.accountAddress,
+		"sequence_number":           fmt.Sprintf("%d", seqNum),
+		"max_gas_amount":            fmt.Sprintf("%d", aptosMaxGasAmount),
+		"gas_unit_price":            fmt.Sprintf("%d", aptosGasUnitPrice),
 		"expiration_timestamp_secs": fmt.Sprintf("%d", time.Now().Unix()+int64(aptosExpirationSecs)),
-		"payload":                 payload,
+		"payload":                   payload,
 	}
 
 	return ac.signAndSubmitJSON(ctx, txn)
@@ -380,23 +380,23 @@ func (ac *AptosClient) submitComprehensiveProofBCS(
 
 // AptosADIGovernanceProof holds the governance proof for Step 3.
 type AptosADIGovernanceProof struct {
-	AdiURL         string
-	AnchorID       [32]byte
-	MerkleProof    [][32]byte
-	Timestamp      uint64
-	ExpiresAt      uint64
-	Nonce          uint64
-	RequiredLevel  uint8
+	AdiURL        string
+	AnchorID      [32]byte
+	MerkleProof   [][32]byte
+	Timestamp     uint64
+	ExpiresAt     uint64
+	Nonce         uint64
+	RequiredLevel uint8
 
 	// BLS fields (passed through for re-verification)
-	BLSProofBytes          []byte
-	BLSMessageHash         []byte
-	BLSPubkeyCommitment    []byte
-	BLSSignedVotingPower   uint64
-	BLSTotalVotingPower    uint64
-	BLSThresholdNumerator  uint64
+	BLSProofBytes           []byte
+	BLSMessageHash          []byte
+	BLSPubkeyCommitment     []byte
+	BLSSignedVotingPower    uint64
+	BLSTotalVotingPower     uint64
+	BLSThresholdNumerator   uint64
 	BLSThresholdDenominator uint64
-	BLSValidatorAddresses  []string
+	BLSValidatorAddresses   []string
 }
 
 // ExecuteGovernanceProofDirect calls execute_governance_proof_direct on the user's
@@ -438,41 +438,41 @@ func (ac *AptosClient) ExecuteGovernanceProofDirect(
 	operationType := uint32(1)
 
 	payload := map[string]interface{}{
-		"type":          "entry_function_payload",
-		"function":      fmt.Sprintf("%s::certen_account_v4::execute_governance_proof_direct_flat", ac.packageAddress),
+		"type":           "entry_function_payload",
+		"function":       fmt.Sprintf("%s::certen_account_v4::execute_governance_proof_direct_flat", ac.packageAddress),
 		"type_arguments": []string{},
 		"arguments": []interface{}{
-			userAccountAddr,                                      // account_addr: address
-			uint32(operationType),                                // operation_type: u32 (JSON number, not string)
-			recipientAddr,                                        // target: address
-			fmt.Sprintf("%d", amountOctas),                       // value_octas: u64
-			"0x",                                                 // operation_data: vector<u8> (empty)
+			userAccountAddr,                // account_addr: address
+			uint32(operationType),          // operation_type: u32 (JSON number, not string)
+			recipientAddr,                  // target: address
+			fmt.Sprintf("%d", amountOctas), // value_octas: u64
+			"0x",                           // operation_data: vector<u8> (empty)
 			// ADIGovernanceProof fields (flattened)
-			"0x" + hex.EncodeToString([]byte(proof.AdiURL)),      // adi_url: vector<u8>
-			"0x" + hex.EncodeToString(proof.AnchorID[:]),          // anchor_id: vector<u8>
-			merkleProofHex,                                        // merkle_proof: vector<vector<u8>>
-			fmt.Sprintf("%d", proof.Timestamp),                    // timestamp_secs: u64
-			fmt.Sprintf("%d", proof.ExpiresAt),                    // expires_at_secs: u64
-			"0x" + hex.EncodeToString(proof.BLSProofBytes),        // bls_proof_bytes: vector<u8>
-			"0x" + hex.EncodeToString(proof.BLSMessageHash),       // bls_message_hash: vector<u8>
-			"0x" + hex.EncodeToString(proof.BLSPubkeyCommitment),  // bls_pubkey_commitment: vector<u8>
-			fmt.Sprintf("%d", proof.BLSSignedVotingPower),         // bls_signed_voting_power: u64
-			fmt.Sprintf("%d", proof.BLSTotalVotingPower),          // bls_total_voting_power: u64
-			fmt.Sprintf("%d", proof.BLSThresholdNumerator),        // bls_threshold_numerator: u64
-			fmt.Sprintf("%d", proof.BLSThresholdDenominator),      // bls_threshold_denominator: u64
-			blsValidators,                                          // validator_addresses: vector<address>
-			fmt.Sprintf("%d", proof.Nonce),                         // nonce: u64
-			uint8(proof.RequiredLevel),                              // required_level: u8 (JSON number, not string)
+			"0x" + hex.EncodeToString([]byte(proof.AdiURL)), // adi_url: vector<u8>
+			"0x" + hex.EncodeToString(proof.AnchorID[:]),    // anchor_id: vector<u8>
+			merkleProofHex,                                       // merkle_proof: vector<vector<u8>>
+			fmt.Sprintf("%d", proof.Timestamp),                   // timestamp_secs: u64
+			fmt.Sprintf("%d", proof.ExpiresAt),                   // expires_at_secs: u64
+			"0x" + hex.EncodeToString(proof.BLSProofBytes),       // bls_proof_bytes: vector<u8>
+			"0x" + hex.EncodeToString(proof.BLSMessageHash),      // bls_message_hash: vector<u8>
+			"0x" + hex.EncodeToString(proof.BLSPubkeyCommitment), // bls_pubkey_commitment: vector<u8>
+			fmt.Sprintf("%d", proof.BLSSignedVotingPower),        // bls_signed_voting_power: u64
+			fmt.Sprintf("%d", proof.BLSTotalVotingPower),         // bls_total_voting_power: u64
+			fmt.Sprintf("%d", proof.BLSThresholdNumerator),       // bls_threshold_numerator: u64
+			fmt.Sprintf("%d", proof.BLSThresholdDenominator),     // bls_threshold_denominator: u64
+			blsValidators,                  // validator_addresses: vector<address>
+			fmt.Sprintf("%d", proof.Nonce), // nonce: u64
+			uint8(proof.RequiredLevel),     // required_level: u8 (JSON number, not string)
 		},
 	}
 
 	txn := map[string]interface{}{
-		"sender":                  ac.accountAddress,
-		"sequence_number":         fmt.Sprintf("%d", seqNum),
-		"max_gas_amount":          fmt.Sprintf("%d", aptosMaxGasAmount),
-		"gas_unit_price":          fmt.Sprintf("%d", aptosGasUnitPrice),
+		"sender":                    ac.accountAddress,
+		"sequence_number":           fmt.Sprintf("%d", seqNum),
+		"max_gas_amount":            fmt.Sprintf("%d", aptosMaxGasAmount),
+		"gas_unit_price":            fmt.Sprintf("%d", aptosGasUnitPrice),
 		"expiration_timestamp_secs": fmt.Sprintf("%d", time.Now().Unix()+int64(aptosExpirationSecs)),
-		"payload":                 payload,
+		"payload":                   payload,
 	}
 
 	txHash, err := ac.signAndSubmitJSON(ctx, txn)
@@ -704,8 +704,8 @@ func (ac *AptosClient) GetAnchorData(ctx context.Context, bundleId [32]byte) (*A
 	function := fmt.Sprintf("%s::certen_anchor_v6_1::get_anchor_v5", ac.packageAddress)
 
 	result, err := ac.callViewFunction(ctx, function, nil, []interface{}{
-		ac.packageAddress,                // anchor_owner: address (AnchorState lives at package address)
-		bytes32ToU256String(bundleId),    // bundle_id: u256
+		ac.packageAddress,             // anchor_owner: address (AnchorState lives at package address)
+		bytes32ToU256String(bundleId), // bundle_id: u256
 	})
 	if err != nil {
 		return nil, fmt.Errorf("get_anchor view call failed: %w", err)
@@ -1397,4 +1397,3 @@ func computeAptosExecutionCommitment(chainID uint8, target string, valueOctas ui
 	copy(out[:], hash)
 	return out
 }
-

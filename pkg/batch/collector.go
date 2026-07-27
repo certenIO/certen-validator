@@ -79,10 +79,10 @@ type Collector struct {
 	onDemandBatch  *activeBatch
 
 	// Configuration
-	validatorID    string
-	maxBatchSize   int           // Max transactions per batch
-	batchTimeout   time.Duration // Max time a batch can stay open (~15 min)
-	maxOnDemand    int           // Max transactions in on-demand batch before immediate anchor
+	validatorID  string
+	maxBatchSize int           // Max transactions per batch
+	batchTimeout time.Duration // Max time a batch can stay open (~15 min)
+	maxOnDemand  int           // Max transactions in on-demand batch before immediate anchor
 
 	// Logging
 	logger *log.Logger
@@ -93,31 +93,31 @@ type Collector struct {
 
 // activeBatch represents a batch being built
 type activeBatch struct {
-	batchID     uuid.UUID
-	batchType   database.BatchType
-	startTime   time.Time
-	leaves      [][]byte                    // Transaction hashes for Merkle tree
-	txData      []*TransactionData          // Original transaction data
-	merkleTree  *merkle.Tree                // Built when batch is closed
+	batchID    uuid.UUID
+	batchType  database.BatchType
+	startTime  time.Time
+	leaves     [][]byte           // Transaction hashes for Merkle tree
+	txData     []*TransactionData // Original transaction data
+	merkleTree *merkle.Tree       // Built when batch is closed
 }
 
 // CollectorConfig holds collector configuration
 type CollectorConfig struct {
-	ValidatorID    string
-	MaxBatchSize   int
-	BatchTimeout   time.Duration
-	MaxOnDemand    int
-	Logger         *log.Logger
+	ValidatorID  string
+	MaxBatchSize int
+	BatchTimeout time.Duration
+	MaxOnDemand  int
+	Logger       *log.Logger
 }
 
 // DefaultCollectorConfig returns default configuration
 func DefaultCollectorConfig() *CollectorConfig {
 	return &CollectorConfig{
-		ValidatorID:    "validator-default",
-		MaxBatchSize:   1000,                  // Max 1000 txs per batch
-		BatchTimeout:   15 * time.Minute,      // ~15 min batches per whitepaper
-		MaxOnDemand:    5,                     // Small on-demand batches
-		Logger:         log.New(log.Writer(), "[BatchCollector] ", log.LstdFlags),
+		ValidatorID:  "validator-default",
+		MaxBatchSize: 1000,             // Max 1000 txs per batch
+		BatchTimeout: 15 * time.Minute, // ~15 min batches per whitepaper
+		MaxOnDemand:  5,                // Small on-demand batches
+		Logger:       log.New(log.Writer(), "[BatchCollector] ", log.LstdFlags),
 	}
 }
 
@@ -134,12 +134,12 @@ func NewCollector(repos *database.Repositories, cfg *CollectorConfig) (*Collecto
 	}
 
 	return &Collector{
-		repos:          repos,
-		validatorID:    cfg.ValidatorID,
-		maxBatchSize:   cfg.MaxBatchSize,
-		batchTimeout:   cfg.BatchTimeout,
-		maxOnDemand:    cfg.MaxOnDemand,
-		logger:         cfg.Logger,
+		repos:        repos,
+		validatorID:  cfg.ValidatorID,
+		maxBatchSize: cfg.MaxBatchSize,
+		batchTimeout: cfg.BatchTimeout,
+		maxOnDemand:  cfg.MaxOnDemand,
+		logger:       cfg.Logger,
 	}, nil
 }
 
