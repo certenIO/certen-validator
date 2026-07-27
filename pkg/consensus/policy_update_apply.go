@@ -21,7 +21,7 @@ import (
 //
 // Nothing is persisted here, which is what makes it safe to call on every
 // block, including replayed ones.
-func (app *ValidatorApp) activatePolicyForHeight(height int64) {
+func (app *ValidatorApp) activatePolicyForBlock(height int64, blockTimeUnix int64) {
 	if app.ledgerStore == nil {
 		return
 	}
@@ -30,13 +30,14 @@ func (app *ValidatorApp) activatePolicyForHeight(height int64) {
 		return
 	}
 
-	active := ActivePolicyAt(state, height)
+	active := ActivePolicyAt(state, blockTimeUnix)
 	cfg, err := policyStateTo(active)
 	if err != nil {
 		// An unusable policy activating here would halt the fleet at this exact
 		// height on every node. VerifyPolicyUpdate refuses unusable policies at
 		// acceptance time precisely so this cannot happen.
-		app.logger.Fatalf("❌ [POLICY] the rule active at height %d is unusable: %v", height, err)
+		app.logger.Fatalf("❌ [POLICY] the rule active at height %d (block time %d) is unusable: %v",
+			height, blockTimeUnix, err)
 	}
 
 	if cfg.Mode != app.entitlement.Mode {
@@ -69,7 +70,7 @@ func (app *ValidatorApp) processPolicyUpdate(pu *PolicyUpdateTx, height int64) a
 		return abcitypes.ExecTxResult{Code: 0, GasWanted: 1, GasUsed: 1}
 	}
 
-	if err := VerifyPolicyUpdate(pu, current, height); err != nil {
+	if err := VerifyPolicyUpdate(pu, current, app.currentBlockTime.UTC().Unix()); err != nil {
 		app.logger.Printf("🚫 [POLICY] rejected update at height %d: %v", height, err)
 		return abcitypes.ExecTxResult{Code: 5, Log: "policy update rejected: " + err.Error()}
 	}
@@ -85,8 +86,8 @@ func (app *ValidatorApp) processPolicyUpdate(pu *PolicyUpdateTx, height int64) a
 	// INCLUDED — not merely to its effect at the activation height.
 	app.blockBundles = append(app.blockBundles, pu.PolicyUpdateID())
 
-	app.logger.Printf("📜 [POLICY] scheduled at height %d: mode=%s activates at %d (version %d)",
-		height, pu.Mode, pu.ActivationHeight, pu.Version)
+	app.logger.Printf("📜 [POLICY] scheduled at height %d: mode=%s activates at unix %d (version %d)",
+		height, pu.Mode, pu.ActivationUnix, pu.Version)
 
 	return abcitypes.ExecTxResult{Code: 0, GasWanted: 1, GasUsed: 1}
 }

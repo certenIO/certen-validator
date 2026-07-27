@@ -269,6 +269,30 @@ func VerifyValidatorBlockInvariants(vb *ValidatorBlock) error {
 		}
 	}
 
+	// LITE-CLIENT PROOF BINDING.
+	//
+	// Consistency between the block's own fields is not proof that the claim is
+	// true — a proposer writing every field can be self-consistent. The proof
+	// carried in the block is the only thing that comes from Accumulate, and its
+	// receipts are self-validating: pure hashing from start to anchor, no
+	// network and no clock, so it is safe in a consensus rule and reproduces on
+	// replay.
+	//
+	// Verified only when a proof is CARRIED. Requiring one outright would refuse
+	// every block that does not yet produce one, which is a fleet-wide outage
+	// wearing a security fix — the mistake this check was nearly shipped with
+	// once already.
+	if vb.LiteClientProof != nil {
+		p := vb.LiteClientProof
+		if err := verifyLiteClientBinding(
+			p.AccountURL, vb.AccumulateAnchorReference.TxHash,
+			p.MainChainProof, p.BPTProof, p.CombinedReceipt,
+			vb.AccumulateAnchorReference.AccountURL,
+		); err != nil {
+			add(err.Error())
+		}
+	}
+
 	// ExternalChainResult shape validation for post-execution
 	if stage == ExecutionStagePost {
 		for i, r := range exec.ExternalChainResults {

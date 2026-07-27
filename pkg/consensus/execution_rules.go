@@ -77,8 +77,18 @@ const (
 	// restart against an outage that looks like data corruption.
 	executionRulesV5 uint64 = 5
 
+	// v6 — two changes, both altering accept/reject:
+	//
+	//   - Policy activation is judged against BLOCK TIME rather than block
+	//     height, so which rule applies to a block can differ from v5.
+	//   - A carried lite-client proof is verified: its receipts must hash from
+	//     start to anchor, it must name the same identity as the principal, and
+	//     it must concern the transaction the block anchors. Blocks carrying an
+	//     inconsistent proof were accepted under v5 and are refused under v6.
+	executionRulesV6 uint64 = 6
+
 	// CurrentExecutionRulesVersion is what THIS binary implements.
-	CurrentExecutionRulesVersion = executionRulesV5
+	CurrentExecutionRulesVersion = executionRulesV6
 )
 
 // ExecutionRulesMismatchError explains a refusal to start in terms an operator

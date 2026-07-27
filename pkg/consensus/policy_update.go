@@ -42,7 +42,8 @@ import (
 // versioned string so a future format cannot be mistaken for this one.
 const PolicyUpdateKind = "certen.policy.update/v1"
 
-// MinActivationDelay is the FLOOR on how far ahead an update may activate.
+// MinActivationDelay is the FLOOR on how far ahead an update may activate,
+// in SECONDS of block time.
 //
 // Correctness does not depend on its size. Activation is derived from committed
 // state, so a node executing block H has already executed any update that
@@ -50,18 +51,16 @@ const PolicyUpdateKind = "certen.policy.update/v1"
 // OPERATIONAL: a window in which a scheduled change is visible and can be
 // superseded before it takes effect.
 //
-// The value is 10, not the 200 first chosen by analogy with Ethereum fork
-// blocks and the Cosmos upgrade module. Those chains produce blocks every few
-// seconds, so 200 blocks is minutes. THIS chain runs with empty-block
-// production disabled and advances only on real ValidatorBlock transactions —
-// it reached height 7 in a full day of operation. At that rate 200 blocks is
-// weeks, or never if traffic stops, and an update scheduled that far out would
-// simply never activate.
+// Expressed in time rather than blocks. A block count was the original
+// choice, by analogy with Ethereum fork blocks and the Cosmos upgrade module —
+// but those chains produce blocks every few seconds, so a count is a good proxy
+// for elapsed time. This chain runs with empty-block production disabled and
+// advances only on real ValidatorBlock transactions: it reached height 7 in a
+// full day. A block count there means nothing stable, and quietly changes
+// meaning whenever throughput does.
 //
-// A block count is a poor proxy for elapsed time on an event-driven chain.
-// Treat this as a floor and choose an activation height with real headroom for
-// the traffic the chain is actually seeing.
-const MinActivationDelay = 10
+// Ten minutes of block time is a real abort window at any throughput.
+const MinActivationDelay = 600
 
 // PolicySignature is one operator's endorsement of an update.
 type PolicySignature struct {
@@ -71,12 +70,12 @@ type PolicySignature struct {
 
 // PolicyUpdateTx schedules a change to the entitlement rule.
 type PolicyUpdateTx struct {
-	Kind             string            `json:"kind"`
-	Mode             string            `json:"mode"`
-	Keys             map[string]string `json:"keys,omitempty"`
-	ActivationHeight int64             `json:"activation_height"`
-	Version          uint64            `json:"version"`
-	Signatures       []PolicySignature `json:"signatures,omitempty"`
+	Kind           string            `json:"kind"`
+	Mode           string            `json:"mode"`
+	Keys           map[string]string `json:"keys,omitempty"`
+	ActivationUnix int64             `json:"activation_unix"`
+	Version        uint64            `json:"version"`
+	Signatures     []PolicySignature `json:"signatures,omitempty"`
 }
 
 // SigningBytes is what admins sign: every field that changes behaviour, and
@@ -96,7 +95,7 @@ func (t *PolicyUpdateTx) SigningBytes() []byte {
 	for _, id := range ids {
 		payload += id + "=" + t.Keys[id] + ";"
 	}
-	payload += fmt.Sprintf("\n%d\n%d", t.ActivationHeight, t.Version)
+	payload += fmt.Sprintf("\n%d\n%d", t.ActivationUnix, t.Version)
 
 	sum := sha256.Sum256([]byte(payload))
 	return sum[:]
@@ -133,7 +132,7 @@ func DecodePolicyUpdate(tx []byte) (*PolicyUpdateTx, bool) {
 // currentHeight is the height of the block carrying the update. Every input is
 // committed state or the block itself, so the verdict is identical on every
 // node and reproducible on replay.
-func VerifyPolicyUpdate(t *PolicyUpdateTx, current *ledger.EntitlementPolicyState, currentHeight int64) error {
+func VerifyPolicyUpdate(t *PolicyUpdateTx, current *ledger.EntitlementPolicyState, blockTimeUnix int64) error {
 	if current == nil {
 		return fmt.Errorf("no sealed policy exists to update")
 	}
@@ -154,11 +153,11 @@ func VerifyPolicyUpdate(t *PolicyUpdateTx, current *ledger.EntitlementPolicyStat
 			"(an update cannot be replayed or reordered)", t.Version, HighestPolicyVersion(current))
 	}
 
-	minHeight := currentHeight + MinActivationDelay
-	if t.ActivationHeight < minHeight {
-		return fmt.Errorf("activation height %d is too soon: must be at least %d "+
-			"(current %d + %d), so every node commits the change before any node acts on it",
-			t.ActivationHeight, minHeight, currentHeight, MinActivationDelay)
+	earliest := blockTimeUnix + MinActivationDelay
+	if t.ActivationUnix < earliest {
+		return fmt.Errorf("activation time %d is too soon: must be at least %d "+
+			"(block time %d + %ds), so every node commits the change before any node acts on it",
+			t.ActivationUnix, earliest, blockTimeUnix, MinActivationDelay)
 	}
 
 	if err := verifyPolicyQuorum(t, current); err != nil {
@@ -246,7 +245,7 @@ func ApplyPolicyUpdate(t *PolicyUpdateTx, current *ledger.EntitlementPolicyState
 		ledger.ScheduledPolicyChange{
 			Mode:             t.Mode,
 			Keys:             t.Keys,
-			ActivationHeight: t.ActivationHeight,
+			ActivationUnix:   t.ActivationUnix,
 			Version:          t.Version,
 			ProposedAtHeight: atHeight,
 		})
@@ -268,23 +267,24 @@ func IsPolicyUpdateScheduled(s *ledger.EntitlementPolicyState, version uint64) b
 	return false
 }
 
-// ActivePolicyAt returns the rule in force at a given height: the latest
-// scheduled change whose activation height has been reached, else genesis.
+// ActivePolicyAt returns the rule in force for a block: the latest scheduled
+// change whose activation time has been reached, else genesis.
 //
-// PURE in (schedule, height). This is what makes replay safe — executing block
-// H yields the same rule regardless of how far the chain has since progressed.
-func ActivePolicyAt(s *ledger.EntitlementPolicyState, height int64) *ledger.EntitlementPolicyState {
+// PURE in (schedule, block time). Block time comes from the header and is
+// identical on every node, so executing a block yields the same rule regardless
+// of when or how often it is executed — which is what makes replay safe.
+func ActivePolicyAt(s *ledger.EntitlementPolicyState, blockTimeUnix int64) *ledger.EntitlementPolicyState {
 	if s == nil {
 		return nil
 	}
 	active := *s
 	best := int64(-1)
 	for _, e := range s.Schedule {
-		if e.ActivationHeight <= height && e.ActivationHeight > best {
-			best = e.ActivationHeight
+		if e.ActivationUnix <= blockTimeUnix && e.ActivationUnix > best {
+			best = e.ActivationUnix
 			active.Mode = e.Mode
 			active.Keys = e.Keys
-			active.SealedAtHeight = e.ActivationHeight
+			active.SealedAtHeight = e.ProposedAtHeight
 		}
 	}
 	return &active

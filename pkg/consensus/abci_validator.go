@@ -487,12 +487,17 @@ func (app *ValidatorApp) FinalizeBlock(ctx context.Context, req *abcitypes.Reque
 
 	// POLICY ACTIVATION — before any transaction is judged.
 	//
+	// Keyed on BLOCK TIME, not height: this chain produces blocks only for real
+	// work, so a height-based schedule means something different at every
+	// throughput. Block time comes from the header and is identical on every
+	// node, so it is exactly as deterministic and does not drift in meaning.
+	//
 	// A scheduled rule change takes effect at its activation height, and it must
 	// take effect for the WHOLE block: judging some transactions in a block by
 	// the old rule and others by the new one would make the outcome depend on
 	// ordering. Promotion is a pure function of committed state and height, so
 	// every node does it at the same height and replay reproduces it exactly.
-	app.activatePolicyForHeight(req.Height)
+	app.activatePolicyForBlock(req.Height, req.Time.UTC().Unix())
 
 	txResults := make([]*abcitypes.ExecTxResult, len(req.Txs))
 	app.blockBundles = app.blockBundles[:0] // reset per-block bundle list; txs append to it

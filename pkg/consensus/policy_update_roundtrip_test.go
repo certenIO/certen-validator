@@ -38,11 +38,11 @@ func TestToolProducedTransactionSurvivesTheWire(t *testing.T) {
 
 	// Exactly what `propose` builds.
 	tx := &PolicyUpdateTx{
-		Kind:             PolicyUpdateKind,
-		Mode:             string(EntitlementEnforce),
-		Keys:             sealed.Keys,
-		ActivationHeight: 5000,
-		Version:          2,
+		Kind:           PolicyUpdateKind,
+		Mode:           string(EntitlementEnforce),
+		Keys:           sealed.Keys,
+		ActivationUnix: 5000,
+		Version:        2,
 	}
 	tx.Signatures = []PolicySignature{{
 		KeyID:     "ops-1",
@@ -75,7 +75,7 @@ func TestSigningBytesAreStableAcrossMapOrdering(t *testing.T) {
 	}
 	base := &PolicyUpdateTx{
 		Kind: PolicyUpdateKind, Mode: "enforce",
-		Keys: keys, ActivationHeight: 900, Version: 4,
+		Keys: keys, ActivationUnix: 900, Version: 4,
 	}
 	want := hex.EncodeToString(base.SigningBytes())
 
@@ -87,7 +87,7 @@ func TestSigningBytesAreStableAcrossMapOrdering(t *testing.T) {
 		}
 		other := &PolicyUpdateTx{
 			Kind: PolicyUpdateKind, Mode: "enforce",
-			Keys: copyKeys, ActivationHeight: 900, Version: 4,
+			Keys: copyKeys, ActivationUnix: 900, Version: 4,
 		}
 		if got := hex.EncodeToString(other.SigningBytes()); got != want {
 			t.Fatalf("signing bytes changed with map ordering on attempt %d", i)
@@ -134,7 +134,7 @@ func TestSignaturesAccumulateToQuorum(t *testing.T) {
 
 	tx := &PolicyUpdateTx{
 		Kind: PolicyUpdateKind, Mode: string(EntitlementEnforce),
-		Keys: sealed.Keys, ActivationHeight: 5000, Version: 2,
+		Keys: sealed.Keys, ActivationUnix: 5000, Version: 2,
 	}
 
 	// First operator signs and passes the file on.
@@ -179,8 +179,8 @@ func TestCheckTxAcceptsAPolicyUpdate(t *testing.T) {
 
 	tx := &PolicyUpdateTx{
 		Kind: PolicyUpdateKind, Mode: string(EntitlementEnforce),
-		Keys:             map[string]string{"entitlement-v1": hex.EncodeToString(epochPub)},
-		ActivationHeight: 5000, Version: 2,
+		Keys:           map[string]string{"entitlement-v1": hex.EncodeToString(epochPub)},
+		ActivationUnix: 5000, Version: 2,
 	}
 	tx.Signatures = []PolicySignature{{
 		KeyID: "ops-1", Signature: hex.EncodeToString(ed25519.Sign(adminPriv, tx.SigningBytes())),

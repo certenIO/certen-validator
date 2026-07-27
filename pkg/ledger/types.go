@@ -186,8 +186,8 @@ type EntitlementPolicyState struct {
 	// Schedule is the APPEND-ONLY list of accepted rule changes.
 	//
 	// The rule in force at height H is DERIVED from this list — the latest entry
-	// whose ActivationHeight <= H, or the genesis Mode/Keys above if there is
-	// none. It is deliberately not a mutated "current mode" field.
+	// whose ActivationUnix <= the block's time, or the genesis Mode/Keys above
+	// if there is none. It is deliberately not a mutated "current mode" field.
 	//
 	// That distinction is the whole correctness argument. A mutated current
 	// value reflects how far the chain has progressed, so replaying block 10
@@ -204,10 +204,22 @@ type EntitlementPolicyState struct {
 
 // ScheduledPolicyChange is one accepted rule change in the append-only schedule.
 type ScheduledPolicyChange struct {
-	Mode             string            `json:"mode"`
-	Keys             map[string]string `json:"keys,omitempty"`
-	ActivationHeight int64             `json:"activationHeight"`
-	Version          uint64            `json:"version"`
+	Mode string            `json:"mode"`
+	Keys map[string]string `json:"keys,omitempty"`
+	// ActivationUnix is when the change takes effect, judged against ABCI BLOCK
+	// TIME — not wall time, and not a block height.
+	//
+	// Block time is in the header, identical on every node, so it is as
+	// deterministic as a height. A height is not equivalent: this chain
+	// produces blocks only for real work, so "200 blocks" was weeks or never,
+	// and any height-based window silently changes meaning as throughput does.
+	// A time is stable regardless.
+	//
+	// On an idle chain the change simply takes effect at the first block at or
+	// after this instant, which is the correct behaviour: nothing is being
+	// gated in the meantime because nothing is happening.
+	ActivationUnix int64  `json:"activationUnix"`
+	Version        uint64 `json:"version"`
 
 	// ProposedAtHeight is where the update was accepted, kept for audit: "when
 	// did enforcement begin and who authorised it" should be answerable from

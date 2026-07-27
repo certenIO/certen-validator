@@ -122,11 +122,18 @@ func TestCheckpointAnchorSeedsFromStateFile(t *testing.T) {
 		t.Fatalf("first entry after restart must chain to persisted head %q, got %q", seed, r.Prev)
 	}
 	// State file must now hold SHA256(this entry) for the next run.
-	b, _ := os.ReadFile(sf)
+	//
+	// persistHead runs AFTER the submit, so waiting on sub.count() proves the
+	// entry was sent, not that the head was written. Asserting immediately made
+	// this test pass alone and fail in a full-package run, where the extra load
+	// widened the gap — a flake that looked like a checkpoint bug and was only
+	// ever a missing wait.
 	sum := sha256.Sum256(sub.entries[0])
-	if strings.TrimSpace(string(b)) != hex.EncodeToString(sum[:]) {
-		t.Fatalf("state file not advanced: got %q want %x", strings.TrimSpace(string(b)), sum)
-	}
+	want := hex.EncodeToString(sum[:])
+	waitFor(t, func() bool {
+		b, err := os.ReadFile(sf)
+		return err == nil && strings.TrimSpace(string(b)) == want
+	})
 }
 
 // TestCheckpointAnchorNeverBlocks verifies Enqueue drops (does not block) when the writer is

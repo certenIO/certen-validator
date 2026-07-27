@@ -38,11 +38,11 @@ func adminState(t *testing.T, threshold int, n int) (*ledger.EntitlementPolicySt
 func updateSignedBy(t *testing.T, st *ledger.EntitlementPolicyState, privs []ed25519.PrivateKey, signers []int, activation int64, version uint64) *PolicyUpdateTx {
 	t.Helper()
 	tx := &PolicyUpdateTx{
-		Kind:             PolicyUpdateKind,
-		Mode:             string(EntitlementEnforce),
-		Keys:             st.Keys,
-		ActivationHeight: activation,
-		Version:          version,
+		Kind:           PolicyUpdateKind,
+		Mode:           string(EntitlementEnforce),
+		Keys:           st.Keys,
+		ActivationUnix: activation,
+		Version:        version,
 	}
 	for _, i := range signers {
 		tx.Signatures = append(tx.Signatures, PolicySignature{
@@ -103,7 +103,7 @@ func TestTamperedFieldsInvalidateSignatures(t *testing.T) {
 		mutate func(*PolicyUpdateTx)
 	}{
 		{"mode", func(tx *PolicyUpdateTx) { tx.Mode = string(EntitlementOff) }},
-		{"activation height", func(tx *PolicyUpdateTx) { tx.ActivationHeight = 500 }},
+		{"activation height", func(tx *PolicyUpdateTx) { tx.ActivationUnix = 500 }},
 		{"version", func(tx *PolicyUpdateTx) { tx.Version = 99 }},
 		{"keys", func(tx *PolicyUpdateTx) { tx.Keys = map[string]string{"x": "00"} }},
 	} {
@@ -158,7 +158,7 @@ func TestUnusableProposedPolicyIsRefusedAtAcceptance(t *testing.T) {
 	st, privs := adminState(t, 1, 1)
 	tx := &PolicyUpdateTx{
 		Kind: PolicyUpdateKind, Mode: string(EntitlementEnforce),
-		Keys: map[string]string{}, ActivationHeight: 1000, Version: 2,
+		Keys: map[string]string{}, ActivationUnix: 1000, Version: 2,
 	}
 	tx.Signatures = []PolicySignature{{
 		KeyID: "A", Signature: hex.EncodeToString(ed25519.Sign(privs[0], tx.SigningBytes())),
@@ -206,8 +206,8 @@ func TestApplyIsIdempotentByVersion(t *testing.T) {
 func TestActivePolicyAtIsDerivedFromHeight(t *testing.T) {
 	st, _ := adminState(t, 1, 1)
 	st.Schedule = []ledger.ScheduledPolicyChange{
-		{Mode: "enforce", Keys: st.Keys, ActivationHeight: 300, Version: 2},
-		{Mode: "off", Keys: st.Keys, ActivationHeight: 600, Version: 3},
+		{Mode: "enforce", Keys: st.Keys, ActivationUnix: 300, Version: 2},
+		{Mode: "off", Keys: st.Keys, ActivationUnix: 600, Version: 3},
 	}
 
 	for _, tc := range []struct {
@@ -232,8 +232,8 @@ func TestActivePolicyAtIsDerivedFromHeight(t *testing.T) {
 func TestActivePolicyIgnoresScheduleOrder(t *testing.T) {
 	st, _ := adminState(t, 1, 1)
 	forward := []ledger.ScheduledPolicyChange{
-		{Mode: "enforce", Keys: st.Keys, ActivationHeight: 300, Version: 2},
-		{Mode: "off", Keys: st.Keys, ActivationHeight: 600, Version: 3},
+		{Mode: "enforce", Keys: st.Keys, ActivationUnix: 300, Version: 2},
+		{Mode: "off", Keys: st.Keys, ActivationUnix: 600, Version: 3},
 	}
 	reversed := []ledger.ScheduledPolicyChange{forward[1], forward[0]}
 

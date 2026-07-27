@@ -12,7 +12,7 @@
 //	    Generate an admin keypair. The public half goes in
 //	    CERTEN_ENTITLEMENT_ADMIN_KEYS at genesis; the private half signs updates.
 //
-//	policy-update propose --mode enforce --activation-height N --version V \
+//	policy-update propose --mode enforce --activation-in 900 --version V \
 //	    --entitlement-keys entitlement-v1:<hex> --admin-key-id A --admin-secret <hex|@file>
 //	    Build and sign an update. Prints the transaction JSON.
 //
@@ -36,6 +36,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/certen/independant-validator/pkg/consensus"
 )
@@ -139,7 +140,8 @@ func parseKeyList(s string) (map[string]string, error) {
 func propose(args []string) error {
 	fs := flag.NewFlagSet("propose", flag.ExitOnError)
 	mode := fs.String("mode", "", "off | observe | enforce")
-	activation := fs.Int64("activation-height", 0, "height at which the rule takes effect")
+	activationIn := fs.Int64("activation-in", 900, "seconds from now until the rule takes effect")
+	activationAt := fs.Int64("activation-unix", 0, "absolute unix time (overrides --activation-in)")
 	version := fs.Uint64("version", 0, "must exceed the highest committed policy version")
 	entKeys := fs.String("entitlement-keys", "", "<keyID>:<hexPubKey>[,...] — epoch signing keys the gate will trust")
 	keyID := fs.String("admin-key-id", "", "this signer's admin key id")
@@ -148,9 +150,16 @@ func propose(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if *mode == "" || *activation == 0 || *version == 0 || *keyID == "" || *secret == "" {
+	if *mode == "" || *version == 0 || *keyID == "" || *secret == "" {
 		fs.Usage()
-		return fmt.Errorf("--mode, --activation-height, --version, --admin-key-id and --admin-secret are required")
+		return fmt.Errorf("--mode, --version, --admin-key-id and --admin-secret are required")
+	}
+	// Activation is judged against BLOCK time; the local clock only approximates
+	// it. The minimum delay is generous enough to absorb ordinary skew, and a
+	// validator refuses anything nearer than that regardless.
+	activation := *activationAt
+	if activation == 0 {
+		activation = time.Now().UTC().Unix() + *activationIn
 	}
 
 	keys, err := parseKeyList(*entKeys)
@@ -163,11 +172,11 @@ func propose(args []string) error {
 	}
 
 	tx := &consensus.PolicyUpdateTx{
-		Kind:             consensus.PolicyUpdateKind,
-		Mode:             *mode,
-		Keys:             keys,
-		ActivationHeight: *activation,
-		Version:          *version,
+		Kind:           consensus.PolicyUpdateKind,
+		Mode:           *mode,
+		Keys:           keys,
+		ActivationUnix: activation,
+		Version:        *version,
 	}
 	tx.Signatures = []consensus.PolicySignature{{
 		KeyID:     *keyID,

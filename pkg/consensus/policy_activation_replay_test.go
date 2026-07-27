@@ -29,8 +29,9 @@ import (
 // blockRunner drives the same sequence FinalizeBlock does: activate any pending
 // policy for this height, process the block's transactions, stage the app hash,
 // then promote it as Commit would.
-func runBlockFull(app *ValidatorApp, height int64, txs ...[]byte) []byte {
-	app.activatePolicyForHeight(height)
+func runBlockFull(app *ValidatorApp, height int64, blockTime time.Time, txs ...[]byte) []byte {
+	app.currentBlockTime = blockTime
+	app.activatePolicyForBlock(height, blockTime.UTC().Unix())
 	app.currentBlockHeight = uint64(height)
 	app.blockBundles = app.blockBundles[:0]
 	for _, tx := range txs {
@@ -94,18 +95,18 @@ func sealPolicyWithAdmin(t *testing.T, kv *memKV, mode EntitlementMode, epochKey
 	return adminPriv
 }
 
-func signedUpdate(t *testing.T, priv ed25519.PrivateKey, mode string, keys entitlement.KeySet, activation int64, version uint64) []byte {
+func signedUpdate(t *testing.T, priv ed25519.PrivateKey, mode string, keys entitlement.KeySet, activationUnix int64, version uint64) []byte {
 	t.Helper()
 	hexKeys := map[string]string{}
 	for id, pub := range keys {
 		hexKeys[id] = hex.EncodeToString(pub)
 	}
 	tx := &PolicyUpdateTx{
-		Kind:             PolicyUpdateKind,
-		Mode:             mode,
-		Keys:             hexKeys,
-		ActivationHeight: activation,
-		Version:          version,
+		Kind:           PolicyUpdateKind,
+		Mode:           mode,
+		Keys:           hexKeys,
+		ActivationUnix: activationUnix,
+		Version:        version,
 	}
 	tx.Signatures = []PolicySignature{{
 		KeyID:     "admin-1",
@@ -127,28 +128,43 @@ func TestPolicyActivationReplaysIdenticallyAcrossARestart(t *testing.T) {
 	adminPriv := sealPolicyWithAdmin(t, kv, EntitlementObserve, epochKeys)
 
 	const proposeAt = int64(10)
-	activateAt := proposeAt + MinActivationDelay // 210
+	// Activation is a TIME. The chain produces blocks only for real work, so a
+	// height-based schedule would mean something different at every throughput;
+	// block time comes from the header and is just as deterministic.
+	proposeTime := blockTime
+	activateTime := proposeTime.Add(time.Duration(MinActivationDelay) * time.Second)
 
 	// An unentitled block: accepted under observe, refused under enforce. It is
 	// the transaction whose treatment changes at the boundary, and therefore the
 	// one that moves the app hash.
 	unentitled := invariantValidBlockJSON(t, "bundle-A", "acc://stranger.acme/data")
-	update := signedUpdate(t, adminPriv, string(EntitlementEnforce), epochKeys, activateAt, 2)
+	update := signedUpdate(t, adminPriv, string(EntitlementEnforce), epochKeys, activateTime.Unix(), 2)
 
-	// Heights spanning the boundary, including the block that activates it.
-	heights := []int64{proposeAt, proposeAt + 1, activateAt - 1, activateAt, activateAt + 1}
+	// Blocks spanning the boundary. Heights advance one at a time; the TIMES are
+	// what decide when the rule changes.
+	type blk struct {
+		h int64
+		t time.Time
+	}
+	blocks := []blk{
+		{proposeAt, proposeTime},
+		{proposeAt + 1, proposeTime.Add(time.Second)},
+		{proposeAt + 2, activateTime.Add(-time.Second)},
+		{proposeAt + 3, activateTime},
+		{proposeAt + 4, activateTime.Add(time.Second)},
+	}
 
 	// ---- first run ----
 	first := map[int64]string{}
 	app := appOn(t, kv, blockTime)
-	for _, h := range heights {
+	for _, b := range blocks {
 		var hash []byte
-		if h == proposeAt {
-			hash = runBlockFull(app, h, update, unentitled)
+		if b.h == proposeAt {
+			hash = runBlockFull(app, b.h, b.t, update, unentitled)
 		} else {
-			hash = runBlockFull(app, h, unentitled)
+			hash = runBlockFull(app, b.h, b.t, unentitled)
 		}
-		first[h] = hex.EncodeToString(hash)
+		first[b.h] = hex.EncodeToString(hash)
 	}
 
 	// The boundary must actually have done something, or this test proves
@@ -159,13 +175,13 @@ func TestPolicyActivationReplaysIdenticallyAcrossARestart(t *testing.T) {
 	// would make CometBFT emit endless proof blocks). So enforcement does not
 	// move the hash at the boundary — it stops it advancing. That is the
 	// signature to assert.
-	if first[activateAt-1] == first[proposeAt+1] {
+	if first[proposeAt+2] == first[proposeAt+1] {
 		t.Fatal("hash did not advance while the block was still being ACCEPTED under observe")
 	}
-	if first[activateAt] != first[activateAt-1] {
-		t.Fatal("hash advanced at the activation height; the block was not rejected, so enforcement did not take effect")
+	if first[proposeAt+3] != first[proposeAt+2] {
+		t.Fatal("hash advanced at the activation time; the block was not rejected, so enforcement did not take effect")
 	}
-	if first[activateAt+1] != first[activateAt] {
+	if first[proposeAt+4] != first[proposeAt+3] {
 		t.Fatal("hash advanced after activation; blocks are still being accepted under enforce")
 	}
 	if app.entitlement.Mode != EntitlementEnforce {
@@ -177,17 +193,17 @@ func TestPolicyActivationReplaysIdenticallyAcrossARestart(t *testing.T) {
 	// CometBFT does at handshake. Committed policy state is deliberately kept.
 	replayApp := appOn(t, kv, blockTime)
 	replayApp.committedAppHash = nil
-	for _, h := range heights {
+	for _, b := range blocks {
 		var hash []byte
-		if h == proposeAt {
-			hash = runBlockFull(replayApp, h, update, unentitled)
+		if b.h == proposeAt {
+			hash = runBlockFull(replayApp, b.h, b.t, update, unentitled)
 		} else {
-			hash = runBlockFull(replayApp, h, unentitled)
+			hash = runBlockFull(replayApp, b.h, b.t, unentitled)
 		}
-		if got := hex.EncodeToString(hash); got != first[h] {
+		if got := hex.EncodeToString(hash); got != first[b.h] {
 			t.Fatalf("REPLAY DIVERGED at height %d: first=%s replay=%s\n"+
 				"This is the failure that bricked the fleet: the rule applied on replay "+
-				"differs from the one that committed the block.", h, first[h], got)
+				"differs from the one that committed the block.", b.h, first[b.h], got)
 		}
 	}
 }
@@ -195,30 +211,30 @@ func TestPolicyActivationReplaysIdenticallyAcrossARestart(t *testing.T) {
 // The activation height is what makes the switch simultaneous. If the rule
 // applied depended on when a node restarted rather than on the height, the
 // whole mechanism would be theatre.
-func TestRuleInForceDependsOnHeightNotOnRestartTime(t *testing.T) {
+func TestRuleInForceDependsOnBlockTimeNotOnRestartTime(t *testing.T) {
 	kv := newMemKV()
 	blockTime := time.Unix(gateNow, 0).UTC()
 	epochKeys := testKeySet(t, 1)
 	adminPriv := sealPolicyWithAdmin(t, kv, EntitlementObserve, epochKeys)
 
-	activateAt := int64(1 + MinActivationDelay)
-	update := signedUpdate(t, adminPriv, string(EntitlementEnforce), epochKeys, activateAt, 2)
+	activateTime := blockTime.Add(time.Duration(MinActivationDelay) * time.Second)
+	update := signedUpdate(t, adminPriv, string(EntitlementEnforce), epochKeys, activateTime.Unix(), 2)
 
 	app := appOn(t, kv, blockTime)
-	runBlockFull(app, 1, update)
+	runBlockFull(app, 1, blockTime, update)
 
 	// A node restarting BEFORE the activation height must still be on observe,
 	// no matter that the change is already committed.
 	early := appOn(t, kv, blockTime)
-	runBlockFull(early, activateAt-1)
+	runBlockFull(early, 2, activateTime.Add(-time.Second))
 	if early.entitlement.Mode != EntitlementObserve {
-		t.Fatalf("rule changed before its activation height: mode = %s", early.entitlement.Mode)
+		t.Fatalf("rule changed before its activation time: mode = %s", early.entitlement.Mode)
 	}
 
 	// A node restarting AT or after it must be on enforce.
 	late := appOn(t, kv, blockTime)
-	runBlockFull(late, activateAt)
+	runBlockFull(late, 2, activateTime)
 	if late.entitlement.Mode != EntitlementEnforce {
-		t.Fatalf("rule did not activate at its height: mode = %s", late.entitlement.Mode)
+		t.Fatalf("rule did not activate at its time: mode = %s", late.entitlement.Mode)
 	}
 }
