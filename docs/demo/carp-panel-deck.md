@@ -204,6 +204,37 @@ From the signer's own documentation:
 
 ---
 
+## Before rules can work, the engine has to see the numbers
+
+A contract call carries its amounts inside ABI-encoded `callData`. The intent's
+*leg* value is `0` — the panel calls a function, it doesn't send ether. So a
+policy engine reading the leg sees **nothing to gate on** and approves anything.
+
+```js
+// escrobot-decoder.mjs — ~40 lines, no dependencies, no fork of the signer
+if (!callData.startsWith('e17a9e7b')) return undefined;   // not forceResolve? decline
+return { summary: {
+  action: `arbitration on ${orderId} — ${amtToSeller} to seller, ${amtToBuyer} to buyer`,
+  values: [String(amtToSeller), String(amtToBuyer)],      // ← what gets gated
+}};
+```
+
+Now the engine reads a sentence:
+
+> *"escrobot arbitration on order 0xfd988283… — 1500000000000000 wei to seller,
+> 0 wei to buyer — 'seller awarded price AND buyer bond (full forfeiture)'"*
+
+**We learned this the direct way.** Before the decoder existed, a full forfeiture
+passed the gate and settled on Sepolia, because the rules were reading a zero
+instead of the payout. The rules were fine. They were looking at the wrong thing.
+
+<!-- NOTE: Do not skip this slide to look cleaner. An engineer in the room will
+     immediately wonder how the engine sees inside a contract call, and having
+     already answered it — including how we found out — buys more credibility
+     than a flawless story would. -->
+
+---
+
 ## The rules in Act 2 are yours, and they're readable
 
 ```js
@@ -238,32 +269,49 @@ flowchart LR
 Changing membership **is itself a panel decision** — the same mechanism that runs
 a resolution. No redeployment. No downtime. The contract never notices.
 
+Live today, after the panel voted:
+```
+key page = 3-of-4 {policy, bryan, agent, regulator}
+```
+
 And the regulator can **witness and refuse** — but cannot redirect a single wei.
 The split is sealed in the proof and conservation is enforced by your own
 `require`.
 
+One thing to notice on that line, though: at **3-of-4**, Bryan is no longer
+structurally required. Adding a seat changed who is necessary. Next slide.
+
 ---
 
-## One honest limitation
+## Two honest limitations
 
-An Accumulate key page threshold counts **how many** signatures, not **which
-ones**.
+**1. A threshold counts how many signatures, not which ones.**
 
 | Configuration | Consequence |
 |---|---|
-| 3 seats, threshold 2 | The agent + policy engine could resolve **without Bryan** |
-| 3 seats, threshold 3 | Bryan is structurally required — but any absent seat blocks everything |
+| 3 seats, threshold 2 | agent + policy engine could resolve **without Bryan** |
+| 3 seats, threshold 3 | Bryan structurally required — any absent seat blocks everything |
+| 4 seats, threshold 3 | Bryan **not** required again — adding the regulator changed this |
 
-We chose **3-of-3**, because "human sign-off required to finalize" should be true
-rather than nearly true. The cost is real: a seat that goes missing stops
-resolutions until the panel rotates it out.
+Adding a seat silently changes who is necessary. That's a decision to make
+deliberately each time, not a detail.
 
-**The proper answer** is multiple key pages at different thresholds — routine
-disputes cleared by the automated seats, larger ones requiring the human. That's
-the next piece of work, not something we're claiming today.
+**2. A mandatory automated seat can veto its own removal.**
 
-<!-- NOTE: Volunteer this before he finds it. Being the one to point at your own
-     sharp edge is what makes the rest of the deck credible. -->
+At 3-of-3 the policy engine is required for *everything* — including changing
+membership. Ours denied a legitimate membership change, because it had no rule
+for governance and correctly refused what it couldn't price.
+
+> A panel whose automated seat is misconfigured can neither resolve disputes nor
+> rotate the broken seat out. It is bricked.
+
+Fixed by giving the engine an explicit governance rule. But the deeper fix is
+**multiple key pages at different thresholds** — routine disputes cleared by the
+automated seats, larger ones requiring the human, and a break-glass path that
+never depends on the automated seat. Not built. Not claimed.
+
+<!-- NOTE: We found #2 by hitting it live, not by reasoning about it. Say that.
+     Volunteering your own sharp edges is what makes everything else credible. -->
 
 ---
 

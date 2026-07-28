@@ -134,63 +134,113 @@ cast call 0x9F452b98e33fF3F973a12ee9333B33082D824816 "status(bytes32)(uint8)" \
 
 ---
 
-## 3. Act 2 — automating Admin  *(seat added; three scenes NOT yet rehearsed)*
+## 3. Act 2 — automating Admin  *(ALL THREE SCENES REHEARSED — see §6.2)*
+
+The panel is already 3-of-3 `{agent, policy, Bryan}`. If it is not:
 
 ```bash
-node panel-admin.mjs add-policy-seat     # panel -> 3-of-3 {agent, policy, Bryan}
+node panel-admin.mjs add-policy-seat
 ```
 
-Then, in two more terminals:
+Two more terminals — **the config path is positional, not `--config`**:
 
 ```bash
 # C — Bryan's rules, on Bryan's machine
+cd C:/Accumulate_Stuff/certen/certen-carp-starter/examples
 node escrow-policy-engine.mjs
 
 # D — the signer holding the third seat
-cd ../../certen-headless-offchain-policy-engine-signer
-node dist/signer.cjs --config ../certen-carp-starter/examples/panel-policy-signer.yaml
+cd C:/Accumulate_Stuff/certen/certen-carp-starter/examples
+node ../../certen-headless-offchain-policy-engine-signer/dist/signer.cjs ./panel-policy-signer.yaml
 ```
 
-### Scene 1 — routine (engine approves)
-Seed and resolve a normal dispute. The signer sees the pending resolution, asks
-the engine, gets `approve`, and signs **by itself**. Bryan clicks once.
+**Check terminal D's boot line before starting.** It must read:
 
-> "That's the every-day-or-two model. The agent did the work, your rules checked
-> it automatically, and you finished it."
+```
+intent decoder chain (first claim wins)  decoders=["escrobot-force-resolve", …]
+SR6 self-check OK: pubkey matches page
+```
 
-### Scene 2 — out of policy (engine denies)
-Propose a resolution awarding one side the other's bond.
+If `escrobot-force-resolve` is missing, **stop**: the engine will be gating on the
+leg value (`0`) instead of the payout, and will approve a forfeiture. That is not
+hypothetical — see §6.3.
 
-> "Conservation still balances — the totals are fine. Your ceiling rule is what
-> refuses it: a forfeiture is a human decision, not an automated one. And note
-> what happens now: **nothing**. Both of us want it to go through. It doesn't."
+### Scene 1 — routine (engine approves)  ~4 min
 
-### Scene 3 — the engine is down  ← **the one that wins the room**
-Stop the policy engine (Ctrl-C in terminal C) and propose a routine resolution.
+```bash
+node panel-admin.mjs seed-dispute
+node panel-admin.mjs force-resolve
+```
+
+Terminal C prints `APPROVE`; terminal D prints `vote submitted vote=approve`.
+
+> "The agent proposed it, your rules checked it automatically, and you finished
+> it with one signature. That's the every-day-or-two model, running."
+
+### Scene 2 — out of policy (engine denies)  ~2 min
+
+```bash
+node panel-admin.mjs seed-dispute
+node panel-admin.mjs force-resolve-forfeit
+```
+
+Terminal C prints `DENY … exceeds the … ceiling; escalate to manual review`;
+terminal D prints `vote=reject`. **The order stays at status 4.**
+
+> "Conservation balances — escrobot would happily execute this. Your ceiling rule
+> is what refuses it: awarding one party the other's bond is a human decision.
+> And notice what happens now. Both of us signed. It still doesn't happen."
+
+### Scene 3 — the engine is down  ← **the one that wins the room**  ~4 min
+
+Ctrl-C terminal C, then:
+
+```bash
+node panel-admin.mjs seed-dispute
+node panel-admin.mjs force-resolve      # a PERFECTLY VALID resolution
+```
+
+Terminal D repeats `policy decision failed | connect ECONNREFUSED` and **casts no
+vote at all** — note it withholds rather than rejecting.
 
 > "Nothing happens. Not a default-allow, not a timeout that waves it through.
 > The signer's own documentation puts it best: *an outage can never become an
 > approval — that is a property of the code, not a setting*."
 
-Restart the engine; the same resolution then completes.
+Now restart terminal C. The same resolution completes on its own.
+
+> "It wasn't lost. It was waiting."
 
 ---
 
-## 4. Act 3 — making it official  *(NOT yet rehearsed)*
+## 4. Act 3 — making it official  *(REHEARSED, ~3 min)*
 
 ```bash
 node panel-admin.mjs add-regulator
 ```
+
+Ends at `3-of-4 {policy, bryan, agent, regulator}`, printed from the live page.
 
 > "Adding a regulator is a panel decision, made by the existing panel. No
 > redeployment. No downtime. Your contract never notices — and the regulator can
 > refuse, but cannot redirect a single wei, because the split is sealed in the
 > proof and conservation is enforced by your own `require`."
 
-**Say the limitation out loud before he finds it:** a key page threshold counts
-*how many* signatures, not *which*. At 3-of-3 Bryan is structurally required; add
-a fourth seat at threshold 3 and he is not. Tiered thresholds across multiple key
-pages are the proper answer and are not built yet.
+**Then volunteer both limitations, before he finds them.**
+
+*Which seats are necessary changed silently.* A threshold counts how many
+signatures, not which. At 3-of-3 Bryan was structurally required; at 3-of-4 he is
+not — `{agent, policy, regulator}` could now resolve without him. Adding a seat
+is also a decision about who is necessary.
+
+*A mandatory automated seat can veto its own removal.* At 3-of-3 the policy
+engine was required for everything including membership changes, and it denied a
+legitimate one because it had no governance rule — see §6.4. A panel whose
+automated seat is misconfigured can neither resolve disputes nor rotate that seat
+out. Fixed here with an explicit governance rule; the real answer is multiple key
+pages at different thresholds, which is not built.
+
+> "That one we found by walking into it, not by reasoning about it."
 
 ---
 
@@ -247,6 +297,78 @@ signatures  2  —  agent bfec7219… opened it, Bryan d7a0d860… finalized it
 executor    validator-6 elected; all 7 validators agreed
 settlement  seller 0.001 ETH (price) · buyer 0.0005 ETH (bond returned)
 ```
+
+### 6.2 Act 2 evidence — 2026-07-28
+
+Panel took the policy seat and moved to **3-of-3 `{agent, policy, Bryan}`**. The
+signer's own SR6 self-check confirmed its key is genuinely on the page, which
+also proves the seed chain: one 32-byte seed → registered seat hash → the key the
+signer signs with.
+
+**Scene 1 — approve.** Order `0x482f98c0…`, WriteData `ee42b4de…` delivered with
+**three** signatures — agent `bfec7219…`, Bryan `d7a0d860…`, policy `01eeb281…`.
+Order reached status 5. The policy seat signed with no human touching it.
+
+**Scene 2 — deny.** Order `0xfd988283…`. The engine read the decoded call:
+```
+DENY  "escrobot arbitration on order 0xfd988283… — 1500000000000000 wei to
+       seller, 0 wei to buyer" — amount 1500000000000000 exceeds the
+       1000000000000000 wei auto-approval ceiling; escalate to manual review
+```
+Signer cast `vote=reject`. **Order stayed at status 4** with both humans signed.
+
+**Scene 3 — outage.** Order `0x98220720…`, a valid resolution. With the engine
+stopped the signer logged `policy decision failed | connect ECONNREFUSED` on
+every poll and cast **no vote**. Order stayed at 4. On restart it completed.
+
+### 6.3 The bug this campaign found — worth knowing before you present
+
+The first version of the policy engine **approved a full forfeiture**, and it
+settled on Sepolia (order `0x945d7dad…`, seller took the buyer's bond).
+
+The rules were correct. They were reading the wrong number. A contract-call
+intent carries its amounts in ABI-encoded `callData`; the built-in decoders
+describe the intent's *leg*, whose value is `0` because the panel calls a
+function rather than sending ether. So the ceiling check compared `0` against the
+limit and passed, and the conservation check — which only runs when it sees two
+amounts — silently skipped.
+
+The fix is `examples/escrobot-decoder.mjs`, ~40 lines with no dependencies,
+loaded via `resolver.decoder_modules`. It parses the `forceResolve` calldata and
+puts both payout amounts into `values`, which is what actually gets gated.
+
+**Operational consequence:** if terminal D's boot line does not list
+`escrobot-force-resolve` first, the gate is not really gating. Treat a missing
+decoder as a stop condition, not a warning.
+
+### 6.4 The second finding — a fail-closed seat can veto governance
+
+With the panel at 3-of-3 `{agent, policy, Bryan}`, adding the regulator was
+**rejected by the policy engine**:
+
+```
+DENY  "updateKeyPage on acc://certen-panel-bryan1.acme/book/1"
+      — no amounts present; refusing to approve a resolution I cannot read
+```
+
+The engine was behaving correctly — it refuses what it cannot price — but the
+consequence is severe: a required automated seat gates *membership changes too*,
+including the change that would remove it. A misconfigured or permanently dead
+engine leaves the panel unable to resolve disputes **and** unable to repair
+itself.
+
+Fixed by giving the engine an explicit rule: membership changes on its own page
+move no funds and are already authorised by the page threshold, so it approves
+them; a key-page update naming any other page is still refused. Verified:
+
+```
+APPROVE "updateKeyPage on acc://certen-panel-bryan1.acme/book/1"
+        — moves no funds and is already authorised by the page threshold
+```
+
+Note also that the submit response reported `signature_count: 3, is_ready: true`
+for the rejected operation. **Signatures submitted is not the same as the change
+landing.** The driver now waits for the key page itself to show the seat.
 
 ---
 
