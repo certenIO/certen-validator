@@ -226,21 +226,23 @@ Ends at `3-of-4 {policy, bryan, agent, regulator}`, printed from the live page.
 > refuse, but cannot redirect a single wei, because the split is sealed in the
 > proof and conservation is enforced by your own `require`."
 
-**Then volunteer both limitations, before he finds them.**
+**Then make the threshold point explicitly, because it is the whole control.**
 
-*Which seats are necessary changed silently.* A threshold counts how many
-signatures, not which. At 3-of-3 Bryan was structurally required; at 3-of-4 he is
-not — `{agent, policy, regulator}` could now resolve without him. Adding a seat
-is also a decision about who is necessary.
+A page threshold counts how many signatures, not which. At 3-of-3, `updateKeyPage`
+requires every current entry to sign — that is the enforcement, not an obstacle.
+Want two seats to be able to change membership? Set 2-of-3, and accept that two
+seats can settle disputes as well. One number governs both.
 
-*A mandatory automated seat can veto its own removal.* At 3-of-3 the policy
-engine was required for everything including membership changes, and it denied a
-legitimate one because it had no governance rule — see §6.4. A panel whose
-automated seat is misconfigured can neither resolve disputes nor rotate that seat
-out. Fixed here with an explicit governance rule; the real answer is multiple key
-pages at different thresholds, which is not built.
+Note aloud that adding the regulator moved the panel to 3-of-4 and **stopped
+requiring Bryan** — `{agent, policy, regulator}` could now resolve without him.
+Adding a seat is also a decision about who is necessary.
 
-> "That one we found by walking into it, not by reasoning about it."
+Then the judgement call in §6.4:
+
+> "Our first version had the policy seat auto-approve membership changes, because
+> they move no money. That was wrong. At 3-of-3 it hands any two other seats the
+> third signature for free — governance quietly becomes 2-of-3 while resolution
+> stays 3-of-3. So it withholds instead, and a human releases it."
 
 ---
 
@@ -341,30 +343,43 @@ puts both payout amounts into `values`, which is what actually gets gated.
 `escrobot-force-resolve` first, the gate is not really gating. Treat a missing
 decoder as a stop condition, not a warning.
 
-### 6.4 The second finding — a fail-closed seat can veto governance
+### 6.4 The second finding — how the automated seat should treat governance
 
 With the panel at 3-of-3 `{agent, policy, Bryan}`, adding the regulator was
-**rejected by the policy engine**:
+rejected by the policy engine, which had no rule for governance and refused what
+it could not price:
 
 ```
 DENY  "updateKeyPage on acc://certen-panel-bryan1.acme/book/1"
       — no amounts present; refusing to approve a resolution I cannot read
 ```
 
-The engine was behaving correctly — it refuses what it cannot price — but the
-consequence is severe: a required automated seat gates *membership changes too*,
-including the change that would remove it. A misconfigured or permanently dead
-engine leaves the panel unable to resolve disputes **and** unable to repair
-itself.
+**The first fix was wrong.** We made the engine auto-approve any `updateKeyPage`
+on its own page, reasoning that membership changes move no funds. At 3-of-3 that
+hands any two other seats the third signature for free — governance silently
+becomes 2-of-3 while dispute resolution stays 3-of-3, weakening the one operation
+that decides who may act at all.
 
-Fixed by giving the engine an explicit rule: membership changes on its own page
-move no funds and are already authorised by the page threshold, so it approves
-them; a key-page update naming any other page is still refused. Verified:
+**The correct behaviour** is to withhold. The engine now returns `pending` for a
+membership change on its own page: no vote is cast, the transaction stays pending
+on chain, and it is approved only after an operator releases it out of band.
 
 ```
-APPROVE "updateKeyPage on acc://certen-panel-bryan1.acme/book/1"
-        — moves no funds and is already authorised by the page threshold
+PENDING  "updateKeyPage on …/book/1" — awaiting operator release
+                                       POST /release {"txHash":"…"}
+APPROVE  — released by an operator
+DENY     — updateKeyPage naming any other page
 ```
+
+Release it during the demo with:
+```bash
+curl -s -X POST http://127.0.0.1:9099/release \
+  -H 'content-type: application/json' -d '{"txHash":"<TX>","by":"bryan"}'
+```
+
+Nothing here is a limitation of the threshold. Requiring all three entries to
+sign a key-page change at 3-of-3 **is** the threshold enforcing itself; choosing
+2-of-3 is how you let two entries do it.
 
 Note also that the submit response reported `signature_count: 3, is_ready: true`
 for the rejected operation. **Signatures submitted is not the same as the change

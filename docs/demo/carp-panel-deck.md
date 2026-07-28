@@ -283,35 +283,51 @@ structurally required. Adding a seat changed who is necessary. Next slide.
 
 ---
 
-## Two honest limitations
+## The threshold is the control — choose it deliberately
 
-**1. A threshold counts how many signatures, not which ones.**
+A page threshold counts **how many** signatures, not **which ones**. That single
+number decides both who can resolve a dispute and who can change the panel.
 
-| Configuration | Consequence |
-|---|---|
-| 3 seats, threshold 2 | agent + policy engine could resolve **without Bryan** |
-| 3 seats, threshold 3 | Bryan structurally required — any absent seat blocks everything |
-| 4 seats, threshold 3 | Bryan **not** required again — adding the regulator changed this |
+| Configuration | Who can resolve | Who can change membership |
+|---|---|---|
+| 3 seats, threshold 2 | any two — Bryan **not** required | any two |
+| 3 seats, threshold 3 | all three — Bryan required | **all three** |
+| 4 seats, threshold 3 | any three — Bryan **not** required | any three |
 
-Adding a seat silently changes who is necessary. That's a decision to make
-deliberately each time, not a detail.
+We run **3-of-3**, so `updateKeyPage` needs every current entry to sign. That is
+not a limitation to work around; it is the enforcement. If you would rather two
+seats be able to change membership, that is a threshold decision — set 2-of-3 —
+and you accept that two seats can settle disputes too.
 
-**2. A mandatory automated seat can veto its own removal.**
+Adding the regulator moved us to 3-of-4, which **stopped requiring Bryan**. Worth
+noticing every time a seat is added.
 
-At 3-of-3 the policy engine is required for *everything* — including changing
-membership. Ours denied a legitimate membership change, because it had no rule
-for governance and correctly refused what it couldn't price.
+---
 
-> A panel whose automated seat is misconfigured can neither resolve disputes nor
-> rotate the broken seat out. It is bricked.
+## Which is why the automated seat must not rubber-stamp governance
 
-Fixed by giving the engine an explicit governance rule. But the deeper fix is
-**multiple key pages at different thresholds** — routine disputes cleared by the
-automated seats, larger ones requiring the human, and a break-glass path that
-never depends on the automated seat. Not built. Not claimed.
+Our first version approved membership changes automatically, reasoning that they
+move no funds. That was a mistake, and a sharp one:
 
-<!-- NOTE: We found #2 by hitting it live, not by reasoning about it. Say that.
-     Volunteering your own sharp edges is what makes everything else credible. -->
+> At 3-of-3, auto-approving hands any two other seats the third signature for
+> free — quietly making governance **2-of-3** while dispute resolution stays
+> 3-of-3. The one operation that decides who can act becomes the easiest to pass.
+
+So the policy seat now **withholds** on membership changes: it casts no vote and
+the transaction sits pending until an operator explicitly releases it.
+
+```
+PENDING  "updateKeyPage on acc://certen-panel-bryan1.acme/book/1"
+         — awaiting operator release
+APPROVE  — released by an operator
+```
+
+3-of-3 stays honest: the third signature exists, but only once a human decides it
+should. And a key-page update naming any *other* page is refused outright.
+
+<!-- NOTE: This is the slide that shows judgement rather than features. We got it
+     wrong first, in the direction of convenience, and the threshold semantics are
+     what caught it. -->
 
 ---
 
