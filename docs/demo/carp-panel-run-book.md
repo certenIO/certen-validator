@@ -63,10 +63,22 @@ ssh -i ~/.ssh/certen_server root@116.202.214.38 \
 Pre-open: **Etherscan** on `0x9F452b98e33fF3F973a12ee9333B33082D824816`, and the
 deck (`carp-panel-brief.pptx`).
 
-**Do NOT plan on an Accumulate explorer.** `explorer.accumulatenetwork.io` and the
-`kermit.*` subdomain both serve **Mainnet only** — every route to a Kermit ADI
-renders "404 Not Found". Verified by loading them. The Accumulate side is shown
-from the terminal instead:
+**The Accumulate explorer works — switch the network first.**
+`explorer.accumulatenetwork.io` has a network selector (top right); set it to
+**Kermit Testnet** and the panel resolves:
+
+```
+https://explorer.accumulatenetwork.io/acc/certen-panel-bryan1.acme/book/1
+  Key Page · Threshold 3 · Keys 3 · Transactions 28
+```
+
+The choice is stored in `localStorage.networkName`, so set it once before the
+demo and it sticks. **Direct URLs default to Mainnet and 404** — if you paste a
+link without switching the network first, that is what the room will see.
+
+The explorer shows keys as `MHz126…` addresses, not the hex hashes our tooling
+prints, so it will not tell you *which* seat is which. Use it for the
+authoritative threshold and key count; use `proof` below for named seats:
 
 ```bash
 node panel-admin.mjs proof
@@ -85,11 +97,16 @@ node ../../certen-headless-offchain-policy-engine-signer/dist/signer.cjs \
   ./panel-policy-signer.yaml 2>&1 | node -e '
   require("readline").createInterface({input:process.stdin}).on("line",l=>{
     try{const j=JSON.parse(l);
-      console.log(new Date(j.time).toISOString().slice(11,19),
-        (j.msg||""), j.vote?("vote="+j.vote):"", j.reason?("| "+j.reason):"");
+      const extra = j.decoders ? " "+JSON.stringify(j.decoders)
+                  : j.vote    ? " vote="+j.vote
+                  : j.reason  ? " | "+String(j.reason).slice(0,70) : "";
+      console.log(new Date(j.time).toISOString().slice(11,19), (j.msg||"")+extra);
     }catch{console.log(l)}
   })'
 ```
+
+Keep `j.decoders` in that formatter — it is the one boot line you must read, and
+an earlier version of this one-liner silently swallowed it.
 
 ---
 
@@ -282,7 +299,7 @@ Then the judgement call in §6.4:
 | Agent's intent rejected 400 | Gateway predates `0b0ef45` | Redeploy (below) |
 | api-bridge 500 on submit | Same — half-deployed fix | Redeploy |
 | Cloudflare 502 | Transient | Retry; the driver already retries |
-| Intent stuck `anchoring` | **Status lag, not failure** | Check the CONTRACT: `status(order)` |
+| Driver prints `status=anchoring` | **Gateway status lag, not failure** | Check the CONTRACT: `status(order)` |
 | Resolution never executes | Threshold not met | `panel-status`; check signature count |
 
 ```bash
