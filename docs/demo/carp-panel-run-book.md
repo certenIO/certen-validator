@@ -28,6 +28,15 @@ node run-demo.mjs all           # everything, then reset
   --auto-release    release pending membership changes automatically
 ```
 
+**`--auto-release` is unreliable** — its lookup of the pending `updateKeyPage`
+did not find them on the last run, and `reset` stalled until they were released
+by hand. Watch terminal C for `PENDING` and release each `txHash` yourself:
+
+```bash
+curl -s -X POST http://127.0.0.1:9099/release \
+  -H 'content-type: application/json' -d '{"txHash":"<TX>","by":"bryan"}'
+```
+
 It shells out to `panel-admin.mjs` for every step, so the script and this manual
 cannot drift apart. It does **not** start the policy engine or the signer — on a
 projector you want those visible in their own terminals — but it checks they are
