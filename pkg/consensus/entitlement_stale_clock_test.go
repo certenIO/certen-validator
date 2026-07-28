@@ -14,87 +14,94 @@ func reseal(ev *entitlement.Evidence, priv ed25519.PrivateKey) {
 	ev.Header.Signature = hex.EncodeToString(ed25519.Sign(priv, ev.Header.SigningBytes()))
 }
 
-// The idle-chain deadlock, observed in production 2026-07-27.
+// THE IDLE-CHAIN CLOCK, and the two incidents it caused.
 //
-// CheckTx used to judge epoch freshness against the LAST COMMITTED block time.
-// Block time only advances when a ValidatorBlock commits, so on a quiet chain
-// it falls arbitrarily far behind the wall clock the gateway stamps epochs
-// with. Past the 300s tolerance every fresh epoch reads as "issued in the
-// future", CheckTx refuses it as ENTITLEMENT_STALE, and the block it refuses is
-// exactly the one that would have advanced the clock. Nothing recovers.
+// This chain produces blocks only for real work, so block time advances only
+// when work happens. After a quiet period it lags wall clock by an unbounded
+// amount, while the gateway stamps epochs with wall clock. Any rule that treats
+// "issued after block time" as suspicious therefore fires on perfectly good
+// epochs, and the longer the chain is idle the worse it gets.
 //
-// Real numbers from the incident (intent a45ee049): epoch issued 1785146227,
-// judged against block time 1785145745 — 482s ahead, 182s past tolerance.
+// It bit twice:
+//
+//  1. 2026-07-27, CheckTx. Freshness was judged against the LAST COMMITTED
+//     block time, so after five idle minutes every epoch looked future-dated,
+//     CheckTx refused it, and the block that would have advanced the clock was
+//     the one being refused. Deadlock. Fixed by judging CheckTx against wall
+//     time (35c894c) — safe there because CheckTx is a mempool filter, not
+//     consensus.
+//
+//  2. 2026-07-28, FinalizeBlock. Same cause, consensus path. Block 22 carried
+//     time 23:15:41 after an hour of quiet; the proposer attached an epoch
+//     issued at 00:20; Verify refused it as future-dated and an ENTITLED
+//     principal was rejected under enforcement. CheckTx had passed the very
+//     same block. Fixed by removing the future-dated check entirely: on this
+//     chain a fresh epoch ahead of block time is normal, not a fault.
+//
+// NotAfterUnix remains the bound, and it is inside the signed header — a
+// publisher cannot extend an entitlement by moving issued_at.
 
-// A freshly issued epoch must FAIL when judged against a stale block clock.
-// This is the hazard itself; if this ever stops failing, the tolerance changed
-// and the reasoning below needs revisiting.
-func TestFreshEpochLooksFutureDatedAgainstStaleBlockClock(t *testing.T) {
+// A fresh epoch judged against a badly lagging block clock must be ACCEPTED.
+// This is the exact shape that refused paid work in production.
+func TestFreshEpochOnALaggingBlockClockIsAccepted(t *testing.T) {
 	cfg, ev, priv, _ := gateFixture(t, activeLeaf(gatePayer))
 	if ev == nil {
 		t.Fatal("fixture built no evidence")
 	}
 
-	// Epoch issued "now"; the chain last committed 482 seconds ago.
+	// Epoch issued "now"; the chain last committed an hour ago.
 	ev.Header.IssuedAtUnix = gateNow
 	ev.Header.NotAfterUnix = gateNow + 900
 	reseal(ev, priv)
-	staleBlockClock := gateNow - 482
+	staleBlockClock := gateNow - 3600
 
-	reason, err := VerifyEntitlement(blockFor(gatePayer, ev), gatePayer, staleBlockClock, cfg)
+	if reason, err := VerifyEntitlement(blockFor(gatePayer, ev), gatePayer, staleBlockClock, cfg); err != nil {
+		t.Fatalf("a fresh epoch was refused on a lagging chain clock: %v (%s)", err, reason)
+	}
+}
+
+// Idleness of any length must no longer cause a refusal. The old rule failed at
+// 301 seconds; the incident ran to an hour.
+func TestIdlenessOfAnyLengthNoLongerRefuses(t *testing.T) {
+	for _, idleFor := range []int64{60, 299, 301, 482, 3600, 86400} {
+		t.Run(idleName(idleFor), func(t *testing.T) {
+			cfg, ev, priv, _ := gateFixture(t, activeLeaf(gatePayer))
+			ev.Header.IssuedAtUnix = gateNow
+			ev.Header.NotAfterUnix = gateNow + 900
+			reseal(ev, priv)
+
+			if _, err := VerifyEntitlement(
+				blockFor(gatePayer, ev), gatePayer, gateNow-idleFor, cfg); err != nil {
+				t.Fatalf("idle %ds: refused a fresh epoch: %v", idleFor, err)
+			}
+		})
+	}
+}
+
+// Expiry is still enforced, and still against BLOCK time. Removing the
+// future-dated check must not have removed the bound that matters.
+func TestExpiryIsStillEnforcedAgainstBlockTime(t *testing.T) {
+	cfg, ev, priv, _ := gateFixture(t, activeLeaf(gatePayer))
+	ev.Header.IssuedAtUnix = gateNow - 1000
+	ev.Header.NotAfterUnix = gateNow - 1 // expired as of this block
+	reseal(ev, priv)
+
+	reason, err := VerifyEntitlement(blockFor(gatePayer, ev), gatePayer, gateNow, cfg)
 	if err == nil {
-		t.Fatal("expected the stale-clock rejection that deadlocked production")
+		t.Fatal("an expired epoch was accepted")
 	}
 	if reason != entitlement.ReasonStale {
 		t.Fatalf("reason = %q, want %q", reason, entitlement.ReasonStale)
 	}
 }
 
-// The same evidence, judged against the wall clock CheckTx now uses, passes.
-// That is the whole fix: the epoch was never invalid, only mis-measured.
-func TestSameEpochPassesAgainstWallClock(t *testing.T) {
-	cfg, ev, priv, _ := gateFixture(t, activeLeaf(gatePayer))
-	if ev == nil {
-		t.Fatal("fixture built no evidence")
-	}
-
-	ev.Header.IssuedAtUnix = gateNow
-	ev.Header.NotAfterUnix = gateNow + 900
-	reseal(ev, priv)
-
-	reason, err := VerifyEntitlement(blockFor(gatePayer, ev), gatePayer, gateNow, cfg)
-	if err != nil {
-		t.Fatalf("entitled principal rejected against a current clock: %v (%s)", err, reason)
-	}
-	if reason != "" {
-		t.Fatalf("unexpected reason %q", reason)
-	}
-}
-
-// Idleness beyond the tolerance is the trigger, so pin where the edge sits.
-// A chain quiet for four minutes still works; five and a half does not.
-func TestStalenessEdgeIsTheIdlenessTolerance(t *testing.T) {
-	for _, tc := range []struct {
-		name       string
-		idleFor    int64
-		wantReject bool
-	}{
-		{"quiet 60s", 60, false},
-		{"quiet 240s", 240, false},
-		{"quiet 299s", 299, false},
-		{"quiet 301s", 301, true},
-		{"quiet 482s (the incident)", 482, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg, ev, priv, _ := gateFixture(t, activeLeaf(gatePayer))
-			ev.Header.IssuedAtUnix = gateNow
-			ev.Header.NotAfterUnix = gateNow + 900
-			reseal(ev, priv)
-
-			_, err := VerifyEntitlement(blockFor(gatePayer, ev), gatePayer, gateNow-tc.idleFor, cfg)
-			if got := err != nil; got != tc.wantReject {
-				t.Fatalf("idle %ds: rejected=%v, want %v", tc.idleFor, got, tc.wantReject)
-			}
-		})
+func idleName(s int64) string {
+	switch {
+	case s < 300:
+		return "under the old tolerance"
+	case s < 600:
+		return "just past the old tolerance"
+	default:
+		return "long idle"
 	}
 }
