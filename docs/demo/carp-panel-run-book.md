@@ -28,14 +28,21 @@ node run-demo.mjs all           # everything, then reset
   --auto-release    release pending membership changes automatically
 ```
 
-**`--auto-release` is unreliable** — its lookup of the pending `updateKeyPage`
-did not find them on the last run, and `reset` stalled until they were released
-by hand. Watch terminal C for `PENDING` and release each `txHash` yourself:
+`node run-demo.mjs pending` shows what the release finder currently sees — useful
+if a reset looks stuck.
+
+Without `--auto-release`, the runner prints the exact `curl` to paste when a
+membership change needs releasing:
 
 ```bash
 curl -s -X POST http://127.0.0.1:9099/release \
   -H 'content-type: application/json' -d '{"txHash":"<TX>","by":"bryan"}'
 ```
+
+`reset` releases **concurrently** with the restore, not after it. That matters:
+`restore-panel-v1` blocks for minutes polling the key page, so a release issued
+only after it returns arrives far too late — that is what stalled an earlier run.
+Verified unattended: five releases, `3-of-4` back to `2-of-2`, exit 0.
 
 It shells out to `panel-admin.mjs` for every step, so the script and this manual
 cannot drift apart. It does **not** start the policy engine or the signer — on a
