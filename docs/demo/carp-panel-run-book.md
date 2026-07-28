@@ -60,8 +60,36 @@ ssh -i ~/.ssh/certen_server root@116.202.214.38 \
   'docker logs -f certen-validator-1 2>&1 | grep --line-buffered -E "DISCOVERED|ELECTED|EVM-EXEC|executed successfully"'
 ```
 
-Pre-open: Etherscan on `0x9F452b98e33fF3F973a12ee9333B33082D824816`, and the deck
-`docs/demo/carp-panel-deck.html`.
+Pre-open: **Etherscan** on `0x9F452b98e33fF3F973a12ee9333B33082D824816`, and the
+deck (`carp-panel-brief.pptx`).
+
+**Do NOT plan on an Accumulate explorer.** `explorer.accumulatenetwork.io` and the
+`kermit.*` subdomain both serve **Mainnet only** — every route to a Kermit ADI
+renders "404 Not Found". Verified by loading them. The Accumulate side is shown
+from the terminal instead:
+
+```bash
+node panel-admin.mjs proof
+```
+
+That prints, on one screen: the key page and its named seats, the resolution's
+WriteData with **which seat cast each signature**, and the effect on Sepolia
+(`admin()`, order status, both payouts) — the same data an explorer would show,
+curated, with the seats named so the signatures mean something to a viewer.
+
+**Terminal D is raw JSON.** The signer logs pino JSON, which reads badly on a
+projector. Pipe it through:
+
+```bash
+node ../../certen-headless-offchain-policy-engine-signer/dist/signer.cjs \
+  ./panel-policy-signer.yaml 2>&1 | node -e '
+  require("readline").createInterface({input:process.stdin}).on("line",l=>{
+    try{const j=JSON.parse(l);
+      console.log(new Date(j.time).toISOString().slice(11,19),
+        (j.msg||""), j.vote?("vote="+j.vote):"", j.reason?("| "+j.reason):"");
+    }catch{console.log(l)}
+  })'
+```
 
 ---
 
