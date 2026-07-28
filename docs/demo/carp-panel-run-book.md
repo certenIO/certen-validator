@@ -272,7 +272,57 @@ rather than starting over.
 
 ---
 
-## 6. Rehearsal evidence — Act 1, 2026-07-28
+## 6. Rehearsal evidence
+
+### 6.0 Full three-act rerun on the updated fleet — 2026-07-28
+
+Every act, back to back, verified on-chain rather than from the demo's output.
+
+| Act | Order | Expected | Actual |
+|---|---|---|---|
+| 1 — panel resolves | `0xcad6e943…` | 5 | **5** |
+| 2 scene 1 — approve | `0x1a8f71a8…` | 5 | **5** |
+| 2 scene 2 — deny | `0xfe8f613b…` | **4 (refused)** | **4** |
+| 2 scene 3 — outage | `0x9edc8447…` | 5 after recovery | **5** |
+
+**Act 1.** Dispute recorded on-chain (`0x7f961765…` buyer, `0x338c0396…` seller),
+then resolution `72ad64f8…` delivered with two signatures — agent `bfec7219…`
+opened it, Bryan `d7a0d860…` finalized it.
+
+**Act 2 scene 2** — the engine read the decoded call and refused:
+```
+DENY  "…1500000000000000 wei to seller, 0 wei to buyer" — exceeds the
+      1000000000000000 wei auto-approval ceiling; escalate to manual review
+signer: vote=reject          order: still 4, with both humans signed
+```
+
+**Act 2 scene 3** — with the engine stopped: `policy decision failed |
+ECONNREFUSED` on every poll and **no vote cast**. On restart, `vote=approve` and
+the order completed. Withheld, not lost.
+
+**Act 3** — the corrected governance path. The membership change was **not**
+auto-signed:
+```
+PENDING "updateKeyPage on …/book/1" — awaiting operator release
+signer:  "policy engine has not decided yet; withholding signature and will retry"
+page:    unchanged at 3-of-3
+```
+After `POST /release {"txHash":"c97b6084…","by":"bryan"}`:
+```
+APPROVE — released by an operator
+page:   3-of-4 {policy, bryan, agent, regulator}
+```
+
+**Resetting afterwards needs releases too — budget for it.** `restore-panel-v1`
+runs governance operations, so while the policy seat is still on the page each
+one waits for a release. In this run: removing the regulator went through on
+three human/agent signatures (no release needed), lowering the threshold needed
+one release, and removing the policy seat needed none once the threshold was 2.
+Watch the engine log for `PENDING` and release each `txHash` as it appears.
+
+Panel returned to `2-of-2 {bryan, agent}`, so the whole sequence is repeatable.
+
+### 6.1 Earlier Act 1 evidence — 2026-07-28
 
 Verified independently on-chain, not from the demo's own output.
 
