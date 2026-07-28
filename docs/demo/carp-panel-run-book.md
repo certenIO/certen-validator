@@ -11,6 +11,31 @@ validator fleet. Every hash in §7 is from that run.
 
 **Runtime:** ~20 minutes. ~0.0015 ETH per order, six orders per full run.
 
+## Running it as a script
+
+`run-demo.mjs` drives the same stages this manual documents, one command per act,
+pausing between beats and printing the line to say:
+
+```bash
+node run-demo.mjs preflight     # checks only
+node run-demo.mjs act1          # a disputed order resolved by the panel
+node run-demo.mjs act2          # the automated seat: approve / deny / outage
+node run-demo.mjs act3          # regulator voted in, with the release step
+node run-demo.mjs reset         # back to 2-of-2 {bryan, agent}
+node run-demo.mjs all           # everything, then reset
+
+  --auto            no pauses (unattended verification run)
+  --auto-release    release pending membership changes automatically
+```
+
+It shells out to `panel-admin.mjs` for every step, so the script and this manual
+cannot drift apart. It does **not** start the policy engine or the signer — on a
+projector you want those visible in their own terminals — but it checks they are
+up and refuses to continue if they are not.
+
+Read the rest of this manual before presenting: the script runs the demo, it does
+not tell you what to watch for.
+
 ---
 
 ## 0. Pre-flight — 3 minutes, do not skip
