@@ -13,8 +13,32 @@ validator fleet. Every hash in §7 is from that run.
 
 ## Running it as a script
 
-`run-demo.mjs` drives the same stages this manual documents, one command per act,
-pausing between beats and printing the line to say:
+**PowerShell — the simplest way.** `Demo.ps1` handles the setup this manual
+otherwise asks you to do by hand:
+
+```powershell
+cd C:\Accumulate_Stuff\certen\certen-carp-starter\examples
+
+.\Demo.ps1 preflight
+.\Demo.ps1 act1
+.\Demo.ps1 act2                    # opens the engine + signer in their own windows
+.\Demo.ps1 act3
+.\Demo.ps1 reset -AutoRelease
+.\Demo.ps1 stop                    # close those two windows afterwards
+
+.\Demo.ps1 all -Auto -AutoRelease  # unattended verification run
+.\Demo.ps1 pending                 # what the release finder currently sees
+```
+
+It reads the funded Sepolia key out of `api-bridge/.env` into the session
+(never printing it), adds Foundry to `PATH` — **`cast` is on Git Bash's PATH but
+not PowerShell's**, and without this every on-chain check fails in a way that
+looks like a broken demo — opens terminals C and D titled so they are obvious on
+a projector, and reuses them if they are already up.
+
+**Node — the same thing underneath.** `run-demo.mjs` drives the stages this
+manual documents, one command per act, pausing between beats and printing the
+line to say:
 
 ```bash
 node run-demo.mjs preflight     # checks only
@@ -485,7 +509,9 @@ tiered thresholds across multiple key pages aren't built. Say it plainly.
 
 | File | Purpose |
 |---|---|
-| `certen-carp-starter/examples/panel-admin.mjs` | the driver — every stage below |
+| `certen-carp-starter/examples/Demo.ps1` | **PowerShell wrapper — start here** |
+| `…/run-demo.mjs` | the act runner it calls |
+| `…/panel-admin.mjs` | the driver — every stage below |
 | `…/escrow-policy-engine.mjs` | Bryan's rules (terminal C) |
 | `…/escrobot-decoder.mjs` | teaches the signer to read `forceResolve` |
 | `…/panel-policy-signer.yaml` | signer config (terminal D) |
