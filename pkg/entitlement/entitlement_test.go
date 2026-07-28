@@ -323,15 +323,19 @@ func TestMissingExpiryIsRefused(t *testing.T) {
 	}
 }
 
-func TestFutureEpochIsRefused(t *testing.T) {
+// An epoch issued ahead of block time is ACCEPTED: on a chain whose clock only
+// advances when work happens, that is the normal reading of a fresh epoch, not
+// a fault. See TestEpochIssuedAheadOfBlockTimeIsAccepted for the full reasoning
+// and the production incident that established it.
+func TestFutureIssuedEpochIsAccepted(t *testing.T) {
 	f := newFixture(t, activeLeaf(principal))
 	hdr := f.header
 	hdr.IssuedAtUnix = now + 86400
 	hdr.NotAfterUnix = now + 90000
 	ev := f.evidence(t, principal)
 	ev.Header = f.sign(hdr)
-	if got := reasonOf(t, Verify(ev, principal, now, f.keys)); got != ReasonStale {
-		t.Fatalf("an epoch from the future must refuse, got %s", got)
+	if err := Verify(ev, principal, now, f.keys); err != nil {
+		t.Fatalf("a fresh epoch on a lagging chain clock was refused: %v", err)
 	}
 }
 

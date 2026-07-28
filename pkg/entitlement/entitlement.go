@@ -252,12 +252,26 @@ func Verify(ev *Evidence, principal string, nowUnix int64, keys KeySet) error {
 		return &VerifyError{Reason: ReasonStale, Detail: fmt.Sprintf(
 			"epoch %d expired at %d, block time %d", ev.Header.Epoch, ev.Header.NotAfterUnix, nowUnix)}
 	}
-	// An epoch from the future indicates a clock or publishing fault. Refuse
-	// rather than honour it, with a small tolerance for ordinary skew.
-	if ev.Header.IssuedAtUnix > nowUnix+300 {
-		return &VerifyError{Reason: ReasonStale, Detail: fmt.Sprintf(
-			"epoch %d issued at %d, ahead of block time %d", ev.Header.Epoch, ev.Header.IssuedAtUnix, nowUnix)}
-	}
+	// DELIBERATELY NO "epoch from the future" CHECK.
+	//
+	// An earlier version refused an epoch whose issued_at was more than 300s
+	// ahead of block time, on the theory that it indicated a clock or
+	// publishing fault. On this chain it indicates neither.
+	//
+	// Block time advances only when a block is produced, and blocks are
+	// produced only for real work. After an idle hour the next block still
+	// carries a consensus time from an hour ago, while the gateway stamps
+	// epochs with wall time. Every freshly published epoch then looks
+	// future-dated, and under enforcement legitimate paid work is refused.
+	// Observed in production 2026-07-28: block 22 carried time 23:15:41, the
+	// attached epoch was issued at 00:20, and an entitled principal was
+	// rejected — while CheckTx, which judges against wall time, had passed the
+	// very same block.
+	//
+	// Nothing is lost by removing it. The security control is NotAfterUnix
+	// above: it is inside the signed header, so a publisher cannot extend an
+	// entitlement by back- or forward-dating issued_at, and an expired epoch is
+	// still refused. issued_at is metadata; not_after is the bound.
 
 	// 3. The leaf must be the principal's. Compared case-insensitively on the
 	// normalized URL because Accumulate URLs are case-insensitive, and a

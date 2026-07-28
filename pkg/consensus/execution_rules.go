@@ -87,8 +87,15 @@ const (
 	//     inconsistent proof were accepted under v5 and are refused under v6.
 	executionRulesV6 uint64 = 6
 
+	// v7 — the "epoch from the future" check is removed. Block time advances
+	// only when this chain produces blocks, so after an idle period every
+	// freshly published epoch reads as future-dated and legitimate work is
+	// refused. Blocks refused under v6 are accepted under v7, which is a change
+	// to accept/reject and therefore to the app hash.
+	executionRulesV7 uint64 = 7
+
 	// CurrentExecutionRulesVersion is what THIS binary implements.
-	CurrentExecutionRulesVersion = executionRulesV6
+	CurrentExecutionRulesVersion = executionRulesV7
 )
 
 // ExecutionRulesMismatchError explains a refusal to start in terms an operator

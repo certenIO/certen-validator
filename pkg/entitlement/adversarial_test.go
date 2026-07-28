@@ -161,17 +161,41 @@ func TestExpiredEpochIsRefusedEvenWithAValidSignature(t *testing.T) {
 	}
 }
 
-// A publisher that signs epochs far in the future would otherwise be able to
-// mint an entitlement that outlives any revocation.
-func TestFutureDatedEpochIsRefused(t *testing.T) {
+// An epoch issued AHEAD of block time must be accepted, and this is not a
+// weakening — it is the correct reading of a chain whose clock only moves when
+// work happens.
+//
+// Block time advances only on block production. After an idle hour the next
+// block still carries an hour-old consensus time while the gateway stamps
+// epochs with wall time, so every fresh epoch reads as future-dated. Refusing
+// them rejected an entitled principal in production on 2026-07-28: CheckTx
+// (wall time) passed the block, FinalizeBlock (block time) refused it.
+//
+// The bound that matters is NotAfterUnix, inside the signed header — a
+// publisher cannot extend an entitlement by moving issued_at.
+func TestEpochIssuedAheadOfBlockTimeIsAccepted(t *testing.T) {
 	f := newAdvFixture(t, activeLeafA(payerA))
 	ev := f.evidence(t, payerA)
-	ev.Header.IssuedAtUnix = advNow + 3600
+	ev.Header.IssuedAtUnix = advNow + 3600 // an hour "ahead" of this block
 	ev.Header.NotAfterUnix = advNow + 7200
 	f.reseal(ev)
 
+	if err := Verify(ev, payerA, advNow, f.keys); err != nil {
+		t.Fatalf("a fresh epoch on a lagging chain clock was refused: %v", err)
+	}
+}
+
+// ...but expiry is still enforced against block time, which is the control that
+// actually bounds an entitlement.
+func TestFutureIssuedButExpiredEpochIsStillRefused(t *testing.T) {
+	f := newAdvFixture(t, activeLeafA(payerA))
+	ev := f.evidence(t, payerA)
+	ev.Header.IssuedAtUnix = advNow + 3600
+	ev.Header.NotAfterUnix = advNow - 1 // already expired at this block time
+	f.reseal(ev)
+
 	if got := reasonOf2(t, Verify(ev, payerA, advNow, f.keys)); got != ReasonStale {
-		t.Fatalf("reason = %s, want %s", got, ReasonStale)
+		t.Fatalf("an expired epoch was accepted: reason = %s, want %s", got, ReasonStale)
 	}
 }
 
