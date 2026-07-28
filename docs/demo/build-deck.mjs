@@ -7,7 +7,11 @@
 // marked + mermaid are INLINED, so the deck works with no network. That matters:
 // a demo laptop on conference wifi should not be able to break the slides.
 //
-//   node build-deck.mjs        -> carp-demo-deck.html
+//   node build-deck.mjs                     -> carp-demo-deck.html
+//   node build-deck.mjs carp-panel-deck.md  -> carp-panel-deck.html
+//
+// The deck title comes from the first `# heading` in the source, so each deck
+// names its own browser tab.
 import { readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -144,7 +148,9 @@ button:hover{background:#232a3c}
 `;
 
 async function main() {
-  const raw = await readFile(join(HERE, 'carp-demo-deck.md'), 'utf8');
+  const srcName = process.argv[2] || 'carp-demo-deck.md';
+  const raw = await readFile(join(HERE, srcName), 'utf8');
+  const title = (raw.match(/^#\s+(.+)$/m)?.[1] ?? srcName).trim();
 
   const slides = raw.split(/^---$/m).map((chunk) => {
     const notes = [];
@@ -173,7 +179,7 @@ async function main() {
   const html = `<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>CERTEN × CARP — Two Agents, One Escrow</title>
+<title>${title.replace(/</g, '&lt;')}</title>
 <style>${CSS}</style></head>
 <body>
 <div id="wrap">
@@ -193,7 +199,7 @@ ${libs}
 <script>(${clientMain.toString()})();</script>
 </body></html>`;
 
-  const out = join(HERE, 'carp-demo-deck.html');
+  const out = join(HERE, srcName.replace(/\.md$/, '') + '.html');
   await writeFile(out, html, 'utf8');
   console.log(`\nWrote ${out} (${Math.round(Buffer.byteLength(html) / 1024)} KB, ${slides.length} slides)`);
 }
