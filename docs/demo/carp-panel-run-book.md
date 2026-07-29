@@ -35,8 +35,17 @@ then observed on chain:
 
 ```powershell
 cd C:\Accumulate_Stuff\certen\certen-carp-starter\examples
-.\Demo.ps1 preflight
+
+.\Demo.ps1 preflight      # verifies BOTH pages, credits, and the admin address
+.\Demo.ps1 routine        # Act 1 — settled without you
+.\Demo.ps1 escalation     # Act 2 — the one that reaches you
+.\Demo.ps1 recovery       # Act 3 — rewriting page 2 from above
+.\Demo.ps1 all            # all three; refuses to start if pre-flight fails
+.\Demo.ps1 stop           # close the engine and signer windows
 ```
+
+Right-clicking the file and choosing **Run with PowerShell** works and holds the
+window open at the end — it used to close instantly, which read as a crash.
 
 `Demo.ps1` loads the funded Sepolia key from `api-bridge/.env`, adds Foundry to
 `PATH` (**`cast` is on Git Bash's PATH but not PowerShell's** — without this every
