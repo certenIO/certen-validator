@@ -16,110 +16,120 @@
 
 ```
 escrobot.admin()  =  0x895b28715FA81F6F4d6994cDda4e5323cC07F9f3   = the panel
-key page          =  2-of-2 {Bryan, his agent}
 ```
 
-Seats are keys. Adding one later is adding a seat — no redeployment, no downtime.
+Your contract sees one address. Behind it is a panel with two levels of
+authority — and you are only on the upper one.
 
 ---
 
-# Act 1 — A disputed order, resolved by the panel
+# The shape: routine below, you above
+
+```
+acc://panel.acme/book                    ← escrobot's admin authority
+  page/1   HIGHER priority   you                    escalation only
+  page/2   lower  priority   agent + policy (2-of-2) routine settlement
+```
+
+Accumulate authorizes at **book** level, so either page can act for the contract
+— each satisfying its own threshold. Two properties follow, and both are
+enforced by the protocol rather than by us:
+
+- **Page 2 settles on its own.** Routine disputes never reach you.
+- **Page 1 can rewrite page 2; page 2 cannot touch page 1.** A page may only be
+  modified by one of equal or higher priority. If an automated seat misbehaves,
+  you replace it from above — and it can never replace you.
+
+> "There's no profit in being Admin so **automating Admin as much as possible is
+> desirable**… I'm willing to check in every day or two."
+>
+> You are not in the routine path at all. Checking in every day or two is the
+> right cadence because the only things waiting are the genuinely unresolvable
+> ones.
+
+---
+
+# Routine — settled without you
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant BU as buyer
-    participant SE as seller
+    participant AG as 🤖 your agent
+    participant PO as ⚙️ your policy engine
     participant ESC as escrobot
-    participant AG as 🤖 agent seat
-    participant BR as 🧑 Bryan's seat
-    SE->>ESC: submit → buy → ship (SHIPPED)
-    BU->>ESC: note "package never arrived"
-    SE->>ESC: note "tracking shows delivered"
-    AG->>ESC: proposes forceResolve(order, reason, price, bond)
-    Note over ESC: 1 of 2 — nothing can execute
-    BR->>ESC: approves → threshold met → executes
+    AG->>ESC: proposes forceResolve on page 2
+    PO->>PO: checks YOUR rules — conservation, ceiling
+    PO->>ESC: co-signs automatically
+    Note over ESC: page 2 is 2-of-2 → satisfied → executes
 ```
 
-**The agent does the work. Bryan's signature is what finalizes it.**
-
-| Order | `0xcad6e943…` | Buyer's complaint | `0x7f961765…` |
-|---|---|---|---|
-| **Resolution** | **`72ad64f8…`** | Seller's rebuttal | `0x338c0396…` |
-| `Completed(order, …)` | **`0x895b2871…` = the panel** | Settled | seller 0.001 · buyer bond back |
-
-Your own `require` enforced the payout; your own `note()` wrote the panel's
-reason on chain, permanently. **Check `admin()` yourself on Etherscan.**
-
----
-
-# Act 2 — Automating Admin
-
-> "There's no profit in being Admin so **automating Admin as much as possible is
-> desirable**… I'm willing to check in every day or two and just do the
-> last-human-approval step."
-
-The third seat is not a person. It is a signer running **your** policy engine, on
-**your** infrastructure, holding **its own key**. CERTEN cannot make it sign.
+The third seat is not a person. It is a signer running **your** policy engine,
+on **your** infrastructure, holding **its own key**. CERTEN cannot make it sign.
 
 | Scene | Your engine | Result |
 |---|---|---|
-| **Routine** — split within policy | `approve` | Signs itself. You click once. **Settled.** |
-| **Out of policy** — one side takes the other's bond | `deny` | **Nothing settles** — though both humans signed |
-| **Engine offline** | *no answer* | **Nothing settles.** Silence is not consent |
+| **Routine** — split within policy | `approve` | Settles. **You are never told.** |
+| **Out of policy** — one side takes the other's bond | `pending` | Stops, and comes to you |
+| **Engine offline** | *no answer* | Stops. Silence is not consent |
 
-> approve ▸ signs · deny ▸ rejects · **no answer ▸ signs nothing**
+> approve ▸ signs · **no answer ▸ signs nothing**
 > *"An outage can never become an approval. That is a property of the code, not a setting."*
 
-**One catch worth knowing.** A contract call hides its amounts in ABI-encoded
-calldata; the intent's *leg* value is `0`. So a ~40-line decoder is required
-before your rules can see the payout at all — without it a full forfeiture sails
-through. We found that the direct way.
+**Proven live:** order `0x7ba2eab4…` → status **5**, signed by `agent` and
+`policy` **both on page 2**. Your seat was never asked.
 
 ---
 
-# Act 3 — The threshold is the control
+# Escalation — the only time you appear
 
-The panel voted a **regulator** in, live: `3-of-4 {policy, Bryan, agent, regulator}`.
-No redeployment. No downtime. The contract never noticed.
+The automated seats could not settle it, so page 2 never reached its threshold
+and nothing happened. One signature from you finishes it.
 
-A page threshold counts **how many** signatures, not **which**. That one number
-governs both who settles a dispute and who changes the panel:
+```bash
+certen-approve list        # what is waiting, and why it stopped
+certen-approve sign <tx>   # your seat, your passphrase, one signature
+```
 
-| Configuration | Who can resolve | Who can change membership |
-|---|---|---|
-| 3 seats, threshold 2 | any two — Bryan **not** required | any two |
-| 3 seats, threshold 3 | all three — Bryan required | **all three** |
-| 4 seats, threshold 3 | any three — Bryan **not** required | any three |
+Your key is **encrypted at rest** and decrypted only for the moment of signing.
+No daemon holds it: nothing can sign for you while you are away — which is the
+entire point of an escalation seat.
 
-**And the automated seat must never rubber-stamp governance.** Auto-approving
-membership changes would hand any two other seats the third signature for free —
-quietly making governance 2-of-3 while resolution stayed 3-of-3. So it withholds:
+**Proven live:** order `0xf62eefea…` → status **5**. The signature record shows
+exactly what happened:
 
 ```
-PENDING  "updateKeyPage on …/book/1"  — awaiting operator release
-APPROVE  — released by an operator          (page changes only now)
+signed: you   on acc://panel.acme/book/1     ← 1-of-1, satisfies the book alone
+signed: agent on acc://panel.acme/book/2     ← 1 of the 2 page 2 needed
 ```
+
+Page 2 had **half** of what it needed and could never finish. Your single
+signature on page 1 completed it.
 
 ---
 
 # What this is, and what it isn't
 
-**Is:** escrobot on Sepolia with a live CERTEN panel as admin · disputes resolved
-by proof-gated multi-party calls · membership self-governing · an automated seat
-that obeys your rules and fails closed. All of it re-checkable on Etherscan
-without trusting anything on this screen.
+**Is:** escrobot on Sepolia with a live two-page CERTEN panel as admin · routine
+disputes settled by automated seats you control · escalation by one signature
+from a key only you hold · a policy engine that fails closed · membership
+recoverable from above. Every claim re-checkable on Etherscan.
 
-**Isn't:** on mainnet · tiered thresholds across multiple key pages · a revenue
-mechanism inside the escrow. `forceResolve` enforces
-`amtToSeller + amtToBuyer == price + bond`, so arbitration cannot pay your agent
-a cut without changing your contract — and we said we wouldn't.
+**Isn't:** on mainnet · a revenue mechanism inside the escrow. `forceResolve`
+enforces `amtToSeller + amtToBuyer == price + bond`, so arbitration cannot pay
+your agent a cut without changing your contract — and we said we wouldn't.
+
+**One property to weigh deliberately.** Page 2 acting alone means two compromised
+automated seats could settle a routine dispute without you. The guards are your
+own policy rules and your power to rewrite page 2 from above — not a signature
+requirement. That is the deliberate trade for keeping you out of the routine
+path, and it is yours to set: raise page 2's threshold, or narrow what its rules
+permit.
 
 ```solidity
 // this requires an agent and/or human to monitor a channel for arbitration
 // requests and act promptly and in good faith
 ```
 
-You wrote that as a caveat. The agent monitors, your policy engine decides, you
-confirm — and **"in good faith" is now enforced by a quorum and sealed in a
-proof**, rather than assumed.
+You wrote that as a caveat. The agent monitors, your policy engine decides, and
+you appear only when they genuinely cannot — with **"in good faith" enforced by
+a quorum and sealed in a proof**, rather than assumed.
