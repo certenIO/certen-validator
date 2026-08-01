@@ -188,8 +188,12 @@ type BlockProcessJob struct {
 // DefaultIntentDiscoveryConfig returns a default configuration for intent discovery
 func DefaultIntentDiscoveryConfig() *IntentDiscoveryConfig {
 	return &IntentDiscoveryConfig{
-		BlockPollInterval:   5 * time.Second,
-		BFTTimeout:          60 * time.Second, // Increased from 30s for WAN latency
+		BlockPollInterval: 5 * time.Second,
+		// Bounds the WHOLE canonical workflow, the G0/G1/G2 govproof CLI round trips
+		// included (G1 alone measured ~27s against the Kermit endpoint). Too small a value
+		// gets G2 KILLED mid-flight, which leaves governance at G1 and makes HIGH-004 refuse
+		// every value-moving intent. Keep in step with main.go's CERTEN_BFT_TIMEOUT default.
+		BFTTimeout:          180 * time.Second,
 		MaxConcurrentBlocks: MAX_CONCURRENT_BLOCKS,
 		IntentBatchSize:     INTENT_BATCH_SIZE,
 		MinStartHeight:      946000, // Current testnet baseline

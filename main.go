@@ -1698,9 +1698,37 @@ func startValidator(
 	log.Printf("🔍 Starting Certen Intent Discovery Service for validator...")
 
 	// Create IntentDiscovery configuration
+	//
+	// BFTTimeout bounds the ENTIRE canonical workflow, governance proof generation included.
+	// That budget is not small: each of G0/G1/G2 shells out to the govproof CLI, which makes
+	// live v3 API round trips. Measured on Sepolia against the Kermit endpoint, G0 ~1s but G1
+	// ~27s and G2 a similar order — comfortably past 30s in total.
+	//
+	// This mattered more than a slow path. exec.CommandContext KILLS the child when the
+	// context expires, and a killed process surfaces as an *exec.ExitError with EMPTY stderr,
+	// so the failure logged only as "governance proof CLI failed:" with no reason. G2 was
+	// killed every time, governance settled at G1, and HIGH-004 then correctly refused every
+	// value-moving intent: "G2 governance required for value-moving operations, got G1".
+	// The net effect was that NO intent moving value could execute, on_demand or on_cadence,
+	// while the CLI itself worked perfectly when run by hand.
+	//
+	// DefaultIntentDiscoveryConfig already carried 60s ("Increased from 30s for WAN latency");
+	// this literal silently reverted it. Keep the two in agreement, and allow an env override
+	// so a slow endpoint can be accommodated without a rebuild.
+	bftTimeout := 180 * time.Second
+	if v := os.Getenv("CERTEN_BFT_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			bftTimeout = d
+			log.Printf("⏱️  BFT timeout overridden by CERTEN_BFT_TIMEOUT=%v", d)
+		} else {
+			log.Printf("⚠️  CERTEN_BFT_TIMEOUT=%q is not a valid duration; using %v", v, bftTimeout)
+		}
+	}
+	log.Printf("⏱️  BFT timeout: %v (must cover G0+G1+G2 govproof CLI round trips)", bftTimeout)
+
 	intentConfig := &intent.IntentDiscoveryConfig{
 		BlockPollInterval:   5 * time.Second,
-		BFTTimeout:          30 * time.Second,
+		BFTTimeout:          bftTimeout,
 		MaxConcurrentBlocks: 2000, // Increased from 10 to handle high block rate
 		IntentBatchSize:     100,  // Increased from 50 to process more intents per batch
 		MinStartHeight:      0,

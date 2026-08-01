@@ -127,11 +127,39 @@ func (g *CLIGovernanceProofGenerator) GenerateAtLevel(ctx context.Context, level
 	// Capture output
 	output, err := cmd.Output()
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			g.logger.Printf("[GOV-PROOF] CLI failed: %s", string(exitErr.Stderr))
-			return nil, fmt.Errorf("governance proof CLI failed: %s", string(exitErr.Stderr))
+		// A context expiry KILLS the child, and a killed process returns an *exec.ExitError
+		// whose Stderr is EMPTY — so this used to log exactly "governance proof CLI failed:"
+		// with nothing after the colon. That is what a too-short PARENT deadline looked like
+		// in production: G2 was killed on every value-moving intent, governance settled at
+		// G1, and HIGH-004 then refused the intent — while the CLI ran fine by hand. Name the
+		// cause instead of emitting an empty reason.
+		if cmdCtx.Err() != nil {
+			g.logger.Printf("[GOV-PROOF] %s CLI killed by context (%v); own budget %v — "+
+				"if this is well under %v the caller's deadline is the real limit",
+				level, cmdCtx.Err(), g.timeout, g.timeout)
+			return nil, fmt.Errorf(
+				"governance proof CLI for %s killed by context expiry (%v); own budget %v — "+
+					"the caller's deadline likely does not cover G0+G1+G2 round trips",
+				level, cmdCtx.Err(), g.timeout)
 		}
-		return nil, fmt.Errorf("governance proof CLI error: %w", err)
+
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			// This CLI reports most failures on stdout, not stderr, so fall back to stdout
+			// rather than returning an error with no text in it.
+			detail := strings.TrimSpace(string(exitErr.Stderr))
+			if detail == "" {
+				detail = strings.TrimSpace(string(output))
+				if len(detail) > 800 {
+					detail = "..." + detail[len(detail)-800:]
+				}
+			}
+			if detail == "" {
+				detail = fmt.Sprintf("exit status %d with no output on stdout or stderr", exitErr.ExitCode())
+			}
+			g.logger.Printf("[GOV-PROOF] %s CLI failed: %s", level, detail)
+			return nil, fmt.Errorf("governance proof CLI for %s failed: %s", level, detail)
+		}
+		return nil, fmt.Errorf("governance proof CLI for %s error: %w", level, err)
 	}
 
 	// Parse JSON output
