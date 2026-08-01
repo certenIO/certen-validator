@@ -1386,11 +1386,22 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 		batchAtt.Replayed = true
 
 		legs, chainID, account, opID, extractErr := bv.batchInputsFromIntent(certenIntent)
+
+		// The ADI URL is keccak'd into the member's Merkle leaf, and the account contract
+		// recomputes that leaf from its OWN immutable adiURL. They must be the identical
+		// string. AccountURL is the DATA account (".../data") — passing it here produced a
+		// leaf no account could ever verify, so every batched member would anchor, attest,
+		// and then revert at settlement with the intent stranded. Resolve the org ADI.
+		adiURL, adiErr := memberADIURL(certenIntent)
+
 		if extractErr != nil {
 			bv.logger.Printf("⚠️ [BATCH-QUEUE] intent %s cannot be batched (%v) — falling back",
 				certenIntent.IntentID, extractErr)
+		} else if adiErr != nil {
+			bv.logger.Printf("⚠️ [BATCH-QUEUE] intent %s has no usable ADI URL (%v) — falling back",
+				certenIntent.IntentID, adiErr)
 		} else if enqErr := bv.batchEnqueuer.EnqueueForBatch(
-			certenIntent.IntentID, certenIntent.AccountURL, chainID, account, opID, legs, batchAtt,
+			certenIntent.IntentID, adiURL, chainID, account, opID, legs, batchAtt,
 		); enqErr != nil {
 			// NOT queued. Fall through rather than return, or the intent would be dropped.
 			bv.logger.Printf("⚠️ [BATCH-QUEUE] intent %s not queued (%v) — falling back",

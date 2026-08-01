@@ -354,3 +354,52 @@ func (bv *BFTValidator) RunBatchMemberAttestation(
 	}
 	bv.RunProofCycle(ctx, att, res)
 }
+
+// memberADIURL resolves the ADI URL to hash into a batch member's Merkle leaf.
+//
+// This value is consensus-critical in a way that is easy to miss. ComputeBatchLeaf hashes
+// keccak256(adiURL) into the leaf, and CertenAccountV7.computeLeaf recomputes that leaf from
+// the account's OWN immutable adiURL, set at deployment by CertenAccountFactoryV9. If the two
+// strings differ by even one character the leaf is not in the root the account checks against,
+// so executeGovernanceProofDirect reverts — AFTER the batch anchor and its BLS attestation
+// have been paid for on chain. The intent then sits pending forever with nothing recording why.
+//
+// CertenIntent carries two URLs that look interchangeable and are not:
+//
+//	AccountURL      — the principal where the WriteData tx lives: "acc://org.acme/data"
+//	OrganizationADI — the org ADI itself:                          "acc://org.acme"
+//
+// Only the second is what the account was deployed with. The batch path originally passed
+// AccountURL, which made every batched member unspendable.
+//
+// The "/data" trim is a fallback for intents whose OrganizationADI was never populated, not
+// the primary path. Anything still carrying a "/data" suffix, or empty, or not an acc:// URL,
+// is refused: falling back to the per-intent path costs more gas but settles, whereas a wrong
+// leaf cannot settle at all.
+func memberADIURL(ci *CertenIntent) (string, error) {
+	if ci == nil {
+		return "", fmt.Errorf("nil intent")
+	}
+
+	adi := strings.TrimSpace(ci.OrganizationADI)
+	if adi == "" {
+		// Fallback only. AccountURL is the data account, so the suffix must come off.
+		adi = strings.TrimSuffix(strings.TrimSpace(ci.AccountURL), "/data")
+	}
+
+	if adi == "" {
+		return "", fmt.Errorf("intent carries neither organizationAdi nor accountUrl")
+	}
+	if !strings.HasPrefix(adi, "acc://") {
+		return "", fmt.Errorf("resolved ADI %q is not an acc:// URL", adi)
+	}
+	// A trailing "/data" here means we resolved the data account, not the ADI. Refuse rather
+	// than emit a leaf the account can never verify.
+	if strings.HasSuffix(adi, "/data") {
+		return "", fmt.Errorf("resolved ADI %q is a data account, not an org ADI", adi)
+	}
+	if strings.HasSuffix(adi, "/") {
+		return "", fmt.Errorf("resolved ADI %q has a trailing slash; the account's adiURL will not match", adi)
+	}
+	return adi, nil
+}
