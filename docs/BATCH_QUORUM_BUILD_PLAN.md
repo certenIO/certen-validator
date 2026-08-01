@@ -123,6 +123,43 @@ already running. `BroadcastTxSync` is available (see `bft_integration.go:2754`).
   byte-identical to the one `cmd/subsetcommit/main.go` records as the production prover's
   output, which independently confirms the fold.
 
+### DONE — commit `6f72b36`
+Deterministic period selection in `pkg/execution/batch_mempool.go`:
+
+- `PendingBatchIntent.CommitHeight` added — the BFT height the intent's round committed at.
+- `BatchPeriodCutoff(height, periodBlocks)` buckets heights into periods.
+- `PeekForPeriod` (non-destructive, for attesters) / `TakeForPeriod` (destructive, leader only).
+- Selection = members with `CommitHeight != 0 && <= cutoff`, ordered by `(CommitHeight, IntentID)`,
+  capped AFTER sorting. Zero-height members are SKIPPED, never guessed at.
+- `DropMembers` for the approved fallback path (drop, never requeue).
+- 7 tests pass, incl. `TestPeekForPeriod_IsIdenticalAcrossValidators`: two pools with the same
+  intents in opposite arrival order and unrelated wall-clocks select the identical member list.
+
+### REMAINING WORK (in order)
+
+1. **Populate `CommitHeight`.** `EnqueueForBatch` must take the BFT commit height and set it.
+   Call site: `pkg/consensus/bft_integration.go:1392` — `bftRes.Height` is in scope there.
+   Until this is done `PeekForPeriod` returns nothing (zero heights are skipped), so the batch
+   path stays inert — safe, but non-functional.
+2. **Batch attestation over the peer endpoint.** Add a batch request/response alongside
+   `PeerAttestationRequest`. Proposer sends `{chainID, cutoffHeight, bundleId}`. The attester
+   MUST recompute its own tree via `PeekForPeriod(chainID, cutoffHeight)` and sign ONLY if its
+   derived bundleId equals the proposer's. This check is the security boundary: without it a
+   malicious proposer could insert a leaf draining an ADI's account and have the quorum bless
+   it. Sign with `consensus.SignBatchAttestation`.
+3. **Leader aggregation + submit.** Collect partials, call
+   `consensus.AggregateBatchAttestations(atts, registry, msgHash, 2, 3)`, then pass the REAL
+   aggregate + `SignedVotingPower` into `ecm.generateBLSZKProof` and submit. Registry (address →
+   pubkey, power) must be read from the anchor, not from config.
+   Replace `signBatchPreExecBLS`'s solo signing at `batch_quorum_prover.go:88-100`.
+   Replace `AggregateSignature: sigBytes` with the ZK blob at `batch_proof_submitter.go:~232`.
+4. **Leader election.** Reuse `bv.selectExecutorForRound` (`bft_integration.go:1352`).
+   Non-leaders attest only; they must never call `createBatchAnchor`.
+5. **Fallback.** On quorum failure: `DropMembers` + route to the per-intent on_demand path.
+   Never requeue (re-forming the identical tree reverts `AnchorAlreadyExists` and hides the
+   real fault).
+6. **Deploy + live e2e**, per the verification checklist below.
+
 ### TRANSPORT — decided, verified reachable
 Use the EXISTING peer attestation HTTP path, not CometBFT txs and not
 `pkg/batch/attestation_broadcaster.go`.
