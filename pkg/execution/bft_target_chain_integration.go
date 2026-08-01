@@ -874,6 +874,47 @@ func (btce *BFTTargetChainExecutor) executeEthereumOperations(
 		// Step 3: Execute via user's Abstract Account (CORRECT FLOW)
 		computedBundleID := chainEthManager.generateAnchorID(legacyIntent, certenProof)
 
+		// ON-CADENCE / MULTI-LEG PATH: if this chain has more than one leg for one source
+		// account, the anchor was created with the BATCH commitment (see
+		// extractExecutionCommitment) and the whole group must execute as ONE atomic call.
+		//
+		// Executing them one-by-one — as this code did before — cannot work: the anchor
+		// commits to exactly one execution effect, and CertenAccountV5/V6 consume the anchor
+		// on first use, so every leg after the first reverted. Every multi-leg intent was
+		// half-executing in production.
+		if batchGroup, isBatch := chainEthManager.batchGroupForThisChain(legacyIntent, certenProof); isBatch {
+			btce.logger.Printf("📦 [BATCH] %s: executing %d legs as ONE atomic batch via account %s",
+				chainDisplayName, len(batchGroup.Legs), batchGroup.Key.SourceAccount.Hex())
+
+			chainGovTx, chainExecErr = chainEthManager.ExecuteBatchViaUserAccount(
+				ctx, batchGroup, computedBundleID, certenProof, accountURL,
+			)
+
+			if chainExecErr != nil {
+				btce.logger.Printf("❌ [BATCH] %s batch failed (all-or-nothing, no leg executed): %v",
+					chainDisplayName, chainExecErr)
+				overallSuccess = false
+				allCreateTxHashes = append(allCreateTxHashes, fmt.Sprintf("%s:%s", chainDisplayName, chainCreateTx))
+				allVerifyTxHashes = append(allVerifyTxHashes, fmt.Sprintf("%s:%s", chainDisplayName, chainVerifyTx))
+				for _, leg := range batchGroup.Legs {
+					allGovTxHashes = append(allGovTxHashes, fmt.Sprintf("batch_failed_%s", leg.LegID))
+				}
+			} else {
+				btce.logger.Printf("✅ [BATCH] %s batch executed: %d legs in tx %s",
+					chainDisplayName, len(batchGroup.Legs), chainGovTx)
+				allCreateTxHashes = append(allCreateTxHashes, fmt.Sprintf("%s:%s", chainDisplayName, chainCreateTx))
+				allVerifyTxHashes = append(allVerifyTxHashes, fmt.Sprintf("%s:%s", chainDisplayName, chainVerifyTx))
+				// One tx settles every leg — attribute it to each for downstream accounting.
+				for _, leg := range batchGroup.Legs {
+					allGovTxHashes = append(allGovTxHashes, fmt.Sprintf("%s:%s:%s", chainDisplayName, leg.LegID, chainGovTx))
+				}
+			}
+
+			chainResults = append(chainResults, fmt.Sprintf("%s:%d_legs_batched", chainDisplayName, len(batchGroup.Legs)))
+			continue
+		}
+
+		// ON-DEMAND PATH: exactly one leg for this chain — unchanged single-call behaviour.
 		// Check if user has an Abstract Account (SourceAddress from leg.From)
 		if firstLeg.SourceAddress != (common.Address{}) {
 			btce.logger.Printf("🏦 [USER-ACCOUNT] Executing via user's Abstract Account: %s", firstLeg.SourceAddress.Hex())
@@ -908,10 +949,20 @@ func (btce *BFTTargetChainExecutor) executeEthereumOperations(
 		btce.logger.Printf("   Verify TX: %s", chainVerifyTx)
 		btce.logger.Printf("   Governance TX: %s", chainGovTx)
 
-		// Execute remaining legs for this chain
+		// Execute remaining legs for this chain.
+		//
+		// Reaching here with >1 leg means the group was NOT batchable — legs missing a
+		// source account, or spanning more than one source account (see
+		// batchGroupForThisChain, which logs the specific reason). These legs cannot share
+		// the anchor: it commits to exactly one execution effect and is consumed on first
+		// use. Each attempt below WILL revert. They are still attempted so the failure is
+		// explicit and per-leg in the result metadata rather than a silent omission, but
+		// the operator is warned loudly that this needs one anchor per source account.
 		if len(chainLegs) > 1 {
 			computedBundleID := chainEthManager.generateAnchorID(legacyIntent, certenProof)
-			btce.logger.Printf("🦵 [MULTI-CHAIN] Executing remaining %d legs for %s...", len(chainLegs)-1, chainDisplayName)
+			btce.logger.Printf("⚠️ [MULTI-LEG-UNBATCHABLE] %s has %d extra leg(s) that could not be "+
+				"batched under one anchor; each will fail the anchor's single-use gate. "+
+				"Legs need a common source account to batch.", chainDisplayName, len(chainLegs)-1)
 
 			for i := 1; i < len(chainLegs); i++ {
 				leg := chainLegs[i]

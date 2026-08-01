@@ -1103,6 +1103,32 @@ func (ecm *EthereumContractManager) buildAccountProof(
 	ccCommitment [32]byte,
 	govRoot [32]byte,
 ) contracts.AccountProof {
+	// Single-call path: the exec commitment is the one the user signed in CrossChainData.
+	return ecm.buildAccountProofWithExec(bundleID, certenProof, adiURL,
+		opCommitment, ccCommitment, govRoot, nil, 1)
+}
+
+// buildAccountProofWithExec is buildAccountProof with the execution commitment and authority
+// level supplied explicitly.
+//
+// The batch path needs both overrides. Its merkle leaf must be tagged with the BATCH
+// commitment (ComputeBatchExecutionCommitment) rather than the single-call one derived from
+// CrossChainData, or the anchor's merkle root won't verify. And its RequiredLevel must cover
+// the most demanding leg in the batch — CertenAccountV6 checks every element against its own
+// value/selector requirement, so a fixed level of 1 (OPERATOR) would reject any batch
+// containing a leg of 0.1 ETH or more.
+//
+// execCommitmentOverride == nil restores the single-call behaviour.
+func (ecm *EthereumContractManager) buildAccountProofWithExec(
+	bundleID [32]byte,
+	certenProof *proof.CertenProof,
+	adiURL string,
+	opCommitment [32]byte,
+	ccCommitment [32]byte,
+	govRoot [32]byte,
+	execCommitmentOverride *[32]byte,
+	requiredLevel uint8,
+) contracts.AccountProof {
 	// LOW-001: Build 5-leaf domain-tagged merkle proof for adiURL verification
 	// Must match _computeMerkleRoot5() in CertenAnchorV4.sol
 	//
@@ -1121,7 +1147,10 @@ func (ecm *EthereumContractManager) buildAccountProof(
 	// committed to that exact value on-chain (bundleId derives from it), so
 	// using the off-chain value is bit-equivalent to a clean on-chain read.
 	var execCommitment [32]byte
-	if certenProof != nil && len(certenProof.CrossChainData) > 0 {
+	if execCommitmentOverride != nil {
+		// Batch path: the anchor committed to the ordered array, not to a single call.
+		execCommitment = *execCommitmentOverride
+	} else if certenProof != nil && len(certenProof.CrossChainData) > 0 {
 		execCommitment = contracts.DeriveExecutionCommitmentFromCrossChainJSON(certenProof.CrossChainData)
 	}
 
@@ -1186,7 +1215,7 @@ func (ecm *EthereumContractManager) buildAccountProof(
 		ExpiresAt:           expiresAt,
 		ValidatorSignatures: validatorSigs,
 		Nonce:               nonce,
-		RequiredLevel:       1, // G1 governance level
+		RequiredLevel:       requiredLevel,
 	}
 }
 
@@ -2241,6 +2270,26 @@ func (ecm *EthereumContractManager) extractExecutionCommitment(
 ) [32]byte {
 	var execCommitment [32]byte
 
+	// BATCH-AWARE — must precede the user-signed single-call short-circuit below.
+	//
+	// When this intent carries MORE THAN ONE leg for this manager's chain and source
+	// account, the anchor must commit to the ordered ARRAY, not to leg 0. Anchoring a
+	// multi-leg group under leg 0's single-call commitment is precisely what makes
+	// multi-leg execution impossible today: leg 0 executes and consumes the anchor, and
+	// legs 1..n then fail the commitment check with params the anchor never committed to.
+	//
+	// AUTHORITY IS PRESERVED, NOT WEAKENED. The batch commitment is a pure deterministic
+	// function of the legs as parsed from the USER-SIGNED CrossChainData — the same bytes
+	// each leg's executionPayload commitment is derived from. The validator chooses nothing:
+	// it cannot add, drop, reorder, or alter a leg without changing the commitment, and
+	// CertenAccountV6 independently re-derives and compares it at execution time.
+	if group, ok := ecm.batchGroupForThisChain(certenIntent, certenProof); ok {
+		execCommitment = computeBatchExecutionCommitment(group.Key.ChainID, group.ToBatchCalls())
+		fmt.Printf("📦 [BATCH-COMMIT] %d legs on chain %d for account %s -> batch commitment 0x%x\n",
+			len(group.Legs), group.Key.ChainID, group.Key.SourceAccount.Hex(), execCommitment[:8])
+		return execCommitment
+	}
+
 	var rawCC []byte
 	if certenProof != nil && len(certenProof.CrossChainData) > 0 {
 		rawCC = certenProof.CrossChainData
@@ -2921,4 +2970,102 @@ func computeExecutionCommitment(chainID int64, target common.Address, value *big
 	packed = append(packed, dataHashBytes...)
 
 	return crypto.Keccak256Hash(packed)
+}
+
+// BatchCommitmentDomain is the domain separator for batch execution commitments.
+// Must match CertenAccountV6.BATCH_COMMITMENT_DOMAIN exactly.
+const BatchCommitmentDomain = "certen:batch:v1"
+
+// BatchCall is one leg of an anchored batch.
+type BatchCall struct {
+	Target common.Address
+	Value  *big.Int
+	Data   []byte
+}
+
+// computeBatchExecutionCommitment computes the anchor-side ARRAY commitment for a batch,
+// matching CertenAccountV6.computeBatchCommitment():
+//
+//	keccak256(abi.encodePacked(
+//	    "certen:batch:v1",
+//	    block.chainid,
+//	    keccak256(abi.encode(targets, values, dataHashes))
+//	))
+//
+// The inner hash uses abi.encode (length-prefixed, unambiguous) rather than encodePacked, so
+// no two distinct batches can collide through boundary ambiguity. The domain tag keeps batch
+// preimages disjoint from the single-call form produced by computeExecutionCommitment, so a
+// commitment minted for one shape can never be spent through the other path.
+//
+// Order is significant — the anchor authorizes an ordered sequence, and CertenAccountV6
+// rejects a reordered batch even when it contains exactly the same calls.
+//
+// abi.encode layout for (address[], uint256[], bytes32[]) with n elements each:
+//
+//	[0x00] offset to targets    = 0x60
+//	[0x20] offset to values     = 0x60 + 32 + 32n
+//	[0x40] offset to dataHashes = 0x60 + 64 + 64n
+//	then, at each offset: uint256 length followed by n left-padded 32-byte words
+func computeBatchExecutionCommitment(chainID int64, calls []BatchCall) [32]byte {
+	n := uint64(len(calls))
+
+	word := func(b []byte) []byte {
+		out := make([]byte, 32)
+		copy(out[32-len(b):], b)
+		return out
+	}
+	uintWord := func(v uint64) []byte {
+		return word(new(big.Int).SetUint64(v).Bytes())
+	}
+
+	headSize := uint64(3 * 32)
+	arraySize := uint64(32) + 32*n // length word + elements
+
+	inner := make([]byte, 0, headSize+3*arraySize)
+	inner = append(inner, uintWord(headSize)...)             // offset -> targets
+	inner = append(inner, uintWord(headSize+arraySize)...)   // offset -> values
+	inner = append(inner, uintWord(headSize+2*arraySize)...) // offset -> dataHashes
+
+	// targets
+	inner = append(inner, uintWord(n)...)
+	for _, c := range calls {
+		inner = append(inner, word(c.Target.Bytes())...)
+	}
+
+	// values
+	inner = append(inner, uintWord(n)...)
+	for _, c := range calls {
+		v := c.Value
+		if v == nil {
+			v = big.NewInt(0)
+		}
+		inner = append(inner, word(v.Bytes())...)
+	}
+
+	// dataHashes
+	inner = append(inner, uintWord(n)...)
+	for _, c := range calls {
+		h := crypto.Keccak256Hash(c.Data)
+		inner = append(inner, h.Bytes()...)
+	}
+
+	innerHash := crypto.Keccak256Hash(inner)
+
+	// abi.encodePacked(string, uint256, bytes32): raw string bytes, then 32-byte chainId,
+	// then the 32-byte inner hash.
+	chainIDBytes := make([]byte, 32)
+	big.NewInt(chainID).FillBytes(chainIDBytes)
+
+	packed := make([]byte, 0, len(BatchCommitmentDomain)+64)
+	packed = append(packed, []byte(BatchCommitmentDomain)...)
+	packed = append(packed, chainIDBytes...)
+	packed = append(packed, innerHash.Bytes()...)
+
+	return crypto.Keccak256Hash(packed)
+}
+
+// ComputeBatchExecutionCommitment is the exported entry point for callers outside this
+// package that need the CertenAccountV6 batch commitment.
+func ComputeBatchExecutionCommitment(chainID int64, calls []BatchCall) [32]byte {
+	return computeBatchExecutionCommitment(chainID, calls)
 }
