@@ -185,6 +185,15 @@ func (h *HealthStatus) ToJSON() []byte {
 // server goroutine and startValidator run concurrently.
 var unifiedOrchestratorForAttestation atomic.Pointer[execution.UnifiedOrchestrator]
 
+// batchStackForAttestation bridges the batch stack (built late, in the batching wiring block)
+// to the peer attestation HTTP handler (registered early). Same pattern, same reason.
+var batchStackForAttestation atomic.Pointer[execution.BatchStack]
+
+// batchAttesterIdentity is who this validator claims to be when co-signing a peer's batch.
+// Its EVM address must match its registry entry on the anchor, or its partial contributes no
+// voting power and the aggregate is refused.
+var batchAttesterIdentity atomic.Pointer[execution.BatchAttesterIdentity]
+
 func main() {
 	// Configure logging
 	log.SetOutput(os.Stdout)
@@ -391,6 +400,37 @@ func main() {
 			http.Error(w, "attestation failed: "+hErr.Error(), http.StatusInternalServerError)
 			return
 		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	})
+
+	// Peer batch attestation. A proposer asks this validator to co-sign a batch; the handler
+	// rebuilds that batch from THIS validator's own mempool and signs only on an exact
+	// bundleId match. The request deliberately carries no member data — see
+	// pkg/execution/batch_attestation.go.
+	mux.HandleFunc(execution.BatchAttestationEndpoint, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		stack := batchStackForAttestation.Load()
+		if stack == nil {
+			http.Error(w, "batch stack not ready", http.StatusServiceUnavailable)
+			return
+		}
+		me := batchAttesterIdentity.Load()
+		if me == nil {
+			http.Error(w, "attester identity not configured", http.StatusServiceUnavailable)
+			return
+		}
+		var req execution.BatchAttestationRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		// A refusal is a normal, expected outcome (the peer simply has a different view), so
+		// it returns 200 with Error set rather than an HTTP error status.
+		resp := stack.HandleBatchAttestationRequest(&req, *me)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
 	})
@@ -1167,6 +1207,34 @@ func startValidator(
 						log.Printf,
 					)
 					validator.SetBatchEnqueuer(stack)
+
+					// Publish to the peer attestation handler. Without this a proposer's
+					// request gets 503 and no quorum can ever form.
+					batchStackForAttestation.Store(stack)
+
+					// The EVM address this validator signs as. It MUST match its registry
+					// entry on the anchor: the aggregator resolves voting power by address,
+					// so a wrong one contributes nothing and the aggregate is refused.
+					attesterEVM := strings.TrimSpace(os.Getenv("VALIDATOR_EVM_ADDRESS"))
+					if attesterEVM == "" {
+						log.Printf("⚠️ [BATCH] VALIDATOR_EVM_ADDRESS unset — this validator can " +
+							"propose batches but CANNOT co-sign a peer's; quorum will be short one signer")
+					} else {
+						batchAttesterIdentity.Store(&execution.BatchAttesterIdentity{
+							ValidatorID: cfg.ValidatorID,
+							EVMAddress:  attesterEVM,
+						})
+						log.Printf("🔏 [BATCH] Attesting as %s (%s) on %s",
+							cfg.ValidatorID, attesterEVM, execution.BatchAttestationEndpoint)
+					}
+
+					if peers := execution.BatchAttestationPeersFromEnv(); len(peers) == 0 {
+						log.Printf("⚠️ [BATCH] ATTESTATION_PEERS unset — no peers to collect " +
+							"quorum from; batches will fail quorum and fall back to on-demand")
+					} else {
+						log.Printf("🌐 [BATCH] Quorum peers: %v", peers)
+					}
+
 					log.Printf("✅ [BATCH] Cross-ADI batching ACTIVE on chains %v (flush every %s)",
 						resolver.Chains(), mempoolCfg.FlushInterval)
 				}
