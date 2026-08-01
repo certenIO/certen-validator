@@ -1715,7 +1715,11 @@ func startValidator(
 	// DefaultIntentDiscoveryConfig already carried 60s ("Increased from 30s for WAN latency");
 	// this literal silently reverted it. Keep the two in agreement, and allow an env override
 	// so a slow endpoint can be accommodated without a rebuild.
-	bftTimeout := 180 * time.Second
+	//
+	// Sized to exceed three CLI budgets (the adapter allows 120s per level and passes the CLI
+	// 115s of that), so the CLI always reaches its OWN timeout and reports a real reason
+	// rather than being SIGKILLed here with empty stderr.
+	bftTimeout := 360 * time.Second
 	if v := os.Getenv("CERTEN_BFT_TIMEOUT"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil && d > 0 {
 			bftTimeout = d

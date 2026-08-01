@@ -193,7 +193,7 @@ func DefaultIntentDiscoveryConfig() *IntentDiscoveryConfig {
 		// included (G1 alone measured ~27s against the Kermit endpoint). Too small a value
 		// gets G2 KILLED mid-flight, which leaves governance at G1 and makes HIGH-004 refuse
 		// every value-moving intent. Keep in step with main.go's CERTEN_BFT_TIMEOUT default.
-		BFTTimeout:          180 * time.Second,
+		BFTTimeout:          360 * time.Second,
 		MaxConcurrentBlocks: MAX_CONCURRENT_BLOCKS,
 		IntentBatchSize:     INTENT_BATCH_SIZE,
 		MinStartHeight:      946000, // Current testnet baseline

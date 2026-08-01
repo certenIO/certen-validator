@@ -206,6 +206,24 @@ func (g *CLIGovernanceProofGenerator) buildCLIArgs(level GovernanceLevel, req *G
 		args = append(args, "--signing-domain", req.SigningDomain)
 	}
 
+	// Give the CLI our budget rather than letting it use its own 30s default.
+	//
+	// The CLI applies --timeout to the WHOLE proof operation, not per request, and G1 makes
+	// many sequential v3 round trips (~1-3s each against the Kermit endpoint). At the 30s
+	// default it ran out mid-flight, and its failure mode is silent: signatureSet extraction
+	// returns a context error, the "direct extraction" fallback is an unimplemented stub that
+	// returns EMPTY, and the run then reports "Threshold not satisfied: 0/1" — an
+	// infrastructure timeout wearing the costume of a governance rejection.
+	//
+	// Leave a small margin under our own deadline so the CLI reaches its internal timeout and
+	// reports a real reason, instead of being SIGKILLed by exec.CommandContext with empty
+	// stderr and no explanation at all.
+	cliBudget := int((g.timeout - 5*time.Second).Seconds())
+	if cliBudget < 30 {
+		cliBudget = 30
+	}
+	args = append(args, "--timeout", fmt.Sprintf("%d", cliBudget))
+
 	// TxHash tool path for G2 payload verification
 	if level == GovLevelG2 && g.txhashPath != "" {
 		args = append(args, "--txhash", g.txhashPath)
