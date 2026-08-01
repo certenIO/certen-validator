@@ -347,6 +347,7 @@ type BatchEnqueuer interface {
 		operationID [32]byte,
 		legs interface{},
 		attestation interface{},
+		commitHeight uint64,
 	) error
 }
 
@@ -1402,6 +1403,12 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 				certenIntent.IntentID, adiErr)
 		} else if enqErr := bv.batchEnqueuer.EnqueueForBatch(
 			certenIntent.IntentID, adiURL, chainID, account, opID, legs, batchAtt,
+			// The BFT height this round committed at. Batch membership is selected by
+			// "committed at or before height H" so every validator derives the same member
+			// set — and therefore the same root and bundleId, which is what makes a batch
+			// co-signable. Selecting by local wall-clock produced divergent trees (v2
+			// 0xe4c950df… vs v3 0x5e71d83a…, live 2026-08-01).
+			uint64(bftRes.Height),
 		); enqErr != nil {
 			// NOT queued. Fall through rather than return, or the intent would be dropped.
 			bv.logger.Printf("⚠️ [BATCH-QUEUE] intent %s not queued (%v) — falling back",

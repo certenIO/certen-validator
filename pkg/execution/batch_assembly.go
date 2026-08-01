@@ -365,6 +365,7 @@ func (s *BatchStack) EnqueueForBatch(
 	operationID [32]byte,
 	legs interface{},
 	attestation interface{},
+	commitHeight uint64,
 ) error {
 	if _, err := s.OrchestratorFor(chainID); err != nil {
 		// No orchestrator means no anchor for this chain — the member could never settle.
@@ -379,14 +380,23 @@ func (s *BatchStack) EnqueueForBatch(
 		return fmt.Errorf("intent %s produced no batch legs", intentID)
 	}
 
+	// A member with no commit height can never be placed in a period deterministically, so
+	// PeekForPeriod skips it and it would sit in the pool forever. Refuse it here, where the
+	// caller can still fall back to the per-intent path, rather than silently stranding it.
+	if commitHeight == 0 {
+		return fmt.Errorf("intent %s has no BFT commit height and could never be batched "+
+			"deterministically", intentID)
+	}
+
 	return s.Mempool.Add(&PendingBatchIntent{
-		IntentID:    intentID,
-		ADIURL:      adiURL,
-		ChainID:     chainID,
-		Account:     common.BytesToAddress(account[:]),
-		OperationID: operationID,
-		Legs:        converted,
-		Attestation: attestation,
+		IntentID:     intentID,
+		ADIURL:       adiURL,
+		ChainID:      chainID,
+		Account:      common.BytesToAddress(account[:]),
+		OperationID:  operationID,
+		Legs:         converted,
+		Attestation:  attestation,
+		CommitHeight: commitHeight,
 	})
 }
 
