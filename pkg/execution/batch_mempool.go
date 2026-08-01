@@ -48,6 +48,16 @@ type PendingBatchIntent struct {
 	// Attestation is the opaque Phase 7-9 snapshot replayed once this member settles.
 	Attestation interface{}
 
+	// CommitHeight is the BFT height at which this intent's consensus round committed.
+	//
+	// This is what makes a batch DETERMINISTIC across validators. EnqueuedAt is local
+	// wall-clock and differs on every node, so selecting by it produced divergent trees —
+	// observed live 2026-08-01, when validator-2 formed bundleId 0xe4c950df… and validator-3
+	// formed 0x5e71d83a… in the same window. Selecting "committed at or before height H"
+	// instead gives every validator the same member set, hence the same root, hence the same
+	// bundleId — which is precisely what lets a quorum co-sign one batch.
+	CommitHeight uint64
+
 	EnqueuedAt time.Time
 }
 
@@ -299,4 +309,140 @@ func (m *BatchMempool) PendingCountForChain(chainID int64) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return len(m.pool[chainID])
+}
+
+// =============================================================================
+// Deterministic period selection
+// =============================================================================
+//
+// A batch may only be co-signed by a quorum if every validator derives the SAME batch. These
+// two functions are the mechanism: membership is a pure function of (chainID, cutoffHeight)
+// over committed state, with no dependence on local clocks or arrival order.
+
+// BatchPeriodCutoff returns the height a batch closes at for the given consensus height.
+//
+// Heights are bucketed into periods of periodBlocks; the cutoff is the START of the current
+// bucket, so an in-flight period is never selected on a boundary race. A validator running a
+// few blocks ahead still computes the same cutoff as one lagging, provided both are inside the
+// same bucket — and if they are not, their bundleIds differ and neither signs the other's,
+// which is the safe outcome rather than a silent mismerge.
+func BatchPeriodCutoff(consensusHeight uint64, periodBlocks uint64) uint64 {
+	if periodBlocks == 0 {
+		periodBlocks = 1
+	}
+	return (consensusHeight / periodBlocks) * periodBlocks
+}
+
+// PeekForPeriod returns the members a batch for cutoffHeight WOULD contain, without removing
+// them. Attesters use this: they must be able to recompute a proposer's batch and compare
+// bundleIds before signing, but must not lose their copy if the proposer never lands it.
+//
+// Ordering is by IntentID ascending — deterministic and independent of arrival order. Do NOT
+// change this to EnqueuedAt; that is local wall-clock and reintroduces divergence.
+func (m *BatchMempool) PeekForPeriod(chainID int64, cutoffHeight uint64) []*PendingBatchIntent {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.selectForPeriodLocked(chainID, cutoffHeight)
+}
+
+// TakeForPeriod is PeekForPeriod plus removal. Only the validator that actually submits the
+// batch calls this.
+func (m *BatchMempool) TakeForPeriod(chainID int64, cutoffHeight uint64) []*PendingBatchIntent {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	taken := m.selectForPeriodLocked(chainID, cutoffHeight)
+	if len(taken) == 0 {
+		return nil
+	}
+	remove := make(map[string]bool, len(taken))
+	for _, p := range taken {
+		remove[p.IntentID] = true
+		delete(m.seen, p.IntentID)
+	}
+	var rest []*PendingBatchIntent
+	for _, p := range m.pool[chainID] {
+		if !remove[p.IntentID] {
+			rest = append(rest, p)
+		}
+	}
+	if len(rest) == 0 {
+		delete(m.pool, chainID)
+	} else {
+		m.pool[chainID] = rest
+	}
+	return taken
+}
+
+// selectForPeriodLocked is the shared, deterministic selection. Caller holds m.mu.
+func (m *BatchMempool) selectForPeriodLocked(chainID int64, cutoffHeight uint64) []*PendingBatchIntent {
+	src := m.pool[chainID]
+	if len(src) == 0 {
+		return nil
+	}
+
+	eligible := make([]*PendingBatchIntent, 0, len(src))
+	for _, p := range src {
+		if p == nil {
+			continue
+		}
+		// A member with no commit height cannot be placed in a period deterministically —
+		// including it would make this validator's tree differ from one that had not yet seen
+		// it. Skip rather than guess; it becomes eligible once its height is known.
+		if p.CommitHeight == 0 {
+			continue
+		}
+		if p.CommitHeight <= cutoffHeight {
+			eligible = append(eligible, p)
+		}
+	}
+	if len(eligible) == 0 {
+		return nil
+	}
+
+	sort.SliceStable(eligible, func(i, j int) bool {
+		if eligible[i].CommitHeight != eligible[j].CommitHeight {
+			return eligible[i].CommitHeight < eligible[j].CommitHeight
+		}
+		return eligible[i].IntentID < eligible[j].IntentID
+	})
+
+	// The cap must be applied identically everywhere, and after sorting, or two validators
+	// holding the same members could truncate to different subsets.
+	if len(eligible) > m.cfg.MaxBatchSize {
+		eligible = eligible[:m.cfg.MaxBatchSize]
+	}
+	return eligible
+}
+
+// DropMembers removes specific members, used when a batch settled elsewhere (the leader landed
+// it) or when members fall back to the per-intent path. Fallback is the approved policy on
+// quorum failure: requeueing risks a permanently stuck batch, whereas falling back costs more
+// gas but always settles.
+func (m *BatchMempool) DropMembers(members []*PendingBatchIntent) {
+	if len(members) == 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	remove := make(map[string]bool, len(members))
+	for _, p := range members {
+		if p != nil {
+			remove[p.IntentID] = true
+			delete(m.seen, p.IntentID)
+		}
+	}
+	for chainID, pool := range m.pool {
+		var rest []*PendingBatchIntent
+		for _, p := range pool {
+			if p != nil && !remove[p.IntentID] {
+				rest = append(rest, p)
+			}
+		}
+		if len(rest) == 0 {
+			delete(m.pool, chainID)
+		} else {
+			m.pool[chainID] = rest
+		}
+	}
 }
