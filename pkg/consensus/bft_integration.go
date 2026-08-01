@@ -332,6 +332,24 @@ type GovernanceProofGenerator interface {
 
 // AnchorScheduler defines the interface for scheduling anchor operations
 // This enables on_cadence batching vs on_demand immediate execution per FIRST_PRINCIPLES 2.5
+// BatchEnqueuer accepts an on_cadence intent for cross-ADI batching.
+//
+// Implemented by pkg/execution's BatchStack. Kept as an interface so consensus does not have
+// to construct the batch stack itself, and so the wiring can be verified with a stub.
+type BatchEnqueuer interface {
+	// EnqueueForBatch queues one authorized intent. Returning an error means the intent was
+	// NOT queued and the caller must fall back, or it would be silently dropped.
+	EnqueueForBatch(
+		intentID string,
+		adiURL string,
+		chainID int64,
+		account [20]byte,
+		operationID [32]byte,
+		legs interface{},
+		attestation interface{},
+	) error
+}
+
 type AnchorScheduler interface {
 	// QueueForCadence queues an intent for batched on-cadence execution
 	// Returns the scheduled time when the batch will be processed
@@ -370,6 +388,16 @@ type BFTValidator struct {
 	// Anchor Scheduler for on_cadence batching per FIRST_PRINCIPLES 2.5
 	// When set, on_cadence intents are queued for batched execution instead of immediate
 	anchorScheduler AnchorScheduler
+
+	// batchEnqueuer routes on_cadence intents into the cross-ADI batch mempool, where many
+	// intents share ONE anchor and ONE BLS verification. Measured on live Sepolia those two
+	// steps are 802,128 of the 987,644 gas an intent costs (81.2%), so amortising them is
+	// where essentially all the saving is.
+	//
+	// Nil means the batch path is not configured and on_cadence falls back to the existing
+	// deferred-serial scheduler — which still settles, just without the saving. Falling back
+	// rather than failing is deliberate: a misconfigured batch path must never strand intents.
+	batchEnqueuer BatchEnqueuer
 
 	// Entitlement store, used at Phase 3 to attach proof that the submitting ADI
 	// may have CERTEN spend on this intent. nil when the gate is not configured,
@@ -507,6 +535,19 @@ func (bv *BFTValidator) GetProofCycleOrchestrator() ProofCycleOrchestratorInterf
 	return bv.proofCycleOrchestrator
 }
 
+// SetBatchEnqueuer installs the cross-ADI batch mempool.
+//
+// on_cadence intents route here in preference to the deferred-serial scheduler. If it is
+// never set, behaviour is exactly as before.
+func (bv *BFTValidator) SetBatchEnqueuer(e BatchEnqueuer) {
+	bv.mu.Lock()
+	defer bv.mu.Unlock()
+	bv.batchEnqueuer = e
+	if e != nil {
+		bv.logger.Printf("✅ Cross-ADI batch mempool wired for on_cadence intents")
+	}
+}
+
 // SetAnchorScheduler sets the anchor scheduler for on_cadence batching
 // Per FIRST_PRINCIPLES 2.5: on_cadence and on_demand are NEVER interchangeable
 func (bv *BFTValidator) SetAnchorScheduler(scheduler AnchorScheduler) {
@@ -515,6 +556,28 @@ func (bv *BFTValidator) SetAnchorScheduler(scheduler AnchorScheduler) {
 	bv.anchorScheduler = scheduler
 	if scheduler != nil {
 		bv.logger.Printf("✅ Anchor scheduler configured for on_cadence batching")
+
+		// Close the loop: give the scheduler the callback it needs to run Phase 7-9 once
+		// a deferred batch settles. Without this the scheduler executes cadence intents
+		// on-chain but their proof cycle never closes — the defect this wiring fixes.
+		//
+		// Installed here rather than at the call site so it can never be forgotten: any
+		// scheduler capable of attestation replay gets wired the moment it is attached.
+		if runner, ok := scheduler.(interface {
+			SetAttestationRunner(func(context.Context, interface{}, *verification.AnchorExecutionResult))
+		}); ok {
+			runner.SetAttestationRunner(func(ctx context.Context, payload interface{}, res *verification.AnchorExecutionResult) {
+				att, ok := payload.(*PendingAttestation)
+				if !ok || att == nil {
+					bv.logger.Printf("⚠️ [ATTEST] cadence attestation payload was not a *PendingAttestation")
+					return
+				}
+				bv.RunProofCycle(ctx, att, res)
+			})
+			bv.logger.Printf("✅ Cadence attestation runner installed (Phase 7-9 will close for on_cadence intents)")
+		} else {
+			bv.logger.Printf("⚠️ Scheduler does not support attestation replay — on_cadence intents will NOT attest")
+		}
 	}
 }
 
@@ -1308,11 +1371,65 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	// =======================================================================
 	var anchorRes *verification.AnchorExecutionResult
 
+	// ON-CADENCE, CROSS-ADI BATCH PATH (preferred).
+	//
+	// Many intents share ONE anchor and ONE BLS verification. Each keeps its own
+	// operationID and its own executionCommitment as a distinct Merkle leaf, so this
+	// batches the ATTESTATION, never the authorization: a member's leaf is spendable only
+	// by the account whose immutable adiURL is hashed into it.
+	//
+	// The attestation snapshot is captured HERE, while the round's values are in scope. The
+	// batch settles minutes later on the flush loop, long after this round is gone.
+	if proofClass == "on_cadence" && bv.batchEnqueuer != nil {
+		batchAtt := bv.captureAttestation(vb, certenIntent, certenProof, blockHeight,
+			g0Proof, g1Proof, g2Proof, blsSignature, validatorSignatures, governanceLevel)
+		batchAtt.Replayed = true
+
+		legs, chainID, account, opID, extractErr := bv.batchInputsFromIntent(certenIntent)
+		if extractErr != nil {
+			bv.logger.Printf("⚠️ [BATCH-QUEUE] intent %s cannot be batched (%v) — falling back",
+				certenIntent.IntentID, extractErr)
+		} else if enqErr := bv.batchEnqueuer.EnqueueForBatch(
+			certenIntent.IntentID, certenIntent.AccountURL, chainID, account, opID, legs, batchAtt,
+		); enqErr != nil {
+			// NOT queued. Fall through rather than return, or the intent would be dropped.
+			bv.logger.Printf("⚠️ [BATCH-QUEUE] intent %s not queued (%v) — falling back",
+				certenIntent.IntentID, enqErr)
+		} else {
+			bv.logger.Printf("📦 [BATCH-QUEUE] intent %s queued for cross-ADI batching on chain %d",
+				certenIntent.IntentID, chainID)
+			return &ExecutionTaskResult{
+				Success:       true,
+				ExecutorID:    bv.validatorID,
+				ConsensusHash: fmt.Sprintf("batch_queued_%s_%d", roundID, bftRes.Height),
+			}, nil
+		}
+	}
+
 	if proofClass == "on_cadence" && bv.anchorScheduler != nil {
-		// ON-CADENCE: Queue for batched execution
+		// ON-CADENCE fallback: deferred-serial execution (one anchor per intent).
 		bv.logger.Printf("📦 [CADENCE-BATCH] Queuing intent %s for on_cadence batched execution", certenIntent.IntentID)
 
-		scheduledAt, queueErr := bv.anchorScheduler.QueueForCadence(ctx, certenIntent.IntentID, vbMeta, bftMeta)
+		// Capture the Phase 7-9 inputs NOW, while the round's values are in scope. The
+		// intent will settle minutes from now on the scheduler's ticker, long after this
+		// round is gone; without this snapshot it could execute but never attest, which
+		// is exactly what used to happen to every on_cadence intent.
+		cadenceAtt := bv.captureAttestation(vb, certenIntent, certenProof, blockHeight,
+			g0Proof, g1Proof, g2Proof, blsSignature, validatorSignatures, governanceLevel)
+		cadenceAtt.Replayed = true
+
+		var scheduledAt time.Time
+		var queueErr error
+		if withAtt, ok := bv.anchorScheduler.(interface {
+			QueueForCadenceWithAttestation(context.Context, string, *verification.ValidatorBlockMetadata, *verification.BFTExecutionMetadata, interface{}) (time.Time, error)
+		}); ok {
+			scheduledAt, queueErr = withAtt.QueueForCadenceWithAttestation(
+				ctx, certenIntent.IntentID, vbMeta, bftMeta, cadenceAtt)
+		} else {
+			bv.logger.Printf("[CADENCE-BATCH] scheduler does not support attestation replay; "+
+				"intent %s will execute but its proof cycle will NOT close", certenIntent.IntentID)
+			scheduledAt, queueErr = bv.anchorScheduler.QueueForCadence(ctx, certenIntent.IntentID, vbMeta, bftMeta)
+		}
 		if queueErr != nil {
 			bv.logger.Printf("⚠️ [CADENCE-BATCH] Failed to queue for cadence: %v - falling back to immediate execution", queueErr)
 			// Fall through to immediate execution
@@ -1359,201 +1476,13 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 
 		// Phase 7-9: Trigger proof cycle for observation, attestation, and write-back
 		if bv.proofCycleOrchestrator != nil && anchorRes.AnchorTxID != "" {
-			go func() {
-				// Parse bundle ID from ValidatorBlock (hex string → raw bytes)
-				var bundleID [32]byte
-				bundleIDHex := strings.TrimPrefix(vb.BundleID, "0x")
-				if decoded, err := hex.DecodeString(bundleIDHex); err == nil && len(decoded) >= 32 {
-					copy(bundleID[:], decoded[:32])
-				}
-
-				// SECURITY CRITICAL: Build execution commitment from intent's CrossChainData
-				commitment := bv.buildExecutionCommitmentFromIntent(certenIntent, bundleID)
-
-				// Add governance data from ValidatorBlock for G1/G2 proof levels
-				if commitMap, ok := commitment.(map[string]interface{}); ok {
-					if vb.GovernanceProof.MerkleRoot != "" {
-						commitMap["governanceRoot"] = vb.GovernanceProof.MerkleRoot
-					}
-					if vb.OperationCommitment != "" {
-						commitMap["operationCommitment"] = vb.OperationCommitment
-					}
-					commitMap["accumulateBlockHeight"] = blockHeight
-					commitMap["accumulateTxHash"] = certenIntent.TransactionHash
-					commitMap["rawCreateTxHashes"] = anchorRes.CreateTxHash
-					commitMap["rawVerifyTxHashes"] = anchorRes.VerifyTxHash
-					commitMap["rawGovernanceTxHashes"] = anchorRes.GovernanceTxHash
-
-					// RB-2/RB-4/RB-5: surface per-leg contract-call verification data so the
-					// Phase 7 attestation gate can cryptographically verify EACH executed call.
-					// Inspect ALL legs (not just leg 0) so a contract-call leg anywhere in a
-					// multi-leg intent is gated — otherwise a native leg 0 + call leg 1 would slip
-					// through. Each entry carries its chain (for per-chain-group matching), target,
-					// and committed events/state; the gate verifies the effect against that chain
-					// group's inclusion-proven receipt(s).
-					if ccEnv, ccErr := certenIntent.ParseCrossChain(); ccErr == nil && len(ccEnv.Legs) > 0 {
-						govByChain := parseMultiChainTxHashes(anchorRes.GovernanceTxHash)
-						rbLegs := make([]map[string]interface{}, 0, len(ccEnv.Legs))
-						for _, leg := range ccEnv.Legs {
-							ep := leg.ExecutionPayload
-							if ep == nil {
-								continue
-							}
-							cd := strings.TrimSpace(ep.CallData)
-							if cd == "" || cd == "0x" || cd == "0X" {
-								continue // native/ERC-20 leg — CRITICAL-003 already binds it, no event gate
-							}
-							chainKey := strings.ToLower(strings.ReplaceAll(leg.Chain, " ", "-"))
-							execTx := extractRawTxHash(anchorRes.GovernanceTxHash) // single-leg default
-							if hs := govByChain[chainKey]; len(hs) > 0 {
-								execTx = extractRawTxHash(hs[len(hs)-1]) // per-chain governance tx (last)
-							}
-							evs := make([]map[string]interface{}, 0, len(ep.ExpectedEvents))
-							for _, e := range ep.ExpectedEvents {
-								evs = append(evs, map[string]interface{}{"contract": e.Contract, "topic0": e.Topic0, "dataHash": e.DataHash})
-							}
-							sts := make([]map[string]interface{}, 0, len(ep.ExpectedState))
-							for _, s := range ep.ExpectedState {
-								sts = append(sts, map[string]interface{}{"account": s.Account, "slot": s.Slot, "value": s.Value})
-							}
-							rbLegs = append(rbLegs, map[string]interface{}{
-								"chainKey":       chainKey,
-								"target":         ep.Target,
-								"value":          ep.Value,
-								"execTxHash":     execTx,
-								"expectedEvents": evs,
-								"expectedState":  sts,
-							})
-						}
-						if len(rbLegs) > 0 {
-							commitMap["rbContractCall"] = true
-							commitMap["rbContractCallLegs"] = rbLegs
-							bv.logger.Printf("🔒 [RB-GATE] %d contract-call leg(s) flagged for Phase 7 verification", len(rbLegs))
-						}
-					}
-
-					// Wire L1-L3 chained proof data so persistProofArtifact can store it
-					if certenProof != nil && certenProof.LiteClientProof != nil {
-						if proofJSON, err := json.Marshal(certenProof.LiteClientProof); err == nil {
-							commitMap["liteClientProof"] = string(proofJSON)
-						}
-					}
-
-					// Wire governance proof results (G0/G1/G2)
-					if g0Proof != nil {
-						if g0JSON, err := json.Marshal(g0Proof); err == nil {
-							commitMap["g0Proof"] = string(g0JSON)
-						}
-					}
-					if g1Proof != nil {
-						if g1JSON, err := json.Marshal(g1Proof); err == nil {
-							commitMap["g1Proof"] = string(g1JSON)
-						}
-					}
-					if g2Proof != nil {
-						if g2JSON, err := json.Marshal(g2Proof); err == nil {
-							commitMap["g2Proof"] = string(g2JSON)
-						}
-					}
-
-					// Wire BLS/validator signatures
-					commitMap["blsSignature"] = blsSignature
-					commitMap["validatorSignatures"] = validatorSignatures
-					commitMap["governanceLevel"] = governanceLevel
-					commitMap["validatorID"] = bv.validatorID
-				}
-
-				// Determine leg count for multi-leg vs single-leg routing
-				legCount, _ := certenIntent.GetLegCount()
-				isMultiLeg := legCount > 1
-
-				bv.logger.Printf("🔄 [PROOF-CYCLE] Triggering Phase 7-9 for intent: %s (legs=%d, multi=%v)",
-					certenIntent.IntentID, legCount, isMultiLeg)
-				bv.logger.Printf("   Accumulate ref: accountURL=%s, txHash=%s", certenIntent.AccountURL, certenIntent.TransactionHash)
-
-				proofCycleCtx := context.Background()
-
-				if isMultiLeg {
-					// MULTI-LEG: Start per-chain proof cycles with unified write-back
-					bv.logger.Printf("🔀 [MULTI-LEG-PROOF] Starting per-chain proof cycles for %d legs", legCount)
-
-					// Parse governance tx hashes into per-chain groups
-					chainTxHashes := parseMultiChainTxHashes(anchorRes.GovernanceTxHash)
-					if len(chainTxHashes) == 0 {
-						// Fallback: use create tx hashes if no governance hashes at all
-						chainTxHashes = parseMultiChainTxHashes(anchorRes.CreateTxHash)
-					} else {
-						// For chains with failed governance (filtered by _failed), fall back
-						// to their create tx hashes so the proof cycle can still observe them
-						createTxHashes := parseMultiChainTxHashes(anchorRes.CreateTxHash)
-						for ck, txHashes := range createTxHashes {
-							if _, hasGov := chainTxHashes[ck]; !hasGov {
-								bv.logger.Printf("🔄 [MULTI-LEG-PROOF] Chain %s governance failed, using create tx for observation", ck)
-								chainTxHashes[ck] = txHashes
-							}
-						}
-					}
-
-					// Build leg info from CrossChainData
-					ccEnvelope, ccErr := certenIntent.ParseCrossChain()
-					if ccErr != nil {
-						bv.logger.Printf("⚠️ [MULTI-LEG-PROOF] Failed to parse CrossChainData: %v - falling back to single proof cycle", ccErr)
-					} else {
-						var legInfos []ChainLegInfo
-						for i, leg := range ccEnvelope.Legs {
-							chainKey := strings.ToLower(strings.ReplaceAll(leg.Chain, " ", "-"))
-							legInfos = append(legInfos, ChainLegInfo{
-								LegIndex:  i,
-								LegID:     leg.LegID,
-								ChainKey:  chainKey,
-								ChainName: leg.Chain,
-								ChainID:   leg.ChainID,
-							})
-						}
-
-						executionMode, _ := certenIntent.GetExecutionMode()
-						operationID := certenIntent.IntentID
-
-						if err := bv.proofCycleOrchestrator.StartPerChainProofCycles(
-							proofCycleCtx, certenIntent.IntentID, operationID, bundleID,
-							chainTxHashes, legInfos, executionMode, commitment,
-							certenIntent.AccountURL, certenIntent.TransactionHash, "",
-						); err != nil {
-							bv.logger.Printf("⚠️ [MULTI-LEG-PROOF] Per-chain proof cycles failed: %v", err)
-						} else {
-							bv.logger.Printf("✅ [MULTI-LEG-PROOF] Per-chain proof cycles started for %d chain groups", len(chainTxHashes))
-							return // Multi-leg handled - skip single-leg fallback
-						}
-					}
-				}
-
-				// SINGLE-LEG (or multi-leg fallback): Original behavior
-				txHashes := &AnchorWorkflowTxHashes{
-					CreateTxHash:     common.HexToHash(extractPureHexHash(anchorRes.CreateTxHash)),
-					VerifyTxHash:     common.HexToHash(extractPureHexHash(anchorRes.VerifyTxHash)),
-					GovernanceTxHash: common.HexToHash(extractPureHexHash(anchorRes.GovernanceTxHash)),
-					PrimaryTxHash:    common.HexToHash(extractPureHexHash(anchorRes.AnchorTxID)),
-					RawTxHashes: []string{
-						extractRawTxHash(anchorRes.CreateTxHash),
-						extractRawTxHash(anchorRes.VerifyTxHash),
-						extractRawTxHash(anchorRes.GovernanceTxHash),
-					},
-				}
-
-				if err := bv.proofCycleOrchestrator.StartProofCycleWithAccumulateRef(
-					proofCycleCtx,
-					certenIntent.IntentID,
-					certenIntent.UserID,
-					bundleID,
-					txHashes,
-					commitment,
-					certenIntent.AccountURL,
-					certenIntent.TransactionHash,
-					"",
-				); err != nil {
-					bv.logger.Printf("⚠️ [PROOF-CYCLE] Failed to start proof cycle: %v", err)
-				}
-			}()
+			// Phase 7-9 now lives in RunProofCycle (async_attestation.go) so the
+			// on_cadence path can replay the SAME logic after its deferred batch
+			// settles. Previously this was an inline closure the cadence path could
+			// not reach, so cadence intents never attested.
+			att := bv.captureAttestation(vb, certenIntent, certenProof, blockHeight,
+				g0Proof, g1Proof, g2Proof, blsSignature, validatorSignatures, governanceLevel)
+			go bv.RunProofCycle(context.Background(), att, anchorRes)
 		}
 	}
 

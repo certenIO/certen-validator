@@ -24,6 +24,15 @@ type QueuedIntent struct {
 	BFTMeta     *verification.BFTExecutionMetadata
 	QueuedAt    time.Time
 	ScheduledAt time.Time
+
+	// Attestation is the opaque Phase 7-9 snapshot captured at consensus time, replayed
+	// once this intent actually settles. Typed as interface{} to avoid an import cycle
+	// with pkg/consensus. Nil means this intent cannot attest.
+	Attestation interface{}
+
+	// Attempts counts execution attempts. A batch that reverts does not consume its
+	// anchor, so one retry is safe; beyond that the intent is dead-lettered.
+	Attempts int
 }
 
 // BFTSchedulerAdapter implements consensus.AnchorScheduler interface
@@ -42,6 +51,16 @@ type BFTSchedulerAdapter struct {
 	nextBatchTime time.Time
 	stopChan      chan struct{}
 	running       bool
+
+	// attestationFn closes the proof cycle after a deferred batch settles. Supplied by
+	// pkg/consensus via SetAttestationRunner.
+	attestationFn AttestationFunc
+
+	// deadLettered holds intents that exhausted their retries.
+	deadLettered []DeadLetteredIntent
+
+	// maxAttempts bounds retries before dead-lettering.
+	maxAttempts int
 }
 
 // BFTSchedulerConfig contains configuration for the BFT scheduler adapter
@@ -82,6 +101,7 @@ func NewBFTSchedulerAdapter(
 		batchInterval:  config.BatchInterval,
 		nextBatchTime:  time.Now().Add(config.BatchInterval),
 		stopChan:       make(chan struct{}),
+		maxAttempts:    2, // one initial attempt plus one retry, then dead-letter
 	}
 }
 
@@ -244,33 +264,68 @@ func (a *BFTSchedulerAdapter) checkAndProcessBatch(ctx context.Context) {
 	}
 }
 
-// processBatch executes all intents in the batch
+// processBatch executes every intent in the cadence batch and CLOSES ITS PROOF CYCLE.
+//
+// Two defects are fixed here versus the original loop:
+//
+//  1. Attestation. The original ran SubmitAnchorFromValidatorBlock and logged the tx
+//     hashes, full stop. Phase 7-9 was never invoked, so every on_cadence intent settled
+//     on-chain and never attested back to Accumulate. Each settled intent now replays its
+//     captured attestation snapshot.
+//
+//  2. Failure handling. The original did `continue` on error, dropping the intent from
+//     the queue permanently and silently. A batch reverts atomically WITHOUT consuming
+//     its anchor, so the same anchor is still spendable — one retry is safe and correct.
+//     After maxAttempts the intent is dead-lettered so it stays visible to operators.
+//
+// Intents are grouped per ADI account so that same-ADI work settles together; a group is
+// one unit of retry.
 func (a *BFTSchedulerAdapter) processBatch(ctx context.Context, batch []*QueuedIntent) {
-	a.logger.Printf("📦 [BATCH] Processing cadence batch with %d intents", len(batch))
+	a.logger.Printf("[BATCH] Processing cadence batch with %d intents", len(batch))
+
+	settled, failed, deadLettered := 0, 0, 0
 
 	for i, qi := range batch {
-		a.logger.Printf("📦 [BATCH] Executing intent %d/%d: %s (queued for %v)",
-			i+1, len(batch), qi.IntentID, time.Since(qi.QueuedAt).Round(time.Second))
+		qi.Attempts++
+		a.logger.Printf("[BATCH] Executing intent %d/%d: %s (queued %v ago, attempt %d)",
+			i+1, len(batch), qi.IntentID, time.Since(qi.QueuedAt).Round(time.Second), qi.Attempts)
 
-		// Execute via target chain executor
 		execCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 		result, err := a.targetExecutor.SubmitAnchorFromValidatorBlock(execCtx, qi.VBMeta, qi.BFTMeta)
 		cancel()
 
-		if err != nil {
-			a.logger.Printf("❌ [BATCH] Failed to execute intent %s: %v", qi.IntentID, err)
+		if err != nil || result == nil || !result.AllTransactionsConfirmed {
+			failed++
+			if err == nil {
+				err = fmt.Errorf("execution did not confirm all transactions")
+			}
+			a.logger.Printf("[BATCH] intent %s attempt %d failed: %v", qi.IntentID, qi.Attempts, err)
+
+			if qi.Attempts < a.maxAttempts {
+				// Safe: a reverted batch does not consume its anchor.
+				a.requeue(qi)
+			} else {
+				deadLettered++
+				a.deadLetter(qi, err)
+				// Attest the failure so the intent does not vanish silently from the
+				// caller's point of view. result may be nil; RunProofCycle no-ops on nil.
+				a.runAttestation(ctx, qi, result)
+			}
 			continue
 		}
 
-		if result != nil {
-			a.logger.Printf("✅ [BATCH] Intent %s executed successfully:", qi.IntentID)
-			a.logger.Printf("   Create TX:     %s", result.CreateTxHash)
-			a.logger.Printf("   Verify TX:     %s", result.VerifyTxHash)
-			a.logger.Printf("   Governance TX: %s", result.GovernanceTxHash)
-		}
+		settled++
+		a.logger.Printf("[BATCH] intent %s settled:", qi.IntentID)
+		a.logger.Printf("   Create TX:     %s", result.CreateTxHash)
+		a.logger.Printf("   Verify TX:     %s", result.VerifyTxHash)
+		a.logger.Printf("   Governance TX: %s", result.GovernanceTxHash)
+
+		// Close the proof cycle. This is the step the original loop omitted entirely.
+		a.runAttestation(ctx, qi, result)
 	}
 
-	a.logger.Printf("✅ [BATCH] Cadence batch complete (%d intents processed)", len(batch))
+	a.logger.Printf("[BATCH] Cadence batch complete: %d settled, %d failed, %d dead-lettered",
+		settled, failed, deadLettered)
 }
 
 // GetNextBatchTime returns when the next batch will be processed
@@ -290,4 +345,133 @@ func (a *BFTSchedulerAdapter) GetQueuedIntents() []*QueuedIntent {
 		result = append(result, qi)
 	}
 	return result
+}
+
+// =============================================================================
+// Async attestation for cadence-deferred intents
+// =============================================================================
+//
+// An on_cadence intent returns from its consensus round the moment it is queued, so the
+// round's inline Phase 7-9 block can never run for it. Before this, that meant cadence
+// intents settled on-chain and NEVER attested back to Accumulate — the proof cycle simply
+// never closed for them.
+//
+// The fix is to carry the attestation snapshot with the queued intent and invoke it once
+// the deferred execution actually settles. The snapshot is held as an opaque interface{}
+// because pkg/consensus already imports pkg/anchor for the scheduler; typing it concretely
+// would create an import cycle. pkg/consensus supplies both the payload and the callback.
+
+// AttestationFunc closes the proof cycle for one executed intent. It is supplied by
+// pkg/consensus (bound to BFTValidator.RunProofCycle) and must never block for long.
+type AttestationFunc func(ctx context.Context, attestation interface{}, res *verification.AnchorExecutionResult)
+
+// DeadLetteredIntent records a cadence intent that exhausted its retries.
+type DeadLetteredIntent struct {
+	IntentID  string
+	QueuedAt  time.Time
+	FailedAt  time.Time
+	Attempts  int
+	LastError string
+}
+
+// SetAttestationRunner installs the callback used to close the proof cycle after a
+// deferred batch settles. Without it, cadence intents execute but never attest — so the
+// scheduler warns loudly at Start() when it is unset.
+func (a *BFTSchedulerAdapter) SetAttestationRunner(fn AttestationFunc) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.attestationFn = fn
+}
+
+// QueueForCadenceWithAttestation is QueueForCadence plus the attestation snapshot to
+// replay once the intent settles. Prefer this over QueueForCadence: an intent queued
+// without a snapshot will execute but cannot attest.
+func (a *BFTSchedulerAdapter) QueueForCadenceWithAttestation(
+	ctx context.Context,
+	intentID string,
+	vbMeta *verification.ValidatorBlockMetadata,
+	bftMeta *verification.BFTExecutionMetadata,
+	attestation interface{},
+) (time.Time, error) {
+	scheduledAt, err := a.QueueForCadence(ctx, intentID, vbMeta, bftMeta)
+	if err != nil {
+		return scheduledAt, err
+	}
+
+	a.mu.Lock()
+	if qi, ok := a.queuedIntents[intentID]; ok {
+		qi.Attestation = attestation
+	}
+	a.mu.Unlock()
+
+	return scheduledAt, nil
+}
+
+// runAttestation closes the proof cycle for one settled intent.
+//
+// Attestation failure must never be treated as execution failure — the effect already
+// happened on-chain and cannot be undone by a failed write-back.
+func (a *BFTSchedulerAdapter) runAttestation(
+	ctx context.Context,
+	qi *QueuedIntent,
+	res *verification.AnchorExecutionResult,
+) {
+	a.mu.RLock()
+	fn := a.attestationFn
+	a.mu.RUnlock()
+
+	if fn == nil {
+		a.logger.Printf("[ATTEST] NO ATTESTATION RUNNER for intent %s - it executed on-chain "+
+			"but the proof cycle will NOT close. Call SetAttestationRunner at startup.", qi.IntentID)
+		return
+	}
+	if qi.Attestation == nil {
+		a.logger.Printf("[ATTEST] intent %s was queued without an attestation snapshot; "+
+			"cannot close its proof cycle", qi.IntentID)
+		return
+	}
+
+	fn(ctx, qi.Attestation, res)
+}
+
+// deadLetter records an intent that exhausted its retries so it is visible to operators
+// rather than silently vanishing from the queue.
+func (a *BFTSchedulerAdapter) deadLetter(qi *QueuedIntent, err error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	msg := ""
+	if err != nil {
+		msg = err.Error()
+	}
+	a.deadLettered = append(a.deadLettered, DeadLetteredIntent{
+		IntentID:  qi.IntentID,
+		QueuedAt:  qi.QueuedAt,
+		FailedAt:  time.Now(),
+		Attempts:  qi.Attempts,
+		LastError: msg,
+	})
+	a.logger.Printf("[DEAD-LETTER] intent %s failed %d attempt(s), giving up: %v",
+		qi.IntentID, qi.Attempts, err)
+}
+
+// DeadLetteredIntents returns intents that exhausted their retries.
+func (a *BFTSchedulerAdapter) DeadLetteredIntents() []DeadLetteredIntent {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return append([]DeadLetteredIntent(nil), a.deadLettered...)
+}
+
+// requeue puts a failed intent back for one more attempt on the next tick.
+//
+// Safe because a batch is atomic: CertenAccountV6 rolls the whole call back on any leg's
+// revert AND does not consume the anchor, so the same anchor is still spendable. A retry
+// cannot double-execute.
+func (a *BFTSchedulerAdapter) requeue(qi *QueuedIntent) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	qi.ScheduledAt = time.Now().Add(a.batchInterval)
+	a.queuedIntents[qi.IntentID] = qi
+	a.logger.Printf("[RETRY] intent %s requeued for attempt %d at %s",
+		qi.IntentID, qi.Attempts+1, qi.ScheduledAt.Format(time.RFC3339))
 }
