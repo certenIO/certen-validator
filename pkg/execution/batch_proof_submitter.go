@@ -69,30 +69,67 @@ func (s *BatchProofSubmitterImpl) batchOperationIDViaV7(
 	ecm *EthereumContractManager,
 	bundleID [32]byte,
 ) ([32]byte, error) {
-	// getOperationID(bytes32) is the explicit V6.1 view; use it rather than the packed
-	// mapping accessor, whose field offsets shifted when operationID was added.
-	const abiJSON = `[{"type":"function","name":"getOperationID","inputs":[{"name":"anchorId","type":"bytes32"}],"outputs":[{"name":"","type":"bytes32"}],"stateMutability":"view"}]`
-	parsed, err := abiFromJSON(abiJSON)
+	// Read operationID out of the public `anchors` mapping getter.
+	//
+	// This used to call getOperationID(bytes32), described in the old comment as "the explicit
+	// V6.1 view". It IS a V6.1 view — and it was never carried into V7/V8/V8_1. On those
+	// anchors the selector matches nothing, so the call hit the fallback and reverted with
+	// empty return data. The flush loop had already MINED the batch anchor by that point, so
+	// every cadence flush paid for an anchor and then failed on the very next read:
+	//
+	//	quorum attestation over batch root failed: reading batch operationID: execution reverted
+	//
+	// The struct getter is the portable route: `mapping(bytes32 => Anchor) public anchors`
+	// flattens Anchor into a tuple, and operationID is field index 7. The ordering below is
+	// transcribed from CertenAnchorV8_1.sol and is asserted against the DEPLOYED contract by
+	// TestAnchorsTupleLayoutMatchesDeployedContract — if a future anchor reorders these
+	// fields, that test fails rather than this silently decoding the wrong 32 bytes.
+	const operationIDFieldIndex = 7
+
+	parsed, err := abiFromJSON(anchorsABIJSON)
 	if err != nil {
 		return [32]byte{}, err
 	}
 	bound := bind.NewBoundContract(anchorAddr, parsed, ecm.client, ecm.client, ecm.client)
 	var out []interface{}
-	if err := bound.Call(&bind.CallOpts{Context: ctx}, &out, "getOperationID", bundleID); err != nil {
+	if err := bound.Call(&bind.CallOpts{Context: ctx}, &out, "anchors", bundleID); err != nil {
 		return [32]byte{}, fmt.Errorf("reading batch operationID: %w", err)
 	}
-	if len(out) == 0 {
-		return [32]byte{}, fmt.Errorf("getOperationID returned no value")
+	if len(out) <= operationIDFieldIndex {
+		return [32]byte{}, fmt.Errorf(
+			"anchors() returned %d fields, need at least %d — the Anchor struct layout changed",
+			len(out), operationIDFieldIndex+1)
 	}
-	v, ok := out[0].([32]byte)
+	v, ok := out[operationIDFieldIndex].([32]byte)
 	if !ok {
-		return [32]byte{}, fmt.Errorf("getOperationID returned unexpected type")
+		return [32]byte{}, fmt.Errorf("anchors().operationID returned unexpected type %T", out[operationIDFieldIndex])
 	}
 	if v == ([32]byte{}) {
 		return [32]byte{}, fmt.Errorf("anchor 0x%x has a zero operationID — not a batch anchor?", bundleID[:8])
 	}
 	return v, nil
 }
+
+// anchorsABIJSON is the `mapping(bytes32 => Anchor) public anchors` getter, transcribed field
+// for field from CertenAnchorV8_1.sol. Shared with the layout test so both read one source of
+// truth; TestAnchorsTupleLayoutMatchesDeployedContract checks it against a DEPLOYED anchor.
+const anchorsABIJSON = `[{"type":"function","name":"anchors","inputs":[{"name":"","type":"bytes32"}],"outputs":[` +
+	`{"name":"bundleId","type":"bytes32"},` +
+	`{"name":"merkleRoot","type":"bytes32"},` +
+	`{"name":"adiURLHash","type":"bytes32"},` +
+	`{"name":"operationCommitment","type":"bytes32"},` +
+	`{"name":"crossChainCommitment","type":"bytes32"},` +
+	`{"name":"governanceRoot","type":"bytes32"},` +
+	`{"name":"executionCommitment","type":"bytes32"},` +
+	`{"name":"operationID","type":"bytes32"},` +
+	`{"name":"accumulateBlockHeight","type":"uint256"},` +
+	`{"name":"timestamp","type":"uint256"},` +
+	`{"name":"validator","type":"address"},` +
+	`{"name":"valid","type":"bool"},` +
+	`{"name":"proofExecuted","type":"bool"},` +
+	`{"name":"governanceExecuted","type":"bool"},` +
+	`{"name":"governanceLevel","type":"uint8"}` +
+	`],"stateMutability":"view"}]`
 
 // AnchorProofExecuted reports whether the quorum attestation has landed.
 func (s *BatchProofSubmitterImpl) AnchorProofExecuted(
