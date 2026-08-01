@@ -135,13 +135,27 @@ Deterministic period selection in `pkg/execution/batch_mempool.go`:
 - 7 tests pass, incl. `TestPeekForPeriod_IsIdenticalAcrossValidators`: two pools with the same
   intents in opposite arrival order and unrelated wall-clocks select the identical member list.
 
+### DONE — commits `c6230ed`, `acb5922`
+
+`c6230ed` — commit height threaded end to end. `EnqueueForBatch` takes `commitHeight`,
+`bft_integration.go` passes `uint64(bftRes.Height)`, and enqueue REFUSES height 0 (such a
+member could never be selected deterministically and would sit in the pool forever).
+
+`acb5922` — `pkg/execution/batch_attestation.go`: the attester, and with it the security
+boundary. `HandleBatchAttestationRequest` rebuilds the batch from its OWN mempool via
+`PeekForPeriod(chainID, cutoffHeight)` and signs ONLY if its derived bundleId equals the
+proposer's. The request carries no member data by design — accepting a member list from the
+proposer would defeat the check entirely. 8 tests, including refusal of an injected extra
+leaf, a tampered member amount, and a mismatched cutoff height; attesting never consumes the
+mempool.
+
 ### REMAINING WORK (in order)
 
-1. **Populate `CommitHeight`.** `EnqueueForBatch` must take the BFT commit height and set it.
+1. ~~**Populate `CommitHeight`.**~~ DONE (`c6230ed`). `EnqueueForBatch` must take the BFT commit height and set it.
    Call site: `pkg/consensus/bft_integration.go:1392` — `bftRes.Height` is in scope there.
    Until this is done `PeekForPeriod` returns nothing (zero heights are skipped), so the batch
    path stays inert — safe, but non-functional.
-2. **Batch attestation over the peer endpoint.** Add a batch request/response alongside
+2. ~~**Batch attestation over the peer endpoint.**~~ Handler DONE (`acb5922`). STILL TO DO: the HTTP wiring — serve it next to `/api/unified/attestation/request` in `main.go`, and add the proposer-side client that fans out to `ATTESTATION_PEERS`. Original note: Add a batch request/response alongside
    `PeerAttestationRequest`. Proposer sends `{chainID, cutoffHeight, bundleId}`. The attester
    MUST recompute its own tree via `PeekForPeriod(chainID, cutoffHeight)` and sign ONLY if its
    derived bundleId equals the proposer's. This check is the security boundary: without it a
