@@ -1117,6 +1117,64 @@ func startValidator(
 	}
 
 	// ==========================================================================
+	// CROSS-ADI BATCH PATH (CertenAnchorV8)
+	//
+	// Many on_cadence intents share ONE anchor and ONE BLS verification. Measured on live
+	// Sepolia, createAnchor + executeComprehensiveProof are 802,128 of the 987,644 gas an
+	// intent costs (81.2%), so amortising them across a batch is where the saving is.
+	//
+	// This batches the ATTESTATION, never the authorization: each member keeps its own
+	// operationID and its own executionCommitment as a distinct Merkle leaf, spendable only
+	// by the account whose immutable adiURL is hashed into it.
+	//
+	// ORDER MATTERS. The flush loop is started BEFORE SetBatchEnqueuer, so the mempool can
+	// never accept a member while nothing is draining it — a pool that fills and never
+	// flushes would strand intents, which is strictly worse than the per-intent path.
+	//
+	// Requires CERTEN_ANCHOR_V8_<chainId> per chain. Absent config leaves the batch path
+	// off and on_cadence falls back to the deferred-serial scheduler above, which still
+	// settles — just without the saving.
+	// ==========================================================================
+	if anchorCfg, cfgErr := config.LoadAnchorConfigFromEnv(); cfgErr != nil {
+		log.Printf("⚠️ [BATCH] No anchor config (%v) — cross-ADI batching disabled", cfgErr)
+	} else {
+		batchChains := []int64{11155111, 84532, 421614} // sepolia, base-sepolia, arbitrum-sepolia
+		resolver, rErr := execution.NewEVMChainResolverFromEnv(anchorCfg, batchChains)
+		if rErr != nil {
+			log.Printf("ℹ️ [BATCH] Cross-ADI batching disabled: %v", rErr)
+		} else {
+			submitter := execution.NewBatchProofSubmitter(resolver, log.Printf)
+			prover, pErr := consensus.NewBatchQuorumProver(
+				log.New(log.Writer(), "[BATCH-QUORUM] ", log.LstdFlags), submitter)
+			if pErr != nil {
+				log.Printf("⚠️ [BATCH] Quorum prover unavailable (%v) — batching disabled", pErr)
+			} else {
+				mempoolCfg := execution.DefaultBatchMempoolConfig()
+				stack, sErr := execution.NewBatchStack(resolver, prover, mempoolCfg, log.Printf)
+				if sErr != nil {
+					log.Printf("⚠️ [BATCH] Stack assembly failed (%v) — batching disabled", sErr)
+				} else {
+					// Drain first, enqueue second.
+					go stack.RunFlushLoop(
+						context.Background(),
+						mempoolCfg.FlushInterval,
+						func() uint64 { return 0 },
+						func(ctx context.Context, att interface{}, txHash string, chainID int64, ok bool) {
+							// Replay the captured Phase 7-9 snapshot so each settled member
+							// closes its own proof cycle back to Accumulate.
+							validator.RunBatchMemberAttestation(ctx, att, txHash, chainID, ok)
+						},
+						log.Printf,
+					)
+					validator.SetBatchEnqueuer(stack)
+					log.Printf("✅ [BATCH] Cross-ADI batching ACTIVE on chains %v (flush every %s)",
+						resolver.Chains(), mempoolCfg.FlushInterval)
+				}
+			}
+		}
+	}
+
+	// ==========================================================================
 	// PHASE 5: Wire Batch System for Real Merkle Roots
 	// Per Implementation Plan: Connect batch collector/processor to AnchorManager
 	// ==========================================================================
