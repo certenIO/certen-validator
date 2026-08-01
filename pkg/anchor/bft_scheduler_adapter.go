@@ -377,7 +377,15 @@ type DeadLetteredIntent struct {
 // SetAttestationRunner installs the callback used to close the proof cycle after a
 // deferred batch settles. Without it, cadence intents execute but never attest — so the
 // scheduler warns loudly at Start() when it is unset.
-func (a *BFTSchedulerAdapter) SetAttestationRunner(fn AttestationFunc) {
+//
+// The parameter is the UNNAMED func type deliberately, and must stay that way. pkg/consensus
+// installs this through a structural interface assertion (it cannot name AttestationFunc
+// without an import cycle), and Go matches method-set parameter types EXACTLY: a method
+// taking the named AttestationFunc does not satisfy an interface declaring the identical
+// underlying signature. Declaring it as AttestationFunc made that assertion fail silently in
+// production — the runner was never installed, and the log said so on every boot:
+// "Scheduler does not support attestation replay — on_cadence intents will NOT attest".
+func (a *BFTSchedulerAdapter) SetAttestationRunner(fn func(ctx context.Context, attestation interface{}, res *verification.AnchorExecutionResult)) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.attestationFn = fn
