@@ -200,3 +200,26 @@ func splitCSV(s string) []string {
 	}
 	return out
 }
+
+// GetV6_1ValidatorSet returns the operator addresses and voting powers the validator-set
+// root is derived from.
+//
+// Exported so the batch attestation path can populate BLSProofData's validator arrays from
+// the SAME source the set root comes from. Deriving them independently would let the
+// threshold arithmetic submitted on-chain drift from the quorum the root actually commits
+// to — the contract would then be checking a threshold against numbers no one attested.
+func GetV6_1ValidatorSet() ([]common.Address, []*big.Int, error) {
+	addrs, err := resolveValidatorAddrs()
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve validator addrs: %w", err)
+	}
+	powers, err := resolveVotingPowers(len(addrs))
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve voting powers: %w", err)
+	}
+	out := make([]*big.Int, 0, len(powers))
+	for _, p := range powers {
+		out = append(out, new(big.Int).Set(p))
+	}
+	return append([]common.Address(nil), addrs...), out, nil
+}
