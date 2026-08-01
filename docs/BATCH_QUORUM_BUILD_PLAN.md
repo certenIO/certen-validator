@@ -104,6 +104,54 @@ already running. `BroadcastTxSync` is available (see `bft_integration.go:2754`).
 
 ---
 
+## PROGRESS
+
+### DONE — commit `cad0412`
+`pkg/consensus/batch_quorum_aggregate.go` + tests, and `bls.PublicKey.VerifyG1`.
+
+- `AggregateBatchAttestations` verifies each partial against the REGISTRY public key, refuses
+  duplicate / unregistered / wrong-message / key-substituted / malformed attestations, sums
+  `SignedVotingPower` from actual signers, enforces threshold BY POWER, and self-checks the
+  fold before returning.
+- `SignBatchAttestation` uses `bls_zkp.SignV6_1PreExec` (NOT `SignWithDomain`).
+- `bls.PublicKey.VerifyG1` added — `Verify()` uses RFC-9380 ExpandMsgXmd and CANNOT check a
+  `SignG1` signature; it silently returns false. This was a required addition.
+- 12 tests pass, including `TestAggregate_SingleSignerIsRefused` (the forgery guard).
+- **Proven against the live chain**: with the real `bls_keys_backup_MASTER.json`, aggregates
+  fold to `0x0097ffa4…` (5-of-7), `0x003dd096…` (6-of-7), `0x00790bb7…` (7-of-7) — all three
+  read back `authorizedPubkeyCommitments == true` on CertenAnchorV8_1. The 7-of-7 value is
+  byte-identical to the one `cmd/subsetcommit/main.go` records as the production prover's
+  output, which independently confirms the fold.
+
+### TRANSPORT — decided, verified reachable
+Use the EXISTING peer attestation HTTP path, not CometBFT txs and not
+`pkg/batch/attestation_broadcaster.go`.
+
+- Endpoint already served: `main.go:374` `/api/unified/attestation/request` →
+  `UnifiedOrchestrator.HandlePeerAttestationRequest`.
+- Client already implemented: `collectPeerAttestations` (`pkg/execution/unified_orchestrator.go:1421`),
+  posts to `%s/api/unified/attestation/request` (`:1502`).
+- Peers ARE configured in production: `ATTESTATION_PEERS=http://validator-2:8080,...`.
+- Currently idle (0 peer-attestation log lines in 60m) — wired but unexercised.
+
+Rejected: `pkg/batch/attestation_broadcaster.go` is dead code (never constructed in `main.go`;
+`ConsensusCoordinator` also unwired) AND signs with `SignWithDomain(bls.DomainAttestation)`
+at `:344`, which makes the V2 circuit unsatisfiable. Do not revive it as-is.
+
+### KEY DESIGN REFINEMENT — deterministic composition beats negotiation
+Membership does NOT need a new consensus round. Make the batch a deterministic function of
+already-committed state, and every validator derives an identical tree, root, and bundleId
+with no negotiation:
+
+- period = `commitHeight / periodBlocks`; cutoff = `period * periodBlocks`
+- members = pending intents whose BFT round committed at height <= cutoff, sorted
+  deterministically (by leaf, ascending)
+- `accumulateBlockHeight` = cutoff  ← this is what makes the bundleId agree
+
+`PendingBatchIntent` must therefore carry its commit height. Without a cutoff, validator A may
+have processed an intent that B has not yet seen, and the trees diverge — which is exactly what
+happened live (v2 `0xe4c950df…` vs v3 `0x5e71d83a…`).
+
 ## Build steps
 
 ### 1. Batch proposal becomes consensus content
