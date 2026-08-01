@@ -271,6 +271,33 @@ func (sk *PrivateKey) SignG1(h bls12381.G1Affine) *Signature {
 	return &Signature{point: sig}
 }
 
+// VerifyG1 is the counterpart to SignG1: it checks e(sig, G2) == e(h, pk) against a
+// PRECOMPUTED G1 point instead of re-deriving one from a message.
+//
+// This has to exist separately because Verify() hashes with RFC-9380 ExpandMsgXmd, which lands
+// on a different curve point than bls_zkp.HashMessageToG1V2. Verify() therefore cannot check a
+// SignG1 signature — it silently returns false. Anything validating a V6.1 pre-exec partial
+// signature (batch quorum attestations, for one) must use this instead.
+//
+// VerifyAggregateSignature shares that limitation; to check an aggregate over a precomputed
+// point, aggregate the public keys first and call this once.
+func (pk *PublicKey) VerifyG1(sig *Signature, h bls12381.G1Affine) bool {
+	if pk == nil || sig == nil {
+		return false
+	}
+	var negPk bls12381.G2Affine
+	negPk.Neg(&pk.point)
+
+	ok, err := bls12381.PairingCheck(
+		[]bls12381.G1Affine{sig.point, h},
+		[]bls12381.G2Affine{g2Gen, negPk},
+	)
+	if err != nil {
+		return false
+	}
+	return ok
+}
+
 // =============================================================================
 // PUBLIC KEY METHODS
 // =============================================================================

@@ -1,0 +1,176 @@
+# Cross-ADI Batch Quorum — Build Plan
+
+Status: IN PROGRESS (started 2026-08-01)
+Decision owner: Jason. Approach and fallback policy approved.
+
+---
+
+## The defect being fixed
+
+The cross-ADI batch path forms its Merkle tree on a **local 1-minute timer per validator**
+(`BatchStack.RunFlushLoop`), entirely outside consensus. Two consequences, both observed live
+on Sepolia 2026-08-01:
+
+1. **Divergent trees.** validator-2 flushed bundleId `0xe4c950df…` while validator-3 flushed
+   `0x5e71d83a…` in the same window. Nothing makes validators agree on batch membership.
+2. **No quorum.** `signBatchPreExecBLS` (`pkg/consensus/batch_quorum_prover.go:88-100`) signs
+   with `km.PrivateKey()` — *this validator alone* — while `buildValidatorSetForBatch` declares
+   all 7 validators, `TotalVotingPower: 700`, `SignedVotingPower: 700`.
+
+It also submits the raw 48-byte BLS signature where the contract requires an abi-encoded
+Groth16 blob (the on_demand path calls `ecm.generateBLSZKProof`).
+
+**The chain rejects this, so it fails SAFE.** Live evidence, anchor `0x5e71d83a…`:
+
+```
+ProofVerificationFailed(merkleVerified: true, commitmentVerified: true,
+                        blsVerified: false, reason: "BLS signature verification failed")
+```
+
+`merkleVerified: true` proves the leaf/root/ADI-binding math is already correct on chain.
+
+### DO NOT "fix" this by wrapping the single signature in generateBLSZKProof
+
+That is the obvious-looking one-liner and it is a **quorum forgery**: it would mint a valid ZK
+proof asserting 700/700 signed voting power from one key — precisely the CRYPTO-007 class of
+attack the authorized-subset commitments exist to prevent. The 29 registered commitments are
+subsets of size 5, 6, and 7 only; a single-signer aggregate is not among them, which is why
+the chain refuses it.
+
+---
+
+## Why bundleId needs no reservation
+
+`CertenAnchorV8_1.sol:776-784` **re-derives** the bundleId and rejects any mismatch:
+
+```solidity
+bytes32 derivedBundleId = keccak256(abi.encodePacked(
+    "certen:batchbundle:v1", DEPLOYMENT_CHAIN_ID, batchRoot,
+    leafCount, batchOperationID, accumulateBlockHeight));
+if (!(bundleId == derivedBundleId)) revert BundleIdMustDeriveFromBatchRootCount();
+```
+
+It is a pure function of batch content — not chain-assigned, nothing to reserve. Fix membership
+and the bundleId is known before any transaction is sent, so the quorum can sign it in advance.
+
+The contract already anticipates exactly this design (`:772-775`): a rogue validator restating
+root or leafCount "produces a different bundleId, which the honest quorum's BLS signature does
+not cover."
+
+**Subtle trap:** `accumulateBlockHeight` feeds the derivation. It MUST be agreed in consensus,
+not read locally per validator, or identical membership still yields divergent bundleIds.
+
+---
+
+## Why cross-ADI cannot be composed pre-signature
+
+A batch holds dozens of intents from dozens of ADIs, each signing independently on Accumulate at
+its own time. No moment exists where they could co-sign a batch. The soundness comes from two
+signature layers with different scopes:
+
+| Signature | Scope | Authorizes |
+|---|---|---|
+| ADI key page (Accumulate) | one intent, one ADI | the operation → becomes the leaf |
+| Validator BLS quorum (Phase 3) | one batch, all ADIs | that these leaves are validly in this root |
+
+The quorum never authorizes anyone's funds. `CertenAccountV7._authorizeLeaf` permits a leaf to
+be spent only by the account whose **immutable** `adiURL` hashes into it. A malicious quorum
+could include a leaf but could not fabricate one for an ADI that never signed.
+
+---
+
+## Approved architecture: reuse Phase 3 + Phase 4
+
+Per `onboarding_v6_1_proof_cycle.html`: Phase 3 has every validator BLS-sign the 6-field pre-exec
+binding; Phase 4 runs CometBFT Propose→Prevote→Precommit→Commit where "the aggregate BLS sig from
+Phase 3 is locked into the committed block", with deterministic-leader rotation electing the
+single submitter. **That is already "one proposer, six attest."**
+
+Rejected alternative: a bespoke proposer→attest gossip protocol. It would have to re-solve
+equivocation (proposer sends batch A to three validators, B to four — both could reach 5-of-7),
+liveness/view-change, and validator-set-change snapshots. CometBFT solves all three.
+
+### Transport decision: CometBFT txs, NOT the HTTP broadcaster
+
+`pkg/batch/attestation_broadcaster.go` already implements request/collect/aggregate — but:
+
+- it is **dead code** (never constructed in `main.go`; `ConsensusCoordinator` is also unwired), and
+- it signs via `SignWithDomain(msgHash, bls.DomainAttestation)` (`:344`), which hashes to a
+  different G1 point and **makes the V2 circuit unsatisfiable** — the documented cause of the
+  Sepolia test #7 failure. Its aggregate could never verify on chain.
+
+Use CometBFT as the transport instead: totally-ordered, replicated, equivocation-proof, and
+already running. `BroadcastTxSync` is available (see `bft_integration.go:2754`).
+
+---
+
+## Build steps
+
+### 1. Batch proposal becomes consensus content
+- Flush loop STOPS anchoring directly. It proposes.
+- New tx type `BatchProposalTx`: `{chainID, memberLeaves[], leafCount, batchRoot,
+  batchOperationID, accumulateBlockHeight, proposerID}`.
+- Only the deterministically-elected proposer for the period may propose; others validate.
+- ABCI `DeliverTx` records the committed proposal → this IS the agreement on membership
+  AND `accumulateBlockHeight`.
+- Every validator derives the same bundleId from committed content.
+
+### 2. Phase 3 signing over the derived bundleId
+- Each validator computes `ComputeBatchPreExecMessage(chainID, bundleID, batchRoot,
+  batchOperationID, setRoot)` and signs with **`bls_zkp.SignV6_1PreExec`** — NOT
+  `SignWithDomain`.
+- Partial signature broadcast as `BatchAttestationTx` through CometBFT.
+- ABCI collects; each is verified against the signer's REGISTERED pubkey before counting.
+
+### 3. Aggregate + submit (elected leader only)
+- On ≥ threshold (5-of-7 by power: 500 ≥ 467) the leader aggregates via
+  `bls.AggregateSignatures` and aggregates the corresponding pubkeys.
+- `signedVotingPower` = sum of the powers of validators that ACTUALLY signed. Never a constant.
+- `generateBLSZKProof(aggSig, msgHash, signedPower, totalPower, aggPubHex)` — now legitimate.
+- Leader submits `createBatchAnchor` then `executeComprehensiveProof`.
+- The resulting pubkey commitment must be one of the 29 authorized subsets.
+
+### 4. Failure policy — APPROVED: fall back, never requeue
+- Quorum not reached in the window → members drop to the **per-intent on_demand path**.
+- Rationale: requeueing risks a permanently stuck batch; fallback costs more gas but guarantees
+  settlement. Matches `EnqueueForBatch` already refusing unconfigured chains rather than
+  stranding intents.
+- Anchor already mined but attestation failed → do NOT requeue (re-forming the identical tree
+  derives the same bundleId and reverts `AnchorAlreadyExists`, hiding the real fault).
+
+---
+
+## Verification required before declaring done
+
+1. Unit: bundleId derivation matches the contract byte-for-byte (live check against deployed).
+2. Unit: aggregate of 5, 6, 7 signers → commitment ∈ the 29 authorized set.
+3. Unit: `signedVotingPower` reflects actual signers, never a constant.
+4. Negative: single-signer aggregate MUST be rejected (guards against reintroducing the forgery).
+5. Negative: divergent membership → different bundleId → signature does not cover it.
+6. Live e2e on Sepolia: real batch intents through to settlement, `proofExecuted = true`,
+   leaf consumed, balance moved.
+7. Multi-member: ≥2 intents from ≥2 distinct ADIs in ONE batch — the actual point of the feature.
+
+---
+
+## Known state at plan time (2026-08-01)
+
+- Live anchor: `CertenAnchorV8_1` `0xb39b707D50089C9Eb92818f9B2870eba6DA5C2a0`, binding ENFORCED,
+  29 commitments authorized, setRoot `0xa85a6911…`, 7 validators @100 power.
+- FactoryV9 `0xf96f936fbfc7c02e4e1d1c847b9817e60c4b6f4e` → V8_1.
+- Test account `0x32b4687bE3c02d52e2d94Dc1cFAF03a0E5af0C8B` for `acc://certen-kermit-12.acme`,
+  funded, keyless, pinned to V8_1.
+- Fixed and shipped earlier today: attestation-runner wiring (`c9a2102`), batch leaf ADI URL
+  (`51fc054`), BFT timeout (`2f75213`), govproof CLI timeout (`0bf0eba`), operationID accessor
+  (`8b53c1c`).
+- Stranded anchors from failed flushes (~550k gas): `0xe4c950df…`, `0x5e71d83a…`.
+- `scripts/submit_intent_v8_1_cadence.js` is under a **gitignored** directory — not committed.
+
+## Open item, not blocking
+
+G2 governance proof: only 1 of its 4 sub-checks is real (payload binding recomputes the tx hash).
+Effect verification is tautological as invoked (no `--expect-entry` passed, so it compares
+computed vs expected — the same comparison payload binding already made); receipt binding and
+witness consistency are "we got here" flags. `go_verifier.go:60-71` also has a path where an
+unset `goVerifyPath` yields a G2 pass with zero real cryptography. Raised with Jason; awaiting
+direction. Does not block batch quorum.
