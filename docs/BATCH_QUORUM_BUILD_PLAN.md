@@ -149,6 +149,20 @@ proposer would defeat the check entirely. 8 tests, including refusal of an injec
 leaf, a tampered member amount, and a mismatched cutoff height; attesting never consumes the
 mempool.
 
+### ⚠ TWO REGRESSIONS THAT FAIL SILENTLY — READ BEFORE TOUCHING STEPS 3 OR 4
+
+**1. Step 3 must not weaken step 2.** `BatchAttestationRequest` deliberately carries NO member
+list. If the proposer's fan-out ever starts sending members "so the peer doesn't have to look
+them up", the security boundary evaporates and EVERY EXISTING TEST STILL PASSES — because the
+attester would then be validating the proposer's own data against itself. The peer must always
+rebuild from `PeekForPeriod`. `TestWireFormat_CarriesNoMemberData` guards this.
+
+**2. Step 4's temptation.** Wrapping a SINGLE signature in `generateBLSZKProof` compiles, runs,
+and produces a structurally valid proof — asserting 700/700 signed power from one key. That is
+the CRYPTO-007 quorum forgery. `signedVotingPower` must come from
+`QuorumAggregate.SignedVotingPower` (sum of real signers), never from a constant or the total.
+`TestAggregate_SingleSignerIsRefused` makes the regression fail loudly rather than ship.
+
 ### REMAINING WORK (in order)
 
 1. ~~**Populate `CommitHeight`.**~~ DONE (`c6230ed`). `EnqueueForBatch` must take the BFT commit height and set it.
