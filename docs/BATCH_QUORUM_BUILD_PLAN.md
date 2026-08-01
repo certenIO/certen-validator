@@ -149,6 +149,29 @@ proposer would defeat the check entirely. 8 tests, including refusal of an injec
 leaf, a tampered member amount, and a mismatched cutoff height; attesting never consumes the
 mempool.
 
+### DONE — commit `5c3fd49` (step 3)
+Peer HTTP wiring, both sides.
+
+- `pkg/execution/batch_attestation_client.go`: `CollectBatchAttestations` fans out concurrently
+  to `ATTESTATION_PEERS`, discards refusals/timeouts/mismatched bundleIds, returns only usable
+  partials. `NewBatchAttestationRequest(tree, cutoff, proposerID)` takes the TREE so the
+  bundleId can never drift from the root it belongs to.
+- `main.go`: serves `execution.BatchAttestationEndpoint` (`/api/batch/attestation/request`) via
+  `batchStackForAttestation` / `batchAttesterIdentity` atomic holders (same pattern as the
+  existing unified endpoint, which is registered before the stack exists). A refusal returns
+  200 with `Error` set — it is a normal outcome, not an HTTP failure.
+- `TestWireFormat_CarriesNoMemberData` is the tripwire for regression #1 below.
+
+**NEW ENV REQUIRED — `VALIDATOR_EVM_ADDRESS`.** Each validator must know the EVM address it
+signs as, and it MUST match its registry entry on the anchor (the aggregator resolves voting
+power by address; a wrong one contributes nothing). Unset ⇒ that validator can propose but
+cannot co-sign, and the quorum runs one signer short. main.go warns loudly on startup.
+Values are the seven `SEPOLIA_V6_VALIDATOR_*` addresses already registered on V8_1.
+
+**ALSO NOTED:** `RunFlushLoop` is currently passed `func() uint64 { return 0 }` as its height
+source (main.go, batching block). Step 4 must replace this with the real consensus height, or
+`BatchPeriodCutoff` always yields 0 and no period ever selects members.
+
 ### ⚠ TWO REGRESSIONS THAT FAIL SILENTLY — READ BEFORE TOUCHING STEPS 3 OR 4
 
 **1. Step 3 must not weaken step 2.** `BatchAttestationRequest` deliberately carries NO member
