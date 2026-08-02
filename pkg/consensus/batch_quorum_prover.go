@@ -2,13 +2,16 @@ package consensus
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"math/big"
+	"os"
+	"sort"
 	"strings"
+	"time"
 
-	"github.com/certen/independant-validator/pkg/crypto/bls"
-	"github.com/certen/independant-validator/pkg/crypto/bls_zkp"
 	"github.com/certen/independant-validator/pkg/execution/contracts"
 	"github.com/certen/independant-validator/pkg/verification"
 )
@@ -61,149 +64,24 @@ func ComputeBatchPreExecMessage(
 	)
 }
 
-// signBatchPreExecBLS signs the batch root with this validator's BLS key.
+// REMOVED: signBatchPreExecBLS / BatchQuorumProver / BatchProofSubmitter.
 //
-// Mirrors signV6_1PreExecBLS's EVM tail exactly, including the use of SignV6_1PreExec rather
-// than SignWithDomain: the latter hashes to a different G1 point and makes the V2 circuit
-// unsatisfiable, which is the failure that took Sepolia test #7 down.
-func signBatchPreExecBLS(
-	logger Logger,
-	chainID int64,
-	bundleID [32]byte,
-	batchRoot [32]byte,
-	batchOperationID [32]byte,
-) (string, [32]byte, error) {
-	setRoot, err := contracts.GetV6_1ValidatorSetRoot()
-	if err != nil {
-		return "", [32]byte{}, fmt.Errorf("validator-set root: %w", err)
-	}
-
-	msgHash := ComputeBatchPreExecMessage(chainID, bundleID, batchRoot, batchOperationID, setRoot)
-
-	if logger != nil {
-		logger.Printf("[BLS-SIG-BATCH] chainId=%d bundleId=0x%x root=0x%x batchOpID=0x%x msg=0x%x setRoot=0x%x",
-			chainID, bundleID[:8], batchRoot[:8], batchOperationID[:8], msgHash[:8], setRoot[:8])
-	}
-
-	km := bls.GetValidatorBLSKey()
-	if km == nil {
-		return "", msgHash, fmt.Errorf("validator BLS key manager not initialized")
-	}
-	sk := km.PrivateKey()
-	if sk == nil {
-		return "", msgHash, fmt.Errorf("validator BLS private key not loaded")
-	}
-
-	sig := bls_zkp.SignV6_1PreExec(sk, msgHash)
-	if sig == nil {
-		return "", msgHash, fmt.Errorf("batch BLS sign returned nil")
-	}
-	return sig.Hex(), msgHash, nil
-}
-
-// BatchProofSubmitter submits executeComprehensiveProof for a batch anchor on one chain.
+// They signed a batch root with THIS validator's key alone and handed the resulting single
+// signature to a submitter that declared SignedVotingPower == TotalVotingPower. The chain
+// refused the raw 48-byte signature, so it failed safe — but the shape invited the one-line
+// "fix" of wrapping it in generateBLSZKProof, which would have minted a valid proof asserting
+// 700/700 signed power from one key (the CRYPTO-007 quorum forgery).
 //
-// Kept as an interface so this file does not import pkg/execution (which already imports
-// pkg/consensus indirectly), and so the submission path can be exercised in tests without a
-// chain.
-type BatchProofSubmitter interface {
-	SubmitBatchComprehensiveProof(
-		ctx context.Context,
-		chainID int64,
-		bundleID [32]byte,
-		batchRoot [32]byte,
-		batchOperationID [32]byte,
-		aggregateSignature string,
-		messageHash [32]byte,
-	) error
-
-	// AnchorProofExecuted reports whether the anchor's proofExecuted flag is set. Used to
-	// confirm the attestation actually landed rather than trusting the submit call.
-	AnchorProofExecuted(ctx context.Context, chainID int64, bundleID [32]byte) (bool, error)
-}
-
-// BatchQuorumProver implements execution.QuorumProver.
-type BatchQuorumProver struct {
-	logger    Logger
-	submitter BatchProofSubmitter
-}
-
-// NewBatchQuorumProver builds a prover. submitter must be non-nil; without it the prover
-// could sign but never land the attestation, and the orchestrator would proceed to account
-// calls against an anchor no account accepts.
-func NewBatchQuorumProver(logger Logger, submitter BatchProofSubmitter) (*BatchQuorumProver, error) {
-	if submitter == nil {
-		return nil, fmt.Errorf("batch quorum prover requires a proof submitter")
-	}
-	return &BatchQuorumProver{logger: logger, submitter: submitter}, nil
-}
-
-// ProveBatchRoot obtains quorum attestation over a batch root and submits it.
+// The replacement is execution.BatchQuorumAttestor: it collects partials from peers over the
+// existing attestation HTTP channel, folds them with AggregateBatchAttestations against the
+// anchor's REGISTERED public keys, and submits a signed power summed from validators that
+// actually signed. It lives in pkg/execution because it needs the peer client, the chain
+// resolver, and the ZK prover — and pkg/consensus cannot import pkg/execution (the dependency
+// runs the other way, via executor.go).
 //
-// Satisfies execution.QuorumProver. Returns only once the anchor's proofExecuted flag is
-// confirmed set — the orchestrator relies on that, because every subsequent account call
-// would revert with "anchor proof not executed" otherwise.
-func (p *BatchQuorumProver) ProveBatchRoot(
-	ctx context.Context,
-	chainID int64,
-	bundleID [32]byte,
-	batchRoot [32]byte,
-) error {
-	// The batch operationID is recoverable from the anchor itself, but requiring it here
-	// would force a chain read on a value the caller already has. Instead it is derived
-	// from the same bundleId binding the contract enforces: the caller cannot pass a root
-	// and id that do not correspond, because createBatchAnchor already rejected that.
-	batchOperationID, err := p.batchOperationIDFor(ctx, chainID, bundleID)
-	if err != nil {
-		return err
-	}
-
-	sigHex, msgHash, err := signBatchPreExecBLS(p.logger, chainID, bundleID, batchRoot, batchOperationID)
-	if err != nil {
-		return fmt.Errorf("signing batch root: %w", err)
-	}
-
-	if err := p.submitter.SubmitBatchComprehensiveProof(
-		ctx, chainID, bundleID, batchRoot, batchOperationID, sigHex, msgHash,
-	); err != nil {
-		return fmt.Errorf("submitting batch comprehensive proof: %w", err)
-	}
-
-	// Confirm rather than assume. A submit that mined with status 1 but did not set the
-	// flag would otherwise send every member into a revert with a misleading error.
-	executed, err := p.submitter.AnchorProofExecuted(ctx, chainID, bundleID)
-	if err != nil {
-		return fmt.Errorf("confirming anchor attestation: %w", err)
-	}
-	if !executed {
-		return fmt.Errorf(
-			"batch anchor 0x%x still reports proofExecuted=false after submission; "+
-				"no account will accept it", bundleID[:8])
-	}
-
-	if p.logger != nil {
-		p.logger.Printf("[BLS-BATCH] chain=%d anchor 0x%x attested; root 0x%x is now spendable",
-			chainID, bundleID[:8], batchRoot[:8])
-	}
-	return nil
-}
-
-// batchOperationIDFor reads the anchor's stored batch operationID.
-func (p *BatchQuorumProver) batchOperationIDFor(
-	ctx context.Context,
-	chainID int64,
-	bundleID [32]byte,
-) ([32]byte, error) {
-	type opIDReader interface {
-		BatchOperationID(ctx context.Context, chainID int64, bundleID [32]byte) ([32]byte, error)
-	}
-	if r, ok := p.submitter.(opIDReader); ok {
-		return r.BatchOperationID(ctx, chainID, bundleID)
-	}
-	return [32]byte{}, fmt.Errorf(
-		"proof submitter does not expose BatchOperationID; cannot reconstruct the quorum "+
-			"message for bundle 0x%x", bundleID[:8])
-}
+// What remains here is what genuinely belongs to consensus: the message definition
+// (ComputeBatchPreExecMessage), the fold and its security rules (batch_quorum_aggregate.go),
+// and intent -> member extraction below.
 
 // =============================================================================
 // Intent -> batch member extraction
@@ -353,6 +231,132 @@ func (bv *BFTValidator) RunBatchMemberAttestation(
 		bv.logger.Printf("⚠️ [BATCH-ATTEST] intent %s did not settle; attesting failure", att.IntentID)
 	}
 	bv.RunProofCycle(ctx, att, res)
+}
+
+// RunBatchMemberFallback executes a member the batch path had to DROP, individually.
+//
+// The approved failure policy is "fall back, never requeue". Requeueing a dropped member
+// re-forms the identical tree, derives the identical bundleId, and reverts with
+// AnchorAlreadyExists — which hides the real fault and can leave the batch permanently stuck.
+// Falling back costs a full per-intent anchor (~800k gas instead of an amortised share) but it
+// settles, which is the whole point.
+//
+// A member that reaches here without its submission snapshot cannot be re-executed. That case
+// still attests the FAILURE rather than returning silently: an intent sitting pending forever
+// with nothing recording why is the outcome this path exists to prevent.
+func (bv *BFTValidator) RunBatchMemberFallback(ctx context.Context, attestation interface{}) {
+	att, ok := attestation.(*PendingAttestation)
+	if !ok || att == nil {
+		bv.logger.Printf("⚠️ [BATCH-FALLBACK] snapshot was not a *PendingAttestation; member cannot fall back")
+		return
+	}
+
+	if bv.targets == nil || att.SubmitVB == nil || att.SubmitBFT == nil {
+		bv.logger.Printf("⚠️ [BATCH-FALLBACK] intent %s was dropped from its batch but carries no "+
+			"per-intent submission inputs (targets=%v vb=%v bft=%v); attesting failure so it does "+
+			"not sit pending silently",
+			att.IntentID, bv.targets != nil, att.SubmitVB != nil, att.SubmitBFT != nil)
+		bv.RunProofCycle(ctx, att, &verification.AnchorExecutionResult{
+			AllTransactionsConfirmed: false,
+		})
+		return
+	}
+
+	bv.logger.Printf("↩️  [BATCH-FALLBACK] intent %s dropped from its batch — executing on the "+
+		"per-intent path", att.IntentID)
+
+	subCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	res, err := bv.targets.SubmitAnchorFromValidatorBlock(subCtx, att.SubmitVB, att.SubmitBFT)
+	if err != nil || res == nil {
+		bv.logger.Printf("❌ [BATCH-FALLBACK] intent %s failed on the per-intent path too: %v",
+			att.IntentID, err)
+		bv.RunProofCycle(ctx, att, &verification.AnchorExecutionResult{
+			AllTransactionsConfirmed: false,
+		})
+		return
+	}
+
+	bv.logger.Printf("✅ [BATCH-FALLBACK] intent %s settled individually: tx=%s network=%s",
+		att.IntentID, res.AnchorTxID, res.Network)
+	bv.RunProofCycle(ctx, att, res)
+}
+
+// =============================================================================
+// Batch period leadership
+// =============================================================================
+
+// ObservedConsensusHeight reports the highest BFT height this validator has seen a round
+// commit at.
+//
+// This — not a chain read and not a wall clock — is the right cutoff source: it is the exact
+// value stamped onto members by EnqueueForBatch, so a cutoff derived from it can never exclude
+// every member by being ahead of them all.
+func (bv *BFTValidator) ObservedConsensusHeight() uint64 {
+	return bv.observedHeight.Load()
+}
+
+// noteConsensusHeight records a committed BFT height. Monotonic: a late-arriving lower height
+// must not rewind the cutoff, or a period already flushed could be re-formed and revert.
+func (bv *BFTValidator) noteConsensusHeight(h uint64) {
+	for {
+		cur := bv.observedHeight.Load()
+		if h <= cur {
+			return
+		}
+		if bv.observedHeight.CompareAndSwap(cur, h) {
+			return
+		}
+	}
+}
+
+// IsBatchPeriodLeader reports whether this validator is the elected submitter for one chain's
+// batch period.
+//
+// Every validator must reach the SAME answer, so the selection is a pure function of
+// (chainID, cutoffHeight) over the same roster — no local state, no wall clock, no ordering.
+// Rotating on the cutoff spreads anchor gas across the set instead of parking it on one node.
+//
+// Without this every validator races to anchor the same period: one wins and six burn gas
+// reverting with AnchorAlreadyExists, and the winner is whoever's timer fired first rather
+// than whoever the set agreed on.
+func (bv *BFTValidator) IsBatchPeriodLeader(chainID int64, cutoffHeight uint64) bool {
+	roster := batchLeaderRoster()
+	if len(roster) == 0 {
+		return false
+	}
+	key := fmt.Sprintf("certen:batchperiod:v1|%d|%d", chainID, cutoffHeight)
+	sum := sha256.Sum256([]byte(key))
+	// Fold four bytes rather than one: with a single byte and a 7-way modulus the selection is
+	// measurably biased toward the low indices (256 = 7*36 + 4).
+	idx := binary.BigEndian.Uint32(sum[:4]) % uint32(len(roster))
+	return roster[idx] == bv.validatorID
+}
+
+// batchLeaderRoster returns the validator IDs eligible to lead a batch period, in a
+// deterministic order.
+//
+// Read from BATCH_LEADER_VALIDATORS when set, so a set change does not require a code change;
+// otherwise the seven production IDs. The order is normalised by sorting, because a roster
+// that differs only in order would elect different leaders on different nodes.
+func batchLeaderRoster() []string {
+	raw := strings.TrimSpace(os.Getenv("BATCH_LEADER_VALIDATORS"))
+	var ids []string
+	if raw != "" {
+		for _, p := range strings.Split(raw, ",") {
+			if p = strings.TrimSpace(p); p != "" {
+				ids = append(ids, p)
+			}
+		}
+	} else {
+		ids = []string{
+			"validator-1", "validator-2", "validator-3", "validator-4",
+			"validator-5", "validator-6", "validator-7",
+		}
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 // memberADIURL resolves the ADI URL to hash into a batch member's Merkle leaf.

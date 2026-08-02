@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	dbm "github.com/cometbft/cometbft-db"
@@ -382,6 +383,12 @@ type BFTValidator struct {
 
 	// BFT coordination fields
 	mu sync.RWMutex
+
+	// observedHeight is the highest BFT height a round has committed at on this node. It is
+	// the cutoff source for deterministic batch periods — see ObservedConsensusHeight. Kept
+	// here rather than read from the ABCI app because this is the exact value stamped onto
+	// batch members, so a cutoff derived from it can never be ahead of every member.
+	observedHeight atomic.Uint64
 
 	// Proof Cycle Orchestrator for Phase 7-9 (observation, attestation, write-back)
 	proofCycleOrchestrator ProofCycleOrchestratorInterface
@@ -1385,6 +1392,15 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 		batchAtt := bv.captureAttestation(vb, certenIntent, certenProof, blockHeight,
 			g0Proof, g1Proof, g2Proof, blsSignature, validatorSignatures, governanceLevel)
 		batchAtt.Replayed = true
+		// Record the committed height BEFORE enqueueing. The flush loop derives its period
+		// cutoff from this; if it lagged behind the members' own CommitHeight, TakeForPeriod
+		// would select nothing and the pool would fill without ever flushing.
+		bv.noteConsensusHeight(uint64(bftRes.Height))
+		// Carry the per-intent submission inputs with the member. If the batch later has to
+		// drop it (quorum not reached over the root, or the anchor mines unusable), this is
+		// the ONLY way it can still settle — the batch path never requeues.
+		batchAtt.SubmitVB = vbMeta
+		batchAtt.SubmitBFT = bftMeta
 
 		legs, chainID, account, opID, extractErr := bv.batchInputsFromIntent(certenIntent)
 

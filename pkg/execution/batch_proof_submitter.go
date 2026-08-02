@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 
+	"github.com/certen/independant-validator/pkg/consensus"
 	"github.com/certen/independant-validator/pkg/execution/contracts"
 )
 
@@ -19,10 +20,8 @@ import (
 // Batch proof submitter
 // =============================================================================
 //
-// Concrete implementation of consensus.BatchProofSubmitter (satisfied structurally — Go
-// interfaces need no import, which keeps pkg/execution free of a consensus dependency).
-//
-// Submits executeComprehensiveProof for a BATCH anchor. The proof struct it builds must
+// Submits executeComprehensiveProof for a BATCH anchor, carrying a quorum aggregate produced
+// by consensus.AggregateBatchAttestations. The proof struct it builds must
 // satisfy every gate in CertenAnchorV7._verifyAllComponents; each field below is set to the
 // specific value that gate requires, and the reason is stated where it is non-obvious.
 
@@ -169,7 +168,7 @@ func (s *BatchProofSubmitterImpl) AnchorProofExecuted(
 	return executed, nil
 }
 
-// SubmitBatchComprehensiveProof submits the quorum attestation over a batch root.
+// SubmitBatchQuorumProof submits the quorum attestation over a batch root.
 //
 // Every field is chosen to satisfy a specific gate in CertenAnchorV7._verifyAllComponents:
 //
@@ -183,22 +182,53 @@ func (s *BatchProofSubmitterImpl) AnchorProofExecuted(
 //   - Commitments.ExecutionCommitment must equal batchRoot, which is what createBatchAnchor
 //     stored in that slot.
 //   - BlsProof.MessageHash must equal the six-field V6.1 pre-exec message the contract
-//     reconstructs; the caller computed and signed exactly that.
-func (s *BatchProofSubmitterImpl) SubmitBatchComprehensiveProof(
+//     reconstructs; the quorum computed and signed exactly that.
+//
+// # THE TWO FIELDS THAT MUST COME FROM THE AGGREGATE, NOT FROM CONFIG
+//
+// AggregateSignature carries the abi-encoded Groth16 blob, not the raw 48-byte BLS signature.
+// The anchor's BLSZKVerifierV2 path expects the blob; submitting the raw signature is what
+// produced the live `blsVerified: false, reason: "BLS signature verification failed"` on
+// Sepolia, and it is also what kept the earlier single-signer bug failing safe.
+//
+// SignedVotingPower is agg.SignedVotingPower — the sum of the registered power of validators
+// whose partials ACTUALLY verified. The previous code passed the full total here regardless of
+// who signed. Combined with the ZK blob that would have been a quorum forgery: a proof
+// asserting 700/700 from however many keys happened to answer. The pubkey commitment derived
+// inside the blob is checked against the anchor's 29 authorized subsets, so an honest
+// SignedVotingPower and an honest aggregate key must agree — passing the total here breaks that
+// agreement in the one direction the chain cannot detect from the arithmetic alone.
+func (s *BatchProofSubmitterImpl) SubmitBatchQuorumProof(
 	ctx context.Context,
 	chainID int64,
 	bundleID [32]byte,
 	batchRoot [32]byte,
 	batchOperationID [32]byte,
-	aggregateSignature string,
+	agg *consensus.QuorumAggregate,
 	messageHash [32]byte,
 ) error {
+	if agg == nil {
+		return fmt.Errorf("nil quorum aggregate; refusing to submit an unattested batch root")
+	}
+	if agg.SignedVotingPower == nil || agg.SignedVotingPower.Sign() <= 0 {
+		return fmt.Errorf("quorum aggregate reports no signed voting power")
+	}
+	if len(agg.Signers) < 2 {
+		// AggregateBatchAttestations already enforces threshold by power, so this is
+		// belt-and-braces against a degenerate registry (e.g. a one-validator set slipping
+		// into production config) producing a single-signer aggregate that the anchor's
+		// authorized-subset commitments would reject anyway.
+		return fmt.Errorf(
+			"refusing to submit a %d-signer aggregate: the anchor's authorized pubkey "+
+				"commitments cover subsets of 5, 6 and 7 only", len(agg.Signers))
+	}
+
 	ecm, anchorAddr, err := s.chains.ManagerForChain(chainID)
 	if err != nil {
 		return err
 	}
 
-	sigBytes, err := hex.DecodeString(strings.TrimPrefix(aggregateSignature, "0x"))
+	sigBytes, err := hex.DecodeString(strings.TrimPrefix(agg.AggregateSignatureHex, "0x"))
 	if err != nil {
 		return fmt.Errorf("decoding aggregate signature: %w", err)
 	}
@@ -206,10 +236,26 @@ func (s *BatchProofSubmitterImpl) SubmitBatchComprehensiveProof(
 		return fmt.Errorf("empty aggregate signature")
 	}
 
-	validators, powers, total, signed, err := buildValidatorSetForBatch()
+	validators, powers, _, err := buildValidatorSetForBatch()
 	if err != nil {
 		return err
 	}
+	total := agg.TotalVotingPower
+	signed := agg.SignedVotingPower
+
+	// The ZK blob. Proven against the AGGREGATE public key — the pairing only holds for the key
+	// the aggregate signature actually verifies under, which is what AggregateBatchAttestations
+	// returned after checking that very relation.
+	zkProofBytes, pubkeyCommitment := ecm.generateBLSZKProof(
+		sigBytes, messageHash, signed, total, agg.AggregatePublicKeyHex,
+	)
+	if len(zkProofBytes) == 0 {
+		return fmt.Errorf(
+			"BLS ZK proof generation returned nothing for anchor 0x%x; the anchor exists but "+
+				"cannot be attested", bundleID[:8])
+	}
+	s.logf("[BATCH-PROOF] chain=%d zk proof %d bytes, pubkeyCommitment=0x%x, signed=%s/%s over %d signers",
+		chainID, len(zkProofBytes), pubkeyCommitment[:8], signed, total, len(agg.Signers))
 
 	proof := contracts.CertenAnchorV4CertenProof{
 		TransactionHash: bundleID, // no single Accumulate tx for a batch; the id identifies it
@@ -228,13 +274,17 @@ func (s *BatchProofSubmitterImpl) SubmitBatchComprehensiveProof(
 			ThresholdMet:       true,
 		},
 		BlsProof: contracts.CertenAnchorV4BLSProofData{
-			AggregateSignature: sigBytes,
+			// The Groth16 blob, NOT sigBytes. The raw aggregate is the witness that produced it.
+			AggregateSignature: zkProofBytes,
 			ValidatorAddresses: validators,
 			VotingPowers:       powers,
 			TotalVotingPower:   total,
 			SignedVotingPower:  signed,
-			ThresholdMet:       true,
-			MessageHash:        messageHash,
+			// Computed from the two values above, never asserted. Asserting it would let a
+			// sub-threshold aggregate claim compliance the arithmetic does not support.
+			ThresholdMet: new(big.Int).Mul(signed, big.NewInt(batchQuorumThresholdDen)).
+				Cmp(new(big.Int).Mul(total, big.NewInt(batchQuorumThresholdNum))) >= 0,
+			MessageHash: messageHash,
 		},
 		Commitments: contracts.CertenAnchorV4CommitmentData{
 			OperationCommitment:  batchOperationID, // V7 requires this exact value
@@ -273,25 +323,26 @@ func (s *BatchProofSubmitterImpl) SubmitBatchComprehensiveProof(
 	return nil
 }
 
-// buildValidatorSetForBatch returns the validator set the BLS threshold gate is checked
-// against.
+// buildValidatorSetForBatch returns the REGISTERED validator roster and its total power.
 //
 // Sourced from contracts.GetV6_1ValidatorSet — the SAME place the validator-set root comes
-// from. Deriving these independently would let the threshold arithmetic submitted on-chain
-// drift from the quorum the signed root actually commits to.
-func buildValidatorSetForBatch() ([]common.Address, []*big.Int, *big.Int, *big.Int, error) {
+// from. Deriving these independently would let the roster submitted on-chain drift from the
+// one the signed setRoot commits to.
+//
+// It deliberately does NOT return a signed power. It used to, and it returned the total: every
+// batch declared a full 7-of-7 quorum no matter who signed. Signed power is a property of the
+// partials that verified, so it now comes from QuorumAggregate.SignedVotingPower and nowhere
+// else.
+func buildValidatorSetForBatch() ([]common.Address, []*big.Int, *big.Int, error) {
 	addrs, powers, err := contracts.GetV6_1ValidatorSet()
 	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("validator set: %w", err)
+		return nil, nil, nil, fmt.Errorf("validator set: %w", err)
 	}
 	total := big.NewInt(0)
 	for _, p := range powers {
 		total = new(big.Int).Add(total, p)
 	}
-	// The aggregate represents the full registered set. The contract independently
-	// re-checks both the threshold arithmetic and the signature itself, so overstating
-	// here cannot pass a signature that does not verify.
-	return addrs, powers, total, new(big.Int).Set(total), nil
+	return addrs, powers, total, nil
 }
 
 // abiFromJSON parses a minimal inline ABI.

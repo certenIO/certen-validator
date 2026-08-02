@@ -207,6 +207,76 @@ the CRYPTO-007 quorum forgery. `signedVotingPower` must come from
 `QuorumAggregate.SignedVotingPower` (sum of real signers), never from a constant or the total.
 `TestAggregate_SingleSignerIsRefused` makes the regression fail loudly rather than ship.
 
+### DONE — steps 4, 5, 6 and the identity gap
+
+**Validated first: the ADI URL vs org identity question.** Re-checked independently, and the
+`51fc054` fix is right for a reason stronger than the keccak match alone:
+
+- `CertenAccountV7` has exactly ONE adiURL consumer — its own immutable `adiURL` via
+  `adiURLHash()` (`:252`, `:269`). `proof.adiURL` is explicitly *"advisory / event label only —
+  NOT used for the leaf"* (`:110`). There is no competing anchor-side ADI-membership check in
+  the V7 batch path, so the bare org ADI is the ONLY string that has to match.
+- The data-account form is not wrong everywhere — `v6_1_signing.go` builds `"%s/data"` at seven
+  sites for the per-intent pre-exec bundle binding, and that is correct there: it binds the
+  Accumulate tx principal, which genuinely is the data account. The two fields are not
+  interchangeable and both are now used correctly.
+- It is already enforced against deployed bytecode: `verifyLeavesAgainstAccounts`
+  (`batch_orchestrator.go:223-232`) reads each account's on-chain `adiURLHash()` and refuses the
+  batch BEFORE `createBatchAnchor` if it disagrees. So a regression here costs a refused flush,
+  not an unspendable paid-for anchor.
+
+**Step 4 — aggregation and submit.** `pkg/execution/batch_quorum_attestor.go`. The leader signs
+its own partial, fans out to `ATTESTATION_PEERS`, folds via `AggregateBatchAttestations` against
+the registry, and submits. `consensus.signBatchPreExecBLS` / `BatchQuorumProver` /
+`BatchProofSubmitter` are DELETED — the solo-signing shape is gone, not merely bypassed. It had
+to move to `pkg/execution` because `pkg/consensus` cannot import it (the dependency runs the
+other way, via `executor.go:24`).
+
+`SubmitBatchComprehensiveProof` → `SubmitBatchQuorumProof`, taking a `*QuorumAggregate`:
+- `AggregateSignature` is now the Groth16 blob from `generateBLSZKProof`, not the raw signature.
+- `SignedVotingPower` is `agg.SignedVotingPower`. `buildValidatorSetForBatch` no longer returns
+  a signed power **at all** — the four-value signature makes reintroducing `signed = total` a
+  compile error rather than a silent forgery.
+- `ThresholdMet` is computed from the two, never asserted.
+- Guards refuse a nil aggregate, zero signed power, and any aggregate with fewer than 2 signers
+  (the authorized commitments cover subsets of 5, 6 and 7 only) — all before any gas is spent.
+
+**Identity gap — closed by self-configuration (option 1).**
+`ReadValidatorRegistry` reads `validators(address)` off the anchor for pubkey + power;
+`ResolveOwnEVMAddress` matches this node's own BLS pubkey against it. No new env. It fails
+loudly when the key is not registered — exactly when the node should refuse to attest.
+`VALIDATOR_EVM_ADDRESS` survives as a bring-up override only. Resolution runs in a background
+goroutine with retries so a slow RPC at startup does not cost the process its ability to attest.
+
+The registry read also refuses a config power that disagrees with the chain: that means the
+local `currentValidatorSetRoot` is stale and every signature would be rejected, so it is better
+to fail with the cause named.
+
+**Real height source.** `func() uint64 { return 0 }` is gone. `BFTValidator.observedHeight` is
+a monotonic atomic recording each round's `bftRes.Height`, exposed as
+`ObservedConsensusHeight()`. That is the exact value stamped onto members by `EnqueueForBatch`,
+so a cutoff derived from it can never be ahead of every member.
+
+**Deterministic membership.** `FlushChain` takes `cutoffHeight` and uses `TakeForPeriod`, not
+`Take`. `BuildBatchTree` gets the cutoff as its height, so `accumulateBlockHeight` — and
+therefore the bundleId — agrees across validators. Height 0 is refused outright.
+
+**Step 5 — leader election.** `IsBatchPeriodLeader(chainID, cutoffHeight)`: a pure function of
+`sha256("certen:batchperiod:v1|chain|cutoff")` over a sorted roster (`BATCH_LEADER_VALIDATORS`,
+defaulting to the seven production IDs). Four bytes are folded, not one — one byte mod 7 is
+measurably biased (256 = 7·36 + 4). Non-leaders never form a batch; they only answer
+attestation requests. Tested for exactly-one-leader across 600 (chain, period) pairs, roster
+order independence, rotation across all seven, and chain sensitivity.
+
+**Step 6 — fallback.** `BatchFlushResult.Dropped` + `BatchFallbackFn`. Quorum failure or an
+unusable anchor DROPS members (never requeues) and routes each to
+`BFTValidator.RunBatchMemberFallback`, which re-runs `SubmitAnchorFromValidatorBlock` on the
+per-intent path. That needed `PendingAttestation.SubmitVB` / `SubmitBFT`, captured on the batch
+path where `vbMeta`/`bftMeta` are in scope. A member that somehow arrives without them still
+attests the FAILURE rather than sitting pending silently.
+
+Build, vet and the full test suite pass. 13 new tests.
+
 ### REMAINING WORK (in order)
 
 1. ~~**Populate `CommitHeight`.**~~ DONE (`c6230ed`). `EnqueueForBatch` must take the BFT commit height and set it.
@@ -219,18 +289,22 @@ the CRYPTO-007 quorum forgery. `signedVotingPower` must come from
    derived bundleId equals the proposer's. This check is the security boundary: without it a
    malicious proposer could insert a leaf draining an ADI's account and have the quorum bless
    it. Sign with `consensus.SignBatchAttestation`.
-3. **Leader aggregation + submit.** Collect partials, call
-   `consensus.AggregateBatchAttestations(atts, registry, msgHash, 2, 3)`, then pass the REAL
-   aggregate + `SignedVotingPower` into `ecm.generateBLSZKProof` and submit. Registry (address →
-   pubkey, power) must be read from the anchor, not from config.
-   Replace `signBatchPreExecBLS`'s solo signing at `batch_quorum_prover.go:88-100`.
-   Replace `AggregateSignature: sigBytes` with the ZK blob at `batch_proof_submitter.go:~232`.
-4. **Leader election.** Reuse `bv.selectExecutorForRound` (`bft_integration.go:1352`).
-   Non-leaders attest only; they must never call `createBatchAnchor`.
-5. **Fallback.** On quorum failure: `DropMembers` + route to the per-intent on_demand path.
-   Never requeue (re-forming the identical tree reverts `AnchorAlreadyExists` and hides the
-   real fault).
-6. **Deploy + live e2e**, per the verification checklist below.
+3. ~~**Leader aggregation + submit.**~~ DONE — `pkg/execution/batch_quorum_attestor.go`.
+4. ~~**Leader election.**~~ DONE — `IsBatchPeriodLeader`. (`selectExecutorForRound` was NOT
+   reused: it keys on a roundID string, and a batch period has no round. It also folds a single
+   hash byte modulo 7, which is biased.)
+5. ~~**Fallback.**~~ DONE — `Dropped` + `RunBatchMemberFallback`.
+6. **Deploy + live e2e**, per the verification checklist below. ← THE ONLY REMAINING STEP.
+
+   Before deploying, set on every validator service (they must be IDENTICAL across all seven,
+   because both feed the bundleId):
+   - `BATCH_PERIOD_BLOCKS` (default 10 if unset)
+   - `BATCH_LEADER_VALIDATORS` (defaults to validator-1..7)
+
+   `ATTESTATION_PEERS` is already populated. `VALIDATOR_EVM_ADDRESS` is NOT needed — identity
+   self-configures from the anchor registry. Watch for `🔏 [BATCH] Attesting as … (matched
+   on-chain BLS registry)` on each node at startup; a node logging the ❌ line instead has a
+   BLS key that is not registered and will refuse every attestation request.
 
 ### TRANSPORT — decided, verified reachable
 Use the EXISTING peer attestation HTTP path, not CometBFT txs and not

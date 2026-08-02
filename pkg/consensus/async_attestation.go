@@ -78,6 +78,18 @@ type PendingAttestation struct {
 	// inline. Logging only — the proof cycle itself is identical either way.
 	Replayed bool
 
+	// SubmitVB / SubmitBFT are the two metadata structs the per-intent (on_demand) submission
+	// path takes. Captured only on the batch path, and only so a member the batch had to drop
+	// can still be executed individually.
+	//
+	// Without them a dropped member has nowhere to go. The approved failure policy is "fall
+	// back to the per-intent path, never requeue" — requeueing re-derives the same bundleId
+	// and reverts AnchorAlreadyExists — and SubmitAnchorFromValidatorBlock IS that path.
+	// Holding the snapshot rather than the live structs keeps a late fallback from observing
+	// a round that has since moved on.
+	SubmitVB  *verification.ValidatorBlockMetadata
+	SubmitBFT *verification.BFTExecutionMetadata
+
 	// BatchedWith lists the other intent IDs settled by the SAME on-chain batch
 	// transaction, empty for a solo execution. Recorded in the commitment map so the
 	// attestation is honest about the fact that one tx settled several intents.

@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -193,6 +194,91 @@ var batchStackForAttestation atomic.Pointer[execution.BatchStack]
 // Its EVM address must match its registry entry on the anchor, or its partial contributes no
 // voting power and the aggregate is refused.
 var batchAttesterIdentity atomic.Pointer[execution.BatchAttesterIdentity]
+
+// batchPeriodBlocksFromEnv reads BATCH_PERIOD_BLOCKS.
+//
+// Every validator MUST agree on this value. It buckets BFT heights into periods, the period
+// cutoff becomes the batch's accumulateBlockHeight, and that height is hashed into the
+// bundleId. A node configured differently derives a different bundleId from identical
+// membership, so it can neither propose a batch its peers will co-sign nor co-sign theirs.
+func batchPeriodBlocksFromEnv() uint64 {
+	raw := strings.TrimSpace(os.Getenv("BATCH_PERIOD_BLOCKS"))
+	if raw == "" {
+		return execution.DefaultBatchPeriodBlocks
+	}
+	n, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil || n == 0 {
+		log.Printf("⚠️ [BATCH] BATCH_PERIOD_BLOCKS=%q is not a positive integer — using %d",
+			raw, execution.DefaultBatchPeriodBlocks)
+		return execution.DefaultBatchPeriodBlocks
+	}
+	return n
+}
+
+// resolveBatchAttesterIdentity determines the EVM address this validator attests as, and
+// publishes it to the peer attestation handler.
+//
+// The address is derived from the CHAIN: read the anchor's validator registry and find the
+// entry whose registered BLS public key equals this node's. That cannot be misconfigured, and
+// it refuses to publish an identity when this node's key is not registered — precisely the
+// case where it must not attest.
+//
+// The explicit VALIDATOR_EVM_ADDRESS remains as an override for bring-up. It is no longer the
+// primary path because the live containers carry only VALIDATOR_ID: requiring it meant
+// batchAttesterIdentity was never set, every peer answered 503, and no quorum could form.
+//
+// Runs in the background with retries because the first RPC call can lose a race with the
+// node's own startup; a validator that cannot reach its anchor yet should keep trying rather
+// than spend the process lifetime unable to attest.
+func resolveBatchAttesterIdentity(resolver *execution.EVMChainResolverImpl, validatorID string) {
+	publish := func(addr, how string) {
+		batchAttesterIdentity.Store(&execution.BatchAttesterIdentity{
+			ValidatorID: validatorID,
+			EVMAddress:  addr,
+		})
+		log.Printf("🔏 [BATCH] Attesting as %s (%s, %s) on %s",
+			validatorID, addr, how, execution.BatchAttestationEndpoint)
+	}
+
+	if override := strings.TrimSpace(os.Getenv("VALIDATOR_EVM_ADDRESS")); override != "" {
+		publish(strings.ToLower(override), "VALIDATOR_EVM_ADDRESS override")
+		return
+	}
+
+	chains := resolver.Chains()
+	if len(chains) == 0 {
+		log.Printf("⚠️ [BATCH] No chains configured — cannot resolve this validator's registry identity")
+		return
+	}
+
+	// Any configured chain's anchor carries the same registry; the first is enough.
+	const attempts = 6
+	for i := 1; i <= attempts; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		ecm, anchorAddr, err := resolver.ManagerForChain(chains[0])
+		if err == nil {
+			var registry map[string]consensus.ValidatorRegistryEntry
+			registry, err = execution.ReadValidatorRegistry(ctx, ecm, anchorAddr)
+			if err == nil {
+				var addr string
+				addr, err = execution.ResolveOwnEVMAddress(registry)
+				if err == nil {
+					cancel()
+					publish(addr, "matched on-chain BLS registry")
+					return
+				}
+			}
+		}
+		cancel()
+		log.Printf("⚠️ [BATCH] Attester identity attempt %d/%d failed: %v", i, attempts, err)
+		if i < attempts {
+			time.Sleep(time.Duration(i) * 5 * time.Second)
+		}
+	}
+	log.Printf("❌ [BATCH] Could not resolve this validator's registry identity. It can propose " +
+		"batches but will REFUSE every peer attestation request, so quorum runs a signer short. " +
+		"Check that this node's BLS key is registered on the anchor.")
+}
 
 func main() {
 	// Configure logging
@@ -1184,10 +1270,11 @@ func startValidator(
 			log.Printf("ℹ️ [BATCH] Cross-ADI batching disabled: %v", rErr)
 		} else {
 			submitter := execution.NewBatchProofSubmitter(resolver, log.Printf)
-			prover, pErr := consensus.NewBatchQuorumProver(
-				log.New(log.Writer(), "[BATCH-QUORUM] ", log.LstdFlags), submitter)
+			peers := execution.BatchAttestationPeersFromEnv()
+			prover, pErr := execution.NewBatchQuorumAttestor(
+				resolver, submitter, peers, cfg.ValidatorID, 0, log.Printf)
 			if pErr != nil {
-				log.Printf("⚠️ [BATCH] Quorum prover unavailable (%v) — batching disabled", pErr)
+				log.Printf("⚠️ [BATCH] Quorum attestor unavailable (%v) — batching disabled", pErr)
 			} else {
 				mempoolCfg := execution.DefaultBatchMempoolConfig()
 				stack, sErr := execution.NewBatchStack(resolver, prover, mempoolCfg, log.Printf)
@@ -1197,12 +1284,30 @@ func startValidator(
 					// Drain first, enqueue second.
 					go stack.RunFlushLoop(
 						context.Background(),
-						mempoolCfg.FlushInterval,
-						func() uint64 { return 0 },
-						func(ctx context.Context, att interface{}, txHash string, chainID int64, ok bool) {
-							// Replay the captured Phase 7-9 snapshot so each settled member
-							// closes its own proof cycle back to Accumulate.
-							validator.RunBatchMemberAttestation(ctx, att, txHash, chainID, ok)
+						execution.BatchFlushConfig{
+							Interval:     mempoolCfg.FlushInterval,
+							PeriodBlocks: batchPeriodBlocksFromEnv(),
+							// The real consensus height. This used to be a stub returning 0,
+							// which made every period cutoff 0 — TakeForPeriod then selected
+							// nothing and the batch path was silently inert.
+							ConsensusHeightFn: validator.ObservedConsensusHeight,
+							// Only the elected submitter for the period forms a batch. Without
+							// this all seven race to anchor the same period and six revert with
+							// AnchorAlreadyExists after paying gas.
+							IsLeaderFn: validator.IsBatchPeriodLeader,
+							Attest: func(ctx context.Context, att interface{}, txHash string, chainID int64, ok bool) {
+								// Replay the captured Phase 7-9 snapshot so each settled member
+								// closes its own proof cycle back to Accumulate.
+								validator.RunBatchMemberAttestation(ctx, att, txHash, chainID, ok)
+							},
+							// Members dropped after the anchor is mined go to the per-intent
+							// path. Approved policy: fall back, never requeue.
+							Fallback: func(ctx context.Context, m *execution.PendingBatchIntent) {
+								if m == nil {
+									return
+								}
+								validator.RunBatchMemberFallback(ctx, m.Attestation)
+							},
 						},
 						log.Printf,
 					)
@@ -1212,31 +1317,28 @@ func startValidator(
 					// request gets 503 and no quorum can ever form.
 					batchStackForAttestation.Store(stack)
 
-					// The EVM address this validator signs as. It MUST match its registry
-					// entry on the anchor: the aggregator resolves voting power by address,
-					// so a wrong one contributes nothing and the aggregate is refused.
-					attesterEVM := strings.TrimSpace(os.Getenv("VALIDATOR_EVM_ADDRESS"))
-					if attesterEVM == "" {
-						log.Printf("⚠️ [BATCH] VALIDATOR_EVM_ADDRESS unset — this validator can " +
-							"propose batches but CANNOT co-sign a peer's; quorum will be short one signer")
-					} else {
-						batchAttesterIdentity.Store(&execution.BatchAttesterIdentity{
-							ValidatorID: cfg.ValidatorID,
-							EVMAddress:  attesterEVM,
-						})
-						log.Printf("🔏 [BATCH] Attesting as %s (%s) on %s",
-							cfg.ValidatorID, attesterEVM, execution.BatchAttestationEndpoint)
-					}
+					// The EVM address this validator signs as. It MUST match its registry entry
+					// on the anchor: the aggregator resolves voting power by address, so a wrong
+					// one contributes nothing and the quorum silently runs a signer short.
+					//
+					// Resolved from the CHAIN by matching this node's BLS public key against the
+					// anchor's registry — impossible to misconfigure, and it fails loudly in
+					// exactly the case where this node should not be attesting (its key is not
+					// registered). VALIDATOR_EVM_ADDRESS remains an explicit override for
+					// bring-up, but is no longer required: the live containers only carry
+					// VALIDATOR_ID, so requiring it meant no validator could ever attest.
+					go resolveBatchAttesterIdentity(resolver, cfg.ValidatorID)
 
-					if peers := execution.BatchAttestationPeersFromEnv(); len(peers) == 0 {
+					if len(peers) == 0 {
 						log.Printf("⚠️ [BATCH] ATTESTATION_PEERS unset — no peers to collect " +
 							"quorum from; batches will fail quorum and fall back to on-demand")
 					} else {
 						log.Printf("🌐 [BATCH] Quorum peers: %v", peers)
 					}
 
-					log.Printf("✅ [BATCH] Cross-ADI batching ACTIVE on chains %v (flush every %s)",
-						resolver.Chains(), mempoolCfg.FlushInterval)
+					log.Printf("✅ [BATCH] Cross-ADI batching ACTIVE on chains %v (flush every %s, "+
+						"period %d blocks)",
+						resolver.Chains(), mempoolCfg.FlushInterval, batchPeriodBlocksFromEnv())
 				}
 			}
 		}

@@ -205,7 +205,7 @@ func TestFlushDueChains_NoAttestFnDoesNotPanic(t *testing.T) {
 	}
 	// The orchestrator here is a zero value, so FlushChain errors out — the point is that
 	// the driver handles it without panicking and without losing the member silently.
-	s.FlushDueChains(context.Background(), time.Now(), true, 1, nil, nil)
+	s.FlushDueChains(context.Background(), time.Now(), true, 1, nil, nil, nil)
 }
 
 // Nothing is due when the pool is empty — the loop must not create empty batches.
@@ -213,7 +213,7 @@ func TestFlushDueChains_EmptyPoolIsNoOp(t *testing.T) {
 	s := stackForChain(t, 11155111)
 	called := 0
 	s.FlushDueChains(context.Background(), time.Now(), true, 1,
-		func(context.Context, interface{}, string, int64, bool) { called++ }, nil)
+		func(context.Context, interface{}, string, int64, bool) { called++ }, nil, nil)
 	if called != 0 {
 		t.Fatal("an empty pool must produce no attestations")
 	}
@@ -225,7 +225,7 @@ func TestRunFlushLoop_DrainsAndReturnsOnCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		s.RunFlushLoop(ctx, 50*time.Millisecond, nil, nil, nil)
+		s.RunFlushLoop(ctx, BatchFlushConfig{Interval: 50 * time.Millisecond}, nil)
 		close(done)
 	}()
 	cancel()

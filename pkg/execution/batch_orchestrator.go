@@ -41,7 +41,13 @@ type QuorumProver interface {
 	// ProveBatchRoot obtains quorum attestation for a batch anchor and submits
 	// executeComprehensiveProof. It must not return until the anchor's proofExecuted flag
 	// is set, or return an error.
-	ProveBatchRoot(ctx context.Context, chainID int64, bundleID [32]byte, batchRoot [32]byte) error
+	//
+	// It takes the TREE, not loose fields: peers are asked to attest by (chainID,
+	// cutoffHeight) and reply with the bundleId they independently derived, so the prover
+	// needs the same object the branches came from or the comparison means nothing.
+	// cutoffHeight is the period boundary that defined membership — peers reconstruct from
+	// it, and it is also the accumulateBlockHeight bound into the bundleId.
+	ProveBatchRoot(ctx context.Context, tree *BatchTree, cutoffHeight uint64) error
 }
 
 // BatchFlushResult reports what happened to one tree.
@@ -52,8 +58,12 @@ type BatchFlushResult struct {
 	MemberCount  int
 	AnchorTxHash string
 
-	Settled  []*PendingBatchIntent
-	Failed   []*PendingBatchIntent
+	Settled []*PendingBatchIntent
+	Failed  []*PendingBatchIntent
+	// Dropped members left the batch path entirely and MUST be routed to the per-intent
+	// on_demand path by the caller. They are not requeued and will never reappear in a batch,
+	// so a caller that ignores this field strands them.
+	Dropped  []*PendingBatchIntent
 	TxHashes map[string]string // intentID -> account tx hash
 
 	GasAnchor uint64
@@ -86,13 +96,29 @@ func NewBatchOrchestrator(
 
 // FlushChain forms ONE tree from the chain's pool and settles it end to end.
 //
-// On any failure before the anchor is created, members are requeued untouched — nothing has
-// been spent and nothing is lost. After the anchor exists, members are settled individually:
-// one member's failure cannot roll back another's, because each spends its own leaf.
+// # MEMBERSHIP IS DETERMINISTIC, NOT TIMER-DRIVEN
+//
+// cutoffHeight selects members via TakeForPeriod: every intent whose BFT round committed at or
+// below the cutoff, ordered by (CommitHeight, IntentID). This is the property the whole quorum
+// design rests on — an honest peer holding the same committed intents derives a byte-identical
+// tree, root and bundleId, so its independent reconstruction is a meaningful check rather than
+// a coin flip.
+//
+// It replaces mempool.Take(chainID), which took whatever had arrived locally by the time a
+// 1-minute wall-clock timer fired. That is why validator-2 flushed bundleId 0xe4c950df… while
+// validator-3 flushed 0x5e71d83a… in the same window on Sepolia: nothing made them agree.
+//
+// # FAILURE HANDLING
+//
+// Before the anchor is created, members are requeued untouched — nothing has been spent.
+// After the anchor exists they are never requeued: re-forming the identical tree derives the
+// same bundleId and reverts with AnchorAlreadyExists, which hides the real fault. A quorum
+// failure past that point DROPS the members so the caller can route them to the per-intent
+// on_demand path (approved policy: fall back, never requeue).
 func (o *BatchOrchestrator) FlushChain(
 	ctx context.Context,
 	chainID int64,
-	blockHeight uint64,
+	cutoffHeight uint64,
 ) (*BatchFlushResult, error) {
 	// Defensive: a misconstructed orchestrator must ERROR, never panic. This runs inside the
 	// flush loop, and a panic there would take the whole validator down rather than skipping
@@ -101,8 +127,15 @@ func (o *BatchOrchestrator) FlushChain(
 		return nil, fmt.Errorf("batch orchestrator for chain %d is not properly constructed "+
 			"(use NewBatchOrchestrator)", chainID)
 	}
+	// Height 0 is not a period. Forming a batch at it would bind accumulateBlockHeight=0 into
+	// the bundleId on every validator that happened to have a different local view, and
+	// TakeForPeriod would select nothing anyway.
+	if cutoffHeight == 0 {
+		return nil, fmt.Errorf("chain %d: cutoff height 0 is not a valid period; the consensus "+
+			"height source is not wired", chainID)
+	}
 
-	members := o.mempool.Take(chainID)
+	members := o.mempool.TakeForPeriod(chainID, cutoffHeight)
 	if len(members) == 0 {
 		return nil, nil
 	}
@@ -124,7 +157,7 @@ func (o *BatchOrchestrator) FlushChain(
 		inputs = append(inputs, in)
 	}
 
-	tree, err := BuildBatchTree(chainID, inputs, blockHeight)
+	tree, err := BuildBatchTree(chainID, inputs, cutoffHeight)
 	if err != nil {
 		o.mempool.Requeue(members)
 		return nil, fmt.Errorf("building batch tree: %w", err)
@@ -157,8 +190,11 @@ func (o *BatchOrchestrator) FlushChain(
 	if err := o.verifyLeavesAgainstAnchor(ctx, tree); err != nil {
 		// The anchor exists but is unusable. Do NOT requeue: re-forming the identical tree
 		// would derive the same bundleId and revert with "Anchor already exists", hiding
-		// the real fault. Surface it instead.
-		return res, fmt.Errorf("anchor created but membership verification failed: %w", err)
+		// the real fault. Drop to the per-intent path and surface the cause.
+		o.mempool.DropMembers(members)
+		res.Dropped = members
+		return res, fmt.Errorf("anchor created but membership verification failed (%d member(s) "+
+			"dropped to the per-intent path): %w", len(members), err)
 	}
 
 	// ---- Quorum attestation over the root -----------------------------------
@@ -166,8 +202,15 @@ func (o *BatchOrchestrator) FlushChain(
 		return res, fmt.Errorf("no quorum prover configured; anchor 0x%x is created but not verified "+
 			"and no account will accept it", tree.BundleID[:8])
 	}
-	if err := o.prover.ProveBatchRoot(ctx, chainID, tree.BundleID, tree.Root); err != nil {
-		return res, fmt.Errorf("quorum attestation over batch root failed: %w", err)
+	if err := o.prover.ProveBatchRoot(ctx, tree, cutoffHeight); err != nil {
+		// APPROVED FALLBACK: drop, never requeue. The anchor is already mined, so re-forming
+		// this tree would derive the same bundleId and revert with AnchorAlreadyExists.
+		// Dropping costs the anchor gas and routes the members to the per-intent on_demand
+		// path — more gas, but they settle. Requeueing risks a permanently stuck batch.
+		o.mempool.DropMembers(members)
+		res.Dropped = members
+		return res, fmt.Errorf("quorum attestation over batch root failed (%d member(s) dropped "+
+			"to the per-intent path): %w", len(members), err)
 	}
 	o.logf("[BATCH] chain=%d quorum verified root 0x%x", chainID, tree.Root[:8])
 

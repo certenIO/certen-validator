@@ -244,49 +244,150 @@ func (s *BatchStack) FlushDueChains(
 	ctx context.Context,
 	now time.Time,
 	force bool,
-	blockHeight uint64,
+	cutoffHeight uint64,
 	attest BatchAttestFn,
+	fallback BatchFallbackFn,
 	logf func(string, ...interface{}),
 ) {
 	if logf == nil {
 		logf = func(string, ...interface{}) {}
 	}
+	// Without a real consensus height there is no period, and TakeForPeriod would select
+	// nothing. Say so once per pass rather than spinning silently.
+	if cutoffHeight == 0 {
+		if s.Mempool.PendingCount() > 0 {
+			logf("[BATCH-FLUSH] %d member(s) queued but the consensus height is 0 — no period "+
+				"can be formed; check the height source wiring", s.Mempool.PendingCount())
+		}
+		return
+	}
 
 	for _, chainID := range s.Mempool.DueChains(now, force) {
-		orch, err := s.OrchestratorFor(chainID)
-		if err != nil {
-			logf("[BATCH-FLUSH] chain %d has no orchestrator: %v", chainID, err)
-			continue
-		}
+		s.flushOneChain(ctx, chainID, cutoffHeight, attest, fallback, logf)
+	}
+}
 
-		res, err := orch.FlushChain(ctx, chainID, blockHeight)
-		if err != nil {
-			// FlushChain requeues on any pre-anchor failure, so nothing is lost here.
-			logf("[BATCH-FLUSH] chain %d flush failed: %v", chainID, err)
-			if res == nil {
-				continue
-			}
-		}
-		if res == nil {
-			continue
-		}
-
-		logf("[BATCH-FLUSH] chain %d: %d settled, %d failed, anchor gas %d amortised over %d members",
-			chainID, len(res.Settled), len(res.Failed), res.GasAnchor, res.MemberCount)
-
-		if attest == nil {
-			logf("[BATCH-FLUSH] NO ATTESTATION FN — %d members settled on chain but their "+
-				"proof cycles will NOT close", len(res.Settled))
-			continue
-		}
-
-		for _, m := range res.Settled {
-			attest(ctx, m.Attestation, res.TxHashes[m.IntentID], chainID, true)
-		}
-		for _, m := range res.Failed {
-			attest(ctx, m.Attestation, "", chainID, false)
+// flushChainIfDue flushes one chain, but only if its pool says it is due.
+//
+// RunFlushLoop uses this rather than FlushDueChains so leadership can be evaluated per chain
+// BEFORE the pool is consulted — a non-leader must not form a batch even for a due chain.
+func (s *BatchStack) flushChainIfDue(
+	ctx context.Context,
+	chainID int64,
+	now time.Time,
+	force bool,
+	cutoffHeight uint64,
+	attest BatchAttestFn,
+	fallback BatchFallbackFn,
+	logf func(string, ...interface{}),
+) {
+	for _, due := range s.Mempool.DueChains(now, force) {
+		if due == chainID {
+			s.flushOneChain(ctx, chainID, cutoffHeight, attest, fallback, logf)
+			return
 		}
 	}
+}
+
+// flushOneChain is the shared body: form the period's tree, settle it, then dispose of every
+// member exactly once — settled and failed to the attester, dropped to the fallback.
+func (s *BatchStack) flushOneChain(
+	ctx context.Context,
+	chainID int64,
+	cutoffHeight uint64,
+	attest BatchAttestFn,
+	fallback BatchFallbackFn,
+	logf func(string, ...interface{}),
+) {
+	orch, err := s.OrchestratorFor(chainID)
+	if err != nil {
+		logf("[BATCH-FLUSH] chain %d has no orchestrator: %v", chainID, err)
+		return
+	}
+
+	res, err := orch.FlushChain(ctx, chainID, cutoffHeight)
+	if err != nil {
+		// FlushChain requeues on any pre-anchor failure, so nothing is lost there. Past the
+		// anchor it DROPS instead, and those members are handed to the fallback below.
+		logf("[BATCH-FLUSH] chain %d flush failed: %v", chainID, err)
+	}
+	if res == nil {
+		return
+	}
+
+	// Dropped members have left the batch path for good. Routing them to the per-intent path
+	// is the approved failure policy; skipping this would strand them silently, which is
+	// precisely the outcome the policy exists to avoid.
+	if len(res.Dropped) > 0 {
+		if fallback == nil {
+			logf("[BATCH-FLUSH] ⚠️ chain %d dropped %d member(s) but NO FALLBACK is wired — "+
+				"they will never settle", chainID, len(res.Dropped))
+		} else {
+			logf("[BATCH-FLUSH] chain %d routing %d dropped member(s) to the per-intent path",
+				chainID, len(res.Dropped))
+			for _, m := range res.Dropped {
+				fallback(ctx, m)
+			}
+		}
+	}
+
+	if res.MemberCount == 0 {
+		return
+	}
+	logf("[BATCH-FLUSH] chain %d: %d settled, %d failed, %d dropped, anchor gas %d amortised over %d members",
+		chainID, len(res.Settled), len(res.Failed), len(res.Dropped), res.GasAnchor, res.MemberCount)
+
+	if attest == nil {
+		logf("[BATCH-FLUSH] NO ATTESTATION FN — %d members settled on chain but their "+
+			"proof cycles will NOT close", len(res.Settled))
+		return
+	}
+
+	for _, m := range res.Settled {
+		attest(ctx, m.Attestation, res.TxHashes[m.IntentID], chainID, true)
+	}
+	for _, m := range res.Failed {
+		attest(ctx, m.Attestation, "", chainID, false)
+	}
+}
+
+// BatchFallbackFn routes a member that has left the batch path to the per-intent on_demand
+// path. Supplied by pkg/consensus, which owns that path.
+//
+// It is not optional in production: FlushChain drops members after the anchor is mined rather
+// than requeueing them (a requeue re-derives the same bundleId and reverts), so without this
+// they never settle.
+type BatchFallbackFn func(ctx context.Context, member *PendingBatchIntent)
+
+// BatchFlushConfig is what RunFlushLoop needs from the node around it.
+type BatchFlushConfig struct {
+	// Interval is the flush cadence.
+	Interval time.Duration
+
+	// PeriodBlocks buckets consensus heights into batch periods. Every validator MUST use the
+	// same value: it feeds BatchPeriodCutoff, which feeds accumulateBlockHeight, which feeds
+	// the bundleId. A node configured differently derives a different bundleId from identical
+	// membership and can neither propose nor attest successfully.
+	PeriodBlocks uint64
+
+	// ConsensusHeightFn reports the current BFT height. A stub returning 0 makes every cutoff
+	// 0, so no period ever selects members and the batch path is silently inert — which is
+	// exactly what shipped before this was wired.
+	ConsensusHeightFn func() uint64
+
+	// IsLeaderFn reports whether THIS validator is the elected submitter for the period.
+	// Non-leaders never form a batch; they only answer attestation requests. Without it every
+	// validator would race to anchor the same period, and six of the seven would burn gas
+	// reverting with AnchorAlreadyExists.
+	//
+	// Nil means "always leader" — correct only for a single-node devnet.
+	IsLeaderFn func(chainID int64, cutoffHeight uint64) bool
+
+	// Attest closes each settled member's proof cycle.
+	Attest BatchAttestFn
+
+	// Fallback routes dropped members to the per-intent path.
+	Fallback BatchFallbackFn
 }
 
 // RunFlushLoop drives FlushDueChains on the cadence until ctx is cancelled.
@@ -295,16 +396,20 @@ func (s *BatchStack) FlushDueChains(
 // mid-window — the same drain-on-exit contract BatchAccumulator honours.
 func (s *BatchStack) RunFlushLoop(
 	ctx context.Context,
-	interval time.Duration,
-	blockHeightFn func() uint64,
-	attest BatchAttestFn,
+	cfg BatchFlushConfig,
 	logf func(string, ...interface{}),
 ) {
+	interval := cfg.Interval
 	if interval <= 0 {
 		interval = 60 * time.Second
 	}
-	if blockHeightFn == nil {
-		blockHeightFn = func() uint64 { return 0 }
+	periodBlocks := cfg.PeriodBlocks
+	if periodBlocks == 0 {
+		periodBlocks = DefaultBatchPeriodBlocks
+	}
+	heightFn := cfg.ConsensusHeightFn
+	if heightFn == nil {
+		heightFn = func() uint64 { return 0 }
 	}
 	if logf == nil {
 		logf = func(string, ...interface{}) {}
@@ -322,21 +427,48 @@ func (s *BatchStack) RunFlushLoop(
 	subTicker := time.NewTicker(sub)
 	defer subTicker.Stop()
 
-	logf("[BATCH-FLUSH] loop started: interval=%s chains=%v", interval, s.Resolver.Chains())
+	logf("[BATCH-FLUSH] loop started: interval=%s periodBlocks=%d chains=%v",
+		interval, periodBlocks, s.Resolver.Chains())
+	if cfg.IsLeaderFn == nil {
+		logf("[BATCH-FLUSH] ⚠️ no leader election wired — this node will attempt to anchor EVERY " +
+			"period. Correct for a single-node devnet only.")
+	}
+
+	// flush runs one pass, gated on leadership for the current period.
+	flush := func(passCtx context.Context, now time.Time, force bool) {
+		cutoff := BatchPeriodCutoff(heightFn(), periodBlocks)
+		if cutoff == 0 {
+			s.FlushDueChains(passCtx, now, force, 0, cfg.Attest, cfg.Fallback, logf)
+			return
+		}
+		for _, chainID := range s.Resolver.Chains() {
+			if cfg.IsLeaderFn != nil && !cfg.IsLeaderFn(chainID, cutoff) {
+				continue
+			}
+			s.flushChainIfDue(passCtx, chainID, now, force, cutoff, cfg.Attest, cfg.Fallback, logf)
+		}
+	}
 
 	for {
 		select {
 		case <-ctx.Done():
 			logf("[BATCH-FLUSH] shutting down — draining %d queued members", s.Mempool.PendingCount())
-			s.FlushDueChains(context.Background(), time.Now(), true, blockHeightFn(), attest, logf)
+			flush(context.Background(), time.Now(), true)
 			return
 		case now := <-ticker.C:
-			s.FlushDueChains(ctx, now, true, blockHeightFn(), attest, logf)
+			flush(ctx, now, true)
 		case now := <-subTicker.C:
-			s.FlushDueChains(ctx, now, false, blockHeightFn(), attest, logf)
+			flush(ctx, now, false)
 		}
 	}
 }
+
+// DefaultBatchPeriodBlocks is the period width used when none is configured.
+//
+// It must match across validators. Ten BFT blocks is short enough that a member does not wait
+// long for its period to close, and long enough that peers have committed the same rounds
+// before the leader forms the tree.
+const DefaultBatchPeriodBlocks uint64 = 10
 
 // =============================================================================
 // BatchEnqueuer adapter
