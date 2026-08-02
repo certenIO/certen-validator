@@ -31,7 +31,9 @@ GROUPS=("validator-1 validator-2" "validator-3 validator-4" "validator-5 validat
 
 # Build limits. The host has other tenants; a build must never be able to starve them.
 BUILD_CPUS=${BUILD_CPUS:-2}
-BUILD_MEMORY=${BUILD_MEMORY:-4g}
+# systemd size suffixes are UPPERCASE (K/M/G/T). "4g" is rejected with
+# "Failed to parse MemoryMax=4g: Invalid argument", which aborts the build.
+BUILD_MEMORY=${BUILD_MEMORY:-4G}
 GO_PARALLEL=${GO_PARALLEL:-2}
 
 log()  { printf '\n\033[1m== %s\033[0m\n' "$*"; }
@@ -78,6 +80,20 @@ for v in BATCH_PERIOD_BLOCKS BATCH_LEADER_VALIDATORS; do
     [ "$n" -eq 1 ] || die "$v appears $n times in .env.shared; it must appear exactly once"
     ok "$v=$(grep "^${v}=" .env.shared | cut -d= -f2- | cut -c1-60)"
 done
+
+# The resource caps must be well-formed, and systemd must accept them. Discovering a typo
+# after the first build has already run is a waste of ten minutes of CPU on a shared host;
+# discovering it when the cap is silently DROPPED would be worse, because the whole point is
+# that a build can never again starve the box.
+case "$BUILD_MEMORY" in
+    *[0-9][KMGT]) : ;;
+    *) die "BUILD_MEMORY='$BUILD_MEMORY' — systemd size suffixes are uppercase (e.g. 4G)" ;;
+esac
+systemd-run --scope -q -p CPUQuota="$((BUILD_CPUS * 100))%" -p MemoryMax="$BUILD_MEMORY" \
+    true >/dev/null 2>&1 \
+    || die "systemd rejected the resource caps (CPUQuota=$((BUILD_CPUS * 100))% MemoryMax=$BUILD_MEMORY).
+       Refusing to build uncapped — that is what took the host down."
+ok "resource caps accepted: cpus=$BUILD_CPUS memory=$BUILD_MEMORY go -p=$GO_PARALLEL"
 
 # All seven must currently be up, or a rolling restart could drop the set below quorum.
 running=$(docker ps --filter name=certen-validator --filter status=running -q | wc -l)
