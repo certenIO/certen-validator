@@ -1,6 +1,7 @@
 package execution
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
 
 	"github.com/certen/independant-validator/pkg/consensus"
 	"github.com/certen/independant-validator/pkg/execution/contracts"
@@ -278,6 +280,14 @@ func (s *BatchProofSubmitterImpl) SubmitBatchQuorumProof(
 		return fmt.Errorf("empty aggregate signature")
 	}
 
+	// Governance material. The anchor rejects a zero keyBookRoot when minimumGovernanceLevel
+	// >= 1, which is why every previous batch attestation reverted with a perfectly valid BLS
+	// proof.
+	keyBookRoot, keyPageProof, err := buildValidatorKeyPageProof(ecm.auth.From)
+	if err != nil {
+		return fmt.Errorf("building validator key page proof: %w", err)
+	}
+
 	// The ZK blob. Proven against the AGGREGATE public key — the pairing only holds for the key
 	// the aggregate signature actually verifies under, which is what AggregateBatchAttestations
 	// returned after checking that very relation.
@@ -298,9 +308,9 @@ func (s *BatchProofSubmitterImpl) SubmitBatchQuorumProof(
 		ProofHashes:     [][32]byte{},
 		LeafHash:        [32]byte{},
 		GovernanceProof: contracts.CertenAnchorV4GovernanceProofData{
-			KeyBookURL:         "",
-			KeyBookRoot:        [32]byte{},
-			KeyPageProofs:      [][32]byte{},
+			KeyBookURL:         "certen:validator-set:v1",
+			KeyBookRoot:        keyBookRoot,
+			KeyPageProofs:      keyPageProof,
 			AuthorityAddress:   ecm.auth.From,
 			AuthorityLevel:     2, // G2 — batches carry value-moving members
 			Nonce:              new(big.Int).SetBytes(bundleID[24:]),
@@ -369,4 +379,112 @@ func (s *BatchProofSubmitterImpl) SubmitBatchQuorumProof(
 // abiFromJSON parses a minimal inline ABI.
 func abiFromJSON(j string) (abi.ABI, error) {
 	return abi.JSON(strings.NewReader(j))
+}
+
+// buildValidatorKeyPageProof builds the governance material a batch attestation needs.
+//
+// CertenAnchorV8_1._verifyGovernanceProof requires it. With minimumGovernanceLevel >= 1 (it is
+// 1 on the deployed anchor), a proof carrying a zero keyBookRoot is rejected outright:
+//
+//	} else if (minimumGovernanceLevel >= 1) {
+//	    // G1+ requires governance proof material — reject if nothing provided
+//	    return false;
+//	}
+//
+// The batch submitter previously sent a zero root and empty proofs, so governanceVerified was
+// false and executeComprehensiveProof reverted even though the BLS quorum, the ZK proof and
+// every commitment were correct. Confirmed live 2026-08-02: calling the deployed Groth16
+// verifier with the exact failing proof returned SUCCESS, which located the failure here.
+//
+// # WHAT THE ROOT COMMITS TO, AND WHY THIS ONE
+//
+// A batch has no single ADI, so there is no per-intent key book to prove against. The authority
+// being asserted is the SUBMITTING VALIDATOR, and the meaningful statement is "this address is
+// one of the registered validators". So the tree is built over the registered validator set —
+// the same roster the anchor's own currentValidatorSetRoot commits to — and the proof is that
+// validator's path to the root. A self-signed single-leaf tree would satisfy the check while
+// proving nothing, which is why it is not used here.
+//
+// Hashing matches _verifyMerkleProof exactly: leaf = keccak256(abi.encodePacked(address)),
+// internal nodes = keccak256 of the two children in ascending order.
+func buildValidatorKeyPageProof(who common.Address) ([32]byte, [][32]byte, error) {
+	var root [32]byte
+
+	addrs, _, err := contracts.GetV6_1ValidatorSet()
+	if err != nil {
+		return root, nil, fmt.Errorf("validator set: %w", err)
+	}
+	if len(addrs) < 2 {
+		// The contract refuses a non-zero root with an empty proof, so a single-leaf tree
+		// cannot satisfy it — and would prove nothing anyway.
+		return root, nil, fmt.Errorf("validator set has %d entries; need at least 2 to build a "+
+			"key page tree the anchor will accept", len(addrs))
+	}
+
+	leaves := make([][32]byte, 0, len(addrs))
+	idx := -1
+	for _, a := range addrs {
+		var leaf [32]byte
+		copy(leaf[:], crypto.Keccak256(a.Bytes()))
+		if a == who {
+			idx = len(leaves)
+		}
+		leaves = append(leaves, leaf)
+	}
+	if idx < 0 {
+		return root, nil, fmt.Errorf(
+			"submitter %s is not in the registered validator set; it cannot prove key page "+
+				"authority and the anchor would reject the attestation", who.Hex())
+	}
+
+	// Build bottom-up, carrying the position of our leaf so the sibling at each level is the
+	// proof element. An odd node at any level is promoted unchanged.
+	var proof [][32]byte
+	level := leaves
+	pos := idx
+	for len(level) > 1 {
+		next := make([][32]byte, 0, (len(level)+1)/2)
+		for i := 0; i < len(level); i += 2 {
+			if i+1 == len(level) {
+				next = append(next, level[i])
+				if pos == i {
+					pos = len(next) - 1
+				}
+				continue
+			}
+			a, b := level[i], level[i+1]
+			var node [32]byte
+			if bytes.Compare(a[:], b[:]) < 0 {
+				copy(node[:], crypto.Keccak256(a[:], b[:]))
+			} else {
+				copy(node[:], crypto.Keccak256(b[:], a[:]))
+			}
+			if pos == i {
+				proof = append(proof, b)
+				pos = len(next)
+			} else if pos == i+1 {
+				proof = append(proof, a)
+				pos = len(next)
+			}
+			next = append(next, node)
+		}
+		level = next
+	}
+	root = level[0]
+
+	// Self-check against the contract's algorithm before spending gas on it.
+	computed := leaves[idx]
+	for _, p := range proof {
+		var node [32]byte
+		if bytes.Compare(computed[:], p[:]) < 0 {
+			copy(node[:], crypto.Keccak256(computed[:], p[:]))
+		} else {
+			copy(node[:], crypto.Keccak256(p[:], computed[:]))
+		}
+		computed = node
+	}
+	if computed != root {
+		return root, nil, fmt.Errorf("internal error: key page proof does not reproduce its own root")
+	}
+	return root, proof, nil
 }

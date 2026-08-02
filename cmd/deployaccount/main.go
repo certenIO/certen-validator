@@ -50,6 +50,9 @@ func main() {
 	adi := flag.String("adi", "", "adiURL, exactly as the intent will carry it")
 	salt := flag.Int64("salt", 1, "CREATE2 salt")
 	fundWei := flag.String("fund", "0", "wei to send to the account after deploy")
+	// CertenAccountV7 is a large contract and the factory deploys it via CREATE2; 3,000,000 was
+	// not enough and the transaction reverted with "out of gas" having burned the whole limit.
+	gasLimit := flag.Uint64("gas", 8000000, "gas limit for the deployment")
 	flag.Parse()
 
 	if *adi == "" {
@@ -107,7 +110,7 @@ func main() {
 		}
 		auth.Context = ctx
 		auth.Value = fee
-		auth.GasLimit = 3000000
+		auth.GasLimit = *gasLimit
 		tx, err := fb.Transact(auth, "createAccountForADI", *adi, big.NewInt(*salt))
 		if err != nil {
 			fmt.Println("createAccountForADI:", err)
@@ -142,7 +145,10 @@ func main() {
 			feeCap := new(big.Int).Add(tip, new(big.Int).Mul(head.BaseFee, big.NewInt(2)))
 			tx := types.NewTx(&types.DynamicFeeTx{
 				ChainID: chainID, Nonce: nonce, To: &acct, Value: w,
-				Gas: 21000, GasTipCap: tip, GasFeeCap: feeCap,
+				// NOT 21000: the recipient is a contract. CertenAccountV7 has an empty
+				// receive(), but a call into a contract still costs more than a bare EOA
+				// transfer, and 21000 reverts.
+				Gas: 100000, GasTipCap: tip, GasFeeCap: feeCap,
 			})
 			signed, err := types.SignTx(tx, types.LatestSignerForChainID(chainID), pk)
 			if err != nil {
