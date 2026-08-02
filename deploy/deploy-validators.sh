@@ -165,7 +165,9 @@ for group in "${RESTART_GROUPS[@]}"; do
     # refuses every peer attestation request, so the quorum would run short with nothing
     # obviously wrong. Surface it here rather than in a failed batch hours later.
     for svc in $group; do
-        if docker logs "certen-$svc" 2>&1 | tail -400 | grep -q "Attesting as"; then
+        # Search the WHOLE log, not the tail: identity is resolved during startup, and a
+        # chatty validator pushes that line out of any fixed tail window within a minute.
+        if docker logs "certen-$svc" 2>&1 | grep -q "Attesting as"; then
             ok "$svc resolved its attester identity"
         else
             printf '  \033[33mWARN\033[0m %s has not logged an attester identity yet\n' "$svc"
