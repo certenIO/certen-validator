@@ -252,6 +252,32 @@ func main() {
 		fmt.Printf("  quorum needs > %s of %s voting power (5 of 7 at 100 each)\n", need, chainTotal)
 	}
 
+	// ---- 5. Gas on EVERY validator -----------------------------------------
+	//
+	// This changed with leader election. Previously whichever node's flush timer fired first
+	// submitted, in practice always the same one. Now leadership rotates per (chain, period),
+	// and CertenAnchorV8_1.createBatchAnchor is onlyValidator — so the transaction is sent FROM
+	// the registered address. Every one of the seven must be funded, or the periods it leads
+	// silently fail to anchor and their members sit until another leader picks them up.
+	fmt.Println("\n[5] Gas balances (leadership rotates — every validator submits)")
+	// createBatchAnchor 500k + executeComprehensiveProof 900k + per-member settle, at a few
+	// gwei. 0.02 ETH is a comfortable floor for a handful of periods.
+	minWei := new(big.Int).Div(big.NewInt(2e16), big.NewInt(1)) // 0.02 ETH
+	for _, a := range addrs {
+		bal, err := client.BalanceAt(ctx, a, nil)
+		if err != nil {
+			fail("reading balance of %s: %v", a.Hex(), err)
+			continue
+		}
+		eth := new(big.Float).Quo(new(big.Float).SetInt(bal), big.NewFloat(1e18))
+		if bal.Cmp(minWei) < 0 {
+			fail("%s holds only %.5f ETH — the periods this validator leads will fail to anchor",
+				a.Hex(), eth)
+			continue
+		}
+		okf("%s %.5f ETH", a.Hex(), eth)
+	}
+
 	if len(failures) == 0 {
 		fmt.Printf("\n✅ PRE-FLIGHT PASSED — the batch quorum can form on chain %s\n\n", chainID)
 		return

@@ -83,6 +83,21 @@ type ValidatorApp struct {
 	blockRetention int64
 }
 
+// LatestHeight returns the height of the last block this app committed.
+//
+// The batch path derives its period cutoff from this. It must be the CHAIN's height, not a
+// count of anything this node happens to be doing: a period closes when the chain passes its
+// upper bound, and until then a member could still land in it.
+//
+// Reading the app rather than counting processed intents is what makes a lone intent settle.
+// When the cutoff only advanced as intents arrived, one queued intent could never close its own
+// period — it waited for a second intent that might never come.
+func (app *ValidatorApp) LatestHeight() int64 {
+	app.mu.RLock()
+	defer app.mu.RUnlock()
+	return app.latestHeight
+}
+
 // SetCheckpointHook installs the (non-blocking) per-commit checkpoint callback. The callback
 // MUST NOT block — it is called on the consensus commit path and is expected to enqueue only.
 func (app *ValidatorApp) SetCheckpointHook(fn func(height int64, blockHash string, appHash []byte, ts time.Time)) {

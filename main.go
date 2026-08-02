@@ -280,6 +280,31 @@ func resolveBatchAttesterIdentity(resolver *execution.EVMChainResolverImpl, vali
 		"Check that this node's BLS key is registered on the anchor.")
 }
 
+// batchConsensusHeightFn returns the height source for batch period cutoffs.
+//
+// Prefers the ABCI app's committed height — that is the chain's height, and a period is only
+// closed once the chain has passed its upper bound. Falls back to the highest height this
+// validator has seen a round commit at, which is never ahead of the chain and so can only be
+// conservative.
+func batchConsensusHeightFn(
+	engine *consensus.RealCometBFTEngine,
+	validator *consensus.BFTValidator,
+) func() uint64 {
+	return func() uint64 {
+		if engine != nil {
+			if app := engine.GetValidatorApp(); app != nil {
+				if h := app.LatestHeight(); h > 0 {
+					return uint64(h)
+				}
+			}
+		}
+		if validator != nil {
+			return validator.ObservedConsensusHeight()
+		}
+		return 0
+	}
+}
+
 func main() {
 	// Configure logging
 	log.SetOutput(os.Stdout)
@@ -1290,10 +1315,17 @@ func startValidator(
 						execution.BatchFlushConfig{
 							Interval:     mempoolCfg.FlushInterval,
 							PeriodBlocks: batchPeriodBlocksFromEnv(),
-							// The real consensus height. This used to be a stub returning 0,
-							// which made every period cutoff 0 — TakeForPeriod then selected
-							// nothing and the batch path was silently inert.
-							ConsensusHeightFn: validator.ObservedConsensusHeight,
+							// The real consensus height, read from the ABCI app so it advances
+							// with the CHAIN rather than with this node's activity. This used to
+							// be a stub returning 0, which made every period cutoff 0 and left
+							// the batch path silently inert.
+							//
+							// Reading committed rounds instead would not be enough: a period
+							// only closes once the chain passes its upper bound, so a lone
+							// queued intent would wait for a second intent to arrive and move
+							// the cutoff. The validator's own observed height is the fallback
+							// for the window before the app is reachable.
+							ConsensusHeightFn: batchConsensusHeightFn(cometEngine, validator),
 							// Only the elected submitter for the period forms a batch. Without
 							// this all seven race to anchor the same period and six revert with
 							// AnchorAlreadyExists after paying gas.
