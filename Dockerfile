@@ -21,17 +21,58 @@ COPY . ./
 # Build the validator service with CGO (required for gnark/blst)
 RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o validator .
 
-# Generate BLS ZK keys (Groth16 proving and verification keys)
-# These keys are deterministic within the same gnark version
-# For production: pre-generate keys and include in build context
-RUN mkdir -p /build/bls_zk_keys && \
-    if [ ! -f /build/bls_zk_keys/proving_key.bin ]; then \
-        echo "Generating BLS ZK keys (this may take 5-10 minutes)..." && \
-        go run ./cmd/bls-zk-setup 2>&1 | head -50 && \
-        cp -r ./bls_zk_keys/* /build/bls_zk_keys/ 2>/dev/null || true; \
-    else \
-        echo "Using pre-generated BLS ZK keys"; \
-    fi
+# VERIFY the BLS ZK keys. NEVER generate them.
+#
+# The previous rule here regenerated the Groth16 keys whenever proving_key.bin was absent from
+# the build context. The comment above it claimed the keys were "deterministic within the same
+# gnark version". They are not: pkg/crypto/bls_zkp/prover.go:192 calls groth16.Setup(cs), and
+# gnark samples fresh toxic waste from crypto/rand on every invocation. Two runs of the same
+# gnark version on the same circuit produce different keys, always.
+#
+# The failure that causes is silent and total. The image compiles, starts, signs, and emits
+# structurally valid Groth16 proofs — every one of which the deployed BLSZKVerifierV2 rejects,
+# because its verification key is compiled in and no longer corresponds. That takes down batch
+# attestation AND the per-intent on_demand path, since both submit through generateBLSZKProof.
+# It presents as a cryptographic bug rather than a build artifact problem.
+#
+# It also melted the production host: the setup is a Groth16 trusted setup over a BLS12-381
+# pairing circuit inside BN254, and running it alongside seven live validators drove the load
+# average past 5800 and stopped sshd from forking (2026-08-02).
+#
+# So the keys are a deployment artifact, verified by digest and never derived.
+#
+# The keys themselves are gitignored — a 215 MB proving key does not belong in git, and `git
+# pull` therefore never delivers them. That is precisely how a host ends up without them and
+# the old rule started a trusted setup. Their DIGESTS are tracked, at
+# deploy/bls_zk_keys.SHA256SUMS, pinning the exact bytes that `cmd/vkcheck` proved match the
+# DEPLOYED verifier element for element: alpha, the negated beta/gamma/delta, and all six IC
+# points. A missing or altered key aborts the build here, where it costs nothing, instead of on
+# chain where it costs settlement.
+#
+# To rotate keys: run the setup, deploy a verifier generated FROM those keys, re-run vkcheck
+# against the newly deployed contract, then update the pinned digests. Never one without the
+# others.
+RUN set -eu; \
+    [ -d /build/bls_zk_keys ] || { \
+        echo "FATAL: bls_zk_keys/ is not in the build context."; \
+        echo "       It is gitignored, so a git checkout will NOT contain it — stage it on the"; \
+        echo "       build host from key custody. Do NOT generate it: a fresh trusted setup"; \
+        echo "       samples new toxic waste and cannot match the deployed verifier."; \
+        exit 1; }; \
+    [ -f /build/deploy/bls_zk_keys.SHA256SUMS ] || { \
+        echo "FATAL: deploy/bls_zk_keys.SHA256SUMS is missing; the keys cannot be verified."; \
+        exit 1; }; \
+    cd /build/bls_zk_keys; \
+    for f in proving_key.bin verification_key.bin constraint_system.bin; do \
+        [ -f "$f" ] || { echo "FATAL: bls_zk_keys/$f is missing. Restore it from key custody."; exit 1; }; \
+    done; \
+    sha256sum -c /build/deploy/bls_zk_keys.SHA256SUMS || { \
+        echo "FATAL: BLS ZK key digests do not match the pinned values."; \
+        echo "       These keys must not ship: every proof built with them would be structurally"; \
+        echo "       valid and rejected on chain, taking down batch attestation AND the"; \
+        echo "       per-intent on_demand path."; \
+        exit 1; }; \
+    echo "BLS ZK keys verified against pinned digests."
 
 # Build the governance proof CLI (G0/G1/G2)
 # Per CERTEN spec v3-governance-kpsw-exec-4.0
