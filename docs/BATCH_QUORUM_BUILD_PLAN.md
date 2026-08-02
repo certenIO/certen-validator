@@ -532,3 +532,46 @@ unbounded build consumed thin headroom and helped tip a host that was already de
 prior boot shows `fork: EAGAIN` across sshd, dockerd and udevd with ZERO OOM kills — PID
 exhaustion, not memory, on a box with 62GB RAM. Raised to 4194304 in
 `/etc/sysctl.d/99-certen-pids.conf`, and every build is now capped by the deploy script.
+
+---
+
+## DURABILITY GAP — queued batch members do not survive a validator restart
+
+Found 2026-08-02 on the migrated Kermit chain. All seven validators were recreated at the same
+instant (identical container Created timestamps, exit=0, RestartCount=0 — a `docker compose up
+-d`, not a crash and not the rolling deploy script, whose own restarts are staggered by
+minutes). Two intents that had been accepted for batching were lost.
+
+The mechanism, and why it strands rather than merely delays:
+
+- `BatchMempool` is in-memory only. A restart empties it.
+- `executeCanonicalBFTWorkflow` returns `batch_queued_...` once `enqueueForBatch` succeeds, so
+  the intent does NOT take the per-intent on_demand path.
+- The member's proof-cycle snapshot lives on the same in-memory object, so nothing survives to
+  attest a failure either.
+
+The intent is therefore neither settled nor failed nor retried: it is simply gone, with the
+round having reported success. That is the one outcome the fallback policy exists to prevent,
+and the fallback cannot fire because the process that would have fired it no longer holds the
+member.
+
+This is INDEPENDENT of the quorum work — it predates it — but the quorum work makes it matter
+much more, because members now wait a settle grace plus a period boundary before flushing, so
+the window in which a restart can eat them is minutes rather than seconds.
+
+Options, in preference order:
+
+1. **Persist the mempool.** The ledger store is already wired into the validator
+   (`GetLedgerStoreProvider`), and `PendingBatchIntent` is serialisable apart from the opaque
+   attestation snapshot, which would need an explicit encoding. Restart then resumes the period
+   exactly where it left off, and determinism is unaffected because membership is still keyed
+   on committed height.
+2. **Re-derive on startup** from the intents' own Accumulate state rather than storing them.
+   More faithful to "membership is a function of committed state", but needs a way to enumerate
+   intents committed in recent periods.
+3. **Refuse to report batch_queued until the member is durable** — the intent then takes the
+   per-intent path on restart. Cheapest, and strictly better than losing it, but it gives up
+   the amortisation for every intent in flight at restart time.
+
+NOT fixed in this session. It needs its own change with its own tests, and it touches the point
+where an intent's fate is decided.
