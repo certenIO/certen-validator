@@ -44,8 +44,10 @@ cd C:\Accumulate_Stuff\certen\certen-carp-starter\examples
 .\Demo.ps1 stop           # close the engine and signer windows
 ```
 
-Right-clicking the file and choosing **Run with PowerShell** works and holds the
-window open at the end — it used to close instantly, which read as a crash.
+**Or just right-click `Demo.ps1` → Run with PowerShell.** With no argument it
+shows a menu of the acts and holds the window open at the end. That path cannot
+pass an argument, so it used to run one fixed act and hide the rest — which made
+the script look like it did nothing.
 
 `Demo.ps1` loads the funded Sepolia key from `api-bridge/.env`, adds Foundry to
 `PATH` (**`cast` is on Git Bash's PATH but not PowerShell's** — without this every

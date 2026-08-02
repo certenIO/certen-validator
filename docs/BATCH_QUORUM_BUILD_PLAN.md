@@ -405,3 +405,64 @@ computed vs expected — the same comparison payload binding already made); rece
 witness consistency are "we got here" flags. `go_verifier.go:60-71` also has a path where an
 unset `goVerifyPath` yields a G2 pass with zero real cryptography. Raised with Jason; awaiting
 direction. Does not block batch quorum.
+
+---
+
+## DEPLOY-TIME FINDINGS (2026-08-02)
+
+Found by `cmd/batchpreflight` and by auditing the runtime path before pushing. Three were
+blocking; all three are fixed (`bab6989`, `87ad2c7`). The fourth is a characterised limitation,
+NOT fixed, and is described honestly below.
+
+### 1. Only the elected executor enqueued — BLOCKING, fixed
+
+Non-executors return from `executeCanonicalBFTWorkflow` before the batch enqueue, so six of
+seven mempools were empty for every intent. An attester rebuilds the batch from its OWN mempool
+— that reconstruction IS the security boundary — so it could never rebuild anything. Every peer
+would have refused, every batch would have fallen back, and it would have looked exactly like
+ordinary peer disagreement.
+
+### 2. Selection was open-ended — BLOCKING, fixed
+
+`CommitHeight <= cutoff` is correct only while every validator removes taken members in
+lockstep, and attesters deliberately do NOT remove. The leader took period P, the attester kept
+it, and at P+1 the leader derived a tree over P+1 while the attester derived one over P and P+1.
+The FIRST batch would have worked and every later one failed, permanently.
+
+Selection is now the half-open window `[periodStart, periodStart+periodBlocks)`. Consequences,
+all handled: the flush loop iterates every closed period (`PendingPeriods`) so a straggler whose
+leader was down is picked up later; `FlushChain` short-circuits when the bundleId already exists
+AND is attested, because otherwise a second leader reaching the same period would re-submit,
+hit replay protection, report quorum failure and route already-settled members to the
+per-intent fallback — re-executing intents that had already moved funds; and `PruneOlderThan` is
+a memory backstop that deliberately does not fall back, because on a non-leader those members
+were settled by whoever led their period.
+
+### 3. The cutoff advanced only on local activity — BLOCKING, fixed
+
+`ObservedConsensusHeight` moved only when this node processed an intent, so a lone queued intent
+could never close its own period. The cutoff now comes from `ValidatorApp.LatestHeight`.
+
+### 4. `CreateEmptyBlocks = false` — NOT fixed, characterised
+
+`bft_integration.go:2429` disables empty blocks, so the CometBFT height advances ONLY when a
+transaction commits. Measured live 2026-08-02: height 195, unchanged over 40s of sampling.
+
+A period closes when the chain passes its upper bound. On a busy chain that is immediate and the
+design is sound — and a busy chain is exactly the regime where batching pays. On an IDLE chain a
+queued intent waits for the next committed transaction to push the height past its period
+boundary. It is never lost and never unsafe; it is late.
+
+The wall-clock alternative was rejected as unsound: while the height sits inside period P, a
+later intent can still commit INTO P, so a timer-based close lets one node form P while another
+still has a member to add. That is the divergence class this whole design exists to remove.
+
+**The correct fix is a consensus heartbeat**: when the flush loop sees members waiting in an
+unclosed period and the height is static, broadcast a no-op tx via `BroadcastAppTxSync` to push
+the height past the boundary. Closure then stays purely height-based and every node observes the
+same advance. This needs a new accepted tx type — `ValidatorApp.CheckTx` currently admits only
+policy updates and ValidatorBlocks — and touching the ABCI accept path deserves its own change
+with its own tests, not a tail-end edit during a deploy.
+
+Until then, set `BATCH_PERIOD_BLOCKS` to match real traffic: small periods close sooner but
+batch fewer members. Deployed at 5.
