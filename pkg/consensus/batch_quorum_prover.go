@@ -10,7 +10,6 @@ import (
 	"os"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/certen/independant-validator/pkg/execution/contracts"
 	"github.com/certen/independant-validator/pkg/proof"
@@ -313,55 +312,53 @@ func (bv *BFTValidator) enqueueForBatch(
 	return true
 }
 
-// RunBatchMemberFallback executes a member the batch path had to DROP, individually.
+// RunBatchMemberFallback closes out a member the batch path could not settle.
 //
-// The approved failure policy is "fall back, never requeue". Requeueing a dropped member
-// re-forms the identical tree, derives the identical bundleId, and reverts with
-// AnchorAlreadyExists — which hides the real fault and can leave the batch permanently stuck.
-// Falling back costs a full per-intent anchor (~800k gas instead of an amortised share) but it
-// settles, which is the whole point.
+// # WHY THIS NO LONGER RE-EXECUTES
 //
-// A member that reaches here without its submission snapshot cannot be re-executed. That case
-// still attests the FAILURE rather than returning silently: an intent sitting pending forever
-// with nothing recording why is the outcome this path exists to prevent.
+// It used to call SubmitAnchorFromValidatorBlock, on the policy "fall back to the per-intent
+// path, never requeue". That path CANNOT LAND against CertenAnchorV8_1:
+//
+//   - extractVotingPower declared power from invented defaults (300/200) rather than from any
+//     real signer set, and _verifyBLSProof requires totalVotingPower to equal the registered
+//     total (700), so the submission is rejected before the pairing is reached;
+//   - its ZK witness proves against the block signer's recorded key, which is not always the
+//     key that signed, giving the unsatisfied constraint #774716 seen live.
+//
+// So routing members there reported a fallback that never occurred, and stranded them. Since
+// quorum failures are now RETRIED for the same period (see FlushChain — createBatchAnchor
+// treats an existing anchor as success and an already-attested one short-circuits), reaching
+// here means the retries are exhausted and the batch genuinely cannot settle.
+//
+// The honest close-out is therefore to attest the FAILURE, loudly. An intent recorded as failed
+// can be reprocessed deliberately; one silently handed to an impossible path cannot, and the
+// round has already told the caller it was handled.
+//
+// Restoring a real per-intent path means giving it the same quorum the batch path uses — a
+// one-member batch, which the design already anticipates ("N=1 IS NOT A SPECIAL CASE"), and
+// which CertenAccountV7 effectively requires anyway since _authorizeLeaf only ever computes the
+// batch-form leaf. That is a change in its own right, not a branch to bolt on here.
 func (bv *BFTValidator) RunBatchMemberFallback(ctx context.Context, attestation interface{}) {
 	att, ok := attestation.(*PendingAttestation)
 	if !ok || att == nil {
-		bv.logger.Printf("⚠️ [BATCH-FALLBACK] snapshot was not a *PendingAttestation; member cannot fall back")
+		bv.logger.Printf("⚠️ [BATCH-FALLBACK] snapshot was not a *PendingAttestation; member cannot be closed out")
 		return
 	}
 
-	if bv.targets == nil || att.SubmitVB == nil || att.SubmitBFT == nil {
-		bv.logger.Printf("⚠️ [BATCH-FALLBACK] intent %s was dropped from its batch but carries no "+
-			"per-intent submission inputs (targets=%v vb=%v bft=%v); attesting failure so it does "+
-			"not sit pending silently",
-			att.IntentID, bv.targets != nil, att.SubmitVB != nil, att.SubmitBFT != nil)
-		bv.RunProofCycle(ctx, att, &verification.AnchorExecutionResult{
-			AllTransactionsConfirmed: false,
-		})
-		return
-	}
+	bv.logger.Printf("❌ [BATCH-FALLBACK] intent %s could not reach quorum after %d attempts and is "+
+		"being attested as FAILED. It is NOT being re-executed: the per-intent submitter declares "+
+		"voting power the anchor rejects (registered total is authoritative) and proves against a "+
+		"key that did not necessarily sign. Re-run it deliberately once the per-intent path uses "+
+		"the same aggregate the batch path does.", att.IntentID, maxQuorumAttemptsForLog)
 
-	bv.logger.Printf("↩️  [BATCH-FALLBACK] intent %s dropped from its batch — executing on the "+
-		"per-intent path", att.IntentID)
-
-	subCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-
-	res, err := bv.targets.SubmitAnchorFromValidatorBlock(subCtx, att.SubmitVB, att.SubmitBFT)
-	if err != nil || res == nil {
-		bv.logger.Printf("❌ [BATCH-FALLBACK] intent %s failed on the per-intent path too: %v",
-			att.IntentID, err)
-		bv.RunProofCycle(ctx, att, &verification.AnchorExecutionResult{
-			AllTransactionsConfirmed: false,
-		})
-		return
-	}
-
-	bv.logger.Printf("✅ [BATCH-FALLBACK] intent %s settled individually: tx=%s network=%s",
-		att.IntentID, res.AnchorTxID, res.Network)
-	bv.RunProofCycle(ctx, att, res)
+	bv.RunProofCycle(ctx, att, &verification.AnchorExecutionResult{
+		AllTransactionsConfirmed: false,
+	})
 }
+
+// maxQuorumAttemptsForLog mirrors execution.maxQuorumAttempts for the message above. Kept as a
+// constant rather than plumbed through, because it is only ever used to explain the failure.
+const maxQuorumAttemptsForLog = 5
 
 // =============================================================================
 // Batch period leadership

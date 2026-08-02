@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
@@ -75,7 +76,14 @@ type BatchFlushResult struct {
 }
 
 // BatchOrchestrator forms and settles batches for one chain's contract manager.
+// maxQuorumAttempts bounds retries of one period's attestation. Five gives a transient peer
+// outage several flush cycles to clear while still surfacing a permanent disagreement.
+const maxQuorumAttempts = 5
+
 type BatchOrchestrator struct {
+	attemptsMu sync.Mutex
+	attempts   map[uint64]int
+
 	ecm      *EthereumContractManager
 	anchorV7 common.Address
 	prover   QuorumProver
@@ -96,6 +104,7 @@ func NewBatchOrchestrator(
 	}
 	return &BatchOrchestrator{
 		ecm: ecm, anchorV7: anchorV7, prover: prover, mempool: mempool, logf: logf,
+		attempts: make(map[uint64]int),
 	}
 }
 
@@ -229,15 +238,46 @@ func (o *BatchOrchestrator) FlushChain(
 			"and no account will accept it", tree.BundleID[:8])
 	}
 	if err := o.prover.ProveBatchRoot(ctx, tree, cutoffHeight, periodBlocks); err != nil {
-		// APPROVED FALLBACK: drop, never requeue. The anchor is already mined, so re-forming
-		// this tree would derive the same bundleId and revert with AnchorAlreadyExists.
-		// Dropping costs the anchor gas and routes the members to the per-intent on_demand
-		// path — more gas, but they settle. Requeueing risks a permanently stuck batch.
+		// REQUEUE, do not drop.
+		//
+		// The original policy was "fall back, never requeue", on the reasoning that re-forming
+		// the identical tree reverts with AnchorAlreadyExists. That reasoning no longer holds:
+		// createBatchAnchor treats an existing anchor for this exact bundleId as SUCCESS
+		// ("already-exists"), and FlushChain short-circuits entirely when that anchor is also
+		// already attested. So a retry re-attests an anchor that is already paid for, which is
+		// exactly what a transient quorum failure needs — a peer that was mid-pipeline or
+		// briefly unreachable will answer on the next attempt.
+		//
+		// Dropping was also routing members to a path that CANNOT land: the per-intent
+		// submitter declares voting power from hardcoded defaults (300/200) which
+		// _verifyBLSProof rejects against an on-chain total of 700. Sending members there
+		// stranded them while reporting a fallback had occurred.
+		//
+		// Attempts are bounded so a genuinely unreachable quorum surfaces as a loud failure
+		// rather than an endless retry.
+		o.attemptsMu.Lock()
+		o.attempts[cutoffHeight]++
+		n := o.attempts[cutoffHeight]
+		o.attemptsMu.Unlock()
+
+		if n < maxQuorumAttempts {
+			o.mempool.Requeue(members)
+			return res, fmt.Errorf("quorum attestation over batch root failed (attempt %d/%d; "+
+				"%d member(s) requeued for retry): %w", n, maxQuorumAttempts, len(members), err)
+		}
+
+		o.attemptsMu.Lock()
+		delete(o.attempts, cutoffHeight)
+		o.attemptsMu.Unlock()
 		o.mempool.DropMembers(members)
 		res.Dropped = members
-		return res, fmt.Errorf("quorum attestation over batch root failed (%d member(s) dropped "+
-			"to the per-intent path): %w", len(members), err)
+		return res, fmt.Errorf("quorum attestation over batch root failed %d times; %d member(s) "+
+			"dropped and will be attested as FAILED — they cannot be re-derived into a batch and "+
+			"the per-intent path is not usable: %w", n, len(members), err)
 	}
+	o.attemptsMu.Lock()
+	delete(o.attempts, cutoffHeight)
+	o.attemptsMu.Unlock()
 	o.logf("[BATCH] chain=%d quorum verified root 0x%x", chainID, tree.Root[:8])
 
 	// ---- Settle each member -------------------------------------------------

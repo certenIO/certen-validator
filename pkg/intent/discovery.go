@@ -18,6 +18,8 @@ import (
 	"fmt"
 	"github.com/certen/independant-validator/pkg/entitlement"
 	"log"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -469,10 +471,49 @@ func (id *IntentDiscovery) initializeStartingHeight(ctx context.Context) error {
 		}
 	}
 
+	// REWIND FOR IN-FLIGHT INTENTS.
+	//
+	// The batch mempool is in-memory, so a restart empties it — but the round has already
+	// returned batch_queued and the intent will not take any other path. Without a rewind the
+	// watermark resumes ahead of those intents, they are never rediscovered, and they are
+	// neither settled, failed, nor retried.
+	//
+	// Membership is a pure function of committed Accumulate state, so the queue is a cache of
+	// a derivation rather than a source of truth: rewinding re-derives it. Re-processing is
+	// safe by construction — leaves are single-use on chain (_consumedLeaf), bundleId is
+	// deterministic so a re-derived period reproduces the same anchor, and FlushChain
+	// short-circuits when that anchor is already attested, releasing members without
+	// re-executing. The worst case is wasted proof work.
+	//
+	// It also restores a RESTARTED PEER's ability to attest. A peer with an empty mempool
+	// refuses every request for a period it should be able to reproduce, which is silent
+	// quorum degradation — one or two restarts are absorbed by 5-of-7, a rolling deploy
+	// touching three is not.
+	if rewind := intentRewindBlocks(); rewind > 0 && startHeight > rewind {
+		id.logger.Printf("⏪ Rewinding the discovery watermark %d blocks (from %d to %d) so intents "+
+			"still in flight for a batch are re-derived rather than lost to the restart",
+			rewind, startHeight, startHeight-rewind)
+		startHeight -= rewind
+	}
+
 	id.lastProcessedBlock = startHeight
 	id.lastQueuedBlock = startHeight
 	id.finalizeCeiling = startHeight
 	return nil
+}
+
+// intentRewindBlocks is how far back discovery restarts, in Accumulate blocks.
+//
+// It must comfortably exceed one batch settle window: the period width plus the settle grace
+// plus the member pipeline. Overshooting only costs a re-scan; undershooting silently strands
+// whatever was in flight.
+func intentRewindBlocks() uint64 {
+	if raw := strings.TrimSpace(os.Getenv("INTENT_REWIND_BLOCKS")); raw != "" {
+		if n, err := strconv.ParseUint(raw, 10, 64); err == nil {
+			return n
+		}
+	}
+	return 600
 }
 
 // checkForNewBlocks scans every block from the watermark up to the latest directory

@@ -1906,47 +1906,62 @@ func extractReceiptHashes(receipt interface{}) [][32]byte {
 	return hashes
 }
 
-// extractVotingPower extracts voting power from proof verification data
+// extractVotingPower returns the voting power a per-intent proof declares.
+//
+// # WHY THE DEFAULTS ARE GONE
+//
+// This used to fall back to hardcoded values:
+//
+//	defaultTotal  := big.NewInt(300)  // 3 validators * 100 power each
+//	defaultSigned := big.NewInt(200)  // 2/3 threshold met
+//
+// Those numbers were invented, not derived from who actually signed. That is the CRYPTO-007
+// shape the batch path was rebuilt to eliminate: a declared quorum unrelated to any real one.
+//
+// It is also unusable against the deployed anchor. CertenAnchorV8_1._verifyBLSProof recomputes
+// signed power from blsProof.validatorAddresses and requires
+// `blsProof.totalVotingPower == totalVotingPower`, which is 700 on chain. A declared 300 is
+// rejected before the pairing is even reached — so every submission built on these defaults
+// fails, and the "fall back to the per-intent path" policy was routing members somewhere that
+// could not land.
+//
+// The total now comes from the registered validator set — the same source the anchor's own
+// currentValidatorSetRoot commits to. Signed power must come from real attestations; when the
+// proof carries none, this returns zero and the caller must refuse to submit rather than
+// invent a quorum.
 func (ecm *EthereumContractManager) extractVotingPower(certenProof *proof.CertenProof) (*big.Int, *big.Int) {
-	// Default voting power values based on validator count
-	// In production, this comes from the actual validator set
-	defaultTotal := big.NewInt(300)  // 3 validators * 100 power each
-	defaultSigned := big.NewInt(200) // 2/3 threshold met
+	total := big.NewInt(0)
+	if _, powers, err := contracts.GetV6_1ValidatorSet(); err == nil {
+		for _, p := range powers {
+			total.Add(total, p)
+		}
+	}
 
-	// Check if verification status has component details with voting power info
+	signed := big.NewInt(0)
 	if certenProof.VerificationStatus != nil && certenProof.VerificationStatus.Details != nil {
-		details := certenProof.VerificationStatus.Details
-
-		// Try to extract from details map
-		if totalStr, ok := details["total_voting_power"]; ok {
-			if total, success := new(big.Int).SetString(totalStr, 10); success {
-				defaultTotal = total
-			}
-		}
-		if signedStr, ok := details["signed_voting_power"]; ok {
-			if signed, success := new(big.Int).SetString(signedStr, 10); success {
-				defaultSigned = signed
+		if s, ok := certenProof.VerificationStatus.Details["signed_voting_power"]; ok {
+			if v, good := new(big.Int).SetString(s, 10); good {
+				signed = v
 			}
 		}
 	}
-
-	// Check if we have consensus proof with power info
 	if certenProof.LiteClientProof != nil && certenProof.LiteClientProof.ConsensusProof != nil {
-		cp := certenProof.LiteClientProof.ConsensusProof
-		if cp.TotalPower > 0 {
-			defaultTotal = big.NewInt(cp.TotalPower)
-		}
-		if cp.SignedPower > 0 {
-			defaultSigned = big.NewInt(cp.SignedPower)
+		if cp := certenProof.LiteClientProof.ConsensusProof; cp.SignedPower > 0 {
+			signed = big.NewInt(cp.SignedPower)
 		}
 	}
 
-	// Ensure signed power doesn't exceed total
-	if defaultSigned.Cmp(defaultTotal) > 0 {
-		defaultSigned = new(big.Int).Set(defaultTotal)
+	// A declared signed power above the registered total is incoherent; clamp rather than
+	// forward a value the chain will reject with a confusing error.
+	if total.Sign() > 0 && signed.Cmp(total) > 0 {
+		signed = new(big.Int).Set(total)
 	}
-
-	return defaultTotal, defaultSigned
+	if signed.Sign() == 0 {
+		log.Printf("⚠️ [BLS] No signed voting power in the proof. This submission declares a " +
+			"quorum it cannot evidence and CertenAnchorV8_1 will reject it. The per-intent path " +
+			"needs the same real aggregate the batch path uses (AggregateBatchAttestations).")
+	}
+	return total, signed
 }
 
 // SubmitGovernanceProofToAccount submits governance proof to account contract
