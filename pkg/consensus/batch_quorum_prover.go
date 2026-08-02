@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/certen/independant-validator/pkg/execution/contracts"
+	"github.com/certen/independant-validator/pkg/proof"
 	"github.com/certen/independant-validator/pkg/verification"
 )
 
@@ -231,6 +232,81 @@ func (bv *BFTValidator) RunBatchMemberAttestation(
 		bv.logger.Printf("⚠️ [BATCH-ATTEST] intent %s did not settle; attesting failure", att.IntentID)
 	}
 	bv.RunProofCycle(ctx, att, res)
+}
+
+// enqueueForBatch places one on_cadence intent into THIS validator's batch mempool and reports
+// whether it was accepted.
+//
+// Called by every validator on every committed on_cadence round, elected executor or not. That
+// is the point: a peer can only attest to a batch it can independently rebuild from its own
+// mempool, so a mempool populated on one node alone makes quorum impossible by construction.
+//
+// It creates no transaction and spends nothing. Duplicate SUBMISSION is prevented separately,
+// by the batch period leader election — a different election from the round executor.
+//
+// Returns false when the intent cannot be represented as a batch member, so the caller falls
+// through to the per-intent path rather than dropping it.
+func (bv *BFTValidator) enqueueForBatch(
+	certenIntent *CertenIntent,
+	certenProof *proof.CertenProof,
+	vb *ValidatorBlock,
+	vbMeta *verification.ValidatorBlockMetadata,
+	bftMeta *verification.BFTExecutionMetadata,
+	blockHeight uint64,
+	g0Proof *proof.G0Result,
+	g1Proof *proof.G1Result,
+	g2Proof *proof.G2Result,
+	blsSignature string,
+	validatorSignatures []string,
+	governanceLevel string,
+	commitHeight uint64,
+) bool {
+	// The attestation snapshot is captured HERE, while the round's values are in scope. The
+	// batch settles minutes later on the flush loop, long after this round is gone.
+	batchAtt := bv.captureAttestation(vb, certenIntent, certenProof, blockHeight,
+		g0Proof, g1Proof, g2Proof, blsSignature, validatorSignatures, governanceLevel)
+	batchAtt.Replayed = true
+	// Carry the per-intent submission inputs with the member. If the batch later has to drop it
+	// (quorum not reached over the root, or the anchor mines unusable), this is the ONLY way it
+	// can still settle — the batch path never requeues.
+	batchAtt.SubmitVB = vbMeta
+	batchAtt.SubmitBFT = bftMeta
+
+	legs, chainID, account, opID, extractErr := bv.batchInputsFromIntent(certenIntent)
+	if extractErr != nil {
+		bv.logger.Printf("⚠️ [BATCH-QUEUE] intent %s cannot be batched (%v) — falling back",
+			certenIntent.IntentID, extractErr)
+		return false
+	}
+
+	// The ADI URL is keccak'd into the member's Merkle leaf, and the account contract recomputes
+	// that leaf from its OWN immutable adiURL. They must be the identical string. AccountURL is
+	// the DATA account (".../data") — passing it here produced a leaf no account could ever
+	// verify, so every batched member would anchor, attest, and then revert at settlement with
+	// the intent stranded. Resolve the org ADI.
+	adiURL, adiErr := memberADIURL(certenIntent)
+	if adiErr != nil {
+		bv.logger.Printf("⚠️ [BATCH-QUEUE] intent %s has no usable ADI URL (%v) — falling back",
+			certenIntent.IntentID, adiErr)
+		return false
+	}
+
+	// commitHeight is the BFT height this round committed at. Batch membership is the set of
+	// intents whose round committed inside one period, so every validator derives the same
+	// member set — and therefore the same root and bundleId, which is what makes a batch
+	// co-signable. Selecting by local wall-clock produced divergent trees (v2 0xe4c950df… vs
+	// v3 0x5e71d83a…, live 2026-08-01).
+	if enqErr := bv.batchEnqueuer.EnqueueForBatch(
+		certenIntent.IntentID, adiURL, chainID, account, opID, legs, batchAtt, commitHeight,
+	); enqErr != nil {
+		bv.logger.Printf("⚠️ [BATCH-QUEUE] intent %s not queued (%v) — falling back",
+			certenIntent.IntentID, enqErr)
+		return false
+	}
+
+	bv.logger.Printf("📦 [BATCH-QUEUE] intent %s queued for cross-ADI batching on chain %d at height %d",
+		certenIntent.IntentID, chainID, commitHeight)
+	return true
 }
 
 // RunBatchMemberFallback executes a member the batch path had to DROP, individually.

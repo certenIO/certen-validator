@@ -163,6 +163,11 @@ type BatchStack struct {
 	Submitter     *BatchProofSubmitterImpl
 	Mempool       *BatchMempool
 	Orchestrators map[int64]*BatchOrchestrator
+
+	// PeriodBlocks is THIS validator's configured period width. The attester compares an
+	// incoming request's width against it and refuses a mismatch, rather than adopting the
+	// proposer's value — see HandleBatchAttestationRequest. Zero means the default.
+	PeriodBlocks uint64
 }
 
 // NewBatchStack assembles resolver -> submitter -> orchestrator for every configured chain.
@@ -263,29 +268,39 @@ func (s *BatchStack) FlushDueChains(
 	}
 
 	for _, chainID := range s.Mempool.DueChains(now, force) {
-		s.flushOneChain(ctx, chainID, cutoffHeight, attest, fallback, logf)
+		s.flushChainPeriods(ctx, chainID, cutoffHeight, DefaultBatchPeriodBlocks, nil, attest, fallback, logf)
 	}
 }
 
-// flushChainIfDue flushes one chain, but only if its pool says it is due.
+// flushChainPeriods flushes every CLOSED period this chain still holds members for.
 //
-// RunFlushLoop uses this rather than FlushDueChains so leadership can be evaluated per chain
-// BEFORE the pool is consulted — a non-leader must not form a batch even for a due chain.
-func (s *BatchStack) flushChainIfDue(
+// Iterating periods rather than flushing only the newest closed one is what stops a straggler
+// stranding. Selection is bucket-scoped, so a period whose elected leader was down is never
+// selected again by the newest-period-only rule — it would sit in every node's pool forever.
+// Leadership rotates per period, so the next leader picks it up here.
+//
+// isLeader is consulted per period, not per chain: leadership is a function of (chain, period).
+func (s *BatchStack) flushChainPeriods(
 	ctx context.Context,
 	chainID int64,
-	now time.Time,
-	force bool,
-	cutoffHeight uint64,
+	currentPeriodStart uint64,
+	periodBlocks uint64,
+	isLeader func(chainID int64, periodStart uint64) bool,
 	attest BatchAttestFn,
 	fallback BatchFallbackFn,
 	logf func(string, ...interface{}),
 ) {
-	for _, due := range s.Mempool.DueChains(now, force) {
-		if due == chainID {
-			s.flushOneChain(ctx, chainID, cutoffHeight, attest, fallback, logf)
-			return
+	// Strictly older than the current period: a period still accepting members must not be
+	// formed, or two validators at different heights inside it derive different trees.
+	periods := s.Mempool.PendingPeriods(chainID, periodBlocks, currentPeriodStart)
+	if len(periods) == 0 {
+		return
+	}
+	for _, start := range periods {
+		if isLeader != nil && !isLeader(chainID, start) {
+			continue
 		}
+		s.flushOneChain(ctx, chainID, start, periodBlocks, attest, fallback, logf)
 	}
 }
 
@@ -295,6 +310,7 @@ func (s *BatchStack) flushOneChain(
 	ctx context.Context,
 	chainID int64,
 	cutoffHeight uint64,
+	periodBlocks uint64,
 	attest BatchAttestFn,
 	fallback BatchFallbackFn,
 	logf func(string, ...interface{}),
@@ -305,7 +321,7 @@ func (s *BatchStack) flushOneChain(
 		return
 	}
 
-	res, err := orch.FlushChain(ctx, chainID, cutoffHeight)
+	res, err := orch.FlushChain(ctx, chainID, cutoffHeight, periodBlocks)
 	if err != nil {
 		// FlushChain requeues on any pre-anchor failure, so nothing is lost there. Past the
 		// anchor it DROPS instead, and those members are handed to the fallback below.
@@ -329,6 +345,15 @@ func (s *BatchStack) flushOneChain(
 				fallback(ctx, m)
 			}
 		}
+	}
+
+	// Settled under an earlier leader: the node that landed the batch already attested every
+	// member. Re-attesting would duplicate the Accumulate write-back, and routing them to the
+	// fallback would re-execute intents that have already moved funds.
+	if len(res.AlreadySettled) > 0 {
+		logf("[BATCH-FLUSH] chain %d period %d: %d member(s) were already settled by a previous "+
+			"leader — released without re-executing", chainID, cutoffHeight, len(res.AlreadySettled))
+		return
 	}
 
 	if res.MemberCount == 0 {
@@ -388,7 +413,16 @@ type BatchFlushConfig struct {
 
 	// Fallback routes dropped members to the per-intent path.
 	Fallback BatchFallbackFn
+
+	// RetentionPeriods is how many periods a member may sit before being pruned as garbage.
+	// Zero means DefaultBatchRetentionPeriods.
+	RetentionPeriods uint64
 }
+
+// DefaultBatchRetentionPeriods is the memory backstop horizon. Generous on purpose: a member
+// pruned while its period was still waiting for a working leader would never settle, and
+// leadership rotates, so the set has many chances to pick a straggler up.
+const DefaultBatchRetentionPeriods uint64 = 50
 
 // RunFlushLoop drives FlushDueChains on the cadence until ctx is cancelled.
 //
@@ -434,18 +468,38 @@ func (s *BatchStack) RunFlushLoop(
 			"period. Correct for a single-node devnet only.")
 	}
 
-	// flush runs one pass, gated on leadership for the current period.
+	// RetentionPeriods bounds how long a member may sit unflushed before it is pruned as
+	// garbage. Attesters never remove what they peek at, so without this every intent a node
+	// has ever seen accumulates for the life of the process.
+	retention := cfg.RetentionPeriods
+	if retention == 0 {
+		retention = DefaultBatchRetentionPeriods
+	}
+
+	// flush runs one pass: every closed period, leader-gated per period.
 	flush := func(passCtx context.Context, now time.Time, force bool) {
-		cutoff := BatchPeriodCutoff(heightFn(), periodBlocks)
+		height := heightFn()
+		cutoff := BatchPeriodCutoff(height, periodBlocks)
 		if cutoff == 0 {
-			s.FlushDueChains(passCtx, now, force, 0, cfg.Attest, cfg.Fallback, logf)
+			if s.Mempool.PendingCount() > 0 {
+				logf("[BATCH-FLUSH] %d member(s) queued but the consensus height is %d — no period "+
+					"has closed yet", s.Mempool.PendingCount(), height)
+			}
 			return
 		}
 		for _, chainID := range s.Resolver.Chains() {
-			if cfg.IsLeaderFn != nil && !cfg.IsLeaderFn(chainID, cutoff) {
-				continue
+			s.flushChainPeriods(passCtx, chainID, cutoff, periodBlocks,
+				cfg.IsLeaderFn, cfg.Attest, cfg.Fallback, logf)
+		}
+
+		// Memory backstop. Correctness does not depend on it — selection is bucket-scoped, so
+		// stale members cannot pollute a later period's tree.
+		if horizonPeriods := retention * periodBlocks; cutoff > horizonPeriods {
+			if n := s.Mempool.PruneOlderThan(cutoff - horizonPeriods); n > 0 {
+				logf("[BATCH-FLUSH] pruned %d member(s) older than %d periods. On a node that led "+
+					"their period this means a batch never settled; on any other node it is the "+
+					"expected copy of a batch some other leader settled.", n, retention)
 			}
-			s.flushChainIfDue(passCtx, chainID, now, force, cutoff, cfg.Attest, cfg.Fallback, logf)
 		}
 	}
 

@@ -12,7 +12,7 @@ import (
 // stubProver satisfies QuorumProver without touching a chain.
 type stubProver struct{ called int }
 
-func (s *stubProver) ProveBatchRoot(_ context.Context, _ *BatchTree, _ uint64) error {
+func (s *stubProver) ProveBatchRoot(_ context.Context, _ *BatchTree, _, _ uint64) error {
 	s.called++
 	return nil
 }

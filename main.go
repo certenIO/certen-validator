@@ -1281,6 +1281,9 @@ func startValidator(
 				if sErr != nil {
 					log.Printf("⚠️ [BATCH] Stack assembly failed (%v) — batching disabled", sErr)
 				} else {
+					// The attester compares an incoming request's period width against this and
+					// refuses a mismatch, so a proposer cannot widen what this node selects.
+					stack.PeriodBlocks = batchPeriodBlocksFromEnv()
 					// Drain first, enqueue second.
 					go stack.RunFlushLoop(
 						context.Background(),

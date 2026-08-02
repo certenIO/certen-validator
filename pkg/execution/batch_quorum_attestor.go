@@ -108,7 +108,7 @@ func NewBatchQuorumAttestor(
 func (a *BatchQuorumAttestor) ProveBatchRoot(
 	ctx context.Context,
 	tree *BatchTree,
-	cutoffHeight uint64,
+	cutoffHeight, periodBlocks uint64,
 ) error {
 	if tree == nil {
 		return fmt.Errorf("nil batch tree")
@@ -157,7 +157,7 @@ func (a *BatchQuorumAttestor) ProveBatchRoot(
 	}}
 
 	// ---- Peers ---------------------------------------------------------------
-	req, err := NewBatchAttestationRequest(tree, cutoffHeight, a.validatorID)
+	req, err := NewBatchAttestationRequest(tree, cutoffHeight, periodBlocks, a.validatorID)
 	if err != nil {
 		return fmt.Errorf("building attestation request: %w", err)
 	}

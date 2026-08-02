@@ -333,25 +333,25 @@ func BatchPeriodCutoff(consensusHeight uint64, periodBlocks uint64) uint64 {
 	return (consensusHeight / periodBlocks) * periodBlocks
 }
 
-// PeekForPeriod returns the members a batch for cutoffHeight WOULD contain, without removing
+// PeekForPeriod returns the members a batch for periodStart WOULD contain, without removing
 // them. Attesters use this: they must be able to recompute a proposer's batch and compare
 // bundleIds before signing, but must not lose their copy if the proposer never lands it.
 //
-// Ordering is by IntentID ascending — deterministic and independent of arrival order. Do NOT
-// change this to EnqueuedAt; that is local wall-clock and reintroduces divergence.
-func (m *BatchMempool) PeekForPeriod(chainID int64, cutoffHeight uint64) []*PendingBatchIntent {
+// Ordering is by (CommitHeight, IntentID) ascending — deterministic and independent of arrival
+// order. Do NOT change this to EnqueuedAt; that is local wall-clock and reintroduces divergence.
+func (m *BatchMempool) PeekForPeriod(chainID int64, periodStart, periodBlocks uint64) []*PendingBatchIntent {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.selectForPeriodLocked(chainID, cutoffHeight)
+	return m.selectForPeriodLocked(chainID, periodStart, periodBlocks)
 }
 
 // TakeForPeriod is PeekForPeriod plus removal. Only the validator that actually submits the
 // batch calls this.
-func (m *BatchMempool) TakeForPeriod(chainID int64, cutoffHeight uint64) []*PendingBatchIntent {
+func (m *BatchMempool) TakeForPeriod(chainID int64, periodStart, periodBlocks uint64) []*PendingBatchIntent {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	taken := m.selectForPeriodLocked(chainID, cutoffHeight)
+	taken := m.selectForPeriodLocked(chainID, periodStart, periodBlocks)
 	if len(taken) == 0 {
 		return nil
 	}
@@ -375,11 +375,34 @@ func (m *BatchMempool) TakeForPeriod(chainID int64, cutoffHeight uint64) []*Pend
 }
 
 // selectForPeriodLocked is the shared, deterministic selection. Caller holds m.mu.
-func (m *BatchMempool) selectForPeriodLocked(chainID int64, cutoffHeight uint64) []*PendingBatchIntent {
+//
+// # A MEMBER BELONGS TO EXACTLY ONE PERIOD
+//
+// The window is half-open: periodStart <= CommitHeight < periodStart+periodBlocks. It used to
+// be the open-ended "CommitHeight <= cutoff", which was correct ONLY while every validator
+// removed taken members in lockstep — and attesters deliberately do not remove (they Peek, so
+// a proposer that never lands its batch does not cost them their copy).
+//
+// With the open-ended rule the first batch worked and every later one failed: the leader had
+// removed period P's members, an attester had not, so at period P+1 the leader derived a tree
+// over P+1 alone while the attester derived one over P and P+1. Different root, different
+// bundleId, refusal — permanently, and looking exactly like an ordinary disagreement.
+//
+// Bucketing makes selection idempotent and independent of what any node removed. It also means
+// a period can be reproduced long after it closed, which is what lets a later leader pick up a
+// bucket an earlier one failed to flush.
+func (m *BatchMempool) selectForPeriodLocked(
+	chainID int64,
+	periodStart, periodBlocks uint64,
+) []*PendingBatchIntent {
 	src := m.pool[chainID]
 	if len(src) == 0 {
 		return nil
 	}
+	if periodBlocks == 0 {
+		return nil
+	}
+	periodEnd := periodStart + periodBlocks // exclusive
 
 	eligible := make([]*PendingBatchIntent, 0, len(src))
 	for _, p := range src {
@@ -392,7 +415,7 @@ func (m *BatchMempool) selectForPeriodLocked(chainID int64, cutoffHeight uint64)
 		if p.CommitHeight == 0 {
 			continue
 		}
-		if p.CommitHeight <= cutoffHeight {
+		if p.CommitHeight >= periodStart && p.CommitHeight < periodEnd {
 			eligible = append(eligible, p)
 		}
 	}
@@ -413,6 +436,76 @@ func (m *BatchMempool) selectForPeriodLocked(chainID int64, cutoffHeight uint64)
 		eligible = eligible[:m.cfg.MaxBatchSize]
 	}
 	return eligible
+}
+
+// PendingPeriods returns the period starts, ascending, that hold members for this chain and are
+// strictly older than beforeStart.
+//
+// The flush loop iterates these rather than only the most recently closed period. A period
+// whose elected leader was down, or whose flush failed before the anchor, would otherwise sit
+// in every node's pool forever: nobody would ever select it again, because selection is now
+// bucket-scoped. Leadership rotates per period, so the next leader picks up the straggler.
+func (m *BatchMempool) PendingPeriods(chainID int64, periodBlocks, beforeStart uint64) []uint64 {
+	if periodBlocks == 0 {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	seen := map[uint64]bool{}
+	for _, p := range m.pool[chainID] {
+		if p == nil || p.CommitHeight == 0 {
+			continue
+		}
+		start := (p.CommitHeight / periodBlocks) * periodBlocks
+		// Strictly older: the current period may still be accepting members, and forming a
+		// batch over a period that has not closed is what made trees diverge in the first place.
+		if start < beforeStart {
+			seen[start] = true
+		}
+	}
+	out := make([]uint64, 0, len(seen))
+	for s := range seen {
+		out = append(out, s)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+// PruneOlderThan removes members whose period closed more than the retention horizon ago, and
+// reports how many went.
+//
+// This is a MEMORY backstop, not a correctness mechanism — bucket-scoped selection already makes
+// stale members harmless to the tree. It exists because attesters never remove what they peek
+// at: on a validator that is not the leader, every member it has ever seen would otherwise
+// accumulate for the life of the process.
+//
+// It deliberately does NOT route the pruned members to the per-intent fallback. On a non-leader
+// those members were settled by whichever node did lead their period, and re-executing them
+// individually would double-spend the intent. Only FlushChain, which the leader alone runs,
+// produces members that genuinely need a fallback.
+func (m *BatchMempool) PruneOlderThan(horizonStart uint64) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	pruned := 0
+	for chainID, pool := range m.pool {
+		var rest []*PendingBatchIntent
+		for _, p := range pool {
+			if p != nil && p.CommitHeight != 0 && p.CommitHeight < horizonStart {
+				delete(m.seen, p.IntentID)
+				pruned++
+				continue
+			}
+			rest = append(rest, p)
+		}
+		if len(rest) == 0 {
+			delete(m.pool, chainID)
+		} else {
+			m.pool[chainID] = rest
+		}
+	}
+	return pruned
 }
 
 // DropMembers removes specific members, used when a batch settled elsewhere (the leader landed

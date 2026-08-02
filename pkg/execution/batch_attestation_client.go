@@ -165,16 +165,24 @@ func CollectBatchAttestations(
 //
 // Takes the tree rather than loose fields so the bundleId can never be typed in by hand and
 // drift from the root it belongs to.
-func NewBatchAttestationRequest(tree *BatchTree, cutoffHeight uint64, proposerID string) (*BatchAttestationRequest, error) {
+func NewBatchAttestationRequest(
+	tree *BatchTree,
+	cutoffHeight, periodBlocks uint64,
+	proposerID string,
+) (*BatchAttestationRequest, error) {
 	if tree == nil {
 		return nil, fmt.Errorf("nil tree")
 	}
 	if cutoffHeight == 0 {
 		return nil, fmt.Errorf("cutoff height 0 is not a valid period")
 	}
+	if periodBlocks == 0 {
+		return nil, fmt.Errorf("period width 0 selects no members")
+	}
 	return &BatchAttestationRequest{
 		ChainID:      tree.ChainID,
 		CutoffHeight: cutoffHeight,
+		PeriodBlocks: periodBlocks,
 		BundleID:     "0x" + hex.EncodeToString(tree.BundleID[:]),
 		ProposerID:   proposerID,
 	}, nil

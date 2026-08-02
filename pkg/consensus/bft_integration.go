@@ -1352,6 +1352,42 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	}
 
 	// =======================================================================
+	// EVERY VALIDATOR RECORDS THE COMMITTED HEIGHT
+	//
+	// This is the cutoff source for deterministic batch periods. It must advance on EVERY
+	// committed round, not only on rounds this node executes or batches: the period cutoff is
+	// derived from it, and a member is only selected once the cutoff has passed its own commit
+	// height. Recording it only on batched rounds meant a single queued intent could never
+	// settle — nothing else would ever advance the height past its period.
+	// =======================================================================
+	bv.noteConsensusHeight(uint64(bftRes.Height))
+
+	// =======================================================================
+	// EVERY VALIDATOR ENQUEUES on_cadence INTENTS INTO ITS OWN BATCH MEMPOOL
+	//
+	// This MUST happen before the elected-executor gate below, and it is the single change
+	// that makes cross-ADI quorum possible at all.
+	//
+	// A peer attests to a batch by rebuilding it from its OWN mempool and comparing bundleIds
+	// (HandleBatchAttestationRequest). If only the elected executor enqueued, every other
+	// validator's mempool would be empty for that intent, PeekForPeriod would return nothing,
+	// and all six peers would refuse with "no members ... in this validator's mempool".
+	// Quorum could never form — the batch path would fail 100% of the time and look exactly
+	// like ordinary peer disagreement.
+	//
+	// Enqueueing is purely local bookkeeping: it spends nothing, submits nothing, and creates
+	// no transaction. Duplicate submission is prevented where it actually matters — only the
+	// elected BATCH PERIOD LEADER flushes (IsBatchPeriodLeader), which is a separate election
+	// from this round's executor.
+	// =======================================================================
+	var batchQueued bool
+	if proofClass == "on_cadence" && bv.batchEnqueuer != nil {
+		batchQueued = bv.enqueueForBatch(certenIntent, certenProof, vb, vbMeta, bftMeta,
+			blockHeight, g0Proof, g1Proof, g2Proof, blsSignature, validatorSignatures,
+			governanceLevel, uint64(bftRes.Height))
+	}
+
+	// =======================================================================
 	// CONSENSUS FIX: Only the elected executor should submit to external chains
 	// This prevents multiple validators from creating duplicate transactions
 	// =======================================================================
@@ -1381,63 +1417,16 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 
 	// ON-CADENCE, CROSS-ADI BATCH PATH (preferred).
 	//
-	// Many intents share ONE anchor and ONE BLS verification. Each keeps its own
-	// operationID and its own executionCommitment as a distinct Merkle leaf, so this
-	// batches the ATTESTATION, never the authorization: a member's leaf is spendable only
-	// by the account whose immutable adiURL is hashed into it.
-	//
-	// The attestation snapshot is captured HERE, while the round's values are in scope. The
-	// batch settles minutes later on the flush loop, long after this round is gone.
-	if proofClass == "on_cadence" && bv.batchEnqueuer != nil {
-		batchAtt := bv.captureAttestation(vb, certenIntent, certenProof, blockHeight,
-			g0Proof, g1Proof, g2Proof, blsSignature, validatorSignatures, governanceLevel)
-		batchAtt.Replayed = true
-		// Record the committed height BEFORE enqueueing. The flush loop derives its period
-		// cutoff from this; if it lagged behind the members' own CommitHeight, TakeForPeriod
-		// would select nothing and the pool would fill without ever flushing.
-		bv.noteConsensusHeight(uint64(bftRes.Height))
-		// Carry the per-intent submission inputs with the member. If the batch later has to
-		// drop it (quorum not reached over the root, or the anchor mines unusable), this is
-		// the ONLY way it can still settle — the batch path never requeues.
-		batchAtt.SubmitVB = vbMeta
-		batchAtt.SubmitBFT = bftMeta
-
-		legs, chainID, account, opID, extractErr := bv.batchInputsFromIntent(certenIntent)
-
-		// The ADI URL is keccak'd into the member's Merkle leaf, and the account contract
-		// recomputes that leaf from its OWN immutable adiURL. They must be the identical
-		// string. AccountURL is the DATA account (".../data") — passing it here produced a
-		// leaf no account could ever verify, so every batched member would anchor, attest,
-		// and then revert at settlement with the intent stranded. Resolve the org ADI.
-		adiURL, adiErr := memberADIURL(certenIntent)
-
-		if extractErr != nil {
-			bv.logger.Printf("⚠️ [BATCH-QUEUE] intent %s cannot be batched (%v) — falling back",
-				certenIntent.IntentID, extractErr)
-		} else if adiErr != nil {
-			bv.logger.Printf("⚠️ [BATCH-QUEUE] intent %s has no usable ADI URL (%v) — falling back",
-				certenIntent.IntentID, adiErr)
-		} else if enqErr := bv.batchEnqueuer.EnqueueForBatch(
-			certenIntent.IntentID, adiURL, chainID, account, opID, legs, batchAtt,
-			// The BFT height this round committed at. Batch membership is selected by
-			// "committed at or before height H" so every validator derives the same member
-			// set — and therefore the same root and bundleId, which is what makes a batch
-			// co-signable. Selecting by local wall-clock produced divergent trees (v2
-			// 0xe4c950df… vs v3 0x5e71d83a…, live 2026-08-01).
-			uint64(bftRes.Height),
-		); enqErr != nil {
-			// NOT queued. Fall through rather than return, or the intent would be dropped.
-			bv.logger.Printf("⚠️ [BATCH-QUEUE] intent %s not queued (%v) — falling back",
-				certenIntent.IntentID, enqErr)
-		} else {
-			bv.logger.Printf("📦 [BATCH-QUEUE] intent %s queued for cross-ADI batching on chain %d",
-				certenIntent.IntentID, chainID)
-			return &ExecutionTaskResult{
-				Success:       true,
-				ExecutorID:    bv.validatorID,
-				ConsensusHash: fmt.Sprintf("batch_queued_%s_%d", roundID, bftRes.Height),
-			}, nil
-		}
+	// The enqueue itself already happened above, on EVERY validator — see the comment there
+	// for why that is load-bearing. All that remains for the elected executor is to stop:
+	// the intent will settle on the batch period leader's flush, which may be a different
+	// node, and executing it here as well would double-spend it.
+	if batchQueued {
+		return &ExecutionTaskResult{
+			Success:       true,
+			ExecutorID:    bv.validatorID,
+			ConsensusHash: fmt.Sprintf("batch_queued_%s_%d", roundID, bftRes.Height),
+		}, nil
 	}
 
 	if proofClass == "on_cadence" && bv.anchorScheduler != nil {

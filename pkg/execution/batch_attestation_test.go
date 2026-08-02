@@ -34,7 +34,7 @@ func addMember(t *testing.T, s *BatchStack, id string, height uint64, target byt
 // derivedBundle returns what a stack would derive for a period — the proposer's value.
 func derivedBundle(t *testing.T, s *BatchStack, cutoff uint64) string {
 	t.Helper()
-	members := s.Mempool.PeekForPeriod(11155111, cutoff)
+	members := s.Mempool.PeekForPeriod(11155111, cutoff, DefaultBatchPeriodBlocks)
 	inputs := make([]BatchLeafInput, 0, len(members))
 	for _, m := range members {
 		in, err := m.LeafInput()

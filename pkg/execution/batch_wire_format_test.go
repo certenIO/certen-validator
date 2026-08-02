@@ -31,6 +31,11 @@ func TestWireFormat_CarriesNoMemberData(t *testing.T) {
 
 	allowed := map[string]bool{
 		"chain_id": true, "cutoff_height": true, "bundle_id": true, "proposer_id": true,
+		// period_blocks is the window WIDTH, not membership. It is allowed only because the
+		// attester REFUSES a width that differs from its own configuration rather than adopting
+		// it (HandleBatchAttestationRequest), so a proposer cannot use it to widen what the peer
+		// selects. If that refusal is ever removed, this entry must come out with it.
+		"period_blocks": true,
 	}
 	for k := range fields {
 		if !allowed[k] {
@@ -52,14 +57,14 @@ func TestWireFormat_CarriesNoMemberData(t *testing.T) {
 // The proposer must not be able to construct a request whose bundleId disagrees with the tree
 // it was built from.
 func TestNewBatchAttestationRequest_BindsToTree(t *testing.T) {
-	if _, err := NewBatchAttestationRequest(nil, 100, "v1"); err == nil {
+	if _, err := NewBatchAttestationRequest(nil, 100, DefaultBatchPeriodBlocks, "v1"); err == nil {
 		t.Fatal("nil tree must be refused")
 	}
 	tree := &BatchTree{ChainID: 11155111, BundleID: [32]byte{0xAB, 0xCD}}
-	if _, err := NewBatchAttestationRequest(tree, 0, "v1"); err == nil {
+	if _, err := NewBatchAttestationRequest(tree, 0, DefaultBatchPeriodBlocks, "v1"); err == nil {
 		t.Fatal("zero cutoff must be refused")
 	}
-	req, err := NewBatchAttestationRequest(tree, 100, "v1")
+	req, err := NewBatchAttestationRequest(tree, 100, DefaultBatchPeriodBlocks, "v1")
 	if err != nil {
 		t.Fatal(err)
 	}

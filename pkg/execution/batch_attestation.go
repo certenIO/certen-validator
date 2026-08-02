@@ -38,8 +38,15 @@ import (
 // (chainID, cutoffHeight); accepting a member list from the proposer would defeat the entire
 // point of the check. BundleID is present only so the attester can compare — never to build from.
 type BatchAttestationRequest struct {
-	ChainID      int64  `json:"chain_id"`
+	ChainID int64 `json:"chain_id"`
+	// CutoffHeight is the START of the period. Membership is the half-open window
+	// [CutoffHeight, CutoffHeight+PeriodBlocks).
 	CutoffHeight uint64 `json:"cutoff_height"`
+	// PeriodBlocks is the window width. Carried explicitly so a proposer running a different
+	// BATCH_PERIOD_BLOCKS cannot quietly ask for a different member set under the same cutoff —
+	// the attester would then derive a different bundleId and refuse, which is the safe
+	// outcome, but the value being on the wire makes the misconfiguration diagnosable.
+	PeriodBlocks uint64 `json:"period_blocks"`
 	BundleID     string `json:"bundle_id"` // hex, for comparison ONLY
 	ProposerID   string `json:"proposer_id"`
 }
@@ -102,11 +109,36 @@ func (s *BatchStack) HandleBatchAttestationRequest(
 		return refuse("chain %d is not configured for batching here: %v", req.ChainID, err)
 	}
 
+	// The period width is the ONE request field that influences which of OUR members are
+	// selected, so it is checked against our own configuration rather than adopted.
+	//
+	// Adopting it would let a proposer name an arbitrary window — say the whole chain history —
+	// and have peers co-sign a batch spanning every intent they hold. That is not a theft (every
+	// leaf still belongs to an ADI that authorised it, and the bundleId must still match), but
+	// it dissolves the period discipline the whole design rests on, and a batch nobody intended
+	// would settle. Refusing a mismatch keeps the field purely diagnostic: it tells us WHICH
+	// misconfiguration we are looking at, and never changes what we build.
+	myPeriodBlocks := s.PeriodBlocks
+	if myPeriodBlocks == 0 {
+		myPeriodBlocks = DefaultBatchPeriodBlocks
+	}
+	// Older proposers omit the field; treat that as "the default", not as zero.
+	theirPeriodBlocks := req.PeriodBlocks
+	if theirPeriodBlocks == 0 {
+		theirPeriodBlocks = DefaultBatchPeriodBlocks
+	}
+	if theirPeriodBlocks != myPeriodBlocks {
+		return refuse("period width mismatch: proposer uses %d blocks, this validator is "+
+			"configured for %d — BATCH_PERIOD_BLOCKS must be identical across the set, or every "+
+			"batch derives a different bundleId", theirPeriodBlocks, myPeriodBlocks)
+	}
+	periodBlocks := myPeriodBlocks
+
 	// ---- Rebuild from OUR OWN view. Never from the request. --------------------
-	members := s.Mempool.PeekForPeriod(req.ChainID, req.CutoffHeight)
+	members := s.Mempool.PeekForPeriod(req.ChainID, req.CutoffHeight, periodBlocks)
 	if len(members) == 0 {
-		return refuse("no members for chain %d at cutoff %d in this validator's mempool",
-			req.ChainID, req.CutoffHeight)
+		return refuse("no members for chain %d in period [%d,%d) in this validator's mempool",
+			req.ChainID, req.CutoffHeight, req.CutoffHeight+periodBlocks)
 	}
 
 	inputs := make([]BatchLeafInput, 0, len(members))

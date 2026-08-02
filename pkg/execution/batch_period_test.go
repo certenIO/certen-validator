@@ -1,6 +1,7 @@
 package execution
 
 import (
+	"fmt"
 	"math/big"
 	"testing"
 	"time"
@@ -46,8 +47,8 @@ func TestPeekForPeriod_IsIdenticalAcrossValidators(t *testing.T) {
 		}
 	}
 
-	ga := a.PeekForPeriod(11155111, 100)
-	gb := b.PeekForPeriod(11155111, 100)
+	ga := a.PeekForPeriod(11155111, 50, 100)
+	gb := b.PeekForPeriod(11155111, 50, 100)
 
 	if len(ga) != 3 || len(gb) != 3 {
 		t.Fatalf("expected 3 members each, got %d and %d", len(ga), len(gb))
@@ -64,9 +65,13 @@ func TestPeekForPeriod_IsIdenticalAcrossValidators(t *testing.T) {
 	}
 }
 
-// Members committed after the cutoff belong to the NEXT period. Including them would make a
-// validator that has not yet seen them compute a different root.
-func TestPeekForPeriod_ExcludesAboveCutoff(t *testing.T) {
+// A member belongs to EXACTLY ONE period: the half-open window [start, start+width).
+//
+// The rule used to be the open-ended "CommitHeight <= cutoff", which was correct only while
+// every validator removed taken members in lockstep. Attesters deliberately do not remove, so
+// after the first batch an attester still held the previous period's members and folded them
+// into the next period's tree — different root, different bundleId, permanent refusal.
+func TestPeekForPeriod_SelectsExactlyOneWindow(t *testing.T) {
 	m := NewBatchMempool(BatchMempoolConfig{MinBatchSize: 1, MaxBatchSize: 64})
 	add := func(id string, h uint64) {
 		if err := m.Add(&PendingBatchIntent{
@@ -78,18 +83,107 @@ func TestPeekForPeriod_ExcludesAboveCutoff(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	add("early", 50)
-	add("onCutoff", 100)
-	add("late", 101)
+	add("previousPeriod", 99) // below the window — belongs to [90,100)
+	add("windowStart", 100)   // inclusive lower bound
+	add("windowEnd", 109)     // last height inside [100,110)
+	add("nextPeriod", 110)    // exclusive upper bound
 
-	got := m.PeekForPeriod(11155111, 100)
+	got := m.PeekForPeriod(11155111, 100, 10)
 	if len(got) != 2 {
-		t.Fatalf("expected 2 (<= cutoff), got %d", len(got))
+		ids := make([]string, len(got))
+		for i, p := range got {
+			ids[i] = p.IntentID
+		}
+		t.Fatalf("expected exactly the 2 members of [100,110), got %d: %v", len(got), ids)
 	}
 	for _, p := range got {
-		if p.IntentID == "late" {
-			t.Fatal("a member committed above the cutoff must not be in this period")
+		if p.IntentID == "previousPeriod" {
+			t.Fatal("a member from an EARLIER period leaked in — this is the bug that made every " +
+				"batch after the first fail quorum")
 		}
+		if p.IntentID == "nextPeriod" {
+			t.Fatal("a member committed at the exclusive upper bound must belong to the next period")
+		}
+	}
+}
+
+// Selecting the same period twice must give the same answer even after a neighbouring period
+// was taken. Bucket scoping is what makes an attester's Peek reproducible against a leader's
+// Take, no matter what either removed.
+func TestPeekForPeriod_IsUnaffectedByNeighbouringPeriods(t *testing.T) {
+	m := NewBatchMempool(BatchMempoolConfig{MinBatchSize: 1, MaxBatchSize: 64})
+	for _, c := range []struct {
+		id string
+		h  uint64
+	}{{"p1a", 100}, {"p1b", 105}, {"p2a", 110}, {"p2b", 115}} {
+		if err := m.Add(&PendingBatchIntent{
+			IntentID: c.id, ADIURL: "acc://" + c.id + ".acme", ChainID: 11155111,
+			Account: common.HexToAddress("0x01"), OperationID: opid(1),
+			Legs:         []LegExecution{{LegID: "l", ChainID: 11155111, Target: tgt(1), Value: big.NewInt(1)}},
+			CommitHeight: c.h,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := m.PeekForPeriod(11155111, 110, 10)
+	if len(before) != 2 {
+		t.Fatalf("period [110,120) should hold 2, got %d", len(before))
+	}
+	// A leader takes the EARLIER period. The later one must be untouched.
+	if taken := m.TakeForPeriod(11155111, 100, 10); len(taken) != 2 {
+		t.Fatalf("period [100,110) should hold 2, got %d", len(taken))
+	}
+	after := m.PeekForPeriod(11155111, 110, 10)
+	if len(after) != len(before) || after[0].IntentID != before[0].IntentID {
+		t.Fatal("taking one period changed another period's membership")
+	}
+}
+
+// PendingPeriods drives the flush loop. It must report every CLOSED period holding members, so
+// a straggler whose leader was down is picked up by a later one rather than stranded.
+func TestPendingPeriods_ReportsClosedPeriodsOnly(t *testing.T) {
+	m := NewBatchMempool(BatchMempoolConfig{MinBatchSize: 1, MaxBatchSize: 64})
+	for _, h := range []uint64{100, 105, 130, 200} {
+		if err := m.Add(&PendingBatchIntent{
+			IntentID: fmt.Sprintf("i%d", h), ADIURL: "acc://x.acme", ChainID: 11155111,
+			Account: common.HexToAddress("0x01"), OperationID: opid(1),
+			Legs:         []LegExecution{{LegID: "l", ChainID: 11155111, Target: tgt(1), Value: big.NewInt(1)}},
+			CommitHeight: h,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Current period starts at 200, so 200 is still open and must NOT be offered.
+	got := m.PendingPeriods(11155111, 10, 200)
+	want := []uint64{100, 130}
+	if len(got) != len(want) {
+		t.Fatalf("expected periods %v, got %v", want, got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("expected periods %v (ascending), got %v", want, got)
+		}
+	}
+}
+
+// The memory backstop must not touch members whose period is still within the horizon.
+func TestPruneOlderThan(t *testing.T) {
+	m := NewBatchMempool(BatchMempoolConfig{MinBatchSize: 1, MaxBatchSize: 64})
+	for _, h := range []uint64{10, 500, 900} {
+		if err := m.Add(&PendingBatchIntent{
+			IntentID: fmt.Sprintf("i%d", h), ADIURL: "acc://x.acme", ChainID: 11155111,
+			Account: common.HexToAddress("0x01"), OperationID: opid(1),
+			Legs:         []LegExecution{{LegID: "l", ChainID: 11155111, Target: tgt(1), Value: big.NewInt(1)}},
+			CommitHeight: h,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := m.PruneOlderThan(500); n != 1 {
+		t.Fatalf("pruned %d, expected exactly the one below the horizon", n)
+	}
+	if m.PendingCount() != 2 {
+		t.Fatalf("expected 2 remaining, got %d", m.PendingCount())
 	}
 }
 
@@ -105,7 +199,7 @@ func TestPeekForPeriod_SkipsUnknownCommitHeight(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if got := m.PeekForPeriod(11155111, 1000); len(got) != 0 {
+	if got := m.PeekForPeriod(11155111, 1000, 100); len(got) != 0 {
 		t.Fatal("a member with no commit height must be skipped")
 	}
 }
@@ -122,14 +216,14 @@ func TestPeekForPeriod_DoesNotConsume(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 3; i++ {
-		if len(m.PeekForPeriod(11155111, 100)) != 1 {
+		if len(m.PeekForPeriod(11155111, 10, 100)) != 1 {
 			t.Fatalf("peek %d lost the member", i)
 		}
 	}
 	if m.PendingCount() != 1 {
 		t.Fatal("peek must leave the pool intact")
 	}
-	if len(m.TakeForPeriod(11155111, 100)) != 1 {
+	if len(m.TakeForPeriod(11155111, 10, 100)) != 1 {
 		t.Fatal("take should return the member")
 	}
 	if m.PendingCount() != 0 {
@@ -154,8 +248,8 @@ func TestPeekForPeriod_CapAppliedAfterSort(t *testing.T) {
 		}
 		return m
 	}
-	g1 := mkPool([]string{"aaa", "bbb", "ccc"}).PeekForPeriod(11155111, 100)
-	g2 := mkPool([]string{"ccc", "bbb", "aaa"}).PeekForPeriod(11155111, 100)
+	g1 := mkPool([]string{"aaa", "bbb", "ccc"}).PeekForPeriod(11155111, 10, 100)
+	g2 := mkPool([]string{"ccc", "bbb", "aaa"}).PeekForPeriod(11155111, 10, 100)
 
 	if len(g1) != 2 || len(g2) != 2 {
 		t.Fatalf("cap not applied: %d %d", len(g1), len(g2))

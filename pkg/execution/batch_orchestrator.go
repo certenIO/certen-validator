@@ -47,7 +47,7 @@ type QuorumProver interface {
 	// needs the same object the branches came from or the comparison means nothing.
 	// cutoffHeight is the period boundary that defined membership — peers reconstruct from
 	// it, and it is also the accumulateBlockHeight bound into the bundleId.
-	ProveBatchRoot(ctx context.Context, tree *BatchTree, cutoffHeight uint64) error
+	ProveBatchRoot(ctx context.Context, tree *BatchTree, cutoffHeight, periodBlocks uint64) error
 }
 
 // BatchFlushResult reports what happened to one tree.
@@ -63,8 +63,13 @@ type BatchFlushResult struct {
 	// Dropped members left the batch path entirely and MUST be routed to the per-intent
 	// on_demand path by the caller. They are not requeued and will never reappear in a batch,
 	// so a caller that ignores this field strands them.
-	Dropped  []*PendingBatchIntent
-	TxHashes map[string]string // intentID -> account tx hash
+	Dropped []*PendingBatchIntent
+	// AlreadySettled members were found under an anchor a previous leader had already attested.
+	// They are removed from the pool and must NOT be attested or fallen back to — the leader
+	// that landed the batch already did both. Reported so the condition is visible rather than
+	// looking like members silently vanishing.
+	AlreadySettled []*PendingBatchIntent
+	TxHashes       map[string]string // intentID -> account tx hash
 
 	GasAnchor uint64
 }
@@ -119,6 +124,7 @@ func (o *BatchOrchestrator) FlushChain(
 	ctx context.Context,
 	chainID int64,
 	cutoffHeight uint64,
+	periodBlocks uint64,
 ) (*BatchFlushResult, error) {
 	// Defensive: a misconstructed orchestrator must ERROR, never panic. This runs inside the
 	// flush loop, and a panic there would take the whole validator down rather than skipping
@@ -135,7 +141,7 @@ func (o *BatchOrchestrator) FlushChain(
 			"height source is not wired", chainID)
 	}
 
-	members := o.mempool.TakeForPeriod(chainID, cutoffHeight)
+	members := o.mempool.TakeForPeriod(chainID, cutoffHeight, periodBlocks)
 	if len(members) == 0 {
 		return nil, nil
 	}
@@ -167,6 +173,26 @@ func (o *BatchOrchestrator) FlushChain(
 
 	o.logf("[BATCH] chain=%d forming tree: %d members, root=0x%x, bundleId=0x%x",
 		chainID, tree.Size(), tree.Root[:8], tree.BundleID[:8])
+
+	// ---- ALREADY SETTLED ELSEWHERE? ----------------------------------------
+	// Leadership rotates per period and the flush loop picks up stragglers, so two different
+	// nodes can legitimately reach the same period. bundleId is deterministic, so an anchor
+	// that already exists AND is attested means the batch settled under a previous leader.
+	//
+	// This MUST short-circuit. Continuing would re-submit executeComprehensiveProof, which
+	// reverts on usedCommitments replay protection; the quorum step would then report failure
+	// and route every member to the per-intent fallback — RE-EXECUTING intents that already
+	// moved funds. A double-spend produced by a retry is far worse than a skipped flush.
+	if settled, serr := o.anchorAlreadyAttested(ctx, tree.BundleID); serr != nil {
+		o.mempool.Requeue(members)
+		return nil, fmt.Errorf("checking whether anchor 0x%x already settled: %w", tree.BundleID[:8], serr)
+	} else if settled {
+		o.logf("[BATCH] chain=%d period %d already settled under anchor 0x%x by a previous leader "+
+			"— releasing %d member(s) without re-executing",
+			chainID, cutoffHeight, tree.BundleID[:8], len(members))
+		res.AlreadySettled = members
+		return res, nil
+	}
 
 	// ---- VERIFY 2: every account's own leaf agrees with ours ----------------
 	// Checked against DEPLOYED bytecode, not a fixture. A drift here would mint an anchor
@@ -202,7 +228,7 @@ func (o *BatchOrchestrator) FlushChain(
 		return res, fmt.Errorf("no quorum prover configured; anchor 0x%x is created but not verified "+
 			"and no account will accept it", tree.BundleID[:8])
 	}
-	if err := o.prover.ProveBatchRoot(ctx, tree, cutoffHeight); err != nil {
+	if err := o.prover.ProveBatchRoot(ctx, tree, cutoffHeight, periodBlocks); err != nil {
 		// APPROVED FALLBACK: drop, never requeue. The anchor is already mined, so re-forming
 		// this tree would derive the same bundleId and revert with AnchorAlreadyExists.
 		// Dropping costs the anchor gas and routes the members to the per-intent on_demand
@@ -287,6 +313,34 @@ func (o *BatchOrchestrator) verifyLeavesAgainstAccounts(
 		}
 	}
 	return nil
+}
+
+// anchorAlreadyAttested reports whether this bundleId already exists on chain with its quorum
+// attestation landed — i.e. the batch settled under a previous leader.
+//
+// Reads the `anchors` struct getter directly rather than anchorExists + a second call, because
+// only the combination matters: an anchor that exists but is NOT attested is a stranded
+// createBatchAnchor from a failed flush, and that one SHOULD be retried.
+func (o *BatchOrchestrator) anchorAlreadyAttested(ctx context.Context, bundleID [32]byte) (bool, error) {
+	parsed, err := abiFromJSON(anchorsABIJSON)
+	if err != nil {
+		return false, err
+	}
+	bound := bind.NewBoundContract(o.anchorV7, parsed, o.ecm.client, o.ecm.client, o.ecm.client)
+	var out []interface{}
+	if err := bound.Call(&bind.CallOpts{Context: ctx}, &out, "anchors", bundleID); err != nil {
+		return false, err
+	}
+	const proofExecutedIndex = 12
+	if len(out) <= proofExecutedIndex {
+		return false, fmt.Errorf("anchors() returned %d fields, need at least %d",
+			len(out), proofExecutedIndex+1)
+	}
+	executed, ok := out[proofExecutedIndex].(bool)
+	if !ok {
+		return false, fmt.Errorf("proofExecuted has unexpected type %T", out[proofExecutedIndex])
+	}
+	return executed, nil
 }
 
 // verifyLeavesAgainstAnchor confirms the deployed anchor stored what we think it did and
