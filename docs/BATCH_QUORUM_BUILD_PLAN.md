@@ -168,6 +168,27 @@ power by address; a wrong one contributes nothing). Unset ⇒ that validator can
 cannot co-sign, and the quorum runs one signer short. main.go warns loudly on startup.
 Values are the seven `SEPOLIA_V6_VALIDATOR_*` addresses already registered on V8_1.
 
+**IDENTITY GAP — VERIFIED ON THE LIVE SERVER 2026-08-01.** The containers have ONLY
+`VALIDATOR_ID=validator-N`. `SEPOLIA_V6_VALIDATOR_*` is NOT present in `.env.shared` (checked
+directly; those addresses live in `certen-contracts/evm/.env`, a different repo). So today no
+validator can determine its own EVM address, and `batchAttesterIdentity` would never be set —
+every peer would answer 503 and quorum could never form.
+
+Two ways to close it, in order of preference:
+
+1. **Self-configure from the registry (recommended, no new config).** The validator already
+   holds its BLS private key. The anchor's registry maps EVM address → BLS pubkey. At startup,
+   read the registered validator set and find the entry whose pubkey equals
+   `bls.GetValidatorBLSKey().PrivateKey().PublicKey().Hex()`; that IS this validator's address.
+   Impossible to misconfigure, and it fails loudly if the node's key is not registered — which
+   is exactly when it should refuse to attest. Costs one chain read at startup.
+2. **Explicit env.** Add `VALIDATOR_EVM_ADDRESS` per service in `docker-compose.yml` (7 edits)
+   from the seven addresses registered on V8_1. `main.go` already reads this. Simpler, but
+   silently wrong if an address is pasted into the wrong service — and a wrong address
+   contributes no voting power, so the quorum just mysteriously runs short.
+
+`main.go` currently implements (2) and warns when unset. Prefer adding (1) with (2) as override.
+
 **ALSO NOTED:** `RunFlushLoop` is currently passed `func() uint64 { return 0 }` as its height
 source (main.go, batching block). Step 4 must replace this with the real consensus height, or
 `BatchPeriodCutoff` always yields 0 and no period ever selects members.
