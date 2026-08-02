@@ -575,3 +575,72 @@ Options, in preference order:
 
 NOT fixed in this session. It needs its own change with its own tests, and it touches the point
 where an intent's fate is decided.
+
+---
+
+## CROSS-ADI BATCH: FORMED AND ATTESTED 7-of-7 (2026-08-02) — one gate left
+
+The determinism fix works. Two intents from two distinct ADIs, submitted five seconds apart:
+
+```
+344c5cf0  acc://certen-kermit-12.acme          Accumulate height 6259279
+13b71159  acc://certen-kermit-12.acme/batchb   Accumulate height 6259282
+```
+
+Both heights were IDENTICAL on all seven validators (previously one intent got seven different
+CometBFT heights), both fell in period [6259200, 6259300), and the elected leader formed:
+
+```
+forming tree: 2 members, root=0xf90f3918…, bundleId=0x9aa538ca…
+anchor created tx=0x4aae3d30… gas=278069
+quorum formed: 700 of 700 voting power from 7 signer(s)
+zk proof 576 bytes, pubkeyCommitment=0x00790bb79d07a0eb, signed=700/700 over 7 signers
+```
+
+7-of-7 — every peer independently rebuilt the batch and derived the same bundleId. The
+signer-set fix also worked: gas on executeComprehensiveProof went 128,219 -> 504,919, i.e. it
+cleared every CRYPTO-007 check and the six-field message-hash comparison and reached the
+Groth16 pairing. It then returned false.
+
+### The remaining failure, stated precisely
+
+The proof is VALID locally:
+
+```
+[BLS-ZK-DIAG] gnark local verify: result=true err=<nil>
+[BLS-ZK] Generated valid ZK proof: 576 bytes, pubkeyCommitment: 0x00790bb79d07a0eb
+```
+
+and its pubkey commitment is one of the 29 the anchor authorizes (cmd/subsetaudit: 29
+authorized, 0 unauthorized; 0x00790bb7… is the 7-of-7 value the plan already recorded).
+
+The anchor's verifier is 0x8D15f88c84009D99350F40E9361aF69bAa7D2Baf, vkInitialized=true,
+blsZKVerificationEnabled=true, pubkeyBindingEnforced=true, governanceVerifier=0 and
+minimumGovernanceLevel=1 — so the governance and commitment gates are not the cause, and
+cmd/anchorstate confirms merkleVerified would pass (bundleId re-derives from stored state).
+
+The diagnostic that matters:
+
+```
+[BLS-ZK-DIAG] VK CommitmentKeys=1 PublicAndCommitmentCommitted=1 IC=6
+[BLS-ZK-DIAG] Manual 4-pairing check: result=false err=expected 5 IC points, got 6
+```
+
+The circuit uses a gnark COMMITMENT. That changes the verification equation: it needs a fifth
+pairing and the commitment folded into the public inputs. cmd/vkcheck confirmed the local VK
+matches BLSZKVerifierV2Generated.sol on all 26 elements including all six IC points, so the key
+is right — the question is whether the DEPLOYED verifier at 0x8D15f88c implements the
+commitment form, and whether the public inputs it reconstructs from the blob match the ones the
+prover committed to.
+
+NOT resolved. The next step is to compare the deployed verifier's bytecode/behaviour against
+BLSZKVerifierV2Generated.sol directly — vkcheck compares against the FILE, which proves nothing
+about what is deployed at that address.
+
+### Also observed
+
+The per-intent on_demand fallback is ALSO failing right now, with constraint #774716
+unsatisfied — the same constraint this document already attributes to proving against a pubkey
+that did not sign. It uses the block signer's key from the ValidatorBlock. That is a
+pre-existing defect on the fallback path, independent of the batch work, and it means dropped
+members currently have nowhere to go.
