@@ -616,12 +616,18 @@ func (s *BatchStack) RunFlushLoop(
 	}
 }
 
-// DefaultBatchPeriodBlocks is the period width used when none is configured.
+// DefaultBatchPeriodBlocks is the period width used when none is configured, in ACCUMULATE
+// block heights.
 //
-// It must match across validators. Ten BFT blocks is short enough that a member does not wait
-// long for its period to close, and long enough that peers have committed the same rounds
-// before the leader forms the tree.
-const DefaultBatchPeriodBlocks uint64 = 10
+// It must match across validators. Accumulate advances continuously and independently of
+// Certen's own traffic, which is what lets a period close at all — the CometBFT chain only
+// advances when Certen commits something, so a lone intent could never close its own period
+// there.
+//
+// A hundred blocks is wide enough that intents submitted within a minute of each other land
+// together (that is the whole point of batching) and narrow enough that a period closes
+// promptly.
+const DefaultBatchPeriodBlocks uint64 = 100
 
 // =============================================================================
 // BatchEnqueuer adapter

@@ -287,21 +287,41 @@ func resolveBatchAttesterIdentity(resolver *execution.EVMChainResolverImpl, vali
 // validator has seen a round commit at, which is never ahead of the chain and so can only be
 // conservative.
 func batchConsensusHeightFn(
-	engine *consensus.RealCometBFTEngine,
+	accClient accumulate.Client,
 	validator *consensus.BFTValidator,
 ) func() uint64 {
+	var (
+		mu     sync.Mutex
+		cached uint64
+		at     time.Time
+	)
 	return func() uint64 {
-		if engine != nil {
-			if app := engine.GetValidatorApp(); app != nil {
-				if h := app.LatestHeight(); h > 0 {
-					return uint64(h)
-				}
+		mu.Lock()
+		defer mu.Unlock()
+		// One query per flush tick at most; the flush loop sub-ticks far faster than
+		// Accumulate produces blocks.
+		if time.Since(at) < 20*time.Second && cached > 0 {
+			return cached
+		}
+		if accClient != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			blk, err := accClient.GetLatestBlock(ctx)
+			cancel()
+			if err == nil && blk != nil && blk.Height > cached {
+				cached = blk.Height
+				at = time.Now()
+				return cached
 			}
 		}
+		// Fallback: the highest Accumulate height this node has actually seen an intent at.
+		// Never ahead of the chain, so it can only be conservative.
 		if validator != nil {
-			return validator.ObservedConsensusHeight()
+			if h := validator.ObservedConsensusHeight(); h > cached {
+				cached = h
+			}
 		}
-		return 0
+		at = time.Now()
+		return cached
 	}
 }
 
@@ -1315,17 +1335,15 @@ func startValidator(
 						execution.BatchFlushConfig{
 							Interval:     mempoolCfg.FlushInterval,
 							PeriodBlocks: batchPeriodBlocksFromEnv(),
-							// The real consensus height, read from the ABCI app so it advances
-							// with the CHAIN rather than with this node's activity. This used to
-							// be a stub returning 0, which made every period cutoff 0 and left
-							// the batch path silently inert.
+							// The ACCUMULATE chain height — the same units member CommitHeights
+							// are keyed in, and the only height every validator agrees on.
 							//
-							// Reading committed rounds instead would not be enough: a period
-							// only closes once the chain passes its upper bound, so a lone
-							// queued intent would wait for a second intent to arrive and move
-							// the cutoff. The validator's own observed height is the fallback
-							// for the window before the app is reachable.
-							ConsensusHeightFn: batchConsensusHeightFn(cometEngine, validator),
+							// Not the CometBFT height: each validator broadcasts its own
+							// ValidatorBlock, so one intent commits at a different height on
+							// every node. Accumulate also advances on its own, so a period
+							// closes without needing more Certen traffic — a lone queued intent
+							// no longer waits for a second one to arrive.
+							ConsensusHeightFn: batchConsensusHeightFn(accClient, validator),
 							// Only the elected submitter for the period forms a batch. Without
 							// this all seven race to anchor the same period and six revert with
 							// AnchorAlreadyExists after paying gas.

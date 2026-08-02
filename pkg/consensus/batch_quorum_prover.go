@@ -291,11 +291,15 @@ func (bv *BFTValidator) enqueueForBatch(
 		return false
 	}
 
-	// commitHeight is the BFT height this round committed at. Batch membership is the set of
-	// intents whose round committed inside one period, so every validator derives the same
-	// member set — and therefore the same root and bundleId, which is what makes a batch
-	// co-signable. Selecting by local wall-clock produced divergent trees (v2 0xe4c950df… vs
-	// v3 0x5e71d83a…, live 2026-08-01).
+	// commitHeight is the ACCUMULATE block height the intent was written in. It must be a value
+	// every validator computes identically for a given intent, because batch membership is the
+	// set of intents falling in one height window and the resulting root and bundleId have to
+	// match across nodes for the batch to be co-signable.
+	//
+	// The CometBFT height is NOT such a value: each validator broadcasts its own ValidatorBlock
+	// transaction, so one intent commits at a different height on every node (observed live:
+	// 230/232/234/235/235/236/237 for a single intent). The Accumulate height is a property of
+	// the intent itself — the same reason roundID is built from it.
 	if enqErr := bv.batchEnqueuer.EnqueueForBatch(
 		certenIntent.IntentID, adiURL, chainID, account, opID, legs, batchAtt, commitHeight,
 	); enqErr != nil {

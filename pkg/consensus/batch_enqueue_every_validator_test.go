@@ -59,9 +59,10 @@ func TestBatchEnqueueHappensBeforeExecutorGate(t *testing.T) {
 func TestConsensusHeightRecordedBeforeExecutorGate(t *testing.T) {
 	src := workflowSource(t)
 
-	note := strings.Index(src, "bv.noteConsensusHeight(uint64(bftRes.Height))")
+	note := strings.Index(src, "bv.noteConsensusHeight(blockHeight)")
 	if note < 0 {
-		t.Fatal("noteConsensusHeight call not found; the period cutoff has no height source")
+		t.Fatal("noteConsensusHeight is not called with blockHeight; the period cutoff has no " +
+			"globally-agreed height source")
 	}
 	gate := strings.Index(src, "if selectedExecutorID != bv.validatorID {")
 	if gate < 0 {
@@ -72,6 +73,43 @@ func TestConsensusHeightRecordedBeforeExecutorGate(t *testing.T) {
 			"node's cutoff would stay behind, so peers could not select the period the leader " +
 			"formed and would refuse to attest.")
 	}
+}
+
+// THE determinism invariant.
+//
+// A member's period must be keyed on a height every validator computes identically for a given
+// intent. blockHeight (the ACCUMULATE height the intent was written in) is such a value.
+// bftRes.Height is NOT: each validator broadcasts its own ValidatorBlock transaction, so one
+// intent commits at a different CometBFT height on every node -- observed live at
+// 230/232/234/235/235/236/237 across the seven. Keying on that puts the same member in
+// different periods on different nodes, and no two validators can ever derive the same batch.
+func TestPeriodHeightIsAccumulateNotCometBFT(t *testing.T) {
+	src := workflowSource(t)
+
+	if strings.Contains(src, "bv.noteConsensusHeight(uint64(bftRes.Height))") {
+		t.Fatal("the period cutoff is keyed on the CometBFT height, which differs per validator " +
+			"for the same intent — batches could never be co-signed")
+	}
+	// The enqueue must carry the same units as the cutoff.
+	enq := strings.Index(src, "bv.enqueueForBatch(")
+	if enq < 0 {
+		t.Fatal("enqueueForBatch call not found")
+	}
+	call := src[enq:min(enq+600, len(src))]
+	if strings.Contains(call, "bftRes.Height") {
+		t.Fatal("enqueueForBatch is passed the CometBFT height; members would fall into " +
+			"different periods on different validators")
+	}
+	if !strings.Contains(call, "blockHeight") {
+		t.Fatal("enqueueForBatch must be passed the Accumulate blockHeight")
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // enqueueForBatch must not be reachable only under a proofClass check that excludes peers.

@@ -1360,7 +1360,13 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	// height. Recording it only on batched rounds meant a single queued intent could never
 	// settle — nothing else would ever advance the height past its period.
 	// =======================================================================
-	bv.noteConsensusHeight(uint64(bftRes.Height))
+	// blockHeight is the ACCUMULATE block height the intent was written in — a property of the
+	// intent, identical on every validator. bftRes.Height is NOT: each validator broadcasts its
+	// own ValidatorBlock transaction, so the same intent commits at a different CometBFT height
+	// on each node. Observed live 2026-08-02, one intent enqueued at heights 230/232/234/235/
+	// 235/236/237 across the seven. Keying periods on that put the same member in different
+	// periods on different nodes, so no two validators could ever derive the same batch.
+	bv.noteConsensusHeight(blockHeight)
 
 	// =======================================================================
 	// EVERY VALIDATOR ENQUEUES on_cadence INTENTS INTO ITS OWN BATCH MEMPOOL
@@ -1384,7 +1390,7 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	if proofClass == "on_cadence" && bv.batchEnqueuer != nil {
 		batchQueued = bv.enqueueForBatch(certenIntent, certenProof, vb, vbMeta, bftMeta,
 			blockHeight, g0Proof, g1Proof, g2Proof, blsSignature, validatorSignatures,
-			governanceLevel, uint64(bftRes.Height))
+			governanceLevel, blockHeight)
 	}
 
 	// =======================================================================

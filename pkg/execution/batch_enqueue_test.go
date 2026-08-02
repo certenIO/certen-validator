@@ -259,8 +259,8 @@ func TestEnqueueForBatch_CarriesCommitHeight(t *testing.T) {
 	if err := s.EnqueueForBatch("i", "acc://a.acme", 11155111, acct(1), opid(1), legs, "att", 4242); err != nil {
 		t.Fatal(err)
 	}
-	// 4242 falls in the period [4240, 4250) at the default width of 10.
-	got := s.Mempool.PeekForPeriod(11155111, 4240, DefaultBatchPeriodBlocks)
+	// 4242 falls in the period starting at 4200 at the default width of 100.
+	got := s.Mempool.PeekForPeriod(11155111, 4200, DefaultBatchPeriodBlocks)
 	if len(got) != 1 {
 		t.Fatalf("member not selectable for the period covering its height (got %d)", len(got))
 	}
@@ -268,10 +268,10 @@ func TestEnqueueForBatch_CarriesCommitHeight(t *testing.T) {
 		t.Fatalf("commit height not carried through: %d", got[0].CommitHeight)
 	}
 	// A member belongs to exactly ONE period — neither the one before nor the one after.
-	if n := len(s.Mempool.PeekForPeriod(11155111, 4230, DefaultBatchPeriodBlocks)); n != 0 {
+	if n := len(s.Mempool.PeekForPeriod(11155111, 4100, DefaultBatchPeriodBlocks)); n != 0 {
 		t.Fatalf("member appeared in the previous period (%d)", n)
 	}
-	if n := len(s.Mempool.PeekForPeriod(11155111, 4250, DefaultBatchPeriodBlocks)); n != 0 {
+	if n := len(s.Mempool.PeekForPeriod(11155111, 4300, DefaultBatchPeriodBlocks)); n != 0 {
 		t.Fatalf("member appeared in the next period (%d)", n)
 	}
 }
