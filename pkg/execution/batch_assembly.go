@@ -164,6 +164,10 @@ type BatchStack struct {
 	Mempool       *BatchMempool
 	Orchestrators map[int64]*BatchOrchestrator
 
+	// closedAt records when this node FIRST saw each period close, for the settle grace.
+	closedMu sync.Mutex
+	closedAt map[periodKey]time.Time
+
 	// PeriodBlocks is THIS validator's configured period width. The attester compares an
 	// incoming request's width against it and refuses a mismatch, rather than adopting the
 	// proposer's value — see HandleBatchAttestationRequest. Zero means the default.
@@ -268,7 +272,7 @@ func (s *BatchStack) FlushDueChains(
 	}
 
 	for _, chainID := range s.Mempool.DueChains(now, force) {
-		s.flushChainPeriods(ctx, chainID, cutoffHeight, DefaultBatchPeriodBlocks, nil, attest, fallback, logf)
+		s.flushChainPeriods(ctx, chainID, cutoffHeight, DefaultBatchPeriodBlocks, nil, 0, now, attest, fallback, logf)
 	}
 }
 
@@ -286,6 +290,8 @@ func (s *BatchStack) flushChainPeriods(
 	currentPeriodStart uint64,
 	periodBlocks uint64,
 	isLeader func(chainID int64, periodStart uint64) bool,
+	grace time.Duration,
+	now time.Time,
 	attest BatchAttestFn,
 	fallback BatchFallbackFn,
 	logf func(string, ...interface{}),
@@ -300,8 +306,81 @@ func (s *BatchStack) flushChainPeriods(
 		if isLeader != nil && !isLeader(chainID, start) {
 			continue
 		}
+		// SETTLE GRACE — see settleGraceElapsed. A period that closed seconds ago is very
+		// likely incomplete on peers that are still generating proofs for its members.
+		if !s.settleGraceElapsed(chainID, start, grace, now, logf) {
+			continue
+		}
 		s.flushOneChain(ctx, chainID, start, periodBlocks, attest, fallback, logf)
 	}
+}
+
+// settleGraceElapsed reports whether a closed period has been closed long enough for peers to
+// have finished processing its members.
+//
+// # WHY A DELAY IS NEEDED AT ALL
+//
+// Membership is a pure function of committed BFT height, so every validator eventually derives
+// the same tree. "Eventually" is the problem: a validator only LEARNS about a member when it
+// finishes its own processing of that round, and that takes minutes — L1-L3 proof, then G0, G1
+// and G2 governance proofs at roughly thirty seconds each. Those pipelines run at different
+// speeds on different nodes.
+//
+// Observed live 2026-08-02: the leader formed a 2-member batch for period [210,215) moments
+// after the period closed. Two peers had only ONE of the members and derived a different
+// bundleId; three had neither and had nothing to rebuild from. One peer agreed. Quorum failed
+// at 2-of-7 even though every node was healthy, honest, and would have agreed a minute later.
+//
+// # WHY A WALL CLOCK IS SAFE HERE, WHEN IT IS NOT SAFE FOR MEMBERSHIP
+//
+// The clock decides only WHEN the leader forms the batch, never WHICH members are in it — that
+// stays keyed on committed height. Two validators with skewed clocks still derive identical
+// trees for a given period; one merely offers to lead it sooner. So this costs latency and
+// cannot cause the divergence the whole design exists to prevent.
+//
+// The grace starts when THIS node first observes the period closed, not when the period's
+// heights were committed, so a node that was restarted or was catching up does not immediately
+// consider a long-closed period ready.
+func (s *BatchStack) settleGraceElapsed(
+	chainID int64,
+	periodStart uint64,
+	grace time.Duration,
+	now time.Time,
+	logf func(string, ...interface{}),
+) bool {
+	if grace <= 0 {
+		return true
+	}
+	key := periodKey{chainID: chainID, periodStart: periodStart}
+
+	s.closedMu.Lock()
+	first, seen := s.closedAt[key]
+	if !seen {
+		if s.closedAt == nil {
+			s.closedAt = make(map[periodKey]time.Time)
+		}
+		s.closedAt[key] = now
+		first = now
+	}
+	// Bound the map. Entries are only ever consulted for periods still holding members, so
+	// anything older than the one being asked about is dead weight.
+	if len(s.closedAt) > 512 {
+		for k, t := range s.closedAt {
+			if now.Sub(t) > 24*time.Hour {
+				delete(s.closedAt, k)
+			}
+		}
+	}
+	s.closedMu.Unlock()
+
+	if now.Sub(first) >= grace {
+		return true
+	}
+	if !seen {
+		logf("[BATCH-FLUSH] chain %d period %d closed; holding %s for peers to finish "+
+			"processing its members before forming the batch", chainID, periodStart, grace)
+	}
+	return false
 }
 
 // flushOneChain is the shared body: form the period's tree, settle it, then dispose of every
@@ -414,10 +493,26 @@ type BatchFlushConfig struct {
 	// Fallback routes dropped members to the per-intent path.
 	Fallback BatchFallbackFn
 
+	// SettleGrace delays forming a closed period so peers can finish processing its members.
+	// Zero means DefaultBatchSettleGrace.
+	SettleGrace time.Duration
+
 	// RetentionPeriods is how many periods a member may sit before being pruned as garbage.
 	// Zero means DefaultBatchRetentionPeriods.
 	RetentionPeriods uint64
 }
+
+// periodKey identifies one chain's period for grace tracking.
+type periodKey struct {
+	chainID     int64
+	periodStart uint64
+}
+
+// DefaultBatchSettleGrace is how long a period must have been closed before the leader forms
+// it. It must comfortably exceed the slowest member pipeline: L1-L3 plus G0/G1/G2 measured at
+// roughly three minutes per intent on Sepolia/Kermit, and a peer that has not finished cannot
+// reproduce the batch.
+const DefaultBatchSettleGrace = 4 * time.Minute
 
 // DefaultBatchRetentionPeriods is the memory backstop horizon. Generous on purpose: a member
 // pruned while its period was still waiting for a working leader would never settle, and
@@ -475,6 +570,10 @@ func (s *BatchStack) RunFlushLoop(
 	if retention == 0 {
 		retention = DefaultBatchRetentionPeriods
 	}
+	grace := cfg.SettleGrace
+	if grace == 0 {
+		grace = DefaultBatchSettleGrace
+	}
 
 	// flush runs one pass: every closed period, leader-gated per period.
 	flush := func(passCtx context.Context, now time.Time, force bool) {
@@ -489,7 +588,7 @@ func (s *BatchStack) RunFlushLoop(
 		}
 		for _, chainID := range s.Resolver.Chains() {
 			s.flushChainPeriods(passCtx, chainID, cutoff, periodBlocks,
-				cfg.IsLeaderFn, cfg.Attest, cfg.Fallback, logf)
+				cfg.IsLeaderFn, grace, now, cfg.Attest, cfg.Fallback, logf)
 		}
 
 		// Memory backstop. Correctness does not depend on it — selection is bucket-scoped, so
