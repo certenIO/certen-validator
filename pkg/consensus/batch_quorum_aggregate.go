@@ -62,6 +62,15 @@ type QuorumAggregate struct {
 	SignedVotingPower     *big.Int
 	TotalVotingPower      *big.Int
 	Signers               []string // EVM addresses, ascending — deterministic across validators
+	// SignerPowers is each signer's REGISTERED voting power, aligned index-for-index with
+	// Signers.
+	//
+	// The anchor does not take SignedVotingPower on trust. _verifyBLSProof walks
+	// blsProof.validatorAddresses, looks each one up in its own registry, and rejects the proof
+	// unless the sum equals the declared signedVotingPower. So validatorAddresses must be the
+	// set that ACTUALLY SIGNED — passing the full roster alongside a partial signed power is
+	// rejected, which is what a 6-of-7 batch hit live on 2026-08-02.
+	SignerPowers []*big.Int
 }
 
 // AggregateBatchAttestations verifies each partial against the registry and folds the survivors
@@ -169,11 +178,13 @@ func AggregateBatchAttestations(
 	sigs := make([]*bls.Signature, 0, len(good))
 	pubs := make([]*bls.PublicKey, 0, len(good))
 	signers := make([]string, 0, len(good))
+	signerPowers := make([]*big.Int, 0, len(good))
 	for _, g := range good {
 		signedPower.Add(signedPower, registry[g.addr].VotingPower)
 		sigs = append(sigs, g.sig)
 		pubs = append(pubs, g.pub)
 		signers = append(signers, g.addr)
+		signerPowers = append(signerPowers, new(big.Int).Set(registry[g.addr].VotingPower))
 	}
 
 	// Threshold, by POWER not by count. signedPower*den >= totalPower*num.
@@ -206,6 +217,7 @@ func AggregateBatchAttestations(
 		SignedVotingPower:     signedPower,
 		TotalVotingPower:      totalPower,
 		Signers:               signers,
+		SignerPowers:          signerPowers,
 	}, nil
 }
 

@@ -116,22 +116,49 @@ func TestSubmitBatchQuorumProof_RefusesSingleSignerAggregate(t *testing.T) {
 	}
 }
 
-// buildValidatorSetForBatch must no longer return a signed power at all. It used to return the
-// total, which is what made every batch declare 7-of-7 regardless of who signed.
-func TestBuildValidatorSetForBatch_ReturnsNoSignedPower(t *testing.T) {
-	t.Setenv("V6_1_VALIDATOR_SET_ADDRS",
-		"0xd4a3dbbae0c04d4307c5e00a5e05b66acc289f5d,0x5555afa8ff8048bddaac1554afd790c9bf7ec6e0")
-	addrs, powers, total, err := buildValidatorSetForBatch()
-	if err != nil {
-		t.Skipf("validator set not resolvable in this environment: %v", err)
+// The anchor recomputes signed power from the addresses it is given, so a submission whose
+// declared signedVotingPower disagrees with the sum of its signers' powers is rejected on
+// chain -- after the batch anchor has been paid for. Catch it locally instead.
+func TestSubmitBatchQuorumProof_RefusesSignerPowerMismatch(t *testing.T) {
+	s := submitterWithNoChain()
+	agg := &consensus.QuorumAggregate{
+		AggregateSignatureHex: "aa",
+		SignedVotingPower:     big.NewInt(600),
+		TotalVotingPower:      big.NewInt(700),
+		Signers: []string{
+			"0xd4a3dbbae0c04d4307c5e00a5e05b66acc289f5d",
+			"0x5555afa8ff8048bddaac1554afd790c9bf7ec6e0",
+			"0x6acaa68417f5ad5d4a02d9d3d72e291effcdf30a",
+			"0x16ab06f3634218a8f1f3b01dcdd32ddfbdc8a69d",
+			"0xf150ff923e29f797b4598b89bd7d02002d00db3a",
+		},
+		// Five signers at 100 each sums to 500, but 600 is declared.
+		SignerPowers: []*big.Int{
+			big.NewInt(100), big.NewInt(100), big.NewInt(100), big.NewInt(100), big.NewInt(100),
+		},
 	}
-	if len(addrs) != len(powers) {
-		t.Fatalf("roster/power length mismatch: %d vs %d", len(addrs), len(powers))
+	err := s.SubmitBatchQuorumProof(context.Background(), 1, [32]byte{}, [32]byte{}, [32]byte{}, agg, [32]byte{})
+	if err == nil {
+		t.Fatal("a declared signed power that does not equal the sum of the signers' powers " +
+			"must be refused before it can burn anchor gas")
 	}
-	if total == nil || total.Sign() <= 0 {
-		t.Fatal("total voting power must be positive")
+	if !strings.Contains(err.Error(), "does not equal the sum") {
+		t.Fatalf("the refusal should name the cause, got: %v", err)
 	}
-	// The signature has exactly four results. A fifth returning signed power would mean the
-	// forgery shape had been reintroduced; this test fails to compile in that case, which is
-	// the intent.
+}
+
+// Signers and SignerPowers are consumed index-for-index; a length mismatch would silently
+// mis-attribute voting power.
+func TestSubmitBatchQuorumProof_RefusesRaggedSignerSet(t *testing.T) {
+	s := submitterWithNoChain()
+	agg := &consensus.QuorumAggregate{
+		AggregateSignatureHex: "aa",
+		SignedVotingPower:     big.NewInt(500),
+		TotalVotingPower:      big.NewInt(700),
+		Signers:               []string{"0xd4a3dbbae0c04d4307c5e00a5e05b66acc289f5d", "0x5555afa8ff8048bddaac1554afd790c9bf7ec6e0"},
+		SignerPowers:          []*big.Int{big.NewInt(100)},
+	}
+	if err := s.SubmitBatchQuorumProof(context.Background(), 1, [32]byte{}, [32]byte{}, [32]byte{}, agg, [32]byte{}); err == nil {
+		t.Fatal("a ragged signer set must be refused")
+	}
 }

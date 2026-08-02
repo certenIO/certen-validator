@@ -352,20 +352,48 @@ func (o *BatchOrchestrator) verifyLeavesAgainstAnchor(ctx context.Context, tree 
 	}
 	opts := &bind.CallOpts{Context: ctx}
 
-	isBatch, err := anchor.IsBatchAnchor(opts, tree.BundleID)
+	// READ-AFTER-WRITE.
+	//
+	// bind.WaitMined returns as soon as the tx appears in a block, but the very next eth_call
+	// can be served by a node that has not applied it yet — public RPC endpoints are load
+	// balanced across peers with independent lag. Observed live 2026-08-02: an anchor mined,
+	// and 121ms later batchLeafCount read back as 0, so the batch was declared unusable and
+	// every member was dropped to the per-intent path even though the anchor was perfectly
+	// good.
+	//
+	// A stale read is indistinguishable from a genuinely broken anchor on a single sample, so
+	// this retries briefly before concluding anything. It gives up quickly: a real mismatch
+	// must still surface rather than being retried forever.
+	var (
+		isBatch bool
+		count   *big.Int
+	)
+	for attempt := 1; attempt <= 6; attempt++ {
+		isBatch, err = anchor.IsBatchAnchor(opts, tree.BundleID)
+		if err == nil && isBatch {
+			count, err = anchor.BatchLeafCount(opts, tree.BundleID)
+			if err == nil && count != nil && count.Int64() == int64(tree.Size()) {
+				break
+			}
+		}
+		if attempt == 6 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Duration(attempt) * 500 * time.Millisecond):
+		}
+	}
 	if err != nil {
-		return fmt.Errorf("reading isBatchAnchor: %w", err)
+		return fmt.Errorf("reading batch anchor state: %w", err)
 	}
 	if !isBatch {
 		return fmt.Errorf("anchor 0x%x is not flagged as a batch anchor", tree.BundleID[:8])
 	}
-
-	count, err := anchor.BatchLeafCount(opts, tree.BundleID)
-	if err != nil {
-		return fmt.Errorf("reading batchLeafCount: %w", err)
-	}
 	if count == nil || count.Int64() != int64(tree.Size()) {
-		return fmt.Errorf("anchor records %v leaves but the tree has %d", count, tree.Size())
+		return fmt.Errorf("anchor records %v leaves but the tree has %d "+
+			"(re-read %d times, so this is not RPC lag)", count, tree.Size(), 6)
 	}
 
 	for i := range tree.Leaves {

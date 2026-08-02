@@ -223,6 +223,48 @@ func (s *BatchProofSubmitterImpl) SubmitBatchQuorumProof(
 				"commitments cover subsets of 5, 6 and 7 only", len(agg.Signers))
 	}
 
+	// THE SIGNERS, not the roster.
+	//
+	// _verifyBLSProof does not take signedVotingPower on trust. It walks validatorAddresses,
+	// looks each address up in the anchor's own registry, refuses unregistered entries,
+	// duplicates and mis-declared powers, and then requires
+	//
+	//	blsProof.signedVotingPower == sum(registered power of validatorAddresses)
+	//
+	// Passing the full seven-validator roster here alongside a 600/700 signed power therefore
+	// fails: the contract recomputes 700 and rejects. That is exactly what a 6-of-7 batch hit
+	// live on 2026-08-02 — the aggregate and the ZK proof were both correct, and the submission
+	// was rejected on the declared signer SET.
+	//
+	// The roster still reaches the contract, via totalVotingPower, which it compares against its
+	// own stored total.
+	validators := make([]common.Address, 0, len(agg.Signers))
+	powers := make([]*big.Int, 0, len(agg.Signers))
+	if len(agg.SignerPowers) != len(agg.Signers) {
+		return fmt.Errorf("aggregate reports %d signers but %d powers; refusing to submit an "+
+			"inconsistent signer set", len(agg.Signers), len(agg.SignerPowers))
+	}
+	for i, s := range agg.Signers {
+		if !common.IsHexAddress(s) {
+			return fmt.Errorf("signer %q is not an EVM address", s)
+		}
+		validators = append(validators, common.HexToAddress(s))
+		powers = append(powers, new(big.Int).Set(agg.SignerPowers[i]))
+	}
+	total := agg.TotalVotingPower
+	signed := agg.SignedVotingPower
+
+	// Cheap local restatement of the contract's own rule, so a mismatch is caught here with a
+	// clear message instead of as an opaque revert that costs the anchor gas.
+	check := big.NewInt(0)
+	for _, p := range powers {
+		check.Add(check, p)
+	}
+	if check.Cmp(signed) != 0 {
+		return fmt.Errorf("declared signed power %s does not equal the sum of the signers' "+
+			"registered powers %s; the anchor would reject this", signed, check)
+	}
+
 	ecm, anchorAddr, err := s.chains.ManagerForChain(chainID)
 	if err != nil {
 		return err
@@ -235,13 +277,6 @@ func (s *BatchProofSubmitterImpl) SubmitBatchQuorumProof(
 	if len(sigBytes) == 0 {
 		return fmt.Errorf("empty aggregate signature")
 	}
-
-	validators, powers, _, err := buildValidatorSetForBatch()
-	if err != nil {
-		return err
-	}
-	total := agg.TotalVotingPower
-	signed := agg.SignedVotingPower
 
 	// The ZK blob. Proven against the AGGREGATE public key — the pairing only holds for the key
 	// the aggregate signature actually verifies under, which is what AggregateBatchAttestations
@@ -323,27 +358,13 @@ func (s *BatchProofSubmitterImpl) SubmitBatchQuorumProof(
 	return nil
 }
 
-// buildValidatorSetForBatch returns the REGISTERED validator roster and its total power.
+// NOTE: buildValidatorSetForBatch was REMOVED.
 //
-// Sourced from contracts.GetV6_1ValidatorSet — the SAME place the validator-set root comes
-// from. Deriving these independently would let the roster submitted on-chain drift from the
-// one the signed setRoot commits to.
-//
-// It deliberately does NOT return a signed power. It used to, and it returned the total: every
-// batch declared a full 7-of-7 quorum no matter who signed. Signed power is a property of the
-// partials that verified, so it now comes from QuorumAggregate.SignedVotingPower and nowhere
-// else.
-func buildValidatorSetForBatch() ([]common.Address, []*big.Int, *big.Int, error) {
-	addrs, powers, err := contracts.GetV6_1ValidatorSet()
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("validator set: %w", err)
-	}
-	total := big.NewInt(0)
-	for _, p := range powers {
-		total = new(big.Int).Add(total, p)
-	}
-	return addrs, powers, total, nil
-}
+// It returned the full registered roster, which is the wrong thing to put in
+// BLSProofData.validatorAddresses. The anchor treats that field as the set that SIGNED and
+// recomputes signedVotingPower from it, so a roster paired with a partial signed power is
+// rejected outright. The signer set now comes from QuorumAggregate.Signers/SignerPowers, which
+// are derived from partials that actually verified.
 
 // abiFromJSON parses a minimal inline ABI.
 func abiFromJSON(j string) (abi.ABI, error) {
