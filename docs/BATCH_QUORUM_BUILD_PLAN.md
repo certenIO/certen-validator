@@ -466,3 +466,69 @@ with its own tests, not a tail-end edit during a deploy.
 
 Until then, set `BATCH_PERIOD_BLOCKS` to match real traffic: small periods close sooner but
 batch fewer members. Deployed at 5.
+
+---
+
+## LIVE VERIFICATION (2026-08-02, Sepolia)
+
+Deployed via `deploy/deploy-validators.sh`: seven images built capped (peak load 11, versus
+5825 for the earlier uncapped build), rolling restart in groups of two, quorum never broken.
+
+### Identity self-configuration — CONFIRMED
+
+All seven resolved their attesting address from the anchor's BLS registry with NO
+`VALIDATOR_EVM_ADDRESS` anywhere:
+
+```
+validator-1 → 0xd4a3dbba…   validator-5 → 0xf150ff92…
+validator-2 → 0x5555afa8…   validator-6 → 0x70a6a81b…
+validator-3 → 0x6acaa684…   validator-7 → 0xee2efa29…
+```
+
+Each matches what `cmd/batchpreflight` predicted offline. This closes the identity gap that
+would otherwise have left every peer answering 503.
+
+### Every validator enqueues — CONFIRMED, and this was the blocking defect
+
+Intent `d81aecef-922b-4ce4-8d40-4b9b63ffbe74`, one leg, 1 wei on Sepolia:
+
+```
+v1 📦 BATCH-QUEUE queued  +  NOT elected executor
+v2 📦 BATCH-QUEUE queued  +  NOT elected executor
+v3 📦 BATCH-QUEUE queued  +  NOT elected executor
+v4 📦 BATCH-QUEUE queued  +  NOT elected executor
+v5 📦 BATCH-QUEUE queued  +  NOT elected executor
+v6 📦 BATCH-QUEUE queued  +  ⚡ ELECTED EXECUTOR
+v7 📦 BATCH-QUEUE queued  +  NOT elected executor
+```
+
+All seven hold the member while only ONE is the round's elected executor. Before the fix the
+six non-executors returned before the enqueue, so their mempools were empty, `PeekForPeriod`
+returned nothing, and every attestation request was refused — quorum could never have formed
+and it would have read as ordinary peer disagreement.
+
+### Pipeline timing, measured
+
+Discovery → L1-L3 chained proof → G0/G1/G2 → ValidatorBlock → BFT commit took roughly three
+minutes end to end, dominated by the three governance proofs at ~30s each. Chain height moved
+195 → 200 on the committed round, which is also what closes the intent's period.
+
+## Corrections to earlier entries in this document
+
+Two root-cause claims made during the 2026-08-02 outage were WRONG and are corrected here so
+the record is not misleading:
+
+1. **The ZK keys were never missing.** `proving_key.bin` is present on the host and its digest
+   matches `deploy/bls_zk_keys.SHA256SUMS` exactly. The trusted setup never ran. The Dockerfile
+   hardening and `cmd/vkcheck` remain correct and worth having, but they address a LATENT
+   hazard — they did not fix this outage.
+2. **The build was not the primary cause.** A co-tenant container (`tidemark-prod-frontend`,
+   unrelated to Certen) was spawning hundreds of `npm install` processes; at peak, 916 zombies
+   under one `npm start`, load 7169. It recurred after a clean reboot with nothing of ours
+   running.
+
+What WAS ours: `kernel.pid_max` was 32768 against a ~19,000-thread idle baseline, so an
+unbounded build consumed thin headroom and helped tip a host that was already degrading. The
+prior boot shows `fork: EAGAIN` across sshd, dockerd and udevd with ZERO OOM kills — PID
+exhaustion, not memory, on a box with 62GB RAM. Raised to 4194304 in
+`/etc/sysctl.d/99-certen-pids.conf`, and every build is now capped by the deploy script.
