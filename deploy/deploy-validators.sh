@@ -27,7 +27,10 @@ SERVICES=(validator-1 validator-2 validator-3 validator-4 validator-5 validator-
 
 # Restart groups. Never more than 2 down at once: CometBFT needs 5 of 7 to make progress, so
 # taking 3 down stalls the chain and taking 4 down halts it.
-GROUPS=("validator-1 validator-2" "validator-3 validator-4" "validator-5 validator-6" "validator-7")
+# NOT named GROUPS: bash reserves that as a readonly array of the current user's group IDs, so
+# the assignment is silently ignored and the loop iterates over group numbers instead of
+# service names ("restarting: 0" / "no such service: 0").
+RESTART_GROUPS=("validator-1 validator-2" "validator-3 validator-4" "validator-5 validator-6" "validator-7")
 
 # Build limits. The host has other tenants; a build must never be able to starve them.
 BUILD_CPUS=${BUILD_CPUS:-2}
@@ -145,7 +148,7 @@ wait_healthy() {
     return 1
 }
 
-for group in "${GROUPS[@]}"; do
+for group in "${RESTART_GROUPS[@]}"; do
     printf '  restarting: %s\n' "$group"
     # shellcheck disable=SC2086
     docker compose up -d --no-deps $group >/dev/null
