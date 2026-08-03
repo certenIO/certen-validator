@@ -451,7 +451,11 @@ func (s *BatchStack) flushOneChain(
 		attest(ctx, m.Attestation, res.TxHashes[m.IntentID], chainID, true)
 	}
 	for _, m := range res.Failed {
-		attest(ctx, m.Attestation, "", chainID, false)
+		// Pass the reverted member's transaction hash when it has one. It is empty only when the
+		// member never reached the chain at all (branch error, or a send that never entered the
+		// mempool); in that case RunProofCycle routes to recordFailedProofCycle, which still
+		// attests and writes back so the outcome is never silent.
+		attest(ctx, m.Attestation, res.TxHashes[m.IntentID], chainID, false)
 	}
 }
 

@@ -304,7 +304,16 @@ func (o *BatchOrchestrator) FlushChain(
 		txHash, serr := o.settleMember(ctx, p, tree, branch)
 		if serr != nil {
 			res.Failed = append(res.Failed, p)
-			o.logf("[BATCH] member %s FAILED: %v", p.IntentID, serr)
+			// Keep the hash of a member that REVERTED. settleMember returns one whenever the
+			// transaction was mined, and a reverted transaction is on chain and independently
+			// verifiable — it is the evidence of the failure, not the absence of evidence.
+			// Discarding it left Phase 7 with nothing to observe, so the failure never reached
+			// acc://certen-protocol.acme/execution-results and the ADI could not tell a reverted
+			// intent from one that was never processed.
+			if txHash != "" {
+				res.TxHashes[p.IntentID] = txHash
+			}
+			o.logf("[BATCH] member %s FAILED: %v (tx=%s)", p.IntentID, serr, txHash)
 			continue
 		}
 		res.Settled = append(res.Settled, p)
