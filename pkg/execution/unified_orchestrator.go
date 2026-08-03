@@ -1606,8 +1606,25 @@ func (o *UnifiedOrchestrator) HandlePeerAttestationRequest(
 	if !obs.IsFinalized {
 		return fail("anchor transaction not finalized on independent observation")
 	}
-	if obs.Status != 1 { // 0=pending, 1=success, 2=failed
-		return fail(fmt.Sprintf("anchor transaction not successful (status=%d)", obs.Status))
+	// A REVERT is an outcome, not a reason to refuse.
+	//
+	// This demanded status==1. A batch member that reverts on chain is a real, finalized,
+	// independently verifiable result — the receipt proves it — but every peer refused to attest
+	// it, so the failure never reached quorum and Phase 9 never wrote it back. The ADI could not
+	// tell a reverted intent from one that was never processed, which is the exact silence the
+	// failure policy exists to remove. Observed live 2026-08-03: achieved=1 of required=5 on the
+	// reverted member while the settled member of the SAME batch reached 7 of 7.
+	//
+	// What must still hold is that peers agree on WHICH outcome occurred, and the ResultHash
+	// comparison immediately below enforces that: it is derived from the peer's own observation,
+	// so a success cannot be passed off as a revert or the reverse. Only a non-terminal status is
+	// rejected here — there is nothing settled to attest yet.
+	if obs.Status != 1 && obs.Status != 2 { // 0=pending, 1=success, 2=failed
+		return fail(fmt.Sprintf("anchor transaction has no terminal outcome yet (status=%d)", obs.Status))
+	}
+	if obs.Status == 2 {
+		fmt.Printf("[Phase 8] attesting a REVERTED execution (%s) — outcome is failure, bound by result hash\n",
+			msg.AnchorTxHash)
 	}
 	if obs.ResultHash != msg.ResultHash {
 		return fail("independently-observed result hash does not match requested message — refusing to attest")
