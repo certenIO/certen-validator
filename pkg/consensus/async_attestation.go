@@ -319,15 +319,48 @@ func (bv *BFTValidator) RunProofCycle(
 			executionMode, _ := att.CertenIntent.GetExecutionMode()
 			operationID := att.CertenIntent.IntentID
 
-			if err := bv.proofCycleOrchestrator.StartPerChainProofCycles(
-				ctx, att.CertenIntent.IntentID, operationID, bundleID,
-				chainTxHashes, legInfos, executionMode, commitment,
-				att.CertenIntent.AccountURL, att.CertenIntent.TransactionHash, "",
-			); err != nil {
-				bv.logger.Printf("⚠️ [MULTI-LEG-PROOF] Per-chain proof cycles failed: %v", err)
+			// Never hand the aggregator legs it has no transactions to resolve.
+			//
+			// This called StartPerChainProofCycles unconditionally. When every leg failed to
+			// execute, res.GovernanceTxHash holds "execution_failed_leg-..." markers rather than
+			// hashes, parseMultiChainTxHashes yields ZERO groups, and the call still registered
+			// the intent as awaiting one group PER LEG. It then logged success — "started for 0
+			// chain groups" under a ✅ — and returned, skipping the single-leg fallback. The
+			// intent waited forever on groups that were never created: no settlement, no failure,
+			// and nothing written back to acc://certen-protocol.acme/execution-results. Observed
+			// live 2026-08-03 on a two-leg Sepolia+Base intent.
+			//
+			// With no groups there is nothing multi-leg to do, so fall through to the single-leg
+			// path, which fails closed and records the outcome.
+			if len(chainTxHashes) == 0 {
+				bv.logger.Printf("❌ [MULTI-LEG-PROOF] intent %s has %d leg(s) but NO observable "+
+					"transaction on any chain (governance=%q create=%q) — not registering with the "+
+					"aggregator; falling through so the outcome is recorded",
+					att.CertenIntent.IntentID, len(legInfos), res.GovernanceTxHash, res.CreateTxHash)
 			} else {
-				bv.logger.Printf("✅ [MULTI-LEG-PROOF] Per-chain proof cycles started for %d chain groups", len(chainTxHashes))
-				return // Multi-leg handled - skip single-leg fallback
+				// A partial set still stalls: the aggregator waits on every leg it was told about,
+				// so a leg whose chain produced no transaction never reports. Name them.
+				if len(chainTxHashes) < len(legInfos) {
+					missing := make([]string, 0, len(legInfos))
+					for _, li := range legInfos {
+						if _, ok := chainTxHashes[li.ChainKey]; !ok {
+							missing = append(missing, li.ChainKey)
+						}
+					}
+					bv.logger.Printf("⚠️ [MULTI-LEG-PROOF] intent %s: %d leg(s) but only %d chain "+
+						"group(s); no transaction for %v — those legs cannot resolve",
+						att.CertenIntent.IntentID, len(legInfos), len(chainTxHashes), missing)
+				}
+				if err := bv.proofCycleOrchestrator.StartPerChainProofCycles(
+					ctx, att.CertenIntent.IntentID, operationID, bundleID,
+					chainTxHashes, legInfos, executionMode, commitment,
+					att.CertenIntent.AccountURL, att.CertenIntent.TransactionHash, "",
+				); err != nil {
+					bv.logger.Printf("⚠️ [MULTI-LEG-PROOF] Per-chain proof cycles failed: %v", err)
+				} else {
+					bv.logger.Printf("✅ [MULTI-LEG-PROOF] Per-chain proof cycles started for %d chain groups", len(chainTxHashes))
+					return // Multi-leg handled - skip single-leg fallback
+				}
 			}
 		}
 	}
