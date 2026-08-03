@@ -13,6 +13,7 @@ package strategy
 import (
 	"context"
 	"fmt"
+	"github.com/certen/independant-validator/pkg/ethrpc"
 	"math/big"
 	"strings"
 	"sync"
@@ -74,7 +75,9 @@ func DefaultEVMStrategyConfig() *EVMStrategyConfig {
 type EVMStrategy struct {
 	// endpoints is the ordered RPC list this strategy may use, for diagnostics.
 	endpoints []string
-	mu        sync.RWMutex
+	// pool rotates OBSERVATION reads across endpoints; nil when only one is configured.
+	pool *ethrpc.Pool
+	mu   sync.RWMutex
 
 	// Configuration
 	config *EVMStrategyConfig
@@ -129,6 +132,15 @@ func NewEVMStrategy(config *EVMStrategyConfig) (*EVMStrategy, error) {
 	}
 	strategy.client = client
 	strategy.endpoints = dialed
+	// Per-request failover for reads. dialFirstReachable only picks an endpoint that CONNECTS;
+	// the free L2 providers connect fine and then refuse archive eth_getLogs/receipt lookups, so
+	// connect-time selection alone never reaches the paid tier. The pool rotates on the refusal
+	// itself, which is what makes an L2 leg observable in Phase 7.
+	if len(dialed) > 1 {
+		if pool, perr := ethrpc.NewPool(dialed, ethrpc.CooldownFromEnv(), nil); perr == nil {
+			strategy.pool = pool
+		}
+	}
 
 	// Get chain ID
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -341,13 +353,24 @@ func (s *EVMStrategy) GetRequiredConfirmations() int {
 
 // GetCurrentBlock returns the current block number
 func (s *EVMStrategy) GetCurrentBlock(ctx context.Context) (uint64, error) {
-	return s.client.BlockNumber(ctx)
+	var n uint64
+	err := s.read(ctx, func(c *ethclient.Client) error {
+		var e error
+		n, e = c.BlockNumber(ctx)
+		return e
+	})
+	return n, err
 }
 
 // GetTransactionReceipt retrieves a transaction receipt
 func (s *EVMStrategy) GetTransactionReceipt(ctx context.Context, txHash string) (*ObservationResult, error) {
 	hash := common.HexToHash(txHash)
-	receipt, err := s.client.TransactionReceipt(ctx, hash)
+	var receipt *types.Receipt
+	err := s.read(ctx, func(c *ethclient.Client) error {
+		var e error
+		receipt, e = c.TransactionReceipt(ctx, hash)
+		return e
+	})
 	if err != nil {
 		return nil, fmt.Errorf("get receipt: %w", err)
 	}
@@ -363,13 +386,23 @@ func (s *EVMStrategy) GetTransactionReceipt(ctx context.Context, txHash string) 
 	}
 
 	// Get block for timestamp
-	block, err := s.client.BlockByHash(ctx, receipt.BlockHash)
+	var block *types.Block
+	err = s.read(ctx, func(c *ethclient.Client) error {
+		var e error
+		block, e = c.BlockByHash(ctx, receipt.BlockHash)
+		return e
+	})
 	if err == nil {
 		result.BlockTimestamp = time.Unix(int64(block.Time()), 0)
 	}
 
 	// Calculate confirmations
-	currentBlock, err := s.client.BlockNumber(ctx)
+	var currentBlock uint64
+	err = s.read(ctx, func(c *ethclient.Client) error {
+		var e error
+		currentBlock, e = c.BlockNumber(ctx)
+		return e
+	})
 	if err == nil {
 		result.Confirmations = int(currentBlock - receipt.BlockNumber.Uint64())
 		result.RequiredConfirmations = s.GetRequiredConfirmations()
@@ -661,4 +694,18 @@ func dialFirstReachable(endpoints []string, primary string) (*ethclient.Client, 
 		return client, ordered, nil
 	}
 	return nil, ordered, fmt.Errorf("all %d endpoint(s) failed, last error: %w", len(ordered), lastErr)
+}
+
+// read runs an observation call, rotating endpoints when one refuses.
+//
+// READS ONLY. Sends and nonce lookups deliberately stay pinned to s.client: rotating those across
+// providers is precisely how a consumed nonce gets handed back ("nonce too low"), which cost a
+// whole batch its settlement on 2026-08-03. Failover is safe for observation because every
+// endpoint answers about the same committed chain state; it is not safe for anything that depends
+// on one provider's view of the pending pool.
+func (s *EVMStrategy) read(ctx context.Context, fn func(*ethclient.Client) error) error {
+	if s.pool == nil {
+		return fn(s.client)
+	}
+	return s.pool.Do(ctx, fn)
 }
