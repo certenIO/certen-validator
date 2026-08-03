@@ -138,3 +138,46 @@ func PoolForChain(chainKey string, logger *log.Logger) (*Pool, error) {
 	}
 	return NewPool(urls, CooldownFromEnv(), logger)
 }
+
+// ChainKeyForID maps an EVM chain ID to the key used for its environment variables.
+//
+// Returns "" for a chain this build does not know, and callers must then fall back to that
+// chain's own single URL rather than to Ethereum's — see EndpointsForChainID.
+func ChainKeyForID(chainID int64) string {
+	switch chainID {
+	case 1:
+		return "ethereum"
+	case 11155111:
+		return "ethereum-sepolia"
+	case 84532:
+		return "base-sepolia"
+	case 421614:
+		return "arbitrum-sepolia"
+	case 11155420:
+		return "optimism-sepolia"
+	case 80002:
+		return "polygon-amoy"
+	case 97:
+		return "bsc-testnet"
+	case 1287:
+		return "moonbase-alpha"
+	case 296:
+		return "hedera-testnet"
+	}
+	return ""
+}
+
+// EndpointsForChainID resolves a chain's endpoints from its numeric ID, with primary as the
+// last-resort entry.
+//
+// NEVER mixes another chain's endpoints in. A pool built from Ethereum's fallback variables while
+// watching Base would rotate onto Ethereum on the first refusal and observe an entirely different
+// chain's logs — the observation would look successful and be meaningless. An unknown chain gets
+// its own URL alone, which is strictly what it had before per-chain resolution existed.
+func EndpointsForChainID(chainID int64, primary string) []string {
+	key := ChainKeyForID(chainID)
+	if key == "" {
+		return ParseEndpoints(primary)
+	}
+	return ParseEndpoints(append([]string{primary}, EndpointsForChain(key)...)...)
+}

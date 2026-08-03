@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"log"
 	"math/big"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -396,13 +395,15 @@ func NewEventWatcher(config *EventWatcherConfig, logger *log.Logger) (*EventWatc
 	// quota on routine polling and eventually 429s. The pool tries cheapest first and escalates
 	// only when a provider actually refuses. config.EthereumURL stays the primary, so a deployment
 	// that sets no fallbacks behaves exactly as before.
+	// Resolve THIS chain's endpoints.
+	//
+	// These were Ethereum's variables regardless of which chain was being watched. On Ethereum
+	// that was correct; on any L2 it was worse than having no fallback — the pool would rotate
+	// onto Ethereum Sepolia on the first refusal and filter logs from a different chain, which
+	// succeeds and means nothing. Each chain now resolves its own tier, and an unknown chain gets
+	// its own URL alone.
 	pool, err := ethrpc.NewPool(
-		ethrpc.ParseEndpoints(
-			config.EthereumURL,
-			os.Getenv(ethrpc.EnvFallbacks),
-			os.Getenv(ethrpc.EnvInfura),
-			os.Getenv(ethrpc.EnvAlchemy),
-		),
+		ethrpc.EndpointsForChainID(config.ChainID, config.EthereumURL),
 		ethrpc.CooldownFromEnv(),
 		logger,
 	)
