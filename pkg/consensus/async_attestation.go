@@ -137,7 +137,23 @@ func (bv *BFTValidator) RunProofCycle(
 	if att == nil || res == nil {
 		return
 	}
-	if bv.proofCycleOrchestrator == nil || res.AnchorTxID == "" {
+	if bv.proofCycleOrchestrator == nil {
+		bv.logger.Printf("⚠️ [PROOF-CYCLE] no orchestrator configured; intent %s cannot be "+
+			"attested back to Accumulate", att.IntentID)
+		return
+	}
+
+	// A member with NO transaction at all — a batch member whose settlement reverted.
+	//
+	// This used to return silently, which is the failure mode the whole batch design exists to
+	// avoid: the intent settled nowhere, was recorded nowhere, and its ADI learned nothing. It
+	// is not an observation problem — there is genuinely nothing on the destination chain to
+	// observe — so Phase 7 is skipped deliberately and the FAILURE is recorded instead.
+	if extractRawTxHash(res.GovernanceTxHash) == "" && extractRawTxHash(res.AnchorTxID) == "" {
+		bv.logger.Printf("❌ [PROOF-CYCLE] intent %s has no settlement transaction (execution "+
+			"reverted); skipping Phase 7 observation — there is nothing on chain to observe — "+
+			"and recording the FAILURE so the intent is not silently lost", att.IntentID)
+		bv.recordFailedProofCycle(ctx, att, res)
 		return
 	}
 	if ctx == nil {
@@ -322,11 +338,24 @@ func (bv *BFTValidator) RunProofCycle(
 		VerifyTxHash:     common.HexToHash(extractPureHexHash(res.VerifyTxHash)),
 		GovernanceTxHash: common.HexToHash(extractPureHexHash(res.GovernanceTxHash)),
 		PrimaryTxHash:    common.HexToHash(extractPureHexHash(res.AnchorTxID)),
-		RawTxHashes: []string{
-			extractRawTxHash(res.CreateTxHash),
-			extractRawTxHash(res.VerifyTxHash),
-			extractRawTxHash(res.GovernanceTxHash),
-		},
+		// ONLY the hashes that exist.
+		//
+		// This was a fixed three-slot list. A BATCH member has no separate create or verify
+		// transaction — the anchor and its quorum attestation are paid ONCE for the whole tree,
+		// which is the entire point of batching — so those two slots were empty strings. Phase 7
+		// iterates the list and polls for a receipt per entry, so it hit index 0 = "" and burned
+		// the full observation timeout:
+		//
+		//	observe transaction 0 (): wait for receipt: context deadline exceeded
+		//
+		// Phase 7 then returned an error, so Phase 8 (the post-exec BLS attestation) and Phase 9
+		// (write-back to acc://certen-protocol.acme/execution-results) never ran. Every batched
+		// intent settled on chain and was never recorded back on Accumulate — the on-chain half
+		// completed and the loop never closed. Observed live 2026-08-03.
+		//
+		// Filtering keeps Phase 7 doing exactly its job: it observes the transactions that
+		// genuinely exist and builds real inclusion proofs for them.
+		RawTxHashes: nonEmptyTxHashes(res.CreateTxHash, res.VerifyTxHash, res.GovernanceTxHash),
 	}
 
 	if err := bv.proofCycleOrchestrator.StartProofCycleWithAccumulateRef(
@@ -394,4 +423,70 @@ func (bv *BFTValidator) captureAttestation(
 	}
 
 	return att
+}
+
+// nonEmptyTxHashes returns the raw hashes that are actually present.
+//
+// Phase 7 observes one transaction per entry, so an empty entry is not a harmless placeholder —
+// it is a receipt poll that can never resolve, and it fails the whole cycle.
+func nonEmptyTxHashes(candidates ...string) []string {
+	out := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		if v := extractRawTxHash(c); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// recordFailedProofCycle records an intent that produced no settlement transaction.
+//
+// Phase 7 is genuinely inapplicable — there is no transaction to observe and no inclusion proof
+// to build — but Phases 8 and 9 still matter: the outcome must be attested and written back to
+// acc://certen-protocol.acme/execution-results, or the ADI has no record that its intent was
+// attempted and failed. Silence is indistinguishable from an intent that was never processed.
+func (bv *BFTValidator) recordFailedProofCycle(
+	ctx context.Context,
+	att *PendingAttestation,
+	res *verification.AnchorExecutionResult,
+) {
+	if bv.proofCycleOrchestrator == nil || att == nil {
+		return
+	}
+	failed := &verification.AnchorExecutionResult{
+		Network:                  res.Network,
+		AllTransactionsConfirmed: false,
+	}
+	// An empty tx-hash set is the signal to the orchestrator that there is nothing to observe.
+	// It carries the same Accumulate reference as a successful cycle, so the write-back lands
+	// against the same intent.
+	txHashes := &AnchorWorkflowTxHashes{RawTxHashes: nil}
+
+	var bundleID [32]byte
+	if decoded, derr := hex.DecodeString(strings.TrimPrefix(att.BundleIDHex, "0x")); derr == nil && len(decoded) >= 32 {
+		copy(bundleID[:], decoded[:32])
+	}
+	commitment := map[string]interface{}{
+		"intentId":                 att.IntentID,
+		"outcome":                  "failed",
+		"reason":                   "no settlement transaction; execution reverted on the target chain",
+		"allTransactionsConfirmed": false,
+		"network":                  failed.Network,
+	}
+
+	if err := bv.proofCycleOrchestrator.StartProofCycleWithAccumulateRef(
+		ctx,
+		att.CertenIntent.IntentID,
+		att.CertenIntent.UserID,
+		bundleID,
+		txHashes,
+		commitment,
+		att.CertenIntent.AccountURL,
+		att.CertenIntent.TransactionHash,
+		"",
+	); err != nil {
+		bv.logger.Printf("⚠️ [PROOF-CYCLE] could not record the failure of intent %s: %v — the "+
+			"intent is settled nowhere AND recorded nowhere, which needs operator attention",
+			att.IntentID, err)
+	}
 }
