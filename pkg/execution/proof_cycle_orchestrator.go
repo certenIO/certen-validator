@@ -2293,15 +2293,39 @@ func (o *ProofCycleOrchestrator) persistAggregatedBLSAttestation(
 
 	attestationIDs := make([]uuid.UUID, 0, len(blsAttestations))
 	publicKeys := make([]*bls.PublicKey, 0, len(blsAttestations))
+	// Every attestation must contribute its key, or none of them do.
+	//
+	// This skipped an empty BLSPublicKey and swallowed a parse error, then folded whatever
+	// survived. The aggregate pubkey commitment is a fold of the SIGNER SET, and CertenAnchorV8_1
+	// authorises only the 29 legal quorum subsets — C(7,5)+C(7,6)+C(7,7). Dropping even one key
+	// silently yields a fold outside that set, so the anchor rejects the proof with
+	// ProofVerificationFailedErr and the whole cycle fails for a reason nothing reported.
+	// Observed live 2026-08-03: the multi-leg proof carried zero authorized commitments.
+	//
+	// A dropped key is a defect, not a degraded mode — fail here, with the reason.
+	var dropped []string
 	for _, att := range blsAttestations {
 		attestationIDs = append(attestationIDs, att.AttestationID)
-		// Collect public keys for aggregation
-		if len(att.BLSPublicKey) > 0 {
-			pk, err := bls.PublicKeyFromBytes(att.BLSPublicKey)
-			if err == nil {
-				publicKeys = append(publicKeys, pk)
-			}
+		if len(att.BLSPublicKey) == 0 {
+			dropped = append(dropped, fmt.Sprintf("%s(empty key)", att.AttestationID))
+			continue
 		}
+		pk, err := bls.PublicKeyFromBytes(att.BLSPublicKey)
+		if err != nil {
+			dropped = append(dropped, fmt.Sprintf("%s(%v)", att.AttestationID, err))
+			continue
+		}
+		publicKeys = append(publicKeys, pk)
+	}
+	if len(dropped) > 0 {
+		o.logger.Printf("❌ [PHASE-8] %d of %d attestation(s) contributed no usable public key %v — "+
+			"refusing to aggregate a partial signer set, whose commitment the anchor would reject",
+			len(dropped), len(blsAttestations), dropped)
+		return
+	}
+	if len(publicKeys) == 0 {
+		o.logger.Printf("❌ [PHASE-8] no public keys to aggregate — refusing to build a proof")
+		return
 	}
 
 	// Compute aggregate public key
@@ -2325,6 +2349,22 @@ func (o *ProofCycleOrchestrator) persistAggregatedBLSAttestation(
 	validatorIndices := make([]int32, len(validatorAddresses))
 	// Note: We don't have individual validator indices in AggregatedAttestation
 	// So we'll leave them as zeros for now
+
+	// The folded set must be a LEGAL QUORUM (>= 2/3 voting power).
+	//
+	// Only the 29 quorum subsets are authorised on chain, so folding a sub-quorum set produces a
+	// commitment the anchor cannot accept. Catching it here reports which threshold was missed;
+	// letting it through costs a reverted transaction that says only "proof verification failed".
+	if agg.SignedVotingPower != nil && agg.TotalVotingPower != nil && agg.TotalVotingPower.Sign() > 0 {
+		signedX3 := new(big.Int).Mul(agg.SignedVotingPower, big.NewInt(3))
+		totalX2 := new(big.Int).Mul(agg.TotalVotingPower, big.NewInt(2))
+		if signedX3.Cmp(totalX2) < 0 {
+			o.logger.Printf("❌ [PHASE-8] signer set is below quorum: %s of %s voting power from %d key(s) "+
+				"— refusing to submit a proof whose commitment is not an authorised quorum subset",
+				agg.SignedVotingPower, agg.TotalVotingPower, len(publicKeys))
+			return
+		}
+	}
 
 	// Compute aggregation hash
 	aggHash := agg.ComputeAggregateHash()
