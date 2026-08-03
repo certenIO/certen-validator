@@ -233,14 +233,28 @@ func (btce *BFTTargetChainExecutor) ExtractExecutionParams(
 		}
 	}
 
-	// Get anchor contract address from env or intent
-	anchorContractAddr := os.Getenv("CERTEN_ANCHOR_V3_ADDRESS")
+	// The SIGNED INTENT decides which anchor this leg targets. Environment is a fallback only.
+	//
+	// This was reversed: a single global CERTEN_ANCHOR_V3_ADDRESS overrode the per-leg address on
+	// every chain. That is wrong on two counts. It is one address for an intent whose legs may
+	// each live on a different chain — an anchor from the wrong chain cannot verify anything. And
+	// it overrides what the ADI actually authorised with node-local configuration, so two nodes
+	// with different env would execute the same signed intent against different contracts.
+	//
+	// Live on 2026-08-03 a two-leg intent had leg anchors b39b707D (Sepolia V8.1) and EA9eeeE4
+	// (Base V8.1); Sepolia executed against 14885Fe8 — a V6.1 anchor — and reverted with "Proof
+	// verification failed", because a V6.1 contract cannot verify a V8.1 proof. Three separate
+	// resolvers disagreed about the anchor; this is the only one that sees what was signed.
+	anchorContractAddr := leg.AnchorContract.Address
+	anchorSrc := "signed intent leg"
 	if anchorContractAddr == "" {
-		anchorContractAddr = leg.AnchorContract.Address
+		anchorContractAddr = os.Getenv("CERTEN_ANCHOR_V3_ADDRESS")
+		anchorSrc = "CERTEN_ANCHOR_V3_ADDRESS"
 	}
 	if anchorContractAddr == "" {
 		return nil, fmt.Errorf("no anchor contract address in intent or environment")
 	}
+	btce.logger.Printf("   ⚓ leg %s anchor %s (from %s)", leg.LegID, anchorContractAddr, anchorSrc)
 
 	// RB-1: real calldata for arbitrary contract calls; empty for native transfers.
 	callData := []byte{}
