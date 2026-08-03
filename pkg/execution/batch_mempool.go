@@ -158,6 +158,54 @@ type BatchMempool struct {
 	mu   sync.Mutex
 	pool map[int64][]*PendingBatchIntent
 	seen map[string]bool // intentID -> queued, for idempotent Add
+
+	// store persists the queue so a restart resumes with its members instead of stranding
+	// intents the round has already reported as batch_queued. Nil disables persistence and
+	// leaves only the discovery watermark rewind as the recovery path.
+	store *BatchMempoolStore
+}
+
+// SetStore attaches durable storage and restores anything previously queued.
+//
+// Called once during wiring, BEFORE the enqueuer is published, so a restored member cannot race
+// a freshly discovered one.
+func (m *BatchMempool) SetStore(store *BatchMempoolStore, logf func(string, ...interface{})) {
+	if logf == nil {
+		logf = func(string, ...interface{}) {}
+	}
+	m.mu.Lock()
+	m.store = store
+	m.mu.Unlock()
+
+	if store == nil {
+		return
+	}
+	n, err := store.Load(m)
+	if err != nil {
+		logf("[BATCH-STORE] restore failed: %v", err)
+		return
+	}
+	if n > 0 {
+		logf("[BATCH-STORE] restored %d queued batch member(s) from the previous run; they keep "+
+			"their original CommitHeight, so they land in exactly the period they would have", n)
+	}
+}
+
+// persist writes the queue. Caller must NOT hold m.mu — Save takes it.
+func (m *BatchMempool) persist() {
+	m.mu.Lock()
+	st := m.store
+	m.mu.Unlock()
+	if st == nil {
+		return
+	}
+	if err := st.Save(m); err != nil {
+		// A failed write is not fatal: the in-memory queue is still correct and the discovery
+		// rewind remains as a backstop. Losing the process now costs a re-derivation, not an
+		// intent.
+		st.logf("[BATCH-STORE] snapshot write failed (%v); the queue is intact in memory and "+
+			"re-derivation remains available", err)
+	}
 }
 
 func NewBatchMempool(cfg BatchMempoolConfig) *BatchMempool {
@@ -172,7 +220,19 @@ func NewBatchMempool(cfg BatchMempoolConfig) *BatchMempool {
 //
 // Validation happens here rather than at flush time so a malformed member is rejected while
 // the caller still has context, instead of poisoning a tree that other intents are waiting on.
+// Add queues a member and snapshots the queue.
+//
+// The snapshot is taken AFTER the lock is released, never from inside it: persist() acquires
+// m.mu to read the pool, and a deferred call would run before the unlock and deadlock.
 func (m *BatchMempool) Add(p *PendingBatchIntent) error {
+	if err := m.add(p); err != nil {
+		return err
+	}
+	m.persist()
+	return nil
+}
+
+func (m *BatchMempool) add(p *PendingBatchIntent) error {
 	if p == nil {
 		return fmt.Errorf("nil intent")
 	}
@@ -348,6 +408,13 @@ func (m *BatchMempool) PeekForPeriod(chainID int64, periodStart, periodBlocks ui
 // TakeForPeriod is PeekForPeriod plus removal. Only the validator that actually submits the
 // batch calls this.
 func (m *BatchMempool) TakeForPeriod(chainID int64, periodStart, periodBlocks uint64) []*PendingBatchIntent {
+	taken := m.takeForPeriod(chainID, periodStart, periodBlocks)
+	// Snapshot after the lock is released — persist() re-acquires m.mu.
+	m.persist()
+	return taken
+}
+
+func (m *BatchMempool) takeForPeriod(chainID int64, periodStart, periodBlocks uint64) []*PendingBatchIntent {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -516,6 +583,11 @@ func (m *BatchMempool) DropMembers(members []*PendingBatchIntent) {
 	if len(members) == 0 {
 		return
 	}
+	m.dropMembers(members)
+	m.persist()
+}
+
+func (m *BatchMempool) dropMembers(members []*PendingBatchIntent) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	remove := make(map[string]bool, len(members))

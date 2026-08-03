@@ -1329,6 +1329,24 @@ func startValidator(
 					// The attester compares an incoming request's period width against this and
 					// refuses a mismatch, so a proposer cannot widen what this node selects.
 					stack.PeriodBlocks = batchPeriodBlocksFromEnv()
+
+					// DURABILITY. Restore anything queued before a restart, BEFORE the enqueuer
+					// is published below, so a restored member cannot race a freshly discovered
+					// one. Without this the round has already reported batch_queued while the
+					// member is gone: neither settled, failed, nor retried.
+					storePath := strings.TrimSpace(os.Getenv("BATCH_MEMPOOL_PATH"))
+					if storePath == "" {
+						storePath = "data/batch_mempool.json"
+					}
+					if mstore, mErr := execution.NewBatchMempoolStore(
+						storePath, consensus.PendingAttestationCodec{}, log.Printf,
+					); mErr != nil {
+						log.Printf("⚠️ [BATCH] Mempool persistence unavailable (%v) — queued members "+
+							"will rely on discovery re-derivation after a restart", mErr)
+					} else {
+						stack.Mempool.SetStore(mstore, log.Printf)
+						log.Printf("💾 [BATCH] Mempool persisted at %s", storePath)
+					}
 					// Drain first, enqueue second.
 					go stack.RunFlushLoop(
 						context.Background(),
