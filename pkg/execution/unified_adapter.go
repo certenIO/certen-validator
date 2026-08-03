@@ -239,7 +239,18 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 		case []string:
 			txHashStrs = hashes
 		case *AnchorWorkflowTxHashes:
-			if len(hashes.RawTxHashes) == 3 {
+			// Use the filtered list whenever it has ANY entry.
+			//
+			// This was `== 3`. A batch member has no separate create or verify transaction — the
+			// anchor and its quorum attestation are paid ONCE for the whole tree — so its filtered
+			// list holds 1 or 2 hashes and ALWAYS fell to the branch below, which rebuilds the
+			// fixed three-slot list from the typed fields. common.Hash.Hex() on an unset field
+			// yields "0x000…000": a non-empty string that reads as a real hash, so Phase 7 polled
+			// for receipts that can never exist and stalled without ever reporting a cause.
+			//
+			// The length of this list is not a contract — it is however many transactions the
+			// intent actually produced.
+			if len(hashes.RawTxHashes) > 0 {
 				txHashStrs = hashes.RawTxHashes
 			} else {
 				txHashStrs = []string{
@@ -251,7 +262,8 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 		default:
 			// Handle AnchorWorkflowTxHashes from consensus package (different type due to package boundary)
 			if extracted := extractTxHashesViaReflection(txHashes); extracted != nil {
-				if len(extracted.RawTxHashes) == 3 {
+				// Same rule as the typed case above: any entry means the list is authoritative.
+				if len(extracted.RawTxHashes) > 0 {
 					txHashStrs = extracted.RawTxHashes
 				} else {
 					txHashStrs = []string{
@@ -264,6 +276,21 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 				txHashStrs = []string{fmt.Sprintf("%v", txHashes)}
 			}
 		}
+
+		// Drop anything that is not a real transaction hash.
+		//
+		// Defence in depth: the branches above should now only ever produce hashes that exist, but
+		// a zero hash reaching Phase 7 is indistinguishable from a real one at the observation
+		// layer — it simply waits for a receipt that can never arrive and stalls the whole cycle,
+		// taking Phases 8 and 9 with it. Nothing downstream can recover from that, so it is
+		// rejected here rather than diagnosed later.
+		txHashStrs = dropUnobservableHashes(txHashStrs)
+		if len(txHashStrs) == 0 {
+			return fmt.Errorf("intent %s: no observable transaction for Phase 7 "+
+				"(every candidate hash was empty or zero) — refusing to start a proof cycle that "+
+				"cannot complete", intentID)
+		}
+		fmt.Printf("[UnifiedAdapter] Phase 7 will observe %d transaction(s): %v\n", len(txHashStrs), txHashStrs)
 
 		// Extract governance data and target chain from commitment (for G1/G2 proof levels)
 		var governanceRoot, operationCommitment [32]byte
@@ -815,4 +842,24 @@ func hexStringToBytes32(hexStr string) ([32]byte, error) {
 	}
 
 	return result, nil
+}
+
+// dropUnobservableHashes removes empty and all-zero hashes.
+//
+// common.Hash.Hex() renders an unset field as "0x000…000", which is a non-empty string that reads
+// as a valid hash everywhere downstream. Phase 7 cannot tell it apart from a real one and will
+// poll for its receipt until the observation deadline expires.
+func dropUnobservableHashes(in []string) []string {
+	out := make([]string, 0, len(in))
+	for _, h := range in {
+		t := strings.TrimSpace(h)
+		if t == "" {
+			continue
+		}
+		if strings.Trim(strings.TrimPrefix(strings.ToLower(t), "0x"), "0") == "" {
+			continue // all zeroes
+		}
+		out = append(out, t)
+	}
+	return out
 }
