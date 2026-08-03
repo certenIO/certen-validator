@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/google/uuid"
@@ -121,23 +122,44 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAllTxs(
 		case []string:
 			txHashStrs = hashes
 		case *AnchorWorkflowTxHashes:
-			txHashStrs = []string{
-				hashes.CreateTxHash.Hex(),
-				hashes.VerifyTxHash.Hex(),
-				hashes.GovernanceTxHash.Hex(),
+			// Prefer the filtered list, exactly as StartProofCycleWithAccumulateRef does. This is
+			// the ON_DEMAND path, and it had the same defect: rebuilding a fixed three-slot list
+			// from the typed fields renders unset ones as "0x000…000" via common.Hash.Hex() — a
+			// non-empty string that reads as a real hash, so Phase 7 polls for receipts that can
+			// never exist and the cycle stalls before Phases 8 and 9.
+			if len(hashes.RawTxHashes) > 0 {
+				txHashStrs = hashes.RawTxHashes
+			} else {
+				txHashStrs = []string{
+					hashes.CreateTxHash.Hex(),
+					hashes.VerifyTxHash.Hex(),
+					hashes.GovernanceTxHash.Hex(),
+				}
 			}
 		default:
 			// Handle AnchorWorkflowTxHashes from consensus package (different type due to package boundary)
 			// Use reflection to extract the hash fields
 			if extracted := extractTxHashesViaReflection(txHashes); extracted != nil {
-				txHashStrs = []string{
-					extracted.CreateTxHash.Hex(),
-					extracted.VerifyTxHash.Hex(),
-					extracted.GovernanceTxHash.Hex(),
+				if len(extracted.RawTxHashes) > 0 {
+					txHashStrs = extracted.RawTxHashes
+				} else {
+					txHashStrs = []string{
+						extracted.CreateTxHash.Hex(),
+						extracted.VerifyTxHash.Hex(),
+						extracted.GovernanceTxHash.Hex(),
+					}
 				}
 			} else {
 				txHashStrs = []string{fmt.Sprintf("%v", txHashes)}
 			}
+		}
+
+		// Same boundary rule as the Accumulate-ref path: a zero hash is indistinguishable from a
+		// real one downstream, so it never gets past here.
+		txHashStrs = dropUnobservableHashes(txHashStrs)
+		if len(txHashStrs) == 0 {
+			return fmt.Errorf("intent %s: no observable transaction for Phase 7 (on_demand) — "+
+				"refusing to start a proof cycle that cannot complete", intentID)
 		}
 
 		fmt.Printf("[UnifiedAdapter] Extracted %d tx hashes for intent %s: %v\n", len(txHashStrs), intentID, txHashStrs)
@@ -425,13 +447,39 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 
 		fmt.Printf("[UnifiedAdapter] Starting unified proof cycle with Accumulate ref for intent %s\n", intentID)
 
-		// Start cycle asynchronously
+		// Start cycle asynchronously.
+		//
+		// Bounded and unconditionally logged. Both were missing, and between them they hid every
+		// Phase 7 failure since 2026-07-29:
+		//
+		//   - context.Background() carries no deadline, so a Phase 7 observation that never
+		//     resolves blocks this goroutine forever. The intent settles on chain and its proof
+		//     cycle simply never ends — no error, no completion, no retry.
+		//   - The logging had no branch for err == nil && result == nil, so that outcome printed
+		//     NOTHING. Silence was indistinguishable from a cycle still in progress.
+		//
+		// Every path now says what happened.
 		go func() {
-			result, err := a.unified.StartProofCycle(context.Background(), req)
-			if err != nil {
-				fmt.Printf("[UnifiedAdapter] Unified proof cycle FAILED for %s: %v\n", intentID, err)
-			} else if result != nil {
-				fmt.Printf("[UnifiedAdapter] Unified proof cycle COMPLETED for %s: success=%v\n", intentID, result.Success)
+			cycleCtx, cancel := context.WithTimeout(context.Background(), unifiedProofCycleTimeout)
+			defer cancel()
+
+			started := time.Now()
+			result, err := a.unified.StartProofCycle(cycleCtx, req)
+			elapsed := time.Since(started).Round(time.Second)
+
+			switch {
+			case err != nil:
+				fmt.Printf("[UnifiedAdapter] Unified proof cycle FAILED for %s after %s: %v\n", intentID, elapsed, err)
+			case result == nil:
+				fmt.Printf("[UnifiedAdapter] Unified proof cycle returned NO RESULT and NO ERROR for %s after %s "+
+					"(ctx=%v) — Phases 8 and 9 will not run for this intent\n", intentID, elapsed, cycleCtx.Err())
+			default:
+				fmt.Printf("[UnifiedAdapter] Unified proof cycle COMPLETED for %s after %s: success=%v error=%q\n",
+					intentID, elapsed, result.Success, result.Error)
+			}
+			if cycleCtx.Err() != nil {
+				fmt.Printf("[UnifiedAdapter] Unified proof cycle for %s hit its %s deadline — Phase 7 did not "+
+					"resolve every observation\n", intentID, unifiedProofCycleTimeout)
 			}
 		}()
 		return nil
@@ -863,3 +911,10 @@ func dropUnobservableHashes(in []string) []string {
 	}
 	return out
 }
+
+// unifiedProofCycleTimeout bounds one intent's Phase 7-9 run.
+//
+// Phase 7 waits on external-chain receipts, so it is legitimately slow — but never unbounded. An
+// unbounded wait is indistinguishable from a hang and leaves the intent settled on chain with no
+// record written back to acc://certen-protocol.acme/execution-results.
+var unifiedProofCycleTimeout = 10 * time.Minute
