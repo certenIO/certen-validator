@@ -355,7 +355,27 @@ func (bv *BFTValidator) RunProofCycle(
 		//
 		// Filtering keeps Phase 7 doing exactly its job: it observes the transactions that
 		// genuinely exist and builds real inclusion proofs for them.
-		RawTxHashes: nonEmptyTxHashes(res.CreateTxHash, res.VerifyTxHash, res.GovernanceTxHash),
+		//
+		// AnchorTxID is included because the guard at the top of this function admits an intent on
+		// AnchorTxID ALONE. Filtering over only the three hashes above therefore let a batch member
+		// pass that guard and still reach Phase 7 with an EMPTY list — nothing to observe, so no
+		// inclusion proof, so Phase 8 had nothing to attest and Phase 9 wrote nothing. It failed
+		// silently, because an empty list was not an error anywhere on this path.
+		RawTxHashes: nonEmptyTxHashes(res.CreateTxHash, res.VerifyTxHash, res.GovernanceTxHash, res.AnchorTxID),
+	}
+
+	// Phase 7 cannot do its job without at least one transaction to observe, and the guard above
+	// has already established that this intent HAS one. An empty list here means the settlement
+	// hash was dropped between that check and this construction, which is a defect — not a
+	// legitimate state. Fail loudly and record the cycle as failed so the outcome still reaches
+	// acc://certen-protocol.acme/execution-results, rather than returning and leaving the ADI with
+	// no record at all. Silence here is what hid this for days.
+	if len(txHashes.RawTxHashes) == 0 {
+		bv.logger.Printf("❌ [PROOF-CYCLE] intent %s: no observable transaction for Phase 7 "+
+			"(anchor=%q governance=%q create=%q verify=%q) — recording as a failed proof cycle",
+			att.CertenIntent.IntentID, res.AnchorTxID, res.GovernanceTxHash, res.CreateTxHash, res.VerifyTxHash)
+		bv.recordFailedProofCycle(ctx, att, res)
+		return
 	}
 
 	if err := bv.proofCycleOrchestrator.StartProofCycleWithAccumulateRef(
@@ -429,12 +449,25 @@ func (bv *BFTValidator) captureAttestation(
 //
 // Phase 7 observes one transaction per entry, so an empty entry is not a harmless placeholder —
 // it is a receipt poll that can never resolve, and it fails the whole cycle.
+// nonEmptyTxHashes returns the candidates that carry a real hash, in order and without repeats.
+//
+// Deduplicated because a single-leg batch member records the SAME settlement transaction as both
+// its anchor and its governance hash. Phase 7 polls for a receipt per entry, so a duplicate makes
+// it observe one transaction twice and build the same inclusion proof twice — wasted work, and a
+// leaf count that no longer matches the number of distinct transactions actually settled.
 func nonEmptyTxHashes(candidates ...string) []string {
 	out := make([]string, 0, len(candidates))
+	seen := make(map[string]struct{}, len(candidates))
 	for _, c := range candidates {
-		if v := extractRawTxHash(c); v != "" {
-			out = append(out, v)
+		v := extractRawTxHash(c)
+		if v == "" {
+			continue
 		}
+		if _, dup := seen[v]; dup {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
 	}
 	return out
 }
