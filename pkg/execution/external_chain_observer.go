@@ -15,10 +15,12 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -611,26 +613,75 @@ func (o *ExternalChainObserver) EffectHasCalldata(ctx context.Context, txHash co
 // returns (false, true, err) so the caller fails closed. Pure/uses only the parsed ABI so it is
 // unit-testable without an RPC.
 func decodeAbstractAccountEffectCalldata(input []byte) (innerHasCalldata bool, matched bool, err error) {
-	if certenAccountABI == nil || len(input) < 4 {
+	if len(input) < 4 {
 		return false, false, nil
 	}
-	m, mErr := certenAccountABI.MethodById(input[:4])
-	if mErr != nil || m.Name != "executeGovernanceProofDirect" {
-		return false, false, nil
+
+	// Try every known account ABI, not just one.
+	//
+	// This matched ONLY the CertenAccountV2 binding. Accounts minted by factory V9 are
+	// CertenAccountV7, whose ADIGovernanceProof tuple gained operationID — a different type list,
+	// therefore a different 4-byte selector. MethodById missed, the function reported
+	// matched=false, and EffectHasCalldata fell back to `len(input) > 0` on the OUTER wrapper
+	// input, which is never empty. So every native-transfer intent looked like a contract call
+	// and every peer refused to attest with
+	//
+	//	execution tx … carries calldata but committed intent has no contract-call leg
+	//
+	// leaving Phase 8 at achieved=1 of required=5 and blocking every write-back to
+	// acc://certen-protocol.acme/execution-results from 2026-07-29. A version-specific decoder is
+	// a latent version trap: each new account release silently re-breaks attestation. Matching
+	// across all known ABIs by NAME removes that.
+	for _, abiDef := range certenAccountABIs() {
+		if abiDef == nil {
+			continue
+		}
+		m, mErr := abiDef.MethodById(input[:4])
+		if mErr != nil {
+			continue
+		}
+		switch m.Name {
+		case "executeGovernanceProofDirect":
+			args, uErr := m.Inputs.Unpack(input[4:])
+			if uErr != nil {
+				return false, true, fmt.Errorf("decode %s wrapper: %w", m.Name, uErr)
+			}
+			// (target address, value uint256, data bytes, proof tuple) — data is index 2.
+			if len(args) < 3 {
+				return false, true, fmt.Errorf("unexpected %s arg count (%d)", m.Name, len(args))
+			}
+			data, ok := args[2].([]byte)
+			if !ok {
+				return false, true, fmt.Errorf("unexpected inner data type in %s", m.Name)
+			}
+			return len(data) > 0, true, nil
+
+		case "batchExecuteGovernanceProofDirect":
+			args, uErr := m.Inputs.Unpack(input[4:])
+			if uErr != nil {
+				return false, true, fmt.Errorf("decode %s wrapper: %w", m.Name, uErr)
+			}
+			// (targets address[], values uint256[], datas bytes[], proof tuple) — datas is index 2.
+			if len(args) < 3 {
+				return false, true, fmt.Errorf("unexpected %s arg count (%d)", m.Name, len(args))
+			}
+			datas, ok := args[2].([][]byte)
+			if !ok {
+				return false, true, fmt.Errorf("unexpected inner datas type in %s", m.Name)
+			}
+			// A multi-leg batch is a contract call if ANY leg carries calldata. Requiring all of
+			// them would let a contract-call leg ride along beside native legs unverified.
+			for _, d := range datas {
+				if len(d) > 0 {
+					return true, true, nil
+				}
+			}
+			return false, true, nil
+		}
 	}
-	args, uErr := m.Inputs.Unpack(input[4:])
-	if uErr != nil {
-		return false, true, fmt.Errorf("decode %s wrapper: %w", m.Name, uErr)
-	}
-	// Signature: (target address, value uint256, data bytes, proof tuple) — data is index 2.
-	if len(args) < 3 {
-		return false, true, fmt.Errorf("unexpected %s arg count (%d)", m.Name, len(args))
-	}
-	data, ok := args[2].([]byte)
-	if !ok {
-		return false, true, fmt.Errorf("unexpected inner data type in %s", m.Name)
-	}
-	return len(data) > 0, true, nil
+
+	// Not an account wrapper: legacy / direct execution, where the tx input IS the effect.
+	return false, false, nil
 }
 
 // =============================================================================
@@ -903,4 +954,69 @@ func (o *ExternalChainObserver) GetPendingExecution(txHash common.Hash) *Pending
 // IsRunning returns true if the observer is running
 func (o *ExternalChainObserver) IsRunning() bool {
 	return o.running
+}
+
+// certenAccountV7ABIJSON declares the V7 execution wrappers.
+//
+// Hand-declared because the validator has no generated V7 binding, and the decoder must not depend
+// on one existing. Only the two entry points that carry an effect are needed — the proof tuple is
+// spelled out solely so the selector matches; nothing reads its fields here.
+//
+// ADIGovernanceProof: (string adiURL, bytes32 anchorId, bytes32[] merkleProof, bytes32 operationID,
+// bytes keyBookProof, bytes roleProof, bytes thresholdProof, uint256 timestamp, uint256 expiresAt,
+// bytes validatorSignatures, uint256 nonce, AuthorityLevel requiredLevel) — the enum is uint8.
+const certenAccountV7ABIJSON = `[
+ {"type":"function","name":"executeGovernanceProofDirect","stateMutability":"nonpayable","outputs":[],
+  "inputs":[
+   {"name":"target","type":"address"},
+   {"name":"value","type":"uint256"},
+   {"name":"data","type":"bytes"},
+   {"name":"proof","type":"tuple","components":[
+     {"name":"adiURL","type":"string"},
+     {"name":"anchorId","type":"bytes32"},
+     {"name":"merkleProof","type":"bytes32[]"},
+     {"name":"operationID","type":"bytes32"},
+     {"name":"keyBookProof","type":"bytes"},
+     {"name":"roleProof","type":"bytes"},
+     {"name":"thresholdProof","type":"bytes"},
+     {"name":"timestamp","type":"uint256"},
+     {"name":"expiresAt","type":"uint256"},
+     {"name":"validatorSignatures","type":"bytes"},
+     {"name":"nonce","type":"uint256"},
+     {"name":"requiredLevel","type":"uint8"}]}]},
+ {"type":"function","name":"batchExecuteGovernanceProofDirect","stateMutability":"nonpayable","outputs":[],
+  "inputs":[
+   {"name":"targets","type":"address[]"},
+   {"name":"values","type":"uint256[]"},
+   {"name":"datas","type":"bytes[]"},
+   {"name":"proof","type":"tuple","components":[
+     {"name":"adiURL","type":"string"},
+     {"name":"anchorId","type":"bytes32"},
+     {"name":"merkleProof","type":"bytes32[]"},
+     {"name":"operationID","type":"bytes32"},
+     {"name":"keyBookProof","type":"bytes"},
+     {"name":"roleProof","type":"bytes"},
+     {"name":"thresholdProof","type":"bytes"},
+     {"name":"timestamp","type":"uint256"},
+     {"name":"expiresAt","type":"uint256"},
+     {"name":"validatorSignatures","type":"bytes"},
+     {"name":"nonce","type":"uint256"},
+     {"name":"requiredLevel","type":"uint8"}]}]}]`
+
+var certenAccountV7ABI, certenAccountV7ABIErr = abi.JSON(strings.NewReader(certenAccountV7ABIJSON))
+
+// certenAccountABIs returns every account ABI the decoder should try, newest first.
+//
+// Add each new account version here. A version absent from this list is not a decode failure — it
+// silently degrades to treating the wrapper input as the effect, which is exactly the false
+// positive that stopped attestation for six days.
+func certenAccountABIs() []*abi.ABI {
+	out := make([]*abi.ABI, 0, 2)
+	if certenAccountV7ABIErr == nil {
+		out = append(out, &certenAccountV7ABI)
+	}
+	if certenAccountABI != nil {
+		out = append(out, certenAccountABI)
+	}
+	return out
 }
