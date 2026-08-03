@@ -1617,12 +1617,13 @@ func (o *UnifiedOrchestrator) HandlePeerAttestationRequest(
 	//
 	// What must still hold is that peers agree on WHICH outcome occurred, and the ResultHash
 	// comparison immediately below enforces that: it is derived from the peer's own observation,
-	// so a success cannot be passed off as a revert or the reverse. Only a non-terminal status is
-	// rejected here — there is nothing settled to attest yet.
-	if obs.Status != 1 && obs.Status != 2 { // 0=pending, 1=success, 2=failed
-		return fail(fmt.Sprintf("anchor transaction has no terminal outcome yet (status=%d)", obs.Status))
-	}
-	if obs.Status == 2 {
+	// so a success cannot be passed off as a revert or the reverse.
+	//
+	// Terminality comes from IsFinalized, checked immediately above — NOT from the status code.
+	// The observer reports a reverted receipt as status 0, the same value the comment here called
+	// "pending", so gating on the code alone cannot tell a revert from an unmined transaction and
+	// rejected both. Once finalized, anything other than success IS a revert.
+	if obs.Status != 1 {
 		fmt.Printf("[Phase 8] attesting a REVERTED execution (%s) — outcome is failure, bound by result hash\n",
 			msg.AnchorTxHash)
 	}
