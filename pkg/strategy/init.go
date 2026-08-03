@@ -13,6 +13,7 @@ package strategy
 import (
 	"crypto/ed25519"
 	"fmt"
+	"github.com/certen/independant-validator/pkg/ethrpc"
 	"log"
 	"os"
 	"strconv"
@@ -169,6 +170,7 @@ func initializeChainStrategies(registry *Registry, cfg *RegistryConfig) error {
 			ChainID:               fmt.Sprintf("%d", cfg.EthChainID),
 			NetworkName:           cfg.NetworkName,
 			RPC:                   cfg.EthereumRPC,
+			Endpoints:             ethrpc.EndpointsForChain(cfg.NetworkName),
 			ContractAddress:       cfg.AnchorContract,
 			RequiredConfirmations: 12,
 			Enabled:               true,
@@ -311,10 +313,14 @@ func registerL2EVMStrategies(registry *Registry, cfg *RegistryConfig, knownAlias
 		}
 
 		chainConfig := &chain.ChainConfig{
-			Platform:              chain.ChainPlatformEVM,
-			ChainID:               strconv.FormatInt(l2.chainID, 10),
-			NetworkName:           l2.networkName,
-			RPC:                   rpcURL,
+			Platform:    chain.ChainPlatformEVM,
+			ChainID:     strconv.FormatInt(l2.chainID, 10),
+			NetworkName: l2.networkName,
+			RPC:         rpcURL,
+			// Every chain gets its own fallback tier, not just Ethereum. The free L2 endpoints
+			// refuse historical eth_getLogs, so without this a leg on an L2 can never complete
+			// Phase 7 — and the failure looks like an aggregation bug rather than an RPC one.
+			Endpoints:             ethrpc.EndpointsForChain(l2.networkName),
 			ContractAddress:       anchorAddr,
 			RequiredConfirmations: l2.confirmations,
 			Enabled:               true,

@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"strings"
 	"sync"
 	"time"
 
@@ -71,7 +72,9 @@ func DefaultEVMStrategyConfig() *EVMStrategyConfig {
 
 // EVMStrategy implements ChainExecutionStrategy for EVM chains
 type EVMStrategy struct {
-	mu sync.RWMutex
+	// endpoints is the ordered RPC list this strategy may use, for diagnostics.
+	endpoints []string
+	mu        sync.RWMutex
 
 	// Configuration
 	config *EVMStrategyConfig
@@ -115,12 +118,17 @@ func NewEVMStrategy(config *EVMStrategyConfig) (*EVMStrategy, error) {
 		config: config,
 	}
 
-	// Connect to Ethereum client
-	client, err := ethclient.Dial(config.ChainConfig.RPC)
+	// Connect to the chain, trying each configured endpoint in cost order.
+	//
+	// Endpoints is empty for a deployment that only sets RPC, in which case this dials exactly
+	// what it always did. When it IS set the later entries are archive-capable providers, which
+	// is what lets Phase 7 observe a leg on an L2 whose free endpoint refuses eth_getLogs.
+	client, dialed, err := dialFirstReachable(config.ChainConfig.Endpoints, config.ChainConfig.RPC)
 	if err != nil {
-		return nil, fmt.Errorf("connect to ethereum: %w", err)
+		return nil, fmt.Errorf("connect to %s: %w", config.ChainConfig.NetworkName, err)
 	}
 	strategy.client = client
+	strategy.endpoints = dialed
 
 	// Get chain ID
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -618,4 +626,39 @@ func (s *EVMStrategy) ExecuteAnchorWorkflow(ctx context.Context, req *AnchorRequ
 	state.Completed = &completed
 
 	return state, nil
+}
+
+// dialFirstReachable dials the first endpoint that answers, and reports the full ordered list.
+//
+// Returns the list so callers can log what a chain will actually fall back to — an endpoint set
+// that silently narrowed to one entry is exactly how the L2s ended up unable to serve archive
+// queries without anyone noticing.
+func dialFirstReachable(endpoints []string, primary string) (*ethclient.Client, []string, error) {
+	ordered := make([]string, 0, len(endpoints)+1)
+	seen := map[string]struct{}{}
+	for _, u := range append(append([]string{}, endpoints...), primary) {
+		u = strings.TrimSpace(u)
+		if u == "" {
+			continue
+		}
+		if _, dup := seen[u]; dup {
+			continue
+		}
+		seen[u] = struct{}{}
+		ordered = append(ordered, u)
+	}
+	if len(ordered) == 0 {
+		return nil, nil, fmt.Errorf("no RPC endpoint configured")
+	}
+
+	var lastErr error
+	for _, u := range ordered {
+		client, err := ethclient.Dial(u)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		return client, ordered, nil
+	}
+	return nil, ordered, fmt.Errorf("all %d endpoint(s) failed, last error: %w", len(ordered), lastErr)
 }

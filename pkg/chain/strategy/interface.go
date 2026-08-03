@@ -106,7 +106,19 @@ type ChainConfig struct {
 	RPC string `json:"rpc"`
 
 	// RPCBackup is an optional backup RPC endpoint
+	//
+	// Deprecated: never read by any strategy. Use Endpoints, which carries the whole ordered list
+	// and is what the EVM strategy actually dials.
 	RPCBackup string `json:"rpc_backup,omitempty"`
+
+	// Endpoints is the ordered RPC endpoint list for this chain, cheapest first.
+	//
+	// Populated from ethrpc.EndpointsForChain so every chain — not just Ethereum — gets an
+	// archive-capable fallback tier. Without it each L2 had exactly one publicnode endpoint,
+	// which refuses all historical eth_getLogs, so Phase 7 could never observe a leg on that
+	// chain. Empty means "use RPC alone", which is the behaviour every deployment had before
+	// this field existed.
+	Endpoints []string `json:"endpoints,omitempty"`
 
 	// ContractAddress is the Certen anchor contract address
 	ContractAddress string `json:"contract_address"`
