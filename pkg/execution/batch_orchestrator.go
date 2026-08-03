@@ -70,7 +70,12 @@ type BatchFlushResult struct {
 	// that landed the batch already did both. Reported so the condition is visible rather than
 	// looking like members silently vanishing.
 	AlreadySettled []*PendingBatchIntent
-	TxHashes       map[string]string // intentID -> account tx hash
+
+	// AlreadySettledOutcome reports, per intent id, whether that released member's leaf was
+	// actually consumed on chain. Absent means the outcome could not be resolved and the member
+	// must be treated as unsettled.
+	AlreadySettledOutcome map[string]bool
+	TxHashes              map[string]string // intentID -> account tx hash
 
 	GasAnchor uint64
 }
@@ -199,7 +204,30 @@ func (o *BatchOrchestrator) FlushChain(
 		o.logf("[BATCH] chain=%d period %d already settled under anchor 0x%x by a previous leader "+
 			"— releasing %d member(s) without re-executing",
 			chainID, cutoffHeight, tree.BundleID[:8], len(members))
+		// Determine each released member's ACTUAL outcome instead of assuming one.
+		//
+		// "Already settled" is inferred from the anchor being attested — NOT from the members
+		// having executed. Those diverge: a previous leader can anchor and attest, then lose
+		// leadership or die before settling its members. Observed live 2026-08-03, period
+		// 6300300 — the anchor existed, two members were released, and no funds moved.
+		//
+		// Releasing them unattested is the silent drop this whole failure policy exists to
+		// prevent, and neither blanket answer is safe: assuming success records a settlement
+		// that never happened, assuming failure libels one that did. The consumed leaf is the
+		// on-chain ground truth, so ask the account.
 		res.AlreadySettled = members
+		res.AlreadySettledOutcome = make(map[string]bool, len(members))
+		for _, m := range members {
+			ok, cerr := o.memberLeafConsumed(ctx, m)
+			if cerr != nil {
+				// Unresolved: leave it out of the map. The caller attests it as unsettled, which
+				// is the conservative direction — the leaf is still spendable, so a retry can
+				// still settle it, whereas a false "settled" would strand it forever.
+				o.logf("[BATCH] member %s: cannot resolve released outcome: %v", m.IntentID, cerr)
+				continue
+			}
+			res.AlreadySettledOutcome[m.IntentID] = ok
+		}
 		return res, nil
 	}
 
@@ -610,4 +638,27 @@ func legArrays(legs []LegExecution) ([]common.Address, []*big.Int, [][]byte) {
 		datas = append(datas, leg.Data)
 	}
 	return targets, values, datas
+}
+
+// memberLeafConsumed reports whether this member's leaf has been spent on chain.
+//
+// The account itself is the authority: a consumed leaf means the member settled, a spendable one
+// means it did not. Used to resolve members released because a previous leader had already
+// anchored their period, where the anchor's existence says nothing about whether they executed.
+func (o *BatchOrchestrator) memberLeafConsumed(ctx context.Context, p *PendingBatchIntent) (bool, error) {
+	if p == nil {
+		return false, fmt.Errorf("nil member")
+	}
+	acct, err := contracts.NewCertenAccountV7(p.Account, o.ecm.client)
+	if err != nil {
+		return false, fmt.Errorf("binding account %s: %w", p.Account.Hex(), err)
+	}
+	exec, err := p.ExecutionCommitment()
+	if err != nil {
+		return false, err
+	}
+	leaf := ComputeBatchLeaf(p.ChainID, BatchLeafInput{
+		ADIURL: p.ADIURL, ExecutionCommitment: exec, OperationID: p.OperationID,
+	})
+	return acct.IsLeafConsumed(&bind.CallOpts{Context: ctx}, leaf)
 }

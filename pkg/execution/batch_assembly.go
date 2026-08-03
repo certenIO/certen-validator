@@ -426,12 +426,37 @@ func (s *BatchStack) flushOneChain(
 		}
 	}
 
-	// Settled under an earlier leader: the node that landed the batch already attested every
-	// member. Re-attesting would duplicate the Accumulate write-back, and routing them to the
-	// fallback would re-execute intents that have already moved funds.
+	// Released because a previous leader had already anchored this period.
+	//
+	// A member whose leaf IS consumed genuinely settled under that leader, which also attested
+	// it — re-attesting would duplicate the Accumulate write-back, and routing it to the fallback
+	// would re-execute an intent that has already moved funds. Those are skipped.
+	//
+	// A member whose leaf is still SPENDABLE never executed. The old code returned here for both
+	// cases on the assumption that the previous leader had attested every member, so these were
+	// released with no settlement, no failure and no record — the silent drop this failure policy
+	// exists to prevent. Observed live 2026-08-03 on period 6300300: anchor present, two members
+	// released, no funds moved, nothing written back. They are attested as unsettled so the ADI
+	// learns the outcome; their leaves remain spendable, so a later flush can still settle them.
 	if len(res.AlreadySettled) > 0 {
-		logf("[BATCH-FLUSH] chain %d period %d: %d member(s) were already settled by a previous "+
-			"leader — released without re-executing", chainID, cutoffHeight, len(res.AlreadySettled))
+		var settled, unsettled int
+		for _, m := range res.AlreadySettled {
+			if res.AlreadySettledOutcome[m.IntentID] {
+				settled++
+				continue
+			}
+			unsettled++
+			if attest != nil {
+				attest(ctx, m.Attestation, "", chainID, false)
+			}
+		}
+		logf("[BATCH-FLUSH] chain %d period %d: %d member(s) released under a previous leader's "+
+			"anchor — %d had consumed leaves (already attested), %d never executed and were "+
+			"attested as unsettled", chainID, cutoffHeight, len(res.AlreadySettled), settled, unsettled)
+		if attest == nil && unsettled > 0 {
+			logf("[BATCH-FLUSH] NO ATTESTATION FN — %d released member(s) never executed and "+
+				"their proof cycles will NOT close", unsettled)
+		}
 		return
 	}
 
