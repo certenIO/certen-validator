@@ -316,6 +316,33 @@ func (bv *BFTValidator) RunProofCycle(
 				})
 			}
 
+			// Re-key the "default" bucket onto the chain the legs actually name.
+			//
+			// parseMultiChainTxHashes files an un-prefixed hash under "default". A multi-leg intent
+			// whose legs are all on ONE chain produces exactly that — a single plain hash — so the
+			// group arrives keyed "default" while every leg is keyed e.g. "ethereum-sepolia". The
+			// keys never match, so sequential-mode dependency resolution cannot satisfy the group
+			// and defers it forever: "Deferring chain group default (dependencies not met)". The
+			// legs settle on chain and the proof cycle never runs, so Phases 8 and 9 never close.
+			//
+			// Only re-keyed when every leg shares one chain, which is the only case where the
+			// mapping is unambiguous. A genuine cross-chain intent keeps its per-chain keys.
+			if hashes, hasDefault := chainTxHashes["default"]; hasDefault && len(chainTxHashes) == 1 {
+				uniq := map[string]struct{}{}
+				for _, li := range legInfos {
+					uniq[li.ChainKey] = struct{}{}
+				}
+				if len(uniq) == 1 {
+					for ck := range uniq {
+						bv.logger.Printf("🔑 [MULTI-LEG-PROOF] re-keying chain group \"default\" to %q "+
+							"(all %d leg(s) on one chain); the group would otherwise never match a leg "+
+							"and would be deferred indefinitely", ck, len(legInfos))
+						chainTxHashes[ck] = hashes
+						delete(chainTxHashes, "default")
+					}
+				}
+			}
+
 			executionMode, _ := att.CertenIntent.GetExecutionMode()
 			operationID := att.CertenIntent.IntentID
 
@@ -340,7 +367,13 @@ func (bv *BFTValidator) RunProofCycle(
 			} else {
 				// A partial set still stalls: the aggregator waits on every leg it was told about,
 				// so a leg whose chain produced no transaction never reports. Name them.
-				if len(chainTxHashes) < len(legInfos) {
+				uniqLegChains := map[string]struct{}{}
+				for _, li := range legInfos {
+					uniqLegChains[li.ChainKey] = struct{}{}
+				}
+				// Compare against DISTINCT leg chains, not leg count: two legs on one chain
+				// legitimately produce one group.
+				if len(chainTxHashes) < len(uniqLegChains) {
 					missing := make([]string, 0, len(legInfos))
 					for _, li := range legInfos {
 						if _, ok := chainTxHashes[li.ChainKey]; !ok {
