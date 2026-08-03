@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"log"
 	"math/big"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +25,8 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
+
+	"github.com/certen/independant-validator/pkg/ethrpc"
 )
 
 // =============================================================================
@@ -332,7 +335,10 @@ func DefaultEventWatcherConfig() *EventWatcherConfig {
 type EventWatcher struct {
 	config *EventWatcherConfig
 	client *ethclient.Client
-	abi    abi.ABI
+	// pool backs client with cost-ordered failover. This watcher is the component that needs
+	// archive access (it filters logs over historical ranges), which free public endpoints refuse.
+	pool *ethrpc.Pool
+	abi  abi.ABI
 
 	// Event channel
 	events chan ContractEvent
@@ -379,19 +385,36 @@ func NewEventWatcher(config *EventWatcherConfig, logger *log.Logger) (*EventWatc
 		return nil, fmt.Errorf("failed to parse events ABI: %w", err)
 	}
 
-	// Connect to Ethereum
-	client, err := ethclient.Dial(config.EthereumURL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to Ethereum: %w", err)
-	}
-
 	if logger == nil {
 		logger = log.New(log.Writer(), "[EventWatcher] ", log.LstdFlags)
 	}
 
+	// Connect through a cost-ordered provider pool rather than a single endpoint.
+	//
+	// Pinned to the free public endpoint this watcher dies on
+	// `403 Archive requests require a personal token`; pinned to a paid provider it spends monthly
+	// quota on routine polling and eventually 429s. The pool tries cheapest first and escalates
+	// only when a provider actually refuses. config.EthereumURL stays the primary, so a deployment
+	// that sets no fallbacks behaves exactly as before.
+	pool, err := ethrpc.NewPool(
+		ethrpc.ParseEndpoints(
+			config.EthereumURL,
+			os.Getenv(ethrpc.EnvFallbacks),
+			os.Getenv(ethrpc.EnvInfura),
+			os.Getenv(ethrpc.EnvAlchemy),
+		),
+		ethrpc.CooldownFromEnv(),
+		logger,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to Ethereum: %w", err)
+	}
+	logger.Printf("🔌 RPC providers: %v", pool.Status())
+
 	return &EventWatcher{
 		config:   config,
-		client:   client,
+		client:   pool.Primary(),
+		pool:     pool,
 		abi:      parsedABI,
 		events:   make(chan ContractEvent, config.EventBufferSize),
 		errors:   make(chan error, 100),
@@ -565,10 +588,19 @@ func (w *EventWatcher) pollEvents() error {
 		}
 	}
 
-	// Fetch logs with retry
+	// Fetch logs with retry.
+	//
+	// Each attempt goes through the provider pool, so a provider that refuses the range (archive
+	// required, rate limited, quota gone) is skipped in favour of the next one WITHIN the attempt.
+	// Retrying the same refusing endpoint three times, which is what this used to do, could never
+	// succeed — the refusal is a property of the provider, not a transient fault.
 	var logs []types.Log
 	for attempt := 0; attempt < w.config.RetryAttempts; attempt++ {
-		logs, err = w.client.FilterLogs(w.ctx, query)
+		err = w.pool.Do(w.ctx, func(c *ethclient.Client) error {
+			var innerErr error
+			logs, innerErr = c.FilterLogs(w.ctx, query)
+			return innerErr
+		})
 		if err == nil {
 			break
 		}
@@ -577,7 +609,8 @@ func (w *EventWatcher) pollEvents() error {
 		}
 	}
 	if err != nil {
-		return fmt.Errorf("failed to filter logs after %d attempts: %w", w.config.RetryAttempts, err)
+		return fmt.Errorf("failed to filter logs after %d attempts across %d providers: %w",
+			w.config.RetryAttempts, len(w.pool.Status()), err)
 	}
 
 	// Parse and emit events
@@ -972,7 +1005,14 @@ func (w *EventWatcher) FetchHistoricalEvents(ctx context.Context, fromBlock, toB
 		Addresses: []common.Address{w.config.ContractAddress},
 	}
 
-	logs, err := w.client.FilterLogs(ctx, query)
+	// Historical ranges are exactly what a free endpoint refuses as an archive request, so this
+	// goes through the pool too.
+	var logs []types.Log
+	err := w.pool.Do(ctx, func(c *ethclient.Client) error {
+		var innerErr error
+		logs, innerErr = c.FilterLogs(ctx, query)
+		return innerErr
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch historical logs: %w", err)
 	}
