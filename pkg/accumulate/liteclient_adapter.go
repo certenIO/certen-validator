@@ -223,27 +223,23 @@ func (l *LiteClientAdapter) constructPartitionLedgerURL(partitionID string) stri
 	return fmt.Sprintf("acc://bvn-%s.acme/ledger", partitionID)
 }
 
-// SearchCertenTransactions searches for CERTEN_INTENT transactions in a Directory Network block.
+// SearchCertenTransactions searches for CERTEN_INTENT transactions across DN and all BVN partitions
+// Scans both DN (for anchored transactions) and all BVNs (for direct transactions) with expand=true
 //
-// `blockHeight` is a DN minor-block index — the discovery scanner walks DN blocks. Each partition
-// keeps its OWN independent index (on kermit: DN ≈ 6.28M while BVN1 ≈ 8.27M for the same wall
-// clock), so a DN height is meaningless against a BVN ledger. This previously fanned the DN height
-// out to every partition, which asked each BVN for a block number from an unrelated sequence.
+// NOTE: a CERTEN_INTENT is a writeData against a user ADI's data account, which lives on a BVN. A DN
+// minor block carries directoryAnchor/blockAnchor entries and anchor chain entries under
+// acc://dn.acme/anchors — NOT the BVN transaction bodies. So the BVN partitions must be scanned to
+// find intents; the DN is what later PROVES their inclusion. Scanning the DN alone finds nothing.
 //
-// Scanning the DN alone is not a reduction in coverage: BVN transactions are anchored into the
-// Directory Network, so they surface in DN blocks with `expand=true`. That is how CERTEN intents
-// have always actually been found.
-//
-// Per-partition scanning would require tracking a cursor per partition, which is a different design
-// — see queryBVNStatus for the case where each partition IS queried directly, using `latest`
-// rather than a borrowed height.
+// `blockHeight` is currently applied to every partition, which is only correct for the DN: each
+// partition keeps an independent index (on kermit DN ≈ 6.28M while BVN1 ≈ 8.27M at the same wall
+// clock). Tracking a cursor per partition is the outstanding fix — see the partition-height work.
 func (l *LiteClientAdapter) SearchCertenTransactions(ctx context.Context, blockHeight int64) ([]*CertenTransaction, error) {
-	// Discovery still runs so a partition-topology change is logged, but only the DN is scanned by
-	// height. Failure here is non-fatal: the DN ledger URL is fixed and always valid.
-	if _, err := l.getPartitions(ctx); err != nil {
-		log.Printf("⚠️ [CERTEN-SEARCH] Partition discovery failed (continuing with DN scan): %v", err)
+	// Dynamically discover partitions from network-status API
+	partitions, err := l.getPartitions(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to discover partitions: %w", err)
 	}
-	partitions := []string{"acc://dn.acme/ledger"}
 
 	// Query all partitions in parallel to reduce per-block latency
 	type partitionResult struct {
