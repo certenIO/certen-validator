@@ -1316,62 +1316,57 @@ func (id *IntentDiscovery) processIntent(intent *CertenIntent, blockHeight uint6
 			}
 		}
 
-		// on_demand (financial) intents REQUIRE the consensus-bound chained proof and must NEVER
-		// silently downgrade to a basic account proof. If it is unavailable, fail closed HERE —
-		// before any execution/anchor side effect — so the caller can requeue (retryable, e.g.
-		// DN-anchoring latency / transient RPC) or surface a terminal failure (misconfig).
-		if certenProof == nil && proofClass == "on_demand" {
+		// EVERY intent REQUIRES the consensus-bound chained proof, whatever its proof class.
+		// None may silently downgrade to a basic account proof. If it is unavailable, fail
+		// closed HERE — before any execution/anchor side effect — so the caller can requeue
+		// (retryable, e.g. DN-anchoring latency / transient RPC) or surface a terminal failure
+		// (misconfig).
+		//
+		// THIS USED TO APPLY TO on_demand ONLY. on_cadence fell through to the basic-proof
+		// fallback below, so whenever the BVN CometBFT endpoint was unreachable it settled on a
+		// proof with no L1-L3 consensus binding — and said so only in a log line that reads like
+		// routine information. Observed live 2026-08-03: with the BVN RPC ports closed after a
+		// testnet migration, on_demand refused and retried while on_cadence reported
+		// "Falling back to basic proof" and proceeded to anchor and settle.
+		//
+		// That made proof strength depend on proof CLASS rather than on what was actually
+		// proven, which is the opposite of the intended guarantee. Batched intents are not
+		// cheaper to verify — they share an anchor and a BLS attestation, nothing else. Each
+		// still carries its own operationID, its own executionCommitment and its own leaf, and
+		// each must be backed by the same chained proof.
+		if certenProof == nil {
 			if !realProofApplicable {
-				return fmt.Errorf("on_demand intent %s: %w (realBuilder=%v txHash=%q partition=%q)",
-					intent.IntentID, errChainedProofTerminal,
+				return fmt.Errorf("intent %s (proofClass=%s): %w (realBuilder=%v txHash=%q partition=%q)",
+					intent.IntentID, proofClass, errChainedProofTerminal,
 					id.proofGenerator.HasRealProofBuilder(), intent.TransactionHash, intent.Partition)
 			}
-			return fmt.Errorf("on_demand intent %s: %w", intent.IntentID, errChainedProofUnavailable)
+			return fmt.Errorf("intent %s (proofClass=%s): %w", intent.IntentID, proofClass, errChainedProofUnavailable)
 		}
 
-		// Fallback: Basic proof (on_cadence only — on_demand returned above).
+		// The basic-proof fallback that used to live here is DELETED.
+		//
+		// There is no "basic proof" in Certen — it was a proof-of-concept artifact from early
+		// development. What it did in production was settle intents on an account proof with no
+		// L1-L3 consensus binding whenever the chained proof was unavailable, and it announced
+		// that with an informational log line. Worse, when the fallback itself failed it logged
+		// "Proceeding without proof ... (proof failure allowed for cadence intents)" and carried
+		// on with NO proof at all.
+		//
+		// Both behaviours were reachable only for on_cadence, so proof strength depended on
+		// proof CLASS rather than on what had actually been proven. It is all or nothing:
+		// certenProof is non-nil past this point or the intent has already failed closed above.
 		if certenProof == nil {
-			id.logger.Printf("📋 [BASIC-PROOF] Falling back to basic proof for %s", intent.IntentID)
-			complete, err := id.proofGenerator.GenerateProofForIntent(ctx, accountURL)
-			if err != nil {
-				id.logger.Printf("⚠️ Failed to generate basic proof for %s: %v", intent.IntentID, err)
-
-				// For on_demand intents, proof failure is a hard error
-				if proofClass == "on_demand" {
-					id.logger.Printf("❌ on_demand intent %s REQUIRES proof - cannot proceed without CertenProof", intent.IntentID)
-					return fmt.Errorf("on_demand intent %s requires proof but proof generation failed: %w", intent.IntentID, err)
-				} else {
-					id.logger.Printf("⚠️ Proceeding without proof for %s intent %s (proof failure allowed for cadence intents)", proofClass, intent.IntentID)
-				}
-			} else {
-				// Build a minimal ProofRequest for adapter
-				req := &proof.ProofRequest{
-					RequestID:       fmt.Sprintf("intent_%s", intent.IntentID),
-					ProofType:       "account",
-					TransactionHash: intent.TransactionHash,
-					AccountURL:      accountURL,
-				}
-
-				adapter := proof.NewCertenProofAdapter(complete, req, id.validatorID)
-				certenProof = adapter.ToCertenProof()
-				if certenProof == nil {
-					if proofClass == "on_demand" {
-						return fmt.Errorf("on_demand intent %s: adapter returned nil CertenProof", intent.IntentID)
-					}
-					id.logger.Printf("⚠️ Adapter returned nil CertenProof for %s intent %s", proofClass, intent.IntentID)
-				} else {
-					id.logger.Printf("✅ Generated basic CertenProof for intent %s", intent.IntentID)
-				}
-			}
+			return fmt.Errorf("intent %s (proofClass=%s): no CertenProof after the chained-proof "+
+				"stage; refusing to proceed — Certen has no degraded proof mode",
+				intent.IntentID, proofClass)
 		}
 	} else {
-		// For on_demand intents, missing proof generator is a hard error
-		if proofClass == "on_demand" {
-			id.logger.Printf("❌ on_demand intent %s REQUIRES ProofGenerator but none configured", intent.IntentID)
-			return fmt.Errorf("on_demand intent %s requires ProofGenerator but none configured", intent.IntentID)
-		} else {
-			id.logger.Printf("⚠️ No proofGenerator configured for %s intent %s", proofClass, intent.IntentID)
-		}
+		// No proof generator at all. This is a hard error for EVERY proof class: an intent
+		// cannot be settled without a Certen proof, and on_cadence is not a weaker tier.
+		id.logger.Printf("❌ intent %s (proofClass=%s) REQUIRES a ProofGenerator but none is configured",
+			intent.IntentID, proofClass)
+		return fmt.Errorf("intent %s (proofClass=%s) requires a ProofGenerator but none is configured",
+			intent.IntentID, proofClass)
 	}
 
 	// 2.5️⃣ Generate G0/G1/G2 governance proof BEFORE routing to batch system
@@ -1696,37 +1691,27 @@ func (id *IntentDiscovery) processMultiLegIntent(intent *CertenIntent, blockHeig
 			}
 		}
 
-		// on_demand multi-leg REQUIRES the consensus-bound chained proof — no silent downgrade.
-		// Fail closed here; RegisterIntent (above) is idempotent so the requeue is replay-safe.
-		if certenProof == nil && proofClass == "on_demand" {
+		// EVERY multi-leg intent REQUIRES the consensus-bound chained proof — no silent
+		// downgrade, whatever the proof class. Fail closed here; RegisterIntent (above) is
+		// idempotent so the requeue is replay-safe.
+		if certenProof == nil {
 			if !realProofApplicable {
-				return fmt.Errorf("on_demand multi-leg intent %s: %w (realBuilder=%v txHash=%q partition=%q)",
-					intent.IntentID, errChainedProofTerminal,
+				return fmt.Errorf("multi-leg intent %s (proofClass=%s): %w (realBuilder=%v txHash=%q partition=%q)",
+					intent.IntentID, proofClass, errChainedProofTerminal,
 					id.proofGenerator.HasRealProofBuilder(), intent.TransactionHash, intent.Partition)
 			}
-			return fmt.Errorf("on_demand multi-leg intent %s: %w", intent.IntentID, errChainedProofUnavailable)
+			return fmt.Errorf("multi-leg intent %s (proofClass=%s): %w", intent.IntentID, proofClass, errChainedProofUnavailable)
 		}
 
-		// Fallback to basic proof (on_cadence only — on_demand returned above).
-		if certenProof == nil {
-			id.logger.Printf("📋 [MULTI-LEG] Using basic proof for %s", intent.IntentID)
-			complete, err := id.proofGenerator.GenerateProofForIntent(ctx, accountURL)
-			if err != nil {
-				id.logger.Printf("⚠️ [MULTI-LEG] Basic proof failed: %v", err)
-			} else {
-				req := &proof.ProofRequest{
-					RequestID:       fmt.Sprintf("multileg_%s", intent.IntentID),
-					ProofType:       "account",
-					TransactionHash: intent.TransactionHash,
-					AccountURL:      accountURL,
-				}
-				adapter := proof.NewCertenProofAdapter(complete, req, id.validatorID)
-				certenProof = adapter.ToCertenProof()
-			}
-		}
-	} else if proofClass == "on_demand" {
-		// No proof generator configured at all — on_demand cannot proceed without a proof.
-		return fmt.Errorf("on_demand multi-leg intent %s requires ProofGenerator but none configured", intent.IntentID)
+		// The multi-leg basic-proof fallback is DELETED. There is no "basic proof" in Certen —
+		// it was an early proof-of-concept, and in production it settled on_cadence multi-leg
+		// intents with no L1-L3 consensus binding whenever the chained proof was unavailable.
+		// Past this point certenProof is non-nil or the intent has already failed closed.
+	} else {
+		// No proof generator configured at all — no intent can proceed without a proof,
+		// whatever its class.
+		return fmt.Errorf("multi-leg intent %s (proofClass=%s) requires a ProofGenerator but none is configured",
+			intent.IntentID, proofClass)
 	}
 
 	// Generate governance proof if available
