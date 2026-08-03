@@ -904,6 +904,16 @@ func dropUnobservableHashes(in []string) []string {
 		if t == "" {
 			continue
 		}
+		// Must be a real 32-byte hash. The executor records FAILURE MARKERS in the same fields —
+		// "create_failed_Ethereum Sepolia", "execution_failed_leg-...", "verify_failed_..." — and
+		// Phase 7 cannot tell those from a hash: it just polls for a receipt that will never
+		// exist and burns the entire observation deadline. That is what stopped multi-leg
+		// write-backs on 2026-08-03: the legs SETTLED on chain, then the proof cycle sat for
+		// 10 minutes on "observe transaction 0 (create_failed_Ethereum Sepolia)" and the
+		// aggregator never saw its chain group complete.
+		if !isHash32(t) {
+			continue
+		}
 		if strings.Trim(strings.TrimPrefix(strings.ToLower(t), "0x"), "0") == "" {
 			continue // all zeroes
 		}
@@ -918,3 +928,20 @@ func dropUnobservableHashes(in []string) []string {
 // unbounded wait is indistinguishable from a hang and leaves the intent settled on chain with no
 // record written back to acc://certen-protocol.acme/execution-results.
 var unifiedProofCycleTimeout = 10 * time.Minute
+
+// isHash32 reports whether s is a 0x-prefixed 32-byte hex string.
+//
+// Deliberately strict: anything else in a transaction-hash field is a marker or a mistake, and
+// treating it as a hash costs a full observation timeout per entry.
+func isHash32(s string) bool {
+	h := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(s)), "0x")
+	if len(h) != 64 {
+		return false
+	}
+	for _, c := range h {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
