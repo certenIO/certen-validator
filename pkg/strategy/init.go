@@ -304,24 +304,38 @@ func registerL2EVMStrategies(registry *Registry, cfg *RegistryConfig, knownAlias
 		// contract with a different validator set. Nothing fails at startup; it surfaces as a
 		// batch that cannot settle on that chain.
 		chainPrefix := l2.anchorEnvVar[:len(l2.anchorEnvVar)-len("_ANCHORV4_ADDRESS")]
-		anchorAddr := os.Getenv(chainPrefix + "_ANCHORV8_1_ADDRESS")
+		anchorSrc := chainPrefix + "_ANCHORV8_1_ADDRESS"
+		anchorAddr := os.Getenv(anchorSrc)
 		if anchorAddr == "" {
-			anchorAddr = os.Getenv(chainPrefix + "_ANCHORV8_ADDRESS")
+			anchorSrc = chainPrefix + "_ANCHORV8_ADDRESS"
+			anchorAddr = os.Getenv(anchorSrc)
 		}
 		if anchorAddr == "" {
-			anchorAddr = os.Getenv(chainPrefix + "_ANCHORV6_1_ADDRESS")
+			anchorSrc = chainPrefix + "_ANCHORV6_1_ADDRESS"
+			anchorAddr = os.Getenv(anchorSrc)
 		}
 		if anchorAddr == "" {
-			anchorAddr = os.Getenv(chainPrefix + "_ANCHORV6_ADDRESS")
+			anchorSrc = chainPrefix + "_ANCHORV6_ADDRESS"
+			anchorAddr = os.Getenv(anchorSrc)
 		}
 		if anchorAddr == "" {
-			anchorAddr = os.Getenv(chainPrefix + "_ANCHORV5_ADDRESS")
+			anchorSrc = chainPrefix + "_ANCHORV5_ADDRESS"
+			anchorAddr = os.Getenv(anchorSrc)
 		}
 		if anchorAddr == "" {
-			anchorAddr = os.Getenv(l2.anchorEnvVar)
+			anchorSrc = l2.anchorEnvVar
+			anchorAddr = os.Getenv(anchorSrc)
 		}
 		if anchorAddr == "" {
+			anchorSrc = "compiled-in default"
 			anchorAddr = l2.anchorDefault
+		}
+
+		// Say WHICH variable won. The resolution silently fell through to an older anchor when a
+		// newer one was configured under a name this chain did not check, and nothing in the logs
+		// revealed it — the mismatch surfaced only later, as a batch that could not settle.
+		if cfg.Logger != nil {
+			cfg.Logger.Printf("   ⚓ %s anchor %s (from %s)", l2.networkName, anchorAddr, anchorSrc)
 		}
 
 		chainConfig := &chain.ChainConfig{
