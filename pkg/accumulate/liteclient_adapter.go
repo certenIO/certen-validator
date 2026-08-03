@@ -206,19 +206,44 @@ func (l *LiteClientAdapter) constructPartitionLedgerURL(partitionID string) stri
 		return "acc://dn.acme/ledger"
 	}
 
-	// Handle BVN partitions - preserve the original ID format
-	// Examples: BVN0, BVN1, bvn-BVN1, etc.
-	return fmt.Sprintf("acc://%s.acme/ledger", partitionID)
+	// Handle BVN partitions.
+	//
+	// The account is `acc://bvn-<ID>.acme`, NOT `acc://<ID>.acme`. network-status reports the bare
+	// partition id ("BVN1"), and this used to interpolate it directly, producing
+	// `acc://BVN1.acme/ledger` — an account that does not exist. Every BVN query then failed with
+	// `cannot locate ledger for block N (-33404)`, which reads like a missing block rather than a
+	// malformed URL, and so was easy to misread as the chain being behind.
+	//
+	// The network's own routing table is the authority; network-status returns:
+	//   {"account": "acc://bvn-BVN1.acme", "partition": "BVN1"}
+	//   {"account": "acc://dn.acme",       "partition": "Directory"}
+	if strings.HasPrefix(normalizedID, "bvn-") {
+		return fmt.Sprintf("acc://%s.acme/ledger", partitionID)
+	}
+	return fmt.Sprintf("acc://bvn-%s.acme/ledger", partitionID)
 }
 
-// SearchCertenTransactions searches for CERTEN_INTENT transactions across DN and all BVN partitions
-// Scans both DN (for anchored transactions) and all BVNs (for direct transactions) with expand=true
+// SearchCertenTransactions searches for CERTEN_INTENT transactions in a Directory Network block.
+//
+// `blockHeight` is a DN minor-block index — the discovery scanner walks DN blocks. Each partition
+// keeps its OWN independent index (on kermit: DN ≈ 6.28M while BVN1 ≈ 8.27M for the same wall
+// clock), so a DN height is meaningless against a BVN ledger. This previously fanned the DN height
+// out to every partition, which asked each BVN for a block number from an unrelated sequence.
+//
+// Scanning the DN alone is not a reduction in coverage: BVN transactions are anchored into the
+// Directory Network, so they surface in DN blocks with `expand=true`. That is how CERTEN intents
+// have always actually been found.
+//
+// Per-partition scanning would require tracking a cursor per partition, which is a different design
+// — see queryBVNStatus for the case where each partition IS queried directly, using `latest`
+// rather than a borrowed height.
 func (l *LiteClientAdapter) SearchCertenTransactions(ctx context.Context, blockHeight int64) ([]*CertenTransaction, error) {
-	// Dynamically discover partitions from network-status API
-	partitions, err := l.getPartitions(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to discover partitions: %w", err)
+	// Discovery still runs so a partition-topology change is logged, but only the DN is scanned by
+	// height. Failure here is non-fatal: the DN ledger URL is fixed and always valid.
+	if _, err := l.getPartitions(ctx); err != nil {
+		log.Printf("⚠️ [CERTEN-SEARCH] Partition discovery failed (continuing with DN scan): %v", err)
 	}
+	partitions := []string{"acc://dn.acme/ledger"}
 
 	// Query all partitions in parallel to reduce per-block latency
 	type partitionResult struct {
