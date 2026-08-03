@@ -211,6 +211,18 @@ func (o *BatchOrchestrator) FlushChain(
 		return nil, err
 	}
 
+	// ---- Pin the nonce for the whole flush ----------------------------------
+	//
+	// The anchor, the attestation and every member call are sent from one key in one sequence.
+	// Re-reading the pending nonce between them is what let a failover provider hand back an
+	// already-consumed value and fail both members with "nonce too low". Read once, advance
+	// locally; see beginNonceSequence.
+	if err := o.ecm.beginNonceSequence(ctx); err != nil {
+		o.mempool.Requeue(members)
+		return nil, err
+	}
+	defer o.ecm.endNonceSequence()
+
 	// ---- Create the anchor --------------------------------------------------
 	anchorTx, gasUsed, err := o.createBatchAnchor(ctx, tree)
 	if err != nil {
@@ -471,6 +483,7 @@ func (o *BatchOrchestrator) createBatchAnchor(
 	}
 
 	o.ecm.auth.GasLimit = 500000
+	o.ecm.nextNonce()
 	tx, err := anchor.CreateBatchAnchor(
 		o.ecm.auth,
 		tree.BundleID,
@@ -540,6 +553,7 @@ func (o *BatchOrchestrator) settleMember(
 	if p.IsMultiLeg() {
 		targets, values, datas := legArrays(p.Legs)
 		o.ecm.auth.GasLimit = 400000 + uint64(len(p.Legs))*250000
+		o.ecm.nextNonce()
 		tx, err = acct.BatchExecuteGovernanceProofDirect(o.ecm.auth, targets, values, datas, proof)
 	} else {
 		leg := p.Legs[0]
@@ -548,9 +562,13 @@ func (o *BatchOrchestrator) settleMember(
 			v = bigZero()
 		}
 		o.ecm.auth.GasLimit = 500000
+		o.ecm.nextNonce()
 		tx, err = acct.ExecuteGovernanceProofDirect(o.ecm.auth, leg.Target, v, leg.Data, proof)
 	}
 	if err != nil {
+		// The transaction never reached the mempool, so its nonce was not consumed. Give it back:
+		// leaving the gap would strand every LATER member behind a nonce the chain never sees.
+		o.ecm.rewindNonce()
 		return "", err
 	}
 

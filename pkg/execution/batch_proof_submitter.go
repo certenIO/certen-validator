@@ -350,6 +350,7 @@ func (s *BatchProofSubmitterImpl) SubmitBatchQuorumProof(
 		chainID, bundleID[:8], batchRoot[:8], messageHash[:8])
 
 	ecm.auth.GasLimit = 900000
+	ecm.nextNonce()
 	tx, err := ecm.anchor.ExecuteComprehensiveProofSimple(ecm.auth, bundleID, proof)
 	if err != nil {
 		return fmt.Errorf("executeComprehensiveProof: %w", err)

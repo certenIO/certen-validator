@@ -244,6 +244,13 @@ type CertenContractConfig struct {
 //   - createAnchor(): 5-parameter anchor creation
 //   - executeComprehensiveProof(): BLS verification
 type EthereumContractManager struct {
+	// nonceSeq / nonceActive pin the nonce across a multi-transaction flush; see
+	// beginNonceSequence. Guarded by nonceMu because the flush and any concurrent caller share
+	// one auth.
+	nonceMu     sync.Mutex
+	nonceSeq    uint64
+	nonceActive bool
+
 	client                  *ethclient.Client
 	auth                    *bind.TransactOpts
 	config                  *CertenContractConfig
@@ -3083,4 +3090,78 @@ func computeBatchExecutionCommitment(chainID int64, calls []BatchCall) [32]byte 
 // package that need the CertenAccountV6 batch commitment.
 func ComputeBatchExecutionCommitment(chainID int64, calls []BatchCall) [32]byte {
 	return computeBatchExecutionCommitment(chainID, calls)
+}
+
+// =============================================================================
+// Nonce sequencing for a multi-transaction flush
+// =============================================================================
+//
+// A batch flush sends three KINDS of transaction from the same key, in order:
+// createBatchAnchor, then executeComprehensiveProof, then one account call per member. With
+// auth.Nonce left nil, go-ethereum re-queries PendingNonceAt before each one.
+//
+// That is safe against a single RPC endpoint and NOT safe against a failover pool: a later
+// query can be answered by a provider that has not yet seen the earlier transactions, so it
+// returns a nonce the chain has already consumed. Observed live 2026-08-03 — the anchor and the
+// attestation mined, then BOTH members failed with
+//
+//	nonce too low: next nonce 57, tx nonce 56
+//
+// Identical stale value for both members, which is one bad read reused rather than two races.
+// The batch was fully authorised — 7-of-7 quorum, anchor attested, root spendable — and settled
+// nothing.
+//
+// So the nonce is read ONCE per flush and advanced locally. Provider disagreement mid-sequence
+// then cannot corrupt it, because nothing re-reads.
+
+// beginNonceSequence pins the nonce for a multi-transaction sequence.
+//
+// Call once before the first transaction of a flush; every subsequent send takes its nonce from
+// the local counter via nextNonce.
+func (ecm *EthereumContractManager) beginNonceSequence(ctx context.Context) error {
+	ecm.nonceMu.Lock()
+	defer ecm.nonceMu.Unlock()
+
+	n, err := ecm.client.PendingNonceAt(ctx, ecm.auth.From)
+	if err != nil {
+		return fmt.Errorf("pinning nonce for %s: %w", ecm.auth.From.Hex(), err)
+	}
+	ecm.nonceSeq = n
+	ecm.nonceActive = true
+	log.Printf("🔢 [NONCE] pinned sequence at %d for %s", n, ecm.auth.From.Hex())
+	return nil
+}
+
+// nextNonce assigns the next nonce in the pinned sequence to auth.
+//
+// A no-op when no sequence is active, so callers outside a flush keep go-ethereum's automatic
+// behaviour.
+func (ecm *EthereumContractManager) nextNonce() {
+	ecm.nonceMu.Lock()
+	defer ecm.nonceMu.Unlock()
+	if !ecm.nonceActive {
+		return
+	}
+	ecm.auth.Nonce = new(big.Int).SetUint64(ecm.nonceSeq)
+	ecm.nonceSeq++
+}
+
+// rewindNonce gives back the nonce most recently handed out.
+//
+// Used when a send fails BEFORE the transaction reached the mempool: that nonce was never
+// consumed, and skipping it would strand every later transaction behind a permanent gap.
+func (ecm *EthereumContractManager) rewindNonce() {
+	ecm.nonceMu.Lock()
+	defer ecm.nonceMu.Unlock()
+	if ecm.nonceActive && ecm.nonceSeq > 0 {
+		ecm.nonceSeq--
+	}
+}
+
+// endNonceSequence returns to automatic nonce selection.
+func (ecm *EthereumContractManager) endNonceSequence() {
+	ecm.nonceMu.Lock()
+	defer ecm.nonceMu.Unlock()
+	ecm.nonceActive = false
+	ecm.auth.Nonce = nil
 }
