@@ -294,11 +294,23 @@ func registerL2EVMStrategies(registry *Registry, cfg *RegistryConfig, knownAlias
 			continue
 		}
 
-		// Resolve anchor address with V6.1 → V6 → V5 → V4 fallback so the
-		// watcher observes the newest anchor on each chain without forcing
-		// operators to rename env vars in lockstep with contract redeploys.
+		// Resolve anchor address newest-first: V8.1 → V8 → V6.1 → V6 → V5 → V4, so the watcher
+		// observes the newest anchor on each chain without forcing operators to rename env vars
+		// in lockstep with contract redeploys.
+		//
+		// V8.1 and V8 were missing from this chain. An operator deploying CertenAnchorV8_1 to an
+		// L2 and setting <CHAIN>_ANCHORV8_1_ADDRESS would have it SILENTLY IGNORED, and the
+		// strategy would keep using whatever older anchor was still configured — a different
+		// contract with a different validator set. Nothing fails at startup; it surfaces as a
+		// batch that cannot settle on that chain.
 		chainPrefix := l2.anchorEnvVar[:len(l2.anchorEnvVar)-len("_ANCHORV4_ADDRESS")]
-		anchorAddr := os.Getenv(chainPrefix + "_ANCHORV6_1_ADDRESS")
+		anchorAddr := os.Getenv(chainPrefix + "_ANCHORV8_1_ADDRESS")
+		if anchorAddr == "" {
+			anchorAddr = os.Getenv(chainPrefix + "_ANCHORV8_ADDRESS")
+		}
+		if anchorAddr == "" {
+			anchorAddr = os.Getenv(chainPrefix + "_ANCHORV6_1_ADDRESS")
+		}
 		if anchorAddr == "" {
 			anchorAddr = os.Getenv(chainPrefix + "_ANCHORV6_ADDRESS")
 		}
