@@ -1369,7 +1369,36 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	bv.noteConsensusHeight(blockHeight)
 
 	// =======================================================================
-	// EVERY VALIDATOR ENQUEUES on_cadence INTENTS INTO ITS OWN BATCH MEMPOOL
+	// EVERY VALIDATOR ENQUEUES EVERY BATCHABLE INTENT INTO ITS OWN BATCH MEMPOOL
+	//
+	// PROOF CLASS NO LONGER GATES THIS. It used to admit on_cadence only, leaving on_demand to
+	// a separate per-intent submission path. That path cannot settle against the deployed
+	// contracts and never could:
+	//
+	//   * CertenAccountV7._authorizeLeaf computes ONLY the batch-form leaf
+	//     (keccak256("certen:batchleaf:v1" || chainid || adiURLHash || execCommitment ||
+	//     operationID)). A V7 account cannot authorise anything against a V6-form
+	//     single-intent anchor, so the per-intent path could not settle a V7 account at all.
+	//   * Its BLS proof declared voting power unrelated to any real signer set, which
+	//     CertenAnchorV8_1._verifyBLSProof rejects against the registered total.
+	//   * Its ZK witness proved against the block signer's recorded key rather than the key
+	//     that signed, giving the unsatisfied constraint #774716 observed live.
+	//
+	// The design already anticipated the fix: "N=1 IS NOT A SPECIAL CASE. A single intent is a
+	// one-leaf tree whose root equals the leaf and whose Merkle proof is empty. There is no
+	// mode flag and no second code path, so the batch and single paths cannot drift apart."
+	// An intent that is alone in its period simply forms a one-member batch, and gets the same
+	// real quorum every other batch gets.
+	//
+	// What this costs is honesty about latency: on_demand's former speed came from NOT having
+	// a quorum. A genuine quorum needs peers to have independently derived the same tree, which
+	// means they must have processed the intent. There is no version of this that is both
+	// single-signer and trustworthy.
+	//
+	// Intents the batch path cannot represent still fall through to the existing per-intent
+	// path unchanged — EnqueueForBatch refuses chains with no configured orchestrator, and
+	// batchInputsFromIntent refuses multi-chain intents. So non-EVM targets (Solana, NEAR,
+	// Aptos, Sui, TON, Cardano) are untouched by this.
 	//
 	// This MUST happen before the elected-executor gate below, and it is the single change
 	// that makes cross-ADI quorum possible at all.
@@ -1387,7 +1416,7 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	// from this round's executor.
 	// =======================================================================
 	var batchQueued bool
-	if proofClass == "on_cadence" && bv.batchEnqueuer != nil {
+	if bv.batchEnqueuer != nil {
 		batchQueued = bv.enqueueForBatch(certenIntent, certenProof, vb, vbMeta, bftMeta,
 			blockHeight, g0Proof, g1Proof, g2Proof, blsSignature, validatorSignatures,
 			governanceLevel, blockHeight)

@@ -112,6 +112,31 @@ func min(a, b int) int {
 	return b
 }
 
+// PROOF CLASS MUST NOT GATE THE ENQUEUE.
+//
+// Restricting it to on_cadence sent on_demand intents down a per-intent path that cannot settle
+// against the deployed contracts: CertenAccountV7._authorizeLeaf computes ONLY the batch-form
+// leaf, so a V7 account can never authorise against a V6-form single-intent anchor. On top of
+// that the per-intent submitter declared voting power unrelated to any signer set, and proved
+// against the block signer's recorded key rather than the key that signed (constraint #774716).
+//
+// "N=1 IS NOT A SPECIAL CASE" — an intent alone in its period is a one-member batch and gets
+// the same real quorum as any other. Intents the batch path cannot represent still fall through
+// via EnqueueForBatch / batchInputsFromIntent refusing them, which keeps non-EVM targets intact.
+func TestEnqueueIsNotGatedOnProofClass(t *testing.T) {
+	src := workflowSource(t)
+	enq := strings.Index(src, "bv.enqueueForBatch(")
+	if enq < 0 {
+		t.Fatal("enqueueForBatch call not found")
+	}
+	window := src[max0(enq-300):enq]
+	if strings.Contains(window, `proofClass == "on_cadence"`) {
+		t.Fatal("the batch enqueue is gated on proofClass again. on_demand intents would go to " +
+			"the per-intent path, which cannot settle a CertenAccountV7 account: _authorizeLeaf " +
+			"computes only the batch-form leaf.")
+	}
+}
+
 // enqueueForBatch must not be reachable only under a proofClass check that excludes peers.
 // Guarding on batchEnqueuer being wired is correct; guarding on executor identity is not.
 func TestEnqueueForBatchIsNotGuardedByExecutorIdentity(t *testing.T) {
