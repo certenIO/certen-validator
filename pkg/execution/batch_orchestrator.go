@@ -2,6 +2,7 @@ package execution
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 	"sync"
@@ -70,6 +71,11 @@ type BatchFlushResult struct {
 	// that landed the batch already did both. Reported so the condition is visible rather than
 	// looking like members silently vanishing.
 	AlreadySettled []*PendingBatchIntent
+
+	// Retryable members hit a TRANSIENT refusal — today only a gas ceiling breach. Their leaf
+	// was never consumed, so the member is requeued rather than attested as failed. Reported so
+	// the caller can see a period was deferred rather than assuming everything settled.
+	Retryable []*PendingBatchIntent
 
 	// AlreadySettledOutcome reports, per intent id, whether that released member's leaf was
 	// actually consumed on chain. Absent means the outcome could not be resolved and the member
@@ -360,6 +366,28 @@ func (o *BatchOrchestrator) FlushChain(
 
 		txHash, serr := o.settleMember(ctx, p, tree, branch)
 		if serr != nil {
+			// A gas-ceiling refusal is "too expensive right now", NOT "this can never work".
+			//
+			// Every settle error used to become a permanent FAILED, so a transient fee spike
+			// killed a perfectly valid intent and wrote that failure back to Accumulate. The
+			// leaf is untouched by a refusal — nothing was submitted — so the member can simply
+			// be requeued and settled in a later period once prices subside.
+			//
+			// errors.As, not errors.Is: ErrGasCeilingExceeded is a struct pointer carrying the
+			// observed and permitted prices, and it arrives wrapped from evaluateGasPrice.
+			var gasCeil *ErrGasCeilingExceeded
+			if errors.As(serr, &gasCeil) {
+				if o.memberPastDeadline(p) {
+					o.logf("[BATCH] member %s: gas ceiling %v but the intent has expired — "+
+						"failing rather than retrying forever", p.IntentID, serr)
+					res.Failed = append(res.Failed, p)
+					continue
+				}
+				o.logf("[BATCH] member %s deferred: %v (leaf untouched; will retry in a later period)",
+					p.IntentID, serr)
+				res.Retryable = append(res.Retryable, p)
+				continue
+			}
 			res.Failed = append(res.Failed, p)
 			// Keep the hash of a member that REVERTED. settleMember returns one whenever the
 			// transaction was mined, and a reverted transaction is on chain and independently
@@ -375,6 +403,14 @@ func (o *BatchOrchestrator) FlushChain(
 		}
 		res.Settled = append(res.Settled, p)
 		res.TxHashes[p.IntentID] = txHash
+	}
+
+	// Put deferred members back so a later period retries them. Requeue, never Drop: dropping
+	// routes to the per-intent path, which would re-derive and re-execute an intent that simply
+	// could not afford gas this minute.
+	if len(res.Retryable) > 0 {
+		o.mempool.Requeue(res.Retryable)
+		o.logf("[BATCH] chain=%d %d member(s) deferred on gas and requeued", chainID, len(res.Retryable))
 	}
 
 	o.logf("[BATCH] chain=%d complete: %d settled, %d failed (anchor amortised across %d)",
@@ -718,3 +754,23 @@ func (o *BatchOrchestrator) memberAccountUsable(ctx context.Context, p *PendingB
 	}
 	return nil
 }
+
+// memberPastDeadline reports whether a member has been deferred for longer than we will keep
+// retrying it on gas.
+//
+// Bounds the retry: without a bound, a member on a chain that stays expensive is requeued forever
+// and never resolves either way — the silent limbo the whole failure policy exists to prevent.
+// Measured from EnqueuedAt, which the mempool stamps once and preserves across requeue and across
+// a restore from disk, so the window does not restart every time the member is deferred.
+func (o *BatchOrchestrator) memberPastDeadline(p *PendingBatchIntent) bool {
+	if p == nil || p.EnqueuedAt.IsZero() {
+		return false
+	}
+	return time.Since(p.EnqueuedAt) > maxGasDeferral
+}
+
+// maxGasDeferral is how long a member may be deferred on gas before it is failed outright.
+//
+// Long enough to ride out an ordinary fee spike, short enough that an ADI learns the outcome the
+// same hour it submitted.
+const maxGasDeferral = time.Hour
