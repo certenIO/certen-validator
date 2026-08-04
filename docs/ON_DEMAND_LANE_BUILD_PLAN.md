@@ -306,9 +306,70 @@ regime — not the ~60s §5.3 implied, because 47s of anchor-and-settle work sit
 
 Still unmeasured: the failover T in §4.5, which needs a leader to actually fail.
 
+### 5.6 VERIFIED LIVE — intent-keyed lane enabled, 2026-08-04 21:41Z
+
+`ON_DEMAND_INTENT_KEYED=true` on all seven. Both lanes settled clean, end to end, with writeback
+to Accumulate.
+
+| Intent | Lane | Flush wait | Exec+settle | **Total** | Wrote back |
+|---|---|---|---|---|---|
+| `0d76afa7` | on_demand via PERIOD (baseline) | 225s | 51s | **276s** | ✓ |
+| `db439b53` | on_demand **intent-keyed** | **64.9s** | 51.9s | **116.8s** | ✓ |
+| `0fef33eb` | on_cadence (period, unchanged) | 140.3s | 51.2s | **191.5s** | ✓ |
+
+**276s → 116.8s, a 2.4× improvement.** §5.5 projected ~115s; actual 116.8s.
+
+The `db439b53` trace, on leader validator-7:
+
+| At | Event |
+|---|---|
+| 21:40:19–21:40:27 | enqueued on all seven as `ON-DEMAND intent-keyed` (8s spread) |
+| 21:40:25.855 | **one-member batch formed 0.5s after enqueue** — no period, no grace |
+| 21:40:38.278 | anchor created, gas 278,081 |
+| 21:40:38.905 | **quorum 7/7, 700/700 — all six peers attested on the FIRST attempt, zero retries** |
+| 21:41:01.464 | anchor `0x5ce0e7bc…` attested; root `0x3d3833a0…` spendable |
+| 21:41:13.665 | member settled, tx `0x87c04cb7…` |
+| 21:41:13.668 | Phase 7-9 replay → complete, written back |
+
+All nine phases confirmed: L1–L4 proof, G0/G1/G2 governance proofs, A+++ BLS signature (gov=G2),
+canonical BFT consensus execution, Phase 7-9 cycle, Accumulate writeback.
+
+**What the readiness retry actually did: nothing.** Every peer already held the member when the
+leader asked, so the quorum formed on attempt one. That is the design working as intended — the
+60s solo grace it replaced was pure dead time, exactly as §5.5's 5s-spread/0.53s-quorum
+measurement predicted.
+
+**Incidental validation of the persistence path.** `db439b53` was submitted while the flag was
+still off and was mid-discovery when the containers were recreated. The discovery watermark
+rewind re-derived it under the new binary, it routed to the on-demand lane, settled, and a later
+re-discovery correctly logged `already completed, skipping`. The restart cost nothing.
+
 ---
 
-## 6. Implementation
+## 6. Implementation — BUILT (commit `7184d7e`)
+
+All five steps are implemented, formatted, vetted and green across the whole module. The lane is
+**OFF by default** (`ON_DEMAND_INTENT_KEYED` unset), so the deploy is a no-op until the flag is
+set. Files added: `batch_mempool_ondemand.go`, `batch_attestation_ondemand{,_client}.go`,
+`batch_orchestrator_ondemand.go`, `batch_ondemand_submitter.go` (+ five test files).
+
+Deviations from the plan as written, and why:
+
+- **No `Lane` field on `PendingBatchIntent`.** The structure holding a member is the single
+  authority on its lane; a second copy on the member could disagree with it. `BatchLane` exists
+  only as the persistence discriminator and the routing vocabulary.
+- **`SettleOnDemandMember` reuses FlushChain's primitives rather than extracting its body.** It
+  calls the same `memberAccountUsable`, `anchorAlreadyAttested`, `verifyLeavesAgainstAccounts`,
+  `createBatchAnchor`, `verifyLeavesAgainstAnchor`, `settleMember` in the same order, so the
+  security-critical checks have one implementation. What it does not inherit is FlushChain's
+  member-lifecycle logic (requeue-some-drop-others, per-period attempt counters, partial tree
+  outcomes) — all of which is about sets and meaningless at N=1. **FlushChain itself is
+  unmodified.**
+- **`BatchQuorumAttestor.prove` was extracted** so both lanes share one aggregate-and-submit
+  body. That is where a quorum forgery would have to get past (CRYPTO-007), and a second copy
+  for on-demand would be a second place for the registry check to weaken.
+
+### Step detail
 
 **Step 1 — Storage.** `onDemand` index on `BatchMempool` + methods + TTL prune. Persist as a
 sibling array in the snapshot. No behaviour change; nothing writes to it yet.
