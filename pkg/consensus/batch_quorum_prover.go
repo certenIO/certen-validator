@@ -103,8 +103,13 @@ type BatchLeg struct {
 // Rejects anything the batch path cannot represent honestly, so a malformed member is
 // refused at enqueue time and falls back to the per-intent path — rather than poisoning a
 // tree that other ADIs' intents are waiting on.
-func (bv *BFTValidator) batchInputsFromIntent(
+// onlyChain, when non-zero, restricts extraction to the legs on that chain. A cross-chain intent
+// is a valid batch input once split: each chain contributes its OWN member, with its own source
+// account and its own leaf. The leaf binds chainid, so two members of the same intent on different
+// chains cannot collide even though they share an operationID and ADI URL.
+func (bv *BFTValidator) batchInputsFromIntentForChain(
 	ci *CertenIntent,
+	onlyChain int64,
 ) (legs []BatchLeg, chainID int64, account [20]byte, operationID [32]byte, err error) {
 	if ci == nil {
 		return nil, 0, account, operationID, fmt.Errorf("nil intent")
@@ -132,6 +137,9 @@ func (bv *BFTValidator) batchInputsFromIntent(
 	}
 
 	for i, leg := range env.Legs {
+		if onlyChain != 0 && leg.ChainID != onlyChain {
+			continue
+		}
 		ep := leg.ExecutionPayload
 		if ep == nil {
 			return nil, 0, account, operationID, fmt.Errorf("leg %d has no executionPayload", i)
@@ -195,6 +203,9 @@ func (bv *BFTValidator) batchInputsFromIntent(
 		})
 	}
 
+	if len(legs) == 0 {
+		return nil, 0, account, operationID, fmt.Errorf("no legs on chain %d", onlyChain)
+	}
 	if account == ([20]byte{}) {
 		return nil, 0, account, operationID, fmt.Errorf("no source account resolved")
 	}
@@ -271,10 +282,20 @@ func (bv *BFTValidator) enqueueForBatch(
 	batchAtt.SubmitVB = vbMeta
 	batchAtt.SubmitBFT = bftMeta
 
-	legs, chainID, account, opID, extractErr := bv.batchInputsFromIntent(certenIntent)
-	if extractErr != nil {
+	// One member PER CHAIN.
+	//
+	// A cross-chain intent used to be refused outright ("intent spans chains X and Y") and fell
+	// through to the per-intent path, which has no quorum collection — so it submitted a proof
+	// with no validators and the anchor rejected it. Splitting is the honest representation: each
+	// chain settles its own legs, under its own anchor, from its own account, and the leaf binds
+	// chainid so the two members cannot collide despite sharing an operationID and ADI URL.
+	//
+	// Partial outcomes are already handled: members settle and fail independently, and a member
+	// that reverts is attested as failed without touching the other chain's member.
+	chains, chainsErr := bv.batchChainsOfIntent(certenIntent)
+	if chainsErr != nil || len(chains) == 0 {
 		bv.logger.Printf("⚠️ [BATCH-QUEUE] intent %s cannot be batched (%v) — falling back",
-			certenIntent.IntentID, extractErr)
+			certenIntent.IntentID, chainsErr)
 		return false
 	}
 
@@ -299,16 +320,37 @@ func (bv *BFTValidator) enqueueForBatch(
 	// transaction, so one intent commits at a different height on every node (observed live:
 	// 230/232/234/235/235/236/237 for a single intent). The Accumulate height is a property of
 	// the intent itself — the same reason roundID is built from it.
-	if enqErr := bv.batchEnqueuer.EnqueueForBatch(
-		certenIntent.IntentID, adiURL, chainID, account, opID, legs, batchAtt, commitHeight,
-	); enqErr != nil {
-		bv.logger.Printf("⚠️ [BATCH-QUEUE] intent %s not queued (%v) — falling back",
-			certenIntent.IntentID, enqErr)
-		return false
+	// All-or-nothing across chains: if any chain's member cannot be built or queued, none are.
+	// A half-queued cross-chain intent would settle on one chain and silently drop the other.
+	type pendingMember struct {
+		legs    []BatchLeg
+		chainID int64
+		account [20]byte
+		opID    [32]byte
+	}
+	members := make([]pendingMember, 0, len(chains))
+	for _, ch := range chains {
+		legs, chainID, account, opID, extractErr := bv.batchInputsFromIntentForChain(certenIntent, ch)
+		if extractErr != nil {
+			bv.logger.Printf("⚠️ [BATCH-QUEUE] intent %s cannot be batched on chain %d (%v) — "+
+				"falling back for the WHOLE intent so it is not split across two paths",
+				certenIntent.IntentID, ch, extractErr)
+			return false
+		}
+		members = append(members, pendingMember{legs, chainID, account, opID})
 	}
 
-	bv.logger.Printf("📦 [BATCH-QUEUE] intent %s queued for cross-ADI batching on chain %d at height %d",
-		certenIntent.IntentID, chainID, commitHeight)
+	for _, m := range members {
+		if enqErr := bv.batchEnqueuer.EnqueueForBatch(
+			certenIntent.IntentID, adiURL, m.chainID, m.account, m.opID, m.legs, batchAtt, commitHeight,
+		); enqErr != nil {
+			bv.logger.Printf("⚠️ [BATCH-QUEUE] intent %s not queued on chain %d (%v) — falling back",
+				certenIntent.IntentID, m.chainID, enqErr)
+			return false
+		}
+		bv.logger.Printf("📦 [BATCH-QUEUE] intent %s queued for cross-ADI batching on chain %d at height %d (%d of %d chain member(s))",
+			certenIntent.IntentID, m.chainID, commitHeight, len(m.legs), len(members))
+	}
 	return true
 }
 
@@ -483,4 +525,33 @@ func memberADIURL(ci *CertenIntent) (string, error) {
 		return "", fmt.Errorf("resolved ADI %q has a trailing slash; the account's adiURL will not match", adi)
 	}
 	return adi, nil
+}
+
+// batchChainsOfIntent lists the distinct chains an intent's legs touch, ascending.
+//
+// Sorted so every validator partitions the same intent into the same members in the same order.
+// Batch membership must be identical on all nodes or the root and bundleId diverge and the batch
+// cannot be co-signed.
+func (bv *BFTValidator) batchChainsOfIntent(ci *CertenIntent) ([]int64, error) {
+	if ci == nil {
+		return nil, fmt.Errorf("nil intent")
+	}
+	env, err := ci.ParseCrossChain()
+	if err != nil {
+		return nil, fmt.Errorf("parse cross-chain: %w", err)
+	}
+	seen := map[int64]struct{}{}
+	out := make([]int64, 0, len(env.Legs))
+	for _, leg := range env.Legs {
+		if leg.ChainID == 0 {
+			return nil, fmt.Errorf("leg %q has no chainID", leg.LegID)
+		}
+		if _, dup := seen[leg.ChainID]; dup {
+			continue
+		}
+		seen[leg.ChainID] = struct{}{}
+		out = append(out, leg.ChainID)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out, nil
 }
