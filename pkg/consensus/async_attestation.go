@@ -278,6 +278,29 @@ func (bv *BFTValidator) RunProofCycle(
 		att.CertenIntent.IntentID, legCount, isMultiLeg)
 	bv.logger.Printf("   Accumulate ref: accountURL=%s, txHash=%s", att.CertenIntent.AccountURL, att.CertenIntent.TransactionHash)
 
+	// A CHAIN-SCOPED BATCH MEMBER closes its own cycle; it must not wait on another chain.
+	//
+	// A cross-chain intent is split into one batch member per chain (see batchChainsOfIntent).
+	// Each member settles under its own anchor, on its own chain, and is replayed here by
+	// whichever validator flushed THAT chain — so it can observe exactly one chain's transaction
+	// and knows nothing of its sibling's.
+	//
+	// Routing it into the multi-leg aggregator asked for one chain group per leg and supplied
+	// one, and the aggregator is per-validator: the node that flushed Sepolia never sees Base's
+	// group and vice versa, so neither cycle can ever complete. Both settled on chain and neither
+	// wrote back. Observed live 2026-08-04 on intent 763f8429.
+	//
+	// The single-chain path below is the correct one for a member: it observes the transaction it
+	// actually has and writes back that leg's outcome. The intent's other chain does the same
+	// independently, which is exactly how the split settles it.
+	if isMultiLeg && att.Replayed && extractRawTxHash(res.GovernanceTxHash) != "" &&
+		len(parseMultiChainTxHashes(res.GovernanceTxHash)) <= 1 {
+		bv.logger.Printf("🧩 [MULTI-LEG-PROOF] intent %s is a chain-scoped batch member (network=%s); "+
+			"closing its own single-chain cycle rather than waiting on a sibling chain this node "+
+			"cannot observe", att.CertenIntent.IntentID, res.Network)
+		isMultiLeg = false
+	}
+
 	if isMultiLeg {
 		// MULTI-LEG: Start per-chain proof cycles with unified write-back
 		bv.logger.Printf("🔀 [MULTI-LEG-PROOF] Starting per-chain proof cycles for %d legs", legCount)
