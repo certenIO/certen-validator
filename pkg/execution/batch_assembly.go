@@ -324,9 +324,34 @@ func (s *BatchStack) flushChainPeriods(
 		}
 		// SETTLE GRACE — see settleGraceElapsed. A period that closed seconds ago is very
 		// likely incomplete on peers that are still generating proofs for its members.
-		if !s.settleGraceElapsed(chainID, start, grace, now, logf) {
+		// A SOLO period needs far less grace than a shared one.
+		//
+		// The grace exists because a leader that forms a batch the instant its period closes can
+		// out-run peers still proving that period's OTHER members — on 2026-08-02 a 2-member
+		// batch found two peers holding one member and three holding neither, and quorum failed
+		// 2-of-7 with every node healthy. That risk is about CO-MEMBERS: a peer holding some but
+		// not all of them derives a different bundleId.
+		//
+		// With exactly one member there are no co-members. A peer either has it or does not, and
+		// measurement says they all do, quickly: an on_demand intent enqueued on all seven within
+		// FOUR SECONDS (14:51:16-14:51:20 on 2026-08-04), ~17s after discovery, while the period
+		// itself takes ~143s to close at Accumulate's ~1.43s/block. The full grace is waiting for
+		// a condition that was satisfied over two minutes earlier.
+		//
+		// on_demand is by definition a single intent, so this is exactly that path — without
+		// having to thread proofClass through the enqueue interface and the persisted schema.
+		// soloSettleGrace still leaves ~15x margin over the observed spread, because that sample
+		// was a healthy idle set and a loaded or catching-up node will be slower.
+		effectiveGrace := grace
+		if n := len(s.Mempool.PeekForPeriod(chainID, start, periodBlocks)); n == 1 && grace > soloSettleGrace {
+			effectiveGrace = soloSettleGrace
+			logf("[BATCH-FLUSH] chain %d period %d: solo member — grace %s instead of %s",
+				chainID, start, effectiveGrace, grace)
+		}
+
+		if !s.settleGraceElapsed(chainID, start, effectiveGrace, now, logf) {
 			logf("[BATCH-FLUSH] chain %d period %d: leading, but holding for settle grace %s",
-				chainID, start, grace)
+				chainID, start, effectiveGrace)
 			continue
 		}
 		logf("[BATCH-FLUSH] chain %d period %d: leading and past grace — flushing", chainID, start)
@@ -565,6 +590,13 @@ type periodKey struct {
 // roughly three minutes per intent on Sepolia/Kermit, and a peer that has not finished cannot
 // reproduce the batch.
 const DefaultBatchSettleGrace = 4 * time.Minute
+
+// soloSettleGrace applies to a period holding exactly one member — the on_demand shape.
+//
+// Sized from measurement, not intuition: all seven validators enqueued the same intent within a
+// 4-second window, so 60s is roughly fifteen times the observed spread. It is deliberately not
+// smaller; the sample came from an idle set, and a node under load or catching up will lag.
+const soloSettleGrace = time.Minute
 
 // DefaultBatchRetentionPeriods is the memory backstop horizon. Generous on purpose: a member
 // pruned while its period was still waiting for a working leader would never settle, and
