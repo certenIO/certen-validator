@@ -167,11 +167,36 @@ type BatchMempool struct {
 	// chain is still refused.
 	seen map[string]bool // intentID|chainID -> queued, for idempotent Add
 
+	// onDemand holds intent-keyed members, which settle one per anchor and never form a period.
+	//
+	// DELIBERATELY A SEPARATE STRUCTURE, not a lane tag on `pool`. Keeping them physically apart
+	// is what guarantees selectForPeriodLocked and PruneOlderThan cannot see an on-demand member,
+	// so the period path needs no lane-scoping anywhere and keeps its current behaviour exactly.
+	// A shared pool with a filter would put a lane check on every one of those call sites, and
+	// the ones that were missed would fail silently — a batch formed over the wrong members.
+	//
+	// Keyed by operationID because that is the intent's identity and the lookup key an attester
+	// is given. See batch_mempool_ondemand.go.
+	onDemand map[int64]map[[32]byte]*PendingBatchIntent
+
 	// store persists the queue so a restart resumes with its members instead of stranding
 	// intents the round has already reported as batch_queued. Nil disables persistence and
 	// leaves only the discovery watermark rewind as the recovery path.
 	store *BatchMempoolStore
 }
+
+// BatchLane identifies which settlement mechanism owns a member.
+//
+// It is NOT a field on PendingBatchIntent. The structure holding a member is the single
+// authority on its lane, so there is no second copy that can disagree with it.
+type BatchLane string
+
+const (
+	// LaneOnCadence members are pooled into height-bucketed periods and share one anchor.
+	LaneOnCadence BatchLane = "on_cadence"
+	// LaneOnDemand members are intent-keyed: one member, one anchor, no period.
+	LaneOnDemand BatchLane = "on_demand"
+)
 
 // SetStore attaches durable storage and restores anything previously queued.
 //
@@ -218,9 +243,10 @@ func (m *BatchMempool) persist() {
 
 func NewBatchMempool(cfg BatchMempoolConfig) *BatchMempool {
 	return &BatchMempool{
-		cfg:  cfg.withDefaults(),
-		pool: make(map[int64][]*PendingBatchIntent),
-		seen: make(map[string]bool),
+		cfg:      cfg.withDefaults(),
+		pool:     make(map[int64][]*PendingBatchIntent),
+		seen:     make(map[string]bool),
+		onDemand: make(map[int64]map[[32]byte]*PendingBatchIntent),
 	}
 }
 
@@ -240,7 +266,15 @@ func (m *BatchMempool) Add(p *PendingBatchIntent) error {
 	return nil
 }
 
-func (m *BatchMempool) add(p *PendingBatchIntent) error {
+// validateMember is the admission check both lanes share.
+//
+// Extracted from add() unchanged so the on-demand index cannot drift into accepting members the
+// period pool would reject — a member that is malformed is malformed regardless of which
+// mechanism settles it, and every one of these checks exists because letting it through would
+// surface later as a failed tree or an anchor no account can spend.
+//
+// It also stamps EnqueuedAt, which is the only mutation here.
+func validateMember(p *PendingBatchIntent) error {
 	if p == nil {
 		return fmt.Errorf("nil intent")
 	}
@@ -272,6 +306,13 @@ func (m *BatchMempool) add(p *PendingBatchIntent) error {
 	}
 	if p.EnqueuedAt.IsZero() {
 		p.EnqueuedAt = time.Now()
+	}
+	return nil
+}
+
+func (m *BatchMempool) add(p *PendingBatchIntent) error {
+	if err := validateMember(p); err != nil {
+		return err
 	}
 
 	m.mu.Lock()

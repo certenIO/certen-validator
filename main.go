@@ -599,6 +599,39 @@ func main() {
 		_ = json.NewEncoder(w).Encode(resp)
 	})
 
+	// Peer ON-DEMAND attestation. Same security boundary as the period endpoint above — the
+	// handler rebuilds the one-member batch from THIS validator's own copy of the member and
+	// signs only on an exact bundleId match — but keyed on (chain, operationID) rather than a
+	// height window. A SEPARATE route on purpose: a validator that has not been upgraded
+	// answers 404 here rather than misreading an on-demand request as a period one.
+	mux.HandleFunc(execution.OnDemandAttestationEndpoint, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		stack := batchStackForAttestation.Load()
+		if stack == nil {
+			http.Error(w, "batch stack not ready", http.StatusServiceUnavailable)
+			return
+		}
+		me := batchAttesterIdentity.Load()
+		if me == nil {
+			http.Error(w, "attester identity not configured", http.StatusServiceUnavailable)
+			return
+		}
+		var req execution.OnDemandAttestationRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		// A refusal is a normal, expected outcome — CodeMemberNotHeld especially, for the few
+		// seconds before a peer finishes processing the round — so it returns 200 with Error
+		// and Code set rather than an HTTP error status.
+		resp := stack.HandleOnDemandAttestationRequest(&req, *me)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	})
+
 	// Health endpoint - Per E.2 remediation: Shows degraded status if database disconnected
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1416,6 +1449,45 @@ func startValidator(
 						log.Printf,
 					)
 					validator.SetBatchEnqueuer(stack)
+
+					// ON-DEMAND LANE. Intent-keyed settlement: one intent, one anchor, no
+					// period, no settle grace — see docs/ON_DEMAND_LANE_BUILD_PLAN.md.
+					//
+					// The submitter is started whenever batching is active, but nothing reaches
+					// it unless ON_DEMAND_INTENT_KEYED=true makes enqueueForBatch route
+					// on_demand intents to EnqueueOnDemand. Running it unconditionally means
+					// the flag flip is a config change on an already-exercised code path rather
+					// than a first run in production.
+					odSubmitter, odErr := execution.NewOnDemandSubmitter(execution.OnDemandSubmitterConfig{
+						Stack:       stack,
+						Prover:      prover,
+						ValidatorID: cfg.ValidatorID,
+						Roster:      consensus.BatchLeaderRoster,
+						Attest: func(ctx context.Context, att interface{}, txHash string, chainID int64, ok bool) {
+							validator.RunBatchMemberAttestation(ctx, att, txHash, chainID, ok)
+						},
+						Fallback: func(ctx context.Context, m *execution.PendingBatchIntent) {
+							if m == nil {
+								return
+							}
+							validator.RunBatchMemberFallback(ctx, m.Attestation)
+						},
+						Logf: log.Printf,
+					})
+					if odErr != nil {
+						log.Printf("⚠️ [OD] on-demand submitter unavailable (%v) — on_demand "+
+							"intents will continue to settle on the period path", odErr)
+					} else {
+						stack.SetOnDemandWaker(odSubmitter.Wake)
+						go odSubmitter.Run(context.Background())
+						if consensus.OnDemandLaneEnabled() {
+							log.Printf("⚡ [OD] intent-keyed on-demand lane ENABLED — on_demand " +
+								"intents settle one-per-anchor with no period and no settle grace")
+						} else {
+							log.Printf("💤 [OD] on-demand submitter running but IDLE " +
+								"(ON_DEMAND_INTENT_KEYED is not true; on_demand intents take the period path)")
+						}
+					}
 
 					// Publish to the peer attestation handler. Without this a proposer's
 					// request gets 503 and no quorum can ever form.

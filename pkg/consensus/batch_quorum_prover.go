@@ -340,19 +340,56 @@ func (bv *BFTValidator) enqueueForBatch(
 		members = append(members, pendingMember{legs, chainID, account, opID})
 	}
 
+	// LANE ROUTING. proofClass decides WHICH MECHANISM settles the member — never WHETHER to
+	// enqueue it. Both lanes are the batch path: routing on_demand off it entirely cannot settle
+	// a CertenAccountV7 account, because _authorizeLeaf only ever computes the batch-form leaf.
+	// TestEnqueueIsNotGatedOnProofClass guards that.
+	//
+	// An unrecognised proofClass falls back rather than defaulting to a lane. A member in the
+	// wrong lane on one node derives a bundleId its peers never will.
+	proofClass, pcErr := certenIntent.GetProofClass()
+	if pcErr != nil {
+		bv.logger.Printf("⚠️ [BATCH-QUEUE] intent %s has no usable proof class (%v) — falling back",
+			certenIntent.IntentID, pcErr)
+		return false
+	}
+	onDemand := proofClass == "on_demand" && onDemandLaneEnabled()
+
 	for _, m := range members {
-		if enqErr := bv.batchEnqueuer.EnqueueForBatch(
-			certenIntent.IntentID, adiURL, m.chainID, m.account, m.opID, m.legs, batchAtt, commitHeight,
-		); enqErr != nil {
+		var enqErr error
+		if onDemand {
+			enqErr = bv.batchEnqueuer.EnqueueOnDemand(
+				certenIntent.IntentID, adiURL, m.chainID, m.account, m.opID, m.legs, batchAtt, commitHeight)
+		} else {
+			enqErr = bv.batchEnqueuer.EnqueueForBatch(
+				certenIntent.IntentID, adiURL, m.chainID, m.account, m.opID, m.legs, batchAtt, commitHeight)
+		}
+		if enqErr != nil {
 			bv.logger.Printf("⚠️ [BATCH-QUEUE] intent %s not queued on chain %d (%v) — falling back",
 				certenIntent.IntentID, m.chainID, enqErr)
 			return false
 		}
-		bv.logger.Printf("📦 [BATCH-QUEUE] intent %s queued for cross-ADI batching on chain %d at height %d (%d of %d chain member(s))",
-			certenIntent.IntentID, m.chainID, commitHeight, len(m.legs), len(members))
+		lane := "on_cadence period"
+		if onDemand {
+			lane = "ON-DEMAND intent-keyed"
+		}
+		bv.logger.Printf("📦 [BATCH-QUEUE] intent %s queued for %s settlement on chain %d at height %d (%d of %d chain member(s))",
+			certenIntent.IntentID, lane, m.chainID, commitHeight, len(m.legs), len(members))
 	}
 	return true
 }
+
+// onDemandLaneEnabled reports whether intent-keyed on-demand settlement is switched on.
+//
+// Default OFF. With the flag off an on_demand intent takes the period path exactly as it does
+// today, so deploying this code changes nothing until the flag is set — and turning it off again
+// is a restart, not a rollback.
+func onDemandLaneEnabled() bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("ON_DEMAND_INTENT_KEYED")), "true")
+}
+
+// OnDemandLaneEnabled is onDemandLaneEnabled exported so the wiring can log which lane is live.
+func OnDemandLaneEnabled() bool { return onDemandLaneEnabled() }
 
 // RunBatchMemberFallback closes out a member the batch path could not settle.
 //
@@ -478,6 +515,11 @@ func (bv *BFTValidator) IsBatchPeriodLeader(chainID int64, cutoffHeight, elapsed
 // Read from BATCH_LEADER_VALIDATORS when set, so a set change does not require a code change;
 // otherwise the seven production IDs. The order is normalised by sorting, because a roster
 // that differs only in order would elect different leaders on different nodes.
+// BatchLeaderRoster is batchLeaderRoster exported for the on-demand submitter, which elects on
+// (chain, operationID) over the SAME roster. Both lanes must agree on who exists, or two nodes
+// could each believe they lead the same member.
+func BatchLeaderRoster() []string { return batchLeaderRoster() }
+
 func batchLeaderRoster() []string {
 	raw := strings.TrimSpace(os.Getenv("BATCH_LEADER_VALIDATORS"))
 	var ids []string

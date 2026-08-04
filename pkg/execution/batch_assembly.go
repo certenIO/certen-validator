@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -172,6 +173,12 @@ type BatchStack struct {
 	// incoming request's width against it and refuses a mismatch, rather than adopting the
 	// proposer's value — see HandleBatchAttestationRequest. Zero means the default.
 	PeriodBlocks uint64
+
+	// onDemandWaker signals the on-demand submitter after an intent-keyed enqueue, so
+	// settlement starts on the event rather than on the next sweep. Nil until the submitter is
+	// wired, and nil forever when the on-demand lane is disabled — EnqueueOnDemand is simply
+	// never called in that case.
+	onDemandWaker atomic.Pointer[func()]
 }
 
 // NewBatchStack assembles resolver -> submitter -> orchestrator for every configured chain.
@@ -773,6 +780,71 @@ func (s *BatchStack) EnqueueForBatch(
 		Attestation:  attestation,
 		CommitHeight: commitHeight,
 	})
+}
+
+// EnqueueOnDemand queues an intent-keyed member: one intent, one anchor, no period.
+//
+// Identical admission rules to EnqueueForBatch — the two differ ONLY in which structure the
+// member lands in, and therefore which mechanism settles it. Routing is the caller's decision,
+// made from the intent's proofClass; this function does not inspect it.
+//
+// Signals the submitter so settlement starts immediately rather than on the next sweep. The
+// signal is best-effort: a member whose signal is lost is picked up by the backstop ticker.
+func (s *BatchStack) EnqueueOnDemand(
+	intentID string,
+	adiURL string,
+	chainID int64,
+	account [20]byte,
+	operationID [32]byte,
+	legs interface{},
+	attestation interface{},
+	commitHeight uint64,
+) error {
+	if _, err := s.OrchestratorFor(chainID); err != nil {
+		return fmt.Errorf("chain %d is not configured for batching: %w", chainID, err)
+	}
+
+	converted, err := convertLegs(legs, chainID, common.BytesToAddress(account[:]))
+	if err != nil {
+		return err
+	}
+	if len(converted) == 0 {
+		return fmt.Errorf("intent %s produced no batch legs", intentID)
+	}
+	// The commit height is bound into the bundleId. Without it every validator with a different
+	// local view derives a different id, exactly as on the period path.
+	if commitHeight == 0 {
+		return fmt.Errorf("intent %s has no BFT commit height; its bundleId is not derivable",
+			intentID)
+	}
+
+	if err := s.Mempool.AddOnDemand(&PendingBatchIntent{
+		IntentID:     intentID,
+		ADIURL:       adiURL,
+		ChainID:      chainID,
+		Account:      common.BytesToAddress(account[:]),
+		OperationID:  operationID,
+		Legs:         converted,
+		Attestation:  attestation,
+		CommitHeight: commitHeight,
+	}); err != nil {
+		return err
+	}
+	if w := s.onDemandWaker.Load(); w != nil {
+		(*w)()
+	}
+	return nil
+}
+
+// SetOnDemandWaker installs the callback that signals the on-demand submitter after an enqueue.
+//
+// Stored as a pointer-to-func in an atomic so the submitter can be wired AFTER the stack is
+// published for attestation, without a lock on the enqueue hot path.
+func (s *BatchStack) SetOnDemandWaker(wake func()) {
+	if wake == nil {
+		return
+	}
+	s.onDemandWaker.Store(&wake)
 }
 
 // convertLegs turns the caller's leg slice into LegExecution via reflection over a

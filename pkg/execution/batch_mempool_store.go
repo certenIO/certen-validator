@@ -68,6 +68,24 @@ type persistedMember struct {
 	OperationID  string         `json:"operation_id"`
 	Legs         []persistedLeg `json:"legs"`
 	CommitHeight uint64         `json:"commit_height"`
+	// Lane routes the member back to the structure that owns it. Absent means on_cadence.
+	//
+	// WHY THE FILE STAYS A BARE ARRAY, AND WHY THE DEFAULT IS SAFE. Both directions of a
+	// version skew have to work, and with `omitempty` they do:
+	//
+	//   - Old file, new binary: no member carries a lane, so every one restores to the period
+	//     pool. Correct — that is where on-demand intents go today, since the enqueue has never
+	//     been gated on proofClass.
+	//   - New file, old binary: encoding/json ignores the unknown field and the old binary
+	//     restores every member into the period pool, which is exactly its current behaviour.
+	//
+	// Turning the file into an object keyed by lane would break the second case: the old
+	// binary's json.Unmarshal into []persistedMember would fail and it would drop the WHOLE
+	// queue back to re-derivation. So the discriminator goes on the member, not the container.
+	//
+	// omitempty also keeps the snapshot byte-identical to today whenever no on-demand member is
+	// queued, so this change produces no file churn on its own.
+	Lane string `json:"lane,omitempty"`
 	// Attestation is the Phase 7-9 snapshot, stored as opaque JSON. The concrete type lives in
 	// pkg/consensus, which this package must not import, so it is re-attached on load by a
 	// decoder the wiring supplies.
@@ -125,50 +143,36 @@ func (s *BatchMempoolStore) Save(m *BatchMempool) error {
 	var out []persistedMember
 	for _, members := range m.pool {
 		for _, p := range members {
-			if p == nil {
-				continue
+			if pm, ok := s.encodeMember(p, LaneOnCadence); ok {
+				out = append(out, pm)
 			}
-			pm := persistedMember{
-				IntentID:     p.IntentID,
-				ADIURL:       p.ADIURL,
-				ChainID:      p.ChainID,
-				Account:      p.Account.Hex(),
-				OperationID:  "0x" + common.Bytes2Hex(p.OperationID[:]),
-				CommitHeight: p.CommitHeight,
+		}
+	}
+	// On-demand members live in their own index and must be snapshotted too, or a restart would
+	// strand exactly the intents that were meant to settle fastest.
+	for _, byOp := range m.onDemand {
+		for _, p := range byOp {
+			if pm, ok := s.encodeMember(p, LaneOnDemand); ok {
+				out = append(out, pm)
 			}
-			for _, l := range p.Legs {
-				v := "0"
-				if l.Value != nil {
-					v = l.Value.String()
-				}
-				pm.Legs = append(pm.Legs, persistedLeg{
-					LegID:  l.LegID,
-					Target: l.Target.Hex(),
-					Value:  v,
-					Data:   "0x" + common.Bytes2Hex(l.Data),
-				})
-			}
-			if s.codec != nil && p.Attestation != nil {
-				if raw, err := s.codec.Encode(p.Attestation); err == nil {
-					pm.Attestation = raw
-				} else {
-					s.logf("[BATCH-STORE] intent %s: attestation not encodable (%v); persisting "+
-						"the member without it — it can still settle but its proof cycle will not replay",
-						p.IntentID, err)
-				}
-			}
-			out = append(out, pm)
 		}
 	}
 	m.mu.Unlock()
 
 	// Deterministic ordering keeps the file diffable and makes an operator comparison across
-	// nodes meaningful.
+	// nodes meaningful. Lane is part of the key so the order is total even if the same intent
+	// were briefly present in both structures during a rollout.
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].CommitHeight != out[j].CommitHeight {
 			return out[i].CommitHeight < out[j].CommitHeight
 		}
-		return out[i].IntentID < out[j].IntentID
+		if out[i].IntentID != out[j].IntentID {
+			return out[i].IntentID < out[j].IntentID
+		}
+		if out[i].ChainID != out[j].ChainID {
+			return out[i].ChainID < out[j].ChainID
+		}
+		return out[i].Lane < out[j].Lane
 	})
 
 	blob, err := json.MarshalIndent(out, "", "  ")
@@ -183,6 +187,50 @@ func (s *BatchMempoolStore) Save(m *BatchMempool) error {
 		return fmt.Errorf("replacing batch mempool snapshot: %w", err)
 	}
 	return nil
+}
+
+// encodeMember converts one in-memory member to its on-disk form. Caller holds m.mu.
+//
+// Shared by both lanes so a field added to one can never be silently missing from the other —
+// a member restored without its legs or its attestation is a member that cannot settle.
+func (s *BatchMempoolStore) encodeMember(p *PendingBatchIntent, lane BatchLane) (persistedMember, bool) {
+	if p == nil {
+		return persistedMember{}, false
+	}
+	pm := persistedMember{
+		IntentID:     p.IntentID,
+		ADIURL:       p.ADIURL,
+		ChainID:      p.ChainID,
+		Account:      p.Account.Hex(),
+		OperationID:  "0x" + common.Bytes2Hex(p.OperationID[:]),
+		CommitHeight: p.CommitHeight,
+	}
+	// on_cadence is the absent default, so it is never written. See persistedMember.Lane.
+	if lane == LaneOnDemand {
+		pm.Lane = string(LaneOnDemand)
+	}
+	for _, l := range p.Legs {
+		v := "0"
+		if l.Value != nil {
+			v = l.Value.String()
+		}
+		pm.Legs = append(pm.Legs, persistedLeg{
+			LegID:  l.LegID,
+			Target: l.Target.Hex(),
+			Value:  v,
+			Data:   "0x" + common.Bytes2Hex(l.Data),
+		})
+	}
+	if s.codec != nil && p.Attestation != nil {
+		if raw, err := s.codec.Encode(p.Attestation); err == nil {
+			pm.Attestation = raw
+		} else {
+			s.logf("[BATCH-STORE] intent %s: attestation not encodable (%v); persisting "+
+				"the member without it — it can still settle but its proof cycle will not replay",
+				p.IntentID, err)
+		}
+	}
+	return pm, true
 }
 
 // Load restores members into the mempool and reports how many were restored.
@@ -253,10 +301,21 @@ func (s *BatchMempoolStore) Load(m *BatchMempool) (int, error) {
 					"member without it", pm.IntentID, derr)
 			}
 		}
-		// m.add, NOT m.Add: Add snapshots the queue, and this call already holds s.mu, so
-		// re-entering Save here would deadlock. Load restores what is already on disk, so
-		// re-writing it would be pointless as well as unsafe.
-		if err := m.add(p); err != nil {
+		// Route by lane. An unrecognised value restores to the period pool rather than being
+		// dropped: that is where every member went before lanes existed, so an unknown lane
+		// written by a NEWER binary degrades to slower settlement, never to a lost intent.
+		//
+		// m.add / m.addOnDemand, NOT the exported forms: those snapshot the queue, and this call
+		// already holds s.mu, so re-entering Save here would deadlock. Load restores what is
+		// already on disk, so re-writing it would be pointless as well as unsafe.
+		var err error
+		switch BatchLane(pm.Lane) {
+		case LaneOnDemand:
+			err = m.addOnDemand(p)
+		default:
+			err = m.add(p)
+		}
+		if err != nil {
 			s.logf("[BATCH-STORE] intent %s not restored: %v", pm.IntentID, err)
 			continue
 		}

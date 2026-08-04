@@ -60,7 +60,41 @@ type BatchAttestationResponse struct {
 	BundleID     string `json:"bundle_id"` // what the ATTESTER derived
 	MessageHash  string `json:"message_hash"`
 	Error        string `json:"error,omitempty"`
+	// Code classifies a refusal so the proposer can tell "not yet" from "we disagree".
+	//
+	// Error stays human prose and must never be parsed: a proposer matching on substrings
+	// would silently reclassify every refusal the moment someone reworded a message. The
+	// on-demand submitter retries on CodeMemberNotHeld without spending an attempt, because a
+	// peer that has not finished processing the round yet is not a disagreement — it is the
+	// normal state for the first few seconds after an intent is discovered.
+	Code AttestationRefusalCode `json:"code,omitempty"`
 }
+
+// AttestationRefusalCode is the machine-readable reason a peer declined.
+type AttestationRefusalCode string
+
+const (
+	// CodeMemberNotHeld — this validator does not (yet) hold the member. RETRYABLE, and the
+	// expected answer for a few seconds after discovery: measured live on 2026-08-04, all seven
+	// validators enqueued the same intent within a 5-second window.
+	CodeMemberNotHeld AttestationRefusalCode = "member_not_held"
+
+	// CodeBundleMismatch — this validator holds the member(s) but derived a different bundleId.
+	// A REAL disagreement. For a one-member batch it means the two nodes disagree about the
+	// intent's own data, which is a bug worth surfacing, not a race to retry away.
+	CodeBundleMismatch AttestationRefusalCode = "bundle_mismatch"
+
+	// CodeConfigMismatch — the request cannot be served because the two nodes are configured
+	// differently. Retrying cannot help; an operator has to fix it.
+	CodeConfigMismatch AttestationRefusalCode = "config_mismatch"
+
+	// CodeNotReady — this validator's batch stack or attester identity is not up yet.
+	// Retryable, but it is a local startup condition rather than a view difference.
+	CodeNotReady AttestationRefusalCode = "not_ready"
+
+	// CodeRefused — anything else. Not retryable by default.
+	CodeRefused AttestationRefusalCode = "refused"
+)
 
 // BatchAttesterIdentity is who this validator is when attesting.
 type BatchAttesterIdentity struct {
@@ -81,8 +115,16 @@ func (s *BatchStack) HandleBatchAttestationRequest(
 		ValidatorID: me.ValidatorID,
 		EVMAddress:  me.EVMAddress,
 	}
+	// refuse keeps the generic code. The three cases a proposer must be able to ACT on
+	// differently — not-held, bundle mismatch, misconfiguration — use refuseWith below.
 	refuse := func(format string, a ...interface{}) *BatchAttestationResponse {
 		resp.Error = fmt.Sprintf(format, a...)
+		resp.Code = CodeRefused
+		return resp
+	}
+	refuseWith := func(code AttestationRefusalCode, format string, a ...interface{}) *BatchAttestationResponse {
+		resp.Error = fmt.Sprintf(format, a...)
+		resp.Code = code
 		return resp
 	}
 
@@ -128,16 +170,18 @@ func (s *BatchStack) HandleBatchAttestationRequest(
 		theirPeriodBlocks = DefaultBatchPeriodBlocks
 	}
 	if theirPeriodBlocks != myPeriodBlocks {
-		return refuse("period width mismatch: proposer uses %d blocks, this validator is "+
-			"configured for %d — BATCH_PERIOD_BLOCKS must be identical across the set, or every "+
-			"batch derives a different bundleId", theirPeriodBlocks, myPeriodBlocks)
+		return refuseWith(CodeConfigMismatch, "period width mismatch: proposer uses %d blocks, "+
+			"this validator is configured for %d — BATCH_PERIOD_BLOCKS must be identical across "+
+			"the set, or every batch derives a different bundleId",
+			theirPeriodBlocks, myPeriodBlocks)
 	}
 	periodBlocks := myPeriodBlocks
 
 	// ---- Rebuild from OUR OWN view. Never from the request. --------------------
 	members := s.Mempool.PeekForPeriod(req.ChainID, req.CutoffHeight, periodBlocks)
 	if len(members) == 0 {
-		return refuse("no members for chain %d in period [%d,%d) in this validator's mempool",
+		return refuseWith(CodeMemberNotHeld,
+			"no members for chain %d in period [%d,%d) in this validator's mempool",
 			req.ChainID, req.CutoffHeight, req.CutoffHeight+periodBlocks)
 	}
 
@@ -160,7 +204,7 @@ func (s *BatchStack) HandleBatchAttestationRequest(
 	// Any disagreement — an extra leaf, a missing one, a different height, a substituted
 	// executionCommitment — changes the root and therefore the bundleId. Refuse.
 	if tree.BundleID != wantBundle {
-		return refuse(
+		return refuseWith(CodeBundleMismatch,
 			"bundleId mismatch: proposer %s, this validator derived %s over %d member(s) — "+
 				"refusing to attest a batch it did not independently reproduce",
 			shortHex(req.BundleID), shortHex(resp.BundleID), len(members))

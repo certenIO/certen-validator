@@ -350,6 +350,21 @@ type BatchEnqueuer interface {
 		attestation interface{},
 		commitHeight uint64,
 	) error
+
+	// EnqueueOnDemand queues an intent-keyed member: one intent, one anchor, no period.
+	//
+	// Same contract as EnqueueForBatch — an error means NOT queued and the caller must fall
+	// back. The two differ only in which mechanism settles the member.
+	EnqueueOnDemand(
+		intentID string,
+		adiURL string,
+		chainID int64,
+		account [20]byte,
+		operationID [32]byte,
+		legs interface{},
+		attestation interface{},
+		commitHeight uint64,
+	) error
 }
 
 type AnchorScheduler interface {

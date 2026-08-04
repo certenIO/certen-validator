@@ -110,6 +110,32 @@ func (a *BatchQuorumAttestor) ProveBatchRoot(
 	tree *BatchTree,
 	cutoffHeight, periodBlocks uint64,
 ) error {
+	return a.prove(ctx, tree, func(ctx context.Context) ([]*BatchAttestationResponse, error) {
+		req, err := NewBatchAttestationRequest(tree, cutoffHeight, periodBlocks, a.validatorID)
+		if err != nil {
+			return nil, fmt.Errorf("building attestation request: %w", err)
+		}
+		// A real logger, not nil: the collector's per-peer lines ("declined: bundleId mismatch",
+		// "unreachable") are the only visibility into WHY a quorum came up short, and a burst of
+		// mismatches means peers are seeing a different mempool — worth noticing early.
+		return CollectBatchAttestations(
+			ctx, log.New(log.Writer(), "[BATCH-QUORUM] ", log.LstdFlags), a.peers, req, a.timeout), nil
+	})
+}
+
+// prove is the shared body: identity, own partial, peer collection, fold, submit, confirm.
+//
+// Both lanes run THIS function. The aggregation step is where a quorum forgery would have to
+// get past (CRYPTO-007), so there is exactly one copy of it — a second implementation for the
+// on-demand path would be a second place for the registry check to be weakened.
+//
+// collect supplies only the peer round trip, which is the sole difference between the lanes:
+// one asks by height window, the other by operationID.
+func (a *BatchQuorumAttestor) prove(
+	ctx context.Context,
+	tree *BatchTree,
+	collect func(context.Context) ([]*BatchAttestationResponse, error),
+) error {
 	if tree == nil {
 		return fmt.Errorf("nil batch tree")
 	}
@@ -157,15 +183,10 @@ func (a *BatchQuorumAttestor) ProveBatchRoot(
 	}}
 
 	// ---- Peers ---------------------------------------------------------------
-	req, err := NewBatchAttestationRequest(tree, cutoffHeight, periodBlocks, a.validatorID)
+	responses, err := collect(ctx)
 	if err != nil {
-		return fmt.Errorf("building attestation request: %w", err)
+		return err
 	}
-	// A real logger, not nil: the collector's per-peer lines ("declined: bundleId mismatch",
-	// "unreachable") are the only visibility into WHY a quorum came up short, and a burst of
-	// mismatches means peers are seeing a different mempool — worth noticing early.
-	responses := CollectBatchAttestations(
-		ctx, log.New(log.Writer(), "[BATCH-QUORUM] ", log.LstdFlags), a.peers, req, a.timeout)
 	for _, r := range responses {
 		if r == nil {
 			continue
@@ -214,6 +235,61 @@ func (a *BatchQuorumAttestor) ProveBatchRoot(
 	a.logf("[BATCH-QUORUM] chain=%d anchor 0x%x attested; root 0x%x is now spendable",
 		chainID, tree.BundleID[:8], tree.Root[:8])
 	return nil
+}
+
+// QuorumNotReadyError means the quorum came up short but the shortfall is peers that have not
+// caught up yet, not peers that disagree.
+//
+// This is the distinction the on-demand submitter retries on. A fixed settle grace guesses how
+// long convergence takes; this measures it. Anything with Mismatch > 0 is NOT this error — a
+// disagreement on a one-member batch is about the intent's own data and will not resolve.
+type QuorumNotReadyError struct {
+	NotHeld     int
+	Unreachable int
+	Agreed      int
+	Err         error
+}
+
+func (e *QuorumNotReadyError) Error() string {
+	return fmt.Sprintf("quorum not ready: %d agreed, %d not held yet, %d unreachable: %v",
+		e.Agreed, e.NotHeld, e.Unreachable, e.Err)
+}
+func (e *QuorumNotReadyError) Unwrap() error { return e.Err }
+
+// ProveBatchRootOnDemand attests a ONE-MEMBER batch, keyed on the member's operationID.
+//
+// Returns *QuorumNotReadyError when the shortfall is recoverable by waiting, so the caller can
+// retry without spending a hard attempt. Any other error is terminal for this attempt.
+func (a *BatchQuorumAttestor) ProveBatchRootOnDemand(
+	ctx context.Context,
+	tree *BatchTree,
+	member *PendingBatchIntent,
+) error {
+	var last OnDemandCollectResult
+	err := a.prove(ctx, tree, func(ctx context.Context) ([]*BatchAttestationResponse, error) {
+		req, rerr := NewOnDemandAttestationRequest(tree, member, a.validatorID)
+		if rerr != nil {
+			return nil, fmt.Errorf("building on-demand attestation request: %w", rerr)
+		}
+		last = CollectOnDemandAttestations(
+			ctx, log.New(log.Writer(), "[OD-QUORUM] ", log.LstdFlags), a.peers, req, a.timeout)
+		return last.Responses, nil
+	})
+	if err == nil {
+		return nil
+	}
+	// Only classify as "not ready" when nobody actively disagreed. A single mismatch on a
+	// one-member batch means two nodes hold different data for the same intent, and no amount
+	// of waiting fixes that — it must surface, not spin.
+	if last.Mismatch == 0 && last.CouldStillConverge() {
+		return &QuorumNotReadyError{
+			NotHeld:     last.NotHeld,
+			Unreachable: last.Unreachable,
+			Agreed:      last.Agreed(),
+			Err:         err,
+		}
+	}
+	return err
 }
 
 // ComputeBatchQuorumMessage is the message a batch quorum signs, exported so an operator or a
