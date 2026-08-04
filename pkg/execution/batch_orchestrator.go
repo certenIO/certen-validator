@@ -167,6 +167,35 @@ func (o *BatchOrchestrator) FlushChain(
 	}
 
 	// ---- Build the tree -----------------------------------------------------
+	// Screen out members whose account cannot participate, BEFORE the tree is formed.
+	//
+	// A member whose account is not a CertenAccountV7 fails verification, and that check used to
+	// abort the ENTIRE flush — one bad member blocked every other ADI's intent in the same period
+	// indefinitely. Observed live 2026-08-04 on chain 84532: account 0x12565E20 (11765 bytes, an
+	// older account version) stalled the Base batch and nothing settled for over 20 minutes.
+	//
+	// Dropping is deterministic across validators because the predicate is on-chain state every
+	// node reads identically, so all seven form the same tree from the same survivors. Dropped
+	// members are returned as such and routed to the per-intent path rather than silently lost.
+	screened := make([]*PendingBatchIntent, 0, len(members))
+	for _, p := range members {
+		if err := o.memberAccountUsable(ctx, p); err != nil {
+			o.logf("[BATCH] chain=%d dropping member %s from this period: %v", chainID, p.IntentID, err)
+			res.Dropped = append(res.Dropped, p)
+			continue
+		}
+		screened = append(screened, p)
+	}
+	if len(screened) == 0 {
+		o.mempool.DropMembers(members)
+		return res, fmt.Errorf("every member of period %d has an unusable account; %d dropped",
+			cutoffHeight, len(members))
+	}
+	if len(screened) != len(members) {
+		o.mempool.DropMembers(res.Dropped)
+		members = screened
+	}
+
 	inputs := make([]BatchLeafInput, 0, len(members))
 	for _, p := range members {
 		in, err := p.LeafInput()
@@ -661,4 +690,31 @@ func (o *BatchOrchestrator) memberLeafConsumed(ctx context.Context, p *PendingBa
 		ADIURL: p.ADIURL, ExecutionCommitment: exec, OperationID: p.OperationID,
 	})
 	return acct.IsLeafConsumed(&bind.CallOpts{Context: ctx}, leaf)
+}
+
+// memberAccountUsable reports whether this member's account can take part in a batch.
+//
+// Screens the two properties that make a member unanchorable regardless of the tree: the account
+// must be a CertenAccountV7, and it must be bound to the ADI the intent claims. Both are read
+// from chain, so every validator reaches the same verdict and drops the same members.
+func (o *BatchOrchestrator) memberAccountUsable(ctx context.Context, p *PendingBatchIntent) error {
+	acct, err := contracts.NewCertenAccountV7(p.Account, o.ecm.client)
+	if err != nil {
+		return fmt.Errorf("binding account %s: %w", p.Account.Hex(), err)
+	}
+	keyless, err := acct.IsKeylessOwner(&bind.CallOpts{Context: ctx})
+	if err != nil {
+		return fmt.Errorf("account %s is not a CertenAccountV7: %w", p.Account.Hex(), err)
+	}
+	if !keyless {
+		return fmt.Errorf("account %s reports a non-keyless owner", p.Account.Hex())
+	}
+	onChainADIHash, err := acct.ADIURLHash(&bind.CallOpts{Context: ctx})
+	if err != nil {
+		return fmt.Errorf("reading adiURLHash on %s: %w", p.Account.Hex(), err)
+	}
+	if onChainADIHash != (BatchLeafInput{ADIURL: p.ADIURL}).ADIURLHash() {
+		return fmt.Errorf("account %s is bound to a different ADI than %q", p.Account.Hex(), p.ADIURL)
+	}
+	return nil
 }
