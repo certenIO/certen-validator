@@ -148,10 +148,42 @@ wait_healthy() {
     return 1
 }
 
+# Recover a container Docker left holding its own published ports.
+#
+# A recreated container can be left in "Created" with an orphaned network endpoint still owning
+# its ports. The OS port is free but Docker's allocator is not, so every later start fails with
+# "port is already allocated" and the node never comes up. Seen three times on
+# certen-validator-3 (port 26677) on 2026-08-04.
+#
+# Not cosmetic: batch-period leadership is elected per (chain, period), so a node stuck down
+# silently freezes every period it wins until failover rotates past it.
+release_stale_endpoint() {
+    local svc=$1 name="certen-$svc" state net
+    state=$(docker inspect -f '{{.State.Status}}' "$name" 2>/dev/null || echo missing)
+    case "$state" in created|exited) ;; *) return 1 ;; esac
+
+    net=$(docker network ls --format '{{.Name}}' | grep -E 'certen-validators.*net' | head -1)
+    [ -n "$net" ] || return 1
+
+    printf '  %s is %s - releasing stale network endpoint on %s
+' "$svc" "$state" "$net"
+    docker network disconnect -f "$net" "$name" >/dev/null 2>&1 || true
+    sleep 3
+    docker start "$name" >/dev/null 2>&1 || return 1
+}
+
 for group in "${RESTART_GROUPS[@]}"; do
     printf '  restarting: %s\n' "$group"
     # shellcheck disable=SC2086
     docker compose up -d --no-deps $group >/dev/null
+
+    # A container that never reached "running" has no health status, so wait_healthy would burn
+    # its full 180s timeout before reporting a failure that a single retry fixes. Catch it here.
+    for svc in $group; do
+        if [ "$(docker inspect -f '{{.State.Status}}' "certen-$svc" 2>/dev/null || echo missing)" != running ]; then
+            release_stale_endpoint "$svc" || true
+        fi
+    done
     for svc in $group; do
         if wait_healthy "$svc"; then
             ok "$svc healthy"
