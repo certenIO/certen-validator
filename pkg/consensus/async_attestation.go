@@ -1,9 +1,12 @@
 package consensus
 
 import (
+	"strconv"
+
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"github.com/certen/independant-validator/pkg/ethrpc"
 	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -299,6 +302,24 @@ func (bv *BFTValidator) RunProofCycle(
 			"closing its own single-chain cycle rather than waiting on a sibling chain this node "+
 			"cannot observe", att.CertenIntent.IntentID, res.Network)
 		isMultiLeg = false
+
+		// The member's OWN chain decides which RPC Phase 7 observes on.
+		//
+		// commitment["targetChain"] is intent-level, and a cross-chain intent names only one of
+		// its chains there. The member for the OTHER chain then inherited that value and searched
+		// an RPC where its transaction cannot exist — burning the full observation deadline on a
+		// transaction that had already settled. Observed live 2026-08-04: intent 16b8266d's Base
+		// leg settled in block 45033109 (status 1) while its cycle spent 10m looking on Arbitrum.
+		if commitMap, ok := commitment.(map[string]interface{}); ok {
+			if ck := chainKeyFromNetwork(res.Network); ck != "" {
+				if prev, _ := commitMap["targetChain"].(string); prev != ck {
+					bv.logger.Printf("🧭 [MULTI-LEG-PROOF] intent %s: retargeting Phase 7 from %q to %q "+
+						"(the chain this member actually settled on)",
+						att.CertenIntent.IntentID, prev, ck)
+				}
+				commitMap["targetChain"] = ck
+			}
+		}
 	}
 
 	if isMultiLeg {
@@ -611,4 +632,19 @@ func (bv *BFTValidator) recordFailedProofCycle(
 			"intent is settled nowhere AND recorded nowhere, which needs operator attention",
 			att.IntentID, err)
 	}
+}
+
+// chainKeyFromNetwork maps an execution result's Network ("evm-<chainID>") to the chain key the
+// strategy registry uses. Returns "" when the form is unrecognised, so the caller leaves the
+// existing target alone rather than guessing.
+func chainKeyFromNetwork(network string) string {
+	n := strings.TrimSpace(strings.ToLower(network))
+	if !strings.HasPrefix(n, "evm-") {
+		return ""
+	}
+	id, err := strconv.ParseInt(strings.TrimPrefix(n, "evm-"), 10, 64)
+	if err != nil {
+		return ""
+	}
+	return ethrpc.ChainKeyForID(id)
 }
