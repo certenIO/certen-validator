@@ -252,8 +252,19 @@ func resolveBatchAttesterIdentity(resolver *execution.EVMChainResolverImpl, vali
 	}
 
 	// Any configured chain's anchor carries the same registry; the first is enough.
+	//
+	// KEEP TRYING. This used to stop after `attempts` and never look again, so a transient RPC
+	// failure during startup permanently demoted the node: it refuses every peer attestation for
+	// the rest of its life while still reporting healthy, and quorum silently runs a signer short.
+	// Seen live on 2026-08-04 — validator-3 lost DNS for ~75s at boot, exhausted its six tries,
+	// and stayed non-attesting until it was restarted by hand.
+	//
+	// There is no state in which giving up is right: a validator that cannot name itself cannot
+	// do its job, and the condition is almost always transient. The first `attempts` stay fast so
+	// a healthy boot publishes within seconds; after that it retries indefinitely at a slower
+	// cadence, which costs one call a minute and removes the failure mode entirely.
 	const attempts = 6
-	for i := 1; i <= attempts; i++ {
+	for i := 1; ; i++ {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		ecm, anchorAddr, err := resolver.ManagerForChain(chains[0])
 		if err == nil {
@@ -270,15 +281,37 @@ func resolveBatchAttesterIdentity(resolver *execution.EVMChainResolverImpl, vali
 			}
 		}
 		cancel()
-		log.Printf("⚠️ [BATCH] Attester identity attempt %d/%d failed: %v", i, attempts, err)
-		if i < attempts {
+
+		switch {
+		case i < attempts:
+			log.Printf("⚠️ [BATCH] Attester identity attempt %d/%d failed: %v", i, attempts, err)
 			time.Sleep(time.Duration(i) * 5 * time.Second)
+		case i == attempts:
+			// Say plainly what is wrong NOW, once, rather than burying it in a repeating line.
+			log.Printf("❌ [BATCH] Could not resolve this validator's registry identity after %d "+
+				"attempts (%v). Until it resolves this node REFUSES every peer attestation request, "+
+				"so quorum runs a signer short. Retrying every %s — check that this node's BLS key "+
+				"is registered on the anchor.", attempts, err, identityRetryInterval)
+			time.Sleep(identityRetryInterval)
+		default:
+			// Throttled so a long outage does not flood the log, but never silent: an operator
+			// grepping for this must be able to see it is still trying.
+			if i%identityRetryLogEvery == 0 {
+				log.Printf("⚠️ [BATCH] Still cannot resolve attester identity (attempt %d): %v — "+
+					"this node is not attesting", i, err)
+			}
+			time.Sleep(identityRetryInterval)
 		}
 	}
-	log.Printf("❌ [BATCH] Could not resolve this validator's registry identity. It can propose " +
-		"batches but will REFUSE every peer attestation request, so quorum runs a signer short. " +
-		"Check that this node's BLS key is registered on the anchor.")
 }
+
+// identityRetryInterval is the steady-state cadence for attester-identity resolution once the
+// fast startup attempts are exhausted. One call a minute is negligible next to a node sitting
+// non-attesting indefinitely.
+const identityRetryInterval = time.Minute
+
+// identityRetryLogEvery throttles the persistent-failure log to roughly every 10 minutes.
+const identityRetryLogEvery = 10
 
 // batchConsensusHeightFn returns the height source for batch period cutoffs.
 //
