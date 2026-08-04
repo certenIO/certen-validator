@@ -3,6 +3,7 @@ package execution
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -157,7 +158,14 @@ type BatchMempool struct {
 	cfg  BatchMempoolConfig
 	mu   sync.Mutex
 	pool map[int64][]*PendingBatchIntent
-	seen map[string]bool // intentID -> queued, for idempotent Add
+	// seen keys on intentID+chainID, NOT intentID alone.
+	//
+	// A cross-chain intent contributes ONE MEMBER PER CHAIN — same intent id, different chain,
+	// different account, different leaf. Keying on the id alone accepted the first chain's member
+	// and refused every other with "already queued", so a Sepolia+Base intent settled on one chain
+	// and silently lost the other. Idempotency still holds: re-adding the same intent for the same
+	// chain is still refused.
+	seen map[string]bool // intentID|chainID -> queued, for idempotent Add
 
 	// store persists the queue so a restart resumes with its members instead of stranding
 	// intents the round has already reported as batch_queued. Nil disables persistence and
@@ -269,10 +277,11 @@ func (m *BatchMempool) add(p *PendingBatchIntent) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.seen[p.IntentID] {
-		return fmt.Errorf("intent %s is already queued", p.IntentID)
+	key := memberKey(p.IntentID, p.ChainID)
+	if m.seen[key] {
+		return fmt.Errorf("intent %s is already queued for chain %d", p.IntentID, p.ChainID)
 	}
-	m.seen[p.IntentID] = true
+	m.seen[key] = true
 	m.pool[p.ChainID] = append(m.pool[p.ChainID], p)
 	return nil
 }
@@ -334,7 +343,7 @@ func (m *BatchMempool) Take(chainID int64) []*PendingBatchIntent {
 		m.pool[chainID] = append([]*PendingBatchIntent(nil), rest...)
 	}
 	for _, p := range taken {
-		delete(m.seen, p.IntentID)
+		delete(m.seen, memberKey(p.IntentID, p.ChainID))
 	}
 	return taken
 }
@@ -345,10 +354,10 @@ func (m *BatchMempool) Requeue(members []*PendingBatchIntent) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, p := range members {
-		if p == nil || m.seen[p.IntentID] {
+		if p == nil || m.seen[memberKey(p.IntentID, p.ChainID)] {
 			continue
 		}
-		m.seen[p.IntentID] = true
+		m.seen[memberKey(p.IntentID, p.ChainID)] = true
 		m.pool[p.ChainID] = append(m.pool[p.ChainID], p)
 	}
 }
@@ -425,7 +434,7 @@ func (m *BatchMempool) takeForPeriod(chainID int64, periodStart, periodBlocks ui
 	remove := make(map[string]bool, len(taken))
 	for _, p := range taken {
 		remove[p.IntentID] = true
-		delete(m.seen, p.IntentID)
+		delete(m.seen, memberKey(p.IntentID, p.ChainID))
 	}
 	var rest []*PendingBatchIntent
 	for _, p := range m.pool[chainID] {
@@ -560,7 +569,7 @@ func (m *BatchMempool) PruneOlderThan(horizonStart uint64) int {
 		var rest []*PendingBatchIntent
 		for _, p := range pool {
 			if p != nil && p.CommitHeight != 0 && p.CommitHeight < horizonStart {
-				delete(m.seen, p.IntentID)
+				delete(m.seen, memberKey(p.IntentID, p.ChainID))
 				pruned++
 				continue
 			}
@@ -594,7 +603,7 @@ func (m *BatchMempool) dropMembers(members []*PendingBatchIntent) {
 	for _, p := range members {
 		if p != nil {
 			remove[p.IntentID] = true
-			delete(m.seen, p.IntentID)
+			delete(m.seen, memberKey(p.IntentID, p.ChainID))
 		}
 	}
 	for chainID, pool := range m.pool {
@@ -610,4 +619,9 @@ func (m *BatchMempool) dropMembers(members []*PendingBatchIntent) {
 			m.pool[chainID] = rest
 		}
 	}
+}
+
+// memberKey identifies a batch member: one intent may have a member on each chain it touches.
+func memberKey(intentID string, chainID int64) string {
+	return intentID + "|" + strconv.FormatInt(chainID, 10)
 }
