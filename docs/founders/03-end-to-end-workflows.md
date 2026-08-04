@@ -256,7 +256,7 @@ flowchart LR
     subgraph OD["On-demand (immediate)"]
         od1["Intent"] --> od2["Its own anchor batch"] --> od3["Executed right away"]
     end
-    subgraph OC["On-cadence (batched ~15 min)"]
+    subgraph OC["On-cadence (batched by period)"]
         oc1["Intent A"] --> bat["Shared batch<br/>(Merkle tree of many intents)"]
         oc2["Intent B"] --> bat
         oc3["Intent ..."] --> bat
