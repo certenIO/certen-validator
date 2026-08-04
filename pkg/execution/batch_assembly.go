@@ -302,15 +302,27 @@ func (s *BatchStack) flushChainPeriods(
 	if len(periods) == 0 {
 		return
 	}
+	logf("[BATCH-FLUSH] chain %d: %d closed period(s) pending %v (current period %d)",
+		chainID, len(periods), periods, currentPeriodStart)
 	for _, start := range periods {
+		// Say which gate declines a pending period.
+		//
+		// Neither the leader check nor the settle grace logged when it said no, so a chain with
+		// queued members and closed periods produced TOTAL SILENCE — no flush, no error, nothing
+		// to grep. Chain 84532 sat like that for 35 minutes on 2026-08-04 with five members
+		// waiting. A declined period is normal; an undiagnosable one is not.
 		if isLeader != nil && !isLeader(chainID, start) {
+			logf("[BATCH-FLUSH] chain %d period %d: not this node's period to lead", chainID, start)
 			continue
 		}
 		// SETTLE GRACE — see settleGraceElapsed. A period that closed seconds ago is very
 		// likely incomplete on peers that are still generating proofs for its members.
 		if !s.settleGraceElapsed(chainID, start, grace, now, logf) {
+			logf("[BATCH-FLUSH] chain %d period %d: leading, but holding for settle grace %s",
+				chainID, start, grace)
 			continue
 		}
+		logf("[BATCH-FLUSH] chain %d period %d: leading and past grace — flushing", chainID, start)
 		s.flushOneChain(ctx, chainID, start, periodBlocks, attest, fallback, logf)
 	}
 }
