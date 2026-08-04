@@ -440,7 +440,23 @@ func (bv *BFTValidator) noteConsensusHeight(h uint64) {
 // Without this every validator races to anchor the same period: one wins and six burn gas
 // reverting with AnchorAlreadyExists, and the winner is whoever's timer fired first rather
 // than whoever the set agreed on.
-func (bv *BFTValidator) IsBatchPeriodLeader(chainID int64, cutoffHeight uint64) bool {
+// elapsedPeriods rotates leadership so a DOWN validator cannot freeze a period forever.
+//
+// Leadership is a pure hash of (chainID, cutoffHeight), so exactly one node may flush a given
+// period. If that node is offline the period is unflushable — every other node correctly declines
+// and nothing ever settles. Observed live 2026-08-04: validator-3 was stuck in Docker's "Created"
+// state, and because it was elected for both pending Base periods the chain sat frozen for 90
+// minutes with members queued and no error anywhere.
+//
+// After batchLeaderFailoverPeriods have elapsed the next node in the roster takes over, and again
+// each interval after that, so any period is eventually reachable while at most one node leads at
+// a time. elapsedPeriods is derived from currentPeriodStart, which every node computes the same
+// way, so the hand-off is deterministic rather than a race.
+//
+// Nodes momentarily disagreeing at an interval boundary is tolerable: the loser's createAnchor
+// returns already-exists and anchorAlreadyAttested short-circuits the rest, which is the same
+// path a legitimately duplicated flush already takes.
+func (bv *BFTValidator) IsBatchPeriodLeader(chainID int64, cutoffHeight, elapsedPeriods uint64) bool {
 	roster := batchLeaderRoster()
 	if len(roster) == 0 {
 		return false
@@ -449,7 +465,10 @@ func (bv *BFTValidator) IsBatchPeriodLeader(chainID int64, cutoffHeight uint64) 
 	sum := sha256.Sum256([]byte(key))
 	// Fold four bytes rather than one: with a single byte and a 7-way modulus the selection is
 	// measurably biased toward the low indices (256 = 7*36 + 4).
-	idx := binary.BigEndian.Uint32(sum[:4]) % uint32(len(roster))
+	base := uint64(binary.BigEndian.Uint32(sum[:4]))
+	// Hand off to the next node every failover interval the period stays unflushed.
+	handoffs := elapsedPeriods / batchLeaderFailoverPeriods
+	idx := (base + handoffs) % uint64(len(roster))
 	return roster[idx] == bv.validatorID
 }
 
@@ -555,3 +574,10 @@ func (bv *BFTValidator) batchChainsOfIntent(ci *CertenIntent) ([]int64, error) {
 	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 	return out, nil
 }
+
+// batchLeaderFailoverPeriods is how many closed periods must pass before leadership for an
+// unflushed period moves to the next node in the roster.
+//
+// Long enough that an ordinary slow flush is never stolen mid-flight, short enough that a node
+// being down does not strand members until the 50-period pruner deletes them.
+const batchLeaderFailoverPeriods uint64 = 3

@@ -28,7 +28,7 @@ func TestBatchPeriodLeader_ExactlyOnePerPeriod(t *testing.T) {
 		for cutoff := uint64(10); cutoff <= 2000; cutoff += 10 {
 			leaders := 0
 			for i := 1; i <= 7; i++ {
-				if validatorFor(validatorIDForIndex(i)).IsBatchPeriodLeader(chainID, cutoff) {
+				if validatorFor(validatorIDForIndex(i)).IsBatchPeriodLeader(chainID, cutoff, 0) {
 					leaders++
 				}
 			}
@@ -110,7 +110,7 @@ func TestBatchPeriodLeader_UnknownValidatorNeverLeads(t *testing.T) {
 	t.Setenv("BATCH_LEADER_VALIDATORS", "validator-1,validator-2,validator-3")
 	stranger := validatorFor("validator-99")
 	for cutoff := uint64(10); cutoff <= 1000; cutoff += 10 {
-		if stranger.IsBatchPeriodLeader(11155111, cutoff) {
+		if stranger.IsBatchPeriodLeader(11155111, cutoff, 0) {
 			t.Fatalf("a validator outside the roster claimed leadership at cutoff %d", cutoff)
 		}
 	}
@@ -161,7 +161,7 @@ func leaderAmong(t *testing.T, ids []string, chainID int64, cutoff uint64) strin
 	var leader string
 	n := 0
 	for _, id := range ids {
-		if validatorFor(id).IsBatchPeriodLeader(chainID, cutoff) {
+		if validatorFor(id).IsBatchPeriodLeader(chainID, cutoff, 0) {
 			leader = id
 			n++
 		}

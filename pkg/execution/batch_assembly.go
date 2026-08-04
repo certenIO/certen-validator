@@ -289,7 +289,7 @@ func (s *BatchStack) flushChainPeriods(
 	chainID int64,
 	currentPeriodStart uint64,
 	periodBlocks uint64,
-	isLeader func(chainID int64, periodStart uint64) bool,
+	isLeader func(chainID int64, periodStart, elapsedPeriods uint64) bool,
 	grace time.Duration,
 	now time.Time,
 	attest BatchAttestFn,
@@ -305,14 +305,21 @@ func (s *BatchStack) flushChainPeriods(
 	logf("[BATCH-FLUSH] chain %d: %d closed period(s) pending %v (current period %d)",
 		chainID, len(periods), periods, currentPeriodStart)
 	for _, start := range periods {
+		// How many periods have closed since this one. Drives leader rotation below.
+		var elapsed uint64
+		if periodBlocks > 0 && currentPeriodStart > start {
+			elapsed = (currentPeriodStart - start) / periodBlocks
+		}
+
 		// Say which gate declines a pending period.
 		//
 		// Neither the leader check nor the settle grace logged when it said no, so a chain with
 		// queued members and closed periods produced TOTAL SILENCE — no flush, no error, nothing
 		// to grep. Chain 84532 sat like that for 35 minutes on 2026-08-04 with five members
 		// waiting. A declined period is normal; an undiagnosable one is not.
-		if isLeader != nil && !isLeader(chainID, start) {
-			logf("[BATCH-FLUSH] chain %d period %d: not this node's period to lead", chainID, start)
+		if isLeader != nil && !isLeader(chainID, start, elapsed) {
+			logf("[BATCH-FLUSH] chain %d period %d: not this node's period to lead (elapsed=%d)",
+				chainID, start, elapsed)
 			continue
 		}
 		// SETTLE GRACE — see settleGraceElapsed. A period that closed seconds ago is very
@@ -526,7 +533,11 @@ type BatchFlushConfig struct {
 	// reverting with AnchorAlreadyExists.
 	//
 	// Nil means "always leader" — correct only for a single-node devnet.
-	IsLeaderFn func(chainID int64, cutoffHeight uint64) bool
+	// elapsedPeriods is how many periods have closed since this one did. It exists so leadership
+	// can ROTATE when the elected node is down: without it a period whose leader is offline can
+	// never be flushed by anyone. Every node derives it from currentPeriodStart, which they
+	// already compute identically, so the rotation stays deterministic.
+	IsLeaderFn func(chainID int64, cutoffHeight, elapsedPeriods uint64) bool
 
 	// Attest closes each settled member's proof cycle.
 	Attest BatchAttestFn
