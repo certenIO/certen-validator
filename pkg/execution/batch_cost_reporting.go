@@ -54,6 +54,7 @@ func (o *BatchOrchestrator) reportBatchCosts(
 	ctx context.Context,
 	chainID int64,
 	anchorTx string,
+	verifyTx string,
 	members []costMember,
 ) {
 	reporter := CostReporter()
@@ -93,6 +94,31 @@ func (o *BatchOrchestrator) reportBatchCosts(
 		}, shared, anchorTx, nil)
 	}
 
+	// ---- Shared: the verify, also paid once for the whole batch ---------------
+	//
+	// executeComprehensiveProof verifies the WHOLE batch root in one transaction, so it is
+	// shared on exactly the same terms as the anchor. Its hash used to be discarded by
+	// SubmitBatchQuorumProof, which left every batch-settled chain stuck at 2 of 3 measured
+	// legs — and the pricing gate treats partial leg coverage as unpriceable, so no chain
+	// settled by the batch path could ever become quotable.
+	if verifyTx != "" {
+		shared := make([]billing.CostMember, 0, len(members))
+		for _, m := range members {
+			shared = append(shared, billing.CostMember{
+				IntentID:    m.IntentID,
+				ADIURL:      m.ADIURL,
+				AccumTxHash: m.AccumTxHash,
+			})
+		}
+		reporter.ObserveAndReportShared(ctx, billing.ProbeConfig{
+			Chain:   chain,
+			ChainID: resolvedChainID,
+			RPCURL:  rpcURL,
+			APIKey:  apiKey,
+			Leg:     billing.LegVerify,
+		}, shared, verifyTx, nil)
+	}
+
 	// ---- Per member: its own settlement transaction --------------------------
 	for _, m := range members {
 		if m.SettleTx == "" {
@@ -109,7 +135,7 @@ func (o *BatchOrchestrator) reportBatchCosts(
 		}, m.IntentID, m.ADIURL, m.AccumTxHash, m.SettleTx, nil)
 	}
 
-	o.logf("[COST] chain=%s reported anchor(shared across %d) + %d member settlement(s)",
+	o.logf("[COST] chain=%s reported anchor+verify(shared across %d) + %d member settlement(s)",
 		chain, len(members), countSettled(members))
 }
 
@@ -139,4 +165,17 @@ func canonicalChainSlugForChainID(chainID int64) (string, int64) {
 // executor path so both probe the endpoint that actually executed the transaction.
 func costEndpointForChain(chain string) (string, string) {
 	return resolveCostEndpointForChain(chain)
+}
+
+// lastVerifyTx returns the executeComprehensiveProof transaction from the prover that just ran,
+// consuming it so it cannot be attributed to a later batch.
+//
+// Returns empty when the prover is not a *BatchQuorumAttestor (tests use stubs) or when the
+// attestation did not reach a mined transaction. Reporting nothing is correct there: a verify
+// leg that never landed has no cost to measure.
+func (o *BatchOrchestrator) lastVerifyTx() string {
+	if a, ok := o.prover.(interface{ TakeLastVerifyTx() string }); ok {
+		return a.TakeLastVerifyTx()
+	}
+	return ""
 }

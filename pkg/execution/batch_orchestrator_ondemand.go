@@ -190,7 +190,9 @@ func (o *BatchOrchestrator) SettleOnDemandMember(
 	// Attribute cost. A solo intent is a one-member batch, so the anchor is "shared" across
 	// exactly one member and it bears the whole cost — the same code path a 3-member batch
 	// takes, which is what keeps the two from drifting apart.
-	o.reportBatchCosts(ctx, chainID, anchorTx, []costMember{costMemberFor(member, txHash)})
+	// verifyTx comes from the prover that just ran; empty when it did not reach a mined
+	// transaction, in which case the verify leg is simply not reported rather than guessed.
+	o.reportBatchCosts(ctx, chainID, anchorTx, o.lastVerifyTx(), []costMember{costMemberFor(member, txHash)})
 	return out, nil
 }
 

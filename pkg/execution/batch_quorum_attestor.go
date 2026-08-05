@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sync/atomic"
 	"time"
 
 	"github.com/certen/independant-validator/pkg/consensus"
@@ -59,6 +60,28 @@ type BatchQuorumAttestor struct {
 	validatorID string
 	timeout     time.Duration
 	logf        func(string, ...interface{})
+
+	// lastVerifyTx is the most recent executeComprehensiveProof transaction hash.
+	//
+	// Held here rather than returned through QuorumProver because that interface is shared with
+	// the period path and a signature change would ripple through both; the orchestrator reads
+	// it immediately after prove() returns, on the same goroutine, so there is no interleaving.
+	lastVerifyTx atomic.Pointer[string]
+}
+
+// TakeLastVerifyTx returns and clears the most recent verify transaction hash.
+//
+// Clearing matters: a stale hash reported against a later batch would attribute one batch's
+// verification cost to another. Empty means the last attempt did not reach a mined transaction.
+func (a *BatchQuorumAttestor) TakeLastVerifyTx() string {
+	if a == nil {
+		return ""
+	}
+	p := a.lastVerifyTx.Swap(nil)
+	if p == nil {
+		return ""
+	}
+	return *p
 }
 
 // NewBatchQuorumAttestor builds the attestor.
@@ -214,11 +237,15 @@ func (a *BatchQuorumAttestor) prove(
 		chainID, agg.SignedVotingPower, agg.TotalVotingPower, len(agg.Signers), agg.Signers)
 
 	// ---- Submit --------------------------------------------------------------
-	if err := a.submitter.SubmitBatchQuorumProof(
+	verifyTx, err := a.submitter.SubmitBatchQuorumProof(
 		ctx, chainID, tree.BundleID, tree.Root, tree.BatchOperationID, agg, msgHash,
-	); err != nil {
+	)
+	if err != nil {
 		return fmt.Errorf("submitting batch quorum proof: %w", err)
 	}
+	// Record the verify transaction so the caller can measure its cost. It is a SHARED leg:
+	// one executeComprehensiveProof verifies the whole batch, exactly like the anchor.
+	a.lastVerifyTx.Store(&verifyTx)
 
 	// Confirm rather than assume. A submit that mined with status 1 but did not set the flag
 	// would otherwise send every member into a revert with a misleading error.

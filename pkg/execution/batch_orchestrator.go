@@ -427,7 +427,7 @@ func (o *BatchOrchestrator) FlushChain(
 	for _, p := range append(append([]*PendingBatchIntent{}, res.Settled...), res.Failed...) {
 		costMembers = append(costMembers, costMemberFor(p, res.TxHashes[p.IntentID]))
 	}
-	o.reportBatchCosts(ctx, chainID, res.AnchorTxHash, costMembers)
+	o.reportBatchCosts(ctx, chainID, res.AnchorTxHash, o.lastVerifyTx(), costMembers)
 
 	return res, nil
 }

@@ -75,7 +75,7 @@ func submitterWithNoChain() *BatchProofSubmitterImpl {
 
 func TestSubmitBatchQuorumProof_RefusesNilAggregate(t *testing.T) {
 	s := submitterWithNoChain()
-	err := s.SubmitBatchQuorumProof(context.Background(), 1, [32]byte{}, [32]byte{}, [32]byte{}, nil, [32]byte{})
+	_, err := s.SubmitBatchQuorumProof(context.Background(), 1, [32]byte{}, [32]byte{}, [32]byte{}, nil, [32]byte{})
 	if err == nil {
 		t.Fatal("a nil aggregate means no quorum attested this root; submitting it must be refused")
 	}
@@ -89,7 +89,7 @@ func TestSubmitBatchQuorumProof_RefusesZeroSignedPower(t *testing.T) {
 		TotalVotingPower:      big.NewInt(700),
 		Signers:               []string{"0xa", "0xb", "0xc", "0xd", "0xe"},
 	}
-	if err := s.SubmitBatchQuorumProof(context.Background(), 1, [32]byte{}, [32]byte{}, [32]byte{}, agg, [32]byte{}); err == nil {
+	if _, err := s.SubmitBatchQuorumProof(context.Background(), 1, [32]byte{}, [32]byte{}, [32]byte{}, agg, [32]byte{}); err == nil {
 		t.Fatal("zero signed voting power must be refused")
 	}
 }
@@ -106,7 +106,7 @@ func TestSubmitBatchQuorumProof_RefusesSingleSignerAggregate(t *testing.T) {
 		TotalVotingPower:      big.NewInt(700),
 		Signers:               []string{"0xaaa"}, // ...from one key
 	}
-	err := s.SubmitBatchQuorumProof(context.Background(), 1, [32]byte{}, [32]byte{}, [32]byte{}, agg, [32]byte{})
+	_, err := s.SubmitBatchQuorumProof(context.Background(), 1, [32]byte{}, [32]byte{}, [32]byte{}, agg, [32]byte{})
 	if err == nil {
 		t.Fatal("a single-signer aggregate claiming full voting power is the CRYPTO-007 forgery " +
 			"and must never reach the chain")
@@ -137,7 +137,7 @@ func TestSubmitBatchQuorumProof_RefusesSignerPowerMismatch(t *testing.T) {
 			big.NewInt(100), big.NewInt(100), big.NewInt(100), big.NewInt(100), big.NewInt(100),
 		},
 	}
-	err := s.SubmitBatchQuorumProof(context.Background(), 1, [32]byte{}, [32]byte{}, [32]byte{}, agg, [32]byte{})
+	_, err := s.SubmitBatchQuorumProof(context.Background(), 1, [32]byte{}, [32]byte{}, [32]byte{}, agg, [32]byte{})
 	if err == nil {
 		t.Fatal("a declared signed power that does not equal the sum of the signers' powers " +
 			"must be refused before it can burn anchor gas")
@@ -158,7 +158,7 @@ func TestSubmitBatchQuorumProof_RefusesRaggedSignerSet(t *testing.T) {
 		Signers:               []string{"0xd4a3dbbae0c04d4307c5e00a5e05b66acc289f5d", "0x5555afa8ff8048bddaac1554afd790c9bf7ec6e0"},
 		SignerPowers:          []*big.Int{big.NewInt(100)},
 	}
-	if err := s.SubmitBatchQuorumProof(context.Background(), 1, [32]byte{}, [32]byte{}, [32]byte{}, agg, [32]byte{}); err == nil {
+	if _, err := s.SubmitBatchQuorumProof(context.Background(), 1, [32]byte{}, [32]byte{}, [32]byte{}, agg, [32]byte{}); err == nil {
 		t.Fatal("a ragged signer set must be refused")
 	}
 }
