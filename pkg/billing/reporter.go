@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/big"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -58,21 +59,27 @@ type CostEvent struct {
 
 	// OrgID is populated by the GATEWAY, not here. Kept on the wire only so an operator tool
 	// can round-trip an event; the validator always sends it empty.
-	OrgID                string            `json:"org_id,omitempty"`
-	Chain                string            `json:"chain"`
-	ChainID              int64             `json:"chain_id,omitempty"`
-	Leg                  string            `json:"leg"`
-	TxHash               string            `json:"tx_hash"`
-	BlockNumber          string            `json:"block_number,omitempty"`
-	GasUsed              string            `json:"gas_used"`
-	EffectiveGasPriceWei string            `json:"effective_gas_price_wei"`
-	NativeSymbol         string            `json:"native_symbol"`
-	WeiPerNative         string            `json:"wei_per_native"`
-	InclusionProof       interface{}       `json:"inclusion_proof,omitempty"`
-	Breakdown            map[string]string `json:"breakdown,omitempty"`
-	FreeAtMargin         bool              `json:"free_at_margin,omitempty"`
-	ObservedAt           string            `json:"observed_at"`
-	IdempotencyKey       string            `json:"idempotency_key"`
+	OrgID                string `json:"org_id,omitempty"`
+	Chain                string `json:"chain"`
+	ChainID              int64  `json:"chain_id,omitempty"`
+	Leg                  string `json:"leg"`
+	TxHash               string `json:"tx_hash"`
+	BlockNumber          string `json:"block_number,omitempty"`
+	GasUsed              string `json:"gas_used"`
+	EffectiveGasPriceWei string `json:"effective_gas_price_wei"`
+	// L1FeeWei is the OP-stack L1 data fee, ADDITIVE to gas_used * gas_price.
+	//
+	// Omitted on chains that do not have one. The gateway must compute
+	// native = gas_used * gas_price + l1_fee_wei; using the product alone
+	// under-charges Base and Optimism by the whole data fee.
+	L1FeeWei       string            `json:"l1_fee_wei,omitempty"`
+	NativeSymbol   string            `json:"native_symbol"`
+	WeiPerNative   string            `json:"wei_per_native"`
+	InclusionProof interface{}       `json:"inclusion_proof,omitempty"`
+	Breakdown      map[string]string `json:"breakdown,omitempty"`
+	FreeAtMargin   bool              `json:"free_at_margin,omitempty"`
+	ObservedAt     string            `json:"observed_at"`
+	IdempotencyKey string            `json:"idempotency_key"`
 }
 
 // NewCostEvent converts a measured ChainCost into the wire payload.
@@ -98,6 +105,7 @@ func NewCostEvent(intentID, adiURL, accumTxHash string, c *ChainCost, inclusionP
 		BlockNumber:          c.BlockNumber,
 		GasUsed:              fmt.Sprintf("%d", c.GasUsed),
 		EffectiveGasPriceWei: c.GasPriceWei.String(),
+		L1FeeWei:             l1FeeString(c.L1FeeWei),
 		NativeSymbol:         c.NativeSymbol,
 		WeiPerNative:         c.WeiPerNative.String(),
 		InclusionProof:       inclusionProof,
@@ -660,4 +668,13 @@ func (r *Reporter) Stats() map[string]interface{} {
 		"pending":   r.pendingCount(),
 		"wal_dir":   r.cfg.WALDir,
 	}
+}
+
+// l1FeeString renders an optional L1 fee. Empty when there is none, so the field is omitted on
+// chains that do not have one rather than asserting a zero fee.
+func l1FeeString(v *big.Int) string {
+	if v == nil || v.Sign() == 0 {
+		return ""
+	}
+	return v.String()
 }

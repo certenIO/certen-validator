@@ -163,3 +163,123 @@ func TestCostEventNeverCarriesAnOrgIDFromTheValidator(t *testing.T) {
 			ev.AccumTxHash)
 	}
 }
+
+// ── OP-stack (Base / Optimism) L1 data fee ──────────────────────────────────
+//
+// Measured on Base Sepolia 2026-08-05, real receipts:
+//   anchor 0x0c5fd593: gasUsed 278081 @ 7200000 wei = 2002183200000, l1Fee 11263703277
+//   settle 0x27c87e6a: gasUsed 144884 @ 7200000 wei = 1043164800000, l1Fee 20740574086
+//
+// Folding the L1 fee into the total (setTotal) kept the arithmetic right but forced GasUsed to
+// 1, which destroyed the gas figure AND broke the shared split.
+
+func TestSetGasWithL1KeepsRealGasAndTotals(t *testing.T) {
+	c := &ChainCost{Chain: "base-sepolia", Leg: LegAnchor, TxHash: "0x0c5fd593"}
+	c.setGasWithL1(278081, big.NewInt(7200000), big.NewInt(11263703277))
+
+	if c.GasUsed != 278081 {
+		t.Fatalf("GasUsed = %d, want the real 278081 — collapsing it to 1 is what broke "+
+			"estimateGasLegs and the shared split", c.GasUsed)
+	}
+	want := new(big.Int).Add(
+		new(big.Int).Mul(big.NewInt(278081), big.NewInt(7200000)),
+		big.NewInt(11263703277),
+	)
+	if c.NativeAmount.Cmp(want) != 0 {
+		t.Fatalf("NativeAmount = %s, want %s (l2 + l1)", c.NativeAmount, want)
+	}
+	if want.String() != "2013446903277" {
+		t.Fatalf("total = %s, want the measured 2013446903277", want)
+	}
+}
+
+// Validate must accept the additive form, or every OP-stack cost event is rejected as malformed.
+func TestValidateAcceptsGasPlusL1(t *testing.T) {
+	c := &ChainCost{
+		Chain: "base-sepolia", Leg: LegAnchor, TxHash: "0xabc",
+		NativeSymbol: "ETH", WeiPerNative: big.NewInt(1e18), ObservedAt: time.Now(),
+	}
+	c.setGasWithL1(144884, big.NewInt(7200000), big.NewInt(20740574086))
+	if err := c.Validate(); err != nil {
+		t.Fatalf("Validate rejected a valid OP-stack cost: %v", err)
+	}
+	// And it must still catch a genuinely inconsistent total.
+	c.NativeAmount = big.NewInt(1)
+	if err := c.Validate(); err == nil {
+		t.Fatal("Validate accepted a total that does not equal gas*price + l1")
+	}
+}
+
+// THE bug the old representation caused. With GasUsed collapsed to 1, splitGas(1,3) is [1,0,0]:
+// member one is charged the entire anchor and the other two are charged nothing.
+func TestSharedSplitWasBrokenByCollapsedGas(t *testing.T) {
+	collapsed := splitGas(1, 3)
+	if collapsed[1] != 0 || collapsed[2] != 0 {
+		t.Fatal("premise wrong: splitGas(1,3) should be [1,0,0]")
+	}
+
+	// With the real gas figure the split is even and exact.
+	real := splitGas(278081, 3)
+	var sum uint64
+	for _, s := range real {
+		sum += s
+		if s == 0 {
+			t.Fatal("a member received ZERO gas from a shared anchor")
+		}
+	}
+	if sum != 278081 {
+		t.Fatalf("shares sum to %d, want 278081", sum)
+	}
+}
+
+// The L1 fee is paid once for the same transaction, so it must be divided too. Leaving it whole
+// charges every member the full data fee — an N-times overcharge.
+func TestL1FeeIsDividedAndSumsExactly(t *testing.T) {
+	total := big.NewInt(11263703277) // measured anchor l1Fee
+	for _, n := range []int{1, 2, 3, 7} {
+		shares := splitBig(total, n)
+		if len(shares) != n {
+			t.Fatalf("splitBig(_, %d) returned %d shares", n, len(shares))
+		}
+		sum := new(big.Int)
+		for _, s := range shares {
+			if s == nil {
+				t.Fatalf("nil share for a non-zero L1 fee across %d members", n)
+			}
+			sum.Add(sum, s)
+		}
+		if sum.Cmp(total) != 0 {
+			t.Fatalf("L1 shares across %d sum to %s, want %s — %s wei lost or invented",
+				n, sum, total, new(big.Int).Sub(total, sum))
+		}
+	}
+}
+
+// A chain with no L1 component must stay absent rather than asserting a zero fee.
+func TestSplitBigNilStaysNil(t *testing.T) {
+	for _, in := range []*big.Int{nil, big.NewInt(0)} {
+		for _, s := range splitBig(in, 3) {
+			if s != nil {
+				t.Fatalf("splitBig(%v,3) produced %v; a chain without an L1 fee must report none", in, s)
+			}
+		}
+	}
+}
+
+// setTotal is still correct for chains that genuinely have no gas model, and must clear any L1
+// component so the two representations cannot be mixed.
+func TestSetTotalStillUsedForNonGasChains(t *testing.T) {
+	c := &ChainCost{Chain: "solana", Leg: LegAnchor, TxHash: "sig"}
+	c.setGasWithL1(100, big.NewInt(2), big.NewInt(5)) // pretend it was set wrongly first
+	c.setTotal(big.NewInt(5000))
+
+	if c.GasUsed != 1 {
+		t.Fatalf("GasUsed = %d, want 1 for a chain with no gas model", c.GasUsed)
+	}
+	if c.L1FeeWei != nil {
+		t.Fatal("setTotal must clear L1FeeWei; mixing the two representations double-counts")
+	}
+	if c.NativeAmount.Cmp(big.NewInt(5000)) != 0 {
+		t.Fatalf("NativeAmount = %s, want 5000", c.NativeAmount)
+	}
+}

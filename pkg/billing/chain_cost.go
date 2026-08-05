@@ -209,7 +209,8 @@ func (p *evmProbe) ObservedCost(ctx context.Context, txHash string) (*ChainCost,
 		EffectiveGasPrice string `json:"effectiveGasPrice"`
 		BlockNumber       string `json:"blockNumber"`
 		Status            string `json:"status"`
-		L1Fee             string `json:"l1Fee"` // OP-stack chains surface the L1 data fee here
+		L1Fee             string `json:"l1Fee"`     // OP-stack chains surface the L1 data fee here
+		L1GasUsed         string `json:"l1GasUsed"` // recorded for auditing; not used in pricing
 	}
 	if err := json.Unmarshal(raw, &r); err != nil {
 		return nil, fmt.Errorf("evm: decode receipt: %w", err)
@@ -247,11 +248,17 @@ func (p *evmProbe) ObservedCost(ctx context.Context, txHash string) (*ChainCost,
 
 	// OP-stack L1 data fee is charged on top of L2 execution gas and is a
 	// large share of the total on Base/Optimism. Omitting it under-charges.
+	//
+	// Recorded as a SEPARATE additive term rather than folded into the total. Folding it
+	// (setTotal) kept the arithmetic right but forced GasUsed to 1, which destroyed the gas
+	// figure and broke the shared-anchor split — see ChainCost.setGasWithL1.
 	if l1, ok := parseBig(r.L1Fee); ok && l1.Sign() > 0 {
-		total := new(big.Int).Add(cost.NativeAmount, l1)
 		cost.Breakdown["l2_execution_wei"] = cost.NativeAmount.String()
 		cost.Breakdown["l1_data_fee_wei"] = l1.String()
-		cost.setTotal(total)
+		if l1GasUsed, ok := parseBig(r.L1GasUsed); ok {
+			cost.Breakdown["l1_gas_used"] = l1GasUsed.String()
+		}
+		cost.setGasWithL1(gasUsed.Uint64(), price, l1)
 	}
 	if normalizeChain(p.cfg.Chain) == "hedera" {
 		// The JSON-RPC relay denominates in weibar (1e18) even though HBAR's

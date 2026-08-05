@@ -3,6 +3,7 @@ package billing
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"time"
 )
 
@@ -122,19 +123,35 @@ func (r *Reporter) ObserveAndReportShared(
 		}
 
 		shares := splitGas(cost.GasUsed, len(members))
-		r.logger.Printf("💰 %s leg=%s tx=%s gas=%d shared across %d intent(s)",
-			probeCfg.Chain, cost.Leg, txHash, cost.GasUsed, len(members))
+		// The OP-stack L1 data fee is additive and paid once for the same transaction, so it
+		// must be divided too. Leaving it whole would charge every member the full data fee —
+		// an N-times overcharge on a component that reaches double digits of the total on
+		// Base/Optimism mainnet.
+		l1Shares := splitBig(cost.L1FeeWei, len(members))
+		r.logger.Printf("💰 %s leg=%s tx=%s gas=%d l1=%s shared across %d intent(s)",
+			probeCfg.Chain, cost.Leg, txHash, cost.GasUsed, bigOrDash(cost.L1FeeWei), len(members))
 
 		for i, m := range members {
 			// Copy per member: the shared ChainCost must not be mutated in place, or every
 			// share after the first would inherit the previous one's gas.
 			share := *cost
 			share.GasUsed = shares[i]
+			share.L1FeeWei = l1Shares[i]
+			// Recompute the total from THIS member's shares so Validate's
+			// gas*price+l1 == native check holds for each event independently.
+			share.NativeAmount = new(big.Int).Mul(
+				new(big.Int).SetUint64(share.GasUsed), share.GasPriceWei)
+			if share.L1FeeWei != nil {
+				share.NativeAmount = new(big.Int).Add(share.NativeAmount, share.L1FeeWei)
+			}
 			share.Breakdown = mergeBreakdown(cost.Breakdown, map[string]string{
 				"shared_tx":        txHash,
 				"shared_with":      fmt.Sprintf("%d", len(members)),
 				"shared_total_gas": fmt.Sprintf("%d", cost.GasUsed),
 			})
+			if cost.L1FeeWei != nil {
+				share.Breakdown["shared_total_l1_fee_wei"] = cost.L1FeeWei.String()
+			}
 
 			event, err := NewCostEvent(m.IntentID, m.ADIURL, m.AccumTxHash, &share, inclusionProof)
 			if err != nil {
@@ -161,4 +178,32 @@ func mergeBreakdown(base, extra map[string]string) map[string]string {
 		out[k] = v
 	}
 	return out
+}
+
+// splitBig divides an optional big-int fee across n members, remainder on the first.
+//
+// Same contract as splitGas: the shares must sum to exactly what was paid. Returns a slice of
+// nils when there is no fee, so a chain without an L1 component stays absent rather than
+// asserting a zero.
+func splitBig(total *big.Int, n int) []*big.Int {
+	out := make([]*big.Int, n)
+	if n <= 0 {
+		return nil
+	}
+	if total == nil || total.Sign() == 0 {
+		return out // all nil
+	}
+	q, rem := new(big.Int).QuoRem(total, big.NewInt(int64(n)), new(big.Int))
+	for i := range out {
+		out[i] = new(big.Int).Set(q)
+	}
+	out[0] = new(big.Int).Add(out[0], rem)
+	return out
+}
+
+func bigOrDash(v *big.Int) string {
+	if v == nil {
+		return "-"
+	}
+	return v.String()
 }
