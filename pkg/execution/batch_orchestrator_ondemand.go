@@ -186,5 +186,26 @@ func (o *BatchOrchestrator) SettleOnDemandMember(
 	out.Settled = true
 	o.logf("[OD] chain=%d intent=%s settled tx=%s (anchor gas %d, unamortised by design)",
 		chainID, member.IntentID, txHash, gasUsed)
+
+	// Attribute cost. A solo intent is a one-member batch, so the anchor is "shared" across
+	// exactly one member and it bears the whole cost — the same code path a 3-member batch
+	// takes, which is what keeps the two from drifting apart.
+	o.reportBatchCosts(ctx, chainID, anchorTx, []costMember{costMemberFor(member, txHash)})
 	return out, nil
+}
+
+// costMemberFor extracts the identifiers cost attribution needs from a settled member.
+//
+// The Accumulate transaction hash comes from the captured attestation, and it is the ONLY
+// identifier the gateway and the validator both hold: IntentID is the validator's own, and the
+// gateway keys intents by a different UUID entirely. Without it the gateway stores a cost it can
+// never join to an intent, so measured gas never reaches settlement.
+func costMemberFor(p *PendingBatchIntent, settleTx string) costMember {
+	cm := costMember{IntentID: p.IntentID, SettleTx: settleTx}
+	if att, ok := p.Attestation.(interface {
+		CostAttribution() (accumTxHash string, orgID string)
+	}); ok {
+		cm.AccumTxHash, cm.OrgID = att.CostAttribution()
+	}
+	return cm
 }

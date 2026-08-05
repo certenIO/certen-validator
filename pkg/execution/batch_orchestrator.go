@@ -416,6 +416,19 @@ func (o *BatchOrchestrator) FlushChain(
 	o.logf("[BATCH] chain=%d complete: %d settled, %d failed (anchor amortised across %d)",
 		chainID, len(res.Settled), len(res.Failed), tree.Size())
 
+	// Attribute cost: the anchor once, divided across the members that shared it, plus each
+	// member's own settlement transaction.
+	//
+	// Includes FAILED members deliberately. A member that reverted still consumed its share of
+	// the anchor and burned gas on its own transaction; excluding it would under-report real
+	// spend and make failures look free. Members with no transaction at all are skipped inside
+	// reportBatchCosts, since there is nothing on chain to measure.
+	costMembers := make([]costMember, 0, len(res.Settled)+len(res.Failed))
+	for _, p := range append(append([]*PendingBatchIntent{}, res.Settled...), res.Failed...) {
+		costMembers = append(costMembers, costMemberFor(p, res.TxHashes[p.IntentID]))
+	}
+	o.reportBatchCosts(ctx, chainID, res.AnchorTxHash, costMembers)
+
 	return res, nil
 }
 

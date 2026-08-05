@@ -251,6 +251,16 @@ func looksLikeTxHash(h string) bool {
 // probe always talks to the endpoint that actually executed the transaction —
 // a different provider may not have indexed it, or may prune it.
 func (btce *BFTTargetChainExecutor) resolveCostEndpoint(chain string) (string, string) {
+	return resolveCostEndpointForChain(chain)
+}
+
+// resolveCostEndpointForChain is the implementation, package-level so the BATCH settle path can
+// reach it too.
+//
+// It deliberately takes no receiver: the batch orchestrator has no BFTTargetChainExecutor, and
+// calling the method on a nil one worked only by accident (the body never touched the receiver).
+// One field access added later would have turned that into a panic during settlement.
+func resolveCostEndpointForChain(chain string) (string, string) {
 	c := strings.ToLower(strings.TrimSpace(chain))
 	c = strings.ReplaceAll(c, " ", "-")
 

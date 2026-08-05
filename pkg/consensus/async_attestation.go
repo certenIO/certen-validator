@@ -99,6 +99,24 @@ type PendingAttestation struct {
 	BatchedWith []string
 }
 
+// CostAttribution returns the identifiers billing needs to attribute this intent's on-chain
+// cost: the Accumulate transaction hash and the owning org.
+//
+// Exists as a method rather than as direct field access because pkg/execution settles the batch
+// and must not import pkg/consensus — consensus already imports execution, so the dependency
+// only runs one way. The batch orchestrator therefore type-asserts on this method set instead.
+//
+// The Accumulate transaction hash is load-bearing: it is the ONLY identifier the gateway and the
+// validator both hold. IntentID is the validator's own and means nothing to the gateway, which
+// keys intents by a different UUID. A cost event without it can be stored but never joined to an
+// intent, so the measured gas never reaches settlement.
+func (p *PendingAttestation) CostAttribution() (accumTxHash string, orgID string) {
+	if p == nil {
+		return "", ""
+	}
+	return p.TransactionHash, p.UserID
+}
+
 // IsCadence reports whether this attestation is being replayed from the cadence queue.
 func (p *PendingAttestation) IsCadence() bool { return p != nil && p.Replayed }
 
