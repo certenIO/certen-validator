@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/certen/independant-validator/pkg/billing"
@@ -147,7 +149,7 @@ func RunCostBackfill(ctx context.Context, db *sql.DB, opts CostBackfillOptions) 
 		rowsInCycle int
 		txHash      string
 		network     string
-		chainID     sql.NullInt64
+		chainIDRaw  sql.NullString
 		intentID    string
 		accumTx     sql.NullString
 		adiURL      sql.NullString
@@ -156,7 +158,7 @@ func RunCostBackfill(ctx context.Context, db *sql.DB, opts CostBackfillOptions) 
 	for rows.Next() {
 		var c candidate
 		if err := rows.Scan(&c.step, &c.rowsInCycle, &c.txHash, &c.network,
-			&c.chainID, &c.intentID, &c.accumTx, &c.adiURL); err != nil {
+			&c.chainIDRaw, &c.intentID, &c.accumTx, &c.adiURL); err != nil {
 			return nil, fmt.Errorf("scanning candidate: %w", err)
 		}
 		candidates = append(candidates, c)
@@ -192,8 +194,14 @@ func RunCostBackfill(ctx context.Context, db *sql.DB, opts CostBackfillOptions) 
 			rep.SkippedChain++
 			continue
 		}
-		if c.chainID.Valid && c.chainID.Int64 != 0 {
-			chainID = c.chainID.Int64
+		// chain_id is a VARCHAR that is inconsistently populated: it holds a numeric id on
+		// most rows ("11155111", "84532") but a chain NAME on others ("sui-testnet"). Parse it
+		// only when it is genuinely numeric, and otherwise keep the value canonicalChainSlug
+		// derived from the name — which is authoritative anyway.
+		if c.chainIDRaw.Valid {
+			if parsed, perr := strconv.ParseInt(strings.TrimSpace(c.chainIDRaw.String), 10, 64); perr == nil && parsed != 0 {
+				chainID = parsed
+			}
 		}
 		rpcURL, apiKey := costEndpointForChain(chain)
 		if rpcURL == "" {
