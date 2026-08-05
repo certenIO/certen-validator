@@ -729,13 +729,38 @@ type DiscoveryStatus struct {
 	Started bool
 }
 
-// Stalled reports whether discovery has stopped making progress for longer than threshold.
+// StallLagFloor is how far behind the head a node must be before a still watermark counts as a
+// stall.
 //
-// Deliberately requires BOTH "has advanced at least once" and "threshold exceeded": a node in
-// its first seconds has never advanced, and reporting that as an outage would make the signal
-// noisy enough to be ignored — which is how a real outage gets missed.
+// A caught-up node legitimately stops advancing: the watermark is capped at the finalize ceiling
+// (head - confirmLag), so once it reaches there it waits, and observed live on 2026-08-05 that
+// wait routinely exceeds two minutes on every validator in the fleet even while the chain
+// produces ~46 blocks/min. Time alone therefore cannot distinguish "idle and fine" from "dead",
+// and a threshold that fires on healthy nodes is one operators learn to ignore.
+//
+// Set above confirmLag (2) with margin: at or under this the node has nothing to do.
+const StallLagFloor = 10
+
+// Stalled reports whether discovery has stopped making progress it SHOULD be making.
+//
+// Requires three things together, and each rules out a specific false alarm:
+//
+//   - Started — a node in its first seconds has never advanced. Without this, every restart
+//     pages.
+//   - SecondsSinceAdvance > threshold — the watermark is actually still.
+//   - LagBlocks > StallLagFloor — and there is work it is failing to do. This is the condition
+//     the first version of this function was missing, and it made every healthy caught-up
+//     validator report STALLED within two minutes of catching up.
+//
+// A node that is behind AND frozen is a real stall and still fires. An endpoint outage is
+// covered separately by LastPollError, which does not depend on lag at all — important because
+// a node that boots into a dead upstream never advances and never learns a head, so its lag
+// reads zero.
 func (s DiscoveryStatus) Stalled(threshold time.Duration) bool {
 	if !s.Started {
+		return false
+	}
+	if s.LagBlocks <= StallLagFloor {
 		return false
 	}
 	return s.SecondsSinceAdvance > threshold.Seconds()
