@@ -45,17 +45,39 @@ type BFTConsensusProtocol interface {
 
 const (
 	CERTEN_INTENT_MEMO    = "CERTEN_INTENT"
-	MAX_CONCURRENT_BLOCKS = 2000 // Increased to handle large block gaps during restarts
-	INTENT_BATCH_SIZE     = 5
+	MAX_CONCURRENT_BLOCKS = 2000 // Job-channel BUFFER, not concurrency — see DefaultBlockWorkers
+
+	// DefaultBlockWorkers is how many blocks are scanned concurrently.
+	//
+	// Raised from a hardcoded 3 on 2026-08-05. Each worker is blocked on a single
+	// SearchCertenTransactions round trip (~675ms measured), so throughput is linear in this
+	// number and costs no CPU — 3 workers gave 267 blocks/min, which needed roughly an hour to
+	// clear that day's ~12,500-block backlog while the chain kept producing.
+	//
+	// 12 is deliberately moderate rather than maximal: the ceiling is what the Accumulate
+	// endpoint will serve, not what this process can spawn, and a validator fleet of seven all
+	// scanning hard is 7x whatever is set here. Raise via BLOCK_WORKERS after watching the
+	// endpoint, not on principle.
+	DefaultBlockWorkers = 12
+	INTENT_BATCH_SIZE   = 5
 )
 
 // IntentDiscoveryConfig contains configuration for intent discovery
 type IntentDiscoveryConfig struct {
-	BlockPollInterval   time.Duration `json:"block_poll_interval"`
-	BFTTimeout          time.Duration `json:"bft_timeout"`
-	MaxConcurrentBlocks int           `json:"max_concurrent_blocks"`
-	IntentBatchSize     int           `json:"intent_batch_size"`
-	MinStartHeight      uint64        `json:"min_start_height"` // Minimum starting height fallback
+	BlockPollInterval time.Duration `json:"block_poll_interval"`
+	BFTTimeout        time.Duration `json:"bft_timeout"`
+	// MaxConcurrentBlocks sizes the block job CHANNEL BUFFER. It does NOT bound concurrency
+	// despite the name — see BlockWorkers, which does.
+	MaxConcurrentBlocks int `json:"max_concurrent_blocks"`
+
+	// BlockWorkers is the number of goroutines draining the block queue, and therefore the
+	// actual scan throughput: each worker does one SearchCertenTransactions round trip per
+	// block, ~675ms measured, so rate ≈ BlockWorkers / 0.675 blocks per second.
+	//
+	// Zero means DefaultBlockWorkers.
+	BlockWorkers    int    `json:"block_workers"`
+	IntentBatchSize int    `json:"intent_batch_size"`
+	MinStartHeight  uint64 `json:"min_start_height"` // Minimum starting height fallback
 
 	// on_demand consensus-bound proof retry policy.
 	// on_demand (financial) intents REQUIRE the L1-L3 consensus-bound chained proof and
@@ -203,6 +225,7 @@ func DefaultIntentDiscoveryConfig() *IntentDiscoveryConfig {
 		// every value-moving intent. Keep in step with main.go's CERTEN_BFT_TIMEOUT default.
 		BFTTimeout:          360 * time.Second,
 		MaxConcurrentBlocks: MAX_CONCURRENT_BLOCKS,
+		BlockWorkers:        blockWorkersFromEnv(),
 		IntentBatchSize:     INTENT_BATCH_SIZE,
 		MinStartHeight:      946000, // Current testnet baseline
 		// Short in-line retry catches the common few-second DN-anchoring lag without holding
@@ -360,12 +383,29 @@ func (id *IntentDiscovery) StartMonitoring() {
 	id.logger.Printf("   - Intent Batch Size: %d", id.config.IntentBatchSize)
 	id.logger.Printf("   - Min Start Height: %d", id.config.MinStartHeight)
 
-	// Start block processor workers
-	for i := 0; i < 3; i++ {
+	// Start block processor workers.
+	//
+	// THIS is the throughput limiter, and it was a hardcoded 3 while MaxConcurrentBlocks — the
+	// field whose name reads like the throttle — only sizes the job channel. Someone raised
+	// that from 10 to 2000 "to handle high block rate"; it changed nothing, because a deeper
+	// queue does not drain faster. Measured 2026-08-05: 267 blocks/min across 3 workers, i.e.
+	// ~675ms per block, entirely I/O-bound on one SearchCertenTransactions round trip each.
+	//
+	// Recovery from an outage is therefore (backlog / (rate - chain_rate)). At 3 workers the
+	// two outages that day left a ~12,500-block backlog needing ~an hour to clear. Raising
+	// concurrency scales that near-linearly until Accumulate pushes back, because the workers
+	// are waiting on the network, not on CPU.
+	workerCount := id.config.BlockWorkers
+	if workerCount <= 0 {
+		workerCount = DefaultBlockWorkers
+	}
+	for i := 0; i < workerCount; i++ {
 		workerID := fmt.Sprintf("worker-%d", i+1)
 		id.logger.Printf("🔧 Starting block processor: %s", workerID)
 		go id.blockProcessor(workerID)
 	}
+	id.logger.Printf("   - Block workers: %d (catch-up rate scales with this, not with "+
+		"MaxConcurrentBlocks, which only sizes the queue)", workerCount)
 
 	// Start the decoupled on_demand consensus-bound proof retry worker
 	go id.retryWorker()
@@ -648,6 +688,24 @@ func (id *IntentDiscovery) blockProcessor(workerID string) {
 			id.advanceWatermark(job.BlockHeight)
 		}
 	}
+}
+
+// blockWorkersFromEnv reads BLOCK_WORKERS, falling back to DefaultBlockWorkers.
+//
+// A malformed or non-positive value uses the default rather than failing startup: discovery
+// running at a sane rate is always better than a validator that refuses to boot over a tuning
+// knob, and the value is logged at startup either way.
+func blockWorkersFromEnv() int {
+	raw := strings.TrimSpace(os.Getenv("BLOCK_WORKERS"))
+	if raw == "" {
+		return DefaultBlockWorkers
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		log.Printf("⚠️ BLOCK_WORKERS=%q is not a positive integer — using %d", raw, DefaultBlockWorkers)
+		return DefaultBlockWorkers
+	}
+	return n
 }
 
 // DiscoveryStatus is a point-in-time view of whether block discovery is alive and keeping up.
