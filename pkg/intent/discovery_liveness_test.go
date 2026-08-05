@@ -95,7 +95,7 @@ func TestLargeLagWhileAdvancingIsNotStalled(t *testing.T) {
 // A failing head poll must be distinguishable from an idle chain. Without this the operator
 // cannot tell "cannot reach Accumulate" from "nothing is happening".
 func TestStatusSurfacesPollError(t *testing.T) {
-	id := &IntentDiscovery{lastPollErr: `Post "http://162.217.96.196:8660/v3": EOF`}
+	id := &IntentDiscovery{lastPollErr: `Post "https://kermit.accumulatenetwork.io/v3": EOF`}
 	if got := id.Status().LastPollError; got == "" {
 		t.Fatal("poll error was not surfaced; an endpoint outage looks like an idle chain")
 	}

@@ -173,7 +173,7 @@ The included `docker-compose.yml` deploys a complete testnet:
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `ACCUMULATE_URL` | Yes | - | Accumulate v3 API endpoint |
+| `ACCUMULATE_URL` | Yes | - | Accumulate v3 API endpoint. **Use the hostname over HTTPS** — see below |
 | `ACCUMULATE_COMET_DN` | No | - | Directory Network CometBFT RPC |
 | `ACCUMULATE_COMET_BVN` | No | - | Block Validation Network CometBFT RPC |
 
@@ -277,9 +277,27 @@ See [Proof Classes](#proof-classes) for what these control.
 
 | Network | Accumulate v3 | CometBFT DN | CometBFT BVN |
 |---------|---------------|-------------|---------------|
-| Kermit Testnet | `https://kermit.accumulatenetwork.io/v3` | `http://host:16592` | `http://host:16692` |
+| Kermit Testnet | `https://kermit.accumulatenetwork.io/v3` | `http://162.217.96.196:16592` | `http://162.217.96.196:16692` |
 | DevNet | `http://localhost:26660/v3` | `http://localhost:16592` | `http://localhost:16692` |
 | Mainnet | `https://mainnet.accumulatenetwork.io/v3` | Production endpoints | Production endpoints |
+
+> **The two columns are addressed differently on purpose — do not "normalise" them.**
+>
+> **`ACCUMULATE_URL` must be the HOSTNAME over HTTPS.** The TLS certificate is issued for
+> `kermit.accumulatenetwork.io` (SAN also covers `testnet.accumulatenetwork.io`), not for the IP,
+> and plain HTTP on port 80 answers **301 → HTTPS**. Go's HTTP client will not replay a POST body
+> across a 301, so an `http://` endpoint fails every JSON-RPC call the moment that redirect is in
+> place — while still looking reachable to `curl` and to a browser. Addressing the IP directly
+> also returns nginx's own **404** (no server block matches a bare-IP `Host` header), which reads
+> like an upstream outage and is not one.
+>
+> This cost most of 2026-08-05: `ACCUMULATE_URL` pointed at `http://<ip>:8660`, that port stopped
+> serving, discovery froze fleet-wide, and the misleading 404/301 responses sent the diagnosis
+> down two wrong paths before the hostname was tried.
+>
+> **CometBFT endpoints stay hardcoded IPv4:port.** The proof pipeline queries DN and BVN consensus
+> RPC directly for L3/L4 evidence. Those ports are plain HTTP, are not behind the TLS proxy, and
+> are not served by the hostname — a hostname there would not resolve to a listening service.
 
 ## Proof Cycle
 
