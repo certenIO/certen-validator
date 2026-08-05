@@ -72,13 +72,41 @@ func (btce *BFTTargetChainExecutor) reportExecutionCosts(
 		return
 	}
 
-	chain := result.Chain
-	if chain == "" {
-		chain = result.Metadata["chain"]
+	rawChain := result.Chain
+	if rawChain == "" {
+		rawChain = result.Metadata["chain"]
 	}
-	if chain == "" {
+	if rawChain == "" {
 		btce.logger.Printf("⚠️ [COST] Result has no chain; cannot attribute cost")
 		return
+	}
+
+	// CANONICALISE BEFORE REPORTING.
+	//
+	// The executor writes a DISPLAY name ("Ethereum Sepolia") on some paths and a slug
+	// ("ethereum-sepolia", and sometimes the short "sepolia") on others. The gateway keys
+	// everything — quotes, the pricing gate, the gas estimator — by slug. Reporting the display
+	// name verbatim meant cost_events.chain held exactly one value, "Ethereum Sepolia", which
+	// matched NO quote. pricingGate.assess() therefore saw zero events and estimateGasLegs()
+	// returned a median over zero rows, i.e. a gas estimate of zero for every leg.
+	//
+	// It has not caused an outage only because the gate runs solely for `quoted` SKUs and every
+	// live SKU is flat. The first SKU moved to quoted pricing would have failed immediately.
+	chain, chainID := canonicalChainSlug(rawChain)
+
+	// Prefer an explicit chainId from the executor when it supplied one; fall back to the value
+	// derived from the name. Previously this read Metadata only, which is unpopulated on the
+	// live path — hence chain_id NULL on every row ever written.
+	if raw, ok := result.Metadata["chainId"]; ok {
+		if parsed, err := strconv.ParseInt(raw, 10, 64); err == nil && parsed != 0 {
+			chainID = parsed
+		}
+	}
+	if chainID == 0 {
+		// Non-EVM chains have no EVM chain id; that is expected and not an error. An EVM chain
+		// reaching here IS a bug — it means canonicalChainSlug does not know the name.
+		btce.logger.Printf("ℹ️ [COST] %s reported without a numeric chain id (non-EVM, or an "+
+			"unmapped name — check canonicalChainSlug if this chain is EVM)", chain)
 	}
 
 	rpcURL, apiKey := btce.resolveCostEndpoint(chain)
@@ -86,11 +114,6 @@ func (btce *BFTTargetChainExecutor) reportExecutionCosts(
 		btce.logger.Printf("⚠️ [COST] No RPC endpoint resolved for %s; cost for this intent will be unmeasured "+
 			"(the gateway will keep refusing to price this chain)", chain)
 		return
-	}
-
-	var chainID int64
-	if raw, ok := result.Metadata["chainId"]; ok {
-		chainID, _ = strconv.ParseInt(raw, 10, 64)
 	}
 
 	// A synthetic placeholder like "create_failed_base" is not a tx hash; a
@@ -263,6 +286,83 @@ func (btce *BFTTargetChainExecutor) resolveCostEndpoint(chain string) (string, s
 		}
 	}
 	return os.Getenv("ETHEREUM_URL"), ""
+}
+
+// canonicalChainSlug turns whatever the executor wrote into the slug the gateway keys by, plus
+// the numeric chain id where one exists.
+//
+// THIS IS THE JOIN KEY between the validator and the gateway. cost_events.chain must equal
+// quotes.chain exactly or every chain-keyed lookup on the gateway silently returns zero rows —
+// no error, just a median over an empty set. Normalising at the emitter (rather than asking the
+// gateway to be lenient) keeps one canonical spelling in the data, so a later reconciliation
+// does not have to know every historical alias.
+//
+// Two normalisations happen, in order:
+//
+//  1. Shape: trim, lowercase, spaces to dashes. "Ethereum Sepolia" -> "ethereum-sepolia".
+//  2. Alias: resolve through evmChainIDForName and re-emit the CANONICAL slug for that id, so
+//     the short form "sepolia" also becomes "ethereum-sepolia". Both forms are present in
+//     chain_execution_results today (419 rows "ethereum-sepolia", 234 rows "sepolia"), which is
+//     exactly the kind of split that makes a GROUP BY chain lie.
+//
+// Non-EVM chains pass through with shape normalisation only and a zero chain id — they have no
+// EVM chain id, and their slugs ("solana-devnet", "near-testnet") are already canonical.
+func canonicalChainSlug(raw string) (string, int64) {
+	slug := strings.ToLower(strings.TrimSpace(raw))
+	slug = strings.ReplaceAll(slug, " ", "-")
+	if slug == "" {
+		return "", 0
+	}
+	chainID, ok := evmChainIDForName(slug)
+	if !ok {
+		return slug, 0
+	}
+	if canonical, known := evmCanonicalSlugForChainID(chainID); known {
+		return canonical, chainID
+	}
+	return slug, chainID
+}
+
+// evmCanonicalSlugForChainID is the single spelling this fleet uses for each EVM chain.
+//
+// Deliberately the inverse of evmChainIDForName's ACCEPTED names rather than a second list of
+// aliases: many names map in, exactly one comes out.
+func evmCanonicalSlugForChainID(chainID int64) (string, bool) {
+	switch chainID {
+	case 1:
+		return "ethereum", true
+	case 11155111:
+		return "ethereum-sepolia", true
+	case 42161:
+		return "arbitrum", true
+	case 421614:
+		return "arbitrum-sepolia", true
+	case 10:
+		return "optimism", true
+	case 11155420:
+		return "optimism-sepolia", true
+	case 8453:
+		return "base", true
+	case 84532:
+		return "base-sepolia", true
+	case 137:
+		return "polygon", true
+	case 80002:
+		return "polygon-amoy", true
+	case 56:
+		return "bsc", true
+	case 97:
+		return "bsc-testnet", true
+	case 1284:
+		return "moonbeam", true
+	case 1287:
+		return "moonbase-alpha", true
+	case 296:
+		return "hedera-testnet", true
+	case 295:
+		return "hedera-mainnet", true
+	}
+	return "", false
 }
 
 // evmChainIDForName maps a chain name to its numeric id for config lookup.
