@@ -36,8 +36,10 @@ import (
 type costMember struct {
 	IntentID    string
 	AccumTxHash string
-	OrgID       string
-	SettleTx    string // this member's own transaction; empty if it never reached the chain
+	// ADIURL is the authorising Accumulate identity. NOT an org id — the validator cannot know
+	// the gateway's org UUID, and supplying anything else fails the uuid cast at insert.
+	ADIURL   string
+	SettleTx string // this member's own transaction; empty if it never reached the chain
 }
 
 // reportBatchCosts attributes one settled batch.
@@ -78,7 +80,7 @@ func (o *BatchOrchestrator) reportBatchCosts(
 		for _, m := range members {
 			shared = append(shared, billing.CostMember{
 				IntentID:    m.IntentID,
-				OrgID:       m.OrgID,
+				ADIURL:      m.ADIURL,
 				AccumTxHash: m.AccumTxHash,
 			})
 		}
@@ -104,7 +106,7 @@ func (o *BatchOrchestrator) reportBatchCosts(
 			RPCURL:  rpcURL,
 			APIKey:  apiKey,
 			Leg:     billing.LegVaultExecute,
-		}, m.IntentID, m.OrgID, m.AccumTxHash, m.SettleTx, nil)
+		}, m.IntentID, m.ADIURL, m.AccumTxHash, m.SettleTx, nil)
 	}
 
 	o.logf("[COST] chain=%s reported anchor(shared across %d) + %d member settlement(s)",

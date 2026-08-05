@@ -135,3 +135,31 @@ func TestMergeBreakdownCarriesSharedProvenanceWithoutMutating(t *testing.T) {
 		t.Fatalf("mergeBreakdown mutated the base map (now %d keys)", len(base))
 	}
 }
+
+// The validator must NEVER put an org identifier on a cost event. org_id is a UUID column in the
+// gateway's cost_events; on 2026-08-05 the batch path passed the intent's created_by
+// ("v8_1-cadence-825dc808") through as org_id and EVERY event 500'd on
+// `invalid input syntax for type uuid`. The validator has no access to the gateway's org UUIDs,
+// so the only correct value it can send is none.
+func TestCostEventNeverCarriesAnOrgIDFromTheValidator(t *testing.T) {
+	cost := &ChainCost{
+		Chain: "base-sepolia", ChainID: 84532, Leg: LegAnchor, TxHash: "0xabc",
+		GasUsed: 10, GasPriceWei: big.NewInt(1), NativeSymbol: "ETH",
+		WeiPerNative: big.NewInt(1e18), NativeAmount: big.NewInt(10), ObservedAt: time.Now(),
+	}
+	ev, err := NewCostEvent("intent-1", "acc://certen-kermit-12.acme", "0xaccum", cost, nil)
+	if err != nil {
+		t.Fatalf("NewCostEvent: %v", err)
+	}
+	if ev.OrgID != "" {
+		t.Fatalf("OrgID = %q; the validator cannot know the gateway's org UUID and must send "+
+			"nothing — a non-UUID here 500s every event at insert", ev.OrgID)
+	}
+	if ev.ADIURL != "acc://certen-kermit-12.acme" {
+		t.Fatalf("ADIURL = %q, want the authorising identity", ev.ADIURL)
+	}
+	if ev.AccumTxHash != "0xaccum" {
+		t.Fatalf("AccumTxHash = %q; without it the gateway cannot join the cost to an intent",
+			ev.AccumTxHash)
+	}
+}

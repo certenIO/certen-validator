@@ -38,8 +38,8 @@ import (
 type CostMember struct {
 	// IntentID is the validator's identifier, used for attribution.
 	IntentID string
-	// OrgID may be empty; the gateway resolves the org from the intent.
-	OrgID string
+	// ADIURL is the authorising Accumulate identity. The gateway resolves the org from it.
+	ADIURL string
 	// AccumTxHash is the Accumulate transaction that carried the intent — the ONLY identifier
 	// the gateway and the validator both hold. Without it the gateway can store the cost but
 	// never join it to an intent.
@@ -136,7 +136,7 @@ func (r *Reporter) ObserveAndReportShared(
 				"shared_total_gas": fmt.Sprintf("%d", cost.GasUsed),
 			})
 
-			event, err := NewCostEvent(m.IntentID, m.OrgID, m.AccumTxHash, &share, inclusionProof)
+			event, err := NewCostEvent(m.IntentID, m.ADIURL, m.AccumTxHash, &share, inclusionProof)
 			if err != nil {
 				r.logger.Printf("❌ Rejecting malformed shared cost event for %s/%s intent %s: %v",
 					probeCfg.Chain, txHash, m.IntentID, err)

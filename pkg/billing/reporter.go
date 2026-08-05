@@ -40,7 +40,24 @@ type CostEvent struct {
 	// measured gas never reached settlement and no intent could be shown to
 	// have executed. The Accumulate transaction hash is the one identifier both
 	// sides already hold.
-	AccumTxHash          string            `json:"accum_tx_hash,omitempty"`
+	AccumTxHash string `json:"accum_tx_hash,omitempty"`
+
+	// ADIURL is the Accumulate identity that authorised the intent, e.g.
+	// "acc://certen-kermit-12.acme".
+	//
+	// Carried because the validator CANNOT supply OrgID and never could: org_id is a UUID from
+	// the gateway's own organizations table, and the validator only ever sees Accumulate ADIs.
+	// Sending anything else fails the uuid cast at insert with a 500 — which is exactly what
+	// happened on 2026-08-05 when the batch path began reporting and passed the intent's
+	// created_by ("v8_1-cadence-...") through as org_id.
+	//
+	// The ADI is the identity the validator DOES hold authoritatively, and it gives the gateway
+	// a second, human-meaningful key to resolve an org from when accum_tx_hash alone does not
+	// (an intent submitted directly to Accumulate never appears in gateway_intents).
+	ADIURL string `json:"adi_url,omitempty"`
+
+	// OrgID is populated by the GATEWAY, not here. Kept on the wire only so an operator tool
+	// can round-trip an event; the validator always sends it empty.
 	OrgID                string            `json:"org_id,omitempty"`
 	Chain                string            `json:"chain"`
 	ChainID              int64             `json:"chain_id,omitempty"`
@@ -59,7 +76,11 @@ type CostEvent struct {
 }
 
 // NewCostEvent converts a measured ChainCost into the wire payload.
-func NewCostEvent(intentID, orgID, accumTxHash string, c *ChainCost, inclusionProof interface{}) (*CostEvent, error) {
+//
+// adiURL identifies the authorising Accumulate identity. There is deliberately NO orgID
+// parameter: see CostEvent.OrgID — the validator cannot know the gateway's org UUID, and the
+// one time it tried to supply something org-shaped it produced a 500 on every event.
+func NewCostEvent(intentID, adiURL, accumTxHash string, c *ChainCost, inclusionProof interface{}) (*CostEvent, error) {
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
@@ -69,7 +90,7 @@ func NewCostEvent(intentID, orgID, accumTxHash string, c *ChainCost, inclusionPr
 	return &CostEvent{
 		IntentID:             intentID,
 		AccumTxHash:          accumTxHash,
-		OrgID:                orgID,
+		ADIURL:               adiURL,
 		Chain:                c.Chain,
 		ChainID:              c.ChainID,
 		Leg:                  c.Leg,
@@ -244,7 +265,7 @@ func (r *Reporter) Report(event *CostEvent) {
 func (r *Reporter) ObserveAndReport(
 	ctx context.Context,
 	probeCfg ProbeConfig,
-	intentID, orgID, accumTxHash, txHash string,
+	intentID, adiURL, accumTxHash, txHash string,
 	inclusionProof interface{},
 ) {
 	if r == nil {
@@ -286,7 +307,7 @@ func (r *Reporter) ObserveAndReport(
 			return
 		}
 
-		event, err := NewCostEvent(intentID, orgID, accumTxHash, cost, inclusionProof)
+		event, err := NewCostEvent(intentID, adiURL, accumTxHash, cost, inclusionProof)
 		if err != nil {
 			r.logger.Printf("❌ Rejecting malformed cost event for %s/%s: %v", probeCfg.Chain, txHash, err)
 			return

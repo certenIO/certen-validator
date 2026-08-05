@@ -196,16 +196,25 @@ func (o *BatchOrchestrator) SettleOnDemandMember(
 
 // costMemberFor extracts the identifiers cost attribution needs from a settled member.
 //
-// The Accumulate transaction hash comes from the captured attestation, and it is the ONLY
-// identifier the gateway and the validator both hold: IntentID is the validator's own, and the
-// gateway keys intents by a different UUID entirely. Without it the gateway stores a cost it can
-// never join to an intent, so measured gas never reaches settlement.
+// The Accumulate transaction hash comes from the captured attestation and is the ONLY identifier
+// the gateway and the validator both hold: IntentID is the validator's own, and the gateway keys
+// intents by a different UUID entirely. Without it the gateway stores a cost it can never join
+// to an intent, so measured gas never reaches settlement.
+//
+// The ADI URL comes from the member itself, which is authoritative — it is the same string
+// hashed into the member's Merkle leaf and recomputed on chain by CertenAccountV7. It is NOT an
+// org id: the validator cannot know the gateway's org UUID, and the one time this path supplied
+// something org-shaped (the intent's created_by) every cost event 500'd on the uuid cast.
 func costMemberFor(p *PendingBatchIntent, settleTx string) costMember {
-	cm := costMember{IntentID: p.IntentID, SettleTx: settleTx}
+	cm := costMember{
+		IntentID: p.IntentID,
+		ADIURL:   p.ADIURL,
+		SettleTx: settleTx,
+	}
 	if att, ok := p.Attestation.(interface {
 		CostAttribution() (accumTxHash string, orgID string)
 	}); ok {
-		cm.AccumTxHash, cm.OrgID = att.CostAttribution()
+		cm.AccumTxHash, _ = att.CostAttribution()
 	}
 	return cm
 }
