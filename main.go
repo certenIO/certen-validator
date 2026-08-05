@@ -2260,6 +2260,10 @@ func startValidator(
 	go intentDiscovery.StartMonitoring()
 	go watchDiscoveryLiveness(intentDiscovery)
 
+	// Eager, so an undelivered cost event survives a restart in practice and not just in
+	// principle — the WAL is only read when the reporter is constructed.
+	execution.StartCostReporter(log.Printf)
+
 	log.Printf("✅ CERTEN Validator initialized with real BFT consensus:")
 	log.Printf("   - Validator ID: %s", cfg.ValidatorID)
 	log.Printf("   - CometBFT role: Full consensus participant + P2P networking")

@@ -24,6 +24,34 @@ var (
 	costReporter     *billing.Reporter
 )
 
+// StartCostReporter constructs the reporter eagerly at boot so its write-ahead log is replayed.
+//
+// # WHY THIS CANNOT BE LEFT TO LAZY INITIALISATION
+//
+// The reporter is built under a sync.Once on FIRST USE, and Start — which calls replayWAL — runs
+// inside that Once. So until something reports a cost, the reporter does not exist and the WAL
+// is never read.
+//
+// That defeats the point of the WAL. It exists so a measured cost survives a restart, but
+// recovery was conditional on new work arriving: a validator that restarted with undelivered
+// events and then settled nothing would hold them on disk indefinitely, retrying never. Observed
+// on 2026-08-05 — two events for intent 825dc808 sat through a restart while the gateway was
+// fixed, and did not move, because nothing had called CostReporter() since boot.
+//
+// Calling this during wiring makes restart the RECOVERY path it was designed to be.
+func StartCostReporter(logf func(string, ...interface{})) {
+	r := CostReporter()
+	if logf == nil {
+		return
+	}
+	if r == nil {
+		logf("⚠️ [COST] reporting is not configured (CERTEN_GATEWAY_URL / " +
+			"VALIDATOR_SERVICE_TOKEN_SECRET unset); measured cost will not reach the gateway")
+		return
+	}
+	logf("💰 [COST] reporter started; any undelivered events in the write-ahead log are being replayed")
+}
+
 // CostReporter returns the process-wide reporter, constructing it on first use.
 // Nil when reporting is unconfigured; every method on *Reporter is nil-safe, so
 // callers need no branch.
