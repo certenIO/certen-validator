@@ -194,6 +194,23 @@ func RunCostBackfill(ctx context.Context, db *sql.DB, opts CostBackfillOptions) 
 			rep.SkippedChain++
 			continue
 		}
+		// SKIP SENTINEL CHAIN NAMES.
+		//
+		// Some rows were written with network_name "unknown-296" or
+		// "unknown-cardano-preview" — the validator did not recognise the chain at execution
+		// time. Those names resolve to nothing, and resolveCostEndpointForChain's EVM fallback
+		// would then hand them ETHEREUM_URL, probing a Hedera or Cardano transaction against an
+		// Ethereum node. That cannot succeed, and if it somehow returned a receipt it would
+		// price the wrong chain's gas.
+		//
+		// 296 IS Hedera and could be mapped by hand, but the name records that the writer did
+		// not know — inferring it now is a guess about money. Skip and count.
+		if strings.HasPrefix(chain, "unknown") {
+			rep.SkippedChain++
+			logf("[BACKFILL] skipping %s tx=%s: the chain was not identified at execution time",
+				c.network, shortHex(c.txHash))
+			continue
+		}
 		// chain_id is a VARCHAR that is inconsistently populated: it holds a numeric id on
 		// most rows ("11155111", "84532") but a chain NAME on others ("sui-testnet"). Parse it
 		// only when it is genuinely numeric, and otherwise keep the value canonicalChainSlug
