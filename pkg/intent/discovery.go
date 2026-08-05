@@ -148,12 +148,18 @@ type IntentDiscovery struct {
 	lastProcessedBlock uint64
 	lastQueuedBlock    uint64 // highest block sent to workers (prevents re-queuing)
 	finalizeCeiling    uint64 // watermark is not finalized past this (= latest - confirmLag); the last few heights stay re-scannable
-	isMonitoring       bool
-	stopCh             chan struct{}
-	blockProcessCh     chan *BlockProcessJob
-	processedBlocks    map[uint64]bool // tracks out-of-order block completions for watermark
-	watermarkMu        sync.Mutex      // protects lastProcessedBlock, lastQueuedBlock, processedBlocks
-	mu                 sync.RWMutex
+	// chainHead is the latest height the last successful poll observed, and lastAdvanceAt is
+	// when the watermark last moved. Together they answer "is discovery alive and keeping up",
+	// which nothing could answer before — see Status().
+	chainHead       uint64
+	lastAdvanceAt   time.Time
+	lastPollErr     string
+	isMonitoring    bool
+	stopCh          chan struct{}
+	blockProcessCh  chan *BlockProcessJob
+	processedBlocks map[uint64]bool // tracks out-of-order block completions for watermark
+	watermarkMu     sync.Mutex      // protects lastProcessedBlock, lastQueuedBlock, processedBlocks
+	mu              sync.RWMutex
 
 	// Intent tracking - E.4 remediation: Two-phase status tracking
 	intentStatus map[string]IntentStatus // Tracks status of each intent
@@ -536,11 +542,19 @@ func intentRewindBlocks() uint64 {
 func (id *IntentDiscovery) checkForNewBlocks(ctx context.Context) error {
 	latestBlock, err := id.client.GetLatestBlock(ctx)
 	if err != nil {
+		// Record WHY discovery is not progressing. This is the first statement of every tick,
+		// so a failure here queues nothing at all — the whole pipeline stops. Leaving it as a
+		// bare returned error made a total outage look identical to an idle network.
+		id.watermarkMu.Lock()
+		id.lastPollErr = err.Error()
+		id.watermarkMu.Unlock()
 		return fmt.Errorf("failed to get latest block: %w", err)
 	}
 	latest := latestBlock.Height
 
 	id.watermarkMu.Lock()
+	id.lastPollErr = ""
+	id.chainHead = latest
 
 	// Network switch detection (e.g., DevNet vs Kermit/Mainnet)
 	if latest < id.lastProcessedBlock {
@@ -636,6 +650,59 @@ func (id *IntentDiscovery) blockProcessor(workerID string) {
 	}
 }
 
+// DiscoveryStatus is a point-in-time view of whether block discovery is alive and keeping up.
+type DiscoveryStatus struct {
+	// Watermark is the highest contiguously-processed block.
+	Watermark uint64
+	// ChainHead is the latest height the last SUCCESSFUL poll saw. Zero means no poll has
+	// ever succeeded.
+	ChainHead uint64
+	// LagBlocks is ChainHead - Watermark, floored at zero.
+	LagBlocks uint64
+	// SecondsSinceAdvance is how long since the watermark last moved. This is the number that
+	// matters: a large lag while advancing is a node catching up, a small lag that stopped
+	// advancing is a node that has died.
+	SecondsSinceAdvance float64
+	// LastPollError is non-empty when the most recent poll failed. A stalled watermark WITH an
+	// error is an outage; without one it may simply be an idle chain.
+	LastPollError string
+	// Started is false until the first watermark advance, so a node that has only just booted
+	// is not reported as stalled.
+	Started bool
+}
+
+// Stalled reports whether discovery has stopped making progress for longer than threshold.
+//
+// Deliberately requires BOTH "has advanced at least once" and "threshold exceeded": a node in
+// its first seconds has never advanced, and reporting that as an outage would make the signal
+// noisy enough to be ignored — which is how a real outage gets missed.
+func (s DiscoveryStatus) Stalled(threshold time.Duration) bool {
+	if !s.Started {
+		return false
+	}
+	return s.SecondsSinceAdvance > threshold.Seconds()
+}
+
+// Status returns the current discovery health. Safe to call from any goroutine.
+func (id *IntentDiscovery) Status() DiscoveryStatus {
+	id.watermarkMu.Lock()
+	defer id.watermarkMu.Unlock()
+
+	st := DiscoveryStatus{
+		Watermark:     id.lastProcessedBlock,
+		ChainHead:     id.chainHead,
+		LastPollError: id.lastPollErr,
+		Started:       !id.lastAdvanceAt.IsZero(),
+	}
+	if id.chainHead > id.lastProcessedBlock {
+		st.LagBlocks = id.chainHead - id.lastProcessedBlock
+	}
+	if st.Started {
+		st.SecondsSinceAdvance = time.Since(id.lastAdvanceAt).Seconds()
+	}
+	return st
+}
+
 // advanceWatermark marks a block height as processed and advances the lastProcessedBlock
 // watermark through any contiguous sequence of completed blocks. This ensures blocks
 // processed out-of-order by concurrent workers are properly tracked without skipping any.
@@ -662,6 +729,11 @@ func (id *IntentDiscovery) advanceWatermark(height uint64) {
 	}
 
 	if advanced {
+		// Stamp the advance so staleness is observable. THIS is the signal that was missing
+		// on 2026-08-05: ACCUMULATE_URL pointed at a dead port, GetLatestBlock failed on the
+		// first line of every tick, and the watermark froze — silently, for hours, with the
+		// containers still reporting healthy. Nothing anywhere said discovery had stopped.
+		id.lastAdvanceAt = time.Now()
 		id.logger.Printf("📊 Watermark advanced to block %d (%d blocks pending completion)",
 			id.lastProcessedBlock, len(id.processedBlocks))
 		if id.ledgerStore != nil {

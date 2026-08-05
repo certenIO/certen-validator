@@ -39,6 +39,7 @@ import (
 	"github.com/certen/independant-validator/pkg/firestore"
 	"github.com/certen/independant-validator/pkg/intent"
 	"github.com/certen/independant-validator/pkg/ledger"
+	"github.com/certen/independant-validator/pkg/metrics"
 	"github.com/certen/independant-validator/pkg/proof"
 	"github.com/certen/independant-validator/pkg/server"
 	"github.com/certen/independant-validator/pkg/strategy"
@@ -92,6 +93,16 @@ type HealthStatus struct {
 	BatchSystem   string `json:"batch_system"`   // "active", "disabled"
 	ProofCycle    string `json:"proof_cycle"`    // "active", "disabled"
 	UptimeSeconds int64  `json:"uptime_seconds"` // Seconds since startup
+
+	// Discovery is "advancing", "stalled", or "starting".
+	//
+	// CONTINUOUSLY re-evaluated, unlike Accumulate above which is set once at startup and then
+	// never revisited. That startup-only check is exactly why the 2026-08-05 outage was
+	// invisible: Accumulate was marked "connected" at boot, the endpoint died later, and the
+	// field still read "connected" hours after discovery had stopped.
+	Discovery     string `json:"discovery"`
+	DiscoveryLag  uint64 `json:"discovery_lag_blocks"`
+	DiscoveryIdle int64  `json:"discovery_seconds_since_advance"`
 	startTime     time.Time
 	mu            sync.RWMutex
 }
@@ -130,6 +141,16 @@ func (h *HealthStatus) SetAccumulate(status string) {
 	h.updateOverallStatus()
 }
 
+// SetDiscovery records discovery liveness. Called on a loop, not once at startup.
+func (h *HealthStatus) SetDiscovery(status string, lagBlocks uint64, secondsSinceAdvance int64) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.Discovery = status
+	h.DiscoveryLag = lagBlocks
+	h.DiscoveryIdle = secondsSinceAdvance
+	h.updateOverallStatus()
+}
+
 func (h *HealthStatus) SetBatchSystem(status string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -150,7 +171,12 @@ func (h *HealthStatus) updateOverallStatus() {
 	// Optional components: BatchSystem, ProofCycle
 
 	// Check for critical failures (error state)
-	if h.Ethereum == "disconnected" || h.Accumulate == "disconnected" {
+	//
+	// A stalled watermark is critical, not degraded: while it is stalled NO intent can be
+	// discovered, so the validator contributes nothing to the set even though every other
+	// component looks fine. On 2026-08-05 that state persisted for hours behind a "healthy"
+	// container because nothing here consulted discovery at all.
+	if h.Ethereum == "disconnected" || h.Accumulate == "disconnected" || h.Discovery == "stalled" {
 		h.Status = "error"
 		return
 	}
@@ -312,6 +338,74 @@ const identityRetryInterval = time.Minute
 
 // identityRetryLogEvery throttles the persistent-failure log to roughly every 10 minutes.
 const identityRetryLogEvery = 10
+
+// discoveryStallThreshold is how long the watermark may sit still before the node is declared
+// stalled.
+//
+// Sized against the mechanism, not guessed: the poll runs every 5s and a healthy node advances
+// the watermark on essentially every tick. Two minutes is ~24 missed ticks — far beyond any
+// transient RPC hiccup, and far short of the hours the 2026-08-05 outage went unnoticed.
+//
+// It must also tolerate a genuinely idle chain. Accumulate produces blocks continuously and
+// independently of Certen traffic, so the watermark advances even when no intent exists; an
+// idle network is therefore NOT a stall. If that ever stops being true, this becomes noisy and
+// should key on poll failure alone.
+const discoveryStallThreshold = 2 * time.Minute
+
+// watchDiscoveryLiveness publishes discovery health to Prometheus and to /health.
+//
+// Runs for the life of the process. Both destinations matter: the metric is for a scraper that
+// may not be configured yet, while the health field takes effect immediately because the
+// container healthcheck already consults /health.
+func watchDiscoveryLiveness(d *intent.IntentDiscovery) {
+	if d == nil {
+		return
+	}
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+
+	wasStalled := false
+	for range ticker.C {
+		st := d.Status()
+		stalled := st.Stalled(discoveryStallThreshold)
+
+		metrics.SetDiscoveryStatus(
+			st.Watermark, st.ChainHead, st.LagBlocks,
+			st.SecondsSinceAdvance, stalled, st.LastPollError != "",
+		)
+
+		state := "advancing"
+		switch {
+		case !st.Started:
+			state = "starting"
+		case stalled:
+			state = "stalled"
+		}
+		healthStatus.SetDiscovery(state, st.LagBlocks, int64(st.SecondsSinceAdvance))
+
+		// Log the EDGES only. A per-tick line would be noise nobody reads, which is the
+		// failure mode that let the original outage hide in plain sight.
+		if stalled && !wasStalled {
+			log.Printf("🚨 [DISCOVERY] STALLED: watermark %d has not advanced for %.0fs "+
+				"(head %d, lag %d blocks). No intent can be discovered while this persists.%s",
+				st.Watermark, st.SecondsSinceAdvance, st.ChainHead, st.LagBlocks,
+				pollErrSuffix(st.LastPollError))
+		} else if !stalled && wasStalled {
+			log.Printf("✅ [DISCOVERY] recovered: watermark advancing again at %d (lag %d blocks)",
+				st.Watermark, st.LagBlocks)
+		}
+		wasStalled = stalled
+	}
+}
+
+func pollErrSuffix(err string) string {
+	if err == "" {
+		// No poll error means we CAN reach Accumulate but are not progressing — a different
+		// fault from the endpoint being unreachable, and worth distinguishing in the log.
+		return " The head poll is succeeding, so this is not an endpoint outage."
+	}
+	return " Last poll error: " + err
+}
 
 // batchConsensusHeightFn returns the height source for batch period cutoffs.
 //
@@ -631,6 +725,15 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
 	})
+
+	// Prometheus metrics.
+	//
+	// pkg/metrics has existed with ~20 instruments since the BFT resiliency work, but neither
+	// RegisterMetrics nor MetricsHandler was ever called, so nothing was exported and the
+	// README's "Prometheus Metrics" claim was untrue. Serving it here is what makes the
+	// discovery liveness gauges (and everything else already defined) reachable by a scraper.
+	metrics.RegisterMetrics()
+	mux.Handle("/metrics", metrics.MetricsHandler())
 
 	// Health endpoint - Per E.2 remediation: Shows degraded status if database disconnected
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -2155,6 +2258,7 @@ func startValidator(
 	}
 
 	go intentDiscovery.StartMonitoring()
+	go watchDiscoveryLiveness(intentDiscovery)
 
 	log.Printf("✅ CERTEN Validator initialized with real BFT consensus:")
 	log.Printf("   - Validator ID: %s", cfg.ValidatorID)

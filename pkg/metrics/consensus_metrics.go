@@ -216,6 +216,9 @@ func RegisterMetrics() {
 		// System metrics
 		prometheus.MustRegister(validatorUptime)
 		prometheus.MustRegister(validatorStatus)
+
+		// Discovery liveness — see discovery_metrics.go for why.
+		registerDiscoveryMetrics()
 	})
 }
 
