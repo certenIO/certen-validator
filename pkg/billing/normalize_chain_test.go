@@ -25,16 +25,23 @@ func TestNormalizeChainAcceptsEverySpelling(t *testing.T) {
 		"Arbitrum Sepolia":    "arbitrum",
 		"optimism-sepolia":    "optimism",
 		"Optimism Sepolia":    "optimism",
-		"polygon-amoy":        "polygon-amoy", // amoy is not in the suffix list; still stable
-		"Solana Devnet":       "solana",
-		"solana-devnet":       "solana",
-		"Sui Testnet":         "sui",
-		"Aptos Testnet":       "aptos",
-		"NEAR Testnet":        "near",
-		"TON Testnet":         "ton",
-		"Cardano Preview":     "cardano",
-		"Hedera Testnet":      "hedera",
-		"BSC Testnet":         "bsc",
+		// Amoy is Polygon's testnet. This previously asserted "polygon-amoy" — the suffix was
+		// missing from the list, so the name never reduced to a family. That is not "stable",
+		// it is broken: all three callers want the family, so NewProbe found no fee model AND
+		// NativeSymbolFor returned "", failing Validate on native_symbol. Every polygon-amoy
+		// cost event was dropped before it was sent.
+		"polygon-amoy":    "polygon",
+		"Polygon Amoy":    "polygon",
+		"moonbase-alpha":  "moonbeam",
+		"Solana Devnet":   "solana",
+		"solana-devnet":   "solana",
+		"Sui Testnet":     "sui",
+		"Aptos Testnet":   "aptos",
+		"NEAR Testnet":    "near",
+		"TON Testnet":     "ton",
+		"Cardano Preview": "cardano",
+		"Hedera Testnet":  "hedera",
+		"BSC Testnet":     "bsc",
 	}
 	for in, want := range cases {
 		if got := normalizeChain(in); got != want {
@@ -82,6 +89,50 @@ func TestNativeSymbolForAcceptsDisplayNames(t *testing.T) {
 	for in, want := range cases {
 		if got := NativeSymbolFor(in); got != want {
 			t.Errorf("NativeSymbolFor(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// Testnet suffixes must reduce to the family the probe registry keys on, or the chain is dropped
+// with "no fee model implemented" — silently, for every event.
+//
+// polygon-amoy was exactly that: "-amoy" was missing from the suffix list, so it never reached
+// the "polygon" case and every cost event for the chain was discarded.
+func TestNormalizeChainReducesEveryConfiguredTestnet(t *testing.T) {
+	cases := map[string]string{
+		"polygon-amoy":     "polygon",
+		"moonbase-alpha":   "moonbeam",
+		"base-sepolia":     "base",
+		"arbitrum-sepolia": "arbitrum",
+		"optimism-sepolia": "optimism",
+		"bsc-testnet":      "bsc",
+		"hedera-testnet":   "hedera",
+		"ethereum-sepolia": "ethereum",
+		"solana-devnet":    "solana",
+		"aptos-testnet":    "aptos",
+		"sui-testnet":      "sui",
+		"near-testnet":     "near",
+		"ton-testnet":      "ton",
+		"tron-shasta":      "tron",
+	}
+	for in, want := range cases {
+		if got := normalizeChain(in); got != want {
+			t.Errorf("normalizeChain(%q) = %q, want %q — a chain that does not reduce is dropped "+
+				"with 'no fee model implemented'", in, got, want)
+		}
+	}
+}
+
+// Every chain the fleet has RPC configured for must actually get a probe.
+func TestEveryConfiguredChainHasAFeeModel(t *testing.T) {
+	for _, chain := range []string{
+		"ethereum-sepolia", "base-sepolia", "arbitrum-sepolia", "optimism-sepolia",
+		"polygon-amoy", "bsc-testnet", "moonbase-alpha", "hedera-testnet",
+		"solana-devnet", "aptos-testnet", "sui-testnet", "near-testnet", "ton-testnet",
+		"tron-shasta",
+	} {
+		if _, err := NewProbe(ProbeConfig{Chain: chain, RPCURL: "http://x", Leg: LegAnchor}); err != nil {
+			t.Errorf("no fee model for %q: %v — every cost event on this chain is dropped", chain, err)
 		}
 	}
 }

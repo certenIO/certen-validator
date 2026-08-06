@@ -262,6 +262,12 @@ func normalizeChain(chain string) string {
 	for _, suffix := range []string{
 		"-mainnet", "-testnet", "-devnet", "-sepolia", "-shasta", "-nile",
 		"-preview", "-preprod", "-one", "-goerli",
+		// -amoy is Polygon's testnet. Its absence meant "polygon-amoy" never reduced to
+		// "polygon", fell through NewProbe's switch, and every cost event for that chain was
+		// dropped with "no fee model implemented" — live reporting as well as backfill.
+		"-amoy",
+		// -alpha covers moonbase-alpha, which reduces to "moonbase" and then to "moonbeam".
+		"-alpha",
 	} {
 		c = strings.TrimSuffix(c, suffix)
 	}
@@ -276,6 +282,10 @@ func normalizeChain(chain string) string {
 		return "polygon"
 	case "sol", "solana":
 		return "solana"
+	case "moonbase", "moonriver", "glmr":
+		// Moonbase Alpha is Moonbeam's testnet and shares its fee model. Without this the name
+		// reduces to "moonbase", misses NewProbe's switch, and every event is dropped.
+		return "moonbeam"
 	default:
 		return c
 	}
