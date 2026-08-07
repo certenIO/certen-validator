@@ -512,11 +512,21 @@ func (r *IntentLifecycleRepository) UpdateLegProgress(
 ) error {
 	now := time.Now().UTC()
 
+	// ACCUMULATES rather than overwrites, because progress arrives per CHAIN.
+	//
+	// A multi-chain intent settles once per destination chain, and each settle reports only the
+	// legs it carried there. Assigning the value made the last chain win: a 2-chain intent
+	// measured on 2026-08-07 recorded legs_completed = 1, not 2, even though cost_events showed
+	// a full anchor + verify + execute on BOTH chains.
+	//
+	// Capped at leg_count so a re-reported settle cannot inflate the count past what the intent
+	// actually has. That makes the update safe to repeat without tracking which chains have
+	// already reported — the cap is the invariant, not the arithmetic.
 	query := `
 		UPDATE intent_lifecycle
-		SET legs_completed = $1,
-		    legs_failed = $2,
-		    updated_at = $3
+		SET legs_completed = LEAST(COALESCE(legs_completed, 0) + $1, COALESCE(leg_count, 1)),
+		    legs_failed    = LEAST(COALESCE(legs_failed, 0) + $2, COALESCE(leg_count, 1)),
+		    updated_at     = $3
 		WHERE intent_id = $4
 		  AND status NOT IN ('complete', 'failed')
 	`
