@@ -197,6 +197,11 @@ func (o *BatchOrchestrator) SettleOnDemandMember(
 	// priced as such, not blended with batched observations.
 	o.reportBatchCosts(ctx, chainID, anchorTx, o.lastVerifyTx(),
 		[]costMember{costMemberFor(member, txHash)}, string(LaneOnDemand))
+
+	// One transaction settles every leg this member carries — measured on 2026-08-07, a 5-leg
+	// on_demand intent produced exactly one settlement transaction. So a settled member has
+	// completed all of its legs, not one.
+	o.recordLegProgress(ctx, []*PendingBatchIntent{member}, nil)
 	return out, nil
 }
 

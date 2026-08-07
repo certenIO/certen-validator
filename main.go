@@ -2272,6 +2272,35 @@ func startValidator(
 		})
 		intentDiscovery.SetLegCompletionHandler(legHandler)
 		log.Printf("✅ [Phase 5] Multi-leg coordination enabled; leg progress persisted to intent_lifecycle")
+
+		// Leg progress from the SETTLE path.
+		//
+		// The handler above only learns of a leg through OnLegCompleted/OnLegFailed, and nothing
+		// in any execution path calls them — so wiring the handler alone left legs_completed at
+		// 0 even on intents that settled. Observed live on 2026-08-07: two calibration intents
+		// reached status 'complete' with leg_count 2 and 5 and legs_completed 0.
+		//
+		// Settlement is where the outcome is actually known: one transaction per chain settles
+		// every leg the member carries there — the 5-leg intent produced exactly one transaction
+		// of 281,407 gas. So the settle path reports len(Legs), not 1.
+		if stack := batchStackForAttestation.Load(); stack != nil {
+			legProgress := func(ctx context.Context, intentID string, completed, failed int) {
+				if lifecycleRepo == nil {
+					return
+				}
+				if err := lifecycleRepo.UpdateLegProgress(ctx, intentID, completed, failed); err != nil {
+					log.Printf("⚠️ [LIFECYCLE] settle-path leg progress not persisted for %s "+
+						"(%d done, %d failed): %v", intentID, completed, failed, err)
+				}
+			}
+			for chainID, orch := range stack.Orchestrators {
+				orch.SetLegProgressHook(legProgress)
+				log.Printf("✅ [Phase 5] Leg progress hook wired for chain %d", chainID)
+			}
+		} else {
+			log.Printf("⚠️ [Phase 5] Batch stack unavailable; settled legs will not update " +
+				"intent_lifecycle.legs_completed")
+		}
 	} else {
 		log.Printf("⚠️ [Phase 5] Batch system not available - intents will bypass PostgreSQL")
 	}
