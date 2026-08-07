@@ -19,6 +19,7 @@ import (
 	"github.com/certen/independant-validator/pkg/entitlement"
 	"log"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -861,11 +862,51 @@ func (id *IntentDiscovery) processBlock(job *BlockProcessJob, workerID string) e
 			if tc, _, tcErr := intent.GetTargetChain(); tcErr == nil {
 				targetChain = tc
 			}
-			if lcErr := id.repos.IntentLifecycle.UpsertOnDiscovery(
-				ctx, intent.IntentID, intent.TransactionHash,
-				int64(job.BlockHeight), intent.UserID, intent.ProofClass, targetChain,
-			); lcErr != nil {
-				id.logger.Printf("⚠️ [LIFECYCLE] Failed to upsert lifecycle for %s: %v", intent.IntentID, lcErr)
+
+			// Multi-leg intents are recorded with their SHAPE — leg count, every target chain,
+			// and execution mode. UpsertOnDiscoveryMultiLeg existed to do exactly this and had
+			// no callers, so every intent went through the single-leg upsert and left
+			// leg_count at its schema default of 1 and target_chains NULL. A multi-leg intent
+			// was therefore indistinguishable from a single-leg one in the durable record,
+			// which is why every analysis of this table concluded multi-leg had never run.
+			recorded := false
+			if isMulti, miErr := intent.IsMultiLeg(); miErr == nil && isMulti {
+				legCount, lcErr := intent.GetLegCount()
+				if lcErr == nil && legCount > 0 {
+					execMode, emErr := intent.GetExecutionMode()
+					if emErr != nil {
+						execMode = "sequential" // the router's own default
+					}
+					var chains []string
+					if grouped, gErr := intent.GetLegsGroupedByChain(); gErr == nil {
+						for chainKey := range grouped {
+							chains = append(chains, chainKey)
+						}
+						sort.Strings(chains) // stable across nodes; the map order is not
+					}
+					if mlErr := id.repos.IntentLifecycle.UpsertOnDiscoveryMultiLeg(
+						ctx, intent.IntentID, intent.TransactionHash,
+						int64(job.BlockHeight), intent.UserID, intent.ProofClass, targetChain,
+						chains, legCount, execMode,
+					); mlErr != nil {
+						id.logger.Printf("⚠️ [LIFECYCLE] Failed to upsert multi-leg lifecycle for %s: %v",
+							intent.IntentID, mlErr)
+					} else {
+						recorded = true
+					}
+				}
+			}
+
+			// Single-leg, or a multi-leg intent whose shape could not be read. Recording it as
+			// single-leg is better than not recording it: the row still carries the identifiers
+			// cost attribution and settlement join on.
+			if !recorded {
+				if lcErr := id.repos.IntentLifecycle.UpsertOnDiscovery(
+					ctx, intent.IntentID, intent.TransactionHash,
+					int64(job.BlockHeight), intent.UserID, intent.ProofClass, targetChain,
+				); lcErr != nil {
+					id.logger.Printf("⚠️ [LIFECYCLE] Failed to upsert lifecycle for %s: %v", intent.IntentID, lcErr)
+				}
 			}
 		}
 

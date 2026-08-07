@@ -118,6 +118,9 @@ type LegCompletionHandler struct {
 
 	// Callback for when all legs of an intent have completed
 	onIntentComplete func(ctx context.Context, intent *MultiLegIntentRecord)
+
+	// onProgress persists leg counters on every status change. See the config field.
+	onProgress func(ctx context.Context, intentID string, legsCompleted, legsFailed int)
 }
 
 // LegCompletionHandlerConfig contains configuration for the handler
@@ -127,6 +130,17 @@ type LegCompletionHandlerConfig struct {
 	// OnIntentComplete is called when all legs of an intent have completed (or partially completed).
 	// This enables the multi-leg aggregator to trigger unified write-back.
 	OnIntentComplete func(ctx context.Context, intent *MultiLegIntentRecord)
+
+	// OnProgress persists the leg counters after EVERY status change, not only on completion.
+	//
+	// The handler's counts live in memory; intent_lifecycle.legs_completed / legs_failed are the
+	// durable record and were never written by anything, so all 542 rows sat at the schema
+	// default of 0 — including 238 intents whose status was 'complete'. Every analysis that read
+	// those columns concluded multi-leg had never run.
+	//
+	// Called with plain counts rather than the record: it is invoked while the handler's mutex is
+	// held, so a callback that reads the record afterwards would race the next leg's update.
+	OnProgress func(ctx context.Context, intentID string, legsCompleted, legsFailed int)
 }
 
 // NewLegCompletionHandler creates a new leg completion handler
@@ -140,6 +154,9 @@ func NewLegCompletionHandler(config *LegCompletionHandlerConfig) *LegCompletionH
 	if config != nil {
 		if config.OnLegReady != nil {
 			h.onLegReady = config.OnLegReady
+		}
+		if config.OnProgress != nil {
+			h.onProgress = config.OnProgress
 		}
 		if config.OnIntentComplete != nil {
 			h.onIntentComplete = config.OnIntentComplete
@@ -544,6 +561,16 @@ func (h *LegCompletionHandler) updateIntentStatus(intent *MultiLegIntentRecord) 
 		h.logger.Printf("Intent %s failed (all %d legs failed)", intent.IntentID, intent.LegCount)
 	} else if intent.LegsCompleted > 0 || intent.LegsFailed > 0 {
 		intent.Status = MultiLegStatusProcessing
+	}
+
+	// Persist the counters on EVERY transition, including intermediate ones — a crash between
+	// the first leg and the last must not leave the durable record claiming zero legs done.
+	//
+	// Values are copied before the goroutine: this runs with h.mu held, and the record keeps
+	// being mutated by later legs, so passing the pointer would race.
+	if h.onProgress != nil {
+		intentID, completed, failed := intent.IntentID, intent.LegsCompleted, intent.LegsFailed
+		go h.onProgress(context.Background(), intentID, completed, failed)
 	}
 }
 

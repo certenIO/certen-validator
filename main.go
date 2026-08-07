@@ -2245,6 +2245,33 @@ func startValidator(
 		// Wire repositories for intent lifecycle tracking
 		intentDiscovery.SetRepositories(batchComponents.Repos)
 		log.Printf("✅ Intent lifecycle tracking wired to intent discovery")
+
+		// Multi-leg coordination.
+		//
+		// SetLegCompletionHandler had NO caller, so multiLegEnabled was permanently false and
+		// every multi-leg intent fell through to the single-leg path. Two consequences: legs
+		// were never tracked as a set, and UpdateLegProgress — which is the only writer of
+		// legs_completed / legs_failed — could never run. All 542 lifecycle rows sat at 0
+		// completed legs, including 238 marked 'complete'.
+		//
+		// OnProgress persists after every transition rather than only at the end, so a crash
+		// mid-intent cannot leave the durable record claiming no legs were done.
+		lifecycleRepo := batchComponents.Repos.IntentLifecycle
+		legHandler := intent.NewLegCompletionHandler(&intent.LegCompletionHandlerConfig{
+			OnProgress: func(ctx context.Context, intentID string, completed, failed int) {
+				if lifecycleRepo == nil {
+					return
+				}
+				if err := lifecycleRepo.UpdateLegProgress(ctx, intentID, completed, failed); err != nil {
+					// Never fatal: leg progress is a record of work already done, so failing to
+					// write it must not affect whether the remaining legs execute.
+					log.Printf("⚠️ [LIFECYCLE] leg progress not persisted for %s (%d done, %d failed): %v",
+						intentID, completed, failed, err)
+				}
+			},
+		})
+		intentDiscovery.SetLegCompletionHandler(legHandler)
+		log.Printf("✅ [Phase 5] Multi-leg coordination enabled; leg progress persisted to intent_lifecycle")
 	} else {
 		log.Printf("⚠️ [Phase 5] Batch system not available - intents will bypass PostgreSQL")
 	}
