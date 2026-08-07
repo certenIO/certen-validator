@@ -192,7 +192,11 @@ func (o *BatchOrchestrator) SettleOnDemandMember(
 	// takes, which is what keeps the two from drifting apart.
 	// verifyTx comes from the prover that just ran; empty when it did not reach a mined
 	// transaction, in which case the verify leg is simply not reported rather than guessed.
-	o.reportBatchCosts(ctx, chainID, anchorTx, o.lastVerifyTx(), []costMember{costMemberFor(member, txHash)})
+	// on_demand by construction: this path is intent-keyed and never carries a second member,
+	// so the whole anchor is this intent's own cost. That is the dearer product and must be
+	// priced as such, not blended with batched observations.
+	o.reportBatchCosts(ctx, chainID, anchorTx, o.lastVerifyTx(),
+		[]costMember{costMemberFor(member, txHash)}, string(LaneOnDemand))
 	return out, nil
 }
 

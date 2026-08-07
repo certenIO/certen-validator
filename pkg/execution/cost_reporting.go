@@ -90,10 +90,14 @@ func firstNonEmpty(vals ...string) string {
 // validator's own, and the gateway keys intents by a different UUID entirely.
 // Without it the gateway can store a cost event but never join it to an intent,
 // so measured gas never reaches settlement.
+// proofClass is the intent's execution class, carried down from the validator block. Empty when
+// the producer did not record one; the gateway then treats the event as unclassified and prices
+// from it only as a fallback, so an unknown class costs precision but never mislabels a cost.
 func (btce *BFTTargetChainExecutor) reportExecutionCosts(
 	intentID string,
 	accumTxHash string,
 	result *TargetChainExecutionResult,
+	proofClass string,
 ) {
 	reporter := CostReporter()
 	if reporter == nil || result == nil {
@@ -181,11 +185,12 @@ func (btce *BFTTargetChainExecutor) reportExecutionCosts(
 			reporter.ObserveAndReport(
 				context.Background(),
 				billing.ProbeConfig{
-					Chain:   chain,
-					ChainID: chainID,
-					RPCURL:  rpcURL,
-					APIKey:  apiKey,
-					Leg:     l.leg,
+					Chain:      chain,
+					ChainID:    chainID,
+					RPCURL:     rpcURL,
+					APIKey:     apiKey,
+					Leg:        l.leg,
+					ProofClass: proofClass,
 				},
 				intentID,
 				"", // org attribution happens gateway-side from the intent

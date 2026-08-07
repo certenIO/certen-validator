@@ -241,6 +241,14 @@ func RunCostBackfill(ctx context.Context, db *sql.DB, opts CostBackfillOptions) 
 			continue
 		}
 
+		// ProofClass is deliberately NOT set.
+		//
+		// intent_lifecycle.proof_class exists, so a class could be joined in here — but it
+		// records how the intent was CLASSIFIED, not how this particular execution was
+		// settled, and for rows predating the on-demand path those are not the same fact.
+		// A backfilled event is a measurement of unknown provenance; labelling it would put
+		// unverifiable rows into a classified median that prices live traffic. Left empty it
+		// joins the fallback pool, which is exactly what it is.
 		reporter.ObserveAndReport(ctx, billing.ProbeConfig{
 			Chain:   chain,
 			ChainID: chainID,

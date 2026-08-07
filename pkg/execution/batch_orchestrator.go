@@ -427,7 +427,11 @@ func (o *BatchOrchestrator) FlushChain(
 	for _, p := range append(append([]*PendingBatchIntent{}, res.Settled...), res.Failed...) {
 		costMembers = append(costMembers, costMemberFor(p, res.TxHashes[p.IntentID]))
 	}
-	o.reportBatchCosts(ctx, chainID, res.AnchorTxHash, o.lastVerifyTx(), costMembers)
+	// This is the PERIOD path, so its members are on_cadence by definition — including a period
+	// that happens to flush a single member. It waited the full period and shared an anchor
+	// sized for a batch, which is what the customer was quoted for.
+	o.reportBatchCosts(ctx, chainID, res.AnchorTxHash, o.lastVerifyTx(), costMembers,
+		string(LaneOnCadence))
 
 	return res, nil
 }

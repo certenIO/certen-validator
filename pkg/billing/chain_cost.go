@@ -57,6 +57,17 @@ type ProbeConfig struct {
 	APIKey  string // toncenter and some providers
 	HTTP    *http.Client
 	Leg     string
+	// ProofClass is the execution class this cost belongs to: "on_cadence" or
+	// "on_demand". Not used to probe — carried here alongside Leg because both
+	// describe the event being measured rather than how to measure it.
+	//
+	// The gateway prices the two classes from separate cost histories, because
+	// an on_cadence intent shares one anchor with up to 19 others while an
+	// on_demand intent pays for its own. Sending it empty is legal and means
+	// "unknown": such events price only as a fallback and never dilute a
+	// classified median. Sending the WRONG one is not recoverable, so it is
+	// only ever set from the execution path that definitionally owns it.
+	ProofClass string
 }
 
 // NewProbe selects the fee model for a chain. Returns an error for unknown

@@ -326,6 +326,7 @@ func (btce *BFTTargetChainExecutor) ExecuteTargetChainOperations(
 	bundleID string,
 	anchorID string,
 	certenProof *proof.CertenProof,
+	proofClass string,
 ) (*TargetChainExecutionResult, error) {
 	result, err := btce.executeTargetChainOperationsInner(
 		ctx, intentID, transactionHash, accountURL, validatorID, bundleID, anchorID, certenProof)
@@ -343,7 +344,7 @@ func (btce *BFTTargetChainExecutor) ExecuteTargetChainOperations(
 		if certenProof != nil {
 			accumTxHash = certenProof.TransactionHash
 		}
-		btce.reportExecutionCosts(intentID, accumTxHash, result)
+		btce.reportExecutionCosts(intentID, accumTxHash, result, proofClass)
 	}
 	return result, err
 }

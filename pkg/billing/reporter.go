@@ -59,7 +59,24 @@ type CostEvent struct {
 
 	// OrgID is populated by the GATEWAY, not here. Kept on the wire only so an operator tool
 	// can round-trip an event; the validator always sends it empty.
-	OrgID                string `json:"org_id,omitempty"`
+	OrgID string `json:"org_id,omitempty"`
+
+	// ProofClass is "on_cadence" or "on_demand", and is a PRICE dimension at the
+	// gateway rather than a label.
+	//
+	// on_cadence batches up to 20 intents behind one anchor, so a member pays
+	// roughly 1/N of it; on_demand is a batch of one and pays that anchor
+	// outright. Until this was carried, the gateway took a single median across
+	// both populations, so batched intents were charged for anchor capacity they
+	// never used and expedited intents were charged less than their own anchor
+	// cost — CERTEN covering the difference on every one.
+	//
+	// Omitted when the reporting path cannot know the class. The gateway treats
+	// absent as unclassified and prices from those rows only when a class has no
+	// history of its own, so omitting costs precision but never corrupts a
+	// classified median.
+	ProofClass string `json:"proof_class,omitempty"`
+
 	Chain                string `json:"chain"`
 	ChainID              int64  `json:"chain_id,omitempty"`
 	Leg                  string `json:"leg"`
@@ -320,6 +337,7 @@ func (r *Reporter) ObserveAndReport(
 			r.logger.Printf("❌ Rejecting malformed cost event for %s/%s: %v", probeCfg.Chain, txHash, err)
 			return
 		}
+		event.ProofClass = probeCfg.ProofClass
 		r.logger.Printf("💰 %s %s leg=%s cost=%s %s (tx %s)",
 			probeCfg.Chain, humanAmount(cost), cost.Leg, cost.NativeAmount.String(), cost.NativeSymbol, txHash)
 		r.Report(event)

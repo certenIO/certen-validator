@@ -50,12 +50,19 @@ type costMember struct {
 //
 // Never blocks: every reporter call is asynchronous and WAL-backed, so a slow or unreachable
 // gateway cannot delay settlement.
+//
+// proofClass is supplied by the caller rather than inferred from len(members), because the two
+// are not the same fact. A period batch that happens to flush with one member is still
+// on_cadence — it waited the full period and shared an anchor that was sized for a batch — while
+// an on_demand batch is one member BY CONSTRUCTION. Deriving the class from the member count
+// would relabel every solo cadence flush as expedited and price it as the dearer product.
 func (o *BatchOrchestrator) reportBatchCosts(
 	ctx context.Context,
 	chainID int64,
 	anchorTx string,
 	verifyTx string,
 	members []costMember,
+	proofClass string,
 ) {
 	reporter := CostReporter()
 	if reporter == nil || len(members) == 0 {
@@ -86,11 +93,12 @@ func (o *BatchOrchestrator) reportBatchCosts(
 			})
 		}
 		reporter.ObserveAndReportShared(ctx, billing.ProbeConfig{
-			Chain:   chain,
-			ChainID: resolvedChainID,
-			RPCURL:  rpcURL,
-			APIKey:  apiKey,
-			Leg:     billing.LegAnchor,
+			Chain:      chain,
+			ChainID:    resolvedChainID,
+			RPCURL:     rpcURL,
+			APIKey:     apiKey,
+			Leg:        billing.LegAnchor,
+			ProofClass: proofClass,
 		}, shared, anchorTx, nil)
 	}
 
@@ -111,11 +119,12 @@ func (o *BatchOrchestrator) reportBatchCosts(
 			})
 		}
 		reporter.ObserveAndReportShared(ctx, billing.ProbeConfig{
-			Chain:   chain,
-			ChainID: resolvedChainID,
-			RPCURL:  rpcURL,
-			APIKey:  apiKey,
-			Leg:     billing.LegVerify,
+			Chain:      chain,
+			ChainID:    resolvedChainID,
+			RPCURL:     rpcURL,
+			APIKey:     apiKey,
+			Leg:        billing.LegVerify,
+			ProofClass: proofClass,
 		}, shared, verifyTx, nil)
 	}
 
@@ -127,11 +136,12 @@ func (o *BatchOrchestrator) reportBatchCosts(
 			continue
 		}
 		reporter.ObserveAndReport(ctx, billing.ProbeConfig{
-			Chain:   chain,
-			ChainID: resolvedChainID,
-			RPCURL:  rpcURL,
-			APIKey:  apiKey,
-			Leg:     billing.LegVaultExecute,
+			Chain:      chain,
+			ChainID:    resolvedChainID,
+			RPCURL:     rpcURL,
+			APIKey:     apiKey,
+			Leg:        billing.LegVaultExecute,
+			ProofClass: proofClass,
 		}, m.IntentID, m.ADIURL, m.AccumTxHash, m.SettleTx, nil)
 	}
 

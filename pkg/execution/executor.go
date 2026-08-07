@@ -204,7 +204,7 @@ func (tcew *TargetChainExecutorWrapper) SubmitAnchorFromValidatorBlock(
 	// Call the legacy ExecuteTargetChainOperations method
 	result, err := tcew.executor.ExecuteTargetChainOperations(
 		ctx, intentID, string(vb.OperationCommitment), vb.AccountURL,
-		validatorID, bundleID, anchorID, certenProof,
+		validatorID, bundleID, anchorID, certenProof, vb.ProofClass,
 	)
 	if err != nil {
 		return nil, err

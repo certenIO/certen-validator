@@ -159,6 +159,7 @@ func (r *Reporter) ObserveAndReportShared(
 					probeCfg.Chain, txHash, m.IntentID, err)
 				continue
 			}
+			event.ProofClass = probeCfg.ProofClass
 			// Per-intent key. The default (chain, tx, leg) would collapse every share into one
 			// row and silently discard the rest — see the note at the top of this file.
 			event.IdempotencyKey = fmt.Sprintf("cost:%s:%s:%s:%s",

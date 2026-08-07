@@ -14,6 +14,15 @@ type ValidatorBlockMetadata struct {
 	RoundID  string
 	IntentID string
 
+	// ProofClass is the intent's execution class, "on_demand" or "on_cadence".
+	//
+	// Carried so measured cost can be attributed to the class that incurred it.
+	// The gateway prices the two from separate histories — an on_cadence intent
+	// shares one anchor with up to 19 others, an on_demand intent pays for its
+	// own — and a cost event reported without a class can only ever price as a
+	// fallback. Empty is legal and means the producer did not know.
+	ProofClass string
+
 	// Height of the VB chain at which this block was committed.
 	Height int64
 

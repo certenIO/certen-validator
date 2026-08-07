@@ -1300,8 +1300,12 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	}
 
 	vbMeta := &verification.ValidatorBlockMetadata{
-		RoundID:             roundID,
-		IntentID:            certenIntent.IntentID,
+		RoundID:  roundID,
+		IntentID: certenIntent.IntentID,
+		// The intent's own class, carried so the executor path can attribute its
+		// measured cost to the class that incurred it rather than reporting it
+		// unclassified.
+		ProofClass:          certenIntent.ProofClass,
 		Height:              bftRes.Height,
 		OperationCommitment: []byte(vb.OperationCommitment), // Convert string to []byte
 		ChainID:             bv.chainID,                     // From config via NewBFTValidator
