@@ -22,13 +22,18 @@
 --
 -- leg_id is NULL for single-leg intents, and in Postgres NULLs are distinct, so a plain UNIQUE
 -- including it would let the same single-leg intent be collected repeatedly — reintroducing the
--- duplicate this constraint exists to stop. COALESCE to '' makes the absent leg a single
--- concrete value, so single-leg intents keep exactly the protection they had.
+-- duplicate this constraint exists to stop. Collapsing the absent leg to one concrete value
+-- keeps single-leg intents exactly the protection they had.
+--
+-- CAST FIRST. leg_id is a uuid, so COALESCE(leg_id, '') is a type error, not a default:
+--   pq: invalid input syntax for type uuid: ""
+-- which failed this migration on every validator at startup. leg_id::text has no such problem,
+-- and text is the right domain for a uniqueness key that has to represent "no leg" at all.
 
 ALTER TABLE batch_transactions DROP CONSTRAINT IF EXISTS unique_tx_in_batch;
 
 CREATE UNIQUE INDEX IF NOT EXISTS unique_tx_leg_in_batch
-    ON batch_transactions (batch_id, accumulate_tx_hash, COALESCE(leg_id, ''));
+    ON batch_transactions (batch_id, accumulate_tx_hash, COALESCE(leg_id::text, ''));
 
 COMMENT ON INDEX unique_tx_leg_in_batch IS
     'One row per (batch, intent transaction, leg). Replaces unique_tx_in_batch, which allowed only one leg per intent per batch and failed every multi-leg on_cadence intent.';
