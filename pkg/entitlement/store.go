@@ -366,6 +366,15 @@ type Snapshot struct {
 	RefreshOK   uint64
 	RefreshFail uint64
 	LastError   string
+
+	// NotAfterUnix is the epoch's own expiry, distinct from local staleness.
+	//
+	// Stale/Age measure how long since this node last FETCHED; this is when the
+	// document stops being valid at all. Under `enforce` that is a countdown to
+	// every validator refusing every block, so it is the number worth alerting
+	// on — a node can be freshly fetched and still be holding an epoch that is
+	// about to expire, and Age alone cannot see that.
+	NotAfterUnix int64
 }
 
 // Health returns the current store state. A silently empty store is
@@ -386,6 +395,7 @@ func (s *Store) Health() Snapshot {
 	}
 	if s.header != nil {
 		snap.Epoch = s.header.Epoch
+		snap.NotAfterUnix = s.header.NotAfterUnix
 	}
 	if s.set != nil {
 		snap.Accounts = len(s.set.Leaves)

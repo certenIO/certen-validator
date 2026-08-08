@@ -2230,6 +2230,38 @@ func startValidator(
 		// in observe mode a decline would drop intents the gate would admit.
 		intentDiscovery.SetEntitlementScreen(entStore, entGateCfg.Mode == consensus.EntitlementEnforce)
 
+		// Report the SEALED mode, not the environment's.
+		//
+		// Policy is sealed into the ledger at genesis and the environment is
+		// ignored thereafter, so an operator who edits CERTEN_ENTITLEMENT_MODE
+		// and redeploys gets a warning log and no behaviour change. Publishing
+		// this as a gauge is how the fleet's ACTUAL mode becomes observable
+		// rather than assumed.
+		metrics.SetEntitlementMode(string(entGateCfg.Mode))
+
+		// Epoch freshness, sampled independently of refresh success.
+		//
+		// A refresh that keeps failing leaves the previous snapshot in place —
+		// correct, and the reason a single failed poll does not halt admission.
+		// But it also means "last refresh succeeded" stays silent while the
+		// document underneath expires. Sampling on a timer reports the epoch a
+		// validator would ACTUALLY verify against, which is the only thing that
+		// predicts a halt under enforce.
+		go func() {
+			t := time.NewTicker(15 * time.Second)
+			defer t.Stop()
+			for range t.C {
+				h := entStore.Health()
+				remaining := float64(0)
+				if h.NotAfterUnix > 0 {
+					// Deliberately signed: negative means this node is already
+					// refusing, and clamping would hide it.
+					remaining = float64(h.NotAfterUnix - time.Now().UTC().Unix())
+				}
+				metrics.SetEntitlementEpoch(h.Epoch, h.Accounts, remaining)
+			}
+		}()
+
 		log.Printf("✅ [ENTITLEMENT] store wired: mode=%s enabled=%t keys=%d",
 			entGateCfg.Mode, entStore.Enabled(), len(entGateCfg.Keys))
 	}
