@@ -2070,6 +2070,22 @@ func (id *IntentDiscovery) routeChainLegsToBatchSystem(
 			continue
 		}
 
+		// Identify WHICH leg this row is.
+		//
+		// Every leg of an intent shares one Accumulate transaction hash, and batch_transactions
+		// is unique on (batch_id, accum_tx_hash, leg_id). Without a leg id all legs collapse to
+		// the same key, so the second leg of any multi-leg on_cadence intent was rejected and
+		// the whole intent failed:
+		//
+		//     batch collector failed for leg 1: duplicate key value violates unique constraint
+		//
+		// The sibling path (processMultiLegIntent) already did this; this one did not, and this
+		// is the path a chain group actually takes. A generated UUID rather than leg.LegID
+		// because the column is uuid-typed and payload leg ids are readable strings
+		// ("leg-base-sepolia-84532-1"), which do not cast.
+		txData.MultiLegIntentID = intent.IntentID
+		txData.LegID = uuid.New().String()
+
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 
 		switch proofClass {
