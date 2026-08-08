@@ -220,6 +220,19 @@ func VerifyEntitlement(
 
 	verr := entitlement.Verify(vb.EntitlementEvidence, principal, nowUnix, cfg.Keys)
 	if verr == nil {
+		// Standing is established. Now the SPEND gate.
+		//
+		// These are different questions and both must be asked: Verify answers
+		// "may this account spend at all", the ceiling answers "may it spend
+		// this much". Until 2026-08-08 only the first was enforced — the
+		// ceilings were published and read as a boolean, so an entitled account
+		// could execute an intent of any size.
+		if reason, cerr := verifyCostCeiling(vb, nowUnix); cerr != nil {
+			if cfg.Mode == EntitlementObserve {
+				return reason, nil
+			}
+			return reason, cerr
+		}
 		return "", nil
 	}
 
@@ -234,6 +247,56 @@ func VerifyEntitlement(
 		return reason, nil
 	}
 	return reason, verr
+}
+
+// verifyCostCeiling checks the block's worst-case cost against the leaf ceiling.
+//
+// Called only after entitlement.Verify has passed, so the evidence, its
+// signature, its freshness and the leaf's binding to this principal are already
+// established — the ceiling read here is one this epoch's signer published for
+// this account, not an attacker's number.
+//
+// Returns ("", nil) — the intent is affordable, or cannot be bounded — in three
+// distinct cases, and the distinction matters:
+//
+//   - No cost basis was published for a chain the block touches. The bound is
+//     unknown. Refusing would turn a gateway configuration gap into refusal of
+//     legitimate work; admitting it as zero would let an unpriced chain bypass
+//     the ceiling entirely. Neither is acceptable, so the COST gate does not
+//     apply and the STATUS gate still does. Visible as a distinct metric so an
+//     unpriced chain is a reported gap rather than a silent hole.
+//
+//   - The leaf publishes a zero ceiling. Entitled() has already refused that
+//     case as NOT_ENTITLED; re-refusing here would relabel the same decision.
+//
+//   - The arithmetic could not be completed. Fails OPEN on purpose: a bound we
+//     could not compute is not evidence of unaffordability, and there is no
+//     safe way to refuse on a number that does not exist.
+func verifyCostCeiling(vb *ValidatorBlock, _ int64) (string, error) {
+	ev := vb.EntitlementEvidence
+	if ev == nil {
+		return "", nil // unreachable: Verify already refused a nil evidence
+	}
+
+	ceiling := ev.Leaf.IntentCeilingMicroUSD
+	if ceiling <= 0 {
+		return "", nil
+	}
+
+	worst, ok, err := WorstCaseCostMicroUSD(vb, ev.Header)
+	if err != nil || !ok {
+		return "", nil
+	}
+	if worst <= ceiling {
+		return "", nil
+	}
+
+	return entitlement.ReasonCeiling, &entitlement.VerifyError{
+		Reason: entitlement.ReasonCeiling,
+		Detail: fmt.Sprintf(
+			"worst-case cost %d microUSD exceeds intent ceiling %d microUSD for %s",
+			worst, ceiling, ev.Leaf.ADIURL),
+	}
 }
 
 // asVerifyError is errors.As specialised, kept local so this file has no

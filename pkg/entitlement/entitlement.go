@@ -149,17 +149,115 @@ type Header struct {
 	// redeploy, and revoked without ambiguity.
 	KeyID string `json:"key_id"`
 
+	// CostBasis is the worst-case cost of ONE intent on each chain, in
+	// micro-USD, as measured and published by the gateway.
+	//
+	// # WHY THIS IS IN THE HEADER AND NOT THE SET
+	//
+	// Evidence carries Header + Leaf + Proof — never the whole set. A validator
+	// verifying a block therefore has exactly one leaf and no way to read a
+	// per-chain table stored beside the leaves. Putting the basis in the header
+	// is what makes it available at the moment a bound must be computed.
+	//
+	// # WHY IT IS PUBLISHED RATHER THAN DERIVED LOCALLY
+	//
+	// A ceiling is only meaningful against a bound on what CERTEN can spend, and
+	// none of the local candidates are sound:
+	//
+	//   - the intent's own gasPolicy is SUBMITTER-CONTROLLED and, as of
+	//     2026-08-08, parsed and never honoured — execution gas comes from
+	//     validator constants (400000 + legs*250000). Bounding against it would
+	//     let anyone declare gasLimit:1 and pass. Enforcement in appearance only.
+	//   - MaxGasPriceGwei is genuinely binding, but it is per-node YAML/env
+	//     (100 on sepolia, 1 on arbitrum). Two nodes with different values
+	//     compute different bounds, reach different verdicts, and FORK.
+	//
+	// The gateway already measures real per-leg cost per chain, and already
+	// signs an artifact every validator fetches and pins a key for. Publishing
+	// the basis there gives every node the same number from a source no
+	// submitter controls — the same reasoning that put NativeUSDMicro here.
+	//
+	// Empty means "no basis published": the cost ceiling cannot be evaluated and
+	// is skipped, leaving the status gate intact. That is the v1 wire format and
+	// it must keep verifying, or every epoch published before this field existed
+	// would fail signature checking.
+	CostBasis []ChainCostBasis `json:"cost_basis,omitempty"`
+
 	// Signature is ed25519 over SigningBytes().
 	Signature string `json:"signature"`
 }
 
+// ChainCostBasis bounds the cost of one intent on one chain, in micro-USD.
+//
+// Split into a fixed and a marginal part because that is how the cost actually
+// behaves, measured on base-sepolia 2026-08-07: legs ride together in ONE
+// settlement transaction per chain, so a second leg costs its marginal share
+// rather than another whole execution.
+//
+//	1 leg 156,318 gas · 2 legs 229,025 · 3 legs 293,840 · 5 legs 423,519
+//
+// A per-intent flat number would over-bound multi-leg intents badly enough to
+// refuse work that is comfortably inside its ceiling.
+type ChainCostBasis struct {
+	// ChainID is the EVM chain id, matching ChainTarget.ChainID in the block.
+	ChainID int64 `json:"chain_id"`
+
+	// BaseMicroUSD is the worst-case cost of an intent's first leg on this
+	// chain, including the shared anchor and verify legs.
+	BaseMicroUSD int64 `json:"base_micro_usd"`
+
+	// PerLegMicroUSD is the worst-case marginal cost of each additional leg on
+	// the same chain.
+	PerLegMicroUSD int64 `json:"per_leg_micro_usd"`
+}
+
 // SigningBytes is the exact preimage signed and verified. Excludes Signature.
+//
+// VERSIONED BY CONTENT, not by a version field. A header carrying no cost basis
+// produces byte-identical v1 output, so every epoch published before this field
+// existed still verifies — and a v1 publisher can be rolled back to at any time.
+//
+// The consequence to respect during rollout: a validator that predates v2
+// computes v1 bytes for a v2 header, the signature fails, and it refuses
+// everything. That is fail-closed and correct, but it means VALIDATORS MUST
+// SHIP FIRST. Deploy the fleet, confirm it verifies v1 unchanged, and only then
+// let the gateway begin emitting a cost basis.
 func (h Header) SigningBytes() []byte {
-	return []byte(fmt.Sprintf(
+	v1 := fmt.Sprintf(
 		"certen:entitlement:v1\x1f%d\x1f%s\x1f%s\x1f%s\x1f%d\x1f%d\x1f%d\x1f%s",
 		h.Epoch, h.Root, h.SetHash, h.PrevRoot,
 		h.NativeUSDMicro, h.IssuedAtUnix, h.NotAfterUnix, h.KeyID,
-	))
+	)
+	if len(h.CostBasis) == 0 {
+		return []byte(v1)
+	}
+
+	// v2 = the v1 preimage, then the cost basis sorted by chain id.
+	//
+	// Sorted on a COPY: the header is shared, and reordering a caller's slice as
+	// a side effect of signing is the kind of thing that produces a signature
+	// which verifies once and never again.
+	basis := make([]ChainCostBasis, len(h.CostBasis))
+	copy(basis, h.CostBasis)
+	sort.Slice(basis, func(i, j int) bool { return basis[i].ChainID < basis[j].ChainID })
+
+	var b strings.Builder
+	b.WriteString("certen:entitlement:v2\x1f")
+	b.WriteString(v1)
+	for _, c := range basis {
+		fmt.Fprintf(&b, "\x1f%d:%d:%d", c.ChainID, c.BaseMicroUSD, c.PerLegMicroUSD)
+	}
+	return []byte(b.String())
+}
+
+// CostBasisFor returns the basis for a chain, and whether one was published.
+func (h Header) CostBasisFor(chainID int64) (ChainCostBasis, bool) {
+	for _, c := range h.CostBasis {
+		if c.ChainID == chainID {
+			return c, true
+		}
+	}
+	return ChainCostBasis{}, false
 }
 
 // Evidence is what a proposer puts INSIDE a ValidatorBlock to justify having
