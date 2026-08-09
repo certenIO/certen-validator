@@ -1556,7 +1556,30 @@ func (ecm *EthereumContractManager) buildComprehensiveProof(
 		certenProof.BlockHeight,
 	)
 
+	// An empty ZK proof is a guaranteed on-chain rejection, so say so LOUDLY.
+	//
+	// generateBLSZKProof returns nil on every failure path and the error used to be
+	// discarded here with `_`. The empty proof was then submitted, CertenAnchorV8_1
+	// refused it at `if (signature.length == 0) return false`, and the transaction
+	// reverted having burned real gas. Nothing recorded why.
+	//
+	// Observed 2026-08-09: proving failed on gnark constraint #774716 (the pairing
+	// and threshold check) because the per-intent path carries signedVotingPower=0,
+	// and the only visible symptom four layers downstream was "no measurable tx
+	// hash was found". The submission still happened, and still cost money.
+	//
+	// The caller decides what to do; this makes sure the failure is not invisible.
+	// generateBLSZKProof reports failure by returning an EMPTY proof — it logs the
+	// cause internally and its second return is the pubkey commitment, not an error.
 	zkProofBytes, _ := ecm.generateBLSZKProof(blsSignatureBytes, evmMessageHash, signedVotingPower, totalVotingPower, certenProof.BLSValidatorSetPubKey)
+	if len(zkProofBytes) == 0 {
+		log.Printf("❌ [BLS-ZK] No ZK proof produced for intent %s (signedPower=%s totalPower=%s). "+
+			"CertenAnchorV8_1 rejects an empty aggregateSignature, so submitting this spends gas "+
+			"on a certain revert. A per-intent submission reaches here with signedPower=0 because "+
+			"that path carries no quorum aggregation by design (CRYPTO-007) — the intent belongs "+
+			"on the batch quorum path.",
+			certenIntent.IntentID, signedVotingPower.String(), totalVotingPower.String())
+	}
 	blsProof.AggregateSignature = zkProofBytes
 	blsProof.MessageHash = evmMessageHash
 
