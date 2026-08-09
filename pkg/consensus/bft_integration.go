@@ -464,11 +464,24 @@ type ExecutionTask struct {
 
 // ExecutionTaskResult contains the result of BFT execution
 type ExecutionTaskResult struct {
-	Success       bool            `json:"success"`
-	AnchorResp    *AnchorResponse `json:"anchor_response,omitempty"`
-	Error         error           `json:"error,omitempty"`
-	ExecutorID    string          `json:"executor_id"`
-	ConsensusHash string          `json:"consensus_hash"`
+	// Success means CONSENSUS succeeded — the validators agreed and the block
+	// committed. It deliberately does NOT mean the target-chain write landed:
+	// an external chain failure must not invalidate a block the fleet already
+	// agreed on.
+	Success bool `json:"success"`
+	// TargetChainConfirmed answers the DIFFERENT question: did the on-chain work
+	// actually land? Collapsing the two into one boolean is why an intent whose
+	// every step reverted was logged as "executed successfully" and marked
+	// complete (observed 2026-08-09 on arbitrum- and ethereum-sepolia, where
+	// create, verify and governance all failed and the intent still reported
+	// success). Consensus and execution are separate facts and are now reported
+	// separately.
+	TargetChainConfirmed bool            `json:"target_chain_confirmed"`
+	TargetChainError     string          `json:"target_chain_error,omitempty"`
+	AnchorResp           *AnchorResponse `json:"anchor_response,omitempty"`
+	Error                error           `json:"error,omitempty"`
+	ExecutorID           string          `json:"executor_id"`
+	ConsensusHash        string          `json:"consensus_hash"`
 }
 
 // NewBFTValidator creates a new decentralized BFT validator
@@ -838,7 +851,18 @@ func (bv *BFTValidator) ExecuteCanonicalIntentWithBFTConsensus(
 		return fmt.Errorf("canonical BFT execution unsuccessful: %w", result.Error)
 	}
 
-	bv.logger.Printf("✅ [BFT-CANONICAL] Canonical intent executed successfully: %s", certenIntent.IntentID)
+	// Report what actually happened. This line previously said "executed
+	// successfully" whenever CONSENSUS succeeded, so an intent whose create,
+	// verify and governance steps had all reverted on chain was logged as a
+	// success and marked complete — which is what made a hard failure look like
+	// a stall for a full day. Consensus succeeding is worth saying; it is not
+	// the same sentence as the work having landed.
+	if result.TargetChainConfirmed {
+		bv.logger.Printf("✅ [BFT-CANONICAL] Canonical intent executed successfully: %s", certenIntent.IntentID)
+	} else {
+		bv.logger.Printf("⚠️ [BFT-CANONICAL] Consensus committed but target-chain execution did NOT confirm: intent=%s targetChainError=%q — gas may have been spent on a reverted transaction",
+			certenIntent.IntentID, result.TargetChainError)
+	}
 	return nil
 }
 
@@ -1468,6 +1492,9 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	// These are NEVER interchangeable - on_cadence gets batched, on_demand executes immediately
 	// =======================================================================
 	var anchorRes *verification.AnchorExecutionResult
+	// Tracked separately from consensus success — see ExecutionTaskResult.
+	var targetChainConfirmed bool
+	var targetChainErr error
 
 	// ON-CADENCE, CROSS-ADI BATCH PATH (preferred).
 	//
@@ -1539,6 +1566,10 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	if err != nil {
 		bv.logger.Printf("⚠️ [CANONICAL-AUDIT] External audit submission failed: %v (continuing)", err)
 		// Non-fatal - audit failure doesn't invalidate consensus
+		targetChainErr = err
+	}
+	if anchorRes != nil {
+		targetChainConfirmed = anchorRes.AllTransactionsConfirmed
 	}
 
 	if anchorRes != nil {
@@ -1563,11 +1594,16 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 		}
 	}
 
-	return &ExecutionTaskResult{
-		Success:       true,
-		ExecutorID:    bv.validatorID,
-		ConsensusHash: fmt.Sprintf("%X", bftRes.TxHash), // Convert []byte to hex string
-	}, nil
+	res := &ExecutionTaskResult{
+		Success:              true, // consensus committed
+		TargetChainConfirmed: targetChainConfirmed,
+		ExecutorID:           bv.validatorID,
+		ConsensusHash:        fmt.Sprintf("%X", bftRes.TxHash),
+	}
+	if targetChainErr != nil {
+		res.TargetChainError = targetChainErr.Error()
+	}
+	return res, nil
 }
 
 // parseMultiChainTxHashes parses comma-separated "ChainName:txhash" strings into per-chain groups.

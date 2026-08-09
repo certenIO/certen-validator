@@ -817,7 +817,15 @@ func (ecm *EthereumContractManager) CreateAnchorOnChain(
 		fmt.Printf("   Gas Used: %d\n", receipt.GasUsed)
 		fmt.Printf("   Status: %d (1=success)\n", receipt.Status)
 		if receipt.Status == 0 {
-			return "", fmt.Errorf("createAnchor reverted on-chain (tx: %s)", txHash)
+			// A REVERTED transaction is still a transaction: it has a hash, it consumed
+			// gas, and CERTEN paid for that gas. Returning "" here made the caller
+			// substitute a placeholder ("verify_failed_<chain>") where the hash belongs,
+			// so the cost reporter concluded "no measurable tx hash was found" and the
+			// spend was never recorded. Observed 2026-08-09 on arbitrum-sepolia: tx
+			// 0x3d477ca1… reverted having burned 107,129 gas, and the ledger recorded
+			// nothing. Return the hash WITH the error so the caller can bill the gas and
+			// still treat the step as failed.
+			return txHash, fmt.Errorf("createAnchor reverted on-chain (tx: %s)", txHash)
 		}
 	}
 
@@ -919,7 +927,7 @@ func (ecm *EthereumContractManager) SubmitCertenProofToAnchor(
 		fmt.Printf("   Gas Used: %d\n", receipt.GasUsed)
 		fmt.Printf("   Status: %d (1=success)\n", receipt.Status)
 		if receipt.Status == 0 {
-			return "", fmt.Errorf("executeComprehensiveProof reverted on-chain (tx: %s, gas: %d)", txHash, receipt.GasUsed)
+			return txHash, fmt.Errorf("executeComprehensiveProof reverted on-chain (tx: %s, gas: %d)", txHash, receipt.GasUsed)
 		}
 	}
 
@@ -977,7 +985,7 @@ func (ecm *EthereumContractManager) ExecuteGovernanceWithAnchor(
 		fmt.Printf("   Gas Used: %d\n", receipt.GasUsed)
 		fmt.Printf("   Status: %d (1=success)\n", receipt.Status)
 		if receipt.Status == 0 {
-			return "", fmt.Errorf("executeWithGovernance reverted on-chain")
+			return txHash, fmt.Errorf("executeWithGovernance reverted on-chain (tx: %s, gas: %d)", txHash, receipt.GasUsed)
 		}
 	}
 
@@ -1083,7 +1091,7 @@ func (ecm *EthereumContractManager) ExecuteViaUserAccount(
 		fmt.Printf("   Gas Used: %d\n", receipt.GasUsed)
 		fmt.Printf("   Status: %d (1=success)\n", receipt.Status)
 		if receipt.Status == 0 {
-			return "", fmt.Errorf("user account execution reverted on-chain")
+			return txHash, fmt.Errorf("user account execution reverted on-chain (tx: %s, gas: %d)", txHash, receipt.GasUsed)
 		}
 	}
 
@@ -1369,7 +1377,10 @@ func (ecm *EthereumContractManager) ExecuteUnifiedAnchorWorkflow(
 		big.NewInt(int64(certenProof.BlockHeight)),
 	)
 	if err != nil {
-		return "", "", fmt.Errorf("step 1 (create anchor) failed: %w", err)
+		// Propagate whatever hash exists. CreateAnchorOnChain now returns the hash of
+		// a REVERTED transaction alongside its error, and that gas was really spent —
+		// dropping it here is what made the spend unmeasurable.
+		return createTxHash, "", fmt.Errorf("step 1 (create anchor) failed: %w", err)
 	}
 
 	fmt.Printf("✅ [UNIFIED] Step 1 complete - Anchor created: %s\n", createTxHash)
@@ -1381,7 +1392,8 @@ func (ecm *EthereumContractManager) ExecuteUnifiedAnchorWorkflow(
 	// Step 2: Execute comprehensive proof on Verification contract
 	verifyTxHash, err = ecm.SubmitCertenProofToAnchor(ctx, certenIntent, certenProof, anchorResult)
 	if err != nil {
-		return createTxHash, "", fmt.Errorf("step 2 (verify proof) failed: %w", err)
+		// Same here: a reverted verify still burned gas under a real hash.
+		return createTxHash, verifyTxHash, fmt.Errorf("step 2 (verify proof) failed: %w", err)
 	}
 
 	fmt.Printf("✅ [UNIFIED] Step 2 complete - Proof verified: %s\n", verifyTxHash)

@@ -878,8 +878,16 @@ func (btce *BFTTargetChainExecutor) executeEthereumOperations(
 		if chainExecErr != nil {
 			btce.logger.Printf("❌ [MULTI-CHAIN] Anchor workflow failed for %s: %v", chainDisplayName, chainExecErr)
 			overallSuccess = false
-			allCreateTxHashes = append(allCreateTxHashes, fmt.Sprintf("create_failed_%s", chainDisplayName))
-			allVerifyTxHashes = append(allVerifyTxHashes, fmt.Sprintf("verify_failed_%s", chainDisplayName))
+			// Keep the REAL hash whenever the workflow produced one, even though the
+			// step failed. A reverted transaction has a hash and burned gas that CERTEN
+			// paid; overwriting it with "create_failed_<chain>" is precisely why the cost
+			// reporter said "no measurable tx hash was found" and the spend vanished from
+			// the ledger. Observed 2026-08-09 on arbitrum-sepolia: step 2 reverted, step 1
+			// had a perfectly good hash, and BOTH were replaced by placeholders.
+			// The placeholder is kept only when there is genuinely no hash to report, so
+			// "failed and unmeasurable" stays distinguishable from "failed but measured".
+			allCreateTxHashes = append(allCreateTxHashes, failedTxLabel(chainCreateTx, "create", chainDisplayName))
+			allVerifyTxHashes = append(allVerifyTxHashes, failedTxLabel(chainVerifyTx, "verify", chainDisplayName))
 			for _, leg := range chainLegs {
 				allGovTxHashes = append(allGovTxHashes, fmt.Sprintf("execution_failed_%s", leg.LegID))
 			}
@@ -6517,4 +6525,17 @@ func (btce *BFTTargetChainExecutor) buildTonResult(
 			"executionMethod": "ton_center_api_v2",
 		},
 	}
+}
+
+// failedTxLabel reports a failed step's transaction.
+//
+// Returns the real hash when one exists — a reverted transaction still consumed
+// gas CERTEN paid for, and the cost reporter needs the hash to measure it. Only
+// when no transaction was ever sent does it fall back to a placeholder, so
+// "never left the ground" stays distinguishable from "landed badly".
+func failedTxLabel(txHash, step, chainDisplayName string) string {
+	if strings.HasPrefix(txHash, "0x") && len(txHash) > 2 {
+		return txHash
+	}
+	return fmt.Sprintf("%s_failed_%s", step, chainDisplayName)
 }
