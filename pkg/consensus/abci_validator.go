@@ -326,7 +326,7 @@ func (app *ValidatorApp) CheckTx(ctx context.Context, req *abcitypes.RequestChec
 	// the block BEING finalized, which is current by construction.
 	approxNow := time.Now().UTC()
 	if reason, err := VerifyEntitlement(&vb, PrincipalOf(&vb), approxNow.Unix(), app.entitlement); err != nil {
-		metrics.RecordEntitlementDecision("checktx", "refused", reason)
+		metrics.RecordEntitlementDecision("checktx", "refused", reason, PrincipalOf(&vb))
 		app.logger.Printf("🚫 [ENTITLEMENT] CheckTx rejecting bundle=%s principal=%q reason=%s",
 			vb.BundleID, PrincipalOf(&vb), reason)
 		return &abcitypes.ResponseCheckTx{
@@ -336,11 +336,11 @@ func (app *ValidatorApp) CheckTx(ctx context.Context, req *abcitypes.RequestChec
 	} else if reason != "" {
 		// Observed, not bound. Counted separately so "what would enforcing refuse"
 		// is answerable from the same series BEFORE the fleet ever enforces.
-		metrics.RecordEntitlementDecision("checktx", "observed", reason)
+		metrics.RecordEntitlementDecision("checktx", "observed", reason, PrincipalOf(&vb))
 		app.logger.Printf("👁️ [ENTITLEMENT] OBSERVE CheckTx would reject bundle=%s principal=%q reason=%s",
 			vb.BundleID, PrincipalOf(&vb), reason)
 	} else {
-		metrics.RecordEntitlementDecision("checktx", "admitted", "")
+		metrics.RecordEntitlementDecision("checktx", "admitted", "", "")
 	}
 
 	app.logger.Printf("✅ CheckTx: Valid ValidatorBlock - Bundle: %s, Height: %d",
@@ -399,7 +399,7 @@ func (app *ValidatorApp) processValidatorTransaction(tx []byte) abcitypes.ExecTx
 	// disagree about expiry and halt the chain.
 	principal := PrincipalOf(&vb)
 	if reason, err := VerifyEntitlement(&vb, principal, app.currentBlockTime.UTC().Unix(), app.entitlement); err != nil {
-		metrics.RecordEntitlementDecision("finalizeblock", "refused", reason)
+		metrics.RecordEntitlementDecision("finalizeblock", "refused", reason, principal)
 		app.logger.Printf("🚫 [ENTITLEMENT] REJECTED bundle=%s principal=%q reason=%s height=%d",
 			vb.BundleID, principal, reason, app.currentBlockHeight)
 		return abcitypes.ExecTxResult{
@@ -407,11 +407,11 @@ func (app *ValidatorApp) processValidatorTransaction(tx []byte) abcitypes.ExecTx
 			Log:  "entitlement check failed: " + err.Error(),
 		}
 	} else if reason != "" {
-		metrics.RecordEntitlementDecision("finalizeblock", "observed", reason)
+		metrics.RecordEntitlementDecision("finalizeblock", "observed", reason, principal)
 		app.logger.Printf("👁️ [ENTITLEMENT] OBSERVE would reject bundle=%s principal=%q reason=%s height=%d",
 			vb.BundleID, principal, reason, app.currentBlockHeight)
 	} else {
-		metrics.RecordEntitlementDecision("finalizeblock", "admitted", "")
+		metrics.RecordEntitlementDecision("finalizeblock", "admitted", "", "")
 	}
 
 	// Store ValidatorBlock with basic memory retention (query cache ONLY — it no longer feeds the

@@ -33,12 +33,26 @@ var (
 	// `decision` separates a refusal that BOUND from one merely observed, so the same series
 	// answers "what is being refused now" and "what would be refused if we enforced" — which is
 	// the question that has to be answered before enforcing at all.
+	//
+	// `principal` says WHO, but only for the decisions where that matters. On 2026-08-11 this
+	// series showed 11 observed INTENT_CEILING_EXCEEDED evaluations and there was no way to
+	// learn which account they belonged to: the log line that would have said is emitted on a
+	// path that does not reliably reach stdout (255 admitted decisions produced 98 log lines,
+	// and 11 observed produced none). "Something would have been refused and we cannot say
+	// what" is not a basis on which to enforce.
+	//
+	// Admitted decisions carry principal "-" deliberately. They are the high-volume case —
+	// every block, every principal, plus mempool rechecks — and labelling them would multiply
+	// the series count by the size of the entitlement set for no diagnostic gain, since an
+	// admitted decision raises no question. Cardinality is therefore bounded by the number of
+	// accounts with a PROBLEM, which is small when things are healthy and grows only when
+	// something needs attention.
 	entitlementDecisions = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "certen",
 		Subsystem: "entitlement",
 		Name:      "decisions_total",
-		Help:      "Entitlement gate evaluations by stage, decision and reason",
-	}, []string{"stage", "decision", "reason"})
+		Help:      "Entitlement gate evaluations by stage, decision, reason and (for non-admitted) principal",
+	}, []string{"stage", "decision", "reason", "principal"})
 
 	// entitlementEpochRemainingSeconds is the countdown to a halt under enforce.
 	//
@@ -88,12 +102,38 @@ var (
 // RecordEntitlementDecision records one gate evaluation.
 //
 // stage is "checktx" or "finalizeblock"; decision is "admitted", "refused" or "observed";
-// reason is the verifier's reason, or "" when admitted.
-func RecordEntitlementDecision(stage, decision, reason string) {
+// reason is the verifier's reason, or "" when admitted; principal is the Accumulate account
+// the block acts for.
+//
+// The principal is recorded only for refused and observed decisions — see the note on
+// entitlementDecisions for why admitted is deliberately unlabelled.
+func RecordEntitlementDecision(stage, decision, reason, principal string) {
 	if reason == "" {
 		reason = "none"
 	}
-	entitlementDecisions.WithLabelValues(stage, decision, reason).Inc()
+	// An unbounded label value from an untrusted source is a cardinality bomb: a caller that
+	// writes intents for made-up principals could mint a new series per request and exhaust
+	// the scraper's memory. Only accounts that appear in a decision worth investigating are
+	// labelled, and even those are truncated.
+	label := "-"
+	if decision != "admitted" {
+		label = truncatePrincipal(principal)
+	}
+	entitlementDecisions.WithLabelValues(stage, decision, reason, label).Inc()
+}
+
+// maxPrincipalLabel bounds one label value. Accumulate URLs are already short; this guards
+// against a pathological one rather than trimming anything real.
+const maxPrincipalLabel = 128
+
+func truncatePrincipal(p string) string {
+	if p == "" {
+		return "unknown"
+	}
+	if len(p) > maxPrincipalLabel {
+		return p[:maxPrincipalLabel]
+	}
+	return p
 }
 
 // SetEntitlementEpoch reports the cached epoch this node verifies against.
