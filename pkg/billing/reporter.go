@@ -95,8 +95,21 @@ type CostEvent struct {
 	InclusionProof interface{}       `json:"inclusion_proof,omitempty"`
 	Breakdown      map[string]string `json:"breakdown,omitempty"`
 	FreeAtMargin   bool              `json:"free_at_margin,omitempty"`
-	ObservedAt     string            `json:"observed_at"`
-	IdempotencyKey string            `json:"idempotency_key"`
+
+	// Succeeded reports whether the transaction did what it was sent to do.
+	//
+	// The gateway's completion check counts cost events and, until this was
+	// carried, had nothing to look at: a reverted execution produced a perfectly
+	// good cost event and completed the intent on `execution_observed`. That
+	// billed 13 intents $12.89 for work that reverted on 2026-08-11.
+	//
+	// Pointer so omission is distinguishable from false. The gateway reads a
+	// missing value as unknown and still completes — reading it as failure would
+	// strand every intent from a chain whose adapter cannot determine the
+	// outcome.
+	Succeeded      *bool  `json:"succeeded,omitempty"`
+	ObservedAt     string `json:"observed_at"`
+	IdempotencyKey string `json:"idempotency_key"`
 }
 
 // NewCostEvent converts a measured ChainCost into the wire payload.
@@ -128,6 +141,7 @@ func NewCostEvent(intentID, adiURL, accumTxHash string, c *ChainCost, inclusionP
 		InclusionProof:       inclusionProof,
 		Breakdown:            c.Breakdown,
 		FreeAtMargin:         c.FreeAtMargin,
+		Succeeded:            c.Succeeded,
 		ObservedAt:           c.ObservedAt.UTC().Format(time.RFC3339Nano),
 		// Deterministic per (chain, tx, leg): a WAL replay, a retry, and a
 		// duplicated call all collapse to one row at the gateway.

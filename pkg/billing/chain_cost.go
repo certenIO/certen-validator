@@ -251,6 +251,18 @@ func (p *evmProbe) ObservedCost(ctx context.Context, txHash string) (*ChainCost,
 	}
 
 	cost := baseCost(p.cfg, txHash)
+	// The receipt's status was already decoded above and never used. An EVM
+	// receipt reports 0x1 for success and 0x0 for a revert; anything else (an
+	// empty field on a pre-Byzantium node) stays unknown rather than guessed.
+	switch strings.ToLower(strings.TrimSpace(r.Status)) {
+	case "0x1", "1":
+		ok := true
+		cost.Succeeded = &ok
+	case "0x0", "0":
+		failed := false
+		cost.Succeeded = &failed
+	}
+
 	cost.WeiPerNative = new(big.Int).Set(wei)
 	cost.setGas(gasUsed.Uint64(), price)
 	if bn, ok := parseBig(r.BlockNumber); ok {

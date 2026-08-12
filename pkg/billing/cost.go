@@ -70,6 +70,21 @@ type ChainCost struct {
 	GasUsed     uint64   `json:"gas_used"`
 	GasPriceWei *big.Int `json:"-"`
 
+	// Succeeded reports whether the transaction actually did what it was sent to
+	// do, from the receipt's status field.
+	//
+	// A cost is measured from a receipt, and a REVERTED transaction has a
+	// receipt too: gas consumed, block assigned, zero effect. Reporting the cost
+	// without the outcome let the gateway complete and BILL intents whose
+	// execution reverted — 13 of them on 2026-08-11, $12.89, because its
+	// completion check counted cost events and had no field to look at. The
+	// number was always here in the receipt; it was simply not carried.
+	//
+	// Pointer, so "not reported" is distinguishable from "reported false". A
+	// chain whose adapter cannot determine the outcome leaves it nil, and the
+	// gateway treats nil as unknown — never as success, never as failure.
+	Succeeded *bool `json:"succeeded,omitempty"`
+
 	// NativeSymbol is the fee token: ETH, SOL, APT, SUI, NEAR, TON, TRX, ADA,
 	// HBAR, BNB, POL, GLMR.
 	NativeSymbol string `json:"native_symbol"`
