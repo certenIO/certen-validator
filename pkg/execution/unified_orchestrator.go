@@ -2903,7 +2903,13 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 	bundle := proof.NewCertenProofBundle(cycle.CycleID)
 
 	// Set transaction reference
-	bundle.SetTransactionRef(accumTxHash, req.IntentID, req.ProofClass)
+	// SetTransactionRef(txHash, accountURL, txType) — the SECOND argument is the ACCOUNT URL.
+	// It was being passed req.IntentID, so the bundle a counterparty downloads showed a UUID in
+	// `account_url` (and, before the accumTxHash fix above, the same UUID in `accum_tx_hash`).
+	// A verifier could not tie the bundle to the Accumulate account or the on-chain transaction
+	// it attests to — which is the entire job of the reference block. The other two call sites
+	// (proof_cycle_orchestrator.go, artifact_service.go) already pass a real account URL.
+	bundle.SetTransactionRef(accumTxHash, req.AccumulateAccountURL, req.ProofClass)
 
 	// Set Merkle inclusion proof if available
 	if req.MerkleRoot != [32]byte{} {
