@@ -2357,15 +2357,17 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 	// every completed intent, which is why intents had to be allowed to complete on chain
 	// evidence alone (api-gateway aee0110) — a workaround for this line.
 	//
-	// `validateRequest` already refuses a request with no TxHashes, so the first branch always
-	// wins in practice; the fallback exists so a future caller that skips validation degrades to
-	// the old behaviour rather than writing an empty key.
-	accumTxHash := ""
-	if len(req.TxHashes) > 0 {
-		accumTxHash = req.TxHashes[0]
-	}
+	// `req.AccumulateTxHash` is the field that carries it (unified_adapter.go:428, :631).
+	accumTxHash := req.AccumulateTxHash
 	if accumTxHash == "" {
+		// NOT req.TxHashes[0]: those are DESTINATION-CHAIN execution hashes
+		// (`TxHashes: []string{executionTxHash.Hex()}`, unified_adapter.go:81) — 0x-prefixed EVM
+		// hashes, not Accumulate ones. Writing one here is as wrong as writing the intent id, just
+		// less obviously. Falling back to the intent id preserves the historical value rather than
+		// inventing a new kind of wrong, and the log line says so out loud.
 		accumTxHash = req.IntentID
+		fmt.Printf("WARNING: [PROOF-ARTIFACT] no AccumulateTxHash on cycle %s; keying artifact by intent id %s, so lookup by transaction hash will MISS\n",
+			req.CycleID, req.IntentID)
 	}
 
 	// Determine leaf index pointer - for on-demand single-tx, always set to 0
@@ -3241,9 +3243,13 @@ func (o *UnifiedOrchestrator) generateSingleBatchArtifact(ctx context.Context, c
 	req := cycle.Request
 	result := cycle.Result
 
-	accumTxHash := ""
-	if len(req.TxHashes) > 0 {
-		accumTxHash = req.TxHashes[0]
+	// The Accumulate transaction hash — the key `GET /v1/proof/tx/{hash}` resolves by.
+	// `req.TxHashes` holds destination-chain execution hashes, not this.
+	accumTxHash := req.AccumulateTxHash
+	if accumTxHash == "" {
+		accumTxHash = req.IntentID
+		fmt.Printf("WARNING: [PROOF-ARTIFACT] no AccumulateTxHash on batch cycle %s; keying artifact by intent id, so lookup by transaction hash will MISS\n",
+			req.CycleID)
 	}
 
 	newArtifact := &database.NewProofArtifact{
