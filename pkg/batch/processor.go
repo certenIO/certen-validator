@@ -625,8 +625,13 @@ func (p *Processor) createProofs(ctx context.Context, result *ClosedBatchResult,
 			if artifactInput != nil {
 				_, artifactErr := p.repos.ProofArtifacts.CreateProofArtifact(ctx, artifactInput)
 				if artifactErr != nil {
-					p.logger.Printf("Warning: failed to create proof artifact for tx %d: %v", tx.ID, artifactErr)
-					// Non-fatal: certen_anchor_proof was created successfully
+					// LOUD, and not "non-fatal" in the sense the old comment implied. A row in
+					// certen_anchor_proofs helps no API consumer: every proof lookup goes through
+					// proof_artifacts. Losing this row means the work was done, anchored and billed, and
+					// the evidence for it is unreachable - while nothing else reports a problem.
+					p.logger.Printf("ERROR: [PROOF-ARTIFACT] FAILED to persist artifact for tx %d (accum_tx=%s account=%s): %v",
+						tx.ID, tx.AccumTxHash, tx.AccountURL, artifactErr)
+					// Execution continues so one bad row cannot strand the rest of the batch.
 				}
 			}
 		}

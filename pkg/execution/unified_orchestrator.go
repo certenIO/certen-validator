@@ -2343,10 +2343,29 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 	// ON-DEMAND: Create single proof artifact (or handle multi-leg)
 	// =========================================================================
 
-	// Determine accumulate tx hash (use first tx hash or intent ID)
-	accumTxHash := req.IntentID
-	if accumTxHash == "" && len(req.TxHashes) > 0 {
+	// The ACCUMULATE TRANSACTION HASH — not the intent id.
+	//
+	// This is the key every consumer looks the artifact up by: proof-service does
+	// `WHERE pa.accum_tx_hash = $1`, and the gateway calls it with the intent's
+	// `accum_tx_hash` to attach `proof_id` to a completed transaction.
+	//
+	// The precedence here used to be inverted — `req.IntentID` first, the real hash only if the
+	// intent id happened to be empty. `IntentID` is effectively always set, so the column got a
+	// UUID and every lookup by hash missed. 380 artifacts written between 2026-01-26 and
+	// 2026-08-21 carry an intent id in this column; the proofs were all generated and anchored
+	// correctly and simply could not be found. Downstream that surfaced as `proof_id: null` on
+	// every completed intent, which is why intents had to be allowed to complete on chain
+	// evidence alone (api-gateway aee0110) — a workaround for this line.
+	//
+	// `validateRequest` already refuses a request with no TxHashes, so the first branch always
+	// wins in practice; the fallback exists so a future caller that skips validation degrades to
+	// the old behaviour rather than writing an empty key.
+	accumTxHash := ""
+	if len(req.TxHashes) > 0 {
 		accumTxHash = req.TxHashes[0]
+	}
+	if accumTxHash == "" {
+		accumTxHash = req.IntentID
 	}
 
 	// Determine leaf index pointer - for on-demand single-tx, always set to 0
@@ -3181,7 +3200,13 @@ func (o *UnifiedOrchestrator) generateBatchProofArtifacts(ctx context.Context, c
 
 		proofArtifact, err := o.config.Repos.ProofArtifacts.CreateProofArtifact(ctx, newArtifact)
 		if err != nil {
-			fmt.Printf("Warning: failed to create proof artifact for tx %d: %v\n", i, err)
+			// LOUD. A missing artifact is not cosmetic: the artifact IS the product. Without it the
+			// gateway finds no proof, `proof_id` stays null, and the customer is billed for an
+			// execution whose evidence was never stored - while every other signal reports success.
+			// A "Warning:" line inside a container nobody tails is how a defect like that survives
+			// for months.
+			fmt.Printf("ERROR: [PROOF-ARTIFACT] FAILED to persist artifact for tx %d (accum_tx=%s account=%s): %v\n",
+				i, batchTx.AccumTxHash, batchTx.AccountURL, err)
 			continue
 		}
 
