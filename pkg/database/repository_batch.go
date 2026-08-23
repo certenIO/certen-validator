@@ -368,6 +368,7 @@ func (r *BatchRepository) AddTransaction(ctx context.Context, input *NewBatchTra
 		GovValid:         input.GovProof != nil,
 		IntentType:       sql.NullString{String: input.IntentType, Valid: input.IntentType != ""},
 		IntentData:       input.IntentData,
+		DeclaredEffects:  input.DeclaredEffects,
 		CreatedAt:        time.Now(),
 		UserID:           userID,
 		IntentID:         intentID,
@@ -388,18 +389,18 @@ func (r *BatchRepository) AddTransaction(ctx context.Context, input *NewBatchTra
 			batch_id, accumulate_tx_hash, account_url, tree_index,
 			merkle_path, transaction_hash, chained_proof, chained_proof_valid,
 			governance_proof, governance_level, governance_valid,
-			intent_type, intent_data, user_id, intent_id,
+			intent_type, intent_data, declared_effects, user_id, intent_id,
 			from_chain, to_chain, from_address, to_address, amount, token_symbol, adi_url, created_at_client,
 			leg_id, multi_leg_intent_id,
 			created_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
 		RETURNING id, created_at`
 
 	err = r.client.QueryRowContext(ctx, query,
 		tx.BatchID, tx.AccumTxHash, tx.AccountURL, tx.TreeIndex,
 		tx.MerklePath, tx.TxHash, tx.ChainedProof, tx.ChainedValid,
 		tx.GovProof, tx.GovLevel, tx.GovValid,
-		tx.IntentType, tx.IntentData, tx.UserID, tx.IntentID,
+		tx.IntentType, tx.IntentData, nullableJSON(tx.DeclaredEffects), tx.UserID, tx.IntentID,
 		tx.FromChain, tx.ToChain, tx.FromAddress, tx.ToAddress, tx.Amount, tx.TokenSymbol, tx.AdiURL, tx.CreatedAtClient,
 		tx.LegID, tx.MultiLegIntentID,
 		tx.CreatedAt,
@@ -638,4 +639,17 @@ func (r *BatchRepository) GetTransactionHashesByBatchID(ctx context.Context, bat
 	}
 
 	return hashes, nil
+}
+
+// nullableJSON keeps the difference between "unknown" and "nothing was declared".
+//
+// A nil json.RawMessage handed to lib/pq becomes an empty STRING, which jsonb rejects — and a
+// well-meaning fix is to substitute `[]`, which silently turns "we never found out" into "the intent
+// committed to nothing". Those are different claims and migration 012 exists to keep them apart, so
+// nil becomes a real SQL NULL here and nowhere else decides.
+func nullableJSON(raw json.RawMessage) interface{} {
+	if len(raw) == 0 {
+		return nil
+	}
+	return []byte(raw)
 }

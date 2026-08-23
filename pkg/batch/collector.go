@@ -39,6 +39,16 @@ type TransactionData struct {
 	IntentType   string          // Optional intent type
 	IntentData   json.RawMessage // Optional intent data
 
+	// DeclaredEffects is the events this intent's legs committed to emitting (RB-4), as a JSON
+	// array. It is what makes an attestation mean "the call did what it said it would" rather
+	// than merely "the call did not revert", and until it was persisted nothing downstream could
+	// tell the two apart.
+	//
+	// nil and an empty array are DIFFERENT and must stay that way: nil means the commitment is
+	// unknown (no envelope, or it would not parse); `[]` means the envelope parsed and nothing was
+	// declared. See migration 012.
+	DeclaredEffects json.RawMessage
+
 	// Phase 2 additions: Extended metadata for governance proof generation
 	KeyPage  string                 // Optional KeyPage URL for governance proofs
 	Metadata map[string]interface{} // Optional metadata (e.g., signer info)
@@ -258,6 +268,9 @@ func (c *Collector) addToBatch(ctx context.Context, batch *activeBatch, tx *Tran
 		GovLevel:     database.GovernanceLevel(tx.GovLevel),
 		IntentType:   tx.IntentType,
 		IntentData:   tx.IntentData,
+		// Passed straight through, nil included. nil is the "we do not know what this committed to"
+		// state and it has to survive to the column — see migration 012.
+		DeclaredEffects: tx.DeclaredEffects,
 	}
 
 	// Pass intent tracking fields if present (for Firestore linking)
