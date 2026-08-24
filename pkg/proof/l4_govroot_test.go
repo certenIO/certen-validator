@@ -219,12 +219,24 @@ func TestP5_SignerAndSubmitterAgree(t *testing.T) {
 // P5.6 - the govRoot MOVES versus today. This is the deploy-gate evidence, not
 // a regression: it is why the fleet must upgrade atomically.
 func TestP5_GovRootMovesVersusZeroL4(t *testing.T) {
-	withoutL4 := contracts.NewAccumulateGovRootInputsBuilder().
-		SetL4ConsensusProofFromJSON(nil).Build()
-	if withoutL4.L4ConsensusProofH != ([32]byte{}) {
-		t.Fatal("a nil L4 payload must still leave the slot zero")
-	}
+	// The pre-Phase-5 baseline is NOT a zero slot, which an earlier version of
+	// this test assumed by passing an untyped nil literal. Production passes a
+	// typed *ConsensusProof; a nil typed pointer is not `v == nil`, so the
+	// builder marshalled it to "null" and committed hash("null"). Model that,
+	// or "the govRoot moves" is measured against a root nothing ever signed.
+	var absent *lcproof.ConsensusProof
+
+	withoutL4 := contracts.NewAccumulateGovRootInputsBuilder().Build()
+	withoutL4.L4ConsensusProofH = contracts.HashL4ConsensusProof([]byte("null"))
 	oldRoot := contracts.ComputeAccumulateGovRoot(withoutL4)
+
+	// And the slot must now be zero for that same typed-nil input, so absence
+	// is distinguishable from a committed quorum.
+	fixed := contracts.NewAccumulateGovRootInputsBuilder().
+		SetL4ConsensusProofFromJSON(absent).Build()
+	if fixed.L4ConsensusProofH != ([32]byte{}) {
+		t.Fatalf("a typed-nil L4 payload must leave the slot zero, got %x", fixed.L4ConsensusProofH)
+	}
 
 	p := testProofWithL4(
 		testLeg("BVN1", []string{"11aa", "22bb"}),

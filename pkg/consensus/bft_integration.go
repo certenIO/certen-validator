@@ -1118,10 +1118,15 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 		certenProof.KeybookURL = resolvedKeyBookURL
 
 		// L4 must be committed into the governance root before anything is
-		// signed. SetL4ConsensusProofFromJSON silently leaves the slot ZERO on
-		// a nil payload, and a zero L4 slot is exactly what every govRoot
-		// carried before this change - the chain committed to L1-L3 and G0-G2
-		// but not to the validator quorum that signed the anchors.
+		// signed. SetL4ConsensusProofFromJSON leaves the slot ZERO on an absent
+		// payload, so nothing downstream can tell a missing quorum apart from a
+		// committed one without this check.
+		//
+		// Before this change the chain committed to L1-L3 and G0-G2 but not to
+		// the validator quorum that signed the anchors. Note that the old slot
+		// was NOT zero: every call site passes a typed *ConsensusProof, and a
+		// nil typed pointer is not `v == nil`, so json.Marshal produced "null"
+		// and the slot carried a constant non-zero hash. See isAbsentPayload.
 		//
 		// Both L4 legs are already mandatory for the proof to exist at all
 		// (ProofVerifier.Verify rejects a nil leg), so reaching here without a

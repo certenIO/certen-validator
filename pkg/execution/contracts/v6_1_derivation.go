@@ -16,6 +16,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -149,11 +150,34 @@ func (b *AccumulateGovRootInputsBuilder) SetL3BlockHash(h []byte) *AccumulateGov
 	return b
 }
 
+// isAbsentPayload reports whether v carries no payload.
+//
+// A plain `v == nil` is NOT sufficient here and was the source of a real
+// defect. Every caller passes a TYPED pointer (*ConsensusProof, *G0Result,
+// ...). A nil typed pointer stored in an interface makes the interface itself
+// non-nil, so `v == nil` is false, and json.Marshal then produces the four
+// bytes "null" — a non-empty payload that hashes to a CONSTANT, non-zero slot.
+//
+// The effect was that an absent layer committed a fixed non-zero hash instead
+// of the documented zero, making "absent" indistinguishable from "present and
+// happened to hash to that value" for anything downstream testing slot == 0.
+func isAbsentPayload(v interface{}) bool {
+	if v == nil {
+		return true
+	}
+	switch rv := reflect.ValueOf(v); rv.Kind() {
+	case reflect.Ptr, reflect.Interface, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan:
+		return rv.IsNil()
+	default:
+		return false
+	}
+}
+
 // SetL4ConsensusProofFromJSON canonicalizes a consensus-proof object via
 // json.Marshal (deterministic for our types) and hashes it under
 // "certen:l4:v1".
 func (b *AccumulateGovRootInputsBuilder) SetL4ConsensusProofFromJSON(v interface{}) *AccumulateGovRootInputsBuilder {
-	if v == nil {
+	if isAbsentPayload(v) {
 		return b
 	}
 	bytes, err := json.Marshal(v)
@@ -167,7 +191,7 @@ func (b *AccumulateGovRootInputsBuilder) SetL4ConsensusProofFromJSON(v interface
 // SetG0FromJSON canonicalizes a G0Result via json.Marshal and hashes it
 // under "certen:g0:v1". Nil v leaves the slot zero.
 func (b *AccumulateGovRootInputsBuilder) SetG0FromJSON(v interface{}) *AccumulateGovRootInputsBuilder {
-	if v == nil {
+	if isAbsentPayload(v) {
 		return b
 	}
 	bytes, err := CanonicalJSONMarshal(v)
@@ -180,7 +204,7 @@ func (b *AccumulateGovRootInputsBuilder) SetG0FromJSON(v interface{}) *Accumulat
 
 // SetG1FromJSON — same as SetG0FromJSON but under "certen:g1:v1".
 func (b *AccumulateGovRootInputsBuilder) SetG1FromJSON(v interface{}) *AccumulateGovRootInputsBuilder {
-	if v == nil {
+	if isAbsentPayload(v) {
 		return b
 	}
 	bytes, err := CanonicalJSONMarshal(v)
@@ -193,7 +217,7 @@ func (b *AccumulateGovRootInputsBuilder) SetG1FromJSON(v interface{}) *Accumulat
 
 // SetG2FromJSON — same as SetG0FromJSON but under "certen:g2:v1".
 func (b *AccumulateGovRootInputsBuilder) SetG2FromJSON(v interface{}) *AccumulateGovRootInputsBuilder {
-	if v == nil {
+	if isAbsentPayload(v) {
 		return b
 	}
 	bytes, err := CanonicalJSONMarshal(v)

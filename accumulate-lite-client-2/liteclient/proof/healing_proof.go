@@ -60,9 +60,14 @@ type PartitionAnchor struct {
 //
 // It previously carried a CometBFT shape - block hash, raw validator
 // signatures, signed/total voting power - which nothing ever populated and
-// nothing ever read. Because it was always nil, SetL4ConsensusProofFromJSON
-// returned early and L4ConsensusProofH was ZERO in every govRoot ever signed:
-// the chain committed to L1, L2, L3 and G0-G2, but not to L4.
+// nothing ever read. Because it was always nil, no govRoot ever committed to
+// L4: the chain committed to L1, L2, L3 and G0-G2 only.
+//
+// That absent slot was a CONSTANT, not zero. Callers pass a typed
+// *ConsensusProof, and a nil typed pointer is not `v == nil`, so the builder
+// marshalled it to "null" and hashed those four bytes. The zero-on-absent
+// behaviour the rest of this file assumes only became true once
+// isAbsentPayload was introduced in the govRoot builder.
 //
 // It now carries the conclusions of the two stored Layer4 legs. Only the
 // conclusions: the legs themselves hold ~2KB of canonical signed bytes plus the

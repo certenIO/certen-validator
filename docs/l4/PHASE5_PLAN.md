@@ -1,6 +1,7 @@
 # Phase 5 — Bind L4 into the governance root
 
-**Status:** IMPLEMENTED on `feat/l4-govroot-binding`; P5.1-P5.6 green, P5.7 (Sepolia) NOT RUN
+**Status:** MERGED to `main` (`1b9b7fa`); P5.1-P5.6 green, P5.7 (Sepolia) NOT RUN
+**Amended:** 2026-08-24 after audit — see §8. The "zero slot" premise below was wrong.
 **Date:** 2026-08-24
 **Blast radius:** every TX2 on every chain, if botched
 
@@ -8,8 +9,10 @@
 
 ## 0. The one-line summary
 
-`L4ConsensusProofH` is **zero in every govRoot signed today**, so the on-chain
-commitment does not bind L4 at all. Fixing that is a small, purely Go-side
+`L4ConsensusProofH` carries **the same constant in every govRoot signed today**
+— `80743b42e3c74aa9…`, the hash of the four bytes `"null"` — so the on-chain
+commitment does not bind L4 at all. (This section originally claimed the slot
+was *zero*. It is not; see §8 for why and what that changes.) Fixing that is a small, purely Go-side
 change. The danger is not the change — it is that **three other govRoot slots
 have already moved** as a side effect of the L4/G1/G2 correctness work, and a
 mixed-version fleet will revert every TX2.
@@ -22,8 +25,8 @@ Everything below was executed, not read.
 
 | Claim | Method | Result |
 |---|---|---|
-| `L4ConsensusProofH` is zero in production | `ConsensusProof` field has **0 assignments** in `pkg/`; `SetL4ConsensusProofFromJSON(nil)` returns early | confirmed |
-| That zero is pinned as intended behaviour | `v6_1_binding_test.go:254` asserts `nil L4 -> zero` | confirmed |
+| `L4ConsensusProofH` is zero in production | `ConsensusProof` field has **0 assignments** in `pkg/`; `SetL4ConsensusProofFromJSON(nil)` returns early | **WRONG — see §8.** 0 assignments is correct; the early return is not reached, because call sites pass a *typed* nil |
+| That zero is pinned as intended behaviour | `v6_1_binding_test.go:254` asserts `nil L4 -> zero` | confirmed, but it pins an **untyped** nil, which production never passes |
 | The `"nonempty"` literal is NOT in the production path | `ethereum_contracts.go:2478` feeds only the diagnostic log at `:2495`; the real root comes from `SetL4ConsensusProofFromJSON` at `:2467` | **runbook 5.1 concern is a false alarm** |
 | `CanonicalJSONMarshal` differs from `json.Marshal` | read `v6_1_binding.go:332` | **false** - it *is* `json.Marshal` plus nil handling |
 | The contract recomputes govRoot | read the LIVE contracts in `certen-contracts/evm/src` | **partly false, corrected below** - govRoot IS passed as an explicit `bytes32` argument, but only as opaque bytes. `CertenAnchorV8_1.createAnchor` (line 656) derives `bundleId` from the 8 args and reverts on mismatch; it never derives govRoot from the gov fields. |
@@ -325,7 +328,7 @@ deleted rather than translated.
 | P5.3 deterministic | PASS - 20 builds identical |
 | P5.4 order-independent | PASS - 4 orderings, duplicates collapse, case-insensitive |
 | P5.5 mutation changes hash | PASS - 10 mutations, all move the hash |
-| P5.6 govRoot moves | PASS - `70570381...` -> `e23ce107...` |
+| P5.6 govRoot moves | PASS - corrected baseline `d375630f...` -> `e23ce107...` (originally recorded as `70570381...` -> `e23ce107...`; the old side modelled an untyped nil) |
 | guard fails closed | PASS - 10 rejection cases |
 | **live proof** | PASS - real Kermit proof commits `aae1cb5763...`; BVN1 1/1 and Directory 3 signers/threshold 2; both legs bind L2/L3 |
 | **P5.7 Sepolia cycle** | **NOT RUN - this is the deploy gate** |
@@ -333,3 +336,49 @@ deleted rather than translated.
 The govRoot now moves for a second reason (L4), on top of the G0/G1/G2 moves
 already on `main`. The atomic-deploy requirement in §2 is unchanged and still
 applies exactly once.
+
+
+---
+
+## 8. Amendment — the typed-nil defect (found in audit, 2026-08-24)
+
+The premise in §0 and the first row of §1 was wrong, and the error was in the
+method rather than the conclusion.
+
+`SetL4ConsensusProofFromJSON(v interface{})` guarded with `if v == nil`. Every
+call site passes `lc.ConsensusProof`, a typed `*ConsensusProof`. A nil typed
+pointer stored in an interface makes the interface non-nil, so the guard never
+fired: `json.Marshal` produced the four bytes `"null"`, and the slot committed
+`HashL4ConsensusProof("null")` = `80743b42e3c74aa9…` — a constant, not zero.
+
+Verified by driving the real `computeV6_1AccumulateGovRoot` with a pre-Phase-5
+proof shape and validating a replica against its output byte-for-byte:
+
+```
+replica validated against the real production function (roots match)
+ACTUAL L4 slot production committed = 80743b42e3c74aa9e894384a164ce888ae353cf386f7a9cdb58f1c2e8c56a4e8
+ACTUAL G0 slot                      = 35778b96900f82d46e57b8a310d11a163981e03b3fe7566933dfdbc3e3f8dc11
+ACTUAL G1 slot                      = 3c525cbac1b3550606ea5da839810bca579001a185faeba8fc8fbbe8f704e689
+```
+
+**It was never L4-specific.** `G0Result`, `G1Result` and `G2Result` are pointers
+too, so every absent layer committed a constant instead of the documented zero.
+
+**What it does not change.** Signer and submitter run identical code, so they
+agreed and nothing reverted. The govRoot still moves, and the atomic-deploy
+requirement in §2 is unchanged and still applies exactly once.
+
+**What it does change.** The `absent -> zero slot` invariant that
+`HashL4ConsensusProof` documents and that `RequireL4Committed` was written
+against did not hold, so any downstream test of `slot == 0` meaning "absent"
+would have been wrong. And the §3.4 diagnostic fix was incomplete: it guards
+with `if lc.ConsensusProof != nil`, a correct pointer check, so the
+`EVM-GOV-INPUTS` line printed `L4=0000…` while the committed slot was
+`80743b42…` — still divergent in the exact case the log exists to expose.
+
+**Fix.** `isAbsentPayload` (reflect-based) now backs all four JSON setters, so a
+typed nil leaves its slot zero. Pinned by `TestTypedNilPayloadLeavesSlotZero`
+and `TestPresentPayloadHashUnchangedByNilFix` — the latter proving a *present*
+payload hashes exactly as before, so this fix adds **no** further govRoot move
+for any real proof. `TestP5_GovRootMovesVersusZeroL4` now models the true
+`hash("null")` baseline.
