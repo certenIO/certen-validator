@@ -1022,47 +1022,88 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 				Chain:           "main",
 			}
 
-			// Generate G0 proof (Inclusion & Finality)
+			// G0, G1 AND G2 are ALL required. None is optional.
+			//
+			// This block previously logged a warning on every failure and
+			// carried on at whatever level it had reached, leaving
+			// governanceLevel at "G0" or "G1" while the intent was still
+			// signed and submitted. That is the same defect class as the
+			// signature-evidence and outcome-binding bugs: a proof succeeding
+			// with less evidence than the spec requires, with the shortfall
+			// visible only as a warning in a log nobody reads.
+			//
+			// A governance proof that does not bind its outcome is not a
+			// governance proof. Fail the intent instead of attesting to a
+			// weaker claim than the one being made.
+			if govRequest.KeyPage == "" {
+				return nil, fmt.Errorf("governance proof requires a key page: "+
+					"G1/G2 cannot be established without one, and G0 alone is not a governance proof "+
+					"(intent %s)", certenIntent.IntentID)
+			}
+
 			g0ProofWrapper, g0Err := bv.governanceProofGen.GenerateG0(ctx, govRequest)
 			if g0Err != nil {
-				bv.logger.Printf("⚠️ [GOV-PROOF] G0 proof generation failed: %v", g0Err)
-			} else if g0ProofWrapper != nil && g0ProofWrapper.G0 != nil {
-				g0Proof = g0ProofWrapper.G0
-				governanceLevel = "G0"
-				bv.logger.Printf("✅ [GOV-PROOF] G0 proof generated: TXID=%s, ExecMBI=%d, Complete=%v",
-					g0Proof.TXID, g0Proof.ExecMBI, g0Proof.G0ProofComplete)
-
-				if govRequest.KeyPage != "" {
-					g1ProofWrapper, g1Err := bv.governanceProofGen.GenerateG1(ctx, govRequest)
-					if g1Err != nil {
-						bv.logger.Printf("⚠️ [GOV-PROOF] G1 proof generation failed: %v", g1Err)
-					} else if g1ProofWrapper != nil && g1ProofWrapper.G1 != nil {
-						g1Proof = g1ProofWrapper.G1
-						governanceLevel = "G1"
-						bv.logger.Printf("✅ [GOV-PROOF] G1 proof generated: ThresholdSatisfied=%v, UniqueKeys=%d, Complete=%v",
-							g1Proof.ThresholdSatisfied, g1Proof.UniqueValidKeys, g1Proof.G1ProofComplete)
-
-						g2ProofWrapper, g2Err := bv.governanceProofGen.GenerateG2(ctx, govRequest)
-						if g2Err != nil {
-							bv.logger.Printf("⚠️ [GOV-PROOF] G2 proof generation failed: %v", g2Err)
-						} else if g2ProofWrapper != nil && g2ProofWrapper.G2 != nil {
-							g2Proof = g2ProofWrapper.G2
-							governanceLevel = "G2"
-							bv.logger.Printf("✅ [GOV-PROOF] G2 proof generated: PayloadVerified=%v, EffectVerified=%v, Complete=%v",
-								g2Proof.PayloadVerified, g2Proof.EffectVerified, g2Proof.G2ProofComplete)
-						}
-					}
-				} else {
-					bv.logger.Printf("⚠️ [GOV-PROOF] Skipping G1/G2 proofs - no key page specified in governance data")
-				}
+				return nil, fmt.Errorf("G0 governance proof failed for intent %s: %w", certenIntent.IntentID, g0Err)
 			}
+			if g0ProofWrapper == nil || g0ProofWrapper.G0 == nil {
+				return nil, fmt.Errorf("G0 governance proof returned no result for intent %s", certenIntent.IntentID)
+			}
+			g0Proof = g0ProofWrapper.G0
+			if !g0Proof.G0ProofComplete {
+				return nil, fmt.Errorf("G0 governance proof incomplete for intent %s", certenIntent.IntentID)
+			}
+			governanceLevel = "G0"
+			bv.logger.Printf("✅ [GOV-PROOF] G0 proof generated: TXID=%s, ExecMBI=%d, Complete=%v",
+				g0Proof.TXID, g0Proof.ExecMBI, g0Proof.G0ProofComplete)
+
+			g1ProofWrapper, g1Err := bv.governanceProofGen.GenerateG1(ctx, govRequest)
+			if g1Err != nil {
+				return nil, fmt.Errorf("G1 governance proof failed for intent %s: %w", certenIntent.IntentID, g1Err)
+			}
+			if g1ProofWrapper == nil || g1ProofWrapper.G1 == nil {
+				return nil, fmt.Errorf("G1 governance proof returned no result for intent %s", certenIntent.IntentID)
+			}
+			g1Proof = g1ProofWrapper.G1
+			if !g1Proof.G1ProofComplete || !g1Proof.ThresholdSatisfied {
+				return nil, fmt.Errorf("G1 governance proof incomplete for intent %s "+
+					"(complete=%v thresholdSatisfied=%v uniqueKeys=%d)",
+					certenIntent.IntentID, g1Proof.G1ProofComplete, g1Proof.ThresholdSatisfied, g1Proof.UniqueValidKeys)
+			}
+			governanceLevel = "G1"
+			bv.logger.Printf("✅ [GOV-PROOF] G1 proof generated: ThresholdSatisfied=%v, UniqueKeys=%d, Complete=%v",
+				g1Proof.ThresholdSatisfied, g1Proof.UniqueValidKeys, g1Proof.G1ProofComplete)
+
+			g2ProofWrapper, g2Err := bv.governanceProofGen.GenerateG2(ctx, govRequest)
+			if g2Err != nil {
+				return nil, fmt.Errorf("G2 governance proof failed for intent %s: %w", certenIntent.IntentID, g2Err)
+			}
+			if g2ProofWrapper == nil || g2ProofWrapper.G2 == nil {
+				return nil, fmt.Errorf("G2 governance proof returned no result for intent %s", certenIntent.IntentID)
+			}
+			g2Proof = g2ProofWrapper.G2
+			if !g2Proof.G2ProofComplete {
+				return nil, fmt.Errorf("G2 governance proof incomplete for intent %s "+
+					"(payloadVerified=%v effectVerified=%v): the outcome is not bound, so this is a G1 claim "+
+					"and must not be recorded as governance",
+					certenIntent.IntentID, g2Proof.PayloadVerified, g2Proof.EffectVerified)
+			}
+			governanceLevel = "G2"
+			bv.logger.Printf("✅ [GOV-PROOF] G2 proof generated: PayloadVerified=%v, EffectVerified=%v, Complete=%v",
+				g2Proof.PayloadVerified, g2Proof.EffectVerified, g2Proof.G2ProofComplete)
 		} else {
+			// Neither branch may proceed without governance. L1-L4 establishes
+			// that the transaction exists; G0-G2 establishes that it was
+			// authorised and what it did. Attesting with one and not the other
+			// claims more than has been proven.
 			if liteClientProof == nil {
-				bv.logger.Printf("⚠️ [GOV-PROOF] Skipping G0/G1/G2 proofs - L1-L4 proof not available (on_cadence flow)")
+				return nil, fmt.Errorf("cannot generate governance proofs for intent %s: "+
+					"the L1-L4 lite client proof is not available", certenIntent.IntentID)
 			}
 			if bv.governanceProofGen == nil {
-				bv.logger.Printf("⚠️ [GOV-PROOF] Governance proof generator not configured")
+				return nil, fmt.Errorf("cannot generate governance proofs for intent %s: "+
+					"the governance proof generator is not configured", certenIntent.IntentID)
 			}
+			return nil, fmt.Errorf("governance proofs were not generated for intent %s", certenIntent.IntentID)
 		}
 
 		// Plumb governance proofs + authority URLs onto certenProof so the

@@ -90,8 +90,14 @@ type SignatureEvidenceIncomplete struct {
 
 func (e *SignatureEvidenceIncomplete) Error() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "signature evidence incomplete on route %q: %d of %d candidates could not be evaluated",
-		e.Route, len(e.Unavailable), e.Requested)
+	if e.Requested == 0 {
+		// The route failed before it could enumerate candidates at all, so
+		// "n of 0" would be nonsense. Say what actually happened.
+		fmt.Fprintf(&b, "signature evidence incomplete on route %q: the route could not be started", e.Route)
+	} else {
+		fmt.Fprintf(&b, "signature evidence incomplete on route %q: %d of %d candidates could not be evaluated",
+			e.Route, len(e.Unavailable), e.Requested)
+	}
 	for i, u := range e.Unavailable {
 		if i >= 5 {
 			fmt.Fprintf(&b, "; (+%d more)", len(e.Unavailable)-i)
