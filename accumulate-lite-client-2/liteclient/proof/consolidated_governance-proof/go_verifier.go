@@ -58,16 +58,20 @@ func (gv *GoVerifier) VerifyPayloadWithRawJSON(ctx context.Context, txJSON []byt
 	fmt.Printf("[GO_VERIFIER] Verifying payload with raw JSON (%d bytes, expected: %s)\n", len(txJSON), SafeTruncate(expectedTxHash, 16))
 
 	if gv.goVerifyPath == "" {
-		// Return expected hash as computed hash to avoid slice bounds issues
-		// This allows G2 to proceed with effect verification using expected hash
-		return &PayloadVerification{
-			Verified:             false,
-			ComputedTxHash:       expectedTxHash, // Use expected hash instead of empty string
-			ExpectedTxHash:       expectedTxHash,
-			GoVerifierOutput:     "",
-			GoVerifierErrors:     "Go verifier path not configured",
-			VerificationDetails:  map[string]interface{}{"error": "Go verifier not available"},
-		}, nil
+		// This used to return a PayloadVerification with
+		// ComputedTxHash == expectedTxHash. That object was booby-trapped: any
+		// later code comparing the two fields - verifyTransactionEffect does
+		// exactly that - compared a value to itself and passed. It was also
+		// the object the g2_layer bypass keyed on, via a string comparison
+		// against the message below.
+		//
+		// An unconfigured payload verifier is a misconfiguration. It is now
+		// rejected at startup (see RequirePayloadVerifier), and if one ever
+		// reaches here it is a hard error rather than a plausible-looking
+		// result.
+		return nil, fmt.Errorf(
+			"payload verifier is not configured: G2 requires the txhash tool to recompute the " +
+				"canonical transaction hash (section 2.2 forbids treating expanded JSON as evidence)")
 	}
 
 	// Execute Go verifier (txhash tool)

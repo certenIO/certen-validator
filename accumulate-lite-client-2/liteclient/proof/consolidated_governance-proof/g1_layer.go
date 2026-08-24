@@ -290,6 +290,14 @@ func (g1 *G1Layer) parseReceiptData(receiptMap map[string]interface{}) (ReceiptD
 		return ReceiptData{}, ValidationError{Msg: fmt.Sprintf("Invalid localBlock: %d", receipt.LocalBlock)}
 	}
 
+
+	// Capture the merkle path so the receipt can actually be recomputed.
+	entries, err := ParseReceiptEntries(receiptMap)
+	if err != nil {
+		return ReceiptData{}, err
+	}
+	receipt.Entries = entries
+
 	return receipt, nil
 }
 
