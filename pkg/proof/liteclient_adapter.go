@@ -13,6 +13,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"time"
 
@@ -257,6 +258,11 @@ func ChainedProofToCompleteProof(cp *chained_proof.ChainedProof) *lcproof.Comple
 
 	// Create combined receipt from Layer3 BPT receipt (final proof path)
 	complete.CombinedReceipt = convertChainedReceipt(&cp.Layer3.BptReceipt)
+
+	// L4 - the two threshold-signed partition anchors. This is what the
+	// governance root commits to as L4ConsensusProofH; before this, that slot
+	// was zero in every govRoot ever signed.
+	complete.ConsensusProof = BuildL4ConsensusProof(cp.Layer4BVN, cp.Layer4DN)
 
 	log.Printf("[PROOF] ChainedProofToCompleteProof: converted L1-L3 proof data")
 	log.Printf("[PROOF]   AccountHash: %d bytes", len(complete.AccountHash))
@@ -712,10 +718,13 @@ func (a *CertenProofAdapter) ToCertenProof() *CertenProof {
 
 	// Map lite client proof to legacy structure
 	certenProof.LiteClientProof = &LiteClientProofData{
-		CompleteProof:   a.CompleteProof,
-		AccountHash:     a.CompleteProof.AccountHash,
-		BPTRoot:         a.CompleteProof.BPTRoot,
-		BlockHash:       a.CompleteProof.BlockHash,
+		CompleteProof: a.CompleteProof,
+		AccountHash:   a.CompleteProof.AccountHash,
+		BPTRoot:       a.CompleteProof.BPTRoot,
+		BlockHash:     a.CompleteProof.BlockHash,
+		// L4 flows from exactly one origin - ChainedProofToCompleteProof -
+		// so the signer and the EVM submitter cannot disagree about it.
+		ConsensusProof:  a.CompleteProof.ConsensusProof,
 		ProofValid:      true, // If we got here, the proof was generated successfully
 		ValidationLevel: "complete",
 	}
@@ -843,4 +852,105 @@ func (g *LiteClientProofGenerator) GetConsensusState(ctx context.Context) (*Cons
 		BlockHash:   blockHashHex,
 		Timestamp:   time.Now(),
 	}, nil
+}
+
+// BuildL4ConsensusProof reduces the two stored Layer4 legs to the evidence the
+// governance root commits to.
+//
+// Returns nil if either leg is missing, so a proof without full L4 produces a
+// ZERO L4ConsensusProofH rather than a partial one. That is deliberate: a
+// half-populated L4 commitment would be indistinguishable from a complete one
+// downstream. Callers that require L4 must check for the zero hash - see
+// RequireL4Committed.
+func BuildL4ConsensusProof(bvn, dn *chained_proof.Layer4) *lcproof.ConsensusProof {
+	if bvn == nil || dn == nil {
+		return nil
+	}
+	return &lcproof.ConsensusProof{
+		Version: lcproof.L4GovRootVersion,
+		BVN:     summarizeL4Leg(bvn),
+		DN:      summarizeL4Leg(dn),
+	}
+}
+
+func summarizeL4Leg(l *chained_proof.Layer4) lcproof.L4LegSummary {
+	signers := make([]string, 0, len(l.Signatures))
+	for _, s := range l.Signatures {
+		signers = append(signers, strings.ToLower(s.PublicKey))
+	}
+	// Sorted, and de-duplicated: the quorum is a SET of distinct signers, and
+	// the govRoot must commit to that set, not to however many rows the API
+	// returned in whatever order it returned them.
+	sort.Strings(signers)
+	signers = dedupeSorted(signers)
+
+	return lcproof.L4LegSummary{
+		Partition:       l.Partition,
+		SignedHash:      strings.ToLower(l.SignedHash),
+		StateTreeAnchor: strings.ToLower(l.StateTreeAnchor),
+		RootChainAnchor: strings.ToLower(l.RootChainAnchor),
+		MinorBlockIndex: l.MinorBlockIndex,
+		Threshold:       l.Threshold,
+		Signers:         signers,
+	}
+}
+
+func dedupeSorted(in []string) []string {
+	if len(in) < 2 {
+		return in
+	}
+	out := in[:1]
+	for _, v := range in[1:] {
+		if v != out[len(out)-1] {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// RequireL4Committed fails closed if the L4 evidence that must go into the
+// governance root is absent.
+//
+// The govRoot builder's SetL4ConsensusProofFromJSON returns early on nil and
+// leaves L4ConsensusProofH as thirty-two zero bytes. That is indistinguishable
+// downstream from "L4 was computed and happened to hash to zero", so the
+// absence has to be caught here rather than discovered as a silently weaker
+// commitment.
+func RequireL4Committed(p *CertenProof) error {
+	if p == nil || p.LiteClientProof == nil {
+		return fmt.Errorf("no lite client proof: L4 cannot be committed to the governance root")
+	}
+	cp := p.LiteClientProof.ConsensusProof
+	if cp == nil {
+		return fmt.Errorf("L4 evidence missing: the governance root would commit a zero L4 slot, " +
+			"claiming a validator quorum that is not carried in the proof")
+	}
+	if cp.Version == "" {
+		return fmt.Errorf("L4 evidence carries no version tag")
+	}
+	for name, leg := range map[string]*lcproof.L4LegSummary{"bvn": &cp.BVN, "dn": &cp.DN} {
+		if leg.Partition == "" || leg.SignedHash == "" || leg.StateTreeAnchor == "" {
+			return fmt.Errorf("L4 %s leg is incomplete: partition=%q signedHash=%q stateTreeAnchor=%q",
+				name, leg.Partition, SafeTrunc(leg.SignedHash), SafeTrunc(leg.StateTreeAnchor))
+		}
+		if leg.Threshold == 0 {
+			return fmt.Errorf("L4 %s leg has a zero threshold, which no signature set can fail", name)
+		}
+		if uint64(len(leg.Signers)) < leg.Threshold {
+			return fmt.Errorf("L4 %s leg carries %d distinct signers against threshold %d",
+				name, len(leg.Signers), leg.Threshold)
+		}
+	}
+	if cp.BVN.Partition == cp.DN.Partition {
+		return fmt.Errorf("L4 legs are both signed by %q; the BVN->DN hop is not witnessed", cp.BVN.Partition)
+	}
+	return nil
+}
+
+// SafeTrunc shortens a hash for error messages.
+func SafeTrunc(s string) string {
+	if len(s) <= 16 {
+		return s
+	}
+	return s[:16] + "..."
 }

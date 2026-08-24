@@ -1117,6 +1117,19 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 		certenProof.KeypageURL = resolvedKeyPageURL
 		certenProof.KeybookURL = resolvedKeyBookURL
 
+		// L4 must be committed into the governance root before anything is
+		// signed. SetL4ConsensusProofFromJSON silently leaves the slot ZERO on
+		// a nil payload, and a zero L4 slot is exactly what every govRoot
+		// carried before this change - the chain committed to L1-L3 and G0-G2
+		// but not to the validator quorum that signed the anchors.
+		//
+		// Both L4 legs are already mandatory for the proof to exist at all
+		// (ProofVerifier.Verify rejects a nil leg), so reaching here without a
+		// payload means the plumbing broke, not that L4 was unavailable.
+		if err := proof.RequireL4Committed(certenProof); err != nil {
+			return nil, fmt.Errorf("intent %s: %w", certenIntent.IntentID, err)
+		}
+
 		// V6.1 A+++ BLS signing: sign the messageHash that CertenAnchorV6_1
 		// will recompute and verify. Pre-V6.1 this signed []byte(opID),
 		// which is why every TX2 reverted with "BLS signature verification

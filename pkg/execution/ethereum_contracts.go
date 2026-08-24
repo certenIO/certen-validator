@@ -1987,11 +1987,16 @@ func (ecm *EthereumContractManager) extractVotingPower(certenProof *proof.Certen
 			}
 		}
 	}
-	if certenProof.LiteClientProof != nil && certenProof.LiteClientProof.ConsensusProof != nil {
-		if cp := certenProof.LiteClientProof.ConsensusProof; cp.SignedPower > 0 {
-			signed = big.NewInt(cp.SignedPower)
-		}
-	}
+	// A CometBFT-style SignedPower override used to be read from
+	// LiteClientProof.ConsensusProof here. That field was never populated -
+	// ConsensusProof was nil on every proof ever built - so this branch has
+	// never executed, and signed voting power has always come from
+	// VerificationStatus.Details above.
+	//
+	// ConsensusProof now carries L4 threshold-signature evidence instead, which
+	// is NOT voting power: it is a count of distinct validator signers against
+	// a per-partition threshold. Substituting one for the other would be a
+	// category error, so the override is gone rather than remapped.
 
 	// A declared signed power above the registered total is incoherent; clamp rather than
 	// forward a value the chain will reject with a confusing error.
@@ -2474,8 +2479,14 @@ func (ecm *EthereumContractManager) computeV6_1AccumulateGovRoot(
 		if len(lc.BlockHash) >= 32 {
 			copy(l3H[:], lc.BlockHash[:32])
 		}
+		// Diagnostic must show the REAL L4 slot. This previously hashed the
+		// literal bytes "nonempty", so the EVM-GOV-INPUTS line printed an L4
+		// value unrelated to the one in govRoot - in the very log whose purpose
+		// is to make signer/submitter divergence identifiable by comparison.
 		if lc.ConsensusProof != nil {
-			l4H = contracts.HashL4ConsensusProof([]byte("nonempty"))
+			if b, err := json.Marshal(lc.ConsensusProof); err == nil {
+				l4H = contracts.HashL4ConsensusProof(b)
+			}
 		}
 	}
 	var kpH, kbH [32]byte

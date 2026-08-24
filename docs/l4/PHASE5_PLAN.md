@@ -1,6 +1,6 @@
 # Phase 5 — Bind L4 into the governance root
 
-**Status:** Researched, not implemented
+**Status:** IMPLEMENTED on `feat/l4-govroot-binding`; P5.1-P5.6 green, P5.7 (Sepolia) NOT RUN
 **Date:** 2026-08-24
 **Blast radius:** every TX2 on every chain, if botched
 
@@ -263,7 +263,7 @@ if b, err := json.Marshal(lc.ConsensusProof); err == nil {
 | P5.4 | Signer order does not affect the hash | shuffle `Layer4.Signatures`, assert the payload is unchanged |
 | P5.5 | A mutated L4 leg changes the hash | flip `StateTreeAnchor`, assert the hash moves |
 | P5.6 | The govRoot moves vs today | assert new govRoot != old govRoot for the same intent - this is the deploy-gate evidence, not a regression |
-| P5.7 | One full CERTEN cycle succeeds on Sepolia | **e2e, mandatory before fleet deploy** |
+| P5.7 | One full CERTEN cycle succeeds on Sepolia | **e2e, mandatory before fleet deploy - NOT RUN** |
 | P5.8 | Mixed-version divergence is detectable | run old and new binaries over one intent, diff the `EVM-GOV-INPUTS` line; must differ visibly in the L4 slot |
 
 **P5.7 is the gate.** Everything up to P5.6 can pass while the on-chain verify
@@ -289,3 +289,47 @@ The govRoot has already moved for G0/G1/G2 (§1.2). That change is on this
 branch and is not yet deployed. Whether Phase 5 ships *with* it or *after* it,
 the atomic-deploy requirement is the same and applies once. Shipping them
 together costs one window instead of two.
+
+
+---
+
+## 7. Implementation record
+
+Landed on `feat/l4-govroot-binding`.
+
+| Plan item | What was done |
+|---|---|
+| §3.1 payload type | `ConsensusProof` in `healing_proof.go` REPLACED, not extended. Its CometBFT shape (BlockHash / ValidatorSignatures / SignedPower / TotalPower) was fully dead - zero writers - and could not represent two legs. It now carries `Version` + `BVN`/`DN` `L4LegSummary`. |
+| §3.1 sorted signers | `summarizeL4Leg` lowercases, sorts, and de-duplicates. Pinned by `TestP5_SignerOrderDoesNotAffectTheHash` across 4 orderings, duplicates, and mixed case. |
+| §3.2 population | One origin only: `ChainedProofToCompleteProof`. It flows to the signer via `CompleteProof.ConsensusProof` -> `LiteClientProofData.ConsensusProof`. **The 7 signing call sites and the 1 submitter call site were NOT touched**, which is what guarantees they cannot diverge. |
+| §3.3 fail closed | `RequireL4Committed`, called once at the proof-assembly point in `bft_integration.go` beside the G0-G2 requirement. Rejects nil payload, missing leg, no version, zero threshold, signers-below-threshold, and both-legs-same-partition. |
+| §3.4 diagnostic | `ethereum_contracts.go` now hashes the real payload instead of the literal `"nonempty"`. |
+
+### One thing the plan did not anticipate
+
+`ethereum_contracts.go:1991` read `ConsensusProof.SignedPower` as an override for
+signed voting power. A grep for `ConsensusProof.` missed it because the variable
+is named `cp`. The branch had **never executed** (ConsensusProof was always
+nil), so removing it preserves current behaviour exactly - but it would have
+started firing the moment the field was populated. L4 threshold signing is a
+count of distinct signers against a per-partition threshold, not voting power;
+remapping one to the other would have been a category error. The override was
+deleted rather than translated.
+
+### Verification actually run
+
+| # | Result |
+|---|---|
+| P5.1 signer/submitter agree | PASS - byte-identical, non-zero |
+| P5.2 slot non-zero | PASS - and still zero when a leg is genuinely absent |
+| P5.3 deterministic | PASS - 20 builds identical |
+| P5.4 order-independent | PASS - 4 orderings, duplicates collapse, case-insensitive |
+| P5.5 mutation changes hash | PASS - 10 mutations, all move the hash |
+| P5.6 govRoot moves | PASS - `70570381...` -> `e23ce107...` |
+| guard fails closed | PASS - 10 rejection cases |
+| **live proof** | PASS - real Kermit proof commits `aae1cb5763...`; BVN1 1/1 and Directory 3 signers/threshold 2; both legs bind L2/L3 |
+| **P5.7 Sepolia cycle** | **NOT RUN - this is the deploy gate** |
+
+The govRoot now moves for a second reason (L4), on top of the G0/G1/G2 moves
+already on `main`. The atomic-deploy requirement in §2 is unchanged and still
+applies exactly once.
