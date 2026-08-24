@@ -1,0 +1,222 @@
+# Phase 5 — Bind L4 into the governance root
+
+**Status:** Researched, not implemented
+**Date:** 2026-08-24
+**Blast radius:** every TX2 on every chain, if botched
+
+---
+
+## 0. The one-line summary
+
+`L4ConsensusProofH` is **zero in every govRoot signed today**, so the on-chain
+commitment does not bind L4 at all. Fixing that is a small, purely Go-side
+change. The danger is not the change — it is that **three other govRoot slots
+have already moved** as a side effect of the L4/G1/G2 correctness work, and a
+mixed-version fleet will revert every TX2.
+
+---
+
+## 1. What was verified, and how
+
+Everything below was executed, not read.
+
+| Claim | Method | Result |
+|---|---|---|
+| `L4ConsensusProofH` is zero in production | `ConsensusProof` field has **0 assignments** in `pkg/`; `SetL4ConsensusProofFromJSON(nil)` returns early | confirmed |
+| That zero is pinned as intended behaviour | `v6_1_binding_test.go:254` asserts `nil L4 -> zero` | confirmed |
+| The `"nonempty"` literal is NOT in the production path | `ethereum_contracts.go:2478` feeds only the diagnostic log at `:2495`; the real root comes from `SetL4ConsensusProofFromJSON` at `:2467` | **runbook 5.1 concern is a false alarm** |
+| `CanonicalJSONMarshal` differs from `json.Marshal` | read `v6_1_binding.go:332` | **false** - it *is* `json.Marshal` plus nil handling |
+| The contract recomputes govRoot | traced `ComputeEvmMessageHashV6_1_Pre` | **false** - the contract recomputes a 6-field messageHash from an `anchorId` it receives; govRoot is folded into `anchorId` off-chain |
+| My struct additions changed govRoot slots | marshalled the structs with and without the new fields | **true, all three** |
+
+### 1.1 The false alarm
+
+Runbook 5.1 says to "confirm the production path does not share that shortcut".
+It does not. `l4H = HashL4ConsensusProof([]byte("nonempty"))` exists solely to
+populate the `EVM-GOV-INPUTS` diagnostic log line.
+
+That log is nonetheless **actively harmful**: it exists to make signer/submitter
+divergence identifiable by direct comparison, and it prints an L4 value that is
+not the one in the root. Anyone debugging a divergence would be misled. Fix it
+in the same change.
+
+### 1.2 The real danger — already introduced
+
+`CanonicalJSONMarshal` is `json.Marshal`. Struct layout therefore *is* the wire
+format, and any field added to a result struct changes its govRoot slot.
+Three fields were added during phases 4A-4C:
+
+| Field added | Slot it moves | Severity |
+|---|---|---|
+| `ReceiptData.Entries` | **G0CanonicalHash** | worst - no `omitempty`, so it emits `"entries":null` even when nil, moving G0 for **every** proof unconditionally |
+| `G1Result.SignatureRouteStatus` | **G1CanonicalHash** | moves whenever route status is recorded, which is always |
+| `G2Result.OutcomeBinding` | **G2CanonicalHash** | moves whenever G2 runs |
+
+Measured: G0 JSON 287 -> 311 bytes; G1 1165 -> 1274; G2 1736 -> 1899.
+
+**These hashes SHOULD move** - the proofs now carry strictly more evidence, and
+committing to it is the point. But the move must be deployed atomically.
+
+---
+
+## 2. Consequence: the deploy constraint
+
+```
+govRoot ──▶ anchorId ──▶ messageHash ──▶ BLS signature ──▶ contract verify
+```
+
+A validator on new code and a submitter on old code compute different
+`G0CanonicalHash` -> different `govRoot` -> different `anchorId` -> different
+`messageHash` -> **BLS verification fails on-chain and TX2 reverts.**
+
+This is true *today*, before Phase 5, purely from the 4A-4C struct changes.
+
+### Requirement
+
+**All validators and the EVM submitter must upgrade in one atomic step.** There
+is no partial rollout. Options, in order of preference:
+
+1. **Atomic fleet deploy.** Stop all 7 validators, deploy, restart. Simplest;
+   requires a maintenance window with no in-flight intents.
+2. **Version the govRoot computation.** Add an explicit `govRootVersion` to the
+   inputs and a `ComputeAccumulateGovRootV2`. Old nodes keep signing v1, new
+   nodes sign v2, and the submitter selects by version carried on the intent.
+   Safer for a live fleet, materially more work, and adds a permanent branch.
+3. **Freeze the struct layout.** Give the three new fields `json:"-"` so they
+   never enter the hash. Rejected: `Entries` is genuine evidence that *should*
+   be committed to, and `OutcomeBinding` is the entire G2 claim. Excluding them
+   would recreate the defect this work removed - a proof whose commitment is
+   weaker than its content.
+
+Recommendation: **(1)** if a window is available, **(2)** if not. Do not ship
+(3).
+
+---
+
+## 3. The Phase 5 change itself
+
+Small, and the atomicity requirement is satisfied structurally: signer
+(`v6_1_signing.go`, 7 call sites) and submitter (`ethereum_contracts.go:2467`)
+call the **same function on the same field of the same object**. Populate that
+field once and both sides move together.
+
+### 3.1 Replace the L4 payload type
+
+`proof.ConsensusProof` is the old CometBFT shape and nothing writes it:
+
+```go
+type ConsensusProof struct {
+    BlockHash           []byte
+    ValidatorSignatures [][]byte
+    SignedPower         int64
+    TotalPower          int64
+}
+```
+
+It cannot represent the real L4: two legs, per-partition validator sets, per-leg
+thresholds, and the canonical signed bytes. Replace the field's contents with a
+structure derived from the stored `Layer4BVN` + `Layer4DN`.
+
+**Hash exactly what the verifier checks.** Do not hash the whole `Layer4` struct
+- it carries `SequencedMessage` (up to ~2 KB of hex per leg) and the full
+validator set, which are needed to *verify* but bloat the preimage and couple
+the hash to incidental encoding. Hash the conclusions instead:
+
+```go
+// L4GovRootPayload is what the govRoot commits to for L4. Every field is a
+// value the offline verifier independently establishes; nothing here is
+// asserted.
+type L4GovRootPayload struct {
+    Version string `json:"v"` // "certen:l4gov:v1" - explicit, so a later
+                              // change is a visible version bump, not a
+                              // silent hash move
+    BVN struct {
+        Partition       string   `json:"partition"`
+        SignedHash      string   `json:"signedHash"`      // what the quorum signed
+        StateTreeAnchor string   `json:"stateTreeAnchor"` // what it binds
+        RootChainAnchor string   `json:"rootChainAnchor"`
+        MinorBlockIndex uint64   `json:"minorBlockIndex"`
+        Threshold       uint64   `json:"threshold"`
+        Signers         []string `json:"signers"` // SORTED pubkey hex
+    } `json:"bvn"`
+    DN struct { /* identical shape */ } `json:"dn"`
+}
+```
+
+`Signers` **must be sorted**. Signature order is whatever the API returned and
+is not stable across queries; an unsorted list would make the hash
+nondeterministic between two nodes reading the same anchor. This is the single
+easiest way to produce an intermittent, unreproducible TX2 revert.
+
+### 3.2 Populate it where the proof is built
+
+`bft_integration.go`, in the same block that now requires G0-G2, after the
+lite-client proof is available:
+
+```go
+certenProof.LiteClientProof.ConsensusProof = BuildL4GovRootPayload(
+    chainedProof.Layer4BVN, chainedProof.Layer4DN)
+```
+
+Both legs are already mandatory (`ProofVerifier.Verify` rejects a nil leg), so
+the payload can never be half-populated.
+
+### 3.3 Fail closed
+
+`SetL4ConsensusProofFromJSON` silently returns on `nil` and on a marshal error,
+leaving the slot zero. With L4 now mandatory, a zero L4 slot means "we failed to
+commit to evidence we hold" and must be an error, not a default. Either:
+
+- add `SetL4ConsensusProofFromJSONStrict` returning an error, or
+- assert `L4ConsensusProofH != [32]byte{}` at the signing site.
+
+The second is smaller and catches the same failure.
+
+### 3.4 Fix the misleading diagnostic
+
+Replace `ethereum_contracts.go:2478` with the real value:
+
+```go
+if b, err := json.Marshal(lc.ConsensusProof); err == nil {
+    l4H = contracts.HashL4ConsensusProof(b)
+}
+```
+
+---
+
+## 4. Verification plan — nothing ships unverified
+
+| # | Check | Method |
+|---|---|---|
+| P5.1 | Signer and submitter produce byte-identical govRoot | unit test calling both paths with one proof object; assert equality |
+| P5.2 | `L4ConsensusProofH != 0` | assert on a real proof built from live Kermit |
+| P5.3 | The hash is deterministic across repeated builds | build the same proof twice, assert identical payload bytes |
+| P5.4 | Signer order does not affect the hash | shuffle `Layer4.Signatures`, assert the payload is unchanged |
+| P5.5 | A mutated L4 leg changes the hash | flip `StateTreeAnchor`, assert the hash moves |
+| P5.6 | The govRoot moves vs today | assert new govRoot != old govRoot for the same intent - this is the deploy-gate evidence, not a regression |
+| P5.7 | One full CERTEN cycle succeeds on Sepolia | **e2e, mandatory before fleet deploy** |
+| P5.8 | Mixed-version divergence is detectable | run old and new binaries over one intent, diff the `EVM-GOV-INPUTS` line; must differ visibly in the L4 slot |
+
+**P5.7 is the gate.** Everything up to P5.6 can pass while the on-chain verify
+still reverts. It has not been run, and Phase 5 must not ship until it has.
+
+---
+
+## 5. Ordering
+
+1. Fix the misleading diagnostic log (§3.4) - independent, zero risk.
+2. Land `L4GovRootPayload` + population + strict check (§3.1-3.3) behind P5.1-P5.6.
+3. Run P5.7 on Sepolia.
+4. Choose the rollout (§2) and execute it atomically.
+
+Steps 1-2 are safe to land on the branch now; they change no deployed
+behaviour until the fleet is upgraded. **Step 4 is the irreversible one.**
+
+---
+
+## 6. Open question for the operator
+
+The govRoot has already moved for G0/G1/G2 (§1.2). That change is on this
+branch and is not yet deployed. Whether Phase 5 ships *with* it or *after* it,
+the atomic-deploy requirement is the same and applies once. Shipping them
+together costs one window instead of two.
