@@ -30,6 +30,15 @@ type ChainedProof struct {
 	Layer2 Layer2     `json:"layer2"`
 	Layer3 Layer3     `json:"layer3"`
 
+	// L4 binds each partition's stateTreeAnchor to a threshold-signed
+	// validator quorum, using Accumulate's own partition anchors. Both legs
+	// are required for a proof-grade object. They are pointers so a proof
+	// whose L4 legs were never built is structurally distinguishable from
+	// one whose legs were built and verified; a nil leg is NOT "passed" -
+	// ProofVerifier.Verify rejects it.
+	Layer4BVN *Layer4 `json:"layer4Bvn,omitempty"`
+	Layer4DN  *Layer4 `json:"layer4Dn,omitempty"`
+
 	// Optional artifacts (marshaled JSON of query responses) for audit trails.
 	Artifacts map[string][]byte `json:"artifacts,omitempty"`
 }
