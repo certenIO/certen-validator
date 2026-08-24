@@ -9,6 +9,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"strings"
 	"time"
 )
@@ -146,18 +147,22 @@ func (g2 *G2Layer) ProveG2(ctx context.Context, request G2Request) (*G2Result, e
 func (g2 *G2Layer) verifyTransactionPayload(ctx context.Context, g1Result *G1Result) (*PayloadVerification, error) {
 	fmt.Printf("[G2] [PAYLOAD] Starting payload verification\n")
 
-	// Query the full transaction from API to get raw JSON with header and body
-	// This is needed for canonical hash computation
-	rawTxJSON, err := g2.queryRawTransactionJSON(ctx, g1Result)
+	// Query the full transaction from the API to get raw JSON with header and
+	// body, for canonical hash computation.
+	//
+	// A query failure here is an OUTAGE, not a payload that failed to verify.
+	// It used to be folded into a PayloadVerification{Verified:false} with the
+	// message "Transaction query failed", which reads downstream as "the
+	// payload is wrong" - the same invalid-versus-unavailable confusion that
+	// cost nine G1 proofs, one layer up. Observed live during the backfill: a
+	// context deadline on this query reported itself as "payload verification
+	// failed".
+	//
+	// Transient failures are retried; an exhausted retry is returned as an
+	// error so the caller reports an outage rather than a verdict.
+	rawTxJSON, err := g2.queryRawTransactionJSONWithRetry(ctx, g1Result)
 	if err != nil {
-		return &PayloadVerification{
-			Verified:             false,
-			ComputedTxHash:       "",
-			ExpectedTxHash:       g1Result.TxHash,
-			GoVerifierOutput:     "",
-			GoVerifierErrors:     fmt.Sprintf("Transaction query failed: %v", err),
-			VerificationDetails:  map[string]interface{}{"query_error": err.Error()},
-		}, nil
+		return nil, fmt.Errorf("payload evidence unavailable (infrastructure, not a payload rejection): %w", err)
 	}
 
 	// Verify payload using txhash tool
@@ -582,4 +587,37 @@ func outcomeBindingDetails(o *OutcomeBinding, which string) string {
 			which, SafeTruncate(o.OutcomeLeaf, 16), o.MerkleSteps, SafeTruncate(o.ExecWitness, 16), o.Status)
 	}
 	return fmt.Sprintf("%s %s: %s", which, o.State, o.Failure)
+}
+
+// queryRawTransactionJSONWithRetry wraps the payload transaction query with
+// jittered exponential backoff.
+//
+// Only the query is retried. Nothing about the payload's validity is retried:
+// once the JSON is in hand, a hash mismatch is a verdict and is final.
+func (g2 *G2Layer) queryRawTransactionJSONWithRetry(ctx context.Context, g1Result *G1Result) ([]byte, error) {
+	const attempts = 3
+	delay := 250 * time.Millisecond
+	var lastErr error
+
+	for i := 1; i <= attempts; i++ {
+		raw, err := g2.queryRawTransactionJSON(ctx, g1Result)
+		if err == nil {
+			return raw, nil
+		}
+		lastErr = err
+		if i == attempts || ctx.Err() != nil {
+			break
+		}
+		jitter := time.Duration(rand.Int63n(int64(delay/2) + 1))
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("payload query aborted after %d attempts: %v (context: %v)", i, lastErr, ctx.Err())
+		case <-time.After(delay + jitter):
+		}
+		if delay *= 2; delay > 2*time.Second {
+			delay = 2 * time.Second
+		}
+		fmt.Printf("[G2] [PAYLOAD] retry %d/%d after: %v\n", i+1, attempts, err)
+	}
+	return nil, fmt.Errorf("payload query failed after %d attempts: %w", attempts, lastErr)
 }
