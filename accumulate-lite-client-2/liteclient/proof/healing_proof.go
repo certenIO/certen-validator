@@ -13,9 +13,9 @@ import (
 	"log"
 	"strings"
 
-	"gitlab.com/accumulatenetwork/accumulate/pkg/database/merkle"
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/backend"
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/types"
+	"gitlab.com/accumulatenetwork/accumulate/pkg/database/merkle"
 )
 
 // CompleteProof represents a complete cryptographic proof for an account
@@ -39,6 +39,11 @@ type CompleteProof struct {
 	// Partition information
 	Partition string `json:"partition"`
 
+	// L4 - the two threshold-signed partition anchors, reduced to what the
+	// governance root commits to. Nil means L4 was not established, which
+	// yields a ZERO L4ConsensusProofH rather than a partial commitment.
+	ConsensusProof *ConsensusProof `json:"consensus_proof,omitempty"`
+
 	// Verification status
 	Verified bool   `json:"verified"`
 	Error    string `json:"error,omitempty"`
@@ -50,12 +55,53 @@ type PartitionAnchor struct {
 	Partition string          `json:"partition"`
 }
 
-// ConsensusProof represents consensus-level proof data
+// ConsensusProof is the L4 evidence that gets committed into the governance
+// root as L4ConsensusProofH.
+//
+// It previously carried a CometBFT shape - block hash, raw validator
+// signatures, signed/total voting power - which nothing ever populated and
+// nothing ever read. Because it was always nil, SetL4ConsensusProofFromJSON
+// returned early and L4ConsensusProofH was ZERO in every govRoot ever signed:
+// the chain committed to L1, L2, L3 and G0-G2, but not to L4.
+//
+// It now carries the conclusions of the two stored Layer4 legs. Only the
+// conclusions: the legs themselves hold ~2KB of canonical signed bytes plus the
+// full validator set, which a verifier needs but which would couple this hash
+// to incidental encoding. Every field below is a value the offline L4 verifier
+// independently establishes.
 type ConsensusProof struct {
-	BlockHash           []byte   `json:"block_hash"`
-	ValidatorSignatures [][]byte `json:"validator_signatures"`
-	SignedPower         int64    `json:"signed_power"`
-	TotalPower          int64    `json:"total_power"`
+	// Version makes any future change to this shape a visible version bump
+	// rather than a silent govRoot move. Struct layout IS the wire format here
+	// (CanonicalJSONMarshal is json.Marshal), so a field added without bumping
+	// this would shift every govRoot with no signal.
+	Version string `json:"v"`
+
+	BVN L4LegSummary `json:"bvn"`
+	DN  L4LegSummary `json:"dn"`
+}
+
+// L4GovRootVersion is the current L4 payload shape.
+const L4GovRootVersion = "certen:l4gov:v1"
+
+// L4LegSummary is one L4 leg - what a validator quorum signed, and what that
+// signature binds.
+type L4LegSummary struct {
+	Partition       string `json:"partition"`       // BVN1 | Directory
+	SignedHash      string `json:"signedHash"`      // what the quorum actually signed
+	StateTreeAnchor string `json:"stateTreeAnchor"` // the state root it binds
+	RootChainAnchor string `json:"rootChainAnchor"`
+	MinorBlockIndex uint64 `json:"minorBlockIndex"`
+	Threshold       uint64 `json:"threshold"` // distinct signers required
+
+	// Signers is the set of public keys that signed, SORTED.
+	//
+	// Sorting is load-bearing, not cosmetic. Signature order is whatever the
+	// API happened to return and is not stable between two queries for the
+	// same anchor. An unsorted list would make this hash differ between two
+	// validators reading identical chain data - producing an intermittent,
+	// unreproducible TX2 revert, which is close to the worst failure mode
+	// available here.
+	Signers []string `json:"signers"`
 }
 
 // HealingProofGenerator generates healing proofs for lite client
