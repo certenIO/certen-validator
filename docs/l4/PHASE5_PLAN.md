@@ -26,7 +26,9 @@ Everything below was executed, not read.
 | That zero is pinned as intended behaviour | `v6_1_binding_test.go:254` asserts `nil L4 -> zero` | confirmed |
 | The `"nonempty"` literal is NOT in the production path | `ethereum_contracts.go:2478` feeds only the diagnostic log at `:2495`; the real root comes from `SetL4ConsensusProofFromJSON` at `:2467` | **runbook 5.1 concern is a false alarm** |
 | `CanonicalJSONMarshal` differs from `json.Marshal` | read `v6_1_binding.go:332` | **false** - it *is* `json.Marshal` plus nil handling |
-| The contract recomputes govRoot | traced `ComputeEvmMessageHashV6_1_Pre` | **false** - the contract recomputes a 6-field messageHash from an `anchorId` it receives; govRoot is folded into `anchorId` off-chain |
+| The contract recomputes govRoot | read `CreateAnchorOnChain` / `CreateAnchorV6_1` | **partly false, corrected below** - govRoot IS passed to the contract as an explicit `bytes32` argument, but only as opaque bytes: the contract recomputes `bundleId` from the 8 args and reverts on mismatch. It never derives govRoot from the gov fields. |
+| Only the validator binary computes govRoot | `grep certen:g0:v1` inside every running container | confirmed - present in `/app/validator`, absent from `proof-service`; `api-bridge` is Node/TS |
+| All 7 validators run the same code | `sha256sum /app/validator` in all 7 containers | confirmed identical: `009c0210f0eb...` (the 3 differing image IDs are per-service tags over the same binary) |
 | My struct additions changed govRoot slots | marshalled the structs with and without the new fields | **true, all three** |
 
 ### 1.1 The false alarm
@@ -62,19 +64,44 @@ committing to it is the point. But the move must be deployed atomically.
 ## 2. Consequence: the deploy constraint
 
 ```
-govRoot ──▶ anchorId ──▶ messageHash ──▶ BLS signature ──▶ contract verify
+govRoot ──▶ bundleId(anchorId) ──▶ messageHash ──▶ BLS signature
+                 │                                       │
+                 └──── passed as calldata ───────────────┴──▶ contract:
+                        require(bundleId == deriveV6_1BundleID(8 args))
+                        + BLS verify over recomputed messageHash
 ```
 
-A validator on new code and a submitter on old code compute different
-`G0CanonicalHash` -> different `govRoot` -> different `anchorId` -> different
-`messageHash` -> **BLS verification fails on-chain and TX2 reverts.**
+`CreateAnchorV6_1` takes `governanceRoot [32]byte` as an explicit argument, so
+govRoot does reach the chain - but only as opaque bytes. The contract checks
+that the `bundleId` it was handed matches a re-derivation from the 8 arguments
+it was handed. **It has no opinion on how govRoot was computed.**
+
+The failure mode is therefore not a contract mismatch, it is a signer/submitter
+mismatch:
+
+- validators SIGN `messageHash` derived from *their* `govRoot -> bundleId`
+- the elected submitter builds calldata from *its* `govRoot -> bundleId`
+- if those differ, the aggregated BLS signature does not verify against the
+  messageHash the contract recomputes, and **TX2 reverts**
 
 This is true *today*, before Phase 5, purely from the 4A-4C struct changes.
 
+### What actually has to be redeployed
+
+| Component | Redeploy? | Why |
+|---|---|---|
+| **`certen-validator-1..7`** | **YES, all seven, atomically** | `/app/validator` is the only binary that computes govRoot. It contains BOTH `pkg/consensus` (BLS signer) and `pkg/execution` (EVM submitter), so one image covers both roles - but the submitter is an *elected* node, and it must not be running different code from the signers. |
+| **Smart contracts** (`CertenAnchorV6_1`) | **NO** | govRoot crosses the ABI as opaque `bytes32`. Changing how it is computed changes the value, not the ABI or the contract logic. No Solidity change, no redeploy, no address change. |
+| `api-bridge` | NO | Node/TypeScript; computes no govRoot. |
+| `certen-proof-service` | NO | verified: no `certen:g0:v1` / `certen:bls:v1:pre` domain tags in its binary. |
+
+So the answer to "do we need to update the validator nodes, or redeploy
+contracts?" is: **validator nodes only, and all seven together.**
+
 ### Requirement
 
-**All validators and the EVM submitter must upgrade in one atomic step.** There
-is no partial rollout. Options, in order of preference:
+**All seven validators must upgrade in one atomic step.** There is no partial
+rollout. Options, in order of preference:
 
 1. **Atomic fleet deploy.** Stop all 7 validators, deploy, restart. Simplest;
    requires a maintenance window with no in-flight intents.
@@ -90,6 +117,34 @@ is no partial rollout. Options, in order of preference:
 
 Recommendation: **(1)** if a window is available, **(2)** if not. Do not ship
 (3).
+
+### Concrete procedure for option (1)
+
+Preconditions, each verified before touching anything:
+
+1. `P5.7` (Sepolia cycle) green on the new binary.
+2. No intents in flight: `SELECT count(*) FROM certen_intents WHERE status NOT
+   IN ('completed','failed');` returns 0.
+3. New binary built once and its sha256 recorded, so all seven can be checked
+   to be identical afterwards - today they are `009c0210f0eb...`.
+
+Then:
+
+```
+# stop all seven together, so no node signs with one version while
+# another submits with the other
+docker compose stop certen-validator-{1..7}
+# deploy the new image, start all seven
+docker compose up -d certen-validator-{1..7}
+# verify homogeneity BEFORE releasing traffic
+for i in $(seq 1 7); do docker exec certen-validator-$i sha256sum /app/validator; done | sort -u | wc -l   # MUST be 1
+# verify the payload verifier survived the rebuild (4B deploy assert)
+for i in $(seq 1 7); do docker exec certen-validator-$i sh -c 'test -x /app/txhash || echo MISSING'; done
+```
+
+Rollback is the same procedure with the previous image. Because the govRoot
+change is deterministic and stateless, rolling back restores the old hashes
+exactly; no data migration is involved either way.
 
 ---
 
