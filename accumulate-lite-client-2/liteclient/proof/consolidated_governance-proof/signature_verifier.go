@@ -267,7 +267,7 @@ func (sv *SignatureVerifier) ValidateSignature(ctx context.Context, sig Validate
 
 // ValidateSignatureSet validates a complete set of signatures for authorization
 // Direct translation of Python evaluate_authorization logic
-func (sv *SignatureVerifier) ValidateSignatureSet(ctx context.Context, signatures []ValidatedSignature, snapshot AuthoritySnapshot, txHash string) (*AuthorizationResult, error) {
+func (sv *SignatureVerifier) ValidateSignatureSet(ctx context.Context, signatures []ValidatedSignature, snapshot AuthoritySnapshot, txHash string, executionVerified bool) (*AuthorizationResult, error) {
 	fmt.Printf("[SIGNATURE] [DEBUG] ValidateSignatureSet: Received %d signatures to validate\n", len(signatures))
 	fmt.Printf("[SIGNATURE] [DEBUG] Authority state: version=%d, threshold=%d, keys=%d\n", snapshot.StateExec.Version, snapshot.StateExec.Threshold, len(snapshot.StateExec.Keys))
 
@@ -275,41 +275,80 @@ func (sv *SignatureVerifier) ValidateSignatureSet(ctx context.Context, signature
 	validSignatures := make([]ValidatedSignature, 0)
 	uniqueKeyHashes := make(map[string]bool)
 
-	// Validate each signature
+	// Validate each signature.
+	//
+	// These two failure paths used to be `continue`, and the threshold was
+	// then computed over whatever survived. That is the same defect that
+	// recorded nine healthy proofs as governance failures: an infrastructure
+	// error and a genuinely invalid signature were dropped identically.
+	//
+	// Every signature reaching this function has already been fully validated
+	// and counted by a signature route, so a failure here is not a routine
+	// rejection - it is either an inconsistency between the two validations or
+	// an outage. Both fail closed, and they fail closed DIFFERENTLY so an
+	// outage is never recorded as an unmet threshold.
+	var unavailable []UnavailableSignature
 	for i, sig := range signatures {
 		fmt.Printf("[SIGNATURE] [DEBUG] Processing signature %d/%d: %s\n", i+1, len(signatures), SafeTruncate(sig.MessageHash, 16))
+
 		if err := sv.ValidateSignature(ctx, sig, state, txHash); err != nil {
-			// Log validation failure but continue (non-fatal for individual signatures)
-			fmt.Printf("[SIGNATURE] [FAIL] Signature %s validation failed: %v\n", sig.MessageHash[:16], err)
-			continue
+			if isInfrastructureDigestFailure(err) {
+				unavailable = append(unavailable, UnavailableSignature{
+					MessageID: sig.MessageID, Stage: "revalidate-signature", Err: err.Error(),
+				})
+				continue
+			}
+			return nil, ValidationError{Msg: fmt.Sprintf(
+				"signature %s passed route validation but failed re-validation: %v -- "+
+					"refusing to compute a threshold over an inconsistent set",
+				SafeTruncate(sig.MessageHash, 16), err)}
 		}
 
-		// Compute key hash for uniqueness tracking
 		keyHash, err := sv.ComputeKeyHash(sig.Signature.PublicKey)
 		if err != nil {
-			fmt.Printf("[SIGNATURE] [FAIL] Failed to compute key hash for %s: %v\n", sig.MessageHash[:16], err)
+			// Cannot compute the key hash, so cannot establish uniqueness.
+			// Dropping this signature would understate the signer count.
+			unavailable = append(unavailable, UnavailableSignature{
+				MessageID: sig.MessageID, Stage: "compute-key-hash", Err: err.Error(),
+			})
 			continue
 		}
 
-		// All validations passed
 		validSignatures = append(validSignatures, sig)
 		uniqueKeyHashes[keyHash] = true
 		fmt.Printf("[SIGNATURE] [OK] Signature verified: %s (key: %s)\n", sig.MessageHash[:16], keyHash[:16])
 	}
 
-	// Check threshold satisfaction
+	if len(unavailable) > 0 {
+		return nil, &SignatureEvidenceIncomplete{
+			Route:       "authorization",
+			Requested:   len(signatures),
+			Evaluated:   len(signatures) - len(unavailable),
+			Unavailable: unavailable,
+		}
+	}
+
+	// Check threshold satisfaction.
 	uniqueValidKeys := len(uniqueKeyHashes)
 	thresholdSatisfied := uint64(uniqueValidKeys) >= state.Threshold
-	executionSuccess := true // Transaction exists on principal#main
-	timingValid := true
 
-	// Check timing for all valid signatures
+	// Timing starts FALSE and is earned. It previously started true and could
+	// only be falsified by a signature in validSignatures, so an empty set
+	// left it true - "never checked" reading as "checked and passed".
+	timingValid := len(validSignatures) > 0
 	for _, sig := range validSignatures {
 		if !sig.TimingVerified {
 			timingValid = false
 			break
 		}
 	}
+
+	// Execution success is G0's claim, not something this function can assert.
+	// It was hardcoded `true` with the comment "Transaction exists on
+	// principal#main" - a boolean defaulting to true, asserting a fact this
+	// function never checked. It is now supplied by the caller from the G0
+	// result that actually proved execution inclusion.
+	executionSuccess := executionVerified
 
 	fmt.Printf("[SIGNATURE] [STATS] Authorization evaluation complete:\n")
 	fmt.Printf("[SIGNATURE]   Valid signatures: %d\n", len(validSignatures))
@@ -333,7 +372,15 @@ func (sv *SignatureVerifier) ValidateSignatureSet(ctx context.Context, signature
 		ThresholdSatisfied:  thresholdSatisfied,
 		ExecutionSuccess:    executionSuccess,
 		TimingValid:         timingValid,
-		G1ProofComplete:     true,
+		// G1 completion is the conjunction of what was actually established,
+		// not a literal. It was hardcoded `true`, so a result could report
+		// G1ProofComplete while carrying TimingValid=false.
+		G1ProofComplete: thresholdSatisfied && timingValid && executionSuccess,
+	}
+	if !result.G1ProofComplete {
+		return nil, ValidationError{Msg: fmt.Sprintf(
+			"G1 incomplete: thresholdSatisfied=%t timingValid=%t executionSuccess=%t",
+			thresholdSatisfied, timingValid, executionSuccess)}
 	}
 
 	return result, nil

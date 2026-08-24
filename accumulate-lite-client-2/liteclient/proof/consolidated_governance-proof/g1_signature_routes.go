@@ -462,14 +462,37 @@ func (g1 *G1Layer) evaluateCandidate(ctx context.Context, cand sigCandidate, key
 	return evalResult{Outcome: SigCounted, Validated: validated, Stage: "counted"}
 }
 
-// isNotASignatureMessage reports whether an extraction error means the message
-// simply is not an ed25519 signature, as opposed to the extraction failing.
+// isNotASignatureMessage reports whether an extraction error means the entry
+// simply is not an ed25519 signature over a transaction, as opposed to the
+// extraction itself failing.
+//
+// A key page's P#signature chain legitimately carries several message kinds -
+// signatureRequest, creditPayment, authority signatures, and so on. Those are
+// not validator-style ed25519 votes and are a correct REJECTION, not an
+// outage. Verified live on Kermit: enumerating
+// acc://carp-buyer-62431.acme/book/1 yields an entry of type "authority",
+// which produced "Not an ed25519 signature (type: authority)".
+//
+// The strings below are matched against the exact messages
+// ExtractSignatureFromMessageResult produces (signature_verifier.go:401-439).
+// Getting this wrong is the same defect class this package exists to close,
+// just pointed the other way: it turns a routine rejection into a fake outage,
+// which then costs the cross-check and burns retries on a permanent condition.
 func isNotASignatureMessage(err error) bool {
 	s := strings.ToLower(err.Error())
-	return strings.Contains(s, "not a signature") ||
-		strings.Contains(s, "missing signature") ||
-		strings.Contains(s, "unsupported signature type") ||
-		strings.Contains(s, "no signature object")
+	switch {
+	case strings.Contains(s, "not a signature message"): // wrong message type
+		return true
+	case strings.Contains(s, "not an ed25519 signature"): // wrong signature type
+		return true
+	case strings.Contains(s, "missing message.signature"): // no signature payload
+		return true
+	case strings.Contains(s, "signature.type missing"):
+		return true
+	case strings.Contains(s, "signature is not an object"):
+		return true
+	}
+	return false
 }
 
 // isInfrastructureDigestFailure reports whether a ValidateSignature error came
