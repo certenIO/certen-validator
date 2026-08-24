@@ -26,7 +26,10 @@ Everything below was executed, not read.
 | That zero is pinned as intended behaviour | `v6_1_binding_test.go:254` asserts `nil L4 -> zero` | confirmed |
 | The `"nonempty"` literal is NOT in the production path | `ethereum_contracts.go:2478` feeds only the diagnostic log at `:2495`; the real root comes from `SetL4ConsensusProofFromJSON` at `:2467` | **runbook 5.1 concern is a false alarm** |
 | `CanonicalJSONMarshal` differs from `json.Marshal` | read `v6_1_binding.go:332` | **false** - it *is* `json.Marshal` plus nil handling |
-| The contract recomputes govRoot | read `CreateAnchorOnChain` / `CreateAnchorV6_1` | **partly false, corrected below** - govRoot IS passed to the contract as an explicit `bytes32` argument, but only as opaque bytes: the contract recomputes `bundleId` from the 8 args and reverts on mismatch. It never derives govRoot from the gov fields. |
+| The contract recomputes govRoot | read the LIVE contracts in `certen-contracts/evm/src` | **partly false, corrected below** - govRoot IS passed as an explicit `bytes32` argument, but only as opaque bytes. `CertenAnchorV8_1.createAnchor` (line 656) derives `bundleId` from the 8 args and reverts on mismatch; it never derives govRoot from the gov fields. |
+| The Go shim matches the live contract | compared ABI method + domain tag | confirmed - Go packs `createAnchor` with 8 args under `"certen:bundleid:v1.1"`, byte-identical to `CertenAnchorV8_1.sol:657`. The `V6_1` in Go identifiers is legacy naming for a shape V8_1 retains. |
+| The account contract gates on governance | `grep governanceRoot\|g2Hash\|governanceLevel` in `CertenAccountV7.sol` + `CertenAccountFactoryV9.sol` | **zero hits** - the account contracts have no governance references at all; the "CertenAccountV8 value-operation check" in L4_DESIGN is proposed, not shipped |
+| `BLSZKVerifierV2` sees govRoot | read `BLSZKVerifierV2.sol` | **no** - it binds `messageHash` only |
 | Only the validator binary computes govRoot | `grep certen:g0:v1` inside every running container | confirmed - present in `/app/validator`, absent from `proof-service`; `api-bridge` is Node/TS |
 | All 7 validators run the same code | `sha256sum /app/validator` in all 7 containers | confirmed identical: `009c0210f0eb...` (the 3 differing image IDs are per-service tags over the same binary) |
 | My struct additions changed govRoot slots | marshalled the structs with and without the new fields | **true, all three** |
@@ -71,10 +74,21 @@ govRoot ──▶ bundleId(anchorId) ──▶ messageHash ──▶ BLS signatu
                         + BLS verify over recomputed messageHash
 ```
 
-`CreateAnchorV6_1` takes `governanceRoot [32]byte` as an explicit argument, so
-govRoot does reach the chain - but only as opaque bytes. The contract checks
-that the `bundleId` it was handed matches a re-derivation from the 8 arguments
-it was handed. **It has no opinion on how govRoot was computed.**
+`CertenAnchorV8_1.createAnchor` takes `bytes32 governanceRoot` as an explicit
+argument, so govRoot does reach the chain - but only as opaque bytes:
+
+```solidity
+bytes32 derivedBundleId = keccak256(abi.encodePacked(
+    "certen:bundleid:v1.1", DEPLOYMENT_CHAIN_ID, adiURLHash,
+    operationCommitment, crossChainCommitment, governanceRoot,
+    executionCommitment, operationID, accumulateBlockHeight));
+if (!(bundleId == derivedBundleId)) revert BundleIdMustDeriveFromCommitmentsOpID();
+```
+
+The contract checks that the `bundleId` it was handed matches a re-derivation
+from the 8 arguments it was handed. **It has no opinion on how govRoot was
+computed.** Elsewhere it only ever wraps the value
+(`keccak256("certen:gov:", governanceRoot)`) for a merkle leaf.
 
 The failure mode is therefore not a contract mismatch, it is a signer/submitter
 mismatch:
@@ -91,7 +105,7 @@ This is true *today*, before Phase 5, purely from the 4A-4C struct changes.
 | Component | Redeploy? | Why |
 |---|---|---|
 | **`certen-validator-1..7`** | **YES, all seven, atomically** | `/app/validator` is the only binary that computes govRoot. It contains BOTH `pkg/consensus` (BLS signer) and `pkg/execution` (EVM submitter), so one image covers both roles - but the submitter is an *elected* node, and it must not be running different code from the signers. |
-| **Smart contracts** (`CertenAnchorV6_1`) | **NO** | govRoot crosses the ABI as opaque `bytes32`. Changing how it is computed changes the value, not the ABI or the contract logic. No Solidity change, no redeploy, no address change. |
+| **Smart contracts** | **NO** | Verified against the four live contracts, not the legacy ones: `CertenAnchorV8_1` takes govRoot as opaque `bytes32`, stores it, merkles it and compares it, but never derives it; `CertenAccountV7` and `CertenAccountFactoryV9` contain **no** governance references whatsoever; `BLSZKVerifierV2` binds `messageHash` only. Changing how govRoot is computed changes the VALUE, not the ABI, the contract logic, or any address. No Solidity change, no redeploy. |
 | `api-bridge` | NO | Node/TypeScript; computes no govRoot. |
 | `certen-proof-service` | NO | verified: no `certen:g0:v1` / `certen:bls:v1:pre` domain tags in its binary. |
 
