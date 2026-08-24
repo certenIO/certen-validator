@@ -104,19 +104,21 @@ func (g1 *G1Layer) ProveG1(ctx context.Context, request G1Request) (*G1Result, e
 		}
 	}()
 
-	// Goroutine 2: Get signature count for parallel enumeration planning
+	// Goroutine 2: pre-read the KEY PAGE's P#signature chain length.
+	//
+	// This used to count the ADI ROOT's signature chain, because
+	// extractPrincipal strips the key page path. That is a different account:
+	// verified live, acc://<adi>.acme carries 3 entries while
+	// acc://<adi>.acme/book/1 carries the 9 that include the ed25519
+	// signatures. The count then fed "enumeration planning" that never ran.
+	// It now reads the key page, and enumeration actually happens - see
+	// collectViaEnumeration.
 	go func() {
-		fmt.Printf("[G1] [GOROUTINE-2] Starting signature chain enumeration...\n")
-		principal, err := g1.extractPrincipal(request.KeyPage)
-		if err != nil {
-			sigChan <- signatureResult{count: 0, err: err}
-			return
-		}
-
-		count, err := g1.getSignatureChainCount(ctx, principal)
+		fmt.Printf("[G1] [GOROUTINE-2] Reading key page P#signature chain length...\n")
+		count, err := g1.signatureChainCount(ctx, request.KeyPage)
 		sigChan <- signatureResult{count: count, err: err}
 		if err == nil {
-			fmt.Printf("[G1] [GOROUTINE-2] Signature enumeration completed: %d signatures found\n", count)
+			fmt.Printf("[G1] [GOROUTINE-2] Key page P#signature chain: %d entries\n", count)
 		}
 	}()
 
@@ -139,9 +141,20 @@ func (g1 *G1Layer) ProveG1(ctx context.Context, request G1Request) (*G1Result, e
 	fmt.Printf("[G1] [CONCURRENT] Both operations completed successfully in %v - proceeding with validation\n", concurrentDuration)
 	fmt.Printf("[G1] [PERFORMANCE] Concurrent execution saved significant time vs sequential processing\n")
 
-	// Step 3: Complete signature validation with authority snapshot
-	validatedSignatures, err := g1.enumerateAndValidateSignatures(ctx, request, *authoritySnapshot, g0Result.TxHash)
+	// Step 3: Complete signature validation with authority snapshot.
+	//
+	// An evidence outage is returned as-is, not wrapped, so the caller can tell
+	// "we could not evaluate the signatures" apart from "the signatures do not
+	// authorise this transaction". Conflating the two is what recorded nine
+	// healthy proofs as governance failures.
+	validatedSignatures, routeStatus, err := g1.enumerateAndValidateSignatures(ctx, request, *authoritySnapshot, g0Result.TxHash)
 	if err != nil {
+		if inc, ok := IsEvidenceIncomplete(err); ok {
+			return nil, inc
+		}
+		if dis, ok := err.(*RouteDisagreement); ok {
+			return nil, dis
+		}
 		return nil, fmt.Errorf("signature validation failed: %v", err)
 	}
 
@@ -162,6 +175,7 @@ func (g1 *G1Layer) ProveG1(ctx context.Context, request G1Request) (*G1Result, e
 		ExecutionSuccess:      authorizationResult.ExecutionSuccess,
 		TimingValid:           authorizationResult.TimingValid,
 		G1ProofComplete:       authorizationResult.G1ProofComplete,
+		SignatureRouteStatus:  routeStatus,
 	}
 
 	fmt.Printf("[G1] G1 proof complete:\n")
@@ -174,51 +188,60 @@ func (g1 *G1Layer) ProveG1(ctx context.Context, request G1Request) (*G1Result, e
 	return result, nil
 }
 
-// enumerateAndValidateSignatures extracts and validates signatures from transaction
-// FIXED: Use direct signature set extraction using message ID
-func (g1 *G1Layer) enumerateAndValidateSignatures(ctx context.Context, request G1Request, snapshot AuthoritySnapshot, txHash string) ([]ValidatedSignature, error) {
-	fmt.Printf("[G1] [SIGNATURE-EXTRACT] Extracting signatures from transaction...\n")
+// enumerateAndValidateSignatures collects the transaction's counted signatures
+// via BOTH independent routes and requires them to agree.
+//
+// Previously this tried the signatureSet route and, on ANY failure, fell back
+// to validateSignaturesDirectFromTransaction - a stub that returned
+// `[]ValidatedSignature{}, nil`. A nil error, so callers saw success with zero
+// signatures, and the threshold was then evaluated over nothing. Four distinct
+// extraction failures reached that stub, and the error that caused them was
+// discarded at the call site.
+//
+// Now: both routes run, an unavailable route is distinguished from a route
+// that legitimately found nothing, and disagreement fails closed.
+func (g1 *G1Layer) enumerateAndValidateSignatures(ctx context.Context, request G1Request,
+	snapshot AuthoritySnapshot, txHash string) ([]ValidatedSignature, *RouteStatus, error) {
 
-	// Step 1: Try to extract signature set using the transaction message ID
-	// Use the message ID format that includes the hash + scope
+	fmt.Printf("[G1] [EVIDENCE] Collecting signature evidence via both routes...\n")
+
+	// --- route 1: the transaction's signatureSet for this key page --------
+	var setEv *SignatureEvidence
 	txMessageID := fmt.Sprintf("acc://%s@%s", txHash, request.G0Request.Account)
-	sigData, err := g1.ExtractSignatureSetUsingMessageID(ctx, txMessageID, request.KeyPage)
-	if err != nil {
-		// If signatureSet extraction fails, create empty sigData to allow fallback
-		fmt.Printf("[G1] [SIGNATURE-EXTRACT] SignatureSet extraction failed: %v - using fallback\n", err)
-		sigData = &SignatureSetData{
-			TxScope:        txMessageID,
-			KeyPage:        request.KeyPage,
-			SignatureCount: 0,
-			MessageIDs:     []string{},
+	sigData, setErr := g1.ExtractSignatureSetUsingMessageID(ctx, txMessageID, request.KeyPage)
+	if setErr != nil {
+		// The extraction error is no longer discarded. It is an outage until
+		// proven otherwise, and it is reported.
+		setErr = &SignatureEvidenceIncomplete{
+			Route:     routeSignatureSet,
+			Requested: 0,
+			Unavailable: []UnavailableSignature{{
+				MessageID: txMessageID, Stage: "extract-signature-set", Err: setErr.Error(),
+			}},
 		}
-	}
-
-	fmt.Printf("[G1] [VALIDATING] %d signatures from transaction...\n", len(sigData.MessageIDs))
-
-	// Step 2: Process signatures - handle both signatureSet and direct extraction
-	if len(sigData.MessageIDs) > 0 {
-		// Use signatureSet message IDs (preferred approach)
-		fmt.Printf("[G1] [VALIDATING] %d signatures from transaction...\n", len(sigData.MessageIDs))
-		validatedSignatures, err := g1.validateSignaturesFromTransaction(ctx, sigData, snapshot, txHash)
-		if err != nil {
-			return nil, fmt.Errorf("signature validation failed: %v", err)
-		}
-		fmt.Printf("[G1] [VALIDATING] Found %d validated signatures from transaction\n", len(validatedSignatures))
-		return validatedSignatures, nil
 	} else {
-		// Fallback: Try to extract signatures directly from transaction data
-		fmt.Printf("[G1] [TRANSACTION-DIRECT] Extracting signatures directly from transaction data (fallback)\n")
-		validatedSignatures, err := g1.validateSignaturesDirectFromTransaction(ctx, snapshot, txHash)
-		if err != nil {
-			return nil, fmt.Errorf("direct signature extraction failed: %v", err)
-		}
-		fmt.Printf("[G1] [VALIDATING] Found %d validated signatures from transaction\n", len(validatedSignatures))
-		return validatedSignatures, nil
+		setEv, setErr = g1.collectViaSignatureSet(ctx, sigData, snapshot, txHash)
 	}
 
-	fmt.Printf("[G1] [SIGNATURES] Found %d validated signatures\n", 0)
-	return []ValidatedSignature{}, nil
+	// --- route 2: enumeration of the key page's P#signature chain ---------
+	enumEv, enumErr := g1.collectViaEnumeration(ctx, request.KeyPage, snapshot, txHash)
+
+	evidence, status, err := ResolveRoutes(nil, setErr, setEv, enumEv, enumErr)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	fmt.Printf("[G1] [EVIDENCE] primary=%s agreed=%t degraded=%t counted=%d rejected=%d candidates=%d\n",
+		status.PrimaryRoute, status.RoutesAgreed, status.Degraded,
+		len(evidence.Counted), len(evidence.Rejected), evidence.Candidates)
+	if status.Degraded {
+		fmt.Printf("[G1] [EVIDENCE] [DEGRADED] %s\n", status.DegradedReason)
+	}
+	for _, r := range evidence.Rejected {
+		fmt.Printf("[G1] [EVIDENCE] rejected %s: %s\n", SafeTruncate(r.MessageID, 40), r.Reason)
+	}
+
+	return evidence.Counted, status, nil
 }
 
 // getSignatureChainCount gets the total count of P#signature entries
@@ -757,18 +780,6 @@ func (g1 *G1Layer) ExtractSignatureSetUsingMessageID(ctx context.Context, messag
 	}
 
 	return signatureSetData, nil
-}
-
-// validateSignaturesDirectFromTransaction extracts signatures directly from transaction (fallback approach)
-func (g1 *G1Layer) validateSignaturesDirectFromTransaction(ctx context.Context, snapshot AuthoritySnapshot, txHash string) ([]ValidatedSignature, error) {
-	// This is the fallback approach that the working implementation uses
-	// Extract signatures directly from the stored transaction data without using signatureSets
-	fmt.Printf("[G1] [TRANSACTION-DIRECT] Using direct signature extraction fallback\n")
-
-	// For now, return empty signatures to let the system continue
-	// This should be implemented to match the working approach
-	fmt.Printf("[G1] [TRANSACTION-DIRECT] Direct extraction not yet implemented - returning empty\n")
-	return []ValidatedSignature{}, nil
 }
 
 // extractPrincipal extracts principal from key page URL

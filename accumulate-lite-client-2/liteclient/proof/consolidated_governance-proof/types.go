@@ -312,6 +312,12 @@ type G1Result struct {
 	Ed25519Verified       int64                 `json:"ed25519_verified"`       // Number of Ed25519 verifications
 	AuditTrailEvents      int                   `json:"audit_trail_events"`     // Number of audit events
 	BundleIntegrityHash   string                `json:"bundle_integrity_hash"`  // Bundle integrity hash
+
+	// SignatureRouteStatus records which extraction routes ran, whether they
+	// agreed, and whether coverage was degraded. It is a pointer so that a
+	// result built without it is distinguishable from one where both routes
+	// ran and agreed - "never recorded" must not read as "agreed".
+	SignatureRouteStatus *RouteStatus `json:"signatureRouteStatus,omitempty"`
 }
 
 // G2Result represents G2 proof result (Governance + Outcome Binding)
