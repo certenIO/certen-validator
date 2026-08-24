@@ -1321,12 +1321,20 @@ func (id *IntentDiscovery) buildChainedCertenProof(ctx context.Context, accountU
 		chainedProof, err := id.proofGenerator.GenerateChainedProof(ctx, accountURL, txHash, partition)
 		if err == nil {
 			complete := proof.ChainedProofToCompleteProof(chainedProof)
-			id.logger.Printf("✅ [REAL-PROOF] L1-L3 chained proof generated for %s (attempt %d/%d):",
+			id.logger.Printf("✅ [REAL-PROOF] L1-L4 chained proof generated for %s (attempt %d/%d):",
 				intentID, attempt, maxAttempts)
 			id.logger.Printf("   L1: TxChainIndex=%d, BVNMinorBlockIndex=%d",
 				chainedProof.Layer1.TxChainIndex, chainedProof.Layer1.BVNMinorBlockIndex)
 			id.logger.Printf("   L2: DNMinorBlockIndex=%d", chainedProof.Layer2.DNMinorBlockIndex)
 			id.logger.Printf("   L3: DNConsensusHeight=%d", chainedProof.Layer3.DNConsensusHeight)
+			if chainedProof.Layer4BVN != nil {
+				id.logger.Printf("   L4-BVN: partition=%s signatures=%d threshold=%d",
+					chainedProof.Layer4BVN.Partition, len(chainedProof.Layer4BVN.Signatures), chainedProof.Layer4BVN.Threshold)
+			}
+			if chainedProof.Layer4DN != nil {
+				id.logger.Printf("   L4-DN:  partition=%s signatures=%d threshold=%d",
+					chainedProof.Layer4DN.Partition, len(chainedProof.Layer4DN.Signatures), chainedProof.Layer4DN.Threshold)
+			}
 
 			req := &proof.ProofRequest{
 				RequestID:       fmt.Sprintf("intent_%s", intentID),
@@ -1514,15 +1522,15 @@ func (id *IntentDiscovery) processIntent(intent *CertenIntent, blockHeight uint6
 			if proofClass == "on_demand" {
 				inlineAttempts = id.config.ChainedProofInlineRetries
 			}
-			id.logger.Printf("🔗 [REAL-PROOF] Generating L1-L3 chained proof for %s (txHash=%s, partition=%s, attempts=%d)",
+			id.logger.Printf("🔗 [REAL-PROOF] Generating L1-L4 chained proof for %s (txHash=%s, partition=%s, attempts=%d)",
 				intent.IntentID, intent.TransactionHash[:16]+"...", intent.Partition, inlineAttempts)
 
 			cp, perr := id.buildChainedCertenProof(ctx, accountURL, intent.TransactionHash, intent.Partition, intent.IntentID, inlineAttempts)
 			if perr != nil {
-				id.logger.Printf("⚠️ [REAL-PROOF] L1-L3 chained proof unavailable for %s: %v", intent.IntentID, perr)
+				id.logger.Printf("⚠️ [REAL-PROOF] L1-L4 chained proof unavailable for %s: %v", intent.IntentID, perr)
 			} else {
 				certenProof = cp
-				id.logger.Printf("✅ [REAL-PROOF] CertenProof created with L1-L3 chained proof for %s", intent.IntentID)
+				id.logger.Printf("✅ [REAL-PROOF] CertenProof created with L1-L4 chained proof for %s", intent.IntentID)
 			}
 		}
 
