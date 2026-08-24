@@ -91,7 +91,11 @@ type BatchTransaction struct {
 	GovValid     bool            `db:"governance_valid" json:"governance_valid"`
 	IntentType   sql.NullString  `db:"intent_type" json:"intent_type,omitempty"`
 	IntentData   json.RawMessage `db:"intent_data" json:"intent_data,omitempty"`
-	CreatedAt    time.Time       `db:"created_at" json:"created_at"`
+	// Events the legs committed to emitting (RB-4). `omitempty` is correct HERE and only here: a nil
+	// RawMessage means the commitment is unknown, and the reader downstream is built to tell an ABSENT
+	// key from an EMPTY array. Do not give this a default. See migration 012.
+	DeclaredEffects json.RawMessage `db:"declared_effects" json:"declared_effects,omitempty"`
+	CreatedAt       time.Time       `db:"created_at" json:"created_at"`
 
 	// Intent Tracking (for Firestore linking)
 	UserID   sql.NullString `db:"user_id" json:"user_id,omitempty"`
@@ -334,6 +338,8 @@ type NewBatchTransaction struct {
 	GovLevel     GovernanceLevel // Optional
 	IntentType   string          // Optional
 	IntentData   json.RawMessage // Optional
+	// RB-4 commitments. nil means unknown, `[]` means none declared — see migration 012.
+	DeclaredEffects json.RawMessage
 
 	// Intent Tracking (for Firestore linking)
 	UserID   *string // Optional - user who submitted the intent

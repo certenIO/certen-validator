@@ -8,36 +8,27 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cometbft/cometbft/rpc/client/http"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3/jsonrpc"
 )
 
 func Test_ExamineArtifacts(t *testing.T) {
 	// Use same defaults as integration test
-	v3URL := getenv("CERTEN_V3", "http://127.0.0.1:26660/v3")
-	dnComet := getenv("CERTEN_DN_COMET", "http://127.0.0.1:26657")
-	bvnComet := getenv("CERTEN_BVN_COMET", "http://127.0.0.1:26757")
+	v3URL := getenv("CERTEN_V3", defaultV3Endpoint)
+	account := getenv("CERTEN_ACCOUNT", "acc://carp-buyer-62431.acme/data")
+	txhash := getenv("CERTEN_TXHASH", "51b0ba6abf413762fd3db7bcb12a2c56ee2806fcd8405640537f92b791aedcf0")
+	bvn := getenv("CERTEN_BVN", "")
+	if bvn == "" {
+		bvn = calculateBVNFromKermitRouting(account)
+	}
 
-	account := getenv("CERTEN_ACCOUNT", "acc://testtesttest10.acme/data1")
-	txhash := getenv("CERTEN_TXHASH", "057c2fc6ae1b8793a3f259705ee1b26f44e4ffed26ac0b897dc0fb733a19f116")
-	bvn := getenv("CERTEN_BVN", "bvn1")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	// Initialize clients
+	// L4 replaced the CometBFT binds, so no consensus client is needed.
 	v3c := jsonrpc.NewClient(v3URL)
-	dnClient, err := http.New(dnComet, "/websocket")
-	if err != nil {
-		t.Fatalf("DN client failed: %v", err)
-	}
-	bvnClient, err := http.New(bvnComet, "/websocket")
-	if err != nil {
-		t.Fatalf("BVN client failed: %v", err)
-	}
 
 	// Build proof with artifacts
-	builder := NewProofBuilder(v3c, dnClient, bvnClient, true)
+	builder := NewProofBuilder(v3c, true)
 	builder.WithArtifacts = true
 
 	proof, err := builder.BuildProof(ctx, ProofInput{
@@ -74,5 +65,8 @@ func Test_ExamineArtifacts(t *testing.T) {
 	t.Logf("✅ They enable OFFLINE proof verification without re-querying the blockchain")
 	t.Logf("✅ They provide complete auditability - anyone can verify our proof construction")
 	t.Logf("✅ They preserve the exact data used for proof generation (forensic value)")
-	t.Logf("⚠️  But they require trusting the artifact provider - not zero-trust verification")
+	t.Logf("Note: artifacts are an audit trail, not the trust root. The proof's")
+	t.Logf("trust comes from L1-L3 merkle recomputation and L4 validator")
+	t.Logf("signatures, both of which are checked offline from the proof object")
+	t.Logf("itself - not from these files.")
 }

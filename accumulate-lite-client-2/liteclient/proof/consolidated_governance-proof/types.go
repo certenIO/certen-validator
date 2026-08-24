@@ -224,12 +224,28 @@ type G2ProofResult struct {
 // ReceiptData represents Accumulate receipt information
 // Contains all receipt fields with proper types
 type ReceiptData struct {
-	Start          string     `json:"start"`          // Receipt start hash
-	Anchor         string     `json:"anchor"`         // Receipt anchor hash
+	Start          string     `json:"start"`          // Receipt start hash (the leaf)
+	Anchor         string     `json:"anchor"`         // Receipt anchor hash (the root)
 	LocalBlock     int64      `json:"localBlock"`     // Local block number
 	LocalBlockTime *time.Time `json:"localBlockTime"` // Local block time (optional)
 	MajorBlock     *int64     `json:"majorBlock"`     // Major block number (optional)
 	End            *string    `json:"end"`            // Receipt end hash (optional)
+
+	// Entries is the merkle path from Start to Anchor.
+	//
+	// It was previously discarded during parsing, so no governance receipt
+	// could ever be recomputed and "receipt binding" could only compare
+	// start/anchor values that came from the same response. See
+	// VerifyReceiptMerkle.
+	Entries []ReceiptStep `json:"entries"`
+}
+
+// ReceiptStep is one step of a receipt's merkle path. Right reports that the
+// sibling is on the right, matching Accumulate's encoding, which omits the
+// field when false.
+type ReceiptStep struct {
+	Hash  string `json:"hash"`
+	Right bool   `json:"right"`
 }
 
 // VerificationResult represents a generic verification result
@@ -312,6 +328,12 @@ type G1Result struct {
 	Ed25519Verified       int64                 `json:"ed25519_verified"`       // Number of Ed25519 verifications
 	AuditTrailEvents      int                   `json:"audit_trail_events"`     // Number of audit events
 	BundleIntegrityHash   string                `json:"bundle_integrity_hash"`  // Bundle integrity hash
+
+	// SignatureRouteStatus records which extraction routes ran, whether they
+	// agreed, and whether coverage was degraded. It is a pointer so that a
+	// result built without it is distinguishable from one where both routes
+	// ran and agreed - "never recorded" must not read as "agreed".
+	SignatureRouteStatus *RouteStatus `json:"signatureRouteStatus,omitempty"`
 }
 
 // G2Result represents G2 proof result (Governance + Outcome Binding)
@@ -322,6 +344,11 @@ type G2Result struct {
 	EffectVerified   bool        `json:"effect_verified"`   // Transaction effect verified
 	G2ProofComplete  bool        `json:"g2_proof_complete"` // G2 proof completion flag
 	SecurityLevel    string      `json:"security_level"`    // Security level description
+
+	// OutcomeBinding is the evidence for G2's defining claim. It is a pointer
+	// so a result built without it is distinguishable from one that verified;
+	// its zero state is NotRun, which is never a pass.
+	OutcomeBinding *OutcomeBinding `json:"outcomeBinding,omitempty"`
 }
 
 // =============================================================================

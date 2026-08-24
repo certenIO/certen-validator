@@ -7,43 +7,37 @@
 package chained_proof
 
 import (
-	"bytes"
 	"context"
-	"encoding/hex"
 	"fmt"
 
-	"github.com/cometbft/cometbft/rpc/client/http"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3/jsonrpc"
 )
 
-// ProofBuilder orchestrates L1-L3 construction + proof-grade consensus binding checks.
+// ProofBuilder orchestrates L1-L4 construction.
+//
+// L4 formerly consisted of two live CometBFT `/commit` assertions that stored
+// nothing and verified no signature. They have been replaced by stored,
+// signature-verifying Layer4 legs built from Accumulate's own threshold-signed
+// partition anchors, so the builder no longer needs a consensus-engine client
+// of any kind.
 type ProofBuilder struct {
-	V3          *jsonrpc.Client
-	CometDN     *http.HTTP
-	CometBVN    *http.HTTP
-	Debug       bool
+	V3            *jsonrpc.Client
+	Debug         bool
 	WithArtifacts bool
 }
 
-func NewProofBuilder(v3c *jsonrpc.Client, cometDN *http.HTTP, cometBVN *http.HTTP, debug bool) *ProofBuilder {
-	return &ProofBuilder{
-		V3:       v3c,
-		CometDN:  cometDN,
-		CometBVN: cometBVN,
-		Debug:    debug,
-	}
+func NewProofBuilder(v3c *jsonrpc.Client, debug bool) *ProofBuilder {
+	return &ProofBuilder{V3: v3c, Debug: debug}
 }
 
 // BuildProof is the canonical implementation of spec section 6 (normative).
+//
+// L1-L3 are unchanged. L4 is built for both legs and is REQUIRED: a proof
+// without both legs is not proof-grade, and BuildProof fails rather than
+// returning a partial object that a caller might mistake for a complete one.
 func (pb *ProofBuilder) BuildProof(ctx context.Context, in ProofInput) (*ChainedProof, error) {
 	if pb.V3 == nil {
 		return nil, fmt.Errorf("proof builder: missing v3 client")
-	}
-	if pb.CometDN == nil {
-		return nil, fmt.Errorf("proof builder: missing DN comet client (proof-grade requires DN binding)")
-	}
-	if pb.CometBVN == nil {
-		return nil, fmt.Errorf("proof builder: missing BVN comet client (proof-grade requires BVN binding)")
 	}
 	if in.BVN == "" {
 		return nil, fmt.Errorf("proof builder: input.BVN required (e.g. bvn1)")
@@ -60,6 +54,7 @@ func (pb *ProofBuilder) BuildProof(ctx context.Context, in ProofInput) (*Chained
 	l1b := &Layer1Builder{Client: pb.V3, Debug: pb.Debug, Artifacts: artifacts}
 	l2b := &Layer2Builder{Client: pb.V3, Debug: pb.Debug, Artifacts: artifacts}
 	l3b := &Layer3Builder{Client: pb.V3, Debug: pb.Debug, Artifacts: artifacts}
+	l4b := &Layer4Builder{Client: pb.V3, Debug: pb.Debug, Artifacts: artifacts}
 
 	// 1) L1
 	l1, err := l1b.Build(ctx, in.Account, in.TxHash)
@@ -73,61 +68,39 @@ func (pb *ProofBuilder) BuildProof(ctx context.Context, in ProofInput) (*Chained
 		return nil, err
 	}
 
-	// 3) Bind BVN consensus (L2.2): height = BVN_MBI + 1, app_hash == BVN stateTreeAnchor
-	if err := bindConsensusAppHash(ctx, pb.CometBVN, l1.BVNMinorBlockIndex+1, l2.BVNStateTreeAnchor, "BVN"); err != nil {
-		return nil, err
-	}
-
-	// 4) L3
+	// 3) L3
 	l3, err := l3b.Build(ctx, l2)
 	if err != nil {
 		return nil, err
 	}
 
-	// 5) Bind DN consensus (L3.1): height = DN_MBI + 1 (DN_MBI from L2), app_hash == DN stateTreeAnchor
-	if err := bindConsensusAppHash(ctx, pb.CometDN, l2.DNMinorBlockIndex+1, l3.DNStateTreeAnchor, "DN"); err != nil {
-		return nil, err
+	// 4) L4-BVN: the BVN's stateTreeAnchor, signed by that BVN's validators.
+	l4bvn, err := l4b.BuildBVNLeg(ctx, in.BVN, l1, l2)
+	if err != nil {
+		return nil, fmt.Errorf("proof builder: L4 BVN leg: %w", err)
+	}
+
+	// 5) L4-DN: the DN's stateTreeAnchor, signed by Directory validators.
+	l4dn, err := l4b.BuildDNLeg(ctx, in.BVN, l2, l3)
+	if err != nil {
+		return nil, fmt.Errorf("proof builder: L4 DN leg: %w", err)
 	}
 
 	out := &ChainedProof{
-		Input:  in,
-		Layer1: l1,
-		Layer2: l2,
-		Layer3: l3,
+		Input:     in,
+		Layer1:    l1,
+		Layer2:    l2,
+		Layer3:    l3,
+		Layer4BVN: l4bvn,
+		Layer4DN:  l4dn,
 	}
 	if pb.WithArtifacts {
 		out.Artifacts = artifacts
 	}
+
+	// The builder must never emit an object the verifier would reject.
+	if err := NewProofVerifier(pb.Debug).Verify(ctx, out); err != nil {
+		return nil, fmt.Errorf("proof builder: built proof does not verify: %w", err)
+	}
 	return out, nil
-}
-
-func bindConsensusAppHash(ctx context.Context, comet *http.HTTP, height uint64, expectStateTreeAnchorHex string, label string) error {
-	if comet == nil {
-		return fmt.Errorf("%s consensus bind: missing comet client", label)
-	}
-
-	// Comet client uses int64 pointers for height
-	h := int64(height)
-	commit, err := comet.Commit(ctx, &h)
-	if err != nil {
-		return fmt.Errorf("%s consensus bind: /commit failed for height=%d: %w", label, height, err)
-	}
-
-	appHash := commit.SignedHeader.Header.AppHash
-	if len(appHash) == 0 {
-		return fmt.Errorf("%s consensus bind: empty app_hash at height=%d", label, height)
-	}
-
-	expectStateTreeAnchorHex, err = MustHex32Lower(expectStateTreeAnchorHex, label+" expected stateTreeAnchor")
-	if err != nil {
-		return err
-	}
-	expectBytes, _ := hex.DecodeString(expectStateTreeAnchorHex)
-
-	// appHash is types.HexBytes under the hood (alias of []byte)
-	if !bytes.Equal(appHash, expectBytes) {
-		return fmt.Errorf("%s consensus bind FAILED: height=%d app_hash=%x expect=%x",
-			label, height, []byte(appHash), expectBytes)
-	}
-	return nil
 }

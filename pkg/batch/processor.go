@@ -186,13 +186,16 @@ type ProcessorConfig struct {
 // DefaultProcessorConfig returns default configuration
 func DefaultProcessorConfig() *ProcessorConfig {
 	return &ProcessorConfig{
-		ValidatorID:     "validator-default",
-		TargetChain:     "ethereum",
-		ChainID:         "11155111", // Sepolia
-		NetworkName:     "sepolia",
-		Logger:          log.New(log.Writer(), "[BatchProcessor] ", log.LstdFlags),
-		GovernanceLevel: proof.GovLevelG1, // Default to G1 (governance correctness)
-		V3Endpoint:      "",               // Must be configured for real governance proofs
+		ValidatorID: "validator-default",
+		TargetChain: "ethereum",
+		ChainID:     "11155111", // Sepolia
+		NetworkName: "sepolia",
+		Logger:      log.New(log.Writer(), "[BatchProcessor] ", log.LstdFlags),
+		// G2 is the required level: G0-G2 are all mandatory for a governance
+		// proof. This defaulted to G1, which silently produced proofs whose
+		// outcome was never bound.
+		GovernanceLevel: proof.GovLevelG2,
+		V3Endpoint:      "", // Must be configured for real governance proofs
 		// CONSENSUS FIX: Default validator set - MUST be configured with actual validators
 		ValidatorSet: []string{"validator-1", "validator-2", "validator-3", "validator-4", "validator-5", "validator-6", "validator-7"},
 	}
@@ -1043,7 +1046,13 @@ func (p *Processor) buildGovernanceProofs(ctx context.Context, result *ClosedBat
 	startTime := time.Now()
 	level := p.defaultGovLevel
 	if level == "" {
-		level = proof.GovLevelG1 // Default to G1 if not configured
+		// Unconfigured must mean the strongest level, not the weakest. This
+		// defaulted to G1, so a missing config silently downgraded every proof
+		// in the batch to one that does not bind its outcome.
+		level = proof.GovLevelG2
+	}
+	if level != proof.GovLevelG2 {
+		return nil, fmt.Errorf("governance level %q is not permitted: G0, G1 and G2 are all required", level)
 	}
 
 	p.logger.Printf("🔐 [Phase 2] Generating %s governance proofs for %d transactions...", level, len(result.Transactions))

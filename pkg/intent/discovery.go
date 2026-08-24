@@ -1189,6 +1189,20 @@ func (id *IntentDiscovery) convertIntentToTransactionData(intent *CertenIntent, 
 			txData.TokenSymbol = leg.Asset.Symbol
 			id.logger.Printf("✅ [TX-METADATA] Extracted: %s → %s, %s %s to %s",
 				txData.FromChain, txData.ToChain, txData.Amount, txData.TokenSymbol, txData.ToAddress)
+
+			// RB-4: what this intent committed in advance to doing. See DeclaredEffectsFrom.
+			encoded, count, err := DeclaredEffectsFrom(&ccEnvelope)
+			if err != nil {
+				// Leave it nil rather than writing something wrong. "Unknown" is the honest state when
+				// we could not encode what we found, and it is the state every pre-migration row is in.
+				id.logger.Printf("⚠️  [RB-4] could not encode declared effects for %s: %v", intent.TransactionHash, err)
+			} else {
+				txData.DeclaredEffects = encoded
+				if count > 0 {
+					id.logger.Printf("✅ [RB-4] %s committed to %d event(s); an attestation speaks to them",
+						intent.TransactionHash, count)
+				}
+			}
 		}
 	}
 
@@ -2396,4 +2410,42 @@ func (id *IntentDiscovery) isReplayData(data map[string]interface{}) bool {
 	_, hasMaxExecutionDelay := data["maxExecutionDelaySeconds"]
 
 	return hasNonce || hasClientNonce || hasClientOperationId || hasCreatedAt || hasNotBefore || hasExpiresAt || hasReplayProtection || hasMaxExecutionDelay
+}
+
+// DeclaredEffectsFrom collects what an intent's legs committed in advance to emitting (RB-4).
+//
+// Returns the JSON array to store, how many events were found, and an error if it could not be
+// encoded. A NIL first return with a nil error is impossible: reaching this function at all means the
+// envelope parsed, and that fact is what the caller records.
+//
+// ── WHY AN EMPTY ARRAY IS NOT NIL ───────────────────────────────────────────────────────────────────
+//
+// The caller stores nil as SQL NULL and `[]` as an empty JSON array, and those mean different things
+// all the way to an auditor's report:
+//
+//	NULL  we do not know what this transaction committed to
+//	[]    the envelope parsed and NOTHING was committed to — a native transfer, say
+//
+// An attestation on a leg that declared events proves those events OCCURRED, because the validator
+// refuses to attest otherwise. So `[]` lets a downstream report say "the question does not arise",
+// while NULL only lets it say "this cannot be answered". Collapsing them manufactures a claim out of
+// silence, which is why `make(...)` here is deliberate and `var declared []T` would be a bug.
+//
+// Every leg is read, not just leg 0: a commitment is a commitment whichever leg made it.
+func DeclaredEffectsFrom(envelope *consensus.CrossChainEnvelope) (json.RawMessage, int, error) {
+	if envelope == nil {
+		return nil, 0, nil
+	}
+	declared := make([]consensus.ExpectedEventPayload, 0)
+	for _, l := range envelope.Legs {
+		if l.ExecutionPayload == nil {
+			continue
+		}
+		declared = append(declared, l.ExecutionPayload.ExpectedEvents...)
+	}
+	encoded, err := json.Marshal(declared)
+	if err != nil {
+		return nil, 0, err
+	}
+	return encoded, len(declared), nil
 }

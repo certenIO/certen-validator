@@ -276,6 +276,13 @@ func validateConfig(config *CLIConfig) error {
 		config.UseHTTP = false // Curl takes precedence
 	}
 
+	// G2 must not start unless the payload verifier is usable. The bypass this
+	// replaces discovered the problem at proof time and silently downgraded a
+	// claim; refusing here converts that into an immediate, loud failure.
+	if err := RequirePayloadVerifier(config.Level, config.TxHashPath); err != nil {
+		return err
+	}
+
 	return nil
 }
 

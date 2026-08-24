@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/cometbft/cometbft/rpc/client/http"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3/jsonrpc"
 )
 
@@ -20,8 +19,6 @@ import (
 func ExamineArtifacts() error {
 	// Use same defaults as integration test
 	v3URL := getenvOrDefault("CERTEN_V3", "http://127.0.0.1:26660/v3")
-	dnComet := getenvOrDefault("CERTEN_DN_COMET", "http://127.0.0.1:26657")
-	bvnComet := getenvOrDefault("CERTEN_BVN_COMET", "http://127.0.0.1:26757")
 
 	account := getenvOrDefault("CERTEN_ACCOUNT", "acc://testtesttest10.acme/data1")
 	txhash := getenvOrDefault("CERTEN_TXHASH", "057c2fc6ae1b8793a3f259705ee1b26f44e4ffed26ac0b897dc0fb733a19f116")
@@ -29,19 +26,12 @@ func ExamineArtifacts() error {
 
 	ctx := context.Background()
 
-	// Initialize clients
+	// Initialize client. L4 replaced the CometBFT binds, so no consensus
+	// client is needed.
 	v3c := jsonrpc.NewClient(v3URL)
-	dnClient, err := http.New(dnComet, "/websocket")
-	if err != nil {
-		return err
-	}
-	bvnClient, err := http.New(bvnComet, "/websocket")
-	if err != nil {
-		return err
-	}
 
 	// Build proof with artifacts
-	builder := NewProofBuilder(v3c, dnClient, bvnClient, true)
+	builder := NewProofBuilder(v3c, true)
 	builder.WithArtifacts = true
 
 	proof, err := builder.BuildProof(ctx, ProofInput{

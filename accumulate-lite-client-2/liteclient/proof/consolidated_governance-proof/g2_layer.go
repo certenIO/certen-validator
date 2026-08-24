@@ -9,6 +9,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"strings"
 	"time"
 )
@@ -69,77 +70,74 @@ func (g2 *G2Layer) ProveG2(ctx context.Context, request G2Request) (*G2Result, e
 		effectVerification = g2.verifyTransactionEffect(payloadVerification.ComputedTxHash, payloadVerification.ExpectedTxHash)
 	}
 
-	// Step 4: Verify receipt binding and witness consistency
-	receiptBinding := g2.verifyReceiptBinding(g1Result)
-	witnessConsistency := g2.verifyWitnessConsistency(g1Result)
+	// Step 4: Verify outcome binding - G2's defining claim over G1.
+	//
+	// This replaced verifyReceiptBinding and verifyWitnessConsistency, which
+	// were `flag && someString != ""`. See g2_outcome_binding.go.
+	outcome := g2.verifyOutcomeBinding(ctx, g1Result)
 
 	// Step 5: Build outcome leaf
-	outcomeLeaf := g2.goVerifier.BuildOutcomeLeaf(*payloadVerification, effectVerification, receiptBinding.Verified, witnessConsistency.Verified)
+	outcomeLeaf := g2.goVerifier.BuildOutcomeLeaf(*payloadVerification, effectVerification,
+		outcome.Verified(), outcome.Verified())
+	outcomeLeaf.ReceiptBinding = VerificationResult{
+		Verified: outcome.Verified(),
+		Details:  outcomeBindingDetails(outcome, "receipt binding"),
+	}
+	outcomeLeaf.WitnessConsistency = VerificationResult{
+		Verified: outcome.Verified(),
+		Details:  outcomeBindingDetails(outcome, "witness consistency"),
+	}
 
-	// Step 6: Determine if G2 proof can be completed
-	g2Complete := payloadVerification.Verified &&
+	// Step 6: G2 is complete only when ALL FOUR components verified.
+	//
+	// The previous expression was:
+	//
+	//	g2ProofComplete := g2Complete || (payloadConfigFailure && g2CoreComplete)
+	//
+	// where payloadConfigFailure was a string comparison against the message
+	// "Go verifier path not configured". That bypass is gone. An unconfigured
+	// payload verifier is a MISCONFIGURATION and is now rejected at startup,
+	// not silently converted into a fake G2 at proof time. There is no partial
+	// G2: a proof either binds its outcome or it is a G1 proof.
+	g2ProofComplete := payloadVerification.Verified &&
 		effectVerification.Verified &&
-		receiptBinding.Verified &&
-		witnessConsistency.Verified
+		outcome.Verified()
 
-	// Check for configuration-related payload failures (non-critical in test environments)
-	payloadConfigFailure := !payloadVerification.Verified &&
-		payloadVerification.GoVerifierErrors == "Go verifier path not configured"
-
-	// Allow partial G2 success if only payload verification fails due to configuration
-	g2CoreComplete := effectVerification.Verified &&
-		receiptBinding.Verified &&
-		witnessConsistency.Verified
-
-	if !g2Complete {
-		// If payload failed due to configuration but core G2 components succeeded, allow partial success
-		if payloadConfigFailure && g2CoreComplete {
-			fmt.Printf("[G2] [WARNING] Payload verification skipped (no external verifier configured), but G2 core verification complete\n")
-		} else {
-			// G2 verification incomplete - report specific failures
-			var failureReasons []string
-			if !payloadVerification.Verified && !payloadConfigFailure {
-				failureReasons = append(failureReasons, "payload verification failed")
-			}
-			if !effectVerification.Verified {
-				failureReasons = append(failureReasons, "effect verification failed")
-			}
-			if !receiptBinding.Verified {
-				failureReasons = append(failureReasons, "receipt binding failed")
-			}
-			if !witnessConsistency.Verified {
-				failureReasons = append(failureReasons, "witness consistency failed")
-			}
-			if len(failureReasons) > 0 {
-				return nil, ValidationError{
-					Msg: fmt.Sprintf("G2 verification incomplete: %s", strings.Join(failureReasons, ", ")),
-				}
-			}
+	if !g2ProofComplete {
+		var reasons []string
+		if !payloadVerification.Verified {
+			reasons = append(reasons, "payload verification failed: "+payloadVerification.GoVerifierErrors)
+		}
+		if !effectVerification.Verified {
+			reasons = append(reasons, "effect verification failed")
+		}
+		if !outcome.Verified() {
+			reasons = append(reasons, "outcome binding "+outcome.State.String()+": "+outcome.Failure)
+		}
+		return nil, ValidationError{
+			Msg: fmt.Sprintf("G2 not established (proof stands at G1, g2Hash must be zero): %s",
+				strings.Join(reasons, "; ")),
 		}
 	}
 
-	// Step 7: Build G2 result
-	// Consider G2 complete if all core components passed (allow payload config failures)
-	g2ProofComplete := g2Complete || (payloadConfigFailure && g2CoreComplete)
-
 	result := &G2Result{
-		G1Result:         *g1Result,
-		OutcomeLeaf:      outcomeLeaf,
-		PayloadVerified:  payloadVerification.Verified,
-		EffectVerified:   effectVerification.Verified,
-		G2ProofComplete:  g2ProofComplete,
-		SecurityLevel:    g2.determineSecurityLevel(outcomeLeaf),
+		G1Result:        *g1Result,
+		OutcomeLeaf:     outcomeLeaf,
+		PayloadVerified: payloadVerification.Verified,
+		EffectVerified:  effectVerification.Verified,
+		G2ProofComplete: g2ProofComplete,
+		OutcomeBinding:  outcome,
+		SecurityLevel:   g2.determineSecurityLevel(outcomeLeaf),
 	}
 
-	if payloadConfigFailure && g2CoreComplete {
-		fmt.Printf("[G2] G2 proof complete (partial - payload verifier not configured):\n")
-	} else {
-		fmt.Printf("[G2] G2 proof complete:\n")
-	}
+	fmt.Printf("[G2] G2 proof complete:\n")
 	fmt.Printf("[G2]   Payload verified: %t\n", payloadVerification.Verified)
 	fmt.Printf("[G2]   Effect verified: %t\n", effectVerification.Verified)
-	fmt.Printf("[G2]   Receipt binding: %t\n", receiptBinding.Verified)
-	fmt.Printf("[G2]   Witness consistency: %t\n", witnessConsistency.Verified)
+	fmt.Printf("[G2]   Outcome binding: %s (%d checks, %d merkle steps)\n",
+		outcome.State, len(outcome.Checks), outcome.MerkleSteps)
+	for _, c := range outcome.Checks {
+		fmt.Printf("[G2]     - %s\n", c)
+	}
 	fmt.Printf("[G2]   Security level: %s\n", result.SecurityLevel)
 
 	return result, nil
@@ -149,18 +147,22 @@ func (g2 *G2Layer) ProveG2(ctx context.Context, request G2Request) (*G2Result, e
 func (g2 *G2Layer) verifyTransactionPayload(ctx context.Context, g1Result *G1Result) (*PayloadVerification, error) {
 	fmt.Printf("[G2] [PAYLOAD] Starting payload verification\n")
 
-	// Query the full transaction from API to get raw JSON with header and body
-	// This is needed for canonical hash computation
-	rawTxJSON, err := g2.queryRawTransactionJSON(ctx, g1Result)
+	// Query the full transaction from the API to get raw JSON with header and
+	// body, for canonical hash computation.
+	//
+	// A query failure here is an OUTAGE, not a payload that failed to verify.
+	// It used to be folded into a PayloadVerification{Verified:false} with the
+	// message "Transaction query failed", which reads downstream as "the
+	// payload is wrong" - the same invalid-versus-unavailable confusion that
+	// cost nine G1 proofs, one layer up. Observed live during the backfill: a
+	// context deadline on this query reported itself as "payload verification
+	// failed".
+	//
+	// Transient failures are retried; an exhausted retry is returned as an
+	// error so the caller reports an outage rather than a verdict.
+	rawTxJSON, err := g2.queryRawTransactionJSONWithRetry(ctx, g1Result)
 	if err != nil {
-		return &PayloadVerification{
-			Verified:             false,
-			ComputedTxHash:       "",
-			ExpectedTxHash:       g1Result.TxHash,
-			GoVerifierOutput:     "",
-			GoVerifierErrors:     fmt.Sprintf("Transaction query failed: %v", err),
-			VerificationDetails:  map[string]interface{}{"query_error": err.Error()},
-		}, nil
+		return nil, fmt.Errorf("payload evidence unavailable (infrastructure, not a payload rejection): %w", err)
 	}
 
 	// Verify payload using txhash tool
@@ -254,49 +256,7 @@ func (g2 *G2Layer) verifyTransactionEffect(computedHash string, expectedHash str
 	return verification
 }
 
-// verifyReceiptBinding verifies receipt binding for outcome leaf
-func (g2 *G2Layer) verifyReceiptBinding(g1Result *G1Result) VerificationResult {
-	fmt.Printf("[G2] [RECEIPT] Verifying receipt binding\n")
 
-	// Receipt binding is verified through G0/G1 inclusion proofs
-	// If we reached this point, receipt binding is valid
-	verified := g1Result.G0ProofComplete && g1Result.Receipt.Start != "" && g1Result.Receipt.Anchor != ""
-
-	result := VerificationResult{
-		Verified: verified,
-		Details:  "Receipt binding verified through G0/G1 inclusion proof",
-	}
-
-	if verified {
-		fmt.Printf("[G2] [RECEIPT] [OK] Receipt binding verified\n")
-	} else {
-		fmt.Printf("[G2] [RECEIPT] [FAIL] Receipt binding failed\n")
-	}
-
-	return result
-}
-
-// verifyWitnessConsistency verifies witness consistency for outcome leaf
-func (g2 *G2Layer) verifyWitnessConsistency(g1Result *G1Result) VerificationResult {
-	fmt.Printf("[G2] [WITNESS] Verifying witness consistency\n")
-
-	// Witness consistency is verified through execution witness derivation
-	// If we reached this point with valid G1, witness consistency is valid
-	verified := g1Result.G1ProofComplete && g1Result.ExecWitness != ""
-
-	result := VerificationResult{
-		Verified: verified,
-		Details:  "Witness consistency verified through execution witness derivation",
-	}
-
-	if verified {
-		fmt.Printf("[G2] [WITNESS] [OK] Witness consistency verified\n")
-	} else {
-		fmt.Printf("[G2] [WITNESS] [FAIL] Witness consistency failed\n")
-	}
-
-	return result
-}
 
 // fallbackToG1 creates G2 result with fallback to G1-level proof
 func (g2 *G2Layer) fallbackToG1(g1Result *G1Result) *G2Result {
@@ -449,7 +409,7 @@ func (g2 *G2Layer) determineSecurityLevel(outcomeLeaf OutcomeLeaf) string {
 		return "G2_FULL_OUTCOME_BINDING"
 	}
 
-	// Determine partial verification levels
+	// Count what actually verified, for diagnostics only.
 	verificationCount := 0
 	if outcomeLeaf.PayloadBinding.Verified {
 		verificationCount++
@@ -464,16 +424,12 @@ func (g2 *G2Layer) determineSecurityLevel(outcomeLeaf OutcomeLeaf) string {
 		verificationCount++
 	}
 
-	switch verificationCount {
-	case 3:
-		return "G2_PARTIAL_OUTCOME_BINDING"
-	case 2:
-		return "G2_LIMITED_OUTCOME_BINDING"
-	case 1:
-		return "G2_MINIMAL_OUTCOME_BINDING"
-	default:
-		return "G1_GOVERNANCE_ONLY"
-	}
+	// There are no intermediate G2 levels. A proof that does not bind its
+	// outcome is a G1 proof; the previous G2_PARTIAL / G2_LIMITED /
+	// G2_MINIMAL levels described a G2 claim that had not been established
+	// and emitted a non-zero g2Hash indistinguishable from a real one.
+	_ = verificationCount
+	return "G1_GOVERNANCE_ONLY"
 }
 
 // =============================================================================
@@ -572,18 +528,13 @@ func (g2 *G2Layer) AnalyzeG2Performance(result *G2Result) map[string]interface{}
 
 // getSecurityGrade provides security grade based on verification count
 func (g2 *G2Layer) getSecurityGrade(verificationCount int) string {
-	switch verificationCount {
-	case 4:
+	// Diagnostic only. There is no partial G2, so anything short of all four
+	// components is reported as G1 - naming it "Partial G2" invited exactly
+	// the reading this work removed.
+	if verificationCount == 4 {
 		return "A+ (Full G2)"
-	case 3:
-		return "A (Partial G2)"
-	case 2:
-		return "B (Limited G2)"
-	case 1:
-		return "C (Minimal G2)"
-	default:
-		return "D (G1 Only)"
 	}
+	return fmt.Sprintf("D (G1 only - %d/4 components verified)", verificationCount)
 }
 
 // =============================================================================
@@ -626,4 +577,47 @@ func (g2 *G2Layer) VerifyG2Prerequisites(request G2Request) error {
 	}
 
 	return nil
+}
+// outcomeBindingDetails renders the outcome binding as the legacy
+// VerificationResult detail string, so existing consumers keep working while
+// reading a real result instead of a tautology.
+func outcomeBindingDetails(o *OutcomeBinding, which string) string {
+	if o.Verified() {
+		return fmt.Sprintf("%s verified: outcome leaf %s merkle-recomputed over %d steps under EXEC_WITNESS %s (status %s)",
+			which, SafeTruncate(o.OutcomeLeaf, 16), o.MerkleSteps, SafeTruncate(o.ExecWitness, 16), o.Status)
+	}
+	return fmt.Sprintf("%s %s: %s", which, o.State, o.Failure)
+}
+
+// queryRawTransactionJSONWithRetry wraps the payload transaction query with
+// jittered exponential backoff.
+//
+// Only the query is retried. Nothing about the payload's validity is retried:
+// once the JSON is in hand, a hash mismatch is a verdict and is final.
+func (g2 *G2Layer) queryRawTransactionJSONWithRetry(ctx context.Context, g1Result *G1Result) ([]byte, error) {
+	const attempts = 3
+	delay := 250 * time.Millisecond
+	var lastErr error
+
+	for i := 1; i <= attempts; i++ {
+		raw, err := g2.queryRawTransactionJSON(ctx, g1Result)
+		if err == nil {
+			return raw, nil
+		}
+		lastErr = err
+		if i == attempts || ctx.Err() != nil {
+			break
+		}
+		jitter := time.Duration(rand.Int63n(int64(delay/2) + 1))
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("payload query aborted after %d attempts: %v (context: %v)", i, lastErr, ctx.Err())
+		case <-time.After(delay + jitter):
+		}
+		if delay *= 2; delay > 2*time.Second {
+			delay = 2 * time.Second
+		}
+		fmt.Printf("[G2] [PAYLOAD] retry %d/%d after: %v\n", i+1, attempts, err)
+	}
+	return nil, fmt.Errorf("payload query failed after %d attempts: %w", attempts, lastErr)
 }
