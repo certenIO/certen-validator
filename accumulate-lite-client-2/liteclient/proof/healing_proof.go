@@ -107,11 +107,53 @@ type ConsensusProof struct {
 	Version string `json:"v"`
 
 	BVN L4LegSummary `json:"bvn"`
-	DN  L4LegSummary `json:"dn"`
+
+	// BVNs carries the summary of every signer partition BEYOND the principal's.
+	//
+	// Governance can span partitions: a delegated signer may live on a different
+	// BVN than the principal, and the govRoot must commit to EVERY quorum that
+	// stood behind the transaction, not only the principal's. A root that
+	// committed to one leg of a two-leg proof would be attesting to less than
+	// the proof carries, silently.
+	//
+	// Sorted by partition, and omitempty. The sort is the same discipline as
+	// L4LegSummary.Signers: partition discovery order depends on which signature
+	// resolved first, which is not stable, and an unsorted list would make two
+	// validators reading identical chain data produce different roots. The
+	// omitempty is what keeps a single-partition proof's preimage identical to
+	// the v1 shape apart from the version string - so the move below is exactly
+	// one move, caused by exactly one thing.
+	BVNs []L4LegSummary `json:"bvns,omitempty"`
+
+	DN L4LegSummary `json:"dn"`
 }
 
 // L4GovRootVersion is the current L4 payload shape.
-const L4GovRootVersion = "certen:l4gov:v1"
+//
+// BUMPED TO v2 IN PHASE 7, DELIBERATELY, AND THIS MOVES EVERY govROOT.
+//
+// The field exists precisely so a change to this payload is a visible version
+// bump rather than a silent move: CanonicalJSONMarshal is json.Marshal, so
+// struct layout IS the wire format, and a field added without bumping this would
+// shift every root with no signal.
+//
+// v1 -> v2 is the addition of BVNs above. Because that field is omitempty, a
+// single-partition proof's preimage differs from v1 in the version string alone
+// - which is the whole point: the root moves once, for a reason a reader can
+// name, rather than drifting.
+//
+// A mixed-version fleet produces different roots for the same proof and every
+// TX2 on every chain reverts. The upgrade is atomic or it is broken.
+const L4GovRootVersion = "certen:l4gov:v2"
+
+// L4GovRootVersionV1 is the previous shape, retained so historical roots stay
+// reproducible.
+//
+// Every govRoot signed before the Phase 7 upgrade committed to this string. If
+// it disappeared, those roots could not be recomputed and the transition itself
+// would become unauditable - which is the thing that makes an upgrade
+// irreversible in the bad sense.
+const L4GovRootVersionV1 = "certen:l4gov:v1"
 
 // L4LegSummary is one L4 leg - what a validator quorum signed, and what that
 // signature binds.

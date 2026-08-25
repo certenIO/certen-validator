@@ -262,7 +262,10 @@ func ChainedProofToCompleteProof(cp *chained_proof.ChainedProof) *lcproof.Comple
 	// L4 - the two threshold-signed partition anchors. This is what the
 	// governance root commits to as L4ConsensusProofH; before this, that slot
 	// was zero in every govRoot ever signed.
-	complete.ConsensusProof = BuildL4ConsensusProof(cp.Layer4BVN, cp.Layer4DN)
+	// Every signer partition's quorum, not only the principal's. A root that
+	// committed to one leg of a two-leg proof would attest to less than the
+	// proof carries, and the resulting root would be perfectly well-formed.
+	complete.ConsensusProof = BuildL4ConsensusProofFromProof(cp)
 
 	// ...and the evidence for it, carried through unreduced.
 	//
@@ -897,6 +900,55 @@ func BuildL4ConsensusProof(bvn, dn *chained_proof.Layer4) *lcproof.ConsensusProo
 		BVN:     summarizeL4Leg(bvn),
 		DN:      summarizeL4Leg(dn),
 	}
+}
+
+// BuildL4ConsensusProofFromProof summarises EVERY signer partition's quorum,
+// not only the principal's.
+//
+// Governance can span partitions, so a proof may carry a leg per partition that
+// signed. A govRoot built from the principal's leg alone would attest to less
+// than the proof actually carries - and it would do so silently, because the
+// resulting root is perfectly well-formed.
+//
+// Returns nil if any required leg is missing, so a proof without full L4
+// produces a ZERO L4ConsensusProofH rather than a partial one. A half-populated
+// commitment is indistinguishable from a complete one downstream.
+func BuildL4ConsensusProofFromProof(cp *chained_proof.ChainedProof) *lcproof.ConsensusProof {
+	if cp == nil || cp.Layer4DN == nil {
+		return nil
+	}
+	legs := cp.Legs()
+	if len(legs) == 0 {
+		return nil
+	}
+
+	// Legs() is already in canonical partition order, and the principal's leg is
+	// singled out only because that is where the v1 shape kept it. Which leg is
+	// "principal" is a property of the proof, not of the order they were
+	// discovered in, so this is deterministic.
+	principal := cp.PrincipalLegForSummary()
+	if principal == nil || principal.Layer4BVN == nil {
+		return nil
+	}
+
+	out := &lcproof.ConsensusProof{
+		Version: lcproof.L4GovRootVersion,
+		BVN:     summarizeL4Leg(principal.Layer4BVN),
+		DN:      summarizeL4Leg(cp.Layer4DN),
+	}
+	for _, leg := range legs {
+		if leg.Layer4BVN == nil {
+			// A leg the proof names but cannot evidence. Returning a summary
+			// without it would commit to a quorum set smaller than the proof
+			// claims, so there is no partial answer to give.
+			return nil
+		}
+		if strings.EqualFold(leg.Partition, principal.Partition) {
+			continue
+		}
+		out.BVNs = append(out.BVNs, summarizeL4Leg(leg.Layer4BVN))
+	}
+	return out
 }
 
 func summarizeL4Leg(l *chained_proof.Layer4) lcproof.L4LegSummary {

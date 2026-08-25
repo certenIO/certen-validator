@@ -168,7 +168,24 @@ func TestP5_MutatedLegChangesTheHash(t *testing.T) {
 		{"a dropped signer", func(c *lcproof.ConsensusProof) { c.DN.Signers = c.DN.Signers[:1] }},
 		{"an added signer", func(c *lcproof.ConsensusProof) { c.DN.Signers = append(c.DN.Signers, "99ff") }},
 		{"a substituted signer", func(c *lcproof.ConsensusProof) { c.DN.Signers[0] = "99ff" }},
-		{"the version tag", func(c *lcproof.ConsensusProof) { c.Version = "certen:l4gov:v2" }},
+		// The mutated version is DERIVED from the live constant, not a literal.
+		//
+		// It used to be the literal "certen:l4gov:v2", chosen because v1 was
+		// current. Phase 7 bumped the constant to v2, so the "mutation" became
+		// the base value and this case silently stopped mutating anything - it
+		// reported that the govRoot does not commit to the version, when in fact
+		// the test had stopped changing it. Deriving the value means the case
+		// keeps working through every future bump.
+		{"the version tag", func(c *lcproof.ConsensusProof) {
+			c.Version = lcproof.L4GovRootVersion + ":mutated"
+		}},
+		// A leg beyond the principal's must be committed to as well - a root that
+		// ignored it would attest to one leg of a two-leg proof.
+		{"an added partition leg", func(c *lcproof.ConsensusProof) {
+			extra := c.BVN
+			extra.Partition = "BVN2"
+			c.BVNs = append(c.BVNs, extra)
+		}},
 		{"swapped legs", func(c *lcproof.ConsensusProof) { c.BVN, c.DN = c.DN, c.BVN }},
 	}
 

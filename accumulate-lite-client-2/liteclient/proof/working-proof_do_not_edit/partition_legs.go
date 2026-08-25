@@ -187,3 +187,30 @@ func verifyLegBinding(leg PartitionLeg) error {
 	}
 	return nil
 }
+
+// PrincipalLegForSummary returns the leg the govRoot summary treats as the
+// principal's.
+//
+// It is exported for the govRoot builder, which must single out one leg because
+// that is where the v1 payload shape kept it. Which leg is principal is a
+// property of the proof - its own Input.BVN, or the one leg it has - and never
+// of the order the legs were discovered in, so two validators reading the same
+// proof pick the same one.
+func (p *ChainedProof) PrincipalLegForSummary() *PartitionLeg {
+	if p == nil {
+		return nil
+	}
+	legs := p.Legs()
+	if len(legs) == 0 {
+		return nil
+	}
+	want := p.principalPartition()
+	for i := range legs {
+		if strings.EqualFold(legs[i].Partition, want) {
+			return &legs[i]
+		}
+	}
+	// No leg matches the proof's own partition. That is a disagreement between
+	// the proof and its evidence, and picking one anyway would hide it.
+	return nil
+}

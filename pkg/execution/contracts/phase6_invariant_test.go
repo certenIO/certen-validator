@@ -278,9 +278,28 @@ func assertShape(t *testing.T, label string, v interface{}, golden []fieldSpec) 
 
 func TestP6_CanonicalShapesUnchanged(t *testing.T) {
 	// ConsensusProof — the L4 govRoot payload itself.
+	//
+	// CHANGED IN PHASE 7, DELIBERATELY AND ONCE. BVNs was added so the root
+	// commits to EVERY signer partition's quorum, not only the principal's;
+	// governance can span partitions, and a root that committed to one leg of a
+	// two-leg proof would attest to less than the proof carries, silently.
+	//
+	// Two things make this a legitimate golden update rather than the drift this
+	// test exists to stop, and both are checked, not asserted:
+	//
+	//   - L4GovRootVersion is bumped v1 -> v2 in the same change, which is what
+	//     that field is for. TestP7_GovRootVersionIsV2 pins it.
+	//   - The v1 preimage still reproduces bit-for-bit. BVNs is omitempty, so a
+	//     v1-shaped payload marshals exactly as before and every historical root
+	//     stays recomputable. TestP7_V1GovRootStillReproduces proves it, and
+	//     TestP6_GovRootInvariant_GoldenSlots - whose fixture pins the v1 version
+	//     as a literal - passes unchanged.
+	//
+	// Adding a field here WITHOUT both of those is the defect. Revert it.
 	assertShape(t, "lcproof.ConsensusProof", lcproof.ConsensusProof{}, []fieldSpec{
 		{"Version", "v"},
 		{"BVN", "bvn"},
+		{"BVNs", "bvns,omitempty"},
 		{"DN", "dn"},
 	})
 
