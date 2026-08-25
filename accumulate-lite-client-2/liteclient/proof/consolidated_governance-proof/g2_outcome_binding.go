@@ -87,14 +87,14 @@ func (o *OutcomeBinding) pass(check string) { o.Checks = append(o.Checks, check)
 
 // verifyOutcomeBinding performs the real check.
 //
-//	1. an outcome leaf exists, located under EXEC_WITNESS
-//	2. it is success-only (section 10) - anything but delivered-success
-//	   degrades the proof to G1
-//	3. its receipt MERKLE-RECOMPUTES to the anchor (not a non-empty check)
-//	4. the receipt-proven leaf is the one under the execution witness G0
-//	   derived, not merely a valid receipt somewhere
-//	5. ENTRY_HASH equals the receipt-proven leaf (section 7.2)
-//	6. the expanded message ID is exactly acc://<ENTRY_HASH>@<scope> (section 2.2)
+//  1. an outcome leaf exists, located under EXEC_WITNESS
+//  2. it is success-only (section 10) - anything but delivered-success
+//     degrades the proof to G1
+//  3. its receipt MERKLE-RECOMPUTES to the anchor (not a non-empty check)
+//  4. the receipt-proven leaf is the one under the execution witness G0
+//     derived, not merely a valid receipt somewhere
+//  5. ENTRY_HASH equals the receipt-proven leaf (section 7.2)
+//  6. the expanded message ID is exactly acc://<ENTRY_HASH>@<scope> (section 2.2)
 //
 // Every step fails closed. Nothing defaults to verified.
 func (g2 *G2Layer) verifyOutcomeBinding(ctx context.Context, g1Result *G1Result) *OutcomeBinding {

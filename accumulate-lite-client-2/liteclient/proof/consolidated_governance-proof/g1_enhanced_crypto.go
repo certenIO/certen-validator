@@ -67,7 +67,7 @@ func (g1 *G1Layer) processSignaturesWithSuperiorCrypto(
 		go func(index int, msgID string) {
 			defer wg.Done()
 			fmt.Printf("[G1] [CRYPTO] [WORKER-%d] Worker started\n", index)
-			semaphore <- struct{}{} // Acquire worker slot
+			semaphore <- struct{}{}        // Acquire worker slot
 			defer func() { <-semaphore }() // Release worker slot
 
 			// Extract message hash
@@ -165,15 +165,15 @@ func (g1 *G1Layer) processSignaturesWithSuperiorCrypto(
 
 			// Create validated signature with enhanced metadata
 			validatedSig := ValidatedSignature{
-				MessageID:              msgID,
-				MessageHash:            msgHash,
-				Receipt:                receipt,
-				Signature:              signature,
-				TimingVerified:         true,
-				TransactionHashVerified: true,
+				MessageID:                 msgID,
+				MessageHash:               msgHash,
+				Receipt:                   receipt,
+				Signature:                 signature,
+				TimingVerified:            true,
+				TransactionHashVerified:   true,
 				CryptographicallyVerified: true,
-				SecurityLevel:          "ENHANCED_CRYPTO",
-				VerificationTime:       time.Now(),
+				SecurityLevel:             "ENHANCED_CRYPTO",
+				VerificationTime:          time.Now(),
 			}
 
 			// Thread-safe addition to results
@@ -298,13 +298,13 @@ func (g1 *G1Layer) extractAndValidateSignatureWithSuperiorCrypto(
 	}
 
 	return SignatureData{
-		Type:              "ed25519",
-		PublicKey:         publicKeyHex,
-		Signature:         signatureHex,
-		TransactionHash:   transactionHashHex,
-		SignerVersion:     int64(signerVersion),
-		Timestamp:         timestamp,
-		SecurityLevel:     "ENHANCED_CRYPTO",
+		Type:            "ed25519",
+		PublicKey:       publicKeyHex,
+		Signature:       signatureHex,
+		TransactionHash: transactionHashHex,
+		SignerVersion:   int64(signerVersion),
+		Timestamp:       timestamp,
+		SecurityLevel:   "ENHANCED_CRYPTO",
 	}, nil
 }
 

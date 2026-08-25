@@ -23,8 +23,8 @@ import (
 // Updated to match working Python configuration using local endpoints
 var TestEndpoints = map[string]string{
 	"devnet":  "http://127.0.0.1:26660/v3",        // Local devnet - matches Python success
-	"testnet": "https://testnet.accumulate.io/v3",  // External testnet
-	"mainnet": "https://mainnet.accumulate.io/v3",  // External mainnet
+	"testnet": "https://testnet.accumulate.io/v3", // External testnet
+	"mainnet": "https://mainnet.accumulate.io/v3", // External mainnet
 }
 
 // TestConfig holds test execution configuration
@@ -40,12 +40,12 @@ type TestConfig struct {
 
 // TestRunner manages governance proof test execution
 type TestRunner struct {
-	config   TestConfig
-	client   *RPCClient
-	g0Layer  *G0Layer
-	g1Layer  *G1Layer
-	g2Layer  *G2Layer
-	workDir  string
+	config  TestConfig
+	client  *RPCClient
+	g0Layer *G0Layer
+	g1Layer *G1Layer
+	g2Layer *G2Layer
+	workDir string
 }
 
 // =============================================================================
@@ -222,10 +222,10 @@ func (tr *TestRunner) RunStepByStepExecution(ctx context.Context) error {
 // executeG0 runs G0 proof level
 func (tr *TestRunner) executeG0(ctx context.Context) (*G0Result, error) {
 	request := G0Request{
-		Account:           tr.config.Principal,
-		TxHash:            tr.config.TxID,
-		Chain:             "main",
-		CanonicalTxHash:   &tr.config.TxID,
+		Account:         tr.config.Principal,
+		TxHash:          tr.config.TxID,
+		Chain:           "main",
+		CanonicalTxHash: &tr.config.TxID,
 	}
 
 	return tr.g0Layer.ProveG0(ctx, request)
@@ -235,10 +235,10 @@ func (tr *TestRunner) executeG0(ctx context.Context) (*G0Result, error) {
 func (tr *TestRunner) executeG1(ctx context.Context, g0Result *G0Result) (*G1Result, error) {
 	request := G1Request{
 		G0Request: G0Request{
-			Account:           tr.config.Principal,
-			TxHash:            tr.config.TxID,
-			Chain:             "main",
-			CanonicalTxHash:   &tr.config.TxID,
+			Account:         tr.config.Principal,
+			TxHash:          tr.config.TxID,
+			Chain:           "main",
+			CanonicalTxHash: &tr.config.TxID,
 		},
 		KeyPage: tr.config.KeyPage,
 	}
@@ -251,10 +251,10 @@ func (tr *TestRunner) executeG2(ctx context.Context, g1Result *G1Result) (*G2Res
 	request := G2Request{
 		G1Request: G1Request{
 			G0Request: G0Request{
-				Account:           tr.config.Principal,
-				TxHash:            g1Result.TxHash,
-				Chain:             "main",
-				CanonicalTxHash:   &g1Result.TxHash,
+				Account:         tr.config.Principal,
+				TxHash:          g1Result.TxHash,
+				Chain:           "main",
+				CanonicalTxHash: &g1Result.TxHash,
 			},
 			KeyPage: tr.config.KeyPage,
 		},

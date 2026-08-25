@@ -79,12 +79,12 @@ func (gv *GoVerifier) VerifyPayloadWithRawJSON(ctx context.Context, txJSON []byt
 	if err != nil {
 		// Return failed verification result instead of error for controlled failure
 		return &PayloadVerification{
-			Verified:             false,
-			ComputedTxHash:       "",
-			ExpectedTxHash:       expectedTxHash,
-			GoVerifierOutput:     stdout,
-			GoVerifierErrors:     stderr,
-			VerificationDetails:  map[string]interface{}{"execution_error": err.Error()},
+			Verified:            false,
+			ComputedTxHash:      "",
+			ExpectedTxHash:      expectedTxHash,
+			GoVerifierOutput:    stdout,
+			GoVerifierErrors:    stderr,
+			VerificationDetails: map[string]interface{}{"execution_error": err.Error()},
 		}, nil
 	}
 
@@ -93,12 +93,12 @@ func (gv *GoVerifier) VerifyPayloadWithRawJSON(ctx context.Context, txJSON []byt
 	normalizedComputed, err := hv.RequireHex32(computedHash, "computed transaction hash")
 	if err != nil {
 		return &PayloadVerification{
-			Verified:             false,
-			ComputedTxHash:       computedHash,
-			ExpectedTxHash:       expectedTxHash,
-			GoVerifierOutput:     stdout,
-			GoVerifierErrors:     stderr,
-			VerificationDetails:  map[string]interface{}{"validation_error": err.Error()},
+			Verified:            false,
+			ComputedTxHash:      computedHash,
+			ExpectedTxHash:      expectedTxHash,
+			GoVerifierOutput:    stdout,
+			GoVerifierErrors:    stderr,
+			VerificationDetails: map[string]interface{}{"validation_error": err.Error()},
 		}, nil
 	}
 
@@ -106,12 +106,12 @@ func (gv *GoVerifier) VerifyPayloadWithRawJSON(ctx context.Context, txJSON []byt
 	normalizedExpected, err := hv.RequireHex32(expectedTxHash, "expected transaction hash")
 	if err != nil {
 		return &PayloadVerification{
-			Verified:             false,
-			ComputedTxHash:       normalizedComputed,
-			ExpectedTxHash:       expectedTxHash,
-			GoVerifierOutput:     stdout,
-			GoVerifierErrors:     stderr,
-			VerificationDetails:  map[string]interface{}{"expected_hash_error": err.Error()},
+			Verified:            false,
+			ComputedTxHash:      normalizedComputed,
+			ExpectedTxHash:      expectedTxHash,
+			GoVerifierOutput:    stdout,
+			GoVerifierErrors:    stderr,
+			VerificationDetails: map[string]interface{}{"expected_hash_error": err.Error()},
 		}, nil
 	}
 
@@ -119,15 +119,15 @@ func (gv *GoVerifier) VerifyPayloadWithRawJSON(ctx context.Context, txJSON []byt
 	verified := normalizedComputed == normalizedExpected
 
 	result := &PayloadVerification{
-		Verified:             verified,
-		ComputedTxHash:       normalizedComputed,
-		ExpectedTxHash:       normalizedExpected,
-		GoVerifierOutput:     stdout,
-		GoVerifierErrors:     stderr,
+		Verified:         verified,
+		ComputedTxHash:   normalizedComputed,
+		ExpectedTxHash:   normalizedExpected,
+		GoVerifierOutput: stdout,
+		GoVerifierErrors: stderr,
 		VerificationDetails: map[string]interface{}{
-			"hash_match":        verified,
-			"computed_length":   len(normalizedComputed),
-			"expected_length":   len(normalizedExpected),
+			"hash_match":      verified,
+			"computed_length": len(normalizedComputed),
+			"expected_length": len(normalizedExpected),
 		},
 	}
 
@@ -415,14 +415,14 @@ func (gv *GoVerifier) VerifyTransactionEffect(expectedEffect string, computedEff
 	verified := expectedEffect == computedEffect
 
 	result := &EffectVerification{
-		EffectType:     "hash_comparison", // Could be extended for other effect types
-		Verified:       verified,
-		ExpectedValue:  &expectedEffect,
-		ComputedValue:  &computedEffect,
+		EffectType:    "hash_comparison", // Could be extended for other effect types
+		Verified:      verified,
+		ExpectedValue: &expectedEffect,
+		ComputedValue: &computedEffect,
 		Details: map[string]interface{}{
-			"effect_match":      verified,
-			"expected_length":   len(expectedEffect),
-			"computed_length":   len(computedEffect),
+			"effect_match":    verified,
+			"expected_length": len(expectedEffect),
+			"computed_length": len(computedEffect),
 		},
 	}
 

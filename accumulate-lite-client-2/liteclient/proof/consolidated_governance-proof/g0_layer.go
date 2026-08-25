@@ -317,7 +317,6 @@ func (g0 *G0Layer) parseReceiptData(receiptMap map[string]interface{}) (ReceiptD
 		}
 	}
 
-
 	// Capture the merkle path so the receipt can actually be recomputed.
 	entries, err := ParseReceiptEntries(receiptMap)
 	if err != nil {

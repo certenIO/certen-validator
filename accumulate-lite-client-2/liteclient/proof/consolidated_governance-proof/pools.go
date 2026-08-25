@@ -26,7 +26,7 @@ type ObjectPools struct {
 	// Slice pools for common operations
 	stringSlicePool    sync.Pool
 	interfaceSlicePool sync.Pool
-	mapPool           sync.Pool
+	mapPool            sync.Pool
 }
 
 // Global pools instance

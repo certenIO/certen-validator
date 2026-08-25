@@ -677,13 +677,13 @@ type BundleIntegrityManager struct {
 
 // CustodyEvent represents a chain-of-custody event
 type CustodyEvent struct {
-	Timestamp   time.Time `json:"timestamp"`
-	ArtifactID  string    `json:"artifactId"`
-	Operation   string    `json:"operation"`
-	Hash        string    `json:"hash"`
-	PreviousHash string   `json:"previousHash,omitempty"`
-	Operator    string    `json:"operator"`
-	Validated   bool      `json:"validated"`
+	Timestamp    time.Time `json:"timestamp"`
+	ArtifactID   string    `json:"artifactId"`
+	Operation    string    `json:"operation"`
+	Hash         string    `json:"hash"`
+	PreviousHash string    `json:"previousHash,omitempty"`
+	Operator     string    `json:"operator"`
+	Validated    bool      `json:"validated"`
 }
 
 // NewBundleIntegrityManager creates enhanced bundle integrity manager
@@ -770,13 +770,13 @@ func (bim *BundleIntegrityManager) GetCustodyChain() []CustodyEvent {
 // ArtifactManager manages RPC artifacts with superior cryptographic verification
 // Implements CERTEN Section 4.2 Bundle Integrity requirements
 type ArtifactManager struct {
-	workDir         string
-	artifactsDir    string
-	fileUtils       FileUtils
-	verifier        *CryptographicVerifier
-	bundleManager   *BundleIntegrityManager
+	workDir          string
+	artifactsDir     string
+	fileUtils        FileUtils
+	verifier         *CryptographicVerifier
+	bundleManager    *BundleIntegrityManager
 	securityMetadata map[string]SecurityMetadata
-	metaMutex       sync.RWMutex
+	metaMutex        sync.RWMutex
 }
 
 // SecurityMetadata tracks enhanced security metadata for artifacts
@@ -1184,7 +1184,6 @@ func (ProofUtilities) ExtractReceiptFromChainEntry(chainEntry map[string]interfa
 			receipt.MajorBlock = &mb
 		}
 	}
-
 
 	// Capture the merkle path so the receipt can actually be recomputed.
 	entries, err := ParseReceiptEntries(receiptMap)

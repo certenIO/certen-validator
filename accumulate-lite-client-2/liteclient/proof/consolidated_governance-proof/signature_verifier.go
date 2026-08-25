@@ -114,7 +114,12 @@ func (sv *SignatureVerifier) ComputeAccumulateDigest(ctx context.Context, sig Si
 			"--pubkey", sig.PublicKey,
 			"--signer", sig.Signer,
 			"--signer-version", strconv.FormatInt(sig.SignerVersion, 10),
-			"--timestamp", func() string { if sig.Timestamp != nil { return strconv.FormatInt(*sig.Timestamp, 10) }; return "0" }(),
+			"--timestamp", func() string {
+				if sig.Timestamp != nil {
+					return strconv.FormatInt(*sig.Timestamp, 10)
+				}
+				return "0"
+			}(),
 			"--txhash", txHash,
 		)
 	} else {
@@ -123,7 +128,12 @@ func (sv *SignatureVerifier) ComputeAccumulateDigest(ctx context.Context, sig Si
 			"--pubkey", sig.PublicKey,
 			"--signer", sig.Signer,
 			"--signer-version", strconv.FormatInt(sig.SignerVersion, 10),
-			"--timestamp", func() string { if sig.Timestamp != nil { return strconv.FormatInt(*sig.Timestamp, 10) }; return "0" }(),
+			"--timestamp", func() string {
+				if sig.Timestamp != nil {
+					return strconv.FormatInt(*sig.Timestamp, 10)
+				}
+				return "0"
+			}(),
 			"--txhash", txHash,
 		)
 	}

@@ -24,8 +24,8 @@ import (
 
 // G2Layer implements G2 governance proofs (Governance + Outcome Binding)
 type G2Layer struct {
-	g1Layer     *G1Layer
-	goVerifier  *GoVerifier
+	g1Layer      *G1Layer
+	goVerifier   *GoVerifier
 	queryBuilder QueryBuilder
 }
 
@@ -256,8 +256,6 @@ func (g2 *G2Layer) verifyTransactionEffect(computedHash string, expectedHash str
 	return verification
 }
 
-
-
 // fallbackToG1 creates G2 result with fallback to G1-level proof
 func (g2 *G2Layer) fallbackToG1(g1Result *G1Result) *G2Result {
 	fmt.Printf("[G2] [FALLBACK] Creating G1 fallback result\n")
@@ -265,12 +263,12 @@ func (g2 *G2Layer) fallbackToG1(g1Result *G1Result) *G2Result {
 	// Create empty outcome leaf indicating G2 not available
 	emptyOutcome := OutcomeLeaf{
 		PayloadBinding: PayloadVerification{
-			Verified:             false,
-			ComputedTxHash:       "",
-			ExpectedTxHash:       g1Result.TxHash,
-			GoVerifierOutput:     "",
-			GoVerifierErrors:     "G2 verification not available",
-			VerificationDetails:  map[string]interface{}{"fallback_reason": "G2 requirements not met"},
+			Verified:            false,
+			ComputedTxHash:      "",
+			ExpectedTxHash:      g1Result.TxHash,
+			GoVerifierOutput:    "",
+			GoVerifierErrors:    "G2 verification not available",
+			VerificationDetails: map[string]interface{}{"fallback_reason": "G2 requirements not met"},
 		},
 		ReceiptBinding: VerificationResult{
 			Verified: false,
@@ -281,21 +279,21 @@ func (g2 *G2Layer) fallbackToG1(g1Result *G1Result) *G2Result {
 			Details:  "G2 witness consistency not verified (fallback to G1)",
 		},
 		Effect: EffectVerification{
-			EffectType:     "fallback",
-			Verified:       false,
-			ExpectedValue:  nil,
-			ComputedValue:  nil,
-			Details:        map[string]interface{}{"fallback": true},
+			EffectType:    "fallback",
+			Verified:      false,
+			ExpectedValue: nil,
+			ComputedValue: nil,
+			Details:       map[string]interface{}{"fallback": true},
 		},
 	}
 
 	return &G2Result{
-		G1Result:         *g1Result,
-		OutcomeLeaf:      emptyOutcome,
-		PayloadVerified:  false,
-		EffectVerified:   false,
-		G2ProofComplete:  false,
-		SecurityLevel:    "G1_GOVERNANCE_ONLY",
+		G1Result:        *g1Result,
+		OutcomeLeaf:     emptyOutcome,
+		PayloadVerified: false,
+		EffectVerified:  false,
+		G2ProofComplete: false,
+		SecurityLevel:   "G1_GOVERNANCE_ONLY",
 	}
 }
 
@@ -383,11 +381,11 @@ func (g2 *G2Layer) buildPayloadStructure(g1Result *G1Result) map[string]interfac
 	// Add signature details
 	for i, sig := range g1Result.ValidatedSignatures {
 		payload["signatures"].([]map[string]interface{})[i] = map[string]interface{}{
-			"type":           sig.Signature.Type,
-			"publicKey":      sig.Signature.PublicKey,
-			"signature":      sig.Signature.Signature,
-			"signer":         sig.Signature.Signer,
-			"signerVersion":  sig.Signature.SignerVersion,
+			"type":            sig.Signature.Type,
+			"publicKey":       sig.Signature.PublicKey,
+			"signature":       sig.Signature.Signature,
+			"signer":          sig.Signature.Signer,
+			"signerVersion":   sig.Signature.SignerVersion,
 			"transactionHash": sig.Signature.TransactionHash,
 		}
 		if sig.Signature.Timestamp != nil {
@@ -483,12 +481,12 @@ func (g2 *G2Layer) AnalyzeG2Performance(result *G2Result) map[string]interface{}
 
 	// Add G2-specific analysis
 	analysis["g2_verification"] = map[string]interface{}{
-		"payload_verified":      result.PayloadVerified,
-		"effect_verified":       result.EffectVerified,
-		"receipt_binding":       result.OutcomeLeaf.ReceiptBinding.Verified,
-		"witness_consistency":   result.OutcomeLeaf.WitnessConsistency.Verified,
-		"g2_complete":          result.G2ProofComplete,
-		"security_level":       result.SecurityLevel,
+		"payload_verified":    result.PayloadVerified,
+		"effect_verified":     result.EffectVerified,
+		"receipt_binding":     result.OutcomeLeaf.ReceiptBinding.Verified,
+		"witness_consistency": result.OutcomeLeaf.WitnessConsistency.Verified,
+		"g2_complete":         result.G2ProofComplete,
+		"security_level":      result.SecurityLevel,
 	}
 
 	// Outcome leaf analysis
@@ -496,9 +494,9 @@ func (g2 *G2Layer) AnalyzeG2Performance(result *G2Result) map[string]interface{}
 		"payload_binding_verified": result.OutcomeLeaf.PayloadBinding.Verified,
 		"payload_hash_computed":    result.OutcomeLeaf.PayloadBinding.ComputedTxHash,
 		"payload_hash_expected":    result.OutcomeLeaf.PayloadBinding.ExpectedTxHash,
-		"effect_type":             result.OutcomeLeaf.Effect.EffectType,
-		"effect_verified":         result.OutcomeLeaf.Effect.Verified,
-		"go_verifier_available":   result.OutcomeLeaf.PayloadBinding.GoVerifierOutput != "",
+		"effect_type":              result.OutcomeLeaf.Effect.EffectType,
+		"effect_verified":          result.OutcomeLeaf.Effect.Verified,
+		"go_verifier_available":    result.OutcomeLeaf.PayloadBinding.GoVerifierOutput != "",
 	}
 
 	// Security assessment
@@ -548,14 +546,14 @@ func (g2 *G2Layer) ExtractPayloadFromG1(g1Result *G1Result) (map[string]interfac
 	// from the expanded execution message that was retrieved during G1 proof generation
 
 	payload := map[string]interface{}{
-		"type":           "transaction",
-		"hash":           g1Result.TxHash,
-		"principal":      g1Result.Principal,
-		"scope":          g1Result.Scope,
-		"chain":          g1Result.Chain,
-		"entry_hash":     g1Result.EntryHashExec,
-		"exec_mbi":       g1Result.ExecMBI,
-		"exec_witness":   g1Result.ExecWitness,
+		"type":         "transaction",
+		"hash":         g1Result.TxHash,
+		"principal":    g1Result.Principal,
+		"scope":        g1Result.Scope,
+		"chain":        g1Result.Chain,
+		"entry_hash":   g1Result.EntryHashExec,
+		"exec_mbi":     g1Result.ExecMBI,
+		"exec_witness": g1Result.ExecWitness,
 	}
 
 	// Additional fields would be extracted from the actual expanded message
@@ -578,6 +576,7 @@ func (g2 *G2Layer) VerifyG2Prerequisites(request G2Request) error {
 
 	return nil
 }
+
 // outcomeBindingDetails renders the outcome binding as the legacy
 // VerificationResult detail string, so existing consumers keep working while
 // reading a real result instead of a tautology.

@@ -81,13 +81,13 @@ type CLIConfig struct {
 	Timeout int
 
 	// Test runner options
-	TestMode     bool
-	TestNetwork  string
+	TestMode      bool
+	TestNetwork   string
 	TestPrincipal string
-	TestTxID     string
-	TestKeyPage  string
-	TestRunMode  string // "chained" or "step"
-	TestWorkDir  string
+	TestTxID      string
+	TestKeyPage   string
+	TestRunMode   string // "chained" or "step"
+	TestWorkDir   string
 }
 
 // main is the entry point for the governance proof CLI

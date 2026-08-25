@@ -57,9 +57,9 @@ var loadFixtures = []struct{ account, txHash, keyPage string }{
 type loadOutcome struct {
 	index      int
 	ok         bool
-	outage     bool   // failure was an evidence outage - acceptable under load
-	disagree   bool   // routes disagreed - a finding, not acceptable
-	verdict    bool   // FAILURE SHAPED AS A GOVERNANCE VERDICT - the defect
+	outage     bool // failure was an evidence outage - acceptable under load
+	disagree   bool // routes disagreed - a finding, not acceptable
+	verdict    bool // FAILURE SHAPED AS A GOVERNANCE VERDICT - the defect
 	uniqueKeys int
 	threshold  uint64
 	detail     string

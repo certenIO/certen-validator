@@ -512,10 +512,10 @@ func (ab *AuthorityBuilder) getTransactionType(msg interface{}) string {
 func (ab *AuthorityBuilder) expandSingleEntry(entryHash, scopeURL string) (map[string]interface{}, error) {
 	// Build query for individual chain entry with expansion (aligned with Python approach)
 	query := map[string]interface{}{
-		"queryType":     "chain",
-		"name":          "main",
-		"entry":         entryHash,
-		"expand":        true,
+		"queryType":      "chain",
+		"name":           "main",
+		"entry":          entryHash,
+		"expand":         true,
 		"includeReceipt": true,
 	}
 
@@ -822,7 +822,7 @@ func (ab *AuthorityBuilder) parseGenesisKeyPageState(msg map[string]interface{},
 			if accountURLStr, ok := accountURL.(string); ok {
 				if accountTypeStr, ok := accountType.(string); ok {
 					if normalizeURL(accountURLStr) == normalizeURL(targetKeyPage) &&
-					   strings.EqualFold(accountTypeStr, "keypage") {
+						strings.EqualFold(accountTypeStr, "keypage") {
 						fmt.Printf("[AUTHORITY] [DEBUG] parseGenesisKeyPageState: Found matching keypage account\n")
 						return ab.parseKeyPageStateFromDef(accountMap)
 					}

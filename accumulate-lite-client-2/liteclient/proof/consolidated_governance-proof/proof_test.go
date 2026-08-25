@@ -25,15 +25,15 @@ import (
 
 // TestFixtures contains all test data for governance proof testing
 type TestFixtures struct {
-	SampleTxHash      string
-	SampleAccount     string
-	SampleKeyPage     string
-	SamplePrincipal   string
-	SamplePublicKey   string
-	SampleSignature   string
-	SampleExecMBI     int64
-	SampleExecWitness string
-	SampleReceiptData ReceiptData
+	SampleTxHash       string
+	SampleAccount      string
+	SampleKeyPage      string
+	SamplePrincipal    string
+	SamplePublicKey    string
+	SampleSignature    string
+	SampleExecMBI      int64
+	SampleExecWitness  string
+	SampleReceiptData  ReceiptData
 	SampleKeyPageState KeyPageState
 }
 
@@ -623,7 +623,7 @@ func createSampleSignatureData(fixtures *TestFixtures) SignatureData {
 		SignerVersion:   1,
 		Timestamp:       func() *int64 { ts := time.Now().Unix(); return &ts }(),
 		TransactionHash: fixtures.SampleTxHash,
-		TXID:           fixtures.SampleTxHash,
+		TXID:            fixtures.SampleTxHash,
 	}
 }
 

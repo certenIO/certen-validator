@@ -165,16 +165,16 @@ func (g1 *G1Layer) ProveG1(ctx context.Context, request G1Request) (*G1Result, e
 
 	// Step 5: Build G1 result
 	result := &G1Result{
-		G0Result:              *g0Result,
-		AuthoritySnapshot:     *authoritySnapshot,
-		ValidatedSignatures:   validatedSignatures,
-		UniqueValidKeys:       authorizationResult.UniqueValidKeys,
-		RequiredThreshold:     authoritySnapshot.StateExec.Threshold,
-		ThresholdSatisfied:    authorizationResult.ThresholdSatisfied,
-		ExecutionSuccess:      authorizationResult.ExecutionSuccess,
-		TimingValid:           authorizationResult.TimingValid,
-		G1ProofComplete:       authorizationResult.G1ProofComplete,
-		SignatureRouteStatus:  routeStatus,
+		G0Result:             *g0Result,
+		AuthoritySnapshot:    *authoritySnapshot,
+		ValidatedSignatures:  validatedSignatures,
+		UniqueValidKeys:      authorizationResult.UniqueValidKeys,
+		RequiredThreshold:    authoritySnapshot.StateExec.Threshold,
+		ThresholdSatisfied:   authorizationResult.ThresholdSatisfied,
+		ExecutionSuccess:     authorizationResult.ExecutionSuccess,
+		TimingValid:          authorizationResult.TimingValid,
+		G1ProofComplete:      authorizationResult.G1ProofComplete,
+		SignatureRouteStatus: routeStatus,
 	}
 
 	fmt.Printf("[G1] G1 proof complete:\n")
@@ -243,12 +243,6 @@ func (g1 *G1Layer) enumerateAndValidateSignatures(ctx context.Context, request G
 	return evidence.Counted, status, nil
 }
 
-
-
-
-
-
-
 // parseReceiptData parses receipt data from receipt object
 func (g1 *G1Layer) parseReceiptData(receiptMap map[string]interface{}) (ReceiptData, error) {
 	pu := ProofUtilities{}
@@ -290,7 +284,6 @@ func (g1 *G1Layer) parseReceiptData(receiptMap map[string]interface{}) (ReceiptD
 		return ReceiptData{}, ValidationError{Msg: fmt.Sprintf("Invalid localBlock: %d", receipt.LocalBlock)}
 	}
 
-
 	// Capture the merkle path so the receipt can actually be recomputed.
 	entries, err := ParseReceiptEntries(receiptMap)
 	if err != nil {
@@ -300,7 +293,6 @@ func (g1 *G1Layer) parseReceiptData(receiptMap map[string]interface{}) (ReceiptD
 
 	return receipt, nil
 }
-
 
 // ExtractSignatureSetUsingMessageID extracts signature set by querying the transaction message ID directly
 func (g1 *G1Layer) ExtractSignatureSetUsingMessageID(ctx context.Context, messageID string, keyPage string) (*SignatureSetData, error) {
@@ -342,10 +334,10 @@ func (g1 *G1Layer) ExtractSignatureSetUsingMessageID(ctx context.Context, messag
 
 	// Build SignatureSetData result
 	signatureSetData := &SignatureSetData{
-		TxScope:          messageID,
-		KeyPage:          keyPage,
-		SignatureCount:   len(messageIDs),
-		MessageIDs:       messageIDs,
+		TxScope:        messageID,
+		KeyPage:        keyPage,
+		SignatureCount: len(messageIDs),
+		MessageIDs:     messageIDs,
 	}
 
 	fmt.Printf("[G1] [SIGNATURESET] Found %d signature message IDs\n", len(messageIDs))
@@ -356,11 +348,9 @@ func (g1 *G1Layer) ExtractSignatureSetUsingMessageID(ctx context.Context, messag
 	return signatureSetData, nil
 }
 
-
 // =============================================================================
 // Canonical SignatureSet Extraction (Python method translation)
 // =============================================================================
-
 
 // pickKeypageSignatureSet selects signatureSet for specific key page from transaction records
 // Translation of Python SignatureParser.pick_keypage_signature_set
@@ -561,12 +551,12 @@ func (g1 *G1Layer) AnalyzeG1Performance(result *G1Result) map[string]interface{}
 
 	// Authority snapshot analysis
 	analysis["authority_snapshot"] = map[string]interface{}{
-		"genesis_version":     result.AuthoritySnapshot.Genesis.PageState.Version,
-		"final_version":       result.AuthoritySnapshot.StateExec.Version,
-		"mutations_applied":   len(result.AuthoritySnapshot.Mutations),
-		"total_main_entries":  result.AuthoritySnapshot.Validation.TotalEntries,
-		"final_key_count":     len(result.AuthoritySnapshot.StateExec.Keys),
-		"final_threshold":     result.AuthoritySnapshot.StateExec.Threshold,
+		"genesis_version":    result.AuthoritySnapshot.Genesis.PageState.Version,
+		"final_version":      result.AuthoritySnapshot.StateExec.Version,
+		"mutations_applied":  len(result.AuthoritySnapshot.Mutations),
+		"total_main_entries": result.AuthoritySnapshot.Validation.TotalEntries,
+		"final_key_count":    len(result.AuthoritySnapshot.StateExec.Keys),
+		"final_threshold":    result.AuthoritySnapshot.StateExec.Threshold,
 	}
 
 	// Signature analysis
@@ -582,13 +572,13 @@ func (g1 *G1Layer) AnalyzeG1Performance(result *G1Result) map[string]interface{}
 	}
 
 	analysis["signature_analysis"] = map[string]interface{}{
-		"total_signatures":       len(result.ValidatedSignatures),
-		"unique_valid_keys":      result.UniqueValidKeys,
-		"timing_valid_count":     timingValidCount,
-		"tx_hash_valid_count":    txHashValidCount,
-		"threshold_required":     result.RequiredThreshold,
-		"threshold_satisfied":    result.ThresholdSatisfied,
-		"threshold_margin":       int64(result.UniqueValidKeys) - int64(result.RequiredThreshold),
+		"total_signatures":    len(result.ValidatedSignatures),
+		"unique_valid_keys":   result.UniqueValidKeys,
+		"timing_valid_count":  timingValidCount,
+		"tx_hash_valid_count": txHashValidCount,
+		"threshold_required":  result.RequiredThreshold,
+		"threshold_satisfied": result.ThresholdSatisfied,
+		"threshold_margin":    int64(result.UniqueValidKeys) - int64(result.RequiredThreshold),
 	}
 
 	// Overall validation
