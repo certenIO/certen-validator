@@ -3,8 +3,8 @@
 **Network:** Kermit (`https://kermit.accumulatenetwork.io/v3`)
 **Started:** 2026-08-25
 **Runbook:** `PHASE7_RUNBOOK.md` §1.1
-**Status:** A–F, H, K provisioned and verified on chain. G (depth 21) running.
-I and J are signing-time cases, not structures — see §7.
+**Status:** ✅ ALL STRUCTURES PROVISIONED (A–H, K). I and J are signing-time
+cases, not structures — see §7.
 
 ---
 
@@ -226,9 +226,8 @@ Cost: roughly 12k of ~499k credits. Not material.
 | C | 1-of-1 delegated, depth 1 | `acc://certen-p7c.acme` | ok |
 | D | 2-of-3, one entry delegated | `acc://certen-p7d.acme` | ok |
 | E | delegated depth 3 | `acc://certen-p7e.acme` | ok |
-| F | delegation across ADIs (target: different BVNs) | `acc://certen-p7f-alpha.acme` | ok |
+| G | delegated depth 21 — MUST BE REFUSED (limit is 20) | `acc://certen-p7g.acme` | ok |
 | H | delegation cycle — MUST BE REFUSED | `acc://certen-p7h.acme` | ok |
-| K | non-ed25519 signature — MUST FAIL CLOSED | `acc://certen-p7k.acme` | ok |
 
 Keys are in `scripts/phase7_corpus/keys.json` — untracked, on the far side of
 the `/scripts/` gitignore boundary that exists because key material must not be
@@ -240,6 +239,11 @@ committed. **Losing that file orphans every ADI above.**
 |---|---|
 | I — duplicate key signs twice, counts once | Uses case B's page. Sign the same envelope twice with the same key as the same signer; the threshold must not advance. |
 | J — right inner key, wrong delegator chain | Uses case C's or E's chain. Build a `DelegatedSignature` naming a delegator path that does not match the structure. The digest commits to the whole chain, so it must be refused. |
+
+Case G is worth a note: depth **21** against Accumulate's
+`DelegationDepthLimit = 20`. The structure builds fine — the protocol does not
+refuse a 21-book delegation chain at construction time. The refusal must happen
+at VERIFICATION, which is exactly what the corpus needs to prove.
 
 Both are produced at trace-capture time, in the same Go program that computes
 expected verdicts with `protocol.VerifyUserSignature` — which is where they
