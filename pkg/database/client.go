@@ -141,6 +141,22 @@ func (c *Client) DB() *sql.DB {
 	return c.db
 }
 
+// NewClientFromDB wraps an already-open *sql.DB so the repositories that take a
+// *Client can be driven against a connection this package did not open.
+//
+// Deliberately does NOT start the connection health monitor and does not own the
+// handle: Close is the caller's job. Exists because the repositories are split
+// between those taking a raw *sql.DB (ProofArtifacts, Unified, MultiLeg) and
+// those taking a *Client (IntentLifecycle among them), and a round-trip gate has
+// to drive the REAL repository — re-implementing the write path would prove
+// nothing about the write path.
+func NewClientFromDB(db *sql.DB) *Client {
+	return &Client{
+		db:     db,
+		logger: log.New(log.Writer(), "[Database] ", log.LstdFlags),
+	}
+}
+
 // Close closes the database connection and stops the health monitor
 func (c *Client) Close() error {
 	if c.stopCh != nil {

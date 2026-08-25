@@ -34,6 +34,12 @@ import (
 	"github.com/certen/independant-validator/pkg/accumulate"
 	attestation "github.com/certen/independant-validator/pkg/attestation/strategy"
 	chain "github.com/certen/independant-validator/pkg/chain/strategy"
+	// One vocabulary for the settlement tri-state, not two. pkg/execution already
+	// imports pkg/consensus (batch_proof_submitter.go, batch_quorum_attestor.go)
+	// and consensus does not import this package, so there is no cycle — and
+	// restating "confirmed | pending | failed" locally is exactly how two copies
+	// of a classification drift apart.
+	"github.com/certen/independant-validator/pkg/consensus"
 	"github.com/certen/independant-validator/pkg/database"
 	"github.com/certen/independant-validator/pkg/proof"
 	"github.com/certen/independant-validator/pkg/strategy"
@@ -520,6 +526,59 @@ func (o *UnifiedOrchestrator) updateLifecycleInProcess(ctx context.Context, inte
 	}
 }
 
+// updateLifecycleSettling marks an intent as waiting on its target-chain receipt.
+// Non-fatal: logs warning on error, never blocks the proof cycle.
+//
+// STAGE 1. Sits between in_process and the terminal states. Before it existed,
+// 'complete' covered this interval and an intent was reported successful ~51s
+// before its transaction confirmed (intent 1638327d…, 2026-08-25). Never terminal:
+// executePhase7 resolves it from the observed receipt.
+func (o *UnifiedOrchestrator) updateLifecycleSettling(ctx context.Context, intentID, cycleID string) {
+	if o.config.Repos == nil || o.config.Repos.IntentLifecycle == nil || intentID == "" {
+		return
+	}
+	if err := o.config.Repos.IntentLifecycle.UpdateStatus(ctx, intentID,
+		database.IntentLifecycleSettling,
+		database.WithCycleID(cycleID),
+	); err != nil {
+		fmt.Printf("Warning: [LIFECYCLE] failed to update %s to settling: %v\n", intentID, err)
+	}
+}
+
+// logTargetChainResolution prints the TERMINAL settlement line for one observed
+// transaction, against the same intent ID the pending line named.
+//
+// STAGE 1. The defect this closes is not that the database ended up wrong — it
+// ended up right — but that the LOG kept a warning forever with nothing beside
+// it. Whoever read "gas may have been spent on a reverted transaction" at 07:33:41
+// had no line to find at 07:34:32 saying the transaction confirmed.
+//
+// This is the first point in the pipeline entitled to say "failed": obsResult
+// carries a receipt that was actually seen (Status 1 = success, 2 = failed), not
+// an inference from a submit window that expired.
+func (o *UnifiedOrchestrator) logTargetChainResolution(intentID, txHash string, obs *chain.ObservationResult) {
+	if obs == nil {
+		return
+	}
+	outcome := consensus.TargetChainOutcomeFromReceiptStatus(obs.Status)
+	switch outcome {
+	case consensus.TargetChainConfirmedOutcome:
+		fmt.Printf("✅ [SETTLEMENT-RESOLVED] intent=%s tx=%s CONFIRMED status=1 block=%d chain=%s "+
+			"— this is the terminal answer for this intent; any earlier pending line is now closed\n",
+			intentID, txHash, obs.BlockNumber, obs.ChainName)
+	case consensus.TargetChainFailed:
+		fmt.Printf("❌ [SETTLEMENT-RESOLVED] intent=%s tx=%s REVERTED status=0 block=%d chain=%s gasUsed=%d "+
+			"— gas was spent on a reverted transaction\n",
+			intentID, txHash, obs.BlockNumber, obs.ChainName, obs.GasUsed)
+	default:
+		// Finalized but neither success nor revert. Not a failure — say so rather
+		// than picking one, which is the whole point of the tri-state.
+		fmt.Printf("⏳ [SETTLEMENT-RESOLVED] intent=%s tx=%s finalized with a NON-TERMINAL receipt "+
+			"status=%d block=%d chain=%s — not treated as a failure\n",
+			intentID, txHash, obs.Status, obs.BlockNumber, obs.ChainName)
+	}
+}
+
 // updateLifecycleFailed marks an intent as failed in the lifecycle table.
 // Non-fatal: logs warning on error, never blocks proof cycle.
 func (o *UnifiedOrchestrator) updateLifecycleFailed(ctx context.Context, intentID, cycleID string, phase int, phaseErr error) {
@@ -581,6 +640,13 @@ func (o *UnifiedOrchestrator) executePhase7(ctx context.Context, cycle *activeCy
 	req := cycle.Request
 	result := cycle.Result
 
+	// STAGE 1 — this is where the settlement is genuinely unresolved, so this is
+	// where the lifecycle says so. Between in_process (the proof cycle is running)
+	// and the terminal states, an intent is waiting on a target-chain receipt, and
+	// until now nothing recorded that. 'complete' absorbed it and reported success
+	// ~51s early; see migration 014.
+	o.updateLifecycleSettling(ctx, req.IntentID, req.CycleID)
+
 	// Create timeout context
 	observeCtx, cancel := context.WithTimeout(ctx, o.config.ObservationTimeout)
 	defer cancel()
@@ -598,6 +664,14 @@ func (o *UnifiedOrchestrator) executePhase7(ctx context.Context, cycle *activeCy
 		if !obsResult.IsFinalized {
 			return fmt.Errorf("transaction %d not finalized after observation", i)
 		}
+
+		// THE TERMINAL LINE, against the same intent ID as the pending one.
+		//
+		// The warning that opened Stage 1 was never retracted because the truth
+		// arrived here, in the database, and never in the log. A receipt has now
+		// been SEEN — obsResult.Status is 1 or 2, not a guess about a window — so
+		// this is the first point in the pipeline entitled to say "failed".
+		o.logTargetChainResolution(req.IntentID, txHash, obsResult)
 
 		observationResults = append(observationResults, obsResult)
 

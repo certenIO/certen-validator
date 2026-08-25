@@ -44,6 +44,47 @@ type BFTConsensusProtocol interface {
 	ExecuteCanonicalIntentWithBFTConsensus(ctx context.Context, certenIntent *consensus.CertenIntent, certenProof *proof.CertenProof, blockHeight uint64) error
 }
 
+// bftConsensusWithOutcome is the OPTIONAL extension a consensus implementation may
+// offer: the same execution, plus the settlement outcome it always knew.
+//
+// STAGE 1. The error-only method above answers "did CONSENSUS commit", and this
+// package was reading that answer as though it also covered the target-chain
+// write. It does not, and the gap is measurable: on 2026-08-25 an intent was
+// logged as "processed successfully and marked complete" fifty-one seconds before
+// its transaction actually confirmed.
+//
+// A separate interface rather than a second method on BFTConsensusProtocol so
+// that nothing implementing the original contract has to change to compile. Type
+// asserted at the call site; absence just means the caller cannot distinguish
+// pending from confirmed and must not claim either.
+type bftConsensusWithOutcome interface {
+	ExecuteCanonicalIntentWithOutcome(ctx context.Context, certenIntent *consensus.CertenIntent, certenProof *proof.CertenProof, blockHeight uint64) (consensus.TargetChainOutcome, error)
+}
+
+// executeCanonical runs the intent through consensus and reports what is known
+// about the target-chain settlement.
+//
+// When the implementation does not offer the outcome, pending is returned — never
+// confirmed. Assuming success from a missing signal is the whole family of bug
+// this stage is closing.
+func (id *IntentDiscovery) executeCanonical(
+	ctx context.Context,
+	intent *CertenIntent,
+	certenProof *proof.CertenProof,
+	blockHeight uint64,
+) (consensus.TargetChainOutcome, error) {
+	if withOutcome, ok := id.bftConsensus.(bftConsensusWithOutcome); ok {
+		return withOutcome.ExecuteCanonicalIntentWithOutcome(
+			ctx, (*consensus.CertenIntent)(intent), certenProof, blockHeight)
+	}
+	err := id.bftConsensus.ExecuteCanonicalIntentWithBFTConsensus(
+		ctx, (*consensus.CertenIntent)(intent), certenProof, blockHeight)
+	if err != nil {
+		return consensus.TargetChainFailed, err
+	}
+	return consensus.TargetChainPending, nil
+}
+
 const (
 	CERTEN_INTENT_MEMO    = "CERTEN_INTENT"
 	MAX_CONCURRENT_BLOCKS = 2000 // Job-channel BUFFER, not concurrency — see DefaultBlockWorkers
@@ -926,7 +967,7 @@ func (id *IntentDiscovery) processBlock(job *BlockProcessJob, workerID string) e
 		id.logger.Printf("   Intent Data: %+v", certenTx.IntentData)
 
 		// Process the intent through consensus
-		if err := id.processIntent(intent, job.BlockHeight); err != nil {
+		if outcome, err := id.processIntent(intent, job.BlockHeight); err != nil {
 			id.logger.Printf("❌ Failed to process intent %s: %v", intent.IntentID, err)
 			// E.4 remediation: Phase 2 (failure) - Mark as failed (allows re-acquire on retry),
 			// unless the failure is structural and therefore final.
@@ -953,9 +994,39 @@ func (id *IntentDiscovery) processBlock(job *BlockProcessJob, workerID string) e
 			}
 		} else {
 			foundIntents++
-			// E.4 remediation: Phase 2 (success) - Mark as completed
+			// E.4 remediation: Phase 2 (success) - Mark as completed.
+			//
+			// markCompleted is this PROCESS's in-memory dedup marker — "this node is
+			// done handling this intent" — and stays where it is. What changes is the
+			// sentence printed next to it.
 			id.markCompleted(intent.IntentID)
-			id.logger.Printf("✅ Intent %s processed successfully and marked complete", intent.IntentID)
+
+			// STAGE 1. This line used to say "processed successfully and marked
+			// complete" for every intent whose CONSENSUS committed, including the
+			// ordinary case where the chain write had not resolved yet. On
+			// 2026-08-25 it printed that at 07:33:41 for intent 1638327d…, whose
+			// transaction confirmed at 07:34:32 — and it printed it directly beneath
+			// a warning claiming the same settlement had failed. Both cannot be true,
+			// and neither was.
+			switch {
+			case outcome == consensus.TargetChainOutcomeUnset:
+				// Declined by the entitlement pre-screen: nothing was submitted, so
+				// there is no settlement to be pending or complete.
+				id.logger.Printf("⏭️ Intent %s handled with no target-chain submission (declined before execution)",
+					intent.IntentID)
+			case outcome.IsConfirmed():
+				id.logger.Printf("✅ Intent %s processed and its target-chain settlement is CONFIRMED",
+					intent.IntentID)
+			case outcome.IsFailed():
+				id.logger.Printf("❌ Intent %s processed; target-chain settlement FAILED", intent.IntentID)
+			default:
+				// PENDING — the ordinary case. Name the resolver so the reader knows
+				// where the terminal answer comes from and does not treat this as the
+				// end of the story.
+				id.logger.Printf("⏳ Intent %s processed; target-chain settlement is IN FLIGHT, not complete "+
+					"— the proof cycle (Phase 7 observation, [SETTLEMENT-RESOLVED]) records the terminal "+
+					"status and advances intent_lifecycle from 'settling'", intent.IntentID)
+			}
 		}
 	}
 
@@ -1433,10 +1504,15 @@ func (id *IntentDiscovery) handleRetryJob(job *intentRetryJob) {
 	}
 
 	id.logger.Printf("🔁 [RETRY %d/%d] Re-processing on_demand intent %s", job.attempts, maxAttempts, job.intent.IntentID)
-	err := id.processIntent(job.intent, job.blockHeight)
+	outcome, err := id.processIntent(job.intent, job.blockHeight)
 	if err == nil {
 		id.markCompleted(job.intent.IntentID)
-		id.logger.Printf("✅ [RETRY] on_demand intent %s succeeded on retry %d/%d", job.intent.IntentID, job.attempts, maxAttempts)
+		// STAGE 1: "succeeded on retry" means the retry got the intent through
+		// consensus. Whether its settlement has resolved is a separate fact and is
+		// reported as one — this node's dedup marker is not a claim about the
+		// target chain.
+		id.logger.Printf("✅ [RETRY] on_demand intent %s got through consensus on retry %d/%d (target chain: %s)",
+			job.intent.IntentID, job.attempts, maxAttempts, outcome.Normalize())
 		return
 	}
 
@@ -1463,7 +1539,12 @@ func (id *IntentDiscovery) handleRetryJob(job *intentRetryJob) {
 	}
 }
 
-func (id *IntentDiscovery) processIntent(intent *CertenIntent, blockHeight uint64) error {
+// processIntent runs one intent all the way through consensus.
+//
+// STAGE 1: returns the target-chain outcome alongside the error. A nil error means
+// CONSENSUS committed; it says nothing about whether the chain write landed, and
+// the caller used to read it as though it did.
+func (id *IntentDiscovery) processIntent(intent *CertenIntent, blockHeight uint64) (consensus.TargetChainOutcome, error) {
 	id.logger.Printf("🚀 Processing Certen intent: %s", intent.IntentID)
 
 	// ENTITLEMENT PRE-SCREEN.
@@ -1478,7 +1559,10 @@ func (id *IntentDiscovery) processIntent(intent *CertenIntent, blockHeight uint6
 	// entitlement snapshot, which may lag. It only ever declines work this node
 	// would otherwise do; it can never admit anything.
 	if !id.entitlementPreScreen(intent) {
-		return nil // refused; nothing spent, nothing to retry
+		// Refused before anything was spent, so there is no settlement to report —
+		// not a failure, and emphatically not a success. Unset is the only honest
+		// value: nothing was submitted, so nothing is pending either.
+		return consensus.TargetChainOutcomeUnset, nil // refused; nothing spent, nothing to retry
 	}
 
 	// Detect if this is a multi-leg intent
@@ -1502,7 +1586,7 @@ func (id *IntentDiscovery) processIntent(intent *CertenIntent, blockHeight uint6
 	proofClass, err := intent.GetProofClass()
 	if err != nil {
 		id.logger.Printf("❌ Failed to extract proof class for intent %s: %v", intent.IntentID, err)
-		return fmt.Errorf("extract proof class for intent %s: %w", intent.IntentID, err)
+		return consensus.TargetChainFailed, fmt.Errorf("extract proof class for intent %s: %w", intent.IntentID, err)
 	}
 	id.logger.Printf("📋 Intent %s has proofClass: %s", intent.IntentID, proofClass)
 
@@ -1554,11 +1638,11 @@ func (id *IntentDiscovery) processIntent(intent *CertenIntent, blockHeight uint6
 		// each must be backed by the same chained proof.
 		if certenProof == nil {
 			if !realProofApplicable {
-				return fmt.Errorf("intent %s (proofClass=%s): %w (realBuilder=%v txHash=%q partition=%q)",
+				return consensus.TargetChainFailed, fmt.Errorf("intent %s (proofClass=%s): %w (realBuilder=%v txHash=%q partition=%q)",
 					intent.IntentID, proofClass, errChainedProofTerminal,
 					id.proofGenerator.HasRealProofBuilder(), intent.TransactionHash, intent.Partition)
 			}
-			return fmt.Errorf("intent %s (proofClass=%s): %w", intent.IntentID, proofClass, errChainedProofUnavailable)
+			return consensus.TargetChainFailed, fmt.Errorf("intent %s (proofClass=%s): %w", intent.IntentID, proofClass, errChainedProofUnavailable)
 		}
 
 		// The basic-proof fallback that used to live here is DELETED.
@@ -1574,7 +1658,7 @@ func (id *IntentDiscovery) processIntent(intent *CertenIntent, blockHeight uint6
 		// proof CLASS rather than on what had actually been proven. It is all or nothing:
 		// certenProof is non-nil past this point or the intent has already failed closed above.
 		if certenProof == nil {
-			return fmt.Errorf("intent %s (proofClass=%s): no CertenProof after the chained-proof "+
+			return consensus.TargetChainFailed, fmt.Errorf("intent %s (proofClass=%s): no CertenProof after the chained-proof "+
 				"stage; refusing to proceed — Certen has no degraded proof mode",
 				intent.IntentID, proofClass)
 		}
@@ -1583,7 +1667,7 @@ func (id *IntentDiscovery) processIntent(intent *CertenIntent, blockHeight uint6
 		// cannot be settled without a Certen proof, and on_cadence is not a weaker tier.
 		id.logger.Printf("❌ intent %s (proofClass=%s) REQUIRES a ProofGenerator but none is configured",
 			intent.IntentID, proofClass)
-		return fmt.Errorf("intent %s (proofClass=%s) requires a ProofGenerator but none is configured",
+		return consensus.TargetChainFailed, fmt.Errorf("intent %s (proofClass=%s) requires a ProofGenerator but none is configured",
 			intent.IntentID, proofClass)
 	}
 
@@ -1664,22 +1748,24 @@ func (id *IntentDiscovery) processIntent(intent *CertenIntent, blockHeight uint6
 	}
 
 	// 4️⃣ Execute via canonical BFT API – ValidatorBlock creation
+	//
+	// STAGE 1: the outcome is captured, not discarded. Completing this call means
+	// CONSENSUS committed; whether the target-chain write landed is a separate
+	// fact, and reading the first as the second is what produced "processed
+	// successfully and marked complete" 51 seconds early.
+	outcome := consensus.TargetChainOutcomeUnset
 	if id.bftConsensus != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), id.config.BFTTimeout)
 		defer cancel()
 
-		err = id.bftConsensus.ExecuteCanonicalIntentWithBFTConsensus(
-			ctx,
-			(*consensus.CertenIntent)(intent), // alias, but cast for clarity
-			certenProof,
-			blockHeight,
-		)
+		outcome, err = id.executeCanonical(ctx, intent, certenProof, blockHeight)
 		if err != nil {
 			id.logger.Printf("❌ Canonical BFT consensus execution failed for intent %s: %v", intent.IntentID, err)
-			return err
+			return consensus.TargetChainFailed, err
 		}
 
-		id.logger.Printf("✅ Canonical BFT consensus execution completed for intent: %s", intent.IntentID)
+		id.logger.Printf("✅ Canonical BFT consensus execution completed for intent: %s (target chain: %s)",
+			intent.IntentID, outcome.Normalize())
 	} else {
 		id.logger.Printf("⚠️ No BFT consensus configured - skipping ValidatorBlock creation for %s", intent.IntentID)
 	}
@@ -1688,7 +1774,7 @@ func (id *IntentDiscovery) processIntent(intent *CertenIntent, blockHeight uint6
 	id.intentCount++
 	id.mu.Unlock()
 
-	return nil
+	return outcome, nil
 }
 
 // routeIntentToBatchSystem routes an intent to the appropriate batch handler based on proofClass
@@ -1831,7 +1917,7 @@ func (id *IntentDiscovery) routeMultiLegToBatchSystem(
 
 // processMultiLegIntent handles intents with multiple legs
 // Routes legs grouped by target chain to the appropriate batch system
-func (id *IntentDiscovery) processMultiLegIntent(intent *CertenIntent, blockHeight uint64) error {
+func (id *IntentDiscovery) processMultiLegIntent(intent *CertenIntent, blockHeight uint64) (consensus.TargetChainOutcome, error) {
 	id.logger.Printf("🔀 Processing multi-leg intent: %s", intent.IntentID)
 
 	// Get execution mode
@@ -1844,7 +1930,7 @@ func (id *IntentDiscovery) processMultiLegIntent(intent *CertenIntent, blockHeig
 	// Get leg count
 	legCount, err := intent.GetLegCount()
 	if err != nil {
-		return fmt.Errorf("get leg count: %w", err)
+		return consensus.TargetChainFailed, fmt.Errorf("get leg count: %w", err)
 	}
 	id.logger.Printf("   Leg count: %d", legCount)
 
@@ -1853,7 +1939,7 @@ func (id *IntentDiscovery) processMultiLegIntent(intent *CertenIntent, blockHeig
 	if id.legCompletionHandler != nil {
 		record, err := id.legCompletionHandler.RegisterIntent((*consensus.CertenIntent)(intent), blockHeight)
 		if err != nil {
-			return fmt.Errorf("register multi-leg intent: %w", err)
+			return consensus.TargetChainFailed, fmt.Errorf("register multi-leg intent: %w", err)
 		}
 		intentRecord = record
 		id.logger.Printf("   Registered with %d chain groups", len(record.ChainGroups))
@@ -1862,7 +1948,7 @@ func (id *IntentDiscovery) processMultiLegIntent(intent *CertenIntent, blockHeig
 	// Group legs by target chain
 	legsGrouped, err := intent.GetLegsGroupedByChain()
 	if err != nil {
-		return fmt.Errorf("group legs by chain: %w", err)
+		return consensus.TargetChainFailed, fmt.Errorf("group legs by chain: %w", err)
 	}
 	id.logger.Printf("   Chain groups: %v", func() []string {
 		keys := make([]string, 0, len(legsGrouped))
@@ -1914,11 +2000,11 @@ func (id *IntentDiscovery) processMultiLegIntent(intent *CertenIntent, blockHeig
 		// idempotent so the requeue is replay-safe.
 		if certenProof == nil {
 			if !realProofApplicable {
-				return fmt.Errorf("multi-leg intent %s (proofClass=%s): %w (realBuilder=%v txHash=%q partition=%q)",
+				return consensus.TargetChainFailed, fmt.Errorf("multi-leg intent %s (proofClass=%s): %w (realBuilder=%v txHash=%q partition=%q)",
 					intent.IntentID, proofClass, errChainedProofTerminal,
 					id.proofGenerator.HasRealProofBuilder(), intent.TransactionHash, intent.Partition)
 			}
-			return fmt.Errorf("multi-leg intent %s (proofClass=%s): %w", intent.IntentID, proofClass, errChainedProofUnavailable)
+			return consensus.TargetChainFailed, fmt.Errorf("multi-leg intent %s (proofClass=%s): %w", intent.IntentID, proofClass, errChainedProofUnavailable)
 		}
 
 		// The multi-leg basic-proof fallback is DELETED. There is no "basic proof" in Certen —
@@ -1928,7 +2014,7 @@ func (id *IntentDiscovery) processMultiLegIntent(intent *CertenIntent, blockHeig
 	} else {
 		// No proof generator configured at all — no intent can proceed without a proof,
 		// whatever its class.
-		return fmt.Errorf("multi-leg intent %s (proofClass=%s) requires a ProofGenerator but none is configured",
+		return consensus.TargetChainFailed, fmt.Errorf("multi-leg intent %s (proofClass=%s) requires a ProofGenerator but none is configured",
 			intent.IntentID, proofClass)
 	}
 
@@ -1964,34 +2050,32 @@ func (id *IntentDiscovery) processMultiLegIntent(intent *CertenIntent, blockHeig
 	}
 
 	if err != nil {
-		return fmt.Errorf("route multi-leg intent: %w", err)
+		return consensus.TargetChainFailed, fmt.Errorf("route multi-leg intent: %w", err)
 	}
 
 	id.logger.Printf("✅ Multi-leg intent %s routed to batch system", intent.IntentID)
 
-	// Execute via BFT consensus
+	// Execute via BFT consensus. STAGE 1: same rule as the single-leg path — the
+	// settlement outcome is carried out rather than inferred from a nil error.
+	outcome := consensus.TargetChainOutcomeUnset
 	if id.bftConsensus != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), id.config.BFTTimeout)
 		defer cancel()
 
-		err = id.bftConsensus.ExecuteCanonicalIntentWithBFTConsensus(
-			ctx,
-			(*consensus.CertenIntent)(intent),
-			certenProof,
-			blockHeight,
-		)
+		outcome, err = id.executeCanonical(ctx, intent, certenProof, blockHeight)
 		if err != nil {
 			id.logger.Printf("❌ BFT consensus failed for multi-leg intent %s: %v", intent.IntentID, err)
-			return err
+			return consensus.TargetChainFailed, err
 		}
-		id.logger.Printf("✅ BFT consensus completed for multi-leg intent: %s", intent.IntentID)
+		id.logger.Printf("✅ BFT consensus completed for multi-leg intent: %s (target chain: %s)",
+			intent.IntentID, outcome.Normalize())
 	}
 
 	id.mu.Lock()
 	id.intentCount++
 	id.mu.Unlock()
 
-	return nil
+	return outcome, nil
 }
 
 // routeSequentialChainGroups routes chain groups one at a time (sequential mode)

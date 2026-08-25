@@ -27,6 +27,24 @@ const (
 	// IntentLifecycleInProcess - Validators running proof cycle (Phase 7-9)
 	IntentLifecycleInProcess IntentLifecycleStatus = "in_process"
 
+	// IntentLifecycleSettling - consensus is done and the target-chain write is IN
+	// FLIGHT: submitted, no terminal receipt yet.
+	//
+	// STAGE 1. There was no state for this, which is exactly why 'complete' was
+	// overloaded: an intent was reported complete while its chain write was still
+	// unresolved. Measured on intent 1638327d-af2c-439c-a188-be53cdb5c854
+	// (2026-08-25), the fleet logged "processed successfully and marked complete"
+	// FIFTY-ONE SECONDS before the transaction actually confirmed status=1. A
+	// missing state does not make the state stop existing — it makes some other
+	// state lie about it.
+	//
+	// Sits BETWEEN in_process and the terminal states: in_process means the proof
+	// cycle is running, settling means it is specifically waiting on the target
+	// chain's receipt. NOT terminal and NOT a failure — an intent here is waiting,
+	// which is the ordinary case. Phase 7's observation of the real receipt
+	// resolves it to complete or failed.
+	IntentLifecycleSettling IntentLifecycleStatus = "settling"
+
 	// IntentLifecycleComplete - Phase 9 writeback to Accumulate succeeded
 	IntentLifecycleComplete IntentLifecycleStatus = "complete"
 
@@ -34,7 +52,10 @@ const (
 	IntentLifecycleFailed IntentLifecycleStatus = "failed"
 )
 
-// IsTerminal returns true if this status represents a final state
+// IsTerminal returns true if this status represents a final state.
+//
+// settling is deliberately NOT terminal: it is the one state whose whole purpose
+// is to say "the answer is not in yet".
 func (s IntentLifecycleStatus) IsTerminal() bool {
 	return s == IntentLifecycleComplete || s == IntentLifecycleFailed
 }

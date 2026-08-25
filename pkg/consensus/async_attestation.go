@@ -81,6 +81,22 @@ type PendingAttestation struct {
 	// inline. Logging only — the proof cycle itself is identical either way.
 	Replayed bool
 
+	// TargetChainOutcome is what the SUBMITTER already knew when it handed this
+	// attestation over. It is not the final answer — Phase 7's observation of the
+	// real receipt is — but it separates the two shapes the proof cycle cannot
+	// otherwise tell apart:
+	//
+	//	pending : submitted, no terminal receipt inside the submit window. The
+	//	          ordinary case (~51s measured lag against a 60s window).
+	//	failed  : the caller KNOWS this settlement failed — quorum was never
+	//	          reached, or the batch member did not settle. Stated explicitly so
+	//	          the pending default can never launder a real failure into "still
+	//	          waiting". See RunBatchMemberAttestation and RunBatchMemberFallback.
+	//
+	// The zero value normalizes to pending, which is why the failure sites set it
+	// deliberately rather than relying on a bool being false.
+	TargetChainOutcome TargetChainOutcome
+
 	// SubmitVB / SubmitBFT are the two metadata structs the per-intent (on_demand) submission
 	// path takes. Captured only on the batch path, and only so a member the batch had to drop
 	// can still be executed individually.
@@ -162,6 +178,22 @@ func (bv *BFTValidator) RunProofCycle(
 		bv.logger.Printf("⚠️ [PROOF-CYCLE] no orchestrator configured; intent %s cannot be "+
 			"attested back to Accumulate", att.IntentID)
 		return
+	}
+
+	// STAGE 1 — this function is the RESOLVER for a pending settlement.
+	//
+	// The warning that started this stage was never retracted because nothing
+	// downstream logged against the same intent ID once the truth was known. Say
+	// here, on entry, that the resolution is under way; the terminal answer is
+	// logged by executePhase7 from the actual receipt (see resolveTargetChain).
+	//
+	// The submitter's belief is carried on att.TargetChainOutcome, and it is
+	// deliberately NOT authoritative: it is what one node knew inside a 60-second
+	// window, and the measured lag is ~51s.
+	if att.TargetChainOutcome.IsPending() {
+		bv.logger.Printf("⏳ [PROOF-CYCLE] intent %s: settlement is IN FLIGHT (tx=%q) — resolving it "+
+			"is this cycle's job; no failure has been observed",
+			att.IntentID, TargetChainTxRef(res))
 	}
 
 	// A member with NO transaction at all — a batch member whose settlement reverted.
@@ -614,6 +646,16 @@ func (bv *BFTValidator) recordFailedProofCycle(
 	if bv.proofCycleOrchestrator == nil || att == nil {
 		return
 	}
+
+	// STAGE 1, THE DANGEROUS DIRECTION — this one really is failed.
+	//
+	// Reached only when there is NO settlement transaction on any chain: the two
+	// guards in RunProofCycle establish that before calling here. That is not a
+	// timeout and not an observation problem, so it must not be softened to
+	// pending by the new default. Stated explicitly so the classification is a
+	// decision in the code rather than a property of a zero value.
+	att.TargetChainOutcome = TargetChainFailed
+
 	failed := &verification.AnchorExecutionResult{
 		Network:                  res.Network,
 		AllTransactionsConfirmed: false,

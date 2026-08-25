@@ -476,12 +476,38 @@ type ExecutionTaskResult struct {
 	// create, verify and governance all failed and the intent still reported
 	// success). Consensus and execution are separate facts and are now reported
 	// separately.
-	TargetChainConfirmed bool            `json:"target_chain_confirmed"`
-	TargetChainError     string          `json:"target_chain_error,omitempty"`
-	AnchorResp           *AnchorResponse `json:"anchor_response,omitempty"`
-	Error                error           `json:"error,omitempty"`
-	ExecutorID           string          `json:"executor_id"`
-	ConsensusHash        string          `json:"consensus_hash"`
+	//
+	// STAGE 1: this bool is now DERIVED, because it has two values and the
+	// question has three answers. A settlement that had merely not resolved yet
+	// was indistinguishable from one that reverted, so a healthy intent was
+	// reported as a failure. Measured 2026-08-25 on intent
+	// 1638327d-af2c-439c-a188-be53cdb5c854: the "did NOT confirm … gas may have
+	// been spent on a reverted transaction" warning was logged at 07:33:41 with
+	// targetChainError="", and the transaction confirmed status=1 at 07:34:32.
+	// FIFTY-ONE SECONDS. See TargetChainOutcome in target_chain_outcome.go.
+	//
+	// Kept rather than deleted: `target_chain_confirmed` is a wire field other
+	// code and operators read, and "did it succeed" is still a real question with
+	// a real boolean answer. Set it ONLY as (TargetChainOutcome == confirmed);
+	// never assign it directly.
+	TargetChainConfirmed bool `json:"target_chain_confirmed"`
+
+	// TargetChainOutcome carries the third answer the bool above cannot hold:
+	// PENDING — submitted, no terminal receipt yet. It is the authoritative
+	// field. Its zero value normalizes to pending, NOT to failed: the absence of
+	// a classification is not evidence of a revert.
+	TargetChainOutcome TargetChainOutcome `json:"target_chain_outcome,omitempty"`
+
+	// TargetChainTxRef is the settlement transaction hash, when one exists. A
+	// pending report without it is unactionable, so the pending log line prints
+	// it and this is where it comes from.
+	TargetChainTxRef string `json:"target_chain_tx_ref,omitempty"`
+
+	TargetChainError string          `json:"target_chain_error,omitempty"`
+	AnchorResp       *AnchorResponse `json:"anchor_response,omitempty"`
+	Error            error           `json:"error,omitempty"`
+	ExecutorID       string          `json:"executor_id"`
+	ConsensusHash    string          `json:"consensus_hash"`
 }
 
 // NewBFTValidator creates a new decentralized BFT validator
@@ -834,13 +860,34 @@ func (bv *BFTValidator) ExecuteCanonicalIntentWithBFTConsensus(
 	certenProof *proof.CertenProof, // from ProofGenerator / lite client
 	blockHeight uint64,
 ) error {
+	_, err := bv.ExecuteCanonicalIntentWithOutcome(ctx, certenIntent, certenProof, blockHeight)
+	return err
+}
+
+// ExecuteCanonicalIntentWithOutcome is ExecuteCanonicalIntentWithBFTConsensus, plus
+// the settlement outcome it always knew and used to throw away.
+//
+// STAGE 1. The error-only signature is why IntentDiscovery logged "processed
+// successfully and marked complete" for an intent whose chain write was still in
+// flight: nil meant CONSENSUS committed, and the caller had no way to ask about
+// the other half. Returning the outcome lets the caller say what actually
+// happened instead of inferring success from the absence of an error.
+//
+// Additive on purpose. BFTConsensusProtocol keeps its one-method shape and callers
+// type-assert for this, so nothing that implements the old interface breaks.
+func (bv *BFTValidator) ExecuteCanonicalIntentWithOutcome(
+	ctx context.Context,
+	certenIntent *CertenIntent,
+	certenProof *proof.CertenProof,
+	blockHeight uint64,
+) (TargetChainOutcome, error) {
 	bv.logger.Printf("🎯 [BFT-CANONICAL] Executing intent via canonical BFT consensus: intent=%s tx=%s height=%d",
 		certenIntent.IntentID, certenIntent.TransactionHash, blockHeight)
 
 	// Execute with canonical BFT consensus using real artifacts
 	result, err := bv.executeCanonicalWithBFTConsensus(ctx, certenIntent, certenProof, blockHeight)
 	if err != nil {
-		return fmt.Errorf("canonical BFT execution failed: %w", err)
+		return TargetChainFailed, fmt.Errorf("canonical BFT execution failed: %w", err)
 	}
 
 	if !result.Success {
@@ -848,7 +895,7 @@ func (bv *BFTValidator) ExecuteCanonicalIntentWithBFTConsensus(
 		// errors.Is, and %v flattens the chain to a string that nothing can
 		// match against. A permanent failure reported as an opaque string gets
 		// retried forever.
-		return fmt.Errorf("canonical BFT execution unsuccessful: %w", result.Error)
+		return TargetChainFailed, fmt.Errorf("canonical BFT execution unsuccessful: %w", result.Error)
 	}
 
 	// Report what actually happened. This line previously said "executed
@@ -857,13 +904,20 @@ func (bv *BFTValidator) ExecuteCanonicalIntentWithBFTConsensus(
 	// success and marked complete — which is what made a hard failure look like
 	// a stall for a full day. Consensus succeeding is worth saying; it is not
 	// the same sentence as the work having landed.
-	if result.TargetChainConfirmed {
-		bv.logger.Printf("✅ [BFT-CANONICAL] Canonical intent executed successfully: %s", certenIntent.IntentID)
-	} else {
-		bv.logger.Printf("⚠️ [BFT-CANONICAL] Consensus committed but target-chain execution did NOT confirm: intent=%s targetChainError=%q — gas may have been spent on a reverted transaction",
-			certenIntent.IntentID, result.TargetChainError)
-	}
-	return nil
+	//
+	// STAGE 1: THREE branches, not two. The second branch used to absorb both
+	// "reverted" and "has not resolved yet" and asserted a revert for both,
+	// including the case with a tx hash and no error — which is the signature of
+	// PENDING, not of failure. The rendering lives in RenderTargetChainOutcomeLog
+	// so that "the gas sentence appears only under failed" is a unit test rather
+	// than a promise.
+	bv.logger.Printf("%s", RenderTargetChainOutcomeLog(
+		certenIntent.IntentID,
+		result.TargetChainOutcome,
+		result.TargetChainTxRef,
+		result.TargetChainError,
+	))
+	return result.TargetChainOutcome.Normalize(), nil
 }
 
 // executeCanonicalWithBFTConsensus - internal canonical execution using real artifacts
@@ -1537,9 +1591,15 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 			bv.validatorID, selectedExecutorID)
 		// Return success - the elected executor will handle external submission
 		return &ExecutionTaskResult{
-			Success:       true,
-			ExecutorID:    selectedExecutorID,
-			ConsensusHash: fmt.Sprintf("consensus_%s_%d", roundID, bftRes.Height),
+			Success: true,
+			// Six of seven validators land here on every round. This node submitted
+			// nothing, so it holds no evidence either way — pending, with no tx
+			// hash, which renders as the informational "no target-chain submission
+			// from this node" line. Before Stage 1 these six each printed the
+			// gas-speculation warning for every healthy intent.
+			TargetChainOutcome: TargetChainPending,
+			ExecutorID:         selectedExecutorID,
+			ConsensusHash:      fmt.Sprintf("consensus_%s_%d", roundID, bftRes.Height),
 		}, nil
 	}
 
@@ -1552,7 +1612,12 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	// =======================================================================
 	var anchorRes *verification.AnchorExecutionResult
 	// Tracked separately from consensus success — see ExecutionTaskResult.
-	var targetChainConfirmed bool
+	//
+	// STAGE 1: this was `var targetChainConfirmed bool`, assigned straight from
+	// anchorRes.AllTransactionsConfirmed after a 60-second context. That bool
+	// collapsed "did not resolve in my window" into "failed", and the measured
+	// base-sepolia lag is ~51s against that 60s window — so the collapse fired on
+	// ordinary, healthy settlements.
 	var targetChainErr error
 
 	// ON-CADENCE, CROSS-ADI BATCH PATH (preferred).
@@ -1563,9 +1628,15 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	// node, and executing it here as well would double-spend it.
 	if batchQueued {
 		return &ExecutionTaskResult{
-			Success:       true,
-			ExecutorID:    bv.validatorID,
-			ConsensusHash: fmt.Sprintf("batch_queued_%s_%d", roundID, bftRes.Height),
+			Success: true,
+			// Queued, not settled. The batch period leader's flush resolves it,
+			// possibly on another node, and RunBatchMemberAttestation then carries
+			// the terminal outcome. Pending, with no tx hash — there is no
+			// transaction yet, and claiming a failure here would be a guess about
+			// work that has not started.
+			TargetChainOutcome: TargetChainPending,
+			ExecutorID:         bv.validatorID,
+			ConsensusHash:      fmt.Sprintf("batch_queued_%s_%d", roundID, bftRes.Height),
 		}, nil
 	}
 
@@ -1603,9 +1674,13 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 
 			// Return success - execution will happen when batch is processed
 			return &ExecutionTaskResult{
-				Success:       true,
-				ExecutorID:    bv.validatorID,
-				ConsensusHash: fmt.Sprintf("cadence_queued_%s_%d", roundID, bftRes.Height),
+				Success: true,
+				// Deferred to the scheduler's ticker, minutes away. Pending with no
+				// tx hash: the captured attestation is replayed through RunProofCycle
+				// once the batch settles, and that is what produces the terminal line.
+				TargetChainOutcome: TargetChainPending,
+				ExecutorID:         bv.validatorID,
+				ConsensusHash:      fmt.Sprintf("cadence_queued_%s_%d", roundID, bftRes.Height),
 			}, nil
 		}
 	}
@@ -1627,9 +1702,12 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 		// Non-fatal - audit failure doesn't invalidate consensus
 		targetChainErr = err
 	}
-	if anchorRes != nil {
-		targetChainConfirmed = anchorRes.AllTransactionsConfirmed
-	}
+
+	// Classify per the Stage 1 table. A submission error is failed; every other
+	// unresolved shape is PENDING, and the terminal answer arrives from Phase 7's
+	// observation of the real receipt rather than from this node's patience.
+	targetChainOutcome := ClassifyTargetChainOutcome(anchorRes, targetChainErr)
+	targetChainTxRef := TargetChainTxRef(anchorRes)
 
 	if anchorRes != nil {
 		bv.logger.Printf("✅ [CANONICAL-AUDIT] External audit completed: tx=%s network=%s",
@@ -1649,13 +1727,21 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 			// not reach, so cadence intents never attested.
 			att := bv.captureAttestation(vb, certenIntent, certenProof, blockHeight,
 				g0Proof, g1Proof, g2Proof, blsSignature, validatorSignatures, governanceLevel)
+			// The proof cycle is the RESOLVER for a pending settlement: it observes
+			// the real receipt and records the terminal status against this same
+			// intent ID. Telling it what this node believes so far keeps the two
+			// halves of the story joined.
+			att.TargetChainOutcome = targetChainOutcome
 			go bv.RunProofCycle(context.Background(), att, anchorRes)
 		}
 	}
 
 	res := &ExecutionTaskResult{
-		Success:              true, // consensus committed
-		TargetChainConfirmed: targetChainConfirmed,
+		Success: true, // consensus committed
+		// Derived, never assigned: see the field comment on ExecutionTaskResult.
+		TargetChainConfirmed: targetChainOutcome.IsConfirmed(),
+		TargetChainOutcome:   targetChainOutcome,
+		TargetChainTxRef:     targetChainTxRef,
 		ExecutorID:           bv.validatorID,
 		ConsensusHash:        fmt.Sprintf("%X", bftRes.TxHash),
 	}

@@ -238,8 +238,27 @@ func (bv *BFTValidator) RunBatchMemberAttestation(
 		GovernanceTxHash:         txHash,
 		AllTransactionsConfirmed: success,
 	}
-	if !success {
-		bv.logger.Printf("⚠️ [BATCH-ATTEST] intent %s did not settle; attesting failure", att.IntentID)
+
+	// STAGE 1, THE DANGEROUS DIRECTION. Everywhere else in this change,
+	// AllTransactionsConfirmed == false now means "unresolved" rather than
+	// "failed" — because a submit window is not evidence. HERE IT REALLY DOES
+	// MEAN FAILED, so it is stated explicitly rather than left to the default.
+	//
+	// Checked at every caller (main.go → BatchFlushConfig.Attest and
+	// OnDemandSubmitterConfig.Attest) before relying on it: success=false is
+	// produced only by batch_assembly.go's res.Failed loop (the member's own
+	// transaction reverted), by its AlreadySettled-but-never-executed release,
+	// and by OnDemandSubmitter.dispose when the member did not settle. None of
+	// those is a timeout. If a future caller passes false for "I gave up
+	// waiting", it must set att.TargetChainOutcome = TargetChainPending itself —
+	// silently downgrading a revert to "still pending" is precisely the harm this
+	// stage must not cause.
+	if success {
+		att.TargetChainOutcome = TargetChainConfirmedOutcome
+	} else {
+		att.TargetChainOutcome = TargetChainFailed
+		bv.logger.Printf("⚠️ [BATCH-ATTEST] intent %s did not settle; attesting failure (tx=%q) — "+
+			"a KNOWN failure, not an unresolved settlement", att.IntentID, txHash)
 	}
 	bv.RunProofCycle(ctx, att, res)
 }
@@ -429,6 +448,13 @@ func (bv *BFTValidator) RunBatchMemberFallback(ctx context.Context, attestation 
 		"voting power the anchor rejects (registered total is authoritative) and proves against a "+
 		"key that did not necessarily sign. Re-run it deliberately once the per-intent path uses "+
 		"the same aggregate the batch path does.", att.IntentID, maxQuorumAttemptsForLog)
+
+	// STAGE 1: a GENUINE failure, stated as one. The function's own log line
+	// already says "attested as FAILED" — quorum was never reached after the full
+	// retry budget and the member is deliberately not re-executed — so there is
+	// nothing unresolved about it. Left to the pending default it would report as
+	// a settlement still in flight that never lands.
+	att.TargetChainOutcome = TargetChainFailed
 
 	bv.RunProofCycle(ctx, att, &verification.AnchorExecutionResult{
 		AllTransactionsConfirmed: false,

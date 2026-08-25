@@ -132,15 +132,31 @@ func (r *IntentLifecycleRepository) UpdateStatus(
 		timestampCol = "authorized_at"
 	case IntentLifecycleInProcess:
 		timestampCol = "in_process_at"
+	case IntentLifecycleSettling:
+		// STAGE 1. Its own column, not a reuse of in_process_at: the gap between
+		// "the proof cycle started" and "the chain write is still unresolved" is
+		// the measurement this stage exists to make visible, and it is invisible if
+		// both write the same timestamp. Added by migration 014.
+		timestampCol = "settling_at"
 	case IntentLifecycleComplete:
 		timestampCol = "completed_at"
 	case IntentLifecycleFailed:
 		timestampCol = "failed_at"
 	}
 
-	// Build query: update status + phase timestamp + optional fields
-	// Guard: don't overwrite terminal states
-	query := fmt.Sprintf(`
+	// Build query: update status + phase timestamp + optional fields.
+	// Guard: don't overwrite terminal states.
+	//
+	// The phase-timestamp clause is CONDITIONAL. Not every status has a column —
+	// pending_signatures never did — and a status without one used to interpolate
+	// an empty name straight into the SET list, producing `updated_at = $2, = $3`
+	// and a syntax error at execution rather than at compile time. It has been
+	// latent only because the statuses in use all happened to have a column;
+	// adding one that does not would have surfaced it in production.
+	var query string
+	var args []interface{}
+	if timestampCol != "" {
+		query = fmt.Sprintf(`
 		UPDATE intent_lifecycle
 		SET status = $1,
 		    updated_at = $2,
@@ -151,16 +167,28 @@ func (r *IntentLifecycleRepository) UpdateStatus(
 		WHERE intent_id = $7
 		  AND status NOT IN ('complete', 'failed')
 	`, timestampCol)
+		args = []interface{}{
+			string(newStatus), now, now,
+			options.errorMessage, options.cycleID, options.writeBackTx, intentID,
+		}
+	} else {
+		query = `
+		UPDATE intent_lifecycle
+		SET status = $1,
+		    updated_at = $2,
+		    error_message = COALESCE($3, error_message),
+		    cycle_id = COALESCE($4, cycle_id),
+		    write_back_tx = COALESCE($5, write_back_tx)
+		WHERE intent_id = $6
+		  AND status NOT IN ('complete', 'failed')
+	`
+		args = []interface{}{
+			string(newStatus), now,
+			options.errorMessage, options.cycleID, options.writeBackTx, intentID,
+		}
+	}
 
-	result, err := r.client.db.ExecContext(ctx, query,
-		string(newStatus),
-		now,
-		now,
-		options.errorMessage,
-		options.cycleID,
-		options.writeBackTx,
-		intentID,
-	)
+	result, err := r.client.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("update intent lifecycle status: %w", err)
 	}
