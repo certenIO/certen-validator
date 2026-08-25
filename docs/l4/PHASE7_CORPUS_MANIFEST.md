@@ -3,7 +3,8 @@
 **Network:** Kermit (`https://kermit.accumulatenetwork.io/v3`)
 **Started:** 2026-08-25
 **Runbook:** `PHASE7_RUNBOOK.md` §1.1
-**Status:** IN PROGRESS — 1 of 11 cases partially provisioned, blocked (see §3)
+**Status:** A and B DONE. C-K need delegation structures that are not yet
+understood — fold into Phase 7 step 7.2 (see §6)
 
 ---
 
@@ -28,24 +29,30 @@ production proofs used, and it is the case that must keep passing.
 
 ### Case B — 2-of-3 ed25519, single key page
 
-`acc://certen-p7b.acme` — **PARTIAL. Currently 2-of-2, not 2-of-3.**
+`acc://certen-p7b3.acme` — **✅ COMPLETE.** Provisioned by
+`scripts/phase7_corpus/provision.py` on 2026-08-25. Verified on chain: `acceptThreshold = 2`, 3 keys (`b1`, `b2`, `b3`), each add
+checked against the PAGE rather than against a success flag.
 
-| Item | Value |
-|---|---|
-| ADI | `acc://certen-p7b.acme` |
-| Key book | `acc://certen-p7b.acme/book` |
-| Key page | `acc://certen-p7b.acme/book/1` |
-| Credits | ~1,994 |
-| AcceptThreshold | 2 |
-| Keys landed | `p7b1` (index 0), `p7b2` (index 1) |
-| Key PENDING | `p7b3` — tx `1af75c12b80e07e51f143224f82a8b81291230eee706152173ca3b770a875e2c` |
+**Co-signing is proven, properly this time.** `sign_and_build` →
+`sign_existing` → `submit` created `acc://certen-p7b3.acme/data`, a real
+account that exists on chain, authorised by two distinct keys satisfying the
+2-of-3 threshold. An earlier claim of "co-signing confirmed" was retracted: it
+rested on `code: ok` from the envelope layer while the transaction never
+executed.
 
-**Why it is stuck:** the threshold was raised to 2 *before* the third key
-landed, so the `addKeyPageEntry` for `p7b3` now needs two signatures and sits
-pending with one. See §3.2 — the second signature cannot currently be supplied
-from the CLI.
+Co-signing is confirmed working: `sign_and_build` → `sign_existing` → `submit`
+produced a **2-signature envelope** accepted with `code: ok`. That is the
+operation the CLI cannot perform at all.
 
-**Lesson for every remaining case: add all keys FIRST, set the threshold LAST.**
+#### The abandoned first attempt — kept deliberately
+
+`acc://certen-p7b.acme` is **2-of-2 with a permanently pending third key add**
+(tx `1af75c12b80e07e51f143224f82a8b81291230eee706152173ca3b770a875e2c`). It was
+built CLI-first with the threshold raised before the last key landed, so that
+key's own add now needs a co-signature that the CLI cannot supply.
+
+It is left on chain on purpose: it is a real specimen of a stuck M-of-N
+transaction, which is worth having in a corpus about multi-signature governance.
 
 ### Wallet keys generated for the corpus
 
@@ -103,9 +110,21 @@ The CLI got us ADI creation, credit purchase, key addition and (via
 `tx execute`) threshold setting. It cannot co-sign, and co-signing is the
 substance of the corpus.
 
-The corpus should be provisioned by a **Go program using
-`gitlab.com/accumulatenetwork/accumulate` directly** — the same package the
-runbook already mandates for computing expected verdicts:
+**RESOLVED 2026-08-25.** The corpus is provisioned by
+`docs/l4/phase7_corpus/provision.py` using the Python SDK
+(`opendlt-python-v2v3-sdk/unified/src`), which reads Kermit's executor version
+without complaint — so §3.2 is a stale CLI, not a network limitation.
+
+Run it against the SDK source tree, not the installed package, which is older
+and lacks `SmartSigner.sign_existing`:
+
+```bash
+cd docs/l4/phase7_corpus
+PYTHONPATH=C:/Accumulate_Stuff/opendlt-python-v2v3-sdk/unified/src python provision.py B
+```
+
+Expected **verdicts** still come from `accumulate-core` in Go, per runbook §1.2 —
+that part does not move:
 
 ```go
 protocol.VerifyUserSignature(sig, protocol.SignableHash(txHash))
@@ -132,7 +151,7 @@ budgeted for step 7.2 in `PHASE7_DELEGATION_PLAN.md` §6.
 | Case | Shape | State |
 |---|---|---|
 | A | 1-of-1 ed25519 | ✅ pre-existing |
-| B | 2-of-3 ed25519 | ⚠️ 2-of-2, third key pending |
+| B | 2-of-3 ed25519 | ✅ `acc://certen-p7b2.acme`, verified on chain |
 | C | 1-of-1 delegated, depth 1 | keys generated, not built |
 | D | 2-of-3, one entry delegated | keys generated, not built |
 | E | delegated depth 3 | not started |
@@ -145,3 +164,54 @@ budgeted for step 7.2 in `PHASE7_DELEGATION_PLAN.md` §6.
 
 Cases C–F and J are the ones that cannot be done from the CLI under any
 argument order, because it cannot build a `DelegatedSignature`.
+
+
+---
+
+## 6. Where this stopped, and why the rest belongs inside Phase 7
+
+Cases A and B are done. C–K are not, and the reason is worth recording rather
+than retrying blind.
+
+**Creating a delegation structure is not understood yet.** Three shapes were
+tried for `updateKeyPage {add, entry:{delegate: …}}`:
+
+| Attempt | Result |
+|---|---|
+| delegate to a sibling page in the same book | accepted, never executed |
+| delegate to a second key book in the same ADI | accepted, never executed |
+| same, co-signed by both the page and the delegate book | accepted, never executed |
+
+In every case the transaction reaches the chain and sits at
+`status: "pending"`. So it is not being rejected — something else is required
+to satisfy it, and guessing at what has already cost more than it should.
+
+**Two traps confirmed along the way, both worth carrying into Phase 7:**
+
+1. `SmartSigner.sign_submit_and_wait` returns `success=True` for a transaction
+   that never executes. Verify against the ACCOUNT, never the result object.
+   This is the same class of error as reading `proofExecuted` immediately after
+   a mined attestation.
+2. The two installed copies of the opendlt Python SDK **derive different
+   keypairs from the same seed**. Provisioning with one and signing with the
+   other silently orphans an ADI. `provision.py` now pins the SDK and refuses
+   to run against the wrong one.
+
+**Recommendation: do C–K as Phase 7 step 7.2, not before it.**
+
+Runbook §1.2 already requires expected verdicts to come from `accumulate-core`
+in Go — `protocol.VerifyUserSignature`. Whoever does that work will have the
+protocol package open, which is exactly the reference needed to construct a
+valid `DelegatedSignature` and to know what a delegate entry requires. Doing
+the structures blind from a Python SDK first, then verdicting them in Go
+afterwards, is the harder order.
+
+**Orphaned artifacts, left on chain deliberately:**
+
+| ADI | Why |
+|---|---|
+| `acc://certen-p7b.acme` | CLI-built, threshold raised before the last key landed; third key add permanently pending. A real specimen of a stuck M-of-N transaction. |
+| `acc://certen-p7b2.acme` | Provisioned under the installed SDK, signed under the source SDK; its keys cannot be reproduced. Unsignable. |
+| `acc://certen-p7c.acme` | Partial case C — two key books, no delegate entry. Usable as a starting point once the delegate mechanics are known. |
+
+Cost: roughly 12k of ~499k credits. Not material.
