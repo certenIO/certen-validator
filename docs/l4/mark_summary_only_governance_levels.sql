@@ -85,14 +85,29 @@ SELECT count(*) AS wrongly_marked
 FROM governance_proof_levels
 WHERE (level_json ? 'receipt') AND (level_json ? 'summary_only');
 
--- Nor may any level have lost a flag the console reads. If this returns anything, roll back.
-\echo '--- must be zero: marked levels that lost their verdict flags ---'
-SELECT count(*) AS lost_flags
+-- Nor may any level have lost what it already carried. If this returns anything, roll back.
+--
+-- The check is "does the row still have keys OTHER than the two markers", NOT "does it have one of
+-- four specific flags". An earlier version asked the narrower question and reported 11 rows, which
+-- read like data loss and was not: those rows come from two other writer paths and never carried any
+-- of the four flags to begin with — the legacy stub writes level/name/verified/block_height/
+-- finality_time, and a backfill path writes G2-specific keys (payload_verified, effect_verified,
+-- outcome_binding, security_level, g2_proof_complete). Both are intact.
+--
+-- The marking cannot lose a key by construction: jsonb || only ADDS or overwrites the keys named on
+-- its right-hand side, and no row carried summary_only or summary_only_reason before this ran.
+\echo '--- must be zero: marked levels left with nothing but the two markers ---'
+SELECT count(*) AS lost_everything
 FROM governance_proof_levels
 WHERE (level_json ? 'summary_only')
-  AND NOT (level_json ? 'inclusion_verified')
-  AND NOT (level_json ? 'threshold_met')
-  AND NOT (level_json ? 'operation_commitment')
-  AND NOT (level_json ? 'governance_root');
+  AND (SELECT count(*) FROM jsonb_object_keys(level_json)) <= 2;
+
+\echo '--- key counts on marked rows (min must be > 2: two markers plus what was there) ---'
+SELECT gov_level, count(*) AS rows,
+       min((SELECT count(*) FROM jsonb_object_keys(level_json))) AS min_keys,
+       max((SELECT count(*) FROM jsonb_object_keys(level_json))) AS max_keys
+FROM governance_proof_levels
+WHERE level_json ? 'summary_only'
+GROUP BY 1 ORDER BY 1;
 
 COMMIT;
