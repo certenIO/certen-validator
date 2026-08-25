@@ -132,11 +132,121 @@ const anchorsABIJSON = `[{"type":"function","name":"anchors","inputs":[{"name":"
 	`{"name":"governanceLevel","type":"uint8"}` +
 	`],"stateMutability":"view"}]`
 
-// AnchorProofExecuted reports whether the quorum attestation has landed.
+// anchorFlagConfirm* bound the read-back of proofExecuted after a mined attestation.
+//
+// Sized for an RPC pool that lags a block or two, not for a chain that is down: eight
+// attempts three seconds apart is ~24s, comfortably longer than a base-sepolia block
+// (~2s) and short enough that a genuinely unattested anchor is reported promptly.
+const (
+	anchorFlagConfirmAttempts = 8
+	anchorFlagConfirmDelay    = 3 * time.Second
+)
+
+// AnchorProofExecutedConfirmed reports whether the quorum attestation has landed, reading
+// the flag AT THE BLOCK THAT MINED IT and retrying while the RPC catches up.
+//
+// # THE DEFECT THIS EXISTS TO FIX
+//
+// The caller used to submit executeComprehensiveProof — which DOES wait for the receipt and
+// DOES reject status 0 — and then immediately read anchors(bundleId) at "latest". Measured
+// live on 2026-08-25, intent c5392a5b: the attestation mined with status 1 in block 45943270,
+// the read-back returned proofExecuted=false ~22s later, the batch was declared unattestable,
+// and every member was attested as FAILED. Querying the same anchor afterwards returned
+// proofExecuted=TRUE, governanceLevel=2. The proof had executed the whole time; TX3 never ran,
+// so the value never moved, on the strength of a read that was simply early.
+//
+// A mined receipt does not guarantee that the NEXT eth_call sees that block. The receipt poll
+// and the state read are separate requests, and against a load-balanced pool they can land on
+// different nodes — so read-your-own-write does not hold. This is the same error as reading
+// AllTransactionsConfirmed==false as a revert: INFERRING FAILURE FROM "I HAVE NOT OBSERVED
+// SUCCESS YET." A window is not evidence.
+//
+// Two defences, and the first is the load-bearing one:
+//
+//	PINNED   the call is made at the receipt's block number, so a node that does not yet have
+//	         that state ERRORS instead of answering from an older block. A stale answer is
+//	         indistinguishable from a true negative; an error is not.
+//	BOUNDED  transient lag is retried, and exhausting the budget is reported as NOT OBSERVED
+//	         rather than as not executed.
+//
+// verifyTxHash is the attestation transaction. Empty falls back to an unpinned read, which is
+// strictly weaker and says so in the error.
+func (s *BatchProofSubmitterImpl) AnchorProofExecutedConfirmed(
+	ctx context.Context,
+	chainID int64,
+	bundleID [32]byte,
+	verifyTxHash string,
+) (bool, error) {
+	ecm, _, err := s.chains.ManagerForChain(chainID)
+	if err != nil {
+		return false, err
+	}
+
+	// Pin to the block that mined the attestation, when we know it.
+	var pinned *big.Int
+	if verifyTxHash != "" {
+		if rcpt, rerr := ecm.client.TransactionReceipt(ctx, common.HexToHash(verifyTxHash)); rerr == nil && rcpt != nil {
+			pinned = rcpt.BlockNumber
+		} else if rerr != nil {
+			s.logf("[BATCH-PROOF] chain=%d could not fetch receipt for attestation %s (%v); "+
+				"falling back to an unpinned read, which can answer from a stale block",
+				chainID, verifyTxHash, rerr)
+		}
+	}
+
+	var lastErr error
+	for attempt := 1; attempt <= anchorFlagConfirmAttempts; attempt++ {
+		executed, err := s.anchorProofExecutedAt(ctx, chainID, bundleID, pinned)
+		if err == nil {
+			if executed {
+				if attempt > 1 {
+					s.logf("[BATCH-PROOF] chain=%d anchor 0x%x proofExecuted observed on attempt %d/%d "+
+						"— the earlier reads were RPC lag, not a failed attestation",
+						chainID, bundleID[:8], attempt, anchorFlagConfirmAttempts)
+				}
+				return true, nil
+			}
+			lastErr = nil
+		} else {
+			// A pinned read against a node without that block errors. That is the
+			// mechanism working: it refused to answer from stale state.
+			lastErr = err
+		}
+		if attempt == anchorFlagConfirmAttempts {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-time.After(anchorFlagConfirmDelay):
+		}
+	}
+
+	if lastErr != nil {
+		return false, fmt.Errorf("could not read proofExecuted for anchor 0x%x within %d attempt(s): %w",
+			bundleID[:8], anchorFlagConfirmAttempts, lastErr)
+	}
+	return false, nil
+}
+
+// AnchorProofExecuted reports whether the quorum attestation has landed, reading at "latest".
+//
+// Prefer AnchorProofExecutedConfirmed. A single unpinned read can answer from a block that
+// predates the attestation, and a false from it means "not seen", never "not executed".
 func (s *BatchProofSubmitterImpl) AnchorProofExecuted(
 	ctx context.Context,
 	chainID int64,
 	bundleID [32]byte,
+) (bool, error) {
+	return s.anchorProofExecutedAt(ctx, chainID, bundleID, nil)
+}
+
+// anchorProofExecutedAt reads the flag, optionally at a specific block.
+func (s *BatchProofSubmitterImpl) anchorProofExecutedAt(
+	ctx context.Context,
+	chainID int64,
+	bundleID [32]byte,
+	blockNumber *big.Int,
 ) (bool, error) {
 	ecm, anchorAddr, err := s.chains.ManagerForChain(chainID)
 	if err != nil {
@@ -157,7 +267,10 @@ func (s *BatchProofSubmitterImpl) AnchorProofExecuted(
 	}
 	bound := bind.NewBoundContract(anchorAddr, parsed, ecm.client, ecm.client, ecm.client)
 	var out []interface{}
-	if err := bound.Call(&bind.CallOpts{Context: ctx}, &out, "anchors", bundleID); err != nil {
+	// BlockNumber nil means "latest". When set, a node lacking that state returns an
+	// error rather than an answer from an older block — which is the whole point.
+	opts := &bind.CallOpts{Context: ctx, BlockNumber: blockNumber}
+	if err := bound.Call(opts, &out, "anchors", bundleID); err != nil {
 		return false, fmt.Errorf("reading anchor: %w", err)
 	}
 	if len(out) < 13 {

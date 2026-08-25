@@ -245,14 +245,32 @@ func (bv *BFTValidator) RunBatchMemberAttestation(
 	// MEAN FAILED, so it is stated explicitly rather than left to the default.
 	//
 	// Checked at every caller (main.go → BatchFlushConfig.Attest and
-	// OnDemandSubmitterConfig.Attest) before relying on it: success=false is
-	// produced only by batch_assembly.go's res.Failed loop (the member's own
-	// transaction reverted), by its AlreadySettled-but-never-executed release,
-	// and by OnDemandSubmitter.dispose when the member did not settle. None of
-	// those is a timeout. If a future caller passes false for "I gave up
-	// waiting", it must set att.TargetChainOutcome = TargetChainPending itself —
-	// silently downgrading a revert to "still pending" is precisely the harm this
-	// stage must not cause.
+	// OnDemandSubmitterConfig.Attest): success=false is produced by
+	// batch_assembly.go's res.Failed loop (the member's own transaction
+	// reverted), by its AlreadySettled-but-never-executed release, and by
+	// OnDemandSubmitter.dispose when the member did not settle.
+	//
+	// AN EARLIER VERSION OF THIS COMMENT CLAIMED "none of those is a timeout".
+	// THAT WAS WRONG, and it was wrong in the one direction this stage must not
+	// get wrong. dispose's `settled` flag derives from the batch quorum attestor,
+	// which — measured live on 2026-08-25, intent c5392a5b — reported a batch
+	// unattestable because it read proofExecuted at "latest" immediately after a
+	// MINED attestation and raced the RPC. The proof had executed; every member
+	// was nonetheless attested as FAILED. So this path could and did carry a
+	// timeout wearing a revert's clothes, and the classification below hardened
+	// it into one.
+	//
+	// The read is now pinned to the mining block and retried
+	// (AnchorProofExecutedConfirmed), so a false here means the flag was false AT
+	// THE BLOCK THAT MINED THE ATTESTATION — a real negative, not an early one.
+	// That is what makes `failed` the honest value.
+	//
+	// The narrower point stands and is worth keeping: if a future caller passes
+	// false for "I gave up waiting", it must set
+	// att.TargetChainOutcome = TargetChainPending itself. Silently downgrading a
+	// revert to "still pending" is the harm in one direction; silently promoting
+	// an unobserved success to "failed" is the harm in the other, and this path
+	// has now demonstrated the second one in production.
 	if success {
 		att.TargetChainOutcome = TargetChainConfirmedOutcome
 	} else {

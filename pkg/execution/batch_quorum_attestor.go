@@ -247,16 +247,37 @@ func (a *BatchQuorumAttestor) prove(
 	// one executeComprehensiveProof verifies the whole batch, exactly like the anchor.
 	a.lastVerifyTx.Store(&verifyTx)
 
-	// Confirm rather than assume. A submit that mined with status 1 but did not set the flag
-	// would otherwise send every member into a revert with a misleading error.
-	executed, err := a.submitter.AnchorProofExecuted(ctx, chainID, tree.BundleID)
+	// Confirm rather than assume — but confirm PROPERLY, at the block that mined the
+	// attestation and with a retry budget.
+	//
+	// The instinct in the original comment was right and the implementation was not: it read
+	// anchors(bundleId) at "latest" exactly once, immediately after SubmitBatchQuorumProof
+	// returned. That submit DOES wait for the receipt and DOES reject status 0, so the
+	// transaction had genuinely mined — but a mined receipt does not guarantee the next
+	// eth_call sees that block. Against a load-balanced RPC pool the two requests can land on
+	// different nodes, and read-your-own-write does not hold.
+	//
+	// Measured live on 2026-08-25, intent c5392a5b: attestation mined status 1 in block
+	// 45943270; this read returned false; the batch was declared unattestable and every member
+	// was attested as FAILED. The same anchor read proofExecuted=TRUE, governanceLevel=2
+	// afterwards. The proof had executed all along. TX3 never ran, so the value never moved —
+	// on the strength of a read that was early.
+	//
+	// That is the same error as reading AllTransactionsConfirmed==false as a revert:
+	// INFERRING FAILURE FROM "I HAVE NOT OBSERVED SUCCESS YET". A window is not evidence.
+	executed, err := a.submitter.AnchorProofExecutedConfirmed(ctx, chainID, tree.BundleID, verifyTx)
 	if err != nil {
-		return fmt.Errorf("confirming anchor attestation: %w", err)
+		// Could not READ the flag. Distinct from reading it as false, and reported as such:
+		// the attestation may well have landed, and the caller must not describe this as a
+		// rejected anchor.
+		return fmt.Errorf("could not confirm anchor 0x%x attestation (tx %s) — the attestation "+
+			"may have landed and was NOT observed: %w", tree.BundleID[:8], verifyTx, err)
 	}
 	if !executed {
 		return fmt.Errorf(
-			"batch anchor 0x%x still reports proofExecuted=false after submission; "+
-				"no account will accept it", tree.BundleID[:8])
+			"batch anchor 0x%x reports proofExecuted=false at the block that mined attestation %s, "+
+				"after %d confirmation attempt(s); no account will accept it",
+			tree.BundleID[:8], verifyTx, anchorFlagConfirmAttempts)
 	}
 
 	a.logf("[BATCH-QUORUM] chain=%d anchor 0x%x attested; root 0x%x is now spendable",
