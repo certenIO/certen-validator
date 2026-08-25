@@ -39,11 +39,31 @@ func NewLayer1Builder(client *jsonrpc.Client, debug bool) *Layer1Builder {
 // - bvnMinorBlockIndex = receipt.localBlock
 // - bvnRootChainAnchor = receipt.anchor
 func (b *Layer1Builder) Build(ctx context.Context, account string, txHashHex string) (Layer1, error) {
+	return b.BuildOnChain(ctx, account, "main", txHashHex)
+}
+
+// BuildOnChain proves the inclusion of an arbitrary leaf on an arbitrary chain
+// of an account.
+//
+// Build proves a TRANSACTION's inclusion on a principal's `main` chain, which is
+// the only thing a single-partition proof needs. A signer's leg needs something
+// different: the SIGNATURE's inclusion on that signer's `signature` chain, under
+// the signature MESSAGE's hash rather than the transaction's.
+//
+// This is governance spec section 4.2's per-signature inclusion, and it is why
+// the chain name and the leaf are parameters rather than constants. Proving a
+// signer page's `main` chain contains the transaction hash would prove nothing:
+// it does not, and the query would simply fail - or worse, succeed against some
+// unrelated entry.
+func (b *Layer1Builder) BuildOnChain(ctx context.Context, account, chainName, leafHex string) (Layer1, error) {
 	if b.Client == nil {
 		return Layer1{}, fmt.Errorf("layer1: missing v3 client")
 	}
+	if chainName == "" {
+		return Layer1{}, fmt.Errorf("layer1: chain name required")
+	}
 
-	txHashHex, err := MustHex32Lower(txHashHex, "txHash")
+	txHashHex, err := MustHex32Lower(leafHex, "leaf")
 	if err != nil {
 		return Layer1{}, err
 	}
@@ -56,7 +76,7 @@ func (b *Layer1Builder) Build(ctx context.Context, account string, txHashHex str
 
 	// Chain query by entry (fail-closed uniqueness enforced in extraction).
 	q := &v3.ChainQuery{
-		Name:           "main",
+		Name:           chainName,
 		Entry:          leafBytes,
 		IncludeReceipt: &v3.ReceiptOptions{ForAny: true},
 	}
@@ -72,7 +92,12 @@ func (b *Layer1Builder) Build(ctx context.Context, account string, txHashHex str
 		}
 	}
 
-	ce, err := pickExactlyOneChainEntry(resp, "main", txHashHex)
+	// chainName, not a literal "main". The query above asked for chainName and
+	// the extraction must agree with it, or a signer leg's `signature` chain
+	// entry is filtered out by a name check looking for the wrong chain - which
+	// reads as "the entry is not there" rather than "we asked the wrong
+	// question".
+	ce, err := pickExactlyOneChainEntry(resp, chainName, txHashHex)
 	if err != nil {
 		return Layer1{}, fmt.Errorf("layer1: %w", err)
 	}

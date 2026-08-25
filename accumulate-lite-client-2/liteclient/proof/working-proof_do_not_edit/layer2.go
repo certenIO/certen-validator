@@ -22,6 +22,57 @@ type Layer2Builder struct {
 	Client    *jsonrpc.Client
 	Debug     bool
 	Artifacts map[string][]byte // optional
+
+	// ReceiptForRootChainHeight asks for a receipt terminating at a SPECIFIC
+	// height of the Directory minor root chain, instead of wherever Accumulate
+	// would anchor it.
+	//
+	// WHY A CROSS-PARTITION PROOF NEEDS THIS, AND WHAT IS STILL MISSING.
+	//
+	// Two partitions' anchors are recorded in different DN blocks, so two
+	// receipts taken "for any" anchor terminate at different DN roots - and L3
+	// proves exactly one of them. Observed live on Kermit for corpus case F: the
+	// principal's leg anchored at DN block 7769803, the delegated signer's at
+	// 7769799. ProofVerifier refuses that pair, correctly, because the second
+	// leg's path to the proven Directory state is asserted rather than shown.
+	//
+	// ReceiptOptions.ForHeight is the lever, and its name misleads. It is a
+	// height ON THE DN MINOR ROOT CHAIN, not a block height:
+	//
+	//   ForHeight = a block number   -> "unable to locate index entry ...
+	//                                    reached the end of the chain"
+	//   ForHeight < entry's anchor   -> "cannot satisfy target height N: entry
+	//                                    is anchored at height M"
+	//   ForHeight = M                -> the same receipt ForAny returns
+	//   ForHeight > M                -> a receipt at a LATER DN root
+	//
+	// All four verified against Kermit: entry anchored at height 1447063 gave DN
+	// block 7769799; height 1447070 gave block 7769801. So the extension itself
+	// works, and a leg CAN be bound forward to a later Directory root.
+	//
+	// What is missing is the mapping. Binding a leg to a chosen DN root needs
+	// that root's own height on the minor root chain, and a DN root is the
+	// chain's ANCHOR rather than an entry on it - querying dn.acme, dn.acme/
+	// anchors and dn.acme/ledger for it by value returns "ElementIndex ... not
+	// found" on every root, minor-root and anchor-sequence chain. Until there is
+	// a way to ask for that height, this field is set by a caller that already
+	// knows it and is left zero otherwise, and a multi-partition proof whose legs
+	// land in different DN blocks is REFUSED at verification with the reason
+	// named. Refusing is the honest answer: the alternative is a leg whose path
+	// to the proven Directory state nobody checked.
+	//
+	// Zero means "for any", which is the single-partition behaviour and is
+	// unchanged.
+	ReceiptForRootChainHeight uint64
+}
+
+// receiptOptions asks for a receipt at the pinned root-chain height when one is
+// set, and otherwise for any.
+func (b *Layer2Builder) receiptOptions() *v3.ReceiptOptions {
+	if b.ReceiptForRootChainHeight > 0 {
+		return &v3.ReceiptOptions{ForHeight: b.ReceiptForRootChainHeight}
+	}
+	return &v3.ReceiptOptions{ForAny: true}
 }
 
 func NewLayer2Builder(client *jsonrpc.Client, debug bool) *Layer2Builder {
@@ -57,7 +108,7 @@ func (b *Layer2Builder) Build(ctx context.Context, bvn string, l1 Layer1) (Layer
 	qRoot := &v3.ChainQuery{
 		Name:           rootChain,
 		Entry:          rootEntry,
-		IncludeReceipt: &v3.ReceiptOptions{ForAny: true},
+		IncludeReceipt: b.receiptOptions(),
 	}
 	respRoot, err := b.Client.Query(ctx, dnAnchors, qRoot)
 	if err != nil {
@@ -73,6 +124,7 @@ func (b *Layer2Builder) Build(ctx context.Context, bvn string, l1 Layer1) (Layer
 	if err != nil {
 		return Layer2{}, fmt.Errorf("layer2: %w", err)
 	}
+
 	if ceRoot.Receipt == nil || ceRoot.Receipt.LocalBlock == 0 {
 		return Layer2{}, fmt.Errorf("layer2: %s missing receipt/localBlock", rootChain)
 	}
@@ -114,7 +166,7 @@ func (b *Layer2Builder) Build(ctx context.Context, bvn string, l1 Layer1) (Layer
 	qBpt := &v3.ChainQuery{
 		Name:           bptChain,
 		Index:          &dnIndex,
-		IncludeReceipt: &v3.ReceiptOptions{ForAny: true},
+		IncludeReceipt: b.receiptOptions(),
 	}
 	respBpt, err := b.Client.Query(ctx, dnAnchors, qBpt)
 	if err != nil {

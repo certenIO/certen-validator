@@ -107,10 +107,17 @@ func (pb *ProofBuilder) BuildProof(ctx context.Context, in ProofInput) (*Chained
 	return out, nil
 }
 
-// SignerLeg names one signer account and the partition it routes to.
+// SignerLeg names one signer account, the partition it routes to, and the
+// signature message that proves it signed.
 type SignerLeg struct {
 	Account   string
 	Partition string
+
+	// MessageHash is the signature MESSAGE's hash on the signer's `signature`
+	// chain - not the transaction hash. A signer page's `main` chain does not
+	// contain the transaction, so proving inclusion there would prove nothing.
+	// See Layer1Builder.BuildOnChain.
+	MessageHash string
 }
 
 // BuildMultiPartitionProof builds a proof carrying a leg per distinct signer
@@ -148,8 +155,27 @@ func (pb *ProofBuilder) BuildMultiPartitionProof(ctx context.Context, in ProofIn
 		artifacts = base.Artifacts
 	}
 	l1b := &Layer1Builder{Client: pb.V3, Debug: pb.Debug, Artifacts: artifacts}
-	l2b := &Layer2Builder{Client: pb.V3, Debug: pb.Debug, Artifacts: artifacts}
 	l4b := &Layer4Builder{Client: pb.V3, Debug: pb.Debug, Artifacts: artifacts}
+
+	// Additional legs' L2 receipts are NOT pinned, because there is currently no
+	// way to compute the height to pin them to.
+	//
+	// Each leg gets a receipt to whichever Directory anchor Accumulate picks, and
+	// two partitions' anchors are recorded in different DN blocks - so the legs
+	// witness different DN roots while L3 proves only one of them. Observed live
+	// on Kermit for corpus case F: the principal's leg landed at DN block 7769803
+	// and the delegated signer's at 7769799.
+	//
+	// Layer2Builder.ReceiptForRootChainHeight is the lever that would fix it, and
+	// its documentation records exactly what was established about it and what is
+	// still missing. Setting it to a guessed value would produce a proof whose
+	// second leg is bound to the wrong Directory root - wrong in a way nothing
+	// downstream would catch, because the leg would be internally consistent.
+	//
+	// So this leaves it unset, and such a proof is REFUSED at verification with
+	// the reason named. A refusal that says what is missing is worth more than a
+	// proof nobody checked.
+	l2b := &Layer2Builder{Client: pb.V3, Debug: pb.Debug, Artifacts: artifacts}
 
 	for _, s := range ordered {
 		key := strings.ToLower(s.Partition)
@@ -162,7 +188,12 @@ func (pb *ProofBuilder) BuildMultiPartitionProof(ctx context.Context, in ProofIn
 		}
 		seen[key] = true
 
-		l1, err := l1b.Build(ctx, s.Account, in.TxHash)
+		if s.MessageHash == "" {
+			return nil, fmt.Errorf("proof builder: signer %s has no signature message hash; "+
+				"a signer leg proves the SIGNATURE's inclusion on that signer's chain, and "+
+				"without the message there is nothing to prove", s.Account)
+		}
+		l1, err := l1b.BuildOnChain(ctx, s.Account, "signature", s.MessageHash)
 		if err != nil {
 			return nil, fmt.Errorf("proof builder: L1 for signer %s on %s: %w", s.Account, s.Partition, err)
 		}

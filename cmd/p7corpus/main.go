@@ -38,6 +38,7 @@ func main() {
 	)
 	flag.Parse()
 
+	traceFile = *out
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
@@ -64,6 +65,11 @@ func main() {
 			fatal("%v", err)
 		}
 
+	case "multileg":
+		if err := buildMultiLeg(ctx, *endpoint, cases); err != nil {
+			fatal("%v", err)
+		}
+
 	case "capture":
 		if err := capture(ctx, c, seeds, cases, *out); err != nil {
 			fatal("%v", err)
@@ -73,6 +79,10 @@ func main() {
 		fatal("unknown stage %q", *stage)
 	}
 }
+
+// traceFile is where the captured corpus lives, set from the -out flag so the
+// stages agree on one path.
+var traceFile string
 
 func readJSON[T any](path string) (T, error) {
 	var v T
