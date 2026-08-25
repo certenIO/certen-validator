@@ -1,7 +1,12 @@
 # Claude Code Prompt — Phase 7 Execution (delegated + multi-sig governance, G0–G2 and L1–L4)
 
 Paste the block below into a fresh Claude Code session rooted at
-`C:\Accumulate_Stuff\certen`.
+**`C:\Accumulate_Stuff\certen\independant_validator`**.
+
+That is the git repository every edit in this phase lands in, so `git status`,
+`git diff` and rollback all work without a `cd`. `C:\Accumulate_Stuff\certen`
+is *not* a repository, and `accumulate-core` is a **sibling of `certen`**, not
+inside it — it is referenced below by absolute path and is read-only.
 
 **End state:** an institution using M-of-N signing with delegated authority,
 across more than one Accumulate partition, can obtain a G2 proof with a
@@ -46,14 +51,14 @@ FIVE DEFECTS, all verified, not inferred:
       leg today.
 
 AUTHORITATIVE DOCUMENTS - read both in full before any edit:
-  independant_validator/docs/l4/PHASE7_DELEGATION_PLAN.md
-  independant_validator/docs/l4/PHASE7_RUNBOOK.md
+  docs/l4/PHASE7_DELEGATION_PLAN.md
+  docs/l4/PHASE7_RUNBOOK.md
 
 Background, if anything surprises you:
-  independant_validator/docs/l4/L4_DESIGN.md            (esp. §1.3 Defect C)
-  independant_validator/docs/l4/PHASE5_PLAN.md          (esp. §1.2, §8)
-  independant_validator/docs/l4/PHASE6_PERSISTENCE_PLAN.md
-  .../consolidated_governance-proof/docs/CERTEN_GOVERANCE_PROOF_SPEC.MD
+  docs/l4/L4_DESIGN.md            (esp. §1.3 Defect C)
+  docs/l4/PHASE5_PLAN.md          (esp. §1.2, §8)
+  docs/l4/PHASE6_PERSISTENCE_PLAN.md
+  accumulate-lite-client-2/liteclient/proof/consolidated_governance-proof/docs/CERTEN_GOVERANCE_PROOF_SPEC.MD
 
 CODE IN SCOPE - read each file COMPLETELY, not in fragments:
   A. accumulate-lite-client-2/liteclient/proof/consolidated_governance-proof/

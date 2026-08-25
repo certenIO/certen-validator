@@ -1,7 +1,12 @@
 # Claude Code Prompt — Phase 6 Execution (L4 Persistence)
 
 Paste the block below into a fresh Claude Code session rooted at
-`C:\Accumulate_Stuff\certen`.
+**`C:\Accumulate_Stuff\certen\independant_validator`**.
+
+That is the git repository every edit in this phase lands in, so `git status`,
+`git diff` and rollback all work without a `cd`. `C:\Accumulate_Stuff\certen`
+is *not* a repository, and `accumulate-core` is a **sibling of `certen`**, not
+inside it — it is referenced below by absolute path and is read-only.
 
 **End state:** a governance proof read back out of PostgreSQL verifies offline,
 end to end, L1 through L4 — with govRoot byte-identical to what it is today.
@@ -21,13 +26,13 @@ You are completing CERTEN's proof persistence. One defect:
   the stored blob tests: signature=f, validatorSet=f, publicKeyHash=f.
 
 AUTHORITATIVE DOCUMENTS — read both in full before any edit:
-  independant_validator/docs/l4/PHASE6_PERSISTENCE_PLAN.md
-  independant_validator/docs/l4/PHASE6_RUNBOOK.md
+  docs/l4/PHASE6_PERSISTENCE_PLAN.md
+  docs/l4/PHASE6_RUNBOOK.md
 
 Background, for context on how L4 got here (read if anything surprises you):
-  independant_validator/docs/l4/L4_DESIGN.md
-  independant_validator/docs/l4/PHASE5_PLAN.md          (esp. §1.2 and §8)
-  .../proof/consolidated_governance-proof/docs/CERTEN_GOVERANCE_PROOF_SPEC.MD
+  docs/l4/L4_DESIGN.md
+  docs/l4/PHASE5_PLAN.md          (esp. §1.2 and §8)
+  accumulate-lite-client-2/liteclient/proof/consolidated_governance-proof/docs/CERTEN_GOVERANCE_PROOF_SPEC.MD
 
 CODE IN SCOPE — read each file COMPLETELY, not in fragments:
   A. pkg/database/proof_artifact_repository.go
