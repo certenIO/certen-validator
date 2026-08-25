@@ -451,12 +451,33 @@ func (g1 *G1Layer) evaluateCandidate(ctx context.Context, cand sigCandidate, key
 	}
 
 	// --- ed25519 + key-page membership (section 8.5) ----------------------
-	if err := g1.signatureVerifier.ValidateSignature(ctx, validated, snapshot.StateExec, txHash); err != nil {
+	form, err := g1.signatureVerifier.ValidateSignature(ctx, validated, snapshot.StateExec, txHash)
+	if err != nil {
 		if isInfrastructureDigestFailure(err) {
 			return evalResult{Outcome: SigUnavailable, Stage: "compute-digest", Reason: err.Error()}
 		}
+		// A capability limit is UNAVAILABLE, not REJECTED, and the difference is
+		// the whole of runbook rule 7.
+		//
+		// An unsupported key type is a real vote by a real key that really did
+		// authorize the transaction - corpus case K is one Kermit DELIVERED - and
+		// we cannot check it. Recording that as a rejection lets the threshold be
+		// computed over the remainder, which is a silent skip: the count comes up
+		// short and reads as "the institution did not authorize this". A false
+		// governance rejection is worse than an error, so this is an error.
+		// SigUnavailable is exactly that: not evidence, and no threshold may be
+		// computed while one is outstanding.
+		//
+		// The same holds for a delegation we have not resolved.
+		if u, ok := IsUnsupportedSignatureType(err); ok {
+			return evalResult{Outcome: SigUnavailable, Stage: u.Reason(), Reason: err.Error()}
+		}
+		if d, ok := err.(DelegationNotResolved); ok {
+			return evalResult{Outcome: SigUnavailable, Stage: d.Reason(), Reason: err.Error()}
+		}
 		return evalResult{Outcome: SigRejected, Stage: "validate-signature", Reason: err.Error()}
 	}
+	validated.Signature.DigestForm = form
 	validated.CryptographicallyVerified = true
 
 	return evalResult{Outcome: SigCounted, Validated: validated, Stage: "counted"}
@@ -479,6 +500,20 @@ func (g1 *G1Layer) evaluateCandidate(ctx context.Context, cand sigCandidate, key
 // just pointed the other way: it turns a routine rejection into a fake outage,
 // which then costs the cross-check and burns retries on a permanent condition.
 func isNotASignatureMessage(err error) bool {
+	// The typed refusal first. It replaced the "not an ed25519 signature"
+	// string, and matching on prose is what made this a maintenance hazard: an
+	// error message was reworded in Phase 7 and every authority-type chain entry
+	// silently changed class. The string cases below remain for the errors that
+	// are still only prose.
+	//
+	// Note which refusal is here and which is NOT. NotAKeySignature is routine.
+	// UnsupportedSignatureType is deliberately absent: a btc or eth signature IS
+	// a vote, and treating it as "not a signature message" would skip it
+	// silently - the exact thing runbook rule 7 forbids.
+	if _, ok := err.(NotAKeySignature); ok {
+		return true
+	}
+
 	s := strings.ToLower(err.Error())
 	switch {
 	case strings.Contains(s, "not a signature message"): // wrong message type

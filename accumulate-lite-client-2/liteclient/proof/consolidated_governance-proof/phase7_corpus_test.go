@@ -169,80 +169,93 @@ func TestP7_1_CorpusIsWellFormed(t *testing.T) {
 	t.Logf("verdicts from %s via %s", cf.ProtocolModule, cf.Endpoint)
 }
 
-// TestP7_1_DelegatedSignaturesAreRefusedBeforeAnyCryptography is defect D1.
+// The three defect tests below were written in their FAILING form first, at
+// commit e025ba4, where each one demonstrated the defect against unmodified
+// code and passed by doing so. PHASE7_RUNBOOK.md section 1.3 requires that
+// order: "Writing the verifier first and the tests second produces an
+// implementation that is self-consistent and wrong."
 //
-// signature_verifier.go rejects every signature whose type is not "ed25519",
-// and a delegated signature's type is "delegated". The refusal happens during
-// EXTRACTION, before a digest is computed or a key is checked - so a delegated
-// signature never reaches the cryptography at all.
-func TestP7_1_DelegatedSignaturesAreRefusedBeforeAnyCryptography(t *testing.T) {
+// Phase 2 made those assertions false on purpose, so they are restated here as
+// their opposites. The evidence that the defects were real is the diff between
+// e025ba4 and this commit, not a test that still asserts them.
+
+// TestP7_1_D1_DelegatedSignaturesAreExtracted is defect D1, fixed.
+//
+// signature_verifier.go refused every signature whose type was not "ed25519",
+// and a delegated signature's type is "delegated" - so delegated signatures
+// never reached the cryptography at all. They are now unwrapped, and the chain
+// is carried rather than discarded, because the chain is inside the signed
+// bytes.
+//
+// Types we genuinely cannot verify are still refused, but with their own
+// reason: see TestP7_UnsupportedTypeIsRefusedByItsOwnReason.
+func TestP7_1_D1_DelegatedSignaturesAreExtracted(t *testing.T) {
 	cf := loadCorpus(t)
 	sv := &SignatureVerifier{}
 
 	var checked int
 	for _, tr := range cf.Traces {
-		if tr.Type == "ed25519" {
+		if tr.Type != "delegated" || tr.RefusalKind == "depth-limit" {
 			continue
 		}
 		checked++
 		t.Run(tr.Label, func(t *testing.T) {
-			_, err := sv.ExtractSignatureFromMessageResult(messageResultFor(tr))
-			if err == nil {
-				t.Fatalf("a %s signature was extracted successfully - the corpus is not "+
-					"exercising the type check this case exists for", tr.Type)
+			got, err := sv.ExtractSignatureFromMessageResult(messageResultFor(tr))
+			if err != nil {
+				t.Fatalf("a delegated signature was refused at extraction: %v", err)
 			}
-			t.Logf("%s refused at extraction: %v", tr.Type, err)
+			if !got.IsDelegated() {
+				t.Fatal("extracted, but the delegation was dropped - the chain is inside the " +
+					"signed bytes, so a signature without it cannot be verified against any path")
+			}
+			if got.Type != "delegated" {
+				t.Fatalf("type recorded as %q, not %q", got.Type, "delegated")
+			}
 		})
 	}
 	if checked == 0 {
-		t.Fatal("no non-ed25519 signature in the corpus, so D1 is untested")
+		t.Fatal("no delegated signature in the corpus, so D1 is untested")
 	}
 }
 
-// TestP7_1_DelegatedDigestIsWrongToday is defect D3, and it is the one that
-// would survive a naive fix.
+// TestP7_1_D3_DelegatedDigestMatchesCore is defect D3, fixed.
 //
-// Removing the type check is not enough. DelegatedSignature.Metadata() recurses
-// and verifySigSplit hashes the OUTERMOST metadata, so the inner ed25519 key
-// signs a digest that commits to every Delegator URL in the chain.
-// ComputeAccumulateDigest builds a bare protocol.ED25519Signature and hashes
-// that, so for a delegated signature it produces a digest the key never signed
-// - a well-formed digest that never verifies.
+// Removing the type check was not enough. DelegatedSignature.Metadata()
+// recurses and verifySigSplit hashes the OUTERMOST metadata, so the inner
+// ed25519 key signs a digest committing to every Delegator URL in the chain.
+// The old ComputeAccumulateDigest built a bare ED25519Signature and hashed
+// that, producing a digest the key never signed.
 //
-// The corpus records the digest accumulate-core accepted. This test shows ours
-// is a different number, and that the signature does not verify against it.
-func TestP7_1_DelegatedDigestIsWrongToday(t *testing.T) {
+// TestP7_DigestParity covers the same ground for every signature; this one
+// stays because it is specifically the delegated case, and because the failure
+// it guards against is silent - a wrong digest looks exactly like an
+// unauthorized signature.
+func TestP7_1_D3_DelegatedDigestMatchesCore(t *testing.T) {
 	cf := loadCorpus(t)
-	sv := NewSignatureVerifier("")
-	ctx := context.Background()
 
 	var checked int
 	for _, tr := range cf.Traces {
-		// KeyType, not Type. A delegated signature's Type is "delegated"; the
-		// ed25519 key is at the centre of the nesting, and filtering on the
-		// outer type finds none of them.
 		if tr.KeyType != "ed25519" || len(tr.Delegators) == 0 || tr.Digest == "" {
 			continue
 		}
 		checked++
 		t.Run(tr.Label, func(t *testing.T) {
-			digest, err := sv.ComputeAccumulateDigest(ctx, signatureDataFor(tr), tr.TransactionHash)
+			digests, err := AcceptedDigests(corpusSignatureData(tr), corpusTxHash(t, tr))
 			if err != nil {
-				t.Logf("digest refused outright: %v (also fail-closed)", err)
-				return
+				t.Fatalf("AcceptedDigests: %v", err)
 			}
-			ours := hex.EncodeToString(digest)
-			if ours == tr.Digest {
-				t.Fatalf("our digest already matches the one accumulate-core accepted (%s). "+
-					"Either the delegation is not in the signed bytes, or this corpus case "+
-					"is not delegated - both mean the case proves nothing", ours[:16])
+			for _, d := range digests {
+				if hex.EncodeToString(d.Digest) == tr.Digest {
+					// And the signature must actually verify against it.
+					sv := NewSignatureVerifier("")
+					if err := sv.VerifyEd25519(tr.PublicKey, tr.Signature, d.Digest); err != nil {
+						t.Fatalf("digest matches accumulate-core but the signature does not "+
+							"verify against it: %v", err)
+					}
+					return
+				}
 			}
-			if err := sv.VerifyEd25519(tr.PublicKey, tr.Signature, digest); err == nil {
-				t.Fatal("the signature verified against our digest, which cannot be true if " +
-					"the digest differs from the one that was signed - FAIL-OPEN")
-			}
-			t.Logf("core accepted %s (%s form); we compute %s - refused",
-				tr.Digest[:16], tr.DigestForm, ours[:16])
+			t.Fatalf("no digest of ours matches the one accumulate-core accepted (%s)", tr.Digest[:16])
 		})
 	}
 	if checked == 0 {
@@ -250,20 +263,18 @@ func TestP7_1_DelegatedDigestIsWrongToday(t *testing.T) {
 	}
 }
 
-// TestP7_1_MerkleFormIsRefusedToday is defect D4.
+// TestP7_1_D4_MerkleFormVerifies is defect D4, fixed.
 //
 // accumulate-core accepts the metadata digest OR the Initiator() merkle digest.
-// ComputeAccumulateDigest implements only the first, so a signature valid under
-// the second is counted invalid - and because G1 fails closed, that surfaces as
-// a governance REJECTION, indistinguishable from "the institution did not
-// authorize this".
+// Only the first was implemented, so a signature valid under the second was
+// counted invalid - and because G1 fails closed, that surfaced as a governance
+// REJECTION, indistinguishable from "the institution did not authorize this".
 //
-// The corpus specimen is a signature Kermit DELIVERED. There is no ambiguity
-// about whether the network considers it authorized.
-func TestP7_1_MerkleFormIsRefusedToday(t *testing.T) {
+// The corpus specimen is a signature Kermit DELIVERED, so there is no ambiguity
+// about whether the network considered it authorized.
+func TestP7_1_D4_MerkleFormVerifies(t *testing.T) {
 	cf := loadCorpus(t)
 	sv := NewSignatureVerifier("")
-	ctx := context.Background()
 
 	var checked int
 	for _, tr := range cf.Traces {
@@ -273,23 +284,32 @@ func TestP7_1_MerkleFormIsRefusedToday(t *testing.T) {
 		checked++
 		t.Run(tr.Label, func(t *testing.T) {
 			if !tr.CoreVerdict {
-				t.Fatalf("corpus says this is a merkle-form signature but accumulate-core " +
+				t.Fatal("corpus says this is a merkle-form signature but accumulate-core " +
 					"does not accept it - the corpus is wrong")
 			}
-			if tr.ExecStatus != "delivered" {
-				t.Logf("note: this specimen's transaction is %q, not delivered", tr.ExecStatus)
-			}
-			digest, err := sv.ComputeAccumulateDigest(ctx, signatureDataFor(tr), tr.TransactionHash)
+
+			form, err := sv.VerifyAgainstAcceptedDigests(corpusSignatureData(tr), tr.TransactionHash)
 			if err != nil {
-				t.Logf("digest refused outright: %v", err)
-				return
+				t.Fatalf("a signature Kermit delivered is still refused: %v", err)
 			}
-			verifyErr := sv.VerifyEd25519(tr.PublicKey, tr.Signature, digest)
-			if verifyErr == nil {
-				t.Fatal("a merkle-form signature verified under the metadata digest - " +
-					"the two forms are not distinct and this case proves nothing")
+			if form != DigestFormMerkle {
+				t.Fatalf("verified under the %q form; accumulate-core used %q - if this passed "+
+					"under the metadata form the two forms are not distinct and the case proves "+
+					"nothing", form, DigestFormMerkle)
 			}
-			t.Logf("a signature Kermit delivered is refused by our digest: %v", verifyErr)
+
+			// The control: it must NOT verify under the metadata form. Otherwise
+			// the merkle branch is never the reason anything passes, and it could
+			// be deleted without any test noticing.
+			metadataOnly, err := sv.ComputeAccumulateDigest(context.Background(),
+				corpusSignatureData(tr), tr.TransactionHash)
+			if err != nil {
+				t.Fatalf("ComputeAccumulateDigest: %v", err)
+			}
+			if err := sv.VerifyEd25519(tr.PublicKey, tr.Signature, metadataOnly); err == nil {
+				t.Fatal("the merkle-form specimen also verifies under the metadata digest, " +
+					"so it does not test the merkle branch at all")
+			}
 		})
 	}
 	if checked == 0 {
@@ -391,8 +411,12 @@ func signatureDataFor(tr corpusTrace) SignatureData {
 // messageResultFor renders a corpus trace as the v3 message result the
 // extractor parses, in the same nesting Kermit returns.
 func messageResultFor(tr corpusTrace) map[string]interface{} {
+	// KeyType, not Type. The key signature at the centre carries the KEY's type;
+	// Type is what the outermost wrapper is called. Labelling the centre
+	// "delegated" makes the unwrapper keep unwrapping until it runs out of
+	// delegators.
 	sig := map[string]interface{}{
-		"type":            tr.Type,
+		"type":            tr.KeyType,
 		"publicKey":       tr.PublicKey,
 		"signature":       tr.Signature,
 		"signer":          tr.Signer,

@@ -55,12 +55,6 @@ func TestRegression_NonSignatureMessagesClassifyAsRejected(t *testing.T) {
 		{"creditPayment message", map[string]interface{}{"type": "creditPayment"}},
 		{"transaction message", map[string]interface{}{"type": "transaction"}},
 		{"blockAnchor message", map[string]interface{}{"type": "blockAnchor"}},
-		{"delegated signature", map[string]interface{}{
-			"type": "signature", "signature": map[string]interface{}{"type": "delegated"}}},
-		{"rcd1 signature", map[string]interface{}{
-			"type": "signature", "signature": map[string]interface{}{"type": "rcd1"}}},
-		{"btc signature", map[string]interface{}{
-			"type": "signature", "signature": map[string]interface{}{"type": "btc"}}},
 		{"signature with no payload", map[string]interface{}{"type": "signature"}},
 		{"signature payload not an object", map[string]interface{}{
 			"type": "signature", "signature": "not-an-object"}},
@@ -81,6 +75,71 @@ func TestRegression_NonSignatureMessagesClassifyAsRejected(t *testing.T) {
 					"error: %v", tc.name, err)
 			}
 		})
+	}
+}
+
+// PHASE 7 changed the class of three entries this test used to list as routine
+// rejections: delegated, rcd1 and btc.
+//
+// "delegated" moved because it is now SUPPORTED. It was only ever a rejection
+// because signature_verifier.go refused everything that was not ed25519, which
+// is the defect Phase 7 exists to fix.
+//
+// "rcd1" and "btc" moved because runbook rule 7 says so. They are real votes by
+// real keys - corpus case K is a btc signature Kermit DELIVERED - that we cannot
+// check. Calling them routine rejections lets the threshold be computed over the
+// remainder, which is a silent skip: the count comes up short and reads as "the
+// institution did not authorize this". A false governance rejection is worse
+// than an error, so an unsupported key type is now an OUTAGE, and no threshold
+// may be computed while one is outstanding.
+func TestPhase7_UnsupportedKeyTypesAreOutagesNotRejections(t *testing.T) {
+	sv := NewSignatureVerifier("")
+
+	for _, tc := range []struct{ name, sigType string }{
+		{"rcd1 signature", "rcd1"},
+		{"btc signature", "btc"},
+		{"eth signature", "eth"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := sv.ExtractSignatureFromMessageResult(buildMsgResult(
+				map[string]interface{}{
+					"type":      "signature",
+					"signature": map[string]interface{}{"type": tc.sigType},
+				}))
+			if err == nil {
+				t.Fatal("expected extraction to fail on an unsupported key type")
+			}
+			if _, ok := IsUnsupportedSignatureType(err); !ok {
+				t.Fatalf("refused, but not with the unsupported-type reason: %v", err)
+			}
+			if isNotASignatureMessage(err) {
+				t.Fatalf("CRITICAL: %q classified as a routine non-signature entry.\n"+
+					"It is a real vote we cannot check. Treating it as routine skips it "+
+					"silently, and the resulting shortfall reads as 'the institution did "+
+					"not authorize this'.\nerror: %v", tc.name, err)
+			}
+		})
+	}
+}
+
+// A delegated signature is now supported, so a MALFORMED one is a broken
+// response rather than a routine chain entry. It must not be waved through as
+// "just not a signature": that would let a signature whose delegator we could
+// not read be quietly dropped, and the delegator is inside the signed bytes.
+func TestPhase7_MalformedDelegationIsNotRoutine(t *testing.T) {
+	sv := NewSignatureVerifier("")
+
+	_, err := sv.ExtractSignatureFromMessageResult(buildMsgResult(
+		map[string]interface{}{
+			"type":      "signature",
+			"signature": map[string]interface{}{"type": "delegated"},
+		}))
+	if err == nil {
+		t.Fatal("a delegated signature with no delegator was accepted")
+	}
+	if isNotASignatureMessage(err) {
+		t.Fatalf("a malformed delegated signature was classified as a routine "+
+			"non-signature entry: %v", err)
 	}
 }
 

@@ -15,9 +15,6 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
-
-	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
-	"gitlab.com/accumulatenetwork/accumulate/protocol"
 )
 
 // CERTEN Governance Proof - Signature Verification
@@ -45,12 +42,15 @@ func NewSignatureVerifier(sigbytesPath string) *SignatureVerifier {
 func (sv *SignatureVerifier) ComputeAccumulateDigest(ctx context.Context, sig SignatureData, txHash string) ([]byte, error) {
 	fmt.Printf("[DIGEST] [ENTRY] sigbytesPath='%s', txHash=%s\n", sv.sigbytesPath, txHash[:16])
 	if sv.sigbytesPath == "" {
-		// In-process Accumulate protocol digest computation using the official protocol package
-		// This matches what the sigbytes tool does:
-		//   mdHash := sig.Metadata().Hash()
-		//   digest := sha256.Sum256(append(mdHash, txnHash[:]...))
-
-		// Use the transaction hash from the signature, not the outer txHash parameter
+		// The METADATA digest, which is the first of the two accumulate-core
+		// accepts. It is computed by AcceptedDigests rather than rebuilt here, so
+		// there is one implementation of the preimage and not two that can drift.
+		//
+		// This function is retained because callers and pinned fixtures use it,
+		// and because "the metadata digest" is a meaningful thing to ask for. It
+		// is NOT sufficient on its own to decide whether a signature is valid -
+		// use VerifyAgainstAcceptedDigests for that, or a signature made over the
+		// Initiator() merkle digest is counted invalid.
 		actualTxHash := sig.TransactionHash
 		if actualTxHash == "" {
 			actualTxHash = txHash
@@ -66,42 +66,18 @@ func (sv *SignatureVerifier) ComputeAccumulateDigest(ctx context.Context, sig Si
 		var txHashArray [32]byte
 		copy(txHashArray[:], txHashBytes)
 
-		// Decode public key
-		pubKeyBytes, err := hex.DecodeString(strings.TrimPrefix(sig.PublicKey, "0x"))
+		digests, err := AcceptedDigests(sig, txHashArray)
 		if err != nil {
-			return nil, fmt.Errorf("failed to decode public key: %v", err)
+			return nil, err
 		}
-
-		// Parse signer URL
-		signerUrl, err := url.Parse(sig.Signer)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse signer URL '%s': %v", sig.Signer, err)
+		for _, d := range digests {
+			if d.Form == DigestFormMetadata {
+				fmt.Printf("[DIGEST] [DEBUG] metadata digest=%x (%d delegation hop(s))\n",
+					d.Digest[:8], len(sig.Chain))
+				return d.Digest, nil
+			}
 		}
-
-		// Build the ED25519Signature using Accumulate protocol
-		accSig := new(protocol.ED25519Signature)
-		accSig.PublicKey = pubKeyBytes
-		accSig.Signer = signerUrl
-		accSig.SignerVersion = uint64(sig.SignerVersion)
-		if sig.Timestamp != nil {
-			accSig.Timestamp = uint64(*sig.Timestamp)
-		}
-		// Vote defaults to 0 (no vote)
-
-		// Debug: show the values being used
-		fmt.Printf("[DIGEST] [DEBUG] txHash=%s, pubKey=%x, signer=%s, version=%d, timestamp=%d\n",
-			actualTxHash[:16], pubKeyBytes[:8], sig.Signer, sig.SignerVersion, accSig.Timestamp)
-
-		// Compute the metadata hash using Accumulate's official method
-		mdHash := accSig.Metadata().Hash()
-		fmt.Printf("[DIGEST] [DEBUG] mdHash=%x\n", mdHash[:8])
-
-		// Final digest = SHA256(mdHash + txnHash)
-		digestInput := append(mdHash, txHashArray[:]...)
-		digest := sha256.Sum256(digestInput)
-		fmt.Printf("[DIGEST] [DEBUG] final digest=%x\n", digest[:8])
-
-		return digest[:], nil
+		return nil, fmt.Errorf("no metadata digest was produced for this signature")
 	}
 
 	// Build command arguments
@@ -211,14 +187,24 @@ func (sv *SignatureVerifier) ComputeKeyHash(pubkeyHex string) (string, error) {
 // =============================================================================
 
 // ValidateSignature validates a single signature against authority state
-func (sv *SignatureVerifier) ValidateSignature(ctx context.Context, sig ValidatedSignature, state KeyPageState, txHash string) error {
+func (sv *SignatureVerifier) ValidateSignature(ctx context.Context, sig ValidatedSignature, state KeyPageState, txHash string) (string, error) {
 	fmt.Printf("[SIGNATURE] [DEBUG] Starting validation for signature %s\n", SafeTruncate(sig.MessageHash, 16))
 	fmt.Printf("[SIGNATURE] [DEBUG] Signature version: %d, State version: %d\n", sig.Signature.SignerVersion, state.Version)
+
+	// A delegated signature's key does not sit on the page being checked, and
+	// its version is the INNER page's version, so neither of the two checks
+	// below means anything for it. Resolving a delegated signature is authority
+	// resolution, which is Phase 3; until that exists this refuses with its own
+	// reason rather than failing the membership check, because "this key is not
+	// on this page" is true, misleading, and reads as a governance rejection.
+	if sig.Signature.IsDelegated() {
+		return "", DelegationNotResolved{Chain: sig.Signature.DelegatorChain(), Signer: sig.Signature.Signer}
+	}
 
 	// Validate signer version matches current state
 	if uint64(sig.Signature.SignerVersion) != state.Version {
 		fmt.Printf("[SIGNATURE] [DEBUG] FAIL: Version mismatch %d != %d\n", sig.Signature.SignerVersion, state.Version)
-		return fmt.Errorf("signature signer version mismatch: %d != %d", sig.Signature.SignerVersion, state.Version)
+		return "", fmt.Errorf("signature signer version mismatch: %d != %d", sig.Signature.SignerVersion, state.Version)
 	}
 
 	fmt.Printf("[SIGNATURE] [DEBUG] Public key: %s\n", SafeTruncate(sig.Signature.PublicKey, 16))
@@ -227,7 +213,7 @@ func (sv *SignatureVerifier) ValidateSignature(ctx context.Context, sig Validate
 	keyHash, err := sv.ComputeKeyHash(sig.Signature.PublicKey)
 	if err != nil {
 		fmt.Printf("[SIGNATURE] [DEBUG] FAIL: Key hash computation failed: %v\n", err)
-		return fmt.Errorf("failed to compute key hash: %v", err)
+		return "", fmt.Errorf("failed to compute key hash: %v", err)
 	}
 
 	fmt.Printf("[SIGNATURE] [DEBUG] Computed key hash: %s\n", SafeTruncate(keyHash, 16))
@@ -246,33 +232,69 @@ func (sv *SignatureVerifier) ValidateSignature(ctx context.Context, sig Validate
 	}
 	if !found {
 		fmt.Printf("[SIGNATURE] [DEBUG] FAIL: Key not in authority set. Computed: %s\n", SafeTruncate(keyHash, 16))
-		return fmt.Errorf("public key not in authority set: %s", SafeTruncate(keyHash, 16))
+		return "", fmt.Errorf("public key not in authority set: %s", SafeTruncate(keyHash, 16))
 	}
 
 	fmt.Printf("[SIGNATURE] [DEBUG] Key membership verified\n")
 
-	// Compute Accumulate-specific digest
-	digest, err := sv.ComputeAccumulateDigest(ctx, sig.Signature, txHash)
+	// Verify against every digest Accumulate accepts, not just the first.
+	//
+	// A signature counts if EITHER the metadata digest or the Initiator() merkle
+	// digest verifies (protocol/signature_utils.go:26-41). Checking only the
+	// metadata form counted a valid signature as invalid, and because G1 fails
+	// closed that surfaced as a governance rejection.
+	form, err := sv.VerifyAgainstAcceptedDigests(sig.Signature, txHash)
 	if err != nil {
-		fmt.Printf("[SIGNATURE] [DEBUG] FAIL: Digest computation failed: %v\n", err)
-		return fmt.Errorf("failed to compute signature digest: %v", err)
+		fmt.Printf("[SIGNATURE] [DEBUG] FAIL: %v\n", err)
+		return "", err
 	}
 
-	fmt.Printf("[SIGNATURE] [DEBUG] Digest computed successfully (len=%d, hex=%s)\n", len(digest), hex.EncodeToString(digest[:8]))
-	fmt.Printf("[SIGNATURE] [DEBUG] Using txHash for digest: %s\n", txHash)
-	fmt.Printf("[SIGNATURE] [DEBUG] Signature's embedded transactionHash: %s\n", sig.Signature.TransactionHash)
-	fmt.Printf("[SIGNATURE] [DEBUG] Signature bytes: %s...\n", sig.Signature.Signature[:32])
-	fmt.Printf("[SIGNATURE] [DEBUG] SignerVersion=%d, Timestamp=%v\n", sig.Signature.SignerVersion, sig.Signature.Timestamp)
+	fmt.Printf("[SIGNATURE] [DEBUG] SUCCESS: Signature validated (%s digest, %d delegation hop(s))\n",
+		form, len(sig.Signature.Chain))
 
-	// Verify Ed25519 signature
-	if err := sv.VerifyEd25519(sig.Signature.PublicKey, sig.Signature.Signature, digest); err != nil {
-		fmt.Printf("[SIGNATURE] [DEBUG] FAIL: Ed25519 verification failed: %v\n", err)
-		return fmt.Errorf("signature verification failed: %v", err)
+	// The form is RETURNED rather than written to sig, which is a value copy.
+	// Assigning it here would look like it was recorded and record nothing.
+	return form, nil
+}
+
+// VerifyAgainstAcceptedDigests verifies a signature against each digest
+// accumulate-core would accept, and reports which one carried it.
+//
+// The digest set is computed from the signature's own transaction hash when it
+// has one, falling back to the caller's, which is the behaviour
+// ComputeAccumulateDigest already had.
+func (sv *SignatureVerifier) VerifyAgainstAcceptedDigests(sig SignatureData, txHash string) (string, error) {
+	actualTxHash := sig.TransactionHash
+	if actualTxHash == "" {
+		actualTxHash = txHash
+	}
+	txHashBytes, err := hex.DecodeString(strings.TrimPrefix(actualTxHash, "0x"))
+	if err != nil {
+		return "", fmt.Errorf("failed to decode transaction hash: %v", err)
+	}
+	if len(txHashBytes) != 32 {
+		return "", fmt.Errorf("transaction hash must be 32 bytes, got %d", len(txHashBytes))
+	}
+	var txHashArray [32]byte
+	copy(txHashArray[:], txHashBytes)
+
+	digests, err := AcceptedDigests(sig, txHashArray)
+	if err != nil {
+		// An unsupported type or an over-deep chain reaches the caller as
+		// itself, so a capability limit is never reported as a bad signature.
+		return "", err
 	}
 
-	fmt.Printf("[SIGNATURE] [DEBUG] SUCCESS: Signature validated\n")
-
-	return nil
+	var lastErr error
+	for _, d := range digests {
+		if err := sv.VerifyEd25519(sig.PublicKey, sig.Signature, d.Digest); err == nil {
+			return d.Form, nil
+		} else {
+			lastErr = err
+		}
+	}
+	return "", fmt.Errorf("signature verification failed against all %d accepted digest form(s): %v",
+		len(digests), lastErr)
 }
 
 // ValidateSignatureSet validates a complete set of signatures for authorization
@@ -301,7 +323,8 @@ func (sv *SignatureVerifier) ValidateSignatureSet(ctx context.Context, signature
 	for i, sig := range signatures {
 		fmt.Printf("[SIGNATURE] [DEBUG] Processing signature %d/%d: %s\n", i+1, len(signatures), SafeTruncate(sig.MessageHash, 16))
 
-		if err := sv.ValidateSignature(ctx, sig, state, txHash); err != nil {
+		form, err := sv.ValidateSignature(ctx, sig, state, txHash)
+		if err != nil {
 			if isInfrastructureDigestFailure(err) {
 				unavailable = append(unavailable, UnavailableSignature{
 					MessageID: sig.MessageID, Stage: "revalidate-signature", Err: err.Error(),
@@ -313,6 +336,12 @@ func (sv *SignatureVerifier) ValidateSignatureSet(ctx context.Context, signature
 					"refusing to compute a threshold over an inconsistent set",
 				SafeTruncate(sig.MessageHash, 16), err)}
 		}
+
+		// Record which digest form carried this signature. It is evidence, and
+		// it is the only way to observe whether the merkle form appears in
+		// practice - which decides whether defect D4 was a live bug or a dormant
+		// one.
+		sig.Signature.DigestForm = form
 
 		keyHash, err := sv.ComputeKeyHash(sig.Signature.PublicKey)
 		if err != nil {
@@ -438,6 +467,19 @@ func (sv *SignatureVerifier) ExtractSignatureFromMessageResult(msgResult map[str
 		return SignatureData{}, ValidationError{Msg: "Signature is not an object"}
 	}
 
+	// Unwrap any delegation before looking at the key signature.
+	//
+	// This used to be a flat type check that refused anything whose type was not
+	// "ed25519", and a delegated signature's type is "delegated" - so every
+	// delegated signature was refused here, before a digest was computed or a
+	// key was checked. The delegation is not decoration on the signature: it is
+	// inside the bytes the inner key signed, so the chain is collected here and
+	// carried on the SignatureData rather than discarded. See delegation.go.
+	sigMap, chain, err := unwrapDelegation(pu, sigMap)
+	if err != nil {
+		return SignatureData{}, err
+	}
+
 	// Extract signature type
 	sigType := pu.CaseInsensitiveGet(sigMap, "type")
 	sigTypeStr, ok := sigType.(string)
@@ -445,13 +487,27 @@ func (sv *SignatureVerifier) ExtractSignatureFromMessageResult(msgResult map[str
 		return SignatureData{}, ValidationError{Msg: "Signature.type missing"}
 	}
 
-	if strings.ToLower(sigTypeStr) != "ed25519" {
-		return SignatureData{}, ValidationError{Msg: fmt.Sprintf("Not an ed25519 signature (type: %s)", sigTypeStr)}
+	// Two different refusals, deliberately kept apart.
+	//
+	// An entry that is not a key signature at all - an authority signature, a
+	// signature request - is routine: a key page's chain carries those, and
+	// skipping them is correct. A key type we cannot verify is not routine: it
+	// is a real vote we cannot count, and it must say so in its own words, or
+	// the shrunken counted set reads as an unmet threshold, which reads as "the
+	// institution did not authorize this".
+	if err := requireSupportedType(SignatureData{Type: sigTypeStr}); err != nil {
+		return SignatureData{}, err
 	}
 
 	// Extract required fields
 	sig := SignatureData{
-		Type: strings.ToLower(sigTypeStr),
+		Type:  strings.ToLower(sigTypeStr),
+		Chain: chain,
+	}
+	if len(chain) > 0 {
+		// The outermost type is what Accumulate calls this signature, and it is
+		// the one whose metadata is hashed.
+		sig.Type = "delegated"
 	}
 
 	// Public key

@@ -65,7 +65,21 @@ type ExecutionContext struct {
 // SignatureData represents Ed25519 signature information with enhanced cryptographic security
 // Contains all signature fields from v3 message result plus security enhancements
 type SignatureData struct {
-	Type            string    `json:"type"`            // Should be "ed25519"
+	Type string `json:"type"` // "ed25519" or "delegated"
+
+	// Chain is the delegation path, OUTERMOST FIRST, and it is part of the
+	// signature rather than context about it: DelegatedSignature.Metadata()
+	// recurses, so every Delegator URL here is inside the bytes the inner key
+	// signed. Empty for a bare ed25519 signature. See delegation.go.
+	Chain []SignerLink `json:"chain,omitempty"`
+
+	// DigestForm records which of the two accepted digests this signature was
+	// actually made over, once it has been verified. It is recorded rather than
+	// discarded so the distribution is observable - if the merkle form never
+	// appears that is worth knowing, and if it does, defect D4 was rejecting
+	// real signatures.
+	DigestForm string `json:"digestForm,omitempty"`
+
 	PublicKey       string    `json:"publicKey"`       // 32-byte hex
 	Signature       string    `json:"signature"`       // 64-byte hex
 	Signer          string    `json:"signer"`          // acc://...
