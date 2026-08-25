@@ -248,6 +248,28 @@ equal the `Layer2[i]` it binds, and a leg from another proof must not be
 graftable — `layer4_crossbind_test.go` already pins the two-leg case and needs
 extending to N.
 
+### 4.4 Phase 7 inherits Phase 6 and must widen it
+
+Phase 6 persists L4 evidence assuming **exactly two legs** — one BVN, one DN —
+and writes them as two `chained_proof_layers` rows with `layer_number = 4`. It
+also adds `ChainedProofFromStorage`, which reassembles L1–L4 for offline
+verification.
+
+Widening `ChainedProof` to N BVN legs breaks both unless they are updated in
+the same phase:
+
+- the layer-4 row writer must emit **N + 1** rows (N BVN + 1 DN), not 2, with
+  `bvn_partition` distinguishing them
+- `ChainedProofFromStorage` must reassemble a variable number of legs in
+  canonical partition order, and must fail closed — not silently truncate — if
+  a leg recorded in the summary has no stored row
+- Phase 6's gate P6.5 (a stored proof verifies offline) must be re-run against
+  a **multi-partition** proof, or it is no longer testing what it claims
+
+This is why the ordering in §5 is not merely a preference: doing Phase 7 first
+would mean building persistence twice, and doing them concurrently would mean
+Phase 6's gates pass against a shape Phase 7 immediately invalidates.
+
 ---
 
 ## 5. govRoot impact — read before writing code
@@ -286,6 +308,7 @@ Consequences for sequencing:
 | 7.4 | Authority resolution — M-of-N + delegation + the five rules (§3.3) | 3 d |
 | 7.5 | Signature enumeration per signer account (§1.5, §4.2) | 2 d |
 | 7.6 | Multi-partition `ChainedProof` + builder (§4.1) | 3 d |
+| 7.6b | **Extend Phase 6 persistence to N legs** (§4.4) | 1 d |
 | 7.7 | Multi-partition verifier + cross-bind generalisation (§4.3) | 2 d |
 | 7.8 | `L4GovRootVersion` v2 + `summarizeL4Leg` over N legs | 1 d |
 | 7.9 | Live e2e with a real delegated multi-sig ADI | 2 d |
@@ -309,6 +332,7 @@ being written blind.
 | P7.7 | Multi-partition proof builds and verifies offline | signers on ≥2 BVNs; network disabled |
 | P7.8 | Every BVN leg is checked | corrupt leg *i* of N; must fail for every i |
 | P7.9 | Cross-bind rejected at N legs | graft leg from another proof; refused |
+| P7.9b | **Phase 6 persistence widened** | a multi-partition proof writes N+1 layer-4 rows; `ChainedProofFromStorage` reassembles it and it verifies offline (P6.5 re-run at N legs); a summary leg with no stored row fails closed |
 | P7.10 | Canonical ordering | shuffle partition discovery order; bytes identical |
 | P7.11 | govRoot moved deliberately, once | new value recorded; `L4GovRootVersion == certen:l4gov:v2` |
 | P7.12 | Live e2e settles | real delegated multi-sig ADI, on base-sepolia |

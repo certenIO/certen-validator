@@ -210,9 +210,22 @@ chain data must produce identical bytes.
 Not per signature, and not per partition-that-exists. A signature that does not
 contribute to the threshold needs no proof.
 
+### 4.4 Widen Phase 6's persistence in the same step
+
+Phase 6 writes exactly two layer-4 rows (one BVN, one DN) and its
+`ChainedProofFromStorage` reassembles that fixed shape. Both must widen here or
+Phase 6's Gate P6.5 is silently no longer testing what it claims:
+
+- emit **N + 1** layer-4 rows, `bvn_partition` distinguishing them
+- reassemble a variable number of legs in canonical partition order
+- **fail closed** if the summary names a leg that has no stored row — never
+  truncate to what happens to be present
+
 ### Gate 4
 
 ✅ Corpus F (signers on ≥2 BVNs) builds with ≥2 BVN legs.
+✅ A multi-partition proof writes N+1 layer-4 rows and reads back through
+`ChainedProofFromStorage`; a missing leg fails closed (P7.9b).
 ✅ Case A builds with exactly one, byte-identical to the Phase 0 baseline.
 ✅ Shuffling partition discovery order yields identical bytes (P7.10).
 
