@@ -295,5 +295,27 @@ func (g *CLIGovernanceProofGenerator) parseOutput(level GovernanceLevel, output 
 		return nil, fmt.Errorf("unknown governance level: %s", level)
 	}
 
+	// STAGE 2 — keep the merkle path the hashed structs are not allowed to hold.
+	//
+	// The CLI already emits receipt.entries (ExtractReceiptFromChainEntry
+	// captures it), and the unmarshal above drops it on the floor: GovReceiptData
+	// has no Entries field and MUST NOT gain one, because it sits inside the
+	// G0/G1/G2 canonical hash. So the raw JSON is read a SECOND time, for that
+	// one field, into a type no hash can reach.
+	//
+	// A side read on purpose: the hashed structs are parsed exactly as before and
+	// nothing in this pass can influence what they contain.
+	if ev := GovReceiptEvidenceFromRaw(string(level), jsonData); ev != nil {
+		govProof.Receipts = append(govProof.Receipts, *ev)
+		g.logger.Printf("[GOV-PROOF] %s receipt evidence captured: %d merkle step(s), anchor=%s",
+			level, len(ev.Entries), truncHex(ev.Anchor))
+	} else {
+		// Loud, because this is the difference between a proof that can be
+		// recomputed from storage and one that can only be read. A govproof build
+		// predating receipt.entries produces exactly this.
+		g.logger.Printf("[GOV-PROOF] %s carries NO receipt merkle path — this level will be stored "+
+			"summary-only and cannot be recomputed from storage", level)
+	}
+
 	return govProof, nil
 }

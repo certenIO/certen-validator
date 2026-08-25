@@ -65,11 +65,12 @@ func main() {
 		dsn     = flag.String("db", os.Getenv("CERTEN_DB"), "PostgreSQL DSN (default $CERTEN_DB)")
 		offline = flag.Bool("offline", true, "refuse all outbound network access during verification")
 		verbose = flag.Bool("v", false, "print the reassembled proof's layer summary")
+		govern  = flag.Bool("governance", false, "also recompute the stored G0/G1/G2 receipts from level_json")
 	)
 	flag.Parse()
 
 	if *proofID == "" || *dsn == "" {
-		fmt.Fprintln(os.Stderr, "usage: proofverify --proof-id <uuid> --db <dsn> [--offline] [-v]")
+		fmt.Fprintln(os.Stderr, "usage: proofverify --proof-id <uuid> --db <dsn> [--offline] [--governance] [-v]")
 		os.Exit(exitUsage)
 	}
 	id, err := uuid.Parse(*proofID)
@@ -118,6 +119,9 @@ func main() {
 			fmt.Printf("  L4  %s signedHash %s…\n", cp.Layer4BVN.Partition, short(cp.Layer4BVN.SignedHash))
 			fmt.Printf("  L4  %s signedHash %s…\n", cp.Layer4DN.Partition, short(cp.Layer4DN.SignedHash))
 		}
+		if *govern {
+			os.Exit(reportGovernance(ctx, store, id, *verbose))
+		}
 		os.Exit(exitVerified)
 
 	case errors.Is(err, certenproof.ErrSummaryOnly), errors.Is(err, certenproof.ErrNoStoredProof):
@@ -141,4 +145,62 @@ func short(hexStr string) string {
 		return hexStr
 	}
 	return hexStr[:16]
+}
+
+// reportGovernance recomputes every stored governance receipt FROM level_json
+// ALONE and returns the exit code for the combined result.
+//
+// Kept separate from the L1-L4 verdict on purpose. They are different claims
+// about different evidence, and a proof can perfectly well have a checkable
+// quorum and an uncheckable governance level: the L4 legs were persisted in
+// Phase 6 and the receipt paths only from Stage 2, so every proof written
+// between those two is exactly that shape. Collapsing them would report the
+// weaker of the two under the stronger one's name, which is the failure mode
+// this tool exists to prevent.
+//
+// The same three-way discipline applies: 0 verified, 3 summary-only, 1 failed.
+// L1-L4 has already verified by the time this runs, so a governance level with
+// no evidence downgrades the RESULT to summary-only rather than failing it —
+// nothing is known to be wrong.
+func reportGovernance(ctx context.Context, store *certenproof.PostgresProofStorage, id uuid.UUID, verbose bool) int {
+	levels, err := certenproof.VerifyStoredGovernanceLevels(ctx, store, id)
+
+	for _, l := range levels {
+		switch {
+		case l.HasEvidence():
+			fmt.Printf("  %-3s RECOMPUTED from level_json: %d merkle step(s), leaf %s… under anchor %s…\n",
+				l.Level, len(l.Receipt.Entries), short(l.Receipt.Start), short(l.Receipt.Anchor))
+			if verbose && l.HasResult() {
+				fmt.Printf("      result stored (%d bytes of canonical G-result)\n", len(l.Result))
+			}
+		case l.HasResult():
+			fmt.Printf("  %-3s result stored but NO receipt path — the conclusion is recorded and cannot be checked\n", l.Level)
+		default:
+			fmt.Printf("  %-3s verdict flags only — this row does not contain the governance proof\n", l.Level)
+		}
+	}
+
+	switch {
+	case err == nil:
+		fmt.Printf("  governance: every stored level recomputes from level_json alone, network disabled\n")
+		return exitVerified
+
+	case errors.Is(err, certenproof.ErrGovernanceSummaryOnly),
+		errors.Is(err, certenproof.ErrNoStoredGovernanceLevels):
+		fmt.Printf("SUMMARY-ONLY (governance)  %s\n", id)
+		fmt.Printf("  %v\n", err)
+		fmt.Printf("  L1-L4 verified. Nothing about the governance levels is known to be wrong — the\n")
+		fmt.Printf("  proof was generated and checked in flight and the govRoot commits to its\n")
+		fmt.Printf("  canonical hash. What is missing is the receipt merkle path needed to check it\n")
+		fmt.Printf("  again, and it cannot be recovered: a receipt fetched today is not necessarily\n")
+		fmt.Printf("  the one this proof was built on.\n")
+		return exitSummaryOnly
+
+	default:
+		fmt.Printf("FAILED (governance)  %s\n", id)
+		fmt.Printf("  %v\n", err)
+		fmt.Printf("  The receipt evidence IS present and does not recompute to its own anchor.\n")
+		fmt.Printf("  This is the one outcome that means something is wrong.\n")
+		return exitFailed
+	}
 }

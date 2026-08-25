@@ -1987,34 +1987,36 @@ func (o *ProofCycleOrchestrator) storeGovernanceLevels(ctx context.Context, proo
 	now := time.Now()
 	verified := true
 
-	// Extract real governance proof data from commitment map
-	var g0Data, g1Data, g2Data string
+	// STAGE 2 — read the governance results through the SHARED helper, using the
+	// same key constants the writer uses.
+	//
+	// This block used to look for ComprehensiveData["g0Proof"]. That key is read
+	// here and WRITTEN NOWHERE in the tree: the only writer emits "att.G0Proof".
+	// So g0Data/g1Data/g2Data were always "" and this function always took its
+	// stub fallback below — the pipe was never connected. Both ends now share
+	// consensus.G0ProofCommitmentKey, so they cannot disagree again silently.
+	var govIn *GovernanceLevelInputs
+	if cycle.Commitment != nil {
+		govIn = GovernanceInputsFromCommitment(cycle.Commitment.ComprehensiveData)
+	}
 	govLevel := ""
-	if cycle.Commitment != nil && cycle.Commitment.ComprehensiveData != nil {
-		cd := cycle.Commitment.ComprehensiveData
-		if v, ok := cd["g0Proof"].(string); ok {
-			g0Data = v
-		}
-		if v, ok := cd["g1Proof"].(string); ok {
-			g1Data = v
-		}
-		if v, ok := cd["g2Proof"].(string); ok {
-			g2Data = v
-		}
-		if v, ok := cd["governanceLevel"].(string); ok {
-			govLevel = v
-		}
+	if govIn != nil {
+		govLevel = govIn.Level
 	}
 
-	// G0: Inclusion and Finality — uses real G0 proof if available
-	g0JSON := json.RawMessage(g0Data)
-	if g0Data == "" {
-		g0JSON, _ = json.Marshal(map[string]interface{}{
-			"level": "G0", "name": "Inclusion and Finality",
-			"verified": true, "block_height": blockHeight,
-			"finality_time": cycle.ExecutionTime.Format(time.RFC3339),
-		})
+	// G0: Inclusion and Finality.
+	//
+	// The flags are kept EXACTLY as before — the evidence report and approval
+	// console read them — and the real result and its merkle path are added
+	// beside them. Additive, never a replacement.
+	g0Flags := map[string]interface{}{
+		"level": "G0", "name": "Inclusion and Finality",
+		"verified": true, "block_height": blockHeight,
+		"finality_time": cycle.ExecutionTime.Format(time.RFC3339),
 	}
+	g0Result, g0Ev := govIn.ResultFor("G0"), govIn.ReceiptFor("G0")
+	g0JSON := BuildGovernanceLevelJSON("G0", g0Result, g0Ev, g0Flags)
+	LogGovernanceLevelEvidence(o.logger.Printf, proofID, "G0", g0Result, g0Ev)
 	g0 := &database.NewGovernanceProofLevel{
 		ProofID:           proofID,
 		GovLevel:          database.GovLevelG0,
@@ -2030,13 +2032,13 @@ func (o *ProofCycleOrchestrator) storeGovernanceLevels(ctx context.Context, proo
 
 	// G1: Governance Correctness — uses real G1 proof data
 	if govLevel == "G1" || govLevel == "G2" || (cycle.Attestation != nil && cycle.Attestation.ThresholdMet) {
-		g1JSON := json.RawMessage(g1Data)
-		if g1Data == "" {
-			g1JSON, _ = json.Marshal(map[string]interface{}{
-				"level": "G1", "name": "Governance Correctness",
-				"verified": true, "threshold_met": true,
-			})
+		g1Flags := map[string]interface{}{
+			"level": "G1", "name": "Governance Correctness",
+			"verified": true, "threshold_met": true,
 		}
+		g1Result, g1Ev := govIn.ResultFor("G1"), govIn.ReceiptFor("G1")
+		g1JSON := BuildGovernanceLevelJSON("G1", g1Result, g1Ev, g1Flags)
+		LogGovernanceLevelEvidence(o.logger.Printf, proofID, "G1", g1Result, g1Ev)
 		g1 := &database.NewGovernanceProofLevel{
 			ProofID:           proofID,
 			GovLevel:          database.GovLevelG1,
@@ -2052,13 +2054,13 @@ func (o *ProofCycleOrchestrator) storeGovernanceLevels(ctx context.Context, proo
 
 	// G2: Outcome Binding — uses real G2 proof data
 	if govLevel == "G2" || (cycle.WriteBackTx != nil && cycle.WriteBackTx.Status == "confirmed") {
-		g2JSON := json.RawMessage(g2Data)
-		if g2Data == "" {
-			g2JSON, _ = json.Marshal(map[string]interface{}{
-				"level": "G2", "name": "Outcome Binding",
-				"verified": true, "write_back_confirmed": true,
-			})
+		g2Flags := map[string]interface{}{
+			"level": "G2", "name": "Outcome Binding",
+			"verified": true, "write_back_confirmed": true,
 		}
+		g2Result, g2Ev := govIn.ResultFor("G2"), govIn.ReceiptFor("G2")
+		g2JSON := BuildGovernanceLevelJSON("G2", g2Result, g2Ev, g2Flags)
+		LogGovernanceLevelEvidence(o.logger.Printf, proofID, "G2", g2Result, g2Ev)
 		g2 := &database.NewGovernanceProofLevel{
 			ProofID:           proofID,
 			GovLevel:          database.GovLevelG2,

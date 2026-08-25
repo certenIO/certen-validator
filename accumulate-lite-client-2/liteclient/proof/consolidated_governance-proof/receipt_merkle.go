@@ -11,7 +11,7 @@ import (
 	"os"
 	"strings"
 
-	cp "github.com/certen/certen-protocol/services/validator/accumulate-lite-client-2/liteclient/proof/working-proof_do_not_edit"
+	"github.com/certen/certen-protocol/services/validator/accumulate-lite-client-2/liteclient/proof/govreceipt"
 )
 
 // Merkle recomputation for governance receipts.
@@ -30,6 +30,16 @@ import (
 // using ReceiptVerifier.ValidateIntegrity from the chained-proof package -
 // the same SHA-256 hashPair walk L1-L3 have always used. There is exactly one
 // implementation of receipt recomputation in the tree, and this defers to it.
+//
+// STAGE 2 MOVED THE LOGIC OUT OF package main.
+//
+// It used to live here in full, and a package main is not importable - so the
+// only consumer it could ever have was this CLI, while the thing that most
+// needs to recompute a governance receipt is the VALIDATOR, reading one back
+// out of PostgreSQL. The implementation now lives in the govreceipt package.
+// The two functions below stay as thin adapters because this package's own
+// call sites and tests reference them by these names; renaming them would be
+// churn with no benefit. There is still exactly one recomputation in the tree.
 
 // ParseReceiptEntries reads the merkle path out of a v3 receipt object.
 //
@@ -37,35 +47,13 @@ import (
 // leaf is itself the anchor. Any other empty path is an error: silently
 // accepting one would make every receipt trivially "verify".
 func ParseReceiptEntries(receiptMap map[string]interface{}) ([]ReceiptStep, error) {
-	raw, ok := receiptMap["entries"]
-	if !ok {
-		return nil, nil // absent; the caller decides whether that is allowed
+	steps, err := govreceipt.ParseEntries(receiptMap)
+	if err != nil {
+		// Re-wrapped so this package's existing callers keep seeing the
+		// ValidationError they already handle. The message text is unchanged.
+		return nil, ValidationError{Msg: err.Error()}
 	}
-	arr, ok := raw.([]interface{})
-	if !ok {
-		return nil, ValidationError{Msg: "receipt.entries is not an array"}
-	}
-
-	hv := HexValidator{}
-	out := make([]ReceiptStep, 0, len(arr))
-	for i, e := range arr {
-		m, ok := e.(map[string]interface{})
-		if !ok {
-			return nil, ValidationError{Msg: fmt.Sprintf("receipt.entries[%d] is not an object", i)}
-		}
-		h, ok := m["hash"].(string)
-		if !ok {
-			return nil, ValidationError{Msg: fmt.Sprintf("receipt.entries[%d] missing hash", i)}
-		}
-		norm, err := hv.RequireHex32(h, fmt.Sprintf("receipt.entries[%d].hash", i))
-		if err != nil {
-			return nil, err
-		}
-		// "right" is omitted when false, matching Accumulate's JSON encoding.
-		right, _ := m["right"].(bool)
-		out = append(out, ReceiptStep{Hash: norm, Right: right})
-	}
-	return out, nil
+	return steps, nil
 }
 
 // VerifyReceiptMerkle recomputes a receipt's merkle path and requires it to
@@ -74,31 +62,13 @@ func ParseReceiptEntries(receiptMap map[string]interface{}) ([]ReceiptStep, erro
 // It fails closed: a receipt with no path and start != anchor is rejected
 // rather than treated as vacuously valid.
 func VerifyReceiptMerkle(r ReceiptData, label string) error {
-	if r.Start == "" || r.Anchor == "" {
-		return ValidationError{Msg: fmt.Sprintf("%s: receipt missing start or anchor", label)}
-	}
-	if len(r.Entries) == 0 {
-		if r.Start != r.Anchor {
-			return ValidationError{Msg: fmt.Sprintf(
-				"%s: receipt carries no merkle path but start != anchor (%s != %s); "+
-					"the leaf is not proven to be under the anchor",
-				label, SafeTruncate(r.Start, 16), SafeTruncate(r.Anchor, 16))}
-		}
-		return nil // single-leaf tree: the leaf IS the anchor
-	}
-
-	steps := make([]cp.ReceiptStep, 0, len(r.Entries))
-	for _, e := range r.Entries {
-		steps = append(steps, cp.ReceiptStep{Hash: e.Hash, Right: e.Right})
-	}
-	rec := cp.Receipt{
+	if err := govreceipt.VerifyMerkle(govreceipt.Receipt{
 		Start:      r.Start,
 		Anchor:     r.Anchor,
-		LocalBlock: uint64(r.LocalBlock),
-		Entries:    steps,
-	}
-	if err := cp.NewReceiptVerifier(false).ValidateIntegrity(rec); err != nil {
-		return ValidationError{Msg: fmt.Sprintf("%s: %v", label, err)}
+		LocalBlock: r.LocalBlock,
+		Entries:    r.Entries,
+	}, label); err != nil {
+		return ValidationError{Msg: err.Error()}
 	}
 	return nil
 }

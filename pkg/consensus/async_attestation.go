@@ -39,6 +39,33 @@ import (
 //
 // Both paths call RunProofCycle, so the two can never drift.
 
+// =============================================================================
+// Commitment-map keys — the contract between the attestation and the persisters
+// =============================================================================
+//
+// RunProofCycle hands the persistence layer a map[string]interface{}. Both
+// orchestrators read it, and until Stage 2 the keys were spelled out as string
+// literals at each end — which is exactly how the legacy G-level writer came to
+// look for "g0Proof" while the only writer in the tree wrote "att.G0Proof". That
+// key was READ in one place and WRITTEN IN ZERO, so the real G-results never
+// reached the database from that path and it always took its stub fallback.
+//
+// Constants, so the two ends cannot disagree again without the compiler saying
+// so. The existing spellings are preserved exactly: they are already in flight
+// on the fleet and renaming them would break the readers that do match.
+const (
+	G0ProofCommitmentKey = "att.G0Proof"
+	G1ProofCommitmentKey = "att.G1Proof"
+	G2ProofCommitmentKey = "att.G2Proof"
+
+	// GovReceiptsCommitmentKey carries []proof.GovReceiptEvidence as JSON — the
+	// merkle paths, beside the results and never inside them.
+	GovReceiptsCommitmentKey = "att.GovReceipts"
+
+	// GovernanceLevelCommitmentKey is the level actually achieved ("G0"|"G1"|"G2").
+	GovernanceLevelCommitmentKey = "att.GovernanceLevel"
+)
+
 // PendingAttestation is a self-contained snapshot of everything Phase 7-9 needs.
 //
 // It is built at consensus time and may be replayed much later, so it must not hold
@@ -66,6 +93,19 @@ type PendingAttestation struct {
 	G0Proof *proof.G0Result
 	G1Proof *proof.G1Result
 	G2Proof *proof.G2Result
+
+	// GovReceipts is the merkle path for each level's execution receipt.
+	//
+	// STAGE 2. The results above are CONCLUSIONS — "the right key page authorised
+	// this" — and until now that conclusion reached the database as a verdict flag
+	// with nothing to check it against. This is the evidence, captured at
+	// consensus time from the GovernanceProof wrapper, which is not part of any
+	// canonical hash.
+	//
+	// Snapshotted like everything else here: replayed minutes later on the cadence
+	// path, it must be the path the proof was BUILT on, not one fetched again
+	// afterwards.
+	GovReceipts []proof.GovReceiptEvidence
 
 	// Signatures and level captured during the round.
 	BLSSignature        string
@@ -302,24 +342,36 @@ func (bv *BFTValidator) RunProofCycle(
 		// Wire governance proof results (G0/G1/G2)
 		if att.G0Proof != nil {
 			if g0JSON, err := json.Marshal(att.G0Proof); err == nil {
-				commitMap["att.G0Proof"] = string(g0JSON)
+				commitMap[G0ProofCommitmentKey] = string(g0JSON)
 			}
 		}
 		if att.G1Proof != nil {
 			if g1JSON, err := json.Marshal(att.G1Proof); err == nil {
-				commitMap["att.G1Proof"] = string(g1JSON)
+				commitMap[G1ProofCommitmentKey] = string(g1JSON)
 			}
 		}
 		if att.G2Proof != nil {
 			if g2JSON, err := json.Marshal(att.G2Proof); err == nil {
-				commitMap["att.G2Proof"] = string(g2JSON)
+				commitMap[G2ProofCommitmentKey] = string(g2JSON)
+			}
+		}
+
+		// STAGE 2 — the evidence for the three results above.
+		//
+		// Under its own key rather than inside att.G0Proof/G1Proof/G2Proof: those
+		// marshal G*Result, which is inside the govRoot, and this must never be
+		// able to reach that shape. The G-level writers read this key and store the
+		// path in level_json beside the result.
+		if len(att.GovReceipts) > 0 {
+			if evJSON, err := json.Marshal(att.GovReceipts); err == nil {
+				commitMap[GovReceiptsCommitmentKey] = string(evJSON)
 			}
 		}
 
 		// Wire BLS/validator signatures
 		commitMap["att.BLSSignature"] = att.BLSSignature
 		commitMap["att.ValidatorSignatures"] = att.ValidatorSignatures
-		commitMap["att.GovernanceLevel"] = att.GovernanceLevel
+		commitMap[GovernanceLevelCommitmentKey] = att.GovernanceLevel
 		commitMap["validatorID"] = att.ValidatorID
 	}
 
@@ -595,6 +647,13 @@ func (bv *BFTValidator) captureAttestation(
 		att.UserID = certenIntent.UserID
 		att.AccountURL = certenIntent.AccountURL
 		att.TransactionHash = certenIntent.TransactionHash
+	}
+	// STAGE 2: the receipt evidence rides on certenProof, which is where
+	// executeCanonicalBFTWorkflow put it after generating G0-G2. Taken from there
+	// rather than passed as three more parameters, so the cadence replay and the
+	// inline path cannot diverge on which receipts they captured.
+	if certenProof != nil {
+		att.GovReceipts = certenProof.GovReceipts
 	}
 
 	bundleIDHex := strings.TrimPrefix(att.BundleIDHex, "0x")

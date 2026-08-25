@@ -8,6 +8,8 @@ package main
 
 import (
 	"time"
+
+	"github.com/certen/certen-protocol/services/validator/accumulate-lite-client-2/liteclient/proof/govreceipt"
 )
 
 // CERTEN Governance Proof Types
@@ -243,10 +245,14 @@ type ReceiptData struct {
 // ReceiptStep is one step of a receipt's merkle path. Right reports that the
 // sibling is on the right, matching Accumulate's encoding, which omits the
 // field when false.
-type ReceiptStep struct {
-	Hash  string `json:"hash"`
-	Right bool   `json:"right"`
-}
+//
+// STAGE 2: a type ALIAS rather than its own declaration. It was a structurally
+// identical copy of the chained-proof step, and two identical declarations are
+// two things that can drift — a receipt stored by the validator and a fixture
+// read by the offline verifier have to be the same document, not merely the same
+// shape today. govreceipt.Step is itself an alias of
+// chained_proof.ReceiptStep, so all three names now denote one type.
+type ReceiptStep = govreceipt.Step
 
 // VerificationResult represents a generic verification result
 type VerificationResult struct {

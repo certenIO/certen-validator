@@ -85,6 +85,20 @@ type CertenProof struct {
 	KeypageURL string    `json:"keypage_url,omitempty"`
 	KeybookURL string    `json:"keybook_url,omitempty"`
 
+	// GovReceipts carries the merkle path for each level's execution receipt.
+	//
+	// STAGE 2, and the non-hashed sibling of the three results above. The govRoot
+	// commits to G0Result/G1Result/G2Result marshalled INDIVIDUALLY — never to
+	// CertenProof — so a field here moves no hash, which is precisely why the
+	// evidence lives here rather than inside GovReceiptData, which IS inside that
+	// hash. Phase 6 proved the shape: Layer4BVN/Layer4DN went onto CompleteProof
+	// and the production govRoot e23ce107… did not move.
+	//
+	// Empty means no path was captured. That is an honest absence, stored as
+	// summary-only; it is never filled in from a later network query, because the
+	// receipt fetched today is not necessarily the one this proof was built on.
+	GovReceipts []GovReceiptEvidence `json:"gov_receipts,omitempty"`
+
 	// Verification status
 	VerificationStatus *VerificationStatusData `json:"verification_status"`
 

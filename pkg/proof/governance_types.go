@@ -263,6 +263,20 @@ type GovernanceProof struct {
 	G0 *G0Result `json:"g0,omitempty"`
 	G1 *G1Result `json:"g1,omitempty"`
 	G2 *G2Result `json:"g2,omitempty"`
+
+	// Receipts carries the merkle path for each level's execution receipt.
+	//
+	// STAGE 2, and it is HERE for a structural reason. This WRAPPER is not part
+	// of any canonical hash: the govRoot commits to G0Result / G1Result /
+	// G2Result marshalled individually (v6_1_signing.go SetG0FromJSON and its
+	// siblings), never to this struct. The path therefore travels beside the
+	// hashed summary rather than inside GovReceiptData — which IS inside that
+	// hash and must not be widened. See GovReceiptEvidence for the full reason.
+	//
+	// Empty means the generator captured no path. That is an honest absence,
+	// marked summary-only downstream; it is never a fabricated empty path,
+	// because an empty path that is accepted makes every receipt verify.
+	Receipts []GovReceiptEvidence `json:"receipts,omitempty"`
 }
 
 // IsValid returns whether the governance proof is valid at its level

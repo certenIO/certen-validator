@@ -26,7 +26,9 @@
 package contracts
 
 import (
+	"bytes"
 	"encoding/hex"
+	"encoding/json"
 	"reflect"
 	"testing"
 	"time"
@@ -346,4 +348,91 @@ func TestP6_CanonicalShapesUnchanged(t *testing.T) {
 		{"G2ProofComplete", "g2_proof_complete"},
 		{"SecurityLevel", "security_level"},
 	})
+}
+
+// =============================================================================
+// Stage 2 — the types on the OTHER side of the line
+// =============================================================================
+//
+// Everything pinned above is INSIDE a govRoot preimage: widening it moves every
+// govRoot ever signed. The two types pinned below are the opposite, and that
+// distinction is the entire design of Stage 2:
+//
+//	GovReceiptEvidence  NOT hashed. Carries the merkle path BESIDE the summary.
+//	                    May be widened freely.
+//	GovernanceProof     NOT hashed. The govRoot commits to G0Result, G1Result
+//	                    and G2Result marshalled INDIVIDUALLY (v6_1_signing.go),
+//	                    never to this wrapper.
+//
+// They are pinned anyway — not because a change here breaks a hash, but so a
+// future reader cannot mistake which side of the line they are on. The trap is
+// real and adjacent: GovReceiptData, pinned above, looks almost identical and IS
+// inside the hash. Putting Entries there is the obvious move and it is wrong.
+//
+// If this test fails, check FIRST whether the field was added to the right
+// struct. If it was, updating the golden here is allowed — and it is explicitly
+// NOT allowed for anything in TestP6_CanonicalShapesUnchanged.
+func TestS2_EvidenceShapesAreNotHashed(t *testing.T) {
+	assertShape(t, "proof.GovReceiptEvidence (NOT HASHED)", certenproof.GovReceiptEvidence{}, []fieldSpec{
+		{"Level", "level"},
+		{"Start", "start"},
+		{"Anchor", "anchor"},
+		{"LocalBlock", "localBlock"},
+		{"Entries", "entries"},
+	})
+
+	assertShape(t, "proof.GovernanceProof (NOT HASHED)", certenproof.GovernanceProof{}, []fieldSpec{
+		{"Level", "level"},
+		{"SpecVersion", "spec_version"},
+		{"GeneratedAt", "generated_at"},
+		{"G0", "g0,omitempty"},
+		{"G1", "g1,omitempty"},
+		{"G2", "g2,omitempty"},
+		{"Receipts", "receipts,omitempty"},
+	})
+}
+
+// The hashed bytes must not move when receipt evidence is present.
+//
+// The shape test proves the hashed structs did not change SHAPE. This proves the
+// separation holds by VALUE: marshal the same G0Result out of a wrapper carrying
+// a full merkle path and out of one carrying none, and require the bytes to be
+// identical. If someone later routes the evidence into G0Result "just for
+// convenience", the shape test catches the declaration and this catches the
+// value.
+func TestS2_HashedBytesUnmovedByReceiptEvidence(t *testing.T) {
+	withEvidence := &certenproof.GovernanceProof{
+		Level:       certenproof.GovLevelG0,
+		SpecVersion: certenproof.GovernanceSpecVersion,
+		GeneratedAt: fixedTime(),
+		G0:          p6FixtureG0(),
+		Receipts: []certenproof.GovReceiptEvidence{{
+			Level:      "G0",
+			Start:      "aaaa",
+			Anchor:     "bbbb",
+			LocalBlock: 40001,
+			Entries: []certenproof.ReceiptStep{
+				{Hash: "1111111111111111111111111111111111111111111111111111111111111111", Right: true},
+				{Hash: "2222222222222222222222222222222222222222222222222222222222222222"},
+			},
+		}},
+	}
+
+	bare, err := json.Marshal(p6FixtureG0())
+	if err != nil {
+		t.Fatalf("marshal bare G0: %v", err)
+	}
+	carried, err := json.Marshal(withEvidence.G0)
+	if err != nil {
+		t.Fatalf("marshal carried G0: %v", err)
+	}
+	if !bytes.Equal(bare, carried) {
+		t.Fatalf("G0Result bytes differ when receipt evidence is attached to the wrapper.\n"+
+			"  bare:    %s\n  carried: %s\n"+
+			"The evidence has leaked into the hashed struct. Revert that edit; do not re-baseline.",
+			bare, carried)
+	}
+	if len(withEvidence.Receipts[0].Entries) != 2 {
+		t.Fatal("fixture lost its merkle path")
+	}
 }

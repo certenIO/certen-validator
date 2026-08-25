@@ -990,6 +990,13 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	var g0Proof *proof.G0Result
 	var g1Proof *proof.G1Result
 	var g2Proof *proof.G2Result
+	// STAGE 2: the merkle path for each level's execution receipt, taken off the
+	// GovernanceProof WRAPPER — which is not part of any canonical hash — rather
+	// than out of the results themselves, which are. Without this the wrapper was
+	// discarded one line after GenerateG0/G1/G2 returned and the evidence went
+	// with it, which is why governance_proof_levels contained verdict flags and
+	// no governance proof.
+	var govReceipts []proof.GovReceiptEvidence
 	var governanceLevel string
 	var resolvedKeyPageURL string
 	resolvedKeyBookURL := governanceData.Authorization.RequiredKeyBook
@@ -1103,6 +1110,7 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 				return nil, fmt.Errorf("G0 governance proof returned no result for intent %s", certenIntent.IntentID)
 			}
 			g0Proof = g0ProofWrapper.G0
+			govReceipts = append(govReceipts, g0ProofWrapper.Receipts...)
 			if !g0Proof.G0ProofComplete {
 				return nil, fmt.Errorf("G0 governance proof incomplete for intent %s", certenIntent.IntentID)
 			}
@@ -1118,6 +1126,7 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 				return nil, fmt.Errorf("G1 governance proof returned no result for intent %s", certenIntent.IntentID)
 			}
 			g1Proof = g1ProofWrapper.G1
+			govReceipts = append(govReceipts, g1ProofWrapper.Receipts...)
 			if !g1Proof.G1ProofComplete || !g1Proof.ThresholdSatisfied {
 				return nil, fmt.Errorf("G1 governance proof incomplete for intent %s "+
 					"(complete=%v thresholdSatisfied=%v uniqueKeys=%d)",
@@ -1135,6 +1144,7 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 				return nil, fmt.Errorf("G2 governance proof returned no result for intent %s", certenIntent.IntentID)
 			}
 			g2Proof = g2ProofWrapper.G2
+			govReceipts = append(govReceipts, g2ProofWrapper.Receipts...)
 			if !g2Proof.G2ProofComplete {
 				return nil, fmt.Errorf("G2 governance proof incomplete for intent %s "+
 					"(payloadVerified=%v effectVerified=%v): the outcome is not bound, so this is a G1 claim "+
@@ -1168,6 +1178,10 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 		certenProof.G0Result = g0Proof
 		certenProof.G1Result = g1Proof
 		certenProof.G2Result = g2Proof
+		// Beside the results, never inside them. RequireL4Committed and the BLS
+		// signing below both run AFTER this assignment and neither reads this
+		// field, which is the point: it cannot reach a hash.
+		certenProof.GovReceipts = govReceipts
 		certenProof.KeypageURL = resolvedKeyPageURL
 		certenProof.KeybookURL = resolvedKeyBookURL
 

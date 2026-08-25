@@ -28,6 +28,7 @@ import (
 
 	v3 "gitlab.com/accumulatenetwork/accumulate/pkg/api/v3"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3/jsonrpc"
+	"gitlab.com/accumulatenetwork/accumulate/pkg/database/merkle"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/types/messaging"
 	acc_url "gitlab.com/accumulatenetwork/accumulate/pkg/url"
 	"gitlab.com/accumulatenetwork/accumulate/protocol"
@@ -175,7 +176,21 @@ func (g *NativeGovernanceProofGenerator) GenerateG0(ctx context.Context, req *Go
 	g.logger.Printf("G0 proof generated: tx=%s, mbi=%d, complete=%v",
 		req.TransactionHash[:16]+"...", g0Result.ExecMBI, g0Result.G0ProofComplete)
 
-	return NewG0GovernanceProof(g0Result), nil
+	gp := NewG0GovernanceProof(g0Result)
+
+	// STAGE 2: attach the path that buildG0Result deliberately did not put into
+	// the hashed summary. txRecord.SourceReceipt.Entries is already in memory —
+	// this is the evidence that used to be dropped one line from where it was
+	// needed.
+	if txRecord.SourceReceipt != nil {
+		if ev := receiptEvidenceFrom(string(GovLevelG0), g0Result.Receipt, txRecord.SourceReceipt.Entries); ev != nil {
+			gp.Receipts = append(gp.Receipts, *ev)
+		} else {
+			g.logger.Printf("G0 receipt for tx=%s carries no usable merkle path; this level will be "+
+				"stored summary-only", req.TransactionHash[:16]+"...")
+		}
+	}
+	return gp, nil
 }
 
 // buildG0Result builds G0Result from transaction record
@@ -192,7 +207,18 @@ func (g *NativeGovernanceProofGenerator) buildG0Result(req *GovernanceRequest, t
 		result.ExecMBI = int64(txRecord.Received)
 		result.ExecWitness = hex.EncodeToString(txRecord.SourceReceipt.Anchor)
 
-		// Build receipt data
+		// Build receipt data.
+		//
+		// STAGE 2: this is one of the two places the merkle path was DISCARDED AT
+		// THE SOURCE. txRecord.SourceReceipt is a *merkle.Receipt that has
+		// .Entries — the path from Start to Anchor — and these three lines copied
+		// out the summary and dropped the evidence one line from where it was
+		// needed. Nothing had to be re-queried; it was already in memory.
+		//
+		// GovReceiptData still must NOT gain an Entries field: it is inside
+		// G0Result and therefore inside the govRoot. The path is captured by the
+		// caller into GovernanceProof.Receipts instead — beside the summary, never
+		// inside it. See receiptEvidenceFrom below and GovReceiptEvidence.
 		result.Receipt = GovReceiptData{
 			Start:      hex.EncodeToString(txRecord.SourceReceipt.Start),
 			Anchor:     hex.EncodeToString(txRecord.SourceReceipt.Anchor),
@@ -228,6 +254,10 @@ func (g *NativeGovernanceProofGenerator) buildG0FromChainEntry(req *GovernanceRe
 		Principal: req.AccountURL,
 	}
 
+	// STAGE 2: same drop as buildG0Result, on the chain-entry path. The evidence
+	// is captured beside the summary rather than inside it — GovReceiptData is in
+	// the govRoot and must not be widened.
+	var evidence *GovReceiptEvidence
 	if entry.Receipt != nil {
 		result.ExecMBI = int64(entry.Receipt.LocalBlock)
 		result.ExecWitness = hex.EncodeToString(entry.Receipt.Anchor)
@@ -236,12 +266,55 @@ func (g *NativeGovernanceProofGenerator) buildG0FromChainEntry(req *GovernanceRe
 			Anchor:     hex.EncodeToString(entry.Receipt.Anchor),
 			LocalBlock: int64(entry.Receipt.LocalBlock),
 		}
+		evidence = receiptEvidenceFrom(string(GovLevelG0), result.Receipt, entry.Receipt.Entries)
 	}
 
 	result.EntryHashExec = hex.EncodeToString(entry.Entry[:])
 	result.G0ProofComplete = result.ExecWitness != ""
 
-	return NewG0GovernanceProof(result), nil
+	gp := NewG0GovernanceProof(result)
+	if evidence != nil {
+		gp.Receipts = append(gp.Receipts, *evidence)
+	}
+	return gp, nil
+}
+
+// receiptEvidenceFrom pairs a receipt summary with the merkle path that was
+// alongside it, in the one shape the offline verifier reads.
+//
+// Start/Anchor/LocalBlock are restated from the summary that was actually built,
+// not re-derived, so the evidence and the hashed summary cannot silently
+// describe different receipts.
+//
+// Returns nil when there is no path AND the leaf is not the anchor: that is not
+// evidence, and storing it would produce a record that reads like a proof and
+// cannot be checked. A genuine single-leaf receipt (start == anchor, no
+// entries) IS returned — it is real evidence of a one-leaf tree.
+func receiptEvidenceFrom(level string, summary GovReceiptData, entries []*merkle.ReceiptEntry) *GovReceiptEvidence {
+	if summary.Start == "" || summary.Anchor == "" {
+		return nil
+	}
+	if len(entries) == 0 && summary.Start != summary.Anchor {
+		return nil
+	}
+	steps := make([]ReceiptStep, 0, len(entries))
+	for _, e := range entries {
+		if e == nil {
+			return nil // a hole in the path is not a path
+		}
+		steps = append(steps, ReceiptStep{
+			Hash: hex.EncodeToString(e.Hash),
+			// Accumulate omits `right` when false; the bool carries it faithfully.
+			Right: e.Right,
+		})
+	}
+	return &GovReceiptEvidence{
+		Level:      level,
+		Start:      summary.Start,
+		Anchor:     summary.Anchor,
+		LocalBlock: summary.LocalBlock,
+		Entries:    steps,
+	}
 }
 
 // =============================================================================
@@ -298,7 +371,13 @@ func (g *NativeGovernanceProofGenerator) GenerateG1(ctx context.Context, req *Go
 	g.logger.Printf("G1 proof generated: tx=%s, threshold=%d/%d, complete=%v",
 		req.TransactionHash[:16]+"...", g1Result.UniqueValidKeys, g1Result.RequiredThreshold, g1Result.G1ProofComplete)
 
-	return NewG1GovernanceProof(g1Result), nil
+	gp := NewG1GovernanceProof(g1Result)
+	// STAGE 2: G1 embeds G0, so it carries G0's execution receipt and needs G0's
+	// merkle path relabelled as its own. Carried forward rather than re-derived —
+	// re-deriving would ask the network again and could answer with a different
+	// receipt than the one this proof was built on.
+	gp.Receipts = relabelReceipts(g0Proof.Receipts, string(GovLevelG1))
+	return gp, nil
 }
 
 // buildG1Result builds G1Result from components
@@ -387,7 +466,30 @@ func (g *NativeGovernanceProofGenerator) GenerateG2(ctx context.Context, req *Go
 	g.logger.Printf("G2 proof generated: tx=%s, payload=%v, effect=%v, complete=%v",
 		req.TransactionHash[:16]+"...", g2Result.PayloadVerified, g2Result.EffectVerified, g2Result.G2ProofComplete)
 
-	return NewG2GovernanceProof(g2Result), nil
+	gp := NewG2GovernanceProof(g2Result)
+	// STAGE 2: same as G1 — G2 embeds G1 embeds G0, so the execution receipt is
+	// the same receipt and its path is carried forward, not re-fetched.
+	gp.Receipts = relabelReceipts(g1Proof.Receipts, string(GovLevelG2))
+	return gp, nil
+}
+
+// relabelReceipts copies receipt evidence forward to a higher level.
+//
+// G1 embeds G0 and G2 embeds G1, so all three describe the SAME execution
+// receipt. The evidence travels with the level that stores it, and is copied
+// rather than re-queried: a receipt fetched again today is not necessarily the
+// one the proof was built on, and pairing a stored proof with fresh network
+// state is the governance-layer version of reconstructing a validator set.
+func relabelReceipts(src []GovReceiptEvidence, level string) []GovReceiptEvidence {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]GovReceiptEvidence, 0, len(src))
+	for _, e := range src {
+		e.Level = level
+		out = append(out, e)
+	}
+	return out
 }
 
 // buildOutcomeLeaf builds the outcome leaf for G2 verification

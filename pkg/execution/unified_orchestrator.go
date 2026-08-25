@@ -2549,6 +2549,19 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 		}
 	}
 
+	// STAGE 2 — the real governance results, recovered once for all three levels.
+	//
+	// req.CommitmentData is the map RunProofCycle built; it carries the marshalled
+	// G0/G1/G2 results and their receipt evidence under the shared key constants.
+	// This writer never looked for them at all, which is why every row it produced
+	// held verdict flags and no governance proof.
+	govIn := GovernanceInputsFromCommitment(req.CommitmentData)
+	if govIn == nil {
+		logfPrintf("🚨 [GOV-LEVEL] proof %s: the commitment carries NO governance results — every "+
+			"level written below is verdict flags only and is summary-only by construction",
+			proofArtifact.ProofID)
+	}
+
 	// G0 - Inclusion and Finality (always created if we have anchor data)
 	if isAnchored {
 		var blockHeight *int64
@@ -2609,14 +2622,25 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 		// Use keyPageURL for logging (avoid unused variable warning)
 		_ = keyPageURL
 
-		g0JSON, _ := json.Marshal(map[string]interface{}{
+		// STAGE 2 — the flags stay, EXACTLY as they were, and the governance proof
+		// is added beside them.
+		//
+		// These six keys are what governance_proof_levels actually contained:
+		// verdict flags about an EVM settlement plus key-page thresholds. They are
+		// read by the evidence report and the approval console, so they are kept
+		// unchanged. What they never were is the governance proof — the real
+		// G0Result lived on PendingAttestation and died at this boundary.
+		g0Flags := map[string]interface{}{
 			"inclusion_verified": true,
 			"finality_achieved":  result.ObservationResults[0].IsFinalized,
 			"confirmations":      result.ObservationResults[0].Confirmations,
 			"threshold_m":        thresholdM,
 			"threshold_n":        thresholdN,
 			"authority_url":      authorityURL,
-		})
+		}
+		g0Result, g0Ev := govIn.ResultFor("G0"), govIn.ReceiptFor("G0")
+		g0JSON := BuildGovernanceLevelJSON("G0", g0Result, g0Ev, g0Flags)
+		LogGovernanceLevelEvidence(logfPrintf, proofArtifact.ProofID, "G0", g0Result, g0Ev)
 
 		// G0 is verified if we have anchor data
 		g0Verified := true
@@ -2682,14 +2706,21 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 			}
 		}
 
-		g1JSON, _ := json.Marshal(map[string]interface{}{
+		// STAGE 2. G1 is the product's central claim — "did the right key page
+		// authorize this" — and until now it was persisted as threshold_met, a
+		// boolean with nothing behind it. The real G1Result and its receipt path
+		// go in beside the flags.
+		g1Flags := map[string]interface{}{
 			"governance_root":   hex.EncodeToString(req.GovernanceRoot[:]),
 			"threshold_met":     result.ThresholdMet,
 			"attestation_count": len(result.Attestations),
 			"authority_url":     authorityURL,
 			"threshold_m":       thresholdM,
 			"threshold_n":       thresholdN,
-		})
+		}
+		g1Result, g1Ev := govIn.ResultFor("G1"), govIn.ReceiptFor("G1")
+		g1JSON := BuildGovernanceLevelJSON("G1", g1Result, g1Ev, g1Flags)
+		LogGovernanceLevelEvidence(logfPrintf, proofArtifact.ProofID, "G1", g1Result, g1Ev)
 
 		// G1 is verified if threshold is met
 		g1Verified := result.ThresholdMet
@@ -2747,13 +2778,17 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 			}
 		}
 
-		g2JSON, _ := json.Marshal(map[string]interface{}{
+		// STAGE 2: flags kept, real G2Result and receipt path added beside them.
+		g2Flags := map[string]interface{}{
 			"operation_commitment": hex.EncodeToString(req.OperationCommitment[:]),
 			"outcome_bound":        true,
 			"write_back_success":   result.WriteBackSuccess,
 			"threshold_m":          thresholdM,
 			"threshold_n":          thresholdN,
-		})
+		}
+		g2Result, g2Ev := govIn.ResultFor("G2"), govIn.ReceiptFor("G2")
+		g2JSON := BuildGovernanceLevelJSON("G2", g2Result, g2Ev, g2Flags)
+		LogGovernanceLevelEvidence(logfPrintf, proofArtifact.ProofID, "G2", g2Result, g2Ev)
 
 		// G2 is verified if threshold met and binding enforced
 		g2Verified := result.ThresholdMet && bindingEnforced
@@ -3465,12 +3500,22 @@ func (o *UnifiedOrchestrator) populateRelatedTablesForBatchTx(
 			}
 		}
 
-		g0JSON, _ := json.Marshal(map[string]interface{}{
+		// STAGE 2 — the SECOND G-level writer, through the SAME helper.
+		//
+		// Rule 7: one construction function, every call site. Two copies of this
+		// is how L4 came to be missing from one path already, and this writer is
+		// the one that was easiest to forget: it runs on the batch-transaction
+		// path rather than the per-intent one.
+		g0Flags := map[string]interface{}{
 			"inclusion_verified": true,
 			"finality_achieved":  obs.IsFinalized,
 			"confirmations":      obs.Confirmations,
 			"authority_url":      authorityURL,
-		})
+		}
+		govIn := GovernanceInputsFromCommitment(req.CommitmentData)
+		g0Result, g0Ev := govIn.ResultFor("G0"), govIn.ReceiptFor("G0")
+		g0JSON := BuildGovernanceLevelJSON("G0", g0Result, g0Ev, g0Flags)
+		LogGovernanceLevelEvidence(logfPrintf, proofArtifact.ProofID, "G0", g0Result, g0Ev)
 
 		g0Level := &database.NewGovernanceProofLevel{
 			ProofID:        proofArtifact.ProofID,
