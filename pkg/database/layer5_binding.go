@@ -34,7 +34,18 @@ import (
 // Layer5Binding is everything the leaf->batchRoot half of L5 needs, joined from
 // the rows that already held it.
 type Layer5Binding struct {
-	BatchID     uuid.UUID
+	BatchID uuid.UUID
+
+	// LeafHash is batch_transactions.transaction_hash: the BATCH-FORM leaf this member
+	// contributed to the tree —
+	// keccak256("certen:batchleaf:v1" || chainId || adiURLHash || execCommitment || operationID),
+	// the same value CertenAccountV7.computeLeaf returns.
+	//
+	// It is emphatically NOT the operationCommitment. That is an INPUT to the leaf. The two
+	// were conflated once (intent 50376476, 2026-08-25: operationCommitment 4b0149349a37ae53…
+	// against batch root 82d2566e777bb9b5…) and the binding could not verify.
+	LeafHash []byte
+
 	TreeIndex   int
 	MerklePath  []MerklePathNode // leaf -> batch root; EMPTY is legitimate for a one-member batch
 	BatchRoot   []byte           // anchor_batches.merkle_root, 32 bytes
@@ -69,6 +80,7 @@ var ErrNoBatchBinding = errors.New("no batch_transactions row for this accumulat
 func (r *ProofArtifactRepository) GetLayer5Binding(ctx context.Context, accumTxHash string) (*Layer5Binding, error) {
 	const q = `
 		SELECT bt.batch_id,
+		       bt.transaction_hash,
 		       COALESCE(bt.tree_index, 0),
 		       bt.merkle_path,
 		       ab.merkle_root,
@@ -86,8 +98,9 @@ func (r *ProofArtifactRepository) GetLayer5Binding(ctx context.Context, accumTxH
 		rawPath []byte
 		root    []byte
 	)
+	var leaf []byte
 	err := r.db.QueryRowContext(ctx, q, accumTxHash).Scan(
-		&b.BatchID, &b.TreeIndex, &rawPath, &root, &b.TargetChain, &b.AnchorTxHash, &b.AnchorBlockNum)
+		&b.BatchID, &leaf, &b.TreeIndex, &rawPath, &root, &b.TargetChain, &b.AnchorTxHash, &b.AnchorBlockNum)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("tx %s: %w", accumTxHash, ErrNoBatchBinding)
 	}
@@ -95,6 +108,7 @@ func (r *ProofArtifactRepository) GetLayer5Binding(ctx context.Context, accumTxH
 		return nil, fmt.Errorf("look up layer-5 binding for %s: %w", accumTxHash, err)
 	}
 	b.BatchRoot = root
+	b.LeafHash = leaf
 
 	if len(rawPath) > 0 {
 		if err := json.Unmarshal(rawPath, &b.MerklePath); err != nil {

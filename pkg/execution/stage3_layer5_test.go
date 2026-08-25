@@ -18,7 +18,6 @@ package execution
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"testing"
@@ -33,63 +32,55 @@ import (
 // Harness
 // =============================================================================
 
-func s3Hash(b ...byte) string {
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:])
+// s3Leaf builds a real batch-form leaf through the SAME function the validator and the
+// account contract use, so the fixture is the document the chain would accept.
+func s3Leaf(adi string, execByte, opByte byte) [32]byte {
+	var exec, op [32]byte
+	exec[0], op[0] = execByte, opByte
+	return ComputeBatchLeaf(84532, BatchLeafInput{
+		ADIURL: adi, ExecutionCommitment: exec, OperationID: op,
+	})
 }
 
-func s3HashPair(t *testing.T, left, right string) string {
+func s3Hex(h [32]byte) string { return hex.EncodeToString(h[:]) }
+
+// s3FourLeafBatch builds a REAL four-member batch through BuildBatchTree/MerkleBranch and
+// returns the layer for leaf 0.
+//
+// Four members, not one: with a single leaf the root IS the leaf, so a gate built only on
+// that shape passes even with the walk deleted. Four means the branch is actually walked —
+// and walked with keccak256(sorted(a,b)), which is what the stored roots were built with.
+// The earlier version of this fixture hand-rolled a sha256 tree and therefore tested a rule
+// the system does not use.
+func s3FourLeafBatch(t *testing.T) *Layer5 {
 	t.Helper()
-	l, err := hex.DecodeString(left)
-	if err != nil || len(l) != 32 {
-		t.Fatalf("bad left %q", left)
+	leaves := [][32]byte{
+		s3Leaf("acc://a.acme", 1, 1),
+		s3Leaf("acc://b.acme", 2, 2),
+		s3Leaf("acc://c.acme", 3, 3),
+		s3Leaf("acc://d.acme", 4, 4),
 	}
-	r, err := hex.DecodeString(right)
-	if err != nil || len(r) != 32 {
-		t.Fatalf("bad right %q", right)
+	root, err := MerkleRoot(leaves)
+	if err != nil {
+		t.Fatalf("MerkleRoot: %v", err)
 	}
-	sum := sha256.Sum256(append(append([]byte{}, l...), r...))
-	return hex.EncodeToString(sum[:])
-}
+	branch, err := MerkleBranch(leaves, 0)
+	if err != nil {
+		t.Fatalf("MerkleBranch: %v", err)
+	}
+	if !VerifyBranch(branch, root, leaves[0]) {
+		t.Fatal("fixture does not verify against the batch tree's own walk")
+	}
 
-// s3FourLeafBatch builds a real four-member batch and returns the layer for leaf
-// 0, with a genuine two-step path.
-//
-// A batch of four rather than of one: the single-leaf case verifies whenever
-// leaf == root, so a gate built only on it would pass with the walk deleted.
-// Four members mean the path is actually walked.
-//
-//	       root
-//	     /      \
-//	  n01        n23
-//	 /   \      /   \
-//	L0    L1   L2    L3
-//
-// Leaf 0's path is [L1 (sibling right), n23 (sibling right)].
-func s3FourLeafBatch(t *testing.T) (*certenproof.Layer5, []string) {
-	t.Helper()
-	l0 := s3Hash('l', '0')
-	l1 := s3Hash('l', '1')
-	l2 := s3Hash('l', '2')
-	l3 := s3Hash('l', '3')
-
-	n01 := s3HashPair(t, l0, l1)
-	n23 := s3HashPair(t, l2, l3)
-	root := s3HashPair(t, n01, n23)
-
-	return &certenproof.Layer5{
-		ChainID:     84532,
-		Network:     "base-sepolia",
-		AnchorTx:    "0xfeedface",
-		BlockNumber: 45937480,
-		BatchRoot:   root,
-		LeafHash:    l0,
-		LeafIndex:   0,
-		Path: []certenproof.MerkleStep{
-			{Hash: l1, Position: "right"},
-			{Hash: n23, Position: "right"},
-		},
-	}, []string{l0, l1, l2, l3}
+	steps := make([]MerkleStep, 0, len(branch))
+	for _, b := range branch {
+		steps = append(steps, MerkleStep{Hash: s3Hex(b)})
+	}
+	return &Layer5{
+		ChainID: 84532, Network: "base-sepolia",
+		AnchorTx: "0xfeedface", BlockNumber: 45943270,
+		BatchRoot: s3Hex(root), LeafHash: s3Hex(leaves[0]), LeafIndex: 0, Path: steps,
+	}
 }
 
 // =============================================================================
@@ -99,7 +90,7 @@ func s3FourLeafBatch(t *testing.T) (*certenproof.Layer5, []string) {
 func TestS3_Layer5VerifiesOffline(t *testing.T) {
 	p6CutTheNetwork(t)
 
-	l5, _ := s3FourLeafBatch(t)
+	l5 := s3FourLeafBatch(t)
 	if err := l5.VerifyOffline(); err != nil {
 		t.Fatalf("GATE 3a FAILED: a well-formed L5 does not verify offline: %v", err)
 	}
@@ -138,10 +129,10 @@ func contains(haystack, needle string) bool {
 func TestS3_SingleLeafBothDirections(t *testing.T) {
 	p6CutTheNetwork(t)
 
-	leaf := s3Hash('s', 'o', 'l', 'o')
+	leaf := s3Hex(s3Leaf("acc://solo.acme", 9, 9))
 
 	// Direction 1: empty path, leaf == root. MUST PASS.
-	ok := &certenproof.Layer5{
+	ok := &Layer5{
 		ChainID: 84532, Network: "base-sepolia",
 		AnchorTx: "0xabc", BlockNumber: 1,
 		BatchRoot: leaf, LeafHash: leaf,
@@ -151,10 +142,10 @@ func TestS3_SingleLeafBothDirections(t *testing.T) {
 	}
 
 	// Direction 2: empty path, leaf != root. MUST REJECT.
-	bad := &certenproof.Layer5{
+	bad := &Layer5{
 		ChainID: 84532, Network: "base-sepolia",
 		AnchorTx: "0xabc", BlockNumber: 1,
-		BatchRoot: s3Hash('o', 't', 'h', 'e', 'r'), LeafHash: leaf,
+		BatchRoot: s3Hex(s3Leaf("acc://other.acme", 8, 8)), LeafHash: leaf,
 	}
 	if err := bad.VerifyOffline(); err == nil {
 		t.Fatal("CRITICAL DEFECT: an empty merkle path was accepted with leafHash != batchRoot. " +
@@ -171,71 +162,61 @@ func TestS3_SingleLeafBothDirections(t *testing.T) {
 func TestS3_Layer5MutationsRejected(t *testing.T) {
 	p6CutTheNetwork(t)
 
-	otherPath := []certenproof.MerkleStep{
-		{Hash: s3Hash('x', '1'), Position: "right"},
-		{Hash: s3Hash('x', '2'), Position: "right"},
+	otherPath := []MerkleStep{
+		{Hash: s3Hex(s3Leaf("acc://x1.acme", 11, 11))},
+		{Hash: s3Hex(s3Leaf("acc://x2.acme", 12, 12))},
 	}
 
 	cases := []struct {
 		name   string
-		mutate func(*certenproof.Layer5)
+		mutate func(*Layer5)
 		why    string
 	}{
 		{
 			name:   "flip a path hash",
-			mutate: func(l *certenproof.Layer5) { l.Path[0].Hash = s3Hash('n', 'o', 'p', 'e') },
+			mutate: func(l *Layer5) { l.Path[0].Hash = s3Hex(s3Leaf("acc://nope.acme", 7, 7)) },
 			why:    "a sibling that was not the sibling cannot reach the root",
 		},
 		{
-			name:   "flip a position",
-			mutate: func(l *certenproof.Layer5) { l.Path[0].Position = "left" },
-			why:    "hashing the pair in the other order yields a different node",
-		},
-		{
 			name:   "drop a step",
-			mutate: func(l *certenproof.Layer5) { l.Path = l.Path[:1] },
+			mutate: func(l *Layer5) { l.Path = l.Path[:1] },
 			why:    "a short path lands on an intermediate node, not the root",
 		},
 		{
 			name:   "empty the path entirely",
-			mutate: func(l *certenproof.Layer5) { l.Path = nil },
+			mutate: func(l *Layer5) { l.Path = nil },
 			why:    "THE VACUOUS PASS — an empty path is valid only when leaf == root",
 		},
 		{
 			name:   "alter the batch root",
-			mutate: func(l *certenproof.Layer5) { l.BatchRoot = s3Hash('w', 'r', 'o', 'n', 'g') },
+			mutate: func(l *Layer5) { l.BatchRoot = s3Hex(s3Leaf("acc://wrong.acme", 6, 6)) },
 			why:    "the walk must reach the root the layer itself claims",
 		},
 		{
 			name:   "alter the leaf",
-			mutate: func(l *certenproof.Layer5) { l.LeafHash = s3Hash('n', 'o', 't', 'm', 'e') },
+			mutate: func(l *Layer5) { l.LeafHash = s3Hex(s3Leaf("acc://notme.acme", 5, 5)) },
 			why:    "a different leaf under the same path reaches a different root",
 		},
 		{
 			name:   "graft another proof's path",
-			mutate: func(l *certenproof.Layer5) { l.Path = otherPath },
+			mutate: func(l *Layer5) { l.Path = otherPath },
 			why:    "a whole well-formed path from elsewhere still does not reach THIS root",
 		},
 		{
-			name:   "an unrecognised position",
-			mutate: func(l *certenproof.Layer5) { l.Path[0].Position = "middle" },
-			why:    "an unknown side must be refused, not silently treated as one of the two",
-		},
-		{
 			name:   "drop the external coordinates",
-			mutate: func(l *certenproof.Layer5) { l.AnchorTx = "" },
+			mutate: func(l *Layer5) { l.AnchorTx = "" },
 			why:    "a batch root nobody can point at a chain is not an anchor binding",
 		},
 		{
 			name:   "block number zero",
-			mutate: func(l *certenproof.Layer5) { l.BlockNumber = 0 },
+			mutate: func(l *Layer5) { l.BlockNumber = 0 },
 			why:    "coordinates that cannot be looked up are not actionable",
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			l5, _ := s3FourLeafBatch(t)
+			l5 := s3FourLeafBatch(t)
 			if err := l5.VerifyOffline(); err != nil {
 				t.Fatalf("the unmutated layer does not verify, so this case is meaningless: %v", err)
 			}
@@ -334,7 +315,7 @@ func TestS3_SixLayerRowsPerProof(t *testing.T) {
 	}
 
 	// And L5 itself recomputes from storage.
-	got, err := certenproof.VerifyStoredLayer5(ctx, store, proofID)
+	got, err := VerifyStoredLayer5(ctx, store, proofID)
 	if err != nil {
 		t.Fatalf("stored L5 does not verify: %v", err)
 	}
@@ -359,11 +340,11 @@ func TestS3_MissingLayer5ReadsSummaryOnly(t *testing.T) {
 		t.Fatalf("L1-L4 must still verify: %v", err)
 	}
 
-	_, err := certenproof.VerifyStoredLayer5(ctx, store, proofID)
+	_, err := VerifyStoredLayer5(ctx, store, proofID)
 	if err == nil {
 		t.Fatal("CRITICAL DEFECT: a proof with no L5 row reported an anchor binding")
 	}
-	if !errors.Is(err, certenproof.ErrNoLayer5) {
+	if !errors.Is(err, ErrNoLayer5) {
 		t.Fatalf("expected ErrNoLayer5, got a different failure: %v", err)
 	}
 	t.Logf("L1-L4 verified, L5 absent — reported as summary-only, not failed: %v", err)
@@ -421,5 +402,63 @@ func testObservation(txHash string, block uint64) *chain.ObservationResult {
 		ChainIDNumeric: 84532,
 		Status:         1,
 		IsFinalized:    true,
+	}
+}
+
+// Position is not a mutation, and that is a property worth pinning rather than an omission.
+//
+// The batch tree pairs with keccak256(sorted(a,b)), so a sibling's recorded side cannot
+// change the computed root. An earlier version of this file mutated Position and expected a
+// rejection — which only "passed" because the walk was sha256/positional, i.e. because it was
+// verifying against a rule the system does not use.
+func TestS3_PositionIsNotConsultedByTheWalk(t *testing.T) {
+	l5 := s3FourLeafBatch(t)
+	if err := l5.VerifyOffline(); err != nil {
+		t.Fatalf("baseline must verify: %v", err)
+	}
+	for i := range l5.Path {
+		l5.Path[i].Position = "left"
+	}
+	if err := l5.VerifyOffline(); err != nil {
+		t.Fatalf("flipping Position changed the outcome, so something is consulting it: %v", err)
+	}
+	for i := range l5.Path {
+		l5.Path[i].Position = "nonsense"
+	}
+	if err := l5.VerifyOffline(); err != nil {
+		t.Fatalf("an unrecognised Position changed the outcome: %v", err)
+	}
+	t.Log("Position is inert, as sorted-pair hashing requires")
+}
+
+// The stored leaf must be the BATCH-FORM leaf, not the operationCommitment. This is the
+// live defect from intent 50376476 in miniature.
+func TestS3_BuildLayer5UsesTheBatchLeafNotTheOperationCommitment(t *testing.T) {
+	leafArr := s3Leaf("acc://certen-demo.acme", 1, 1)
+	root := leafArr // one-member batch: MerkleRoot returns the leaf itself
+
+	opCommitment := make([]byte, 32)
+	opCommitment[0] = 0x4b // stands in for 4b0149…, which is NOT the leaf
+
+	binding := &database.Layer5Binding{
+		BatchID:   uuid.New(),
+		LeafHash:  leafArr[:],
+		BatchRoot: root[:],
+		TreeIndex: 0,
+	}
+
+	l5, err := BuildLayer5(binding, testObservation("0xabc", 42), opCommitment, opCommitment, 84532)
+	if err != nil {
+		t.Fatalf("BuildLayer5: %v", err)
+	}
+	if l5 == nil {
+		t.Fatal("expected a binding from a valid batch row")
+	}
+	if l5.LeafHash != s3Hex(leafArr) {
+		t.Fatalf("BuildLayer5 used %s, want the batch leaf %s — the operationCommitment is an "+
+			"INPUT to the leaf, not the leaf", l5.LeafHash, s3Hex(leafArr))
+	}
+	if err := l5.VerifyOffline(); err != nil {
+		t.Fatalf("the binding built from the batch leaf must verify: %v", err)
 	}
 }

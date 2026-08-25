@@ -40,6 +40,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/certen/independant-validator/pkg/execution"
 	certenproof "github.com/certen/independant-validator/pkg/proof"
 	"github.com/google/uuid"
 	_ "github.com/lib/pq"
@@ -240,7 +241,7 @@ func worseExit(a, b int) int {
 // with no observable external transaction. Nothing about them is known to be
 // wrong.
 func reportLayer5(ctx context.Context, store *certenproof.PostgresProofStorage, id uuid.UUID) int {
-	l5, err := certenproof.VerifyStoredLayer5(ctx, store, id)
+	l5, err := execution.VerifyStoredLayer5(ctx, store, id)
 
 	switch {
 	case err == nil:
@@ -260,7 +261,7 @@ func reportLayer5(ctx context.Context, store *certenproof.PostgresProofStorage, 
 		fmt.Printf("      the legitimate one. Nothing in this proof does.\n")
 		return exitVerified
 
-	case errors.Is(err, certenproof.ErrNoLayer5):
+	case errors.Is(err, execution.ErrNoLayer5):
 		// A DISTINCT message, not the L1-L4 one: "L1-L4 verified, L5 absent" is
 		// its own state and an operator has to be able to tell it from a proof
 		// whose quorum evidence is missing.

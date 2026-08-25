@@ -32,7 +32,6 @@ import (
 
 	chain "github.com/certen/independant-validator/pkg/chain/strategy"
 	"github.com/certen/independant-validator/pkg/database"
-	certenproof "github.com/certen/independant-validator/pkg/proof"
 	"github.com/google/uuid"
 )
 
@@ -60,62 +59,73 @@ const Layer5LayerNumber = 5
 func BuildLayer5(
 	binding *database.Layer5Binding,
 	obs *chain.ObservationResult,
-	leafHash []byte,
-	merkleRoot []byte,
+	fallbackLeaf []byte,
+	fallbackRoot []byte,
 	chainID int64,
-) (*certenproof.Layer5, error) {
-	if len(leafHash) != 32 {
-		return nil, nil // nothing to anchor
-	}
+) (*Layer5, error) {
 	if obs == nil || obs.TxHash == "" || obs.BlockNumber == 0 {
 		return nil, nil // no actionable external coordinates
 	}
 
-	l5 := &certenproof.Layer5{
+	l5 := &Layer5{
 		ChainID:     chainID,
 		Network:     obs.ChainName,
 		AnchorTx:    obs.TxHash,
 		BlockNumber: obs.BlockNumber,
 		BlockHash:   obs.BlockHash,
-		LeafHash:    hex.EncodeToString(leafHash),
 	}
 	if l5.Network == "" {
 		l5.Network = fmt.Sprintf("chain-%d", chainID)
 	}
 
 	switch {
-	case binding != nil && len(binding.BatchRoot) == 32:
-		// The batch path: a real tree with a real path. This is where the
-		// leaf->root half stops being trivial.
+	case binding != nil && len(binding.BatchRoot) == 32 && len(binding.LeafHash) == 32:
+		// THE BATCH PATH, AND THE ONLY ONE THAT CAN BE HONEST.
+		//
+		// The leaf is batch_transactions.transaction_hash — the BATCH-FORM leaf,
+		// keccak256("certen:batchleaf:v1" || chainId || adiURLHash || execCommitment ||
+		// operationID), the same value CertenAccountV7.computeLeaf returns and the same one
+		// the tree was built over.
+		//
+		// It is deliberately NOT the proof cycle's LeafHash. That field carries the
+		// operationCommitment, which is an INPUT to the leaf, not the leaf. Measured live on
+		// 2026-08-25, intent 50376476: operationCommitment 4b0149349a37ae53… against a batch
+		// root of 82d2566e777bb9b5…. Using it produced a binding that could not verify, and
+		// the fail-closed guard below refused to store it — correctly, but the record was
+		// then simply absent.
 		l5.BatchRoot = hex.EncodeToString(binding.BatchRoot)
+		l5.LeafHash = hex.EncodeToString(binding.LeafHash)
 		l5.LeafIndex = uint64(binding.TreeIndex)
 		l5.Path = merkleStepsFromNodes(binding.MerklePath)
 
-	case len(merkleRoot) == 32:
-		// No batch row: this intent settled alone, so it is a ONE-MEMBER tree
-		// whose root equals its leaf and whose path is empty. N=1 is not a
-		// special case — it is the ordinary case with one member — and it is
-		// only sound because VerifyOffline requires leaf == root before
-		// accepting an empty path. If they differ here, the caller has handed
-		// us a root this leaf is not under, and BuildLayer5 must not paper over
-		// that by emitting a row that will fail later with a confusing message.
-		l5.BatchRoot = hex.EncodeToString(merkleRoot)
+	case len(fallbackRoot) == 32 && len(fallbackLeaf) == 32 &&
+		hex.EncodeToString(fallbackLeaf) == hex.EncodeToString(fallbackRoot):
+		// No batch row, and the caller's leaf IS its root. A genuine one-member tree:
+		// MerkleRoot over a single leaf returns that leaf, so this shape is real rather
+		// than assumed. Accepted only on that equality — never inferred.
+		l5.BatchRoot = hex.EncodeToString(fallbackRoot)
+		l5.LeafHash = hex.EncodeToString(fallbackLeaf)
 		l5.LeafIndex = 0
 		l5.Path = nil
-		if l5.BatchRoot != l5.LeafHash {
-			return nil, fmt.Errorf(
-				"layer5: no batch path is available and leaf %s… != root %s…; this proof cannot be "+
-					"shown to be under that root, and no L5 row will be written",
-				l5.LeafHash[:16], l5.BatchRoot[:16])
-		}
+
+	case len(fallbackRoot) == 32 && len(fallbackLeaf) == 32:
+		// A leaf and a root that DISAGREE, with no branch to bridge them. Loud, because it
+		// means the plumbing handed us two values that do not belong together — and staying
+		// quiet about it is how the operationCommitment/batch-leaf conflation survived until
+		// a live run. This is the shape that produced the 50376476 refusal.
+		return nil, fmt.Errorf(
+			"layer5: no batch branch is available and leaf %s… != root %s…; this proof cannot be "+
+				"shown to be under that root, and no L5 row will be written",
+			hex.EncodeToString(fallbackLeaf)[:16], hex.EncodeToString(fallbackRoot)[:16])
 
 	default:
-		return nil, nil // no root at all
+		// Genuinely nothing to bind: no batch row and no usable leaf/root pair. Returning nil
+		// is not a failure — an absent L5 reads as summary-only, which is true.
+		return nil, nil
 	}
 
-	// Never store a row that does not verify. The write path and the read path
-	// must agree, and the cheapest way to guarantee that is to run the read
-	// path's check before writing.
+	// Never store a row that would not read back. The write path and the read path must
+	// agree, and the cheapest guarantee is running the reader's check before writing.
 	if err := l5.VerifyOffline(); err != nil {
 		return nil, fmt.Errorf("layer5: refusing to store an unverifiable anchor binding: %w", err)
 	}
@@ -124,23 +134,23 @@ func BuildLayer5(
 
 // merkleStepsFromNodes converts the stored path shape to the layer's.
 //
-// database.MerklePathNode.Position and certenproof.MerkleStep.Position carry the
+// database.MerklePathNode.Position and MerkleStep.Position carry the
 // same meaning — the SIBLING's side — so this is a rename, not a translation.
 // It is written out rather than aliased because the two types live in packages
 // with different reasons to change.
-func merkleStepsFromNodes(nodes []database.MerklePathNode) []certenproof.MerkleStep {
+func merkleStepsFromNodes(nodes []database.MerklePathNode) []MerkleStep {
 	if len(nodes) == 0 {
 		return nil
 	}
-	out := make([]certenproof.MerkleStep, 0, len(nodes))
+	out := make([]MerkleStep, 0, len(nodes))
 	for _, n := range nodes {
-		out = append(out, certenproof.MerkleStep{Hash: n.Hash, Position: n.Position})
+		out = append(out, MerkleStep{Hash: n.Hash, Position: n.Position})
 	}
 	return out
 }
 
 // BuildLayer5Row returns the chained_proof_layers row for an external anchor.
-func BuildLayer5Row(proofID uuid.UUID, l5 *certenproof.Layer5) (*database.NewChainedProofLayer, error) {
+func BuildLayer5Row(proofID uuid.UUID, l5 *Layer5) (*database.NewChainedProofLayer, error) {
 	if l5 == nil {
 		return nil, fmt.Errorf("layer5: no anchor binding to persist")
 	}
@@ -176,7 +186,7 @@ func WriteLayer5Row(
 	ctx context.Context,
 	repo *database.ProofArtifactRepository,
 	proofID uuid.UUID,
-	l5 *certenproof.Layer5,
+	l5 *Layer5,
 	binding *database.Layer5Binding,
 	logf func(string, ...interface{}),
 ) error {
