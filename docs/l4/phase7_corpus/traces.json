@@ -1,7 +1,7 @@
 {
   "endpoint": "https://kermit.accumulatenetwork.io/v3",
   "protocolModule": "gitlab.com/accumulatenetwork/accumulate v1.4.2",
-  "capturedAt": "2026-08-25T19:35:39Z",
+  "capturedAt": "2026-08-25T20:39:11Z",
   "traces": [
     {
       "case": "B",
@@ -10,20 +10,20 @@
       "why": "two distinct keys of a 2-of-3 page; the threshold is met by distinct entries",
       "expect": "valid",
       "principal": "acc://certen-p7b3.acme",
-      "transactionHash": "c4a5880a05597d9494e39c12856cf581e2c1c390170add1e3f9f5dbfab5422eb",
+      "transactionHash": "8906ebb6fa444c8f40b56db4a5eae866541a5184422be69188591b33f7de8be5",
       "type": "ed25519",
       "keyType": "ed25519",
       "publicKey": "25f7f8df253cb1f4da0710a62a77234c81c7c8a430a6222b05ab4a952bcfab24",
-      "signature": "7770fc26c672b1654e90de93392a106196098e8089210c10bc8efc415ebafeb78b2d3ef32d95e43f15d935bd41e6528fbcf227b0fb036bd452347f0e66e8ee0e",
+      "signature": "49419fc2d92d103481eae3d34f8ba3e9ff57bce610827cf1e89b9b652130f4efbaaa9e81cd0783c4b0d40aab317ba4264eadeef179e7166287cac9c8b85d3b08",
       "signer": "acc://certen-p7b3.acme/book/1",
       "signerVersion": 4,
-      "timestamp": 1787686539294892,
+      "timestamp": 1787690351514850,
       "signerPartition": "BVN2",
       "coreVerdict": true,
       "digestForm": "metadata",
-      "digest": "e1900890248ed9b338ee627176b3c21c9941d568e9486306af2ebc019e933473",
+      "digest": "c329cbe8312b55f09c61164571bf7bc04af6e77828cfff0a66e929fb4a0e09e9",
       "submitted": true,
-      "txID": "acc://c4a5880a05597d9494e39c12856cf581e2c1c390170add1e3f9f5dbfab5422eb@certen-p7b3.acme/data",
+      "txID": "acc://8906ebb6fa444c8f40b56db4a5eae866541a5184422be69188591b33f7de8be5@certen-p7b3.acme/data",
       "execStatus": "delivered"
     },
     {
@@ -33,20 +33,20 @@
       "why": "two distinct keys of a 2-of-3 page; the threshold is met by distinct entries",
       "expect": "valid",
       "principal": "acc://certen-p7b3.acme",
-      "transactionHash": "c4a5880a05597d9494e39c12856cf581e2c1c390170add1e3f9f5dbfab5422eb",
+      "transactionHash": "8906ebb6fa444c8f40b56db4a5eae866541a5184422be69188591b33f7de8be5",
       "type": "ed25519",
       "keyType": "ed25519",
       "publicKey": "ec9115f0cffa34d57c4128298530c1527a741b0b221bbf5b6242a17d66e22a0a",
-      "signature": "46c35af77bd5042928a3b206f287674f8f4128c4472aeb75479db7abe9bf12114580718c1cf4bbeeef06f6098a237e8441bacad5e46cb2d6c074acc87ef74b00",
+      "signature": "e89e79cdd9dbf1f02a73250367f2db2c6b68d1018cb10b4e03eb55e8d81a3ac91eabd82fc9787acc249f6c5111f64280ed4da71a81ba6684fcc3ac341904a706",
       "signer": "acc://certen-p7b3.acme/book/1",
       "signerVersion": 4,
-      "timestamp": 1787686539347926,
+      "timestamp": 1787690351572381,
       "signerPartition": "BVN2",
       "coreVerdict": true,
       "digestForm": "metadata",
-      "digest": "31be84e92c6c66d20633df1cc6e8f8bd8cbd9e6c53333e705703ea13a32f1922",
+      "digest": "03f9c27362a7fac2af1c6c718d85c8e87602b652859cdb9c44222989cedf91fe",
       "submitted": true,
-      "txID": "acc://c4a5880a05597d9494e39c12856cf581e2c1c390170add1e3f9f5dbfab5422eb@certen-p7b3.acme/data",
+      "txID": "acc://8906ebb6fa444c8f40b56db4a5eae866541a5184422be69188591b33f7de8be5@certen-p7b3.acme/data",
       "execStatus": "delivered"
     },
     {
@@ -57,20 +57,20 @@
       "expect": "refused",
       "refusalKind": "duplicate-key",
       "principal": "acc://certen-p7b3.acme",
-      "transactionHash": "e42f6566e6ace5afb79b688da5c6eebb3dc358c3fc727fea679b74fa290c8d8d",
+      "transactionHash": "55ff25b1c1be003e9252885f4902c08175771768bb94c27dbe516d748719c2e0",
       "type": "ed25519",
       "keyType": "ed25519",
       "publicKey": "25f7f8df253cb1f4da0710a62a77234c81c7c8a430a6222b05ab4a952bcfab24",
-      "signature": "0229248cfa5c236facaf5fd944ece53d2833aed4d91d6210639ed79af587f1f4b906ee6cc7b727c2d00517698cb12261e85fa7c6592ae7fc5f9842fcae02a80e",
+      "signature": "f73ec0617ee25f8390db4bb0ac14cca15267a8df908a98623fae5159663b7747724768a11a32ccaffbe650a7463e1e9fb4a8dda16892c6506dfba780e8dcc20b",
       "signer": "acc://certen-p7b3.acme/book/1",
       "signerVersion": 4,
-      "timestamp": 1787686542622974,
+      "timestamp": 1787690354849070,
       "signerPartition": "BVN2",
       "coreVerdict": true,
       "digestForm": "metadata",
-      "digest": "bea2b23789c5f53a0ee7cdc9645c02b64e99ea39118a00106280d7f8481e1788",
+      "digest": "aaeb2ec3136e4348d087e6b1d9acc82a0c8172f6c452782d5331710b8381e660",
       "submitted": true,
-      "txID": "acc://e42f6566e6ace5afb79b688da5c6eebb3dc358c3fc727fea679b74fa290c8d8d@certen-p7b3.acme/data",
+      "txID": "acc://55ff25b1c1be003e9252885f4902c08175771768bb94c27dbe516d748719c2e0@certen-p7b3.acme/data",
       "execStatus": "pending"
     },
     {
@@ -81,20 +81,20 @@
       "expect": "refused",
       "refusalKind": "duplicate-key",
       "principal": "acc://certen-p7b3.acme",
-      "transactionHash": "e42f6566e6ace5afb79b688da5c6eebb3dc358c3fc727fea679b74fa290c8d8d",
+      "transactionHash": "55ff25b1c1be003e9252885f4902c08175771768bb94c27dbe516d748719c2e0",
       "type": "ed25519",
       "keyType": "ed25519",
       "publicKey": "25f7f8df253cb1f4da0710a62a77234c81c7c8a430a6222b05ab4a952bcfab24",
-      "signature": "2b4fd1ed1fd9e623bda004cd491d457d0fe403f30cee9a795c3081988e9ebe6d19540ec54a6bfd301fa164cc29e569cd1b3dd6801bd195781dbc68ef6db2480f",
+      "signature": "d6072ba75419dd6b3fb248b958dc57ee8384605e708d1b1e431eefe7132be9872149dc15e03fa402db09c64c1406d6737e405efce8e988df8508e35d9b94dd0e",
       "signer": "acc://certen-p7b3.acme/book/1",
       "signerVersion": 4,
-      "timestamp": 1787686542676227,
+      "timestamp": 1787690354898237,
       "signerPartition": "BVN2",
       "coreVerdict": true,
       "digestForm": "metadata",
-      "digest": "064f0aa73e05580e00b8a969136b9cb1cff93c3368cedc68ad655817b6dbce4b",
+      "digest": "f28c4941591bcbb6862b200250316e90a318aaa8ad76c28eb661a764cccfaf26",
       "submitted": true,
-      "txID": "acc://e42f6566e6ace5afb79b688da5c6eebb3dc358c3fc727fea679b74fa290c8d8d@certen-p7b3.acme/data",
+      "txID": "acc://55ff25b1c1be003e9252885f4902c08175771768bb94c27dbe516d748719c2e0@certen-p7b3.acme/data",
       "execStatus": "pending"
     },
     {
@@ -105,23 +105,23 @@
       "expect": "valid",
       "keyIsDirectOnOuterPage": true,
       "principal": "acc://certen-p7c.acme",
-      "transactionHash": "bd711ed8e69ff957bf0c5151e706e79a42d5f437520c2581da7867e3278f9794",
+      "transactionHash": "f25a6dfd561fc8e8fbda779341be6a2d0d90d3b64ad7db69f95d88b49d2f5be3",
       "type": "delegated",
       "keyType": "ed25519",
       "delegators": [
         "acc://certen-p7c.acme/book/1"
       ],
       "publicKey": "b3be1fb8a8d158423e086c855a1c04b8d9e80a3805f8dcb6fd606a24bd054e11",
-      "signature": "d8cf5f959be66e8872f25585a51097e8b1c37232bbee815e5628b43697e68d71b0158d386740582d5dacaba1e36528aba5dbb4b01d28a42428b910246f876d0c",
+      "signature": "412f8e83fa9c96ce94f2d7fe0d8dcb0d911940760fce937229eea307687e60ece087531cc380524fc8244dd1d929374012da5238b830737669fc45783ba7540d",
       "signer": "acc://certen-p7c.acme/book2/1",
       "signerVersion": 1,
-      "timestamp": 1787686635223991,
+      "timestamp": 1787690447248086,
       "signerPartition": "BVN3",
       "coreVerdict": true,
       "digestForm": "metadata",
-      "digest": "dfaea4ddab529a9ccae6c0aebe10b32582420e9bb683b8535dd42fb7346b9ab3",
+      "digest": "aa7031bc141b37283c139ddc9100499293cc72559adf20cabfc69425136a365d",
       "submitted": true,
-      "txID": "acc://bd711ed8e69ff957bf0c5151e706e79a42d5f437520c2581da7867e3278f9794@certen-p7c.acme/data",
+      "txID": "acc://f25a6dfd561fc8e8fbda779341be6a2d0d90d3b64ad7db69f95d88b49d2f5be3@certen-p7c.acme/data",
       "execStatus": "delivered"
     },
     {
@@ -132,23 +132,23 @@
       "expect": "valid",
       "keyIsDirectOnOuterPage": true,
       "principal": "acc://certen-p7c.acme",
-      "transactionHash": "f6c3e01918a8dc2e5c8a8e4e6b2534d357b1804c6b67eb5d299b295091200b28",
+      "transactionHash": "60d82c093582b5d242441a125d29fe0b2b9cd4cde08e86d82e601267fe2d0662",
       "type": "delegated",
       "keyType": "ed25519",
       "delegators": [
         "acc://certen-p7c.acme/book/1"
       ],
       "publicKey": "b3be1fb8a8d158423e086c855a1c04b8d9e80a3805f8dcb6fd606a24bd054e11",
-      "signature": "a7b09425affff934a74ed803caeb870291d8fa642792e0fb78fe9c2029157705003903c513af55bc5fe3f928d4a9c2bdb64626b85a60a2d6f7e1253c8e939809",
+      "signature": "ef58d976ac683d36e5c590b6451dd4c735094194f3f0a96a1257059bf0488dc065bc5f7d67b1a1b0e736c0c016e036d0e1e6da3b20a46daa66ee7d57e7b24d0e",
       "signer": "acc://certen-p7c.acme/book2/1",
       "signerVersion": 1,
-      "timestamp": 1787686638532377,
+      "timestamp": 1787690450575377,
       "signerPartition": "BVN3",
       "coreVerdict": true,
       "digestForm": "initiator-merkle",
-      "digest": "dceb3d4cd6cf6077531d8a8a593e45b56b71f31c04896b94c99bbd9b2e157587",
+      "digest": "43866e67e8bf14b45d4b0d419d926f525fb84ce617c4bef7f61360699fd6b0d5",
       "submitted": true,
-      "txID": "acc://f6c3e01918a8dc2e5c8a8e4e6b2534d357b1804c6b67eb5d299b295091200b28@certen-p7c.acme/data",
+      "txID": "acc://60d82c093582b5d242441a125d29fe0b2b9cd4cde08e86d82e601267fe2d0662@certen-p7c.acme/data",
       "execStatus": "delivered"
     },
     {
@@ -159,7 +159,7 @@
       "expect": "valid",
       "keyIsDirectOnOuterPage": true,
       "principal": "acc://certen-p7e.acme",
-      "transactionHash": "5aa670e8244bf07dcfecc12a45c144a304d09ece58a1c3198438a437a7888372",
+      "transactionHash": "86894ec131fbc97205fec15895f76a5d9ef3c184eb9ceaac9b8583e78b94f091",
       "type": "delegated",
       "keyType": "ed25519",
       "delegators": [
@@ -168,16 +168,16 @@
         "acc://certen-p7e.acme/book3/1"
       ],
       "publicKey": "9da2fa2fba9cba04c97fb9a7917470bbb2aae97f0ac0dbf036b4ef8240fd8439",
-      "signature": "dd4a56f49545a8d839707801ffaf8abe1152b86e951b2fe0468b6daa840aaa3e6a86b3847009f048e04e8d6afc9823364e77b6de8692585a3e170305be7e8c0c",
+      "signature": "5f3e7b810235282c8f65414045a140514b181936081bb101d8471053c9b81eef7cbe441e225f78dc7896b0dcf2590755c7c6d09acac87f4f43500f58d01efc0c",
       "signer": "acc://certen-p7e.acme/book4/1",
       "signerVersion": 1,
-      "timestamp": 1787686641853945,
+      "timestamp": 1787690453894662,
       "signerPartition": "BVN1",
       "coreVerdict": true,
       "digestForm": "metadata",
-      "digest": "53d295bbcfbd58e4cca468f58891b3ce812d4319c177b75c7d22ec31b6737bb7",
+      "digest": "0d56898a8aee398c74c5ce4bd040ea44812308c65d885a56da1423075e775825",
       "submitted": true,
-      "txID": "acc://5aa670e8244bf07dcfecc12a45c144a304d09ece58a1c3198438a437a7888372@certen-p7e.acme/data",
+      "txID": "acc://86894ec131fbc97205fec15895f76a5d9ef3c184eb9ceaac9b8583e78b94f091@certen-p7e.acme/data",
       "execStatus": "delivered"
     },
     {
@@ -189,7 +189,7 @@
       "refusalKind": "path-binding",
       "keyIsDirectOnOuterPage": true,
       "principal": "acc://certen-p7e.acme",
-      "transactionHash": "fd651cb92ef39f0c88d831bb1f6224a950ec1b2a505fc2d91e3794a627a9f78c",
+      "transactionHash": "c4977bbfdc0f31bf813e5cc70b72fa4cc14911e913e14e45ec40b0deef9849eb",
       "type": "delegated",
       "keyType": "ed25519",
       "delegators": [
@@ -197,16 +197,16 @@
         "acc://certen-p7e.acme/book3/1"
       ],
       "publicKey": "9da2fa2fba9cba04c97fb9a7917470bbb2aae97f0ac0dbf036b4ef8240fd8439",
-      "signature": "5249a904f8c8b563d7543fdbcf9e40c47d73266d20d2de03b7d33a7a47af1d624f959f1f4c07850ed28302c8f3880b09b220379131d050925abeced1f505200b",
+      "signature": "61e224dfbaad864b8c98e449ee8e42b187246b02f98d7250b5536667e24156342d35e0817e38082439a79792439e0d178e492db2f0b4b99aad21599283a82503",
       "signer": "acc://certen-p7e.acme/book4/1",
       "signerVersion": 1,
-      "timestamp": 1787686645179334,
+      "timestamp": 1787690457299066,
       "signerPartition": "BVN1",
       "coreVerdict": true,
       "digestForm": "metadata",
-      "digest": "a95c4a30cb2ba37d10ff60a45dc1827a2bf34b50858474942ccb650f8c6630cc",
+      "digest": "ff2d982e011972a630fd3a02378076ea59edbbf6c01b56a2211f3428ea7ca948",
       "submitted": true,
-      "txID": "acc://fd651cb92ef39f0c88d831bb1f6224a950ec1b2a505fc2d91e3794a627a9f78c@certen-p7e.acme/data",
+      "txID": "acc://c4977bbfdc0f31bf813e5cc70b72fa4cc14911e913e14e45ec40b0deef9849eb@certen-p7e.acme/data",
       "execStatus": "pending"
     },
     {
@@ -216,20 +216,20 @@
       "why": "2-of-3 where one satisfied entry is direct and the other is delegated; the two paths must both count, and count once each",
       "expect": "valid",
       "principal": "acc://certen-p7d.acme",
-      "transactionHash": "bf2bf9949d42b0c2406e1bebf64d0fbbd3c578540cc8c861f72bbd38157741ed",
+      "transactionHash": "261f939370db762b869dd85def19f4d4a7a2e6dd375791cda91cea22cdd1549a",
       "type": "ed25519",
       "keyType": "ed25519",
       "publicKey": "5a2d571026e9f737424eb69f98aefff31e12dddc20cf712fa608e3176c927324",
-      "signature": "8135f6f3d8fe0152e9dcaf2f1a19d3678a85af8c6c2786f2d9b7df160148f41e78161b778ea2245a58827f917612a6abc1287fc211240c7eef4d16e3472b9b0f",
+      "signature": "1a5f07b12bb4480df1937f3d95a8190ed50b5ed0fba2ffc5b76f84511da7786013e0b52dfcf465df5869a857707adc06cad81f54f2ec59d2d06791f50f711c0b",
       "signer": "acc://certen-p7d.acme/book/1",
       "signerVersion": 4,
-      "timestamp": 1787686737524424,
+      "timestamp": 1787690549662916,
       "signerPartition": "BVN3",
       "coreVerdict": true,
       "digestForm": "metadata",
-      "digest": "5db171302cc922a1c1672a31ce59427ec26d7d8c2bace94631b1852026f22c7c",
+      "digest": "1bc9106edc9aab3dade4110dcfe506a18ee6aa9fc9385d9e7c98fa8055f5726b",
       "submitted": true,
-      "txID": "acc://bf2bf9949d42b0c2406e1bebf64d0fbbd3c578540cc8c861f72bbd38157741ed@certen-p7d.acme/data",
+      "txID": "acc://261f939370db762b869dd85def19f4d4a7a2e6dd375791cda91cea22cdd1549a@certen-p7d.acme/data",
       "execStatus": "delivered"
     },
     {
@@ -240,23 +240,23 @@
       "expect": "valid",
       "keyIsDirectOnOuterPage": false,
       "principal": "acc://certen-p7d.acme",
-      "transactionHash": "bf2bf9949d42b0c2406e1bebf64d0fbbd3c578540cc8c861f72bbd38157741ed",
+      "transactionHash": "261f939370db762b869dd85def19f4d4a7a2e6dd375791cda91cea22cdd1549a",
       "type": "delegated",
       "keyType": "ed25519",
       "delegators": [
         "acc://certen-p7d.acme/book/1"
       ],
       "publicKey": "98f8b0faf0797b2da7f175ed370e4401a46b610b873a8c118075411fa2b3eeee",
-      "signature": "e9ac212db868c766b7f09535d8f938f8b0e540cbc1df63122a578415b28276d9555ba0a147ecf7108076b08266f5ddfa3fdea7f9fea64ae204683b4494b33908",
+      "signature": "0f0840d4de1aef88b620dded1ca33f932c32bfd0fd73af325f9c612da0c82304e4a2aaf38a40a63452645a3873b9c3ad374483346e48a911bef9dbc79c6c5a0b",
       "signer": "acc://certen-p7d.acme/book2/1",
       "signerVersion": 1,
-      "timestamp": 1787686737578189,
+      "timestamp": 1787690549714305,
       "signerPartition": "BVN3",
       "coreVerdict": true,
       "digestForm": "metadata",
-      "digest": "0675cda02e0526037d11466b8ffcc73612d9bb2b37323798502f543517bfb910",
+      "digest": "2967855d3ce7ad1bc279779d2ec862acf7994e0e86ca01c3218d9099d9834757",
       "submitted": true,
-      "txID": "acc://bf2bf9949d42b0c2406e1bebf64d0fbbd3c578540cc8c861f72bbd38157741ed@certen-p7d.acme/data",
+      "txID": "acc://261f939370db762b869dd85def19f4d4a7a2e6dd375791cda91cea22cdd1549a@certen-p7d.acme/data",
       "execStatus": "delivered"
     },
     {
@@ -267,23 +267,23 @@
       "expect": "valid",
       "keyIsDirectOnOuterPage": false,
       "principal": "acc://certen-p7f-alpha.acme",
-      "transactionHash": "475281f0166a962cbc01ffdcadf133ceb34fa08d253a2459fe9ef956f9bce819",
+      "transactionHash": "a934d8851030ff18fcbb52c2050933aa1dab12b807c637c97a3c48323d3d5f1d",
       "type": "delegated",
       "keyType": "ed25519",
       "delegators": [
         "acc://certen-p7f-alpha.acme/book/1"
       ],
       "publicKey": "81de5d5540c000f3cbedd0117ea28025b58ac12b18e1d40f3b7330c56589621f",
-      "signature": "7ca53254ce76422c810d35781aa57d6a21ea6f84764a95b27761b3adcf5a41c7356ce02b43bdd52b018458ac60b618fd05926c8c201400d5b890fd41ca52850d",
+      "signature": "93f188cc6e4b9ce6e95e1ad0988b6b2e2f1f29087c227350ee6bd2c94ac3dd2ca25051d599a2197130c360f027716afa52a2858dba9ce79cc39f29b18b6a480a",
       "signer": "acc://certen-p7f-omega.acme/book/1",
       "signerVersion": 1,
-      "timestamp": 1787686741173787,
+      "timestamp": 1787690553554548,
       "signerPartition": "BVN2",
       "coreVerdict": true,
       "digestForm": "metadata",
-      "digest": "76acc5e324b31168ccab78d80bcaa21576497567deb14e6020599d4922aa0b46",
+      "digest": "4e8730689346e49353b349a31278011024514470af2638a54f997c68e0e66201",
       "submitted": true,
-      "txID": "acc://475281f0166a962cbc01ffdcadf133ceb34fa08d253a2459fe9ef956f9bce819@certen-p7f-alpha.acme/data",
+      "txID": "acc://a934d8851030ff18fcbb52c2050933aa1dab12b807c637c97a3c48323d3d5f1d@certen-p7f-alpha.acme/data",
       "execStatus": "delivered"
     },
     {
@@ -295,7 +295,7 @@
       "refusalKind": "depth-limit",
       "keyIsDirectOnOuterPage": true,
       "principal": "acc://certen-p7g.acme",
-      "transactionHash": "7c27087e664e1e6e76d5a8b7a8a7fe6c4f75a2c812f48869b972774a25ade910",
+      "transactionHash": "a29cb044afdd6519f6db4138ed302ee481627f353cfdc2b47ae6a6645a346c56",
       "type": "delegated",
       "keyType": "ed25519",
       "delegators": [
@@ -322,14 +322,14 @@
         "acc://certen-p7g.acme/book21/1"
       ],
       "publicKey": "6fafd04af1cf8b1d70180d9113624ee7362a55f4a8c72013b3273d0e44383621",
-      "signature": "566803e64da802bbe0fb31b0555bc96b55648f462ab4821cb89996e0198d0fe2e01b99866871ec4a28411d06d97abc3802c77bc4a9c2d34b23f4654043b0ea08",
+      "signature": "44224db8ed3f44ec5911e5c001311a6ff97f2e27e03987149e0222bac5f427cd935adc4bb724c589cb9a59e560746fab2ba73c22b367835be35a6c43f9f83e00",
       "signer": "acc://certen-p7g.acme/book22/1",
       "signerVersion": 1,
-      "timestamp": 1787686750668199,
+      "timestamp": 1787690563006731,
       "signerPartition": "BVN2",
       "coreVerdict": true,
       "digestForm": "metadata",
-      "digest": "6504eff57b6e8584278ffedcb13838da6c832443b4fc7371f8f0452bbc962822",
+      "digest": "95255010de6b9b4eb409d5d9978d3461653a19b921da05d9e9753ba58da23cc9",
       "submitted": false,
       "submitError": "delegated signature exceeded the depth limit (20)"
     },
@@ -341,7 +341,7 @@
       "expect": "valid",
       "keyIsDirectOnOuterPage": true,
       "principal": "acc://certen-p7h.acme",
-      "transactionHash": "97791b1fc8992f880c5f239cd4632814bb5d0bc41b87ee18591bbf88ef0140ae",
+      "transactionHash": "a88d042de46c058062a62606d3f89876c9c94eb3b991592685b9823bc2347177",
       "type": "delegated",
       "keyType": "ed25519",
       "delegators": [
@@ -349,16 +349,16 @@
         "acc://certen-p7h.acme/book2/1"
       ],
       "publicKey": "f6a20131134b9609f6968e7c4b40dd649c3a192eb0f430721493042d98b9182f",
-      "signature": "7e36eca493886c4f9263673491384405ed20a8e6e050bae19b9bae1bc75c0b58dac61fe22956e169e3c6b94f3d5f4862988af75103cda338cd0fe8112428040e",
+      "signature": "0b7e340c874bc22ab991983b8c88e75dd9b783e8317606a03fb2f9355a27afaa35e25c3136847880205f448e99a4f209275892c1a9c2e70e863c2283025ece0f",
       "signer": "acc://certen-p7h.acme/book/1",
       "signerVersion": 2,
-      "timestamp": 1787686750890478,
+      "timestamp": 1787690563217597,
       "signerPartition": "BVN1",
       "coreVerdict": true,
       "digestForm": "metadata",
-      "digest": "e0441d071f162162bef8303adfc1fd9610fbf4be8a1d800dc860e51906383ca7",
+      "digest": "355a3b73163d4ddeb4d4dd9934ce639a4ffe1f44125474eb778eb84422bf9a1e",
       "submitted": true,
-      "txID": "acc://97791b1fc8992f880c5f239cd4632814bb5d0bc41b87ee18591bbf88ef0140ae@certen-p7h.acme/data",
+      "txID": "acc://a88d042de46c058062a62606d3f89876c9c94eb3b991592685b9823bc2347177@certen-p7h.acme/data",
       "execStatus": "delivered"
     },
     {
@@ -370,7 +370,7 @@
       "refusalKind": "cycle",
       "keyIsDirectOnOuterPage": true,
       "principal": "acc://certen-p7h.acme",
-      "transactionHash": "c2bacf7da600381ed3d12a84cd56c62a25895f61812417b70b22fb197f638b4c",
+      "transactionHash": "6863ed734b398fe02b528ed376764a2e4f3bf61c1be5e499024daf9f0ad6bb48",
       "type": "delegated",
       "keyType": "ed25519",
       "delegators": [
@@ -380,16 +380,16 @@
         "acc://certen-p7h.acme/book2/1"
       ],
       "publicKey": "f6a20131134b9609f6968e7c4b40dd649c3a192eb0f430721493042d98b9182f",
-      "signature": "6e02769c5cd964ae282e39409ba89e1f9170686aa3ab2b196b7e082bde74ab8fb923a49ce336686d7640154b347259f1d8ceed1ea8efc6ce6962004380a48e00",
+      "signature": "b57594cd81ae3d8074854d098a93e532a451b4de76755bd9c71974b5c0d2d00c099444f07b505b8302eca631b694996199c0aea1019156f4f9b6a381ca7e7a05",
       "signer": "acc://certen-p7h.acme/book/1",
       "signerVersion": 2,
-      "timestamp": 1787686754258309,
+      "timestamp": 1787690566548834,
       "signerPartition": "BVN1",
       "coreVerdict": true,
       "digestForm": "metadata",
-      "digest": "04b302ebb53afb796be463043434e7105286dcdaeb0b68ac3c8bf17525a04ecb",
+      "digest": "e7f9c9b03e25ee7f36f2d0d85f14fd15bad5e0b9ad582c67dfd5cd9859232c41",
       "submitted": true,
-      "txID": "acc://c2bacf7da600381ed3d12a84cd56c62a25895f61812417b70b22fb197f638b4c@certen-p7h.acme/data",
+      "txID": "acc://6863ed734b398fe02b528ed376764a2e4f3bf61c1be5e499024daf9f0ad6bb48@certen-p7h.acme/data",
       "execStatus": "delivered"
     },
     {
@@ -400,20 +400,517 @@
       "expect": "refused",
       "refusalKind": "unsupported-type",
       "principal": "acc://certen-p7k.acme",
-      "transactionHash": "fdb16d6ceffc5b0cafb70acff4d57e686f2d022d0185afd4f84c5d001eeeb3a3",
+      "transactionHash": "06195913c2ee872b15c39aa3e845ab29d03aa68b369f6ea6b6be0c2cfe4558f2",
       "type": "btc",
       "keyType": "btc",
       "publicKey": "039d1c74200a8e95b73a699e22de2d7a2df50a07b2556825d8a903811b1e964b68",
-      "signature": "3044022065f2fc57525edd92bb18ac7d33457151f3065378d848e10d6928af0ced771887022071e7d13cc34c5cbbfd34333f6c19cce83f506d86e780915a64cd6dec3be9a96d",
+      "signature": "304402200db4b7d316e7664f97a6a32f4e220092e9a46a2627a7ef1dbb3b4cda0a55488d0220241f5a530d61f57f7042db890a20606ecfa58e911ef01d3b2a250e5bb6147153",
       "signer": "acc://certen-p7k.acme/book/1",
       "signerVersion": 2,
-      "timestamp": 1787686757910082,
+      "timestamp": 1787690569949632,
       "signerPartition": "BVN2",
       "coreVerdict": true,
       "digestForm": "none",
       "submitted": true,
-      "txID": "acc://fdb16d6ceffc5b0cafb70acff4d57e686f2d022d0185afd4f84c5d001eeeb3a3@certen-p7k.acme/data",
+      "txID": "acc://06195913c2ee872b15c39aa3e845ab29d03aa68b369f6ea6b6be0c2cfe4558f2@certen-p7k.acme/data",
       "execStatus": "delivered"
     }
-  ]
+  ],
+  "pages": {
+    "acc://certen-p7b3.acme/book/1": {
+      "url": "acc://certen-p7b3.acme/book/1",
+      "version": 4,
+      "threshold": 2,
+      "partition": "BVN2",
+      "entries": [
+        {
+          "keyHash": "2fe508d4dc0761921ac9b2b990b80c344befadadb8a3828d34da07204bede237"
+        },
+        {
+          "keyHash": "5901b08ed10523158dba8d47fb28ca3c2db1347fb8ba3389740e1ec86ba7228f"
+        },
+        {
+          "keyHash": "f49edfb9e46d996789e28d7f3bddcfffc94354ad37b02baf5931626f29bd1888"
+        }
+      ]
+    },
+    "acc://certen-p7c.acme/book/1": {
+      "url": "acc://certen-p7c.acme/book/1",
+      "version": 2,
+      "threshold": 1,
+      "partition": "BVN3",
+      "entries": [
+        {
+          "delegate": "acc://certen-p7c.acme/book2"
+        },
+        {
+          "keyHash": "c0265bd3e745825832605b75cbd40e5bde38fd21037769bbb202b5f7822fc465"
+        }
+      ]
+    },
+    "acc://certen-p7c.acme/book2/1": {
+      "url": "acc://certen-p7c.acme/book2/1",
+      "version": 1,
+      "threshold": 0,
+      "partition": "BVN3",
+      "entries": [
+        {
+          "keyHash": "c0265bd3e745825832605b75cbd40e5bde38fd21037769bbb202b5f7822fc465"
+        }
+      ]
+    },
+    "acc://certen-p7d.acme/book/1": {
+      "url": "acc://certen-p7d.acme/book/1",
+      "version": 4,
+      "threshold": 2,
+      "partition": "BVN3",
+      "entries": [
+        {
+          "delegate": "acc://certen-p7d.acme/book2"
+        },
+        {
+          "keyHash": "7d3389b8c275a64d52d840f477e44fd7d0b82b429ea76d832eeb22ecd115ef4e"
+        },
+        {
+          "keyHash": "b37d5b2f5eac3312436f319bc479fb3e74a933e19957608c7dd9ce19ed4db4ff"
+        }
+      ]
+    },
+    "acc://certen-p7d.acme/book2/1": {
+      "url": "acc://certen-p7d.acme/book2/1",
+      "version": 1,
+      "threshold": 0,
+      "partition": "BVN3",
+      "entries": [
+        {
+          "keyHash": "b4f91e76528c48abe0b386bd9a513b4ed837066c7d29966f0dbafd6559630705"
+        }
+      ]
+    },
+    "acc://certen-p7e.acme/book/1": {
+      "url": "acc://certen-p7e.acme/book/1",
+      "version": 2,
+      "threshold": 1,
+      "partition": "BVN1",
+      "entries": [
+        {
+          "delegate": "acc://certen-p7e.acme/book2"
+        },
+        {
+          "keyHash": "44d3e6214521424dc278f21072d08754e3fa4d03e98d14a702cba99a64c628bb"
+        }
+      ]
+    },
+    "acc://certen-p7e.acme/book2/1": {
+      "url": "acc://certen-p7e.acme/book2/1",
+      "version": 2,
+      "threshold": 0,
+      "partition": "BVN1",
+      "entries": [
+        {
+          "delegate": "acc://certen-p7e.acme/book3"
+        },
+        {
+          "keyHash": "44d3e6214521424dc278f21072d08754e3fa4d03e98d14a702cba99a64c628bb"
+        }
+      ]
+    },
+    "acc://certen-p7e.acme/book3/1": {
+      "url": "acc://certen-p7e.acme/book3/1",
+      "version": 2,
+      "threshold": 0,
+      "partition": "BVN1",
+      "entries": [
+        {
+          "delegate": "acc://certen-p7e.acme/book4"
+        },
+        {
+          "keyHash": "44d3e6214521424dc278f21072d08754e3fa4d03e98d14a702cba99a64c628bb"
+        }
+      ]
+    },
+    "acc://certen-p7e.acme/book4/1": {
+      "url": "acc://certen-p7e.acme/book4/1",
+      "version": 1,
+      "threshold": 0,
+      "partition": "BVN1",
+      "entries": [
+        {
+          "keyHash": "44d3e6214521424dc278f21072d08754e3fa4d03e98d14a702cba99a64c628bb"
+        }
+      ]
+    },
+    "acc://certen-p7f-alpha.acme/book/1": {
+      "url": "acc://certen-p7f-alpha.acme/book/1",
+      "version": 2,
+      "threshold": 1,
+      "partition": "BVN1",
+      "entries": [
+        {
+          "delegate": "acc://certen-p7f-omega.acme/book"
+        },
+        {
+          "keyHash": "b8af247704a7acd57c6a72b25a03494fc1d8f57b76c4db0def1876ca37b451ad"
+        }
+      ]
+    },
+    "acc://certen-p7f-omega.acme/book/1": {
+      "url": "acc://certen-p7f-omega.acme/book/1",
+      "version": 1,
+      "threshold": 1,
+      "partition": "BVN2",
+      "entries": [
+        {
+          "keyHash": "178c26d15864efc5124b6817ae69157b8e2fae43918966613d884751fa4b9f3d"
+        }
+      ]
+    },
+    "acc://certen-p7g.acme/book/1": {
+      "url": "acc://certen-p7g.acme/book/1",
+      "version": 2,
+      "threshold": 1,
+      "partition": "BVN2",
+      "entries": [
+        {
+          "delegate": "acc://certen-p7g.acme/book2"
+        },
+        {
+          "keyHash": "0e4967097728bf23a439173b4a814c6caba6e5597191fef397697b5bfae96ee7"
+        }
+      ]
+    },
+    "acc://certen-p7g.acme/book10/1": {
+      "url": "acc://certen-p7g.acme/book10/1",
+      "version": 2,
+      "threshold": 0,
+      "partition": "BVN2",
+      "entries": [
+        {
+          "delegate": "acc://certen-p7g.acme/book11"
+        },
+        {
+          "keyHash": "0e4967097728bf23a439173b4a814c6caba6e5597191fef397697b5bfae96ee7"
+        }
+      ]
+    },
+    "acc://certen-p7g.acme/book11/1": {
+      "url": "acc://certen-p7g.acme/book11/1",
+      "version": 2,
+      "threshold": 0,
+      "partition": "BVN2",
+      "entries": [
+        {
+          "delegate": "acc://certen-p7g.acme/book12"
+        },
+        {
+          "keyHash": "0e4967097728bf23a439173b4a814c6caba6e5597191fef397697b5bfae96ee7"
+        }
+      ]
+    },
+    "acc://certen-p7g.acme/book12/1": {
+      "url": "acc://certen-p7g.acme/book12/1",
+      "version": 2,
+      "threshold": 0,
+      "partition": "BVN2",
+      "entries": [
+        {
+          "delegate": "acc://certen-p7g.acme/book13"
+        },
+        {
+          "keyHash": "0e4967097728bf23a439173b4a814c6caba6e5597191fef397697b5bfae96ee7"
+        }
+      ]
+    },
+    "acc://certen-p7g.acme/book13/1": {
+      "url": "acc://certen-p7g.acme/book13/1",
+      "version": 2,
+      "threshold": 0,
+      "partition": "BVN2",
+      "entries": [
+        {
+          "delegate": "acc://certen-p7g.acme/book14"
+        },
+        {
+          "keyHash": "0e4967097728bf23a439173b4a814c6caba6e5597191fef397697b5bfae96ee7"
+        }
+      ]
+    },
+    "acc://certen-p7g.acme/book14/1": {
+      "url": "acc://certen-p7g.acme/book14/1",
+      "version": 2,
+      "threshold": 0,
+      "partition": "BVN2",
+      "entries": [
+        {
+          "delegate": "acc://certen-p7g.acme/book15"
+        },
+        {
+          "keyHash": "0e4967097728bf23a439173b4a814c6caba6e5597191fef397697b5bfae96ee7"
+        }
+      ]
+    },
+    "acc://certen-p7g.acme/book15/1": {
+      "url": "acc://certen-p7g.acme/book15/1",
+      "version": 2,
+      "threshold": 0,
+      "partition": "BVN2",
+      "entries": [
+        {
+          "delegate": "acc://certen-p7g.acme/book16"
+        },
+        {
+          "keyHash": "0e4967097728bf23a439173b4a814c6caba6e5597191fef397697b5bfae96ee7"
+        }
+      ]
+    },
+    "acc://certen-p7g.acme/book16/1": {
+      "url": "acc://certen-p7g.acme/book16/1",
+      "version": 2,
+      "threshold": 0,
+      "partition": "BVN2",
+      "entries": [
+        {
+          "delegate": "acc://certen-p7g.acme/book17"
+        },
+        {
+          "keyHash": "0e4967097728bf23a439173b4a814c6caba6e5597191fef397697b5bfae96ee7"
+        }
+      ]
+    },
+    "acc://certen-p7g.acme/book17/1": {
+      "url": "acc://certen-p7g.acme/book17/1",
+      "version": 2,
+      "threshold": 0,
+      "partition": "BVN2",
+      "entries": [
+        {
+          "delegate": "acc://certen-p7g.acme/book18"
+        },
+        {
+          "keyHash": "0e4967097728bf23a439173b4a814c6caba6e5597191fef397697b5bfae96ee7"
+        }
+      ]
+    },
+    "acc://certen-p7g.acme/book18/1": {
+      "url": "acc://certen-p7g.acme/book18/1",
+      "version": 2,
+      "threshold": 0,
+      "partition": "BVN2",
+      "entries": [
+        {
+          "delegate": "acc://certen-p7g.acme/book19"
+        },
+        {
+          "keyHash": "0e4967097728bf23a439173b4a814c6caba6e5597191fef397697b5bfae96ee7"
+        }
+      ]
+    },
+    "acc://certen-p7g.acme/book19/1": {
+      "url": "acc://certen-p7g.acme/book19/1",
+      "version": 2,
+      "threshold": 0,
+      "partition": "BVN2",
+      "entries": [
+        {
+          "delegate": "acc://certen-p7g.acme/book20"
+        },
+        {
+          "keyHash": "0e4967097728bf23a439173b4a814c6caba6e5597191fef397697b5bfae96ee7"
+        }
+      ]
+    },
+    "acc://certen-p7g.acme/book2/1": {
+      "url": "acc://certen-p7g.acme/book2/1",
+      "version": 2,
+      "threshold": 0,
+      "partition": "BVN2",
+      "entries": [
+        {
+          "delegate": "acc://certen-p7g.acme/book3"
+        },
+        {
+          "keyHash": "0e4967097728bf23a439173b4a814c6caba6e5597191fef397697b5bfae96ee7"
+        }
+      ]
+    },
+    "acc://certen-p7g.acme/book20/1": {
+      "url": "acc://certen-p7g.acme/book20/1",
+      "version": 2,
+      "threshold": 0,
+      "partition": "BVN2",
+      "entries": [
+        {
+          "delegate": "acc://certen-p7g.acme/book21"
+        },
+        {
+          "keyHash": "0e4967097728bf23a439173b4a814c6caba6e5597191fef397697b5bfae96ee7"
+        }
+      ]
+    },
+    "acc://certen-p7g.acme/book21/1": {
+      "url": "acc://certen-p7g.acme/book21/1",
+      "version": 2,
+      "threshold": 0,
+      "partition": "BVN2",
+      "entries": [
+        {
+          "delegate": "acc://certen-p7g.acme/book22"
+        },
+        {
+          "keyHash": "0e4967097728bf23a439173b4a814c6caba6e5597191fef397697b5bfae96ee7"
+        }
+      ]
+    },
+    "acc://certen-p7g.acme/book22/1": {
+      "url": "acc://certen-p7g.acme/book22/1",
+      "version": 1,
+      "threshold": 0,
+      "partition": "BVN2",
+      "entries": [
+        {
+          "keyHash": "0e4967097728bf23a439173b4a814c6caba6e5597191fef397697b5bfae96ee7"
+        }
+      ]
+    },
+    "acc://certen-p7g.acme/book3/1": {
+      "url": "acc://certen-p7g.acme/book3/1",
+      "version": 2,
+      "threshold": 0,
+      "partition": "BVN2",
+      "entries": [
+        {
+          "delegate": "acc://certen-p7g.acme/book4"
+        },
+        {
+          "keyHash": "0e4967097728bf23a439173b4a814c6caba6e5597191fef397697b5bfae96ee7"
+        }
+      ]
+    },
+    "acc://certen-p7g.acme/book4/1": {
+      "url": "acc://certen-p7g.acme/book4/1",
+      "version": 2,
+      "threshold": 0,
+      "partition": "BVN2",
+      "entries": [
+        {
+          "delegate": "acc://certen-p7g.acme/book5"
+        },
+        {
+          "keyHash": "0e4967097728bf23a439173b4a814c6caba6e5597191fef397697b5bfae96ee7"
+        }
+      ]
+    },
+    "acc://certen-p7g.acme/book5/1": {
+      "url": "acc://certen-p7g.acme/book5/1",
+      "version": 2,
+      "threshold": 0,
+      "partition": "BVN2",
+      "entries": [
+        {
+          "delegate": "acc://certen-p7g.acme/book6"
+        },
+        {
+          "keyHash": "0e4967097728bf23a439173b4a814c6caba6e5597191fef397697b5bfae96ee7"
+        }
+      ]
+    },
+    "acc://certen-p7g.acme/book6/1": {
+      "url": "acc://certen-p7g.acme/book6/1",
+      "version": 2,
+      "threshold": 0,
+      "partition": "BVN2",
+      "entries": [
+        {
+          "delegate": "acc://certen-p7g.acme/book7"
+        },
+        {
+          "keyHash": "0e4967097728bf23a439173b4a814c6caba6e5597191fef397697b5bfae96ee7"
+        }
+      ]
+    },
+    "acc://certen-p7g.acme/book7/1": {
+      "url": "acc://certen-p7g.acme/book7/1",
+      "version": 2,
+      "threshold": 0,
+      "partition": "BVN2",
+      "entries": [
+        {
+          "delegate": "acc://certen-p7g.acme/book8"
+        },
+        {
+          "keyHash": "0e4967097728bf23a439173b4a814c6caba6e5597191fef397697b5bfae96ee7"
+        }
+      ]
+    },
+    "acc://certen-p7g.acme/book8/1": {
+      "url": "acc://certen-p7g.acme/book8/1",
+      "version": 2,
+      "threshold": 0,
+      "partition": "BVN2",
+      "entries": [
+        {
+          "delegate": "acc://certen-p7g.acme/book9"
+        },
+        {
+          "keyHash": "0e4967097728bf23a439173b4a814c6caba6e5597191fef397697b5bfae96ee7"
+        }
+      ]
+    },
+    "acc://certen-p7g.acme/book9/1": {
+      "url": "acc://certen-p7g.acme/book9/1",
+      "version": 2,
+      "threshold": 0,
+      "partition": "BVN2",
+      "entries": [
+        {
+          "delegate": "acc://certen-p7g.acme/book10"
+        },
+        {
+          "keyHash": "0e4967097728bf23a439173b4a814c6caba6e5597191fef397697b5bfae96ee7"
+        }
+      ]
+    },
+    "acc://certen-p7h.acme/book/1": {
+      "url": "acc://certen-p7h.acme/book/1",
+      "version": 2,
+      "threshold": 1,
+      "partition": "BVN1",
+      "entries": [
+        {
+          "delegate": "acc://certen-p7h.acme/book2"
+        },
+        {
+          "keyHash": "2debaa423c14dc5fa53aea5688d12db689e0562a593681fe32195339da1a62d5"
+        }
+      ]
+    },
+    "acc://certen-p7h.acme/book2/1": {
+      "url": "acc://certen-p7h.acme/book2/1",
+      "version": 2,
+      "threshold": 0,
+      "partition": "BVN1",
+      "entries": [
+        {
+          "delegate": "acc://certen-p7h.acme/book"
+        },
+        {
+          "keyHash": "2debaa423c14dc5fa53aea5688d12db689e0562a593681fe32195339da1a62d5"
+        }
+      ]
+    },
+    "acc://certen-p7k.acme/book/1": {
+      "url": "acc://certen-p7k.acme/book/1",
+      "version": 2,
+      "threshold": 1,
+      "partition": "BVN2",
+      "entries": [
+        {
+          "keyHash": "994c154f7421eb10376251f86a3e883fa68c32d7"
+        },
+        {
+          "keyHash": "c07d4d69dcfe4683259c4f31cf1905a150c1a0058032bad06265b919cd8d314a"
+        }
+      ]
+    }
+  }
 }

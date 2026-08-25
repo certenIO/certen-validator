@@ -61,11 +61,39 @@ type corpusTrace struct {
 	ExecStatus             string   `json:"execStatus"`
 }
 
+// corpusPage is a key page as the chain reported it when the corpus was
+// captured: version, accept threshold, and every entry - keys AND delegates.
+type corpusPage struct {
+	URL       string `json:"url"`
+	Version   uint64 `json:"version"`
+	Threshold uint64 `json:"threshold"`
+	Partition string `json:"partition"`
+	Entries   []struct {
+		KeyHash  string `json:"keyHash"`
+		Delegate string `json:"delegate"`
+	} `json:"entries"`
+}
+
+// state renders a captured page as the authority model resolution consumes.
+func (p corpusPage) state() KeyPageState {
+	entries := make([]KeyPageEntry, 0, len(p.Entries))
+	for _, e := range p.Entries {
+		entries = append(entries, KeyPageEntry{KeyHash: e.KeyHash, Delegate: e.Delegate})
+	}
+	return KeyPageState{
+		Version:   p.Version,
+		Threshold: p.Threshold,
+		Entries:   entries,
+		Keys:      deriveKeyHashes(entries),
+	}
+}
+
 type corpusFile struct {
-	Endpoint       string        `json:"endpoint"`
-	ProtocolModule string        `json:"protocolModule"`
-	CapturedAt     string        `json:"capturedAt"`
-	Traces         []corpusTrace `json:"traces"`
+	Endpoint       string                `json:"endpoint"`
+	ProtocolModule string                `json:"protocolModule"`
+	CapturedAt     string                `json:"capturedAt"`
+	Traces         []corpusTrace         `json:"traces"`
+	Pages          map[string]corpusPage `json:"pages"`
 }
 
 // corpusPath walks up to the repository root rather than hardcoding a depth,
@@ -151,7 +179,13 @@ func TestP7_1_CorpusIsWellFormed(t *testing.T) {
 	}
 	// Runbook Gate 3 requires each refusal to carry its own distinct reason. The
 	// corpus has to name them, or "each with its own reason" cannot be checked.
-	for _, want := range []string{"depth-limit", "cycle", "duplicate-key", "path-binding", "unsupported-type"} {
+	//
+	// "cycle" is deliberately NOT in this list. The plan expected a delegation
+	// cycle to be refused; Kermit DELIVERS both a single traversal (case H) and
+	// a doubled one (H-repeat), so refusing either would be a false governance
+	// rejection. The cycle cases became over-counting cases instead, and are
+	// checked by TestP7_3_LongerPathGrantsNoMoreAuthority.
+	for _, want := range []string{"depth-limit", "duplicate-key", "path-binding", "unsupported-type"} {
 		if !refusalKinds[want] {
 			t.Errorf("the corpus has no case whose refusal reason is %q", want)
 		}

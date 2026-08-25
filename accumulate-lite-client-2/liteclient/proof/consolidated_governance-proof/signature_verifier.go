@@ -28,6 +28,20 @@ import (
 // SignatureVerifier handles Ed25519 signature verification and Accumulate digest computation
 type SignatureVerifier struct {
 	sigbytesPath string // Path to sigbytes tool for Accumulate-specific digest computation
+
+	// resolver decides whether a key page's authority is satisfied, by walking
+	// the delegation path each signature commits to. Optional: with none set,
+	// threshold evaluation falls back to counting distinct keys, which is
+	// correct for a page whose entries are all keys and cannot decide a
+	// delegated signature at all - so one arriving without a resolver is
+	// reported as unavailable rather than counted as absent.
+	resolver *AuthorityResolver
+}
+
+// WithResolver returns the verifier with authority resolution enabled.
+func (sv *SignatureVerifier) WithResolver(r *AuthorityResolver) *SignatureVerifier {
+	sv.resolver = r
+	return sv
 }
 
 // NewSignatureVerifier creates a new signature verifier
@@ -193,12 +207,16 @@ func (sv *SignatureVerifier) ValidateSignature(ctx context.Context, sig Validate
 
 	// A delegated signature's key does not sit on the page being checked, and
 	// its version is the INNER page's version, so neither of the two checks
-	// below means anything for it. Resolving a delegated signature is authority
-	// resolution, which is Phase 3; until that exists this refuses with its own
-	// reason rather than failing the membership check, because "this key is not
-	// on this page" is true, misleading, and reads as a governance rejection.
+	// below means anything for it. Its AUTHORITY is decided by resolution
+	// (authority_resolution.go), which walks the path the digest commits to and
+	// asks the page that can actually answer.
+	//
+	// What this function still does for it - the important half - is verify the
+	// CRYPTOGRAPHY: the digest, built over the whole delegation chain, against
+	// the key. Membership is skipped here because it is the wrong question at
+	// this point, not because it goes unasked.
 	if sig.Signature.IsDelegated() {
-		return "", DelegationNotResolved{Chain: sig.Signature.DelegatorChain(), Signer: sig.Signature.Signer}
+		return sv.VerifyAgainstAcceptedDigests(sig.Signature, txHash)
 	}
 
 	// Validate signer version matches current state
@@ -367,9 +385,78 @@ func (sv *SignatureVerifier) ValidateSignatureSet(ctx context.Context, signature
 		}
 	}
 
-	// Check threshold satisfaction.
+	// Check threshold satisfaction, by RESOLVING the authority rather than by
+	// counting distinct keys.
+	//
+	// Counting keys is right only when every entry is a key and every signature
+	// is direct - which is every one of the 400 production proofs, and is why
+	// the difference never showed. It is wrong the moment an entry is a
+	// delegate: the delegated signer's key is not on this page, so it counts
+	// zero, and the threshold comes up short. That reads as "the institution did
+	// not authorize this" about a transaction the institution did authorize.
+	//
+	// Resolution counts satisfied ENTRIES, which is what a key page's
+	// AcceptThreshold actually means, and it is also where the distinct-entry
+	// rule lives - so one key signing twice is one acceptance here rather than
+	// by the happy accident of a map key.
+	//
+	// With no resolver configured this falls back to the key count, which keeps
+	// the 1-of-1 path working in callers that never set one up. The fallback is
+	// recorded, not silent: a delegated signature cannot be resolved by it and
+	// is reported as unavailable rather than counted as absent.
 	uniqueValidKeys := len(uniqueKeyHashes)
-	thresholdSatisfied := uint64(uniqueValidKeys) >= state.Threshold
+	var thresholdSatisfied bool
+	var resolution *ResolutionResult
+
+	if sv.resolver != nil {
+		sigs := make([]SignatureData, 0, len(validSignatures))
+		for _, s := range validSignatures {
+			sigs = append(sigs, s.Signature)
+		}
+		res, err := sv.resolver.Resolve(ctx, snapshot.Page, state, sigs)
+		if err != nil {
+			// Resolution could not be completed. That is an outage, not a
+			// verdict, and it must never become one.
+			return nil, &SignatureEvidenceIncomplete{
+				Route:     "authority-resolution",
+				Requested: len(validSignatures),
+				Unavailable: []UnavailableSignature{{
+					Stage: "resolve-authority", Err: err.Error(),
+				}},
+			}
+		}
+		resolution = res
+		thresholdSatisfied = res.ThresholdMet()
+		uniqueValidKeys = res.Satisfied
+
+		for _, r := range res.Refused {
+			if r.Reason == ReasonPageUnavailable {
+				return nil, &SignatureEvidenceIncomplete{
+					Route:     "authority-resolution",
+					Requested: len(validSignatures),
+					Unavailable: []UnavailableSignature{{
+						MessageID: r.SignerPage, Stage: r.Reason, Err: r.Detail,
+					}},
+				}
+			}
+		}
+	} else {
+		for _, s := range validSignatures {
+			if s.Signature.IsDelegated() {
+				return nil, &SignatureEvidenceIncomplete{
+					Route:     "authority-resolution",
+					Requested: len(validSignatures),
+					Unavailable: []UnavailableSignature{{
+						MessageID: s.MessageID, Stage: "resolve-authority",
+						Err: "a delegated signature reached threshold evaluation with no " +
+							"resolver configured; counting keys cannot decide it, and " +
+							"dropping it would understate the authority",
+					}},
+				}
+			}
+		}
+		thresholdSatisfied = uint64(uniqueValidKeys) >= state.Threshold
+	}
 
 	// Timing starts FALSE and is earned. It previously started true and could
 	// only be falsified by a signature in validSignatures, so an empty set
@@ -397,7 +484,15 @@ func (sv *SignatureVerifier) ValidateSignatureSet(ctx context.Context, signature
 	fmt.Printf("[SIGNATURE]   Timing valid: %t\n", timingValid)
 
 	if !thresholdSatisfied {
-		return nil, ValidationError{Msg: fmt.Sprintf("Threshold not satisfied: %d/%d", uniqueValidKeys, state.Threshold)}
+		// The reason carries WHY each signature failed to count, not just the
+		// arithmetic. "1/2" is indistinguishable between an institution that did
+		// not authorize this and a signature we could not resolve.
+		detail := ""
+		if resolution != nil {
+			detail = "; " + describeResolutionRefusals(resolution)
+		}
+		return nil, ValidationError{Msg: fmt.Sprintf("Threshold not satisfied: %d/%d%s",
+			uniqueValidKeys, state.Threshold, detail)}
 	}
 
 	// Create authorization result

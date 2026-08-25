@@ -874,10 +874,28 @@ func (ab *AuthorityBuilder) parseKeyPageMutation(msg map[string]interface{}) (Ke
 
 	fmt.Printf("[AUTHORITY] [MUTATION] Parsing %d operations from updateKeyPage\n", len(opArray))
 
-	// Parse operations to extract key changes
-	// For now, we track old and new key hashes
-	var oldKeys, newKeys []string
+	// Parse operations to extract entry changes.
+	//
+	// ENTRIES, not key hashes. An updateKeyPage that adds a delegate carries
+	// {"delegate": "acc://.../book2"} with no keyHash at all, so reading only
+	// keyHash made every delegation invisible to the replay - the page on chain
+	// gained an entry and the reconstructed state did not. That is how a
+	// reconstructed authority silently disagrees with the real one.
+	var oldEntries, newEntries []KeyPageEntry
 	var thresholdChange *uint64
+
+	readEntry := func(v interface{}, what string) (KeyPageEntry, bool) {
+		m, ok := v.(map[string]interface{})
+		if !ok {
+			return KeyPageEntry{}, false
+		}
+		e, err := parseKeyPageEntry(pu, m)
+		if err != nil || e.IsEmpty() {
+			return KeyPageEntry{}, false
+		}
+		fmt.Printf("[AUTHORITY] [MUTATION] %s: %s\n", what, e)
+		return e, true
+	}
 
 	for i, op := range opArray {
 		opMap, ok := op.(map[string]interface{})
@@ -891,38 +909,19 @@ func (ab *AuthorityBuilder) parseKeyPageMutation(msg map[string]interface{}) (Ke
 
 		switch strings.ToLower(opTypeStr) {
 		case "add":
-			// Adding a new key
-			entry := pu.CaseInsensitiveGet(opMap, "entry")
-			if entryMap, ok := entry.(map[string]interface{}); ok {
-				if keyHash := pu.CaseInsensitiveGet(entryMap, "keyHash"); keyHash != nil {
-					newKeys = append(newKeys, keyHash.(string))
-					fmt.Printf("[AUTHORITY] [MUTATION] Add key: %s\n", keyHash.(string)[:16])
-				}
+			if e, ok := readEntry(pu.CaseInsensitiveGet(opMap, "entry"), "Add"); ok {
+				newEntries = append(newEntries, e)
 			}
 		case "remove":
-			// Removing a key
-			entry := pu.CaseInsensitiveGet(opMap, "entry")
-			if entryMap, ok := entry.(map[string]interface{}); ok {
-				if keyHash := pu.CaseInsensitiveGet(entryMap, "keyHash"); keyHash != nil {
-					oldKeys = append(oldKeys, keyHash.(string))
-					fmt.Printf("[AUTHORITY] [MUTATION] Remove key: %s\n", keyHash.(string)[:16])
-				}
+			if e, ok := readEntry(pu.CaseInsensitiveGet(opMap, "entry"), "Remove"); ok {
+				oldEntries = append(oldEntries, e)
 			}
 		case "update":
-			// Updating/replacing a key
-			oldEntry := pu.CaseInsensitiveGet(opMap, "oldEntry")
-			newEntry := pu.CaseInsensitiveGet(opMap, "newEntry")
-			if oldEntryMap, ok := oldEntry.(map[string]interface{}); ok {
-				if keyHash := pu.CaseInsensitiveGet(oldEntryMap, "keyHash"); keyHash != nil {
-					oldKeys = append(oldKeys, keyHash.(string))
-					fmt.Printf("[AUTHORITY] [MUTATION] Update old key: %s\n", keyHash.(string)[:16])
-				}
+			if e, ok := readEntry(pu.CaseInsensitiveGet(opMap, "oldEntry"), "Update old"); ok {
+				oldEntries = append(oldEntries, e)
 			}
-			if newEntryMap, ok := newEntry.(map[string]interface{}); ok {
-				if keyHash := pu.CaseInsensitiveGet(newEntryMap, "keyHash"); keyHash != nil {
-					newKeys = append(newKeys, keyHash.(string))
-					fmt.Printf("[AUTHORITY] [MUTATION] Update new key: %s\n", keyHash.(string)[:16])
-				}
+			if e, ok := readEntry(pu.CaseInsensitiveGet(opMap, "newEntry"), "Update new"); ok {
+				newEntries = append(newEntries, e)
 			}
 		case "setthreshold":
 			threshold := pu.CaseInsensitiveGet(opMap, "threshold")
@@ -940,20 +939,23 @@ func (ab *AuthorityBuilder) parseKeyPageMutation(msg map[string]interface{}) (Ke
 	prevState := KeyPageState{
 		Version:   0, // Will be filled in by caller based on genesis + prior mutations
 		Threshold: 1, // Default, may be overridden
-		Keys:      oldKeys,
+		Entries:   oldEntries,
+		Keys:      deriveKeyHashes(oldEntries),
 	}
 
 	newState := KeyPageState{
 		Version:   0, // Will be filled in by caller (prevVersion + 1)
 		Threshold: 1, // Default, may be overridden
-		Keys:      newKeys,
+		Entries:   newEntries,
+		Keys:      deriveKeyHashes(newEntries),
 	}
 
 	if thresholdChange != nil {
 		newState.Threshold = *thresholdChange
 	}
 
-	fmt.Printf("[AUTHORITY] [MUTATION] Parsed mutation: %d old keys, %d new keys\n", len(oldKeys), len(newKeys))
+	fmt.Printf("[AUTHORITY] [MUTATION] Parsed mutation: %d removed, %d added\n",
+		len(oldEntries), len(newEntries))
 
 	return prevState, newState, nil
 }
@@ -1005,42 +1007,46 @@ func (ab *AuthorityBuilder) parseKeyPageStateFromDef(keyPageDef map[string]inter
 		return KeyPageState{}, ValidationError{Msg: "Keys is not an array"}
 	}
 
-	var keyHashes []string
-	for _, key := range keysArray {
-		if keyMap, ok := key.(map[string]interface{}); ok {
-			// Extract key hash (preferring publicKeyHash over computed hash of publicKey)
-			keyHashField := pu.CaseInsensitiveGet(keyMap, "publicKeyHash")
-			if keyHashField == nil {
-				keyHashField = pu.CaseInsensitiveGet(keyMap, "keyHash")
+	// Every entry, not just the ones that carry a key.
+	//
+	// This loop used to collect key hashes and drop anything else, so a
+	// delegated entry vanished and a page whose only entry was a delegate
+	// failed with "No valid keys found". The threshold counts ENTRIES, so
+	// dropping one does not lose a detail - it makes the arithmetic wrong in
+	// the direction that satisfies thresholds too easily.
+	var entries []KeyPageEntry
+	for i, key := range keysArray {
+		switch k := key.(type) {
+		case map[string]interface{}:
+			entry, err := parseKeyPageEntry(pu, k)
+			if err != nil {
+				return KeyPageState{}, fmt.Errorf("key page entry %d: %w", i, err)
 			}
-			if keyHashStr, ok := keyHashField.(string); ok && keyHashStr != "" {
-				// Using direct key hash from authority data
-				keyHashes = append(keyHashes, keyHashStr)
-			} else {
-				// Fallback: compute hash from publicKey if no hash fields present
-				pubkey := pu.CaseInsensitiveGet(keyMap, "publicKey")
-				if pubkeyStr, ok := pubkey.(string); ok && pubkeyStr != "" {
-					sv := SignatureVerifier{}
-					keyHash, err := sv.ComputeKeyHash(pubkeyStr)
-					if err != nil {
-						return KeyPageState{}, fmt.Errorf("failed to compute key hash: %v", err)
-					}
-					keyHashes = append(keyHashes, keyHash)
-				}
+			if entry.IsEmpty() {
+				// An entry naming neither a key nor a delegate cannot be
+				// satisfied by anything. Dropping it would make the page look
+				// like it has fewer entries than it does; refusing is the only
+				// answer that does not quietly change the authority.
+				return KeyPageState{}, ValidationError{Msg: fmt.Sprintf(
+					"key page entry %d names neither a key nor a delegate; refusing to "+
+						"evaluate a threshold over an authority we cannot read", i)}
 			}
-		} else if keyStr, ok := key.(string); ok && keyStr != "" {
-			// Direct key hash
-			keyHashes = append(keyHashes, keyStr)
+			entries = append(entries, entry)
+		case string:
+			if k != "" {
+				entries = append(entries, KeyPageEntry{KeyHash: strings.ToLower(k)})
+			}
 		}
 	}
 
-	if len(keyHashes) == 0 {
-		return KeyPageState{}, ValidationError{Msg: "No valid keys found in key page definition"}
+	if len(entries) == 0 {
+		return KeyPageState{}, ValidationError{Msg: "No valid entries found in key page definition"}
 	}
 
 	return KeyPageState{
 		Version:   versionNum,
-		Keys:      keyHashes,
+		Entries:   entries,
+		Keys:      deriveKeyHashes(entries),
 		Threshold: thresholdNum,
 	}, nil
 }
@@ -1055,26 +1061,24 @@ func (ab *AuthorityBuilder) buildFinalState(genesis GenesisEvent, mutations []Mu
 		prevVersion := state.Version
 		newVersion := prevVersion + 1
 
-		// Apply key changes from mutation operations
-		// Remove old keys and add new keys
-		newKeys := make([]string, 0, len(state.Keys))
-
-		// Keep keys that weren't removed
-		for _, existingKey := range state.Keys {
-			removed := false
-			for _, oldKey := range mutation.PreviousState.Keys {
-				if existingKey == oldKey {
-					removed = true
-					break
-				}
-			}
-			if !removed {
-				newKeys = append(newKeys, existingKey)
-			}
+		// Apply entry changes from the mutation: drop what it removed, add what
+		// it added. Entries, not key hashes - a mutation that adds a delegate
+		// changes the page's entry count and therefore what its threshold means,
+		// and replaying only key hashes leaves the reconstructed page smaller
+		// than the real one.
+		removed := make(map[string]bool, len(mutation.PreviousState.Entries))
+		for _, e := range mutation.PreviousState.EntrySet() {
+			removed[e.Identity()] = true
 		}
 
-		// Add new keys
-		newKeys = append(newKeys, mutation.NewState.Keys...)
+		before := len(state.EntrySet())
+		newEntries := make([]KeyPageEntry, 0, before)
+		for _, e := range state.EntrySet() {
+			if !removed[e.Identity()] {
+				newEntries = append(newEntries, e)
+			}
+		}
+		newEntries = append(newEntries, mutation.NewState.EntrySet()...)
 
 		// Update threshold if changed
 		newThreshold := state.Threshold
@@ -1085,11 +1089,12 @@ func (ab *AuthorityBuilder) buildFinalState(genesis GenesisEvent, mutations []Mu
 		state = KeyPageState{
 			Version:   newVersion,
 			Threshold: newThreshold,
-			Keys:      newKeys,
+			Entries:   newEntries,
+			Keys:      deriveKeyHashes(newEntries),
 		}
 
-		fmt.Printf("[AUTHORITY] Applied mutation: version %d -> %d at block %d (keys: %d -> %d)\n",
-			prevVersion, newVersion, mutation.LocalBlock, len(genesis.PageState.Keys)+len(mutation.PreviousState.Keys), len(state.Keys))
+		fmt.Printf("[AUTHORITY] Applied mutation: version %d -> %d at block %d (entries: %d -> %d)\n",
+			prevVersion, newVersion, mutation.LocalBlock, before, len(newEntries))
 	}
 
 	return state, nil

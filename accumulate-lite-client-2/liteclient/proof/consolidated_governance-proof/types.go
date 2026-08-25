@@ -7,6 +7,7 @@
 package main
 
 import (
+	"strings"
 	"time"
 
 	"github.com/certen/certen-protocol/services/validator/accumulate-lite-client-2/liteclient/proof/govreceipt"
@@ -125,9 +126,38 @@ type SignatureSetData struct {
 // KeyPageState represents key page state at a specific version
 // Direct translation of Python KeyPageState dataclass
 type KeyPageState struct {
-	Version   uint64   `json:"version"`   // Key page version
+	Version uint64 `json:"version"` // Key page version
+
+	// Entries is the page's authority: every KeySpec on it, key entries and
+	// delegated ones alike. It is what the threshold counts.
+	//
+	// Keys below is the key-hash SUBSET of this, kept because everything that
+	// already reads it keeps meaning what it meant. Entries is the authority;
+	// Keys is a view. A page whose entries are all delegates has an empty Keys
+	// and is still a perfectly good authority - which is precisely the case the
+	// old model could not represent at all. See authority_entries.go.
+	Entries []KeyPageEntry `json:"entries,omitempty"`
+
 	Keys      []string `json:"keys"`      // List of key hashes (SHA256)
 	Threshold uint64   `json:"threshold"` // Required signature threshold
+}
+
+// EntrySet returns the page's entries, reconstructing them from Keys if a state
+// was built before entries existed.
+//
+// The fallback is not a compatibility shim for its own sake: a state carrying
+// only key hashes is one whose delegate entries were never parsed, and treating
+// its key list as the whole page would silently understate the entry count and
+// let a threshold be met that the real page does not consider met.
+func (s KeyPageState) EntrySet() []KeyPageEntry {
+	if len(s.Entries) > 0 {
+		return s.Entries
+	}
+	out := make([]KeyPageEntry, 0, len(s.Keys))
+	for _, k := range s.Keys {
+		out = append(out, KeyPageEntry{KeyHash: strings.ToLower(k)})
+	}
+	return out
 }
 
 // GenesisEvent represents the syntheticCreateIdentity event

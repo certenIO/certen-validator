@@ -126,6 +126,11 @@ type captureResult struct {
 	ProtocolModule string  `json:"protocolModule"`
 	CapturedAt     string  `json:"capturedAt"`
 	Traces         []trace `json:"traces"`
+
+	// Pages is every key page the traces name, as the chain reports it. Gate 3
+	// resolves delegation paths against these rather than against the network,
+	// so the resolution tests run offline and are pinned to one observation.
+	Pages map[string]pageState `json:"pages"`
 }
 
 func capture(ctx context.Context, c *client, seeds map[string]string, raw map[string]json.RawMessage, out string) error {
@@ -155,6 +160,13 @@ func capture(ctx context.Context, c *client, seeds map[string]string, raw map[st
 		}
 		res.Traces = append(res.Traces, ts...)
 	}
+	fmt.Println("== key pages named by the corpus ==")
+	pages, err := capturePages(ctx, c, r, res.Traces)
+	if err != nil {
+		return err
+	}
+	res.Pages = pages
+
 	if err := writeJSON(out, res); err != nil {
 		return err
 	}
@@ -369,10 +381,12 @@ func buildPlans(cases map[string]caseSpec) ([]casePlan, error) {
 	})
 	plans = append(plans, casePlan{
 		Case: "H-repeat", Shape: "a delegation path that goes round the cycle twice",
-		Principal: h.ADI, Expect: "refused", RefusalKind: "cycle",
-		Why: "the path revisits pages it has already used, so counting each visit would " +
-			"let one key satisfy one page's entry more than once; Accumulate accepts the " +
-			"path because every link in it is real, which is exactly why we must not",
+		Principal: h.ADI, Expect: "valid",
+		Why: "Kermit DELIVERS this, so refusing it would be a false governance rejection - " +
+			"the failure this phase exists to remove. What it tests instead is over-counting: " +
+			"it satisfies the SAME single entry on the principal page as case H, so a longer " +
+			"path must grant no more authority than a short one. An implementation that " +
+			"credited an acceptance per hop passes H and fails here",
 		Signatures: []signaturePlan{{
 			Seed: "h1", SignerPage: hPage1,
 			Delegators: []string{hPage1, hPage2, hPage1, hPage2},

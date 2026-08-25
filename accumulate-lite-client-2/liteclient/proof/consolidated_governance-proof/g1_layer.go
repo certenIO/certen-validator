@@ -37,7 +37,15 @@ type G1Layer struct {
 func NewG1Layer(client RPCClientInterface, artifactManager *ArtifactManager, sigbytesPath string) *G1Layer {
 	g0Layer := NewG0Layer(client, artifactManager)
 	authorityBuilder := NewAuthorityBuilder(client, artifactManager)
-	signatureVerifier := NewSignatureVerifier(sigbytesPath)
+
+	// Authority resolution is wired in HERE rather than left optional at the
+	// call site. A verifier without it counts distinct keys, which is right only
+	// while every entry is a key and every signature is direct - true of all 400
+	// production proofs and false the moment governance has a delegate. Making
+	// the live G1 layer the place it is always attached means the delegated path
+	// cannot quietly fall back to the arithmetic that cannot see it.
+	signatureVerifier := NewSignatureVerifier(sigbytesPath).
+		WithResolver(&AuthorityResolver{Source: newLivePageSource(client, authorityBuilder)})
 
 	// Get enhanced cryptographic components
 	cryptographicVerifier := artifactManager.GetCryptographicVerifier()
