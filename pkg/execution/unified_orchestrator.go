@@ -2972,7 +2972,17 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 						"not offline-verifiable\n", proofArtifact.ProofID)
 				}
 
-				fmt.Printf("Created chained_proof_layers L1/L2/L3/L4 for proof_id=%s\n", proofArtifact.ProofID)
+				// L5: the external anchor binding, plus the two joins that were
+				// never written. STAGE 3.
+				//
+				// It comes after L4 for a structural reason, not a stylistic one:
+				// L5 attests to the anchoring of a govRoot that commits to L1-L4
+				// and G0-G2, so what the proof CONTAINS has to be settled before
+				// the layer attesting to it is built. It is deliberately NOT in
+				// the govRoot — it cannot be inside what it describes.
+				o.writeLayer5(ctx, proofArtifact.ProofID, req, result)
+
+				fmt.Printf("Created chained_proof_layers L1/L2/L3/L4/L5 for proof_id=%s\n", proofArtifact.ProofID)
 			}
 		} else {
 			fmt.Printf("Note: Cannot generate chained proof - missing accountURL or txHash\n")

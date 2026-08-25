@@ -66,11 +66,12 @@ func main() {
 		offline = flag.Bool("offline", true, "refuse all outbound network access during verification")
 		verbose = flag.Bool("v", false, "print the reassembled proof's layer summary")
 		govern  = flag.Bool("governance", false, "also recompute the stored G0/G1/G2 receipts from level_json")
+		l5      = flag.Bool("l5", false, "also recompute the stored external-anchor binding (leaf -> batch root)")
 	)
 	flag.Parse()
 
 	if *proofID == "" || *dsn == "" {
-		fmt.Fprintln(os.Stderr, "usage: proofverify --proof-id <uuid> --db <dsn> [--offline] [--governance] [-v]")
+		fmt.Fprintln(os.Stderr, "usage: proofverify --proof-id <uuid> --db <dsn> [--offline] [--governance] [--l5] [-v]")
 		os.Exit(exitUsage)
 	}
 	id, err := uuid.Parse(*proofID)
@@ -119,10 +120,20 @@ func main() {
 			fmt.Printf("  L4  %s signedHash %s…\n", cp.Layer4BVN.Partition, short(cp.Layer4BVN.SignedHash))
 			fmt.Printf("  L4  %s signedHash %s…\n", cp.Layer4DN.Partition, short(cp.Layer4DN.SignedHash))
 		}
+		// Each extra check can only WEAKEN the verdict, never strengthen it, and
+		// the weakest of the three is what gets reported. L1-L4 verifying says
+		// nothing about whether the governance receipts or the anchor binding
+		// were stored, and reporting the strongest result would put a weaker
+		// claim under a stronger one's name — the failure mode this tool exists
+		// to prevent.
+		code := exitVerified
 		if *govern {
-			os.Exit(reportGovernance(ctx, store, id, *verbose))
+			code = worseExit(code, reportGovernance(ctx, store, id, *verbose))
 		}
-		os.Exit(exitVerified)
+		if *l5 {
+			code = worseExit(code, reportLayer5(ctx, store, id))
+		}
+		os.Exit(code)
 
 	case errors.Is(err, certenproof.ErrSummaryOnly), errors.Is(err, certenproof.ErrNoStoredProof):
 		// Not a failure. The distinction is the whole point of this tool.
@@ -201,6 +212,73 @@ func reportGovernance(ctx context.Context, store *certenproof.PostgresProofStora
 		fmt.Printf("  %v\n", err)
 		fmt.Printf("  The receipt evidence IS present and does not recompute to its own anchor.\n")
 		fmt.Printf("  This is the one outcome that means something is wrong.\n")
+		return exitFailed
+	}
+}
+
+// worseExit returns the weaker of two verdicts: failed beats summary-only beats
+// verified. A tool that reported the best of several checks would let one green
+// answer hide two absent ones.
+func worseExit(a, b int) int {
+	rank := map[int]int{exitVerified: 0, exitSummaryOnly: 1, exitFailed: 2}
+	if rank[b] > rank[a] {
+		return b
+	}
+	return a
+}
+
+// reportLayer5 recomputes the stored external-anchor binding and returns the
+// exit code for it.
+//
+// The two halves are reported SEPARATELY and deliberately:
+//
+//	leaf -> batchRoot   recomputed here, offline, network disabled.
+//	batchRoot -> chain  printed as COORDINATES. Not checked, and not claimed.
+//
+// "L1-L4 verified, L5 absent" is summary-only, not a failure — every proof
+// written before Stage 3 is in that state, and so is every proof that settled
+// with no observable external transaction. Nothing about them is known to be
+// wrong.
+func reportLayer5(ctx context.Context, store *certenproof.PostgresProofStorage, id uuid.UUID) int {
+	l5, err := certenproof.VerifyStoredLayer5(ctx, store, id)
+
+	switch {
+	case err == nil:
+		if len(l5.Path) == 0 {
+			fmt.Printf("  L5  leaf IS the batch root (one-member batch) — accepted only because " +
+				"leafHash == batchRoot\n")
+		} else {
+			fmt.Printf("  L5  leaf %s… recomputed to batch root %s… over %d step(s), OFFLINE\n",
+				short(l5.LeafHash), short(l5.BatchRoot), len(l5.Path))
+		}
+		fmt.Printf("  L5  external coordinates: tx %s at block %d on %s (chainId %d)\n",
+			l5.AnchorTx, l5.BlockNumber, l5.Network, l5.ChainID)
+		fmt.Printf("  L5  NOT verified offline: that the transaction above exists and contains this\n")
+		fmt.Printf("      batch root. That is an ONLINE check; proving it offline needs a light\n")
+		fmt.Printf("      client, which is deliberately out of scope.\n")
+		fmt.Printf("  L5  does NOT establish that the Accumulate validator set which signed L4 was\n")
+		fmt.Printf("      the legitimate one. Nothing in this proof does.\n")
+		return exitVerified
+
+	case errors.Is(err, certenproof.ErrNoLayer5):
+		// A DISTINCT message, not the L1-L4 one: "L1-L4 verified, L5 absent" is
+		// its own state and an operator has to be able to tell it from a proof
+		// whose quorum evidence is missing.
+		fmt.Printf("SUMMARY-ONLY (L5)  %s\n", id)
+		fmt.Printf("  %v\n", err)
+		fmt.Printf("  L1-L4 verified. This proof is not bound to a publication — either it predates\n")
+		fmt.Printf("  the external anchor binding, or it settled with no observable external\n")
+		fmt.Printf("  transaction. Nothing about it is known to be wrong.\n")
+		return exitSummaryOnly
+
+	default:
+		fmt.Printf("FAILED (L5)  %s\n", id)
+		fmt.Printf("  %v\n", err)
+		if l5 != nil {
+			fmt.Printf("  claimed: %s\n", l5.ExternalClaim())
+		}
+		fmt.Printf("  The binding IS present and the leaf does not recompute to the batch root it\n")
+		fmt.Printf("  names. This proof is not in the batch it claims to be in.\n")
 		return exitFailed
 	}
 }
