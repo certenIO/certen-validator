@@ -80,18 +80,18 @@ func (r Rational) Threshold(keyCount int) (uint64, error) {
 // It fails closed at every step. Nothing defaults to valid: the function
 // returns an error unless every requirement below is met.
 //
-//	 1. SequencedMessage decodes to a SequencedMessage wrapping a transaction
-//	    whose body is a partition anchor.
-//	 2. seq.Hash() == SignedHash          (signatures are bound to THIS object)
-//	 3. txn.Hash() == AnchorTxHash
-//	 4. Routing and the anchor body's MinorBlockIndex / RootChainAnchor /
-//	    StateTreeAnchor match the restated fields, so StateTreeAnchor is bound
-//	    to what the quorum signed rather than merely asserted beside it.
-//	 5. Partition is the anchor's source partition.
-//	 6. Threshold == AcceptThreshold.Threshold(#validators active on Partition).
-//	 7. Every signature verifies over the digest of SignedHash.
-//	 8. Every signer is in ValidatorSet and active on Partition.
-//	 9. Distinct verified signers >= Threshold.
+//  1. SequencedMessage decodes to a SequencedMessage wrapping a transaction
+//     whose body is a partition anchor.
+//  2. seq.Hash() == SignedHash          (signatures are bound to THIS object)
+//  3. txn.Hash() == AnchorTxHash
+//  4. Routing and the anchor body's MinorBlockIndex / RootChainAnchor /
+//     StateTreeAnchor match the restated fields, so StateTreeAnchor is bound
+//     to what the quorum signed rather than merely asserted beside it.
+//  5. Partition is the anchor's source partition.
+//  6. Threshold == AcceptThreshold.Threshold(#validators active on Partition).
+//  7. Every signature verifies over the digest of SignedHash.
+//  8. Every signer is in ValidatorSet and active on Partition.
+//  9. Distinct verified signers >= Threshold.
 func (l4 *Layer4) VerifyOffline() error {
 	if l4 == nil {
 		return fmt.Errorf("layer4: nil leg (L4 is required; a missing leg is not a passing leg)")

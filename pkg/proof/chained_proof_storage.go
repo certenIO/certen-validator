@@ -30,6 +30,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 
 	lcproof "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof"
 	chained_proof "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/working-proof_do_not_edit"
@@ -122,6 +124,14 @@ func ChainedProofFromStorage(ctx context.Context, store ProofStorageReader, proo
 
 	// --- L1-L3, from the rows -------------------------------------------
 	var haveL1, haveL2, haveL3 bool
+
+	// bvnLegs collects every non-Directory layer-4 row by partition, and
+	// additionalLegs is the L1/L2 of every signer partition beyond the
+	// principal's, which rides on the L1 row. They are matched to each other
+	// after the loop, and a leg named by one with no counterpart in the other is
+	// a hard failure - never a truncation.
+	bvnLegs := map[string]*chained_proof.Layer4{}
+	var additionalLegs []chained_proof.PartitionLeg
 	for _, row := range rows {
 		if len(row.LayerJSON) == 0 {
 			continue
@@ -149,6 +159,11 @@ func ChainedProofFromStorage(ctx context.Context, store ProofStorageReader, proo
 				}
 				haveL1 = true
 			}
+			if raw, ok := obj["additionalLegs"]; ok {
+				if err := json.Unmarshal(raw, &additionalLegs); err != nil {
+					return nil, fmt.Errorf("proof %s: additionalLegs does not decode: %w", proofID, err)
+				}
+			}
 		case 2:
 			if raw, ok := obj["layer2"]; ok {
 				if err := json.Unmarshal(raw, &cp.Layer2); err != nil {
@@ -174,9 +189,18 @@ func ChainedProofFromStorage(ctx context.Context, store ProofStorageReader, proo
 			// is what the quorum signed and what the verifier checks against.
 			if leg.Partition == "Directory" {
 				cp.Layer4DN = leg
-			} else {
-				cp.Layer4BVN = leg
+				continue
 			}
+			// Collected rather than assigned. A proof whose signers span two
+			// BVNs has a leg per partition, and assigning each in turn to
+			// Layer4BVN would keep the last one and silently drop the rest -
+			// producing a proof that verifies while missing evidence the
+			// summary names.
+			if _, dup := bvnLegs[leg.Partition]; dup {
+				return nil, fmt.Errorf("proof %s: two stored layer-4 rows claim partition %s",
+					proofID, leg.Partition)
+			}
+			bvnLegs[leg.Partition] = leg
 		}
 	}
 
@@ -194,6 +218,17 @@ func ChainedProofFromStorage(ctx context.Context, store ProofStorageReader, proo
 				cp.Layer4DN = blob.CompleteProof.Layer4DN
 			}
 		}
+	}
+
+	// --- match the BVN legs to the partitions that claim them ------------
+	//
+	// This is where a multi-partition proof either reassembles completely or
+	// fails. It must never truncate to what happens to be present: a proof
+	// silently missing a leg still verifies, because the verifier only sees the
+	// legs it is given, and the result is an object that passes while the
+	// evidence for one of its partitions is gone.
+	if err := attachStoredLegs(proofID, cp, bvnLegs, additionalLegs); err != nil {
+		return nil, err
 	}
 
 	// --- what is missing, said precisely --------------------------------
@@ -287,4 +322,81 @@ func (s *PostgresProofStorage) ProofBlob(ctx context.Context, proofID uuid.UUID)
 		return nil, err
 	}
 	return json.RawMessage(raw), nil
+}
+
+// attachStoredLegs matches the stored layer-4 rows to the partitions that claim
+// them, and refuses anything it cannot account for.
+//
+// The runbook is explicit about the failure this prevents (P7.9b): reassembly
+// must "fail closed if the summary names a leg that has no stored row — never
+// truncate to what happens to be present". A truncated proof is worse than a
+// missing one, because it VERIFIES: the verifier checks the legs it is handed,
+// so a proof quietly missing its second partition passes while the evidence for
+// that partition is gone.
+//
+// Both directions are checked. A partition named by additionalLegs with no
+// layer-4 row is missing evidence. A layer-4 row whose partition nothing claims
+// is evidence for something this proof does not say it covers, which means the
+// stored record disagrees with itself.
+func attachStoredLegs(proofID uuid.UUID, cp *chained_proof.ChainedProof,
+	bvnLegs map[string]*chained_proof.Layer4, additional []chained_proof.PartitionLeg) error {
+
+	if len(bvnLegs) == 0 {
+		return nil // nothing stored; the caller reports it as summary-only
+	}
+
+	// The principal's leg is the one whose partition the proof's own input
+	// names. Falling back to "the only one" keeps every single-partition proof
+	// ever written reading exactly as before, including those whose input.BVN
+	// is spelled in a different case than the leg's partition.
+	principal := ""
+	for part := range bvnLegs {
+		if strings.EqualFold(part, cp.Input.BVN) {
+			principal = part
+			break
+		}
+	}
+	if principal == "" && len(bvnLegs) == 1 && len(additional) == 0 {
+		for part := range bvnLegs {
+			principal = part
+		}
+	}
+	if principal == "" {
+		parts := make([]string, 0, len(bvnLegs))
+		for p := range bvnLegs {
+			parts = append(parts, p)
+		}
+		sort.Strings(parts)
+		return fmt.Errorf("proof %s: no stored layer-4 row is for the principal's partition %q "+
+			"(stored: %v); the proof's own input and its stored evidence disagree about which "+
+			"partition it is anchored on", proofID, cp.Input.BVN, parts)
+	}
+
+	cp.Layer4BVN = bvnLegs[principal]
+	delete(bvnLegs, principal)
+
+	// Every additional partition must have its row, and vice versa.
+	for i := range additional {
+		leg, ok := bvnLegs[additional[i].Partition]
+		if !ok {
+			return fmt.Errorf("proof %s: partition %s is recorded as a signer partition but has "+
+				"no stored layer-4 row; refusing to return a proof whose evidence for that "+
+				"partition is absent: %w", proofID, additional[i].Partition, ErrSummaryOnly)
+		}
+		additional[i].Layer4BVN = leg
+		delete(bvnLegs, additional[i].Partition)
+	}
+	if len(bvnLegs) > 0 {
+		orphans := make([]string, 0, len(bvnLegs))
+		for p := range bvnLegs {
+			orphans = append(orphans, p)
+		}
+		sort.Strings(orphans)
+		return fmt.Errorf("proof %s: stored layer-4 row(s) for partition(s) %v that this proof "+
+			"does not record as signer partitions; the stored record disagrees with itself",
+			proofID, orphans)
+	}
+
+	cp.AdditionalLegs = additional
+	return nil
 }

@@ -120,25 +120,85 @@ func (pv *ProofVerifier) Verify(ctx context.Context, p *ChainedProof) error {
 	if p.Layer4DN == nil {
 		return fmt.Errorf("L4 DN leg missing: a proof without a signed DN anchor is not proof-grade")
 	}
-	if err := p.Layer4BVN.VerifyOffline(); err != nil {
-		return fmt.Errorf("L4 BVN leg invalid: %w", err)
-	}
 	if err := p.Layer4DN.VerifyOffline(); err != nil {
 		return fmt.Errorf("L4 DN leg invalid: %w", err)
 	}
 
-	// L4 must bind the layer beneath it, or it proves something unrelated.
-	if !strings.EqualFold(p.Layer4BVN.StateTreeAnchor, p.Layer2.BVNStateTreeAnchor) {
-		return fmt.Errorf("L4 BVN bind failed: layer4Bvn.stateTreeAnchor=%s != layer2.bvnStateTreeAnchor=%s",
-			p.Layer4BVN.StateTreeAnchor, p.Layer2.BVNStateTreeAnchor)
-	}
-	if !strings.EqualFold(p.Layer4BVN.RootChainAnchor, p.Layer1.BVNRootChainAnchor) {
-		return fmt.Errorf("L4 BVN bind failed: layer4Bvn.rootChainAnchor=%s != layer1.bvnRootChainAnchor=%s",
-			p.Layer4BVN.RootChainAnchor, p.Layer1.BVNRootChainAnchor)
-	}
-	if p.Layer4BVN.MinorBlockIndex != p.Layer1.BVNMinorBlockIndex {
-		return fmt.Errorf("L4 BVN bind failed: layer4Bvn.minorBlockIndex=%d != layer1.bvnMinorBlockIndex=%d",
-			p.Layer4BVN.MinorBlockIndex, p.Layer1.BVNMinorBlockIndex)
+	// EVERY partition leg, not just the principal's.
+	//
+	// A proof whose signers span two BVNs carries a leg for each, and a verifier
+	// that checked only the first would accept a proof whose second leg is
+	// forged, absent or grafted from another proof. The principal's leg goes
+	// through the SAME function as the others: two code paths for "the first
+	// one" and "the rest" is how the first one ends up with a check the rest do
+	// not have.
+	legs := p.Legs()
+	seenPartition := map[string]bool{}
+	for i, leg := range legs {
+		if err := verifyLegBinding(leg); err != nil {
+			return fmt.Errorf("partition leg %d of %d: %w", i+1, len(legs), err)
+		}
+		key := strings.ToLower(leg.Partition)
+		if seenPartition[key] {
+			return fmt.Errorf("two legs claim partition %s; a proof carries at most one leg "+
+				"per partition, and two would be counted twice by anything walking them",
+				leg.Partition)
+		}
+		seenPartition[key] = true
+
+		// Each leg's receipts must recompute, exactly as the principal's do.
+		if err := rv.ValidateIntegrity(leg.Layer1.Receipt); err != nil {
+			return fmt.Errorf("partition %s: L1 receipt invalid: %w", leg.Partition, err)
+		}
+		if err := rv.ValidateIntegrity(leg.Layer2.RootReceipt); err != nil {
+			return fmt.Errorf("partition %s: L2 root receipt invalid: %w", leg.Partition, err)
+		}
+		if err := rv.ValidateIntegrity(leg.Layer2.BptReceipt); err != nil {
+			return fmt.Errorf("partition %s: L2 bpt receipt invalid: %w", leg.Partition, err)
+		}
+		if leg.Layer2.RootReceipt.Anchor != leg.Layer2.BptReceipt.Anchor {
+			return fmt.Errorf("partition %s: L2 pairing invariant failed: root.anchor != bpt.anchor",
+				leg.Partition)
+		}
+		if leg.Layer1.BVNMinorBlockIndex != leg.Layer1.Receipt.LocalBlock {
+			return fmt.Errorf("partition %s: L1 invariant failed: bvnMinorBlockIndex != receipt.localBlock",
+				leg.Partition)
+		}
+		if lowerHex(leg.Layer1.BVNRootChainAnchor) != lowerHex(leg.Layer1.Receipt.Anchor) {
+			return fmt.Errorf("partition %s: L1 invariant failed: bvnRootChainAnchor != receipt.anchor",
+				leg.Partition)
+		}
+
+		// Every leg must reach the SAME Directory state, or the proof is several
+		// unrelated claims stapled together.
+		//
+		// L3 proves one DN root chain anchor into one DN state tree. A leg whose
+		// DN anchor is that same root reaches it directly - which is the case for
+		// every single-partition proof, and for any two partitions whose anchors
+		// landed in the same DN block.
+		//
+		// A leg anchored at an EARLIER DN block does not reach it directly. Its
+		// DN root is a real ancestor of the proof's DN root on the DN root chain,
+		// so a receipt from one to the other exists and would complete the
+		// chain - but this proof does not carry one, and a missing link is not a
+		// link. Refusing with the reason named is the only honest option: the
+		// alternative is accepting a leg whose path to the proven Directory state
+		// is asserted rather than shown.
+		if !strings.EqualFold(leg.Layer2.DNRootChainAnchor, p.Layer2.DNRootChainAnchor) {
+			if leg.Layer2.DNMinorBlockIndex > p.Layer2.DNMinorBlockIndex {
+				return fmt.Errorf("partition %s anchors into DN block %d, LATER than the DN "+
+					"block %d this proof's L3 proves - a leg cannot be anchored after the "+
+					"Directory state that is supposed to contain it",
+					leg.Partition, leg.Layer2.DNMinorBlockIndex, p.Layer2.DNMinorBlockIndex)
+			}
+			return fmt.Errorf("partition %s anchors into DN block %d and witnesses DN root %s, "+
+				"while this proof's L3 proves DN root %s at block %d. The earlier root is an "+
+				"ancestor of the later one on the DN root chain, so a receipt binding them "+
+				"exists - but this proof does not carry it, and this leg's path to the proven "+
+				"Directory state is therefore asserted rather than shown",
+				leg.Partition, leg.Layer2.DNMinorBlockIndex, leg.Layer2.DNRootChainAnchor,
+				p.Layer2.DNRootChainAnchor, p.Layer2.DNMinorBlockIndex)
+		}
 	}
 
 	if !strings.EqualFold(p.Layer4DN.StateTreeAnchor, p.Layer3.DNStateTreeAnchor) {

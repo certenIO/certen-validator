@@ -27,17 +27,17 @@ import (
 //
 // Locating the delivered anchor is O(1) and self-verifying:
 //
-//	 1. On the DESTINATION anchor pool, the chain anchor(<source>)-root holds
-//	    the source's root chain anchors. Its index for a given root anchor is
-//	    the source's outbound sequence index. L2 and L3 already compute this
-//	    index, so no search is needed.
-//	 2. On the SOURCE anchor pool, chain anchor-sequence at that index holds
-//	    the anchor transaction as produced - with a nil principal.
-//	 3. Re-principalling that transaction to the destination pool and hashing
-//	    it yields the delivered transaction's hash. (Verified live: the two
-//	    copies differ only in the header principal.)
-//	 4. Querying the destination pool's `main` chain BY ENTRY with that hash
-//	    returns the delivered anchor and its signature set.
+//  1. On the DESTINATION anchor pool, the chain anchor(<source>)-root holds
+//     the source's root chain anchors. Its index for a given root anchor is
+//     the source's outbound sequence index. L2 and L3 already compute this
+//     index, so no search is needed.
+//  2. On the SOURCE anchor pool, chain anchor-sequence at that index holds
+//     the anchor transaction as produced - with a nil principal.
+//  3. Re-principalling that transaction to the destination pool and hashing
+//     it yields the delivered transaction's hash. (Verified live: the two
+//     copies differ only in the header principal.)
+//  4. Querying the destination pool's `main` chain BY ENTRY with that hash
+//     returns the delivered anchor and its signature set.
 //
 // Every derived value is checked against the anchor body before it is stored,
 // so a wrong index cannot silently produce a wrong-but-well-formed leg.

@@ -30,6 +30,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	chained_proof "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/working-proof_do_not_edit"
 	"github.com/certen/independant-validator/pkg/database"
@@ -87,25 +88,55 @@ func BuildLayer4Rows(proofID uuid.UUID, cp *chained_proof.ChainedProof) ([]*data
 			cp.Layer4BVN != nil, cp.Layer4DN != nil)
 	}
 
-	bvnRow, err := buildLayer4Row(proofID, Layer4BVNRowName, cp.Layer4BVN)
-	if err != nil {
-		return nil, err
+	// N + 1 rows: one per signer partition, plus the Directory.
+	//
+	// Governance can span partitions, so a proof may carry a BVN leg for each
+	// partition that signed. Writing only the principal's would leave the stored
+	// proof unable to reassemble the others, and ChainedProofFromStorage would
+	// then produce a proof missing a leg the summary names — a record that reads
+	// as evidence and cannot be checked.
+	//
+	// The row NAME carries the partition for every leg past the first, because
+	// (layer_number, layer_name) is how rows are ordered and read back, and two
+	// rows sharing a name would be indistinguishable.
+	legs := cp.Legs()
+	rows := make([]*database.NewChainedProofLayer, 0, len(legs)+1)
+	seen := map[string]bool{}
+	for i, leg := range legs {
+		if leg.Layer4BVN == nil {
+			return nil, fmt.Errorf("layer4: partition %s has no signed anchor; refusing to store "+
+				"a proof whose leg cannot be verified", leg.Partition)
+		}
+		if seen[leg.Partition] {
+			return nil, fmt.Errorf("layer4: two legs claim partition %s", leg.Partition)
+		}
+		seen[leg.Partition] = true
+
+		name := Layer4BVNRowName
+		if i > 0 || len(legs) > 1 {
+			name = fmt.Sprintf("%s (%s)", Layer4BVNRowName, leg.Partition)
+		}
+		row, err := buildLayer4Row(proofID, name, leg.Layer4BVN)
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, row)
 	}
+
 	dnRow, err := buildLayer4Row(proofID, Layer4DNRowName, cp.Layer4DN)
 	if err != nil {
 		return nil, err
 	}
 
-	// The two legs must come from DIFFERENT signing partitions. If they did
-	// not, one leg is redundant and the BVN->DN hop is unwitnessed — the
-	// verifier rejects that, and there is no reason to store it as though it
-	// were evidence.
-	if cp.Layer4BVN.Partition == cp.Layer4DN.Partition {
-		return nil, fmt.Errorf("layer4: both legs are signed by %q; the BVN->DN hop is not witnessed",
-			cp.Layer4BVN.Partition)
+	// No BVN leg may be signed by the Directory. If one were, that hop is
+	// unwitnessed — the verifier rejects it, and there is no reason to store it
+	// as though it were evidence.
+	if seen[cp.Layer4DN.Partition] {
+		return nil, fmt.Errorf("layer4: a BVN leg is signed by %q, the same partition as the DN leg; "+
+			"the BVN->DN hop is not witnessed", cp.Layer4DN.Partition)
 	}
 
-	return []*database.NewChainedProofLayer{bvnRow, dnRow}, nil
+	return append(rows, dnRow), nil
 }
 
 func buildLayer4Row(proofID uuid.UUID, name string, leg *chained_proof.Layer4) (*database.NewChainedProofLayer, error) {
@@ -161,10 +192,17 @@ func WriteLayer4Rows(ctx context.Context, repo layer4RowWriter, proofID uuid.UUI
 			return fmt.Errorf("write layer-4 row %q: %w", row.LayerName, err)
 		}
 	}
-	logf("✅ [L4-PERSIST] proof %s: stored L4 quorum evidence — %s (%d sigs / threshold %d), %s (%d sigs / threshold %d)",
-		proofID,
-		cp.Layer4BVN.Partition, len(cp.Layer4BVN.Signatures), cp.Layer4BVN.Threshold,
-		cp.Layer4DN.Partition, len(cp.Layer4DN.Signatures), cp.Layer4DN.Threshold)
+	parts := make([]string, 0, len(rows))
+	for _, leg := range cp.Legs() {
+		if leg.Layer4BVN != nil {
+			parts = append(parts, fmt.Sprintf("%s (%d sigs / threshold %d)",
+				leg.Layer4BVN.Partition, len(leg.Layer4BVN.Signatures), leg.Layer4BVN.Threshold))
+		}
+	}
+	parts = append(parts, fmt.Sprintf("%s (%d sigs / threshold %d)",
+		cp.Layer4DN.Partition, len(cp.Layer4DN.Signatures), cp.Layer4DN.Threshold))
+	logf("✅ [L4-PERSIST] proof %s: stored L4 quorum evidence over %d leg(s) — %s",
+		proofID, len(rows), strings.Join(parts, ", "))
 	return nil
 }
 
@@ -223,6 +261,12 @@ const (
 	CanonicalLayer1Key = "layer1"
 	CanonicalLayer2Key = "layer2"
 	CanonicalLayer3Key = "layer3"
+
+	// CanonicalAdditionalLegsKey carries the L1/L2 of every signer partition
+	// beyond the principal's. It rides on the L1 row because the layer rows are
+	// keyed by layer, so there is exactly one L1 row however many partitions
+	// signed. The legs' L4 evidence is NOT here - each has its own layer-4 row.
+	CanonicalAdditionalLegsKey = "additionalLegs"
 )
 
 // WithCanonicalL1 / L2 / L3 add the authoritative layer object to a row's
@@ -237,7 +281,25 @@ func WithCanonicalL1(layerJSON json.RawMessage, cp *chained_proof.ChainedProof) 
 	// The input travels with L1 because layer1.leaf must equal input.txHash,
 	// and a verifier that cannot see the input cannot check that.
 	layerJSON = WithCanonicalLayer(layerJSON, CanonicalInputKey, cp.Input)
-	return WithCanonicalLayer(layerJSON, CanonicalLayer1Key, cp.Layer1)
+	layerJSON = WithCanonicalLayer(layerJSON, CanonicalLayer1Key, cp.Layer1)
+
+	// Additional signer partitions travel here too, because their L1 and L2 have
+	// nowhere else to go: the layer rows are keyed by LAYER, so there is one L1
+	// row and one L2 row however many partitions signed.
+	//
+	// Their L4 legs are stripped first. Each of those has its own layer-4 row,
+	// and one leg stored twice is two things that can disagree - at which point
+	// a reader has no way to say which is the evidence. Reassembly matches them
+	// back by partition and FAILS CLOSED if a leg named here has no row.
+	if len(cp.AdditionalLegs) > 0 {
+		stripped := make([]chained_proof.PartitionLeg, 0, len(cp.AdditionalLegs))
+		for _, leg := range cp.AdditionalLegs {
+			leg.Layer4BVN = nil
+			stripped = append(stripped, leg)
+		}
+		layerJSON = WithCanonicalLayer(layerJSON, CanonicalAdditionalLegsKey, stripped)
+	}
+	return layerJSON
 }
 
 func WithCanonicalL2(layerJSON json.RawMessage, cp *chained_proof.ChainedProof) json.RawMessage {

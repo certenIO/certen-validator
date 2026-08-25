@@ -55,8 +55,8 @@ func (b *Layer2Builder) Build(ctx context.Context, bvn string, l1 Layer1) (Layer
 	rootEntry, _ := hex.DecodeString(rootEntryHex)
 
 	qRoot := &v3.ChainQuery{
-		Name: rootChain,
-		Entry: rootEntry,
+		Name:           rootChain,
+		Entry:          rootEntry,
 		IncludeReceipt: &v3.ReceiptOptions{ForAny: true},
 	}
 	respRoot, err := b.Client.Query(ctx, dnAnchors, qRoot)
@@ -112,8 +112,8 @@ func (b *Layer2Builder) Build(ctx context.Context, bvn string, l1 Layer1) (Layer
 	// L2.1: anchor(<bvn>)-bpt[index=dnIndex]
 	bptChain := fmt.Sprintf("anchor(%s)-bpt", bvn)
 	qBpt := &v3.ChainQuery{
-		Name: bptChain,
-		Index: &dnIndex,
+		Name:           bptChain,
+		Index:          &dnIndex,
 		IncludeReceipt: &v3.ReceiptOptions{ForAny: true},
 	}
 	respBpt, err := b.Client.Query(ctx, dnAnchors, qBpt)
@@ -183,11 +183,11 @@ func (b *Layer2Builder) Build(ctx context.Context, bvn string, l1 Layer1) (Layer
 	}
 
 	return Layer2{
-		DNIndex:           dnIndex,
-		DNMinorBlockIndex: dnMBI,
-		DNRootChainAnchor: dnRootChainAnchorHex,
+		DNIndex:            dnIndex,
+		DNMinorBlockIndex:  dnMBI,
+		DNRootChainAnchor:  dnRootChainAnchorHex,
 		BVNStateTreeAnchor: bvnStateTreeAnchorHex,
-		RootReceipt:       rootReceipt,
-		BptReceipt:        bptReceipt,
+		RootReceipt:        rootReceipt,
+		BptReceipt:         bptReceipt,
 	}, nil
 }

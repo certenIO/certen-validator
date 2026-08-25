@@ -19,8 +19,8 @@ import (
 
 // Layer1Builder implements L1: account chainEntry inclusion -> BVN rootChainAnchor witness.
 type Layer1Builder struct {
-	Client   *jsonrpc.Client
-	Debug    bool
+	Client    *jsonrpc.Client
+	Debug     bool
 	Artifacts map[string][]byte // optional (may be nil)
 }
 
@@ -56,8 +56,8 @@ func (b *Layer1Builder) Build(ctx context.Context, account string, txHashHex str
 
 	// Chain query by entry (fail-closed uniqueness enforced in extraction).
 	q := &v3.ChainQuery{
-		Name: "main",
-		Entry: leafBytes,
+		Name:           "main",
+		Entry:          leafBytes,
 		IncludeReceipt: &v3.ReceiptOptions{ForAny: true},
 	}
 

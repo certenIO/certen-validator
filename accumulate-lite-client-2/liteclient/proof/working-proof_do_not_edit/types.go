@@ -39,24 +39,40 @@ type ChainedProof struct {
 	Layer4BVN *Layer4 `json:"layer4Bvn,omitempty"`
 	Layer4DN  *Layer4 `json:"layer4Dn,omitempty"`
 
+	// AdditionalLegs carries a leg per signer partition BEYOND the principal's.
+	//
+	// Governance can span partitions: a delegated signer may live on a different
+	// BVN than the principal, and each distinct signer partition needs its own
+	// L1, L2 and L4-BVN. L3 and L4-DN stay single - there is one Directory.
+	//
+	// omitempty is load-bearing. A single-partition proof - which is every proof
+	// on record - marshals with this field ABSENT, so its bytes are unchanged
+	// and every stored proof and testdata fixture still reads. See
+	// partition_legs.go for why the shape is this rather than a list.
+	//
+	// Read this through Legs(), never directly: Legs() presents the principal's
+	// leg and these as one canonically ordered list, and nothing downstream
+	// should care which leg was written first.
+	AdditionalLegs []PartitionLeg `json:"additionalLegs,omitempty"`
+
 	// Optional artifacts (marshaled JSON of query responses) for audit trails.
 	Artifacts map[string][]byte `json:"artifacts,omitempty"`
 }
 
 // Layer1 implements L1: chain entry inclusion -> BVN rootChainAnchor witness.
 type Layer1 struct {
-	TxChainIndex       uint64 `json:"txChainIndex"`
-	BVNMinorBlockIndex uint64 `json:"bvnMinorBlockIndex"`
-	BVNRootChainAnchor string `json:"bvnRootChainAnchor"` // hex32
-	Leaf               string `json:"leaf"`               // hex32 (txHash)
+	TxChainIndex       uint64  `json:"txChainIndex"`
+	BVNMinorBlockIndex uint64  `json:"bvnMinorBlockIndex"`
+	BVNRootChainAnchor string  `json:"bvnRootChainAnchor"` // hex32
+	Leaf               string  `json:"leaf"`               // hex32 (txHash)
 	Receipt            Receipt `json:"receipt"`
 }
 
 // Layer2 implements L2: BVN rootChainAnchor -> DN anchor pair -> BVN stateTreeAnchor.
 type Layer2 struct {
-	DNIndex          uint64 `json:"dnIndex"`
-	DNMinorBlockIndex uint64 `json:"dnMinorBlockIndex"` // DN_MBI (anchor-recording MBI)
-	DNRootChainAnchor string `json:"dnRootChainAnchor"` // hex32 (witness root)
+	DNIndex            uint64 `json:"dnIndex"`
+	DNMinorBlockIndex  uint64 `json:"dnMinorBlockIndex"`  // DN_MBI (anchor-recording MBI)
+	DNRootChainAnchor  string `json:"dnRootChainAnchor"`  // hex32 (witness root)
 	BVNStateTreeAnchor string `json:"bvnStateTreeAnchor"` // hex32 (from anchor(bvn)-bpt[IDX].entry)
 
 	RootReceipt Receipt `json:"rootReceipt"`
@@ -65,11 +81,11 @@ type Layer2 struct {
 
 // Layer3 implements L3: DN rootChainAnchor -> DN stateTreeAnchor via DN self index oracle.
 type Layer3 struct {
-	DNRootChainIndex                    uint64 `json:"dnRootChainIndex"`
-	DNAnchorMinorBlockIndex             uint64 `json:"dnAnchorMinorBlockIndex"` // = Layer2.DNMinorBlockIndex (DN_MBI)
-	DNConsensusHeight                   uint64 `json:"dnConsensusHeight"`       // = DN_MBI + 1
+	DNRootChainIndex                      uint64 `json:"dnRootChainIndex"`
+	DNAnchorMinorBlockIndex               uint64 `json:"dnAnchorMinorBlockIndex"`               // = Layer2.DNMinorBlockIndex (DN_MBI)
+	DNConsensusHeight                     uint64 `json:"dnConsensusHeight"`                     // = DN_MBI + 1
 	DNSelfAnchorRecordedAtMinorBlockIndex uint64 `json:"dnSelfAnchorRecordedAtMinorBlockIndex"` // DN_FINAL_MBI
-	DNStateTreeAnchor                   string `json:"dnStateTreeAnchor"`       // hex32 (from anchor(directory)-bpt[index].entry)
+	DNStateTreeAnchor                     string `json:"dnStateTreeAnchor"`                     // hex32 (from anchor(directory)-bpt[index].entry)
 
 	RootReceipt Receipt `json:"rootReceipt"`
 	BptReceipt  Receipt `json:"bptReceipt"`

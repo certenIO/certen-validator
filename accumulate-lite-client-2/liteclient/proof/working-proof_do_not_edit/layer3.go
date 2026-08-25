@@ -31,10 +31,10 @@ func NewLayer3Builder(client *jsonrpc.Client, debug bool) *Layer3Builder {
 // Build constructs Layer3 per spec 2.4 + 2.5.
 //
 // Steps (normative):
-// - L3.0: query anchor(directory)-root by entry=dnRootChainAnchor -> dnRootChainIndex, DN_FINAL_MBI
-//         require DN_FINAL_MBI >= DN_MBI
-// - L3.0b: query anchor(directory)-bpt[index=dnRootChainIndex] -> dnStateTreeAnchor
-//          enforce pairing invariants against L3.0 receipts
+//   - L3.0: query anchor(directory)-root by entry=dnRootChainAnchor -> dnRootChainIndex, DN_FINAL_MBI
+//     require DN_FINAL_MBI >= DN_MBI
+//   - L3.0b: query anchor(directory)-bpt[index=dnRootChainIndex] -> dnStateTreeAnchor
+//     enforce pairing invariants against L3.0 receipts
 //
 // Consensus binding is NOT performed here (it is done by ProofBuilder using DN_MBI+1).
 func (b *Layer3Builder) Build(ctx context.Context, l2 Layer2) (Layer3, error) {
@@ -53,8 +53,8 @@ func (b *Layer3Builder) Build(ctx context.Context, l2 Layer2) (Layer3, error) {
 	dnRootBytes, _ := hex.DecodeString(dnRootHex)
 
 	qRoot := &v3.ChainQuery{
-		Name: rootChain,
-		Entry: dnRootBytes,
+		Name:           rootChain,
+		Entry:          dnRootBytes,
 		IncludeReceipt: &v3.ReceiptOptions{ForAny: true},
 	}
 	respRoot, err := b.Client.Query(ctx, dnAnchors, qRoot)
@@ -112,8 +112,8 @@ func (b *Layer3Builder) Build(ctx context.Context, l2 Layer2) (Layer3, error) {
 	// L3.0b: anchor(directory)-bpt[index=dnRootIndex] -> DN stateTreeAnchor
 	bptChain := "anchor(directory)-bpt"
 	qBpt := &v3.ChainQuery{
-		Name: bptChain,
-		Index: &dnRootIndex,
+		Name:           bptChain,
+		Index:          &dnRootIndex,
 		IncludeReceipt: &v3.ReceiptOptions{ForAny: true},
 	}
 	respBpt, err := b.Client.Query(ctx, dnAnchors, qBpt)
@@ -185,12 +185,12 @@ func (b *Layer3Builder) Build(ctx context.Context, l2 Layer2) (Layer3, error) {
 	dnConsensusHeight := l2.DNMinorBlockIndex + 1
 
 	return Layer3{
-		DNRootChainIndex:                     dnRootIndex,
-		DNAnchorMinorBlockIndex:              l2.DNMinorBlockIndex,
-		DNConsensusHeight:                    dnConsensusHeight,
+		DNRootChainIndex:                      dnRootIndex,
+		DNAnchorMinorBlockIndex:               l2.DNMinorBlockIndex,
+		DNConsensusHeight:                     dnConsensusHeight,
 		DNSelfAnchorRecordedAtMinorBlockIndex: dnFinalMBI,
-		DNStateTreeAnchor:                    dnStateTreeAnchorHex,
-		RootReceipt:                          rootReceipt,
-		BptReceipt:                           bptReceipt,
+		DNStateTreeAnchor:                     dnStateTreeAnchorHex,
+		RootReceipt:                           rootReceipt,
+		BptReceipt:                            bptReceipt,
 	}, nil
 }
