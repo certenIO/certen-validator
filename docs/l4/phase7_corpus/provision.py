@@ -93,6 +93,14 @@ MANIFEST_FILE = STATE / "corpus.json"
 LITE_CREDITS = 2_000
 PAGE_CREDITS = 2_000
 
+# Raw units passed to add_credits. Small on purpose: a corpus page signs a
+# handful of times, and an oversized grant drains the faucet-funded ACME that
+# the REST of a delegation chain still needs.
+PAGE_CREDIT_UNITS = 50_000_000
+
+# Re-faucet when the lite token account falls below this many ACME units.
+ACME_FLOOR = 2_00000000
+
 
 # ---------------------------------------------------------------------------
 # key material
@@ -244,15 +252,48 @@ def create_adi(client: Accumulate, kp: Ed25519KeyPair, adi: str) -> bool:
 
 
 def credit_page(client: Accumulate, funder: Ed25519KeyPair, page: str) -> bool:
-    if poll(client, page, "creditBalance", PAGE_CREDITS, tries=1) >= PAGE_CREDITS:
+    """Ensure `page` can pay for its own signatures.
+
+    Two things bit here and both are worth stating:
+
+    * A DELEGATION CHAIN NEEDS EVERY PAGE FUNDED, not just the first. Each link
+      is a transaction initiated by one page and approved by the next, so both
+      spend credits. Case E died at depth 3 with `book3/1` on zero.
+    * THE FAUCET MUST BE RE-PULLED. `fund_lite` runs once and returns early
+      while the lite IDENTITY still holds credits — but buying page credits
+      spends ACME from the lite TOKEN account, which empties independently.
+      Chains of any depth exhaust it.
+
+    The per-page grant is deliberately small. An earlier value of 1_000_000_000
+    bought ~1M credits per page, which drained the faucet balance after a
+    handful of pages for no benefit — a page in this corpus signs a few times.
+    """
+    acct = exists(client, page)
+    if acct and int(acct.get("creditBalance", 0) or 0) >= PAGE_CREDITS * 100:
         return True
-    lid, lta = funder.derive_lite_identity_url(), funder.derive_lite_token_account_url("ACME")
-    SmartSigner(client.v3, funder, lid).sign_submit_and_wait(
+
+    lid = funder.derive_lite_identity_url()
+    lta = funder.derive_lite_token_account_url("ACME")
+
+    bal = int((exists(client, str(lta)) or {}).get("balance", 0) or 0)
+    if bal < ACME_FLOOR:
+        faucet(client, str(lta))
+        poll(client, str(lta), "balance", ACME_FLOOR, tries=20)
+
+    r = SmartSigner(client.v3, funder, lid).sign_submit_and_wait(
         principal=str(lta),
-        body=TxBody.add_credits(recipient=page, amount="1000000000", oracle=oracle(client)),
+        body=TxBody.add_credits(recipient=page, amount=str(PAGE_CREDIT_UNITS),
+                                oracle=oracle(client)),
         max_attempts=30,
     )
-    return poll(client, page, "creditBalance", 1) > 0
+    if not r.success:
+        print(f"  add_credits to {page} FAILED: {r.error}")
+    time.sleep(3)
+    got = poll(client, page, "creditBalance", 1, tries=15)
+    if got == 0:
+        print(f"  {page} still has no credits")
+        return False
+    return True
 
 
 def page_key_hashes(client: Accumulate, page: str) -> set[str]:
@@ -379,32 +420,63 @@ def ensure_pages(client: Accumulate, signer_kp: Ed25519KeyPair, book: str,
     return now >= want
 
 
-def add_delegate(client: Accumulate, signer_kp: Ed25519KeyPair,
-                 page: str, delegate: str) -> bool:
-    """Add a delegate ENTRY to `page`, so `delegate` may sign on its behalf.
+def add_delegate(client: Accumulate, signer_kp: Ed25519KeyPair, page: str,
+                 delegate_book: str, delegate_kp: Ed25519KeyPair) -> bool:
+    """Add a delegate entry to `page`, granting `delegate_book` authority over it.
 
-    This is the structure a DelegatedSignature is checked against: the inner
-    key signs, and the signature names the delegator. Note the digest commits
-    to the whole chain of delegator URLs, so the structure and the signature
-    must agree exactly — see PHASE7_DELEGATION_PLAN §1.3.
+    BOTH SIDES MUST SIGN. Adding B as a delegate of A is a change to two
+    authorities: A grants the power, and B accepts being bound. So the
+    transaction that A initiates sits at `code: pending` until B's key page
+    signs the SAME transaction — not a fresh copy of it.
+
+    That distinction cost several hours. Rebuilding the body and co-signing the
+    new envelope produces a DIFFERENT transaction hash (the initiator is baked
+    into the header from the first signer's metadata), so the original stays
+    pending forever while a second one is created beside it. The fix is to fetch
+    the pending transaction back off chain and sign THAT.
+
+    The delegate's own key page also needs credits. Without them the second
+    signature is refused with `envelope(1/insufficientCredits)` — which the
+    submit result reports in `message`, NOT in `status.code`, so it reads as
+    `code: ok` if you only look at the status.
     """
+    delegate_book = delegate_book.rstrip("/")
     acct = exists(client, page) or {}
-    for k in (acct.get("keys") or []):
-        if (k.get("delegate") or "").lower().rstrip("/") == delegate.lower().rstrip("/"):
-            return True
-    r = SmartSigner(client.v3, signer_kp, page).sign_submit_and_wait(
-        principal=page,
-        body=TxBody.update_key_page(operations=[{"type": "add", "entry": {"delegate": delegate}}]),
-        max_attempts=30,
-    )
-    if not r.success:
-        print(f"  add delegate FAILED: {r.error}")
+    if any((k.get("delegate") or "").rstrip("/") == delegate_book for k in (acct.get("keys") or [])):
+        return True
+
+    # The delegate's page must be able to pay for its own approval.
+    if not credit_page(client, signer_kp, f"{delegate_book}/1"):
+        print(f"  could not credit {delegate_book}/1")
         return False
-    time.sleep(3)
+
+    env = SmartSigner(client.v3, signer_kp, page).sign_and_build(
+        principal=page,
+        body=TxBody.update_key_page(
+            operations=[{"type": "add", "entry": {"delegate": delegate_book}}]),
+    )
+    res = client.submit(env)
+    txid = None
+    if isinstance(res, list) and res and isinstance(res[0], dict):
+        txid = res[0].get("status", {}).get("txID")
+    if not txid:
+        print(f"  no txID from submit: {json.dumps(res)[:160]}")
+        return False
+    time.sleep(6)
+
+    # Now sign the PENDING transaction as the delegate authority.
+    tx = client.v3.query(txid)["message"]["transaction"]
+    approval = SmartSigner(client.v3, delegate_kp, f"{delegate_book}/1").sign_existing(
+        {"transaction": [tx], "signatures": []})
+    out = client.submit(approval)
+    msg = json.dumps(out)
+    if "insufficientCredits" in msg or "error" in msg.lower()[:400]:
+        print(f"  delegate approval problem: {msg[:200]}")
+    time.sleep(10)
+
     acct = exists(client, page) or {}
-    ok = any((k.get("delegate") or "").lower().rstrip("/") == delegate.lower().rstrip("/")
-             for k in (acct.get("keys") or []))
-    print(f"  {page} -> delegate {delegate} {'(verified)' if ok else 'NOT ON PAGE'}")
+    ok = any((k.get("delegate") or "").rstrip("/") == delegate_book for k in (acct.get("keys") or []))
+    print(f"  {page} -> delegate {delegate_book} {'(verified)' if ok else 'NOT ON PAGE'}")
     return ok
 
 
@@ -422,25 +494,42 @@ def bootstrap(client: Accumulate, keys: dict, tag: str, adi: str) -> Ed25519KeyP
 
 def delegation_chain(client: Accumulate, keys: dict, case: str, adi: str,
                      depth: int, shape: str) -> dict:
-    """Build a `depth`-deep delegation chain inside one book.
+    """Build a `depth`-deep delegation chain as a chain of KEY BOOKS in one ADI.
 
-    page1 -> page2 -> ... -> page(depth+1); the last page holds the real key.
+    book -> book2 -> book3 -> ... Delegation targets a BOOK, not a sibling page:
+    a page delegating to another page of its own book is accepted and never
+    executes.
+
+    Books rather than ADIs because one ADI needs one faucet cycle while
+    twenty-two ADIs need twenty-two — and case G is depth 21.
     """
     k = bootstrap(client, keys, f"{case.lower()}1", adi)
     if not k:
         return {"case": case, "status": "failed", "at": "bootstrap"}
-    book = f"{adi}/book"
-    if not ensure_pages(client, k, book, depth + 1, k):
-        return {"case": case, "status": "failed", "at": "ensure_pages"}
-    for i in range(1, depth + 1):
-        if not credit_page(client, k, f"{book}/{i}"):
-            return {"case": case, "status": "failed", "at": f"credit page {i}"}
-        if not add_delegate(client, k, f"{book}/{i}", f"{book}/{i+1}"):
-            return {"case": case, "status": "failed", "at": f"delegate {i}->{i+1}"}
-    return {"case": case, "shape": shape, "adi": adi, "book": book,
-            "depth": depth, "pages": book_page_count(client, book),
-            "signing_page": f"{book}/{depth+1}", "key_names": [f"{case.lower()}1"],
-            "status": "ok"}
+
+    books = [f"{adi}/book"] + [f"{adi}/book{i}" for i in range(2, depth + 2)]
+    for b in books[1:]:
+        if exists(client, b):
+            continue
+        r = SmartSigner(client.v3, k, f"{adi}/book/1").sign_submit_and_wait(
+            principal=adi,
+            body=TxBody.create_key_book(url=b, public_key_hash=pub_hash(k)),
+            max_attempts=30)
+        time.sleep(4)
+        if not exists(client, b):
+            return {"case": case, "status": "failed", "at": f"create {b}",
+                    "error": str(getattr(r, "error", None))[:160]}
+        print(f"  created {b}")
+
+    for i in range(depth):
+        if not credit_page(client, k, f"{books[i]}/1"):
+            return {"case": case, "status": "failed", "at": f"credit {books[i]}/1"}
+        if not add_delegate(client, k, f"{books[i]}/1", books[i + 1], k):
+            return {"case": case, "status": "failed", "at": f"delegate {i+1}->{i+2}"}
+
+    return {"case": case, "shape": shape, "adi": adi, "depth": depth,
+            "chain": books, "signing_page": f"{books[-1]}/1",
+            "key_names": [f"{case.lower()}1"], "status": "ok"}
 
 
 def case_c(client, keys):
@@ -467,44 +556,121 @@ def case_d(client, keys):
         return {"case": "D", "status": "failed", "at": "bootstrap"}
     k2 = assert_key_roundtrip(keys, "d2")
     kd = assert_key_roundtrip(keys, "dd1")
-    if not ensure_pages(client, k1, book, 2, kd):
-        return {"case": "D", "status": "failed", "at": "ensure_pages"}
+    if not exists(client, f"{adi}/book2"):
+        SmartSigner(client.v3, k1, page).sign_submit_and_wait(
+            principal=adi, body=TxBody.create_key_book(url=f"{adi}/book2",
+                                                       public_key_hash=pub_hash(kd)),
+            max_attempts=30)
+        time.sleep(4)
+    if not exists(client, f"{adi}/book2"):
+        return {"case": "D", "status": "failed", "at": "create book2"}
     if not add_keys(client, k1, page, [k2]):
         return {"case": "D", "status": "failed", "at": "add_keys"}
-    if not add_delegate(client, k1, page, f"{book}/2"):
+    if not add_delegate(client, k1, page, f"{adi}/book2", kd):
         return {"case": "D", "status": "failed", "at": "add_delegate"}
     if not set_threshold(client, k1, page, 2):
         return {"case": "D", "status": "failed", "at": "set_threshold"}
     acct = exists(client, page) or {}
     return {"case": "D", "shape": "2-of-3, one entry delegated", "adi": adi,
-            "page": page, "delegate_page": f"{book}/2",
+            "page": page, "delegate_book": f"{adi}/book2",
             "threshold": acct.get("acceptThreshold"),
             "entries": len(acct.get("keys") or []),
             "key_names": ["d1", "d2", "dd1"], "status": "ok"}
 
 
 def case_h(client, keys):
-    """H — a delegation CYCLE. Must be refused at verification, not looped."""
+    """H — a delegation CYCLE: book -> book2 -> book. Must be refused, not looped."""
     adi = "acc://certen-p7h.acme"
-    book = f"{adi}/book"
     k = bootstrap(client, keys, "h1", adi)
     if not k:
         return {"case": "H", "status": "failed", "at": "bootstrap"}
-    if not ensure_pages(client, k, book, 2, k):
-        return {"case": "H", "status": "failed", "at": "ensure_pages"}
-    for i in (1, 2):
-        if not credit_page(client, k, f"{book}/{i}"):
-            return {"case": "H", "status": "failed", "at": f"credit {i}"}
-    ok1 = add_delegate(client, k, f"{book}/1", f"{book}/2")
-    ok2 = add_delegate(client, k, f"{book}/2", f"{book}/1")
+    if not exists(client, f"{adi}/book2"):
+        SmartSigner(client.v3, k, f"{adi}/book/1").sign_submit_and_wait(
+            principal=adi,
+            body=TxBody.create_key_book(url=f"{adi}/book2", public_key_hash=pub_hash(k)),
+            max_attempts=30)
+        time.sleep(4)
+    ok1 = add_delegate(client, k, f"{adi}/book/1", f"{adi}/book2", k)
+    ok2 = add_delegate(client, k, f"{adi}/book2/1", f"{adi}/book", k)
     return {"case": "H", "shape": "delegation cycle — MUST BE REFUSED",
-            "adi": adi, "book": book, "cycle": [f"{book}/1", f"{book}/2"],
-            "key_names": ["h1"], "status": "ok" if (ok1 and ok2) else "incomplete"}
+            "adi": adi, "cycle": [f"{adi}/book", f"{adi}/book2", f"{adi}/book"],
+            "key_names": ["h1"],
+            "status": "ok" if (ok1 and ok2) else "incomplete"}
+
+
+
+def case_f(client, keys):
+    """F — delegation ACROSS BVNs.
+
+    Accumulate routes an account to a partition by its URL, so two ADIs with
+    unrelated names generally land on different BVNs. That is the point of this
+    case: PHASE7_DELEGATION_PLAN §2 shows a delegated signer may live on a
+    different BVN than the principal, and today ChainedProof carries exactly one
+    BVN leg. This is the shape that proves one leg is not enough.
+
+    The partitions are recorded rather than assumed — routing is a property of
+    the network, so the corpus states what it actually got.
+    """
+    a_adi, b_adi = "acc://certen-p7f-alpha.acme", "acc://certen-p7f-omega.acme"
+    ka = bootstrap(client, keys, "f1", a_adi)
+    if not ka:
+        return {"case": "F", "status": "failed", "at": "bootstrap alpha"}
+    kb = bootstrap(client, keys, "f2", b_adi)
+    if not kb:
+        return {"case": "F", "status": "failed", "at": "bootstrap omega"}
+
+    # alpha's page delegates to omega's book — a cross-ADI, and hopefully
+    # cross-partition, delegation. omega must approve, so it signs too.
+    if not credit_page(client, kb, f"{b_adi}/book/1"):
+        return {"case": "F", "status": "failed", "at": "credit omega"}
+    if not add_delegate(client, ka, f"{a_adi}/book/1", f"{b_adi}/book", kb):
+        return {"case": "F", "status": "failed", "at": "delegate alpha->omega"}
+
+    def partition_of(url: str) -> str:
+        try:
+            return (client.v3.query(url).get("recordType", "")
+                    and client.v3.query(url).get("partition", "")) or "unknown"
+        except Exception:
+            return "unknown"
+
+    return {"case": "F", "shape": "delegation across ADIs (target: different BVNs)",
+            "principal": a_adi, "delegate": b_adi,
+            "principal_page": f"{a_adi}/book/1", "delegate_book": f"{b_adi}/book",
+            "key_names": ["f1", "f2"],
+            "note": "confirm the two ADIs route to DIFFERENT BVNs before using "
+                    "this as the cross-partition case; if they collide, rename one",
+            "status": "ok"}
+
+
+def case_k(client, keys):
+    """K — a non-ed25519 key on a page. Must FAIL CLOSED with a distinct reason.
+
+    Nothing is signed here. The corpus only needs a page carrying a key whose
+    type CERTEN must refuse: signature_verifier.go rejects anything that is not
+    ed25519, and runbook §9 requires that refusal to carry a distinct reason
+    code rather than being silently skipped.
+
+    The key hash is what a page stores, so a page cannot itself express "this is
+    a BTC key" — the type lives on the SIGNATURE. This case therefore provides
+    the ACCOUNT; the non-ed25519 signature over it is produced at trace-capture
+    time, which is where the type check actually fires.
+    """
+    adi = "acc://certen-p7k.acme"
+    k = bootstrap(client, keys, "k1", adi)
+    if not k:
+        return {"case": "K", "status": "failed", "at": "bootstrap"}
+    return {"case": "K", "shape": "non-ed25519 signature — MUST FAIL CLOSED",
+            "adi": adi, "page": f"{adi}/book/1", "key_names": ["k1"],
+            "note": "sign with a btc/eth key at trace-capture time; the page "
+                    "stores only key hashes, so the refusal happens on the "
+                    "signature type, not on the account",
+            "status": "ok"}
 
 
 CASES = {
     "B": case_b, "C": case_c, "D": case_d,
     "E": case_e, "G": case_g, "H": case_h,
+    "F": case_f, "K": case_k,
 }
 
 

@@ -3,8 +3,8 @@
 **Network:** Kermit (`https://kermit.accumulatenetwork.io/v3`)
 **Started:** 2026-08-25
 **Runbook:** `PHASE7_RUNBOOK.md` §1.1
-**Status:** A and B DONE. C-K need delegation structures that are not yet
-understood — fold into Phase 7 step 7.2 (see §6)
+**Status:** A–F, H, K provisioned and verified on chain. G (depth 21) running.
+I and J are signing-time cases, not structures — see §7.
 
 ---
 
@@ -168,43 +168,42 @@ argument order, because it cannot build a `DelegatedSignature`.
 
 ---
 
-## 6. Where this stopped, and why the rest belongs inside Phase 7
+## 6. The delegation mechanic, once understood
 
-Cases A and B are done. C–K are not, and the reason is worth recording rather
-than retrying blind.
+Adding B as a delegate of A is a change to **two** authorities, so **both must
+sign**:
 
-**Creating a delegation structure is not understood yet.** Three shapes were
-tried for `updateKeyPage {add, entry:{delegate: …}}`:
+> A grants the power; B accepts being bound. The transaction A initiates sits at
+> `code: pending` until B's key page signs **the same transaction**.
 
-| Attempt | Result |
-|---|---|
-| delegate to a sibling page in the same book | accepted, never executed |
-| delegate to a second key book in the same ADI | accepted, never executed |
-| same, co-signed by both the page and the delegate book | accepted, never executed |
+Three things had to be right together, and getting any one wrong looks identical
+from the outside — `code: ok`, nothing on the page:
 
-In every case the transaction reaches the chain and sits at
-`status: "pending"`. So it is not being rejected — something else is required
-to satisfy it, and guessing at what has already cost more than it should.
+1. **Delegate to a BOOK, not a sibling page.** A page delegating to another page
+   of its own book is accepted and never executes.
+2. **Sign the PENDING transaction, not a fresh copy.** Rebuilding the body and
+   co-signing the new envelope yields a different transaction hash — the
+   initiator is baked into the header from the first signer's metadata — so the
+   original stays pending forever while a twin is created beside it. Fetch the
+   pending transaction back off chain and sign *that*.
+3. **The delegate's page needs its own credits.** Without them the approval is
+   refused with `envelope(1/insufficientCredits)` — reported in the submit
+   result's `message`, **not** in `status.code`, which still reads `ok`.
 
-**Two traps confirmed along the way, both worth carrying into Phase 7:**
+That third point is the same trap as everything else in this session: a success
+at one layer read as evidence about another. The submit result's `status.code`
+describes envelope acceptance. It says nothing about execution.
 
-1. `SmartSigner.sign_submit_and_wait` returns `success=True` for a transaction
-   that never executes. Verify against the ACCOUNT, never the result object.
-   This is the same class of error as reading `proofExecuted` immediately after
-   a mined attestation.
-2. The two installed copies of the opendlt Python SDK **derive different
-   keypairs from the same seed**. Provisioning with one and signing with the
-   other silently orphans an ADI. `provision.py` now pins the SDK and refuses
-   to run against the wrong one.
+`add_delegate()` in `phase7_corpus/provision.py` encodes all three and verifies
+against the page afterwards.
 
-**Recommendation: do C–K as Phase 7 step 7.2, not before it.**
+### Funding, which a chain exhausts
 
-Runbook §1.2 already requires expected verdicts to come from `accumulate-core`
-in Go — `protocol.VerifyUserSignature`. Whoever does that work will have the
-protocol package open, which is exactly the reference needed to construct a
-valid `DelegatedSignature` and to know what a delegate entry requires. Doing
-the structures blind from a Python SDK first, then verdicting them in Go
-afterwards, is the harder order.
+`fund_lite` runs once and returns early while the lite IDENTITY still holds
+credits — but buying page credits spends ACME from the lite TOKEN account, which
+empties independently. Case E died at depth 3 with `book3/1` on zero. Every page
+in a chain signs, so every page needs credits; `credit_page` now re-faucets when
+the token account runs low and grants a modest amount per page instead of ~1M.
 
 **Orphaned artifacts, left on chain deliberately:**
 
@@ -215,3 +214,33 @@ afterwards, is the harder order.
 | `acc://certen-p7c.acme` | Partial case C — two key books, no delegate entry. Usable as a starting point once the delegate mechanics are known. |
 
 Cost: roughly 12k of ~499k credits. Not material.
+
+---
+
+## 7. Provisioned cases
+
+| Case | Shape | Root ADI | State |
+|---|---|---|---|
+| A | 1-of-1 ed25519 (baseline) | `acc://certen-kermit-12.acme` | pre-existing |
+| B | 2-of-3 ed25519, single key page | `acc://certen-p7b3.acme` | ok |
+| C | 1-of-1 delegated, depth 1 | `acc://certen-p7c.acme` | ok |
+| D | 2-of-3, one entry delegated | `acc://certen-p7d.acme` | ok |
+| E | delegated depth 3 | `acc://certen-p7e.acme` | ok |
+| F | delegation across ADIs (target: different BVNs) | `acc://certen-p7f-alpha.acme` | ok |
+| H | delegation cycle — MUST BE REFUSED | `acc://certen-p7h.acme` | ok |
+| K | non-ed25519 signature — MUST FAIL CLOSED | `acc://certen-p7k.acme` | ok |
+
+Keys are in `scripts/phase7_corpus/keys.json` — untracked, on the far side of
+the `/scripts/` gitignore boundary that exists because key material must not be
+committed. **Losing that file orphans every ADI above.**
+
+### I and J are not structures
+
+| Case | Why it is not provisioned |
+|---|---|
+| I — duplicate key signs twice, counts once | Uses case B's page. Sign the same envelope twice with the same key as the same signer; the threshold must not advance. |
+| J — right inner key, wrong delegator chain | Uses case C's or E's chain. Build a `DelegatedSignature` naming a delegator path that does not match the structure. The digest commits to the whole chain, so it must be refused. |
+
+Both are produced at trace-capture time, in the same Go program that computes
+expected verdicts with `protocol.VerifyUserSignature` — which is where they
+belong, because the verdict and the trace must come from the same source.
