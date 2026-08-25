@@ -264,6 +264,23 @@ func ChainedProofToCompleteProof(cp *chained_proof.ChainedProof) *lcproof.Comple
 	// was zero in every govRoot ever signed.
 	complete.ConsensusProof = BuildL4ConsensusProof(cp.Layer4BVN, cp.Layer4DN)
 
+	// ...and the evidence for it, carried through unreduced.
+	//
+	// ConsensusProof above is a SUMMARY, by design: it is the govRoot preimage,
+	// so it holds partition, threshold, sorted signers and the anchors, and
+	// nothing that would couple the hash to incidental encoding. That makes it
+	// a claim a reader can only believe. These two legs are what lets a reader
+	// check it instead - the signatures, the validator set, and the canonical
+	// signed bytes the quorum covered - and they travel in the same column, so
+	// no second query is needed to verify a stored proof.
+	//
+	// Pass-through, not a re-derivation: the pointers are the same legs
+	// BuildL4ConsensusProof summarised, so the evidence and the conclusion
+	// cannot describe different anchors. Nil stays nil - a partial L4 is not
+	// stored as though it were complete.
+	complete.Layer4BVN = cp.Layer4BVN
+	complete.Layer4DN = cp.Layer4DN
+
 	log.Printf("[PROOF] ChainedProofToCompleteProof: converted L1-L3 proof data")
 	log.Printf("[PROOF]   AccountHash: %d bytes", len(complete.AccountHash))
 	log.Printf("[PROOF]   BPTRoot: %d bytes", len(complete.BPTRoot))
@@ -273,6 +290,15 @@ func ChainedProofToCompleteProof(cp *chained_proof.ChainedProof) *lcproof.Comple
 	log.Printf("[PROOF]   DNAnchorProof: %v", complete.DNAnchorProof != nil)
 	log.Printf("[PROOF]   BPTProof: %v", complete.BPTProof != nil)
 	log.Printf("[PROOF]   CombinedReceipt: %v", complete.CombinedReceipt != nil)
+	if complete.Layer4BVN != nil && complete.Layer4DN != nil {
+		log.Printf("[PROOF]   L4 evidence: %s (%d sigs, %d validators, %d B signed) + %s (%d sigs, %d validators, %d B signed)",
+			complete.Layer4BVN.Partition, len(complete.Layer4BVN.Signatures),
+			len(complete.Layer4BVN.ValidatorSet), len(complete.Layer4BVN.SequencedMessage)/2,
+			complete.Layer4DN.Partition, len(complete.Layer4DN.Signatures),
+			len(complete.Layer4DN.ValidatorSet), len(complete.Layer4DN.SequencedMessage)/2)
+	} else {
+		log.Printf("[PROOF]   L4 evidence: ABSENT - this proof is summary-only and cannot be verified offline")
+	}
 
 	return complete
 }

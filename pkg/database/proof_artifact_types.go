@@ -49,6 +49,27 @@ const (
 	VerificationStatusPending  VerificationStatus = "pending"
 	VerificationStatusVerified VerificationStatus = "verified"
 	VerificationStatusFailed   VerificationStatus = "failed"
+
+	// VerificationStatusSummaryOnly means the stored record carries the
+	// CONCLUSIONS of the L4 quorum check but not the evidence for it, so the
+	// proof cannot be verified offline from storage.
+	//
+	// It is not a failure. Nothing about such a proof is known to be wrong —
+	// the quorum was checked in flight, and the governance root commits to its
+	// conclusion. What is missing is the signatures, validator set and signed
+	// bytes an independent verifier would need to check that conclusion for
+	// itself. Every proof written before Phase 6 is in this state.
+	//
+	// It exists so "verified" can keep meaning ONE thing. Left as 'verified',
+	// a proof whose evidence was never stored is indistinguishable from one
+	// that was re-verified from storage, and the weaker claim silently
+	// inherits the stronger one's name.
+	//
+	// The evidence for these proofs CANNOT be recovered: re-querying Accumulate
+	// returns today's validator set, not the one that signed. Marking is the
+	// only honest option — a synthesized quorum would be worse than an absent
+	// one.
+	VerificationStatusSummaryOnly VerificationStatus = "summary_only"
 )
 
 // ============================================================================
@@ -160,6 +181,18 @@ type ChainedProofLayer struct {
 	DNBlockHeight      *int64     `json:"dn_block_height,omitempty" db:"dn_block_height"`
 	ConsensusTimestamp *time.Time `json:"consensus_timestamp,omitempty" db:"consensus_timestamp"`
 
+	// Layer 4 Fields — a projection of the quorum, for querying only.
+	//
+	// The authoritative evidence is LayerJSON, which carries the full
+	// chained_proof.Layer4 (sequencedMessage, signatures, validatorSet,
+	// acceptThreshold) and is the only thing the offline verifier reads. These
+	// three exist so an operator can ask "which DN legs had fewer than three
+	// signers" without unpacking jsonb per row. If they ever disagree with
+	// LayerJSON, LayerJSON is right and these are a bug. NULL on layers 0-3.
+	SignatureCount *int   `json:"signature_count,omitempty" db:"signature_count"`
+	Threshold      *int   `json:"threshold,omitempty" db:"threshold"`
+	SignedHash     []byte `json:"signed_hash,omitempty" db:"signed_hash"`
+
 	// Full Layer Artifact
 	LayerJSON json.RawMessage `json:"layer_json" db:"layer_json"`
 
@@ -185,6 +218,11 @@ type NewChainedProofLayer struct {
 	DNBlockHeight      *int64          `json:"dn_block_height,omitempty"`
 	ConsensusTimestamp *time.Time      `json:"consensus_timestamp,omitempty"`
 	LayerJSON          json.RawMessage `json:"layer_json"`
+	// Layer 4 projection — see ChainedProofLayer above. Set only for
+	// layer_number = 4; left nil on the state layers, which have no quorum.
+	SignatureCount *int   `json:"signature_count,omitempty"`
+	Threshold      *int   `json:"threshold,omitempty"`
+	SignedHash     []byte `json:"signed_hash,omitempty"`
 	// New fields for ProofChainDiagram visualization
 	SourceHash     []byte           `json:"source_hash,omitempty"`     // Source hash for layer diagram
 	TargetHash     []byte           `json:"target_hash,omitempty"`     // Target hash for layer diagram

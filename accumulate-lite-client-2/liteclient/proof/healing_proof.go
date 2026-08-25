@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/backend"
+	chained_proof "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/working-proof_do_not_edit"
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/types"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/database/merkle"
 )
@@ -43,6 +44,30 @@ type CompleteProof struct {
 	// governance root commits to. Nil means L4 was not established, which
 	// yields a ZERO L4ConsensusProofH rather than a partial commitment.
 	ConsensusProof *ConsensusProof `json:"consensus_proof,omitempty"`
+
+	// Layer4BVN / Layer4DN are the EVIDENCE behind ConsensusProof: the
+	// ed25519 signatures, the validator set, and the canonical signed bytes.
+	//
+	// ConsensusProof above is the conclusion, and is deliberately thin because
+	// it is the govRoot preimage - widening it would move every govRoot ever
+	// signed. These two are the second home that conclusion always needed. A
+	// verifier handed this object alone can now finish the job: recompute
+	// SignedHash from SequencedMessage, check each signature against the
+	// validator set, and count distinct signers against the threshold. Before
+	// they existed the stored artifact could be believed but not checked,
+	// which failed governance spec section 4.
+	//
+	// These are SIBLING fields on a struct that is never hashed. CompleteProof
+	// reaches govRoot only as three raw 32-byte values (AccountHash, BPTRoot,
+	// BlockHash) plus json.Marshal(ConsensusProof); nothing marshals
+	// CompleteProof itself into a commitment. That is pinned by the blocking
+	// gate TestP6_GovRootInvariant_GoldenSlots.
+	//
+	// The tags match the testdata fixtures (working-proof_do_not_edit/testdata)
+	// exactly, so a stored proof and a fixture are the same document and the
+	// unmodified offline verifier runs on both with no shim.
+	Layer4BVN *chained_proof.Layer4 `json:"layer4Bvn,omitempty"`
+	Layer4DN  *chained_proof.Layer4 `json:"layer4Dn,omitempty"`
 
 	// Verification status
 	Verified bool   `json:"verified"`

@@ -1840,6 +1840,11 @@ func (o *ProofCycleOrchestrator) storeChainedProofLayers(ctx context.Context, pr
 			o.logger.Printf("⚠️ [PROOF-CYCLE] Failed to fetch chained proof for persistence: %v", err)
 			// Fall through to minimal layers below
 		} else if chainedProof != nil {
+			// The full ChainedProof behind the flattened result. It carries the
+			// scalars the visualisation fields drop and both L4 legs, so it is
+			// what makes these rows reassemblable into a verifiable proof.
+			canonicalCP := ChainedProofFromResult(chainedProof)
+
 			// L1: Transaction → BVN (with real receipt entries)
 			l1JSON, _ := json.Marshal(map[string]interface{}{
 				"layer":          "L1",
@@ -1850,6 +1855,11 @@ func (o *ProofCycleOrchestrator) storeChainedProofLayers(ctx context.Context, pr
 				"target_hash":    hex.EncodeToString(chainedProof.L1TargetHash),
 				"path_depth":     len(chainedProof.L1ReceiptEntries),
 			})
+
+			// The authoritative L1 object (and the proof input it binds), beside
+			// the description above. Without these the row can be redrawn but not
+			// re-verified: ProofVerifier checks scalars the description drops.
+			l1JSON = WithCanonicalL1(l1JSON, canonicalCP)
 			l1Layer := &database.NewChainedProofLayer{
 				ProofID:        proofID,
 				LayerNumber:    1,
@@ -1875,6 +1885,8 @@ func (o *ProofCycleOrchestrator) storeChainedProofLayers(ctx context.Context, pr
 				"target_hash": hex.EncodeToString(chainedProof.L2TargetHash),
 				"path_depth":  len(chainedProof.L2ReceiptEntries),
 			})
+
+			l2JSON = WithCanonicalL2(l2JSON, canonicalCP)
 			l2Layer := &database.NewChainedProofLayer{
 				ProofID:        proofID,
 				LayerNumber:    2,
@@ -1902,6 +1914,8 @@ func (o *ProofCycleOrchestrator) storeChainedProofLayers(ctx context.Context, pr
 				"target_hash":         hex.EncodeToString(chainedProof.L3TargetHash),
 				"path_depth":          len(chainedProof.L3ReceiptEntries),
 			})
+
+			l3JSON = WithCanonicalL3(l3JSON, canonicalCP)
 			l3Layer := &database.NewChainedProofLayer{
 				ProofID:            proofID,
 				LayerNumber:        3,
@@ -1915,6 +1929,19 @@ func (o *ProofCycleOrchestrator) storeChainedProofLayers(ctx context.Context, pr
 			}
 			if _, err := o.repos.ProofArtifacts.CreateChainedProofLayer(ctx, l3Layer); err != nil {
 				o.logger.Printf("⚠️ [PROOF-CYCLE] Failed to create L3 layer: %v", err)
+			}
+
+			// L4: the two threshold-signed partition anchors.
+			//
+			// Rows 1-3 above are recomputable offline from their receipt
+			// entries. Without these two, the stored proof stops at "L4
+			// concluded a quorum signed" — a claim a reader can only believe.
+			// These carry the signatures, the validator set and the canonical
+			// signed bytes that let them check it instead.
+			if err := WriteLayer4Rows(ctx, o.repos.ProofArtifacts, proofID,
+				ChainedProofFromResult(chainedProof), o.logger.Printf); err != nil {
+				o.logger.Printf("⚠️ [PROOF-CYCLE] proof %s stored WITHOUT L4 evidence — it is summary-only, "+
+					"not offline-verifiable", proofID)
 			}
 
 			o.logger.Printf("✅ [PROOF-CYCLE] Created L1/L2/L3 chained proof layers with %d+%d+%d receipt entries for proof %s",
@@ -1942,7 +1969,12 @@ func (o *ProofCycleOrchestrator) storeChainedProofLayers(ctx context.Context, pr
 			o.logger.Printf("⚠️ [PROOF-CYCLE] Failed to create L%d layer: %v", layer, err)
 		}
 	}
-	o.logger.Printf("✅ [PROOF-CYCLE] Created L1/L2/L3 chained proof layers (minimal — no ProofGenerator) for proof %s", proofID)
+	// No ProofGenerator means no chained proof was fetched, so there is no L4
+	// evidence to store. Deliberately silent about quorum rather than writing
+	// an empty leg: an absent layer-4 row is what marks this proof
+	// summary_only downstream, and that is the honest record.
+	o.logger.Printf("✅ [PROOF-CYCLE] Created L1/L2/L3 chained proof layers (minimal — no ProofGenerator, "+
+		"therefore NO L4 evidence: this proof is summary-only) for proof %s", proofID)
 }
 
 // storeGovernanceLevels stores G0/G1/G2 governance proof level records using

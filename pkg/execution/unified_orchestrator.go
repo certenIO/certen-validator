@@ -2764,6 +2764,10 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 				// Store for bundle creation later
 				storedChainedProof = chainedProof
 
+				// The full ChainedProof behind the flattened result — the scalars
+				// the visualisation fields drop, plus both L4 legs.
+				canonicalCP := ChainedProofFromResult(chainedProof)
+
 				// L1: Transaction → BVN
 				l1JSON, _ := json.Marshal(map[string]interface{}{
 					"layer":          "L1",
@@ -2774,6 +2778,11 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 					"target_hash":    hex.EncodeToString(chainedProof.L1TargetHash),
 					"path_depth":     len(chainedProof.L1ReceiptEntries),
 				})
+
+				// The authoritative L1 object (and the proof input it binds), beside
+				// the description above. Without these the row can be redrawn but not
+				// re-verified: ProofVerifier checks scalars the description drops.
+				l1JSON = WithCanonicalL1(l1JSON, canonicalCP)
 				l1Layer := &database.NewChainedProofLayer{
 					ProofID:        proofArtifact.ProofID,
 					LayerNumber:    1,
@@ -2799,6 +2808,8 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 					"target_hash": hex.EncodeToString(chainedProof.L2TargetHash),
 					"path_depth":  len(chainedProof.L2ReceiptEntries),
 				})
+
+				l2JSON = WithCanonicalL2(l2JSON, canonicalCP)
 				l2Layer := &database.NewChainedProofLayer{
 					ProofID:        proofArtifact.ProofID,
 					LayerNumber:    2,
@@ -2825,6 +2836,8 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 					"target_hash":         hex.EncodeToString(chainedProof.L3TargetHash),
 					"path_depth":          len(chainedProof.L3ReceiptEntries),
 				})
+
+				l3JSON = WithCanonicalL3(l3JSON, canonicalCP)
 				consensusTS := chainedProof.L3ConsensusTimestamp
 				l3Layer := &database.NewChainedProofLayer{
 					ProofID:            proofArtifact.ProofID,
@@ -2841,7 +2854,16 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 					fmt.Printf("Warning: failed to create L3 chained layer: %v\n", err)
 				}
 
-				fmt.Printf("Created chained_proof_layers L1/L2/L3 for proof_id=%s\n", proofArtifact.ProofID)
+				// L4: the two threshold-signed partition anchors, through the
+				// SAME helper proof_cycle_orchestrator uses. Two copies of this
+				// logic is how L4 came to be missing from one path already.
+				if err := WriteLayer4Rows(ctx, o.config.Repos.ProofArtifacts, proofArtifact.ProofID,
+					ChainedProofFromResult(chainedProof), logfPrintf); err != nil {
+					fmt.Printf("Warning: proof_id=%s stored WITHOUT L4 evidence — it is summary-only, "+
+						"not offline-verifiable\n", proofArtifact.ProofID)
+				}
+
+				fmt.Printf("Created chained_proof_layers L1/L2/L3/L4 for proof_id=%s\n", proofArtifact.ProofID)
 			}
 		} else {
 			fmt.Printf("Note: Cannot generate chained proof - missing accountURL or txHash\n")

@@ -728,15 +728,27 @@ func (r *ProofArtifactRepository) CreateChainedProofLayer(ctx context.Context, i
 	}
 	// When receiptEntriesJSON is nil (untyped), PostgreSQL will receive NULL
 
+	// Same hazard, same fix, for the layer-4 signed hash. A typed nil []byte
+	// reaches PostgreSQL as an EMPTY bytea rather than NULL, and an empty
+	// bytea reads as "there is a signed hash and it is zero bytes long" — a
+	// claim about a quorum, on the state layers, which have none. The
+	// migration documents these columns as NULL on layers 1-3; this is what
+	// makes that true rather than merely intended.
+	var signedHash interface{}
+	if len(input.SignedHash) > 0 {
+		signedHash = input.SignedHash
+	}
+
 	query := `
 		INSERT INTO chained_proof_layers (
 			proof_id, layer_number, layer_name,
 			bvn_partition, receipt_anchor,
 			bvn_root, dn_root, anchor_sequence, bvn_partition_id,
 			dn_block_hash, dn_block_height, consensus_timestamp,
-			layer_json, source_hash, target_hash, receipt_entries, verified, verified_at, created_at
+			layer_json, source_hash, target_hash, receipt_entries,
+			signature_count, threshold, signed_hash, verified, verified_at, created_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, true, NOW(), NOW()
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, true, NOW(), NOW()
 		)
 		RETURNING layer_id, created_at`
 
@@ -754,6 +766,9 @@ func (r *ProofArtifactRepository) CreateChainedProofLayer(ctx context.Context, i
 	layer.DNBlockHeight = input.DNBlockHeight
 	layer.ConsensusTimestamp = input.ConsensusTimestamp
 	layer.LayerJSON = input.LayerJSON
+	layer.SignatureCount = input.SignatureCount
+	layer.Threshold = input.Threshold
+	layer.SignedHash = input.SignedHash
 
 	err := r.db.QueryRowContext(ctx, query,
 		input.ProofID, input.LayerNumber, input.LayerName,
@@ -761,6 +776,7 @@ func (r *ProofArtifactRepository) CreateChainedProofLayer(ctx context.Context, i
 		input.BVNRoot, input.DNRoot, input.AnchorSequence, input.BVNPartitionID,
 		input.DNBlockHash, input.DNBlockHeight, input.ConsensusTimestamp,
 		input.LayerJSON, input.SourceHash, input.TargetHash, receiptEntriesJSON,
+		input.SignatureCount, input.Threshold, signedHash,
 	).Scan(&layer.LayerID, &layer.CreatedAt)
 
 	if err != nil {
@@ -777,10 +793,11 @@ func (r *ProofArtifactRepository) GetChainedProofLayers(ctx context.Context, pro
 			   bvn_partition, receipt_anchor,
 			   bvn_root, dn_root, anchor_sequence, bvn_partition_id,
 			   dn_block_hash, dn_block_height, consensus_timestamp,
+			   signature_count, threshold, signed_hash,
 			   layer_json, verified, verified_at, created_at
 		FROM chained_proof_layers
 		WHERE proof_id = $1
-		ORDER BY layer_number`
+		ORDER BY layer_number, layer_name`
 
 	rows, err := r.db.QueryContext(ctx, query, proofID)
 	if err != nil {
@@ -796,6 +813,7 @@ func (r *ProofArtifactRepository) GetChainedProofLayers(ctx context.Context, pro
 			&l.BVNPartition, &l.ReceiptAnchor,
 			&l.BVNRoot, &l.DNRoot, &l.AnchorSequence, &l.BVNPartitionID,
 			&l.DNBlockHash, &l.DNBlockHeight, &l.ConsensusTimestamp,
+			&l.SignatureCount, &l.Threshold, &l.SignedHash,
 			&l.LayerJSON, &l.Verified, &l.VerifiedAt, &l.CreatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan chained proof layer: %w", err)
