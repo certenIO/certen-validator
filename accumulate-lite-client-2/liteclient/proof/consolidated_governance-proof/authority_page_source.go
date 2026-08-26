@@ -81,18 +81,28 @@ func (s *livePageSource) PageState(ctx context.Context, page string) (KeyPageSta
 		def = acct
 	}
 
-	// A key page reports its accept threshold as "acceptThreshold"; the
-	// snapshot parser reads "threshold". Normalise before parsing so a page
-	// whose threshold is only spelled one way does not silently read as zero.
+	// A key page reports its accept threshold as "acceptThreshold"; the snapshot
+	// parser reads "threshold". Normalise before parsing.
+	//
+	// And when NEITHER is present, supply zero rather than letting the parse
+	// fail. Accumulate omits an accept threshold of zero, and a freshly created
+	// book's first page has exactly that - every delegate book in the Phase 7
+	// corpus reports no threshold field at all. Failing the parse there made
+	// PageState error, which made delegation enumeration skip the page, which
+	// made the delegated signature invisible and the threshold come up short.
+	// Zero is not "no rule": the resolver reads it as one, which is what
+	// Accumulate means by it.
 	if pu.CaseInsensitiveGet(def, "threshold") == nil {
-		if at := pu.CaseInsensitiveGet(def, "acceptThreshold"); at != nil {
-			copied := make(map[string]interface{}, len(def)+1)
-			for k, v := range def {
-				copied[k] = v
-			}
-			copied["threshold"] = at
-			def = copied
+		copied := make(map[string]interface{}, len(def)+1)
+		for k, v := range def {
+			copied[k] = v
 		}
+		if at := pu.CaseInsensitiveGet(def, "acceptThreshold"); at != nil {
+			copied["threshold"] = at
+		} else {
+			copied["threshold"] = float64(0)
+		}
+		def = copied
 	}
 
 	state, err := s.builder.parseKeyPageStateFromDef(def)

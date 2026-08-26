@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"sort"
 	"strings"
 	"time"
 )
@@ -59,6 +60,26 @@ const (
 type sigCandidate struct {
 	MessageID   string
 	MessageHash string
+
+	// Page is the key page whose signature chain carries this message.
+	//
+	// It is per-candidate because under delegation the candidates do NOT all
+	// live on one page: the delegated signer's user signature is on the
+	// innermost page, and looking its receipt up on the principal's chain
+	// returns "ElementIndex not found" - which the classifier correctly calls an
+	// outage, so the whole route goes unavailable and falls back to one that
+	// only sees the principal's page. Observed live on Kermit for corpus case D.
+	//
+	// Empty means "the route's own page", which is every non-delegated case.
+	Page string
+}
+
+// pageFor returns the page a candidate's receipt should be read from.
+func (c sigCandidate) pageFor(fallback string) string {
+	if c.Page != "" {
+		return c.Page
+	}
+	return fallback
 }
 
 // evalResult is the outcome of evaluating one candidate.
@@ -109,8 +130,14 @@ func (g1 *G1Layer) collectViaSignatureSet(ctx context.Context, sigData *Signatur
 			continue
 		}
 
-		res := g1.evaluateCandidateWithRetry(ctx, sigCandidate{MessageID: messageID, MessageHash: msgHash},
-			sigData.KeyPage, snapshot, txHash, fmt.Sprintf("g1_sigset_%d", i))
+		// The page comes from the message ID itself - acc://<hash>@<page> - so a
+		// delegated signature's receipt is read from the chain that actually
+		// holds it. Under delegation the candidates span several pages, and
+		// using the route's page for all of them turns the delegated ones into
+		// not-found outages.
+		res := g1.evaluateCandidateWithRetry(ctx, sigCandidate{
+			MessageID: messageID, MessageHash: msgHash, Page: pageOfMessageID(messageID),
+		}, sigData.KeyPage, snapshot, txHash, fmt.Sprintf("g1_sigset_%d", i))
 
 		switch res.Outcome {
 		case SigUnavailable:
@@ -168,86 +195,190 @@ func (g1 *G1Layer) collectViaEnumeration(ctx context.Context, keyPage string,
 
 	ev := &SignatureEvidence{Route: routeEnumeration}
 
-	total, err := g1.signatureChainCount(ctx, keyPage)
-	if err != nil {
+	// The principal's page AND every page its delegate entries lead to.
+	//
+	// Enumerating only the principal's chain misses the delegated signer's
+	// signature entirely, and the two routes then disagree - correctly, and
+	// fatally, because a disagreement is a fail-closed condition. Both routes
+	// must cover the same ground.
+	//
+	// They discover it from DIFFERENT sources, which is the point of having two:
+	// the signatureSet route follows the authority signatures on the
+	// transaction, this one follows the delegate entries on the key pages
+	// themselves. Two independent paths to the same set of signer accounts.
+	pages, pageErr := g1.enumerateDelegatePages(ctx, keyPage, snapshot)
+	if pageErr != nil {
 		return nil, &SignatureEvidenceIncomplete{
 			Route:     routeEnumeration,
 			Requested: 0,
 			Unavailable: []UnavailableSignature{{
-				MessageID: keyPage, Stage: "chain-count", Err: err.Error(),
-			}},
-		}
-	}
-	if total == 0 {
-		return nil, &SignatureEvidenceIncomplete{
-			Route:     routeEnumeration,
-			Requested: 0,
-			Unavailable: []UnavailableSignature{{
-				MessageID: keyPage, Stage: "chain-count",
-				Err: "key page P#signature chain is empty; the transaction's signatures cannot be enumerated",
+				MessageID: keyPage, Stage: "enumerate-delegate-pages", Err: pageErr.Error(),
 			}},
 		}
 	}
 
-	// Read the most recent window. Signatures are appended, so a transaction's
-	// signatures sit at or before its execution point, near the tail for any
-	// recent transaction.
-	start := 0
-	if total > enumerationMaxEntries {
-		start = total - enumerationMaxEntries
-		ev.Bounded = true
-		ev.BoundedReason = fmt.Sprintf("read the most recent %d of %d P#signature entries", enumerationMaxEntries, total)
-	}
-
-	entries, err := g1.enumerateSignatureEntryHashes(ctx, keyPage, start, total)
-	if err != nil {
-		return nil, &SignatureEvidenceIncomplete{
-			Route:     routeEnumeration,
-			Requested: total - start,
-			Unavailable: []UnavailableSignature{{
-				MessageID: keyPage, Stage: "enumerate", Err: err.Error(),
-			}},
-		}
-	}
-	ev.Candidates = len(entries)
+	fmt.Printf("[G1] [ENUMERATION] signer pages: %v\n", pages)
 
 	var unavailable []UnavailableSignature
-	for i, entryHash := range entries {
-		messageID := fmt.Sprintf("acc://%s@%s", entryHash, strings.TrimPrefix(keyPage, "acc://"))
-		res := g1.evaluateCandidateWithRetry(ctx, sigCandidate{MessageID: messageID, MessageHash: entryHash},
-			keyPage, snapshot, txHash, fmt.Sprintf("g1_enum_%d", i))
+	for _, page := range pages {
+		total, err := g1.signatureChainCount(ctx, page)
+		if err != nil {
+			return nil, &SignatureEvidenceIncomplete{
+				Route:     routeEnumeration,
+				Requested: 0,
+				Unavailable: []UnavailableSignature{{
+					MessageID: page, Stage: "chain-count", Err: err.Error(),
+				}},
+			}
+		}
+		if total == 0 {
+			if page != keyPage {
+				// A delegate page with no signature chain simply did not sign.
+				// That is not an outage.
+				continue
+			}
+			return nil, &SignatureEvidenceIncomplete{
+				Route:     routeEnumeration,
+				Requested: 0,
+				Unavailable: []UnavailableSignature{{
+					MessageID: page, Stage: "chain-count",
+					Err: "key page P#signature chain is empty; the transaction's signatures cannot be enumerated",
+				}},
+			}
+		}
 
-		switch res.Outcome {
-		case SigUnavailable:
-			unavailable = append(unavailable, UnavailableSignature{
-				MessageID: messageID, Stage: res.Stage, Err: res.Reason,
-			})
-		case SigCounted:
-			ev.Counted = append(ev.Counted, res.Validated)
-		case SigRejected:
-			// The overwhelming majority of entries on a key page belong to
-			// other transactions. That is a rejection, and it is normal.
-			ev.Rejected = append(ev.Rejected, RejectedSignature{MessageID: messageID, Reason: res.Reason})
-		default:
-			unavailable = append(unavailable, UnavailableSignature{
-				MessageID: messageID, Stage: "classify",
-				Err: "candidate returned no outcome (internal error)",
-			})
+		// Read the most recent window. Signatures are appended, so a
+		// transaction's signatures sit at or before its execution point, near
+		// the tail for any recent transaction.
+		start := 0
+		if total > enumerationMaxEntries {
+			start = total - enumerationMaxEntries
+			ev.Bounded = true
+			ev.BoundedReason = fmt.Sprintf("read the most recent %d of %d P#signature entries on %s",
+				enumerationMaxEntries, total, page)
+		}
+
+		entries, err := g1.enumerateSignatureEntryHashes(ctx, page, start, total)
+		if err != nil {
+			return nil, &SignatureEvidenceIncomplete{
+				Route:     routeEnumeration,
+				Requested: total - start,
+				Unavailable: []UnavailableSignature{{
+					MessageID: page, Stage: "enumerate", Err: err.Error(),
+				}},
+			}
+		}
+		ev.Candidates += len(entries)
+
+		for i, entryHash := range entries {
+			messageID := fmt.Sprintf("acc://%s@%s", entryHash, strings.TrimPrefix(page, "acc://"))
+			res := g1.evaluateCandidateWithRetry(ctx, sigCandidate{
+				MessageID: messageID, MessageHash: entryHash, Page: page,
+			}, page, snapshot, txHash, fmt.Sprintf("g1_enum_%s_%d", sanitizeLabel(page), i))
+
+			switch res.Outcome {
+			case SigUnavailable:
+				unavailable = append(unavailable, UnavailableSignature{
+					MessageID: messageID, Stage: res.Stage, Err: res.Reason,
+				})
+			case SigCounted:
+				ev.Counted = append(ev.Counted, res.Validated)
+			case SigRejected:
+				ev.Rejected = append(ev.Rejected, RejectedSignature{MessageID: messageID, Reason: res.Reason})
+			default:
+				unavailable = append(unavailable, UnavailableSignature{
+					MessageID: messageID, Stage: "classify",
+					Err: "candidate returned no outcome (internal error)",
+				})
+			}
 		}
 	}
 
 	if len(unavailable) > 0 {
 		return nil, &SignatureEvidenceIncomplete{
 			Route:       routeEnumeration,
-			Requested:   len(entries),
-			Evaluated:   len(entries) - len(unavailable),
+			Requested:   ev.Candidates,
+			Evaluated:   ev.Candidates - len(unavailable),
 			Unavailable: unavailable,
 		}
 	}
 	return ev, nil
 }
 
-// signatureChainCount reads the key page's P#signature chain length.
+// enumerateDelegatePages walks the key pages reachable from the principal's
+// through delegate entries, breadth first, and returns them in canonical order.
+//
+// This is the enumeration route's OWN discovery of the signer accounts: it reads
+// the key pages, where the signatureSet route reads the transaction. Two sources
+// that must agree is the whole value of running both.
+//
+// The visited set is what makes it terminate: a delegation graph may cycle, and
+// corpus case H is one Kermit executes transactions over. The hop bound is
+// Accumulate's own depth limit, because a chain deeper than the protocol allows
+// cannot have produced a valid signature.
+func (g1 *G1Layer) enumerateDelegatePages(ctx context.Context, keyPage string,
+	snapshot AuthoritySnapshot) ([]string, error) {
+
+	uu := URLUtils{}
+	start := uu.NormalizeURL(keyPage)
+
+	source := newLivePageSource(g1.client, g1.authorityBuilder)
+	visited := map[string]bool{start: true}
+	order := []string{start}
+
+	// The principal's own state comes from the KPSW-EXEC snapshot, which is
+	// replayed from genesis; pages reached through delegation are queried. The
+	// difference is recorded on resolution links rather than smoothed over here.
+	frontier := delegateBooksOf(snapshot.StateExec.EntrySet())
+	fmt.Printf("[G1] [ENUMERATION] principal entries=%d delegate books=%v\n",
+		len(snapshot.StateExec.EntrySet()), frontier)
+
+	for hop := 0; hop < delegationEnumerationMaxHops && len(frontier) > 0; hop++ {
+		var next []string
+		for _, book := range frontier {
+			page := uu.NormalizeURL(book + "/1")
+			if visited[page] {
+				continue
+			}
+			state, err := source.PageState(ctx, page)
+			if err != nil {
+				// NOT skipped silently. A delegate page we cannot read is a
+				// signer account we cannot enumerate, and dropping it makes the
+				// counted set smaller than the authority - which surfaces as a
+				// threshold shortfall and reads as "the institution did not
+				// authorize this".
+				//
+				// This was a silent `continue` for one iteration of this code and
+				// it hid exactly that: every corpus delegate book reports no
+				// accept threshold field, the parse failed, the page was skipped,
+				// and the delegated signature became invisible.
+				return nil, fmt.Errorf("delegate page %s could not be read, so the signer "+
+					"accounts cannot be fully enumerated: %w", page, err)
+			}
+			visited[page] = true
+			order = append(order, page)
+			next = append(next, delegateBooksOf(state.EntrySet())...)
+		}
+		frontier = next
+	}
+
+	if len(order) > 1 {
+		sort.Strings(order[1:])
+	}
+	return order, nil
+}
+
+// delegateBooksOf returns the delegate book URLs among a page's entries.
+func delegateBooksOf(entries []KeyPageEntry) []string {
+	var out []string
+	for _, e := range entries {
+		if e.Delegate != "" {
+			out = append(out, e.Delegate)
+		}
+	}
+	return out
+}
+
 func (g1 *G1Layer) signatureChainCount(ctx context.Context, keyPage string) (int, error) {
 	query := g1.queryBuilder.BuildSignatureChainQuery(nil, 0, 0)
 	response, err := g1.artifactManager.SaveRPCArtifact(ctx,
@@ -421,7 +552,12 @@ func (g1 *G1Layer) evaluateCandidate(ctx context.Context, cand sigCandidate, key
 
 	// --- receipt, for timing (section 6.2 / 7.1) --------------------------
 	receiptQuery := g1.queryBuilder.BuildNormativeChainQuery("signature", cand.MessageHash, true, false)
-	receiptResp, err := g1.artifactManager.SaveRPCArtifact(ctx, label+"_receipt", g1.client, keyPage, receiptQuery)
+	// The candidate's OWN page, not the route's. A delegated signature lives on
+	// the innermost signer's chain, and asking the principal's chain for it
+	// returns not-found - an outage, not a rejection, which takes the whole
+	// route down with it.
+	receiptResp, err := g1.artifactManager.SaveRPCArtifact(ctx, label+"_receipt", g1.client,
+		cand.pageFor(keyPage), receiptQuery)
 	if err != nil {
 		return evalResult{Outcome: SigUnavailable, Stage: "query-receipt", Reason: err.Error()}
 	}

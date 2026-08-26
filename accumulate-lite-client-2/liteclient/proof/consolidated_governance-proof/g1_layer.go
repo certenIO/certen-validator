@@ -328,16 +328,25 @@ func (g1 *G1Layer) ExtractSignatureSetUsingMessageID(ctx context.Context, messag
 		return nil, fmt.Errorf("failed to query transaction message for signatureSet: %v", err)
 	}
 
-	// Pick signatureSet for specific key page from transaction response
-	signatureSet, err := g1.pickKeypageSignatureSet(response, keyPage)
+	// Enumerate the principal's page AND every page reachable through
+	// delegation.
+	//
+	// Enumerating only the principal's page is complete for a 1-of-1 or a plain
+	// M-of-N - every signature is there - and incomplete the moment an entry is
+	// delegated: the delegated signer's user signature is on the INNERMOST page,
+	// and the principal's page holds only an `authority` record that the delegate
+	// approved. The threshold then comes up short and reads as "the institution
+	// did not authorize this", about a transaction the network executed.
+	//
+	// Every page's set is already in this one response, so the walk costs no
+	// extra queries. See g1_delegated_enumeration.go.
+	messageIDs, pages, err := g1.collectDelegatedMessageIDs(response, keyPage)
 	if err != nil {
-		return nil, fmt.Errorf("failed to pick signatureSet for key page: %v", err)
+		return nil, fmt.Errorf("failed to enumerate signature sets: %v", err)
 	}
-
-	// Extract signature message IDs from signatureSet
-	messageIDs, err := g1.extractSignatureMessageIDs(signatureSet)
-	if err != nil {
-		return nil, fmt.Errorf("failed to extract signature message IDs: %v", err)
+	if len(pages) > 1 {
+		fmt.Printf("[G1] [SIGNATURESET] Enumerated %d signer page(s) via delegation: %v\n",
+			len(pages), pages)
 	}
 
 	// Build SignatureSetData result
