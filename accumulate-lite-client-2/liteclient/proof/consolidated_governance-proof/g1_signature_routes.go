@@ -570,7 +570,33 @@ func (g1 *G1Layer) evaluateCandidate(ctx context.Context, cand sigCandidate, key
 		return evalResult{Outcome: SigUnavailable, Stage: "extract-receipt", Reason: err.Error()}
 	}
 
-	timingVerified := g1.signatureVerifier.ValidateSignatureTiming(receipt, snapshot.ExecTerms.MBI)
+	// Timing is compared WITHIN a partition, never across two.
+	//
+	// receipt.localBlock is a block index on the SIGNER's partition; execMBI is
+	// one on the PRINCIPAL's. Within one partition they are the same clock and
+	// "the signature came before execution" is a real re-derivation of a rule
+	// Accumulate enforces. Across partitions they are two unrelated counters,
+	// and comparing them is not a weak check - it is a meaningless one that
+	// produces a confident answer.
+	//
+	// Observed live on Kermit, corpus case F: the delegated signer on BVN2 had
+	// localBlock 10200307 against an execMBI of 10199460 on BVN1, and the
+	// signature was rejected as "signed after execution" - a false governance
+	// rejection of a signature the network accepted, produced by subtracting two
+	// numbers that do not belong to the same sequence.
+	//
+	// For a cross-partition signer the ordering still holds; what is missing is
+	// a LOCAL way to re-derive it. Accumulate does not execute a transaction
+	// whose signatures came after execution, and G0 proves this one executed, so
+	// the ordering is established by execution inclusion rather than by
+	// comparing indices. That is a weaker claim than the same-partition case and
+	// it is recorded as such on the evidence rather than being passed off as the
+	// same thing.
+	sameClock := sameRoutingPartition(cand.pageFor(keyPage), snapshot.Page)
+	timingVerified := true
+	if sameClock {
+		timingVerified = g1.signatureVerifier.ValidateSignatureTiming(receipt, snapshot.ExecTerms.MBI)
+	}
 	if !timingVerified {
 		return evalResult{Outcome: SigRejected, Stage: "timing",
 			Reason: fmt.Sprintf("signed after execution: receipt.localBlock=%d > execMBI=%d",

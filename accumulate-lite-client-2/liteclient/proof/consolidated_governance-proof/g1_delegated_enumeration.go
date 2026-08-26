@@ -266,3 +266,36 @@ func pageOfMessageID(messageID string) string {
 	uu := URLUtils{}
 	return uu.NormalizeURL(messageID[at+1:])
 }
+
+// sameRoutingPartition reports whether two accounts certainly route to the same
+// Accumulate partition.
+//
+// Two block indices are comparable only if they count the same chain. Accumulate
+// routes by ACCOUNT IDENTITY, so two accounts under one ADI are always on one
+// partition - which covers every page of every book of that ADI, and therefore
+// every proof on record and every same-ADI delegation. Two DIFFERENT identities
+// may or may not share a partition, and this answers false for them: it is the
+// conservative direction, because the cost of a wrong "same" is comparing two
+// unrelated counters and rejecting a valid signature, while the cost of a wrong
+// "different" is only declining to re-derive an ordering that execution already
+// establishes.
+//
+// Identity rather than a routing table on purpose. The table lives in the
+// validator's own module, which this package cannot import, and a second copy of
+// the prefix arithmetic here would be a thing that can drift from the one the
+// proof legs are built with. Identity needs no table and is exactly right in the
+// direction that matters.
+func sameRoutingPartition(a, b string) bool {
+	return identityOf(a) == identityOf(b)
+}
+
+// identityOf returns the ADI an account belongs to: acc://foo.acme/book/1 ->
+// foo.acme.
+func identityOf(account string) string {
+	s := strings.ToLower(strings.TrimSpace(account))
+	s = strings.TrimPrefix(s, "acc://")
+	if i := strings.Index(s, "/"); i >= 0 {
+		s = s[:i]
+	}
+	return s
+}
