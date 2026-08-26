@@ -133,18 +133,14 @@ type SignerLeg struct {
 // here - a signature that did not contribute to the threshold needs no
 // inclusion proof, and proving it inflates the proof without adding evidence.
 func (pb *ProofBuilder) BuildMultiPartitionProof(ctx context.Context, in ProofInput, signers []SignerLeg) (*ChainedProof, error) {
-	base, err := pb.BuildProof(ctx, in)
-	if err != nil {
-		return nil, err
+	if pb.V3 == nil {
+		return nil, fmt.Errorf("proof builder: missing v3 client")
 	}
 
-	principal := base.principalPartition()
-	seen := map[string]bool{strings.ToLower(principal): true}
-
-	// Sorted, so the legs are built - and stored - in canonical order rather
-	// than in whatever order resolution happened to enumerate the signers.
-	// Partition discovery order is not stable, and unordered legs make two
-	// validators reading identical chain data produce different bytes.
+	// Sorted, so legs are built - and stored - in canonical order rather than in
+	// whatever order resolution enumerated the signers. Partition discovery
+	// order is not stable, and unordered legs make two validators reading
+	// identical chain data produce different bytes.
 	ordered := append([]SignerLeg{}, signers...)
 	sort.SliceStable(ordered, func(i, j int) bool {
 		return strings.ToLower(ordered[i].Partition) < strings.ToLower(ordered[j].Partition)
@@ -152,75 +148,154 @@ func (pb *ProofBuilder) BuildMultiPartitionProof(ctx context.Context, in ProofIn
 
 	var artifacts map[string][]byte
 	if pb.WithArtifacts {
-		artifacts = base.Artifacts
+		artifacts = make(map[string][]byte)
 	}
 	l1b := &Layer1Builder{Client: pb.V3, Debug: pb.Debug, Artifacts: artifacts}
+	l3b := &Layer3Builder{Client: pb.V3, Debug: pb.Debug, Artifacts: artifacts}
 	l4b := &Layer4Builder{Client: pb.V3, Debug: pb.Debug, Artifacts: artifacts}
 
-	// Additional legs' L2 receipts are NOT pinned, because there is currently no
-	// way to compute the height to pin them to.
+	// ---- pass 1: L1 for every leg, and an unpinned L2 to learn its DN block --
 	//
-	// Each leg gets a receipt to whichever Directory anchor Accumulate picks, and
-	// two partitions' anchors are recorded in different DN blocks - so the legs
-	// witness different DN roots while L3 proves only one of them. Observed live
-	// on Kermit for corpus case F: the principal's leg landed at DN block 7769803
-	// and the delegated signer's at 7769799.
-	//
-	// Layer2Builder.ReceiptForRootChainHeight is the lever that would fix it, and
-	// its documentation records exactly what was established about it and what is
-	// still missing. Setting it to a guessed value would produce a proof whose
-	// second leg is bound to the wrong Directory root - wrong in a way nothing
-	// downstream would catch, because the leg would be internally consistent.
-	//
-	// So this leaves it unset, and such a proof is REFUSED at verification with
-	// the reason named. A refusal that says what is missing is worth more than a
-	// proof nobody checked.
-	l2b := &Layer2Builder{Client: pb.V3, Debug: pb.Debug, Artifacts: artifacts}
+	// The unpinned L2 is a probe, not the leg's evidence. It exists only to find
+	// out which Directory block each partition's anchor was recorded in, so the
+	// common root can be chosen from the proof itself rather than from wherever
+	// the chain happens to be.
+	type legBuild struct {
+		partition string
+		account   string
+		l1        Layer1
+	}
+
+	principalPartition := strings.ToLower(in.BVN)
+	builds := []legBuild{}
+
+	l1Principal, err := l1b.Build(ctx, in.Account, in.TxHash)
+	if err != nil {
+		return nil, err
+	}
+	builds = append(builds, legBuild{partition: principalPartition, account: in.Account, l1: l1Principal})
 
 	for _, s := range ordered {
-		key := strings.ToLower(s.Partition)
 		if s.Partition == "" {
 			return nil, fmt.Errorf("proof builder: signer %s has no partition; a leg whose "+
 				"partition is unknown cannot be checked against the quorum that signed it", s.Account)
 		}
-		if seen[key] {
+		if strings.EqualFold(s.Partition, principalPartition) {
 			continue // this partition's evidence is already in the proof
 		}
-		seen[key] = true
-
 		if s.MessageHash == "" {
-			return nil, fmt.Errorf("proof builder: signer %s has no signature message hash; "+
-				"a signer leg proves the SIGNATURE's inclusion on that signer's chain, and "+
-				"without the message there is nothing to prove", s.Account)
+			return nil, fmt.Errorf("proof builder: signer %s has no signature message hash; a "+
+				"signer leg proves the SIGNATURE's inclusion on that signer's chain, and without "+
+				"the message there is nothing to prove", s.Account)
 		}
 		l1, err := l1b.BuildOnChain(ctx, s.Account, "signature", s.MessageHash)
 		if err != nil {
 			return nil, fmt.Errorf("proof builder: L1 for signer %s on %s: %w", s.Account, s.Partition, err)
 		}
-		l2, err := l2b.Build(ctx, s.Partition, l1)
-		if err != nil {
-			return nil, fmt.Errorf("proof builder: L2 for %s: %w", s.Partition, err)
-		}
-		l4, err := l4b.BuildBVNLeg(ctx, s.Partition, l1, l2)
-		if err != nil {
-			return nil, fmt.Errorf("proof builder: L4 for %s: %w", s.Partition, err)
-		}
+		builds = append(builds, legBuild{
+			partition: strings.ToLower(s.Partition), account: s.Account, l1: l1,
+		})
+	}
 
-		if err := base.AddLeg(PartitionLeg{
-			Partition: s.Partition,
-			Account:   s.Account,
-			Layer1:    l1,
-			Layer2:    l2,
-			Layer4BVN: l4,
-		}); err != nil {
+	// ---- choose ONE Directory root for every leg ---------------------------
+	probe := &Layer2Builder{Client: pb.V3, Debug: pb.Debug}
+	var latestDNBlock uint64
+	for _, b := range builds {
+		l2, err := probe.Build(ctx, b.partition, b.l1)
+		if err != nil {
+			return nil, fmt.Errorf("proof builder: L2 probe for %s: %w", b.partition, err)
+		}
+		if l2.DNMinorBlockIndex > latestDNBlock {
+			latestDNBlock = l2.DNMinorBlockIndex
+		}
+	}
+
+	height := uint64(0)
+	if len(builds) > 1 {
+		// Only a multi-partition proof needs pinning. A single-partition proof
+		// takes the receipt Accumulate would give it anyway, so its bytes are
+		// unchanged - which is what keeps every existing proof and fixture
+		// reading exactly as before.
+		height, err = resolveDNRootChainHeight(ctx, pb.V3, latestDNBlock)
+		if err != nil {
 			return nil, fmt.Errorf("proof builder: %w", err)
 		}
 	}
 
-	// As with the single-partition path: never emit an object the verifier
-	// would reject.
-	if err := NewProofVerifier(pb.Debug).Verify(ctx, base); err != nil {
+	// ---- pass 2: the real L2 for every leg, all at that one height ----------
+	l2b := &Layer2Builder{
+		Client: pb.V3, Debug: pb.Debug, Artifacts: artifacts,
+		ReceiptForRootChainHeight: height,
+	}
+
+	legs := make([]PartitionLeg, 0, len(builds))
+	for _, b := range builds {
+		l2, err := l2b.Build(ctx, b.partition, b.l1)
+		if err != nil {
+			return nil, fmt.Errorf("proof builder: L2 for %s: %w", b.partition, err)
+		}
+		l4, err := l4b.BuildBVNLeg(ctx, b.partition, b.l1, l2)
+		if err != nil {
+			return nil, fmt.Errorf("proof builder: L4 for %s: %w", b.partition, err)
+		}
+		legs = append(legs, PartitionLeg{
+			Partition: l4.Partition, Account: b.account, Layer1: b.l1, Layer2: l2, Layer4BVN: l4,
+		})
+	}
+
+	// Every leg must now witness the SAME Directory root. This is the property
+	// the whole pass exists to establish, so it is checked rather than assumed:
+	// a silent mismatch here would produce a proof whose second leg is bound to
+	// a root nothing proves.
+	for _, leg := range legs[1:] {
+		if !strings.EqualFold(leg.Layer2.DNRootChainAnchor, legs[0].Layer2.DNRootChainAnchor) {
+			return nil, fmt.Errorf("proof builder: leg %s witnesses DN root %s but leg %s "+
+				"witnesses %s; pinning to root chain height %d did not bring them together",
+				leg.Partition, leg.Layer2.DNRootChainAnchor,
+				legs[0].Partition, legs[0].Layer2.DNRootChainAnchor, height)
+		}
+	}
+
+	// ---- L3 and the Directory quorum, from the common root -----------------
+	principal := legs[0]
+	for i := range legs {
+		if strings.EqualFold(legs[i].Partition, principalPartition) {
+			principal = legs[i]
+		}
+	}
+
+	l3, err := l3b.Build(ctx, principal.Layer2)
+	if err != nil {
+		return nil, err
+	}
+	l4dn, err := l4b.BuildDNLeg(ctx, principal.Partition, principal.Layer2, l3)
+	if err != nil {
+		return nil, fmt.Errorf("proof builder: L4 DN leg: %w", err)
+	}
+
+	out := &ChainedProof{
+		Input:     in,
+		Layer1:    principal.Layer1,
+		Layer2:    principal.Layer2,
+		Layer3:    l3,
+		Layer4BVN: principal.Layer4BVN,
+		Layer4DN:  l4dn,
+	}
+	if pb.WithArtifacts {
+		out.Artifacts = artifacts
+	}
+	for _, leg := range legs {
+		if strings.EqualFold(leg.Partition, principal.Partition) {
+			continue
+		}
+		if err := out.AddLeg(leg); err != nil {
+			return nil, fmt.Errorf("proof builder: %w", err)
+		}
+	}
+
+	// The builder must never emit an object the verifier would reject.
+	if err := NewProofVerifier(pb.Debug).Verify(ctx, out); err != nil {
 		return nil, fmt.Errorf("proof builder: built multi-partition proof does not verify: %w", err)
 	}
-	return base, nil
+	return out, nil
 }

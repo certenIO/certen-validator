@@ -394,3 +394,57 @@ func flipHex(s string) string {
 	}
 	return string(b)
 }
+
+// TestP7_5_LegsMustShareOneDirectoryRoot is the invariant that makes a
+// cross-partition proof a single claim rather than two stapled together.
+//
+// Every leg's L2 receipt is a merkle path up to a Directory root, and L3 proves
+// ONE root into the DN state tree. If two legs terminate at different roots, the
+// second has no proven path to the state the proof is about - and the proof
+// would still look complete, because each leg is internally valid.
+//
+// The builder now brings them together by asking every leg's receipt for the
+// same DN minor root chain height (see dn_root_height.go). This pins the check
+// the verifier applies regardless, so a builder regression cannot slip a
+// mismatched pair through.
+func TestP7_5_LegsMustShareOneDirectoryRoot(t *testing.T) {
+	base := loadFixtureProof(t, "proof_bvn1.json")
+	other := loadFixtureProof(t, "proof_bvn3.json")
+	ctx := context.Background()
+	pv := NewProofVerifier(false)
+
+	// A leg that agrees on the Directory root verifies.
+	agreeing := PartitionLeg{
+		Partition: "BVN3",
+		Account:   other.Input.Account,
+		Layer1:    other.Layer1,
+		Layer2:    other.Layer2,
+		Layer4BVN: other.Layer4BVN,
+	}
+	agreeing.Layer2.DNRootChainAnchor = base.Layer2.DNRootChainAnchor
+	agreeing.Layer2.DNMinorBlockIndex = base.Layer2.DNMinorBlockIndex
+
+	ok := *base
+	ok.AdditionalLegs = nil
+	if err := ok.AddLeg(agreeing); err != nil {
+		t.Fatalf("add leg: %v", err)
+	}
+	if err := pv.Verify(ctx, &ok); err != nil {
+		t.Fatalf("two legs sharing a Directory root must verify: %v", err)
+	}
+
+	// The same leg, disagreeing by one bit in the root, must not.
+	disagreeing := agreeing
+	disagreeing.Layer2.DNRootChainAnchor = flipHex(base.Layer2.DNRootChainAnchor)
+
+	bad := *base
+	bad.AdditionalLegs = nil
+	if err := bad.AddLeg(disagreeing); err != nil {
+		t.Fatalf("add leg: %v", err)
+	}
+	if err := pv.Verify(ctx, &bad); err == nil {
+		t.Fatal("a leg witnessing a different Directory root was accepted. Its path to the " +
+			"state this proof proves is asserted, not shown, and the proof would still look " +
+			"complete because the leg is internally valid")
+	}
+}
