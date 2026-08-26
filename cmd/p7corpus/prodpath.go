@@ -21,6 +21,10 @@ import (
 	proofpkg "github.com/certen/independant-validator/pkg/proof"
 )
 
+// baselineTx is a delivered 1-of-1 transaction on the production ADI, used to
+// prove the shape all existing traffic uses is unaffected.
+var baselineTx = "1f25bb6ae4cad401ddede00c5711d871b02dd0bae20e027d2194fae5c7f12c5f"
+
 func checkProductionPath(ctx context.Context, endpoint string, raw map[string]json.RawMessage) error {
 	cases, err := parseCases(raw)
 	if err != nil {
@@ -112,5 +116,27 @@ func checkProductionPath(ctx context.Context, endpoint string, raw map[string]js
 		return fmt.Errorf("production proof does not verify offline: %w", err)
 	}
 	fmt.Println("production's cross-partition proof VERIFIES OFFLINE")
+
+	// The regression that matters more than any of it: the 1-of-1 shape every
+	// production proof uses must be untouched. Discovery now runs in front of
+	// every build, so a mistake there would break all traffic, not just the
+	// cross-partition case that has none yet.
+	if baselineTx != "" {
+		baseAcct := "acc://certen-kermit-12.acme/data"
+		bcp, err := gen.GenerateChainedProof(ctx, baseAcct, baselineTx,
+			proofpkg.CalculateBVNFromAccountURL(baseAcct))
+		if err != nil {
+			return fmt.Errorf("production baseline (1-of-1) build: %w", err)
+		}
+		if len(bcp.Legs()) != 1 {
+			return fmt.Errorf("the 1-of-1 baseline built %d legs; it must build exactly one",
+				len(bcp.Legs()))
+		}
+		if err := chained_proof.NewProofVerifier(false).Verify(ctx, bcp); err != nil {
+			return fmt.Errorf("production baseline proof does not verify: %w", err)
+		}
+		fmt.Printf("baseline 1-of-1 still builds %d leg %v and VERIFIES OFFLINE\n",
+			len(bcp.Legs()), bcp.SignerPartitions())
+	}
 	return nil
 }
