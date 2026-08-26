@@ -65,6 +65,11 @@ func main() {
 			fatal("%v", err)
 		}
 
+	case "prodpath":
+		if err := checkProductionPath(ctx, *endpoint, cases); err != nil {
+			fatal("%v", err)
+		}
+
 	case "multileg":
 		if err := buildMultiLeg(ctx, *endpoint, cases); err != nil {
 			fatal("%v", err)

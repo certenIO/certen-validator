@@ -184,14 +184,64 @@ func (g *LiteClientProofGenerator) GenerateChainedProof(ctx context.Context, acc
 	proofBuilder := chained_proof.NewProofBuilder(g.v3Client, true)
 	proofBuilder.WithArtifacts = true
 
-	// Build real proof using the working-proof_do_not_edit ProofBuilder
-	chainedProof, err := proofBuilder.BuildProof(ctx, chained_proof.ProofInput{
+	in := chained_proof.ProofInput{
 		Account: accountURL,
 		TxHash:  txHash,
 		BVN:     bvn,
-	})
+	}
+
+	// How many partitions actually signed?
+	//
+	// Governance can span partitions - a delegated signer may live on a
+	// different BVN than the principal - and each distinct signer partition
+	// needs its own L1, L2 and L4-BVN. Building a single-leg proof for such a
+	// transaction is not a missing feature but silent under-proving: the one-leg
+	// proof VERIFIES, because it is internally consistent, while the other
+	// partition's quorum is simply absent from it.
+	//
+	// So the signer partitions are read off the transaction before the proof is
+	// built. Discovery failing is NOT a reason to fall back to one leg - that
+	// would reintroduce the very failure this prevents, and hide it behind a
+	// warning. It fails closed.
+	signerLegs, err := DiscoverSignerLegs(ctx, g.endpoint, signerTxScope(accountURL, txHash))
+	if err != nil {
+		return nil, fmt.Errorf("build chained proof: cannot determine which partitions signed, "+
+			"so cannot tell whether one leg is enough: %w", err)
+	}
+	// The PRINCIPAL's partition counts too, and it is the case that matters
+	// most. Corpus case F has exactly one signer account - the delegated signer
+	// on BVN2 - because the principal's own page carries only an authority
+	// record, not a key signature. Counting signer partitions alone gives one,
+	// while the proof plainly needs two: BVN1 for the principal and BVN2 for the
+	// signer.
+	//
+	// So the span is the union of the signers' partitions with the principal's.
+	partitions := DistinctPartitions(append(
+		append([]chained_proof.SignerLeg{}, signerLegs...),
+		chained_proof.SignerLeg{Account: accountURL, Partition: bvn},
+	))
+
+	var chainedProof *chained_proof.ChainedProof
+	if len(partitions) > 1 {
+		log.Printf("[PROOF] governance spans %d partitions %v - building a leg for each",
+			len(partitions), partitions)
+		chainedProof, err = proofBuilder.BuildMultiPartitionProof(ctx, in, signerLegs)
+	} else {
+		// The single-partition path, unchanged. This is every proof on record,
+		// and its bytes must not move.
+		chainedProof, err = proofBuilder.BuildProof(ctx, in)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("build chained proof: %w", err)
+	}
+
+	// The proof must carry a leg for every partition that signed. Checked rather
+	// than trusted: a builder that quietly dropped one would produce an object
+	// that passes verification while proving less than the transaction shows.
+	if got := len(chainedProof.Legs()); got < len(partitions) {
+		return nil, fmt.Errorf("build chained proof: %d partition(s) signed %v but the proof "+
+			"carries %d leg(s); refusing to emit a proof that omits a signer partition's quorum",
+			len(partitions), partitions, got)
 	}
 
 	log.Printf("[PROOF] L1-L4 chained proof built successfully:")
