@@ -319,14 +319,55 @@ failure.
 > produces different roots and **every TX2 on every chain reverts**.
 
 1. Confirm Phase 6 Gate is green and the new govRoot is recorded.
-2. Build once; deploy the **same** binary to all seven validators.
-3. Verify identity before starting any of them:
+2. Build once; deploy the **same** binaries to all seven validators.
+3. Verify identity before starting any of them — for **every** proof-bearing
+   binary, not only the validator:
 
 ```bash
-for i in 1 2 3 4 5 6 7; do docker exec certen-validator-$i sha256sum /app/validator; done | awk '{print $1}' | sort -u | wc -l
+for B in validator govproof txhash; do
+  printf '%-10s ' "$B"
+  for i in 1 2 3 4 5 6 7; do docker exec certen-validator-$i sha256sum /app/$B; done \
+    | awk '{print $1}' | sort -u | wc -l
+done
 ```
 
-✅ Exactly `1`.
+✅ Exactly `1` for each of the three.
+
+> **Why three, and why this check used to be wrong.**
+>
+> The image ships three binaries and the proof is split across all of them:
+>
+> | binary | carries | how it reaches the validator |
+> |---|---|---|
+> | `/app/validator` | L1–L5 chained proof, govRoot assembly, signing | `working-proof_do_not_edit` is `package chained_proof` and is **imported**, so it compiles in |
+> | `/app/govproof` | G0 / G1 / G2 | `consolidated_governance-proof` is `package main` and **cannot** be imported; it is a separate executable invoked via `GOV_PROOF_CLI_PATH` |
+> | `/app/txhash` | G2 payload verification | separate executable, invoked via `TXHASH_CLI_PATH` |
+>
+> This step checked `/app/validator` alone. Two nodes can carry an identical
+> `/app/validator` and a **different** `/app/govproof` — and G1 feeds
+> `G1CanonicalHash`, which feeds govRoot. The check would have reported a clean
+> fleet while the governance verdicts diverged, which is precisely the
+> mixed-version hazard it exists to prevent, in the one binary it did not look at.
+>
+> Observed on 2026-08-26: commit `df6af20` changed only the governance package,
+> so `/app/validator` was byte-identical before and after while `/app/govproof`
+> moved `be6aadef…` → `1cd8d059…`. Under the old check that deploy looked like a
+> no-op.
+>
+> Verify the same three **on the built images, before anything starts** — that is
+> what "before starting any of them" means, and a container must exist to be
+> exec'd into:
+>
+> ```bash
+> for B in validator govproof txhash; do
+>   for i in 1 2 3 4 5 6 7; do
+>     docker run --rm --entrypoint sha256sum certen-validators-validator-$i /app/$B
+>   done | awk '{print $1}' | sort -u | wc -l
+> done
+> ```
+>
+> If a binary is ever added to the final stage of the `Dockerfile`, add it here.
+> The list is `grep 'COPY --from=builder' Dockerfile`.
 
 4. Start all seven. Confirm `git log -1` on `/root/certen-validators` matches
    the intended commit.
