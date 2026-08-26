@@ -407,40 +407,14 @@ func (sv *SignatureVerifier) ValidateSignatureSet(ctx context.Context, signature
 	uniqueValidKeys := len(uniqueKeyHashes)
 	var thresholdSatisfied bool
 	var resolution *ResolutionResult
+	var authorization *AccountAuthorization
 
-	if sv.resolver != nil {
-		sigs := make([]SignatureData, 0, len(validSignatures))
-		for _, s := range validSignatures {
-			sigs = append(sigs, s.Signature)
-		}
-		res, err := sv.resolver.Resolve(ctx, snapshot.Page, state, sigs)
-		if err != nil {
-			// Resolution could not be completed. That is an outage, not a
-			// verdict, and it must never become one.
-			return nil, &SignatureEvidenceIncomplete{
-				Route:     "authority-resolution",
-				Requested: len(validSignatures),
-				Unavailable: []UnavailableSignature{{
-					Stage: "resolve-authority", Err: err.Error(),
-				}},
-			}
-		}
-		resolution = res
-		thresholdSatisfied = res.ThresholdMet()
-		uniqueValidKeys = res.Satisfied
-
-		for _, r := range res.Refused {
-			if r.Reason == ReasonPageUnavailable {
-				return nil, &SignatureEvidenceIncomplete{
-					Route:     "authority-resolution",
-					Requested: len(validSignatures),
-					Unavailable: []UnavailableSignature{{
-						MessageID: r.SignerPage, Stage: r.Reason, Err: r.Detail,
-					}},
-				}
-			}
-		}
-	} else {
+	switch {
+	case sv.resolver == nil:
+		// No resolver: fall back to counting distinct keys. Correct while every
+		// entry is a key and every signature is direct, and unable to decide a
+		// delegated one at all - so one arriving here is reported as unavailable
+		// rather than counted as absent.
 		for _, s := range validSignatures {
 			if s.Signature.IsDelegated() {
 				return nil, &SignatureEvidenceIncomplete{
@@ -449,13 +423,101 @@ func (sv *SignatureVerifier) ValidateSignatureSet(ctx context.Context, signature
 					Unavailable: []UnavailableSignature{{
 						MessageID: s.MessageID, Stage: "resolve-authority",
 						Err: "a delegated signature reached threshold evaluation with no " +
-							"resolver configured; counting keys cannot decide it, and " +
-							"dropping it would understate the authority",
+							"resolver configured; counting keys cannot decide it, and dropping " +
+							"it would understate the authority",
 					}},
 				}
 			}
 		}
 		thresholdSatisfied = uint64(uniqueValidKeys) >= state.Threshold
+
+	default:
+		sigs := make([]SignatureData, 0, len(validSignatures))
+		for _, s := range validSignatures {
+			sigs = append(sigs, s.Signature)
+		}
+
+		// THE ACCOUNT'S AUTHORITY SET, not one key page.
+		//
+		// Accumulate requires every enabled authority of the principal to vote -
+		// userTransactionIsReady is ready only when notReady is empty - and an
+		// authority is a key book satisfied by ANY ONE of its pages, which is
+		// what AuthorityWillVote does by returning on the first signer that
+		// would vote.
+		//
+		// Evaluating a single page, chosen by assuming "<adi>/book/1", answers a
+		// narrower question than G1 claims. It is right for an account with one
+		// inherited authority whose book has one page - every account seen so
+		// far - and silently wrong for an account with two authorities, an
+		// explicit authority that is not the default book, or a signing page
+		// that is not page 1.
+		authz, authErr := sv.resolver.ResolveAccount(ctx, snapshot.Page, nil, false, sigs)
+		if authErr != nil {
+			// The source cannot read authority sets. Fall back to the single
+			// page rather than failing, but the narrower question is the one
+			// being answered and the evidence says so.
+			fmt.Printf("[SIGNATURE] [WARN] authority set unavailable (%v); evaluating the single "+
+				"key page %s instead, which is a NARROWER claim than the account's authority set\n",
+				authErr, snapshot.Page)
+
+			res, err := sv.resolver.Resolve(ctx, snapshot.Page, state, sigs)
+			if err != nil {
+				return nil, &SignatureEvidenceIncomplete{
+					Route:     "authority-resolution",
+					Requested: len(validSignatures),
+					Unavailable: []UnavailableSignature{{
+						Stage: "resolve-authority", Err: err.Error(),
+					}},
+				}
+			}
+			for _, r := range res.Refused {
+				if r.Reason == ReasonPageUnavailable {
+					return nil, &SignatureEvidenceIncomplete{
+						Route:     "authority-resolution",
+						Requested: len(validSignatures),
+						Unavailable: []UnavailableSignature{{
+							MessageID: r.SignerPage, Stage: r.Reason, Err: r.Detail,
+						}},
+					}
+				}
+			}
+			resolution = res
+			thresholdSatisfied = res.ThresholdMet()
+			uniqueValidKeys = res.Satisfied
+			break
+		}
+
+		authorization = authz
+		thresholdSatisfied = authz.Satisfied
+
+		// An authority we could not read is not an authority that failed, and a
+		// verdict must not be computed while one is outstanding.
+		if len(authz.Unevaluated) > 0 {
+			return nil, &SignatureEvidenceIncomplete{
+				Route:     "authority-resolution",
+				Requested: len(validSignatures),
+				Unavailable: []UnavailableSignature{{
+					MessageID: strings.Join(authz.Unevaluated, ","),
+					Stage:     "resolve-authority-set",
+					Err: "one or more of the principal's authorities could not be read; an " +
+						"authority we could not load is not an authority that failed",
+				}},
+			}
+		}
+
+		// Keep the satisfying page's detail as the reported resolution, so the
+		// familiar "n of m entries" evidence still appears.
+		for _, a := range authorization.Authorities {
+			for _, pg := range a.Pages {
+				if pg.Satisfied && pg.Result != nil {
+					resolution = pg.Result
+					uniqueValidKeys = pg.Result.Satisfied
+				}
+			}
+		}
+		if resolution == nil {
+			uniqueValidKeys = 0
+		}
 	}
 
 	// Timing starts FALSE and is earned. It previously started true and could
@@ -483,12 +545,25 @@ func (sv *SignatureVerifier) ValidateSignatureSet(ctx context.Context, signature
 	fmt.Printf("[SIGNATURE]   Threshold satisfied: %t\n", thresholdSatisfied)
 	fmt.Printf("[SIGNATURE]   Timing valid: %t\n", timingValid)
 
+	// WHICH authorities voted, and which page satisfied each. This is the
+	// evidence for the claim G1 actually makes - "the account's authority set
+	// approved" - and without it the log says only that some threshold was met.
+	if authorization != nil {
+		fmt.Printf("[SIGNATURE]   Authority set (%d authority/ies): %s\n",
+			len(authorization.Authorities), authorization.Describe())
+	}
+
 	if !thresholdSatisfied {
 		// The reason carries WHY each signature failed to count, not just the
 		// arithmetic. "1/2" is indistinguishable between an institution that did
 		// not authorize this and a signature we could not resolve.
+		// Name WHICH authority was unmet, not just that one was. "1/2" cannot
+		// distinguish an institution that did not authorize this from a
+		// signature we could not resolve.
 		detail := ""
-		if resolution != nil {
+		if authorization != nil {
+			detail = "; " + authorization.Describe()
+		} else if resolution != nil {
 			detail = "; " + describeResolutionRefusals(resolution)
 		}
 		return nil, ValidationError{Msg: fmt.Sprintf("Threshold not satisfied: %d/%d%s",

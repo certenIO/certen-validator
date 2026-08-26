@@ -9,6 +9,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 )
 
@@ -114,4 +115,132 @@ func (s *livePageSource) PageState(ctx context.Context, page string) (KeyPageSta
 	s.cache[key] = state
 	s.mu.Unlock()
 	return state, nil
+}
+
+// AccountAuthorities returns the authority set that governs an account.
+//
+// It follows the same derivation the Accumulate explorer uses, which in turn
+// mirrors the executor:
+//
+//	key page      -> its BOOK (strip the trailing page index) and ask again
+//	lite identity -> the identity itself is its own authority
+//	otherwise     -> the account's own `authorities` array
+//
+// The walk matters. An account whose authority is inherited reports it in
+// `authorities` like any other, but a KEY PAGE does not carry an authority set
+// of its own - its authority is the book it belongs to - so asking a page
+// directly returns nothing and the account reads as ungoverned.
+func (s *livePageSource) AccountAuthorities(ctx context.Context, account string) ([]AccountAuthority, error) {
+	pu := ProofUtilities{}
+	scope := normalizeAccURL(account)
+
+	// Bounded: the walk only ever climbs from a page to its book, so one step is
+	// enough. The bound is here so a surprising account type cannot loop.
+	for hop := 0; hop < 4; hop++ {
+		resp, err := s.client.Query(ctx, scope, map[string]interface{}{})
+		if err != nil {
+			return nil, fmt.Errorf("query %s: %w", scope, err)
+		}
+		result, err := pu.ExpectResult(resp)
+		if err != nil {
+			return nil, fmt.Errorf("account %s: %w", scope, err)
+		}
+		def := result
+		if acct, ok := pu.CaseInsensitiveGet(result, "account").(map[string]interface{}); ok {
+			def = acct
+		}
+
+		typ, _ := pu.CaseInsensitiveGet(def, "type").(string)
+		switch strings.ToLower(typ) {
+		case "keypage":
+			// The page's authority is its book.
+			book := bookOfPage(scope)
+			if book == "" {
+				return nil, fmt.Errorf("cannot derive the book of key page %s", scope)
+			}
+			scope = book
+			continue
+
+		case "liteidentity", "litetokenaccount":
+			// A lite account is its own authority.
+			return []AccountAuthority{{URL: identityURLOf(scope)}}, nil
+		}
+
+		raw, ok := pu.CaseInsensitiveGet(def, "authorities").([]interface{})
+		if !ok {
+			return nil, fmt.Errorf("account %s (%s) reports no authority set; an account with no "+
+				"authority cannot be shown to have approved anything", scope, typ)
+		}
+		out := make([]AccountAuthority, 0, len(raw))
+		for _, item := range raw {
+			m, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			u, _ := pu.CaseInsensitiveGet(m, "url").(string)
+			if u == "" {
+				continue
+			}
+			disabled, _ := pu.CaseInsensitiveGet(m, "disabled").(bool)
+			out = append(out, AccountAuthority{URL: normalizeAccURL(u), Disabled: disabled})
+		}
+		return out, nil
+	}
+	return nil, fmt.Errorf("authority derivation for %s did not terminate", account)
+}
+
+// BookPages returns a key book's signer pages in priority order.
+//
+// Accumulate's KeyBook.GetSigners() is pages 1..PageCount, and ANY ONE of them
+// satisfying its threshold satisfies the book. Reading pageCount rather than
+// assuming page 1 is the difference between evaluating the authority and
+// evaluating a guess about it.
+func (s *livePageSource) BookPages(ctx context.Context, book string) ([]string, error) {
+	pu := ProofUtilities{}
+	scope := normalizeAccURL(book)
+
+	resp, err := s.client.Query(ctx, scope, map[string]interface{}{})
+	if err != nil {
+		return nil, fmt.Errorf("query book %s: %w", scope, err)
+	}
+	result, err := pu.ExpectResult(resp)
+	if err != nil {
+		return nil, fmt.Errorf("book %s: %w", scope, err)
+	}
+	def := result
+	if acct, ok := pu.CaseInsensitiveGet(result, "account").(map[string]interface{}); ok {
+		def = acct
+	}
+
+	count := uint64(0)
+	switch v := pu.CaseInsensitiveGet(def, "pageCount").(type) {
+	case float64:
+		count = uint64(v)
+	case int:
+		count = uint64(v)
+	case uint64:
+		count = v
+	}
+	if count == 0 {
+		// A book with no pages cannot be satisfied by anything. Refusing beats
+		// returning an empty list, which a caller could read as "checked, and
+		// nothing was wrong".
+		return nil, fmt.Errorf("book %s reports no pages", scope)
+	}
+
+	out := make([]string, 0, count)
+	for i := uint64(1); i <= count; i++ {
+		out = append(out, fmt.Sprintf("%s/%d", scope, i))
+	}
+	return out, nil
+}
+
+// identityURLOf returns the acc:// identity an account belongs to.
+func identityURLOf(account string) string {
+	s := normalizeAccURL(account)
+	body := strings.TrimPrefix(s, "acc://")
+	if i := strings.Index(body, "/"); i >= 0 {
+		body = body[:i]
+	}
+	return "acc://" + body
 }
