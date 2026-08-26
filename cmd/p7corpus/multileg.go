@@ -179,5 +179,31 @@ func buildMultiLeg(ctx context.Context, endpoint string, raw map[string]json.Raw
 		return fmt.Errorf("the built proof does not verify offline: %w", err)
 	}
 	fmt.Println("the multi-partition proof VERIFIES OFFLINE")
+
+	// Determinism: build it a second time and compare the bytes.
+	//
+	// The Directory root every leg is bound to is chosen from the proof's own DN
+	// blocks and an append-only index chain, never from where the chain happens
+	// to be. If that were not so, two builds moments apart would pick different
+	// roots - and two validators would then disagree about govRoot, which is the
+	// intermittent unreproducible revert this whole ordering discipline exists to
+	// prevent. Asserting it is cheap; assuming it is how that class of bug ships.
+	again, err := pb.BuildMultiPartitionProof(ctx, in, signers)
+	if err != nil {
+		return fmt.Errorf("second build: %w", err)
+	}
+	a, err := json.Marshal(proof)
+	if err != nil {
+		return err
+	}
+	b, err := json.Marshal(again)
+	if err != nil {
+		return err
+	}
+	if string(a) != string(b) {
+		return fmt.Errorf("two builds of the same proof produced DIFFERENT bytes; the common " +
+			"Directory root is not being chosen deterministically")
+	}
+	fmt.Printf("built twice, byte-identical (%d bytes), legs %v\n", len(a), proof.SignerPartitions())
 	return nil
 }
