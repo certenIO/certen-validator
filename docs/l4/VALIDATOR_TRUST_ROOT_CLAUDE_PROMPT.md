@@ -8,10 +8,11 @@ That is the git repository any CERTEN-side notes land in. `accumulate-core` is a
 absolute path and **read-only**. AIPs are written to `C:\Accumulate_Stuff\AIPs\`,
 which is not a git repository.
 
-**End state:** a draft Accumulate Improvement Proposal that closes the one gap
+**End state:** two draft Accumulate Improvement Proposals closing the one gap
 left in CERTEN's cryptographic chain — that L4 verifies signatures against a
 validator set the proof carries, with nothing binding that set to network
-genesis.
+genesis. **AIP A targets the network running today (CometBFT). AIP B targets
+DAG-BFT.** A must stand on its own.
 
 ---
 
@@ -47,12 +48,34 @@ THE REQUIREMENT, IN ONE LINE:
 AUTHORITATIVE DOCUMENT - read in full before anything else:
   docs/l4/VALIDATOR_TRUST_ROOT_RUNBOOK.md
 
-Its section 2 is a research head start: Accumulate has ALREADY BUILT most of
-this (issue #4058 - a major-block "spine" with archived quorum signatures,
-network-update proofs, and a fast-sync induction walk from a pinned genesis
-snapshot). Section 2 gives you the file:line. TREAT IT AS A LEAD, NOT AS TRUTH -
-it was read once, on one branch, and may be stale or wrong. Re-verify it. Where
-it is wrong, say so plainly and correct it.
+READ SECTION 2A BEFORE SECTION 2.
+
+Section 2 describes a major-block "spine" (#4058) that Accumulate has already
+built - archived quorum signatures, network-update proofs, and a fast-sync
+induction walk from a pinned genesis snapshot. It is real, and it is NOT
+AVAILABLE: it lives on `dagbft-integration`, Kermit and mainnet do not run it,
+and DAG-BFT is months away. `internal/fastsync/spine.go` and
+`internal/api/v3/major_header.go` are BOTH ABSENT on origin/main.
+
+Section 2A is what exists on main TODAY, and it is where the near-term answer
+lives. Measured 2026-08-28:
+
+  - A validator-set change is an ordinary `WriteData` on acc://dn.acme/network,
+    with WriteToState MANDATORY (network_accounts.go on main). So every change
+    already carries a receipt, provable by the L1-L3 machinery CERTEN already
+    runs. The TIMELINE needs no new protocol.
+
+  - That account's main chain has EXACTLY ONE ENTRY on mainnet AND on kermit: a
+    `systemGenesis` transaction. The validator set has never changed on either
+    network. The induction chain today has length zero.
+
+  - The genesis entry is NOT receipt-provable through the normal chain-entry
+    query ("ElementIndex ... not found") while ordinary writeData entries are.
+    THE BASE CASE IS THE GAP - not the timeline, not the signatures.
+
+TREAT BOTH SECTIONS AS LEADS, NOT AS TRUTH. They were read once and may be
+stale or wrong. Re-verify. Where they are wrong, say so plainly and correct
+them.
 
 Background, if anything surprises you:
   docs/proof/DAGBFT_MIGRATION_ANALYSIS.md   (CometBFT -> DAG-BFT primitive map)
@@ -92,9 +115,11 @@ NON-NEGOTIABLE RULES
    on a guess about someone else's protocol is worse than no design, because it
    looks like research.
 
-3. CHECK BOTH BRANCHES. The spine machinery was found on `dagbft-integration`.
-   Determine what exists on `main` too. A proposal to "expose" something that
-   only exists on an unmerged branch is a different proposal, and must say so.
+3. MAIN IS THE TARGET; dagbft-integration IS THE FUTURE. Kermit runs CometBFT.
+   A proposal that only works after DAG-BFT lands does not unblock anything for
+   months. Write AIP A against `origin/main` and make it stand alone. Write AIP
+   B separately and mark it as depending on #4058. Never bundle B into A to look
+   thorough.
 
 4. DO NOT INVENT PROTOCOL. If Accumulate has a mechanism, propose exposing or
    extending it. Propose something new only after showing nothing existing fits,
@@ -118,9 +143,14 @@ NON-NEGOTIABLE RULES
    PROVEN ABSENT. Carry that discipline into the design - a verifier that cannot
    obtain the induction path must fail closed and say which of the three it hit.
 
-9. RUNNING BEATS READING. Where a question can be answered by querying a live
-   network (https://kermit.accumulatenetwork.io/v3, or mainnet), query it. Phase
-   8 found five defects that every offline reading missed.
+9. RUNNING BEATS READING, AND THE PATH HAS NEVER RUN. Query the live networks
+   (https://kermit.accumulatenetwork.io/v3, mainnet) for anything checkable. And
+   note what section 2A.3 means: the validator set has NEVER changed on either
+   network, so the update-proof path has zero production history. Simulate a
+   real validator-set change - devnet, the simulator, or accumulate-core's own
+   execute tests - and prove it end to end before claiming the timeline is
+   provable. Phase 8's record on exactly this: five defects, every one findable
+   only by running.
 
 10. REPORT FAITHFULLY. If a question cannot be answered, record it as
     unanswered with what you tried. If section 2 of the runbook is wrong, say
@@ -131,7 +161,9 @@ ORDER OF WORK
 ═══════════════════════════════════════════════════════════════════
 
   Runbook Phase 0   Re-verify section 2 on both branches      -> Gate 0
-  Runbook Phase 1   Q1-Q3  genesis identity, timeline, retention -> Gate 1
+  Runbook Phase 1   Q9 FIRST (is the genesis entry really unprovable, or is
+                    it the wrong query shape? this decides whether AIP A is a
+                    one-line API fix or a protocol change), then Q1-Q3 -> Gate 1
   Runbook Phase 2   Q4-Q6  point query, cost, DAG-BFT         -> Gate 2
   Runbook Phase 3   Q7     evaluate the options               -> Gate 3
   Runbook Phase 4   Q8     the CERTEN-side verifier contract  -> Gate 4
@@ -152,10 +184,12 @@ DEFINITION OF DONE
   [ ] A recommended design, with the alternatives considered and the reason each
       lost.
   [ ] Measured sizes/counts wherever the design costs a verifier bandwidth.
-  [ ] Draft AIP(s) saved under C:\Accumulate_Stuff\AIPs\, matching the AIP-50
-      house style, plus a short GitLab issue body per AIP in the governance form
-      (Summary / What is the need? / What is the desired behavior? / How will
-      this be implemented?).
+  [ ] AIP A (CometBFT, today) and AIP B (DAG-BFT, spine) saved separately under
+      C:\Accumulate_Stuff\AIPs\, matching the AIP-50 house style, plus a short
+      GitLab issue body per AIP in the governance form (Summary / What is the
+      need? / What is the desired behavior? / How will this be implemented?).
+      A must be implementable without B.
+  [ ] A validator-set change SIMULATED and proven end to end, not reasoned about.
   [ ] An explicit statement of what the proposal does NOT solve and what trust
       remains after it ships.
   [ ] The CERTEN-side change described concretely: what layer4_verify.go would

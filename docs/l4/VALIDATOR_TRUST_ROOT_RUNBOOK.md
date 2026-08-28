@@ -4,7 +4,12 @@
 **Predecessor:** `PHASE8_RUNBOOK.md` (closed — all gates green, fleet deployed)
 **Date:** 2026-08-28
 **Target repo for research:** `C:\Accumulate_Stuff\accumulate-core` — **READ ONLY**
-**Deliverable:** one or more draft Accumulate Improvement Proposals
+**Deliverable:** two draft Accumulate Improvement Proposals — one for the
+network running **today** (CometBFT), one for DAG-BFT
+
+> ⚠️ **Read §2A before §2.** §2 describes machinery on `dagbft-integration`,
+> which Kermit and mainnet DO NOT RUN and which is months away. §2A is what
+> exists on `main` today, and it is where the near-term answer lives.
 
 > This runbook produces a **design and an AIP**, not a code change to
 > accumulate-core. Nothing in `accumulate-core` is modified. CERTEN-side code
@@ -177,6 +182,114 @@ works.** The design problem is largely solved inside Accumulate.
 
 ---
 
+## 2A. What is available NOW — the CometBFT track (READ THIS BEFORE §2)
+
+**Section 2 describes `dagbft-integration`. Kermit and mainnet do not run it, and
+DAG-BFT is months away.** Everything below was measured on 2026-08-28 against
+`origin/main` and against the live networks. This is the track that matters
+first.
+
+### 2A.1 The spine does NOT exist on main
+
+```
+internal/fastsync/spine.go          ABSENT on origin/main
+internal/api/v3/major_header.go     ABSENT on origin/main
+internal/api/private/api.go         present, but WITHOUT the two rangers
+```
+
+So none of §2's machinery is reachable on the network CERTEN actually proves
+against. Any design that depends on it is a DAG-BFT-era design.
+
+### 2A.2 But the validator set is already ordinary, provable account state
+
+`internal/core/execute/v2/block/network_accounts.go` on **main**,
+`processNetworkAccountUpdates`:
+
+```go
+case *protocol.WriteData:
+    switch targetName {
+    case protocol.Network:
+        err = x.globals.Pending.ParseNetwork(body.Entry)   // the validator set
+    ...
+    }
+    // Force WriteToState for variable accounts
+    if !body.WriteToState {
+        return errors.BadRequest.WithFormat("updates to %v must write to state", ...)
+    }
+```
+
+Three things follow, and they are the foundation of the near-term design:
+
+1. A validator-set change is a **`WriteData` transaction on
+   `acc://dn.acme/network`** — an ordinary transaction on an ordinary data
+   account's main chain.
+2. `WriteToState` is **mandatory** — the account state can never drift from the
+   entry history.
+3. Therefore **every change already has a receipt**, provable by the exact
+   L1–L3 machinery CERTEN already runs on `certen-kermit-12.acme/data`.
+
+No new protocol is needed to prove the *timeline*. That is a much smaller ask
+than §2 implies.
+
+### 2A.3 Measured: the timeline is currently EMPTY
+
+```
+acc://dn.acme/network  main chain entries:
+    mainnet.accumulatenetwork.io/v3   ->  1
+    kermit.accumulatenetwork.io/v3    ->  1
+```
+
+That single entry is a **`systemGenesis`** transaction (principal `acc://ACME`).
+**The validator set has never been changed on either network.** The induction
+chain from genesis to today has length zero: the current set *is* the genesis
+set.
+
+This is a gift and a trap. The gift: a genesis-rooted proof today needs to walk
+nothing. The trap: the code path that would prove a change has **never run**,
+which is precisely the condition Phase 8 showed produces five defects the moment
+it does. Any design must be exercised against a *simulated* change, not against
+the empty case.
+
+### 2A.4 The real base-case gap, measured
+
+Ordinary `writeData` entries are receipt-provable today — CERTEN does it on
+every proof. The genesis entry is **not**:
+
+```
+query acc://dn.acme/network chain main entry=e43be90e3492...  includeReceipt
+  -> get entry index: Account.acc://dn.acme/network.MainChain.ElementIndex.
+     e43be90e3492... not found
+```
+
+So the gap on CometBFT is **not** the update timeline and **not** the signature
+verification. It is the **base case**: the genesis network definition cannot be
+proven through the normal chain-entry path, so induction has nothing to stand on.
+
+Confirm this before designing around it — it may be a query-shape problem rather
+than a missing capability, and that would change the proposal entirely.
+
+### 2A.5 Candidate that already exists publicly
+
+`pkg/api/v3/api.go:82` on main defines a public `SnapshotService` with
+`ListSnapshots`. If genesis snapshots are listable and fetchable, that is a
+plausible published trust anchor without new protocol. Determine what it
+actually serves.
+
+### 2A.6 What this means for the deliverable
+
+The ask **splits in two**, and they must be written as separate AIPs:
+
+| | Target | Ask | Depends on |
+|---|---|---|---|
+| **A — now** | CometBFT / `main` / Kermit | make the **genesis** network definition verifiable, and guarantee historical anchor signatures are retained so induction is possible once the set does change | nothing unmerged |
+| **B — later** | DAG-BFT / `dagbft-integration` | promote the #4058 spine (`MajorHeaderRange` / `MinorRootRange`) to the public API so induction scales without walking every update | #4058 landing |
+
+**A is the one that unblocks CERTEN.** Write it first, and write it so it does
+not depend on B. If A alone closes the gap for the current network, say so
+plainly rather than bundling B to look thorough.
+
+---
+
 ## 3. The open questions the research must answer
 
 These are the questions. Do not answer them from this document — answer them
@@ -212,12 +325,29 @@ self-anchor" primitive survive? `docs/proof/DAGBFT_MIGRATION_ANALYSIS.md` in the
 CERTEN repo already flags that **StateHash is excluded from the certificate
 quorum** — determine whether that breaks the spine's quorum check.
 
-**Q7 — Minimal public surface.** What is the smallest public API that closes the
-gap? Candidates, to be evaluated not assumed:
-  - (a) promote `MajorHeaderRange` + `MinorRootRange` to public v3
-  - (b) a new point query: "validator set at height H, with proof to genesis"
-  - (c) publish signed genesis checkpoints so verifiers start recent, not at genesis
-  - (d) embed the induction path in the anchor receipt CERTEN already fetches
+**Q7 — Minimal public surface, ON MAIN.** What is the smallest public API that
+closes the gap **for the network running today**? Candidates, to be evaluated not
+assumed:
+  - (a) make the genesis network-definition entry receipt-provable (may be a
+        query-shape fix rather than new protocol — see §2A.4)
+  - (b) publish a canonical, checkable genesis anchor (hash or signed checkpoint),
+        possibly via the existing public `SnapshotService`
+  - (c) a point query: "validator set at height H, with proof to genesis"
+  - (d) guarantee retention of historical anchor quorum signatures, so induction
+        remains possible after the set changes
+  - (e) DAG-BFT ERA ONLY: promote `MajorHeaderRange` + `MinorRootRange` to public v3
+
+**Q9 — Is the genesis entry actually unprovable?** §2A.4 measured
+`ElementIndex ... not found` for the genesis entry while ordinary writeData
+entries prove fine. Establish whether that is a missing capability or the wrong
+query shape. **This single answer decides whether AIP A is a one-line API fix or
+a protocol change.**
+
+**Q10 — Exercise the path that has never run.** The validator set has never
+changed on mainnet or Kermit (§2A.3), so the update-proof path has zero
+production history. Simulate a change (devnet, simulator, or
+`internal/core/execute` tests) and prove it end to end before claiming the
+timeline is provable. Phase 8's record: five defects, all found only by running.
 
 **Q8 — What CERTEN must build regardless.** Whatever the API, the verifier side
 is CERTEN's. What does `layer4_verify.go` need so that `ValidatorSet` is
@@ -258,7 +388,7 @@ is CERTEN's. What does `layer4_verify.go` need so that `ValidatorSet` is
 | 2 | Answer Q4–Q6 (point query, cost, DAG-BFT) | Measured numbers, not estimates |
 | 3 | Evaluate Q7 options (a)–(d) against the answers | A recommendation with the rejected options and why |
 | 4 | Answer Q8 — the CERTEN-side verifier design | Written as a change to `layer4_verify.go`'s contract |
-| 5 | Draft the AIP(s) | Matches the template in §6; every claim cited |
+| 5 | Draft AIP A (CometBFT, now) then AIP B (DAG-BFT) | Matches §6; every claim cited; A does not depend on B |
 | 6 | Adversarial review of the draft | A named attack the proposal does NOT stop, or an argument none exists |
 
 Gates are blocking. Phase 5 cannot start before Phase 3 has a recommendation.
@@ -302,13 +432,18 @@ AIP. Do not force unrelated changes into a single proposal.
 
 ## 7. Definition of done
 
-- [ ] Every §2 claim re-verified or corrected, on **both** `main` and
-      `dagbft-integration`, with file:line.
+- [ ] Every §2 **and §2A** claim re-verified or corrected, on **both** `main`
+      and `dagbft-integration`, with file:line.
+- [ ] Q9 answered first — it determines the size of the entire near-term ask.
+- [ ] A validator-set change actually simulated and proven end to end (Q10),
+      not reasoned about.
 - [ ] Q1–Q8 each answered with citations, or explicitly recorded as unanswerable
       and why.
 - [ ] A recommended solution, with the alternatives and the reason each lost.
 - [ ] Measured sizes and counts wherever the proposal costs a verifier bandwidth.
-- [ ] Draft AIP(s) saved under `C:\Accumulate_Stuff\AIPs\`, matching §6.
+- [ ] **AIP A** (CometBFT / today) saved under `C:\Accumulate_Stuff\AIPs\`,
+      standing on its own without AIP B.
+- [ ] **AIP B** (DAG-BFT / spine) saved separately, marked as depending on #4058.
 - [ ] A matching short issue body per AIP.
 - [ ] A written statement of what the proposal does not solve, and the residual
       trust assumption that remains after it ships.
