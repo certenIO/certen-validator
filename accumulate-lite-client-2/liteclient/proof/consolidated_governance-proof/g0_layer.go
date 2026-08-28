@@ -47,7 +47,9 @@ func (g0 *G0Layer) ProveG0(ctx context.Context, request G0Request) (*G0Result, e
 	// Step 1: Prove execution inclusion and derive execution witness
 	execMBI, execWitness, execEntry, receipt, err := g0.proveExecutionInclusion(ctx, request)
 	if err != nil {
-		return nil, fmt.Errorf("execution inclusion proof failed: %v", err)
+		// %w, not %v: NotExecutedOnChain carries a Reason() a caller must be
+		// able to match on without reading prose.
+		return nil, fmt.Errorf("execution inclusion proof failed: %w", err)
 	}
 
 	// Step 2: Bind expanded execution message to receipt leaf
@@ -110,6 +112,16 @@ func (g0 *G0Layer) proveExecutionInclusion(ctx context.Context, request G0Reques
 	// Extract chain entry and receipt
 	chainEntry, receipt, err := g0.extractChainEntryAndReceipt(response)
 	if err != nil {
+		// Before calling this a malformed response, ask what the network
+		// actually said. A transaction that has not executed has no main-chain
+		// entry, and that is a fact about the transaction - not about the shape
+		// of the payload. Reporting it as the latter is the rule 8 failure:
+		// an operator cannot tell "still collecting votes" from "we could not
+		// read the chain" from "the institution refused".
+		if missing, detail := missingMainChainEntry(response); missing {
+			return 0, "", "", ReceiptData{},
+				classifyNotExecuted(ctx, g0.client, request.Account, request.TxHash, detail)
+		}
 		return 0, "", "", ReceiptData{}, fmt.Errorf("failed to extract chain entry and receipt: %v", err)
 	}
 
