@@ -670,6 +670,10 @@ anchor (the gas is spent), L5 is 100% for proofs produced since it shipped, and
         path, and the incarnation identity (§4A decided where the commitment
         lives). L5 today proves existence and time only.
 
+**Q10 — ✅ RUN IN PHASE 3 (§9.3.1).** A validator-set change was executed end
+to end on `origin/main`'s executor; the previous set became unprovable, exactly
+as Phase 1 predicted. Original question text follows.
+
 **Q10 — Exercise the path that has never run.** The validator set has never
 changed on mainnet or Kermit (§2A.3), so the update-proof path has zero
 production history. Simulate a change (devnet, simulator, or
@@ -1867,3 +1871,246 @@ activates. It is cheap to handle now and expensive to discover in production.
   per-record cost looks cheapest in §2.1, which would be a misleading number to
   publish.
 - Q7 (Phase 3), Q8 (Phase 4), §4A implementation (Phase 4b), Q15 (Phase 4c).
+
+---
+
+## Phase 3 — Q10 (run at last) and Q7 (the recommendation)
+
+**Run 2026-08-28.** Same refs. `accumulate-core` **not modified**
+(`git status --porcelain` empty); Q10 ran against a `git archive` copy of
+`origin/main`. Probe: `docs/l4/phase3_probe/`.
+
+**Gate 3 verdict: PASSED.** A recommendation, with every rejected option and the
+reason it lost. And **Q10 has now been run** — it was the largest hole in the
+evidence after Phase 2, and it confirms Phase 1's central claim by construction
+rather than by code reading.
+
+### 3.1 Q10 — the path that had never run. RUN. Phase 1 was right.
+
+A real validator-set change, executed end to end on `origin/main`'s executor
+(`ExecutorVersionV2Vandenberg`, the version MainNet runs), then the decisive
+question:
+
+```
+BEFORE: 3 validators, NetworkDefinition.Version=0, main chain height=1
+BEFORE: state leaf   9f87ee782870e0c9
+BEFORE: BPT root     fe23c46e1212d0c1  (receipt VALIDATES)
+
+  -- WriteData to acc://dn.acme/network, signed by the operator page, SUCCEEDS --
+
+AFTER : 4 validators, NetworkDefinition.Version=1, main chain height=2
+AFTER : state leaf   5600b391edab5fd7
+AFTER : BPT root     a2081164441ff857  (receipt VALIDATES: true)
+
+=== Q10: can the PREVIOUS validator set still be proven? ===
+  receipt.start is now  5600b391edab5fd7 (the NEW state)
+  the genesis leaf was  9f87ee782870e0c9
+  -> StateReceipt() returns a proof of the CURRENT set ONLY.
+  -> There is no API taking a height or a historical root.
+  -> The genesis validator set is now UNPROVABLE via the public API.
+
+  ASYMMETRY: anchor(directory)-bpt retains 6 historical BPT roots,
+             including the one the genesis set was provable against.
+             The ROOT survives; the MEMBERSHIP PATH to it does not.
+```
+
+**Phase 1 §1.1 predicted exactly this from reading `bpt_receipt.go:17`. It is now
+demonstrated.** The moment the set changes, the previous set becomes unprovable
+through the public API, while the root it was provable against remains on chain
+forever. That asymmetry is the entire content of AIP A.
+
+**Three further results from the same run:**
+
+1. **The update entry IS by-hash resolvable** — `by-hash lookup -> index 1`,
+   where the genesis entry at index 0 is not. This confirms §9.1.4's distinction
+   empirically: genesis entries never get an `ElementIndex`; runtime entries,
+   written through `merkle.Chain.AddEntry`, always do. The update receipt is
+   1 step and validates.
+
+2. **`NetworkUpdateProof` measured at last — the number Phase 2 could not get**,
+   because on the live networks every window has `updates = 0`:
+
+   ```
+   Transaction (WriteData + full NetworkDefinition) :  518 B
+   Receipt                                          :  142 B
+   -> NetworkUpdateProof ~= 660 B  (4-validator set)
+   ```
+
+   Note it carries the **entire** `NetworkDefinition`, not a delta
+   (`updateNetworkDefinition` in `test/e2e/validators_test.go:125-136` calls
+   `values.FormatNetwork()`), so it scales with validator count, not with the
+   size of the change. §9.2.1's spine totals are therefore unchanged for the
+   history to date, and grow by ~660 B–2 KB per future change — negligible.
+
+3. **A validator-set change is a real governance action.** On a 3x3 network the
+   same transaction stays **pending**, not failed: the operator page threshold
+   (`OperatorAcceptThreshold` 1/3 over 9 operators = 3) was not met by one
+   signature. Q2's claim that this is an ordinary, authorised, receipted
+   transaction is confirmed from the submitting side as well as the executing
+   side.
+
+### 3.2 Q7 — the options, evaluated against everything measured
+
+| | Option | Verdict |
+|---|---|---|
+| (a) | Make the genesis network-definition entry receipt-provable | **REJECTED** |
+| (b) | Publish a canonical genesis anchor via `SnapshotService` | **REJECTED as stated** |
+| (c) | Point query: "validator set at height H, with proof" | **RECOMMENDED — AIP A** |
+| (d) | Guarantee retention of historical anchor quorum signatures | **ACCEPTED as a secondary ask in AIP A** |
+| (e) | Promote `MajorHeaderRange` + `MinorRootRange` to public v3 | **DEFERRED — AIP B** |
+
+**(a) REJECTED — it is already true, and it would not help.** The genesis entry
+*is* receipt-provable today, by index, and the receipt validates offline on both
+live networks (§9.0.2). Proposing it would be proposing something that already
+works. Worse, it would not close anything: `SystemGenesis` is an empty struct
+(`protocol/system.yml:98-99`), so a receipt over it proves that a **contentless**
+transaction was anchored. The by-hash failure that motivated §2A.4 is guaranteed
+for genesis entries on any node (§9.1.4, reproduced from a locally built
+genesis), so there is no node bug to fix either.
+
+**(b) REJECTED as stated — it has never run in production.** `SnapshotService`
+is defined in the public API on both branches (`pkg/api/v3/api.go:82-84`) but
+neither live network advertises it, and `list-snapshots` fails with
+`dial …/acc-svc/snapshot:directory: notFound` (§9.1.5). Proposing "use the
+existing service" would be proposing an unrun code path. Two further problems
+even if it were enabled: a snapshot is a whole-state blob, not a per-proof
+artifact, so it cannot ride inside a 2.4 KB proof; and it would still need
+out-of-band distribution to be a trust root at all (rule 6). **It may be asked
+for as a supporting measure — a published, hash-pinned genesis snapshot is a
+good thing — but it cannot be the mechanism.**
+
+**(c) RECOMMENDED.** It is the only option that is simultaneously *sufficient*,
+*cheap*, and *decomposable to one missing primitive*:
+
+- **Sufficient.** Phase 1 §1.1 measured that the validator set is already
+  provable offline: the BPT leaf is derivable from the returned account state
+  (`observer_prod.go:31`), the membership path validates, and the state parses
+  to the real `NetworkDefinition`. Nothing about the *proof format* is missing.
+- **Cheap.** ~2,364 B on Kermit, 2.4–7.5 KB at mainnet BPT depth by validator
+  count (§9.2.2) — small enough to embed in every CERTEN proof, against
+  640 KB–3 MB per verifier for (e).
+- **One primitive.** Everything is already served *except* a membership path
+  against a **historical** BPT root. `BPT.GetReceipt` is documented
+  "for the current state" (`pkg/database/bpt/bpt_receipt.go:17`), the BPT is
+  stored under a single `Root` and mutated in place, and `ReceiptOptions.ForHeight`
+  is honoured only on the chain-entry path (`querier.go:517-519`), never on the
+  account path (`querier.go:339-346`).
+
+**This is not inventing protocol (rule 4).** Accumulate already has the account
+state receipt, the retained historical BPT root chain (`anchor(<part>)-bpt`,
+173,378 entries on Kermit), the anchoring, and the quorum signatures over it.
+The ask is to make an **existing proof** available against an **existing,
+already-retained root**. What that costs the implementer is retention of, or
+re-derivation of, historical BPT nodes — an archival-mode question, not a new
+proof system. **The AIP must present it that way and must not pretend the
+retention cost is free**; Phase 4/5 should ask the maintainers which of the two
+(retain vs replay-on-demand) they prefer, because that is their call, not ours.
+
+**(d) ACCEPTED as a secondary ask.** Measured retained today — Kermit's
+`dn.acme/anchors` main[1] still carries its `blockAnchor` signature 355,574
+entries later, and no pruning function exists in `internal/database/` or the v2
+executor (§9.1.7). But *absence of pruning is not a guarantee*. A pruned or
+state-synced node, or a future release that adds pruning, silently breaks proof
+construction for old transactions. Stating retention as a commitment costs
+nothing today and is not redundant.
+
+**(e) DEFERRED to AIP B, and it is a genuine fallback, not a token one.** It
+works — `verifyQuorum` is a complete induction (`spine.go:189-204`) and Q6 shows
+the primitive survives DAG-BFT untouched (§9.2.3). It is affordable — under
+10 MB in every scenario measured, ~1.1 MB/year of growth (§9.2.1). AIP B should
+say so with those numbers rather than hedging. But it loses for AIP A on four
+counts: it exists only on `dagbft-integration`; it is a *walk*, not a query
+(`spine.go:118-123` refuses any walk not starting at genesis); it costs ~300x
+more bandwidth; and its base case is a pinned genesis snapshot that
+**no live network serves** (§9.1.5) — so it inherits (b)'s problem.
+
+### 3.3 The recommendation, in one line
+
+> **AIP A: (c) + (d).** Make the account-state (BPT membership) proof available
+> against a historical BPT root, and commit to retaining the historical anchor
+> quorum signatures. **AIP B: (e)**, the #4058 spine promoted to public v3,
+> marked as depending on #4058 and on DAG-BFT.
+
+### 3.4 What CERTEN can do TODAY, with no AIP at all — and its limit
+
+This is the most consequential thing Phase 3 found, and it changes what AIP A is
+*for*.
+
+**The account state hash commits to the account's own chain contents.**
+`observer_prod.go:63-80`, `hashChains`, hashes each chain's
+`CurrentState().Anchor()` — the merkle DAG root, which commits to every entry
+and to the count. So a verifier who has proven the state of
+`acc://dn.acme/network` at BPT root R has *also* proven, at that same root, the
+exact contents and height of that account's main chain.
+
+Therefore, **while the main chain height is 1**, a single present-day state proof
+establishes:
+
+> the validator set is X, **and** this account has exactly one entry — the
+> genesis entry — so the set has never changed, so X *is* the genesis set.
+
+That is the induction base case and the entire timeline, in one 2.4 KB artifact,
+**obtainable today, from an unmodified public node, verifiable offline.** It
+follows the spec's own "record, don't re-derive" pattern
+(`CERTEN_GOVERANCE_PROOF_SPEC.MD` §1.2.2) and the beside-the-hash convention of
+`pkg/proof/timing_evidence.go`.
+
+**Mechanically it is checkable offline**: the server returns the account state
+and, separately, the chain list with each chain's count and merkle state; the
+verifier recomputes the `hashChains` component and checks it against the
+corresponding sibling in the state receipt's path. If it matches, the chain
+heights are *bound*, not asserted.
+
+**Stated honestly, three limits, none of which the AIP may gloss:**
+
+1. **It is designed and cited, not run.** I verified the mechanism in code and
+   measured every component, but I did **not** implement or execute this
+   end-to-end. Phase 4 owns the verifier contract; do not report it as working.
+2. **It only helps proofs built while the claim is still true.** It captures the
+   set *at build time*. For a transaction whose proof was never built then — and
+   for all 429 existing proofs — it does nothing. Historical coverage still needs
+   (c).
+3. **It expires at the first validator-set change.** Q10 shows exactly what
+   happens: once height goes to 2, "height is 1, therefore never changed" is
+   false, and proving what the set *was* needs the historical membership path.
+   After that, CERTEN can still chain forward — prove state at R committing to
+   height H, plus receipts for entries 0..H-1 showing each change (~660 B each,
+   §3.1) — but the *base case* is gone, because the state at the older roots is
+   unprovable.
+
+So the split is clean, and it should shape both documents:
+
+| | Closes | Needs |
+|---|---|---|
+| **CERTEN-side, today** | the §1 gap for **newly built** proofs, while the set is unchanged | nothing from Accumulate |
+| **AIP A (c)+(d)** | historical proofs, and everything after the first set change | Accumulate |
+
+**AIP A is therefore not urgent in the sense of "CERTEN is blocked" — it is
+urgent in the sense of "the window closes at the first validator-set change,
+and after that the genesis set is unprovable forever."** That is a much stronger
+and more honest motivation than "we cannot prove anything today", and it is what
+the Motivation section should say.
+
+### 3.5 What this does NOT solve — carried forward to Phase 6
+
+- **The incarnation boundary is untouched.** (c) proves a set within an
+  incarnation. It says nothing across a restart (§9.1.2, §9.1.3), and
+  `SystemGenesis` being an empty struct means nothing can. Every artifact must
+  carry the incarnation identity and a verdict distinct from `verified`.
+- **A stored proof still cannot tell it is on a dead chain** (§9.1.3). That is a
+  CERTEN defect, fixable by CERTEN, and it is independent of both AIPs.
+- **Kourou** (§9.2.4) will let anchors be authorized with no validator
+  signatures. Neither AIP addresses it; the verifier contract must.
+- **(c) makes the set *derivable*; it does not make it *legitimate*.** A verifier
+  can prove "this set was the network's recorded validator set at height H". Who
+  was entitled to put it there is the operator-book question, one level further
+  out, and neither AIP touches it. Say so.
+
+### 3.6 Still open after Phase 3
+
+- **§9.0.8** — `mainnet.accumulatenetwork.io` identity, still unresolved, still
+  blocking any published "mainnet" number.
+- Q8 (Phase 4), §4A implementation (Phase 4b), Q15 (Phase 4c), the AIPs
+  (Phase 5), adversarial review (Phase 6).
+- The retention-versus-replay question inside (c) is deliberately left to the
+  maintainers (§3.2).
