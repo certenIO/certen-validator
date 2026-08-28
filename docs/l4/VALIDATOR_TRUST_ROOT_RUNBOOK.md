@@ -284,6 +284,11 @@ than a missing capability, and that would change the proposal entirely.
 
 ### 2A.5 Candidate that already exists publicly
 
+> ⛔ **CORRECTED BY PHASE 1 (§9.1.5): no live network runs it.** `SnapshotService`
+> is defined in the public API but is not advertised by mainnet or Kermit, and
+> `list-snapshots` fails with `acc-svc/snapshot:directory: notFound`. It may be
+> *asked for*; it cannot be *used*.
+
 `pkg/api/v3/api.go:82` on main defines a public `SnapshotService` with
 `ListSnapshots`. If genesis snapshots are listable and fetchable, that is a
 plausible published trust anchor without new protocol. Determine what it
@@ -601,8 +606,9 @@ quorum** — determine whether that breaks the spine's quorum check.
 **Q7 — Minimal public surface, ON MAIN.** What is the smallest public API that
 closes the gap **for the network running today**? Candidates, to be evaluated not
 assumed:
-  - (a) make the genesis network-definition entry receipt-provable (may be a
-        query-shape fix rather than new protocol — see §2A.4)
+  - (a) ~~make the genesis network-definition entry receipt-provable~~ — **DEAD,
+        see §9.1.1/§9.1.4**: it already is (by index), and it proves nothing,
+        because `systemGenesis` has an empty body
   - (b) publish a canonical, checkable genesis anchor (hash or signed checkpoint),
         possibly via the existing public `SnapshotService`
   - (c) a point query: "validator set at height H, with proof to genesis"
@@ -1187,3 +1193,407 @@ Q1–Q15 remain open; Phase 0 verifies §2, it does not answer them. Specificall
 the `MajorHeaderRecord` size measurement (Q5), and any test of a stored proof
 against a restarted chain (Q12). Nothing in this section should be read as
 progress on those.
+
+---
+
+## Phase 1 — Q13, Q11, Q12, Q9, Q1–Q3
+
+**Run 2026-08-28.** Same refs as Phase 0 (`origin/main` = `56f5ae9b`,
+`origin/dagbft-integration` = `c01b026e`). `accumulate-core` was **not
+modified** — the simulator work ran against a `git archive` copy extracted to a
+scratch directory, and `git status --porcelain` on the repo is empty. Probes and
+run instructions: `docs/l4/phase1_probe/`.
+
+**Gate 1 verdict: PASSED.** Q13, Q11, Q12, Q9, Q1, Q2 and Q3 are each answered
+with citations or measurements. Q10 remains open by design (Phase 2+). One
+Phase 0 hypothesis is corrected — by me, against my own guess.
+
+### 1.0 The one-paragraph result
+
+The near-term gap is **not** where §2A.4 put it and **not** where Phase 0 left
+it. Proving the genesis *chain entry* is worthless, because `systemGenesis` has
+an empty body and commits to nothing. What has to be proven is the genesis
+*account state*, which lives in the BPT — and that **is** provable offline
+today, but **only while it is still the current state**. `BPT.GetReceipt`
+constructs a receipt "for the current state" only, and there is no height
+parameter anywhere in the public API. The validator set has never changed on
+either network, so current == genesis, and the gap is invisible. **The first
+validator-set change makes the genesis set permanently unprovable through the
+public API.** That is the ask for AIP A.
+
+### 1.1 Q13 — the base case, re-derived correctly. ANSWERED.
+
+**Step 1: the genesis entry proves nothing.** `SystemGenesis` is an empty struct
+(§9.0.1; `protocol/system.yml:98-99`). A receipt over it establishes that a
+contentless transaction was anchored. It says nothing about the validator set.
+Phase 0 was right that the entry is provable and right that §2A.4's conclusion
+was false — but "the base case is provable" was the wrong lesson to draw from it.
+
+**Step 2: the validator set is in the account state, and that IS provable
+offline today.** Measured with `docs/l4/phase1_probe/main.go`, which queries
+`acc://dn.acme/network` with `includeReceipt`, re-derives the receipt's start
+from the returned state, and validates the path:
+
+```
+=== kermit : acc://dn.acme/network state proof ===
+  account type            : dataAccount
+  receipt.start           : 733250b14876c25fb2a89c050c1793b45e12386a9d1fd5c41ab65c3ed15f0c88
+  sha256(marshalled state): 733250b14876c25fb2a89c050c1793b45e12386a9d1fd5c41ab65c3ed15f0c88
+  LEAF DERIVABLE OFFLINE  : true
+  path length             : 5
+  MERKLE PATH VALID       : true
+  networkName             : DevNet
+  validators              : 3
+  partitions              : 4
+```
+
+The leaf is derivable because `hasher[0]` is a plain hash of the marshalled main
+state (`internal/database/observer_prod.go:31`, `hashState(&err, &hasher, true,
+a.Main().Get)`), and `Account.StateReceipt` combines that state hasher's receipt
+with the BPT receipt (`internal/database/bpt_account.go:66-88`). So a verifier
+holding the account bytes can recompute the leaf and walk to the BPT root
+without trusting the server. **This is a real, working, offline-checkable proof
+of the current validator set, and it needs no protocol change.**
+
+**Step 3: and it is current-state only. This is the gap.**
+
+```go
+// pkg/database/bpt/bpt_receipt.go:17
+// GetReceipt constructs a receipt for the current state for the given key.
+func (b *BPT) GetReceipt(key *record.Key) (*merkle.Receipt, error)
+```
+
+`Account.BptReceipt` (`bpt_account.go:53-64`) calls exactly that, and
+`indexing.ReceiptForAccountState` (`internal/database/indexing/receipts.go:124-142`)
+calls `account.StateReceipt()` and then attaches *the latest* root index entry
+purely for its block number. The API has no height parameter for account state:
+`ReceiptOptions` carries only `ForAny` and `ForHeight` (`pkg/api/v3/options.yml:119-124`),
+and `ForHeight` is consumed only on the **chain-entry** path
+(`internal/api/v3/querier.go:517-519`), never on the account path
+(`querier.go:339-346`). The BPT is stored under a single `Root`
+(`pkg/database/merkle/model.yml`, `pkg/database/bpt/model.yml:16`) and mutated
+in place — there is no versioned or historical tree to query.
+
+**Step 4: historical BPT *roots* are retained; historical *membership* is not.**
+This asymmetry is the precise shape of the ask. Measured on Kermit:
+
+```
+acc://dn.acme/anchors  chain anchor(directory)-bpt  ->  173,373 entries
+  index 0      5cd146ba4ba40712ab002936d29ef213a7e2ff4ebc0b5ec4183b1ae8af00d5ff
+  index 173372 79cd33f73adc0bba662f4c1de8b4bb664244ec269e38fd77d30883f283003868
+mainnet: 13,732 entries, index 0 = b166048d9c3c89417ea3aec01afa0e671332391e08660f9d8c1ee6605bacb79b
+```
+
+Every historical BPT root is on an indexed, receipt-provable chain — this is the
+same `anchor(<partition>)-bpt` chain CERTEN's L2/L3 already use
+(`layer2.go:164-165`, `layer3.go:35-38`). What is missing is the *membership
+path* from an account leaf to one of those historical roots.
+
+**So the AIP A ask is one bounded thing:** a way to obtain a BPT membership
+receipt for an account against a *historical* BPT root, not only the current
+one. Everything else — the roots, the anchoring, the quorum signatures over
+them, the offline leaf derivation — already exists and already works.
+
+**Also re-derived, per §2B.1's instruction:** the per-partition copies behave
+identically. `bvn-BVN1.acme/network` and `bvn-BVN2.acme/network` each have
+exactly one main-chain entry, the same `systemGenesis` hash. Kermit BVN1 block 1
+carries all 11 system accounts (§9.0.1). Nothing about the partition view
+changes the answer — the base case is a *state* question, not a *block* question.
+
+### 1.2 Q11 — incarnation identity. ANSWERED, and the news is bad.
+
+**A stored CERTEN proof contains nothing that names its network or its
+incarnation.** Inspected `testdata/proof_bvn1.json`, every field of both L4 legs:
+
+```
+layer4Bvn: partition BVN1  source acc://bvn-BVN1.acme  destination acc://dn.acme
+           anchorPool acc://dn.acme/anchors   networkVersion 0
+layer4Dn:  partition Directory  source acc://dn.acme   destination acc://bvn-BVN1.acme
+           signer[0] acc://dn.acme/network    networkVersion 0
+top-level keys: input, layer1, layer2, layer3, layer4Bvn, layer4Dn
+```
+
+Every one of those URLs is a protocol constant. `acc://dn.acme` is the Directory
+on MainNet, on Kermit, and on every incarnation of both. `networkVersion` is
+`NetworkDefinition.Version`, measured as **0** on both live networks — it is not
+a discriminator either.
+
+**Nor is it in the signed preimage, which is the load-bearing part.** The L4
+digest is `sha256( ED25519Signature.Metadata().Hash() || signedHash )`
+(`layer4_verify.go:29-60`; `protocol/signature.go:385-390`, where `Metadata()`
+clears the signature and the transaction hash, leaving public key, signer URL,
+signer version and timestamp). `signedHash` is the hash of a `SequencedMessage`,
+whose fields are `Message`, `Source`, `Destination`, `Number`
+(`pkg/types/messaging/types_gen.go:111-121`), wrapping a `PartitionAnchor`
+whose fields are `Source`, `MajorBlockIndex`, `MinorBlockIndex`,
+`RootChainIndex`, `RootChainAnchor`, `StateTreeAnchor`
+(`protocol/types_gen.go:654-669`).
+
+**Not one field in that preimage identifies a network or an incarnation.** The
+Accumulate validators are not signing anything that says which chain they are
+on. This is not a CERTEN omission — it is a property of the protocol's anchor
+signatures, and it means the incarnation identity **must** be added by CERTEN,
+alongside the hash, exactly as §4A.1 decided.
+
+**Candidates evaluated:**
+
+| Candidate | Verdict |
+|---|---|
+| genesis transaction hash | **DEAD.** `e43be90e…16d5` is byte-identical on MainNet, on Kermit, and on a genesis built from scratch in the simulator (§9.0.3, §9.1.4). It is a constant, not an identifier. |
+| `networkName` (`MainNet` / `DevNet`) | **Weak.** Asserted account state, and stable across a restart of the same network — it names the network, not the incarnation. |
+| `NetworkDefinition.Version` | **Dead.** Measured 0 on both networks. |
+| CometBFT `GenesisDoc.ChainID` = `NetworkID + "." + PartitionId` (`internal/node/genesis/bootstrap.go:147`) | **Names the network, not the incarnation** — the composition contains nothing that changes on a restart. Not exposed by any public API. |
+| **genesis root anchor** — `anchor(directory)-root[0]` | **BEST AVAILABLE.** See below. |
+
+The genesis root anchor is queryable today, differs between chains, and is
+itself receipt-provable into a later quorum-signed root:
+
+```
+mainnet  anchor(directory)-root[0] = 672f89ff…6e17   receipt VALID into block 86, majorBlock 1
+kermit   anchor(directory)-root[0] = e3f31192…cf81   receipt VALID into block 3,  majorBlock 1
+```
+
+(Both equal the anchor of the genesis chain-entry receipt measured in §9.0.2 —
+two independent queries agreeing.) Because it proves into a later root anchor,
+and root anchors are what the validator quorum signs, an incarnation identifier
+built on it can be **bound to the same quorum signature the rest of L4 uses**.
+That is the property no other candidate has.
+
+**State the limit plainly, per rule 6a.** This is a *distinguisher*, not a
+*proof of distinctness*. It differs across incarnations because genesis content
+and timestamps differ. An operator who deliberately replayed a byte-identical
+genesis would produce a colliding identifier. It is strong enough to stop a
+verifier silently accepting a proof from a dead chain; it is not a cryptographic
+guarantee that two incarnations are different, and the AIP must not say it is.
+
+### 1.3 Q12 / Q12a — proof survival across a restart. ANSWERED. The dangerous case is the real one.
+
+**Empirical part.** CERTEN holds **41 proofs created before Kermit's current
+genesis** (oldest `2026-01-25 15:57:27+00`; Kermit block 1 is `2026-02-01`).
+These are genuine pre-restart artefacts. Their Accumulate transactions are gone
+from the current chain:
+
+```
+kermit txid 85756bbafb4ca5ca… -> NOT FOUND
+kermit txid d81a379086efc63e… -> NOT FOUND
+kermit txid 3f160290ff827bbc… -> NOT FOUND
+```
+
+**Limit of that experiment, stated honestly:** all 41 predate L4 persistence.
+Every one of their `governance_proof_levels` rows is already `summary_only`, and
+their `artifact_json` uses the old schema (`cycle_id`, `attestation`,
+`anchor_block`, …) with no L1–L5 legs. **So I could not run a modern L4 offline
+verification against a real pre-restart proof — none exists.** That is a gap in
+the evidence, not a gap in the answer.
+
+**Structural part, which settles it.** `layer4_verify.go` imports
+`crypto/ed25519`, `crypto/sha256`, `encoding/hex`, `fmt`, `strings`,
+`messaging`, `url`, `protocol` — **no `net/http`, no client, no context**.
+`VerifyOffline()` performs no network access, by construction; the existing
+`TestOffline_StoredProofsVerifyWithNetworkDisabled` asserts it, and the full
+offline suite passes (10/10 tampering cases correctly rejected, run this
+session).
+
+Combine that with Q11: the artifact carries no incarnation identity, and the
+verifier never asks the chain anything. Therefore:
+
+> **A stored L4 proof from incarnation N returns a confident PASS after a
+> restart, unchanged, forever.** Not "fails". Not "warns". The verdict is
+> *necessarily* identical before and after, because nothing the verifier reads
+> can differ.
+
+This is precisely the outcome §2B.3 named as the dangerous one, and it is not a
+risk — it is the current behaviour, and it is structural.
+
+**Q12a — the verdict a verifier must produce.** The three-way discipline (rule
+8) maps cleanly, and the marker must live **beside** govRoot, per the
+`pkg/proof/timing_evidence.go` pattern, so govRoot does not move:
+
+| Situation | Verdict | What is established |
+|---|---|---|
+| Proof's incarnation == the live incarnation | `verified` | everything L1–L4 claims |
+| Proof names an incarnation ≠ the live one | **`foreign_incarnation`** (new, modelled on `summary_only`) | content, internal consistency, and — if L5 is present — external existence and time. **Not** validator-set legitimacy. |
+| Proof carries no incarnation identity at all (every proof issued to date) | **`incarnation_unknown`** | the same, minus the ability to say *which* chain. This is a *could-not-read*, not a refusal, and must not be reported as a governance rejection. |
+
+Note the third row is not hypothetical: it is the state of all 429 stored
+proofs. Backfilling an incarnation identity onto historical proofs is possible
+only where the referenced chain is still live — mark, never fabricate.
+
+### 1.4 Q9 — is the missing hash→index map guaranteed or incidental? ANSWERED: GUARANTEED. (This corrects my own Phase 0 hypothesis.)
+
+§9.0.2 speculated the missing `ElementIndex` was "a per-node database-index
+artifact" of snapshot provisioning. **That was wrong, and I am correcting it
+against my own guess.** Built a genesis from scratch in the simulator — no
+snapshot restore anywhere in the path — and asked the same question
+(`docs/l4/phase1_probe/q9_genesis_index_test.go`, against a `git archive` copy
+of `origin/main`):
+
+```
+--- acc://dn.acme/network : main chain height 1 ---
+    entry[0]        = e43be90e349210456662d8b8bdc9cc9e5e46ccb07f2129e7b57a8195e5e916d5
+    IndexOf(entry0) -> ERROR: Account.acc://dn.acme/network.MainChain.ElementIndex.e43be90e… not found
+    VERDICT: hash->index map ABSENT on a freshly built genesis
+--- acc://dn.acme/globals : main chain height 1 ---
+    (identical)
+```
+
+Reproduced exactly the live behaviour, on a chain that has never been
+snapshotted. So the by-hash lookup failure is **guaranteed for genesis entries**,
+not a provisioning accident. Two consequences:
+
+- Any AIP-A text must say the genesis entry is reachable **by index**, and must
+  not propose "fix the node's index" as the remedy — there is nothing to fix.
+- The same run independently reproduced the cross-network genesis hash constant
+  `e43be90e…16d5` for a **third** time, from a locally constructed genesis. §9.0.3
+  is now confirmed by construction, not just by observation.
+
+**Mechanism, offered as explanation and labelled as such.** `ElementIndex` and
+`Element` are declared `type: index` in `pkg/database/merkle/model.yml:28-39`
+("Not indexed directly") — locally-derived index records rather than state.
+Genesis is built in a temporary database and delivered as a snapshot
+(`internal/node/genesis/bootstrap.go:142-143`), and the restore path rebuilds
+the index only from mark points and the head hash list
+(`internal/database/snapshot/merkle_snapshot.go:117-145`, driven from
+`restore.go:165,184`). **I verified the *behaviour* by running it; I did not
+isolate which of those steps drops the entry.** Do not cite the mechanism as
+measured — cite the empirical result.
+
+### 1.5 Q1 — genesis identity. ANSWERED, with a hard limit.
+
+**Is there a canonical genesis artifact?** Yes, and it is richer than expected.
+`internal/node/genesis/bootstrap.go:143-184` writes a CometBFT `GenesisDoc` into
+the genesis snapshot's `SectionTypeConsensus`, carrying:
+
+- `doc.ChainID = opts.NetworkID + "." + opts.PartitionId` (`:147`)
+- `doc.Params` — the consensus parameters
+- `doc.Validators` — **every genesis validator active on the partition, with
+  public key, address and power** (`:150-169`)
+
+So the genesis validator set is committed inside a well-defined, hashable
+document. That is the natural trust root.
+
+**Is it queryable? NO.** `SnapshotService`/`ListSnapshots` exists in the public
+API on both branches (`pkg/api/v3/api.go:82-84`, `ServiceTypeSnapshot = 10` at
+`enums_gen.go:138`) but **neither live network runs it**:
+
+```
+mainnet services: [f001, consensus, event, metrics, network, node, query, submit, validate]
+kermit  services: [f001, consensus, event, faucet, metrics, network, node, query, submit, validate]
+snapshot offered: False on both
+list-snapshots -> "dial /p2p/12D3KooWNDFRs…/acc-svc/snapshot:directory: notFound"
+```
+
+**This kills §2A.5 / Q7 option (b) as written.** The service is defined but not
+deployed; proposing "use the existing SnapshotService" would be proposing
+something that has never run in production. An AIP may still ask for it to be
+enabled — but it must say that it is currently absent, not that it is available.
+
+**Can two parties verify they pinned the same genesis? Yes, with a caveat that
+matters.** Both can query `anchor(directory)-root[0]`, compare, and each obtain
+a receipt proving it into a later quorum-signed root. That is a genuine
+consistency check. But both parties obtained it **from the network whose
+legitimacy is the question** — so it is not, by itself, a trust root (rule 6). A
+trust root requires that the value be fixed out-of-band. This is exactly what
+§4A buys: writing the incarnation identity into the anchor pre-exec message
+publishes it to a chain that did not restart, at a time nobody can backdate.
+**That is the argument for §4A that Phase 1 supplies and §4A.2 does not yet
+make.**
+
+### 1.6 Q2 — completeness of the update timeline. ANSWERED: complete, with two named exceptions.
+
+The consensus validator set is not stored — it is **derived** from the account
+state, every block:
+
+```go
+// internal/core/execute/v2/block/block_end.go:261-263
+var valUp []*execute.ValidatorUpdate
+if !m.isGenesis && !m.globals.Active.Equal(&m.globals.Pending) {
+    valUp = execute.DiffValidators(&m.globals.Active, &m.globals.Pending, m.Describe.PartitionId)
+```
+
+`DiffValidators` (`internal/core/validators.go:18-55`) computes adds and removes
+purely from `GlobalValues.Network.Validators`. `globals.Pending` is mutated in
+exactly one production place — `processNetworkAccountUpdates`
+(`network_accounts.go:78-111`), on a `WriteData` to `dn.acme/network`, with
+`WriteToState` mandatory. Every other caller of the protocol-level mutators
+(`AddValidator`, `RemoveValidator`, `UpdateValidatorKey`,
+`protocol/network_def.go:63,82,93`) is **initialization only**:
+`internal/node/daemon/init.go:217-218,226` and `cmd/accumulated/run/devnet.go:377-378`.
+
+> **The CometBFT validator set cannot diverge from `acc://dn.acme/network`,
+> because it is computed from it.** The account's chain history therefore *is*
+> the complete timeline. There is no side channel to miss.
+
+BVN copies are consistent by construction: BVN `/network` accounts reject direct
+updates and are written only by internally-produced transactions pushed from the
+DN (`network_accounts.go:115-125`), which are stored as real transactions
+(`msg_network_update.go:120-160`) and so are equally provable. And a DN anchor
+carries `Updates []NetworkAccountUpdate` inside the **quorum-signed**
+`DirectoryAnchor` (`protocol/types_gen.go:322-334`) — a validator-set change is
+therefore already inside a signed message today, on `main`, with no spine.
+
+**The two exceptions, named:**
+
+1. `!m.isGenesis` (`block_end.go:262`) — genesis establishes the set without
+   producing an update. The timeline's *base case* is outside the timeline. This
+   is §1.1 again, arriving from a second direction.
+2. `Executor.Init(validators)` (`internal/core/execute/v2/block/executor.go:216-243`)
+   takes the validator set from the consensus layer at startup.
+
+Both are boundary conditions, not runtime paths. Neither breaks induction *after*
+genesis; both are why induction needs a base case it cannot get from the chain.
+
+### 1.7 Q3 — archived signature retention. ANSWERED: retained, but not guaranteed.
+
+Measured on Kermit, whose `acc://dn.acme/anchors` main chain has **355,574
+entries** across 173k+ blocks:
+
+```
+anchors main[1]      blockValidatorAnchor   1 blockAnchor signature   (genesis era, 2026-02-01)
+anchors main[1000]   directoryAnchor        3 blockAnchor signatures  (= all 3 validators)
+anchors main[100000] blockValidatorAnchor   1 blockAnchor signature
+```
+
+Index 1 still carries its signature 355,000 entries later. Supporting this at the
+code level: **no pruning function exists** — `grep -rn "func.*[Pp]rune"` over
+`internal/database/` and `internal/core/execute/v2/` returns nothing.
+
+**But absence of pruning is not a retention guarantee.** What was measured is one
+node's behaviour on one network with no pruning implemented. An operator running
+a pruned or state-synced node, or a future release that adds pruning, breaks
+proof construction for old transactions silently. **AIP A should ask for
+retention to be a stated commitment**, which is Q7 option (d) — and Q7(d) is
+therefore *not* redundant just because nothing prunes today.
+
+### 1.8 What Phase 1 changes about the deliverable
+
+- **AIP A's ask is now concrete and small:** a BPT membership receipt against a
+  *historical* root. Not a new proof system; a height parameter on a proof that
+  already exists and already verifies offline.
+- **Q7 option (a) is dead as stated** — the genesis entry is provable by index
+  and proves nothing anyway (§1.1, §1.4).
+- **Q7 option (b) is dead as stated** — no live network runs `SnapshotService`
+  (§1.5). It can be *asked for*; it cannot be *used*.
+- **Q7 option (c)** — "validator set at height H with proof" — is the surviving
+  candidate, and §1.1 shows it decomposes into one missing primitive.
+- **Q7 option (d)** survives and is independently necessary (§1.7).
+- **§4A gains its strongest argument** (§1.5): the incarnation identity is
+  obtainable from Accumulate but cannot be a *trust root* while it is only ever
+  fetched from Accumulate. Publishing it to a chain that did not restart is what
+  converts a consistency check into a trust root.
+- **A new CERTEN-side defect is now on the record** (§1.3): every stored proof
+  will verify confidently against a chain that no longer exists. That is not a
+  Phase 5 design note — it is a live product risk, and it is the same
+  overclaiming-verdict class this project has removed twice.
+
+### 1.9 Still open after Phase 1
+
+- **Q10 — the simulated validator-set change has NOT been run.** Phase 1 built
+  the harness that makes it possible (an out-of-tree simulator copy that builds
+  and runs, `GOWORK=off`), but did not exercise a change. This remains the
+  single most important unrun experiment, and §2A.3's warning stands: the update
+  path has zero production history.
+- **Q4–Q6** (point query shape, induction cost, DAG-BFT survival) — Phase 2.
+- **§9.0.8** — whether `mainnet.accumulatenetwork.io` is the public MainNet is
+  still unresolved and still blocking for any "mainnet" number in an AIP.
+- The mechanism behind Q9's missing index is explained but not isolated (§1.4).
