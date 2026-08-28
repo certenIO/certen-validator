@@ -117,6 +117,44 @@ func main() {
 			cp.Layer4BVN.Partition, len(cp.Layer4BVN.Signatures), cp.Layer4BVN.Threshold, len(cp.Layer4BVN.ValidatorSet))
 		fmt.Printf("  L4  %s quorum: %d/%d distinct signers over %d validators\n",
 			cp.Layer4DN.Partition, len(cp.Layer4DN.Signatures), cp.Layer4DN.Threshold, len(cp.Layer4DN.ValidatorSet))
+
+		// PHASE 8 ITEM 1 — say how many SIGNER PARTITIONS this proof carries,
+		// and whether the govRoot preimage committed to the extra ones.
+		//
+		// A one-leg proof and a two-leg proof both verify; the difference is
+		// which quorums the root attests to, and that difference is invisible
+		// unless it is printed. ConsensusProof.BVNs is omitempty, so an absent
+		// slot and a deliberately-empty one look identical in the JSON, and
+		// reporting the count is what separates "this authority lives on one
+		// partition" from "we only proved one of the two it lives on".
+		legs := cp.Legs()
+		fmt.Printf("  L4  signer partitions: %d leg(s) %v\n", len(legs), cp.SignerPartitions())
+		consensus := certenproof.BuildL4ConsensusProofFromProof(cp)
+		if consensus == nil {
+			// Not a verification failure: L1-L4 checked out. It means a leg the
+			// proof NAMES carries no quorum evidence, so no summary can be
+			// rebuilt from storage — which is summary-only, by the same rule
+			// the governance levels follow.
+			fmt.Printf("  L4  govRoot preimage: NOT RECONSTRUCTABLE from storage — a named leg " +
+				"carries no quorum evidence\n")
+		} else {
+			fmt.Printf("  L4  govRoot preimage: version %q, principal %s, bvns = %d additional partition(s)\n",
+				consensus.Version, consensus.BVN.Partition, len(consensus.BVNs))
+			for _, b := range consensus.BVNs {
+				fmt.Printf("        bvns[] %s: %d distinct signer(s), threshold %d\n",
+					b.Partition, len(b.Signers), b.Threshold)
+			}
+			// FAIL CLOSED. A root that commits to one leg of a multi-leg proof
+			// is perfectly well-formed and attests to less than the proof
+			// carries — the silent under-proving this whole path exists to
+			// prevent, arrived at from the other end.
+			if len(legs) > 1 && len(consensus.BVNs) == 0 {
+				fmt.Printf("FAILED  the proof carries %d legs and the govRoot preimage commits to ONE\n",
+					len(legs))
+				os.Exit(exitFailed)
+			}
+		}
+
 		if *verbose {
 			fmt.Printf("  L4  %s signedHash %s…\n", cp.Layer4BVN.Partition, short(cp.Layer4BVN.SignedHash))
 			fmt.Printf("  L4  %s signedHash %s…\n", cp.Layer4DN.Partition, short(cp.Layer4DN.SignedHash))
