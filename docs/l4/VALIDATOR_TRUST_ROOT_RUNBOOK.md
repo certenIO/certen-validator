@@ -3029,3 +3029,253 @@ run the network, would be the exact overclaim this project exists to delete.
 - The five deployment items from §9.4b.8: nothing is deployed, and
   `signV8_2PreExecBLS` is not wired in.
 - §9.0.8 itself — still worth asking the maintainer directly.
+
+---
+
+## Phase 6 — adversarial review
+
+**Run 2026-08-28.** `accumulate-core` **not modified**. This is the final gate.
+
+**Gate 6 verdict: PASSED, and it found three real defects — two of them in my own
+work, one of them load-bearing.** The corrections have been applied to AIP-058
+and its issue body. §9.3.4 and §9.4.3 are corrected below.
+
+The review was conducted against the design as written, not against a
+sympathetic reading of it.
+
+### 6.1 DEFECT 1 (load-bearing) — the derivation is CIRCULAR
+
+**This is the most important finding in the whole runbook after the §1 gap
+itself, and it qualifies everything built in Phases 3, 4 and 4b.**
+
+The Phase 4 verifier contract does this:
+
+```
+steps 7-9   every signature verifies against ValidatorSet, threshold met
+step 14     ValidatorSet EQUALS the set derived from AccountState
+step 15     StateReceipt.Anchor == StateTreeAnchor of a quorum-signed anchor
+            in THIS proof
+```
+
+Read them together. The set authenticates the anchor (steps 7–9). The anchor
+authenticates the set (step 15). **The set is derived from state proven into an
+anchor signed by that same set.** It is a closed loop.
+
+**The attack.** An adversary fabricates a validator set `S'` whose keys they
+hold. They construct an account state containing `S'`, a BPT whose leaf is that
+state, a root `R'`, a `DirectoryAnchor` with `StateTreeAnchor = R'`, and
+signatures over it made with `S'`'s keys. They assemble the artifact. **All
+sixteen steps pass.** The verifier makes no network access — by design — so
+there is nothing to contradict the fabrication.
+
+**What Phase 4 actually achieved,** stated honestly: it raises the attacker's
+cost from *"choose a validator set"* to *"fabricate an entire internally
+consistent chain history"*. That is a real and substantial increase. It is not
+what §9.4.1 claimed.
+
+**My own overclaim, withdrawn.** §9.4.3 ended step 15 with:
+
+> *"The chain is then: quorum signature → signed anchor → BPT root → account
+> leaf → NetworkDefinition → the validator set the signatures were checked
+> against. **It closes on itself, offline.**"*
+
+Closing on itself is precisely the defect. That sentence is **withdrawn**. The
+correct statement is that the loop must be *broken* at a point the verifier
+pinned out of band, and rule 6 said so before I wrote it: *"a trust root is
+out-of-band or it is not a trust root. Never disguise a bootstrapping assumption
+as a proof — that is the exact defect you are here to remove, reintroduced one
+level up."* I reintroduced it one level up.
+
+**The fix, which is small.** The verifier must hold the incarnation identifier
+(the genesis root anchor, §9.1.2) out of band and require the artifact to chain
+to it. Phase 4's contract therefore needs a **step 17**:
+
+```
+17. Incarnation MUST equal the verifier's independently pinned value.
+      pinned and equal      -> the induction terminates at a fixed point
+      pinned and different  -> foreign_incarnation
+      NOT pinned            -> incarnation_unverified  (NEW named state)
+```
+
+`incarnation_unverified` is weaker than `verified` and must never report as it.
+**Any implementation that returns the same verdict with and without a pinned
+anchor has reintroduced this defect.**
+
+Note what this does *not* rescue: L5 does not break the circle either. An
+external anchor proves the artifact existed by time T on a chain that did not
+restart — an attacker can anchor a fabricated artifact just as easily as a real
+one. L5 remains existence and time, exactly as §2B.4e says.
+
+### 6.2 DEFECT 2 — the chain-height binding cannot be executed as specified
+
+§9.3.4 and Phase 4's step 13 rest on the account state committing to its own
+chain contents. **The property is real; my description of how to check it was
+wrong.**
+
+The state hasher has four elements (`internal/database/observer_prod.go:28-35`):
+
+```
+[0] main state       [1] secondaryState       [2] chains       [3] pending
+```
+
+`StateReceipt` builds `hasher.Receipt(0, len-1)`, and a receipt from element 0 to
+the root of a four-leaf tree has **two** steps: the sibling `hasher[1]`, then the
+sibling `H(hasher[2] || hasher[3])`. Confirmed against a live receipt — the first
+two steps of Kermit's `dn.acme/network` receipt are both right-siblings, exactly
+the shape of a walk up from leaf 0.
+
+So `hasher[2]` — the chains component — **is never a sibling in the path.** It
+appears only folded together with `hasher[3]`, the pending-transactions hash.
+
+Phase 4 §4.3 step 13 says *"recompute the hashChains component and check it
+against the corresponding sibling"*, and the `ValidatorSetProof` structure
+carries only `Chains []ChainRoot`. **That check cannot be performed with the data
+the structure carries.** A verifier needs the pending hash as well, recompute
+`H(chains || pending)`, and compare against the second step.
+
+**Corrected.** AIP-058 now states the four-element structure and says servers
+must return both components. Phase 4's `ValidatorSetProof` needs a `Pending`
+field before it is implemented — it is a specification, so this is caught at
+exactly the right time, but it would have been a compile-clean, test-passing,
+silently-unverifiable feature had it been built as written.
+
+### 6.3 DEFECT 3 — `ForHeight` was specified at a granularity the chain does not have
+
+AIP-058 originally said the server *"resolves the BPT root in force at minor
+block H"*. BPT roots are recorded at anchor-emission points, not per block:
+
+```
+MainNet  DN height 34,653,971  recorded BPT roots  13,732  -> 1 per ~2,524 blocks
+Kermit   DN height  7,965,738  recorded BPT roots 173,528  -> 1 per ~46 blocks
+```
+
+**For the overwhelming majority of heights there is no recorded root**, and on
+MainNet the gap is over two thousand blocks. The specification was unanswerable
+as written, and the dangerous failure mode is a server that silently returns the
+nearest root while echoing the requested height — answering a different question
+than the one asked, confidently.
+
+**Corrected.** `ForHeight` is now defined as a **lower bound**: the server
+resolves the nearest recorded root at or after `H` and echoes the **resolved**
+height. The client closes the remaining gap itself using the chain-height binding
+of §6.2 — if the account's main-chain height is unchanged between `H` and the
+resolved root, the account did not change in between.
+
+### 6.4 Attacks the design DOES stop
+
+Stated for balance, and each is genuinely stopped **given a pinned incarnation**:
+
+1. **The build-time substitution.** Today `layer4.go:255` copies the validator
+   set from a `network-status` RPC at build time. A compromised or merely wrong
+   endpoint yields a proof asserting a set nobody signed for. Step 14 makes that
+   inconsistent with the artifact's own evidence.
+2. **The single rogue CERTEN validator.** V8.2 folds
+   `accumulateValidatorSetRoot` and `accumulateIncarnation` into the bundleId
+   (verified by `test_BundleIdCommitsTheAccumulateFields`), so a validator cannot
+   plant a different Accumulate set under the bundleId the honest quorum signed.
+3. **Cross-incarnation replay.** The incarnation is in the signed pre-exec
+   message, so a proof for one chain cannot be presented as a proof for another —
+   provided the verifier checks it, which is §6.1's step 17.
+4. **Stale-signature replay across the version boundary.** The bumped
+   `certen:bls:v2:pre` tag changes the digest, proven by
+   `test_BumpedTagIsNotDecoration` and `TestV8_2_DomainSeparation`.
+5. **The silent slot shift.** Appending rather than inserting the two Anchor
+   fields turned a silent misread of `valid`/`proofExecuted` into a compile
+   error (§9.4b.3).
+
+### 6.5 THE NAMED ADVERSARY THE DESIGN DOES NOT STOP
+
+Required by the definition of done. There are two, and the first is the honest
+headline.
+
+**A. The operator quorum that legitimately writes a validator set it controls.**
+
+Nothing in AIP-058, AIP-059, V8.2 or the verifier contract prevents Accumulate's
+operator book from writing any validator set it likes to
+`acc://dn.acme/network`. The `WriteData` would be genuine, receipted, anchored
+and signed. Every proof would verify. The verifier would correctly report that
+the network's own records said so — because they did.
+
+**This is not a gap that a proof system can close.** A proof establishes *what
+the records held*, never *who was entitled to write them*. Anyone reading these
+proposals as protection against governance capture has been misled, and the
+documents say so in their Security sections rather than leaving it implied.
+
+**B. An adversary who controls the verifier's out-of-band channel.**
+
+§6.1's fix rests entirely on the verifier holding a correct pinned incarnation
+identifier. An adversary who supplies that pin — by controlling the
+documentation, the distribution channel, or the operator's configuration —
+supplies a fabricated chain beneath it and every check passes.
+
+This is not theoretical here. Phase 4b's `signV8_2PreExecBLS` reads the
+incarnation from the `ACCUMULATE_INCARNATION` environment variable
+(§9.4b.7). **A misconfigured or maliciously configured value produces a
+wrong-but-well-formed on-chain commitment that the contract cannot detect**,
+because the contract commits the set and does not validate it (§4A.3). The
+mitigation is procedural, not cryptographic: publish the pin widely, in more than
+one place, under more than one party's control.
+
+### 6.6 Overclaims searched for and not found
+
+The following were checked specifically, because they are the failure modes this
+project has removed before:
+
+- **"Proven to genesis" unqualified** — absent. Both AIPs, both issue bodies and
+  §9 consistently say *this incarnation's* genesis and name the boundary as a
+  trust event.
+- **A capability limit reported as a governance rejection** — absent. Phase 4's
+  §4.4 table, Phase 4c's finding that `proofverify` already implements the
+  three-way split, and AIP-058's "three refusals" all keep could-not-read
+  distinct from proven-wrong.
+- **A weaker claim wearing the stronger claim's name** — one found and fixed:
+  §6.1's `incarnation_unverified`. Without it, a proof verified with no pinned
+  anchor would print `verified`.
+- **A number published that could not be vouched for** — none. §9.0.8's
+  unresolved MainNet-identity question is disclosed in both AIPs' References.
+- **An unrun code path proposed as a solution** — one found and rejected in
+  Phase 3: `SnapshotService` (option b), which no live network advertises.
+
+### 6.7 What the whole body of work does and does not establish
+
+**Does:**
+
+- The validator set can be *derived* from chain state rather than *asserted*, and
+  the derivation is offline-checkable (§9.4.2, measured at ~2.4 KB).
+- The gap becomes permanent at the first validator-set change, demonstrated by
+  running one (§9.3.1).
+- The Accumulate set and incarnation are now committed in a signed, on-chain
+  anchor message, with cross-language agreement proven by shared vectors
+  (§9.4b.2).
+- Two AIPs give Accumulate a concrete, cited, sized ask, the first of which
+  needs nothing unmerged.
+
+**Does not:**
+
+- Close the §1 gap by itself. §6.1 is decisive: without an out-of-band pin the
+  derivation is circular. **The sentence in `pkg/execution/layer5.go:225` is not
+  yet deletable**, and the honest revision is narrower than "delete it" — it
+  becomes conditional on the verifier holding a pinned incarnation.
+- Cross an incarnation boundary. Nothing can.
+- Say anything about who is entitled to be a validator.
+- Ship anything. Nothing is deployed and `signV8_2PreExecBLS` is not wired in
+  (§9.4b.8).
+
+### 6.8 Recommended order of work from here
+
+1. **Add `Pending` to `ValidatorSetProof` and step 17 to the verifier contract**
+   (§6.1, §6.2) — both are specification fixes and cost nothing now.
+2. **Implement Phase 4's artifact work.** Without it V8.2 commits a root nobody
+   can expand.
+3. **Publish the incarnation pin** for each network, in more than one place.
+4. **Then** the coordinated three-network cutover.
+5. Submit AIP-058; it is independent of all of the above.
+6. Ask the maintainer about §9.0.8.
+
+### 6.9 Runbook corrections applied in this phase
+
+- §9.4.3's *"It closes on itself, offline"* — **withdrawn** (§6.1).
+- §9.3.4 and §9.4.3 step 13's chain-height binding — **corrected** (§6.2); the
+  property holds, the check needs the pending hash too.
+- AIP-058's adversary claim, `ForHeight` semantics, chain-height binding note,
+  and the matching passages in its issue body — **corrected in place**.
