@@ -2255,7 +2255,15 @@ already proves `StateTreeAnchor` is what a validator quorum signed (steps 1–9)
 Step 15 says the BPT root the validator set was proven into **is that same
 anchor**. The chain is then: quorum signature → signed anchor → BPT root →
 account leaf → `NetworkDefinition` → the validator set the signatures were
-checked against. It closes on itself, offline.
+checked against.
+
+> ⛔ **The original sentence here — "It closes on itself, offline" — is
+> WITHDRAWN by §9.6.1.** Closing on itself is precisely the defect: the set
+> authenticates the anchor and the anchor authenticates the set, so an adversary
+> who fabricates a whole consistent chain passes every step. The loop must be
+> broken at a point the verifier pinned OUT OF BAND. See §9.6.1 for the attack
+> and the required step 17. Step 13 as written also cannot be executed — it needs
+> the pending-transactions hash as well; see §9.6.2.
 
 ### 4.4 What it refuses, what it names, and what it must never do
 
