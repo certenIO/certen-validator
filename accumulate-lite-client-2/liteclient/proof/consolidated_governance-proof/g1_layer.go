@@ -205,6 +205,16 @@ func (g1 *G1Layer) ProveG1(ctx context.Context, request G1Request) (*G1Result, e
 		G1ProofComplete:      authorizationResult.G1ProofComplete,
 		SignatureRouteStatus: routeStatus,
 		TimingBasis:          timingBasis,
+		UnverifiedPageRules:  g1.authorityBuilder.UnverifiedPageRules(),
+	}
+
+	// Rule 8 again, at the point a reader is looking: if any page carried a
+	// rule this proof did not re-derive, the summary line must not read as an
+	// unqualified "the governance was verified".
+	if n := len(result.UnverifiedPageRules); n > 0 {
+		fmt.Printf("[G1]   [NOTE] %d page rule(s) recorded but NOT re-derived - "+
+			"this proof verifies the ACCEPT threshold, and the pages named in "+
+			"unverifiedPageRules demand more than that\n", n)
 	}
 
 	fmt.Printf("[G1] G1 proof complete:\n")

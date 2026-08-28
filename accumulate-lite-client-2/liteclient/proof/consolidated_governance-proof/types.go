@@ -397,6 +397,30 @@ type G1Result struct {
 	//
 	// See g1_timing_basis.go for why the distinction is worth recording.
 	TimingBasis []SignatureTimingBasis `json:"timingBasis,omitempty"`
+
+	// UnverifiedPageRules names, PER PAGE, every threshold the page carries
+	// that this proof did not re-derive: reject, response and block.
+	//
+	// G1 re-derives the ACCEPT threshold. A page that sets one of the other
+	// three demands more than that, and until this field a reader of
+	// "threshold satisfied: true" had no way to learn it. Each note says which
+	// of three distinct things it is - a rule that could have changed the
+	// answer, one that could not, and one the protocol does not enforce at all
+	// - because collapsing them would put a load-bearing omission and a moot
+	// one behind the same words.
+	//
+	// A TOP-LEVEL ARRAY for the same reason TimingBasis is one: KeyPageState is
+	// reachable from this struct through AuthoritySnapshot.StateExec, and this
+	// struct is what the validator hashes into the govRoot. Carrying the
+	// thresholds on KeyPageState would widen that preimage and move every
+	// govRoot ever signed.
+	//
+	// Empty - and so absent, via omitempty - for every page in the corpus and
+	// in production, none of which set any of the three.
+	//
+	// See g1_page_rules.go for what each rule means and why each was recorded
+	// rather than re-derived.
+	UnverifiedPageRules []PageRuleNote `json:"unverifiedPageRules,omitempty"`
 }
 
 // G2Result represents G2 proof result (Governance + Outcome Binding)

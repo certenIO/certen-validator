@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -28,6 +29,16 @@ type AuthorityBuilder struct {
 	client          RPCClientInterface
 	artifactManager *ArtifactManager
 	queryBuilder    QueryBuilder
+
+	// ruleMu guards rules, which records the thresholds beyond accept that
+	// each parsed page definition carried.
+	//
+	// Every key page definition in this package is parsed by
+	// parseKeyPageStateFromDef, so collecting here catches the principal's
+	// replayed page as well as every page reached by delegation. It is kept
+	// beside KeyPageState, never on it: see g1_page_rules.go.
+	ruleMu sync.Mutex
+	rules  map[string]pageThresholds
 }
 
 // NewAuthorityBuilder creates a new authority snapshot builder
@@ -36,7 +47,45 @@ func NewAuthorityBuilder(client RPCClientInterface, artifactManager *ArtifactMan
 		client:          client,
 		artifactManager: artifactManager,
 		queryBuilder:    QueryBuilder{},
+		rules:           map[string]pageThresholds{},
 	}
+}
+
+// notePageRules records what a page definition demanded beyond accept.
+//
+// Keyed by the page's own url when the definition carries one. A definition
+// without a url is recorded under the empty key rather than dropped: a page
+// carrying rules we cannot name is still a page carrying rules, and silently
+// discarding it is the "narrower claim than advertised" this phase closes.
+func (ab *AuthorityBuilder) notePageRules(def map[string]interface{}) {
+	t := parsePageThresholds(def)
+	if !t.any() {
+		return
+	}
+	pu := ProofUtilities{}
+	page, _ := pu.CaseInsensitiveGet(def, "url").(string)
+
+	ab.ruleMu.Lock()
+	if ab.rules == nil {
+		ab.rules = map[string]pageThresholds{}
+	}
+	ab.rules[normalizeAccURL(page)] = t
+	ab.ruleMu.Unlock()
+}
+
+// UnverifiedPageRules returns one note per rule that a parsed page carried and
+// this proof did not re-derive. Empty for every page in the corpus and in
+// production, none of which set any of them.
+func (ab *AuthorityBuilder) UnverifiedPageRules() []PageRuleNote {
+	ab.ruleMu.Lock()
+	defer ab.ruleMu.Unlock()
+
+	var out []PageRuleNote
+	for page, t := range ab.rules {
+		out = append(out, pageRuleNotes(page, t)...)
+	}
+	sortPageRuleNotes(out)
+	return out
 }
 
 // BuildAuthoritySnapshot builds complete authority snapshot at execution time
@@ -969,6 +1018,10 @@ func (ab *AuthorityBuilder) parseKeyPageMutation(msg map[string]interface{}) (Ke
 // parseKeyPageStateFromDef parses KeyPageState from key page definition object
 func (ab *AuthorityBuilder) parseKeyPageStateFromDef(keyPageDef map[string]interface{}) (KeyPageState, error) {
 	pu := ProofUtilities{}
+
+	// Record the rules this page carries beyond its accept threshold, before
+	// parsing drops them.
+	ab.notePageRules(keyPageDef)
 
 	// Extract version
 	version := pu.CaseInsensitiveGet(keyPageDef, "version")

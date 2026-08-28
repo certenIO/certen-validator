@@ -111,6 +111,19 @@ func (s *livePageSource) PageState(ctx context.Context, page string) (KeyPageSta
 		return KeyPageState{}, fmt.Errorf("parse key page %s: %w", key, err)
 	}
 
+	// Read the three thresholds the page carries beyond accept, at the one
+	// moment the page definition is in scope. They are kept beside the state,
+	// never on it: KeyPageState is hashed into the govRoot.
+	thresholds := parsePageThresholds(def)
+	if thresholds.any() {
+		// Rule 8: say it loudly. A page carrying rules this proof does not
+		// re-derive is a narrower claim than "the governance was verified", and
+		// an operator must not have to read the evidence array to discover that.
+		fmt.Printf("[AUTHORITY] [NOTE] key page %s carries rules this proof does not re-derive "+
+			"(reject=%d response=%d block=%d) - see unverifiedPageRules in the G1 document\n",
+			key, thresholds.Reject, thresholds.Response, thresholds.Block)
+	}
+
 	s.mu.Lock()
 	s.cache[key] = state
 	s.mu.Unlock()
