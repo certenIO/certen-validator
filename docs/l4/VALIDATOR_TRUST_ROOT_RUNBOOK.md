@@ -3492,3 +3492,104 @@ claim, and it does not pretend to be.
 - **§9.4b's on-chain commitment is unaffected.** V8.2 commits the root the
   quorum attested to; whether an offline verifier can bind that root to an
   Accumulate anchor is a separate question, and this is its answer.
+
+---
+
+## Post-Phase 6 (cont.) — the builder, and the seam left for the proof cycle
+
+**Run 2026-08-28.** Commit `03f4621`. `accumulate-core` untouched.
+
+### P.11 What was added
+
+```
+pkg/proof/validator_set_builder.go   BuildValidatorSetProof + an HTTP querier
+cmd/vsproof/                         build from a live network, verify, report
+```
+
+The builder takes an `AccumulateQuerier` interface rather than a concrete client,
+so the proof cycle can pass its existing v3 client and tests can drive it without
+a network.
+
+**It proves its own output before returning it.** `BuildValidatorSetProof` runs
+the decode, both chain bindings, and the same-root check, and returns an error
+rather than emitting evidence that would not verify. A producer that ships a
+malformed artifact for a third party to discover is worse than one that refuses.
+
+It also **refuses to guess**. The state hasher's second and fourth components are
+not served by the API and are derived as 32 zero bytes; the builder errors if the
+account reports any pending transactions, because the pending component would no
+longer be zero and assuming it would produce an unverifiable proof. The binding
+check would catch it anyway — this fails earlier and says why.
+
+### P.12 Run against the live network
+
+```
+$ go run ./cmd/vsproof
+  incarnation        e3f3119213a1ead44647659d67e47f4269a2affb13f150aa87b20baacf93cf81
+  BPT root           1701cb2ce4d2656334c84ad92995c7ef57d992fab53cdc02d56a8f746b96f109
+  derived validators 3, threshold 2/3
+     40e6e8b96de7e7ed  active on [Directory BVN1]
+     625b03bfad7d82b1  active on [Directory BVN2]
+     0f9f714a43c0c337  active on [Directory BVN3]
+  network main chain height 1
+     => only the genesis entry exists, so this set has NEVER changed,
+        so it IS the genesis set of this incarnation
+
+VERDICT: validator_set_unbound        (exit 3)
+```
+
+4,642 bytes of evidence. The CLI prints, at every weaker verdict, exactly which
+claim is missing and why — the unbound case explains the anchor-emission rate and
+points at AIP-058 rather than reporting a fault.
+
+### P.13 The seam, and why the proof cycle was NOT changed
+
+`layer4.go:255` still asserts, and nothing populates a `ValidatorSetProof` during
+a real proof build. That was a judgement call, and the reasoning belongs on the
+record:
+
+- Wiring it in today moves proofs from `validator_set_asserted` to
+  `validator_set_unbound`. That is a genuine improvement — the set would come
+  from chain bytes with a merkle path instead of a build-time RPC — but it is
+  **not** the closure, and it costs two extra round trips and a storage field per
+  proof.
+- The remaining step is small and now well-defined: call
+  `BuildValidatorSetProof` where `networkInfo()` is called today
+  (`layer4.go:421`), and carry the result on the `CompleteProof` wrapper beside
+  `Layer4BVN`/`Layer4DN`, which is already a never-hashed sibling.
+- **`working-proof_do_not_edit/` must not be edited**, so the field belongs on
+  the CERTEN-side wrapper rather than on `chained_proof.Layer4`.
+
+Whether the intermediate state is worth a production change now or after AIP-058
+lands is an operator's call, not the implementer's, and it is the kind of call
+that should be made deliberately rather than inherited from whoever was writing
+code that afternoon.
+
+### P.14 Where the whole effort now stands
+
+**Closed:**
+
+- The validator set and the accept threshold are derived from chain bytes, with
+  the account's own chain height cryptographically bound (§P.5, §P.4).
+- The Accumulate set and incarnation are committed in a signed, on-chain anchor
+  message, with cross-language agreement proven by shared vectors (§9.4b.2).
+- Two AIPs, cited and sized, the first independent of anything unmerged.
+- A verdict ladder that never lets a weaker claim wear a stronger name, exercised
+  by 20 tests and one live CLI.
+
+**Open, and each needs someone other than the implementer:**
+
+1. Publish the incarnation pin per network, in more than one place under more
+   than one party's control. Until then §9.6.5's adversary B is live and
+   `-pin` has nowhere trustworthy to come from.
+2. Submit AIP-058. Without it the binding is unreachable — for current
+   transactions as much as historical ones (§P.7-P.8).
+3. Cut over the three EVM networks together, which moves every account address.
+4. Resolve §9.0.8 — whether `mainnet.accumulatenetwork.io` is the production
+   MainNet.
+5. Decide whether to wire the builder into the proof cycle now (§P.13).
+
+**Still true, and worth restating because it is the point of all of it:**
+`pkg/execution/layer5.go:225` is not yet deletable. The honest revision is
+narrower than deletion — it becomes conditional on a pinned incarnation and on
+AIP-058 landing.
