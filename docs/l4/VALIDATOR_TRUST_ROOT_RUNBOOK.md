@@ -662,6 +662,10 @@ Decision taken 2026-08-28 by the maintainer. Do not re-litigate it; implement
 it. The remaining work is *how*, not *whether*. See §4A for the full rationale,
 the honest limits, and the scope.
 
+**Q15 — ✅ ANSWERED IN PHASE 4c (§9.4c).** (ii) backfill measured IMPOSSIBLE for
+all 419; (i) already shipped on the verify side, two build-side gaps remain;
+(iii) specified and must ship with Phase 4b. Original question text follows.
+
 **Q15 — The L5 workstream.** §2B.4d/e measured: 98% of proofs already carry an
 anchor (the gas is spent), L5 is 100% for proofs produced since it shipped, and
 419 historical proofs lack it. Three separate deliverables, do not conflate:
@@ -1136,7 +1140,14 @@ Path note for Phase 4b: `certen-contracts/` is a sibling of
 `independant_validator` under `C:\Accumulate_Stuff\certen\`, not a
 subdirectory of it. §4A.4's paths are relative to `certen\`.
 
-### 0.5 CORRECTION 4 — the `summary_only` count is 392, not 402
+### 0.5 CORRECTION 4 — WITHDRAWN. §2B.3's "402" was right.
+
+> ⛔ **This correction was itself wrong and is withdrawn in §9.4c.1.**
+> `proof_artifacts.verification_status = 'summary_only'` is exactly **402**,
+> which is what §2B.3 meant. The 392 below counts a different column
+> (`governance_proof_levels.level_json`). Both numbers are correct; only this
+> section's conclusion was not. Original text follows.
+
 
 §2B.3 cites "402 proofs are already marked `summary_only`". Measured today:
 **392 distinct proofs** (1,106 `governance_proof_levels` rows). The argument is
@@ -2670,3 +2681,219 @@ Two consequences to carry forward, neither of them hidden:
 - **§9.0.8** — `mainnet.accumulatenetwork.io` identity, still unresolved.
 - Phase 4c (Q15, the L5 workstream), Phase 5 (the AIPs), Phase 6 (adversarial
   review).
+
+---
+
+## Phase 4c — Q15, the L5 workstream as three separate deliverables
+
+**Run 2026-08-28.** `accumulate-core` **not modified**. Measurements against the
+production proof database on the fleet.
+
+**Gate 4c verdict: PASSED.** The three deliverables are separated and reported
+separately. One is measured as **impossible**, one is **already shipped** and
+Q15's framing of it is stale, and one is specified. Phase 0's §0.5 correction is
+itself corrected below.
+
+### 4c.1 CORRECTION TO MY OWN PHASE 0 — §2B.3's "402" was right
+
+§9.0.5 claimed the `summary_only` count is "392, not 402" and recorded §2B.3's
+number as an error. **That was wrong.** The two numbers measure different
+things, and both are correct:
+
+```
+proof_artifacts.verification_status = 'summary_only'              402   <- §2B.3's number
+distinct proof_id with summary_only in governance_proof_levels    392   <- what §9.0.5 measured
+overlap of the two sets                                           378
+```
+
+§2B.3 was referring to the artifact-level status, which is exactly 402. §9.0.5
+queried a different column and reported the difference as a defect in the
+runbook rather than in its own query. **§9.0.5 is withdrawn.**
+
+The 24/14 split either side of the overlap is a real, separate observation — some
+proofs carry the artifact status without a level marker and vice versa — but it
+is a consistency question about CERTEN's own bookkeeping, not a correction to
+§2B.3, and it should not be presented as one.
+
+### 4c.2 Q15(ii) — BACKFILL. Measured: IMPOSSIBLE for all 419.
+
+Q15 asked "can the batch tree be reconstructed for the historical 419 from
+`batch_transactions`?" The answer is no, and not for the reason one would guess.
+The tree data is abundant; the *linkage* is destroyed.
+
+**The data is there:**
+
+```
+batch_transactions rows            70,621   (with merkle_path: 70,621)
+anchor_batches rows                68,152   (with merkle_root:  68,152)
+```
+
+**The link is not:**
+
+```
+proofs missing L5                     419
+  ..with batch_id set                   0     <- every one is NULL
+  ..with blank accum_tx_hash            1
+  ..joinable to batch_transactions
+    by accumulate_tx_hash             415     (all 415 have a merkle_path)
+  ..joining to an ANCHORED batch        0
+```
+
+Every one of the 419 has `proof_artifacts.batch_id IS NULL`, so the direct
+reference is gone. The obvious fallback is to re-link by transaction hash. It
+does not work:
+
+```
+proofs resolving to EXACTLY ONE batch_transactions row        0
+proofs mapping to MORE THAN ONE distinct batch              415
+maximum distinct batches for a single proof                   35
+```
+
+**Not one proof resolves to a unique batch.** The same `accumulate_tx_hash`
+appears in up to 35 different batches, so "joinable" does not mean
+"identifiable". Adding the proof's own recorded root as a disambiguator does not
+rescue it:
+
+```
+resolve to exactly one batch via (tx hash + merkle_root)      0
+still ambiguous (>1 batch shares that root and that tx)      40
+resolve to NO batch at all                                  375
+```
+
+375 of the 415 carry a `merkle_root` that matches **no** batch they appear in,
+and the remaining 40 are still ambiguous. There is no third key available.
+
+> **Verdict: the backfill cannot be done for any of the 419. Mark them; never
+> fabricate one.** Choosing among 35 candidate batches — or among 40 ambiguous
+> ones — would manufacture a merkle path that looks exactly like a real one and
+> is not. That is strictly worse than an absent one.
+
+This is the same conclusion, for the same reason, that
+`pkg/database/proof_artifact_types.go:68-71` already records for L4:
+
+> *"The evidence for these proofs CANNOT be recovered: re-querying Accumulate
+> returns today's validator set, not the one that signed. Marking is the only
+> honest option — a synthesized quorum would be worse than an absent one."*
+
+**A related data-model observation, offered as a lead not a conclusion.** Only
+**10** of 68,152 `anchor_batches` rows carry an `anchor_tx_hash`, while **421**
+of 429 `proof_artifacts` rows do. Anchoring is recorded on the proof, not on the
+batch. That is why "joining to an anchored batch" returns 0 even though the
+proofs plainly were anchored. It does not change the verdict — the ambiguity
+above is fatal on its own — but it is the likely reason the linkage was never
+maintained, and it is worth fixing before the same gap reopens on new proofs.
+
+### 4c.3 Q15(i) — ERROR HANDLING. Already shipped on the verify side; Q15's framing is stale.
+
+Q15(i) asks for "a distinct named state modelled on `summary_only` — never a
+silent pass, never a governance rejection." **`cmd/proofverify/main.go:280-321`
+already implements exactly that**, with the three-way discipline intact:
+
+| Outcome | Exit | What it prints |
+|---|---|---|
+| L1–L5 verified | 0 | plus an explicit note that L5 is *not* verified offline, and that nothing in the proof establishes validator-set legitimacy |
+| `ErrNoLayer5` | 3 | `SUMMARY-ONLY (L5)` — *"L1–L4 verified… Nothing about it is known to be wrong."* |
+| binding present, leaf does not recompute | 1 | `FAILED (L5)` — *"This proof is not in the batch it claims to be in."* |
+
+The code comment says why, and it is the right reason: *"a DISTINCT message, not
+the L1-L4 one: 'L1-L4 verified, L5 absent' is its own state and an operator has
+to be able to tell it from a proof whose quorum evidence is missing."*
+
+**So Q15(i) should be re-scoped, not built.** Two real gaps remain, both on the
+*build* side rather than the verify side:
+
+1. **The reason is not recorded.** `persistLayer5`
+   (`pkg/execution/layer5_rows.go:288-300`) logs and returns on both failure
+   paths. Downstream, "no L5 row" conflates three different situations that an
+   operator needs to tell apart:
+   - the proof **predates** the feature (all 419 historical ones),
+   - anchoring was attempted and **could not be observed** (a capability limit —
+     chain outage, gas, RPC timeout),
+   - `BuildLayer5` **errored** on data it did have.
+
+   The first is permanent and expected; the second is transient and should be
+   retried; the third is a bug. Today they are indistinguishable in storage. The
+   fix is a recorded reason beside the absent row — not a new verdict, since the
+   verdict is already right.
+
+2. **`failed` is used in production but is not a declared constant.**
+   `pkg/database/proof_artifact_types.go` declares only
+   `VerificationStatusVerified` and `VerificationStatusSummaryOnly`, yet
+   production holds:
+
+   ```
+   summary_only 402 | verified 12 | failed 9 | NULL 6
+   ```
+
+   Nine rows carry a status the type system does not know about, and six carry
+   none at all. That is a small defect, but it is in exactly the vocabulary this
+   whole workstream depends on being unambiguous.
+
+**And the rule that must not be broken**, restated because it is the one that
+bites: a missing L5 must never make a proof invalid. If it did, an anchoring
+outage would become a governance-proof failure — the capability-limit-as-
+governance-rejection defect this project has removed twice. The current code
+gets this right; any change to it must keep getting it right.
+
+### 4c.4 Q15(iii) — THE EXTENSION. Specified.
+
+L5 today proves **existence and time**: *this proof, with this content, existed
+no later than block B on chain C at time T*. It says nothing about validator-set
+legitimacy, and `layer5.go:225` says so inside the artifact.
+
+The extension carries what Phase 4 and Phase 4b built:
+
+```go
+// Beside the hashed summary, never inside it - the timing_evidence.go pattern.
+type Layer5AccumulateBinding struct {
+    // AccumulateValidatorSetRoot is now COMMITTED ON CHAIN by CertenAnchorV8_2's
+    // pre-exec message (§9.4b.1). L5 carries it so a reader of the artifact can
+    // see what the anchor transaction committed to without re-deriving it.
+    AccumulateValidatorSetRoot string `json:"accumulateValidatorSetRoot"`
+
+    // Incarnation is which Accumulate chain. Without it a permanent on-chain
+    // record cannot say what it refers to (§9.1.2), and a stored proof cannot
+    // tell it is on a dead chain (§9.1.3).
+    Incarnation string `json:"incarnation"`
+
+    // ValidatorSetProof is the EXPANSION of the committed root - the account
+    // state, the BPT membership path, the chain roots, the height (§9.4.2).
+    // Without it the on-chain commitment is, in §4A.5.1's words, "decoration
+    // that looks like coverage".
+    ValidatorSetProof *ValidatorSetProof `json:"validatorSetProof,omitempty"`
+}
+```
+
+Three properties this must have, each inherited from a measured finding:
+
+1. **It rides beside govRoot, not inside it** — `timing_evidence.go:31-45`.
+   Phase 4b already proved govRoot does not move; the extension must not
+   undo that.
+2. **It is mandatory to RECORD, never mandatory to VERIFY** (§2B.4e). A proof
+   lacking it lands in `validator_set_asserted` (§9.4.4), not in `failed`.
+3. **It does not upgrade L5's claim.** Even with the Accumulate set attached, an
+   external anchor still proves existence and time. Across an incarnation
+   boundary it becomes the *only* surviving link (§2B.4b) — and that is a
+   **non-repudiable existence and time witness**, a different and weaker claim
+   than a within-incarnation governance proof. It must never report the same
+   verdict.
+
+**And the sequencing matters.** Phase 4b put the commitment on chain; the
+expansion lives here. Shipping 4b without this leaves a root nobody can expand.
+Shipping this without 4b leaves an expansion nothing commits to. **Neither half
+is useful alone**, and the cutover plan has to move both.
+
+### 4c.5 What Phase 4c changes about the deliverable
+
+- **Q15(ii) is closed as impossible**, with numbers. The AIPs and the spec should
+  say the 419 are permanently `summary_only` for L5 and say why — not "backfill
+  pending".
+- **Q15(i) shrinks to two small build-side fixes**, because the verify side is
+  already correct. An AIP or plan that describes it as unbuilt would be wrong.
+- **Q15(iii) is the load-bearing half of Phase 4b** and must ship with it.
+
+### 4c.6 Still open after Phase 4c
+
+- The five deployment items from §9.4b.8 — nothing is deployed or wired in.
+- **§9.0.8** — `mainnet.accumulatenetwork.io` identity, still unresolved.
+- Phase 5 (the AIPs), Phase 6 (adversarial review).
