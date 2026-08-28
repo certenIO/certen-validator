@@ -3403,3 +3403,92 @@ moment the set changes.
   When it does, that branch becomes the induction.
 - §6.8 items 3-6 remain: publish the pin, cut over all three networks together,
   submit AIP-058, and resolve §9.0.8 with the maintainer.
+
+---
+
+## Post-Phase 6 (cont.) — the binding is NOT achievable today, measured
+
+**Run 2026-08-28.** Commit `0820dc8`. Found while attempting §P.6's remaining
+item, wiring the builder into the proof cycle.
+
+### P.7 The measurement
+
+Step 15 requires the BPT root the validator set was proven into to equal the
+`StateTreeAnchor` of a quorum-signed anchor. An account query returns a receipt
+against the node's **current** BPT root. Those two are almost never the same
+value:
+
+```
+account-state root 4c795823d1aabbddbb3c1039 at localBlock 7,967,201
+scanned the 300 most recent anchored BPT roots on anchor(directory)-bpt -> NO MATCH
+polled for 60s across two new anchor entries                            -> NO MATCH
+```
+
+That is not a lag. It follows from the recording rate measured in §9.6.3: BPT
+roots reach `anchor(<partition>)-bpt` only at anchor-emission points — one per
+~46 blocks on Kermit, one per ~2,524 on MainNet — so a freshly fetched root is
+almost never one of them.
+
+### P.8 Why polling does not rescue it
+
+One could poll until the current root happens to be an anchored one. On Kermit
+that is roughly every ~100 seconds; on MainNet far rarer. **It would not help**,
+and the reason matters:
+
+Step 15 exists to bind the validator set to **the anchor of the block the intent
+settled in** — the L4 Directory leg's `StateTreeAnchor`. That block is chosen by
+when the intent settled, not by the prover. Binding to some *other* anchor that
+happened to be convenient proves the set was current at an unrelated moment,
+which is not the claim L4 needs.
+
+To bind to the intent's anchor you need the account state **at that block**.
+That is precisely the historical membership proof AIP-058 asks for and
+Accumulate does not serve.
+
+> **Without AIP-058, a ValidatorSetProof can be DERIVED but cannot be BOUND.**
+> Not for historical proofs, and not for current ones either.
+
+### P.9 What changed in the code, and why it is not a workaround
+
+`Verify` previously returned an **error** when no binding was supplied. That was
+wrong: it would report a capability limit as tampering — the defect class this
+codebase has removed twice (§2B.4e) — and it would have done so on **every proof
+built today**, because none of them can supply a binding.
+
+Added `VerdictValidatorSetUnbound`, and step 15 now distinguishes:
+
+| Situation | Outcome |
+|---|---|
+| no binding supplied | `validator_set_unbound` — a named state, no error |
+| binding supplied and it holds | continue to step 16 |
+| binding supplied and it does NOT hold | **error** — that is tampering |
+
+The verdict ladder is now, weakest to strongest:
+
+```
+validator_set_asserted    no evidence carried (all 429 stored proofs)
+validator_set_unbound     set DERIVED from chain bytes, root not tied to a quorum   <- the best available today
+incarnation_unknown       bound, but the artifact does not name its chain
+incarnation_unverified    named, but the verifier holds no out-of-band pin
+foreign_incarnation       named, pinned, and a DIFFERENT chain
+verified                  everything, including a matching pinned incarnation
+```
+
+**`validator_set_unbound` is a real improvement over `validator_set_asserted`**,
+and it is honest about being short of `verified`: the set now comes from chain
+bytes with a merkle path rather than from a build-time RPC. It is not the whole
+claim, and it does not pretend to be.
+
+### P.10 What this does to the deliverable
+
+- **AIP-058's motivation is stronger than Phase 5 stated.** Phase 5 argued the
+  gap "becomes permanent at the first validator-set change". That is true and
+  understated: the *binding* is unavailable **today**, for every proof, current
+  or historical. AIP-058 has been updated accordingly.
+- **Wiring the builder into the proof cycle is still worth doing**, and it now
+  has a defined ceiling: it moves proofs from `validator_set_asserted` to
+  `validator_set_unbound`. It should be built with that expectation rather than
+  in the belief that it reaches `verified`.
+- **§9.4b's on-chain commitment is unaffected.** V8.2 commits the root the
+  quorum attested to; whether an offline verifier can bind that root to an
+  Accumulate anchor is a separate question, and this is its answer.
