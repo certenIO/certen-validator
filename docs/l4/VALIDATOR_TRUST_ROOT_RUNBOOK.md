@@ -64,9 +64,17 @@ That is the sentence this work exists to delete.
 
 ### The requirement, in one line
 
-> For **any** transaction and **any** block, determine what the validator set
-> was at that block, and prove that set cryptographically back to network
-> genesis.
+> For any transaction and any block **within a network incarnation**, determine
+> what the validator set was, prove it cryptographically back to **that
+> incarnation's** genesis, and commit enough of that proof to the external
+> anchor that an offline third party can check it — while stating explicitly
+> that the incarnation boundary is a trust event.
+
+**This supersedes the unqualified "back to network genesis" this section
+originally carried.** §2B explains why that phrasing was false: the network has
+restarted, and no chain contains a commitment to the one before it. §2B.4c
+explains the "commit to the anchor" clause: the on-chain record today binds
+CERTEN's validator set and never Accumulate's.
 
 ---
 
@@ -620,6 +628,29 @@ is unprovable from the DN's hash-only entry. Redo it against **partition block
 0/1** (§2B.1), which is where genesis actually is. The conclusion may change
 completely.
 
+**Q14 — Where does the Accumulate validator-set commitment go?** §2B.4c: the
+deployed `CertenAnchorV8_1` binds CERTEN's validator set as on-chain state and
+has no Accumulate-validator concept. Evaluate, do not assume:
+  - (a) in the anchor pre-exec message — changes the signed preimage AND the
+        contract, needs a redeploy and a migration for pinned accounts
+  - (b) in `govRoot` — changes the preimage only, no contract change, but the
+        value is opaque on chain
+  - (c) in the L5 artifact only — cheapest, but then nothing on chain binds it
+Whatever is chosen must be **expandable offline**. A committed root nobody can
+expand is decoration that looks like coverage. State the artifact size cost.
+
+**Q15 — The L5 workstream.** §2B.4d/e measured: 98% of proofs already carry an
+anchor (the gas is spent), L5 is 100% for proofs produced since it shipped, and
+419 historical proofs lack it. Three separate deliverables, do not conflate:
+  - (i) **Error handling.** A proof that fails to achieve L5 must land in a
+        distinct named state modelled on `summary_only` — never a silent pass,
+        never a governance rejection. An anchoring outage is a capability limit.
+  - (ii) **Backfill.** Can the batch tree be reconstructed for the historical
+        419 from `batch_transactions`? Where it cannot, mark — never fabricate.
+  - (iii) **Extension.** Carry the Accumulate validator-set root, the induction
+        path, and the incarnation identity (see Q14 for where the commitment
+        lives). L5 today proves existence and time only.
+
 **Q10 — Exercise the path that has never run.** The validator set has never
 changed on mainnet or Kermit (§2A.3), so the update-proof path has zero
 production history. Simulate a change (devnet, simulator, or
@@ -665,6 +696,7 @@ is CERTEN's. What does `layer4_verify.go` need so that `ValidatorSet` is
 | 2 | Answer Q4–Q6 (point query, cost, DAG-BFT) | Measured numbers, not estimates |
 | 3 | Evaluate Q7 options (a)–(d) against the answers | A recommendation with the rejected options and why |
 | 4 | Answer Q8 — the CERTEN-side verifier design | Written as a change to `layer4_verify.go`'s contract |
+| 4b | Answer Q14 + Q15 — where the commitment lives, and the L5 workstream | A chosen home with the rejected options; L5's three deliverables separated |
 | 5 | Draft AIP A (CometBFT, now) then AIP B (DAG-BFT) | Matches §6; every claim cited; A does not depend on B |
 | 6 | Adversarial review of the draft | A named attack the proposal does NOT stop, or an argument none exists |
 

@@ -117,7 +117,42 @@ The maintainer corrected two things on 2026-08-28, both since confirmed:
         a weaker, DIFFERENT claim and must be labelled as one - never allowed to
         report the same verdict as a within-incarnation proof.
 
-TREAT ALL THREE SECTIONS AS LEADS, NOT AS TRUTH. They were read once and may be
+SECTIONS 2B.4c/d/e — THE ANCHOR AND L5. Also measured 2026-08-28:
+
+  - THE LIVE ANCHOR IS CertenAnchorV8_1, NOT V6_1. Confirmed on chain: the
+    production CertenAccount 0x3850C52C…050389 returns anchorContract() =
+    0xEA9eee…42490272, the deployed V8.1. CertenAccountV7.sol:85 declares the
+    field as type `CertenAnchorV6_1` - that is a STALE TYPE NAME. Do not read
+    the source's V6_1 references as the live version; verify on chain.
+
+  - THE ANCHOR BINDS CERTEN'S VALIDATORS, NOT ACCUMULATE'S. In V8_1,
+    currentValidatorSetRoot is on-chain contract state (CertenAnchorV8_1.sol:541),
+    recomputed on any membership/power/threshold change, and a signature
+    claiming a stale root is rejected. Strong - for CERTEN. Grepping V8_1 for
+    any Accumulate-validator concept returns NOTHING. What reaches the chain
+    about Accumulate is only govRoot's L4LegSummary: Signers and Threshold -
+    WHO SIGNED and HOW MANY WERE NEEDED, never WHO WAS ELIGIBLE. The
+    denominator is missing, so a fabricated proof listing arbitrary keys as
+    Signers produces a consistent govRoot no on-chain check can distinguish.
+    Q14 decides where the Accumulate validator-set commitment should live.
+
+  - L5 IS ALREADY UNIVERSAL, AND THE ANCHOR IS ALREADY PAID FOR. 421 of 429
+    proofs (98%) already carry an anchor_tx_hash. L5 coverage went 0/15 before
+    2026-08-26 and 8/8 then 2/2 after - it is 100% for every proof produced
+    since it shipped; the 419 without it are historical. So L5 is NOT a cost
+    decision and NOT "barely deployed". What was missing was the merkle path
+    binding a proof to an anchor already bought.
+
+  - MANDATORY TO RECORD, NEVER MANDATORY TO VERIFY. If a proof were invalid
+    without L5, an anchoring outage becomes a GOVERNANCE-PROOF FAILURE - the
+    capability-limit-as-governance-rejection defect this session removed twice.
+    A missing L5 is a distinct named state modelled on summary_only.
+
+  - AND L5 DOES NOT CLOSE THE GAP. It proves EXISTENCE AND TIME, not
+    validator-set legitimacy. Necessary, not sufficient. Never let a claim
+    built on it be reported as the stronger one.
+
+TREAT ALL FOUR SECTION GROUPS AS LEADS, NOT AS TRUTH. They were read once and may be
 stale or wrong. Re-verify. Where they are wrong, say so plainly and correct
 them - as 2B corrects 2A.
 
@@ -220,6 +255,11 @@ ORDER OF WORK
   Runbook Phase 2   Q4-Q6  point query, cost, DAG-BFT         -> Gate 2
   Runbook Phase 3   Q7     evaluate the options               -> Gate 3
   Runbook Phase 4   Q8     the CERTEN-side verifier contract  -> Gate 4
+  Runbook Phase 4b  Q14    where the Accumulate validator-set commitment
+                           lives (anchor message / govRoot / L5 artifact)
+                    Q15    the L5 workstream, as THREE separate deliverables:
+                           error handling, backfill of the historical 419,
+                           and the extension                     -> Gate 4b
   Runbook Phase 5   Draft the AIP(s)                          -> Gate 5
   Runbook Phase 6   Adversarial review                        -> final gate
 
@@ -249,6 +289,14 @@ DEFINITION OF DONE
       accept, what it would refuse, how the stored artifact grows, and whether
       govRoot moves (it must not, unless deliberately versioned - see
       pkg/proof/timing_evidence.go for the beside-the-hash pattern).
+  [ ] A decision on WHERE the Accumulate validator-set commitment lives (Q14),
+      with rejected options and the offline-expandability argument. A committed
+      root nobody can expand is decoration that looks like coverage.
+  [ ] The L5 workstream split into its three deliverables (Q15) and reported
+      separately: error handling for a missing L5, backfill of the historical
+      419 (mark, never fabricate), and the extension carrying the Accumulate
+      validator set + incarnation identity.
+  [ ] Stated plainly that L5 alone does not close the gap.
   [ ] One named adversary the design defeats, and one it does not.
 
 Begin with Runbook Phase 0. Do not write a line of the AIP before Gate 3.
