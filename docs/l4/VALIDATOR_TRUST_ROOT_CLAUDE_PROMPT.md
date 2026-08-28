@@ -1,18 +1,50 @@
 # Claude Code Prompt — Validator Trust Root research and AIP
 
-Paste the block below into a fresh Claude Code session rooted at
-**`C:\Accumulate_Stuff\certen\independant_validator`**.
+## HOW TO RUN THIS
 
-That is the git repository any CERTEN-side notes land in. `accumulate-core` is a
-**sibling of `certen`** at `C:\Accumulate_Stuff\accumulate-core`, referenced by
-absolute path and **read-only**. AIPs are written to `C:\Accumulate_Stuff\AIPs\`,
-which is not a git repository.
+**Working directory — start the session here:**
 
-**End state:** two draft Accumulate Improvement Proposals closing the one gap
-left in CERTEN's cryptographic chain — that L4 verifies signatures against a
-validator set the proof carries, with nothing binding that set to network
-genesis. **AIP A targets the network running today (CometBFT). AIP B targets
-DAG-BFT.** A must stand on its own.
+```
+C:\Accumulate_Stuff\certen\independant_validator
+```
+
+That is the git repository every CERTEN-side edit lands in, so `git status`,
+`git diff` and rollback all work without a `cd`. `accumulate-core` is a sibling
+of `certen` at `C:/Accumulate_Stuff/accumulate-core` (Windows: backslashes) — referenced by
+path and **read-only**. AIPs are written to `C:\Accumulate_Stuff\AIPs\`, which
+is not a git repository.
+
+**ONE PHASE PER SESSION.** The gates are blocking and the research is deep
+enough that a single session cannot hold all of it without degrading. Start a
+fresh session for each phase and say which phase you are on.
+
+**Type exactly this** (substituting the phase number):
+
+```
+Your instruction set: docs/l4/VALIDATOR_TRUST_ROOT_CLAUDE_PROMPT.md
+Authoritative runbook: docs/l4/VALIDATOR_TRUST_ROOT_RUNBOOK.md
+
+Execute PHASE 0 only. Stop at its gate and report.
+
+Read both documents in full before doing anything. Cut no corners: no
+demotion, no deferral, no "will address later", no stub, no assumed answer.
+Every claim about how Accumulate behaves must be verified in the code with a
+file:line citation, or measured against a live network - and where it can be
+run rather than read, run it. If something cannot be established, say so
+plainly and say what you tried; never fill a gap with a plausible answer. It
+must be correct and independently verifiable.
+```
+
+For later sessions, change `PHASE 0` to `PHASE 1`, `PHASE 2`, `PHASE 4b`, and
+so on, and add one line naming what the previous phase concluded — the new
+session has no memory of it. The runbook's §5 table lists the phases and their
+gates.
+
+**Where the phase's findings go.** Append them to the runbook under the phase
+heading, and commit. The runbook is the shared state between sessions; a
+finding that lives only in a session transcript is lost.
+
+---
 
 ---
 
@@ -169,9 +201,12 @@ SECTIONS 2B.4c/d/e — THE ANCHOR AND L5. Also measured 2026-08-28:
             base-sepolia      0xEA9eeeE42a7971792B11Fd2f682C9c1172490272
             arbitrum-sepolia  0x4b9eA187772E115641Fd40F35BF7a84925e7A035
 
-        IN SCOPE:  CertenAnchorV8_1.sol, CertenAccountV7.sol,
-                   pkg/execution/contracts/v6_1_binding.go (EVM),
-                   pkg/consensus/v6_1_signing.go signV6_1PreExecBLS (EVM only)
+        IN SCOPE - CREATE THESE, derived from the deployed originals; do NOT
+        edit the live V8_1/V7 files, which stay deployed until cutover:
+                   CertenAnchorV8_2.sol      (from CertenAnchorV8_1.sol)
+                   CertenAccountV7_2.sol     (from CertenAccountV7.sol)
+                   pkg/execution/contracts/v8_2_binding.go (from v6_1_binding.go)
+                   signV8_2PreExecBLS        (from signV6_1PreExecBLS, EVM only)
 
         OUT OF SCOPE - DO NOT UPDATE: v6_1_binding_{near,solana,aptos,sui,ton,
                    cardano}.go, signV6_1PreExecBLS{Near,Solana,...},

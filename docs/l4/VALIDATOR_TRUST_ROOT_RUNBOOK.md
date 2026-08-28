@@ -739,11 +739,12 @@ Identical bytecode on all three — one contract, three deployments.
 **IN SCOPE**
 
 ```
-certen-contracts/evm/src/core/CertenAnchorV8_1.sol   the one contract
-certen-contracts/evm/src/account/CertenAccountV7.sol  pinned via initializeAnchor
-pkg/execution/contracts/v6_1_binding.go               the EVM message builder
-pkg/consensus/v6_1_signing.go   signV6_1PreExecBLS    the EVM signing path
-                                (the EVM one only)
+NEW, derived from the deployed originals - do not edit the live V8_1/V7 files:
+  certen-contracts/evm/src/core/CertenAnchorV8_2.sol      from CertenAnchorV8_1.sol
+  certen-contracts/evm/src/account/CertenAccountV7_2.sol  from CertenAccountV7.sol
+  pkg/execution/contracts/v8_2_binding.go                 from v6_1_binding.go
+  pkg/consensus/  signV8_2PreExecBLS                      from signV6_1PreExecBLS
+                                                          (the EVM one only)
 ```
 
 **OUT OF SCOPE — legacy, inactive, unsupported. DO NOT UPDATE THESE.**
@@ -766,6 +767,27 @@ The migration is three redeploys of one contract plus re-pinning the accounts on
 those three chains — not a heterogeneous eight-ecosystem rollout. Combined with
 pre-mainnet timing, the cost objection to putting the commitment in the signed
 message essentially disappears.
+
+### 4A.4a A new account contract MOVES EVERY ACCOUNT ADDRESS
+
+`CertenAccountV7_2` is not a cosmetic rename. A `CertenAccount` address is
+derived by CREATE2, and CREATE2 commits to the **init code hash** — so changing
+the account contract changes every derived address. Consequences the executor
+must plan for, not discover:
+
+- The **factory must be redeployed** and pinned to the V8_2 anchor.
+- Every ADI gets a **new account address**. The production account
+  `0x3850C52C…050389` (V8_1-pinned) does not become V8_2; it is superseded.
+- `initializeAnchor` is one-shot and the account is immutable — there is no
+  in-place upgrade path. This is by design.
+- Anything holding a balance or an allowlist entry at an old address must be
+  migrated deliberately, or explicitly abandoned and recorded as such.
+
+This exact class of failure is already on record: the Sepolia anchor
+version-drift episode, where an account pinned to a stale anchor could not be
+re-pointed and needed a new factory and a new ADI. **Pre-mainnet is precisely
+why this is acceptable now** — and precisely why it must be done now rather
+than later.
 
 **The atomicity rule still holds, and is now easy to satisfy.** All three
 deployments must move together under one bumped domain tag
