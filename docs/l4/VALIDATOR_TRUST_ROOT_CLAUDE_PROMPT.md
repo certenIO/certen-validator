@@ -73,9 +73,38 @@ lives. Measured 2026-08-28:
     query ("ElementIndex ... not found") while ordinary writeData entries are.
     THE BASE CASE IS THE GAP - not the timeline, not the signatures.
 
-TREAT BOTH SECTIONS AS LEADS, NOT AS TRUTH. They were read once and may be
+AND THEN READ SECTION 2B, WHICH INVALIDATES THE PREMISE OF SECTION 1.
+
+The maintainer corrected two things on 2026-08-28, both since confirmed:
+
+  - dn.acme's entries are just HASHES. The genesis actions are visible by
+    parsing a PARTITION's block 0/1, and every partition has its own /network
+    account. Kermit BVN1 block 1 holds systemGenesis for all 11 system
+    accounts. So the "genesis is unprovable" finding in 2A.4 was derived from
+    the wrong place and must be redone (Q13).
+
+  - THE NETWORK HAS FORKED AND RESTARTED MORE THAN ONCE, and each time the
+    entire past state was RE-CREATED at a new genesis. Measured: mainnet's
+    block 1 is timestamped 2025-07-13 and Kermit's 2026-02-01, though Accumulate
+    mainnet has existed since 2022. The numbering itself restarted.
+
+    So "prove back to genesis" is AMBIGUOUS AND, UNQUALIFIED, FALSE. The most
+    anyone can prove is a chain back to the genesis of the CURRENT INCARNATION,
+    and that genesis is an operator-established state, not a cryptographic
+    continuation of the chain before it. Every restart is a TRUST
+    DISCONTINUITY. Name it; never smooth over it.
+
+    Two consequences you must carry into the design:
+      * A stored CERTEN proof may not survive a restart. Nobody has established
+        what happens (Q12). The dangerous outcome is not "fails" - it is
+        "appears to verify against re-created state".
+      * L5 gets STRONGER, not weaker. An anchor published to an external chain
+        is the only artefact independent of Accumulate's incarnation. Across a
+        re-genesis it may be the strongest link CERTEN holds.
+
+TREAT ALL THREE SECTIONS AS LEADS, NOT AS TRUTH. They were read once and may be
 stale or wrong. Re-verify. Where they are wrong, say so plainly and correct
-them.
+them - as 2B corrects 2A.
 
 Background, if anything surprises you:
   docs/proof/DAGBFT_MIGRATION_ANALYSIS.md   (CometBFT -> DAG-BFT primitive map)
@@ -134,6 +163,14 @@ NON-NEGOTIABLE RULES
    thing. Never disguise a bootstrapping assumption as a proof - that is the
    exact defect you are here to remove, reintroduced one level up.
 
+6a. NEVER WRITE "PROVEN TO GENESIS" UNQUALIFIED. Section 2B: the network has
+   restarted, state was re-created by operators, and the boundary is a trust
+   event. Say "to the genesis of incarnation X", carry the incarnation identity
+   inside the artifact, and state plainly that the boundary is asserted rather
+   than proven. A proposal that claims an unbroken cryptographic chain to an
+   original genesis is making the exact overclaim this project exists to
+   delete - and it would be making it to the people who restarted the network.
+
 7. NAME WHAT IT DOES NOT SOLVE. An overclaiming proposal is its own defect. This
    project spent Phase 8 deleting an overclaiming sentence from its own spec;
    do not write a new one into someone else's protocol.
@@ -161,9 +198,10 @@ ORDER OF WORK
 ═══════════════════════════════════════════════════════════════════
 
   Runbook Phase 0   Re-verify section 2 on both branches      -> Gate 0
-  Runbook Phase 1   Q9 FIRST (is the genesis entry really unprovable, or is
-                    it the wrong query shape? this decides whether AIP A is a
-                    one-line API fix or a protocol change), then Q1-Q3 -> Gate 1
+  Runbook Phase 1   Q13 + Q11 FIRST (re-derive the base case from PARTITION
+                    genesis, not the DN's hash-only entry; and establish how a
+                    proof names its incarnation). Then Q12 (what happens to a
+                    proof across a restart), then Q9, then Q1-Q3    -> Gate 1
   Runbook Phase 2   Q4-Q6  point query, cost, DAG-BFT         -> Gate 2
   Runbook Phase 3   Q7     evaluate the options               -> Gate 3
   Runbook Phase 4   Q8     the CERTEN-side verifier contract  -> Gate 4

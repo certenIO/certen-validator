@@ -290,6 +290,86 @@ plainly rather than bundling B to look thorough.
 
 ---
 
+## 2B. THE NETWORK RESTARTS — this invalidates "prove back to genesis"
+
+**Read this before designing anything.** It was contributed by the maintainer
+2026-08-28 and then confirmed against both live networks. It is the single most
+important fact in this document, and §1's one-line requirement is *wrong* as
+written because of it.
+
+### 2B.1 Genesis is not where §2A looked
+
+`acc://dn.acme/network`'s main-chain entries are **hashes**, not the definition.
+The genesis actions are visible by parsing a **partition's block 0/1**, and
+every partition has its own network account. Measured on Kermit, BVN1 block 1:
+
+```
+main  acc://bvn-BVN1.acme             systemGenesis
+main  acc://bvn-BVN1.acme/anchors     systemGenesis
+main  acc://bvn-BVN1.acme/globals     systemGenesis
+main  acc://bvn-BVN1.acme/network     systemGenesis   <-- per-partition
+main  acc://bvn-BVN1.acme/operators   systemGenesis
+main  acc://bvn-BVN1.acme/routing     systemGenesis
+main  acc://bvn-BVN1.acme/votes       systemWriteData
+      (11 entries, every system account created in one block)
+```
+
+So §2A.4's "the genesis entry is not receipt-provable" may be an artefact of
+looking at the DN's hash-only entry rather than at the partition genesis block.
+**Re-derive that finding from partition block 1 before treating it as a gap.**
+
+### 2B.2 The network has forked and restarted, more than once
+
+Each restart **re-created every account and all state at a new genesis**. The
+prior transaction history is not cryptographically continued into the new
+chain — it is re-established by the operators.
+
+Measured 2026-08-28:
+
+| Network | Block 1 timestamp | Current DN height |
+|---|---|---|
+| Kermit (`networkName: DevNet`, `v2-jiuquan`) | **2026-02-01** | 7,937,941 |
+| **MainNet** (`v2-vandenberg`) | **2025-07-13** | 34,641,646 |
+
+Accumulate mainnet has existed publicly since 2022. A block-1 timestamp of
+2025-07-13 means **the numbering and the chain itself restarted**, with prior
+state re-created at genesis.
+
+### 2B.3 What this does to the trust model
+
+1. **"Prove back to genesis" is ambiguous and, unqualified, false.** The most a
+   verifier can establish is a chain back to the genesis of the **current
+   incarnation**. That genesis is an operator-established state, not a
+   cryptographic continuation of the previous chain.
+2. **Every restart is a trust discontinuity.** At the boundary, state exists
+   because operators asserted it. No amount of downstream cryptography converts
+   that into a proof. It must be *named*, not smoothed over.
+3. **CERTEN proofs may have a shelf life.** A proof anchored to incarnation N
+   references a validator set and anchors that may be unprovable — or absent —
+   from incarnation N+1's chain. **Nobody has established what happens to a
+   stored CERTEN proof across a network restart.** This is a live product risk,
+   not a theoretical one: 402 proofs are already marked `summary_only` for a
+   less severe reason.
+4. **L5 changes meaning, upward.** `pkg/execution/layer5.go` currently
+   under-sells itself as "COORDINATES, not an offline proof". But an anchor
+   published to an external chain at time T is the **only artefact that survives
+   a re-genesis** — it is independent of Accumulate's incarnation. Across a
+   restart, L5 may be the strongest link CERTEN holds, not the weakest.
+
+### 2B.4 The requirement, restated honestly
+
+Replace §1's one-liner with:
+
+> For any transaction and any block **within a network incarnation**, determine
+> what the validator set was and prove it cryptographically back to that
+> incarnation's genesis — **and state explicitly that the incarnation boundary
+> is a trust event, identifying which incarnation the proof belongs to.**
+
+A design that does not carry the incarnation identity inside the artifact cannot
+tell a verifier which chain its proof is even about.
+
+---
+
 ## 3. The open questions the research must answer
 
 These are the questions. Do not answer them from this document — answer them
@@ -342,6 +422,24 @@ assumed:
 entries prove fine. Establish whether that is a missing capability or the wrong
 query shape. **This single answer decides whether AIP A is a one-line API fix or
 a protocol change.**
+
+**Q11 — Incarnation identity.** How does a verifier tell which incarnation a
+proof belongs to, from the artifact alone? Is there a network/chain identifier
+that changes on restart (`networkName`, a genesis hash, an executor version)?
+If not, two incarnations are indistinguishable inside a stored proof, and that
+must be fixed before anything else in this document matters.
+
+**Q12 — Proof survival across a restart.** Take a CERTEN proof anchored to the
+previous incarnation. Against the current chain: does it still verify, fail
+loudly, or — the dangerous case — appear to verify against re-created state?
+Determine this empirically if any pre-restart artefact still exists. Whatever
+the answer, the artifact must fail closed and say "different incarnation"
+rather than produce a confident verdict.
+
+**Q13 — Re-derive the base case correctly.** §2A.4 concluded the genesis entry
+is unprovable from the DN's hash-only entry. Redo it against **partition block
+0/1** (§2B.1), which is where genesis actually is. The conclusion may change
+completely.
 
 **Q10 — Exercise the path that has never run.** The validator set has never
 changed on mainnet or Kermit (§2A.3), so the update-proof path has zero
@@ -434,7 +532,10 @@ AIP. Do not force unrelated changes into a single proposal.
 
 - [ ] Every §2 **and §2A** claim re-verified or corrected, on **both** `main`
       and `dagbft-integration`, with file:line.
-- [ ] Q9 answered first — it determines the size of the entire near-term ask.
+- [ ] Q13 and Q11 answered FIRST — the base case must be re-derived from
+      partition genesis, and a proof must be able to name its incarnation.
+- [ ] Q9 answered — it determines the size of the near-term ask.
+- [ ] Q12 answered: what happens to an existing CERTEN proof across a restart.
 - [ ] A validator-set change actually simulated and proven end to end (Q10),
       not reasoned about.
 - [ ] Q1–Q8 each answered with citations, or explicitly recorded as unanswerable
