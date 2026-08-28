@@ -680,6 +680,10 @@ production history. Simulate a change (devnet, simulator, or
 `internal/core/execute` tests) and prove it end to end before claiming the
 timeline is provable. Phase 8's record: five defects, all found only by running.
 
+**Q8 — ✅ ANSWERED IN PHASE 4 (§9.4).** The contract is written as steps 10-16
+of `VerifyOffline`, with three named weaker states, govRoot unmoved, and the
+artifact growth measured at +9.8%/+13.1%. Original question text follows.
+
 **Q8 — What CERTEN must build regardless.** Whatever the API, the verifier side
 is CERTEN's. What does `layer4_verify.go` need so that `ValidatorSet` is
 *derived* rather than *asserted*?
@@ -2114,3 +2118,288 @@ the Motivation section should say.
   (Phase 5), adversarial review (Phase 6).
 - The retention-versus-replay question inside (c) is deliberately left to the
   maintainers (§3.2).
+
+---
+
+## Phase 4 — Q8, the CERTEN-side verifier contract
+
+**Run 2026-08-28.** Same refs. `accumulate-core` **not modified**. Sizing probe:
+`docs/l4/phase4_probe/`, run against both live networks.
+
+**Gate 4 verdict: PASSED.** The change is written as a change to
+`layer4_verify.go`'s contract: what it accepts, what it refuses, what it names,
+how the artifact grows (measured), and why govRoot does not move.
+
+**Nothing in this phase was implemented.** It is a specification. Where it says
+"the verifier checks X", that is the proposed contract, not shipped behaviour.
+
+### 4.1 The one-line statement of the change
+
+> Today `Layer4.ValidatorSet` is **asserted** — `layer4.go:255` copies it from a
+> build-time `network-status` RPC. The change makes it **derived**: the leg
+> carries a `ValidatorSetProof` that reconstructs the same set from chain state
+> and binds it to the same quorum-signed `StateTreeAnchor` the leg already
+> proves. `VerifyOffline` then checks that the asserted set **equals** the
+> derived one, and refuses the leg if it does not.
+
+That single equality is the §1 gap closing. A forged proof carrying a fabricated
+validator set can still make its own signatures verify — but it can no longer
+make the fabricated set hash to a leaf inside a BPT root that a real quorum
+signed.
+
+### 4.2 What the artifact gains
+
+One new structure, carried **once per proof** — not once per leg. Both the BVN
+and DN legs draw their validator set from the same `acc://dn.acme/network`
+account, so one proof serves both.
+
+```go
+// ValidatorSetProof derives Layer4.ValidatorSet from chain state instead of
+// asserting it. Every field is checked; nothing here is trusted on assertion.
+type ValidatorSetProof struct {
+    // Incarnation is the genesis root anchor of the chain this proof is about
+    // (§9.1.2): anchor(directory)-root[0]. Without it a proof cannot say which
+    // chain it belongs to, and a restart makes it silently meaningless (§9.1.3).
+    Incarnation string `json:"incarnation"` // hex32
+
+    // AccountState is the canonical binary encoding of acc://dn.acme/network's
+    // DataAccount, hex. sha256(AccountState) IS the BPT leaf - the "simple hash
+    // of the main state" at accumulate-core internal/database/observer_prod.go:31.
+    AccountState string `json:"accountState"`
+
+    // StateReceipt proves that leaf into a BPT root
+    // (internal/database/bpt_account.go:66-88, Account.StateReceipt).
+    StateReceipt Receipt `json:"stateReceipt"`
+
+    // Chains lets the verifier RECOMPUTE the hashChains component
+    // (observer_prod.go:63-80) and check it against the corresponding sibling
+    // in StateReceipt. That is what BINDS MainChainHeight instead of asserting
+    // it - see §9.3.4. Without this the height is just a number in a struct.
+    Chains []ChainRoot `json:"chains"`
+
+    // MainChainHeight is acc://dn.acme/network's main chain height at that root.
+    // 1 means only the genesis entry exists, so the set has NEVER changed, so
+    // this IS the genesis set OF THIS INCARNATION.
+    MainChainHeight uint64 `json:"mainChainHeight"`
+
+    // Updates carries one entry per validator-set change when height > 1.
+    // Measured at ~660 B each (§9.3.1). Empty today on both live networks.
+    Updates []NetworkUpdateEvidence `json:"updates,omitempty"`
+}
+
+type ChainRoot struct {
+    Name   string `json:"name"`
+    Count  uint64 `json:"count"`
+    Anchor string `json:"anchor"` // hex32, the chain's merkle DAG root
+}
+```
+
+`Receipt` is the existing type the other layers already use — no new receipt
+format is introduced.
+
+### 4.3 What `VerifyOffline` adds — steps 10 through 16
+
+The existing steps 1–9 are unchanged. Appended, in order, each failing closed:
+
+```
+10. If ValidatorSetProof is absent -> the leg is VALIDATOR_SET_ASSERTED.
+    NOT an error. See §4.4 - every proof issued to date is in this state.
+
+11. sha256(AccountState) == StateReceipt.Start.
+    Refuse on mismatch: the state does not hash to the leaf being proven.
+
+12. StateReceipt validates as a merkle path from Start to Anchor.
+    Refuse on mismatch. (Same receipt verifier L1-L3 already use.)
+
+13. Recompute the hashChains component from Chains and check it against the
+    corresponding sibling in StateReceipt's path.
+    Refuse on mismatch. THIS is what binds MainChainHeight and the chain
+    contents; without step 13, step 16's base case is an assertion.
+
+14. AccountState decodes to a DataAccount whose entry decodes to a
+    NetworkDefinition; the validator set derived from it EQUALS
+    Layer4.ValidatorSet, compared canonically (sorted by public key, with
+    ActiveOn sorted).
+    Refuse on mismatch. *** This is the step that closes the gap. ***
+
+15. StateReceipt.Anchor == the StateTreeAnchor of a quorum-signed anchor in
+    THIS proof - the Directory leg's, since dn.acme/network lives on the DN.
+    Refuse on mismatch: an unbound BPT root proves nothing about who signed.
+
+16. Base case / induction:
+      MainChainHeight == 1 -> the set has never changed; the derived set is
+                              this incarnation's genesis set. Done.
+      MainChainHeight  > 1 -> require len(Updates) == MainChainHeight-1, each
+                              receipt-proven into the same root, applied in
+                              order, and the result must equal the derived set.
+                              Refuse if any update is missing or does not apply.
+```
+
+Step 15 deserves emphasis because it is where the two halves meet. The DN leg
+already proves `StateTreeAnchor` is what a validator quorum signed (steps 1–9).
+Step 15 says the BPT root the validator set was proven into **is that same
+anchor**. The chain is then: quorum signature → signed anchor → BPT root →
+account leaf → `NetworkDefinition` → the validator set the signatures were
+checked against. It closes on itself, offline.
+
+### 4.4 What it refuses, what it names, and what it must never do
+
+Rule 8's three-way discipline, applied. **A thing that could not be READ is not
+a thing that REFUSED, and neither is a thing that was PROVEN WRONG.**
+
+| Situation | Verdict | Exit | Meaning |
+|---|---|---|---|
+| All 16 steps pass, incarnation == live | `verified` | 0 | the full claim |
+| `ValidatorSetProof` absent | **`validator_set_asserted`** | 3 | could-not-read. The quorum was checked; the *set* it was checked against is asserted. |
+| `Incarnation` absent | **`incarnation_unknown`** | 3 | could-not-read. Cannot say which chain. |
+| `Incarnation` != the live incarnation | **`foreign_incarnation`** | 3 | proven-different. Content and time may still hold via L5; validator legitimacy does not. |
+| Steps 11–16 fail | `failed` | 1 | proven-wrong: tampering or corruption |
+
+The three new names are modelled on `summary_only`
+(`pkg/database/proof_artifact_types.go:72`) and reuse `proofverify`'s existing
+exit-3 channel (`cmd/proofverify/main.go:53,184`), whose message already says
+the right thing: *"Nothing about this proof is known to be wrong… what is
+missing is the evidence needed to check it again."*
+
+**Three things this contract must never do**, each of which is a defect this
+project has already removed once:
+
+1. **Never fail a proof for lacking a `ValidatorSetProof`.** All 429 stored
+   proofs lack one. Turning step 10 into an error converts a capability limit
+   into a governance rejection — the exact defect class §2B.4e names and that
+   Phase 8 removed twice.
+2. **Never let `validator_set_asserted` print as `verified`.** That is
+   `timing_evidence.go`'s lesson verbatim: *"`summary_only` exists in this
+   codebase precisely so a weaker claim cannot read as the stronger one."*
+3. **Never treat "the network accepted this anchor" as "a quorum signed it."**
+   After Kourou (§9.2.4) an anchor can be authorized by a collection proof with
+   **zero** validator signatures. A leg built from such an anchor has no quorum
+   to carry, and must land in a named state — `anchor_proof_authorized` — not
+   in `failed`. This is the one contract item driven by a change that has not
+   shipped yet, and it is cheap now and expensive later.
+
+### 4.5 govRoot does NOT move — and where the commitment goes instead
+
+**`L4LegSummary` is hashed into govRoot** (`healing_proof.go:160-176`; §2B.4c).
+Widening it would move every govRoot ever signed. That is exactly the trap
+`timing_evidence.go:31-45` documents:
+
+> *"Struct layout IS the wire format, so widening ValidatedSignature — the
+> obvious move — would move every govRoot ever signed. TestP6_CanonicalShapesUnchanged
+> blocks it, correctly."*
+
+**So `ValidatorSetProof` rides BESIDE the hashed summary**, on the
+`GovernanceProof` wrapper, in a type not reachable from any canonical hash —
+the same place and for the same reason as `SignatureTimingBasis` and
+`GovReceiptEvidence`. The govRoot preimage is byte-identical with or without it.
+`TestP6_CanonicalShapesUnchanged` must keep passing unmodified; if it fails, the
+change is in the wrong place.
+
+**The on-chain commitment is a separate matter and lives elsewhere.** §4A
+decided the Accumulate validator-set root and the incarnation identity go in the
+**anchor pre-exec message** — the signed preimage of the message CERTEN's own
+quorum signs and the anchor contract verifies. That is not govRoot, so there is
+no conflict. The relationship is:
+
+```
+anchor pre-exec message  commits  accumulateValidatorSetRoot + incarnation   (32+32 B on chain)
+ValidatorSetProof        carries  the full expansion of that root            (~2 KB, off chain)
+```
+
+which satisfies §4A.5.1's requirement that the commitment be **offline-expandable**:
+*"A committed root nobody can expand is decoration that looks like coverage."*
+
+The root itself must be canonically encoded (§4A.5.2/4/5) and commit
+**membership and threshold**, not just the signers — the missing denominator of
+§2B.4c:
+
+```
+accumulateValidatorSetRoot =
+    keccak256( "certen:accval:v1"                      domain, versioned
+             , incarnation                             32 B (§9.1.2)
+             , acceptThreshold.num, .denom             the DENOMINATOR
+             , uint32(len(validators))                 length-prefixed
+             , for each validator SORTED by publicKey:
+                   publicKey(32) , uint32(len(activeOn)) , activeOn sorted )
+```
+
+Sorting is load-bearing for the same reason `healing_proof.go:168-176` gives for
+`Signers`: two validators reading identical chain data must produce identical
+bytes, or the result is an intermittent, unreproducible on-chain revert.
+
+### 4.6 How the artifact grows — MEASURED, not estimated
+
+Built as real JSON from live data (`docs/l4/phase4_probe`):
+
+```
+=== kermit ===                        === mainnet ===
+leaf derivable            : true      leaf derivable            : true
+BPT path steps            : 5         BPT path steps            : 17
+main chain height         : 1         main chain height         : 1
+  -> BASE CASE: set has NEVER changed   -> BASE CASE: set has NEVER changed
+ValidatorSetProof compact : 1839 B    ValidatorSetProof compact : 2453 B
+current stored proof      : 18784 B   current stored proof      : 18784 B
+GROWTH (one per proof)    : +9.8%     GROWTH (one per proof)    : +13.1%
+```
+
+**+1.8–2.5 KB on an 18.8 KB proof: under 10% on Kermit, under 14% at mainnet BPT
+depth.** Carried once per proof, not once per leg — both legs draw on the same
+account, and duplicating it would double the cost for nothing (+19.6% / +26.1%).
+
+Growth after the set starts changing: +~660 B per historical change (§9.3.1,
+measured), since each `NetworkUpdateEvidence` carries the full
+`NetworkDefinition` plus a receipt rather than a delta.
+
+Note both live networks report `mainChainHeight = 1`, so **today the base case
+needs no `Updates` at all** and the artifact is complete at 1.8–2.5 KB.
+
+### 4.7 What the contract does NOT establish
+
+Four things, each of which must be stated in the spec and in the AIP:
+
+1. **It proves the set was *recorded*, not that it was *legitimate*.** Step 14
+   proves the network's own `dn.acme/network` account held this set. Who was
+   entitled to write it there is the operator-book question, one level further
+   out, and this contract does not reach it (§9.3.5).
+2. **It stops at the incarnation boundary.** `SystemGenesis` is an empty struct
+   (§9.2B.4a), so nothing can carry a proof across a restart. `foreign_incarnation`
+   is the honest verdict, and it is weaker than `verified` — never the same one.
+3. **It only helps proofs built while the evidence is obtainable.** For the 429
+   existing proofs, and for any historical transaction whose proof was not built
+   at the time, the state at the old BPT root is unprovable (§9.3.1, run). That
+   is what AIP A (c) is for. **Mark, never fabricate** — `proof_artifact_types.go:68-71`
+   already says why: *"re-querying Accumulate returns today's validator set, not
+   the one that signed."*
+4. **L5 is still necessary and still not sufficient.** It proves existence and
+   time on a chain that did not restart; it says nothing about validator
+   legitimacy (§2B.4e). A `foreign_incarnation` proof with a valid L5 is a
+   non-repudiable existence witness — a different, weaker claim, and it must
+   report as one.
+
+### 4.8 Implementation order, each step independently reviewable
+
+1. Add `ValidatorSetProof`, `ChainRoot`, `NetworkUpdateEvidence` in a package
+   **not reachable from any canonical hash**, beside `pkg/proof/timing_evidence.go`.
+2. Add the builder side: fetch the account state + receipt + chain list at
+   build time, alongside the existing `networkInfo()` call in `layer4.go:421`.
+   `layer4.go:255` keeps setting `ValidatorSet` — the proof does not replace it,
+   it *checks* it.
+3. Add steps 10–16 to `VerifyOffline`, with step 10 returning the named state
+   rather than an error.
+4. Add the three named states to `VerificationStatus` and the exit-3 branch of
+   `cmd/proofverify/main.go`.
+5. Confirm `TestP6_CanonicalShapesUnchanged` still passes **unmodified**, and
+   that a stored proof's govRoot is byte-identical before and after.
+6. Only then: §4A's anchor-message field (Phase 4b), which commits the root the
+   artifact now expands.
+
+Steps 1–5 are CERTEN-only, need nothing from Accumulate, and close the gap for
+newly built proofs while `mainChainHeight == 1` (§9.3.4).
+
+### 4.9 Still open after Phase 4
+
+- **§9.0.8** — `mainnet.accumulatenetwork.io` identity, still unresolved.
+- Nothing here is implemented or run. Steps 10–16 are a specification; the
+  measurements behind §4.6 are real, the verifier is not.
+- Phase 4b (§4A implementation), Phase 4c (Q15), Phase 5 (the AIPs), Phase 6
+  (adversarial review).
