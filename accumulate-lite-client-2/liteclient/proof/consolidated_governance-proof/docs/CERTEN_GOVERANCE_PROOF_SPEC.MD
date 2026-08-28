@@ -42,12 +42,90 @@ G0 proves only that a specific chain entry was committed to Accumulate state and
 G1 proves:
 
 1. A specific execution chain entry was committed at an execution witness, and
-2. The verifier can independently validate that Accumulate’s governance rules were satisfied **at execution time**, including:
+2. The verifier can independently re-derive the rules listed in §1.2.1 **at
+   execution time**, and records — rather than re-derives — the rules listed in
+   §1.2.2.
 
-   * signer Key Page identity and version (**KPSW-EXEC**),
-   * key membership,
-   * threshold satisfaction,
-   * execution-time eligibility of signatures.
+An earlier form of this section said the verifier "can independently validate
+that Accumulate's governance rules were satisfied". That claimed the whole of
+Accumulate's authorization model. It is not the whole, and the gap is not a
+detail: the single-key-page assumption looked correct for four hundred
+production proofs precisely because nothing here said which rules were in scope.
+**An overclaiming spec is its own defect.** The two lists below are exhaustive
+and MUST be kept so.
+
+#### 1.2.1 Rules G1 RE-DERIVES
+
+A G1 verifier re-derives each of these from chain data, independently of any
+API's opinion:
+
+* **Signer key page identity and version (KPSW-EXEC).** The page's genesis is
+  located and every mutation up to the execution block is replayed, each step
+  receipt-bound. Every signature is evaluated against the page **as it stood at
+  execution** and against no other state. A version that does not match that
+  state is a finding; a page that has merely changed *since* is not evaluable
+  and MUST NOT be reported as a refusal.
+* **Key membership**, over the page's full entry set — key entries and delegate
+  entries alike.
+* **Accept-threshold satisfaction**, over distinct satisfied entries.
+* **The account's whole authority set.** Every authority named on the account
+  must be satisfied, not merely the one holding the signer's page; any page of a
+  book satisfies that book; a disabled authority is skipped unless the body type
+  requires authorization.
+* **Additional authorities the transaction itself requires**, derived from the
+  body and header exactly as `Transaction.GetAdditionalAuthorities` does — an
+  `UpdateKeyPage` that adds or updates a delegate requires that delegate's
+  approval, an `UpdateAccountAuth` that adds an authority requires that
+  authority's, and the creation transactions require the authorities their body
+  names.
+* **Execution-time eligibility of signatures** (ordering before execution), by
+  `receipt.localBlock <= execMBI` where both indices count the same chain.
+
+#### 1.2.2 Rules G1 RECORDS but does NOT re-derive
+
+Each of these is carried in the proof's evidence, naming the rule, its value and
+why it was not re-derived. A proof that reaches any of them and stays silent is
+non-conforming.
+
+* **`responseThreshold`.** It gates on votes of every kind — accepts, rejects
+  and abstains — per delegation path. G1 enumerates the signatures it can
+  validate as accepts and cannot claim to have counted votes it did not
+  enumerate. Since the transaction executed, the network's own `SignerWillVote`
+  found the threshold met; that fact is **inherited from execution**, not
+  re-derived. Recorded as `response-threshold-not-recounted`.
+* **`rejectThreshold`.** The executor tests accept before reject and the
+  transaction executed, so this cannot have changed the outcome. Recorded as
+  `reject-threshold-moot-after-execution` — present, and not in doubt.
+* **`blockThreshold`.** `accumulate-core` does not enforce it against the page:
+  `blockThresholdIsMet` reads the transaction's `HoldUntil` header, under a TODO
+  saying page-level minimum thresholds do not yet exist. Verifying it would
+  claim more than the protocol implements. Recorded as
+  `block-threshold-not-enforced-by-protocol`.
+* **Ordering for a CROSS-PARTITION signer.** The `localBlock <= execMBI`
+  comparison is skipped, correctly — those indices count different chains, and
+  comparing them is not a weak check but a meaningless one that returns a
+  confident answer. Ordering rests instead on **execution inclusion**: Accumulate
+  does not execute a transaction whose signatures came after execution, and G0
+  proves it executed. That is strictly weaker than a local re-derivation and is
+  named per signature in the proof's timing evidence.
+* **The state of pages reached THROUGH delegation.** The principal's page is
+  replayed to the execution block; pages reached by delegation are queried once
+  and their current state used. Every resolution link records which of the two
+  it was.
+
+#### 1.2.3 Capability limits — NOT governance verdicts
+
+These are stated as errors and MUST NOT be reported as governance rejections,
+threshold shortfalls, or refusals:
+
+* A signature type CERTEN does not verify (only `ed25519` and `delegated` are
+  verified).
+* A transaction that has **not executed** — pending, or absent — which has no
+  authority set to evaluate against.
+* An authority, page or signature that could not be READ. An authority that
+  could not be read is not an authority that refused.
+* A key page operation type this implementation does not recognise, which it
+  MUST fail on rather than assume introduces no authority.
 
 ---
 
