@@ -256,47 +256,6 @@ func (g2 *G2Layer) verifyTransactionEffect(computedHash string, expectedHash str
 	return verification
 }
 
-// fallbackToG1 creates G2 result with fallback to G1-level proof
-func (g2 *G2Layer) fallbackToG1(g1Result *G1Result) *G2Result {
-	fmt.Printf("[G2] [FALLBACK] Creating G1 fallback result\n")
-
-	// Create empty outcome leaf indicating G2 not available
-	emptyOutcome := OutcomeLeaf{
-		PayloadBinding: PayloadVerification{
-			Verified:            false,
-			ComputedTxHash:      "",
-			ExpectedTxHash:      g1Result.TxHash,
-			GoVerifierOutput:    "",
-			GoVerifierErrors:    "G2 verification not available",
-			VerificationDetails: map[string]interface{}{"fallback_reason": "G2 requirements not met"},
-		},
-		ReceiptBinding: VerificationResult{
-			Verified: false,
-			Details:  "G2 receipt binding not verified (fallback to G1)",
-		},
-		WitnessConsistency: VerificationResult{
-			Verified: false,
-			Details:  "G2 witness consistency not verified (fallback to G1)",
-		},
-		Effect: EffectVerification{
-			EffectType:    "fallback",
-			Verified:      false,
-			ExpectedValue: nil,
-			ComputedValue: nil,
-			Details:       map[string]interface{}{"fallback": true},
-		},
-	}
-
-	return &G2Result{
-		G1Result:        *g1Result,
-		OutcomeLeaf:     emptyOutcome,
-		PayloadVerified: false,
-		EffectVerified:  false,
-		G2ProofComplete: false,
-		SecurityLevel:   "G1_GOVERNANCE_ONLY",
-	}
-}
-
 // extractTransactionPayload extracts real transaction payload from G1 execution data
 func (g2 *G2Layer) extractTransactionPayload(g1Result *G1Result) (map[string]interface{}, error) {
 	fmt.Printf("[G2] [EXTRACT] Extracting transaction payload from expanded message ID: %s\n", SafeTruncate(g1Result.ExpandedMessageID, 16))
@@ -408,25 +367,17 @@ func (g2 *G2Layer) determineSecurityLevel(outcomeLeaf OutcomeLeaf) string {
 	}
 
 	// Count what actually verified, for diagnostics only.
-	verificationCount := 0
-	if outcomeLeaf.PayloadBinding.Verified {
-		verificationCount++
-	}
-	if outcomeLeaf.ReceiptBinding.Verified {
-		verificationCount++
-	}
-	if outcomeLeaf.WitnessConsistency.Verified {
-		verificationCount++
-	}
-	if outcomeLeaf.Effect.Verified {
-		verificationCount++
-	}
-
-	// There are no intermediate G2 levels. A proof that does not bind its
-	// outcome is a G1 proof; the previous G2_PARTIAL / G2_LIMITED /
-	// G2_MINIMAL levels described a G2 claim that had not been established
-	// and emitted a non-zero g2Hash indistinguishable from a real one.
-	_ = verificationCount
+	// There are no intermediate G2 levels, so this is a constant.
+	//
+	// The previous G2_PARTIAL / G2_LIMITED / G2_MINIMAL levels described a G2
+	// claim that had not been established while emitting a non-zero g2Hash
+	// indistinguishable from a real one. A proof that does not bind its outcome
+	// is a G1 proof, and ProveG2 now returns an error rather than a labelled
+	// half-proof - see the fail-closed check there.
+	//
+	// The tally of individually verified bindings that used to be computed here
+	// was discarded without being read; it is gone rather than left to look
+	// like it feeds a decision.
 	return "G1_GOVERNANCE_ONLY"
 }
 

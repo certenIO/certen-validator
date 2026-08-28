@@ -537,40 +537,54 @@ func (sv *SignatureVerifier) ValidateSignatureSet(ctx context.Context, signature
 		}
 		authz, authErr := resolver.ResolveAccount(ctx, authScope, extra.URLs, extra.IgnoreDisabled, sigs, replayed)
 		if authErr != nil {
-			// The source cannot read authority sets. Fall back to the single
-			// page rather than failing, but the narrower question is the one
-			// being answered and the evidence says so.
-			fmt.Printf("[SIGNATURE] [WARN] authority set of %s unavailable (%v); evaluating the "+
-				"single key page %s instead, which is a NARROWER claim than the account's "+
-				"authority set\n", authScope, authErr, snapshot.Page)
-
-			// The snapshot IS the page at execution - that is what KPSW-EXEC
-			// builds - so a version mismatch against it is a real finding.
-			res, err := sv.resolver.Resolve(ctx, snapshot.Page, state, true, sigs)
-			if err != nil {
-				return nil, &SignatureEvidenceIncomplete{
-					Route:     "authority-resolution",
-					Requested: len(validSignatures),
-					Unavailable: []UnavailableSignature{{
-						Stage: "resolve-authority", Err: err.Error(),
-					}},
-				}
+			// AN AUTHORITY SET WE COULD NOT READ IS NOT AN AUTHORITY SET THAT APPROVED.
+			//
+			// This used to fall back to evaluating the signer's SINGLE KEY PAGE
+			// and carry on to a verdict, printing a warning that the claim was
+			// narrower. Three things were wrong with that, and they compound:
+			//
+			//  1. It answered a DIFFERENT QUESTION and reported the answer under
+			//     the same name. "Did this one page sign?" is not "did the
+			//     account's authority set approve?" - for corpus case L those
+			//     have opposite answers, and the narrow one says authorized.
+			//
+			//  2. NOTHING RECORDED IT. The warning went to stdout; neither
+			//     AuthorizationResult nor G1Result carried a field for it. A
+			//     stored proof that took the fallback was byte-indistinguishable
+			//     from one that evaluated the full authority set, and reported
+			//     thresholdSatisfied: true. A weaker claim read as the stronger
+			//     one - the exact failure this package exists to prevent.
+			//
+			//  3. IT CONTRADICTED THE CODE BELOW IT. Forty lines on, this same
+			//     function refuses to compute any verdict while a SINGLE
+			//     signature's page state is unavailable. Failing closed on the
+			//     smaller problem and falling back on the larger one is not a
+			//     policy, it is an accident of history: the single-page path was
+			//     the whole implementation before authority resolution existed,
+			//     and it was kept as a safety net.
+			//
+			// The legitimate case people reach for to justify a fallback - an
+			// account whose authority is INHERITED, whose book is the signer's
+			// own book - is not a fallback at all. AccountAuthorities resolves
+			// it on the primary path: it climbs a page to its book, and reads an
+			// empty authority set as inherited from the parent identity rather
+			// than as absent. Every account in production takes that path.
+			//
+			// So every remaining arrival here is an infrastructure failure or a
+			// genuine data anomaly, and neither may produce a governance
+			// verdict. Fail closed, and say which thing went wrong.
+			return nil, &SignatureEvidenceIncomplete{
+				Route:     "authority-resolution",
+				Requested: len(validSignatures),
+				Unavailable: []UnavailableSignature{{
+					MessageID: authScope,
+					Stage:     "resolve-authority-set",
+					Err: "the account's authority set could not be established, so no " +
+						"governance verdict was computed: " + authErr.Error() +
+						". This is NOT a governance rejection and NOT a threshold " +
+						"shortfall - nothing was evaluated",
+				}},
 			}
-			for _, r := range res.Refused {
-				if r.Reason == ReasonPageUnavailable {
-					return nil, &SignatureEvidenceIncomplete{
-						Route:     "authority-resolution",
-						Requested: len(validSignatures),
-						Unavailable: []UnavailableSignature{{
-							MessageID: r.SignerPage, Stage: r.Reason, Err: r.Detail,
-						}},
-					}
-				}
-			}
-			resolution = res
-			thresholdSatisfied = res.ThresholdMet()
-			uniqueValidKeys = res.Satisfied
-			break
 		}
 
 		// A SIGNATURE WE COULD NOT EVALUATE IS NOT A SIGNATURE THAT FAILED.
