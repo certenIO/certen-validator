@@ -159,13 +159,33 @@ SECTIONS 2B.4c/d/e — THE ANCHOR AND L5. Also measured 2026-08-28:
         Accumulate governance" has been misled, and your documents must
         prevent that reading.
 
-      * IT IS 8 CHAIN FAMILIES, NOT ONE. EVM, NEAR, Solana, Aptos, Sui, TON,
-        Cardano (+ cosmwasm) each build the pre-exec message independently
-        (pkg/execution/contracts/v6_1_binding*.go,
-        pkg/consensus/v6_1_signing.go signV6_1PreExecBLS*). They must all
-        change TOGETHER under a bumped domain tag (certen:bls:v2:pre or
-        similar). A partial rollout is the PHASE8 rule-15 mixed-fleet hazard
-        one layer out.
+      * SCOPE IS ONE CHAIN FAMILY, THREE NETWORKS - NOT EIGHT. Everything
+        other than ethereum-sepolia, base-sepolia and arbitrum-sepolia is
+        LEGACY, OBSOLETE AND INACTIVE, on contracts that are no longer
+        supported. The three active deployments all run the SAME
+        CertenAnchorV8_1 bytecode (22,431 bytes, verified on chain 2026-08-28):
+
+            sepolia           0xb39b707D50089C9Eb92818f9B2870eba6DA5C2a0
+            base-sepolia      0xEA9eeeE42a7971792B11Fd2f682C9c1172490272
+            arbitrum-sepolia  0x4b9eA187772E115641Fd40F35BF7a84925e7A035
+
+        IN SCOPE:  CertenAnchorV8_1.sol, CertenAccountV7.sol,
+                   pkg/execution/contracts/v6_1_binding.go (EVM),
+                   pkg/consensus/v6_1_signing.go signV6_1PreExecBLS (EVM only)
+
+        OUT OF SCOPE - DO NOT UPDATE: v6_1_binding_{near,solana,aptos,sui,ton,
+                   cardano}.go, signV6_1PreExecBLS{Near,Solana,...},
+                   certen-contracts/{aptos-cli,cardano,cosmwasm}/, and the
+                   inactive EVM testnets (polygon-amoy, optimism-sepolia,
+                   moonbase-alpha, bsc-testnet, tron-shasta, hedera).
+        If a change seems to require editing one of those, STOP and say why -
+        it means the design drifted, it is not a task.
+
+        All three ACTIVE deployments must still move TOGETHER under one bumped
+        domain tag (certen:bls:v2:pre or similar), so an old signature can
+        never replay against the new message. Three identical EVM deployments
+        make that one coordinated change, not the mixed-fleet hazard an
+        eight-family rollout would have been.
 
   - L5 IS ALREADY UNIVERSAL, AND THE ANCHOR IS ALREADY PAID FOR. 421 of 429
     proofs (98%) already carry an anchor_tx_hash. L5 coverage went 0/15 before
@@ -287,7 +307,7 @@ ORDER OF WORK
   Runbook Phase 3   Q7     evaluate the options               -> Gate 3
   Runbook Phase 4   Q8     the CERTEN-side verifier contract  -> Gate 4
   Runbook Phase 4b  Implement section 4A - the anchor-message commitment,
-                           all 8 chain families together, bumped domain tag,
+                           EVM ONLY, all 3 active networks together, bumped tag,
                            offline-expandable, canonically encoded, carrying
                            threshold + membership + incarnation  -> Gate 4b
   Runbook Phase 4c  Q15    the L5 workstream, as THREE separate deliverables:
@@ -323,8 +343,11 @@ DEFINITION OF DONE
       govRoot moves (it must not, unless deliberately versioned - see
       pkg/proof/timing_evidence.go for the beside-the-hash pattern).
   [ ] Section 4A implemented as DECIDED: the commitment is a named field of the
-      anchor pre-exec message, under a bumped domain tag, in ALL 8 CHAIN
-      FAMILIES TOGETHER - never a partial rollout.
+      anchor pre-exec message, under a bumped domain tag, on ALL THREE ACTIVE
+      EVM DEPLOYMENTS TOGETHER (sepolia, base-sepolia, arbitrum-sepolia) -
+      never a partial rollout.
+  [ ] NO LEGACY CHAIN WAS TOUCHED. The non-EVM bindings and inactive EVM
+      testnets are out of scope.
   [ ] The commitment is OFFLINE-EXPANDABLE (the artifact carries the full
       validator set and induction path), canonically encoded (sorted,
       length-prefixed, domain-separated), and commits threshold + membership +

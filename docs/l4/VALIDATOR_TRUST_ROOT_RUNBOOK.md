@@ -399,6 +399,13 @@ anchors by network (top):  ethereum-sepolia 157, sepolia 70, base-sepolia 54,
 anchors per day:           2, 8, 2, 1, 5, 7, 1, 16  — tracks TRAFFIC, not a clock
 ```
 
+⚠️ That 21-network spread is **historical**. Only **ethereum-sepolia,
+base-sepolia and arbitrum-sepolia are active** — everything else in that list
+(near-testnet, solana-devnet, ton-testnet, cardano-preview, polygon-amoy,
+moonbase-alpha, bsc-testnet, tron-shasta, hedera, aptos, sui) is legacy and
+unsupported. See §4A.4. Read the counts as evidence of *cadence*, not as a list
+of chains to design for.
+
 **External anchoring is PER-INTENT, not per-major-block.** It is not the
 12-hourly major-block cadence — an on-demand intent is anchored within minutes
 (measured this session: submit → anchored on base-sepolia in ~5 min). The L5
@@ -711,25 +718,60 @@ So the honest claim after this lands is:
 Anyone reading this as "the chain now verifies Accumulate governance" has been
 misled, and the documents must prevent that reading.
 
-### 4A.4 Scope — 8 chain families, not one
+### 4A.4 Scope — ONE chain family, THREE networks
 
-The pre-exec message is constructed independently per chain family. **Every one
-must change together, or a proof signed for one chain will not verify on
-another** — and a partial rollout is the mixed-fleet hazard from `PHASE8_RUNBOOK`
-rule 15, one layer out:
+**Corrected 2026-08-28 by the maintainer.** An earlier draft of this section
+said "8 chain families". That was wrong: it counted every binding file in the
+tree, including deployments that are **legacy, obsolete and inactive, on
+contracts that are no longer supported.**
+
+**The only active deployments are three EVM testnets, all running the same
+`CertenAnchorV8_1` bytecode.** Verified on chain 2026-08-28:
 
 ```
-pkg/execution/contracts/     v6_1_binding.go          EVM
-                             v6_1_binding_near.go     NEAR
-                             v6_1_binding_solana.go   Solana
-                             v6_1_binding_aptos.go    Aptos
-                             v6_1_binding_sui.go      Sui
-                             v6_1_binding_ton.go      TON
-                             v6_1_binding_cardano.go  Cardano
-pkg/consensus/v6_1_signing.go   signV6_1PreExecBLS{,Near,Solana,Aptos,Sui,Ton,Cardano}
-certen-contracts/               evm/src/core/CertenAnchorV8_1.sol, aptos-cli/,
-                                cardano/, cosmwasm/, + per-chain programs
+sepolia            0xb39b707D50089C9Eb92818f9B2870eba6DA5C2a0   22,431 bytes
+base-sepolia       0xEA9eeeE42a7971792B11Fd2f682C9c1172490272   22,431 bytes
+arbitrum-sepolia   0x4b9eA187772E115641Fd40F35BF7a84925e7A035   22,431 bytes
 ```
+
+Identical bytecode on all three — one contract, three deployments.
+
+**IN SCOPE**
+
+```
+certen-contracts/evm/src/core/CertenAnchorV8_1.sol   the one contract
+certen-contracts/evm/src/account/CertenAccountV7.sol  pinned via initializeAnchor
+pkg/execution/contracts/v6_1_binding.go               the EVM message builder
+pkg/consensus/v6_1_signing.go   signV6_1PreExecBLS    the EVM signing path
+                                (the EVM one only)
+```
+
+**OUT OF SCOPE — legacy, inactive, unsupported. DO NOT UPDATE THESE.**
+
+```
+v6_1_binding_near.go     v6_1_binding_solana.go   v6_1_binding_aptos.go
+v6_1_binding_sui.go      v6_1_binding_ton.go      v6_1_binding_cardano.go
+signV6_1PreExecBLS{Near,Solana,Aptos,Sui,Ton,Cardano}
+certen-contracts/{aptos-cli,cardano,cosmwasm}/ and the non-EVM programs
+other EVM testnets: polygon-amoy, optimism-sepolia, moonbase-alpha,
+                    bsc-testnet, tron-shasta, hedera(296)
+```
+
+Touching them adds risk and reviewer confusion for zero benefit. If a change
+appears to require editing one, stop and say why — it is a signal the design
+has drifted, not a task.
+
+**What this does to the decision.** It makes §4A *more* clearly right, not less.
+The migration is three redeploys of one contract plus re-pinning the accounts on
+those three chains — not a heterogeneous eight-ecosystem rollout. Combined with
+pre-mainnet timing, the cost objection to putting the commitment in the signed
+message essentially disappears.
+
+**The atomicity rule still holds, and is now easy to satisfy.** All three
+deployments must move together under one bumped domain tag
+(`certen:bls:v2:pre`), so an old signature can never replay against the new
+message. Three identical EVM deployments make that a single coordinated change
+rather than the mixed-fleet hazard an eight-family rollout would have been.
 
 ### 4A.5 Required properties of the commitment
 
@@ -780,7 +822,7 @@ certen-contracts/               evm/src/core/CertenAnchorV8_1.sol, aptos-cli/,
 | 2 | Answer Q4–Q6 (point query, cost, DAG-BFT) | Measured numbers, not estimates |
 | 3 | Evaluate Q7 options (a)–(d) against the answers | A recommendation with the rejected options and why |
 | 4 | Answer Q8 — the CERTEN-side verifier design | Written as a change to `layer4_verify.go`'s contract |
-| 4b | Implement §4A — the anchor-message commitment, all 8 chain families | Message shape defined, canonical encoding pinned, every family updated together |
+| 4b | Implement §4A — the anchor-message commitment, EVM only, 3 networks | Message shape defined, canonical encoding pinned, all 3 deployments moved together under one bumped tag |
 | 4c | Answer Q15 — the L5 workstream | Three deliverables separated: error handling, backfill, extension |
 | 5 | Draft AIP A (CometBFT, now) then AIP B (DAG-BFT) | Matches §6; every claim cited; A does not depend on B |
 | 6 | Adversarial review of the draft | A named attack the proposal does NOT stop, or an argument none exists |
