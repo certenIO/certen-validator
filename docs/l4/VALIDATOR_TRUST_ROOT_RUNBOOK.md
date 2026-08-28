@@ -260,6 +260,12 @@ the empty case.
 
 ### 2A.4 The real base-case gap, measured
 
+> ⛔ **CORRECTED BY PHASE 0 — this section's conclusion is FALSE.** The genesis
+> entry *is* receipt-provable; querying it **by index** returns a receipt that
+> validates offline on both networks. The failure below is a by-**hash** lookup
+> through a database-local `ElementIndex` map, not a missing capability, and it
+> is not genesis-specific. See §9 Phase 0, §0.2. Do not design around this gap.
+
 Ordinary `writeData` entries are receipt-provable today — CERTEN does it on
 every proof. The genesis entry is **not**:
 
@@ -357,7 +363,8 @@ state re-created at genesis.
    from incarnation N+1's chain. **Nobody has established what happens to a
    stored CERTEN proof across a network restart.** This is a live product risk,
    not a theoretical one: 402 proofs are already marked `summary_only` for a
-   less severe reason.
+   less severe reason. (Measured again in Phase 0: **392** distinct proofs —
+   see §9, §0.5.)
 4. **L5 changes meaning, upward.** `pkg/execution/layer5.go` currently
    under-sells itself as "COORDINATES, not an offline proof". But an anchor
    published to an external chain at time T is the **only artefact that survives
@@ -734,7 +741,9 @@ base-sepolia       0xEA9eeeE42a7971792B11Fd2f682C9c1172490272   22,431 bytes
 arbitrum-sepolia   0x4b9eA187772E115641Fd40F35BF7a84925e7A035   22,431 bytes
 ```
 
-Identical bytecode on all three — one contract, three deployments.
+~~Identical bytecode on all three~~ — **corrected in §9 Phase 0, §0.4**: same
+compiled source, but the deployed code differs in 24 bytes (8 sites holding the
+`DEPLOYMENT_CHAIN_ID` immutable). One contract, three chain-bound deployments.
 
 **IN SCOPE**
 
@@ -926,3 +935,255 @@ AIP. Do not force unrelated changes into a single proposal.
   deliberate. `pkg/proof/timing_evidence.go` documents the pattern.
 - Do not assume the answer is "expose MajorHeaderRange publicly". It is the
   leading candidate, not the conclusion.
+
+---
+
+# 9. PHASE FINDINGS
+
+Appended by each session. One heading per phase. This is the shared state
+between sessions — nothing here may live only in a transcript.
+
+---
+
+## Phase 0 — re-verification of §2 / §2A / §2B on both branches
+
+**Run 2026-08-28.** `accumulate-core` at `origin/main` = `56f5ae9b`,
+`origin/dagbft-integration` = `c01b026e` (the HEAD §2 was researched against).
+Nothing in `accumulate-core` was modified; every citation is `git show <ref>:<path>`
+against those two refs. Live queries hit `mainnet.accumulatenetwork.io/v3`,
+`kermit.accumulatenetwork.io/v3`, three EVM testnet RPCs, and the production
+proof database on the fleet. Re-runnable: `docs/l4/phase0_verify.sh`.
+
+**Gate 0 verdict: PASSED.** Every §2-series claim was re-verified or corrected.
+Five corrections, one of which invalidates §2A.4's central conclusion.
+
+### 0.1 Confirmed, with line numbers pinned to a branch
+
+| Claim | Status | Citation |
+|---|---|---|
+| §2.1 `Network` / `Globals` path constants | ✅ both branches | `protocol/protocol.go:61`, `:67` |
+| §2.1 `GenesisBlock = 1` | ✅ both branches | `protocol/protocol.go:73` |
+| §2.1 `NetworkDefinition` shape | ✅ both, **different lines** | dagbft `protocol/types_gen.go:608`; **main `:596`** |
+| §2.2 `MajorHeaderRanger` | ✅ dagbft only | `internal/api/private/api.go:36-47` (iface `:44`, method `:46`) |
+| §2.2 `MinorRootRanger` | ✅ dagbft only | `internal/api/private/api.go:49-59` (iface `:56`, method `:58`) |
+| §2.2 `MajorHeaderRecord` / `NetworkUpdateProof` | ✅ dagbft only | `internal/api/private/types_gen.go:28-40`, `:56-61` |
+| §2.2 `getNetworkUpdatesInWindow` + its comment | ✅ dagbft only | `internal/api/v3/major_header.go:129-133` |
+| §2.3 `NewSpine`, genesis refusal, active-validator refusal | ✅ dagbft only | `internal/fastsync/spine.go:48`, `:122`, `:197`; quorum at `:201-203` |
+| §2.3 "the walk's only out-of-band trust input" | ✅ dagbft only | `internal/fastsync/snapshot.go:85-87` |
+| §2.4 spine is `internal/api/private`, no public service | ✅ **on both branches** | `pkg/api/v3/enums_gen.go:463` (identical text on main and dagbft) |
+| §2.4 private routing | ✅ dagbft | `internal/api/routing/message.go:276` (and `:234` for MinorRoot) |
+| §2A.1 spine absent on main | ✅ **stronger than stated** | `internal/fastsync/` does not exist on main at all (`git ls-tree` empty); no ranger in `internal/api/private/api.go` |
+| §2A.2 validator-set change is `WriteData`, `WriteToState` mandatory | ✅ main, **qualified below** | `internal/core/execute/v2/block/network_accounts.go:78`, `:91`, `:109-111` |
+| §2A.3 exactly one main-chain entry | ✅ live, both networks, **and also for `/globals`** | measured |
+| §2A.5 public `SnapshotService` | ✅ both branches | `pkg/api/v3/api.go:82-84`; `ServiceTypeSnapshot = 10` at `enums_gen.go:138` |
+| §2B.1 partition genesis block holds `systemGenesis` for every system account | ✅ live | Kermit `bvn-BVN1.acme` block 1, 11 entries |
+| §2B.2 block-1 timestamps | ✅ live | MainNet `2025-07-13T13:49:18Z`; Kermit `2026-02-01T01:44:46Z` |
+| §2B.4a `SystemGenesis` is an empty struct | ✅ **both branches, and in the schema source** | main `protocol/types_gen.go:995`; dagbft `:959`; `protocol/system.yml:98-99` on both (union, zero fields) |
+| §2B.4c `currentValidatorSetRoot` is on-chain state, recomputed | ✅ | `CertenAnchorV8_1.sol:541`, `:1590`, `:1620` |
+| §2B.4c the 6-field pre-exec message | ✅ exact | `CertenAnchorV8_1.sol:1999-2005` |
+| §2B.4c `CertenAccountV7.sol:85` names the stale type | ✅ | `CertenAnchorV6_1 public anchorContract;` |
+| §2B.4c live anchor is V8.1 | ✅ on chain | `0x3850C52C…050389.anchorContract()` → `0xea9eee…490272` |
+| §1 `ValidatorSet: ni.Validators` from build-time RPC | ✅ | `layer4.go:255`, `layer4.go:421-427` |
+| §1 the caveat sentence | ✅ | `pkg/execution/layer5.go:225` |
+
+Current heights, re-measured (both grew since §2B.2, as expected):
+MainNet DN `34,653,971`, Kermit DN `7,958,618` (`acc://dn.acme/ledger`.`index`).
+
+Fleet proof database, re-measured — **§2B.4b and §2B.4d reproduce exactly**:
+
+```
+proof_artifacts total                429
+  anchor_tx_hash present             421   (98%)
+  anchor_references rows             401   (93%)
+  merkle_path present  (= "L5 row")   10
+proof_class  on_demand 403  |  on_cadence 26
+L5 by day: 08-21 0/7 · 08-22 0/5 · 08-24 0/1 · 08-25 0/2 · 08-26 8/8 · 08-28 2/2
+```
+
+Precision note: what §2B.4d calls "an L5 row" is the column
+`proof_artifacts.merkle_path`, not a separate table.
+
+### 0.2 CORRECTION 1 — §2A.4 is WRONG. The genesis entry IS receipt-provable.
+
+This is the finding that matters most, and it changes the size of AIP A.
+
+§2A.4 concluded the genesis network definition "cannot be proven through the
+normal chain-entry path". That conclusion came from a query **by entry hash**.
+The same entry queried **by index** returns a complete merkle receipt, on both
+networks:
+
+```
+query acc://dn.acme/network chain=main entry=e43be90e…16d5 includeReceipt
+  -> ERROR  "get entry index: Account.acc://dn.acme/network.MainChain
+             .ElementIndex.e43be90e…16d5 not found"
+
+query acc://dn.acme/network chain=main index=0    includeReceipt
+  -> receipt { start e43be90e…16d5, anchor …, entries[…], localBlock 1, majorBlock 1 }
+```
+
+The receipt was recomputed offline (sha256, `right` flag = concat order) and
+**validates on both networks**:
+
+```
+MainNet  path len 5   anchor 672f89ffc3cc87cff9a7fea1529ec893ec775e49e0cf4da1ab9c927979176e17  VALID
+Kermit   path len 4   anchor e3f3119213a1ead44647659d67e47f4269a2affb13f150aa87b20baacf93cf81  VALID
+```
+
+**Why the by-hash form fails, in code.** `internal/api/v3/querier.go:455-460`
+(`queryChainEntryByValue`) resolves the hash through `record.IndexOf(value)` →
+`pkg/database/merkle/chain.go:108-116` → `ElementIndex(hash).Get()`, a
+**database-local hash→index map**. `querier.go:447-453`
+(`queryChainEntryByIndex`) never touches it. The receipt itself is built
+identically in both paths, by `queryChainEntry` (`querier.go:462`).
+
+**It is not genesis-specific.** Measured on Kermit `acc://dn.acme/votes`
+(10 entries): indices **0 and 1 both fail by hash**, indices 2, 5 and 9 all
+succeed. Both failing entries are the ones written in the genesis blocks. An
+ordinary account written after that boundary — `acc://certen-kermit-12.acme/data`
+index 0 — resolves by hash and returns a receipt.
+
+So this is a **per-node database-index artifact affecting entries that entered
+the store other than through `merkle.Chain.AddEntry`**
+(`pkg/database/merkle/chain.go:64-75`, the only writer of `ElementIndex` outside
+snapshot restore; restore rebuilds it at
+`internal/database/snapshot/merkle_snapshot.go:117-145`, driven from
+`restore.go:165` and `:184`). It is **not** a missing proof capability.
+
+**Consequence.** §2A.4's framing — "THE BASE CASE IS THE GAP" — does not
+survive. The base case is provable today against an unmodified public v3 node,
+by index. Phase 1 must still answer Q9/Q13 properly (why the index entry is
+missing on these nodes, and whether that is guaranteed or incidental), but it
+should start from "this works" rather than "this is impossible". The prompt's
+own note applies: **this single answer decides whether AIP A is a one-line API
+fix or a protocol change**, and the evidence points hard at the former.
+
+Also correct §2B.1's implication: you do **not** have to go to a BVN. The DN's
+**own block 1** lists `main acc://dn.acme/network systemGenesis` directly —
+30 entries on MainNet, 12 on Kermit. §2B.1 is right that the DN main-chain
+*entry* is a bare hash; it is wrong that the DN block is the wrong place to look.
+
+### 0.3 CORRECTION 2 — the genesis transaction hash carries NO network identity
+
+The genesis chain entry is **byte-identical on two different networks and two
+different incarnations**:
+
+```
+MainNet  acc://dn.acme/network  entry[0] = e43be90e349210456662d8b8bdc9cc9e5e46ccb07f2129e7b57a8195e5e916d5
+Kermit   acc://dn.acme/network  entry[0] = e43be90e349210456662d8b8bdc9cc9e5e46ccb07f2129e7b57a8195e5e916d5
+```
+
+The same hash also appears at index 0 of `acc://dn.acme`, `dn.acme/globals`,
+`dn.acme/votes`, `bvn-BVN1.acme/network` and `bvn-BVN2.acme/network`. That
+follows directly from §2B.4a: `SystemGenesis` has zero fields, and its header
+principal is the constant `acc://ACME`, so the transaction hashes to the same
+value everywhere.
+
+**This pre-empts one candidate answer to Q11 and must be recorded before Phase 1
+wastes time on it: the genesis txid cannot identify an incarnation.**
+
+What *does* differ is the **genesis-block root anchor** returned in that same
+receipt — `672f89ff…6e17` (MainNet) vs `e3f31192…cf81` (Kermit), both at
+`localBlock 1` / `majorBlock 1`. It is queryable today from an unmodified public
+node and it is a genuine candidate incarnation identifier. Phase 1 should
+evaluate it against Q1 and Q11 — including whether two honest parties derive it
+identically, and whether it is stable across a node's own re-sync.
+
+### 0.4 CORRECTION 3 — §4A.4's "identical bytecode on all three" is FALSE
+
+All three active deployments are 22,431 bytes, as §4A.4 says. They are **not
+identical**. Measured 2026-08-28 via `eth_getCode`:
+
+```
+sepolia           0xb39b707D50089C9Eb92818f9B2870eba6DA5C2a0   22,431 B
+base-sepolia      0xEA9eeeE42a7971792B11Fd2f682C9c1172490272   22,431 B
+arbitrum-sepolia  0x4b9eA187772E115641Fd40F35BF7a84925e7A035   22,431 B
+
+pairwise diff: exactly 24 differing bytes, at 8 three-byte sites
+  offsets 4685, 5258, 5547, 8955, 10315, 13051, 14788, 21599
+  sepolia  aa36a7 = 11155111    base 014a34 = 84532    arbitrum 066eee = 421614
+```
+
+Every differing byte is the inlined `DEPLOYMENT_CHAIN_ID` immutable. **Same
+compiled source, three chain-bound deployments.** The conclusion §4A.4 draws
+survives intact — this is one contract to change, not eight — but the sentence
+"Identical bytecode on all three" must not be repeated in an AIP or a spec.
+Phase 4b must also expect three *different* deployed-code hashes when verifying
+a V8_2 rollout, and must not use bytecode equality as its cutover check.
+
+Path note for Phase 4b: `certen-contracts/` is a sibling of
+`independant_validator` under `C:\Accumulate_Stuff\certen\`, not a
+subdirectory of it. §4A.4's paths are relative to `certen\`.
+
+### 0.5 CORRECTION 4 — the `summary_only` count is 392, not 402
+
+§2B.3 cites "402 proofs are already marked `summary_only`". Measured today:
+**392 distinct proofs** (1,106 `governance_proof_levels` rows). The argument is
+unaffected; the number is not 402.
+
+### 0.6 CORRECTION 5 — §2B.4c's grep claim, narrowed
+
+§2B.4c says "Grepping `CertenAnchorV8_1.sol` for any Accumulate-validator
+concept returns **nothing**." The claim is true **about validators** and false
+as a grep instruction: the contract does carry Accumulate concepts —
+`adiURLHash` (`:291`), `accumulateBlockHeight` (`:205`, an event field), and
+`operationID`. What is absent is any notion of an Accumulate *validator*,
+*quorum*, *ed25519 key* or *threshold*. State it that way; the loose version
+will be contradicted by the first reviewer who runs the grep.
+
+`accumulateBlockHeight` at `:205` is worth Phase 4b's attention: an
+Accumulate-block field already reaches the chain in an event, which is a useful
+precedent for the incarnation identity — though an event is not part of the
+signed preimage and is therefore not a substitute for §4A.1.
+
+### 0.7 QUALIFICATION — §2A.2's "every change already has a receipt"
+
+`processNetworkAccountUpdates` returns early for system transactions
+(`network_accounts.go:38-40`, `Body.Type().IsSystem()`) **before** reaching the
+`WriteData` case that enforces `WriteToState` (`:109-111`). So the mandate binds
+ordinary governance writes, not system transactions — and genesis is exactly a
+system transaction. §2A.2's conclusion is sound for the *update timeline*; do
+not extend it to the base case.
+
+Two further details Phase 1 will need, both from this session's reading:
+
+- `getNetworkUpdatesInWindow` (`major_header.go:133-136`) walks
+  `s.partition.JoinPath(protocol.Network)` and `…JoinPath(protocol.Globals)` —
+  the **serving partition's own** accounts, not a hard-coded `dn.acme`. Every
+  partition has its own `/network` (verified live: `bvn-BVN1.acme/network` and
+  `bvn-BVN2.acme/network` each have exactly 1 entry).
+- `network_accounts.go:115-125` shows BVN `/network` accounts are updated only
+  by internally-produced transactions pushed from the DN, never directly. That
+  is what makes the per-partition copies a consistent mirror rather than an
+  independent timeline — relevant to Q2's completeness argument.
+
+### 0.8 UNRESOLVED — is `mainnet.accumulatenetwork.io` the public MainNet?
+
+`network-status` on that endpoint reports:
+
+```
+networkName  MainNet        executorVersion  v2-vandenberg
+partitions   [Cyclops, Directory]            validators  1
+```
+
+One validator, and a single BVN named `Cyclops` — not the Apollo / Yutu /
+Chandrayaan topology of the Accumulate mainnet as publicly documented. Either
+the topology was replaced at the 2025-07-13 re-genesis, or this endpoint is not
+the production mainnet.
+
+**Tried:** `network-status` (Directory), `consensus-status` (rejected —
+`node ID is missing`, which needs a node id this session does not have),
+`acc://dn.acme/ledger`, and DN blocks 1 and 2. Not resolved from the API alone.
+
+This is blocking for any AIP that quotes a "mainnet" number, and it interacts
+directly with §2B.2 — a topology change across the boundary would be further
+evidence for the re-genesis, but it must be established, not assumed. **Ask the
+maintainer.** Do not let a Phase 2 cost measurement cite this endpoint as
+"mainnet" until it is settled.
+
+### 0.9 Not attempted in Phase 0, by design
+
+Q1–Q15 remain open; Phase 0 verifies §2, it does not answer them. Specifically
+**not** done here, and still owed: the simulated validator-set change (Q10),
+the `MajorHeaderRecord` size measurement (Q5), and any test of a stored proof
+against a restarted chain (Q12). Nothing in this section should be read as
+progress on those.
