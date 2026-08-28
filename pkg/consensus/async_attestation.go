@@ -62,6 +62,12 @@ const (
 	// merkle paths, beside the results and never inside them.
 	GovReceiptsCommitmentKey = "att.GovReceipts"
 
+	// GovTimingBasisCommitmentKey carries []proof.SignatureTimingBasis as JSON —
+	// which counted signatures' ordering rests on execution inclusion rather
+	// than on a local block comparison. Beside the results for the same reason
+	// the receipts are: the flag it qualifies lives inside the govRoot preimage.
+	GovTimingBasisCommitmentKey = "att.GovTimingBasis"
+
 	// GovernanceLevelCommitmentKey is the level actually achieved ("G0"|"G1"|"G2").
 	GovernanceLevelCommitmentKey = "att.GovernanceLevel"
 )
@@ -106,6 +112,11 @@ type PendingAttestation struct {
 	// path, it must be the path the proof was BUILT on, not one fetched again
 	// afterwards.
 	GovReceipts []proof.GovReceiptEvidence
+
+	// GovTimingBasis is which counted signatures' timing rests on the weaker
+	// basis. Snapshotted with everything else here: replayed minutes later on
+	// the cadence path it must be what the proof was BUILT on.
+	GovTimingBasis []proof.SignatureTimingBasis
 
 	// Signatures and level captured during the round.
 	BLSSignature        string
@@ -365,6 +376,15 @@ func (bv *BFTValidator) RunProofCycle(
 		if len(att.GovReceipts) > 0 {
 			if evJSON, err := json.Marshal(att.GovReceipts); err == nil {
 				commitMap[GovReceiptsCommitmentKey] = string(evJSON)
+			}
+		}
+
+		// PHASE 8 ITEM 2 — under its own key, and never inside att.G1Proof/G2Proof
+		// for the same reason: those marshal G*Result, which is inside the
+		// govRoot, and this must never be able to reach that shape.
+		if len(att.GovTimingBasis) > 0 {
+			if tbJSON, err := json.Marshal(att.GovTimingBasis); err == nil {
+				commitMap[GovTimingBasisCommitmentKey] = string(tbJSON)
 			}
 		}
 
@@ -654,6 +674,7 @@ func (bv *BFTValidator) captureAttestation(
 	// inline path cannot diverge on which receipts they captured.
 	if certenProof != nil {
 		att.GovReceipts = certenProof.GovReceipts
+		att.GovTimingBasis = certenProof.GovTimingBasis
 	}
 
 	bundleIDHex := strings.TrimPrefix(att.BundleIDHex, "0x")

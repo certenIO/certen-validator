@@ -2639,8 +2639,9 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 			"authority_url":      authorityURL,
 		}
 		g0Result, g0Ev := govIn.ResultFor("G0"), govIn.ReceiptFor("G0")
-		g0JSON := BuildGovernanceLevelJSON("G0", g0Result, g0Ev, g0Flags)
-		LogGovernanceLevelEvidence(logfPrintf, proofArtifact.ProofID, "G0", g0Result, g0Ev)
+		g0TB := govIn.TimingBasisFor("G0")
+		g0JSON := BuildGovernanceLevelJSON("G0", g0Result, g0Ev, g0TB, g0Flags)
+		LogGovernanceLevelEvidence(logfPrintf, proofArtifact.ProofID, "G0", g0Result, g0Ev, g0TB)
 
 		// G0 is verified if we have anchor data
 		g0Verified := true
@@ -2719,8 +2720,9 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 			"threshold_n":       thresholdN,
 		}
 		g1Result, g1Ev := govIn.ResultFor("G1"), govIn.ReceiptFor("G1")
-		g1JSON := BuildGovernanceLevelJSON("G1", g1Result, g1Ev, g1Flags)
-		LogGovernanceLevelEvidence(logfPrintf, proofArtifact.ProofID, "G1", g1Result, g1Ev)
+		g1TB := govIn.TimingBasisFor("G1")
+		g1JSON := BuildGovernanceLevelJSON("G1", g1Result, g1Ev, g1TB, g1Flags)
+		LogGovernanceLevelEvidence(logfPrintf, proofArtifact.ProofID, "G1", g1Result, g1Ev, g1TB)
 
 		// G1 is verified if threshold is met
 		g1Verified := result.ThresholdMet
@@ -2787,8 +2789,9 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 			"threshold_n":          thresholdN,
 		}
 		g2Result, g2Ev := govIn.ResultFor("G2"), govIn.ReceiptFor("G2")
-		g2JSON := BuildGovernanceLevelJSON("G2", g2Result, g2Ev, g2Flags)
-		LogGovernanceLevelEvidence(logfPrintf, proofArtifact.ProofID, "G2", g2Result, g2Ev)
+		g2TB := govIn.TimingBasisFor("G2")
+		g2JSON := BuildGovernanceLevelJSON("G2", g2Result, g2Ev, g2TB, g2Flags)
+		LogGovernanceLevelEvidence(logfPrintf, proofArtifact.ProofID, "G2", g2Result, g2Ev, g2TB)
 
 		// G2 is verified if threshold met and binding enforced
 		g2Verified := result.ThresholdMet && bindingEnforced
@@ -3524,8 +3527,9 @@ func (o *UnifiedOrchestrator) populateRelatedTablesForBatchTx(
 		}
 		govIn := GovernanceInputsFromCommitment(req.CommitmentData)
 		g0Result, g0Ev := govIn.ResultFor("G0"), govIn.ReceiptFor("G0")
-		g0JSON := BuildGovernanceLevelJSON("G0", g0Result, g0Ev, g0Flags)
-		LogGovernanceLevelEvidence(logfPrintf, proofArtifact.ProofID, "G0", g0Result, g0Ev)
+		g0TB := govIn.TimingBasisFor("G0")
+		g0JSON := BuildGovernanceLevelJSON("G0", g0Result, g0Ev, g0TB, g0Flags)
+		LogGovernanceLevelEvidence(logfPrintf, proofArtifact.ProofID, "G0", g0Result, g0Ev, g0TB)
 
 		g0Level := &database.NewGovernanceProofLevel{
 			ProofID:        proofArtifact.ProofID,

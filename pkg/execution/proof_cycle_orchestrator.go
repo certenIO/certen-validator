@@ -2015,8 +2015,9 @@ func (o *ProofCycleOrchestrator) storeGovernanceLevels(ctx context.Context, proo
 		"finality_time": cycle.ExecutionTime.Format(time.RFC3339),
 	}
 	g0Result, g0Ev := govIn.ResultFor("G0"), govIn.ReceiptFor("G0")
-	g0JSON := BuildGovernanceLevelJSON("G0", g0Result, g0Ev, g0Flags)
-	LogGovernanceLevelEvidence(o.logger.Printf, proofID, "G0", g0Result, g0Ev)
+	g0TB := govIn.TimingBasisFor("G0")
+	g0JSON := BuildGovernanceLevelJSON("G0", g0Result, g0Ev, g0TB, g0Flags)
+	LogGovernanceLevelEvidence(o.logger.Printf, proofID, "G0", g0Result, g0Ev, g0TB)
 	g0 := &database.NewGovernanceProofLevel{
 		ProofID:           proofID,
 		GovLevel:          database.GovLevelG0,
@@ -2037,8 +2038,9 @@ func (o *ProofCycleOrchestrator) storeGovernanceLevels(ctx context.Context, proo
 			"verified": true, "threshold_met": true,
 		}
 		g1Result, g1Ev := govIn.ResultFor("G1"), govIn.ReceiptFor("G1")
-		g1JSON := BuildGovernanceLevelJSON("G1", g1Result, g1Ev, g1Flags)
-		LogGovernanceLevelEvidence(o.logger.Printf, proofID, "G1", g1Result, g1Ev)
+		g1TB := govIn.TimingBasisFor("G1")
+		g1JSON := BuildGovernanceLevelJSON("G1", g1Result, g1Ev, g1TB, g1Flags)
+		LogGovernanceLevelEvidence(o.logger.Printf, proofID, "G1", g1Result, g1Ev, g1TB)
 		g1 := &database.NewGovernanceProofLevel{
 			ProofID:           proofID,
 			GovLevel:          database.GovLevelG1,
@@ -2059,8 +2061,9 @@ func (o *ProofCycleOrchestrator) storeGovernanceLevels(ctx context.Context, proo
 			"verified": true, "write_back_confirmed": true,
 		}
 		g2Result, g2Ev := govIn.ResultFor("G2"), govIn.ReceiptFor("G2")
-		g2JSON := BuildGovernanceLevelJSON("G2", g2Result, g2Ev, g2Flags)
-		LogGovernanceLevelEvidence(o.logger.Printf, proofID, "G2", g2Result, g2Ev)
+		g2TB := govIn.TimingBasisFor("G2")
+		g2JSON := BuildGovernanceLevelJSON("G2", g2Result, g2Ev, g2TB, g2Flags)
+		LogGovernanceLevelEvidence(o.logger.Printf, proofID, "G2", g2Result, g2Ev, g2TB)
 		g2 := &database.NewGovernanceProofLevel{
 			ProofID:           proofID,
 			GovLevel:          database.GovLevelG2,

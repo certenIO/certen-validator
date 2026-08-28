@@ -997,6 +997,12 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	// with it, which is why governance_proof_levels contained verdict flags and
 	// no governance proof.
 	var govReceipts []proof.GovReceiptEvidence
+	// PHASE 8 ITEM 2: which counted signatures' ordering rests on execution
+	// inclusion rather than on a local block comparison. Taken off the same
+	// wrapper as the receipts, for the same reason - the flag it qualifies
+	// (ValidatedSignature.TimingVerified) is inside the govRoot preimage and
+	// this must never be able to reach it.
+	var govTimingBasis []proof.SignatureTimingBasis
 	var governanceLevel string
 	var resolvedKeyPageURL string
 	resolvedKeyBookURL := governanceData.Authorization.RequiredKeyBook
@@ -1127,6 +1133,7 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 			}
 			g1Proof = g1ProofWrapper.G1
 			govReceipts = append(govReceipts, g1ProofWrapper.Receipts...)
+			govTimingBasis = append(govTimingBasis, g1ProofWrapper.TimingBasis...)
 			if !g1Proof.G1ProofComplete || !g1Proof.ThresholdSatisfied {
 				return nil, fmt.Errorf("G1 governance proof incomplete for intent %s "+
 					"(complete=%v thresholdSatisfied=%v uniqueKeys=%d)",
@@ -1145,6 +1152,7 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 			}
 			g2Proof = g2ProofWrapper.G2
 			govReceipts = append(govReceipts, g2ProofWrapper.Receipts...)
+			govTimingBasis = append(govTimingBasis, g2ProofWrapper.TimingBasis...)
 			if !g2Proof.G2ProofComplete {
 				return nil, fmt.Errorf("G2 governance proof incomplete for intent %s "+
 					"(payloadVerified=%v effectVerified=%v): the outcome is not bound, so this is a G1 claim "+
@@ -1182,6 +1190,7 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 		// signing below both run AFTER this assignment and neither reads this
 		// field, which is the point: it cannot reach a hash.
 		certenProof.GovReceipts = govReceipts
+		certenProof.GovTimingBasis = govTimingBasis
 		certenProof.KeypageURL = resolvedKeyPageURL
 		certenProof.KeybookURL = resolvedKeyBookURL
 

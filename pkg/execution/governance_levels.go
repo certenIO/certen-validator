@@ -66,6 +66,20 @@ const (
 	// summary-only one, and GovernanceLevelsFromStorage keys ErrGovernanceSummaryOnly
 	// on exactly this.
 	GovLevelReceiptKey = "receipt"
+
+	// GovLevelTimingBasisKey holds []SignatureTimingBasis — which counted
+	// signatures' ordering before execution was RE-DERIVED here and which was
+	// INHERITED from the fact of execution because signer and principal sit on
+	// different partitions.
+	//
+	// The QUALIFIER. "result" carries timingVerified: true for every counted
+	// signature; this says which of those trues rest on the weaker basis. It is
+	// beside "result" rather than inside it because the flag lives in G1Result,
+	// which is inside the govRoot preimage.
+	//
+	// Absent means the generator recorded none — which is NOT the same as "every
+	// signature was locally ordered", and must never be read that way.
+	GovLevelTimingBasisKey = "timingBasis"
 )
 
 // GovernanceLevelInputs is what the persistence layer could recover about the
@@ -86,6 +100,10 @@ type GovernanceLevelInputs struct {
 	// Receipts is the merkle path per level.
 	Receipts []certenproof.GovReceiptEvidence
 
+	// TimingBasis is the per-signature timing basis, across all levels. Filed
+	// per level by TimingBasisFor when the row is built.
+	TimingBasis []certenproof.SignatureTimingBasis
+
 	// Level is the governance level actually achieved ("G0"|"G1"|"G2").
 	Level string
 }
@@ -104,6 +122,19 @@ func (in *GovernanceLevelInputs) ResultFor(level string) json.RawMessage {
 		return in.G2
 	}
 	return nil
+}
+
+// TimingBasisFor returns the timing-basis records filed under one level.
+//
+// No fallback to another level, unlike ReceiptFor. The three levels share one
+// execution receipt, so relabelling G0's path for G1 records the same fact; the
+// timing basis is per SIGNATURE, and G0 evaluates none. Borrowing across levels
+// here would attach one level's signature set to another's row.
+func (in *GovernanceLevelInputs) TimingBasisFor(level string) []certenproof.SignatureTimingBasis {
+	if in == nil {
+		return nil
+	}
+	return certenproof.TimingBasisFor(in.TimingBasis, level)
 }
 
 // ReceiptFor returns the receipt evidence for one level, or nil.
@@ -166,6 +197,13 @@ func GovernanceInputsFromCommitment(cm map[string]interface{}) *GovernanceLevelI
 			found = true
 		}
 	}
+	if s, ok := cm[consensus.GovTimingBasisCommitmentKey].(string); ok && s != "" {
+		var tb []certenproof.SignatureTimingBasis
+		if err := json.Unmarshal([]byte(s), &tb); err == nil && len(tb) > 0 {
+			in.TimingBasis = tb
+			found = true
+		}
+	}
 	if !found {
 		return nil
 	}
@@ -192,6 +230,7 @@ func BuildGovernanceLevelJSON(
 	level string,
 	result json.RawMessage,
 	ev *certenproof.GovReceiptEvidence,
+	timingBasis []certenproof.SignatureTimingBasis,
 	existing map[string]interface{},
 ) json.RawMessage {
 	obj := map[string]interface{}{}
@@ -205,6 +244,14 @@ func BuildGovernanceLevelJSON(
 	if ev.HasPath() {
 		if raw, err := json.Marshal(ev); err == nil {
 			obj[GovLevelReceiptKey] = json.RawMessage(raw)
+		}
+	}
+	// Written only when there is something to write. An empty array would
+	// assert "we looked and none were weakened", which is a different claim
+	// from "this generator did not record it".
+	if len(timingBasis) > 0 {
+		if raw, err := json.Marshal(timingBasis); err == nil {
+			obj[GovLevelTimingBasisKey] = json.RawMessage(raw)
 		}
 	}
 
@@ -225,7 +272,19 @@ func BuildGovernanceLevelJSON(
 // LogGovernanceLevelEvidence reports, per level, whether real evidence was
 // stored — because a silent stub is how this went unnoticed for 401 rows.
 func LogGovernanceLevelEvidence(logf func(string, ...interface{}), proofID fmt.Stringer, level string,
-	result json.RawMessage, ev *certenproof.GovReceiptEvidence) {
+	result json.RawMessage, ev *certenproof.GovReceiptEvidence,
+	timingBasis []certenproof.SignatureTimingBasis) {
+
+	// Said separately from the result/receipt verdict below, because it is a
+	// separate claim: a row can carry a full merkle path and still not say which
+	// of its counted signatures were only ordered by execution inclusion.
+	if weak := certenproof.WeakenedTimingBasis(timingBasis); len(weak) > 0 {
+		logf("⚠️ [GOV-LEVEL] proof %s %s: %d of %d counted signature(s) are CROSS-PARTITION — their "+
+			"ordering before execution rests on execution inclusion, NOT on a local block "+
+			"comparison; recorded under %q",
+			proofID, level, len(weak), len(timingBasis), GovLevelTimingBasisKey)
+	}
+
 	switch {
 	case len(result) > 0 && ev.HasPath():
 		logf("✅ [GOV-LEVEL] proof %s %s: stored the real result AND its %d-step merkle path — "+

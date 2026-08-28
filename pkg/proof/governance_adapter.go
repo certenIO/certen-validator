@@ -305,6 +305,36 @@ func (g *CLIGovernanceProofGenerator) parseOutput(level GovernanceLevel, output 
 	//
 	// A side read on purpose: the hashed structs are parsed exactly as before and
 	// nothing in this pass can influence what they contain.
+	// PHASE 8 ITEM 2 - the timing basis, kept the same way and for the same
+	// reason. The CLI emits a top-level "timingBasis" array; the unmarshal above
+	// drops it because G1Result has no such field and MUST NOT gain one, since
+	// it sits inside the govRoot preimage. A second side read keeps it in a type
+	// no hash can reach.
+	//
+	// G0 is skipped: a G0 result records that the transaction executed and
+	// evaluates no signatures, so it has no timing claim to qualify.
+	if level != GovLevelG0 {
+		if tb := TimingBasisFromRaw(string(level), jsonData); len(tb) > 0 {
+			govProof.TimingBasis = append(govProof.TimingBasis, tb...)
+			if weak := WeakenedTimingBasis(tb); len(weak) > 0 {
+				g.logger.Printf("[GOV-PROOF] %s timing basis: %d of %d counted signature(s) are "+
+					"CROSS-PARTITION - their ordering rests on execution inclusion, not on a local "+
+					"block comparison (first: %s on %s vs principal on %s)",
+					level, len(weak), len(tb), truncHex(weak[0].MessageHash),
+					weak[0].SignerPartition, weak[0].PrincipalPartition)
+			} else {
+				g.logger.Printf("[GOV-PROOF] %s timing basis: all %d counted signature(s) locally "+
+					"ordered against execMBI on one partition", level, len(tb))
+			}
+		} else {
+			// Not loud like the receipt case: a govproof build predating this
+			// evidence produces exactly this, and the absence is recorded rather
+			// than filled in. It must not read as "all locally ordered".
+			g.logger.Printf("[GOV-PROOF] %s carries NO timing basis - which signatures rest on "+
+				"execution inclusion is NOT recorded for this proof", level)
+		}
+	}
+
 	if ev := GovReceiptEvidenceFromRaw(string(level), jsonData); ev != nil {
 		govProof.Receipts = append(govProof.Receipts, *ev)
 		g.logger.Printf("[GOV-PROOF] %s receipt evidence captured: %d merkle step(s), anchor=%s",

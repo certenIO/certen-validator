@@ -99,6 +99,12 @@ type CertenProof struct {
 	// receipt fetched today is not necessarily the one this proof was built on.
 	GovReceipts []GovReceiptEvidence `json:"gov_receipts,omitempty"`
 
+	// GovTimingBasis is the per-signature timing basis, the second non-hashed
+	// sibling of the three results above. Same argument as GovReceipts: the
+	// govRoot commits to G0Result/G1Result/G2Result marshalled INDIVIDUALLY,
+	// never to CertenProof, so a field here moves no hash.
+	GovTimingBasis []SignatureTimingBasis `json:"gov_timing_basis,omitempty"`
+
 	// Verification status
 	VerificationStatus *VerificationStatusData `json:"verification_status"`
 

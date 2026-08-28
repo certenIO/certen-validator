@@ -113,7 +113,7 @@ func s2WriteLevel(ctx context.Context, t *testing.T, db *sql.DB, proofID uuid.UU
 	level string, result json.RawMessage, ev *certenproof.GovReceiptEvidence) {
 	t.Helper()
 
-	levelJSON := BuildGovernanceLevelJSON(level, result, ev, s2Flags())
+	levelJSON := BuildGovernanceLevelJSON(level, result, ev, nil, s2Flags())
 
 	var govLevel string
 	switch level {
@@ -454,7 +454,7 @@ func TestS2_BuildGovernanceLevelJSONIsAdditive(t *testing.T) {
 	ev := &certenproof.GovReceiptEvidence{
 		Level: "G0", Start: "aa", Anchor: "aa",
 	}
-	out := BuildGovernanceLevelJSON("G0", json.RawMessage(`{"x":1}`), ev, existing)
+	out := BuildGovernanceLevelJSON("G0", json.RawMessage(`{"x":1}`), ev, nil, existing)
 
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal(out, &obj); err != nil {
@@ -474,7 +474,7 @@ func TestS2_BuildGovernanceLevelJSONIsAdditive(t *testing.T) {
 
 	// With nothing to add, the flags must come back untouched — that is what the
 	// 1,106 historical rows look like, and rewriting them is not this stage's job.
-	bare := BuildGovernanceLevelJSON("G0", nil, nil, existing)
+	bare := BuildGovernanceLevelJSON("G0", nil, nil, nil, existing)
 	// A FRESH map: json.Unmarshal MERGES into a non-empty one, so reusing obj
 	// would carry the keys from the case above and this assertion would pass
 	// whatever the helper did.

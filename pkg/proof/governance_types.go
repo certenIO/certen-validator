@@ -277,6 +277,19 @@ type GovernanceProof struct {
 	// marked summary-only downstream; it is never a fabricated empty path,
 	// because an empty path that is accepted makes every receipt verify.
 	Receipts []GovReceiptEvidence `json:"receipts,omitempty"`
+
+	// TimingBasis says, per counted signature, whether its ordering before
+	// execution was re-derived locally or inherited from execution inclusion.
+	//
+	// HERE for the same structural reason as Receipts: this wrapper is not part
+	// of any canonical hash, while ValidatedSignature.TimingVerified - the flag
+	// this qualifies - is inside G1Result and therefore inside the govRoot.
+	// Widening that would move every root ever signed; this moves none.
+	//
+	// Empty means the generator emitted none. That is an honest absence and
+	// must never be read as "every signature was locally ordered" - see
+	// timing_evidence.go.
+	TimingBasis []SignatureTimingBasis `json:"timing_basis,omitempty"`
 }
 
 // IsValid returns whether the governance proof is valid at its level

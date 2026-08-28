@@ -400,6 +400,11 @@ func TestS2_EvidenceShapesAreNotHashed(t *testing.T) {
 		{"Entries", "entries"},
 	})
 
+	// TimingBasis was added in Phase 8 item 2. This is the golden update the
+	// comment above explicitly permits: the field went onto the WRAPPER, which
+	// no canonical hash reaches, and not onto ValidatedSignature, which is
+	// inside G1Result and inside the govRoot. TestP8_TimingBasisIsNotInTheGovRootPreimage
+	// checks that by value; this pins the declaration.
 	assertShape(t, "proof.GovernanceProof (NOT HASHED)", certenproof.GovernanceProof{}, []fieldSpec{
 		{"Level", "level"},
 		{"SpecVersion", "spec_version"},
@@ -408,6 +413,23 @@ func TestS2_EvidenceShapesAreNotHashed(t *testing.T) {
 		{"G1", "g1,omitempty"},
 		{"G2", "g2,omitempty"},
 		{"Receipts", "receipts,omitempty"},
+		{"TimingBasis", "timing_basis,omitempty"},
+	})
+
+	assertShape(t, "proof.SignatureTimingBasis (NOT HASHED)", certenproof.SignatureTimingBasis{}, []fieldSpec{
+		{"Level", "level"},
+		{"MessageID", "messageID"},
+		{"MessageHash", "messageHash"},
+		{"SignerPage", "signerPage"},
+		{"SignerIdentity", "signerIdentity"},
+		{"SignerPartition", "signerPartition,omitempty"},
+		{"PrincipalPage", "principalPage"},
+		{"PrincipalIdentity", "principalIdentity"},
+		{"PrincipalPartition", "principalPartition,omitempty"},
+		{"LocalOrderingChecked", "localOrderingChecked"},
+		{"ReceiptLocalBlock", "receiptLocalBlock"},
+		{"ExecMBI", "execMBI"},
+		{"Basis", "basis"},
 	})
 }
 
