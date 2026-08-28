@@ -598,6 +598,10 @@ genesis? What is the size of that artifact?
 large is one `MajorHeaderRecord`? This decides whether a verifier can walk the
 spine once and cache, or needs checkpointing.
 
+**Q6 — DAG-BFT survival.** ✅ **ANSWERED IN PHASE 2 (§9.2.3): the primitive
+survives untouched**, and `DAGBFT_MIGRATION_ANALYSIS.md`'s L3/L4 rows are stale.
+The original question text follows.
+
 **Q6 — DAG-BFT survival.** Under DAG-BFT, does the "quorum signature over a DN
 self-anchor" primitive survive? `docs/proof/DAGBFT_MIGRATION_ANALYSIS.md` in the
 CERTEN repo already flags that **StateHash is excluded from the certificate
@@ -1597,3 +1601,269 @@ therefore *not* redundant just because nothing prunes today.
 - **§9.0.8** — whether `mainnet.accumulatenetwork.io` is the public MainNet is
   still unresolved and still blocking for any "mainnet" number in an AIP.
 - The mechanism behind Q9's missing index is explained but not isolated (§1.4).
+
+---
+
+## Phase 2 — Q4, Q5, Q6
+
+**Run 2026-08-28.** Same refs as Phases 0–1. `accumulate-core` **not modified**
+(`git status --porcelain` empty); the sizing ran against a `git archive` copy of
+`origin/dagbft-integration`. Probes: `docs/l4/phase2_probe/`.
+
+**Gate 2 verdict: PASSED.** Q4, Q5 and Q6 are answered with measured bytes and
+counts taken from live production data, not estimates. One unrelated finding
+surfaced that is **more urgent than DAG-BFT** and is recorded in §9.2.4.
+
+### 2.1 Q5 — cost of induction. ANSWERED. The whole spine is 1–3 MB.
+
+**Major blocks in existence, measured 2026-08-28:**
+
+```
+MainNet   822 major blocks   (genesis 2025-07-13 -> 411 days x 2/day = 822)  ✅ 12-hourly
+Kermit    417 major blocks   (genesis 2026-02-01 -> 208 days x 2/day = 416)  ✅
+both networks opened major block N at 2026-08-28T12:00:00Z
+```
+
+Cross-checked two ways: the block query's `majorRange` total and the
+`major-block` index chain on `<partition>/anchors` agree exactly (822 / 417).
+
+**One `MajorHeaderRecord`, built from real Kermit data and marshalled**
+(`TestQ5_MajorHeaderRecordSize`) — a real major-block `IndexEntry` (index 416),
+a real `DirectoryAnchor` in a real `SequencedMessage`, and the real 3-signature
+validator quorum from `dn.acme/anchors` main[1000]:
+
+```
+IndexEntry                    17 B   (source 355261, block 417, rootIndexIndex 389720)
+DirectoryAnchor body         996 B   (1 receipt, 0 updates)
+SequencedMessage (anchor)   1043 B
+KeySignature                 165 B   each, x3 signers = 495 B
+---------------------------------------------------
+MajorHeaderRecord TOTAL     1572 B   (0 updates in window)
+```
+
+**Variance.** Sampled ten anchors across the whole chain
+(`TestQ5b_AnchorSizeDistribution`): body min **89 B**, median **996 B**, max
+**1,856 B**, mean 973 B. The driver is the receipt count (0–3 seen), i.e. how
+many partitions anchored into that DN block. **Updates seen: 0 everywhere** —
+consistent with §2A.3, the set has never changed.
+
+**The whole spine, at today's height:**
+
+| Validators | Bytes/record | MainNet (822) | Kermit (417) |
+|---|---|---|---|
+| 1 (mainnet today) | 1,242 | **997 KB** | 506 KB |
+| 3 (kermit today) | 1,572 | 1.26 MB | **640 KB** |
+| 8 | 2,397 | 1.92 MB | 976 KB |
+| 16 | 3,717 | **2.98 MB** | 1.51 MB |
+| 32 | 6,357 | 5.10 MB | 2.59 MB |
+| 64 | 11,637 | 9.34 MB | 4.74 MB |
+
+Record size is `~1,077 B + 165 B x validators`, plus the update deltas (zero so
+far).
+
+> **Verdict: a verifier can walk the entire spine once and cache it. No
+> checkpointing scheme is needed.** Even at 64 validators — far beyond anything
+> Accumulate has run — the full induction from genesis to today is under 10 MB,
+> and it grows at ~2 records/day (≈1.1 MB/year at 16 validators). This removes
+> the concern §2.4(3) raised about the spine being "a whole-chain sync
+> primitive, not a point query": at these sizes the distinction is an
+> optimisation, not a blocker.
+
+### 2.2 Q4 — point query feasibility. ANSWERED. ~2.4 KB, and it needs no spine.
+
+Two shapes were sized. The second is the one that matters.
+
+**(a) The spine shape** — nearest major-block checkpoint plus deltas — is not
+actually a point query in the implementation. `spine.go:118-123` refuses any
+walk that does not start at genesis:
+
+```go
+if s.LastMinorBlock == 0 && s.RootChainAnchor == [32]byte{} {
+    if proof.MerkleState.Count != 0 {
+        return errors.Unauthenticated.With("root proof does not start at genesis")
+    }
+}
+```
+
+So the spine offers "walk me from genesis", not "prove me block N". Binding a
+*minor* block past the spine needs a second record, `MinorRootRecord`
+(`internal/api/private/types_gen.go:43-54`: anchor, signatures, updates, plus a
+`RootProof *merkle.ReceiptList` extending the last verified root). CERTEN's
+proofs are per-intent at minor-block granularity, so it would need both. Given
+§2.1's measurements this is affordable, but it is a walk, not a query.
+
+**(b) The CERTEN shape**, which Phase 1 §1.1 showed is the real ask — "the
+validator set at block N, provable to a signed anchor". Measured from live
+Kermit data (`TestQ4_PointQueryArtifactSize`):
+
+```
+NetworkDefinition (the payload)          335 B
+full dataAccount state (leaf preimage)   397 B      <- what the leaf hashes
+BPT membership path                      165 B      (5 steps x 33 B)
+root-chain receipt for the BPT root    ~ 264 B      (8 steps, per §9.1.2)
+signed anchor + quorum (3 validators)   1538 B
+--------------------------------------------------
+POINT QUERY ARTIFACT TOTAL              2364 B
+```
+
+At mainnet scale the BPT is deeper — measured **17 steps (561 B)** for
+`dn.acme/network` on MainNet versus 5 on Kermit, since path length grows with
+account count:
+
+| Validators | Artifact (mainnet-depth BPT) |
+|---|---|
+| 1 | 2,430 B |
+| 8 | 3,585 B |
+| 16 | **4,905 B** |
+| 32 | 7,545 B |
+
+> **Verdict: the point query is feasible and costs ~2.4–7.5 KB — roughly 300x
+> smaller than walking the spine, and small enough to embed in every CERTEN
+> proof artifact.** Every component already exists and is already served, except
+> one: the BPT membership path must be against a *historical* root
+> (Phase 1 §1.1). That single missing primitive is the whole of AIP A's ask, and
+> Q4 now prices it: **~2.4 KB per proof, versus 640 KB–3 MB per verifier for the
+> spine alternative.**
+
+This also settles Q7's shape. Option **(c)** — "validator set at height H, with
+proof" — is not merely the surviving candidate (Phase 1 §1.8); it is the
+*cheaper* one by two orders of magnitude, and it is the only one that fits
+inside a per-intent artifact.
+
+### 2.3 Q6 — DAG-BFT survival. ANSWERED: the primitive survives untouched.
+
+**The quorum signature over a DN self-anchor is executor-layer chain state, not
+consensus-engine state, and the check is byte-identical on both branches.**
+
+`internal/core/execute/v2/block/msg_block_anchor.go`, same line on both:
+
+```go
+// :305 on origin/main AND on origin/dagbft-integration
+if uint64(len(sigs)) < ctx.Executor.globals.Active.ValidatorThreshold(partition) {
+    return false, nil
+}
+```
+
+And the spine's own quorum check never touches a certificate:
+
+```go
+// internal/fastsync/spine.go:189 (dagbft-integration)
+func verifyQuorum(g *network.GlobalValues, anchor *messaging.SequencedMessage, sigs []protocol.KeySignature) error {
+    for _, sig := range sigs {
+        if !sig.Verify(nil, anchor) { ... }
+```
+
+`grep` over `spine.go` for `Certificate` or `StateHash` returns **nothing**. It
+verifies `protocol.KeySignature` values over a `messaging.SequencedMessage` —
+the *same* primitive CERTEN's L4 verifies (`layer4_verify.go:29-60`).
+
+**So the StateHash-binding gap does not break it.**
+`DAGBFT_MIGRATION_ANALYSIS.md` §4.3 is right that `Certificate.StateHash` is a
+sibling of the header and is not covered by the DAG vertex quorum. But neither
+the spine nor CERTEN's shipped L4 reads the certificate. The flag is real for
+anything that would bind to `Certificate.StateHash`; it is not a risk to this
+design.
+
+**CORRECTION to `DAGBFT_MIGRATION_ANALYSIS.md`.** Its table row
+(`:58`) reads:
+
+> | **L3** | Anchor signed by ≥2/3 validators | **CometBFT** `/commit`, `Header.AppHash`, CanonicalVote precommits | **Full rewrite** → Bullshark certificate + StateHashMessage |
+
+That describes a design **L4 has already moved off**, and `layer4_types.go` says
+so in its own header: *"L4 replaces the former CometBFT `bindConsensusAppHash`
+assertions… That is chain state, not engine state, so the same evidence exists
+on CometBFT and on DAG-BFT."* The "full rewrite" row is stale relative to
+shipped code. Q6's honest answer is **no rewrite is needed**, and the migration
+doc should be corrected rather than cited.
+
+### 2.4 UNPLANNED FINDING — Kourou lets an anchor be authorized with NO validator signatures
+
+Found while verifying Q6. It is not a DAG-BFT issue, it is on `main`, and it is
+a nearer-term threat to L4's premise than anything in §2.3.
+
+`msg_block_anchor.go` on **origin/main**, `txnIsReady`:
+
+```go
+// :277-290
+// A collection proof under a root of the SOURCE that we already hold
+// authorizes the anchor by itself — no signature quorum (#4087).
+if ctx.blockAnchor.Proof != nil {
+    held, err := x.proofAnchorIsHeld(batch, ctx)
+    ...
+    if held { return true, nil }
+}
+```
+
+and `checkSignature` short-circuits entirely (`:243-249`):
+
+```go
+// A proof-authorized anchor carries no signature to check.
+if ctx.blockAnchor.Signature == nil { return nil }
+```
+
+The same mechanism is on `dagbft-integration` under a different issue number
+(`:271-276`, "#4056"), keyed off the directory root instead of the source root.
+**Both tracks have it.**
+
+**Gated, and not yet live.** It requires `V2KourouEnabled()`
+(`msg_block_anchor.go:126`; `protocol/version.go:70-71`,
+`v >= ExecutorVersionV2Kourou`). Measured executor versions:
+
+```
+ExecutorVersionV2Vandenberg = 7    <- MainNet runs this
+ExecutorVersionV2Jiuquan    = 8    <- Kermit runs this
+ExecutorVersionV2Kourou     = 9    (10 on dagbft-integration)
+protocol/version.go:14  ExecutorVersionLatest = ExecutorVersionV2Kourou
+```
+
+**Neither live network has it enabled today — but it is the next activation on
+`main`.**
+
+**Why this matters to CERTEN.** `layer4_types.go` states L4's premise as:
+
+> "anchors are threshold-signed at the *executor* layer (see accumulate-core
+> `internal/core/execute/v2/block/msg_block_anchor.go`: `txnIsReady` requires
+> `len(sigs) >= globals.Active.ValidatorThreshold(partition)`)"
+
+Under Kourou that becomes **conditionally false**. An anchor may be delivered,
+executed and become chain history with **zero validator signatures**. For such an
+anchor:
+
+- L4 cannot be built — there is no quorum to carry. That is a **capability
+  limit**, and must be reported as one, never as a governance rejection. This is
+  the exact defect class removed twice already (§2B.4e).
+- More seriously, a verifier must stop treating *"the network accepted this
+  anchor"* as implying *"a validator quorum signed it."* After Kourou those are
+  different statements.
+
+The collection-proof form is intended for recovery — the comment notes a
+historical quorum "can be impossible to re-gather after validator churn" — so
+normal anchors will still carry signatures. But CERTEN cannot rely on an
+intention. **This belongs in AIP A's compatibility section and in the Phase 4
+verifier contract**, and it should be raised with the maintainers before Kourou
+activates. It is cheap to handle now and expensive to discover in production.
+
+### 2.5 What Phase 2 changes about the deliverable
+
+- **Q7(c) is now the recommendation on cost grounds as well as feasibility**:
+  ~2.4 KB per proof against 640 KB–3 MB per verifier (§2.2 vs §2.1).
+- **The spine (AIP B) is cheap enough to be a genuine fallback**, not a
+  theoretical one — under 10 MB in every scenario measured. AIP B should say so
+  with these numbers rather than hedging.
+- **Q6 removes a supposed blocker**: no DAG-BFT rewrite is required for the
+  anchor-quorum primitive, and `DAGBFT_MIGRATION_ANALYSIS.md` needs correcting.
+- **A new compatibility hazard is on the record** (§2.4) that neither the
+  runbook nor the prompt anticipated, and that arrives *before* DAG-BFT.
+
+### 2.6 Still open after Phase 2
+
+- **Q10 — the simulated validator-set change is STILL NOT RUN.** Phase 1 built
+  the harness; Phase 2 used it for sizing but did not exercise a change. Every
+  size in §2.1 has `updates = 0` because the path has never run — the one number
+  in this section that is *structurally* unmeasured is the cost of a
+  `NetworkUpdateProof`. That is now the single largest hole in the evidence.
+- **§9.0.8** — whether `mainnet.accumulatenetwork.io` is the public MainNet
+  remains unresolved. Note it bites here: MainNet's "1 validator" is why its
+  per-record cost looks cheapest in §2.1, which would be a misleading number to
+  publish.
+- Q7 (Phase 3), Q8 (Phase 4), §4A implementation (Phase 4b), Q15 (Phase 4c).
