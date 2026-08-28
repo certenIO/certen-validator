@@ -3606,3 +3606,101 @@ Accumulate validator-set root, the incarnation identity, and the
 only artefact that survives a re-genesis, and across an incarnation boundary it
 is the strongest link CERTEN holds. What shrinks when this work lands is one
 sentence of caveat inside L5's own output, not L5.
+
+---
+
+## Post-Phase 6 (cont.) — Q15(iii) implemented: the L5 extension
+
+**Run 2026-08-28.** `accumulate-core` untouched. govRoot invariants pass
+unmodified.
+
+### P.15 What was added
+
+```
+pkg/execution/layer5_accumulate.go       AccumulateBinding + AccumulateSetRoot
+pkg/execution/layer5.go                  Layer5.Accumulate (optional), claim reworked
+pkg/execution/layer5_accumulate_test.go  10 tests
+```
+
+`Layer5` gains one optional field. §9.4c.4 specified this; it is now built.
+
+**L5 was extended, not changed.** `VerifyOffline`'s existing four steps are
+untouched, and a `Layer5` with no binding verifies exactly as before — asserted
+by `TestL5Ext_AbsentIsNotAFailure`.
+
+### P.16 Why L5 is the right home
+
+1. **It already reaches the external chain.** The root is committed in the anchor
+   transaction L5 already names, so the expansion belongs beside the coordinates
+   pointing at it.
+2. **L5 is not hashed into govRoot**, which commits L1-L4 and G0-G2 only. Adding
+   a field moves no signed preimage — verified, both invariants still pass.
+3. **An external anchor is the only artefact that survives a re-genesis**
+   (§2B.4b), which makes it exactly where the incarnation identity belongs.
+
+### P.17 The two halves now join
+
+`AccumulateSetRoot` computes, from the artifact's evidence, the same value
+`CertenAnchorV8_2`'s pre-exec message commits — using
+`contracts.ComputeAccumulateValidatorSetRoot`, the one canonical encoder, so the
+artifact and the anchor message cannot disagree about what was committed:
+
+```
+accumulateValidatorSetRoot = b4e93e74bfa583aec703dc42b2927cb4ba9560332e73705c66a81090626a0173
+```
+
+That closes §4A.5.1's requirement. Phase 4b put the root on chain; this is what
+lets anyone expand it. **Neither half was useful alone** and both now exist.
+
+### P.18 The caveat sentence NARROWED — it did not disappear
+
+`ExternalClaim()` is now conditional, and deliberately still bounded.
+
+**Without the extension the original sentence stands verbatim:**
+
+> *"This attests to whatever was signed, NOT to whether the Accumulate validator
+> set that signed L4 was the legitimate one."*
+
+**With evidence carried it becomes:**
+
+> *"It carries the Accumulate validator set as EVIDENCE (incarnation e3f3119…),
+> so the set that signed L4 can be derived from chain state rather than taken on
+> trust — but this line does not say the derivation was bound to a quorum-signed
+> anchor, nor that the incarnation was checked against an out-of-band pin. Verify
+> the binding and read its verdict; do not infer either from the presence of this
+> evidence."*
+
+The narrowed form still refuses to assert the two things a reader would most
+like to assume. `TestL5Ext_ClaimNeverOverstates` pins both directions: the
+original caveat must survive verbatim when no evidence is carried, and the
+narrowed form must never claim the set "is the legitimate one".
+
+**This is the sentence the project set out to make deletable, and the honest
+outcome is that it shrinks rather than vanishes.** It cannot vanish while the
+binding is unreachable (§P.7-P.8) and while a pin has to come from outside.
+
+### P.19 Present-and-weak versus present-and-wrong
+
+`AccumulateBindingResult` keeps the distinction the whole runbook turns on:
+
+| Situation | Result |
+|---|---|
+| no binding recorded | `Present: false` — the set is asserted; not an error |
+| present, weaker verdict | `Verdict` carries it; `Err` is nil |
+| present and inconsistent | `Err` set — proven wrong |
+
+Two inconsistencies are refused that the `ValidatorSetProof` alone would not
+catch: a restated `ValidatorSetRoot` that is not what the evidence produces, and
+a binding whose incarnation disagrees with its own proof's.
+
+### P.20 Still open
+
+Unchanged from §P.14, minus Q15(iii) which is now done:
+
+1. Publish the incarnation pin per network, in more than one place.
+2. Submit AIP-058 — without it the binding stays unreachable.
+3. Cut over the three EVM networks together.
+4. Resolve §9.0.8.
+5. Decide whether to wire the builder into the proof cycle (§P.13), which is
+   also what would populate `Layer5.Accumulate` on real proofs. Today the field
+   exists and nothing fills it.
