@@ -92,7 +92,12 @@ func (e KeyPageEntry) IsEmpty() bool { return e.KeyHash == "" && e.Delegate == "
 // the same account compare equal. Accumulate URLs are case-insensitive in their
 // authority part and the API is not consistent about case.
 func normalizeAccURL(u string) string {
-	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(u)), "/")
+	// One definition of the canonical spelling, shared with
+	// URLUtils.NormalizeURL. These two had drifted - NormalizeURL returned
+	// acc:// URLs untouched, so it did not lower-case and did not strip a
+	// trailing slash - and a normalisation that behaves two ways is how one
+	// spelling of a page fails to match another.
+	return canonicalAccSpelling(u)
 }
 
 // deriveKeyHashes returns the key-hash subset of a page's entries.

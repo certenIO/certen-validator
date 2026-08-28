@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -78,13 +79,61 @@ func (m *MockRPCClient) AddMockResponse(scope string, response map[string]interf
 	m.responses[scope] = response
 }
 
-// Query returns mock response for testing
+// Query returns the recorded response for testing.
 func (m *MockRPCClient) Query(ctx context.Context, scope string, query map[string]interface{}) (map[string]interface{}, error) {
-	if response, exists := m.responses[scope]; exists {
+	if response, exists := m.responses[normalizeAccURL(scope)]; exists {
 		return response, nil
 	}
 	return nil, ValidationError{Msg: "Mock response not found for scope: " + scope}
 }
+
+// QueryRaw and GetEndpoint complete RPCClientInterface.
+//
+// Without these this type did not satisfy the interface, and the two G0 tests
+// worked around that by building a REAL client pointed at the endpoint "test"
+// - which cannot resolve - while still populating this one. The recorded
+// responses were fed to a client that was never called, so the tests could only
+// ever fail with "unsupported protocol scheme". They are the reason those two
+// tests were red from the day the layer moved to an interface.
+func (m *MockRPCClient) QueryRaw(ctx context.Context, scope string, query map[string]interface{}) ([]byte, error) {
+	resp, err := m.Query(ctx, scope, query)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(resp)
+}
+
+func (m *MockRPCClient) GetEndpoint() string { return "recorded" }
+
+// loadRecordedResponse reads a response captured from the live network.
+//
+// These fixtures are REAL Kermit bytes for a real transaction
+// (1f25bb6ae4cad401… on acc://certen-kermit-12.acme/data, captured 2026-08-28),
+// not a hand-written shape. A fixture we invent to match our own parser proves
+// only that we agree with ourselves; one recorded off the wire tests the parser
+// against what Accumulate actually sends, and does it offline and
+// deterministically.
+func loadRecordedResponse(t *testing.T, name string) map[string]interface{} {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("testdata", name))
+	if err != nil {
+		t.Fatalf("read recorded response %s: %v", name, err)
+	}
+	var out map[string]interface{}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("recorded response %s is not JSON: %v", name, err)
+	}
+	return out
+}
+
+// The transaction the recorded fixtures describe.
+const (
+	recordedAccount    = "acc://certen-kermit-12.acme/data"
+	recordedTxHash     = "1f25bb6ae4cad401ddede00c5711d871b02dd0bae20e027d2194fae5c7f12c5f"
+	recordedExecMBI    = int64(10214060)
+	recordedMessageID  = "acc://1f25bb6ae4cad401ddede00c5711d871b02dd0bae20e027d2194fae5c7f12c5f@certen-kermit-12.acme/data"
+	recordedChainIndex = 291
+)
 
 // createTestWorkDir creates temporary working directory for tests
 func createTestWorkDir(t *testing.T) string {
@@ -357,27 +406,24 @@ func TestAuthorityBuilder(t *testing.T) {
 // TestG0Layer tests G0 proof generation
 func TestG0Layer(t *testing.T) {
 	workDir := createTestWorkDir(t)
-	mockClient := NewMockRPCClient()
 	artifactManager, err := NewArtifactManager(workDir)
 	if err != nil {
 		t.Fatalf("Failed to create artifact manager: %v", err)
 	}
-	// Create a real RPC client since g0Layer expects *RPCClient
-	rpcConfig := RPCConfig{Endpoint: "test", UseHTTP: true}
-	rpcClient := NewRPCClient(rpcConfig)
-	g0Layer := NewG0Layer(rpcClient, artifactManager)
 
-	fixtures := createTestFixtures()
-
-	// Setup mock responses
-	setupMockG0Responses(mockClient, fixtures)
+	// The recorded client, not a real one aimed at an endpoint that cannot
+	// resolve. Both G0 queries (inclusion, then the expanded binding) are
+	// answered from the same recorded record, which is what the live endpoint
+	// returns for both.
+	client := NewMockRPCClient()
+	client.AddMockResponse(recordedAccount, loadRecordedResponse(t, "g0_inclusion.json"))
+	g0Layer := NewG0Layer(client, artifactManager)
 
 	request := G0Request{
-		Account:    fixtures.SampleAccount,
-		TxHash:     fixtures.SampleTxHash,
-		Chain:      "main",
-		V3Endpoint: "http://localhost:26660/v3",
-		WorkDir:    workDir,
+		Account: recordedAccount,
+		TxHash:  recordedTxHash,
+		Chain:   "main",
+		WorkDir: workDir,
 	}
 
 	t.Run("G0ProofGeneration", func(t *testing.T) {
@@ -386,24 +432,50 @@ func TestG0Layer(t *testing.T) {
 
 		result, err := g0Layer.ProveG0(ctx, request)
 		if err != nil {
-			t.Errorf("Expected no error, got: %v", err)
-			return
+			t.Fatalf("G0 over a recorded real response failed: %v", err)
 		}
 
-		// Validate G0 result
-		if result.TXID != fixtures.SampleTxHash {
-			t.Errorf("Expected TXID %s, got %s", fixtures.SampleTxHash, result.TXID)
+		if result.TxHash != recordedTxHash {
+			t.Errorf("TxHash = %s, want %s", result.TxHash, recordedTxHash)
 		}
-		if result.ExecMBI != fixtures.SampleExecMBI {
-			t.Errorf("Expected ExecMBI %d, got %d", fixtures.SampleExecMBI, result.ExecMBI)
+		// The execution block comes from the receipt the network actually sent.
+		if result.ExecMBI != recordedExecMBI {
+			t.Errorf("ExecMBI = %d, want %d (receipt.localBlock in the recording)",
+				result.ExecMBI, recordedExecMBI)
+		}
+		if result.ExpandedMessageID != recordedMessageID {
+			t.Errorf("ExpandedMessageID = %s, want %s", result.ExpandedMessageID, recordedMessageID)
 		}
 		if !result.G0ProofComplete {
-			t.Error("Expected G0ProofComplete to be true")
+			t.Error("G0ProofComplete is false on a proof that returned no error")
+		}
+		// G0 must carry the transaction forward for G1's authority derivation.
+		if g0Layer.Transaction() == nil {
+			t.Error("G0 did not carry the transaction forward; G1 cannot derive the " +
+				"authorities the body requires")
+		}
+	})
+
+	// The binding check must be insensitive to how the CALLER spelled the
+	// account, since one side of that comparison is built from this string and
+	// the other comes off the wire.
+	t.Run("G0BindingIsSpellingInsensitive", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		shouty := NewMockRPCClient()
+		shouty.AddMockResponse(recordedAccount, loadRecordedResponse(t, "g0_inclusion.json"))
+		layer := NewG0Layer(shouty, artifactManager)
+
+		loud := request
+		loud.Account = "ACC://Certen-Kermit-12.acme/data/"
+
+		if _, err := layer.ProveG0(ctx, loud); err != nil {
+			t.Fatalf("the same account spelled differently failed the message-ID binding: %v", err)
 		}
 	})
 }
 
-// setupMockG0Responses sets up mock RPC responses for G0 testing
 func setupMockG0Responses(mockClient *MockRPCClient, fixtures *TestFixtures) {
 	// Mock execution inclusion response
 	executionResponse := map[string]interface{}{
@@ -430,49 +502,49 @@ func setupMockG0Responses(mockClient *MockRPCClient, fixtures *TestFixtures) {
 // Integration Tests - Complete Workflow
 // =============================================================================
 
-// TestCompleteWorkflow tests complete proof generation workflow
+// TestCompleteWorkflow drives G0 over a recorded real response.
+//
+// The name promises more than it does, and the body now says exactly where the
+// promise stops rather than leaving a reader to assume G1 and G2 are covered.
 func TestCompleteWorkflow(t *testing.T) {
-	// This test would set up a complete mock environment and test
-	// the full G0 -> G1 -> G2 progression
-
 	workDir := createTestWorkDir(t)
-	fixtures := createTestFixtures()
 
 	t.Run("G0_to_G1_to_G2_Progression", func(t *testing.T) {
-		// Setup mock environment
-		mockClient := NewMockRPCClient()
-		setupCompleteWorkflowMocks(mockClient, fixtures)
-
-		// Test G0
 		artifactManager, err := NewArtifactManager(workDir)
 		if err != nil {
 			t.Fatalf("Failed to create artifact manager: %v", err)
 		}
-		// Create a real RPC client since g0Layer expects *RPCClient
-		rpcConfig := RPCConfig{Endpoint: "test", UseHTTP: true}
-		rpcClient := NewRPCClient(rpcConfig)
-		g0Layer := NewG0Layer(rpcClient, artifactManager)
+
+		client := NewMockRPCClient()
+		client.AddMockResponse(recordedAccount, loadRecordedResponse(t, "g0_inclusion.json"))
+		g0Layer := NewG0Layer(client, artifactManager)
 
 		ctx := context.Background()
-		g0Request := G0Request{
-			Account: fixtures.SampleAccount,
-			TxHash:  fixtures.SampleTxHash,
+		g0Result, err := g0Layer.ProveG0(ctx, G0Request{
+			Account: recordedAccount,
+			TxHash:  recordedTxHash,
 			Chain:   "main",
 			WorkDir: workDir,
-		}
-
-		g0Result, err := g0Layer.ProveG0(ctx, g0Request)
+		})
 		if err != nil {
-			t.Errorf("G0 proof failed: %v", err)
-			return
+			t.Fatalf("G0 proof failed: %v", err)
 		}
-
 		if !g0Result.G0ProofComplete {
 			t.Error("G0 proof should be complete")
 		}
 
-		// Note: Full G1 and G2 testing would require more complex mock setup
-		// This demonstrates the testing approach for the complete workflow
+		// G1 and G2 are NOT exercised here, and saying so is the point.
+		//
+		// They need the signature sets, the authority snapshot and the key page
+		// history, none of which this single recorded record carries. The real
+		// G1/G2 verification is the Phase 7/8 corpus, which runs the actual
+		// prover against Kermit over seventeen provisioned key shapes
+		// (phase7_corpus_test.go, phase8_*_test.go). A local fixture that
+		// pretended to cover them would be the overclaim this package keeps
+		// removing.
+		if g0Result.ExecMBI != recordedExecMBI {
+			t.Errorf("ExecMBI = %d, want %d", g0Result.ExecMBI, recordedExecMBI)
+		}
 	})
 }
 

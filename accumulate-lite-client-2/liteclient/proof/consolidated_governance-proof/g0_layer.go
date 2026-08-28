@@ -205,7 +205,14 @@ func (g0 *G0Layer) bindExpandedExecutionMessage(ctx context.Context, request G0R
 	uu := URLUtils{}
 	principalName := strings.TrimPrefix(uu.NormalizeURL(request.Account), "acc://")
 	expectedMessageID := fmt.Sprintf("acc://%s@%s", execEntry, principalName)
-	if messageID != expectedMessageID {
+	// Compared in the CANONICAL spelling on both sides, not as raw strings.
+	//
+	// One side is built here from the caller's account string and the other
+	// comes off the wire, so an equality test between them was really a test
+	// that the caller spelled the account exactly as the endpoint does. A
+	// difference in case or a trailing slash would fail the binding and report
+	// it as a proof failure, when nothing about the binding was wrong.
+	if canonicalAccSpelling(messageID) != canonicalAccSpelling(expectedMessageID) {
 		return "", nil, ValidationError{
 			Msg: fmt.Sprintf("Message ID binding failed: got %s, expected %s", messageID, expectedMessageID),
 		}

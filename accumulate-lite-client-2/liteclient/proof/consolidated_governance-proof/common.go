@@ -125,21 +125,58 @@ func (hv HexValidator) AsHex32(x interface{}) string {
 // URLUtils provides utilities for URL and scope handling
 type URLUtils struct{}
 
-// NormalizeURL normalizes Accumulate URL to standard format
+// NormalizeURL normalizes an Accumulate URL to one canonical spelling: the
+// acc:// scheme, lower case, and no trailing slash.
+//
+// # WHY THE LOWER-CASING AND THE TRAILING SLASH MATTER
+//
+// This used to return `u` unchanged whenever it already began with "acc://",
+// so `ACC://Example.acme`, `acc://example.acme/` and `acc://example.acme` were
+// three different strings for one account. That is not cosmetic here: the
+// result of this function is used as a MAP KEY and for STRING EQUALITY all
+// through delegation and authority resolution -
+//
+//	g1_delegated_enumeration.go   idx.sets[NormalizeURL(url)] = rec
+//	g1_layer.go                   NormalizeURL(aurlStr) == pageURLNorm
+//	g1_signature_routes.go        p := NormalizeURL(r) ... page comparisons
+//
+// - so two spellings of the same page would fail to match, the page would not
+// be recognised as one already seen or already required, its signature would
+// not be collected, and the threshold would come up short. That surfaces as a
+// GOVERNANCE REJECTION of a transaction the network accepted, which is the
+// failure this package ranks above every other.
+//
+// Accumulate URLs are case-insensitive, so lower-casing loses nothing. The
+// newer authority code already normalised this way (normalizeAccURL); the two
+// had drifted, and a normalisation that exists twice with two behaviours is
+// exactly the kind of thing that produces a confident wrong answer.
+//
+// TestURLUtils pins all five cases.
 func (URLUtils) NormalizeURL(u string) string {
 	if u == "" {
 		return u
 	}
-	if strings.HasPrefix(u, "acc://") {
-		return u
+
+	trimmed := strings.TrimSpace(u)
+	switch {
+	case strings.HasPrefix(strings.ToLower(trimmed), "acc://"):
+		// already scheme-qualified
+	case strings.HasPrefix(strings.ToLower(trimmed), "acc:"):
+		trimmed = "acc://" + trimmed[4:]
+	case !strings.Contains(trimmed, "://"):
+		trimmed = "acc://" + trimmed
 	}
-	if strings.HasPrefix(u, "acc:") {
-		return "acc://" + u[4:]
-	}
-	if !strings.Contains(u, "://") {
-		return "acc://" + u
-	}
-	return u
+
+	return canonicalAccSpelling(trimmed)
+}
+
+// canonicalAccSpelling is the one place the canonical spelling is defined:
+// trimmed, lower case, no trailing slash.
+//
+// Both NormalizeURL and normalizeAccURL delegate here so the two cannot drift
+// apart again.
+func canonicalAccSpelling(u string) string {
+	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(u)), "/")
 }
 
 // NormalizeScope normalizes scope string for RPC queries
