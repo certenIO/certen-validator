@@ -94,13 +94,28 @@ The maintainer corrected two things on 2026-08-28, both since confirmed:
     continuation of the chain before it. Every restart is a TRUST
     DISCONTINUITY. Name it; never smooth over it.
 
+    SETTLED, DO NOT RESEARCH IT: protocol/types_gen.go:995 on origin/main shows
+    `type SystemGenesis struct` is an EMPTY STRUCT - no prior-state root, no
+    commitment to the incarnation before it. So a validator set in incarnation
+    N-1 CANNOT be proven from incarnation N's chain, by any API. Do not spend
+    time looking for a way; spend it on what verdict a verifier should give
+    instead (Q12a).
+
     Two consequences you must carry into the design:
       * A stored CERTEN proof may not survive a restart. Nobody has established
         what happens (Q12). The dangerous outcome is not "fails" - it is
         "appears to verify against re-created state".
       * L5 gets STRONGER, not weaker. An anchor published to an external chain
         is the only artefact independent of Accumulate's incarnation. Across a
-        re-genesis it may be the strongest link CERTEN holds.
+        re-genesis it is the ONLY link CERTEN holds. And it operates at the
+        right granularity already: measured in production, anchoring is
+        PER-INTENT (403 on_demand vs 26 on_cadence, 21 networks, submit ->
+        anchored in ~5 min), NOT the 12-hourly major-block cadence.
+        But be precise: an external anchor proves "this proof, with this
+        content, existed by time T on a chain that did not restart". It does
+        NOT retroactively make the Accumulate validator set legitimate. That is
+        a weaker, DIFFERENT claim and must be labelled as one - never allowed to
+        report the same verdict as a within-incarnation proof.
 
 TREAT ALL THREE SECTIONS AS LEADS, NOT AS TRUTH. They were read once and may be
 stale or wrong. Re-verify. Where they are wrong, say so plainly and correct

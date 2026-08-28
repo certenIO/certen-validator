@@ -356,6 +356,63 @@ state re-created at genesis.
    a re-genesis** — it is independent of Accumulate's incarnation. Across a
    restart, L5 may be the strongest link CERTEN holds, not the weakest.
 
+### 2B.4a Cross-restart continuity is IMPOSSIBLE from the chain — measured
+
+`protocol/types_gen.go:995` on `origin/main`:
+
+```go
+type SystemGenesis struct {
+    fieldsSet []bool
+    extraData []byte
+}
+```
+
+**An empty struct.** The genesis transaction carries no prior-state root, no
+previous-chain commitment, no linkage of any kind to the incarnation before it.
+
+So this is settled, and it does not need researching:
+
+> **A validator set in incarnation N-1 cannot be proven from incarnation N's
+> chain. Not with a better API, not with more receipts. The chain contains no
+> commitment to what preceded it.**
+
+What remains researchable is the *consequence*: what a verifier should do when a
+proof references an incarnation that is no longer the live one, and what weaker
+claim can still be honoured (see §2B.4b).
+
+### 2B.4b L5 is the only cross-incarnation bridge — and its cadence supports it
+
+Measured against the production proof database 2026-08-28:
+
+```
+proof_class:   on_demand 403   |   on_cadence 26
+anchors by network (top):  ethereum-sepolia 157, sepolia 70, base-sepolia 54,
+                           arbitrum-sepolia 28, near-testnet 23   (21 networks)
+anchors per day:           2, 8, 2, 1, 5, 7, 1, 16  — tracks TRAFFIC, not a clock
+```
+
+**External anchoring is PER-INTENT, not per-major-block.** It is not the
+12-hourly major-block cadence — an on-demand intent is anchored within minutes
+(measured this session: submit → anchored on base-sepolia in ~5 min). The L5
+merkle path proves *this intent's leaf* into the batch root that was published.
+So L5 already operates at exactly the granularity CERTEN's model needs.
+
+That matters because the anchor is on a chain that **did not restart**. It is
+the only artefact that survives a re-genesis.
+
+**But be precise about what it proves.** An external anchor establishes:
+
+> this proof, with exactly this content, existed no later than block B on chain
+> C at time T
+
+It does **not** retroactively establish that the Accumulate validator set which
+signed L4 was legitimate. Across a restart, that legitimacy is unrecoverable.
+The honest post-restart claim is a **non-repudiable existence and time
+witness**, not a governance proof — and it must be labelled as a different,
+weaker claim, in the same way `summary_only` marks the 402 proofs that predate
+L4 persistence. Do not let a cross-incarnation proof report the same verdict as
+a within-incarnation one.
+
 ### 2B.4 The requirement, restated honestly
 
 Replace §1's one-liner with:
@@ -428,6 +485,14 @@ proof belongs to, from the artifact alone? Is there a network/chain identifier
 that changes on restart (`networkName`, a genesis hash, an executor version)?
 If not, two incarnations are indistinguishable inside a stored proof, and that
 must be fixed before anything else in this document matters.
+
+**Q12a — What is the correct post-restart verdict?** Given §2B.4a (continuity is
+impossible) and §2B.4b (L5 survives), define the outcome a verifier must produce
+for a proof from a previous incarnation. It must be a distinct, named state -
+neither "verified" nor "failed" - carrying what IS still established (existence,
+content, external timestamp) and what is not (validator-set legitimacy). Model
+it on `summary_only`. Then say where that marker lives, given govRoot must not
+move.
 
 **Q12 — Proof survival across a restart.** Take a CERTEN proof anchored to the
 previous incarnation. Against the current chain: does it still verify, fail
