@@ -3287,3 +3287,119 @@ project has removed before:
   property holds, the check needs the pending hash too.
 - AIP-058's adversary claim, `ForHeight` semantics, chain-height binding note,
   and the matching passages in its issue body — **corrected in place**.
+
+---
+
+## Post-Phase 6 — §6.8 items 1 and 2 implemented
+
+**Run 2026-08-28.** `accumulate-core` **not modified**. Commit `2858e5e`.
+
+§6.8 recommended six things. Items 3-6 (publish the pin, cut over, submit
+AIP-058, ask the maintainer) are outward-facing and need the maintainer or an
+operator. Items 1 and 2 are done here, with 1 folded into 2 rather than written
+as prose and then re-written as code.
+
+### P.1 What was built
+
+```
+pkg/proof/validator_set_proof.go        the type and steps 10-17
+pkg/proof/validator_set_decode.go       decoding the two network accounts
+pkg/proof/validator_set_proof_test.go   20 tests
+pkg/proof/testdata/…_kermit.json        a REAL fixture captured from Kermit
+docs/l4/phase7_binding_probe/           live validation of the binding
+```
+
+It lives in `pkg/proof`, beside `timing_evidence.go`, not reachable from any
+canonical hash. `TestP6_GovRootInvariant_GoldenSlots` and
+`TestP6_CanonicalShapesUnchanged` still pass unmodified — **govRoot did not
+move.**
+
+### P.2 Both Phase 6 defects are fixed in the code, not just the prose
+
+**Defect 2 (§9.6.2)** — `SecondaryHash` and `PendingHash` are carried, and
+`verifyChainBinding` recomputes `H(chains || pending)` and checks it against the
+receipt's second step. `TestVSP_PendingHashIsRequired` fails the build of any
+future version that drops them.
+
+**Defect 1 (§9.6.1)** — `Verify` takes a `PinnedIncarnation`. Without one it
+returns `VerdictIncarnationUnverified`, which `Verdict.Weaker()` reports as less
+than verified. The package comment states the circularity in full so no future
+reader mistakes derivation for sufficiency.
+
+### P.3 The threshold is derived too — a third defect, found while building
+
+Phase 4 specified one account, `acc://dn.acme/network`. But the accept threshold
+lives in `acc://dn.acme/globals`. Carrying it as an assertion beside a derived
+membership would have left exactly the defect §2B.4c named: **a commitment to who
+signed, without a commitment to how many were required, cannot tell a real quorum
+from three arbitrary keys.**
+
+So `ValidatorSetProof` proves **two** accounts, and `Verify` refuses unless both
+resolve to the same BPT root — otherwise the set and the threshold need never
+have coexisted.
+
+### P.4 A fourth defect, found by a test that was supposed to pass
+
+`TestVSP_RefusesTampering/chain_height_inflated` **failed on first run**: the
+proof was accepted with `Count` changed from 1 to 99.
+
+The chains component is built from each chain's DAG *anchor*, and `Count` was a
+free-standing field beside it. Editing `Count` changed nothing the binding
+covered.
+
+The dangerous direction is not inflation, it is **deflation**: understating the
+height makes an account whose validator set has changed several times look like
+it still holds its genesis set, so step 16's base case fires on a set that is not
+the genesis set. That is the precise failure this whole runbook exists to
+prevent, reintroduced by a convenience field.
+
+**Fixed** by carrying the chain's merkle `State.Pending` list — the sparse list
+whose non-nil entries are the binary representation of the height and whose fold
+is the DAG root. Both `Count` and `Anchor` are now **recomputed** from it and any
+disagreement is refused, the same discipline `layer4_types.go` applies to its
+restated anchor fields. Lying about the height now requires a hash collision
+rather than an edited integer. Both directions are covered by tests.
+
+### P.5 Validated against the live network, not just against itself
+
+`docs/l4/phase7_binding_probe` confirms a client can derive both hasher
+components from what the public API already returns, and that the derivation
+matches the receipt byte-for-byte:
+
+```
+=== kermit : acc://dn.acme/network ===
+  secondary sibling : 0000…0000   derivable as 32 zero bytes: true
+  H(chains||pending): 022a7648ef84ad35efa728b03f60d853cd01f61d007050a86a941d73ebc437a6
+  receipt step[1]   : 022a7648ef84ad35efa728b03f60d853cd01f61d007050a86a941d73ebc437a6
+  CHAIN HEIGHTS BOUND: true
+=== kermit : acc://dn.acme/globals ===   CHAIN HEIGHTS BOUND: true
+```
+
+And the tests run offline against a fixture of that same real evidence:
+
+```
+derived 3 validators, threshold 2/3, network main chain height 1
+  40e6e8b96de7e7ed active on [Directory BVN1]
+  625b03bfad7d82b1 active on [Directory BVN2]
+  0f9f714a43c0c337 active on [Directory BVN3]
+height 1 => only the genesis entry exists => this IS the genesis set of this incarnation
+```
+
+**The base case is now cryptographically bound rather than asserted, using only
+the public API as it exists today** — no AIP required for the current-state case.
+AIP-058 remains necessary for the historical case, which is what breaks the
+moment the set changes.
+
+### P.6 What is still not done
+
+- **The builder is not wired into the proof cycle.** `layer4.go:255` still
+  asserts, and nothing yet populates a `ValidatorSetProof` during a real proof
+  build. The capture tool in the probe shows the shape; production wiring is the
+  next code change.
+- **`signV8_2PreExecBLS` is still not called** (`bft_integration.go:1221` calls
+  V6.1), and nothing is deployed. §9.4b.8 stands unchanged.
+- **Steps 16's `height > 1` path returns `validator_set_asserted`** — correct
+  today, because the historical membership path AIP-058 asks for does not exist.
+  When it does, that branch becomes the induction.
+- §6.8 items 3-6 remain: publish the pin, cut over all three networks together,
+  submit AIP-058, and resolve §9.0.8 with the maintainer.
