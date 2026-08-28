@@ -134,7 +134,38 @@ SECTIONS 2B.4c/d/e — THE ANCHOR AND L5. Also measured 2026-08-28:
     WHO SIGNED and HOW MANY WERE NEEDED, never WHO WAS ELIGIBLE. The
     denominator is missing, so a fabricated proof listing arbitrary keys as
     Signers produces a consistent govRoot no on-chain check can distinguish.
-    Q14 decides where the Accumulate validator-set commitment should live.
+    Q14 IS DECIDED, NOT OPEN. The maintainer decided 2026-08-28: the
+    Accumulate validator-set root and the incarnation identity go in the
+    ANCHOR PRE-EXEC MESSAGE - the message CERTEN's quorum signs and the anchor
+    contract verifies. Not govRoot alone, not the L5 artifact alone.
+    IMPLEMENT IT; DO NOT RE-LITIGATE IT. Runbook section 4A has the full
+    rationale, the honest limits and the scope. Three things from it you must
+    carry:
+
+      * BE ACCURATE ABOUT WHY. govRoot would ALSO have been cryptographically
+        sufficient - it is committed on chain, so a field in its preimage is
+        bound one hash deeper. Do NOT write that the chosen option was the only
+        sound one. It was chosen for explicit quorum attestation, for putting
+        BOTH validator states side by side in one signed message, for symmetry
+        with the existing currentValidatorSetRoot mechanism, and because CERTEN
+        is PRE-MAINNET AND PRE-REAL-USERS - a signed-preimage change plus
+        anchor redeploy plus re-pinning immutable CertenAccounts is cheap now
+        and impossible later.
+
+      * STATE WHAT IT DOES NOT BUY. The contract still cannot VALIDATE the
+        Accumulate set - it cannot run the induction walk or verify ed25519
+        quorums on chain. This makes the set COMMITTED and NON-SUBSTITUTABLE;
+        validation stays offline. Anyone reading it as "the chain now verifies
+        Accumulate governance" has been misled, and your documents must
+        prevent that reading.
+
+      * IT IS 8 CHAIN FAMILIES, NOT ONE. EVM, NEAR, Solana, Aptos, Sui, TON,
+        Cardano (+ cosmwasm) each build the pre-exec message independently
+        (pkg/execution/contracts/v6_1_binding*.go,
+        pkg/consensus/v6_1_signing.go signV6_1PreExecBLS*). They must all
+        change TOGETHER under a bumped domain tag (certen:bls:v2:pre or
+        similar). A partial rollout is the PHASE8 rule-15 mixed-fleet hazard
+        one layer out.
 
   - L5 IS ALREADY UNIVERSAL, AND THE ANCHOR IS ALREADY PAID FOR. 421 of 429
     proofs (98%) already carry an anchor_tx_hash. L5 coverage went 0/15 before
@@ -255,11 +286,13 @@ ORDER OF WORK
   Runbook Phase 2   Q4-Q6  point query, cost, DAG-BFT         -> Gate 2
   Runbook Phase 3   Q7     evaluate the options               -> Gate 3
   Runbook Phase 4   Q8     the CERTEN-side verifier contract  -> Gate 4
-  Runbook Phase 4b  Q14    where the Accumulate validator-set commitment
-                           lives (anchor message / govRoot / L5 artifact)
-                    Q15    the L5 workstream, as THREE separate deliverables:
+  Runbook Phase 4b  Implement section 4A - the anchor-message commitment,
+                           all 8 chain families together, bumped domain tag,
+                           offline-expandable, canonically encoded, carrying
+                           threshold + membership + incarnation  -> Gate 4b
+  Runbook Phase 4c  Q15    the L5 workstream, as THREE separate deliverables:
                            error handling, backfill of the historical 419,
-                           and the extension                     -> Gate 4b
+                           and the extension                     -> Gate 4c
   Runbook Phase 5   Draft the AIP(s)                          -> Gate 5
   Runbook Phase 6   Adversarial review                        -> final gate
 
@@ -289,9 +322,15 @@ DEFINITION OF DONE
       accept, what it would refuse, how the stored artifact grows, and whether
       govRoot moves (it must not, unless deliberately versioned - see
       pkg/proof/timing_evidence.go for the beside-the-hash pattern).
-  [ ] A decision on WHERE the Accumulate validator-set commitment lives (Q14),
-      with rejected options and the offline-expandability argument. A committed
-      root nobody can expand is decoration that looks like coverage.
+  [ ] Section 4A implemented as DECIDED: the commitment is a named field of the
+      anchor pre-exec message, under a bumped domain tag, in ALL 8 CHAIN
+      FAMILIES TOGETHER - never a partial rollout.
+  [ ] The commitment is OFFLINE-EXPANDABLE (the artifact carries the full
+      validator set and induction path), canonically encoded (sorted,
+      length-prefixed, domain-separated), and commits threshold + membership +
+      incarnation - not just the signers.
+  [ ] The docs state plainly that the contract COMMITS the Accumulate set and
+      does NOT validate it.
   [ ] The L5 workstream split into its three deliverables (Q15) and reported
       separately: error handling for a missing L5, backfill of the historical
       419 (mark, never fabricate), and the extension carrying the Accumulate

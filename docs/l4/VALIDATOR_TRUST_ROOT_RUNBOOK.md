@@ -628,16 +628,11 @@ is unprovable from the DN's hash-only entry. Redo it against **partition block
 0/1** (§2B.1), which is where genesis actually is. The conclusion may change
 completely.
 
-**Q14 — Where does the Accumulate validator-set commitment go?** §2B.4c: the
-deployed `CertenAnchorV8_1` binds CERTEN's validator set as on-chain state and
-has no Accumulate-validator concept. Evaluate, do not assume:
-  - (a) in the anchor pre-exec message — changes the signed preimage AND the
-        contract, needs a redeploy and a migration for pinned accounts
-  - (b) in `govRoot` — changes the preimage only, no contract change, but the
-        value is opaque on chain
-  - (c) in the L5 artifact only — cheapest, but then nothing on chain binds it
-Whatever is chosen must be **expandable offline**. A committed root nobody can
-expand is decoration that looks like coverage. State the artifact size cost.
+**Q14 — DECIDED, NOT OPEN: the commitment goes in the ANCHOR PRE-EXEC MESSAGE.**
+
+Decision taken 2026-08-28 by the maintainer. Do not re-litigate it; implement
+it. The remaining work is *how*, not *whether*. See §4A for the full rationale,
+the honest limits, and the scope.
 
 **Q15 — The L5 workstream.** §2B.4d/e measured: 98% of proofs already carry an
 anchor (the gas is spent), L5 is 100% for proofs produced since it shipped, and
@@ -660,6 +655,95 @@ timeline is provable. Phase 8's record: five defects, all found only by running.
 **Q8 — What CERTEN must build regardless.** Whatever the API, the verifier side
 is CERTEN's. What does `layer4_verify.go` need so that `ValidatorSet` is
 *derived* rather than *asserted*?
+
+---
+
+## 4A. DECISION — the Accumulate validator-set commitment goes in the anchor message
+
+### 4A.1 What was decided
+
+The Accumulate validator-set root, and the incarnation identity, are added as
+**named fields of the anchor pre-exec message** — the message CERTEN's validator
+quorum signs and the anchor contract verifies. Not govRoot alone, not the L5
+artifact alone.
+
+### 4A.2 Why, honestly
+
+Be accurate about this, because an overclaim here would be the same defect this
+project keeps deleting: **govRoot (option b) would also be cryptographically
+sufficient for an offline verifier.** govRoot is itself committed on chain, so a
+field added to its preimage is bound just as tightly, one hash deeper. Anyone
+claiming (a) is the *only* sound option is wrong.
+
+(a) is nonetheless the right choice, for four reasons that are about legibility
+and timing rather than raw soundness:
+
+1. **Explicit quorum attestation.** CERTEN's validators sign the pre-exec
+   message. Putting the Accumulate set root *there* makes the quorum explicitly
+   attest to **which Accumulate validator set it saw** — a named commitment,
+   not one buried inside a hash preimage that happens to contain it.
+2. **Both validator states, side by side, in one signed message.** That is
+   precisely the end-to-end binding the system is missing:
+   `currentValidatorSetRoot` (CERTEN, already on-chain state) and
+   `accumulateValidatorSetRoot` (the set that signed L4) in the same attestation.
+3. **Symmetry with an existing, proven mechanism.** V8_1 already rejects any
+   signature whose claimed CERTEN set root is stale
+   (`CertenAnchorV8_1.sol:541`). The same shape extends naturally.
+4. **The window is now.** CERTEN is **pre-mainnet and pre-real-users**. Changing
+   a signed preimage means a contract redeploy plus re-pinning every
+   `CertenAccount` (they are immutable and pinned via `initializeAnchor`). That
+   is cheap today and effectively impossible once real value and real users
+   depend on the deployed set. This is the last clean moment.
+
+### 4A.3 What this does NOT buy — state it in the AIP and the spec
+
+**The contract still cannot validate the Accumulate validator set.** It cannot
+run the induction walk, and it cannot verify Accumulate's ed25519 quorum. (a)
+makes the set **committed and non-substitutable**; the *validation* stays
+offline, in the verifier that expands the artifact.
+
+So the honest claim after this lands is:
+
+> The anchor binds which Accumulate validator set the CERTEN quorum attested to.
+> An offline verifier can expand that root and check the induction to the
+> incarnation's genesis. The contract does not, and cannot, check it on chain.
+
+Anyone reading this as "the chain now verifies Accumulate governance" has been
+misled, and the documents must prevent that reading.
+
+### 4A.4 Scope — 8 chain families, not one
+
+The pre-exec message is constructed independently per chain family. **Every one
+must change together, or a proof signed for one chain will not verify on
+another** — and a partial rollout is the mixed-fleet hazard from `PHASE8_RUNBOOK`
+rule 15, one layer out:
+
+```
+pkg/execution/contracts/     v6_1_binding.go          EVM
+                             v6_1_binding_near.go     NEAR
+                             v6_1_binding_solana.go   Solana
+                             v6_1_binding_aptos.go    Aptos
+                             v6_1_binding_sui.go      Sui
+                             v6_1_binding_ton.go      TON
+                             v6_1_binding_cardano.go  Cardano
+pkg/consensus/v6_1_signing.go   signV6_1PreExecBLS{,Near,Solana,Aptos,Sui,Ton,Cardano}
+certen-contracts/               evm/src/core/CertenAnchorV8_1.sol, aptos-cli/,
+                                cardano/, cosmwasm/, + per-chain programs
+```
+
+### 4A.5 Required properties of the commitment
+
+1. **Offline-expandable.** The artifact must carry the full validator set (and
+   the induction path) so a verifier can recompute the root. A committed root
+   nobody can expand is decoration that looks like coverage.
+2. **Canonically encoded.** Sorted, length-prefixed, domain-separated. Rule 12:
+   two validators reading identical chain data must produce identical bytes.
+3. **Carries the incarnation identity** (§2B) — a permanent on-chain record must
+   say which chain incarnation it is about.
+4. **Commits the threshold and the membership**, not only the signers. The
+   missing denominator (§2B.4c) is the whole point.
+5. **Versioned deliberately.** A new domain tag (e.g. `certen:bls:v2:pre`), so a
+   signature for the old message can never be replayed against the new one.
 
 ---
 
@@ -696,7 +780,8 @@ is CERTEN's. What does `layer4_verify.go` need so that `ValidatorSet` is
 | 2 | Answer Q4–Q6 (point query, cost, DAG-BFT) | Measured numbers, not estimates |
 | 3 | Evaluate Q7 options (a)–(d) against the answers | A recommendation with the rejected options and why |
 | 4 | Answer Q8 — the CERTEN-side verifier design | Written as a change to `layer4_verify.go`'s contract |
-| 4b | Answer Q14 + Q15 — where the commitment lives, and the L5 workstream | A chosen home with the rejected options; L5's three deliverables separated |
+| 4b | Implement §4A — the anchor-message commitment, all 8 chain families | Message shape defined, canonical encoding pinned, every family updated together |
+| 4c | Answer Q15 — the L5 workstream | Three deliverables separated: error handling, backfill, extension |
 | 5 | Draft AIP A (CometBFT, now) then AIP B (DAG-BFT) | Matches §6; every claim cited; A does not depend on B |
 | 6 | Adversarial review of the draft | A named attack the proposal does NOT stop, or an argument none exists |
 
