@@ -145,9 +145,13 @@ type ChainRoot struct {
 	Anchor string `json:"anchor"` // hex32
 }
 
-// derive recomputes (count, anchor) from Pending and rejects any disagreement
-// with the restated values.
-func (c *ChainRoot) derive() (uint64, []byte, error) {
+// compute derives (count, anchor) from Pending alone.
+//
+// Pending is a merkle State's sparse hash list: entry i is non-nil exactly when
+// bit i of the height is set, and folding the non-nil entries yields the chain's
+// DAG root. So both facts come out of one field, and lying about either requires
+// a hash collision rather than an edited integer.
+func (c *ChainRoot) compute() (uint64, []byte, error) {
 	var count uint64
 	var anchor []byte
 	for i, v := range c.Pending {
@@ -169,13 +173,25 @@ func (c *ChainRoot) derive() (uint64, []byte, error) {
 	if anchor == nil {
 		anchor = make([]byte, 32)
 	}
+	return count, anchor, nil
+}
+
+// derive computes (count, anchor) and rejects any disagreement with the restated
+// values. An empty Anchor means "not restated" and is not compared, which is the
+// builder's path; Count is always compared.
+func (c *ChainRoot) derive() (uint64, []byte, error) {
+	count, anchor, err := c.compute()
+	if err != nil {
+		return 0, nil, err
+	}
 	if count != c.Count {
 		return 0, nil, fmt.Errorf("chain %q: restated count %d but its merkle state says %d "+
 			"— the height is not what the proof claims", c.Name, c.Count, count)
 	}
-	if got := hex.EncodeToString(anchor); count > 0 && got != strings.ToLower(strings.TrimPrefix(c.Anchor, "0x")) {
+	restated := strings.ToLower(strings.TrimPrefix(c.Anchor, "0x"))
+	if restated != "" && count > 0 && hex.EncodeToString(anchor) != restated {
 		return 0, nil, fmt.Errorf("chain %q: restated anchor does not match its merkle state: "+
-			"computed=%s restated=%s", c.Name, got[:16], c.Anchor[:16])
+			"computed=%s restated=%s", c.Name, hex.EncodeToString(anchor)[:16], short(restated))
 	}
 	return count, anchor, nil
 }
