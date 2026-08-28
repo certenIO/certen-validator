@@ -120,6 +120,15 @@ func (g2 *G2Layer) ProveG2(ctx context.Context, request G2Request) (*G2Result, e
 		}
 	}
 
+	// The level is COMPUTED from the leaf, and a leaf that cannot justify one
+	// is an error rather than a downgrade. Reaching this point already means
+	// the completeness gate passed, so a disagreement here is a contradiction
+	// inside the builder and must stop the proof.
+	securityLevel, err := g2.determineSecurityLevel(outcomeLeaf)
+	if err != nil {
+		return nil, err
+	}
+
 	result := &G2Result{
 		G1Result:        *g1Result,
 		OutcomeLeaf:     outcomeLeaf,
@@ -127,7 +136,7 @@ func (g2 *G2Layer) ProveG2(ctx context.Context, request G2Request) (*G2Result, e
 		EffectVerified:  effectVerification.Verified,
 		G2ProofComplete: g2ProofComplete,
 		OutcomeBinding:  outcome,
-		SecurityLevel:   g2.determineSecurityLevel(outcomeLeaf),
+		SecurityLevel:   securityLevel,
 	}
 
 	fmt.Printf("[G2] G2 proof complete:\n")
@@ -355,30 +364,50 @@ func (g2 *G2Layer) buildPayloadStructure(g1Result *G1Result) map[string]interfac
 	return payload
 }
 
-// determineSecurityLevel determines security level based on verification results
-func (g2 *G2Layer) determineSecurityLevel(outcomeLeaf OutcomeLeaf) string {
-	allVerified := outcomeLeaf.PayloadBinding.Verified &&
-		outcomeLeaf.ReceiptBinding.Verified &&
-		outcomeLeaf.WitnessConsistency.Verified &&
-		outcomeLeaf.Effect.Verified
-
-	if allVerified {
-		return "G2_FULL_OUTCOME_BINDING"
+// determineSecurityLevel reports the security level actually established, and
+// refuses to name one that was not.
+//
+// There is exactly ONE level, because there is exactly one G2: a proof either
+// binds its outcome or it is a G1 proof. The previous G2_PARTIAL / G2_LIMITED /
+// G2_MINIMAL levels described a G2 claim that had not been established while
+// emitting a non-zero g2Hash indistinguishable from a real one.
+//
+// # WHY THIS RETURNS AN ERROR RATHER THAN A LOWER LABEL
+//
+// ProveG2 already refuses to build a result unless the payload, the effect and
+// the outcome binding all verified. So by the time this is called, all four
+// bindings on the leaf MUST be verified. If they are not, the leaf and the gate
+// that admitted it disagree, and that is a contradiction inside the proof
+// builder - not a proof at a lower level.
+//
+// Returning a downgraded label there would have written "G1_GOVERNANCE_ONLY"
+// onto a result whose G2ProofComplete flag was already true, which is the same
+// class of defect as a partial G2: a field describing a claim that the rest of
+// the object contradicts. A caller must never have to reconcile the two.
+func (g2 *G2Layer) determineSecurityLevel(outcomeLeaf OutcomeLeaf) (string, error) {
+	var missing []string
+	if !outcomeLeaf.PayloadBinding.Verified {
+		missing = append(missing, "payload binding")
+	}
+	if !outcomeLeaf.ReceiptBinding.Verified {
+		missing = append(missing, "receipt binding")
+	}
+	if !outcomeLeaf.WitnessConsistency.Verified {
+		missing = append(missing, "witness consistency")
+	}
+	if !outcomeLeaf.Effect.Verified {
+		missing = append(missing, "effect")
 	}
 
-	// Count what actually verified, for diagnostics only.
-	// There are no intermediate G2 levels, so this is a constant.
-	//
-	// The previous G2_PARTIAL / G2_LIMITED / G2_MINIMAL levels described a G2
-	// claim that had not been established while emitting a non-zero g2Hash
-	// indistinguishable from a real one. A proof that does not bind its outcome
-	// is a G1 proof, and ProveG2 now returns an error rather than a labelled
-	// half-proof - see the fail-closed check there.
-	//
-	// The tally of individually verified bindings that used to be computed here
-	// was discarded without being read; it is gone rather than left to look
-	// like it feeds a decision.
-	return "G1_GOVERNANCE_ONLY"
+	if len(missing) > 0 {
+		return "", ValidationError{Msg: fmt.Sprintf(
+			"cannot name a security level: the outcome leaf reports %s unverified, yet the "+
+				"G2 completeness gate admitted this proof. The leaf and the gate disagree; "+
+				"no level is emitted rather than a downgraded one",
+			strings.Join(missing, ", "))}
+	}
+
+	return "G2_FULL_OUTCOME_BINDING", nil
 }
 
 // =============================================================================
@@ -408,14 +437,20 @@ func (g2 *G2Layer) ValidateG2Result(result *G2Result) error {
 			return ValidationError{Msg: "G2 complete but witness consistency not verified"}
 		}
 	} else {
-		// If G2 is not complete, security level should indicate G1 level
+		// An incomplete G2 must never carry the established level. There is no
+		// lower level to carry instead: the result is a G1 proof.
 		if result.SecurityLevel == "G2_FULL_OUTCOME_BINDING" {
 			return ValidationError{Msg: "G2 incomplete but security level indicates full binding"}
 		}
+		return nil
 	}
 
-	// Validate security level consistency
-	expectedLevel := g2.determineSecurityLevel(result.OutcomeLeaf)
+	// The level must be the one the leaf justifies, recomputed rather than
+	// trusted from the field.
+	expectedLevel, err := g2.determineSecurityLevel(result.OutcomeLeaf)
+	if err != nil {
+		return err
+	}
 	if result.SecurityLevel != expectedLevel {
 		return ValidationError{
 			Msg: fmt.Sprintf("Security level mismatch: got %s, expected %s", result.SecurityLevel, expectedLevel),
