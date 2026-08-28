@@ -77,6 +77,25 @@ const (
 	// issued before this type existed is in this state. NOT an error.
 	VerdictValidatorSetAsserted Verdict = "validator_set_asserted"
 
+	// VerdictValidatorSetUnbound — the set was DERIVED from chain bytes, but the
+	// BPT root it was proven into could not be tied to a quorum-signed anchor.
+	//
+	// This is the normal state today, not an anomaly, and it is a CAPABILITY
+	// LIMIT rather than a fault in the proof. Measured 2026-08-28: an account
+	// query returns a receipt against the node's CURRENT BPT root, and those
+	// roots are recorded on anchor(<partition>)-bpt only at anchor-emission
+	// points — one per ~46 blocks on Kermit and one per ~2,524 on MainNet. A
+	// freshly fetched root is therefore almost never one of the anchored ones
+	// (checked against the 300 most recent: no match), and obtaining the state
+	// at a root that IS anchored requires the historical membership proof
+	// AIP-058 asks for and Accumulate does not serve.
+	//
+	// So this verdict says exactly what is true: the set is no longer asserted,
+	// and it is not yet bound. Reporting it as a failure would be the
+	// capability-limit-as-governance-rejection defect this codebase has removed
+	// twice.
+	VerdictValidatorSetUnbound Verdict = "validator_set_unbound"
+
 	// VerdictIncarnationUnknown — the artifact carries no incarnation, so it
 	// cannot say which chain it is about. A could-not-read, not a refusal.
 	VerdictIncarnationUnknown Verdict = "incarnation_unknown"
@@ -324,9 +343,14 @@ func (p *ValidatorSetProof) Verify(in VerifyInput) (Verdict, error) {
 	}
 
 	// --- 15. the root is bound to a quorum-signed anchor ---------------------
+	//
+	// No binding supplied is a NAMED STATE, not an error. See
+	// VerdictValidatorSetUnbound: today it is unachievable, because it needs a
+	// membership proof against a historical BPT root. A binding that IS supplied
+	// and does NOT hold remains an error — that is tampering, and the two must
+	// not be confused.
 	if in.BoundStateTreeAnchor == "" {
-		return "", fmt.Errorf("validatorSetProof: no stateTreeAnchor supplied to bind the BPT root " +
-			"to; an unbound root proves nothing about who signed")
+		return VerdictValidatorSetUnbound, nil
 	}
 	bound, err := chained_proof.MustHex32Lower(in.BoundStateTreeAnchor, "boundStateTreeAnchor")
 	if err != nil {

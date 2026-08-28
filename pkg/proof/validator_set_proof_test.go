@@ -106,21 +106,23 @@ func TestVSP_VerdictLadder(t *testing.T) {
 	other := "672f89ffc3cc87cff9a7fea1529ec893ec775e49e0cf4da1ab9c927979176e17" // MainNet's
 
 	cases := []struct {
-		name    string
-		mutate  func(*ValidatorSetProof)
-		pinned  *string
-		want    Verdict
-		wantErr bool
+		name     string
+		mutate   func(*ValidatorSetProof)
+		mutateIn func(*VerifyInput)
+		pinned   *string
+		want     Verdict
 	}{
-		{"pinned and matching", nil, &pin, VerdictVerified, false},
-		{"no pin held", nil, nil, VerdictIncarnationUnverified, false},
-		{"pinned but different chain", nil, &other, VerdictForeignIncarnation, false},
+		{"pinned and matching", nil, nil, &pin, VerdictVerified},
+		{"no pin held", nil, nil, nil, VerdictIncarnationUnverified},
+		{"pinned but different chain", nil, nil, &other, VerdictForeignIncarnation},
 		{"artifact names no incarnation",
-			func(p *ValidatorSetProof) { p.Incarnation = "" }, &pin, VerdictIncarnationUnknown, false},
+			func(p *ValidatorSetProof) { p.Incarnation = "" }, nil, &pin, VerdictIncarnationUnknown},
+		{"derived but not bound to a signed anchor — the normal state today",
+			nil, func(in *VerifyInput) { in.BoundStateTreeAnchor = "" }, &pin, VerdictValidatorSetUnbound},
 		{"no network evidence at all",
-			func(p *ValidatorSetProof) { p.Network.AccountState = "" }, &pin, VerdictValidatorSetAsserted, false},
+			func(p *ValidatorSetProof) { p.Network.AccountState = "" }, nil, &pin, VerdictValidatorSetAsserted},
 		{"membership without the denominator",
-			func(p *ValidatorSetProof) { p.Globals.AccountState = "" }, &pin, VerdictValidatorSetAsserted, false},
+			func(p *ValidatorSetProof) { p.Globals.AccountState = "" }, nil, &pin, VerdictValidatorSetAsserted},
 	}
 
 	for _, tc := range cases {
@@ -130,10 +132,13 @@ func TestVSP_VerdictLadder(t *testing.T) {
 			if tc.mutate != nil {
 				tc.mutate(p)
 			}
+			if tc.mutateIn != nil {
+				tc.mutateIn(&in)
+			}
 			in.PinnedIncarnation = tc.pinned
 			got, err := p.Verify(in)
-			if tc.wantErr != (err != nil) {
-				t.Fatalf("error=%v, wanted error=%v", err, tc.wantErr)
+			if err != nil {
+				t.Fatalf("a weaker verdict must not be an error: %v", err)
 			}
 			if got != tc.want {
 				t.Fatalf("verdict %q, wanted %q", got, tc.want)
@@ -202,9 +207,6 @@ func TestVSP_RefusesTampering(t *testing.T) {
 		},
 		"BPT root not bound to a signed anchor": func(_ *ValidatorSetProof, in *VerifyInput) {
 			in.BoundStateTreeAnchor = "00000000000000000000000000000000000000000000000000000000000000ff"
-		},
-		"no bound anchor supplied": func(_ *ValidatorSetProof, in *VerifyInput) {
-			in.BoundStateTreeAnchor = ""
 		},
 		"the two accounts read at different blocks": func(p *ValidatorSetProof, _ *VerifyInput) {
 			p.Globals.StateReceipt.Anchor = p.Globals.StateReceipt.Start
