@@ -113,6 +113,19 @@ type Layer5 struct {
 	LeafHash  string       `json:"leafHash"`  // hex32 — this proof's leaf
 	LeafIndex uint64       `json:"leafIndex"`
 	Path      []MerkleStep `json:"path"` // leaf -> batchRoot; empty IFF leaf == root
+
+	// Accumulate is the L5 extension (Q15(iii)): which Accumulate incarnation
+	// this proof belongs to, and the evidence expanding the validator-set root
+	// that CertenAnchorV8_2's pre-exec message commits.
+	//
+	// OPTIONAL, and optional on purpose. VerifyOffline does not require it and
+	// does not fail without it: a missing extension is a named weaker state, not
+	// a rejection. Making it mandatory would turn an evidence outage into a
+	// governance-proof failure.
+	//
+	// It is additive to the stored layer JSON and is NOT part of govRoot, which
+	// commits L1-L4 and G0-G2 only. See layer5_accumulate.go.
+	Accumulate *AccumulateBinding `json:"accumulate,omitempty"`
 }
 
 // VerifyOffline recomputes leaf -> batchRoot and checks the coordinates are
@@ -219,12 +232,37 @@ func (l *Layer5) ExternalClaim() string {
 	if l == nil {
 		return "no external anchor recorded"
 	}
-	return fmt.Sprintf(
+	base := fmt.Sprintf(
 		"leaf is under batch root %s… (verified offline); that root is stated to be in tx %s "+
-			"at block %d on %s (chainId %d) — COORDINATES, not an offline proof. "+
-			"This attests to whatever was signed, NOT to whether the Accumulate validator set "+
-			"that signed L4 was the legitimate one.",
+			"at block %d on %s (chainId %d) — COORDINATES, not an offline proof.",
 		short16(l.BatchRoot), l.AnchorTx, l.BlockNumber, l.Network, l.ChainID)
+
+	// The caveat is CONDITIONAL, not absolute — but it only shrinks when the
+	// evidence is actually carried, and even then it never disappears.
+	//
+	// Without the extension the original sentence stands verbatim: an external
+	// timestamp attests to WHATEVER WAS SIGNED and says nothing about whether the
+	// signers were the right ones.
+	if l.Accumulate == nil || l.Accumulate.ValidatorSetProof == nil {
+		return base + " This attests to whatever was signed, NOT to whether the Accumulate " +
+			"validator set that signed L4 was the legitimate one."
+	}
+
+	// With the extension, the honest statement is narrower and still bounded. The
+	// set is derived rather than asserted; whether it is BOUND to a quorum-signed
+	// anchor, and whether the incarnation was checked against an out-of-band pin,
+	// are separate questions this string must not answer on the reader's behalf.
+	inc := l.Accumulate.Incarnation
+	if inc == "" && l.Accumulate.ValidatorSetProof != nil {
+		inc = l.Accumulate.ValidatorSetProof.Incarnation
+	}
+	return base + fmt.Sprintf(
+		" It carries the Accumulate validator set as EVIDENCE (incarnation %s…), so the set "+
+			"that signed L4 can be derived from chain state rather than taken on trust — but "+
+			"this line does not say the derivation was bound to a quorum-signed anchor, nor "+
+			"that the incarnation was checked against an out-of-band pin. Verify the binding "+
+			"and read its verdict; do not infer either from the presence of this evidence.",
+		short16(inc))
 }
 
 func decodeHex32(s, label string) ([]byte, error) {
