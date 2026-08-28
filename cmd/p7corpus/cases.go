@@ -33,6 +33,17 @@ type caseSpec struct {
 	PrincipalPage string   `json:"principal_page"`
 	Delegate      string   `json:"delegate"`
 	KeyNames      []string `json:"key_names"`
+
+	// Phase 8 cases L, M and N. The authority set is a property of the ACCOUNT,
+	// not of a key page, and these are the first corpus cases where the two
+	// differ - so the manifest records what the chain reported rather than what
+	// the shape name implies.
+	Authorities          []string `json:"authorities"`
+	EffectiveAuthorities []string `json:"effective_authorities"`
+	InheritedFrom        string   `json:"authority_inherited_from"`
+	DisabledAuthorities  []string `json:"disabled_authorities"`
+	SigningPages         []string `json:"signing_pages"`
+	Pages                []string `json:"pages"`
 }
 
 func parseCases(raw map[string]json.RawMessage) (map[string]caseSpec, error) {
@@ -93,6 +104,16 @@ func corpusKeyPages(raw map[string]json.RawMessage) map[string]string {
 			want["f2"] = cs.DelegateBook + "/1"
 		case "K":
 			want[cs.KeyNames[0]] = cs.Page
+		case "L":
+			// One key per authority: l1 on the default book's page, l2 on book2's.
+			want["l1"] = cs.SigningPages[0]
+			want["l2"] = cs.SigningPages[1]
+		case "M":
+			// m2 is on PAGE 2 and deliberately NOT on page 1 - otherwise an
+			// implementation that only reads page 1 passes the case anyway.
+			want["m2"] = cs.SigningPage
+		case "N":
+			want["n1"] = cs.SigningPages[0]
 		}
 	}
 	return want

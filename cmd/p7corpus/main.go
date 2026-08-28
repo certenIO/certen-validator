@@ -34,7 +34,8 @@ func main() {
 		keysPath = flag.String("keys", filepath.Join("scripts", "phase7_corpus", "keys.json"), "corpus key seeds")
 		manifest = flag.String("manifest", filepath.Join("scripts", "phase7_corpus", "corpus.json"), "corpus structure manifest")
 		out      = flag.String("out", filepath.Join("docs", "l4", "phase7_corpus", "traces.json"), "where to write captured traces")
-		stage    = flag.String("stage", "keycheck", "keycheck | partitions | capture")
+		stage    = flag.String("stage", "keycheck", "keycheck | partitions | capture | prodpath | multileg")
+		only     = flag.String("cases", "", "comma-separated case names to capture (default: all)")
 	)
 	flag.Parse()
 
@@ -76,7 +77,7 @@ func main() {
 		}
 
 	case "capture":
-		if err := capture(ctx, c, seeds, cases, *out); err != nil {
+		if err := capture(ctx, c, seeds, cases, *out, *only); err != nil {
 			fatal("%v", err)
 		}
 

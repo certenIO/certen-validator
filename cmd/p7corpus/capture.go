@@ -15,6 +15,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"gitlab.com/accumulatenetwork/accumulate/protocol"
@@ -67,6 +69,18 @@ type casePlan struct {
 	// a case that was not submitted is a weaker specimen than one that was, and
 	// the corpus has to say which it is.
 	SkipSubmit bool
+
+	// ExpectExec is what the NETWORK must do with the transaction, as distinct
+	// from what accumulate-core says about each signature.
+	//
+	// The two come apart for the first time in case L. A signature can be
+	// perfectly valid - CoreVerdict true - while the transaction it is on never
+	// executes, because a second authority has not voted. `Expect` is about the
+	// signature; this is about readiness, and conflating them is how "the
+	// envelope was accepted" came to stand in for "the thing happened".
+	//
+	// Empty means "delivered", which is every case before L.
+	ExpectExec string
 }
 
 // trace is what a case produced. Every field is evidence; nothing is inferred.
@@ -78,6 +92,12 @@ type trace struct {
 
 	Expect      string `json:"expect"`
 	RefusalKind string `json:"refusalKind,omitempty"`
+
+	// ExpectExec is what the NETWORK was expected to do with the transaction,
+	// recorded beside what it actually did. "pending" is a real expectation, not
+	// a failure to reach one: case L-partial is a valid signature on a
+	// transaction that must NOT execute.
+	ExpectExec string `json:"expectExec,omitempty"`
 
 	// KeyIsDirectOnOuterPage records whether the inner signing key ALSO appears
 	// directly on the outermost delegator page. Where it does, the case does not
@@ -133,7 +153,8 @@ type captureResult struct {
 	Pages map[string]pageState `json:"pages"`
 }
 
-func capture(ctx context.Context, c *client, seeds map[string]string, raw map[string]json.RawMessage, out string) error {
+func capture(ctx context.Context, c *client, seeds map[string]string, raw map[string]json.RawMessage,
+	out string, only string) error {
 	cases, err := parseCases(raw)
 	if err != nil {
 		return err
@@ -147,12 +168,39 @@ func capture(ctx context.Context, c *client, seeds map[string]string, raw map[st
 		return err
 	}
 
+	// A case filter, so a newly added case can be captured without re-submitting
+	// every specimen that is already recorded. When one is used the EXISTING
+	// traces are loaded and the captured cases replace their entries - a capture
+	// of three cases must not silently shrink the corpus to three.
+	wanted := map[string]bool{}
+	for _, name := range strings.Split(only, ",") {
+		if n := strings.TrimSpace(strings.ToUpper(name)); n != "" {
+			wanted[n] = true
+		}
+	}
+
 	res := captureResult{
 		Endpoint:       kermit,
 		ProtocolModule: protocolModule,
 		CapturedAt:     time.Now().UTC().Format(time.RFC3339),
 	}
+	if len(wanted) > 0 {
+		if prev, err := readJSON[captureResult](out); err == nil {
+			for _, t := range prev.Traces {
+				if !wanted[strings.ToUpper(baseCase(t.Case))] {
+					res.Traces = append(res.Traces, t)
+				}
+			}
+			res.Pages = prev.Pages
+			fmt.Printf("capturing only %v; %d existing trace(s) retained\n",
+				sortedKeys(wanted), len(res.Traces))
+		}
+	}
+
 	for _, p := range plans {
+		if len(wanted) > 0 && !wanted[strings.ToUpper(baseCase(p.Case))] {
+			continue
+		}
 		fmt.Printf("== case %s: %s ==\n", p.Case, p.Shape)
 		ts, err := runCase(ctx, c, r, seeds, p)
 		if err != nil {
@@ -407,5 +455,93 @@ func buildPlans(cases map[string]caseSpec) ([]casePlan, error) {
 		Bootstrap:  []signaturePlan{{Seed: "k1", SignerPage: k.Page}},
 	})
 
+	// ---- Phase 8: the authority SET, not one key page --------------------
+	//
+	// A-K all have one inherited authority whose book has one page, so
+	// "the principal's page reached its threshold" and "the account's authority
+	// set approved" have the same answer for every one of them. L, M and N are
+	// the first cases where they differ.
+
+	l, err := need("L")
+	if err != nil {
+		return nil, err
+	}
+	if len(l.SigningPages) != 2 {
+		return nil, fmt.Errorf("case L needs two signing pages, has %d", len(l.SigningPages))
+	}
+	plans = append(plans, casePlan{
+		Case: "L", Shape: l.Shape, Principal: l.ADI, Expect: "valid",
+		Why: "the account has TWO authorities and userTransactionIsReady is ready only when " +
+			"notReady is empty, so BOTH books must vote; an implementation that evaluates one " +
+			"key page reports this authorised on half its authority set",
+		Signatures: []signaturePlan{
+			{Seed: "l1", SignerPage: l.SigningPages[0]},
+			{Seed: "l2", SignerPage: l.SigningPages[1]},
+		},
+	})
+	plans = append(plans, casePlan{
+		Case: "L-partial", Shape: "two authorities, only ONE signs", Principal: l.ADI,
+		Expect: "valid", ExpectExec: "pending",
+		Why: "the SIGNATURE is valid and the TRANSACTION is not ready - the distinction case L " +
+			"exists to make. Kermit leaves it pending because the second authority never voted, " +
+			"so a verifier that called this authorised would be asserting something the network " +
+			"itself refused to act on",
+		Signatures: []signaturePlan{{Seed: "l1", SignerPage: l.SigningPages[0]}},
+	})
+
+	m, err := need("M")
+	if err != nil {
+		return nil, err
+	}
+	plans = append(plans, casePlan{
+		Case: "M", Shape: m.Shape, Principal: m.ADI, Expect: "valid",
+		Why: "the signer is on PAGE 2 of the authority's book, and AuthorityWillVote iterates " +
+			"pages 1..PageCount returning on the first that would vote - so any page satisfies " +
+			"the book. m2 is deliberately NOT on page 1, so an implementation that reads only " +
+			"page 1 cannot pass this by accident",
+		Signatures: []signaturePlan{{Seed: "m2", SignerPage: m.SigningPage}},
+		Bootstrap:  []signaturePlan{{Seed: "m1", SignerPage: m.PrincipalPage}},
+	})
+
+	n, err := need("N")
+	if err != nil {
+		return nil, err
+	}
+	if len(n.SigningPages) != 1 {
+		return nil, fmt.Errorf("case N needs one signing page, has %d", len(n.SigningPages))
+	}
+	if len(n.DisabledAuthorities) != 1 {
+		return nil, fmt.Errorf("case N needs exactly one disabled authority, has %d",
+			len(n.DisabledAuthorities))
+	}
+	plans = append(plans, casePlan{
+		Case: "N", Shape: n.Shape, Principal: n.ADI, Expect: "valid",
+		Why: fmt.Sprintf("%s is DISABLED on the account, and userTransactionIsReady skips a "+
+			"disabled authority unless the body type RequireAuthorization() - which only "+
+			"UpdateAccountAuth does. So this writeData is ready on one authority's vote, and "+
+			"an implementation that demanded the disabled one would falsely reject it",
+			shortURL(n.DisabledAuthorities[0])),
+		Signatures: []signaturePlan{{Seed: "n1", SignerPage: n.SigningPages[0]}},
+	})
+
 	return plans, nil
+}
+
+// baseCase strips a specimen suffix: "L-partial" and "H-repeat" belong to cases
+// L and H. A filter naming L must capture both of L's specimens, or the pair
+// that makes the case discriminating comes apart.
+func baseCase(name string) string {
+	if i := strings.Index(name, "-"); i > 0 {
+		return name[:i]
+	}
+	return name
+}
+
+func sortedKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

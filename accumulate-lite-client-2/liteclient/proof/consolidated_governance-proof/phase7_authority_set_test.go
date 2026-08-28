@@ -121,7 +121,7 @@ func TestP7_Auth_AllAuthoritiesMustVote(t *testing.T) {
 
 	// Only the first authority signed.
 	one, err := r.ResolveAccount(context.Background(), "acc://alpha.acme/data", nil, false,
-		[]SignatureData{sig1})
+		[]SignatureData{sig1}, nil)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestP7_Auth_AllAuthoritiesMustVote(t *testing.T) {
 
 	// Both signed.
 	both, err := r.ResolveAccount(context.Background(), "acc://alpha.acme/data", nil, false,
-		[]SignatureData{sig1, sig2})
+		[]SignatureData{sig1, sig2}, nil)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestP7_Auth_AnyPageSatisfiesTheBook(t *testing.T) {
 	r := &AuthorityResolver{Source: src}
 
 	res, err := r.ResolveAccount(context.Background(), "acc://multi.acme/data", nil, false,
-		[]SignatureData{sig2})
+		[]SignatureData{sig2}, nil)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -211,7 +211,7 @@ func TestP7_Auth_DisabledAuthorityIsSkipped(t *testing.T) {
 
 	// Disabled skipped: the one enabled authority is enough.
 	res, err := r.ResolveAccount(context.Background(), "acc://alpha.acme/data", nil, false,
-		[]SignatureData{sig1})
+		[]SignatureData{sig1}, nil)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -221,7 +221,7 @@ func TestP7_Auth_DisabledAuthorityIsSkipped(t *testing.T) {
 
 	// ignoreDisabled (RequireAuthorization): now it must vote too.
 	strict, err := r.ResolveAccount(context.Background(), "acc://alpha.acme/data", nil, true,
-		[]SignatureData{sig1})
+		[]SignatureData{sig1}, nil)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -255,7 +255,7 @@ func TestP7_Auth_UnreadableAuthorityIsNotAFailure(t *testing.T) {
 	r := &AuthorityResolver{Source: src}
 
 	res, err := r.ResolveAccount(context.Background(), "acc://alpha.acme/data", nil, false,
-		[]SignatureData{sig1})
+		[]SignatureData{sig1}, nil)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -301,7 +301,7 @@ func TestP7_Auth_ExtraAuthoritiesAreRequired(t *testing.T) {
 
 	// The account's own authority signed, the named extra did not.
 	res, err := r.ResolveAccount(context.Background(), "acc://alpha.acme/data", extra, false,
-		[]SignatureData{sig1})
+		[]SignatureData{sig1}, nil)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -311,7 +311,7 @@ func TestP7_Auth_ExtraAuthoritiesAreRequired(t *testing.T) {
 
 	// Both signed.
 	both, err := r.ResolveAccount(context.Background(), "acc://alpha.acme/data", extra, false,
-		[]SignatureData{sig1, sig2})
+		[]SignatureData{sig1, sig2}, nil)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}

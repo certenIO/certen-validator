@@ -155,6 +155,20 @@ const (
 // AuthorityResolver answers whether a page is satisfied.
 type AuthorityResolver struct {
 	Source PageSource
+
+	// Exec returns a page's state AS OF THE EXECUTION BLOCK.
+	//
+	// It is what every version comparison is made against. A signer version
+	// names an authority STATE, not a moment in time, so a signature can only be
+	// evaluated against the page as it stood when the transaction executed;
+	// against any other state the comparison is meaningless. When Exec cannot
+	// reconstruct a page, resolution declines to compare rather than refusing
+	// the signature - see authority_exec_state.go.
+	//
+	// Optional. With none set, resolution falls back to Source and reports a
+	// version mismatch as UNEVALUABLE, because that is all a current-state read
+	// can honestly support.
+	Exec ExecPageSource
 }
 
 // Resolve evaluates every candidate signature against the principal's page.
@@ -165,8 +179,11 @@ type AuthorityResolver struct {
 //
 // An error - as opposed to a refused signature - means resolution could not be
 // completed at all. It is never a governance verdict.
+//
+// principalAtExec says whether `principal` is the page as it stood at
+// execution. Only then may a version mismatch be reported as a refusal.
 func (r *AuthorityResolver) Resolve(ctx context.Context, principalPage string,
-	principal KeyPageState, sigs []SignatureData) (*ResolutionResult, error) {
+	principal KeyPageState, principalAtExec bool, sigs []SignatureData) (*ResolutionResult, error) {
 
 	principalPage = normalizeAccURL(principalPage)
 	entries := principal.EntrySet()
@@ -192,7 +209,7 @@ func (r *AuthorityResolver) Resolve(ctx context.Context, principalPage string,
 	satisfied := map[string]bool{}
 
 	for _, sig := range sigs {
-		res, entry, err := r.resolveOne(ctx, principalPage, principal, entries, sig)
+		res, entry, err := r.resolveOne(ctx, principalPage, principal, principalAtExec, entries, sig)
 		if err != nil {
 			out.Refused = append(out.Refused, *err)
 			continue
@@ -230,8 +247,12 @@ func (r *AuthorityResolver) Resolve(ctx context.Context, principalPage string,
 
 // resolveOne walks the path a single signature declares and reports which
 // principal entry it satisfies.
+//
+// principalAtExec says whether `principal` is the page AS OF EXECUTION. It
+// decides whether a version mismatch is a finding or an inability to reach one;
+// see versionRefusal.
 func (r *AuthorityResolver) resolveOne(ctx context.Context, principalPage string,
-	principal KeyPageState, entries []KeyPageEntry, sig SignatureData) (
+	principal KeyPageState, principalAtExec bool, entries []KeyPageEntry, sig SignatureData) (
 	*ResolvedSignature, string, *RefusedSignature) {
 
 	refuse := func(reason, detail string) *RefusedSignature {
@@ -275,9 +296,12 @@ func (r *AuthorityResolver) resolveOne(ctx context.Context, principalPage string
 				"signer is %s but the authority being evaluated is %s", signerPage, principalPage))
 		}
 		if uint64(sig.SignerVersion) != principal.Version {
-			return nil, "", refuse(ReasonWrongVersion, fmt.Sprintf(
-				"signature was made against version %d, the page is at version %d",
-				sig.SignerVersion, principal.Version))
+			// Whether this is a finding or an inability to reach one depends on
+			// WHICH state we are holding. principalAtExec is set by the caller
+			// that obtained it.
+			reason, detail := versionRefusal(principalAtExec, principalPage,
+				uint64(sig.SignerVersion), principal.Version)
+			return nil, "", refuse(reason, detail)
 		}
 		entry, ok := entryForKey(entries, res.PublicKeyHash)
 		if !ok {
@@ -303,7 +327,8 @@ func (r *AuthorityResolver) resolveOne(ctx context.Context, principalPage string
 	hops := append(append([]string{}, chain...), signerPage)
 
 	fromState := principal
-	fromReplayed := true
+	fromReplayed := principalAtExec
+	fromAtExec := principalAtExec
 	var firstEntry KeyPageEntry
 	for i := 0; i < len(hops)-1; i++ {
 		from, to := normalizeAccURL(hops[i]), normalizeAccURL(hops[i+1])
@@ -327,23 +352,24 @@ func (r *AuthorityResolver) resolveOne(ctx context.Context, principalPage string
 			FromVersion: fromState.Version, FromReplayed: fromReplayed,
 		})
 
-		next, err := r.Source.PageState(ctx, to)
+		next, err := r.stateFor(ctx, to)
 		if err != nil {
 			// Not a refusal of the signature - we could not read the page. A
 			// caller must not turn this into a threshold verdict.
 			return nil, "", refuse(ReasonPageUnavailable, fmt.Sprintf(
 				"could not read %s: %v", to, err))
 		}
-		fromState = next
-		fromReplayed = false
+		fromState = next.State
+		fromAtExec = next.AtExec
+		fromReplayed = next.AtExec
 	}
 
 	// The innermost page must carry the signing key, at the version the
 	// signature was made against (KPSW-EXEC).
 	if uint64(sig.SignerVersion) != fromState.Version {
-		return nil, "", refuse(ReasonWrongVersion, fmt.Sprintf(
-			"signature was made against version %d of %s, which is at version %d",
-			sig.SignerVersion, signerPage, fromState.Version))
+		reason, detail := versionRefusal(fromAtExec, signerPage,
+			uint64(sig.SignerVersion), fromState.Version)
+		return nil, "", refuse(reason, detail)
 	}
 	if _, ok := entryForKey(fromState.EntrySet(), res.PublicKeyHash); !ok {
 		return nil, "", refuse(ReasonKeyNotOnPage, fmt.Sprintf(

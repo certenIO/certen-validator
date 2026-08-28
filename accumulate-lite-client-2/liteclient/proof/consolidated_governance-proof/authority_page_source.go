@@ -166,11 +166,40 @@ func (s *livePageSource) AccountAuthorities(ctx context.Context, account string)
 			return []AccountAuthority{{URL: identityURLOf(scope)}}, nil
 		}
 
-		raw, ok := pu.CaseInsensitiveGet(def, "authorities").([]interface{})
-		if !ok {
-			return nil, fmt.Errorf("account %s (%s) reports no authority set; an account with no "+
-				"authority cannot be shown to have approved anything", scope, typ)
+		raw, _ := pu.CaseInsensitiveGet(def, "authorities").([]interface{})
+
+		// AN EMPTY AUTHORITY SET IS INHERITED, NOT ABSENT.
+		//
+		// Measured on Kermit 2026-08-26: acc://certen-kermit-12.acme/data — the
+		// account every production intent writes to — reports
+		// "authorities": null, and so does the freshly provisioned corpus case
+		// M. That is not a malformed account. accumulate-core's
+		// setInitialAuthorities (chain/create_utils.go) creates an account with
+		// NO authority list of its own and verifies only that some parent has a
+		// non-empty one:
+		//
+		//	// Otherwise leave the authority set empty - but verify that there is
+		//	// a parent with a non-empty authority set
+		//
+		// The governing authority is then the parent identity's. Before this,
+		// asking this source about such an account returned "reports no
+		// authority set" — an error, which ResolveAccount's caller correctly
+		// refuses to turn into a verdict, and which would have taken down every
+		// production account the moment the authority set was actually consulted.
+		//
+		// So climb, exactly as the executor does. Only a ROOT identity with no
+		// authorities is genuinely ungoverned, and that is still an error.
+		if len(raw) == 0 {
+			parent := identityURLOf(scope)
+			if parent != "" && parent != scope {
+				scope = parent
+				continue
+			}
+			return nil, fmt.Errorf("account %s (%s) reports no authority set and is a root "+
+				"identity with no parent to inherit from; an account with no authority cannot "+
+				"be shown to have approved anything", scope, typ)
 		}
+
 		out := make([]AccountAuthority, 0, len(raw))
 		for _, item := range raw {
 			m, ok := item.(map[string]interface{})

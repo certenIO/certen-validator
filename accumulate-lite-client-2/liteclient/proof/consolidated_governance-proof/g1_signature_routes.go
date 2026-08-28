@@ -88,6 +88,12 @@ type evalResult struct {
 	Validated ValidatedSignature
 	Stage     string
 	Reason    string
+
+	// TimingBasis says HOW this candidate's ordering-before-execution was
+	// established. Meaningful only alongside SigCounted — a candidate that was
+	// rejected or could not be evaluated has no timing claim to qualify — and
+	// the collectors copy it only in that branch for exactly that reason.
+	TimingBasis SignatureTimingBasis
 }
 
 // ---------------------------------------------------------------------------
@@ -146,6 +152,7 @@ func (g1 *G1Layer) collectViaSignatureSet(ctx context.Context, sigData *Signatur
 			})
 		case SigCounted:
 			ev.Counted = append(ev.Counted, res.Validated)
+			ev.TimingBasis = append(ev.TimingBasis, res.TimingBasis)
 		case SigRejected:
 			ev.Rejected = append(ev.Rejected, RejectedSignature{MessageID: messageID, Reason: res.Reason})
 		default:
@@ -191,7 +198,7 @@ func (g1 *G1Layer) collectViaSignatureSet(ctx context.Context, sigData *Signatur
 // expanded JSON, which section 2.2 forbids as evidence - it is receipt-bound
 // throughout.
 func (g1 *G1Layer) collectViaEnumeration(ctx context.Context, keyPage string,
-	snapshot AuthoritySnapshot, txHash string) (*SignatureEvidence, error) {
+	snapshot AuthoritySnapshot, txHash string, authorityPages ...string) (*SignatureEvidence, error) {
 
 	ev := &SignatureEvidence{Route: routeEnumeration}
 
@@ -206,7 +213,7 @@ func (g1 *G1Layer) collectViaEnumeration(ctx context.Context, keyPage string,
 	// the signatureSet route follows the authority signatures on the
 	// transaction, this one follows the delegate entries on the key pages
 	// themselves. Two independent paths to the same set of signer accounts.
-	pages, pageErr := g1.enumerateDelegatePages(ctx, keyPage, snapshot)
+	pages, pageErr := g1.enumerateDelegatePages(ctx, keyPage, snapshot, authorityPages...)
 	if pageErr != nil {
 		return nil, &SignatureEvidenceIncomplete{
 			Route:     routeEnumeration,
@@ -283,6 +290,7 @@ func (g1 *G1Layer) collectViaEnumeration(ctx context.Context, keyPage string,
 				})
 			case SigCounted:
 				ev.Counted = append(ev.Counted, res.Validated)
+				ev.TimingBasis = append(ev.TimingBasis, res.TimingBasis)
 			case SigRejected:
 				ev.Rejected = append(ev.Rejected, RejectedSignature{MessageID: messageID, Reason: res.Reason})
 			default:
@@ -317,7 +325,7 @@ func (g1 *G1Layer) collectViaEnumeration(ctx context.Context, keyPage string,
 // Accumulate's own depth limit, because a chain deeper than the protocol allows
 // cannot have produced a valid signature.
 func (g1 *G1Layer) enumerateDelegatePages(ctx context.Context, keyPage string,
-	snapshot AuthoritySnapshot) ([]string, error) {
+	snapshot AuthoritySnapshot, roots ...string) ([]string, error) {
 
 	uu := URLUtils{}
 	start := uu.NormalizeURL(keyPage)
@@ -325,6 +333,19 @@ func (g1 *G1Layer) enumerateDelegatePages(ctx context.Context, keyPage string,
 	source := newLivePageSource(g1.client, g1.authorityBuilder)
 	visited := map[string]bool{start: true}
 	order := []string{start}
+
+	// Every other page that may carry a vote, seeded before the delegation walk
+	// begins. Delegate entries lead DOWNWARD from one authority; they never lead
+	// ACROSS to a sibling authority, so without this the second authority's page
+	// is not enumerated and its vote is not collected.
+	for _, r := range roots {
+		p := uu.NormalizeURL(r)
+		if p == "" || visited[p] {
+			continue
+		}
+		visited[p] = true
+		order = append(order, p)
+	}
 
 	// The principal's own state comes from the KPSW-EXEC snapshot, which is
 	// replayed from genesis; pages reached through delegation are queried. The
@@ -592,7 +613,8 @@ func (g1 *G1Layer) evaluateCandidate(ctx context.Context, cand sigCandidate, key
 	// comparing indices. That is a weaker claim than the same-partition case and
 	// it is recorded as such on the evidence rather than being passed off as the
 	// same thing.
-	sameClock := sameRoutingPartition(cand.pageFor(keyPage), snapshot.Page)
+	signerPage := cand.pageFor(keyPage)
+	sameClock := sameRoutingPartition(signerPage, snapshot.Page)
 	timingVerified := true
 	if sameClock {
 		timingVerified = g1.signatureVerifier.ValidateSignatureTiming(receipt, snapshot.ExecTerms.MBI)
@@ -602,6 +624,14 @@ func (g1 *G1Layer) evaluateCandidate(ctx context.Context, cand sigCandidate, key
 			Reason: fmt.Sprintf("signed after execution: receipt.localBlock=%d > execMBI=%d",
 				receipt.LocalBlock, snapshot.ExecTerms.MBI)}
 	}
+
+	// Record WHICH of the two bases this signature's ordering rests on, built
+	// from the same `sameClock` that decided whether the comparison ran. See
+	// g1_timing_basis.go: the marker travels beside the hashed shape, never
+	// inside it, so a reader can tell a re-derived ordering from an inherited
+	// one without the govRoot moving.
+	timingBasis := newTimingBasis(cand.MessageID, cand.MessageHash, signerPage, snapshot.Page,
+		sameClock, receipt.LocalBlock, snapshot.ExecTerms.MBI)
 
 	validated := ValidatedSignature{
 		MessageID:               cand.MessageID,
@@ -613,7 +643,7 @@ func (g1 *G1Layer) evaluateCandidate(ctx context.Context, cand sigCandidate, key
 	}
 
 	// --- ed25519 + key-page membership (section 8.5) ----------------------
-	form, err := g1.signatureVerifier.ValidateSignature(ctx, validated, snapshot.StateExec, txHash)
+	form, err := g1.signatureVerifier.ValidateSignature(ctx, validated, snapshot.StateExec, txHash, snapshot.Page)
 	if err != nil {
 		if isInfrastructureDigestFailure(err) {
 			return evalResult{Outcome: SigUnavailable, Stage: "compute-digest", Reason: err.Error()}
@@ -642,7 +672,7 @@ func (g1 *G1Layer) evaluateCandidate(ctx context.Context, cand sigCandidate, key
 	validated.Signature.DigestForm = form
 	validated.CryptographicallyVerified = true
 
-	return evalResult{Outcome: SigCounted, Validated: validated, Stage: "counted"}
+	return evalResult{Outcome: SigCounted, Validated: validated, Stage: "counted", TimingBasis: timingBasis}
 }
 
 // isNotASignatureMessage reports whether an extraction error means the entry

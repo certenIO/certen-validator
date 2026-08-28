@@ -84,7 +84,10 @@ func resolveCase(t *testing.T, cf corpusFile, caseName string) *ResolutionResult
 	}
 
 	r := &AuthorityResolver{Source: src}
-	res, err := r.Resolve(context.Background(), principal, state, sigs)
+	// true: the fixture state IS the page at execution. These tests pin the
+	// REFUSAL semantics, and a version mismatch is only a refusal when the state
+	// it is measured against is execution-accurate - see authority_exec_state.go.
+	res, err := r.Resolve(context.Background(), principal, state, true, sigs)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -311,7 +314,7 @@ func TestP7_3_OneOfOneDoesNotRegress(t *testing.T) {
 
 		t.Run(tr.Label, func(t *testing.T) {
 			r := &AuthorityResolver{Source: src}
-			res, err := r.Resolve(context.Background(), page, state, []SignatureData{corpusSignatureData(tr)})
+			res, err := r.Resolve(context.Background(), page, state, true, []SignatureData{corpusSignatureData(tr)})
 			if err != nil {
 				t.Fatalf("resolve: %v", err)
 			}
@@ -353,7 +356,7 @@ func TestP7_3_VersionBindingIsEnforced(t *testing.T) {
 			sig.SignerVersion++ // a version the page is not at
 
 			r := &AuthorityResolver{Source: src}
-			res, err := r.Resolve(context.Background(), page, state, []SignatureData{sig})
+			res, err := r.Resolve(context.Background(), page, state, true, []SignatureData{sig})
 			if err != nil {
 				t.Fatalf("resolve: %v", err)
 			}

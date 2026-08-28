@@ -168,13 +168,26 @@ func delegatedOrigins(set map[string]interface{}) []string {
 //
 // Bounded by DelegationDepthLimit hops as well, for the same reason the parser
 // is: an untrusted response must not be able to make this walk forever.
-func enumerateAcrossSigners(idx *signatureSetIndex, principalPage string, maxHops int) []string {
+func enumerateAcrossSigners(idx *signatureSetIndex, principalPage string, maxHops int, roots ...string) []string {
 	uu := URLUtils{}
 	start := uu.NormalizeURL(principalPage)
 
 	visited := map[string]bool{}
 	order := []string{}
+
+	// Seeded with the principal's page AND every other page that may carry a
+	// vote for this account. A SIBLING AUTHORITY IS NOT REACHABLE BY DELEGATION
+	// from the principal - the account names both books and neither delegates to
+	// the other - so a walk seeded only with the principal never sees the second
+	// authority's signature. See g1_authority_pages.go.
+	//
+	// The principal stays first; it is the authority being evaluated.
 	queue := []string{start}
+	for _, r := range roots {
+		if p := uu.NormalizeURL(r); p != "" && p != start {
+			queue = append(queue, p)
+		}
+	}
 
 	for hop := 0; len(queue) > 0 && hop <= maxHops; hop++ {
 		next := []string{}
@@ -211,13 +224,15 @@ func enumerateAcrossSigners(idx *signatureSetIndex, principalPage string, maxHop
 //
 // Returned in the order the pages were walked, so the principal's own
 // signatures come first and the evidence reads outermost-inward.
-func (g1 *G1Layer) collectDelegatedMessageIDs(txResult map[string]interface{}, principalPage string) ([]string, []string, error) {
+func (g1 *G1Layer) collectDelegatedMessageIDs(txResult map[string]interface{}, principalPage string,
+	roots ...string) ([]string, []string, error) {
+
 	idx, err := indexSignatureSets(txResult)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	pages := enumerateAcrossSigners(idx, principalPage, delegationEnumerationMaxHops)
+	pages := enumerateAcrossSigners(idx, principalPage, delegationEnumerationMaxHops, roots...)
 	if len(pages) == 0 {
 		return nil, nil, ValidationError{Msg: fmt.Sprintf(
 			"no signature set for the principal's page %s on this transaction", principalPage)}

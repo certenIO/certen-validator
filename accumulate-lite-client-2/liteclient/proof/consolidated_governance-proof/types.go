@@ -382,6 +382,21 @@ type G1Result struct {
 	// result built without it is distinguishable from one where both routes
 	// ran and agreed - "never recorded" must not read as "agreed".
 	SignatureRouteStatus *RouteStatus `json:"signatureRouteStatus,omitempty"`
+
+	// TimingBasis says, PER COUNTED SIGNATURE, how its ordering before
+	// execution was established: re-derived locally (localBlock <= execMBI) or
+	// inherited from the fact of execution because the two block indices count
+	// different chains.
+	//
+	// A TOP-LEVEL ARRAY, deliberately, and NOT a field of ValidatedSignature.
+	// ValidatedSignature is inside the shape the validator hashes into the
+	// govRoot; this must never be able to reach that shape. It travels beside
+	// it, in the same relationship GovReceiptEvidence has to the receipt
+	// summary, and the validator lifts it with a side read into a wrapper no
+	// canonical hash reaches. Correlate to validated_signatures by messageID.
+	//
+	// See g1_timing_basis.go for why the distinction is worth recording.
+	TimingBasis []SignatureTimingBasis `json:"timingBasis,omitempty"`
 }
 
 // G2Result represents G2 proof result (Governance + Outcome Binding)

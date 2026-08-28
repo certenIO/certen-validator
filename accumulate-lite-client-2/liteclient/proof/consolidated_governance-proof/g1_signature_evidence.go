@@ -131,6 +131,16 @@ type SignatureEvidence struct {
 	// Counted signatures, fully validated and receipt-bound.
 	Counted []ValidatedSignature `json:"-"`
 
+	// TimingBasis says, per counted signature, whether its ordering before
+	// execution was RE-DERIVED here (localBlock <= execMBI, one partition's
+	// clock) or INHERITED from the fact of execution because the two indices
+	// count different chains. One entry per Counted entry, appended together so
+	// the two cannot come apart.
+	//
+	// json:"-" like Counted: this rides out on G1Result, beside the hashed
+	// shape, not inside this route report. See g1_timing_basis.go.
+	TimingBasis []SignatureTimingBasis `json:"-"`
+
 	// Rejected candidates. Retained as evidence: a proof that says "three
 	// candidates, one counted, two rejected because they belong to another
 	// transaction" is stronger than one that says "one counted".

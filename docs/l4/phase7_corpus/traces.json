@@ -1,7 +1,7 @@
 {
   "endpoint": "https://kermit.accumulatenetwork.io/v3",
   "protocolModule": "gitlab.com/accumulatenetwork/accumulate v1.4.2",
-  "capturedAt": "2026-08-25T20:39:11Z",
+  "capturedAt": "2026-08-26T11:44:44Z",
   "traces": [
     {
       "case": "B",
@@ -413,6 +413,126 @@
       "digestForm": "none",
       "submitted": true,
       "txID": "acc://06195913c2ee872b15c39aa3e845ab29d03aa68b369f6ea6b6be0c2cfe4558f2@certen-p7k.acme/data",
+      "execStatus": "delivered"
+    },
+    {
+      "case": "L",
+      "shape": "two authorities, BOTH must sign",
+      "label": "L/l1@certen-p8l.acme/book/1",
+      "why": "the account has TWO authorities and userTransactionIsReady is ready only when notReady is empty, so BOTH books must vote; an implementation that evaluates one key page reports this authorised on half its authority set",
+      "expect": "valid",
+      "expectExec": "delivered",
+      "principal": "acc://certen-p8l.acme",
+      "transactionHash": "27498a8f018585b7294b26f931338312f6c92927b2a2ab99b8aab28fd6c3c991",
+      "type": "ed25519",
+      "keyType": "ed25519",
+      "publicKey": "38025a7ebd5d29bcb7a24d4c23932d6be393e88fb31810588b706249cdb42902",
+      "signature": "6cdc53dc3ba33f5e7c8c0785dbae6c0228b60683af227ff2840c4e4820b8c077958ff88fe3197707c1aacbb98530d5f87de56be2e6a7eeca7b4ed89c5345980d",
+      "signer": "acc://certen-p8l.acme/book/1",
+      "signerVersion": 1,
+      "timestamp": 1787744684584103,
+      "signerPartition": "BVN2",
+      "coreVerdict": true,
+      "digestForm": "metadata",
+      "digest": "f49d3b4c436f1c111c97b6337677d531c71fee2b722fd86333aadd54cd497409",
+      "submitted": true,
+      "txID": "acc://27498a8f018585b7294b26f931338312f6c92927b2a2ab99b8aab28fd6c3c991@certen-p8l.acme/data",
+      "execStatus": "delivered"
+    },
+    {
+      "case": "L",
+      "shape": "two authorities, BOTH must sign",
+      "label": "L/l2@certen-p8l.acme/book2/1",
+      "why": "the account has TWO authorities and userTransactionIsReady is ready only when notReady is empty, so BOTH books must vote; an implementation that evaluates one key page reports this authorised on half its authority set",
+      "expect": "valid",
+      "expectExec": "delivered",
+      "principal": "acc://certen-p8l.acme",
+      "transactionHash": "27498a8f018585b7294b26f931338312f6c92927b2a2ab99b8aab28fd6c3c991",
+      "type": "ed25519",
+      "keyType": "ed25519",
+      "publicKey": "328e8743c8acb7071f2455182bf0633330890bfee11148e0f491d8773226b7c0",
+      "signature": "1ab5fe808869c88127189641a6a5c37a77a5e74e960727ac75cce77bc452d49f03b02259add4f2e54b5db107bc702ae43c3f209d4eec2fbdb615759c9141440f",
+      "signer": "acc://certen-p8l.acme/book2/1",
+      "signerVersion": 1,
+      "timestamp": 1787744684833050,
+      "signerPartition": "BVN2",
+      "coreVerdict": true,
+      "digestForm": "metadata",
+      "digest": "b82e17aa2b53950f0848687786b5ad0d0a85fc652aa019fb783de65dd43abb1a",
+      "submitted": true,
+      "txID": "acc://27498a8f018585b7294b26f931338312f6c92927b2a2ab99b8aab28fd6c3c991@certen-p8l.acme/data",
+      "execStatus": "delivered"
+    },
+    {
+      "case": "L-partial",
+      "shape": "two authorities, only ONE signs",
+      "label": "L-partial/l1@certen-p8l.acme/book/1",
+      "why": "the SIGNATURE is valid and the TRANSACTION is not ready - the distinction case L exists to make. Kermit leaves it pending because the second authority never voted, so a verifier that called this authorised would be asserting something the network itself refused to act on",
+      "expect": "valid",
+      "expectExec": "pending",
+      "principal": "acc://certen-p8l.acme",
+      "transactionHash": "fd279178fb52a6e086a321be345833bc93190abca32c0992c2b521e3b930d0dc",
+      "type": "ed25519",
+      "keyType": "ed25519",
+      "publicKey": "38025a7ebd5d29bcb7a24d4c23932d6be393e88fb31810588b706249cdb42902",
+      "signature": "c82d88c579756c4cea60cf5728d15afd3b89500e7ebdc487edb546785b16a0812f65d34c21fb2ea33cd9e79a72bfc55a64fe6ca17aa46c338c1dd7789d937307",
+      "signer": "acc://certen-p8l.acme/book/1",
+      "signerVersion": 1,
+      "timestamp": 1787744689233272,
+      "signerPartition": "BVN2",
+      "coreVerdict": true,
+      "digestForm": "metadata",
+      "digest": "3ffce1b3649fb9b6584ddeb4acd5b906227c425ee4e242b5d176b65afa24f300",
+      "submitted": true,
+      "txID": "acc://fd279178fb52a6e086a321be345833bc93190abca32c0992c2b521e3b930d0dc@certen-p8l.acme/data",
+      "execStatus": "pending"
+    },
+    {
+      "case": "M",
+      "shape": "one INHERITED authority, book with two pages, PAGE 2 signs",
+      "label": "M/m2@certen-p8m.acme/book/2",
+      "why": "the signer is on PAGE 2 of the authority's book, and AuthorityWillVote iterates pages 1..PageCount returning on the first that would vote - so any page satisfies the book. m2 is deliberately NOT on page 1, so an implementation that reads only page 1 cannot pass this by accident",
+      "expect": "valid",
+      "expectExec": "delivered",
+      "principal": "acc://certen-p8m.acme",
+      "transactionHash": "54e962f88502aacf3dc087de4d2b5e513a7d2be22f72dbae979fac693759363a",
+      "type": "ed25519",
+      "keyType": "ed25519",
+      "publicKey": "cb4f278fa99b612a4795e3825979dd24a90937e990b2d28e13332e0d8963072d",
+      "signature": "89ecde096555e116e754c0739bd4c6e406cb3425f2fdc78785a5830feae0516b84a1f045cd0c689191afdea2d7a19f016eca4ac50be4e7a62e951e2f0ae45d0a",
+      "signer": "acc://certen-p8m.acme/book/2",
+      "signerVersion": 1,
+      "timestamp": 1787744782091694,
+      "signerPartition": "BVN2",
+      "coreVerdict": true,
+      "digestForm": "metadata",
+      "digest": "4f3e6030f69e3968039cc682779b39ca8430c39936c66714076f9d05dacad841",
+      "submitted": true,
+      "txID": "acc://54e962f88502aacf3dc087de4d2b5e513a7d2be22f72dbae979fac693759363a@certen-p8m.acme/data",
+      "execStatus": "delivered"
+    },
+    {
+      "case": "N",
+      "shape": "two authorities, one DISABLED",
+      "label": "N/n1@certen-p8n.acme/book/1",
+      "why": "certen-p8n.acme/book2 is DISABLED on the account, and userTransactionIsReady skips a disabled authority unless the body type RequireAuthorization() - which only UpdateAccountAuth does. So this writeData is ready on one authority's vote, and an implementation that demanded the disabled one would falsely reject it",
+      "expect": "valid",
+      "expectExec": "delivered",
+      "principal": "acc://certen-p8n.acme",
+      "transactionHash": "da420e2947f4f095880a6f10349317a85f2542293bba888b7baadbf32f935355",
+      "type": "ed25519",
+      "keyType": "ed25519",
+      "publicKey": "8ca696fafeb135457986880178b2f58c70641138c3eea478d827b213dd7c3fd8",
+      "signature": "f5af0c9f152e0f62d6c7f5043cb3412ecd800b27611e49c70ae29fb56a6c68c82f844cce8ed7807eea69d321c49b79f1313677a1030415bbbb65f9444cab960f",
+      "signer": "acc://certen-p8n.acme/book/1",
+      "signerVersion": 1,
+      "timestamp": 1787744785799116,
+      "signerPartition": "BVN3",
+      "coreVerdict": true,
+      "digestForm": "metadata",
+      "digest": "8b43cb5f9ccd20efdf1c66f161c600f6f62c16788065fcff8b8dff4c2bc28b80",
+      "submitted": true,
+      "txID": "acc://da420e2947f4f095880a6f10349317a85f2542293bba888b7baadbf32f935355@certen-p8n.acme/data",
       "execStatus": "delivered"
     }
   ],
@@ -909,6 +1029,50 @@
         },
         {
           "keyHash": "c07d4d69dcfe4683259c4f31cf1905a150c1a0058032bad06265b919cd8d314a"
+        }
+      ]
+    },
+    "acc://certen-p8l.acme/book/1": {
+      "url": "acc://certen-p8l.acme/book/1",
+      "version": 1,
+      "threshold": 1,
+      "partition": "BVN2",
+      "entries": [
+        {
+          "keyHash": "dd0c6f37908795b9b3dc57e886945d3375963afc352dc8d7757f4b6eae3cf399"
+        }
+      ]
+    },
+    "acc://certen-p8l.acme/book2/1": {
+      "url": "acc://certen-p8l.acme/book2/1",
+      "version": 1,
+      "threshold": 0,
+      "partition": "BVN2",
+      "entries": [
+        {
+          "keyHash": "1104fce81edd31a2dbddd3abb354716a1250d5b71211417d5d585c6dec84b499"
+        }
+      ]
+    },
+    "acc://certen-p8m.acme/book/2": {
+      "url": "acc://certen-p8m.acme/book/2",
+      "version": 1,
+      "threshold": 1,
+      "partition": "BVN2",
+      "entries": [
+        {
+          "keyHash": "74c4ce7e2c81b61b9e8d3d276a6ba6f925443dee0e13fa768f99fe4e7357cf09"
+        }
+      ]
+    },
+    "acc://certen-p8n.acme/book/1": {
+      "url": "acc://certen-p8n.acme/book/1",
+      "version": 1,
+      "threshold": 1,
+      "partition": "BVN3",
+      "entries": [
+        {
+          "keyHash": "74ffa96dd51cf4cc1522f58104d60274656d5042136ad8e74f3389f53ba916b9"
         }
       ]
     }

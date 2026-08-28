@@ -82,7 +82,35 @@ type PageOutcome struct {
 	Satisfied bool              `json:"satisfied"`
 	Result    *ResolutionResult `json:"result,omitempty"`
 	Err       string            `json:"error,omitempty"`
+
+	// Replayed records whether this page's state was DERIVED BY REPLAY from the
+	// chain's own history up to the execution block (KPSW-EXEC), or simply
+	// queried as it stands today.
+	//
+	// The distinction decides correctness, not just provenance. A page that has
+	// changed since the transaction executed reports a version the signature was
+	// never made against, and resolution then refuses a signature the network
+	// accepted. Recorded rather than smoothed over, the same way
+	// ResolutionLink.FromReplayed records it for delegation hops.
+	Replayed bool `json:"replayed,omitempty"`
 }
+
+// ReplayedPages are page states already established by KPSW-EXEC replay, keyed
+// by normalised page URL.
+//
+// THE STATE AT EXECUTION, NOT THE STATE TODAY. The authority-set walk used to
+// query every page live, which threw away the replayed snapshot the layer above
+// had just built and made every proof a statement about the page as it is now.
+//
+// Measured on Kermit 2026-08-26: after acc://certen-kermit-12.acme/book/1 went
+// from version 1 to version 2, G1 could no longer prove transaction
+// 1f25bb6ae4cad401 - signed at version 1, executed at version 1 - because
+// resolution compared its signerVersion against the page's CURRENT version and
+// refused it. The KPSW-EXEC snapshot had the right answer and was discarded one
+// call earlier. Verified against the pre-Phase-8 build, which fails identically:
+// this is not a regression, it is a defect that could not fire until a page
+// actually changed.
+type ReplayedPages map[string]KeyPageState
 
 // AuthorityOutcome is one authority's verdict, and the evidence for it.
 type AuthorityOutcome struct {
@@ -123,7 +151,8 @@ type AccountAuthorization struct {
 // ignoreDisabled mirrors Body.Type().RequireAuthorization(): when the
 // transaction type requires authorization, a disabled authority is NOT skipped.
 func (r *AuthorityResolver) ResolveAccount(ctx context.Context, account string,
-	extraAuthorities []string, ignoreDisabled bool, sigs []SignatureData) (*AccountAuthorization, error) {
+	extraAuthorities []string, ignoreDisabled bool, sigs []SignatureData,
+	replayed ReplayedPages) (*AccountAuthorization, error) {
 
 	src, ok := r.Source.(AuthoritySource)
 	if !ok {
@@ -171,7 +200,7 @@ func (r *AuthorityResolver) ResolveAccount(ctx context.Context, account string,
 			continue
 		}
 
-		outcome, err := r.resolveAuthority(ctx, src, key, sigs)
+		outcome, err := r.resolveAuthority(ctx, src, key, sigs, replayed)
 		if err != nil {
 			out.Unevaluated = append(out.Unevaluated, key)
 			allSatisfied = false
@@ -199,7 +228,7 @@ func (r *AuthorityResolver) ResolveAccount(ctx context.Context, account string,
 // evaluated and recorded, because "page 2 satisfied it" and "page 1 satisfied
 // it" are different facts about who signed.
 func (r *AuthorityResolver) resolveAuthority(ctx context.Context, src AuthoritySource,
-	book string, sigs []SignatureData) (*AuthorityOutcome, error) {
+	book string, sigs []SignatureData, replayed ReplayedPages) (*AuthorityOutcome, error) {
 
 	pages, err := src.BookPages(ctx, book)
 	if err != nil {
@@ -211,17 +240,32 @@ func (r *AuthorityResolver) resolveAuthority(ctx context.Context, src AuthorityS
 
 	out := &AuthorityOutcome{Authority: normalizeAccURL(book)}
 	for _, page := range pages {
-		state, err := src.PageState(ctx, page)
+		// The REPLAYED state wins where there is one. It is the page as it stood
+		// at execution, derived from the chain's own history and receipt-bound at
+		// every step; the live query is the page as it stands now, and the two
+		// differ for every transaction older than the page's last change.
+		// THE PAGE AS IT STOOD AT EXECUTION. A signature names the version of
+		// the authority it was made against, so that is the only state it can be
+		// compared with; see authority_exec_state.go.
+		key := normalizeAccURL(page)
+		state, fromReplay := replayed[key]
+		var at PageStateAt
+		if fromReplay {
+			at = PageStateAt{State: state, AtExec: true}
+		} else {
+			var err error
+			at, err = r.stateFor(ctx, page)
+			if err != nil {
+				out.Pages = append(out.Pages, PageOutcome{Page: page, Err: err.Error()})
+				continue
+			}
+		}
+		res, err := r.Resolve(ctx, page, at.State, at.AtExec, sigs)
 		if err != nil {
 			out.Pages = append(out.Pages, PageOutcome{Page: page, Err: err.Error()})
 			continue
 		}
-		res, err := r.Resolve(ctx, page, state, sigs)
-		if err != nil {
-			out.Pages = append(out.Pages, PageOutcome{Page: page, Err: err.Error()})
-			continue
-		}
-		po := PageOutcome{Page: page, Satisfied: res.ThresholdMet(), Result: res}
+		po := PageOutcome{Page: page, Satisfied: res.ThresholdMet(), Result: res, Replayed: at.AtExec}
 		out.Pages = append(out.Pages, po)
 		if po.Satisfied && !out.Satisfied {
 			out.Satisfied = true
@@ -257,6 +301,31 @@ func (a *AccountAuthorization) CountedSignerAccounts() []string {
 	return out
 }
 
+// UnevaluableSignatures returns every refusal that means "could not evaluate"
+// rather than "did not count".
+//
+// The two must never be added together. A signature refused for a real reason -
+// a key that is not on the page, a broken delegation path - is evidence, and a
+// threshold may be computed over a set containing it. A signature we could not
+// evaluate is not evidence at all, and a verdict computed while one is
+// outstanding is not a verdict.
+func (a *AccountAuthorization) UnevaluableSignatures() []RefusedSignature {
+	var out []RefusedSignature
+	for _, auth := range a.Authorities {
+		for _, p := range auth.Pages {
+			if p.Result == nil {
+				continue
+			}
+			for _, r := range p.Result.Refused {
+				if isPageUnavailable(r) {
+					out = append(out, r)
+				}
+			}
+		}
+	}
+	return out
+}
+
 // Describe renders the verdict for a failure message, so an unmet authority set
 // says WHICH authority was unmet rather than only that one was.
 func (a *AccountAuthorization) Describe() string {
@@ -268,15 +337,29 @@ func (a *AccountAuthorization) Describe() string {
 		case auth.Satisfied:
 			parts = append(parts, auth.Authority+": satisfied by "+auth.SatisfiedBy)
 		default:
-			detail := ""
+			// WHY it is not satisfied, per page — a threshold shortfall and a
+			// page that could not be read are different findings, and reporting
+			// them both as a bare "NOT satisfied" is the collapse runbook rule 8
+			// exists to prevent. A page with no Result at all was not evaluated;
+			// saying so is the difference between "the institution did not
+			// authorize this" and "we could not tell".
+			var detail []string
 			for _, p := range auth.Pages {
-				if p.Result != nil {
-					detail = fmt.Sprintf(" (%s: %d/%d entries)", p.Page,
-						p.Result.Satisfied, p.Result.Threshold)
-					break
+				switch {
+				case p.Result != nil:
+					detail = append(detail, fmt.Sprintf("%s: %d/%d entries", p.Page,
+						p.Result.Satisfied, p.Result.Threshold))
+				case p.Err != "":
+					detail = append(detail, fmt.Sprintf("%s: NOT EVALUATED (%s)", p.Page, p.Err))
+				default:
+					detail = append(detail, p.Page+": no result recorded")
 				}
 			}
-			parts = append(parts, auth.Authority+": NOT satisfied"+detail)
+			if len(auth.Pages) == 0 {
+				detail = append(detail, "no pages were evaluated")
+			}
+			parts = append(parts, auth.Authority+": NOT satisfied ("+
+				strings.Join(detail, "; ")+")")
 		}
 	}
 	for _, u := range a.Unevaluated {

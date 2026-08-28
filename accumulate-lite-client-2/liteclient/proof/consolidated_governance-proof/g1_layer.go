@@ -72,7 +72,9 @@ func (g1 *G1Layer) ProveG1(ctx context.Context, request G1Request) (*G1Result, e
 	// Step 1: Generate G0 proof as foundation
 	g0Result, err := g1.g0Layer.ProveG0(ctx, request.G0Request)
 	if err != nil {
-		return nil, fmt.Errorf("G0 proof failed: %v", err)
+		// %w so a G0 outcome that is NOT a governance rejection - a transaction
+		// that never executed, above all - stays distinguishable at the top.
+		return nil, fmt.Errorf("G0 proof failed: %w", err)
 	}
 
 	fmt.Printf("[G1] G0 foundation established\n")
@@ -154,7 +156,7 @@ func (g1 *G1Layer) ProveG1(ctx context.Context, request G1Request) (*G1Result, e
 	// "we could not evaluate the signatures" apart from "the signatures do not
 	// authorise this transaction". Conflating the two is what recorded nine
 	// healthy proofs as governance failures.
-	validatedSignatures, routeStatus, err := g1.enumerateAndValidateSignatures(ctx, request, *authoritySnapshot, g0Result.TxHash)
+	validatedSignatures, timingBasis, routeStatus, err := g1.enumerateAndValidateSignatures(ctx, request, *authoritySnapshot, g0Result.TxHash)
 	if err != nil {
 		if inc, ok := IsEvidenceIncomplete(err); ok {
 			return nil, inc
@@ -165,9 +167,28 @@ func (g1 *G1Layer) ProveG1(ctx context.Context, request G1Request) (*G1Result, e
 		return nil, fmt.Errorf("signature validation failed: %v", err)
 	}
 
-	// Step 4: Evaluate authorization
-	authorizationResult, err := g1.signatureVerifier.ValidateSignatureSet(ctx, validatedSignatures, *authoritySnapshot, g0Result.TxHash, g0Result.G0ProofComplete)
+	// Step 4: Evaluate authorization.
+	//
+	// The replay source is built HERE, where the execution block is known, and
+	// seeded with the principal's snapshot so that page is not replayed twice.
+	// Every version comparison downstream is made against a page reconstructed
+	// to this block - see authority_exec_state.go for why nothing else will do.
+	execSource := newExecPageSource(g1.authorityBuilder, g0Result.ExecMBI, g0Result.ExecWitness,
+		map[string]KeyPageState{normalizeAccURL(authoritySnapshot.Page): authoritySnapshot.StateExec})
+
+	authorizationResult, err := g1.signatureVerifier.ValidateSignatureSet(ctx, validatedSignatures, *authoritySnapshot, g0Result.TxHash, g0Result.G0ProofComplete, request.G0Request.Account, execSource)
 	if err != nil {
+		// An evidence outage is returned AS-IS, exactly as step 3 does.
+		//
+		// Wrapping it with %v would flatten the typed error to a string, and
+		// IsEvidenceIncomplete upstream would then classify "we could not
+		// establish the page state at execution" as an ordinary authorization
+		// failure - which is to say, as a governance rejection. That is the
+		// conflation this layer spends its whole length avoiding, and it would
+		// have been reintroduced by an error-formatting verb.
+		if inc, ok := IsEvidenceIncomplete(err); ok {
+			return nil, inc
+		}
 		return nil, fmt.Errorf("authorization evaluation failed: %v", err)
 	}
 
@@ -183,6 +204,7 @@ func (g1 *G1Layer) ProveG1(ctx context.Context, request G1Request) (*G1Result, e
 		TimingValid:          authorizationResult.TimingValid,
 		G1ProofComplete:      authorizationResult.G1ProofComplete,
 		SignatureRouteStatus: routeStatus,
+		TimingBasis:          timingBasis,
 	}
 
 	fmt.Printf("[G1] G1 proof complete:\n")
@@ -208,14 +230,37 @@ func (g1 *G1Layer) ProveG1(ctx context.Context, request G1Request) (*G1Result, e
 // Now: both routes run, an unavailable route is distinguished from a route
 // that legitimately found nothing, and disagreement fails closed.
 func (g1 *G1Layer) enumerateAndValidateSignatures(ctx context.Context, request G1Request,
-	snapshot AuthoritySnapshot, txHash string) ([]ValidatedSignature, *RouteStatus, error) {
+	snapshot AuthoritySnapshot, txHash string) ([]ValidatedSignature, []SignatureTimingBasis, *RouteStatus, error) {
 
 	fmt.Printf("[G1] [EVIDENCE] Collecting signature evidence via both routes...\n")
+
+	// WHICH PAGES MAY CARRY A VOTE, before either route starts looking.
+	//
+	// Both routes walk outward from a page — one through authority signatures,
+	// one through delegate entries — and neither can reach a SIBLING authority,
+	// because the account names both books and neither delegates to the other.
+	// Seeding them with every authority's pages is what makes the two routes
+	// cover the account's whole authority set instead of one book of it.
+	//
+	// Failing here is fatal on purpose. Not knowing which pages may vote is not
+	// the same as there being one, and quietly continuing with the principal's
+	// page alone is precisely the under-collection that produced case L's false
+	// rejection. See g1_authority_pages.go.
+	authorityPages, apErr := g1.accountSignerPages(ctx, request.G0Request.Account, request.KeyPage)
+	if apErr != nil {
+		return nil, nil, nil, &SignatureEvidenceIncomplete{
+			Route:     "authority-pages",
+			Requested: 0,
+			Unavailable: []UnavailableSignature{{
+				MessageID: request.G0Request.Account, Stage: "authority-pages", Err: apErr.Error(),
+			}},
+		}
+	}
 
 	// --- route 1: the transaction's signatureSet for this key page --------
 	var setEv *SignatureEvidence
 	txMessageID := fmt.Sprintf("acc://%s@%s", txHash, request.G0Request.Account)
-	sigData, setErr := g1.ExtractSignatureSetUsingMessageID(ctx, txMessageID, request.KeyPage)
+	sigData, setErr := g1.ExtractSignatureSetUsingMessageID(ctx, txMessageID, request.KeyPage, authorityPages...)
 	if setErr != nil {
 		// The extraction error is no longer discarded. It is an outage until
 		// proven otherwise, and it is reported.
@@ -231,11 +276,11 @@ func (g1 *G1Layer) enumerateAndValidateSignatures(ctx context.Context, request G
 	}
 
 	// --- route 2: enumeration of the key page's P#signature chain ---------
-	enumEv, enumErr := g1.collectViaEnumeration(ctx, request.KeyPage, snapshot, txHash)
+	enumEv, enumErr := g1.collectViaEnumeration(ctx, request.KeyPage, snapshot, txHash, authorityPages...)
 
 	evidence, status, err := ResolveRoutes(nil, setErr, setEv, enumEv, enumErr)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	fmt.Printf("[G1] [EVIDENCE] primary=%s agreed=%t degraded=%t counted=%d rejected=%d candidates=%d\n",
@@ -248,7 +293,28 @@ func (g1 *G1Layer) enumerateAndValidateSignatures(ctx context.Context, request G
 		fmt.Printf("[G1] [EVIDENCE] rejected %s: %s\n", SafeTruncate(r.MessageID, 40), r.Reason)
 	}
 
-	return evidence.Counted, status, nil
+	// One timing record per counted signature, or nothing is returned at all.
+	//
+	// These are appended in the same branch, so a mismatch means a counted
+	// signature reached the verdict with no record of HOW its ordering was
+	// established - which is the precise thing this evidence exists to prevent,
+	// arrived at from the inside. A short list would silently understate how
+	// many signatures rest on the weaker basis, and understating that is worse
+	// than not recording it at all.
+	if len(evidence.TimingBasis) != len(evidence.Counted) {
+		return nil, nil, nil, fmt.Errorf(
+			"internal: %d counted signature(s) but %d timing-basis record(s) on route %q - "+
+				"refusing to emit a proof in which a counted signature has no recorded timing basis",
+			len(evidence.Counted), len(evidence.TimingBasis), evidence.Route)
+	}
+	sortTimingBasis(evidence.TimingBasis)
+	if w := countWeakened(evidence.TimingBasis); w > 0 {
+		fmt.Printf("[G1] [TIMING] %d of %d counted signature(s) are CROSS-PARTITION: their ordering "+
+			"before execution rests on execution inclusion, not on a local block comparison\n",
+			w, len(evidence.TimingBasis))
+	}
+
+	return evidence.Counted, evidence.TimingBasis, status, nil
 }
 
 // parseReceiptData parses receipt data from receipt object
@@ -303,7 +369,8 @@ func (g1 *G1Layer) parseReceiptData(receiptMap map[string]interface{}) (ReceiptD
 }
 
 // ExtractSignatureSetUsingMessageID extracts signature set by querying the transaction message ID directly
-func (g1 *G1Layer) ExtractSignatureSetUsingMessageID(ctx context.Context, messageID string, keyPage string) (*SignatureSetData, error) {
+func (g1 *G1Layer) ExtractSignatureSetUsingMessageID(ctx context.Context, messageID string, keyPage string,
+	authorityPages ...string) (*SignatureSetData, error) {
 	fmt.Printf("[G1] [SIGNATURESET] Extracting signature set from transaction...\n")
 	fmt.Printf("[G1] [SIGNATURESET]   Transaction Hash: %s\n", messageID)
 	fmt.Printf("[G1] [SIGNATURESET]   Key Page: %s\n", keyPage)
@@ -340,7 +407,7 @@ func (g1 *G1Layer) ExtractSignatureSetUsingMessageID(ctx context.Context, messag
 	//
 	// Every page's set is already in this one response, so the walk costs no
 	// extra queries. See g1_delegated_enumeration.go.
-	messageIDs, pages, err := g1.collectDelegatedMessageIDs(response, keyPage)
+	messageIDs, pages, err := g1.collectDelegatedMessageIDs(response, keyPage, authorityPages...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to enumerate signature sets: %v", err)
 	}

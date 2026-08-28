@@ -349,9 +349,14 @@ func (ab *AuthorityBuilder) classifyGovernanceEvents(entries []map[string]interf
 		// Check for syntheticCreateIdentity (aligned with Python _is_synthetic_create_identity)
 		// Pass the entire expanded entry value, which contains the message structure
 		entryValue := pu.CaseInsensitiveGet(expandedEntry, "value")
-		fmt.Printf("[AUTHORITY] [DEBUG] Checking if entry is syntheticCreateIdentity (entryValue nil: %t)\n", entryValue == nil)
-		if ab.isSyntheticCreateIdentity(entryValue) {
-			fmt.Printf("[AUTHORITY] [DEBUG] Found syntheticCreateIdentity at block %d\n", receipt.LocalBlock)
+		// A page's genesis is whichever transaction CREATED it, and there are
+		// three of those — not one. See authority_genesis.go: recognising only
+		// syntheticCreateIdentity made every page except a default book's first
+		// unprovable, with "No genesis event found for key page".
+		genesisType, isGenesis := ab.isKeyPageGenesis(entryValue)
+		if isGenesis {
+			fmt.Printf("[AUTHORITY] [DEBUG] Found %s (a key page genesis) at block %d\n",
+				genesisType, receipt.LocalBlock)
 
 			if genesis != nil {
 				return nil, nil, ValidationError{Msg: "Multiple genesis events found"}
@@ -359,8 +364,9 @@ func (ab *AuthorityBuilder) classifyGovernanceEvents(entries []map[string]interf
 
 			// Extract entry hash (aligned with JSON-RPC response format)
 			if entryStr, ok := pu.CaseInsensitiveGet(entry, "entry").(string); ok {
-				// Parse initial key page state from transaction
-				pageState, err := ab.parseGenesisKeyPageState(msgMap, keyPage)
+				// The page's INITIAL state, derived from the transaction that
+				// created it under accumulate-core's own rules for that type.
+				pageState, err := ab.parseGenesisState(genesisType, entryValue, keyPage)
 				if err != nil {
 					return nil, nil, fmt.Errorf("failed to parse genesis key page state: %v", err)
 				}
@@ -369,12 +375,12 @@ func (ab *AuthorityBuilder) classifyGovernanceEvents(entries []map[string]interf
 					EntryHash:  entryStr,
 					LocalBlock: receipt.LocalBlock,
 					Receipt:    receipt,
-					TxType:     "syntheticCreateIdentity",
+					TxType:     genesisType,
 					PageState:  pageState,
 				}
 
-				fmt.Printf("[AUTHORITY] [GENESIS] Found at block %d, version=%d, threshold=%d, keys=%d\n",
-					receipt.LocalBlock, pageState.Version, pageState.Threshold, len(pageState.Keys))
+				fmt.Printf("[AUTHORITY] [GENESIS] Found at block %d via %s, version=%d, threshold=%d, keys=%d\n",
+					receipt.LocalBlock, genesisType, pageState.Version, pageState.Threshold, len(pageState.Keys))
 			}
 		} else if ab.isUpdateKeyPage(msg) {
 			fmt.Printf("[AUTHORITY] [DEBUG] Found updateKeyPage at block %d\n", receipt.LocalBlock)

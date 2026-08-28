@@ -201,7 +201,11 @@ func (sv *SignatureVerifier) ComputeKeyHash(pubkeyHex string) (string, error) {
 // =============================================================================
 
 // ValidateSignature validates a single signature against authority state
-func (sv *SignatureVerifier) ValidateSignature(ctx context.Context, sig ValidatedSignature, state KeyPageState, txHash string) (string, error) {
+//
+// statePage is the URL `state` describes. A signature made on a DIFFERENT page
+// cannot be checked against it - see the sibling-authority note below - and
+// passing "" keeps the old behaviour of assuming they are the same page.
+func (sv *SignatureVerifier) ValidateSignature(ctx context.Context, sig ValidatedSignature, state KeyPageState, txHash string, statePage string) (string, error) {
 	fmt.Printf("[SIGNATURE] [DEBUG] Starting validation for signature %s\n", SafeTruncate(sig.MessageHash, 16))
 	fmt.Printf("[SIGNATURE] [DEBUG] Signature version: %d, State version: %d\n", sig.Signature.SignerVersion, state.Version)
 
@@ -217,6 +221,35 @@ func (sv *SignatureVerifier) ValidateSignature(ctx context.Context, sig Validate
 	// this point, not because it goes unasked.
 	if sig.Signature.IsDelegated() {
 		return sv.VerifyAgainstAcceptedDigests(sig.Signature, txHash)
+	}
+
+	// A SIBLING AUTHORITY'S SIGNATURE IS THE SAME SITUATION, for the same reason.
+	//
+	// `state` is the KPSW-EXEC snapshot of ONE page - the principal's. A
+	// signature cast by another authority of the account sits on that
+	// authority's own page, carries that page's version, and its key is on that
+	// page. Checking it against the principal's page asks whether one book's key
+	// is on a different book's page, and the answer is always no.
+	//
+	// Measured on Kermit, corpus case L: l2 signing from
+	// acc://certen-p8l.acme/book2/1 was rejected as "public key not in authority
+	// set" against acc://certen-p8l.acme/book/1 - a false governance rejection of
+	// a signature the network accepted, on a transaction it DELIVERED.
+	//
+	// Membership and version are therefore left to resolution, which evaluates
+	// each authority against ITS OWN page state (authority_set.go
+	// resolveAuthority -> Resolve). What still happens here is the important
+	// half: the CRYPTOGRAPHY is verified. Skipped because it is the wrong
+	// question at this point, not because it goes unasked - exactly as for a
+	// delegated signature above.
+	if statePage != "" {
+		signerPage := normalizeAccURL(sig.Signature.Signer)
+		if signerPage != "" && signerPage != normalizeAccURL(statePage) {
+			fmt.Printf("[SIGNATURE] [DEBUG] %s signs from %s, not the snapshot page %s - "+
+				"membership and version are resolution's question, verifying cryptography only\n",
+				SafeTruncate(sig.MessageHash, 16), signerPage, normalizeAccURL(statePage))
+			return sv.VerifyAgainstAcceptedDigests(sig.Signature, txHash)
+		}
 	}
 
 	// Validate signer version matches current state
@@ -317,7 +350,13 @@ func (sv *SignatureVerifier) VerifyAgainstAcceptedDigests(sig SignatureData, txH
 
 // ValidateSignatureSet validates a complete set of signatures for authorization
 // Direct translation of Python evaluate_authorization logic
-func (sv *SignatureVerifier) ValidateSignatureSet(ctx context.Context, signatures []ValidatedSignature, snapshot AuthoritySnapshot, txHash string, executionVerified bool) (*AuthorizationResult, error) {
+//
+// principal is the ACCOUNT THE TRANSACTION WAS EXECUTED AGAINST — the data
+// account, not the signer's key page and not the ADI. It is what carries the
+// authority set Accumulate evaluates, and passing anything else asks a narrower
+// question. Empty falls back to the key page, which is the pre-Phase-8
+// behaviour, and the fallback says so.
+func (sv *SignatureVerifier) ValidateSignatureSet(ctx context.Context, signatures []ValidatedSignature, snapshot AuthoritySnapshot, txHash string, executionVerified bool, principal string, exec ExecPageSource) (*AuthorizationResult, error) {
 	fmt.Printf("[SIGNATURE] [DEBUG] ValidateSignatureSet: Received %d signatures to validate\n", len(signatures))
 	fmt.Printf("[SIGNATURE] [DEBUG] Authority state: version=%d, threshold=%d, keys=%d\n", snapshot.StateExec.Version, snapshot.StateExec.Threshold, len(snapshot.StateExec.Keys))
 
@@ -341,7 +380,7 @@ func (sv *SignatureVerifier) ValidateSignatureSet(ctx context.Context, signature
 	for i, sig := range signatures {
 		fmt.Printf("[SIGNATURE] [DEBUG] Processing signature %d/%d: %s\n", i+1, len(signatures), SafeTruncate(sig.MessageHash, 16))
 
-		form, err := sv.ValidateSignature(ctx, sig, state, txHash)
+		form, err := sv.ValidateSignature(ctx, sig, state, txHash, snapshot.Page)
 		if err != nil {
 			if isInfrastructureDigestFailure(err) {
 				unavailable = append(unavailable, UnavailableSignature{
@@ -451,16 +490,49 @@ func (sv *SignatureVerifier) ValidateSignatureSet(ctx context.Context, signature
 		// far - and silently wrong for an account with two authorities, an
 		// explicit authority that is not the default book, or a signing page
 		// that is not page 1.
-		authz, authErr := sv.resolver.ResolveAccount(ctx, snapshot.Page, nil, false, sigs)
+		// PHASE 8 ITEM 3 — resolve the PRINCIPAL's authority set.
+		//
+		// This used to pass snapshot.Page, the SIGNER'S KEY PAGE. AccountAuthorities
+		// climbs a page to its book, so the call asked "did this ONE book approve"
+		// and named the answer "the account's authority set" — the exact narrowing
+		// the comment above warns against, committed by the code that comment sits
+		// on.
+		//
+		// It could not matter until now: every account on record has a single
+		// inherited authority whose book is the signer's own, so the two questions
+		// had the same answer. Corpus case L is the first account with TWO
+		// authorities and case N the first with a disabled one. Against those the
+		// difference is the entire verdict — a second authority that never voted
+		// would simply not be consulted, and G1 would report the transaction
+		// authorised on evidence from half its authority set.
+		authScope := principal
+		if authScope == "" {
+			authScope = snapshot.Page
+		}
+		// The principal's page as it stood AT EXECUTION, handed to resolution so
+		// it does not query the page as it stands today. Without this, any change
+		// to a key page invalidates the proof of every transaction that preceded
+		// it — see ReplayedPages and authority_exec_state.go.
+		replayed := ReplayedPages{normalizeAccURL(snapshot.Page): snapshot.StateExec}
+
+		// A COPY of the resolver, carrying the replay source for THIS proof.
+		// Assigning to sv.resolver would leak one proof's execution block into
+		// the next, and the whole point of the field is that it is true of one
+		// execution and no other.
+		resolver := *sv.resolver
+		resolver.Exec = exec
+		authz, authErr := resolver.ResolveAccount(ctx, authScope, nil, false, sigs, replayed)
 		if authErr != nil {
 			// The source cannot read authority sets. Fall back to the single
 			// page rather than failing, but the narrower question is the one
 			// being answered and the evidence says so.
-			fmt.Printf("[SIGNATURE] [WARN] authority set unavailable (%v); evaluating the single "+
-				"key page %s instead, which is a NARROWER claim than the account's authority set\n",
-				authErr, snapshot.Page)
+			fmt.Printf("[SIGNATURE] [WARN] authority set of %s unavailable (%v); evaluating the "+
+				"single key page %s instead, which is a NARROWER claim than the account's "+
+				"authority set\n", authScope, authErr, snapshot.Page)
 
-			res, err := sv.resolver.Resolve(ctx, snapshot.Page, state, sigs)
+			// The snapshot IS the page at execution - that is what KPSW-EXEC
+			// builds - so a version mismatch against it is a real finding.
+			res, err := sv.resolver.Resolve(ctx, snapshot.Page, state, true, sigs)
 			if err != nil {
 				return nil, &SignatureEvidenceIncomplete{
 					Route:     "authority-resolution",
@@ -485,6 +557,26 @@ func (sv *SignatureVerifier) ValidateSignatureSet(ctx context.Context, signature
 			thresholdSatisfied = res.ThresholdMet()
 			uniqueValidKeys = res.Satisfied
 			break
+		}
+
+		// A SIGNATURE WE COULD NOT EVALUATE IS NOT A SIGNATURE THAT FAILED.
+		//
+		// Resolution reports a page it could not reconstruct to the execution
+		// block as ReasonPageUnavailable rather than as a version mismatch,
+		// precisely so this check can exist: no threshold verdict may be computed
+		// while one is outstanding. Counting them out instead would produce a
+		// shortfall that reads as "the institution did not authorize this".
+		if un := authz.UnevaluableSignatures(); len(un) > 0 {
+			return nil, &SignatureEvidenceIncomplete{
+				Route:     "authority-resolution",
+				Requested: len(validSignatures),
+				Unavailable: []UnavailableSignature{{
+					Stage: "resolve-page-state",
+					Err: "the page state at execution could not be established for " +
+						"one or more signatures, so no comparison was made: " +
+						describeUnavailable(un),
+				}},
+			}
 		}
 
 		authorization = authz

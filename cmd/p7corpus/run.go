@@ -259,7 +259,15 @@ func runCase(ctx context.Context, c *client, r *router, seeds map[string]string,
 			t.Label, t.CoreVerdict, t.DigestForm, shortURL(t.Signer), part)
 	}
 
+	// Every case before L expected delivery, and said so by not saying anything.
+	wantExec := p.ExpectExec
+	if wantExec == "" {
+		wantExec = "delivered"
+	}
 	if p.SkipSubmit {
+		for i := range traces {
+			traces[i].ExpectExec = wantExec
+		}
 		return traces, nil
 	}
 
@@ -285,8 +293,25 @@ func runCase(ctx context.Context, c *client, r *router, seeds map[string]string,
 		traces[i].TxID = txid.String()
 		traces[i].ExecStatus = status
 		traces[i].ExecError = execErr
+		traces[i].ExpectExec = wantExec
 	}
 	fmt.Printf("  submitted %s -> %s %s\n", txid.String(), status, execErr)
+
+	// What the NETWORK did, against what the case said it would do.
+	//
+	// Reported as a mismatch rather than returned as an error: the trace is
+	// still a specimen and still worth recording, and a case whose expectation
+	// is wrong is exactly what a corpus is for — case H was expected to be
+	// refused, Kermit delivered it, and the CORPUS was corrected, not the
+	// network. Silence here would let that pass unnoticed.
+	switch {
+	case wantExec == "delivered" && status != "delivered":
+		fmt.Printf("  MISMATCH case %s expected the transaction to EXECUTE and it did not (%s %s)\n",
+			p.Case, status, execErr)
+	case wantExec == "pending" && status == "delivered":
+		fmt.Printf("  MISMATCH case %s expected the transaction NOT to execute and it DID — "+
+			"an authority set failed to hold back a transaction it should have\n", p.Case)
+	}
 	return traces, nil
 }
 
