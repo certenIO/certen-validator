@@ -415,8 +415,26 @@ a within-incarnation one.
 
 ### 2B.4c THE ANCHOR COMMITS TO CERTEN'S VALIDATORS, NOT ACCUMULATE'S
 
-Measured 2026-08-28. The on-chain pre-exec message
-(`pkg/consensus/batch_quorum_prover.go:30`) is:
+Measured 2026-08-28 against the **deployed** contracts, not the source tree's
+legacy names. **The live anchor is `CertenAnchorV8_1`**, not V6_1:
+
+```
+base-sepolia V8.1 anchor  0xEA9eeeE42a7971792B11Fd2f682C9c1172490272  (22,431 bytes deployed)
+production CertenAccount  0x3850C52C22Eb5ac1d727784DeFdCa7C5DB050389
+  anchorContract()     -> 0xEA9eee…   (V8.1 — CONFIRMED on chain)
+```
+
+`CertenAccountV7.sol:85` declares the field as `CertenAnchorV6_1 public
+anchorContract`, which is a stale TYPE NAME — the deployed target is V8.1. Do
+not read the source's V6_1 references as the live version; verify on chain.
+
+In V8_1, `currentValidatorSetRoot` is **on-chain contract state**
+(`CertenAnchorV8_1.sol:541`), recomputed by `_recomputeValidatorSetRoot()` on any
+change to membership, voting power or threshold, and any signature whose claimed
+root does not match is rejected. That is a genuinely strong binding — for
+CERTEN's validators.
+
+The pre-exec message (contract header, `CertenAnchorV8_1.sol:14`) is:
 
 ```solidity
 keccak256(abi.encode(
@@ -426,10 +444,9 @@ keccak256(abi.encode(
     validatorSetRoot))            // <-- CERTEN's 7 operators
 ```
 
-`validatorSetRoot` comes from `contracts.GetV6_1ValidatorSetRoot()` — "computed
-once from operator config. Same 7 addresses + powers + threshold"
-(`pkg/consensus/v6_1_signing.go:146`). **That is CERTEN's validator set. The
-Accumulate validator set is not in the anchor at all.**
+**That is CERTEN's validator set.** Grepping `CertenAnchorV8_1.sol` for any
+Accumulate-validator concept returns **nothing**. The Accumulate validator set is
+not in the current anchor contract at all.
 
 What DOES reach the chain about Accumulate is inside govRoot, via
 `L4LegSummary` (`healing_proof.go:160`): `Partition`, `SignedHash`,
@@ -461,17 +478,54 @@ Note the ordering constraint: whatever is added must be something an *offline*
 verifier can check, or it is decoration. Committing a root nobody can expand is
 worse than committing nothing, because it looks like coverage.
 
-### 2B.4d L5 is barely deployed — 10 of 371 proofs
+### 2B.4d L5 status, measured correctly
+
+A raw count misleads here. The trajectory is what matters:
 
 ```
-chained_proof_layers:  layer_number=5  ->  10 rows
-distinct proofs        ->  371
+proofs total                     429
+already carry an anchor_tx_hash  421   (98%)
+already have an anchor_reference 401   (93%)
+carry an L5 row                   10
+
+L5 coverage by day:
+  2026-08-21   0 / 7
+  2026-08-22   0 / 5
+  2026-08-24   0 / 1
+  2026-08-25   0 / 2
+  2026-08-26   8 / 8     <- Phase 8 fleet upgrade
+  2026-08-28   2 / 2
 ```
 
-Ten. Every recommendation in §2B.4b that leans on L5 as the cross-incarnation
-bridge is leaning on something that exists for **2.7% of proofs**. Before L5 can
-be called a bridge it has to be built for every proof, and the runbook must say
-so rather than reasoning about a layer that mostly is not there.
+**L5 is not "barely deployed" — it is 100% for every proof produced since it
+shipped.** The 419 without it are historical, and predate the implementation.
+
+The more important number is the first one: **98% of proofs already have an
+external anchor.** The gas was already spent. What was missing was never the
+anchor — it was the *merkle path binding this proof's leaf into that anchor*,
+persisted so it can be checked offline. Not recording it was an unforced loss of
+a property already paid for.
+
+That reframes the "should L5 be mandatory" question entirely: it is not a cost
+decision, and it is largely already done. What remains is (a) backfill for the
+historical 419, honestly marked where the batch tree cannot be reconstructed, and
+(b) deciding what a MISSING L5 means — see §2B.4e.
+
+### 2B.4e Mandatory to RECORD, never mandatory to VERIFY
+
+If a proof were invalid without L5, then an anchoring failure — chain outage,
+gas exhaustion, RPC timeout — becomes a **governance-proof failure**. That is
+precisely the defect class removed twice in this session: a capability limit
+reported as a governance rejection.
+
+So the rule is:
+
+- **Record L5 on every proof.** It is nearly free; the anchor already exists.
+- **A missing L5 is a distinct, named state** — not a silent pass, not a
+  rejection. Model it on `summary_only`.
+- **L5 alone does not close the §1 gap.** It proves *existence and time*, not
+  validator-set legitimacy. Necessary, not sufficient. Any claim built on it
+  must say which of the two it is making.
 
 ### 2B.4 The requirement, restated honestly
 
