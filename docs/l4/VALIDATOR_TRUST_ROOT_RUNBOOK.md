@@ -652,6 +652,10 @@ is unprovable from the DN's hash-only entry. Redo it against **partition block
 0/1** (§2B.1), which is where genesis actually is. The conclusion may change
 completely.
 
+**Q14 — ✅ IMPLEMENTED IN PHASE 4b (§9.4b).** Eight-slot message under
+`certen:bls:v2:pre`, cross-language agreement proven by shared test vectors,
+govRoot unmoved. NOT deployed and NOT wired in - see §9.4b.8.
+
 **Q14 — DECIDED, NOT OPEN: the commitment goes in the ANCHOR PRE-EXEC MESSAGE.**
 
 Decision taken 2026-08-28 by the maintainer. Do not re-litigate it; implement
@@ -2403,3 +2407,266 @@ newly built proofs while `mainChainHeight == 1` (§9.3.4).
   measurements behind §4.6 are real, the verifier is not.
 - Phase 4b (§4A implementation), Phase 4c (Q15), Phase 5 (the AIPs), Phase 6
   (adversarial review).
+
+---
+
+## Phase 4b — §4A implemented: the anchor-message commitment
+
+**Run 2026-08-28.** `accumulate-core` **not modified** (`git status --porcelain`
+empty). This is the first phase that writes code, and it lands in **two** repos:
+`certen-contracts` (Solidity) and `independant_validator` (Go).
+
+**Gate 4b verdict: PASSED for what a session can do.** The message shape is
+defined, the canonical encoding is pinned, cross-language agreement is
+**proven by test**, and all three active deployments are covered by one bumped
+tag. **Nothing was deployed** — see §4b.8.
+
+### 4b.1 The message, as built
+
+Eight slots under a bumped domain tag. `CertenAnchorV8_2.sol::_verifyBLSProof`
+and `contracts.ComputeEvmMessageHashV8_2_Pre` produce this identically:
+
+```
+keccak256(abi.encode(
+    bytes32("certen:bls:v2:pre"),      // BUMPED - no V8.1 signature can replay
+    uint256(DEPLOYMENT_CHAIN_ID),
+    anchorId,
+    anchor.executionCommitment,
+    anchor.operationID,
+    currentValidatorSetRoot,            // CERTEN's set    (V8.1)
+    anchor.accumulateValidatorSetRoot,  // ACCUMULATE's set  (NEW)
+    anchor.accumulateIncarnation        // which chain       (NEW)
+))
+```
+
+Both validator states now sit side by side in one signed object, which is what
+§4A.2 asked for and what V8.1 could not express.
+
+**The Accumulate root, canonically encoded** (`certen:accval:v1`):
+
+```
+keccak256(
+  "certen:accval:v1"                 // 16-byte domain tag
+  || incarnation                      // 32 B
+  || uint64BE(thresholdNumerator)     //  8 B   <- the missing denominator
+  || uint64BE(thresholdDenominator)   //  8 B
+  || uint32BE(len(validators))        //  4 B   length prefix
+  || for each validator SORTED by publicKey ascending:
+         publicKey                    // 32 B
+      || uint32BE(len(activeOn))      //  4 B   length prefix
+      || for each partition SORTED ascending:
+             uint32BE(len(partition)) //  4 B   length prefix
+          || partition                //  n B
+)
+```
+
+Sorted, length-prefixed and domain-separated, per §4A.5.2. Every §4A.5
+requirement is met: it is offline-expandable (the artifact carries the set —
+Phase 4 §4.2), canonically encoded, carries the incarnation, commits
+**threshold and membership** rather than only the signers, and is deliberately
+versioned.
+
+This is **not** an `abi.encode`. The contract never recomputes this root — it
+cannot, having no access to Accumulate state — it only commits to it. The
+encoding is therefore optimised for unambiguous re-derivation from an artifact
+by an offline verifier, not for Solidity's decoder. Stated in the code so a
+reader does not go looking for the on-chain mirror.
+
+### 4b.2 Cross-language agreement — PROVEN, not asserted
+
+The same fixed vectors are asserted on both sides. If either encoding drifts,
+one of the two tests goes red:
+
+```
+Go   pkg/execution/contracts/v8_2_binding_test.go  TestV8_2_FixedVectors
+Sol  evm/test/CertenAnchorV8_2Binding.t.sol        test_MessageHashMatchesGoBinding
+
+accumulateValidatorSetRoot = 0074e2d6a7b1388c113c4f9f3621b3988d4aae715df060b395a181aaafced0f2
+messageHash (v2:pre)       = 85d3623ce19d4453f9df1077e6d7b29c10892db6916289eecca246644f59cb2d
+```
+
+The vector's incarnation is Kermit's real genesis root anchor
+(`e3f3119213a1…cf81`, measured live in §9.0.2/§9.1.2), so the test data is the
+production shape rather than a placeholder.
+
+```
+Go   ok  pkg/execution/contracts   9 tests
+Sol  Ran 5 tests ... 5 passed; 0 failed
+```
+
+Beyond the shared vector, the Go tests prove the properties the encoding claims:
+order-independence (shuffled input, identical root), caller inputs not mutated,
+**length prefixes actually disambiguate** (`{"BVN1","BVN2"}` vs `{"BVN1BVN2"}`
+do not collide), the threshold is committed (2/3 and 1/3 differ), the
+incarnation is committed (MainNet's and Kermit's genesis anchors differ), the
+bumped tag is not decoration (V8.2 ≠ V6.1 for identical inputs), and every
+unusable input is refused rather than silently encoded.
+
+### 4b.3 A hazard §4A did not anticipate, and the real reason V7_2 exists
+
+`CertenAccountV7._verifyAnchorUsable` destructures `anchorContract.anchors()`
+**positionally**:
+
+```solidity
+(
+    , , , , , , , , , , ,
+    bool valid,          // position 12
+    bool proofExecuted,  // position 13
+    ,
+) = anchorContract.anchors(proof.anchorId);
+```
+
+Had the two new fields been inserted anywhere above position 12 — the natural
+place, next to `accumulateBlockHeight`, which is where an author would put them
+— `valid` and `proofExecuted` would have shifted by two. The contract would
+have kept compiling and started reading `governanceExecuted` and
+`governanceLevel` as the verification flags. **An unverified anchor would have
+read as verified**, silently, on a permanent record.
+
+They are therefore **APPENDED at the end**, which changes the tuple arity from
+15 to 17 and turns the hazard into a compile error. `test_AppendedFieldsDoNotShiftValidOrProofExecuted`
+deploys a real V8.2, creates a real anchor and asserts `valid` is still #12,
+`proofExecuted` still #13, and the two new fields round-trip at #16 and #17.
+
+**This is the concrete reason `CertenAccountV7_2` is required.** §4A.4 listed it
+without saying why, and a reasonable reader would conclude it was a cosmetic fix
+for the stale `CertenAnchorV6_1` type name. It is not: V7 **cannot compile**
+against V8.2, because the tuple it destructures changed width. The retype is a
+consequence, not the motive.
+
+### 4b.4 What was created
+
+**`certen-contracts`** (all new files; no existing contract edited):
+
+```
+evm/src/core/CertenAnchorV8_2.sol          from CertenAnchorV8_1.sol
+evm/src/account/CertenAccountV7_2.sol      from CertenAccountV7.sol
+evm/src/account/CertenAccountFactoryV10.sol  from CertenAccountFactoryV9.sol
+evm/test/CertenAnchorV8_2Binding.t.sol     new
+```
+
+**`independant_validator`** (commit `52c364d`):
+
+```
+pkg/execution/contracts/v8_2_binding.go       442 lines
+pkg/execution/contracts/v8_2_binding_test.go  261 lines
+pkg/consensus/v8_2_signing.go                 266 lines
+```
+
+The factory was **not** in §4A.4's list, and it is needed anyway: a factory
+embeds `type(Account).creationCode` in its CREATE2 derivation, so
+`CertenAccountFactoryV9` physically cannot deploy a V7_2. §4A.4a's "the factory
+must be redeployed" therefore means a *new factory contract*, not a redeploy of
+the existing one. Recording it here because §4A.4's scope list is otherwise
+exact and a future reader will notice the extra file.
+
+**Measured sizes** (`forge build`, EIP-170 limit 24,576 B):
+
+```
+CertenAnchorV8_1    22,431 B   headroom 2,145 B
+CertenAnchorV8_2    22,839 B   headroom 1,737 B   (+408)
+CertenAccountV7     12,975 B   headroom 11,601 B
+CertenAccountV7_2   13,281 B   headroom 11,295 B  (+306)
+```
+
+Note V8_1 compiles to **exactly** the 22,431 bytes measured on chain in §9.0.4 —
+an independent confirmation that the source tree matches all three deployed
+contracts. V8.2's 1,737 B of headroom is real but not generous; a future feature
+of any size will need to reckon with it.
+
+### 4b.5 govRoot did NOT move
+
+Required by the definition of done, and verified rather than assumed:
+
+```
+TestP6_GovRootInvariant_GoldenSlots   PASS   (unmodified)
+TestP6_CanonicalShapesUnchanged       PASS   (unmodified)
+TestP7_V1GovRootStillReproduces       PASS
+```
+
+`ComputeAccumulateGovRoot` is untouched and the V8.2 builder calls it unchanged.
+The Accumulate set root travels in the **anchor message**, not in govRoot's
+preimage — §4A.2's point, and §9.4.5's: govRoot would have been
+cryptographically sufficient too, but the message is where the CERTEN quorum
+explicitly attests to which Accumulate set it saw.
+
+### 4b.6 Scope — no legacy chain was touched
+
+Verified by inspecting both repos' change sets:
+
+```
+independant_validator  3 new files, none matching near|solana|aptos|sui|ton|cardano
+certen-contracts       4 new files, all under evm/src/{core,account} and evm/test
+```
+
+`signV8_2PreExecBLS` **refuses** non-EVM targets rather than silently falling
+back to the V6.1 path — a caller arriving with a NEAR or Solana intent has a
+routing bug, and quietly signing the old message would hide it. It accepts only
+`sepolia`, `base-sepolia` and `arbitrum-sepolia`; the inactive EVM testnets
+(polygon-amoy, optimism-sepolia, moonbase-alpha, bsc-testnet, tron-shasta,
+hedera) are refused with the rest.
+
+The pre-existing modifications in `certen-contracts` (`tron/hardhat.config.js`,
+`evm/package.json`, various untracked scratch files) were already in the working
+tree and are **not** part of this work; they were deliberately left uncommitted.
+
+### 4b.7 The honest weak point: where the incarnation comes from
+
+`signV8_2PreExecBLS` reads the incarnation from the `ACCUMULATE_INCARNATION`
+environment variable, and **fails closed** when it is unset, non-hex, wrong
+length, or all zeroes.
+
+That is not where it belongs. It should come from the L4 evidence — but it
+cannot yet, because **nothing in an L4 leg identifies which chain it is about**
+(§9.1.2, measured). The signed preimage is a `SequencedMessage` over a
+`PartitionAnchor`, and every URL in it is a protocol constant identical across
+MainNet, Kermit, and every incarnation of both. Until Phase 4's
+`ValidatorSetProof` lands and carries the incarnation inside the artifact, the
+value has to come from outside the proof.
+
+Two consequences to carry forward, neither of them hidden:
+
+1. **A misconfigured `ACCUMULATE_INCARNATION` produces a wrong-but-well-formed
+   commitment.** The contract cannot detect it (it cannot validate the set), and
+   an offline verifier would only catch it by comparing against a known-good
+   value. This is a real operational hazard and the strongest argument for
+   finishing Phase 4's artifact work before cutover.
+2. The validator **set** does come from the proof — `Layer4DN.ValidatorSet` and
+   `AcceptThreshold`, the full set rather than only the signers, which is the
+   whole point. `BuildV8_2AccumulateSetInputs` is exported precisely so the EVM
+   submission path reduces the same evidence the same way; a second independent
+   reduction is exactly how two paths drift.
+
+### 4b.8 What was NOT done, and must not be reported as done
+
+- **Nothing was deployed.** No contract was pushed to sepolia, base-sepolia or
+  arbitrum-sepolia. The atomicity rule (§4A.4a — all three together, one bumped
+  tag) is a **deployment** requirement, and deployment is an irreversible,
+  outward-facing action that needs explicit authorisation. It is the next
+  operational step, not a completed one.
+- **`signV8_2PreExecBLS` is not wired in.** `bft_integration.go:1221` still
+  calls `signV6_1PreExecBLS`. The switch-over must happen together with the
+  contract cutover, or validators would sign a message no deployed contract
+  verifies. Left deliberately, and it is the single change that arms this work.
+- **The EVM submission path is not updated.** `pkg/anchor/anchor_manager.go`
+  still packs the 8-argument `createAnchorWithLegs`; V8.2's `createAnchor` and
+  `createBatchAnchor` take ten. `BuildV8_2AccumulateSetInputs` is exported ready
+  for it, but the call sites are unchanged.
+- **`createAnchorWithLegs` was not extended.** V8.2 threads the two fields
+  through `createAnchor` and `createBatchAnchor` — the paths that write an
+  `Anchor` and therefore the paths `_verifyBLSProof` reads. The multi-leg path
+  writes an `IntentAnchor` and has its own execution route. Extending it is
+  additional work, and claiming it was covered would be false.
+- **Phase 4's `ValidatorSetProof` is not implemented.** Without it the artifact
+  cannot expand the committed root, and §4A.5.1 warns that "a committed root
+  nobody can expand is decoration that looks like coverage." **Phase 4b commits
+  the root; Phase 4's artifact work is what makes it mean something.** Neither
+  half is useful alone.
+
+### 4b.9 Still open after Phase 4b
+
+- The five items in §4b.8, of which the artifact work and the coordinated
+  three-network cutover are the load-bearing ones.
+- **§9.0.8** — `mainnet.accumulatenetwork.io` identity, still unresolved.
+- Phase 4c (Q15, the L5 workstream), Phase 5 (the AIPs), Phase 6 (adversarial
+  review).
