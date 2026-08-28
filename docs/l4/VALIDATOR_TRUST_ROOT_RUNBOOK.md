@@ -643,7 +643,7 @@ anchor (the gas is spent), L5 is 100% for proofs produced since it shipped, and
   - (ii) **Backfill.** Can the batch tree be reconstructed for the historical
         419 from `batch_transactions`? Where it cannot, mark — never fabricate.
   - (iii) **Extension.** Carry the Accumulate validator-set root, the induction
-        path, and the incarnation identity (see Q14 for where the commitment
+        path, and the incarnation identity (§4A decided where the commitment
         lives). L5 today proves existence and time only.
 
 **Q10 — Exercise the path that has never run.** The validator set has never
