@@ -181,11 +181,27 @@ func (g1 *G1Layer) ProveG1(ctx context.Context, request G1Request) (*G1Result, e
 	// delegate requires that delegate's approval; an UpdateAccountAuth must be
 	// voted on even by a disabled authority. See g1_extra_authorities.go.
 	//
-	// A failure here is FATAL, not a fallback to "no extras". Continuing with
+	// READ FROM THE TRANSACTION G0 ALREADY FETCHED, not queried again.
+	//
+	// This first shipped as its own query at this point in the flow, and that
+	// was wrong twice over. It re-read data already in hand, and it made that
+	// read the LAST thing on a context the enumeration above had already spent
+	// - so on a slow endpoint it timed out and failed a proof whose governance
+	// had already been established. Observed in production 2026-08-28 on intent
+	// ca207ad9: "cannot determine which authorities this transaction requires:
+	// context deadline exceeded", with G0 and G1 both otherwise complete.
+	//
+	// A failure to DERIVE from a body we hold is still fatal - continuing with
 	// an empty set would ask a narrower question than the protocol asks and
-	// report the answer as though it were the whole one - which is the defect
-	// this derivation exists to close, reintroduced as an error path.
-	extraAuthorities, err := DeriveExtraAuthorities(ctx, g1.client, request.G0Request.Account, g0Result.TxHash)
+	// report the answer as though it were the whole one. What is no longer
+	// fatal is a network round trip that should never have been here.
+	transaction := g1.g0Layer.Transaction()
+	if transaction == nil {
+		return nil, fmt.Errorf("cannot determine which authorities this transaction requires: " +
+			"G0 did not carry the transaction forward. This is an infrastructure failure, NOT a " +
+			"governance rejection")
+	}
+	extraAuthorities, err := extraAuthoritiesFromTransaction(transaction)
 	if err != nil {
 		return nil, fmt.Errorf("cannot determine which authorities this transaction requires: %w", err)
 	}

@@ -72,7 +72,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -124,45 +123,15 @@ var bodyTypesCarryingAuthorities = map[string]bool{
 	"createkeybook":      true,
 }
 
-// DeriveExtraAuthorities reads the transaction and returns the authorities its
-// body and header require beyond the principal's.
+// extraAuthoritiesFromTransaction derives the extras from the transaction G0
+// already fetched.
 //
-// Errors are errors: an undecidable body must never be reported as a body that
-// requires nothing.
-func DeriveExtraAuthorities(ctx context.Context, client RPCClientInterface,
-	account, txHash string) (ExtraAuthorities, error) {
-
-	out := ExtraAuthorities{}
-	if client == nil {
-		return out, fmt.Errorf("extra authorities: no client to read the transaction with")
-	}
-
-	scope := fmt.Sprintf("acc://%s@%s", txHash, strings.TrimPrefix(normalizeAccURL(account), "acc://"))
-	resp, err := client.Query(ctx, scope, map[string]interface{}{"queryType": "default"})
-	if err != nil {
-		return out, fmt.Errorf("extra authorities: query %s: %w", scope, err)
-	}
-
-	pu := ProofUtilities{}
-	result, err := pu.ExpectResult(resp)
-	if err != nil {
-		return out, fmt.Errorf("extra authorities: %s: %w", scope, err)
-	}
-
-	message, _ := pu.CaseInsensitiveGet(result, "message").(map[string]interface{})
-	if message == nil {
-		return out, fmt.Errorf("extra authorities: %s carries no message to read the body from", scope)
-	}
-	transaction, _ := pu.CaseInsensitiveGet(message, "transaction").(map[string]interface{})
-	if transaction == nil {
-		return out, fmt.Errorf("extra authorities: %s carries no transaction", scope)
-	}
-
-	return extraAuthoritiesFromTransaction(transaction)
-}
-
-// extraAuthoritiesFromTransaction is the derivation itself, separated from the
-// query so it can be tested against a body without a network.
+// It takes the transaction rather than fetching one on purpose. An earlier form
+// queried the transaction itself at this point in the flow, which re-read data
+// already in hand and put a network round trip at the end of a context the
+// signature enumeration had already spent; on a slow endpoint it timed out and
+// failed a proof whose governance was already established. The body comes from
+// G0's expanded execution message, which is the same bytes and costs nothing.
 func extraAuthoritiesFromTransaction(transaction map[string]interface{}) (ExtraAuthorities, error) {
 	pu := ProofUtilities{}
 	out := ExtraAuthorities{}

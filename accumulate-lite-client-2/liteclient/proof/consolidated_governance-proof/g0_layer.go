@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 )
 
 // CERTEN Governance Proof - G0 Layer (Inclusion and Finality Only)
@@ -25,6 +26,27 @@ type G0Layer struct {
 	client          RPCClientInterface
 	artifactManager *ArtifactManager
 	queryBuilder    QueryBuilder
+
+	// txMu guards lastTransaction, the transaction object from the expanded
+	// execution message G0 already fetched.
+	//
+	// A SIDE CHANNEL, deliberately. G1 needs the body to derive the authorities
+	// the transaction requires beyond the principal's, and G0Result is embedded
+	// in G1Result and hashed into the govRoot - so the transaction must not be
+	// carried as a field of it. It is also the reason G1 does not simply query
+	// the transaction again: a second read of data already in hand cost a whole
+	// extra round trip on the critical path and, on a slow endpoint, exhausted
+	// the request budget and failed a proof that had already succeeded.
+	txMu            sync.Mutex
+	lastTransaction map[string]interface{}
+}
+
+// Transaction returns the transaction object from the expanded execution
+// message, or nil if G0 has not run.
+func (g0 *G0Layer) Transaction() map[string]interface{} {
+	g0.txMu.Lock()
+	defer g0.txMu.Unlock()
+	return g0.lastTransaction
 }
 
 // NewG0Layer creates a new G0 proof layer
@@ -56,6 +78,18 @@ func (g0 *G0Layer) ProveG0(ctx context.Context, request G0Request) (*G0Result, e
 	expandedMessageID, txData, err := g0.bindExpandedExecutionMessage(ctx, request, execEntry)
 	if err != nil {
 		return nil, fmt.Errorf("expanded execution binding failed: %v", err)
+	}
+
+	// Keep the transaction for G1, which must know which authorities the BODY
+	// requires beyond the principal's. It is already in hand here; fetching it
+	// again in G1 is a round trip that buys nothing.
+	if txData != nil {
+		pu := ProofUtilities{}
+		if txn, ok := pu.CaseInsensitiveGet(txData, "transaction").(map[string]interface{}); ok {
+			g0.txMu.Lock()
+			g0.lastTransaction = txn
+			g0.txMu.Unlock()
+		}
 	}
 
 	// Step 3: Extract key identifiers and metadata
