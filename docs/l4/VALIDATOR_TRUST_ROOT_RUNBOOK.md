@@ -3589,7 +3589,20 @@ code that afternoon.
    MainNet.
 5. Decide whether to wire the builder into the proof cycle now (§P.13).
 
-**Still true, and worth restating because it is the point of all of it:**
-`pkg/execution/layer5.go:225` is not yet deletable. The honest revision is
-narrower than deletion — it becomes conditional on a pinned incarnation and on
-AIP-058 landing.
+**Still true, and worth restating because it is the point of all of it:** the
+CAVEAT SENTENCE that L5 ships inside its artifact —
+
+> *"This attests to whatever was signed, NOT to whether the Accumulate validator
+> set that signed L4 was the legitimate one."* (`pkg/execution/layer5.go:225`)
+
+— is not yet deletable. The honest revision is narrower than deletion anyway: it
+becomes conditional on a pinned incarnation and on AIP-058 landing.
+
+**To be unambiguous, because a bare line number invites the wrong reading: L5 is
+being EXTENDED, never removed.** §9.4c.4 specifies the extension — L5 carries the
+Accumulate validator-set root, the incarnation identity, and the
+`ValidatorSetProof` expansion of the root V8.2 commits on chain. §2B.3 and
+§2B.4b raised L5's standing rather than lowering it: an external anchor is the
+only artefact that survives a re-genesis, and across an incarnation boundary it
+is the strongest link CERTEN holds. What shrinks when this work lands is one
+sentence of caveat inside L5's own output, not L5.
