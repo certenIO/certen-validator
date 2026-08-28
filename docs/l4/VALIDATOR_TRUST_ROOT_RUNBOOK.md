@@ -413,6 +413,66 @@ weaker claim, in the same way `summary_only` marks the 402 proofs that predate
 L4 persistence. Do not let a cross-incarnation proof report the same verdict as
 a within-incarnation one.
 
+### 2B.4c THE ANCHOR COMMITS TO CERTEN'S VALIDATORS, NOT ACCUMULATE'S
+
+Measured 2026-08-28. The on-chain pre-exec message
+(`pkg/consensus/batch_quorum_prover.go:30`) is:
+
+```solidity
+keccak256(abi.encode(
+    bytes32("certen:bls:v1:pre"), chainId, anchorId,
+    anchor.executionCommitment,   // = batchRoot
+    anchor.operationID,
+    validatorSetRoot))            // <-- CERTEN's 7 operators
+```
+
+`validatorSetRoot` comes from `contracts.GetV6_1ValidatorSetRoot()` — "computed
+once from operator config. Same 7 addresses + powers + threshold"
+(`pkg/consensus/v6_1_signing.go:146`). **That is CERTEN's validator set. The
+Accumulate validator set is not in the anchor at all.**
+
+What DOES reach the chain about Accumulate is inside govRoot, via
+`L4LegSummary` (`healing_proof.go:160`): `Partition`, `SignedHash`,
+`StateTreeAnchor`, `RootChainAnchor`, `MinorBlockIndex`, `Threshold`, and
+`Signers` — the sorted public keys that signed.
+
+So the anchor commits to **who signed** and **how many were required**, but never
+to **who was eligible**. The denominator is missing. A fabricated proof listing
+three arbitrary keys as `Signers` with `Threshold: 2` produces an internally
+consistent govRoot, and no on-chain check can distinguish it.
+
+**Consequence, stated plainly:** an on-chain verifier can establish *"CERTEN's
+quorum attested to this"*. It cannot establish *"Accumulate's real validators
+signed it."* The Accumulate half of the chain terminates in CERTEN's own
+attestation rather than in cryptography — which is the §1 gap, surfacing one
+layer out, on chains where the record is permanent.
+
+**So YES, the anchor needs an extension**, and it is in scope for this work:
+
+- commit an **Accumulate validator-set root** (the membership + threshold the
+  quorum was drawn from) beside the existing CERTEN `validatorSetRoot`
+- commit the **incarnation identity** (§2B), so a permanent on-chain record says
+  which chain it is about
+- decide whether this rides in the anchor message (changes the signed preimage
+  and the contract) or in govRoot (changes the preimage only) — the second is
+  cheaper and may suffice; **evaluate both, do not assume**
+
+Note the ordering constraint: whatever is added must be something an *offline*
+verifier can check, or it is decoration. Committing a root nobody can expand is
+worse than committing nothing, because it looks like coverage.
+
+### 2B.4d L5 is barely deployed — 10 of 371 proofs
+
+```
+chained_proof_layers:  layer_number=5  ->  10 rows
+distinct proofs        ->  371
+```
+
+Ten. Every recommendation in §2B.4b that leans on L5 as the cross-incarnation
+bridge is leaning on something that exists for **2.7% of proofs**. Before L5 can
+be called a bridge it has to be built for every proof, and the runbook must say
+so rather than reasoning about a layer that mostly is not there.
+
 ### 2B.4 The requirement, restated honestly
 
 Replace §1's one-liner with:
