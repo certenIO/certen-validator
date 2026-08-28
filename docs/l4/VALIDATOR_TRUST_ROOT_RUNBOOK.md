@@ -2897,3 +2897,135 @@ is useful alone**, and the cutover plan has to move both.
 - The five deployment items from §9.4b.8 — nothing is deployed or wired in.
 - **§9.0.8** — `mainnet.accumulatenetwork.io` identity, still unresolved.
 - Phase 5 (the AIPs), Phase 6 (adversarial review).
+
+---
+
+## Phase 5 — the AIPs
+
+**Run 2026-08-28.** `accumulate-core` **not modified**. AIPs written to
+`C:\Accumulate_Stuff\AIPs\`, which is not a git repository, so they are not
+under version control by design.
+
+**Gate 5 verdict: PASSED.** Both AIPs written, matching §6's structure, with a
+short GitLab issue body each. **AIP A stands alone** — it does not depend on
+AIP B, on #4058, or on DAG-BFT.
+
+### 5.1 What was written
+
+```
+AIP-58-historical-account-state-proof/
+  docs/058-historical-account-state-proof.md   442 lines
+  issue.md                                     governance form
+AIP-59-public-major-block-spine/
+  docs/059-public-major-block-spine.md         328 lines
+  issue.md                                     governance form
+```
+
+Numbers 58 and 59 are the next free ones (50, 51, 52, 54, 55, 57 exist). Both
+follow AIP-50's house style: the header table, then Summary / Motivation /
+Specification / Rationale / Security / Compatibility / Implementation /
+References / Copyright. Each issue body uses the governance project's four-part
+form.
+
+### 5.2 AIP-058 — the one that unblocks CERTEN
+
+**Ask:** honour `ReceiptOptions.ForHeight` on the account query path, so the BPT
+membership receipt that already works can be produced against a **historical**
+root. Plus a stated retention commitment for historical anchor quorum
+signatures.
+
+The proposal is framed around the asymmetry Phase 3 demonstrated: **the roots are
+retained, only the paths to them are not.** 173,378 historical BPT roots on
+Kermit's `anchor(directory)-bpt`, every one indexed and receipt-provable, and no
+way to prove an account into any of them but the newest.
+
+Its Motivation leads with the Q10 run rather than with reasoning, because that is
+the strongest thing this research produced: the change was executed on
+`origin/main`'s executor at MainNet's version, and the previous set became
+unprovable. The AIP says plainly that the gap is invisible today only because the
+set has never changed, and becomes permanent at the first change.
+
+**Deliberately left to the maintainers:** whether historical BPT membership is
+served by retaining nodes or by replay. The AIP states the cost is real and
+declines to prescribe. Prescribing someone else's implementation on the basis of
+a week's reading would be the "looks like research" failure rule 2 warns about.
+
+### 5.3 AIP-059 — the spine, marked as depending on #4058
+
+Marked at the top, before the summary, in a block quote — the dependency and the
+mutual independence from AIP-058 are the first things a reader sees.
+
+It carries one finding that changes its own status. Prior analysis
+(`DAGBFT_MIGRATION_ANALYSIS.md`) held that DAG-BFT's exclusion of `StateHash`
+from the certificate quorum would force a full rewrite of the anchor-quorum
+primitive. **That is wrong and the AIP says so with the evidence**:
+`spine.go:189` verifies `KeySignature` values over a `SequencedMessage` —
+executor-layer chain state, not consensus-engine state — `spine.go` contains
+neither `Certificate` nor `StateHash`, and the threshold check is byte-identical
+on both branches. A supposed blocker is removed rather than inherited.
+
+It also records the finding that makes the AIP necessary at all rather than
+redundant with #4058: **the public `ServiceType` list is byte-identical on
+`origin/main` and `dagbft-integration`**, so the spine is private on *both*
+branches and landing #4058 alone does not expose it.
+
+### 5.4 Every bandwidth cost is measured
+
+Rule 5 required it, and both AIPs carry marshalled-byte numbers rather than
+estimates:
+
+```
+AIP-058  historical validator-set proof   2,364 B   (2,430–7,545 B at MainNet BPT depth)
+AIP-059  one MajorHeaderRecord            1,572 B   (~1,077 B + 165 B x validators)
+AIP-059  the entire spine          640 KB – 9.3 MB  (417/822 major blocks, 3–64 validators)
+AIP-059  one NetworkUpdateProof            660 B    (518 B txn + 142 B receipt)
+```
+
+The `NetworkUpdateProof` figure could only be obtained by *running* a
+validator-set change, because every window on both live networks has
+`updates = 0`. Both AIPs say so where the number appears.
+
+### 5.5 What both AIPs refuse to claim
+
+Rule 6a and rule 7, applied in both Security sections and both issue bodies:
+
+- **Never "proven to genesis" unqualified.** Both state that proofs reach *this
+  incarnation's* genesis and no further, that the boundary is an
+  operator-established state rather than a cryptographic continuation, and that
+  `SystemGenesis` being an empty struct means **no API can ever cross it**.
+- **Record, not legitimacy.** Both say the proof establishes what the network's
+  records held, not who was entitled to write them. Governance capture is named
+  as out of scope rather than quietly omitted.
+- **A trust root fetched from the network is not a trust root.** Both say the
+  anchor's hash must be pinned out of band, and neither pretends the protocol can
+  supply that.
+- **One adversary defeated, one not.** Both name a concrete attack the design
+  stops (a fabricated self-consistent validator set; a server answering
+  "what was the set at H?" with a set of its choosing) and one it does not (an
+  operator quorum legitimately writing a set they control).
+
+AIP-058 additionally carries the **Kourou** hazard into its Compatibility
+section: under `ExecutorVersionV2Kourou` an anchor may be authorized by a
+collection proof with no validator signature at all, so consumers must stop
+reading "the network accepted this anchor" as "a quorum signed it". Neither live
+network runs it yet, but it is `ExecutorVersionLatest` and therefore the next
+activation.
+
+### 5.6 The unresolved measurement is disclosed in both
+
+§9.0.8 is not swept under the rug. Both References sections state that
+`mainnet.accumulatenetwork.io` reports `networkName: MainNet`, one validator, and
+partitions `[Cyclops, Directory]` — not the publicly documented
+Apollo/Yutu/Chandrayaan topology — that the authors could not resolve whether it
+is the production network, and that figures labelled "mainnet" should be read
+with that caveat.
+
+Publishing a number we cannot vouch for, without the caveat, to the people who
+run the network, would be the exact overclaim this project exists to delete.
+
+### 5.7 Still open after Phase 5
+
+- **Phase 6** — adversarial review, the final gate.
+- The five deployment items from §9.4b.8: nothing is deployed, and
+  `signV8_2PreExecBLS` is not wired in.
+- §9.0.8 itself — still worth asking the maintainer directly.
