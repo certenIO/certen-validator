@@ -473,3 +473,34 @@ type G2Request struct {
 	SigbytesPath    *string `json:"sigbytes_path,omitempty"`     // Path to sigbytes tool
 	ExpectEntryHash *string `json:"expect_entry_hash,omitempty"` // Expected entry hash for effect verification
 }
+
+// SecurityReport is the shape the `security_report` slot of G1Result carries.
+//
+// # WHY IT SURVIVED THE DELETION OF THE FILE THAT DEFINED IT
+//
+// Phase 8 item 4 deleted g1_enhanced_crypto.go, which invented a digest -
+// sha256("accumulate/" || txHash || version || timestamp) - that is not the
+// Accumulate digest and never was. The only producer of a SecurityReport was
+// generateSecurityReport in that file, so nothing populates this any more and
+// the slot is always null.
+//
+// The TYPE stays because G1Result is hashed into the governance root
+// (SetG1FromJSON), the field carries no omitempty, and every G1Result ever
+// serialized therefore contains `"security_report": null`. Removing the field
+// would remove that key, change the preimage, and move govRoot - which
+// runbook rule 4 forbids and which no fleet upgrade could roll out atomically
+// against proofs already anchored on chain.
+//
+// It holds no digest and no verification logic, so rule 10 - one
+// implementation of a digest - is satisfied by the deletion that left it here.
+type SecurityReport struct {
+	SecurityLevel     string    `json:"securityLevel"`
+	CryptographicHash string    `json:"cryptographicHash"`
+	BundleHash        string    `json:"bundleHash"`
+	AuditEvents       int       `json:"auditEvents"`
+	CustodyEvents     int       `json:"custodyEvents"`
+	VerificationTime  time.Time `json:"verificationTime"`
+	IntegrityVerified bool      `json:"integrityVerified"`
+	Ed25519Verified   int64     `json:"ed25519Verified"`
+	FailedCount       int64     `json:"failedCount"`
+}

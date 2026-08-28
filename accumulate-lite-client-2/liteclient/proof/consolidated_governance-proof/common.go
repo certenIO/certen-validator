@@ -9,7 +9,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/ed25519"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
@@ -441,7 +440,6 @@ type CryptographicVerifier struct {
 	trailMutex  sync.RWMutex
 	verifyCount int64
 	failCount   int64
-	domains     map[string]SigningDomain
 }
 
 // AuditEvent represents a cryptographic operation for audit trail
@@ -456,173 +454,24 @@ type AuditEvent struct {
 	ErrorDetail string    `json:"errorDetail,omitempty"`
 }
 
-// SigningDomain represents cryptographic signing domain configuration
-type SigningDomain struct {
-	Name            string
-	HashAlgorithm   string
-	SignatureFormat string
-	Prefix          []byte
-	Verifier        func(pubKey, signature, message []byte) bool
-}
-
-// NewCryptographicVerifier creates a new cryptographic verifier with superior security
+// NewCryptographicVerifier creates a verifier that keeps the cryptographic
+// audit trail.
+//
+// It no longer registers a signing domain. The domain it used to register
+// prepended the literal "accumulate/" to the message before calling
+// ed25519.Verify, and there is no such prefix in Accumulate: the signed
+// preimage is sha256(sig.Metadata().Hash() || txHash), or the Initiator()
+// merkle form. A signature checked against the prefixed message could never
+// verify, and the failure would surface as a governance rejection -
+// indistinguishable from "the institution did not authorize this".
+//
+// The one implementation of the digest lives on SignatureVerifier
+// (signature_verifier.go), which is what every live path calls. A second one
+// is a thing that can drift, and this was the drift.
 func NewCryptographicVerifier() *CryptographicVerifier {
-	cv := &CryptographicVerifier{
+	return &CryptographicVerifier{
 		auditTrail: make([]AuditEvent, 0),
-		domains:    make(map[string]SigningDomain),
 	}
-
-	// Register superior Ed25519 verification with Accumulate domain
-	cv.RegisterSigningDomain(SigningDomain{
-		Name:            "accumulate_ed25519",
-		HashAlgorithm:   "SHA512",
-		SignatureFormat: "Ed25519",
-		Prefix:          []byte("accumulate/"),
-		Verifier:        cv.verifyEd25519Signature,
-	})
-
-	return cv
-}
-
-// RegisterSigningDomain registers a cryptographic signing domain
-func (cv *CryptographicVerifier) RegisterSigningDomain(domain SigningDomain) {
-	cv.domains[domain.Name] = domain
-	cv.auditLog("DOMAIN_REGISTER", domain.Name, "SUCCESS", "", "", "", "")
-}
-
-// VerifyEd25519Signature verifies Ed25519 signature with superior security
-func (cv *CryptographicVerifier) VerifyEd25519Signature(pubKeyHex, signatureHex, domainName string, messageData []byte) (bool, error) {
-	cv.trailMutex.Lock()
-	cv.verifyCount++
-	cv.trailMutex.Unlock()
-
-	// Validate inputs with constant-time comparison where applicable
-	if len(pubKeyHex) != 64 {
-		cv.auditLog("ED25519_VERIFY", pubKeyHex[:min(16, len(pubKeyHex))], "FAIL", "", signatureHex[:min(16, len(signatureHex))], pubKeyHex, "Invalid public key length")
-		cv.trailMutex.Lock()
-		cv.failCount++
-		cv.trailMutex.Unlock()
-		return false, ValidationError{Msg: fmt.Sprintf("Invalid Ed25519 public key length: %d", len(pubKeyHex))}
-	}
-
-	if len(signatureHex) != 128 {
-		cv.auditLog("ED25519_VERIFY", pubKeyHex[:16], "FAIL", "", signatureHex[:min(16, len(signatureHex))], pubKeyHex, "Invalid signature length")
-		cv.trailMutex.Lock()
-		cv.failCount++
-		cv.trailMutex.Unlock()
-		return false, ValidationError{Msg: fmt.Sprintf("Invalid Ed25519 signature length: %d", len(signatureHex))}
-	}
-
-	// Decode public key with validation
-	pubKeyBytes, err := hex.DecodeString(pubKeyHex)
-	if err != nil {
-		cv.auditLog("ED25519_VERIFY", pubKeyHex[:16], "FAIL", "", signatureHex[:16], pubKeyHex, "Public key decode error")
-		cv.trailMutex.Lock()
-		cv.failCount++
-		cv.trailMutex.Unlock()
-		return false, ValidationError{Msg: fmt.Sprintf("Invalid public key hex: %v", err)}
-	}
-
-	// Decode signature with validation
-	signatureBytes, err := hex.DecodeString(signatureHex)
-	if err != nil {
-		cv.auditLog("ED25519_VERIFY", pubKeyHex[:16], "FAIL", "", signatureHex[:16], pubKeyHex, "Signature decode error")
-		cv.trailMutex.Lock()
-		cv.failCount++
-		cv.trailMutex.Unlock()
-		return false, ValidationError{Msg: fmt.Sprintf("Invalid signature hex: %v", err)}
-	}
-
-	// Get signing domain configuration
-	domain, exists := cv.domains[domainName]
-	if !exists {
-		cv.auditLog("ED25519_VERIFY", pubKeyHex[:16], "FAIL", "", signatureHex[:16], pubKeyHex, "Unknown signing domain")
-		cv.trailMutex.Lock()
-		cv.failCount++
-		cv.trailMutex.Unlock()
-		return false, ValidationError{Msg: fmt.Sprintf("Unknown signing domain: %s", domainName)}
-	}
-
-	// Prepare message with domain prefix (Accumulate protocol)
-	var finalMessage []byte
-	if len(domain.Prefix) > 0 {
-		finalMessage = append(domain.Prefix, messageData...)
-	} else {
-		finalMessage = messageData
-	}
-
-	// Calculate message hash for audit
-	msgHash := sha256.Sum256(finalMessage)
-	msgHashHex := hex.EncodeToString(msgHash[:])
-
-	// Perform cryptographic verification using Go's crypto/ed25519 package
-	valid := ed25519.Verify(ed25519.PublicKey(pubKeyBytes), finalMessage, signatureBytes)
-
-	// Audit log the verification attempt
-	result := "FAIL"
-	if valid {
-		result = "SUCCESS"
-	} else {
-		cv.trailMutex.Lock()
-		cv.failCount++
-		cv.trailMutex.Unlock()
-	}
-
-	cv.auditLog("ED25519_VERIFY", pubKeyHex[:16], result, msgHashHex, signatureHex[:16], pubKeyHex, "")
-
-	return valid, nil
-}
-
-// verifyEd25519Signature is the internal verifier function for signing domains
-func (cv *CryptographicVerifier) verifyEd25519Signature(pubKey, signature, message []byte) bool {
-	return ed25519.Verify(ed25519.PublicKey(pubKey), message, signature)
-}
-
-// ComputeAccumulateDigest computes the Accumulate protocol digest for Ed25519
-func (cv *CryptographicVerifier) ComputeAccumulateDigest(txHash string, signerVersion int64, timestamp *int64) ([]byte, error) {
-	// Validate transaction hash
-	hv := HexValidator{}
-	normalizedTxHash, err := hv.RequireHex32(txHash, "transaction hash")
-	if err != nil {
-		return nil, err
-	}
-
-	// Decode transaction hash
-	txHashBytes, err := hex.DecodeString(normalizedTxHash)
-	if err != nil {
-		return nil, ValidationError{Msg: fmt.Sprintf("Failed to decode transaction hash: %v", err)}
-	}
-
-	// Build digest according to Accumulate protocol
-	var digestData []byte
-	digestData = append(digestData, []byte("accumulate/")...) // Domain prefix
-	digestData = append(digestData, txHashBytes...)           // Transaction hash (32 bytes)
-
-	// Add signer version (8 bytes, big-endian)
-	versionBytes := make([]byte, 8)
-	for i := 7; i >= 0; i-- {
-		versionBytes[i] = byte(signerVersion & 0xFF)
-		signerVersion >>= 8
-	}
-	digestData = append(digestData, versionBytes...)
-
-	// Add timestamp if provided (8 bytes, big-endian)
-	if timestamp != nil {
-		timestampBytes := make([]byte, 8)
-		ts := *timestamp
-		for i := 7; i >= 0; i-- {
-			timestampBytes[i] = byte(ts & 0xFF)
-			ts >>= 8
-		}
-		digestData = append(digestData, timestampBytes...)
-	}
-
-	// Audit log digest computation
-	digestHash := sha256.Sum256(digestData)
-	digestHashHex := hex.EncodeToString(digestHash[:])
-	cv.auditLog("DIGEST_COMPUTE", normalizedTxHash[:16], "SUCCESS", digestHashHex, "", "", "")
-
-	return digestData, nil
 }
 
 // GetAuditTrail returns the complete cryptographic audit trail
