@@ -356,7 +356,11 @@ func (sv *SignatureVerifier) VerifyAgainstAcceptedDigests(sig SignatureData, txH
 // authority set Accumulate evaluates, and passing anything else asks a narrower
 // question. Empty falls back to the key page, which is the pre-Phase-8
 // behaviour, and the fallback says so.
-func (sv *SignatureVerifier) ValidateSignatureSet(ctx context.Context, signatures []ValidatedSignature, snapshot AuthoritySnapshot, txHash string, executionVerified bool, principal string, exec ExecPageSource) (*AuthorizationResult, error) {
+// extra carries the authorities the TRANSACTION requires beyond the
+// principal's, plus the ignoreDisabled flag, both derived from the body. See
+// g1_extra_authorities.go. A zero value means an ordinary transaction that adds
+// no authority - which is every writeData intent.
+func (sv *SignatureVerifier) ValidateSignatureSet(ctx context.Context, signatures []ValidatedSignature, snapshot AuthoritySnapshot, txHash string, executionVerified bool, principal string, exec ExecPageSource, extra ExtraAuthorities) (*AuthorizationResult, error) {
 	fmt.Printf("[SIGNATURE] [DEBUG] ValidateSignatureSet: Received %d signatures to validate\n", len(signatures))
 	fmt.Printf("[SIGNATURE] [DEBUG] Authority state: version=%d, threshold=%d, keys=%d\n", snapshot.StateExec.Version, snapshot.StateExec.Threshold, len(snapshot.StateExec.Keys))
 
@@ -521,7 +525,17 @@ func (sv *SignatureVerifier) ValidateSignatureSet(ctx context.Context, signature
 		// execution and no other.
 		resolver := *sv.resolver
 		resolver.Exec = exec
-		authz, authErr := resolver.ResolveAccount(ctx, authScope, nil, false, sigs, replayed)
+		// The extra authorities and ignoreDisabled are DERIVED from the
+		// transaction body now, not hard-coded. Passing nil/false here asked a
+		// narrower question than the protocol does: an UpdateKeyPage that adds
+		// a delegate requires that delegate's approval, and an
+		// UpdateAccountAuth must be voted on even by a DISABLED authority.
+		if len(extra.URLs) > 0 || extra.IgnoreDisabled {
+			fmt.Printf("[SIGNATURE] transaction body %q requires %d additional authority/ies "+
+				"beyond the principal's (ignoreDisabled=%t): %v\n",
+				extra.BodyType, len(extra.URLs), extra.IgnoreDisabled, extra.URLs)
+		}
+		authz, authErr := resolver.ResolveAccount(ctx, authScope, extra.URLs, extra.IgnoreDisabled, sigs, replayed)
 		if authErr != nil {
 			// The source cannot read authority sets. Fall back to the single
 			// page rather than failing, but the narrower question is the one

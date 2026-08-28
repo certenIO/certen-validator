@@ -176,7 +176,21 @@ func (g1 *G1Layer) ProveG1(ctx context.Context, request G1Request) (*G1Result, e
 	execSource := newExecPageSource(g1.authorityBuilder, g0Result.ExecMBI, g0Result.ExecWitness,
 		map[string]KeyPageState{normalizeAccURL(authoritySnapshot.Page): authoritySnapshot.StateExec})
 
-	authorizationResult, err := g1.signatureVerifier.ValidateSignatureSet(ctx, validatedSignatures, *authoritySnapshot, g0Result.TxHash, g0Result.G0ProofComplete, request.G0Request.Account, execSource)
+	// The authorities the TRANSACTION requires beyond the principal's, derived
+	// from its body rather than assumed absent. An UpdateKeyPage that adds a
+	// delegate requires that delegate's approval; an UpdateAccountAuth must be
+	// voted on even by a disabled authority. See g1_extra_authorities.go.
+	//
+	// A failure here is FATAL, not a fallback to "no extras". Continuing with
+	// an empty set would ask a narrower question than the protocol asks and
+	// report the answer as though it were the whole one - which is the defect
+	// this derivation exists to close, reintroduced as an error path.
+	extraAuthorities, err := DeriveExtraAuthorities(ctx, g1.client, request.G0Request.Account, g0Result.TxHash)
+	if err != nil {
+		return nil, fmt.Errorf("cannot determine which authorities this transaction requires: %w", err)
+	}
+
+	authorizationResult, err := g1.signatureVerifier.ValidateSignatureSet(ctx, validatedSignatures, *authoritySnapshot, g0Result.TxHash, g0Result.G0ProofComplete, request.G0Request.Account, execSource, extraAuthorities)
 	if err != nil {
 		// An evidence outage is returned AS-IS, exactly as step 3 does.
 		//
