@@ -559,6 +559,21 @@ func (r *UnifiedRepository) MarkAggregatedAttestationVerified(ctx context.Contex
 // =============================================================================
 
 // CreateChainExecutionResult creates a new chain execution result
+// UpdateChainExecutionProofs replaces the persisted inclusion proofs on an execution result with
+// the ones the RB-2 gate actually verified against the block header.
+//
+// The row is written during observation, before the gate runs, and what it carries then is what the
+// chain strategy could build: on Ethereum a list of transaction hashes the code itself calls "a
+// simplified proof", and on chains go-ethereum cannot decode (Base, Arbitrum) nothing at all. The
+// gate builds and verifies real trie proofs for the transaction and its receipt and then discarded
+// them. Now they are written here, so what the database says was proven is what was proven.
+func (r *UnifiedRepository) UpdateChainExecutionProofs(ctx context.Context, id uuid.UUID, merkleProof, receiptProof []byte) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE chain_execution_results SET merkle_proof = $2, receipt_proof = $3 WHERE result_id = $1`,
+		id, merkleProof, receiptProof)
+	return err
+}
+
 func (r *UnifiedRepository) CreateChainExecutionResult(ctx context.Context, input *NewChainExecutionResult) (uuid.UUID, error) {
 	id := uuid.New()
 

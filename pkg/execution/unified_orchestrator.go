@@ -693,9 +693,15 @@ func (o *UnifiedOrchestrator) executePhase7(ctx context.Context, cycle *activeCy
 	// RB-2/RB-4/RB-5: cryptographic attestation gate for proof-gated contract calls.
 	// Refuses the cycle (⇒ no attestation / write-back) unless the executed call's
 	// inclusion proof verifies AND every committed event/state is proven on-chain.
-	if err := o.verifyContractCallGate(observeCtx, cycle, chainStrategy); err != nil {
+	verified, err := o.verifyContractCallGate(observeCtx, cycle, chainStrategy)
+	if err != nil {
 		return fmt.Errorf("RB contract-call verification gate failed: %w", err)
 	}
+
+	// Persist the proofs the gate verified onto the rows written above, so the database carries the
+	// real trie proofs (tx and receipt, bound to the header roots) rather than what the strategy
+	// observer could build — which on Ethereum is a hash list and on Base/Arbitrum is nothing.
+	o.persistVerifiedProofs(ctx, observationResults, chainExecutionIDs, verified)
 
 	return nil
 }
@@ -708,13 +714,47 @@ func (o *UnifiedOrchestrator) executePhase7(ctx context.Context, cycle *activeCy
 // committed value against the finalized stateRoot (RB-5). Any failure returns an error
 // so the caller aborts the cycle. Native transfers (no calldata) are a no-op here (the
 // CRITICAL-003 commitment check already binds them).
-func (o *UnifiedOrchestrator) verifyContractCallGate(ctx context.Context, cycle *activeCycle, chainStrategy chain.ChainExecutionStrategy) error {
+// verifiedCallProofs is what the gate hands back on success: the verified observation for each
+// executed call, keyed by lowercase transaction hash without 0x.
+type verifiedCallProofs map[string]*ExternalChainResult
+
+// persistVerifiedProofs writes the gate's verified tx and receipt inclusion proofs onto the
+// chain_execution_results rows persisted during observation, matched by transaction hash. Best
+// effort: the attestation is already decided by the gate, and a failed write must not undo it.
+func (o *UnifiedOrchestrator) persistVerifiedProofs(ctx context.Context, observations []*chain.ObservationResult, execIDs []uuid.UUID, verified verifiedCallProofs) {
+	if len(verified) == 0 || o.config.UnifiedRepo == nil || len(execIDs) != len(observations) {
+		return
+	}
+	for i, obs := range observations {
+		key := strings.ToLower(strings.TrimPrefix(obs.TxHash, "0x"))
+		res, ok := verified[key]
+		if !ok || res.TxInclusionProof == nil || res.ReceiptInclusionProof == nil {
+			continue
+		}
+		txJSON, err1 := json.Marshal(res.TxInclusionProof)
+		rcJSON, err2 := json.Marshal(res.ReceiptInclusionProof)
+		if err1 != nil || err2 != nil {
+			fmt.Printf("⚠️ [RB-GATE] could not encode verified proofs for %s: %v %v\n", obs.TxHash, err1, err2)
+			continue
+		}
+		// The observation object travels on into the artifact, so carry the real proofs there too.
+		obs.MerkleProof = txJSON
+		obs.ReceiptProof = rcJSON
+		if err := o.config.UnifiedRepo.UpdateChainExecutionProofs(ctx, execIDs[i], txJSON, rcJSON); err != nil {
+			fmt.Printf("⚠️ [RB-GATE] could not persist verified proofs for %s: %v\n", obs.TxHash, err)
+			continue
+		}
+		fmt.Printf("💾 [RB-GATE] Persisted verified tx+receipt inclusion proofs for %s (%d + %d bytes)\n", obs.TxHash, len(txJSON), len(rcJSON))
+	}
+}
+
+func (o *UnifiedOrchestrator) verifyContractCallGate(ctx context.Context, cycle *activeCycle, chainStrategy chain.ChainExecutionStrategy) (verifiedCallProofs, error) {
 	cm := cycle.Request.CommitmentData
 	if cm == nil {
-		return nil
+		return nil, nil
 	}
 	if isCall, _ := cm["rbContractCall"].(bool); !isCall {
-		return nil
+		return nil, nil
 	}
 	// SEC-11: rbContractCall is asserted true, so this cycle DID execute a proof-gated call.
 	// If the committed leg descriptors are missing/malformed and parse to zero, we cannot
@@ -722,7 +762,7 @@ func (o *UnifiedOrchestrator) verifyContractCallGate(ctx context.Context, cycle 
 	// never neuter the gate for a cycle flagged as a contract call).
 	legs := parseRBContractCallLegs(cm["rbContractCallLegs"])
 	if len(legs) == 0 {
-		return fmt.Errorf("cycle flagged rbContractCall but no committed call legs could be parsed — refusing to attest")
+		return nil, fmt.Errorf("cycle flagged rbContractCall but no committed call legs could be parsed — refusing to attest")
 	}
 
 	// Select the contract-call leg(s) that belong to THIS chain group's cycle. Match by
@@ -743,12 +783,12 @@ func (o *UnifiedOrchestrator) verifyContractCallGate(ctx context.Context, cycle 
 		}
 	}
 	if len(applicable) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	cfg := chainStrategy.Config()
 	if cfg == nil || cfg.RPC == "" {
-		return fmt.Errorf("no RPC endpoint for chain %s to verify contract call", chainStrategy.ChainID())
+		return nil, fmt.Errorf("no RPC endpoint for chain %s to verify contract call", chainStrategy.ChainID())
 	}
 	chainID, _ := strconv.ParseInt(chainStrategy.ChainID(), 10, 64)
 	observer, err := NewExternalChainObserver(&ExternalChainObserverConfig{
@@ -759,15 +799,16 @@ func (o *UnifiedOrchestrator) verifyContractCallGate(ctx context.Context, cycle 
 		Timeout:               90 * time.Second,
 	})
 	if err != nil {
-		return fmt.Errorf("build observer for contract-call gate: %w", err)
+		return nil, fmt.Errorf("build observer for contract-call gate: %w", err)
 	}
 
 	// Verify EVERY applicable call leg. Candidate txs: the leg's declared exec tx first,
 	// then all of this chain group's observed txs (robust to imperfect exec-tx threading —
 	// the create/verify txs simply fail the event check and we move on to the real one).
+	verified := make(verifiedCallProofs)
 	for _, l := range applicable {
 		if len(l.events) == 0 {
-			return fmt.Errorf("contract-call leg (chain=%s) committed no events — refusing to attest (success would be indistinguishable from a no-op non-revert)", l.chainKey)
+			return nil, fmt.Errorf("contract-call leg (chain=%s) committed no events — refusing to attest (success would be indistinguishable from a no-op non-revert)", l.chainKey)
 		}
 		candidates := make([]string, 0, len(cycle.Request.TxHashes)+1)
 		if l.execTxHash != "" {
@@ -775,7 +816,7 @@ func (o *UnifiedOrchestrator) verifyContractCallGate(ctx context.Context, cycle 
 		}
 		candidates = append(candidates, cycle.Request.TxHashes...)
 
-		verified := false
+		legOK := false
 		seen := make(map[string]bool)
 		var lastErr error
 		for _, tx := range candidates {
@@ -790,17 +831,18 @@ func (o *UnifiedOrchestrator) verifyContractCallGate(ctx context.Context, cycle 
 			if verr == nil {
 				fmt.Printf("✅ [RB-GATE] Contract-call verified (RB-2 inclusion + RB-4 events%s): chain=%s tx=%s block=%s logs=%d\n",
 					rbStateNote(l.state), l.chainKey, tx, result.BlockNumber.String(), len(result.Logs))
-				verified = true
+				legOK = true
+				verified[key] = result
 				break
 			}
 			lastErr = verr
 		}
-		if !verified {
+		if !legOK {
 			fmt.Printf("❌ [RB-GATE] Contract-call verification FAILED (chain=%s): %v\n", l.chainKey, lastErr)
-			return fmt.Errorf("contract-call verification failed (chain=%s): %w", l.chainKey, lastErr)
+			return nil, fmt.Errorf("contract-call verification failed (chain=%s): %w", l.chainKey, lastErr)
 		}
 	}
-	return nil
+	return verified, nil
 }
 
 // rbCallLeg is a per-leg contract-call verification descriptor carried in CommitmentData.
