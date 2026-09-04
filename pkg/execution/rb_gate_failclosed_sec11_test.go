@@ -22,7 +22,7 @@ func TestSec11_RBContractCallWithNoLegs_FailsClosed(t *testing.T) {
 		},
 	}
 	// chainStrategy is nil, but the fail-closed check returns before any RPC access.
-	if err := o.verifyContractCallGate(context.Background(), cycle, nil); err == nil {
+	if _, err := o.verifyContractCallGate(context.Background(), cycle, nil); err == nil {
 		t.Error("rbContractCall=true with zero parseable legs must fail closed, not no-op")
 	}
 }
@@ -34,7 +34,7 @@ func TestSec11_NoCommitmentData_NoOp(t *testing.T) {
 		CycleID: "c2",
 		Request: &UnifiedProofCycleRequest{CycleID: "c2", TargetChain: "ethereum-sepolia"},
 	}
-	if err := o.verifyContractCallGate(context.Background(), cycle, nil); err != nil {
+	if _, err := o.verifyContractCallGate(context.Background(), cycle, nil); err != nil {
 		t.Errorf("no commitment data must be a no-op (native/anchoring), got %v", err)
 	}
 }
@@ -50,7 +50,7 @@ func TestSec11_RBContractCallFalse_NoOp(t *testing.T) {
 			CommitmentData: map[string]interface{}{"rbContractCall": false},
 		},
 	}
-	if err := o.verifyContractCallGate(context.Background(), cycle, nil); err != nil {
+	if _, err := o.verifyContractCallGate(context.Background(), cycle, nil); err != nil {
 		t.Errorf("rbContractCall=false must be a no-op, got %v", err)
 	}
 }
