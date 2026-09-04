@@ -406,19 +406,23 @@ func (c *Client) GetLatestBlock(ctx context.Context) (*types.Block, error) {
 // GetLatestBlockNumber returns the latest block number
 // Used by confirmation tracker for calculating confirmations
 func (c *Client) GetLatestBlockNumber(ctx context.Context) (int64, error) {
-	block, err := c.GetLatestBlock(ctx)
+	// eth_blockNumber, not a full block: a full block decodes every transaction, and OP-stack and
+	// Arbitrum blocks carry transaction types go-ethereum does not know, so BlockByNumber fails there
+	// on every block. A number needs no transactions.
+	n, err := c.client.BlockNumber(ctx)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to get block number: %w", err)
 	}
-	return block.Number().Int64(), nil
+	return int64(n), nil
 }
 
 // GetBlockInfo returns the hash and timestamp of a specific block
 // Used by confirmation tracker for updating anchor records
 func (c *Client) GetBlockInfo(ctx context.Context, blockNumber int64) (hash string, timestamp time.Time, err error) {
-	block, err := c.GetBlock(ctx, big.NewInt(blockNumber))
+	// Header only — see GetLatestBlockNumber for why a full block fails on OP-stack and Arbitrum.
+	header, err := c.client.HeaderByNumber(ctx, big.NewInt(blockNumber))
 	if err != nil {
-		return "", time.Time{}, err
+		return "", time.Time{}, fmt.Errorf("failed to get block header: %w", err)
 	}
-	return block.Hash().Hex(), time.Unix(int64(block.Time()), 0), nil
+	return header.Hash().Hex(), time.Unix(int64(header.Time), 0), nil
 }

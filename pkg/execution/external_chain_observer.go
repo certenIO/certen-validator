@@ -174,19 +174,11 @@ func (o *ExternalChainObserver) ObserveTransaction(
 
 	o.log("✅ [OBSERVER] Transaction finalized with %d confirmations", o.requiredConfirmations)
 
-	// Get the full block for proof construction
-	block, err := o.ethClient.BlockByNumber(ctx, receipt.BlockNumber)
+	// The header bound to the receipt (required), and the full block when this chain's
+	// transactions can be decoded (an enrichment, for the inclusion proofs). See fetchBlockForResult.
+	block, fullBlock, err := o.fetchBlockForResult(ctx, receipt)
 	if err != nil {
-		return nil, fmt.Errorf("get block: %w", err)
-	}
-
-	// RB-2: Bind the fetched header to the receipt's block hash. block.Hash()
-	// recomputes the header hash from the header fields; if a lying RPC served a header
-	// whose TransactionsRoot/ReceiptsRoot don't belong to the canonical block, this
-	// catches it before we treat those roots as authoritative for inclusion proofs.
-	if block.Hash() != receipt.BlockHash {
-		return nil, fmt.Errorf("header binding failed: block.Hash()=%s != receipt.BlockHash=%s (untrusted RPC header)",
-			block.Hash().Hex(), receipt.BlockHash.Hex())
+		return nil, err
 	}
 
 	// Get the transaction
@@ -205,20 +197,23 @@ func (o *ExternalChainObserver) ObserveTransaction(
 	// Create the external chain result
 	result := FromEthereumReceipt(receipt, tx, block, o.chainID, confirmations, o.validatorID)
 
-	// Construct Merkle inclusion proofs
-	txProof, err := o.constructTxInclusionProof(ctx, block, receipt.TransactionIndex)
-	if err != nil {
-		o.log("⚠️ [OBSERVER] Failed to construct tx inclusion proof: %v", err)
-		// Continue without proof - result is still valid from receipt
-	} else {
-		result.TxInclusionProof = txProof
-	}
+	// Construct Merkle inclusion proofs — only from a block whose every transaction decoded, since
+	// a trie built from a partial transaction list has the wrong root and proves nothing.
+	if fullBlock != nil {
+		txProof, err := o.constructTxInclusionProof(ctx, fullBlock, receipt.TransactionIndex)
+		if err != nil {
+			o.log("⚠️ [OBSERVER] Failed to construct tx inclusion proof: %v", err)
+			// Continue without proof - result is still valid from receipt
+		} else {
+			result.TxInclusionProof = txProof
+		}
 
-	receiptProof, err := o.constructReceiptInclusionProof(ctx, block, receipt)
-	if err != nil {
-		o.log("⚠️ [OBSERVER] Failed to construct receipt inclusion proof: %v", err)
-	} else {
-		result.ReceiptInclusionProof = receiptProof
+		receiptProof, err := o.constructReceiptInclusionProof(ctx, fullBlock, receipt)
+		if err != nil {
+			o.log("⚠️ [OBSERVER] Failed to construct receipt inclusion proof: %v", err)
+		} else {
+			result.ReceiptInclusionProof = receiptProof
+		}
 	}
 
 	// RB-5: if the intent committed storage-slot effects, fetch and attach state proofs
@@ -242,6 +237,56 @@ func (o *ExternalChainObserver) ObserveTransaction(
 	o.log("🎉 [OBSERVER] External chain result complete: hash=%s status=%d", result.ToHex()[:16], result.Status)
 
 	return result, nil
+}
+
+// fetchBlockForResult returns the block the receipt landed in, in two forms: a header-only block
+// bound to the receipt (always, or an error), and the fully decoded block when this chain allows it
+// (otherwise nil).
+//
+// WHY TWO. ethclient.BlockByNumber decodes every transaction in the block with go-ethereum's own
+// types, and rejects the whole block on the first type it does not know. Every OP-stack block (Base,
+// Optimism) carries a type-0x7e deposit transaction, and Arbitrum blocks carry Nitro's own types, so
+// on those chains the call fails with "transaction type not supported" — for every block, always.
+// Until 2026-09-04 that failure aborted the observation, the RB gate failed, and no contract call on
+// Base or Arbitrum could be proved: 54 Base artifacts existed and all were value transfers, which
+// never reach this path.
+//
+// What the result actually needs from the block is the header: its hash (RB-2 binding to the
+// receipt's block hash, so a lying RPC cannot substitute roots), its time, and its transactions,
+// receipts and state roots. HeaderByNumber decodes only the header, which is the upstream geth
+// layout on OP-stack and Nitro chains alike, so the binding and the roots hold there. The full block
+// is wanted only to build the Merkle inclusion tries, and those were already best-effort: skipping
+// them on a chain whose transactions cannot be decoded loses an enrichment, not the proof of effect,
+// which comes from the receipt bound to the header.
+func (o *ExternalChainObserver) fetchBlockForResult(
+	ctx context.Context,
+	receipt *types.Receipt,
+) (headerBlock *types.Block, fullBlock *types.Block, err error) {
+	header, err := o.ethClient.HeaderByNumber(ctx, receipt.BlockNumber)
+	if err != nil {
+		return nil, nil, fmt.Errorf("get block header: %w", err)
+	}
+	// RB-2: bind the fetched header to the receipt's block hash. header.Hash() recomputes the hash
+	// from the header fields; if a lying RPC served a header whose TransactionsRoot/ReceiptsRoot do
+	// not belong to the canonical block, this catches it before those roots are treated as
+	// authoritative.
+	if header.Hash() != receipt.BlockHash {
+		return nil, nil, fmt.Errorf("header binding failed: header.Hash()=%s != receipt.BlockHash=%s (untrusted RPC header)",
+			header.Hash().Hex(), receipt.BlockHash.Hex())
+	}
+	headerBlock = types.NewBlockWithHeader(header)
+
+	full, err := o.ethClient.BlockByNumber(ctx, receipt.BlockNumber)
+	if err != nil {
+		o.log("⚠️ [OBSERVER] Full block %d not decodable on chain %d (%v) — inclusion proofs skipped; header binding and receipt verification still apply",
+			receipt.BlockNumber.Uint64(), o.chainID, err)
+		return headerBlock, nil, nil
+	}
+	if full.Hash() != receipt.BlockHash {
+		return nil, nil, fmt.Errorf("header binding failed: block.Hash()=%s != receipt.BlockHash=%s (untrusted RPC block)",
+			full.Hash().Hex(), receipt.BlockHash.Hex())
+	}
+	return headerBlock, full, nil
 }
 
 // TrackExecution adds an execution to be tracked asynchronously
@@ -864,16 +909,10 @@ func (o *ExternalChainObserver) checkExecution(ctx context.Context, p *PendingEx
 		return nil, ErrNotYetFinalized
 	}
 
-	// Get full block and tx for result construction
-	block, err := o.ethClient.BlockByNumber(ctx, receipt.BlockNumber)
+	// Header bound to the receipt (required) and the full block when decodable (see fetchBlockForResult).
+	block, fullBlock, err := o.fetchBlockForResult(ctx, receipt)
 	if err != nil {
 		return nil, err
-	}
-
-	// RB-2: bind the fetched header to the receipt's block hash before trusting its roots.
-	if block.Hash() != receipt.BlockHash {
-		return nil, fmt.Errorf("header binding failed: block.Hash()=%s != receipt.BlockHash=%s (untrusted RPC header)",
-			block.Hash().Hex(), receipt.BlockHash.Hex())
 	}
 
 	tx, _, err := o.ethClient.TransactionByHash(ctx, p.TxHash)
@@ -883,12 +922,13 @@ func (o *ExternalChainObserver) checkExecution(ctx context.Context, p *PendingEx
 
 	result := FromEthereumReceipt(receipt, tx, block, o.chainID, confirmations, o.validatorID)
 
-	// Construct proofs
-	txProof, _ := o.constructTxInclusionProof(ctx, block, receipt.TransactionIndex)
-	result.TxInclusionProof = txProof
-
-	receiptProof, _ := o.constructReceiptInclusionProof(ctx, block, receipt)
-	result.ReceiptInclusionProof = receiptProof
+	// Construct proofs — only from a fully decoded block (a partial list has the wrong root).
+	if fullBlock != nil {
+		txProof, _ := o.constructTxInclusionProof(ctx, fullBlock, receipt.TransactionIndex)
+		result.TxInclusionProof = txProof
+		receiptProof, _ := o.constructReceiptInclusionProof(ctx, fullBlock, receipt)
+		result.ReceiptInclusionProof = receiptProof
+	}
 
 	return result, nil
 }
