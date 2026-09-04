@@ -197,8 +197,10 @@ func (o *ExternalChainObserver) ObserveTransaction(
 	// Create the external chain result
 	result := FromEthereumReceipt(receipt, tx, block, o.chainID, confirmations, o.validatorID)
 
-	// Construct Merkle inclusion proofs — only from a block whose every transaction decoded, since
-	// a trie built from a partial transaction list has the wrong root and proves nothing.
+	// Construct Merkle inclusion proofs. From the decoded block when go-ethereum could decode every
+	// transaction; otherwise from the raw JSON block, encoding the chain's own transaction types by
+	// hand and refusing unless both roots match the header (see raw_block_proofs.go). Never from a
+	// partial list: a trie over a subset has the wrong root and proves nothing.
 	if fullBlock != nil {
 		txProof, err := o.constructTxInclusionProof(ctx, fullBlock, receipt.TransactionIndex)
 		if err != nil {
@@ -213,6 +215,15 @@ func (o *ExternalChainObserver) ObserveTransaction(
 			o.log("⚠️ [OBSERVER] Failed to construct receipt inclusion proof: %v", err)
 		} else {
 			result.ReceiptInclusionProof = receiptProof
+		}
+	} else {
+		txProof, receiptProof, err := o.inclusionProofsFromRaw(ctx, block.Header(), receipt.TransactionIndex)
+		if err != nil {
+			o.log("⚠️ [OBSERVER] Inclusion proofs from raw block failed on chain %d: %v", o.chainID, err)
+		} else {
+			result.TxInclusionProof = txProof
+			result.ReceiptInclusionProof = receiptProof
+			o.log("✅ [OBSERVER] Inclusion proofs built from the raw block (chain %d); both roots matched the header", o.chainID)
 		}
 	}
 
@@ -278,7 +289,7 @@ func (o *ExternalChainObserver) fetchBlockForResult(
 
 	full, err := o.ethClient.BlockByNumber(ctx, receipt.BlockNumber)
 	if err != nil {
-		o.log("⚠️ [OBSERVER] Full block %d not decodable on chain %d (%v) — inclusion proofs skipped; header binding and receipt verification still apply",
+		o.log("ℹ️ [OBSERVER] Full block %d not decodable by go-ethereum on chain %d (%v) — inclusion proofs will be built from the raw block",
 			receipt.BlockNumber.Uint64(), o.chainID, err)
 		return headerBlock, nil, nil
 	}
@@ -922,12 +933,18 @@ func (o *ExternalChainObserver) checkExecution(ctx context.Context, p *PendingEx
 
 	result := FromEthereumReceipt(receipt, tx, block, o.chainID, confirmations, o.validatorID)
 
-	// Construct proofs — only from a fully decoded block (a partial list has the wrong root).
+	// Construct proofs — from the decoded block, or from the raw block on chains go-ethereum cannot
+	// decode (see raw_block_proofs.go). Never from a partial list.
 	if fullBlock != nil {
 		txProof, _ := o.constructTxInclusionProof(ctx, fullBlock, receipt.TransactionIndex)
 		result.TxInclusionProof = txProof
 		receiptProof, _ := o.constructReceiptInclusionProof(ctx, fullBlock, receipt)
 		result.ReceiptInclusionProof = receiptProof
+	} else if txProof, receiptProof, err := o.inclusionProofsFromRaw(ctx, block.Header(), receipt.TransactionIndex); err == nil {
+		result.TxInclusionProof = txProof
+		result.ReceiptInclusionProof = receiptProof
+	} else {
+		o.log("⚠️ [OBSERVER] Inclusion proofs from raw block failed on chain %d: %v", o.chainID, err)
 	}
 
 	return result, nil
