@@ -141,10 +141,7 @@ func (pb *ProofBuilder) BuildMultiPartitionProof(ctx context.Context, in ProofIn
 	// whatever order resolution enumerated the signers. Partition discovery
 	// order is not stable, and unordered legs make two validators reading
 	// identical chain data produce different bytes.
-	ordered := append([]SignerLeg{}, signers...)
-	sort.SliceStable(ordered, func(i, j int) bool {
-		return strings.ToLower(ordered[i].Partition) < strings.ToLower(ordered[j].Partition)
-	})
+	ordered := onePerPartition(signers)
 
 	var artifacts map[string][]byte
 	if pb.WithArtifacts {
@@ -183,6 +180,8 @@ func (pb *ProofBuilder) BuildMultiPartitionProof(ctx context.Context, in ProofIn
 		if strings.EqualFold(s.Partition, principalPartition) {
 			continue // this partition's evidence is already in the proof
 		}
+		// Two signers on one partition are already collapsed by onePerPartition above; a second
+		// leg for the same partition would be refused by AddLeg, and used to fail the whole proof.
 		if s.MessageHash == "" {
 			return nil, fmt.Errorf("proof builder: signer %s has no signature message hash; a "+
 				"signer leg proves the SIGNATURE's inclusion on that signer's chain, and without "+
@@ -298,4 +297,38 @@ func (pb *ProofBuilder) BuildMultiPartitionProof(ctx context.Context, in ProofIn
 		return nil, fmt.Errorf("proof builder: built multi-partition proof does not verify: %w", err)
 	}
 	return out, nil
+}
+
+// onePerPartition reduces the signer legs to one per partition, sorted by partition and then by
+// account so the choice is the same on every validator.
+//
+// A leg proves a partition's quorum (L4) and one signature's inclusion on that partition (L1).
+// When two governing books route to the SAME partition — three authorities on an identity make
+// that likely: with three partitions the odds two share one are about three in four — the
+// partition's quorum is proven once and the leg carries the first signer in canonical order.
+// Building a second leg for the same partition was refused by AddLeg ("at most one leg per
+// partition") and the whole proof failed closed, which left the intent unsettled forever
+// (2026-09-06: every claim from an insurer identity with an owner's book and an underwriting
+// book on the same BVN). The invariant the caller checks afterwards — a leg for every partition
+// that signed — still holds exactly.
+func onePerPartition(signers []SignerLeg) []SignerLeg {
+	ordered := append([]SignerLeg{}, signers...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		pi, pj := strings.ToLower(ordered[i].Partition), strings.ToLower(ordered[j].Partition)
+		if pi != pj {
+			return pi < pj
+		}
+		return strings.ToLower(ordered[i].Account) < strings.ToLower(ordered[j].Account)
+	})
+	out := ordered[:0]
+	seen := map[string]bool{}
+	for _, s := range ordered {
+		key := strings.ToLower(s.Partition)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, s)
+	}
+	return out
 }
