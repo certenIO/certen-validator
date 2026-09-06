@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/certen/independant-validator/pkg/entitlement"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -2937,8 +2938,12 @@ func (e *RealCometBFTEngine) BroadcastValidatorBlockCommit(
 			return nil, fmt.Errorf("BroadcastTxSync: %w", err)
 		}
 
-		// Check if it's a timeout error worth retrying
-		if strings.Contains(err.Error(), "deadline exceeded") || strings.Contains(err.Error(), "connection refused") {
+		// Retry what is transient. A timeout and a refused connection were already here; a stale
+		// keep-alive that the RPC closed answers EOF (or a reset) on the next request, and that is
+		// the most common failure seen on the fleet — 2026-09-06, three validators, each marked an
+		// intent failed on its FIRST attempt and never queued it for settlement, so the hashed
+		// leader did nothing until the four-minute failover. A fresh request succeeds at once.
+		if isTransientBroadcastError(err) {
 			if attempt < maxRetries {
 				retryDelay := time.Duration(attempt) * 2 * time.Second
 				e.logger.Printf("🔄 [COMETBFT] Retrying in %v...", retryDelay)
@@ -3905,4 +3910,26 @@ func NewProductionEngine(cfg EngineConfig, app abcitypes.Application, logger *lo
 
 	logger.Printf("✅ [PRODUCTION-ENGINE] Unified CometBFT engine created successfully")
 	return engine, nil
+}
+
+// isTransientBroadcastError reports whether a BroadcastTxSync failure is worth another attempt:
+// a timeout, a refused connection, or a transport error on a connection the RPC dropped (EOF,
+// reset, broken pipe). A CheckTx rejection is not an error here and never reaches this.
+func isTransientBroadcastError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	msg := err.Error()
+	for _, needle := range []string{
+		"deadline exceeded", "connection refused", "EOF", "connection reset", "broken pipe",
+		"no such host", "i/o timeout", "TLS handshake timeout", "server closed idle connection",
+	} {
+		if strings.Contains(msg, needle) {
+			return true
+		}
+	}
+	return false
 }
