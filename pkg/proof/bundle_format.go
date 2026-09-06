@@ -77,6 +77,58 @@ type ProofComponents struct {
 
 	// Component 4: Governance Proof (G0/G1/G2)
 	GovernanceProof *GovernanceProof `json:"4_governance_proof,omitempty"`
+
+	// Component 5: Execution Proof — the target-chain transaction and its receipt, with the
+	// Patricia-trie inclusion proofs the RB-2 gate verified against the block header. Component 2
+	// names the transaction; this one lets a stranger check, off any RPC, that the receipt with
+	// these logs is in that block.
+	ExecutionProof *ExecutionProof `json:"5_execution_proof,omitempty"`
+}
+
+// =============================================================================
+// Component 5: Execution Proof
+// =============================================================================
+
+// ExecutionProof binds the execution receipt to the block. `receipt_inclusion_proof` and
+// `tx_inclusion_proof` are the gate's verified MerkleInclusionProof records (leaf hash, index,
+// expected root, raw proof nodes, leaf value): re-verify with go-ethereum's trie.VerifyProof
+// (nodes keyed by keccak256(node), key = RLP(tx index)) against `receipts_root` /
+// `transactions_root`, which are the block header's, and compare the resolved value to
+// `raw_receipt`. `logs` are decoded from that receipt for reading, not for trust.
+type ExecutionProof struct {
+	ChainID          string          `json:"chain_id"`
+	TxHash           string          `json:"tx_hash"`
+	BlockNumber      uint64          `json:"block_number"`
+	BlockHash        string          `json:"block_hash,omitempty"`
+	Status           uint8           `json:"status"`
+	TransactionsRoot string          `json:"transactions_root,omitempty"`
+	ReceiptsRoot     string          `json:"receipts_root,omitempty"`
+	RawReceipt       string          `json:"raw_receipt,omitempty"`
+	Logs             []ExecutionLog  `json:"logs,omitempty"`
+	TxInclusion      json.RawMessage `json:"tx_inclusion_proof,omitempty"`
+	ReceiptInclusion json.RawMessage `json:"receipt_inclusion_proof,omitempty"`
+	VerifiedBy       string          `json:"verified_by,omitempty"`
+	VerifiedAt       time.Time       `json:"verified_at"`
+}
+
+// ExecutionLog is one event log from the receipt, hex-encoded for readers.
+type ExecutionLog struct {
+	Address  string   `json:"address"`
+	Topics   []string `json:"topics"`
+	Data     string   `json:"data"`
+	LogIndex uint     `json:"log_index"`
+}
+
+// SetExecutionProof attaches component 5. Nothing is attached without a receipt inclusion proof:
+// a receipt the bundle cannot prove is a claim, not a proof, and the component's absence says so.
+func (b *CertenProofBundle) SetExecutionProof(p *ExecutionProof) {
+	if p == nil || len(p.ReceiptInclusion) == 0 {
+		return
+	}
+	if p.VerifiedAt.IsZero() {
+		p.VerifiedAt = time.Now().UTC()
+	}
+	b.ProofComponents.ExecutionProof = p
 }
 
 // =============================================================================

@@ -3138,6 +3138,30 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 		if bundle.ProofComponents.AnchorReference != nil {
 			bundle.ProofComponents.AnchorReference.AnchorBlockHash = obs.BlockHash
 		}
+		// Component 5: the receipt and the verified inclusion proofs, so a stranger can check the
+		// event off any RPC. Only present when the gate verified a receipt proof (persistVerifiedProofs
+		// wrote it onto the observation); never a receipt without its proof.
+		if len(obs.ReceiptProof) > 0 {
+			logs := make([]proof.ExecutionLog, 0, len(obs.Logs))
+			for _, l := range obs.Logs {
+				logs = append(logs, proof.ExecutionLog{Address: l.Address, Topics: l.Topics, Data: "0x" + hex.EncodeToString(l.Data), LogIndex: l.LogIndex})
+			}
+			bundle.SetExecutionProof(&proof.ExecutionProof{
+				ChainID:          result.ChainID,
+				TxHash:           obs.TxHash,
+				BlockNumber:      obs.BlockNumber,
+				BlockHash:        obs.BlockHash,
+				Status:           obs.Status,
+				TransactionsRoot: "0x" + hex.EncodeToString(obs.TransactionsRoot[:]),
+				ReceiptsRoot:     "0x" + hex.EncodeToString(obs.ReceiptsRoot[:]),
+				RawReceipt:       "0x" + hex.EncodeToString(obs.RawReceipt),
+				Logs:             logs,
+				TxInclusion:      json.RawMessage(obs.MerkleProof),
+				ReceiptInclusion: json.RawMessage(obs.ReceiptProof),
+				VerifiedBy:       obs.ObserverValidatorID,
+				VerifiedAt:       obs.ObservedAt,
+			})
+		}
 	}
 
 	// Set governance proof (basic G1 structure)
