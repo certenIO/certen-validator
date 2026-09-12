@@ -2932,6 +2932,31 @@ func (e *RealCometBFTEngine) BroadcastValidatorBlockCommit(
 
 		e.logger.Printf("⚠️ [COMETBFT] BroadcastTxSync attempt %d failed: %v", attempt, err)
 
+		// A peer broadcasting the SAME canonical block first is not a failure. Every validator
+		// discovers an intent independently — markInProgress guards one PROCESS, not the fleet —
+		// so several build the identical ValidatorBlock and broadcast it. CometBFT's mempool
+		// deduplicates by tx hash and answers the later broadcaster
+		// "-32603 ... tx already exists in cache", which means the transaction IS queued and WILL
+		// be committed. The goal of this call is already achieved.
+		//
+		// Treating it as fatal orphaned intents. On 2026-09-12 validator-6 broadcast intent
+		// ec656887 at 11:08:03; validator-7 hit the cache 12s later, called it a failure, and then
+		// could not even record that — the lifecycle write timed out with "context deadline
+		// exceeded". So nothing was marked anywhere: the intent sat in `anchoring` forever while
+		// the gateway polled for a proof that would never exist. An identical retry minutes later
+		// succeeded, which is what makes this look intermittent rather than broken, and why it
+		// only bites when two validators happen to race the same broadcast.
+		if isAlreadyInMempool(err) {
+			txHash := sha256.Sum256(payload)
+			e.logger.Printf("✅ [COMETBFT] Canonical block is already in the mempool (a peer broadcast it first): hash=%X — treating as submitted", txHash)
+			return &BFTExecutionResult{
+				Height:      0,
+				TxHash:      txHash[:],
+				BlockHash:   nil,
+				CommittedAt: time.Now().UTC(),
+			}, nil
+		}
+
 		// Don't retry if context was cancelled externally
 		if ctx.Err() != nil {
 			e.logger.Printf("❌ [COMETBFT] Context cancelled, not retrying")
@@ -3910,6 +3935,19 @@ func NewProductionEngine(cfg EngineConfig, app abcitypes.Application, logger *lo
 
 	logger.Printf("✅ [PRODUCTION-ENGINE] Unified CometBFT engine created successfully")
 	return engine, nil
+}
+
+// isAlreadyInMempool reports whether a BroadcastTxSync failure actually means the transaction is
+// ALREADY QUEUED, because a peer validator broadcast the identical canonical block first.
+//
+// This is the mempool doing its job, not an error. It is deliberately NOT folded into
+// isTransientBroadcastError: that one says "try again", and trying again here would only earn the
+// same answer. This says "someone else already did it, carry on".
+func isAlreadyInMempool(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "already exists in cache")
 }
 
 // isTransientBroadcastError reports whether a BroadcastTxSync failure is worth another attempt:
