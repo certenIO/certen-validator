@@ -159,7 +159,8 @@ func TestPersistCommittedBlockInsertsOnceAndNeverRewrites(t *testing.T) {
 	}
 }
 
-// The destructive upsert reset MarkConsensusQuorumMet on the next Commit.
+// A later update of the mutable columns (here MarkConsensusQuorumMet and the verification flag) must survive
+// the same block being persisted again; the removed upsert reset them on every Commit.
 func TestPersistCommittedBlockPreservesQuorumMetAndVerification(t *testing.T) {
 	repo := consensusRepoForTest(t)
 	ctx := context.Background()
@@ -290,5 +291,129 @@ func TestPersistCommittedBlockRejectsInvalidInput(t *testing.T) {
 	}
 	if _, err := repo.PersistCommittedBlock(ctx, writerForTest(), nil); err == nil {
 		t.Fatal("nil records accepted")
+	}
+}
+
+func TestResetPersistedHeightMovesTheWatermarkBackwards(t *testing.T) {
+	repo := consensusRepoForTest(t)
+	ctx := context.Background()
+	writer := writerForTest()
+	if _, err := repo.PersistCommittedBlock(ctx, writer, &CommittedConsensusRecords{Height: 5000}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.ResetPersistedHeight(ctx, writer, 0); err != nil {
+		t.Fatal(err)
+	}
+	if h, found, _ := repo.LoadPersistedHeight(ctx, writer); !found || h != 0 {
+		t.Fatalf("watermark = %d found=%v, want 0", h, found)
+	}
+	if _, err := repo.PersistCommittedBlock(ctx, writer, &CommittedConsensusRecords{Height: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if h, _, _ := repo.LoadPersistedHeight(ctx, writer); h != 1 {
+		t.Fatalf("watermark = %d after the rewound chain's first block, want 1", h)
+	}
+	if err := repo.ResetPersistedHeight(ctx, writer, -1); err == nil {
+		t.Fatal("negative height accepted")
+	}
+}
+
+// Validators that start together must all get through migration 017; before the advisory lock six of seven
+// failed with a pg_type unique violation and MigrateUp stopped there.
+func TestMigration017SurvivesSevenValidatorsStartingTogether(t *testing.T) {
+	repo := consensusRepoForTest(t)
+	ctx := context.Background()
+	for round := 0; round < 3; round++ {
+		if _, err := testDB.Exec(`DROP TABLE IF EXISTS consensus_persistence_progress;
+			DELETE FROM schema_migrations WHERE version = '017_consensus_persistence_progress'`); err != nil {
+			t.Fatal(err)
+		}
+		errs := make(chan error, 7)
+		var wg sync.WaitGroup
+		for i := 0; i < 7; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				errs <- repo.client.MigrateUp(ctx)
+			}()
+		}
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			if err != nil {
+				t.Fatalf("round %d: concurrent MigrateUp failed: %v", round, err)
+			}
+		}
+	}
+}
+
+// Where MigrateUp never reaches 017, the writer creates the table itself — concurrently and repeatedly.
+func TestEnsurePersistenceProgressTableIsConcurrentAndIdempotent(t *testing.T) {
+	repo := consensusRepoForTest(t)
+	ctx := context.Background()
+	if _, err := testDB.Exec(`DROP TABLE IF EXISTS consensus_persistence_progress`); err != nil {
+		t.Fatal(err)
+	}
+	errs := make(chan error, 7)
+	var wg sync.WaitGroup
+	for i := 0; i < 7; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- repo.EnsurePersistenceProgressTable(ctx)
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent ensure failed: %v", err)
+		}
+	}
+	if err := repo.EnsurePersistenceProgressTable(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.PersistCommittedBlock(ctx, writerForTest(), &CommittedConsensusRecords{Height: 1}); err != nil {
+		t.Fatalf("table unusable: %v", err)
+	}
+}
+
+// Writers persisting the same block in different record orders must not deadlock.
+func TestWritersPersistingOneBlockInDifferentOrdersDoNotDeadlock(t *testing.T) {
+	repo := consensusRepoForTest(t)
+	ctx := context.Background()
+	for round := 0; round < 10; round++ {
+		base, _ := committedRecordsForTest(int64(100+round), time.Now().UTC(), "completed")
+		for i := 0; i < 5; i++ {
+			more, _ := committedRecordsForTest(base.Height, time.Now().UTC(), "completed")
+			base.Entries = append(base.Entries, more.Entries...)
+			base.Attestations = append(base.Attestations, more.Attestations...)
+		}
+		errs := make(chan error, 7)
+		var wg sync.WaitGroup
+		for w := 0; w < 7; w++ {
+			rec := *base
+			rec.Entries = append([]CommittedConsensusEntry(nil), base.Entries...)
+			rec.Attestations = append([]NewBatchAttestation(nil), base.Attestations...)
+			if w%2 == 1 { // reversed order on half the writers
+				for i, j := 0, len(rec.Entries)-1; i < j; i, j = i+1, j-1 {
+					rec.Entries[i], rec.Entries[j] = rec.Entries[j], rec.Entries[i]
+					rec.Attestations[i], rec.Attestations[j] = rec.Attestations[j], rec.Attestations[i]
+				}
+			}
+			wg.Add(1)
+			go func(r CommittedConsensusRecords) {
+				defer wg.Done()
+				_, err := repo.PersistCommittedBlock(ctx, writerForTest(), &r)
+				errs <- err
+			}(rec)
+		}
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			if err != nil {
+				t.Fatalf("round %d: %v", round, err)
+			}
+		}
 	}
 }

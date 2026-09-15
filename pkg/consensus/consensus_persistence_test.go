@@ -42,6 +42,8 @@ type fakeRecordStore struct {
 	gate      chan struct{} // when non-nil, PersistCommittedBlock waits for it to close
 	writes    []database.CommittedConsensusRecords
 	reject    []database.RejectedRecord // returned as content rejections by every write
+	resets    []int64
+	hang      bool // PersistCommittedBlock blocks until its context ends (a hung connection)
 	calls     atomic.Int64
 }
 
@@ -53,6 +55,13 @@ func (s *fakeRecordStore) PersistCommittedBlock(ctx context.Context, writerID st
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
+	}
+	s.mu.Lock()
+	hang := s.hang
+	s.mu.Unlock()
+	if hang {
+		<-ctx.Done()
+		return nil, ctx.Err()
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -77,6 +86,17 @@ func (s *fakeRecordStore) LoadPersistedHeight(ctx context.Context, writerID stri
 	}
 	return s.watermark, s.found, nil
 }
+
+func (s *fakeRecordStore) ResetPersistedHeight(ctx context.Context, writerID string, height int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.watermark = height
+	s.found = true
+	s.resets = append(s.resets, height)
+	return nil
+}
+
+func (s *fakeRecordStore) EnsurePersistenceProgressTable(ctx context.Context) error { return nil }
 
 func (s *fakeRecordStore) heights() []int64 {
 	s.mu.Lock()
@@ -708,5 +728,82 @@ func TestPersisterSkipsContentRejectionsInsteadOfStalling(t *testing.T) {
 	waitUntil(t, "heights 1-2", time.Second, func() bool { return len(store.heights()) == 2 })
 	if got := store.calls.Load(); got != 2 || p.rejected.Load() != 2 {
 		t.Fatalf("calls=%d rejected=%d, want 2 and 2 (no retries for content rejections)", got, p.rejected.Load())
+	}
+}
+
+// A CometBFT data reset with the database kept leaves the watermark far ahead of the new chain. The writer
+// must rewind and persist the new chain, not silently skip every height up to the old watermark.
+func TestPersisterRewindsAWatermarkAheadOfTheChain(t *testing.T) {
+	store := &fakeRecordStore{watermark: 5000, found: true}
+	p := startTestPersister(t, store, 0)
+	for h := int64(1); h <= 50; h++ {
+		p.enqueue(committedBlock{height: h}, 7)
+	}
+	waitUntil(t, "the new chain persisted", 2*time.Second, func() bool { return len(store.heights()) == 50 })
+	if got := store.heights(); got[0] != 1 || got[49] != 50 {
+		t.Fatalf("heights = %v", got)
+	}
+	store.mu.Lock()
+	resets := append([]int64(nil), store.resets...)
+	store.mu.Unlock()
+	if len(resets) != 1 || resets[0] != 0 || p.rewinds.Load() != 1 {
+		t.Fatalf("resets=%v rewinds=%d, want one rewind to 0", resets, p.rewinds.Load())
+	}
+}
+
+// A normal restart (watermark below the first committed height) must not rewind.
+func TestPersisterDoesNotRewindOnANormalRestart(t *testing.T) {
+	store := &fakeRecordStore{watermark: 99, found: true}
+	p := startTestPersister(t, store, 0)
+	p.enqueue(committedBlock{height: 100}, 7)
+	waitUntil(t, "height 100", time.Second, func() bool { return len(store.heights()) == 1 })
+	if p.rewinds.Load() != 0 || len(store.resets) != 0 {
+		t.Fatalf("rewound on a normal restart: rewinds=%d resets=%v", p.rewinds.Load(), store.resets)
+	}
+}
+
+// A hung database call is bounded and retried, not a silent permanent stall.
+func TestPersisterBoundsHungDatabaseCalls(t *testing.T) {
+	store := &fakeRecordStore{hang: true}
+	p := newConsensusPersister(store, "validator-test", persistQuietLog)
+	p.retryBase, p.retryMax, p.idleCheck, p.callTimeout = time.Millisecond, 2*time.Millisecond, 2*time.Millisecond, 10*time.Millisecond
+	p.start()
+	t.Cleanup(p.stop)
+	p.enqueue(committedBlock{height: 1}, 7)
+	waitUntil(t, "several bounded attempts", 2*time.Second, func() bool { return store.calls.Load() >= 3 })
+	store.mu.Lock()
+	store.hang = false
+	store.mu.Unlock()
+	waitUntil(t, "height 1 after the connection recovers", 2*time.Second, func() bool { return len(store.heights()) == 1 })
+}
+
+// Blocks the handshake replays before the database is wired are never handed off; the writer rebuilds them.
+func TestEnablingPersistenceRebuildsBlocksCommittedBeforeIt(t *testing.T) {
+	app := newPersistTestApp(t)
+	if _, err := app.Info(context.Background(), &abcitypes.RequestInfo{}); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Unix(gateNow, 0).UTC()
+	reader := newFakeBlockReader()
+	early := persistTestBlockJSON(t, "op-replayed", "G2", "validator-1")
+	commitBlock(t, app, reader, 1, base, early) // committed before persistence exists
+	commitBlock(t, app, reader, 2, base.Add(time.Second))
+
+	store := &fakeRecordStore{}
+	p := newConsensusPersister(store, "validator-test", persistQuietLog)
+	p.retryBase, p.retryMax, p.idleCheck = time.Millisecond, 2*time.Millisecond, 2*time.Millisecond
+	p.setSource(&rpcCommittedBlockSource{reader: reader, chainID: app.chainID})
+	p.seedCommitted(app.startHeight, app.latestHeight)
+	p.start()
+	t.Cleanup(p.stop)
+	app.persister = p
+
+	commitBlock(t, app, reader, 3, base.Add(2*time.Second))
+	waitUntil(t, "heights 1-3", 2*time.Second, func() bool { return len(store.heights()) == 3 })
+	if got := store.heights(); !reflect.DeepEqual(got, []int64{1, 2, 3}) {
+		t.Fatalf("heights = %v, want [1 2 3]", got)
+	}
+	if w := store.byHeight()[1]; len(w.Entries) != 1 || w.Entries[0].BatchID != uuid.NewSHA1(uuid.NameSpaceOID, []byte(bundleOf(t, early))) {
+		t.Fatalf("replayed height 1 not rebuilt: %+v", w)
 	}
 }

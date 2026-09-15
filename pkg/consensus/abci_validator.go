@@ -76,6 +76,10 @@ type ValidatorApp struct {
 	persister *consensusPersister
 	// Accepted ValidatorBlocks of the block being finalized (reset each FinalizeBlock, handed off by Commit).
 	blockValidatorBlocks []ValidatorBlock
+	// Height restored from the ledger when this process started (before any handshake replay). Blocks this
+	// process commits above it before the persister exists are rebuilt from the block store.
+	startHeight    int64
+	startHeightSet bool
 
 	// Validator count for quorum calculation
 	validatorCount int
@@ -239,6 +243,11 @@ func (app *ValidatorApp) EnableConsensusPersistence(repos *database.Repositories
 	}
 	p := newConsensusPersister(repos.Consensus, writerID, log.New(log.Writer(), "[ValidatorApp] ", log.LstdFlags))
 	p.setSource(source)
+	start := app.latestHeight
+	if app.startHeightSet {
+		start = app.startHeight
+	}
+	p.seedCommitted(start, app.latestHeight)
 	p.start()
 	app.persister = p
 	app.logger.Printf("✅ [PERSIST] consensus persistence runs off the Commit path (writer=%s, rebuild=%t)", writerID, source != nil)
@@ -323,6 +332,12 @@ func (app *ValidatorApp) Info(ctx context.Context, req *abcitypes.RequestInfo) (
 			app.logger.Printf("❌ Could not load persisted ABCI state (%v); "+
 				"reporting height %d, which will force a replay", err, app.latestHeight)
 		}
+	}
+
+	if !app.startHeightSet {
+		// The handshake calls Info before replaying any block: this is the height this process started from.
+		app.startHeight = app.latestHeight
+		app.startHeightSet = true
 	}
 
 	app.logger.Printf("📋 Info() called - App height: %d, AppHash: %x",

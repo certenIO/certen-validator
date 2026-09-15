@@ -15,7 +15,7 @@
 --  `anchoring`.
 --
 --  The rewrite was also destructive: ON CONFLICT DO UPDATE reset state, completed_at, aggregates and
---  result_json on every commit, undoing MarkConsensusQuorumMet and the attestation verification flags.
+--  result_json of every cached entry, and signature_valid of its attestation, on every commit.
 --
 -- ─────────────────────────────────────────────────────────────────────────────────────────────────────
 --  WHAT THIS TABLE IS
@@ -28,6 +28,12 @@
 --
 --  One row per writer: the validators may share this database, and each tracks its own progress.
 -- ─────────────────────────────────────────────────────────────────────────────────────────────────────
+
+-- Validators that start together on one database run this concurrently. Serialise it (the lock is released at
+-- the end of MigrateUp's transaction): a concurrent CREATE TABLE IF NOT EXISTS fails with a pg_type unique
+-- violation, which would stop MigrateUp on the losing nodes. The same lock id is used by
+-- ConsensusRepository.EnsurePersistenceProgressTable, which creates this table if MigrateUp never reaches 017.
+SELECT pg_advisory_xact_lock(8017000017);
 
 CREATE TABLE IF NOT EXISTS consensus_persistence_progress (
     writer_id           VARCHAR(256) PRIMARY KEY,

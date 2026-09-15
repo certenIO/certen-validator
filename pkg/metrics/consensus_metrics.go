@@ -223,6 +223,7 @@ func RegisterMetrics() {
 		// Entitlement gate — separates "not entitled" (a customer decision) from
 		// "stale" (an infrastructure failure that halts an enforcing fleet).
 		registerEntitlementMetrics()
+		registerPersistenceMetrics()
 	})
 }
 

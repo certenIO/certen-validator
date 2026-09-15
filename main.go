@@ -1634,8 +1634,9 @@ func startValidator(
 		// Create database repositories
 		repos := database.NewRepositories(dbClient)
 
-		// Wire repositories to ValidatorApp for consensus persistence
-		// This enables the ABCI Commit() function to persist consensus entries and batch attestations
+		// Wire repositories to ValidatorApp for consensus persistence. Commit hands each block's accepted
+		// ValidatorBlocks to a background writer (pkg/consensus/consensus_persistence.go); Commit itself never
+		// touches the database.
 		cometEngine.SetValidatorRepositories(repos)
 		cometEngine.SetValidatorCount(7) // 7 validators in the network
 		log.Println("✅ [Phase 5] Database repositories wired to ValidatorApp for consensus persistence")

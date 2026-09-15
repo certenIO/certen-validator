@@ -13,7 +13,8 @@ package consensus
 // CometBFT serialises CheckTx with Commit and its RPC write timeout is 11 s, so every BroadcastTxSync
 // overlapping a commit answered EOF, validators marked committed ValidatorBlocks as failed, quorum never
 // formed, and intents stayed `anchoring`. The rewrite was also destructive: its upsert reset state,
-// completed_at, aggregates and result_json each block, undoing MarkConsensusQuorumMet.
+// completed_at, aggregates and result_json of every cached entry each block, and signature_valid of its
+// attestation, so no later update to those columns could last.
 //
 // WHAT THIS DOES
 //
@@ -38,6 +39,7 @@ import (
 	"time"
 
 	"github.com/certen/independant-validator/pkg/database"
+	"github.com/certen/independant-validator/pkg/metrics"
 	"github.com/google/uuid"
 )
 
@@ -53,6 +55,8 @@ type committedBlock struct {
 type consensusRecordStore interface {
 	PersistCommittedBlock(ctx context.Context, writerID string, rec *database.CommittedConsensusRecords) ([]database.RejectedRecord, error)
 	LoadPersistedHeight(ctx context.Context, writerID string) (height int64, found bool, err error)
+	ResetPersistedHeight(ctx context.Context, writerID string, height int64) error
+	EnsurePersistenceProgressTable(ctx context.Context) error
 }
 
 // errCommittedBlockUnavailable reports a height the block store can no longer serve (pruned). It is not
@@ -76,6 +80,9 @@ const (
 	persistRetryBase     = 500 * time.Millisecond
 	persistRetryMax      = 30 * time.Second
 	persistIdleCheck     = 1 * time.Second
+	// persistCallTimeout bounds one database call, so a hung connection surfaces as a retried error
+	// instead of a silent stall.
+	persistCallTimeout = 60 * time.Second
 )
 
 // consensusPersister owns the background writer.
@@ -104,9 +111,12 @@ type consensusPersister struct {
 	gaps      atomic.Uint64 // heights that could not be rebuilt
 	rejected  atomic.Uint64 // rows the database refused on content (skipped, never retried)
 
-	retryBase time.Duration
-	retryMax  time.Duration
-	idleCheck time.Duration // how often an idle writer looks for heights it was not handed
+	rewinds atomic.Uint64 // watermark found ahead of the chain
+
+	retryBase   time.Duration
+	retryMax    time.Duration
+	idleCheck   time.Duration // how often an idle writer looks for heights it was not handed
+	callTimeout time.Duration
 }
 
 func newConsensusPersister(store consensusRecordStore, writerID string, logger *log.Logger) *consensusPersister {
@@ -114,14 +124,30 @@ func newConsensusPersister(store consensusRecordStore, writerID string, logger *
 		logger = log.New(log.Writer(), "[Persist] ", log.LstdFlags)
 	}
 	return &consensusPersister{
-		store:     store,
-		writerID:  writerID,
-		logger:    logger,
-		queue:     make(chan persistJob, persistQueueCapacity),
-		done:      make(chan struct{}),
-		retryBase: persistRetryBase,
-		retryMax:  persistRetryMax,
-		idleCheck: persistIdleCheck,
+		store:       store,
+		writerID:    writerID,
+		logger:      logger,
+		queue:       make(chan persistJob, persistQueueCapacity),
+		done:        make(chan struct{}),
+		retryBase:   persistRetryBase,
+		retryMax:    persistRetryMax,
+		idleCheck:   persistIdleCheck,
+		callTimeout: persistCallTimeout,
+	}
+}
+
+// call bounds one database call.
+func (p *consensusPersister) call(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, p.callTimeout)
+}
+
+// seedCommitted tells a writer that heights (startHeight, latestHeight] were committed by this process before
+// persistence was enabled (the CometBFT handshake replays blocks before the database is wired). They are
+// rebuilt from the block store like dropped hand-offs. It must be called before start.
+func (p *consensusPersister) seedCommitted(startHeight, latestHeight int64) {
+	p.firstSeen.CompareAndSwap(0, startHeight+1)
+	if latestHeight > p.latest.Load() {
+		p.latest.Store(latestHeight)
 	}
 }
 
@@ -174,6 +200,7 @@ func (p *consensusPersister) enqueue(b committedBlock, validatorCount int) bool 
 		return true
 	default:
 		n := p.dropped.Add(1)
+		metrics.RecordConsensusPersistDropped()
 		p.logger.Printf("⚠️ [PERSIST] hand-off queue full; height %d will be rebuilt from the block store (dropped=%d)", b.height, n)
 		return false
 	}
@@ -184,28 +211,73 @@ func (p *consensusPersister) run(ctx context.Context) {
 
 	// last is the highest height known to be persisted for this writer; -1 until established.
 	last := int64(-1)
-	for last < 0 {
-		h, found, err := p.store.LoadPersistedHeight(ctx, p.writerID)
+	for attempt := 1; ; attempt++ {
+		cctx, cancel := p.call(ctx)
+		err := p.store.EnsurePersistenceProgressTable(cctx)
+		cancel()
+		if err != nil {
+			metrics.RecordConsensusPersistError("ensure_table")
+			p.logger.Printf("⚠️ [PERSIST] could not ensure the persisted-height table (attempt %d; consensus is unaffected, rows are not being written): %v", attempt, err)
+			if !p.sleep(ctx, attempt) {
+				return
+			}
+			continue
+		}
+		cctx, cancel = p.call(ctx)
+		h, found, err := p.store.LoadPersistedHeight(cctx, p.writerID)
+		cancel()
 		if err == nil {
 			if found {
 				last = h
 			}
 			break
 		}
-		p.logger.Printf("⚠️ [PERSIST] could not load the persisted height for %s: %v", p.writerID, err)
-		if !p.sleep(ctx, 1) {
+		metrics.RecordConsensusPersistError("load_watermark")
+		p.logger.Printf("⚠️ [PERSIST] could not load the persisted height for %s (attempt %d; consensus is unaffected, rows are not being written): %v", p.writerID, attempt, err)
+		if !p.sleep(ctx, attempt) {
 			return
 		}
 	}
 
-	// startAt fixes where a writer with no watermark begins: the first height it was ever offered. History
-	// before it was written by earlier binaries; rebuilding it is not this writer's job.
-	startAt := func() {
-		if last < 0 {
-			if first := p.firstSeen.Load(); first > 0 {
-				last = first - 1
-			}
+	// startAt runs once, at the first height this process is offered:
+	//   - no watermark: begin there. History before it was written by earlier binaries; rebuilding it is not
+	//     this writer's job.
+	//   - watermark at or above it: persistence can only trail commits, so the chain was reset (or replayed
+	//     from an earlier app state). Skipping to the old watermark would silently persist nothing until the
+	//     new chain passed it; rewind instead. Re-persisting a replayed height is harmless (insert-once).
+	started := false
+	startAt := func() bool {
+		if started {
+			return true
 		}
+		first := p.firstSeen.Load()
+		if first <= 0 {
+			return false
+		}
+		if last >= first {
+			n := p.rewinds.Add(1)
+			metrics.RecordConsensusPersistRewind()
+			p.logger.Printf("⚠️ [PERSIST] persisted height %d for %s is at or above the first committed height %d of this run: the chain was reset or replayed; rewinding to %d (rewinds=%d)",
+				last, p.writerID, first, first-1, n)
+			for attempt := 1; ; attempt++ {
+				cctx, cancel := p.call(ctx)
+				err := p.store.ResetPersistedHeight(cctx, p.writerID, first-1)
+				cancel()
+				if err == nil {
+					break
+				}
+				metrics.RecordConsensusPersistError("rewind_watermark")
+				p.logger.Printf("⚠️ [PERSIST] could not rewind the persisted height for %s (attempt %d): %v", p.writerID, attempt, err)
+				if !p.sleep(ctx, attempt) {
+					return false
+				}
+			}
+			last = first - 1
+		} else if last < 0 {
+			last = first - 1
+		}
+		started = true
+		return true
 	}
 
 	idle := time.NewTicker(p.idleCheck)
@@ -217,7 +289,12 @@ func (p *consensusPersister) run(ctx context.Context) {
 			return
 
 		case job := <-p.queue:
-			startAt()
+			if !startAt() {
+				if ctx.Err() != nil {
+					return
+				}
+				continue
+			}
 			h := job.block.height
 			if h <= last {
 				continue // already persisted (a replayed or duplicate hand-off, or rebuilt while idle)
@@ -239,8 +316,10 @@ func (p *consensusPersister) run(ctx context.Context) {
 			if len(p.queue) > 0 {
 				continue
 			}
-			startAt()
-			if last < 0 {
+			if !startAt() {
+				if ctx.Err() != nil {
+					return
+				}
 				continue // nothing offered yet
 			}
 			for target := p.latest.Load(); last < target; {
@@ -259,19 +338,24 @@ func (p *consensusPersister) rebuild(ctx context.Context, height int64, validato
 		src := p.getSource()
 		if src == nil {
 			n := p.gaps.Add(1)
+			metrics.RecordConsensusPersistGap()
 			p.logger.Printf("⚠️ [PERSIST] height %d was not handed off and no block source is configured; skipping (gaps=%d)", height, n)
 			return p.advanceOnly(ctx, height)
 		}
-		blk, err := src.CommittedValidatorBlocks(ctx, height)
+		cctx, cancel := p.call(ctx)
+		blk, err := src.CommittedValidatorBlocks(cctx, height)
+		cancel()
 		if err == nil {
 			p.logger.Printf("🔁 [PERSIST] rebuilt height %d from the block store (%d ValidatorBlocks)", height, len(blk.blocks))
 			return p.write(ctx, blk, validatorCount)
 		}
 		if errors.Is(err, errCommittedBlockUnavailable) {
 			n := p.gaps.Add(1)
+			metrics.RecordConsensusPersistGap()
 			p.logger.Printf("⚠️ [PERSIST] height %d is no longer in the block store; its rows cannot be rebuilt (gaps=%d): %v", height, n, err)
 			return p.advanceOnly(ctx, height)
 		}
+		metrics.RecordConsensusPersistError("read_block")
 		p.logger.Printf("⚠️ [PERSIST] could not read committed height %d (attempt %d): %v", height, attempt, err)
 		if !p.sleep(ctx, attempt) {
 			return false
@@ -288,14 +372,18 @@ func (p *consensusPersister) advanceOnly(ctx context.Context, height int64) bool
 func (p *consensusPersister) write(ctx context.Context, b *committedBlock, validatorCount int) bool {
 	rec := consensusRecordsFor(b, validatorCount, p.logger)
 	for attempt := 1; ; attempt++ {
-		rejected, err := p.store.PersistCommittedBlock(ctx, p.writerID, rec)
+		cctx, cancel := p.call(ctx)
+		rejected, err := p.store.PersistCommittedBlock(cctx, p.writerID, rec)
+		cancel()
 		if err == nil {
 			for _, r := range rejected {
 				n := p.rejected.Add(1)
+				metrics.RecordConsensusPersistRejected()
 				p.logger.Printf("⚠️ [PERSIST] height %d: the database refused the %s row for batch %s; skipped (rejected=%d): %v",
 					b.height, r.Table, r.BatchID, n, r.Err)
 			}
 			p.persisted.Store(b.height)
+			metrics.SetConsensusPersistLag(max(p.latest.Load()-b.height, 0))
 			if len(rec.Entries) > 0 || len(rec.Attestations) > 0 {
 				p.logger.Printf("✅ [PERSIST] height %d: %d consensus entries, %d batch attestations",
 					b.height, len(rec.Entries), len(rec.Attestations))
@@ -305,7 +393,9 @@ func (p *consensusPersister) write(ctx context.Context, b *committedBlock, valid
 		if ctx.Err() != nil {
 			return false
 		}
-		p.logger.Printf("⚠️ [PERSIST] could not persist height %d (attempt %d): %v", b.height, attempt, err)
+		metrics.RecordConsensusPersistError("persist_block")
+		metrics.SetConsensusPersistLag(max(p.latest.Load()-(b.height-1), 0))
+		p.logger.Printf("⚠️ [PERSIST] could not persist height %d (attempt %d; consensus is unaffected): %v", b.height, attempt, err)
 		if !p.sleep(ctx, attempt) {
 			return false
 		}
