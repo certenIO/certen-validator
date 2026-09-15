@@ -6,14 +6,18 @@
 package database
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 )
 
 // ConsensusRepository handles consensus state persistence operations
@@ -68,73 +72,250 @@ type ConsensusEntry struct {
 	CreatedAt          time.Time
 }
 
-// CreateConsensusEntry creates a new consensus entry
-func (r *ConsensusRepository) CreateConsensusEntry(ctx context.Context, input *NewConsensusEntry) (*ConsensusEntry, error) {
-	entry := &ConsensusEntry{
-		EntryID:            uuid.New(),
-		BatchID:            input.BatchID,
-		MerkleRoot:         input.MerkleRoot,
-		AnchorTxHash:       input.AnchorTxHash,
-		BlockNumber:        input.BlockNumber,
-		TxCount:            input.TxCount,
-		State:              input.State,
-		AttestationCount:   input.AttestationCount,
-		RequiredCount:      input.RequiredCount,
-		QuorumFraction:     input.QuorumFraction,
-		AggregateSignature: input.AggregateSignature,
-		AggregatePubKey:    input.AggregatePubKey,
-		StartTime:          input.StartTime,
-		LastUpdate:         time.Now(),
-	}
+// CreateConsensusEntry was removed: its ON CONFLICT DO UPDATE rewrote state, aggregates, result_json and
+// completed_at on every call, so no later update to those columns could last. Committed entries are written
+// once by PersistCommittedBlock.
 
-	// Marshal result JSON if provided
-	var resultJSON []byte
-	var err error
-	if input.ResultJSON != nil {
-		resultJSON, err = json.Marshal(input.ResultJSON)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal result JSON: %w", err)
+// ============================================================================
+// COMMITTED-BLOCK PERSISTENCE (off the ABCI Commit path)
+// ============================================================================
+
+// CommittedConsensusEntry is a consensus entry derived from a committed ValidatorBlock. CompletedAt is
+// supplied by the caller (the block time) instead of the wall clock, so every writer derives the same row.
+type CommittedConsensusEntry struct {
+	NewConsensusEntry
+	CompletedAt *time.Time
+}
+
+// CommittedConsensusRecords is everything one committed CometBFT block contributes to consensus_entries
+// and batch_attestations. A block without ValidatorBlocks has no records and still advances the watermark.
+type CommittedConsensusRecords struct {
+	Height       int64
+	Entries      []CommittedConsensusEntry
+	Attestations []NewBatchAttestation
+}
+
+// RejectedRecord is a row the database refused on its content (SQLSTATE class 22 data exception or 23
+// integrity violation). Such a row can never be written, so it is skipped rather than retried — as the
+// previous row-by-row writer logged and skipped it — and the rest of the block is still persisted.
+type RejectedRecord struct {
+	Table   string
+	BatchID uuid.UUID
+	Err     error
+}
+
+// isContentRejection reports a database refusal caused by the row itself, not by the connection or server.
+func isContentRejection(err error) bool {
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) {
+		class := string(pqErr.Code.Class())
+		return class == "22" || class == "23"
+	}
+	return false
+}
+
+// execRow runs one insert inside a savepoint, so a content rejection rolls back only that row. It returns
+// the rejection separately from a failure that must abort the block.
+func execRow(ctx context.Context, tx *sql.Tx, query string, args ...interface{}) (rejected error, err error) {
+	if _, err := tx.ExecContext(ctx, "SAVEPOINT committed_row"); err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+		if !isContentRejection(err) {
+			return nil, err
 		}
+		if _, rbErr := tx.ExecContext(ctx, "ROLLBACK TO SAVEPOINT committed_row"); rbErr != nil {
+			return nil, rbErr
+		}
+		return err, nil
+	}
+	if _, err := tx.ExecContext(ctx, "RELEASE SAVEPOINT committed_row"); err != nil {
+		return nil, err
+	}
+	return nil, nil
+}
+
+// PersistCommittedBlock inserts one committed block's records and advances writerID's persisted height,
+// atomically.
+//
+// Rows are inserted once and never rewritten (ON CONFLICT DO NOTHING). A committed ValidatorBlock is
+// immutable, so a second insert has nothing to add, and any later update of the mutable columns (state,
+// aggregates, result_json, completed_at, the attestation verification flags) must last. The previous
+// upsert reset those columns on every Commit.
+//
+// Rows are inserted in batch_id order, so writers persisting the same block take row locks in the same order
+// and cannot deadlock one another.
+//
+// The watermark only moves forward (GREATEST), so a replayed or out-of-order call cannot rewind it.
+//
+// A row the database refuses on its content is skipped and returned in rejected (see RejectedRecord); any
+// other failure rolls the whole block back and is returned as err, for the caller to retry.
+func (r *ConsensusRepository) PersistCommittedBlock(ctx context.Context, writerID string, rec *CommittedConsensusRecords) (rejected []RejectedRecord, err error) {
+	if writerID == "" {
+		return nil, fmt.Errorf("persist committed block: writer id is empty")
+	}
+	if rec == nil || rec.Height <= 0 {
+		return nil, fmt.Errorf("persist committed block: invalid height")
 	}
 
-	// Set completed_at if state is terminal
-	var completedAt *time.Time
-	if input.State == "completed" || input.State == "quorum_met" {
-		now := time.Now()
-		completedAt = &now
-		entry.CompletedAt = completedAt
+	tx, err := r.client.BeginTx(ctx)
+	if err != nil {
+		return nil, err
 	}
+	defer tx.Rollback() //nolint:errcheck // a no-op after Commit
 
-	query := `
+	const entryQuery = `
 		INSERT INTO consensus_entries (
 			entry_id, batch_id, merkle_root, anchor_tx_hash, block_number,
 			tx_count, state, attestation_count, required_count, quorum_fraction,
 			aggregate_signature, aggregate_pubkey, start_time, last_update,
 			completed_at, result_json
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-		ON CONFLICT (batch_id) DO UPDATE SET
-			state = EXCLUDED.state,
-			attestation_count = EXCLUDED.attestation_count,
-			aggregate_signature = EXCLUDED.aggregate_signature,
-			aggregate_pubkey = EXCLUDED.aggregate_pubkey,
-			last_update = EXCLUDED.last_update,
-			completed_at = EXCLUDED.completed_at,
-			result_json = EXCLUDED.result_json
-		RETURNING entry_id, created_at`
+		ON CONFLICT (batch_id) DO NOTHING`
 
-	err = r.client.QueryRowContext(ctx, query,
-		entry.EntryID, entry.BatchID, entry.MerkleRoot, entry.AnchorTxHash,
-		entry.BlockNumber, entry.TxCount, entry.State, entry.AttestationCount,
-		entry.RequiredCount, entry.QuorumFraction, entry.AggregateSignature,
-		entry.AggregatePubKey, entry.StartTime, entry.LastUpdate,
-		completedAt, resultJSON,
-	).Scan(&entry.EntryID, &entry.CreatedAt)
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to create consensus entry: %w", err)
+	entryOrder := make([]int, len(rec.Entries))
+	for i := range entryOrder {
+		entryOrder[i] = i
+	}
+	sort.SliceStable(entryOrder, func(a, b int) bool {
+		return bytes.Compare(rec.Entries[entryOrder[a]].BatchID[:], rec.Entries[entryOrder[b]].BatchID[:]) < 0
+	})
+	for _, i := range entryOrder {
+		e := &rec.Entries[i]
+		var resultJSON []byte
+		if e.ResultJSON != nil {
+			var mErr error
+			if resultJSON, mErr = json.Marshal(e.ResultJSON); mErr != nil {
+				rejected = append(rejected, RejectedRecord{Table: "consensus_entries", BatchID: e.BatchID, Err: mErr})
+				continue
+			}
+		}
+		rej, err := execRow(ctx, tx.Tx(), entryQuery,
+			uuid.New(), e.BatchID, e.MerkleRoot, e.AnchorTxHash, e.BlockNumber,
+			e.TxCount, e.State, e.AttestationCount, e.RequiredCount, e.QuorumFraction,
+			e.AggregateSignature, e.AggregatePubKey, e.StartTime, time.Now(),
+			e.CompletedAt, resultJSON,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("persist committed block %d: consensus entry for batch %s: %w", rec.Height, e.BatchID, err)
+		}
+		if rej != nil {
+			rejected = append(rejected, RejectedRecord{Table: "consensus_entries", BatchID: e.BatchID, Err: rej})
+		}
 	}
 
-	return entry, nil
+	const attestationQuery = `
+		INSERT INTO batch_attestations (
+			attestation_id, batch_id, validator_id, merkle_root,
+			bls_signature, bls_public_key, tx_count, block_height,
+			attestation_time, signature_valid
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		ON CONFLICT (batch_id, validator_id) DO NOTHING`
+
+	attOrder := make([]int, len(rec.Attestations))
+	for i := range attOrder {
+		attOrder[i] = i
+	}
+	sort.SliceStable(attOrder, func(x, y int) bool {
+		ax, ay := &rec.Attestations[attOrder[x]], &rec.Attestations[attOrder[y]]
+		if c := bytes.Compare(ax.BatchID[:], ay.BatchID[:]); c != 0 {
+			return c < 0
+		}
+		return ax.ValidatorID < ay.ValidatorID
+	})
+	for _, i := range attOrder {
+		a := &rec.Attestations[i]
+		rej, err := execRow(ctx, tx.Tx(), attestationQuery,
+			uuid.New(), a.BatchID, a.ValidatorID, a.MerkleRoot,
+			a.BLSSignature, a.BLSPublicKey, a.TxCount, a.BlockHeight,
+			a.AttestationTime, a.SignatureValid,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("persist committed block %d: batch attestation for batch %s: %w", rec.Height, a.BatchID, err)
+		}
+		if rej != nil {
+			rejected = append(rejected, RejectedRecord{Table: "batch_attestations", BatchID: a.BatchID, Err: rej})
+		}
+	}
+
+	if _, err := tx.Tx().ExecContext(ctx, `
+		INSERT INTO consensus_persistence_progress (writer_id, persisted_height, updated_at)
+		VALUES ($1, $2, NOW())
+		ON CONFLICT (writer_id) DO UPDATE SET
+			persisted_height = GREATEST(consensus_persistence_progress.persisted_height, EXCLUDED.persisted_height),
+			updated_at = NOW()`,
+		writerID, rec.Height,
+	); err != nil {
+		return nil, fmt.Errorf("persist committed block %d: advance watermark: %w", rec.Height, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("persist committed block %d: commit: %w", rec.Height, err)
+	}
+	return rejected, nil
+}
+
+// progressTableDDL is migration 017's table. EnsurePersistenceProgressTable applies it directly so consensus
+// persistence works even where MigrateUp stops before 017 (MigrateUp halts at its first failing migration and
+// the validator only warns); keep the two identical.
+const progressTableDDL = `
+	CREATE TABLE IF NOT EXISTS consensus_persistence_progress (
+	    writer_id           VARCHAR(256) PRIMARY KEY,
+	    persisted_height    BIGINT NOT NULL CHECK (persisted_height >= 0),
+	    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	)`
+
+// persistenceMigrationLock serialises creation of the progress table across validators that start together
+// on one database (a concurrent CREATE TABLE IF NOT EXISTS can fail with a pg_type unique violation).
+const persistenceMigrationLock = 8017_000_017
+
+// EnsurePersistenceProgressTable creates the persisted-height table if it does not exist.
+func (r *ConsensusRepository) EnsurePersistenceProgressTable(ctx context.Context) error {
+	tx, err := r.client.BeginTx(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck // a no-op after Commit
+	if _, err := tx.Tx().ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, persistenceMigrationLock); err != nil {
+		return fmt.Errorf("ensure progress table: lock: %w", err)
+	}
+	if _, err := tx.Tx().ExecContext(ctx, progressTableDDL); err != nil {
+		return fmt.Errorf("ensure progress table: %w", err)
+	}
+	return tx.Commit()
+}
+
+// ResetPersistedHeight sets writerID's persisted height to exactly height, moving it backwards if needed. It
+// is used only when the watermark is found ahead of the chain (a reset chain); normal progress goes through
+// PersistCommittedBlock, which never moves it backwards.
+func (r *ConsensusRepository) ResetPersistedHeight(ctx context.Context, writerID string, height int64) error {
+	if writerID == "" || height < 0 {
+		return fmt.Errorf("reset persisted height: invalid writer or height")
+	}
+	if _, err := r.client.ExecContext(ctx, `
+		INSERT INTO consensus_persistence_progress (writer_id, persisted_height, updated_at)
+		VALUES ($1, $2, NOW())
+		ON CONFLICT (writer_id) DO UPDATE SET persisted_height = EXCLUDED.persisted_height, updated_at = NOW()`,
+		writerID, height,
+	); err != nil {
+		return fmt.Errorf("reset persisted height for %s: %w", writerID, err)
+	}
+	return nil
+}
+
+// LoadPersistedHeight returns the highest CometBFT height writerID has persisted. found is false when the
+// writer has never persisted a block.
+func (r *ConsensusRepository) LoadPersistedHeight(ctx context.Context, writerID string) (height int64, found bool, err error) {
+	err = r.client.QueryRowContext(ctx,
+		`SELECT persisted_height FROM consensus_persistence_progress WHERE writer_id = $1`, writerID,
+	).Scan(&height)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("load persisted height for %s: %w", writerID, err)
+	}
+	return height, true, nil
 }
 
 // GetConsensusEntry retrieves a consensus entry by batch ID
@@ -256,47 +437,8 @@ type BatchAttestation struct {
 	CreatedAt       time.Time
 }
 
-// CreateBatchAttestation creates a new batch attestation
-func (r *ConsensusRepository) CreateBatchAttestation(ctx context.Context, input *NewBatchAttestation) (*BatchAttestation, error) {
-	attestation := &BatchAttestation{
-		AttestationID:   uuid.New(),
-		BatchID:         input.BatchID,
-		ValidatorID:     input.ValidatorID,
-		MerkleRoot:      input.MerkleRoot,
-		BLSSignature:    input.BLSSignature,
-		BLSPublicKey:    input.BLSPublicKey,
-		TxCount:         input.TxCount,
-		BlockHeight:     input.BlockHeight,
-		AttestationTime: input.AttestationTime,
-		SignatureValid:  input.SignatureValid,
-	}
-
-	query := `
-		INSERT INTO batch_attestations (
-			attestation_id, batch_id, validator_id, merkle_root,
-			bls_signature, bls_public_key, tx_count, block_height,
-			attestation_time, signature_valid
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-		ON CONFLICT (batch_id, validator_id) DO UPDATE SET
-			bls_signature = EXCLUDED.bls_signature,
-			bls_public_key = EXCLUDED.bls_public_key,
-			attestation_time = EXCLUDED.attestation_time,
-			signature_valid = EXCLUDED.signature_valid
-		RETURNING attestation_id, created_at`
-
-	err := r.client.QueryRowContext(ctx, query,
-		attestation.AttestationID, attestation.BatchID, attestation.ValidatorID,
-		attestation.MerkleRoot, attestation.BLSSignature, attestation.BLSPublicKey,
-		attestation.TxCount, attestation.BlockHeight, attestation.AttestationTime,
-		attestation.SignatureValid,
-	).Scan(&attestation.AttestationID, &attestation.CreatedAt)
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to create batch attestation: %w", err)
-	}
-
-	return attestation, nil
-}
+// CreateBatchAttestation was removed: its ON CONFLICT DO UPDATE reset signature_valid, discarding the verification
+// flags. Committed self-attestations are written once by PersistCommittedBlock.
 
 // GetBatchAttestations retrieves all attestations for a batch
 func (r *ConsensusRepository) GetBatchAttestations(ctx context.Context, batchID uuid.UUID) ([]*BatchAttestation, error) {

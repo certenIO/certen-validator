@@ -31,7 +31,6 @@ import (
 	cryptoproto "github.com/cometbft/cometbft/proto/tendermint/crypto"
 	"github.com/cometbft/cometbft/proxy"
 	cmthttp "github.com/cometbft/cometbft/rpc/client/http"
-	coretypes "github.com/cometbft/cometbft/rpc/core/types"
 	cmttypes "github.com/cometbft/cometbft/types"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -2909,138 +2908,10 @@ func (e *RealCometBFTEngine) BroadcastValidatorBlockCommit(
 	}
 	e.logger.Printf("📦 [COMETBFT] ValidatorBlock marshaled: %d bytes", len(payload))
 
-	// Phase 1: Submit to mempool via BroadcastTxSync with retry logic
-	// CometBFT RPC can become temporarily unresponsive during peer connectivity issues
-	e.logger.Printf("📡 [COMETBFT] Phase 1: Submitting to mempool via BroadcastTxSync...")
-
-	var res *coretypes.ResultBroadcastTx
-	maxRetries := 3
-	baseTimeout := 30 * time.Second
-
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		// Increase timeout with each retry
-		timeout := baseTimeout + time.Duration(attempt-1)*15*time.Second
-		syncCtx, syncCancel := context.WithTimeout(ctx, timeout)
-
-		e.logger.Printf("📡 [COMETBFT] BroadcastTxSync attempt %d/%d (timeout=%v)...", attempt, maxRetries, timeout)
-		res, err = e.rpcClient.BroadcastTxSync(syncCtx, payload)
-		syncCancel()
-
-		if err == nil {
-			break // Success
-		}
-
-		e.logger.Printf("⚠️ [COMETBFT] BroadcastTxSync attempt %d failed: %v", attempt, err)
-
-		// A peer broadcasting the SAME canonical block first is not a failure. Every validator
-		// discovers an intent independently — markInProgress guards one PROCESS, not the fleet —
-		// so several build the identical ValidatorBlock and broadcast it. CometBFT's mempool
-		// deduplicates by tx hash and answers the later broadcaster
-		// "-32603 ... tx already exists in cache", which means the transaction IS queued and WILL
-		// be committed. The goal of this call is already achieved.
-		//
-		// Treating it as fatal orphaned intents. On 2026-09-12 validator-6 broadcast intent
-		// ec656887 at 11:08:03; validator-7 hit the cache 12s later, called it a failure, and then
-		// could not even record that — the lifecycle write timed out with "context deadline
-		// exceeded". So nothing was marked anywhere: the intent sat in `anchoring` forever while
-		// the gateway polled for a proof that would never exist. An identical retry minutes later
-		// succeeded, which is what makes this look intermittent rather than broken, and why it
-		// only bites when two validators happen to race the same broadcast.
-		if isAlreadyInMempool(err) {
-			txHash := sha256.Sum256(payload)
-			e.logger.Printf("✅ [COMETBFT] Canonical block is already in the mempool (a peer broadcast it first): hash=%X — treating as submitted", txHash)
-			return &BFTExecutionResult{
-				Height:      0,
-				TxHash:      txHash[:],
-				BlockHash:   nil,
-				CommittedAt: time.Now().UTC(),
-			}, nil
-		}
-
-		// Don't retry if context was cancelled externally
-		if ctx.Err() != nil {
-			e.logger.Printf("❌ [COMETBFT] Context cancelled, not retrying")
-			return nil, fmt.Errorf("BroadcastTxSync: %w", err)
-		}
-
-		// Retry what is transient. A timeout and a refused connection were already here; a stale
-		// keep-alive that the RPC closed answers EOF (or a reset) on the next request, and that is
-		// the most common failure seen on the fleet — 2026-09-06, three validators, each marked an
-		// intent failed on its FIRST attempt and never queued it for settlement, so the hashed
-		// leader did nothing until the four-minute failover. A fresh request succeeds at once.
-		if isTransientBroadcastError(err) {
-			if attempt < maxRetries {
-				retryDelay := time.Duration(attempt) * 2 * time.Second
-				e.logger.Printf("🔄 [COMETBFT] Retrying in %v...", retryDelay)
-				time.Sleep(retryDelay)
-				continue
-			}
-		}
-
-		// Non-retryable error
-		e.logger.Printf("❌ [COMETBFT] BroadcastTxSync failed after %d attempts: %v", attempt, err)
-		return nil, fmt.Errorf("BroadcastTxSync: %w", err)
-	}
-
-	if res == nil {
-		return nil, fmt.Errorf("BroadcastTxSync: failed after %d attempts", maxRetries)
-	}
-	e.logger.Printf("📡 [COMETBFT] BroadcastTxSync returned: hash=%X code=%d", res.Hash, res.Code)
-	if res.Code != 0 {
-		e.logger.Printf("❌ [COMETBFT] CheckTx failed: code=%d log=%s", res.Code, res.Log)
-		return nil, fmt.Errorf("CheckTx failed: code=%d log=%s", res.Code, res.Log)
-	}
-	e.logger.Printf("✅ [COMETBFT] CheckTx passed - transaction in mempool: hash=%X", res.Hash)
-
-	// Phase 2: Poll for transaction inclusion in a block
-	// Note: The ValidatorBlock itself contains all cryptographic proofs (L1-L3, governance, BLS).
-	// The CometBFT height is metadata for audit trail, not part of the proof chain.
-	txHash := res.Hash
-	e.logger.Printf("⏳ [COMETBFT] Phase 2: Polling for block inclusion (max 15s)...")
-
-	pollTimeout := 15 * time.Second
-	pollInterval := 1 * time.Second
-	pollStart := time.Now()
-
-	for {
-		// Check if we've exceeded poll timeout
-		if time.Since(pollStart) > pollTimeout {
-			e.logger.Printf("⚠️ [COMETBFT] Poll timeout - returning with mempool confirmation only")
-			e.logger.Printf("✅ [COMETBFT] Transaction passed CheckTx and is in mempool - consensus will commit it")
-			// Return with Height=0 indicating pending consensus but valid mempool inclusion
-			// The caller can still proceed since ValidatorBlock was cryptographically validated
-			return &BFTExecutionResult{
-				Height:      0,
-				TxHash:      txHash,
-				BlockHash:   nil,
-				CommittedAt: time.Now().UTC(),
-			}, nil
-		}
-
-		// Query transaction status via RPC
-		txResult, err := e.rpcClient.Tx(ctx, txHash, false)
-		if err != nil {
-			// Transaction not yet indexed - wait and retry
-			time.Sleep(pollInterval)
-			continue
-		}
-
-		// Transaction found in a block!
-		if txResult.TxResult.Code != 0 {
-			e.logger.Printf("❌ [COMETBFT] Transaction failed in block: code=%d log=%s", txResult.TxResult.Code, txResult.TxResult.Log)
-			return nil, fmt.Errorf("transaction failed in block: code=%d log=%s", txResult.TxResult.Code, txResult.TxResult.Log)
-		}
-
-		e.logger.Printf("🎉 [COMETBFT] ValidatorBlock COMMITTED at height=%d hash=%X (elapsed: %v)",
-			txResult.Height, txResult.Hash, time.Since(pollStart).Round(time.Millisecond))
-
-		return &BFTExecutionResult{
-			Height:      txResult.Height,
-			TxHash:      txResult.Hash,
-			BlockHash:   nil,
-			CommittedAt: time.Now().UTC(),
-		}, nil
-	}
+	// Submit, then confirm inclusion. The outcome is decided by whether the transaction is admitted or
+	// committed — looked up by hash when a reply is lost — not by the RPC acknowledgement alone
+	// (bft_broadcast_confirm.go).
+	return submitValidatorBlock(ctx, e.rpcClient, payload, defaultBroadcastTiming, e.logger)
 }
 
 // BroadcastAppTxSync broadcasts ABCI transactions via in-process CometBFT engine
@@ -3105,8 +2976,15 @@ func (e *RealCometBFTEngine) GetValidatorApp() *ValidatorApp {
 // This enables the ValidatorApp to persist consensus entries and batch attestations to postgres.
 func (e *RealCometBFTEngine) SetValidatorRepositories(repos *database.Repositories) {
 	if validatorApp := e.GetValidatorApp(); validatorApp != nil {
-		validatorApp.SetRepositories(repos)
-		e.logger.Printf("✅ [PERSIST] Database repositories wired to ValidatorApp for consensus persistence")
+		// Each validator keeps its own persisted-height watermark (they may share one database), and
+		// rebuilds heights it missed from its own block store.
+		writerID := e.validatorID
+		if writerID == "" {
+			writerID = e.nodeID
+		}
+		validatorApp.EnableConsensusPersistence(repos, writerID,
+			&rpcCommittedBlockSource{reader: e.rpcClient, chainID: validatorApp.GetChainID()})
+		e.logger.Printf("✅ [PERSIST] Database repositories wired to ValidatorApp for consensus persistence (writer=%s)", writerID)
 	}
 }
 
