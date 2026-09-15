@@ -70,26 +70,45 @@ const unconfirmedLookupLimit = 100
 type txLookup int
 
 const (
-	txNotFound txLookup = iota
+	txNotFound     txLookup = iota // both lookups answered and neither has the transaction
+	txLookupFailed                 // a lookup did not answer, so absence is not established
 	txInMempool
 	txCommitted
 )
 
-// lookupTxByHash reports whether the transaction is committed or waiting in the mempool. Lookup errors
-// count as not found: the caller then retries the broadcast, which is safe (a duplicate is deduplicated).
+// lookupTxByHash reports whether the transaction is committed or waiting in the mempool.
+//
+// Each lookup gets its own timeout. unconfirmed_txs takes the mempool lock and therefore blocks for as long
+// as a block commit does, exactly when the broadcast reply was lost; a lookup that does not answer is
+// reported as txLookupFailed, never as absence. The caller retries the broadcast either way, which is safe
+// (a duplicate is deduplicated), but only a real absence may end in "not in the mempool".
 func lookupTxByHash(ctx context.Context, rpc broadcastRPC, hash []byte, timeout time.Duration) (txLookup, *coretypes.ResultTx) {
-	lctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	if res, err := rpc.Tx(lctx, hash, false); err == nil && res != nil {
+	failed := false
+
+	tctx, tcancel := context.WithTimeout(ctx, timeout)
+	res, err := rpc.Tx(tctx, hash, false)
+	tcancel()
+	switch {
+	case err == nil && res != nil:
 		return txCommitted, res
+	case err != nil && !strings.Contains(err.Error(), "not found"):
+		failed = true // the indexer did not answer, rather than answering "not found"
 	}
+
+	uctx, ucancel := context.WithTimeout(ctx, timeout)
+	defer ucancel()
 	limit := unconfirmedLookupLimit
-	if u, err := rpc.UnconfirmedTxs(lctx, &limit); err == nil && u != nil {
-		for _, tx := range u.Txs {
-			if bytes.Equal(tx.Hash(), hash) {
-				return txInMempool, nil
-			}
+	u, err := rpc.UnconfirmedTxs(uctx, &limit)
+	if err != nil || u == nil {
+		return txLookupFailed, nil
+	}
+	for _, tx := range u.Txs {
+		if bytes.Equal(tx.Hash(), hash) {
+			return txInMempool, nil
 		}
+	}
+	if failed {
+		return txLookupFailed, nil
 	}
 	return txNotFound, nil
 }
@@ -132,12 +151,16 @@ func submitValidatorBlock(ctx context.Context, rpc broadcastRPC, payload []byte,
 	txHash := sum[:]
 
 	deadline := start.Add(timing.submitBudget)
-	// Leave the caller's context room for the inclusion poll.
+	// The last attempt may start at the deadline and then take a full attempt plus its two lookups; leave the
+	// caller's context room for that and for the inclusion poll. (With the production caller's 3-minute
+	// context this bound is later than the 2-minute budget, so the budget decides.)
 	if dl, ok := ctx.Deadline(); ok {
-		if d := dl.Add(-timing.inclusionPoll); d.Before(deadline) {
+		reserve := timing.inclusionPoll + timing.attemptTimeout + 2*timing.lookupTimeout
+		if d := dl.Add(-reserve); d.Before(deadline) {
 			deadline = d
 		}
 	}
+	lastLookup := txNotFound
 
 	logger.Printf("📡 [COMETBFT] Phase 1: Submitting to mempool via BroadcastTxSync...")
 submit:
@@ -182,16 +205,25 @@ submit:
 
 		// A transport error means the REPLY was lost, not that the transaction was. The node may already
 		// have admitted it (a commit held CheckTx past the RPC write timeout) or even committed it.
-		switch state, committed := lookupTxByHash(ctx, rpc, txHash, timing.lookupTimeout); state {
+		state, committed := lookupTxByHash(ctx, rpc, txHash, timing.lookupTimeout)
+		switch state {
 		case txCommitted:
 			logger.Printf("✅ [COMETBFT] Reply lost (%v) but the ValidatorBlock is already committed: hash=%X", err, txHash)
 			return committedResult(logger, committed, start)
 		case txInMempool:
 			logger.Printf("✅ [COMETBFT] Reply lost (%v) but the ValidatorBlock is in the mempool: hash=%X", err, txHash)
 			break submit
+		case txLookupFailed:
+			logger.Printf("⚠️ [COMETBFT] Reply lost (%v) and the lookup by hash did not answer; admission unknown: hash=%X", err, txHash)
 		}
+		lastLookup = state
 
 		if !time.Now().Before(deadline) {
+			if lastLookup == txLookupFailed {
+				logger.Printf("❌ [COMETBFT] BroadcastTxSync failed after %d attempts over %v; whether the node admitted the transaction could not be determined: %v",
+					attempt, time.Since(start).Round(time.Millisecond), err)
+				return nil, fmt.Errorf("BroadcastTxSync: %w (admission could not be confirmed after %d attempts: the lookup by hash did not answer)", err, attempt)
+			}
 			logger.Printf("❌ [COMETBFT] BroadcastTxSync failed after %d attempts over %v; the transaction is neither committed nor in the mempool: %v",
 				attempt, time.Since(start).Round(time.Millisecond), err)
 			return nil, fmt.Errorf("BroadcastTxSync: %w (not committed and not in the mempool after %d attempts)", err, attempt)

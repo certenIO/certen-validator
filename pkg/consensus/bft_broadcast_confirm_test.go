@@ -44,6 +44,9 @@ type fakeCometRPC struct {
 	txCalls          int
 	unconfirmedCalls int
 	mempoolTxs       []cmttypes.Tx // other transactions in the mempool
+
+	// While true, UnconfirmedTxs blocks until its context ends (the mempool lock held by a slow commit).
+	mempoolLocked bool
 }
 
 func (f *fakeCometRPC) BroadcastTxSync(ctx context.Context, tx cmttypes.Tx) (*coretypes.ResultBroadcastTx, error) {
@@ -74,6 +77,13 @@ func (f *fakeCometRPC) Tx(ctx context.Context, hash []byte, prove bool) (*corety
 }
 
 func (f *fakeCometRPC) UnconfirmedTxs(ctx context.Context, limit *int) (*coretypes.ResultUnconfirmedTxs, error) {
+	f.mu.Lock()
+	locked := f.mempoolLocked
+	f.mu.Unlock()
+	if locked {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.unconfirmedCalls++
@@ -249,20 +259,66 @@ func TestAdmittedButNotYetCommittedReturnsPending(t *testing.T) {
 	}
 }
 
-// The submit budget shrinks to leave the caller's context room for the inclusion poll.
+// The submit budget shrinks so the last attempt, its lookups and the inclusion poll all fit in the caller's
+// context: the function ends on its own budget, not by running the caller's context out.
 func TestHonoursTheCallersDeadline(t *testing.T) {
-	timing := fastTiming()
+	timing := fastTiming() // attempt 200ms, lookup 50ms, inclusion poll 100ms
 	timing.submitBudget = 10 * time.Second
-	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 	rpc := &fakeCometRPC{broadcastReply: func(int) (*coretypes.ResultBroadcastTx, error) { return nil, eofErr }}
 	start := time.Now()
 	_, err := submitValidatorBlock(ctx, rpc, testPayload, timing, broadcastQuietLog)
-	if err == nil {
-		t.Fatal("expected failure")
+	elapsed := time.Since(start)
+	if err == nil || !strings.Contains(err.Error(), "not committed and not in the mempool") {
+		t.Fatalf("err = %v, want the budget failure (not the caller's context expiring)", err)
 	}
-	if elapsed := time.Since(start); elapsed > 450*time.Millisecond {
-		t.Fatalf("ran %v past a 400ms caller deadline", elapsed)
+	if ctx.Err() != nil {
+		t.Fatalf("used the caller's whole context (%v) instead of reserving room for the inclusion poll", elapsed)
+	}
+	if reserve := timing.inclusionPoll + timing.attemptTimeout + 2*timing.lookupTimeout; elapsed > time.Second-reserve+100*time.Millisecond {
+		t.Fatalf("ended after %v; the budget should stop new attempts %v before the caller deadline", elapsed, reserve)
+	}
+}
+
+// A lookup that does not answer (unconfirmed_txs blocks on the mempool lock during a slow commit) is not
+// evidence of absence: the failure must say admission is unknown, not "not in the mempool".
+func TestUnansweredLookupIsNotReportedAsAbsence(t *testing.T) {
+	rpc := &fakeCometRPC{
+		broadcastReply: func(int) (*coretypes.ResultBroadcastTx, error) { return nil, eofErr },
+		mempoolLocked:  true,
+	}
+	_, err := submitValidatorBlock(context.Background(), rpc, testPayload, fastTiming(), broadcastQuietLog)
+	if err == nil || strings.Contains(err.Error(), "not in the mempool") || !strings.Contains(err.Error(), "admission could not be confirmed") {
+		t.Fatalf("err = %v, want an 'admission could not be confirmed' failure", err)
+	}
+	if !errors.Is(err, eofErr) {
+		t.Fatalf("transport error not wrapped: %v", err)
+	}
+}
+
+// The slow-commit timeline end to end: broadcasts and the mempool lookup block while a commit holds the
+// lock; when it ends the node has admitted the transaction. The broadcaster must end on inclusion.
+func TestSlowCommitWithBlockedLookupsStillConfirmsInclusion(t *testing.T) {
+	timing := fastTiming()
+	timing.submitBudget = 2 * time.Second
+	commitEnds := time.Now().Add(250 * time.Millisecond)
+	rpc := &fakeCometRPC{mempoolLocked: true, height: 2187}
+	rpc.broadcastReply = func(n int) (*coretypes.ResultBroadcastTx, error) {
+		if time.Now().Before(commitEnds) {
+			time.Sleep(time.Until(commitEnds))
+			rpc.mu.Lock()
+			rpc.mempoolLocked = false
+			rpc.admittedAfter = n // admitted when the commit released the lock
+			rpc.committedAfterTxCalls = rpc.txCalls + 3
+			rpc.mu.Unlock()
+			return nil, eofErr // the reply was lost to the RPC write timeout
+		}
+		return nil, errors.New("tx already exists in cache")
+	}
+	res, err := submitValidatorBlock(context.Background(), rpc, testPayload, timing, broadcastQuietLog)
+	if err != nil || res.Height != 2187 {
+		t.Fatalf("res=%+v err=%v, want committed at 2187", res, err)
 	}
 }
 
