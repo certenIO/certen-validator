@@ -73,10 +73,20 @@ var ErrNoBatchBinding = errors.New("no batch_transactions row for this accumulat
 // The join is on accumulate_tx_hash for the same reason ProofBlob's is:
 // batch_transactions predates proof_artifacts and carries no proof_id.
 //
-// Ordered newest-first and limited to one. A transaction can appear in more than
-// one batch row across re-runs, and the most recent row is the one whose batch
-// actually anchored — picking arbitrarily would sometimes return a path to a
-// root that was never published.
+// CANONICAL ROWS ONLY (bundle_id IS NOT NULL).
+//
+// The pre-2026-09 rows are per-validator shadow copies: one per validator with a
+// random UUID, over leaves computed as sha256(4 blobs) rather than the on-chain
+// keccak("certen:batchleaf:v1"…). Their roots were never published, and the old
+// "newest row wins" rule bound one of them to the settlement transaction —
+// producing a live L5 claim that root d2d24ab3… is in tx 0x9e4ff6ab…, which
+// settled root 2fd899ae….
+//
+// A published anchor now has exactly one row, written from the quorum the chain
+// executed, so "newest wins" is no longer choosing between rival copies. When no
+// canonical row exists the answer is ErrNoBatchBinding: the caller then treats the
+// proof as a one-member tree, which is honest, rather than receiving a binding to
+// a root nobody anchored.
 func (r *ProofArtifactRepository) GetLayer5Binding(ctx context.Context, accumTxHash string) (*Layer5Binding, error) {
 	const q = `
 		SELECT bt.batch_id,
@@ -85,11 +95,14 @@ func (r *ProofArtifactRepository) GetLayer5Binding(ctx context.Context, accumTxH
 		       bt.merkle_path,
 		       ab.merkle_root,
 		       COALESCE(ab.target_chain, ''),
-		       COALESCE(ab.anchor_tx_hash, ''),
-		       COALESCE(ab.anchor_block_num, 0)
+		       -- The ANCHOR-CREATE transaction, never the settlement transaction: this field answers
+		       -- "where was this root published", and the settlement tx published a different root.
+		       COALESCE(ab.anchor_create_tx, ab.anchor_tx_hash, ''),
+		       COALESCE(ab.verify_block, ab.anchor_block_num, 0)
 		FROM batch_transactions bt
 		JOIN anchor_batches ab ON ab.id = bt.batch_id
 		WHERE bt.accumulate_tx_hash = $1
+		  AND ab.bundle_id IS NOT NULL
 		ORDER BY bt.created_at DESC
 		LIMIT 1`
 

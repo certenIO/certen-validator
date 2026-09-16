@@ -54,6 +54,9 @@ const (
 
 // BatchQuorumAttestor implements QuorumProver by running a real peer quorum.
 type BatchQuorumAttestor struct {
+	// onAnchorAttested records what a proven anchor established. Nil unless wired in main.go.
+	onAnchorAttested AnchorAttestedHook
+
 	chains      EVMChainResolver
 	submitter   *BatchProofSubmitterImpl
 	peers       []string
@@ -119,6 +122,16 @@ func NewBatchQuorumAttestor(
 	}, nil
 }
 
+// SetAnchorAttestedHook wires persistence of anchor quorum evidence. Optional: unset, proving behaves
+// exactly as before and the evidence is simply not recorded.
+//
+// The hook fires ONLY after the aggregate verified against the registry, the verify transaction mined,
+// and the anchor's proofExecuted flag was read back as true. It never fires for QuorumNotReadyError, a
+// mismatch, or an unconfirmed flag — the row exists because the chain says so, not because we tried.
+func (a *BatchQuorumAttestor) SetAnchorAttestedHook(fn AnchorAttestedHook) {
+	a.onAnchorAttested = fn
+}
+
 // ProveBatchRoot satisfies QuorumProver.
 //
 // Takes the TREE rather than loose fields so the bundleId, root and batch operationID it
@@ -133,7 +146,9 @@ func (a *BatchQuorumAttestor) ProveBatchRoot(
 	tree *BatchTree,
 	cutoffHeight, periodBlocks uint64,
 ) error {
-	return a.prove(ctx, tree, func(ctx context.Context) ([]*BatchAttestationResponse, error) {
+	// Cadence members are identified by their operation id: the orchestrator holds the intent ids and the
+	// prover deliberately does not, so nothing here guesses them.
+	return a.prove(ctx, tree, AnchorLaneOnCadence, nil, func(ctx context.Context) ([]*BatchAttestationResponse, error) {
 		req, err := NewBatchAttestationRequest(tree, cutoffHeight, periodBlocks, a.validatorID)
 		if err != nil {
 			return nil, fmt.Errorf("building attestation request: %w", err)
@@ -157,6 +172,8 @@ func (a *BatchQuorumAttestor) ProveBatchRoot(
 func (a *BatchQuorumAttestor) prove(
 	ctx context.Context,
 	tree *BatchTree,
+	lane string,
+	intentByOperation map[[32]byte]string,
 	collect func(context.Context) ([]*BatchAttestationResponse, error),
 ) error {
 	if tree == nil {
@@ -282,6 +299,32 @@ func (a *BatchQuorumAttestor) prove(
 
 	a.logf("[BATCH-QUORUM] chain=%d anchor 0x%x attested; root 0x%x is now spendable",
 		chainID, tree.BundleID[:8], tree.Root[:8])
+
+	// Everything above is now established: the aggregate verified against the on-chain registry, the
+	// verify transaction mined, and proofExecuted reads true at that block. Hand the evidence off.
+	//
+	// After the success log and never before it: a hook that ran earlier would record a quorum for an
+	// anchor that had not been confirmed, which is the shape of claim this whole path refuses to make.
+	if a.onAnchorAttested != nil {
+		a.onAnchorAttested(ctx, &AnchorQuorumEvidence{
+			ChainID:               chainID,
+			BundleID:              tree.BundleID,
+			Root:                  tree.Root,
+			BatchOperationID:      tree.BatchOperationID,
+			MessageHash:           msgHash,
+			SetRoot:               setRoot,
+			VerifyTx:              verifyTx,
+			AggregateSignatureHex: agg.AggregateSignatureHex,
+			AggregatePublicKeyHex: agg.AggregatePublicKeyHex,
+			Signers:               agg.Signers,
+			SignerPowers:          agg.SignerPowers,
+			SignedVotingPower:     agg.SignedVotingPower,
+			TotalVotingPower:      agg.TotalVotingPower,
+			Lane:                  lane,
+			Members:               membersFromTree(tree, intentByOperation),
+			AttestedAt:            time.Now().UTC(),
+		})
+	}
 	return nil
 }
 
@@ -314,7 +357,11 @@ func (a *BatchQuorumAttestor) ProveBatchRootOnDemand(
 	member *PendingBatchIntent,
 ) error {
 	var last OnDemandCollectResult
-	err := a.prove(ctx, tree, func(ctx context.Context) ([]*BatchAttestationResponse, error) {
+	intentByOperation := map[[32]byte]string{}
+	if member != nil {
+		intentByOperation[member.OperationID] = member.IntentID
+	}
+	err := a.prove(ctx, tree, AnchorLaneOnDemand, intentByOperation, func(ctx context.Context) ([]*BatchAttestationResponse, error) {
 		req, rerr := NewOnDemandAttestationRequest(tree, member, a.validatorID)
 		if rerr != nil {
 			return nil, fmt.Errorf("building on-demand attestation request: %w", rerr)

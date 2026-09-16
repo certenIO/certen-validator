@@ -216,6 +216,13 @@ var unifiedOrchestratorForAttestation atomic.Pointer[execution.UnifiedOrchestrat
 // to the peer attestation HTTP handler (registered early). Same pattern, same reason.
 var batchStackForAttestation atomic.Pointer[execution.BatchStack]
 
+// batchQuorumAttestorForEvidence bridges the quorum attestor (built in the batching wiring block, before
+// the database exists) to the anchor-evidence hook (wired later, once repositories are available).
+//
+// Same shape and the same reason as batchStackForAttestation above: the two halves are constructed in
+// different phases of startup, and a package-level handle is how this file already joins them.
+var batchQuorumAttestorForEvidence atomic.Pointer[execution.BatchQuorumAttestor]
+
 // batchAttesterIdentity is who this validator claims to be when co-signing a peer's batch.
 // Its EVM address must match its registry entry on the anchor, or its partial contributes no
 // voting power and the aggregate is refused.
@@ -1490,6 +1497,7 @@ func startValidator(
 			if pErr != nil {
 				log.Printf("⚠️ [BATCH] Quorum attestor unavailable (%v) — batching disabled", pErr)
 			} else {
+				batchQuorumAttestorForEvidence.Store(prover)
 				mempoolCfg := execution.DefaultBatchMempoolConfig()
 				stack, sErr := execution.NewBatchStack(resolver, prover, mempoolCfg, log.Printf)
 				if sErr != nil {
@@ -2316,6 +2324,20 @@ func startValidator(
 		// Settlement is where the outcome is actually known: one transaction per chain settles
 		// every leg the member carries there — the 5-leg intent produced exactly one transaction
 		// of 281,407 gas. So the settle path reports len(Legs), not 1.
+		// Anchor quorum evidence. The quorum proven over each anchor — aggregate signature, signer set and
+		// voting power — used to be computed and dropped, leaving anchor_batches' Phase 5 columns empty on
+		// all 70,236 rows and proofs_service reporting batch_quorum_met=false for every intent. The writer
+		// records it off the proving path; see pkg/execution/anchor_quorum_writer.go.
+		if attestor := batchQuorumAttestorForEvidence.Load(); attestor != nil && batchComponents.Repos != nil {
+			anchorQuorumWriter := execution.NewAnchorQuorumWriter(batchComponents.Repos.Batches, log.Printf)
+			anchorQuorumWriter.Start()
+			attestor.SetAnchorAttestedHook(anchorQuorumWriter.Hook())
+			log.Printf("✅ [Phase 5] Anchor quorum evidence hook wired (canonical rows keyed by chain_id + bundle_id)")
+		} else {
+			log.Printf("⚠️ [Phase 5] Anchor quorum evidence NOT recorded (attestor or repositories unavailable); " +
+				"proven anchors will have no canonical row")
+		}
+
 		if stack := batchStackForAttestation.Load(); stack != nil {
 			legProgress := func(ctx context.Context, intentID string, completed, failed int) {
 				if lifecycleRepo == nil {
