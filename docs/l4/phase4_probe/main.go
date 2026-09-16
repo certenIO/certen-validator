@@ -1,5 +1,7 @@
 // Phase 4 probe: how much does a ValidatorSetProof actually add to a stored
 // proof? Builds the real JSON from live data and measures it.
+//go:build ignore
+
 package main
 
 import (

@@ -2,17 +2,18 @@ package database
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+
+	schema "github.com/certen/independant-validator/db"
 )
 
 // Integration tests for committed-block consensus persistence (off the ABCI Commit path). They run
-// against CERTEN_TEST_DB (see TestMain) with every embedded migration applied.
+// against CERTEN_TEST_DB (see TestMain) with the shared production schema catalog applied.
 
 var migrateConsensusOnce sync.Once
 
@@ -30,72 +31,17 @@ func consensusRepoForTest(t *testing.T) *ConsensusRepository {
 	return NewConsensusRepository(client)
 }
 
-// applyMigrationFilesDirectly brings an empty test database to the fleet's migration state by executing each
-// embedded migration file in order, outside a wrapping transaction.
-//
-// The embedded migrations cannot build a database from empty — a pre-existing limit unrelated to this
-// change: 005_intent_metadata carries its own BEGIN/COMMIT (which ends MigrateUp's transaction) and
-// 010_backfill_leg_progress references a column no earlier migration creates. The fleet's database was
-// built incrementally. So a migration unrelated to the consensus tables may fail here; every migration is
-// then recorded as applied, as on the fleet. The migrations these tests depend on — 001 (consensus_entries,
-// batch_attestations, schema_migrations) and 017 — must apply cleanly.
+// applyMigrationFilesDirectly is retained as the common fixture hook while tests are migrated. It uses the
+// shared runner exclusively; legacy migration files are never executed by the test harness.
 func applyMigrationFilesDirectly(client *Client) error {
-	ms, err := client.getMigrations()
-	if err != nil {
-		return err
-	}
-	required := map[string]bool{"001_initial_schema": true, "017_consensus_persistence_progress": true}
-	for _, m := range ms {
-		if _, err := testDB.Exec(m.SQL); err != nil && required[m.Version] {
-			return fmt.Errorf("%s: %w", m.Version, err)
-		}
-		// Some older migrations do not record themselves; record every one as the fleet has it. 017 is left
-		// to record itself (TestMigration017AppliesThroughMigrateUpAndRegistersItself checks that it does).
-		if m.Version == "017_consensus_persistence_progress" {
-			continue
-		}
-		if _, err := testDB.Exec(`INSERT INTO schema_migrations (version, description) VALUES ($1, 'test fixture') ON CONFLICT (version) DO NOTHING`, m.Version); err != nil {
-			return fmt.Errorf("record %s: %w", m.Version, err)
-		}
-	}
-	return nil
+	return (schema.Runner{DB: client.DB()}).Up(context.Background(), "test-suite")
 }
 
-// The production upgrade path: a database at 016 runs MigrateUp on the new binary. Exactly 017 applies,
-// registers itself, and the next start applies nothing.
-func TestMigration017AppliesThroughMigrateUpAndRegistersItself(t *testing.T) {
+func TestConsensusPersistenceUsesSharedSchema(t *testing.T) {
 	repo := consensusRepoForTest(t)
 	ctx := context.Background()
-	client := repo.client
-
-	// Rewind to the fleet's state before this change.
-	if _, err := testDB.Exec(`DROP TABLE IF EXISTS consensus_persistence_progress;
-		DELETE FROM schema_migrations WHERE version = '017_consensus_persistence_progress'`); err != nil {
-		t.Fatal(err)
-	}
-	applied, err := client.getAppliedMigrations(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	all, _ := client.getMigrations()
-	for _, m := range all {
-		if m.Version != "017_consensus_persistence_progress" && !applied[m.Version] {
-			t.Fatalf("fixture: %s is not registered, so MigrateUp would re-apply it", m.Version)
-		}
-	}
-
-	if err := client.MigrateUp(ctx); err != nil {
-		t.Fatalf("MigrateUp from 016: %v", err)
-	}
-	applied, _ = client.getAppliedMigrations(ctx)
-	if !applied["017_consensus_persistence_progress"] {
-		t.Fatal("017 did not register itself in schema_migrations; it would re-run on every start")
-	}
 	if _, err := repo.PersistCommittedBlock(ctx, writerForTest(), &CommittedConsensusRecords{Height: 1}); err != nil {
-		t.Fatalf("table not usable after MigrateUp: %v", err)
-	}
-	if err := client.MigrateUp(ctx); err != nil {
-		t.Fatalf("second MigrateUp: %v", err)
+		t.Fatalf("table not usable after shared migration: %v", err)
 	}
 }
 
@@ -334,42 +280,30 @@ func TestResetPersistedHeightMovesTheWatermarkBackwards(t *testing.T) {
 	}
 }
 
-// Validators that start together must all get through migration 017; before the advisory lock six of seven
-// failed with a pg_type unique violation and MigrateUp stopped there.
-func TestMigration017SurvivesSevenValidatorsStartingTogether(t *testing.T) {
+func TestSharedRunnerSurvivesSevenValidatorsStartingTogether(t *testing.T) {
 	repo := consensusRepoForTest(t)
 	ctx := context.Background()
-	for round := 0; round < 3; round++ {
-		if _, err := testDB.Exec(`DROP TABLE IF EXISTS consensus_persistence_progress;
-			DELETE FROM schema_migrations WHERE version = '017_consensus_persistence_progress'`); err != nil {
-			t.Fatal(err)
-		}
-		errs := make(chan error, 7)
-		var wg sync.WaitGroup
-		for i := 0; i < 7; i++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				errs <- repo.client.MigrateUp(ctx)
-			}()
-		}
-		wg.Wait()
-		close(errs)
-		for err := range errs {
-			if err != nil {
-				t.Fatalf("round %d: concurrent MigrateUp failed: %v", round, err)
-			}
+	errs := make(chan error, 7)
+	var wg sync.WaitGroup
+	for i := 0; i < 7; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- (schema.Runner{DB: repo.client.DB()}).Up(ctx, "test-suite")
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent shared migration: %v", err)
 		}
 	}
 }
 
-// Where MigrateUp never reaches 017, the writer creates the table itself — concurrently and repeatedly.
-func TestEnsurePersistenceProgressTableIsConcurrentAndIdempotent(t *testing.T) {
+func TestEnsurePersistenceProgressTableRequiresSharedSchema(t *testing.T) {
 	repo := consensusRepoForTest(t)
 	ctx := context.Background()
-	if _, err := testDB.Exec(`DROP TABLE IF EXISTS consensus_persistence_progress`); err != nil {
-		t.Fatal(err)
-	}
 	errs := make(chan error, 7)
 	var wg sync.WaitGroup
 	for i := 0; i < 7; i++ {
@@ -385,12 +319,6 @@ func TestEnsurePersistenceProgressTableIsConcurrentAndIdempotent(t *testing.T) {
 		if err != nil {
 			t.Fatalf("concurrent ensure failed: %v", err)
 		}
-	}
-	if err := repo.EnsurePersistenceProgressTable(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := repo.PersistCommittedBlock(ctx, writerForTest(), &CommittedConsensusRecords{Height: 1}); err != nil {
-		t.Fatalf("table unusable: %v", err)
 	}
 }
 

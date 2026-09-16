@@ -10,22 +10,27 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	_ "github.com/lib/pq" // PostgreSQL driver
+
+	schema "github.com/certen/independant-validator/db"
 )
 
 // Test database connection string (use test database or skip)
 var testDB *sql.DB
 
 func TestMain(m *testing.M) {
-	// Try to connect to test database
 	connStr := os.Getenv("CERTEN_TEST_DB")
 	if connStr == "" {
-		// Skip database tests if no test DB configured
+		if os.Getenv("CI") != "" {
+			fmt.Fprintln(os.Stderr, "CERTEN_TEST_DB is required in CI")
+			os.Exit(1)
+		}
 		os.Exit(0)
 	}
 
@@ -33,6 +38,12 @@ func TestMain(m *testing.M) {
 	testDB, err = sql.Open("postgres", connStr)
 	if err != nil {
 		panic("Failed to connect to test database: " + err.Error())
+	}
+	if err := testDB.Ping(); err != nil {
+		panic("Ping test database: " + err.Error())
+	}
+	if err := (schema.Runner{DB: testDB}).Up(context.Background(), "test-suite"); err != nil {
+		panic("Migrate test database: " + err.Error())
 	}
 
 	// Run tests
@@ -209,7 +220,7 @@ func TestGetProofsByAccount(t *testing.T) {
 	}
 }
 
-func TestUpdateProofAnchored(t *testing.T) {
+func TestUpdateProofAnchoredSimple(t *testing.T) {
 	if testDB == nil {
 		t.Skip("Test database not configured")
 	}
@@ -236,9 +247,8 @@ func TestUpdateProofAnchored(t *testing.T) {
 	}()
 
 	// Update as anchored
-	anchorID := uuid.New()
 	anchorTxHash := "0x" + uuid.New().String()[:32]
-	err = repo.UpdateProofAnchored(ctx, proof.ProofID, anchorID, anchorTxHash, 12345678, "ethereum")
+	err = repo.UpdateProofAnchoredSimple(ctx, proof.ProofID, anchorTxHash, 12345678, "ethereum")
 	if err != nil {
 		t.Fatalf("Failed to update proof as anchored: %v", err)
 	}

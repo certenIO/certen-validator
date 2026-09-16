@@ -10,6 +10,8 @@
 //	chains         : merkle over each chain's DAG root, itself folded from the
 //	                 chain query's "state" (the merkle State.Pending list)
 //	pending        : 32 zero bytes when the account has no pending transactions
+//go:build ignore
+
 package main
 
 import (

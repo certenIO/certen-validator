@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
@@ -16,17 +17,11 @@ import (
 
 func migration020SQL(t *testing.T) string {
 	t.Helper()
-	ms, err := NewClientFromDB(testDB).getMigrations()
+	sql, err := os.ReadFile("migrations/020_supersede_layer5_contradicted_by_canonical.sql")
 	if err != nil {
-		t.Fatalf("loading migrations: %v", err)
+		t.Fatalf("read frozen migration 020: %v", err)
 	}
-	for _, m := range ms {
-		if strings.HasPrefix(m.Version, "020_") {
-			return m.SQL
-		}
-	}
-	t.Fatal("migration 020 is not embedded")
-	return ""
+	return string(sql)
 }
 
 // l5Case builds one intent's worth of rows: an anchor row carrying anchorRoot, a member row linking the

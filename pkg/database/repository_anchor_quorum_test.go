@@ -318,28 +318,8 @@ func TestLayer5BindingReportsNoneWhenOnlyShadowRowsExist(t *testing.T) {
 	}
 }
 
-func TestMigration018AppliesThroughMigrateUpAndRegistersItself(t *testing.T) {
-	repo := anchorRepoForTest(t)
-	ctx := context.Background()
-	client := repo.client
-
-	if _, err := testDB.Exec(`DELETE FROM schema_migrations WHERE version = '018_anchor_quorum_evidence'`); err != nil {
-		t.Fatal(err)
-	}
-	if err := client.MigrateUp(ctx); err != nil {
-		t.Fatalf("MigrateUp: %v", err)
-	}
-	applied, err := client.getAppliedMigrations(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !applied["018_anchor_quorum_evidence"] {
-		t.Fatal("018 did not register itself; it would re-run on every start")
-	}
-	// Re-running must be harmless: seven validators apply migrations at the same time.
-	if err := client.MigrateUp(ctx); err != nil {
-		t.Fatalf("second MigrateUp: %v", err)
-	}
+func TestAnchorQuorumUsesSharedSchema(t *testing.T) {
+	_ = anchorRepoForTest(t)
 }
 
 // REGRESSION — the live failure of 2026-09-16, intent 7758cbed.

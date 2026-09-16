@@ -890,7 +890,7 @@ func (r *ProofArtifactRepository) GetGovernanceProofLevels(ctx context.Context, 
 			   block_height, finality_timestamp, anchor_height, is_anchored,
 			   authority_url, key_page_count, threshold_m, threshold_n, signature_count,
 			   outcome_type, outcome_hash, binding_enforced,
-			   level_json, verified, verified_at, created_at
+			   level_json, COALESCE(verified, FALSE) AS verified, verified_at, created_at
 		FROM governance_proof_levels
 		WHERE proof_id = $1
 		ORDER BY gov_level`
@@ -968,7 +968,7 @@ func (r *ProofArtifactRepository) GetProofAttestationsByProof(ctx context.Contex
 	query := `
 		SELECT attestation_id, proof_id, batch_id, validator_id, validator_pubkey,
 			   attested_hash, signature, anchor_tx_hash, merkle_root, block_number,
-			   signature_valid, verified_at, attested_at, created_at
+			   COALESCE(signature_valid, FALSE) AS signature_valid, verified_at, attested_at, created_at
 		FROM validator_attestations
 		WHERE proof_id = $1
 		ORDER BY attested_at`
@@ -1000,7 +1000,7 @@ func (r *ProofArtifactRepository) GetProofAttestationsByBatch(ctx context.Contex
 	query := `
 		SELECT attestation_id, proof_id, batch_id, validator_id, validator_pubkey,
 			   attested_hash, signature, anchor_tx_hash, merkle_root, block_number,
-			   signature_valid, verified_at, attested_at, created_at
+			   COALESCE(signature_valid, FALSE) AS signature_valid, verified_at, attested_at, created_at
 		FROM validator_attestations
 		WHERE batch_id = $1
 		ORDER BY attested_at`
@@ -1075,7 +1075,7 @@ func (r *ProofArtifactRepository) CreateVerificationRecord(ctx context.Context, 
 func (r *ProofArtifactRepository) GetVerificationHistory(ctx context.Context, proofID uuid.UUID) ([]ProofVerificationRecord, error) {
 	query := `
 		SELECT verification_id, proof_id, verification_type, passed, error_message, error_code,
-			   verifier_id, verification_method, duration_ms, artifacts_json, created_at
+			   verifier_id, verification_method, duration_ms, COALESCE(artifacts_json, '{}'::jsonb) AS artifacts_json, created_at
 		FROM verification_history
 		WHERE proof_id = $1
 		ORDER BY created_at DESC`

@@ -11,6 +11,8 @@
 //  4. checks that anchor against the DN's signed StateTreeAnchor.
 //
 // Read-only. Run: go run ./docs/l4/phase1_probe <network>
+//go:build ignore
+
 package main
 
 import (

@@ -255,34 +255,17 @@ func (r *ConsensusRepository) PersistCommittedBlock(ctx context.Context, writerI
 	return rejected, nil
 }
 
-// progressTableDDL is migration 017's table. EnsurePersistenceProgressTable applies it directly so consensus
-// persistence works even where MigrateUp stops before 017 (MigrateUp halts at its first failing migration and
-// the validator only warns); keep the two identical.
-const progressTableDDL = `
-	CREATE TABLE IF NOT EXISTS consensus_persistence_progress (
-	    writer_id           VARCHAR(256) PRIMARY KEY,
-	    persisted_height    BIGINT NOT NULL CHECK (persisted_height >= 0),
-	    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
-	)`
-
-// persistenceMigrationLock serialises creation of the progress table across validators that start together
-// on one database (a concurrent CREATE TABLE IF NOT EXISTS can fail with a pg_type unique violation).
-const persistenceMigrationLock = 8017_000_017
-
-// EnsurePersistenceProgressTable creates the persisted-height table if it does not exist.
+// EnsurePersistenceProgressTable verifies that the shared schema runner created the persisted-height table.
+// It must never issue DDL: validators run in verify mode and do not require schema-owner privileges.
 func (r *ConsensusRepository) EnsurePersistenceProgressTable(ctx context.Context) error {
-	tx, err := r.client.BeginTx(ctx)
-	if err != nil {
-		return err
+	var exists bool
+	if err := r.client.QueryRowContext(ctx, `SELECT to_regclass('public.consensus_persistence_progress') IS NOT NULL`).Scan(&exists); err != nil {
+		return fmt.Errorf("verify progress table: %w", err)
 	}
-	defer tx.Rollback() //nolint:errcheck // a no-op after Commit
-	if _, err := tx.Tx().ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, persistenceMigrationLock); err != nil {
-		return fmt.Errorf("ensure progress table: lock: %w", err)
+	if !exists {
+		return fmt.Errorf("verify progress table: shared schema is missing consensus_persistence_progress")
 	}
-	if _, err := tx.Tx().ExecContext(ctx, progressTableDDL); err != nil {
-		return fmt.Errorf("ensure progress table: %w", err)
-	}
-	return tx.Commit()
+	return nil
 }
 
 // ResetPersistedHeight sets writerID's persisted height to exactly height, moving it backwards if needed. It

@@ -46,7 +46,7 @@ type rb1Vector struct {
 
 func loadRB1Vectors(t *testing.T) []rb1Vector {
 	t.Helper()
-	path := filepath.Join("..", "..", "..", "certen-contracts", "test", "vectors", "execution_commitment_test_vectors.json")
+	path := sharedVectorPath(t)
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read shared vectors %s: %v", path, err)
@@ -59,6 +59,30 @@ func loadRB1Vectors(t *testing.T) []rb1Vector {
 		t.Fatal("no vectors loaded")
 	}
 	return vs
+}
+
+func sharedVectorPath(t *testing.T) string {
+	t.Helper()
+	if root := os.Getenv("CERTEN_CONTRACTS_DIR"); root != "" {
+		return filepath.Join(root, "test", "vectors", "execution_commitment_test_vectors.json")
+	}
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get working directory: %v", err)
+	}
+	for {
+		candidate := filepath.Join(dir, "certen-contracts", "test", "vectors", "execution_commitment_test_vectors.json")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	t.Fatal("shared execution vectors not found; set CERTEN_CONTRACTS_DIR to the certen-contracts checkout")
+	return ""
 }
 
 // TestRB1_CommitmentMatchesSharedVectors asserts the Go computeExecutionCommitment

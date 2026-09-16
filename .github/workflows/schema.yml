@@ -1,0 +1,42 @@
+name: Schema and database tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: certen_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d certen_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      CI: "true"
+      CERTEN_TEST_DB: postgres://postgres:postgres@localhost:5432/certen_test?sslmode=disable
+      CERTEN_CONTRACTS_DIR: ${{ github.workspace }}/certen-contracts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: certenIO/certen-contracts
+          path: certen-contracts
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.0"
+      - run: go mod tidy
+      - run: git diff --exit-code -- go.mod go.sum
+      # Several legacy integration packages share CERTEN_TEST_DB. Run packages serially so each
+      # fixture observes a stable catalog and cannot race another package's cleanup.
+      - run: go test -p 1 ./... -count=1
