@@ -24,6 +24,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/google/uuid"
 
+	"github.com/certen/independant-validator/db"
 	"github.com/certen/independant-validator/pkg/accumulate"
 	"github.com/certen/independant-validator/pkg/anchor"
 	"github.com/certen/independant-validator/pkg/attestation"
@@ -464,6 +465,10 @@ func main() {
 	log.SetOutput(os.Stdout)
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 	log.Printf("🚀 Starting Certen Validator Service with REAL CometBFT Consensus - NO SIMULATION")
+	if len(os.Args) > 1 && os.Args[1] == "migrate" {
+		runMigrationCommand(os.Args[2:])
+		return
+	}
 
 	// Parse CLI flags
 	var (
@@ -527,10 +532,20 @@ func main() {
 		log.Println("✅ [Phase 5] Connected to PostgreSQL database")
 		healthStatus.SetDatabase("connected")
 
-		// Run migrations
-		if err := dbClient.MigrateUp(context.Background()); err != nil {
-			log.Printf("⚠️ [Phase 5] Database migration failed: %v", err)
-			// Migration failure is a warning, not a fatal error
+		runner := schema.Runner{DB: dbClient.DB()}
+		if os.Getenv("MIGRATE_ON_START") == "true" {
+			if err := runner.Up(context.Background(), cfg.ValidatorID); err != nil {
+				log.Fatalf("❌ [Phase 5] Database migration failed: %v", err)
+			}
+		} else {
+			required, err := schema.LatestVersion()
+			if err != nil {
+				log.Fatalf("❌ [Phase 5] Cannot load schema catalog: %v", err)
+			}
+			if err := runner.Verify(context.Background(), required); err != nil {
+				log.Fatalf("❌ [Phase 5] Database schema verification failed: %v", err)
+			}
+			log.Printf("✅ [Phase 5] Database schema verified through migration %s", required)
 		}
 	}
 
@@ -1053,6 +1068,48 @@ func main() {
 	}
 
 	log.Printf("✅ BFT Validator stopped")
+}
+
+func runMigrationCommand(args []string) {
+	if len(args) != 1 || (args[0] != "up" && args[0] != "verify" && args[0] != "fingerprint" && args[0] != "adopt") {
+		log.Fatal("usage: certen-validator migrate <up|verify|fingerprint|adopt>")
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("load configuration: %v", err)
+	}
+	client, err := database.NewClient(cfg)
+	if err != nil {
+		log.Fatalf("connect database: %v", err)
+	}
+	defer client.Close()
+	runner := schema.Runner{DB: client.DB()}
+	switch args[0] {
+	case "up":
+		err = runner.Up(context.Background(), cfg.ValidatorID)
+	case "verify":
+		var required string
+		required, err = schema.LatestVersion()
+		if err == nil {
+			err = runner.Verify(context.Background(), required)
+		}
+	case "fingerprint":
+		var fingerprint string
+		fingerprint, err = runner.Fingerprint(context.Background())
+		if err == nil {
+			fmt.Println(fingerprint)
+		}
+	case "adopt":
+		var fingerprint string
+		fingerprint, err = runner.Fingerprint(context.Background())
+		if err == nil {
+			err = runner.Adopt(context.Background(), fingerprint, os.Getenv("SCHEMA_FINGERPRINT"), cfg.ValidatorID)
+		}
+	}
+	if err != nil {
+		log.Fatalf("migrate %s: %v", args[0], err)
+	}
+	log.Printf("schema migration command %q completed", args[0])
 }
 
 // BatchComponents holds all batch system components for API handlers
