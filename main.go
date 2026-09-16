@@ -1116,7 +1116,7 @@ func runMigrationCommand(args []string) {
 		fingerprint, err = runner.Fingerprint(context.Background())
 		if err == nil {
 			var approved string
-			approved, err = schema.ApprovedFingerprint()
+			approved, err = schema.BaselineFingerprint()
 			if configured := os.Getenv("SCHEMA_FINGERPRINT"); err == nil && configured != "" && configured != approved {
 				err = fmt.Errorf("SCHEMA_FINGERPRINT does not match the reviewed catalog fingerprint")
 			}

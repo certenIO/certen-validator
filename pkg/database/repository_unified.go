@@ -774,7 +774,7 @@ func (r *UnifiedRepository) UpdateChainExecutionStatus(ctx context.Context, id u
 	query := `
 		UPDATE chain_execution_results
 		SET status = $2, block_number = $3, block_hash = $4,
-		    confirmed_at = CASE WHEN $2 = 1 AND confirmed_at IS NULL THEN NOW() ELSE confirmed_at END
+		    confirmed_at = CASE WHEN $2::smallint = 1 AND confirmed_at IS NULL THEN NOW() ELSE confirmed_at END
 		WHERE result_id = $1
 	`
 

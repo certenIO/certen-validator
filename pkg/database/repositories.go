@@ -9,10 +9,8 @@ package database
 type Repositories struct {
 	Batches         *BatchRepository
 	Anchors         *AnchorRepository
-	Proofs          *ProofRepository
 	ProofArtifacts  *ProofArtifactRepository // NEW: Comprehensive proof artifact storage
 	Attestations    *AttestationRepository
-	Requests        *RequestRepository
 	Consensus       *ConsensusRepository       // Consensus entries and batch attestations
 	Unified         *UnifiedRepository         // Multi-chain unified attestations and chain execution results
 	IntentLifecycle *IntentLifecycleRepository // Unified intent lifecycle status tracking
@@ -24,10 +22,8 @@ func NewRepositories(client *Client) *Repositories {
 	return &Repositories{
 		Batches:         NewBatchRepository(client),
 		Anchors:         NewAnchorRepository(client),
-		Proofs:          NewProofRepository(client),
 		ProofArtifacts:  NewProofArtifactRepository(client.DB()), // NEW: Uses raw *sql.DB
 		Attestations:    NewAttestationRepository(client),
-		Requests:        NewRequestRepository(client),
 		Consensus:       NewConsensusRepository(client),
 		Unified:         NewUnifiedRepository(client.DB()),    // Multi-chain unified tables
 		IntentLifecycle: NewIntentLifecycleRepository(client), // Intent lifecycle tracking

@@ -242,19 +242,6 @@ func (t *ConfirmationTracker) processAnchor(ctx context.Context, anchor *databas
 			t.logger.Printf("Failed to mark anchor %s as final: %v", anchor.AnchorID, err)
 		}
 
-		// Update all proofs associated with this anchor
-		proofs, err := t.repos.Proofs.GetProofsByAnchorID(ctx, anchor.AnchorID)
-		if err != nil {
-			t.logger.Printf("Failed to get proofs for anchor %s: %v", anchor.AnchorID, err)
-			return
-		}
-
-		for _, proof := range proofs {
-			if err := t.repos.Proofs.UpdateAnchorConfirmations(ctx, proof.ProofID, confirmations, blockHash); err != nil {
-				t.logger.Printf("Failed to update proof %s confirmations: %v", proof.ProofID, err)
-			}
-		}
-
 		// Mark external chain results as finalized (Gap 5 fix)
 		if t.repos.ProofArtifacts != nil {
 			if ecCount, err := t.repos.ProofArtifacts.MarkExternalChainResultsFinalizedByAnchor(ctx, anchor.AnchorID); err != nil {

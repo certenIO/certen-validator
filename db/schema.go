@@ -16,6 +16,9 @@ var files embed.FS
 //go:embed schema.fingerprint
 var approvedFingerprint string
 
+//go:embed baseline.fingerprint
+var baselineFingerprint string
+
 // Migration is an immutable, ordered schema change.
 type Migration struct {
 	Version string
@@ -67,13 +70,23 @@ func LatestVersion() (string, error) {
 	return migrations[len(migrations)-1].Version, nil
 }
 
-// ApprovedFingerprint is the reviewed catalog fingerprint captured from the production schema copy.
-// It is intentionally versioned beside the immutable migration catalog so adoption cannot trust an
-// unreviewed value supplied at runtime.
+// ApprovedFingerprint is the reviewed catalog fingerprint after every migration known to this binary.
+// It changes when a new migration changes the catalog and is used to prove fresh-install equivalence.
 func ApprovedFingerprint() (string, error) {
-	fingerprint := strings.TrimSpace(approvedFingerprint)
+	return parseFingerprint("approved", approvedFingerprint)
+}
+
+// BaselineFingerprint is the immutable production catalog captured for version 00000. Adoption must
+// compare against this value rather than the current catalog, so future migrations remain deployable
+// without making an already-existing production schema ineligible for adoption.
+func BaselineFingerprint() (string, error) {
+	return parseFingerprint("baseline", baselineFingerprint)
+}
+
+func parseFingerprint(name, source string) (string, error) {
+	fingerprint := strings.TrimSpace(source)
 	if len(fingerprint) != 64 {
-		return "", fmt.Errorf("approved schema fingerprint must be a SHA-256 hex digest")
+		return "", fmt.Errorf("%s schema fingerprint must be a SHA-256 hex digest", name)
 	}
 	for _, c := range fingerprint {
 		if !strings.ContainsRune("0123456789abcdef", c) {

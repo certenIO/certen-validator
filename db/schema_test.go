@@ -26,12 +26,17 @@ func TestCatalogIsOrderedAndLintClean(t *testing.T) {
 }
 
 func TestApprovedFingerprintIsValid(t *testing.T) {
-	fingerprint, err := ApprovedFingerprint()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(fingerprint) != 64 {
-		t.Fatalf("fingerprint length = %d", len(fingerprint))
+	for name, fingerprintFn := range map[string]func() (string, error){
+		"approved": ApprovedFingerprint,
+		"baseline": BaselineFingerprint,
+	} {
+		fingerprint, err := fingerprintFn()
+		if err != nil {
+			t.Fatalf("%s fingerprint: %v", name, err)
+		}
+		if len(fingerprint) != 64 {
+			t.Fatalf("%s fingerprint length = %d", name, len(fingerprint))
+		}
 	}
 }
 

@@ -139,9 +139,15 @@ type NewProofArtifact struct {
 	AccumTxHash string     `json:"accum_tx_hash"`
 	AccountURL  string     `json:"account_url"`
 	BatchID     *uuid.UUID `json:"batch_id,omitempty"`
-	MerkleRoot  []byte     `json:"merkle_root,omitempty"`
-	LeafHash    []byte     `json:"leaf_hash,omitempty"`
-	LeafIndex   *int       `json:"leaf_index,omitempty"`
+	// Anchor fields are supplied when the proof is first created as part of an
+	// already-submitted batch. This keeps the canonical proof row atomic.
+	AnchorID          *uuid.UUID `json:"anchor_id,omitempty"`
+	AnchorTxHash      *string    `json:"anchor_tx_hash,omitempty"`
+	AnchorBlockNumber *int64     `json:"anchor_block_number,omitempty"`
+	AnchorChain       *string    `json:"anchor_chain,omitempty"`
+	MerkleRoot        []byte     `json:"merkle_root,omitempty"`
+	LeafHash          []byte     `json:"leaf_hash,omitempty"`
+	LeafIndex         *int       `json:"leaf_index,omitempty"`
 	// MerklePath stores the Merkle inclusion proof path for visualization
 	// Format: [{"hash": "0x...", "right": true/false}, ...]
 	MerklePath   []MerklePathNode `json:"merkle_path,omitempty"`
