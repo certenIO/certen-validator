@@ -115,8 +115,15 @@ func membersFromTree(tree *BatchTree, intentByOperation map[[32]byte]string) []A
 		if i < len(tree.Leaves) {
 			leaf = tree.Leaves[i]
 		}
+		// The tree's own intent id first: both lanes populate it through PendingBatchIntent.LeafInput.
+		// intentByOperation remains as an override for callers that know better (the on-demand lane
+		// passes its single member explicitly) and as the path for trees rebuilt without it.
+		intentID := in.IntentID
+		if v, ok := intentByOperation[in.OperationID]; ok && v != "" {
+			intentID = v
+		}
 		members = append(members, AnchorQuorumMember{
-			IntentID:    intentByOperation[in.OperationID],
+			IntentID:    intentID,
 			OperationID: in.OperationID,
 			ADIURL:      in.ADIURL,
 			Leaf:        leaf,
