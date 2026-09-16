@@ -797,6 +797,10 @@ func (r *ProofArtifactRepository) GetChainedProofLayers(ctx context.Context, pro
 			   layer_json, verified, verified_at, created_at
 		FROM chained_proof_layers
 		WHERE proof_id = $1
+		  -- A withdrawn layer row is kept as the record of a claim that was made, not returned as one
+		  -- that stands. Migration 019 withdrew the layer-5 rows binding roots that were never
+		  -- published; returning them here would keep presenting exactly the claim that was wrong.
+		  AND superseded_at IS NULL
 		ORDER BY layer_number, layer_name`
 
 	rows, err := r.db.QueryContext(ctx, query, proofID)
