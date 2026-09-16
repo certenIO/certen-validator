@@ -64,8 +64,27 @@ type BackfillOutcome struct {
 }
 
 // AnchorOnChainState is the anchor's own record of a bundle, read from `anchors(bytes32)`.
+//
+// A BATCH ANCHOR BINDS ITS OPERATION ID IN `operationID`, NOT IN `operationCommitment`.
+//
+// The struct carries both, and for every batch anchor on base-sepolia, sepolia and arbitrum-sepolia the
+// second is zero:
+//
+//	[ 1] merkleRoot           0xd4d5fe5c…   the published root
+//	[ 3] operationCommitment  0x00000000…   EMPTY on a batch anchor
+//	[ 6] executionCommitment  0xd4d5fe5c…   equal to merkleRoot, as createBatchAnchor stores it
+//	[ 7] operationID          0x6ba3ae63…   the batch operation id — THE ONE THAT BINDS
+//
+// createBatchAnchor fills operationID; operationCommitment belongs to the single-intent path. The value
+// the quorum signs is BatchTree.BatchOperationID, which is what lands in operationID — so that is the
+// field the message hash must be rebuilt from and the field the calldata must agree with. Comparing
+// against operationCommitment instead refuses every genuine batch anchor, because zero never equals a
+// real operation id. Caught by the first live dry run against the fleet.
 type AnchorOnChainState struct {
-	MerkleRoot          [32]byte
+	MerkleRoot [32]byte
+	// OperationID is what a BATCH anchor binds, and what the backfill checks against.
+	OperationID [32]byte
+	// OperationCommitment is the single-intent path's field, kept for completeness. Zero on batch anchors.
 	OperationCommitment [32]byte
 	ExecutionCommitment [32]byte
 	Timestamp           time.Time
@@ -165,7 +184,7 @@ func ReconstructAnchorQuorum(
 		ChainID:          cand.ChainID,
 		BundleID:         hexPrefixed(call.BundleID[:]),
 		Root:             append([]byte(nil), state.MerkleRoot[:]...),
-		BatchOperationID: hexPrefixed(state.OperationCommitment[:]),
+		BatchOperationID: hexPrefixed(state.OperationID[:]),
 		MessageHash:      hexPrefixed(call.MessageHash[:]),
 		VerifyTx:         cand.TxHash,
 		VerifyBlock:      int64(blockNumber),
@@ -219,9 +238,9 @@ func VerifyBackfilledQuorum(
 		return fmt.Errorf("calldata root 0x%x is not the anchor's stored root 0x%x",
 			call.MerkleRoot[:8], state.MerkleRoot[:8])
 	}
-	if call.OperationID != state.OperationCommitment {
-		return fmt.Errorf("calldata operation id 0x%x is not the anchor's operation commitment 0x%x",
-			call.OperationID[:8], state.OperationCommitment[:8])
+	if call.OperationID != state.OperationID {
+		return fmt.Errorf("calldata operation id 0x%x is not the anchor's operation id 0x%x",
+			call.OperationID[:8], state.OperationID[:8])
 	}
 
 	// 5/6. The signer set, against the registry.
@@ -287,7 +306,7 @@ func VerifyBackfilledQuorum(
 		return fmt.Errorf("validator-set root: %w", err)
 	}
 	want := contracts.ComputeEvmMessageHashV6_1_Pre(
-		chainID, call.BundleID, state.MerkleRoot, state.OperationCommitment, setRoot,
+		chainID, call.BundleID, state.MerkleRoot, state.OperationID, setRoot,
 	)
 	if call.MessageHash != want {
 		return fmt.Errorf(
