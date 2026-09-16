@@ -3,6 +3,7 @@ package schema
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"strings"
 	"testing"
 )
 
@@ -102,5 +103,11 @@ func TestNormalizeCatalogEntryIgnoresDumpWhitespaceOnly(t *testing.T) {
 	changed := "F|public|f|CREATE FUNCTION f()\nRETURNS void\nAS $$\nBEGIN\n  PERFORM 1;\nEND;\n$$"
 	if normalizeCatalogEntry(changed) == normalizeCatalogEntry(unix) {
 		t.Fatal("normalization hid a non-whitespace function body change")
+	}
+}
+
+func TestCatalogUsesStableCollationIdentity(t *testing.T) {
+	if !strings.Contains(catalogEntriesQuery, "coll_ns.nspname || '.' || coll.collname") {
+		t.Fatal("catalog query does not use a stable schema-qualified collation identity")
 	}
 }
