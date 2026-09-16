@@ -67,11 +67,23 @@ func LatestVersion() (string, error) {
 // Lint rejects transaction control in SQL files. The runner owns transaction boundaries, which prevents
 // the legacy nested-BEGIN/COMMIT failure mode. PL/pgSQL function bodies are intentionally not matched.
 func Lint(m Migration) error {
+	destructive, approved := false, false
 	for _, line := range strings.Split(string(m.SQL), "\n") {
-		switch strings.ToUpper(strings.TrimSpace(line)) {
+		trimmed := strings.TrimSpace(line)
+		upper := strings.ToUpper(trimmed)
+		switch upper {
 		case "BEGIN;", "COMMIT;", "ROLLBACK;":
 			return fmt.Errorf("%s contains runner-owned transaction control", m.Name)
 		}
+		if strings.HasPrefix(upper, "DROP ") || strings.HasPrefix(upper, "ALTER TABLE ") && (strings.Contains(upper, " DROP ") || strings.Contains(upper, " RENAME ") || strings.Contains(upper, " SET NOT NULL")) {
+			destructive = true
+		}
+		if strings.Contains(trimmed, "schema: destructive-approved") {
+			approved = true
+		}
+	}
+	if destructive && !approved {
+		return fmt.Errorf("%s contains destructive DDL without -- schema: destructive-approved", m.Name)
 	}
 	return nil
 }

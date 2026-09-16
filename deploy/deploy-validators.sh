@@ -132,6 +132,13 @@ for svc in "${SERVICES[@]}"; do
 done
 ok "all seven images built"
 
+# The schema owner applies any pending DDL once, before a validator is restarted. Validators themselves
+# run verify-only and therefore never need DDL privileges or race each other during startup.
+log "Schema migration"
+docker compose run --rm --no-deps validator-1 ./validator migrate up >/tmp/certen-schema-migrate.log 2>&1 \
+    || { tail -80 /tmp/certen-schema-migrate.log >&2; die "schema migration failed; no validator was restarted"; }
+ok "schema catalog is current"
+
 # ---------------------------------------------------------------------------
 # ROLLING RESTART — quorum preserved throughout
 # ---------------------------------------------------------------------------

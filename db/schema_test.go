@@ -19,3 +19,23 @@ func TestCatalogIsOrderedAndLintClean(t *testing.T) {
 		}
 	}
 }
+
+func TestLintRejectsUnsafeMigrationControl(t *testing.T) {
+	cases := []struct {
+		name string
+		sql  string
+		ok   bool
+	}{
+		{"transaction", "BEGIN;\nCREATE TABLE x();", false},
+		{"destructive", "DROP TABLE x;", false},
+		{"approved destructive", "-- schema: destructive-approved\nDROP TABLE x;", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := Lint(Migration{Name: tc.name + ".sql", SQL: []byte(tc.sql)})
+			if (err == nil) != tc.ok {
+				t.Fatalf("Lint() error = %v, want success=%v", err, tc.ok)
+			}
+		})
+	}
+}

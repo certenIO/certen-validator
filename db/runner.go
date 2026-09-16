@@ -110,6 +110,16 @@ func (r Runner) Up(ctx context.Context, appliedBy string) error {
 		if err := rows.Err(); err != nil {
 			return err
 		}
+		known := make(map[string]Migration, len(migrations))
+		for _, migration := range migrations {
+			known[migration.Version] = migration
+		}
+		latest := migrations[len(migrations)-1].Version
+		for version := range history {
+			if _, ok := known[version]; !ok && version <= latest {
+				return fmt.Errorf("unknown schema history version %s at or below catalog version %s", version, latest)
+			}
+		}
 		for _, m := range migrations {
 			sum := hex.EncodeToString(m.SHA256[:])
 			if actual, ok := history[m.Version]; ok {
