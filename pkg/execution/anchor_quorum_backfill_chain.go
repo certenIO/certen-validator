@@ -78,11 +78,19 @@ func (r *ChainBackfillReader) AnchorState(
 	if err := bound.Call(&bind.CallOpts{Context: ctx}, &out, "anchors", bundleID); err != nil {
 		return AnchorOnChainState{}, fmt.Errorf("reading anchor 0x%x: %w", bundleID[:8], err)
 	}
+	return decodeAnchorState(out)
+}
+
+// decodeAnchorState maps the anchors() tuple onto the fields the backfill checks.
+//
+// Split out and tested against a REAL response (see the golden vector in the tests) because the field
+// INDEXES are the part that was wrong in production: a batch anchor binds operationID at index 7, while
+// index 3, operationCommitment, stays empty. Reading the wrong one refuses every genuine anchor.
+func decodeAnchorState(out []interface{}) (AnchorOnChainState, error) {
 	if len(out) < 15 {
 		return AnchorOnChainState{}, fmt.Errorf(
 			"anchors() returned %d fields, expected 15 — the Anchor struct layout changed", len(out))
 	}
-
 	state := AnchorOnChainState{}
 	var ok bool
 	if state.MerkleRoot, ok = out[1].([32]byte); !ok {
@@ -90,6 +98,10 @@ func (r *ChainBackfillReader) AnchorState(
 	}
 	if state.OperationCommitment, ok = out[3].([32]byte); !ok {
 		return AnchorOnChainState{}, fmt.Errorf("operationCommitment has an unexpected type")
+	}
+	// Index 7. A batch anchor binds here, not at index 3 — see AnchorOnChainState.
+	if state.OperationID, ok = out[7].([32]byte); !ok {
+		return AnchorOnChainState{}, fmt.Errorf("operationID has an unexpected type")
 	}
 	if state.ExecutionCommitment, ok = out[6].([32]byte); !ok {
 		return AnchorOnChainState{}, fmt.Errorf("executionCommitment has an unexpected type")

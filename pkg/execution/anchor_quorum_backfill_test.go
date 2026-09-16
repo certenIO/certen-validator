@@ -2,6 +2,7 @@ package execution
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"math/big"
 	"strings"
@@ -49,8 +50,10 @@ func bfRegistry(t *testing.T) map[string]consensus.ValidatorRegistryEntry {
 
 func bfState() AnchorOnChainState {
 	return AnchorOnChainState{
-		MerkleRoot:          bfWord(0xaa),
-		OperationCommitment: bfWord(0xbb),
+		MerkleRoot: bfWord(0xaa),
+		// A batch anchor binds operationID; operationCommitment is zero, exactly as the live anchors show.
+		OperationID:         bfWord(0xbb),
+		OperationCommitment: [32]byte{},
 		ExecutionCommitment: bfWord(0xaa),
 		Timestamp:           time.Unix(1_757_000_000, 0).UTC(),
 		Valid:               true,
@@ -75,9 +78,9 @@ func bfCall(t *testing.T) *DecodedVerifyCall {
 	return &DecodedVerifyCall{
 		BundleID:    bfWord(0xcc),
 		MerkleRoot:  st.MerkleRoot,
-		OperationID: st.OperationCommitment,
+		OperationID: st.OperationID,
 		MessageHash: contracts.ComputeEvmMessageHashV6_1_Pre(
-			backfillChainID, bfWord(0xcc), st.MerkleRoot, st.OperationCommitment, setRoot),
+			backfillChainID, bfWord(0xcc), st.MerkleRoot, st.OperationID, setRoot),
 		Signers:           signers,
 		SignerPowers:      powers,
 		SignedVotingPower: big.NewInt(500),
@@ -122,11 +125,11 @@ func TestBackfillRefusals(t *testing.T) {
 			wantErr: "is not the anchor's stored root",
 		},
 		{
-			name: "calldata operation id is not the anchor's commitment",
+			name: "calldata operation id is not the anchor's operation id",
 			mutate: func(c *DecodedVerifyCall, _ *AnchorOnChainState, _ map[string]consensus.ValidatorRegistryEntry) {
 				c.OperationID = bfWord(0x99)
 			},
-			wantErr: "operation commitment",
+			wantErr: "operation id",
 		},
 		{
 			// A valid signature over a DIFFERENT batch, replayed onto this one.
@@ -433,9 +436,115 @@ func TestDecodeRoundTripsASubmittedProof(t *testing.T) {
 	}
 	call.MessageHash = contracts.ComputeEvmMessageHashV6_1_Pre(backfillChainID, bundleID, root, opID, setRoot)
 	state := AnchorOnChainState{
-		MerkleRoot: root, OperationCommitment: opID, Valid: true, ProofExecuted: true,
+		MerkleRoot: root, OperationID: opID, Valid: true, ProofExecuted: true,
 	}
 	if err := VerifyBackfilledQuorum(backfillChainID, call, state, bfRegistry(t)); err != nil {
 		t.Fatalf("a round-tripped genuine proof was refused: %v", err)
+	}
+}
+
+// REGRESSION — the field a batch anchor actually binds.
+//
+// The first live dry run refused all 313 candidates with "is not the anchor's operation commitment
+// 0x00000000…", because the check read operationCommitment (index 3), which createBatchAnchor leaves
+// empty, instead of operationID (index 7), which it fills. Zero never equals a real operation id, so
+// every genuine anchor was refused. It failed closed, which is the right direction — but it made the
+// backfill incapable of accepting anything.
+//
+// This pins the rule with the live values from base-sepolia anchor 0xa9cc3e51…:
+//
+//	merkleRoot  0xd4d5fe5c…   operationCommitment 0x0   operationID 0x6ba3ae63…
+func TestBackfillChecksOperationIDNotOperationCommitment(t *testing.T) {
+	call := bfCall(t)
+	state := bfState()
+
+	// As live: operationCommitment empty, operationID carrying the batch operation id.
+	if state.OperationCommitment != ([32]byte{}) {
+		t.Fatal("fixture drift: a batch anchor's operationCommitment is empty")
+	}
+	if err := VerifyBackfilledQuorum(backfillChainID, call, state, bfRegistry(t)); err != nil {
+		t.Fatalf("a genuine batch anchor was refused: %v", err)
+	}
+
+	// And the message hash must be rebuilt from operationID too: a state whose operationID differs is a
+	// different batch, and must be refused even though operationCommitment still matches (both zero).
+	other := state
+	other.OperationID = bfWord(0x5e)
+	if err := VerifyBackfilledQuorum(backfillChainID, call, other, bfRegistry(t)); err == nil {
+		t.Fatal("an anchor bound to a different operation id was accepted")
+	}
+}
+
+// GOLDEN VECTOR — a real anchors() response from the deployed base-sepolia anchor.
+//
+// These are the exact 15 words returned by CertenAnchorV8_1.anchors(0xa9cc3e51…) at
+// 0xEA9eeeE42a7971792B11Fd2f682C9c1172490272, read live on 2026-09-16. They are kept verbatim because
+// the production defect was a FIELD INDEX: the code read operationCommitment (index 3, empty on a batch
+// anchor) where it had to read operationID (index 7). A hand-built fixture would not have caught that;
+// this response does, because it is what the chain actually says.
+const liveAnchorsResponse = "" +
+	"a9cc3e51e3f77f3ade8e6ae80ea30bb3b606e67b0a5df17cba94a287bfe4ff22" + // [ 0] bundleId
+	"d4d5fe5ca51b390b851000cd698dcd63e831e380732e78c31020f056669662b2" + // [ 1] merkleRoot
+	"0000000000000000000000000000000000000000000000000000000000000000" + // [ 2] adiURLHash
+	"0000000000000000000000000000000000000000000000000000000000000000" + // [ 3] operationCommitment — EMPTY
+	"0000000000000000000000000000000000000000000000000000000000000000" + // [ 4] crossChainCommitment
+	"0000000000000000000000000000000000000000000000000000000000000000" + // [ 5] governanceRoot
+	"d4d5fe5ca51b390b851000cd698dcd63e831e380732e78c31020f056669662b2" + // [ 6] executionCommitment
+	"6ba3ae631e0fa12fbe602bb9d5e0d24e4348281d9e8c7a3154a4cc3272ea0ad2" + // [ 7] operationID — THE BINDING
+	"000000000000000000000000000000000000000000000000000000000081a673" + // [ 8] accumulateBlockHeight
+	"000000000000000000000000000000000000000000000000000000006a9c84ba" + // [ 9] timestamp
+	"000000000000000000000000d4a3dbbae0c04d4307c5e00a5e05b66acc289f5d" + // [10] validator
+	"0000000000000000000000000000000000000000000000000000000000000001" + // [11] valid
+	"0000000000000000000000000000000000000000000000000000000000000001" + // [12] proofExecuted
+	"0000000000000000000000000000000000000000000000000000000000000000" + // [13] governanceExecuted
+	"0000000000000000000000000000000000000000000000000000000000000002" //   [14] governanceLevel
+
+func TestDecodeAnchorStateReadsTheLiveAnchorLayout(t *testing.T) {
+	raw, err := hex.DecodeString(liveAnchorsResponse)
+	if err != nil {
+		t.Fatalf("bad golden vector: %v", err)
+	}
+	parsed, err := abiFromJSON(anchorsABIJSON)
+	if err != nil {
+		t.Fatalf("anchors ABI: %v", err)
+	}
+	out, err := parsed.Methods["anchors"].Outputs.Unpack(raw)
+	if err != nil {
+		t.Fatalf("unpacking the live response: %v", err)
+	}
+
+	state, err := decodeAnchorState(out)
+	if err != nil {
+		t.Fatalf("decodeAnchorState: %v", err)
+	}
+
+	wantRoot := "d4d5fe5ca51b390b851000cd698dcd63e831e380732e78c31020f056669662b2"
+	wantOpID := "6ba3ae631e0fa12fbe602bb9d5e0d24e4348281d9e8c7a3154a4cc3272ea0ad2"
+
+	if got := hex.EncodeToString(state.MerkleRoot[:]); got != wantRoot {
+		t.Fatalf("merkleRoot = %s", got)
+	}
+	// THE REGRESSION: operationID must come from index 7, not index 3.
+	if got := hex.EncodeToString(state.OperationID[:]); got != wantOpID {
+		t.Fatalf("operationID = %s, want %s — reading the wrong tuple index refuses every batch anchor", got, wantOpID)
+	}
+	if state.OperationCommitment != ([32]byte{}) {
+		t.Fatalf("operationCommitment = %x, want empty on a batch anchor", state.OperationCommitment)
+	}
+	if hex.EncodeToString(state.ExecutionCommitment[:]) != wantRoot {
+		t.Fatal("executionCommitment must equal the published root on a batch anchor")
+	}
+	if !state.Valid || !state.ProofExecuted {
+		t.Fatalf("valid=%v proofExecuted=%v, want both true", state.Valid, state.ProofExecuted)
+	}
+	if state.Timestamp.IsZero() {
+		t.Fatal("timestamp was not decoded")
+	}
+}
+
+// A truncated response must be refused rather than silently decoded from whatever words arrived.
+func TestDecodeAnchorStateRefusesAChangedLayout(t *testing.T) {
+	if _, err := decodeAnchorState(make([]interface{}, 14)); err == nil {
+		t.Fatal("a 14-field response was accepted")
 	}
 }
