@@ -92,3 +92,15 @@ func TestNoTransactionMarkerMustBeFirstNonEmptyLine(t *testing.T) {
 		t.Fatal("marker after SQL must not opt out of transactions")
 	}
 }
+
+func TestNormalizeCatalogEntryIgnoresDumpWhitespaceOnly(t *testing.T) {
+	windows := "F|public|f|CREATE FUNCTION f()\r\nRETURNS void\r\n\r\nAS $$\r\nBEGIN\r\n  NULL;  \r\nEND;\r\n$$"
+	unix := "F|public|f|CREATE FUNCTION f()\nRETURNS void\nAS $$\nBEGIN\n  NULL;\nEND;\n$$"
+	if got := normalizeCatalogEntry(windows); got != unix {
+		t.Fatalf("normalized catalog entry = %q, want %q", got, unix)
+	}
+	changed := "F|public|f|CREATE FUNCTION f()\nRETURNS void\nAS $$\nBEGIN\n  PERFORM 1;\nEND;\n$$"
+	if normalizeCatalogEntry(changed) == normalizeCatalogEntry(unix) {
+		t.Fatal("normalization hid a non-whitespace function body change")
+	}
+}
