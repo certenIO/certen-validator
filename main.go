@@ -1072,7 +1072,7 @@ func main() {
 
 func runMigrationCommand(args []string) {
 	if !validMigrationCommand(args) {
-		log.Fatal("usage: certen-validator migrate <up|verify [--require VERSION]|fingerprint|adopt [--dry-run]|data NAME>")
+		log.Fatal("usage: certen-validator migrate <up|verify [--require VERSION]|fingerprint|catalog|adopt [--dry-run]|data NAME>")
 	}
 	cfg, err := config.Load()
 	if err != nil {
@@ -1102,6 +1102,14 @@ func runMigrationCommand(args []string) {
 		fingerprint, err = runner.Fingerprint(context.Background())
 		if err == nil {
 			fmt.Println(fingerprint)
+		}
+	case "catalog":
+		var catalog []string
+		catalog, err = runner.Catalog(context.Background())
+		if err == nil {
+			for _, entry := range catalog {
+				fmt.Println(entry)
+			}
 		}
 	case "adopt":
 		var fingerprint string
@@ -1135,7 +1143,7 @@ func validMigrationCommand(args []string) bool {
 		return false
 	}
 	switch args[0] {
-	case "up", "fingerprint":
+	case "up", "fingerprint", "catalog":
 		return len(args) == 1
 	case "verify":
 		return len(args) == 1 || len(args) == 3 && args[1] == "--require" && args[2] != ""

@@ -15,16 +15,45 @@ const advisoryLockID int64 = 0x4352544E5343484D // "CRTNSCHM"
 
 const noTransactionMarker = "-- schema: no-transaction"
 
-const catalogFingerprintQuery = `WITH objects AS (
- SELECT format('C|%I|%I|%s|%s|%s|%s', n.nspname,c.relname,a.attname,pg_catalog.format_type(a.atttypid,a.atttypmod),a.attnotnull,COALESCE(pg_get_expr(ad.adbin,ad.adrelid),'')) AS entry
- FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_attribute a ON a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped LEFT JOIN pg_attrdef ad ON ad.adrelid=a.attrelid AND ad.adnum=a.attnum
- WHERE c.relkind IN ('r','p','v','m') AND n.nspname NOT IN ('pg_catalog','information_schema')
- UNION ALL SELECT 'I|' || pg_get_indexdef(i.indexrelid) FROM pg_index i JOIN pg_class c ON c.oid=i.indrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname NOT IN ('pg_catalog','information_schema')
- UNION ALL SELECT 'K|' || n.nspname || '|' || c.relname || '|' || pg_get_constraintdef(k.oid) FROM pg_constraint k JOIN pg_class c ON c.oid=k.conrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname NOT IN ('pg_catalog','information_schema')
- UNION ALL SELECT 'V|' || n.nspname || '|' || c.relname || '|' || pg_get_viewdef(c.oid,true) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relkind IN ('v','m') AND n.nspname NOT IN ('pg_catalog','information_schema')
- UNION ALL SELECT 'F|' || n.nspname || '|' || p.proname || '|' || pg_get_functiondef(p.oid) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname NOT IN ('pg_catalog','information_schema')
- UNION ALL SELECT 'T|' || n.nspname || '|' || c.relname || '|' || pg_get_triggerdef(t.oid,true) FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE NOT t.tgisinternal AND n.nspname NOT IN ('pg_catalog','information_schema')
-) SELECT COALESCE(string_agg(entry, E'\n' ORDER BY entry), '') FROM objects`
+// catalogEntriesQuery describes only the application-owned public catalog. PostgreSQL's TOAST
+// relations and the runner's own history table are implementation details, and operations backup tables
+// are deliberately outside the adopted schema contract. Every clause which begins from a relation applies
+// the same relation filter, so an ignored backup cannot leak back in through its indexes, constraints, or
+// triggers.
+const catalogEntriesQuery = `WITH app_relations AS (
+ SELECT c.oid, c.relname, c.relkind
+ FROM pg_class c
+ JOIN pg_namespace n ON n.oid = c.relnamespace
+ WHERE n.nspname = 'public'
+   AND c.relkind IN ('r','p','v','m')
+   AND c.relname !~ '_backup_[0-9]{8}$'
+	 AND c.relname <> 'certen_schema_history'
+), objects AS (
+ SELECT format('R|public|%I|%s', relname, relkind) AS entry FROM app_relations
+ UNION ALL
+ SELECT format('C|public|%I|%I|%s|%s|%s|%s|%s|%s', r.relname, a.attname,
+   pg_catalog.format_type(a.atttypid,a.atttypmod), a.attnotnull,
+   a.attidentity, a.attgenerated, a.attcollation,
+   COALESCE(pg_get_expr(ad.adbin,ad.adrelid),''))
+ FROM app_relations r
+ JOIN pg_attribute a ON a.attrelid = r.oid AND a.attnum > 0 AND NOT a.attisdropped
+ LEFT JOIN pg_attrdef ad ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum
+ UNION ALL
+ SELECT 'I|' || pg_get_indexdef(i.indexrelid)
+ FROM pg_index i JOIN app_relations r ON r.oid = i.indrelid
+ UNION ALL
+ SELECT 'K|public|' || r.relname || '|' || pg_get_constraintdef(k.oid)
+ FROM pg_constraint k JOIN app_relations r ON r.oid = k.conrelid
+ UNION ALL
+ SELECT 'V|public|' || r.relname || '|' || pg_get_viewdef(r.oid,true)
+ FROM app_relations r WHERE r.relkind IN ('v','m')
+ UNION ALL
+ SELECT 'F|public|' || p.proname || '|' || pg_get_functiondef(p.oid)
+ FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public'
+ UNION ALL
+ SELECT 'T|public|' || r.relname || '|' || pg_get_triggerdef(t.oid,true)
+ FROM pg_trigger t JOIN app_relations r ON r.oid = t.tgrelid WHERE NOT t.tgisinternal
+) SELECT entry FROM objects ORDER BY entry`
 
 // Runner applies and verifies the one shared schema catalog. It intentionally has no dependency on either
 // service, so the validator and proofs service can use identical history and checksum rules.
@@ -40,12 +69,64 @@ func (r Runner) Fingerprint(ctx context.Context) (string, error) {
 	if r.DB == nil {
 		return "", errors.New("schema runner requires a database")
 	}
-	var catalog string
-	if err := r.DB.QueryRowContext(ctx, catalogFingerprintQuery).Scan(&catalog); err != nil {
-		return "", fmt.Errorf("read schema catalog: %w", err)
+	catalog, err := r.Catalog(ctx)
+	if err != nil {
+		return "", err
 	}
-	sum := sha256.Sum256([]byte(catalog))
+	sum := sha256.Sum256([]byte(strings.Join(catalog, "\n")))
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// Catalog returns the normalized, ordered entries which are hashed by Fingerprint. It is exposed so
+// adoption tooling can show an actionable catalog diff rather than merely two unrelated digests.
+func (r Runner) Catalog(ctx context.Context) ([]string, error) {
+	if r.DB == nil {
+		return nil, errors.New("schema runner requires a database")
+	}
+	return readCatalog(ctx, r.DB)
+}
+
+type sqlQueryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func readCatalog(ctx context.Context, db sqlQueryer) ([]string, error) {
+	rows, err := db.QueryContext(ctx, catalogEntriesQuery)
+	if err != nil {
+		return nil, fmt.Errorf("read schema catalog: %w", err)
+	}
+	defer rows.Close()
+	var catalog []string
+	for rows.Next() {
+		var entry string
+		if err := rows.Scan(&entry); err != nil {
+			return nil, fmt.Errorf("scan schema catalog: %w", err)
+		}
+		catalog = append(catalog, normalizeCatalogEntry(entry))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read schema catalog: %w", err)
+	}
+	return catalog, nil
+}
+
+// normalizeCatalogEntry removes dump transport differences which do not alter PostgreSQL semantics.
+// In particular, pg_dump restored from a Windows checkout preserves CRLF and blank-only source lines in
+// plpgsql bodies, whereas the production catalog deparses them with LF and without blank-only lines.
+// A real code, type, identifier, default, index, constraint, view, trigger, or non-blank function-body
+// change remains part of the fingerprint.
+func normalizeCatalogEntry(entry string) string {
+	entry = strings.ReplaceAll(entry, "\r\n", "\n")
+	lines := strings.Split(entry, "\n")
+	result := lines[:0]
+	for _, line := range lines {
+		line = strings.TrimRight(line, " \t")
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		result = append(result, line)
+	}
+	return strings.Join(result, "\n")
 }
 
 func (r Runner) defaults() Runner {
@@ -232,12 +313,11 @@ func (r Runner) Adopt(ctx context.Context, fingerprint, approvedFingerprint, app
 		if !legacy {
 			return errors.New("legacy schema_migrations table is absent; refusing adoption")
 		}
-		var catalog string
-		err := conn.QueryRowContext(ctx, catalogFingerprintQuery).Scan(&catalog)
+		catalog, err := readCatalog(ctx, conn)
 		if err != nil {
-			return fmt.Errorf("read schema catalog: %w", err)
+			return err
 		}
-		sum := sha256.Sum256([]byte(catalog))
+		sum := sha256.Sum256([]byte(strings.Join(catalog, "\n")))
 		observed := hex.EncodeToString(sum[:])
 		if observed != fingerprint {
 			return fmt.Errorf("schema changed during adoption preflight: observed %s, now %s", fingerprint, observed)
