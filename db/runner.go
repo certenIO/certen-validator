@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -14,6 +15,8 @@ import (
 const advisoryLockID int64 = 0x4352544E5343484D // "CRTNSCHM"
 
 const noTransactionMarker = "-- schema: no-transaction"
+
+var parenthesizedArrayString = regexp.MustCompile(`\('((?:''|[^'])*)'\)`)
 
 // catalogEntriesQuery describes only the application-owned public catalog. PostgreSQL's TOAST
 // relations and the runner's own history table are implementation details, and operations backup tables
@@ -129,7 +132,83 @@ func normalizeCatalogEntry(entry string) string {
 		}
 		result = append(result, line)
 	}
-	return strings.Join(result, "\n")
+	entry = strings.Join(result, "\n")
+	if strings.HasPrefix(entry, "I|") || strings.HasPrefix(entry, "K|") || strings.HasPrefix(entry, "V|") {
+		entry = normalizeCatalogExpression(entry)
+	}
+	return entry
+}
+
+// normalizeCatalogExpression removes only the alternate textual forms PostgreSQL emits for implicit
+// varchar-to-text array coercions. The catalog stores the same expression tree for both forms, but
+// pg_get_indexdef, pg_get_constraintdef, and pg_get_viewdef preserve different display spellings before
+// and after pg_dump/restore. Other casts and all non-array expression text remain fingerprinted.
+func normalizeCatalogExpression(entry string) string {
+	for searchFrom := 0; ; {
+		startOffset := strings.Index(entry[searchFrom:], "ARRAY[")
+		if startOffset < 0 {
+			return entry
+		}
+		start := searchFrom + startOffset
+		end, ok := arrayLiteralEnd(entry, start)
+		if !ok {
+			// A malformed deparse must remain visible to the fingerprint instead of
+			// being guessed at by a normalizer.
+			return entry
+		}
+
+		array := entry[start : end+1]
+		array = strings.NewReplacer(
+			"::character varying", "",
+			"::text", "",
+		).Replace(array)
+		array = parenthesizedArrayString.ReplaceAllString(array, "'$1'")
+
+		prefix := entry[:start]
+		suffix := entry[end+1:]
+		// pg_dump may introduce one grouping pair solely to carry an implicit
+		// ARRAY[...]::text[] coercion. Remove that pair only when both halves
+		// are adjacent to this array literal.
+		removeWrapper := strings.HasSuffix(prefix, "((") && strings.HasPrefix(suffix, ")::text[]")
+		if removeWrapper {
+			prefix = prefix[:len(prefix)-1]
+			suffix = suffix[len(")::text[]"):]
+		} else if strings.HasPrefix(suffix, "::text[]") {
+			// This is the same implicit coercion without the extra grouping pair.
+			suffix = suffix[len("::text[]"):]
+		}
+		entry = prefix + array + suffix
+		searchFrom = len(prefix) + len(array)
+	}
+}
+
+// arrayLiteralEnd returns the closing bracket for the ARRAY[ starting at start. It understands SQL
+// single-quoted strings (including escaped single quotes) so a bracket in a value cannot confuse it.
+func arrayLiteralEnd(entry string, start int) (int, bool) {
+	depth := 0
+	inString := false
+	for i := start + len("ARRAY"); i < len(entry); i++ {
+		switch entry[i] {
+		case '\'':
+			if inString && i+1 < len(entry) && entry[i+1] == '\'' {
+				i++
+				continue
+			}
+			inString = !inString
+		case '[':
+			if !inString {
+				depth++
+			}
+		case ']':
+			if !inString {
+				depth--
+				if depth == 0 {
+					return i, true
+				}
+			}
+		}
+	}
+	return 0, false
 }
 
 func (r Runner) defaults() Runner {

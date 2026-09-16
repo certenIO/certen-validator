@@ -111,3 +111,19 @@ func TestCatalogUsesStableCollationIdentity(t *testing.T) {
 		t.Fatal("catalog query does not use a stable schema-qualified collation identity")
 	}
 }
+
+func TestNormalizeCatalogExpressionIgnoresDumpArrayCoercion(t *testing.T) {
+	live := "I|CREATE INDEX i ON public.t USING btree (state) WHERE ((state)::text = ANY (ARRAY[('pending'::character varying)::text, ('ready'::character varying)::text]))"
+	restored := "I|CREATE INDEX i ON public.t USING btree (state) WHERE ((state)::text = ANY ((ARRAY['pending'::character varying, 'ready'::character varying])::text[]))"
+	if got, want := normalizeCatalogExpression(live), normalizeCatalogExpression(restored); got != want {
+		t.Fatalf("normalized index expressions differ:\n%s\n!=\n%s", got, want)
+	}
+	changed := "I|CREATE INDEX i ON public.t USING btree (state) WHERE ((state)::text = ANY (ARRAY[('pending'::character varying)::text, ('failed'::character varying)::text]))"
+	if normalizeCatalogExpression(changed) == normalizeCatalogExpression(live) {
+		t.Fatal("normalization hid a changed array member")
+	}
+	outsideArrayCast := "I|CREATE INDEX i ON public.t USING btree ((state)::text) WHERE state::text = 'pending'::text"
+	if got := normalizeCatalogExpression(outsideArrayCast); got != outsideArrayCast {
+		t.Fatalf("normalization changed a non-array cast: %s", got)
+	}
+}
