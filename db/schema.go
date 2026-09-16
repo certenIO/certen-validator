@@ -52,6 +52,18 @@ func Migrations() ([]Migration, error) {
 	return result, nil
 }
 
+// LatestVersion is the minimum schema version required by this binary.
+func LatestVersion() (string, error) {
+	migrations, err := Migrations()
+	if err != nil {
+		return "", err
+	}
+	if len(migrations) == 0 {
+		return "", fmt.Errorf("migration catalog is empty")
+	}
+	return migrations[len(migrations)-1].Version, nil
+}
+
 // Lint rejects transaction control in SQL files. The runner owns transaction boundaries, which prevents
 // the legacy nested-BEGIN/COMMIT failure mode. PL/pgSQL function bodies are intentionally not matched.
 func Lint(m Migration) error {
