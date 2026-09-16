@@ -159,8 +159,12 @@ func TestPersistCommittedBlockInsertsOnceAndNeverRewrites(t *testing.T) {
 	}
 }
 
-// A later update of the mutable columns (here MarkConsensusQuorumMet and the verification flag) must survive
-// the same block being persisted again; the removed upsert reset them on every Commit.
+// A later update of the mutable columns (the quorum columns and the verification flag) must survive the
+// same block being persisted again; the removed upsert reset them on every Commit.
+//
+// The quorum columns are set here directly rather than through a repository method: the only writer of
+// them was the retired shadow coordinator, and this test is about what PersistCommittedBlock must not
+// overwrite, whoever wrote it.
 func TestPersistCommittedBlockPreservesQuorumMetAndVerification(t *testing.T) {
 	repo := consensusRepoForTest(t)
 	ctx := context.Background()
@@ -171,7 +175,12 @@ func TestPersistCommittedBlockPreservesQuorumMetAndVerification(t *testing.T) {
 	if _, err := repo.PersistCommittedBlock(ctx, writer, rec); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.MarkConsensusQuorumMet(ctx, batch, []byte{0xde, 0xad}, []byte{0xbe, 0xef}, 6, map[string]interface{}{"quorum": "fictional"}); err != nil {
+	if _, err := testDB.ExecContext(ctx, `
+		UPDATE consensus_entries
+		   SET state = 'quorum_met', aggregate_signature = $2, aggregate_pubkey = $3,
+		       attestation_count = 6, result_json = $4, completed_at = NOW(), last_update = NOW()
+		 WHERE batch_id = $1`,
+		batch, []byte{0xde, 0xad}, []byte{0xbe, 0xef}, `{"quorum":"fictional"}`); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.MarkBatchAttestationVerifiedByBatchAndValidator(ctx, batch, "validator-fictional", false); err != nil {
@@ -263,7 +272,14 @@ func TestPersistCommittedBlockSkipsRowsRefusedOnContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("content rejections must not fail the block: %v", err)
 	}
-	if len(rejected) != 2 || rejected[0].BatchID != badBatch || rejected[1].BatchID != longBatch {
+	// Rows are written in batch-id order (PersistCommittedBlock sorts them so concurrent writers cannot
+	// deadlock), and the ids are random uuids — so which refusal is reported first is not fixed. Assert
+	// the SET of refused rows, never their order.
+	rejectedIDs := map[uuid.UUID]bool{}
+	for _, r := range rejected {
+		rejectedIDs[r.BatchID] = true
+	}
+	if len(rejected) != 2 || !rejectedIDs[badBatch] || !rejectedIDs[longBatch] {
 		t.Fatalf("rejected = %+v, want the invalid-state and over-long rows", rejected)
 	}
 	if e, _ := repo.GetConsensusEntry(ctx, good); e == nil {

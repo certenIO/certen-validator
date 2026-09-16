@@ -563,43 +563,6 @@ func (r *ConsensusRepository) UpdateConsensusAggregates(ctx context.Context, bat
 	return nil
 }
 
-// MarkConsensusQuorumMet updates consensus entry when quorum is reached
-func (r *ConsensusRepository) MarkConsensusQuorumMet(ctx context.Context, batchID uuid.UUID, aggregateSig []byte, aggregatePubKey []byte, attestationCount int, resultJSON interface{}) error {
-	now := time.Now()
-
-	var resultJSONBytes []byte
-	var err error
-	if resultJSON != nil {
-		resultJSONBytes, err = json.Marshal(resultJSON)
-		if err != nil {
-			return fmt.Errorf("failed to marshal result JSON: %w", err)
-		}
-	}
-
-	query := `
-		UPDATE consensus_entries
-		SET state = 'quorum_met',
-			aggregate_signature = $2,
-			aggregate_pubkey = $3,
-			attestation_count = $4,
-			result_json = $5,
-			completed_at = $6,
-			last_update = $6
-		WHERE batch_id = $1`
-
-	result, err := r.client.ExecContext(ctx, query, batchID, aggregateSig, aggregatePubKey, attestationCount, resultJSONBytes, now)
-	if err != nil {
-		return fmt.Errorf("failed to mark consensus quorum met: %w", err)
-	}
-
-	rows, _ := result.RowsAffected()
-	if rows == 0 {
-		return fmt.Errorf("consensus entry not found for batch: %s", batchID)
-	}
-
-	return nil
-}
-
 // GetRecentBatchAttestations returns recent batch attestations
 func (r *ConsensusRepository) GetRecentBatchAttestations(ctx context.Context, limit int) ([]*BatchAttestation, error) {
 	query := `
