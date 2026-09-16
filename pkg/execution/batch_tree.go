@@ -231,6 +231,16 @@ type BatchTree struct {
 	BatchOperationID [32]byte
 	BundleID         [32]byte
 	BlockHeight      uint64
+
+	// AnchorCreateTx is the transaction that PUBLISHED this root — createBatchAnchor's own transaction,
+	// set by the orchestrator once it returns and before the quorum proves the root.
+	//
+	// It travels on the tree because it is the one fact about a batch that only the creating step knows
+	// and that layer 5 must state: "this root is in THIS transaction". Layer 5 previously fell back to
+	// whatever observation the settlement produced, which published a real transaction hash next to a
+	// root that transaction never contained. Empty is honest — a tree that has not been anchored yet, or
+	// one anchored by another leader — and readers fall back rather than assert.
+	AnchorCreateTx string
 }
 
 // BuildBatchTree assembles the tree and self-verifies every branch before returning.

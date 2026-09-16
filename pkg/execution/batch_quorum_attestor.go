@@ -254,7 +254,7 @@ func (a *BatchQuorumAttestor) prove(
 		chainID, agg.SignedVotingPower, agg.TotalVotingPower, len(agg.Signers), agg.Signers)
 
 	// ---- Submit --------------------------------------------------------------
-	verifyTx, err := a.submitter.SubmitBatchQuorumProof(
+	verifyTx, verifyBlockNum, err := a.submitter.SubmitBatchQuorumProof(
 		ctx, chainID, tree.BundleID, tree.Root, tree.BatchOperationID, agg, msgHash,
 	)
 	if err != nil {
@@ -314,6 +314,8 @@ func (a *BatchQuorumAttestor) prove(
 			MessageHash:           msgHash,
 			SetRoot:               setRoot,
 			VerifyTx:              verifyTx,
+			VerifyBlock:           int64(verifyBlockNum),
+			AnchorCreateTx:        tree.AnchorCreateTx,
 			AggregateSignatureHex: agg.AggregateSignatureHex,
 			AggregatePublicKeyHex: agg.AggregatePublicKeyHex,
 			Signers:               agg.Signers,

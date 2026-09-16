@@ -548,3 +548,60 @@ func TestDecodeAnchorStateRefusesAChangedLayout(t *testing.T) {
 		t.Fatal("a 14-field response was accepted")
 	}
 }
+
+// REGRESSION — the live gate found these two columns empty on a genuine anchor.
+//
+// The first live on-demand intent after deploy produced a correct canonical row (quorum_reached, 7
+// attestations, 700/700) with anchor_create_tx and verify_block BLANK: prove() never received the
+// transaction that created the anchor, and the submitter discarded the verify receipt's block number.
+//
+// anchor_create_tx blank is the one that matters. Layer 5 falls back to the settlement observation when
+// the canonical row has no anchor transaction — which is exactly the false binding this work removed, so
+// the field has to arrive with the evidence.
+func TestAnchorQuorumRecordCarriesTheAnchorCreateTxAndVerifyBlock(t *testing.T) {
+	const createTx = "0x51a1c0de00000000000000000000000000000000000000000000000000000baa"
+	const verifyTx = "0x06308e33e18b541148029acae074ccb76fdf0573ee1da181275b7ab04b7e2228"
+
+	ev := &AnchorQuorumEvidence{
+		ChainID:        84532,
+		BundleID:       bfWord(0xcc),
+		Root:           bfWord(0xaa),
+		VerifyTx:       verifyTx,
+		VerifyBlock:    46_437_104,
+		AnchorCreateTx: createTx,
+		Lane:           AnchorLaneOnDemand,
+	}
+	rec := AnchorQuorumRecordFrom(ev)
+	if rec == nil {
+		t.Fatal("no record")
+	}
+	if rec.AnchorCreateTx != createTx {
+		t.Fatalf("anchor_create_tx = %q, want the anchor-create transaction; blank makes layer 5 fall "+
+			"back to the settlement observation, which is the false binding", rec.AnchorCreateTx)
+	}
+	if rec.VerifyTx != verifyTx {
+		t.Fatalf("verify_tx = %q", rec.VerifyTx)
+	}
+	if rec.VerifyBlock != 46_437_104 {
+		t.Fatalf("verify_block = %d", rec.VerifyBlock)
+	}
+	// And the two must never be confused: the verify transaction proved the root, it did not publish it.
+	if rec.AnchorCreateTx == rec.VerifyTx {
+		t.Fatal("the verify transaction is being recorded as the transaction that published the root")
+	}
+}
+
+// An anchor created by ANOTHER leader leaves the field empty here. Empty is honest; inventing a
+// transaction would be the original defect in a new place.
+func TestAnchorQuorumRecordLeavesTheCreateTxEmptyWhenThisNodeDidNotAnchor(t *testing.T) {
+	rec := AnchorQuorumRecordFrom(&AnchorQuorumEvidence{
+		ChainID:  84532,
+		BundleID: bfWord(0xcc),
+		Root:     bfWord(0xaa),
+		VerifyTx: "0x06308e33e18b541148029acae074ccb76fdf0573ee1da181275b7ab04b7e2228",
+		Lane:     AnchorLaneOnDemand,
+	})
+	if rec.AnchorCreateTx != "" {
+		t.Fatalf("anchor_create_tx was invented as %q", rec.AnchorCreateTx)
+	}
+}

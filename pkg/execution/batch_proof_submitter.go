@@ -321,19 +321,19 @@ func (s *BatchProofSubmitterImpl) SubmitBatchQuorumProof(
 	batchOperationID [32]byte,
 	agg *consensus.QuorumAggregate,
 	messageHash [32]byte,
-) (verifyTxHash string, err error) {
+) (verifyTxHash string, verifyBlock uint64, err error) {
 	if agg == nil {
-		return "", fmt.Errorf("nil quorum aggregate; refusing to submit an unattested batch root")
+		return "", 0, fmt.Errorf("nil quorum aggregate; refusing to submit an unattested batch root")
 	}
 	if agg.SignedVotingPower == nil || agg.SignedVotingPower.Sign() <= 0 {
-		return "", fmt.Errorf("quorum aggregate reports no signed voting power")
+		return "", 0, fmt.Errorf("quorum aggregate reports no signed voting power")
 	}
 	if len(agg.Signers) < 2 {
 		// AggregateBatchAttestations already enforces threshold by power, so this is
 		// belt-and-braces against a degenerate registry (e.g. a one-validator set slipping
 		// into production config) producing a single-signer aggregate that the anchor's
 		// authorized-subset commitments would reject anyway.
-		return "", fmt.Errorf(
+		return "", 0, fmt.Errorf(
 			"refusing to submit a %d-signer aggregate: the anchor's authorized pubkey "+
 				"commitments cover subsets of 5, 6 and 7 only", len(agg.Signers))
 	}
@@ -356,12 +356,12 @@ func (s *BatchProofSubmitterImpl) SubmitBatchQuorumProof(
 	validators := make([]common.Address, 0, len(agg.Signers))
 	powers := make([]*big.Int, 0, len(agg.Signers))
 	if len(agg.SignerPowers) != len(agg.Signers) {
-		return "", fmt.Errorf("aggregate reports %d signers but %d powers; refusing to submit an "+
+		return "", 0, fmt.Errorf("aggregate reports %d signers but %d powers; refusing to submit an "+
 			"inconsistent signer set", len(agg.Signers), len(agg.SignerPowers))
 	}
 	for i, s := range agg.Signers {
 		if !common.IsHexAddress(s) {
-			return "", fmt.Errorf("signer %q is not an EVM address", s)
+			return "", 0, fmt.Errorf("signer %q is not an EVM address", s)
 		}
 		validators = append(validators, common.HexToAddress(s))
 		powers = append(powers, new(big.Int).Set(agg.SignerPowers[i]))
@@ -376,21 +376,21 @@ func (s *BatchProofSubmitterImpl) SubmitBatchQuorumProof(
 		check.Add(check, p)
 	}
 	if check.Cmp(signed) != 0 {
-		return "", fmt.Errorf("declared signed power %s does not equal the sum of the signers' "+
+		return "", 0, fmt.Errorf("declared signed power %s does not equal the sum of the signers' "+
 			"registered powers %s; the anchor would reject this", signed, check)
 	}
 
 	ecm, anchorAddr, err := s.chains.ManagerForChain(chainID)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 
 	sigBytes, err := hex.DecodeString(strings.TrimPrefix(agg.AggregateSignatureHex, "0x"))
 	if err != nil {
-		return "", fmt.Errorf("decoding aggregate signature: %w", err)
+		return "", 0, fmt.Errorf("decoding aggregate signature: %w", err)
 	}
 	if len(sigBytes) == 0 {
-		return "", fmt.Errorf("empty aggregate signature")
+		return "", 0, fmt.Errorf("empty aggregate signature")
 	}
 
 	// Governance material. The anchor rejects a zero keyBookRoot when minimumGovernanceLevel
@@ -398,7 +398,7 @@ func (s *BatchProofSubmitterImpl) SubmitBatchQuorumProof(
 	// proof.
 	keyBookRoot, keyPageProof, err := buildValidatorKeyPageProof(ecm.auth.From)
 	if err != nil {
-		return "", fmt.Errorf("building validator key page proof: %w", err)
+		return "", 0, fmt.Errorf("building validator key page proof: %w", err)
 	}
 
 	// The ZK blob. Proven against the AGGREGATE public key — the pairing only holds for the key
@@ -408,7 +408,7 @@ func (s *BatchProofSubmitterImpl) SubmitBatchQuorumProof(
 		sigBytes, messageHash, signed, total, agg.AggregatePublicKeyHex,
 	)
 	if len(zkProofBytes) == 0 {
-		return "", fmt.Errorf(
+		return "", 0, fmt.Errorf(
 			"BLS ZK proof generation returned nothing for anchor 0x%x; the anchor exists but "+
 				"cannot be attested", bundleID[:8])
 	}
@@ -466,15 +466,15 @@ func (s *BatchProofSubmitterImpl) SubmitBatchQuorumProof(
 	ecm.nextNonce()
 	tx, err := ecm.anchor.ExecuteComprehensiveProofSimple(ecm.auth, bundleID, proof)
 	if err != nil {
-		return "", fmt.Errorf("executeComprehensiveProof: %w", err)
+		return "", 0, fmt.Errorf("executeComprehensiveProof: %w", err)
 	}
 
 	receipt, err := bind.WaitMined(ctx, ecm.client, tx)
 	if err != nil {
-		return "", fmt.Errorf("waiting for attestation tx %s: %w", tx.Hash().Hex(), err)
+		return "", 0, fmt.Errorf("waiting for attestation tx %s: %w", tx.Hash().Hex(), err)
 	}
 	if receipt.Status == 0 {
-		return "", fmt.Errorf("executeComprehensiveProof reverted (tx %s)", tx.Hash().Hex())
+		return "", 0, fmt.Errorf("executeComprehensiveProof reverted (tx %s)", tx.Hash().Hex())
 	}
 
 	s.logf("[BATCH-PROOF] chain=%d attestation mined tx=%s gas=%d",
@@ -482,7 +482,7 @@ func (s *BatchProofSubmitterImpl) SubmitBatchQuorumProof(
 	// Returned so the caller can report the VERIFY leg's cost. Discarding it left every
 	// batch-settled chain permanently at 2 of 3 measured legs, which the pricing gate treats
 	// as partial coverage and refuses to price.
-	return tx.Hash().Hex(), nil
+	return tx.Hash().Hex(), receipt.BlockNumber.Uint64(), nil
 }
 
 // NOTE: buildValidatorSetForBatch was REMOVED.

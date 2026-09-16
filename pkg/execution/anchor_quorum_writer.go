@@ -223,6 +223,8 @@ func AnchorQuorumRecordFrom(ev *AnchorQuorumEvidence) *database.AnchorQuorumReco
 		BatchOperationID:   hexPrefixed(ev.BatchOperationID[:]),
 		MessageHash:        hexPrefixed(ev.MessageHash[:]),
 		VerifyTx:           ev.VerifyTx,
+		VerifyBlock:        ev.VerifyBlock,
+		AnchorCreateTx:     ev.AnchorCreateTx,
 		VerifiedAt:         ev.AttestedAt,
 		AggregateSignature: decodeHexOrNil(ev.AggregateSignatureHex),
 		AggregatePubKey:    decodeHexOrNil(ev.AggregatePublicKeyHex),
