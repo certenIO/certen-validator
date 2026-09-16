@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
+
 	"github.com/certen/independant-validator/pkg/database"
 )
 
@@ -305,5 +307,83 @@ func TestMembersFromTreeCarryBranchesAndKnownIntentIDs(t *testing.T) {
 	// would attach a quorum to the wrong intent.
 	if members[0].IntentID != "" || members[2].IntentID != "" {
 		t.Fatalf("intent ids invented: %q %q", members[0].IntentID, members[2].IntentID)
+	}
+}
+
+// REGRESSION — the cadence lane must record member identity too.
+//
+// ProveBatchRoot passes a nil intentByOperation map by design: the prover does not hold intent ids. Before
+// BatchLeafInput carried one, that left every CADENCE canonical row with members whose intent_id was
+// empty — and since the layer-5 binding is keyed on intent_id, those intents could never find their
+// canonical anchor and fell back to the settlement observation. That is the false binding this work
+// removed, reappearing on the lane the live gate had not exercised.
+func TestMembersFromTreeCarryTheIntentIdOnTheCadenceLane(t *testing.T) {
+	inputs := []BatchLeafInput{
+		{ADIURL: "acc://payer-one.acme", ExecutionCommitment: [32]byte{0xe1}, OperationID: [32]byte{0x01}, IntentID: "intent-one"},
+		{ADIURL: "acc://payer-two.acme", ExecutionCommitment: [32]byte{0xe2}, OperationID: [32]byte{0x02}, IntentID: "intent-two"},
+	}
+	tree, err := BuildBatchTree(84532, inputs, 100)
+	if err != nil {
+		t.Fatalf("BuildBatchTree: %v", err)
+	}
+
+	// nil map: exactly what ProveBatchRoot passes.
+	members := membersFromTree(tree, nil)
+	if len(members) != 2 {
+		t.Fatalf("got %d members", len(members))
+	}
+	for i, want := range []string{"intent-one", "intent-two"} {
+		if members[i].IntentID != want {
+			t.Fatalf("member %d intent_id = %q, want %q — an empty one makes the layer-5 binding fall "+
+				"back to the settlement observation", i, members[i].IntentID, want)
+		}
+	}
+}
+
+// The explicit map still wins where a caller supplies it, and the leaf is unaffected by the new field.
+func TestIntentIdOverrideAndLeafStability(t *testing.T) {
+	in := BatchLeafInput{ADIURL: "acc://payer-one.acme", ExecutionCommitment: [32]byte{0xe1}, OperationID: [32]byte{0x01}}
+	withID := in
+	withID.IntentID = "intent-one"
+
+	// The leaf must not move: IntentID is evidence, never part of the commitment.
+	if ComputeBatchLeaf(84532, in) != ComputeBatchLeaf(84532, withID) {
+		t.Fatal("adding an intent id changed the leaf; it must not be hashed")
+	}
+
+	tree, err := BuildBatchTree(84532, []BatchLeafInput{withID}, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	members := membersFromTree(tree, map[[32]byte]string{{0x01}: "override"})
+	if members[0].IntentID != "override" {
+		t.Fatalf("explicit map did not win: %q", members[0].IntentID)
+	}
+}
+
+// The plumbing itself: LeafInput is the single funnel both lanes build their leaves through, so the
+// intent id has to survive that conversion or the cadence lane records nothing.
+func TestLeafInputCarriesTheIntentIdIntoTheTree(t *testing.T) {
+	p := &PendingBatchIntent{
+		IntentID:    "intent-cadence-one",
+		ADIURL:      "acc://payer-one.acme",
+		ChainID:     84532,
+		OperationID: [32]byte{0x01},
+		Legs: []LegExecution{{
+			LegID: "leg-1", ChainID: 84532,
+			Target: common.HexToAddress("0x000000000000000000000000000000000000dEaD"),
+			Value:  big.NewInt(0),
+		}},
+	}
+	in, err := p.LeafInput()
+	if err != nil {
+		t.Fatalf("LeafInput: %v", err)
+	}
+	if in.IntentID != "intent-cadence-one" {
+		t.Fatalf("LeafInput dropped the intent id (%q); a cadence canonical row would record members with "+
+			"no intent, and layer 5 could never bind them", in.IntentID)
+	}
+	if in.OperationID != p.OperationID {
+		t.Fatal("LeafInput changed the operation id")
 	}
 }

@@ -103,6 +103,7 @@ func (p *PendingBatchIntent) LeafInput() (BatchLeafInput, error) {
 		ADIURL:              p.ADIURL,
 		ExecutionCommitment: exec,
 		OperationID:         p.OperationID,
+		IntentID:            p.IntentID,
 	}, nil
 }
 

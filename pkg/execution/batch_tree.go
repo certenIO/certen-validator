@@ -35,6 +35,17 @@ type BatchLeafInput struct {
 	ADIURL              string   // the owning ADI; hashed, never sent raw
 	ExecutionCommitment [32]byte // single-call OR multi-leg batch commitment
 	OperationID         [32]byte // the Accumulate 4-blob intent hash
+
+	// IntentID identifies the member for EVIDENCE only. It is deliberately NOT part of the leaf —
+	// ComputeBatchLeaf hashes (domain, chainId, adiURLHash, executionCommitment, operationID) and nothing
+	// else, so adding it here cannot move a root or a bundle id.
+	//
+	// It is here because both lanes build their leaves through PendingBatchIntent.LeafInput, so carrying
+	// it on the input is what gives the cadence lane the same member identity the on-demand lane passes
+	// explicitly. Without it a cadence canonical row records members with an empty intent_id, the
+	// layer-5 binding cannot find them, and layer 5 falls back to the settlement observation — the exact
+	// false binding this work removed, reappearing on the other lane.
+	IntentID string
 }
 
 // ADIURLHash is keccak256(adiURL) — the same value CertenAccountV7.adiURLHash() returns.
