@@ -33,11 +33,14 @@ const catalogEntriesQuery = `WITH app_relations AS (
  UNION ALL
  SELECT format('C|public|%I|%I|%s|%s|%s|%s|%s|%s', r.relname, a.attname,
    pg_catalog.format_type(a.atttypid,a.atttypmod), a.attnotnull,
-   a.attidentity, a.attgenerated, a.attcollation,
+   a.attidentity, a.attgenerated,
+   COALESCE(coll_ns.nspname || '.' || coll.collname, ''),
    COALESCE(pg_get_expr(ad.adbin,ad.adrelid),''))
  FROM app_relations r
  JOIN pg_attribute a ON a.attrelid = r.oid AND a.attnum > 0 AND NOT a.attisdropped
  LEFT JOIN pg_attrdef ad ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum
+ LEFT JOIN pg_collation coll ON coll.oid = a.attcollation
+ LEFT JOIN pg_namespace coll_ns ON coll_ns.oid = coll.collnamespace
  UNION ALL
  SELECT 'I|' || pg_get_indexdef(i.indexrelid)
  FROM pg_index i JOIN app_relations r ON r.oid = i.indrelid
