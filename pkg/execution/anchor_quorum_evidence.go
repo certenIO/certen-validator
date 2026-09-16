@@ -41,6 +41,14 @@ type AnchorQuorumEvidence struct {
 
 	/// VerifyTx is the executeComprehensiveProof transaction that carried the aggregate on-chain.
 	VerifyTx string
+	// VerifyBlock is the block that transaction landed in. Zero means the receipt was not observed.
+	VerifyBlock int64
+	// AnchorCreateTx is the transaction that PUBLISHED the root — createBatchAnchor's, never the
+	// settlement's. This is the field layer 5 states as "the root is in this transaction", and
+	// conflating it with a settlement observation is what published a binding no chain supported.
+	// Empty when this validator did not create the anchor (another leader did), which readers must
+	// treat as "not known here", never as "use whatever transaction is to hand".
+	AnchorCreateTx string
 
 	AggregateSignatureHex string
 	AggregatePublicKeyHex string
