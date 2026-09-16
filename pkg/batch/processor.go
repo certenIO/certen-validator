@@ -561,7 +561,7 @@ func (p *Processor) ProcessClosedBatch(ctx context.Context, result *ClosedBatchR
 	return nil
 }
 
-// createProofs creates Certen Anchor Proofs for each transaction in the batch
+// createProofs creates canonical proof artifacts for each transaction in the batch.
 func (p *Processor) createProofs(ctx context.Context, result *ClosedBatchResult, anchorID uuid.UUID, anchorResult *BatchAnchorResult) error {
 	// Get transactions from database
 	txs, err := p.repos.Batches.GetTransactionsInBatch(ctx, result.BatchID)
@@ -597,45 +597,14 @@ func (p *Processor) createProofs(ctx context.Context, result *ClosedBatchResult,
 			govLevel = database.GovernanceLevel(tx.GovLevel.String)
 		}
 
-		proofInput := &database.NewCertenAnchorProof{
-			BatchID:           result.BatchID,
-			AnchorID:          anchorID,
-			TransactionID:     tx.ID,
-			AccumTxHash:       tx.AccumTxHash,
-			AccountURL:        tx.AccountURL,
-			MerkleRoot:        result.MerkleRoot,
-			MerkleInclusion:   merklePath,
-			AnchorChain:       database.TargetChain(p.targetChain),
-			AnchorTxHash:      anchorResult.TxHash,
-			AnchorBlockNumber: anchorResult.BlockNumber,
-			AnchorBlockHash:   anchorResult.BlockHash,
-			AccumStateProof:   tx.ChainedProof,
-			GovProof:          tx.GovProof,
-			GovLevel:          govLevel,
-			ValidatorID:       p.validatorID,
+		if p.repos.ProofArtifacts == nil {
+			return fmt.Errorf("proof artifact repository is required")
 		}
 
-		certenProof, err := p.repos.Proofs.CreateProof(ctx, proofInput)
-		if err != nil {
-			p.logger.Printf("Failed to create proof for tx %d: %v", tx.ID, err)
-			continue
-		}
-
-		// PHASE 5: Also create record in proof_artifacts table for comprehensive proof storage
-		// This provides better API access patterns and supports proof bundles
-		if p.repos.ProofArtifacts != nil {
-			artifactInput := p.buildProofArtifact(tx, result, certenProof, anchorResult, proof, govLevel)
-			if artifactInput != nil {
-				_, artifactErr := p.repos.ProofArtifacts.CreateProofArtifact(ctx, artifactInput)
-				if artifactErr != nil {
-					// LOUD, and not "non-fatal" in the sense the old comment implied. A row in
-					// certen_anchor_proofs helps no API consumer: every proof lookup goes through
-					// proof_artifacts. Losing this row means the work was done, anchored and billed, and
-					// the evidence for it is unreachable - while nothing else reports a problem.
-					p.logger.Printf("ERROR: [PROOF-ARTIFACT] FAILED to persist artifact for tx %d (accum_tx=%s account=%s): %v",
-						tx.ID, tx.AccumTxHash, tx.AccountURL, artifactErr)
-					// Execution continues so one bad row cannot strand the rest of the batch.
-				}
+		artifactInput := p.buildProofArtifact(tx, result, anchorID, anchorResult, proof, govLevel)
+		if artifactInput != nil {
+			if _, err := p.repos.ProofArtifacts.CreateProofArtifact(ctx, artifactInput); err != nil {
+				return fmt.Errorf("persist proof artifact for tx %d: %w", tx.ID, err)
 			}
 		}
 
@@ -739,19 +708,17 @@ func (p *Processor) UpdateChainConfig(chain, chainID, network, contract string) 
 	p.logger.Printf("Chain config updated: %s (%s/%s)", chain, chainID, network)
 }
 
-// buildProofArtifact constructs a NewProofArtifact for the comprehensive proof storage schema
-// This bridges the batch system's CertenAnchorProof to the proof_artifacts table
+// buildProofArtifact constructs the canonical proof record for a batch transaction.
 func (p *Processor) buildProofArtifact(
 	tx *database.BatchTransaction,
 	result *ClosedBatchResult,
-	certenProof *database.CertenAnchorProof,
+	anchorID uuid.UUID,
 	anchorResult *BatchAnchorResult,
 	inclusionProof *merkle.InclusionProof,
 	govLevel database.GovernanceLevel,
 ) *database.NewProofArtifact {
 	// Build artifact JSON containing all proof components
 	artifact := map[string]interface{}{
-		"proof_id":       certenProof.ProofID.String(),
 		"batch_id":       result.BatchID.String(),
 		"accum_tx_hash":  tx.AccumTxHash,
 		"account_url":    tx.AccountURL,
@@ -760,7 +727,7 @@ func (p *Processor) buildProofArtifact(
 		"anchor_tx_hash": anchorResult.TxHash,
 		"anchor_block":   anchorResult.BlockNumber,
 		"validator_id":   p.validatorID,
-		"proof_version":  database.CurrentProofVersion,
+		"proof_version":  "1.0",
 		"created_at":     time.Now().Format(time.RFC3339),
 	}
 
@@ -805,6 +772,13 @@ func (p *Processor) buildProofArtifact(
 
 	// Build the new proof artifact input
 	batchID := result.BatchID
+	var anchorIDPtr *uuid.UUID
+	if anchorID != uuid.Nil {
+		anchorIDPtr = &anchorID
+	}
+	anchorTxHash := anchorResult.TxHash
+	anchorBlockNumber := anchorResult.BlockNumber
+	anchorChain := p.targetChain
 	leafIndex := inclusionProof.LeafIndex
 	var govLevelPtr *database.GovernanceLevel
 	if govLevel != "" {
@@ -812,17 +786,21 @@ func (p *Processor) buildProofArtifact(
 	}
 
 	return &database.NewProofArtifact{
-		ProofType:    database.ProofTypeCertenAnchor,
-		AccumTxHash:  tx.AccumTxHash,
-		AccountURL:   tx.AccountURL,
-		BatchID:      &batchID,
-		MerkleRoot:   result.MerkleRoot,
-		LeafHash:     tx.TxHash,
-		LeafIndex:    &leafIndex,
-		GovLevel:     govLevelPtr,
-		ProofClass:   proofClass,
-		ValidatorID:  p.validatorID,
-		ArtifactJSON: artifactJSON,
+		ProofType:         database.ProofTypeCertenAnchor,
+		AccumTxHash:       tx.AccumTxHash,
+		AccountURL:        tx.AccountURL,
+		BatchID:           &batchID,
+		AnchorID:          anchorIDPtr,
+		AnchorTxHash:      &anchorTxHash,
+		AnchorBlockNumber: &anchorBlockNumber,
+		AnchorChain:       &anchorChain,
+		MerkleRoot:        result.MerkleRoot,
+		LeafHash:          tx.TxHash,
+		LeafIndex:         &leafIndex,
+		GovLevel:          govLevelPtr,
+		ProofClass:        proofClass,
+		ValidatorID:       p.validatorID,
+		ArtifactJSON:      artifactJSON,
 	}
 }
 

@@ -1,0 +1,217 @@
+package database
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"net/url"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	schema "github.com/certen/independant-validator/db"
+	"github.com/google/uuid"
+	"github.com/lib/pq"
+)
+
+// TestStaticRepositorySQLPreparesAgainstSharedSchema is the schema/code compatibility gate for every
+// repository statement represented as a complete static SQL literal. Dynamic builders have dedicated
+// executable tests because a string fragment cannot be prepared safely in isolation. A missing relation
+// or column therefore fails CI before it can reach a production request path.
+func TestStaticRepositorySQLPreparesAgainstSharedSchema(t *testing.T) {
+	statements, err := repositorySQLStatements(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(statements) == 0 {
+		t.Fatal("no repository SQL statements discovered")
+	}
+
+	ctx := context.Background()
+	prepareDB := freshPreparedSchema(t, ctx)
+	for _, statement := range statements {
+		prepared, err := prepareDB.PrepareContext(ctx, statement.SQL)
+		if err != nil {
+			t.Errorf("prepare %s: %v\n%s", statement.Source, err, statement.SQL)
+			continue
+		}
+		if err := prepared.Close(); err != nil {
+			t.Errorf("close prepared statement %s: %v", statement.Source, err)
+		}
+	}
+}
+
+// TestDynamicRepositoryQueriesExecuteAgainstSharedSchema covers every query builder that cannot be
+// checked as an isolated literal. Representative filters enable each optional branch, so a renamed
+// column, malformed placeholder sequence, or status-specific lifecycle update fails in CI.
+func TestDynamicRepositoryQueriesExecuteAgainstSharedSchema(t *testing.T) {
+	ctx := context.Background()
+	db := freshPreparedSchema(t, ctx)
+	repo := NewProofArtifactRepository(db)
+
+	accumTxHash, accountURL, anchorTxHash := "dynamic-tx", "acc://dynamic.acme", "anchor-tx"
+	batchID := uuid.New()
+	proofType := ProofTypeCertenAnchor
+	govLevel := GovLevelG1
+	proofClass := ProofClassOnDemand
+	status := ProofStatusPending
+	validatorID, anchorChain := "validator-dynamic", "ethereum"
+	now := time.Now().UTC()
+	filter := &ProofArtifactFilter{
+		AccumTxHash:      &accumTxHash,
+		AccountURL:       &accountURL,
+		BatchID:          &batchID,
+		AnchorTxHash:     &anchorTxHash,
+		ProofType:        &proofType,
+		GovLevel:         &govLevel,
+		ProofClass:       &proofClass,
+		Status:           &status,
+		ValidatorID:      &validatorID,
+		AnchorChain:      &anchorChain,
+		CreatedAfter:     &now,
+		CreatedBefore:    &now,
+		Limit:            1,
+		AccountURLs:      []string{accountURL, "acc://dynamic-2.acme"},
+		Statuses:         []string{string(status), "anchored"},
+		GovernanceLevels: []string{string(govLevel), "G2"},
+		GovernanceLevel:  ptr(string(govLevel)),
+	}
+	if _, err := repo.QueryProofs(ctx, filter); err != nil {
+		t.Fatalf("QueryProofs dynamic query: %v", err)
+	}
+	if _, err := repo.GetProofsForBulkExport(ctx, filter.AccountURLs, now.Add(-time.Hour), now.Add(time.Hour), 1); err != nil {
+		t.Fatalf("GetProofsForBulkExport dynamic query: %v", err)
+	}
+	if _, err := repo.CountProofs(ctx, filter); err != nil {
+		t.Fatalf("CountProofs dynamic query: %v", err)
+	}
+	if _, err := repo.QueryProofsForExport(ctx, filter); err != nil {
+		t.Fatalf("QueryProofsForExport dynamic query: %v", err)
+	}
+
+	lifecycle := &IntentLifecycleRepository{client: &Client{db: db}}
+	if err := lifecycle.UpsertOnDiscovery(ctx, "dynamic-intent", "dynamic-lifecycle-tx", 1, "", "", ""); err != nil {
+		t.Fatalf("create lifecycle fixture: %v", err)
+	}
+	if err := lifecycle.UpdateStatus(ctx, "dynamic-intent", IntentLifecyclePendingSignatures); err != nil {
+		t.Fatalf("UpdateStatus without timestamp column: %v", err)
+	}
+	if err := lifecycle.UpdateStatus(ctx, "dynamic-intent", IntentLifecycleSettling); err != nil {
+		t.Fatalf("UpdateStatus with timestamp column: %v", err)
+	}
+}
+
+func ptr[T any](value T) *T { return &value }
+
+// freshPreparedSchema keeps the prepare gate independent of mutable repository test fixtures. It uses
+// the same shared runner as production, but in a unique database which is dropped after the test.
+func freshPreparedSchema(t *testing.T, ctx context.Context) *sql.DB {
+	t.Helper()
+	conn := os.Getenv("CERTEN_TEST_DB")
+	if conn == "" {
+		t.Fatal("CERTEN_TEST_DB is required for repository SQL preparation")
+	}
+	u, err := url.Parse(conn)
+	if err != nil {
+		t.Fatalf("parse CERTEN_TEST_DB: %v", err)
+	}
+	dbName := fmt.Sprintf("certen_prepare_%d", time.Now().UnixNano())
+	adminURL := *u
+	adminURL.Path = "/postgres"
+	adminURL.RawPath = ""
+	admin, err := sql.Open("postgres", adminURL.String())
+	if err != nil {
+		t.Fatalf("open postgres admin database: %v", err)
+	}
+	if _, err := admin.ExecContext(ctx, "CREATE DATABASE "+pq.QuoteIdentifier(dbName)); err != nil {
+		admin.Close()
+		t.Fatalf("create prepare database: %v", err)
+	}
+	t.Cleanup(func() {
+		admin.ExecContext(context.Background(), "DROP DATABASE "+pq.QuoteIdentifier(dbName))
+		admin.Close()
+	})
+
+	testURL := *u
+	testURL.Path = "/" + dbName
+	testURL.RawPath = ""
+	db, err := sql.Open("postgres", testURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := (schema.Runner{DB: db}).Up(ctx, "schema-prepare-test"); err != nil {
+		t.Fatalf("migrate prepare database: %v", err)
+	}
+	return db
+}
+
+type repositorySQL struct {
+	Source string
+	SQL    string
+}
+
+func repositorySQLStatements(dir string) ([]repositorySQL, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]repositorySQL)
+	fileSet := token.NewFileSet()
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fileSet, filepath.Join(dir, name), nil, 0)
+		if err != nil {
+			return nil, fmt.Errorf("parse %s: %w", name, err)
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			literal, ok := node.(*ast.BasicLit)
+			if !ok || literal.Kind != token.STRING {
+				return true
+			}
+			value, err := strconv.Unquote(literal.Value)
+			if err != nil || !looksLikeRepositorySQL(value) {
+				return true
+			}
+			value = normalizeRepositorySQLTemplate(value)
+			position := fileSet.Position(literal.Pos())
+			key := value
+			if _, exists := seen[key]; !exists {
+				seen[key] = repositorySQL{Source: fmt.Sprintf("%s:%d", filepath.Base(position.Filename), position.Line), SQL: value}
+			}
+			return true
+		})
+	}
+
+	result := make([]repositorySQL, 0, len(seen))
+	for _, statement := range seen {
+		result = append(result, statement)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Source < result[j].Source })
+	return result, nil
+}
+
+func looksLikeRepositorySQL(value string) bool {
+	value = strings.TrimSpace(value)
+	if strings.Contains(value, "%") {
+		return false
+	}
+	for _, prefix := range []string{"SELECT ", "INSERT ", "UPDATE ", "DELETE ", "WITH "} {
+		if strings.HasPrefix(value, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeRepositorySQLTemplate(value string) string { return value }

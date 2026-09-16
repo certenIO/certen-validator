@@ -78,7 +78,7 @@ func (r *AttestationRepository) CreateAttestation(ctx context.Context, input *Ne
 func (r *AttestationRepository) GetAttestation(ctx context.Context, attestationID uuid.UUID) (*ValidatorAttestation, error) {
 	query := `
 		SELECT attestation_id, proof_id, validator_id, validator_pubkey,
-			signature, attested_merkle_root, attested_anchor_tx_hash, attested_at
+			signature, merkle_root, anchor_tx_hash, attested_at
 		FROM validator_attestations
 		WHERE attestation_id = $1`
 
@@ -104,7 +104,7 @@ func (r *AttestationRepository) GetAttestation(ctx context.Context, attestationI
 func (r *AttestationRepository) GetAttestationsByProof(ctx context.Context, proofID uuid.UUID) ([]*ValidatorAttestation, error) {
 	query := `
 		SELECT attestation_id, proof_id, validator_id, validator_pubkey,
-			signature, attested_merkle_root, attested_anchor_tx_hash, attested_at
+			signature, merkle_root, anchor_tx_hash, attested_at
 		FROM validator_attestations
 		WHERE proof_id = $1
 		ORDER BY attested_at ASC`
@@ -136,7 +136,7 @@ func (r *AttestationRepository) GetAttestationsByProof(ctx context.Context, proo
 func (r *AttestationRepository) GetAttestationsByValidator(ctx context.Context, validatorID string, limit int) ([]*ValidatorAttestation, error) {
 	query := `
 		SELECT attestation_id, proof_id, validator_id, validator_pubkey,
-			signature, attested_merkle_root, attested_anchor_tx_hash, attested_at
+			signature, merkle_root, anchor_tx_hash, attested_at
 		FROM validator_attestations
 		WHERE validator_id = $1
 		ORDER BY attested_at DESC
@@ -169,7 +169,7 @@ func (r *AttestationRepository) GetAttestationsByValidator(ctx context.Context, 
 func (r *AttestationRepository) GetAttestationByValidatorAndProof(ctx context.Context, validatorID string, proofID uuid.UUID) (*ValidatorAttestation, error) {
 	query := `
 		SELECT attestation_id, proof_id, validator_id, validator_pubkey,
-			signature, attested_merkle_root, attested_anchor_tx_hash, attested_at
+			signature, merkle_root, anchor_tx_hash, attested_at
 		FROM validator_attestations
 		WHERE validator_id = $1 AND proof_id = $2`
 
@@ -221,9 +221,9 @@ func (r *AttestationRepository) CountAttestationsByValidator(ctx context.Context
 func (r *AttestationRepository) GetAttestationsByMerkleRoot(ctx context.Context, merkleRoot []byte) ([]*ValidatorAttestation, error) {
 	query := `
 		SELECT attestation_id, proof_id, validator_id, validator_pubkey,
-			signature, attested_merkle_root, attested_anchor_tx_hash, attested_at
+			signature, merkle_root, anchor_tx_hash, attested_at
 		FROM validator_attestations
-		WHERE attested_merkle_root = $1
+		WHERE merkle_root = $1
 		ORDER BY attested_at ASC`
 
 	rows, err := r.client.QueryContext(ctx, query, merkleRoot)
@@ -253,7 +253,7 @@ func (r *AttestationRepository) GetAttestationsByMerkleRoot(ctx context.Context,
 func (r *AttestationRepository) GetRecentAttestations(ctx context.Context, limit int) ([]*ValidatorAttestation, error) {
 	query := `
 		SELECT attestation_id, proof_id, validator_id, validator_pubkey,
-			signature, attested_merkle_root, attested_anchor_tx_hash, attested_at
+			signature, merkle_root, anchor_tx_hash, attested_at
 		FROM validator_attestations
 		ORDER BY attested_at DESC
 		LIMIT $1`

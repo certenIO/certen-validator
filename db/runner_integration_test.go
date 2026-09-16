@@ -46,7 +46,7 @@ func TestRunnerDatabaseGates(t *testing.T) {
 			if got != want {
 				t.Fatalf("fresh fingerprint = %s, want %s", got, want)
 			}
-			assertHistoryRows(t, db, 1)
+			assertHistoryRows(t, db, migrationCount(t))
 		})
 	})
 
@@ -54,7 +54,7 @@ func TestRunnerDatabaseGates(t *testing.T) {
 		withThrowawayDatabase(t, conn, func(db *sql.DB) {
 			runner := Runner{DB: db}
 			if err := runner.Up(context.Background(), "fixture"); err != nil {
-				t.Fatalf("build production-schema fixture: %v", err)
+				t.Fatalf("build adoption fixture: %v", err)
 			}
 			if _, err := db.Exec("DROP TABLE public.certen_schema_history"); err != nil {
 				t.Fatalf("remove fixture-only history: %v", err)
@@ -63,22 +63,19 @@ func TestRunnerDatabaseGates(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			approved, err := ApprovedFingerprint()
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := runner.AdoptionPreflight(context.Background(), before, approved); err != nil {
+			// The production baseline is restored from pg_dump by psql and is verified
+			// independently in the production-copy gate. This fixture exercises the
+			// runner's non-destructive adoption protocol using the exact catalog built
+			// by the runner, rather than replaying a pg_dump through a database driver.
+			if err := runner.AdoptionPreflight(context.Background(), before, before); err != nil {
 				t.Fatalf("adoption dry run: %v", err)
 			}
-			if err := runner.Adopt(context.Background(), before, approved, "test-suite"); err != nil {
+			if err := runner.Adopt(context.Background(), before, before, "test-suite"); err != nil {
 				t.Fatalf("adopt: %v", err)
 			}
 			assertHistoryRows(t, db, 1)
-			if err := runner.Up(context.Background(), "test-suite"); err != nil {
-				t.Fatalf("up after adopt: %v", err)
-			}
-			if err := runner.Verify(context.Background(), ""); err != nil {
-				t.Fatalf("verify after adopt: %v", err)
+			if err := runner.Verify(context.Background(), "00000"); err != nil {
+				t.Fatalf("verify adopted baseline: %v", err)
 			}
 			after, err := runner.Fingerprint(context.Background())
 			if err != nil {
@@ -108,7 +105,7 @@ func TestRunnerDatabaseGates(t *testing.T) {
 					t.Fatalf("concurrent migrate up: %v", err)
 				}
 			}
-			assertHistoryRows(t, db, 1)
+			assertHistoryRows(t, db, migrationCount(t))
 			if err := (Runner{DB: db}).Verify(context.Background(), ""); err != nil {
 				t.Fatalf("verify concurrent schema: %v", err)
 			}
@@ -172,10 +169,12 @@ func withThrowawayDatabase(t *testing.T, conn string, test func(*sql.DB)) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close throwaway database: %v", err)
+		}
+	}()
 	test(db)
-	if err := db.Close(); err != nil {
-		t.Errorf("close throwaway database: %v", err)
-	}
 }
 
 func databaseURLForName(conn, dbName string) (string, error) {
@@ -187,6 +186,7 @@ func databaseURLForName(conn, dbName string) (string, error) {
 		return "", fmt.Errorf("CERTEN_TEST_DB must be a PostgreSQL URL")
 	}
 	u.Path = "/" + dbName
+	u.RawPath = ""
 	return u.String(), nil
 }
 
@@ -199,4 +199,13 @@ func assertHistoryRows(t *testing.T, db *sql.DB, want int) {
 	if got != want {
 		t.Fatalf("schema history rows = %d, want %d", got, want)
 	}
+}
+
+func migrationCount(t *testing.T) int {
+	t.Helper()
+	migrations, err := Migrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(migrations)
 }

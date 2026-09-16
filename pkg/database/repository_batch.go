@@ -614,7 +614,7 @@ func (r *BatchRepository) GetAccountURLByIntentID(ctx context.Context, intentID 
 // Used for Firestore sync to link confirmation updates back to user intents
 func (r *BatchRepository) GetTransactionHashesByBatchID(ctx context.Context, batchID uuid.UUID) ([]string, error) {
 	query := `
-		SELECT accum_tx_hash
+		SELECT accumulate_tx_hash
 		FROM batch_transactions
 		WHERE batch_id = $1
 		ORDER BY tree_index`

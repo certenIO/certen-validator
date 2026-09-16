@@ -440,8 +440,8 @@ func (h *BatchHandlers) HandleGetProof(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	proof, err := h.repos.Proofs.GetProof(ctx, proofID)
-	if err != nil {
+	proof, err := h.repos.ProofArtifacts.GetProofByID(ctx, proofID)
+	if err != nil || proof == nil {
 		writeJSONError(w, fmt.Sprintf("proof not found: %v", err), http.StatusNotFound)
 		return
 	}
@@ -474,8 +474,8 @@ func (h *BatchHandlers) HandleGetProofByTxHash(w http.ResponseWriter, r *http.Re
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	proof, err := h.repos.Proofs.GetProofByAccumTxHash(ctx, path)
-	if err != nil {
+	proof, err := h.repos.ProofArtifacts.GetProofByTxHash(ctx, path)
+	if err != nil || proof == nil {
 		writeJSONError(w, fmt.Sprintf("proof not found: %v", err), http.StatusNotFound)
 		return
 	}
@@ -508,7 +508,7 @@ func (h *BatchHandlers) HandleGetProofsByAccount(w http.ResponseWriter, r *http.
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	proofs, err := h.repos.Proofs.GetProofsByAccountURL(ctx, path, 100)
+	proofs, err := h.repos.ProofArtifacts.GetProofsByAccount(ctx, path, 100, 0)
 	if err != nil {
 		writeJSONError(w, fmt.Sprintf("failed to get proofs: %v", err), http.StatusInternalServerError)
 		return
