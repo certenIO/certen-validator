@@ -1,0 +1,343 @@
+package database
+
+import (
+	"context"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"math/big"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+)
+
+// Integration tests for canonical anchor rows, against CERTEN_TEST_DB (see TestMain in
+// proof_artifact_repository_test.go). They pin the properties that make the row trustworthy:
+//
+//   - one row per (chain_id, bundle_id), whichever of the seven validators gets there first;
+//   - evidence is never overwritten, and a disagreement is reported rather than resolved;
+//   - the L5 binding query sees canonical rows ONLY, so the shadow row that produced the false
+//     "root d2d24ab3… is in tx 0x9e4ff6ab…" claim can never be selected again.
+
+func anchorRepoForTest(t *testing.T) *BatchRepository {
+	t.Helper()
+	if testDB == nil {
+		t.Skip("Test database not configured")
+	}
+	client := NewClientFromDB(testDB)
+	var migErr error
+	migrateConsensusOnce.Do(func() { migErr = applyMigrationFilesDirectly(client) })
+	if migErr != nil {
+		t.Fatalf("migrations: %v", migErr)
+	}
+	return NewBatchRepository(client)
+}
+
+// bundleHex makes a distinct bundle id per test RUN as well as per case: the test database persists
+// between runs, and a canonical row is deliberately write-once — a fixed id would make the second run
+// measure the first run's row instead of this one's.
+var bundleRunNonce = uuid.New()
+
+func bundleHex(n int) string {
+	nonce := strings.ReplaceAll(bundleRunNonce.String(), "-", "") // 32 hex chars
+	return fmt.Sprintf("0x%s%s%08x", nonce, nonce[:24], n)        // 32 + 24 + 8 = 64
+}
+
+func anchorRecordForTest(chainID int64, bundle string, rootByte byte) *AnchorQuorumRecord {
+	root := make([]byte, 32)
+	for i := range root {
+		root[i] = rootByte
+	}
+	leaf := make([]byte, 32)
+	leaf[0] = 0x11
+	return &AnchorQuorumRecord{
+		ChainID:            chainID,
+		BundleID:           bundle,
+		Root:               root,
+		BatchOperationID:   bundleHex(999),
+		MessageHash:        bundleHex(888),
+		AnchorCreateTx:     "0x51a1c0de" + strings.Repeat("00", 28), // a real hash is 0x + 64 hex chars
+		VerifyTx:           "0xbeef" + strings.Repeat("11", 30),
+		VerifyBlock:        45943100,
+		VerifiedAt:         time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC),
+		AggregateSignature: []byte{0xab, 0xcd},
+		AggregatePubKey:    []byte{0x12, 0x34},
+		Signers: []AnchorQuorumSigner{
+			{Address: "0xaaa", VotingPower: big.NewInt(100)},
+			{Address: "0xbbb", VotingPower: big.NewInt(100)},
+		},
+		SignedVotingPower: big.NewInt(200),
+		TotalVotingPower:  big.NewInt(700),
+		Lane:              "on_demand",
+		EvidenceSource:    "live",
+		TargetChain:       "base-sepolia",
+		Members: []AnchorQuorumMemberRecord{{
+			IntentID:    "f6cea77e-0000-0000-0000-000000000001",
+			AccumTxHash: "member-" + bundle,
+			ADIURL:      "acc://fictional-payer.acme",
+			OperationID: bundleHex(777),
+			Leaf:        leaf,
+			LeafIndex:   0,
+			Branch:      []MerklePathNode{{Hash: strings.Repeat("22", 32), Position: "right"}},
+		}},
+	}
+}
+
+func TestRecordAnchorQuorumWritesOnceWithItsEvidence(t *testing.T) {
+	repo := anchorRepoForTest(t)
+	ctx := context.Background()
+	rec := anchorRecordForTest(84532, bundleHex(1001), 0xaa)
+
+	written, err := repo.RecordAnchorQuorum(ctx, rec)
+	if err != nil || !written {
+		t.Fatalf("first write: written=%v err=%v", written, err)
+	}
+
+	row, err := repo.GetAnchorQuorum(ctx, rec.ChainID, rec.BundleID)
+	if err != nil || row == nil {
+		t.Fatalf("canonical row not found: %v", err)
+	}
+	if !row.QuorumReached {
+		t.Fatal("quorum_reached is false on a row written from a proven quorum")
+	}
+	if row.AttestationCount != 2 || row.SignedVotingPower != "200" || row.TotalVotingPower != "700" {
+		t.Fatalf("evidence not stored: count=%d signed=%s total=%s",
+			row.AttestationCount, row.SignedVotingPower, row.TotalVotingPower)
+	}
+	if row.AnchorCreateTx != rec.AnchorCreateTx || row.VerifyTx != rec.VerifyTx || row.VerifyBlock != rec.VerifyBlock {
+		t.Fatalf("chain coordinates not stored: %+v", row)
+	}
+	if !row.VerifiedAt.Equal(rec.VerifiedAt) {
+		t.Fatalf("consensus_completed_at = %v, want the on-chain verification time %v", row.VerifiedAt, rec.VerifiedAt)
+	}
+	if row.EvidenceSource != "live" || row.Lane != "on_demand" || row.MemberCount != 1 {
+		t.Fatalf("row shape: %+v", row)
+	}
+
+	// A second validator proving the same anchor adds nothing and reports it did not write.
+	again, err := repo.RecordAnchorQuorum(ctx, anchorRecordForTest(84532, rec.BundleID, 0xaa))
+	if err != nil || again {
+		t.Fatalf("second write: written=%v err=%v (want false, nil)", again, err)
+	}
+
+	var members, attestations int
+	if err := testDB.QueryRow(
+		`SELECT COUNT(*) FROM batch_transactions WHERE batch_id = $1`, row.BatchID).Scan(&members); err != nil {
+		t.Fatal(err)
+	}
+	if err := testDB.QueryRow(
+		`SELECT COUNT(*) FROM batch_attestations WHERE batch_id = $1`, row.BatchID).Scan(&attestations); err != nil {
+		t.Fatal(err)
+	}
+	if members != 1 || attestations != 2 {
+		t.Fatalf("members=%d attestations=%d, want 1 and 2 (no duplication on the second write)", members, attestations)
+	}
+}
+
+// Seven validators prove every anchor. Exactly one row, one member set and one attestation set may result.
+func TestRecordAnchorQuorumIsSafeUnderSevenConcurrentValidators(t *testing.T) {
+	repo := anchorRepoForTest(t)
+	ctx := context.Background()
+	bundle := bundleHex(2002)
+
+	var wg sync.WaitGroup
+	results := make(chan struct {
+		written bool
+		err     error
+	}, 7)
+	for i := 0; i < 7; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			w, err := repo.RecordAnchorQuorum(ctx, anchorRecordForTest(84532, bundle, 0xbb))
+			results <- struct {
+				written bool
+				err     error
+			}{w, err}
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	writes := 0
+	for r := range results {
+		if r.err != nil {
+			t.Fatalf("concurrent write failed: %v", r.err)
+		}
+		if r.written {
+			writes++
+		}
+	}
+	if writes != 1 {
+		t.Fatalf("writes = %d, want exactly 1", writes)
+	}
+
+	var rows int
+	if err := testDB.QueryRow(
+		`SELECT COUNT(*) FROM anchor_batches WHERE chain_id = $1 AND bundle_id = $2`, 84532, bundle).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 1 {
+		t.Fatalf("anchor rows = %d, want 1", rows)
+	}
+}
+
+// A different aggregate for the same anchor is a disagreement about what the chain executed. It must be
+// reported and must not touch the stored row.
+func TestRecordAnchorQuorumRefusesToOverwriteDifferentEvidence(t *testing.T) {
+	repo := anchorRepoForTest(t)
+	ctx := context.Background()
+	bundle := bundleHex(3003)
+
+	first := anchorRecordForTest(84532, bundle, 0xcc)
+	if _, err := repo.RecordAnchorQuorum(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+
+	rival := anchorRecordForTest(84532, bundle, 0xdd) // different root
+	rival.AggregateSignature = []byte{0xff, 0xee}
+	_, err := repo.RecordAnchorQuorum(ctx, rival)
+
+	var conflict *AnchorQuorumConflict
+	if !errors.As(err, &conflict) {
+		t.Fatalf("err = %v, want an AnchorQuorumConflict", err)
+	}
+	if conflict.BundleID != bundle {
+		t.Fatalf("conflict names the wrong anchor: %+v", conflict)
+	}
+
+	row, err := repo.GetAnchorQuorum(ctx, 84532, bundle)
+	if err != nil || row == nil {
+		t.Fatalf("row missing after a conflict: %v", err)
+	}
+	if hex.EncodeToString(row.Root) != hex.EncodeToString(first.Root) {
+		t.Fatalf("stored row was changed by the conflicting write: %x", row.Root)
+	}
+}
+
+func TestRecordAnchorQuorumRejectsIncompleteEvidence(t *testing.T) {
+	repo := anchorRepoForTest(t)
+	ctx := context.Background()
+
+	if _, err := repo.RecordAnchorQuorum(ctx, nil); err == nil {
+		t.Fatal("nil record accepted")
+	}
+	noBundle := anchorRecordForTest(84532, "", 0x01)
+	if _, err := repo.RecordAnchorQuorum(ctx, noBundle); err == nil {
+		t.Fatal("record without a bundle id accepted")
+	}
+	noRoot := anchorRecordForTest(84532, bundleHex(4004), 0x01)
+	noRoot.Root = nil
+	if _, err := repo.RecordAnchorQuorum(ctx, noRoot); err == nil {
+		t.Fatal("record without a root accepted")
+	}
+	badSource := anchorRecordForTest(84532, bundleHex(4005), 0x01)
+	badSource.EvidenceSource = "assumed"
+	if _, err := repo.RecordAnchorQuorum(ctx, badSource); err == nil {
+		t.Fatal("record with an unrecognised evidence source accepted")
+	}
+}
+
+// THE REGRESSION. A shadow row must never be selected for an L5 binding, even when it is the newest row
+// for that transaction — that rule is what published "root d2d24ab3… is in tx 0x9e4ff6ab…".
+func TestLayer5BindingIgnoresShadowRowsAndUsesTheAnchorCreateTx(t *testing.T) {
+	repo := anchorRepoForTest(t)
+	ctx := context.Background()
+	accumTx := "l5-binding-" + bundleRunNonce.String()
+	bundle := bundleHex(5005)
+
+	// A canonical row with its member (written first).
+	rec := anchorRecordForTest(84532, bundle, 0x2f)
+	rec.Members[0].AccumTxHash = accumTx
+	if _, err := repo.RecordAnchorQuorum(ctx, rec); err != nil {
+		t.Fatal(err)
+	}
+
+	// A NEWER shadow row for the same transaction: a random UUID, a root nobody published, no bundle id.
+	shadowBatch := uuid.New()
+	shadowRoot, _ := hex.DecodeString("d2d24ab3bc0e2f4a5b6c7d8e9f0a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c2")
+	if _, err := testDB.ExecContext(ctx,
+		`INSERT INTO anchor_batches (id, batch_type, status, merkle_root, target_chain, transaction_count,
+		                            anchor_tx_hash, evidence_source, created_at)
+		 VALUES ($1, 'on_demand', 'pending', $2, 'base-sepolia', 1, $3, 'legacy_shadow', NOW() + interval '1 hour')`,
+		shadowBatch, shadowRoot, "0x9e4ff6ab"+strings.Repeat("00", 28)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testDB.ExecContext(ctx,
+		`INSERT INTO batch_transactions (batch_id, accumulate_tx_hash, account_url, tree_index, transaction_hash, created_at)
+		 VALUES ($1, $2, 'acc://fictional-payer.acme', 0, $3, NOW() + interval '1 hour')`,
+		shadowBatch, accumTx, shadowRoot); err != nil {
+		t.Fatal(err)
+	}
+
+	artifacts := NewProofArtifactRepository(testDB)
+	binding, err := artifacts.GetLayer5Binding(ctx, accumTx)
+	if err != nil {
+		t.Fatalf("binding lookup failed: %v", err)
+	}
+	if hex.EncodeToString(binding.BatchRoot) == hex.EncodeToString(shadowRoot) {
+		t.Fatal("REGRESSION: the shadow root was selected for an L5 binding")
+	}
+	if hex.EncodeToString(binding.BatchRoot) != hex.EncodeToString(rec.Root) {
+		t.Fatalf("binding root = %x, want the published root %x", binding.BatchRoot, rec.Root)
+	}
+	if binding.AnchorTxHash != rec.AnchorCreateTx {
+		t.Fatalf("binding anchor tx = %s, want the anchor-create tx %s", binding.AnchorTxHash, rec.AnchorCreateTx)
+	}
+}
+
+// A transaction that exists ONLY in shadow rows has no canonical binding: the honest answer is "none",
+// not a path to a root nobody published.
+func TestLayer5BindingReportsNoneWhenOnlyShadowRowsExist(t *testing.T) {
+	anchorRepoForTest(t)
+	ctx := context.Background()
+	accumTx := "shadow-only-" + bundleRunNonce.String()
+
+	shadowBatch := uuid.New()
+	shadowRoot, _ := hex.DecodeString("d2d24ab3bc0e2f4a5b6c7d8e9f0a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c2")
+	if _, err := testDB.ExecContext(ctx,
+		`INSERT INTO anchor_batches (id, batch_type, status, merkle_root, target_chain, transaction_count, evidence_source)
+		 VALUES ($1, 'on_demand', 'pending', $2, 'base-sepolia', 1, 'legacy_shadow')`,
+		shadowBatch, shadowRoot); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testDB.ExecContext(ctx,
+		`INSERT INTO batch_transactions (batch_id, accumulate_tx_hash, account_url, tree_index, transaction_hash)
+		 VALUES ($1, $2, 'acc://fictional-payer.acme', 0, $3)`,
+		shadowBatch, accumTx, shadowRoot); err != nil {
+		t.Fatal(err)
+	}
+
+	artifacts := NewProofArtifactRepository(testDB)
+	_, err := artifacts.GetLayer5Binding(ctx, accumTx)
+	if !errors.Is(err, ErrNoBatchBinding) {
+		t.Fatalf("err = %v, want ErrNoBatchBinding", err)
+	}
+}
+
+func TestMigration018AppliesThroughMigrateUpAndRegistersItself(t *testing.T) {
+	repo := anchorRepoForTest(t)
+	ctx := context.Background()
+	client := repo.client
+
+	if _, err := testDB.Exec(`DELETE FROM schema_migrations WHERE version = '018_anchor_quorum_evidence'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.MigrateUp(ctx); err != nil {
+		t.Fatalf("MigrateUp: %v", err)
+	}
+	applied, err := client.getAppliedMigrations(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !applied["018_anchor_quorum_evidence"] {
+		t.Fatal("018 did not register itself; it would re-run on every start")
+	}
+	// Re-running must be harmless: seven validators apply migrations at the same time.
+	if err := client.MigrateUp(ctx); err != nil {
+		t.Fatalf("second MigrateUp: %v", err)
+	}
+}

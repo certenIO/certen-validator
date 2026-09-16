@@ -78,6 +78,19 @@ func BuildLayer5(
 		l5.Network = fmt.Sprintf("chain-%d", chainID)
 	}
 
+	// The anchor transaction is where the ROOT was published, which is not where this member settled.
+	// `obs` describes settlement; binding.AnchorTxHash is the anchor-create transaction carried on the
+	// canonical row. Using the observation for both is what produced the live claim that root d2d24ab3…
+	// is in tx 0x9e4ff6ab… — a transaction that settled a different root entirely.
+	if binding != nil && binding.AnchorTxHash != "" {
+		l5.AnchorTx = binding.AnchorTxHash
+		if binding.AnchorBlockNum > 0 {
+			l5.BlockNumber = uint64(binding.AnchorBlockNum)
+			// The block hash described the settlement block, so it cannot travel with the anchor block.
+			l5.BlockHash = ""
+		}
+	}
+
 	switch {
 	case binding != nil && len(binding.BatchRoot) == 32 && len(binding.LeafHash) == 32:
 		// THE BATCH PATH, AND THE ONLY ONE THAT CAN BE HONEST.

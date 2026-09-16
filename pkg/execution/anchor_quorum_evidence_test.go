@@ -1,0 +1,309 @@
+package execution
+
+import (
+	"context"
+	"encoding/hex"
+	"errors"
+	"math/big"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/certen/independant-validator/pkg/database"
+)
+
+// The quorum a batch anchor carries was computed and discarded: prove() returned only `error`, so
+// anchor_batches' Phase 5 columns were never written by any live path (70,236 rows, zero with
+// quorum_reached) and proofs_service reported batch_quorum_met=false for every intent — including anchors
+// that reached 7 of 7 voting power on-chain.
+//
+// These tests pin the evidence path: what is recorded is exactly what was proven, nothing is invented for
+// a missing field, and the writer never blocks the prover or overwrites a disagreement.
+
+func evidenceFixture() *AnchorQuorumEvidence {
+	var bundle, root, opID, msg, setRoot [32]byte
+	copy(bundle[:], mustHex("2fd899ae1b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6"))
+	copy(root[:], mustHex("d1c58b0d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f80910203"))
+	copy(opID[:], mustHex("0a0b0c0d0e0f1011121314151617181920212223242526272829303132333435"))
+	copy(msg[:], mustHex("a1cdbb96d8a5a1d6000000000000000000000000000000000000000000000000"))
+	copy(setRoot[:], mustHex("a85a6911183f5085000000000000000000000000000000000000000000000000"))
+
+	var memberOp [32]byte
+	copy(memberOp[:], mustHex("f6cea77e00000000000000000000000000000000000000000000000000000000"))
+	var leaf, sibling [32]byte
+	copy(leaf[:], mustHex("1111111111111111111111111111111111111111111111111111111111111111"))
+	copy(sibling[:], mustHex("2222222222222222222222222222222222222222222222222222222222222222"))
+
+	return &AnchorQuorumEvidence{
+		ChainID:               84532,
+		BundleID:              bundle,
+		Root:                  root,
+		BatchOperationID:      opID,
+		MessageHash:           msg,
+		SetRoot:               setRoot,
+		VerifyTx:              "0x9e4ff6ab00000000000000000000000000000000000000000000000000000000",
+		AggregateSignatureHex: "0xabcdef",
+		AggregatePublicKeyHex: "0x123456",
+		Signers:               []string{"0xaaa", "0xbbb", "0xccc"},
+		SignerPowers:          []*big.Int{big.NewInt(100), big.NewInt(100), big.NewInt(100)},
+		SignedVotingPower:     big.NewInt(300),
+		TotalVotingPower:      big.NewInt(700),
+		Lane:                  AnchorLaneOnDemand,
+		AttestedAt:            time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC),
+		Members: []AnchorQuorumMember{{
+			IntentID:    "f6cea77e-0000-0000-0000-000000000000",
+			OperationID: memberOp,
+			ADIURL:      "acc://fictional-payer.acme",
+			Leaf:        leaf,
+			LeafIndex:   0,
+			Branch:      [][32]byte{sibling},
+		}},
+	}
+}
+
+func mustHex(s string) []byte {
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
+func TestAnchorQuorumRecordCarriesWhatWasProven(t *testing.T) {
+	ev := evidenceFixture()
+	rec := AnchorQuorumRecordFrom(ev)
+
+	if rec.ChainID != 84532 {
+		t.Fatalf("chain id = %d", rec.ChainID)
+	}
+	if rec.BundleID != "0x"+hex.EncodeToString(ev.BundleID[:]) {
+		t.Fatalf("bundle id = %s", rec.BundleID)
+	}
+	if hex.EncodeToString(rec.Root) != hex.EncodeToString(ev.Root[:]) {
+		t.Fatalf("root = %x", rec.Root)
+	}
+	if rec.EvidenceSource != "live" || rec.Lane != AnchorLaneOnDemand {
+		t.Fatalf("source=%s lane=%s", rec.EvidenceSource, rec.Lane)
+	}
+	if rec.VerifyTx != ev.VerifyTx || !rec.VerifiedAt.Equal(ev.AttestedAt) {
+		t.Fatalf("verify tx/time not carried: %s %v", rec.VerifyTx, rec.VerifiedAt)
+	}
+	if rec.SignedVotingPower.Cmp(big.NewInt(300)) != 0 || rec.TotalVotingPower.Cmp(big.NewInt(700)) != 0 {
+		t.Fatalf("voting power = %v / %v", rec.SignedVotingPower, rec.TotalVotingPower)
+	}
+	if len(rec.Signers) != 3 || rec.Signers[1].Address != "0xbbb" || rec.Signers[1].VotingPower.Cmp(big.NewInt(100)) != 0 {
+		t.Fatalf("signers = %+v", rec.Signers)
+	}
+	if len(rec.Members) != 1 {
+		t.Fatalf("members = %d", len(rec.Members))
+	}
+	m := rec.Members[0]
+	if m.IntentID != "f6cea77e-0000-0000-0000-000000000000" || m.LeafIndex != 0 || len(m.Branch) != 1 {
+		t.Fatalf("member = %+v", m)
+	}
+	if hex.EncodeToString(m.Leaf) != hex.EncodeToString(ev.Members[0].Leaf[:]) {
+		t.Fatalf("member leaf = %x", m.Leaf)
+	}
+	// The stored leaf must be the ON-CHAIN batch leaf handed to us, never re-derived here: a second
+	// derivation is a second chance to disagree with CertenAccountV7.computeLeaf.
+	if m.AccumTxHash != hex.EncodeToString(ev.Members[0].OperationID[:]) {
+		t.Fatalf("member accum tx = %s", m.AccumTxHash)
+	}
+}
+
+func TestAnchorQuorumRecordDoesNotInventMissingFields(t *testing.T) {
+	ev := evidenceFixture()
+	ev.AggregateSignatureHex = ""
+	ev.AggregatePublicKeyHex = "not-hex"
+	ev.SignerPowers = nil
+	rec := AnchorQuorumRecordFrom(ev)
+
+	if rec.AggregateSignature != nil || rec.AggregatePubKey != nil {
+		t.Fatalf("absent/undecodable aggregate must stay absent: %x %x", rec.AggregateSignature, rec.AggregatePubKey)
+	}
+	for _, s := range rec.Signers {
+		if s.VotingPower != nil {
+			t.Fatalf("signer power invented: %+v", s)
+		}
+	}
+	if AnchorQuorumRecordFrom(nil) != nil {
+		t.Fatal("nil evidence must produce no record")
+	}
+}
+
+// ─── writer ─────────────────────────────────────────────────────────────────────────────────────────
+
+type fakeQuorumStore struct {
+	mu       sync.Mutex
+	calls    int
+	records  []*database.AnchorQuorumRecord
+	failN    int
+	conflict bool
+	gate     chan struct{}
+}
+
+func (f *fakeQuorumStore) RecordAnchorQuorum(ctx context.Context, rec *database.AnchorQuorumRecord) (bool, error) {
+	if f.gate != nil {
+		select {
+		case <-f.gate:
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	if f.conflict {
+		return false, &database.AnchorQuorumConflict{ChainID: rec.ChainID, BundleID: rec.BundleID}
+	}
+	if f.failN > 0 {
+		f.failN--
+		return false, errors.New("fictional: database unavailable")
+	}
+	f.records = append(f.records, rec)
+	return true, nil
+}
+
+func (f *fakeQuorumStore) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
+func waitForQuorum(t *testing.T, what string, timeout time.Duration, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+func startWriter(t *testing.T, store AnchorQuorumStore, queueCap int) *AnchorQuorumWriter {
+	t.Helper()
+	w := NewAnchorQuorumWriter(store, nil)
+	if queueCap > 0 {
+		w.queue = make(chan *database.AnchorQuorumRecord, queueCap)
+	}
+	w.retryBase, w.retryMax, w.callTimeout = time.Millisecond, 5*time.Millisecond, time.Second
+	w.Start()
+	t.Cleanup(w.Stop)
+	return w
+}
+
+func TestWriterRecordsProvenEvidence(t *testing.T) {
+	store := &fakeQuorumStore{}
+	w := startWriter(t, store, 0)
+	w.Hook()(context.Background(), evidenceFixture())
+
+	waitForQuorum(t, "the record to be written", time.Second, func() bool { return len(store.records) == 1 })
+	written, _, _, _, _ := w.Stats()
+	if written != 1 {
+		t.Fatalf("written = %d", written)
+	}
+	if store.records[0].EvidenceSource != "live" {
+		t.Fatalf("source = %s", store.records[0].EvidenceSource)
+	}
+}
+
+// The prover must never wait on the database: proving already costs a peer round trip, a transaction and a
+// confirmation read, and a database outage must not stop anchors from being proven.
+func TestHookNeverBlocksTheProver(t *testing.T) {
+	store := &fakeQuorumStore{gate: make(chan struct{})} // never answers
+	w := startWriter(t, store, 1)
+	t.Cleanup(func() { close(store.gate) })
+
+	hook := w.Hook()
+	done := make(chan time.Duration, 1)
+	go func() {
+		start := time.Now()
+		for i := 0; i < 500; i++ {
+			hook(context.Background(), evidenceFixture())
+		}
+		done <- time.Since(start)
+	}()
+
+	select {
+	case elapsed := <-done:
+		if elapsed > 2*time.Second {
+			t.Fatalf("hook took %v for 500 calls against a blocked database", elapsed)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("hook blocked on a database that never answers")
+	}
+	_, _, _, dropped, _ := w.Stats()
+	if dropped == 0 {
+		t.Fatal("expected refused hand-offs to be counted, not silently lost")
+	}
+}
+
+func TestWriterRetriesTransportFailures(t *testing.T) {
+	store := &fakeQuorumStore{failN: 3}
+	w := startWriter(t, store, 0)
+	w.Hook()(context.Background(), evidenceFixture())
+
+	waitForQuorum(t, "the record after retries", 2*time.Second, func() bool { return len(store.records) == 1 })
+	if store.count() != 4 {
+		t.Fatalf("calls = %d, want 4 (3 failures + 1 success)", store.count())
+	}
+}
+
+// A conflict is a disagreement about what the chain executed. Retrying cannot settle it, and overwriting
+// would destroy the evidence that something is wrong.
+func TestWriterNeverRetriesOrOverwritesAConflict(t *testing.T) {
+	store := &fakeQuorumStore{conflict: true}
+	w := startWriter(t, store, 0)
+	w.Hook()(context.Background(), evidenceFixture())
+
+	waitForQuorum(t, "the conflict to be counted", time.Second, func() bool {
+		_, _, conflicts, _, _ := w.Stats()
+		return conflicts == 1
+	})
+	time.Sleep(50 * time.Millisecond)
+	if store.count() != 1 {
+		t.Fatalf("calls = %d, want exactly 1 (no retry)", store.count())
+	}
+	if len(store.records) != 0 {
+		t.Fatal("a conflict must not write a record")
+	}
+}
+
+// ─── membership ─────────────────────────────────────────────────────────────────────────────────────
+
+func TestMembersFromTreeCarryBranchesAndKnownIntentIDs(t *testing.T) {
+	inputs := []BatchLeafInput{
+		{ADIURL: "acc://a.acme", OperationID: [32]byte{1}, ExecutionCommitment: [32]byte{9}},
+		{ADIURL: "acc://b.acme", OperationID: [32]byte{2}, ExecutionCommitment: [32]byte{8}},
+		{ADIURL: "acc://c.acme", OperationID: [32]byte{3}, ExecutionCommitment: [32]byte{7}},
+	}
+	tree, err := BuildBatchTree(84532, inputs, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	members := membersFromTree(tree, map[[32]byte]string{{2}: "intent-b"})
+	if len(members) != 3 {
+		t.Fatalf("members = %d", len(members))
+	}
+	for i, m := range members {
+		if m.LeafIndex != i {
+			t.Fatalf("member %d has index %d", i, m.LeafIndex)
+		}
+		if m.Leaf != tree.Leaves[i] {
+			t.Fatalf("member %d leaf does not match the tree", i)
+		}
+		if !VerifyBranch(m.Branch, tree.Root, m.Leaf) {
+			t.Fatalf("member %d branch does not prove its leaf under the root", i)
+		}
+	}
+	if members[1].IntentID != "intent-b" {
+		t.Fatalf("known intent id not carried: %q", members[1].IntentID)
+	}
+	// An unknown intent id stays EMPTY. The operation id is the durable identifier, and guessing here
+	// would attach a quorum to the wrong intent.
+	if members[0].IntentID != "" || members[2].IntentID != "" {
+		t.Fatalf("intent ids invented: %q %q", members[0].IntentID, members[2].IntentID)
+	}
+}
