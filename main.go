@@ -1071,8 +1071,8 @@ func main() {
 }
 
 func runMigrationCommand(args []string) {
-	if len(args) < 1 || len(args) > 2 || (args[0] != "up" && args[0] != "verify" && args[0] != "fingerprint" && args[0] != "adopt") || (len(args) == 2 && (args[0] != "adopt" || args[1] != "--dry-run")) {
-		log.Fatal("usage: certen-validator migrate <up|verify|fingerprint|adopt [--dry-run]>")
+	if !validMigrationCommand(args) {
+		log.Fatal("usage: certen-validator migrate <up|verify [--require VERSION]|fingerprint|adopt [--dry-run]|data NAME>")
 	}
 	cfg, err := config.Load()
 	if err != nil {
@@ -1089,7 +1089,11 @@ func runMigrationCommand(args []string) {
 		err = runner.Up(context.Background(), cfg.ValidatorID)
 	case "verify":
 		var required string
-		required, err = schema.LatestVersion()
+		if len(args) == 3 {
+			required = args[2]
+		} else {
+			required, err = schema.LatestVersion()
+		}
 		if err == nil {
 			err = runner.Verify(context.Background(), required)
 		}
@@ -1117,11 +1121,31 @@ func runMigrationCommand(args []string) {
 				err = runner.Adopt(context.Background(), fingerprint, approved, cfg.ValidatorID)
 			}
 		}
+	case "data":
+		err = runner.Data(context.Background(), args[1], cfg.ValidatorID)
 	}
 	if err != nil {
 		log.Fatalf("migrate %s: %v", args[0], err)
 	}
 	log.Printf("schema migration command %q completed", args[0])
+}
+
+func validMigrationCommand(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	switch args[0] {
+	case "up", "fingerprint":
+		return len(args) == 1
+	case "verify":
+		return len(args) == 1 || len(args) == 3 && args[1] == "--require" && args[2] != ""
+	case "adopt":
+		return len(args) == 1 || len(args) == 2 && args[1] == "--dry-run"
+	case "data":
+		return len(args) == 2 && args[1] != ""
+	default:
+		return false
+	}
 }
 
 // BatchComponents holds all batch system components for API handlers

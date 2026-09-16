@@ -8,27 +8,22 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 )
 
-// migration019SQL returns the migration's own text, so the test runs exactly what production runs.
+// migration019SQL reads the frozen legacy migration directly. Legacy files are retained for regression
+// evidence only and are deliberately no longer embedded in the application binary.
 func migration019SQL(t *testing.T) string {
 	t.Helper()
-	client := NewClientFromDB(testDB)
-	ms, err := client.getMigrations()
+	sql, err := os.ReadFile("migrations/019_supersede_false_layer5_bindings.sql")
 	if err != nil {
-		t.Fatalf("loading migrations: %v", err)
+		t.Fatalf("read frozen migration 019: %v", err)
 	}
-	for _, m := range ms {
-		if strings.HasPrefix(m.Version, "019_") {
-			return m.SQL
-		}
-	}
-	t.Fatal("migration 019 is not embedded")
-	return ""
+	return string(sql)
 }
 
 // insertAnchorRootForTest adds an anchor row carrying a root, canonical or shadow.

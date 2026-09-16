@@ -9,6 +9,8 @@
 //
 // Phase 1 §1.1 predicted no, from reading bpt_receipt.go. This settles it by
 // running it.
+//go:build ignore
+
 package q10probe
 
 import (

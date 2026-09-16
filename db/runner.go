@@ -187,6 +187,19 @@ func (r Runner) Verify(ctx context.Context, requiredVersion string) error {
 	return validateHistory(migrations, history, requiredVersion, true)
 }
 
+// Data runs a named, out-of-band data migration. Data migrations are intentionally not part of Up:
+// schema deployment must remain bounded and startup must never backfill application rows. No data
+// migration is currently registered because the legacy backfill is represented in the production baseline.
+func (r Runner) Data(ctx context.Context, name, appliedBy string) error {
+	if r.DB == nil {
+		return errors.New("schema runner requires a database")
+	}
+	if name == "" {
+		return errors.New("data migration name is required")
+	}
+	return fmt.Errorf("data migration %q is not registered", name)
+}
+
 // Adopt records an already-existing catalog as the baseline without executing any migration SQL. The caller
 // must supply a fingerprint captured from the approved production-schema copy; an empty value is rejected
 // so adoption can never silently bless an unknown schema.
@@ -340,6 +353,12 @@ func applyInTransaction(ctx context.Context, conn *sql.Conn, m Migration, sum, a
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("commit migration %s: %w", m.Name, err)
 	}
+	// The production baseline is a pg_dump, whose standard preamble changes search_path and
+	// other session settings. This connection returns to the pool in development/test runs, so
+	// it must be restored before repository code can reuse it.
+	if _, err = conn.ExecContext(ctx, "RESET ALL"); err != nil {
+		return fmt.Errorf("reset session after migration %s: %w", m.Name, err)
+	}
 	return nil
 }
 
@@ -348,7 +367,7 @@ func applyWithoutTransaction(ctx context.Context, conn *sql.Conn, m Migration, s
 	if _, err := conn.ExecContext(ctx, fmt.Sprintf("SET lock_timeout = '%dms'; SET statement_timeout = '%dms'", r.LockTimeout.Milliseconds(), r.StatementTimeout.Milliseconds())); err != nil {
 		return fmt.Errorf("configure migration %s timeouts: %w", m.Name, err)
 	}
-	defer conn.ExecContext(context.Background(), "RESET lock_timeout; RESET statement_timeout")
+	defer conn.ExecContext(context.Background(), "RESET ALL")
 	if _, err := conn.ExecContext(ctx, string(m.SQL)); err != nil {
 		return fmt.Errorf("apply non-transactional migration %s: %w", m.Name, err)
 	}

@@ -5,6 +5,8 @@
 // DirectoryAnchor that closed that window wrapped in a real SequencedMessage,
 // and the real validator quorum signatures over it. Then marshals it and
 // measures. Read-only: fetches over HTTP, writes nothing.
+//go:build ignore
+
 package q5probe
 
 import (

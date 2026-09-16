@@ -6,6 +6,8 @@
 // receipt-provable by INDEX. Q9 asks whether that missing hash->index map is
 // GUARANTEED by how genesis is built, or INCIDENTAL to how these particular
 // nodes were provisioned. This builds a genesis from scratch and asks again.
+//go:build ignore
+
 package q9probe
 
 import (
