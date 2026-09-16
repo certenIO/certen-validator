@@ -2,8 +2,6 @@
 -- PostgreSQL database dump
 --
 
-\restrict TgnH5aCqMdD9L15husBWEmC3wwPvaXkFk6xSdC2oKxe7Vc8NwSYm6iaTUWETdJM
-
 -- Dumped from database version 15.15
 -- Dumped by pg_dump version 15.15
 
@@ -3245,5 +3243,3 @@ ALTER TABLE ONLY public.verification_history
 --
 -- PostgreSQL database dump complete
 --
-
-\unrestrict TgnH5aCqMdD9L15husBWEmC3wwPvaXkFk6xSdC2oKxe7Vc8NwSYm6iaTUWETdJM
