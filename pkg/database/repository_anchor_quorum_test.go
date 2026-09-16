@@ -274,7 +274,7 @@ func TestLayer5BindingIgnoresShadowRowsAndUsesTheAnchorCreateTx(t *testing.T) {
 	}
 
 	artifacts := NewProofArtifactRepository(testDB)
-	binding, err := artifacts.GetLayer5Binding(ctx, accumTx)
+	binding, err := artifacts.GetLayer5Binding(ctx, "", accumTx)
 	if err != nil {
 		t.Fatalf("binding lookup failed: %v", err)
 	}
@@ -312,7 +312,7 @@ func TestLayer5BindingReportsNoneWhenOnlyShadowRowsExist(t *testing.T) {
 	}
 
 	artifacts := NewProofArtifactRepository(testDB)
-	_, err := artifacts.GetLayer5Binding(ctx, accumTx)
+	_, err := artifacts.GetLayer5Binding(ctx, "", accumTx)
 	if !errors.Is(err, ErrNoBatchBinding) {
 		t.Fatalf("err = %v, want ErrNoBatchBinding", err)
 	}
@@ -339,5 +339,101 @@ func TestMigration018AppliesThroughMigrateUpAndRegistersItself(t *testing.T) {
 	// Re-running must be harmless: seven validators apply migrations at the same time.
 	if err := client.MigrateUp(ctx); err != nil {
 		t.Fatalf("second MigrateUp: %v", err)
+	}
+}
+
+// REGRESSION — the live failure of 2026-09-16, intent 7758cbed.
+//
+// The batch path never sees an intent's Accumulate transaction hash: a member arrives as
+// (intent id, ADI, operation id, legs). So a CANONICAL member row has no accumulate_tx_hash, and a
+// binding keyed on that column finds only the retired shadow rows — which the canonical filter then
+// discards, leaving no binding at all. Layer 5 fell back to the settlement observation and published the
+// settlement transaction, while a correct canonical row (root matching the on-chain anchor) sat unused.
+//
+// The fixture is the live shape exactly: a canonical row reachable only by intent_id, and shadow rows
+// carrying the Accumulate transaction hash.
+func TestLayer5BindingFindsTheCanonicalRowByIntentWhenTheAccumHashIsOnlyOnShadowRows(t *testing.T) {
+	repo := anchorRepoForTest(t)
+	ctx := context.Background()
+	artifacts := NewProofArtifactRepository(testDB)
+
+	intentID := "intent-" + uuid.NewString()
+	accumTx := strings.Repeat("ab", 32) // the WriteData hash, known ONLY to the shadow path
+	anchorCreateTx := "0x51a1c0de" + strings.Repeat("00", 28)
+
+	rec := anchorRecordForTest(84532, bundleHex(7758), 0xda)
+	rec.AnchorCreateTx = anchorCreateTx
+	// Exactly as the live writer produces it: a member with an intent id and NO Accumulate tx hash.
+	rec.Members = []AnchorQuorumMemberRecord{{
+		IntentID:    intentID,
+		AccumTxHash: "",
+		ADIURL:      "acc://fictional-payer.acme",
+		Leaf:        rec.Root,
+		LeafIndex:   0,
+	}}
+	if _, err := repo.RecordAnchorQuorum(ctx, rec); err != nil {
+		t.Fatal(err)
+	}
+
+	// Seven shadow rows for the same intent, each carrying the real Accumulate hash and a root that was
+	// never published — the live picture.
+	shadowRoot, _ := hex.DecodeString("c3da22722f0972af4e6571520d58d22ee6ecf57a3321df5a5c19067f41244fc7")
+	for i := 0; i < 7; i++ {
+		sb := uuid.New()
+		if _, err := testDB.ExecContext(ctx,
+			`INSERT INTO anchor_batches (id, batch_type, status, merkle_root, target_chain, transaction_count, created_at)
+			 VALUES ($1, 'on_demand', 'pending', $2, 'base-sepolia', 1, NOW() + interval '1 hour')`,
+			sb, shadowRoot); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := testDB.ExecContext(ctx,
+			`INSERT INTO batch_transactions (batch_id, accumulate_tx_hash, account_url, tree_index, transaction_hash, intent_id, created_at)
+			 VALUES ($1, $2, 'acc://fictional-payer.acme', 0, $3, $4, NOW() + interval '1 hour')`,
+			sb, accumTx, shadowRoot, intentID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The live call: the orchestrator knows both, and the intent id is what reaches the canonical row.
+	binding, err := artifacts.GetLayer5Binding(ctx, intentID, accumTx)
+	if err != nil {
+		t.Fatalf("no binding found for an intent that HAS a canonical anchor: %v", err)
+	}
+	if hex.EncodeToString(binding.BatchRoot) == hex.EncodeToString(shadowRoot) {
+		t.Fatal("REGRESSION: a shadow root was bound")
+	}
+	if hex.EncodeToString(binding.BatchRoot) != hex.EncodeToString(rec.Root) {
+		t.Fatalf("binding root = %x, want the published root %x", binding.BatchRoot, rec.Root)
+	}
+	if binding.AnchorTxHash != anchorCreateTx {
+		t.Fatalf("binding anchor tx = %q, want the anchor-create tx — an empty one sends layer 5 back to "+
+			"the settlement observation", binding.AnchorTxHash)
+	}
+}
+
+// An intent with no canonical anchor at all must still report "none", not borrow a shadow row.
+func TestLayer5BindingRefusesWhenOnlyShadowRowsExistForTheIntent(t *testing.T) {
+	_ = anchorRepoForTest(t)
+	ctx := context.Background()
+	artifacts := NewProofArtifactRepository(testDB)
+
+	intentID := "intent-" + uuid.NewString()
+	accumTx := strings.Repeat("cd", 32)
+	shadowRoot, _ := hex.DecodeString("d2d24ab3bc0e2f4a5b6c7d8e9f0a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c2")
+	sb := uuid.New()
+	if _, err := testDB.ExecContext(ctx,
+		`INSERT INTO anchor_batches (id, batch_type, status, merkle_root, target_chain, transaction_count, created_at)
+		 VALUES ($1, 'on_demand', 'pending', $2, 'base-sepolia', 1, NOW())`, sb, shadowRoot); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testDB.ExecContext(ctx,
+		`INSERT INTO batch_transactions (batch_id, accumulate_tx_hash, account_url, tree_index, transaction_hash, intent_id, created_at)
+		 VALUES ($1, $2, 'acc://fictional-payer.acme', 0, $3, $4, NOW())`,
+		sb, accumTx, shadowRoot, intentID); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := artifacts.GetLayer5Binding(ctx, intentID, accumTx); !errors.Is(err, ErrNoBatchBinding) {
+		t.Fatalf("expected ErrNoBatchBinding, got %v", err)
 	}
 }

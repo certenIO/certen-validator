@@ -67,11 +67,21 @@ type Layer5Binding struct {
 // proofs where it is simplest to produce.
 var ErrNoBatchBinding = errors.New("no batch_transactions row for this accumulate transaction")
 
-// GetLayer5Binding joins batch_transactions to anchor_batches for one Accumulate
-// transaction.
+// GetLayer5Binding joins batch_transactions to anchor_batches for one intent.
 //
-// The join is on accumulate_tx_hash for the same reason ProofBlob's is:
-// batch_transactions predates proof_artifacts and carries no proof_id.
+// KEYED ON intent_id FIRST, accumulate_tx_hash SECOND.
+//
+// The batch path does not know the intent's Accumulate transaction hash: a member reaches the mempool as
+// (intent id, ADI, operation id, legs), and the WriteData hash is not among them. So a canonical member
+// row cannot carry accumulate_tx_hash, and keying the join on it finds only the retired shadow rows —
+// which the canonical filter then discards, leaving NO binding and sending layer 5 to its fallback: the
+// settlement observation. That is how a correct canonical row (root da4c331b…, matching the anchor) sat
+// in the database while layer 5 published the settlement transaction instead. Observed live 2026-09-16
+// on intent 7758cbed, the first on-demand intent after the canonical writer shipped.
+//
+// intent_id is carried by both row kinds and is the natural key for "which anchored batch contains this
+// intent's leaf". accumulate_tx_hash remains as a fallback for historical rows written before the
+// canonical writer, which have it and may have no usable intent_id.
 //
 // CANONICAL ROWS ONLY (bundle_id IS NOT NULL).
 //
@@ -87,7 +97,12 @@ var ErrNoBatchBinding = errors.New("no batch_transactions row for this accumulat
 // canonical row exists the answer is ErrNoBatchBinding: the caller then treats the
 // proof as a one-member tree, which is honest, rather than receiving a binding to
 // a root nobody anchored.
-func (r *ProofArtifactRepository) GetLayer5Binding(ctx context.Context, accumTxHash string) (*Layer5Binding, error) {
+func (r *ProofArtifactRepository) GetLayer5Binding(ctx context.Context, intentID, accumTxHash string) (*Layer5Binding, error) {
+	if intentID == "" && accumTxHash == "" {
+		return nil, ErrNoBatchBinding
+	}
+	// $1 matches intent_id, $2 accumulate_tx_hash. An empty key must match nothing rather than every row
+	// whose column happens to be empty too.
 	const q = `
 		SELECT bt.batch_id,
 		       bt.transaction_hash,
@@ -101,9 +116,10 @@ func (r *ProofArtifactRepository) GetLayer5Binding(ctx context.Context, accumTxH
 		       COALESCE(ab.verify_block, ab.anchor_block_num, 0)
 		FROM batch_transactions bt
 		JOIN anchor_batches ab ON ab.id = bt.batch_id
-		WHERE bt.accumulate_tx_hash = $1
-		  AND ab.bundle_id IS NOT NULL
-		ORDER BY bt.created_at DESC
+		WHERE ab.bundle_id IS NOT NULL
+		  AND (   ($1 <> '' AND bt.intent_id = $1)
+		       OR ($2 <> '' AND bt.accumulate_tx_hash = $2))
+		ORDER BY (CASE WHEN $1 <> '' AND bt.intent_id = $1 THEN 0 ELSE 1 END), bt.created_at DESC
 		LIMIT 1`
 
 	var (
@@ -112,7 +128,7 @@ func (r *ProofArtifactRepository) GetLayer5Binding(ctx context.Context, accumTxH
 		root    []byte
 	)
 	var leaf []byte
-	err := r.db.QueryRowContext(ctx, q, accumTxHash).Scan(
+	err := r.db.QueryRowContext(ctx, q, intentID, accumTxHash).Scan(
 		&b.BatchID, &leaf, &b.TreeIndex, &rawPath, &root, &b.TargetChain, &b.AnchorTxHash, &b.AnchorBlockNum)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("tx %s: %w", accumTxHash, ErrNoBatchBinding)

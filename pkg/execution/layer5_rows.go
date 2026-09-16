@@ -274,8 +274,10 @@ func (o *UnifiedOrchestrator) writeLayer5(
 	// because treating "settled alone" as "lookup failed" would suppress L5 for
 	// exactly the proofs where it is simplest to produce.
 	var binding *database.Layer5Binding
-	if req.AccumulateTxHash != "" {
-		b, err := o.config.Repos.ProofArtifacts.GetLayer5Binding(ctx, req.AccumulateTxHash)
+	// Keyed on the intent first: a canonical member row carries intent_id, not the Accumulate tx hash,
+	// which the batch path never sees. See GetLayer5Binding.
+	if req.IntentID != "" || req.AccumulateTxHash != "" {
+		b, err := o.config.Repos.ProofArtifacts.GetLayer5Binding(ctx, req.IntentID, req.AccumulateTxHash)
 		switch {
 		case err == nil:
 			binding = b
