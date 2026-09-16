@@ -13,6 +13,9 @@ import (
 //go:embed migrations/*.sql
 var files embed.FS
 
+//go:embed schema.fingerprint
+var approvedFingerprint string
+
 // Migration is an immutable, ordered schema change.
 type Migration struct {
 	Version string
@@ -64,6 +67,22 @@ func LatestVersion() (string, error) {
 	return migrations[len(migrations)-1].Version, nil
 }
 
+// ApprovedFingerprint is the reviewed catalog fingerprint captured from the production schema copy.
+// It is intentionally versioned beside the immutable migration catalog so adoption cannot trust an
+// unreviewed value supplied at runtime.
+func ApprovedFingerprint() (string, error) {
+	fingerprint := strings.TrimSpace(approvedFingerprint)
+	if len(fingerprint) != 64 {
+		return "", fmt.Errorf("approved schema fingerprint must be a SHA-256 hex digest")
+	}
+	for _, c := range fingerprint {
+		if !strings.ContainsRune("0123456789abcdef", c) {
+			return "", fmt.Errorf("approved schema fingerprint is not lowercase hexadecimal")
+		}
+	}
+	return fingerprint, nil
+}
+
 // Lint rejects transaction control in SQL files. The runner owns transaction boundaries, which prevents
 // the legacy nested-BEGIN/COMMIT failure mode. PL/pgSQL function bodies are intentionally not matched.
 func Lint(m Migration) error {
@@ -74,6 +93,11 @@ func Lint(m Migration) error {
 		switch upper {
 		case "BEGIN;", "COMMIT;", "ROLLBACK;":
 			return fmt.Errorf("%s contains runner-owned transaction control", m.Name)
+		}
+		// The production-derived baseline is intentionally an immutable pg_dump and contains
+		// pg_dump's session SET commands. New migrations must never alter runner timeouts.
+		if m.Version != "00000" && (strings.HasPrefix(upper, "SET ") || strings.HasPrefix(upper, "RESET ")) {
+			return fmt.Errorf("%s changes session settings; configure timeouts in the runner instead", m.Name)
 		}
 		if strings.HasPrefix(upper, "DROP ") || strings.HasPrefix(upper, "ALTER TABLE ") && (strings.Contains(upper, " DROP ") || strings.Contains(upper, " RENAME ") || strings.Contains(upper, " SET NOT NULL")) {
 			destructive = true

@@ -7,10 +7,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
 const advisoryLockID int64 = 0x4352544E5343484D // "CRTNSCHM"
+
+const noTransactionMarker = "-- schema: no-transaction"
 
 const catalogFingerprintQuery = `WITH objects AS (
  SELECT format('C|%I|%I|%s|%s|%s|%s', n.nspname,c.relname,a.attname,pg_catalog.format_type(a.atttypid,a.atttypmod),a.attnotnull,COALESCE(pg_get_expr(ad.adbin,ad.adrelid),'')) AS entry
@@ -55,24 +58,43 @@ func (r Runner) defaults() Runner {
 	return r
 }
 
-func (r Runner) ensureHistory(ctx context.Context) error {
-	_, err := r.DB.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS certen_schema_history (
+func ensureHistory(ctx context.Context, db sqlExecutor) error {
+	_, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS public.certen_schema_history (
 version varchar(16) PRIMARY KEY, name text NOT NULL, sha256 char(64) NOT NULL,
 applied_at timestamptz NOT NULL DEFAULT now(), applied_by text NOT NULL, duration_ms bigint NOT NULL)`)
 	return err
 }
 
-func (r Runner) withLock(ctx context.Context, fn func() error) error {
+type sqlExecutor interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func (r Runner) withLock(ctx context.Context, fn func(*sql.Conn) error) error {
 	conn, err := r.DB.Conn(ctx)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
-	if _, err = conn.ExecContext(ctx, "SELECT pg_advisory_lock($1)", advisoryLockID); err != nil {
-		return err
+	deadline := time.Now().Add(r.LockTimeout)
+	for {
+		var locked bool
+		if err = conn.QueryRowContext(ctx, "SELECT pg_try_advisory_lock($1)", advisoryLockID).Scan(&locked); err != nil {
+			return fmt.Errorf("acquire schema advisory lock: %w", err)
+		}
+		if locked {
+			break
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("schema advisory lock timed out after %s", r.LockTimeout)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
 	}
 	defer conn.ExecContext(context.Background(), "SELECT pg_advisory_unlock($1)", advisoryLockID)
-	return fn()
+	return fn(conn)
 }
 
 // Up applies missing migrations atomically, after validating every existing history row's checksum.
@@ -90,12 +112,12 @@ func (r Runner) Up(ctx context.Context, appliedBy string) error {
 			return err
 		}
 	}
-	return r.withLock(ctx, func() error {
-		if err := r.ensureHistory(ctx); err != nil {
+	return r.withLock(ctx, func(conn *sql.Conn) error {
+		if err := ensureHistory(ctx, conn); err != nil {
 			return fmt.Errorf("create schema history: %w", err)
 		}
 		history := map[string]string{}
-		rows, err := r.DB.QueryContext(ctx, "SELECT version, sha256 FROM certen_schema_history")
+		rows, err := conn.QueryContext(ctx, "SELECT version, sha256 FROM public.certen_schema_history")
 		if err != nil {
 			return err
 		}
@@ -110,15 +132,8 @@ func (r Runner) Up(ctx context.Context, appliedBy string) error {
 		if err := rows.Err(); err != nil {
 			return err
 		}
-		known := make(map[string]Migration, len(migrations))
-		for _, migration := range migrations {
-			known[migration.Version] = migration
-		}
-		latest := migrations[len(migrations)-1].Version
-		for version := range history {
-			if _, ok := known[version]; !ok && version <= latest {
-				return fmt.Errorf("unknown schema history version %s at or below catalog version %s", version, latest)
-			}
+		if err := validateHistory(migrations, history, migrations[len(migrations)-1].Version, false); err != nil {
+			return err
 		}
 		for _, m := range migrations {
 			sum := hex.EncodeToString(m.SHA256[:])
@@ -128,23 +143,12 @@ func (r Runner) Up(ctx context.Context, appliedBy string) error {
 				}
 				continue
 			}
-			started := time.Now()
-			tx, err := r.DB.BeginTx(ctx, nil)
-			if err != nil {
+			if isNoTransaction(m) {
+				if err := applyWithoutTransaction(ctx, conn, m, sum, appliedBy, r); err != nil {
+					return err
+				}
+			} else if err := applyInTransaction(ctx, conn, m, sum, appliedBy, r); err != nil {
 				return err
-			}
-			if _, err = tx.ExecContext(ctx, fmt.Sprintf("SET LOCAL lock_timeout = '%dms'; SET LOCAL statement_timeout = '%dms'", r.LockTimeout.Milliseconds(), r.StatementTimeout.Milliseconds())); err == nil {
-				_, err = tx.ExecContext(ctx, string(m.SQL))
-			}
-			if err == nil {
-				_, err = tx.ExecContext(ctx, "INSERT INTO certen_schema_history(version,name,sha256,applied_by,duration_ms) VALUES($1,$2,$3,$4,$5)", m.Version, m.Name, sum, appliedBy, time.Since(started).Milliseconds())
-			}
-			if err != nil {
-				tx.Rollback()
-				return fmt.Errorf("apply migration %s: %w", m.Name, err)
-			}
-			if err = tx.Commit(); err != nil {
-				return fmt.Errorf("commit migration %s: %w", m.Name, err)
 			}
 		}
 		return nil
@@ -154,11 +158,14 @@ func (r Runner) Up(ctx context.Context, appliedBy string) error {
 // Verify checks that all migrations through requiredVersion have been applied with their expected checksum.
 // Newer rows are permitted to support rolling deployments.
 func (r Runner) Verify(ctx context.Context, requiredVersion string) error {
+	if r.DB == nil {
+		return errors.New("schema runner requires a database")
+	}
 	migrations, err := Migrations()
 	if err != nil {
 		return err
 	}
-	rows, err := r.DB.QueryContext(ctx, "SELECT version, sha256 FROM certen_schema_history")
+	rows, err := r.DB.QueryContext(ctx, "SELECT version, sha256 FROM public.certen_schema_history")
 	if err != nil {
 		return fmt.Errorf("schema history unavailable: %w", err)
 	}
@@ -174,13 +181,138 @@ func (r Runner) Verify(ctx context.Context, requiredVersion string) error {
 	if err := rows.Err(); err != nil {
 		return err
 	}
+	if requiredVersion == "" {
+		requiredVersion = migrations[len(migrations)-1].Version
+	}
+	return validateHistory(migrations, history, requiredVersion, true)
+}
+
+// Adopt records an already-existing catalog as the baseline without executing any migration SQL. The caller
+// must supply a fingerprint captured from the approved production-schema copy; an empty value is rejected
+// so adoption can never silently bless an unknown schema.
+func (r Runner) Adopt(ctx context.Context, fingerprint, approvedFingerprint, appliedBy string) error {
+	r = r.defaults()
+	if r.DB == nil {
+		return errors.New("schema runner requires a database")
+	}
+	if err := r.AdoptionPreflight(ctx, fingerprint, approvedFingerprint); err != nil {
+		return err
+	}
+	return r.withLock(ctx, func(conn *sql.Conn) error {
+		var exists bool
+		if err := conn.QueryRowContext(ctx, "SELECT to_regclass('public.certen_schema_history') IS NOT NULL").Scan(&exists); err != nil {
+			return err
+		}
+		if exists {
+			var count int
+			if err := conn.QueryRowContext(ctx, "SELECT count(*) FROM public.certen_schema_history").Scan(&count); err != nil {
+				return err
+			}
+			if count != 0 {
+				return errors.New("schema history is not empty; refusing adoption")
+			}
+		}
+		var legacy bool
+		if err := conn.QueryRowContext(ctx, "SELECT to_regclass('public.schema_migrations') IS NOT NULL").Scan(&legacy); err != nil {
+			return err
+		}
+		if !legacy {
+			return errors.New("legacy schema_migrations table is absent; refusing adoption")
+		}
+		var catalog string
+		err := conn.QueryRowContext(ctx, catalogFingerprintQuery).Scan(&catalog)
+		if err != nil {
+			return fmt.Errorf("read schema catalog: %w", err)
+		}
+		sum := sha256.Sum256([]byte(catalog))
+		observed := hex.EncodeToString(sum[:])
+		if observed != fingerprint {
+			return fmt.Errorf("schema changed during adoption preflight: observed %s, now %s", fingerprint, observed)
+		}
+		if err := ensureHistory(ctx, conn); err != nil {
+			return fmt.Errorf("create schema history: %w", err)
+		}
+		migrations, err := Migrations()
+		if err != nil {
+			return err
+		}
+		baseline := migrations[0]
+		_, err = conn.ExecContext(ctx, "INSERT INTO public.certen_schema_history(version,name,sha256,applied_by,duration_ms) VALUES($1,$2,$3,$4,0)", baseline.Version, baseline.Name, hex.EncodeToString(baseline.SHA256[:]), appliedBy)
+		return err
+	})
+}
+
+// AdoptionPreflight performs every non-mutating adoption check. It is safe to run in deployment
+// automation before a change window; Adopt repeats the checks while holding the schema lock before writing.
+func (r Runner) AdoptionPreflight(ctx context.Context, fingerprint, approvedFingerprint string) error {
+	if r.DB == nil {
+		return errors.New("schema runner requires a database")
+	}
+	if fingerprint == "" || approvedFingerprint == "" {
+		return errors.New("adoption requires both observed and approved schema fingerprints")
+	}
+	if fingerprint != approvedFingerprint {
+		return fmt.Errorf("schema fingerprint mismatch: observed %s, expected %s", fingerprint, approvedFingerprint)
+	}
+	var exists bool
+	if err := r.DB.QueryRowContext(ctx, "SELECT to_regclass('public.certen_schema_history') IS NOT NULL").Scan(&exists); err != nil {
+		return err
+	}
+	if exists {
+		var count int
+		if err := r.DB.QueryRowContext(ctx, "SELECT count(*) FROM public.certen_schema_history").Scan(&count); err != nil {
+			return err
+		}
+		if count != 0 {
+			return errors.New("schema history is not empty; refusing adoption")
+		}
+	}
+	var legacy bool
+	if err := r.DB.QueryRowContext(ctx, "SELECT to_regclass('public.schema_migrations') IS NOT NULL").Scan(&legacy); err != nil {
+		return err
+	}
+	if !legacy {
+		return errors.New("legacy schema_migrations table is absent; refusing adoption")
+	}
+	return nil
+}
+
+func isNoTransaction(m Migration) bool {
+	for _, line := range strings.Split(string(m.SQL), "\n") {
+		trimmed := strings.TrimSpace(strings.ToLower(line))
+		if trimmed == "" {
+			continue
+		}
+		return trimmed == noTransactionMarker
+	}
+	return false
+}
+
+func validateHistory(migrations []Migration, history map[string]string, requiredVersion string, requireAll bool) error {
+	known := make(map[string]Migration, len(migrations))
+	for _, migration := range migrations {
+		known[migration.Version] = migration
+	}
+	for version := range history {
+		if _, ok := known[version]; !ok && version <= requiredVersion {
+			return fmt.Errorf("unknown schema history version %s at or below required catalog version %s", version, requiredVersion)
+		}
+	}
+	seenGap := false
 	for _, m := range migrations {
-		if requiredVersion != "" && m.Version > requiredVersion {
+		if m.Version > requiredVersion {
 			break
 		}
 		actual, ok := history[m.Version]
 		if !ok {
-			return fmt.Errorf("schema is older than required migration %s", m.Version)
+			seenGap = true
+			if requireAll {
+				return fmt.Errorf("schema is older than required migration %s", m.Version)
+			}
+			continue
+		}
+		if seenGap {
+			return fmt.Errorf("schema history has a gap before migration %s", m.Version)
 		}
 		if actual != hex.EncodeToString(m.SHA256[:]) {
 			return fmt.Errorf("migration %s checksum mismatch", m.Name)
@@ -189,40 +321,39 @@ func (r Runner) Verify(ctx context.Context, requiredVersion string) error {
 	return nil
 }
 
-// Adopt records an already-existing catalog as the baseline without executing any migration SQL. The caller
-// must supply a fingerprint captured from the approved production-schema copy; an empty value is rejected
-// so adoption can never silently bless an unknown schema.
-func (r Runner) Adopt(ctx context.Context, fingerprint, approvedFingerprint, appliedBy string) error {
-	if fingerprint == "" || approvedFingerprint == "" {
-		return errors.New("adoption requires both observed and approved schema fingerprints")
+func applyInTransaction(ctx context.Context, conn *sql.Conn, m Migration, sum, appliedBy string, r Runner) error {
+	started := time.Now()
+	tx, err := conn.BeginTx(ctx, nil)
+	if err == nil {
+		_, err = tx.ExecContext(ctx, fmt.Sprintf("SET LOCAL lock_timeout = '%dms'; SET LOCAL statement_timeout = '%dms'", r.LockTimeout.Milliseconds(), r.StatementTimeout.Milliseconds()))
 	}
-	if fingerprint != approvedFingerprint {
-		return fmt.Errorf("schema fingerprint mismatch: observed %s, expected %s", fingerprint, approvedFingerprint)
+	if err == nil {
+		_, err = tx.ExecContext(ctx, string(m.SQL))
 	}
-	return r.withLock(ctx, func() error {
-		if err := r.ensureHistory(ctx); err != nil {
-			return err
-		}
-		var count int
-		if err := r.DB.QueryRowContext(ctx, "SELECT count(*) FROM certen_schema_history").Scan(&count); err != nil {
-			return err
-		}
-		if count != 0 {
-			return errors.New("schema history is not empty; refusing adoption")
-		}
-		var legacy bool
-		if err := r.DB.QueryRowContext(ctx, "SELECT to_regclass('public.schema_migrations') IS NOT NULL").Scan(&legacy); err != nil {
-			return err
-		}
-		if !legacy {
-			return errors.New("legacy schema_migrations table is absent; refusing adoption")
-		}
-		migrations, err := Migrations()
-		if err != nil {
-			return err
-		}
-		baseline := migrations[0]
-		_, err = r.DB.ExecContext(ctx, "INSERT INTO certen_schema_history(version,name,sha256,applied_by,duration_ms) VALUES($1,$2,$3,$4,0)", baseline.Version, baseline.Name, hex.EncodeToString(baseline.SHA256[:]), appliedBy)
-		return err
-	})
+	if err == nil {
+		_, err = tx.ExecContext(ctx, "INSERT INTO public.certen_schema_history(version,name,sha256,applied_by,duration_ms) VALUES($1,$2,$3,$4,$5)", m.Version, m.Name, sum, appliedBy, time.Since(started).Milliseconds())
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("apply migration %s: %w", m.Name, err)
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit migration %s: %w", m.Name, err)
+	}
+	return nil
+}
+
+func applyWithoutTransaction(ctx context.Context, conn *sql.Conn, m Migration, sum, appliedBy string, r Runner) error {
+	started := time.Now()
+	if _, err := conn.ExecContext(ctx, fmt.Sprintf("SET lock_timeout = '%dms'; SET statement_timeout = '%dms'", r.LockTimeout.Milliseconds(), r.StatementTimeout.Milliseconds())); err != nil {
+		return fmt.Errorf("configure migration %s timeouts: %w", m.Name, err)
+	}
+	defer conn.ExecContext(context.Background(), "RESET lock_timeout; RESET statement_timeout")
+	if _, err := conn.ExecContext(ctx, string(m.SQL)); err != nil {
+		return fmt.Errorf("apply non-transactional migration %s: %w", m.Name, err)
+	}
+	if _, err := conn.ExecContext(ctx, "INSERT INTO public.certen_schema_history(version,name,sha256,applied_by,duration_ms) VALUES($1,$2,$3,$4,$5)", m.Version, m.Name, sum, appliedBy, time.Since(started).Milliseconds()); err != nil {
+		return fmt.Errorf("record non-transactional migration %s: %w", m.Name, err)
+	}
+	return nil
 }

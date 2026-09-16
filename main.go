@@ -1071,8 +1071,8 @@ func main() {
 }
 
 func runMigrationCommand(args []string) {
-	if len(args) != 1 || (args[0] != "up" && args[0] != "verify" && args[0] != "fingerprint" && args[0] != "adopt") {
-		log.Fatal("usage: certen-validator migrate <up|verify|fingerprint|adopt>")
+	if len(args) < 1 || len(args) > 2 || (args[0] != "up" && args[0] != "verify" && args[0] != "fingerprint" && args[0] != "adopt") || (len(args) == 2 && (args[0] != "adopt" || args[1] != "--dry-run")) {
+		log.Fatal("usage: certen-validator migrate <up|verify|fingerprint|adopt [--dry-run]>")
 	}
 	cfg, err := config.Load()
 	if err != nil {
@@ -1103,7 +1103,19 @@ func runMigrationCommand(args []string) {
 		var fingerprint string
 		fingerprint, err = runner.Fingerprint(context.Background())
 		if err == nil {
-			err = runner.Adopt(context.Background(), fingerprint, os.Getenv("SCHEMA_FINGERPRINT"), cfg.ValidatorID)
+			var approved string
+			approved, err = schema.ApprovedFingerprint()
+			if configured := os.Getenv("SCHEMA_FINGERPRINT"); err == nil && configured != "" && configured != approved {
+				err = fmt.Errorf("SCHEMA_FINGERPRINT does not match the reviewed catalog fingerprint")
+			}
+			if err != nil {
+				break
+			}
+			if len(args) == 2 {
+				err = runner.AdoptionPreflight(context.Background(), fingerprint, approved)
+			} else {
+				err = runner.Adopt(context.Background(), fingerprint, approved, cfg.ValidatorID)
+			}
 		}
 	}
 	if err != nil {
