@@ -50,6 +50,12 @@ func TestLintRejectsUnsafeMigrationControl(t *testing.T) {
 		{"destructive", "DROP TABLE x;", false},
 		{"approved destructive", "-- schema: destructive-approved\nDROP TABLE x;", true},
 		{"session setting", "SET statement_timeout = '1s';", false},
+		{"set not null on a continuation line", "ALTER TABLE x\n  ALTER COLUMN y SET NOT NULL;", false},
+		{"rename on a continuation line", "ALTER TABLE x\n  RENAME COLUMN y TO z;", false},
+		{"column type change", "ALTER TABLE x ALTER COLUMN y TYPE bigint;", false},
+		{"truncate", "TRUNCATE x;", false},
+		{"additive column", "ALTER TABLE x\n  ADD COLUMN y integer;", true},
+		{"destructive word in a comment only", "-- we never DROP anything here\nALTER TABLE x ADD COLUMN y integer;", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

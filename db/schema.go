@@ -99,7 +99,8 @@ func parseFingerprint(name, source string) (string, error) {
 // Lint rejects transaction control in SQL files. The runner owns transaction boundaries, which prevents
 // the legacy nested-BEGIN/COMMIT failure mode. PL/pgSQL function bodies are intentionally not matched.
 func Lint(m Migration) error {
-	destructive, approved := false, false
+	approved := false
+	var code strings.Builder
 	for _, line := range strings.Split(string(m.SQL), "\n") {
 		trimmed := strings.TrimSpace(line)
 		upper := strings.ToUpper(trimmed)
@@ -112,15 +113,37 @@ func Lint(m Migration) error {
 		if m.Version != "00000" && (strings.HasPrefix(upper, "SET ") || strings.HasPrefix(upper, "RESET ")) {
 			return fmt.Errorf("%s changes session settings; configure timeouts in the runner instead", m.Name)
 		}
-		if strings.HasPrefix(upper, "DROP ") || strings.HasPrefix(upper, "ALTER TABLE ") && (strings.Contains(upper, " DROP ") || strings.Contains(upper, " RENAME ") || strings.Contains(upper, " SET NOT NULL")) {
-			destructive = true
-		}
 		if strings.Contains(trimmed, "schema: destructive-approved") {
 			approved = true
 		}
+		if comment := strings.Index(upper, "--"); comment >= 0 {
+			upper = upper[:comment]
+		}
+		code.WriteString(upper)
+		code.WriteString(" ")
 	}
-	if destructive && !approved {
-		return fmt.Errorf("%s contains destructive DDL without -- schema: destructive-approved", m.Name)
+	// Destructive DDL is judged per statement, not per line: "ALTER TABLE t" on one line and
+	// "ALTER COLUMN c SET NOT NULL" on the next is the same statement.
+	for _, statement := range strings.Split(code.String(), ";") {
+		if isDestructive(strings.Join(strings.Fields(statement), " ")) && !approved {
+			return fmt.Errorf("%s contains destructive DDL without -- schema: destructive-approved", m.Name)
+		}
 	}
 	return nil
+}
+
+func isDestructive(statement string) bool {
+	if strings.HasPrefix(statement, "DROP ") || strings.HasPrefix(statement, "TRUNCATE ") {
+		return true
+	}
+	if !strings.HasPrefix(statement, "ALTER TABLE ") && !strings.HasPrefix(statement, "ALTER TYPE ") {
+		return false
+	}
+	padded := statement + " "
+	for _, clause := range []string{" DROP ", " RENAME ", " SET NOT NULL ", " TYPE "} {
+		if strings.Contains(padded, clause) {
+			return true
+		}
+	}
+	return false
 }
