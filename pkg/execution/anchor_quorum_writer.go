@@ -25,10 +25,14 @@ type AnchorQuorumStore interface {
 // off and returns, exactly like the consensus persister: a bounded queue, retries with backoff, and
 // counters an operator can alert on.
 //
-// A refused hand-off is not silently lost — it is counted and logged, and the chain remains the source of
-// truth. Re-deriving a dropped anchor from the chain is what `backfill anchor-quorum` is for.
+// Nothing proven is dropped. Every way the in-memory hand-off can fail — a full queue, a database that is
+// down when the process is told to stop, records still queued at shutdown — spills to a durable outbox and
+// is replayed by AnchorQuorumReconciler once the database is available again. Only a failure to write the
+// outbox itself is counted as dropped, and even then the chain still holds the evidence and
+// `anchorquorumbackfill` can rebuild the row.
 type AnchorQuorumWriter struct {
 	store  AnchorQuorumStore
+	outbox AnchorQuorumOutbox
 	logf   func(string, ...interface{})
 	queue  chan *database.AnchorQuorumRecord
 	cancel context.CancelFunc
@@ -40,6 +44,7 @@ type AnchorQuorumWriter struct {
 	conflicts atomic.Uint64
 	dropped   atomic.Uint64
 	failed    atomic.Uint64
+	spilled   atomic.Uint64
 
 	retryBase   time.Duration
 	retryMax    time.Duration
@@ -83,6 +88,10 @@ func (w *AnchorQuorumWriter) Stop() {
 	})
 }
 
+// SetOutbox installs the durable spill store. Without one the writer still works, but a full queue or a
+// shutdown mid-outage loses the evidence to the chain, recoverable only by running the backfill by hand.
+func (w *AnchorQuorumWriter) SetOutbox(o AnchorQuorumOutbox) { w.outbox = o }
+
 // Hook returns the AnchorAttestedHook to install on the attestor.
 func (w *AnchorQuorumWriter) Hook() AnchorAttestedHook {
 	return func(_ context.Context, ev *AnchorQuorumEvidence) {
@@ -93,12 +102,33 @@ func (w *AnchorQuorumWriter) Hook() AnchorAttestedHook {
 		select {
 		case w.queue <- rec:
 		default:
-			n := w.dropped.Add(1)
-			metrics.RecordAnchorQuorumDropped()
-			w.logf("⚠️ [ANCHOR-QUORUM] write queue full; evidence for chain %d bundle %s not queued "+
-				"(dropped=%d) — recoverable with `backfill anchor-quorum`", rec.ChainID, rec.BundleID, n)
+			// Saturated, which means the database is not keeping up. Spilling to disk keeps the proving
+			// path non-blocking without paying for it in lost evidence.
+			w.spill(rec, "write queue full")
 		}
 	}
+}
+
+// spill persists a record the in-memory path could not take. Only a failure HERE is a real drop.
+func (w *AnchorQuorumWriter) spill(rec *database.AnchorQuorumRecord, why string) {
+	if w.outbox != nil {
+		err := w.outbox.Put(rec)
+		if err == nil {
+			n := w.spilled.Add(1)
+			w.logf("[ANCHOR-QUORUM] %s; evidence for chain=%d bundle=%s held in the outbox "+
+				"(spilled=%d) and will be recorded when the database accepts it", why, rec.ChainID, rec.BundleID, n)
+			if depth, dErr := w.outbox.Depth(); dErr == nil {
+				metrics.SetAnchorQuorumOutboxDepth(depth)
+			}
+			return
+		}
+		w.logf("⚠️ [ANCHOR-QUORUM] outbox refused evidence for chain=%d bundle=%s: %v",
+			rec.ChainID, rec.BundleID, err)
+	}
+	n := w.dropped.Add(1)
+	metrics.RecordAnchorQuorumDropped()
+	w.logf("⚠️ [ANCHOR-QUORUM] %s and no durable outbox took it; evidence for chain %d bundle %s "+
+		"not retained (dropped=%d) — recoverable with `anchorquorumbackfill`", why, rec.ChainID, rec.BundleID, n)
 }
 
 func (w *AnchorQuorumWriter) run(ctx context.Context) {
@@ -106,11 +136,28 @@ func (w *AnchorQuorumWriter) run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			w.drainToOutbox("writer stopping")
 			return
 		case rec := <-w.queue:
 			if !w.write(ctx, rec) {
+				// write() already spilled the record it was holding; everything still queued behind it
+				// would otherwise die with this goroutine.
+				w.drainToOutbox("writer stopping")
 				return
 			}
+		}
+	}
+}
+
+// drainToOutbox empties whatever is still queued into durable storage. Called once, on the way out, so a
+// shutdown during a database outage does not discard anchors that were already proven.
+func (w *AnchorQuorumWriter) drainToOutbox(why string) {
+	for {
+		select {
+		case rec := <-w.queue:
+			w.spill(rec, why)
+		default:
+			return
 		}
 	}
 }
@@ -147,6 +194,9 @@ func (w *AnchorQuorumWriter) write(ctx context.Context, rec *database.AnchorQuor
 		}
 
 		if ctx.Err() != nil {
+			// Shutting down with the write still failing. The evidence is proven and unrecorded, which is
+			// precisely what the outbox exists for.
+			w.spill(rec, "writer stopping with the write unfinished")
 			return false
 		}
 		w.failed.Add(1)
@@ -154,6 +204,7 @@ func (w *AnchorQuorumWriter) write(ctx context.Context, rec *database.AnchorQuor
 		w.logf("⚠️ [ANCHOR-QUORUM] could not record chain=%d bundle=%s (attempt %d): %v",
 			rec.ChainID, rec.BundleID, attempt, err)
 		if !w.sleep(ctx, attempt) {
+			w.spill(rec, "writer stopping with the write unfinished")
 			return false
 		}
 	}
@@ -181,6 +232,10 @@ func (w *AnchorQuorumWriter) sleep(ctx context.Context, attempt int) bool {
 func (w *AnchorQuorumWriter) Stats() (written, duplicate, conflicts, dropped, failed uint64) {
 	return w.written.Load(), w.duplicate.Load(), w.conflicts.Load(), w.dropped.Load(), w.failed.Load()
 }
+
+// Spilled counts records handed to the outbox rather than written directly. Not a loss: the reconciler
+// records them. Distinct from dropped, which is.
+func (w *AnchorQuorumWriter) Spilled() uint64 { return w.spilled.Load() }
 
 // AnchorQuorumRecordFrom converts proven evidence into the row shape, without inventing anything: every
 // field is a re-encoding of what prove() verified and confirmed.

@@ -10,7 +10,6 @@ package anchor
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"log"
@@ -23,6 +22,7 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
 
 	"github.com/certen/independant-validator/pkg/ethrpc"
@@ -284,12 +284,18 @@ func init() {
 	TopicThresholdUpdated = computeEventSignatureHash("ThresholdUpdated(uint256,uint256)")
 }
 
-// computeEventSignatureHash computes Keccak256 hash of an event signature
+// computeEventSignatureHash computes the Keccak256 topic hash of an event signature.
+//
+// It used to return sha256, with a comment saying Ethereum uses Keccak256 and that the real value would be
+// computed "at runtime for accuracy". Nothing ever did. Every constant above was therefore a hash of the
+// right string under the wrong function — a value that matches no log ever emitted by any Ethereum node.
+//
+// That was survivable only by accident: parseLog dispatches on the ABI's own event IDs, which go-ethereum
+// derives with Keccak256 correctly, and the one place these constants are used — the topic filter in
+// fetchLogs — is reached only when EnabledEvents is non-empty, which no caller sets. The first caller to
+// narrow the watcher to the events it cares about would have silently received none.
 func computeEventSignatureHash(signature string) common.Hash {
-	hash := sha256.Sum256([]byte(signature))
-	// Note: Ethereum uses Keccak256, not SHA256
-	// We'll use go-ethereum's crypto.Keccak256Hash at runtime for accuracy
-	return common.BytesToHash(hash[:])
+	return crypto.Keccak256Hash([]byte(signature))
 }
 
 // =============================================================================

@@ -21,29 +21,42 @@
 //
 // # CANDIDATES
 //
-// One verify transaction per line, "<chainID>,<txHash>", '#' comments ignored:
+// By default the tool finds its own work: -chains scans each anchor contract's ProofExecuted logs and
+// keeps the anchors this database has no canonical row for. That is the chain stating which anchors it
+// proved, so nothing has to be exported by hand and nothing can be missed because another service failed
+// to record it.
+//
+// The older input is still accepted. -candidates reads one verify transaction per line,
+// "<chainID>,<txHash>", '#' comments ignored:
 //
 //	84532,0x9e4f…
 //	11155111,0x51a1…
 //
-// The gateway holds the list: the verify leg of every batch was reported as a cost event, so
+// which the gateway can export with
 //
 //	SELECT chain_id, tx_hash FROM cost_events WHERE leg = 'verify' ORDER BY created_at;
 //
-// exports it. Bundles that already have a canonical row are left exactly as they are — live evidence
-// carries the member list and the aggregate, which a backfill cannot recover, so it never overwrites.
+// Use it to re-examine a specific set; use -chains for everything else. Bundles that already have a
+// canonical row are left exactly as they are — live evidence carries the member list and the aggregate,
+// which a backfill cannot recover, so it never overwrites.
 //
 // # RUNNING IT
 //
 // Where the validator runs, with DATABASE_URL, the per-chain RPC configuration and the
 // CERTEN_ANCHOR_V8_<chainId> addresses the batch path uses.
 //
-//	anchorquorumbackfill -candidates verify-txs.txt                 # DRY RUN — the default
-//	anchorquorumbackfill -candidates verify-txs.txt -limit 5 -write # write the first five
-//	anchorquorumbackfill -candidates verify-txs.txt -write          # the full run
+//	anchorquorumbackfill -chains 84532                              # DRY RUN over the recent range
+//	anchorquorumbackfill -chains 84532,11155111 -lookback 200000    # a wider window
+//	anchorquorumbackfill -chains 84532 -from-block N -to-block M    # an exact range
+//	anchorquorumbackfill -chains 84532 -write                       # write what it found
+//	anchorquorumbackfill -candidates verify-txs.txt -write          # the explicit list instead
 //
 // Writing requires -write. A dry run reads the chain, prints exactly what it would write and every
 // refusal with its reason, and touches nothing.
+//
+// Scanning needs an endpoint that serves eth_getLogs over the range asked for. A window a provider
+// refuses is reported as an error and fails the run: a refused window returned as "no anchors here" is
+// indistinguishable from a healthy chain, which is the one wrong answer this tool must never give.
 package main
 
 import (
@@ -67,21 +80,19 @@ import (
 )
 
 func main() {
-	candidatesPath := flag.String("candidates", "", "file of '<chainID>,<txHash>' verify transactions (required)")
+	candidatesPath := flag.String("candidates", "", "file of '<chainID>,<txHash>' verify transactions; omit to discover from the chain")
+	chainList := flag.String("chains", "", "comma-separated chain ids to scan for anchors with no canonical row")
+	fromBlock := flag.Uint64("from-block", 0, "first block to scan (0 = derive from -lookback)")
+	toBlock := flag.Uint64("to-block", 0, "last block to scan (0 = the chain head)")
+	lookback := flag.Uint64("lookback", 0, "blocks to scan back from the head when -from-block is unset (0 = 50,000)")
+	window := flag.Uint64("window", 0, "eth_getLogs block window (0 = 2,000)")
 	write := flag.Bool("write", false, "actually write rows; without it the run is a dry run")
 	limit := flag.Int("limit", 0, "stop after this many candidates (0 = all)")
 	pause := flag.Duration("pause", 250*time.Millisecond, "delay between candidates, to spare shared RPC endpoints")
 	flag.Parse()
 
-	if *candidatesPath == "" {
-		log.Fatal("-candidates is required; see the package comment for the export query")
-	}
-	candidates, err := readCandidates(*candidatesPath)
-	if err != nil {
-		log.Fatalf("reading candidates: %v", err)
-	}
-	if len(candidates) == 0 {
-		log.Fatalf("%s lists no candidates", *candidatesPath)
+	if (*candidatesPath == "") == (*chainList == "") {
+		log.Fatal("give exactly one of -chains (discover from the chain) or -candidates (an explicit list)")
 	}
 
 	dsn := os.Getenv("DATABASE_URL")
@@ -93,6 +104,27 @@ func main() {
 		log.Fatalf("connecting to database: %v", err)
 	}
 	defer client.Close()
+	repo := database.NewBatchRepository(client)
+
+	// Which chains to open clients for. With an explicit list it is the chains that list names; when
+	// discovering it is the chains asked for.
+	var candidates []execution.BackfillCandidate
+	var chainIDs []int64
+	if *candidatesPath != "" {
+		candidates, err = readCandidates(*candidatesPath)
+		if err != nil {
+			log.Fatalf("reading candidates: %v", err)
+		}
+		if len(candidates) == 0 {
+			log.Fatalf("%s lists no candidates", *candidatesPath)
+		}
+		chainIDs = chainIDsOf(candidates)
+	} else {
+		chainIDs, err = parseChainIDs(*chainList)
+		if err != nil {
+			log.Fatalf("reading -chains: %v", err)
+		}
+	}
 
 	// The same environment-based chain configuration the validator itself uses, so the backfill reads
 	// the anchors the batch path writes to and no others.
@@ -100,11 +132,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("loading anchor configuration: %v", err)
 	}
-	// READ-ONLY. This tool issues eth_call, eth_getTransactionByHash, eth_getTransactionReceipt and
-	// eth_getBlockByNumber, and nothing else. ReadOnlyChains cannot sign because it holds nothing to sign
-	// with, so no ETH_PRIVATE_KEY is read and none is needed — earlier versions went through the transact
-	// manager and had to be handed a throwaway key just to construct.
-	resolver, err := execution.NewReadOnlyChainsFromEnv(anchorCfg, chainIDsOf(candidates))
+	// READ-ONLY. This tool issues eth_call, eth_getLogs, eth_getTransactionByHash,
+	// eth_getTransactionReceipt and eth_getBlockByNumber, and nothing else. ReadOnlyChains cannot sign
+	// because it holds nothing to sign with, so no ETH_PRIVATE_KEY is read and none is needed — earlier
+	// versions went through the transact manager and had to be handed a throwaway key just to construct.
+	resolver, err := execution.NewReadOnlyChainsFromEnv(anchorCfg, chainIDs)
 	if err != nil {
 		log.Fatalf("resolving chains: %v", err)
 	}
@@ -113,16 +145,52 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
+	reader := execution.NewChainBackfillReader(resolver)
+
 	mode := "DRY RUN — nothing will be written"
 	if *write {
 		mode = "WRITING"
 	}
-	log.Printf("[BACKFILL] %s: %d candidate(s) from %s", mode, len(candidates), *candidatesPath)
+
+	if *candidatesPath != "" {
+		log.Printf("[BACKFILL] %s: %d candidate(s) from %s", mode, len(candidates), *candidatesPath)
+	} else {
+		disc, dErr := execution.DiscoverAnchorQuorumCandidates(ctx, reader,
+			func(c context.Context, chainID int64, bundleID string) (bool, error) {
+				row, rErr := repo.GetAnchorQuorum(c, chainID, bundleID)
+				return row != nil, rErr
+			},
+			execution.DiscoverOptions{
+				Chains:         chainIDs,
+				FromBlock:      *fromBlock,
+				ToBlock:        *toBlock,
+				LookbackBlocks: *lookback,
+				WindowSize:     *window,
+				Pause:          *pause,
+				Logf:           log.Printf,
+			})
+		if dErr != nil {
+			// Never degrade to "nothing to do": a scan that could not read its range has established
+			// nothing, and treating that as an empty result is how a backfill silently skips everything.
+			log.Fatalf("discovering candidates: %v", dErr)
+		}
+		log.Printf("[BACKFILL] discovery: %d anchor(s) proven on-chain, %d already canonical, %d to examine",
+			disc.ProvenOnChain, disc.AlreadyCanonical, len(disc.Candidates))
+		for chainID, to := range disc.ScannedTo {
+			log.Printf("[BACKFILL] chain=%d scanned through block %d", chainID, to)
+		}
+		if len(disc.Candidates) == 0 {
+			log.Printf("[BACKFILL] every anchor proven in this range already has a canonical row; nothing to do")
+			return
+		}
+		candidates = disc.Candidates
+		log.Printf("[BACKFILL] %s: %d candidate(s) discovered from the chain", mode, len(candidates))
+	}
 
 	rep, err := execution.RunAnchorQuorumBackfill(
 		ctx,
-		execution.NewChainBackfillReader(resolver),
-		database.NewBatchRepository(client),
+		reader,
+		repo,
 		candidates,
 		execution.AnchorQuorumBackfillOptions{
 			DryRun: !*write,
@@ -191,6 +259,32 @@ func readCandidates(path string) ([]execution.BackfillCandidate, error) {
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
+	}
+	return out, nil
+}
+
+// parseChainIDs reads "84532,11155111". A malformed entry fails the run rather than being skipped: a scan
+// that quietly drops a chain reports "nothing to backfill" for it.
+func parseChainIDs(s string) ([]int64, error) {
+	seen := map[int64]bool{}
+	var out []int64
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		id, err := strconv.ParseInt(part, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("%q is not a chain id", part)
+		}
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("no chain ids given")
 	}
 	return out, nil
 }

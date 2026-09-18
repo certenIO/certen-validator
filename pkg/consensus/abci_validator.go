@@ -1161,6 +1161,7 @@ func (app *ValidatorApp) GetStateInfo() (height int64, appHash []byte, blockCoun
 // ==============================================
 //
 // Commit hands each block's accepted ValidatorBlocks to consensusPersister (consensus_persistence.go),
-// which writes them off the consensus path. Phase 5 anchor_batches fields are owned by the batch
-// ConsensusCoordinator. The previous in-Commit implementations (persistConsensusData,
-// updatePhase5AfterCommit) are removed; see consensus_persistence.go for why.
+// which writes them off the consensus path. Phase 5 anchor_batches fields are owned by
+// execution.BatchQuorumAttestor, which fires its anchor-attested hook once the chain has confirmed the
+// proof, and execution.AnchorQuorumWriter, which records it. The previous in-Commit implementations
+// (persistConsensusData, updatePhase5AfterCommit) are removed; see consensus_persistence.go for why.

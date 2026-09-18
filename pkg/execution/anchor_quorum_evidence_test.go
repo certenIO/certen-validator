@@ -153,7 +153,9 @@ type fakeQuorumStore struct {
 	records  []*database.AnchorQuorumRecord
 	failN    int
 	conflict bool
-	gate     chan struct{}
+	// alreadyHeld reports the row as present without writing it — what every validator but the first sees.
+	alreadyHeld bool
+	gate        chan struct{}
 }
 
 func (f *fakeQuorumStore) RecordAnchorQuorum(ctx context.Context, rec *database.AnchorQuorumRecord) (bool, error) {
@@ -169,6 +171,9 @@ func (f *fakeQuorumStore) RecordAnchorQuorum(ctx context.Context, rec *database.
 	f.calls++
 	if f.conflict {
 		return false, &database.AnchorQuorumConflict{ChainID: rec.ChainID, BundleID: rec.BundleID}
+	}
+	if f.alreadyHeld {
+		return false, nil
 	}
 	if f.failN > 0 {
 		f.failN--
