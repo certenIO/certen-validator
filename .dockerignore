@@ -39,3 +39,29 @@ Thumbs.db
 
 # Go
 vendor/
+
+# ── Secrets and runtime state: never part of a build ──────────────────────────────────────────────
+#
+# THE ONE THAT MATTERS: .env.shared holds DATABASE_URL (with the password) and ETH_PRIVATE_KEY, and the
+# existing `.env` / `.env.local` rules did NOT match it. It was therefore sent to the daemon as build
+# context and written into the builder stage on every build. The shipped image is clean — the production
+# stage copies only named artifacts — but a credential has no business in a build context or a layer
+# cache, and "it does not reach the final image" is a property of the current Dockerfile, not a guarantee.
+#
+# The rest below are tidiness, and the honest measurement says so. Measured 2026-09-18 on the fleet host:
+# the context is 742 MB, of which bls_zk_keys_bls12381_v2 is 344 MB and bls_zk_keys is 243 MB — both
+# REQUIRED, both COPYed out of the builder into the final image. data/ is 1.7 MB and had zero files
+# modified in a two-minute window, because live validator state lives in Docker volumes
+# (validator1_data:/app/data), not in this directory. Excluding it neither shrinks the context
+# meaningfully nor stabilises the cache; it is simply correct that runtime state is not a build input.
+#
+# NOT excluded, deliberately: bls_zk_keys/ and bls_zk_keys_bls12381*/ are COPYed out of the builder into
+# the final image (Dockerfile ~line 130). Excluding them produces an image that cannot prove anything.
+data/
+bft-keys/
+.env.shared
+.env.shared.*
+*.bak
+*.bak[0-9]
+*.bak-*
+*.bak.*
