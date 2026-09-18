@@ -26,8 +26,9 @@ package consensus
 //     hand-off queue is full, the database is down, or the process restarts, the writer rebuilds the
 //     missing heights from the CometBFT block store and resumes from the watermark. A height the block
 //     store no longer holds is logged as a gap; nothing is invented.
-//   - Phase 5 (anchor_batches quorum fields) is not written here: it belongs to the batch
-//     ConsensusCoordinator, which holds the real attestation data.
+//   - Phase 5 (anchor_batches quorum fields) is not written here: it belongs to
+//     execution.BatchQuorumAttestor, which holds the real attestation data and hands it to
+//     execution.AnchorQuorumWriter only once the chain has confirmed the proof.
 
 import (
 	"context"

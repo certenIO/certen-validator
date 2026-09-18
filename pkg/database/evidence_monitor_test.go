@@ -56,13 +56,16 @@ func TestEvidenceChecksSeeASettledIntentWithNoCanonicalRow(t *testing.T) {
 			"with no canonical anchor", after.SettledWithoutCanonicalRow, before.SettledWithoutCanonicalRow+1)
 	}
 
-	// Give the same intent a canonical row and it must stop counting.
+	// Give the same intent a canonical row and it must stop counting. The bundle id has to be distinct
+	// per run: the test database persists between runs and (chain_id, bundle_id) is unique, so a fixed
+	// id passes once and then collides with its own first run for ever after.
 	canonical := uuid.New()
 	if _, err := testDB.ExecContext(ctx, `
 		INSERT INTO anchor_batches (id, batch_type, status, merkle_root, transaction_count, tx_count,
 		                            chain_id, bundle_id, created_at, updated_at)
 		VALUES ($1,'on_demand','confirmed',$2,1,1,84532,$3,NOW(),NOW())`,
-		canonical, []byte{0xbb}, "0x"+strings.Repeat("ab", 32)); err != nil {
+		canonical, []byte{0xbb},
+		"0x"+strings.ReplaceAll(uuid.NewString(), "-", "")+strings.Repeat("0", 32)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := testDB.ExecContext(ctx, `
