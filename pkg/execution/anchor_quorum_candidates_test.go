@@ -337,3 +337,26 @@ func TestDiscoveryIsOrderedStably(t *testing.T) {
 		}
 	}
 }
+
+// A bundle id names which anchor is being talked about. A lenient parse would address a different anchor
+// and report it as never proven.
+func TestParseBundleIDIsStrict(t *testing.T) {
+	full := strings.Repeat("ab", 32)
+	for _, ok := range []string{"0x" + full, "0X" + full, full, "  0x" + full + "  "} {
+		got, err := ParseBundleID(ok)
+		if err != nil {
+			t.Fatalf("ParseBundleID(%q) = %v", ok, err)
+		}
+		if hexPrefixed(got[:]) != "0x"+full {
+			t.Fatalf("ParseBundleID(%q) = %s", ok, hexPrefixed(got[:]))
+		}
+	}
+	for _, bad := range []string{
+		"", "0x", "0xab", strings.Repeat("ab", 31), strings.Repeat("ab", 33),
+		"0x" + strings.Repeat("zz", 32),
+	} {
+		if _, err := ParseBundleID(bad); err == nil {
+			t.Fatalf("ParseBundleID accepted %q", bad)
+		}
+	}
+}

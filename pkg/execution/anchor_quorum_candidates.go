@@ -6,8 +6,10 @@ package execution
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -29,6 +31,26 @@ type AnchorLogScanner interface {
 	ScanProofExecuted(ctx context.Context, chainID int64, fromBlock, toBlock uint64) ([]ProofExecutedLog, error)
 	// LatestBlock reports the head this endpoint will serve.
 	LatestBlock(ctx context.Context, chainID int64) (uint64, error)
+}
+
+// ParseBundleID turns the stored "0x…" form back into the 32 bytes the contract keys on.
+//
+// Strict about length: a short value silently left-padded would address a DIFFERENT anchor, and read as
+// "this bundle was never proven" rather than as the typo it is.
+func ParseBundleID(s string) ([32]byte, error) {
+	var out [32]byte
+	trimmed := strings.TrimSpace(s)
+	trimmed = strings.TrimPrefix(strings.TrimPrefix(trimmed, "0x"), "0X")
+	if len(trimmed) != 64 {
+		return out, fmt.Errorf("%q is not a bundle id: expected 32 bytes of hex, got %d hex digit(s)",
+			s, len(trimmed))
+	}
+	raw, err := hex.DecodeString(trimmed)
+	if err != nil {
+		return out, fmt.Errorf("%q is not a bundle id: %w", s, err)
+	}
+	copy(out[:], raw)
+	return out, nil
 }
 
 // DiscoverOptions bounds one discovery run.
