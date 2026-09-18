@@ -2379,10 +2379,30 @@ func startValidator(
 	// PHASE 5: Wire batch system to intent discovery for PostgreSQL persistence
 	// This enables routing intents based on proofClass (on_demand vs on_cadence)
 	if batchComponents != nil {
-		intentDiscovery.SetBatchSystem(batchComponents.Collector, batchComponents.OnDemandHandler)
-		log.Printf("✅ [Phase 5] Batch system wired to intent discovery:")
-		log.Printf("   - on_cadence intents → BatchCollector → ~$0.05/proof")
-		log.Printf("   - on_demand intents → OnDemandHandler → ~$0.25/proof")
+		// THE RETIRED SHADOW PIPELINE.
+		//
+		// This wiring routes every intent into the pre-2026-09 batch path, which writes one anchor_batches
+		// row PER VALIDATOR with a merkle_root computed locally over pending blobs — a root that is never
+		// published anywhere. Seven rows per intent, each disagreeing with the anchor actually on chain.
+		// Reading one of them is what produced the live claim that root d2d24ab3… was in transaction
+		// 0x9e4ff6ab…, which settled a different root entirely.
+		//
+		// The canonical path replaced it: one row per (chain_id, bundle_id), written from the quorum the
+		// chain executed, carrying the Accumulate transaction and the settled leg. Every reader now filters
+		// on bundle_id IS NOT NULL, so the shadow rows are already ignored — they are simply still being
+		// manufactured, on every transaction.
+		//
+		// Default OFF. LEGACY_BATCH_PIPELINE=on restores it for one release, because turning off a live
+		// write path deserves a way back that does not need a rebuild. The flag and this block go together
+		// once a soak confirms nothing reads the rows.
+		if os.Getenv("LEGACY_BATCH_PIPELINE") == "on" {
+			intentDiscovery.SetBatchSystem(batchComponents.Collector, batchComponents.OnDemandHandler)
+			log.Printf("⚠️ [Phase 5] LEGACY batch pipeline ENABLED (LEGACY_BATCH_PIPELINE=on): every intent "+
+				"will also write %d per-validator shadow anchor rows whose root is never published", 7)
+		} else {
+			log.Printf("✅ [Phase 5] Legacy shadow batch pipeline retired; anchors are recorded only as " +
+				"canonical rows keyed by (chain_id, bundle_id)")
+		}
 
 		// Wire repositories for intent lifecycle tracking
 		intentDiscovery.SetRepositories(batchComponents.Repos)
