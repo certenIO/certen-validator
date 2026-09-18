@@ -6,3 +6,15 @@
 *.go text eol=lf
 go.mod text eol=lf
 go.sum text eol=lf
+
+# Schema migrations are HASHED, so their bytes are part of the contract.
+#
+# db/schema.go embeds migrations/*.sql and records sha256(file) in certen_schema_history; Verify then
+# re-hashes the embedded bytes and compares. A CRLF checkout therefore produces a binary whose baseline
+# hash differs from the one a Linux-built binary wrote, and that binary REFUSES to start against a
+# perfectly good production database — reporting "checksum mismatch", which reads like corruption.
+#
+# Observed 2026-09-18 while recovering a fleet outage: a Windows-built recovery tool computed
+# a6d06c0b… for 00000_baseline.sql where production held dacf9261…, the LF hash of the same file.
+db/migrations/*.sql text eol=lf
+db/*.fingerprint text eol=lf
