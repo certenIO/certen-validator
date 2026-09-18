@@ -155,6 +155,39 @@ func TestARequestNamingTheAccumulateTransactionIDIsCompleted(t *testing.T) {
 	}
 }
 
+// Production had more requests in flight than one page, the first page all still waiting, and the
+// requests behind them already proven: a pass that read only the first page never settled them.
+func TestAPassSettlesRequestsBeyondTheFirstPage(t *testing.T) {
+	db, repos := openDB(t)
+	ctx := context.Background()
+	now := time.Now()
+	for i := 0; i < 5; i++ {
+		waiting := newRequest(t, db, repos, &database.NewProofRequest{
+			AccumTxHash: strings.ReplaceAll(uuid.NewString()+uuid.NewString(), "-", ""), RequestType: database.RequestTypeOnDemand,
+		})
+		if err := repos.Requests.MarkProcessingAt(ctx, waiting.RequestID, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hash := strings.ReplaceAll(uuid.NewString()+uuid.NewString(), "-", "")
+	proven := newRequest(t, db, repos, &database.NewProofRequest{
+		AccumTxHash: "acc://" + hash + "@pages.acme/data", RequestType: database.RequestTypeOnDemand,
+	})
+	if err := repos.Requests.MarkProcessingAt(ctx, proven.RequestID, now); err != nil {
+		t.Fatal(err)
+	}
+	artifact := newArtifact(t, db, repos, hash, "acc://pages.acme/data")
+
+	f, err := New(repos, Config{ValidatorID: "requests-test", Now: func() time.Time { return now }, BatchSize: 2, OnDemandDeadline: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.RunOnce(ctx)
+	if got := getRequest(t, repos, proven.RequestID); got.Status != database.RequestStatusCompleted || got.ProofID.UUID != artifact.ProofID {
+		t.Fatalf("a proven request behind a full page of waiting ones was not settled: %+v", got)
+	}
+}
+
 func TestARequestWhoseTransactionIsBatchedIsMarkedBatched(t *testing.T) {
 	db, repos := openDB(t)
 	ctx := context.Background()

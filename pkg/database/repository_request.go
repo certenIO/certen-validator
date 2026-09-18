@@ -35,10 +35,14 @@ const proofRequestColumns = `
 	priority, status, batch_id, proof_id, api_key_id, callback_url, created_at,
 	processed_at, completed_at, requester_id, error_message, retry_count`
 
-// priorityOrder sorts urgent work first and, within a priority, the oldest request first.
+// priorityRanks maps a priority to its sort rank; it follows a CASE operand.
+const priorityRanks = ` WHEN 'urgent' THEN 1 WHEN 'high' THEN 2 WHEN 'normal' THEN 3 WHEN 'low' THEN 4 ELSE 5 END`
+
+// priorityOrder sorts urgent work first and, within a priority, the oldest request first. The request id
+// breaks ties, so the order is total and a page boundary is a position.
 const priorityOrder = `
-	CASE priority WHEN 'urgent' THEN 1 WHEN 'high' THEN 2 WHEN 'normal' THEN 3 WHEN 'low' THEN 4 ELSE 5 END,
-	created_at ASC`
+	CASE priority` + priorityRanks + `,
+	created_at ASC, request_id ASC`
 
 func scanProofRequest(scan func(...any) error) (*ProofRequest, error) {
 	request := &ProofRequest{}
@@ -151,6 +155,18 @@ func (r *RequestRepository) GetPendingOnCadenceRequests(ctx context.Context, lim
 // GetProcessingRequests retrieves requests that have been picked up and are awaiting their proof
 func (r *RequestRepository) GetProcessingRequests(ctx context.Context, limit int) ([]*ProofRequest, error) {
 	return r.getMany(ctx, "processing requests", `WHERE status IN ('processing', 'batched') ORDER BY `+priorityOrder+` LIMIT $1`, limit)
+}
+
+// GetProcessingRequestsAfter returns the page of in-flight requests that follows `after` in priority order
+// (the first page when after is nil). A pass over in-flight requests leaves most of them in the set, so it
+// must page by position: re-reading the first page by LIMIT alone never reaches the requests behind it.
+func (r *RequestRepository) GetProcessingRequestsAfter(ctx context.Context, after *ProofRequest, limit int) ([]*ProofRequest, error) {
+	if after == nil {
+		return r.GetProcessingRequests(ctx, limit)
+	}
+	return r.getMany(ctx, "processing requests", `WHERE status IN ('processing', 'batched')
+		AND (CASE priority`+priorityRanks+`, created_at, request_id) > (CASE $1::text`+priorityRanks+`, $2::timestamptz, $3::uuid)
+		ORDER BY `+priorityOrder+` LIMIT $4`, string(after.Priority), after.RequestedAt, after.RequestID, limit)
 }
 
 // GetRequestsByBatch retrieves all requests assigned to a batch

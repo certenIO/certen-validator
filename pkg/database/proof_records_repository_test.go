@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 )
 
 func requireTestDB(t *testing.T) {
@@ -683,6 +684,80 @@ func TestProofRequestLifecycle(t *testing.T) {
 	}
 	if _, err := requests.CreateRequest(ctx, &NewProofRequest{RequestType: RequestTypeOnDemand}); err == nil {
 		t.Fatal("a request with no target was created")
+	}
+}
+
+// Paging through in-flight requests visits each exactly once, in priority order, including requests that
+// share a priority and a creation time.
+func TestProcessingRequestsPageByPosition(t *testing.T) {
+	requireTestDB(t)
+	ctx := context.Background()
+	requests := NewRequestRepository(NewClientFromDB(testDB))
+	mine := map[uuid.UUID]int{}
+	var want []uuid.UUID
+	for _, priority := range []RequestPriority{PriorityLow, PriorityUrgent, PriorityNormal, PriorityNormal, PriorityNormal, PriorityHigh, PriorityUrgent} {
+		request, err := requests.CreateRequest(ctx, &NewProofRequest{AccumTxHash: "page-" + uuid.NewString(), RequestType: RequestTypeOnDemand, Priority: priority})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			_, _ = testDB.ExecContext(context.Background(), `DELETE FROM proof_requests WHERE request_id = $1`, request.RequestID)
+		})
+		if err := requests.MarkProcessingAt(ctx, request.RequestID, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		mine[request.RequestID] = len(mine)
+		want = append(want, request.RequestID)
+	}
+	// Three requests with the same priority and the same creation time: only the id orders them.
+	if _, err := testDB.ExecContext(ctx, `UPDATE proof_requests SET created_at = '2026-01-01T00:00:00Z' WHERE request_id = ANY($1)`,
+		pq.Array([]string{want[2].String(), want[3].String(), want[4].String()})); err != nil {
+		t.Fatal(err)
+	}
+	all, err := requests.GetProcessingRequests(ctx, 1000000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var expected []uuid.UUID
+	for _, request := range all {
+		if _, ok := mine[request.RequestID]; ok {
+			expected = append(expected, request.RequestID)
+		}
+	}
+
+	var seen []uuid.UUID
+	var after *ProofRequest
+	for pages := 0; ; pages++ {
+		if pages > len(all) {
+			t.Fatal("paging did not end")
+		}
+		page, err := requests.GetProcessingRequestsAfter(ctx, after, 2)
+		if err != nil {
+			t.Fatalf("GetProcessingRequestsAfter: %v", err)
+		}
+		for _, request := range page {
+			if _, ok := mine[request.RequestID]; ok {
+				seen = append(seen, request.RequestID)
+			}
+		}
+		if len(page) < 2 {
+			break
+		}
+		after = page[len(page)-1]
+	}
+	if len(expected) != len(want) || len(seen) != len(expected) {
+		t.Fatalf("paging visited %d of %d requests (%d in one read)", len(seen), len(want), len(expected))
+	}
+	for i := range expected {
+		if seen[i] != expected[i] {
+			t.Fatalf("page order differs from the single read at %d: %v vs %v", i, seen, expected)
+		}
+	}
+	rank := map[RequestPriority]int{PriorityUrgent: 1, PriorityHigh: 2, PriorityNormal: 3, PriorityLow: 4}
+	for i := 1; i < len(all); i++ {
+		if rank[all[i-1].Priority] > rank[all[i].Priority] {
+			t.Fatalf("in-flight requests are not in priority order at %d", i)
+		}
 	}
 }
 
