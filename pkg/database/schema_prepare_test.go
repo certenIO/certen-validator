@@ -26,13 +26,18 @@ import (
 // executable tests because a string fragment cannot be prepared safely in isolation. A missing relation
 // or column therefore fails CI before it can reach a production request path.
 func TestStaticRepositorySQLPreparesAgainstSharedSchema(t *testing.T) {
-	statements, err := repositorySQLStatements(".")
+	statements, err := repositorySQLStatements(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(statements) == 0 {
 		t.Fatal("no repository SQL statements discovered")
 	}
+	packages := map[string]int{}
+	for _, statement := range statements {
+		packages[filepath.Dir(statement.Source)]++
+	}
+	t.Logf("preparing %d distinct statements from %v", len(statements), packages)
 
 	ctx := context.Background()
 	prepareDB := freshPreparedSchema(t, ctx)
@@ -106,6 +111,16 @@ func TestDynamicRepositoryQueriesExecuteAgainstSharedSchema(t *testing.T) {
 	if err := lifecycle.UpdateStatus(ctx, "dynamic-intent", IntentLifecycleSettling); err != nil {
 		t.Fatalf("UpdateStatus with timestamp column: %v", err)
 	}
+	if _, err := lifecycle.ListRecentEnriched(ctx, 1); err != nil {
+		t.Fatalf("ListRecentEnriched wrapped query: %v", err)
+	}
+	if _, err := lifecycle.ListByUserEnriched(ctx, "dynamic-user", 1); err != nil {
+		t.Fatalf("ListByUserEnriched wrapped query: %v", err)
+	}
+	validOnly := true
+	if _, err := repo.CountAttestations(ctx, &validOnly); err != nil {
+		t.Fatalf("CountAttestations with the valid-only clause: %v", err)
+	}
 }
 
 func ptr[T any](value T) *T { return &value }
@@ -158,21 +173,35 @@ type repositorySQL struct {
 	SQL    string
 }
 
-func repositorySQLStatements(dir string) ([]repositorySQL, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, err
-	}
+// repositorySQLStatements collects every complete SQL literal in the module's non-test Go files, not
+// just this package's: a statement added anywhere else would otherwise reach production unchecked.
+func repositorySQLStatements(root string) ([]repositorySQL, error) {
 	seen := make(map[string]repositorySQL)
 	fileSet := token.NewFileSet()
-	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		file, err := parser.ParseFile(fileSet, filepath.Join(dir, name), nil, 0)
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
-			return nil, fmt.Errorf("parse %s: %w", name, err)
+			return err
+		}
+		name := entry.Name()
+		if entry.IsDir() {
+			if path == root {
+				return nil
+			}
+			// A nested go.mod is another module with its own storage (the lite client's SQLite schema).
+			if _, err := os.Stat(filepath.Join(path, "go.mod")); err == nil {
+				return filepath.SkipDir
+			}
+			if strings.HasPrefix(name, ".") || name == "vendor" || name == "testdata" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			return nil
+		}
+		file, err := parser.ParseFile(fileSet, path, nil, 0)
+		if err != nil {
+			return fmt.Errorf("parse %s: %w", path, err)
 		}
 		ast.Inspect(file, func(node ast.Node) bool {
 			literal, ok := node.(*ast.BasicLit)
@@ -185,12 +214,16 @@ func repositorySQLStatements(dir string) ([]repositorySQL, error) {
 			}
 			value = normalizeRepositorySQLTemplate(value)
 			position := fileSet.Position(literal.Pos())
-			key := value
-			if _, exists := seen[key]; !exists {
-				seen[key] = repositorySQL{Source: fmt.Sprintf("%s:%d", filepath.Base(position.Filename), position.Line), SQL: value}
+			if _, exists := seen[value]; !exists {
+				source, _ := filepath.Rel(root, position.Filename)
+				seen[value] = repositorySQL{Source: fmt.Sprintf("%s:%d", filepath.ToSlash(source), position.Line), SQL: value}
 			}
 			return true
 		})
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	result := make([]repositorySQL, 0, len(seen))
