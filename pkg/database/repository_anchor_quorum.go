@@ -163,19 +163,19 @@ func (r *BatchRepository) RecordAnchorQuorum(
 			$6, $7, $8, $9, $10, $11,
 			$12, $13::jsonb, $14, $15,
 			TRUE, $16, $17, $18,
-			TRUE, $19, $20, $2,
+			TRUE, $19, $20, $21,
 			$9, $19, $19, $19
 		)
 		ON CONFLICT (chain_id, bundle_id) WHERE bundle_id IS NOT NULL DO NOTHING
 		RETURNING TRUE`,
-		batchID, rec.Lane, rec.Root, rec.TargetChain,
+		batchID, batchTypeFor(rec.Lane), rec.Root, rec.TargetChain,
 		len(rec.Members),
 		rec.ChainID, rec.BundleID, nullIfEmpty(rec.BatchOperationID), nullIfEmpty(rec.AnchorCreateTx),
 		nullIfEmpty(rec.VerifyTx), nullIfZero(rec.VerifyBlock),
 		nullIfEmpty(rec.MessageHash), string(signersJSON),
 		numericOrNil(rec.SignedVotingPower), numericOrNil(rec.TotalVotingPower),
 		len(rec.Signers), rec.AggregateSignature, rec.AggregatePubKey,
-		rec.VerifiedAt.UTC(), rec.EvidenceSource,
+		rec.VerifiedAt.UTC(), rec.EvidenceSource, nullIfEmpty(rec.Lane),
 	).Scan(&inserted)
 
 	if err == sql.ErrNoRows {
@@ -311,6 +311,22 @@ func hexOrEmpty(b []byte) string {
 		return ""
 	}
 	return fmt.Sprintf("0x%x", b)
+}
+
+// batchTypeFor keeps batch_type honest when the lane is not known.
+//
+// batch_type is NOT NULL, constrained to on_cadence/on_demand/unknown (migration 021), and defaults to
+// 'on_cadence'. A row reconstructed from the chain has no lane — nothing in the calldata or the anchor's
+// state records how this fleet scheduled the batch — so omitting the column would let the default assert
+// 'on_cadence' for every backfilled row. 'unknown' says what is actually true.
+//
+// The nullable `lane` column stays NULL in that case rather than repeating the word: NULL there already
+// means "not recorded".
+func batchTypeFor(lane string) string {
+	if lane == "" {
+		return "unknown"
+	}
+	return lane
 }
 
 func bytesEqual(a, b []byte) bool {

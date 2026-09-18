@@ -437,3 +437,70 @@ func TestLayer5BindingRefusesWhenOnlyShadowRowsExistForTheIntent(t *testing.T) {
 		t.Fatalf("expected ErrNoBatchBinding, got %v", err)
 	}
 }
+
+// REGRESSION — a backfilled row must not inherit a lane it never observed.
+//
+// anchor_batches.batch_type is NOT NULL and DEFAULTS to 'on_cadence'. A row reconstructed from the chain
+// has no lane: neither the calldata nor the anchor's stored state records how this fleet scheduled the
+// batch, and a one-member batch is not evidence of the on-demand lane because a period can close with
+// one member. Letting the default apply would stamp 'on_cadence' on every backfilled row — a fact nobody
+// established, in a column that reads as evidence.
+//
+// Caught by the first -write attempt against production, which failed the valid_batch_type constraint
+// rather than writing anything.
+func TestBackfilledRowRecordsAnUnknownLaneRatherThanInheritingOne(t *testing.T) {
+	repo := anchorRepoForTest(t)
+	ctx := context.Background()
+
+	rec := anchorRecordForTest(84532, bundleHex(2101), 0xb1)
+	rec.EvidenceSource = "chain_backfill"
+	rec.Lane = "" // the chain does not say
+	rec.Members = nil
+
+	written, err := repo.RecordAnchorQuorum(ctx, rec)
+	if err != nil {
+		t.Fatalf("a backfilled row with no lane could not be written: %v", err)
+	}
+	if !written {
+		t.Fatal("no row written")
+	}
+
+	var batchType string
+	var lane *string
+	if err := testDB.QueryRowContext(ctx,
+		`SELECT batch_type, lane FROM anchor_batches WHERE chain_id=$1 AND bundle_id=$2`,
+		rec.ChainID, rec.BundleID).Scan(&batchType, &lane); err != nil {
+		t.Fatal(err)
+	}
+	if batchType != "unknown" {
+		t.Fatalf("batch_type = %q, want \"unknown\" — anything else asserts a lane the chain never recorded",
+			batchType)
+	}
+	if lane != nil {
+		t.Fatalf("lane = %q, want NULL; NULL already means \"not recorded\"", *lane)
+	}
+}
+
+// A live row still records the lane it actually ran, in both columns.
+func TestLiveRowKeepsItsRealLane(t *testing.T) {
+	repo := anchorRepoForTest(t)
+	ctx := context.Background()
+
+	rec := anchorRecordForTest(84532, bundleHex(2102), 0xb2)
+	rec.EvidenceSource = "live"
+	rec.Lane = "on_demand"
+
+	if _, err := repo.RecordAnchorQuorum(ctx, rec); err != nil {
+		t.Fatal(err)
+	}
+	var batchType string
+	var lane *string
+	if err := testDB.QueryRowContext(ctx,
+		`SELECT batch_type, lane FROM anchor_batches WHERE chain_id=$1 AND bundle_id=$2`,
+		rec.ChainID, rec.BundleID).Scan(&batchType, &lane); err != nil {
+		t.Fatal(err)
+	}
+	if batchType != "on_demand" || lane == nil || *lane != "on_demand" {
+		t.Fatalf("batch_type=%q lane=%v, want both on_demand", batchType, lane)
+	}
+}
