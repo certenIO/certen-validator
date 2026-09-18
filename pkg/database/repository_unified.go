@@ -427,12 +427,14 @@ func (r *UnifiedRepository) CreateAggregatedAttestation(ctx context.Context, inp
 		return uuid.Nil, fmt.Errorf("marshal participant IDs: %w", err)
 	}
 
-	var attestationIDsJSON []byte
+	// A typed nil []byte reaches jsonb as an empty string, which is not JSON; no ids is SQL NULL.
+	var attestationIDsJSON any
 	if len(input.AttestationIDs) > 0 {
-		attestationIDsJSON, err = json.Marshal(input.AttestationIDs)
+		encoded, err := json.Marshal(input.AttestationIDs)
 		if err != nil {
 			return uuid.Nil, fmt.Errorf("marshal attestation IDs: %w", err)
 		}
+		attestationIDsJSON = encoded
 	}
 
 	query := `

@@ -18,6 +18,10 @@ var (
 	// ErrProofNotFound is returned when a proof record is not found
 	ErrProofNotFound = errors.New("proof not found")
 
+	// ErrAnchorBlockMismatch is returned when a proof is updated with an anchor block other than the one
+	// it was created against
+	ErrAnchorBlockMismatch = errors.New("anchor block mismatch")
+
 	// ErrAttestationNotFound is returned when an attestation record is not found
 	ErrAttestationNotFound = errors.New("attestation not found")
 
