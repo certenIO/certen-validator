@@ -137,7 +137,12 @@ func (o *BatchOrchestrator) SettleOnDemandMember(
 	out.GasAnchor = gasUsed
 	// The transaction that published this root. Carried on the tree so the quorum evidence — and through
 	// it layer 5 — can say which transaction contains the root, instead of borrowing the settlement's.
-	tree.AnchorCreateTx = anchorTx
+	// Only a real transaction hash. createBatchAnchor returns "already-exists" when another
+	// validator created the anchor first; this node then does not know the creating transaction, and
+	// empty is how that is said. See IsTransactionHash.
+	if IsTransactionHash(anchorTx) {
+		tree.AnchorCreateTx = anchorTx
+	}
 	o.logf("[OD] chain=%d intent=%s anchor created tx=%s gas=%d",
 		chainID, member.IntentID, anchorTx, gasUsed)
 
