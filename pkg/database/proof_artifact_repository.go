@@ -59,7 +59,15 @@ func (r *ProofArtifactRepository) CreateProofArtifact(ctx context.Context, input
 			gov_level, proof_class, validator_id, status,
 			artifact_json, artifact_hash, user_id, intent_id, created_at, anchored_at
 		) VALUES (
-			$1, '1.0', $2, $3, $4, $5, $6, $7, $8,
+			-- $6 is cast at EVERY occurrence, including here.
+			--
+			-- It feeds anchor_tx_hash (character varying) and two CASE expressions that read $6::text.
+			-- Postgres deduces one type per parameter from all uses, so a bare $6 here and $6::text below
+			-- is "inconsistent types deduced for parameter $6: text versus character varying" — at PREPARE
+			-- time, every time, for every caller. Casting the value position too makes the deduction
+			-- single-valued. text rather than varchar(128) so the cast does not have to be revisited if the
+			-- column widens.
+			$1, '1.0', $2, $3, $4, $5, $6::text, $7, $8,
 			$9, $10, $11, $12, $13, $14, $15,
 			CASE WHEN $6::text IS NULL THEN 'pending' ELSE 'anchored' END,
 			$16, $17, $18, $19, NOW(), CASE WHEN $6::text IS NULL THEN NULL ELSE NOW() END
