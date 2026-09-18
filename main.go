@@ -2451,6 +2451,35 @@ func startValidator(
 		// records it off the proving path; see pkg/execution/anchor_quorum_writer.go.
 		if attestor := batchQuorumAttestorForEvidence.Load(); attestor != nil && batchComponents.Repos != nil {
 			anchorQuorumWriter := execution.NewAnchorQuorumWriter(batchComponents.Repos.Batches, log.Printf)
+
+			// The durable half. Every way the in-memory hand-off can lose a proven anchor — a saturated
+			// queue, a database that is down, a shutdown with records still in flight — is a way the
+			// database is unavailable, so the spill store cannot live in that database. It is a directory
+			// beside the validator's other state, and the reconciler drains it back once the database
+			// answers again, including across a restart.
+			aqDataDir := cfg.DataDir
+			if aqDataDir == "" {
+				aqDataDir = "data"
+			}
+			outboxDir := filepath.Join(aqDataDir, "anchor_quorum_outbox")
+			if outbox, obErr := execution.NewFileAnchorQuorumOutbox(outboxDir); obErr != nil {
+				// Not fatal: without the outbox the writer still records everything the database accepts,
+				// and the chain remains the backstop. But say so plainly — this is the difference between
+				// "recovers by itself" and "someone must run the backfill".
+				log.Printf("⚠️ [Phase 5] Anchor quorum outbox unavailable at %s (%v); evidence that cannot be "+
+					"written will be recoverable only with `anchorquorumbackfill`", outboxDir, obErr)
+			} else {
+				anchorQuorumWriter.SetOutbox(outbox)
+				reconciler := &execution.AnchorQuorumReconciler{
+					Outbox: outbox,
+					Store:  batchComponents.Repos.Batches,
+					Logf:   log.Printf,
+				}
+				reconciler.Start(context.Background())
+				log.Printf("✅ [Phase 5] Anchor quorum outbox at %s; reconciler replaying on startup and every %s",
+					outboxDir, 5*time.Minute)
+			}
+
 			anchorQuorumWriter.Start()
 			attestor.SetAnchorAttestedHook(anchorQuorumWriter.Hook())
 			log.Printf("✅ [Phase 5] Anchor quorum evidence hook wired (canonical rows keyed by chain_id + bundle_id)")

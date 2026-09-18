@@ -47,6 +47,24 @@ var (
 		Name:      "write_errors_total",
 		Help:      "Failed attempts to record anchor quorum evidence (retried)",
 	})
+	anchorQuorumOutboxDepth = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "certen",
+		Subsystem: "anchor_quorum",
+		Name:      "outbox_depth",
+		Help:      "Proven anchors held on disk awaiting a database that can take them",
+	})
+	anchorQuorumOutboxReplayed = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "certen",
+		Subsystem: "anchor_quorum",
+		Name:      "outbox_replayed_total",
+		Help:      "Canonical rows recovered from the outbox after the database became available again",
+	})
+	anchorQuorumOutboxQuarantined = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "certen",
+		Subsystem: "anchor_quorum",
+		Name:      "outbox_quarantined_total",
+		Help:      "Outbox entries set aside for a human: the stored row disagreed, or the entry did not decode",
+	})
 )
 
 // RecordAnchorQuorumWritten counts a canonical row this validator created.
@@ -61,12 +79,24 @@ func RecordAnchorQuorumDropped() { anchorQuorumDropped.Inc() }
 // RecordAnchorQuorumWriteError counts a write failure that will be retried.
 func RecordAnchorQuorumWriteError() { anchorQuorumWriteErrors.Inc() }
 
+// SetAnchorQuorumOutboxDepth reports how much proven evidence is waiting on disk.
+func SetAnchorQuorumOutboxDepth(n int) { anchorQuorumOutboxDepth.Set(float64(n)) }
+
+// RecordAnchorQuorumOutboxReplayed counts a row recovered from the outbox.
+func RecordAnchorQuorumOutboxReplayed() { anchorQuorumOutboxReplayed.Inc() }
+
+// RecordAnchorQuorumOutboxQuarantined counts an entry set aside for investigation.
+func RecordAnchorQuorumOutboxQuarantined() { anchorQuorumOutboxQuarantined.Inc() }
+
 // registerAnchorQuorumMetrics is called from RegisterMetrics.
 func registerAnchorQuorumMetrics() {
 	prometheus.MustRegister(anchorQuorumWritten)
 	prometheus.MustRegister(anchorQuorumConflicts)
 	prometheus.MustRegister(anchorQuorumDropped)
 	prometheus.MustRegister(anchorQuorumWriteErrors)
+	prometheus.MustRegister(anchorQuorumOutboxDepth)
+	prometheus.MustRegister(anchorQuorumOutboxReplayed)
+	prometheus.MustRegister(anchorQuorumOutboxQuarantined)
 }
 
 // Recommended alert rules:
