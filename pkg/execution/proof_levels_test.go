@@ -12,7 +12,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,6 +25,7 @@ import (
 	chain "github.com/certen/independant-validator/pkg/chain/strategy"
 	"github.com/certen/independant-validator/pkg/crypto/bls"
 	"github.com/certen/independant-validator/pkg/database"
+	"github.com/certen/independant-validator/pkg/strategy"
 )
 
 func levelHash(label string) [32]byte { return sha256.Sum256([]byte(label)) }
@@ -40,8 +43,8 @@ func canonicalSingleLeafAnchor(t *testing.T, db *sql.DB, intentID, accumTx strin
 	batchID := uuid.New()
 	bundle := "0x" + hex.EncodeToString(levelBytes("bundle-"+intentID))
 	if _, err := db.ExecContext(ctx, `
-		INSERT INTO anchor_batches (id, batch_type, status, merkle_root, target_chain, chain_id, bundle_id, anchor_create_tx, verify_block, quorum_reached)
-		VALUES ($1, 'on_demand', 'confirmed', $2, 'base-sepolia', 84532, $3, $4, 4242, TRUE)`,
+		INSERT INTO anchor_batches (id, batch_type, status, merkle_root, target_chain, chain_id, bundle_id, anchor_create_tx, anchor_tx_hash, anchor_block_num, verify_block, quorum_reached)
+		VALUES ($1, 'on_demand', 'confirmed', $2, 'base-sepolia', 84532, $3, $4, $4, 4231, 4242, TRUE)`,
 		batchID, leaf[:], bundle, anchorTx); err != nil {
 		t.Fatalf("canonical anchor row: %v", err)
 	}
@@ -208,6 +211,99 @@ func TestUnifiedProofLevelsRecordAllFourAndComplete(t *testing.T) {
 	}
 	if string(done.CycleHash) != string(proofCycleHash(record, "writeback-tx")) {
 		t.Error("the cycle hash does not bind the four levels and the write-back")
+	}
+}
+
+// anchorChain observes one anchor transaction; the cycle uses no other strategy method here.
+type anchorChain struct {
+	chain.ChainExecutionStrategy
+	obs   *chain.ObservationResult
+	calls int
+}
+
+func (c *anchorChain) ObserveTransaction(_ context.Context, txHash string) (*chain.ObservationResult, error) {
+	c.calls++
+	if !strings.EqualFold(txHash, c.obs.TxHash) {
+		return nil, fmt.Errorf("transaction %s not found", txHash)
+	}
+	return c.obs, nil
+}
+
+// layer5Of writes the proof's layer-5 row as the cycle does and reads it back.
+func layer5Of(t *testing.T, f *levelFixture) Layer5 {
+	t.Helper()
+	l5, binding := f.orch.resolveAnchorBinding(context.Background(), f.artifact.ProofID, f.inputs.IntentID, f.inputs.AccumTxHash, f.root[:], f.root[:], f.cycle.Result)
+	if err := WriteLayer5Row(context.Background(), f.repos.ProofArtifacts, f.artifact.ProofID, l5, binding, t.Logf); err != nil {
+		t.Fatalf("write layer 5: %v", err)
+	}
+	layers, err := f.repos.ProofArtifacts.GetChainedProofLayers(context.Background(), f.artifact.ProofID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, layer := range layers {
+		if layer.LayerName == Layer5RowName {
+			var l5 Layer5
+			if err := json.Unmarshal(layer.LayerJSON, &l5); err != nil {
+				t.Fatal(err)
+			}
+			return l5
+		}
+	}
+	t.Fatal("no layer-5 row")
+	return Layer5{}
+}
+
+// The settlement observation says nothing about the anchor: the proof states the anchor transaction's own
+// block (the create receipt's, not the verify transaction's), the chain named on the canonical row, and no
+// depth it did not observe. Production's observation carries no chain name.
+func TestTheCertenProofStatesTheAnchorsOwnBlockAndChain(t *testing.T) {
+	f := newLevelFixture(t)
+	f.cycle.Result.ObservationResults[0].ChainName = ""
+	f.record(t)
+	certen, err := f.repos.Proofs.GetProofByArtifactID(context.Background(), f.artifact.ProofID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if certen.AnchorBlockNumber != 4231 || certen.AnchorChain != "base-sepolia" {
+		t.Fatalf("anchor %s @ %d on %q, want block 4231 (not the verify block 4242 or the settlement 5000) on base-sepolia",
+			certen.AnchorTxHash, certen.AnchorBlockNumber, certen.AnchorChain)
+	}
+	if certen.AnchorConfirms != 0 || certen.AnchorBlockHash.Valid {
+		t.Fatalf("the settlement's depth or block hash was stated for the anchor: %d %v", certen.AnchorConfirms, certen.AnchorBlockHash)
+	}
+	if l5 := layer5Of(t, f); l5.AnchorTx != f.anchorTx || l5.BlockNumber != 4231 || l5.BlockHash != "" {
+		t.Fatalf("layer 5 states %s @ %d (%s)", l5.AnchorTx, l5.BlockNumber, l5.BlockHash)
+	}
+}
+
+// With an observer for the anchor's chain, the anchor transaction is read back: the chain's block wins over
+// a recorded one that disagrees, and its block hash and depth are recorded. One read per anchor per cycle.
+func TestTheAnchorIsReadBackForItsBlockHashAndDepth(t *testing.T) {
+	f := newLevelFixture(t)
+	observer := &anchorChain{obs: &chain.ObservationResult{
+		TxHash: f.anchorTx, BlockNumber: 4230, BlockHash: "0xanchorblock", Confirmations: 812, IsFinalized: true,
+	}}
+	registry := strategy.NewRegistry()
+	if err := registry.RegisterChainStrategy("base-sepolia", &chain.ChainConfig{}, observer); err != nil {
+		t.Fatal(err)
+	}
+	f.orch.config.Registry = registry
+	f.record(t)
+
+	certen, err := f.repos.Proofs.GetProofByArtifactID(context.Background(), f.artifact.ProofID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if certen.AnchorBlockNumber != 4230 || certen.AnchorBlockHash.String != "0xanchorblock" || certen.AnchorConfirms != 812 {
+		t.Fatalf("anchor recorded @ %d (%v), depth %d; want the chain's 4230, its hash and 812",
+			certen.AnchorBlockNumber, certen.AnchorBlockHash, certen.AnchorConfirms)
+	}
+	if l5 := layer5Of(t, f); l5.BlockNumber != 4230 || l5.BlockHash != "0xanchorblock" {
+		t.Fatalf("layer 5 states block %d (%s)", l5.BlockNumber, l5.BlockHash)
+	}
+	f.orch.resolveAnchorBinding(context.Background(), f.artifact.ProofID, f.inputs.IntentID, f.inputs.AccumTxHash, f.root[:], f.root[:], f.cycle.Result)
+	if observer.calls != 1 {
+		t.Fatalf("the anchor was read %d times in one cycle", observer.calls)
 	}
 }
 

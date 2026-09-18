@@ -76,6 +76,21 @@ func settlementObservation() *chain.ObservationResult {
 	}
 }
 
+// A row that names the anchor transaction but not its block does not borrow the settlement's: the layer
+// cannot state coordinates it does not have, so it is refused until the anchor is read back.
+func TestLayer5NeverPairsTheAnchorWithTheSettlementBlock(t *testing.T) {
+	binding := canonicalBinding(t)
+	binding.AnchorBlockNum = 0
+	l5, err := BuildLayer5(binding, settlementObservation(), nil, nil, 84532)
+	if err == nil {
+		t.Fatalf("built %s @ %d (%s) with no block for the anchor", l5.AnchorTx, l5.BlockNumber, l5.BlockHash)
+	}
+	binding.AnchorBlockNum = anchorBlockNo
+	if l5, err = BuildLayer5(binding, settlementObservation(), nil, nil, 84532); err != nil || l5.BlockHash != "" || l5.Confirmations != 0 {
+		t.Fatalf("the settlement block's hash or depth travelled with the anchor: %+v, %v", l5, err)
+	}
+}
+
 // The core regression: the anchor transaction must describe where the ROOT was published.
 func TestLayer5AnchorTxIsTheAnchorCreateTxNotTheSettlementTx(t *testing.T) {
 	binding := canonicalBinding(t)

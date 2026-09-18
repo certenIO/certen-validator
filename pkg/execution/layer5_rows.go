@@ -29,6 +29,8 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
+	"time"
 
 	chain "github.com/certen/independant-validator/pkg/chain/strategy"
 	"github.com/certen/independant-validator/pkg/database"
@@ -73,6 +75,8 @@ func BuildLayer5(
 		AnchorTx:    obs.TxHash,
 		BlockNumber: obs.BlockNumber,
 		BlockHash:   obs.BlockHash,
+
+		Confirmations: obs.Confirmations,
 	}
 	if l5.Network == "" {
 		l5.Network = fmt.Sprintf("chain-%d", chainID)
@@ -82,13 +86,18 @@ func BuildLayer5(
 	// `obs` describes settlement; binding.AnchorTxHash is the anchor-create transaction carried on the
 	// canonical row. Using the observation for both is what produced the live claim that root d2d24ab3…
 	// is in tx 0x9e4ff6ab… — a transaction that settled a different root entirely.
-	if binding != nil && binding.AnchorTxHash != "" {
+	if binding != nil && binding.AnchorTxHash != "" && !strings.EqualFold(binding.AnchorTxHash, obs.TxHash) {
+		// None of the observation's coordinates belong to the anchor: its block, block hash and depth
+		// are the settlement's. The anchor's block is the one recorded with it (the create receipt's),
+		// and unknown (zero) until the anchor transaction itself is observed. Never the verify
+		// transaction's block, and never the settlement's.
 		l5.AnchorTx = binding.AnchorTxHash
+		l5.BlockNumber = 0
 		if binding.AnchorBlockNum > 0 {
 			l5.BlockNumber = uint64(binding.AnchorBlockNum)
-			// The block hash described the settlement block, so it cannot travel with the anchor block.
-			l5.BlockHash = ""
 		}
+		l5.BlockHash = ""
+		l5.Confirmations = 0
 	}
 
 	switch {
@@ -322,6 +331,20 @@ func (o *UnifiedOrchestrator) resolveAnchorBinding(
 		}
 	}
 
+	// The anchor, when it is not the observed transaction, is read back first: the layer needs its block
+	// before it can verify, and the chain's block is the one to state.
+	var anchorObs *chain.ObservationResult
+	if binding != nil && binding.AnchorTxHash != "" && !strings.EqualFold(binding.AnchorTxHash, obs.TxHash) {
+		anchorObs = o.observeAnchor(ctx, proofID, binding.AnchorTxHash, binding, obs, result)
+		if anchorObs != nil {
+			if binding.AnchorBlockNum > 0 && uint64(binding.AnchorBlockNum) != anchorObs.BlockNumber {
+				logfPrintf("🚨 [L5-PERSIST] proof %s: anchor %s is in block %d on chain, not block %d as recorded; "+
+					"the chain's block is used", proofID, binding.AnchorTxHash, anchorObs.BlockNumber, binding.AnchorBlockNum)
+			}
+			binding.AnchorBlockNum = int64(anchorObs.BlockNumber)
+		}
+	}
+
 	l5, err := BuildLayer5(binding, obs, leafHash, merkleRoot, chainIDNum)
 	if err != nil {
 		logfPrintf("🚨 [L5-PERSIST] proof %s: %v", proofID, err)
@@ -333,5 +356,53 @@ func (o *UnifiedOrchestrator) resolveAnchorBinding(
 			proofID, len(leafHash), obs.TxHash, obs.BlockNumber)
 		return nil, binding
 	}
+	if anchorObs != nil && l5.BlockNumber == anchorObs.BlockNumber {
+		l5.BlockHash, l5.Confirmations = anchorObs.BlockHash, anchorObs.Confirmations
+	}
 	return l5, binding
+}
+
+// anchorObservationTimeout bounds reading an anchor transaction back. The anchor was mined before the
+// settlement this cycle already saw finalised, so the receipt is there; this only guards a stalled RPC.
+const anchorObservationTimeout = 2 * time.Minute
+
+// observeAnchor reads the anchor transaction's own coordinates off its chain: the block it is in, that
+// block's hash and its depth. The settlement observation cannot supply them, and the canonical row has
+// only the block, and not even that when another validator created the anchor. Nil when there is no
+// observer for the chain or the read fails. One read per anchor per cycle.
+func (o *UnifiedOrchestrator) observeAnchor(ctx context.Context, proofID uuid.UUID, anchorTx string, binding *database.Layer5Binding, obs *chain.ObservationResult, result *UnifiedProofCycleResult) *chain.ObservationResult {
+	if o.config.Registry == nil {
+		return nil
+	}
+	key := strings.ToLower(anchorTx)
+	anchorObs, seen := result.anchorObservations[key]
+	if !seen {
+		chainName := obs.ChainName
+		if binding != nil && binding.TargetChain != "" {
+			chainName = binding.TargetChain
+		}
+		strategy, err := o.config.Registry.GetChainStrategy(chainName)
+		if err != nil {
+			logfPrintf("⚠️ [L5-PERSIST] proof %s: no observer for anchor chain %q, so anchor %s is recorded "+
+				"without its block hash or depth: %v", proofID, chainName, anchorTx, err)
+			return nil
+		}
+		timeout := anchorObservationTimeout
+		if o.config.ObservationTimeout > 0 && o.config.ObservationTimeout < timeout {
+			timeout = o.config.ObservationTimeout
+		}
+		observeCtx, cancel := context.WithTimeout(ctx, timeout)
+		anchorObs, err = strategy.ObserveTransaction(observeCtx, anchorTx)
+		cancel()
+		if err != nil || anchorObs == nil || anchorObs.BlockNumber == 0 {
+			logfPrintf("⚠️ [L5-PERSIST] proof %s: anchor %s could not be read back (%v); recorded without its "+
+				"block hash or depth", proofID, anchorTx, err)
+			anchorObs = nil
+		}
+		if result.anchorObservations == nil {
+			result.anchorObservations = map[string]*chain.ObservationResult{}
+		}
+		result.anchorObservations[key] = anchorObs
+	}
+	return anchorObs
 }

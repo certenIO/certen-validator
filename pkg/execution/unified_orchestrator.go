@@ -256,6 +256,10 @@ type UnifiedProofCycleResult struct {
 	// CycleID uniquely identifies this cycle
 	CycleID string `json:"cycle_id"`
 
+	// anchorObservations caches anchor transactions read back by observeAnchor, keyed by lower-case hash;
+	// a nil entry records a read that failed, so a batch does not retry it for every member.
+	anchorObservations map[string]*chain.ObservationResult
+
 	// ProofID is the resulting proof artifact ID
 	ProofID uuid.UUID `json:"proof_id"`
 

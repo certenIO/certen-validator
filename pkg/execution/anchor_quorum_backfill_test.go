@@ -571,7 +571,9 @@ func TestAnchorQuorumRecordCarriesTheAnchorCreateTxAndVerifyBlock(t *testing.T) 
 		VerifyTx:       verifyTx,
 		VerifyBlock:    46_437_104,
 		AnchorCreateTx: createTx,
-		Lane:           AnchorLaneOnDemand,
+		// Mined before the verify transaction: the create receipt's block, not the verify block.
+		AnchorCreateBlock: 46_437_093,
+		Lane:              AnchorLaneOnDemand,
 	}
 	rec := AnchorQuorumRecordFrom(ev)
 	if rec == nil {
@@ -586,6 +588,9 @@ func TestAnchorQuorumRecordCarriesTheAnchorCreateTxAndVerifyBlock(t *testing.T) 
 	}
 	if rec.VerifyBlock != 46_437_104 {
 		t.Fatalf("verify_block = %d", rec.VerifyBlock)
+	}
+	if rec.AnchorCreateBlock != 46_437_093 {
+		t.Fatalf("anchor create block = %d, want the create receipt's block", rec.AnchorCreateBlock)
 	}
 	// And the two must never be confused: the verify transaction proved the root, it did not publish it.
 	if rec.AnchorCreateTx == rec.VerifyTx {

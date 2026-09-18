@@ -330,7 +330,7 @@ func (o *BatchOrchestrator) FlushChain(
 	defer o.ecm.endNonceSequence()
 
 	// ---- Create the anchor --------------------------------------------------
-	anchorTx, gasUsed, err := o.createBatchAnchor(ctx, tree)
+	anchorTx, gasUsed, anchorBlock, err := o.createBatchAnchor(ctx, tree)
 	if err != nil {
 		o.mempool.Requeue(members)
 		return nil, fmt.Errorf("createBatchAnchor: %w", err)
@@ -343,7 +343,7 @@ func (o *BatchOrchestrator) FlushChain(
 	// validator created the anchor first; this node then does not know the creating transaction, and
 	// empty is how that is said. See IsTransactionHash.
 	if IsTransactionHash(anchorTx) {
-		tree.AnchorCreateTx = anchorTx
+		tree.AnchorCreateTx, tree.AnchorCreateBlock = anchorTx, anchorBlock
 	}
 	o.logf("[BATCH] chain=%d anchor created tx=%s gas=%d", chainID, anchorTx, gasUsed)
 
@@ -642,10 +642,10 @@ func (o *BatchOrchestrator) verifyLeavesAgainstAnchor(ctx context.Context, tree 
 func (o *BatchOrchestrator) createBatchAnchor(
 	ctx context.Context,
 	tree *BatchTree,
-) (string, uint64, error) {
+) (txHash string, gasUsed uint64, block uint64, err error) {
 	anchor, err := contracts.NewCertenAnchorV7Batch(o.anchorV7, o.ecm.client)
 	if err != nil {
-		return "", 0, err
+		return "", 0, 0, err
 	}
 
 	// Idempotence: a retry after a timeout must not revert with "Anchor already exists"
@@ -653,7 +653,7 @@ func (o *BatchOrchestrator) createBatchAnchor(
 	// tree is a SUCCESS, not a conflict.
 	if exists, eerr := anchor.AnchorExists(&bind.CallOpts{Context: ctx}, tree.BundleID); eerr == nil && exists {
 		o.logf("[BATCH] anchor 0x%x already exists — treating as created", tree.BundleID[:8])
-		return "already-exists", 0, nil
+		return "already-exists", 0, 0, nil
 	}
 
 	o.ecm.auth.GasLimit = 500000
@@ -667,17 +667,17 @@ func (o *BatchOrchestrator) createBatchAnchor(
 		new(big.Int).SetUint64(tree.BlockHeight),
 	)
 	if err != nil {
-		return "", 0, err
+		return "", 0, 0, err
 	}
 
 	receipt, err := bind.WaitMined(ctx, o.ecm.client, tx)
 	if err != nil {
-		return tx.Hash().Hex(), 0, fmt.Errorf("waiting for anchor: %w", err)
+		return tx.Hash().Hex(), 0, 0, fmt.Errorf("waiting for anchor: %w", err)
 	}
 	if receipt.Status == 0 {
-		return tx.Hash().Hex(), receipt.GasUsed, fmt.Errorf("createBatchAnchor reverted")
+		return tx.Hash().Hex(), receipt.GasUsed, 0, fmt.Errorf("createBatchAnchor reverted")
 	}
-	return tx.Hash().Hex(), receipt.GasUsed, nil
+	return tx.Hash().Hex(), receipt.GasUsed, receipt.BlockNumber.Uint64(), nil
 }
 
 // settleMember submits one member's account call carrying its Merkle branch.

@@ -160,8 +160,13 @@ func storeCertenAnchorProof(ctx context.Context, repos *database.Repositories, p
 	}
 	proofs := repos.Proofs
 	var batchID uuid.UUID
+	anchorChain := anchor.Network
 	if anchorBatch != nil {
 		batchID = anchorBatch.BatchID
+		// The canonical row names the chain; the observation's name is empty when its strategy set none.
+		if anchorBatch.TargetChain != "" {
+			anchorChain = anchorBatch.TargetChain
+		}
 	}
 	leaf, path, leafIndex := in.LeafHash, in.MerklePath, in.LeafIndex
 	if decoded, err := hex.DecodeString(anchor.LeafHash); err == nil && len(decoded) == 32 {
@@ -186,7 +191,7 @@ func storeCertenAnchorProof(ctx context.Context, repos *database.Repositories, p
 		MerkleInclusion:   path,
 		LeafHash:          leaf,
 		LeafIndex:         leafIndex,
-		AnchorChain:       database.TargetChain(anchor.Network),
+		AnchorChain:       database.TargetChain(anchorChain),
 		AnchorTxHash:      anchor.AnchorTx,
 		AnchorBlockNumber: int64(anchor.BlockNumber),
 		AnchorBlockHash:   anchor.BlockHash,
@@ -203,9 +208,14 @@ func storeCertenAnchorProof(ctx context.Context, repos *database.Repositories, p
 		return
 	}
 
-	// Confirmations are known only when the anchor is the transaction this cycle observed.
-	if pc.ObservedTx != "" && strings.EqualFold(pc.ObservedTx, anchor.AnchorTx) {
-		if err := proofs.UpdateAnchorConfirmations(ctx, stored.ProofID, pc.ObservedConfirmations, pc.ObservedBlockHash); err != nil {
+	// Confirmations come from an observation of the anchor transaction itself: the layer's, when the
+	// anchor was read back, or the cycle's, when the anchor is the transaction the cycle observed.
+	confirmations, blockHash := anchor.Confirmations, anchor.BlockHash
+	if confirmations == 0 && pc.ObservedTx != "" && strings.EqualFold(pc.ObservedTx, anchor.AnchorTx) {
+		confirmations, blockHash = pc.ObservedConfirmations, pc.ObservedBlockHash
+	}
+	if confirmations > 0 {
+		if err := proofs.UpdateAnchorConfirmations(ctx, stored.ProofID, confirmations, blockHash); err != nil {
 			logfPrintf("⚠️ [CERTEN-PROOF] proof %s: confirmations not recorded: %v", in.Artifact.ProofID, err)
 		}
 	}

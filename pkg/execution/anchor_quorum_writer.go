@@ -293,6 +293,7 @@ func AnchorQuorumRecordFrom(ev *AnchorQuorumEvidence) *database.AnchorQuorumReco
 		VerifyTx:           ev.VerifyTx,
 		VerifyBlock:        ev.VerifyBlock,
 		AnchorCreateTx:     ev.AnchorCreateTx,
+		AnchorCreateBlock:  ev.AnchorCreateBlock,
 		VerifiedAt:         ev.AttestedAt,
 		AggregateSignature: decodeHexOrNil(ev.AggregateSignatureHex),
 		AggregatePubKey:    decodeHexOrNil(ev.AggregatePublicKeyHex),

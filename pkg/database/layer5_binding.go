@@ -113,7 +113,9 @@ func (r *ProofArtifactRepository) GetLayer5Binding(ctx context.Context, intentID
 		       -- The ANCHOR-CREATE transaction, never the settlement transaction: this field answers
 		       -- "where was this root published", and the settlement tx published a different root.
 		       COALESCE(ab.anchor_create_tx, ab.anchor_tx_hash, ''),
-		       COALESCE(ab.verify_block, ab.anchor_block_num, 0)
+		       CASE WHEN ab.anchor_create_tx IS NULL
+		              OR LOWER(ab.anchor_create_tx) = LOWER(COALESCE(ab.anchor_tx_hash, ''))
+		            THEN COALESCE(ab.anchor_block_num, 0) ELSE 0 END
 		FROM batch_transactions bt
 		JOIN anchor_batches ab ON ab.id = bt.batch_id
 		WHERE ab.bundle_id IS NOT NULL
@@ -193,6 +195,8 @@ func (r *ProofArtifactRepository) BindProofToBatch(
 // Deliberately does NOT overwrite an existing hash. A batch is anchored once;
 // a second, different hash arriving later means either a re-anchor or a bug, and
 // silently replacing the first would erase the evidence needed to tell which.
+// The same transaction arriving with its block fills a block the row lacks: the
+// canonical row names the create transaction before anyone has read its block.
 func (r *ProofArtifactRepository) SetAnchorBatchTxHash(
 	ctx context.Context, batchID uuid.UUID, txHash string, blockNum int64,
 ) error {
@@ -201,12 +205,13 @@ func (r *ProofArtifactRepository) SetAnchorBatchTxHash(
 	}
 	const q = `
 		UPDATE anchor_batches
-		SET anchor_tx_hash   = $2,
-		    anchor_block_num = COALESCE(anchor_block_num, $3),
+		SET anchor_tx_hash   = COALESCE(NULLIF(anchor_tx_hash, ''), $2),
+		    anchor_block_num = COALESCE(anchor_block_num, NULLIF($3, 0)),
 		    anchored_at      = COALESCE(anchored_at, NOW()),
 		    updated_at       = NOW()
 		WHERE id = $1
-		  AND (anchor_tx_hash IS NULL OR anchor_tx_hash = '')`
+		  AND (anchor_tx_hash IS NULL OR anchor_tx_hash = ''
+		       OR (LOWER(anchor_tx_hash) = LOWER($2) AND anchor_block_num IS NULL AND $3 > 0))`
 	res, err := r.db.ExecContext(ctx, q, batchID, txHash, blockNum)
 	if err != nil {
 		return fmt.Errorf("record anchor tx for batch %s: %w", batchID, err)

@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -134,6 +135,127 @@ func TestRecordAnchorQuorumWritesOnceWithItsEvidence(t *testing.T) {
 	}
 	if members != 1 || attestations != 2 {
 		t.Fatalf("members=%d attestations=%d, want 1 and 2 (no duplication on the second write)", members, attestations)
+	}
+}
+
+// The anchor's block is the create transaction's, from its receipt: stored with it, read by the layer-5
+// binding with it, and never the verify transaction's block.
+func TestAnchorQuorumRecordsTheCreateTransactionsOwnBlock(t *testing.T) {
+	repo := anchorRepoForTest(t)
+	ctx := context.Background()
+	rec := anchorRecordForTest(84532, bundleHex(1101), 0xa1)
+	rec.AnchorCreateBlock = 45943089 // mined before the verify transaction at 45943100
+	rec.Members[0].IntentID = uuid.NewString()
+	if written, err := repo.RecordAnchorQuorum(ctx, rec); err != nil || !written {
+		t.Fatalf("write: %v %v", written, err)
+	}
+	row, err := repo.GetAnchorQuorum(ctx, rec.ChainID, rec.BundleID)
+	if err != nil || row == nil {
+		t.Fatalf("row: %v", err)
+	}
+	var block sql.NullInt64
+	var anchorTx sql.NullString
+	if err := testDB.QueryRow(`SELECT anchor_block_num, anchor_tx_hash FROM anchor_batches WHERE id = $1`, row.BatchID).Scan(&block, &anchorTx); err != nil {
+		t.Fatal(err)
+	}
+	if block.Int64 != rec.AnchorCreateBlock || anchorTx.String != rec.AnchorCreateTx {
+		t.Fatalf("anchor_block_num=%v anchor_tx_hash=%v, want %d and the create transaction", block, anchorTx, rec.AnchorCreateBlock)
+	}
+	binding, err := NewProofArtifactRepository(testDB).GetLayer5Binding(ctx, rec.Members[0].IntentID, "")
+	if err != nil {
+		t.Fatalf("binding: %v", err)
+	}
+	if binding.AnchorTxHash != rec.AnchorCreateTx || binding.AnchorBlockNum != rec.AnchorCreateBlock {
+		t.Fatalf("binding names %s @ %d, want the create transaction @ %d (not the verify block %d)",
+			binding.AnchorTxHash, binding.AnchorBlockNum, rec.AnchorCreateBlock, rec.VerifyBlock)
+	}
+}
+
+// Another validator may record the anchor before the one that created it; the creator's transaction and
+// block complete the row, and nothing that is already there is replaced.
+func TestTheAnchorCreatorCompletesARowAnotherValidatorWrote(t *testing.T) {
+	repo := anchorRepoForTest(t)
+	ctx := context.Background()
+	bundle := bundleHex(1102)
+	first := anchorRecordForTest(84532, bundle, 0xa2)
+	first.AnchorCreateTx = "" // not the creator
+	if written, err := repo.RecordAnchorQuorum(ctx, first); err != nil || !written {
+		t.Fatalf("first write: %v %v", written, err)
+	}
+	creator := anchorRecordForTest(84532, bundle, 0xa2)
+	creator.AnchorCreateBlock = 45943090
+	if written, err := repo.RecordAnchorQuorum(ctx, creator); err != nil || written {
+		t.Fatalf("creator write: %v %v (want false, nil)", written, err)
+	}
+	read := func() (string, string, int64) {
+		t.Helper()
+		var createTx, anchorTx sql.NullString
+		var block sql.NullInt64
+		if err := testDB.QueryRow(`SELECT anchor_create_tx, anchor_tx_hash, anchor_block_num FROM anchor_batches WHERE chain_id = 84532 AND bundle_id = $1`, bundle).Scan(&createTx, &anchorTx, &block); err != nil {
+			t.Fatal(err)
+		}
+		return createTx.String, anchorTx.String, block.Int64
+	}
+	if createTx, anchorTx, block := read(); createTx != creator.AnchorCreateTx || anchorTx != creator.AnchorCreateTx || block != creator.AnchorCreateBlock {
+		t.Fatalf("row not completed by the creator: %s %s %d", createTx, anchorTx, block)
+	}
+	// The other six validators prove the same anchor: a complete row is left as it is, not even touched.
+	var before, after time.Time
+	if err := testDB.QueryRow(`SELECT updated_at FROM anchor_batches WHERE chain_id = 84532 AND bundle_id = $1`, bundle).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.RecordAnchorQuorum(ctx, anchorRecordForTest(84532, bundle, 0xa2)); err != nil {
+		t.Fatal(err)
+	}
+	if err := testDB.QueryRow(`SELECT updated_at FROM anchor_batches WHERE chain_id = 84532 AND bundle_id = $1`, bundle).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if !after.Equal(before) {
+		t.Fatalf("a duplicate record rewrote a complete row (updated_at %v -> %v)", before, after)
+	}
+	other := anchorRecordForTest(84532, bundle, 0xa2)
+	other.AnchorCreateTx, other.AnchorCreateBlock = "0x0bad"+strings.Repeat("00", 30), 1
+	if _, err := repo.RecordAnchorQuorum(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+	if createTx, _, block := read(); createTx != creator.AnchorCreateTx || block != creator.AnchorCreateBlock {
+		t.Fatalf("a later, different create transaction replaced the recorded one: %s %d", createTx, block)
+	}
+}
+
+// A block recorded with one transaction is not stated for another, and the same transaction arriving
+// with its block fills a block the row lacks.
+func TestTheLayer5BindingPairsABlockOnlyWithItsOwnTransaction(t *testing.T) {
+	repo := anchorRepoForTest(t)
+	ctx := context.Background()
+	rec := anchorRecordForTest(84532, bundleHex(1103), 0xa3)
+	rec.Members[0].IntentID = uuid.NewString()
+	if written, err := repo.RecordAnchorQuorum(ctx, rec); err != nil || !written {
+		t.Fatalf("write: %v %v", written, err)
+	}
+	row, err := repo.GetAnchorQuorum(ctx, rec.ChainID, rec.BundleID)
+	if err != nil || row == nil {
+		t.Fatalf("row: %v", err)
+	}
+	artifacts := NewProofArtifactRepository(testDB)
+	binding, err := artifacts.GetLayer5Binding(ctx, rec.Members[0].IntentID, "")
+	if err != nil || binding.AnchorBlockNum != 0 {
+		t.Fatalf("with no recorded block the binding states block %d (the verify block is %d): %v", binding.AnchorBlockNum, rec.VerifyBlock, err)
+	}
+	if err := artifacts.SetAnchorBatchTxHash(ctx, row.BatchID, rec.AnchorCreateTx, 45943091); err != nil {
+		t.Fatalf("filling the block of the recorded transaction: %v", err)
+	}
+	if binding, err = artifacts.GetLayer5Binding(ctx, rec.Members[0].IntentID, ""); err != nil || binding.AnchorBlockNum != 45943091 {
+		t.Fatalf("binding block = %d after it was recorded: %v", binding.AnchorBlockNum, err)
+	}
+	if err := artifacts.SetAnchorBatchTxHash(ctx, row.BatchID, "0x0bad"+strings.Repeat("11", 30), 7); !errors.Is(err, ErrAnchorTxAlreadyRecorded) {
+		t.Fatalf("another transaction's block was accepted: %v", err)
+	}
+	if _, err := testDB.ExecContext(ctx, `UPDATE anchor_batches SET anchor_tx_hash = $2 WHERE id = $1`, row.BatchID, "0x0bad"+strings.Repeat("22", 30)); err != nil {
+		t.Fatal(err)
+	}
+	if binding, err = artifacts.GetLayer5Binding(ctx, rec.Members[0].IntentID, ""); err != nil || binding.AnchorBlockNum != 0 {
+		t.Fatalf("a block recorded with another transaction was stated for the create transaction: %d, %v", binding.AnchorBlockNum, err)
 	}
 }
 
