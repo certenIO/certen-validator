@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 
+	"github.com/certen/independant-validator/pkg/anchor"
 	"github.com/certen/independant-validator/pkg/consensus"
 )
 
@@ -166,6 +167,70 @@ func (r *ChainBackfillReader) ValidatorRegistry(
 		return nil, err
 	}
 	return ReadValidatorRegistryWith(ctx, client, anchorAddr)
+}
+
+// LatestBlock reports the head this endpoint will serve.
+func (r *ChainBackfillReader) LatestBlock(ctx context.Context, chainID int64) (uint64, error) {
+	client, _, err := r.chains.ClientForChain(chainID)
+	if err != nil {
+		return 0, err
+	}
+	head, err := client.BlockNumber(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("chain %d: reading head: %w", chainID, err)
+	}
+	return head, nil
+}
+
+// ScanProofExecuted returns the anchors this chain reports as proven in a block range.
+//
+// The topic comes from the parsed ABI rather than a stored constant: the hand-maintained topic table in
+// pkg/anchor was computed with sha256 for the life of the file, which matches no log any node emits. A
+// scanner that silently returns nothing is indistinguishable from a chain with nothing to backfill, so
+// this derives the value it filters on from the same ABI it decodes with.
+func (r *ChainBackfillReader) ScanProofExecuted(
+	ctx context.Context,
+	chainID int64,
+	fromBlock, toBlock uint64,
+) ([]ProofExecutedLog, error) {
+	client, anchorAddr, err := r.chains.ClientForChain(chainID)
+	if err != nil {
+		return nil, err
+	}
+	parsed, err := abiFromJSON(anchor.CertenAnchorV3EventsABI)
+	if err != nil {
+		return nil, fmt.Errorf("parsing anchor event ABI: %w", err)
+	}
+	event, ok := parsed.Events["ProofExecuted"]
+	if !ok {
+		return nil, fmt.Errorf("the anchor event ABI declares no ProofExecuted event")
+	}
+
+	logs, err := client.FilterLogs(ctx, ethereum.FilterQuery{
+		FromBlock: new(big.Int).SetUint64(fromBlock),
+		ToBlock:   new(big.Int).SetUint64(toBlock),
+		Addresses: []common.Address{anchorAddr},
+		Topics:    [][]common.Hash{{event.ID}},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("eth_getLogs %d..%d on %s: %w", fromBlock, toBlock, anchorAddr.Hex(), err)
+	}
+
+	out := make([]ProofExecutedLog, 0, len(logs))
+	for _, l := range logs {
+		// topics[0] is the event id; topics[1] is the indexed anchorId, which IS the bundle id.
+		if len(l.Topics) < 2 || l.Removed {
+			continue
+		}
+		entry := ProofExecutedLog{
+			ChainID:     chainID,
+			TxHash:      l.TxHash.Hex(),
+			BlockNumber: l.BlockNumber,
+		}
+		copy(entry.BundleID[:], l.Topics[1].Bytes())
+		out = append(out, entry)
+	}
+	return out, nil
 }
 
 // BlockTime returns a block's timestamp.
