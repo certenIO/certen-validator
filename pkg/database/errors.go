@@ -18,6 +18,13 @@ var (
 	// ErrProofNotFound is returned when a proof record is not found
 	ErrProofNotFound = errors.New("proof not found")
 
+	// ErrAnchorBlockMismatch is returned when a proof is updated with an anchor block other than the one
+	// it was created against
+	ErrAnchorBlockMismatch = errors.New("anchor block mismatch")
+
+	// ErrHashChainBroken is returned when persisted result hash chain links do not follow each other
+	ErrHashChainBroken = errors.New("result hash chain broken")
+
 	// ErrAttestationNotFound is returned when an attestation record is not found
 	ErrAttestationNotFound = errors.New("attestation not found")
 

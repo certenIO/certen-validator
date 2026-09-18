@@ -786,80 +786,117 @@ type BundleDownloadRecord struct {
 // LEVEL 4: External Chain Execution Proof Types
 // ============================================================================
 
-// ExternalChainResultRecord stores execution results with hash chain binding
+// ExternalChainResultRecord is one observed external-chain execution result, read from
+// external_chain_results. Nullable columns are pointers: a result observed before it was linked to a
+// proof has no ProofID, and a result written before the hash chain was persisted has no SequenceNumber.
 type ExternalChainResultRecord struct {
-	ResultID uuid.UUID `json:"result_id" db:"result_id"`
-	ProofID  uuid.UUID `json:"proof_id" db:"proof_id"`
+	ResultID uuid.UUID  `json:"result_id" db:"result_id"`
+	ProofID  *uuid.UUID `json:"proof_id,omitempty" db:"proof_id"`
+
+	// Binding to the anchored operation
+	BundleID    []byte `json:"bundle_id" db:"bundle_id"`
+	OperationID []byte `json:"operation_id" db:"operation_id"`
 
 	// External Chain Reference
+	ChainType       string `json:"chain_type" db:"chain_type"`
 	ChainID         string `json:"chain_id" db:"chain_id"`
-	ChainName       string `json:"chain_name" db:"chain_name"`
+	ChainName       string `json:"chain_name" db:"network_name"`
 	BlockNumber     int64  `json:"block_number" db:"block_number"`
 	BlockHash       []byte `json:"block_hash" db:"block_hash"`
-	TransactionHash []byte `json:"transaction_hash" db:"transaction_hash"`
+	TransactionHash []byte `json:"transaction_hash" db:"tx_hash"`
 
 	// Execution Details
 	ExecutionStatus uint8  `json:"execution_status" db:"execution_status"`
-	GasUsed         int64  `json:"gas_used" db:"gas_used"`
+	GasUsed         int64  `json:"gas_used" db:"tx_gas_used"`
 	ReturnData      []byte `json:"return_data,omitempty" db:"return_data"`
 
 	// Patricia/Merkle Proof (Keccak256-based for Ethereum)
 	StorageProofJSON json.RawMessage `json:"storage_proof_json,omitempty" db:"storage_proof_json"`
 	StorageProofHash []byte          `json:"storage_proof_hash,omitempty" db:"storage_proof_hash"`
 
-	// Hash Chain Binding (RFC8785 canonical JSON)
-	SequenceNumber     int64  `json:"sequence_number" db:"sequence_number"`
+	// Hash Chain Binding
+	SequenceNumber     *int64 `json:"sequence_number,omitempty" db:"sequence_number"`
 	PreviousResultHash []byte `json:"previous_result_hash,omitempty" db:"previous_result_hash"`
 	ResultHash         []byte `json:"result_hash" db:"result_hash"`
 
 	// Binding to Level 3 Anchor Proof
-	AnchorProofHash []byte `json:"anchor_proof_hash" db:"anchor_proof_hash"`
+	AnchorProofHash []byte `json:"anchor_proof_hash,omitempty" db:"anchor_proof_hash"`
 
 	// Full Artifact
-	ArtifactJSON json.RawMessage `json:"artifact_json" db:"artifact_json"`
+	ArtifactJSON json.RawMessage `json:"artifact_json,omitempty" db:"artifact_json"`
 
-	// Verification
-	Verified   bool       `json:"verified" db:"verified"`
-	VerifiedAt *time.Time `json:"verified_at,omitempty" db:"verified_at"`
+	// Validator set the result's attestations were counted against
+	SnapshotID *uuid.UUID `json:"snapshot_id,omitempty" db:"snapshot_id"`
 
-	CreatedAt time.Time `json:"created_at" db:"created_at"`
+	// Finality and verification
+	IsFinalized         bool       `json:"is_finalized" db:"is_finalized"`
+	ObserverValidatorID string     `json:"observer_validator_id" db:"observer_validator_id"`
+	Verified            bool       `json:"verified" db:"verified"`
+	VerifiedAt          *time.Time `json:"verified_at,omitempty" db:"verified_at"`
+
+	ObservedAt time.Time `json:"observed_at" db:"observed_at"`
+	CreatedAt  time.Time `json:"created_at" db:"created_at"`
 }
 
-// NewExternalChainResult is used to create a new execution result record
+// NewExternalChainResult creates an external chain result that is already bound to a proof and to its
+// place in the result hash chain. It carries every column external_chain_results requires, so it is
+// stored through the same insert as ExternalChainResultInput.
 type NewExternalChainResult struct {
-	ProofID            uuid.UUID       `json:"proof_id"`
-	ChainID            string          `json:"chain_id"`
-	ChainName          string          `json:"chain_name"`
-	BlockNumber        int64           `json:"block_number"`
-	BlockHash          []byte          `json:"block_hash"`
-	TransactionHash    []byte          `json:"transaction_hash"`
-	ExecutionStatus    uint8           `json:"execution_status"`
-	GasUsed            int64           `json:"gas_used"`
-	ReturnData         []byte          `json:"return_data,omitempty"`
-	StorageProofJSON   json.RawMessage `json:"storage_proof_json,omitempty"`
-	StorageProofHash   []byte          `json:"storage_proof_hash,omitempty"`
-	SequenceNumber     int64           `json:"sequence_number"`
-	PreviousResultHash []byte          `json:"previous_result_hash,omitempty"`
-	ResultHash         []byte          `json:"result_hash"`
-	AnchorProofHash    []byte          `json:"anchor_proof_hash"`
-	ArtifactJSON       json.RawMessage `json:"artifact_json"`
+	ProofID             uuid.UUID       `json:"proof_id"`
+	BundleID            []byte          `json:"bundle_id"`
+	OperationID         []byte          `json:"operation_id"`
+	ChainType           string          `json:"chain_type"` // ethereum, bitcoin, solana, polygon
+	ChainID             string          `json:"chain_id"`   // numeric chain id, as text
+	ChainName           string          `json:"chain_name"` // network name
+	BlockNumber         int64           `json:"block_number"`
+	BlockHash           []byte          `json:"block_hash"`
+	BlockTimestamp      time.Time       `json:"block_timestamp"`
+	TransactionHash     []byte          `json:"transaction_hash"`
+	TxIndex             int             `json:"tx_index"`
+	TxFromAddress       []byte          `json:"tx_from_address"`
+	TxToAddress         []byte          `json:"tx_to_address,omitempty"`
+	StateRoot           []byte          `json:"state_root"`
+	TransactionsRoot    []byte          `json:"transactions_root"`
+	ReceiptsRoot        []byte          `json:"receipts_root"`
+	ExecutionStatus     uint8           `json:"execution_status"`
+	GasUsed             int64           `json:"gas_used"`
+	ReturnData          []byte          `json:"return_data,omitempty"`
+	StorageProofJSON    json.RawMessage `json:"storage_proof_json,omitempty"`
+	StorageProofHash    []byte          `json:"storage_proof_hash,omitempty"`
+	SequenceNumber      int64           `json:"sequence_number"`
+	PreviousResultHash  []byte          `json:"previous_result_hash,omitempty"`
+	ResultHash          []byte          `json:"result_hash"`
+	AnchorProofHash     []byte          `json:"anchor_proof_hash"`
+	ArtifactJSON        json.RawMessage `json:"artifact_json"`
+	SnapshotID          *uuid.UUID      `json:"snapshot_id,omitempty"`
+	IsFinalized         bool            `json:"is_finalized"`
+	ObserverValidatorID string          `json:"observer_validator_id"`
+	ObservedAt          time.Time       `json:"observed_at"`
 }
 
-// BLSAttestationRecord stores individual BLS12-381 attestations
+// BLSAttestationRecord is one validator's BLS12-381 attestation over an external chain result, read from
+// bls_result_attestations.
 type BLSAttestationRecord struct {
-	AttestationID uuid.UUID `json:"attestation_id" db:"attestation_id"`
-	ResultID      uuid.UUID `json:"result_id" db:"result_id"`
-	SnapshotID    uuid.UUID `json:"snapshot_id" db:"snapshot_id"`
+	AttestationID uuid.UUID  `json:"attestation_id" db:"attestation_id"`
+	ResultID      uuid.UUID  `json:"result_id" db:"result_id"`
+	SnapshotID    *uuid.UUID `json:"snapshot_id,omitempty" db:"snapshot_id"`
+
+	// What was attested
+	ResultHash []byte `json:"result_hash" db:"result_hash"`
+	BundleID   []byte `json:"bundle_id" db:"bundle_id"`
 
 	// Validator Identity
-	ValidatorID string `json:"validator_id" db:"validator_id"`
-	PublicKey   []byte `json:"public_key" db:"public_key"` // BLS12-381 G2 point (96 bytes compressed)
+	ValidatorID      string `json:"validator_id" db:"validator_id"`
+	ValidatorAddress []byte `json:"validator_address" db:"validator_address"`
+	ValidatorIndex   int    `json:"validator_index" db:"validator_index"`
+	PublicKey        []byte `json:"public_key" db:"bls_public_key"` // BLS12-381 G2 point (96 bytes compressed)
 
 	// Message Being Attested
-	MessageHash []byte `json:"message_hash" db:"message_hash"` // SHA256 of canonical result
+	MessageHash     []byte `json:"message_hash" db:"message_hash"` // SHA256 of canonical result
+	SignatureDomain string `json:"signature_domain" db:"signature_domain"`
 
 	// BLS Signature
-	Signature []byte `json:"signature" db:"signature"` // BLS12-381 G1 point (48 bytes compressed)
+	Signature []byte `json:"signature" db:"bls_signature"` // BLS12-381 G1 point (48 bytes compressed)
 
 	// Validator Weight
 	Weight int64 `json:"weight" db:"weight"`
@@ -867,48 +904,63 @@ type BLSAttestationRecord struct {
 	// Subgroup Validation (security check)
 	SubgroupValid bool `json:"subgroup_valid" db:"subgroup_valid"`
 
+	// Chain position the validator attested at
+	AttestedBlockNumber int64 `json:"attested_block_number" db:"attested_block_number"`
+
 	// Verification
 	SignatureValid bool       `json:"signature_valid" db:"signature_valid"`
 	VerifiedAt     *time.Time `json:"verified_at,omitempty" db:"verified_at"`
 
-	AttestedAt time.Time `json:"attested_at" db:"attested_at"`
+	AttestedAt time.Time `json:"attested_at" db:"attestation_time"`
 	CreatedAt  time.Time `json:"created_at" db:"created_at"`
 }
 
-// NewBLSAttestation is used to create a new BLS attestation record
+// NewBLSAttestation is used to create a new BLS attestation record in bls_result_attestations.
 type NewBLSAttestation struct {
-	ResultID      uuid.UUID `json:"result_id"`
-	SnapshotID    uuid.UUID `json:"snapshot_id"`
-	ValidatorID   string    `json:"validator_id"`
-	PublicKey     []byte    `json:"public_key"`
-	MessageHash   []byte    `json:"message_hash"`
-	Signature     []byte    `json:"signature"`
-	Weight        int64     `json:"weight"`
-	SubgroupValid bool      `json:"subgroup_valid"`
-	AttestedAt    time.Time `json:"attested_at"`
+	ResultID              uuid.UUID  `json:"result_id"`
+	SnapshotID            *uuid.UUID `json:"snapshot_id,omitempty"`
+	ResultHash            []byte     `json:"result_hash"`
+	BundleID              []byte     `json:"bundle_id"`
+	ValidatorID           string     `json:"validator_id"`
+	ValidatorAddress      []byte     `json:"validator_address"`
+	ValidatorIndex        int        `json:"validator_index"`
+	PublicKey             []byte     `json:"public_key"`
+	MessageHash           []byte     `json:"message_hash"`
+	SignatureDomain       string     `json:"signature_domain,omitempty"`
+	Signature             []byte     `json:"signature"`
+	Weight                int64      `json:"weight"`
+	SubgroupValid         bool       `json:"subgroup_valid"`
+	AttestedBlockNumber   int64      `json:"attested_block_number"`
+	AttestedBlockHash     []byte     `json:"attested_block_hash,omitempty"`
+	ConfirmationsAtAttest int        `json:"confirmations_at_attest"`
+	AttestedAt            time.Time  `json:"attested_at"`
 }
 
-// AggregatedAttestationRecord stores BLS aggregated attestations
+// AggregatedAttestationRecord is an aggregated BLS attestation. Result-level aggregates live in
+// aggregated_bls_attestations (ResultID set); proof-cycle aggregates from the unified orchestrator live
+// in aggregated_attestations (CycleID set). Source says which.
 type AggregatedAttestationRecord struct {
-	AggregationID uuid.UUID `json:"aggregation_id" db:"aggregation_id"`
-	ResultID      uuid.UUID `json:"result_id" db:"result_id"`
-	SnapshotID    uuid.UUID `json:"snapshot_id" db:"snapshot_id"`
+	AggregationID uuid.UUID  `json:"aggregation_id" db:"aggregation_id"`
+	Source        string     `json:"source"` // "result" or "cycle"
+	ResultID      *uuid.UUID `json:"result_id,omitempty" db:"result_id"`
+	CycleID       *string    `json:"cycle_id,omitempty" db:"cycle_id"`
+	SnapshotID    *uuid.UUID `json:"snapshot_id,omitempty" db:"snapshot_id"`
 
 	// Aggregated Message (must match all individual attestations)
 	MessageHash []byte `json:"message_hash" db:"message_hash"`
 
 	// Aggregated BLS Signature
-	AggregatedSignature []byte `json:"aggregated_signature" db:"aggregated_signature"`   // BLS12-381 G1
-	AggregatedPublicKey []byte `json:"aggregated_public_key" db:"aggregated_public_key"` // BLS12-381 G2
+	AggregatedSignature []byte `json:"aggregated_signature" db:"aggregate_signature"`   // BLS12-381 G1
+	AggregatedPublicKey []byte `json:"aggregated_public_key" db:"aggregate_public_key"` // BLS12-381 G2
 
 	// Participant Information
-	ParticipantIDs   json.RawMessage `json:"participant_ids" db:"participant_ids"` // JSON array of validator IDs
-	ParticipantCount int             `json:"participant_count" db:"participant_count"`
+	ParticipantIDs   json.RawMessage `json:"participant_ids,omitempty" db:"participant_ids"` // JSON array of validator IDs
+	ParticipantCount int             `json:"participant_count" db:"validator_count"`
 
 	// Weight Calculations
-	TotalWeight     int64 `json:"total_weight" db:"total_weight"`
-	ThresholdWeight int64 `json:"threshold_weight" db:"threshold_weight"` // 2/3+1 of total
-	AchievedWeight  int64 `json:"achieved_weight" db:"achieved_weight"`
+	TotalWeight     int64 `json:"total_weight" db:"total_voting_power"`
+	ThresholdWeight int64 `json:"threshold_weight"` // floor(total * numerator / denominator) + 1
+	AchievedWeight  int64 `json:"achieved_weight" db:"signed_voting_power"`
 
 	// Threshold Met
 	ThresholdMet bool `json:"threshold_met" db:"threshold_met"`
@@ -917,27 +969,40 @@ type AggregatedAttestationRecord struct {
 	MessageConsistencyValid bool `json:"message_consistency_valid" db:"message_consistency_valid"`
 
 	// Verification
-	AggregationValid bool       `json:"aggregation_valid" db:"aggregation_valid"`
+	AggregationValid bool       `json:"aggregation_valid" db:"aggregate_verified"`
 	VerifiedAt       *time.Time `json:"verified_at,omitempty" db:"verified_at"`
 
-	AggregatedAt time.Time `json:"aggregated_at" db:"aggregated_at"`
+	AggregatedAt time.Time `json:"aggregated_at"`
 	CreatedAt    time.Time `json:"created_at" db:"created_at"`
 }
 
-// NewAggregatedAttestation is used to create a new aggregated attestation record
+// NewAggregatedAttestation creates a result-level aggregated BLS attestation in
+// aggregated_bls_attestations.
 type NewAggregatedAttestation struct {
 	ResultID                uuid.UUID       `json:"result_id"`
-	SnapshotID              uuid.UUID       `json:"snapshot_id"`
+	SnapshotID              *uuid.UUID      `json:"snapshot_id,omitempty"`
+	ResultHash              []byte          `json:"result_hash"`
+	BundleID                []byte          `json:"bundle_id"`
+	AttestedBlockNumber     int64           `json:"attested_block_number"`
 	MessageHash             []byte          `json:"message_hash"`
 	AggregatedSignature     []byte          `json:"aggregated_signature"`
 	AggregatedPublicKey     []byte          `json:"aggregated_public_key"`
+	ValidatorBitfield       []byte          `json:"validator_bitfield"`
+	ValidatorAddresses      [][]byte        `json:"validator_addresses"`
+	ValidatorIndices        []int32         `json:"validator_indices"`
+	AttestationIDs          []uuid.UUID     `json:"attestation_ids"`
 	ParticipantIDs          json.RawMessage `json:"participant_ids"`
 	ParticipantCount        int             `json:"participant_count"`
 	TotalWeight             int64           `json:"total_weight"`
 	ThresholdWeight         int64           `json:"threshold_weight"`
 	AchievedWeight          int64           `json:"achieved_weight"`
+	ThresholdNumerator      int             `json:"threshold_numerator"`
+	ThresholdDenominator    int             `json:"threshold_denominator"`
 	ThresholdMet            bool            `json:"threshold_met"`
 	MessageConsistencyValid bool            `json:"message_consistency_valid"`
+	FirstAttestationAt      time.Time       `json:"first_attestation_at"`
+	LastAttestationAt       time.Time       `json:"last_attestation_at"`
+	AggregationHash         []byte          `json:"aggregation_hash"`
 	AggregatedAt            time.Time       `json:"aggregated_at"`
 }
 
@@ -958,7 +1023,7 @@ type ValidatorSetSnapshotRecord struct {
 	TotalWeight     int64  `json:"total_weight" db:"total_weight"`
 	ThresholdWeight int64  `json:"threshold_weight" db:"threshold_weight"` // 2/3+1
 
-	// Snapshot Hash (RFC8785 canonical JSON)
+	// Snapshot Hash
 	SnapshotHash []byte `json:"snapshot_hash" db:"snapshot_hash"`
 
 	// Chain Reference
@@ -990,36 +1055,38 @@ type ValidatorEntry struct {
 	Index       int    `json:"index"` // Position in validator set
 }
 
-// ProofCycleCompletionRecord tracks complete proof cycles through all 4 levels
+// ProofCycleCompletionRecord tracks complete proof cycles through all 4 levels. The per-level ids are
+// NULL until that level is recorded, so they are pointers.
 type ProofCycleCompletionRecord struct {
 	CompletionID uuid.UUID `json:"completion_id" db:"completion_id"`
 	ProofID      uuid.UUID `json:"proof_id" db:"proof_id"`
+	CycleID      *string   `json:"cycle_id,omitempty" db:"cycle_id"`
 
 	// Level 1: Chained Proof
-	Level1Complete bool      `json:"level1_complete" db:"level1_complete"`
-	Level1ProofID  uuid.UUID `json:"level1_proof_id,omitempty" db:"level1_proof_id"`
-	Level1Hash     []byte    `json:"level1_hash,omitempty" db:"level1_hash"`
+	Level1Complete bool       `json:"level1_complete" db:"level1_complete"`
+	Level1ProofID  *uuid.UUID `json:"level1_proof_id,omitempty" db:"level1_proof_id"`
+	Level1Hash     []byte     `json:"level1_hash,omitempty" db:"level1_hash"`
 
 	// Level 2: Governance Proof
-	Level2Complete bool      `json:"level2_complete" db:"level2_complete"`
-	Level2ProofID  uuid.UUID `json:"level2_proof_id,omitempty" db:"level2_proof_id"`
-	Level2Hash     []byte    `json:"level2_hash,omitempty" db:"level2_hash"`
+	Level2Complete bool       `json:"level2_complete" db:"level2_complete"`
+	Level2ProofID  *uuid.UUID `json:"level2_proof_id,omitempty" db:"level2_proof_id"`
+	Level2Hash     []byte     `json:"level2_hash,omitempty" db:"level2_hash"`
 
 	// Level 3: Anchor Proof
-	Level3Complete bool      `json:"level3_complete" db:"level3_complete"`
-	Level3ProofID  uuid.UUID `json:"level3_proof_id,omitempty" db:"level3_proof_id"`
-	Level3Hash     []byte    `json:"level3_hash,omitempty" db:"level3_hash"`
+	Level3Complete bool       `json:"level3_complete" db:"level3_complete"`
+	Level3ProofID  *uuid.UUID `json:"level3_proof_id,omitempty" db:"level3_proof_id"`
+	Level3Hash     []byte     `json:"level3_hash,omitempty" db:"level3_hash"`
 
 	// Level 4: Execution Proof
-	Level4Complete bool      `json:"level4_complete" db:"level4_complete"`
-	Level4ResultID uuid.UUID `json:"level4_result_id,omitempty" db:"level4_result_id"`
-	Level4Hash     []byte    `json:"level4_hash,omitempty" db:"level4_hash"`
+	Level4Complete bool       `json:"level4_complete" db:"level4_complete"`
+	Level4ResultID *uuid.UUID `json:"level4_result_id,omitempty" db:"level4_result_id"`
+	Level4Hash     []byte     `json:"level4_hash,omitempty" db:"level4_hash"`
 
 	// Cross-Level Bindings Valid
 	BindingsValid bool `json:"bindings_valid" db:"bindings_valid"`
 
 	// Complete Cycle Hash (all levels bound together)
-	CycleHash []byte `json:"cycle_hash" db:"cycle_hash"`
+	CycleHash []byte `json:"cycle_hash,omitempty" db:"cycle_hash"`
 
 	// Cycle Status
 	AllLevelsComplete bool `json:"all_levels_complete" db:"all_levels_complete"`
@@ -1038,6 +1105,7 @@ type ProofCycleCompletionRecord struct {
 // NewProofCycleCompletion is used to create a new proof cycle completion record
 type NewProofCycleCompletion struct {
 	ProofID uuid.UUID `json:"proof_id"`
+	CycleID string    `json:"cycle_id,omitempty"`
 }
 
 // ProofCycleCompletionUpdate is used to update a proof cycle completion record

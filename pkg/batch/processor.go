@@ -603,9 +603,11 @@ func (p *Processor) createProofs(ctx context.Context, result *ClosedBatchResult,
 
 		artifactInput := p.buildProofArtifact(tx, result, anchorID, anchorResult, proof, govLevel)
 		if artifactInput != nil {
-			if _, err := p.repos.ProofArtifacts.CreateProofArtifact(ctx, artifactInput); err != nil {
+			artifact, err := p.repos.ProofArtifacts.CreateProofArtifact(ctx, artifactInput)
+			if err != nil {
 				return fmt.Errorf("persist proof artifact for tx %d: %w", tx.ID, err)
 			}
+			p.createCertenProof(ctx, tx, result, anchorID, anchorResult, proof, merklePath, govLevel, artifact.ProofID)
 		}
 
 		// Update transaction merkle path in database
@@ -1166,4 +1168,50 @@ func (p *Processor) triggerAnchorSubmittedFirestoreEvent(result *ClosedBatchResu
 	if err := p.firestoreSyncService.OnAnchorSubmitted(ctx, event); err != nil {
 		p.logger.Printf("Warning: failed to send anchor submitted event to Firestore: %v", err)
 	}
+}
+
+// createCertenProof stores the four-component Certen proof for one batch transaction beside its proof
+// artifact: inclusion under the batch root, the anchor transaction that published that root, the
+// transaction's chained state proof and its governance proof. A failure here is logged and does not fail
+// the batch; the artifact is already stored.
+func (p *Processor) createCertenProof(
+	ctx context.Context,
+	tx *database.BatchTransaction,
+	result *ClosedBatchResult,
+	anchorID uuid.UUID,
+	anchorResult *BatchAnchorResult,
+	inclusion *merkle.InclusionProof,
+	merklePath []database.MerklePathNode,
+	govLevel database.GovernanceLevel,
+	artifactID uuid.UUID,
+) {
+	if p.repos.Proofs == nil || anchorResult == nil {
+		return
+	}
+	stored, err := p.repos.Proofs.CreateProof(ctx, &database.NewCertenAnchorProof{
+		ProofArtifactID:   artifactID,
+		BatchID:           result.BatchID,
+		AnchorID:          anchorID,
+		TransactionID:     tx.ID,
+		AccumTxHash:       tx.AccumTxHash,
+		AccountURL:        tx.AccountURL,
+		MerkleRoot:        result.MerkleRoot,
+		MerkleInclusion:   merklePath,
+		LeafHash:          tx.TxHash,
+		LeafIndex:         inclusion.LeafIndex,
+		AnchorChain:       database.TargetChain(p.targetChain),
+		AnchorTxHash:      anchorResult.TxHash,
+		AnchorBlockNumber: anchorResult.BlockNumber,
+		AnchorBlockHash:   anchorResult.BlockHash,
+		AccumStateProof:   tx.ChainedProof,
+		GovProof:          tx.GovProof,
+		GovLevel:          govLevel,
+		GovValid:          tx.GovValid,
+		ValidatorID:       p.validatorID,
+	})
+	if err != nil {
+		p.logger.Printf("ERROR: [CERTEN-PROOF] failed to store the Certen proof for tx %d (accum_tx=%s): %v", tx.ID, tx.AccumTxHash, err)
+		return
+	}
+	p.logger.Printf("Stored Certen proof %s for tx %d (artifact %s)", stored.ProofID, tx.ID, artifactID)
 }

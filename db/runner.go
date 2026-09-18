@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/lib/pq"
 )
 
 const advisoryLockID int64 = 0x4352544E5343484D // "CRTNSCHM"
@@ -67,6 +69,21 @@ type Runner struct {
 	DB               *sql.DB
 	LockTimeout      time.Duration
 	StatementTimeout time.Duration
+	// LockRetries is how many more times a transactional file is attempted after it fails on
+	// lock_timeout. Each attempt rolls back completely, so a retry starts from a clean slate.
+	LockRetries  int
+	RetryBackoff time.Duration
+
+	// catalog replaces the embedded catalog in tests, so the stateful gates can exercise a file the
+	// production catalog does not contain without editing it.
+	catalog []Migration
+}
+
+func (r Runner) migrations() ([]Migration, error) {
+	if r.catalog != nil {
+		return r.catalog, nil
+	}
+	return Migrations()
 }
 
 // Fingerprint hashes the complete live public catalog deterministically. It intentionally contains schema
@@ -218,6 +235,14 @@ func (r Runner) defaults() Runner {
 	if r.StatementTimeout <= 0 {
 		r.StatementTimeout = 2 * time.Minute
 	}
+	if r.LockRetries < 0 {
+		r.LockRetries = 0
+	} else if r.LockRetries == 0 {
+		r.LockRetries = 4
+	}
+	if r.RetryBackoff <= 0 {
+		r.RetryBackoff = time.Second
+	}
 	return r
 }
 
@@ -266,7 +291,7 @@ func (r Runner) Up(ctx context.Context, appliedBy string) error {
 	if r.DB == nil {
 		return errors.New("schema runner requires a database")
 	}
-	migrations, err := Migrations()
+	migrations, err := r.migrations()
 	if err != nil {
 		return err
 	}
@@ -310,12 +335,39 @@ func (r Runner) Up(ctx context.Context, appliedBy string) error {
 				if err := applyWithoutTransaction(ctx, conn, m, sum, appliedBy, r); err != nil {
 					return err
 				}
-			} else if err := applyInTransaction(ctx, conn, m, sum, appliedBy, r); err != nil {
+			} else if err := r.applyWithLockRetry(ctx, conn, m, sum, appliedBy); err != nil {
 				return err
 			}
 		}
 		return nil
 	})
+}
+
+// applyWithLockRetry retries a transactional file that lost a lock race. A busy table is an ordinary
+// deploy-time condition, and because the whole file rolled back there is nothing partial to undo.
+// A non-transactional file is never retried: it may have committed some of its statements.
+func (r Runner) applyWithLockRetry(ctx context.Context, conn *sql.Conn, m Migration, sum, appliedBy string) error {
+	backoff := r.RetryBackoff
+	for attempt := 0; ; attempt++ {
+		err := applyInTransaction(ctx, conn, m, sum, appliedBy, r)
+		if err == nil || !isLockTimeout(err) {
+			return err
+		}
+		if attempt >= r.LockRetries {
+			return fmt.Errorf("%w (gave up after %d attempts)", err, attempt+1)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff):
+		}
+		backoff *= 2
+	}
+}
+
+func isLockTimeout(err error) bool {
+	var pqErr *pq.Error
+	return errors.As(err, &pqErr) && pqErr.Code == "55P03"
 }
 
 // Verify checks that all migrations through requiredVersion have been applied with their expected checksum.
@@ -324,7 +376,7 @@ func (r Runner) Verify(ctx context.Context, requiredVersion string) error {
 	if r.DB == nil {
 		return errors.New("schema runner requires a database")
 	}
-	migrations, err := Migrations()
+	migrations, err := r.migrations()
 	if err != nil {
 		return err
 	}
@@ -407,7 +459,7 @@ func (r Runner) Adopt(ctx context.Context, fingerprint, approvedFingerprint, app
 		if err := ensureHistory(ctx, conn); err != nil {
 			return fmt.Errorf("create schema history: %w", err)
 		}
-		migrations, err := Migrations()
+		migrations, err := r.migrations()
 		if err != nil {
 			return err
 		}

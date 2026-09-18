@@ -11,6 +11,7 @@
 package database
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -104,6 +105,7 @@ type NewUnifiedAttestation struct {
 	AttestedBlockNumber *int64
 	AttestedBlockHash   []byte
 	AttestedAt          time.Time
+	SnapshotID          *uuid.UUID // validator set this attestation is counted against
 }
 
 // =============================================================================
@@ -160,6 +162,11 @@ type NewUnifiedAggregatedAttestation struct {
 	FirstAttestationAt   *time.Time
 	LastAttestationAt    *time.Time
 	AggregatedAt         time.Time
+
+	// Validator set the weights were counted against, and whether every aggregated attestation
+	// signed the same message.
+	SnapshotID              *uuid.UUID
+	MessageConsistencyValid bool
 }
 
 // =============================================================================
@@ -201,6 +208,13 @@ type ChainExecutionResult struct {
 	FinalizedAt           sql.NullTime    `db:"finalized_at" json:"finalized_at,omitempty"`
 	CreatedAt             time.Time       `db:"created_at" json:"created_at"`
 	UpdatedAt             time.Time       `db:"updated_at" json:"updated_at"`
+
+	// Position in the target chain's result hash chain, as bound into the write-back bundle. NULL on
+	// results that were not a cycle's primary observation and on rows from before it was persisted.
+	SequenceNumber     sql.NullInt64 `db:"sequence_number" json:"sequence_number,omitempty"`
+	PreviousResultHash []byte        `db:"previous_result_hash" json:"previous_result_hash,omitempty"`
+	AnchorProofHash    []byte        `db:"anchor_proof_hash" json:"anchor_proof_hash,omitempty"`
+	ChainResultHash    []byte        `db:"chain_result_hash" json:"chain_result_hash,omitempty"`
 }
 
 // NewChainExecutionResult is input for creating a chain execution result
@@ -261,8 +275,8 @@ func (r *UnifiedRepository) CreateUnifiedAttestation(ctx context.Context, input 
 		INSERT INTO unified_attestations (
 			attestation_id, proof_id, cycle_id, scheme, validator_id, validator_index,
 			public_key, signature, message_hash, weight,
-			attested_block_number, attested_block_hash, attested_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+			attested_block_number, attested_block_hash, attested_at, snapshot_id
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 	`
 
 	var proofID interface{}
@@ -283,7 +297,7 @@ func (r *UnifiedRepository) CreateUnifiedAttestation(ctx context.Context, input 
 	_, err := r.db.ExecContext(ctx, query,
 		id, proofID, input.CycleID, input.Scheme, input.ValidatorID, validatorIndex,
 		input.PublicKey, input.Signature, input.MessageHash, input.Weight,
-		blockNumber, input.AttestedBlockHash, input.AttestedAt,
+		blockNumber, input.AttestedBlockHash, input.AttestedAt, input.SnapshotID,
 	)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("create unified attestation: %w", err)
@@ -427,12 +441,14 @@ func (r *UnifiedRepository) CreateAggregatedAttestation(ctx context.Context, inp
 		return uuid.Nil, fmt.Errorf("marshal participant IDs: %w", err)
 	}
 
-	var attestationIDsJSON []byte
+	// A typed nil []byte reaches jsonb as an empty string, which is not JSON; no ids is SQL NULL.
+	var attestationIDsJSON any
 	if len(input.AttestationIDs) > 0 {
-		attestationIDsJSON, err = json.Marshal(input.AttestationIDs)
+		encoded, err := json.Marshal(input.AttestationIDs)
 		if err != nil {
 			return uuid.Nil, fmt.Errorf("marshal attestation IDs: %w", err)
 		}
+		attestationIDsJSON = encoded
 	}
 
 	query := `
@@ -442,8 +458,9 @@ func (r *UnifiedRepository) CreateAggregatedAttestation(ctx context.Context, inp
 			participant_ids, participant_count, validator_bitfield,
 			total_weight, achieved_weight, threshold_weight, threshold_met,
 			threshold_numerator, threshold_denominator,
-			attestation_ids, first_attestation_at, last_attestation_at, aggregated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+			attestation_ids, first_attestation_at, last_attestation_at, aggregated_at,
+			snapshot_id, message_consistency_valid
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
 	`
 
 	var proofID interface{}
@@ -458,6 +475,7 @@ func (r *UnifiedRepository) CreateAggregatedAttestation(ctx context.Context, inp
 		input.TotalWeight, input.AchievedWeight, input.ThresholdWeight, input.ThresholdMet,
 		input.ThresholdNumerator, input.ThresholdDenominator,
 		attestationIDsJSON, input.FirstAttestationAt, input.LastAttestationAt, input.AggregatedAt,
+		input.SnapshotID, input.MessageConsistencyValid,
 	)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("create aggregated attestation: %w", err)
@@ -620,7 +638,7 @@ func (r *UnifiedRepository) CreateChainExecutionResult(ctx context.Context, inpu
 		input.Status, gasUsed, input.GasCost, input.Confirmations, requiredConfirmations, input.IsFinalized,
 		input.ResultHash, input.MerkleProof, input.ReceiptProof,
 		input.StateRoot, input.TransactionsRoot, input.ReceiptsRoot,
-		input.RawReceipt, input.Logs, input.PlatformData,
+		nullableJSON(input.RawReceipt), nullableJSON(input.Logs), nullableJSON(input.PlatformData),
 		input.ObserverValidatorID, workflowStep, input.AnchorID, input.SubmittedAt,
 	)
 	if err != nil {
@@ -640,7 +658,8 @@ func (r *UnifiedRepository) GetChainExecutionResult(ctx context.Context, id uuid
 		       state_root, transactions_root, receipts_root,
 		       raw_receipt, logs, platform_data,
 		       observer_validator_id, workflow_step, anchor_id,
-		       submitted_at, confirmed_at, finalized_at, created_at, updated_at
+		       submitted_at, confirmed_at, finalized_at, created_at, updated_at,
+		       sequence_number, previous_result_hash, anchor_proof_hash, chain_result_hash
 		FROM chain_execution_results
 		WHERE result_id = $1
 	`
@@ -657,6 +676,7 @@ func (r *UnifiedRepository) GetChainExecutionResult(ctx context.Context, id uuid
 		&result.ObserverValidatorID, &result.WorkflowStep, &result.AnchorID,
 		&result.SubmittedAt, &result.ConfirmedAt, &result.FinalizedAt,
 		&result.CreatedAt, &result.UpdatedAt,
+		&result.SequenceNumber, &result.PreviousResultHash, &result.AnchorProofHash, &result.ChainResultHash,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -678,7 +698,8 @@ func (r *UnifiedRepository) GetChainExecutionResultsByProof(ctx context.Context,
 		       state_root, transactions_root, receipts_root,
 		       raw_receipt, logs, platform_data,
 		       observer_validator_id, workflow_step, anchor_id,
-		       submitted_at, confirmed_at, finalized_at, created_at, updated_at
+		       submitted_at, confirmed_at, finalized_at, created_at, updated_at,
+		       sequence_number, previous_result_hash, anchor_proof_hash, chain_result_hash
 		FROM chain_execution_results
 		WHERE proof_id = $1
 		ORDER BY workflow_step ASC, created_at ASC
@@ -704,6 +725,7 @@ func (r *UnifiedRepository) GetChainExecutionResultsByProof(ctx context.Context,
 			&result.ObserverValidatorID, &result.WorkflowStep, &result.AnchorID,
 			&result.SubmittedAt, &result.ConfirmedAt, &result.FinalizedAt,
 			&result.CreatedAt, &result.UpdatedAt,
+			&result.SequenceNumber, &result.PreviousResultHash, &result.AnchorProofHash, &result.ChainResultHash,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scan execution result: %w", err)
@@ -724,7 +746,8 @@ func (r *UnifiedRepository) GetChainExecutionResultByTxHash(ctx context.Context,
 		       state_root, transactions_root, receipts_root,
 		       raw_receipt, logs, platform_data,
 		       observer_validator_id, workflow_step, anchor_id,
-		       submitted_at, confirmed_at, finalized_at, created_at, updated_at
+		       submitted_at, confirmed_at, finalized_at, created_at, updated_at,
+		       sequence_number, previous_result_hash, anchor_proof_hash, chain_result_hash
 		FROM chain_execution_results
 		WHERE chain_id = $1 AND tx_hash = $2
 	`
@@ -741,6 +764,7 @@ func (r *UnifiedRepository) GetChainExecutionResultByTxHash(ctx context.Context,
 		&result.ObserverValidatorID, &result.WorkflowStep, &result.AnchorID,
 		&result.SubmittedAt, &result.ConfirmedAt, &result.FinalizedAt,
 		&result.CreatedAt, &result.UpdatedAt,
+		&result.SequenceNumber, &result.PreviousResultHash, &result.AnchorProofHash, &result.ChainResultHash,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -750,6 +774,93 @@ func (r *UnifiedRepository) GetChainExecutionResultByTxHash(ctx context.Context,
 	}
 
 	return &result, nil
+}
+
+// UpdateChainExecutionHashChain records where a result sits in its observer's result hash chain for the
+// target chain: the values the write-back bundle committed to, including the chained result hash.
+func (r *UnifiedRepository) UpdateChainExecutionHashChain(ctx context.Context, id uuid.UUID, sequence int64, previousResultHash, anchorProofHash, chainResultHash []byte) error {
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE chain_execution_results
+		SET sequence_number = $2, previous_result_hash = $3, anchor_proof_hash = $4, chain_result_hash = $5, updated_at = NOW()
+		WHERE result_id = $1`, id, sequence, previousResultHash, anchorProofHash, chainResultHash)
+	if err != nil {
+		return fmt.Errorf("update chain execution hash chain: %w", err)
+	}
+	if rows, _ := result.RowsAffected(); rows == 0 {
+		return fmt.Errorf("chain execution result not found: %s", id)
+	}
+	return nil
+}
+
+// ChainHashChainHead is the newest persisted link of one validator's result hash chain for one target
+// chain.
+type ChainHashChainHead struct {
+	ChainID         string
+	SequenceNumber  int64
+	ChainResultHash []byte
+	AnchorProofHash []byte
+}
+
+// GetChainHashChainHeads returns the newest persisted link of each of a validator's result hash chains,
+// so a restarted validator continues its chains instead of starting them again at sequence 0. Chains are
+// per observer: seven validators share this table and each keeps its own.
+func (r *UnifiedRepository) GetChainHashChainHeads(ctx context.Context, observerValidatorID string) ([]ChainHashChainHead, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT DISTINCT ON (chain_id) chain_id, sequence_number, chain_result_hash, anchor_proof_hash
+		FROM chain_execution_results
+		WHERE observer_validator_id = $1 AND sequence_number IS NOT NULL AND chain_result_hash IS NOT NULL
+		ORDER BY chain_id, sequence_number DESC`, observerValidatorID)
+	if err != nil {
+		return nil, fmt.Errorf("query hash chain heads: %w", err)
+	}
+	defer rows.Close()
+	var heads []ChainHashChainHead
+	for rows.Next() {
+		var head ChainHashChainHead
+		if err := rows.Scan(&head.ChainID, &head.SequenceNumber, &head.ChainResultHash, &head.AnchorProofHash); err != nil {
+			return nil, fmt.Errorf("scan hash chain head: %w", err)
+		}
+		heads = append(heads, head)
+	}
+	return heads, rows.Err()
+}
+
+// VerifyChainExecutionHashChain checks one validator's persisted result hash chain for one target chain:
+// sequence numbers are consecutive and each link's previous_result_hash is its predecessor's
+// chain_result_hash. A chain whose first persisted link is sequence 0 must start from the zero hash; a
+// chain persisted from mid-way (earlier results predate persistence) is checked from its first stored
+// link. It returns the number of links checked.
+func (r *UnifiedRepository) VerifyChainExecutionHashChain(ctx context.Context, observerValidatorID, chainID string) (int, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT sequence_number, previous_result_hash, chain_result_hash
+		FROM chain_execution_results
+		WHERE observer_validator_id = $1 AND chain_id = $2 AND sequence_number IS NOT NULL
+		ORDER BY sequence_number ASC`, observerValidatorID, chainID)
+	if err != nil {
+		return 0, fmt.Errorf("query hash chain: %w", err)
+	}
+	defer rows.Close()
+	var previousHash []byte
+	var previousSequence int64
+	count := 0
+	for rows.Next() {
+		var sequence int64
+		var prevHash, chainHash []byte
+		if err := rows.Scan(&sequence, &prevHash, &chainHash); err != nil {
+			return count, fmt.Errorf("scan hash chain link: %w", err)
+		}
+		switch {
+		case count == 0 && sequence == 0 && !bytes.Equal(prevHash, make([]byte, len(prevHash))):
+			return count, fmt.Errorf("%w: link 0 does not start from the zero hash", ErrHashChainBroken)
+		case count > 0 && sequence != previousSequence+1:
+			return count, fmt.Errorf("%w: link %d follows link %d", ErrHashChainBroken, sequence, previousSequence)
+		case count > 0 && !bytes.Equal(prevHash, previousHash):
+			return count, fmt.Errorf("%w: link %d does not point at link %d", ErrHashChainBroken, sequence, previousSequence)
+		}
+		previousHash, previousSequence = chainHash, sequence
+		count++
+	}
+	return count, rows.Err()
 }
 
 // UpdateChainExecutionConfirmations updates confirmations for a result

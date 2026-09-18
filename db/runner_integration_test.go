@@ -2,6 +2,7 @@ package schema
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"fmt"
 	"net/url"
@@ -138,6 +139,151 @@ func TestRunnerDatabaseGates(t *testing.T) {
 			}
 		})
 	})
+
+	t.Run("a busy table is retried, then the file applies once", func(t *testing.T) {
+		withThrowawayDatabase(t, conn, func(db *sql.DB) {
+			ctx := context.Background()
+			if err := (Runner{DB: db}).Up(ctx, "fixture"); err != nil {
+				t.Fatalf("build fixture: %v", err)
+			}
+			release := holdTableLock(t, db, "anchor_batches")
+			go func() { time.Sleep(300 * time.Millisecond); release() }()
+
+			runner := probeRunner(t, db)
+			runner.LockRetries, runner.RetryBackoff = 5, 50*time.Millisecond
+			if err := runner.Up(ctx, "test-suite"); err != nil {
+				t.Fatalf("migrate up with a briefly locked table: %v", err)
+			}
+			if !columnExists(t, db, "anchor_batches", "retry_probe") {
+				t.Fatal("probe column missing after a successful retry")
+			}
+			assertHistoryRows(t, db, migrationCount(t)+1)
+		})
+	})
+
+	t.Run("a lock that never clears fails cleanly with nothing applied", func(t *testing.T) {
+		withThrowawayDatabase(t, conn, func(db *sql.DB) {
+			ctx := context.Background()
+			if err := (Runner{DB: db}).Up(ctx, "fixture"); err != nil {
+				t.Fatalf("build fixture: %v", err)
+			}
+			release := holdTableLock(t, db, "anchor_batches")
+			defer release()
+
+			runner := probeRunner(t, db)
+			runner.LockRetries, runner.RetryBackoff = 2, 20*time.Millisecond
+			err := runner.Up(ctx, "test-suite")
+			if err == nil || !isLockTimeout(err) || !strings.Contains(err.Error(), "gave up after 3 attempts") {
+				t.Fatalf("locked migrate up error = %v, want a lock timeout after 3 attempts", err)
+			}
+			release()
+			if columnExists(t, db, "anchor_batches", "retry_probe") {
+				t.Fatal("a failed file left its column behind")
+			}
+			assertHistoryRows(t, db, migrationCount(t))
+		})
+	})
+
+	t.Run("an edited applied file stops the run before anything new applies", func(t *testing.T) {
+		withThrowawayDatabase(t, conn, func(db *sql.DB) {
+			ctx := context.Background()
+			if err := (Runner{DB: db}).Up(ctx, "fixture"); err != nil {
+				t.Fatalf("build fixture: %v", err)
+			}
+			if _, err := db.Exec("UPDATE public.certen_schema_history SET sha256 = repeat('0', 64) WHERE version = '00001'"); err != nil {
+				t.Fatal(err)
+			}
+			err := probeRunner(t, db).Up(ctx, "test-suite")
+			if err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
+				t.Fatalf("migrate up error = %v, want checksum mismatch", err)
+			}
+			if columnExists(t, db, "anchor_batches", "retry_probe") {
+				t.Fatal("a pending file applied despite a checksum mismatch")
+			}
+			if err := (Runner{DB: db}).Verify(ctx, ""); err == nil {
+				t.Fatal("verify accepted an edited applied file")
+			}
+		})
+	})
+
+	t.Run("a missing lower version stops the run", func(t *testing.T) {
+		withThrowawayDatabase(t, conn, func(db *sql.DB) {
+			ctx := context.Background()
+			if err := (Runner{DB: db}).Up(ctx, "fixture"); err != nil {
+				t.Fatalf("build fixture: %v", err)
+			}
+			if _, err := db.Exec("DELETE FROM public.certen_schema_history WHERE version = '00001'"); err != nil {
+				t.Fatal(err)
+			}
+			err := probeRunner(t, db).Up(ctx, "test-suite")
+			if err == nil || !strings.Contains(err.Error(), "gap before migration") {
+				t.Fatalf("migrate up error = %v, want a history gap", err)
+			}
+			if columnExists(t, db, "anchor_batches", "retry_probe") {
+				t.Fatal("a pending file applied despite a history gap")
+			}
+		})
+	})
+
+	t.Run("an older binary accepts a newer schema", func(t *testing.T) {
+		withThrowawayDatabase(t, conn, func(db *sql.DB) {
+			ctx := context.Background()
+			newer := probeRunner(t, db)
+			if err := newer.Up(ctx, "newer-binary"); err != nil {
+				t.Fatalf("newer binary migrate up: %v", err)
+			}
+			required, err := LatestVersion()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := (Runner{DB: db}).Verify(ctx, required); err != nil {
+				t.Fatalf("older binary rejected a schema one migration ahead of it: %v", err)
+			}
+			if err := (Runner{DB: db}).Up(ctx, "older-binary"); err != nil {
+				t.Fatalf("older binary migrate up against a newer schema: %v", err)
+			}
+		})
+	})
+}
+
+// probeRunner is the production catalog plus one additive file that alters a real table, so the gates
+// above can watch a pending migration wait on, retry, or refuse to apply against production objects.
+func probeRunner(t *testing.T, db *sql.DB) Runner {
+	t.Helper()
+	migrations, err := Migrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	probeSQL := []byte("ALTER TABLE public.anchor_batches ADD COLUMN retry_probe integer;\n")
+	probe := Migration{Version: "99990", Name: "99990_retry_probe.sql", SQL: probeSQL, SHA256: sha256.Sum256(probeSQL)}
+	return Runner{DB: db, LockTimeout: 200 * time.Millisecond, catalog: append(migrations, probe)}
+}
+
+// holdTableLock takes ACCESS EXCLUSIVE on a table in an open transaction; the returned func releases it
+// and is safe to call more than once.
+func holdTableLock(t *testing.T, db *sql.DB, table string) func() {
+	t.Helper()
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec("LOCK TABLE public." + pq.QuoteIdentifier(table) + " IN ACCESS EXCLUSIVE MODE"); err != nil {
+		tx.Rollback()
+		t.Fatal(err)
+	}
+	var once sync.Once
+	return func() { once.Do(func() { tx.Rollback() }) }
+}
+
+func columnExists(t *testing.T, db *sql.DB, table, column string) bool {
+	t.Helper()
+	var exists bool
+	err := db.QueryRow(`SELECT EXISTS (SELECT 1 FROM information_schema.columns
+		WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2)`, table, column).Scan(&exists)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return exists
 }
 
 func withThrowawayDatabase(t *testing.T, conn string, test func(*sql.DB)) {

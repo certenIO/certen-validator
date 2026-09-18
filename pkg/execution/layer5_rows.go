@@ -258,14 +258,36 @@ func (o *UnifiedOrchestrator) writeLayer5(
 	proofID uuid.UUID,
 	req *UnifiedProofCycleRequest,
 	result *UnifiedProofCycleResult,
-) {
-	if o.config.Repos == nil || o.config.Repos.ProofArtifacts == nil || req == nil || result == nil {
-		return
+) (*Layer5, *database.Layer5Binding) {
+	l5, binding := o.resolveAnchorBinding(ctx, proofID, req.IntentID, req.AccumulateTxHash, req.LeafHash, req.MerkleRoot[:], result)
+	if l5 == nil {
+		return nil, binding
+	}
+	if err := WriteLayer5Row(ctx, o.config.Repos.ProofArtifacts, proofID, l5, binding, logfPrintf); err != nil {
+		return l5, binding
+	}
+	logfPrintf("   L5 claim: %s", l5.ExternalClaim())
+	return l5, binding
+}
+
+// resolveAnchorBinding works out where a proof's root was anchored: the canonical batch row covering the
+// intent's leaf when there is one, or the one-member tree whose root is its leaf. It returns nil when no
+// honest binding can be built, never a binding to the settlement transaction. Layer 5, level 3 of the
+// proof cycle and the Certen anchor proof all take their anchor from here, so they cannot disagree.
+func (o *UnifiedOrchestrator) resolveAnchorBinding(
+	ctx context.Context,
+	proofID uuid.UUID,
+	intentID, accumTxHash string,
+	leafHash, merkleRoot []byte,
+	result *UnifiedProofCycleResult,
+) (*Layer5, *database.Layer5Binding) {
+	if o.config.Repos == nil || o.config.Repos.ProofArtifacts == nil || result == nil {
+		return nil, nil
 	}
 	if len(result.ObservationResults) == 0 {
 		logfPrintf("ℹ️ [L5-PERSIST] proof %s: no observed target-chain transaction, so there are no "+
 			"external coordinates to bind to; no L5 row", proofID)
-		return
+		return nil, nil
 	}
 	obs := result.ObservationResults[0]
 
@@ -276,8 +298,8 @@ func (o *UnifiedOrchestrator) writeLayer5(
 	var binding *database.Layer5Binding
 	// Keyed on the intent first: a canonical member row carries intent_id, not the Accumulate tx hash,
 	// which the batch path never sees. See GetLayer5Binding.
-	if req.IntentID != "" || req.AccumulateTxHash != "" {
-		b, err := o.config.Repos.ProofArtifacts.GetLayer5Binding(ctx, req.IntentID, req.AccumulateTxHash)
+	if intentID != "" || accumTxHash != "" {
+		b, err := o.config.Repos.ProofArtifacts.GetLayer5Binding(ctx, intentID, accumTxHash)
 		switch {
 		case err == nil:
 			binding = b
@@ -300,21 +322,16 @@ func (o *UnifiedOrchestrator) writeLayer5(
 		}
 	}
 
-	merkleRoot := req.MerkleRoot[:]
-	l5, err := BuildLayer5(binding, obs, req.LeafHash, merkleRoot, chainIDNum)
+	l5, err := BuildLayer5(binding, obs, leafHash, merkleRoot, chainIDNum)
 	if err != nil {
 		logfPrintf("🚨 [L5-PERSIST] proof %s: %v", proofID, err)
-		return
+		return nil, binding
 	}
 	if l5 == nil {
 		logfPrintf("ℹ️ [L5-PERSIST] proof %s: not enough to build an honest external anchor binding "+
 			"(leaf=%d bytes, tx=%q, block=%d); no L5 row rather than a half one",
-			proofID, len(req.LeafHash), obs.TxHash, obs.BlockNumber)
-		return
+			proofID, len(leafHash), obs.TxHash, obs.BlockNumber)
+		return nil, binding
 	}
-
-	if err := WriteLayer5Row(ctx, o.config.Repos.ProofArtifacts, proofID, l5, binding, logfPrintf); err != nil {
-		return
-	}
-	logfPrintf("   L5 claim: %s", l5.ExternalClaim())
+	return l5, binding
 }

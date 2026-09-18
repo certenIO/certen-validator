@@ -46,9 +46,10 @@ type MultiLegAggregator struct {
 	// Persistence store for crash recovery (GAP 4)
 	persistenceRepo *database.MultiLegRepository
 
-	// Result hash chains (shared from orchestrator)
+	// Result hash chains (shared from orchestrator), and where each new link is persisted
 	resultChains     map[string]*ResultHashChain
 	resultChainsLock *sync.RWMutex
+	hashChainRepo    *database.UnifiedRepository
 
 	// Configuration
 	writeBackTimeout   time.Duration
@@ -101,6 +102,7 @@ type MultiLegAggregatorConfig struct {
 	Submitter        AccumulateSubmitter
 	ResultChains     map[string]*ResultHashChain
 	ResultChainsLock *sync.RWMutex
+	HashChainRepo    *database.UnifiedRepository // persists each result hash chain link (nil: not persisted)
 	WriteBackTimeout time.Duration
 	ValidatorID      string
 	Logger           *log.Logger
@@ -142,6 +144,7 @@ func NewMultiLegAggregator(cfg *MultiLegAggregatorConfig) *MultiLegAggregator {
 		persistenceRepo:    cfg.PersistenceRepo,
 		resultChains:       cfg.ResultChains,
 		resultChainsLock:   cfg.ResultChainsLock,
+		hashChainRepo:      cfg.HashChainRepo,
 		writeBackTimeout:   writeBackTimeout,
 		aggregationTimeout: aggregationTimeout,
 		validatorID:        cfg.ValidatorID,
@@ -440,6 +443,14 @@ func (a *MultiLegAggregator) buildUnifiedAttestationBundle(
 		}
 		_ = hashChain.AddResult(extResult)
 		a.resultChainsLock.Unlock()
+
+		persistCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		err := persistResultHashChainLink(persistCtx, a.hashChainRepo, primaryResult.ChainExecutionIDs,
+			len(primaryResult.ObservationResults), extResult)
+		cancel()
+		if err != nil {
+			a.logger.Printf("WARNING: failed to persist result hash chain link for intent %s: %v", pending.IntentID, err)
+		}
 	}
 
 	// Build aggregated attestation from primary result

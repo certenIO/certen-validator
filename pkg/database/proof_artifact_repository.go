@@ -1711,6 +1711,20 @@ type ExternalChainResultInput struct {
 	ResultHash            []byte
 	ObserverValidatorID   string
 	ObservedAt            time.Time
+
+	// Result hash chain binding. SequenceNumber is nil when the caller does not track the chain.
+	SequenceNumber     *int64
+	PreviousResultHash []byte
+	AnchorProofHash    []byte
+
+	// Execution evidence beyond the receipt
+	ReturnData       []byte
+	StorageProofJSON json.RawMessage
+	StorageProofHash []byte
+	ArtifactJSON     json.RawMessage
+
+	// Validator set the result's attestations are counted against
+	SnapshotID *uuid.UUID
 }
 
 // SaveExternalChainResultV2 creates a new external chain execution result matching the actual schema
@@ -1723,9 +1737,12 @@ func (r *ProofArtifactRepository) SaveExternalChainResultV2(ctx context.Context,
 			state_root, transactions_root, receipts_root,
 			execution_status, execution_success, revert_reason, contract_address, logs_json,
 			confirmation_blocks, required_confirmations, is_finalized, finalized_at,
-			result_hash, observer_validator_id, observed_at
+			result_hash, observer_validator_id, observed_at,
+			sequence_number, previous_result_hash, anchor_proof_hash,
+			return_data, storage_proof_json, storage_proof_hash, artifact_json, snapshot_id
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29,
+			$30, $31, $32, $33, $34, $35, $36, $37
 		)
 		RETURNING result_id`
 
@@ -1735,9 +1752,11 @@ func (r *ProofArtifactRepository) SaveExternalChainResultV2(ctx context.Context,
 		input.TxHash, input.TxIndex, input.TxGasUsed, input.TxFromAddress, input.TxToAddress,
 		input.BlockNumber, input.BlockHash, input.BlockTimestamp,
 		input.StateRoot, input.TransactionsRoot, input.ReceiptsRoot,
-		input.ExecutionStatus, input.ExecutionSuccess, input.RevertReason, input.ContractAddress, input.LogsJSON,
+		input.ExecutionStatus, input.ExecutionSuccess, input.RevertReason, input.ContractAddress, nullableJSON(input.LogsJSON),
 		input.ConfirmationBlocks, input.RequiredConfirmations, input.IsFinalized, input.FinalizedAt,
 		input.ResultHash, input.ObserverValidatorID, input.ObservedAt,
+		input.SequenceNumber, input.PreviousResultHash, input.AnchorProofHash,
+		input.ReturnData, nullableJSON(input.StorageProofJSON), input.StorageProofHash, nullableJSON(input.ArtifactJSON), input.SnapshotID,
 	).Scan(&resultID)
 
 	if err != nil {
@@ -2338,6 +2357,12 @@ type NewBLSResultAttestation struct {
 	AttestedBlockHash     []byte
 	ConfirmationsAtAttest int
 	AttestationTime       time.Time
+
+	// Validator set this attestation is counted against, the validator's weight in it, and whether the
+	// signature point was checked to lie in the prime-order subgroup.
+	SnapshotID    *uuid.UUID
+	Weight        int64 // defaults to 1 when zero
+	SubgroupValid bool
 }
 
 // BLSResultAttestationRecord represents a stored BLS result attestation
@@ -2376,15 +2401,23 @@ func (r *ProofArtifactRepository) SaveBLSResultAttestation(ctx context.Context, 
 			validator_id, validator_address, validator_index,
 			bls_signature, bls_public_key, signature_domain,
 			attested_block_number, attested_block_hash, confirmations_at_attest,
-			attestation_time
+			attestation_time, snapshot_id, weight, subgroup_valid
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
 		)
 		ON CONFLICT (result_id, validator_id) DO UPDATE SET
 			bls_signature = EXCLUDED.bls_signature,
 			bls_public_key = EXCLUDED.bls_public_key,
-			attestation_time = EXCLUDED.attestation_time
+			attestation_time = EXCLUDED.attestation_time,
+			snapshot_id = COALESCE(EXCLUDED.snapshot_id, bls_result_attestations.snapshot_id),
+			weight = EXCLUDED.weight,
+			subgroup_valid = EXCLUDED.subgroup_valid
 		RETURNING attestation_id, created_at`
+
+	weight := input.Weight
+	if weight == 0 {
+		weight = 1
+	}
 
 	var att BLSResultAttestationRecord
 	att.ResultID = input.ResultID
@@ -2407,7 +2440,7 @@ func (r *ProofArtifactRepository) SaveBLSResultAttestation(ctx context.Context, 
 		input.ValidatorID, input.ValidatorAddress, input.ValidatorIndex,
 		input.BLSSignature, input.BLSPublicKey, domain,
 		input.AttestedBlockNumber, input.AttestedBlockHash, input.ConfirmationsAtAttest,
-		input.AttestationTime,
+		input.AttestationTime, input.SnapshotID, weight, input.SubgroupValid,
 	).Scan(&att.AttestationID, &att.CreatedAt)
 
 	if err != nil {
@@ -2502,6 +2535,12 @@ type NewAggregatedBLSAttestation struct {
 	FirstAttestationAt    time.Time
 	LastAttestationAt     time.Time
 	AggregationHash       []byte
+
+	// Validator set the weights were counted against, the participating validator ids, and whether
+	// every aggregated attestation signed the same message.
+	SnapshotID              *uuid.UUID
+	ParticipantIDs          json.RawMessage
+	MessageConsistencyValid bool
 }
 
 // AggregatedBLSAttestationRecord represents a stored aggregated BLS attestation
@@ -2542,9 +2581,10 @@ func (r *ProofArtifactRepository) SaveAggregatedBLSAttestation(ctx context.Conte
 			validator_count, validator_addresses, validator_indices, attestation_ids,
 			total_voting_power, signed_voting_power, voting_power_percentage,
 			threshold_numerator, threshold_denominator, threshold_met,
-			first_attestation_at, last_attestation_at, aggregation_hash
+			first_attestation_at, last_attestation_at, aggregation_hash,
+			snapshot_id, participant_ids, message_consistency_valid
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24
 		)
 		ON CONFLICT (result_id) DO UPDATE SET
 			aggregate_signature = EXCLUDED.aggregate_signature,
@@ -2560,6 +2600,9 @@ func (r *ProofArtifactRepository) SaveAggregatedBLSAttestation(ctx context.Conte
 			threshold_met = EXCLUDED.threshold_met,
 			last_attestation_at = EXCLUDED.last_attestation_at,
 			aggregation_hash = EXCLUDED.aggregation_hash,
+			snapshot_id = COALESCE(EXCLUDED.snapshot_id, aggregated_bls_attestations.snapshot_id),
+			participant_ids = COALESCE(EXCLUDED.participant_ids, aggregated_bls_attestations.participant_ids),
+			message_consistency_valid = EXCLUDED.message_consistency_valid,
 			updated_at = NOW()
 		RETURNING aggregation_id, created_at, updated_at`
 
@@ -2604,6 +2647,7 @@ func (r *ProofArtifactRepository) SaveAggregatedBLSAttestation(ctx context.Conte
 		input.TotalVotingPower, input.SignedVotingPower, input.VotingPowerPercentage,
 		input.ThresholdNumerator, input.ThresholdDenominator, input.ThresholdMet,
 		input.FirstAttestationAt, input.LastAttestationAt, input.AggregationHash,
+		input.SnapshotID, nullableJSON(input.ParticipantIDs), input.MessageConsistencyValid,
 	).Scan(&agg.AggregationID, &agg.CreatedAt, &agg.UpdatedAt)
 
 	if err != nil {

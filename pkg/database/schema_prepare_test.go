@@ -26,13 +26,18 @@ import (
 // executable tests because a string fragment cannot be prepared safely in isolation. A missing relation
 // or column therefore fails CI before it can reach a production request path.
 func TestStaticRepositorySQLPreparesAgainstSharedSchema(t *testing.T) {
-	statements, err := repositorySQLStatements(".")
+	statements, err := repositorySQLStatements(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(statements) == 0 {
 		t.Fatal("no repository SQL statements discovered")
 	}
+	packages := map[string]int{}
+	for _, statement := range statements {
+		packages[filepath.Dir(statement.Source)]++
+	}
+	t.Logf("preparing %d distinct statements from %v", len(statements), packages)
 
 	ctx := context.Background()
 	prepareDB := freshPreparedSchema(t, ctx)
@@ -106,6 +111,16 @@ func TestDynamicRepositoryQueriesExecuteAgainstSharedSchema(t *testing.T) {
 	if err := lifecycle.UpdateStatus(ctx, "dynamic-intent", IntentLifecycleSettling); err != nil {
 		t.Fatalf("UpdateStatus with timestamp column: %v", err)
 	}
+	if _, err := lifecycle.ListRecentEnriched(ctx, 1); err != nil {
+		t.Fatalf("ListRecentEnriched wrapped query: %v", err)
+	}
+	if _, err := lifecycle.ListByUserEnriched(ctx, "dynamic-user", 1); err != nil {
+		t.Fatalf("ListByUserEnriched wrapped query: %v", err)
+	}
+	validOnly := true
+	if _, err := repo.CountAttestations(ctx, &validOnly); err != nil {
+		t.Fatalf("CountAttestations with the valid-only clause: %v", err)
+	}
 }
 
 func ptr[T any](value T) *T { return &value }
@@ -158,39 +173,86 @@ type repositorySQL struct {
 	SQL    string
 }
 
-func repositorySQLStatements(dir string) ([]repositorySQL, error) {
-	entries, err := os.ReadDir(dir)
+// repositorySQLStatements collects every complete SQL statement in the module's non-test Go files, not
+// just this package's: a statement added anywhere else would otherwise reach production unchecked.
+//
+// A statement is a string literal, or a concatenation of string literals and package-level string
+// constants (a shared column list, say), folded into the text the database receives. A concatenation
+// with a runtime operand cannot be folded; its literal fragments are still checked on their own, and the
+// statement as a whole is covered by the repository's integration tests.
+func repositorySQLStatements(root string) ([]repositorySQL, error) {
+	seen := make(map[string]repositorySQL)
+	fileSet := token.NewFileSet()
+	packages := map[string][]*ast.File{}
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		name := entry.Name()
+		if entry.IsDir() {
+			if path == root {
+				return nil
+			}
+			// A nested go.mod is another module with its own storage (the lite client's SQLite schema).
+			if _, err := os.Stat(filepath.Join(path, "go.mod")); err == nil {
+				return filepath.SkipDir
+			}
+			if strings.HasPrefix(name, ".") || name == "vendor" || name == "testdata" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			return nil
+		}
+		file, err := parser.ParseFile(fileSet, path, nil, 0)
+		if err != nil {
+			return fmt.Errorf("parse %s: %w", path, err)
+		}
+		packages[filepath.Dir(path)] = append(packages[filepath.Dir(path)], file)
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	seen := make(map[string]repositorySQL)
-	fileSet := token.NewFileSet()
-	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
+
+	record := func(value string, pos token.Pos) {
+		value = normalizeRepositorySQLTemplate(value)
+		if _, exists := seen[value]; exists {
+			return
 		}
-		file, err := parser.ParseFile(fileSet, filepath.Join(dir, name), nil, 0)
-		if err != nil {
-			return nil, fmt.Errorf("parse %s: %w", name, err)
+		position := fileSet.Position(pos)
+		source, _ := filepath.Rel(root, position.Filename)
+		seen[value] = repositorySQL{Source: fmt.Sprintf("%s:%d", filepath.ToSlash(source), position.Line), SQL: value}
+	}
+	for _, files := range packages {
+		constants := stringConstants(files)
+		for _, file := range files {
+			ast.Inspect(file, func(node ast.Node) bool {
+				switch n := node.(type) {
+				case *ast.BinaryExpr:
+					if n.Op != token.ADD {
+						return true
+					}
+					folded, ok := foldString(n, constants)
+					if !ok {
+						return true
+					}
+					if looksLikeRepositorySQL(folded) {
+						record(folded, n.Pos())
+					}
+					return false
+				case *ast.BasicLit:
+					if n.Kind != token.STRING {
+						return true
+					}
+					if value, err := strconv.Unquote(n.Value); err == nil && looksLikeRepositorySQL(value) {
+						record(value, n.Pos())
+					}
+				}
+				return true
+			})
 		}
-		ast.Inspect(file, func(node ast.Node) bool {
-			literal, ok := node.(*ast.BasicLit)
-			if !ok || literal.Kind != token.STRING {
-				return true
-			}
-			value, err := strconv.Unquote(literal.Value)
-			if err != nil || !looksLikeRepositorySQL(value) {
-				return true
-			}
-			value = normalizeRepositorySQLTemplate(value)
-			position := fileSet.Position(literal.Pos())
-			key := value
-			if _, exists := seen[key]; !exists {
-				seen[key] = repositorySQL{Source: fmt.Sprintf("%s:%d", filepath.Base(position.Filename), position.Line), SQL: value}
-			}
-			return true
-		})
 	}
 
 	result := make([]repositorySQL, 0, len(seen))
@@ -199,6 +261,68 @@ func repositorySQLStatements(dir string) ([]repositorySQL, error) {
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Source < result[j].Source })
 	return result, nil
+}
+
+// stringConstants returns the package-level string constants of one package, folding constants defined
+// in terms of other constants.
+func stringConstants(files []*ast.File) map[string]string {
+	pending := map[string]ast.Expr{}
+	for _, file := range files {
+		for _, decl := range file.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				value := spec.(*ast.ValueSpec)
+				for i, name := range value.Names {
+					if i < len(value.Values) {
+						pending[name.Name] = value.Values[i]
+					}
+				}
+			}
+		}
+	}
+	constants := map[string]string{}
+	for progress := true; progress; {
+		progress = false
+		for name, expr := range pending {
+			if folded, ok := foldString(expr, constants); ok {
+				constants[name] = folded
+				delete(pending, name)
+				progress = true
+			}
+		}
+	}
+	return constants
+}
+
+// foldString evaluates a concatenation of string literals and known string constants.
+func foldString(expr ast.Expr, constants map[string]string) (string, bool) {
+	switch e := expr.(type) {
+	case *ast.BasicLit:
+		if e.Kind != token.STRING {
+			return "", false
+		}
+		value, err := strconv.Unquote(e.Value)
+		return value, err == nil
+	case *ast.Ident:
+		value, ok := constants[e.Name]
+		return value, ok
+	case *ast.ParenExpr:
+		return foldString(e.X, constants)
+	case *ast.BinaryExpr:
+		if e.Op != token.ADD {
+			return "", false
+		}
+		left, ok := foldString(e.X, constants)
+		if !ok {
+			return "", false
+		}
+		right, ok := foldString(e.Y, constants)
+		return left + right, ok
+	}
+	return "", false
 }
 
 func looksLikeRepositorySQL(value string) bool {

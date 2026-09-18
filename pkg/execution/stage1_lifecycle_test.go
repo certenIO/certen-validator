@@ -9,9 +9,9 @@
 // 1638327d-af2c-439c-a188-be53cdb5c854 was logged complete at 07:33:41 and its
 // transaction confirmed at 07:34:32.
 //
-// This drives the REAL repository against a REAL PostgreSQL carrying the live
-// schema plus migration 014. Without CERTEN_TEST_DB it SKIPS rather than passing
-// vacuously — a skipped gate is not a green gate.
+// This drives the REAL repository against a REAL PostgreSQL, addressed by
+// CERTEN_TEST_DB and migrated through the production runner. Without it the test
+// skips locally and fails in CI — a skipped gate is not a green gate.
 //
 //	go test ./pkg/execution/ -run 'TestS1_' -count=1 -v
 package execution
@@ -19,7 +19,6 @@ package execution
 import (
 	"context"
 	"database/sql"
-	"os"
 	"testing"
 	"time"
 
@@ -31,33 +30,7 @@ import (
 
 func s1OpenDB(t *testing.T) *sql.DB {
 	t.Helper()
-	conn := os.Getenv("CERTEN_TEST_DB")
-	if conn == "" {
-		t.Skip("CERTEN_TEST_DB not set — Gate 1c needs a PostgreSQL with the live schema " +
-			"and migration 014. A skipped gate is not a green gate.")
-	}
-	db, err := sql.Open("postgres", conn)
-	if err != nil {
-		t.Fatalf("open test database: %v", err)
-	}
-	if err := db.Ping(); err != nil {
-		t.Fatalf("ping test database: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	// Fail loudly if 014 has not been applied: otherwise the settling write would
-	// error at runtime and this gate would report a confusing SQL failure rather
-	// than "the migration is missing".
-	var n int
-	if err := db.QueryRow(`SELECT count(*) FROM information_schema.columns
-		WHERE table_name = 'intent_lifecycle' AND column_name = 'settling_at'`).Scan(&n); err != nil {
-		t.Fatalf("probe for settling_at: %v", err)
-	}
-	if n == 0 {
-		t.Fatal("intent_lifecycle.settling_at is absent — apply migration " +
-			"014_intent_lifecycle_settling.sql to the test database first")
-	}
-	return db
+	return openMigratedTestDB(t, "Gate 1c")
 }
 
 // s1Orchestrator builds a UnifiedOrchestrator wired to the test database with

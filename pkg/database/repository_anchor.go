@@ -101,7 +101,7 @@ func (r *AnchorRepository) GetAnchor(ctx context.Context, anchorID uuid.UUID) (*
 			anchor_timestamp, merkle_root, accumulate_height, operation_commitment,
 			cross_chain_commitment, governance_root, confirmations, required_confirmations,
 			confirmed_at, is_final, gas_used, gas_price_wei, total_cost_wei, total_cost_usd,
-			validator_id, created_at, updated_at
+			COALESCE(validator_id, ''), created_at, updated_at
 		FROM anchor_records
 		WHERE anchor_id = $1`
 
@@ -134,7 +134,7 @@ func (r *AnchorRepository) GetAnchorByTxHash(ctx context.Context, txHash string)
 			anchor_timestamp, merkle_root, accumulate_height, operation_commitment,
 			cross_chain_commitment, governance_root, confirmations, required_confirmations,
 			confirmed_at, is_final, gas_used, gas_price_wei, total_cost_wei, total_cost_usd,
-			validator_id, created_at, updated_at
+			COALESCE(validator_id, ''), created_at, updated_at
 		FROM anchor_records
 		WHERE anchor_tx_hash = $1`
 
@@ -167,7 +167,7 @@ func (r *AnchorRepository) GetAnchorByBatchID(ctx context.Context, batchID uuid.
 			anchor_timestamp, merkle_root, accumulate_height, operation_commitment,
 			cross_chain_commitment, governance_root, confirmations, required_confirmations,
 			confirmed_at, is_final, gas_used, gas_price_wei, total_cost_wei, total_cost_usd,
-			validator_id, created_at, updated_at
+			COALESCE(validator_id, ''), created_at, updated_at
 		FROM anchor_records
 		WHERE batch_id = $1`
 
@@ -200,7 +200,7 @@ func (r *AnchorRepository) GetUnconfirmedAnchors(ctx context.Context) ([]*Anchor
 			anchor_timestamp, merkle_root, accumulate_height, operation_commitment,
 			cross_chain_commitment, governance_root, confirmations, required_confirmations,
 			confirmed_at, is_final, gas_used, gas_price_wei, total_cost_wei, total_cost_usd,
-			validator_id, created_at, updated_at
+			COALESCE(validator_id, ''), created_at, updated_at
 		FROM anchor_records
 		WHERE is_final = false
 		ORDER BY created_at ASC`
@@ -298,7 +298,7 @@ func (r *AnchorRepository) GetAnchorsByChain(ctx context.Context, chain TargetCh
 			anchor_timestamp, merkle_root, accumulate_height, operation_commitment,
 			cross_chain_commitment, governance_root, confirmations, required_confirmations,
 			confirmed_at, is_final, gas_used, gas_price_wei, total_cost_wei, total_cost_usd,
-			validator_id, created_at, updated_at
+			COALESCE(validator_id, ''), created_at, updated_at
 		FROM anchor_records
 		WHERE target_chain = $1
 		ORDER BY created_at DESC
@@ -338,7 +338,7 @@ func (r *AnchorRepository) GetRecentAnchors(ctx context.Context, limit int) ([]*
 			anchor_timestamp, merkle_root, accumulate_height, operation_commitment,
 			cross_chain_commitment, governance_root, confirmations, required_confirmations,
 			confirmed_at, is_final, gas_used, gas_price_wei, total_cost_wei, total_cost_usd,
-			validator_id, created_at, updated_at
+			COALESCE(validator_id, ''), created_at, updated_at
 		FROM anchor_records
 		ORDER BY created_at DESC
 		LIMIT $1`
