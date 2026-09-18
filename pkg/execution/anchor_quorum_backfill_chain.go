@@ -2,11 +2,13 @@ package execution
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 	"strings"
 	"time"
 
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 
@@ -15,12 +17,17 @@ import (
 
 // ChainBackfillReader is the live BackfillChain: the same RPC endpoints and the same anchor addresses
 // the batch path itself uses, so the backfill sees exactly what the validator sees.
+//
+// It holds a READ-ONLY resolver. The backfill issues nothing but eth_call, eth_getTransactionByHash,
+// eth_getTransactionReceipt and eth_getBlockByNumber, and ReadOnlyChains cannot sign because it has
+// nothing to sign with — previously this path went through EthereumContractManager, whose constructor
+// demands a parseable private key, so a read-only tool had to be handed a throwaway signing key.
 type ChainBackfillReader struct {
-	chains EVMChainResolver
+	chains *ReadOnlyChains
 }
 
-// NewChainBackfillReader builds a reader over an existing chain resolver.
-func NewChainBackfillReader(chains EVMChainResolver) *ChainBackfillReader {
+// NewChainBackfillReader builds a reader over a read-only chain resolver.
+func NewChainBackfillReader(chains *ReadOnlyChains) *ChainBackfillReader {
 	return &ChainBackfillReader{chains: chains}
 }
 
@@ -34,7 +41,7 @@ func (r *ChainBackfillReader) VerifyTransaction(
 	chainID int64,
 	txHash string,
 ) ([]byte, uint64, bool, error) {
-	ecm, _, err := r.chains.ManagerForChain(chainID)
+	client, _, err := r.chains.ClientForChain(chainID)
 	if err != nil {
 		return nil, 0, false, err
 	}
@@ -43,7 +50,7 @@ func (r *ChainBackfillReader) VerifyTransaction(
 	}
 	hash := common.HexToHash(txHash)
 
-	tx, pending, err := ecm.client.TransactionByHash(ctx, hash)
+	tx, pending, err := client.TransactionByHash(ctx, hash)
 	if err != nil {
 		return nil, 0, false, fmt.Errorf("fetching %s: %w", txHash, err)
 	}
@@ -51,11 +58,42 @@ func (r *ChainBackfillReader) VerifyTransaction(
 		// A pending transaction has proven nothing yet.
 		return nil, 0, false, fmt.Errorf("%s is still pending", txHash)
 	}
-	receipt, err := ecm.client.TransactionReceipt(ctx, hash)
+	receipt, err := client.TransactionReceipt(ctx, hash)
 	if err != nil {
+		// "THE CHAIN SAYS NO" AND "THIS ENDPOINT CANNOT ANSWER" ARE DIFFERENT FACTS.
+		//
+		// A pruning endpoint returns the transaction body happily and then `not found` for its receipt.
+		// That is indistinguishable from a transaction that does not exist unless it is said out loud —
+		// and the first backfill run reported 84 candidates as unexaminable data problems when in truth
+		// the configured RPC simply had no receipts older than its retention window. Every one of them
+		// was a real, mined, successful transaction.
+		//
+		// So: if the body exists and the receipt does not, the endpoint is the problem, not the chain.
+		if isNotFound(err) {
+			return nil, 0, false, fmt.Errorf(
+				"%s: this endpoint returned the transaction but not its receipt, which means it is pruning "+
+					"history rather than that the transaction is missing — point this chain at an archive "+
+					"endpoint and re-run: %w", txHash, err)
+		}
 		return nil, 0, false, fmt.Errorf("fetching receipt for %s: %w", txHash, err)
 	}
 	return tx.Data(), receipt.BlockNumber.Uint64(), receipt.Status == 1, nil
+}
+
+// isNotFound reports whether an RPC error is "no such object" rather than a transport or server failure.
+//
+// go-ethereum returns ethereum.NotFound for a missing object, but a pruning node may also answer with a
+// null result that surfaces as a plain error string, so both shapes are matched. A false negative here
+// only costs a less specific message; a false positive would claim an endpoint is pruning when the chain
+// really has nothing, so the match is kept narrow.
+func isNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ethereum.NotFound) {
+		return true
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "not found")
 }
 
 // AnchorState reads the anchor's own record of a bundle.
@@ -64,7 +102,7 @@ func (r *ChainBackfillReader) AnchorState(
 	chainID int64,
 	bundleID [32]byte,
 ) (AnchorOnChainState, error) {
-	ecm, anchorAddr, err := r.chains.ManagerForChain(chainID)
+	client, anchorAddr, err := r.chains.ClientForChain(chainID)
 	if err != nil {
 		return AnchorOnChainState{}, err
 	}
@@ -72,7 +110,7 @@ func (r *ChainBackfillReader) AnchorState(
 	if err != nil {
 		return AnchorOnChainState{}, err
 	}
-	bound := bind.NewBoundContract(anchorAddr, parsed, ecm.client, ecm.client, ecm.client)
+	bound := bind.NewBoundContract(anchorAddr, parsed, client, client, client)
 
 	var out []interface{}
 	if err := bound.Call(&bind.CallOpts{Context: ctx}, &out, "anchors", bundleID); err != nil {
@@ -123,20 +161,20 @@ func (r *ChainBackfillReader) ValidatorRegistry(
 	ctx context.Context,
 	chainID int64,
 ) (map[string]consensus.ValidatorRegistryEntry, error) {
-	ecm, anchorAddr, err := r.chains.ManagerForChain(chainID)
+	client, anchorAddr, err := r.chains.ClientForChain(chainID)
 	if err != nil {
 		return nil, err
 	}
-	return ReadValidatorRegistry(ctx, ecm, anchorAddr)
+	return ReadValidatorRegistryWith(ctx, client, anchorAddr)
 }
 
 // BlockTime returns a block's timestamp.
 func (r *ChainBackfillReader) BlockTime(ctx context.Context, chainID int64, blockNumber uint64) (time.Time, error) {
-	ecm, _, err := r.chains.ManagerForChain(chainID)
+	client, _, err := r.chains.ClientForChain(chainID)
 	if err != nil {
 		return time.Time{}, err
 	}
-	header, err := ecm.client.HeaderByNumber(ctx, new(big.Int).SetUint64(blockNumber))
+	header, err := client.HeaderByNumber(ctx, new(big.Int).SetUint64(blockNumber))
 	if err != nil {
 		return time.Time{}, fmt.Errorf("reading block %d: %w", blockNumber, err)
 	}

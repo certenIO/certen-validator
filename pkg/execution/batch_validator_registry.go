@@ -57,6 +57,19 @@ func ReadValidatorRegistry(
 	if ecm == nil || ecm.client == nil {
 		return nil, fmt.Errorf("no chain client for registry read")
 	}
+	return ReadValidatorRegistryWith(ctx, ecm.client, anchorAddr)
+}
+
+// ReadValidatorRegistryWith is the same read over any backend. Split out so read-only callers need no
+// transactor, and therefore no private key — see ReadOnlyChains.
+func ReadValidatorRegistryWith(
+	ctx context.Context,
+	backend bind.ContractBackend,
+	anchorAddr common.Address,
+) (map[string]consensus.ValidatorRegistryEntry, error) {
+	if backend == nil {
+		return nil, fmt.Errorf("no chain client for registry read")
+	}
 
 	addrs, cfgPowers, err := contracts.GetV6_1ValidatorSet()
 	if err != nil {
@@ -70,7 +83,7 @@ func ReadValidatorRegistry(
 	if err != nil {
 		return nil, err
 	}
-	bound := bind.NewBoundContract(anchorAddr, parsed, ecm.client, ecm.client, ecm.client)
+	bound := bind.NewBoundContract(anchorAddr, parsed, backend, backend, backend)
 	opts := &bind.CallOpts{Context: ctx}
 
 	reg := make(map[string]consensus.ValidatorRegistryEntry, len(addrs))

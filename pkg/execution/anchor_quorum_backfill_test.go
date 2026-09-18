@@ -3,7 +3,9 @@ package execution
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"github.com/ethereum/go-ethereum"
 	"math/big"
 	"strings"
 	"testing"
@@ -652,5 +654,34 @@ func TestAnchorQuorumRecordMapsMemberProvenance(t *testing.T) {
 	if m.FromChain != "accumulate" || m.ToChain != "base-sepolia" || m.TokenSymbol != "ETH" ||
 		m.FromAddress != "0xfrom" || m.ToAddress != "0xto" || m.Amount != "0" || m.UserID != "acc://payer.acme" {
 		t.Fatalf("leg not mapped: %+v", m)
+	}
+}
+
+// "The chain says no" and "this endpoint cannot answer" must not read the same.
+//
+// A pruning endpoint returns a transaction body and then "not found" for its receipt. The first live
+// backfill reported 84 such candidates as unexaminable, which looked like missing data; every one was a
+// real, mined, successful transaction that the configured RPC had simply forgotten the receipt for.
+func TestIsNotFoundSeparatesAPruningEndpointFromAMissingObject(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"go-ethereum sentinel", ethereum.NotFound, true},
+		{"wrapped sentinel", fmt.Errorf("fetching receipt: %w", ethereum.NotFound), true},
+		{"plain string from a pruning node", errors.New("not found"), true},
+		{"mixed case", errors.New("Not Found"), true},
+		{"nil", nil, false},
+		{"a transport failure is NOT a missing object", errors.New("dial tcp: connection refused"), false},
+		{"a rate limit is NOT a missing object", errors.New("429 Too Many Requests"), false},
+		{"a revert is NOT a missing object", errors.New("execution reverted"), false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := isNotFound(c.err); got != c.want {
+				t.Fatalf("isNotFound(%v) = %v, want %v", c.err, got, c.want)
+			}
+		})
 	}
 }
