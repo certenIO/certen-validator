@@ -1359,6 +1359,12 @@ func startValidator(
 
 	// --- REAL CometBFT engine wiring (unified engine) ---
 	log.Printf("🚀 Initializing unified BFT consensus with real CometBFT networking: %s", cfg.ValidatorID)
+
+	// Both switches below decide whether a target-chain side effect can execute on a ValidatorBlock that
+	// was never proven committed. Said once, out loud, at startup: the previous permissive default was
+	// invisible unless someone read the source, and it was set on no validator in the fleet.
+	consensus.LogConsensusSafetyMode(log.Printf)
+
 	cometEngine, err := consensus.NewUnifiedCometBFTEngine(cfg.ValidatorID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create unified CometBFT engine: %w", err)

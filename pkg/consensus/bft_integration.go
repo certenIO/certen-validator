@@ -1395,23 +1395,23 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	// CometBFT consensus will commit it - we can proceed since CheckTx validated the block.
 	if bftRes.Height > 0 {
 		bv.logger.Printf("✅ [CANONICAL-BFT] ValidatorBlock COMMITTED at height %d, tx=%X", bftRes.Height, bftRes.TxHash)
-	} else if os.Getenv("REQUIRE_BFT_COMMIT") == "true" {
-		// Strict mode (opt-in): the ValidatorBlock passed CheckTx but did NOT commit
-		// within the inclusion-poll window, so BFT agreement is not yet proven. Fail
-		// closed (retryable) rather than executing a target-chain side effect on an
-		// uncommitted block. The intent is requeued and succeeds once consensus commits.
-		bv.logger.Printf("⛔ [CANONICAL-BFT] ValidatorBlock NOT committed within inclusion window and REQUIRE_BFT_COMMIT=true — failing closed (retryable), tx=%X", bftRes.TxHash)
+	} else if requireBFTCommit() {
+		// THE DEFAULT. The ValidatorBlock passed CheckTx but was not observed in a block, so BFT
+		// agreement over it is not proven. Fail closed — retryably — rather than execute a target-chain
+		// side effect on a block that may never commit. The intent is requeued and succeeds once
+		// consensus commits it.
+		bv.logger.Printf("⛔ [CANONICAL-BFT] ValidatorBlock NOT committed within inclusion window — failing closed (retryable), tx=%X", bftRes.TxHash)
 		return &ExecutionTaskResult{
 			Success:    false,
 			ExecutorID: bv.validatorID,
 			Error:      fmt.Errorf("BFT commit required but ValidatorBlock not committed within inclusion window (retryable)"),
 		}, nil
 	} else {
-		// Default (backward-compatible): proceed. The proofs live in the ValidatorBlock
-		// and CometBFT is expected to commit it shortly. Set REQUIRE_BFT_COMMIT=true to
-		// enforce a committed block before any target-chain side effect (fail closed).
-		bv.logger.Printf("⚠️ [CANONICAL-BFT] ValidatorBlock validated (CheckTx passed) but NOT yet committed, tx=%X — proceeding (set REQUIRE_BFT_COMMIT=true to fail closed)", bftRes.TxHash)
-		bv.logger.Printf("   Cryptographic proofs are in ValidatorBlock, CometBFT height is audit metadata only")
+		// REQUIRE_BFT_COMMIT=false. A target-chain side effect may now execute on a ValidatorBlock that
+		// was never proven committed; this is louder than the code it replaces because it is now a
+		// deliberate opt-out rather than the default nobody chose.
+		bv.logger.Printf("⚠️ [CANONICAL-BFT] ValidatorBlock validated (CheckTx passed) but NOT committed, tx=%X — proceeding anyway because REQUIRE_BFT_COMMIT=false", bftRes.TxHash)
+		bv.logger.Printf("   A side effect may execute on a block consensus never commits. Unset REQUIRE_BFT_COMMIT to fail closed.")
 	}
 
 	// 3) Forward to external audit/mining network via TargetChainExecutor

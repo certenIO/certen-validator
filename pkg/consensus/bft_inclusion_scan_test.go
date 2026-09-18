@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -747,3 +748,75 @@ func TestInclusionScanOffUsesTheIndexPath(t *testing.T) {
 		t.Fatalf("scanned with INCLUSION_SCAN=off: info=%d blocks=%d", chain.infoReads, chain.blockReads)
 	}
 }
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────
+// E2 — the strict default
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────
+
+// The default must be FAIL CLOSED. Until 2026-09 it was the opposite: REQUIRE_BFT_COMMIT was opt-in and
+// set on no validator in the fleet, so whenever the inclusion poll timed out a target-chain side effect
+// executed on a block that had only passed CheckTx — one node's opinion, not agreement.
+//
+// This test is the one named in the runbook's mutation table against "revert REQUIRE_BFT_COMMIT to
+// opt-in": reverting it makes the first case below fail.
+func TestE2CommitIsRequiredByDefault(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		set   bool
+		value string
+		want  bool
+	}{
+		{name: "unset — the default", set: false, want: true},
+		{name: "empty", set: true, value: "", want: true},
+		{name: "explicit true", set: true, value: "true", want: true},
+		{name: "anything else is still strict", set: true, value: "yes", want: true},
+		{name: "the documented opt-out", set: true, value: "false", want: false},
+		{name: "opt-out is case-insensitive", set: true, value: "FALSE", want: false},
+		{name: "opt-out tolerates whitespace", set: true, value: " false ", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.set {
+				t.Setenv("REQUIRE_BFT_COMMIT", tc.value)
+			} else {
+				os.Unsetenv("REQUIRE_BFT_COMMIT")
+			}
+			if got := requireBFTCommit(); got != tc.want {
+				t.Fatalf("requireBFTCommit() = %t, want %t — an uncommitted ValidatorBlock would %s",
+					got, tc.want, map[bool]string{true: "be allowed through", false: "be blocked"}[!tc.want])
+			}
+		})
+	}
+}
+
+// The startup log must say which way both switches are set, and must be loud about either permissive one.
+func TestStartupSaysWhichSafetyModeIsActive(t *testing.T) {
+	capture := func() string {
+		var sb strings.Builder
+		LogConsensusSafetyMode(func(format string, args ...interface{}) {
+			fmt.Fprintf(&sb, format+"\n", args...)
+		})
+		return sb.String()
+	}
+
+	os.Unsetenv("REQUIRE_BFT_COMMIT")
+	os.Unsetenv("INCLUSION_SCAN")
+	strict := capture()
+	if !strings.Contains(strict, "must be observed committed") {
+		t.Fatalf("the default mode is not stated at startup:\n%s", strict)
+	}
+	if strings.Contains(strict, "⚠️") {
+		t.Fatalf("the safe default warns as if it were dangerous:\n%s", strict)
+	}
+
+	t.Setenv("REQUIRE_BFT_COMMIT", "false")
+	t.Setenv("INCLUSION_SCAN", "off")
+	permissive := capture()
+	for _, want := range []string{"REQUIRE_BFT_COMMIT=false", "INCLUSION_SCAN=off", "never proven committed"} {
+		if !strings.Contains(permissive, want) {
+			t.Fatalf("the permissive mode does not say %q:\n%s", want, permissive)
+		}
+	}
+}
+
+// A nil logger must not panic: the safety log is called before much else is wired.
+func TestStartupSafetyLogToleratesANilLogger(t *testing.T) { LogConsensusSafetyMode(nil) }

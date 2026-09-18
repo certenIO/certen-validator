@@ -60,6 +60,45 @@ func inclusionScanEnabled() bool {
 	return !strings.EqualFold(strings.TrimSpace(os.Getenv("INCLUSION_SCAN")), "off")
 }
 
+// requireBFTCommit reports whether an intent may proceed on a ValidatorBlock that was not observed
+// committed.
+//
+// DEFAULT: NO. Until 2026-09 the default was yes — the flag was opt-in and was set on no validator in the
+// fleet — so whenever the inclusion poll timed out, a target-chain side effect executed on a block that
+// had only passed CheckTx. CheckTx is one node's opinion; it is not agreement. Nothing then re-checked
+// whether the block ever committed.
+//
+// Failing closed is cheap because the failure is RETRYABLE: the intent is requeued and succeeds on the
+// next pass once consensus commits. And with the inclusion scan deciding outcomes from committed blocks,
+// the pending window closes far more often than it used to, so this should rarely trigger at all.
+//
+// REQUIRE_BFT_COMMIT=false restores the old permissive behaviour for one release.
+func requireBFTCommit() bool {
+	return !strings.EqualFold(strings.TrimSpace(os.Getenv("REQUIRE_BFT_COMMIT")), "false")
+}
+
+// LogConsensusSafetyMode states, once at startup, which way both switches are set.
+//
+// Both change whether a side effect can execute on an unproven block, and a default that is only visible
+// by reading the source is a default nobody has chosen.
+func LogConsensusSafetyMode(logf func(string, ...interface{})) {
+	if logf == nil {
+		return
+	}
+	if inclusionScanEnabled() {
+		logf("✅ [CONSENSUS] Broadcast outcomes are decided from committed blocks (INCLUSION_SCAN on)")
+	} else {
+		logf("⚠️ [CONSENSUS] INCLUSION_SCAN=off — outcomes come from the transaction index, which reports " +
+			"the LAST inclusion of a hash and can therefore report a committed ValidatorBlock as failed")
+	}
+	if requireBFTCommit() {
+		logf("✅ [CONSENSUS] A ValidatorBlock must be observed committed before any target-chain side effect")
+	} else {
+		logf("⚠️ [CONSENSUS] REQUIRE_BFT_COMMIT=false — a side effect may execute on a ValidatorBlock that " +
+			"was never proven committed")
+	}
+}
+
 // blockchainInfoPageSize is CometBFT's hard limit for one BlockchainInfo call (rpc/core/blocks.go).
 const blockchainInfoPageSize = 20
 
