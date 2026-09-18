@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/big"
 	"sort"
+	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
@@ -50,6 +51,31 @@ type BatchLeafInput struct {
 	// layer-5 binding cannot find them, and layer 5 falls back to the settlement observation — the exact
 	// false binding this work removed, reappearing on the other lane.
 	IntentID string
+}
+
+// IsTransactionHash reports whether s is a 0x-prefixed 32-byte hex transaction hash.
+//
+// createBatchAnchor returns the sentinel "already-exists" when the anchor is already on chain, created by
+// another validator. That is a correct idempotence signal and a correct thing to log — and a catastrophic
+// thing to STORE, because anchor_create_tx is read as "the transaction that published this root" and
+// travels into layer 5 as `anchorTx`. Live on 2026-09-18 a layer-5 row published
+// `anchorTx: "already-exists"`: a claim that a root appears in a transaction that is not a transaction.
+//
+// A node that did not create the anchor does not know which transaction did. Empty says that. A sentinel
+// does not — it says something false in a field that is read as evidence, which is the same defect class
+// as the d2d24ab3 binding this work exists to remove.
+func IsTransactionHash(s string) bool {
+	if len(s) != 66 || !strings.HasPrefix(s, "0x") {
+		return false
+	}
+	for _, c := range s[2:] {
+		switch {
+		case c >= '0' && c <= '9', c >= 'a' && c <= 'f', c >= 'A' && c <= 'F':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // MemberProvenance is everything recorded ABOUT a batch member that is not part of its leaf.

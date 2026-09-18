@@ -339,7 +339,12 @@ func (o *BatchOrchestrator) FlushChain(
 	res.GasAnchor = gasUsed
 	// Same as the on-demand lane: the tree carries the transaction that published its root, so the
 	// quorum evidence records where the root actually is.
-	tree.AnchorCreateTx = anchorTx
+	// Only a real transaction hash. createBatchAnchor returns "already-exists" when another
+	// validator created the anchor first; this node then does not know the creating transaction, and
+	// empty is how that is said. See IsTransactionHash.
+	if IsTransactionHash(anchorTx) {
+		tree.AnchorCreateTx = anchorTx
+	}
 	o.logf("[BATCH] chain=%d anchor created tx=%s gas=%d", chainID, anchorTx, gasUsed)
 
 	// ---- VERIFY 3: the deployed anchor accepts every member leaf ------------

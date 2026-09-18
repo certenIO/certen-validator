@@ -562,3 +562,73 @@ func TestCanonicalMemberRowAcceptsMissingProvenance(t *testing.T) {
 		t.Fatalf("member rows = %d, want 1", n)
 	}
 }
+
+// REGRESSION — the database must refuse a status word where a transaction hash belongs.
+//
+// createBatchAnchor returns "already-exists" when another validator created the anchor first. On
+// 2026-09-18 that sentinel was stored in anchor_create_tx and copied into layer 5, which published
+// `anchorTx: "already-exists"` — a root claimed to appear in something that is not a transaction.
+//
+// The orchestrator no longer produces it (IsTransactionHash). This asserts the second lock: migration
+// 00003's CHECK, which stops EVERY writer, including one written by someone who never read that code.
+func TestAnchorCreateTxMustBeATransactionHash(t *testing.T) {
+	repo := anchorRepoForTest(t)
+	ctx := context.Background()
+
+	rec := anchorRecordForTest(84532, bundleHex(4101), 0xd1)
+	rec.AnchorCreateTx = "already-exists"
+	rec.Members = nil
+
+	if _, err := repo.RecordAnchorQuorum(ctx, rec); err == nil {
+		t.Fatal("a sentinel was accepted into anchor_create_tx; the column is read as evidence and " +
+			"travels into layer 5 as anchorTx")
+	} else if !strings.Contains(err.Error(), "anchor_create_tx_is_a_transaction") {
+		t.Fatalf("refused, but not by the constraint that should catch it: %v", err)
+	}
+}
+
+// NULL remains valid: a validator that did not create the anchor does not know which transaction did,
+// and empty is how that is said. Refusing it would lose real quorum evidence over a display field.
+func TestAnchorCreateTxAcceptsUnknown(t *testing.T) {
+	repo := anchorRepoForTest(t)
+	ctx := context.Background()
+
+	rec := anchorRecordForTest(84532, bundleHex(4102), 0xd2)
+	rec.AnchorCreateTx = ""
+	rec.Members = nil
+
+	if _, err := repo.RecordAnchorQuorum(ctx, rec); err != nil {
+		t.Fatalf("an anchor whose creating transaction is unknown could not be recorded: %v", err)
+	}
+	var got *string
+	if err := testDB.QueryRowContext(ctx,
+		`SELECT anchor_create_tx FROM anchor_batches WHERE bundle_id=$1`, rec.BundleID).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != nil {
+		t.Fatalf("anchor_create_tx = %q, want NULL", *got)
+	}
+}
+
+// And a real hash is stored unchanged.
+func TestAnchorCreateTxAcceptsARealHash(t *testing.T) {
+	repo := anchorRepoForTest(t)
+	ctx := context.Background()
+
+	const real = "0xbafab491071b28f21956c82317abe2a531bb41ad89880153901991f15fb3da58"
+	rec := anchorRecordForTest(84532, bundleHex(4103), 0xd3)
+	rec.AnchorCreateTx = real
+	rec.Members = nil
+
+	if _, err := repo.RecordAnchorQuorum(ctx, rec); err != nil {
+		t.Fatalf("a real anchor-create transaction was refused: %v", err)
+	}
+	var got string
+	if err := testDB.QueryRowContext(ctx,
+		`SELECT anchor_create_tx FROM anchor_batches WHERE bundle_id=$1`, rec.BundleID).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != real {
+		t.Fatalf("anchor_create_tx = %q, want %q", got, real)
+	}
+}

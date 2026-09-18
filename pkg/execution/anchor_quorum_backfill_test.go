@@ -685,3 +685,33 @@ func TestIsNotFoundSeparatesAPruningEndpointFromAMissingObject(t *testing.T) {
 		})
 	}
 }
+
+// REGRESSION — a status word must never be stored as a transaction hash.
+//
+// createBatchAnchor returns "already-exists" when another validator created the anchor first. Live on
+// 2026-09-18 that sentinel reached anchor_create_tx and then layer 5, which published
+// `anchorTx: "already-exists"` — a claim that a root appears in a transaction that is not a transaction.
+func TestIsTransactionHashRejectsSentinelsAndAccepts32ByteHashes(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"the sentinel that shipped", "already-exists", false},
+		{"empty means not known", "", false},
+		{"status word", "pending", false},
+		{"too short", "0xdeadbeef", false},
+		{"missing 0x", strings.Repeat("a", 64), false},
+		{"not hex", "0x" + strings.Repeat("z", 64), false},
+		{"one char short", "0x" + strings.Repeat("a", 63), false},
+		{"one char long", "0x" + strings.Repeat("a", 65), false},
+		{"a real hash", "0xbafab491071b28f21956c82317abe2a531bb41ad89880153901991f15fb3da58", true},
+		{"uppercase hex is still a hash", "0x" + strings.Repeat("A", 64), true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := IsTransactionHash(c.in); got != c.want {
+				t.Fatalf("IsTransactionHash(%q) = %v, want %v", c.in, got, c.want)
+			}
+		})
+	}
+}
