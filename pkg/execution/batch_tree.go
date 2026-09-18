@@ -36,6 +36,10 @@ type BatchLeafInput struct {
 	ExecutionCommitment [32]byte // single-call OR multi-leg batch commitment
 	OperationID         [32]byte // the Accumulate 4-blob intent hash
 
+	// Provenance is what the database records ABOUT this member: which Accumulate transaction carried
+	// it, and the leg it settles. Evidence only — see MemberProvenance.
+	Provenance MemberProvenance
+
 	// IntentID identifies the member for EVIDENCE only. It is deliberately NOT part of the leaf —
 	// ComputeBatchLeaf hashes (domain, chainId, adiURLHash, executionCommitment, operationID) and nothing
 	// else, so adding it here cannot move a root or a bundle id.
@@ -46,6 +50,33 @@ type BatchLeafInput struct {
 	// layer-5 binding cannot find them, and layer 5 falls back to the settlement observation — the exact
 	// false binding this work removed, reappearing on the other lane.
 	IntentID string
+}
+
+// MemberProvenance is everything recorded ABOUT a batch member that is not part of its leaf.
+//
+// NONE OF IT IS HASHED. ComputeBatchLeaf covers (domain, chainId, adiURLHash, executionCommitment,
+// operationID) and nothing else, so adding or changing a field here cannot move a root or a bundle id.
+// TestIntentIdOverrideAndLeafStability pins that.
+//
+// It exists because the canonical anchor row was, until now, strictly poorer than the shadow row it
+// replaced. A canonical member carried the operation id in a column named accumulate_tx_hash and nothing
+// else; the retired per-validator shadow row carried the real Accumulate transaction and the leg's
+// from/to/amount. Retiring that pipeline while the canonical row was thinner would have silently emptied
+// the Transaction Center. So the canonical row has to carry what it replaces before the old writer can go.
+type MemberProvenance struct {
+	// AccumTxHash is the Accumulate transaction that carried this intent — the WriteData hash, not the
+	// operation id. It is the key layer 5 historically joined on, and writing anything else into a column
+	// named accumulate_tx_hash is the same mislabelling as storing a ZK blob in aggregated_signature.
+	AccumTxHash string
+
+	// The settled leg, for display and for answering "what did this member actually do".
+	FromChain   string
+	ToChain     string
+	FromAddress string
+	ToAddress   string
+	Amount      string
+	TokenSymbol string
+	UserID      string
 }
 
 // ADIURLHash is keccak256(adiURL) — the same value CertenAccountV7.adiURLHash() returns.

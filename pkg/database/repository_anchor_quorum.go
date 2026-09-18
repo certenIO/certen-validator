@@ -31,6 +31,16 @@ type AnchorQuorumMemberRecord struct {
 	Leaf        []byte
 	LeafIndex   int
 	Branch      []MerklePathNode
+
+	// The settled leg. Recorded because the canonical row replaces a shadow row that carried it, and a
+	// replacement that drops columns the console reads is a regression dressed as a cleanup.
+	FromChain   string
+	ToChain     string
+	FromAddress string
+	ToAddress   string
+	Amount      string
+	TokenSymbol string
+	UserID      string
 }
 
 // AnchorQuorumRecord is everything one proven anchor contributes to the database.
@@ -196,10 +206,16 @@ func (r *BatchRepository) RecordAnchorQuorum(
 		if _, mErr = tx.Tx().ExecContext(ctx, `
 			INSERT INTO batch_transactions (
 				batch_id, accumulate_tx_hash, account_url, tree_index, merkle_path, transaction_hash,
-				intent_id, adi_url, created_at
-			) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, NOW())`,
+				intent_id, adi_url, from_chain, to_chain, from_address, to_address, amount, token_symbol,
+				user_id, created_at
+			) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8,
+			          COALESCE($9,''), COALESCE($10,''), COALESCE($11,''), COALESCE($12,''),
+			          COALESCE($13,'0'), COALESCE($14,''), $15, NOW())`,
 			batchID, m.AccumTxHash, m.ADIURL, m.LeafIndex, string(pathJSON), m.Leaf,
 			nullIfEmpty(m.IntentID), nullIfEmpty(m.ADIURL),
+			nullIfEmpty(m.FromChain), nullIfEmpty(m.ToChain), nullIfEmpty(m.FromAddress),
+			nullIfEmpty(m.ToAddress), nullIfEmpty(m.Amount), nullIfEmpty(m.TokenSymbol),
+			nullIfEmpty(m.UserID),
 		); mErr != nil {
 			return false, fmt.Errorf("record anchor quorum: member %d of anchor %s: %w", i, rec.BundleID, mErr)
 		}

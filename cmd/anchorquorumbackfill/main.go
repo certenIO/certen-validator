@@ -100,10 +100,15 @@ func main() {
 	if err != nil {
 		log.Fatalf("loading anchor configuration: %v", err)
 	}
-	resolver, err := execution.NewEVMChainResolverFromEnv(anchorCfg, chainIDsOf(candidates))
+	// READ-ONLY. This tool issues eth_call, eth_getTransactionByHash, eth_getTransactionReceipt and
+	// eth_getBlockByNumber, and nothing else. ReadOnlyChains cannot sign because it holds nothing to sign
+	// with, so no ETH_PRIVATE_KEY is read and none is needed — earlier versions went through the transact
+	// manager and had to be handed a throwaway key just to construct.
+	resolver, err := execution.NewReadOnlyChainsFromEnv(anchorCfg, chainIDsOf(candidates))
 	if err != nil {
 		log.Fatalf("resolving chains: %v", err)
 	}
+	defer resolver.Close()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()

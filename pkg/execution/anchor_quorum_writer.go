@@ -207,9 +207,22 @@ func AnchorQuorumRecordFrom(ev *AnchorQuorumEvidence) *database.AnchorQuorumReco
 			IntentID: m.IntentID,
 			// The Accumulate 4-blob intent hash is what binds a member to its transaction, and it is the
 			// value bound into the on-chain leaf.
-			AccumTxHash: hex.EncodeToString(m.OperationID[:]),
+			// The Accumulate transaction that carried the member — NOT the operation id.
+			//
+			// This column is named accumulate_tx_hash and was holding hex(operationID), which is a
+			// different thing entirely: layer 5 joined on it and found nothing, and the Transaction
+			// Center showed an id where a transaction belonged. Empty when the member predates the
+			// provenance plumbing, which is honest; the operation id is still recorded in its own field.
+			AccumTxHash: m.Provenance.AccumTxHash,
 			ADIURL:      m.ADIURL,
 			OperationID: hexPrefixed(m.OperationID[:]),
+			FromChain:   m.Provenance.FromChain,
+			ToChain:     m.Provenance.ToChain,
+			FromAddress: m.Provenance.FromAddress,
+			ToAddress:   m.Provenance.ToAddress,
+			Amount:      m.Provenance.Amount,
+			TokenSymbol: m.Provenance.TokenSymbol,
+			UserID:      m.Provenance.UserID,
 			Leaf:        append([]byte(nil), m.Leaf[:]...),
 			LeafIndex:   m.LeafIndex,
 			Branch:      branch,

@@ -59,6 +59,11 @@ func evidenceFixture() *AnchorQuorumEvidence {
 			Leaf:        leaf,
 			LeafIndex:   0,
 			Branch:      [][32]byte{sibling},
+			Provenance: MemberProvenance{
+				AccumTxHash: "3e595d2c526dfacb5e332cd11f4f0306d2648cf1291bed63a9bcfd6ef44a7a12",
+				FromChain:   "accumulate",
+				ToChain:     "base-sepolia",
+			},
 		}},
 	}
 }
@@ -106,10 +111,17 @@ func TestAnchorQuorumRecordCarriesWhatWasProven(t *testing.T) {
 	if hex.EncodeToString(m.Leaf) != hex.EncodeToString(ev.Members[0].Leaf[:]) {
 		t.Fatalf("member leaf = %x", m.Leaf)
 	}
-	// The stored leaf must be the ON-CHAIN batch leaf handed to us, never re-derived here: a second
-	// derivation is a second chance to disagree with CertenAccountV7.computeLeaf.
-	if m.AccumTxHash != hex.EncodeToString(ev.Members[0].OperationID[:]) {
-		t.Fatalf("member accum tx = %s", m.AccumTxHash)
+	// accumulate_tx_hash carries the ACCUMULATE TRANSACTION, not the operation id.
+	//
+	// This assertion previously required the opposite, which is how hex(operationID) came to sit in a
+	// column named accumulate_tx_hash: the test encoded the defect, so the defect could not regress.
+	// The operation id is still recorded — in OperationID, where it belongs.
+	if m.AccumTxHash != ev.Members[0].Provenance.AccumTxHash {
+		t.Fatalf("member accum tx = %q, want the Accumulate transaction %q",
+			m.AccumTxHash, ev.Members[0].Provenance.AccumTxHash)
+	}
+	if m.OperationID != hexPrefixed(ev.Members[0].OperationID[:]) {
+		t.Fatalf("member operation id = %q", m.OperationID)
 	}
 }
 
@@ -385,5 +397,80 @@ func TestLeafInputCarriesTheIntentIdIntoTheTree(t *testing.T) {
 	}
 	if in.OperationID != p.OperationID {
 		t.Fatal("LeafInput changed the operation id")
+	}
+}
+
+// REGRESSION — the canonical member row must be no poorer than the shadow row it replaces.
+//
+// Until this, a canonical member carried hex(operationID) in a column named accumulate_tx_hash and
+// nothing else. The retired per-validator shadow row carried the real Accumulate transaction plus the
+// leg's from/to/amount, and the Transaction Center read those. Retiring the shadow pipeline while the
+// canonical row was thinner would have silently emptied the console — so the row has to carry what it
+// replaces BEFORE the old writer can be switched off.
+//
+// Observed live on intent a2e25171 (2026-09-18): canonical accumulate_tx_hash held e300dafb… (the
+// operation id) with every display column empty, while the shadow row held 3e595d2c… (the real
+// Accumulate transaction) and the full leg.
+func TestLeafInputCarriesProvenanceForTheCanonicalRow(t *testing.T) {
+	p := &PendingBatchIntent{
+		IntentID:    "intent-prov-1",
+		ADIURL:      "acc://payer-one.acme",
+		ChainID:     84532,
+		Account:     common.HexToAddress("0x9cc158f77DAdF9a605E141262338c89588825f6c"),
+		OperationID: [32]byte{0x01},
+		AccumTxHash: "3e595d2c526dfacb5e332cd11f4f0306d2648cf1291bed63a9bcfd6ef44a7a12",
+		Legs: []LegExecution{{
+			LegID: "leg-1", ChainID: 84532, Chain: "base-sepolia",
+			Target: common.HexToAddress("0x12dD00C619C1Ac3F58eC68ed44ec1023fE33B9Ff"),
+			Value:  big.NewInt(0),
+		}},
+	}
+	in, err := p.LeafInput()
+	if err != nil {
+		t.Fatalf("LeafInput: %v", err)
+	}
+
+	pv := in.Provenance
+	if pv.AccumTxHash != p.AccumTxHash {
+		t.Fatalf("accum tx hash = %q, want the Accumulate transaction %q — an operation id here is the "+
+			"mislabelling that broke the layer-5 join", pv.AccumTxHash, p.AccumTxHash)
+	}
+	if pv.AccumTxHash == hex.EncodeToString(p.OperationID[:]) {
+		t.Fatal("the operation id is being recorded as the Accumulate transaction")
+	}
+	if pv.FromChain != "accumulate" || pv.ToChain != "base-sepolia" {
+		t.Fatalf("chains = %s -> %s", pv.FromChain, pv.ToChain)
+	}
+	if pv.FromAddress != p.Account.Hex() || pv.ToAddress != p.Legs[0].Target.Hex() {
+		t.Fatalf("addresses = %s -> %s", pv.FromAddress, pv.ToAddress)
+	}
+	if pv.Amount != "0" || pv.TokenSymbol != "ETH" || pv.UserID != p.ADIURL {
+		t.Fatalf("amount=%q token=%q user=%q", pv.Amount, pv.TokenSymbol, pv.UserID)
+	}
+
+	// And it must survive into the member evidence, on BOTH lanes (nil map = cadence).
+	tree, err := BuildBatchTree(84532, []BatchLeafInput{in}, 100)
+	if err != nil {
+		t.Fatalf("BuildBatchTree: %v", err)
+	}
+	members := membersFromTree(tree, nil)
+	if len(members) != 1 || members[0].Provenance.AccumTxHash != p.AccumTxHash {
+		t.Fatalf("provenance did not reach the member evidence: %+v", members)
+	}
+}
+
+// Provenance must never move a leaf. If it could, adding a display field would change a bundle id.
+func TestProvenanceDoesNotAffectTheLeaf(t *testing.T) {
+	bare := BatchLeafInput{
+		ADIURL: "acc://payer-one.acme", ExecutionCommitment: [32]byte{0xe1}, OperationID: [32]byte{0x01},
+	}
+	rich := bare
+	rich.IntentID = "intent-prov-1"
+	rich.Provenance = MemberProvenance{
+		AccumTxHash: "3e595d2c", FromChain: "accumulate", ToChain: "base-sepolia",
+		FromAddress: "0xaaa", ToAddress: "0xbbb", Amount: "12345", TokenSymbol: "ETH", UserID: "acc://x",
+	}
+	if ComputeBatchLeaf(84532, bare) != ComputeBatchLeaf(84532, rich) {
+		t.Fatal("provenance changed the leaf; it must never be hashed")
 	}
 }

@@ -61,11 +61,14 @@ type persistedLeg struct {
 
 // persistedMember is one queued batch member on disk.
 type persistedMember struct {
-	IntentID     string         `json:"intent_id"`
-	ADIURL       string         `json:"adi_url"`
-	ChainID      int64          `json:"chain_id"`
-	Account      string         `json:"account"`
-	OperationID  string         `json:"operation_id"`
+	IntentID    string `json:"intent_id"`
+	ADIURL      string `json:"adi_url"`
+	ChainID     int64  `json:"chain_id"`
+	Account     string `json:"account"`
+	OperationID string `json:"operation_id"`
+	// AccumTxHash is omitempty for the same version-skew reason as Lane below: an old file restores it
+	// empty, which is honest, and an old binary ignores it.
+	AccumTxHash  string         `json:"accum_tx_hash,omitempty"`
 	Legs         []persistedLeg `json:"legs"`
 	CommitHeight uint64         `json:"commit_height"`
 	// Lane routes the member back to the structure that owns it. Absent means on_cadence.
@@ -203,6 +206,7 @@ func (s *BatchMempoolStore) encodeMember(p *PendingBatchIntent, lane BatchLane) 
 		ChainID:      p.ChainID,
 		Account:      p.Account.Hex(),
 		OperationID:  "0x" + common.Bytes2Hex(p.OperationID[:]),
+		AccumTxHash:  p.AccumTxHash,
 		CommitHeight: p.CommitHeight,
 	}
 	// on_cadence is the absent default, so it is never written. See persistedMember.Lane.
@@ -275,6 +279,7 @@ func (s *BatchMempoolStore) Load(m *BatchMempool) (int, error) {
 			ChainID:      pm.ChainID,
 			Account:      common.HexToAddress(pm.Account),
 			OperationID:  opID,
+			AccumTxHash:  pm.AccumTxHash,
 			CommitHeight: pm.CommitHeight,
 		}
 		for _, l := range pm.Legs {

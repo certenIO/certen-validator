@@ -79,6 +79,10 @@ type AnchorQuorumMember struct {
 	Leaf        [32]byte
 	LeafIndex   int
 	Branch      [][32]byte
+
+	// Provenance is what the row records about the member beyond its position in the tree: the
+	// Accumulate transaction that carried it, and the leg it settles. Never hashed.
+	Provenance MemberProvenance
 }
 
 // AnchorLaneOnDemand and AnchorLaneOnCadence name the two lanes.
@@ -124,6 +128,7 @@ func membersFromTree(tree *BatchTree, intentByOperation map[[32]byte]string) []A
 		}
 		members = append(members, AnchorQuorumMember{
 			IntentID:    intentID,
+			Provenance:  in.Provenance,
 			OperationID: in.OperationID,
 			ADIURL:      in.ADIURL,
 			Leaf:        leaf,

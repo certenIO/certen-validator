@@ -3,7 +3,9 @@ package execution
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"github.com/ethereum/go-ethereum"
 	"math/big"
 	"strings"
 	"testing"
@@ -603,5 +605,83 @@ func TestAnchorQuorumRecordLeavesTheCreateTxEmptyWhenThisNodeDidNotAnchor(t *tes
 	})
 	if rec.AnchorCreateTx != "" {
 		t.Fatalf("anchor_create_tx was invented as %q", rec.AnchorCreateTx)
+	}
+}
+
+// The writer's member mapping: evidence -> database record.
+//
+// Covered explicitly because the two neighbouring tests do not reach it — one stops at membersFromTree,
+// the other builds the database record by hand — so a regression here would have been invisible to both.
+// This is the exact line that wrote hex(operationID) into a column named accumulate_tx_hash.
+func TestAnchorQuorumRecordMapsMemberProvenance(t *testing.T) {
+	const accumTx = "3e595d2c526dfacb5e332cd11f4f0306d2648cf1291bed63a9bcfd6ef44a7a12"
+	opID := bfWord(0x01)
+
+	rec := AnchorQuorumRecordFrom(&AnchorQuorumEvidence{
+		ChainID:  84532,
+		BundleID: bfWord(0xcc),
+		Root:     bfWord(0xaa),
+		VerifyTx: "0xverify",
+		Lane:     AnchorLaneOnDemand,
+		Members: []AnchorQuorumMember{{
+			IntentID:    "intent-map-1",
+			OperationID: opID,
+			ADIURL:      "acc://payer.acme",
+			Leaf:        bfWord(0xaa),
+			Provenance: MemberProvenance{
+				AccumTxHash: accumTx,
+				FromChain:   "accumulate",
+				ToChain:     "base-sepolia",
+				FromAddress: "0xfrom",
+				ToAddress:   "0xto",
+				Amount:      "0",
+				TokenSymbol: "ETH",
+				UserID:      "acc://payer.acme",
+			},
+		}},
+	})
+	if rec == nil || len(rec.Members) != 1 {
+		t.Fatalf("no member record: %+v", rec)
+	}
+	m := rec.Members[0]
+	if m.AccumTxHash != accumTx {
+		t.Fatalf("accumulate_tx_hash = %q, want %q — the operation id belongs in OperationID, not here",
+			m.AccumTxHash, accumTx)
+	}
+	if m.OperationID != hexPrefixed(opID[:]) {
+		t.Fatalf("operation id = %q", m.OperationID)
+	}
+	if m.FromChain != "accumulate" || m.ToChain != "base-sepolia" || m.TokenSymbol != "ETH" ||
+		m.FromAddress != "0xfrom" || m.ToAddress != "0xto" || m.Amount != "0" || m.UserID != "acc://payer.acme" {
+		t.Fatalf("leg not mapped: %+v", m)
+	}
+}
+
+// "The chain says no" and "this endpoint cannot answer" must not read the same.
+//
+// A pruning endpoint returns a transaction body and then "not found" for its receipt. The first live
+// backfill reported 84 such candidates as unexaminable, which looked like missing data; every one was a
+// real, mined, successful transaction that the configured RPC had simply forgotten the receipt for.
+func TestIsNotFoundSeparatesAPruningEndpointFromAMissingObject(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"go-ethereum sentinel", ethereum.NotFound, true},
+		{"wrapped sentinel", fmt.Errorf("fetching receipt: %w", ethereum.NotFound), true},
+		{"plain string from a pruning node", errors.New("not found"), true},
+		{"mixed case", errors.New("Not Found"), true},
+		{"nil", nil, false},
+		{"a transport failure is NOT a missing object", errors.New("dial tcp: connection refused"), false},
+		{"a rate limit is NOT a missing object", errors.New("429 Too Many Requests"), false},
+		{"a revert is NOT a missing object", errors.New("execution reverted"), false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := isNotFound(c.err); got != c.want {
+				t.Fatalf("isNotFound(%v) = %v, want %v", c.err, got, c.want)
+			}
+		})
 	}
 }

@@ -72,3 +72,46 @@ func TestChainIDsOfIsDeduplicatedInFirstSeenOrder(t *testing.T) {
 		t.Fatalf("chainIDsOf = %v", got)
 	}
 }
+
+// A read-only tool must not be able to sign, and must not need a key to start.
+//
+// The first version of this command went through EthereumContractManager, whose constructor parses a
+// private key before it returns anything, so running a backfill that issues nothing but eth_call required
+// generating a throwaway signing key and putting it in the environment. A key that exists only to satisfy
+// a constructor is still a key: it lands in an env file, a process listing, a shell history.
+//
+// This asserts the shape rather than the behaviour, because the failure it guards against is a future
+// edit quietly reintroducing the transact path.
+func TestBackfillNeverReachesForASigningKey(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("reading main.go: %v", err)
+	}
+	text := string(src)
+
+	// Strip comments so the explanation above does not satisfy its own test.
+	var code strings.Builder
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "//") {
+			continue
+		}
+		code.WriteString(line)
+		code.WriteString("\n")
+	}
+	body := code.String()
+
+	for _, forbidden := range []string{
+		"ETH_PRIVATE_KEY",
+		"NewEVMChainResolver",        // the transact resolver; builds managers that demand a key
+		"NewEthereumContractManager", // the manager itself
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("the backfill references %q. It reads the chain and writes the database; it must not "+
+				"construct anything that can sign, and must not need a key to run.", forbidden)
+		}
+	}
+
+	if !strings.Contains(body, "NewReadOnlyChainsFromEnv") {
+		t.Fatal("the backfill no longer uses the read-only chain resolver")
+	}
+}
