@@ -254,7 +254,7 @@ func (r *ProofRepository) GetProofByArtifactID(ctx context.Context, artifactID u
 
 // GetProofByAccumTxHash retrieves the most recent proof for an Accumulate transaction hash
 func (r *ProofRepository) GetProofByAccumTxHash(ctx context.Context, accumTxHash string) (*CertenAnchorProof, error) {
-	return r.getOne(ctx, `WHERE accum_tx_hash = $1 ORDER BY created_at DESC LIMIT 1`, accumTxHash)
+	return r.getOne(ctx, `WHERE accum_tx_hash = $1 ORDER BY created_at DESC LIMIT 1`, TransactionHashKey(accumTxHash))
 }
 
 // GetProofsByBatchID retrieves all proofs in a batch

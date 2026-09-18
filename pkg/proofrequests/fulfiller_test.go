@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -139,10 +140,25 @@ func TestARequestWhoseProofExistsIsCompletedAndItsCallbackCalled(t *testing.T) {
 	}
 }
 
+// Clients send the Accumulate transaction ID (acc://<hash>@<principal>); artifacts and batch members are
+// keyed by the bare hash. This is the form every production request has.
+func TestARequestNamingTheAccumulateTransactionIDIsCompleted(t *testing.T) {
+	db, repos := openDB(t)
+	hash := strings.Repeat("ab", 16) + strings.ReplaceAll(uuid.NewString(), "-", "")
+	artifact := newArtifact(t, db, repos, hash, "acc://txid.acme/data")
+	request := newRequest(t, db, repos, &database.NewProofRequest{
+		AccumTxHash: "acc://" + strings.ToUpper(hash) + "@txid.acme/data", RequestType: database.RequestTypeOnDemand,
+	})
+	fulfiller(t, repos, time.Now).RunOnce(context.Background())
+	if got := getRequest(t, repos, request.RequestID); got.Status != database.RequestStatusCompleted || got.ProofID.UUID != artifact.ProofID {
+		t.Fatalf("a request naming the transaction ID was not answered by its artifact: %+v", got)
+	}
+}
+
 func TestARequestWhoseTransactionIsBatchedIsMarkedBatched(t *testing.T) {
 	db, repos := openDB(t)
 	ctx := context.Background()
-	accumTx := "requests-batched-" + uuid.NewString()
+	accumTx := strings.ReplaceAll(uuid.NewString()+uuid.NewString(), "-", "")
 	batchID := uuid.New()
 	if _, err := db.ExecContext(ctx, `INSERT INTO anchor_batches (id) VALUES ($1)`, batchID); err != nil {
 		t.Fatal(err)
@@ -153,7 +169,7 @@ func TestARequestWhoseTransactionIsBatchedIsMarkedBatched(t *testing.T) {
 	if _, err := db.ExecContext(ctx, `INSERT INTO batch_transactions (batch_id, accumulate_tx_hash, account_url, tree_index) VALUES ($1, $2, 'acc://b.acme', 0)`, batchID, accumTx); err != nil {
 		t.Fatal(err)
 	}
-	request := newRequest(t, db, repos, &database.NewProofRequest{AccumTxHash: accumTx, RequestType: database.RequestTypeOnDemand})
+	request := newRequest(t, db, repos, &database.NewProofRequest{AccumTxHash: "acc://" + accumTx + "@b.acme/data", RequestType: database.RequestTypeOnDemand})
 
 	fulfiller(t, repos, time.Now).RunOnce(ctx)
 

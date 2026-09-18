@@ -247,6 +247,8 @@ func (f *Fulfiller) deadline(request *database.ProofRequest) time.Duration {
 
 // findProof returns the proof that answers a request: the artifact for its transaction, or for an
 // account-only request the newest artifact for that account created after the request was made.
+// Requests carry whatever the client sent, usually the transaction ID (acc://<hash>@<principal>); the
+// repositories look transactions up by database.TransactionHashKey, so every form finds the artifact.
 func (f *Fulfiller) findProof(ctx context.Context, request *database.ProofRequest) (uuid.UUID, error) {
 	if request.AccumTxHash.Valid && request.AccumTxHash.String != "" {
 		artifact, err := f.artifacts.GetProofByTxHash(ctx, request.AccumTxHash.String)

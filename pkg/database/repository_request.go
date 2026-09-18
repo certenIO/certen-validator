@@ -14,6 +14,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -124,7 +125,12 @@ func (r *RequestRepository) GetRequest(ctx context.Context, requestID uuid.UUID)
 
 // GetRequestByAccumTxHash retrieves the most recent request for an Accumulate transaction
 func (r *RequestRepository) GetRequestByAccumTxHash(ctx context.Context, accumTxHash string) (*ProofRequest, error) {
-	return r.getOne(ctx, `WHERE accum_tx_hash = $1 ORDER BY created_at DESC LIMIT 1`, accumTxHash)
+	// A request is stored with the value its client sent: a bare hash or a transaction ID naming any
+	// principal. Match every form of the same transaction.
+	return r.getOne(ctx, `WHERE accum_tx_hash = $1
+		OR accum_tx_hash = $2
+		OR lower(substring(accum_tx_hash from '^acc://([0-9A-Fa-f]{64})@')) = $2
+		ORDER BY created_at DESC LIMIT 1`, strings.TrimSpace(accumTxHash), TransactionHashKey(accumTxHash))
 }
 
 // GetPendingRequests retrieves pending requests, most urgent first

@@ -471,7 +471,7 @@ func (r *BatchRepository) GetTransactionByAccumHash(ctx context.Context, accumTx
 		ORDER BY created_at DESC
 		LIMIT 1`
 
-	tx, err := scanBatchTransaction(r.client.QueryRowContext(ctx, query, accumTxHash).Scan)
+	tx, err := scanBatchTransaction(r.client.QueryRowContext(ctx, query, TransactionHashKey(accumTxHash)).Scan)
 
 	if err == sql.ErrNoRows {
 		// F.4 remediation: Return explicit error instead of nil, nil
