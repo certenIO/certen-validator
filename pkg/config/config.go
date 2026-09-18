@@ -80,6 +80,12 @@ type Config struct {
 	AttestationPeers         []string // URLs of peer validators for attestation collection
 	AttestationRequiredCount int      // Number of attestations required (2f+1)
 
+	// Proof request fulfilment (pkg/proofrequests)
+	ProofRequestInterval         time.Duration // how often pending requests are worked
+	ProofRequestOnDemandDeadline time.Duration // how long an on-demand request waits for its proof
+	ProofRequestCadenceDeadline  time.Duration // how long an on-cadence request waits for its proof
+	ProofRequestMaxRetries       int           // attempts before a request stays failed
+
 	// Security Configuration
 	JWTSecret   string
 	CORSOrigins []string
@@ -185,6 +191,11 @@ func Load() (*Config, error) {
 		// Multi-Validator Attestation Configuration
 		AttestationPeers:         parseAttestationPeers(getEnv("ATTESTATION_PEERS", "")),
 		AttestationRequiredCount: getEnvInt("ATTESTATION_REQUIRED_COUNT", 3), // 2f+1 for f=1
+
+		ProofRequestInterval:         getEnvDuration("PROOF_REQUEST_INTERVAL", 15*time.Second),
+		ProofRequestOnDemandDeadline: getEnvDuration("PROOF_REQUEST_ON_DEMAND_DEADLINE", 30*time.Minute),
+		ProofRequestCadenceDeadline:  getEnvDuration("PROOF_REQUEST_CADENCE_DEADLINE", 24*time.Hour),
+		ProofRequestMaxRetries:       getEnvInt("PROOF_REQUEST_MAX_RETRIES", 3),
 
 		// Security Configuration - REQUIRED, no weak defaults
 		JWTSecret:   getEnv("JWT_SECRET", ""),

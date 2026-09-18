@@ -14,6 +14,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -179,9 +180,15 @@ func (r *RequestRepository) UpdateRequestStatus(ctx context.Context, requestID u
 // MarkProcessing claims a pending request. It only succeeds from 'pending', so two workers cannot both
 // claim the same request.
 func (r *RequestRepository) MarkProcessing(ctx context.Context, requestID uuid.UUID) error {
+	return r.MarkProcessingAt(ctx, requestID, time.Now())
+}
+
+// MarkProcessingAt claims a pending request as of the caller's clock. A worker that measures deadlines
+// from the claim must stamp it with the same clock it measures with; the database's clock may differ.
+func (r *RequestRepository) MarkProcessingAt(ctx context.Context, requestID uuid.UUID, at time.Time) error {
 	return r.execOne(ctx, "mark request processing", requestID, `
-		UPDATE proof_requests SET status = 'processing', processed_at = NOW()
-		WHERE request_id = $1 AND status = 'pending'`)
+		UPDATE proof_requests SET status = 'processing', processed_at = $2
+		WHERE request_id = $1 AND status = 'pending'`, at)
 }
 
 // MarkBatched records the batch a request's transaction was placed in

@@ -421,20 +421,11 @@ func (r *BatchRepository) AddTransaction(ctx context.Context, input *NewBatchTra
 // GetTransaction retrieves a transaction by ID
 func (r *BatchRepository) GetTransaction(ctx context.Context, txID int64) (*BatchTransaction, error) {
 	query := `
-		SELECT id, batch_id, accumulate_tx_hash, account_url, tree_index,
-			merkle_path, transaction_hash, chained_proof, chained_proof_valid,
-			governance_proof, governance_level, governance_valid,
-			intent_type, intent_data, created_at
+		SELECT ` + batchTransactionColumns + `
 		FROM batch_transactions
 		WHERE id = $1`
 
-	tx := &BatchTransaction{}
-	err := r.client.QueryRowContext(ctx, query, txID).Scan(
-		&tx.ID, &tx.BatchID, &tx.AccumTxHash, &tx.AccountURL, &tx.TreeIndex,
-		&tx.MerklePath, &tx.TxHash, &tx.ChainedProof, &tx.ChainedValid,
-		&tx.GovProof, &tx.GovLevel, &tx.GovValid,
-		&tx.IntentType, &tx.IntentData, &tx.CreatedAt,
-	)
+	tx, err := scanBatchTransaction(r.client.QueryRowContext(ctx, query, txID).Scan)
 
 	if err == sql.ErrNoRows {
 		// F.4 remediation: Return explicit error instead of nil, nil
@@ -447,25 +438,40 @@ func (r *BatchRepository) GetTransaction(ctx context.Context, txID int64) (*Batc
 	return tx, nil
 }
 
+// batchTransactionColumns is what the transaction readers select; scanBatchTransaction reads it.
+const batchTransactionColumns = `id, batch_id, accumulate_tx_hash, account_url, tree_index,
+			merkle_path, transaction_hash, chained_proof, chained_proof_valid,
+			governance_proof, governance_level, governance_valid,
+			intent_type, intent_data, created_at, user_id, intent_id`
+
+// scanBatchTransaction reads one batch_transactions row. The proof, path and intent JSON columns and the
+// two validity flags are nullable: a member written by the canonical anchor path has no chained proof
+// yet, and scanning NULL straight into json.RawMessage or bool fails the whole read.
+func scanBatchTransaction(scan func(...any) error) (*BatchTransaction, error) {
+	tx := &BatchTransaction{}
+	var chainedValid, govValid sql.NullBool
+	if err := scan(
+		&tx.ID, &tx.BatchID, &tx.AccumTxHash, &tx.AccountURL, &tx.TreeIndex,
+		(*[]byte)(&tx.MerklePath), &tx.TxHash, (*[]byte)(&tx.ChainedProof), &chainedValid,
+		(*[]byte)(&tx.GovProof), &tx.GovLevel, &govValid,
+		&tx.IntentType, (*[]byte)(&tx.IntentData), &tx.CreatedAt, &tx.UserID, &tx.IntentID,
+	); err != nil {
+		return nil, err
+	}
+	tx.ChainedValid, tx.GovValid = chainedValid.Bool, govValid.Bool
+	return tx, nil
+}
+
 // GetTransactionByAccumHash retrieves a transaction by Accumulate tx hash
 func (r *BatchRepository) GetTransactionByAccumHash(ctx context.Context, accumTxHash string) (*BatchTransaction, error) {
 	query := `
-		SELECT id, batch_id, accumulate_tx_hash, account_url, tree_index,
-			merkle_path, transaction_hash, chained_proof, chained_proof_valid,
-			governance_proof, governance_level, governance_valid,
-			intent_type, intent_data, created_at
+		SELECT ` + batchTransactionColumns + `
 		FROM batch_transactions
 		WHERE accumulate_tx_hash = $1
 		ORDER BY created_at DESC
 		LIMIT 1`
 
-	tx := &BatchTransaction{}
-	err := r.client.QueryRowContext(ctx, query, accumTxHash).Scan(
-		&tx.ID, &tx.BatchID, &tx.AccumTxHash, &tx.AccountURL, &tx.TreeIndex,
-		&tx.MerklePath, &tx.TxHash, &tx.ChainedProof, &tx.ChainedValid,
-		&tx.GovProof, &tx.GovLevel, &tx.GovValid,
-		&tx.IntentType, &tx.IntentData, &tx.CreatedAt,
-	)
+	tx, err := scanBatchTransaction(r.client.QueryRowContext(ctx, query, accumTxHash).Scan)
 
 	if err == sql.ErrNoRows {
 		// F.4 remediation: Return explicit error instead of nil, nil
@@ -481,10 +487,7 @@ func (r *BatchRepository) GetTransactionByAccumHash(ctx context.Context, accumTx
 // GetTransactionsInBatch retrieves all transactions in a batch
 func (r *BatchRepository) GetTransactionsInBatch(ctx context.Context, batchID uuid.UUID) ([]*BatchTransaction, error) {
 	query := `
-		SELECT id, batch_id, accumulate_tx_hash, account_url, tree_index,
-			merkle_path, transaction_hash, chained_proof, chained_proof_valid,
-			governance_proof, governance_level, governance_valid,
-			intent_type, intent_data, created_at
+		SELECT ` + batchTransactionColumns + `
 		FROM batch_transactions
 		WHERE batch_id = $1
 		ORDER BY tree_index ASC`
@@ -497,13 +500,7 @@ func (r *BatchRepository) GetTransactionsInBatch(ctx context.Context, batchID uu
 
 	var txs []*BatchTransaction
 	for rows.Next() {
-		tx := &BatchTransaction{}
-		err := rows.Scan(
-			&tx.ID, &tx.BatchID, &tx.AccumTxHash, &tx.AccountURL, &tx.TreeIndex,
-			&tx.MerklePath, &tx.TxHash, &tx.ChainedProof, &tx.ChainedValid,
-			&tx.GovProof, &tx.GovLevel, &tx.GovValid,
-			&tx.IntentType, &tx.IntentData, &tx.CreatedAt,
-		)
+		tx, err := scanBatchTransaction(rows.Scan)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan transaction: %w", err)
 		}

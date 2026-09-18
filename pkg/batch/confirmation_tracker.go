@@ -18,6 +18,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/certen/independant-validator/pkg/database"
 	"github.com/certen/independant-validator/pkg/firestore"
 )
@@ -227,6 +229,9 @@ func (t *ConfirmationTracker) processAnchor(ctx context.Context, anchor *databas
 		t.logger.Printf("Failed to update confirmations for anchor %s: %v", anchor.AnchorID, err)
 		return
 	}
+
+	// The Certen proofs anchored here carry the anchor's confirmation count too.
+	t.updateProofConfirmations(ctx, anchor, confirmations, blockHash)
 
 	// Sync confirmation update to Firestore (Stage 7)
 	if t.firestoreSyncService != nil && t.firestoreSyncService.IsEnabled() {
@@ -438,4 +443,31 @@ func (p *EthereumBlockProvider) GetBlockTimestamp(ctx context.Context, blockNumb
 	}
 	_, timestamp, err := p.getBlockInfo(ctx, blockNumber)
 	return timestamp, err
+}
+
+// updateProofConfirmations records an anchor's confirmation count on every Certen anchor proof it
+// anchors. Proofs are found by anchor record and by anchor transaction: a proof built by the proof cycle
+// names the anchor-create transaction and may have no anchor record.
+func (t *ConfirmationTracker) updateProofConfirmations(ctx context.Context, anchor *database.AnchorRecord, confirmations int, blockHash string) {
+	if t.repos == nil || t.repos.Proofs == nil {
+		return
+	}
+	byAnchor, err := t.repos.Proofs.GetProofsByAnchorID(ctx, anchor.AnchorID)
+	if err != nil {
+		t.logger.Printf("Failed to get proofs for anchor %s: %v", anchor.AnchorID, err)
+	}
+	byTx, err := t.repos.Proofs.GetProofsByAnchorTxHash(ctx, anchor.AnchorTxHash)
+	if err != nil {
+		t.logger.Printf("Failed to get proofs for anchor tx %s: %v", anchor.AnchorTxHash, err)
+	}
+	seen := make(map[uuid.UUID]bool, len(byAnchor)+len(byTx))
+	for _, proof := range append(byAnchor, byTx...) {
+		if seen[proof.ProofID] {
+			continue
+		}
+		seen[proof.ProofID] = true
+		if err := t.repos.Proofs.UpdateAnchorConfirmations(ctx, proof.ProofID, confirmations, blockHash); err != nil {
+			t.logger.Printf("Failed to update proof %s confirmations: %v", proof.ProofID, err)
+		}
+	}
 }

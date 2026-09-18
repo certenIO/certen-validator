@@ -694,3 +694,36 @@ func indexOfRequest(list []*ProofRequest, id uuid.UUID) int {
 	}
 	return -1
 }
+
+// A member written by the canonical anchor path has no chained or governance proof yet; the readers must
+// still return it, with its intent.
+func TestBatchTransactionsWithoutProofsAreReadable(t *testing.T) {
+	requireTestDB(t)
+	ctx := context.Background()
+	batchID := uuid.New()
+	if _, err := testDB.ExecContext(ctx, `INSERT INTO anchor_batches (id) VALUES ($1)`, batchID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testDB.ExecContext(context.Background(), `DELETE FROM anchor_batches WHERE id = $1`, batchID)
+	})
+	accumTx, intentID := "bare-"+uuid.NewString(), "intent-"+uuid.NewString()
+	if _, err := testDB.ExecContext(ctx, `
+		INSERT INTO batch_transactions (batch_id, accumulate_tx_hash, account_url, tree_index, intent_id, chained_proof_valid, governance_valid)
+		VALUES ($1, $2, 'acc://bare.acme', 0, $3, NULL, NULL)`, batchID, accumTx, intentID); err != nil {
+		t.Fatal(err)
+	}
+	batches := NewBatchRepository(NewClientFromDB(testDB))
+	byHash, err := batches.GetTransactionByAccumHash(ctx, accumTx)
+	if err != nil || byHash.IntentID.String != intentID || byHash.ChainedProof != nil || byHash.GovValid {
+		t.Fatalf("GetTransactionByAccumHash = %+v, %v", byHash, err)
+	}
+	inBatch, err := batches.GetTransactionsInBatch(ctx, batchID)
+	if err != nil || len(inBatch) != 1 || inBatch[0].IntentID.String != intentID {
+		t.Fatalf("GetTransactionsInBatch = %+v, %v", inBatch, err)
+	}
+	byID, err := batches.GetTransaction(ctx, byHash.ID)
+	if err != nil || byID.AccumTxHash != accumTx {
+		t.Fatalf("GetTransaction = %+v, %v", byID, err)
+	}
+}

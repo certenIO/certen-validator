@@ -42,6 +42,7 @@ import (
 	"github.com/certen/independant-validator/pkg/ledger"
 	"github.com/certen/independant-validator/pkg/metrics"
 	"github.com/certen/independant-validator/pkg/proof"
+	"github.com/certen/independant-validator/pkg/proofrequests"
 	"github.com/certen/independant-validator/pkg/server"
 	"github.com/certen/independant-validator/pkg/strategy"
 )
@@ -927,6 +928,12 @@ func main() {
 		mux.HandleFunc("/api/proofs/by-tx/", batchHandlers.HandleGetProofByTxHash)
 		mux.HandleFunc("/api/proofs/by-account/", batchHandlers.HandleGetProofsByAccount)
 		mux.HandleFunc("/api/proofs/", batchHandlers.HandleGetProof)
+
+		// Four-component Certen anchor proofs (certen_anchor_proofs)
+		mux.HandleFunc("/api/certen-proofs/by-artifact/", batchHandlers.HandleGetCertenProofByArtifact)
+		mux.HandleFunc("/api/certen-proofs/by-tx/", batchHandlers.HandleGetCertenProofByTxHash)
+		mux.HandleFunc("/api/certen-proofs/by-account/", batchHandlers.HandleGetCertenProofsByAccount)
+		mux.HandleFunc("/api/certen-proofs/", batchHandlers.HandleGetCertenProof)
 
 		// Anchor retrieval endpoints
 		mux.HandleFunc("/api/anchors/by-batch/", batchHandlers.HandleGetAnchorByBatch)
@@ -1918,6 +1925,21 @@ func startValidator(
 			} else {
 				log.Println("✅ [Phase 5] Confirmation tracker started - monitoring anchor finality")
 			}
+		}
+
+		// Proof requests: the API records them as pending; this works them through to a proof.
+		requestFulfiller, err := proofrequests.New(repos, proofrequests.Config{
+			Interval:         cfg.ProofRequestInterval,
+			OnDemandDeadline: cfg.ProofRequestOnDemandDeadline,
+			CadenceDeadline:  cfg.ProofRequestCadenceDeadline,
+			MaxRetries:       cfg.ProofRequestMaxRetries,
+			ValidatorID:      cfg.ValidatorID,
+		})
+		if err != nil {
+			log.Printf("⚠️ [Phase 5] Proof request fulfiller not started: %v", err)
+		} else {
+			requestFulfiller.Start(context.Background())
+			log.Println("✅ [Phase 5] Proof request fulfiller started")
 		}
 
 		// ==========================================================================
