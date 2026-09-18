@@ -84,6 +84,19 @@ WORKDIR /build/accumulate-lite-client-2/liteclient/proof/consolidated_governance
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o /build/txhash .
 WORKDIR /build
 
+# Build the schema migrator.
+#
+# It ships in the image so the deploy can bring the database forward BEFORE any validator starts.
+# main.go verifies the schema at startup and calls log.Fatalf when the catalog is ahead of the database,
+# which is correct — a binary must not run against a schema it does not understand — but it means rolling
+# a new image before migrating crash-loops the whole fleet. That has now happened three times
+# (2026-09-18: the catalog switch, migration 00002, migration 00003), because the rebuild-and-restart is
+# automatic on merge and nobody gets a window to migrate first.
+#
+# With this binary in the image, compose can run it as a one-shot service the validators depend on, and
+# the failure mode disappears rather than being documented.
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o /build/schemamigrate ./cmd/schemamigrate
+
 # ═══════════════════════════════════════════════════════════════
 # Production Stage
 # ═══════════════════════════════════════════════════════════════
@@ -102,6 +115,7 @@ WORKDIR /app
 COPY --from=builder /build/validator .
 COPY --from=builder /build/govproof .
 COPY --from=builder /build/txhash .
+COPY --from=builder /build/schemamigrate .
 
 # Create directories for persistent storage
 RUN mkdir -p /app/bft-keys \
