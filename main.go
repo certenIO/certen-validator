@@ -2439,6 +2439,17 @@ func startValidator(
 				"proven anchors will have no canonical row")
 		}
 
+		// Standing evidence checks. The counters above report what the writer DID; these report what is
+		// WRONG, on a timer, whether or not anything is happening — including whether this database is
+		// behind this binary's migration catalog, which is fatal on the NEXT restart and therefore has to
+		// be visible before someone rolls the fleet rather than after.
+		if dbClient != nil {
+			monitor := &execution.EvidenceMonitor{DB: dbClient.DB(), Logf: log.Printf}
+			monitor.Start(context.Background())
+			log.Printf("✅ [Phase 5] Standing evidence checks started (settled-without-canonical, " +
+				"contradicted layer 5, schema-behind-binary)")
+		}
+
 		if stack := batchStackForAttestation.Load(); stack != nil {
 			legProgress := func(ctx context.Context, intentID string, completed, failed int) {
 				if lifecycleRepo == nil {

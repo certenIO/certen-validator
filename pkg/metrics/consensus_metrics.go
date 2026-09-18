@@ -224,6 +224,7 @@ func RegisterMetrics() {
 		// "stale" (an infrastructure failure that halts an enforcing fleet).
 		registerEntitlementMetrics()
 		registerAnchorQuorumMetrics()
+		registerEvidenceMonitorMetrics()
 		registerPersistenceMetrics()
 	})
 }
