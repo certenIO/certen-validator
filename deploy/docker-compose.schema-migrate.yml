@@ -1,0 +1,71 @@
+# Migrate the schema BEFORE any validator starts.
+#
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────
+#  WHY THIS EXISTS
+#
+#  main.go verifies the schema at startup and calls log.Fatalf when its migration catalog is ahead of the
+#  database. That is correct: a binary must not run against a schema it does not understand. But the
+#  rebuild-and-restart is automatic on merge, so rolling a new image before migrating crash-loops the
+#  entire fleet, and nobody gets a window to migrate first.
+#
+#  It has happened three times, all on 2026-09-18:
+#
+#    - the pkg/database -> db/migrations catalog switch
+#    - migration 00002 (anchor batch_type 'unknown')       ~4 min outage, 7/7 validators down
+#    - migration 00003 (anchor_create_tx must be a hash)   10 failed starts per validator
+#
+#  Each was recovered by hand with cmd/schemamigrate. Documenting the deploy order did not prevent the
+#  second or the third, because the order is not something a human performs — it is something the deploy
+#  does. So it belongs here.
+#
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────
+#  HOW IT WORKS
+#
+#  schema-migrate runs once, applies any pending migrations through the runner (the same path
+#  MIGRATE_ON_START takes, so history rows and checksums are written by the runner rather than by hand),
+#  and exits 0. Every validator waits for that exit with service_completed_successfully, so:
+#
+#    - migration fails  -> validators never start, and the failure is one clear message rather than
+#                          seven crash loops
+#    - migration succeeds -> validators start against a schema they understand
+#    - nothing pending  -> it is a no-op that exits immediately
+#
+#  It is idempotent and safe to leave in place permanently.
+#
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────
+#  HOW TO APPLY
+#
+#  This file is a fragment, kept in the repository so the change is reviewable. Merge its contents into
+#  /root/certen-validators/docker-compose.yml:
+#
+#    1. add the `schema-migrate` service below
+#    2. add the depends_on block to EVERY validator service (validator-1 .. validator-7)
+#    3. docker compose config >/dev/null   # validate before applying
+#    4. docker compose up -d
+#
+#  Or run it as an overlay without editing the main file:
+#
+#    docker compose -f docker-compose.yml -f deploy/docker-compose.schema-migrate.yml up -d
+#
+#  Requires Docker Compose v2.x for service_completed_successfully (the fleet runs v2.18.1).
+
+services:
+  schema-migrate:
+    # Built from the same source as the validators, so the catalog it applies is exactly the catalog they
+    # will verify against. Using a pinned image instead would let the two drift, which is the whole bug.
+    build: .
+    container_name: certen-schema-migrate
+    restart: "no" # a one-shot must never be restarted; a failure has to stay visible, not retry silently
+    command: ["./schemamigrate", "-applied-by", "deploy"]
+    env_file: .env.shared # DATABASE_URL, same as every validator
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - certen-net
+
+  # Repeat this depends_on for every validator service.
+  validator-1:
+    depends_on:
+      schema-migrate:
+        condition: service_completed_successfully
