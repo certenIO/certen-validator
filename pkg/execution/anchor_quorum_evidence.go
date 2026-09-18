@@ -49,6 +49,8 @@ type AnchorQuorumEvidence struct {
 	// Empty when this validator did not create the anchor (another leader did), which readers must
 	// treat as "not known here", never as "use whatever transaction is to hand".
 	AnchorCreateTx string
+	// AnchorCreateBlock is the block AnchorCreateTx was mined in; zero when the transaction is not known.
+	AnchorCreateBlock int64
 
 	AggregateSignatureHex string
 	AggregatePublicKeyHex string

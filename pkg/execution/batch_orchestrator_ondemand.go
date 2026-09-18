@@ -130,7 +130,7 @@ func (o *BatchOrchestrator) SettleOnDemandMember(
 	defer o.ecm.endNonceSequence()
 
 	// ---- Create the anchor --------------------------------------------------
-	anchorTx, gasUsed, err := o.createBatchAnchor(ctx, tree)
+	anchorTx, gasUsed, anchorBlock, err := o.createBatchAnchor(ctx, tree)
 	if err != nil {
 		return nil, fmt.Errorf("createBatchAnchor: %w", err)
 	}
@@ -141,7 +141,7 @@ func (o *BatchOrchestrator) SettleOnDemandMember(
 	// validator created the anchor first; this node then does not know the creating transaction, and
 	// empty is how that is said. See IsTransactionHash.
 	if IsTransactionHash(anchorTx) {
-		tree.AnchorCreateTx = anchorTx
+		tree.AnchorCreateTx, tree.AnchorCreateBlock = anchorTx, anchorBlock
 	}
 	o.logf("[OD] chain=%d intent=%s anchor created tx=%s gas=%d",
 		chainID, member.IntentID, anchorTx, gasUsed)

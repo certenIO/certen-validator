@@ -316,6 +316,7 @@ func (a *BatchQuorumAttestor) prove(
 			VerifyTx:              verifyTx,
 			VerifyBlock:           int64(verifyBlockNum),
 			AnchorCreateTx:        tree.AnchorCreateTx,
+			AnchorCreateBlock:     int64(tree.AnchorCreateBlock),
 			AggregateSignatureHex: agg.AggregateSignatureHex,
 			AggregatePublicKeyHex: agg.AggregatePublicKeyHex,
 			Signers:               agg.Signers,

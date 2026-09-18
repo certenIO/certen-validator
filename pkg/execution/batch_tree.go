@@ -309,6 +309,8 @@ type BatchTree struct {
 	// root that transaction never contained. Empty is honest — a tree that has not been anchored yet, or
 	// one anchored by another leader — and readers fall back rather than assert.
 	AnchorCreateTx string
+	// AnchorCreateBlock is the block AnchorCreateTx was mined in, from its receipt; zero with it.
+	AnchorCreateBlock uint64
 }
 
 // BuildBatchTree assembles the tree and self-verifies every branch before returning.

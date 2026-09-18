@@ -51,8 +51,10 @@ type AnchorQuorumRecord struct {
 	BatchOperationID string
 	MessageHash      string
 	AnchorCreateTx   string
-	VerifyTx         string
-	VerifyBlock      int64
+	// AnchorCreateBlock is the block AnchorCreateTx was mined in (anchor_block_num); not VerifyBlock.
+	AnchorCreateBlock int64
+	VerifyTx          string
+	VerifyBlock       int64
 	// VerifiedAt is the time the quorum was confirmed on-chain, used as consensus_completed_at.
 	VerifiedAt time.Time
 
@@ -146,7 +148,26 @@ func (r *BatchRepository) RecordAnchorQuorum(
 				IncomingSig:  hexOrEmpty(rec.AggregateSignature),
 			}
 		}
-		return false, nil
+		// Same evidence. Only the validator that created the anchor knows its transaction and block, and
+		// another validator may have written the row first; fill them in if the row lacks them. Never
+		// overwrites: a row that names a different create transaction keeps it, and its block.
+		if rec.AnchorCreateTx != "" {
+			if _, err := tx.Tx().ExecContext(ctx, `
+				UPDATE anchor_batches
+				SET anchor_create_tx = COALESCE(anchor_create_tx, $2),
+				    anchor_tx_hash   = COALESCE(NULLIF(anchor_tx_hash, ''), $2),
+				    anchor_block_num = CASE
+				        WHEN anchor_block_num IS NULL AND LOWER(COALESCE(anchor_create_tx, $2)) = LOWER($2)
+				        THEN $3 ELSE anchor_block_num END,
+				    updated_at       = NOW()
+				WHERE id = $1
+				  AND (anchor_create_tx IS NULL
+				       OR (LOWER(anchor_create_tx) = LOWER($2) AND anchor_block_num IS NULL AND $3::bigint IS NOT NULL))`,
+				existingID, rec.AnchorCreateTx, anchorCreateBlock(rec)); err != nil {
+				return false, fmt.Errorf("record anchor quorum: completing anchor %s: %w", rec.BundleID, err)
+			}
+		}
+		return false, tx.Commit()
 	case err != sql.ErrNoRows:
 		return false, fmt.Errorf("record anchor quorum: reading existing row: %w", err)
 	}
@@ -166,7 +187,7 @@ func (r *BatchRepository) RecordAnchorQuorum(
 			message_hash, signers, signed_voting_power, total_voting_power,
 			proof_data_included, attestation_count, aggregated_signature, aggregated_public_key,
 			quorum_reached, consensus_completed_at, evidence_source, lane,
-			anchor_tx_hash, anchored_at, confirmed_at, closed_at
+			anchor_tx_hash, anchored_at, confirmed_at, closed_at, anchor_block_num
 		) VALUES (
 			$1, $2, 'confirmed', $3, $4, NULL,
 			$5, $5,
@@ -174,7 +195,7 @@ func (r *BatchRepository) RecordAnchorQuorum(
 			$12, $13::jsonb, $14, $15,
 			TRUE, $16, $17, $18,
 			TRUE, $19, $20, $21,
-			$9, $19, $19, $19
+			$9, $19, $19, $19, $22
 		)
 		ON CONFLICT (chain_id, bundle_id) WHERE bundle_id IS NOT NULL DO NOTHING
 		RETURNING TRUE`,
@@ -186,6 +207,7 @@ func (r *BatchRepository) RecordAnchorQuorum(
 		numericOrNil(rec.SignedVotingPower), numericOrNil(rec.TotalVotingPower),
 		len(rec.Signers), rec.AggregateSignature, rec.AggregatePubKey,
 		rec.VerifiedAt.UTC(), rec.EvidenceSource, nullIfEmpty(rec.Lane),
+		anchorCreateBlock(rec),
 	).Scan(&inserted)
 
 	if err == sql.ErrNoRows {
@@ -313,6 +335,15 @@ func nullIfEmpty(s string) interface{} {
 		return nil
 	}
 	return s
+}
+
+// anchorCreateBlock is anchor_block_num for a new row: the create transaction's block, recorded only with
+// the transaction it belongs to.
+func anchorCreateBlock(rec *AnchorQuorumRecord) interface{} {
+	if rec.AnchorCreateTx == "" {
+		return nil
+	}
+	return nullIfZero(rec.AnchorCreateBlock)
 }
 
 func nullIfZero(v int64) interface{} {

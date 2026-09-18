@@ -107,6 +107,9 @@ type Layer5 struct {
 	AnchorTx    string `json:"anchorTx"`
 	BlockNumber uint64 `json:"blockNumber"`
 	BlockHash   string `json:"blockHash,omitempty"`
+	// Confirmations is how deep the anchor transaction was when it was observed; zero when it was not.
+	// Not part of the layer: it changes with every block, so it is recorded on the Certen proof instead.
+	Confirmations int `json:"-"`
 
 	// The offline half.
 	BatchRoot string       `json:"batchRoot"` // hex32 — what was anchored

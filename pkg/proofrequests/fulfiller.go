@@ -38,7 +38,7 @@ type Config struct {
 	OnDemandDeadline time.Duration // how long an on-demand request waits for its proof (default 30m)
 	CadenceDeadline  time.Duration // how long an on-cadence request waits (default 24h)
 	MaxRetries       int           // attempts before a failed request stays failed (default 3)
-	BatchSize        int           // requests handled per pass per state (default 100)
+	BatchSize        int           // requests retried and claimed per pass, and read per page when settling (default 100)
 	ValidatorID      string
 	HTTPClient       *http.Client // for callbacks (default: 10s timeout)
 	Logger           *log.Logger
@@ -166,21 +166,31 @@ func (f *Fulfiller) RunOnce(ctx context.Context) PassResult {
 		}
 	}
 
-	// Every validator settles claimed requests, so one that stops mid-request does not strand it.
-	inFlight, err := f.requests.GetProcessingRequests(ctx, f.cfg.BatchSize)
-	if err != nil {
-		f.cfg.Logger.Printf("list processing requests: %v", err)
-		return result
-	}
-	for _, request := range inFlight {
-		switch f.settle(ctx, request) {
-		case outcomeBatched:
-			result.Batched++
-		case outcomeCompleted:
-			result.Completed++
-		case outcomeFailed:
-			result.Failed++
+	// Every validator settles claimed requests, so one that stops mid-request does not strand it. Most
+	// in-flight requests are still waiting and stay in flight, so the pass pages through all of them;
+	// taking only the first page would leave every request behind it unsettled until the ones in front
+	// time out.
+	var after *database.ProofRequest
+	for ctx.Err() == nil {
+		inFlight, err := f.requests.GetProcessingRequestsAfter(ctx, after, f.cfg.BatchSize)
+		if err != nil {
+			f.cfg.Logger.Printf("list processing requests: %v", err)
+			break
 		}
+		for _, request := range inFlight {
+			switch f.settle(ctx, request) {
+			case outcomeBatched:
+				result.Batched++
+			case outcomeCompleted:
+				result.Completed++
+			case outcomeFailed:
+				result.Failed++
+			}
+		}
+		if len(inFlight) < f.cfg.BatchSize {
+			break
+		}
+		after = inFlight[len(inFlight)-1]
 	}
 	if result != (PassResult{}) {
 		f.cfg.Logger.Printf("pass: %+v", result)
