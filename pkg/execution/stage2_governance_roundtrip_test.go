@@ -28,8 +28,8 @@
 //
 //	go test ./pkg/execution/ -run 'TestS2_' -count=1 -v
 //
-// It needs a PostgreSQL carrying the live schema plus migration 015, addressed
-// by CERTEN_TEST_DB. Without it the test SKIPS rather than passing vacuously — a
+// It needs a PostgreSQL addressed by CERTEN_TEST_DB, which it migrates through the
+// production runner. Without it the test skips locally and fails in CI — a
 // skipped gate is not a green gate.
 package execution
 

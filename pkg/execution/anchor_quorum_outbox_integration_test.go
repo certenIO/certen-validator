@@ -11,10 +11,8 @@ package execution
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"math/big"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -22,27 +20,12 @@ import (
 	"github.com/google/uuid"
 	_ "github.com/lib/pq"
 
-	schema "github.com/certen/independant-validator/db"
 	"github.com/certen/independant-validator/pkg/database"
 )
 
 func outboxTestDB(t *testing.T) *database.BatchRepository {
 	t.Helper()
-	dsn := os.Getenv("CERTEN_TEST_DB")
-	if dsn == "" {
-		t.Skip("CERTEN_TEST_DB is not set")
-	}
-	conn, err := sql.Open("postgres", dsn)
-	if err != nil {
-		t.Fatalf("opening test database: %v", err)
-	}
-	t.Cleanup(func() { conn.Close() })
-	if err := conn.Ping(); err != nil {
-		t.Fatalf("pinging test database: %v", err)
-	}
-	if err := (schema.Runner{DB: conn}).Up(context.Background(), "outbox-integration-test"); err != nil {
-		t.Fatalf("migrating test database: %v", err)
-	}
+	conn := openMigratedTestDB(t, "the anchor quorum outbox")
 	return database.NewBatchRepository(database.NewClientFromDB(conn))
 }
 

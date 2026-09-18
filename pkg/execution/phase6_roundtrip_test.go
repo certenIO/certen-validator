@@ -28,9 +28,9 @@
 //
 //	go test ./pkg/execution/ -run 'TestP6_StoredProofVerifiesOffline|TestP6_StoredProofRejects' -count=1 -v
 //
-// It needs a PostgreSQL carrying the live schema, addressed by CERTEN_TEST_DB.
-// Without it the test SKIPS rather than passing vacuously — a skipped Gate 5
-// is not a green Gate 5.
+// It needs a PostgreSQL addressed by CERTEN_TEST_DB, which it migrates through the
+// production runner. Without it the test skips locally and fails in CI — a
+// skipped Gate 5 is not a green Gate 5.
 package execution
 
 import (
@@ -84,20 +84,7 @@ func p6CutTheNetwork(t *testing.T) {
 
 func p6OpenDB(t *testing.T) *sql.DB {
 	t.Helper()
-	conn := os.Getenv("CERTEN_TEST_DB")
-	if conn == "" {
-		t.Skip("CERTEN_TEST_DB not set — Gate 5 needs a PostgreSQL with the live schema. " +
-			"A skipped Gate 5 is not a green Gate 5.")
-	}
-	db, err := sql.Open("postgres", conn)
-	if err != nil {
-		t.Fatalf("open test database: %v", err)
-	}
-	if err := db.Ping(); err != nil {
-		t.Fatalf("ping test database: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	return db
+	return openMigratedTestDB(t, "Gate 5")
 }
 
 // p6LoadFixture reads one of the real stored proofs. Their signatures are
