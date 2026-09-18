@@ -42,6 +42,10 @@ type PendingBatchIntent struct {
 	// parties can still verify a single member against the batch root.
 	OperationID [32]byte
 
+	// AccumTxHash is the Accumulate transaction that carried this intent. Evidence only — never hashed
+	// into the leaf. Empty is honest for a member restored from a pre-2026-09-18 mempool blob.
+	AccumTxHash string
+
 	// Legs is what this member executes. One leg uses the single-call commitment; more than
 	// one uses the multi-leg batch commitment. Both nest inside the same leaf.
 	Legs []LegExecution
@@ -104,7 +108,36 @@ func (p *PendingBatchIntent) LeafInput() (BatchLeafInput, error) {
 		ExecutionCommitment: exec,
 		OperationID:         p.OperationID,
 		IntentID:            p.IntentID,
+		Provenance:          p.provenance(),
 	}, nil
+}
+
+// provenance describes the member for the canonical row. It reads the FIRST leg: a member with several
+// legs settles them together under one leaf, and the row records one line, so the first is the one shown.
+// Nothing here is hashed.
+func (p *PendingBatchIntent) provenance() MemberProvenance {
+	prov := MemberProvenance{
+		AccumTxHash: p.AccumTxHash,
+		FromChain:   "accumulate",
+		UserID:      p.ADIURL,
+		FromAddress: p.Account.Hex(),
+	}
+	if len(p.Legs) > 0 {
+		leg := p.Legs[0]
+		prov.ToChain = leg.Chain
+		if prov.ToChain == "" {
+			prov.ToChain = chainName(leg.ChainID)
+		}
+		prov.ToAddress = leg.Target.Hex()
+		if leg.Value != nil {
+			prov.Amount = leg.Value.String()
+		} else {
+			prov.Amount = "0"
+		}
+		// The batch path settles native value; a contract-call leg moves none, and says so as "0".
+		prov.TokenSymbol = "ETH"
+	}
+	return prov
 }
 
 // BatchMempoolConfig tunes when a tree is formed.

@@ -349,6 +349,10 @@ type BatchEnqueuer interface {
 		legs interface{},
 		attestation interface{},
 		commitHeight uint64,
+		// accumTxHash is the Accumulate transaction that carried the intent. Evidence only; the batch
+		// path never saw it before, which left canonical rows unable to say which transaction a member
+		// came from. Empty is accepted and recorded as empty.
+		accumTxHash string,
 	) error
 
 	// EnqueueOnDemand queues an intent-keyed member: one intent, one anchor, no period.
@@ -364,6 +368,10 @@ type BatchEnqueuer interface {
 		legs interface{},
 		attestation interface{},
 		commitHeight uint64,
+		// accumTxHash is the Accumulate transaction that carried the intent. Evidence only; the batch
+		// path never saw it before, which left canonical rows unable to say which transaction a member
+		// came from. Empty is accepted and recorded as empty.
+		accumTxHash string,
 	) error
 }
 

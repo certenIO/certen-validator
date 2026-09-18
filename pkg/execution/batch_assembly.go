@@ -748,6 +748,7 @@ func (s *BatchStack) EnqueueForBatch(
 	legs interface{},
 	attestation interface{},
 	commitHeight uint64,
+	accumTxHash string,
 ) error {
 	if _, err := s.OrchestratorFor(chainID); err != nil {
 		// No orchestrator means no anchor for this chain — the member could never settle.
@@ -776,6 +777,7 @@ func (s *BatchStack) EnqueueForBatch(
 		ChainID:      chainID,
 		Account:      common.BytesToAddress(account[:]),
 		OperationID:  operationID,
+		AccumTxHash:  accumTxHash,
 		Legs:         converted,
 		Attestation:  attestation,
 		CommitHeight: commitHeight,
@@ -799,6 +801,7 @@ func (s *BatchStack) EnqueueOnDemand(
 	legs interface{},
 	attestation interface{},
 	commitHeight uint64,
+	accumTxHash string,
 ) error {
 	if _, err := s.OrchestratorFor(chainID); err != nil {
 		return fmt.Errorf("chain %d is not configured for batching: %w", chainID, err)
@@ -824,6 +827,7 @@ func (s *BatchStack) EnqueueOnDemand(
 		ChainID:      chainID,
 		Account:      common.BytesToAddress(account[:]),
 		OperationID:  operationID,
+		AccumTxHash:  accumTxHash,
 		Legs:         converted,
 		Attestation:  attestation,
 		CommitHeight: commitHeight,

@@ -484,3 +484,81 @@ func TestLiveRowKeepsItsRealLane(t *testing.T) {
 		t.Fatalf("batch_type=%q lane=%v, want both on_demand", batchType, lane)
 	}
 }
+
+// REGRESSION — the canonical member row must carry what the shadow row it replaces carried.
+//
+// §3 of the hardening runbook retires the shadow pipeline. That is only safe once the canonical row is
+// at least as rich, because proofs_service reads these columns for the Transaction Center. Live on
+// 2026-09-18 the canonical row held the operation id in accumulate_tx_hash and nothing else, so retiring
+// the shadow writer would have emptied the console for every new intent.
+func TestCanonicalMemberRowCarriesTheAccumulateTransactionAndLeg(t *testing.T) {
+	repo := anchorRepoForTest(t)
+	ctx := context.Background()
+
+	const accumTx = "3e595d2c526dfacb5e332cd11f4f0306d2648cf1291bed63a9bcfd6ef44a7a12"
+	rec := anchorRecordForTest(84532, bundleHex(3101), 0xc1)
+	rec.Members = []AnchorQuorumMemberRecord{{
+		IntentID:    "intent-canonical-rich",
+		AccumTxHash: accumTx,
+		ADIURL:      "acc://spk-cust-tcl1.acme",
+		OperationID: "0x" + strings.Repeat("01", 32),
+		Leaf:        rec.Root,
+		LeafIndex:   0,
+		FromChain:   "accumulate",
+		ToChain:     "base-sepolia",
+		FromAddress: "0x9cc158f77DAdF9a605E141262338c89588825f6c",
+		ToAddress:   "0x12dD00C619C1Ac3F58eC68ed44ec1023fE33B9Ff",
+		Amount:      "0",
+		TokenSymbol: "ETH",
+		UserID:      "acc://spk-cust-tcl1.acme",
+	}}
+
+	if _, err := repo.RecordAnchorQuorum(ctx, rec); err != nil {
+		t.Fatalf("RecordAnchorQuorum: %v", err)
+	}
+
+	var gotAccum, fromChain, toChain, fromAddr, toAddr, amount, token, userID string
+	if err := testDB.QueryRowContext(ctx, `
+		SELECT bt.accumulate_tx_hash, bt.from_chain, bt.to_chain, bt.from_address, bt.to_address,
+		       bt.amount, bt.token_symbol, COALESCE(bt.user_id,'')
+		  FROM batch_transactions bt JOIN anchor_batches ab ON ab.id = bt.batch_id
+		 WHERE ab.bundle_id = $1`, rec.BundleID).
+		Scan(&gotAccum, &fromChain, &toChain, &fromAddr, &toAddr, &amount, &token, &userID); err != nil {
+		t.Fatalf("reading the member row: %v", err)
+	}
+
+	if gotAccum != accumTx {
+		t.Fatalf("accumulate_tx_hash = %q, want the Accumulate transaction %q", gotAccum, accumTx)
+	}
+	if fromChain != "accumulate" || toChain != "base-sepolia" {
+		t.Fatalf("chains = %s -> %s", fromChain, toChain)
+	}
+	if fromAddr == "" || toAddr == "" || token != "ETH" || amount != "0" || userID == "" {
+		t.Fatalf("leg not recorded: from=%q to=%q amount=%q token=%q user=%q",
+			fromAddr, toAddr, amount, token, userID)
+	}
+}
+
+// A member with no provenance (restored from an older mempool blob) must still be writable, with empty
+// columns rather than a failed insert. Empty is honest; refusing to record the anchor is not.
+func TestCanonicalMemberRowAcceptsMissingProvenance(t *testing.T) {
+	repo := anchorRepoForTest(t)
+	ctx := context.Background()
+
+	rec := anchorRecordForTest(84532, bundleHex(3102), 0xc2)
+	rec.Members = []AnchorQuorumMemberRecord{{
+		IntentID: "intent-bare", ADIURL: "acc://bare.acme", Leaf: rec.Root, LeafIndex: 0,
+	}}
+	if _, err := repo.RecordAnchorQuorum(ctx, rec); err != nil {
+		t.Fatalf("a member with no provenance could not be written: %v", err)
+	}
+	var n int
+	if err := testDB.QueryRowContext(ctx,
+		`SELECT count(*) FROM batch_transactions bt JOIN anchor_batches ab ON ab.id=bt.batch_id
+		  WHERE ab.bundle_id=$1`, rec.BundleID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("member rows = %d, want 1", n)
+	}
+}
