@@ -93,9 +93,11 @@ COMMENT ON COLUMN public.external_chain_results.previous_result_hash IS 'result_
 ALTER TABLE public.chain_execution_results
     ADD COLUMN sequence_number bigint,
     ADD COLUMN previous_result_hash bytea,
-    ADD COLUMN anchor_proof_hash bytea;
-CREATE INDEX idx_cer_hash_chain ON public.chain_execution_results USING btree (chain_id, sequence_number DESC) WHERE (sequence_number IS NOT NULL);
-COMMENT ON COLUMN public.chain_execution_results.sequence_number IS 'Position in this target chain''s result hash chain, as bound into the write-back bundle. NULL on rows written before the chain was persisted and on observations that were not the cycle''s primary result.';
+    ADD COLUMN anchor_proof_hash bytea,
+    ADD COLUMN chain_result_hash bytea;
+CREATE UNIQUE INDEX idx_cer_hash_chain ON public.chain_execution_results USING btree (observer_validator_id, chain_id, sequence_number) WHERE (sequence_number IS NOT NULL);
+COMMENT ON COLUMN public.chain_execution_results.sequence_number IS 'Position in the observing validator''s result hash chain for this target chain, as bound into the write-back bundle. NULL on rows written before the chain was persisted and on observations that were not the cycle''s primary result.';
+COMMENT ON COLUMN public.chain_execution_results.chain_result_hash IS 'The result hash the chain links: the bundle''s result hash, computed with the chain binding (sequence, previous hash, anchor proof). result_hash is the observation hash, computed before the binding. The next link''s previous_result_hash equals this.';
 
 ALTER TABLE public.bls_result_attestations
     ADD COLUMN snapshot_id uuid REFERENCES public.validator_set_snapshots(snapshot_id),

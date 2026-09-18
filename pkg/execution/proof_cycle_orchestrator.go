@@ -75,6 +75,10 @@ type ProofCycleOrchestrator struct {
 	// Chained proof generator for L1-L3 receipt extraction
 	proofGenerator ChainedProofGenerator
 
+	// validator_set_snapshots rows already written, by snapshot hash
+	snapshotRows   map[[32]byte]uuid.UUID
+	snapshotRowsMu sync.Mutex
+
 	// Logging
 	logger Logger
 }
@@ -1680,11 +1684,11 @@ func (o *ProofCycleOrchestrator) persistProofArtifact(cycle *ProofCycleCompletio
 	// ============ CHAINED PROOF LAYERS (L1/L2/L3) ============
 	// Fetch and store the Accumulate chained proof (Merkle receipt paths)
 	// This populates the "Proof Journey" section in the web app
-	o.storeChainedProofLayers(ctx, proof.ProofID, cycle)
+	chainedProof := o.storeChainedProofLayers(ctx, proof.ProofID, cycle)
 
 	// ============ GOVERNANCE PROOF LEVELS ============
 	// Store G0/G1/G2 governance proof records
-	o.storeGovernanceLevels(ctx, proof.ProofID, cycle, anchorBlockNumber)
+	govLevel, govJSON, govVerified := o.storeGovernanceLevels(ctx, proof.ProofID, cycle, anchorBlockNumber)
 
 	// ============ ATTESTATION RECORDS ============
 	// Store validator attestation for this proof
@@ -1692,6 +1696,10 @@ func (o *ProofCycleOrchestrator) persistProofArtifact(cycle *ProofCycleCompletio
 
 	// ============ PROOF BUNDLE (downloadable artifact) ============
 	o.createProofBundle(ctx, proof.ProofID, cycle, anchorTxHash, anchorBlockNumber, anchorChain)
+
+	// ============ PROOF LEVELS AND THE FOUR-COMPONENT CERTEN PROOF ============
+	// The write-back is already confirmed here, so the cycle's levels are recorded and closed together.
+	o.recordLegacyProofLevels(ctx, proof, cycle, chainedProof, govLevel, govJSON, govVerified)
 
 	o.logger.Printf("✅ [PROOF-CYCLE] Created proof artifact %s for intent %s", proof.ProofID, cycle.IntentID)
 	return nil
@@ -1812,9 +1820,9 @@ func (o *ProofCycleOrchestrator) createProofBundle(ctx context.Context, proofID 
 
 // storeChainedProofLayers fetches the L1-L3 receipt entries from Accumulate
 // (the same proof the validators already produced during Phase 2) and stores them.
-func (o *ProofCycleOrchestrator) storeChainedProofLayers(ctx context.Context, proofID uuid.UUID, cycle *ProofCycleCompletion) {
+func (o *ProofCycleOrchestrator) storeChainedProofLayers(ctx context.Context, proofID uuid.UUID, cycle *ProofCycleCompletion) *ChainedProofResult {
 	if o.repos == nil {
-		return
+		return nil
 	}
 
 	// Determine account URL and tx hash for proof lookup
@@ -1947,7 +1955,7 @@ func (o *ProofCycleOrchestrator) storeChainedProofLayers(ctx context.Context, pr
 			o.logger.Printf("✅ [PROOF-CYCLE] Created L1/L2/L3 chained proof layers with %d+%d+%d receipt entries for proof %s",
 				len(chainedProof.L1ReceiptEntries), len(chainedProof.L2ReceiptEntries),
 				len(chainedProof.L3ReceiptEntries), proofID)
-			return
+			return chainedProof
 		}
 	} else if o.proofGenerator == nil {
 		o.logger.Printf("⚠️ [PROOF-CYCLE] ProofGenerator not configured — receipt entries will be empty")
@@ -1975,17 +1983,20 @@ func (o *ProofCycleOrchestrator) storeChainedProofLayers(ctx context.Context, pr
 	// summary_only downstream, and that is the honest record.
 	o.logger.Printf("✅ [PROOF-CYCLE] Created L1/L2/L3 chained proof layers (minimal — no ProofGenerator, "+
 		"therefore NO L4 evidence: this proof is summary-only) for proof %s", proofID)
+	return nil
 }
 
 // storeGovernanceLevels stores G0/G1/G2 governance proof level records using
 // the actual proof data wired through from bft_integration.
-func (o *ProofCycleOrchestrator) storeGovernanceLevels(ctx context.Context, proofID uuid.UUID, cycle *ProofCycleCompletion, blockHeight int64) {
+func (o *ProofCycleOrchestrator) storeGovernanceLevels(ctx context.Context, proofID uuid.UUID, cycle *ProofCycleCompletion, blockHeight int64) (database.GovernanceLevel, json.RawMessage, bool) {
 	if o.repos == nil {
-		return
+		return "", nil, false
 	}
 
 	now := time.Now()
 	verified := true
+	var reached database.GovernanceLevel
+	var reachedJSON json.RawMessage
 
 	// STAGE 2 — read the governance results through the SHARED helper, using the
 	// same key constants the writer uses.
@@ -2029,6 +2040,8 @@ func (o *ProofCycleOrchestrator) storeGovernanceLevels(ctx context.Context, proo
 	}
 	if _, err := o.repos.ProofArtifacts.CreateGovernanceProofLevel(ctx, g0); err != nil {
 		o.logger.Printf("⚠️ [PROOF-CYCLE] Failed to create G0 level: %v", err)
+	} else {
+		reached, reachedJSON = database.GovLevelG0, g0JSON
 	}
 
 	// G1: Governance Correctness — uses real G1 proof data
@@ -2051,6 +2064,8 @@ func (o *ProofCycleOrchestrator) storeGovernanceLevels(ctx context.Context, proo
 		}
 		if _, err := o.repos.ProofArtifacts.CreateGovernanceProofLevel(ctx, g1); err != nil {
 			o.logger.Printf("⚠️ [PROOF-CYCLE] Failed to create G1 level: %v", err)
+		} else {
+			reached, reachedJSON = database.GovLevelG1, g1JSON
 		}
 	}
 
@@ -2074,10 +2089,13 @@ func (o *ProofCycleOrchestrator) storeGovernanceLevels(ctx context.Context, proo
 		}
 		if _, err := o.repos.ProofArtifacts.CreateGovernanceProofLevel(ctx, g2); err != nil {
 			o.logger.Printf("⚠️ [PROOF-CYCLE] Failed to create G2 level: %v", err)
+		} else {
+			reached, reachedJSON = database.GovLevelG2, g2JSON
 		}
 	}
 
 	o.logger.Printf("✅ [PROOF-CYCLE] Created governance proof levels (gov_level=%s) for proof %s", govLevel, proofID)
+	return reached, reachedJSON, verified
 }
 
 // storeAttestationRecord stores the validator attestation for this proof
@@ -2160,12 +2178,21 @@ func (o *ProofCycleOrchestrator) persistExternalChainResults(
 		}
 	}
 
+	// The three workflow results form the proof's result hash chain: sequence 0, 1, 2 for steps 1-3,
+	// each linking to the result hash persisted before it, all bound to the anchored bundle. A step that
+	// is missing leaves a gap, which the chain check reports rather than papering over.
+	var previousResultHash []byte = make([]byte, 32)
+	anchorProofHash := cycle.BundleID[:]
+	snapshotID := o.persistValidatorSetSnapshot(persistCtx)
+
 	// Helper to persist a single result
 	persistResult := func(stepName string, result *ExternalChainResult, stepNum int) {
 		if result == nil {
 			o.logger.Printf("⚠️ [PHASE-7] %s result is nil, skipping persistence", stepName)
 			return
 		}
+
+		sequence := int64(stepNum - 1)
 
 		// Build input matching the actual schema
 		// Derive execution status from IsSuccess (1 = success, 0 = failure)
@@ -2223,6 +2250,10 @@ func (o *ProofCycleOrchestrator) persistExternalChainResults(
 			ResultHash:            result.ResultHash[:],
 			ObserverValidatorID:   o.validatorID,
 			ObservedAt:            time.Now(),
+			SequenceNumber:        &sequence,
+			PreviousResultHash:    previousResultHash,
+			AnchorProofHash:       anchorProofHash,
+			SnapshotID:            snapshotID,
 		}
 
 		// Set TxTo if available
@@ -2235,6 +2266,7 @@ func (o *ProofCycleOrchestrator) persistExternalChainResults(
 			o.logger.Printf("⚠️ [PHASE-7] Failed to persist %s result: %v", stepName, err)
 		} else {
 			o.logger.Printf("✅ [PHASE-7] Persisted %s result: %s (tx=%s)", stepName, resultID, result.TxHash.Hex()[:18])
+			previousResultHash = append([]byte(nil), result.ResultHash[:]...)
 		}
 	}
 
@@ -2282,6 +2314,9 @@ func (o *ProofCycleOrchestrator) persistBLSResultAttestation(
 		AttestedBlockHash:     result.BlockHash[:],
 		ConfirmationsAtAttest: attestation.Confirmations,
 		AttestationTime:       attestation.AttestationTime,
+		SnapshotID:            o.persistValidatorSetSnapshot(ctx),
+		Weight:                o.collector.votingPowerOf(attestation.ValidatorID),
+		SubgroupValid:         bls.ValidateBLSPublicKeySubgroup(o.verifier.GetBLSPublicKey()) == nil,
 	}
 
 	att, err := o.repos.ProofArtifacts.SaveBLSResultAttestation(ctx, input)
@@ -2329,6 +2364,7 @@ func (o *ProofCycleOrchestrator) persistAggregatedBLSAttestation(
 	}
 
 	attestationIDs := make([]uuid.UUID, 0, len(blsAttestations))
+	participantIDs := make([]string, 0, len(blsAttestations))
 	publicKeys := make([]*bls.PublicKey, 0, len(blsAttestations))
 	// Every attestation must contribute its key, or none of them do.
 	//
@@ -2343,6 +2379,7 @@ func (o *ProofCycleOrchestrator) persistAggregatedBLSAttestation(
 	var dropped []string
 	for _, att := range blsAttestations {
 		attestationIDs = append(attestationIDs, att.AttestationID)
+		participantIDs = append(participantIDs, att.ValidatorID)
 		if len(att.BLSPublicKey) == 0 {
 			dropped = append(dropped, fmt.Sprintf("%s(empty key)", att.AttestationID))
 			continue
@@ -2405,6 +2442,7 @@ func (o *ProofCycleOrchestrator) persistAggregatedBLSAttestation(
 
 	// Compute aggregation hash
 	aggHash := agg.ComputeAggregateHash()
+	participantJSON, _ := json.Marshal(participantIDs)
 
 	// Compute voting power percentage
 	var votingPowerPct float64
@@ -2439,6 +2477,10 @@ func (o *ProofCycleOrchestrator) persistAggregatedBLSAttestation(
 		FirstAttestationAt:    agg.FirstAttestation,
 		LastAttestationAt:     agg.LastAttestation,
 		AggregationHash:       aggHash[:],
+
+		SnapshotID:              o.persistValidatorSetSnapshot(ctx),
+		ParticipantIDs:          participantJSON,
+		MessageConsistencyValid: agg.MessageConsistencyVerified,
 	}
 
 	aggRecord, err := o.repos.ProofArtifacts.SaveAggregatedBLSAttestation(ctx, input)

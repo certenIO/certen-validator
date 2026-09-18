@@ -321,6 +321,9 @@ type UnifiedOrchestrator struct {
 	// Multi-leg aggregator for unified write-back across chain groups
 	multiLegAggregator *MultiLegAggregator
 
+	// Multi-leg chain groups whose proof levels complete when the unified write-back lands
+	deferred deferredCompletions
+
 	// State
 	running bool
 	stopCh  chan struct{}
@@ -334,6 +337,14 @@ type activeCycle struct {
 	Phase     int
 	Result    *UnifiedProofCycleResult
 	Cancel    context.CancelFunc
+
+	// SnapshotID is the validator_set_snapshots row this cycle's attestations were counted against.
+	SnapshotID *uuid.UUID
+	// Completions are the proof_cycle_completions rows tracking this cycle's proofs through the four
+	// levels: one for an on-demand cycle, one per transaction for a batch cycle.
+	Completions []uuid.UUID
+	// PrimaryResultHash is the result hash the write-back bundle committed to for this cycle.
+	PrimaryResultHash [32]byte
 }
 
 // NewUnifiedOrchestrator creates a new unified orchestrator
@@ -369,17 +380,47 @@ func NewUnifiedOrchestrator(config *UnifiedOrchestratorConfig) (*UnifiedOrchestr
 		)
 	}
 
+	// Continue this validator's persisted result hash chains rather than restarting them at sequence 0.
+	if config.EnableUnifiedTables && config.UnifiedRepo != nil {
+		seedCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		seeded, err := seedResultHashChains(seedCtx, config.UnifiedRepo, config.ValidatorID, orch.resultChains)
+		cancel()
+		if err != nil {
+			fmt.Printf("Warning: could not load persisted result hash chains; new links may repeat sequence numbers: %v\n", err)
+		} else if seeded > 0 {
+			fmt.Printf("Continuing %d persisted result hash chain(s) for %s\n", seeded, config.ValidatorID)
+		}
+	}
+
 	// Initialize multi-leg aggregator
 	orch.multiLegAggregator = NewMultiLegAggregator(&MultiLegAggregatorConfig{
 		TxBuilder:        orch.txBuilder,
 		Submitter:        config.AccumulateClient,
 		ResultChains:     orch.resultChains,
 		ResultChainsLock: &orch.resultChainsLock,
+		HashChainRepo:    hashChainRepo(config),
 		WriteBackTimeout: config.WriteBackTimeout,
 		ValidatorID:      config.ValidatorID,
 	})
 
+	// A multi-leg intent's chain groups write back together; their proof cycles complete then.
+	orch.multiLegAggregator.SetOnUnifiedWriteBack(func(intentID string, txHash string) {
+		completeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		for _, entry := range orch.deferred.take(intentID) {
+			orch.completeProofCycles(completeCtx, entry.cycleID, entry.completions, entry.result, entry.merkleRoot, txHash)
+		}
+	})
+
 	return orch, nil
+}
+
+// hashChainRepo is where result hash chain links are persisted, or nil when unified tables are off.
+func hashChainRepo(config *UnifiedOrchestratorConfig) *database.UnifiedRepository {
+	if !config.EnableUnifiedTables {
+		return nil
+	}
+	return config.UnifiedRepo
 }
 
 // GetMultiLegAggregator returns the multi-leg aggregator for external wiring
@@ -497,6 +538,15 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 	now := time.Now().UTC()
 	result.CompletedAt = &now
 	result.Success = true
+
+	if req.Metadata != nil && req.Metadata["multi_leg"] == "true" {
+		o.deferred.add(req.IntentID, deferredCompletion{
+			cycleID: req.CycleID, completions: cycle.Completions, result: result,
+			merkleRoot: req.MerkleRoot, deferredAt: now,
+		})
+	} else {
+		o.completeProofCycles(ctx, req.CycleID, cycle.Completions, result, req.MerkleRoot, result.WriteBackTxHash)
+	}
 
 	// Intent lifecycle: mark as complete
 	o.updateLifecycleComplete(ctx, req.IntentID, req.CycleID, result.WriteBackTxHash)
@@ -1352,6 +1402,24 @@ func (o *UnifiedOrchestrator) executePhase8(ctx context.Context, cycle *activeCy
 		}
 	}
 
+	thresholdConfig := o.config.ThresholdConfig
+	if thresholdConfig == nil {
+		thresholdConfig = attestation.DefaultThresholdConfig()
+	}
+
+	// Record the validator set this quorum is counted against, so a reader can check the threshold
+	// against the membership rather than trusting the stored weights.
+	if o.config.EnableUnifiedTables && o.config.Repos != nil && o.config.Repos.ProofArtifacts != nil {
+		set := unifiedAttestationSet(o.config.ValidatorID, o.config.AttestationPeers,
+			thresholdConfig.CalculateThresholdWeight, result.ObservationResults[0].BlockNumber)
+		snapshotID, err := persistValidatorSetSnapshot(ctx, o.config.Repos.ProofArtifacts, set, result.ChainID, getNetworkName(result.ChainID))
+		if err != nil {
+			fmt.Printf("Warning: failed to persist validator set snapshot for cycle %s: %v\n", cycle.CycleID, err)
+		} else {
+			cycle.SnapshotID = snapshotID
+		}
+	}
+
 	// Persist individual attestations
 	if o.config.EnableUnifiedTables && o.config.UnifiedRepo != nil {
 		for _, att := range attestations {
@@ -1366,12 +1434,6 @@ func (o *UnifiedOrchestrator) executePhase8(ctx context.Context, cycle *activeCy
 	aggAttestation, err := attestStrategy.Aggregate(attestCtx, attestations)
 	if err != nil {
 		return fmt.Errorf("aggregate attestations: %w", err)
-	}
-
-	// Calculate threshold
-	thresholdConfig := o.config.ThresholdConfig
-	if thresholdConfig == nil {
-		thresholdConfig = attestation.DefaultThresholdConfig()
 	}
 
 	// RB-SEC-1: TotalWeight is the FULL validator set (self + peers), so the ≥2/3 threshold
@@ -1398,7 +1460,11 @@ func (o *UnifiedOrchestrator) executePhase8(ctx context.Context, cycle *activeCy
 
 	// Persist aggregated attestation
 	if o.config.EnableUnifiedTables && o.config.UnifiedRepo != nil {
-		aggID, err := o.persistAggregatedAttestation(ctx, cycle, aggAttestation)
+		messageHashes := make([][]byte, len(attestations))
+		for i, att := range attestations {
+			messageHashes[i] = att.MessageHash[:]
+		}
+		aggID, err := o.persistAggregatedAttestation(ctx, cycle, aggAttestation, attestationMessagesAgree(messageHashes))
 		if err != nil {
 			fmt.Printf("Warning: failed to persist aggregated attestation: %v\n", err)
 		} else {
@@ -1441,6 +1507,7 @@ func (o *UnifiedOrchestrator) persistUnifiedAttestation(ctx context.Context, cyc
 		AttestedBlockNumber: &blockNumber,
 		AttestedBlockHash:   attestedBlockHash,
 		AttestedAt:          att.Timestamp,
+		SnapshotID:          cycle.SnapshotID,
 	}
 
 	// Create attestation and get ID
@@ -1458,7 +1525,7 @@ func (o *UnifiedOrchestrator) persistUnifiedAttestation(ctx context.Context, cyc
 }
 
 // persistAggregatedAttestation persists an aggregated attestation
-func (o *UnifiedOrchestrator) persistAggregatedAttestation(ctx context.Context, cycle *activeCycle, agg *attestation.AggregatedAttestation) (uuid.UUID, error) {
+func (o *UnifiedOrchestrator) persistAggregatedAttestation(ctx context.Context, cycle *activeCycle, agg *attestation.AggregatedAttestation, messagesAgree bool) (uuid.UUID, error) {
 	if o.config.UnifiedRepo == nil {
 		return uuid.Nil, fmt.Errorf("unified repo not configured")
 	}
@@ -1493,6 +1560,9 @@ func (o *UnifiedOrchestrator) persistAggregatedAttestation(ctx context.Context, 
 		FirstAttestationAt:   &agg.FirstAttestation,
 		LastAttestationAt:    &agg.LastAttestation,
 		AggregatedAt:         agg.AggregatedAt,
+
+		SnapshotID:              cycle.SnapshotID,
+		MessageConsistencyValid: messagesAgree,
 	}
 
 	// Create aggregated attestation and get ID
@@ -1847,6 +1917,11 @@ func (o *UnifiedOrchestrator) executePhase9(ctx context.Context, cycle *activeCy
 	bundle := o.buildAttestationBundleFromCycle(cycle)
 	if bundle == nil {
 		return fmt.Errorf("failed to build attestation bundle")
+	}
+	cycle.PrimaryResultHash = bundle.Result.ResultHash
+	if err := persistResultHashChainLink(ctx, hashChainRepo(o.config), cycle.Result.ChainExecutionIDs,
+		len(cycle.Result.ObservationResults), bundle.Result); err != nil {
+		fmt.Printf("Warning: failed to persist result hash chain link for cycle %s: %v\n", cycle.CycleID, err)
 	}
 
 	// Enrich bundle with per-leg data for multi-leg intents
@@ -2604,6 +2679,12 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 			proofArtifact.ProofID)
 	}
 
+	// The highest governance level actually written, and its evidence: the authority proof of the
+	// four-component Certen proof.
+	var govLevelReached database.GovernanceLevel
+	var govLevelJSON json.RawMessage
+	var govLevelVerified bool
+
 	// G0 - Inclusion and Finality (always created if we have anchor data)
 	if isAnchored {
 		var blockHeight *int64
@@ -2708,6 +2789,7 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 			fmt.Printf("Warning: failed to create G0 governance level: %v\n", err)
 		} else {
 			fmt.Printf("Created governance_proof_level G0 for proof_id=%s\n", proofArtifact.ProofID)
+			govLevelReached, govLevelJSON, govLevelVerified = database.GovLevelG0, g0JSON, g0Verified
 		}
 	}
 
@@ -2786,6 +2868,7 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 			fmt.Printf("Warning: failed to create G1 governance level: %v\n", err)
 		} else {
 			fmt.Printf("Created governance_proof_level G1 for proof_id=%s\n", proofArtifact.ProofID)
+			govLevelReached, govLevelJSON, govLevelVerified = database.GovLevelG1, g1JSON, g1Verified
 		}
 	}
 
@@ -2858,6 +2941,7 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 			fmt.Printf("Warning: failed to create G2 governance level: %v\n", err)
 		} else {
 			fmt.Printf("Created governance_proof_level G2 for proof_id=%s\n", proofArtifact.ProofID)
+			govLevelReached, govLevelJSON, govLevelVerified = database.GovLevelG2, g2JSON, g2Verified
 		}
 	}
 
@@ -2865,6 +2949,9 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 	// Fetch chained proof from Accumulate if ProofGenerator is configured
 	// Store the result for bundle creation later
 	var storedChainedProof *ChainedProofResult
+	var anchorL5 *Layer5
+	var anchorBatch *database.Layer5Binding
+	anchorResolved := false
 	if o.config.ProofGenerator != nil {
 		// Determine parameters for chained proof generation
 		accountURL := req.AccumulateAccountURL
@@ -3025,7 +3112,8 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 				// and G0-G2, so what the proof CONTAINS has to be settled before
 				// the layer attesting to it is built. It is deliberately NOT in
 				// the govRoot — it cannot be inside what it describes.
-				o.writeLayer5(ctx, proofArtifact.ProofID, req, result)
+				anchorL5, anchorBatch = o.writeLayer5(ctx, proofArtifact.ProofID, req, result)
+				anchorResolved = true
 
 				fmt.Printf("Created chained_proof_layers L1/L2/L3/L4/L5 for proof_id=%s\n", proofArtifact.ProofID)
 			}
@@ -3086,6 +3174,36 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 	} else {
 		fmt.Printf("Created verification_history for proof_id=%s\n", proofArtifact.ProofID)
 	}
+
+	// 2f. The four proof levels and the four-component Certen proof.
+	if !anchorResolved {
+		anchorL5, anchorBatch = o.resolveAnchorBinding(ctx, proofArtifact.ProofID, req.IntentID, req.AccumulateTxHash, req.LeafHash, req.MerkleRoot[:], result)
+	}
+	var chainedProofJSON json.RawMessage
+	if storedChainedProof != nil {
+		if encoded, err := json.Marshal(ChainedProofFromResult(storedChainedProof)); err == nil {
+			chainedProofJSON = encoded
+		} else {
+			fmt.Printf("Warning: could not encode chained proof for level 1 of proof_id=%s: %v\n", proofArtifact.ProofID, err)
+		}
+	}
+	o.recordProofLevels(ctx, cycle, proofLevelInputs{
+		Artifact:         proofArtifact,
+		IntentID:         req.IntentID,
+		AccumTxHash:      accumTxHash,
+		AccountURL:       req.AccumulateAccountURL,
+		MerkleRoot:       req.MerkleRoot[:],
+		LeafHash:         req.LeafHash,
+		LeafIndex:        req.LeafIndex,
+		MerklePath:       req.MerklePath,
+		ChainedProof:     chainedProofJSON,
+		AccumBlockHeight: req.AccumulateHeight,
+		AccumBVN:         req.AccumulateBVN,
+		GovCommitment:    req.GovernanceRoot[:],
+		GovLevel:         govLevelReached,
+		GovProof:         govLevelJSON,
+		GovValid:         govLevelVerified,
+	}, anchorL5, anchorBatch)
 
 	// Step 3: Build the CertenProofBundle
 	bundle := proof.NewCertenProofBundle(cycle.CycleID)
@@ -3438,6 +3556,36 @@ func (o *UnifiedOrchestrator) generateBatchProofArtifacts(ctx context.Context, c
 
 		// Create related tables for this proof artifact
 		o.populateRelatedTablesForBatchTx(ctx, proofArtifact, batchTx, merklePath, result, req)
+
+		// The four proof levels and the four-component Certen proof, from this transaction's own
+		// chained and governance proofs. Level 2 commits to the governance proof itself: a batch
+		// transaction carries its proof, not a governance root.
+		txIntentID := ""
+		if intentID != nil {
+			txIntentID = *intentID
+		}
+		txAnchor, txBatch := o.resolveAnchorBinding(ctx, proofArtifact.ProofID, txIntentID, batchTx.AccumTxHash, batchTx.TxHash, req.MerkleRoot[:], result)
+		var govCommitment []byte
+		if len(batchTx.GovProof) > 0 {
+			sum := sha256.Sum256(batchTx.GovProof)
+			govCommitment = sum[:]
+		}
+		o.recordProofLevels(ctx, cycle, proofLevelInputs{
+			Artifact:      proofArtifact,
+			IntentID:      txIntentID,
+			AccumTxHash:   batchTx.AccumTxHash,
+			AccountURL:    batchTx.AccountURL,
+			TransactionID: batchTx.ID,
+			MerkleRoot:    req.MerkleRoot[:],
+			LeafHash:      batchTx.TxHash,
+			LeafIndex:     batchTx.TreeIndex,
+			MerklePath:    merklePath,
+			ChainedProof:  batchTx.ChainedProof,
+			GovCommitment: govCommitment,
+			GovLevel:      database.GovernanceLevel(batchTx.GovLevel.String),
+			GovProof:      batchTx.GovProof,
+			GovValid:      batchTx.GovValid,
+		}, txAnchor, txBatch)
 	}
 
 	// Update the result with the first proof ID (for backward compatibility)
