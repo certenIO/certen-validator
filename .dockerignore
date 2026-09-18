@@ -40,19 +40,20 @@ Thumbs.db
 # Go
 vendor/
 
-# ── Runtime state and secrets: never part of a build ──────────────────────────────────────────────
+# ── Secrets and runtime state: never part of a build ──────────────────────────────────────────────
 #
-# WHY THESE MATTER, not just tidiness:
+# THE ONE THAT MATTERS: .env.shared holds DATABASE_URL (with the password) and ETH_PRIVATE_KEY, and the
+# existing `.env` / `.env.local` rules did NOT match it. It was therefore sent to the daemon as build
+# context and written into the builder stage on every build. The shipped image is clean — the production
+# stage copies only named artifacts — but a credential has no business in a build context or a layer
+# cache, and "it does not reach the final image" is a property of the current Dockerfile, not a guarantee.
 #
-# 1. data/ is live validator state — CometBFT databases, replay stores — and it changes every second.
-#    The Dockerfile does `COPY . ./`, so a changing data/ invalidates that layer on EVERY build, and
-#    each of the seven validator images then rebuilds the expensive CGO `go build` from scratch instead
-#    of reusing cache. Measured 2026-09-18: a 22.3 MB context and a full rebuild per service.
-#
-# 2. .env.shared holds DATABASE_URL (with the password) and ETH_PRIVATE_KEY. It was NOT matched by the
-#    existing `.env` / `.env.local` rules, so it was being shipped to the daemon and written into the
-#    builder stage. The final image is clean — the production stage copies only named artifacts — but a
-#    secret has no business in a build context or a layer cache at all.
+# The rest below are tidiness, and the honest measurement says so. Measured 2026-09-18 on the fleet host:
+# the context is 742 MB, of which bls_zk_keys_bls12381_v2 is 344 MB and bls_zk_keys is 243 MB — both
+# REQUIRED, both COPYed out of the builder into the final image. data/ is 1.7 MB and had zero files
+# modified in a two-minute window, because live validator state lives in Docker volumes
+# (validator1_data:/app/data), not in this directory. Excluding it neither shrinks the context
+# meaningfully nor stabilises the cache; it is simply correct that runtime state is not a build input.
 #
 # NOT excluded, deliberately: bls_zk_keys/ and bls_zk_keys_bls12381*/ are COPYed out of the builder into
 # the final image (Dockerfile ~line 130). Excluding them produces an image that cannot prove anything.
