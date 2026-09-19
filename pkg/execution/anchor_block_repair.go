@@ -30,7 +30,10 @@ import (
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/ethereum/go-ethereum/rpc"
 
 	"github.com/certen/independant-validator/pkg/database"
 	"github.com/certen/independant-validator/pkg/ethrpc"
@@ -396,46 +399,87 @@ func (r *EthAnchorTxReader) pool(chainID int64) (*ethrpc.Pool, error) {
 	return p, nil
 }
 
-// ReadAnchorTx implements AnchorTxReader.
+// ReadAnchorTx implements AnchorTxReader. It reads over the pool so that an endpoint lacking the history
+// (see ReadAnchorTxFrom) hands the read to the next provider instead of ending it.
 func (r *EthAnchorTxReader) ReadAnchorTx(ctx context.Context, chainID int64, txHash string) (*AnchorTxReading, error) {
 	p, err := r.pool(chainID)
 	if err != nil {
 		return nil, err
 	}
-	hash := common.HexToHash(txHash)
-	reading := &AnchorTxReading{}
+	var reading *AnchorTxReading
 	err = p.Do(ctx, func(c *ethclient.Client) error {
-		tx, pending, err := c.TransactionByHash(ctx, hash)
-		if errors.Is(err, ethereum.NotFound) {
-			*reading = AnchorTxReading{}
-			return nil
+		got, err := ReadAnchorTxFrom(ctx, c, txHash)
+		if err == nil {
+			reading = got
 		}
-		if err != nil {
-			return err
-		}
-		if pending {
-			*reading = AnchorTxReading{}
-			return nil
-		}
-		receipt, err := c.TransactionReceipt(ctx, hash)
-		if err != nil {
-			return err
-		}
-		head, err := c.BlockNumber(ctx)
-		if err != nil {
-			return err
-		}
-		*reading = AnchorTxReading{
-			Found: true, Succeeded: receipt.Status == 1,
-			BlockNumber: receipt.BlockNumber.Uint64(), BlockHash: receipt.BlockHash.Hex(),
-			Head: head, Input: tx.Data(),
-		}
-		return nil
+		return err
 	})
 	if err != nil {
 		return nil, err
 	}
 	return reading, nil
+}
+
+// rpcTransaction is the part of eth_getTransactionByHash the reading needs, including the block it was
+// mined in, which ethclient's TransactionByHash does not return.
+type rpcTransaction struct {
+	BlockNumber *hexutil.Big  `json:"blockNumber"`
+	BlockHash   *common.Hash  `json:"blockHash"`
+	Input       hexutil.Bytes `json:"input"`
+}
+
+// ReadAnchorTxFrom reads a transaction, its receipt and the head from one endpoint. The receipt is taken
+// by hash, or else from its block's receipts, which do not depend on a transaction index. An endpoint that
+// returns the transaction but neither receipt does not hold that block's receipts; that is
+// ethrpc.ErrEndpointLacksHistory, never "no such transaction".
+func ReadAnchorTxFrom(ctx context.Context, c *ethclient.Client, txHash string) (*AnchorTxReading, error) {
+	hash := common.HexToHash(txHash)
+	var tx *rpcTransaction
+	if err := c.Client().CallContext(ctx, &tx, "eth_getTransactionByHash", hash); err != nil {
+		return nil, err
+	}
+	if tx == nil {
+		// Unknown here. The pool asks the next provider; absent from every provider is reported by the
+		// caller as unreadable, not as proven absent.
+		return nil, fmt.Errorf("transaction %s: %w", txHash, ethrpc.ErrEndpointLacksHistory)
+	}
+	if tx.BlockNumber == nil || tx.BlockHash == nil {
+		return &AnchorTxReading{Found: true}, nil // pending: no block to state
+	}
+	block := tx.BlockNumber.ToInt().Uint64()
+
+	receipt, err := c.TransactionReceipt(ctx, hash)
+	if errors.Is(err, ethereum.NotFound) {
+		receipt, err = nil, nil
+		receipts, blockErr := c.BlockReceipts(ctx, rpc.BlockNumberOrHashWithHash(*tx.BlockHash, false))
+		if blockErr != nil && !errors.Is(blockErr, ethereum.NotFound) {
+			return nil, blockErr
+		}
+		for _, candidate := range receipts {
+			if candidate != nil && candidate.TxHash == hash {
+				receipt = candidate
+				break
+			}
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	if receipt == nil {
+		return nil, fmt.Errorf("receipt of %s in block %d: %w", txHash, block, ethrpc.ErrEndpointLacksHistory)
+	}
+	if receipt.BlockHash != *tx.BlockHash || receipt.BlockNumber == nil || receipt.BlockNumber.Uint64() != block {
+		return nil, fmt.Errorf("receipt of %s names block %v %s, the transaction block %d %s",
+			txHash, receipt.BlockNumber, receipt.BlockHash.Hex(), block, tx.BlockHash.Hex())
+	}
+	head, err := c.BlockNumber(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &AnchorTxReading{
+		Found: true, Succeeded: receipt.Status == types.ReceiptStatusSuccessful,
+		BlockNumber: block, BlockHash: tx.BlockHash.Hex(), Head: head, Input: tx.Input,
+	}, nil
 }
 
 // Close releases the reader's connections.
