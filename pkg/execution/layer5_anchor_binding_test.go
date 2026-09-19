@@ -91,6 +91,28 @@ func TestLayer5NeverPairsTheAnchorWithTheSettlementBlock(t *testing.T) {
 	}
 }
 
+// A strategy that does not name its chain leaves the name to the canonical row, or to the chain id: the
+// layer names the chain the way the anchor row and the Certen proof do.
+func TestLayer5NamesTheChainLikeTheAnchorRow(t *testing.T) {
+	obs := settlementObservation()
+	obs.ChainName = ""
+	binding := canonicalBinding(t)
+	if l5, err := BuildLayer5(binding, obs, nil, nil, 84532); err != nil || l5.Network != "base-sepolia" {
+		t.Fatalf("network = %q (%v), want the anchor row's base-sepolia", l5.Network, err)
+	}
+	binding.TargetChain = ""
+	if l5, err := BuildLayer5(binding, obs, nil, nil, 84532); err != nil || l5.Network != "base-sepolia" {
+		t.Fatalf("network = %q (%v), want the name of chain 84532", l5.Network, err)
+	}
+	if l5, err := BuildLayer5(binding, obs, nil, nil, 999999); err != nil || l5.Network != "chain-999999" {
+		t.Fatalf("network = %q (%v), want chain-999999 for a chain this build cannot name", l5.Network, err)
+	}
+	binding.TargetChain = "private-net"
+	if l5, err := BuildLayer5(binding, obs, nil, nil, 999999); err != nil || l5.Network != "private-net" {
+		t.Fatalf("network = %q (%v), want the anchor row's name for a chain this build cannot name", l5.Network, err)
+	}
+}
+
 // The core regression: the anchor transaction must describe where the ROOT was published.
 func TestLayer5AnchorTxIsTheAnchorCreateTxNotTheSettlementTx(t *testing.T) {
 	binding := canonicalBinding(t)

@@ -17,6 +17,7 @@ type Repositories struct {
 	Unified         *UnifiedRepository         // Multi-chain unified attestations and chain execution results
 	IntentLifecycle *IntentLifecycleRepository // Unified intent lifecycle status tracking
 	MultiLeg        *MultiLegRepository        // Multi-leg aggregation state persistence (GAP 4)
+	EvidenceRepair  *EvidenceRepair            // Corrections to stored anchor evidence and their record
 }
 
 // NewRepositories creates all repositories with the given client
@@ -32,5 +33,6 @@ func NewRepositories(client *Client) *Repositories {
 		Unified:         NewUnifiedRepository(client.DB()),    // Multi-chain unified tables
 		IntentLifecycle: NewIntentLifecycleRepository(client), // Intent lifecycle tracking
 		MultiLeg:        NewMultiLegRepository(client.DB()),   // Multi-leg aggregation persistence
+		EvidenceRepair:  NewEvidenceRepair(client),
 	}
 }
