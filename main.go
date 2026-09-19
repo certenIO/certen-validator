@@ -470,6 +470,9 @@ func main() {
 		runMigrationCommand(os.Args[2:])
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "repair" {
+		os.Exit(runRepairCommand(os.Args[2:]))
+	}
 
 	// Parse CLI flags
 	var (
@@ -1175,19 +1178,31 @@ type BatchComponents struct {
 	FirestoreSyncService *firestore.SyncService // Real-time UI sync
 }
 
+// ed25519KeyPath is where the validator's Ed25519 key lives: ED25519_KEY_PATH, or ed25519_key.hex in the
+// data directory.
+func ed25519KeyPath(cfg *config.Config) string {
+	if cfg.Ed25519KeyPath != "" {
+		return cfg.Ed25519KeyPath
+	}
+	dataDir := cfg.DataDir
+	if dataDir == "" {
+		dataDir = "./data"
+	}
+	return filepath.Join(dataDir, "ed25519_key.hex")
+}
+
+// blsKeyPath is where the validator's BLS key lives: BLS_KEY_PATH, or data/bls_key_<id>.hex.
+func blsKeyPath(cfg *config.Config) string {
+	if path := os.Getenv("BLS_KEY_PATH"); path != "" {
+		return path
+	}
+	return filepath.Join("data", fmt.Sprintf("bls_key_%s.hex", cfg.ValidatorID))
+}
+
 // loadOrGenerateEd25519Key securely loads or generates an Ed25519 private key
 // E.5 remediation: Never derive keys from validator ID - use proper key management
 func loadOrGenerateEd25519Key(cfg *config.Config) (ed25519.PrivateKey, error) {
-	// Determine key file path
-	keyPath := cfg.Ed25519KeyPath
-	if keyPath == "" {
-		// Default to data directory
-		dataDir := cfg.DataDir
-		if dataDir == "" {
-			dataDir = "./data"
-		}
-		keyPath = filepath.Join(dataDir, "ed25519_key.hex")
-	}
+	keyPath := ed25519KeyPath(cfg)
 
 	// Ensure directory exists
 	keyDir := filepath.Dir(keyPath)
@@ -1434,11 +1449,7 @@ func startValidator(
 	// Initialize BLS key for validator consensus
 	// Keys are derived deterministically from validator ID or loaded from file
 	// Key storage path can be set via BLS_KEY_PATH env var, defaults to ./data/bls_key.hex
-	blsKeyPath := os.Getenv("BLS_KEY_PATH")
-	if blsKeyPath == "" {
-		blsKeyPath = filepath.Join("data", fmt.Sprintf("bls_key_%s.hex", cfg.ValidatorID))
-	}
-	blsKeyManager, err := bls.InitializeValidatorBLSKey(cfg.ValidatorID, cfg.ChainID, blsKeyPath)
+	blsKeyManager, err := bls.InitializeValidatorBLSKey(cfg.ValidatorID, cfg.ChainID, blsKeyPath(cfg))
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to initialize BLS key: %w", err)
 	}
@@ -1446,7 +1457,7 @@ func startValidator(
 	log.Printf("✅ BLS key initialized: %s...%s (path: %s)",
 		blsPubKeyHex[:16],
 		blsPubKeyHex[len(blsPubKeyHex)-8:],
-		blsKeyPath)
+		blsKeyPath(cfg))
 	// Log full BLS public key for contract registration
 	log.Printf("📋 BLS PUBLIC KEY FOR CONTRACT REGISTRATION:")
 	log.Printf("   0x%s", blsPubKeyHex)

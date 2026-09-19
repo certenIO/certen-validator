@@ -19,10 +19,24 @@ import (
 	"github.com/certen/independant-validator/pkg/database"
 )
 
-// certenProofResponse is a stored Certen proof and whether its hash still covers its content.
+// certenProofResponse is a stored Certen proof, whether its hash still covers its content, and every
+// correction made to it after it was published (each keeps the proof as it was).
 type certenProofResponse struct {
 	*database.CertenAnchorProof
-	ProofHashVerified bool `json:"proof_hash_verified"`
+	ProofHashVerified bool                          `json:"proof_hash_verified"`
+	Corrections       []database.EvidenceCorrection `json:"corrections"`
+}
+
+func (h *BatchHandlers) certenProofView(ctx context.Context, proof *database.CertenAnchorProof) (certenProofResponse, error) {
+	view := certenProofResponse{CertenAnchorProof: proof, ProofHashVerified: proof.VerifyProofHash(), Corrections: []database.EvidenceCorrection{}}
+	if h.repos.EvidenceRepair != nil {
+		corrections, err := h.repos.EvidenceRepair.GetCorrections(ctx, database.CorrectionRecordCertenProof, proof.ProofID.String())
+		if err != nil {
+			return view, err
+		}
+		view.Corrections = corrections
+	}
+	return view, nil
 }
 
 func (h *BatchHandlers) certenProofRequest(w http.ResponseWriter, r *http.Request, prefix string) (string, context.Context, context.CancelFunc, bool) {
@@ -44,7 +58,7 @@ func (h *BatchHandlers) certenProofRequest(w http.ResponseWriter, r *http.Reques
 	return key, ctx, cancel, true
 }
 
-func writeCertenProof(w http.ResponseWriter, proof *database.CertenAnchorProof, err error) {
+func (h *BatchHandlers) writeCertenProof(ctx context.Context, w http.ResponseWriter, proof *database.CertenAnchorProof, err error) {
 	if errors.Is(err, database.ErrProofNotFound) {
 		writeJSONError(w, "certen proof not found", http.StatusNotFound)
 		return
@@ -53,7 +67,12 @@ func writeCertenProof(w http.ResponseWriter, proof *database.CertenAnchorProof, 
 		writeJSONError(w, fmt.Sprintf("failed to get certen proof: %v", err), http.StatusInternalServerError)
 		return
 	}
-	json.NewEncoder(w).Encode(certenProofResponse{CertenAnchorProof: proof, ProofHashVerified: proof.VerifyProofHash()})
+	view, err := h.certenProofView(ctx, proof)
+	if err != nil {
+		writeJSONError(w, fmt.Sprintf("failed to get certen proof corrections: %v", err), http.StatusInternalServerError)
+		return
+	}
+	json.NewEncoder(w).Encode(view)
 }
 
 // HandleGetCertenProof handles GET /api/certen-proofs/:id
@@ -69,7 +88,7 @@ func (h *BatchHandlers) HandleGetCertenProof(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	proof, err := h.repos.Proofs.GetProof(ctx, id)
-	writeCertenProof(w, proof, err)
+	h.writeCertenProof(ctx, w, proof, err)
 }
 
 // HandleGetCertenProofByArtifact handles GET /api/certen-proofs/by-artifact/:proof_id
@@ -85,7 +104,7 @@ func (h *BatchHandlers) HandleGetCertenProofByArtifact(w http.ResponseWriter, r 
 		return
 	}
 	proof, err := h.repos.Proofs.GetProofByArtifactID(ctx, id)
-	writeCertenProof(w, proof, err)
+	h.writeCertenProof(ctx, w, proof, err)
 }
 
 // HandleGetCertenProofByTxHash handles GET /api/certen-proofs/by-tx/:hash
@@ -96,7 +115,7 @@ func (h *BatchHandlers) HandleGetCertenProofByTxHash(w http.ResponseWriter, r *h
 	}
 	defer cancel()
 	proof, err := h.repos.Proofs.GetProofByAccumTxHash(ctx, key)
-	writeCertenProof(w, proof, err)
+	h.writeCertenProof(ctx, w, proof, err)
 }
 
 // HandleGetCertenProofsByAccount handles GET /api/certen-proofs/by-account/:url
@@ -113,7 +132,12 @@ func (h *BatchHandlers) HandleGetCertenProofsByAccount(w http.ResponseWriter, r 
 	}
 	responses := make([]certenProofResponse, 0, len(proofs))
 	for _, proof := range proofs {
-		responses = append(responses, certenProofResponse{CertenAnchorProof: proof, ProofHashVerified: proof.VerifyProofHash()})
+		view, err := h.certenProofView(ctx, proof)
+		if err != nil {
+			writeJSONError(w, fmt.Sprintf("failed to get certen proof corrections: %v", err), http.StatusInternalServerError)
+			return
+		}
+		responses = append(responses, view)
 	}
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"account_url": key,

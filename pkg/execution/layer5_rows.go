@@ -79,7 +79,12 @@ func BuildLayer5(
 		Confirmations: obs.Confirmations,
 	}
 	if l5.Network == "" {
-		l5.Network = fmt.Sprintf("chain-%d", chainID)
+		// The strategy did not name its chain. The canonical row does, and a known chain id has a name;
+		// "chain-<id>" only for a chain this build cannot name, so every record of one anchor agrees.
+		l5.Network = chainName(chainID)
+		if binding != nil && binding.TargetChain != "" {
+			l5.Network = binding.TargetChain
+		}
 	}
 
 	// The anchor transaction is where the ROOT was published, which is not where this member settled.

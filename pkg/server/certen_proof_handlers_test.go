@@ -80,6 +80,25 @@ func TestCertenProofEndpoints(t *testing.T) {
 
 	code, body := get(h.HandleGetCertenProof, "/api/certen-proofs/"+proof.ProofID.String())
 	wantProof("by id", code, body)
+	if string(body["corrections"]) != "[]" {
+		t.Fatalf("an uncorrected proof lists corrections: %s", body["corrections"])
+	}
+	// A corrected proof carries its correction, which keeps the proof as it was published.
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO evidence_corrections (record_type, record_id, reason, previous, corrected, chain_evidence, corrected_by)
+		VALUES ('certen_anchor_proof', $1, 'test', '{"proof_hash":"00"}', '{"proof_hash":"11"}', '{}', 'server-test')`,
+		proof.ProofID.String()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM evidence_corrections WHERE record_id = $1`, proof.ProofID.String())
+	})
+	code, body = get(h.HandleGetCertenProof, "/api/certen-proofs/"+proof.ProofID.String())
+	var corrections []database.EvidenceCorrection
+	if err := json.Unmarshal(body["corrections"], &corrections); code != http.StatusOK || err != nil || len(corrections) != 1 ||
+		string(corrections[0].Previous) != `{"proof_hash":"00"}` {
+		t.Fatalf("corrections: %d %s %v", code, body["corrections"], err)
+	}
 	code, body = get(h.HandleGetCertenProofByArtifact, "/api/certen-proofs/by-artifact/"+artifact.ProofID.String())
 	wantProof("by artifact", code, body)
 	code, body = get(h.HandleGetCertenProofByTxHash, "/api/certen-proofs/by-tx/"+accumTx)

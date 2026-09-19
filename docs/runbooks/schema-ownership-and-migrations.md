@@ -252,7 +252,7 @@ the per-start exclusive lock immediately.
 
 ---
 
-## 7. What shipped, where it differs, and what is left (2026-09-18)
+## 7. What shipped, where it differs, and what is left (2026-09-18/19)
 
 ### 7.1 Shipped
 
@@ -266,7 +266,7 @@ the per-start exclusive lock immediately.
 | Deploy applies, services verify | `deploy/deploy-validators.sh` runs `validator migrate up` before any restart group; the validator calls `Runner.Verify` at startup and exits if the schema is older (`MIGRATE_ON_START=true` keeps the dev path); `cmd/schemamigrate` migrates without starting a validator |
 | Commands | `validator migrate up`, `verify [--require V]`, `fingerprint`, `catalog`, `adopt [--dry-run]`, `data NAME` |
 | Adoption without touching objects or data | production adopted on 2026-09-16 (`00000`, applied_by `emergency-recovery`); at `00003` when this was written. The legacy `schema_migrations` (19 rows) is untouched, so old binaries remain a rollback target |
-| proofs_service verifies only | its migrations, `MigrateUp` and the Dockerfile `COPY migrations` are gone; it exits at startup unless every entry of `database.RequiredSchema` (version **and** SHA-256, now through `00004`) is in `certen_schema_history` |
+| proofs_service verifies only | its migrations, `MigrateUp` and the Dockerfile `COPY migrations` are gone; it exits at startup unless every entry of `database.RequiredSchema` (version **and** SHA-256, now through `00005`) is in `certen_schema_history` |
 | Legacy runner | deleted from the binary; `Client` has no `MigrateUp` |
 
 ### 7.2 Where it differs from §2–§4
@@ -353,33 +353,101 @@ verdict, attestations, consistency and aggregate), `/api/v1/certen-proofs/{id|tx
 | A7 table-lock timeout: retried then applied; never clears, so nothing applied | same file; mutation-checked (removing the retry turns the first red) |
 | A4 edited applied file, A5 missing lower version, A6 older binary against newer schema | same file, against a real database (unit-level cases are in `schema_test.go`) |
 | A8 lint | `TestLintRejectsUnsafeMigrationControl` |
-| A9 code matches schema | validator: 238 statements prepare (`TestStaticRepositorySQLPreparesAgainstSharedSchema`) plus the dynamic test; proofs_service: 159 (`TestRepositorySQLPreparesAgainstSharedSchema`), up from 100 with 66 failing |
+| A9 code matches schema | validator: 252 statements prepare (`TestStaticRepositorySQLPreparesAgainstSharedSchema`) plus the dynamic test; proofs_service: 160 (`TestRepositorySQLPreparesAgainstSharedSchema`), up from 100 with 66 failing |
 | Restored repositories | validator `proof_records_repository_test.go` and proofs_service's port of it: every restored function against the shared schema |
 | Wiring | `pkg/execution/proof_levels_test.go` (unified and legacy levels, Certen proof, completion, bindings, snapshots, hash chain across a restart), `pkg/batch/certen_proof_records_test.go`, `pkg/proofrequests/fulfiller_test.go`, both services' endpoint tests |
-| Mutation checks | 30 single mutations and 2 multi-layer ones, each caught by its named test: every writer, every guard, the clock the fulfiller measures deadlines with, and the three layers (Go, SQL, CHECK) that refuse an incomplete cycle, removed together |
+| Mutation checks | 30 single mutations and 2 multi-layer ones, each caught by its named test: every writer, every guard, the clock the fulfiller measures deadlines with, and the three layers (Go, SQL, CHECK) that refuse an incomplete cycle, removed together. The §7.6 fixes: 11 + 12 (transaction key), 4 (paging), 14 (anchor block); the §7.7 repair: 20 (every chain check, the dry-run gate, ownership, the exact-bytes guard, verification, the correction record) and 3 in proofs_service |
 | A10 no silent skip | as above; proofs_service CI is `.github/workflows/schema.yml` |
 | B/C adoption | production history: `00000` 2026-09-16 10:54 UTC, then `00001`–`00003`; the checksums match the committed files |
 | proofs_service startup | the real binary exits against an unmigrated database (`relation "public.certen_schema_history" does not exist`), and starts against a migrated one |
 | Full suites | validator `go test -p 1 ./...` (23 packages) and proofs_service `go test ./...` green on Postgres 15 |
 
-### 7.5 Still open
+### 7.5 Deployment and live verification (2026-09-18/19)
 
-1. **Deployment.** `00004` must be applied (`validator migrate up`, or `schemamigrate`) before any new
-   binary starts, then the validators are rolled, then proofs_service (which requires `00004`). Merge
-   order: validator first, so proofs_service CI (which checks out validator `main`) can build `00004`.
-2. **Live verification.** After deployment, one on-demand intent must produce, for its proof artifact: a
-   validator-set snapshot referenced by its attestations, a result hash-chain link, all four levels with a
-   completed cycle and `bindings_valid`, and a verified, signed Certen anchor proof; and one proof request
-   must be completed by the fulfiller.
-3. **E4: prod fingerprint equals `schema.fingerprint`.** Read-only:
-   `docker compose run --rm --no-deps validator-1 ./validator migrate fingerprint`; compare with `db/schema.fingerprint`.
-4. **Database unreachable at startup.** Verify is fatal when the database connects and the schema is
+`00004` was applied by `migrate up` before the fleet rolled (validator #31, proofs_service #3), then the
+fixes below were deployed the same way (validator #32 and #33, proofs_service #4). All seven validators
+log `schema verified through migration 00004`; proofs_service refuses to start below it.
+
+**E4 holds.** `docker exec certen-validator-1 ./validator migrate fingerprint` on production returned
+`8e4a1f00…2d431`, the committed `schema.fingerprint` for `00004`.
+
+**Two live on-demand intents**, both zero-value `EventProbe.ping` legs on base-sepolia
+(`transaction-controls/scenarios/spikes/L5GATE.ts`):
+
+| Check | `f87e57f5` (23:02 UTC, before the anchor fix) | `e7d7b42d` (00:02 UTC, after it) |
+|---|---|---|
+| Validator-set snapshot referenced by every attestation and the aggregate | `2200fdda`: 7 validators, threshold 5, 7/7 attestations | `54753988`: same |
+| Result hash-chain link | validator-3, chain 84532, sequence 0 | validator-5, chain 84532, sequence 0 |
+| Levels 1-4, `all_levels_complete`, `bindings_valid` | all true | all true |
+| Certen anchor proof verified and signed | `d516e04e`, 64-byte Ed25519 signature | `e0f25d41`, same |
+| Anchor block / hash / confirmations | **47002149** (the verify block; the receipt says 47002138) / none / 0 | 47003910 = the receipt's block / the receipt's hash / 73 |
+| Proof request completed by the fulfiller | `15d85d00`, after the paging fix | `a307c640`, directly |
+
+Each validator's result chain starts at sequence 0 the first time it executes, so a *linked* sequence 1
+appears only when the same validator executes twice. `TestResultHashChainIsPersistedVerifiedAndContinuedAfterRestart`
+covers the link, and the live link is recorded in §7.7 once observed.
+
+### 7.6 Defects found in production and fixed
+
+| Defect | Effect | Fix |
+|---|---|---|
+| Requests store the Accumulate transaction ID (`acc://<hash>@<principal>`); artifacts, batch members, lifecycle rows and Certen proofs store the bare hash; every lookup compared them verbatim | the fulfiller matched none of 358 claimed requests; `POST /api/v1/proofs/request` queued requests for 240 transactions that already had proofs; `GET /api/v1/proofs/tx/acc://…` found nothing | `database.TransactionHashKey` in both services, used by every lookup by transaction; request lookups match every stored form (validator #32, proofs_service #4) |
+| The settle pass read the first 100 in-flight requests with `LIMIT` only | proven requests behind 100 waiting ones were never settled (32 in production) | page by position `(priority, created_at, request_id)` through all of them each pass (#33) |
+| Layer 5 paired `anchor_create_tx` with `verify_block`; with no block it borrowed the settlement's block and hash | every canonical on-demand anchor stated the verify transaction's block (e.g. 47002149 for a transaction in 47002138), and so did the Certen proofs built from it | the create receipt's block is stored on the canonical row (`anchor_block_num`) and is the only block the binding states; the cycle reads the anchor transaction back from its chain for block, hash and depth; the creator completes a row another validator wrote first (#33) |
+| Certen proofs never received confirmations: the tracker follows `anchor_records`, which the current anchor paths do not write | `anchor_confirmations` stayed 0 | depth read from the anchor transaction itself at proof time (#33) |
+| Layer 5 and the Certen proof named the chain `chain-84532` where the observation carried no name | three names for one chain | the canonical row's name, then the chain id's (#33 and this change) |
+| proofs_service served layer rows migrations 019/020 had withdrawn | withdrawn claims were presented as standing | `GetChainedProofLayers` filters `superseded_at IS NULL`, as the validator's reader already did |
+
+### 7.7 Correcting stored anchor evidence (`00005`, `validator repair anchor-blocks`)
+
+The writers are fixed; the rows they stored before the fix still state the verify block. They are
+corrected, not rewritten silently:
+
+- **`00005_evidence_corrections.sql`** adds `evidence_corrections` (what was stored, what replaced it, the
+  chain reading that proves it, who, when) and `chained_proof_layers.superseded_by`. Each correction and
+  its record are written in one transaction, conditional on the value being replaced.
+- **`validator repair anchor-blocks [--apply] [--min-depth N]`** reads every canonical anchor's create
+  transaction from its own chain (`ethrpc.PoolForChain`) and accepts it only if it succeeded, is at least
+  `--min-depth` (default 12) deep, and its `createBatchAnchor` calldata names the row's bundle id and root.
+  Then, only where the stored value differs from the chain:
+  - `anchor_batches.anchor_block_num` is filled or corrected;
+  - a layer-5 row naming the anchor is withdrawn (`superseded_at`, reason, `superseded_by`) and a
+    corrected row added: `blockNumber`, `blockHash` and `network` change, nothing else, and the result must
+    pass `VerifyOffline`. A row naming a root the anchor did not publish is refused, not "corrected";
+  - a Certen proof's anchor reference is revised, its hash recomputed over the revised document and the
+    proof **re-signed by the validator that signed it** (Ed25519 or BLS, from the scheme it recorded). The
+    stored document must re-serialise to its exact bytes first, so nothing but the anchor reference can
+    change. It keeps its verification; the previous document, hash and signature stay in the correction.
+    A proof signed by another validator is left for that validator's run.
+  - Without `--apply` it only reports. Exit status 2 if anything was refused.
+- **Served:** validator `/api/certen-proofs/*` and proofs_service `/api/v1/certen-proofs/*`,
+  `/api/v1/proofs/{id}/certen` include `corrections`; withdrawn layers are not served by either.
+
+**Procedure**, after `migrate up` has applied `00005` and the fleet runs the new binary (proofs_service
+requires `00005`, so it is redeployed after the migration):
+
+```
+# dry run on one validator: read-only, prints every planned correction
+docker exec certen-validator-1 ./validator repair anchor-blocks
+# then on every validator; each revises the Certen proofs it signed
+for n in 1 2 3 4 5 6 7; do docker exec certen-validator-$n ./validator repair anchor-blocks --apply; done
+# a second pass must report no actions
+docker exec certen-validator-1 ./validator repair anchor-blocks
+```
+
+Verification: `SELECT record_type, count(*) FROM evidence_corrections GROUP BY 1`; no standing layer-5
+row whose `blockNumber` differs from its canonical row's `anchor_block_num`; every revised Certen proof's
+`proof_hash` equals `sha256(full_proof_json)` and its signature verifies under its validator's key.
+
+### 7.8 Still open
+
+1. **Database unreachable at startup.** Verify is fatal when the database connects and the schema is
    old. But when the connection itself fails and `DATABASE_REQUIRED` is false (the default), the
    validator still starts in degraded mode (`main.go`, Phase 5), so E2 as written does not hold. Whether
    a validator should refuse to start without its database is a fleet-availability decision, so it is
    left for the owner.
-5. **DDL privileges.** Validators and proofs_service still connect as `certen`, which owns the schema.
+2. **DDL privileges.** Validators and proofs_service still connect as `certen`, which owns the schema.
    Now that no service runs DDL outside `migrate up` / `MIGRATE_ON_START`, they can move to a DML-only role.
-6. **§3 Step 6 cleanups**, each its own decision: `chain_execution_results.status` → NOT NULL; one
+3. **§3 Step 6 cleanups**, each its own decision: `chain_execution_results.status` → NOT NULL; one
    `attestation_scheme` default; drop the two `*_backup_2026082x` tables; drop `schema_migrations` once no
    rollback target reads it.
