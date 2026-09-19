@@ -20,6 +20,7 @@ package ethrpc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -244,6 +245,9 @@ func ShouldFailover(err error) bool {
 	if err == nil {
 		return false
 	}
+	if errors.Is(err, ErrEndpointLacksHistory) {
+		return true
+	}
 	m := strings.ToLower(err.Error())
 	switch {
 	case strings.Contains(m, "archive"): // "Archive requests require a personal token"
@@ -265,6 +269,11 @@ func ShouldFailover(err error) bool {
 	}
 	return false
 }
+
+// ErrEndpointLacksHistory reports that an endpoint answered but does not hold the history asked for: a
+// transaction it can return whose receipt it no longer indexes, for example (publicnode keeps receipts for
+// recent blocks only). Another provider may hold it, so it is failover-worthy.
+var ErrEndpointLacksHistory = errors.New("endpoint does not hold the requested history")
 
 // redact removes the API key from a provider URL before logging. Alchemy and Infura carry the key
 // in the path, so a bare URL in a log line is a leaked credential.
