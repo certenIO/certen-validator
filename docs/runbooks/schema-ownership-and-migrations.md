@@ -356,7 +356,7 @@ verdict, attestations, consistency and aggregate), `/api/v1/certen-proofs/{id|tx
 | A9 code matches schema | validator: 252 statements prepare (`TestStaticRepositorySQLPreparesAgainstSharedSchema`) plus the dynamic test; proofs_service: 160 (`TestRepositorySQLPreparesAgainstSharedSchema`), up from 100 with 66 failing |
 | Restored repositories | validator `proof_records_repository_test.go` and proofs_service's port of it: every restored function against the shared schema |
 | Wiring | `pkg/execution/proof_levels_test.go` (unified and legacy levels, Certen proof, completion, bindings, snapshots, hash chain across a restart), `pkg/batch/certen_proof_records_test.go`, `pkg/proofrequests/fulfiller_test.go`, both services' endpoint tests |
-| Mutation checks | 30 single mutations and 2 multi-layer ones, each caught by its named test: every writer, every guard, the clock the fulfiller measures deadlines with, and the three layers (Go, SQL, CHECK) that refuse an incomplete cycle, removed together. The §7.6 fixes: 11 + 12 (transaction key), 4 (paging), 14 (anchor block); the §7.7 repair: 20 (every chain check, the dry-run gate, ownership, the exact-bytes guard, verification, the correction record) and 3 in proofs_service |
+| Mutation checks | 30 single mutations and 2 multi-layer ones, each caught by its named test: every writer, every guard, the clock the fulfiller measures deadlines with, and the three layers (Go, SQL, CHECK) that refuse an incomplete cycle, removed together. The §7.6 fixes: 11 + 12 (transaction key), 4 (paging), 14 (anchor block); the §7.7 repair: 20 (every chain check, the dry-run gate, ownership, the exact-bytes guard, verification, the correction record), 7 in its chain reader, and 3 in proofs_service |
 | A10 no silent skip | as above; proofs_service CI is `.github/workflows/schema.yml` |
 | B/C adoption | production history: `00000` 2026-09-16 10:54 UTC, then `00001`–`00003`; the checksums match the committed files |
 | proofs_service startup | the real binary exits against an unmigrated database (`relation "public.certen_schema_history" does not exist`), and starts against a migrated one |
@@ -385,7 +385,7 @@ log `schema verified through migration 00004`; proofs_service refuses to start b
 
 Each validator's result chain starts at sequence 0 the first time it executes, so a *linked* sequence 1
 appears only when the same validator executes twice. `TestResultHashChainIsPersistedVerifiedAndContinuedAfterRestart`
-covers the link, and the live link is recorded in §7.7 once observed.
+covers the link; the live link is recorded at the end of §7.7.
 
 ### 7.6 Defects found in production and fixed
 
@@ -396,7 +396,8 @@ covers the link, and the live link is recorded in §7.7 once observed.
 | Layer 5 paired `anchor_create_tx` with `verify_block`; with no block it borrowed the settlement's block and hash | every canonical on-demand anchor stated the verify transaction's block (e.g. 47002149 for a transaction in 47002138), and so did the Certen proofs built from it | the create receipt's block is stored on the canonical row (`anchor_block_num`) and is the only block the binding states; the cycle reads the anchor transaction back from its chain for block, hash and depth; the creator completes a row another validator wrote first (#33) |
 | Certen proofs never received confirmations: the tracker follows `anchor_records`, which the current anchor paths do not write | `anchor_confirmations` stayed 0 | depth read from the anchor transaction itself at proof time (#33) |
 | Layer 5 and the Certen proof named the chain `chain-84532` where the observation carried no name | three names for one chain | the canonical row's name, then the chain id's (#33 and this change) |
-| proofs_service served layer rows migrations 019/020 had withdrawn | withdrawn claims were presented as standing | `GetChainedProofLayers` filters `superseded_at IS NULL`, as the validator's reader already did |
+| proofs_service served layer rows migrations 019/020 had withdrawn | withdrawn claims were presented as standing | `GetChainedProofLayers` filters `superseded_at IS NULL`, as the validator's reader already did (proofs_service #5) |
+| The repair's reader stopped at the first endpoint: publicnode returns old base-sepolia transactions but holds no receipts for their blocks, and its "not found" was not failover-worthy | 4 anchors from 2026-09-16/18 refused as unreadable | `ethrpc.ErrEndpointLacksHistory` is failover-worthy; the receipt is taken by hash or from its block's receipts; a transaction no provider holds is unreadable, never "absent" (#35) |
 
 ### 7.7 Correcting stored anchor evidence (`00005`, `validator repair anchor-blocks`)
 
@@ -438,6 +439,24 @@ docker exec certen-validator-1 ./validator repair anchor-blocks
 Verification: `SELECT record_type, count(*) FROM evidence_corrections GROUP BY 1`; no standing layer-5
 row whose `blockNumber` differs from its canonical row's `anchor_block_num`; every revised Certen proof's
 `proof_hash` equals `sha256(full_proof_json)` and its signature verifies under its validator's key.
+
+**Run on production, 2026-09-19** (validator #34, #35; proofs_service #5):
+
+| Step | Result |
+|---|---|
+| Dry run, validator-1 (07:35) | 19 canonical anchors, 15 confirmed on chain; 4 refused as unreadable (publicnode; fixed in #35) |
+| `--apply`, validators 1-7 (07:48) | validator-1: 12 anchor blocks filled, 7 layer-5 rows replaced; validator-3: Certen proof `d516e04e` revised (47002149 -> 47002138) and re-signed; the other five: nothing of theirs to change |
+| `--apply`, validators 1-7, after #35 (08:09) | 19/19 confirmed; validator-1: 4 anchor blocks filled, 4 layer-5 rows replaced; nothing refused |
+| Second dry run | 19/19 confirmed, 0 actions |
+| Recorded corrections | `anchor_batch` 16, `layer5` 11, `certen_anchor_proof` 1 |
+| Checked against the chains, independently of the tool | the 6 Ethereum Sepolia and 5 base-sepolia corrected blocks and block hashes equal their receipts; each receipt succeeded |
+| Checked in the database | 0 canonical anchors without their create block; 0 standing layer-5 rows disagreeing with it or stating the verify block; 11/11 withdrawn rows link to a standing replacement; 0 Certen proofs whose block differs from their anchor or whose hash does not cover their document |
+| Signer | the revised and the original signature of `d516e04e` both verify under validator-3's Ed25519 key |
+| Served | validator `/api/certen-proofs/d516e04e…` returns block 47002138, `proof_hash_verified`, and its correction (previous block 47002149) |
+
+**Result hash chain, live:** validator-3 wrote sequence 1 at 01:11 UTC linked to its sequence 0 of 23:03, across
+the fleet restarts of 23:19 and 23:58 (the chain is re-seeded from the database, not forked). Results are
+recorded by the validator that observes the settlement, which is not always the executor.
 
 ### 7.8 Still open
 
