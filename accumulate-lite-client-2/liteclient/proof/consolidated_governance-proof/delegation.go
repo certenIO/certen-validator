@@ -9,6 +9,7 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -98,7 +99,8 @@ func IsUnsupportedSignatureType(err error) (UnsupportedSignatureType, bool) {
 	if err == nil {
 		return UnsupportedSignatureType{}, false
 	}
-	if e, ok := err.(UnsupportedSignatureType); ok {
+	var e UnsupportedSignatureType
+	if errors.As(err, &e) {
 		return e, true
 	}
 	return UnsupportedSignatureType{}, false
