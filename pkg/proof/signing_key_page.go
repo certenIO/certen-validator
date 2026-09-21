@@ -26,8 +26,11 @@
 // It reads the transaction's signature sets from the network. Every key page that
 // signed carries its own set, with the signature (public key, signer, signer
 // version) and the page's current state (version, key hashes). A page of the
-// required key book is a candidate when it carries a key signature over THIS
-// transaction from a key that is on the page. The page chosen is:
+// required key book is a candidate when it carries a vote over THIS transaction:
+// an ED25519 signature from a key that is on the page, or a delegated or
+// non-ED25519 signature the network accepted as the page's (whose key G1 verifies
+// cryptographically). The page is named as the network spells it, because the URL
+// is hashed into the govRoot. The page chosen is:
 //
 //   - the declared page, when it is a well-formed page URL and it signed;
 //   - otherwise the only page of the book that signed;
@@ -166,7 +169,8 @@ func selectSigningKeyPage(
 ) (string, []string, error) {
 	var notes []string
 	type candidate struct {
-		url   string
+		url   string // normalised, for comparison
+		named string // as the network spells it, which is what is hashed into the govRoot
 		index uint64
 	}
 	var candidates []candidate
@@ -191,14 +195,23 @@ func selectSigningKeyPage(
 			if txHash != "" && hashOfTxID(rec.Message.TxID) != txHash {
 				continue // a signature for some other transaction says nothing about this one
 			}
-			keyHash, ok := keyHashOfSignature(sig.Type, sig.PublicKey)
-			if !ok {
-				continue // not a key signature: requests, payments, authority records
+			if !isVoteSignature(sig.Type) {
+				continue // not a vote: requests, payments, authority and system records
 			}
 			if signer := normalizeAccountURL(sig.Signer); signer != "" && signer != page {
 				continue // filed under this page but signed as another: not this page's vote
 			}
+			keyHash, hashable := keyHashOfSignature(sig.Type, sig.PublicKey)
 			switch {
+			case !hashable:
+				// A delegated signature (the key lives in a delegate's book) or a key type whose
+				// entry hash is not a plain SHA-256 of the key. The network accepted it as this
+				// page's vote; G1 verifies it cryptographically and resolves the delegation. This
+				// read has nothing further to check, and refusing it would fail every intent a
+				// delegate or a non-ED25519 key signs - which G1 itself accepts.
+				notes = append(notes, fmt.Sprintf("%s carries a %s vote; its key is verified by G1, "+
+					"not by this read", page, sig.Type))
+				signed = true
 			case keyHashes[keyHash]:
 				signed = true
 			case set.Account.Version > sig.SignerVersion:
@@ -217,7 +230,7 @@ func selectSigningKeyPage(
 		}
 		if signed {
 			seen[page] = true
-			candidates = append(candidates, candidate{url: page, index: idx})
+			candidates = append(candidates, candidate{url: page, named: strings.TrimSuffix(strings.TrimSpace(set.Account.URL), "/"), index: idx})
 		}
 	}
 
@@ -232,12 +245,12 @@ func selectSigningKeyPage(
 	if declaredWellFormed {
 		for _, c := range candidates {
 			if c.url == declared {
-				return c.url, notes, nil
+				return c.named, notes, nil
 			}
 		}
 	}
 
-	chosen := candidates[0].url
+	chosen := candidates[0].named
 	switch {
 	case declared == "":
 		notes = append(notes, fmt.Sprintf("no key page declared; %s signed", chosen))
@@ -271,13 +284,24 @@ func pageIndexInBook(page, book string) (uint64, bool) {
 	return n, true
 }
 
+// isVoteSignature reports whether a signature type is a vote by a key page: a key
+// signature of any algorithm, or a delegated one. Signature requests, credit
+// payments, authority, partition, receipt and internal records are not votes.
+func isVoteSignature(sigType string) bool {
+	switch strings.ToLower(sigType) {
+	case "ed25519", "legacyed25519", "rcd1", "btc", "btclegacy", "eth", "rsasha256",
+		"ecdsasha256", "typeddata", "delegated":
+		return true
+	}
+	return false
+}
+
 // keyHashOfSignature returns the key-page entry hash of a signature's public key.
 //
-// Only ED25519 keys are recognised, because only their entry hash is a plain
+// Only ED25519 keys are hashed here, because only their entry hash is a plain
 // SHA-256 of the public key; guessing the hash of another key type would compare
-// against the wrong value and count or reject a signature on a coincidence. A
-// signature of another type is reported as not a key signature, so a page that
-// only carries one is not a candidate and the resolver fails rather than guess.
+// against the wrong value and count or reject a signature on a coincidence. For
+// any other vote the caller defers key membership to G1.
 func keyHashOfSignature(sigType, publicKey string) (string, bool) {
 	switch strings.ToLower(sigType) {
 	case "ed25519", "legacyed25519":

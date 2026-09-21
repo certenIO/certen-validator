@@ -188,16 +188,49 @@ func TestSigningKeyPage_PageRotatedSinceSigningDefersToReplay(t *testing.T) {
 	}
 }
 
-// Signatures over another transaction and non-key signatures are not evidence.
-func TestSigningKeyPage_IgnoresOtherTransactionsAndNonKeySignatures(t *testing.T) {
+// Signatures over another transaction and non-vote records are not evidence.
+func TestSigningKeyPage_IgnoresOtherTransactionsAndNonVoteRecords(t *testing.T) {
 	sets := skpSets(t, skpResponse(
 		skpSig{page: skpBook + "/1", pageVersion: 2, pageKeys: []string{humanKey}, signerKey: humanKey, signerVersion: 2, txHash: skpOther},
-		skpSig{page: skpBook + "/1", pageVersion: 2, pageKeys: []string{humanKey}, signerKey: humanKey, signerVersion: 2, sigType: "delegated"},
+		skpSig{page: skpBook + "/1", pageVersion: 2, pageKeys: []string{humanKey}, signerKey: humanKey, signerVersion: 2, sigType: "authority"},
 		skpSig{page: skpBook + "/2", pageVersion: 4, pageKeys: []string{machineKey}, signerKey: machineKey, signerVersion: 4},
 	))
 	page, _, err := selectSigningKeyPage(skpBook, "", skpTx, sets)
 	if err != nil || page != skpBook+"/2" {
 		t.Fatalf("got %q, %v; want page 2 - page 1's records are not votes on this transaction", page, err)
+	}
+}
+
+// A page whose vote is DELEGATED - its key lives in a delegate's book - signed, and G1 accepts
+// delegation. Refusing it would fail every delegated intent outright.
+func TestSigningKeyPage_DelegatedVoteNamesItsPage(t *testing.T) {
+	sets := skpSets(t, skpResponse(
+		skpSig{page: skpBook + "/2", pageVersion: 4, pageKeys: []string{machineKey}, signerKey: "", signerVersion: 4, sigType: "delegated"},
+	))
+	page, notes, err := selectSigningKeyPage(skpBook, skpBook+"/page", skpTx, sets)
+	if err != nil || page != skpBook+"/2" {
+		t.Fatalf("got %q, %v; want the delegated page 2", page, err)
+	}
+	if !strings.Contains(strings.Join(notes, "|"), "delegated") {
+		t.Fatalf("notes %v", notes)
+	}
+	// A non-ED25519 key vote is a vote too.
+	sets = skpSets(t, skpResponse(
+		skpSig{page: skpBook + "/1", pageVersion: 2, signerKey: "02abcdef", signerVersion: 2, sigType: "eth"},
+	))
+	if page, _, err := selectSigningKeyPage(skpBook, "", skpTx, sets); err != nil || page != skpBook+"/1" {
+		t.Fatalf("got %q, %v; want page 1 from its eth key vote", page, err)
+	}
+}
+
+// The page is named as the network spells it: the URL is hashed into the govRoot.
+func TestSigningKeyPage_NamedAsTheNetworkSpellsIt(t *testing.T) {
+	sets := skpSets(t, skpResponse(
+		skpSig{page: "acc://Orchid-Logistics-TCL1.acme/book/2", pageVersion: 4, pageKeys: []string{machineKey}, signerKey: machineKey, signerVersion: 4},
+	))
+	page, _, err := selectSigningKeyPage(skpBook, "", skpTx, sets)
+	if err != nil || page != "acc://Orchid-Logistics-TCL1.acme/book/2" {
+		t.Fatalf("got %q, %v", page, err)
 	}
 }
 
