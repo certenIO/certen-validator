@@ -80,6 +80,11 @@ type CertenIntent struct {
 	// CRITICAL: Proof class determines execution routing per FIRST_PRINCIPLES 2.5
 	// On-demand vs on-cadence proofs are NEVER interchangeable
 	ProofClass string `json:"proofClass"` // "on_demand" | "on_cadence" - extracted from IntentData
+
+	// BlockTime is the consensus time of the Partition minor block the intent was written in - the
+	// same on every validator, unlike any local clock. Zero when discovery could not read it. It is
+	// never serialized: nothing hashed or signed over an intent changes by carrying it.
+	BlockTime time.Time `json:"-"`
 }
 
 // IntentData represents the parsed intent data blob

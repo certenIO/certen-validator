@@ -101,6 +101,8 @@ type persistedMember struct {
 	VerifyTx           string   `json:"verify_tx,omitempty"`
 	AnchorBlock        uint64   `json:"anchor_block,omitempty"`
 	FirstSeen          int64    `json:"first_seen,omitempty"` // unix seconds
+	CommitPartition    string   `json:"commit_partition,omitempty"`
+	CommitTimeMs       int64    `json:"commit_time_ms,omitempty"` // unix milliseconds
 	SettlementTx       string   `json:"settlement_tx,omitempty"`
 	SettlementTxs      []string `json:"settlement_txs,omitempty"`
 	SettlementNonce    uint64   `json:"settlement_nonce,omitempty"`
@@ -225,6 +227,8 @@ func (s *BatchMempoolStore) encodeMember(p *PendingBatchIntent, lane BatchLane) 
 		VerifyTx:           p.VerifyTx,
 		AnchorBlock:        p.AnchorBlock,
 		FirstSeen:          unixOrZero(p.FirstSeen),
+		CommitPartition:    p.CommitPartition,
+		CommitTimeMs:       unixMilliOrZero(p.CommitTime),
 		SettlementTx:       p.SettlementTx,
 		SettlementTxs:      append([]string(nil), p.SettlementTxs...),
 		SettlementNonce:    p.SettlementNonce,
@@ -307,6 +311,8 @@ func (s *BatchMempoolStore) Load(m *BatchMempool) (int, error) {
 			VerifyTx:           pm.VerifyTx,
 			AnchorBlock:        pm.AnchorBlock,
 			FirstSeen:          timeOrZero(pm.FirstSeen),
+			CommitPartition:    pm.CommitPartition,
+			CommitTime:         timeOrZeroMilli(pm.CommitTimeMs),
 			SettlementTx:       pm.SettlementTx,
 			SettlementTxs:      pm.SettlementTxs,
 			SettlementNonce:    pm.SettlementNonce,
@@ -371,4 +377,18 @@ func timeOrZero(sec int64) time.Time {
 		return time.Time{}
 	}
 	return time.Unix(sec, 0)
+}
+
+func unixMilliOrZero(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.UnixMilli()
+}
+
+func timeOrZeroMilli(ms int64) time.Time {
+	if ms == 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(ms)
 }

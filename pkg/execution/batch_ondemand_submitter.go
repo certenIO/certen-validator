@@ -61,7 +61,16 @@ const (
 	// anchors ARE absorbed (createBatchAnchor treats an existing anchor as success and an
 	// already-attested one short-circuits), so erring long is the safer direction.
 	OnDemandFailoverAfter = 4 * time.Minute
+
+	// onDemandCommitTimeRetry spaces the attempts to read a member's Accumulate block time when a
+	// read fails, so an unreachable API costs one query per member per interval, not one per pass.
+	onDemandCommitTimeRetry = 30 * time.Second
+	// onDemandCommitTimeRead bounds one such read.
+	onDemandCommitTimeRead = 10 * time.Second
 )
+
+// CommitTimeResolver reads the consensus time of an Accumulate partition's minor block.
+type CommitTimeResolver func(ctx context.Context, partition string, height uint64) (time.Time, error)
 
 // OnDemandLeaderRoster supplies the ordered validator roster used for leader election.
 type OnDemandLeaderRoster func() []string
@@ -85,6 +94,11 @@ type OnDemandSubmitterConfig struct {
 	SweepInterval  time.Duration
 	FailoverAfter  time.Duration
 	TTL            time.Duration
+
+	// CommitTime reads a member's Accumulate block time when the member arrived without it
+	// (discovery could not read it, or the member was queued before it was carried). Optional:
+	// without it such a member's failover runs from this validator's persisted first sighting.
+	CommitTime CommitTimeResolver
 
 	Logf func(string, ...interface{})
 }
@@ -115,6 +129,8 @@ type OnDemandSubmitter struct {
 	cfg    OnDemandSubmitterConfig
 	wake   chan struct{}
 	inWork map[string]bool // chainID|opID currently being worked, so a signal cannot double-start
+	// commitTimeTried is when a member's block time was last asked for and could not be read.
+	commitTimeTried map[string]time.Time
 }
 
 // NewOnDemandSubmitter builds the submitter.
@@ -130,6 +146,8 @@ func NewOnDemandSubmitter(cfg OnDemandSubmitterConfig) (*OnDemandSubmitter, erro
 		cfg:    cfg,
 		wake:   make(chan struct{}, 1),
 		inWork: make(map[string]bool),
+
+		commitTimeTried: make(map[string]time.Time),
 	}, nil
 }
 
@@ -163,6 +181,11 @@ func (s *OnDemandSubmitter) Run(ctx context.Context) {
 			s.pass(ctx)
 			if n := s.cfg.Stack.Mempool.PruneOnDemandOlderThan(s.cfg.TTL, time.Now()); n > 0 {
 				logf("[OD] pruned %d member(s) past the %s TTL", n, s.cfg.TTL)
+			}
+			for key, at := range s.commitTimeTried {
+				if time.Since(at) > s.cfg.TTL {
+					delete(s.commitTimeTried, key)
+				}
 			}
 			if held := s.cfg.Stack.Mempool.HeldPastTTL(); held > 0 {
 				logf("⚠️ [OD] %d member(s) past the %s TTL are held because this validator acted on them "+
@@ -204,8 +227,7 @@ func (s *OnDemandSubmitter) consider(ctx context.Context, member *PendingBatchIn
 		return
 	}
 
-	elapsed := time.Since(member.EnqueuedAt)
-	if !s.isLeaderFor(member, elapsed) {
+	if !s.isLeaderFor(member, s.failoverElapsed(ctx, member)) {
 		return
 	}
 
@@ -364,6 +386,54 @@ func (s *OnDemandSubmitter) isLeaderFor(member *PendingBatchIntent, elapsed time
 	}
 	idx = (idx + handoffs) % len(roster)
 	return roster[idx] == s.cfg.ValidatorID
+}
+
+// failoverElapsed is how far the member is into the failover rotation: the time since its
+// Accumulate block. That time is consensus data, so every validator places the member at the same
+// point in the rotation, and it survives a restart - measured from a local clock, as it used to be,
+// every restart put this validator back at the start of the rotation and a dead leader's members
+// waited for a node that no longer counted as late.
+//
+// A member without its block time has it read first. If it cannot be read the rotation runs from
+// this validator's persisted first sighting: still immune to a restart, but no longer aligned with
+// the other validators, so that is logged.
+func (s *OnDemandSubmitter) failoverElapsed(ctx context.Context, member *PendingBatchIntent) time.Duration {
+	s.resolveCommitTime(ctx, member)
+	origin, _ := member.Origin()
+	if origin.IsZero() {
+		return 0
+	}
+	return time.Since(origin)
+}
+
+// resolveCommitTime reads and records the member's Accumulate block time if it is missing.
+func (s *OnDemandSubmitter) resolveCommitTime(ctx context.Context, member *PendingBatchIntent) {
+	if !member.CommitTime.IsZero() || s.cfg.CommitTime == nil ||
+		member.CommitPartition == "" || member.CommitHeight == 0 {
+		return
+	}
+	key := memberWorkKey(member.ChainID, member.OperationID)
+	if at, ok := s.commitTimeTried[key]; ok && time.Since(at) < onDemandCommitTimeRetry {
+		return
+	}
+	rctx, cancel := context.WithTimeout(ctx, onDemandCommitTimeRead)
+	t, err := s.cfg.CommitTime(rctx, member.CommitPartition, member.CommitHeight)
+	cancel()
+	if err != nil || t.IsZero() {
+		s.commitTimeTried[key] = time.Now()
+		s.cfg.Logf("⚠️ [OD] intent=%s: reading the block time of %s height %d: %v - failover runs from this "+
+			"validator's first sighting until it can be read", member.IntentID, member.CommitPartition, member.CommitHeight, err)
+		return
+	}
+	delete(s.commitTimeTried, key)
+	if !s.cfg.Stack.Mempool.NoteOnDemandProgress(member.ChainID, member.OperationID, func(p *PendingBatchIntent) {
+		if p.CommitTime.IsZero() {
+			p.CommitTime = t
+		}
+	}) {
+		// No longer queued (its outcome landed meanwhile): the time still serves this decision.
+		member.CommitTime = t
+	}
 }
 
 // onDemandLeaderIndex is the deterministic election. Every validator must compute the same

@@ -1196,13 +1196,46 @@ func (l *LiteClientAdapter) convertToLedgerScope(partitionURL string) string {
 	return "acc://" + url + ".acme/ledger"
 }
 
+// MinorBlockTime returns the consensus time of partition's minor block at height: the time the
+// partition's validators committed that block, identical for every reader. It fails rather than
+// return a zero or unverified time - a caller that orders work by it must never get a local guess.
+func (l *LiteClientAdapter) MinorBlockTime(ctx context.Context, partition string, height uint64) (time.Time, error) {
+	if partition == "" || height == 0 {
+		return time.Time{}, fmt.Errorf("minor block time needs a partition and a height (got %q, %d)", partition, height)
+	}
+	blocks, err := l.queryMinorBlocks(ctx, partition, int64(height))
+	if err != nil {
+		return time.Time{}, err
+	}
+	if len(blocks) == 0 || blocks[0] == nil {
+		return time.Time{}, fmt.Errorf("no minor block %d on %s", height, partition)
+	}
+	b := blocks[0]
+	if b.Index != int64(height) {
+		return time.Time{}, fmt.Errorf("minor block query for %d on %s returned block %d", height, partition, b.Index)
+	}
+	// The record must come from the partition asked for. A scope that is not a partition ledger
+	// (acc://bvn1.acme/ledger rather than acc://bvn-BVN1.acme/ledger) is routed like any account and
+	// answered by whichever partition it hashes to - with THAT partition's block at this height.
+	want := strings.TrimSuffix(l.convertToLedgerScope(partition), "/ledger")
+	if !strings.EqualFold(b.Source, want) {
+		return time.Time{}, fmt.Errorf("minor block %d for %s was answered by %q", height, want, b.Source)
+	}
+	if b.Time.IsZero() {
+		return time.Time{}, fmt.Errorf("minor block %d on %s carries no time", height, partition)
+	}
+	return b.Time, nil
+}
+
 // MinorBlock represents a minor block from Accumulate v3 API
 type MinorBlock struct {
-	Height    int64        `json:"height"`
-	Index     int64        `json:"index"`
-	Time      time.Time    `json:"time"`
-	Partition string       `json:"partition"`
-	Entries   []BlockEntry `json:"entries"`
+	Height    int64     `json:"height"`
+	Index     int64     `json:"index"`
+	Time      time.Time `json:"time"`
+	Partition string    `json:"partition"`
+	// Source is the partition that answered, as the record names it (acc://bvn-BVN1.acme).
+	Source  string       `json:"source"`
+	Entries []BlockEntry `json:"entries"`
 }
 
 // BlockEntry represents an entry (transaction) in a minor block
@@ -1239,6 +1272,9 @@ func (l *LiteClientAdapter) parseMinorBlockRecord(recordMap map[string]interface
 		if parsedTime, err := time.Parse(time.RFC3339, timeStr); err == nil {
 			block.Time = parsedTime
 		}
+	}
+	if source, ok := blockData["source"].(string); ok {
+		block.Source = source
 	}
 
 	// Extract entries using the TypeScript getBlockEntries pattern

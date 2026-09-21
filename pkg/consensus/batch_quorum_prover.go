@@ -397,11 +397,11 @@ func (bv *BFTValidator) enqueueForBatch(
 		if onDemand {
 			enqErr = bv.batchEnqueuer.EnqueueOnDemand(
 				certenIntent.IntentID, adiURL, m.chainID, m.account, m.opID, m.legs, batchAtt, commitHeight,
-				certenIntent.TransactionHash)
+				certenIntent.Partition, certenIntent.BlockTime, certenIntent.TransactionHash)
 		} else {
 			enqErr = bv.batchEnqueuer.EnqueueForBatch(
 				certenIntent.IntentID, adiURL, m.chainID, m.account, m.opID, m.legs, batchAtt, commitHeight,
-				certenIntent.TransactionHash)
+				certenIntent.Partition, certenIntent.BlockTime, certenIntent.TransactionHash)
 		}
 		if enqErr != nil {
 			bv.logger.Printf("⚠️ [BATCH-QUEUE] intent %s not queued on chain %d (%v) — falling back",
