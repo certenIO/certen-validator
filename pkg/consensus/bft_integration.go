@@ -14,7 +14,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -69,69 +68,40 @@ var (
 	GitCommit = "unknown"
 )
 
-// validKeyPageURLPattern matches valid Accumulate keypage URLs that end with /N where N is a number
-// Examples: acc://foo.acme/book/1, acc://bar.acme/book/2
-var validKeyPageURLPattern = regexp.MustCompile(`/\d+$`)
-
-// resolveKeyPageURL validates and resolves a keypage URL to ensure it follows Accumulate conventions.
-// Accumulate keypages are numbered: /book/1, /book/2, etc. Not /book/page or other invalid formats.
+// SigningKeyPageResolver names the key page that actually signed an intent's Accumulate
+// transaction.
 //
-// This function:
-// 1. Validates if the URL ends with a number (valid format like /book/1)
-// 2. If invalid (like /book/page), extracts the keybook base and queries Accumulate for valid pages
-// 3. Returns the resolved keypage URL or error if resolution fails
+// G1 is built against one named page: its genesis is replayed to the execution block and its
+// threshold is the threshold the proof reports, and the page's URL is hashed into the govRoot. So
+// the page must be the one that authorised the transaction, established from the chain. It used to
+// be GUESSED: the governance blob's required_key_page is the intent builder's template
+// "<adi>/book/page" for multi-leg intents, and resolveKeyPageURL repaired that by string rule to
+// "<book>/1". Under the Business Transaction Controls books (humans on page 1, the machine key on
+// page 2) an automated payment is signed by page 2, so G1 named a page that did not sign.
 //
-// Parameters:
-//   - keyPageURL: The keypage URL to validate (e.g., "acc://foo.acme/book/page")
-//   - keyBookURL: The keybook URL to use for fallback resolution (e.g., "acc://foo.acme/book")
-//   - logger: Logger for diagnostic output
+// Implemented by proof.ChainKeyPageResolver. An error means no page of the book signed the
+// transaction, and the caller must fail the proof rather than name a page.
+type SigningKeyPageResolver interface {
+	ResolveSigningKeyPage(ctx context.Context, principal, txHash, keyBook, declaredPage string) (string, error)
+}
+
+// resolveSigningKeyPage names the page G1 is built against, or fails.
 //
-// Returns:
-//   - Resolved keypage URL (e.g., "acc://foo.acme/book/1")
-//   - Error if the URL cannot be resolved
-func resolveKeyPageURL(keyPageURL, keyBookURL string, logger Logger) (string, error) {
-	// If keyPageURL is empty, derive from keybook
-	if keyPageURL == "" {
-		if keyBookURL == "" {
-			return "", fmt.Errorf("both keypage and keybook URLs are empty")
-		}
-		// Keybook exists, query it to find the first keypage
-		// Accumulate keypages are indexed starting from 1
-		resolvedURL := keyBookURL + "/1"
-		logger.Printf("🔧 [KEYPAGE-RESOLVE] Derived keypage from keybook: %s", resolvedURL)
-		return resolvedURL, nil
+// There is no fallback. A validator without a resolver cannot establish the page, and naming one
+// anyway is exactly the guess this replaces.
+func (bv *BFTValidator) resolveSigningKeyPage(ctx context.Context, ci *CertenIntent, gov *GovernanceData) (string, error) {
+	bv.mu.RLock()
+	resolver := bv.keyPageResolver
+	bv.mu.RUnlock()
+	if resolver == nil {
+		return "", fmt.Errorf("no signing key page resolver is configured; the key page cannot be " +
+			"established from the chain and will not be guessed")
 	}
-
-	// Check if the keyPageURL ends with a valid number pattern
-	if validKeyPageURLPattern.MatchString(keyPageURL) {
-		// URL is valid (ends with /N where N is a number)
-		return keyPageURL, nil
+	if ci == nil || gov == nil {
+		return "", fmt.Errorf("intent or governance data missing")
 	}
-
-	// Invalid format detected - resolve from keybook
-	logger.Printf("⚠️ [KEYPAGE-RESOLVE] Invalid keypage format detected: %s (must end with /N)", keyPageURL)
-
-	// Extract the base path by removing the invalid suffix
-	// e.g., "acc://foo.acme/book/page" -> "acc://foo.acme/book"
-	lastSlash := strings.LastIndex(keyPageURL, "/")
-	if lastSlash > 0 {
-		basePath := keyPageURL[:lastSlash]
-		// The base path should be the keybook
-		// Query Accumulate to find valid keypages under this keybook
-		// For now, use the standard convention: first keypage is at index 1
-		resolvedURL := basePath + "/1"
-		logger.Printf("🔧 [KEYPAGE-RESOLVE] Resolved invalid keypage %s -> %s", keyPageURL, resolvedURL)
-		return resolvedURL, nil
-	}
-
-	// If we have a keybook URL, use it as fallback
-	if keyBookURL != "" {
-		resolvedURL := keyBookURL + "/1"
-		logger.Printf("🔧 [KEYPAGE-RESOLVE] Using keybook fallback: %s", resolvedURL)
-		return resolvedURL, nil
-	}
-
-	return "", fmt.Errorf("cannot resolve invalid keypage URL: %s", keyPageURL)
+	return resolver.ResolveSigningKeyPage(ctx, ci.AccountURL, ci.TransactionHash,
+		gov.Authorization.RequiredKeyBook, gov.Authorization.RequiredKeyPage)
 }
 
 // BFTConsensusEngine is what the rest of the validator code should depend on.
@@ -394,6 +364,7 @@ type BFTValidator struct {
 	anchorManager         AnchorManager
 	proofGenerator        ProofGenerator
 	governanceProofGen    GovernanceProofGenerator // G0/G1/G2 proof generator (runs AFTER L1-L4)
+	keyPageResolver       SigningKeyPageResolver   // names the page G1 is built against, from the chain
 	targets               verification.TargetChainExecutor
 	validatorBlockBuilder *ValidatorBlockBuilder
 	logger                Logger
@@ -603,6 +574,14 @@ func (bv *BFTValidator) GetProofCycleOrchestrator() ProofCycleOrchestratorInterf
 	bv.mu.RLock()
 	defer bv.mu.RUnlock()
 	return bv.proofCycleOrchestrator
+}
+
+// SetKeyPageResolver installs the resolver that names the key page G1 is built against. Required
+// for governance proofs: without it an intent fails rather than proceeding with a guessed page.
+func (bv *BFTValidator) SetKeyPageResolver(r SigningKeyPageResolver) {
+	bv.mu.Lock()
+	defer bv.mu.Unlock()
+	bv.keyPageResolver = r
 }
 
 // SetBatchEnqueuer installs the cross-ADI batch mempool.
@@ -1081,14 +1060,13 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 				certenIntent.IntentID)
 
 			// Build governance proof request from intent data
-			keyPageURL, keyPageErr := resolveKeyPageURL(
-				governanceData.Authorization.RequiredKeyPage,
-				governanceData.Authorization.RequiredKeyBook,
-				bv.logger,
-			)
+			keyPageURL, keyPageErr := bv.resolveSigningKeyPage(ctx, certenIntent, governanceData)
 			if keyPageErr != nil {
-				bv.logger.Printf("⚠️ [GOV-PROOF] Failed to resolve keypage URL: %v", keyPageErr)
+				return nil, fmt.Errorf("governance proof for intent %s cannot name its key page: %w",
+					certenIntent.IntentID, keyPageErr)
 			}
+			bv.logger.Printf("🔑 [GOV-PROOF] intent %s signed by key page %s (declared %q)",
+				certenIntent.IntentID, keyPageURL, governanceData.Authorization.RequiredKeyPage)
 			resolvedKeyPageURL = keyPageURL
 			govRequest := &proof.GovernanceRequest{
 				AccountURL:      certenIntent.AccountURL,

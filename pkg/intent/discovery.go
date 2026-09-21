@@ -196,10 +196,11 @@ type IntentDiscovery struct {
 	validatorID    string
 
 	// PHASE 5: Batch system integration for PostgreSQL persistence and proof assembly
-	batchCollector     *batch.Collector               // For on-cadence batching
-	onDemandHandler    *batch.OnDemandHandler         // For immediate on-demand anchoring
-	batchingEnabled    bool                           // Toggle for batch system routing
-	governanceProofGen proof.GovernanceProofGenerator // For G0/G1/G2 proof generation
+	batchCollector     *batch.Collector                 // For on-cadence batching
+	onDemandHandler    *batch.OnDemandHandler           // For immediate on-demand anchoring
+	batchingEnabled    bool                             // Toggle for batch system routing
+	governanceProofGen proof.GovernanceProofGenerator   // For G0/G1/G2 proof generation
+	keyPageResolver    consensus.SigningKeyPageResolver // names the page G1+ is built against, from the chain
 
 	// Intent lifecycle tracking (PostgreSQL)
 	repos *database.Repositories // For lifecycle status persistence
@@ -357,6 +358,12 @@ func (id *IntentDiscovery) SetBatchSystem(collector *batch.Collector, onDemand *
 // IsBatchingEnabled returns whether batch system routing is enabled
 func (id *IntentDiscovery) IsBatchingEnabled() bool {
 	return id.batchingEnabled
+}
+
+// SetKeyPageResolver configures how the key page for G1+ proofs is established. Without it, the
+// discovery-time governance proof stops at G0 rather than naming a guessed page.
+func (id *IntentDiscovery) SetKeyPageResolver(r consensus.SigningKeyPageResolver) {
+	id.keyPageResolver = r
 }
 
 // SetGovernanceProofGenerator configures the governance proof generator for G0/G1/G2 proof generation
@@ -1675,17 +1682,35 @@ func (id *IntentDiscovery) processIntent(intent *CertenIntent, blockHeight uint6
 	// This ensures the generated proof (not input config) is persisted to PostgreSQL
 	var govProof *proof.GovernanceProof
 	if id.governanceProofGen != nil && certenProof != nil {
-		// Extract key page from governance data for G1+ proofs
+		// The key page G1+ is built against is the page that SIGNED the transaction, read from the
+		// chain. This used to be RequiredKeyBook + "/1" unconditionally, which names the wrong page
+		// whenever the signer is not on page 1 - an automated payment signed by a machine key on
+		// page 2, for one. Unresolvable means no G1+: the proof stops at G0 and says why, rather
+		// than naming a page that did not authorise the transaction.
 		var keyPageURL string
 		if len(intent.GovernanceData) > 0 {
 			var govConfig struct {
 				Authorization struct {
 					RequiredKeyBook string `json:"required_key_book"`
+					RequiredKeyPage string `json:"required_key_page"`
 				} `json:"authorization"`
 			}
-			if err := json.Unmarshal(intent.GovernanceData, &govConfig); err == nil {
-				if govConfig.Authorization.RequiredKeyBook != "" {
-					keyPageURL = govConfig.Authorization.RequiredKeyBook + "/1"
+			if err := json.Unmarshal(intent.GovernanceData, &govConfig); err != nil {
+				id.logger.Printf("❌ [GOV-PROOF] intent %s: governance data does not parse (%v); no G1+ proof",
+					intent.IntentID, err)
+			} else if id.keyPageResolver == nil {
+				id.logger.Printf("❌ [GOV-PROOF] intent %s: no signing key page resolver configured; "+
+					"the key page will not be guessed, so no G1+ proof", intent.IntentID)
+			} else {
+				rctx, rcancel := context.WithTimeout(context.Background(), 30*time.Second)
+				page, rerr := id.keyPageResolver.ResolveSigningKeyPage(rctx, accountURL, intent.TransactionHash,
+					govConfig.Authorization.RequiredKeyBook, govConfig.Authorization.RequiredKeyPage)
+				rcancel()
+				if rerr != nil {
+					id.logger.Printf("❌ [GOV-PROOF] intent %s: cannot name the signing key page (%v); no G1+ proof",
+						intent.IntentID, rerr)
+				} else {
+					keyPageURL = page
 				}
 			}
 		}
