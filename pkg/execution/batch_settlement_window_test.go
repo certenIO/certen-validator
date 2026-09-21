@@ -103,8 +103,8 @@ func TestOD_DeadAttesterIsTakenOverInTheNextWindow(t *testing.T) {
 	if want := odT0.Add(2*SettlementWindow - settlementFenceMargin); !f.lastFence.Equal(want) {
 		t.Fatalf("fence %s, want window 1's %s", f.lastFence, want)
 	}
-	if want := odT0.Add(SettlementWindow - settlementFenceMargin); !f.priorUntil.Equal(want) {
-		t.Fatalf("earlier windows scanned until %s, want window 0's fence %s", f.priorUntil, want)
+	if want := odT0.Add(SettlementWindow - settlementFenceMargin + settlementReorgMargin); !f.priorUntil.Equal(want) {
+		t.Fatalf("earlier windows scanned until %s, want window 0's fence plus the reorg margin %s", f.priorUntil, want)
 	}
 }
 
