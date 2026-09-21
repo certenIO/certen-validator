@@ -1094,6 +1094,25 @@ func ed25519KeyPath(cfg *config.Config) string {
 }
 
 // blsKeyPath is where the validator's BLS key lives: BLS_KEY_PATH, or data/bls_key_<id>.hex.
+// blsKeySecret is the secret a validator's BLS key is derived from when it has no key file: BLS_KEY_SEED
+// (hex) when set, otherwise the validator's ETH_PRIVATE_KEY. Both live in the validator's environment,
+// not its data volume, so wiping the volume does not lose them.
+func blsKeySecret(cfg *config.Config) ([]byte, error) {
+	raw, name := os.Getenv("BLS_KEY_SEED"), "BLS_KEY_SEED"
+	if strings.TrimSpace(raw) == "" {
+		raw, name = cfg.EthPrivateKey, "ETH_PRIVATE_KEY"
+	}
+	raw = strings.TrimPrefix(strings.TrimSpace(raw), "0x")
+	if raw == "" {
+		return nil, fmt.Errorf("no BLS key secret: set BLS_KEY_SEED or ETH_PRIVATE_KEY")
+	}
+	secret, err := hex.DecodeString(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%s is not hex: %w", name, err)
+	}
+	return secret, nil
+}
+
 func blsKeyPath(cfg *config.Config) string {
 	if path := os.Getenv("BLS_KEY_PATH"); path != "" {
 		return path
@@ -1348,10 +1367,14 @@ func startValidator(
 		}
 	}
 
-	// Initialize BLS key for validator consensus
-	// Keys are derived deterministically from validator ID or loaded from file
-	// Key storage path can be set via BLS_KEY_PATH env var, defaults to ./data/bls_key.hex
-	blsKeyManager, err := bls.InitializeValidatorBLSKey(cfg.ValidatorID, cfg.ChainID, blsKeyPath(cfg))
+	// The validator's BLS key: its key file, or - when there is none - derived from this validator's
+	// secret, so a wiped data volume comes back with the same, still-registered key. See
+	// bls.InitializeValidatorBLSKey and docs/runbooks/bls-key-rotation.md.
+	blsSecret, err := blsKeySecret(cfg)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to initialize BLS key: %w", err)
+	}
+	blsKeyManager, err := bls.InitializeValidatorBLSKey(cfg.ValidatorID, blsKeyPath(cfg), blsSecret)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to initialize BLS key: %w", err)
 	}

@@ -6,9 +6,11 @@
 package bls
 
 import (
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 )
@@ -98,14 +100,6 @@ func (km *KeyManager) GenerateFromSeed(seed []byte) error {
 	return nil
 }
 
-// GenerateFromValidatorID generates a deterministic key from validator ID
-// This provides consistent key derivation across validator restarts
-func (km *KeyManager) GenerateFromValidatorID(validatorID string, chainID string) error {
-	// Create deterministic seed from validator ID and chain ID
-	seed := sha256.Sum256([]byte(fmt.Sprintf("CERTEN_BLS_KEY_V1:%s:%s", validatorID, chainID)))
-	return km.GenerateFromSeed(seed[:])
-}
-
 // SaveKey saves the private key to the key path
 func (km *KeyManager) SaveKey() error {
 	if km.keyPath == "" {
@@ -186,36 +180,68 @@ func (km *KeyManager) PrivateKey() *PrivateKey {
 
 var globalKeyManager *KeyManager
 
-// InitializeValidatorBLSKey initializes the global validator BLS key
-// Called from main.go during validator startup
-func InitializeValidatorBLSKey(validatorID, chainID, keyPath string) (*KeyManager, error) {
+// InitializeValidatorBLSKey loads the validator's BLS key from keyPath, or - when there is no key
+// file yet - generates a RANDOM key and saves it there.
+//
+// A key file that exists is loaded as is. When there is none - a new validator, or a data volume that
+// was wiped - the key is DERIVED from secret, so the same validator always comes back with the same key
+// and needs no re-registration.
+//
+// The derivation used to take only the validator ID and chain ID. Those are public, so anyone could
+// compute every validator's private key and sign any quorum. The seed is now a secret this validator
+// alone holds (see DeriveValidatorBLSKey); with no secret the validator refuses to start rather than
+// fall back to anything computable.
+func InitializeValidatorBLSKey(validatorID, keyPath string, secret []byte) (*KeyManager, error) {
+	if keyPath == "" {
+		return nil, fmt.Errorf("no BLS key path configured for %s", validatorID)
+	}
 	km := NewKeyManager(keyPath)
-
-	// If key path exists, load it
-	if keyPath != "" {
-		if _, err := os.Stat(keyPath); err == nil {
-			if err := km.LoadKey(); err != nil {
-				return nil, fmt.Errorf("load BLS key: %w", err)
-			}
-			globalKeyManager = km
-			return km, nil
+	if _, err := os.Stat(keyPath); err == nil {
+		if err := km.LoadKey(); err != nil {
+			return nil, fmt.Errorf("load BLS key: %w", err)
 		}
+		globalKeyManager = km
+		return km, nil
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("stat BLS key %s: %w", keyPath, err)
 	}
-
-	// Otherwise, generate deterministically from validator ID
-	if err := km.GenerateFromValidatorID(validatorID, chainID); err != nil {
-		return nil, fmt.Errorf("generate BLS key: %w", err)
+	if err := km.DeriveFromSecret(validatorID, secret); err != nil {
+		return nil, err
 	}
-
-	// Save if path specified
-	if keyPath != "" {
-		if err := km.SaveKey(); err != nil {
-			return nil, fmt.Errorf("save BLS key: %w", err)
-		}
+	if err := km.SaveKey(); err != nil {
+		return nil, fmt.Errorf("save BLS key: %w", err)
 	}
-
+	log.Printf("🔑 [BLS] %s had no BLS key file; derived its key from its secret and saved it to %s (public key %s)",
+		validatorID, keyPath, km.publicKey.Hex())
 	globalKeyManager = km
 	return km, nil
+}
+
+// blsKeyDerivationDomain separates this use of a validator's secret from every other: the key derived
+// here reveals nothing about the secret, and no other protocol derives the same value from it.
+const blsKeyDerivationDomain = "certen:bls-key:v2:"
+
+// DeriveValidatorBLSKey is the validator's BLS key derived from secret: HMAC-SHA256 keyed by the
+// secret over the domain and validator ID, used as the key seed. Deterministic, so a wiped validator
+// re-derives the same key; unknowable without the secret. The secret must be at least 32 bytes.
+func DeriveValidatorBLSKey(validatorID string, secret []byte) (*PrivateKey, *PublicKey, error) {
+	if len(secret) < 32 {
+		return nil, nil, fmt.Errorf("BLS key secret for %s is %d bytes; at least 32 are required "+
+			"(BLS_KEY_SEED, or the validator's ETH_PRIVATE_KEY)", validatorID, len(secret))
+	}
+	mac := hmac.New(sha256.New, secret)
+	mac.Write([]byte(blsKeyDerivationDomain + validatorID))
+	return GenerateKeyPairFromSeed(mac.Sum(nil))
+}
+
+// DeriveFromSecret sets the key manager's key to DeriveValidatorBLSKey(validatorID, secret).
+func (km *KeyManager) DeriveFromSecret(validatorID string, secret []byte) error {
+	sk, pk, err := DeriveValidatorBLSKey(validatorID, secret)
+	if err != nil {
+		return err
+	}
+	km.privateKey, km.publicKey = sk, pk
+	return nil
 }
 
 // GetValidatorBLSKey returns the global validator BLS key manager

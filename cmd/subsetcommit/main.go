@@ -35,7 +35,10 @@
 //
 // Usage:
 //
-//	go run ./cmd/subsetcommit -keys bls_keys_backup_MASTER.json [-threshold-num 2 -threshold-den 3]
+//	go run ./cmd/subsetcommit -keys pubkeys.json [-threshold-num 2 -threshold-den 3]
+//
+// pubkeys.json lists each validator's validator_id and bls_public_key, in any order; no private key
+// is needed or wanted.
 package main
 
 import (
@@ -68,7 +71,7 @@ func fatal(f string, a ...interface{}) {
 
 func main() {
 	var (
-		keysPath  = flag.String("keys", "bls_keys_backup_MASTER.json", "validator BLS key file")
+		keysPath  = flag.String("keys", "pubkeys.json", "validator BLS public keys (JSON: validators[].validator_id, bls_public_key)")
 		thrNum    = flag.Int("threshold-num", 2, "threshold numerator")
 		thrDen    = flag.Int("threshold-den", 3, "threshold denominator")
 		power     = flag.Int("power", 100, "voting power per validator (uniform)")
@@ -90,10 +93,22 @@ func main() {
 		fatal("key file contains no validators")
 	}
 
-	// Load every keypair. Private keys are needed only for -selfcheck.
+	// Public keys are all the commitments need. A file that names only public keys - the normal
+	// case: no one should hold every validator's private key - is used as is. A file that carries
+	// private keys is checked against its public keys.
 	pubs := make([]*bls.PublicKey, n)
 	privs := make([]*bls.PrivateKey, n)
+	pubOnly := 0
 	for i, v := range kf.Validators {
+		if strings.TrimSpace(v.BLSPrivateKey) == "" {
+			pk, err := bls.PublicKeyFromHex(strings.TrimPrefix(v.BLSPublicKey, "0x"))
+			if err != nil {
+				fatal("%s: bad public key: %v", v.ValidatorID, err)
+			}
+			pubs[i] = pk
+			pubOnly++
+			continue
+		}
 		skBytes, err := hex.DecodeString(strings.TrimPrefix(v.BLSPrivateKey, "0x"))
 		if err != nil {
 			fatal("%s: bad private key: %v", v.ValidatorID, err)
@@ -114,7 +129,11 @@ func main() {
 				v.ValidatorID, want, got)
 		}
 	}
-	fmt.Printf("loaded %d validators; derived pubkeys match the backup file\n", n)
+	if pubOnly != 0 && pubOnly != n {
+		fatal("the key file mixes entries with and without private keys (%d of %d public only)", pubOnly, n)
+	}
+	fmt.Printf("loaded %d validators (%s)\n", n, map[bool]string{true: "public keys only",
+		false: "private keys, their public keys checked"}[pubOnly == n])
 
 	total := n * *power
 	required := (total * *thrNum) / *thrDen
@@ -133,7 +152,20 @@ func main() {
 
 	// ---- selfcheck: prove this fold is the one the production prover uses ----
 	if *selfcheck {
-		if err := proveFoldMatchesProver(privs, pubs); err != nil {
+		// The check proves this tool's fold IS the production prover's - a property of the code,
+		// not of any key. With public keys only it runs over a throwaway set generated here.
+		checkPrivs, checkPubs := privs, pubs
+		if pubOnly == n {
+			checkPrivs, checkPubs = make([]*bls.PrivateKey, n), make([]*bls.PublicKey, n)
+			for i := range checkPrivs {
+				sk, pk, err := bls.GenerateKeyPair()
+				if err != nil {
+					fatal("generating a selfcheck key: %v", err)
+				}
+				checkPrivs[i], checkPubs[i] = sk, pk
+			}
+		}
+		if err := proveFoldMatchesProver(checkPrivs, checkPubs); err != nil {
 			fatal("SELFCHECK FAILED — do NOT authorize these commitments: %v", err)
 		}
 		fmt.Println("selfcheck: fold matches the production prover witness path")
