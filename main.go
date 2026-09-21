@@ -22,14 +22,11 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/google/uuid"
 
 	"github.com/certen/independant-validator/db"
 	"github.com/certen/independant-validator/pkg/accumulate"
 	"github.com/certen/independant-validator/pkg/anchor"
-	"github.com/certen/independant-validator/pkg/attestation"
 	attestationStrategy "github.com/certen/independant-validator/pkg/attestation/strategy"
-	"github.com/certen/independant-validator/pkg/batch"
 	"github.com/certen/independant-validator/pkg/config"
 	"github.com/certen/independant-validator/pkg/consensus"
 	"github.com/certen/independant-validator/pkg/crypto/bls"
@@ -806,64 +803,6 @@ func main() {
 			BatchDetails:  make(map[string]interface{}),
 		}
 
-		// Add batch system details if available
-		if batchComponents != nil && batchComponents.Collector != nil {
-			batchInterval := 15 * time.Minute
-
-			// Get on-cadence batch info
-			onCadenceInfo := batchComponents.Collector.GetOnCadenceBatchInfo()
-			if onCadenceInfo != nil {
-				expectedCompletion := onCadenceInfo.StartTime.Add(batchInterval)
-				remaining := time.Until(expectedCompletion)
-
-				detailed.BatchDetails["on_cadence"] = map[string]interface{}{
-					"batch_id":               onCadenceInfo.BatchID.String(),
-					"transaction_count":      onCadenceInfo.TxCount,
-					"age_seconds":            int64(onCadenceInfo.Age.Seconds()),
-					"start_time":             onCadenceInfo.StartTime.UTC().Format(time.RFC3339),
-					"expected_completion_at": expectedCompletion.UTC().Format(time.RFC3339),
-					"remaining_seconds":      int64(remaining.Seconds()),
-					"is_delay_expected":      true,
-					"price_tier":             "$0.05/proof",
-					"status_message":         "On-cadence batch delays up to 15 minutes are normal operation.",
-				}
-
-				// Check if batch is stalled (beyond expected + grace period)
-				if onCadenceInfo.Age > (batchInterval + 5*time.Minute) {
-					detailed.BatchDetails["on_cadence_warning"] = "Batch age exceeds expected window. May require investigation."
-				}
-			}
-
-			// Get on-demand batch info
-			onDemandInfo := batchComponents.Collector.GetOnDemandBatchInfo()
-			if onDemandInfo != nil {
-				detailed.BatchDetails["on_demand"] = map[string]interface{}{
-					"batch_id":          onDemandInfo.BatchID.String(),
-					"transaction_count": onDemandInfo.TxCount,
-					"age_seconds":       int64(onDemandInfo.Age.Seconds()),
-					"start_time":        onDemandInfo.StartTime.UTC().Format(time.RFC3339),
-					"is_delay_expected": false,
-					"price_tier":        "$0.25/proof",
-					"status_message":    "On-demand batches anchor immediately.",
-				}
-
-				// Check if on-demand batch is stalled
-				if onDemandInfo.Age > 2*time.Minute {
-					detailed.BatchDetails["on_demand_warning"] = "On-demand batch age exceeds expected. May require investigation."
-				}
-			}
-
-			// Get batch system health status
-			batchHealth := batch.GetBatchSystemHealth(onCadenceInfo, onDemandInfo, batchInterval)
-			detailed.BatchDetails["system_health"] = map[string]interface{}{
-				"overall_status":          batchHealth.OverallStatus,
-				"on_cadence_status":       batchHealth.OnCadenceStatus,
-				"on_demand_status":        batchHealth.OnDemandStatus,
-				"on_cadence_delay_normal": batchHealth.OnCadenceDelayNormal,
-				"message":                 batchHealth.StatusMessage,
-			}
-		}
-
 		// Build status explanation
 		switch healthStatus.Status {
 		case "ok":
@@ -912,19 +851,12 @@ func main() {
 	// ==========================================================================
 	if batchComponents != nil {
 		batchHandlers := server.NewBatchHandlers(
-			batchComponents.Collector,
-			batchComponents.Processor,
-			batchComponents.OnDemandHandler,
 			batchComponents.Repos,
 			cfg.ValidatorID,
 			log.New(log.Writer(), "[BatchAPI] ", log.LstdFlags),
 		)
 
-		// On-demand anchor endpoint (Priority 2.1)
-		mux.HandleFunc("/api/anchors/on-demand", batchHandlers.HandleOnDemandAnchor)
-
-		// Batch status endpoints
-		mux.HandleFunc("/api/batches/current", batchHandlers.HandleBatchInfo)
+		// Batch status endpoint
 		mux.HandleFunc("/api/batches/", batchHandlers.HandleBatchStatus)
 
 		// Proof retrieval endpoints (Priority 3.1)
@@ -945,28 +877,6 @@ func main() {
 		// Cost tracking endpoints (Priority 3.2)
 		mux.HandleFunc("/api/costs", batchHandlers.HandleGetCostStatistics)
 		mux.HandleFunc("/api/costs/estimate", batchHandlers.HandleEstimateCost)
-
-		// Multi-Validator Attestation endpoints (Priority 3.1)
-		if batchComponents.AttestationService != nil {
-			attestationHandlers := server.NewAttestationHandlers(
-				batchComponents.AttestationService,
-				cfg.ValidatorID,
-				log.New(log.Writer(), "[AttestationAPI] ", log.LstdFlags),
-			)
-
-			// Attestation collection endpoints
-			mux.HandleFunc("/api/attestations", attestationHandlers.HandleAttestationInfo)
-			mux.HandleFunc("/api/attestations/request", attestationHandlers.HandleAttestationRequest)
-			mux.HandleFunc("/api/attestations/status/", attestationHandlers.HandleGetAttestationStatus)
-			mux.HandleFunc("/api/attestations/bundle/", attestationHandlers.HandleGetAttestationBundle)
-			mux.HandleFunc("/api/attestations/peers", attestationHandlers.HandleGetPeers)
-
-			log.Printf("✅ [Phase 5] Multi-validator attestation endpoints configured:")
-			log.Printf("   - POST /api/attestations/request  (receive attestation from peer)")
-			log.Printf("   - GET  /api/attestations/status/:id (attestation status)")
-			log.Printf("   - GET  /api/attestations/bundle/:id (attestation bundle)")
-			log.Printf("   - GET  /api/attestations/peers     (configured peers)")
-		}
 
 		// NEW: Comprehensive Proof Artifact API (v1 endpoints)
 		proofHandlers := server.NewProofHandlers(
@@ -1018,8 +928,6 @@ func main() {
 		log.Printf("   - GET  /api/v1/batches/:id/stats    (batch statistics)")
 
 		log.Printf("✅ [Phase 5] Batch and proof API endpoints configured:")
-		log.Printf("   - POST /api/anchors/on-demand  (immediate anchoring ~$0.25/proof)")
-		log.Printf("   - GET  /api/batches/current    (current batch status)")
 		log.Printf("   - GET  /api/proofs/by-tx/:hash (proof by transaction)")
 		log.Printf("   - GET  /api/proofs/by-account/:url (proofs by account)")
 		log.Printf("   - GET  /api/costs              (cost structure)")
@@ -1168,12 +1076,6 @@ func validMigrationCommand(args []string) bool {
 
 // BatchComponents holds all batch system components for API handlers
 type BatchComponents struct {
-	Scheduler            *batch.Scheduler
-	Collector            *batch.Collector
-	Processor            *batch.Processor
-	OnDemandHandler      *batch.OnDemandHandler
-	ConfirmationTracker  *batch.ConfirmationTracker
-	AttestationService   *attestation.Service
 	Repos                *database.Repositories
 	FirestoreSyncService *firestore.SyncService // Real-time UI sync
 }
@@ -1779,176 +1681,6 @@ func startValidator(
 		cometEngine.SetValidatorCount(7) // 7 validators in the network
 		log.Println("✅ [Phase 5] Database repositories wired to ValidatorApp for consensus persistence")
 
-		// Create batch collector configuration
-		collectorCfg := &batch.CollectorConfig{
-			ValidatorID:  cfg.ValidatorID,
-			MaxBatchSize: 1000,             // Max 1000 txs per batch
-			BatchTimeout: 15 * time.Minute, // ~15 min batches per whitepaper
-			MaxOnDemand:  5,                // Small on-demand batches for immediate anchoring
-			Logger:       log.New(log.Writer(), "[BatchCollector] ", log.LstdFlags),
-		}
-
-		// Create batch collector
-		collector, err := batch.NewCollector(repos, collectorCfg)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to create batch collector: %w", err)
-		}
-		log.Println("✅ [Phase 5] Batch collector created")
-
-		// Create anchor adapter that bridges batch.Processor to AnchorManager
-		// This uses the REAL Merkle roots from closed batches
-		anchorManagerWrapper := batch.NewAnchorManagerWrapper(func(ctx context.Context, batchID string, merkleRoot, opCommit, crossCommit, govRoot []byte,
-			txCount int, accumHeight int64, accumHash, targetChain, validatorID string) (
-			txHash string, blockNumber int64, blockHash string, gasUsed int64,
-			gasPriceWei, totalCostWei string, success bool, err error) {
-
-			// Call the real AnchorManager's CreateBatchAnchorOnChain
-			req := &anchor.AnchorOnChainRequest{
-				BatchID:              batchID,
-				MerkleRoot:           merkleRoot,
-				OperationCommitment:  opCommit,
-				CrossChainCommitment: crossCommit,
-				GovernanceRoot:       govRoot,
-				TxCount:              txCount,
-				AccumulateHeight:     accumHeight,
-				AccumulateHash:       accumHash,
-				TargetChain:          targetChain,
-				ValidatorID:          validatorID,
-			}
-			result, err := anchorManager.CreateBatchAnchorOnChain(ctx, req)
-			if err != nil {
-				return "", 0, "", 0, "", "", false, err
-			}
-			return result.TxHash, result.BlockNumber, result.BlockHash,
-				result.GasUsed, result.GasPriceWei, result.TotalCostWei, result.Success, nil
-		})
-
-		// Wire the ExecuteComprehensiveProofOnChain function to enable Ethereum proof execution
-		// Per CRITICAL-001: This MUST be set for comprehensive proofs to be submitted on-chain
-		anchorManagerWrapper.SetExecuteProofFunc(anchorManager.ExecuteComprehensiveProofOnChain)
-		log.Println("✅ [Phase 5] ExecuteComprehensiveProofOnChain wired to anchor manager")
-
-		anchorAdapter := batch.NewAnchorAdapter(
-			anchorManagerWrapper,
-			log.New(log.Writer(), "[AnchorAdapter] ", log.LstdFlags),
-		)
-		log.Println("✅ [Phase 5] Anchor adapter created for real Merkle root anchoring")
-
-		// Create batch processor configuration
-		processorCfg := &batch.ProcessorConfig{
-			ValidatorID:     cfg.ValidatorID,
-			TargetChain:     "ethereum",
-			ChainID:         fmt.Sprintf("%d", cfg.EthChainID),
-			NetworkName:     cfg.NetworkName, // From NETWORK_NAME env var, defaults to "devnet"
-			ContractAddress: cfg.CertenContractAddress,
-			Logger:          log.New(log.Writer(), "[BatchProcessor] ", log.LstdFlags),
-		}
-
-		// Create batch processor
-		processor, err := batch.NewProcessor(repos, anchorAdapter, processorCfg)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to create batch processor: %w", err)
-		}
-		log.Println("✅ [Phase 5] Batch processor created")
-
-		// Wire Firestore sync service to batch collector and processor
-		if firestoreSyncService != nil {
-			collector.SetFirestoreSyncService(firestoreSyncService)
-			processor.SetFirestoreSyncService(firestoreSyncService)
-			log.Println("✅ [Firestore] Sync service wired to batch collector and processor")
-		}
-
-		// PHASE 5: Attestation callback will be wired after attestation service is created
-		// See below after attestation service initialization
-
-		// Create scheduler configuration
-		schedulerCfg := &batch.SchedulerConfig{
-			Interval:      15 * time.Minute, // ~15 min batches per whitepaper
-			CheckInterval: 1 * time.Minute,  // Check every minute
-			Callback: func(ctx context.Context, result *batch.ClosedBatchResult) error {
-				// Process the closed batch (create anchor, store proofs)
-				return processor.ProcessClosedBatch(ctx, result)
-			},
-			GetAccumState: func() (int64, string) {
-				// Get current Accumulate state from lite client
-				// Uses the LiteClientProofGenerator to query consensus state
-				state, err := liteClientProofGen.GetConsensusState(context.Background())
-				if err != nil {
-					log.Printf("⚠️ [BatchScheduler] Failed to get Accumulate state: %v", err)
-					return 0, ""
-				}
-				return state.BlockHeight, state.BlockHash
-			},
-			Logger: log.New(log.Writer(), "[BatchScheduler] ", log.LstdFlags),
-		}
-
-		// Create batch scheduler
-		batchScheduler, err := batch.NewScheduler(collector, schedulerCfg)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to create batch scheduler: %w", err)
-		}
-		log.Println("✅ [Phase 5] Batch scheduler created")
-
-		// Start the batch scheduler
-		if err := batchScheduler.Start(context.Background()); err != nil {
-			return nil, nil, fmt.Errorf("failed to start batch scheduler: %w", err)
-		}
-		log.Println("🚀 [Phase 5] Batch scheduler started - processing ~15 min on-cadence batches")
-
-		// Create on-demand handler for immediate anchoring (~$0.25/proof)
-		onDemandCfg := &batch.OnDemandConfig{
-			MaxBatchSize: 5,
-			MaxWaitTime:  30 * time.Second,
-			Callback: func(ctx context.Context, result *batch.ClosedBatchResult) error {
-				return processor.ProcessClosedBatch(ctx, result)
-			},
-			GetAccumState: schedulerCfg.GetAccumState,
-			Logger:        log.New(log.Writer(), "[OnDemand] ", log.LstdFlags),
-		}
-		onDemandHandler, err := batch.NewOnDemandHandler(collector, onDemandCfg)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to create on-demand handler: %w", err)
-		}
-		log.Println("✅ [Phase 5] On-demand handler created for immediate anchoring")
-
-		// Create confirmation tracker for anchor finality monitoring
-		confirmationCfg := &batch.ConfirmationTrackerConfig{
-			PollInterval:          30 * time.Second,
-			RequiredConfirmations: 12, // Standard Ethereum finality
-			Logger:                log.New(log.Writer(), "[ConfirmationTracker] ", log.LstdFlags),
-		}
-
-		// Create Ethereum block provider using the Ethereum client
-		blockProvider := batch.NewEthereumBlockProvider(
-			func(ctx context.Context) (int64, error) {
-				// Get latest block from Ethereum client
-				// Note: ethClient is available in the outer scope
-				return ethClient.GetLatestBlockNumber(ctx)
-			},
-			func(ctx context.Context, blockNumber int64) (string, time.Time, error) {
-				// Get block info from Ethereum client
-				return ethClient.GetBlockInfo(ctx, blockNumber)
-			},
-		)
-
-		confirmationTracker, err := batch.NewConfirmationTracker(repos, blockProvider, confirmationCfg)
-		if err != nil {
-			log.Printf("⚠️ [Phase 5] Failed to create confirmation tracker: %v", err)
-			// Continue without confirmation tracking - it's not critical
-		} else {
-			// Wire Firestore sync service to confirmation tracker
-			if firestoreSyncService != nil {
-				confirmationTracker.SetFirestoreSyncService(firestoreSyncService)
-				log.Println("✅ [Firestore] Sync service wired to confirmation tracker")
-			}
-			// Start the confirmation tracker
-			if err := confirmationTracker.Start(context.Background()); err != nil {
-				log.Printf("⚠️ [Phase 5] Failed to start confirmation tracker: %v", err)
-			} else {
-				log.Println("✅ [Phase 5] Confirmation tracker started - monitoring anchor finality")
-			}
-		}
-
 		// Proof requests: the API records them as pending; this works them through to a proof.
 		requestFulfiller, err := proofrequests.New(repos, proofrequests.Config{
 			Interval:         cfg.ProofRequestInterval,
@@ -1962,41 +1694,6 @@ func startValidator(
 		} else {
 			requestFulfiller.Start(context.Background())
 			log.Println("✅ [Phase 5] Proof request fulfiller started")
-		}
-
-		// ==========================================================================
-		// PHASE 5: Multi-Validator Attestation Service
-		// Per Whitepaper Section 3.4.1 Component 4: Validator attestations
-		// ==========================================================================
-		var attestationService *attestation.Service
-		attestationCfg := &attestation.Config{
-			ValidatorID:   cfg.ValidatorID,
-			PrivateKey:    privateKey,
-			PeerEndpoints: cfg.AttestationPeers,
-			RequiredCount: cfg.AttestationRequiredCount,
-			Timeout:       30 * time.Second,
-			Logger:        log.New(log.Writer(), "[Attestation] ", log.LstdFlags),
-		}
-
-		attestationService, err = attestation.NewService(repos, attestationCfg)
-		if err != nil {
-			log.Printf("⚠️ [Phase 5] Failed to create attestation service: %v", err)
-			// Continue without attestation - it's not critical for single-validator testing
-		} else {
-			log.Printf("✅ [Phase 5] Attestation service created with %d peers", len(cfg.AttestationPeers))
-
-			// Wire attestation callback to batch processor
-			// This triggers multi-validator attestation collection when a batch is anchored
-			processor.SetOnAnchorCallback(func(ctx context.Context, batchID uuid.UUID, merkleRoot []byte, anchorTxHash string, txCount int, blockNumber int64) error {
-				status, err := attestationService.OnBatchAnchored(ctx, batchID, merkleRoot, anchorTxHash, txCount, blockNumber)
-				if err != nil {
-					return err
-				}
-				log.Printf("📜 Attestation status for batch %s: %d/%d validators attested",
-					batchID, status.CollectedCount, status.RequiredCount)
-				return nil
-			})
-			log.Printf("✅ [Phase 5] Attestation callback wired to batch processor")
 		}
 
 		// ==========================================================================
@@ -2059,12 +1756,6 @@ func startValidator(
 
 		// Package all batch components
 		batchComponents = &BatchComponents{
-			Scheduler:            batchScheduler,
-			Collector:            collector,
-			Processor:            processor,
-			OnDemandHandler:      onDemandHandler,
-			ConfirmationTracker:  confirmationTracker,
-			AttestationService:   attestationService,
 			Repos:                repos,
 			FirestoreSyncService: firestoreSyncService,
 		}
@@ -2420,34 +2111,7 @@ func startValidator(
 			entGateCfg.Mode, entStore.Enabled(), len(entGateCfg.Keys))
 	}
 
-	// PHASE 5: Wire batch system to intent discovery for PostgreSQL persistence
-	// This enables routing intents based on proofClass (on_demand vs on_cadence)
 	if batchComponents != nil {
-		// THE RETIRED SHADOW PIPELINE.
-		//
-		// This wiring routes every intent into the pre-2026-09 batch path, which writes one anchor_batches
-		// row PER VALIDATOR with a merkle_root computed locally over pending blobs — a root that is never
-		// published anywhere. Seven rows per intent, each disagreeing with the anchor actually on chain.
-		// Reading one of them is what produced the live claim that root d2d24ab3… was in transaction
-		// 0x9e4ff6ab…, which settled a different root entirely.
-		//
-		// The canonical path replaced it: one row per (chain_id, bundle_id), written from the quorum the
-		// chain executed, carrying the Accumulate transaction and the settled leg. Every reader now filters
-		// on bundle_id IS NOT NULL, so the shadow rows are already ignored — they are simply still being
-		// manufactured, on every transaction.
-		//
-		// Default OFF. LEGACY_BATCH_PIPELINE=on restores it for one release, because turning off a live
-		// write path deserves a way back that does not need a rebuild. The flag and this block go together
-		// once a soak confirms nothing reads the rows.
-		if os.Getenv("LEGACY_BATCH_PIPELINE") == "on" {
-			intentDiscovery.SetBatchSystem(batchComponents.Collector, batchComponents.OnDemandHandler)
-			log.Printf("⚠️ [Phase 5] LEGACY batch pipeline ENABLED (LEGACY_BATCH_PIPELINE=on): every intent "+
-				"will also write %d per-validator shadow anchor rows whose root is never published", 7)
-		} else {
-			log.Printf("✅ [Phase 5] Legacy shadow batch pipeline retired; anchors are recorded only as " +
-				"canonical rows keyed by (chain_id, bundle_id)")
-		}
-
 		// Wire repositories for intent lifecycle tracking
 		intentDiscovery.SetRepositories(batchComponents.Repos)
 		log.Printf("✅ Intent lifecycle tracking wired to intent discovery")
@@ -2563,20 +2227,6 @@ func startValidator(
 		}
 	} else {
 		log.Printf("⚠️ [Phase 5] Batch system not available - intents will bypass PostgreSQL")
-	}
-
-	// Wire governance proof generator to intent discovery for G0/G1/G2 proof generation
-	// This ensures governance proofs are generated BEFORE batch routing, so they are persisted correctly
-	if governanceProofGen != nil {
-		intentDiscovery.SetGovernanceProofGenerator(governanceProofGen)
-		if kpResolver, kpErr := proof.NewChainKeyPageResolver(cfg.AccumulateURL, log.Printf); kpErr != nil {
-			log.Printf("❌ [GOV-PROOF] signing key page resolver unavailable for discovery (%v); "+
-				"discovery-time governance proofs will stop at G0", kpErr)
-		} else {
-			intentDiscovery.SetKeyPageResolver(kpResolver)
-		}
-		log.Printf("✅ [Phase 5] Governance proof generator wired to intent discovery")
-		log.Printf("   - G0/G1/G2 proofs generated before PostgreSQL persistence")
 	}
 
 	go intentDiscovery.StartMonitoring()

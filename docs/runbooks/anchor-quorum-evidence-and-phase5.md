@@ -177,9 +177,18 @@ replay it. The reconciler also scans recent verify txs for anchors this node nev
 
 ### Step 7 — retire the shadow pipeline
 
-Behind `LEGACY_BATCH_PIPELINE=off` (default off after soak): stop `routeIntentToBatchSystem` writing
-`anchor_batches`, stop the old processor's anchoring. Then delete `ConsensusCoordinator`,
-`AttestationBroadcaster`, `MarkConsensusQuorumMet` and the `attestation.Service` batch wiring.
+Done. The pipeline sat behind `LEGACY_BATCH_PIPELINE` (default off) from 2026-09-18. The soak showed no
+shadow row written after 2026-09-19 while canonical rows continued, and no `anchor_records` write after
+2026-09-18. It is now deleted, not flagged:
+- `pkg/batch`, including the scheduler and confirmation tracker, which had kept running with the flag off;
+- the discovery routing, which also broke every multi-leg intent before consensus while the flag was off;
+- the discovery-time governance proof;
+- `attestation.Service` and `/api/attestations/*`;
+- the unauthenticated `POST /api/anchors/on-demand`, which still wrote shadow rows and could anchor on chain with the flag off;
+- `/api/batches/current`;
+- the `BatchRepository` write methods only it called.
+
+Consensus remains the only producer of G0-G2.
 
 ### Step 8 — backfill (separate command, dry-run first)
 
@@ -290,7 +299,7 @@ Migration 018 is additive and needs no rollback; the canonical rows are inert wi
 | 4 — `RecordAnchorQuorum` | done | `pkg/database/repository_anchor_quorum.go` (write-once, conflict-refusing) |
 | 5 — writer + outbox + reconciler | done, **outbox is on disk, not a table** | `anchor_quorum_writer.go`, `anchor_quorum_outbox.go`, `anchor_quorum_reconciler.go`. See §7.2. |
 | 6 — switch readers | done | `pkg/database/layer5_binding.go`; `proof_artifact_repository.go` in the **proofs_service** repo, which is where the `batch_quorum_met` query lives |
-| 7 — retire the shadow pipeline | done | `LEGACY_BATCH_PIPELINE` (default off) in `main.go`; `ConsensusCoordinator`, `AttestationBroadcaster` and `PeerManager` deleted outright |
+| 7 — retire the shadow pipeline | done | pipeline, flag and HTTP entry point deleted after the soak; `ConsensusCoordinator`, `AttestationBroadcaster` and `PeerManager` deleted outright |
 | 8 — backfill | done, **sourcing changed** | `cmd/anchorquorumbackfill`. See §7.2. |
 
 Migrations now live in `db/migrations/`; `pkg/database/migrations/` is frozen at 020 and nothing applies

@@ -7,8 +7,6 @@ package server
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -18,25 +16,18 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/certen/independant-validator/pkg/batch"
 	"github.com/certen/independant-validator/pkg/database"
 )
 
 // BatchHandlers provides HTTP handlers for batch and proof operations
 type BatchHandlers struct {
-	collector       *batch.Collector
-	processor       *batch.Processor
-	onDemandHandler *batch.OnDemandHandler
-	repos           *database.Repositories
-	validatorID     string
-	logger          *log.Logger
+	repos       *database.Repositories
+	validatorID string
+	logger      *log.Logger
 }
 
 // NewBatchHandlers creates new batch operation handlers
 func NewBatchHandlers(
-	collector *batch.Collector,
-	processor *batch.Processor,
-	onDemandHandler *batch.OnDemandHandler,
 	repos *database.Repositories,
 	validatorID string,
 	logger *log.Logger,
@@ -45,217 +36,11 @@ func NewBatchHandlers(
 		logger = log.New(log.Writer(), "[BatchAPI] ", log.LstdFlags)
 	}
 	return &BatchHandlers{
-		collector:       collector,
-		processor:       processor,
-		onDemandHandler: onDemandHandler,
-		repos:           repos,
-		validatorID:     validatorID,
-		logger:          logger,
+		repos:       repos,
+		validatorID: validatorID,
+		logger:      logger,
 	}
 }
-
-// ========================================
-// On-Demand Anchor API
-// ========================================
-
-// OnDemandAnchorRequest is the API request for on-demand anchoring
-type OnDemandAnchorRequest struct {
-	// Accumulate transaction hash (required)
-	AccumTxHash string `json:"accum_tx_hash"`
-	// Account URL (required)
-	AccountURL string `json:"account_url"`
-	// Pre-computed transaction hash for Merkle tree (optional, computed if not provided)
-	TxHash string `json:"tx_hash,omitempty"`
-	// Chained proof JSON (optional, from L1-L3 proof layers)
-	ChainedProof json.RawMessage `json:"chained_proof,omitempty"`
-	// Governance proof JSON (optional, G0-G2)
-	GovProof json.RawMessage `json:"gov_proof,omitempty"`
-	// Governance level (G0, G1, G2)
-	GovLevel string `json:"gov_level,omitempty"`
-	// Intent type (optional)
-	IntentType string `json:"intent_type,omitempty"`
-	// Intent data (optional)
-	IntentData json.RawMessage `json:"intent_data,omitempty"`
-}
-
-// OnDemandAnchorResponse is the API response for on-demand anchoring
-type OnDemandAnchorResponse struct {
-	// Success indicator
-	Success bool `json:"success"`
-	// Transaction ID in the batch
-	TransactionID int64 `json:"transaction_id,omitempty"`
-	// Batch ID this transaction was added to
-	BatchID string `json:"batch_id,omitempty"`
-	// Tree index within the batch
-	TreeIndex int `json:"tree_index"`
-	// Current batch size
-	BatchSize int `json:"batch_size"`
-	// Whether an anchor was triggered
-	AnchorTriggered bool `json:"anchor_triggered"`
-	// Whether the anchor was successfully created on-chain
-	Anchored bool `json:"anchored"`
-	// Anchor transaction hash (if anchored)
-	AnchorTxHash string `json:"anchor_tx_hash,omitempty"`
-	// Anchor block number (if anchored)
-	AnchorBlockNumber int64 `json:"anchor_block_number,omitempty"`
-	// Merkle root (if batch was closed)
-	MerkleRoot string `json:"merkle_root,omitempty"`
-	// Estimated cost per proof
-	EstimatedCost string `json:"estimated_cost"`
-	// Error message (if any)
-	Error string `json:"error,omitempty"`
-}
-
-// BatchInfoResponse provides detailed batch information with class-aware context
-// Per Implementation Plan: API responses must include delay expectation and status messages
-type BatchInfoResponse struct {
-	// Batch identification
-	BatchID   string `json:"batch_id"`
-	BatchType string `json:"batch_type"` // "on_cadence" or "on_demand"
-
-	// Batch state
-	Status           string `json:"status"`
-	StatusMessage    string `json:"status_message"`
-	TransactionCount int    `json:"transaction_count"`
-
-	// Timing information
-	StartTime            string  `json:"start_time"`
-	AgeSeconds           int64   `json:"age_seconds"`
-	ExpectedCompletionAt *string `json:"expected_completion_at,omitempty"`
-
-	// Class-aware context
-	IsDelayExpected bool   `json:"is_delay_expected"`
-	PriceTier       string `json:"price_tier"` // "$0.05" or "$0.25"
-
-	// Additional context for on-cadence batches
-	RemainingSeconds *int64 `json:"remaining_seconds,omitempty"`
-}
-
-// CurrentBatchesResponse is the enhanced response for /api/batches/current
-type CurrentBatchesResponse struct {
-	ValidatorID    string             `json:"validator_id"`
-	Timestamp      string             `json:"timestamp"`
-	OnCadenceBatch *BatchInfoResponse `json:"on_cadence_batch,omitempty"`
-	OnDemandBatch  *BatchInfoResponse `json:"on_demand_batch,omitempty"`
-	OnDemandStats  interface{}        `json:"on_demand_stats,omitempty"`
-	SystemHealth   *BatchHealthInfo   `json:"system_health"`
-}
-
-// BatchHealthInfo provides batch system health status
-type BatchHealthInfo struct {
-	Status               string `json:"status"` // "healthy", "delayed", "stalled"
-	Message              string `json:"message"`
-	OnCadenceDelayNormal bool   `json:"on_cadence_delay_normal"`
-}
-
-// HandleOnDemandAnchor handles POST /api/anchors/on-demand
-// Per whitepaper: On-demand anchoring at ~$0.25/proof for immediate confirmation
-func (h *BatchHandlers) HandleOnDemandAnchor(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
-	if r.Method != http.MethodPost {
-		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	if h.onDemandHandler == nil {
-		writeJSONError(w, "on-demand anchoring not available", http.StatusServiceUnavailable)
-		return
-	}
-
-	// Parse request
-	var req OnDemandAnchorRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, fmt.Sprintf("invalid request body: %v", err), http.StatusBadRequest)
-		return
-	}
-
-	// Validate required fields
-	if req.AccumTxHash == "" {
-		writeJSONError(w, "accum_tx_hash is required", http.StatusBadRequest)
-		return
-	}
-	if req.AccountURL == "" {
-		writeJSONError(w, "account_url is required", http.StatusBadRequest)
-		return
-	}
-	if !strings.HasPrefix(req.AccountURL, "acc://") {
-		writeJSONError(w, "account_url must start with acc://", http.StatusBadRequest)
-		return
-	}
-
-	// Compute transaction hash if not provided
-	var txHash []byte
-	if req.TxHash != "" {
-		var err error
-		txHash, err = hex.DecodeString(req.TxHash)
-		if err != nil {
-			writeJSONError(w, "invalid tx_hash: must be hex-encoded", http.StatusBadRequest)
-			return
-		}
-		if len(txHash) != 32 {
-			writeJSONError(w, "invalid tx_hash: must be 32 bytes", http.StatusBadRequest)
-			return
-		}
-	} else {
-		// Compute hash from accum_tx_hash + account_url
-		hasher := sha256.New()
-		hasher.Write([]byte(req.AccumTxHash))
-		hasher.Write([]byte(req.AccountURL))
-		txHash = hasher.Sum(nil)
-	}
-
-	// Create transaction data
-	txData := &batch.TransactionData{
-		AccumTxHash:  req.AccumTxHash,
-		AccountURL:   req.AccountURL,
-		TxHash:       txHash,
-		ChainedProof: req.ChainedProof,
-		GovProof:     req.GovProof,
-		GovLevel:     req.GovLevel,
-		IntentType:   req.IntentType,
-		IntentData:   req.IntentData,
-	}
-
-	// Process the on-demand transaction
-	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
-	defer cancel()
-
-	result, err := h.onDemandHandler.ProcessTransaction(ctx, txData)
-	if err != nil {
-		h.logger.Printf("On-demand anchor failed: %v", err)
-		writeJSONError(w, fmt.Sprintf("failed to process transaction: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	// Build response
-	resp := OnDemandAnchorResponse{
-		Success:         true,
-		EstimatedCost:   "$0.25", // Per whitepaper
-		AnchorTriggered: result.AnchorTriggered,
-		Anchored:        result.Anchored,
-	}
-
-	if result.TransactionResult != nil {
-		resp.TransactionID = result.TransactionResult.TransactionID
-		resp.BatchID = result.TransactionResult.BatchID.String()
-		resp.TreeIndex = result.TransactionResult.TreeIndex
-		resp.BatchSize = result.TransactionResult.BatchSize
-	}
-
-	if result.BatchResult != nil {
-		resp.MerkleRoot = result.BatchResult.MerkleRootHex
-	}
-
-	h.logger.Printf("On-demand anchor processed: tx=%s, batch=%s, anchored=%v",
-		req.AccumTxHash[:16]+"...", resp.BatchID, resp.Anchored)
-
-	json.NewEncoder(w).Encode(resp)
-}
-
-// ========================================
-// Batch Status API
-// ========================================
 
 // HandleBatchStatus handles GET /api/batches/:id
 func (h *BatchHandlers) HandleBatchStatus(w http.ResponseWriter, r *http.Request) {
@@ -295,114 +80,6 @@ func (h *BatchHandlers) HandleBatchStatus(w http.ResponseWriter, r *http.Request
 	}
 
 	json.NewEncoder(w).Encode(batch)
-}
-
-// HandleBatchInfo handles GET /api/batches/current
-// Returns info about the current on-cadence and on-demand batches
-// Per Implementation Plan: Enhanced response includes delay expectations and status messages
-func (h *BatchHandlers) HandleBatchInfo(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
-	if r.Method != http.MethodGet {
-		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	// Default batch interval (15 minutes per whitepaper)
-	batchInterval := 15 * time.Minute
-
-	response := &CurrentBatchesResponse{
-		ValidatorID: h.validatorID,
-		Timestamp:   time.Now().UTC().Format(time.RFC3339),
-		SystemHealth: &BatchHealthInfo{
-			Status:               "healthy",
-			Message:              "Batch system operational.",
-			OnCadenceDelayNormal: true,
-		},
-	}
-
-	if h.collector != nil {
-		// Process on-cadence batch with class-aware context
-		if onCadence := h.collector.GetOnCadenceBatchInfo(); onCadence != nil {
-			statusInfo := batch.GetBatchStatusInfo(
-				onCadence.BatchType,
-				database.BatchStatusPending,
-				onCadence.StartTime,
-				batchInterval,
-			)
-
-			batchInfo := &BatchInfoResponse{
-				BatchID:          onCadence.BatchID.String(),
-				BatchType:        string(onCadence.BatchType),
-				Status:           string(database.BatchStatusPending),
-				StatusMessage:    statusInfo.StatusMessage,
-				TransactionCount: onCadence.TxCount,
-				StartTime:        onCadence.StartTime.UTC().Format(time.RFC3339),
-				AgeSeconds:       int64(onCadence.Age.Seconds()),
-				IsDelayExpected:  statusInfo.IsDelayExpected,
-				PriceTier:        statusInfo.PriceTier,
-			}
-
-			// Add expected completion time for on-cadence batches
-			if statusInfo.ExpectedCompletionAt != nil {
-				completionStr := statusInfo.ExpectedCompletionAt.UTC().Format(time.RFC3339)
-				batchInfo.ExpectedCompletionAt = &completionStr
-
-				remaining := time.Until(*statusInfo.ExpectedCompletionAt).Seconds()
-				if remaining > 0 {
-					remainingSec := int64(remaining)
-					batchInfo.RemainingSeconds = &remainingSec
-				}
-			}
-
-			response.OnCadenceBatch = batchInfo
-
-			// Update system health message
-			response.SystemHealth.Message = "On-cadence batch collecting transactions. Delays up to 15 minutes are normal."
-		}
-
-		// Process on-demand batch
-		if onDemand := h.collector.GetOnDemandBatchInfo(); onDemand != nil {
-			statusInfo := batch.GetBatchStatusInfo(
-				onDemand.BatchType,
-				database.BatchStatusPending,
-				onDemand.StartTime,
-				batchInterval,
-			)
-
-			batchInfo := &BatchInfoResponse{
-				BatchID:          onDemand.BatchID.String(),
-				BatchType:        string(onDemand.BatchType),
-				Status:           string(database.BatchStatusPending),
-				StatusMessage:    statusInfo.StatusMessage,
-				TransactionCount: onDemand.TxCount,
-				StartTime:        onDemand.StartTime.UTC().Format(time.RFC3339),
-				AgeSeconds:       int64(onDemand.Age.Seconds()),
-				IsDelayExpected:  statusInfo.IsDelayExpected,
-				PriceTier:        statusInfo.PriceTier,
-			}
-
-			response.OnDemandBatch = batchInfo
-		}
-
-		// Get batch system health
-		healthStatus := batch.GetBatchSystemHealth(
-			h.collector.GetOnCadenceBatchInfo(),
-			h.collector.GetOnDemandBatchInfo(),
-			batchInterval,
-		)
-		response.SystemHealth = &BatchHealthInfo{
-			Status:               healthStatus.OverallStatus,
-			Message:              healthStatus.StatusMessage,
-			OnCadenceDelayNormal: healthStatus.OnCadenceDelayNormal,
-		}
-	}
-
-	if h.onDemandHandler != nil {
-		response.OnDemandStats = h.onDemandHandler.GetStats()
-	}
-
-	json.NewEncoder(w).Encode(response)
 }
 
 // ========================================

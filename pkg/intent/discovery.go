@@ -12,7 +12,6 @@ package intent
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,10 +24,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/certen/independant-validator/pkg/accumulate"
-	"github.com/certen/independant-validator/pkg/batch"
 	"github.com/certen/independant-validator/pkg/commitment"
 	"github.com/certen/independant-validator/pkg/consensus"
 	"github.com/certen/independant-validator/pkg/database"
@@ -196,11 +192,6 @@ type IntentDiscovery struct {
 	validatorID    string
 
 	// PHASE 5: Batch system integration for PostgreSQL persistence and proof assembly
-	batchCollector     *batch.Collector                 // For on-cadence batching
-	onDemandHandler    *batch.OnDemandHandler           // For immediate on-demand anchoring
-	batchingEnabled    bool                             // Toggle for batch system routing
-	governanceProofGen proof.GovernanceProofGenerator   // For G0/G1/G2 proof generation
-	keyPageResolver    consensus.SigningKeyPageResolver // names the page G1+ is built against, from the chain
 
 	// Intent lifecycle tracking (PostgreSQL)
 	repos *database.Repositories // For lifecycle status persistence
@@ -334,45 +325,6 @@ func NewIntentDiscoveryLegacy(client accumulate.Client, accumulateURL string) *I
 func (id *IntentDiscovery) SetBFTConsensus(consensus BFTConsensusProtocol) {
 	id.bftConsensus = consensus
 	id.logger.Printf("🎯 BFT consensus configured for intent processing")
-}
-
-// SetBatchSystem configures the batch system for PostgreSQL persistence and proof assembly
-// PHASE 5: This enables routing intents to the batch system based on proofClass
-func (id *IntentDiscovery) SetBatchSystem(collector *batch.Collector, onDemand *batch.OnDemandHandler) {
-	id.batchCollector = collector
-	id.onDemandHandler = onDemand
-	id.batchingEnabled = (collector != nil || onDemand != nil)
-	if id.batchingEnabled {
-		id.logger.Printf("🗄️ Batch system configured for intent routing:")
-		if collector != nil {
-			id.logger.Printf("   - On-Cadence: BatchCollector enabled")
-		}
-		if onDemand != nil {
-			id.logger.Printf("   - On-Demand: OnDemandHandler enabled")
-		}
-	} else {
-		id.logger.Printf("⚠️ Batch system not configured - intents will bypass PostgreSQL")
-	}
-}
-
-// IsBatchingEnabled returns whether batch system routing is enabled
-func (id *IntentDiscovery) IsBatchingEnabled() bool {
-	return id.batchingEnabled
-}
-
-// SetKeyPageResolver configures how the key page for G1+ proofs is established. Without it, the
-// discovery-time governance proof stops at G0 rather than naming a guessed page.
-func (id *IntentDiscovery) SetKeyPageResolver(r consensus.SigningKeyPageResolver) {
-	id.keyPageResolver = r
-}
-
-// SetGovernanceProofGenerator configures the governance proof generator for G0/G1/G2 proof generation
-// This must be called before processing intents if governance proofs are desired
-func (id *IntentDiscovery) SetGovernanceProofGenerator(gen proof.GovernanceProofGenerator) {
-	id.governanceProofGen = gen
-	if gen != nil {
-		id.logger.Printf("✅ Governance proof generator configured for G0/G1/G2 proof generation")
-	}
 }
 
 // SetLegCompletionHandler configures the leg completion handler for multi-leg intent coordination
@@ -1211,155 +1163,6 @@ func (id *IntentDiscovery) convertCertenTransactionToIntent(certenTx *accumulate
 
 // parseCertenIntent has been removed - use convertCertenTransactionToIntent instead
 
-// convertIntentToTransactionData converts a CertenIntent to batch.TransactionData
-// This bridges the intent discovery system with the batch/proof assembly system
-// govProof is the generated G0/G1/G2 governance proof (may be nil if not generated)
-func (id *IntentDiscovery) convertIntentToTransactionData(intent *CertenIntent, certenProof *proof.CertenProof, govProof *proof.GovernanceProof) (*batch.TransactionData, error) {
-	// Compute 32-byte transaction hash for Merkle tree
-	// We hash the 4 canonical blobs to get a deterministic txHash
-	txHash := sha256.Sum256(append(append(append(
-		intent.IntentData,
-		intent.CrossChainData...),
-		intent.GovernanceData...),
-		intent.ReplayData...))
-
-	// Extract target chain from intent legs per Unified Multi-Chain Architecture
-	targetChain, chainID, err := intent.GetTargetChain()
-	if err != nil {
-		id.logger.Printf("⚠️ Failed to extract target chain for intent %s: %v (using default)", intent.IntentID, err)
-		// Default to sepolia for Ethereum testnets
-		targetChain = "sepolia"
-		chainID = 11155111
-	} else {
-		id.logger.Printf("✅ [TARGET-CHAIN] Extracted target chain '%s' (chainID: %d) from intent %s", targetChain, chainID, intent.IntentID)
-	}
-
-	// Build TransactionData for the batch system
-	txData := &batch.TransactionData{
-		AccumTxHash: intent.TransactionHash,
-		AccountURL:  intent.AccountURL,
-		TxHash:      txHash[:],
-		IntentType:  "certen_intent",
-		IntentData:  intent.IntentData,
-		// Intent tracking: links validator proofs back to Firestore intents
-		UserID:   intent.UserID,   // From intent_data.created_by
-		IntentID: intent.IntentID, // From intent_data.intent_id
-		// Multi-Chain Support: Target chain for anchoring
-		TargetChain: targetChain,
-	}
-
-	// Extract Transaction Center metadata from CrossChainData
-	// This populates from_chain, to_chain, from_address, to_address, amount, token_symbol
-	if len(intent.CrossChainData) > 0 {
-		var ccEnvelope consensus.CrossChainEnvelope
-		if err := json.Unmarshal(intent.CrossChainData, &ccEnvelope); err == nil && len(ccEnvelope.Legs) > 0 {
-			// Use first leg for primary transaction metadata
-			leg := ccEnvelope.Legs[0]
-			txData.FromChain = "accumulate" // Source is always Accumulate
-			txData.ToChain = leg.Chain      // Target chain from leg
-			txData.FromAddress = leg.From
-			txData.ToAddress = leg.To
-			// Prefer AmountEth (human-readable) for display; AmountWei may have
-			// been computed with wrong decimals for non-EVM chains (SOL=9, not 18).
-			if leg.AmountEth != "" {
-				txData.Amount = leg.AmountEth
-			} else if leg.AmountWei != "" {
-				txData.Amount = leg.AmountWei
-			}
-			txData.TokenSymbol = leg.Asset.Symbol
-			id.logger.Printf("✅ [TX-METADATA] Extracted: %s → %s, %s %s to %s",
-				txData.FromChain, txData.ToChain, txData.Amount, txData.TokenSymbol, txData.ToAddress)
-
-			// RB-4: what this intent committed in advance to doing. See DeclaredEffectsFrom.
-			encoded, count, err := DeclaredEffectsFrom(&ccEnvelope)
-			if err != nil {
-				// Leave it nil rather than writing something wrong. "Unknown" is the honest state when
-				// we could not encode what we found, and it is the state every pre-migration row is in.
-				id.logger.Printf("⚠️  [RB-4] could not encode declared effects for %s: %v", intent.TransactionHash, err)
-			} else {
-				txData.DeclaredEffects = encoded
-				if count > 0 {
-					id.logger.Printf("✅ [RB-4] %s committed to %d event(s); an attestation speaks to them",
-						intent.TransactionHash, count)
-				}
-			}
-		}
-	}
-
-	// Extract ADI URL from GovernanceData
-	if len(intent.GovernanceData) > 0 {
-		var govData struct {
-			OrganizationADI string `json:"organizationAdi"`
-		}
-		if err := json.Unmarshal(intent.GovernanceData, &govData); err == nil && govData.OrganizationADI != "" {
-			txData.AdiURL = govData.OrganizationADI
-		}
-	}
-	// Fallback to intent's OrganizationADI
-	if txData.AdiURL == "" && intent.OrganizationADI != "" {
-		txData.AdiURL = intent.OrganizationADI
-	}
-
-	// Extract created_at from IntentData for client timestamp
-	if len(intent.IntentData) > 0 {
-		var intentMeta struct {
-			CreatedAt string `json:"created_at"`
-		}
-		if err := json.Unmarshal(intent.IntentData, &intentMeta); err == nil && intentMeta.CreatedAt != "" {
-			if t, err := time.Parse(time.RFC3339, intentMeta.CreatedAt); err == nil {
-				txData.CreatedAtClient = &t
-			}
-		}
-	}
-
-	// Log chain ID for debugging (not stored in TransactionData directly)
-	_ = chainID // Suppress unused warning
-
-	// Add ChainedProof and GovProof if available from CertenProof
-	if certenProof != nil && certenProof.LiteClientProof != nil {
-		// Serialize the lite client proof as ChainedProof
-		chainedBytes, err := json.Marshal(certenProof.LiteClientProof)
-		if err == nil {
-			txData.ChainedProof = chainedBytes
-		}
-	}
-
-	// Add generated governance proof (G0/G1/G2) if available
-	// This is the ACTUAL proof result, not the input config
-	if govProof != nil {
-		govProofBytes, err := json.Marshal(govProof)
-		if err == nil {
-			txData.GovProof = govProofBytes
-			txData.GovLevel = string(govProof.Level)
-			id.logger.Printf("✅ [GOV-PROOF] Storing generated %s proof for intent %s", govProof.Level, intent.IntentID)
-		} else {
-			id.logger.Printf("⚠️ [GOV-PROOF] Failed to serialize governance proof: %v", err)
-		}
-	} else if len(intent.GovernanceData) > 0 {
-		// Fallback: store governance input config if no generated proof available
-		// This is the legacy behavior - should be replaced with generated proof when available
-		txData.GovProof = intent.GovernanceData
-		// Parse to determine governance level from input config
-		var govData struct {
-			Authorization struct {
-				SignatureThreshold int `json:"signature_threshold"`
-			} `json:"authorization"`
-		}
-		if err := json.Unmarshal(intent.GovernanceData, &govData); err == nil {
-			if govData.Authorization.SignatureThreshold >= 3 {
-				txData.GovLevel = "G2"
-			} else if govData.Authorization.SignatureThreshold >= 2 {
-				txData.GovLevel = "G1"
-			} else {
-				txData.GovLevel = "G0"
-			}
-		}
-		id.logger.Printf("⚠️ [GOV-PROOF] Using governance input config (no generated proof) for intent %s", intent.IntentID)
-	}
-
-	return txData, nil
-}
-
 // processIntent triggers consensus for the discovered intent
 // PHASE 5: Now routes to batch system based on proofClass for PostgreSQL persistence
 // Multi-Leg: Detects multi-leg intents and routes to chain-grouped leg processing
@@ -1680,23 +1483,6 @@ func (id *IntentDiscovery) processIntent(intent *CertenIntent, blockHeight uint6
 			intent.IntentID, proofClass)
 	}
 
-	// 2.5️⃣ Generate G0/G1/G2 governance proof BEFORE routing to batch system
-	// This ensures the generated proof (not input config) is persisted to PostgreSQL. See
-	// discoveryGovernanceProof: it is generated only when there is a batch system to route it to.
-	govProof := id.discoveryGovernanceProof(intent, certenProof, accountURL)
-
-	// 3️⃣ PHASE 5: Route to batch system for PostgreSQL persistence and CertenAnchorProof assembly
-	if id.batchingEnabled {
-		if err := id.routeIntentToBatchSystem(intent, certenProof, govProof, proofClass, blockHeight); err != nil {
-			id.logger.Printf("⚠️ Batch system routing failed for intent %s: %v", intent.IntentID, err)
-			// Continue with BFT consensus even if batch routing fails
-		} else {
-			id.logger.Printf("✅ Intent %s routed to batch system for PostgreSQL persistence", intent.IntentID)
-		}
-	} else {
-		id.logger.Printf("⚠️ Batch system not enabled - intent %s will not be persisted to PostgreSQL", intent.IntentID)
-	}
-
 	// 4️⃣ Execute via canonical BFT API – ValidatorBlock creation
 	//
 	// STAGE 1: the outcome is captured, not discarded. Completing this call means
@@ -1727,243 +1513,13 @@ func (id *IntentDiscovery) processIntent(intent *CertenIntent, blockHeight uint6
 	return outcome, nil
 }
 
-// discoveryGovernanceProof generates the G0/G1/G2 governance proof the batch system persists with an
-// intent, or returns nil when there is no batch system to route it to.
-//
-// routeIntentToBatchSystem is this proof's one consumer; consensus builds its own G0/G1/G2 for the
-// proof that is actually signed. With batching off the proof was generated and discarded - G1 alone
-// replays the signing books' key-page history and signature chains - and live (intent 1875ae30,
-// 2026-09-21) the sequence held every intent for ~2.5 minutes before consensus began, then failed
-// G2 on its 150s budget.
-func (id *IntentDiscovery) discoveryGovernanceProof(intent *CertenIntent, certenProof *proof.CertenProof, accountURL string) *proof.GovernanceProof {
-	if !id.batchingEnabled {
-		return nil
-	}
-	if id.governanceProofGen == nil {
-		id.logger.Printf("⚠️ [GOV-PROOF] Governance proof generator not configured - using fallback")
-		return nil
-	}
-	if certenProof == nil {
-		return nil
-	}
-	var govProof *proof.GovernanceProof
-	// The key page G1+ is built against is the page that SIGNED the transaction, read from the
-	// chain. This used to be RequiredKeyBook + "/1" unconditionally, which names the wrong page
-	// whenever the signer is not on page 1 - an automated payment signed by a machine key on
-	// page 2, for one. Unresolvable means no G1+: the proof stops at G0 and says why, rather
-	// than naming a page that did not authorise the transaction.
-	var keyPageURL string
-	if len(intent.GovernanceData) > 0 {
-		var govConfig struct {
-			Authorization struct {
-				RequiredKeyBook string `json:"required_key_book"`
-				RequiredKeyPage string `json:"required_key_page"`
-			} `json:"authorization"`
-		}
-		if err := json.Unmarshal(intent.GovernanceData, &govConfig); err != nil {
-			id.logger.Printf("❌ [GOV-PROOF] intent %s: governance data does not parse (%v); no G1+ proof",
-				intent.IntentID, err)
-		} else if id.keyPageResolver == nil {
-			id.logger.Printf("❌ [GOV-PROOF] intent %s: no signing key page resolver configured; "+
-				"the key page will not be guessed, so no G1+ proof", intent.IntentID)
-		} else {
-			rctx, rcancel := context.WithTimeout(context.Background(), 30*time.Second)
-			page, rerr := id.keyPageResolver.ResolveSigningKeyPage(rctx, accountURL, intent.TransactionHash,
-				govConfig.Authorization.RequiredKeyBook, govConfig.Authorization.RequiredKeyPage)
-			rcancel()
-			if rerr != nil {
-				id.logger.Printf("❌ [GOV-PROOF] intent %s: cannot name the signing key page (%v); no G1+ proof",
-					intent.IntentID, rerr)
-			} else {
-				keyPageURL = page
-			}
-		}
-	}
-
-	// Build governance request
-	govRequest := &proof.GovernanceRequest{
-		AccountURL:      accountURL,
-		TransactionHash: intent.TransactionHash,
-		KeyPage:         keyPageURL,
-		Chain:           "main",
-	}
-
-	// G0→G1→G2 are generated in sequence below; each CLI level re-derives its predecessors,
-	// so the full sequence needs ~90s. 30s cut off G1/G2 and committed G0-only. This budget is
-	// independent of the consensus broadcast (which has its own context), so it can be generous.
-	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Second)
-	// Generate G0 proof (Inclusion & Finality)
-	g0Wrapper, g0Err := id.governanceProofGen.GenerateG0(ctx, govRequest)
-	if g0Err != nil {
-		id.logger.Printf("⚠️ [GOV-PROOF] G0 proof generation failed: %v", g0Err)
-	} else if g0Wrapper != nil {
-		govProof = g0Wrapper
-		id.logger.Printf("✅ [GOV-PROOF] G0 proof generated for intent %s", intent.IntentID)
-
-		// Try G1 if key page is available
-		if keyPageURL != "" {
-			g1Wrapper, g1Err := id.governanceProofGen.GenerateG1(ctx, govRequest)
-			if g1Err != nil {
-				id.logger.Printf("⚠️ [GOV-PROOF] G1 proof generation failed: %v", g1Err)
-			} else if g1Wrapper != nil {
-				govProof = g1Wrapper
-				id.logger.Printf("✅ [GOV-PROOF] G1 proof generated for intent %s", intent.IntentID)
-
-				// Try G2
-				g2Wrapper, g2Err := id.governanceProofGen.GenerateG2(ctx, govRequest)
-				if g2Err != nil {
-					id.logger.Printf("⚠️ [GOV-PROOF] G2 proof generation failed: %v", g2Err)
-				} else if g2Wrapper != nil {
-					govProof = g2Wrapper
-					id.logger.Printf("✅ [GOV-PROOF] G2 proof generated for intent %s", intent.IntentID)
-				}
-			}
-		}
-	}
-	cancel()
-	return govProof
-}
-
-// routeIntentToBatchSystem routes an intent to the appropriate batch handler based on proofClass
-// PHASE 5: This enables PostgreSQL persistence and CertenAnchorProof assembly
-// govProof is the generated G0/G1/G2 governance proof (may be nil if not generated)
-func (id *IntentDiscovery) routeIntentToBatchSystem(intent *CertenIntent, certenProof *proof.CertenProof, govProof *proof.GovernanceProof, proofClass string, blockHeight uint64) error {
-	// Check if this is a multi-leg intent that should create per-leg batch transactions
-	if len(intent.CrossChainData) > 0 {
-		var ccEnvelope consensus.CrossChainEnvelope
-		if err := json.Unmarshal(intent.CrossChainData, &ccEnvelope); err == nil && len(ccEnvelope.Legs) > 1 {
-			id.logger.Printf("📦 [MULTI-LEG] Routing %d legs as separate batch transactions for intent %s",
-				len(ccEnvelope.Legs), intent.IntentID)
-			return id.routeMultiLegToBatchSystem(intent, ccEnvelope.Legs, certenProof, govProof, proofClass, blockHeight)
-		}
-	}
-
-	// Convert intent to batch transaction data
-	txData, err := id.convertIntentToTransactionData(intent, certenProof, govProof)
-	if err != nil {
-		return fmt.Errorf("convert intent to transaction data: %w", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	switch proofClass {
-	case "on_demand":
-		// Immediate anchoring via OnDemandHandler
-		if id.onDemandHandler == nil {
-			return fmt.Errorf("on_demand intent %s but OnDemandHandler not configured", intent.IntentID)
-		}
-
-		id.logger.Printf("📦 Routing on_demand intent %s to OnDemandHandler", intent.IntentID)
-		result, err := id.onDemandHandler.ProcessTransaction(ctx, txData)
-		if err != nil {
-			return fmt.Errorf("on_demand handler failed: %w", err)
-		}
-
-		if result.AnchorTriggered {
-			id.logger.Printf("⚡ On-demand anchor triggered for intent %s (batch: %s)",
-				intent.IntentID, result.BatchResult.BatchID)
-		} else {
-			id.logger.Printf("📦 Intent %s added to on-demand batch (size: %d)",
-				intent.IntentID, result.TransactionResult.BatchSize)
-		}
-
-	case "on_cadence":
-		// Batched anchoring via Collector
-		if id.batchCollector == nil {
-			return fmt.Errorf("on_cadence intent %s but BatchCollector not configured", intent.IntentID)
-		}
-
-		id.logger.Printf("📦 Routing on_cadence intent %s to BatchCollector", intent.IntentID)
-		result, err := id.batchCollector.AddOnCadenceTransaction(ctx, txData)
-		if err != nil {
-			return fmt.Errorf("batch collector failed: %w", err)
-		}
-
-		id.logger.Printf("📦 Intent %s added to on-cadence batch %s (position: %d)",
-			intent.IntentID, result.BatchID, result.TreeIndex)
-
-	default:
-		// Default to on_cadence for unknown proof classes
-		id.logger.Printf("⚠️ Unknown proofClass '%s' for intent %s, defaulting to on_cadence", proofClass, intent.IntentID)
-		if id.batchCollector != nil {
-			_, err := id.batchCollector.AddOnCadenceTransaction(ctx, txData)
-			if err != nil {
-				return fmt.Errorf("batch collector (default) failed: %w", err)
-			}
-		}
-	}
-
-	return nil
-}
-
-// routeMultiLegToBatchSystem creates separate batch transactions for each leg of a multi-leg intent
-func (id *IntentDiscovery) routeMultiLegToBatchSystem(
-	intent *CertenIntent,
-	legs []consensus.CCLeg,
-	certenProof *proof.CertenProof,
-	govProof *proof.GovernanceProof,
-	proofClass string,
-	blockHeight uint64,
-) error {
-	for i, leg := range legs {
-		txData, err := id.convertLegToTransactionData(intent, &leg, i, certenProof, govProof)
-		if err != nil {
-			id.logger.Printf("⚠️ [MULTI-LEG] Failed to convert leg %d: %v", i, err)
-			continue
-		}
-		// Tag with multi-leg metadata (generate UUID for leg_id since DB column is UUID type)
-		txData.MultiLegIntentID = intent.IntentID
-		txData.LegID = uuid.New().String()
-
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		switch proofClass {
-		case "on_demand":
-			if id.onDemandHandler == nil {
-				cancel()
-				return fmt.Errorf("on_demand but OnDemandHandler not configured")
-			}
-			result, err := id.onDemandHandler.ProcessTransaction(ctx, txData)
-			if err != nil {
-				cancel()
-				return fmt.Errorf("on_demand handler failed for leg %d: %w", i, err)
-			}
-			if result.AnchorTriggered {
-				id.logger.Printf("⚡ [MULTI-LEG] Leg %d anchor triggered (batch: %s)", i, result.BatchResult.BatchID)
-			}
-
-		case "on_cadence":
-			if id.batchCollector == nil {
-				cancel()
-				return fmt.Errorf("on_cadence but BatchCollector not configured")
-			}
-			result, err := id.batchCollector.AddOnCadenceTransaction(ctx, txData)
-			if err != nil {
-				cancel()
-				return fmt.Errorf("batch collector failed for leg %d: %w", i, err)
-			}
-			id.logger.Printf("📦 [MULTI-LEG] Leg %d added to batch %s (chain: %s)", i, result.BatchID, leg.Chain)
-
-		default:
-			if id.batchCollector != nil {
-				_, err := id.batchCollector.AddOnCadenceTransaction(ctx, txData)
-				if err != nil {
-					cancel()
-					return fmt.Errorf("batch collector (default) failed for leg %d: %w", i, err)
-				}
-			}
-		}
-		cancel()
-	}
-	return nil
-}
-
 // =============================================================================
 // Multi-Leg Intent Processing
 // =============================================================================
 
 // processMultiLegIntent handles intents with multiple legs
-// Routes legs grouped by target chain to the appropriate batch system
+// Registers the legs, builds the L1-L3 chained proof fail-closed, and runs the intent through consensus,
+// which settles one batch member per target chain.
 func (id *IntentDiscovery) processMultiLegIntent(intent *CertenIntent, blockHeight uint64) (consensus.TargetChainOutcome, error) {
 	id.logger.Printf("🔀 Processing multi-leg intent: %s", intent.IntentID)
 
@@ -1982,13 +1538,11 @@ func (id *IntentDiscovery) processMultiLegIntent(intent *CertenIntent, blockHeig
 	id.logger.Printf("   Leg count: %d", legCount)
 
 	// Register intent with leg completion handler
-	var intentRecord *MultiLegIntentRecord
 	if id.legCompletionHandler != nil {
 		record, err := id.legCompletionHandler.RegisterIntent((*consensus.CertenIntent)(intent), blockHeight)
 		if err != nil {
 			return consensus.TargetChainFailed, fmt.Errorf("register multi-leg intent: %w", err)
 		}
-		intentRecord = record
 		id.logger.Printf("   Registered with %d chain groups", len(record.ChainGroups))
 	}
 
@@ -2018,7 +1572,6 @@ func (id *IntentDiscovery) processMultiLegIntent(intent *CertenIntent, blockHeig
 
 	// Generate CertenProof
 	var certenProof *proof.CertenProof
-	var govProof *proof.GovernanceProof
 
 	if id.proofGenerator != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), id.config.BFTTimeout)
@@ -2065,43 +1618,6 @@ func (id *IntentDiscovery) processMultiLegIntent(intent *CertenIntent, blockHeig
 			intent.IntentID, proofClass)
 	}
 
-	// Generate governance proof if available
-	if id.governanceProofGen != nil && certenProof != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		govRequest := &proof.GovernanceRequest{
-			AccountURL:      accountURL,
-			TransactionHash: intent.TransactionHash,
-			Chain:           "main",
-		}
-		g0Wrapper, g0Err := id.governanceProofGen.GenerateG0(ctx, govRequest)
-		if g0Err == nil && g0Wrapper != nil {
-			govProof = g0Wrapper
-		}
-		cancel()
-	}
-
-	// Route based on execution mode
-	switch execMode {
-	case "sequential":
-		// Execute first chain group, then next chain group
-		err = id.routeSequentialChainGroups(intent, legsGrouped, certenProof, govProof, proofClass, blockHeight, intentRecord)
-	case "parallel":
-		// Execute all chain groups in parallel
-		err = id.routeParallelChainGroups(intent, legsGrouped, certenProof, govProof, proofClass, blockHeight, intentRecord)
-	case "atomic":
-		// All chain groups must succeed or all rollback
-		err = id.routeAtomicChainGroups(intent, legsGrouped, certenProof, govProof, proofClass, blockHeight, intentRecord)
-	default:
-		// Default to sequential
-		err = id.routeSequentialChainGroups(intent, legsGrouped, certenProof, govProof, proofClass, blockHeight, intentRecord)
-	}
-
-	if err != nil {
-		return consensus.TargetChainFailed, fmt.Errorf("route multi-leg intent: %w", err)
-	}
-
-	id.logger.Printf("✅ Multi-leg intent %s routed to batch system", intent.IntentID)
-
 	// Execute via BFT consensus. STAGE 1: same rule as the single-leg path — the
 	// settlement outcome is carried out rather than inferred from a nil error.
 	outcome := consensus.TargetChainOutcomeUnset
@@ -2123,218 +1639,6 @@ func (id *IntentDiscovery) processMultiLegIntent(intent *CertenIntent, blockHeig
 	id.mu.Unlock()
 
 	return outcome, nil
-}
-
-// routeSequentialChainGroups routes chain groups one at a time (sequential mode)
-func (id *IntentDiscovery) routeSequentialChainGroups(
-	intent *CertenIntent,
-	legsGrouped map[string][]consensus.CCLeg,
-	certenProof *proof.CertenProof,
-	govProof *proof.GovernanceProof,
-	proofClass string,
-	blockHeight uint64,
-	intentRecord *MultiLegIntentRecord,
-) error {
-	// For sequential mode, we only route the first chain group initially
-	// Subsequent groups are triggered by the LegCompletionHandler when the first completes
-	firstGroup := true
-	for chainKey, legs := range legsGrouped {
-		if firstGroup {
-			id.logger.Printf("📦 [SEQUENTIAL] Routing first chain group %s with %d legs", chainKey, len(legs))
-			if err := id.routeChainLegsToBatchSystem(intent, chainKey, legs, certenProof, govProof, proofClass, blockHeight); err != nil {
-				return fmt.Errorf("route chain group %s: %w", chainKey, err)
-			}
-			firstGroup = false
-		} else {
-			id.logger.Printf("📋 [SEQUENTIAL] Chain group %s with %d legs queued for later", chainKey, len(legs))
-		}
-	}
-	return nil
-}
-
-// routeParallelChainGroups routes all chain groups simultaneously (parallel mode)
-func (id *IntentDiscovery) routeParallelChainGroups(
-	intent *CertenIntent,
-	legsGrouped map[string][]consensus.CCLeg,
-	certenProof *proof.CertenProof,
-	govProof *proof.GovernanceProof,
-	proofClass string,
-	blockHeight uint64,
-	intentRecord *MultiLegIntentRecord,
-) error {
-	// Route all chain groups
-	for chainKey, legs := range legsGrouped {
-		id.logger.Printf("📦 [PARALLEL] Routing chain group %s with %d legs", chainKey, len(legs))
-		if err := id.routeChainLegsToBatchSystem(intent, chainKey, legs, certenProof, govProof, proofClass, blockHeight); err != nil {
-			return fmt.Errorf("route chain group %s: %w", chainKey, err)
-		}
-	}
-	return nil
-}
-
-// routeAtomicChainGroups routes all chain groups with atomic rollback support
-func (id *IntentDiscovery) routeAtomicChainGroups(
-	intent *CertenIntent,
-	legsGrouped map[string][]consensus.CCLeg,
-	certenProof *proof.CertenProof,
-	govProof *proof.GovernanceProof,
-	proofClass string,
-	blockHeight uint64,
-	intentRecord *MultiLegIntentRecord,
-) error {
-	// For atomic mode, we route all groups but track them for potential rollback
-	id.logger.Printf("⚛️ [ATOMIC] Routing all chain groups atomically")
-
-	var errors []error
-	for chainKey, legs := range legsGrouped {
-		id.logger.Printf("📦 [ATOMIC] Routing chain group %s with %d legs", chainKey, len(legs))
-		if err := id.routeChainLegsToBatchSystem(intent, chainKey, legs, certenProof, govProof, proofClass, blockHeight); err != nil {
-			errors = append(errors, fmt.Errorf("chain group %s: %w", chainKey, err))
-		}
-	}
-
-	if len(errors) > 0 {
-		// In atomic mode, any failure should trigger rollback consideration
-		id.logger.Printf("⚠️ [ATOMIC] %d chain groups failed - rollback may be needed", len(errors))
-		return fmt.Errorf("atomic routing failed: %d errors", len(errors))
-	}
-
-	return nil
-}
-
-// routeChainLegsToBatchSystem routes all legs for a specific chain to that chain's anchor
-func (id *IntentDiscovery) routeChainLegsToBatchSystem(
-	intent *CertenIntent,
-	chainKey string,
-	legs []consensus.CCLeg,
-	certenProof *proof.CertenProof,
-	govProof *proof.GovernanceProof,
-	proofClass string,
-	blockHeight uint64,
-) error {
-	id.logger.Printf("📦 Routing %d legs for chain %s to batch system", len(legs), chainKey)
-
-	// For each leg, create a transaction and route to batch system
-	for i, leg := range legs {
-		// Create transaction data for this leg
-		txData, err := id.convertLegToTransactionData(intent, &leg, i, certenProof, govProof)
-		if err != nil {
-			id.logger.Printf("⚠️ Failed to convert leg %d to transaction data: %v", i, err)
-			continue
-		}
-
-		// Identify WHICH leg this row is.
-		//
-		// Every leg of an intent shares one Accumulate transaction hash, and batch_transactions
-		// is unique on (batch_id, accum_tx_hash, leg_id). Without a leg id all legs collapse to
-		// the same key, so the second leg of any multi-leg on_cadence intent was rejected and
-		// the whole intent failed:
-		//
-		//     batch collector failed for leg 1: duplicate key value violates unique constraint
-		//
-		// The sibling path (processMultiLegIntent) already did this; this one did not, and this
-		// is the path a chain group actually takes. A generated UUID rather than leg.LegID
-		// because the column is uuid-typed and payload leg ids are readable strings
-		// ("leg-base-sepolia-84532-1"), which do not cast.
-		txData.MultiLegIntentID = intent.IntentID
-		txData.LegID = uuid.New().String()
-
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-
-		switch proofClass {
-		case "on_demand":
-			if id.onDemandHandler == nil {
-				cancel()
-				return fmt.Errorf("on_demand but OnDemandHandler not configured")
-			}
-			id.logger.Printf("⚡ [LEG %d] Routing to OnDemandHandler", i)
-			result, err := id.onDemandHandler.ProcessTransaction(ctx, txData)
-			if err != nil {
-				cancel()
-				return fmt.Errorf("on_demand handler failed for leg %d: %w", i, err)
-			}
-			if result.AnchorTriggered {
-				id.logger.Printf("⚡ [LEG %d] Anchor triggered (batch: %s)", i, result.BatchResult.BatchID)
-			}
-
-		case "on_cadence":
-			if id.batchCollector == nil {
-				cancel()
-				return fmt.Errorf("on_cadence but BatchCollector not configured")
-			}
-			id.logger.Printf("📦 [LEG %d] Routing to BatchCollector", i)
-			result, err := id.batchCollector.AddOnCadenceTransaction(ctx, txData)
-			if err != nil {
-				cancel()
-				return fmt.Errorf("batch collector failed for leg %d: %w", i, err)
-			}
-			id.logger.Printf("📦 [LEG %d] Added to batch %s (position: %d)", i, result.BatchID, result.TreeIndex)
-		}
-
-		cancel()
-	}
-
-	return nil
-}
-
-// convertLegToTransactionData converts a single leg to batch.TransactionData
-func (id *IntentDiscovery) convertLegToTransactionData(
-	intent *CertenIntent,
-	leg *consensus.CCLeg,
-	legIndex int,
-	certenProof *proof.CertenProof,
-	govProof *proof.GovernanceProof,
-) (*batch.TransactionData, error) {
-	// Compute unique transaction hash for this leg
-	legData := fmt.Sprintf("%s:leg:%d:%s", intent.TransactionHash, legIndex, leg.LegID)
-	txHash := sha256.Sum256([]byte(legData))
-
-	// Build TransactionData for this leg
-	txData := &batch.TransactionData{
-		AccumTxHash: intent.TransactionHash,
-		AccountURL:  intent.AccountURL,
-		TxHash:      txHash[:],
-		IntentType:  "certen_intent",
-		IntentData:  intent.IntentData,
-		UserID:      intent.UserID,
-		IntentID:    intent.IntentID,
-		TargetChain: leg.Chain,
-		FromChain:   "accumulate",
-		ToChain:     leg.Chain,
-		FromAddress: leg.From,
-		ToAddress:   leg.To,
-		TokenSymbol: leg.Asset.Symbol,
-	}
-
-	// Set amount — prefer human-readable AmountEth for display correctness
-	if leg.AmountEth != "" {
-		txData.Amount = leg.AmountEth
-	} else if leg.AmountWei != "" {
-		txData.Amount = leg.AmountWei
-	}
-
-	// Extract ADI URL
-	if intent.OrganizationADI != "" {
-		txData.AdiURL = intent.OrganizationADI
-	}
-
-	// Add proofs
-	if certenProof != nil && certenProof.LiteClientProof != nil {
-		chainedBytes, err := json.Marshal(certenProof.LiteClientProof)
-		if err == nil {
-			txData.ChainedProof = chainedBytes
-		}
-	}
-
-	if govProof != nil {
-		govProofBytes, err := json.Marshal(govProof)
-		if err == nil {
-			txData.GovProof = govProofBytes
-			txData.GovLevel = string(govProof.Level)
-		}
-	}
-
-	return txData, nil
 }
 
 // Helper methods
