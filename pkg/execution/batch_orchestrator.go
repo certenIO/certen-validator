@@ -1139,6 +1139,11 @@ func (o *BatchOrchestrator) memberLeafConsumed(ctx context.Context, p *PendingBa
 // a read that succeeds. Only an answer the chain gave - no code, a call the account rejects, a wrong
 // owner or ADI - disqualifies the member.
 func (o *BatchOrchestrator) memberAccountUsable(ctx context.Context, p *PendingBatchIntent) error {
+	// Before any read: a member that would point its account away from CERTEN is refused on its
+	// calldata alone, the same way on every validator.
+	if err := checkMemberAnchorPin(orchestratorAnchorPolicy{o}, p); err != nil {
+		return err
+	}
 	code, err := o.ecm.client.CodeAt(ctx, p.Account, nil)
 	if err != nil {
 		return readErr(fmt.Errorf("reading code at %s: %w", p.Account.Hex(), err))

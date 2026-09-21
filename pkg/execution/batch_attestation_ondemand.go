@@ -107,6 +107,9 @@ func (s *BatchStack) HandleOnDemandAttestationRequest(
 			shortHex(req.OperationID), req.ChainID)
 	}
 
+	if err := checkMemberAnchorPin(s, member); err != nil {
+		return refuseWith(CodeRefused, "%v", err)
+	}
 	in, err := member.LeafInput()
 	if err != nil {
 		return refuseWith(CodeRefused, "member %s: %v", member.IntentID, err)

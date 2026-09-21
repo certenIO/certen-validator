@@ -770,6 +770,11 @@ func (s *BatchStack) EnqueueForBatch(
 	if len(converted) == 0 {
 		return fmt.Errorf("intent %s produced no batch legs", intentID)
 	}
+	for _, l := range converted {
+		if err := checkCallAnchorPin(s, chainID, common.BytesToAddress(account[:]), l.Target, l.Data); err != nil {
+			return fmt.Errorf("intent %s: %w", intentID, err)
+		}
+	}
 
 	// A member with no commit height can never be placed in a period deterministically, so
 	// PeekForPeriod skips it and it would sit in the pool forever. Refuse it here, where the
@@ -825,6 +830,11 @@ func (s *BatchStack) EnqueueOnDemand(
 	}
 	if len(converted) == 0 {
 		return fmt.Errorf("intent %s produced no batch legs", intentID)
+	}
+	for _, l := range converted {
+		if err := checkCallAnchorPin(s, chainID, common.BytesToAddress(account[:]), l.Target, l.Data); err != nil {
+			return fmt.Errorf("intent %s: %w", intentID, err)
+		}
 	}
 	// The commit height is bound into the bundleId. Without it every validator with a different
 	// local view derives a different id, exactly as on the period path.
