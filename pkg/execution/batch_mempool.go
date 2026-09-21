@@ -92,6 +92,9 @@ type PendingBatchIntent struct {
 	// AnchorBlock is the block the member's anchor was created in, when this validator created it:
 	// the floor for searching the account's LeafConsumed log.
 	AnchorBlock uint64
+	// AttestedSeen: this validator has seen the member's anchor attested. Such a member may still be
+	// this validator's to settle in a later settlement window, so the memory-backstop prune keeps it.
+	AttestedSeen bool
 	// SettlementTx is the settlement transaction this validator sent, recorded before its receipt
 	// is awaited: the most recent broadcast.
 	SettlementTx string

@@ -100,6 +100,7 @@ type persistedMember struct {
 	AnchorTx           string   `json:"anchor_tx,omitempty"`
 	VerifyTx           string   `json:"verify_tx,omitempty"`
 	AnchorBlock        uint64   `json:"anchor_block,omitempty"`
+	AttestedSeen       bool     `json:"attested_seen,omitempty"`
 	FirstSeen          int64    `json:"first_seen,omitempty"` // unix seconds
 	CommitPartition    string   `json:"commit_partition,omitempty"`
 	CommitTimeMs       int64    `json:"commit_time_ms,omitempty"` // unix milliseconds
@@ -226,6 +227,7 @@ func (s *BatchMempoolStore) encodeMember(p *PendingBatchIntent, lane BatchLane) 
 		AnchorTx:           p.AnchorTx,
 		VerifyTx:           p.VerifyTx,
 		AnchorBlock:        p.AnchorBlock,
+		AttestedSeen:       p.AttestedSeen,
 		FirstSeen:          unixOrZero(p.FirstSeen),
 		CommitPartition:    p.CommitPartition,
 		CommitTimeMs:       unixMilliOrZero(p.CommitTime),
@@ -310,6 +312,7 @@ func (s *BatchMempoolStore) Load(m *BatchMempool) (int, error) {
 			AnchorTx:           pm.AnchorTx,
 			VerifyTx:           pm.VerifyTx,
 			AnchorBlock:        pm.AnchorBlock,
+			AttestedSeen:       pm.AttestedSeen,
 			FirstSeen:          timeOrZero(pm.FirstSeen),
 			CommitPartition:    pm.CommitPartition,
 			CommitTime:         timeOrZeroMilli(pm.CommitTimeMs),
