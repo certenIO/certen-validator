@@ -1145,6 +1145,8 @@ func (id *IntentDiscovery) convertCertenTransactionToIntent(certenTx *accumulate
 	if certenTx.Partition != "" {
 		intent.Partition = strings.ToLower(certenTx.Partition)
 	}
+	// The minor block's own time, read with the block that carried the transaction: consensus data.
+	intent.BlockTime = certenTx.Timestamp
 
 	// Authoritative account: prefer the REAL transaction principal (the account the
 	// writeData provably lives on, extracted from header.principal during discovery)

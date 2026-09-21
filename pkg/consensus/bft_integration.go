@@ -319,6 +319,12 @@ type BatchEnqueuer interface {
 		legs interface{},
 		attestation interface{},
 		commitHeight uint64,
+		// commitPartition and commitTime identify the Accumulate minor block the intent was written
+		// in (commitHeight is its height on commitPartition) and that block's consensus time. The time
+		// is every validator's common clock for the member; zero means discovery could not read it,
+		// and the member then resolves it from the partition and height.
+		commitPartition string,
+		commitTime time.Time,
 		// accumTxHash is the Accumulate transaction that carried the intent. Evidence only; the batch
 		// path never saw it before, which left canonical rows unable to say which transaction a member
 		// came from. Empty is accepted and recorded as empty.
@@ -338,6 +344,12 @@ type BatchEnqueuer interface {
 		legs interface{},
 		attestation interface{},
 		commitHeight uint64,
+		// commitPartition and commitTime identify the Accumulate minor block the intent was written
+		// in (commitHeight is its height on commitPartition) and that block's consensus time. The time
+		// is every validator's common clock for the member; zero means discovery could not read it,
+		// and the member then resolves it from the partition and height.
+		commitPartition string,
+		commitTime time.Time,
 		// accumTxHash is the Accumulate transaction that carried the intent. Evidence only; the batch
 		// path never saw it before, which left canonical rows unable to say which transaction a member
 		// came from. Empty is accepted and recorded as empty.

@@ -754,6 +754,8 @@ func (s *BatchStack) EnqueueForBatch(
 	legs interface{},
 	attestation interface{},
 	commitHeight uint64,
+	commitPartition string,
+	commitTime time.Time,
 	accumTxHash string,
 ) error {
 	if _, err := s.OrchestratorFor(chainID); err != nil {
@@ -778,15 +780,17 @@ func (s *BatchStack) EnqueueForBatch(
 	}
 
 	return s.Mempool.Add(&PendingBatchIntent{
-		IntentID:     intentID,
-		ADIURL:       adiURL,
-		ChainID:      chainID,
-		Account:      common.BytesToAddress(account[:]),
-		OperationID:  operationID,
-		AccumTxHash:  accumTxHash,
-		Legs:         converted,
-		Attestation:  attestation,
-		CommitHeight: commitHeight,
+		IntentID:        intentID,
+		ADIURL:          adiURL,
+		ChainID:         chainID,
+		Account:         common.BytesToAddress(account[:]),
+		OperationID:     operationID,
+		AccumTxHash:     accumTxHash,
+		Legs:            converted,
+		Attestation:     attestation,
+		CommitHeight:    commitHeight,
+		CommitPartition: commitPartition,
+		CommitTime:      commitTime,
 	})
 }
 
@@ -807,6 +811,8 @@ func (s *BatchStack) EnqueueOnDemand(
 	legs interface{},
 	attestation interface{},
 	commitHeight uint64,
+	commitPartition string,
+	commitTime time.Time,
 	accumTxHash string,
 ) error {
 	if _, err := s.OrchestratorFor(chainID); err != nil {
@@ -828,15 +834,17 @@ func (s *BatchStack) EnqueueOnDemand(
 	}
 
 	if err := s.Mempool.AddOnDemand(&PendingBatchIntent{
-		IntentID:     intentID,
-		ADIURL:       adiURL,
-		ChainID:      chainID,
-		Account:      common.BytesToAddress(account[:]),
-		OperationID:  operationID,
-		AccumTxHash:  accumTxHash,
-		Legs:         converted,
-		Attestation:  attestation,
-		CommitHeight: commitHeight,
+		IntentID:        intentID,
+		ADIURL:          adiURL,
+		ChainID:         chainID,
+		Account:         common.BytesToAddress(account[:]),
+		OperationID:     operationID,
+		AccumTxHash:     accumTxHash,
+		Legs:            converted,
+		Attestation:     attestation,
+		CommitHeight:    commitHeight,
+		CommitPartition: commitPartition,
+		CommitTime:      commitTime,
 	}); err != nil {
 		return err
 	}

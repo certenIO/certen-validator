@@ -1125,13 +1125,18 @@ func (o *BatchOrchestrator) memberAccountUsable(ctx context.Context, p *PendingB
 //
 // Bounds the retry: without a bound, a member on a chain that stays expensive is requeued forever
 // and never resolves either way — the silent limbo the whole failure policy exists to prevent.
-// Measured from EnqueuedAt, which the mempool stamps once and preserves across requeue and across
-// a restore from disk, so the window does not restart every time the member is deferred.
+// Measured from the member's Origin - its Accumulate block time, or its persisted first sighting
+// - never from EnqueuedAt, which a restart resets: measured from that, a validator restarting
+// within the hour would defer the member for ever.
 func (o *BatchOrchestrator) memberPastDeadline(p *PendingBatchIntent) bool {
-	if p == nil || p.EnqueuedAt.IsZero() {
+	if p == nil {
 		return false
 	}
-	return time.Since(p.EnqueuedAt) > maxGasDeferral
+	origin, _ := p.Origin()
+	if origin.IsZero() {
+		return false
+	}
+	return time.Since(origin) > maxGasDeferral
 }
 
 // maxGasDeferral is how long a member may be deferred on gas before it is failed outright.

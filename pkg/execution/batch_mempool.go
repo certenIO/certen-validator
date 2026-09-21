@@ -63,6 +63,15 @@ type PendingBatchIntent struct {
 	// bundleId — which is precisely what lets a quorum co-sign one batch.
 	CommitHeight uint64
 
+	// CommitPartition is the Accumulate partition whose minor block CommitHeight counts, and
+	// CommitTime that block's consensus time. CommitTime is the member's COMMON clock: every
+	// validator reads the same value for it, and it survives a restart. The on-demand failover
+	// rotation and the gas-deferral deadline are measured from it (see Origin). Zero until known.
+	CommitPartition string
+	CommitTime      time.Time
+
+	// EnqueuedAt is when this process queued the member. Local, and reset by a restart: only the
+	// memory-backstop prune uses it, where a restart extending retention is the safe direction.
 	EnqueuedAt time.Time
 
 	// FirstSeen is when this validator first queued the member. Unlike EnqueuedAt it is persisted and
@@ -393,6 +402,22 @@ func validateMember(p *PendingBatchIntent) error {
 		p.FirstSeen = p.EnqueuedAt
 	}
 	return nil
+}
+
+// Origin is the time a member's age is measured from, and whether it is the consensus time that
+// every validator shares. It is CommitTime when known. Until then it is FirstSeen: this
+// validator's own first sighting, which is persisted, so a restart still never restarts the
+// clock, but which differs between validators - callers that coordinate validators (the failover
+// rotation) resolve CommitTime first and fall back only when it cannot be read.
+func (p *PendingBatchIntent) Origin() (t time.Time, consensus bool) {
+	switch {
+	case !p.CommitTime.IsZero():
+		return p.CommitTime, true
+	case !p.FirstSeen.IsZero():
+		return p.FirstSeen, false
+	default:
+		return p.EnqueuedAt, false
+	}
 }
 
 func (m *BatchMempool) add(p *PendingBatchIntent) error {

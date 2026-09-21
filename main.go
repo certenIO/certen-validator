@@ -1711,7 +1711,9 @@ func startValidator(
 							}
 							validator.RunBatchMemberFallback(ctx, m.Attestation)
 						},
-						Logf: log.Printf,
+						// The Accumulate block time of a member queued without it: the failover clock.
+						CommitTime: liteClientAdapter.MinorBlockTime,
+						Logf:       log.Printf,
 					})
 					if odErr != nil {
 						log.Printf("⚠️ [OD] on-demand submitter unavailable (%v) — on_demand "+

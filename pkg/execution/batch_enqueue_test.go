@@ -68,7 +68,7 @@ func TestEnqueueForBatch_QueuesAMember(t *testing.T) {
 	legs := []mirrorLeg{
 		{LegID: "l0", ChainID: 11155111, Target: tgt(0xAA), Value: big.NewInt(1000), Data: nil},
 	}
-	if err := s.EnqueueForBatch("i1", "acc://a.acme", 11155111, acct(0x11), opid(1), legs, "att", 100, "0xaccumfictional"); err != nil {
+	if err := s.EnqueueForBatch("i1", "acc://a.acme", 11155111, acct(0x11), opid(1), legs, "att", 100, "", time.Time{}, "0xaccumfictional"); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
 	if s.Mempool.PendingCount() != 1 {
@@ -111,7 +111,7 @@ func TestEnqueueForBatch_RejectsUnconfiguredChain(t *testing.T) {
 	s := stackForChain(t, 11155111)
 	legs := []mirrorLeg{{LegID: "l0", ChainID: 8453, Target: tgt(1), Value: big.NewInt(1)}}
 
-	if err := s.EnqueueForBatch("i1", "acc://a.acme", 8453, acct(1), opid(1), legs, "att", 100, "0xaccumfictional"); err == nil {
+	if err := s.EnqueueForBatch("i1", "acc://a.acme", 8453, acct(1), opid(1), legs, "att", 100, "", time.Time{}, "0xaccumfictional"); err == nil {
 		t.Fatal("an unconfigured chain must be refused, not queued")
 	}
 	if s.Mempool.PendingCount() != 0 {
@@ -134,7 +134,7 @@ func TestEnqueueForBatch_RejectsMalformedLegs(t *testing.T) {
 		{"empty", []mirrorLeg{}},
 	}
 	for _, c := range cases {
-		if err := s.EnqueueForBatch("i", "acc://a.acme", 11155111, acct(1), opid(1), c.legs, "att", 100, "0xaccumfictional"); err == nil {
+		if err := s.EnqueueForBatch("i", "acc://a.acme", 11155111, acct(1), opid(1), c.legs, "att", 100, "", time.Time{}, "0xaccumfictional"); err == nil {
 			t.Fatalf("%s must be refused", c.name)
 		}
 	}
@@ -149,7 +149,7 @@ func TestEnqueueForBatch_RejectsChainMismatchedLeg(t *testing.T) {
 	s := stackForChain(t, 11155111)
 	legs := []mirrorLeg{{LegID: "l0", ChainID: 8453, Target: tgt(1), Value: big.NewInt(1)}}
 
-	if err := s.EnqueueForBatch("i", "acc://a.acme", 11155111, acct(1), opid(1), legs, "att", 100, "0xaccumfictional"); err == nil {
+	if err := s.EnqueueForBatch("i", "acc://a.acme", 11155111, acct(1), opid(1), legs, "att", 100, "", time.Time{}, "0xaccumfictional"); err == nil {
 		t.Fatal("a leg on a different chain than its member must be refused")
 	}
 }
@@ -158,7 +158,7 @@ func TestEnqueueForBatch_RejectsZeroOperationID(t *testing.T) {
 	s := stackForChain(t, 11155111)
 	legs := []mirrorLeg{{LegID: "l0", ChainID: 11155111, Target: tgt(1), Value: big.NewInt(1)}}
 
-	if err := s.EnqueueForBatch("i", "acc://a.acme", 11155111, acct(1), [32]byte{}, legs, "att", 100, "0xaccumfictional"); err == nil {
+	if err := s.EnqueueForBatch("i", "acc://a.acme", 11155111, acct(1), [32]byte{}, legs, "att", 100, "", time.Time{}, "0xaccumfictional"); err == nil {
 		t.Fatal("a zero operationID must be refused — the anchor rejects it too")
 	}
 }
@@ -170,7 +170,7 @@ func TestEnqueueForBatch_MultiLegMemberUsesBatchCommitment(t *testing.T) {
 		{LegID: "l0", ChainID: 11155111, Target: tgt(0xAA), Value: big.NewInt(100)},
 		{LegID: "l1", ChainID: 11155111, Target: tgt(0xBB), Value: big.NewInt(200)},
 	}
-	if err := s.EnqueueForBatch("i", "acc://a.acme", 11155111, acct(1), opid(1), legs, "att", 100, "0xaccumfictional"); err != nil {
+	if err := s.EnqueueForBatch("i", "acc://a.acme", 11155111, acct(1), opid(1), legs, "att", 100, "", time.Time{}, "0xaccumfictional"); err != nil {
 		t.Fatal(err)
 	}
 	m := s.Mempool.Take(11155111)[0]
@@ -200,7 +200,7 @@ func TestEnqueueForBatch_MultiLegMemberUsesBatchCommitment(t *testing.T) {
 func TestFlushDueChains_NoAttestFnDoesNotPanic(t *testing.T) {
 	s := stackForChain(t, 11155111)
 	legs := []mirrorLeg{{LegID: "l0", ChainID: 11155111, Target: tgt(1), Value: big.NewInt(1)}}
-	if err := s.EnqueueForBatch("i", "acc://a.acme", 11155111, acct(1), opid(1), legs, "att", 100, "0xaccumfictional"); err != nil {
+	if err := s.EnqueueForBatch("i", "acc://a.acme", 11155111, acct(1), opid(1), legs, "att", 100, "", time.Time{}, "0xaccumfictional"); err != nil {
 		t.Fatal(err)
 	}
 	// The orchestrator here is a zero value, so FlushChain errors out — the point is that
@@ -243,7 +243,7 @@ func TestEnqueueForBatch_RejectsZeroCommitHeight(t *testing.T) {
 	s := stackForChain(t, 11155111)
 	legs := []mirrorLeg{{LegID: "l0", ChainID: 11155111, Target: tgt(1), Value: big.NewInt(1)}}
 
-	if err := s.EnqueueForBatch("i", "acc://a.acme", 11155111, acct(1), opid(1), legs, "att", 0, "0xaccumfictional"); err == nil {
+	if err := s.EnqueueForBatch("i", "acc://a.acme", 11155111, acct(1), opid(1), legs, "att", 0, "", time.Time{}, "0xaccumfictional"); err == nil {
 		t.Fatal("a zero commit height must be refused — the member could never be batched")
 	}
 	if s.Mempool.PendingCount() != 0 {
@@ -256,7 +256,7 @@ func TestEnqueueForBatch_CarriesCommitHeight(t *testing.T) {
 	s := stackForChain(t, 11155111)
 	legs := []mirrorLeg{{LegID: "l0", ChainID: 11155111, Target: tgt(1), Value: big.NewInt(1)}}
 
-	if err := s.EnqueueForBatch("i", "acc://a.acme", 11155111, acct(1), opid(1), legs, "att", 4242, "0xaccumfictional"); err != nil {
+	if err := s.EnqueueForBatch("i", "acc://a.acme", 11155111, acct(1), opid(1), legs, "att", 4242, "", time.Time{}, "0xaccumfictional"); err != nil {
 		t.Fatal(err)
 	}
 	// 4242 falls in the period starting at 4200 at the default width of 100.
