@@ -60,7 +60,7 @@ func TestCertenProofEndpoints(t *testing.T) {
 		_, _ = db.ExecContext(context.Background(), `DELETE FROM proof_artifacts WHERE proof_id = $1`, artifact.ProofID)
 	})
 
-	h := NewBatchHandlers(nil, nil, nil, repos, "server-test", log.New(io.Discard, "", 0))
+	h := NewBatchHandlers(repos, "server-test", log.New(io.Discard, "", 0))
 	get := func(handler http.HandlerFunc, path string) (int, map[string]json.RawMessage) {
 		t.Helper()
 		rec := httptest.NewRecorder()

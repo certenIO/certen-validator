@@ -114,10 +114,12 @@ The retirement gate (all eight checks on one on-demand *and* one cadence intent)
 intents `c3ad250a` and `195fac5a`. This is ready.
 
 1. Stop `routeIntentToBatchSystem`'s legacy `anchor_batches` write and the old processor's anchoring,
-   behind `LEGACY_BATCH_PIPELINE=off`.
-2. Soak, then delete the dead code and the flag.
-3. Decide what happens to the ~71,000 existing shadow rows. They are already excluded from every reader
-   (`bundle_id IS NOT NULL`); label them `evidence_source='legacy_shadow'` rather than deleting, so the
+   behind `LEGACY_BATCH_PIPELINE=off`. Done 2026-09-18.
+2. Soak, then delete the dead code and the flag. Done: see the Phase 5 runbook, step 7.
+3. Decide what happens to the ~71,000 existing shadow rows. The validator's readers exclude them
+   (`bundle_id IS NOT NULL`), but several proofs_service Transaction Center queries do not
+   (`GetProofByIntentID`, `GetTimelineByIntentID`, `GetIntentsByUserID`, `SearchAuditTrail`), and they
+   need the same filter. Label the rows `evidence_source='legacy_shadow'` rather than deleting, so the
    record of what was written survives.
 
 **Gate:** one intent of each lane produces exactly one `anchor_batches` row; `SELECT count(*) FROM
