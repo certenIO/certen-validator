@@ -89,6 +89,12 @@ type evalResult struct {
 	Stage     string
 	Reason    string
 
+	// Permanent marks a SigUnavailable that no retry can change: a capability limit, such as a
+	// signature type CERTEN does not verify. It is still unavailable - never a rejection - but
+	// evaluating it again re-queries the chain for the same answer. Live, a book whose history
+	// held a dozen ecdsaSha256 signatures made G1 repeat each evaluation three times.
+	Permanent bool
+
 	// TimingBasis says HOW this candidate's ordering-before-execution was
 	// established. Meaningful only alongside SigCounted — a candidate that was
 	// rejected or could not be evaluated has no timing claim to qualify — and
@@ -504,7 +510,7 @@ func (g1 *G1Layer) evaluateCandidateWithRetry(ctx context.Context, cand sigCandi
 
 	for attempt := 1; attempt <= sigRetryAttempts; attempt++ {
 		res = g1.evaluateCandidate(ctx, cand, keyPage, snapshot, txHash, fmt.Sprintf("%s_a%d", label, attempt))
-		if res.Outcome != SigUnavailable {
+		if res.Outcome != SigUnavailable || res.Permanent {
 			return res
 		}
 		if attempt == sigRetryAttempts {
@@ -561,7 +567,8 @@ func (g1 *G1Layer) evaluateCandidate(ctx context.Context, cand sigCandidate, key
 		if isNotASignatureMessage(err) {
 			return evalResult{Outcome: SigRejected, Stage: "extract-signature", Reason: "not an ed25519 signature message"}
 		}
-		return evalResult{Outcome: SigUnavailable, Stage: "extract-signature", Reason: err.Error()}
+		_, capability := IsUnsupportedSignatureType(err)
+		return evalResult{Outcome: SigUnavailable, Stage: "extract-signature", Reason: err.Error(), Permanent: capability}
 	}
 
 	// --- does it belong to this transaction? (section 7.1) ----------------
@@ -662,7 +669,7 @@ func (g1 *G1Layer) evaluateCandidate(ctx context.Context, cand sigCandidate, key
 		//
 		// The same holds for a delegation we have not resolved.
 		if u, ok := IsUnsupportedSignatureType(err); ok {
-			return evalResult{Outcome: SigUnavailable, Stage: u.Reason(), Reason: err.Error()}
+			return evalResult{Outcome: SigUnavailable, Stage: u.Reason(), Reason: err.Error(), Permanent: true}
 		}
 		if d, ok := err.(DelegationNotResolved); ok {
 			return evalResult{Outcome: SigUnavailable, Stage: d.Reason(), Reason: err.Error()}
