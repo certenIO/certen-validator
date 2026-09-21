@@ -128,6 +128,12 @@ type BatchOrchestrator struct {
 
 	// floors caches where attribution searches start; see batch_attribution.go.
 	floors attributionFloors
+
+	// roster is the chain-confirmed settlement roster; see settlementRoster.
+	rosterMu sync.Mutex
+	roster   []common.Address
+	// peersFn names the peers asked for settlement evidence. Nil means ATTESTATION_PEERS.
+	peersFn func() []string
 }
 
 // SetLegProgressHook wires persistence of per-member leg outcomes. Optional: unset, settlement
@@ -523,7 +529,7 @@ func (o *BatchOrchestrator) settleFlushMembers(
 			continue
 		}
 
-		txHash, serr := o.settleMember(ctx, p, tree, branch)
+		txHash, serr := o.settleMember(ctx, p, tree, branch, time.Time{})
 		var unknown *SettlementOutcomeUnknownError
 		if serr != nil && errors.As(serr, &unknown) {
 			// Sent, outcome not observed within the wait. NOT a failure: it may still land. The
@@ -840,11 +846,18 @@ func (o *BatchOrchestrator) createBatchAnchor(
 }
 
 // settleMember submits one member's account call carrying its Merkle branch.
+//
+// fence is the latest time the settlement may execute: its expiresAt. The on-demand lane always
+// passes its settlement window's fence (see batch_settlement_window.go); zero leaves the hour the
+// period lane has always used. The proof's timestamp is the chain head's time, not this machine's
+// clock: the account requires block.timestamp >= timestamp, and a local clock running ahead made
+// that a revert the intent did not cause.
 func (o *BatchOrchestrator) settleMember(
 	ctx context.Context,
 	p *PendingBatchIntent,
 	tree *BatchTree,
 	branch [][32]byte,
+	fence time.Time,
 ) (string, error) {
 	acct, err := contracts.NewCertenAccountV7(p.Account, o.ecm.client)
 	if err != nil {
@@ -863,20 +876,33 @@ func (o *BatchOrchestrator) settleMember(
 	// beats paying gas to hit "leaf already consumed" on-chain.
 	consumed, err := acct.IsLeafConsumed(&bind.CallOpts{Context: ctx}, leaf)
 	if err != nil {
-		return "", fmt.Errorf("reading isLeafConsumed: %w", err)
+		return "", readErr(fmt.Errorf("reading isLeafConsumed: %w", err))
 	}
 	if consumed {
 		return "", fmt.Errorf("leaf 0x%x already consumed — member %s has already settled: %w",
 			leaf[:8], p.IntentID, errLeafAlreadyConsumed)
 	}
 
+	head, err := o.ecm.client.HeaderByNumber(ctx, nil)
+	if err != nil {
+		return "", readErr(fmt.Errorf("reading chain head for the settlement's timestamp: %w", err))
+	}
+	notBefore := int64(head.Time)
+	expiresAt := notBefore + int64(time.Hour/time.Second)
+	if !fence.IsZero() {
+		expiresAt = fence.Unix()
+		if expiresAt <= notBefore {
+			return "", fmt.Errorf("settlement window closed at %s (chain time %d): %w",
+				fence.UTC().Format(time.RFC3339), notBefore, errSettlementWindowClosed)
+		}
+	}
 	proof := contracts.AccountProofV7{
 		AdiURL:      p.ADIURL, // advisory; the contract uses its own immutable adiURL
 		AnchorId:    tree.BundleID,
 		MerkleProof: branch,
 		OperationID: p.OperationID,
-		Timestamp:   big.NewInt(time.Now().Unix() - 60), // clock-skew allowance
-		ExpiresAt:   big.NewInt(time.Now().Add(time.Hour).Unix()),
+		Timestamp:   big.NewInt(notBefore),
+		ExpiresAt:   big.NewInt(expiresAt),
 		Nonce:       big.NewInt(0),
 		// Must cover the most demanding leg or the contract rejects the whole call.
 		RequiredLevel: requiredLevelForLegs(p.Legs),
@@ -1003,6 +1029,9 @@ func (o *BatchOrchestrator) ownAddress() common.Address { return o.ecm.auth.From
 // reported unknown. Far longer than a block on any chain the batch path settles on.
 const settlementWaitTimeout = 10 * time.Minute
 
+// errSettlementWindowClosed: the settlement's window ended before it could be sent. Nothing was sent.
+var errSettlementWindowClosed = errors.New("settlement window closed")
+
 // errSettlementReverted is a settlement that was mined and reverted: a terminal, observed outcome.
 var errSettlementReverted = errors.New("member execution reverted on-chain (leaf still spendable)")
 
@@ -1098,13 +1127,27 @@ func (o *BatchOrchestrator) memberLeafConsumed(ctx context.Context, p *PendingBa
 // Screens the two properties that make a member unanchorable regardless of the tree: the account
 // must be a CertenAccountV7, and it must be bound to the ADI the intent claims. Both are read
 // from chain, so every validator reaches the same verdict and drops the same members.
+//
+// A read that fails is not a verdict: it is returned as a chain read error, and the member waits for
+// a read that succeeds. Only an answer the chain gave - no code, a call the account rejects, a wrong
+// owner or ADI - disqualifies the member.
 func (o *BatchOrchestrator) memberAccountUsable(ctx context.Context, p *PendingBatchIntent) error {
+	code, err := o.ecm.client.CodeAt(ctx, p.Account, nil)
+	if err != nil {
+		return readErr(fmt.Errorf("reading code at %s: %w", p.Account.Hex(), err))
+	}
+	if len(code) == 0 {
+		return fmt.Errorf("account %s has no code", p.Account.Hex())
+	}
 	acct, err := contracts.NewCertenAccountV7(p.Account, o.ecm.client)
 	if err != nil {
 		return fmt.Errorf("binding account %s: %w", p.Account.Hex(), err)
 	}
 	keyless, err := acct.IsKeylessOwner(&bind.CallOpts{Context: ctx})
 	if err != nil {
+		if !isCallVerdict(err) {
+			return readErr(fmt.Errorf("reading isKeylessOwner on %s: %w", p.Account.Hex(), err))
+		}
 		return fmt.Errorf("account %s is not a CertenAccountV7: %w", p.Account.Hex(), err)
 	}
 	if !keyless {
@@ -1112,6 +1155,9 @@ func (o *BatchOrchestrator) memberAccountUsable(ctx context.Context, p *PendingB
 	}
 	onChainADIHash, err := acct.ADIURLHash(&bind.CallOpts{Context: ctx})
 	if err != nil {
+		if !isCallVerdict(err) {
+			return readErr(fmt.Errorf("reading adiURLHash on %s: %w", p.Account.Hex(), err))
+		}
 		return fmt.Errorf("reading adiURLHash on %s: %w", p.Account.Hex(), err)
 	}
 	if onChainADIHash != (BatchLeafInput{ADIURL: p.ADIURL}).ADIURLHash() {

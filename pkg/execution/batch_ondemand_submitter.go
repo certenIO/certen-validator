@@ -228,7 +228,17 @@ func (s *OnDemandSubmitter) consider(ctx context.Context, member *PendingBatchIn
 	}
 
 	if !s.isLeaderFor(member, s.failoverElapsed(ctx, member)) {
-		return
+		// Not this validator's turn to anchor it. Once the anchor is attested, though, the leader
+		// rotation no longer decides: the member's settlement windows do, and one of them may be this
+		// validator's - which is how a dead attester's member is taken over.
+		orch, err := s.cfg.Stack.OrchestratorFor(member.ChainID)
+		if err != nil {
+			return
+		}
+		attested, err := orch.OnDemandAnchorAttested(ctx, member)
+		if err != nil || !attested {
+			return
+		}
 	}
 
 	s.inWork[key] = true
@@ -241,6 +251,11 @@ func (s *OnDemandSubmitter) consider(ctx context.Context, member *PendingBatchIn
 	}
 
 	outcome, err := s.settleWithReadinessRetry(ctx, orch, member)
+	if err != nil && IsChainReadError(err) {
+		// A read that failed decides nothing about the member. It stays queued for a read that works.
+		logf("[OD] intent=%s deferred: a chain read failed (%v)", member.IntentID, err)
+		return false
+	}
 	if err != nil {
 		// Terminal for this member: deadline expired, a real disagreement, or a settle failure.
 		logf("[OD] intent=%s could not settle: %v", member.IntentID, err)

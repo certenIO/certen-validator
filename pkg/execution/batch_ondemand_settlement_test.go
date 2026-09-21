@@ -57,6 +57,20 @@ type fakeODChain struct {
 	beginErr  error
 	createErr error
 
+	// Settlement windows. attTime is T (default odT0); head and finalized are chain times (default
+	// T+1m and T: window 0); prior* answers priorSettlementAttempt; timing marks reverts caused by the
+	// settlement's own timing fields.
+	attTime      time.Time
+	head         time.Time
+	finalized    time.Time
+	priorTx      string
+	priorFrom    common.Address
+	priorFound   bool
+	priorAsked   []common.Address
+	timing       map[string]bool
+	lastFence    time.Time
+	rosterFailed bool
+
 	createCalls int
 	settleCalls int
 	costs       []costCall
@@ -86,10 +100,11 @@ func (f *fakeODChain) createBatchAnchor(context.Context, *BatchTree) (string, ui
 	return f.anchorTx, 100, 1, nil
 }
 func (f *fakeODChain) verifyLeavesAgainstAnchor(context.Context, *BatchTree) error { return nil }
-func (f *fakeODChain) settleMember(_ context.Context, p *PendingBatchIntent, _ *BatchTree, _ [][32]byte) (string, error) {
+func (f *fakeODChain) settleMember(_ context.Context, p *PendingBatchIntent, _ *BatchTree, _ [][32]byte, fence time.Time) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.settleCalls++
+	f.lastFence = fence
 	// What the real settleMember records before it awaits the receipt: the hash and its nonce.
 	p.SettlementTx = f.settleTx
 	p.SettlementTxs = append(p.SettlementTxs, f.settleTx)
@@ -126,6 +141,52 @@ func (f *fakeODChain) anchorAttester(context.Context, [32]byte, uint64) (string,
 	return odVerifyTx, f.attester, true, nil
 }
 func (f *fakeODChain) ownAddress() common.Address { return odOwnAddr }
+
+// odT0 is the fake attestation's block time.
+var odT0 = time.Unix(1_800_000_000, 0)
+
+func (f *fakeODChain) anchorAttestation(context.Context, [32]byte, uint64) (anchorAttestation, bool, error) {
+	if f.attesterUnknown {
+		return anchorAttestation{}, false, nil
+	}
+	a := f.attester
+	if a == (common.Address{}) {
+		a = odOwnAddr // a freshly attested anchor is this node's
+	}
+	t := f.attTime
+	if t.IsZero() {
+		t = odT0
+	}
+	return anchorAttestation{Tx: odVerifyTx, From: a, Time: t}, true, nil
+}
+func (f *fakeODChain) settlementRoster(context.Context) ([]common.Address, error) {
+	if f.rosterFailed {
+		return nil, errors.New("roster does not match the anchor")
+	}
+	return []common.Address{odOwnAddr, odOtherAddr, odThirdAddr}, nil
+}
+func (f *fakeODChain) chainTimes(context.Context) (time.Time, time.Time, error) {
+	h, fin := f.head, f.finalized
+	if h.IsZero() {
+		h = odT0.Add(time.Minute)
+	}
+	if fin.IsZero() {
+		fin = odT0
+	}
+	return h, fin, nil
+}
+func (f *fakeODChain) priorSettlementAttempt(_ context.Context, _ *PendingBatchIntent, _ *BatchTree, settlers []common.Address) (string, common.Address, bool, error) {
+	f.priorAsked = settlers
+	return f.priorTx, f.priorFrom, f.priorFound, nil
+}
+func (f *fakeODChain) settlementRevertCause(_ context.Context, tx string) (bool, string, error) {
+	if f.timing[tx] {
+		return true, "mined after its expiresAt", nil
+	}
+	return false, "", nil
+}
+
+var odThirdAddr = common.HexToAddress("0x6ACaa68417F5ad5d4a02D9d3d72E291efFcDf30A")
 
 var (
 	odOwnAddr   = common.HexToAddress("0xd4A3dBbAE0C04D4307c5E00A5E05b66AcC289f5D")
@@ -203,8 +264,13 @@ func TestOD_FailoverReleasesAMemberAnotherValidatorAttested(t *testing.T) {
 		f := &fakeODChain{attested: true, consumed: consumed, settleTx: odSettleTx,
 			attester: odOtherAddr, spentBy: odRevertTx, spentFrom: odOtherAddr, spentByKnown: true}
 		out := settle(t, f, odMember(1, odChain, 100))
-		if !out.Released || out.Settled || out.Reverted || out.TxHash != "" {
-			t.Fatalf("consumed=%t: outcome %+v; want released with nothing to attest", consumed, out)
+		// Spent: its sender's outcome, released. Unspent inside the attester's own window: held,
+		// because the member is this validator's to take over if the attester dies.
+		if consumed && (!out.Released || out.Settled || out.Reverted || out.TxHash != "") {
+			t.Fatalf("consumed: outcome %+v; want released with nothing to attest", out)
+		}
+		if !consumed && (!out.Deferred || out.Released || out.Settled || out.Reverted) {
+			t.Fatalf("unspent in the attester's window: outcome %+v; want held", out)
 		}
 		if f.settleCalls != 0 || f.createCalls != 0 || len(f.costs) != 0 {
 			t.Fatalf("consumed=%t: settle=%d create=%d costs=%+v; a failover validator only reads",
@@ -346,10 +412,13 @@ func TestOD_DisposeOwnRevertAttestsTheFailureWithItsTx(t *testing.T) {
 	}
 }
 
-// The whole submitter pass over the live case, on a failover validator: nothing attested, nothing
-// executed, the local copy released.
+// The whole submitter pass over the live case, on a failover validator: another validator attested
+// and its settlement reverted. Once that window is final the failover validator finds the attempt on
+// chain - nothing attested, nothing executed, the local copy released.
 func TestOD_FailoverPassAttestsNothing(t *testing.T) {
-	f := &fakeODChain{attested: true}
+	f := &fakeODChain{attested: true, attester: odThirdAddr,
+		head: odT0.Add(SettlementWindow + time.Minute), finalized: odT0.Add(SettlementWindow - time.Minute),
+		priorTx: odRevertTx, priorFrom: odThirdAddr, priorFound: true}
 	s, calls := settlementSubmitter(t, f)
 	m := odMember(1, odChain, 100)
 	_ = s.cfg.Stack.Mempool.AddOnDemand(m)
@@ -585,8 +654,8 @@ func TestOD_TheChainsAttesterDecidesWhoSettles(t *testing.T) {
 	m = odMember(1, odChain, 100)
 	m.AnchorProved = true // believed it proved the anchor
 	f = &fakeODChain{attested: true, settleTx: odSettleTx, attester: odOtherAddr}
-	if out := settle(t, f, m); !out.Released || f.settleCalls != 0 {
-		t.Fatalf("another validator's attestation: outcome %+v; want released", out)
+	if out := settle(t, f, m); !out.Deferred || f.settleCalls != 0 {
+		t.Fatalf("another validator's attestation, in its window: outcome %+v; want held, not settled", out)
 	}
 	f = &fakeODChain{attested: true, attesterUnknown: true}
 	if out := settle(t, f, odMember(1, odChain, 100)); !out.Deferred || f.settleCalls != 0 {
@@ -602,8 +671,8 @@ func TestOD_AttestedByAnotherValidatorIsDecidedFromTheChain(t *testing.T) {
 	out, err := odOrchestrator(f).SettleOnDemandMember(context.Background(), m, func(context.Context, *BatchTree) error {
 		return fmt.Errorf("submitting batch quorum proof: executeComprehensiveProof 0xab: %w", ErrAttestedByAnother)
 	})
-	if err != nil || !out.Released || m.AnchorProved || f.settleCalls != 0 {
-		t.Fatalf("outcome %+v err %v member %+v; want released, not the settler", out, err, m)
+	if err != nil || !out.Deferred || m.AnchorProved || f.settleCalls != 0 {
+		t.Fatalf("outcome %+v err %v member %+v; want held in the attester's window, not the settler", out, err, m)
 	}
 }
 

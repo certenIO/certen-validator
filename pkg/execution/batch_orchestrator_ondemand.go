@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/ethereum/go-ethereum/common"
 	"strings"
+	"time"
+
+	"github.com/ethereum/go-ethereum/common"
 )
 
 // =============================================================================
@@ -66,6 +68,9 @@ type OnDemandOutcome struct {
 	// KeyBusy: this node's key cannot send right now - a transaction of its own is still in flight,
 	// or the sender is unavailable. Nothing else on this chain can be sent this pass either.
 	KeyBusy bool
+
+	// fence is the expiresAt this validator's settlement carries: the end of its settlement window.
+	fence time.Time
 }
 
 // onDemandChain is every chain operation on-demand settlement performs.
@@ -82,7 +87,7 @@ type onDemandChain interface {
 	endSettlementSequence()
 	createBatchAnchor(ctx context.Context, tree *BatchTree) (txHash string, gasUsed uint64, block uint64, err error)
 	verifyLeavesAgainstAnchor(ctx context.Context, tree *BatchTree) error
-	settleMember(ctx context.Context, p *PendingBatchIntent, tree *BatchTree, branch [][32]byte) (string, error)
+	settleMember(ctx context.Context, p *PendingBatchIntent, tree *BatchTree, branch [][32]byte, fence time.Time) (string, error)
 	settlementStatus(ctx context.Context, txHash string) (found, mined, reverted bool, err error)
 	memberPastDeadline(p *PendingBatchIntent) bool
 	lastVerifyTx(bundleID [32]byte) string
@@ -101,6 +106,16 @@ type onDemandChain interface {
 	anchorAttester(ctx context.Context, bundleID [32]byte, floor uint64) (txHash string, from common.Address, found bool, err error)
 	// ownAddress is the address this node settles from.
 	ownAddress() common.Address
+	// anchorAttestation is the transaction that attested bundleID: its hash, sender and block time.
+	anchorAttestation(ctx context.Context, bundleID [32]byte, floor uint64) (anchorAttestation, bool, error)
+	// settlementRoster is the chain-confirmed validator roster the settlement windows rotate over.
+	settlementRoster(ctx context.Context) ([]common.Address, error)
+	// chainTimes is the head's and the finalized block's timestamps.
+	chainTimes(ctx context.Context) (head, finalized time.Time, err error)
+	// priorSettlementAttempt finds a mined settlement of the member by one of settlers.
+	priorSettlementAttempt(ctx context.Context, member *PendingBatchIntent, tree *BatchTree, settlers []common.Address) (string, common.Address, bool, error)
+	// settlementRevertCause reports whether a reverted settlement reverted on its own timing fields.
+	settlementRevertCause(ctx context.Context, txHash string) (timing bool, why string, err error)
 }
 
 func (o *BatchOrchestrator) chainOps() onDemandChain {
@@ -217,10 +232,9 @@ func (o *BatchOrchestrator) SettleOnDemandMember(
 		if done := o.resolveUnderAttestedAnchor(ctx, chain, member, tree, out); done {
 			return out, nil
 		}
-		// This validator attested the anchor itself and has no settlement of its own on chain or in
-		// flight. It is the settler; settle under its own anchor.
-		o.logf("[OD] chain=%d intent=%s anchor 0x%x was attested by this validator, which has no "+
-			"settlement of its own on chain — settling now", chainID, member.IntentID, tree.BundleID[:8])
+		// The settlement window is this validator's and nothing of its own is on chain or in flight.
+		o.logf("[OD] chain=%d intent=%s anchor 0x%x attested; settling in this validator's window (fence %s)",
+			chainID, member.IntentID, tree.BundleID[:8], out.fence.UTC().Format(time.RFC3339))
 		return o.settleAndClassify(ctx, chain, member, tree, out)
 	}
 
@@ -311,6 +325,11 @@ func (o *BatchOrchestrator) SettleOnDemandMember(
 	o.logf("[OD] chain=%d intent=%s quorum verified root 0x%x",
 		chainID, member.IntentID, tree.Root[:8])
 
+	// This validator attested, so window 0 is its own; the schedule still decides, from the chain,
+	// and supplies the fence.
+	if done := o.decideSettlementWindow(ctx, chain, member, tree, out); done {
+		return out, nil
+	}
 	return o.settleAndClassify(ctx, chain, member, tree, out)
 }
 
@@ -367,6 +386,17 @@ func (o *BatchOrchestrator) resolveUnderAttestedAnchor(
 				continue
 			}
 			if mined && reverted {
+				timing, why, rerr := chain.settlementRevertCause(ctx, h)
+				if rerr != nil {
+					unknown = true
+					continue
+				}
+				if timing {
+					// Its own timing, not the intent: this attempt never executed the member.
+					o.logf("[OD] intent=%s settlement %s reverted on its timing (%s); not the member's outcome",
+						member.IntentID, h, why)
+					continue
+				}
 				o.markReverted(ctx, chain, member, h, out)
 				return true
 			}
@@ -393,24 +423,10 @@ func (o *BatchOrchestrator) resolveUnderAttestedAnchor(
 			member.IntentID, own)
 	}
 
-	// Leaf unspent, nothing of this node's on chain or in flight. Who settles under this anchor is the
-	// validator that ATTESTED it - read from the chain (the sender of its ProofExecuted transaction),
-	// not from this node's memory, which a crash between attesting and recording, or an attestation
-	// that landed after its wait ran out, can leave wrong.
-	_, attester, found, aerr := chain.anchorAttester(ctx, tree.BundleID, member.AnchorBlock)
-	if aerr != nil || !found {
-		out.Deferred = true
-		o.logf("[OD] intent=%s anchor 0x%x attested; its attester is not in view (found=%t err=%v) — deferring",
-			member.IntentID, tree.BundleID[:8], found, aerr)
-		return true
-	}
-	if attester != chain.ownAddress() {
-		out.Released = true
-		o.logf("[OD] intent=%s anchor 0x%x attested by %s, leaf unspent; releasing — that validator settles "+
-			"it and records the outcome", member.IntentID, tree.BundleID[:8], attester.Hex())
-		return true
-	}
-	return false
+	// Leaf unspent, nothing of this node's on chain or in flight. Who settles now is decided by the
+	// settlement windows, from chain facts alone: the attestation's sender and block time, the
+	// chain-bound roster and finalized chain time. See batch_settlement_window.go.
+	return o.decideSettlementWindow(ctx, chain, member, tree, out)
 }
 
 // resolveSpentLeaf decides a member whose leaf is spent, from the LeafConsumed log that names the
@@ -487,12 +503,17 @@ func (o *BatchOrchestrator) settleAndClassify(
 ) (*OnDemandOutcome, error) {
 	chainID := member.ChainID
 
+	// Every on-demand settlement is fenced to its window; one without a fence could execute after
+	// another validator has taken over.
+	if out.fence.IsZero() {
+		return nil, fmt.Errorf("intent %s: settlement has no window fence", member.IntentID)
+	}
 	// N=1: the branch is empty and the root is the leaf.
 	branch, berr := tree.BranchFor(0)
 	if berr != nil {
 		return nil, fmt.Errorf("branch error: %w", berr)
 	}
-	txHash, serr := chain.settleMember(ctx, member, tree, branch)
+	txHash, serr := chain.settleMember(ctx, member, tree, branch, out.fence)
 	if serr == nil {
 		out.Settled = true
 		out.TxHash = txHash
@@ -542,6 +563,14 @@ func (o *BatchOrchestrator) settleAndClassify(
 		return out, nil
 	}
 
+	// Nothing was sent, and nothing about the member was learned: its window closed first, or a
+	// chain read failed. The next pass decides again.
+	if errors.Is(serr, errSettlementWindowClosed) || IsChainReadError(serr) {
+		out.Deferred = true
+		o.logf("[OD] intent=%s settlement not sent (%v) — deferring", member.IntentID, serr)
+		return out, nil
+	}
+
 	// Refused on price before broadcast, never reached a mempool, or the nonce went to another
 	// transaction: nothing of this settlement executed. The next pass tries again.
 	if isTransientSendError(serr) {
@@ -564,6 +593,20 @@ func (o *BatchOrchestrator) settleAndClassify(
 			// settlement of this node's own that landed after its wait ran out).
 			o.logf("[OD] intent=%s settlement %s reverted because the leaf was already spent", member.IntentID, txHash)
 			o.resolveSpentLeaf(ctx, chain, member, tree.BundleID, out)
+			return out, nil
+		}
+		timing, why, rerr := chain.settlementRevertCause(ctx, txHash)
+		if rerr != nil {
+			out.Deferred = true
+			o.logf("[OD] intent=%s settlement %s reverted; its cause is unreadable (%v) — deferring",
+				member.IntentID, txHash, rerr)
+			return out, nil
+		}
+		if timing {
+			// Mined outside its own validity window: the intent was never tried. Not a failure.
+			out.Deferred = true
+			o.logf("[OD] intent=%s settlement %s reverted on its timing (%s) — not the member's outcome; "+
+				"settlement continues", member.IntentID, txHash, why)
 			return out, nil
 		}
 		o.markReverted(ctx, chain, member, txHash, out)
