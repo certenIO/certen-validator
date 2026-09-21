@@ -64,6 +64,21 @@ type PendingBatchIntent struct {
 	CommitHeight uint64
 
 	EnqueuedAt time.Time
+
+	// What THIS validator did toward settling an on-demand member, persisted with it so a restart
+	// does not forget it. Every validator holds every member and the settlement failover hands it
+	// to each in turn, so a validator that finds the member's anchor already attested must be able
+	// to tell its own work from another's: only the validator that sent a settlement attests its
+	// outcome, and only the validator that attested the anchor settles under it.
+	//
+	// AnchorTx and VerifyTx are the anchor and quorum-verify transactions this validator paid for,
+	// when it did, so their cost is reported with the member's outcome however many passes later.
+	AnchorProved bool
+	AnchorTx     string
+	VerifyTx     string
+	// SettlementTx is the settlement transaction this validator sent, recorded before its receipt
+	// is awaited.
+	SettlementTx string
 }
 
 // ExecutionCommitment returns the commitment this member's leaf must carry.

@@ -135,6 +135,26 @@ func (m *BatchMempool) removeOnDemand(chainID int64, opID [32]byte) bool {
 	return true
 }
 
+// NoteOnDemandProgress records this validator's own progress on a queued on-demand member and
+// persists it. It reports whether the member was queued; a member that is not (the period lane, or
+// one already released) is left alone.
+//
+// The update runs under the mempool lock, so a concurrent snapshot never reads a half-written
+// member.
+func (m *BatchMempool) NoteOnDemandProgress(chainID int64, opID [32]byte, update func(p *PendingBatchIntent)) bool {
+	m.mu.Lock()
+	p := m.onDemand[chainID][opID]
+	if p != nil {
+		update(p)
+	}
+	m.mu.Unlock()
+	if p == nil {
+		return false
+	}
+	m.persist()
+	return true
+}
+
 // PendingOnDemand lists a chain's queued intent-keyed members.
 //
 // Ordered by (CommitHeight, IntentID) — the same rule the period path sorts by. Map iteration

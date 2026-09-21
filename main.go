@@ -1523,6 +1523,15 @@ func startValidator(
 
 	log.Printf("✅ BFT validator created with pure CometBFT consensus architecture")
 
+	// The key page G1 is built against is the page that signed, read from the chain - never a
+	// guess. Without a resolver every governance proof fails rather than naming a page.
+	if kpResolver, kpErr := proof.NewChainKeyPageResolver(cfg.AccumulateURL, log.Printf); kpErr != nil {
+		log.Printf("❌ [GOV-PROOF] signing key page resolver unavailable (%v); governance proofs will "+
+			"fail until ACCUMULATE_URL is set", kpErr)
+	} else {
+		validator.SetKeyPageResolver(kpResolver)
+	}
+
 	// LedgerStore is automatically configured within the ABCI application
 	if ledgerProvider := cometEngine.GetLedgerStoreProvider(); ledgerProvider != nil {
 		log.Printf("✅ LedgerStore configured in ABCI app for chain: %s", ledgerProvider.GetChainID())
@@ -2558,6 +2567,12 @@ func startValidator(
 	// This ensures governance proofs are generated BEFORE batch routing, so they are persisted correctly
 	if governanceProofGen != nil {
 		intentDiscovery.SetGovernanceProofGenerator(governanceProofGen)
+		if kpResolver, kpErr := proof.NewChainKeyPageResolver(cfg.AccumulateURL, log.Printf); kpErr != nil {
+			log.Printf("❌ [GOV-PROOF] signing key page resolver unavailable for discovery (%v); "+
+				"discovery-time governance proofs will stop at G0", kpErr)
+		} else {
+			intentDiscovery.SetKeyPageResolver(kpResolver)
+		}
 		log.Printf("✅ [Phase 5] Governance proof generator wired to intent discovery")
 		log.Printf("   - G0/G1/G2 proofs generated before PostgreSQL persistence")
 	}
