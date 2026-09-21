@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 )
@@ -98,14 +99,6 @@ func (km *KeyManager) GenerateFromSeed(seed []byte) error {
 	return nil
 }
 
-// GenerateFromValidatorID generates a deterministic key from validator ID
-// This provides consistent key derivation across validator restarts
-func (km *KeyManager) GenerateFromValidatorID(validatorID string, chainID string) error {
-	// Create deterministic seed from validator ID and chain ID
-	seed := sha256.Sum256([]byte(fmt.Sprintf("CERTEN_BLS_KEY_V1:%s:%s", validatorID, chainID)))
-	return km.GenerateFromSeed(seed[:])
-}
-
 // SaveKey saves the private key to the key path
 func (km *KeyManager) SaveKey() error {
 	if km.keyPath == "" {
@@ -186,34 +179,33 @@ func (km *KeyManager) PrivateKey() *PrivateKey {
 
 var globalKeyManager *KeyManager
 
-// InitializeValidatorBLSKey initializes the global validator BLS key
-// Called from main.go during validator startup
+// InitializeValidatorBLSKey loads the validator's BLS key from keyPath, or - when there is no key
+// file yet - generates a RANDOM key and saves it there.
+//
+// A validator's key used to be derived from its validator ID and chain ID when no file existed.
+// Those inputs are public, so anyone could compute every validator's private key and sign any
+// quorum. A key is never derived now: it exists only in this validator's key file. A newly
+// generated key is not registered on any anchor; the owner registers its public key (see
+// docs/runbooks/bls-key-rotation.md), and until then this validator's partials do not count.
 func InitializeValidatorBLSKey(validatorID, chainID, keyPath string) (*KeyManager, error) {
-	km := NewKeyManager(keyPath)
-
-	// If key path exists, load it
-	if keyPath != "" {
-		if _, err := os.Stat(keyPath); err == nil {
-			if err := km.LoadKey(); err != nil {
-				return nil, fmt.Errorf("load BLS key: %w", err)
-			}
-			globalKeyManager = km
-			return km, nil
-		}
+	if keyPath == "" {
+		return nil, fmt.Errorf("no BLS key path configured for %s", validatorID)
 	}
-
-	// Otherwise, generate deterministically from validator ID
-	if err := km.GenerateFromValidatorID(validatorID, chainID); err != nil {
+	km := NewKeyManager(keyPath)
+	if _, err := os.Stat(keyPath); err == nil {
+		if err := km.LoadKey(); err != nil {
+			return nil, fmt.Errorf("load BLS key: %w", err)
+		}
+		globalKeyManager = km
+		return km, nil
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("stat BLS key %s: %w", keyPath, err)
+	}
+	if err := km.GenerateNewKey(); err != nil {
 		return nil, fmt.Errorf("generate BLS key: %w", err)
 	}
-
-	// Save if path specified
-	if keyPath != "" {
-		if err := km.SaveKey(); err != nil {
-			return nil, fmt.Errorf("save BLS key: %w", err)
-		}
-	}
-
+	log.Printf("⚠️ [BLS] %s had no BLS key; generated a new random key at %s. Public key %s must be "+
+		"registered on each anchor before this validator's signatures count.", validatorID, keyPath, km.publicKey.Hex())
 	globalKeyManager = km
 	return km, nil
 }

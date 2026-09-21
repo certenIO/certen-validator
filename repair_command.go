@@ -136,16 +136,11 @@ func repairSigners(cfg *config.Config) (map[string]func([]byte) []byte, error) {
 	edKey := ed25519.PrivateKey(raw)
 	signers["ed25519"] = func(proofHash []byte) []byte { return ed25519.Sign(edKey, proofHash) }
 
-	// The BLS key the validator signs legacy-path proofs with: loaded from its file, or derived from the
-	// validator id exactly as startup derives it when there is no file. Never written.
+	// The BLS key the validator signs legacy-path proofs with, from its key file. Never derived and
+	// never written.
 	km := bls.NewKeyManager(blsKeyPath(cfg))
-	if _, statErr := os.Stat(blsKeyPath(cfg)); statErr == nil {
-		err = km.LoadKey()
-	} else {
-		err = km.GenerateFromValidatorID(cfg.ValidatorID, cfg.ChainID)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("BLS key: %w", err)
+	if err = km.LoadKey(); err != nil {
+		return nil, fmt.Errorf("BLS key at %s: %w", blsKeyPath(cfg), err)
 	}
 	blsKey := km.GetPrivateKey()
 	signers["bls12-381"] = func(proofHash []byte) []byte {
