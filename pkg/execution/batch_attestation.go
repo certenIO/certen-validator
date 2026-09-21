@@ -187,6 +187,9 @@ func (s *BatchStack) HandleBatchAttestationRequest(
 
 	inputs := make([]BatchLeafInput, 0, len(members))
 	for _, m := range members {
+		if err := checkMemberAnchorPin(s, m); err != nil {
+			return refuse("%v", err)
+		}
 		in, err := m.LeafInput()
 		if err != nil {
 			return refuse("member %s: %v", m.IntentID, err)

@@ -1317,6 +1317,25 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 		}
 	}
 
+	// ACCOUNT ANCHOR PIN. An intent that would point an account at an anchor CERTEN does not run is
+	// refused here, on every validator, before anything is queued or sent - so no honest validator
+	// ever signs for it. Not behind the execution-validation switch: it is a safety rule, not a
+	// readiness check. See account_anchor_pin.go. With no policy wired, every such intent is refused.
+	var anchorPolicy AccountAnchorPolicy
+	if p, ok := bv.batchEnqueuer.(AccountAnchorPolicy); ok {
+		anchorPolicy = p
+	}
+	if err := CheckIntentAccountAnchors(anchorPolicy, certenIntent); err != nil {
+		bv.logger.Printf("🚫 [ANCHOR-PIN] refusing intent %s: %v", certenIntent.IntentID, err)
+		return &ExecutionTaskResult{
+			Success:    false,
+			ExecutorID: bv.validatorID,
+			// PERMANENT: the intent's legs are final on Accumulate and will name the same anchor on
+			// every pass.
+			Error: fmt.Errorf("intent %s refused: %w: %w", certenIntent.IntentID, ErrIntentPermanentlyInvalid, err),
+		}, nil
+	}
+
 	// Create builder inputs STRICTLY from canonical sources
 	builderInputs := BuilderInputs{
 		Intent: certenIntent, // canonical 4 blobs from IntentDiscovery
