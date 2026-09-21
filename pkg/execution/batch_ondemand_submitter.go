@@ -235,8 +235,8 @@ func (s *OnDemandSubmitter) consider(ctx context.Context, member *PendingBatchIn
 		if err != nil {
 			return
 		}
-		attested, err := orch.OnDemandAnchorAttested(ctx, member)
-		if err != nil || !attested {
+		needed, err := orch.OnDemandMemberNeedsThisValidator(ctx, member)
+		if err != nil || !needed {
 			return
 		}
 	}

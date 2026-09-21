@@ -60,16 +60,19 @@ type fakeODChain struct {
 	// Settlement windows. attTime is T (default odT0); head and finalized are chain times (default
 	// T+1m and T: window 0); prior* answers priorSettlementAttempt; timing marks reverts caused by the
 	// settlement's own timing fields.
-	attTime      time.Time
-	head         time.Time
-	finalized    time.Time
-	priorTx      string
-	priorFrom    common.Address
-	priorFound   bool
-	priorAsked   []common.Address
-	timing       map[string]bool
-	lastFence    time.Time
-	rosterFailed bool
+	attTime       time.Time
+	head          time.Time
+	finalized     time.Time
+	priorTx       string
+	priorFrom     common.Address
+	priorFound    bool
+	priorReverted bool
+	priorUntil    time.Time
+	finalizedErr  error
+	prescans      int
+	timing        map[string]bool
+	lastFence     time.Time
+	rosterFailed  bool
 
 	createCalls int
 	settleCalls int
@@ -165,19 +168,27 @@ func (f *fakeODChain) settlementRoster(context.Context) ([]common.Address, error
 	}
 	return []common.Address{odOwnAddr, odOtherAddr, odThirdAddr}, nil
 }
-func (f *fakeODChain) chainTimes(context.Context) (time.Time, time.Time, error) {
-	h, fin := f.head, f.finalized
-	if h.IsZero() {
-		h = odT0.Add(time.Minute)
+func (f *fakeODChain) headTime(context.Context) (time.Time, error) {
+	if f.head.IsZero() {
+		return odT0.Add(time.Minute), nil
 	}
-	if fin.IsZero() {
-		fin = odT0
-	}
-	return h, fin, nil
+	return f.head, nil
 }
-func (f *fakeODChain) priorSettlementAttempt(_ context.Context, _ *PendingBatchIntent, _ *BatchTree, settlers []common.Address) (string, common.Address, bool, error) {
-	f.priorAsked = settlers
-	return f.priorTx, f.priorFrom, f.priorFound, nil
+func (f *fakeODChain) finalizedTime(context.Context) (time.Time, error) {
+	if f.finalizedErr != nil {
+		return time.Time{}, f.finalizedErr
+	}
+	if f.finalized.IsZero() {
+		return odT0, nil
+	}
+	return f.finalized, nil
+}
+func (f *fakeODChain) priorSettlementAttempt(_ context.Context, _ *PendingBatchIntent, _ *BatchTree, _ anchorAttestation, until time.Time, _ []common.Address) (priorAttempt, bool, error) {
+	f.priorUntil = until
+	return priorAttempt{Tx: f.priorTx, From: f.priorFrom, Reverted: f.priorReverted}, f.priorFound, nil
+}
+func (f *fakeODChain) prescanEarlierWindows(context.Context, *PendingBatchIntent, *BatchTree, anchorAttestation, time.Time, []common.Address) {
+	f.prescans++
 }
 func (f *fakeODChain) settlementRevertCause(_ context.Context, tx string) (bool, string, error) {
 	if f.timing[tx] {
@@ -417,8 +428,8 @@ func TestOD_DisposeOwnRevertAttestsTheFailureWithItsTx(t *testing.T) {
 // chain - nothing attested, nothing executed, the local copy released.
 func TestOD_FailoverPassAttestsNothing(t *testing.T) {
 	f := &fakeODChain{attested: true, attester: odThirdAddr,
-		head: odT0.Add(SettlementWindow + time.Minute), finalized: odT0.Add(SettlementWindow - time.Minute),
-		priorTx: odRevertTx, priorFrom: odThirdAddr, priorFound: true}
+		head: odT0.Add(SettlementWindow + 2*time.Minute), finalized: odT0.Add(SettlementWindow + time.Minute),
+		priorTx: odRevertTx, priorFrom: odThirdAddr, priorFound: true, priorReverted: true}
 	s, calls := settlementSubmitter(t, f)
 	m := odMember(1, odChain, 100)
 	_ = s.cfg.Stack.Mempool.AddOnDemand(m)

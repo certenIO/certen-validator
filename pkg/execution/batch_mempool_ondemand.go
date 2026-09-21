@@ -239,7 +239,9 @@ func (m *BatchMempool) pruneOnDemandOlderThan(ttl time.Duration, now time.Time) 
 			// settlement. Its outcome may still land - a settlement in flight, an attestation it must
 			// settle under - and pruning it would drop a real result unrecorded. Such a member leaves
 			// the queue only through its outcome.
-			if p.AnchorProved || p.SettlementNonceSet || len(p.SettlementTxs) > 0 || p.SettlementTx != "" {
+			// A member seen attested is held too: a later settlement window may be this validator's,
+			// and dropping it would lose the takeover that window exists for.
+			if p.AnchorProved || p.AttestedSeen || p.SettlementNonceSet || len(p.SettlementTxs) > 0 || p.SettlementTx != "" {
 				if now.Sub(p.EnqueuedAt) >= ttl {
 					m.heldPastTTL++
 				}

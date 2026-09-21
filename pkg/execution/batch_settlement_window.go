@@ -3,20 +3,18 @@ package execution
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
-	"net/http"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rpc"
 
@@ -41,13 +39,15 @@ import (
 //     settlement mined after its expiresAt (CertenAccountV7: block.timestamp <= proof.expiresAt), so
 //     no settlement from window j can execute after window j - whoever broadcasts it, and however
 //     long it sat in a mempool.
-//   - Window j's settler acts only once a FINALIZED block is later than window j-1's fence. At that
-//     block, every earlier window's settlement has executed (the leaf reads spent), reverted, or can
-//     no longer execute. The leaf is read after that, so the handoff cannot race an earlier settler.
-//   - Before settling, the taker looks for an earlier settler's attempt: it asks its peers for the
-//     hashes of their settlements of the member and checks each on chain. One that was mined - a
-//     revert the target caused - is that validator's outcome, recorded by it. Nothing is taken on a
-//     peer's word: an attempt counts only if the chain shows it.
+//   - Window j's settler acts only once a FINALIZED block is later than window j-1's fence (plus a
+//     reorg margin). Every settlement an earlier window's settler sent has then executed (the leaf
+//     reads spent), reverted, or can never execute, and each of those is fixed in finalized blocks.
+//   - Before settling, the taker scans those finalized blocks - from the attestation to window j-1's
+//     fence - for a transaction a roster validator sent to the member's account. One that is an
+//     honest settlement of this member under this anchor and reverted is a tried-and-failed outcome:
+//     its sender records it (or, if the sender is this validator, it records it now), and nobody
+//     settles again. The chain is the only evidence taken: a reverted transaction leaves no log, but
+//     it is in its block.
 //
 // A revert caused by the timing fields, not by the intent (mined after its expiresAt, or before its
 // timestamp) is not the member's failure: it is never recorded as one, and settlement continues.
@@ -55,18 +55,37 @@ import (
 const (
 	// SettlementWindow is W: how long each settler has.
 	//
-	// Window j's settler may act only once a finalized block is past window j-1's fence, so it acts
-	// about (finality lag) into its window, and must still have settlementMinLanding left before its
-	// own fence. W therefore has to exceed the finality lag plus the margins, or no taker could ever
-	// act inside its window. Measured 2026-09-21: finalized lagged head by 17m48s on Sepolia, 20m38s
-	// on Base Sepolia and 19m13s on Arbitrum Sepolia. 30 minutes clears that with room; a dead
-	// attester's member is taken over roughly 50 minutes after its attestation.
+	// Window j's settler may act only once a finalized block is past window j-1's fence (and the reorg
+	// margin), so it acts about (finality lag) into its window, and must still have
+	// settlementMinLanding left before its own fence. W therefore has to exceed the finality lag plus
+	// the margins, or no taker could ever act inside its window. Measured 2026-09-21: finalized lagged
+	// head by 17m48s on Sepolia, 20m38s on Base Sepolia and 19m13s on Arbitrum Sepolia. 30 minutes
+	// clears that with room; a dead attester's member is taken over roughly 50 minutes after its
+	// attestation.
 	SettlementWindow = 30 * time.Minute
 	// settlementFenceMargin puts the fence this far before the window's end.
 	settlementFenceMargin = 2 * time.Minute
 	// settlementMinLanding is the least time a settlement is sent with before its fence. Less
 	// than this and it would most likely be mined after its expiresAt and revert.
 	settlementMinLanding = 2 * time.Minute
+	// settlementReorgMargin is how far past the previous fence finality must be before a taker acts.
+	// The attester reads T straight after its attestation mines; a reorg that re-mines the
+	// attestation a few slots earlier moves every fence earlier for the takers than for it. The
+	// margin keeps the attester's own fence behind the takers' view of it.
+	settlementReorgMargin = 2 * time.Minute
+	// settlementScanBatch is how many blocks one JSON-RPC batch fetches while scanning a window; small
+	// enough that a public endpoint's rate limit rarely refuses it.
+	settlementScanBatch = 20
+	// settlementScanRetries is how often a refused batch is retried, with doubling backoff, before the
+	// member is deferred. Progress is kept either way: finalized blocks never need scanning twice.
+	settlementScanRetries = 3
+	// settlementScanPerPass bounds the blocks one pass scans. The scan runs while this validator holds its
+	// key's nonce sequence, which the period lane waits on; a long window (thousands of Arbitrum blocks)
+	// is covered over several passes instead, resuming from its saved progress.
+	settlementScanPerPass = 400
+	// settlementPrescanPerPass bounds a pre-scan, which holds no lock: the next window's settler scans
+	// the current window's blocks as they finalize, so its own turn finds only a short tail left.
+	settlementPrescanPerPass = 2000
 )
 
 // settlementWindows is one attested member's schedule of settlers.
@@ -121,39 +140,30 @@ func (w settlementWindows) fence(j int) time.Time {
 	return w.start.Add(time.Duration(j+1)*w.width - w.margin)
 }
 
-// earlierSettlers is every validator that held a window before j, once each, except me.
-func (w settlementWindows) earlierSettlers(j int, me common.Address) []common.Address {
-	seen := map[common.Address]bool{me: true}
-	var out []common.Address
-	for k := 0; k < j; k++ {
-		s := w.settler(k)
-		if !seen[s] {
-			seen[s] = true
-			out = append(out, s)
-		}
-	}
-	return out
-}
-
-// isCallVerdict reports whether a failed contract call is the contract's answer - it reverted, or
-// returned data that does not decode as the expected result - rather than a failed read.
+// isCallVerdict reports whether a failed contract call is the contract's own answer - it reverted -
+// rather than a failed read. Only an explicit revert counts: go-ethereum gives every JSON-RPC error
+// body an ErrorData, so "has data" would also match "header not found", a rate limit or an internal
+// error. An empty result on an address known to hold code (bind's "no contract code" or an abi
+// unmarshal of nothing) is a lagging backend, not a verdict.
 func isCallVerdict(err error) bool {
 	if err == nil {
 		return false
 	}
-	var de rpc.DataError
-	if errors.As(err, &de) {
+	var re rpc.Error
+	if errors.As(err, &re) && re.ErrorCode() == 3 {
 		return true
 	}
-	msg := err.Error()
-	return strings.Contains(msg, "execution reverted") || strings.HasPrefix(msg, "abi:") ||
-		strings.Contains(msg, "no contract code at given address")
+	return strings.Contains(err.Error(), "execution reverted")
 }
 
-// OnDemandAnchorAttested reports whether member's one-member anchor is already attested. Read-only:
-// the submitter uses it to let an attested member's settlement windows, rather than the
-// pre-attestation leader rotation, decide who acts on it.
-func (o *BatchOrchestrator) OnDemandAnchorAttested(ctx context.Context, member *PendingBatchIntent) (bool, error) {
+// OnDemandMemberNeedsThisValidator reports whether this validator should act on a member it is not
+// the anchoring leader for: its anchor is attested, and either the leaf is spent (this validator
+// releases its copy) or the current settlement window is this validator's. Cheap reads only, so the
+// validators that have nothing to do for a member do not pin their key's nonce sequence for it.
+//
+// A member whose anchor is attested is marked as such: it is held past the memory-backstop prune,
+// because this validator may yet hold a settlement window for it.
+func (o *BatchOrchestrator) OnDemandMemberNeedsThisValidator(ctx context.Context, member *PendingBatchIntent) (bool, error) {
 	in, err := member.LeafInput()
 	if err != nil {
 		return false, err
@@ -162,19 +172,70 @@ func (o *BatchOrchestrator) OnDemandAnchorAttested(ctx context.Context, member *
 	if err != nil {
 		return false, err
 	}
-	return o.chainOps().anchorAlreadyAttested(ctx, tree.BundleID)
+	chain := o.chainOps()
+	attested, err := chain.anchorAlreadyAttested(ctx, tree.BundleID)
+	if err != nil || !attested {
+		return false, err
+	}
+	if !member.AttestedSeen {
+		o.noteOnDemandProgress(member, func(p *PendingBatchIntent) { p.AttestedSeen = true })
+	}
+	consumed, err := chain.memberLeafConsumed(ctx, member)
+	if err != nil {
+		return false, err
+	}
+	if consumed {
+		return true, nil
+	}
+	att, found, err := chain.anchorAttestation(ctx, tree.BundleID, member.AnchorBlock)
+	if err != nil || !found {
+		return false, err
+	}
+	roster, err := chain.settlementRoster(ctx)
+	if err != nil {
+		return false, err
+	}
+	win, err := newSettlementWindows(att.Time, roster, att.From, member.ChainID, member.OperationID)
+	if err != nil {
+		return false, err
+	}
+	head, err := chain.headTime(ctx)
+	if err != nil {
+		return false, err
+	}
+	j, me := win.index(head), chain.ownAddress()
+	if win.settler(j+1) == me || (j > 0 && win.settler(j) == me) {
+		// This validator takes over next (or now): scan what has finalized of the earlier windows
+		// ahead of its turn. Best effort; the turn itself scans whatever is left.
+		if fin, ferr := chain.finalizedTime(ctx); ferr == nil {
+			until := fin
+			if f := win.fence(j); until.After(f) {
+				until = f
+			}
+			chain.prescanEarlierWindows(ctx, member, tree, att, until, roster)
+		}
+	}
+	return win.settler(j) == me, nil
 }
 
 // anchorAttestation is the transaction that attested an anchor.
 type anchorAttestation struct {
-	Tx   string
-	From common.Address
-	Time time.Time
+	Tx    string
+	From  common.Address
+	Block uint64
+	Time  time.Time
+}
+
+// priorAttempt is a settlement of a member that an earlier window's settler sent and that was mined.
+type priorAttempt struct {
+	Tx       string
+	From     common.Address
+	Reverted bool
 }
 
 // decideSettlementWindow decides whether THIS validator may settle an attested member now, and with
-// which fence. It returns true when the outcome is decided (Deferred or Released); false means settle,
-// with out.fence set.
+// which fence. It returns true when the outcome is decided (Deferred, Released or Reverted); false
+// means settle, with out.fence set.
 func (o *BatchOrchestrator) decideSettlementWindow(
 	ctx context.Context,
 	chain onDemandChain,
@@ -186,6 +247,9 @@ func (o *BatchOrchestrator) decideSettlementWindow(
 		out.Deferred = true
 		o.logf("[OD] intent=%s anchor 0x%x: "+format, append([]interface{}{member.IntentID, tree.BundleID[:8]}, a...)...)
 		return true
+	}
+	if !member.AttestedSeen {
+		o.noteOnDemandProgress(member, func(p *PendingBatchIntent) { p.AttestedSeen = true })
 	}
 	att, found, err := chain.anchorAttestation(ctx, tree.BundleID, member.AnchorBlock)
 	if err != nil || !found {
@@ -199,7 +263,7 @@ func (o *BatchOrchestrator) decideSettlementWindow(
 	if err != nil {
 		return deferf("no settlement schedule (%v) — deferring", err)
 	}
-	head, finalized, err := chain.chainTimes(ctx)
+	head, err := chain.headTime(ctx)
 	if err != nil {
 		return deferf("chain time unreadable (%v) — deferring", err)
 	}
@@ -210,21 +274,35 @@ func (o *BatchOrchestrator) decideSettlementWindow(
 			win.fence(j).UTC().Format(time.RFC3339), s.Hex())
 	}
 	if j > 0 {
-		if !finalized.After(win.fence(j - 1)) {
+		finalized, ferr := chain.finalizedTime(ctx)
+		if ferr != nil {
+			return deferf("finalized block unreadable (%v) — deferring", ferr)
+		}
+		prevFence := win.fence(j - 1)
+		if !finalized.After(prevFence.Add(settlementReorgMargin)) {
 			return deferf("window %d is this validator's; waiting for a finalized block past window %d's fence %s "+
-				"(finalized %s)", j, j-1, win.fence(j-1).UTC().Format(time.RFC3339), finalized.UTC().Format(time.RFC3339))
+				"(finalized %s)", j, j-1, prevFence.UTC().Format(time.RFC3339), finalized.UTC().Format(time.RFC3339))
 		}
-		tx, from, found, perr := chain.priorSettlementAttempt(ctx, member, tree, win.earlierSettlers(j, me))
+		prior, pfound, perr := chain.priorSettlementAttempt(ctx, member, tree, att, prevFence, roster)
 		if perr != nil {
-			return deferf("earlier settlers' attempts unreadable (%v) — deferring", perr)
+			return deferf("earlier windows unreadable (%v) — deferring", perr)
 		}
-		if found {
+		if pfound {
+			if prior.From == me {
+				// This validator's own attempt, which its record lost. Recording it is this node's job.
+				if prior.Reverted {
+					o.markReverted(ctx, chain, member, prior.Tx, out)
+				} else {
+					o.markOwnSettled(ctx, chain, member, prior.Tx, out)
+				}
+				return true
+			}
 			out.Released = true
 			o.logf("[OD] intent=%s anchor 0x%x: %s already settled it in its window (%s, mined); releasing — "+
-				"that transaction is its outcome and its sender records it", member.IntentID, tree.BundleID[:8], from.Hex(), tx)
+				"that transaction is its outcome and its sender records it", member.IntentID, tree.BundleID[:8], prior.From.Hex(), prior.Tx)
 			return true
 		}
-		o.logf("[OD] intent=%s anchor 0x%x: no earlier settler's attempt is on chain; taking over in window %d",
+		o.logf("[OD] intent=%s anchor 0x%x: no earlier window's settlement is in the finalized chain; taking over in window %d",
 			member.IntentID, tree.BundleID[:8], j)
 	}
 	fence := win.fence(j)
@@ -260,20 +338,25 @@ func (o *BatchOrchestrator) anchorAttestation(ctx context.Context, bundleID [32]
 	if err != nil {
 		return anchorAttestation{}, false, readErr(fmt.Errorf("reading block %d: %w", l.BlockNumber, err))
 	}
-	return anchorAttestation{Tx: l.TxHash.Hex(), From: from, Time: time.Unix(int64(h.Time), 0)}, true, nil
+	return anchorAttestation{Tx: l.TxHash.Hex(), From: from, Block: l.BlockNumber, Time: time.Unix(int64(h.Time), 0)}, true, nil
 }
 
-// chainTimes is the head's and the finalized block's timestamps.
-func (o *BatchOrchestrator) chainTimes(ctx context.Context) (head, finalized time.Time, err error) {
+// headTime is the chain head's timestamp.
+func (o *BatchOrchestrator) headTime(ctx context.Context) (time.Time, error) {
 	h, err := o.ecm.client.HeaderByNumber(ctx, nil)
 	if err != nil {
-		return time.Time{}, time.Time{}, readErr(fmt.Errorf("reading head: %w", err))
+		return time.Time{}, readErr(fmt.Errorf("reading head: %w", err))
 	}
+	return time.Unix(int64(h.Time), 0), nil
+}
+
+// finalizedTime is the finalized block's timestamp.
+func (o *BatchOrchestrator) finalizedTime(ctx context.Context) (time.Time, error) {
 	f, err := o.ecm.client.HeaderByNumber(ctx, big.NewInt(int64(rpc.FinalizedBlockNumber)))
 	if err != nil {
-		return time.Time{}, time.Time{}, readErr(fmt.Errorf("reading finalized block: %w", err))
+		return time.Time{}, readErr(fmt.Errorf("reading finalized block: %w", err))
 	}
-	return time.Unix(int64(h.Time), 0), time.Unix(int64(f.Time), 0), nil
+	return time.Unix(int64(f.Time), 0), nil
 }
 
 const validatorSetRootABIJSON = `[{"type":"function","name":"currentValidatorSetRoot","inputs":[],` +
@@ -393,192 +476,200 @@ func (o *BatchOrchestrator) settlementRevertCause(ctx context.Context, txHash st
 	return infra, why, nil
 }
 
-// priorSettlementAttempt looks for a settlement of member under tree's anchor, sent by one of
-// settlers and MINED - a success, or a revert the intent caused. Candidates come from the peers; the
-// verdict comes from the chain alone.
+// =============================================================================
+// Earlier windows' attempts, from the finalized chain
+// =============================================================================
+
+// scanTx is the part of a block's transaction the scan reads, taken from the raw JSON so transaction
+// types go-ethereum cannot decode (an OP-stack deposit, an Arbitrum system transaction) never stop it.
+type scanTx struct {
+	Hash common.Hash     `json:"hash"`
+	From common.Address  `json:"from"`
+	To   *common.Address `json:"to"`
+}
+
+type scanBlock struct {
+	Number       hexutil.Uint64 `json:"number"`
+	Transactions []scanTx       `json:"transactions"`
+}
+
+// settlementCandidates picks the transactions a roster validator sent to account.
+func settlementCandidates(txs []scanTx, account common.Address, roster []common.Address) []scanTx {
+	var out []scanTx
+	for _, tx := range txs {
+		if tx.To == nil || *tx.To != account {
+			continue
+		}
+		for _, r := range roster {
+			if tx.From == r {
+				out = append(out, tx)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// priorSettlementAttempt looks, in the finalized blocks from the attestation to until, for a mined
+// settlement of member under tree's anchor sent by a roster validator: a success, or a revert the
+// intent caused (an attempt the account would have authorised, shaped as an honest settlement, whose
+// execution reverted). Timing reverts, crafted or starved calls, and transactions for other members or
+// anchors do not count. The first found, in chain order, is returned.
 func (o *BatchOrchestrator) priorSettlementAttempt(
 	ctx context.Context,
 	member *PendingBatchIntent,
 	tree *BatchTree,
-	settlers []common.Address,
-) (string, common.Address, bool, error) {
-	if len(settlers) == 0 {
-		return "", common.Address{}, false, nil
-	}
-	hashes := collectSettlementEvidence(ctx, o.evidencePeers(), &SettlementEvidenceRequest{
-		ChainID: member.ChainID, OperationID: "0x" + common.Bytes2Hex(member.OperationID[:]),
-	}, o.logf)
-	for _, hash := range hashes {
-		from, ok, err := o.verifyPriorAttempt(ctx, member, tree, settlers, hash)
-		if err != nil {
-			return "", common.Address{}, false, err
-		}
-		if ok {
-			return hash, from, true, nil
-		}
-	}
-	return "", common.Address{}, false, nil
+	att anchorAttestation,
+	until time.Time,
+	roster []common.Address,
+) (priorAttempt, bool, error) {
+	return o.scanEarlierWindows(ctx, member, tree, att, until, roster, settlementScanPerPass)
 }
 
-func (o *BatchOrchestrator) evidencePeers() []string {
-	if o.peersFn != nil {
-		return o.peersFn()
-	}
-	return BatchAttestationPeersFromEnv()
+// prescanEarlierWindows advances the scan of the earlier windows without deciding anything; its
+// progress is what the settler's own turn resumes from.
+func (o *BatchOrchestrator) prescanEarlierWindows(ctx context.Context, member *PendingBatchIntent, tree *BatchTree,
+	att anchorAttestation, until time.Time, roster []common.Address) {
+	_, _, _ = o.scanEarlierWindows(ctx, member, tree, att, until, roster, settlementPrescanPerPass)
 }
 
-// verifyPriorAttempt checks one candidate hash: a mined transaction from one of settlers to the
-// member's account, carrying a settlement proof for this anchor and this operation, which did not
-// revert on its own timing fields.
-func (o *BatchOrchestrator) verifyPriorAttempt(
+// scanEarlierWindows is priorSettlementAttempt's search, covering at most perPass blocks per call.
+func (o *BatchOrchestrator) scanEarlierWindows(
 	ctx context.Context,
 	member *PendingBatchIntent,
 	tree *BatchTree,
-	settlers []common.Address,
-	hash string,
-) (common.Address, bool, error) {
-	if !IsTransactionHash(hash) {
-		return common.Address{}, false, nil
-	}
-	h := common.HexToHash(hash)
-	tx, pending, err := o.ecm.client.TransactionByHash(ctx, h)
-	if errors.Is(err, ethereum.NotFound) {
-		return common.Address{}, false, nil
-	}
+	att anchorAttestation,
+	until time.Time,
+	roster []common.Address,
+	perPass uint64,
+) (priorAttempt, bool, error) {
+	last, err := o.blockAtOrBefore(ctx, uint64(until.Unix()))
 	if err != nil {
-		return common.Address{}, false, readErr(fmt.Errorf("reading transaction %s: %w", hash, err))
+		return priorAttempt{}, false, err
 	}
-	if pending || tx.To() == nil || *tx.To() != member.Account {
-		return common.Address{}, false, nil
+	rpcClient := o.ecm.client.Client()
+	start := att.Block
+	o.scanMu.Lock()
+	if done, ok := o.scanned[tree.BundleID]; ok && done+1 > start {
+		start = done + 1
 	}
-	from, err := types.Sender(types.LatestSignerForChainID(tx.ChainId()), tx)
-	if err != nil {
-		return common.Address{}, false, nil
+	o.scanMu.Unlock()
+	stop := last
+	if start+perPass-1 < stop {
+		stop = start + perPass - 1
 	}
-	isSettler := false
-	for _, s := range settlers {
-		if s == from {
-			isSettler = true
-			break
+	for from := start; from <= stop; from += settlementScanBatch {
+		to := from + settlementScanBatch - 1
+		if to > stop {
+			to = stop
+		}
+		batch := make([]rpc.BatchElem, 0, to-from+1)
+		blocks := make([]scanBlock, to-from+1)
+		for n := from; n <= to; n++ {
+			batch = append(batch, rpc.BatchElem{
+				Method: "eth_getBlockByNumber",
+				Args:   []interface{}{hexutil.EncodeUint64(n), true},
+				Result: &blocks[n-from],
+			})
+		}
+		if err := fetchBatch(ctx, rpcClient, batch); err != nil {
+			return priorAttempt{}, false, readErr(fmt.Errorf("reading blocks %d-%d: %w", from, to, err))
+		}
+		for i := range batch {
+			for _, c := range settlementCandidates(blocks[i].Transactions, member.Account, roster) {
+				pa, ok, err := o.checkPriorAttempt(ctx, member, tree, c)
+				if err != nil {
+					return priorAttempt{}, false, err
+				}
+				if ok {
+					return pa, true, nil
+				}
+			}
+		}
+		o.scanMu.Lock()
+		if o.scanned == nil {
+			o.scanned = make(map[[32]byte]uint64)
+		}
+		o.scanned[tree.BundleID] = to
+		o.scanMu.Unlock()
+	}
+	if stop < last {
+		// Not a verdict: the rest of the earlier windows is scanned on the next passes.
+		return priorAttempt{}, false, readErr(fmt.Errorf("earlier windows scanned to block %d of %d; continuing next pass", stop, last))
+	}
+	return priorAttempt{}, false, nil
+}
+
+// fetchBatch runs one JSON-RPC batch, retrying a refused one with doubling backoff.
+func fetchBatch(ctx context.Context, c *rpc.Client, batch []rpc.BatchElem) error {
+	wait := time.Second
+	var err error
+	for attempt := 0; ; attempt++ {
+		err = c.BatchCallContext(ctx, batch)
+		if err == nil {
+			for _, el := range batch {
+				if el.Error != nil {
+					err = el.Error
+					break
+				}
+			}
+		}
+		if err == nil || attempt == settlementScanRetries {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(wait):
+		}
+		wait *= 2
+		for i := range batch {
+			batch[i].Error = nil
 		}
 	}
-	if !isSettler {
-		return common.Address{}, false, nil
+}
+
+// checkPriorAttempt judges one candidate: a settlement of this member (its calls, its operation) under
+// this anchor that succeeded, or reverted as an authorised, honestly shaped attempt.
+func (o *BatchOrchestrator) checkPriorAttempt(ctx context.Context, member *PendingBatchIntent, tree *BatchTree, c scanTx) (priorAttempt, bool, error) {
+	tx, _, err := o.ecm.client.TransactionByHash(ctx, c.Hash)
+	if errors.Is(err, types.ErrTxTypeNotSupported) {
+		return priorAttempt{}, false, nil
+	}
+	if err != nil {
+		return priorAttempt{}, false, readErr(fmt.Errorf("reading transaction %s: %w", c.Hash.Hex(), err))
 	}
 	p, ok := settlementProofOf(tx.Data())
 	if !ok || p.AnchorId != tree.BundleID || p.OperationID != member.OperationID {
-		return common.Address{}, false, nil
+		return priorAttempt{}, false, nil
 	}
-	rcpt, err := o.ecm.client.TransactionReceipt(ctx, h)
+	exec, err := decodeAccountExecution(tx.Data())
+	if err != nil {
+		return priorAttempt{}, false, nil
+	}
+	committed := make([]CommittedCall, 0, len(member.Legs))
+	for _, l := range member.Legs {
+		committed = append(committed, CommittedCall{Target: l.Target, Value: l.Value, Data: l.Data})
+	}
+	if matchCommittedCalls(exec.Calls, committed) != nil {
+		return priorAttempt{}, false, nil
+	}
+	rcpt, err := o.ecm.client.TransactionReceipt(ctx, c.Hash)
 	if errors.Is(err, ethereum.NotFound) {
-		return common.Address{}, false, nil
+		return priorAttempt{}, false, nil
 	}
 	if err != nil {
-		return common.Address{}, false, readErr(fmt.Errorf("reading receipt %s: %w", hash, err))
+		return priorAttempt{}, false, readErr(fmt.Errorf("reading receipt %s: %w", c.Hash.Hex(), err))
 	}
-	if rcpt.Status == types.ReceiptStatusFailed {
-		hdr, err := o.ecm.client.HeaderByNumber(ctx, rcpt.BlockNumber)
-		if err != nil {
-			return common.Address{}, false, readErr(fmt.Errorf("reading block %s: %w", rcpt.BlockNumber, err))
+	if rcpt.Status == types.ReceiptStatusSuccessful {
+		return priorAttempt{Tx: c.Hash.Hex(), From: c.From}, true, nil
+	}
+	if err := checkAuthorizedAttempt(ctx, o.ecm.client, tx, rcpt, exec, member.Account); err != nil {
+		if IsChainReadError(err) {
+			return priorAttempt{}, false, err
 		}
-		if infra, _ := timingRevert(p, hdr.Time); infra {
-			return common.Address{}, false, nil
-		}
+		// Not an attempt the intent could have failed: timing, a crafted or starved call.
+		return priorAttempt{}, false, nil
 	}
-	return from, true, nil
-}
-
-// =============================================================================
-// Settlement evidence — what each validator sent for a member
-// =============================================================================
-
-// SettlementEvidenceEndpoint is the peer path answering which settlement transactions a validator
-// broadcast for an on-demand member. The answer is only a list of candidates: the asker verifies
-// every one on chain, so the endpoint needs no authentication.
-const SettlementEvidenceEndpoint = "/api/batch/ondemand/settlement-evidence"
-
-// SettlementEvidenceRequest names one member.
-type SettlementEvidenceRequest struct {
-	ChainID     int64  `json:"chainId"`
-	OperationID string `json:"operationId"`
-}
-
-// SettlementEvidenceResponse lists the hashes this validator broadcast for the member's settlement.
-type SettlementEvidenceResponse struct {
-	Hashes []string `json:"hashes"`
-	Error  string   `json:"error,omitempty"`
-}
-
-// HandleSettlementEvidenceRequest answers from this validator's durable outbox, which keeps every
-// hash a settlement went out under, resolved or not, for its retention period.
-func (s *BatchStack) HandleSettlementEvidenceRequest(req *SettlementEvidenceRequest) *SettlementEvidenceResponse {
-	if req == nil {
-		return &SettlementEvidenceResponse{Error: "empty request"}
-	}
-	opBytes := common.FromHex(req.OperationID)
-	if len(opBytes) != 32 {
-		return &SettlementEvidenceResponse{Error: "operationId must be 32 bytes"}
-	}
-	var op [32]byte
-	copy(op[:], opBytes)
-	orch, err := s.OrchestratorFor(req.ChainID)
-	if err != nil {
-		return &SettlementEvidenceResponse{Error: err.Error()}
-	}
-	sender, err := orch.ecm.batchSender()
-	if err != nil || sender == nil {
-		return &SettlementEvidenceResponse{Error: "sender unavailable"}
-	}
-	return &SettlementEvidenceResponse{
-		Hashes: sender.outbox.hashesForOwner("settle:" + memberWorkKey(req.ChainID, op)),
-	}
-}
-
-// collectSettlementEvidence asks every peer and returns the distinct hashes they name. A peer that
-// is down or refuses contributes nothing - which only ever leads to settling, never to a false record.
-func collectSettlementEvidence(ctx context.Context, peers []string, req *SettlementEvidenceRequest,
-	logf func(string, ...interface{})) []string {
-	body, err := json.Marshal(req)
-	if err != nil || len(peers) == 0 {
-		return nil
-	}
-	client := &http.Client{Timeout: 10 * time.Second}
-	var (
-		mu   sync.Mutex
-		seen = map[string]bool{}
-		out  []string
-		wg   sync.WaitGroup
-	)
-	for _, peer := range peers {
-		wg.Add(1)
-		go func(peer string) {
-			defer wg.Done()
-			hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, peer+SettlementEvidenceEndpoint, bytes.NewReader(body))
-			if err != nil {
-				return
-			}
-			hreq.Header.Set("Content-Type", "application/json")
-			resp, err := client.Do(hreq)
-			if err != nil {
-				logf("[OD] settlement evidence: %s unreachable: %v", peer, err)
-				return
-			}
-			defer resp.Body.Close()
-			var r SettlementEvidenceResponse
-			if resp.StatusCode != http.StatusOK || json.NewDecoder(resp.Body).Decode(&r) != nil {
-				return
-			}
-			mu.Lock()
-			defer mu.Unlock()
-			for _, h := range r.Hashes {
-				k := strings.ToLower(h)
-				if !seen[k] {
-					seen[k] = true
-					out = append(out, h)
-				}
-			}
-		}(peer)
-	}
-	wg.Wait()
-	return out
+	return priorAttempt{Tx: c.Hash.Hex(), From: c.From, Reverted: true}, true, nil
 }

@@ -132,8 +132,9 @@ type BatchOrchestrator struct {
 	// roster is the chain-confirmed settlement roster; see settlementRoster.
 	rosterMu sync.Mutex
 	roster   []common.Address
-	// peersFn names the peers asked for settlement evidence. Nil means ATTESTATION_PEERS.
-	peersFn func() []string
+	// scanned is, per anchor, the last finalized block already searched for earlier windows' attempts.
+	scanMu  sync.Mutex
+	scanned map[[32]byte]uint64
 }
 
 // SetLegProgressHook wires persistence of per-member leg outcomes. Optional: unset, settlement
@@ -586,7 +587,7 @@ func (o *BatchOrchestrator) settleFlushMembers(
 			}
 			// Nothing of this settlement executed: refused before broadcast, never reached a
 			// mempool, or its nonce went to another transaction. Not a failure of the member.
-			if !errors.As(serr, &unknown) && isTransientSendError(serr) {
+			if !errors.As(serr, &unknown) && (isTransientSendError(serr) || IsChainReadError(serr)) {
 				o.logf("[BATCH] member %s deferred: the settlement did not reach the chain (%v); will retry",
 					p.IntentID, serr)
 				res.Retryable = append(res.Retryable, p)

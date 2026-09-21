@@ -636,27 +636,6 @@ func (o *txOutbox) hashesAt(nonce uint64, owner string) []string {
 	return nil
 }
 
-// hashesForOwner is every hash broadcast for owner, at any nonce, in nonce order.
-func (o *txOutbox) hashesForOwner(owner string) []string {
-	if owner == "" {
-		return nil
-	}
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	nonces := make([]uint64, 0, len(o.byN))
-	for n, e := range o.byN {
-		if e.Owner == owner {
-			nonces = append(nonces, n)
-		}
-	}
-	sort.Slice(nonces, func(i, j int) bool { return nonces[i] < nonces[j] })
-	var out []string
-	for _, n := range nonces {
-		out = append(out, o.byN[n].Hashes...)
-	}
-	return out
-}
-
 // put writes e; the in-memory state changes only if the write succeeds.
 func (o *txOutbox) put(e *outboxEntry) error {
 	o.mu.Lock()

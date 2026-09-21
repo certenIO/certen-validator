@@ -110,10 +110,14 @@ type onDemandChain interface {
 	anchorAttestation(ctx context.Context, bundleID [32]byte, floor uint64) (anchorAttestation, bool, error)
 	// settlementRoster is the chain-confirmed validator roster the settlement windows rotate over.
 	settlementRoster(ctx context.Context) ([]common.Address, error)
-	// chainTimes is the head's and the finalized block's timestamps.
-	chainTimes(ctx context.Context) (head, finalized time.Time, err error)
-	// priorSettlementAttempt finds a mined settlement of the member by one of settlers.
-	priorSettlementAttempt(ctx context.Context, member *PendingBatchIntent, tree *BatchTree, settlers []common.Address) (string, common.Address, bool, error)
+	// headTime and finalizedTime are the head's and the finalized block's timestamps.
+	headTime(ctx context.Context) (time.Time, error)
+	finalizedTime(ctx context.Context) (time.Time, error)
+	// priorSettlementAttempt finds, in the finalized blocks from the attestation to until, a mined
+	// settlement of the member by a roster validator: a success or a revert the intent caused.
+	priorSettlementAttempt(ctx context.Context, member *PendingBatchIntent, tree *BatchTree, att anchorAttestation, until time.Time, roster []common.Address) (priorAttempt, bool, error)
+	// prescanEarlierWindows advances that search ahead of this validator's turn, deciding nothing.
+	prescanEarlierWindows(ctx context.Context, member *PendingBatchIntent, tree *BatchTree, att anchorAttestation, until time.Time, roster []common.Address)
 	// settlementRevertCause reports whether a reverted settlement reverted on its own timing fields.
 	settlementRevertCause(ctx context.Context, txHash string) (timing bool, why string, err error)
 }
@@ -504,9 +508,11 @@ func (o *BatchOrchestrator) settleAndClassify(
 	chainID := member.ChainID
 
 	// Every on-demand settlement is fenced to its window; one without a fence could execute after
-	// another validator has taken over.
+	// another validator has taken over. Nothing is sent and nothing about the member is concluded.
 	if out.fence.IsZero() {
-		return nil, fmt.Errorf("intent %s: settlement has no window fence", member.IntentID)
+		out.Deferred = true
+		o.logf("[OD] ❌ intent=%s: settlement reached with no window fence — not sent; deferring", member.IntentID)
+		return out, nil
 	}
 	// N=1: the branch is empty and the root is the leaf.
 	branch, berr := tree.BranchFor(0)

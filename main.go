@@ -724,27 +724,6 @@ func main() {
 	// signs only on an exact bundleId match — but keyed on (chain, operationID) rather than a
 	// height window. A SEPARATE route on purpose: a validator that has not been upgraded
 	// answers 404 here rather than misreading an on-demand request as a period one.
-	// Which settlement transactions this validator sent for an on-demand member. Candidates only: a
-	// validator taking over a member verifies every one on chain before it counts.
-	mux.HandleFunc(execution.SettlementEvidenceEndpoint, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		stack := batchStackForAttestation.Load()
-		if stack == nil {
-			http.Error(w, "batch stack not ready", http.StatusServiceUnavailable)
-			return
-		}
-		var req execution.SettlementEvidenceRequest
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
-			http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(stack.HandleSettlementEvidenceRequest(&req))
-	})
-
 	mux.HandleFunc(execution.OnDemandAttestationEndpoint, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

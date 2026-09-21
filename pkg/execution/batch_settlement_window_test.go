@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"math/big"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -47,10 +46,6 @@ func TestSettlementWindows_RotateFromTheAttester(t *testing.T) {
 		if !w.fence(j).After(start) || !w.fence(j).Before(start.Add(SettlementWindow)) {
 			t.Fatalf("fence(%d) %s outside its window", j, w.fence(j))
 		}
-	}
-	got := w.earlierSettlers(4, odOwnAddr) // windows 0..3: other, third, own, other
-	if len(got) != 2 || got[0] != odOtherAddr || got[1] != odThirdAddr {
-		t.Fatalf("earlier settlers %v", got)
 	}
 }
 
@@ -99,8 +94,8 @@ func TestOD_FreshAttestationSettlesUnderItsFence(t *testing.T) {
 // finalized block is past window 0's fence, window 1's settler settles - under window 1's fence.
 func TestOD_DeadAttesterIsTakenOverInTheNextWindow(t *testing.T) {
 	f := &fakeODChain{attested: true, settleTx: odSettleTx, attester: odThirdAddr, // window 1 = own
-		head:      odT0.Add(SettlementWindow + time.Minute),
-		finalized: odT0.Add(SettlementWindow - time.Minute)} // past fence(0) = T+8m
+		head:      odT0.Add(SettlementWindow + 2*time.Minute),
+		finalized: odT0.Add(SettlementWindow + time.Minute)} // past fence(0) + the reorg margin
 	out := settle(t, f, odMember(1, odChain, 100))
 	if !out.Settled || f.settleCalls != 1 {
 		t.Fatalf("outcome %+v; want this validator to take over and settle", out)
@@ -108,8 +103,8 @@ func TestOD_DeadAttesterIsTakenOverInTheNextWindow(t *testing.T) {
 	if want := odT0.Add(2*SettlementWindow - settlementFenceMargin); !f.lastFence.Equal(want) {
 		t.Fatalf("fence %s, want window 1's %s", f.lastFence, want)
 	}
-	if len(f.priorAsked) != 1 || f.priorAsked[0] != odThirdAddr {
-		t.Fatalf("asked %v for earlier attempts; want the attester", f.priorAsked)
+	if want := odT0.Add(SettlementWindow - settlementFenceMargin); !f.priorUntil.Equal(want) {
+		t.Fatalf("earlier windows scanned until %s, want window 0's fence %s", f.priorUntil, want)
 	}
 }
 
@@ -118,7 +113,7 @@ func TestOD_DeadAttesterIsTakenOverInTheNextWindow(t *testing.T) {
 func TestOD_TakeoverWaitsForFinalityPastThePreviousFence(t *testing.T) {
 	f := &fakeODChain{attested: true, settleTx: odSettleTx, attester: odThirdAddr,
 		head:      odT0.Add(SettlementWindow + time.Minute),
-		finalized: odT0.Add(SettlementWindow - settlementFenceMargin)} // exactly at fence(0): not past
+		finalized: odT0.Add(SettlementWindow - settlementFenceMargin + settlementReorgMargin)} // not past fence(0)+margin
 	out := settle(t, f, odMember(1, odChain, 100))
 	if !out.Deferred || f.settleCalls != 0 {
 		t.Fatalf("outcome %+v; want held until finality passes the fence", out)
@@ -129,8 +124,8 @@ func TestOD_TakeoverWaitsForFinalityPastThePreviousFence(t *testing.T) {
 // the attester's outcome to record, and the next settler releases instead of executing again.
 func TestOD_AnEarlierSettlersMinedAttemptIsItsOutcome(t *testing.T) {
 	f := &fakeODChain{attested: true, settleTx: odSettleTx, attester: odThirdAddr,
-		head: odT0.Add(SettlementWindow + time.Minute), finalized: odT0.Add(SettlementWindow),
-		priorTx: odRevertTx, priorFrom: odThirdAddr, priorFound: true}
+		head: odT0.Add(SettlementWindow + 2*time.Minute), finalized: odT0.Add(SettlementWindow + time.Minute),
+		priorTx: odRevertTx, priorFrom: odThirdAddr, priorFound: true, priorReverted: true}
 	out := settle(t, f, odMember(1, odChain, 100))
 	if !out.Released || f.settleCalls != 0 || len(f.costs) != 0 || f.failedLegs != 0 {
 		t.Fatalf("outcome %+v settle=%d; want released with nothing sent or reported", out, f.settleCalls)
@@ -192,18 +187,6 @@ func TestOD_UnconfirmedRosterDefers(t *testing.T) {
 	}
 }
 
-// An on-demand settlement is never sent without a fence.
-func TestOD_SettlementWithoutAFenceIsRefused(t *testing.T) {
-	f := &fakeODChain{settleTx: odSettleTx}
-	tree, err := BuildBatchTree(odChain, []BatchLeafInput{mustLeaf(t, odMember(1, odChain, 100))}, 100)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := odOrchestrator(f).settleAndClassify(context.Background(), f, odMember(1, odChain, 100), tree, &OnDemandOutcome{}); err == nil || f.settleCalls != 0 {
-		t.Fatalf("err %v settle calls %d; want refused before sending", err, f.settleCalls)
-	}
-}
-
 func mustLeaf(t *testing.T, m *PendingBatchIntent) BatchLeafInput {
 	t.Helper()
 	in, err := m.LeafInput()
@@ -251,39 +234,18 @@ func TestSettlementProofOfRoundTrip(t *testing.T) {
 	}
 }
 
-// The evidence a validator serves is every hash its outbox holds for the member's settlement - and
-// nothing else's.
-func TestOutboxHashesForOwner(t *testing.T) {
-	o, err := openTxOutbox(filepath.Join(t.TempDir(), "o.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, e := range []*outboxEntry{
-		{Nonce: 5, Owner: "settle:a", Hashes: []string{"0x05a", "0x05b"}},
-		{Nonce: 3, Owner: "settle:a", Hashes: []string{"0x03"}},
-		{Nonce: 4, Owner: "settle:b", Hashes: []string{"0x04"}},
-	} {
-		if err := o.put(e); err != nil {
-			t.Fatal(err)
-		}
-	}
-	got := o.hashesForOwner("settle:a")
-	if len(got) != 3 || got[0] != "0x03" || got[1] != "0x05a" || got[2] != "0x05b" {
-		t.Fatalf("hashes %v", got)
-	}
-	if len(o.hashesForOwner("")) != 0 {
-		t.Fatal("hashes for no owner")
-	}
-}
-
 func TestIsCallVerdict(t *testing.T) {
 	for _, c := range []struct {
 		err  error
 		want bool
 	}{
 		{errors.New("execution reverted"), true},
-		{errors.New("abi: attempting to unmarshall an empty string while arguments are expected"), true},
-		{errors.New("no contract code at given address"), true},
+		{rpcErr{3, "execution reverted: leaf mismatch"}, true},
+		{rpcErr{-32000, "header not found"}, false},
+		{rpcErr{-32005, "rate limited"}, false},
+		{rpcErr{-32603, "internal error"}, false},
+		{errors.New("abi: attempting to unmarshall an empty string while arguments are expected"), false},
+		{errors.New("no contract code at given address"), false},
 		{errors.New("Post \"https://rpc\": dial tcp: i/o timeout"), false},
 		{errors.New("429 Too Many Requests"), false},
 		{context.DeadlineExceeded, false},
@@ -292,15 +254,27 @@ func TestIsCallVerdict(t *testing.T) {
 			t.Fatalf("%v: verdict=%t, want %t", c.err, got, c.want)
 		}
 	}
-	var _ rpc.DataError // the typed revert error is also a verdict
 }
+
+// rpcErr is a JSON-RPC error body as go-ethereum surfaces it: a code, a message and data.
+type rpcErr struct {
+	code int
+	msg  string
+}
+
+func (e rpcErr) Error() string          { return e.msg }
+func (e rpcErr) ErrorCode() int         { return e.code }
+func (e rpcErr) ErrorData() interface{} { return "0x" }
+
+var _ rpc.Error = rpcErr{}
+var _ rpc.DataError = rpcErr{}
 
 // A taker acts only once finality passes the previous fence. If a window were shorter than the
 // finality lag plus the margins, no taker could ever act inside its own window and a dead attester's
 // member would never be taken over. 21 minutes is the largest lag measured on the live testnets.
 func TestSettlementWindowExceedsFinalityLag(t *testing.T) {
 	const measuredLag = 21 * time.Minute
-	if SettlementWindow-settlementFenceMargin-settlementMinLanding <= measuredLag {
+	if SettlementWindow-settlementFenceMargin-settlementMinLanding-settlementReorgMargin <= measuredLag {
 		t.Fatalf("window %s leaves no room to act after a %s finality lag", SettlementWindow, measuredLag)
 	}
 }
@@ -316,5 +290,124 @@ func TestSettlementRosterIsOrderIndependent(t *testing.T) {
 		if i > 0 && bytes.Compare(a[i-1][:], a[i][:]) >= 0 {
 			t.Fatalf("not ascending: %v", a)
 		}
+	}
+}
+
+// The live defect's other half: the attester reverted, recorded the failure and is now unreachable. Its
+// revert is in the finalized chain, so the taker finds it there and releases - it never executes a
+// member whose failure is on record.
+func TestOD_RecordedRevertOfAnUnreachableAttesterIsFoundOnChain(t *testing.T) {
+	f := &fakeODChain{attested: true, settleTx: odSettleTx, attester: odThirdAddr,
+		head: odT0.Add(SettlementWindow + 2*time.Minute), finalized: odT0.Add(SettlementWindow + time.Minute),
+		priorTx: odRevertTx, priorFrom: odThirdAddr, priorFound: true, priorReverted: true}
+	out := settle(t, f, odMember(1, odChain, 100))
+	if !out.Released || f.settleCalls != 0 {
+		t.Fatalf("outcome %+v settle=%d; want released", out, f.settleCalls)
+	}
+}
+
+// This validator's own earlier attempt, which its record lost: found on chain, it is recorded now by
+// this validator, not released to nobody.
+func TestOD_OwnAttemptFoundOnChainIsRecorded(t *testing.T) {
+	f := &fakeODChain{attested: true, settleTx: odSettleTx, attester: odOwnAddr,
+		head:      odT0.Add(3*SettlementWindow + 2*time.Minute), // window 3 = own again (roster of 3)
+		finalized: odT0.Add(3*SettlementWindow + time.Minute),
+		priorTx:   odRevertTx, priorFrom: odOwnAddr, priorFound: true, priorReverted: true}
+	out := settle(t, f, odMember(1, odChain, 100))
+	if !out.Reverted || out.TxHash != odRevertTx || f.settleCalls != 0 || f.failedLegs != 1 {
+		t.Fatalf("outcome %+v; want this validator's own revert recorded", out)
+	}
+}
+
+// Window 0 never needs the finalized block: the attester settles its fresh attestation even if the
+// provider cannot serve "finalized".
+func TestOD_WindowZeroDoesNotReadFinality(t *testing.T) {
+	f := &fakeODChain{attested: true, settleTx: odSettleTx, attester: odOwnAddr, finalizedErr: errors.New("finalized not supported")}
+	if out := settle(t, f, odMember(1, odChain, 100)); !out.Settled {
+		t.Fatalf("outcome %+v; want settled without a finality read", out)
+	}
+}
+
+// A settlement reached without a fence is a coding error: nothing is sent and nothing is recorded -
+// in particular no failure.
+func TestOD_ZeroFenceDefersWithoutAFailure(t *testing.T) {
+	f := &fakeODChain{settleTx: odSettleTx}
+	tree, err := BuildBatchTree(odChain, []BatchLeafInput{mustLeaf(t, odMember(1, odChain, 100))}, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := odOrchestrator(f).settleAndClassify(context.Background(), f, odMember(1, odChain, 100), tree, &OnDemandOutcome{})
+	if err != nil || !out.Deferred || f.settleCalls != 0 {
+		t.Fatalf("outcome %+v err %v; want deferred, nothing sent", out, err)
+	}
+}
+
+// Every validator that reaches an attested member marks it, and the memory-backstop prune then keeps
+// it: a later settlement window may be this validator's.
+func TestOD_AttestedMemberIsHeldPastTheTTL(t *testing.T) {
+	pool := NewBatchMempool(BatchMempoolConfig{})
+	m := odMember(1, odChain, 100)
+	if err := pool.AddOnDemand(m); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeODChain{attested: true, attester: odOtherAddr}
+	o := odOrchestrator(f)
+	o.mempool = pool
+	if out, err := o.SettleOnDemandMember(context.Background(), pool.PendingOnDemand(odChain)[0], proveOK); err != nil || !out.Deferred {
+		t.Fatalf("outcome %+v err %v", out, err)
+	}
+	if n := pool.PruneOnDemandOlderThan(time.Nanosecond, time.Now().Add(3*time.Hour)); n != 0 {
+		t.Fatalf("pruned %d attested member(s); a later window may be this validator's", n)
+	}
+}
+
+// Only a roster validator's transaction to the member's account is a candidate. Transaction types the
+// client cannot decode never reach this point: the scan reads raw JSON.
+func TestSettlementCandidates(t *testing.T) {
+	acct := common.HexToAddress("0x32b4687bE3c02d52e2d94Dc1cFAF03a0E5af0C8B")
+	other := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	outsider := common.HexToAddress("0x000000000000000000000000000000000000dEaD")
+	txs := []scanTx{
+		{Hash: common.Hash{1}, From: odOtherAddr, To: &acct},
+		{Hash: common.Hash{2}, From: outsider, To: &acct},
+		{Hash: common.Hash{3}, From: odOtherAddr, To: &other},
+		{Hash: common.Hash{4}, From: odOwnAddr, To: nil},
+		{Hash: common.Hash{5}, From: odOwnAddr, To: &acct},
+	}
+	got := settlementCandidates(txs, acct, odRoster3)
+	if len(got) != 2 || got[0].Hash != (common.Hash{1}) || got[1].Hash != (common.Hash{5}) {
+		t.Fatalf("candidates %+v", got)
+	}
+}
+
+// The pre-check tells a validator whether an attested member is its business now, and makes the next
+// window's settler scan ahead, lock-free, so its own turn is short.
+func TestOD_PrecheckAndPrescan(t *testing.T) {
+	m := odMember(1, odChain, 100)
+	// Window 0 is the attester's (other); window 1 is third; roster [own, other, third].
+	f := &fakeODChain{attested: true, attester: odOtherAddr, head: odT0.Add(time.Minute)}
+	needed, err := odOrchestrator(f).OnDemandMemberNeedsThisValidator(context.Background(), m)
+	if err != nil || needed || f.prescans != 0 {
+		t.Fatalf("needed=%t err=%v prescans=%d; own is neither this window's nor the next", needed, err, f.prescans)
+	}
+	if !m.AttestedSeen {
+		t.Fatal("an attested member was not marked held")
+	}
+	f = &fakeODChain{attested: true, attester: odThirdAddr, head: odT0.Add(time.Minute)} // window 1 = own
+	needed, err = odOrchestrator(f).OnDemandMemberNeedsThisValidator(context.Background(), odMember(1, odChain, 100))
+	if err != nil || needed || f.prescans != 1 {
+		t.Fatalf("needed=%t err=%v prescans=%d; the next settler pre-scans but does not act yet", needed, err, f.prescans)
+	}
+	f = &fakeODChain{attested: true, attester: odThirdAddr, head: odT0.Add(SettlementWindow + time.Minute)}
+	if needed, _ := odOrchestrator(f).OnDemandMemberNeedsThisValidator(context.Background(), odMember(1, odChain, 100)); !needed {
+		t.Fatal("own window: not reported as needed")
+	}
+	f = &fakeODChain{attested: true, consumed: true, attester: odOtherAddr}
+	if needed, _ := odOrchestrator(f).OnDemandMemberNeedsThisValidator(context.Background(), odMember(1, odChain, 100)); !needed {
+		t.Fatal("a spent leaf must bring every holder to release its copy")
+	}
+	f = &fakeODChain{attested: false}
+	if needed, _ := odOrchestrator(f).OnDemandMemberNeedsThisValidator(context.Background(), odMember(1, odChain, 100)); needed {
+		t.Fatal("an unattested member is the anchoring leader's, not this validator's")
 	}
 }
