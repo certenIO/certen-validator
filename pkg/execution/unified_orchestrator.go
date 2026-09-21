@@ -676,6 +676,30 @@ func (o *UnifiedOrchestrator) updateLifecycleComplete(ctx context.Context, inten
 	}
 }
 
+// executionOutcome is what the cycle's observed executions did: "succeeded" when every observed
+// transaction is a finalized success, "reverted" when every one is a finalized revert, and "" when
+// they are not all final or do not agree - a batch whose members ended differently has no single
+// outcome, and each intent's own evidence has to decide it.
+func executionOutcome(obs []*chain.ObservationResult) (string, []string) {
+	outcome := ""
+	txs := make([]string, 0, len(obs))
+	for _, o := range obs {
+		if o == nil || !o.IsFinalized {
+			return "", nil
+		}
+		this := "succeeded"
+		if observationReverted(o) {
+			this = "reverted"
+		}
+		if outcome != "" && outcome != this {
+			return "", nil
+		}
+		outcome = this
+		txs = append(txs, o.TxHash)
+	}
+	return outcome, txs
+}
+
 // revertedObservation returns the first observed transaction that is a finalized revert.
 func revertedObservation(obs []*chain.ObservationResult) (string, bool) {
 	for _, o := range obs {
@@ -2661,6 +2685,13 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 		"attestation_scheme": result.Scheme,
 		"threshold_met":      result.ThresholdMet,
 		"write_back_success": result.WriteBackSuccess,
+	}
+	// What the proven execution DID. An artifact exists for a reverted settlement as well as a
+	// successful one - the failure is proven, attested and written back too - so the artifact must
+	// say which, or a reader of it (the gateway) takes "a proof exists" to mean "it executed".
+	if outcome, txs := executionOutcome(result.ObservationResults); outcome != "" {
+		artifactData["execution_outcome"] = outcome
+		artifactData["execution_tx_hashes"] = txs
 	}
 	artifactJSON, err := json.Marshal(artifactData)
 	if err != nil {
