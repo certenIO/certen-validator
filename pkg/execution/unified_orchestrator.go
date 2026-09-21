@@ -552,8 +552,14 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 		o.completeProofCycles(ctx, req.CycleID, cycle.Completions, result, req.MerkleRoot, result.WriteBackTxHash)
 	}
 
-	// Intent lifecycle: mark as complete
-	o.updateLifecycleComplete(ctx, req.IntentID, req.CycleID, result.WriteBackTxHash)
+	// Intent lifecycle: complete - or FAILED, when what the cycle proved and wrote back is that
+	// the settlement reverted. The write-back records the failure; the lifecycle must say the
+	// same thing, not "complete".
+	if tx, reverted := revertedObservation(result.ObservationResults); reverted {
+		o.updateLifecycleReverted(ctx, req.IntentID, req.CycleID, tx, result.WriteBackTxHash)
+	} else {
+		o.updateLifecycleComplete(ctx, req.IntentID, req.CycleID, result.WriteBackTxHash)
+	}
 
 	if o.config.OnCycleComplete != nil {
 		o.config.OnCycleComplete(result)
@@ -615,6 +621,9 @@ func (o *UnifiedOrchestrator) logTargetChainResolution(intentID, txHash string, 
 		return
 	}
 	outcome := consensus.TargetChainOutcomeFromReceiptStatus(obs.Status)
+	if observationReverted(obs) {
+		outcome = consensus.TargetChainFailed
+	}
 	switch outcome {
 	case consensus.TargetChainConfirmedOutcome:
 		fmt.Printf("✅ [SETTLEMENT-RESOLVED] intent=%s tx=%s CONFIRMED status=1 block=%d chain=%s "+
@@ -664,6 +673,34 @@ func (o *UnifiedOrchestrator) updateLifecycleComplete(ctx context.Context, inten
 		opts...,
 	); err != nil {
 		fmt.Printf("Warning: [LIFECYCLE] failed to update %s to complete: %v\n", intentID, err)
+	}
+}
+
+// revertedObservation returns the first observed transaction that is a finalized revert.
+func revertedObservation(obs []*chain.ObservationResult) (string, bool) {
+	for _, o := range obs {
+		if observationReverted(o) {
+			return o.TxHash, true
+		}
+	}
+	return "", false
+}
+
+// updateLifecycleReverted marks an intent failed because its settlement reverted, keeping the
+// write-back that recorded the failure.
+func (o *UnifiedOrchestrator) updateLifecycleReverted(ctx context.Context, intentID, cycleID, txHash, writeBackTxHash string) {
+	if o.config.Repos == nil || o.config.Repos.IntentLifecycle == nil || intentID == "" {
+		return
+	}
+	opts := []database.UpdateOption{
+		database.WithCycleID(cycleID),
+		database.WithErrorMessage(fmt.Sprintf("settlement transaction %s reverted on the target chain", txHash)),
+	}
+	if writeBackTxHash != "" {
+		opts = append(opts, database.WithWriteBackTx(writeBackTxHash))
+	}
+	if err := o.config.Repos.IntentLifecycle.UpdateStatus(ctx, intentID, database.IntentLifecycleFailed, opts...); err != nil {
+		fmt.Printf("Warning: [LIFECYCLE] failed to update %s to failed: %v\n", intentID, err)
 	}
 }
 
@@ -889,6 +926,21 @@ func (o *UnifiedOrchestrator) verifyContractCallGate(ctx context.Context, cycle 
 				verified[key] = result
 				break
 			}
+			// A REVERT of the committed call is an outcome, not a failed verification. It is proven
+			// differently - inclusion of the status-0 receipt, and the transaction bound to the
+			// committed call and operationID - and the cycle goes on to attest and write back the
+			// FAILURE. Refusing it here was what left a reverted payment recorded nowhere.
+			if call, ok := l.committedCall(); ok {
+				if rres, rerr := observer.VerifyRevertedCall(ctx, common.HexToHash(tx),
+					[]CommittedCall{call}, cycleOperationID(cm), common.HexToAddress(l.account)); rerr == nil {
+					fmt.Printf("❌ [RB-GATE] Contract call REVERTED, proven (RB-2 inclusion of the status-0 receipt, "+
+						"bound to the committed call): chain=%s tx=%s block=%s - attesting the failure\n",
+						l.chainKey, tx, rres.BlockNumber.String())
+					legOK = true
+					verified[key] = rres
+					break
+				}
+			}
 			lastErr = verr
 		}
 		if !legOK {
@@ -903,9 +955,51 @@ func (o *UnifiedOrchestrator) verifyContractCallGate(ctx context.Context, cycle 
 type rbCallLeg struct {
 	chainKey   string
 	target     string
+	value      string
+	callData   string
+	account    string // the member account the call is sent from (the leg's source)
 	execTxHash string
 	events     []ExpectedEvent
 	state      []ExpectedStateSlot
+}
+
+// committedCall is the call this leg committed to, for binding a REVERTED execution to it. The
+// boolean is false when the leg does not carry enough to bind (a commitment written before
+// callData was carried), in which case a revert cannot be attested for it.
+func (l rbCallLeg) committedCall() (CommittedCall, bool) {
+	if l.target == "" || l.callData == "" {
+		return CommittedCall{}, false
+	}
+	c, err := ParseCommittedCall(l.target, l.value, l.callData)
+	if err != nil {
+		return CommittedCall{}, false
+	}
+	return c, true
+}
+
+// observationReverted reports whether an observed transaction is a finalized REVERT.
+//
+// Not TargetChainOutcomeFromReceiptStatus alone: the EVM strategy reports a reverted receipt as
+// status 0 - its raw receipt status - which the strategy interface otherwise uses for "pending".
+// Terminality comes from IsFinalized; once finalized, anything other than success is a revert.
+// The same rule HandlePeerAttestationRequest applies.
+func observationReverted(obs *chain.ObservationResult) bool {
+	return obs != nil && obs.IsFinalized && obs.Status != 1
+}
+
+// cycleOperationID is the intent's operationID carried in the commitment, when it is.
+func cycleOperationID(cm map[string]interface{}) *[32]byte {
+	s, _ := cm["operationID"].(string)
+	if s == "" {
+		return nil
+	}
+	b, err := hex.DecodeString(strings.TrimPrefix(s, "0x"))
+	if err != nil || len(b) != 32 {
+		return nil
+	}
+	var out [32]byte
+	copy(out[:], b)
+	return &out
 }
 
 func normalizeRBChainKey(s string) string {
@@ -939,10 +1033,16 @@ func parseRBContractCallLegs(v interface{}) []rbCallLeg {
 	for _, m := range maps {
 		ck, _ := m["chainKey"].(string)
 		tgt, _ := m["target"].(string)
+		val, _ := m["value"].(string)
+		cd, _ := m["callData"].(string)
+		acct, _ := m["account"].(string)
 		etx, _ := m["execTxHash"].(string)
 		out = append(out, rbCallLeg{
 			chainKey:   ck,
 			target:     tgt,
+			value:      val,
+			callData:   cd,
+			account:    acct,
 			execTxHash: etx,
 			events:     parseRBExpectedEvents(m["expectedEvents"]),
 			state:      parseRBExpectedState(m["expectedState"]),
@@ -1036,7 +1136,12 @@ func (o *UnifiedOrchestrator) executionTxHashForChain(req *UnifiedProofCycleRequ
 // peerVerifyCommittedEffect (RB-SEC-1) independently verifies a contract-call intent's
 // committed effect before this peer signs, using the USER-SIGNED intent fetched from
 // Accumulate — never trusting the executor's request. Fails closed on any doubt.
-func (o *UnifiedOrchestrator) peerVerifyCommittedEffect(ctx context.Context, msg *attestation.AttestationMessage, chainStrategy chain.ChainExecutionStrategy) error {
+//
+// reverted says the peer's OWN observation found the execution reverted. The committed events then
+// cannot exist, and what is verified instead is that the reverted transaction is the committed call
+// under the intent's operationID - so a quorum can attest the FAILURE of a contract call, and cannot
+// be led to attest an unrelated failed transaction as this intent's.
+func (o *UnifiedOrchestrator) peerVerifyCommittedEffect(ctx context.Context, msg *attestation.AttestationMessage, chainStrategy chain.ChainExecutionStrategy, reverted bool) error {
 	// Native-only deployments have no contract-call effects to independently verify here
 	// (the native value transfer is verified on the normal observation path). Everything
 	// below concerns the CERTEN_ALLOW_CONTRACT_CALLS regime.
@@ -1134,6 +1239,37 @@ func (o *UnifiedOrchestrator) peerVerifyCommittedEffect(ctx context.Context, msg
 	if oerr != nil {
 		return oerr // fail closed — cannot independently verify without an observer
 	}
+	if reverted {
+		if len(blobs) < 4 {
+			return fmt.Errorf("signed intent incomplete (%d blobs); cannot bind the reverted call to its operationID", len(blobs))
+		}
+		opBytes, _, operr := proof.ComputeCanonical4BlobHash(blobs[0], blobs[1], blobs[2], blobs[3])
+		if operr != nil || len(opBytes) != 32 {
+			return fmt.Errorf("derive operationID from the signed intent: %v", operr)
+		}
+		var opID [32]byte
+		copy(opID[:], opBytes)
+		calls := make([]CommittedCall, 0, len(applicable))
+		var account common.Address
+		for _, l := range applicable {
+			c, ok := l.committedCall()
+			if !ok || !common.IsHexAddress(l.account) {
+				return fmt.Errorf("committed contract call on %s cannot be bound to a reverted execution", l.chainKey)
+			}
+			a := common.HexToAddress(l.account)
+			if account != (common.Address{}) && a != account {
+				return fmt.Errorf("committed calls on %s come from two accounts", l.chainKey)
+			}
+			account = a
+			calls = append(calls, c)
+		}
+		if _, verr := observer.VerifyRevertedCall(ctx, common.HexToHash(msg.ExecutionTxHash), calls, &opID, account); verr != nil {
+			return fmt.Errorf("reverted execution not proven as the committed call on %s: %w", msg.ExecutionTxHash, verr)
+		}
+		fmt.Printf("❌ [RB-SEC-1] Peer independently verified the committed call REVERTED for intent %s (chain=%s tx=%s)\n",
+			msg.IntentID, msg.TargetChain, msg.ExecutionTxHash)
+		return nil
+	}
 	for _, l := range applicable {
 		if len(l.events) == 0 {
 			return fmt.Errorf("committed contract call has no events — refusing")
@@ -1162,7 +1298,10 @@ func parseCommittedCallLegs(crossChainData []byte) []rbCallLeg {
 	var ccd struct {
 		Legs []struct {
 			Chain            string `json:"chain"`
+			From             string `json:"from"`
 			ExecutionPayload *struct {
+				Target         string `json:"target"`
+				Value          string `json:"value"`
 				CallData       string `json:"callData"`
 				ExpectedEvents []struct {
 					Contract string `json:"contract"`
@@ -1209,7 +1348,8 @@ func parseCommittedCallLegs(crossChainData []byte) []rbCallLeg {
 				Value:   common.HexToHash(s.Value),
 			})
 		}
-		out = append(out, rbCallLeg{chainKey: normalizeRBChainKey(leg.Chain), events: events, state: state})
+		out = append(out, rbCallLeg{chainKey: normalizeRBChainKey(leg.Chain), target: ep.Target, value: ep.Value,
+			callData: cd, account: leg.From, events: events, state: state})
 	}
 	return out
 }
@@ -1824,7 +1964,7 @@ func (o *UnifiedOrchestrator) HandlePeerAttestationRequest(
 	// 3b. RB-SEC-1: independently verify the committed CONTRACT-CALL effect from the
 	//     USER-SIGNED intent (fetched from Accumulate), so the quorum — not just the
 	//     executor — enforces RB-2/RB-4/RB-5. Fails closed on any doubt.
-	if err := o.peerVerifyCommittedEffect(ctx, msg, chainStrategy); err != nil {
+	if err := o.peerVerifyCommittedEffect(ctx, msg, chainStrategy, obs.Status != 1); err != nil {
 		return fail(fmt.Sprintf("committed-effect verification failed: %v", err))
 	}
 

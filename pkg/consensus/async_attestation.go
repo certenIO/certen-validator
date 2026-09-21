@@ -247,16 +247,26 @@ func (bv *BFTValidator) RunProofCycle(
 			att.IntentID, TargetChainTxRef(res))
 	}
 
-	// A member with NO transaction at all — a batch member whose settlement reverted.
+	// A member with NO transaction at all — one whose settlement never reached the chain. (A
+	// settlement that REVERTED has a transaction, and is observed and recorded like any other.)
 	//
 	// This used to return silently, which is the failure mode the whole batch design exists to
 	// avoid: the intent settled nowhere, was recorded nowhere, and its ADI learned nothing. It
 	// is not an observation problem — there is genuinely nothing on the destination chain to
 	// observe — so Phase 7 is skipped deliberately and the FAILURE is recorded instead.
 	if extractRawTxHash(res.GovernanceTxHash) == "" && extractRawTxHash(res.AnchorTxID) == "" {
-		bv.logger.Printf("❌ [PROOF-CYCLE] intent %s has no settlement transaction (execution "+
-			"reverted); skipping Phase 7 observation — there is nothing on chain to observe — "+
-			"and recording the FAILURE so the intent is not silently lost", att.IntentID)
+		// A caller that says the member SETTLED but has no transaction to show for it is not
+		// describing a failure. Failover validators did exactly this for every settled on-demand
+		// intent until they learned to tell their own settlement from another's; recording it as
+		// failed would contradict the chain.
+		if att.TargetChainOutcome == TargetChainConfirmedOutcome {
+			bv.logger.Printf("⚠️ [PROOF-CYCLE] intent %s reported settled with no settlement transaction; "+
+				"nothing to observe and no failure to record", att.IntentID)
+			return
+		}
+		bv.logger.Printf("❌ [PROOF-CYCLE] intent %s has no settlement transaction — none reached the "+
+			"target chain; skipping Phase 7 observation and recording the FAILURE so the intent is "+
+			"not silently lost", att.IntentID)
 		bv.recordFailedProofCycle(ctx, att, res)
 		return
 	}
@@ -328,9 +338,15 @@ func (bv *BFTValidator) RunProofCycle(
 					sts = append(sts, map[string]interface{}{"account": s.Account, "slot": s.Slot, "value": s.Value})
 				}
 				rbLegs = append(rbLegs, map[string]interface{}{
-					"chainKey":       chainKey,
-					"target":         ep.Target,
-					"value":          ep.Value,
+					"chainKey": chainKey,
+					"target":   ep.Target,
+					"value":    ep.Value,
+					// The committed calldata, so a REVERTED execution can be bound to this call
+					// rather than refused: see VerifyRevertedCall.
+					"callData": cd,
+					// The member account the call is sent from; a reverted execution must be
+					// addressed to it.
+					"account":        leg.From,
 					"execTxHash":     execTx,
 					"expectedEvents": evs,
 					"expectedState":  sts,
@@ -339,6 +355,11 @@ func (bv *BFTValidator) RunProofCycle(
 			if len(rbLegs) > 0 {
 				commitMap["rbContractCall"] = true
 				commitMap["rbContractCallLegs"] = rbLegs
+				// The intent's operationID, which the settlement is authorised under. The gate
+				// requires a reverted execution to carry it, so a failure is bound to THIS intent.
+				if opID, oerr := att.CertenIntent.OperationID(); oerr == nil {
+					commitMap["operationID"] = opID
+				}
 				bv.logger.Printf("🔒 [RB-GATE] %d contract-call leg(s) flagged for Phase 7 verification", len(rbLegs))
 			}
 		}

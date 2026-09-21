@@ -84,7 +84,7 @@ func TestRBSec1_NoQueryClientFailsClosed(t *testing.T) {
 	t.Setenv("CERTEN_ALLOW_CONTRACT_CALLS", "true")
 	o := orch(nil)
 	msg := &attestation.AttestationMessage{IntentID: "x", TargetChain: "ethereum-sepolia", AccumulateTxHash: "h", AccumulateAccountURL: "a"}
-	if err := o.peerVerifyCommittedEffect(context.Background(), msg, nil); err == nil {
+	if err := o.peerVerifyCommittedEffect(context.Background(), msg, nil, false); err == nil {
 		t.Error("must fail closed when no query client and contract calls enabled")
 	}
 }
@@ -95,7 +95,7 @@ func TestRBSec1_IntentIDMismatchRefused(t *testing.T) {
 	qc := &mockQueryClient{blobs: [][]byte{intentBlob("OTHER"), ccdBlobCall("ethereum-sepolia", "0xE3b7678231642e4de600C601Ff422654D17203f3")}}
 	o := orch(qc)
 	msg := &attestation.AttestationMessage{IntentID: "ATTESTED", TargetChain: "ethereum-sepolia", AccumulateTxHash: "h", AccumulateAccountURL: "a", ExecutionTxHash: "0xabc"}
-	if err := o.peerVerifyCommittedEffect(context.Background(), msg, nil); err == nil {
+	if err := o.peerVerifyCommittedEffect(context.Background(), msg, nil, false); err == nil {
 		t.Error("must refuse when fetched intent_id != attested intent_id")
 	}
 }
@@ -106,7 +106,7 @@ func TestRBSec1_FetchErrorRefused(t *testing.T) {
 	qc := &mockQueryClient{err: fmt.Errorf("boom")}
 	o := orch(qc)
 	msg := &attestation.AttestationMessage{IntentID: "x", TargetChain: "ethereum-sepolia", AccumulateTxHash: "h", AccumulateAccountURL: "a"}
-	if err := o.peerVerifyCommittedEffect(context.Background(), msg, nil); err == nil {
+	if err := o.peerVerifyCommittedEffect(context.Background(), msg, nil, false); err == nil {
 		t.Error("must refuse when the signed intent cannot be fetched")
 	}
 }
@@ -117,7 +117,7 @@ func TestRBSec1_NativeIntentPasses(t *testing.T) {
 	qc := &mockQueryClient{blobs: [][]byte{intentBlob("x"), ccdBlobNative("ethereum-sepolia")}}
 	o := orch(qc)
 	msg := &attestation.AttestationMessage{IntentID: "x", TargetChain: "ethereum-sepolia", AccumulateTxHash: "h", AccumulateAccountURL: "a"}
-	if err := o.peerVerifyCommittedEffect(context.Background(), msg, nil); err != nil {
+	if err := o.peerVerifyCommittedEffect(context.Background(), msg, nil, false); err != nil {
 		t.Errorf("native intent must pass peer effect check, got %v", err)
 	}
 }
@@ -129,7 +129,7 @@ func TestRBSec1_EmptyIntentIDRefused(t *testing.T) {
 	qc := &mockQueryClient{blobs: [][]byte{intentBlob(""), ccdBlobNative("ethereum-sepolia")}}
 	o := orch(qc)
 	msg := &attestation.AttestationMessage{IntentID: "", TargetChain: "ethereum-sepolia", AccumulateTxHash: "h", AccumulateAccountURL: "a"}
-	if err := o.peerVerifyCommittedEffect(context.Background(), msg, nil); err == nil {
+	if err := o.peerVerifyCommittedEffect(context.Background(), msg, nil, false); err == nil {
 		t.Error("must refuse a contract-call attestation with an empty intent id")
 	}
 }
@@ -141,7 +141,7 @@ func TestRBSec1_NativeNoExecTxNoObserverPasses(t *testing.T) {
 	qc := &mockQueryClient{blobs: [][]byte{intentBlob("x"), ccdBlobNative("ethereum-sepolia")}}
 	o := orch(qc)
 	msg := &attestation.AttestationMessage{IntentID: "x", TargetChain: "ethereum-sepolia", AccumulateTxHash: "h", AccumulateAccountURL: "a", ExecutionTxHash: ""}
-	if err := o.peerVerifyCommittedEffect(context.Background(), msg, nil); err != nil {
+	if err := o.peerVerifyCommittedEffect(context.Background(), msg, nil, false); err != nil {
 		t.Errorf("native intent with no exec tx must pass without an observer, got %v", err)
 	}
 }
@@ -153,7 +153,7 @@ func TestRBSec1_NativeClaimWithExecTxNoObserverFailsClosed(t *testing.T) {
 	qc := &mockQueryClient{blobs: [][]byte{intentBlob("x"), ccdBlobNative("ethereum-sepolia")}}
 	o := orch(qc)
 	msg := &attestation.AttestationMessage{IntentID: "x", TargetChain: "ethereum-sepolia", AccumulateTxHash: "h", AccumulateAccountURL: "a", ExecutionTxHash: "0xabc"}
-	if err := o.peerVerifyCommittedEffect(context.Background(), msg, nil); err == nil {
+	if err := o.peerVerifyCommittedEffect(context.Background(), msg, nil, false); err == nil {
 		t.Error("must fail closed when an execution tx exists but calldata cannot be cross-checked")
 	}
 }
@@ -164,7 +164,7 @@ func TestRBSec1_CallMissingExecTxRefused(t *testing.T) {
 	qc := &mockQueryClient{blobs: [][]byte{intentBlob("x"), ccdBlobCall("ethereum-sepolia", "0xE3b7678231642e4de600C601Ff422654D17203f3")}}
 	o := orch(qc)
 	msg := &attestation.AttestationMessage{IntentID: "x", TargetChain: "ethereum-sepolia", AccumulateTxHash: "h", AccumulateAccountURL: "a", ExecutionTxHash: ""}
-	if err := o.peerVerifyCommittedEffect(context.Background(), msg, nil); err == nil {
+	if err := o.peerVerifyCommittedEffect(context.Background(), msg, nil, false); err == nil {
 		t.Error("must refuse a contract call with no execution tx hash")
 	}
 }
