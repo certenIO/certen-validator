@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -112,6 +113,10 @@ type BatchOrchestrator struct {
 	// A callback rather than a repository handle, so the orchestrator keeps no database
 	// dependency and the wiring stays visible in main.go alongside the other lifecycle hooks.
 	onLegProgress func(ctx context.Context, intentID string, legsCompleted, legsFailed int)
+
+	// odChain replaces the orchestrator's own chain operations for on-demand settlement. Nil in
+	// production, where the orchestrator IS the chain; set by tests to drive the decisions.
+	odChain onDemandChain
 }
 
 // SetLegProgressHook wires persistence of per-member leg outcomes. Optional: unset, settlement
@@ -416,6 +421,14 @@ func (o *BatchOrchestrator) FlushChain(
 		}
 
 		txHash, serr := o.settleMember(ctx, p, tree, branch)
+		var unknown *SettlementOutcomeUnknownError
+		if serr != nil && errors.As(serr, &unknown) {
+			// Sent, outcome not observed within the wait. If the leaf is consumed it landed; it
+			// is a settlement, not a failure.
+			if consumed, cerr := o.memberLeafConsumed(ctx, p); cerr == nil && consumed {
+				serr = nil
+			}
+		}
 		if serr != nil {
 			// A gas-ceiling refusal is "too expensive right now", NOT "this can never work".
 			//
@@ -747,17 +760,81 @@ func (o *BatchOrchestrator) settleMember(
 	}
 
 	txHash := tx.Hash().Hex()
-	receipt, err := bind.WaitMined(ctx, o.ecm.client, tx)
+	// Known BEFORE it is known how it ends: a crash, a shutdown or a lost receipt from here on
+	// must not lose the fact that this node sent a settlement for this member.
+	o.noteOnDemandProgress(p, func(m *PendingBatchIntent) { m.SettlementTx = txHash })
+	// Bounded. WaitMined polls until the context ends, so an unbounded wait on a transaction that
+	// was dropped from the mempool held this member - and the node's claim to be settling it -
+	// for ever.
+	waitCtx, cancel := context.WithTimeout(ctx, settlementWaitTimeout)
+	defer cancel()
+	receipt, err := bind.WaitMined(waitCtx, o.ecm.client, tx)
 	if err != nil {
-		return txHash, fmt.Errorf("waiting for member tx: %w", err)
+		// NOT a revert. The transaction was sent and its outcome was not observed; it may yet
+		// execute. Saying "reverted" here recorded failures for settlements that went on to land.
+		return txHash, &SettlementOutcomeUnknownError{TxHash: txHash, Err: err}
 	}
 	if receipt.Status == 0 {
 		// Only THIS member failed. Its leaf was rolled back with the rest of the tx, so it
 		// stays spendable — the other members are unaffected, which is the point of giving
 		// each its own leaf rather than sharing one anchor-wide consumption flag.
-		return txHash, fmt.Errorf("member execution reverted on-chain (leaf still spendable)")
+		return txHash, errSettlementReverted
 	}
 	return txHash, nil
+}
+
+// settlementWaitTimeout bounds how long a sent settlement is waited on before its outcome is
+// reported unknown. Far longer than a block on any chain the batch path settles on.
+const settlementWaitTimeout = 10 * time.Minute
+
+// errSettlementReverted is a settlement that was mined and reverted: a terminal, observed outcome.
+var errSettlementReverted = errors.New("member execution reverted on-chain (leaf still spendable)")
+
+// SettlementOutcomeUnknownError is a settlement that was SENT but whose outcome was not observed -
+// the wait timed out or its context ended. The transaction may still execute or revert.
+type SettlementOutcomeUnknownError struct {
+	TxHash string
+	Err    error
+}
+
+func (e *SettlementOutcomeUnknownError) Error() string {
+	return fmt.Sprintf("settlement %s sent but its outcome was not observed: %v", e.TxHash, e.Err)
+}
+func (e *SettlementOutcomeUnknownError) Unwrap() error { return e.Err }
+
+// noteOnDemandProgress records this validator's own progress on an on-demand member, persisting it
+// with the queue. A member that is not queued on demand (a period member) is updated in memory only.
+func (o *BatchOrchestrator) noteOnDemandProgress(p *PendingBatchIntent, update func(*PendingBatchIntent)) {
+	if p == nil {
+		return
+	}
+	if o.mempool == nil || !o.mempool.NoteOnDemandProgress(p.ChainID, p.OperationID, update) {
+		update(p)
+	}
+}
+
+// settlementStatus reports whether a transaction is mined, and if so whether it reverted. found is
+// false when the node does not know the transaction at all - dropped, or never broadcast.
+func (o *BatchOrchestrator) settlementStatus(ctx context.Context, txHash string) (found, mined, reverted bool, err error) {
+	if !IsTransactionHash(txHash) {
+		return false, false, false, fmt.Errorf("%q is not a transaction hash", txHash)
+	}
+	h := common.HexToHash(txHash)
+	_, pending, err := o.ecm.client.TransactionByHash(ctx, h)
+	if err != nil {
+		if errors.Is(err, ethereum.NotFound) {
+			return false, false, false, nil
+		}
+		return false, false, false, err
+	}
+	if pending {
+		return true, false, false, nil
+	}
+	receipt, err := o.ecm.client.TransactionReceipt(ctx, h)
+	if err != nil {
+		return true, false, false, err
+	}
+	return true, true, receipt.Status == 0, nil
 }
 
 // legArrays splits legs into the three parallel arrays the contract takes.

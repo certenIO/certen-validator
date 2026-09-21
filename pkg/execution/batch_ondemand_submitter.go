@@ -291,6 +291,16 @@ func (s *OnDemandSubmitter) dispose(
 		txHash = outcome.TxHash
 	}
 
+	// Another validator's outcome: it attested the anchor, or its settlement spent the leaf. It
+	// records the outcome. Attesting here as well - with no transaction of this node's to show -
+	// is what sent every failover validator's empty-handed attestation into Phase 7.
+	if ok && outcome != nil && outcome.Released {
+		s.cfg.Logf("[OD] intent=%s released: its outcome is another validator's to record",
+			member.IntentID)
+		s.cfg.Stack.Mempool.RemoveOnDemand(member.ChainID, member.OperationID)
+		return
+	}
+
 	if settled {
 		if s.cfg.Attest != nil {
 			s.cfg.Attest(ctx, member.Attestation, txHash, member.ChainID, true)
@@ -301,7 +311,7 @@ func (s *OnDemandSubmitter) dispose(
 
 	// Not settled. Attest the FAILURE — loudly and with the transaction hash if the member
 	// reverted on chain, because a reverted transaction is the evidence of the failure and
-	// Phase 7 needs it to write the outcome back to Accumulate.
+	// Phase 7 proves it (VerifyRevertedCall) to write the outcome back to Accumulate.
 	s.cfg.Logf("[OD] ❌ intent=%s attested as FAILED (tx=%q): %v — it is NOT re-executed; the "+
 		"per-intent submitter cannot land against CertenAnchorV8_1. Re-run it deliberately.",
 		member.IntentID, txHash, cause)

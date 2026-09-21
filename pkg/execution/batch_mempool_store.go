@@ -93,6 +93,12 @@ type persistedMember struct {
 	// pkg/consensus, which this package must not import, so it is re-attached on load by a
 	// decoder the wiring supplies.
 	Attestation json.RawMessage `json:"attestation,omitempty"`
+	// This validator's own settlement progress on an on-demand member. omitempty for the same
+	// version-skew reason as Lane.
+	AnchorProved bool   `json:"anchor_proved,omitempty"`
+	AnchorTx     string `json:"anchor_tx,omitempty"`
+	VerifyTx     string `json:"verify_tx,omitempty"`
+	SettlementTx string `json:"settlement_tx,omitempty"`
 }
 
 // AttestationCodec converts the opaque Phase 7-9 snapshot to and from JSON.
@@ -208,6 +214,10 @@ func (s *BatchMempoolStore) encodeMember(p *PendingBatchIntent, lane BatchLane) 
 		OperationID:  "0x" + common.Bytes2Hex(p.OperationID[:]),
 		AccumTxHash:  p.AccumTxHash,
 		CommitHeight: p.CommitHeight,
+		AnchorProved: p.AnchorProved,
+		AnchorTx:     p.AnchorTx,
+		VerifyTx:     p.VerifyTx,
+		SettlementTx: p.SettlementTx,
 	}
 	// on_cadence is the absent default, so it is never written. See persistedMember.Lane.
 	if lane == LaneOnDemand {
@@ -281,6 +291,10 @@ func (s *BatchMempoolStore) Load(m *BatchMempool) (int, error) {
 			OperationID:  opID,
 			AccumTxHash:  pm.AccumTxHash,
 			CommitHeight: pm.CommitHeight,
+			AnchorProved: pm.AnchorProved,
+			AnchorTx:     pm.AnchorTx,
+			VerifyTx:     pm.VerifyTx,
+			SettlementTx: pm.SettlementTx,
 		}
 		for _, l := range pm.Legs {
 			v := new(big.Int)
