@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -34,8 +35,8 @@ import (
 //   - T is the block time of the anchor's attestation (its ProofExecuted transaction): one value,
 //     read identically by every validator.
 //   - Window j is [T + j*W, T + (j+1)*W). Window 0 belongs to the attester; each later window to the
-//     next validator in the chain-bound roster (the configured set the anchor's validator-set root
-//     commits to), wrapping around.
+//     next validator in the chain-bound roster (the set the anchor's validator-set root commits to,
+//     sorted by address as the contract sorts it), wrapping around.
 //   - A settlement sent in window j carries expiresAt = T + (j+1)*W - margin. The account refuses a
 //     settlement mined after its expiresAt (CertenAccountV7: block.timestamp <= proof.expiresAt), so
 //     no settlement from window j can execute after window j - whoever broadcasts it, and however
@@ -278,8 +279,11 @@ func (o *BatchOrchestrator) chainTimes(ctx context.Context) (head, finalized tim
 const validatorSetRootABIJSON = `[{"type":"function","name":"currentValidatorSetRoot","inputs":[],` +
 	`"outputs":[{"name":"","type":"bytes32"}],"stateMutability":"view"}]`
 
-// settlementRoster is the configured validator roster, used only after checking it is the roster the
-// anchor's currentValidatorSetRoot commits to. Cached once confirmed: a roster change needs a restart.
+// settlementRoster is the validator roster, sorted by address ascending, used only after checking it
+// is the set the anchor's currentValidatorSetRoot commits to. The root binds the SET (the contract
+// sorts it), not the order the addresses are configured in, so the schedule must not depend on that
+// order: every validator sorts, and every validator gets the same rotation. Cached once confirmed: a
+// roster change needs a restart.
 func (o *BatchOrchestrator) settlementRoster(ctx context.Context) ([]common.Address, error) {
 	o.rosterMu.Lock()
 	defer o.rosterMu.Unlock()
@@ -311,8 +315,15 @@ func (o *BatchOrchestrator) settlementRoster(ctx context.Context) ([]common.Addr
 		return nil, fmt.Errorf("the configured validator roster is not the one anchor %s commits to "+
 			"(root 0x%x, configured 0x%x)", o.anchorV7.Hex(), got[:8], want[:8])
 	}
-	o.roster = append([]common.Address(nil), addrs...)
+	o.roster = sortedRoster(addrs)
 	return o.roster, nil
+}
+
+// sortedRoster is addrs in ascending address order - the order the anchor's set root uses.
+func sortedRoster(addrs []common.Address) []common.Address {
+	out := append([]common.Address(nil), addrs...)
+	sort.Slice(out, func(i, j int) bool { return bytes.Compare(out[i][:], out[j][:]) < 0 })
+	return out
 }
 
 // settlementProofOf decodes the account proof a settlement transaction carries.

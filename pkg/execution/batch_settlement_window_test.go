@@ -1,6 +1,7 @@
 package execution
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"math/big"
@@ -301,5 +302,19 @@ func TestSettlementWindowExceedsFinalityLag(t *testing.T) {
 	const measuredLag = 21 * time.Minute
 	if SettlementWindow-settlementFenceMargin-settlementMinLanding <= measuredLag {
 		t.Fatalf("window %s leaves no room to act after a %s finality lag", SettlementWindow, measuredLag)
+	}
+}
+
+// Validators whose rosters are configured in different orders still get one rotation.
+func TestSettlementRosterIsOrderIndependent(t *testing.T) {
+	a := sortedRoster([]common.Address{odThirdAddr, odOwnAddr, odOtherAddr})
+	b := sortedRoster([]common.Address{odOtherAddr, odThirdAddr, odOwnAddr})
+	for i := range a {
+		if a[i] != b[i] {
+			t.Fatalf("rosters differ at %d: %v vs %v", i, a, b)
+		}
+		if i > 0 && bytes.Compare(a[i-1][:], a[i][:]) >= 0 {
+			t.Fatalf("not ascending: %v", a)
+		}
 	}
 }
