@@ -73,10 +73,18 @@ type BatchFlushResult struct {
 	// looking like members silently vanishing.
 	AlreadySettled []*PendingBatchIntent
 
-	// Retryable members hit a TRANSIENT refusal — today only a gas ceiling breach. Their leaf
-	// was never consumed, so the member is requeued rather than attested as failed. Reported so
-	// the caller can see a period was deferred rather than assuming everything settled.
+	// Retryable members hit a TRANSIENT condition - a gas ceiling, a settlement still in flight, a
+	// send that never reached the chain, a spent leaf whose spender is not in view yet. Nothing
+	// about the member is known to have failed, so it is requeued rather than attested as failed.
 	Retryable []*PendingBatchIntent
+
+	// SpentElsewhere members' leaves were spent by a transaction this node did not send: another
+	// validator (or a relayer) executed them, and records them. Removed without attesting.
+	SpentElsewhere []*PendingBatchIntent
+
+	// stopSending: a settlement in this flush is still in flight, holding its nonce, so no further
+	// member is sent this flush.
+	stopSending bool
 
 	// AlreadySettledOutcome reports, per intent id, whether that released member's leaf was
 	// actually consumed on chain. Absent means the outcome could not be resolved and the member
@@ -117,6 +125,9 @@ type BatchOrchestrator struct {
 	// odChain replaces the orchestrator's own chain operations for on-demand settlement. Nil in
 	// production, where the orchestrator IS the chain; set by tests to drive the decisions.
 	odChain onDemandChain
+
+	// floors caches where attribution searches start; see batch_attribution.go.
+	floors attributionFloors
 }
 
 // SetLegProgressHook wires persistence of per-member leg outcomes. Optional: unset, settlement
@@ -271,6 +282,22 @@ func (o *BatchOrchestrator) FlushChain(
 	o.logf("[BATCH] chain=%d forming tree: %d members, root=0x%x, bundleId=0x%x",
 		chainID, tree.Size(), tree.Root[:8], tree.BundleID[:8])
 
+	// ---- Pin the nonce for the whole flush ----------------------------------
+	//
+	// The anchor, the attestation and every member call are sent from one key in one sequence.
+	// Re-reading the pending nonce between them is what let a failover provider hand back an
+	// already-consumed value and fail both members with "nonce too low". Read once, advance
+	// locally; see beginNonceSequence.
+	//
+	// Pinned BEFORE the chain is read for this batch's state: beginNonceSequence first drives any
+	// transaction this key still has in flight to a result. Reading "is the anchor attested?" before
+	// that could see an attestation this node already sent as not yet landed, and send it again.
+	if err := o.ecm.beginNonceSequenceWaiting(ctx); err != nil {
+		o.mempool.Requeue(members)
+		return nil, err
+	}
+	defer o.ecm.endNonceSequence()
+
 	// ---- ALREADY SETTLED ELSEWHERE? ----------------------------------------
 	// Leadership rotates per period and the flush loop picks up stragglers, so two different
 	// nodes can legitimately reach the same period. bundleId is deterministic, so an anchor
@@ -284,6 +311,28 @@ func (o *BatchOrchestrator) FlushChain(
 		o.mempool.Requeue(members)
 		return nil, fmt.Errorf("checking whether anchor 0x%x already settled: %w", tree.BundleID[:8], serr)
 	} else if settled {
+		// Whose attestation is it? The chain says: the sender of its ProofExecuted transaction. If it
+		// is THIS node's - a verify of its own that had no result when an earlier flush gave up on it,
+		// and has since landed - this node is the period's settler and settles the members under it.
+		// Attesting them unsettled would write back as failed a batch this node anchored and attested
+		// itself and never got to settle.
+		attesterTx, attester, found, aerr := o.anchorAttester(ctx, tree.BundleID, 0)
+		if aerr != nil || !found {
+			o.mempool.Requeue(members)
+			return nil, fmt.Errorf("anchor 0x%x is attested but its attester is not in view (found=%t): %v",
+				tree.BundleID[:8], found, aerr)
+		}
+		if attester == o.ecm.auth.From {
+			o.logf("[BATCH] chain=%d period %d: anchor 0x%x was attested by this node; settling its %d member(s) under it",
+				chainID, cutoffHeight, tree.BundleID[:8], len(members))
+			o.attemptsMu.Lock()
+			delete(o.attempts, cutoffHeight)
+			o.attemptsMu.Unlock()
+			// The verify is the attester's transaction, read from the chain - this flush sent none.
+			// The anchor was created by an earlier flush whose cost was not reported; its hash is not
+			// known here, so that leg is left unreported rather than guessed.
+			return o.settleFlushMembers(ctx, chainID, members, tree, res, attesterTx), nil
+		}
 		o.logf("[BATCH] chain=%d period %d already settled under anchor 0x%x by a previous leader "+
 			"— releasing %d member(s) without re-executing",
 			chainID, cutoffHeight, tree.BundleID[:8], len(members))
@@ -298,18 +347,53 @@ func (o *BatchOrchestrator) FlushChain(
 		// prevent, and neither blanket answer is safe: assuming success records a settlement
 		// that never happened, assuming failure libels one that did. The consumed leaf is the
 		// on-chain ground truth, so ask the account.
-		res.AlreadySettled = members
+		//
+		// Another validator attested this anchor, so the settlement is that validator's. A member
+		// whose leaf is spent is settled (by it). A member whose leaf is NOT yet spent is not a
+		// failure: the attesting validator may be between its attestation and its settlement -
+		// the normal case when two leaders raced this period and this node's attestation lost.
+		// Attesting it unsettled here wrote FAILED for members that went on to settle. It is
+		// requeued, and a later flush sees its leaf spent. (Settling in the attester's place when
+		// the attester has died is the dead-leader takeover, deliberately not done here.)
 		res.AlreadySettledOutcome = make(map[string]bool, len(members))
+		var awaiting []*PendingBatchIntent
 		for _, m := range members {
 			ok, cerr := o.memberLeafConsumed(ctx, m)
-			if cerr != nil {
-				// Unresolved: leave it out of the map. The caller attests it as unsettled, which
-				// is the conservative direction — the leaf is still spendable, so a retry can
-				// still settle it, whereas a false "settled" would strand it forever.
-				o.logf("[BATCH] member %s: cannot resolve released outcome: %v", m.IntentID, cerr)
+			if cerr != nil || !ok {
+				if cerr != nil {
+					o.logf("[BATCH] member %s: leaf state unreadable (%v); requeued", m.IntentID, cerr)
+				}
+				awaiting = append(awaiting, m)
 				continue
 			}
-			res.AlreadySettledOutcome[m.IntentID] = ok
+			res.AlreadySettled = append(res.AlreadySettled, m)
+			res.AlreadySettledOutcome[m.IntentID] = true
+		}
+		// A member still unsettled PAST ITS DEADLINE under another validator's attestation is that
+		// validator's outcome - most often its settlement reverted and it recorded the failure. It
+		// leaves this node's pool without being attested here (the attester owns the record),
+		// loudly, instead of being re-examined on every flush for ever.
+		var expired []*PendingBatchIntent
+		kept := awaiting[:0:0]
+		for _, m := range awaiting {
+			if o.memberPastDeadline(m) {
+				expired = append(expired, m)
+			} else {
+				kept = append(kept, m)
+			}
+		}
+		awaiting = kept
+		if len(expired) > 0 {
+			o.mempool.DropMembers(expired)
+			for _, m := range expired {
+				o.logf("⚠️ [BATCH] member %s: past its deadline, unsettled under anchor 0x%x attested by %s; "+
+					"removed from this node's pool - its outcome is that validator's record", m.IntentID, tree.BundleID[:8], attester.Hex())
+			}
+		}
+		if len(awaiting) > 0 {
+			o.mempool.Requeue(awaiting)
+			o.logf("[BATCH] chain=%d period %d: %d member(s) under anchor 0x%x attested by %s are not settled yet; "+
+				"requeued until that validator settles them", chainID, cutoffHeight, len(awaiting), tree.BundleID[:8], attester.Hex())
 		}
 		return res, nil
 	}
@@ -321,18 +405,6 @@ func (o *BatchOrchestrator) FlushChain(
 		o.mempool.Requeue(members)
 		return nil, err
 	}
-
-	// ---- Pin the nonce for the whole flush ----------------------------------
-	//
-	// The anchor, the attestation and every member call are sent from one key in one sequence.
-	// Re-reading the pending nonce between them is what let a failover provider hand back an
-	// already-consumed value and fail both members with "nonce too low". Read once, advance
-	// locally; see beginNonceSequence.
-	if err := o.ecm.beginNonceSequence(ctx); err != nil {
-		o.mempool.Requeue(members)
-		return nil, err
-	}
-	defer o.ecm.endNonceSequence()
 
 	// ---- Create the anchor --------------------------------------------------
 	anchorTx, gasUsed, anchorBlock, err := o.createBatchAnchor(ctx, tree)
@@ -369,6 +441,16 @@ func (o *BatchOrchestrator) FlushChain(
 			"and no account will accept it", tree.BundleID[:8])
 	}
 	if err := o.prover.ProveBatchRoot(ctx, tree, cutoffHeight, periodBlocks); err != nil {
+		// An attestation that was broadcast and has no observed result yet - or was refused on price
+		// before broadcast - is not a quorum failure and does not count toward dropping the batch:
+		// it may land, and the retry finds the anchor attested.
+		if isTransientSendError(err) || isAnchorConfirmUnread(err) || errors.Is(err, ErrAttestedByAnother) {
+			// No result yet, or the anchor was attested by another validator's transaction: the next
+			// flush reads the anchor attested and decides from its attester who settles.
+			o.mempool.Requeue(members)
+			return res, fmt.Errorf("quorum attestation over batch root has no result of this node's yet (%d member(s) "+
+				"requeued; not counted as a failed attempt): %w", len(members), err)
+		}
 		// REQUEUE, do not drop.
 		//
 		// The original policy was "fall back, never requeue", on the reasoning that re-forming
@@ -411,8 +493,29 @@ func (o *BatchOrchestrator) FlushChain(
 	o.attemptsMu.Unlock()
 	o.logf("[BATCH] chain=%d quorum verified root 0x%x", chainID, tree.Root[:8])
 
+	return o.settleFlushMembers(ctx, chainID, members, tree, res, o.lastVerifyTx(tree.BundleID)), nil
+}
+
+// settleFlushMembers settles each member of a flushed period under its attested anchor, then requeues
+// the deferred ones, reports cost and records leg progress. Shared by a fresh flush and by a flush
+// that finds its own attestation of this period's anchor already on chain.
+func (o *BatchOrchestrator) settleFlushMembers(
+	ctx context.Context,
+	chainID int64,
+	members []*PendingBatchIntent,
+	tree *BatchTree,
+	res *BatchFlushResult,
+	verifyTx string,
+) *BatchFlushResult {
 	// ---- Settle each member -------------------------------------------------
 	for i, p := range members {
+		// A settlement still in flight holds its nonce: every later member would queue behind it and
+		// wait out the same bound. Stop, and leave the rest for the next flush, which first drives
+		// the in-flight transaction to a result.
+		if res.stopSending {
+			res.Retryable = append(res.Retryable, p)
+			continue
+		}
 		branch, berr := tree.BranchFor(i)
 		if berr != nil {
 			res.Failed = append(res.Failed, p)
@@ -423,11 +526,34 @@ func (o *BatchOrchestrator) FlushChain(
 		txHash, serr := o.settleMember(ctx, p, tree, branch)
 		var unknown *SettlementOutcomeUnknownError
 		if serr != nil && errors.As(serr, &unknown) {
-			// Sent, outcome not observed within the wait. If the leaf is consumed it landed; it
-			// is a settlement, not a failure.
-			if consumed, cerr := o.memberLeafConsumed(ctx, p); cerr == nil && consumed {
-				serr = nil
+			// Sent, outcome not observed within the wait. NOT a failure: it may still land. The
+			// member is retried; the next flush drives this transaction to a result first, and if it
+			// executed the member's leaf reads spent and is attributed to it (below).
+			o.logf("[BATCH] member %s: settlement %s has no result yet; retried after it resolves",
+				p.IntentID, unknown.TxHash)
+			res.Retryable = append(res.Retryable, p)
+			res.stopSending = true
+			continue
+		}
+		if serr != nil && errors.Is(serr, errLeafAlreadyConsumed) {
+			// Already spent when this node went to settle it. The chain's own record says who spent
+			// it: this node's key (a settlement of its own that landed meanwhile) is this member's
+			// success; anyone else's is theirs to record.
+			spender, from, found, lerr := o.leafConsumedTx(ctx, p, [32]byte{})
+			switch {
+			case lerr != nil || !found:
+				o.logf("[BATCH] member %s: leaf spent, spending transaction not in view (%v); retried", p.IntentID, lerr)
+				res.Retryable = append(res.Retryable, p)
+			case from == o.ecm.auth.From:
+				o.logf("[BATCH] member %s: leaf spent by this node's own settlement %s", p.IntentID, spender)
+				res.Settled = append(res.Settled, p)
+				res.TxHashes[p.IntentID] = spender
+			default:
+				o.logf("[BATCH] member %s: leaf spent by %s from %s, not this node; its sender records it",
+					p.IntentID, spender, from.Hex())
+				res.SpentElsewhere = append(res.SpentElsewhere, p)
 			}
+			continue
 		}
 		if serr != nil {
 			// A gas-ceiling refusal is "too expensive right now", NOT "this can never work".
@@ -448,6 +574,14 @@ func (o *BatchOrchestrator) FlushChain(
 					continue
 				}
 				o.logf("[BATCH] member %s deferred: %v (leaf untouched; will retry in a later period)",
+					p.IntentID, serr)
+				res.Retryable = append(res.Retryable, p)
+				continue
+			}
+			// Nothing of this settlement executed: refused before broadcast, never reached a
+			// mempool, or its nonce went to another transaction. Not a failure of the member.
+			if !errors.As(serr, &unknown) && isTransientSendError(serr) {
+				o.logf("[BATCH] member %s deferred: the settlement did not reach the chain (%v); will retry",
 					p.IntentID, serr)
 				res.Retryable = append(res.Retryable, p)
 				continue
@@ -494,14 +628,14 @@ func (o *BatchOrchestrator) FlushChain(
 	// This is the PERIOD path, so its members are on_cadence by definition — including a period
 	// that happens to flush a single member. It waited the full period and shared an anchor
 	// sized for a batch, which is what the customer was quoted for.
-	o.reportBatchCosts(ctx, chainID, res.AnchorTxHash, o.lastVerifyTx(), costMembers,
+	o.reportBatchCosts(ctx, chainID, res.AnchorTxHash, verifyTx, costMembers,
 		string(LaneOnCadence))
 
 	// Record which legs actually executed. Same membership as cost attribution, and for the same
 	// reason: settlement is the moment a leg's outcome is known.
 	o.recordLegProgress(ctx, res.Settled, res.Failed)
 
-	return res, nil
+	return res
 }
 
 // verifyLeavesAgainstAccounts asks each deployed account to compute its own leaf and compares.
@@ -664,33 +798,45 @@ func (o *BatchOrchestrator) createBatchAnchor(
 	// Idempotence: a retry after a timeout must not revert with "Anchor already exists"
 	// and lose the batch. bundleId is deterministic, so an existing anchor for this exact
 	// tree is a SUCCESS, not a conflict.
-	if exists, eerr := anchor.AnchorExists(&bind.CallOpts{Context: ctx}, tree.BundleID); eerr == nil && exists {
+	exists, eerr := anchor.AnchorExists(&bind.CallOpts{Context: ctx}, tree.BundleID)
+	if eerr != nil {
+		// Unknown is not "absent": sending on an unreadable answer created a second anchor attempt
+		// that reverts, and the revert was then read as the member failing.
+		return "", 0, 0, readErr(fmt.Errorf("reading anchorExists for 0x%x: %w", tree.BundleID[:8], eerr))
+	}
+	if exists {
 		o.logf("[BATCH] anchor 0x%x already exists — treating as created", tree.BundleID[:8])
 		return "already-exists", 0, 0, nil
 	}
 
-	o.ecm.auth.GasLimit = 500000
-	o.ecm.nextNonce()
-	tx, err := anchor.CreateBatchAnchor(
-		o.ecm.auth,
-		tree.BundleID,
-		tree.Root,
-		big.NewInt(int64(tree.Size())),
-		tree.BatchOperationID,
-		new(big.Int).SetUint64(tree.BlockHeight),
-	)
+	// Priced when sent, replaced at the same nonce while it does not mine, and bounded: see
+	// txSender. A bound that runs out returns *ChainWaitError - "not yet known", never a failure;
+	// the anchor is idempotent by bundleId, so the retry finds it once it lands.
+	receipt, txHash, err := o.ecm.sendBatchTx(ctx, "anchor", "", 500000,
+		func(opts *bind.TransactOpts) (*types.Transaction, error) {
+			return anchor.CreateBatchAnchor(
+				opts,
+				tree.BundleID,
+				tree.Root,
+				big.NewInt(int64(tree.Size())),
+				tree.BatchOperationID,
+				new(big.Int).SetUint64(tree.BlockHeight),
+			)
+		}, nil)
 	if err != nil {
 		return "", 0, 0, err
 	}
-
-	receipt, err := bind.WaitMined(ctx, o.ecm.client, tx)
-	if err != nil {
-		return tx.Hash().Hex(), 0, 0, fmt.Errorf("waiting for anchor: %w", err)
-	}
 	if receipt.Status == 0 {
-		return tx.Hash().Hex(), receipt.GasUsed, 0, fmt.Errorf("createBatchAnchor reverted")
+		// The usual cause is another validator's anchor for this exact bundleId landing first -
+		// the anchor this node wanted now exists. Anything else is a real failure.
+		if now, rerr := anchor.AnchorExists(&bind.CallOpts{Context: ctx}, tree.BundleID); rerr == nil && now {
+			o.logf("[BATCH] createBatchAnchor %s reverted because anchor 0x%x already exists — treating as created",
+				txHash, tree.BundleID[:8])
+			return "already-exists", receipt.GasUsed, 0, nil
+		}
+		return txHash, receipt.GasUsed, 0, fmt.Errorf("createBatchAnchor reverted")
 	}
-	return tx.Hash().Hex(), receipt.GasUsed, receipt.BlockNumber.Uint64(), nil
+	return txHash, receipt.GasUsed, receipt.BlockNumber.Uint64(), nil
 }
 
 // settleMember submits one member's account call carrying its Merkle branch.
@@ -720,8 +866,8 @@ func (o *BatchOrchestrator) settleMember(
 		return "", fmt.Errorf("reading isLeafConsumed: %w", err)
 	}
 	if consumed {
-		return "", fmt.Errorf("leaf 0x%x already consumed — member %s has already settled",
-			leaf[:8], p.IntentID)
+		return "", fmt.Errorf("leaf 0x%x already consumed — member %s has already settled: %w",
+			leaf[:8], p.IntentID, errLeafAlreadyConsumed)
 	}
 
 	proof := contracts.AccountProofV7{
@@ -736,43 +882,60 @@ func (o *BatchOrchestrator) settleMember(
 		RequiredLevel: requiredLevelForLegs(p.Legs),
 	}
 
-	var tx *types.Transaction
+	gas := uint64(500000)
 	if p.IsMultiLeg() {
-		targets, values, datas := legArrays(p.Legs)
-		o.ecm.auth.GasLimit = 400000 + uint64(len(p.Legs))*250000
-		o.ecm.nextNonce()
-		tx, err = acct.BatchExecuteGovernanceProofDirect(o.ecm.auth, targets, values, datas, proof)
-	} else {
+		gas = 400000 + uint64(len(p.Legs))*250000
+	}
+	build := func(opts *bind.TransactOpts) (*types.Transaction, error) {
+		if p.IsMultiLeg() {
+			targets, values, datas := legArrays(p.Legs)
+			return acct.BatchExecuteGovernanceProofDirect(opts, targets, values, datas, proof)
+		}
 		leg := p.Legs[0]
 		v := leg.Value
 		if v == nil {
 			v = bigZero()
 		}
-		o.ecm.auth.GasLimit = 500000
-		o.ecm.nextNonce()
-		tx, err = acct.ExecuteGovernanceProofDirect(o.ecm.auth, leg.Target, v, leg.Data, proof)
+		return acct.ExecuteGovernanceProofDirect(opts, leg.Target, v, leg.Data, proof)
 	}
-	if err != nil {
-		// The transaction never reached the mempool, so its nonce was not consumed. Give it back:
-		// leaving the gap would strand every LATER member behind a nonce the chain never sees.
-		o.ecm.rewindNonce()
-		return "", err
+	// Every hash this settlement is broadcast under - the first and each fee-bumped replacement at
+	// the same nonce - is recorded BEFORE its receipt is awaited. A crash, a shutdown or a lost
+	// receipt from here on must not lose the fact that this node sent a settlement for this
+	// member, nor which hashes might be the one that mines.
+	var lastHash string
+	onBroadcast := func(nonce uint64, hash string) {
+		lastHash = hash
+		o.noteOnDemandProgress(p, func(m *PendingBatchIntent) {
+			m.SettlementTx = hash
+			m.SettlementTxs = append(m.SettlementTxs, hash)
+			m.SettlementNonce, m.SettlementNonceSet = nonce, true
+		})
 	}
-
-	txHash := tx.Hash().Hex()
-	// Known BEFORE it is known how it ends: a crash, a shutdown or a lost receipt from here on
-	// must not lose the fact that this node sent a settlement for this member.
-	o.noteOnDemandProgress(p, func(m *PendingBatchIntent) { m.SettlementTx = txHash })
-	// Bounded. WaitMined polls until the context ends, so an unbounded wait on a transaction that
-	// was dropped from the mempool held this member - and the node's claim to be settling it -
-	// for ever.
-	waitCtx, cancel := context.WithTimeout(ctx, settlementWaitTimeout)
-	defer cancel()
-	receipt, err := bind.WaitMined(waitCtx, o.ecm.client, tx)
+	receipt, txHash, err := o.ecm.sendBatchTx(ctx, "settle", settlementOwner(p), gas, build, onBroadcast)
 	if err != nil {
-		// NOT a revert. The transaction was sent and its outcome was not observed; it may yet
-		// execute. Saying "reverted" here recorded failures for settlements that went on to land.
-		return txHash, &SettlementOutcomeUnknownError{TxHash: txHash, Err: err}
+		var cwe *ChainWaitError
+		switch {
+		case errors.As(err, &cwe):
+			// NOT a revert. The transaction was sent and its outcome was not observed; it may yet
+			// execute. Saying "reverted" here recorded failures for settlements that went on to land.
+			return lastHash, &SettlementOutcomeUnknownError{TxHash: lastHash, Err: err}
+		case errors.Is(err, ErrNonceConsumedElsewhere):
+			// None of this settlement's hashes executed: another transaction took the nonce. The
+			// hashes stay on the member's record (history attributes a spend correctly later);
+			// nothing is in flight at that nonce, so a later pass may settle afresh.
+			return "", err
+		default:
+			// Refused before broadcast (a ceiling, a read) or never reached a mempool: nothing is
+			// in flight, and the nonce has been given back - it may now carry another transaction.
+			// The member keeps its hashes as history but no longer claims that nonce.
+			// The hash recorded for this attempt never reached a mempool, so it is removed: it is not
+			// history, it is nothing. Earlier hashes (other attempts) stay.
+			var nb *NotBroadcastError
+			if errors.As(err, &nb) {
+				o.forgetUnbroadcastSettlement(p, lastHash)
+			}
+			return "", err
+		}
 	}
 	if receipt.Status == 0 {
 		// Only THIS member failed. Its leaf was rolled back with the rest of the tx, so it
@@ -782,6 +945,59 @@ func (o *BatchOrchestrator) settleMember(
 	}
 	return txHash, nil
 }
+
+// forgetUnbroadcastSettlement removes the record of a settlement attempt that never reached a mempool
+// (its first broadcast was refused before or at sending): that hash is not history, it is nothing,
+// and its nonce may now carry another transaction. Earlier attempts' hashes stay.
+func (o *BatchOrchestrator) forgetUnbroadcastSettlement(p *PendingBatchIntent, hash string) {
+	o.noteOnDemandProgress(p, func(m *PendingBatchIntent) {
+		m.SettlementNonceSet = false
+		kept := m.SettlementTxs[:0:0]
+		for _, h := range m.SettlementTxs {
+			if h != hash {
+				kept = append(kept, h)
+			}
+		}
+		m.SettlementTxs = kept
+		m.SettlementTx = ""
+		if n := len(kept); n > 0 {
+			m.SettlementTx = kept[n-1]
+		}
+	})
+}
+
+// errLeafAlreadyConsumed: the member's leaf was already spent when this node went to settle it, so it
+// sent nothing. Another settlement - another validator's, or a relayer's - executed the member.
+var errLeafAlreadyConsumed = errors.New("leaf already consumed")
+
+// settlementInFlight reports whether this node's key still has a transaction outstanding at nonce -
+// broadcast, not yet mined, still being driven by the sender.
+func (o *BatchOrchestrator) settlementInFlight(nonce uint64) bool {
+	sender, err := o.ecm.batchSender()
+	if err != nil || sender == nil {
+		// Unknown is treated as in flight: concluding "not in flight" would settle a second time.
+		return true
+	}
+	return sender.outbox.has(nonce)
+}
+
+// settlementHashesAt is every hash this node's key broadcast at nonce for member p's settlement, from
+// the sender's durable history - including replacements made while no caller was listening (Resume).
+func (o *BatchOrchestrator) settlementHashesAt(p *PendingBatchIntent, nonce uint64) []string {
+	sender, err := o.ecm.batchSender()
+	if err != nil || sender == nil {
+		return nil
+	}
+	return sender.outbox.hashesAt(nonce, settlementOwner(p))
+}
+
+// settlementOwner names a member's settlement in the sender's outbox.
+func settlementOwner(p *PendingBatchIntent) string {
+	return "settle:" + memberWorkKey(p.ChainID, p.OperationID)
+}
+
+// ownAddress is the address this node settles from.
+func (o *BatchOrchestrator) ownAddress() common.Address { return o.ecm.auth.From }
 
 // settlementWaitTimeout bounds how long a sent settlement is waited on before its outcome is
 // reported unknown. Far longer than a block on any chain the batch path settles on.

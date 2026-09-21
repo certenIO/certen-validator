@@ -3,9 +3,13 @@ package execution
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/ethereum/go-ethereum/common"
 )
 
 // =============================================================================
@@ -36,6 +40,22 @@ type fakeODChain struct {
 	// statuses answers settlementStatus, keyed by tx hash: found, mined, reverted.
 	statuses  map[string][3]bool
 	statusErr error
+	// spentBy answers leafConsumedTx: the transaction that spent the leaf and its sender, when
+	// spentByKnown.
+	spentBy      string
+	spentFrom    common.Address
+	spentByKnown bool
+	// history answers settlementHashesAt: the sender's record of hashes per nonce.
+	history map[uint64][]string
+	// attester answers anchorAttester (the ProofExecuted transaction's sender); attesterUnknown
+	// makes it not in view.
+	attester        common.Address
+	attesterUnknown bool
+	// inFlight answers settlementInFlight by nonce.
+	inFlight map[uint64]bool
+	// beginErr and createErr fail the nonce pin and the anchor creation.
+	beginErr  error
+	createErr error
 
 	createCalls int
 	settleCalls int
@@ -56,10 +76,13 @@ func (f *fakeODChain) memberLeafConsumed(context.Context, *PendingBatchIntent) (
 func (f *fakeODChain) verifyLeavesAgainstAccounts(context.Context, []*PendingBatchIntent, *BatchTree) error {
 	return nil
 }
-func (f *fakeODChain) beginSettlementSequence(context.Context) error { return nil }
+func (f *fakeODChain) beginSettlementSequence(context.Context) error { return f.beginErr }
 func (f *fakeODChain) endSettlementSequence()                        {}
 func (f *fakeODChain) createBatchAnchor(context.Context, *BatchTree) (string, uint64, uint64, error) {
 	f.createCalls++
+	if f.createErr != nil {
+		return "", 0, 0, f.createErr
+	}
 	return f.anchorTx, 100, 1, nil
 }
 func (f *fakeODChain) verifyLeavesAgainstAnchor(context.Context, *BatchTree) error { return nil }
@@ -67,8 +90,10 @@ func (f *fakeODChain) settleMember(_ context.Context, p *PendingBatchIntent, _ *
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.settleCalls++
-	// What the real settleMember records before it awaits the receipt.
+	// What the real settleMember records before it awaits the receipt: the hash and its nonce.
 	p.SettlementTx = f.settleTx
+	p.SettlementTxs = append(p.SettlementTxs, f.settleTx)
+	p.SettlementNonce, p.SettlementNonceSet = odSettleNonce, true
 	if f.consumeOnSettle {
 		f.consumed = true
 	}
@@ -79,7 +104,7 @@ func (f *fakeODChain) settlementStatus(_ context.Context, tx string) (bool, bool
 	return st[0], st[1], st[2], f.statusErr
 }
 func (f *fakeODChain) memberPastDeadline(*PendingBatchIntent) bool { return false }
-func (f *fakeODChain) lastVerifyTx() string                        { return f.verifyTx }
+func (f *fakeODChain) lastVerifyTx([32]byte) string                { return f.verifyTx }
 func (f *fakeODChain) reportOnDemandCosts(_ context.Context, m *PendingBatchIntent, settleTx string) {
 	f.costs = append(f.costs, costCall{m.AnchorTx, m.VerifyTx, settleTx})
 }
@@ -88,9 +113,32 @@ func (f *fakeODChain) recordLegProgress(_ context.Context, settled, failed []*Pe
 	f.failedLegs += len(failed)
 }
 
+func (f *fakeODChain) leafConsumedTx(context.Context, *PendingBatchIntent, [32]byte) (string, common.Address, bool, error) {
+	return f.spentBy, f.spentFrom, f.spentByKnown, nil
+}
+func (f *fakeODChain) settlementHashesAt(_ *PendingBatchIntent, nonce uint64) []string {
+	return f.history[nonce]
+}
+func (f *fakeODChain) anchorAttester(context.Context, [32]byte, uint64) (string, common.Address, bool, error) {
+	if f.attesterUnknown {
+		return "", common.Address{}, false, nil
+	}
+	return odVerifyTx, f.attester, true, nil
+}
+func (f *fakeODChain) ownAddress() common.Address { return odOwnAddr }
+
+var (
+	odOwnAddr   = common.HexToAddress("0xd4A3dBbAE0C04D4307c5E00A5E05b66AcC289f5D")
+	odOtherAddr = common.HexToAddress("0x5555afA8Ff8048BddAAC1554AFd790c9bf7ec6E0")
+)
+
+func (f *fakeODChain) settlementInFlight(nonce uint64) bool { return f.inFlight[nonce] }
+
 func odOrchestrator(f *fakeODChain) *BatchOrchestrator {
 	return &BatchOrchestrator{odChain: f, logf: func(string, ...interface{}) {}, attempts: map[uint64]int{}}
 }
+
+const odSettleNonce = 42
 
 const (
 	odRevertTx = "0x54562d54d6c38a858fda1bdd9cffb95cffb688b2f2f685468ba4752ddd3c8b0b"
@@ -135,7 +183,8 @@ func TestOD_OwnRevertIsReportedWithItsTransaction(t *testing.T) {
 // A settlement that reverted because another validator's settlement spent the leaf first is a
 // lost race, not a failure. Reporting it would tell the gateway a payment that went through failed.
 func TestOD_LostSettlementRaceIsReleasedNotReported(t *testing.T) {
-	f := &fakeODChain{settleTx: odRevertTx, settleErr: errSettlementReverted, consumeOnSettle: true, anchorTx: odAnchorTx}
+	f := &fakeODChain{settleTx: odRevertTx, settleErr: errSettlementReverted, consumeOnSettle: true, anchorTx: odAnchorTx,
+		spentBy: odSettleTx, spentFrom: odOtherAddr, spentByKnown: true}
 	out := settle(t, f, odMember(1, odChain, 100))
 	if !out.Released || out.Reverted || out.Settled {
 		t.Fatalf("outcome %+v; want released", out)
@@ -151,7 +200,8 @@ func TestOD_LostSettlementRaceIsReleasedNotReported(t *testing.T) {
 // (that could execute an intent whose failure is on record), and must not report anything.
 func TestOD_FailoverReleasesAMemberAnotherValidatorAttested(t *testing.T) {
 	for _, consumed := range []bool{false, true} {
-		f := &fakeODChain{attested: true, consumed: consumed, settleTx: odSettleTx}
+		f := &fakeODChain{attested: true, consumed: consumed, settleTx: odSettleTx,
+			attester: odOtherAddr, spentBy: odRevertTx, spentFrom: odOtherAddr, spentByKnown: true}
 		out := settle(t, f, odMember(1, odChain, 100))
 		if !out.Released || out.Settled || out.Reverted || out.TxHash != "" {
 			t.Fatalf("consumed=%t: outcome %+v; want released with nothing to attest", consumed, out)
@@ -166,7 +216,7 @@ func TestOD_FailoverReleasesAMemberAnotherValidatorAttested(t *testing.T) {
 // The validator that attested the anchor and stopped before sending (a restart between the two)
 // still holds its persisted record, and it - only it - settles under its own anchor.
 func TestOD_ValidatorThatAttestedTheAnchorSettlesAfterARestart(t *testing.T) {
-	f := &fakeODChain{attested: true, settleTx: odSettleTx}
+	f := &fakeODChain{attested: true, settleTx: odSettleTx, attester: odOwnAddr}
 	m := odMember(1, odChain, 100)
 	m.AnchorProved, m.AnchorTx = true, odAnchorTx
 	out := settle(t, f, m)
@@ -211,7 +261,18 @@ func TestOD_UnobservedSettlementIsResolvedFromItsOwnRecord(t *testing.T) {
 		{"reverted, leaf spent by another", [3]bool{true, true, true}, nil, true, func(o *OnDemandOutcome) bool { return o.Released && o.TxHash == "" }, 0},
 	}
 	for _, c := range cases {
-		g := &fakeODChain{attested: true, consumed: c.leaf, statuses: map[string][3]bool{odSettleTx: c.status}, statusErr: c.err}
+		g := &fakeODChain{attested: true, consumed: c.leaf, statuses: map[string][3]bool{odSettleTx: c.status}, statusErr: c.err,
+			inFlight: map[uint64]bool{odSettleNonce: true}}
+		if c.leaf {
+			// A spent leaf is decided by the LeafConsumed log's sender: this node's settlement when it
+			// succeeded, another sender's when this node's reverted.
+			g.spentByKnown = true
+			if c.status[2] {
+				g.spentBy, g.spentFrom = odRevertTx, odOtherAddr
+			} else {
+				g.spentBy, g.spentFrom = odSettleTx, odOwnAddr
+			}
+		}
 		out := settle(t, g, m)
 		if !c.check(out) {
 			t.Errorf("%s: outcome %+v", c.name, out)
@@ -316,6 +377,7 @@ func TestOD_ProgressIsPersistedWithTheMember(t *testing.T) {
 	}
 	if !m.NoteOnDemandProgress(odChain, p.OperationID, func(q *PendingBatchIntent) {
 		q.AnchorProved, q.AnchorTx, q.VerifyTx, q.SettlementTx = true, odAnchorTx, odVerifyTx, odSettleTx
+		q.SettlementTxs, q.SettlementNonce, q.SettlementNonceSet = []string{odSettleTx, odReplacementTx}, 7, true
 	}) {
 		t.Fatal("progress not noted on a queued member")
 	}
@@ -328,7 +390,271 @@ func TestOD_ProgressIsPersistedWithTheMember(t *testing.T) {
 		t.Fatalf("load: %d, %v", n, err)
 	}
 	got := restored.GetOnDemand(odChain, p.OperationID)
-	if got == nil || !got.AnchorProved || got.AnchorTx != odAnchorTx || got.VerifyTx != odVerifyTx || got.SettlementTx != odSettleTx {
+	if got == nil || !got.AnchorProved || got.AnchorTx != odAnchorTx || got.VerifyTx != odVerifyTx || got.SettlementTx != odSettleTx ||
+		len(got.SettlementTxs) != 2 || got.SettlementTxs[1] != odReplacementTx || !got.SettlementNonceSet || got.SettlementNonce != 7 {
 		t.Fatalf("restored %+v", got)
+	}
+}
+
+// ---- the sender's outcomes, as the on-demand lane sees them ----------------------------------
+
+const odReplacementTx = "0x4444444444444444444444444444444444444444444444444444444444444444"
+
+func withOwnSettlement(m *PendingBatchIntent, nonce uint64, hashes ...string) *PendingBatchIntent {
+	m.AnchorProved = true
+	m.SettlementTxs = append([]string(nil), hashes...)
+	m.SettlementTx = hashes[len(hashes)-1]
+	m.SettlementNonce, m.SettlementNonceSet = nonce, true
+	return m
+}
+
+// The settlement was replaced at the same nonce; the REPLACEMENT mined. Every hash is checked, so
+// the member is settled with the one that actually executed.
+func TestOD_ReplacedSettlementIsResolvedByTheHashThatMined(t *testing.T) {
+	m := withOwnSettlement(odMember(1, odChain, 100), 7, odSettleTx, odReplacementTx)
+	f := &fakeODChain{attested: true, consumed: true,
+		statuses: map[string][3]bool{odReplacementTx: {true, true, false}},
+		spentBy:  odReplacementTx, spentFrom: odOwnAddr, spentByKnown: true}
+	out := settle(t, f, m)
+	if !out.Settled || out.TxHash != odReplacementTx || f.settleCalls != 0 {
+		t.Fatalf("outcome %+v settle calls %d; want settled with the replacement, nothing re-sent", out, f.settleCalls)
+	}
+}
+
+// None of its hashes mined and the sender no longer has the nonce in flight: the settlement never
+// reached the chain. It is forgotten and the member is settled afresh - not deferred for ever.
+func TestOD_SettlementThatNeverExecutedIsForgottenAndResent(t *testing.T) {
+	m := withOwnSettlement(odMember(1, odChain, 100), 7, odSettleTx)
+	f := &fakeODChain{attested: true, settleTx: odReplacementTx, inFlight: map[uint64]bool{7: false}, attester: odOwnAddr}
+	out := settle(t, f, m)
+	if f.settleCalls != 1 || !out.Settled || out.TxHash != odReplacementTx {
+		t.Fatalf("outcome %+v settle calls %d; want one fresh settlement", out, f.settleCalls)
+	}
+}
+
+// Still in flight: nothing is concluded and nothing is sent.
+func TestOD_SettlementStillInFlightDefers(t *testing.T) {
+	m := withOwnSettlement(odMember(1, odChain, 100), 7, odSettleTx)
+	f := &fakeODChain{attested: true, inFlight: map[uint64]bool{7: true}}
+	out := settle(t, f, m)
+	if !out.Deferred || f.settleCalls != 0 {
+		t.Fatalf("outcome %+v settle calls %d; want deferred", out, f.settleCalls)
+	}
+}
+
+// The leaf is spent and no receipt of ours is visible yet (a lagging RPC node). The account's own
+// LeafConsumed log names the spender: ours is settled, anyone else's is released, and no log in view
+// decides nothing.
+func TestOD_SpentLeafIsDecidedByItsLeafConsumedLog(t *testing.T) {
+	cases := []struct {
+		name         string
+		spentBy      string
+		from         common.Address
+		known        bool
+		wantSettled  bool
+		wantReleased bool
+		wantDeferred bool
+	}{
+		{"our replacement spent it", odReplacementTx, odOwnAddr, true, true, false, false},
+		// A replacement Resume made while nobody was listening: on no record of the member's, but
+		// sent by this node's key - so it is this node's settlement.
+		{"an unrecorded replacement of ours spent it", "0x5555555555555555555555555555555555555555555555555555555555555555", odOwnAddr, true, true, false, false},
+		{"another settlement spent it", odRevertTx, odOtherAddr, true, false, true, false},
+		{"the log is not in view yet", "", common.Address{}, false, false, false, true},
+	}
+	for _, c := range cases {
+		m := withOwnSettlement(odMember(1, odChain, 100), 7, odSettleTx, odReplacementTx)
+		f := &fakeODChain{attested: true, consumed: true, spentBy: c.spentBy, spentFrom: c.from, spentByKnown: c.known,
+			inFlight: map[uint64]bool{7: true}}
+		out := settle(t, f, m)
+		if out.Settled != c.wantSettled || out.Released != c.wantReleased || out.Deferred != c.wantDeferred {
+			t.Errorf("%s: outcome %+v", c.name, out)
+		}
+		if c.wantSettled && out.TxHash != c.spentBy {
+			t.Errorf("%s: settled with %s, want %s", c.name, out.TxHash, c.spentBy)
+		}
+	}
+}
+
+// Every transient send outcome defers the member; none records a failure.
+func TestOD_TransientSendsDeferAndNeverFail(t *testing.T) {
+	wait := &ChainWaitError{Label: "anchor", Nonce: 3, Hashes: []string{odAnchorTx}, Err: context.DeadlineExceeded}
+	priced := &NotBroadcastError{Err: &ErrTxCostCeilingExceeded{ChainID: odChain}}
+
+	f := &fakeODChain{beginErr: wait}
+	if out := settle(t, f, odMember(1, odChain, 100)); !out.Deferred || f.createCalls != 0 {
+		t.Errorf("a key with a transaction still in flight: outcome %+v create calls %d", out, f.createCalls)
+	}
+	f = &fakeODChain{createErr: wait}
+	if out := settle(t, f, odMember(1, odChain, 100)); !out.Deferred {
+		t.Errorf("an anchor with no result yet: outcome %+v", out)
+	}
+	f = &fakeODChain{settleTx: "", settleErr: priced, anchorTx: odAnchorTx}
+	if out := settle(t, f, odMember(1, odChain, 100)); !out.Deferred || out.Reverted || f.failedLegs != 0 {
+		t.Errorf("a settlement refused on cost: outcome %+v failed legs %d", out, f.failedLegs)
+	}
+	f = &fakeODChain{settleTx: "", settleErr: ErrNonceConsumedElsewhere, anchorTx: odAnchorTx}
+	if out := settle(t, f, odMember(1, odChain, 100)); !out.Deferred || out.Reverted {
+		t.Errorf("a settlement whose nonce went elsewhere: outcome %+v", out)
+	}
+}
+
+// The leaf was already spent when this node went to settle: another settlement executed the member.
+func TestOD_LeafSpentAtSendIsReleased(t *testing.T) {
+	f := &fakeODChain{anchorTx: odAnchorTx, settleErr: fmt.Errorf("leaf 0xaa already consumed: %w", errLeafAlreadyConsumed),
+		spentBy: odRevertTx, spentFrom: odOtherAddr, spentByKnown: true}
+	out := settle(t, f, odMember(1, odChain, 100))
+	if !out.Released || out.Reverted || f.failedLegs != 0 {
+		t.Fatalf("outcome %+v failed legs %d; want released", out, f.failedLegs)
+	}
+}
+
+// This node BROADCAST the quorum attestation and did not see its result. It may land, so this node
+// is a settler from now on: noted and persisted, so the next pass settles instead of releasing.
+func TestOD_BroadcastAttestationMakesThisNodeTheSettler(t *testing.T) {
+	for _, proveErr := range []error{
+		fmt.Errorf("submitting batch quorum proof: %w", &ChainWaitError{Label: "verify", Nonce: 4,
+			Hashes: []string{odVerifyTx}, Err: context.DeadlineExceeded}),
+		&AnchorConfirmUnreadError{VerifyTx: odVerifyTx, Err: errors.New("rpc down")},
+	} {
+		f := &fakeODChain{anchorTx: odAnchorTx}
+		m := odMember(1, odChain, 100)
+		out, err := odOrchestrator(f).SettleOnDemandMember(context.Background(), m,
+			func(context.Context, *BatchTree) error { return proveErr })
+		if err != nil || !out.Deferred {
+			t.Fatalf("%v: outcome %+v err %v; want deferred", proveErr, out, err)
+		}
+		if !m.AnchorProved || m.VerifyTx != odVerifyTx || m.AnchorTx != odAnchorTx {
+			t.Fatalf("%v: member %+v not marked as the settler", proveErr, m)
+		}
+		// Next pass: the anchor reads attested, and this node settles it.
+		g := &fakeODChain{attested: true, settleTx: odSettleTx, attester: odOwnAddr}
+		if out := settle(t, g, m); !out.Settled || g.settleCalls != 1 {
+			t.Fatalf("%v: next pass outcome %+v; want this node to settle", proveErr, out)
+		}
+	}
+}
+
+// The leaf was already spent at send time by a settlement of THIS node's that landed meanwhile (the
+// sender drove it to a result while pinning the sequence): that is the member's success, not a
+// release.
+func TestOD_LeafSpentAtSendByOurOwnEarlierSettlementIsSettled(t *testing.T) {
+	f := &fakeODChain{anchorTx: odAnchorTx, settleErr: fmt.Errorf("leaf 0xaa already consumed: %w", errLeafAlreadyConsumed),
+		spentBy: odReplacementTx, spentFrom: odOwnAddr, spentByKnown: true}
+	out := settle(t, f, odMember(1, odChain, 100))
+	if !out.Settled || out.TxHash != odReplacementTx {
+		t.Fatalf("outcome %+v; want settled with this node's earlier settlement", out)
+	}
+}
+
+// Hashes the sender broadcast while no caller was listening are consulted from its history: a
+// replacement that REVERTED is found there and recorded as the member's failure.
+func TestOD_RevertedReplacementFromTheSendersHistoryIsTheFailure(t *testing.T) {
+	m := withOwnSettlement(odMember(1, odChain, 100), 7, odSettleTx)
+	f := &fakeODChain{attested: true, history: map[uint64][]string{7: {odSettleTx, odReplacementTx}},
+		statuses: map[string][3]bool{odReplacementTx: {true, true, true}}}
+	out := settle(t, f, m)
+	if !out.Reverted || out.TxHash != odReplacementTx || f.settleCalls != 0 {
+		t.Fatalf("outcome %+v settle calls %d; want the replacement's revert recorded, nothing re-sent", out, f.settleCalls)
+	}
+}
+
+// A key that cannot send (a transaction still in flight) marks the outcome busy, so the pass skips
+// the rest of that chain instead of waiting on the same thing member after member.
+func TestOD_BusyKeyIsReported(t *testing.T) {
+	f := &fakeODChain{beginErr: &ChainWaitError{Label: "settle", Nonce: 3, Err: context.DeadlineExceeded}}
+	if out := settle(t, f, odMember(1, odChain, 100)); !out.Deferred || !out.KeyBusy {
+		t.Fatalf("outcome %+v; want deferred with the key busy", out)
+	}
+	f = &fakeODChain{beginErr: &SenderUnavailableError{Err: errors.New("outbox corrupt")}}
+	if out := settle(t, f, odMember(1, odChain, 100)); !out.Deferred || !out.KeyBusy {
+		t.Fatalf("an unavailable sender: outcome %+v; want deferred, never failed", out)
+	}
+}
+
+// Who settles under an attested anchor is decided by who ATTESTED it, read from the chain - not by
+// this node's memory. A node whose own attestation landed without it recording that (a crash, a wait
+// that ran out) still settles; a node that recorded "I proved it" but whose attestation was NOT the
+// one that landed does not.
+func TestOD_TheChainsAttesterDecidesWhoSettles(t *testing.T) {
+	m := odMember(1, odChain, 100) // no local record at all
+	f := &fakeODChain{attested: true, settleTx: odSettleTx, attester: odOwnAddr}
+	if out := settle(t, f, m); !out.Settled || f.settleCalls != 1 {
+		t.Fatalf("own attestation, no local record: outcome %+v; want this node to settle", out)
+	}
+	m = odMember(1, odChain, 100)
+	m.AnchorProved = true // believed it proved the anchor
+	f = &fakeODChain{attested: true, settleTx: odSettleTx, attester: odOtherAddr}
+	if out := settle(t, f, m); !out.Released || f.settleCalls != 0 {
+		t.Fatalf("another validator's attestation: outcome %+v; want released", out)
+	}
+	f = &fakeODChain{attested: true, attesterUnknown: true}
+	if out := settle(t, f, odMember(1, odChain, 100)); !out.Deferred || f.settleCalls != 0 {
+		t.Fatalf("attester not in view: outcome %+v; want deferred", out)
+	}
+}
+
+// This node's attestation reverted because another validator's landed first: the root is attested,
+// but not by this node, so it releases to that validator instead of claiming to be the settler.
+func TestOD_AttestedByAnotherValidatorIsDecidedFromTheChain(t *testing.T) {
+	f := &fakeODChain{anchorTx: odAnchorTx, attester: odOtherAddr}
+	m := odMember(1, odChain, 100)
+	out, err := odOrchestrator(f).SettleOnDemandMember(context.Background(), m, func(context.Context, *BatchTree) error {
+		return fmt.Errorf("submitting batch quorum proof: executeComprehensiveProof 0xab: %w", ErrAttestedByAnother)
+	})
+	if err != nil || !out.Released || m.AnchorProved || f.settleCalls != 0 {
+		t.Fatalf("outcome %+v err %v member %+v; want released, not the settler", out, err, m)
+	}
+}
+
+// The 2-hour prune never drops a member this validator has acted on: its settlement may still land,
+// or it must settle under its own attestation. Such a member leaves the queue only through its outcome.
+func TestOD_PruneKeepsMembersThisValidatorActedOn(t *testing.T) {
+	m := NewBatchMempool(BatchMempoolConfig{})
+	idle, sent, proved := odMember(1, odChain, 100), odMember(2, odChain, 101), odMember(3, odChain, 102)
+	for _, p := range []*PendingBatchIntent{idle, sent, proved} {
+		if err := m.AddOnDemand(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m.NoteOnDemandProgress(odChain, sent.OperationID, func(p *PendingBatchIntent) {
+		p.SettlementTx, p.SettlementNonce, p.SettlementNonceSet = odSettleTx, 9, true
+	})
+	m.NoteOnDemandProgress(odChain, proved.OperationID, func(p *PendingBatchIntent) { p.AnchorProved = true })
+
+	pruned := m.PruneOnDemandOlderThan(time.Minute, time.Now().Add(3*time.Hour))
+	if pruned != 1 || m.GetOnDemand(odChain, idle.OperationID) != nil {
+		t.Fatalf("pruned %d; want only the member nobody acted on", pruned)
+	}
+	if m.GetOnDemand(odChain, sent.OperationID) == nil || m.GetOnDemand(odChain, proved.OperationID) == nil {
+		t.Fatal("a member with a settlement in flight or an own attestation was pruned")
+	}
+}
+
+// A member queued by an older binary carries a settlement hash but no nonce. A hash no node knows
+// was dropped: it is not treated as in flight for ever. Who settles is then read from the chain.
+func TestOD_LegacySettlementWithNoNonceIsNotInFlightForever(t *testing.T) {
+	m := odMember(1, odChain, 100)
+	m.SettlementTx = odSettleTx // legacy: no SettlementNonce
+	f := &fakeODChain{attested: true, attester: odOwnAddr, settleTx: odReplacementTx}
+	out := settle(t, f, m)
+	if !out.Settled || f.settleCalls != 1 {
+		t.Fatalf("outcome %+v settle calls %d; a dropped legacy settlement must not defer for ever", out, f.settleCalls)
+	}
+}
+
+// A settlement whose first broadcast was definitively rejected put nothing in flight: its hash is
+// removed from the member, so the next pass is not held waiting on it.
+func TestOD_RejectedBroadcastLeavesNoSettlementInFlight(t *testing.T) {
+	m := odMember(1, odChain, 100)
+	o := odOrchestrator(&fakeODChain{})
+	// What settleMember's broadcast hook and its NotBroadcast branch do, in order.
+	o.noteOnDemandProgress(m, func(p *PendingBatchIntent) {
+		p.SettlementTx, p.SettlementTxs = odSettleTx, []string{odSettleTx}
+		p.SettlementNonce, p.SettlementNonceSet = 7, true
+	})
+	o.forgetUnbroadcastSettlement(m, odSettleTx)
+	if m.SettlementNonceSet || len(m.SettlementTxs) != 0 || m.SettlementTx != "" {
+		t.Fatalf("member %+v still claims a settlement that never left", m)
 	}
 }

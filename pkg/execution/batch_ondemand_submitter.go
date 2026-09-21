@@ -164,6 +164,11 @@ func (s *OnDemandSubmitter) Run(ctx context.Context) {
 			if n := s.cfg.Stack.Mempool.PruneOnDemandOlderThan(s.cfg.TTL, time.Now()); n > 0 {
 				logf("[OD] pruned %d member(s) past the %s TTL", n, s.cfg.TTL)
 			}
+			if held := s.cfg.Stack.Mempool.HeldPastTTL(); held > 0 {
+				logf("⚠️ [OD] %d member(s) past the %s TTL are held because this validator acted on them "+
+					"(a settlement in flight, or an anchor it attested); they leave only through their outcome",
+					held, s.cfg.TTL)
+			}
 		}
 	}
 }
@@ -175,7 +180,11 @@ func (s *OnDemandSubmitter) pass(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
-			s.consider(ctx, member)
+			if busy := s.consider(ctx, member); busy {
+				// This chain's key has a transaction still in flight (or its sender is unavailable):
+				// every other member on it would wait on the same thing. Move on to the next chain.
+				break
+			}
 		}
 	}
 }
@@ -186,8 +195,9 @@ func memberWorkKey(chainID int64, opID [32]byte) string {
 	return fmt.Sprintf("%d|%x", chainID, opID)
 }
 
-// consider decides whether this node should settle the member now, and does so if it should.
-func (s *OnDemandSubmitter) consider(ctx context.Context, member *PendingBatchIntent) {
+// consider decides whether this node should settle the member now, and does so if it should. It
+// reports whether this chain's key was found busy, so the pass can skip the rest of the chain.
+func (s *OnDemandSubmitter) consider(ctx context.Context, member *PendingBatchIntent) (keyBusy bool) {
 	logf := s.cfg.Logf
 	key := memberWorkKey(member.ChainID, member.OperationID)
 	if s.inWork[key] {
@@ -216,10 +226,12 @@ func (s *OnDemandSubmitter) consider(ctx context.Context, member *PendingBatchIn
 		return
 	}
 	if outcome != nil && outcome.Deferred {
-		// Gas ceiling. The leaf is untouched; leave the member queued and try again next pass.
-		return
+		// Nothing terminal is known: a price refusal, or a transaction whose result is not in yet.
+		// The member stays queued and is tried again next pass.
+		return outcome.KeyBusy
 	}
 	s.dispose(ctx, member, outcome, true, nil)
+	return false
 }
 
 // settleWithReadinessRetry performs attempts until the quorum forms, the deadline expires, or a

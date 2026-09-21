@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 )
@@ -95,10 +96,15 @@ type persistedMember struct {
 	Attestation json.RawMessage `json:"attestation,omitempty"`
 	// This validator's own settlement progress on an on-demand member. omitempty for the same
 	// version-skew reason as Lane.
-	AnchorProved bool   `json:"anchor_proved,omitempty"`
-	AnchorTx     string `json:"anchor_tx,omitempty"`
-	VerifyTx     string `json:"verify_tx,omitempty"`
-	SettlementTx string `json:"settlement_tx,omitempty"`
+	AnchorProved       bool     `json:"anchor_proved,omitempty"`
+	AnchorTx           string   `json:"anchor_tx,omitempty"`
+	VerifyTx           string   `json:"verify_tx,omitempty"`
+	AnchorBlock        uint64   `json:"anchor_block,omitempty"`
+	FirstSeen          int64    `json:"first_seen,omitempty"` // unix seconds
+	SettlementTx       string   `json:"settlement_tx,omitempty"`
+	SettlementTxs      []string `json:"settlement_txs,omitempty"`
+	SettlementNonce    uint64   `json:"settlement_nonce,omitempty"`
+	SettlementNonceSet bool     `json:"settlement_nonce_set,omitempty"`
 }
 
 // AttestationCodec converts the opaque Phase 7-9 snapshot to and from JSON.
@@ -207,17 +213,22 @@ func (s *BatchMempoolStore) encodeMember(p *PendingBatchIntent, lane BatchLane) 
 		return persistedMember{}, false
 	}
 	pm := persistedMember{
-		IntentID:     p.IntentID,
-		ADIURL:       p.ADIURL,
-		ChainID:      p.ChainID,
-		Account:      p.Account.Hex(),
-		OperationID:  "0x" + common.Bytes2Hex(p.OperationID[:]),
-		AccumTxHash:  p.AccumTxHash,
-		CommitHeight: p.CommitHeight,
-		AnchorProved: p.AnchorProved,
-		AnchorTx:     p.AnchorTx,
-		VerifyTx:     p.VerifyTx,
-		SettlementTx: p.SettlementTx,
+		IntentID:           p.IntentID,
+		ADIURL:             p.ADIURL,
+		ChainID:            p.ChainID,
+		Account:            p.Account.Hex(),
+		OperationID:        "0x" + common.Bytes2Hex(p.OperationID[:]),
+		AccumTxHash:        p.AccumTxHash,
+		CommitHeight:       p.CommitHeight,
+		AnchorProved:       p.AnchorProved,
+		AnchorTx:           p.AnchorTx,
+		VerifyTx:           p.VerifyTx,
+		AnchorBlock:        p.AnchorBlock,
+		FirstSeen:          unixOrZero(p.FirstSeen),
+		SettlementTx:       p.SettlementTx,
+		SettlementTxs:      append([]string(nil), p.SettlementTxs...),
+		SettlementNonce:    p.SettlementNonce,
+		SettlementNonceSet: p.SettlementNonceSet,
 	}
 	// on_cadence is the absent default, so it is never written. See persistedMember.Lane.
 	if lane == LaneOnDemand {
@@ -284,17 +295,22 @@ func (s *BatchMempoolStore) Load(m *BatchMempool) (int, error) {
 		copy(opID[:], common.FromHex(pm.OperationID))
 
 		p := &PendingBatchIntent{
-			IntentID:     pm.IntentID,
-			ADIURL:       pm.ADIURL,
-			ChainID:      pm.ChainID,
-			Account:      common.HexToAddress(pm.Account),
-			OperationID:  opID,
-			AccumTxHash:  pm.AccumTxHash,
-			CommitHeight: pm.CommitHeight,
-			AnchorProved: pm.AnchorProved,
-			AnchorTx:     pm.AnchorTx,
-			VerifyTx:     pm.VerifyTx,
-			SettlementTx: pm.SettlementTx,
+			IntentID:           pm.IntentID,
+			ADIURL:             pm.ADIURL,
+			ChainID:            pm.ChainID,
+			Account:            common.HexToAddress(pm.Account),
+			OperationID:        opID,
+			AccumTxHash:        pm.AccumTxHash,
+			CommitHeight:       pm.CommitHeight,
+			AnchorProved:       pm.AnchorProved,
+			AnchorTx:           pm.AnchorTx,
+			VerifyTx:           pm.VerifyTx,
+			AnchorBlock:        pm.AnchorBlock,
+			FirstSeen:          timeOrZero(pm.FirstSeen),
+			SettlementTx:       pm.SettlementTx,
+			SettlementTxs:      pm.SettlementTxs,
+			SettlementNonce:    pm.SettlementNonce,
+			SettlementNonceSet: pm.SettlementNonceSet,
 		}
 		for _, l := range pm.Legs {
 			v := new(big.Int)
@@ -341,4 +357,18 @@ func (s *BatchMempoolStore) Load(m *BatchMempool) (int, error) {
 		restored++
 	}
 	return restored, nil
+}
+
+func unixOrZero(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.Unix()
+}
+
+func timeOrZero(sec int64) time.Time {
+	if sec == 0 {
+		return time.Time{}
+	}
+	return time.Unix(sec, 0)
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 
 	"github.com/certen/independant-validator/pkg/consensus"
@@ -462,27 +463,36 @@ func (s *BatchProofSubmitterImpl) SubmitBatchQuorumProof(
 	s.logf("[BATCH-PROOF] chain=%d submitting attestation for anchor 0x%x root=0x%x msg=0x%x",
 		chainID, bundleID[:8], batchRoot[:8], messageHash[:8])
 
-	ecm.auth.GasLimit = 900000
-	ecm.nextNonce()
-	tx, err := ecm.anchor.ExecuteComprehensiveProofSimple(ecm.auth, bundleID, proof)
+	// Priced when sent, replaced at the same nonce while it does not mine, and bounded: see
+	// txSender. A bound that runs out is *ChainWaitError - the attestation may still land, so it is
+	// "not yet known", and the caller must not describe it as a rejected anchor.
+	receipt, txHash, err := ecm.sendBatchTx(ctx, "verify", "", 900000,
+		func(opts *bind.TransactOpts) (*types.Transaction, error) {
+			return ecm.anchor.ExecuteComprehensiveProofSimple(opts, bundleID, proof)
+		}, nil)
 	if err != nil {
 		return "", 0, fmt.Errorf("executeComprehensiveProof: %w", err)
 	}
-
-	receipt, err := bind.WaitMined(ctx, ecm.client, tx)
-	if err != nil {
-		return "", 0, fmt.Errorf("waiting for attestation tx %s: %w", tx.Hash().Hex(), err)
-	}
 	if receipt.Status == 0 {
-		return "", 0, fmt.Errorf("executeComprehensiveProof reverted (tx %s)", tx.Hash().Hex())
+		// The usual cause is another validator's attestation of this exact anchor landing first:
+		// the proof is single-use, so a second one reverts. If the anchor now reads attested at this
+		// transaction's block, the root IS attested - that is the outcome this call exists for.
+		if executed, cerr := s.AnchorProofExecutedConfirmed(ctx, chainID, bundleID, txHash); cerr == nil && executed {
+			// Attested - by ANOTHER validator's transaction. This reverted one is not the
+			// attestation and must not be reported or recorded as it (evidence, verify cost).
+			s.logf("[BATCH-PROOF] chain=%d attestation %s reverted because anchor 0x%x was already attested "+
+				"by another validator", chainID, txHash, bundleID[:8])
+			return "", 0, fmt.Errorf("executeComprehensiveProof %s: %w", txHash, ErrAttestedByAnother)
+		}
+		return "", 0, fmt.Errorf("executeComprehensiveProof reverted (tx %s)", txHash)
 	}
 
 	s.logf("[BATCH-PROOF] chain=%d attestation mined tx=%s gas=%d",
-		chainID, tx.Hash().Hex(), receipt.GasUsed)
+		chainID, txHash, receipt.GasUsed)
 	// Returned so the caller can report the VERIFY leg's cost. Discarding it left every
 	// batch-settled chain permanently at 2 of 3 measured legs, which the pricing gate treats
 	// as partial coverage and refuses to price.
-	return tx.Hash().Hex(), receipt.BlockNumber.Uint64(), nil
+	return txHash, receipt.BlockNumber.Uint64(), nil
 }
 
 // NOTE: buildValidatorSetForBatch was REMOVED.

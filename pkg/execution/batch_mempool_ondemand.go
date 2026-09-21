@@ -155,6 +155,14 @@ func (m *BatchMempool) NoteOnDemandProgress(chainID int64, opID [32]byte, update
 	return true
 }
 
+// HeldPastTTL is how many on-demand members the last prune kept past their TTL because this
+// validator has acted on them - settlements in flight, or anchors it attested - and must see resolve.
+func (m *BatchMempool) HeldPastTTL() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.heldPastTTL
+}
+
 // PendingOnDemand lists a chain's queued intent-keyed members.
 //
 // Ordered by (CommitHeight, IntentID) — the same rule the period path sorts by. Map iteration
@@ -219,9 +227,25 @@ func (m *BatchMempool) pruneOnDemandOlderThan(ttl time.Duration, now time.Time) 
 	defer m.mu.Unlock()
 
 	pruned := 0
+	m.heldPastTTL = 0
 	for chainID, byOp := range m.onDemand {
 		for opID, p := range byOp {
-			if p == nil || now.Sub(p.EnqueuedAt) >= ttl {
+			if p == nil {
+				delete(byOp, opID)
+				pruned++
+				continue
+			}
+			// Never prune a member this validator has acted on: it attested the anchor or sent a
+			// settlement. Its outcome may still land - a settlement in flight, an attestation it must
+			// settle under - and pruning it would drop a real result unrecorded. Such a member leaves
+			// the queue only through its outcome.
+			if p.AnchorProved || p.SettlementNonceSet || len(p.SettlementTxs) > 0 || p.SettlementTx != "" {
+				if now.Sub(p.EnqueuedAt) >= ttl {
+					m.heldPastTTL++
+				}
+				continue
+			}
+			if now.Sub(p.EnqueuedAt) >= ttl {
 				delete(byOp, opID)
 				pruned++
 			}

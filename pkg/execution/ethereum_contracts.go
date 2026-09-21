@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/certen/independant-validator/pkg/anchor"
@@ -250,6 +251,18 @@ type EthereumContractManager struct {
 	nonceMu     sync.Mutex
 	nonceSeq    uint64
 	nonceActive bool
+	// periodWaiting counts period flushes waiting for seqMu; while one waits, the on-demand lane
+	// yields (see beginNonceSequenceWaiting).
+	periodWaiting atomic.Int32
+	// seqMu is held from beginNonceSequence to endNonceSequence. The period flush and the on-demand
+	// submitter are separate goroutines sharing this manager (one per chain) and one key: two open
+	// sequences would hand out the same nonces, and one's endNonceSequence would close the other's.
+	seqMu sync.Mutex
+
+	// The batch lane's transaction sender and its durable outbox; see tx_sender.go and batch_tx.go.
+	senderOnce sync.Once
+	sender     *txSender
+	senderErr  error
 
 	client                  *ethclient.Client
 	auth                    *bind.TransactOpts
@@ -3165,6 +3178,63 @@ func ComputeBatchExecutionCommitment(chainID int64, calls []BatchCall) [32]byte 
 // Call once before the first transaction of a flush; every subsequent send takes its nonce from
 // the local counter via nextNonce.
 func (ecm *EthereumContractManager) beginNonceSequence(ctx context.Context) error {
+	// One sequence at a time on this key; released by endNonceSequence, or here on failure. TryLock,
+	// not Lock: the on-demand lane's single goroutine serves every chain, and blocking it here for
+	// the minutes a flush can take would stall all of them behind this one key. It also yields to a
+	// period flush that is waiting, so steady on-demand traffic cannot starve the period lane.
+	if ecm.periodWaiting.Load() > 0 || !ecm.seqMu.TryLock() {
+		return ErrSequenceBusy
+	}
+	return ecm.beginLocked(ctx)
+}
+
+// periodSequenceWait bounds how long a period flush waits for the on-demand lane to finish its
+// sequence on this key.
+const periodSequenceWait = 30 * time.Second
+
+// beginNonceSequenceWaiting is the period flush's begin: it waits up to periodSequenceWait for the
+// sequence, and while it waits the on-demand lane yields, so the period lane cannot be starved by
+// a stream of on-demand members.
+func (ecm *EthereumContractManager) beginNonceSequenceWaiting(ctx context.Context) error {
+	ecm.periodWaiting.Add(1)
+	defer ecm.periodWaiting.Add(-1)
+	deadline := time.Now().Add(periodSequenceWait)
+	for !ecm.seqMu.TryLock() {
+		if time.Now().After(deadline) {
+			log.Printf("⏳ [NONCE] period flush on %s waited %s for the on-demand lane's sequence and gave up; "+
+				"its members are requeued for the next flush", ecm.auth.From.Hex(), periodSequenceWait)
+			return ErrSequenceBusy
+		}
+		select {
+		case <-ctx.Done():
+			return ErrSequenceBusy
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+	return ecm.beginLocked(ctx)
+}
+
+// beginLocked pins the sequence. The caller holds seqMu; it is released here on failure.
+func (ecm *EthereumContractManager) beginLocked(ctx context.Context) error {
+	ok := false
+	defer func() {
+		if !ok {
+			ecm.seqMu.Unlock()
+		}
+	}()
+
+	// Nothing new is sent while this key still has a transaction in flight: it would only queue
+	// behind it. Resume drives every outstanding transaction - including one left by a previous run -
+	// toward a result, replacing it with a higher fee while it does not mine, and returns
+	// *ChainWaitError if one is still pending at its bound. That is "not yet", never a failure.
+	sender, err := ecm.batchSender()
+	if err != nil {
+		return err
+	}
+	if err := sender.Resume(ctx); err != nil {
+		return err
+	}
+
 	ecm.nonceMu.Lock()
 	defer ecm.nonceMu.Unlock()
 
@@ -3172,6 +3242,27 @@ func (ecm *EthereumContractManager) beginNonceSequence(ctx context.Context) erro
 	if err != nil {
 		return fmt.Errorf("pinning nonce for %s: %w", ecm.auth.From.Hex(), err)
 	}
+	// Anything in flight between the mined nonce and the pending one must be this sender's. A
+	// transaction it did not send - left by an earlier binary, or by the legacy per-intent path
+	// sharing this key - would sit ahead of everything this sequence sends, and nothing here may
+	// replace it: it may be a real payment. The key is reported busy, loudly, until it resolves.
+	mined, err := ecm.client.NonceAt(ctx, ecm.auth.From, nil)
+	if err != nil {
+		return fmt.Errorf("reading the mined nonce for %s: %w", ecm.auth.From.Hex(), err)
+	}
+	var foreign []uint64
+	for k := mined; k < n; k++ {
+		if !sender.outbox.known(k) {
+			foreign = append(foreign, k)
+		}
+	}
+	if len(foreign) > 0 {
+		log.Printf("🚨 [NONCE] %s has transaction(s) in flight at nonce(s) %v that this sender did not send. "+
+			"Nothing new is sent from this key until they resolve; if one is stuck, an operator must clear it.",
+			ecm.auth.From.Hex(), foreign)
+		return &ForeignPendingError{Nonces: foreign}
+	}
+	ok = true
 	ecm.nonceSeq = n
 	ecm.nonceActive = true
 	log.Printf("🔢 [NONCE] pinned sequence at %d for %s", n, ecm.auth.From.Hex())
@@ -3192,22 +3283,28 @@ func (ecm *EthereumContractManager) nextNonce() {
 	ecm.nonceSeq++
 }
 
-// rewindNonce gives back the nonce most recently handed out.
+// rewindNonce gives back nonce n, the one most recently handed out.
 //
 // Used when a send fails BEFORE the transaction reached the mempool: that nonce was never
-// consumed, and skipping it would strand every later transaction behind a permanent gap.
-func (ecm *EthereumContractManager) rewindNonce() {
+// consumed, and skipping it would strand every later transaction behind a permanent gap. It gives
+// back EXACTLY n and only if n is still the last one handed out; otherwise it does nothing, because
+// decrementing past a nonce another send is using would issue that nonce twice.
+func (ecm *EthereumContractManager) rewindNonce(n uint64) {
 	ecm.nonceMu.Lock()
 	defer ecm.nonceMu.Unlock()
-	if ecm.nonceActive && ecm.nonceSeq > 0 {
-		ecm.nonceSeq--
+	if ecm.nonceActive && ecm.nonceSeq == n+1 {
+		ecm.nonceSeq = n
 	}
 }
 
 // endNonceSequence returns to automatic nonce selection.
 func (ecm *EthereumContractManager) endNonceSequence() {
 	ecm.nonceMu.Lock()
-	defer ecm.nonceMu.Unlock()
+	wasActive := ecm.nonceActive
 	ecm.nonceActive = false
 	ecm.auth.Nonce = nil
+	ecm.nonceMu.Unlock()
+	if wasActive {
+		ecm.seqMu.Unlock()
+	}
 }

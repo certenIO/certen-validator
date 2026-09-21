@@ -177,15 +177,15 @@ func costEndpointForChain(chain string) (string, string) {
 	return resolveCostEndpointForChain(chain)
 }
 
-// lastVerifyTx returns the executeComprehensiveProof transaction from the prover that just ran,
-// consuming it so it cannot be attributed to a later batch.
+// lastVerifyTx returns bundleID's executeComprehensiveProof transaction from the prover, consuming
+// it so it cannot be attributed to another batch.
 //
-// Returns empty when the prover is not a *BatchQuorumAttestor (tests use stubs) or when the
-// attestation did not reach a mined transaction. Reporting nothing is correct there: a verify
-// leg that never landed has no cost to measure.
-func (o *BatchOrchestrator) lastVerifyTx() string {
-	if a, ok := o.prover.(interface{ TakeLastVerifyTx() string }); ok {
-		return a.TakeLastVerifyTx()
+// Returns empty when the prover is not a *BatchQuorumAttestor (tests use stubs) or when this node's
+// attestation of that anchor did not reach a mined transaction. Reporting nothing is correct there:
+// a verify leg that never landed has no cost to measure.
+func (o *BatchOrchestrator) lastVerifyTx(bundleID [32]byte) string {
+	if a, ok := o.prover.(interface{ TakeVerifyTx([32]byte) string }); ok {
+		return a.TakeVerifyTx(bundleID)
 	}
 	return ""
 }

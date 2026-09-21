@@ -65,6 +65,10 @@ type PendingBatchIntent struct {
 
 	EnqueuedAt time.Time
 
+	// FirstSeen is when this validator first queued the member. Unlike EnqueuedAt it is persisted and
+	// never reset by a restart: it is the floor for searching the chain for the member's spent leaf.
+	FirstSeen time.Time
+
 	// What THIS validator did toward settling an on-demand member, persisted with it so a restart
 	// does not forget it. Every validator holds every member and the settlement failover hands it
 	// to each in turn, so a validator that finds the member's anchor already attested must be able
@@ -76,9 +80,36 @@ type PendingBatchIntent struct {
 	AnchorProved bool
 	AnchorTx     string
 	VerifyTx     string
+	// AnchorBlock is the block the member's anchor was created in, when this validator created it:
+	// the floor for searching the account's LeafConsumed log.
+	AnchorBlock uint64
 	// SettlementTx is the settlement transaction this validator sent, recorded before its receipt
-	// is awaited.
+	// is awaited: the most recent broadcast.
 	SettlementTx string
+	// SettlementTxs is every hash this validator's settlement was broadcast under. A settlement that
+	// does not mine is replaced at the same nonce with a higher fee (txSender), so any ONE of these
+	// may be the one that mines; SettlementNonce is that shared nonce.
+	SettlementTxs      []string
+	SettlementNonce    uint64
+	SettlementNonceSet bool
+}
+
+// settlementHashes is every hash this validator's settlement for p was broadcast under.
+func (p *PendingBatchIntent) settlementHashes() []string {
+	out := append([]string(nil), p.SettlementTxs...)
+	if p.SettlementTx != "" {
+		seen := false
+		for _, h := range out {
+			if h == p.SettlementTx {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			out = append(out, p.SettlementTx)
+		}
+	}
+	return out
 }
 
 // ExecutionCommitment returns the commitment this member's leaf must carry.
@@ -227,6 +258,8 @@ type BatchMempool struct {
 	// Keyed by operationID because that is the intent's identity and the lookup key an attester
 	// is given. See batch_mempool_ondemand.go.
 	onDemand map[int64]map[[32]byte]*PendingBatchIntent
+	// heldPastTTL: see HeldPastTTL.
+	heldPastTTL int
 
 	// store persists the queue so a restart resumes with its members instead of stranding
 	// intents the round has already reported as batch_queued. Nil disables persistence and
@@ -355,6 +388,9 @@ func validateMember(p *PendingBatchIntent) error {
 	}
 	if p.EnqueuedAt.IsZero() {
 		p.EnqueuedAt = time.Now()
+	}
+	if p.FirstSeen.IsZero() {
+		p.FirstSeen = p.EnqueuedAt
 	}
 	return nil
 }
