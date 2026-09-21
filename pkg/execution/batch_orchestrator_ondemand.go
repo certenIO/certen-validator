@@ -188,7 +188,15 @@ func (o *BatchOrchestrator) SettleOnDemandMember(
 	// Same predicate the period path uses, and deterministic across validators because it reads
 	// on-chain state every node sees identically.
 	if err := chain.memberAccountUsable(ctx, member); err != nil {
-		return nil, fmt.Errorf("member %s account unusable: %w", member.IntentID, err)
+		// A member whose anchor was attested, or that this validator sent a settlement for, has an
+		// outcome that is decided on chain - a settlement may be in flight or mined. A screen answer
+		// (possibly from a lagging node) must not override it: carry on and let the chain decide.
+		if member.AnchorProved || member.AttestedSeen || member.SettlementNonceSet || len(member.SettlementTxs) > 0 {
+			o.logf("[OD] intent=%s account screen failed (%v) after the member's anchor was attested or a "+
+				"settlement sent; resolving from the chain instead", member.IntentID, err)
+		} else {
+			return nil, fmt.Errorf("member %s account unusable: %w", member.IntentID, err)
+		}
 	}
 
 	// ---- Form the one-leaf tree at the member's OWN height -------------------

@@ -252,6 +252,12 @@ func (o *BatchOrchestrator) FlushChain(
 	screened := make([]*PendingBatchIntent, 0, len(members))
 	for _, p := range members {
 		if err := o.memberAccountUsable(ctx, p); err != nil {
+			if IsChainReadError(err) {
+				// A read that failed is not the on-chain state every validator reads: dropping on it
+				// would give this validator a different tree from its peers. Put the period back.
+				o.mempool.Requeue(members)
+				return nil, fmt.Errorf("period %d on chain %d: screening %s: %w", cutoffHeight, chainID, p.IntentID, err)
+			}
 			o.logf("[BATCH] chain=%d dropping member %s from this period: %v", chainID, p.IntentID, err)
 			res.Dropped = append(res.Dropped, p)
 			continue

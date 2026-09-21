@@ -227,18 +227,17 @@ func (s *OnDemandSubmitter) consider(ctx context.Context, member *PendingBatchIn
 		return
 	}
 
-	if !s.isLeaderFor(member, s.failoverElapsed(ctx, member)) {
-		// Not this validator's turn to anchor it. Once the anchor is attested, though, the leader
-		// rotation no longer decides: the member's settlement windows do, and one of them may be this
-		// validator's - which is how a dead attester's member is taken over.
-		orch, err := s.cfg.Stack.OrchestratorFor(member.ChainID)
-		if err != nil {
+	// Once the anchor is attested the leader rotation no longer decides: the member's settlement
+	// windows do, and one of them may be this validator's - which is how a dead attester's member is
+	// taken over. The check also pre-scans ahead of this validator's window, leader or not.
+	leader := s.isLeaderFor(member, s.failoverElapsed(ctx, member))
+	if orch, err := s.cfg.Stack.OrchestratorFor(member.ChainID); err == nil {
+		needed, nerr := orch.OnDemandMemberNeedsThisValidator(ctx, member)
+		if !leader && (nerr != nil || !needed) {
 			return
 		}
-		needed, err := orch.OnDemandMemberNeedsThisValidator(ctx, member)
-		if err != nil || !needed {
-			return
-		}
+	} else if !leader {
+		return
 	}
 
 	s.inWork[key] = true

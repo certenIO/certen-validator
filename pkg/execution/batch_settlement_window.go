@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
@@ -43,11 +42,14 @@ import (
 //     reorg margin). Every settlement an earlier window's settler sent has then executed (the leaf
 //     reads spent), reverted, or can never execute, and each of those is fixed in finalized blocks.
 //   - Before settling, the taker scans those finalized blocks - from the attestation to window j-1's
-//     fence - for a transaction a roster validator sent to the member's account. One that is an
-//     honest settlement of this member under this anchor and reverted is a tried-and-failed outcome:
-//     its sender records it (or, if the sender is this validator, it records it now), and nobody
-//     settles again. The chain is the only evidence taken: a reverted transaction leaves no log, but
-//     it is in its block.
+//     fence plus the reorg margin - for a transaction a roster validator sent to the member's account.
+//     A settlement of this member (its calls, its operation) under this anchor that was mined is an
+//     outcome: a success, or a revert other than on its own timing - exactly what the settler that
+//     sent it records as the member's failure, so the two can never disagree. Its sender records it
+//     (or, if the sender is this validator, it records it now), and nobody settles again. The chain is
+//     the only evidence taken: a reverted transaction leaves no log, but it is in its block. Anything
+//     the scan cannot read with certainty - a missing block, a missing receipt - stops it without
+//     saving progress, so a gap in a node's answers can never be taken for an empty block.
 //
 // A revert caused by the timing fields, not by the intent (mined after its expiresAt, or before its
 // timestamp) is not the member's failure: it is never recorded as one, and settlement continues.
@@ -153,7 +155,7 @@ func isCallVerdict(err error) bool {
 	if errors.As(err, &re) && re.ErrorCode() == 3 {
 		return true
 	}
-	return strings.Contains(err.Error(), "execution reverted")
+	return strings.Contains(strings.ToLower(err.Error()), "execution reverted")
 }
 
 // OnDemandMemberNeedsThisValidator reports whether this validator should act on a member it is not
@@ -209,7 +211,7 @@ func (o *BatchOrchestrator) OnDemandMemberNeedsThisValidator(ctx context.Context
 		// ahead of its turn. Best effort; the turn itself scans whatever is left.
 		if fin, ferr := chain.finalizedTime(ctx); ferr == nil {
 			until := fin
-			if f := win.fence(j); until.After(f) {
+			if f := win.fence(j).Add(settlementReorgMargin); until.After(f) {
 				until = f
 			}
 			chain.prescanEarlierWindows(ctx, member, tree, att, until, roster)
@@ -283,7 +285,9 @@ func (o *BatchOrchestrator) decideSettlementWindow(
 			return deferf("window %d is this validator's; waiting for a finalized block past window %d's fence %s "+
 				"(finalized %s)", j, j-1, prevFence.UTC().Format(time.RFC3339), finalized.UTC().Format(time.RFC3339))
 		}
-		prior, pfound, perr := chain.priorSettlementAttempt(ctx, member, tree, att, prevFence, roster)
+		// Through the reorg margin, not just to the fence: that is the finalized range waited for, and
+		// an attester whose view of T was a few slots later sent with a fence up to that much later.
+		prior, pfound, perr := chain.priorSettlementAttempt(ctx, member, tree, att, prevFence.Add(settlementReorgMargin), roster)
 		if perr != nil {
 			return deferf("earlier windows unreadable (%v) — deferring", perr)
 		}
@@ -547,6 +551,16 @@ func (o *BatchOrchestrator) scanEarlierWindows(
 	if err != nil {
 		return priorAttempt{}, false, err
 	}
+	// Never past the finalized block itself: several blocks can share a timestamp (Arbitrum), so the
+	// last block at a finalized TIME can be past the finalized NUMBER, and progress saved over a block
+	// that can still change would be a hole.
+	fin, err := o.ecm.client.HeaderByNumber(ctx, big.NewInt(int64(rpc.FinalizedBlockNumber)))
+	if err != nil {
+		return priorAttempt{}, false, readErr(fmt.Errorf("reading finalized block: %w", err))
+	}
+	if n := fin.Number.Uint64(); last > n {
+		last = n
+	}
 	rpcClient := o.ecm.client.Client()
 	start := att.Block
 	o.scanMu.Lock()
@@ -576,6 +590,11 @@ func (o *BatchOrchestrator) scanEarlierWindows(
 			return priorAttempt{}, false, readErr(fmt.Errorf("reading blocks %d-%d: %w", from, to, err))
 		}
 		for i := range batch {
+			// A node that does not have the block answers null, which decodes as an empty block with no
+			// error. That is not "no transactions": stop, and save nothing past it.
+			if n := from + uint64(i); uint64(blocks[i].Number) != n {
+				return priorAttempt{}, false, readErr(fmt.Errorf("block %d was not returned (got %d)", n, uint64(blocks[i].Number)))
+			}
 			for _, c := range settlementCandidates(blocks[i].Transactions, member.Account, roster) {
 				pa, ok, err := o.checkPriorAttempt(ctx, member, tree, c)
 				if err != nil {
@@ -629,8 +648,13 @@ func fetchBatch(ctx context.Context, c *rpc.Client, batch []rpc.BatchElem) error
 	}
 }
 
-// checkPriorAttempt judges one candidate: a settlement of this member (its calls, its operation) under
-// this anchor that succeeded, or reverted as an authorised, honestly shaped attempt.
+// checkPriorAttempt judges one candidate by the rule its sender applies to its own settlement: a
+// settlement of this member (its calls, its operation) under this anchor that was mined is the member's
+// outcome - a success, or a revert other than on its own timing fields. Using the sender's own rule
+// means a revert its sender recorded as the member's failure is always found here.
+//
+// Any read the scan cannot complete is an error, never a "no": the transaction came from a finalized
+// block, so a missing receipt is a node's gap, not an absence.
 func (o *BatchOrchestrator) checkPriorAttempt(ctx context.Context, member *PendingBatchIntent, tree *BatchTree, c scanTx) (priorAttempt, bool, error) {
 	tx, _, err := o.ecm.client.TransactionByHash(ctx, c.Hash)
 	if errors.Is(err, types.ErrTxTypeNotSupported) {
@@ -655,20 +679,19 @@ func (o *BatchOrchestrator) checkPriorAttempt(ctx context.Context, member *Pendi
 		return priorAttempt{}, false, nil
 	}
 	rcpt, err := o.ecm.client.TransactionReceipt(ctx, c.Hash)
-	if errors.Is(err, ethereum.NotFound) {
-		return priorAttempt{}, false, nil
-	}
 	if err != nil {
 		return priorAttempt{}, false, readErr(fmt.Errorf("reading receipt %s: %w", c.Hash.Hex(), err))
 	}
 	if rcpt.Status == types.ReceiptStatusSuccessful {
 		return priorAttempt{Tx: c.Hash.Hex(), From: c.From}, true, nil
 	}
-	if err := checkAuthorizedAttempt(ctx, o.ecm.client, tx, rcpt, exec, member.Account); err != nil {
-		if IsChainReadError(err) {
-			return priorAttempt{}, false, err
-		}
-		// Not an attempt the intent could have failed: timing, a crafted or starved call.
+	hdr, err := o.ecm.client.HeaderByNumber(ctx, rcpt.BlockNumber)
+	if err != nil {
+		return priorAttempt{}, false, readErr(fmt.Errorf("reading block %s: %w", rcpt.BlockNumber, err))
+	}
+	if timing, _ := timingRevert(p, hdr.Time); timing {
+		// Mined outside its own validity window: it never tried the member, and its sender does not
+		// record it as the member's failure either.
 		return priorAttempt{}, false, nil
 	}
 	return priorAttempt{Tx: c.Hash.Hex(), From: c.From, Reverted: true}, true, nil
