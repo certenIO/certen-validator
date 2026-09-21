@@ -511,6 +511,12 @@ func (s *BatchStack) flushOneChain(
 		return
 	}
 
+	if len(res.SpentElsewhere) > 0 {
+		// Executed by a transaction this node did not send; its sender records them. Attesting here
+		// too would be an outcome with no transaction of this node's to show for it.
+		logf("[BATCH-FLUSH] chain %d: %d member(s) found already executed by another sender; released without attesting",
+			chainID, len(res.SpentElsewhere))
+	}
 	if res.MemberCount == 0 {
 		return
 	}

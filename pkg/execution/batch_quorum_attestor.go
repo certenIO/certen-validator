@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"github.com/certen/independant-validator/pkg/consensus"
@@ -64,27 +64,37 @@ type BatchQuorumAttestor struct {
 	timeout     time.Duration
 	logf        func(string, ...interface{})
 
-	// lastVerifyTx is the most recent executeComprehensiveProof transaction hash.
+	// verifyTxs holds each anchor's executeComprehensiveProof transaction until its orchestrator
+	// takes it, keyed by bundleId.
 	//
 	// Held here rather than returned through QuorumProver because that interface is shared with
-	// the period path and a signature change would ripple through both; the orchestrator reads
-	// it immediately after prove() returns, on the same goroutine, so there is no interleaving.
-	lastVerifyTx atomic.Pointer[string]
+	// the period path. Keyed, not a single slot: the period flush and the on-demand submitter are
+	// separate goroutines sharing this prover across every chain, so "the most recent verify" could
+	// be another lane's or another chain's.
+	verifyMu  sync.Mutex
+	verifyTxs map[[32]byte]string
 }
 
-// TakeLastVerifyTx returns and clears the most recent verify transaction hash.
-//
-// Clearing matters: a stale hash reported against a later batch would attribute one batch's
-// verification cost to another. Empty means the last attempt did not reach a mined transaction.
-func (a *BatchQuorumAttestor) TakeLastVerifyTx() string {
+// TakeVerifyTx returns and clears bundleID's verify transaction hash. Empty means that anchor's last
+// attestation attempt did not reach a mined transaction of this node's.
+func (a *BatchQuorumAttestor) TakeVerifyTx(bundleID [32]byte) string {
 	if a == nil {
 		return ""
 	}
-	p := a.lastVerifyTx.Swap(nil)
-	if p == nil {
-		return ""
+	a.verifyMu.Lock()
+	defer a.verifyMu.Unlock()
+	tx := a.verifyTxs[bundleID]
+	delete(a.verifyTxs, bundleID)
+	return tx
+}
+
+func (a *BatchQuorumAttestor) putVerifyTx(bundleID [32]byte, tx string) {
+	a.verifyMu.Lock()
+	defer a.verifyMu.Unlock()
+	if a.verifyTxs == nil {
+		a.verifyTxs = make(map[[32]byte]string)
 	}
-	return *p
+	a.verifyTxs[bundleID] = tx
 }
 
 // NewBatchQuorumAttestor builds the attestor.
@@ -262,7 +272,7 @@ func (a *BatchQuorumAttestor) prove(
 	}
 	// Record the verify transaction so the caller can measure its cost. It is a SHARED leg:
 	// one executeComprehensiveProof verifies the whole batch, exactly like the anchor.
-	a.lastVerifyTx.Store(&verifyTx)
+	a.putVerifyTx(tree.BundleID, verifyTx)
 
 	// Confirm rather than assume — but confirm PROPERLY, at the block that mined the
 	// attestation and with a retry budget.
@@ -287,8 +297,7 @@ func (a *BatchQuorumAttestor) prove(
 		// Could not READ the flag. Distinct from reading it as false, and reported as such:
 		// the attestation may well have landed, and the caller must not describe this as a
 		// rejected anchor.
-		return fmt.Errorf("could not confirm anchor 0x%x attestation (tx %s) — the attestation "+
-			"may have landed and was NOT observed: %w", tree.BundleID[:8], verifyTx, err)
+		return &AnchorConfirmUnreadError{BundleID: tree.BundleID, VerifyTx: verifyTx, Err: err}
 	}
 	if !executed {
 		return fmt.Errorf(

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/ethereum/go-ethereum/common"
+	"strings"
 )
 
 // =============================================================================
@@ -61,6 +63,9 @@ type OnDemandOutcome struct {
 	// its settlement consumed the leaf first. That validator records the outcome; this one drops
 	// its copy of the member without attesting anything and without executing it.
 	Released bool
+	// KeyBusy: this node's key cannot send right now - a transaction of its own is still in flight,
+	// or the sender is unavailable. Nothing else on this chain can be sent this pass either.
+	KeyBusy bool
 }
 
 // onDemandChain is every chain operation on-demand settlement performs.
@@ -80,9 +85,22 @@ type onDemandChain interface {
 	settleMember(ctx context.Context, p *PendingBatchIntent, tree *BatchTree, branch [][32]byte) (string, error)
 	settlementStatus(ctx context.Context, txHash string) (found, mined, reverted bool, err error)
 	memberPastDeadline(p *PendingBatchIntent) bool
-	lastVerifyTx() string
+	lastVerifyTx(bundleID [32]byte) string
 	reportOnDemandCosts(ctx context.Context, member *PendingBatchIntent, settleTx string)
 	recordLegProgress(ctx context.Context, settled, failed []*PendingBatchIntent)
+	// leafConsumedTx names the transaction that spent the member's leaf, from the account's own
+	// LeafConsumed log, and the address that sent it. found=false means no such log was seen:
+	// nothing may be concluded.
+	leafConsumedTx(ctx context.Context, p *PendingBatchIntent, anchorID [32]byte) (txHash string, from common.Address, found bool, err error)
+	// settlementInFlight reports whether this node still has a transaction outstanding at nonce.
+	settlementInFlight(nonce uint64) bool
+	// settlementHashesAt is every hash this node's key broadcast at nonce for p's settlement.
+	settlementHashesAt(p *PendingBatchIntent, nonce uint64) []string
+	// anchorAttester names the transaction that attested bundleID and its sender. found=false
+	// means none is in view: nothing may be concluded.
+	anchorAttester(ctx context.Context, bundleID [32]byte, floor uint64) (txHash string, from common.Address, found bool, err error)
+	// ownAddress is the address this node settles from.
+	ownAddress() common.Address
 }
 
 func (o *BatchOrchestrator) chainOps() onDemandChain {
@@ -169,27 +187,40 @@ func (o *BatchOrchestrator) SettleOnDemandMember(
 	o.logf("[OD] chain=%d intent=%s forming one-member batch: root=0x%x bundleId=0x%x height=%d",
 		chainID, member.IntentID, tree.Root[:8], tree.BundleID[:8], member.CommitHeight)
 
+	// ---- Pin the nonce for the whole sequence -------------------------------
+	// BEFORE reading this member's chain state: pinning first drives any transaction this key still
+	// has in flight - this member's attestation or settlement among them - to a result. Reading
+	// "is the anchor attested?" before that could see this node's own pending attestation as absent
+	// and send a second one, whose revert was then read as the member failing.
+	if err := chain.beginSettlementSequence(ctx); err != nil {
+		if isTransientSendError(err) {
+			// This key still has a transaction in flight; nothing new is queued behind it.
+			return o.deferOnSend(member, "an earlier transaction from this key is still in flight", err, out), nil
+		}
+		return nil, err
+	}
+	defer chain.endSettlementSequence()
+
 	// ---- ALREADY ATTESTED? ---------------------------------------------------
 	// The bundleId is deterministic, so an existing AND attested anchor means a validator already
 	// did the anchoring. Whose work it was decides everything that follows; see
 	// resolveUnderAttestedAnchor.
 	attested, aerr := chain.anchorAlreadyAttested(ctx, tree.BundleID)
 	if aerr != nil {
-		return nil, fmt.Errorf("checking whether anchor 0x%x already settled: %w", tree.BundleID[:8], aerr)
+		// A read that failed says nothing about the anchor. Keep the member and read again.
+		out.Deferred = true
+		o.logf("[OD] intent=%s anchor 0x%x state unreadable (%v) — deferring", member.IntentID, tree.BundleID[:8], aerr)
+		return out, nil
 	}
 	if attested {
 		out.AlreadySettled = true
 		if done := o.resolveUnderAttestedAnchor(ctx, chain, member, tree, out); done {
 			return out, nil
 		}
-		// This validator attested the anchor itself and never sent a settlement: it stopped (a
-		// restart) between the two. It is the settler; settle under its own anchor.
-		o.logf("[OD] chain=%d intent=%s anchor 0x%x was attested by this validator, which never "+
-			"settled it — settling now", chainID, member.IntentID, tree.BundleID[:8])
-		if err := chain.beginSettlementSequence(ctx); err != nil {
-			return nil, err
-		}
-		defer chain.endSettlementSequence()
+		// This validator attested the anchor itself and has no settlement of its own on chain or in
+		// flight. It is the settler; settle under its own anchor.
+		o.logf("[OD] chain=%d intent=%s anchor 0x%x was attested by this validator, which has no "+
+			"settlement of its own on chain — settling now", chainID, member.IntentID, tree.BundleID[:8])
 		return o.settleAndClassify(ctx, chain, member, tree, out)
 	}
 
@@ -198,15 +229,14 @@ func (o *BatchOrchestrator) SettleOnDemandMember(
 		return nil, err
 	}
 
-	// ---- Pin the nonce for the whole sequence -------------------------------
-	if err := chain.beginSettlementSequence(ctx); err != nil {
-		return nil, err
-	}
-	defer chain.endSettlementSequence()
-
 	// ---- Create the anchor --------------------------------------------------
 	anchorTx, gasUsed, anchorBlock, err := chain.createBatchAnchor(ctx, tree)
 	if err != nil {
+		if isTransientSendError(err) || IsChainReadError(err) {
+			// Not yet known, refused on price before anything was sent, or the anchor's existence
+			// could not be read. The anchor is idempotent by bundleId: the next pass finds it.
+			return o.deferOnSend(member, "the anchor transaction has no result yet", err, out), nil
+		}
 		return nil, fmt.Errorf("createBatchAnchor: %w", err)
 	}
 	out.GasAnchor = gasUsed
@@ -217,6 +247,8 @@ func (o *BatchOrchestrator) SettleOnDemandMember(
 	// empty is how that is said. See IsTransactionHash.
 	if IsTransactionHash(anchorTx) {
 		tree.AnchorCreateTx, tree.AnchorCreateBlock = anchorTx, anchorBlock
+		// The floor for finding this member's LeafConsumed log later.
+		o.noteOnDemandProgress(member, func(p *PendingBatchIntent) { p.AnchorBlock = anchorBlock })
 	}
 	o.logf("[OD] chain=%d intent=%s anchor created tx=%s gas=%d",
 		chainID, member.IntentID, anchorTx, gasUsed)
@@ -232,6 +264,33 @@ func (o *BatchOrchestrator) SettleOnDemandMember(
 			"verified and no account will accept it", tree.BundleID[:8])
 	}
 	if err := prove(ctx, tree); err != nil {
+		// This validator BROADCAST the attestation and did not see its result: it may land. From
+		// here on this validator is a settler for the member - noted and persisted now, so the next
+		// pass, finding the anchor attested, settles it instead of mistaking the attestation for
+		// another validator's and releasing a member nobody then settles.
+		if verifyTx, broadcast := verifyBroadcast(err); broadcast {
+			o.noteOnDemandProgress(member, func(p *PendingBatchIntent) {
+				p.AnchorProved = true
+				if IsTransactionHash(anchorTx) {
+					p.AnchorTx = anchorTx
+				}
+				if IsTransactionHash(verifyTx) {
+					p.VerifyTx = verifyTx
+				}
+			})
+		}
+		if isTransientSendError(err) || isAnchorConfirmUnread(err) {
+			return o.deferOnSend(member, "the quorum attestation has no observed result yet", err, out), nil
+		}
+		if errors.Is(err, ErrAttestedByAnother) {
+			// The root is attested - by another validator, which settles it. Decided like any
+			// attested anchor: from the chain.
+			out.AlreadySettled = true
+			if done := o.resolveUnderAttestedAnchor(ctx, chain, member, tree, out); done {
+				return out, nil
+			}
+			return o.settleAndClassify(ctx, chain, member, tree, out)
+		}
 		// Surface as-is, including *QuorumNotReadyError, so the caller can decide whether to
 		// wait. The anchor is already paid for and createBatchAnchor treats an existing anchor
 		// for this bundleId as success, so a retry re-attests it rather than duplicating work.
@@ -239,7 +298,7 @@ func (o *BatchOrchestrator) SettleOnDemandMember(
 	}
 	// Recorded before the settlement is sent, and persisted: from here on this validator is the
 	// member's settler, and a restart must not make it mistake its own anchor for another's.
-	verifyTx := chain.lastVerifyTx()
+	verifyTx := chain.lastVerifyTx(tree.BundleID)
 	o.noteOnDemandProgress(member, func(p *PendingBatchIntent) {
 		p.AnchorProved = true
 		if IsTransactionHash(anchorTx) {
@@ -257,16 +316,22 @@ func (o *BatchOrchestrator) SettleOnDemandMember(
 
 // resolveUnderAttestedAnchor decides a member whose anchor is already attested, from this
 // validator's own record and the chain. It returns false only when this validator attested the
-// anchor itself and never sent a settlement, so it must settle now.
+// anchor itself and has no settlement of its own mined or in flight, so it must settle now.
 //
-//	sent a settlement, it succeeded            -> Settled with that transaction (this node attests it)
-//	sent a settlement, it reverted, leaf spent -> Released (another validator's settlement won)
-//	sent a settlement, it reverted, leaf live  -> Reverted with that transaction (this node attests the failure)
-//	sent a settlement, outcome not readable    -> Deferred
-//	sent nothing, leaf spent                   -> Released (another validator settled it)
-//	sent nothing, did not attest the anchor    -> Released (the validator that attested it settles it)
-//	sent nothing, attested the anchor itself   -> false: settle
-//	leaf state not readable                    -> Deferred
+// This validator's settlement may have gone out under several hashes - the sender replaces a
+// transaction that does not mine with a higher fee at the SAME nonce, some of them while no caller
+// is listening - so every hash is checked: the member's own record and the sender's history for the
+// nonce. At most one can have mined.
+//
+//	leaf spent, no settlement of its own        -> Released (it records every broadcast first)
+//	leaf spent, it sent a settlement            -> decided by who sent the spending transaction:
+//	                                               this node -> Settled with it; anyone else -> Released
+//	one of its hashes mined and reverted        -> Reverted with that transaction (this node attests the failure)
+//	none mined, still in flight or unreadable   -> Deferred
+//	none mined and nothing in flight            -> it never executed: settle again (the record is kept)
+//	no settlement, did not attest the anchor    -> Released (the validator that attested it settles it)
+//	no settlement, attested the anchor itself   -> false: settle
+//	leaf state not readable                     -> Deferred
 func (o *BatchOrchestrator) resolveUnderAttestedAnchor(
 	ctx context.Context,
 	chain onDemandChain,
@@ -282,45 +347,133 @@ func (o *BatchOrchestrator) resolveUnderAttestedAnchor(
 			member.IntentID, tree.BundleID[:8], cerr)
 		return true
 	}
-
-	if own := member.SettlementTx; own != "" {
-		found, mined, reverted, serr := chain.settlementStatus(ctx, own)
-		switch {
-		case serr != nil || !found || !mined:
-			// Not readable yet, still pending, or not known to this RPC endpoint. None of these is
-			// an outcome; the next pass reads it again.
-			out.Deferred = true
-			o.logf("[OD] intent=%s this validator's settlement %s has no readable outcome yet "+
-				"(found=%t mined=%t err=%v) — deferring", member.IntentID, own, found, mined, serr)
-		case !reverted:
-			out.Settled = true
-			out.TxHash = own
-			o.logf("[OD] intent=%s this validator's settlement %s succeeded", member.IntentID, own)
-			chain.reportOnDemandCosts(ctx, member, own)
-			chain.recordLegProgress(ctx, []*PendingBatchIntent{member}, nil)
-		case consumed:
-			out.Released = true
-			o.logf("[OD] intent=%s this validator's settlement %s reverted but the leaf is spent — "+
-				"another validator's settlement executed it; releasing", member.IntentID, own)
-		default:
-			o.markReverted(ctx, chain, member, own, out)
-		}
-		return true
-	}
-
+	// A spent leaf is decided by the chain's record of who spent it: the sender of the spending
+	// transaction. Exact whichever replacement hash mined, whatever this node's local record holds
+	// (a restart or a failed write can lose it), and independent of lagging receipts.
 	if consumed {
-		out.Released = true
-		o.logf("[OD] intent=%s anchor 0x%x attested and leaf spent by another validator's "+
-			"settlement; releasing — that validator records it", member.IntentID, tree.BundleID[:8])
+		return o.resolveSpentLeaf(ctx, chain, member, tree.BundleID, out)
+	}
+
+	own := member.settlementHashes()
+	if member.SettlementNonceSet {
+		own = mergeHashes(own, chain.settlementHashesAt(member, member.SettlementNonce))
+	}
+	if len(own) > 0 {
+		unknown := false
+		for _, h := range own {
+			found, mined, reverted, serr := chain.settlementStatus(ctx, h)
+			if serr != nil || (found && !mined) {
+				unknown = true
+				continue
+			}
+			if mined && reverted {
+				o.markReverted(ctx, chain, member, h, out)
+				return true
+			}
+			// A hash that mined and SUCCEEDED spent the leaf; the leaf reads unspent only because
+			// this read and that block disagree. Not an outcome yet.
+			if mined {
+				unknown = true
+			}
+		}
+		// In flight only if its nonce is still outstanding. A member with hashes but no nonce on
+		// record (one queued by a binary older than this one) has only its hashes to go by: a hash
+		// no node knows (checked above) was dropped, and is not in flight.
+		inFlight := member.SettlementNonceSet && chain.settlementInFlight(member.SettlementNonce)
+		if unknown || inFlight {
+			out.Deferred = true
+			o.logf("[OD] intent=%s this validator's settlement %v has no result yet — deferring",
+				member.IntentID, own)
+			return true
+		}
+		// Nothing of ours mined and nothing is in flight: the nonce went to another transaction, or
+		// the broadcast was rejected. This node's settlement never executed. The record of the
+		// earlier hashes is kept - it is history, not a claim - and who settles is decided below.
+		o.logf("[OD] intent=%s this validator's settlement %v never executed and is no longer in flight",
+			member.IntentID, own)
+	}
+
+	// Leaf unspent, nothing of this node's on chain or in flight. Who settles under this anchor is the
+	// validator that ATTESTED it - read from the chain (the sender of its ProofExecuted transaction),
+	// not from this node's memory, which a crash between attesting and recording, or an attestation
+	// that landed after its wait ran out, can leave wrong.
+	_, attester, found, aerr := chain.anchorAttester(ctx, tree.BundleID, member.AnchorBlock)
+	if aerr != nil || !found {
+		out.Deferred = true
+		o.logf("[OD] intent=%s anchor 0x%x attested; its attester is not in view (found=%t err=%v) — deferring",
+			member.IntentID, tree.BundleID[:8], found, aerr)
 		return true
 	}
-	if !member.AnchorProved {
+	if attester != chain.ownAddress() {
 		out.Released = true
-		o.logf("[OD] intent=%s anchor 0x%x attested by another validator, leaf unspent; releasing "+
-			"— that validator settles it and records the outcome", member.IntentID, tree.BundleID[:8])
+		o.logf("[OD] intent=%s anchor 0x%x attested by %s, leaf unspent; releasing — that validator settles "+
+			"it and records the outcome", member.IntentID, tree.BundleID[:8], attester.Hex())
 		return true
 	}
 	return false
+}
+
+// resolveSpentLeaf decides a member whose leaf is spent, from the LeafConsumed log that names the
+// spending transaction and its sender: this node's key means this node's own settlement - whichever
+// replacement hash mined - and it is Settled with it; anyone else's is Released to them. No log in
+// view decides nothing.
+func (o *BatchOrchestrator) resolveSpentLeaf(
+	ctx context.Context,
+	chain onDemandChain,
+	member *PendingBatchIntent,
+	bundleID [32]byte,
+	out *OnDemandOutcome,
+) bool {
+	tx, from, found, err := chain.leafConsumedTx(ctx, member, bundleID)
+	if err != nil || !found {
+		out.Deferred = true
+		o.logf("[OD] intent=%s leaf spent; the spending transaction is not in view yet (found=%t err=%v) — deferring",
+			member.IntentID, found, err)
+		return true
+	}
+	if from == chain.ownAddress() {
+		o.markOwnSettled(ctx, chain, member, tx, out)
+		return true
+	}
+	out.Released = true
+	o.logf("[OD] intent=%s leaf spent by %s from %s, not this validator; releasing — its sender records it",
+		member.IntentID, tx, from.Hex())
+	return true
+}
+
+func mergeHashes(a, b []string) []string {
+	out := append([]string(nil), a...)
+	for _, h := range b {
+		seen := false
+		for _, x := range out {
+			if strings.EqualFold(x, h) {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+// markOwnSettled records this validator's settlement transaction as the member's success.
+func (o *BatchOrchestrator) markOwnSettled(ctx context.Context, chain onDemandChain, member *PendingBatchIntent, txHash string, out *OnDemandOutcome) {
+	out.Settled = true
+	out.TxHash = txHash
+	o.logf("[OD] intent=%s this validator's settlement %s succeeded", member.IntentID, txHash)
+	chain.reportOnDemandCosts(ctx, member, txHash)
+	chain.recordLegProgress(ctx, []*PendingBatchIntent{member}, nil)
+}
+
+// deferOnSend marks the member deferred because a transaction's result is not known yet, or a send
+// was refused before anything reached the chain. Neither says anything about the member.
+func (o *BatchOrchestrator) deferOnSend(member *PendingBatchIntent, why string, err error, out *OnDemandOutcome) *OnDemandOutcome {
+	out.Deferred = true
+	out.KeyBusy = keyBusy(err)
+	o.logf("[OD] intent=%s deferred: %s (%v) — the member stays queued", member.IntentID, why, err)
+	return out
 }
 
 // settleAndClassify sends the member's settlement under an attested anchor and classifies what
@@ -370,14 +523,29 @@ func (o *BatchOrchestrator) settleAndClassify(
 		return out, nil
 	}
 
+	// The leaf was already spent when this node went to settle, so this send sent nothing. Who spent
+	// it decides: a settlement of this node's own that landed meanwhile is this member's success.
+	if errors.Is(serr, errLeafAlreadyConsumed) {
+		o.resolveSpentLeaf(ctx, chain, member, tree.BundleID, out)
+		return out, nil
+	}
+
 	// Sent, outcome not observed. Not a revert and not a failure: the transaction may still land.
 	// The member keeps this validator's record of the send, and the next pass reads the outcome.
 	var unknown *SettlementOutcomeUnknownError
 	if errors.As(serr, &unknown) {
 		out.Deferred = true
+		// The settlement still holds this key's nonce: nothing else on this chain can be sent now.
+		out.KeyBusy = true
 		o.logf("[OD] intent=%s settlement %s sent, outcome not observed (%v) — deferring",
 			member.IntentID, txHash, unknown.Err)
 		return out, nil
+	}
+
+	// Refused on price before broadcast, never reached a mempool, or the nonce went to another
+	// transaction: nothing of this settlement executed. The next pass tries again.
+	if isTransientSendError(serr) {
+		return o.deferOnSend(member, "the settlement did not reach the chain", serr, out), nil
 	}
 
 	if errors.Is(serr, errSettlementReverted) {
@@ -392,9 +560,10 @@ func (o *BatchOrchestrator) settleAndClassify(
 			return out, nil
 		}
 		if consumed {
-			out.Released = true
-			o.logf("[OD] intent=%s settlement %s reverted because another validator's settlement "+
-				"consumed the leaf first; releasing", member.IntentID, txHash)
+			// Spent by some other transaction - whose, the chain says (it may be an earlier
+			// settlement of this node's own that landed after its wait ran out).
+			o.logf("[OD] intent=%s settlement %s reverted because the leaf was already spent", member.IntentID, txHash)
+			o.resolveSpentLeaf(ctx, chain, member, tree.BundleID, out)
 			return out, nil
 		}
 		o.markReverted(ctx, chain, member, txHash, out)
