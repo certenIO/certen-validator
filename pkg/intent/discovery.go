@@ -1679,86 +1679,9 @@ func (id *IntentDiscovery) processIntent(intent *CertenIntent, blockHeight uint6
 	}
 
 	// 2.5️⃣ Generate G0/G1/G2 governance proof BEFORE routing to batch system
-	// This ensures the generated proof (not input config) is persisted to PostgreSQL
-	var govProof *proof.GovernanceProof
-	if id.governanceProofGen != nil && certenProof != nil {
-		// The key page G1+ is built against is the page that SIGNED the transaction, read from the
-		// chain. This used to be RequiredKeyBook + "/1" unconditionally, which names the wrong page
-		// whenever the signer is not on page 1 - an automated payment signed by a machine key on
-		// page 2, for one. Unresolvable means no G1+: the proof stops at G0 and says why, rather
-		// than naming a page that did not authorise the transaction.
-		var keyPageURL string
-		if len(intent.GovernanceData) > 0 {
-			var govConfig struct {
-				Authorization struct {
-					RequiredKeyBook string `json:"required_key_book"`
-					RequiredKeyPage string `json:"required_key_page"`
-				} `json:"authorization"`
-			}
-			if err := json.Unmarshal(intent.GovernanceData, &govConfig); err != nil {
-				id.logger.Printf("❌ [GOV-PROOF] intent %s: governance data does not parse (%v); no G1+ proof",
-					intent.IntentID, err)
-			} else if id.keyPageResolver == nil {
-				id.logger.Printf("❌ [GOV-PROOF] intent %s: no signing key page resolver configured; "+
-					"the key page will not be guessed, so no G1+ proof", intent.IntentID)
-			} else {
-				rctx, rcancel := context.WithTimeout(context.Background(), 30*time.Second)
-				page, rerr := id.keyPageResolver.ResolveSigningKeyPage(rctx, accountURL, intent.TransactionHash,
-					govConfig.Authorization.RequiredKeyBook, govConfig.Authorization.RequiredKeyPage)
-				rcancel()
-				if rerr != nil {
-					id.logger.Printf("❌ [GOV-PROOF] intent %s: cannot name the signing key page (%v); no G1+ proof",
-						intent.IntentID, rerr)
-				} else {
-					keyPageURL = page
-				}
-			}
-		}
-
-		// Build governance request
-		govRequest := &proof.GovernanceRequest{
-			AccountURL:      accountURL,
-			TransactionHash: intent.TransactionHash,
-			KeyPage:         keyPageURL,
-			Chain:           "main",
-		}
-
-		// G0→G1→G2 are generated in sequence below; each CLI level re-derives its predecessors,
-		// so the full sequence needs ~90s. 30s cut off G1/G2 and committed G0-only. This budget is
-		// independent of the consensus broadcast (which has its own context), so it can be generous.
-		ctx, cancel := context.WithTimeout(context.Background(), 150*time.Second)
-		// Generate G0 proof (Inclusion & Finality)
-		g0Wrapper, g0Err := id.governanceProofGen.GenerateG0(ctx, govRequest)
-		if g0Err != nil {
-			id.logger.Printf("⚠️ [GOV-PROOF] G0 proof generation failed: %v", g0Err)
-		} else if g0Wrapper != nil {
-			govProof = g0Wrapper
-			id.logger.Printf("✅ [GOV-PROOF] G0 proof generated for intent %s", intent.IntentID)
-
-			// Try G1 if key page is available
-			if keyPageURL != "" {
-				g1Wrapper, g1Err := id.governanceProofGen.GenerateG1(ctx, govRequest)
-				if g1Err != nil {
-					id.logger.Printf("⚠️ [GOV-PROOF] G1 proof generation failed: %v", g1Err)
-				} else if g1Wrapper != nil {
-					govProof = g1Wrapper
-					id.logger.Printf("✅ [GOV-PROOF] G1 proof generated for intent %s", intent.IntentID)
-
-					// Try G2
-					g2Wrapper, g2Err := id.governanceProofGen.GenerateG2(ctx, govRequest)
-					if g2Err != nil {
-						id.logger.Printf("⚠️ [GOV-PROOF] G2 proof generation failed: %v", g2Err)
-					} else if g2Wrapper != nil {
-						govProof = g2Wrapper
-						id.logger.Printf("✅ [GOV-PROOF] G2 proof generated for intent %s", intent.IntentID)
-					}
-				}
-			}
-		}
-		cancel()
-	} else if id.governanceProofGen == nil {
-		id.logger.Printf("⚠️ [GOV-PROOF] Governance proof generator not configured - using fallback")
-	}
+	// This ensures the generated proof (not input config) is persisted to PostgreSQL. See
+	// discoveryGovernanceProof: it is generated only when there is a batch system to route it to.
+	govProof := id.discoveryGovernanceProof(intent, certenProof, accountURL)
 
 	// 3️⃣ PHASE 5: Route to batch system for PostgreSQL persistence and CertenAnchorProof assembly
 	if id.batchingEnabled {
@@ -1800,6 +1723,103 @@ func (id *IntentDiscovery) processIntent(intent *CertenIntent, blockHeight uint6
 	id.mu.Unlock()
 
 	return outcome, nil
+}
+
+// discoveryGovernanceProof generates the G0/G1/G2 governance proof the batch system persists with an
+// intent, or returns nil when there is no batch system to route it to.
+//
+// routeIntentToBatchSystem is this proof's one consumer; consensus builds its own G0/G1/G2 for the
+// proof that is actually signed. With batching off the proof was generated and discarded - G1 alone
+// replays the signing books' key-page history and signature chains - and live (intent 1875ae30,
+// 2026-09-21) the sequence held every intent for ~2.5 minutes before consensus began, then failed
+// G2 on its 150s budget.
+func (id *IntentDiscovery) discoveryGovernanceProof(intent *CertenIntent, certenProof *proof.CertenProof, accountURL string) *proof.GovernanceProof {
+	if !id.batchingEnabled {
+		return nil
+	}
+	if id.governanceProofGen == nil {
+		id.logger.Printf("⚠️ [GOV-PROOF] Governance proof generator not configured - using fallback")
+		return nil
+	}
+	if certenProof == nil {
+		return nil
+	}
+	var govProof *proof.GovernanceProof
+	// The key page G1+ is built against is the page that SIGNED the transaction, read from the
+	// chain. This used to be RequiredKeyBook + "/1" unconditionally, which names the wrong page
+	// whenever the signer is not on page 1 - an automated payment signed by a machine key on
+	// page 2, for one. Unresolvable means no G1+: the proof stops at G0 and says why, rather
+	// than naming a page that did not authorise the transaction.
+	var keyPageURL string
+	if len(intent.GovernanceData) > 0 {
+		var govConfig struct {
+			Authorization struct {
+				RequiredKeyBook string `json:"required_key_book"`
+				RequiredKeyPage string `json:"required_key_page"`
+			} `json:"authorization"`
+		}
+		if err := json.Unmarshal(intent.GovernanceData, &govConfig); err != nil {
+			id.logger.Printf("❌ [GOV-PROOF] intent %s: governance data does not parse (%v); no G1+ proof",
+				intent.IntentID, err)
+		} else if id.keyPageResolver == nil {
+			id.logger.Printf("❌ [GOV-PROOF] intent %s: no signing key page resolver configured; "+
+				"the key page will not be guessed, so no G1+ proof", intent.IntentID)
+		} else {
+			rctx, rcancel := context.WithTimeout(context.Background(), 30*time.Second)
+			page, rerr := id.keyPageResolver.ResolveSigningKeyPage(rctx, accountURL, intent.TransactionHash,
+				govConfig.Authorization.RequiredKeyBook, govConfig.Authorization.RequiredKeyPage)
+			rcancel()
+			if rerr != nil {
+				id.logger.Printf("❌ [GOV-PROOF] intent %s: cannot name the signing key page (%v); no G1+ proof",
+					intent.IntentID, rerr)
+			} else {
+				keyPageURL = page
+			}
+		}
+	}
+
+	// Build governance request
+	govRequest := &proof.GovernanceRequest{
+		AccountURL:      accountURL,
+		TransactionHash: intent.TransactionHash,
+		KeyPage:         keyPageURL,
+		Chain:           "main",
+	}
+
+	// G0→G1→G2 are generated in sequence below; each CLI level re-derives its predecessors,
+	// so the full sequence needs ~90s. 30s cut off G1/G2 and committed G0-only. This budget is
+	// independent of the consensus broadcast (which has its own context), so it can be generous.
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Second)
+	// Generate G0 proof (Inclusion & Finality)
+	g0Wrapper, g0Err := id.governanceProofGen.GenerateG0(ctx, govRequest)
+	if g0Err != nil {
+		id.logger.Printf("⚠️ [GOV-PROOF] G0 proof generation failed: %v", g0Err)
+	} else if g0Wrapper != nil {
+		govProof = g0Wrapper
+		id.logger.Printf("✅ [GOV-PROOF] G0 proof generated for intent %s", intent.IntentID)
+
+		// Try G1 if key page is available
+		if keyPageURL != "" {
+			g1Wrapper, g1Err := id.governanceProofGen.GenerateG1(ctx, govRequest)
+			if g1Err != nil {
+				id.logger.Printf("⚠️ [GOV-PROOF] G1 proof generation failed: %v", g1Err)
+			} else if g1Wrapper != nil {
+				govProof = g1Wrapper
+				id.logger.Printf("✅ [GOV-PROOF] G1 proof generated for intent %s", intent.IntentID)
+
+				// Try G2
+				g2Wrapper, g2Err := id.governanceProofGen.GenerateG2(ctx, govRequest)
+				if g2Err != nil {
+					id.logger.Printf("⚠️ [GOV-PROOF] G2 proof generation failed: %v", g2Err)
+				} else if g2Wrapper != nil {
+					govProof = g2Wrapper
+					id.logger.Printf("✅ [GOV-PROOF] G2 proof generated for intent %s", intent.IntentID)
+				}
+			}
+		}
+	}
+	cancel()
+	return govProof
 }
 
 // routeIntentToBatchSystem routes an intent to the appropriate batch handler based on proofClass
