@@ -7,13 +7,10 @@
 package chained_proof
 
 import (
-	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"strings"
 
 	v3 "gitlab.com/accumulatenetwork/accumulate/pkg/api/v3"
@@ -220,7 +217,17 @@ func (b *Layer4Builder) buildLeg(ctx context.Context, spec legSpec) (*Layer4, er
 		return nil, fmt.Errorf("%s: %w", tag, err)
 	}
 
-	ni, err := b.networkInfo(ctx, spec.ArtifactPrefix)
+	// The set the destination partition checked these signatures against: its
+	// own, as in force at the block it executed the anchor
+	// (layer4_validator_set.go) - not the Directory's set today.
+	if ce.Receipt == nil || ce.Receipt.LocalBlock == 0 {
+		return nil, fmt.Errorf("%s: delivered anchor carries no receipt naming the block it executed in", tag)
+	}
+	if !mr.Sequence.Destination.RootIdentity().Equal(destURL.RootIdentity()) {
+		return nil, fmt.Errorf("%s: delivered anchor's destination %v is not the pool's partition %v",
+			tag, mr.Sequence.Destination, destURL.RootIdentity())
+	}
+	ni, err := b.networkInfoAt(ctx, destURL.RootIdentity(), ce.Receipt.LocalBlock, spec.ArtifactPrefix)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", tag, err)
 	}
@@ -404,112 +411,6 @@ func extractAnchorSignatures(mr *v3.MessageRecord[messaging.Message], signedHash
 		return nil, fmt.Errorf("delivered anchor carries no ed25519 validator signatures")
 	}
 	return out, nil
-}
-
-// networkInfo reads the validator set and the network's accept threshold.
-//
-// This uses raw JSON-RPC rather than the typed client. The typed client
-// refuses to unmarshal a network-status response whose executorVersion is
-// newer than the vendored protocol package knows about (observed live:
-// `invalid Executor Version "v2-jiuquan"`), which would make L4 unbuildable
-// against any network ahead of this module's accumulate dependency. Reading
-// only the fields L4 needs removes that coupling.
-//
-// Nothing read here is trusted on assertion: publicKeyHash is re-derived from
-// publicKey, the threshold is recomputed, and every signature is checked
-// against the set by the verifier.
-func (b *Layer4Builder) networkInfo(ctx context.Context, prefix string) (*networkInfo, error) {
-	if b.Client.Server == "" {
-		return nil, fmt.Errorf("network-status: client has no server URL")
-	}
-	reqBody, err := json.Marshal(map[string]any{
-		"jsonrpc": "2.0", "id": 1, "method": "network-status",
-		"params": map[string]any{"partition": protocol.Directory},
-	})
-	if err != nil {
-		return nil, err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, b.Client.Server, bytes.NewReader(reqBody))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := b.Client.Client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("network-status: %w", err)
-	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	if err != nil {
-		return nil, fmt.Errorf("network-status: reading response: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("network-status: HTTP %d", resp.StatusCode)
-	}
-	if b.Artifacts != nil {
-		b.Artifacts[prefix+"_network_status.json"] = raw
-	}
-
-	var envelope struct {
-		Error  *json.RawMessage `json:"error"`
-		Result struct {
-			Globals struct {
-				ValidatorAcceptThreshold *struct {
-					Numerator   uint64 `json:"numerator"`
-					Denominator uint64 `json:"denominator"`
-				} `json:"validatorAcceptThreshold"`
-			} `json:"globals"`
-			Network struct {
-				Version    uint64 `json:"version"`
-				Validators []struct {
-					PublicKey     string `json:"publicKey"`
-					PublicKeyHash string `json:"publicKeyHash"`
-					Partitions    []struct {
-						ID     string `json:"id"`
-						Active bool   `json:"active"`
-					} `json:"partitions"`
-				} `json:"validators"`
-			} `json:"network"`
-		} `json:"result"`
-	}
-	if err := json.Unmarshal(raw, &envelope); err != nil {
-		return nil, fmt.Errorf("network-status: decoding response: %w", err)
-	}
-	if envelope.Error != nil {
-		return nil, fmt.Errorf("network-status: RPC error: %s", string(*envelope.Error))
-	}
-	at := envelope.Result.Globals.ValidatorAcceptThreshold
-	if at == nil {
-		return nil, fmt.Errorf("network-status returned no validatorAcceptThreshold")
-	}
-	accept := Rational{Numerator: at.Numerator, Denominator: at.Denominator}
-	if _, err := accept.Threshold(1); err != nil {
-		return nil, err
-	}
-
-	vals := make([]ValidatorKey, 0, len(envelope.Result.Network.Validators))
-	for i, v := range envelope.Result.Network.Validators {
-		pk, err := MustHex32Lower(v.PublicKey, fmt.Sprintf("network validator[%d].publicKey", i))
-		if err != nil {
-			return nil, err
-		}
-		pkh, err := MustHex32Lower(v.PublicKeyHash, fmt.Sprintf("network validator[%d].publicKeyHash", i))
-		if err != nil {
-			return nil, err
-		}
-		var activeOn []string
-		for _, p := range v.Partitions {
-			if p.Active {
-				activeOn = append(activeOn, p.ID)
-			}
-		}
-		vals = append(vals, ValidatorKey{PublicKey: pk, PublicKeyHash: pkh, ActiveOn: activeOn})
-	}
-	if len(vals) == 0 {
-		return nil, fmt.Errorf("network-status returned an empty validator set")
-	}
-	return &networkInfo{Validators: vals, Accept: accept, Version: envelope.Result.Network.Version}, nil
 }
 
 func (b *Layer4Builder) saveArtifact(name string, v any) {
