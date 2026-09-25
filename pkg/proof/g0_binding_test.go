@@ -4,6 +4,7 @@ package proof
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -107,4 +108,65 @@ func TestG0Binding_RefusesEveryMismatch(t *testing.T) {
 	if err := BindG0ToChainedProof(nil, nil); err == nil {
 		t.Fatal("binding nothing to nothing succeeded")
 	}
+}
+
+// storedPairLevels is the real G0 as governance_proof_levels stores it: the
+// canonical result, and the receipt evidence with its merkle path.
+func storedPairLevels(t *testing.T) []StoredGovernanceLevel {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("testdata", "g0_multileg_bvn1_bvn2.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var withPath struct {
+		Receipt GovReceiptEvidence `json:"receipt"`
+	}
+	if err := json.Unmarshal(raw, &withPath); err != nil {
+		t.Fatal(err)
+	}
+	withPath.Receipt.Level = "G0"
+	return []StoredGovernanceLevel{{Level: "G0", Result: raw, Receipt: &withPath.Receipt}}
+}
+
+func TestStoredG0Binding(t *testing.T) {
+	_, cp := loadG0BindingPair(t)
+
+	levels := storedPairLevels(t)
+	if !levels[0].HasEvidence() || levels[0].Receipt.VerifyMerkle() != nil {
+		t.Fatal("the stored G0 receipt must itself recompute")
+	}
+	if err := VerifyStoredG0Binding(levels, cp); err != nil {
+		t.Fatalf("the stored real pair must bind: %v", err)
+	}
+
+	t.Run("stored result names another witness", func(t *testing.T) {
+		levels := storedPairLevels(t)
+		levels[0].Result = []byte(strings.Replace(string(levels[0].Result),
+			`"exec_witness":"fb4f`, `"exec_witness":"0b4f`, 1))
+		if err := VerifyStoredG0Binding(levels, cp); err == nil {
+			t.Fatal("a stored G0 result with another witness bound")
+		}
+	})
+	t.Run("stored receipt from another root", func(t *testing.T) {
+		levels := storedPairLevels(t)
+		levels[0].Result = nil
+		levels[0].Receipt.Anchor = strings.Repeat("ab", 32)
+		if err := VerifyStoredG0Binding(levels, cp); err == nil {
+			t.Fatal("a stored G0 receipt ending elsewhere bound")
+		}
+	})
+	t.Run("stored receipt at another block", func(t *testing.T) {
+		levels := storedPairLevels(t)
+		levels[0].Result = nil
+		levels[0].Receipt.LocalBlock--
+		if err := VerifyStoredG0Binding(levels, cp); err == nil {
+			t.Fatal("a stored G0 receipt at another block bound")
+		}
+	})
+	t.Run("nothing stored is uncheckable, not verified", func(t *testing.T) {
+		err := VerifyStoredG0Binding([]StoredGovernanceLevel{{Level: "G0"}}, cp)
+		if !errors.Is(err, ErrG0BindingUncheckable) {
+			t.Fatalf("want ErrG0BindingUncheckable, got %v", err)
+		}
+	})
 }

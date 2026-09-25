@@ -22,10 +22,13 @@ package proof
 
 import (
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
 	lcproof "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof"
+	chained_proof "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/working-proof_do_not_edit"
 )
 
 // BindG0ToChainedProof requires G0's execution entry, witness and block to be
@@ -95,4 +98,52 @@ func hash32(s, label string) (string, error) {
 		return "", fmt.Errorf("G0 binding: %s is not hex: %w", label, err)
 	}
 	return s, nil
+}
+
+// ErrG0BindingUncheckable reports that no stored governance level carries
+// anything the binding could be checked against. Like summary-only, it is not
+// a failure - nothing was found wrong - and must never read as a pass.
+var ErrG0BindingUncheckable = errors.New("no stored governance level carries a G-result or a G0 receipt to bind to the chained proof")
+
+// VerifyStoredG0Binding checks, from storage alone, what BindG0ToChainedProof
+// checked in flight: every stored level's G0 fields (G1 and G2 embed G0's), and
+// the stored G0 receipt, against the reassembled chained proof.
+func VerifyStoredG0Binding(levels []StoredGovernanceLevel, cp *chained_proof.ChainedProof) error {
+	if cp == nil {
+		return fmt.Errorf("G0 binding: no chained proof")
+	}
+	complete := ChainedProofToCompleteProof(cp)
+	checked := 0
+	for i := range levels {
+		l := &levels[i]
+		if l.HasResult() {
+			var g0 G0Result
+			if err := json.Unmarshal(l.Result, &g0); err != nil {
+				return fmt.Errorf("level %s: decode stored result: %w", l.Level, err)
+			}
+			if err := BindG0ToChainedProof(&g0, complete); err != nil {
+				return fmt.Errorf("level %s: %w", l.Level, err)
+			}
+			checked++
+		}
+		if strings.EqualFold(l.Level, string(GovLevelG0)) && l.HasEvidence() {
+			r := l.Receipt
+			switch {
+			case !strings.EqualFold(r.Start, cp.Layer1.Leaf):
+				return fmt.Errorf("level G0: stored receipt starts at %s, the chained proof's L1 at %s",
+					short(r.Start), short(cp.Layer1.Leaf))
+			case !strings.EqualFold(r.Anchor, cp.Layer1.Receipt.Anchor):
+				return fmt.Errorf("level G0: stored receipt ends at %s, the chained proof's L1 at %s",
+					short(r.Anchor), short(cp.Layer1.Receipt.Anchor))
+			case cp.Layer4BVN == nil || r.LocalBlock <= 0 || uint64(r.LocalBlock) != cp.Layer4BVN.MinorBlockIndex:
+				return fmt.Errorf("level G0: stored receipt's block %d is not the block the BVN quorum signed",
+					r.LocalBlock)
+			}
+			checked++
+		}
+	}
+	if checked == 0 {
+		return ErrG0BindingUncheckable
+	}
+	return nil
 }

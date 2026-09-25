@@ -40,6 +40,7 @@ import (
 	"os"
 	"time"
 
+	chained_proof "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/working-proof_do_not_edit"
 	"github.com/certen/independant-validator/pkg/execution"
 	certenproof "github.com/certen/independant-validator/pkg/proof"
 	"github.com/google/uuid"
@@ -168,6 +169,7 @@ func main() {
 		code := exitVerified
 		if *govern {
 			code = worseExit(code, reportGovernance(ctx, store, id, *verbose))
+			code = worseExit(code, reportG0Binding(ctx, store, id, cp))
 		}
 		if *l5 {
 			code = worseExit(code, reportLayer5(ctx, store, id))
@@ -251,6 +253,34 @@ func reportGovernance(ctx context.Context, store *certenproof.PostgresProofStora
 		fmt.Printf("  %v\n", err)
 		fmt.Printf("  The receipt evidence IS present and does not recompute to its own anchor.\n")
 		fmt.Printf("  This is the one outcome that means something is wrong.\n")
+		return exitFailed
+	}
+}
+
+// reportG0Binding checks, from storage, that the governance levels describe
+// the same execution the chained proof proves: G0's receipt is L1's receipt,
+// ending at the root and block the BVN quorum signed. It is what makes G0's
+// finality checkable offline rather than a label.
+func reportG0Binding(ctx context.Context, store *certenproof.PostgresProofStorage, id uuid.UUID,
+	cp *chained_proof.ChainedProof) int {
+
+	// The levels' own receipts were judged by reportGovernance; this reads them
+	// again only to compare them with the chained proof.
+	levels, _ := certenproof.VerifyStoredGovernanceLevels(ctx, store, id)
+	err := certenproof.VerifyStoredG0Binding(levels, cp)
+	switch {
+	case err == nil:
+		fmt.Printf("  G0 binding: the governance levels' execution receipt IS the chained proof's L1 receipt, " +
+			"ending at the root and block the BVN quorum signed\n")
+		return exitVerified
+	case errors.Is(err, certenproof.ErrG0BindingUncheckable):
+		fmt.Printf("SUMMARY-ONLY (G0 binding)  %s\n", id)
+		fmt.Printf("  %v\n", err)
+		return exitSummaryOnly
+	default:
+		fmt.Printf("FAILED (G0 binding)  %s\n", id)
+		fmt.Printf("  %v\n", err)
+		fmt.Printf("  The governance levels and the chained proof describe different executions.\n")
 		return exitFailed
 	}
 }
