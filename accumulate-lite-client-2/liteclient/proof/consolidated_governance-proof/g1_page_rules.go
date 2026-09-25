@@ -33,35 +33,25 @@
 // transaction.Header.HoldUntil and never reads page.BlockThreshold at all,
 // under an explicit TODO saying page-level minimum thresholds do not exist yet.
 //
-// # THE DECISION: RECORD, DO NOT RE-DERIVE - AND WHY, PER RULE
+// # WHAT IS RE-DERIVED NOW, AND WHAT REMAINS RECORDED
 //
-// The runbook requires this be decided explicitly rather than left silent.
-// These proofs are about transactions that ALREADY EXECUTED, and G0 proves the
-// execution, so the question for each rule is whether re-deriving it could
-// change the answer:
+//	responseThreshold  RE-DERIVED. The authority vote (g1_votes.go) reads every
+//	                   signature's vote - accept, reject and abstain - and
+//	                   tallies them per delegation path, which is what
+//	                   SignerWillVote gates the response threshold on. It was
+//	                   recorded here as "not recounted" while G1 enumerated
+//	                   only accepts; it is recounted now, so it is not a note.
 //
-//	rejectThreshold    CANNOT change the outcome of an executed transaction.
-//	                   Accept is tested BEFORE reject in the executor, and the
-//	                   transaction executed - so the accept branch is the one
-//	                   that was taken. Re-deriving the reject threshold would
-//	                   compute a number that could not alter the verdict.
-//
-//	responseThreshold  COULD change it, and is the reason this evidence exists.
-//	                   It gates on allVotes - accepts, rejects and abstains
-//	                   together, per delegation path. A G1 proof enumerates the
-//	                   signatures it could validate as accepts; it cannot claim
-//	                   to have counted votes it did not enumerate. Since the
-//	                   transaction executed, the network's own SignerWillVote
-//	                   found the threshold met - that fact is inherited from
-//	                   execution, not re-derived here, and that is exactly the
-//	                   weaker basis this file records.
+//	rejectThreshold    RE-DERIVED, by the same tally: a page that reaches it
+//	                   votes reject, and an authority that votes reject has not
+//	                   approved.
 //
 //	blockThreshold     is not enforced against the page by accumulate-core.
 //	                   Claiming to verify it would claim more than the protocol
 //	                   implements, so it is recorded as present and unenforced.
 //
-// Silently ignoring all three - the state before this file - was the one option
-// the runbook rules out.
+// Silently ignoring a rule the page carries was the one option the runbook
+// rules out; the one rule the protocol itself does not enforce is recorded.
 //
 // # WHY IT TRAVELS BESIDE THE HASHED SHAPE
 //
@@ -82,13 +72,8 @@ import (
 	"sort"
 )
 
-// Reason codes, so a reader distinguishes the three cases without parsing
-// prose. They are part of the cross-binary contract and are pinned by test.
+// Reason codes, part of the cross-binary contract and pinned by test.
 const (
-	// PageRuleUnverifiedResponse is the one that could have changed the answer.
-	PageRuleUnverifiedResponse = "response-threshold-not-recounted"
-	// PageRuleMootReject cannot change an executed transaction's outcome.
-	PageRuleMootReject = "reject-threshold-moot-after-execution"
 	// PageRuleUnenforcedBlock is not enforced against the page by the protocol.
 	PageRuleUnenforcedBlock = "block-threshold-not-enforced-by-protocol"
 )
@@ -173,32 +158,9 @@ func parsePageThresholds(def map[string]interface{}) pageThresholds {
 func pageRuleNotes(page string, t pageThresholds) []PageRuleNote {
 	var out []PageRuleNote
 
-	if t.Response != 0 {
-		out = append(out, PageRuleNote{
-			Page:   page,
-			Rule:   "responseThreshold",
-			Value:  t.Response,
-			Reason: PageRuleUnverifiedResponse,
-			Explanation: fmt.Sprintf("this page does not vote until %d votes of ANY kind have been "+
-				"cast on a delegation path. That count includes rejects and abstains, which this "+
-				"proof does not enumerate, so the rule was NOT recounted here: it is inherited from "+
-				"the fact that the transaction executed, which is a weaker basis than the accept "+
-				"threshold, which was re-derived", t.Response),
-		})
-	}
-
-	if t.Reject != 0 {
-		out = append(out, PageRuleNote{
-			Page:   page,
-			Rule:   "rejectThreshold",
-			Value:  t.Reject,
-			Reason: PageRuleMootReject,
-			Explanation: fmt.Sprintf("this page votes REJECT at %d reject votes. The executor tests "+
-				"accept BEFORE reject and the transaction executed, so the accept branch is the one "+
-				"that was taken and this threshold could not have changed the outcome. Recorded "+
-				"because the page carries it, not because it is in doubt", t.Reject),
-		})
-	}
+	// The response and reject thresholds are re-derived by the authority vote
+	// (g1_votes.go decideVote), so they are not notes: a note is a rule this
+	// proof did not re-derive.
 
 	if t.Block != 0 {
 		out = append(out, PageRuleNote{

@@ -126,6 +126,10 @@ type PageVote struct {
 	Counted   []CountedEntry    `json:"counted,omitempty"`
 	Excluded  []ExcludedMessage `json:"excluded,omitempty"`
 
+	// Delegates are the votes of the delegate books this page counted,
+	// recomputed from their own signatures.
+	Delegates []BookVote `json:"delegates,omitempty"`
+
 	vote protocol.VoteType
 }
 
@@ -366,6 +370,7 @@ func (m *voteModel) pageVote(ctx context.Context, page string, path []string, de
 			entry: "delegate:" + normalizeAccURL(a.Authority), vote: dv.vote, by: a.ID, block: a.Block,
 			ambiguous: holding < len(cands),
 		})
+		pv.Delegates = append(pv.Delegates, *dv)
 	}
 
 	// Decide with every ambiguous contribution counted and with none. If the
@@ -514,6 +519,12 @@ type AccountVote struct {
 	Account     string          `json:"account"`
 	Authorities []AuthorityVote `json:"authorities"`
 	Satisfied   bool            `json:"satisfied"`
+
+	// Unused are recorded signatures that reached no authority this
+	// transaction required - a delegation chain that leads nowhere the account
+	// is governed from, or a page no required book owns. Reported, not dropped:
+	// a signature that did not count must say why.
+	Unused []ExcludedMessage `json:"unused,omitempty"`
 }
 
 // accountVote mirrors userTransactionIsReady. The authority set is the
@@ -559,6 +570,17 @@ func (m *voteModel) accountVote(ctx context.Context, account string, authorities
 			return nil, err
 		}
 	}
+	for _, s := range m.facts.Sigs {
+		if _, evaluated := m.pages[s.Signer+"|"+strings.Join(s.Path, ",")]; evaluated {
+			continue
+		}
+		reason := fmt.Sprintf("signed on %s", s.Signer)
+		if len(s.Path) > 0 {
+			reason += " for " + strings.Join(s.Path, " -> ")
+		}
+		out.Unused = append(out.Unused, ExcludedMessage{By: s.ID,
+			Reason: reason + ", which reaches no authority this transaction required"})
+	}
 	if len(out.Authorities) == 0 {
 		// Every authority is disabled and the type does not require
 		// authorization: core still requires one signature at least
@@ -568,4 +590,118 @@ func (m *voteModel) accountVote(ctx context.Context, account string, authorities
 			"something this model decides", out.Account)
 	}
 	return out, nil
+}
+
+// acceptingKeys counts the distinct keys whose acceptance was counted by a page
+// that voted, across every authority and every delegate that voted for one -
+// the "unique valid keys" G1 reports.
+func (av *AccountVote) acceptingKeys() int {
+	keys := map[string]bool{}
+	var walk func(bv BookVote)
+	walk = func(bv BookVote) {
+		for _, pv := range bv.Pages {
+			if !pv.Voted {
+				continue
+			}
+			for _, c := range pv.Counted {
+				if c.Vote == protocol.VoteTypeAccept.String() && strings.HasPrefix(c.Entry, "key:") {
+					keys[c.Entry] = true
+				}
+			}
+			// The keys that signed through delegation are on the delegate
+			// books' pages, and count as much as the principal's own.
+			for _, d := range pv.Delegates {
+				if d.Voted && d.vote == protocol.VoteTypeAccept {
+					walk(d)
+				}
+			}
+		}
+	}
+	for _, a := range av.Authorities {
+		walk(a.Vote)
+	}
+	return len(keys)
+}
+
+// Describe names each required authority, how it voted and which page decided.
+func (av *AccountVote) Describe() string {
+	parts := make([]string, 0, len(av.Authorities))
+	for _, a := range av.Authorities {
+		switch {
+		case a.Vote.Voted:
+			parts = append(parts, fmt.Sprintf("%s: %s (by %s)", a.Authority, a.Vote.Vote, a.Vote.By))
+		case len(a.Vote.Pages) == 0:
+			parts = append(parts, fmt.Sprintf("%s: no page recorded a vote", a.Authority))
+		default:
+			var pages []string
+			for _, pv := range a.Vote.Pages {
+				pages = append(pages, fmt.Sprintf("%s v%d %d/%d", pv.Page, pv.Version, countAccepts(pv), pv.Threshold))
+			}
+			parts = append(parts, fmt.Sprintf("%s: did not vote (%s)", a.Authority, strings.Join(pages, ", ")))
+		}
+	}
+	return strings.Join(parts, "; ")
+}
+
+func countAccepts(pv PageVote) int {
+	n := 0
+	for _, c := range pv.Counted {
+		if c.Vote == protocol.VoteTypeAccept.String() {
+			n++
+		}
+	}
+	return n
+}
+
+// AccountAuthority is one entry of an account's authority set.
+type AccountAuthority struct {
+	URL string `json:"url"`
+
+	// Disabled means auth checks are skipped for this authority unless the
+	// transaction type requires authorization (Body.Type().RequireAuthorization()),
+	// which is the caller's to decide, so it is carried rather than filtered.
+	Disabled bool `json:"disabled,omitempty"`
+}
+
+// bookOfPage returns the key book a page belongs to: acc://foo.acme/book/1 ->
+// acc://foo.acme/book.
+func bookOfPage(page string) string {
+	p := normalizeAccURL(page)
+	i := strings.LastIndex(p, "/")
+	if i <= 0 {
+		return ""
+	}
+	return p[:i]
+}
+
+// SignerPages lists, in canonical order, every page whose counted signatures
+// made up the vote - through delegates as well. It is every signer account the
+// proof of this vote needs an inclusion leg for.
+func (av *AccountVote) SignerPages() []string {
+	seen := map[string]bool{}
+	var walk func(bv BookVote)
+	walk = func(bv BookVote) {
+		for _, pv := range bv.Pages {
+			if !pv.Voted {
+				continue
+			}
+			for _, c := range pv.Counted {
+				if strings.HasPrefix(c.Entry, "key:") {
+					seen[pv.Page] = true
+				}
+			}
+			for _, d := range pv.Delegates {
+				walk(d)
+			}
+		}
+	}
+	for _, a := range av.Authorities {
+		walk(a.Vote)
+	}
+	out := make([]string, 0, len(seen))
+	for p := range seen {
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	return out
 }

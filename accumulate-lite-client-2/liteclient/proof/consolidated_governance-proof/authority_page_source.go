@@ -24,7 +24,7 @@ import (
 //
 // Pages reached THROUGH delegation do not get that treatment here. They are
 // queried, once, and their current state is used. That is a weaker claim, and
-// it is recorded as such on every resolution link (ResolutionLink.FromReplayed)
+// it is recorded as such wherever it is used
 // rather than being quietly presented as the same thing. A reader of a proof
 // can therefore tell which pages were replayed and which were asked about.
 //

@@ -81,6 +81,9 @@ type SignatureData struct {
 	// real signatures.
 	DigestForm string `json:"digestForm,omitempty"`
 
+	// Vote is the vote the key cast: accept, reject, abstain or suggest.
+	Vote string `json:"vote,omitempty"`
+
 	PublicKey       string    `json:"publicKey"`       // 32-byte hex
 	Signature       string    `json:"signature"`       // 64-byte hex
 	Signer          string    `json:"signer"`          // acc://...
@@ -213,6 +216,9 @@ type AuthorizationResult struct {
 	ExecutionSuccess    bool                 `json:"executionSuccess"`    // Transaction exists
 	TimingValid         bool                 `json:"timingValid"`         // All signatures before execution
 	G1ProofComplete     bool                 `json:"g1ProofComplete"`     // G1 proof complete
+
+	// Authorization is the authority vote the verdict was computed from.
+	Authorization *AccountVote `json:"authorization,omitempty"`
 }
 
 // =============================================================================
@@ -421,6 +427,15 @@ type G1Result struct {
 	// See g1_page_rules.go for what each rule means and why each was recorded
 	// rather than re-derived.
 	UnverifiedPageRules []PageRuleNote `json:"unverifiedPageRules,omitempty"`
+
+	// Authorization is the authority vote the verdict was computed from: each
+	// required authority, the page that decided its vote, the entries each page
+	// counted and the messages it did not, and why (g1_votes.go).
+	//
+	// A top-level field for the same reason UnverifiedPageRules is one: the
+	// validator's G1Result has no such field, so it is dropped on the way into
+	// the govRoot preimage and the hash is unchanged by its presence.
+	Authorization *AccountVote `json:"authorization,omitempty"`
 }
 
 // G2Result represents G2 proof result (Governance + Outcome Binding)

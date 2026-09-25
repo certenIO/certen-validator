@@ -333,6 +333,33 @@ func TestVotes_SelfUpdateInItsOwnBlock(t *testing.T) {
 	requireSatisfied(t, av, err, true)
 }
 
+// A delegate page on another partition, whose block numbers run far ahead of
+// the principal's. It rotated d-old out at its own block 900; the principal
+// executed at its block 50. Judged on its own clock, d-old signed at 850 while
+// it was held and counts, and d-new signing at 850 had not been added yet.
+// Judged at the principal's block 50, both answers would be backwards.
+func TestVotes_SignerPageOnAnotherPartitionUsesItsOwnBlocks(t *testing.T) {
+	tls := func() memTimelines {
+		return memTimelines{
+			normalizeAccURL(pPage): timeline(t, pPage, []int64{1}, vPage{version: 1, accept: 1, delegates: []string{dBook}}),
+			normalizeAccURL(dPage): timeline(t, dPage, []int64{1, 900},
+				vPage{version: 1, accept: 1, keys: []string{"d-old"}},
+				vPage{version: 2, accept: 1, keys: []string{"d-new"}}),
+		}
+	}
+	av, err := account(t, tls(), voteFacts{
+		Sigs:     []sigFact{sig(dPage, "d-old", 1, 850, pPage)},
+		Arrivals: []arrivalFact{arrival(pPage, dBook, 40)},
+	}, pBook)
+	requireSatisfied(t, av, err, true)
+
+	_, err = account(t, tls(), voteFacts{
+		Sigs:     []sigFact{sig(dPage, "d-new", 2, 850, pPage)},
+		Arrivals: []arrivalFact{arrival(pPage, dBook, 40)},
+	}, pBook)
+	requireUnevaluable(t, err)
+}
+
 // ---- blacklist ------------------------------------------------------------
 
 func TestVotes_BlacklistedTypeCannotBeSigned(t *testing.T) {
