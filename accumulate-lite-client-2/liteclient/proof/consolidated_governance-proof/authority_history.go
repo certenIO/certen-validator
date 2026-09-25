@@ -391,3 +391,123 @@ func (ab *AuthorityBuilder) noteRulesOf(page *protocol.KeyPage) {
 		"blockThreshold":    page.BlockThreshold,
 	})
 }
+
+// pageTimeline is every state a key page has been in, in chain order, each
+// with the block it began at. It is built by the same replay the snapshot uses
+// and carries the same guarantee: replayed to the head it equals the page the
+// network holds.
+type pageTimeline struct {
+	Page    string
+	Genesis *GenesisEvent
+	Entries int
+
+	// States[0] is the page as its genesis created it; each later state is the
+	// page after one main chain transaction that changed its authority.
+	States []timedState
+}
+
+// timedState is one state of a page and the block it began at.
+type timedState struct {
+	Block int64
+	Page  *protocol.KeyPage
+
+	// Event is the transaction that produced this state; nil for genesis.
+	Event *pageEvent
+	// Prev is the state it replaced; nil for genesis.
+	Prev *protocol.KeyPage
+}
+
+// BuildPageTimeline reads, binds and replays a key page's whole main chain.
+func (ab *AuthorityBuilder) BuildPageTimeline(ctx context.Context, keyPage string) (*pageTimeline, error) {
+	scope := normalizeAccURL(keyPage)
+	count, err := ab.getMainChainCount(ctx, scope)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get main chain count: %v", err)
+	}
+	entries, err := ab.enumerateMainEntries(ctx, scope, count)
+	if err != nil {
+		return nil, fmt.Errorf("failed to enumerate main entries: %v", err)
+	}
+	genesis, genesisPage, events, err := ab.collectPageHistory(ctx, entries, scope)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read the key page's history: %w", err)
+	}
+
+	tl := &pageTimeline{Page: scope, Genesis: genesis, Entries: len(entries)}
+	page := genesisPage.Copy()
+	tl.States = append(tl.States, timedState{Block: genesis.LocalBlock, Page: page.Copy()})
+	for i := range events {
+		ev := events[i]
+		before := page.Copy()
+		effect, err := applyPageEvent(page, ev)
+		if err != nil {
+			return nil, err
+		}
+		if effect == effectAuthority {
+			tl.States = append(tl.States, timedState{Block: ev.LocalBlock, Page: page.Copy(), Event: &ev, Prev: before})
+		}
+	}
+
+	// Replayed to the head, the page must be the page the network holds.
+	if err := ab.checkReplayAgainstLive(ctx, scope, page, count); err != nil {
+		return nil, err
+	}
+	return tl, nil
+}
+
+// At returns the page after every change recorded at or before block, or nil
+// when block precedes the page's genesis.
+func (tl *pageTimeline) At(block int64) *protocol.KeyPage {
+	var out *protocol.KeyPage
+	for _, s := range tl.States {
+		if s.Block > block {
+			break
+		}
+		out = s.Page
+	}
+	return out
+}
+
+// Before returns the page immediately before the transaction whose entry hash
+// is given, when that transaction is one of its changes, and whether it was.
+func (tl *pageTimeline) Before(entryHash string) (*protocol.KeyPage, bool) {
+	for _, s := range tl.States {
+		if s.Event != nil && strings.EqualFold(s.Event.EntryHash, entryHash) {
+			return s.Prev, true
+		}
+	}
+	return nil, false
+}
+
+// CandidatesDuring returns every state the page may have been in during a
+// block: the state it entered the block in, and each state a change within
+// the block produced. Which of them a message processed in that block saw is
+// decided by the message itself - a signature names its signer version.
+func (tl *pageTimeline) CandidatesDuring(block int64) []*protocol.KeyPage {
+	var out []*protocol.KeyPage
+	var entering *protocol.KeyPage
+	for _, s := range tl.States {
+		switch {
+		case s.Block < block:
+			entering = s.Page
+		case s.Block == block:
+			out = append(out, s.Page)
+		}
+	}
+	if entering != nil {
+		out = append([]*protocol.KeyPage{entering}, out...)
+	}
+	return out
+}
+
+// OfVersion returns a state the page held at a version. Every state of one
+// version has the same thresholds and delegates: only UpdateKey changes a page
+// without changing its version, and it changes only a key hash.
+func (tl *pageTimeline) OfVersion(v uint64) (*protocol.KeyPage, bool) {
+	for _, s := range tl.States {
+		if s.Page.Version == v {
+			return s.Page, true
+		}
+	}
+	return nil, false
+}

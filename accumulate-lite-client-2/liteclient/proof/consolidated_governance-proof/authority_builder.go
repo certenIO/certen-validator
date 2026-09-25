@@ -90,68 +90,60 @@ func (ab *AuthorityBuilder) UnverifiedPageRules() []PageRuleNote {
 // BuildAuthoritySnapshot builds complete authority snapshot at execution time
 // Direct translation of Python build_authority_snapshot
 func (ab *AuthorityBuilder) BuildAuthoritySnapshot(ctx context.Context, keyPage string, execMBI int64, execWitness string) (*AuthoritySnapshot, error) {
+	return ab.BuildAuthoritySnapshotFor(ctx, keyPage, execMBI, execWitness, "")
+}
+
+// BuildAuthoritySnapshotFor builds the snapshot of the page the governed
+// transaction executed against.
+//
+// That is the page after every change recorded at or before the execution
+// block - except when the governed transaction is itself one of this page's
+// changes (an updateKeyPage or updateKey on the page that signed it). Then the
+// state it executed against is the one immediately before it: its own effect,
+// and anything after it on this chain, came later. Taking the post-block state
+// instead is what refused every self-update as signed at the wrong version.
+func (ab *AuthorityBuilder) BuildAuthoritySnapshotFor(ctx context.Context, keyPage string, execMBI int64,
+	execWitness, governedTx string) (*AuthoritySnapshot, error) {
+
 	fmt.Printf("[AUTHORITY] Building authority snapshot for %s at MBI %d\n", keyPage, execMBI)
+	keyPageScope := normalizeAccURL(keyPage)
 
-	// Use the full keyPage URL for querying main chain entries
-	// This is critical: updateKeyPage transactions are on the KEY PAGE's main chain,
-	// not the ADI's main chain. Previous bug queried ADI instead of key page.
-	keyPageScope := keyPage
-	if !strings.HasPrefix(keyPageScope, "acc://") {
-		keyPageScope = "acc://" + keyPageScope
-	}
-
-	// Get key page's main chain count
-	mainCount, err := ab.getMainChainCount(ctx, keyPageScope)
+	tl, err := ab.BuildPageTimeline(ctx, keyPageScope)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get main chain count: %v", err)
+		return nil, err
 	}
+	genesis := tl.Genesis
 
-	fmt.Printf("[AUTHORITY] Key page %s has %d entries on main chain\n", keyPageScope, mainCount)
-
-	// Enumerate all key page's main chain entries
-	mainEntries, err := ab.enumerateMainEntries(ctx, keyPageScope, mainCount)
-	if err != nil {
-		return nil, fmt.Errorf("failed to enumerate main entries: %v", err)
+	execPage := tl.At(execMBI)
+	if execPage == nil {
+		return nil, ValidationError{Msg: fmt.Sprintf("%s did not exist at block %d: its genesis is at block %d",
+			keyPageScope, execMBI, genesis.LocalBlock)}
 	}
-
-	// Read, bind and classify every entry, in chain order.
-	genesis, genesisPage, events, err := ab.collectPageHistory(ctx, mainEntries, keyPageScope)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read the key page's history: %w", err)
-	}
-
-	// Replay the whole chain under accumulate-core's rules (authority_replay.go).
-	// The state at execution is the page after every entry recorded at or
-	// before the execution block; chain order and block order agree, so those
-	// entries are a prefix of the chain.
-	page := genesisPage.Copy()
-	execPage := page.Copy()
-	var mutations []MutationEvent
-	for _, ev := range events {
-		before := stateFromPage(page)
-		effect, err := applyPageEvent(page, ev)
-		if err != nil {
-			return nil, err
+	cutAt := len(tl.States)
+	if governedTx != "" {
+		if before, ok := tl.Before(governedTx); ok {
+			execPage = before
+			for i, s := range tl.States {
+				if s.Event != nil && strings.EqualFold(s.Event.EntryHash, governedTx) {
+					cutAt = i
+				}
+			}
 		}
-		if ev.LocalBlock > execMBI {
+	}
+
+	var mutations []MutationEvent
+	for i, s := range tl.States {
+		if s.Event == nil || s.Block > execMBI || i >= cutAt {
 			continue
 		}
-		execPage = page.Copy()
-		if effect == effectAuthority {
-			mutations = append(mutations, MutationEvent{
-				EntryHash:     ev.EntryHash,
-				LocalBlock:    ev.LocalBlock,
-				Receipt:       ev.Receipt,
-				TxType:        ev.Txn.Body.Type().String(),
-				PreviousState: before,
-				NewState:      stateFromPage(page),
-			})
-		}
-	}
-
-	// Replayed to the head, the page must be the page the network holds.
-	if err := ab.checkReplayAgainstLive(ctx, keyPageScope, page, mainCount); err != nil {
-		return nil, err
+		mutations = append(mutations, MutationEvent{
+			EntryHash:     s.Event.EntryHash,
+			LocalBlock:    s.Event.LocalBlock,
+			Receipt:       s.Event.Receipt,
+			TxType:        s.Event.Txn.Body.Type().String(),
+			PreviousState: stateFromPage(s.Prev),
+			NewState:      stateFromPage(s.Page),
+		})
 	}
 
 	fmt.Printf("[AUTHORITY] Found genesis at block %d with %d mutations at or before block %d\n",
@@ -164,7 +156,7 @@ func (ab *AuthorityBuilder) BuildAuthoritySnapshot(ctx context.Context, keyPage 
 	validation := ValidationSummary{
 		GenesisFound:     true,
 		MutationsApplied: len(mutations),
-		TotalEntries:     len(mainEntries),
+		TotalEntries:     tl.Entries,
 		FinalVersion:     finalState.Version,
 		FinalThreshold:   finalState.Threshold,
 		FinalKeyCount:    len(finalState.Keys),
