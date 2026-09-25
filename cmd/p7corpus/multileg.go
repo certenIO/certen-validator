@@ -96,8 +96,11 @@ func hashOfAccURL(id string) (string, error) {
 	return h, nil
 }
 
-// buildMultiLeg builds and verifies a multi-partition proof for case F.
-func buildMultiLeg(ctx context.Context, endpoint string, raw map[string]json.RawMessage) error {
+// buildMultiLeg builds and verifies a multi-partition proof for case F. With
+// proofOut set it also records the proof, so an offline fixture of a genuine
+// cross-partition proof comes from this path rather than being assembled by
+// hand.
+func buildMultiLeg(ctx context.Context, endpoint string, raw map[string]json.RawMessage, proofOut string) error {
 	cases, err := parseCases(raw)
 	if err != nil {
 		return err
@@ -205,5 +208,12 @@ func buildMultiLeg(ctx context.Context, endpoint string, raw map[string]json.Raw
 			"Directory root is not being chosen deterministically")
 	}
 	fmt.Printf("built twice, byte-identical (%d bytes), legs %v\n", len(a), proof.SignerPartitions())
+
+	if proofOut != "" {
+		if err := writeJSON(proofOut, proof); err != nil {
+			return fmt.Errorf("record the proof: %w", err)
+		}
+		fmt.Printf("recorded the proof at %s\n", proofOut)
+	}
 	return nil
 }
