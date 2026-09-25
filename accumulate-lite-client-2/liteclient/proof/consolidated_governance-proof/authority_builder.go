@@ -9,7 +9,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -115,25 +114,51 @@ func (ab *AuthorityBuilder) BuildAuthoritySnapshot(ctx context.Context, keyPage 
 		return nil, fmt.Errorf("failed to enumerate main entries: %v", err)
 	}
 
-	// Classify governance events
-	fmt.Printf("[AUTHORITY] [DEBUG] Classifying %d entries for governance events...\n", len(mainEntries))
-	genesis, mutations, err := ab.classifyGovernanceEvents(mainEntries, execMBI, keyPage)
+	// Read, bind and classify every entry, in chain order.
+	genesis, genesisPage, events, err := ab.collectPageHistory(ctx, mainEntries, keyPageScope)
 	if err != nil {
-		return nil, fmt.Errorf("failed to classify governance events: %v", err)
+		return nil, fmt.Errorf("failed to read the key page's history: %w", err)
 	}
 
-	// Validate exactly one genesis event exists
-	if genesis == nil {
-		return nil, ValidationError{Msg: "No genesis event found for key page"}
+	// Replay the whole chain under accumulate-core's rules (authority_replay.go).
+	// The state at execution is the page after every entry recorded at or
+	// before the execution block; chain order and block order agree, so those
+	// entries are a prefix of the chain.
+	page := genesisPage.Copy()
+	execPage := page.Copy()
+	var mutations []MutationEvent
+	for _, ev := range events {
+		before := stateFromPage(page)
+		effect, err := applyPageEvent(page, ev)
+		if err != nil {
+			return nil, err
+		}
+		if ev.LocalBlock > execMBI {
+			continue
+		}
+		execPage = page.Copy()
+		if effect == effectAuthority {
+			mutations = append(mutations, MutationEvent{
+				EntryHash:     ev.EntryHash,
+				LocalBlock:    ev.LocalBlock,
+				Receipt:       ev.Receipt,
+				TxType:        ev.Txn.Body.Type().String(),
+				PreviousState: before,
+				NewState:      stateFromPage(page),
+			})
+		}
 	}
 
-	fmt.Printf("[AUTHORITY] Found genesis at block %d with %d mutations\n", genesis.LocalBlock, len(mutations))
-
-	// Build final state by applying mutations chronologically
-	finalState, err := ab.buildFinalState(*genesis, mutations)
-	if err != nil {
-		return nil, fmt.Errorf("failed to build final state: %v", err)
+	// Replayed to the head, the page must be the page the network holds.
+	if err := ab.checkReplayAgainstLive(ctx, keyPageScope, page, mainCount); err != nil {
+		return nil, err
 	}
+
+	fmt.Printf("[AUTHORITY] Found genesis at block %d with %d mutations at or before block %d\n",
+		genesis.LocalBlock, len(mutations), execMBI)
+
+	ab.noteRulesOf(execPage)
+	finalState := stateFromPage(execPage)
 
 	// Create validation summary
 	validation := ValidationSummary{
@@ -316,201 +341,6 @@ func (ab *AuthorityBuilder) enumerateMainEntries(ctx context.Context, scopeURL s
 	return allEntries, nil
 }
 
-// classifyGovernanceEvents classifies main chain entries as governance events
-func (ab *AuthorityBuilder) classifyGovernanceEvents(entries []map[string]interface{}, execMBI int64, keyPage string) (*GenesisEvent, []MutationEvent, error) {
-	fmt.Printf("[AUTHORITY] [DEBUG] Starting classification of %d entries\n", len(entries))
-	var genesis *GenesisEvent
-	var mutations []MutationEvent
-
-	pu := ProofUtilities{}
-
-	// Use the full keyPage URL for entry expansion queries
-	// This ensures we query the key page's chain, not the ADI's chain
-	keyPageScope := keyPage
-	if !strings.HasPrefix(keyPageScope, "acc://") {
-		keyPageScope = "acc://" + keyPageScope
-	}
-
-	// Phase 2: Expand each entry and classify (matching Python approach)
-	for i, entry := range entries {
-		fmt.Printf("[AUTHORITY] [DEBUG] Processing entry %d/%d\n", i+1, len(entries))
-
-		// Get entry hash from range query result
-		entryHash, ok := pu.CaseInsensitiveGet(entry, "entry").(string)
-		if !ok {
-			fmt.Printf("[AUTHORITY] [WARN] Entry %d: No entry hash found\n", i+1)
-			continue
-		}
-
-		// Expand entry to get full transaction details (like Python lines 386-402)
-		fmt.Printf("[AUTHORITY] [DEBUG] Expanding entry %s...\n", entryHash[:16])
-		expandedEntry, err := ab.expandSingleEntry(entryHash, keyPageScope)
-		if err != nil {
-			// GRACEFUL DEGRADATION: the by-hash+receipt expand can hang on an OLD anchor (a Kermit
-			// limitation). Fall back to a ranged (by-index) expand — served instantly at any chain
-			// age — and proceed with a degraded (localBlock-only) receipt so G1 completes as
-			// partial, never collapsing to G0.
-			idx := ab.entryIndexOf(entry, i)
-			fmt.Printf("[AUTHORITY] [DEGRADED] Entry %s by-hash expand failed (%v); ranged fallback at index %d\n", entryHash[:16], err, idx)
-			expandedEntry, err = ab.expandEntryByIndexRanged(idx, keyPageScope)
-			if err != nil {
-				fmt.Printf("[AUTHORITY] [WARN] Ranged fallback also failed for entry %s: %v\n", entryHash[:16], err)
-				continue
-			}
-		}
-
-		// Extract receipt from expanded entry for timing validation
-		receipt, err := ab.extractReceiptFromEntry(expandedEntry)
-		if err != nil {
-			fmt.Printf("[AUTHORITY] [WARN] Entry %d: Failed to extract receipt from expanded entry: %v\n", i+1, err)
-			continue
-		}
-
-		// Skip entries after execution MBI (like Python line 414)
-		if receipt.LocalBlock > execMBI {
-			fmt.Printf("[AUTHORITY] [DEBUG] Entry %d: Skipped (localBlock %d > execMBI %d)\n", i+1, receipt.LocalBlock, execMBI)
-			continue
-		}
-		fmt.Printf("[AUTHORITY] [DEBUG] Entry %d: Processing (localBlock %d <= execMBI %d)\n", i+1, receipt.LocalBlock, execMBI)
-
-		// Extract message from expanded entry
-		var msg interface{}
-		if value := pu.CaseInsensitiveGet(expandedEntry, "value"); value != nil {
-			if valueMap, ok := value.(map[string]interface{}); ok {
-				msg = pu.CaseInsensitiveGet(valueMap, "message")
-				fmt.Printf("[AUTHORITY] [DEBUG] Extracted message from expanded entry %s\n", entryHash[:16])
-			}
-		}
-
-		if msg == nil {
-			continue
-		}
-
-		msgMap, ok := msg.(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		// Debug: Show what transaction type we found
-		txType := ab.getTransactionType(msg)
-		fmt.Printf("[AUTHORITY] [DEBUG] Entry %s transaction type: %s at block %d\n", entryHash[:16], txType, receipt.LocalBlock)
-
-		// Check for syntheticCreateIdentity (aligned with Python _is_synthetic_create_identity)
-		// Pass the entire expanded entry value, which contains the message structure
-		entryValue := pu.CaseInsensitiveGet(expandedEntry, "value")
-		// A page's genesis is whichever transaction CREATED it, and there are
-		// three of those — not one. See authority_genesis.go: recognising only
-		// syntheticCreateIdentity made every page except a default book's first
-		// unprovable, with "No genesis event found for key page".
-		genesisType, isGenesis := ab.isKeyPageGenesis(entryValue)
-		if isGenesis {
-			fmt.Printf("[AUTHORITY] [DEBUG] Found %s (a key page genesis) at block %d\n",
-				genesisType, receipt.LocalBlock)
-
-			if genesis != nil {
-				return nil, nil, ValidationError{Msg: "Multiple genesis events found"}
-			}
-
-			// Extract entry hash (aligned with JSON-RPC response format)
-			if entryStr, ok := pu.CaseInsensitiveGet(entry, "entry").(string); ok {
-				// The page's INITIAL state, derived from the transaction that
-				// created it under accumulate-core's own rules for that type.
-				pageState, err := ab.parseGenesisState(genesisType, entryValue, keyPage)
-				if err != nil {
-					return nil, nil, fmt.Errorf("failed to parse genesis key page state: %v", err)
-				}
-
-				genesis = &GenesisEvent{
-					EntryHash:  entryStr,
-					LocalBlock: receipt.LocalBlock,
-					Receipt:    receipt,
-					TxType:     genesisType,
-					PageState:  pageState,
-				}
-
-				fmt.Printf("[AUTHORITY] [GENESIS] Found at block %d via %s, version=%d, threshold=%d, keys=%d\n",
-					receipt.LocalBlock, genesisType, pageState.Version, pageState.Threshold, len(pageState.Keys))
-			}
-		} else if ab.isUpdateKeyPage(msg) {
-			fmt.Printf("[AUTHORITY] [DEBUG] Found updateKeyPage at block %d\n", receipt.LocalBlock)
-
-			// Extract entry hash (aligned with JSON-RPC response format)
-			if entryStr, ok := pu.CaseInsensitiveGet(entry, "entry").(string); ok {
-				// Parse key page mutation
-				prevState, newState, err := ab.parseKeyPageMutation(msgMap)
-				if err != nil {
-					fmt.Printf("[AUTHORITY] [WARN] Failed to parse key page mutation at block %d: %v\n", receipt.LocalBlock, err)
-					continue
-				}
-
-				mutation := MutationEvent{
-					EntryHash:     entryStr,
-					LocalBlock:    receipt.LocalBlock,
-					Receipt:       receipt,
-					TxType:        "updateKeyPage",
-					PreviousState: prevState,
-					NewState:      newState,
-				}
-
-				mutations = append(mutations, mutation)
-
-				fmt.Printf("[AUTHORITY] [MUTATION] Found at block %d, version %d->%d, threshold %d->%d\n",
-					receipt.LocalBlock, prevState.Version, newState.Version, prevState.Threshold, newState.Threshold)
-			}
-		} else {
-			// Skip non-governance transactions (aligned with Python approach)
-			fmt.Printf("[AUTHORITY] [DEBUG] Skipping non-governance transaction at block %d\n", receipt.LocalBlock)
-		}
-	}
-
-	// Sort mutations chronologically with enhanced ordering logic
-	sort.Slice(mutations, func(i, j int) bool {
-		// Primary sort: by block number
-		if mutations[i].LocalBlock != mutations[j].LocalBlock {
-			return mutations[i].LocalBlock < mutations[j].LocalBlock
-		}
-
-		// Secondary sort: extract and compare chain indices if available
-		chainIndexI := ab.extractChainIndex(mutations[i])
-		chainIndexJ := ab.extractChainIndex(mutations[j])
-
-		if chainIndexI != chainIndexJ {
-			return chainIndexI < chainIndexJ
-		}
-
-		// Tertiary sort: fallback to lexicographic entry hash comparison for deterministic ordering
-		return mutations[i].EntryHash < mutations[j].EntryHash
-	})
-
-	return genesis, mutations, nil
-}
-
-// extractChainIndex extracts chain index from authority mutation for proper ordering
-// Returns index based on entry hash patterns or falls back to hash-based ordering
-func (ab *AuthorityBuilder) extractChainIndex(mutation MutationEvent) int {
-	// For deterministic ordering, use the first 8 bytes of the entry hash
-	// converted to an integer. This ensures consistent ordering across runs.
-	if len(mutation.EntryHash) >= 16 {
-		// Use first 8 hex characters (4 bytes) as a pseudo-index
-		hashPrefix := mutation.EntryHash[:8]
-		// Convert hex to integer for numerical comparison
-		if val, err := strconv.ParseUint(hashPrefix, 16, 32); err == nil {
-			return int(val)
-		}
-	}
-
-	// Fallback: use hash code of entry hash for ordering
-	hash := 0
-	for _, c := range mutation.EntryHash {
-		hash = hash*31 + int(c)
-	}
-	// Ensure positive value
-	if hash < 0 {
-		hash = -hash
-	}
-	return hash
-}
-
 // normalizeURL normalizes an Accumulate URL for comparison
 func normalizeURL(url string) string {
 	// Remove any trailing slashes and convert to lowercase for consistent comparison
@@ -518,47 +348,6 @@ func normalizeURL(url string) string {
 	url = strings.ToLower(url)
 	url = strings.TrimSuffix(url, "/")
 	return url
-}
-
-// getTransactionType extracts transaction type for debugging
-func (ab *AuthorityBuilder) getTransactionType(msg interface{}) string {
-	pu := ProofUtilities{}
-	msgMap, ok := msg.(map[string]interface{})
-	if !ok {
-		return "invalid-message"
-	}
-
-	msgType := pu.CaseInsensitiveGet(msgMap, "type")
-	if msgType != "transaction" {
-		return fmt.Sprintf("non-transaction-%v", msgType)
-	}
-
-	transaction := pu.CaseInsensitiveGet(msgMap, "transaction")
-	if transaction == nil {
-		return "no-transaction-field"
-	}
-
-	txMap, ok := transaction.(map[string]interface{})
-	if !ok {
-		return "invalid-transaction-field"
-	}
-
-	body := pu.CaseInsensitiveGet(txMap, "body")
-	if body == nil {
-		return "no-body-field"
-	}
-
-	bodyMap, ok := body.(map[string]interface{})
-	if !ok {
-		return "invalid-body-field"
-	}
-
-	bodyType := pu.CaseInsensitiveGet(bodyMap, "type")
-	if bodyType == nil {
-		return "no-body-type"
-	}
-
-	return fmt.Sprintf("%v", bodyType)
 }
 
 // expandSingleEntry expands a chain entry to get full transaction details (with receipt).
@@ -603,213 +392,6 @@ func (ab *AuthorityBuilder) expandSingleEntry(entryHash, scopeURL string) (map[s
 	}
 
 	return dataMap, nil
-}
-
-// expandEntryByIndexRanged expands a chain entry by INDEX via a ranged query. Ranged
-// (receipt-free) chain queries are served instantly at any chain length or anchor age — unlike a
-// by-hash query that requests an anchored receipt, which can hang indefinitely on an old anchor.
-// This is the graceful-degradation path: it returns the expanded entry with a DEGRADED receipt
-// (localBlock only, no anchor) so G1 can proceed as partial rather than failing to G0.
-func (ab *AuthorityBuilder) expandEntryByIndexRanged(index int, scopeURL string) (map[string]interface{}, error) {
-	query := map[string]interface{}{
-		"queryType": "chain",
-		"name":      "main",
-		"range":     map[string]interface{}{"start": index, "count": 1, "expand": true},
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	response, err := ab.client.Query(ctx, scopeURL, query)
-	if err != nil {
-		return nil, fmt.Errorf("ranged expand failed: %v", err)
-	}
-
-	pu := ProofUtilities{}
-	data := pu.CaseInsensitiveGet(response, "result")
-	if data == nil {
-		data = pu.CaseInsensitiveGet(response, "data")
-	}
-	dataMap, ok := data.(map[string]interface{})
-	if !ok {
-		return nil, ValidationError{Msg: "ranged response missing result"}
-	}
-	records, ok := pu.CaseInsensitiveGet(dataMap, "records").([]interface{})
-	if !ok || len(records) == 0 {
-		return nil, ValidationError{Msg: "ranged response has no records"}
-	}
-	rec, ok := records[0].(map[string]interface{})
-	if !ok {
-		return nil, ValidationError{Msg: "ranged record is not an object"}
-	}
-
-	// Synthesize a degraded receipt (localBlock from value.received) so extractReceiptFromEntry and
-	// the timing checks work. The anchor is intentionally empty: this entry's full anchored receipt
-	// was unobtainable, so the resulting proof is G1-partial for this event.
-	rec["receipt"] = map[string]interface{}{
-		"start":      "",
-		"anchor":     "",
-		"localBlock": ab.localBlockFromValue(rec),
-		"degraded":   true,
-	}
-	return rec, nil
-}
-
-// entryIndexOf returns the chain index of an enumerated entry record, falling back to the loop
-// position if the record carries no explicit index.
-func (ab *AuthorityBuilder) entryIndexOf(entry map[string]interface{}, fallback int) int {
-	pu := ProofUtilities{}
-	switch v := pu.CaseInsensitiveGet(entry, "index").(type) {
-	case float64:
-		return int(v)
-	case int:
-		return v
-	case int64:
-		return int(v)
-	}
-	return fallback
-}
-
-// localBlockFromValue extracts the transaction's block (value.received) from an expanded record,
-// used as the degraded receipt's localBlock when a full receipt is unobtainable.
-func (ab *AuthorityBuilder) localBlockFromValue(rec map[string]interface{}) float64 {
-	pu := ProofUtilities{}
-	if value, ok := pu.CaseInsensitiveGet(rec, "value").(map[string]interface{}); ok {
-		switch v := pu.CaseInsensitiveGet(value, "received").(type) {
-		case float64:
-			return v
-		case int:
-			return float64(v)
-		case int64:
-			return float64(v)
-		}
-	}
-	return 0
-}
-
-// isSyntheticCreateIdentity checks if the message value represents a syntheticCreateIdentity transaction
-func (ab *AuthorityBuilder) isSyntheticCreateIdentity(value interface{}) bool {
-	fmt.Printf("[AUTHORITY] [DEBUG] isSyntheticCreateIdentity: Starting check\n")
-	valueMap, ok := value.(map[string]interface{})
-	if !ok {
-		fmt.Printf("[AUTHORITY] [DEBUG] isSyntheticCreateIdentity: value not a map\n")
-		return false
-	}
-
-	pu := ProofUtilities{}
-	message := pu.CaseInsensitiveGet(valueMap, "message")
-	if message == nil {
-		fmt.Printf("[AUTHORITY] [DEBUG] isSyntheticCreateIdentity: no message field found\n")
-		return false
-	}
-
-	messageMap, ok := message.(map[string]interface{})
-	if !ok {
-		return false
-	}
-
-	msgType := pu.CaseInsensitiveGet(messageMap, "type")
-	msgTypeStr, ok := msgType.(string)
-	if !ok {
-		fmt.Printf("[AUTHORITY] [DEBUG] isSyntheticCreateIdentity: message.type not string: %T\n", msgType)
-		return false
-	}
-	fmt.Printf("[AUTHORITY] [DEBUG] isSyntheticCreateIdentity: message.type = %s\n", msgTypeStr)
-
-	// Check that this is a transaction message
-	if !strings.EqualFold(msgTypeStr, "transaction") {
-		fmt.Printf("[AUTHORITY] [DEBUG] isSyntheticCreateIdentity: not a transaction message\n")
-		return false
-	}
-
-	// Get transaction object
-	transaction := pu.CaseInsensitiveGet(messageMap, "transaction")
-	if transaction == nil {
-		fmt.Printf("[AUTHORITY] [DEBUG] isSyntheticCreateIdentity: no transaction field\n")
-		return false
-	}
-
-	transactionMap, ok := transaction.(map[string]interface{})
-	if !ok {
-		fmt.Printf("[AUTHORITY] [DEBUG] isSyntheticCreateIdentity: transaction not a map\n")
-		return false
-	}
-
-	// Get transaction body
-	body := pu.CaseInsensitiveGet(transactionMap, "body")
-	if body == nil {
-		fmt.Printf("[AUTHORITY] [DEBUG] isSyntheticCreateIdentity: no body field\n")
-		return false
-	}
-
-	bodyMap, ok := body.(map[string]interface{})
-	if !ok {
-		fmt.Printf("[AUTHORITY] [DEBUG] isSyntheticCreateIdentity: body not a map\n")
-		return false
-	}
-
-	// Get body type
-	bodyType := pu.CaseInsensitiveGet(bodyMap, "type")
-	bodyTypeStr, ok := bodyType.(string)
-	if !ok {
-		fmt.Printf("[AUTHORITY] [DEBUG] isSyntheticCreateIdentity: body.type not string: %T\n", bodyType)
-		return false
-	}
-
-	fmt.Printf("[AUTHORITY] [DEBUG] isSyntheticCreateIdentity: body.type = %s\n", bodyTypeStr)
-	result := strings.EqualFold(bodyTypeStr, "syntheticCreateIdentity")
-	fmt.Printf("[AUTHORITY] [DEBUG] isSyntheticCreateIdentity: result = %t\n", result)
-	return result
-}
-
-// isUpdateKeyPage checks if the message value represents an updateKeyPage transaction
-// Note: This receives `msg` which is already the message object (not a wrapper containing message)
-// Structure: { "type": "transaction", "transaction": { "body": { "type": "updateKeyPage" } } }
-func (ab *AuthorityBuilder) isUpdateKeyPage(msg interface{}) bool {
-	msgMap, ok := msg.(map[string]interface{})
-	if !ok {
-		return false
-	}
-
-	pu := ProofUtilities{}
-
-	// First check that this is a transaction message
-	msgType := pu.CaseInsensitiveGet(msgMap, "type")
-	msgTypeStr, ok := msgType.(string)
-	if !ok || !strings.EqualFold(msgTypeStr, "transaction") {
-		return false
-	}
-
-	// Get transaction object
-	transaction := pu.CaseInsensitiveGet(msgMap, "transaction")
-	if transaction == nil {
-		return false
-	}
-
-	transactionMap, ok := transaction.(map[string]interface{})
-	if !ok {
-		return false
-	}
-
-	// Get transaction body
-	body := pu.CaseInsensitiveGet(transactionMap, "body")
-	if body == nil {
-		return false
-	}
-
-	bodyMap, ok := body.(map[string]interface{})
-	if !ok {
-		return false
-	}
-
-	// Check body type is updateKeyPage
-	bodyType := pu.CaseInsensitiveGet(bodyMap, "type")
-	bodyTypeStr, ok := bodyType.(string)
-	if !ok {
-		return false
-	}
-
-	return strings.EqualFold(bodyTypeStr, "updateKeyPage")
 }
 
 // parseGenesisKeyPageState parses initial key page state from syntheticCreateIdentity
@@ -888,131 +470,6 @@ func (ab *AuthorityBuilder) parseGenesisKeyPageState(msg map[string]interface{},
 
 	fmt.Printf("[AUTHORITY] [DEBUG] parseGenesisKeyPageState: No matching keypage found for %s\n", targetKeyPage)
 	return KeyPageState{}, ValidationError{Msg: "No key page definition found in genesis"}
-}
-
-// parseKeyPageMutation parses previous and new states from updateKeyPage transaction
-// Accumulate updateKeyPage structure: msg.transaction.body.operation[]
-// Each operation has: type ("add", "remove", "update", "setThreshold"), and key/entry info
-func (ab *AuthorityBuilder) parseKeyPageMutation(msg map[string]interface{}) (KeyPageState, KeyPageState, error) {
-	pu := ProofUtilities{}
-
-	// Navigate to transaction.body.operation
-	transaction := pu.CaseInsensitiveGet(msg, "transaction")
-	if transaction == nil {
-		return KeyPageState{}, KeyPageState{}, ValidationError{Msg: "Missing transaction in updateKeyPage message"}
-	}
-
-	txMap, ok := transaction.(map[string]interface{})
-	if !ok {
-		return KeyPageState{}, KeyPageState{}, ValidationError{Msg: "Transaction is not an object"}
-	}
-
-	body := pu.CaseInsensitiveGet(txMap, "body")
-	if body == nil {
-		return KeyPageState{}, KeyPageState{}, ValidationError{Msg: "Missing body in updateKeyPage transaction"}
-	}
-
-	bodyMap, ok := body.(map[string]interface{})
-	if !ok {
-		return KeyPageState{}, KeyPageState{}, ValidationError{Msg: "Body is not an object"}
-	}
-
-	operations := pu.CaseInsensitiveGet(bodyMap, "operation")
-	if operations == nil {
-		return KeyPageState{}, KeyPageState{}, ValidationError{Msg: "Missing operation in updateKeyPage body"}
-	}
-
-	opArray, ok := operations.([]interface{})
-	if !ok {
-		return KeyPageState{}, KeyPageState{}, ValidationError{Msg: "Operation is not an array"}
-	}
-
-	fmt.Printf("[AUTHORITY] [MUTATION] Parsing %d operations from updateKeyPage\n", len(opArray))
-
-	// Parse operations to extract entry changes.
-	//
-	// ENTRIES, not key hashes. An updateKeyPage that adds a delegate carries
-	// {"delegate": "acc://.../book2"} with no keyHash at all, so reading only
-	// keyHash made every delegation invisible to the replay - the page on chain
-	// gained an entry and the reconstructed state did not. That is how a
-	// reconstructed authority silently disagrees with the real one.
-	var oldEntries, newEntries []KeyPageEntry
-	var thresholdChange *uint64
-
-	readEntry := func(v interface{}, what string) (KeyPageEntry, bool) {
-		m, ok := v.(map[string]interface{})
-		if !ok {
-			return KeyPageEntry{}, false
-		}
-		e, err := parseKeyPageEntry(pu, m)
-		if err != nil || e.IsEmpty() {
-			return KeyPageEntry{}, false
-		}
-		fmt.Printf("[AUTHORITY] [MUTATION] %s: %s\n", what, e)
-		return e, true
-	}
-
-	for i, op := range opArray {
-		opMap, ok := op.(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		opType := pu.CaseInsensitiveGet(opMap, "type")
-		opTypeStr, _ := opType.(string)
-		fmt.Printf("[AUTHORITY] [MUTATION] Operation %d: type=%s\n", i, opTypeStr)
-
-		switch strings.ToLower(opTypeStr) {
-		case "add":
-			if e, ok := readEntry(pu.CaseInsensitiveGet(opMap, "entry"), "Add"); ok {
-				newEntries = append(newEntries, e)
-			}
-		case "remove":
-			if e, ok := readEntry(pu.CaseInsensitiveGet(opMap, "entry"), "Remove"); ok {
-				oldEntries = append(oldEntries, e)
-			}
-		case "update":
-			if e, ok := readEntry(pu.CaseInsensitiveGet(opMap, "oldEntry"), "Update old"); ok {
-				oldEntries = append(oldEntries, e)
-			}
-			if e, ok := readEntry(pu.CaseInsensitiveGet(opMap, "newEntry"), "Update new"); ok {
-				newEntries = append(newEntries, e)
-			}
-		case "setthreshold":
-			threshold := pu.CaseInsensitiveGet(opMap, "threshold")
-			if t, ok := threshold.(float64); ok {
-				thresholdVal := uint64(t)
-				thresholdChange = &thresholdVal
-				fmt.Printf("[AUTHORITY] [MUTATION] Set threshold: %d\n", thresholdVal)
-			}
-		}
-	}
-
-	// Create placeholder states - the actual state will be computed incrementally
-	// from genesis + all mutations. Each updateKeyPage increments version by 1.
-	// The previous/new states here are used to track what changed, not the full state.
-	prevState := KeyPageState{
-		Version:   0, // Will be filled in by caller based on genesis + prior mutations
-		Threshold: 1, // Default, may be overridden
-		Entries:   oldEntries,
-		Keys:      deriveKeyHashes(oldEntries),
-	}
-
-	newState := KeyPageState{
-		Version:   0, // Will be filled in by caller (prevVersion + 1)
-		Threshold: 1, // Default, may be overridden
-		Entries:   newEntries,
-		Keys:      deriveKeyHashes(newEntries),
-	}
-
-	if thresholdChange != nil {
-		newState.Threshold = *thresholdChange
-	}
-
-	fmt.Printf("[AUTHORITY] [MUTATION] Parsed mutation: %d removed, %d added\n",
-		len(oldEntries), len(newEntries))
-
-	return prevState, newState, nil
 }
 
 // parseKeyPageStateFromDef parses KeyPageState from key page definition object
@@ -1110,55 +567,6 @@ func (ab *AuthorityBuilder) parseKeyPageStateFromDef(keyPageDef map[string]inter
 	}, nil
 }
 
-// buildFinalState applies mutations chronologically to build final state
-func (ab *AuthorityBuilder) buildFinalState(genesis GenesisEvent, mutations []MutationEvent) (KeyPageState, error) {
-	state := genesis.PageState
-
-	// Apply each mutation in order
-	// Version starts at genesis (1) and increments by 1 for each updateKeyPage
-	for _, mutation := range mutations {
-		prevVersion := state.Version
-		newVersion := prevVersion + 1
-
-		// Apply entry changes from the mutation: drop what it removed, add what
-		// it added. Entries, not key hashes - a mutation that adds a delegate
-		// changes the page's entry count and therefore what its threshold means,
-		// and replaying only key hashes leaves the reconstructed page smaller
-		// than the real one.
-		removed := make(map[string]bool, len(mutation.PreviousState.Entries))
-		for _, e := range mutation.PreviousState.EntrySet() {
-			removed[e.Identity()] = true
-		}
-
-		before := len(state.EntrySet())
-		newEntries := make([]KeyPageEntry, 0, before)
-		for _, e := range state.EntrySet() {
-			if !removed[e.Identity()] {
-				newEntries = append(newEntries, e)
-			}
-		}
-		newEntries = append(newEntries, mutation.NewState.EntrySet()...)
-
-		// Update threshold if changed
-		newThreshold := state.Threshold
-		if mutation.NewState.Threshold > 0 {
-			newThreshold = mutation.NewState.Threshold
-		}
-
-		state = KeyPageState{
-			Version:   newVersion,
-			Threshold: newThreshold,
-			Entries:   newEntries,
-			Keys:      deriveKeyHashes(newEntries),
-		}
-
-		fmt.Printf("[AUTHORITY] Applied mutation: version %d -> %d at block %d (entries: %d -> %d)\n",
-			prevVersion, newVersion, mutation.LocalBlock, before, len(newEntries))
-	}
-
-	return state, nil
-}
-
 // extractReceiptFromEntry extracts receipt data from main chain entry
 func (ab *AuthorityBuilder) extractReceiptFromEntry(entry map[string]interface{}) (ReceiptData, error) {
 	pu := ProofUtilities{}
@@ -1205,6 +613,13 @@ func (ab *AuthorityBuilder) extractReceiptFromEntry(entry map[string]interface{}
 	} else {
 		return ReceiptData{}, ValidationError{Msg: "Receipt missing localBlock"}
 	}
+
+	// The merkle path, so the receipt can be recomputed rather than read.
+	steps, err := ParseReceiptEntries(receiptMap)
+	if err != nil {
+		return ReceiptData{}, err
+	}
+	receiptData.Entries = steps
 
 	return receiptData, nil
 }
