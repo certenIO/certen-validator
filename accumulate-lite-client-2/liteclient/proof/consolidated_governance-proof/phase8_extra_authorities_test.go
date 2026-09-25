@@ -200,6 +200,19 @@ func TestP8_UnknownOperationFailsClosed(t *testing.T) {
 	}
 }
 
+// TestP8_UnknownBodyTypeFailsClosed: whether a disabled authority is skipped is
+// accumulate-core's RequireAuthorization, asked of the type itself. A type the
+// protocol does not define cannot be asked, and is not guessed.
+func TestP8_UnknownBodyTypeFailsClosed(t *testing.T) {
+	_, err := extraAuthoritiesFromTransaction(p8tx(`{"type":"someTransactionInventedIn2027"}`, p8NoHeader))
+	if err == nil {
+		t.Fatal("an unrecognised transaction type was judged anyway")
+	}
+	if !strings.Contains(err.Error(), "NOT a governance rejection") {
+		t.Errorf("a capability limit must not read as a governance rejection, got: %v", err)
+	}
+}
+
 // TestP8_MissingOperationsFailsClosed: a body of these types with no operations
 // array is one we failed to READ, not one with nothing to do.
 func TestP8_MissingOperationsFailsClosed(t *testing.T) {
