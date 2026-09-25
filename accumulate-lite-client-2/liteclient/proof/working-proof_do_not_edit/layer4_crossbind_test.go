@@ -18,7 +18,7 @@ func loadFixture(t *testing.T, name string) *ChainedProof {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("testdata", name))
 	if err != nil {
-		t.Skipf("fixture %s missing", name)
+		t.Fatalf("fixture %s missing: a missing fixture is a broken test, not an inapplicable one", name)
 	}
 	p := new(ChainedProof)
 	if err := json.Unmarshal(raw, p); err != nil {

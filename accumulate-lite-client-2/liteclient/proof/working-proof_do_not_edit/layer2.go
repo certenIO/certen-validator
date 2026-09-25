@@ -210,6 +210,10 @@ func (b *Layer2Builder) Build(ctx context.Context, bvn string, l1 Layer1) (Layer
 	if err != nil {
 		return Layer2{}, err
 	}
+	// Invariant: the receipt proves THIS entry, the BVN state tree anchor.
+	if bptReceipt.Start != bvnStateTreeAnchorHex {
+		return Layer2{}, fmt.Errorf("layer2: %s receipt.start mismatch: got=%s expect=%s", bptChain, bptReceipt.Start, bvnStateTreeAnchorHex)
+	}
 	bptReceipt.Anchor, err = MustHex32Lower(bptReceipt.Anchor, "layer2 bpt receipt.anchor")
 	if err != nil {
 		return Layer2{}, err

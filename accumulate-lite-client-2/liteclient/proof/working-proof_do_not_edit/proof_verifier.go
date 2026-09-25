@@ -100,6 +100,23 @@ func (pv *ProofVerifier) Verify(ctx context.Context, p *ChainedProof) error {
 		return fmt.Errorf("L3 DN-self pairing invariant failed: root.receipt.localBlock != bpt.receipt.localBlock")
 	}
 
+	// 2.4b L3 links: the DN self-anchor receipts start at the DN root L2
+	// reached and at the DN state tree anchor L3 names, and are recorded at the
+	// block L3 names. Without these L3 recomputes receipts about some other
+	// Directory state.
+	if err := requireSameHash("L3 root receipt must start at the DN root chain anchor L2 reached",
+		p.Layer3.RootReceipt.Start, p.Layer2.DNRootChainAnchor); err != nil {
+		return err
+	}
+	if err := requireSameHash("L3 bpt receipt must start at the DN state tree anchor",
+		p.Layer3.BptReceipt.Start, p.Layer3.DNStateTreeAnchor); err != nil {
+		return err
+	}
+	if p.Layer3.RootReceipt.LocalBlock != p.Layer3.DNSelfAnchorRecordedAtMinorBlockIndex {
+		return fmt.Errorf("L3 root receipt must be recorded at the DN block layer3 names: receipt.localBlock=%d, dnSelfAnchorRecordedAtMinorBlockIndex=%d",
+			p.Layer3.RootReceipt.LocalBlock, p.Layer3.DNSelfAnchorRecordedAtMinorBlockIndex)
+	}
+
 	// 3 ordering invariant
 	if p.Layer3.DNSelfAnchorRecordedAtMinorBlockIndex < p.Layer2.DNMinorBlockIndex {
 		return fmt.Errorf("ordering invariant failed: DN_FINAL_MBI < DN_MBI")
@@ -168,6 +185,9 @@ func (pv *ProofVerifier) Verify(ctx context.Context, p *ChainedProof) error {
 			return fmt.Errorf("partition %s: L1 invariant failed: bvnRootChainAnchor != receipt.anchor",
 				leg.Partition)
 		}
+		if err := verifyLegReceiptLinks(leg); err != nil {
+			return fmt.Errorf("partition %s: %w", leg.Partition, err)
+		}
 
 		// Every leg must reach the SAME Directory state, or the proof is several
 		// unrelated claims stapled together.
@@ -224,5 +244,60 @@ func (pv *ProofVerifier) Verify(ctx context.Context, p *ChainedProof) error {
 		return fmt.Errorf("L4 BVN leg is signed by Directory, expected a block validator partition")
 	}
 
+	return nil
+}
+
+// verifyLegReceiptLinks checks that one partition leg's L2 receipts continue
+// the chain its L1 receipt started.
+//
+// A receipt that recomputes proves only that its start folds to its anchor.
+// What it proves ABOUT this proof depends on where it starts and ends, so the
+// start of each receipt must be the value the layer below reached, and its
+// end the value the layer above consumes. Checked for every leg through this
+// one function, the principal's included.
+func verifyLegReceiptLinks(leg PartitionLeg) error {
+	l1, l2 := leg.Layer1, leg.Layer2
+	if err := requireSameHash("L2 root receipt must start at the BVN root chain anchor L1 reached",
+		l2.RootReceipt.Start, l1.BVNRootChainAnchor); err != nil {
+		return err
+	}
+	if err := requireSameHash("L2 root receipt must end at the DN root chain anchor",
+		l2.RootReceipt.Anchor, l2.DNRootChainAnchor); err != nil {
+		return err
+	}
+	if l2.RootReceipt.LocalBlock != l2.DNMinorBlockIndex {
+		return fmt.Errorf("L2 root receipt must be recorded at the DN block layer2 names: receipt.localBlock=%d, dnMinorBlockIndex=%d",
+			l2.RootReceipt.LocalBlock, l2.DNMinorBlockIndex)
+	}
+	if err := requireSameHash("L2 bpt receipt must start at the BVN state tree anchor",
+		l2.BptReceipt.Start, l2.BVNStateTreeAnchor); err != nil {
+		return err
+	}
+	if err := requireSameHash("L2 bpt receipt must end at the root receipt's anchor",
+		l2.BptReceipt.Anchor, l2.RootReceipt.Anchor); err != nil {
+		return err
+	}
+	if l2.BptReceipt.LocalBlock != l2.RootReceipt.LocalBlock {
+		return fmt.Errorf("L2 bpt receipt must be recorded at the root receipt's block: bpt.localBlock=%d, root.localBlock=%d",
+			l2.BptReceipt.LocalBlock, l2.RootReceipt.LocalBlock)
+	}
+	return nil
+}
+
+// requireSameHash fails unless both values are well-formed 32-byte hashes and
+// equal. Two absent values are not the same hash: a link is shown by a value,
+// and a missing value shows nothing.
+func requireSameHash(link, a, b string) error {
+	ah, err := MustHex32Lower(a, link)
+	if err != nil {
+		return err
+	}
+	bh, err := MustHex32Lower(b, link)
+	if err != nil {
+		return err
+	}
+	if ah != bh {
+		return fmt.Errorf("%s: %s != %s", link, ah, bh)
+	}
 	return nil
 }

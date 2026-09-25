@@ -93,6 +93,10 @@ func (b *Layer3Builder) Build(ctx context.Context, l2 Layer2) (Layer3, error) {
 	if err != nil {
 		return Layer3{}, err
 	}
+	// Invariant: the receipt proves THIS entry, the DN root L2 reached.
+	if rootReceipt.Start != dnRootHex {
+		return Layer3{}, fmt.Errorf("layer3: %s receipt.start mismatch: got=%s expect=%s", rootChain, rootReceipt.Start, dnRootHex)
+	}
 	rootReceipt.Anchor, err = MustHex32Lower(rootReceipt.Anchor, "layer3 root receipt.anchor")
 	if err != nil {
 		return Layer3{}, err
@@ -155,6 +159,10 @@ func (b *Layer3Builder) Build(ctx context.Context, l2 Layer2) (Layer3, error) {
 	bptReceipt.Start, err = MustHex32Lower(bptReceipt.Start, "layer3 bpt receipt.start")
 	if err != nil {
 		return Layer3{}, err
+	}
+	// Invariant: the receipt proves THIS entry, the DN state tree anchor.
+	if bptReceipt.Start != dnStateTreeAnchorHex {
+		return Layer3{}, fmt.Errorf("layer3: %s receipt.start mismatch: got=%s expect=%s", bptChain, bptReceipt.Start, dnStateTreeAnchorHex)
 	}
 	bptReceipt.Anchor, err = MustHex32Lower(bptReceipt.Anchor, "layer3 bpt receipt.anchor")
 	if err != nil {
