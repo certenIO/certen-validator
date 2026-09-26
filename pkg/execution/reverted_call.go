@@ -207,7 +207,7 @@ func honestSettlementGas(exec *accountExecution) uint64 {
 var proofExecutedTopic = crypto.Keccak256Hash([]byte("ProofExecuted(bytes32,bytes32,bool,bool,bool,uint256)"))
 
 // proofExecutedLookback bounds how far before an attempt its anchor's attestation is searched
-// for, in chunks a public RPC will serve.
+// for, in chunks (split further wherever the RPC caps the range - filterLogsSplitting).
 const (
 	proofExecutedLookback = 60000
 	proofExecutedChunk    = 2000
@@ -231,14 +231,12 @@ func anchorAttestedBefore(ctx context.Context, chain attemptChain, anchor common
 		if hi > proofExecutedChunk && hi-proofExecutedChunk+1 > floor {
 			lo = hi - proofExecutedChunk + 1
 		}
-		logs, err := chain.FilterLogs(ctx, ethereum.FilterQuery{
-			FromBlock: new(big.Int).SetUint64(lo),
-			ToBlock:   new(big.Int).SetUint64(hi),
+		logs, err := filterLogsSplitting(ctx, chain, ethereum.FilterQuery{
 			Addresses: []common.Address{anchor},
 			Topics:    [][]common.Hash{{proofExecutedTopic}, {common.Hash(anchorID)}},
-		})
+		}, lo, hi)
 		if err != nil {
-			return false, readErr(fmt.Errorf("ProofExecuted logs %d-%d: %w", lo, hi, err))
+			return false, readErr(fmt.Errorf("ProofExecuted %w", err))
 		}
 		for _, l := range logs {
 			if l.BlockNumber < to || (l.BlockNumber == to && l.TxIndex < receipt.TransactionIndex) {
