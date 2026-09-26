@@ -66,9 +66,6 @@ type UnifiedOrchestratorConfig struct {
 	// UnifiedRepo for new unified tables
 	UnifiedRepo *database.UnifiedRepository
 
-	// DefaultChainID if not specified in request
-	DefaultChainID string
-
 	// Thresholds
 	ThresholdConfig *attestation.ThresholdConfig
 
@@ -465,9 +462,13 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 	}
 
 	// Get strategies for target chain
+	// The chain the member settled on. No default: a cycle observed on a guessed chain finds nothing,
+	// or worse, finds something that is not this member's (RB3-F45).
 	targetChain := req.TargetChain
 	if targetChain == "" {
-		targetChain = o.config.DefaultChainID
+		err := fmt.Errorf("proof cycle %s names no target chain", req.CycleID)
+		result.Error = err.Error()
+		return result, err
 	}
 
 	chainStrategy, attestStrategy, err := o.config.Registry.GetStrategiesForChain(targetChain)
@@ -888,20 +889,20 @@ func (o *UnifiedOrchestrator) verifyContractCallGate(ctx context.Context, cycle 
 		return nil, fmt.Errorf("cycle flagged rbContractCall but no committed call legs could be parsed — refusing to attest")
 	}
 
-	// Select the contract-call leg(s) that belong to THIS chain group's cycle. Match by
-	// normalized chain key OR by the leg's exec tx being one this cycle observed; a lone
-	// call leg (single-leg intent) always applies. A chain group with no call leg (e.g. a
-	// native leg on this chain) is a legitimate no-op here.
-	targetChain := normalizeRBChainKey(cycle.Request.TargetChain)
-	txSet := make(map[string]bool)
-	for _, h := range cycle.Request.TxHashes {
-		txSet[strings.ToLower(strings.TrimPrefix(h, "0x"))] = true
+	// Select the contract-call legs that execute on THIS cycle's chain, by each leg's signed chain id.
+	// Matching the leg's free-text chain name, or any leg whose execTx this cycle happened to
+	// observe, checked another chain's call against this chain's execution (RB3-F45). A chain with
+	// no call leg (a native leg on this chain) is a legitimate no-op here.
+	cycleChainID, perr := strconv.ParseInt(chainStrategy.ChainID(), 10, 64)
+	if perr != nil {
+		return nil, fmt.Errorf("cycle chain %q is not a numeric chain id", chainStrategy.ChainID())
 	}
 	var applicable []rbCallLeg
 	for _, l := range legs {
-		matchChain := l.chainKey != "" && normalizeRBChainKey(l.chainKey) == targetChain
-		matchTx := l.execTxHash != "" && txSet[strings.ToLower(strings.TrimPrefix(l.execTxHash, "0x"))]
-		if matchChain || matchTx || len(legs) == 1 {
+		if l.chainID == 0 {
+			return nil, fmt.Errorf("committed call leg carries no chain id - cannot tell which chain executes it")
+		}
+		if l.chainID == cycleChainID {
 			applicable = append(applicable, l)
 		}
 	}
@@ -1046,6 +1047,26 @@ func rbStateNote(state []ExpectedStateSlot) string {
 	return ""
 }
 
+// commitmentInt64 reads an integer the commitment map carries: an int64 in-process, a float64 after
+// a JSON round trip. Anything else reads as 0, which callers treat as absent.
+func commitmentInt64(v interface{}) int64 {
+	switch n := v.(type) {
+	case int64:
+		return n
+	case int:
+		return int64(n)
+	case float64:
+		if n == float64(int64(n)) {
+			return int64(n)
+		}
+	case json.Number:
+		if i, err := n.Int64(); err == nil {
+			return i
+		}
+	}
+	return 0
+}
+
 // parseRBContractCallLegs reconstructs the per-leg gate descriptors from CommitmentData,
 // tolerating both []map[string]interface{} (same-process) and []interface{} (JSON roundtrip).
 func parseRBContractCallLegs(v interface{}) []rbCallLeg {
@@ -1072,6 +1093,7 @@ func parseRBContractCallLegs(v interface{}) []rbCallLeg {
 		etx, _ := m["execTxHash"].(string)
 		out = append(out, rbCallLeg{
 			chainKey:   ck,
+			chainID:    commitmentInt64(m["chainId"]),
 			target:     tgt,
 			value:      val,
 			callData:   cd,
@@ -1151,9 +1173,9 @@ func (o *UnifiedOrchestrator) executionTxHashForChain(req *UnifiedProofCycleRequ
 	if req.CommitmentData != nil {
 		if isCall, _ := req.CommitmentData["rbContractCall"].(bool); isCall {
 			legs := parseRBContractCallLegs(req.CommitmentData["rbContractCallLegs"])
-			target := normalizeRBChainKey(req.TargetChain)
+			target, _ := strconv.ParseInt(req.TargetChain, 10, 64)
 			for _, l := range legs {
-				if l.execTxHash != "" && (normalizeRBChainKey(l.chainKey) == target || len(legs) == 1) {
+				if l.execTxHash != "" && l.chainID == target {
 					return l.execTxHash
 				}
 			}

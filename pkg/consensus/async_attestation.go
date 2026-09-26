@@ -1,12 +1,11 @@
 package consensus
 
 import (
-	"strconv"
-
 	"context"
 	"encoding/hex"
 	"encoding/json"
-	"github.com/certen/independant-validator/pkg/ethrpc"
+	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -267,6 +266,16 @@ func (bv *BFTValidator) RunProofCycle(
 		ctx = context.Background()
 	}
 
+	// The chain this member settled on: the chain its batch was flushed on, which
+	// RunBatchMemberAttestation stamps on res.Network. Phase 7 observes there and nowhere else - not on
+	// the chain the intent's free-text leg name suggests, and not on a configured default (RB3-F45).
+	settledChainID, cerr := settledChainOf(res)
+	if cerr != nil {
+		bv.logger.Printf("❌ [PROOF-CYCLE] intent %s: %v — its settlement cannot be observed or recorded; "+
+			"needs operator attention", att.IntentID, cerr)
+		return
+	}
+
 	mode := "inline"
 	if att.Replayed {
 		mode = "cadence-replay"
@@ -292,6 +301,8 @@ func (bv *BFTValidator) RunProofCycle(
 		if att.OperationCommitment != "" {
 			commitMap["operationCommitment"] = att.OperationCommitment
 		}
+		commitMap["targetChain"] = strconv.FormatInt(settledChainID, 10)
+		commitMap["chainID"] = settledChainID
 		commitMap["accumulateBlockHeight"] = att.AccumulateBlockHeight
 		commitMap["accumulateTxHash"] = att.CertenIntent.TransactionHash
 		commitMap["rawCreateTxHashes"] = res.CreateTxHash
@@ -306,7 +317,6 @@ func (bv *BFTValidator) RunProofCycle(
 		// and committed events/state; the gate verifies the effect against that chain
 		// group's inclusion-proven receipt(s).
 		if ccEnv, ccErr := att.CertenIntent.ParseCrossChain(); ccErr == nil && len(ccEnv.Legs) > 0 {
-			govByChain := parseMultiChainTxHashes(res.GovernanceTxHash)
 			rbLegs := make([]map[string]interface{}, 0, len(ccEnv.Legs))
 			for _, leg := range ccEnv.Legs {
 				ep := leg.ExecutionPayload
@@ -318,9 +328,12 @@ func (bv *BFTValidator) RunProofCycle(
 					continue // native/ERC-20 leg — CRITICAL-003 already binds it, no event gate
 				}
 				chainKey := strings.ToLower(strings.ReplaceAll(leg.Chain, " ", "-"))
-				execTx := extractRawTxHash(res.GovernanceTxHash) // single-leg default
-				if hs := govByChain[chainKey]; len(hs) > 0 {
-					execTx = extractRawTxHash(hs[len(hs)-1]) // per-chain governance tx (last)
+				// This member's transaction is the execution of the legs on ITS chain only. A leg on
+				// another chain is that chain's member's to prove; handing it this transaction had it
+				// checked against the wrong chain's execution.
+				execTx := ""
+				if leg.ChainID == settledChainID {
+					execTx = extractRawTxHash(res.GovernanceTxHash)
 				}
 				evs := make([]map[string]interface{}, 0, len(ep.ExpectedEvents))
 				for _, e := range ep.ExpectedEvents {
@@ -332,8 +345,10 @@ func (bv *BFTValidator) RunProofCycle(
 				}
 				rbLegs = append(rbLegs, map[string]interface{}{
 					"chainKey": chainKey,
-					"target":   ep.Target,
-					"value":    ep.Value,
+					// The leg's signed chain id: what the gate matches legs to a chain by.
+					"chainId": leg.ChainID,
+					"target":  ep.Target,
+					"value":   ep.Value,
 					// The committed calldata, so a REVERTED execution can be bound to this call
 					// rather than refused: see VerifyRevertedCall.
 					"callData": cd,
@@ -409,176 +424,19 @@ func (bv *BFTValidator) RunProofCycle(
 		commitMap["validatorID"] = att.ValidatorID
 	}
 
-	// Determine leg count for multi-leg vs single-leg routing
 	legCount, _ := att.CertenIntent.GetLegCount()
-	isMultiLeg := legCount > 1
-
-	bv.logger.Printf("🔄 [PROOF-CYCLE] Triggering Phase 7-9 for intent: %s (legs=%d, multi=%v)",
-		att.CertenIntent.IntentID, legCount, isMultiLeg)
+	bv.logger.Printf("🔄 [PROOF-CYCLE] Triggering Phase 7-9 for intent: %s on chain %d (legs=%d)",
+		att.CertenIntent.IntentID, settledChainID, legCount)
 	bv.logger.Printf("   Accumulate ref: accountURL=%s, txHash=%s", att.CertenIntent.AccountURL, att.CertenIntent.TransactionHash)
 
-	// A CHAIN-SCOPED BATCH MEMBER closes its own cycle; it must not wait on another chain.
-	//
-	// A cross-chain intent is split into one batch member per chain (see batchChainsOfIntent).
-	// Each member settles under its own anchor, on its own chain, and is replayed here by
-	// whichever validator flushed THAT chain — so it can observe exactly one chain's transaction
-	// and knows nothing of its sibling's.
-	//
-	// Routing it into the multi-leg aggregator asked for one chain group per leg and supplied
-	// one, and the aggregator is per-validator: the node that flushed Sepolia never sees Base's
-	// group and vice versa, so neither cycle can ever complete. Both settled on chain and neither
-	// wrote back. Observed live 2026-08-04 on intent 763f8429.
-	//
-	// The single-chain path below is the correct one for a member: it observes the transaction it
-	// actually has and writes back that leg's outcome. The intent's other chain does the same
-	// independently, which is exactly how the split settles it.
-	if isMultiLeg && att.Replayed && extractRawTxHash(res.GovernanceTxHash) != "" &&
-		len(parseMultiChainTxHashes(res.GovernanceTxHash)) <= 1 {
-		bv.logger.Printf("🧩 [MULTI-LEG-PROOF] intent %s is a chain-scoped batch member (network=%s); "+
-			"closing its own single-chain cycle rather than waiting on a sibling chain this node "+
-			"cannot observe", att.CertenIntent.IntentID, res.Network)
-		isMultiLeg = false
+	// Every cycle is ONE chain member's. A cross-chain intent is split into one batch member per
+	// chain (batchChainsOfIntent); each settles under its own anchor, on its own chain, and closes
+	// its own cycle here with the one transaction it has. Routing a member into the multi-leg
+	// aggregator asked for one chain group per leg and supplied one - the aggregator is
+	// per-validator, so neither group could complete (observed live 2026-08-04, intent 763f8429).
+	// The routing used to depend on the member's Replayed flag and on the shape of its hash string;
+	// it depends on neither now.
 
-		// The member's OWN chain decides which RPC Phase 7 observes on.
-		//
-		// commitment["targetChain"] is intent-level, and a cross-chain intent names only one of
-		// its chains there. The member for the OTHER chain then inherited that value and searched
-		// an RPC where its transaction cannot exist — burning the full observation deadline on a
-		// transaction that had already settled. Observed live 2026-08-04: intent 16b8266d's Base
-		// leg settled in block 45033109 (status 1) while its cycle spent 10m looking on Arbitrum.
-		if commitMap, ok := commitment.(map[string]interface{}); ok {
-			if ck := chainKeyFromNetwork(res.Network); ck != "" {
-				if prev, _ := commitMap["targetChain"].(string); prev != ck {
-					bv.logger.Printf("🧭 [MULTI-LEG-PROOF] intent %s: retargeting Phase 7 from %q to %q "+
-						"(the chain this member actually settled on)",
-						att.CertenIntent.IntentID, prev, ck)
-				}
-				commitMap["targetChain"] = ck
-			}
-		}
-	}
-
-	if isMultiLeg {
-		// MULTI-LEG: Start per-chain proof cycles with unified write-back
-		bv.logger.Printf("🔀 [MULTI-LEG-PROOF] Starting per-chain proof cycles for %d legs", legCount)
-
-		// Parse governance tx hashes into per-chain groups
-		chainTxHashes := parseMultiChainTxHashes(res.GovernanceTxHash)
-		if len(chainTxHashes) == 0 {
-			// Fallback: use create tx hashes if no governance hashes at all
-			chainTxHashes = parseMultiChainTxHashes(res.CreateTxHash)
-		} else {
-			// For chains with failed governance (filtered by _failed), fall back
-			// to their create tx hashes so the proof cycle can still observe them
-			createTxHashes := parseMultiChainTxHashes(res.CreateTxHash)
-			for ck, txHashes := range createTxHashes {
-				if _, hasGov := chainTxHashes[ck]; !hasGov {
-					bv.logger.Printf("🔄 [MULTI-LEG-PROOF] Chain %s governance failed, using create tx for observation", ck)
-					chainTxHashes[ck] = txHashes
-				}
-			}
-		}
-
-		// Build leg info from CrossChainData
-		ccEnvelope, ccErr := att.CertenIntent.ParseCrossChain()
-		if ccErr != nil {
-			bv.logger.Printf("⚠️ [MULTI-LEG-PROOF] Failed to parse CrossChainData: %v - falling back to single proof cycle", ccErr)
-		} else {
-			var legInfos []ChainLegInfo
-			for i, leg := range ccEnvelope.Legs {
-				chainKey := strings.ToLower(strings.ReplaceAll(leg.Chain, " ", "-"))
-				legInfos = append(legInfos, ChainLegInfo{
-					LegIndex:  i,
-					LegID:     leg.LegID,
-					ChainKey:  chainKey,
-					ChainName: leg.Chain,
-					ChainID:   leg.ChainID,
-				})
-			}
-
-			// Re-key the "default" bucket onto the chain the legs actually name.
-			//
-			// parseMultiChainTxHashes files an un-prefixed hash under "default". A multi-leg intent
-			// whose legs are all on ONE chain produces exactly that — a single plain hash — so the
-			// group arrives keyed "default" while every leg is keyed e.g. "ethereum-sepolia". The
-			// keys never match, so sequential-mode dependency resolution cannot satisfy the group
-			// and defers it forever: "Deferring chain group default (dependencies not met)". The
-			// legs settle on chain and the proof cycle never runs, so Phases 8 and 9 never close.
-			//
-			// Only re-keyed when every leg shares one chain, which is the only case where the
-			// mapping is unambiguous. A genuine cross-chain intent keeps its per-chain keys.
-			if hashes, hasDefault := chainTxHashes["default"]; hasDefault && len(chainTxHashes) == 1 {
-				uniq := map[string]struct{}{}
-				for _, li := range legInfos {
-					uniq[li.ChainKey] = struct{}{}
-				}
-				if len(uniq) == 1 {
-					for ck := range uniq {
-						bv.logger.Printf("🔑 [MULTI-LEG-PROOF] re-keying chain group \"default\" to %q "+
-							"(all %d leg(s) on one chain); the group would otherwise never match a leg "+
-							"and would be deferred indefinitely", ck, len(legInfos))
-						chainTxHashes[ck] = hashes
-						delete(chainTxHashes, "default")
-					}
-				}
-			}
-
-			executionMode, _ := att.CertenIntent.GetExecutionMode()
-			operationID := att.CertenIntent.IntentID
-
-			// Never hand the aggregator legs it has no transactions to resolve.
-			//
-			// This called StartPerChainProofCycles unconditionally. When every leg failed to
-			// execute, res.GovernanceTxHash holds "execution_failed_leg-..." markers rather than
-			// hashes, parseMultiChainTxHashes yields ZERO groups, and the call still registered
-			// the intent as awaiting one group PER LEG. It then logged success — "started for 0
-			// chain groups" under a ✅ — and returned, skipping the single-leg fallback. The
-			// intent waited forever on groups that were never created: no settlement, no failure,
-			// and nothing written back to acc://certen-protocol.acme/execution-results. Observed
-			// live 2026-08-03 on a two-leg Sepolia+Base intent.
-			//
-			// With no groups there is nothing multi-leg to do, so fall through to the single-leg
-			// path, which fails closed and records the outcome.
-			if len(chainTxHashes) == 0 {
-				bv.logger.Printf("❌ [MULTI-LEG-PROOF] intent %s has %d leg(s) but NO observable "+
-					"transaction on any chain (governance=%q create=%q) — not registering with the "+
-					"aggregator; falling through so the outcome is recorded",
-					att.CertenIntent.IntentID, len(legInfos), res.GovernanceTxHash, res.CreateTxHash)
-			} else {
-				// A partial set still stalls: the aggregator waits on every leg it was told about,
-				// so a leg whose chain produced no transaction never reports. Name them.
-				uniqLegChains := map[string]struct{}{}
-				for _, li := range legInfos {
-					uniqLegChains[li.ChainKey] = struct{}{}
-				}
-				// Compare against DISTINCT leg chains, not leg count: two legs on one chain
-				// legitimately produce one group.
-				if len(chainTxHashes) < len(uniqLegChains) {
-					missing := make([]string, 0, len(legInfos))
-					for _, li := range legInfos {
-						if _, ok := chainTxHashes[li.ChainKey]; !ok {
-							missing = append(missing, li.ChainKey)
-						}
-					}
-					bv.logger.Printf("⚠️ [MULTI-LEG-PROOF] intent %s: %d leg(s) but only %d chain "+
-						"group(s); no transaction for %v — those legs cannot resolve",
-						att.CertenIntent.IntentID, len(legInfos), len(chainTxHashes), missing)
-				}
-				if err := bv.proofCycleOrchestrator.StartPerChainProofCycles(
-					ctx, att.CertenIntent.IntentID, operationID, bundleID,
-					chainTxHashes, legInfos, executionMode, commitment,
-					att.CertenIntent.AccountURL, att.CertenIntent.TransactionHash, "",
-				); err != nil {
-					bv.logger.Printf("⚠️ [MULTI-LEG-PROOF] Per-chain proof cycles failed: %v", err)
-				} else {
-					bv.logger.Printf("✅ [MULTI-LEG-PROOF] Per-chain proof cycles started for %d chain groups", len(chainTxHashes))
-					return // Multi-leg handled - skip single-leg fallback
-				}
-			}
-		}
-	}
-
-	// SINGLE-LEG (or multi-leg fallback): Original behavior
 	txHashes := &AnchorWorkflowTxHashes{
 		CreateTxHash:     common.HexToHash(extractPureHexHash(res.CreateTxHash)),
 		VerifyTxHash:     common.HexToHash(extractPureHexHash(res.VerifyTxHash)),
@@ -771,12 +629,21 @@ func (bv *BFTValidator) recordFailedProofCycle(
 	if att.FailureReason != "" {
 		reason = reason + ": " + att.FailureReason
 	}
+	// The failure is recorded against the chain the member was queued on - never a default.
+	chainID, cerr := settledChainOf(res)
+	if cerr != nil {
+		bv.logger.Printf("⚠️ [PROOF-CYCLE] could not record the failure of intent %s: %v — the intent is "+
+			"settled nowhere AND recorded nowhere, which needs operator attention", att.IntentID, cerr)
+		return
+	}
 	commitment := map[string]interface{}{
 		"intentId":                 att.IntentID,
 		"outcome":                  "failed",
 		"reason":                   reason,
 		"allTransactionsConfirmed": false,
 		"network":                  failed.Network,
+		"targetChain":              strconv.FormatInt(chainID, 10),
+		"chainID":                  chainID,
 	}
 
 	if err := bv.proofCycleOrchestrator.StartProofCycleWithAccumulateRef(
@@ -796,17 +663,19 @@ func (bv *BFTValidator) recordFailedProofCycle(
 	}
 }
 
-// chainKeyFromNetwork maps an execution result's Network ("evm-<chainID>") to the chain key the
-// strategy registry uses. Returns "" when the form is unrecognised, so the caller leaves the
-// existing target alone rather than guessing.
-func chainKeyFromNetwork(network string) string {
-	n := strings.TrimSpace(strings.ToLower(network))
-	if !strings.HasPrefix(n, "evm-") {
-		return ""
+// settledChainOf is the chain a member settled on, from its execution result's Network
+// ("evm-<chainID>"), and it must be a chain CERTEN executes on.
+func settledChainOf(res *verification.AnchorExecutionResult) (int64, error) {
+	if res == nil {
+		return 0, fmt.Errorf("no execution result")
 	}
+	n := strings.TrimSpace(strings.ToLower(res.Network))
 	id, err := strconv.ParseInt(strings.TrimPrefix(n, "evm-"), 10, 64)
-	if err != nil {
-		return ""
+	if !strings.HasPrefix(n, "evm-") || err != nil {
+		return 0, fmt.Errorf("settlement chain not identifiable from network %q", res.Network)
 	}
-	return ethrpc.ChainKeyForID(id)
+	if !IsSupportedTargetChain(id) {
+		return 0, fmt.Errorf("settlement chain %d is not a chain CERTEN executes on", id)
+	}
+	return id, nil
 }

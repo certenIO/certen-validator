@@ -6,8 +6,6 @@ import (
 	"os"
 	"strings"
 	"testing"
-
-	"github.com/ethereum/go-ethereum/common"
 )
 
 // =============================================================================
@@ -22,18 +20,11 @@ import (
 func TestAdapterWithoutUnifiedOrchestratorRefusesByName(t *testing.T) {
 	a := &UnifiedOrchestratorAdapter{}
 	ctx := context.Background()
+	// The adapter's one entry point (RB3-F45: the others had no caller once every cycle became one
+	// chain member's).
 	calls := map[string]func() error{
-		"StartProofCycle": func() error {
-			return a.StartProofCycle(ctx, "i", [32]byte{}, common.Hash{}, nil)
-		},
-		"StartProofCycleWithAllTxs": func() error {
-			return a.StartProofCycleWithAllTxs(ctx, "i", "u", [32]byte{}, nil, nil)
-		},
 		"StartProofCycleWithAccumulateRef": func() error {
 			return a.StartProofCycleWithAccumulateRef(ctx, "i", "u", [32]byte{}, nil, nil, "acc://a.acme/data", "tx", "")
-		},
-		"StartPerChainProofCycles": func() error {
-			return a.StartPerChainProofCycles(ctx, "i", "op", [32]byte{}, map[string][]string{}, nil, "", nil, "", "", "")
 		},
 	}
 	for name, call := range calls {

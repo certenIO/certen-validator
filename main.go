@@ -1569,7 +1569,7 @@ func startValidator(
 				if m == nil {
 					return
 				}
-				validator.RunBatchMemberRefusal(ctx, m.Attestation, cause)
+				validator.RunBatchMemberRefusal(ctx, m.Attestation, m.ChainID, cause)
 			},
 		},
 		log.Printf,
@@ -1596,7 +1596,7 @@ func startValidator(
 			if m == nil {
 				return
 			}
-			validator.RunBatchMemberRefusal(ctx, m.Attestation, cause)
+			validator.RunBatchMemberRefusal(ctx, m.Attestation, m.ChainID, cause)
 		},
 		// The Accumulate block time of a member queued without it: the failover clock.
 		CommitTime: liteClientAdapter.MinorBlockTime,
@@ -1850,7 +1850,6 @@ func startValidator(
 		Registry:                 strategyRegistry,
 		Repos:                    orchestratorRepos,
 		UnifiedRepo:              unifiedRepo,
-		DefaultChainID:           cfg.DefaultTargetChain,
 		ThresholdConfig:          attestationStrategy.DefaultThresholdConfig(),
 		ObservationTimeout:       10 * time.Minute,
 		AttestationTimeout:       5 * time.Minute,
@@ -1882,7 +1881,6 @@ func startValidator(
 	log.Printf("   - Strategy Registry: %d attestation schemes, %d chains",
 		len(strategyRegistry.ListAttestationSchemes()),
 		len(strategyRegistry.ListChainIDs()))
-	log.Printf("   - Default Chain: %s", cfg.DefaultTargetChain)
 	log.Printf("   - Multi-Chain: %v", cfg.EnableMultiChain)
 	log.Printf("   - Unified Tables: %v", cfg.EnableUnifiedTables)
 	healthStatus.SetProofCycle("active")

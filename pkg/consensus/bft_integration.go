@@ -220,29 +220,13 @@ func extractRawTxHash(chainPrefixedHash string) string {
 	return chainPrefixedHash
 }
 
-// ProofCycleOrchestratorInterface defines the interface for proof cycle orchestration
-// This enables the BFTValidator to trigger Phase 7-9 after successful execution
+// ProofCycleOrchestratorInterface starts Phase 7-9 for one settled chain member.
+//
+// It has one entry point. The commitment names the chain the member settled on ("targetChain", the
+// numeric chain id) - there is no default chain and no multi-leg grouping: every cycle is one chain
+// member's (RB3-F45). txHashes and commitment are interface{} to avoid an import cycle with execution.
 type ProofCycleOrchestratorInterface interface {
-	// StartProofCycle initiates Phase 7-9 for an executed operation
-	// The commitment parameter uses interface{} to avoid circular imports with execution package
-	StartProofCycle(ctx context.Context, intentID string, bundleID [32]byte, executionTxHash common.Hash, commitment interface{}) error
-
-	// StartProofCycleWithAllTxs initiates Phase 7-9 with all 3 anchor workflow tx hashes
-	// Enhanced: Tracks createAnchor, executeComprehensiveProof, and executeWithGovernance
-	// The txHashes parameter uses interface{} to avoid circular imports - actual type is *AnchorWorkflowTxHashes
-	StartProofCycleWithAllTxs(ctx context.Context, intentID string, userID string, bundleID [32]byte, txHashes interface{}, commitment interface{}) error
-
-	// StartProofCycleWithAccumulateRef initiates Phase 7-9 with Accumulate reference data for L1/L2/L3 proofs
-	// Enhanced: Includes Accumulate account URL and tx hash for chained proof generation
 	StartProofCycleWithAccumulateRef(ctx context.Context, intentID string, userID string, bundleID [32]byte, txHashes interface{}, commitment interface{}, accumulateAccountURL string, accumulateTxHash string, bvn string) error
-
-	// StartPerChainProofCycles starts separate proof cycles for each chain in a multi-leg intent.
-	// chainTxHashes maps chain key (e.g., "base-sepolia") to governance tx hashes for that chain.
-	// legs uses interface{} (actual type []ChainLegInfo) to avoid circular imports.
-	// Returns nil if multi-leg proof cycles are not supported (legacy orchestrator).
-	StartPerChainProofCycles(ctx context.Context, intentID string, operationID string, bundleID [32]byte,
-		chainTxHashes map[string][]string, legs interface{}, executionMode string, commitment interface{},
-		accumulateAccountURL string, accumulateTxHash string, bvn string) error
 }
 
 // BFTValidatorInfo represents information about a BFT validator

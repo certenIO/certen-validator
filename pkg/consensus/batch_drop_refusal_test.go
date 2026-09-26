@@ -43,7 +43,7 @@ func TestDroppedMemberIsRecordedFailedWithItsOwnCause(t *testing.T) {
 	att := &PendingAttestation{IntentID: "x", CertenIntent: liveFailedIntent(t)}
 	cause := "its batch anchor 0x1234 on chain 84532 was created but rejects the member leaves: leaf 0 not found"
 
-	bv.RunBatchMemberRefusal(context.Background(), att, cause)
+	bv.RunBatchMemberRefusal(context.Background(), att, 84532, cause)
 
 	if att.TargetChainOutcome != TargetChainFailed {
 		t.Fatalf("outcome = %q, want failed", att.TargetChainOutcome)
@@ -70,7 +70,7 @@ func TestDroppedMemberWithoutACauseSaysSo(t *testing.T) {
 	bv := failureTestValidator(orch)
 	att := &PendingAttestation{IntentID: "x", CertenIntent: liveFailedIntent(t)}
 
-	bv.RunBatchMemberRefusal(context.Background(), att, "")
+	bv.RunBatchMemberRefusal(context.Background(), att, 84532, "")
 
 	reason := fmt.Sprint(orch.commitment["reason"])
 	if !strings.Contains(reason, "cause not recorded") {

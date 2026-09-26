@@ -11,15 +11,11 @@ package execution
 import (
 	"context"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
-
-	"github.com/ethereum/go-ethereum/common"
-	"github.com/google/uuid"
 )
 
 // sortInts sorts a slice of ints in ascending order
@@ -46,178 +42,6 @@ func NewUnifiedOrchestratorAdapter(unified *UnifiedOrchestrator) *UnifiedOrchest
 // unavailable is the refusal every entry point gives when there is no orchestrator.
 func (a *UnifiedOrchestratorAdapter) unavailable(intentID string) error {
 	return fmt.Errorf("%w: no unified orchestrator for intent %s", ErrProofCycleUnavailable, intentID)
-}
-
-// StartProofCycle implements ProofCycleOrchestratorInterface
-func (a *UnifiedOrchestratorAdapter) StartProofCycle(
-	ctx context.Context,
-	intentID string,
-	bundleID [32]byte,
-	executionTxHash common.Hash,
-	commitment interface{},
-) error {
-	if a.unified != nil {
-		// Extract target chain from commitment if available
-		targetChain := a.unified.config.DefaultChainID
-		if commitMap, ok := commitment.(map[string]interface{}); ok {
-			if tc, ok := commitMap["targetChain"].(string); ok && tc != "" {
-				targetChain = tc
-			}
-		}
-
-		// Create unified request
-		req := &UnifiedProofCycleRequest{
-			IntentID:    intentID,
-			BundleID:    bundleID,
-			TxHashes:    []string{executionTxHash.Hex()},
-			ProofClass:  "on_demand",
-			TargetChain: targetChain,
-		}
-
-		// Start cycle asynchronously
-		go func() {
-			result, err := a.unified.StartProofCycle(ctx, req)
-			if err != nil {
-				fmt.Printf("Unified proof cycle failed: %v\n", err)
-			} else if result != nil {
-				fmt.Printf("Unified proof cycle completed: success=%v\n", result.Success)
-			}
-		}()
-		return nil
-	}
-
-	return a.unavailable(intentID)
-}
-
-// StartProofCycleWithAllTxs implements the enhanced ProofCycleOrchestratorInterface
-func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAllTxs(
-	ctx context.Context,
-	intentID string,
-	userID string,
-	bundleID [32]byte,
-	txHashes interface{},
-	commitment interface{},
-) error {
-	fmt.Printf("[UnifiedAdapter] StartProofCycleWithAllTxs called: intent=%s, unified=%v\n",
-		intentID, a.unified != nil)
-
-	if a.unified != nil {
-		// Extract tx hashes from the interface
-		var txHashStrs []string
-		switch hashes := txHashes.(type) {
-		case []string:
-			txHashStrs = hashes
-		case *AnchorWorkflowTxHashes:
-			// Prefer the filtered list, exactly as StartProofCycleWithAccumulateRef does. This is
-			// the ON_DEMAND path, and it had the same defect: rebuilding a fixed three-slot list
-			// from the typed fields renders unset ones as "0x000…000" via common.Hash.Hex() — a
-			// non-empty string that reads as a real hash, so Phase 7 polls for receipts that can
-			// never exist and the cycle stalls before Phases 8 and 9.
-			if len(hashes.RawTxHashes) > 0 {
-				txHashStrs = hashes.RawTxHashes
-			} else {
-				txHashStrs = []string{
-					hashes.CreateTxHash.Hex(),
-					hashes.VerifyTxHash.Hex(),
-					hashes.GovernanceTxHash.Hex(),
-				}
-			}
-		default:
-			// Handle AnchorWorkflowTxHashes from consensus package (different type due to package boundary)
-			// Use reflection to extract the hash fields
-			if extracted := extractTxHashesViaReflection(txHashes); extracted != nil {
-				if len(extracted.RawTxHashes) > 0 {
-					txHashStrs = extracted.RawTxHashes
-				} else {
-					txHashStrs = []string{
-						extracted.CreateTxHash.Hex(),
-						extracted.VerifyTxHash.Hex(),
-						extracted.GovernanceTxHash.Hex(),
-					}
-				}
-			} else {
-				txHashStrs = []string{fmt.Sprintf("%v", txHashes)}
-			}
-		}
-
-		// Same boundary rule as the Accumulate-ref path: a zero hash is indistinguishable from a
-		// real one downstream, so it never gets past here.
-		txHashStrs = dropUnobservableHashes(txHashStrs)
-		if len(txHashStrs) == 0 {
-			return fmt.Errorf("intent %s: no observable transaction for Phase 7 (on_demand) — "+
-				"refusing to start a proof cycle that cannot complete", intentID)
-		}
-
-		fmt.Printf("[UnifiedAdapter] Extracted %d tx hashes for intent %s: %v\n", len(txHashStrs), intentID, txHashStrs)
-
-		// Extract operation commitment and target chain from commitment interface
-		var operationCommitment [32]byte
-		var targetChainFromCommit string
-		if commitMap, ok := commitment.(map[string]interface{}); ok {
-			if opCommitStr, ok := commitMap["operationCommitment"].(string); ok && opCommitStr != "" {
-				if decoded, err := hexStringToBytes32(opCommitStr); err == nil {
-					operationCommitment = decoded
-				}
-			}
-			if tc, ok := commitMap["targetChain"].(string); ok && tc != "" {
-				targetChainFromCommit = tc
-			}
-		}
-
-		// For on-demand proofs (single transaction):
-		// LeafIndex = 0, LeafHash = operation commitment
-		var leafHash []byte
-		var merkleRoot [32]byte
-		if operationCommitment != [32]byte{} {
-			leafHash = operationCommitment[:]
-			merkleRoot = operationCommitment
-		}
-
-		// Use target chain from commitment, fall back to default
-		targetChain := targetChainFromCommit
-		if targetChain == "" {
-			targetChain = a.unified.config.DefaultChainID
-		}
-
-		// Create unified request
-		var userIDPtr *string
-		if userID != "" {
-			userIDPtr = &userID
-		}
-
-		req := &UnifiedProofCycleRequest{
-			IntentID:            intentID,
-			BundleID:            bundleID,
-			TxHashes:            txHashStrs,
-			ProofClass:          "on_demand",
-			TargetChain:         targetChain,
-			UserID:              userIDPtr,
-			OperationCommitment: operationCommitment,
-			// Merkle inclusion proof data
-			LeafHash:   leafHash,
-			LeafIndex:  0,
-			MerklePath: nil,
-			MerkleRoot: merkleRoot,
-		}
-
-		fmt.Printf("[UnifiedAdapter] Starting unified proof cycle for intent %s with target chain %q (from commitment: %q)\n",
-			intentID, targetChain, targetChainFromCommit)
-
-		// Start cycle asynchronously
-		go func() {
-			fmt.Printf("[UnifiedAdapter] Goroutine started for intent %s\n", intentID)
-			result, err := a.unified.StartProofCycle(context.Background(), req)
-			if err != nil {
-				fmt.Printf("[UnifiedAdapter] Unified proof cycle FAILED for %s: %v\n", intentID, err)
-			} else if result != nil {
-				fmt.Printf("[UnifiedAdapter] Unified proof cycle COMPLETED for %s: success=%v, phase=%d\n",
-					intentID, result.Success, result.FailPhase)
-			}
-		}()
-		return nil
-	}
-
-	return a.unavailable(intentID)
 }
 
 // StartProofCycleWithAccumulateRef implements the enhanced ProofCycleOrchestratorInterface with Accumulate reference data
@@ -295,16 +119,19 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 		}
 		fmt.Printf("[UnifiedAdapter] Phase 7 will observe %d transaction(s): %v\n", len(txHashStrs), txHashStrs)
 
-		// Extract governance data and target chain from commitment (for G1/G2 proof levels)
+		// The chain the member settled on, stamped by consensus from the chain its batch was flushed
+		// on. There is no default to fall back to: a cycle that names no chain is refused rather
+		// than observed somewhere guessed (RB3-F45).
+		commitMap, _ := commitment.(map[string]interface{})
+		targetChain, _ := commitMap["targetChain"].(string)
+		if targetChain == "" {
+			return fmt.Errorf("intent %s: the proof cycle names no target chain - refusing rather than guessing one", intentID)
+		}
+
+		// Extract governance data from commitment (for G1/G2 proof levels)
 		var governanceRoot, operationCommitment [32]byte
 		var keyPageThreshold, keyPageKeyCount int
-		var targetChainFromCommitment string
-		commitMap, _ := commitment.(map[string]interface{})
 		if commitMap != nil {
-			// Extract targetChain from commitment (set by buildExecutionCommitmentFromIntent)
-			if tc, ok := commitMap["targetChain"].(string); ok && tc != "" {
-				targetChainFromCommitment = tc
-			}
 			// Extract governanceRoot (hex string -> [32]byte)
 			if govRootStr, ok := commitMap["governanceRoot"].(string); ok && govRootStr != "" {
 				if decoded, err := hexStringToBytes32(govRootStr); err == nil {
@@ -333,16 +160,6 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 			}
 		}
 
-		// Extract multi-leg metadata
-		var legCount int
-		if commitMap != nil {
-			if lc, ok := commitMap["legCount"].(float64); ok {
-				legCount = int(lc)
-			} else if lc, ok := commitMap["legCount"].(int); ok {
-				legCount = lc
-			}
-		}
-
 		// Create unified request with Accumulate reference data
 		var userIDPtr *string
 		if userID != "" {
@@ -361,42 +178,7 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 			merkleRoot = operationCommitment // For single tx, merkle root = leaf
 		}
 
-		// Use target chain from commitment (set by BFT validator from intent's CrossChainData)
-		// Fall back to default chain ID only if commitment didn't include it
-		targetChain := targetChainFromCommitment
-		if targetChain == "" {
-			targetChain = a.unified.config.DefaultChainID
-		}
-
-		// For multi-chain intents, the tx hashes come from the first successful chain
-		// which may differ from the commitment's targetChain (leg 0's chain).
-		// Extract the actual chain from the raw create tx hash to ensure consistency.
-		if legCount > 1 && commitMap != nil {
-			if rawCreate, ok := commitMap["rawCreateTxHashes"].(string); ok && rawCreate != "" {
-				// Format: "ChainName:0xhash,ChainName2:0xhash2,...,create_failed_ChainName3"
-				// Find the first valid (non-failed) entry
-				for _, part := range strings.Split(rawCreate, ",") {
-					part = strings.TrimSpace(part)
-					if strings.Contains(part, "_failed") {
-						continue
-					}
-					if colonIdx := strings.LastIndex(part, ":"); colonIdx > 0 {
-						chainFromTx := strings.TrimSpace(part[:colonIdx])
-						// Normalize: "Optimism Sepolia" -> "optimism-sepolia"
-						normalized := strings.ToLower(strings.ReplaceAll(chainFromTx, " ", "-"))
-						if normalized != "" && normalized != targetChain {
-							fmt.Printf("[UnifiedAdapter] Multi-chain: overriding target chain from %q to %q (matching first successful tx)\n",
-								targetChain, normalized)
-							targetChain = normalized
-						}
-						break
-					}
-				}
-			}
-		}
-
-		fmt.Printf("[UnifiedAdapter] Target chain for Phase 7-9: %q (from commitment: %q, default: %q)\n",
-			targetChain, targetChainFromCommitment, a.unified.config.DefaultChainID)
+		fmt.Printf("[UnifiedAdapter] Target chain for Phase 7-9: %s\n", targetChain)
 
 		req := &UnifiedProofCycleRequest{
 			IntentID:             intentID,
@@ -419,11 +201,6 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 			MerklePath:     nil, // Empty path for single leaf (leaf = root)
 			MerkleRoot:     merkleRoot,
 			CommitmentData: commitMap,
-		}
-
-		if legCount > 1 {
-			fmt.Printf("[UnifiedAdapter] Multi-leg intent detected: %d legs for intent %s\n",
-				legCount, intentID)
 		}
 
 		fmt.Printf("[UnifiedAdapter] Starting unified proof cycle with Accumulate ref for intent %s\n", intentID)
@@ -467,373 +244,6 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 	}
 
 	return a.unavailable(intentID)
-}
-
-// =============================================================================
-// BATCH PROCESSOR CALLBACK ADAPTER
-// =============================================================================
-
-// BatchAnchorCallbackAdapter creates an OnAnchorCallback that routes to UnifiedOrchestrator
-// This connects the on_cadence batch flow to the unified proof cycle
-func BatchAnchorCallbackAdapter(unified *UnifiedOrchestrator) func(
-	ctx context.Context,
-	batchID uuid.UUID,
-	merkleRoot []byte,
-	anchorTxHash string,
-	txCount int,
-	blockNumber int64,
-) error {
-	if unified == nil {
-		return nil
-	}
-
-	return func(
-		ctx context.Context,
-		batchID uuid.UUID,
-		merkleRoot []byte,
-		anchorTxHash string,
-		txCount int,
-		blockNumber int64,
-	) error {
-		// Convert merkle root to [32]byte
-		var merkleRootArr [32]byte
-		if len(merkleRoot) >= 32 {
-			copy(merkleRootArr[:], merkleRoot[:32])
-		}
-
-		// Create unified request for on_cadence batch
-		req := &UnifiedProofCycleRequest{
-			CycleID:     fmt.Sprintf("batch-%s", batchID.String()),
-			BatchID:     &batchID,
-			TxHashes:    []string{anchorTxHash},
-			MerkleRoot:  merkleRootArr,
-			ProofClass:  "on_cadence",
-			TargetChain: unified.config.DefaultChainID,
-			Metadata: map[string]string{
-				"tx_count":     fmt.Sprintf("%d", txCount),
-				"block_number": fmt.Sprintf("%d", blockNumber),
-			},
-		}
-
-		// Start cycle asynchronously
-		go func() {
-			result, err := unified.StartProofCycle(ctx, req)
-			if err != nil {
-				fmt.Printf("Unified proof cycle for batch %s failed: %v\n", batchID, err)
-			} else if result != nil {
-				fmt.Printf("Unified proof cycle for batch %s completed: success=%v\n", batchID, result.Success)
-			}
-		}()
-
-		return nil
-	}
-}
-
-// =============================================================================
-// MULTI-LEG PROOF CYCLE SUPPORT
-// =============================================================================
-
-// StartMultiLegProofCycle starts a proof cycle for a chain group that is part of a multi-leg intent.
-// Sets multi-leg metadata so Phase 9 defers write-back to the MultiLegAggregator.
-func (a *UnifiedOrchestratorAdapter) StartMultiLegProofCycle(
-	ctx context.Context,
-	intentID string,
-	chainKey string,
-	totalLegs int,
-	bundleID [32]byte,
-	txHashes []string,
-	targetChain string,
-	commitmentData map[string]interface{},
-	accumulateAccountURL string,
-	accumulateTxHash string,
-	bvn string,
-) error {
-	if a.unified == nil {
-		return a.unavailable(intentID)
-	}
-
-	// Build leg_indices metadata: extract leg indices for this chain key from commitmentData
-	legIndicesStr := ""
-	if liRaw, ok := commitmentData["leg_indices_"+chainKey]; ok {
-		if li, ok := liRaw.(string); ok {
-			legIndicesStr = li
-		}
-	}
-
-	// Extract governance and merkle data from commitment (same as single-leg path)
-	var governanceRoot, operationCommitment [32]byte
-	var keyPageThreshold, keyPageKeyCount int
-	if commitmentData != nil {
-		if govRootStr, ok := commitmentData["governanceRoot"].(string); ok && govRootStr != "" {
-			if decoded, err := hexStringToBytes32(govRootStr); err == nil {
-				governanceRoot = decoded
-			}
-		}
-		if opCommitStr, ok := commitmentData["operationCommitment"].(string); ok && opCommitStr != "" {
-			if decoded, err := hexStringToBytes32(opCommitStr); err == nil {
-				operationCommitment = decoded
-			}
-		}
-		if threshold, ok := commitmentData["signatureThreshold"].(float64); ok {
-			keyPageThreshold = int(threshold)
-		}
-		if keyCount, ok := commitmentData["keyPageKeyCount"].(float64); ok {
-			keyPageKeyCount = int(keyCount)
-		}
-		if keyPageThreshold == 0 {
-			keyPageThreshold = 1
-		}
-		if keyPageKeyCount == 0 {
-			keyPageKeyCount = 1
-		}
-	}
-
-	// Compute merkle leaf/root from operation commitment (same as single-leg)
-	var leafHash []byte
-	var merkleRoot [32]byte
-	if operationCommitment != [32]byte{} {
-		leafHash = operationCommitment[:]
-		merkleRoot = operationCommitment
-	}
-
-	req := &UnifiedProofCycleRequest{
-		IntentID:             intentID,
-		BundleID:             bundleID,
-		TxHashes:             txHashes,
-		ProofClass:           "on_demand",
-		TargetChain:          targetChain,
-		CommitmentData:       commitmentData,
-		AccumulateAccountURL: accumulateAccountURL,
-		AccumulateTxHash:     accumulateTxHash,
-		AccumulateBVN:        bvn,
-		GovernanceRoot:       governanceRoot,
-		OperationCommitment:  operationCommitment,
-		KeyPageThreshold:     keyPageThreshold,
-		KeyPageKeyCount:      keyPageKeyCount,
-		LeafHash:             leafHash,
-		LeafIndex:            0,
-		MerkleRoot:           merkleRoot,
-		Metadata: map[string]string{
-			"multi_leg":   "true",
-			"chain_key":   chainKey,
-			"total_legs":  fmt.Sprintf("%d", totalLegs),
-			"intent_id":   intentID,
-			"leg_indices": legIndicesStr,
-		},
-	}
-
-	go func() {
-		result, err := a.unified.StartProofCycle(context.Background(), req)
-		if err != nil {
-			fmt.Printf("[UnifiedAdapter] Multi-leg proof cycle FAILED for %s chain %s: %v\n",
-				intentID, chainKey, err)
-		} else if result != nil {
-			fmt.Printf("[UnifiedAdapter] Multi-leg proof cycle COMPLETED for %s chain %s: success=%v\n",
-				intentID, chainKey, result.Success)
-		}
-	}()
-
-	return nil
-}
-
-// RegisterMultiLegIntent registers a multi-leg intent with the aggregator for unified write-back
-func (a *UnifiedOrchestratorAdapter) RegisterMultiLegIntent(
-	intentID string,
-	operationID string,
-	totalLegs int,
-	executionMode string,
-	legMapping map[int]LegChainInfo,
-) {
-	if a.unified != nil && a.unified.multiLegAggregator != nil {
-		a.unified.multiLegAggregator.RegisterMultiLegIntent(
-			intentID, operationID, totalLegs, executionMode, legMapping)
-	}
-}
-
-// StartPerChainProofCycles implements per-chain Phase 7-9 proof cycles for multi-leg intents.
-// It registers the intent with the MultiLegAggregator, then starts a separate proof cycle
-// for each chain group. The aggregator collects results and produces a unified write-back.
-func (a *UnifiedOrchestratorAdapter) StartPerChainProofCycles(
-	ctx context.Context,
-	intentID string,
-	operationID string,
-	bundleID [32]byte,
-	chainTxHashes map[string][]string,
-	legs interface{},
-	executionMode string,
-	commitment interface{},
-	accumulateAccountURL string,
-	accumulateTxHash string,
-	bvn string,
-) error {
-	if a.unified == nil {
-		return a.unavailable(intentID)
-	}
-
-	if a.unified.multiLegAggregator == nil {
-		return fmt.Errorf("multi-leg aggregator not initialized")
-	}
-
-	// Extract legs via JSON roundtrip to bridge consensus.ChainLegInfo → local struct.
-	// Both types have identical fields so JSON marshal/unmarshal maps cleanly.
-	type chainLegInfo struct {
-		LegIndex  int    `json:"LegIndex"`
-		LegID     string `json:"LegID"`
-		ChainKey  string `json:"ChainKey"`
-		ChainName string `json:"ChainName"`
-		ChainID   int64  `json:"ChainID"`
-	}
-
-	var legInfos []chainLegInfo
-	legsJSON, err := json.Marshal(legs)
-	if err != nil {
-		return fmt.Errorf("marshal legs: %w", err)
-	}
-	if err := json.Unmarshal(legsJSON, &legInfos); err != nil {
-		return fmt.Errorf("unmarshal legs: %w", err)
-	}
-
-	if len(legInfos) == 0 {
-		return fmt.Errorf("no leg info provided for multi-leg proof cycles")
-	}
-
-	// Build leg mapping for the aggregator
-	legMapping := make(map[int]LegChainInfo)
-	for _, leg := range legInfos {
-		legMapping[leg.LegIndex] = LegChainInfo{
-			ChainKey:  leg.ChainKey,
-			ChainName: leg.ChainName,
-			ChainID:   leg.ChainID,
-			LegID:     leg.LegID,
-		}
-	}
-
-	// Register intent with the aggregator
-	a.unified.multiLegAggregator.RegisterMultiLegIntent(
-		intentID, operationID, len(legInfos), executionMode, legMapping)
-
-	fmt.Printf("[UnifiedAdapter] Registered multi-leg intent %s with %d legs (mode=%s), starting per-chain proof cycles\n",
-		intentID, len(legInfos), executionMode)
-
-	// Build leg indices per chain key for positional observation matching (Workstream 1.1)
-	legIndicesByChain := make(map[string][]int)
-	for _, leg := range legInfos {
-		legIndicesByChain[leg.ChainKey] = append(legIndicesByChain[leg.ChainKey], leg.LegIndex)
-	}
-	// Sort for determinism
-	for ck := range legIndicesByChain {
-		sortInts(legIndicesByChain[ck])
-	}
-
-	// For sequential mode, build dependency info to determine which chain groups
-	// can start immediately vs which must wait (Workstream 2.4: GAP 6)
-	readyChainKeys := make(map[string]bool)
-	if executionMode == "sequential" {
-		// Extract DependsOnLegs from commitment data
-		type legDep struct {
-			LegIndex      int
-			ChainKey      string
-			SequenceOrder int
-			DependsOn     []string
-		}
-		var legDeps []legDep
-		if cm, ok := commitment.(map[string]interface{}); ok {
-			if legsRaw, ok := cm["legs_dependency_info"]; ok {
-				if depsJSON, err := json.Marshal(legsRaw); err == nil {
-					json.Unmarshal(depsJSON, &legDeps)
-				}
-			}
-		}
-
-		// Determine which chain groups have legs with no dependencies (can start immediately)
-		if len(legDeps) > 0 {
-			for _, dep := range legDeps {
-				if len(dep.DependsOn) == 0 && dep.SequenceOrder == 0 {
-					readyChainKeys[dep.ChainKey] = true
-				}
-			}
-		} else {
-			// No explicit dependency info - find chain groups containing sequence_order=0 legs
-			for _, leg := range legInfos {
-				// Without explicit deps, start all groups (parallel fallback)
-				readyChainKeys[leg.ChainKey] = true
-			}
-		}
-
-		if len(readyChainKeys) == 0 {
-			// Safety: if nothing is ready, start all (avoid deadlock)
-			for ck := range chainTxHashes {
-				readyChainKeys[ck] = true
-			}
-		}
-	} else {
-		// parallel or atomic mode: all chain groups start immediately
-		for ck := range chainTxHashes {
-			readyChainKeys[ck] = true
-		}
-	}
-
-	// Start a proof cycle for each ready chain group
-	for chainKey, txHashes := range chainTxHashes {
-		if len(txHashes) == 0 {
-			continue
-		}
-
-		// For sequential mode, skip chain groups that aren't ready yet
-		if !readyChainKeys[chainKey] {
-			fmt.Printf("[UnifiedAdapter] Deferring chain group %s (sequential mode, dependencies not met)\n", chainKey)
-			continue
-		}
-
-		// Determine target chain for strategy resolution
-		targetChain := chainKey
-
-		fmt.Printf("[UnifiedAdapter] Starting proof cycle for chain group %s (intent %s, %d tx hashes)\n",
-			chainKey, intentID, len(txHashes))
-
-		commitData := make(map[string]interface{})
-		if cm, ok := commitment.(map[string]interface{}); ok {
-			for k, v := range cm {
-				commitData[k] = v
-			}
-		}
-		commitData["chain_key"] = chainKey
-
-		// Embed leg indices for this chain group into commitment data
-		// so StartMultiLegProofCycle can pass them as metadata
-		if indices, ok := legIndicesByChain[chainKey]; ok {
-			parts := make([]string, len(indices))
-			for i, idx := range indices {
-				parts[i] = fmt.Sprintf("%d", idx)
-			}
-			commitData["leg_indices_"+chainKey] = strings.Join(parts, ",")
-		}
-
-		if err := a.StartMultiLegProofCycle(
-			ctx, intentID, chainKey, len(legInfos), bundleID,
-			txHashes, targetChain, commitData,
-			accumulateAccountURL, accumulateTxHash, bvn,
-		); err != nil {
-			fmt.Printf("[UnifiedAdapter] WARNING: Failed to start proof cycle for chain %s: %v\n", chainKey, err)
-			// Continue with other chains - partial results are better than none
-		}
-	}
-
-	return nil
-}
-
-// =============================================================================
-// HELPER: Get Unified if Legacy Adapter
-// =============================================================================
-
-// GetUnifiedOrchestrator returns the unified orchestrator if this adapter is using it
-func (a *UnifiedOrchestratorAdapter) GetUnifiedOrchestrator() *UnifiedOrchestrator {
-	return a.unified
-}
-
-// IsUsingUnified returns true if the adapter is using the unified orchestrator
-func (a *UnifiedOrchestratorAdapter) IsUsingUnified() bool {
-	return a.unified != nil
 }
 
 // =============================================================================
