@@ -101,7 +101,6 @@ type UnifiedOrchestratorConfig struct {
 	// Feature flags
 	EnableMultiChain    bool
 	EnableUnifiedTables bool
-	FallbackToLegacy    bool
 	EnableWriteBack     bool // Enable Phase 9 write-back to Accumulate
 
 	// Chained proof generator for L1/L2/L3 proofs
@@ -170,7 +169,6 @@ func DefaultUnifiedOrchestratorConfig() *UnifiedOrchestratorConfig {
 		WriteBackTimeout:    2 * time.Minute,
 		EnableMultiChain:    true,
 		EnableUnifiedTables: true,
-		FallbackToLegacy:    true,
 	}
 }
 
@@ -278,9 +276,11 @@ type UnifiedProofCycleResult struct {
 	AttestationID         *uuid.UUID                         `json:"attestation_id,omitempty"`
 	ThresholdMet          bool                               `json:"threshold_met"`
 
-	// Phase 9 results
+	// Phase 9 results. WriteBackSuccess is true only when a write-back transaction was actually
+	// submitted; WriteBackState says what happened in every case.
 	WriteBackTxHash  string `json:"write_back_tx_hash,omitempty"`
 	WriteBackSuccess bool   `json:"write_back_success"`
+	WriteBackState   string `json:"write_back_state,omitempty"`
 
 	// Timing
 	StartedAt   time.Time  `json:"started_at"`
@@ -2032,8 +2032,27 @@ func (o *UnifiedOrchestrator) notifyMultiLegGroupFailed(cycle *activeCycle, err 
 	o.multiLegAggregator.OnChainGroupFailed(cycle.Request.IntentID, cycle.Request.Metadata["chain_key"], err)
 }
 
-func (o *UnifiedOrchestrator) executePhase9(ctx context.Context, cycle *activeCycle) error {
+// Phase 9 write-back states, recorded on every cycle.
+const (
+	WriteBackWritten                     = "written"
+	WriteBackDisabledByConfiguration     = "disabled_by_configuration"
+	WriteBackDeferredToMultiLegAggregate = "deferred_to_multi_leg_aggregate"
+	WriteBackRefusedQuorumNotMet         = "refused_quorum_not_met"
+	WriteBackFailed                      = "failed"
+)
+
+func (o *UnifiedOrchestrator) executePhase9(ctx context.Context, cycle *activeCycle) (err error) {
 	cycle.Phase = 9
+	// Any error below is a write-back that did not happen; say so unless a more specific state
+	// was already recorded.
+	defer func() {
+		if err != nil && cycle.Result != nil {
+			cycle.Result.WriteBackSuccess = false
+			if cycle.Result.WriteBackState == "" {
+				cycle.Result.WriteBackState = WriteBackFailed
+			}
+		}
+	}()
 
 	if o.config.OnPhaseComplete != nil {
 		defer func() { o.config.OnPhaseComplete(cycle.CycleID, 9) }()
@@ -2047,31 +2066,42 @@ func (o *UnifiedOrchestrator) executePhase9(ctx context.Context, cycle *activeCy
 		fmt.Printf("🚫 [Phase 9] Attestation threshold NOT met for cycle %s — refusing write-back (quorum enforcement)\n", cycle.CycleID)
 		if cycle.Result != nil {
 			cycle.Result.WriteBackSuccess = false
+			cycle.Result.WriteBackState = WriteBackRefusedQuorumNotMet
 		}
 		return fmt.Errorf("attestation threshold not met — refusing write-back")
 	}
 
-	// For multi-leg chain groups, defer write-back to the MultiLegAggregator
-	// which produces a unified write-back after all chain groups complete
+	// For multi-leg chain groups, the MultiLegAggregator produces ONE write-back after all chain
+	// groups complete. This group's part is handing its result over - which is not a write-back,
+	// and is not done at all when there is no aggregator or it refuses the hand-over.
 	if cycle.Request.Metadata != nil && cycle.Request.Metadata["multi_leg"] == "true" {
 		chainKey := cycle.Request.Metadata["chain_key"]
-		if o.multiLegAggregator != nil {
-			fmt.Printf("[Phase 9] Multi-leg chain group %s complete - deferring write-back to aggregator (intent=%s)\n",
+		if o.multiLegAggregator == nil {
+			return fmt.Errorf("multi-leg chain group %s of intent %s has no aggregator; its write-back cannot happen",
 				chainKey, cycle.Request.IntentID)
-			if err := o.multiLegAggregator.OnChainGroupCycleComplete(
-				cycle.Request.IntentID, chainKey, cycle.Result); err != nil {
-				fmt.Printf("[Phase 9] WARNING: Multi-leg aggregator error: %v\n", err)
-			}
 		}
-		cycle.Result.WriteBackSuccess = true
+		fmt.Printf("[Phase 9] Multi-leg chain group %s complete - handing over to the aggregator (intent=%s)\n",
+			chainKey, cycle.Request.IntentID)
+		if aggErr := o.multiLegAggregator.OnChainGroupCycleComplete(
+			cycle.Request.IntentID, chainKey, cycle.Result); aggErr != nil {
+			return fmt.Errorf("multi-leg aggregator refused chain group %s of intent %s: %w",
+				chainKey, cycle.Request.IntentID, aggErr)
+		}
+		cycle.Result.WriteBackSuccess = false
+		cycle.Result.WriteBackState = WriteBackDeferredToMultiLegAggregate
 		return nil
 	}
 
-	// Skip write-back if not enabled
-	if !o.config.EnableWriteBack || o.txBuilder == nil || o.config.AccumulateClient == nil {
-		fmt.Printf("Write-back skipped (not configured): cycle=%s\n", cycle.CycleID)
-		cycle.Result.WriteBackSuccess = true
+	// Write-back disabled by configuration is a stated mode: nothing is written, and it is recorded
+	// as not written. Enabled but without its builder or client is a misconfiguration.
+	if !o.config.EnableWriteBack {
+		fmt.Printf("Write-back disabled by configuration: cycle=%s — recorded as not written\n", cycle.CycleID)
+		cycle.Result.WriteBackSuccess = false
+		cycle.Result.WriteBackState = WriteBackDisabledByConfiguration
 		return nil
+	}
+	if o.txBuilder == nil || o.config.AccumulateClient == nil {
+		return fmt.Errorf("write-back is enabled but has no transaction builder or Accumulate client")
 	}
 
 	// Create timeout context
@@ -2116,6 +2146,7 @@ func (o *UnifiedOrchestrator) executePhase9(ctx context.Context, cycle *activeCy
 
 	cycle.Result.WriteBackTxHash = receipt
 	cycle.Result.WriteBackSuccess = true
+	cycle.Result.WriteBackState = WriteBackWritten
 
 	fmt.Printf("Write-back submitted: cycle=%s, receipt=%s\n", cycle.CycleID, receipt)
 
@@ -2685,6 +2716,7 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 		"attestation_scheme": result.Scheme,
 		"threshold_met":      result.ThresholdMet,
 		"write_back_success": result.WriteBackSuccess,
+		"write_back_state":   result.WriteBackState,
 	}
 	// What the proven execution DID. An artifact exists for a reverted settlement as well as a
 	// successful one - the failure is proven, attested and written back too - so the artifact must
@@ -3085,6 +3117,7 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 			"operation_commitment": hex.EncodeToString(req.OperationCommitment[:]),
 			"outcome_bound":        true,
 			"write_back_success":   result.WriteBackSuccess,
+			"write_back_state":     result.WriteBackState,
 			"threshold_m":          thresholdM,
 			"threshold_n":          thresholdN,
 		}

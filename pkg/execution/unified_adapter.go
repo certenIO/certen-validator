@@ -1,13 +1,10 @@
 // Copyright 2025 Certen Protocol
 //
 // Unified Orchestrator Adapter
-// Provides adapter implementations to integrate UnifiedOrchestrator with
-// legacy interfaces (ProofCycleOrchestratorInterface and batch OnAnchorCallback)
-//
-// Per Unified Multi-Chain Architecture:
-// - Enables gradual migration from legacy to unified orchestrator
-// - Feature flag controlled (FF_UNIFIED_ORCHESTRATOR)
-// - Backward compatible with existing code paths
+// Implements consensus's ProofCycleOrchestratorInterface on the UnifiedOrchestrator, the only
+// proof-cycle orchestrator. There is no legacy fallback: the legacy orchestrator ran with a
+// one-member validator set and could not produce a quorum attestation, and a proof cycle requested
+// with no orchestrator is refused by name (ErrProofCycleUnavailable), never skipped.
 
 package execution
 
@@ -15,6 +12,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -31,30 +29,23 @@ func sortInts(s []int) { sort.Ints(s) }
 // UNIFIED ORCHESTRATOR ADAPTER
 // =============================================================================
 
+// ErrProofCycleUnavailable is a proof cycle requested where no orchestrator can run it.
+var ErrProofCycleUnavailable = errors.New("proof cycle unavailable")
+
 // UnifiedOrchestratorAdapter wraps UnifiedOrchestrator to implement
 // the ProofCycleOrchestratorInterface expected by consensus/bft_integration.go
 type UnifiedOrchestratorAdapter struct {
 	unified *UnifiedOrchestrator
-	legacy  *ProofCycleOrchestrator // Fallback to legacy if unified fails
-
-	// Feature flags
-	useUnified       bool
-	fallbackToLegacy bool
 }
 
-// NewUnifiedOrchestratorAdapter creates a new adapter
-func NewUnifiedOrchestratorAdapter(
-	unified *UnifiedOrchestrator,
-	legacy *ProofCycleOrchestrator,
-	useUnified bool,
-	fallbackToLegacy bool,
-) *UnifiedOrchestratorAdapter {
-	return &UnifiedOrchestratorAdapter{
-		unified:          unified,
-		legacy:           legacy,
-		useUnified:       useUnified,
-		fallbackToLegacy: fallbackToLegacy,
-	}
+// NewUnifiedOrchestratorAdapter creates the adapter over the unified orchestrator.
+func NewUnifiedOrchestratorAdapter(unified *UnifiedOrchestrator) *UnifiedOrchestratorAdapter {
+	return &UnifiedOrchestratorAdapter{unified: unified}
+}
+
+// unavailable is the refusal every entry point gives when there is no orchestrator.
+func (a *UnifiedOrchestratorAdapter) unavailable(intentID string) error {
+	return fmt.Errorf("%w: no unified orchestrator for intent %s", ErrProofCycleUnavailable, intentID)
 }
 
 // StartProofCycle implements ProofCycleOrchestratorInterface
@@ -65,7 +56,7 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycle(
 	executionTxHash common.Hash,
 	commitment interface{},
 ) error {
-	if a.useUnified && a.unified != nil {
+	if a.unified != nil {
 		// Extract target chain from commitment if available
 		targetChain := a.unified.config.DefaultChainID
 		if commitMap, ok := commitment.(map[string]interface{}); ok {
@@ -95,12 +86,7 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycle(
 		return nil
 	}
 
-	// Use legacy orchestrator
-	if a.legacy != nil {
-		return a.legacy.StartProofCycle(ctx, intentID, bundleID, executionTxHash, commitment)
-	}
-
-	return nil
+	return a.unavailable(intentID)
 }
 
 // StartProofCycleWithAllTxs implements the enhanced ProofCycleOrchestratorInterface
@@ -112,10 +98,10 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAllTxs(
 	txHashes interface{},
 	commitment interface{},
 ) error {
-	fmt.Printf("[UnifiedAdapter] StartProofCycleWithAllTxs called: intent=%s, useUnified=%v, unified=%v\n",
-		intentID, a.useUnified, a.unified != nil)
+	fmt.Printf("[UnifiedAdapter] StartProofCycleWithAllTxs called: intent=%s, unified=%v\n",
+		intentID, a.unified != nil)
 
-	if a.useUnified && a.unified != nil {
+	if a.unified != nil {
 		// Extract tx hashes from the interface
 		var txHashStrs []string
 		switch hashes := txHashes.(type) {
@@ -231,12 +217,7 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAllTxs(
 		return nil
 	}
 
-	// Use legacy orchestrator
-	if a.legacy != nil {
-		return a.legacy.StartProofCycleWithAllTxs(ctx, intentID, userID, bundleID, txHashes, commitment)
-	}
-
-	return nil
+	return a.unavailable(intentID)
 }
 
 // StartProofCycleWithAccumulateRef implements the enhanced ProofCycleOrchestratorInterface with Accumulate reference data
@@ -254,7 +235,7 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 	fmt.Printf("[UnifiedAdapter] StartProofCycleWithAccumulateRef: intent=%s, accountURL=%s, txHash=%s, bvn=%s\n",
 		intentID, accumulateAccountURL, accumulateTxHash, bvn)
 
-	if a.useUnified && a.unified != nil {
+	if a.unified != nil {
 		// Extract tx hashes from the interface
 		var txHashStrs []string
 		switch hashes := txHashes.(type) {
@@ -485,12 +466,7 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 		return nil
 	}
 
-	// Fall back to legacy method without Accumulate ref
-	if a.legacy != nil {
-		return a.legacy.StartProofCycleWithAllTxs(ctx, intentID, userID, bundleID, txHashes, commitment)
-	}
-
-	return nil
+	return a.unavailable(intentID)
 }
 
 // =============================================================================
@@ -572,8 +548,8 @@ func (a *UnifiedOrchestratorAdapter) StartMultiLegProofCycle(
 	accumulateTxHash string,
 	bvn string,
 ) error {
-	if !a.useUnified || a.unified == nil {
-		return fmt.Errorf("multi-leg proof cycles require unified orchestrator")
+	if a.unified == nil {
+		return a.unavailable(intentID)
 	}
 
 	// Build leg_indices metadata: extract leg indices for this chain key from commitmentData
@@ -690,8 +666,8 @@ func (a *UnifiedOrchestratorAdapter) StartPerChainProofCycles(
 	accumulateTxHash string,
 	bvn string,
 ) error {
-	if !a.useUnified || a.unified == nil {
-		return fmt.Errorf("per-chain proof cycles require unified orchestrator")
+	if a.unified == nil {
+		return a.unavailable(intentID)
 	}
 
 	if a.unified.multiLegAggregator == nil {
@@ -855,14 +831,9 @@ func (a *UnifiedOrchestratorAdapter) GetUnifiedOrchestrator() *UnifiedOrchestrat
 	return a.unified
 }
 
-// GetLegacyOrchestrator returns the legacy orchestrator
-func (a *UnifiedOrchestratorAdapter) GetLegacyOrchestrator() *ProofCycleOrchestrator {
-	return a.legacy
-}
-
 // IsUsingUnified returns true if the adapter is using the unified orchestrator
 func (a *UnifiedOrchestratorAdapter) IsUsingUnified() bool {
-	return a.useUnified && a.unified != nil
+	return a.unified != nil
 }
 
 // =============================================================================

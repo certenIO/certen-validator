@@ -1276,11 +1276,13 @@ func startValidator(
 		return nil, nil, fmt.Errorf("failed to create lite client proof generator: %w", err)
 	}
 
-	if liteClientProofGen.HasRealProofBuilder() {
-		log.Printf("✅ [PROOF] Real L1-L3 ProofBuilder initialized with CometBFT consensus binding")
-	} else {
-		log.Printf("⚠️ [PROOF] Basic proof mode - CometBFT binding not available")
+	// The real L1-L4 proof builder needs only the v3 client and is always constructed; there is no
+	// "basic proof mode". Stated as a startup invariant so a regression cannot run a validator that
+	// builds proofs without their chained layers.
+	if !liteClientProofGen.HasRealProofBuilder() {
+		return nil, nil, fmt.Errorf("the real L1-L4 proof builder is not available; a validator does not run without it")
 	}
+	log.Printf("✅ [PROOF] Real L1-L4 ProofBuilder initialized")
 
 	proofGenerator, err := proof.NewProofGenerator(liteClientProofGen, proofConfig)
 	if err != nil {
@@ -1760,34 +1762,43 @@ func startValidator(
 	// ==========================================================================
 	log.Println("🔄 [Phase 7-9] Initializing Proof Cycle Orchestrator...")
 
-	// Create AccumulateSubmitter for proof write-back
-	// If Accumulate write-back credentials are configured, use real submitter
-	// Otherwise, use null submitter that logs but doesn't submit
+	// Phase 9 write-back. Enabled (PROOF_CYCLE_WRITEBACK=true) means it must actually work: the
+	// principal, the signer and the submitter are required, and a validator that cannot build them
+	// does not start. There is no null-submitter fallback for an enabled write-back and no fallback
+	// to the validator's key for a malformed write-back key - each of those used to let the
+	// validator run while the proof cycle's results were written nowhere, or signed by an identity
+	// the operator did not configure.
+	//
+	// Disabled is an explicit, stated mode: the null submitter writes nothing and every proof cycle
+	// records its write-back as not performed.
 	var accSubmitter execution.AccumulateSubmitter
 
 	accWritebackPrincipal := os.Getenv("ACCUMULATE_RESULTS_PRINCIPAL")
 	accSignerURL := os.Getenv("ACCUMULATE_SIGNER_URL")
 	writebackEnabled := os.Getenv("PROOF_CYCLE_WRITEBACK") == "true"
 
-	if writebackEnabled && accWritebackPrincipal != "" && accSignerURL != "" {
-		log.Printf("📝 [Phase 9] Configuring real Accumulate write-back:")
+	if writebackEnabled {
+		if accWritebackPrincipal == "" || accSignerURL == "" {
+			return nil, nil, fmt.Errorf("PROOF_CYCLE_WRITEBACK=true requires ACCUMULATE_RESULTS_PRINCIPAL and ACCUMULATE_SIGNER_URL " +
+				"(write-back cannot run without them)")
+		}
+		log.Printf("📝 [Phase 9] Configuring Accumulate write-back:")
 		log.Printf("   - Principal: %s", accWritebackPrincipal)
 		log.Printf("   - Signer: %s", accSignerURL)
 
-		// Check for optional separate write-back private key
-		// This allows using a different key than the validator's key for signing write-back transactions
+		// An optional dedicated write-back key. If it is set it must be valid: a malformed key is a
+		// configuration error, not a reason to sign with the validator's own key instead.
 		writebackPrivKey := privateKey
 		if writebackKeyHex := os.Getenv("ACCUMULATE_WRITEBACK_PRIV_KEY"); writebackKeyHex != "" {
-			log.Printf("   - Using dedicated write-back private key from ACCUMULATE_WRITEBACK_PRIV_KEY")
 			keyBytes, err := hex.DecodeString(strings.TrimSpace(writebackKeyHex))
 			if err != nil {
-				log.Printf("⚠️ [Phase 9] Invalid ACCUMULATE_WRITEBACK_PRIV_KEY: %v (falling back to validator key)", err)
-			} else if len(keyBytes) != ed25519.PrivateKeySize {
-				log.Printf("⚠️ [Phase 9] Invalid ACCUMULATE_WRITEBACK_PRIV_KEY size: expected %d, got %d (falling back to validator key)", ed25519.PrivateKeySize, len(keyBytes))
-			} else {
-				writebackPrivKey = ed25519.PrivateKey(keyBytes)
-				log.Printf("✅ [Phase 9] Loaded dedicated write-back private key")
+				return nil, nil, fmt.Errorf("ACCUMULATE_WRITEBACK_PRIV_KEY is not valid hex: %w", err)
 			}
+			if len(keyBytes) != ed25519.PrivateKeySize {
+				return nil, nil, fmt.Errorf("ACCUMULATE_WRITEBACK_PRIV_KEY is %d bytes, want %d", len(keyBytes), ed25519.PrivateKeySize)
+			}
+			writebackPrivKey = ed25519.PrivateKey(keyBytes)
+			log.Printf("   - Using the dedicated write-back key from ACCUMULATE_WRITEBACK_PRIV_KEY")
 		}
 
 		submitterCfg := &execution.AccumulateSubmitterConfig{
@@ -1802,172 +1813,87 @@ func startValidator(
 			RetryDelay:          5 * time.Second,
 			Logger:              log.New(log.Writer(), "[AccSubmitter] ", log.LstdFlags),
 		}
-
-		var submitErr error
-		accSubmitter, submitErr = execution.NewAccumulateSubmitter(submitterCfg)
+		submitter, submitErr := execution.NewAccumulateSubmitter(submitterCfg)
 		if submitErr != nil {
-			log.Printf("⚠️ [Phase 9] Failed to create Accumulate submitter: %v (using null submitter)", submitErr)
-			accSubmitter = execution.NewNullAccumulateSubmitter(log.New(log.Writer(), "[NullSubmitter] ", log.LstdFlags))
-		} else {
-			log.Printf("✅ [Phase 9] Real Accumulate submitter configured")
+			return nil, nil, fmt.Errorf("PROOF_CYCLE_WRITEBACK=true but the Accumulate submitter cannot be created: %w", submitErr)
 		}
+		accSubmitter = submitter
+		log.Printf("✅ [Phase 9] Accumulate submitter configured")
 	} else {
-		log.Printf("⚠️ [Phase 9] Accumulate write-back not configured (PROOF_CYCLE_WRITEBACK=true required)")
-		log.Printf("   Using null submitter - proof results will be logged but not written to Accumulate")
+		log.Printf("⚠️ [Phase 9] Write-back is DISABLED by configuration (PROOF_CYCLE_WRITEBACK is not \"true\") — " +
+			"proof cycles run and record their write-back as not performed")
 		accSubmitter = execution.NewNullAccumulateSubmitter(log.New(log.Writer(), "[NullSubmitter] ", log.LstdFlags))
 	}
 
-	// Create Proof Cycle Orchestrator configuration
-	orchestratorConfig := &execution.ProofCycleConfig{
-		EthereumRPC:           cfg.EthereumURL,
-		ChainID:               cfg.EthChainID,
-		RequiredConfirmations: 12,
-		ObservationTimeout:    10 * time.Minute,
-		ThresholdNumerator:    2,
-		ThresholdDenominator:  3,
-		AccumulatePrincipal:   accWritebackPrincipal,
-		WriteBackEnabled:      writebackEnabled,
-		BLSPrivateKey:         blsKeyManager.GetPrivateKeyBytes(),
-	}
-
-	// Get validator address from BLS public key
-	validatorAddress := blsKeyManager.GetAddress()
-
-	// Create validator set (single validator for now, will load from config/contract later)
-	validatorSet := execution.NewValidatorSetFromConfig(cfg.ValidatorID, validatorAddress)
-
-	// Create Proof Cycle Orchestrator
-	// Pass database repositories for proof artifact persistence (enables web app to track all 9 stages)
 	var orchestratorRepos *database.Repositories
 	if batchComponents != nil {
 		orchestratorRepos = batchComponents.Repos
 	}
-	orchestrator, orchestratorErr := execution.NewProofCycleOrchestrator(
-		cfg.ValidatorID,
-		validatorAddress,
-		0, // validator index
-		validatorSet,
-		orchestratorConfig,
-		accSubmitter,
-		orchestratorRepos,
-		log.New(log.Writer(), "[ProofCycle] ", log.LstdFlags),
-	)
 
-	if orchestratorErr != nil {
-		log.Printf("⚠️ [Phase 7-9] Failed to create proof cycle orchestrator: %v", orchestratorErr)
-		log.Printf("   Phase 7-9 disabled - execution will complete without proof write-back")
-		// F.2 remediation: Update health status for proof cycle
-		healthStatus.SetProofCycle("disabled")
-	} else {
-		// Wire the chained proof generator for L1-L3 receipt entry persistence
-		if liteClientProofGen != nil && liteClientProofGen.HasRealProofBuilder() {
-			proofGenAdapterLegacy := execution.NewLiteClientProofGeneratorAdapter(liteClientProofGen)
-			orchestrator.SetProofGenerator(proofGenAdapterLegacy)
-			log.Printf("✅ [Phase 7-9] Chained Proof Generator wired to legacy orchestrator (L1/L2/L3 receipt persistence)")
-		} else {
-			log.Printf("⚠️ [Phase 7-9] No real proof builder — L1/L2/L3 receipt entries will not be persisted")
-		}
-		// ==========================================================================
-		// UNIFIED MULTI-CHAIN ORCHESTRATOR (Feature Flag Controlled)
-		// Per Unified Multi-Chain Architecture plan
-		// ==========================================================================
-		if cfg.UseUnifiedOrchestrator {
-			log.Printf("🔄 [Unified] Initializing Unified Multi-Chain Orchestrator...")
-
-			// Create strategy registry with all attestation and chain strategies
-			strategyRegistry, registryErr := initializeStrategyRegistry(cfg, blsKeyManager, privateKey)
-			if registryErr != nil {
-				log.Printf("⚠️ [Unified] Failed to create strategy registry: %v (falling back to legacy)", registryErr)
-			} else {
-				// Get unified repository
-				var unifiedRepo *database.UnifiedRepository
-				if batchComponents != nil && batchComponents.Repos != nil {
-					unifiedRepo = batchComponents.Repos.Unified
-				}
-
-				// Create proof generator adapter for chained proofs (L1/L2/L3)
-				var proofGenAdapter *execution.LiteClientProofGeneratorAdapter
-				if liteClientProofGen != nil && liteClientProofGen.HasRealProofBuilder() {
-					proofGenAdapter = execution.NewLiteClientProofGeneratorAdapter(liteClientProofGen)
-					log.Printf("   - Chained Proof Generator: enabled (L1/L2/L3 proofs)")
-				} else {
-					log.Printf("   - Chained Proof Generator: disabled (no real proof builder)")
-				}
-
-				// Create unified orchestrator configuration
-				unifiedConfig := &execution.UnifiedOrchestratorConfig{
-					ValidatorID:              cfg.ValidatorID,
-					ValidatorIndex:           0,
-					Registry:                 strategyRegistry,
-					Repos:                    orchestratorRepos,
-					UnifiedRepo:              unifiedRepo,
-					DefaultChainID:           cfg.DefaultTargetChain,
-					ThresholdConfig:          attestationStrategy.DefaultThresholdConfig(),
-					ObservationTimeout:       10 * time.Minute,
-					AttestationTimeout:       5 * time.Minute,
-					WriteBackTimeout:         2 * time.Minute,
-					AttestationPeers:         cfg.AttestationPeers,
-					AttestationRequiredCount: cfg.AttestationRequiredCount,
-					AccumulateClient:         accSubmitter,
-					ResultsPrincipal:         accWritebackPrincipal,
-					Ed25519Key:               privateKey,
-					EnableMultiChain:         cfg.EnableMultiChain,
-					EnableUnifiedTables:      cfg.EnableUnifiedTables,
-					FallbackToLegacy:         cfg.FallbackToLegacy,
-					EnableWriteBack:          writebackEnabled,
-					ProofGenerator:           proofGenAdapter,
-					AccumulateQueryClient:    liteClientAdapter, // For querying tx governance data (M-of-N threshold)
-				}
-
-				unifiedOrchestrator, unifiedErr := execution.NewUnifiedOrchestrator(unifiedConfig)
-				if unifiedErr != nil {
-					log.Printf("⚠️ [Unified] Failed to create unified orchestrator: %v (falling back to legacy)", unifiedErr)
-				} else {
-					// Create adapter that implements ProofCycleOrchestratorInterface
-					adapter := execution.NewUnifiedOrchestratorAdapter(
-						unifiedOrchestrator,
-						orchestrator, // Legacy orchestrator for fallback
-						true,         // useUnified = true
-						cfg.FallbackToLegacy,
-					)
-
-					// Wire adapter to validator (implements same interface as legacy)
-					validator.SetProofCycleOrchestrator(adapter)
-					log.Printf("✅ [Unified] Unified Multi-Chain Orchestrator initialized and wired to validator")
-
-					// Phase 8 quorum: publish the orchestrator so main()'s HTTP mux can route
-					// peer attestation requests to it. The handler logic already exists
-					// (UnifiedOrchestrator.HandlePeerAttestationRequest); it was never routed,
-					// so peers' POSTs to /api/unified/attestation/request 404'd and the cycle
-					// fell back to a single self-attestation.
-					unifiedOrchestratorForAttestation.Store(unifiedOrchestrator)
-					log.Printf("✅ [Unified] Phase 8 peer attestation handler published for HTTP routing")
-					log.Printf("   - Strategy Registry: %d attestation schemes, %d chains",
-						len(strategyRegistry.ListAttestationSchemes()),
-						len(strategyRegistry.ListChainIDs()))
-					log.Printf("   - Default Chain: %s", cfg.DefaultTargetChain)
-					log.Printf("   - Multi-Chain: %v", cfg.EnableMultiChain)
-					log.Printf("   - Unified Tables: %v", cfg.EnableUnifiedTables)
-					log.Printf("   - Fallback to Legacy: %v", cfg.FallbackToLegacy)
-					healthStatus.SetProofCycle("active")
-
-					// Skip wiring legacy orchestrator
-					goto afterOrchestrator
-				}
-			}
-		}
-
-		// Wire legacy orchestrator to BFT validator (default or fallback)
-		validator.SetProofCycleOrchestrator(orchestrator)
-		log.Printf("✅ [Phase 7-9] Proof Cycle Orchestrator initialized and wired to validator")
-		log.Printf("   - Ethereum RPC: %s", cfg.EthereumURL)
-		log.Printf("   - Confirmations: %d", orchestratorConfig.RequiredConfirmations)
-		log.Printf("   - Write-back: %v", writebackEnabled)
-		// F.2 remediation: Update health status for proof cycle
-		healthStatus.SetProofCycle("active")
-
-	afterOrchestrator:
+	// The unified orchestrator is the only proof-cycle orchestrator. The legacy one it used to fall
+	// back to ran with a one-member validator set and could not produce a quorum attestation; a
+	// validator whose proof cycle cannot be built does not start (it used to run with Phases 7-9
+	// silently disabled).
+	if !cfg.UseUnifiedOrchestrator {
+		return nil, nil, fmt.Errorf("FF_UNIFIED_ORCHESTRATOR=false is not supported: the unified orchestrator is the only " +
+			"proof-cycle orchestrator")
 	}
+	log.Printf("🔄 [Unified] Initializing Unified Multi-Chain Orchestrator...")
+
+	strategyRegistry, registryErr := initializeStrategyRegistry(cfg, blsKeyManager, privateKey)
+	if registryErr != nil {
+		return nil, nil, fmt.Errorf("proof cycle: strategy registry cannot be created: %w", registryErr)
+	}
+
+	var unifiedRepo *database.UnifiedRepository
+	if batchComponents != nil && batchComponents.Repos != nil {
+		unifiedRepo = batchComponents.Repos.Unified
+	}
+
+	// Chained proofs (L1/L2/L3) come from the real proof builder, required at startup above.
+	proofGenAdapter := execution.NewLiteClientProofGeneratorAdapter(liteClientProofGen)
+
+	unifiedConfig := &execution.UnifiedOrchestratorConfig{
+		ValidatorID:              cfg.ValidatorID,
+		ValidatorIndex:           0,
+		Registry:                 strategyRegistry,
+		Repos:                    orchestratorRepos,
+		UnifiedRepo:              unifiedRepo,
+		DefaultChainID:           cfg.DefaultTargetChain,
+		ThresholdConfig:          attestationStrategy.DefaultThresholdConfig(),
+		ObservationTimeout:       10 * time.Minute,
+		AttestationTimeout:       5 * time.Minute,
+		WriteBackTimeout:         2 * time.Minute,
+		AttestationPeers:         cfg.AttestationPeers,
+		AttestationRequiredCount: cfg.AttestationRequiredCount,
+		AccumulateClient:         accSubmitter,
+		ResultsPrincipal:         accWritebackPrincipal,
+		Ed25519Key:               privateKey,
+		EnableMultiChain:         cfg.EnableMultiChain,
+		EnableUnifiedTables:      cfg.EnableUnifiedTables,
+		EnableWriteBack:          writebackEnabled,
+		ProofGenerator:           proofGenAdapter,
+		AccumulateQueryClient:    liteClientAdapter, // For querying tx governance data (M-of-N threshold)
+	}
+
+	unifiedOrchestrator, unifiedErr := execution.NewUnifiedOrchestrator(unifiedConfig)
+	if unifiedErr != nil {
+		return nil, nil, fmt.Errorf("proof cycle: unified orchestrator cannot be created: %w", unifiedErr)
+	}
+	validator.SetProofCycleOrchestrator(execution.NewUnifiedOrchestratorAdapter(unifiedOrchestrator))
+	log.Printf("✅ [Unified] Unified Multi-Chain Orchestrator initialized and wired to validator")
+
+	// Phase 8 quorum: publish the orchestrator so main()'s HTTP mux can route peer attestation
+	// requests to it (UnifiedOrchestrator.HandlePeerAttestationRequest).
+	unifiedOrchestratorForAttestation.Store(unifiedOrchestrator)
+	log.Printf("✅ [Unified] Phase 8 peer attestation handler published for HTTP routing")
+	log.Printf("   - Strategy Registry: %d attestation schemes, %d chains",
+		len(strategyRegistry.ListAttestationSchemes()),
+		len(strategyRegistry.ListChainIDs()))
+	log.Printf("   - Default Chain: %s", cfg.DefaultTargetChain)
+	log.Printf("   - Multi-Chain: %v", cfg.EnableMultiChain)
+	log.Printf("   - Unified Tables: %v", cfg.EnableUnifiedTables)
+	healthStatus.SetProofCycle("active")
 
 	// --- Intent discovery wiring ---
 	log.Printf("🔍 Starting Certen Intent Discovery Service for validator...")
