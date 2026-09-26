@@ -1490,161 +1490,150 @@ func startValidator(
 	// never accept a member while nothing is draining it — a pool that fills and never
 	// flushes would strand intents, and there is no other path to settle them.
 	//
-	// Requires CERTEN_ANCHOR_V8_<chainId> per chain. Absent config leaves the batch path
-	// off and on_cadence falls back to the deferred-serial scheduler above, which still
-	// settles — just without the saving.
+	// Required: the batch path is the only settlement path. Each piece it needs is a startup error when
+	// missing - a validator that ran without it would accept intents it can never settle.
 	// ==========================================================================
-	if anchorCfg, cfgErr := config.LoadAnchorConfigFromEnv(); cfgErr != nil {
-		log.Printf("⚠️ [BATCH] No anchor config (%v) — cross-ADI batching disabled", cfgErr)
-	} else {
-		batchChains := []int64{11155111, 84532, 421614} // sepolia, base-sepolia, arbitrum-sepolia
-		resolver, rErr := execution.NewEVMChainResolverFromEnv(anchorCfg, batchChains)
-		if rErr != nil {
-			log.Printf("ℹ️ [BATCH] Cross-ADI batching disabled: %v", rErr)
-		} else {
-			submitter := execution.NewBatchProofSubmitter(resolver, log.Printf)
-			peers := execution.BatchAttestationPeersFromEnv()
-			prover, pErr := execution.NewBatchQuorumAttestor(
-				resolver, submitter, peers, cfg.ValidatorID, 0, log.Printf)
-			if pErr != nil {
-				log.Printf("⚠️ [BATCH] Quorum attestor unavailable (%v) — batching disabled", pErr)
-			} else {
-				batchQuorumAttestorForEvidence.Store(prover)
-				mempoolCfg := execution.DefaultBatchMempoolConfig()
-				stack, sErr := execution.NewBatchStack(resolver, prover, mempoolCfg, log.Printf)
-				if sErr != nil {
-					log.Printf("⚠️ [BATCH] Stack assembly failed (%v) — batching disabled", sErr)
-				} else {
-					// The attester compares an incoming request's period width against this and
-					// refuses a mismatch, so a proposer cannot widen what this node selects.
-					stack.PeriodBlocks = batchPeriodBlocksFromEnv()
-
-					// DURABILITY. Restore anything queued before a restart, BEFORE the enqueuer
-					// is published below, so a restored member cannot race a freshly discovered
-					// one. Without this the round has already reported batch_queued while the
-					// member is gone: neither settled, failed, nor retried.
-					storePath := strings.TrimSpace(os.Getenv("BATCH_MEMPOOL_PATH"))
-					if storePath == "" {
-						storePath = "data/batch_mempool.json"
-					}
-					if mstore, mErr := execution.NewBatchMempoolStore(
-						storePath, consensus.PendingAttestationCodec{}, log.Printf,
-					); mErr != nil {
-						log.Printf("⚠️ [BATCH] Mempool persistence unavailable (%v) — queued members "+
-							"will rely on discovery re-derivation after a restart", mErr)
-					} else {
-						stack.Mempool.SetStore(mstore, log.Printf)
-						log.Printf("💾 [BATCH] Mempool persisted at %s", storePath)
-					}
-					// Drain first, enqueue second.
-					go stack.RunFlushLoop(
-						context.Background(),
-						execution.BatchFlushConfig{
-							Interval:     mempoolCfg.FlushInterval,
-							PeriodBlocks: batchPeriodBlocksFromEnv(),
-							// The ACCUMULATE chain height — the same units member CommitHeights
-							// are keyed in, and the only height every validator agrees on.
-							//
-							// Not the CometBFT height: each validator broadcasts its own
-							// ValidatorBlock, so one intent commits at a different height on
-							// every node. Accumulate also advances on its own, so a period
-							// closes without needing more Certen traffic — a lone queued intent
-							// no longer waits for a second one to arrive.
-							ConsensusHeightFn: batchConsensusHeightFn(accClient, validator),
-							// Only the elected submitter for the period forms a batch. Without
-							// this all seven race to anchor the same period and six revert with
-							// AnchorAlreadyExists after paying gas.
-							IsLeaderFn: validator.IsBatchPeriodLeader,
-							Attest: func(ctx context.Context, att interface{}, txHash string, chainID int64, ok bool) {
-								// Replay the captured Phase 7-9 snapshot so each settled member
-								// closes its own proof cycle back to Accumulate.
-								validator.RunBatchMemberAttestation(ctx, att, txHash, chainID, ok)
-							},
-							// Members that leave the batch path for good are recorded as FAILED
-							// with the cause they were dropped for; there is no other path to
-							// settle them (owner decision 2026-09-26).
-							OnDropped: func(ctx context.Context, m *execution.PendingBatchIntent, cause string) {
-								if m == nil {
-									return
-								}
-								validator.RunBatchMemberRefusal(ctx, m.Attestation, cause)
-							},
-						},
-						log.Printf,
-					)
-					validator.SetBatchEnqueuer(stack)
-
-					// ON-DEMAND LANE. Intent-keyed settlement: one intent, one anchor, no
-					// period, no settle grace — see docs/ON_DEMAND_LANE_BUILD_PLAN.md.
-					//
-					// The submitter is started whenever batching is active, but nothing reaches
-					// it unless ON_DEMAND_INTENT_KEYED=true makes enqueueForBatch route
-					// on_demand intents to EnqueueOnDemand. Running it unconditionally means
-					// the flag flip is a config change on an already-exercised code path rather
-					// than a first run in production.
-					odSubmitter, odErr := execution.NewOnDemandSubmitter(execution.OnDemandSubmitterConfig{
-						Stack:       stack,
-						Prover:      prover,
-						ValidatorID: cfg.ValidatorID,
-						Roster:      consensus.BatchLeaderRoster,
-						Attest: func(ctx context.Context, att interface{}, txHash string, chainID int64, ok bool) {
-							validator.RunBatchMemberAttestation(ctx, att, txHash, chainID, ok)
-						},
-						OnDropped: func(ctx context.Context, m *execution.PendingBatchIntent, cause string) {
-							if m == nil {
-								return
-							}
-							validator.RunBatchMemberRefusal(ctx, m.Attestation, cause)
-						},
-						// The Accumulate block time of a member queued without it: the failover clock.
-						CommitTime: liteClientAdapter.MinorBlockTime,
-						Logf:       log.Printf,
-					})
-					if odErr != nil {
-						log.Printf("⚠️ [OD] on-demand submitter unavailable (%v) — on_demand "+
-							"intents will continue to settle on the period path", odErr)
-					} else {
-						stack.SetOnDemandWaker(odSubmitter.Wake)
-						go odSubmitter.Run(context.Background())
-						if consensus.OnDemandLaneEnabled() {
-							log.Printf("⚡ [OD] intent-keyed on-demand lane ENABLED — on_demand " +
-								"intents settle one-per-anchor with no period and no settle grace")
-						} else {
-							log.Printf("💤 [OD] on-demand submitter running but IDLE " +
-								"(ON_DEMAND_INTENT_KEYED is not true; on_demand intents take the period path)")
-						}
-					}
-
-					// Publish to the peer attestation handler. Without this a proposer's
-					// request gets 503 and no quorum can ever form.
-					batchStackForAttestation.Store(stack)
-
-					// The EVM address this validator signs as. It MUST match its registry entry
-					// on the anchor: the aggregator resolves voting power by address, so a wrong
-					// one contributes nothing and the quorum silently runs a signer short.
-					//
-					// Resolved from the CHAIN by matching this node's BLS public key against the
-					// anchor's registry — impossible to misconfigure, and it fails loudly in
-					// exactly the case where this node should not be attesting (its key is not
-					// registered). VALIDATOR_EVM_ADDRESS remains an explicit override for
-					// bring-up, but is no longer required: the live containers only carry
-					// VALIDATOR_ID, so requiring it meant no validator could ever attest.
-					go resolveBatchAttesterIdentity(resolver, cfg.ValidatorID)
-
-					if len(peers) == 0 {
-						log.Printf("⚠️ [BATCH] ATTESTATION_PEERS unset — no peers to collect " +
-							"quorum from; batches will fail quorum and fall back to on-demand")
-					} else {
-						log.Printf("🌐 [BATCH] Quorum peers: %v", peers)
-					}
-
-					log.Printf("✅ [BATCH] Cross-ADI batching ACTIVE on chains %v (flush every %s, "+
-						"period %d blocks)",
-						resolver.Chains(), mempoolCfg.FlushInterval, batchPeriodBlocksFromEnv())
-				}
-			}
-		}
+	anchorCfg, cfgErr := config.LoadAnchorConfigFromEnv()
+	if cfgErr != nil {
+		return nil, nil, fmt.Errorf("batch path: anchor config: %w", cfgErr)
 	}
+	batchChains := []int64{11155111, 84532, 421614} // sepolia, base-sepolia, arbitrum-sepolia
+	resolver, rErr := execution.NewEVMChainResolverFromEnv(anchorCfg, batchChains)
+	if rErr != nil {
+		return nil, nil, fmt.Errorf("batch path: chain resolver: %w", rErr)
+	}
+	submitter := execution.NewBatchProofSubmitter(resolver, log.Printf)
+	peers := execution.BatchAttestationPeersFromEnv()
+	if len(peers) == 0 {
+		return nil, nil, fmt.Errorf("batch path: ATTESTATION_PEERS unset - no quorum can form without peers")
+	}
+	prover, pErr := execution.NewBatchQuorumAttestor(
+		resolver, submitter, peers, cfg.ValidatorID, 0, log.Printf)
+	if pErr != nil {
+		return nil, nil, fmt.Errorf("batch path: quorum attestor: %w", pErr)
+	}
+	batchQuorumAttestorForEvidence.Store(prover)
+	mempoolCfg := execution.DefaultBatchMempoolConfig()
+	stack, sErr := execution.NewBatchStack(resolver, prover, mempoolCfg, log.Printf)
+	if sErr != nil {
+		return nil, nil, fmt.Errorf("batch path: stack assembly: %w", sErr)
+	}
+	// The attester compares an incoming request's period width against this and
+	// refuses a mismatch, so a proposer cannot widen what this node selects.
+	stack.PeriodBlocks = batchPeriodBlocksFromEnv()
+
+	// DURABILITY. Restore anything queued before a restart, BEFORE the enqueuer
+	// is published below, so a restored member cannot race a freshly discovered
+	// one. Without this the round has already reported batch_queued while the
+	// member is gone: neither settled, failed, nor retried.
+	storePath := strings.TrimSpace(os.Getenv("BATCH_MEMPOOL_PATH"))
+	if storePath == "" {
+		storePath = "data/batch_mempool.json"
+	}
+	mstore, mErr := execution.NewBatchMempoolStore(storePath, consensus.PendingAttestationCodec{}, log.Printf)
+	if mErr != nil {
+		return nil, nil, fmt.Errorf("batch path: mempool persistence at %s unavailable - a restart would lose queued members: %w", storePath, mErr)
+	}
+	stack.Mempool.SetStore(mstore, log.Printf)
+	log.Printf("💾 [BATCH] Mempool persisted at %s", storePath)
+	// Drain first, enqueue second.
+	go stack.RunFlushLoop(
+		context.Background(),
+		execution.BatchFlushConfig{
+			Interval:     mempoolCfg.FlushInterval,
+			PeriodBlocks: batchPeriodBlocksFromEnv(),
+			// The ACCUMULATE chain height — the same units member CommitHeights
+			// are keyed in, and the only height every validator agrees on.
+			//
+			// Not the CometBFT height: each validator broadcasts its own
+			// ValidatorBlock, so one intent commits at a different height on
+			// every node. Accumulate also advances on its own, so a period
+			// closes without needing more Certen traffic — a lone queued intent
+			// no longer waits for a second one to arrive.
+			ConsensusHeightFn: batchConsensusHeightFn(accClient, validator),
+			// Only the elected submitter for the period forms a batch. Without
+			// this all seven race to anchor the same period and six revert with
+			// AnchorAlreadyExists after paying gas.
+			IsLeaderFn: validator.IsBatchPeriodLeader,
+			Attest: func(ctx context.Context, att interface{}, txHash string, chainID int64, ok bool) {
+				// Replay the captured Phase 7-9 snapshot so each settled member
+				// closes its own proof cycle back to Accumulate.
+				validator.RunBatchMemberAttestation(ctx, att, txHash, chainID, ok)
+			},
+			// Members that leave the batch path for good are recorded as FAILED
+			// with the cause they were dropped for; there is no other path to
+			// settle them (owner decision 2026-09-26).
+			OnDropped: func(ctx context.Context, m *execution.PendingBatchIntent, cause string) {
+				if m == nil {
+					return
+				}
+				validator.RunBatchMemberRefusal(ctx, m.Attestation, cause)
+			},
+		},
+		log.Printf,
+	)
+	validator.SetBatchEnqueuer(stack)
+
+	// ON-DEMAND LANE. Intent-keyed settlement: one intent, one anchor, no
+	// period, no settle grace — see docs/ON_DEMAND_LANE_BUILD_PLAN.md.
+	//
+	// The submitter is started whenever batching is active, but nothing reaches
+	// it unless ON_DEMAND_INTENT_KEYED=true makes enqueueForBatch route
+	// on_demand intents to EnqueueOnDemand. Running it unconditionally means
+	// the flag flip is a config change on an already-exercised code path rather
+	// than a first run in production.
+	odSubmitter, odErr := execution.NewOnDemandSubmitter(execution.OnDemandSubmitterConfig{
+		Stack:       stack,
+		Prover:      prover,
+		ValidatorID: cfg.ValidatorID,
+		Roster:      consensus.BatchLeaderRoster,
+		Attest: func(ctx context.Context, att interface{}, txHash string, chainID int64, ok bool) {
+			validator.RunBatchMemberAttestation(ctx, att, txHash, chainID, ok)
+		},
+		OnDropped: func(ctx context.Context, m *execution.PendingBatchIntent, cause string) {
+			if m == nil {
+				return
+			}
+			validator.RunBatchMemberRefusal(ctx, m.Attestation, cause)
+		},
+		// The Accumulate block time of a member queued without it: the failover clock.
+		CommitTime: liteClientAdapter.MinorBlockTime,
+		Logf:       log.Printf,
+	})
+	if odErr != nil {
+		return nil, nil, fmt.Errorf("batch path: on-demand submitter unavailable: %w", odErr)
+	}
+	stack.SetOnDemandWaker(odSubmitter.Wake)
+	go odSubmitter.Run(context.Background())
+	if consensus.OnDemandLaneEnabled() {
+		log.Printf("⚡ [OD] intent-keyed on-demand lane ENABLED — on_demand " +
+			"intents settle one-per-anchor with no period and no settle grace")
+	} else {
+		log.Printf("💤 [OD] on-demand submitter running but IDLE " +
+			"(ON_DEMAND_INTENT_KEYED is not true; on_demand intents take the period path)")
+	}
+
+	// Publish to the peer attestation handler. Without this a proposer's
+	// request gets 503 and no quorum can ever form.
+	batchStackForAttestation.Store(stack)
+
+	// The EVM address this validator signs as. It MUST match its registry entry
+	// on the anchor: the aggregator resolves voting power by address, so a wrong
+	// one contributes nothing and the quorum silently runs a signer short.
+	//
+	// Resolved from the CHAIN by matching this node's BLS public key against the
+	// anchor's registry — impossible to misconfigure, and it fails loudly in
+	// exactly the case where this node should not be attesting (its key is not
+	// registered). VALIDATOR_EVM_ADDRESS remains an explicit override for
+	// bring-up, but is no longer required: the live containers only carry
+	// VALIDATOR_ID, so requiring it meant no validator could ever attest.
+	go resolveBatchAttesterIdentity(resolver, cfg.ValidatorID)
+
+	log.Printf("🌐 [BATCH] Quorum peers: %v", peers)
+
+	log.Printf("✅ [BATCH] Cross-ADI batching ACTIVE on chains %v (flush every %s, "+
+		"period %d blocks)",
+		resolver.Chains(), mempoolCfg.FlushInterval, batchPeriodBlocksFromEnv())
 
 	// ==========================================================================
 	// PHASE 5: Wire Batch System for Real Merkle Roots
