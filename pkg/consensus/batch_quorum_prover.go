@@ -334,14 +334,18 @@ func (bv *BFTValidator) enqueueForBatch(
 
 	var added []batchMember
 	for _, m := range plan.members {
+		// Each chain member records its OWN outcome on its snapshot (TargetChainOutcome,
+		// FailureReason), and the members settle independently. One shared snapshot let one chain's
+		// outcome stand in for the other's (RB3-F47).
+		memberAtt := *batchAtt
 		var enqErr error
 		if plan.onDemand {
 			enqErr = bv.batchEnqueuer.EnqueueOnDemand(
-				certenIntent.IntentID, plan.adiURL, m.chainID, m.account, m.opID, m.legs, batchAtt, commitHeight,
+				certenIntent.IntentID, plan.adiURL, m.chainID, m.account, m.opID, m.legs, &memberAtt, commitHeight,
 				certenIntent.Partition, certenIntent.BlockTime, certenIntent.TransactionHash)
 		} else {
 			enqErr = bv.batchEnqueuer.EnqueueForBatch(
-				certenIntent.IntentID, plan.adiURL, m.chainID, m.account, m.opID, m.legs, batchAtt, commitHeight,
+				certenIntent.IntentID, plan.adiURL, m.chainID, m.account, m.opID, m.legs, &memberAtt, commitHeight,
 				certenIntent.Partition, certenIntent.BlockTime, certenIntent.TransactionHash)
 		}
 		switch {
