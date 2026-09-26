@@ -1118,6 +1118,14 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 			if !g0Proof.G0ProofComplete {
 				return nil, fmt.Errorf("G0 governance proof incomplete for intent %s", certenIntent.IntentID)
 			}
+			// G0 is final because its receipt is the chained proof's L1
+			// receipt, ending at the root the BVN quorum signed, at the block
+			// it signed it (pkg/proof/g0_binding.go). Two proofs of one entry
+			// that disagree describe different facts.
+			if err := proof.BindG0ToChainedProof(g0Proof, liteClientProof); err != nil {
+				return nil, fmt.Errorf("G0 governance proof for intent %s does not bind to its chained proof: %w",
+					certenIntent.IntentID, err)
+			}
 			governanceLevel = "G0"
 			bv.logger.Printf("✅ [GOV-PROOF] G0 proof generated: TXID=%s, ExecMBI=%d, Complete=%v",
 				g0Proof.TXID, g0Proof.ExecMBI, g0Proof.G0ProofComplete)

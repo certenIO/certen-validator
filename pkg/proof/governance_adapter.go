@@ -210,10 +210,12 @@ func (g *CLIGovernanceProofGenerator) buildCLIArgs(level GovernanceLevel, req *G
 	//
 	// The CLI applies --timeout to the WHOLE proof operation, not per request, and G1 makes
 	// many sequential v3 round trips (~1-3s each against the Kermit endpoint). At the 30s
-	// default it ran out mid-flight, and its failure mode is silent: signatureSet extraction
-	// returns a context error, the "direct extraction" fallback is an unimplemented stub that
-	// returns EMPTY, and the run then reports "Threshold not satisfied: 0/1" — an
-	// infrastructure timeout wearing the costume of a governance rejection.
+	// default it ran out mid-flight. It once did so silently - an unimplemented extraction
+	// fallback returned EMPTY and the run reported "Threshold not satisfied: 0/1", an
+	// infrastructure timeout wearing the costume of a governance rejection. That fallback is
+	// gone: a signature whose evaluation the deadline cuts short is now reported unavailable,
+	// and G1 fails as an infrastructure failure rather than a verdict. The budget still
+	// matters, because a proof cut short is a proof not made.
 	//
 	// Leave a small margin under our own deadline so the CLI reaches its internal timeout and
 	// reports a real reason, instead of being SIGKILLed by exec.CommandContext with empty

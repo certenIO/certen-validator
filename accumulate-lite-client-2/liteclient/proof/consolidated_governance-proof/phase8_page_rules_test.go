@@ -74,51 +74,30 @@ func TestP8_ZeroIsNotSet(t *testing.T) {
 	}
 }
 
-// TestP8_ResponseThresholdIsTheLoadBearingOne pins the rule that could have
-// changed the verdict, and pins that its note says so.
-func TestP8_ResponseThresholdIsTheLoadBearingOne(t *testing.T) {
+// TestP8_ResponseThresholdIsRederived: the response threshold counts accepts,
+// rejects and abstains per delegation path, and the authority vote now counts
+// exactly those - so it is re-derived, and is not recorded as unverified.
+func TestP8_ResponseThresholdIsRederived(t *testing.T) {
 	th := parsePageThresholds(p8pageDef("acc://a.acme/book/1", map[string]interface{}{
 		"responseThreshold": float64(3),
 	}))
-	notes := pageRuleNotes("acc://a.acme/book/1", th)
-
-	if len(notes) != 1 {
-		t.Fatalf("want exactly one note, got %d", len(notes))
+	if notes := pageRuleNotes("acc://a.acme/book/1", th); len(notes) != 0 {
+		t.Fatalf("a re-derived rule was recorded as unverified: %+v", notes)
 	}
-	n := notes[0]
-	if n.Reason != PageRuleUnverifiedResponse {
-		t.Errorf("reason = %q, want %q", n.Reason, PageRuleUnverifiedResponse)
-	}
-	if n.Value != 3 {
-		t.Errorf("value = %d, want the page's own number 3", n.Value)
-	}
-	// The explanation must say the two things a reader needs: that it was NOT
-	// recounted, and what it would have counted.
-	for _, want := range []string{"NOT recounted", "rejects and abstains"} {
-		if !strings.Contains(n.Explanation, want) {
-			t.Errorf("explanation must contain %q, got: %s", want, n.Explanation)
-		}
-	}
+	// And it is applied: see TestVotes_ResponseThreshold, which pins that one
+	// acceptance below a response threshold of two is not a vote.
 }
 
-// TestP8_RejectThresholdIsRecordedAsMoot pins the opposite: a rule that is
-// recorded for completeness and is NOT a gap in the proof.
-//
-// Calling this "not verified" in the same words as the response threshold would
-// invent a doubt that does not exist - the executor tests accept before reject
-// and the transaction executed.
-func TestP8_RejectThresholdIsRecordedAsMoot(t *testing.T) {
+// TestP8_RejectThresholdIsRederived: the same tally decides a reject vote, so
+// the reject threshold is re-derived and is not a note either.
+func TestP8_RejectThresholdIsRederived(t *testing.T) {
 	th := parsePageThresholds(p8pageDef("acc://a.acme/book/1", map[string]interface{}{
 		"rejectThreshold": float64(2),
 	}))
-	notes := pageRuleNotes("acc://a.acme/book/1", th)
-
-	if len(notes) != 1 || notes[0].Reason != PageRuleMootReject {
-		t.Fatalf("want one moot-reject note, got %+v", notes)
+	if notes := pageRuleNotes("acc://a.acme/book/1", th); len(notes) != 0 {
+		t.Fatalf("a re-derived rule was recorded as unverified: %+v", notes)
 	}
-	if !strings.Contains(notes[0].Explanation, "could not have changed the outcome") {
-		t.Errorf("a moot rule must say it is moot, got: %s", notes[0].Explanation)
-	}
+	// Applied: see TestVotes_RejectThresholdRejects.
 }
 
 // TestP8_BlockThresholdIsRecordedAsUnenforced pins the third case: the protocol
@@ -176,7 +155,7 @@ func TestP8_PageRulesCollectedAtTheOneParsePoint(t *testing.T) {
 		t.Fatalf("parse plain page: %v", err)
 	}
 	if _, err := ab.parseKeyPageStateFromDef(p8pageDef("acc://strict.acme/book/1",
-		map[string]interface{}{"responseThreshold": float64(2)})); err != nil {
+		map[string]interface{}{"blockThreshold": float64(2)})); err != nil {
 		t.Fatalf("parse strict page: %v", err)
 	}
 

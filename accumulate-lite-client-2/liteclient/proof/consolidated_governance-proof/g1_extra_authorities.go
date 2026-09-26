@@ -75,6 +75,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"gitlab.com/accumulatenetwork/accumulate/protocol"
 )
 
 // ExtraAuthorities is what a transaction requires beyond its principal's
@@ -155,9 +157,15 @@ func extraAuthoritiesFromTransaction(transaction map[string]interface{}) (ExtraA
 	out.BodyType = bodyType
 	lowerType := strings.ToLower(bodyType)
 
-	// Exactly the one type accumulate-core's RequireAuthorization returns true
-	// for. Derived, not assumed.
-	out.IgnoreDisabled = lowerType == "updateaccountauth"
+	// accumulate-core's own rule, asked of accumulate-core rather than copied,
+	// so a type it later adds is not silently missed. A type it does not define
+	// cannot be judged.
+	txType, ok := protocol.TransactionTypeByName(bodyType)
+	if !ok {
+		return out, fmt.Errorf("extra authorities: %q is not a transaction type Accumulate defines, so which "+
+			"authorities it requires cannot be derived. This is a capability limit, NOT a governance rejection", bodyType)
+	}
+	out.IgnoreDisabled = txType.RequireAuthorization()
 
 	switch {
 	case bodyTypesCarryingAuthorities[lowerType]:

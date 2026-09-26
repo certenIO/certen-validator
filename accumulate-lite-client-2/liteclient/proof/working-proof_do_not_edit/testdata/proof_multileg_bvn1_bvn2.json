@@ -1,0 +1,820 @@
+{
+  "input": {
+    "Account": "acc://certen-p7f-alpha.acme/data",
+    "TxHash": "a934d8851030ff18fcbb52c2050933aa1dab12b807c637c97a3c48323d3d5f1d",
+    "TxID": "",
+    "BVN": "bvn1"
+  },
+  "layer1": {
+    "txChainIndex": 5,
+    "bvnMinorBlockIndex": 10199460,
+    "bvnRootChainAnchor": "fb4fd1a8a88eb5aa80b83960de904e88f84c7a1f8239ce09bd86b3ec4ef68d98",
+    "leaf": "a934d8851030ff18fcbb52c2050933aa1dab12b807c637c97a3c48323d3d5f1d",
+    "receipt": {
+      "start": "a934d8851030ff18fcbb52c2050933aa1dab12b807c637c97a3c48323d3d5f1d",
+      "anchor": "fb4fd1a8a88eb5aa80b83960de904e88f84c7a1f8239ce09bd86b3ec4ef68d98",
+      "localBlock": 10199460,
+      "entries": [
+        {
+          "hash": "475281f0166a962cbc01ffdcadf133ceb34fa08d253a2459fe9ef956f9bce819",
+          "right": false
+        },
+        {
+          "hash": "377f44591cd4cbf9179b7b0dea404e58331aae890dad229296145db406406a35",
+          "right": false
+        },
+        {
+          "hash": "e0de6d3c1d8883ec95a221d081b6752aa2967cfe9fa7e20aad9d345d6767dca6",
+          "right": false
+        },
+        {
+          "hash": "93b7fed74fdbb417b236451cdcdd0e520fc2ec01f110bda363530679b482480c",
+          "right": false
+        },
+        {
+          "hash": "6990e82f716e67c09e11be04b59bd82832b99467b69ddcef76435868c95b3a32",
+          "right": true
+        },
+        {
+          "hash": "943c04406d9efe14473ed0b82297accf4b2b5492e2e07fbcf85d26acb5a3d785",
+          "right": false
+        },
+        {
+          "hash": "5a1da66d99d3c2349f326c9adcc748d1be20fa0b01a4ae1baad36aba21de3def",
+          "right": false
+        },
+        {
+          "hash": "09ab6ecb7302261827513b99f4c705ee43891ec16e4dd55d401fb2d518eb3839",
+          "right": false
+        },
+        {
+          "hash": "fa607d0011531bc36eda5158122fefb6f5e6152b6dd9122021bd5ad1925fb7c5",
+          "right": false
+        },
+        {
+          "hash": "9883b5e61fdfbae00627eed7f4a5cda770dd4b57eb97a700571128b270f3df10",
+          "right": false
+        },
+        {
+          "hash": "33a174ceec5a9939b698827c75650ab1ebc20b7758d9a7cb9e7c94ed93d58a63",
+          "right": false
+        },
+        {
+          "hash": "b469d57d1daede1fecb885b380ac3e4a7d0ef4dbcc9f7a0d8b040f60a2e923bf",
+          "right": false
+        },
+        {
+          "hash": "c4e865b7f0af6138860f0538a0f289d3886a27923b2c268664ce87b2fc1ba542",
+          "right": false
+        }
+      ]
+    }
+  },
+  "layer2": {
+    "dnIndex": 154570,
+    "dnMinorBlockIndex": 7769803,
+    "dnRootChainAnchor": "03789ab9cb73247a8d93e119cd58bbbea6ecd644e27c832fa1a58f1705a86e83",
+    "bvnStateTreeAnchor": "cf2d5de8da0f241fabe2c68b5a5a412d7e8111a7d389cf3d4c051e6a2f05f556",
+    "rootReceipt": {
+      "start": "fb4fd1a8a88eb5aa80b83960de904e88f84c7a1f8239ce09bd86b3ec4ef68d98",
+      "anchor": "03789ab9cb73247a8d93e119cd58bbbea6ecd644e27c832fa1a58f1705a86e83",
+      "localBlock": 7769803,
+      "entries": [
+        {
+          "hash": "4a13b793b7f7024085e632bd23bfd6c5d0184b6328dd9f8d085a5338a54c1c26",
+          "right": false
+        },
+        {
+          "hash": "3e8bad4462ec69cdeb4c87e38fea8d2d55487ec4e027527db8802a1ebb1f077b",
+          "right": false
+        },
+        {
+          "hash": "7ecbe3129fbf490a9410ed4940dfd89e583b2b07ee9890765526f4afb0dce24d",
+          "right": false
+        },
+        {
+          "hash": "a89f51097b68915c9632e1c767e66be7060c035b1836f9216df1a74969ae2122",
+          "right": false
+        },
+        {
+          "hash": "69969e51efbb1c3c1158080e0e8042ee5a347b2374ba13a723f6ba36a156c1e3",
+          "right": false
+        },
+        {
+          "hash": "b1d9bd16553a594f9951873b88e2d34e8f2ce503406ceead1ac158aacdcf69cc",
+          "right": false
+        },
+        {
+          "hash": "61d163b8e27687c77f1e91ca98deea81ca1dd5e88c132e3fa1eeddc5b7fcfb60",
+          "right": false
+        },
+        {
+          "hash": "90aeb146c29a8df6d931a72b42c3e9ce214aca4d6485e399aba690d4926b6970",
+          "right": false
+        },
+        {
+          "hash": "23dd9a95c5619e2d1d60b248bbd18cf6bc8e0a94bd8b878fb6113e9012e042fc",
+          "right": false
+        },
+        {
+          "hash": "cc92287086d59bfcb61d64676be9e1ed1b2d8138c84bbf1ac3119d85a653608f",
+          "right": false
+        },
+        {
+          "hash": "b8f54deeb0c50bcc5c86322b2861cb67140f046d12d299a42ca12f0abb5e3d1a",
+          "right": true
+        },
+        {
+          "hash": "2f311dffafac4bcfc37b9e91d8c3d9d1463f38a028c58528e108d3ae26e7988a",
+          "right": true
+        },
+        {
+          "hash": "f612cda60f04d1cae7564488f2cafe05b9fc50c9bb48c14bba13bfd2d530a003",
+          "right": false
+        },
+        {
+          "hash": "988bb5a19425cda31fd1129db38a8bb7b1dc52a94ef6bb5f94a8f506592743be",
+          "right": false
+        },
+        {
+          "hash": "4f3966016fd8c05e32d9b684fcfabb44f5013a4d755040d4a2e002fa5b95ba16",
+          "right": false
+        },
+        {
+          "hash": "3e24fcfb39f88013a6cd9a97507933544bf6ef68a299dd7087bbb43eb6be3d65",
+          "right": false
+        },
+        {
+          "hash": "4f8868109c812771d67a1e1056d731bb2966c5b37b928cf024de7f8bca076c9b",
+          "right": false
+        },
+        {
+          "hash": "0472762088cdd2aaad7343776407d797acf4efc81459f9b52ba1273c51885024",
+          "right": false
+        },
+        {
+          "hash": "aded6e9b035efe484c2b4d7fb4f2a7f482581d0dd632a66f82a5ab9afdb247a6",
+          "right": false
+        }
+      ]
+    },
+    "bptReceipt": {
+      "start": "cf2d5de8da0f241fabe2c68b5a5a412d7e8111a7d389cf3d4c051e6a2f05f556",
+      "anchor": "03789ab9cb73247a8d93e119cd58bbbea6ecd644e27c832fa1a58f1705a86e83",
+      "localBlock": 7769803,
+      "entries": [
+        {
+          "hash": "f198545a28a308d008e36638bcdc72e9ee1f51fbc64e327a4bc5bbf673da622e",
+          "right": false
+        },
+        {
+          "hash": "6f7fd498b999312285182e622a9e20dd031fdec11033d9c5f04281c795c7d52e",
+          "right": false
+        },
+        {
+          "hash": "3e9c799a3a165fad73111f0668fdb52fc690e463ccfc44ef1703357d3f65d195",
+          "right": false
+        },
+        {
+          "hash": "3fb82c47718fb5eb58d4114c88abb33cf3a0c84f076971b13e57ec632f9ba89d",
+          "right": false
+        },
+        {
+          "hash": "2fdd4b1a8e5a65827544737e3bfd0845ab1b6bb535b7e29a9571eec1962de0f3",
+          "right": false
+        },
+        {
+          "hash": "72a5bbace365ab1a7bc4c28b11857a5e2ac0f9fa14ea78e2aff7fcb25b87d5d8",
+          "right": false
+        },
+        {
+          "hash": "25a7c0a1494cf53ad1fde1f09d9f3b4149f3ec00e4cd58978f1850bcdbf76a50",
+          "right": false
+        },
+        {
+          "hash": "2c00e71d7320e973ac11e798e5682508b3ebbb7b4a75a9de3ee4aeb49b87045c",
+          "right": false
+        },
+        {
+          "hash": "23625af979b74e1bab4f4ca6b83c1f24b0eaae96307fd3ab2b8ad5f0c20443ba",
+          "right": false
+        },
+        {
+          "hash": "b8c3a3aeed0dec4cc3a9959fd0255f4de196a2f6b612c389fdc19241811f7956",
+          "right": false
+        },
+        {
+          "hash": "1a22d530f46bec10ca82c4c526f35b5a8bceb454db6ca8048714a57a26e40ee4",
+          "right": false
+        },
+        {
+          "hash": "caad837e2a7c0de1c5647f07c2f14833004505b485bb8fb21d4a560ca70488e8",
+          "right": false
+        },
+        {
+          "hash": "e659e4e21bbf5e42f078251483e7a2d4c07c1ab88f72e8ece4c0ab4dfae0a6bb",
+          "right": false
+        },
+        {
+          "hash": "20ab28543d1c5a549a3c708d2e8ef40e3cb3ce198c91ee3a639e404a864c37ab",
+          "right": false
+        },
+        {
+          "hash": "bd6419c5bc8cbc71c75dbb13cda2ae64c1d0adf11f2a28b8edeb4bf3d1d803e5",
+          "right": false
+        },
+        {
+          "hash": "aa94021903293ff52aec210ea123087802f75d495bf22ade1c6493fa84478c0d",
+          "right": true
+        },
+        {
+          "hash": "988bb5a19425cda31fd1129db38a8bb7b1dc52a94ef6bb5f94a8f506592743be",
+          "right": false
+        },
+        {
+          "hash": "4f3966016fd8c05e32d9b684fcfabb44f5013a4d755040d4a2e002fa5b95ba16",
+          "right": false
+        },
+        {
+          "hash": "3e24fcfb39f88013a6cd9a97507933544bf6ef68a299dd7087bbb43eb6be3d65",
+          "right": false
+        },
+        {
+          "hash": "4f8868109c812771d67a1e1056d731bb2966c5b37b928cf024de7f8bca076c9b",
+          "right": false
+        },
+        {
+          "hash": "0472762088cdd2aaad7343776407d797acf4efc81459f9b52ba1273c51885024",
+          "right": false
+        },
+        {
+          "hash": "aded6e9b035efe484c2b4d7fb4f2a7f482581d0dd632a66f82a5ab9afdb247a6",
+          "right": false
+        }
+      ]
+    }
+  },
+  "layer3": {
+    "dnRootChainIndex": 171393,
+    "dnAnchorMinorBlockIndex": 7769803,
+    "dnConsensusHeight": 7769804,
+    "dnSelfAnchorRecordedAtMinorBlockIndex": 7769805,
+    "dnStateTreeAnchor": "b262f494ec00dc71fe79c2a052ab49c61fba1b7e8a0df4c353fc6c4acee87f8c",
+    "rootReceipt": {
+      "start": "03789ab9cb73247a8d93e119cd58bbbea6ecd644e27c832fa1a58f1705a86e83",
+      "anchor": "d774031f03d61c32087722a1bb33f583cc13c7fb5d27ad9463e886f55d450b03",
+      "localBlock": 7769805,
+      "entries": [
+        {
+          "hash": "c09e61ae75d8b23e407de1cfe030cc75017dbd40f647e7a13a847dd10eb59bb7",
+          "right": false
+        },
+        {
+          "hash": "2ed2aa2f0ceca75503dc32845211d06f933f16df093fc9c5913550b28d340e7f",
+          "right": false
+        },
+        {
+          "hash": "df199c45e36f960dace72e122910a5e995485fb72415c0eea152bfbfec2cc317",
+          "right": false
+        },
+        {
+          "hash": "3531a9f5c0eb92fde1861bdf89ed675aa45ff60eedb3116fb3f67876165e7dde",
+          "right": false
+        },
+        {
+          "hash": "4558f2caabf89fd9eb32448db2f69ba90f274dd91c0143ba3d96f5826bec7178",
+          "right": false
+        },
+        {
+          "hash": "f6e9058c9f5da850c957d41d1950209464fbccf52553a2a14a36f1d3b8e62608",
+          "right": false
+        },
+        {
+          "hash": "7a9571e9e540c93ffc06317458cbffa830fa8a537407128908a78ace6381803e",
+          "right": false
+        },
+        {
+          "hash": "b273da22278c6a84e78a0f1adbc2f42f1650aa281951c9f37bee8578b21f6ba9",
+          "right": false
+        },
+        {
+          "hash": "b71f879691caa7dd7e48384c65df1afca7fb8b059a48cf50bd83042e4209d77d",
+          "right": false
+        },
+        {
+          "hash": "339df8c94c1add5299cdf8b240bc600024732d99b76e78f92728966b800d89f0",
+          "right": true
+        },
+        {
+          "hash": "7f40cfd4c39138ef69d1045b8296f2e0aedf3cd86a636f53551126d806c749df",
+          "right": false
+        },
+        {
+          "hash": "f612cda60f04d1cae7564488f2cafe05b9fc50c9bb48c14bba13bfd2d530a003",
+          "right": false
+        },
+        {
+          "hash": "988bb5a19425cda31fd1129db38a8bb7b1dc52a94ef6bb5f94a8f506592743be",
+          "right": false
+        },
+        {
+          "hash": "4f3966016fd8c05e32d9b684fcfabb44f5013a4d755040d4a2e002fa5b95ba16",
+          "right": false
+        },
+        {
+          "hash": "3e24fcfb39f88013a6cd9a97507933544bf6ef68a299dd7087bbb43eb6be3d65",
+          "right": false
+        },
+        {
+          "hash": "4f8868109c812771d67a1e1056d731bb2966c5b37b928cf024de7f8bca076c9b",
+          "right": false
+        },
+        {
+          "hash": "0472762088cdd2aaad7343776407d797acf4efc81459f9b52ba1273c51885024",
+          "right": false
+        },
+        {
+          "hash": "aded6e9b035efe484c2b4d7fb4f2a7f482581d0dd632a66f82a5ab9afdb247a6",
+          "right": false
+        }
+      ]
+    },
+    "bptReceipt": {
+      "start": "b262f494ec00dc71fe79c2a052ab49c61fba1b7e8a0df4c353fc6c4acee87f8c",
+      "anchor": "d774031f03d61c32087722a1bb33f583cc13c7fb5d27ad9463e886f55d450b03",
+      "localBlock": 7769805,
+      "entries": [
+        {
+          "hash": "71f75c39e7005122245b648edcf8f4c22f33203c7fcbf5453d50bad593643d1b",
+          "right": false
+        },
+        {
+          "hash": "64ca5f5d41ea5a27565d831d398b26772c4bb0223a985b1bc5d817a9fc471df0",
+          "right": false
+        },
+        {
+          "hash": "9f88f6ee236bf9a7deae87a637b88704896d84c3a086905000269fa0d8e360d8",
+          "right": false
+        },
+        {
+          "hash": "adbbd84c8b8361c5f40a28117ab5ed04711b1fa7cdf091df4cba3b46cd6d338e",
+          "right": false
+        },
+        {
+          "hash": "8a3f44e0138948d6440879dc806017527b4f96f8f0b31e0c262f7928cffb8756",
+          "right": false
+        },
+        {
+          "hash": "9ecfb9eab0a2326fe79f41fb64387877db4d99fa0624264611ecfd3951ae6ca8",
+          "right": false
+        },
+        {
+          "hash": "b9290ba80d43ec716d36ef280dfa3dbee86b465edf648b4fd24a8c68a1b435f7",
+          "right": false
+        },
+        {
+          "hash": "a34baddd08bfef26216c520760c9e75387879b654bac3631d6daa968f29d6197",
+          "right": false
+        },
+        {
+          "hash": "04918df99f2f337cf91781467013afe80bcfd42521e1a4108ad5e39ac1a32fc2",
+          "right": true
+        },
+        {
+          "hash": "339df8c94c1add5299cdf8b240bc600024732d99b76e78f92728966b800d89f0",
+          "right": true
+        },
+        {
+          "hash": "7f40cfd4c39138ef69d1045b8296f2e0aedf3cd86a636f53551126d806c749df",
+          "right": false
+        },
+        {
+          "hash": "f612cda60f04d1cae7564488f2cafe05b9fc50c9bb48c14bba13bfd2d530a003",
+          "right": false
+        },
+        {
+          "hash": "988bb5a19425cda31fd1129db38a8bb7b1dc52a94ef6bb5f94a8f506592743be",
+          "right": false
+        },
+        {
+          "hash": "4f3966016fd8c05e32d9b684fcfabb44f5013a4d755040d4a2e002fa5b95ba16",
+          "right": false
+        },
+        {
+          "hash": "3e24fcfb39f88013a6cd9a97507933544bf6ef68a299dd7087bbb43eb6be3d65",
+          "right": false
+        },
+        {
+          "hash": "4f8868109c812771d67a1e1056d731bb2966c5b37b928cf024de7f8bca076c9b",
+          "right": false
+        },
+        {
+          "hash": "0472762088cdd2aaad7343776407d797acf4efc81459f9b52ba1273c51885024",
+          "right": false
+        },
+        {
+          "hash": "aded6e9b035efe484c2b4d7fb4f2a7f482581d0dd632a66f82a5ab9afdb247a6",
+          "right": false
+        }
+      ]
+    }
+  },
+  "layer4Bvn": {
+    "partition": "BVN1",
+    "source": "acc://bvn-BVN1.acme",
+    "destination": "acc://dn.acme",
+    "anchorPool": "acc://dn.acme/anchors",
+    "anchorIndex": 351530,
+    "sequenceNumber": 154571,
+    "anchorTxHash": "0227a97c7cead80d32eb0d66a3f87c993a796dd39c981e82db7589746da0699a",
+    "signedHash": "0e017d69f965e22de3dcd98adba575191dfb5017ae5338876984c8882e4322ee",
+    "sequencedMessage": "01050283010101027f011701156163633a2f2f646e2e61636d652f616e63686f727302640162026001136163633a2f2f62766e2d42564e312e61636d6503a4c3ee0404ec885905fb4fd1a8a88eb5aa80b83960de904e88f84c7a1f8239ce09bd86b3ec4ef68d9806cf2d5de8da0f241fabe2c68b5a5a412d7e8111a7d389cf3d4c051e6a2f05f55603136163633a2f2f62766e2d42564e312e61636d65040d6163633a2f2f646e2e61636d6505cbb709",
+    "minorBlockIndex": 10199460,
+    "rootChainAnchor": "fb4fd1a8a88eb5aa80b83960de904e88f84c7a1f8239ce09bd86b3ec4ef68d98",
+    "stateTreeAnchor": "cf2d5de8da0f241fabe2c68b5a5a412d7e8111a7d389cf3d4c051e6a2f05f556",
+    "signatures": [
+      {
+        "publicKey": "40e6e8b96de7e7ed4c38815448abe22ab555236418d813b3a02cb6a7bc42871b",
+        "signature": "d7d9b3c3e79909d6958325cc8476f11c5fa679b35087f948160a66a4b6e97bd19d80abb486d2f186f9ff64ad2e49036ac2b71e16bcb353f5f54e37fa532a4304",
+        "signer": "acc://dn.acme/network",
+        "timestamp": 1787690561050,
+        "signerVersion": 0
+      }
+    ],
+    "validatorSet": [
+      {
+        "publicKey": "40e6e8b96de7e7ed4c38815448abe22ab555236418d813b3a02cb6a7bc42871b",
+        "publicKeyHash": "309068791543793065c5a36c15bbcfa5259c707dbc3ab8cccde45c8a8928d7fb",
+        "activeOn": [
+          "Directory",
+          "BVN1"
+        ]
+      },
+      {
+        "publicKey": "625b03bfad7d82b11d69be478954ca6293468694f7868a8dfe64d0923a81b262",
+        "publicKeyHash": "3184b7252ea7c152e7398a255b5423fd825f1199ce53e9a051a53f503bd2a356",
+        "activeOn": [
+          "Directory",
+          "BVN2"
+        ]
+      },
+      {
+        "publicKey": "0f9f714a43c0c33731f6e097aea9567f8d0b8817b86510d888e333c84d0b8191",
+        "publicKeyHash": "364d06669499526150676cbd922dadccd4e0155352e9477eefc79346ab15de89",
+        "activeOn": [
+          "Directory",
+          "BVN3"
+        ]
+      }
+    ],
+    "threshold": 1,
+    "acceptThreshold": {
+      "numerator": 2,
+      "denominator": 3
+    },
+    "networkVersion": 0
+  },
+  "layer4Dn": {
+    "partition": "Directory",
+    "source": "acc://dn.acme",
+    "destination": "acc://bvn-BVN1.acme",
+    "anchorPool": "acc://bvn-BVN1.acme/anchors",
+    "anchorIndex": 171394,
+    "sequenceNumber": 171394,
+    "anchorTxHash": "49df256b338a96e961b3412e03d6fd2275daa34a6dd3ac360a3113884613dc30",
+    "signedHash": "2b4a7d171676c4a88f643c3f613fd01d47440d4db49a97206da6f044f30bd172",
+    "sequencedMessage": "0105028b080101028608011d011b6163633a2f2f62766e2d42564e312e61636d652f616e63686f727302e4070161025a010d6163633a2f2f646e2e61636d6503cb9dda0304a2a9580503789ab9cb73247a8d93e119cd58bbbea6ecd644e27c832fa1a58f1705a86e8306b262f494ec00dc71fe79c2a052ab49c61fba1b7e8a0df4c353fc6c4acee87f8c048307016001136163633a2f2f62766e2d42564e312e61636d6503a4c3ee0404ec885905fb4fd1a8a88eb5aa80b83960de904e88f84c7a1f8239ce09bd86b3ec4ef68d9806cf2d5de8da0f241fabe2c68b5a5a412d7e8111a7d389cf3d4c051e6a2f05f556029e060120fb4fd1a8a88eb5aa80b83960de904e88f84c7a1f8239ce09bd86b3ec4ef68d980294ef120320fb4fd1a8a88eb5aa80b83960de904e88f84c7a1f8239ce09bd86b3ec4ef68d980494ef12052003789ab9cb73247a8d93e119cd58bbbea6ecd644e27c832fa1a58f1705a86e83062202204a13b793b7f7024085e632bd23bfd6c5d0184b6328dd9f8d085a5338a54c1c26062202203e8bad4462ec69cdeb4c87e38fea8d2d55487ec4e027527db8802a1ebb1f077b062202207ecbe3129fbf490a9410ed4940dfd89e583b2b07ee9890765526f4afb0dce24d06220220a89f51097b68915c9632e1c767e66be7060c035b1836f9216df1a74969ae21220622022069969e51efbb1c3c1158080e0e8042ee5a347b2374ba13a723f6ba36a156c1e306220220b1d9bd16553a594f9951873b88e2d34e8f2ce503406ceead1ac158aacdcf69cc0622022061d163b8e27687c77f1e91ca98deea81ca1dd5e88c132e3fa1eeddc5b7fcfb600622022090aeb146c29a8df6d931a72b42c3e9ce214aca4d6485e399aba690d4926b69700622022023dd9a95c5619e2d1d60b248bbd18cf6bc8e0a94bd8b878fb6113e9012e042fc06220220cc92287086d59bfcb61d64676be9e1ed1b2d8138c84bbf1ac3119d85a653608f062401010220b8f54deeb0c50bcc5c86322b2861cb67140f046d12d299a42ca12f0abb5e3d1a0624010102202f311dffafac4bcfc37b9e91d8c3d9d1463f38a028c58528e108d3ae26e7988a06220220f612cda60f04d1cae7564488f2cafe05b9fc50c9bb48c14bba13bfd2d530a00306220220988bb5a19425cda31fd1129db38a8bb7b1dc52a94ef6bb5f94a8f506592743be062202204f3966016fd8c05e32d9b684fcfabb44f5013a4d755040d4a2e002fa5b95ba16062202203e24fcfb39f88013a6cd9a97507933544bf6ef68a299dd7087bbb43eb6be3d65062202204f8868109c812771d67a1e1056d731bb2966c5b37b928cf024de7f8bca076c9b062202200472762088cdd2aaad7343776407d797acf4efc81459f9b52ba1273c5188502406220220aded6e9b035efe484c2b4d7fb4f2a7f482581d0dd632a66f82a5ab9afdb247a6030d6163633a2f2f646e2e61636d6504136163633a2f2f62766e2d42564e312e61636d650582bb0a",
+    "minorBlockIndex": 7769803,
+    "rootChainAnchor": "03789ab9cb73247a8d93e119cd58bbbea6ecd644e27c832fa1a58f1705a86e83",
+    "stateTreeAnchor": "b262f494ec00dc71fe79c2a052ab49c61fba1b7e8a0df4c353fc6c4acee87f8c",
+    "signatures": [
+      {
+        "publicKey": "625b03bfad7d82b11d69be478954ca6293468694f7868a8dfe64d0923a81b262",
+        "signature": "c7325cbd229d445b613804242fdb21aa6c38be5162ad9c48f82c356332fd48e13fe2a078002ba9e0db90173e0c7e5a01f81ff4f10f8063bb61a80dc42071f70f",
+        "signer": "acc://dn.acme/network",
+        "timestamp": 1787690563077,
+        "signerVersion": 0
+      },
+      {
+        "publicKey": "0f9f714a43c0c33731f6e097aea9567f8d0b8817b86510d888e333c84d0b8191",
+        "signature": "c7734124040d52092ff9120bf76c3b3f40f727966f28a25a512bd64c296c6404dadbfaa9194acc65675a51d0ee00409b7cc152b588654b4df444a16a7c05ff03",
+        "signer": "acc://dn.acme/network",
+        "timestamp": 1787690563079,
+        "signerVersion": 0
+      },
+      {
+        "publicKey": "40e6e8b96de7e7ed4c38815448abe22ab555236418d813b3a02cb6a7bc42871b",
+        "signature": "15be4857643a6cf5c0f7ed3f91e509353b97e3d07010cfea32ca88c57b7451b7e44ba9f1dfc9a1684f662c8f1a8d42f685bf5e2a0db75ba6a8102ba51826590d",
+        "signer": "acc://dn.acme/network",
+        "timestamp": 1787690563126,
+        "signerVersion": 0
+      }
+    ],
+    "validatorSet": [
+      {
+        "publicKey": "40e6e8b96de7e7ed4c38815448abe22ab555236418d813b3a02cb6a7bc42871b",
+        "publicKeyHash": "309068791543793065c5a36c15bbcfa5259c707dbc3ab8cccde45c8a8928d7fb",
+        "activeOn": [
+          "Directory",
+          "BVN1"
+        ]
+      },
+      {
+        "publicKey": "625b03bfad7d82b11d69be478954ca6293468694f7868a8dfe64d0923a81b262",
+        "publicKeyHash": "3184b7252ea7c152e7398a255b5423fd825f1199ce53e9a051a53f503bd2a356",
+        "activeOn": [
+          "Directory",
+          "BVN2"
+        ]
+      },
+      {
+        "publicKey": "0f9f714a43c0c33731f6e097aea9567f8d0b8817b86510d888e333c84d0b8191",
+        "publicKeyHash": "364d06669499526150676cbd922dadccd4e0155352e9477eefc79346ab15de89",
+        "activeOn": [
+          "Directory",
+          "BVN3"
+        ]
+      }
+    ],
+    "threshold": 2,
+    "acceptThreshold": {
+      "numerator": 2,
+      "denominator": 3
+    },
+    "networkVersion": 0
+  },
+  "additionalLegs": [
+    {
+      "partition": "BVN2",
+      "account": "acc://certen-p7f-omega.acme/book/1",
+      "layer1": {
+        "txChainIndex": 5,
+        "bvnMinorBlockIndex": 10200307,
+        "bvnRootChainAnchor": "6f3d933f9e90fbc2391ab3d2dd4e00104856534af787fcea5333ddde727df807",
+        "leaf": "3d782dfc03b47f5dff6ca231907ba9136fc7754c768011bf33a0a43692478d56",
+        "receipt": {
+          "start": "3d782dfc03b47f5dff6ca231907ba9136fc7754c768011bf33a0a43692478d56",
+          "anchor": "6f3d933f9e90fbc2391ab3d2dd4e00104856534af787fcea5333ddde727df807",
+          "localBlock": 10200307,
+          "entries": [
+            {
+              "hash": "5ca98cecd6113fed2280e6ea05b22660b5cc5354d8145a72c54994ce93602cf9",
+              "right": false
+            },
+            {
+              "hash": "43c7ac4d446c9bf917c13ee908b47eb56ef36eba638360e7dafa3fd116dc1441",
+              "right": false
+            },
+            {
+              "hash": "fbb6b9455044f556eb14f2b6029a27a21cc1c2f5dc8cc16bafffeed387591835",
+              "right": true
+            },
+            {
+              "hash": "8c30ec338a72f7940a89b833bfb9caf39bbb12abfafa0c028afa93ab2ee23ab4",
+              "right": false
+            },
+            {
+              "hash": "a0abbbc305839fa8dc1fd7243dbfe94a7f829022ca1957ce446aae898776efee",
+              "right": false
+            },
+            {
+              "hash": "81d434be36d0cdffd9a26575398c8ec9372e2f0c86488351501b56454e67e075",
+              "right": false
+            },
+            {
+              "hash": "19e23199eaec914ff347d9e93e10ed66dce1eeab315a160972a18cb43aa9c1b5",
+              "right": false
+            },
+            {
+              "hash": "67f6e5f6f2d66c817cabfdc80951abf60fc2f029af8813c5b2e5534307dee53f",
+              "right": false
+            },
+            {
+              "hash": "7550b0b0e2ff96b74bae57a807fd8b4b0d91a2a0b0397ca358e85b8973f8ec3b",
+              "right": false
+            }
+          ]
+        }
+      },
+      "layer2": {
+        "dnIndex": 10270,
+        "dnMinorBlockIndex": 7769803,
+        "dnRootChainAnchor": "03789ab9cb73247a8d93e119cd58bbbea6ecd644e27c832fa1a58f1705a86e83",
+        "bvnStateTreeAnchor": "2f21fbe17a8d43fa5b7fc147a9c5ab6cb5aa3a12f7e4870caea8a007b26f465f",
+        "rootReceipt": {
+          "start": "6f3d933f9e90fbc2391ab3d2dd4e00104856534af787fcea5333ddde727df807",
+          "anchor": "03789ab9cb73247a8d93e119cd58bbbea6ecd644e27c832fa1a58f1705a86e83",
+          "localBlock": 7769803,
+          "entries": [
+            {
+              "hash": "342812336964c09a0b611357bacb83f81b5d0dc6bedaf2efb5753aedbffa4bd0",
+              "right": false
+            },
+            {
+              "hash": "63f0809a67d4471277ada6bb00a9ab6be9c90815ec4793743db7152a5628ae80",
+              "right": false
+            },
+            {
+              "hash": "9919e3eccab0dccfc6f5ddeafc4cd1bc7d01de47bf89d2322d5fd72a95e53866",
+              "right": false
+            },
+            {
+              "hash": "1cac9ee843f41552291ed7536c1ab2f290c574309be75efc0ba97bbc719c866e",
+              "right": false
+            },
+            {
+              "hash": "be724e51d34a306e0c4eb0e02f22497fc90ae603c0e81b36c1630d9b7a477683",
+              "right": false
+            },
+            {
+              "hash": "d0fd94559cee1088b219236e60227ac935637eb68148796728dde7fe72e8f83c",
+              "right": false
+            },
+            {
+              "hash": "327f5330687836975b63c973a65665c3ad8f8fe456ee400c1b3e48c1e6fefd07",
+              "right": false
+            },
+            {
+              "hash": "1549fddcefa0f3c5ee95050e6fed5e07e6b7dcddeb189a1791886089c9acd78e",
+              "right": false
+            },
+            {
+              "hash": "215df383ebfcbec17455ddad1e514e599a244fdcd1043e83bc51e0a30da958b0",
+              "right": false
+            },
+            {
+              "hash": "4428eb2803ab17eca88586309baebedb2f2cc462c0fab493c0ba246cae88070f",
+              "right": true
+            },
+            {
+              "hash": "bd6419c5bc8cbc71c75dbb13cda2ae64c1d0adf11f2a28b8edeb4bf3d1d803e5",
+              "right": false
+            },
+            {
+              "hash": "aa94021903293ff52aec210ea123087802f75d495bf22ade1c6493fa84478c0d",
+              "right": true
+            },
+            {
+              "hash": "988bb5a19425cda31fd1129db38a8bb7b1dc52a94ef6bb5f94a8f506592743be",
+              "right": false
+            },
+            {
+              "hash": "4f3966016fd8c05e32d9b684fcfabb44f5013a4d755040d4a2e002fa5b95ba16",
+              "right": false
+            },
+            {
+              "hash": "3e24fcfb39f88013a6cd9a97507933544bf6ef68a299dd7087bbb43eb6be3d65",
+              "right": false
+            },
+            {
+              "hash": "4f8868109c812771d67a1e1056d731bb2966c5b37b928cf024de7f8bca076c9b",
+              "right": false
+            },
+            {
+              "hash": "0472762088cdd2aaad7343776407d797acf4efc81459f9b52ba1273c51885024",
+              "right": false
+            },
+            {
+              "hash": "aded6e9b035efe484c2b4d7fb4f2a7f482581d0dd632a66f82a5ab9afdb247a6",
+              "right": false
+            }
+          ]
+        },
+        "bptReceipt": {
+          "start": "2f21fbe17a8d43fa5b7fc147a9c5ab6cb5aa3a12f7e4870caea8a007b26f465f",
+          "anchor": "03789ab9cb73247a8d93e119cd58bbbea6ecd644e27c832fa1a58f1705a86e83",
+          "localBlock": 7769803,
+          "entries": [
+            {
+              "hash": "f0704f725fabc8008b2bff9de92aa58ffd339269b609a106bd41640abf720518",
+              "right": false
+            },
+            {
+              "hash": "bee8ca32e949bd7d246e210c1e67d6626fcc8fefdb2618206c0d8db2a8db3793",
+              "right": false
+            },
+            {
+              "hash": "146ca6166e9ea775c770c8f608498655ede8f9d7f3c9b126e4daf90eeed57676",
+              "right": false
+            },
+            {
+              "hash": "156124e8629d76caeefa61182884e2f54c398e33ec4733a883cc1de3692c4269",
+              "right": false
+            },
+            {
+              "hash": "6c55cd7de9a9c88a7fef2b993b41dbb65d1fc7f1a62b9329348e25eaa96beb43",
+              "right": false
+            },
+            {
+              "hash": "87bbafa6a98716fa6cfe10e6d095597c2b6441b85838c0158fbfec7c704f638f",
+              "right": false
+            },
+            {
+              "hash": "72ac9e2864fa901bdc9a20c9d20cf106ed7ae4e3b3941ee77adbfb778168f711",
+              "right": true
+            },
+            {
+              "hash": "1549fddcefa0f3c5ee95050e6fed5e07e6b7dcddeb189a1791886089c9acd78e",
+              "right": false
+            },
+            {
+              "hash": "215df383ebfcbec17455ddad1e514e599a244fdcd1043e83bc51e0a30da958b0",
+              "right": false
+            },
+            {
+              "hash": "4428eb2803ab17eca88586309baebedb2f2cc462c0fab493c0ba246cae88070f",
+              "right": true
+            },
+            {
+              "hash": "bd6419c5bc8cbc71c75dbb13cda2ae64c1d0adf11f2a28b8edeb4bf3d1d803e5",
+              "right": false
+            },
+            {
+              "hash": "aa94021903293ff52aec210ea123087802f75d495bf22ade1c6493fa84478c0d",
+              "right": true
+            },
+            {
+              "hash": "988bb5a19425cda31fd1129db38a8bb7b1dc52a94ef6bb5f94a8f506592743be",
+              "right": false
+            },
+            {
+              "hash": "4f3966016fd8c05e32d9b684fcfabb44f5013a4d755040d4a2e002fa5b95ba16",
+              "right": false
+            },
+            {
+              "hash": "3e24fcfb39f88013a6cd9a97507933544bf6ef68a299dd7087bbb43eb6be3d65",
+              "right": false
+            },
+            {
+              "hash": "4f8868109c812771d67a1e1056d731bb2966c5b37b928cf024de7f8bca076c9b",
+              "right": false
+            },
+            {
+              "hash": "0472762088cdd2aaad7343776407d797acf4efc81459f9b52ba1273c51885024",
+              "right": false
+            },
+            {
+              "hash": "aded6e9b035efe484c2b4d7fb4f2a7f482581d0dd632a66f82a5ab9afdb247a6",
+              "right": false
+            }
+          ]
+        }
+      },
+      "layer4Bvn": {
+        "partition": "BVN2",
+        "source": "acc://bvn-BVN2.acme",
+        "destination": "acc://dn.acme",
+        "anchorPool": "acc://dn.acme/anchors",
+        "anchorIndex": 351528,
+        "sequenceNumber": 10271,
+        "anchorTxHash": "c9177423fbcada47647e2e0c05723fb8e378457ec115d6235daef05f1edc8ca6",
+        "signedHash": "f14e86e455bd0a8ef0c2bd6638493938ae466626d80acf597bd03dc58f6f708b",
+        "sequencedMessage": "01050283010101027f011701156163633a2f2f646e2e61636d652f616e63686f727302640162026001136163633a2f2f62766e2d42564e322e61636d6503f3c9ee0404c1812d056f3d933f9e90fbc2391ab3d2dd4e00104856534af787fcea5333ddde727df807062f21fbe17a8d43fa5b7fc147a9c5ab6cb5aa3a12f7e4870caea8a007b26f465f03136163633a2f2f62766e2d42564e322e61636d65040d6163633a2f2f646e2e61636d65059f50",
+        "minorBlockIndex": 10200307,
+        "rootChainAnchor": "6f3d933f9e90fbc2391ab3d2dd4e00104856534af787fcea5333ddde727df807",
+        "stateTreeAnchor": "2f21fbe17a8d43fa5b7fc147a9c5ab6cb5aa3a12f7e4870caea8a007b26f465f",
+        "signatures": [
+          {
+            "publicKey": "625b03bfad7d82b11d69be478954ca6293468694f7868a8dfe64d0923a81b262",
+            "signature": "9beeebcd1277b5797e5d659a80392e76075af205f8c387273e615e8037e39ca03c7b64d2aa04343bc341b52eabc13140940c319ebc9a54abd69a5722a2a3ab04",
+            "signer": "acc://dn.acme/network",
+            "timestamp": 1787690554865,
+            "signerVersion": 0
+          }
+        ],
+        "validatorSet": [
+          {
+            "publicKey": "40e6e8b96de7e7ed4c38815448abe22ab555236418d813b3a02cb6a7bc42871b",
+            "publicKeyHash": "309068791543793065c5a36c15bbcfa5259c707dbc3ab8cccde45c8a8928d7fb",
+            "activeOn": [
+              "Directory",
+              "BVN1"
+            ]
+          },
+          {
+            "publicKey": "625b03bfad7d82b11d69be478954ca6293468694f7868a8dfe64d0923a81b262",
+            "publicKeyHash": "3184b7252ea7c152e7398a255b5423fd825f1199ce53e9a051a53f503bd2a356",
+            "activeOn": [
+              "Directory",
+              "BVN2"
+            ]
+          },
+          {
+            "publicKey": "0f9f714a43c0c33731f6e097aea9567f8d0b8817b86510d888e333c84d0b8191",
+            "publicKeyHash": "364d06669499526150676cbd922dadccd4e0155352e9477eefc79346ab15de89",
+            "activeOn": [
+              "Directory",
+              "BVN3"
+            ]
+          }
+        ],
+        "threshold": 1,
+        "acceptThreshold": {
+          "numerator": 2,
+          "denominator": 3
+        },
+        "networkVersion": 0
+      }
+    }
+  ]
+}

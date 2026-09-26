@@ -28,15 +28,28 @@
 // proof failed", and Phase 7's rule 8 is that a capability limit must not read
 // like a governance rejection.
 //
-// # THE THREE WAYS A PAGE IS BORN
+// # THE FOUR WAYS A PAGE IS BORN
 //
 // From accumulate-core, which is the only authority on this — every initial
 // value below is quoted from the executor that sets it, not inferred from what
 // a page happens to report today:
 //
-//	syntheticCreateIdentity   page 1 of an ADI's default book. The created
-//	                          accounts travel inline in body.accounts[], so the
-//	                          page's initial state is read from there.
+//	syntheticCreateIdentity   page 1 of an ADI's default book, when the
+//	                          CreateIdentity's principal is on another
+//	                          partition. The created accounts travel inline in
+//	                          body.accounts[], so the page's initial state is
+//	                          read from there.
+//
+//	createIdentity            the same page, when the principal is LOCAL to the
+//	                          new identity - on the same partition - and
+//	                          chain/create_identity.go creates the accounts in
+//	                          place instead of sending them. page.Version = 1,
+//	                          page.AcceptThreshold = 1, one KeySpec whose hash is
+//	                          body.keyHash, at FormatKeyPageUrl(body.keyBookUrl, 0).
+//	                          Which of the two a page gets depends only on
+//	                          routing, so a page on either side is equally
+//	                          ordinary. Found by the replay's differential test
+//	                          against core's executor (difftest/).
 //
 //	createKeyBook             page 1 of a NEW book.
 //	                          chain/create_key_book.go: page.Version = 1,
@@ -74,6 +87,7 @@ import (
 // genesisTxTypes are the transaction types that bring a key page into being.
 var genesisTxTypes = map[string]bool{
 	"syntheticcreateidentity": true,
+	"createidentity":          true,
 	"createkeybook":           true,
 	"createkeypage":           true,
 }
@@ -168,6 +182,30 @@ func (ab *AuthorityBuilder) parseGenesisState(txType string, value interface{},
 			return KeyPageState{}, ValidationError{Msg: "genesis message is not an object"}
 		}
 		return ab.parseGenesisKeyPageState(msgMap, keyPage)
+
+	case "createidentity":
+		// chain/create_identity.go, local branch: the page is keyBookUrl's page
+		// 1, Version = 1, AcceptThreshold = 1, one key spec of body.keyHash. A
+		// CreateIdentity without a key book creates no page, so finding one on
+		// a page's main chain without a book naming that page is refused.
+		bookURL, _ := pu.CaseInsensitiveGet(body, "keyBookUrl").(string)
+		if bookURL == "" {
+			return KeyPageState{}, ValidationError{Msg: "createIdentity carries no keyBookUrl, so it created no key page"}
+		}
+		if normalizeAccURL(bookURL) != book || !strings.HasSuffix(page, "/1") {
+			return KeyPageState{}, ValidationError{Msg: fmt.Sprintf(
+				"createIdentity creates %s/1, not %s", normalizeAccURL(bookURL), page)}
+		}
+		hash, _ := pu.CaseInsensitiveGet(body, "keyHash").(string)
+		if hash == "" {
+			return KeyPageState{}, ValidationError{Msg: "createIdentity carries no keyHash"}
+		}
+		return KeyPageState{
+			Version:   1,
+			Threshold: 1,
+			Keys:      []string{strings.ToLower(hash)},
+			Entries:   []KeyPageEntry{{KeyHash: strings.ToLower(hash)}},
+		}, nil
 
 	case "createkeybook":
 		// chain/create_key_book.go: page.Version = 1, one key, AcceptThreshold

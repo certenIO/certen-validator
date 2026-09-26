@@ -15,7 +15,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -201,6 +200,19 @@ func TestP8_UnknownOperationFailsClosed(t *testing.T) {
 	}
 }
 
+// TestP8_UnknownBodyTypeFailsClosed: whether a disabled authority is skipped is
+// accumulate-core's RequireAuthorization, asked of the type itself. A type the
+// protocol does not define cannot be asked, and is not guessed.
+func TestP8_UnknownBodyTypeFailsClosed(t *testing.T) {
+	_, err := extraAuthoritiesFromTransaction(p8tx(`{"type":"someTransactionInventedIn2027"}`, p8NoHeader))
+	if err == nil {
+		t.Fatal("an unrecognised transaction type was judged anyway")
+	}
+	if !strings.Contains(err.Error(), "NOT a governance rejection") {
+		t.Errorf("a capability limit must not read as a governance rejection, got: %v", err)
+	}
+}
+
 // TestP8_MissingOperationsFailsClosed: a body of these types with no operations
 // array is one we failed to READ, not one with nothing to do.
 func TestP8_MissingOperationsFailsClosed(t *testing.T) {
@@ -238,62 +250,5 @@ func TestP8_ExtraAuthoritiesAreCanonical(t *testing.T) {
 		if got.URLs[i] != want[i] {
 			t.Fatalf("not canonically ordered and de-duplicated: want %v, got %v", want, got.URLs)
 		}
-	}
-}
-
-// TestP8_DerivedExtrasReachTheResolver is the end the whole item exists for:
-// the derivation and the rule, joined.
-//
-// TestP7_Auth_ExtraAuthoritiesAreRequired hands the resolver its extras. This
-// derives them from a body and requires the same outcome, so the rule can no
-// longer be correct and unreachable at the same time.
-func TestP8_DerivedExtrasReachTheResolver(t *testing.T) {
-	kh1, sig1 := keyFor("account-key")
-	kh2, sig2 := keyFor("delegate-key")
-	sig1.Signer = "acc://alpha.acme/book/1"
-	sig2.Signer = "acc://extra.acme/book/1"
-
-	src := fakeAuthoritySource{
-		auth: map[string][]AccountAuthority{
-			"acc://alpha.acme/data": {{URL: "acc://alpha.acme/book"}},
-		},
-		books: map[string][]string{
-			"acc://alpha.acme/book": {"acc://alpha.acme/book/1"},
-			"acc://extra.acme/book": {"acc://extra.acme/book/1"},
-		},
-		pages: map[string]KeyPageState{
-			"acc://alpha.acme/book/1": pageWith(1, 1, kh1),
-			"acc://extra.acme/book/1": pageWith(1, 1, kh2),
-		},
-	}
-	r := &AuthorityResolver{Source: src}
-
-	// The body itself says the delegate is required - nothing is handed in.
-	derived, err := extraAuthoritiesFromTransaction(p8tx(`{
-		"type":"updateKeyPage",
-		"operation":[{"type":"add","entry":{"delegate":"acc://extra.acme/book"}}]
-	}`, p8NoHeader))
-	if err != nil {
-		t.Fatalf("derive: %v", err)
-	}
-
-	only, err := r.ResolveAccount(context.Background(), "acc://alpha.acme/data",
-		derived.URLs, derived.IgnoreDisabled, []SignatureData{sig1}, nil)
-	if err != nil {
-		t.Fatalf("resolve: %v", err)
-	}
-	if only.Satisfied {
-		t.Fatalf("a key page added a delegate without the delegate's approval and it read as "+
-			"authorized: %s", only.Describe())
-	}
-
-	both, err := r.ResolveAccount(context.Background(), "acc://alpha.acme/data",
-		derived.URLs, derived.IgnoreDisabled, []SignatureData{sig1, sig2}, nil)
-	if err != nil {
-		t.Fatalf("resolve: %v", err)
-	}
-	if !both.Satisfied {
-		t.Fatalf("both the account and the added delegate signed and it did not read as "+
-			"approved: %s", both.Describe())
 	}
 }

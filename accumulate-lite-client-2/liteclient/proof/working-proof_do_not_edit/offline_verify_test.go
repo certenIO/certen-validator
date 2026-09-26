@@ -83,7 +83,7 @@ func TestOffline_StoredProofsVerifyWithNetworkDisabled(t *testing.T) {
 func TestOffline_StoredProofsRejectTampering(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("testdata", "proof_bvn1.json"))
 	if err != nil {
-		t.Skip("fixture missing")
+		t.Fatal("fixture missing: a missing fixture is a broken test, not an inapplicable one")
 	}
 	pv := NewProofVerifier(false)
 	ctx := context.Background()

@@ -36,6 +36,7 @@ func main() {
 		out      = flag.String("out", filepath.Join("docs", "l4", "phase7_corpus", "traces.json"), "where to write captured traces")
 		stage    = flag.String("stage", "keycheck", "keycheck | partitions | capture | prodpath | multileg")
 		only     = flag.String("cases", "", "comma-separated case names to capture (default: all)")
+		proofOut = flag.String("proof-out", "", "multileg: also write the built proof here, once it verifies offline and rebuilds byte-identically")
 	)
 	flag.Parse()
 
@@ -72,7 +73,7 @@ func main() {
 		}
 
 	case "multileg":
-		if err := buildMultiLeg(ctx, *endpoint, cases); err != nil {
+		if err := buildMultiLeg(ctx, *endpoint, cases, *proofOut); err != nil {
 			fatal("%v", err)
 		}
 

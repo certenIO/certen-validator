@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"gitlab.com/accumulatenetwork/accumulate/protocol"
 )
 
 // CERTEN Governance Proof - G1 Layer (Governance Correctness)
@@ -38,14 +40,10 @@ func NewG1Layer(client RPCClientInterface, artifactManager *ArtifactManager, sig
 	g0Layer := NewG0Layer(client, artifactManager)
 	authorityBuilder := NewAuthorityBuilder(client, artifactManager)
 
-	// Authority resolution is wired in HERE rather than left optional at the
-	// call site. A verifier without it counts distinct keys, which is right only
-	// while every entry is a key and every signature is direct - true of all 400
-	// production proofs and false the moment governance has a delegate. Making
-	// the live G1 layer the place it is always attached means the delegated path
-	// cannot quietly fall back to the arithmetic that cannot see it.
-	signatureVerifier := NewSignatureVerifier(sigbytesPath).
-		WithResolver(&AuthorityResolver{Source: newLivePageSource(client, authorityBuilder)})
+	// The authorization verdict is computed per transaction by the authority
+	// vote model (g1_authorization.go, g1_votes.go), built in ProveG1 once the
+	// execution it is about is known.
+	signatureVerifier := NewSignatureVerifier(sigbytesPath)
 
 	// Get enhanced cryptographic components
 	cryptographicVerifier := artifactManager.GetCryptographicVerifier()
@@ -101,11 +99,14 @@ func (g1 *G1Layer) ProveG1(ctx context.Context, request G1Request) (*G1Result, e
 	// Goroutine 1: Build authority snapshot (KPSW-EXEC)
 	go func() {
 		fmt.Printf("[G1] [GOROUTINE-1] Starting authority snapshot building...\n")
-		snapshot, err := g1.authorityBuilder.BuildAuthoritySnapshot(
+		// The page as the governed transaction executed against it: before
+		// its own update, when it updates the page that signed it.
+		snapshot, err := g1.authorityBuilder.BuildAuthoritySnapshotFor(
 			ctx,
 			request.KeyPage,
 			g0Result.ExecMBI,
 			g0Result.ExecWitness,
+			g0Result.TxHash,
 		)
 		authChan <- authorityResult{snapshot: snapshot, err: err}
 		if err == nil {
@@ -169,13 +170,6 @@ func (g1 *G1Layer) ProveG1(ctx context.Context, request G1Request) (*G1Result, e
 
 	// Step 4: Evaluate authorization.
 	//
-	// The replay source is built HERE, where the execution block is known, and
-	// seeded with the principal's snapshot so that page is not replayed twice.
-	// Every version comparison downstream is made against a page reconstructed
-	// to this block - see authority_exec_state.go for why nothing else will do.
-	execSource := newExecPageSource(g1.authorityBuilder, g0Result.ExecMBI, g0Result.ExecWitness,
-		map[string]KeyPageState{normalizeAccURL(authoritySnapshot.Page): authoritySnapshot.StateExec})
-
 	// The authorities the TRANSACTION requires beyond the principal's, derived
 	// from its body rather than assumed absent. An UpdateKeyPage that adds a
 	// delegate requires that delegate's approval; an UpdateAccountAuth must be
@@ -206,7 +200,27 @@ func (g1 *G1Layer) ProveG1(ctx context.Context, request G1Request) (*G1Result, e
 		return nil, fmt.Errorf("cannot determine which authorities this transaction requires: %w", err)
 	}
 
-	authorizationResult, err := g1.signatureVerifier.ValidateSignatureSet(ctx, validatedSignatures, *authoritySnapshot, g0Result.TxHash, g0Result.G0ProofComplete, request.G0Request.Account, execSource, extraAuthorities)
+	// The authority vote for THIS transaction, judged at the blocks the chain
+	// recorded its signatures and votes (g1_authorization.go). Built here, where
+	// the execution it is about is known; nothing of it outlives this proof.
+	txType, ok := protocol.TransactionTypeByName(extraAuthorities.BodyType)
+	if !ok {
+		return nil, fmt.Errorf("the governed transaction's type %q is not one Accumulate defines", extraAuthorities.BodyType)
+	}
+	if g0Result.ExpandedMessageID == "" {
+		return nil, fmt.Errorf("G0 did not establish the transaction's message id, so its signature sets " +
+			"cannot be read. This is an infrastructure failure, NOT a governance rejection")
+	}
+	authz := &g1Authorization{
+		g1:        g1,
+		txID:      g0Result.ExpandedMessageID,
+		principal: request.G0Request.Account,
+		execMBI:   g0Result.ExecMBI,
+		txType:    txType,
+		timelines: newTimelineCache(g1.authorityBuilder),
+	}
+
+	authorizationResult, err := g1.signatureVerifier.ValidateSignatureSet(ctx, validatedSignatures, *authoritySnapshot, g0Result.TxHash, g0Result.G0ProofComplete, request.G0Request.Account, authz, extraAuthorities)
 	if err != nil {
 		// An evidence outage is returned AS-IS, exactly as step 3 does.
 		//
@@ -236,6 +250,7 @@ func (g1 *G1Layer) ProveG1(ctx context.Context, request G1Request) (*G1Result, e
 		SignatureRouteStatus: routeStatus,
 		TimingBasis:          timingBasis,
 		UnverifiedPageRules:  g1.authorityBuilder.UnverifiedPageRules(),
+		Authorization:        authorizationResult.Authorization,
 	}
 
 	// Rule 8 again, at the point a reader is looking: if any page carried a

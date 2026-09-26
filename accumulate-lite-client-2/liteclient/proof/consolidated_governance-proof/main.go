@@ -59,6 +59,9 @@ type CLIConfig struct {
 	KeyPage       string
 	SigningDomain string
 
+	// AUTHORITY options: the block whose key page state is replayed
+	ExecMBI int64
+
 	// G2+ options
 	GoModDir        string
 	GoVerifyPath    string
@@ -160,6 +163,7 @@ func parseFlags() (*CLIConfig, error) {
 	flag.StringVar(&config.Level, "level", config.Level, "Proof level: G0, G1, G2")
 	flag.StringVar(&config.KeyPage, "keypage", "", "Key page URL (required for G1+)")
 	flag.StringVar(&config.KeyPage, "page", "", "Key page URL (alias for --keypage)")
+	flag.Int64Var(&config.ExecMBI, "exec-mbi", 0, "AUTHORITY: the block at which to report the key page's replayed state")
 	flag.StringVar(&config.SigningDomain, "signing-domain", config.SigningDomain, "Signing domain for signature verification")
 	flag.StringVar(&config.GoModDir, "gomoddir", "", "Go module directory for G2 verifier")
 	flag.StringVar(&config.GoVerifyPath, "goverify", "", "Path to Go verifier tool/source (deprecated, use --txhash)")
@@ -211,6 +215,12 @@ func parseFlags() (*CLIConfig, error) {
 		if config.TestKeyPage != "" {
 			config.KeyPage = config.TestKeyPage
 		}
+	} else if strings.EqualFold(config.Level, "AUTHORITY") {
+		// Diagnostic mode: the replayed history of one key page. It proves no
+		// transaction, so it takes no account or transaction hash.
+		if len(flag.Args()) != 0 {
+			return nil, fmt.Errorf("AUTHORITY takes no positional arguments")
+		}
 	} else {
 		// Normal mode: parse positional arguments
 		args := flag.Args()
@@ -247,10 +257,15 @@ func parseFlags() (*CLIConfig, error) {
 func validateConfig(config *CLIConfig) error {
 	// Validate proof level
 	level := strings.ToUpper(config.Level)
-	if level != "G0" && level != "G1" && level != "G2" {
-		return fmt.Errorf("invalid proof level: %s (must be G0, G1, or G2)", config.Level)
+	if level != "G0" && level != "G1" && level != "G2" && level != "AUTHORITY" {
+		return fmt.Errorf("invalid proof level: %s (must be G0, G1, G2, or AUTHORITY)", config.Level)
 	}
 	config.Level = level
+
+	// AUTHORITY replays one key page to one block.
+	if level == "AUTHORITY" && (config.KeyPage == "" || config.ExecMBI <= 0) {
+		return fmt.Errorf("AUTHORITY requires --keypage and a positive --exec-mbi")
+	}
 
 	// Validate G1+ requirements
 	if (level == "G1" || level == "G2") && config.KeyPage == "" {
@@ -313,6 +328,9 @@ func runGovernanceProof(config *CLIConfig) error {
 		result, proofErr = generateG1Proof(ctx, config, rpcClient, artifactManager)
 	case "G2":
 		result, proofErr = generateG2Proof(ctx, config, rpcClient, artifactManager)
+	case "AUTHORITY":
+		result, proofErr = NewAuthorityBuilder(rpcClient, artifactManager).
+			BuildAuthoritySnapshot(ctx, config.KeyPage, config.ExecMBI, "")
 	default:
 		return fmt.Errorf("unsupported proof level: %s", config.Level)
 	}
@@ -492,6 +510,10 @@ func outputResult(config *CLIConfig, result interface{}) error {
 			printG1Result(config, r)
 		case *G2Result:
 			printG2Result(config, r)
+		case *AuthoritySnapshot:
+			fmt.Printf("%s at block %d: version %d, threshold %d, entries %v, %d mutation(s)\n",
+				r.Page, r.ExecTerms.MBI, r.StateExec.Version, r.StateExec.Threshold,
+				r.StateExec.EntrySet(), len(r.Mutations))
 		default:
 			return fmt.Errorf("unknown result type: %T", result)
 		}

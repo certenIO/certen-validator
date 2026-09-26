@@ -422,6 +422,13 @@ func (g0 *G0Layer) validateExecutionInclusion(chainEntry string, receipt Receipt
 		}
 	}
 
+	// The receipt's path must recompute from the entry to the anchor that
+	// becomes EXEC_WITNESS. Checking only that it starts at the entry proves
+	// nothing about where it ends: any anchor would pass.
+	if err := VerifyReceiptMerkle(receipt, "G0 execution receipt"); err != nil {
+		return err
+	}
+
 	return nil
 }
 

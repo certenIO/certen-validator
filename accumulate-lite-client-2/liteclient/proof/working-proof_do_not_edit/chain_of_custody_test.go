@@ -37,7 +37,7 @@ import (
 func TestChainOfCustody_UserTxToValidatorSignatures(t *testing.T) {
 	files, _ := filepath.Glob(filepath.Join("testdata", "proof_*.json"))
 	if len(files) == 0 {
-		t.Skip("no stored proofs")
+		t.Fatal("no stored proofs in testdata: a missing fixture is a broken test, not an inapplicable one")
 	}
 
 	for _, f := range files {

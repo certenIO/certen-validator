@@ -598,6 +598,14 @@ func (g1 *G1Layer) evaluateCandidate(ctx context.Context, cand sigCandidate, key
 		return evalResult{Outcome: SigUnavailable, Stage: "extract-receipt", Reason: err.Error()}
 	}
 
+	// The block this receipt names is when the signer page recorded the
+	// signature, and the vote model judges the page at that block. It is only
+	// that if the receipt is for THIS message and recomputes: unchecked, it is
+	// a number the endpoint chose.
+	if err := requireBoundReceipt(receipt, cand.MessageHash); err != nil {
+		return evalResult{Outcome: SigUnavailable, Stage: "bind-receipt", Reason: err.Error()}
+	}
+
 	// Timing is compared WITHIN a partition, never across two.
 	//
 	// receipt.localBlock is a block index on the SIGNER's partition; execMBI is
@@ -649,8 +657,14 @@ func (g1 *G1Layer) evaluateCandidate(ctx context.Context, cand sigCandidate, key
 		TransactionHashVerified: true,
 	}
 
-	// --- ed25519 + key-page membership (section 8.5) ----------------------
-	form, err := g1.signatureVerifier.ValidateSignature(ctx, validated, snapshot.StateExec, txHash, snapshot.Page)
+	// --- the cryptography (section 8.5) -----------------------------------
+	//
+	// That this key signed this transaction is true at any time and is checked
+	// here. Whether the key's page, at the version it names, held it and let it
+	// sign when the signature was recorded - and whether its vote counted - is
+	// the authority vote's question, answered per page at the signature's own
+	// block (g1_votes.go), not here against the page at execution.
+	form, err := g1.signatureVerifier.VerifyAgainstAcceptedDigests(validated.Signature, txHash)
 	if err != nil {
 		if isInfrastructureDigestFailure(err) {
 			return evalResult{Outcome: SigUnavailable, Stage: "compute-digest", Reason: err.Error()}

@@ -25,7 +25,9 @@ func loadFixtureProof(t *testing.T, name string) *ChainedProof {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join("testdata", name))
 	if err != nil {
-		t.Skipf("fixture %s not available: %v", name, err)
+		// A missing fixture is a broken test, not an inapplicable one: skipping
+		// would turn every check below into a silent pass.
+		t.Fatalf("fixture %s not available: %v", name, err)
 	}
 	var p ChainedProof
 	if err := json.Unmarshal(b, &p); err != nil {
@@ -47,7 +49,7 @@ func TestP7_4_SinglePartitionBytesAreUnchanged(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			original, err := os.ReadFile(filepath.Join("testdata", name))
 			if err != nil {
-				t.Skipf("fixture not available: %v", err)
+				t.Fatalf("fixture not available: %v", err)
 			}
 
 			var p ChainedProof
@@ -407,44 +409,67 @@ func flipHex(s string) string {
 // same DN minor root chain height (see dn_root_height.go). This pins the check
 // the verifier applies regardless, so a builder regression cannot slip a
 // mismatched pair through.
+//
+// The agreeing case is a genuine two-partition proof recorded from Kermit by
+// `p7corpus -stage multileg -proof-out` (corpus case F: principal on BVN1,
+// delegated signer on BVN2), whose legs really do reach one Directory root.
+// An earlier version of this test made its agreeing leg by relabelling BVN3's
+// Directory root to BVN1's while keeping BVN3's receipts - a leg whose path to
+// that root is asserted rather than shown. That construction is now a
+// rejection case below.
 func TestP7_5_LegsMustShareOneDirectoryRoot(t *testing.T) {
-	base := loadFixtureProof(t, "proof_bvn1.json")
-	other := loadFixtureProof(t, "proof_bvn3.json")
 	ctx := context.Background()
 	pv := NewProofVerifier(false)
 
-	// A leg that agrees on the Directory root verifies.
-	agreeing := PartitionLeg{
+	// A genuine proof whose legs share a Directory root verifies.
+	genuine := loadFixtureProof(t, "proof_multileg_bvn1_bvn2.json")
+	if n := len(genuine.Legs()); n != 2 {
+		t.Fatalf("fixture must carry two partition legs, has %d", n)
+	}
+	for _, leg := range genuine.Legs() {
+		if !strings.EqualFold(leg.Layer2.DNRootChainAnchor, genuine.Layer2.DNRootChainAnchor) {
+			t.Fatalf("fixture leg %s does not share the proof's Directory root", leg.Partition)
+		}
+	}
+	if err := pv.Verify(ctx, genuine); err != nil {
+		t.Fatalf("two legs sharing a Directory root must verify: %v", err)
+	}
+
+	// The same proof with its additional leg witnessing a root one bit off
+	// must not.
+	disagreeing := loadFixtureProof(t, "proof_multileg_bvn1_bvn2.json")
+	disagreeing.AdditionalLegs[0].Layer2.DNRootChainAnchor = flipHex(disagreeing.Layer2.DNRootChainAnchor)
+	if err := pv.Verify(ctx, disagreeing); err == nil {
+		t.Fatal("a leg witnessing a different Directory root was accepted. Its path to the " +
+			"state this proof proves is asserted, not shown, and the proof would still look " +
+			"complete because the leg is internally valid")
+	}
+
+	// A leg RELABELLED onto the proof's Directory root, keeping receipts that
+	// end at its own, must not verify either: the label agrees, the receipts
+	// do not.
+	base := loadFixtureProof(t, "proof_bvn1.json")
+	other := loadFixtureProof(t, "proof_bvn3.json")
+	relabelled := PartitionLeg{
 		Partition: "BVN3",
 		Account:   other.Input.Account,
 		Layer1:    other.Layer1,
 		Layer2:    other.Layer2,
 		Layer4BVN: other.Layer4BVN,
 	}
-	agreeing.Layer2.DNRootChainAnchor = base.Layer2.DNRootChainAnchor
-	agreeing.Layer2.DNMinorBlockIndex = base.Layer2.DNMinorBlockIndex
-
-	ok := *base
-	ok.AdditionalLegs = nil
-	if err := ok.AddLeg(agreeing); err != nil {
+	relabelled.Layer2.DNRootChainAnchor = base.Layer2.DNRootChainAnchor
+	relabelled.Layer2.DNMinorBlockIndex = base.Layer2.DNMinorBlockIndex
+	grafted := *base
+	grafted.AdditionalLegs = nil
+	if err := grafted.AddLeg(relabelled); err != nil {
 		t.Fatalf("add leg: %v", err)
 	}
-	if err := pv.Verify(ctx, &ok); err != nil {
-		t.Fatalf("two legs sharing a Directory root must verify: %v", err)
+	err := pv.Verify(ctx, &grafted)
+	if err == nil {
+		t.Fatal("a leg relabelled onto the proof's Directory root was accepted, though its " +
+			"receipts end at a different root")
 	}
-
-	// The same leg, disagreeing by one bit in the root, must not.
-	disagreeing := agreeing
-	disagreeing.Layer2.DNRootChainAnchor = flipHex(base.Layer2.DNRootChainAnchor)
-
-	bad := *base
-	bad.AdditionalLegs = nil
-	if err := bad.AddLeg(disagreeing); err != nil {
-		t.Fatalf("add leg: %v", err)
-	}
-	if err := pv.Verify(ctx, &bad); err == nil {
-		t.Fatal("a leg witnessing a different Directory root was accepted. Its path to the " +
-			"state this proof proves is asserted, not shown, and the proof would still look " +
-			"complete because the leg is internally valid")
+	if !strings.Contains(err.Error(), "L2 root receipt must end at the DN root chain anchor") {
+		t.Fatalf("relabelled leg rejected for the wrong reason: %v", err)
 	}
 }

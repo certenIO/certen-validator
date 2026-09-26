@@ -15,6 +15,8 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+
+	"gitlab.com/accumulatenetwork/accumulate/protocol"
 )
 
 // CERTEN Governance Proof - Signature Verification
@@ -28,20 +30,6 @@ import (
 // SignatureVerifier handles Ed25519 signature verification and Accumulate digest computation
 type SignatureVerifier struct {
 	sigbytesPath string // Path to sigbytes tool for Accumulate-specific digest computation
-
-	// resolver decides whether a key page's authority is satisfied, by walking
-	// the delegation path each signature commits to. Optional: with none set,
-	// threshold evaluation falls back to counting distinct keys, which is
-	// correct for a page whose entries are all keys and cannot decide a
-	// delegated signature at all - so one arriving without a resolver is
-	// reported as unavailable rather than counted as absent.
-	resolver *AuthorityResolver
-}
-
-// WithResolver returns the verifier with authority resolution enabled.
-func (sv *SignatureVerifier) WithResolver(r *AuthorityResolver) *SignatureVerifier {
-	sv.resolver = r
-	return sv
 }
 
 // NewSignatureVerifier creates a new signature verifier
@@ -360,7 +348,7 @@ func (sv *SignatureVerifier) VerifyAgainstAcceptedDigests(sig SignatureData, txH
 // principal's, plus the ignoreDisabled flag, both derived from the body. See
 // g1_extra_authorities.go. A zero value means an ordinary transaction that adds
 // no authority - which is every writeData intent.
-func (sv *SignatureVerifier) ValidateSignatureSet(ctx context.Context, signatures []ValidatedSignature, snapshot AuthoritySnapshot, txHash string, executionVerified bool, principal string, exec ExecPageSource, extra ExtraAuthorities) (*AuthorizationResult, error) {
+func (sv *SignatureVerifier) ValidateSignatureSet(ctx context.Context, signatures []ValidatedSignature, snapshot AuthoritySnapshot, txHash string, executionVerified bool, principal string, authz authorizationEvaluator, extra ExtraAuthorities) (*AuthorizationResult, error) {
 	fmt.Printf("[SIGNATURE] [DEBUG] ValidateSignatureSet: Received %d signatures to validate\n", len(signatures))
 	fmt.Printf("[SIGNATURE] [DEBUG] Authority state: version=%d, threshold=%d, keys=%d\n", snapshot.StateExec.Version, snapshot.StateExec.Threshold, len(snapshot.StateExec.Keys))
 
@@ -384,7 +372,11 @@ func (sv *SignatureVerifier) ValidateSignatureSet(ctx context.Context, signature
 	for i, sig := range signatures {
 		fmt.Printf("[SIGNATURE] [DEBUG] Processing signature %d/%d: %s\n", i+1, len(signatures), SafeTruncate(sig.MessageHash, 16))
 
-		form, err := sv.ValidateSignature(ctx, sig, state, txHash, snapshot.Page)
+		// The cryptography, which is true at any time: the key signed this
+		// transaction. Whether its page, version and vote made it count is
+		// decided per page at the block it was recorded, by the vote model
+		// below - not here against the page at execution.
+		form, err := sv.VerifyAgainstAcceptedDigests(sig.Signature, txHash)
 		if err != nil {
 			if isInfrastructureDigestFailure(err) {
 				unavailable = append(unavailable, UnavailableSignature{
@@ -428,217 +420,45 @@ func (sv *SignatureVerifier) ValidateSignatureSet(ctx context.Context, signature
 		}
 	}
 
-	// Check threshold satisfaction, by RESOLVING the authority rather than by
-	// counting distinct keys.
+	// THE AUTHORITY VOTE, AS ACCUMULATE-CORE COUNTS IT (g1_votes.go).
 	//
-	// Counting keys is right only when every entry is a key and every signature
-	// is direct - which is every one of the 400 production proofs, and is why
-	// the difference never showed. It is wrong the moment an entry is a
-	// delegate: the delegated signer's key is not on this page, so it counts
-	// zero, and the threshold comes up short. That reads as "the institution did
-	// not authorize this" about a transaction the institution did authorize.
+	// Each page is judged at the block it received each message, votes are
+	// tallied per delegation path at one signer version, every delegate page's
+	// own threshold applies, a signature's vote is read rather than assumed,
+	// and every authority of the principal as of execution must vote accept.
 	//
-	// Resolution counts satisfied ENTRIES, which is what a key page's
-	// AcceptThreshold actually means, and it is also where the distinct-entry
-	// rule lives - so one key signing twice is one acceptance here rather than
-	// by the happy accident of a map key.
-	//
-	// With no resolver configured this falls back to the key count, which keeps
-	// the 1-of-1 path working in callers that never set one up. The fallback is
-	// recorded, not silent: a delegated signature cannot be resolved by it and
-	// is reported as unavailable rather than counted as absent.
-	uniqueValidKeys := len(uniqueKeyHashes)
-	var thresholdSatisfied bool
-	var resolution *ResolutionResult
-	var authorization *AccountAuthorization
-
-	switch {
-	case sv.resolver == nil:
-		// No resolver: fall back to counting distinct keys. Correct while every
-		// entry is a key and every signature is direct, and unable to decide a
-		// delegated one at all - so one arriving here is reported as unavailable
-		// rather than counted as absent.
-		for _, s := range validSignatures {
-			if s.Signature.IsDelegated() {
-				return nil, &SignatureEvidenceIncomplete{
-					Route:     "authority-resolution",
-					Requested: len(validSignatures),
-					Unavailable: []UnavailableSignature{{
-						MessageID: s.MessageID, Stage: "resolve-authority",
-						Err: "a delegated signature reached threshold evaluation with no " +
-							"resolver configured; counting keys cannot decide it, and dropping " +
-							"it would understate the authority",
-					}},
-				}
-			}
-		}
-		thresholdSatisfied = uint64(uniqueValidKeys) >= state.Threshold
-
-	default:
-		sigs := make([]SignatureData, 0, len(validSignatures))
-		for _, s := range validSignatures {
-			sigs = append(sigs, s.Signature)
-		}
-
-		// THE ACCOUNT'S AUTHORITY SET, not one key page.
-		//
-		// Accumulate requires every enabled authority of the principal to vote -
-		// userTransactionIsReady is ready only when notReady is empty - and an
-		// authority is a key book satisfied by ANY ONE of its pages, which is
-		// what AuthorityWillVote does by returning on the first signer that
-		// would vote.
-		//
-		// Evaluating a single page, chosen by assuming "<adi>/book/1", answers a
-		// narrower question than G1 claims. It is right for an account with one
-		// inherited authority whose book has one page - every account seen so
-		// far - and silently wrong for an account with two authorities, an
-		// explicit authority that is not the default book, or a signing page
-		// that is not page 1.
-		// PHASE 8 ITEM 3 — resolve the PRINCIPAL's authority set.
-		//
-		// This used to pass snapshot.Page, the SIGNER'S KEY PAGE. AccountAuthorities
-		// climbs a page to its book, so the call asked "did this ONE book approve"
-		// and named the answer "the account's authority set" — the exact narrowing
-		// the comment above warns against, committed by the code that comment sits
-		// on.
-		//
-		// It could not matter until now: every account on record has a single
-		// inherited authority whose book is the signer's own, so the two questions
-		// had the same answer. Corpus case L is the first account with TWO
-		// authorities and case N the first with a disabled one. Against those the
-		// difference is the entire verdict — a second authority that never voted
-		// would simply not be consulted, and G1 would report the transaction
-		// authorised on evidence from half its authority set.
-		authScope := principal
-		if authScope == "" {
-			authScope = snapshot.Page
-		}
-		// The principal's page as it stood AT EXECUTION, handed to resolution so
-		// it does not query the page as it stands today. Without this, any change
-		// to a key page invalidates the proof of every transaction that preceded
-		// it — see ReplayedPages and authority_exec_state.go.
-		replayed := ReplayedPages{normalizeAccURL(snapshot.Page): snapshot.StateExec}
-
-		// A COPY of the resolver, carrying the replay source for THIS proof.
-		// Assigning to sv.resolver would leak one proof's execution block into
-		// the next, and the whole point of the field is that it is true of one
-		// execution and no other.
-		resolver := *sv.resolver
-		resolver.Exec = exec
-		// The extra authorities and ignoreDisabled are DERIVED from the
-		// transaction body now, not hard-coded. Passing nil/false here asked a
-		// narrower question than the protocol does: an UpdateKeyPage that adds
-		// a delegate requires that delegate's approval, and an
-		// UpdateAccountAuth must be voted on even by a DISABLED authority.
-		if len(extra.URLs) > 0 || extra.IgnoreDisabled {
-			fmt.Printf("[SIGNATURE] transaction body %q requires %d additional authority/ies "+
-				"beyond the principal's (ignoreDisabled=%t): %v\n",
-				extra.BodyType, len(extra.URLs), extra.IgnoreDisabled, extra.URLs)
-		}
-		authz, authErr := resolver.ResolveAccount(ctx, authScope, extra.URLs, extra.IgnoreDisabled, sigs, replayed)
-		if authErr != nil {
-			// AN AUTHORITY SET WE COULD NOT READ IS NOT AN AUTHORITY SET THAT APPROVED.
-			//
-			// This used to fall back to evaluating the signer's SINGLE KEY PAGE
-			// and carry on to a verdict, printing a warning that the claim was
-			// narrower. Three things were wrong with that, and they compound:
-			//
-			//  1. It answered a DIFFERENT QUESTION and reported the answer under
-			//     the same name. "Did this one page sign?" is not "did the
-			//     account's authority set approve?" - for corpus case L those
-			//     have opposite answers, and the narrow one says authorized.
-			//
-			//  2. NOTHING RECORDED IT. The warning went to stdout; neither
-			//     AuthorizationResult nor G1Result carried a field for it. A
-			//     stored proof that took the fallback was byte-indistinguishable
-			//     from one that evaluated the full authority set, and reported
-			//     thresholdSatisfied: true. A weaker claim read as the stronger
-			//     one - the exact failure this package exists to prevent.
-			//
-			//  3. IT CONTRADICTED THE CODE BELOW IT. Forty lines on, this same
-			//     function refuses to compute any verdict while a SINGLE
-			//     signature's page state is unavailable. Failing closed on the
-			//     smaller problem and falling back on the larger one is not a
-			//     policy, it is an accident of history: the single-page path was
-			//     the whole implementation before authority resolution existed,
-			//     and it was kept as a safety net.
-			//
-			// The legitimate case people reach for to justify a fallback - an
-			// account whose authority is INHERITED, whose book is the signer's
-			// own book - is not a fallback at all. AccountAuthorities resolves
-			// it on the primary path: it climbs a page to its book, and reads an
-			// empty authority set as inherited from the parent identity rather
-			// than as absent. Every account in production takes that path.
-			//
-			// So every remaining arrival here is an infrastructure failure or a
-			// genuine data anomaly, and neither may produce a governance
-			// verdict. Fail closed, and say which thing went wrong.
-			return nil, &SignatureEvidenceIncomplete{
-				Route:     "authority-resolution",
-				Requested: len(validSignatures),
-				Unavailable: []UnavailableSignature{{
-					MessageID: authScope,
-					Stage:     "resolve-authority-set",
-					Err: "the account's authority set could not be established, so no " +
-						"governance verdict was computed: " + authErr.Error() +
-						". This is NOT a governance rejection and NOT a threshold " +
-						"shortfall - nothing was evaluated",
-				}},
-			}
-		}
-
-		// A SIGNATURE WE COULD NOT EVALUATE IS NOT A SIGNATURE THAT FAILED.
-		//
-		// Resolution reports a page it could not reconstruct to the execution
-		// block as ReasonPageUnavailable rather than as a version mismatch,
-		// precisely so this check can exist: no threshold verdict may be computed
-		// while one is outstanding. Counting them out instead would produce a
-		// shortfall that reads as "the institution did not authorize this".
-		if un := authz.UnevaluableSignatures(); len(un) > 0 {
-			return nil, &SignatureEvidenceIncomplete{
-				Route:     "authority-resolution",
-				Requested: len(validSignatures),
-				Unavailable: []UnavailableSignature{{
-					Stage: "resolve-page-state",
-					Err: "the page state at execution could not be established for " +
-						"one or more signatures, so no comparison was made: " +
-						describeUnavailable(un),
-				}},
-			}
-		}
-
-		authorization = authz
-		thresholdSatisfied = authz.Satisfied
-
-		// An authority we could not read is not an authority that failed, and a
-		// verdict must not be computed while one is outstanding.
-		if len(authz.Unevaluated) > 0 {
-			return nil, &SignatureEvidenceIncomplete{
-				Route:     "authority-resolution",
-				Requested: len(validSignatures),
-				Unavailable: []UnavailableSignature{{
-					MessageID: strings.Join(authz.Unevaluated, ","),
-					Stage:     "resolve-authority-set",
-					Err: "one or more of the principal's authorities could not be read; an " +
-						"authority we could not load is not an authority that failed",
-				}},
-			}
-		}
-
-		// Keep the satisfying page's detail as the reported resolution, so the
-		// familiar "n of m entries" evidence still appears.
-		for _, a := range authorization.Authorities {
-			for _, pg := range a.Pages {
-				if pg.Satisfied && pg.Result != nil {
-					resolution = pg.Result
-					uniqueValidKeys = pg.Result.Satisfied
-				}
-			}
-		}
-		if resolution == nil {
-			uniqueValidKeys = 0
+	// There is no fallback. Counting distinct keys against one page's
+	// threshold - what this did with no resolver configured - answers a
+	// narrower question than G1 claims and cannot see delegation at all.
+	if authz == nil {
+		return nil, &SignatureEvidenceIncomplete{
+			Route:     "authority-vote",
+			Requested: len(validSignatures),
+			Unavailable: []UnavailableSignature{{
+				Stage: "evaluate-authority-vote",
+				Err:   "no authorization evaluator was supplied for this transaction; nothing was evaluated",
+			}},
 		}
 	}
+	vote, err := authz.Evaluate(ctx, validSignatures, extra)
+	if err != nil {
+		// A vote the chain records but that could not be re-established, an
+		// authority set that cannot be read as of execution, a page whose
+		// history cannot be replayed: none of these is the institution
+		// withholding approval, and none may produce a governance verdict.
+		return nil, &SignatureEvidenceIncomplete{
+			Route:     "authority-vote",
+			Requested: len(validSignatures),
+			Unavailable: []UnavailableSignature{{
+				MessageID: principal,
+				Stage:     "evaluate-authority-vote",
+				Err: "the authority vote could not be established, so no governance verdict was " +
+					"computed: " + err.Error() + ". This is NOT a governance rejection",
+			}},
+		}
+	}
+	thresholdSatisfied := vote.Satisfied
+	uniqueValidKeys := vote.acceptingKeys()
 
 	// Timing starts FALSE and is earned. It previously started true and could
 	// only be falsified by a signature in validSignatures, so an empty set
@@ -665,29 +485,16 @@ func (sv *SignatureVerifier) ValidateSignatureSet(ctx context.Context, signature
 	fmt.Printf("[SIGNATURE]   Threshold satisfied: %t\n", thresholdSatisfied)
 	fmt.Printf("[SIGNATURE]   Timing valid: %t\n", timingValid)
 
-	// WHICH authorities voted, and which page satisfied each. This is the
-	// evidence for the claim G1 actually makes - "the account's authority set
-	// approved" - and without it the log says only that some threshold was met.
-	if authorization != nil {
-		fmt.Printf("[SIGNATURE]   Authority set (%d authority/ies): %s\n",
-			len(authorization.Authorities), authorization.Describe())
-	}
+	// WHICH authorities voted, and how. This is the evidence for the claim G1
+	// actually makes - "the account's authority set approved".
+	fmt.Printf("[SIGNATURE]   Authority set (%d authority/ies): %s\n", len(vote.Authorities), vote.Describe())
 
 	if !thresholdSatisfied {
-		// The reason carries WHY each signature failed to count, not just the
-		// arithmetic. "1/2" is indistinguishable between an institution that did
-		// not authorize this and a signature we could not resolve.
-		// Name WHICH authority was unmet, not just that one was. "1/2" cannot
-		// distinguish an institution that did not authorize this from a
-		// signature we could not resolve.
-		detail := ""
-		if authorization != nil {
-			detail = "; " + authorization.Describe()
-		} else if resolution != nil {
-			detail = "; " + describeResolutionRefusals(resolution)
-		}
-		return nil, ValidationError{Msg: fmt.Sprintf("Threshold not satisfied: %d/%d%s",
-			uniqueValidKeys, state.Threshold, detail)}
+		// Name WHICH authority did not vote to accept, and what each of its
+		// pages recorded. "1/2" cannot distinguish an institution that did not
+		// authorize this from one that voted against it.
+		return nil, ValidationError{Msg: fmt.Sprintf("Threshold not satisfied: %d/%d; %s",
+			uniqueValidKeys, state.Threshold, vote.Describe())}
 	}
 
 	// Create authorization result
@@ -701,6 +508,7 @@ func (sv *SignatureVerifier) ValidateSignatureSet(ctx context.Context, signature
 		ThresholdSatisfied:  thresholdSatisfied,
 		ExecutionSuccess:    executionSuccess,
 		TimingValid:         timingValid,
+		Authorization:       vote,
 		// G1 completion is the conjunction of what was actually established,
 		// not a literal. It was hardcoded `true`, so a result could report
 		// G1ProofComplete while carrying TimingValid=false.
@@ -824,6 +632,24 @@ func (sv *SignatureVerifier) ExtractSignatureFromMessageResult(msgResult map[str
 		return SignatureData{}, err
 	}
 	sig.Signature = normalizedSig
+
+	// The vote this signature casts. Accumulate omits the field for the zero
+	// value, which is accept; any other value is named. Read, never assumed:
+	// a key that votes reject is not an acceptance, and counting it as one is
+	// how a rejection became a vote in favour.
+	vote := protocol.VoteTypeAccept
+	if v := pu.CaseInsensitiveGet(sigMap, "vote"); v != nil {
+		name, ok := v.(string)
+		if !ok {
+			return SignatureData{}, ValidationError{Msg: fmt.Sprintf("Signature.vote is %T, not a vote name", v)}
+		}
+		parsed, ok := protocol.VoteTypeByName(name)
+		if !ok {
+			return SignatureData{}, ValidationError{Msg: fmt.Sprintf("Signature.vote %q is not a vote Accumulate defines", name)}
+		}
+		vote = parsed
+	}
+	sig.Vote = vote.String()
 
 	// Transaction hash: check signature.transactionHash first (devnet),
 	// then fall back to message.txID which is acc://<txHash>@<scope> (Kermit/production)
