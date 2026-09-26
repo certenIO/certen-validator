@@ -324,10 +324,8 @@ type UnifiedOrchestrator struct {
 	resultChainsLock sync.RWMutex
 
 	// Multi-leg aggregator for unified write-back across chain groups
-	multiLegAggregator *MultiLegAggregator
 
 	// Multi-leg chain groups whose proof levels complete when the unified write-back lands
-	deferred deferredCompletions
 
 	// State
 	running bool
@@ -401,26 +399,6 @@ func NewUnifiedOrchestrator(config *UnifiedOrchestratorConfig) (*UnifiedOrchestr
 		}
 	}
 
-	// Initialize multi-leg aggregator
-	orch.multiLegAggregator = NewMultiLegAggregator(&MultiLegAggregatorConfig{
-		TxBuilder:        orch.txBuilder,
-		Submitter:        config.AccumulateClient,
-		ResultChains:     orch.resultChains,
-		ResultChainsLock: &orch.resultChainsLock,
-		HashChainRepo:    hashChainRepo(config),
-		WriteBackTimeout: config.WriteBackTimeout,
-		ValidatorID:      config.ValidatorID,
-	})
-
-	// A multi-leg intent's chain groups write back together; their proof cycles complete then.
-	orch.multiLegAggregator.SetOnUnifiedWriteBack(func(intentID string, txHash string) {
-		completeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		for _, entry := range orch.deferred.take(intentID) {
-			orch.completeProofCycles(completeCtx, entry.cycleID, entry.completions, entry.result, entry.merkleRoot, txHash)
-		}
-	})
-
 	return orch, nil
 }
 
@@ -430,11 +408,6 @@ func hashChainRepo(config *UnifiedOrchestratorConfig) *database.UnifiedRepositor
 		return nil
 	}
 	return config.UnifiedRepo
-}
-
-// GetMultiLegAggregator returns the multi-leg aggregator for external wiring
-func (o *UnifiedOrchestrator) GetMultiLegAggregator() *MultiLegAggregator {
-	return o.multiLegAggregator
 }
 
 // =============================================================================
@@ -510,7 +483,6 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 		result.Error = fmt.Sprintf("phase 7 failed: %v", err)
 		result.FailPhase = 7
 		o.updateLifecycleFailed(ctx, req.IntentID, req.CycleID, 7, err)
-		o.notifyMultiLegGroupFailed(cycle, err)
 		if o.config.OnCycleFailed != nil {
 			o.config.OnCycleFailed(result, err)
 		}
@@ -521,7 +493,6 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 		result.Error = fmt.Sprintf("phase 8 failed: %v", err)
 		result.FailPhase = 8
 		o.updateLifecycleFailed(ctx, req.IntentID, req.CycleID, 8, err)
-		o.notifyMultiLegGroupFailed(cycle, err)
 		if o.config.OnCycleFailed != nil {
 			o.config.OnCycleFailed(result, err)
 		}
@@ -540,7 +511,6 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 		result.Error = fmt.Sprintf("phase 9 failed: %v", err)
 		result.FailPhase = 9
 		o.updateLifecycleFailed(ctx, req.IntentID, req.CycleID, 9, err)
-		o.notifyMultiLegGroupFailed(cycle, err)
 		if o.config.OnCycleFailed != nil {
 			o.config.OnCycleFailed(result, err)
 		}
@@ -552,14 +522,7 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 	result.CompletedAt = &now
 	result.Success = true
 
-	if req.Metadata != nil && req.Metadata["multi_leg"] == "true" {
-		o.deferred.add(req.IntentID, deferredCompletion{
-			cycleID: req.CycleID, completions: cycle.Completions, result: result,
-			merkleRoot: req.MerkleRoot, deferredAt: now,
-		})
-	} else {
-		o.completeProofCycles(ctx, req.CycleID, cycle.Completions, result, req.MerkleRoot, result.WriteBackTxHash)
-	}
+	o.completeProofCycles(ctx, req.CycleID, cycle.Completions, result, req.MerkleRoot, result.WriteBackTxHash)
 
 	// Intent lifecycle: complete - or FAILED, when what the cycle proved and wrote back is that
 	// the settlement reverted. The write-back records the failure; the lifecycle must say the
@@ -1548,11 +1511,14 @@ func (o *UnifiedOrchestrator) executePhase8(ctx context.Context, cycle *activeCy
 	req := cycle.Request
 	result := cycle.Result
 
-	// Create attestation message
-	var primaryResultHash [32]byte
-	if len(result.ObservationResults) > 0 {
-		primaryResultHash = result.ObservationResults[0].ResultHash
+	// A cycle is one chain member's, and a member has exactly one settlement transaction. The
+	// attestation below binds that one observation's result; a second observation would reach the
+	// write-back unattested, so it is refused rather than left out.
+	if len(result.ObservationResults) != 1 {
+		return fmt.Errorf("phase 8: a chain member's cycle attests exactly one observation, this cycle has %d",
+			len(result.ObservationResults))
 	}
+	primaryResultHash := result.ObservationResults[0].ResultHash
 
 	message := &attestation.AttestationMessage{
 		IntentID:     req.IntentID,
@@ -1570,19 +1536,6 @@ func (o *UnifiedOrchestrator) executePhase8(ctx context.Context, cycle *activeCy
 		ExecutionTxHash:      o.executionTxHashForChain(req),
 		AccumulateTxHash:     req.AccumulateTxHash,
 		AccumulateAccountURL: req.AccumulateAccountURL,
-	}
-
-	// For multi-leg chain groups, include per-observation result hashes in the
-	// attestation message so all observations are covered by BFT signing (GAP 5).
-	if req.Metadata != nil && req.Metadata["multi_leg"] == "true" && len(result.ObservationResults) > 1 {
-		message.LegCount = len(result.ObservationResults)
-		// Compute a combined hash over all observation result hashes
-		combinedData := make([]byte, 0, 32*len(result.ObservationResults)+len("CERTEN_MULTI_OBS_V1"))
-		combinedData = append(combinedData, []byte("CERTEN_MULTI_OBS_V1")...)
-		for _, obs := range result.ObservationResults {
-			combinedData = append(combinedData, obs.ResultHash[:]...)
-		}
-		message.MultiLegResultHash = sha256.Sum256(combinedData)
 	}
 
 	// Create timeout context
@@ -2066,27 +2019,12 @@ func (o *UnifiedOrchestrator) HandlePeerAttestationRequest(
 // PHASE 9: RESULT WRITE-BACK
 // =============================================================================
 
-// notifyMultiLegGroupFailed tells the multi-leg aggregator that this chain group's proof
-// cycle failed, so it can abort the intent (atomic) or skip a partial write-back (parallel/
-// sequential) instead of silently timing out into a write-back that omits the failed leg.
-// No-op for single-leg cycles. SEC-10.
-func (o *UnifiedOrchestrator) notifyMultiLegGroupFailed(cycle *activeCycle, err error) {
-	if cycle == nil || cycle.Request == nil || cycle.Request.Metadata == nil {
-		return
-	}
-	if cycle.Request.Metadata["multi_leg"] != "true" || o.multiLegAggregator == nil {
-		return
-	}
-	o.multiLegAggregator.OnChainGroupFailed(cycle.Request.IntentID, cycle.Request.Metadata["chain_key"], err)
-}
-
 // Phase 9 write-back states, recorded on every cycle.
 const (
-	WriteBackWritten                     = "written"
-	WriteBackDisabledByConfiguration     = "disabled_by_configuration"
-	WriteBackDeferredToMultiLegAggregate = "deferred_to_multi_leg_aggregate"
-	WriteBackRefusedQuorumNotMet         = "refused_quorum_not_met"
-	WriteBackFailed                      = "failed"
+	WriteBackWritten                 = "written"
+	WriteBackDisabledByConfiguration = "disabled_by_configuration"
+	WriteBackRefusedQuorumNotMet     = "refused_quorum_not_met"
+	WriteBackFailed                  = "failed"
 )
 
 func (o *UnifiedOrchestrator) executePhase9(ctx context.Context, cycle *activeCycle) (err error) {
@@ -2106,8 +2044,7 @@ func (o *UnifiedOrchestrator) executePhase9(ctx context.Context, cycle *activeCy
 		defer func() { o.config.OnPhaseComplete(cycle.CycleID, 9) }()
 	}
 
-	// RB-SEC-1: QUORUM ENFORCEMENT (fail closed). Never write back — or contribute a
-	// "success" to the multi-leg aggregator — unless the attestation aggregate met the
+	// RB-SEC-1: QUORUM ENFORCEMENT (fail closed). Never write back unless the attestation aggregate met the
 	// ≥2/3 threshold in Phase 8. Without this a lone/malicious executor could write back
 	// with only its own attestation (peers refusing via RB-SEC-1 would then be moot).
 	if cycle.Result == nil || !cycle.Result.ThresholdMet {
@@ -2117,27 +2054,6 @@ func (o *UnifiedOrchestrator) executePhase9(ctx context.Context, cycle *activeCy
 			cycle.Result.WriteBackState = WriteBackRefusedQuorumNotMet
 		}
 		return fmt.Errorf("attestation threshold not met — refusing write-back")
-	}
-
-	// For multi-leg chain groups, the MultiLegAggregator produces ONE write-back after all chain
-	// groups complete. This group's part is handing its result over - which is not a write-back,
-	// and is not done at all when there is no aggregator or it refuses the hand-over.
-	if cycle.Request.Metadata != nil && cycle.Request.Metadata["multi_leg"] == "true" {
-		chainKey := cycle.Request.Metadata["chain_key"]
-		if o.multiLegAggregator == nil {
-			return fmt.Errorf("multi-leg chain group %s of intent %s has no aggregator; its write-back cannot happen",
-				chainKey, cycle.Request.IntentID)
-		}
-		fmt.Printf("[Phase 9] Multi-leg chain group %s complete - handing over to the aggregator (intent=%s)\n",
-			chainKey, cycle.Request.IntentID)
-		if aggErr := o.multiLegAggregator.OnChainGroupCycleComplete(
-			cycle.Request.IntentID, chainKey, cycle.Result); aggErr != nil {
-			return fmt.Errorf("multi-leg aggregator refused chain group %s of intent %s: %w",
-				chainKey, cycle.Request.IntentID, aggErr)
-		}
-		cycle.Result.WriteBackSuccess = false
-		cycle.Result.WriteBackState = WriteBackDeferredToMultiLegAggregate
-		return nil
 	}
 
 	// Write-back disabled by configuration is a stated mode: nothing is written, and it is recorded

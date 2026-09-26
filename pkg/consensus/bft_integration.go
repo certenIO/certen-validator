@@ -148,16 +148,6 @@ type AnchorResponse struct {
 	Message  string `json:"message"`
 }
 
-// ChainLegInfo describes a single leg's chain identity for multi-leg proof cycle routing.
-// Defined here (not in execution package) to avoid circular imports.
-type ChainLegInfo struct {
-	LegIndex  int
-	LegID     string
-	ChainKey  string // e.g., "base-sepolia"
-	ChainName string // e.g., "Base Sepolia"
-	ChainID   int64  // e.g., 84532
-}
-
 // AnchorWorkflowTxHashes contains all 3 transaction hashes from the Ethereum anchor workflow
 // This enables comprehensive tracking and observation of the entire anchor process
 type AnchorWorkflowTxHashes struct {
@@ -1503,59 +1493,6 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 		ExecutorID:         bv.validatorID,
 		ConsensusHash:      fmt.Sprintf("batch_queued_%s_%d", roundID, bftRes.Height),
 	}, nil
-}
-
-// parseMultiChainTxHashes parses comma-separated "ChainName:txhash" strings into per-chain groups.
-// Input format: "Base Sepolia:0x1234,Arbitrum Sepolia:0x5678,Solana devnet:abc123"
-// Returns map: {"base-sepolia": ["0x1234"], "arbitrum-sepolia": ["0x5678"], "solana-devnet": ["abc123"]}
-func parseMultiChainTxHashes(multiChainHashes string) map[string][]string {
-	result := make(map[string][]string)
-	if multiChainHashes == "" {
-		return result
-	}
-
-	parts := strings.Split(multiChainHashes, ",")
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-
-		// Skip failed entries
-		if strings.Contains(part, "_failed") {
-			continue
-		}
-
-		// Handle both 2-part "ChainName:txHash" and 3-part "ChainName:leg-N:txHash" formats.
-		// The governance tx format includes leg IDs: "Ethereum Sepolia:leg-0:0x8771..."
-		// We need to extract just the chain name (without leg ID) as the key.
-		segments := strings.Split(part, ":")
-		if len(segments) < 2 {
-			// No chain prefix - treat as default chain
-			result["default"] = append(result["default"], part)
-			continue
-		}
-
-		// TX hash is always the last segment
-		txHash := strings.TrimSpace(segments[len(segments)-1])
-		if txHash == "" {
-			continue
-		}
-
-		// Chain name is the first segment; skip any intermediate "leg-N" segments
-		chainName := strings.TrimSpace(segments[0])
-		// For "0x..." hashes that got split on their ":" in oddly formatted entries,
-		// reconstruct if the first segment looks like a chain name
-		if chainName == "" {
-			continue
-		}
-
-		// Normalize chain key (strip leg ID segments from chain name)
-		chainKey := strings.ToLower(strings.ReplaceAll(chainName, " ", "-"))
-		result[chainKey] = append(result[chainKey], txHash)
-	}
-
-	return result
 }
 
 // extractAuthorizationLeavesFromGovernance extracts AuthorizationLeaf structs from canonical GovernanceData

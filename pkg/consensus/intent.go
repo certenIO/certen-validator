@@ -566,7 +566,6 @@ func normalizeChainName(chain string) string {
 // This is the ONLY function that should construct chain keys for use across the
 // multi-leg pipeline (GAP 15: chain key normalization).
 // Format: lowercase, spaces replaced with hyphens (e.g., "base-sepolia").
-// This matches the format used by bft_integration.go for parseMultiChainTxHashes output keys.
 func NormalizeChainKey(chain string) string {
 	return strings.ToLower(strings.ReplaceAll(chain, " ", "-"))
 }

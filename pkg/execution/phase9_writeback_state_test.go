@@ -12,24 +12,20 @@ import (
 // WriteBackSuccess was set true when write-back was disabled by configuration, and when a
 // multi-leg chain group only deferred its write-back to the aggregator - even with no aggregator
 // to defer to, and even when the aggregator returned an error. It feeds the governance flags
-// ("write_back_success"), so each of those recorded a write-back that never happened.
+// ("write_back_success"), so each of those recorded a write-back that never happened. (The multi-leg
+// hand-off state went with the multi-leg aggregator: every cycle is one chain member's, RB3-F45.)
 
-func phase9Cycle(multiLeg bool) *activeCycle {
-	md := map[string]string{}
-	if multiLeg {
-		md["multi_leg"] = "true"
-		md["chain_key"] = "base-sepolia"
-	}
+func phase9Cycle() *activeCycle {
 	return &activeCycle{
 		CycleID: "cycle-1",
-		Request: &UnifiedProofCycleRequest{IntentID: "i1", Metadata: md},
+		Request: &UnifiedProofCycleRequest{IntentID: "i1", Metadata: map[string]string{}},
 		Result:  &UnifiedProofCycleResult{ThresholdMet: true},
 	}
 }
 
 func TestPhase9_DisabledWriteBackIsNotRecordedAsWritten(t *testing.T) {
 	o := &UnifiedOrchestrator{config: &UnifiedOrchestratorConfig{EnableWriteBack: false}}
-	c := phase9Cycle(false)
+	c := phase9Cycle()
 	if err := o.executePhase9(context.Background(), c); err != nil {
 		t.Fatalf("disabled write-back is a stated mode, not a failure: %v", err)
 	}
@@ -41,20 +37,9 @@ func TestPhase9_DisabledWriteBackIsNotRecordedAsWritten(t *testing.T) {
 	}
 }
 
-func TestPhase9_MultiLegWithoutAnAggregatorIsAnError(t *testing.T) {
-	o := &UnifiedOrchestrator{config: &UnifiedOrchestratorConfig{EnableWriteBack: true}}
-	c := phase9Cycle(true)
-	if err := o.executePhase9(context.Background(), c); err == nil {
-		t.Fatal("a multi-leg chain group with no aggregator to write it back was reported as done")
-	}
-	if c.Result.WriteBackSuccess {
-		t.Fatal("recorded as written although nothing will ever write it")
-	}
-}
-
 func TestPhase9_QuorumNotMetRecordsTheRefusal(t *testing.T) {
 	o := &UnifiedOrchestrator{config: &UnifiedOrchestratorConfig{EnableWriteBack: true}}
-	c := phase9Cycle(false)
+	c := phase9Cycle()
 	c.Result.ThresholdMet = false
 	if err := o.executePhase9(context.Background(), c); err == nil {
 		t.Fatal("write-back without quorum must be refused")

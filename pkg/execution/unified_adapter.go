@@ -13,13 +13,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 )
-
-// sortInts sorts a slice of ints in ascending order
-func sortInts(s []int) { sort.Ints(s) }
 
 // =============================================================================
 // UNIFIED ORCHESTRATOR ADAPTER

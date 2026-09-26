@@ -22,8 +22,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -319,53 +317,4 @@ func (o *UnifiedOrchestrator) completeProofCycles(ctx context.Context, cycleID s
 		}
 		logfPrintf("✅ [PROOF-LEVELS] cycle %s proof %s: all four levels complete (bindings_valid=%v)", cycleID, record.ProofID, bindings)
 	}
-}
-
-// deferredCompletion is a multi-leg chain group's cycle, whose write-back happens later in the aggregator.
-type deferredCompletion struct {
-	cycleID     string
-	completions []uuid.UUID
-	result      *UnifiedProofCycleResult
-	merkleRoot  [32]byte
-	deferredAt  time.Time
-}
-
-// deferredCompletions holds multi-leg cycles until the aggregator's unified write-back lands.
-type deferredCompletions struct {
-	mu       sync.Mutex
-	byIntent map[string][]deferredCompletion
-}
-
-// deferredCompletionTTL bounds how long a chain group waits for its unified write-back before its level
-// records are left incomplete; it is the aggregator's own timeout with a margin.
-const deferredCompletionTTL = 2 * time.Hour
-
-func (d *deferredCompletions) add(intentID string, entry deferredCompletion) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.byIntent == nil {
-		d.byIntent = map[string][]deferredCompletion{}
-	}
-	for id, entries := range d.byIntent {
-		kept := entries[:0]
-		for _, e := range entries {
-			if time.Since(e.deferredAt) < deferredCompletionTTL {
-				kept = append(kept, e)
-			}
-		}
-		if len(kept) == 0 {
-			delete(d.byIntent, id)
-		} else {
-			d.byIntent[id] = kept
-		}
-	}
-	d.byIntent[intentID] = append(d.byIntent[intentID], entry)
-}
-
-func (d *deferredCompletions) take(intentID string) []deferredCompletion {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	entries := d.byIntent[intentID]
-	delete(d.byIntent, intentID)
-	return entries
 }

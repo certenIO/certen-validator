@@ -309,3 +309,24 @@ func TestRB3F41_RegistryIsRequired(t *testing.T) {
 		t.Fatalf("orchestrator built without a validator registry source: %v", err)
 	}
 }
+
+// A chain member's cycle has one settlement transaction and its attestation binds that one
+// observation. A second observation would reach the write-back unattested, so Phase 8 refuses it.
+func TestPhase8RefusesAnObservationItWouldNotAttest(t *testing.T) {
+	vals, reg := rb3Validators(t, 4)
+	o := &UnifiedOrchestrator{config: &UnifiedOrchestratorConfig{
+		ValidatorID: "validator-1", AttestationTimeout: time.Second,
+		ResultQuorumRegistry: func(context.Context, string) (map[string]consensus.ValidatorRegistryEntry, error) { return reg, nil },
+	}}
+	cycle := &activeCycle{
+		CycleID: "c1",
+		Request: &UnifiedProofCycleRequest{IntentID: "i1", TxHashes: []string{"0xaa", "0xbb"}, TargetChain: "11155111"},
+		Result: &UnifiedProofCycleResult{ChainID: "11155111", ObservationResults: []*chain.ObservationResult{
+			{TxHash: "0xaa", ResultHash: [32]byte{1}}, {TxHash: "0xbb", ResultHash: [32]byte{2}},
+		}},
+	}
+	err := o.executePhase8(context.Background(), cycle, vals[0].strat)
+	if err == nil || !strings.Contains(err.Error(), "exactly one observation") {
+		t.Fatalf("a second, unattested observation was accepted: %v", err)
+	}
+}
