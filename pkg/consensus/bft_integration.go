@@ -1344,6 +1344,20 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 		}, nil
 	}
 
+	// SUPPORTED TARGET CHAINS. CERTEN executes only on Ethereum Sepolia, Base Sepolia and Arbitrum
+	// Sepolia; every other chain runs retired contracts. Refused here, on every validator, before
+	// anything is queued, signed or sent. See supported_chains.go.
+	if err := CheckIntentTargetChains(certenIntent); err != nil {
+		bv.logger.Printf("🚫 [TARGET-CHAIN] refusing intent %s: %v", certenIntent.IntentID, err)
+		return &ExecutionTaskResult{
+			Success:    false,
+			ExecutorID: bv.validatorID,
+			// PERMANENT: the intent's legs are final on Accumulate and name the same chains on every
+			// pass.
+			Error: fmt.Errorf("intent %s refused: %w: %w", certenIntent.IntentID, ErrIntentPermanentlyInvalid, err),
+		}, nil
+	}
+
 	// Create builder inputs STRICTLY from canonical sources
 	builderInputs := BuilderInputs{
 		Intent: certenIntent, // canonical 4 blobs from IntentDiscovery
