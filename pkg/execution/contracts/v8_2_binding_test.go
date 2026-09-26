@@ -259,3 +259,27 @@ func TestV8_2_BundleIDFoldsTheAccumulateFields(t *testing.T) {
 		t.Fatal("batch bundleId does not commit accumulateValidatorSetRoot")
 	}
 }
+
+// TestV8_2_LegsMessageVector pins the multi-leg proof message. The same inputs and
+// expected value are asserted in certen-contracts/evm/test/CertenAnchorV8_2Legs.t.sol
+// (test_LegsMessageMatchesGoBinding), and the value was computed a third way with
+// `cast keccak (cast abi-encode ...)`. Never update it on one side only.
+func TestV8_2_LegsMessageVector(t *testing.T) {
+	intentID := b32("5555555555555555555555555555555555555555555555555555555555555555")
+	proofRoot := b32("6666666666666666666666666666666666666666666666666666666666666666")
+
+	msg := ComputeEvmMessageHashV8_2_Legs(vecChainID, intentID, proofRoot)
+	t.Logf("messageHash (v2:legs) = %x", msg)
+
+	const want = "c4f6126af4b292ba170eb4eb2c744fcf866524c27bf1b939037d5e1084a46d0a"
+	if got := hex.EncodeToString(msg[:]); got != want {
+		t.Errorf("V8.2 legs messageHash drifted: got %s want %s -- if this is a deliberate encoding change, update certen-contracts/evm/test/CertenAnchorV8_2Legs.t.sol too", got, want)
+	}
+
+	// The legs domain must not collide with the pre-exec domain over the same leading fields.
+	var zero [32]byte
+	pre := ComputeEvmMessageHashV8_2_Pre(vecChainID, intentID, proofRoot, zero, zero, zero, zero)
+	if pre == msg {
+		t.Fatal("legs and pre-exec messages collide")
+	}
+}

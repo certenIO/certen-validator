@@ -104,6 +104,38 @@ func ComputeEvmMessageHashV8_2_Post(
 	)
 }
 
+// ComputeEvmMessageHashV8_2_Legs is the message a validator quorum signs to prove a
+// multi-leg intent on CertenAnchorV8_2.executeLegs:
+//
+//	keccak256(abi.encode(
+//	  bytes32("certen:bls:v2:legs"),   // domain — no pre/post or V8.1 signature fits
+//	  uint256(chainId),                // cross-chain replay
+//	  bytes32(intentId),               // derived on-chain from operationId, proofRoot,
+//	                                   // the leg count, height and every leg
+//	  bytes32(proofRoot)
+//	))
+//
+// Total preimage: 128 bytes (4 × 32). The contract accepts it only from an
+// authorized quorum (registered signers, threshold, authorized aggregate-key
+// commitment) — the same check as the pre-exec path.
+func ComputeEvmMessageHashV8_2_Legs(chainID int64, intentID, proofRoot [32]byte) [32]byte {
+	var domain [32]byte
+	copy(domain[:], "certen:bls:v2:legs")
+
+	var chainIDBE [32]byte
+	big.NewInt(chainID).FillBytes(chainIDBE[:])
+
+	preimage := make([]byte, 0, 32*4)
+	preimage = append(preimage, domain[:]...)
+	preimage = append(preimage, chainIDBE[:]...)
+	preimage = append(preimage, intentID[:]...)
+	preimage = append(preimage, proofRoot[:]...)
+
+	var out [32]byte
+	copy(out[:], crypto.Keccak256(preimage))
+	return out
+}
+
 func computeEvmMessageHashV8_2(
 	domainTag []byte,
 	chainID int64,
