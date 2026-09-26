@@ -1,14 +1,11 @@
 package execution
 
 import (
-	"encoding/json"
 	"math/big"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
-
-	"github.com/certen/independant-validator/pkg/intent"
 )
 
 // RB-4: committed expected-event gate for contract calls.
@@ -163,49 +160,5 @@ func TestRB4_NativeTransferUnaffected(t *testing.T) {
 	}
 	if !c.VerifyAgainstResult(r) {
 		t.Error("native transfer must not be blocked by the contract-call event gate")
-	}
-}
-
-// TestRB4_LegParsesExpectedEvents asserts the validator parses the user-signed
-// expectedEvents from the executionPayload onto the leg, and flags it as a call.
-func TestRB4_LegParsesExpectedEvents(t *testing.T) {
-	callData := "0x1a1772681111111111111111111111111111111111111111111111111111111111111111"
-	leg := map[string]interface{}{
-		"legId":     "leg-0",
-		"from":      "0x1111111111111111111111111111111111111111",
-		"to":        rb4Target.Hex(),
-		"amountWei": "0",
-		"chainId":   11155111,
-		"chain":     "ethereum sepolia",
-		"executionPayload": map[string]interface{}{
-			"target":              rb4Target.Hex(),
-			"value":               "0",
-			"callData":            callData,
-			"dataHash":            crypto.Keccak256Hash(common.FromHex(callData)).Hex(),
-			"chainId":             11155111,
-			"executionCommitment": common.Hash(computeExecutionCommitment(11155111, rb4Target, big.NewInt(0), common.FromHex(callData))).Hex(),
-			"expectedEvents": []interface{}{
-				map[string]interface{}{"contract": rb4Target.Hex(), "topic0": rb4Topic0.Hex()},
-			},
-		},
-	}
-	blob := map[string]interface{}{"protocol": "CERTEN", "version": "2.0", "legs": []interface{}{leg}}
-	ccd, _ := json.Marshal(blob)
-
-	t.Setenv("CERTEN_ALLOW_CONTRACT_CALLS", "true") // opt in to arbitrary calls for this test
-
-	btce := NewBFTTargetChainExecutor(rb1Logger{})
-	legs := btce.extractAllLegsFromIntent(&intent.CertenIntent{IntentID: "rb4", CrossChainData: ccd})
-	if len(legs) != 1 {
-		t.Fatalf("expected 1 leg, got %d", len(legs))
-	}
-	if !legs[0].IsContractCall() {
-		t.Error("leg with non-empty calldata must be flagged as a contract call")
-	}
-	if len(legs[0].ExpectedEvents) != 1 {
-		t.Fatalf("expected 1 parsed expected event, got %d", len(legs[0].ExpectedEvents))
-	}
-	if legs[0].ExpectedEvents[0].Topic0 != rb4Topic0 || legs[0].ExpectedEvents[0].Contract != rb4Target {
-		t.Error("parsed expected event does not match the signed executionPayload")
 	}
 }

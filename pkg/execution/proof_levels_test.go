@@ -23,7 +23,7 @@ import (
 
 	attestation "github.com/certen/independant-validator/pkg/attestation/strategy"
 	chain "github.com/certen/independant-validator/pkg/chain/strategy"
-	"github.com/certen/independant-validator/pkg/crypto/bls"
+	"github.com/certen/independant-validator/pkg/consensus"
 	"github.com/certen/independant-validator/pkg/database"
 	"github.com/certen/independant-validator/pkg/strategy"
 )
@@ -366,18 +366,38 @@ func TestLevelsBoundByAttestations(t *testing.T) {
 	}
 }
 
-func TestUnifiedAttestationSetIsTheSameOnEveryValidator(t *testing.T) {
+func TestRegistryAttestationSetIsTheSameOnEveryValidator(t *testing.T) {
 	threshold := attestation.DefaultThresholdConfig().CalculateThresholdWeight
-	peers := []string{"http://validator-2:8080", "http://validator-3:8080"}
-	a := unifiedAttestationSet("http://validator-1:8080", peers, threshold, 99)
-	b := unifiedAttestationSet("http://validator-3:8080", []string{"http://validator-1:8080", "http://validator-2:8080"}, threshold, 99)
+	_, reg := rb3Validators(t, 3)
+	a, err := registryAttestationSet(reg, threshold, 99)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The set is the registry's, so every validator - whoever it is - derives the same snapshot.
+	b, err := registryAttestationSet(reg, threshold, 99)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if a.SnapshotID != b.SnapshotID || a.ValidatorRoot != b.ValidatorRoot {
 		t.Fatal("two validators of one set derived different snapshots")
 	}
 	if a.TotalWeight.Int64() != 3 || a.ThresholdWeight.Int64() != threshold(3) {
 		t.Fatalf("weights %s/%s", a.ThresholdWeight, a.TotalWeight)
 	}
-	c := unifiedAttestationSet("http://validator-1:8080", peers[:1], threshold, 99)
+	for _, v := range a.Validators {
+		if len(v.PublicKey) == 0 || v.Weight.Int64() != 1 {
+			t.Fatalf("member %s recorded without its registered key or power", v.ValidatorID)
+		}
+	}
+	smaller := map[string]consensus.ValidatorRegistryEntry{}
+	for k, v := range reg {
+		smaller[k] = v
+		break
+	}
+	c, err := registryAttestationSet(smaller, threshold, 99)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if c.SnapshotID == a.SnapshotID {
 		t.Fatal("a smaller set produced the same snapshot")
 	}
@@ -455,113 +475,6 @@ func TestResultHashChainIsPersistedVerifiedAndContinuedAfterRestart(t *testing.T
 	}
 	if _, err := unified.VerifyChainExecutionHashChain(ctx, validator, "84532"); !errors.Is(err, database.ErrHashChainBroken) {
 		t.Fatalf("a broken link verified: %v", err)
-	}
-}
-
-// runLegacyLevels records a completed legacy cycle's levels; adjust changes the cycle before recording.
-func runLegacyLevels(t *testing.T, adjust func(*ProofCycleCompletion)) (*database.ProofCycleCompletionRecord, *database.CertenAnchorProof, *bls.PublicKey, uuid.UUID, [32]byte, [32]byte) {
-	t.Helper()
-	db := openMigratedTestDB(t, "legacy proof levels")
-	ctx := context.Background()
-	repos := database.NewRepositories(database.NewClientFromDB(db))
-	sk, pk, err := bls.GenerateKeyPair()
-	if err != nil {
-		t.Fatal(err)
-	}
-	validatorSet := &ValidatorSet{
-		Validators:       []ValidatorInfo{{ID: "legacy-validator", Index: 0, VotingPower: big.NewInt(1), BLSPublicKey: pk.Bytes(), Active: true}},
-		TotalVotingPower: big.NewInt(1), ValidatorCount: 1,
-	}
-	collector := NewAttestationCollector(validatorSet, 2, 3)
-	verifier, err := NewResultVerifierFromBytes("legacy-validator", common.Address{}, 0, sk.Bytes(), collector)
-	if err != nil {
-		t.Fatal(err)
-	}
-	o := &ProofCycleOrchestrator{validatorID: "legacy-validator", repos: repos, collector: collector, verifier: verifier,
-		config: &ProofCycleConfig{ChainID: 84532}, logger: testLogger{t}}
-
-	intentID := "legacy-intent-" + uuid.NewString()
-	accumTx := hex.EncodeToString(levelBytes("accum-" + intentID))
-	leaf := levelHash("leaf-" + intentID)
-	createTx := levelHash("create-" + intentID)
-	canonicalSingleLeafAnchor(t, db, intentID, accumTx, leaf, "0x"+hex.EncodeToString(createTx[:]))
-	artifact, err := repos.ProofArtifacts.CreateProofArtifact(ctx, &database.NewProofArtifact{
-		ProofType: database.ProofTypeCertenAnchor, AccumTxHash: accumTx, AccountURL: "acc://legacy.acme/tokens",
-		ProofClass: database.ProofClassOnDemand, ValidatorID: "legacy-validator", ArtifactJSON: json.RawMessage(`{}`), IntentID: &intentID,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_, _ = db.ExecContext(context.Background(), `DELETE FROM proof_artifacts WHERE proof_id = $1`, artifact.ProofID)
-	})
-
-	govResult := &ExternalChainResult{ResultHash: levelHash("gov-result-" + intentID), TxHash: common.BytesToHash(levelBytes("gov-" + intentID))}
-	sequence := int64(2)
-	resultID, err := repos.ProofArtifacts.SaveExternalChainResultV2(ctx, &database.ExternalChainResultInput{
-		ProofID: &artifact.ProofID, BundleID: leaf[:], OperationID: leaf[:], ChainType: "ethereum", ChainID: 84532,
-		TxHash: govResult.TxHash.Bytes(), TxFromAddress: make([]byte, 20), BlockNumber: 10, BlockHash: leaf[:],
-		BlockTimestamp: time.Now().UTC(), StateRoot: leaf[:], TransactionsRoot: leaf[:], ReceiptsRoot: leaf[:],
-		ExecutionStatus: 1, ExecutionSuccess: true, ResultHash: govResult.ResultHash[:], ObserverValidatorID: "legacy-validator",
-		ObservedAt: time.Now().UTC(), SequenceNumber: &sequence,
-	})
-	if err != nil {
-		t.Fatalf("governance result row: %v", err)
-	}
-	t.Cleanup(func() {
-		_, _ = db.ExecContext(context.Background(), `DELETE FROM external_chain_results WHERE result_id = $1`, resultID)
-	})
-
-	cycle := &ProofCycleCompletion{
-		IntentID: intentID, IntentTxHash: accumTx, CreateTxHash: common.BytesToHash(createTx[:]),
-		CreateResult:     &ExternalChainResult{BlockNumber: big.NewInt(4242), BlockHash: common.BytesToHash(leaf[:]), ConfirmationBlocks: 12},
-		GovernanceResult: govResult,
-		Attestation:      &AggregatedAttestation{ThresholdMet: true, MessageConsistencyVerified: true, ResultHash: govResult.ResultHash, ValidatorCount: 1},
-		CycleHash:        levelHash("legacy-cycle-" + intentID),
-	}
-	if adjust != nil {
-		adjust(cycle)
-	}
-	o.recordLegacyProofLevels(ctx, artifact, cycle, &ChainedProofResult{L3DNBlockHeight: 7},
-		database.GovLevelG1, json.RawMessage(`{"level":"G1"}`), true)
-
-	record, err := repos.ProofArtifacts.GetProofCycleCompletionByProof(ctx, artifact.ProofID)
-	if err != nil || record == nil {
-		t.Fatalf("legacy level record: %v", err)
-	}
-	certen, err := repos.Proofs.GetProofByArtifactID(ctx, artifact.ProofID)
-	if err != nil {
-		t.Fatalf("legacy certen proof: %v", err)
-	}
-	return record, certen, pk, resultID, cycle.CycleHash, createTx
-}
-
-func TestLegacyProofLevelsRecordSignAndComplete(t *testing.T) {
-	record, certen, pk, resultID, cycleHash, createTx := runLegacyLevels(t, nil)
-	if !record.AllLevelsComplete || !record.BindingsValid || string(record.CycleHash) != string(cycleHash[:]) ||
-		record.Level4ResultID == nil || *record.Level4ResultID != resultID {
-		t.Fatalf("legacy cycle not completed as recorded: %+v", record)
-	}
-	signature, err := bls.SignatureFromBytes(certen.ValidatorSig)
-	if err != nil {
-		t.Fatalf("legacy signature: %v", err)
-	}
-	var message [32]byte
-	copy(message[:], certen.ProofHash)
-	if !pk.VerifyWithDomain(signature, message[:], bls.DomainResult) {
-		t.Fatal("the legacy BLS signature does not verify over the proof hash")
-	}
-	if !certen.Verified || certen.AnchorTxHash != "0x"+hex.EncodeToString(createTx[:]) {
-		t.Fatalf("legacy certen proof = %+v", certen)
-	}
-}
-
-func TestLegacyBindingsNeedEveryAttestationToSignOneMessage(t *testing.T) {
-	record, _, _, _, _, _ := runLegacyLevels(t, func(cycle *ProofCycleCompletion) {
-		cycle.Attestation.MessageConsistencyVerified = false
-	})
-	if !record.AllLevelsComplete || record.BindingsValid {
-		t.Fatalf("bindings accepted over attestations to different messages: %+v", record)
 	}
 }
 

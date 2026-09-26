@@ -102,11 +102,9 @@ type Config struct {
 
 	// Unified Multi-Chain Feature Flags
 	// Per Unified Multi-Chain Architecture plan
-	UseUnifiedOrchestrator bool   // Use unified orchestrator for proof cycles
-	EnableMultiChain       bool   // Enable multi-chain execution strategies
-	EnableUnifiedTables    bool   // Write to unified PostgreSQL tables
-	FallbackToLegacy       bool   // Fall back to legacy if unified fails
-	DefaultTargetChain     string // Default target chain (e.g., "ethereum", "sepolia")
+	UseUnifiedOrchestrator bool // Use unified orchestrator for proof cycles
+	EnableMultiChain       bool // Enable multi-chain execution strategies
+	EnableUnifiedTables    bool // Write to unified PostgreSQL tables
 }
 
 // Load reads configuration from environment variables
@@ -216,8 +214,6 @@ func Load() (*Config, error) {
 		UseUnifiedOrchestrator: getEnvBool("FF_UNIFIED_ORCHESTRATOR", true),
 		EnableMultiChain:       getEnvBool("FF_MULTI_CHAIN", true),
 		EnableUnifiedTables:    getEnvBool("FF_UNIFIED_TABLES", true),
-		FallbackToLegacy:       getEnvBool("FF_FALLBACK_LEGACY", true),
-		DefaultTargetChain:     getEnv("DEFAULT_TARGET_CHAIN", "sepolia"),
 	}
 
 	return cfg, nil

@@ -53,6 +53,28 @@ type QuorumProver interface {
 	ProveBatchRoot(ctx context.Context, tree *BatchTree, cutoffHeight, periodBlocks uint64) error
 }
 
+// drop records members as having left the batch path for good, with the cause.
+func (r *BatchFlushResult) drop(cause string, members ...*PendingBatchIntent) {
+	if r.dropCause == nil {
+		r.dropCause = make(map[string]string, len(members))
+	}
+	for _, p := range members {
+		if p == nil {
+			continue
+		}
+		r.Dropped = append(r.Dropped, p)
+		r.dropCause[memberKey(p.IntentID, p.ChainID)] = cause
+	}
+}
+
+// DropCauseOf reports why a dropped member was dropped.
+func (r *BatchFlushResult) DropCauseOf(p *PendingBatchIntent) string {
+	if r == nil || p == nil {
+		return ""
+	}
+	return r.dropCause[memberKey(p.IntentID, p.ChainID)]
+}
+
 // BatchFlushResult reports what happened to one tree.
 type BatchFlushResult struct {
 	ChainID      int64
@@ -63,10 +85,14 @@ type BatchFlushResult struct {
 
 	Settled []*PendingBatchIntent
 	Failed  []*PendingBatchIntent
-	// Dropped members left the batch path entirely and MUST be routed to the per-intent
-	// on_demand path by the caller. They are not requeued and will never reappear in a batch,
-	// so a caller that ignores this field strands them.
+	// Dropped members left the batch path for good: their account cannot participate, the anchor
+	// mined but rejects their leaves, or quorum over the root was never reached. There is no other
+	// path to settle them, so the caller MUST record each as FAILED with its cause (DropCauseOf);
+	// a caller that ignores this field leaves them settled nowhere and recorded nowhere. Always add
+	// to it through drop, which records the cause.
 	Dropped []*PendingBatchIntent
+	// dropCause is why each dropped member was dropped, keyed by member (intent and chain).
+	dropCause map[string]string
 	// AlreadySettled members were found under an anchor a previous leader had already attested.
 	// They are removed from the pool and must NOT be attested or fallen back to — the leader
 	// that landed the batch already did both. Reported so the condition is visible rather than
@@ -201,11 +227,11 @@ func NewBatchOrchestrator(
 //
 // # FAILURE HANDLING
 //
-// Before the anchor is created, members are requeued untouched — nothing has been spent.
-// After the anchor exists they are never requeued: re-forming the identical tree derives the
-// same bundleId and reverts with AnchorAlreadyExists, which hides the real fault. A quorum
-// failure past that point DROPS the members so the caller can route them to the per-intent
-// on_demand path (approved policy: fall back, never requeue).
+// Before the anchor is created, members are requeued untouched — nothing has been spent. After
+// it exists, a transient quorum failure is retried (createBatchAnchor treats the existing anchor
+// as success) up to maxQuorumAttempts; past that, or when the anchor rejects the leaves, the
+// members are DROPPED with their cause and the caller records each as FAILED. There is no other
+// path to settle them.
 func (o *BatchOrchestrator) FlushChain(
 	ctx context.Context,
 	chainID int64,
@@ -248,7 +274,8 @@ func (o *BatchOrchestrator) FlushChain(
 	//
 	// Dropping is deterministic across validators because the predicate is on-chain state every
 	// node reads identically, so all seven form the same tree from the same survivors. Dropped
-	// members are returned as such and routed to the per-intent path rather than silently lost.
+	// members are returned with their cause and recorded as FAILED by the caller, never silently
+	// lost.
 	screened := make([]*PendingBatchIntent, 0, len(members))
 	for _, p := range members {
 		if err := o.memberAccountUsable(ctx, p); err != nil {
@@ -259,7 +286,7 @@ func (o *BatchOrchestrator) FlushChain(
 				return nil, fmt.Errorf("period %d on chain %d: screening %s: %w", cutoffHeight, chainID, p.IntentID, err)
 			}
 			o.logf("[BATCH] chain=%d dropping member %s from this period: %v", chainID, p.IntentID, err)
-			res.Dropped = append(res.Dropped, p)
+			res.drop(fmt.Sprintf("its account cannot take part in a batch on chain %d: %v", chainID, err), p)
 			continue
 		}
 		screened = append(screened, p)
@@ -318,8 +345,8 @@ func (o *BatchOrchestrator) FlushChain(
 	//
 	// This MUST short-circuit. Continuing would re-submit executeComprehensiveProof, which
 	// reverts on usedCommitments replay protection; the quorum step would then report failure
-	// and route every member to the per-intent fallback — RE-EXECUTING intents that already
-	// moved funds. A double-spend produced by a retry is far worse than a skipped flush.
+	// and record every member as FAILED although it already moved funds. A false failure
+	// produced by a retry contradicts the chain; a skipped flush does not.
 	if settled, serr := o.anchorAlreadyAttested(ctx, tree.BundleID); serr != nil {
 		o.mempool.Requeue(members)
 		return nil, fmt.Errorf("checking whether anchor 0x%x already settled: %w", tree.BundleID[:8], serr)
@@ -439,13 +466,15 @@ func (o *BatchOrchestrator) FlushChain(
 
 	// ---- VERIFY 3: the deployed anchor accepts every member leaf ------------
 	if err := o.verifyLeavesAgainstAnchor(ctx, tree); err != nil {
-		// The anchor exists but is unusable. Do NOT requeue: re-forming the identical tree
-		// would derive the same bundleId and revert with "Anchor already exists", hiding
-		// the real fault. Drop to the per-intent path and surface the cause.
+		// The anchor exists but rejects these leaves. Do NOT requeue: re-forming the identical tree
+		// derives the same bundleId, finds the same anchor, and fails this same check again - the
+		// rejection is a property of the tree, not a transient. Drop the members, recorded as
+		// FAILED with this cause by the caller.
 		o.mempool.DropMembers(members)
-		res.Dropped = members
+		res.drop(fmt.Sprintf("its batch anchor 0x%x on chain %d was created but rejects the member leaves: %v",
+			tree.BundleID[:8], chainID, err), members...)
 		return res, fmt.Errorf("anchor created but membership verification failed (%d member(s) "+
-			"dropped to the per-intent path): %w", len(members), err)
+			"dropped and recorded as FAILED): %w", len(members), err)
 	}
 
 	// ---- Quorum attestation over the root -----------------------------------
@@ -496,10 +525,10 @@ func (o *BatchOrchestrator) FlushChain(
 		delete(o.attempts, cutoffHeight)
 		o.attemptsMu.Unlock()
 		o.mempool.DropMembers(members)
-		res.Dropped = members
+		res.drop(fmt.Sprintf("quorum over its batch root 0x%x on chain %d was not reached after %d attempts: %v",
+			tree.BundleID[:8], chainID, n, err), members...)
 		return res, fmt.Errorf("quorum attestation over batch root failed %d times; %d member(s) "+
-			"dropped and will be attested as FAILED — they cannot be re-derived into a batch and "+
-			"the per-intent path is not usable: %w", n, len(members), err)
+			"dropped and recorded as FAILED: %w", n, len(members), err)
 	}
 	o.attemptsMu.Lock()
 	delete(o.attempts, cutoffHeight)
@@ -616,9 +645,9 @@ func (o *BatchOrchestrator) settleFlushMembers(
 		res.TxHashes[p.IntentID] = txHash
 	}
 
-	// Put deferred members back so a later period retries them. Requeue, never Drop: dropping
-	// routes to the per-intent path, which would re-derive and re-execute an intent that simply
-	// could not afford gas this minute.
+	// Put deferred members back so a later period retries them. Requeue, never Drop: a dropped
+	// member is recorded as FAILED for good, and an intent that simply could not afford gas this
+	// minute has not failed.
 	if len(res.Retryable) > 0 {
 		o.mempool.Requeue(res.Retryable)
 		o.logf("[BATCH] chain=%d %d member(s) deferred on gas and requeued", chainID, len(res.Retryable))
@@ -744,8 +773,7 @@ func (o *BatchOrchestrator) verifyLeavesAgainstAnchor(ctx context.Context, tree 
 	// can be served by a node that has not applied it yet — public RPC endpoints are load
 	// balanced across peers with independent lag. Observed live 2026-08-02: an anchor mined,
 	// and 121ms later batchLeafCount read back as 0, so the batch was declared unusable and
-	// every member was dropped to the per-intent path even though the anchor was perfectly
-	// good.
+	// every member was dropped from it even though the anchor was perfectly good.
 	//
 	// A stale read is indistinguishable from a genuinely broken anchor on a single sample, so
 	// this retries briefly before concluding anything. It gives up quickly: a real mismatch

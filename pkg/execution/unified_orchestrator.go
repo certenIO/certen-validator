@@ -66,9 +66,6 @@ type UnifiedOrchestratorConfig struct {
 	// UnifiedRepo for new unified tables
 	UnifiedRepo *database.UnifiedRepository
 
-	// DefaultChainID if not specified in request
-	DefaultChainID string
-
 	// Thresholds
 	ThresholdConfig *attestation.ThresholdConfig
 
@@ -101,12 +98,15 @@ type UnifiedOrchestratorConfig struct {
 	// Feature flags
 	EnableMultiChain    bool
 	EnableUnifiedTables bool
-	FallbackToLegacy    bool
 	EnableWriteBack     bool // Enable Phase 9 write-back to Accumulate
 
 	// Chained proof generator for L1/L2/L3 proofs
 	// Used to fetch Accumulate proof chain: Transaction → BVN → DN → Consensus
 	ProofGenerator ChainedProofGenerator
+
+	// ResultQuorumRegistry is the on-chain validator registry Phase 8 counts its quorum against.
+	// Required: without it there is no quorum to count.
+	ResultQuorumRegistry ResultQuorumRegistryFn
 }
 
 // ChainedProofGenerator interface for generating Accumulate chained proofs
@@ -170,7 +170,6 @@ func DefaultUnifiedOrchestratorConfig() *UnifiedOrchestratorConfig {
 		WriteBackTimeout:    2 * time.Minute,
 		EnableMultiChain:    true,
 		EnableUnifiedTables: true,
-		FallbackToLegacy:    true,
 	}
 }
 
@@ -278,9 +277,11 @@ type UnifiedProofCycleResult struct {
 	AttestationID         *uuid.UUID                         `json:"attestation_id,omitempty"`
 	ThresholdMet          bool                               `json:"threshold_met"`
 
-	// Phase 9 results
+	// Phase 9 results. WriteBackSuccess is true only when a write-back transaction was actually
+	// submitted; WriteBackState says what happened in every case.
 	WriteBackTxHash  string `json:"write_back_tx_hash,omitempty"`
 	WriteBackSuccess bool   `json:"write_back_success"`
+	WriteBackState   string `json:"write_back_state,omitempty"`
 
 	// Timing
 	StartedAt   time.Time  `json:"started_at"`
@@ -323,10 +324,8 @@ type UnifiedOrchestrator struct {
 	resultChainsLock sync.RWMutex
 
 	// Multi-leg aggregator for unified write-back across chain groups
-	multiLegAggregator *MultiLegAggregator
 
 	// Multi-leg chain groups whose proof levels complete when the unified write-back lands
-	deferred deferredCompletions
 
 	// State
 	running bool
@@ -365,6 +364,10 @@ func NewUnifiedOrchestrator(config *UnifiedOrchestratorConfig) (*UnifiedOrchestr
 		return nil, fmt.Errorf("validator ID is required")
 	}
 
+	if config.ResultQuorumRegistry == nil {
+		return nil, fmt.Errorf("a validator registry source is required - Phase 8 counts its quorum against it")
+	}
+
 	orch := &UnifiedOrchestrator{
 		config:       config,
 		activeCycles: make(map[string]*activeCycle),
@@ -396,26 +399,6 @@ func NewUnifiedOrchestrator(config *UnifiedOrchestratorConfig) (*UnifiedOrchestr
 		}
 	}
 
-	// Initialize multi-leg aggregator
-	orch.multiLegAggregator = NewMultiLegAggregator(&MultiLegAggregatorConfig{
-		TxBuilder:        orch.txBuilder,
-		Submitter:        config.AccumulateClient,
-		ResultChains:     orch.resultChains,
-		ResultChainsLock: &orch.resultChainsLock,
-		HashChainRepo:    hashChainRepo(config),
-		WriteBackTimeout: config.WriteBackTimeout,
-		ValidatorID:      config.ValidatorID,
-	})
-
-	// A multi-leg intent's chain groups write back together; their proof cycles complete then.
-	orch.multiLegAggregator.SetOnUnifiedWriteBack(func(intentID string, txHash string) {
-		completeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		for _, entry := range orch.deferred.take(intentID) {
-			orch.completeProofCycles(completeCtx, entry.cycleID, entry.completions, entry.result, entry.merkleRoot, txHash)
-		}
-	})
-
 	return orch, nil
 }
 
@@ -425,11 +408,6 @@ func hashChainRepo(config *UnifiedOrchestratorConfig) *database.UnifiedRepositor
 		return nil
 	}
 	return config.UnifiedRepo
-}
-
-// GetMultiLegAggregator returns the multi-leg aggregator for external wiring
-func (o *UnifiedOrchestrator) GetMultiLegAggregator() *MultiLegAggregator {
-	return o.multiLegAggregator
 }
 
 // =============================================================================
@@ -457,9 +435,13 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 	}
 
 	// Get strategies for target chain
+	// The chain the member settled on. No default: a cycle observed on a guessed chain finds nothing,
+	// or worse, finds something that is not this member's (RB3-F45).
 	targetChain := req.TargetChain
 	if targetChain == "" {
-		targetChain = o.config.DefaultChainID
+		err := fmt.Errorf("proof cycle %s names no target chain", req.CycleID)
+		result.Error = err.Error()
+		return result, err
 	}
 
 	chainStrategy, attestStrategy, err := o.config.Registry.GetStrategiesForChain(targetChain)
@@ -501,7 +483,6 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 		result.Error = fmt.Sprintf("phase 7 failed: %v", err)
 		result.FailPhase = 7
 		o.updateLifecycleFailed(ctx, req.IntentID, req.CycleID, 7, err)
-		o.notifyMultiLegGroupFailed(cycle, err)
 		if o.config.OnCycleFailed != nil {
 			o.config.OnCycleFailed(result, err)
 		}
@@ -512,7 +493,6 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 		result.Error = fmt.Sprintf("phase 8 failed: %v", err)
 		result.FailPhase = 8
 		o.updateLifecycleFailed(ctx, req.IntentID, req.CycleID, 8, err)
-		o.notifyMultiLegGroupFailed(cycle, err)
 		if o.config.OnCycleFailed != nil {
 			o.config.OnCycleFailed(result, err)
 		}
@@ -531,7 +511,6 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 		result.Error = fmt.Sprintf("phase 9 failed: %v", err)
 		result.FailPhase = 9
 		o.updateLifecycleFailed(ctx, req.IntentID, req.CycleID, 9, err)
-		o.notifyMultiLegGroupFailed(cycle, err)
 		if o.config.OnCycleFailed != nil {
 			o.config.OnCycleFailed(result, err)
 		}
@@ -543,14 +522,7 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 	result.CompletedAt = &now
 	result.Success = true
 
-	if req.Metadata != nil && req.Metadata["multi_leg"] == "true" {
-		o.deferred.add(req.IntentID, deferredCompletion{
-			cycleID: req.CycleID, completions: cycle.Completions, result: result,
-			merkleRoot: req.MerkleRoot, deferredAt: now,
-		})
-	} else {
-		o.completeProofCycles(ctx, req.CycleID, cycle.Completions, result, req.MerkleRoot, result.WriteBackTxHash)
-	}
+	o.completeProofCycles(ctx, req.CycleID, cycle.Completions, result, req.MerkleRoot, result.WriteBackTxHash)
 
 	// Intent lifecycle: complete - or FAILED, when what the cycle proved and wrote back is that
 	// the settlement reverted. The write-back records the failure; the lifecycle must say the
@@ -880,20 +852,20 @@ func (o *UnifiedOrchestrator) verifyContractCallGate(ctx context.Context, cycle 
 		return nil, fmt.Errorf("cycle flagged rbContractCall but no committed call legs could be parsed — refusing to attest")
 	}
 
-	// Select the contract-call leg(s) that belong to THIS chain group's cycle. Match by
-	// normalized chain key OR by the leg's exec tx being one this cycle observed; a lone
-	// call leg (single-leg intent) always applies. A chain group with no call leg (e.g. a
-	// native leg on this chain) is a legitimate no-op here.
-	targetChain := normalizeRBChainKey(cycle.Request.TargetChain)
-	txSet := make(map[string]bool)
-	for _, h := range cycle.Request.TxHashes {
-		txSet[strings.ToLower(strings.TrimPrefix(h, "0x"))] = true
+	// Select the contract-call legs that execute on THIS cycle's chain, by each leg's signed chain id.
+	// Matching the leg's free-text chain name, or any leg whose execTx this cycle happened to
+	// observe, checked another chain's call against this chain's execution (RB3-F45). A chain with
+	// no call leg (a native leg on this chain) is a legitimate no-op here.
+	cycleChainID, perr := strconv.ParseInt(chainStrategy.ChainID(), 10, 64)
+	if perr != nil {
+		return nil, fmt.Errorf("cycle chain %q is not a numeric chain id", chainStrategy.ChainID())
 	}
 	var applicable []rbCallLeg
 	for _, l := range legs {
-		matchChain := l.chainKey != "" && normalizeRBChainKey(l.chainKey) == targetChain
-		matchTx := l.execTxHash != "" && txSet[strings.ToLower(strings.TrimPrefix(l.execTxHash, "0x"))]
-		if matchChain || matchTx || len(legs) == 1 {
+		if l.chainID == 0 {
+			return nil, fmt.Errorf("committed call leg carries no chain id - cannot tell which chain executes it")
+		}
+		if l.chainID == cycleChainID {
 			applicable = append(applicable, l)
 		}
 	}
@@ -978,6 +950,7 @@ func (o *UnifiedOrchestrator) verifyContractCallGate(ctx context.Context, cycle 
 // rbCallLeg is a per-leg contract-call verification descriptor carried in CommitmentData.
 type rbCallLeg struct {
 	chainKey   string
+	chainID    int64 // the leg's signed chainId - the chain it executes on
 	target     string
 	value      string
 	callData   string
@@ -1037,6 +1010,26 @@ func rbStateNote(state []ExpectedStateSlot) string {
 	return ""
 }
 
+// commitmentInt64 reads an integer the commitment map carries: an int64 in-process, a float64 after
+// a JSON round trip. Anything else reads as 0, which callers treat as absent.
+func commitmentInt64(v interface{}) int64 {
+	switch n := v.(type) {
+	case int64:
+		return n
+	case int:
+		return int64(n)
+	case float64:
+		if n == float64(int64(n)) {
+			return int64(n)
+		}
+	case json.Number:
+		if i, err := n.Int64(); err == nil {
+			return i
+		}
+	}
+	return 0
+}
+
 // parseRBContractCallLegs reconstructs the per-leg gate descriptors from CommitmentData,
 // tolerating both []map[string]interface{} (same-process) and []interface{} (JSON roundtrip).
 func parseRBContractCallLegs(v interface{}) []rbCallLeg {
@@ -1063,6 +1056,7 @@ func parseRBContractCallLegs(v interface{}) []rbCallLeg {
 		etx, _ := m["execTxHash"].(string)
 		out = append(out, rbCallLeg{
 			chainKey:   ck,
+			chainID:    commitmentInt64(m["chainId"]),
 			target:     tgt,
 			value:      val,
 			callData:   cd,
@@ -1142,9 +1136,9 @@ func (o *UnifiedOrchestrator) executionTxHashForChain(req *UnifiedProofCycleRequ
 	if req.CommitmentData != nil {
 		if isCall, _ := req.CommitmentData["rbContractCall"].(bool); isCall {
 			legs := parseRBContractCallLegs(req.CommitmentData["rbContractCallLegs"])
-			target := normalizeRBChainKey(req.TargetChain)
+			target, _ := strconv.ParseInt(req.TargetChain, 10, 64)
 			for _, l := range legs {
-				if l.execTxHash != "" && (normalizeRBChainKey(l.chainKey) == target || len(legs) == 1) {
+				if l.execTxHash != "" && l.chainID == target {
 					return l.execTxHash
 				}
 			}
@@ -1218,14 +1212,31 @@ func (o *UnifiedOrchestrator) peerVerifyCommittedEffect(ctx context.Context, msg
 		return fmt.Errorf("fetched intent_id %q != attested %q", got, msg.IntentID)
 	}
 
-	// Committed contract-call leg(s) for this chain group (derived from the SIGNED intent).
-	target := normalizeRBChainKey(msg.TargetChain)
+	// Committed contract-call leg(s) for this chain group, from the SIGNED intent: every leg whose
+	// signed chainId is the chain this peer itself observed the execution on. Not the chain NAME the
+	// requesting executor supplied - matching that against the leg's free-text name let an executor
+	// select no legs at all (RB3-F46).
+	if chainStrategy == nil {
+		return fmt.Errorf("no observed chain to select the committed calls by")
+	}
+	observedChainID, perr := strconv.ParseInt(chainStrategy.ChainID(), 10, 64)
+	if perr != nil {
+		return fmt.Errorf("observed chain %q is not a numeric chain id", chainStrategy.ChainID())
+	}
 	var applicable []rbCallLeg
-	legs := parseCommittedCallLegs(blobs[1])
-	for _, l := range legs {
-		if normalizeRBChainKey(l.chainKey) == target || len(legs) == 1 {
+	for _, l := range parseCommittedCallLegs(blobs[1]) {
+		if l.chainID == observedChainID {
 			applicable = append(applicable, l)
 		}
+	}
+	// The execution this peer verifies: the one named, or else the transaction the peer has just
+	// re-observed. Never nothing - "no execution hash" is the requester's claim, not a fact.
+	execTx := msg.ExecutionTxHash
+	if execTx == "" {
+		execTx = msg.AnchorTxHash
+	}
+	if execTx == "" {
+		return fmt.Errorf("no execution transaction to verify the committed effect against")
 	}
 	if len(applicable) == 0 {
 		// H1: the intent pointer is executor-supplied, so a malicious executor could point
@@ -1238,27 +1249,20 @@ func (o *UnifiedOrchestrator) peerVerifyCommittedEffect(ctx context.Context, msg
 		// non-empty; EffectHasCalldata decodes the INNER `data` the account forwards so a
 		// native transfer isn't misread as a contract call (that false positive was making
 		// every peer refuse to attest — the Phase-8 quorum failure).
-		if msg.ExecutionTxHash == "" {
-			return nil // nothing executed on this chain group to cross-check
-		}
 		observer, oerr := buildObserver()
 		if oerr != nil {
 			return fmt.Errorf("cross-check execution calldata: %w", oerr) // fail closed
 		}
-		hasCalldata, cderr := observer.EffectHasCalldata(ctx, common.HexToHash(msg.ExecutionTxHash))
+		hasCalldata, cderr := observer.EffectHasCalldata(ctx, common.HexToHash(execTx))
 		if cderr != nil {
 			return fmt.Errorf("cross-check execution calldata: %w", cderr) // fail closed
 		}
 		if hasCalldata {
-			return fmt.Errorf("execution tx %s carries calldata but committed intent has no contract-call leg for %s — refusing (possible forged intent pointer)", msg.ExecutionTxHash, msg.TargetChain)
+			return fmt.Errorf("execution tx %s carries calldata but committed intent has no contract-call leg for chain %d — refusing (possible forged intent pointer)", execTx, observedChainID)
 		}
 		return nil // genuinely native — no contract-call effect to verify
 	}
 
-	// A contract call requires the execution tx to independently re-verify.
-	if msg.ExecutionTxHash == "" {
-		return fmt.Errorf("contract-call attestation missing execution tx hash")
-	}
 	observer, oerr := buildObserver()
 	if oerr != nil {
 		return oerr // fail closed — cannot independently verify without an observer
@@ -1287,23 +1291,23 @@ func (o *UnifiedOrchestrator) peerVerifyCommittedEffect(ctx context.Context, msg
 			account = a
 			calls = append(calls, c)
 		}
-		if _, verr := observer.VerifyRevertedCall(ctx, common.HexToHash(msg.ExecutionTxHash), calls, &opID, account); verr != nil {
-			return fmt.Errorf("reverted execution not proven as the committed call on %s: %w", msg.ExecutionTxHash, verr)
+		if _, verr := observer.VerifyRevertedCall(ctx, common.HexToHash(execTx), calls, &opID, account); verr != nil {
+			return fmt.Errorf("reverted execution not proven as the committed call on %s: %w", execTx, verr)
 		}
 		fmt.Printf("❌ [RB-SEC-1] Peer independently verified the committed call REVERTED for intent %s (chain=%s tx=%s)\n",
-			msg.IntentID, msg.TargetChain, msg.ExecutionTxHash)
+			msg.IntentID, msg.TargetChain, execTx)
 		return nil
 	}
 	for _, l := range applicable {
 		if len(l.events) == 0 {
 			return fmt.Errorf("committed contract call has no events — refusing")
 		}
-		if _, verr := observer.VerifyExecutedCall(ctx, common.HexToHash(msg.ExecutionTxHash), l.events, l.state); verr != nil {
-			return fmt.Errorf("committed effect not proven on %s: %w", msg.ExecutionTxHash, verr)
+		if _, verr := observer.VerifyExecutedCall(ctx, common.HexToHash(execTx), l.events, l.state); verr != nil {
+			return fmt.Errorf("committed effect not proven on %s: %w", execTx, verr)
 		}
 	}
 	fmt.Printf("✅ [RB-SEC-1] Peer independently verified committed effect for intent %s (chain=%s tx=%s)\n",
-		msg.IntentID, msg.TargetChain, msg.ExecutionTxHash)
+		msg.IntentID, msg.TargetChain, execTx)
 	return nil
 }
 
@@ -1322,6 +1326,7 @@ func parseCommittedCallLegs(crossChainData []byte) []rbCallLeg {
 	var ccd struct {
 		Legs []struct {
 			Chain            string `json:"chain"`
+			ChainID          int64  `json:"chainId"`
 			From             string `json:"from"`
 			ExecutionPayload *struct {
 				Target         string `json:"target"`
@@ -1372,8 +1377,8 @@ func parseCommittedCallLegs(crossChainData []byte) []rbCallLeg {
 				Value:   common.HexToHash(s.Value),
 			})
 		}
-		out = append(out, rbCallLeg{chainKey: normalizeRBChainKey(leg.Chain), target: ep.Target, value: ep.Value,
-			callData: cd, account: leg.From, events: events, state: state})
+		out = append(out, rbCallLeg{chainKey: normalizeRBChainKey(leg.Chain), chainID: leg.ChainID, target: ep.Target,
+			value: ep.Value, callData: cd, account: leg.From, events: events, state: state})
 	}
 	return out
 }
@@ -1506,11 +1511,14 @@ func (o *UnifiedOrchestrator) executePhase8(ctx context.Context, cycle *activeCy
 	req := cycle.Request
 	result := cycle.Result
 
-	// Create attestation message
-	var primaryResultHash [32]byte
-	if len(result.ObservationResults) > 0 {
-		primaryResultHash = result.ObservationResults[0].ResultHash
+	// A cycle is one chain member's, and a member has exactly one settlement transaction. The
+	// attestation below binds that one observation's result; a second observation would reach the
+	// write-back unattested, so it is refused rather than left out.
+	if len(result.ObservationResults) != 1 {
+		return fmt.Errorf("phase 8: a chain member's cycle attests exactly one observation, this cycle has %d",
+			len(result.ObservationResults))
 	}
+	primaryResultHash := result.ObservationResults[0].ResultHash
 
 	message := &attestation.AttestationMessage{
 		IntentID:     req.IntentID,
@@ -1530,31 +1538,25 @@ func (o *UnifiedOrchestrator) executePhase8(ctx context.Context, cycle *activeCy
 		AccumulateAccountURL: req.AccumulateAccountURL,
 	}
 
-	// For multi-leg chain groups, include per-observation result hashes in the
-	// attestation message so all observations are covered by BFT signing (GAP 5).
-	if req.Metadata != nil && req.Metadata["multi_leg"] == "true" && len(result.ObservationResults) > 1 {
-		message.LegCount = len(result.ObservationResults)
-		// Compute a combined hash over all observation result hashes
-		combinedData := make([]byte, 0, 32*len(result.ObservationResults)+len("CERTEN_MULTI_OBS_V1"))
-		combinedData = append(combinedData, []byte("CERTEN_MULTI_OBS_V1")...)
-		for _, obs := range result.ObservationResults {
-			combinedData = append(combinedData, obs.ResultHash[:]...)
-		}
-		message.MultiLegResultHash = sha256.Sum256(combinedData)
-	}
-
 	// Create timeout context
 	attestCtx, cancel := context.WithTimeout(ctx, o.config.AttestationTimeout)
 	defer cancel()
 
-	// Sign our own attestation
+	// The registry this quorum is counted against. Read before signing: without it there is no
+	// quorum to form, and the cycle fails by name rather than counting self-declared weights.
+	if o.config.ResultQuorumRegistry == nil {
+		return fmt.Errorf("phase 8: no validator registry source configured - the result quorum cannot be counted")
+	}
+	registry, err := o.config.ResultQuorumRegistry(attestCtx, result.ChainID)
+	if err != nil {
+		return fmt.Errorf("phase 8: validator registry for chain %s: %w", result.ChainID, err)
+	}
+
+	// Sign our own attestation. Its weight, like every peer's, is set from the registry by the fold.
 	localAttestation, err := attestStrategy.Sign(attestCtx, message)
 	if err != nil {
 		return fmt.Errorf("create local attestation: %w", err)
 	}
-
-	// Set weight based on validator voting power (default 1)
-	localAttestation.Weight = 1
 
 	attestations := []*attestation.Attestation{localAttestation}
 
@@ -1578,8 +1580,10 @@ func (o *UnifiedOrchestrator) executePhase8(ctx context.Context, cycle *activeCy
 	// Record the validator set this quorum is counted against, so a reader can check the threshold
 	// against the membership rather than trusting the stored weights.
 	if o.config.EnableUnifiedTables && o.config.Repos != nil && o.config.Repos.ProofArtifacts != nil {
-		set := unifiedAttestationSet(o.config.ValidatorID, o.config.AttestationPeers,
-			thresholdConfig.CalculateThresholdWeight, result.ObservationResults[0].BlockNumber)
+		set, err := registryAttestationSet(registry, thresholdConfig.CalculateThresholdWeight, result.ObservationResults[0].BlockNumber)
+		if err != nil {
+			return fmt.Errorf("phase 8: validator set snapshot: %w", err)
+		}
 		snapshotID, err := persistValidatorSetSnapshot(ctx, o.config.Repos.ProofArtifacts, set, result.ChainID, getNetworkName(result.ChainID))
 		if err != nil {
 			fmt.Printf("Warning: failed to persist validator set snapshot for cycle %s: %v\n", cycle.CycleID, err)
@@ -1588,31 +1592,28 @@ func (o *UnifiedOrchestrator) executePhase8(ctx context.Context, cycle *activeCy
 		}
 	}
 
-	// Persist individual attestations
+	// Count against the registry: registered keys at registered power, one per validator, over this
+	// result's message. Anything else is excluded by name and neither helps nor blocks the quorum.
+	aggAttestation, excluded, err := foldResultAttestations(attestCtx, attestStrategy, message, attestations, registry, thresholdConfig)
+	for _, x := range excluded {
+		fmt.Printf("[Phase 8] cycle %s: attestation from %q not counted: %s\n", cycle.CycleID, x.ValidatorID, x.Reason)
+	}
+	if err != nil {
+		return fmt.Errorf("phase 8: %w", err)
+	}
+	fmt.Printf("[Phase 8] Attestation threshold: achieved=%d total=%d required=%d met=%v\n",
+		aggAttestation.AchievedWeight, aggAttestation.TotalWeight, aggAttestation.ThresholdWeight, aggAttestation.ThresholdMet)
+
+	// Persist the attestations that COUNTED - each is recorded as verified, which an excluded one is not.
+	counted := aggAttestation.Attestations
 	if o.config.EnableUnifiedTables && o.config.UnifiedRepo != nil {
-		for _, att := range attestations {
+		for _, att := range counted {
 			_, err := o.persistUnifiedAttestation(ctx, cycle, att)
 			if err != nil {
 				fmt.Printf("Warning: failed to persist attestation: %v\n", err)
 			}
 		}
 	}
-
-	// Aggregate attestations
-	aggAttestation, err := attestStrategy.Aggregate(attestCtx, attestations)
-	if err != nil {
-		return fmt.Errorf("aggregate attestations: %w", err)
-	}
-
-	// RB-SEC-1: TotalWeight is the FULL validator set (self + peers), so the ≥2/3 threshold
-	// is meaningful. Previously this was set to AchievedWeight, which made ANY single
-	// attestation "meet" threshold — a quorum-enforcement bypass (a lone executor could
-	// write back with no peer agreement).
-	aggAttestation.TotalWeight = int64(len(o.config.AttestationPeers) + 1)
-	aggAttestation.ThresholdWeight = thresholdConfig.CalculateThresholdWeight(aggAttestation.TotalWeight)
-	aggAttestation.ThresholdMet = thresholdConfig.IsThresholdMet(aggAttestation.AchievedWeight, aggAttestation.TotalWeight)
-	fmt.Printf("[Phase 8] Attestation threshold: achieved=%d total=%d required=%d met=%v\n",
-		aggAttestation.AchievedWeight, aggAttestation.TotalWeight, aggAttestation.ThresholdWeight, aggAttestation.ThresholdMet)
 
 	// Verify aggregated attestation
 	valid, err := attestStrategy.VerifyAggregated(attestCtx, aggAttestation)
@@ -1628,8 +1629,8 @@ func (o *UnifiedOrchestrator) executePhase8(ctx context.Context, cycle *activeCy
 
 	// Persist aggregated attestation
 	if o.config.EnableUnifiedTables && o.config.UnifiedRepo != nil {
-		messageHashes := make([][]byte, len(attestations))
-		for i, att := range attestations {
+		messageHashes := make([][]byte, len(counted))
+		for i, att := range counted {
 			messageHashes[i] = att.MessageHash[:]
 		}
 		aggID, err := o.persistAggregatedAttestation(ctx, cycle, aggAttestation, attestationMessagesAgree(messageHashes))
@@ -1640,7 +1641,7 @@ func (o *UnifiedOrchestrator) executePhase8(ctx context.Context, cycle *activeCy
 		}
 	}
 
-	result.Attestations = attestations
+	result.Attestations = counted
 	result.AggregatedAttestation = aggAttestation
 	result.ThresholdMet = aggAttestation.ThresholdMet
 
@@ -2018,60 +2019,53 @@ func (o *UnifiedOrchestrator) HandlePeerAttestationRequest(
 // PHASE 9: RESULT WRITE-BACK
 // =============================================================================
 
-// notifyMultiLegGroupFailed tells the multi-leg aggregator that this chain group's proof
-// cycle failed, so it can abort the intent (atomic) or skip a partial write-back (parallel/
-// sequential) instead of silently timing out into a write-back that omits the failed leg.
-// No-op for single-leg cycles. SEC-10.
-func (o *UnifiedOrchestrator) notifyMultiLegGroupFailed(cycle *activeCycle, err error) {
-	if cycle == nil || cycle.Request == nil || cycle.Request.Metadata == nil {
-		return
-	}
-	if cycle.Request.Metadata["multi_leg"] != "true" || o.multiLegAggregator == nil {
-		return
-	}
-	o.multiLegAggregator.OnChainGroupFailed(cycle.Request.IntentID, cycle.Request.Metadata["chain_key"], err)
-}
+// Phase 9 write-back states, recorded on every cycle.
+const (
+	WriteBackWritten                 = "written"
+	WriteBackDisabledByConfiguration = "disabled_by_configuration"
+	WriteBackRefusedQuorumNotMet     = "refused_quorum_not_met"
+	WriteBackFailed                  = "failed"
+)
 
-func (o *UnifiedOrchestrator) executePhase9(ctx context.Context, cycle *activeCycle) error {
+func (o *UnifiedOrchestrator) executePhase9(ctx context.Context, cycle *activeCycle) (err error) {
 	cycle.Phase = 9
+	// Any error below is a write-back that did not happen; say so unless a more specific state
+	// was already recorded.
+	defer func() {
+		if err != nil && cycle.Result != nil {
+			cycle.Result.WriteBackSuccess = false
+			if cycle.Result.WriteBackState == "" {
+				cycle.Result.WriteBackState = WriteBackFailed
+			}
+		}
+	}()
 
 	if o.config.OnPhaseComplete != nil {
 		defer func() { o.config.OnPhaseComplete(cycle.CycleID, 9) }()
 	}
 
-	// RB-SEC-1: QUORUM ENFORCEMENT (fail closed). Never write back — or contribute a
-	// "success" to the multi-leg aggregator — unless the attestation aggregate met the
+	// RB-SEC-1: QUORUM ENFORCEMENT (fail closed). Never write back unless the attestation aggregate met the
 	// ≥2/3 threshold in Phase 8. Without this a lone/malicious executor could write back
 	// with only its own attestation (peers refusing via RB-SEC-1 would then be moot).
 	if cycle.Result == nil || !cycle.Result.ThresholdMet {
 		fmt.Printf("🚫 [Phase 9] Attestation threshold NOT met for cycle %s — refusing write-back (quorum enforcement)\n", cycle.CycleID)
 		if cycle.Result != nil {
 			cycle.Result.WriteBackSuccess = false
+			cycle.Result.WriteBackState = WriteBackRefusedQuorumNotMet
 		}
 		return fmt.Errorf("attestation threshold not met — refusing write-back")
 	}
 
-	// For multi-leg chain groups, defer write-back to the MultiLegAggregator
-	// which produces a unified write-back after all chain groups complete
-	if cycle.Request.Metadata != nil && cycle.Request.Metadata["multi_leg"] == "true" {
-		chainKey := cycle.Request.Metadata["chain_key"]
-		if o.multiLegAggregator != nil {
-			fmt.Printf("[Phase 9] Multi-leg chain group %s complete - deferring write-back to aggregator (intent=%s)\n",
-				chainKey, cycle.Request.IntentID)
-			if err := o.multiLegAggregator.OnChainGroupCycleComplete(
-				cycle.Request.IntentID, chainKey, cycle.Result); err != nil {
-				fmt.Printf("[Phase 9] WARNING: Multi-leg aggregator error: %v\n", err)
-			}
-		}
-		cycle.Result.WriteBackSuccess = true
+	// Write-back disabled by configuration is a stated mode: nothing is written, and it is recorded
+	// as not written. Enabled but without its builder or client is a misconfiguration.
+	if !o.config.EnableWriteBack {
+		fmt.Printf("Write-back disabled by configuration: cycle=%s — recorded as not written\n", cycle.CycleID)
+		cycle.Result.WriteBackSuccess = false
+		cycle.Result.WriteBackState = WriteBackDisabledByConfiguration
 		return nil
 	}
-
-	// Skip write-back if not enabled
-	if !o.config.EnableWriteBack || o.txBuilder == nil || o.config.AccumulateClient == nil {
-		fmt.Printf("Write-back skipped (not configured): cycle=%s\n", cycle.CycleID)
-		cycle.Result.WriteBackSuccess = true
-		return nil
+	if o.txBuilder == nil || o.config.AccumulateClient == nil {
+		return fmt.Errorf("write-back is enabled but has no transaction builder or Accumulate client")
 	}
 
 	// Create timeout context
@@ -2116,6 +2110,7 @@ func (o *UnifiedOrchestrator) executePhase9(ctx context.Context, cycle *activeCy
 
 	cycle.Result.WriteBackTxHash = receipt
 	cycle.Result.WriteBackSuccess = true
+	cycle.Result.WriteBackState = WriteBackWritten
 
 	fmt.Printf("Write-back submitted: cycle=%s, receipt=%s\n", cycle.CycleID, receipt)
 
@@ -2432,129 +2427,54 @@ func (o *UnifiedOrchestrator) enrichBundleWithLegData(bundle *AttestationBundle,
 		return
 	}
 
-	// Get primary observation result for shared tx/block data
-	var primaryTxHash, primaryBlockHash string
-	var primaryBlockNumber, primaryGasUsed uint64
-	var primaryStatus uint64 = 1
-	if len(cycle.Result.ObservationResults) > 0 {
-		obs := cycle.Result.ObservationResults[0]
-		primaryTxHash = obs.TxHash
-		primaryBlockHash = obs.BlockHash
-		primaryBlockNumber = obs.BlockNumber
-		primaryGasUsed = obs.GasUsed
-		primaryStatus = uint64(obs.Status)
+	// This member executed only the legs on ITS chain, in the one transaction it observed. The legs on
+	// the intent's other chains are executed - and recorded - by their own chain's members; listing
+	// them here gave them this member's transaction, block and status (RB3-F51).
+	if len(cycle.Result.ObservationResults) == 0 {
+		return
 	}
+	cycleChainID, err := strconv.ParseInt(cycle.Result.ChainID, 10, 64)
+	if err != nil {
+		fmt.Printf("[MULTI-LEG] cycle chain %q is not a numeric chain id; no leg results recorded for intent %s\n",
+			cycle.Result.ChainID, cycle.Request.IntentID)
+		return
+	}
+	obs := cycle.Result.ObservationResults[0]
 
-	// Parse per-chain governance tx hashes from commitment
-	// Format: "Arbitrum Sepolia:leg-0:0xa72de...,Base Sepolia:leg-1:0xb4f7...,devnet:leg-2:0x8265..."
-	perLegGovTxHash := make(map[int]string) // legIndex -> governance tx hash
-	if rawGov, ok := commitMap["rawGovernanceTxHashes"].(string); ok && rawGov != "" {
-		for _, part := range strings.Split(rawGov, ",") {
-			part = strings.TrimSpace(part)
-			// Extract leg index from "ChainName:leg-N:0xhash" format
-			if legIdx := strings.Index(part, ":leg-"); legIdx >= 0 {
-				afterLeg := part[legIdx+5:] // skip ":leg-"
-				colonIdx := strings.Index(afterLeg, ":")
-				if colonIdx >= 0 {
-					if idx, err := strconv.Atoi(afterLeg[:colonIdx]); err == nil {
-						txHash := afterLeg[colonIdx+1:]
-						perLegGovTxHash[idx] = txHash
-					}
-				}
-			}
-		}
-	}
-	// Also parse create tx hashes per chain (format: "ChainName:0xhash,ChainName:0xhash,...")
-	perLegCreateTxHash := make(map[int]string)
-	if rawCreate, ok := commitMap["rawCreateTxHashes"].(string); ok && rawCreate != "" {
-		for i, part := range strings.Split(rawCreate, ",") {
-			part = strings.TrimSpace(part)
-			if colIdx := strings.LastIndex(part, ":"); colIdx >= 0 {
-				perLegCreateTxHash[i] = part[colIdx+1:]
-			}
-		}
-	}
-
-	// Build LegResults from commitment legs
 	for _, legMap := range legsList {
-		legIndex := 0
-		if idx, ok := legMap["legIndex"].(float64); ok {
-			legIndex = int(idx)
-		} else if idx, ok := legMap["legIndex"].(int); ok {
-			legIndex = idx
+		chainID := commitmentInt64(legMap["chainId"])
+		if chainID != cycleChainID {
+			continue
 		}
+		legIndex := int(commitmentInt64(legMap["legIndex"]))
+		chainName, _ := legMap["chain"].(string)
+		if network, _ := legMap["network"].(string); network != "" && network != chainName {
+			chainName = chainName + "-" + network
+		}
+		legID, _ := legMap["legId"].(string)
 
-		chain := ""
-		if c, ok := legMap["chain"].(string); ok {
-			chain = c
-		}
-		network := ""
-		if n, ok := legMap["network"].(string); ok {
-			network = n
-		}
-		chainName := chain
-		if network != "" && chain != network {
-			chainName = chain + "-" + network
-		}
-
-		var chainID int64
-		if cid, ok := legMap["chainId"].(float64); ok {
-			chainID = int64(cid)
-		} else if cid, ok := legMap["chainId"].(int64); ok {
-			chainID = cid
-		}
-
-		legID := ""
-		if lid, ok := legMap["legId"].(string); ok {
-			legID = lid
-		}
-
-		// Use per-leg governance tx hash if available, otherwise fall back to primary
-		txHash := primaryTxHash
-		if govHash, ok := perLegGovTxHash[legIndex]; ok {
-			txHash = govHash
-		}
-
-		// Determine success status: check for failure markers in tx hash
-		legSuccess := primaryStatus == 1
-		if strings.Contains(txHash, "failed") || strings.Contains(txHash, "error") {
-			legSuccess = false
-		}
-
-		// For non-primary legs, don't copy primary chain's block/gas data.
-		// Each leg gets its own chain-specific values (or zeros if not observed).
-		legBlockNumber := primaryBlockNumber
-		legBlockHash := primaryBlockHash
-		legGasUsed := primaryGasUsed
-		if legIndex > 0 {
-			// Non-primary legs: we don't have observation data for them,
-			// so use zero values rather than misleading primary chain data
-			legBlockNumber = 0
-			legBlockHash = ""
-			legGasUsed = 0
-		}
-
-		lr := LegResult{
+		bundle.LegResults = append(bundle.LegResults, LegResult{
 			LegIndex:    legIndex,
 			LegID:       legID,
 			Chain:       chainName,
 			ChainID:     chainID,
-			TxHash:      txHash,
-			BlockNumber: legBlockNumber,
-			BlockHash:   legBlockHash,
-			Status:      map[bool]uint64{true: 1, false: 0}[legSuccess],
-			GasUsed:     legGasUsed,
-			IsFinalized: legIndex == 0, // Only primary leg has finalization data
-		}
-
-		bundle.LegResults = append(bundle.LegResults, lr)
+			TxHash:      obs.TxHash,
+			BlockNumber: obs.BlockNumber,
+			BlockHash:   obs.BlockHash,
+			Status:      uint64(obs.Status),
+			GasUsed:     obs.GasUsed,
+			IsFinalized: obs.IsFinalized,
+		})
+	}
+	if len(bundle.LegResults) == 0 {
+		fmt.Printf("[MULTI-LEG] intent %s has no leg on chain %d - the member for this chain executed none of its legs\n",
+			cycle.Request.IntentID, cycleChainID)
+		return
 	}
 
-	// Compute multi-leg result hash
 	bundle.MultiLegResultHash = ComputeMultiLegResultHash(bundle.LegResults)
-
-	fmt.Printf("[MULTI-LEG] Enriched bundle with %d leg results for intent %s (hash=%x)\n",
-		len(bundle.LegResults), cycle.Request.IntentID, bundle.MultiLegResultHash[:8])
+	fmt.Printf("[MULTI-LEG] Recorded %d leg result(s) on chain %d for intent %s (hash=%x)\n",
+		len(bundle.LegResults), cycleChainID, cycle.Request.IntentID, bundle.MultiLegResultHash[:8])
 }
 
 // parseHash parses a hex string to common.Hash.
@@ -2685,6 +2605,7 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 		"attestation_scheme": result.Scheme,
 		"threshold_met":      result.ThresholdMet,
 		"write_back_success": result.WriteBackSuccess,
+		"write_back_state":   result.WriteBackState,
 	}
 	// What the proven execution DID. An artifact exists for a reverted settlement as well as a
 	// successful one - the failure is proven, attested and written back too - so the artifact must
@@ -3085,6 +3006,7 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 			"operation_commitment": hex.EncodeToString(req.OperationCommitment[:]),
 			"outcome_bound":        true,
 			"write_back_success":   result.WriteBackSuccess,
+			"write_back_state":     result.WriteBackState,
 			"threshold_m":          thresholdM,
 			"threshold_n":          thresholdN,
 		}

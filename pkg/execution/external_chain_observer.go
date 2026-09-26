@@ -300,14 +300,6 @@ func (o *ExternalChainObserver) fetchBlockForResult(
 	return headerBlock, full, nil
 }
 
-// TrackExecution adds an execution to be tracked asynchronously
-func (o *ExternalChainObserver) TrackExecution(pending *PendingExecution) {
-	o.pendingLock.Lock()
-	defer o.pendingLock.Unlock()
-	o.pending[pending.TxHash] = pending
-	o.log("📝 [OBSERVER] Tracking execution: %s", pending.TxHash.Hex())
-}
-
 // =============================================================================
 // INTERNAL WAITING METHODS
 // =============================================================================
@@ -607,23 +599,6 @@ func (o *ExternalChainObserver) VerifyExecutedCall(
 	return result, nil
 }
 
-// TxHasCalldata reports whether the on-chain execution tx carries non-empty input data,
-// i.e. it is a contract call rather than a native value transfer. This is executor-
-// INDEPENDENT ground truth (read straight from the chain), used by peer verification to
-// cross-check the "is contract call" classification against what actually executed —
-// closing the forged-intent-pointer bypass where an executor claims a call was "native".
-// Fails closed: any RPC/lookup error is returned to the caller to refuse on.
-func (o *ExternalChainObserver) TxHasCalldata(ctx context.Context, txHash common.Hash) (bool, error) {
-	tx, _, err := o.ethClient.TransactionByHash(ctx, txHash)
-	if err != nil {
-		return false, fmt.Errorf("fetch execution tx %s: %w", txHash.Hex(), err)
-	}
-	if tx == nil {
-		return false, fmt.Errorf("execution tx %s not found", txHash.Hex())
-	}
-	return len(tx.Data()) > 0, nil
-}
-
 // EffectHasCalldata reports whether the EXECUTED EFFECT carried calldata — i.e. whether the
 // value-moving call was a contract call rather than a native transfer. This is the correct
 // signal for RB-SEC-1's "native classification" cross-check.
@@ -823,163 +798,6 @@ func (c *MerkleProofCollector) GetNodes() [][]byte {
 // BACKGROUND OBSERVATION SERVICE
 // =============================================================================
 
-// Start begins the background observation service
-func (o *ExternalChainObserver) Start() {
-	if o.running {
-		return
-	}
-	o.running = true
-	go o.observeLoop()
-	o.log("🚀 [OBSERVER] Background observation service started")
-}
-
-// Stop stops the background observation service
-func (o *ExternalChainObserver) Stop() {
-	if !o.running {
-		return
-	}
-	o.running = false
-	close(o.stopCh)
-	o.log("🛑 [OBSERVER] Background observation service stopped")
-}
-
-// observeLoop is the main background loop that checks pending executions
-func (o *ExternalChainObserver) observeLoop() {
-	ticker := time.NewTicker(o.pollingInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-o.stopCh:
-			return
-		case <-ticker.C:
-			o.checkPendingExecutions()
-		}
-	}
-}
-
-// checkPendingExecutions checks all pending executions for finalization
-func (o *ExternalChainObserver) checkPendingExecutions() {
-	o.pendingLock.Lock()
-	pending := make([]*PendingExecution, 0, len(o.pending))
-	for _, p := range o.pending {
-		pending = append(pending, p)
-	}
-	o.pendingLock.Unlock()
-
-	ctx := context.Background()
-
-	for _, p := range pending {
-		// Check if timed out
-		if time.Since(p.SubmittedAt) > o.timeout {
-			o.handleTimeout(p)
-			continue
-		}
-
-		// Try to get result
-		result, err := o.checkExecution(ctx, p)
-		if err != nil {
-			// F.4 remediation: Handle expected "not yet" errors gracefully
-			if err == ErrNotYetMined || err == ErrNotYetFinalized {
-				// Expected state - transaction still pending
-				continue
-			}
-			o.log("⚠️ [OBSERVER] Error checking execution %s: %v", p.TxHash.Hex(), err)
-			continue
-		}
-
-		if result != nil {
-			o.handleFinalized(p, result)
-		}
-	}
-}
-
-// checkExecution checks a single pending execution
-func (o *ExternalChainObserver) checkExecution(ctx context.Context, p *PendingExecution) (*ExternalChainResult, error) {
-	receipt, err := o.ethClient.TransactionReceipt(ctx, p.TxHash)
-	if err == ethereum.NotFound {
-		// F.4 remediation: Return explicit error instead of nil, nil
-		return nil, ErrNotYetMined
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	// Check confirmations
-	currentBlock, err := o.ethClient.BlockNumber(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	confirmations := int(currentBlock - receipt.BlockNumber.Uint64())
-	p.CurrentConfirmations = confirmations
-	p.LastCheckedAt = time.Now()
-
-	if confirmations < o.requiredConfirmations {
-		// F.4 remediation: Return explicit error instead of nil, nil
-		return nil, ErrNotYetFinalized
-	}
-
-	// Header bound to the receipt (required) and the full block when decodable (see fetchBlockForResult).
-	block, fullBlock, err := o.fetchBlockForResult(ctx, receipt)
-	if err != nil {
-		return nil, err
-	}
-
-	tx, _, err := o.ethClient.TransactionByHash(ctx, p.TxHash)
-	if err != nil {
-		return nil, err
-	}
-
-	result := FromEthereumReceipt(receipt, tx, block, o.chainID, confirmations, o.validatorID)
-
-	// Construct proofs — from the decoded block, or from the raw block on chains go-ethereum cannot
-	// decode (see raw_block_proofs.go). Never from a partial list.
-	if fullBlock != nil {
-		txProof, _ := o.constructTxInclusionProof(ctx, fullBlock, receipt.TransactionIndex)
-		result.TxInclusionProof = txProof
-		receiptProof, _ := o.constructReceiptInclusionProof(ctx, fullBlock, receipt)
-		result.ReceiptInclusionProof = receiptProof
-	} else if txProof, receiptProof, err := o.inclusionProofsFromRaw(ctx, block.Header(), receipt.TransactionIndex); err == nil {
-		result.TxInclusionProof = txProof
-		result.ReceiptInclusionProof = receiptProof
-	} else {
-		o.log("⚠️ [OBSERVER] Inclusion proofs from raw block failed on chain %d: %v", o.chainID, err)
-	}
-
-	return result, nil
-}
-
-// handleFinalized handles a finalized execution
-func (o *ExternalChainObserver) handleFinalized(p *PendingExecution, result *ExternalChainResult) {
-	o.pendingLock.Lock()
-	delete(o.pending, p.TxHash)
-	o.pendingLock.Unlock()
-
-	p.Status = "finalized"
-
-	o.log("🎉 [OBSERVER] Execution finalized: %s", p.TxHash.Hex())
-
-	if o.onFinalized != nil {
-		o.onFinalized(result)
-	}
-}
-
-// handleTimeout handles a timed-out execution
-func (o *ExternalChainObserver) handleTimeout(p *PendingExecution) {
-	o.pendingLock.Lock()
-	delete(o.pending, p.TxHash)
-	o.pendingLock.Unlock()
-
-	p.Status = "timeout"
-
-	o.log("⏰ [OBSERVER] Execution timed out: %s", p.TxHash.Hex())
-
-	if o.onFailed != nil {
-		o.onFailed(p, fmt.Errorf("execution timed out after %v", o.timeout))
-	}
-}
-
 // =============================================================================
 // LOGGING
 // =============================================================================
@@ -993,25 +811,6 @@ func (o *ExternalChainObserver) log(format string, args ...interface{}) {
 // =============================================================================
 // UTILITY METHODS
 // =============================================================================
-
-// GetPendingCount returns the number of pending executions
-func (o *ExternalChainObserver) GetPendingCount() int {
-	o.pendingLock.RLock()
-	defer o.pendingLock.RUnlock()
-	return len(o.pending)
-}
-
-// GetPendingExecution returns a pending execution by tx hash
-func (o *ExternalChainObserver) GetPendingExecution(txHash common.Hash) *PendingExecution {
-	o.pendingLock.RLock()
-	defer o.pendingLock.RUnlock()
-	return o.pending[txHash]
-}
-
-// IsRunning returns true if the observer is running
-func (o *ExternalChainObserver) IsRunning() bool {
-	return o.running
-}
 
 // certenAccountV7ABIJSON declares the V7 execution wrappers.
 //

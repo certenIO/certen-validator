@@ -44,7 +44,8 @@ import (
 //
 // A peer that has not yet seen one of the intents derives a different bundleId and declines.
 // That costs liveness, never safety: quorum is 5-of-7 by power, and a batch that cannot reach
-// it falls back to the per-intent path rather than settling on a weaker signature.
+// is retried and, if quorum never forms, its members are recorded as FAILED - never settled on a
+// weaker signature.
 
 // batchQuorumThresholdNum / Den express the quorum rule the anchor enforces (2/3 by power).
 const (

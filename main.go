@@ -1276,11 +1276,13 @@ func startValidator(
 		return nil, nil, fmt.Errorf("failed to create lite client proof generator: %w", err)
 	}
 
-	if liteClientProofGen.HasRealProofBuilder() {
-		log.Printf("✅ [PROOF] Real L1-L3 ProofBuilder initialized with CometBFT consensus binding")
-	} else {
-		log.Printf("⚠️ [PROOF] Basic proof mode - CometBFT binding not available")
+	// The real L1-L4 proof builder needs only the v3 client and is always constructed; there is no
+	// "basic proof mode". Stated as a startup invariant so a regression cannot run a validator that
+	// builds proofs without their chained layers.
+	if !liteClientProofGen.HasRealProofBuilder() {
+		return nil, nil, fmt.Errorf("the real L1-L4 proof builder is not available; a validator does not run without it")
 	}
+	log.Printf("✅ [PROOF] Real L1-L4 ProofBuilder initialized")
 
 	proofGenerator, err := proof.NewProofGenerator(liteClientProofGen, proofConfig)
 	if err != nil {
@@ -1290,13 +1292,8 @@ func startValidator(
 	// --- Anchor manager for Ethereum (now uses shared proof generator) ---
 	// We'll create the anchor manager after the engine is set up in the validator
 
-	// --- Target chain executor (BFT-aware wrapper) ---
-	targetChainExecutor := execution.NewBFTTargetChainExecutor(
-		log.New(os.Stdout, "[TARGET-CHAIN] ", log.LstdFlags),
-	)
 	// Create placeholder anchor wrapper for now - will be updated after engine is configured
 	var anchorWrapper *execution.AnchorManagerWrapper
-	targetChainWrapper := execution.NewTargetChainExecutorWrapper(targetChainExecutor, cfg.ValidatorID)
 
 	log.Printf("✅ BFT execution components initialized (legacy IntentExecutor replaced)")
 
@@ -1441,7 +1438,6 @@ func startValidator(
 		anchorWrapper,
 		proofGenerator,
 		governanceProofGen, // G0/G1/G2 governance proof generator (runs AFTER L1-L4)
-		targetChainWrapper,
 		validatorBlockBuilder,
 		log.New(log.Writer(), "[BFTValidator] ", log.LstdFlags),
 	)
@@ -1480,43 +1476,6 @@ func startValidator(
 	log.Printf("✅ Unified BFT consensus with real CometBFT networking active for validator: %s", cfg.ValidatorID)
 
 	// ==========================================================================
-	// ON-CADENCE SCHEDULER: Wire BFT Scheduler for batched execution
-	// Per FIRST_PRINCIPLES 2.5: on_cadence and on_demand are NEVER interchangeable
-	// ==========================================================================
-	log.Println("📦 [Cadence] Initializing BFT scheduler for on_cadence batching...")
-
-	// Create anchor scheduler service
-	schedulerConfig := anchor.DefaultSchedulerConfig()
-	schedulerConfig.OnCadenceInterval = 15 * time.Minute // Batch every 15 minutes per whitepaper
-	anchorSchedulerService, err := anchor.NewAnchorSchedulerService(schedulerConfig)
-	if err != nil {
-		log.Printf("⚠️ [Cadence] Failed to create anchor scheduler service: %v (continuing without cadence batching)", err)
-	} else {
-		// Create BFT scheduler adapter
-		bftSchedulerConfig := &anchor.BFTSchedulerConfig{
-			BatchInterval: 15 * time.Minute, // Process batches every 15 minutes
-			MinBatchSize:  1,                // Process even single intents when due
-			MaxBatchSize:  100,              // Max 100 intents per batch
-		}
-		bftScheduler := anchor.NewBFTSchedulerAdapter(
-			anchorSchedulerService,
-			targetChainWrapper,
-			bftSchedulerConfig,
-			log.New(log.Writer(), "[BFT-Scheduler] ", log.LstdFlags),
-		)
-
-		// Wire scheduler to validator
-		validator.SetAnchorScheduler(bftScheduler)
-
-		// Start the scheduler
-		if err := bftScheduler.Start(context.Background()); err != nil {
-			log.Printf("⚠️ [Cadence] Failed to start BFT scheduler: %v", err)
-		} else {
-			log.Printf("✅ [Cadence] BFT scheduler started - on_cadence intents will be batched every 15 minutes")
-		}
-	}
-
-	// ==========================================================================
 	// CROSS-ADI BATCH PATH (CertenAnchorV8)
 	//
 	// Many on_cadence intents share ONE anchor and ONE BLS verification. Measured on live
@@ -1529,162 +1488,154 @@ func startValidator(
 	//
 	// ORDER MATTERS. The flush loop is started BEFORE SetBatchEnqueuer, so the mempool can
 	// never accept a member while nothing is draining it — a pool that fills and never
-	// flushes would strand intents, which is strictly worse than the per-intent path.
+	// flushes would strand intents, and there is no other path to settle them.
 	//
-	// Requires CERTEN_ANCHOR_V8_<chainId> per chain. Absent config leaves the batch path
-	// off and on_cadence falls back to the deferred-serial scheduler above, which still
-	// settles — just without the saving.
+	// Required: the batch path is the only settlement path. Each piece it needs is a startup error when
+	// missing - a validator that ran without it would accept intents it can never settle.
 	// ==========================================================================
-	if anchorCfg, cfgErr := config.LoadAnchorConfigFromEnv(); cfgErr != nil {
-		log.Printf("⚠️ [BATCH] No anchor config (%v) — cross-ADI batching disabled", cfgErr)
-	} else {
-		batchChains := []int64{11155111, 84532, 421614} // sepolia, base-sepolia, arbitrum-sepolia
-		resolver, rErr := execution.NewEVMChainResolverFromEnv(anchorCfg, batchChains)
-		if rErr != nil {
-			log.Printf("ℹ️ [BATCH] Cross-ADI batching disabled: %v", rErr)
-		} else {
-			submitter := execution.NewBatchProofSubmitter(resolver, log.Printf)
-			peers := execution.BatchAttestationPeersFromEnv()
-			prover, pErr := execution.NewBatchQuorumAttestor(
-				resolver, submitter, peers, cfg.ValidatorID, 0, log.Printf)
-			if pErr != nil {
-				log.Printf("⚠️ [BATCH] Quorum attestor unavailable (%v) — batching disabled", pErr)
-			} else {
-				batchQuorumAttestorForEvidence.Store(prover)
-				mempoolCfg := execution.DefaultBatchMempoolConfig()
-				stack, sErr := execution.NewBatchStack(resolver, prover, mempoolCfg, log.Printf)
-				if sErr != nil {
-					log.Printf("⚠️ [BATCH] Stack assembly failed (%v) — batching disabled", sErr)
-				} else {
-					// The attester compares an incoming request's period width against this and
-					// refuses a mismatch, so a proposer cannot widen what this node selects.
-					stack.PeriodBlocks = batchPeriodBlocksFromEnv()
-
-					// DURABILITY. Restore anything queued before a restart, BEFORE the enqueuer
-					// is published below, so a restored member cannot race a freshly discovered
-					// one. Without this the round has already reported batch_queued while the
-					// member is gone: neither settled, failed, nor retried.
-					storePath := strings.TrimSpace(os.Getenv("BATCH_MEMPOOL_PATH"))
-					if storePath == "" {
-						storePath = "data/batch_mempool.json"
-					}
-					if mstore, mErr := execution.NewBatchMempoolStore(
-						storePath, consensus.PendingAttestationCodec{}, log.Printf,
-					); mErr != nil {
-						log.Printf("⚠️ [BATCH] Mempool persistence unavailable (%v) — queued members "+
-							"will rely on discovery re-derivation after a restart", mErr)
-					} else {
-						stack.Mempool.SetStore(mstore, log.Printf)
-						log.Printf("💾 [BATCH] Mempool persisted at %s", storePath)
-					}
-					// Drain first, enqueue second.
-					go stack.RunFlushLoop(
-						context.Background(),
-						execution.BatchFlushConfig{
-							Interval:     mempoolCfg.FlushInterval,
-							PeriodBlocks: batchPeriodBlocksFromEnv(),
-							// The ACCUMULATE chain height — the same units member CommitHeights
-							// are keyed in, and the only height every validator agrees on.
-							//
-							// Not the CometBFT height: each validator broadcasts its own
-							// ValidatorBlock, so one intent commits at a different height on
-							// every node. Accumulate also advances on its own, so a period
-							// closes without needing more Certen traffic — a lone queued intent
-							// no longer waits for a second one to arrive.
-							ConsensusHeightFn: batchConsensusHeightFn(accClient, validator),
-							// Only the elected submitter for the period forms a batch. Without
-							// this all seven race to anchor the same period and six revert with
-							// AnchorAlreadyExists after paying gas.
-							IsLeaderFn: validator.IsBatchPeriodLeader,
-							Attest: func(ctx context.Context, att interface{}, txHash string, chainID int64, ok bool) {
-								// Replay the captured Phase 7-9 snapshot so each settled member
-								// closes its own proof cycle back to Accumulate.
-								validator.RunBatchMemberAttestation(ctx, att, txHash, chainID, ok)
-							},
-							// Members dropped after the anchor is mined go to the per-intent
-							// path. Approved policy: fall back, never requeue.
-							Fallback: func(ctx context.Context, m *execution.PendingBatchIntent) {
-								if m == nil {
-									return
-								}
-								validator.RunBatchMemberFallback(ctx, m.Attestation)
-							},
-						},
-						log.Printf,
-					)
-					validator.SetBatchEnqueuer(stack)
-
-					// ON-DEMAND LANE. Intent-keyed settlement: one intent, one anchor, no
-					// period, no settle grace — see docs/ON_DEMAND_LANE_BUILD_PLAN.md.
-					//
-					// The submitter is started whenever batching is active, but nothing reaches
-					// it unless ON_DEMAND_INTENT_KEYED=true makes enqueueForBatch route
-					// on_demand intents to EnqueueOnDemand. Running it unconditionally means
-					// the flag flip is a config change on an already-exercised code path rather
-					// than a first run in production.
-					odSubmitter, odErr := execution.NewOnDemandSubmitter(execution.OnDemandSubmitterConfig{
-						Stack:       stack,
-						Prover:      prover,
-						ValidatorID: cfg.ValidatorID,
-						Roster:      consensus.BatchLeaderRoster,
-						Attest: func(ctx context.Context, att interface{}, txHash string, chainID int64, ok bool) {
-							validator.RunBatchMemberAttestation(ctx, att, txHash, chainID, ok)
-						},
-						Fallback: func(ctx context.Context, m *execution.PendingBatchIntent) {
-							if m == nil {
-								return
-							}
-							validator.RunBatchMemberFallback(ctx, m.Attestation)
-						},
-						// The Accumulate block time of a member queued without it: the failover clock.
-						CommitTime: liteClientAdapter.MinorBlockTime,
-						Logf:       log.Printf,
-					})
-					if odErr != nil {
-						log.Printf("⚠️ [OD] on-demand submitter unavailable (%v) — on_demand "+
-							"intents will continue to settle on the period path", odErr)
-					} else {
-						stack.SetOnDemandWaker(odSubmitter.Wake)
-						go odSubmitter.Run(context.Background())
-						if consensus.OnDemandLaneEnabled() {
-							log.Printf("⚡ [OD] intent-keyed on-demand lane ENABLED — on_demand " +
-								"intents settle one-per-anchor with no period and no settle grace")
-						} else {
-							log.Printf("💤 [OD] on-demand submitter running but IDLE " +
-								"(ON_DEMAND_INTENT_KEYED is not true; on_demand intents take the period path)")
-						}
-					}
-
-					// Publish to the peer attestation handler. Without this a proposer's
-					// request gets 503 and no quorum can ever form.
-					batchStackForAttestation.Store(stack)
-
-					// The EVM address this validator signs as. It MUST match its registry entry
-					// on the anchor: the aggregator resolves voting power by address, so a wrong
-					// one contributes nothing and the quorum silently runs a signer short.
-					//
-					// Resolved from the CHAIN by matching this node's BLS public key against the
-					// anchor's registry — impossible to misconfigure, and it fails loudly in
-					// exactly the case where this node should not be attesting (its key is not
-					// registered). VALIDATOR_EVM_ADDRESS remains an explicit override for
-					// bring-up, but is no longer required: the live containers only carry
-					// VALIDATOR_ID, so requiring it meant no validator could ever attest.
-					go resolveBatchAttesterIdentity(resolver, cfg.ValidatorID)
-
-					if len(peers) == 0 {
-						log.Printf("⚠️ [BATCH] ATTESTATION_PEERS unset — no peers to collect " +
-							"quorum from; batches will fail quorum and fall back to on-demand")
-					} else {
-						log.Printf("🌐 [BATCH] Quorum peers: %v", peers)
-					}
-
-					log.Printf("✅ [BATCH] Cross-ADI batching ACTIVE on chains %v (flush every %s, "+
-						"period %d blocks)",
-						resolver.Chains(), mempoolCfg.FlushInterval, batchPeriodBlocksFromEnv())
-				}
-			}
-		}
+	anchorCfg, cfgErr := config.LoadAnchorConfigFromEnv()
+	if cfgErr != nil {
+		return nil, nil, fmt.Errorf("batch path: anchor config: %w", cfgErr)
 	}
+	batchChains := []int64{11155111, 84532, 421614} // sepolia, base-sepolia, arbitrum-sepolia
+	// The chain resolver is shared with Phase 8, which counts its post-execution quorum against the
+	// same on-chain validator registry the batch quorum does.
+	resolver, rErr := execution.NewEVMChainResolverFromEnv(anchorCfg, batchChains)
+	if rErr != nil {
+		return nil, nil, fmt.Errorf("batch path: chain resolver: %w", rErr)
+	}
+	submitter := execution.NewBatchProofSubmitter(resolver, log.Printf)
+	peers := execution.BatchAttestationPeersFromEnv()
+	if len(peers) == 0 {
+		return nil, nil, fmt.Errorf("batch path: ATTESTATION_PEERS unset - no quorum can form without peers")
+	}
+	prover, pErr := execution.NewBatchQuorumAttestor(
+		resolver, submitter, peers, cfg.ValidatorID, 0, log.Printf)
+	if pErr != nil {
+		return nil, nil, fmt.Errorf("batch path: quorum attestor: %w", pErr)
+	}
+	batchQuorumAttestorForEvidence.Store(prover)
+	mempoolCfg := execution.DefaultBatchMempoolConfig()
+	stack, sErr := execution.NewBatchStack(resolver, prover, mempoolCfg, log.Printf)
+	if sErr != nil {
+		return nil, nil, fmt.Errorf("batch path: stack assembly: %w", sErr)
+	}
+	// The attester compares an incoming request's period width against this and
+	// refuses a mismatch, so a proposer cannot widen what this node selects.
+	stack.PeriodBlocks = batchPeriodBlocksFromEnv()
+
+	// DURABILITY. Restore anything queued before a restart, BEFORE the enqueuer
+	// is published below, so a restored member cannot race a freshly discovered
+	// one. Without this the round has already reported batch_queued while the
+	// member is gone: neither settled, failed, nor retried.
+	storePath := strings.TrimSpace(os.Getenv("BATCH_MEMPOOL_PATH"))
+	if storePath == "" {
+		storePath = "data/batch_mempool.json"
+	}
+	mstore, mErr := execution.NewBatchMempoolStore(storePath, consensus.PendingAttestationCodec{}, log.Printf)
+	if mErr != nil {
+		return nil, nil, fmt.Errorf("batch path: mempool persistence at %s unavailable - a restart would lose queued members: %w", storePath, mErr)
+	}
+	stack.Mempool.SetStore(mstore, log.Printf)
+	log.Printf("💾 [BATCH] Mempool persisted at %s", storePath)
+	// Drain first, enqueue second.
+	go stack.RunFlushLoop(
+		context.Background(),
+		execution.BatchFlushConfig{
+			Interval:     mempoolCfg.FlushInterval,
+			PeriodBlocks: batchPeriodBlocksFromEnv(),
+			// The ACCUMULATE chain height — the same units member CommitHeights
+			// are keyed in, and the only height every validator agrees on.
+			//
+			// Not the CometBFT height: each validator broadcasts its own
+			// ValidatorBlock, so one intent commits at a different height on
+			// every node. Accumulate also advances on its own, so a period
+			// closes without needing more Certen traffic — a lone queued intent
+			// no longer waits for a second one to arrive.
+			ConsensusHeightFn: batchConsensusHeightFn(accClient, validator),
+			// Only the elected submitter for the period forms a batch. Without
+			// this all seven race to anchor the same period and six revert with
+			// AnchorAlreadyExists after paying gas.
+			IsLeaderFn: validator.IsBatchPeriodLeader,
+			Attest: func(ctx context.Context, att interface{}, txHash string, chainID int64, ok bool) {
+				// Replay the captured Phase 7-9 snapshot so each settled member
+				// closes its own proof cycle back to Accumulate.
+				validator.RunBatchMemberAttestation(ctx, att, txHash, chainID, ok)
+			},
+			// Members that leave the batch path for good are recorded as FAILED
+			// with the cause they were dropped for; there is no other path to
+			// settle them (owner decision 2026-09-26).
+			OnDropped: func(ctx context.Context, m *execution.PendingBatchIntent, cause string) {
+				if m == nil {
+					return
+				}
+				validator.RunBatchMemberRefusal(ctx, m.Attestation, m.ChainID, cause)
+			},
+		},
+		log.Printf,
+	)
+	validator.SetBatchEnqueuer(stack)
+
+	// ON-DEMAND LANE. Intent-keyed settlement: one intent, one anchor, no
+	// period, no settle grace — see docs/ON_DEMAND_LANE_BUILD_PLAN.md.
+	//
+	// The submitter is started whenever batching is active, but nothing reaches
+	// it unless ON_DEMAND_INTENT_KEYED=true makes enqueueForBatch route
+	// on_demand intents to EnqueueOnDemand. Running it unconditionally means
+	// the flag flip is a config change on an already-exercised code path rather
+	// than a first run in production.
+	odSubmitter, odErr := execution.NewOnDemandSubmitter(execution.OnDemandSubmitterConfig{
+		Stack:       stack,
+		Prover:      prover,
+		ValidatorID: cfg.ValidatorID,
+		Roster:      consensus.BatchLeaderRoster,
+		Attest: func(ctx context.Context, att interface{}, txHash string, chainID int64, ok bool) {
+			validator.RunBatchMemberAttestation(ctx, att, txHash, chainID, ok)
+		},
+		OnDropped: func(ctx context.Context, m *execution.PendingBatchIntent, cause string) {
+			if m == nil {
+				return
+			}
+			validator.RunBatchMemberRefusal(ctx, m.Attestation, m.ChainID, cause)
+		},
+		// The Accumulate block time of a member queued without it: the failover clock.
+		CommitTime: liteClientAdapter.MinorBlockTime,
+		Logf:       log.Printf,
+	})
+	if odErr != nil {
+		return nil, nil, fmt.Errorf("batch path: on-demand submitter unavailable: %w", odErr)
+	}
+	stack.SetOnDemandWaker(odSubmitter.Wake)
+	go odSubmitter.Run(context.Background())
+	if consensus.OnDemandLaneEnabled() {
+		log.Printf("⚡ [OD] intent-keyed on-demand lane ENABLED — on_demand " +
+			"intents settle one-per-anchor with no period and no settle grace")
+	} else {
+		log.Printf("💤 [OD] on-demand submitter running but IDLE " +
+			"(ON_DEMAND_INTENT_KEYED is not true; on_demand intents take the period path)")
+	}
+
+	// Publish to the peer attestation handler. Without this a proposer's
+	// request gets 503 and no quorum can ever form.
+	batchStackForAttestation.Store(stack)
+
+	// The EVM address this validator signs as. It MUST match its registry entry
+	// on the anchor: the aggregator resolves voting power by address, so a wrong
+	// one contributes nothing and the quorum silently runs a signer short.
+	//
+	// Resolved from the CHAIN by matching this node's BLS public key against the
+	// anchor's registry — impossible to misconfigure, and it fails loudly in
+	// exactly the case where this node should not be attesting (its key is not
+	// registered). VALIDATOR_EVM_ADDRESS remains an explicit override for
+	// bring-up, but is no longer required: the live containers only carry
+	// VALIDATOR_ID, so requiring it meant no validator could ever attest.
+	go resolveBatchAttesterIdentity(resolver, cfg.ValidatorID)
+
+	log.Printf("🌐 [BATCH] Quorum peers: %v", peers)
+
+	log.Printf("✅ [BATCH] Cross-ADI batching ACTIVE on chains %v (flush every %s, "+
+		"period %d blocks)",
+		resolver.Chains(), mempoolCfg.FlushInterval, batchPeriodBlocksFromEnv())
 
 	// ==========================================================================
 	// PHASE 5: Wire Batch System for Real Merkle Roots
@@ -1802,34 +1753,43 @@ func startValidator(
 	// ==========================================================================
 	log.Println("🔄 [Phase 7-9] Initializing Proof Cycle Orchestrator...")
 
-	// Create AccumulateSubmitter for proof write-back
-	// If Accumulate write-back credentials are configured, use real submitter
-	// Otherwise, use null submitter that logs but doesn't submit
+	// Phase 9 write-back. Enabled (PROOF_CYCLE_WRITEBACK=true) means it must actually work: the
+	// principal, the signer and the submitter are required, and a validator that cannot build them
+	// does not start. There is no null-submitter fallback for an enabled write-back and no fallback
+	// to the validator's key for a malformed write-back key - each of those used to let the
+	// validator run while the proof cycle's results were written nowhere, or signed by an identity
+	// the operator did not configure.
+	//
+	// Disabled is an explicit, stated mode: the null submitter writes nothing and every proof cycle
+	// records its write-back as not performed.
 	var accSubmitter execution.AccumulateSubmitter
 
 	accWritebackPrincipal := os.Getenv("ACCUMULATE_RESULTS_PRINCIPAL")
 	accSignerURL := os.Getenv("ACCUMULATE_SIGNER_URL")
 	writebackEnabled := os.Getenv("PROOF_CYCLE_WRITEBACK") == "true"
 
-	if writebackEnabled && accWritebackPrincipal != "" && accSignerURL != "" {
-		log.Printf("📝 [Phase 9] Configuring real Accumulate write-back:")
+	if writebackEnabled {
+		if accWritebackPrincipal == "" || accSignerURL == "" {
+			return nil, nil, fmt.Errorf("PROOF_CYCLE_WRITEBACK=true requires ACCUMULATE_RESULTS_PRINCIPAL and ACCUMULATE_SIGNER_URL " +
+				"(write-back cannot run without them)")
+		}
+		log.Printf("📝 [Phase 9] Configuring Accumulate write-back:")
 		log.Printf("   - Principal: %s", accWritebackPrincipal)
 		log.Printf("   - Signer: %s", accSignerURL)
 
-		// Check for optional separate write-back private key
-		// This allows using a different key than the validator's key for signing write-back transactions
+		// An optional dedicated write-back key. If it is set it must be valid: a malformed key is a
+		// configuration error, not a reason to sign with the validator's own key instead.
 		writebackPrivKey := privateKey
 		if writebackKeyHex := os.Getenv("ACCUMULATE_WRITEBACK_PRIV_KEY"); writebackKeyHex != "" {
-			log.Printf("   - Using dedicated write-back private key from ACCUMULATE_WRITEBACK_PRIV_KEY")
 			keyBytes, err := hex.DecodeString(strings.TrimSpace(writebackKeyHex))
 			if err != nil {
-				log.Printf("⚠️ [Phase 9] Invalid ACCUMULATE_WRITEBACK_PRIV_KEY: %v (falling back to validator key)", err)
-			} else if len(keyBytes) != ed25519.PrivateKeySize {
-				log.Printf("⚠️ [Phase 9] Invalid ACCUMULATE_WRITEBACK_PRIV_KEY size: expected %d, got %d (falling back to validator key)", ed25519.PrivateKeySize, len(keyBytes))
-			} else {
-				writebackPrivKey = ed25519.PrivateKey(keyBytes)
-				log.Printf("✅ [Phase 9] Loaded dedicated write-back private key")
+				return nil, nil, fmt.Errorf("ACCUMULATE_WRITEBACK_PRIV_KEY is not valid hex: %w", err)
 			}
+			if len(keyBytes) != ed25519.PrivateKeySize {
+				return nil, nil, fmt.Errorf("ACCUMULATE_WRITEBACK_PRIV_KEY is %d bytes, want %d", len(keyBytes), ed25519.PrivateKeySize)
+			}
+			writebackPrivKey = ed25519.PrivateKey(keyBytes)
+			log.Printf("   - Using the dedicated write-back key from ACCUMULATE_WRITEBACK_PRIV_KEY")
 		}
 
 		submitterCfg := &execution.AccumulateSubmitterConfig{
@@ -1844,172 +1804,86 @@ func startValidator(
 			RetryDelay:          5 * time.Second,
 			Logger:              log.New(log.Writer(), "[AccSubmitter] ", log.LstdFlags),
 		}
-
-		var submitErr error
-		accSubmitter, submitErr = execution.NewAccumulateSubmitter(submitterCfg)
+		submitter, submitErr := execution.NewAccumulateSubmitter(submitterCfg)
 		if submitErr != nil {
-			log.Printf("⚠️ [Phase 9] Failed to create Accumulate submitter: %v (using null submitter)", submitErr)
-			accSubmitter = execution.NewNullAccumulateSubmitter(log.New(log.Writer(), "[NullSubmitter] ", log.LstdFlags))
-		} else {
-			log.Printf("✅ [Phase 9] Real Accumulate submitter configured")
+			return nil, nil, fmt.Errorf("PROOF_CYCLE_WRITEBACK=true but the Accumulate submitter cannot be created: %w", submitErr)
 		}
+		accSubmitter = submitter
+		log.Printf("✅ [Phase 9] Accumulate submitter configured")
 	} else {
-		log.Printf("⚠️ [Phase 9] Accumulate write-back not configured (PROOF_CYCLE_WRITEBACK=true required)")
-		log.Printf("   Using null submitter - proof results will be logged but not written to Accumulate")
+		log.Printf("⚠️ [Phase 9] Write-back is DISABLED by configuration (PROOF_CYCLE_WRITEBACK is not \"true\") — " +
+			"proof cycles run and record their write-back as not performed")
 		accSubmitter = execution.NewNullAccumulateSubmitter(log.New(log.Writer(), "[NullSubmitter] ", log.LstdFlags))
 	}
 
-	// Create Proof Cycle Orchestrator configuration
-	orchestratorConfig := &execution.ProofCycleConfig{
-		EthereumRPC:           cfg.EthereumURL,
-		ChainID:               cfg.EthChainID,
-		RequiredConfirmations: 12,
-		ObservationTimeout:    10 * time.Minute,
-		ThresholdNumerator:    2,
-		ThresholdDenominator:  3,
-		AccumulatePrincipal:   accWritebackPrincipal,
-		WriteBackEnabled:      writebackEnabled,
-		BLSPrivateKey:         blsKeyManager.GetPrivateKeyBytes(),
-	}
-
-	// Get validator address from BLS public key
-	validatorAddress := blsKeyManager.GetAddress()
-
-	// Create validator set (single validator for now, will load from config/contract later)
-	validatorSet := execution.NewValidatorSetFromConfig(cfg.ValidatorID, validatorAddress)
-
-	// Create Proof Cycle Orchestrator
-	// Pass database repositories for proof artifact persistence (enables web app to track all 9 stages)
 	var orchestratorRepos *database.Repositories
 	if batchComponents != nil {
 		orchestratorRepos = batchComponents.Repos
 	}
-	orchestrator, orchestratorErr := execution.NewProofCycleOrchestrator(
-		cfg.ValidatorID,
-		validatorAddress,
-		0, // validator index
-		validatorSet,
-		orchestratorConfig,
-		accSubmitter,
-		orchestratorRepos,
-		log.New(log.Writer(), "[ProofCycle] ", log.LstdFlags),
-	)
 
-	if orchestratorErr != nil {
-		log.Printf("⚠️ [Phase 7-9] Failed to create proof cycle orchestrator: %v", orchestratorErr)
-		log.Printf("   Phase 7-9 disabled - execution will complete without proof write-back")
-		// F.2 remediation: Update health status for proof cycle
-		healthStatus.SetProofCycle("disabled")
-	} else {
-		// Wire the chained proof generator for L1-L3 receipt entry persistence
-		if liteClientProofGen != nil && liteClientProofGen.HasRealProofBuilder() {
-			proofGenAdapterLegacy := execution.NewLiteClientProofGeneratorAdapter(liteClientProofGen)
-			orchestrator.SetProofGenerator(proofGenAdapterLegacy)
-			log.Printf("✅ [Phase 7-9] Chained Proof Generator wired to legacy orchestrator (L1/L2/L3 receipt persistence)")
-		} else {
-			log.Printf("⚠️ [Phase 7-9] No real proof builder — L1/L2/L3 receipt entries will not be persisted")
-		}
-		// ==========================================================================
-		// UNIFIED MULTI-CHAIN ORCHESTRATOR (Feature Flag Controlled)
-		// Per Unified Multi-Chain Architecture plan
-		// ==========================================================================
-		if cfg.UseUnifiedOrchestrator {
-			log.Printf("🔄 [Unified] Initializing Unified Multi-Chain Orchestrator...")
-
-			// Create strategy registry with all attestation and chain strategies
-			strategyRegistry, registryErr := initializeStrategyRegistry(cfg, blsKeyManager, privateKey)
-			if registryErr != nil {
-				log.Printf("⚠️ [Unified] Failed to create strategy registry: %v (falling back to legacy)", registryErr)
-			} else {
-				// Get unified repository
-				var unifiedRepo *database.UnifiedRepository
-				if batchComponents != nil && batchComponents.Repos != nil {
-					unifiedRepo = batchComponents.Repos.Unified
-				}
-
-				// Create proof generator adapter for chained proofs (L1/L2/L3)
-				var proofGenAdapter *execution.LiteClientProofGeneratorAdapter
-				if liteClientProofGen != nil && liteClientProofGen.HasRealProofBuilder() {
-					proofGenAdapter = execution.NewLiteClientProofGeneratorAdapter(liteClientProofGen)
-					log.Printf("   - Chained Proof Generator: enabled (L1/L2/L3 proofs)")
-				} else {
-					log.Printf("   - Chained Proof Generator: disabled (no real proof builder)")
-				}
-
-				// Create unified orchestrator configuration
-				unifiedConfig := &execution.UnifiedOrchestratorConfig{
-					ValidatorID:              cfg.ValidatorID,
-					ValidatorIndex:           0,
-					Registry:                 strategyRegistry,
-					Repos:                    orchestratorRepos,
-					UnifiedRepo:              unifiedRepo,
-					DefaultChainID:           cfg.DefaultTargetChain,
-					ThresholdConfig:          attestationStrategy.DefaultThresholdConfig(),
-					ObservationTimeout:       10 * time.Minute,
-					AttestationTimeout:       5 * time.Minute,
-					WriteBackTimeout:         2 * time.Minute,
-					AttestationPeers:         cfg.AttestationPeers,
-					AttestationRequiredCount: cfg.AttestationRequiredCount,
-					AccumulateClient:         accSubmitter,
-					ResultsPrincipal:         accWritebackPrincipal,
-					Ed25519Key:               privateKey,
-					EnableMultiChain:         cfg.EnableMultiChain,
-					EnableUnifiedTables:      cfg.EnableUnifiedTables,
-					FallbackToLegacy:         cfg.FallbackToLegacy,
-					EnableWriteBack:          writebackEnabled,
-					ProofGenerator:           proofGenAdapter,
-					AccumulateQueryClient:    liteClientAdapter, // For querying tx governance data (M-of-N threshold)
-				}
-
-				unifiedOrchestrator, unifiedErr := execution.NewUnifiedOrchestrator(unifiedConfig)
-				if unifiedErr != nil {
-					log.Printf("⚠️ [Unified] Failed to create unified orchestrator: %v (falling back to legacy)", unifiedErr)
-				} else {
-					// Create adapter that implements ProofCycleOrchestratorInterface
-					adapter := execution.NewUnifiedOrchestratorAdapter(
-						unifiedOrchestrator,
-						orchestrator, // Legacy orchestrator for fallback
-						true,         // useUnified = true
-						cfg.FallbackToLegacy,
-					)
-
-					// Wire adapter to validator (implements same interface as legacy)
-					validator.SetProofCycleOrchestrator(adapter)
-					log.Printf("✅ [Unified] Unified Multi-Chain Orchestrator initialized and wired to validator")
-
-					// Phase 8 quorum: publish the orchestrator so main()'s HTTP mux can route
-					// peer attestation requests to it. The handler logic already exists
-					// (UnifiedOrchestrator.HandlePeerAttestationRequest); it was never routed,
-					// so peers' POSTs to /api/unified/attestation/request 404'd and the cycle
-					// fell back to a single self-attestation.
-					unifiedOrchestratorForAttestation.Store(unifiedOrchestrator)
-					log.Printf("✅ [Unified] Phase 8 peer attestation handler published for HTTP routing")
-					log.Printf("   - Strategy Registry: %d attestation schemes, %d chains",
-						len(strategyRegistry.ListAttestationSchemes()),
-						len(strategyRegistry.ListChainIDs()))
-					log.Printf("   - Default Chain: %s", cfg.DefaultTargetChain)
-					log.Printf("   - Multi-Chain: %v", cfg.EnableMultiChain)
-					log.Printf("   - Unified Tables: %v", cfg.EnableUnifiedTables)
-					log.Printf("   - Fallback to Legacy: %v", cfg.FallbackToLegacy)
-					healthStatus.SetProofCycle("active")
-
-					// Skip wiring legacy orchestrator
-					goto afterOrchestrator
-				}
-			}
-		}
-
-		// Wire legacy orchestrator to BFT validator (default or fallback)
-		validator.SetProofCycleOrchestrator(orchestrator)
-		log.Printf("✅ [Phase 7-9] Proof Cycle Orchestrator initialized and wired to validator")
-		log.Printf("   - Ethereum RPC: %s", cfg.EthereumURL)
-		log.Printf("   - Confirmations: %d", orchestratorConfig.RequiredConfirmations)
-		log.Printf("   - Write-back: %v", writebackEnabled)
-		// F.2 remediation: Update health status for proof cycle
-		healthStatus.SetProofCycle("active")
-
-	afterOrchestrator:
+	// The unified orchestrator is the only proof-cycle orchestrator. The legacy one it used to fall
+	// back to ran with a one-member validator set and could not produce a quorum attestation; a
+	// validator whose proof cycle cannot be built does not start (it used to run with Phases 7-9
+	// silently disabled).
+	if !cfg.UseUnifiedOrchestrator {
+		return nil, nil, fmt.Errorf("FF_UNIFIED_ORCHESTRATOR=false is not supported: the unified orchestrator is the only " +
+			"proof-cycle orchestrator")
 	}
+	log.Printf("🔄 [Unified] Initializing Unified Multi-Chain Orchestrator...")
+
+	strategyRegistry, registryErr := initializeStrategyRegistry(cfg, blsKeyManager, privateKey)
+	if registryErr != nil {
+		return nil, nil, fmt.Errorf("proof cycle: strategy registry cannot be created: %w", registryErr)
+	}
+
+	var unifiedRepo *database.UnifiedRepository
+	if batchComponents != nil && batchComponents.Repos != nil {
+		unifiedRepo = batchComponents.Repos.Unified
+	}
+
+	// Chained proofs (L1/L2/L3) come from the real proof builder, required at startup above.
+	proofGenAdapter := execution.NewLiteClientProofGeneratorAdapter(liteClientProofGen)
+
+	unifiedConfig := &execution.UnifiedOrchestratorConfig{
+		ValidatorID:              cfg.ValidatorID,
+		ValidatorIndex:           0,
+		Registry:                 strategyRegistry,
+		Repos:                    orchestratorRepos,
+		UnifiedRepo:              unifiedRepo,
+		ThresholdConfig:          attestationStrategy.DefaultThresholdConfig(),
+		ObservationTimeout:       10 * time.Minute,
+		AttestationTimeout:       5 * time.Minute,
+		WriteBackTimeout:         2 * time.Minute,
+		AttestationPeers:         cfg.AttestationPeers,
+		AttestationRequiredCount: cfg.AttestationRequiredCount,
+		AccumulateClient:         accSubmitter,
+		ResultsPrincipal:         accWritebackPrincipal,
+		Ed25519Key:               privateKey,
+		EnableMultiChain:         cfg.EnableMultiChain,
+		EnableUnifiedTables:      cfg.EnableUnifiedTables,
+		EnableWriteBack:          writebackEnabled,
+		ProofGenerator:           proofGenAdapter,
+		AccumulateQueryClient:    liteClientAdapter, // For querying tx governance data (M-of-N threshold)
+		ResultQuorumRegistry:     execution.ResultQuorumRegistryFromChains(resolver),
+	}
+
+	unifiedOrchestrator, unifiedErr := execution.NewUnifiedOrchestrator(unifiedConfig)
+	if unifiedErr != nil {
+		return nil, nil, fmt.Errorf("proof cycle: unified orchestrator cannot be created: %w", unifiedErr)
+	}
+	validator.SetProofCycleOrchestrator(execution.NewUnifiedOrchestratorAdapter(unifiedOrchestrator))
+	log.Printf("✅ [Unified] Unified Multi-Chain Orchestrator initialized and wired to validator")
+
+	// Phase 8 quorum: publish the orchestrator so main()'s HTTP mux can route peer attestation
+	// requests to it (UnifiedOrchestrator.HandlePeerAttestationRequest).
+	unifiedOrchestratorForAttestation.Store(unifiedOrchestrator)
+	log.Printf("✅ [Unified] Phase 8 peer attestation handler published for HTTP routing")
+	log.Printf("   - Strategy Registry: %d attestation schemes, %d chains",
+		len(strategyRegistry.ListAttestationSchemes()),
+		len(strategyRegistry.ListChainIDs()))
+	log.Printf("   - Multi-Chain: %v", cfg.EnableMultiChain)
+	log.Printf("   - Unified Tables: %v", cfg.EnableUnifiedTables)
+	healthStatus.SetProofCycle("active")
 
 	// --- Intent discovery wiring ---
 	log.Printf("🔍 Starting Certen Intent Discovery Service for validator...")

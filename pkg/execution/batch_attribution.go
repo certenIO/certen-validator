@@ -270,7 +270,7 @@ func searchBlockAtOrBefore(head, headTime, ts uint64, timeAt func(uint64) (uint6
 }
 
 // scanForward returns the first log matching topics on address from block `from` to the head,
-// searching in chunks a public RPC will serve.
+// searching in chunks (split further wherever the RPC caps the range - filterLogsSplitting).
 func (o *BatchOrchestrator) scanForward(ctx context.Context, address common.Address, topics [][]common.Hash, from uint64) (*types.Log, error) {
 	head, err := o.ecm.client.BlockNumber(ctx)
 	if err != nil {
@@ -281,14 +281,12 @@ func (o *BatchOrchestrator) scanForward(ctx context.Context, address common.Addr
 		if hi > head {
 			hi = head
 		}
-		logs, err := o.ecm.client.FilterLogs(ctx, ethereum.FilterQuery{
-			FromBlock: new(big.Int).SetUint64(lo),
-			ToBlock:   new(big.Int).SetUint64(hi),
+		logs, err := filterLogsSplitting(ctx, o.ecm.client, ethereum.FilterQuery{
 			Addresses: []common.Address{address},
 			Topics:    topics,
-		})
+		}, lo, hi)
 		if err != nil {
-			return nil, readErr(fmt.Errorf("logs %d-%d on %s: %w", lo, hi, address.Hex(), err))
+			return nil, readErr(fmt.Errorf("%w on %s", err, address.Hex()))
 		}
 		if len(logs) > 0 {
 			l := logs[0]
@@ -314,14 +312,12 @@ func (o *BatchOrchestrator) scanBack(ctx context.Context, address common.Address
 		if hi > proofExecutedChunk && hi-proofExecutedChunk+1 > floor {
 			lo = hi - proofExecutedChunk + 1
 		}
-		logs, err := o.ecm.client.FilterLogs(ctx, ethereum.FilterQuery{
-			FromBlock: new(big.Int).SetUint64(lo),
-			ToBlock:   new(big.Int).SetUint64(hi),
+		logs, err := filterLogsSplitting(ctx, o.ecm.client, ethereum.FilterQuery{
 			Addresses: []common.Address{address},
 			Topics:    topics,
-		})
+		}, lo, hi)
 		if err != nil {
-			return nil, readErr(fmt.Errorf("logs %d-%d on %s: %w", lo, hi, address.Hex(), err))
+			return nil, readErr(fmt.Errorf("%w on %s", err, address.Hex()))
 		}
 		if n := len(logs); n > 0 {
 			l := logs[n-1]

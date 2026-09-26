@@ -85,9 +85,9 @@ type OnDemandSubmitterConfig struct {
 	// Attest closes a settled (or failed) member's proof cycle — the same Phase 7-9 replay the
 	// period path performs.
 	Attest BatchAttestFn
-	// Fallback routes a member that could not settle. Attests it as FAILED; it does NOT
-	// re-execute, because the per-intent submitter cannot land against CertenAnchorV8_1.
-	Fallback BatchFallbackFn
+	// OnDropped records a member that could not settle as FAILED, with its cause, when no Attest is
+	// wired. Nothing is ever re-executed: there is no other path to settle it.
+	OnDropped BatchDropFn
 
 	QuorumDeadline time.Duration
 	RetryBackoff   time.Duration
@@ -360,13 +360,13 @@ func (s *OnDemandSubmitter) dispose(
 	// Not settled. Attest the FAILURE — loudly and with the transaction hash if the member
 	// reverted on chain, because a reverted transaction is the evidence of the failure and
 	// Phase 7 proves it (VerifyRevertedCall) to write the outcome back to Accumulate.
-	s.cfg.Logf("[OD] ❌ intent=%s attested as FAILED (tx=%q): %v — it is NOT re-executed; the "+
-		"per-intent submitter cannot land against CertenAnchorV8_1. Re-run it deliberately.",
+	s.cfg.Logf("[OD] ❌ intent=%s attested as FAILED (tx=%q): %v — it is not re-executed; there is "+
+		"no other path to settle it. The ADI resubmits it deliberately.",
 		member.IntentID, txHash, cause)
 	if s.cfg.Attest != nil {
 		s.cfg.Attest(ctx, member.Attestation, txHash, member.ChainID, false)
-	} else if s.cfg.Fallback != nil {
-		s.cfg.Fallback(ctx, member)
+	} else if s.cfg.OnDropped != nil {
+		s.cfg.OnDropped(ctx, member, fmt.Sprintf("%v", cause))
 	}
 	s.cfg.Stack.Mempool.RemoveOnDemand(member.ChainID, member.OperationID)
 }

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/certen/independant-validator/pkg/anchor"
+	"github.com/certen/independant-validator/pkg/consensus"
 	"github.com/certen/independant-validator/pkg/crypto/bls"
 	"github.com/certen/independant-validator/pkg/crypto/bls_zkp"
 	"github.com/certen/independant-validator/pkg/execution/contracts"
@@ -3023,34 +3024,8 @@ func (ecm *EthereumContractManager) extractLegsForExecCommitment(
 //	value:    uint256 = 32 bytes (big-endian, left-padded)
 //	dataHash: bytes32 = 32 bytes
 func computeExecutionCommitment(chainID int64, target common.Address, value *big.Int, callData []byte) [32]byte {
-	// Step 1: keccak256(data)
-	dataHash := crypto.Keccak256Hash(callData)
-
-	// Step 2: abi.encodePacked(chainId, target, value, dataHash)
-	// uint256 chainId — 32 bytes
-	chainIDBytes := make([]byte, 32)
-	chainIDBig := big.NewInt(chainID)
-	chainIDBig.FillBytes(chainIDBytes)
-
-	// address target — 20 bytes (encodePacked for address is 20 bytes, no padding)
-	targetBytes := target.Bytes() // 20 bytes
-
-	// uint256 value — 32 bytes
-	valueBytes := make([]byte, 32)
-	if value != nil {
-		value.FillBytes(valueBytes)
-	}
-
-	// bytes32 dataHash — 32 bytes
-	dataHashBytes := dataHash.Bytes() // 32 bytes
-
-	packed := make([]byte, 0, 116) // 32 + 20 + 32 + 32
-	packed = append(packed, chainIDBytes...)
-	packed = append(packed, targetBytes...)
-	packed = append(packed, valueBytes...)
-	packed = append(packed, dataHashBytes...)
-
-	return crypto.Keccak256Hash(packed)
+	// Single definition in consensus, which checks it at batch admission; the leaf binds the same bytes.
+	return consensus.ComputeExecutionCommitment(chainID, target, value, callData)
 }
 
 // BatchCommitmentDomain is the domain separator for batch execution commitments.

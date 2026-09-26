@@ -137,8 +137,10 @@ func TestEnqueueIsNotGatedOnProofClass(t *testing.T) {
 	}
 }
 
-// enqueueForBatch must not be reachable only under a proofClass check that excludes peers.
-// Guarding on batchEnqueuer being wired is correct; guarding on executor identity is not.
+// enqueueForBatch must not be reachable only under a check that excludes peers: guarding on
+// executor identity would leave peers unable to attest. It runs unconditionally, and its result is
+// acted on: a validator with no batch path wired gets a named, retryable refusal from inside it
+// (planBatch), not a silent skip.
 func TestEnqueueForBatchIsNotGuardedByExecutorIdentity(t *testing.T) {
 	src := workflowSource(t)
 	enqueue := strings.Index(src, "bv.enqueueForBatch(")
@@ -151,29 +153,34 @@ func TestEnqueueForBatchIsNotGuardedByExecutorIdentity(t *testing.T) {
 		t.Fatal("the batch enqueue is guarded by executor identity; peers would not enqueue " +
 			"and could never attest")
 	}
-	if !strings.Contains(window, "bv.batchEnqueuer != nil") {
-		t.Fatal("the batch enqueue should be guarded on the enqueuer being wired")
+	if !strings.Contains(src[max0(enqueue-10):enqueue+len("bv.enqueueForBatch(")], "err := bv.enqueueForBatch(") {
+		t.Fatal("the batch enqueue's result must be acted on - a refusal must reach the workflow's result")
+	}
+	plan := readRepoFileMust(t, "batch_refusal.go")
+	if !strings.Contains(plan, "if bv.batchEnqueuer == nil {") || !strings.Contains(plan, "ErrBatchUnavailable") {
+		t.Fatal("a validator with no batch path wired must refuse by name (ErrBatchUnavailable), not skip")
 	}
 }
 
-// enqueueForBatch must exist as a method with a bool result the caller can act on: a silent
-// enqueue would leave the elected executor unable to tell "queued, stop here" from "not
-// queued, fall through to the per-intent path" — and falling through after a successful
-// enqueue double-executes the intent.
+// enqueueForBatch must report its outcome so the caller can act on it: nil for queued (including
+// the same intent already queued), a *BatchRefusal otherwise. It returned a bool before the
+// per-intent path was removed (owner decision 2026-09-26); a bool cannot say WHY an intent was not
+// queued, and the refusal must carry its reason. The outcomes themselves are driven functionally in
+// batch_refusal_test.go.
 func TestEnqueueForBatchReportsWhetherItQueued(t *testing.T) {
 	m, ok := reflect.TypeOf(&BFTValidator{}).MethodByName("enqueueForBatch")
 	if ok {
-		if m.Type.NumOut() != 1 || m.Type.Out(0).Kind() != reflect.Bool {
-			t.Fatal("enqueueForBatch must return a single bool")
+		if m.Type.NumOut() != 1 || m.Type.Out(0) != reflect.TypeOf((*error)(nil)).Elem() {
+			t.Fatal("enqueueForBatch must return a single error")
 		}
 		return
 	}
-	// Unexported methods are not reported by MethodByName on some Go versions; fall back to
-	// asserting the signature in source.
+	// Unexported methods are not reported by MethodByName on some Go versions; assert the
+	// signature in source instead.
 	src := readRepoFileMust(t, "batch_quorum_prover.go")
-	if !strings.Contains(src, "commitHeight uint64,\n) bool {") {
-		t.Fatal("enqueueForBatch must return bool so the caller can distinguish queued from " +
-			"not-queued; falling through after a successful enqueue double-executes the intent")
+	if !strings.Contains(src, "commitHeight uint64,\n) error {") {
+		t.Fatal("enqueueForBatch must return an error so the caller can distinguish queued from " +
+			"refused, and say why")
 	}
 }
 
