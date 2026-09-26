@@ -2511,129 +2511,54 @@ func (o *UnifiedOrchestrator) enrichBundleWithLegData(bundle *AttestationBundle,
 		return
 	}
 
-	// Get primary observation result for shared tx/block data
-	var primaryTxHash, primaryBlockHash string
-	var primaryBlockNumber, primaryGasUsed uint64
-	var primaryStatus uint64 = 1
-	if len(cycle.Result.ObservationResults) > 0 {
-		obs := cycle.Result.ObservationResults[0]
-		primaryTxHash = obs.TxHash
-		primaryBlockHash = obs.BlockHash
-		primaryBlockNumber = obs.BlockNumber
-		primaryGasUsed = obs.GasUsed
-		primaryStatus = uint64(obs.Status)
+	// This member executed only the legs on ITS chain, in the one transaction it observed. The legs on
+	// the intent's other chains are executed - and recorded - by their own chain's members; listing
+	// them here gave them this member's transaction, block and status (RB3-F51).
+	if len(cycle.Result.ObservationResults) == 0 {
+		return
 	}
+	cycleChainID, err := strconv.ParseInt(cycle.Result.ChainID, 10, 64)
+	if err != nil {
+		fmt.Printf("[MULTI-LEG] cycle chain %q is not a numeric chain id; no leg results recorded for intent %s\n",
+			cycle.Result.ChainID, cycle.Request.IntentID)
+		return
+	}
+	obs := cycle.Result.ObservationResults[0]
 
-	// Parse per-chain governance tx hashes from commitment
-	// Format: "Arbitrum Sepolia:leg-0:0xa72de...,Base Sepolia:leg-1:0xb4f7...,devnet:leg-2:0x8265..."
-	perLegGovTxHash := make(map[int]string) // legIndex -> governance tx hash
-	if rawGov, ok := commitMap["rawGovernanceTxHashes"].(string); ok && rawGov != "" {
-		for _, part := range strings.Split(rawGov, ",") {
-			part = strings.TrimSpace(part)
-			// Extract leg index from "ChainName:leg-N:0xhash" format
-			if legIdx := strings.Index(part, ":leg-"); legIdx >= 0 {
-				afterLeg := part[legIdx+5:] // skip ":leg-"
-				colonIdx := strings.Index(afterLeg, ":")
-				if colonIdx >= 0 {
-					if idx, err := strconv.Atoi(afterLeg[:colonIdx]); err == nil {
-						txHash := afterLeg[colonIdx+1:]
-						perLegGovTxHash[idx] = txHash
-					}
-				}
-			}
-		}
-	}
-	// Also parse create tx hashes per chain (format: "ChainName:0xhash,ChainName:0xhash,...")
-	perLegCreateTxHash := make(map[int]string)
-	if rawCreate, ok := commitMap["rawCreateTxHashes"].(string); ok && rawCreate != "" {
-		for i, part := range strings.Split(rawCreate, ",") {
-			part = strings.TrimSpace(part)
-			if colIdx := strings.LastIndex(part, ":"); colIdx >= 0 {
-				perLegCreateTxHash[i] = part[colIdx+1:]
-			}
-		}
-	}
-
-	// Build LegResults from commitment legs
 	for _, legMap := range legsList {
-		legIndex := 0
-		if idx, ok := legMap["legIndex"].(float64); ok {
-			legIndex = int(idx)
-		} else if idx, ok := legMap["legIndex"].(int); ok {
-			legIndex = idx
+		chainID := commitmentInt64(legMap["chainId"])
+		if chainID != cycleChainID {
+			continue
 		}
+		legIndex := int(commitmentInt64(legMap["legIndex"]))
+		chainName, _ := legMap["chain"].(string)
+		if network, _ := legMap["network"].(string); network != "" && network != chainName {
+			chainName = chainName + "-" + network
+		}
+		legID, _ := legMap["legId"].(string)
 
-		chain := ""
-		if c, ok := legMap["chain"].(string); ok {
-			chain = c
-		}
-		network := ""
-		if n, ok := legMap["network"].(string); ok {
-			network = n
-		}
-		chainName := chain
-		if network != "" && chain != network {
-			chainName = chain + "-" + network
-		}
-
-		var chainID int64
-		if cid, ok := legMap["chainId"].(float64); ok {
-			chainID = int64(cid)
-		} else if cid, ok := legMap["chainId"].(int64); ok {
-			chainID = cid
-		}
-
-		legID := ""
-		if lid, ok := legMap["legId"].(string); ok {
-			legID = lid
-		}
-
-		// Use per-leg governance tx hash if available, otherwise fall back to primary
-		txHash := primaryTxHash
-		if govHash, ok := perLegGovTxHash[legIndex]; ok {
-			txHash = govHash
-		}
-
-		// Determine success status: check for failure markers in tx hash
-		legSuccess := primaryStatus == 1
-		if strings.Contains(txHash, "failed") || strings.Contains(txHash, "error") {
-			legSuccess = false
-		}
-
-		// For non-primary legs, don't copy primary chain's block/gas data.
-		// Each leg gets its own chain-specific values (or zeros if not observed).
-		legBlockNumber := primaryBlockNumber
-		legBlockHash := primaryBlockHash
-		legGasUsed := primaryGasUsed
-		if legIndex > 0 {
-			// Non-primary legs: we don't have observation data for them,
-			// so use zero values rather than misleading primary chain data
-			legBlockNumber = 0
-			legBlockHash = ""
-			legGasUsed = 0
-		}
-
-		lr := LegResult{
+		bundle.LegResults = append(bundle.LegResults, LegResult{
 			LegIndex:    legIndex,
 			LegID:       legID,
 			Chain:       chainName,
 			ChainID:     chainID,
-			TxHash:      txHash,
-			BlockNumber: legBlockNumber,
-			BlockHash:   legBlockHash,
-			Status:      map[bool]uint64{true: 1, false: 0}[legSuccess],
-			GasUsed:     legGasUsed,
-			IsFinalized: legIndex == 0, // Only primary leg has finalization data
-		}
-
-		bundle.LegResults = append(bundle.LegResults, lr)
+			TxHash:      obs.TxHash,
+			BlockNumber: obs.BlockNumber,
+			BlockHash:   obs.BlockHash,
+			Status:      uint64(obs.Status),
+			GasUsed:     obs.GasUsed,
+			IsFinalized: obs.IsFinalized,
+		})
+	}
+	if len(bundle.LegResults) == 0 {
+		fmt.Printf("[MULTI-LEG] intent %s has no leg on chain %d - the member for this chain executed none of its legs\n",
+			cycle.Request.IntentID, cycleChainID)
+		return
 	}
 
-	// Compute multi-leg result hash
 	bundle.MultiLegResultHash = ComputeMultiLegResultHash(bundle.LegResults)
-
-	fmt.Printf("[MULTI-LEG] Enriched bundle with %d leg results for intent %s (hash=%x)\n",
-		len(bundle.LegResults), cycle.Request.IntentID, bundle.MultiLegResultHash[:8])
+	fmt.Printf("[MULTI-LEG] Recorded %d leg result(s) on chain %d for intent %s (hash=%x)\n",
+		len(bundle.LegResults), cycleChainID, cycle.Request.IntentID, bundle.MultiLegResultHash[:8])
 }
 
 // parseHash parses a hex string to common.Hash.
