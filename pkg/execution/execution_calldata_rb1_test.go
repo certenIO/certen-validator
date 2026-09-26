@@ -2,7 +2,6 @@ package execution
 
 import (
 	"encoding/json"
-	"fmt"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -10,8 +9,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
-
-	"github.com/certen/independant-validator/pkg/intent"
 )
 
 // RB-1: end-to-end calldata binding tests.
@@ -119,147 +116,5 @@ func TestRB1_CommitmentMatchesSharedVectors(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-type rb1Logger struct{}
-
-func (rb1Logger) Printf(string, ...interface{}) {}
-
-// buildCrossChainDataJSON builds a single-leg crossChainData blob carrying an
-// executionPayload with the given (chainId, target, value, callData, commitment).
-func buildCrossChainDataJSON(chainID int64, target, value, callData, commitment string) []byte {
-	leg := map[string]interface{}{
-		"legId":     "leg-0",
-		"from":      "0x1111111111111111111111111111111111111111",
-		"to":        target,
-		"amountWei": value,
-		"chainId":   chainID,
-		"chain":     "ethereum sepolia",
-		"executionPayload": map[string]interface{}{
-			"target":              target,
-			"value":               value,
-			"callData":            callData,
-			"dataHash":            crypto.Keccak256Hash(common.FromHex(callData)).Hex(),
-			"chainId":             chainID,
-			"executionCommitment": commitment,
-		},
-	}
-	blob := map[string]interface{}{
-		"protocol": "CERTEN",
-		"version":  "2.0",
-		"legs":     []interface{}{leg},
-	}
-	b, _ := json.Marshal(blob)
-	return b
-}
-
-// TestRB1_Critical003GateBindsRealCalldata drives extractAllLegsFromIntent with a leg
-// whose executionPayload carries real calldata. The gate must pass when the stored
-// commitment matches the real calldata, surface leg.Data == callData, and REJECT
-// (return nil) when the executed calldata is mutated away from the committed one.
-func TestRB1_Critical003GateBindsRealCalldata(t *testing.T) {
-	vs := loadRB1Vectors(t)
-	// Pick the arbitrary-call vector (non-empty calldata, target != recipient).
-	var v *rb1Vector
-	for i := range vs {
-		if vs[i].Leg.ContractCall != nil {
-			v = &vs[i]
-			break
-		}
-	}
-	if v == nil {
-		t.Fatal("no contractCall vector present")
-	}
-
-	t.Setenv("CERTEN_ALLOW_CONTRACT_CALLS", "true") // opt in to arbitrary calls for this test
-
-	btce := NewBFTTargetChainExecutor(rb1Logger{})
-
-	// (a) Correct calldata + matching commitment ⇒ accepted, Data carries the calldata.
-	ccd := buildCrossChainDataJSON(v.ChainID, v.Expected.Target, v.Expected.Value, v.Expected.CallData, v.Expected.ExecutionCommitment)
-	legs := btce.extractAllLegsFromIntent(&intent.CertenIntent{IntentID: "rb1-ok", CrossChainData: ccd})
-	if len(legs) != 1 {
-		t.Fatalf("expected 1 leg, got %d (gate wrongly rejected valid calldata)", len(legs))
-	}
-	wantData, _ := decodeHexBytes(v.Expected.CallData)
-	if fmt.Sprintf("%x", legs[0].Data) != fmt.Sprintf("%x", wantData) {
-		t.Errorf("leg.Data mismatch:\n got  0x%x\n want 0x%x", legs[0].Data, wantData)
-	}
-
-	// (b) Mutated calldata but the SAME (now-stale) committed commitment ⇒ rejected.
-	mutatedCallData := "0x" + fmt.Sprintf("%x", append([]byte{0xde, 0xad, 0xbe, 0xef}, wantData[4:]...))
-	ccdBad := buildCrossChainDataJSON(v.ChainID, v.Expected.Target, v.Expected.Value, mutatedCallData, v.Expected.ExecutionCommitment)
-	legsBad := btce.extractAllLegsFromIntent(&intent.CertenIntent{IntentID: "rb1-bad", CrossChainData: ccdBad})
-	if legsBad != nil {
-		t.Errorf("gate accepted mutated calldata (expected nil rejection), got %d legs", len(legsBad))
-	}
-}
-
-// TestFeatureGate_ContractCallsOffByDefault asserts arbitrary contract calls are refused
-// unless CERTEN_ALLOW_CONTRACT_CALLS is enabled (fail-closed default).
-func TestFeatureGate_ContractCallsOffByDefault(t *testing.T) {
-	vs := loadRB1Vectors(t)
-	var v *rb1Vector
-	for i := range vs {
-		if vs[i].Leg.ContractCall != nil {
-			v = &vs[i]
-			break
-		}
-	}
-	if v == nil {
-		t.Fatal("no contractCall vector present")
-	}
-	ccd := buildCrossChainDataJSON(v.ChainID, v.Expected.Target, v.Expected.Value, v.Expected.CallData, v.Expected.ExecutionCommitment)
-	btce := NewBFTTargetChainExecutor(rb1Logger{})
-
-	// Default (env unset): contract-call leg must be rejected.
-	t.Setenv("CERTEN_ALLOW_CONTRACT_CALLS", "")
-	if legs := btce.extractAllLegsFromIntent(&intent.CertenIntent{IntentID: "gate-off", CrossChainData: ccd}); legs != nil {
-		t.Errorf("contract call must be refused by default, got %d legs", len(legs))
-	}
-
-	// Enabled: same leg is accepted.
-	t.Setenv("CERTEN_ALLOW_CONTRACT_CALLS", "true")
-	if legs := btce.extractAllLegsFromIntent(&intent.CertenIntent{IntentID: "gate-on", CrossChainData: ccd}); len(legs) != 1 {
-		t.Errorf("contract call must be accepted when enabled, got %d legs", len(legs))
-	}
-}
-
-// TestRB1_BuildFromIntentBindsCallDataHash asserts the commitment builder binds the
-// real calldata into Step3.CallDataHash and FinalCallData (previously always zero).
-func TestRB1_BuildFromIntentBindsCallDataHash(t *testing.T) {
-	vs := loadRB1Vectors(t)
-	var v *rb1Vector
-	for i := range vs {
-		if vs[i].Leg.ContractCall != nil {
-			v = &vs[i]
-			break
-		}
-	}
-	if v == nil {
-		t.Fatal("no contractCall vector present")
-	}
-
-	ccd := buildCrossChainDataJSON(v.ChainID, v.Expected.Target, v.Expected.Value, v.Expected.CallData, v.Expected.ExecutionCommitment)
-	builder := NewExecutionCommitmentBuilder()
-	var bundleID [32]byte
-	commitment, err := builder.BuildFromIntent("rb1-intent", bundleID, ccd, v.Expected.Target)
-	if err != nil {
-		t.Fatalf("BuildFromIntent: %v", err)
-	}
-
-	wantData, _ := decodeHexBytes(v.Expected.CallData)
-	if fmt.Sprintf("%x", commitment.FinalCallData) != fmt.Sprintf("%x", wantData) {
-		t.Errorf("FinalCallData mismatch:\n got  0x%x\n want 0x%x", commitment.FinalCallData, wantData)
-	}
-	var wantHash [32]byte
-	copy(wantHash[:], crypto.Keccak256(wantData))
-	if commitment.ExecuteGovernanceCommitment.CallDataHash != wantHash {
-		t.Errorf("Step3 CallDataHash mismatch:\n got  0x%x\n want 0x%x", commitment.ExecuteGovernanceCommitment.CallDataHash, wantHash)
-	}
-	var zero [32]byte
-	if commitment.ExecuteGovernanceCommitment.CallDataHash == zero {
-		t.Error("Step3 CallDataHash is zero — calldata not bound")
 	}
 }

@@ -41,7 +41,6 @@ import (
 	"github.com/certen/independant-validator/pkg/kvdb"
 	"github.com/certen/independant-validator/pkg/ledger"
 	"github.com/certen/independant-validator/pkg/proof"
-	"github.com/certen/independant-validator/pkg/verification"
 )
 
 // ErrIntentPermanentlyInvalid marks a failure that no later attempt can fix.
@@ -369,18 +368,6 @@ type BatchEnqueuer interface {
 	) error
 }
 
-type AnchorScheduler interface {
-	// QueueForCadence queues an intent for batched on-cadence execution
-	// Returns the scheduled time when the batch will be processed
-	QueueForCadence(ctx context.Context, intentID string, vbMeta *verification.ValidatorBlockMetadata, bftMeta *verification.BFTExecutionMetadata) (scheduledAt time.Time, err error)
-
-	// GetQueuedCount returns the number of intents waiting in the cadence queue
-	GetQueuedCount() int
-
-	// IsRunning returns whether the scheduler is actively processing
-	IsRunning() bool
-}
-
 // BFTValidator represents a decentralized BFT validator with elected executor consensus
 // Phase 3: BFTValidator now uses only CometBFT for consensus (no ExecutionConsensus)
 type BFTValidator struct {
@@ -389,7 +376,6 @@ type BFTValidator struct {
 	proofGenerator        ProofGenerator
 	governanceProofGen    GovernanceProofGenerator // G0/G1/G2 proof generator (runs AFTER L1-L4)
 	keyPageResolver       SigningKeyPageResolver   // names the page G1 is built against, from the chain
-	targets               verification.TargetChainExecutor
 	validatorBlockBuilder *ValidatorBlockBuilder
 	logger                Logger
 	validatorID           string
@@ -410,10 +396,6 @@ type BFTValidator struct {
 
 	// Proof Cycle Orchestrator for Phase 7-9 (observation, attestation, write-back)
 	proofCycleOrchestrator ProofCycleOrchestratorInterface
-
-	// Anchor Scheduler for on_cadence batching per FIRST_PRINCIPLES 2.5
-	// When set, on_cadence intents are queued for batched execution instead of immediate
-	anchorScheduler AnchorScheduler
 
 	// batchEnqueuer routes on_cadence intents into the cross-ADI batch mempool, where many
 	// intents share ONE anchor and ONE BLS verification. Measured on live Sepolia those two
@@ -525,7 +507,6 @@ func NewBFTValidator(
 	anchorManager AnchorManager,
 	proofGenerator ProofGenerator,
 	governanceProofGen GovernanceProofGenerator, // G0/G1/G2 proof generator (runs AFTER L1-L4)
-	targetChainExecutor verification.TargetChainExecutor,
 	builder *ValidatorBlockBuilder,
 	logger Logger,
 ) *BFTValidator {
@@ -541,7 +522,6 @@ func NewBFTValidator(
 		anchorManager:         anchorManager,
 		proofGenerator:        proofGenerator,
 		governanceProofGen:    governanceProofGen,
-		targets:               targetChainExecutor,
 		validatorBlockBuilder: builder,
 		logger:                logger,
 		validatorID:           validatorID,
@@ -619,46 +599,6 @@ func (bv *BFTValidator) SetBatchEnqueuer(e BatchEnqueuer) {
 	if e != nil {
 		bv.logger.Printf("✅ Cross-ADI batch mempool wired for on_cadence intents")
 	}
-}
-
-// SetAnchorScheduler sets the anchor scheduler for on_cadence batching
-// Per FIRST_PRINCIPLES 2.5: on_cadence and on_demand are NEVER interchangeable
-func (bv *BFTValidator) SetAnchorScheduler(scheduler AnchorScheduler) {
-	bv.mu.Lock()
-	defer bv.mu.Unlock()
-	bv.anchorScheduler = scheduler
-	if scheduler != nil {
-		bv.logger.Printf("✅ Anchor scheduler configured for on_cadence batching")
-
-		// Close the loop: give the scheduler the callback it needs to run Phase 7-9 once
-		// a deferred batch settles. Without this the scheduler executes cadence intents
-		// on-chain but their proof cycle never closes — the defect this wiring fixes.
-		//
-		// Installed here rather than at the call site so it can never be forgotten: any
-		// scheduler capable of attestation replay gets wired the moment it is attached.
-		if runner, ok := scheduler.(interface {
-			SetAttestationRunner(func(context.Context, interface{}, *verification.AnchorExecutionResult))
-		}); ok {
-			runner.SetAttestationRunner(func(ctx context.Context, payload interface{}, res *verification.AnchorExecutionResult) {
-				att, ok := payload.(*PendingAttestation)
-				if !ok || att == nil {
-					bv.logger.Printf("⚠️ [ATTEST] cadence attestation payload was not a *PendingAttestation")
-					return
-				}
-				bv.RunProofCycle(ctx, att, res)
-			})
-			bv.logger.Printf("✅ Cadence attestation runner installed (Phase 7-9 will close for on_cadence intents)")
-		} else {
-			bv.logger.Printf("⚠️ Scheduler does not support attestation replay — on_cadence intents will NOT attest")
-		}
-	}
-}
-
-// GetAnchorScheduler returns the anchor scheduler
-func (bv *BFTValidator) GetAnchorScheduler() AnchorScheduler {
-	bv.mu.RLock()
-	defer bv.mu.RUnlock()
-	return bv.anchorScheduler
 }
 
 // Start starts the validator's background services
