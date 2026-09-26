@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math/big"
 	"os"
@@ -281,24 +282,24 @@ func (bv *BFTValidator) RunBatchMemberAttestation(
 	bv.RunProofCycle(ctx, att, res)
 }
 
-// enqueueForBatch places one on_cadence intent into THIS validator's batch mempool and reports
-// whether it was accepted.
+// enqueueForBatch places an intent into THIS validator's batch mempool.
 //
-// Called by every validator on every committed on_cadence round, elected executor or not. That
-// is the point: a peer can only attest to a batch it can independently rebuild from its own
-// mempool, so a mempool populated on one node alone makes quorum impossible by construction.
+// Called by every validator on every committed round, elected executor or not. That is the point:
+// a peer can only attest to a batch it can independently rebuild from its own mempool, so a mempool
+// populated on one node alone makes quorum impossible by construction.
 //
-// It creates no transaction and spends nothing. Duplicate SUBMISSION is prevented separately,
-// by the batch period leader election — a different election from the round executor.
+// It creates no transaction and spends nothing. Duplicate SUBMISSION is prevented separately, by
+// the batch period leader election - a different election from the round executor.
 //
-// Returns false when the intent cannot be represented as a batch member, so the caller falls
-// through to the per-intent path rather than dropping it.
+// Returns nil when the intent is queued - including when this same intent was already queued by
+// an earlier run, which is not a refusal and must never lead to a second execution (RB3-F34).
+// Otherwise it returns a *BatchRefusal: permanent for the intent's own defect or a replay,
+// retryable when CERTEN cannot settle on the chain right now. There is no other path to fall back
+// to. A multi-chain intent is queued on every chain or on none.
 func (bv *BFTValidator) enqueueForBatch(
 	certenIntent *CertenIntent,
 	certenProof *proof.CertenProof,
 	vb *ValidatorBlock,
-	vbMeta *verification.ValidatorBlockMetadata,
-	bftMeta *verification.BFTExecutionMetadata,
 	blockHeight uint64,
 	g0Proof *proof.G0Result,
 	g1Proof *proof.G1Result,
@@ -307,115 +308,60 @@ func (bv *BFTValidator) enqueueForBatch(
 	validatorSignatures []string,
 	governanceLevel string,
 	commitHeight uint64,
-) bool {
-	// The attestation snapshot is captured HERE, while the round's values are in scope. The
-	// batch settles minutes later on the flush loop, long after this round is gone.
+) error {
+	// commitHeight is the ACCUMULATE block height the intent was written in. It must be a value
+	// every validator computes identically for a given intent, because batch membership is the set
+	// of intents falling in one height window and the resulting root and bundleId have to match
+	// across nodes for the batch to be co-signable. (The CometBFT height is NOT such a value: each
+	// validator broadcasts its own ValidatorBlock, so one intent commits at a different height on
+	// every node.)
+	plan, err := bv.planBatch(certenIntent, commitHeight)
+	if err != nil {
+		return err
+	}
+
+	// The attestation snapshot is captured HERE, while the round's values are in scope. The batch
+	// settles minutes later on the flush loop, long after this round is gone.
 	batchAtt := bv.captureAttestation(vb, certenIntent, certenProof, blockHeight,
 		g0Proof, g1Proof, g2Proof, blsSignature, validatorSignatures, governanceLevel)
 	batchAtt.Replayed = true
-	// Carry the per-intent submission inputs with the member. If the batch later has to drop it
-	// (quorum not reached over the root, or the anchor mines unusable), this is the ONLY way it
-	// can still settle — the batch path never requeues.
-	batchAtt.SubmitVB = vbMeta
-	batchAtt.SubmitBFT = bftMeta
 
-	// One member PER CHAIN.
-	//
-	// A cross-chain intent used to be refused outright ("intent spans chains X and Y") and fell
-	// through to the per-intent path, which has no quorum collection — so it submitted a proof
-	// with no validators and the anchor rejected it. Splitting is the honest representation: each
-	// chain settles its own legs, under its own anchor, from its own account, and the leaf binds
-	// chainid so the two members cannot collide despite sharing an operationID and ADI URL.
-	//
-	// Partial outcomes are already handled: members settle and fail independently, and a member
-	// that reverts is attested as failed without touching the other chain's member.
-	chains, chainsErr := bv.batchChainsOfIntent(certenIntent)
-	if chainsErr != nil || len(chains) == 0 {
-		bv.logger.Printf("⚠️ [BATCH-QUEUE] intent %s cannot be batched (%v) — falling back",
-			certenIntent.IntentID, chainsErr)
-		return false
-	}
-
-	// The ADI URL is keccak'd into the member's Merkle leaf, and the account contract recomputes
-	// that leaf from its OWN immutable adiURL. They must be the identical string. AccountURL is
-	// the DATA account (".../data") — passing it here produced a leaf no account could ever
-	// verify, so every batched member would anchor, attest, and then revert at settlement with
-	// the intent stranded. Resolve the org ADI.
-	adiURL, adiErr := memberADIURL(certenIntent)
-	if adiErr != nil {
-		bv.logger.Printf("⚠️ [BATCH-QUEUE] intent %s has no usable ADI URL (%v) — falling back",
-			certenIntent.IntentID, adiErr)
-		return false
-	}
-
-	// commitHeight is the ACCUMULATE block height the intent was written in. It must be a value
-	// every validator computes identically for a given intent, because batch membership is the
-	// set of intents falling in one height window and the resulting root and bundleId have to
-	// match across nodes for the batch to be co-signable.
-	//
-	// The CometBFT height is NOT such a value: each validator broadcasts its own ValidatorBlock
-	// transaction, so one intent commits at a different height on every node (observed live:
-	// 230/232/234/235/235/236/237 for a single intent). The Accumulate height is a property of
-	// the intent itself — the same reason roundID is built from it.
-	// All-or-nothing across chains: if any chain's member cannot be built or queued, none are.
-	// A half-queued cross-chain intent would settle on one chain and silently drop the other.
-	type pendingMember struct {
-		legs    []BatchLeg
-		chainID int64
-		account [20]byte
-		opID    [32]byte
-	}
-	members := make([]pendingMember, 0, len(chains))
-	for _, ch := range chains {
-		legs, chainID, account, opID, extractErr := bv.batchInputsFromIntentForChain(certenIntent, ch)
-		if extractErr != nil {
-			bv.logger.Printf("⚠️ [BATCH-QUEUE] intent %s cannot be batched on chain %d (%v) — "+
-				"falling back for the WHOLE intent so it is not split across two paths",
-				certenIntent.IntentID, ch, extractErr)
-			return false
-		}
-		members = append(members, pendingMember{legs, chainID, account, opID})
-	}
-
-	// LANE ROUTING. proofClass decides WHICH MECHANISM settles the member — never WHETHER to
-	// enqueue it. Both lanes are the batch path: routing on_demand off it entirely cannot settle
-	// a CertenAccountV7 account, because _authorizeLeaf only ever computes the batch-form leaf.
-	// TestEnqueueIsNotGatedOnProofClass guards that.
-	//
-	// An unrecognised proofClass falls back rather than defaulting to a lane. A member in the
-	// wrong lane on one node derives a bundleId its peers never will.
-	proofClass, pcErr := certenIntent.GetProofClass()
-	if pcErr != nil {
-		bv.logger.Printf("⚠️ [BATCH-QUEUE] intent %s has no usable proof class (%v) — falling back",
-			certenIntent.IntentID, pcErr)
-		return false
-	}
-	onDemand := proofClass == "on_demand" && onDemandLaneEnabled()
-
-	for _, m := range members {
+	var added []batchMember
+	for _, m := range plan.members {
 		var enqErr error
-		if onDemand {
+		if plan.onDemand {
 			enqErr = bv.batchEnqueuer.EnqueueOnDemand(
-				certenIntent.IntentID, adiURL, m.chainID, m.account, m.opID, m.legs, batchAtt, commitHeight,
+				certenIntent.IntentID, plan.adiURL, m.chainID, m.account, m.opID, m.legs, batchAtt, commitHeight,
 				certenIntent.Partition, certenIntent.BlockTime, certenIntent.TransactionHash)
 		} else {
 			enqErr = bv.batchEnqueuer.EnqueueForBatch(
-				certenIntent.IntentID, adiURL, m.chainID, m.account, m.opID, m.legs, batchAtt, commitHeight,
+				certenIntent.IntentID, plan.adiURL, m.chainID, m.account, m.opID, m.legs, batchAtt, commitHeight,
 				certenIntent.Partition, certenIntent.BlockTime, certenIntent.TransactionHash)
 		}
-		if enqErr != nil {
-			bv.logger.Printf("⚠️ [BATCH-QUEUE] intent %s not queued on chain %d (%v) — falling back",
-				certenIntent.IntentID, m.chainID, enqErr)
-			return false
+		switch {
+		case enqErr == nil:
+			added = append(added, m)
+		case errors.Is(enqErr, ErrMemberAlreadyQueued):
+			// This intent's member for the chain is already queued by an earlier run. Queued.
+			bv.logger.Printf("📦 [BATCH-QUEUE] intent %s already queued on chain %d — not queued twice",
+				certenIntent.IntentID, m.chainID)
+		default:
+			// All-or-nothing: take back what this call queued for the intent's other chains, or the
+			// intent would settle on one chain while being reported refused.
+			for _, r := range added {
+				bv.batchEnqueuer.RemoveMember(plan.onDemand, certenIntent.IntentID, r.chainID, r.opID)
+			}
+			return refuse(fmt.Errorf("intent %s on chain %d: %w", certenIntent.IntentID, m.chainID, enqErr))
 		}
-		lane := "on_cadence period"
-		if onDemand {
-			lane = "ON-DEMAND intent-keyed"
-		}
-		bv.logger.Printf("📦 [BATCH-QUEUE] intent %s queued for %s settlement on chain %d at height %d (%d of %d chain member(s))",
-			certenIntent.IntentID, lane, m.chainID, commitHeight, len(m.legs), len(members))
 	}
-	return true
+
+	lane := "on_cadence period"
+	if plan.onDemand {
+		lane = "ON-DEMAND intent-keyed"
+	}
+	bv.logger.Printf("📦 [BATCH-QUEUE] intent %s queued for %s settlement at height %d (%d chain member(s))",
+		certenIntent.IntentID, lane, commitHeight, len(plan.members))
+	return nil
 }
 
 // onDemandLaneEnabled reports whether intent-keyed on-demand settlement is switched on.

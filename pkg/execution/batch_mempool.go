@@ -1,31 +1,31 @@
 package execution
 
 import (
-	"errors"
 	"fmt"
 	"sort"
 	"strconv"
 	"sync"
 	"time"
 
+	"github.com/certen/independant-validator/pkg/consensus"
 	"github.com/ethereum/go-ethereum/common"
 )
 
-// Admission outcomes a caller must be able to tell apart. Consensus refuses an intent the batch
-// path cannot settle, and it may only do that for a reason that is the intent's own.
+// Admission outcomes a caller must be able to tell apart. They are consensus's (it owns the
+// BatchEnqueuer interface this package implements), aliased so both packages match with errors.Is.
 var (
 	// ErrMemberAlreadyQueued is the SAME intent arriving again for a chain it is already queued on
 	// - a workflow re-run. It is not a refusal, and the intent must not be executed a second time.
-	ErrMemberAlreadyQueued = errors.New("member already queued")
+	ErrMemberAlreadyQueued = consensus.ErrMemberAlreadyQueued
 
 	// ErrOperationAlreadyQueued is a DIFFERENT intent carrying an operation (the same four
 	// Accumulate blobs) that is already queued on the chain: a replay, refused for good.
-	ErrOperationAlreadyQueued = errors.New("operation already queued by another intent")
+	ErrOperationAlreadyQueued = consensus.ErrOperationAlreadyQueued
 
 	// ErrBatchUnavailable is CERTEN being unable to settle the member right now - no anchor
 	// configured for the chain, or no commit height resolved yet. It is never the intent's defect,
 	// so the intent is retried, not refused.
-	ErrBatchUnavailable = errors.New("batch settlement unavailable")
+	ErrBatchUnavailable = consensus.ErrBatchUnavailable
 )
 
 // =============================================================================

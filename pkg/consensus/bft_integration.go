@@ -308,8 +308,9 @@ type GovernanceProofGenerator interface {
 // Implemented by pkg/execution's BatchStack. Kept as an interface so consensus does not have
 // to construct the batch stack itself, and so the wiring can be verified with a stub.
 type BatchEnqueuer interface {
-	// EnqueueForBatch queues one authorized intent. Returning an error means the intent was
-	// NOT queued and the caller must fall back, or it would be silently dropped.
+	// EnqueueForBatch queues one authorized intent in the period lane. Errors: ErrMemberAlreadyQueued
+	// (this intent is already queued - not a refusal), ErrOperationAlreadyQueued (a replay),
+	// ErrBatchUnavailable (CERTEN cannot settle it now); anything else is the intent's own defect.
 	EnqueueForBatch(
 		intentID string,
 		adiURL string,
@@ -330,6 +331,17 @@ type BatchEnqueuer interface {
 		// came from. Empty is accepted and recorded as empty.
 		accumTxHash string,
 	) error
+
+	// CheckMember reports whether EnqueueForBatch (onDemand false) or EnqueueOnDemand (onDemand
+	// true) would accept the member, without queueing it. Errors are those the enqueues return:
+	// ErrOperationAlreadyQueued for a replay, ErrBatchUnavailable for CERTEN's outage, anything else
+	// for the intent's own defect. The same intent already queued is not an error here.
+	CheckMember(onDemand bool, intentID, adiURL string, chainID int64, account [20]byte,
+		operationID [32]byte, legs interface{}, commitHeight uint64) error
+
+	// RemoveMember takes a member back out of its lane as if it had never been queued, so a
+	// multi-chain intent can be rolled back when one of its chains cannot be queued.
+	RemoveMember(onDemand bool, intentID string, chainID int64, operationID [32]byte)
 
 	// EnqueueOnDemand queues an intent-keyed member: one intent, one anchor, no period.
 	//
@@ -1358,6 +1370,14 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 		}, nil
 	}
 
+	// BATCH SETTLEMENT. The batch path is the only way CERTEN settles an intent. One it cannot
+	// settle is refused here, by name, before the validator block is built, signed or broadcast -
+	// the same plan and admission rules the enqueue below applies, so the two cannot disagree. See
+	// batch_refusal.go.
+	if err := bv.checkBatchable(certenIntent, blockHeight); err != nil {
+		return bv.refusalResult(certenIntent, err), nil
+	}
+
 	// Create builder inputs STRICTLY from canonical sources
 	builderInputs := BuilderInputs{
 		Intent: certenIntent, // canonical 4 blobs from IntentDiscovery
@@ -1445,130 +1465,6 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 		bv.logger.Printf("   Cryptographic proofs are in ValidatorBlock, CometBFT height is audit metadata only")
 	}
 
-	// 3) Forward to external audit/mining network via TargetChainExecutor
-	// This maintains the external audit boundary per FIRST_PRINCIPLES
-	//
-	// CRITICAL: We must pass ALL proof data to the target chain executor so that
-	// createAnchor() receives real values for crossChainCommitment and governanceRoot.
-	// Without these, the contract stores merkleRoot = keccak256(op || 0x00 || 0x00)
-	// which can never be verified against proofs with real data.
-
-	// Extract BPT root from lite client proof for CrossChainCommitment
-	var bptRoot []byte
-	if liteClientProof != nil && liteClientProof.BPTProof != nil {
-		if liteClientProof.BPTProof.Anchor != nil {
-			bptRoot = liteClientProof.BPTProof.Anchor
-		}
-	}
-
-	// Extract CrossChainCommitment from ValidatorBlock
-	var crossChainCommitment []byte
-	if vb.CrossChainProof.CrossChainCommitment != "" {
-		crossChainCommitment = []byte(vb.CrossChainProof.CrossChainCommitment)
-	}
-
-	// Extract GovernanceRoot from ValidatorBlock
-	// GovernanceRoot is the MerkleRoot from the GovernanceProof
-	var governanceRoot []byte
-	if vb.GovernanceProof.MerkleRoot != "" {
-		governanceRoot = []byte(vb.GovernanceProof.MerkleRoot)
-	}
-
-	bv.logger.Printf("📦 [ANCHOR-DATA] Proof data for anchor creation:")
-	bv.logger.Printf("   BPT Root len: %d", len(bptRoot))
-	bv.logger.Printf("   CrossChainCommitment len: %d", len(crossChainCommitment))
-	bv.logger.Printf("   GovernanceRoot len: %d", len(governanceRoot))
-	bv.logger.Printf("   BLSAggregateSignature len: %d", len(blsSignature))
-	bv.logger.Printf("   SourceBlockHeight: %d (Accumulate)", blockHeight)
-
-	// V6.1 A+++: serialize G0/G1/G2 to canonical JSON so the executor can
-	// reconstruct certenProof.G_n with byte-identical content to what BFT
-	// signed. Without this, executor.go::SubmitAnchorFromValidatorBlock
-	// builds a CertenProof with nil G_n fields, A+++ govRoot derives over
-	// zero-hashes for those slots, bundleId diverges from what BFT computed,
-	// and executeComprehensiveProof reverts with BLS verification failure.
-	var g0JSON, g1JSON, g2JSON []byte
-	if g0Proof != nil {
-		g0JSON, _ = json.Marshal(g0Proof)
-	}
-	if g1Proof != nil {
-		g1JSON, _ = json.Marshal(g1Proof)
-	}
-	if g2Proof != nil {
-		g2JSON, _ = json.Marshal(g2Proof)
-	}
-
-	vbMeta := &verification.ValidatorBlockMetadata{
-		RoundID:  roundID,
-		IntentID: certenIntent.IntentID,
-		// The intent's own class, carried so the executor path can attribute its
-		// measured cost to the class that incurred it rather than reporting it
-		// unclassified.
-		ProofClass:          certenIntent.ProofClass,
-		Height:              bftRes.Height,
-		OperationCommitment: []byte(vb.OperationCommitment), // Convert string to []byte
-		ChainID:             bv.chainID,                     // From config via NewBFTValidator
-
-		// CRITICAL: Pass proof data for anchor creation
-		BPTRoot:               bptRoot,
-		CrossChainCommitment:  crossChainCommitment,
-		BLSAggregateSignature: blsSignature,
-		// Matched pair with the signature: the block signer's public key, so the
-		// executor proves the BLS signature against the key that produced it
-		// (fixes #774716 when the BFT proposer/signer differs from the executor).
-		BLSValidatorSetPubKey: vb.GovernanceProof.BLSValidatorSetPubKey,
-		GovernanceRoot:        governanceRoot,
-		TransactionHash:       certenIntent.TransactionHash,
-		AccountURL:            certenIntent.AccountURL,
-		// V6.1 A+++: source block height MUST equal certenProof.BlockHeight,
-		// not the BFT workflow's `blockHeight` argument. The two differ by 1
-		// because the workflow runs at the block AFTER the intent was
-		// committed. BFT signing uses certenProof.BlockHeight, so the
-		// executor's reconstructed certenProof must read the same value
-		// or operationCommitment hash diverges → bundleId diverges → TX2
-		// reverts (Sepolia test #5 root cause, 2026-05-26).
-		SourceBlockHeight: func() uint64 {
-			if certenProof != nil && certenProof.BlockHeight > 0 {
-				return certenProof.BlockHeight
-			}
-			return blockHeight
-		}(),
-
-		// CRITICAL: Pass complete lite client proof for Merkle verification
-		// This enables extractMerkleProofHashes() to extract the actual Merkle proof path
-		// for on-chain verification. Without this, proofHashes[] is empty and
-		// the contract's merkleVerified check fails.
-		LiteClientProof: liteClientProof,
-
-		// CRITICAL: Pass original CrossChainData for executeWithGovernance target address
-		// This ensures the correct target address (leg.To) is used, NOT the anchor contract.
-		CrossChainData: certenIntent.CrossChainData,
-
-		// V6.1 A+++ governance plumbing — see comment above on the JSON variables.
-		G0CanonicalJSON: g0JSON,
-		G1CanonicalJSON: g1JSON,
-		G2CanonicalJSON: g2JSON,
-		KeypageURL:      resolvedKeyPageURL,
-		KeybookURL:      resolvedKeyBookURL,
-
-		// V6.1 A+++ — original intent 4-blob snapshot. CrossChainData is
-		// already plumbed above for executeWithGovernance; the other three
-		// are required so the EVM submitter's intent.CertenIntent has
-		// byte-identical blobs and intent.OperationID() returns the same
-		// hex the BFT signer used. Without this, executeComprehensiveProof
-		// reverts because the contract recomputed bundleId from a
-		// different opID than what was signed.
-		IntentData:     certenIntent.IntentData,
-		GovernanceData: certenIntent.GovernanceData,
-		ReplayData:     certenIntent.ReplayData,
-	}
-
-	bftMeta := &verification.BFTExecutionMetadata{
-		Height:      bftRes.Height,
-		TxHash:      bftRes.TxHash,
-		CommittedAt: time.Now().UTC(), // This is consensus metadata, not proof data
-	}
-
 	// =======================================================================
 	// EVERY VALIDATOR RECORDS THE COMMITTED HEIGHT
 	//
@@ -1613,10 +1509,10 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	// means they must have processed the intent. There is no version of this that is both
 	// single-signer and trustworthy.
 	//
-	// Intents the batch path cannot represent still fall through to the existing per-intent
-	// path unchanged — EnqueueForBatch refuses chains with no configured orchestrator, and
-	// batchInputsFromIntent refuses multi-chain intents. So non-EVM targets (Solana, NEAR,
-	// Aptos, Sui, TON, Cardano) are untouched by this.
+	// There is no other path. An intent the batch path cannot settle was already refused by name
+	// before signing (checkBatchable); intents on chains CERTEN does not run were refused before
+	// that (CheckIntentTargetChains). The per-intent path this used to fall through to could not
+	// settle, for the three reasons above, and is gone (owner decision 2026-09-26).
 	//
 	// This MUST happen before the elected-executor gate below, and it is the single change
 	// that makes cross-ADI quorum possible at all.
@@ -1633,11 +1529,12 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	// elected BATCH PERIOD LEADER flushes (IsBatchPeriodLeader), which is a separate election
 	// from this round's executor.
 	// =======================================================================
-	var batchQueued bool
-	if bv.batchEnqueuer != nil {
-		batchQueued = bv.enqueueForBatch(certenIntent, certenProof, vb, vbMeta, bftMeta,
-			blockHeight, g0Proof, g1Proof, g2Proof, blsSignature, validatorSignatures,
-			governanceLevel, blockHeight)
+	if err := bv.enqueueForBatch(certenIntent, certenProof, vb,
+		blockHeight, g0Proof, g1Proof, g2Proof, blsSignature, validatorSignatures,
+		governanceLevel, blockHeight); err != nil {
+		// checkBatchable accepted this intent before signing, so a refusal here is a race (another
+		// intent queued the operation first) or an outage that began since. Still refused by name.
+		return bv.refusalResult(certenIntent, err), nil
 	}
 
 	// =======================================================================
@@ -1665,152 +1562,23 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 		}, nil
 	}
 
-	bv.logger.Printf("⚡ [CANONICAL-BFT] Validator %s is ELECTED EXECUTOR for round %s - proceeding with external submission",
-		bv.validatorID, roundID)
+	bv.logger.Printf("⚡ [CANONICAL-BFT] Validator %s is ELECTED EXECUTOR for round %s - intent %s is queued for batch settlement",
+		bv.validatorID, roundID, certenIntent.IntentID)
 
-	// =======================================================================
-	// PROOF CLASS ROUTING: on_cadence vs on_demand per FIRST_PRINCIPLES 2.5
-	// These are NEVER interchangeable - on_cadence gets batched, on_demand executes immediately
-	// =======================================================================
-	var anchorRes *verification.AnchorExecutionResult
-	// Tracked separately from consensus success — see ExecutionTaskResult.
-	//
-	// STAGE 1: this was `var targetChainConfirmed bool`, assigned straight from
-	// anchorRes.AllTransactionsConfirmed after a 60-second context. That bool
-	// collapsed "did not resolve in my window" into "failed", and the measured
-	// base-sepolia lag is ~51s against that 60s window — so the collapse fired on
-	// ordinary, healthy settlements.
-	var targetChainErr error
-
-	// ON-CADENCE, CROSS-ADI BATCH PATH (preferred).
-	//
-	// The enqueue itself already happened above, on EVERY validator — see the comment there
-	// for why that is load-bearing. All that remains for the elected executor is to stop:
-	// the intent will settle on the batch period leader's flush, which may be a different
-	// node, and executing it here as well would double-spend it.
-	if batchQueued {
-		return &ExecutionTaskResult{
-			Success: true,
-			// Queued, not settled. The batch period leader's flush resolves it,
-			// possibly on another node, and RunBatchMemberAttestation then carries
-			// the terminal outcome. Pending, with no tx hash — there is no
-			// transaction yet, and claiming a failure here would be a guess about
-			// work that has not started.
-			TargetChainOutcome: TargetChainPending,
-			ExecutorID:         bv.validatorID,
-			ConsensusHash:      fmt.Sprintf("batch_queued_%s_%d", roundID, bftRes.Height),
-		}, nil
-	}
-
-	if proofClass == "on_cadence" && bv.anchorScheduler != nil {
-		// ON-CADENCE fallback: deferred-serial execution (one anchor per intent).
-		bv.logger.Printf("📦 [CADENCE-BATCH] Queuing intent %s for on_cadence batched execution", certenIntent.IntentID)
-
-		// Capture the Phase 7-9 inputs NOW, while the round's values are in scope. The
-		// intent will settle minutes from now on the scheduler's ticker, long after this
-		// round is gone; without this snapshot it could execute but never attest, which
-		// is exactly what used to happen to every on_cadence intent.
-		cadenceAtt := bv.captureAttestation(vb, certenIntent, certenProof, blockHeight,
-			g0Proof, g1Proof, g2Proof, blsSignature, validatorSignatures, governanceLevel)
-		cadenceAtt.Replayed = true
-
-		var scheduledAt time.Time
-		var queueErr error
-		if withAtt, ok := bv.anchorScheduler.(interface {
-			QueueForCadenceWithAttestation(context.Context, string, *verification.ValidatorBlockMetadata, *verification.BFTExecutionMetadata, interface{}) (time.Time, error)
-		}); ok {
-			scheduledAt, queueErr = withAtt.QueueForCadenceWithAttestation(
-				ctx, certenIntent.IntentID, vbMeta, bftMeta, cadenceAtt)
-		} else {
-			bv.logger.Printf("[CADENCE-BATCH] scheduler does not support attestation replay; "+
-				"intent %s will execute but its proof cycle will NOT close", certenIntent.IntentID)
-			scheduledAt, queueErr = bv.anchorScheduler.QueueForCadence(ctx, certenIntent.IntentID, vbMeta, bftMeta)
-		}
-		if queueErr != nil {
-			bv.logger.Printf("⚠️ [CADENCE-BATCH] Failed to queue for cadence: %v - falling back to immediate execution", queueErr)
-			// Fall through to immediate execution
-		} else {
-			queuedCount := bv.anchorScheduler.GetQueuedCount()
-			bv.logger.Printf("✅ [CADENCE-BATCH] Intent %s queued for batch execution at %s (queue size: %d)",
-				certenIntent.IntentID, scheduledAt.Format(time.RFC3339), queuedCount)
-
-			// Return success - execution will happen when batch is processed
-			return &ExecutionTaskResult{
-				Success: true,
-				// Deferred to the scheduler's ticker, minutes away. Pending with no
-				// tx hash: the captured attestation is replayed through RunProofCycle
-				// once the batch settles, and that is what produces the terminal line.
-				TargetChainOutcome: TargetChainPending,
-				ExecutorID:         bv.validatorID,
-				ConsensusHash:      fmt.Sprintf("cadence_queued_%s_%d", roundID, bftRes.Height),
-			}, nil
-		}
-	}
-
-	// ON-DEMAND or fallback: Execute immediately
-	if proofClass == "on_demand" {
-		bv.logger.Printf("⚡ [ON-DEMAND] Executing intent %s immediately (on_demand proof class)", certenIntent.IntentID)
-	} else if proofClass == "on_cadence" {
-		bv.logger.Printf("⚠️ [CADENCE-FALLBACK] No scheduler configured - executing on_cadence intent %s immediately", certenIntent.IntentID)
-	}
-
-	// External audit boundary - validators do NOT impersonate audit logic
-	anchorCtx, anchorCancel := context.WithTimeout(ctx, 60*time.Second)
-	defer anchorCancel()
-
-	anchorRes, err = bv.targets.SubmitAnchorFromValidatorBlock(anchorCtx, vbMeta, bftMeta)
-	if err != nil {
-		bv.logger.Printf("⚠️ [CANONICAL-AUDIT] External audit submission failed: %v (continuing)", err)
-		// Non-fatal - audit failure doesn't invalidate consensus
-		targetChainErr = err
-	}
-
-	// Classify per the Stage 1 table. A submission error is failed; every other
-	// unresolved shape is PENDING, and the terminal answer arrives from Phase 7's
-	// observation of the real receipt rather than from this node's patience.
-	targetChainOutcome := ClassifyTargetChainOutcome(anchorRes, targetChainErr)
-	targetChainTxRef := TargetChainTxRef(anchorRes)
-
-	if anchorRes != nil {
-		bv.logger.Printf("✅ [CANONICAL-AUDIT] External audit completed: tx=%s network=%s",
-			anchorRes.AnchorTxID, anchorRes.Network)
-
-		// Enhanced logging for all 3 transaction hashes
-		bv.logger.Printf("📋 [ANCHOR-WORKFLOW] Transaction hashes:")
-		bv.logger.Printf("   Create TX:     %s", anchorRes.CreateTxHash)
-		bv.logger.Printf("   Verify TX:     %s", anchorRes.VerifyTxHash)
-		bv.logger.Printf("   Governance TX: %s", anchorRes.GovernanceTxHash)
-
-		// Phase 7-9: Trigger proof cycle for observation, attestation, and write-back
-		if bv.proofCycleOrchestrator != nil && anchorRes.AnchorTxID != "" {
-			// Phase 7-9 now lives in RunProofCycle (async_attestation.go) so the
-			// on_cadence path can replay the SAME logic after its deferred batch
-			// settles. Previously this was an inline closure the cadence path could
-			// not reach, so cadence intents never attested.
-			att := bv.captureAttestation(vb, certenIntent, certenProof, blockHeight,
-				g0Proof, g1Proof, g2Proof, blsSignature, validatorSignatures, governanceLevel)
-			// The proof cycle is the RESOLVER for a pending settlement: it observes
-			// the real receipt and records the terminal status against this same
-			// intent ID. Telling it what this node believes so far keeps the two
-			// halves of the story joined.
-			att.TargetChainOutcome = targetChainOutcome
-			go bv.RunProofCycle(context.Background(), att, anchorRes)
-		}
-	}
-
-	res := &ExecutionTaskResult{
-		Success: true, // consensus committed
-		// Derived, never assigned: see the field comment on ExecutionTaskResult.
-		TargetChainConfirmed: targetChainOutcome.IsConfirmed(),
-		TargetChainOutcome:   targetChainOutcome,
-		TargetChainTxRef:     targetChainTxRef,
-		ExecutorID:           bv.validatorID,
-		ConsensusHash:        fmt.Sprintf("%X", bftRes.TxHash),
-	}
-	if targetChainErr != nil {
-		res.TargetChainError = targetChainErr.Error()
-	}
-	return res, nil
+	// The enqueue already happened above, on EVERY validator - see the comment there for why that
+	// is load-bearing. All that remains for the elected executor is to stop: the intent settles on
+	// the batch period leader's flush, which may be a different node, and executing it here as well
+	// would double-spend it.
+	return &ExecutionTaskResult{
+		Success: true,
+		// Queued, not settled. The batch period leader's flush resolves it, possibly on another
+		// node, and RunBatchMemberAttestation then carries the terminal outcome. Pending, with no
+		// tx hash - there is no transaction yet, and claiming a failure here would be a guess about
+		// work that has not started.
+		TargetChainOutcome: TargetChainPending,
+		ExecutorID:         bv.validatorID,
+		ConsensusHash:      fmt.Sprintf("batch_queued_%s_%d", roundID, bftRes.Height),
+	}, nil
 }
 
 // parseMultiChainTxHashes parses comma-separated "ChainName:txhash" strings into per-chain groups.

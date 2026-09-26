@@ -107,7 +107,7 @@ func TestAnchorPinRunsBeforeAnythingIsQueuedOrSent(t *testing.T) {
 	}
 	src := string(raw)
 	pin := strings.Index(src, "CheckIntentAccountAnchors(anchorPolicy, certenIntent)")
-	enqueue := strings.Index(src, "batchQueued = bv.enqueueForBatch(")
+	enqueue := strings.Index(src, "bv.enqueueForBatch(")
 	if pin < 0 || enqueue < 0 || pin > enqueue {
 		t.Fatalf("anchor pin at %d, enqueue at %d: the pin must run first", pin, enqueue)
 	}
