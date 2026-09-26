@@ -23,6 +23,7 @@ import (
 
 	attestation "github.com/certen/independant-validator/pkg/attestation/strategy"
 	chain "github.com/certen/independant-validator/pkg/chain/strategy"
+	"github.com/certen/independant-validator/pkg/consensus"
 	"github.com/certen/independant-validator/pkg/crypto/bls"
 	"github.com/certen/independant-validator/pkg/database"
 	"github.com/certen/independant-validator/pkg/strategy"
@@ -366,18 +367,38 @@ func TestLevelsBoundByAttestations(t *testing.T) {
 	}
 }
 
-func TestUnifiedAttestationSetIsTheSameOnEveryValidator(t *testing.T) {
+func TestRegistryAttestationSetIsTheSameOnEveryValidator(t *testing.T) {
 	threshold := attestation.DefaultThresholdConfig().CalculateThresholdWeight
-	peers := []string{"http://validator-2:8080", "http://validator-3:8080"}
-	a := unifiedAttestationSet("http://validator-1:8080", peers, threshold, 99)
-	b := unifiedAttestationSet("http://validator-3:8080", []string{"http://validator-1:8080", "http://validator-2:8080"}, threshold, 99)
+	_, reg := rb3Validators(t, 3)
+	a, err := registryAttestationSet(reg, threshold, 99)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The set is the registry's, so every validator - whoever it is - derives the same snapshot.
+	b, err := registryAttestationSet(reg, threshold, 99)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if a.SnapshotID != b.SnapshotID || a.ValidatorRoot != b.ValidatorRoot {
 		t.Fatal("two validators of one set derived different snapshots")
 	}
 	if a.TotalWeight.Int64() != 3 || a.ThresholdWeight.Int64() != threshold(3) {
 		t.Fatalf("weights %s/%s", a.ThresholdWeight, a.TotalWeight)
 	}
-	c := unifiedAttestationSet("http://validator-1:8080", peers[:1], threshold, 99)
+	for _, v := range a.Validators {
+		if len(v.PublicKey) == 0 || v.Weight.Int64() != 1 {
+			t.Fatalf("member %s recorded without its registered key or power", v.ValidatorID)
+		}
+	}
+	smaller := map[string]consensus.ValidatorRegistryEntry{}
+	for k, v := range reg {
+		smaller[k] = v
+		break
+	}
+	c, err := registryAttestationSet(smaller, threshold, 99)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if c.SnapshotID == a.SnapshotID {
 		t.Fatal("a smaller set produced the same snapshot")
 	}

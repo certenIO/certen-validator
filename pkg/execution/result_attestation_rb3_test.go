@@ -1,173 +1,311 @@
 package execution
 
 import (
+	"context"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math/big"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
-	"github.com/ethereum/go-ethereum/common"
-
-	"github.com/certen/independant-validator/pkg/crypto/bls"
+	attestation "github.com/certen/independant-validator/pkg/attestation/strategy"
+	chain "github.com/certen/independant-validator/pkg/chain/strategy"
+	"github.com/certen/independant-validator/pkg/consensus"
+	"github.com/certen/independant-validator/pkg/strategy"
 )
 
-// RB-3: quorum-confirmed header attestation tests.
+// RB-3: quorum-confirmed result attestation.
 //
-// These assert that the attestation collector only finalizes a result when a BFT
-// supermajority (>= 2/3 voting power) independently signed the IDENTICAL ResultHash
-// (which binds block_hash + receipts_root + status), and that a divergent-RPC minority
-// can never join the quorum — with the aggregate BLS signature independently verified.
+// A result is final only when validators holding >= 2/3 of the REGISTERED voting power signed the
+// identical result message, and a validator that observed a different result (a forked or lying RPC)
+// can neither join nor block that quorum. These ran against the legacy AttestationCollector, which no
+// live path used; they now run against the Phase 8 fold that decides every write-back.
+//
+// RB3-F41: that fold counted each attestation's self-declared Weight over whatever key it carried,
+// with no dedupe, against len(peers)+1 - one responder declaring Weight 100 met the threshold alone.
 
-func rb3MakeValidatorSet(n int) (*ValidatorSet, []*bls.PrivateKey) {
-	vs := &ValidatorSet{TotalVotingPower: big.NewInt(int64(n)), ValidatorCount: n}
-	keys := make([]*bls.PrivateKey, n)
+type rb3Validator struct {
+	addr  string
+	strat *attestation.BLSStrategy
+}
+
+func rb3Validators(t *testing.T, n int) ([]rb3Validator, map[string]consensus.ValidatorRegistryEntry) {
+	t.Helper()
+	vals := make([]rb3Validator, n)
+	reg := make(map[string]consensus.ValidatorRegistryEntry, n)
 	for i := 0; i < n; i++ {
-		sk, pk, err := bls.GenerateKeyPair()
+		s, err := attestation.NewBLSStrategyWithNewKey(fmt.Sprintf("validator-%d", i+1), uint32(i))
 		if err != nil {
-			panic(err)
+			t.Fatal(err)
 		}
-		keys[i] = sk
-		vs.Validators = append(vs.Validators, ValidatorInfo{
-			ID:           fmt.Sprintf("val-%d", i),
-			Address:      common.BigToAddress(big.NewInt(int64(i + 1))),
-			Index:        uint32(i),
+		addr := fmt.Sprintf("0x%040x", i+1)
+		vals[i] = rb3Validator{addr: addr, strat: s}
+		reg[addr] = consensus.ValidatorRegistryEntry{
+			EVMAddress:   addr,
+			PublicKeyHex: hex.EncodeToString(s.PublicKey()),
 			VotingPower:  big.NewInt(1),
-			BLSPublicKey: pk.Bytes(),
-			Active:       true,
-		})
-	}
-	return vs, keys
-}
-
-func rb3MakeAttestation(vs *ValidatorSet, keys []*bls.PrivateKey, i int, resultHash, bundleID [32]byte, block *big.Int) *ResultAttestation {
-	msg := ComputeAttestationMessageHash(resultHash, bundleID, block)
-	sig := keys[i].SignWithDomain(msg[:], bls.DomainResult)
-	return &ResultAttestation{
-		ResultHash:       resultHash,
-		BundleID:         bundleID,
-		ValidatorID:      vs.Validators[i].ID,
-		ValidatorAddress: vs.Validators[i].Address,
-		ValidatorIndex:   vs.Validators[i].Index,
-		BLSSignature:     sig.Bytes(),
-		MessageHash:      msg,
-		BlockNumber:      block,
-	}
-}
-
-func rb3PubKeys(vs *ValidatorSet, idxs ...int) [][]byte {
-	out := make([][]byte, 0, len(idxs))
-	for _, i := range idxs {
-		out = append(out, vs.Validators[i].BLSPublicKey)
-	}
-	return out
-}
-
-// TestRB3_QuorumFinalizesOnAgreement: >=2/3 validators signing the same ResultHash
-// finalizes, and the aggregate BLS signature verifies against the agreed messageHash.
-func TestRB3_QuorumFinalizesOnAgreement(t *testing.T) {
-	vs, keys := rb3MakeValidatorSet(4)
-	collector := NewAttestationCollector(vs, 2, 3)
-
-	rh := [32]byte{0xAA}
-	bundle := [32]byte{0x01}
-	block := big.NewInt(100)
-
-	// 2 of 4 = threshold met (CheckThreshold) but NOT supermajority (2*3<8) ⇒ no finalize.
-	for _, i := range []int{0, 1} {
-		if err := collector.AddAttestation(rb3MakeAttestation(vs, keys, i, rh, bundle, block)); err != nil {
-			t.Fatalf("add %d: %v", i, err)
 		}
 	}
-	if agg := collector.aggregated[rh]; agg == nil || agg.Finalized {
-		t.Fatalf("must NOT finalize at 2/4 (below 2/3 supermajority)")
+	return vals, reg
+}
+
+func rb3Message(result byte) *attestation.AttestationMessage {
+	return &attestation.AttestationMessage{
+		IntentID:     "intent-1",
+		ResultHash:   [32]byte{result},
+		AnchorTxHash: "0xabc",
+		BlockNumber:  100,
+		TargetChain:  "11155111",
+		ChainID:      "11155111",
+		Timestamp:    1_700_000_000,
+		CycleID:      "cycle-1",
+		BundleID:     [32]byte{0x01},
+	}
+}
+
+func rb3Sign(t *testing.T, v rb3Validator, msg *attestation.AttestationMessage) *attestation.Attestation {
+	t.Helper()
+	att, err := v.strat.Sign(context.Background(), msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return att
+}
+
+func rb3Fold(t *testing.T, vals []rb3Validator, reg map[string]consensus.ValidatorRegistryEntry, msg *attestation.AttestationMessage, atts []*attestation.Attestation) (*attestation.AggregatedAttestation, []ExcludedResultAttestation, error) {
+	t.Helper()
+	return foldResultAttestations(context.Background(), vals[0].strat, msg, atts, reg, attestation.DefaultThresholdConfig())
+}
+
+// >= 2/3 of registered power signing the same result finalizes, and the aggregate verifies.
+func TestRB3_QuorumFinalizesOnAgreement(t *testing.T) {
+	vals, reg := rb3Validators(t, 4)
+	msg := rb3Message(0xAA)
+
+	two := []*attestation.Attestation{rb3Sign(t, vals[0], msg), rb3Sign(t, vals[1], msg)}
+	agg, _, err := rb3Fold(t, vals, reg, msg, two)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agg.ThresholdMet {
+		t.Fatalf("2 of 4 registered power met the quorum (achieved=%d required=%d)", agg.AchievedWeight, agg.ThresholdWeight)
 	}
 
-	// 3 of 4 ⇒ supermajority ⇒ finalize.
-	if err := collector.AddAttestation(rb3MakeAttestation(vs, keys, 2, rh, bundle, block)); err != nil {
-		t.Fatalf("add 2: %v", err)
+	three := append(two, rb3Sign(t, vals[2], msg))
+	agg, excluded, err := rb3Fold(t, vals, reg, msg, three)
+	if err != nil {
+		t.Fatal(err)
 	}
-	agg := collector.aggregated[rh]
-	if agg == nil || !agg.Finalized {
-		t.Fatalf("must finalize at 3/4 (>=2/3 supermajority)")
+	if !agg.ThresholdMet || len(excluded) != 0 {
+		t.Fatalf("3 of 4 must finalize: met=%v excluded=%v", agg.ThresholdMet, excluded)
 	}
-	if !agg.MeetsSupermajority() {
-		t.Error("MeetsSupermajority should be true at 3/4")
+	if agg.TotalWeight != 4 || agg.AchievedWeight != 3 {
+		t.Fatalf("weights achieved=%d total=%d, want 3/4", agg.AchievedWeight, agg.TotalWeight)
 	}
-	// The embedded aggregate MUST carry the validator root + bitfield for re-verification.
 	if len(agg.ValidatorBitfield) == 0 {
-		t.Error("aggregate missing validator bitfield")
+		t.Error("aggregate carries no validator bitfield")
 	}
-	// Independently verify the aggregate BLS signature over the agreed messageHash.
-	ok, err := VerifyAggregatedBLSSignature(agg.AggregateSignature, agg.MessageHash, rb3PubKeys(vs, 0, 1, 2))
+	ok, err := vals[0].strat.VerifyAggregated(context.Background(), agg)
 	if err != nil || !ok {
-		t.Errorf("aggregate BLS signature must verify: ok=%v err=%v", ok, err)
+		t.Fatalf("aggregate signature must verify: ok=%v err=%v", ok, err)
 	}
 }
 
-// TestRB3_DivergentRPCCannotJoinQuorum: a validator observing a different result
-// (different ResultHash — e.g. a forked RPC) lands in a separate bucket and cannot
-// help the honest result reach quorum; with a 2/2 split neither finalizes.
+// A validator that observed a different result signs a different message. It is excluded by name and
+// cannot help the honest result; with a 2/2 split nothing finalizes.
 func TestRB3_DivergentRPCCannotJoinQuorum(t *testing.T) {
-	vs, keys := rb3MakeValidatorSet(4)
-	collector := NewAttestationCollector(vs, 2, 3)
-
-	rhHonest := [32]byte{0xAA}
-	rhForked := [32]byte{0xBB} // different block_hash/receipts_root ⇒ different ResultHash
-	bundle := [32]byte{0x01}
-	block := big.NewInt(100)
-
-	collector.AddAttestation(rb3MakeAttestation(vs, keys, 0, rhHonest, bundle, block))
-	collector.AddAttestation(rb3MakeAttestation(vs, keys, 1, rhHonest, bundle, block))
-	collector.AddAttestation(rb3MakeAttestation(vs, keys, 2, rhForked, bundle, block))
-	collector.AddAttestation(rb3MakeAttestation(vs, keys, 3, rhForked, bundle, block))
-
-	if agg := collector.aggregated[rhHonest]; agg != nil && agg.Finalized {
-		t.Error("honest bucket must not finalize with only 2/4 (forked validators cannot join)")
+	vals, reg := rb3Validators(t, 4)
+	honest, forked := rb3Message(0xAA), rb3Message(0xBB)
+	atts := []*attestation.Attestation{
+		rb3Sign(t, vals[0], honest), rb3Sign(t, vals[1], honest),
+		rb3Sign(t, vals[2], forked), rb3Sign(t, vals[3], forked),
 	}
-	if agg := collector.aggregated[rhForked]; agg != nil && agg.Finalized {
-		t.Error("forked bucket must not finalize with only 2/4")
-	}
-	// Divergence must be observable.
-	if got := collector.DivergentResultHashes(bundle); len(got) != 2 {
-		t.Errorf("expected 2 divergent result hashes, got %d", len(got))
+
+	for name, msg := range map[string]*attestation.AttestationMessage{"honest": honest, "forked": forked} {
+		agg, excluded, err := rb3Fold(t, vals, reg, msg, atts)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if agg.ThresholdMet {
+			t.Errorf("%s result finalized on 2 of 4", name)
+		}
+		if len(excluded) != 2 || !strings.Contains(excluded[0].Reason, "different result") {
+			t.Errorf("%s: the divergence must be named, got %v", name, excluded)
+		}
 	}
 }
 
-// TestRB3_HonestSupermajorityWinsDespiteFork: 3 honest + 1 forked ⇒ honest result
-// finalizes; the forked RPC cannot prevent quorum, and its bucket never finalizes.
+// 3 honest + 1 forked: the honest result finalizes. The forked attestation used to abort the whole
+// aggregate ("different message hash"), so a single divergent peer denied the write-back.
 func TestRB3_HonestSupermajorityWinsDespiteFork(t *testing.T) {
-	vs, keys := rb3MakeValidatorSet(4)
-	collector := NewAttestationCollector(vs, 2, 3)
-
-	rhHonest := [32]byte{0xAA}
-	rhForked := [32]byte{0xBB}
-	bundle := [32]byte{0x01}
-	block := big.NewInt(100)
-
-	for _, i := range []int{0, 1, 2} {
-		collector.AddAttestation(rb3MakeAttestation(vs, keys, i, rhHonest, bundle, block))
+	vals, reg := rb3Validators(t, 4)
+	honest, forked := rb3Message(0xAA), rb3Message(0xBB)
+	atts := []*attestation.Attestation{
+		rb3Sign(t, vals[3], forked),
+		rb3Sign(t, vals[0], honest), rb3Sign(t, vals[1], honest), rb3Sign(t, vals[2], honest),
 	}
-	collector.AddAttestation(rb3MakeAttestation(vs, keys, 3, rhForked, bundle, block))
-
-	if agg := collector.aggregated[rhHonest]; agg == nil || !agg.Finalized {
-		t.Fatal("honest 3/4 supermajority must finalize despite a forked validator")
+	agg, excluded, err := rb3Fold(t, vals, reg, honest, atts)
+	if err != nil {
+		t.Fatalf("a forked peer must not block the honest quorum: %v", err)
 	}
-	if agg := collector.aggregated[rhForked]; agg != nil && agg.Finalized {
-		t.Error("forked bucket (1/4) must never finalize")
+	if !agg.ThresholdMet || len(excluded) != 1 {
+		t.Fatalf("met=%v excluded=%v", agg.ThresholdMet, excluded)
 	}
 }
 
-// TestRB3_ConflictingAttestationRejected: a validator cannot attest two different
-// results for the same bundle within a bucket (double-sign guard).
+// An attestation whose message hash does not bind this result does not count.
 func TestRB3_MessageHashMismatchRejected(t *testing.T) {
-	vs, keys := rb3MakeValidatorSet(4)
-	collector := NewAttestationCollector(vs, 2, 3)
+	vals, reg := rb3Validators(t, 4)
+	msg := rb3Message(0xAA)
+	bad := rb3Sign(t, vals[0], msg)
+	bad.MessageHash = [32]byte{0xDE, 0xAD}
+	_, excluded, err := rb3Fold(t, vals, reg, msg, []*attestation.Attestation{bad})
+	if err == nil || len(excluded) != 1 {
+		t.Fatalf("an attestation over another message counted: err=%v excluded=%v", err, excluded)
+	}
+}
 
-	rh := [32]byte{0xAA}
-	bundle := [32]byte{0x01}
-	att := rb3MakeAttestation(vs, keys, 0, rh, bundle, big.NewInt(100))
-	// Corrupt the message hash so it no longer matches compute(resultHash,bundle,block).
-	att.MessageHash = [32]byte{0xDE, 0xAD}
-	if err := collector.AddAttestation(att); err == nil {
-		t.Error("collector must reject an attestation whose MessageHash doesn't bind its ResultHash")
+// RB3-F41: the attester's Weight is never read - a validator counts its registered power.
+func TestRB3F41_SelfDeclaredWeightIsIgnored(t *testing.T) {
+	vals, reg := rb3Validators(t, 7)
+	msg := rb3Message(0xAA)
+	att := rb3Sign(t, vals[1], msg)
+	att.Weight = 100
+	agg, _, err := rb3Fold(t, vals, reg, msg, []*attestation.Attestation{rb3Sign(t, vals[0], msg), att})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agg.AchievedWeight != 2 || agg.ThresholdMet {
+		t.Fatalf("self-declared weight counted: achieved=%d met=%v", agg.AchievedWeight, agg.ThresholdMet)
+	}
+}
+
+// RB3-F41: a valid signature from a key the registry does not hold counts for nothing.
+func TestRB3F41_UnregisteredKeyDoesNotCount(t *testing.T) {
+	vals, reg := rb3Validators(t, 4)
+	outsider, _ := rb3Validators(t, 1)
+	msg := rb3Message(0xAA)
+	atts := []*attestation.Attestation{
+		rb3Sign(t, vals[0], msg), rb3Sign(t, vals[1], msg), rb3Sign(t, outsider[0], msg),
+	}
+	agg, excluded, err := rb3Fold(t, vals, reg, msg, atts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agg.ThresholdMet || agg.AchievedWeight != 2 {
+		t.Fatalf("an unregistered key counted: achieved=%d met=%v", agg.AchievedWeight, agg.ThresholdMet)
+	}
+	if len(excluded) != 1 || !strings.Contains(excluded[0].Reason, "not a registered") {
+		t.Fatalf("the outsider must be excluded by name, got %v", excluded)
+	}
+}
+
+// RB3-F41: one validator counts once, however many copies of its attestation arrive.
+func TestRB3F41_DuplicateValidatorCountsOnce(t *testing.T) {
+	vals, reg := rb3Validators(t, 4)
+	msg := rb3Message(0xAA)
+	a := rb3Sign(t, vals[0], msg)
+	b := rb3Sign(t, vals[1], msg)
+	agg, excluded, err := rb3Fold(t, vals, reg, msg, []*attestation.Attestation{a, b, a, b})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agg.AchievedWeight != 2 || agg.ThresholdMet || len(excluded) != 2 {
+		t.Fatalf("duplicates counted: achieved=%d met=%v excluded=%v", agg.AchievedWeight, agg.ThresholdMet, excluded)
+	}
+}
+
+// RB3-F41: registered power, not a head count, decides - a heavy validator is weighted as registered.
+func TestRB3F41_ThresholdIsRegisteredPower(t *testing.T) {
+	vals, reg := rb3Validators(t, 4)
+	heavy := reg[vals[0].addr]
+	heavy.VotingPower = big.NewInt(10) // total 13, need > 26/3 => 9
+	reg[vals[0].addr] = heavy
+	msg := rb3Message(0xAA)
+
+	agg, _, err := rb3Fold(t, vals, reg, msg, []*attestation.Attestation{rb3Sign(t, vals[1], msg), rb3Sign(t, vals[2], msg), rb3Sign(t, vals[3], msg)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agg.ThresholdMet || agg.TotalWeight != 13 {
+		t.Fatalf("3 light validators (3 of 13) met the quorum: total=%d", agg.TotalWeight)
+	}
+	agg, _, err = rb3Fold(t, vals, reg, msg, []*attestation.Attestation{rb3Sign(t, vals[0], msg), rb3Sign(t, vals[1], msg), rb3Sign(t, vals[2], msg)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !agg.ThresholdMet || agg.AchievedWeight != 12 {
+		t.Fatalf("12 of 13 must meet: achieved=%d met=%v", agg.AchievedWeight, agg.ThresholdMet)
+	}
+}
+
+// RB3-F41 end to end through Phase 8: the repro that met the quorum at 996e608 (one unregistered peer
+// declaring Weight 100) no longer does, and the total is the registry's power, not the peer count.
+func TestRB3F41_Phase8CountsAgainstTheRegistry(t *testing.T) {
+	vals, reg := rb3Validators(t, 7)
+	forger, _ := rb3Validators(t, 1)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req PeerAttestationRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		att, _ := forger[0].strat.Sign(r.Context(), req.Message)
+		att.Weight = 100
+		_ = json.NewEncoder(w).Encode(&PeerAttestationResponse{CycleID: req.CycleID, Success: true, Attestation: att})
+	}))
+	defer srv.Close()
+
+	o := &UnifiedOrchestrator{
+		config: &UnifiedOrchestratorConfig{
+			ValidatorID:        "validator-1",
+			AttestationPeers:   []string{srv.URL},
+			AttestationTimeout: 5 * time.Second,
+			ResultQuorumRegistry: func(ctx context.Context, chainID string) (map[string]consensus.ValidatorRegistryEntry, error) {
+				if chainID != "11155111" {
+					return nil, fmt.Errorf("unexpected chain %s", chainID)
+				}
+				return reg, nil
+			},
+		},
+		httpClient: &http.Client{Timeout: 5 * time.Second},
+	}
+	cycle := &activeCycle{
+		CycleID: "c1",
+		Request: &UnifiedProofCycleRequest{IntentID: "i1", TxHashes: []string{"0xabc"}, TargetChain: "11155111"},
+		Result: &UnifiedProofCycleResult{
+			ChainID:            "11155111",
+			ObservationResults: []*chain.ObservationResult{{TxHash: "0xabc", BlockNumber: 7, ResultHash: [32]byte{0xAA}}},
+		},
+	}
+	if err := o.executePhase8(context.Background(), cycle, vals[0].strat); err != nil {
+		t.Fatal(err)
+	}
+	agg := cycle.Result.AggregatedAttestation
+	if cycle.Result.ThresholdMet || agg.AchievedWeight != 1 || agg.TotalWeight != 7 {
+		t.Fatalf("achieved=%d total=%d met=%v, want 1/7 not met", agg.AchievedWeight, agg.TotalWeight, cycle.Result.ThresholdMet)
+	}
+	if len(cycle.Result.Attestations) != 1 {
+		t.Fatalf("the uncounted attestation was recorded with the result: %d", len(cycle.Result.Attestations))
+	}
+}
+
+// Phase 8 without a registry refuses by name; so does building an orchestrator without one.
+func TestRB3F41_RegistryIsRequired(t *testing.T) {
+	vals, _ := rb3Validators(t, 1)
+	o := &UnifiedOrchestrator{config: &UnifiedOrchestratorConfig{ValidatorID: "v", AttestationTimeout: time.Second}}
+	cycle := &activeCycle{
+		CycleID: "c1",
+		Request: &UnifiedProofCycleRequest{TxHashes: []string{"0xabc"}},
+		Result:  &UnifiedProofCycleResult{ChainID: "11155111", ObservationResults: []*chain.ObservationResult{{ResultHash: [32]byte{1}}}},
+	}
+	if err := o.executePhase8(context.Background(), cycle, vals[0].strat); err == nil || !strings.Contains(err.Error(), "registry") {
+		t.Fatalf("phase 8 without a registry: %v", err)
+	}
+	_, err := NewUnifiedOrchestrator(&UnifiedOrchestratorConfig{ValidatorID: "v", Registry: strategy.NewRegistry()})
+	if err == nil || !strings.Contains(err.Error(), "validator registry source") {
+		t.Fatalf("orchestrator built without a validator registry source: %v", err)
 	}
 }

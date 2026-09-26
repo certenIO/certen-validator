@@ -1498,6 +1498,8 @@ func startValidator(
 		return nil, nil, fmt.Errorf("batch path: anchor config: %w", cfgErr)
 	}
 	batchChains := []int64{11155111, 84532, 421614} // sepolia, base-sepolia, arbitrum-sepolia
+	// The chain resolver is shared with Phase 8, which counts its post-execution quorum against the
+	// same on-chain validator registry the batch quorum does.
 	resolver, rErr := execution.NewEVMChainResolverFromEnv(anchorCfg, batchChains)
 	if rErr != nil {
 		return nil, nil, fmt.Errorf("batch path: chain resolver: %w", rErr)
@@ -1863,6 +1865,7 @@ func startValidator(
 		EnableWriteBack:          writebackEnabled,
 		ProofGenerator:           proofGenAdapter,
 		AccumulateQueryClient:    liteClientAdapter, // For querying tx governance data (M-of-N threshold)
+		ResultQuorumRegistry:     execution.ResultQuorumRegistryFromChains(resolver),
 	}
 
 	unifiedOrchestrator, unifiedErr := execution.NewUnifiedOrchestrator(unifiedConfig)

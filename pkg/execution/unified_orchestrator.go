@@ -106,6 +106,10 @@ type UnifiedOrchestratorConfig struct {
 	// Chained proof generator for L1/L2/L3 proofs
 	// Used to fetch Accumulate proof chain: Transaction → BVN → DN → Consensus
 	ProofGenerator ChainedProofGenerator
+
+	// ResultQuorumRegistry is the on-chain validator registry Phase 8 counts its quorum against.
+	// Required: without it there is no quorum to count.
+	ResultQuorumRegistry ResultQuorumRegistryFn
 }
 
 // ChainedProofGenerator interface for generating Accumulate chained proofs
@@ -363,6 +367,10 @@ func NewUnifiedOrchestrator(config *UnifiedOrchestratorConfig) (*UnifiedOrchestr
 
 	if config.ValidatorID == "" {
 		return nil, fmt.Errorf("validator ID is required")
+	}
+
+	if config.ResultQuorumRegistry == nil {
+		return nil, fmt.Errorf("a validator registry source is required - Phase 8 counts its quorum against it")
 	}
 
 	orch := &UnifiedOrchestrator{
@@ -1547,14 +1555,21 @@ func (o *UnifiedOrchestrator) executePhase8(ctx context.Context, cycle *activeCy
 	attestCtx, cancel := context.WithTimeout(ctx, o.config.AttestationTimeout)
 	defer cancel()
 
-	// Sign our own attestation
+	// The registry this quorum is counted against. Read before signing: without it there is no
+	// quorum to form, and the cycle fails by name rather than counting self-declared weights.
+	if o.config.ResultQuorumRegistry == nil {
+		return fmt.Errorf("phase 8: no validator registry source configured - the result quorum cannot be counted")
+	}
+	registry, err := o.config.ResultQuorumRegistry(attestCtx, result.ChainID)
+	if err != nil {
+		return fmt.Errorf("phase 8: validator registry for chain %s: %w", result.ChainID, err)
+	}
+
+	// Sign our own attestation. Its weight, like every peer's, is set from the registry by the fold.
 	localAttestation, err := attestStrategy.Sign(attestCtx, message)
 	if err != nil {
 		return fmt.Errorf("create local attestation: %w", err)
 	}
-
-	// Set weight based on validator voting power (default 1)
-	localAttestation.Weight = 1
 
 	attestations := []*attestation.Attestation{localAttestation}
 
@@ -1578,8 +1593,10 @@ func (o *UnifiedOrchestrator) executePhase8(ctx context.Context, cycle *activeCy
 	// Record the validator set this quorum is counted against, so a reader can check the threshold
 	// against the membership rather than trusting the stored weights.
 	if o.config.EnableUnifiedTables && o.config.Repos != nil && o.config.Repos.ProofArtifacts != nil {
-		set := unifiedAttestationSet(o.config.ValidatorID, o.config.AttestationPeers,
-			thresholdConfig.CalculateThresholdWeight, result.ObservationResults[0].BlockNumber)
+		set, err := registryAttestationSet(registry, thresholdConfig.CalculateThresholdWeight, result.ObservationResults[0].BlockNumber)
+		if err != nil {
+			return fmt.Errorf("phase 8: validator set snapshot: %w", err)
+		}
 		snapshotID, err := persistValidatorSetSnapshot(ctx, o.config.Repos.ProofArtifacts, set, result.ChainID, getNetworkName(result.ChainID))
 		if err != nil {
 			fmt.Printf("Warning: failed to persist validator set snapshot for cycle %s: %v\n", cycle.CycleID, err)
@@ -1588,31 +1605,28 @@ func (o *UnifiedOrchestrator) executePhase8(ctx context.Context, cycle *activeCy
 		}
 	}
 
-	// Persist individual attestations
+	// Count against the registry: registered keys at registered power, one per validator, over this
+	// result's message. Anything else is excluded by name and neither helps nor blocks the quorum.
+	aggAttestation, excluded, err := foldResultAttestations(attestCtx, attestStrategy, message, attestations, registry, thresholdConfig)
+	for _, x := range excluded {
+		fmt.Printf("[Phase 8] cycle %s: attestation from %q not counted: %s\n", cycle.CycleID, x.ValidatorID, x.Reason)
+	}
+	if err != nil {
+		return fmt.Errorf("phase 8: %w", err)
+	}
+	fmt.Printf("[Phase 8] Attestation threshold: achieved=%d total=%d required=%d met=%v\n",
+		aggAttestation.AchievedWeight, aggAttestation.TotalWeight, aggAttestation.ThresholdWeight, aggAttestation.ThresholdMet)
+
+	// Persist the attestations that COUNTED - each is recorded as verified, which an excluded one is not.
+	counted := aggAttestation.Attestations
 	if o.config.EnableUnifiedTables && o.config.UnifiedRepo != nil {
-		for _, att := range attestations {
+		for _, att := range counted {
 			_, err := o.persistUnifiedAttestation(ctx, cycle, att)
 			if err != nil {
 				fmt.Printf("Warning: failed to persist attestation: %v\n", err)
 			}
 		}
 	}
-
-	// Aggregate attestations
-	aggAttestation, err := attestStrategy.Aggregate(attestCtx, attestations)
-	if err != nil {
-		return fmt.Errorf("aggregate attestations: %w", err)
-	}
-
-	// RB-SEC-1: TotalWeight is the FULL validator set (self + peers), so the ≥2/3 threshold
-	// is meaningful. Previously this was set to AchievedWeight, which made ANY single
-	// attestation "meet" threshold — a quorum-enforcement bypass (a lone executor could
-	// write back with no peer agreement).
-	aggAttestation.TotalWeight = int64(len(o.config.AttestationPeers) + 1)
-	aggAttestation.ThresholdWeight = thresholdConfig.CalculateThresholdWeight(aggAttestation.TotalWeight)
-	aggAttestation.ThresholdMet = thresholdConfig.IsThresholdMet(aggAttestation.AchievedWeight, aggAttestation.TotalWeight)
-	fmt.Printf("[Phase 8] Attestation threshold: achieved=%d total=%d required=%d met=%v\n",
-		aggAttestation.AchievedWeight, aggAttestation.TotalWeight, aggAttestation.ThresholdWeight, aggAttestation.ThresholdMet)
 
 	// Verify aggregated attestation
 	valid, err := attestStrategy.VerifyAggregated(attestCtx, aggAttestation)
@@ -1628,8 +1642,8 @@ func (o *UnifiedOrchestrator) executePhase8(ctx context.Context, cycle *activeCy
 
 	// Persist aggregated attestation
 	if o.config.EnableUnifiedTables && o.config.UnifiedRepo != nil {
-		messageHashes := make([][]byte, len(attestations))
-		for i, att := range attestations {
+		messageHashes := make([][]byte, len(counted))
+		for i, att := range counted {
 			messageHashes[i] = att.MessageHash[:]
 		}
 		aggID, err := o.persistAggregatedAttestation(ctx, cycle, aggAttestation, attestationMessagesAgree(messageHashes))
@@ -1640,7 +1654,7 @@ func (o *UnifiedOrchestrator) executePhase8(ctx context.Context, cycle *activeCy
 		}
 	}
 
-	result.Attestations = attestations
+	result.Attestations = counted
 	result.AggregatedAttestation = aggAttestation
 	result.ThresholdMet = aggAttestation.ThresholdMet
 

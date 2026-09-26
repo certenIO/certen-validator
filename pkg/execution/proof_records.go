@@ -1,8 +1,8 @@
 // Copyright 2025 Certen Protocol
 //
 // Proof records written alongside a proof cycle: the validator set a cycle's attestations were counted
-// against, and whether those attestations agree on what they signed. Shared by the unified and the
-// legacy orchestrator so both record the same facts the same way.
+// against (registryAttestationSet, result_quorum.go), and whether those attestations agree on what they
+// signed.
 
 package execution
 
@@ -11,35 +11,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math/big"
-	"sort"
-	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/certen/independant-validator/pkg/database"
 )
-
-// unifiedAttestationSet is the validator set the unified orchestrator counts a quorum against: this
-// validator and every configured attestation peer, one weight each (RB-SEC-1: TotalWeight is the whole
-// set, not the responders). Members are sorted by identifier so every validator derives the same set.
-func unifiedAttestationSet(selfID string, peers []string, thresholdWeight func(int64) int64, blockNumber uint64) *ValidatorSetSnapshot {
-	members := append([]string{selfID}, peers...)
-	sort.Strings(members)
-	snapshot := &ValidatorSetSnapshot{
-		BlockNumber: blockNumber,
-		CreatedAt:   time.Now().UTC(),
-		Validators:  make([]ValidatorEntry, len(members)),
-		TotalWeight: big.NewInt(int64(len(members))),
-	}
-	for i, member := range members {
-		snapshot.Validators[i] = ValidatorEntry{ValidatorID: member, Weight: big.NewInt(1), Index: uint32(i)}
-	}
-	snapshot.ThresholdWeight = big.NewInt(thresholdWeight(int64(len(members))))
-	snapshot.ValidatorRoot = snapshot.ComputeValidatorRoot()
-	snapshot.SnapshotID = snapshot.ComputeSnapshotID()
-	return snapshot
-}
 
 // persistValidatorSetSnapshot stores a snapshot and returns its row id. The snapshot id doubles as the
 // row's snapshot hash, so the same set at the same block is stored once.
