@@ -986,6 +986,7 @@ func (o *UnifiedOrchestrator) verifyContractCallGate(ctx context.Context, cycle 
 // rbCallLeg is a per-leg contract-call verification descriptor carried in CommitmentData.
 type rbCallLeg struct {
 	chainKey   string
+	chainID    int64 // the leg's signed chainId - the chain it executes on
 	target     string
 	value      string
 	callData   string
@@ -1226,14 +1227,31 @@ func (o *UnifiedOrchestrator) peerVerifyCommittedEffect(ctx context.Context, msg
 		return fmt.Errorf("fetched intent_id %q != attested %q", got, msg.IntentID)
 	}
 
-	// Committed contract-call leg(s) for this chain group (derived from the SIGNED intent).
-	target := normalizeRBChainKey(msg.TargetChain)
+	// Committed contract-call leg(s) for this chain group, from the SIGNED intent: every leg whose
+	// signed chainId is the chain this peer itself observed the execution on. Not the chain NAME the
+	// requesting executor supplied - matching that against the leg's free-text name let an executor
+	// select no legs at all (RB3-F46).
+	if chainStrategy == nil {
+		return fmt.Errorf("no observed chain to select the committed calls by")
+	}
+	observedChainID, perr := strconv.ParseInt(chainStrategy.ChainID(), 10, 64)
+	if perr != nil {
+		return fmt.Errorf("observed chain %q is not a numeric chain id", chainStrategy.ChainID())
+	}
 	var applicable []rbCallLeg
-	legs := parseCommittedCallLegs(blobs[1])
-	for _, l := range legs {
-		if normalizeRBChainKey(l.chainKey) == target || len(legs) == 1 {
+	for _, l := range parseCommittedCallLegs(blobs[1]) {
+		if l.chainID == observedChainID {
 			applicable = append(applicable, l)
 		}
+	}
+	// The execution this peer verifies: the one named, or else the transaction the peer has just
+	// re-observed. Never nothing - "no execution hash" is the requester's claim, not a fact.
+	execTx := msg.ExecutionTxHash
+	if execTx == "" {
+		execTx = msg.AnchorTxHash
+	}
+	if execTx == "" {
+		return fmt.Errorf("no execution transaction to verify the committed effect against")
 	}
 	if len(applicable) == 0 {
 		// H1: the intent pointer is executor-supplied, so a malicious executor could point
@@ -1246,27 +1264,20 @@ func (o *UnifiedOrchestrator) peerVerifyCommittedEffect(ctx context.Context, msg
 		// non-empty; EffectHasCalldata decodes the INNER `data` the account forwards so a
 		// native transfer isn't misread as a contract call (that false positive was making
 		// every peer refuse to attest — the Phase-8 quorum failure).
-		if msg.ExecutionTxHash == "" {
-			return nil // nothing executed on this chain group to cross-check
-		}
 		observer, oerr := buildObserver()
 		if oerr != nil {
 			return fmt.Errorf("cross-check execution calldata: %w", oerr) // fail closed
 		}
-		hasCalldata, cderr := observer.EffectHasCalldata(ctx, common.HexToHash(msg.ExecutionTxHash))
+		hasCalldata, cderr := observer.EffectHasCalldata(ctx, common.HexToHash(execTx))
 		if cderr != nil {
 			return fmt.Errorf("cross-check execution calldata: %w", cderr) // fail closed
 		}
 		if hasCalldata {
-			return fmt.Errorf("execution tx %s carries calldata but committed intent has no contract-call leg for %s — refusing (possible forged intent pointer)", msg.ExecutionTxHash, msg.TargetChain)
+			return fmt.Errorf("execution tx %s carries calldata but committed intent has no contract-call leg for chain %d — refusing (possible forged intent pointer)", execTx, observedChainID)
 		}
 		return nil // genuinely native — no contract-call effect to verify
 	}
 
-	// A contract call requires the execution tx to independently re-verify.
-	if msg.ExecutionTxHash == "" {
-		return fmt.Errorf("contract-call attestation missing execution tx hash")
-	}
 	observer, oerr := buildObserver()
 	if oerr != nil {
 		return oerr // fail closed — cannot independently verify without an observer
@@ -1295,23 +1306,23 @@ func (o *UnifiedOrchestrator) peerVerifyCommittedEffect(ctx context.Context, msg
 			account = a
 			calls = append(calls, c)
 		}
-		if _, verr := observer.VerifyRevertedCall(ctx, common.HexToHash(msg.ExecutionTxHash), calls, &opID, account); verr != nil {
-			return fmt.Errorf("reverted execution not proven as the committed call on %s: %w", msg.ExecutionTxHash, verr)
+		if _, verr := observer.VerifyRevertedCall(ctx, common.HexToHash(execTx), calls, &opID, account); verr != nil {
+			return fmt.Errorf("reverted execution not proven as the committed call on %s: %w", execTx, verr)
 		}
 		fmt.Printf("❌ [RB-SEC-1] Peer independently verified the committed call REVERTED for intent %s (chain=%s tx=%s)\n",
-			msg.IntentID, msg.TargetChain, msg.ExecutionTxHash)
+			msg.IntentID, msg.TargetChain, execTx)
 		return nil
 	}
 	for _, l := range applicable {
 		if len(l.events) == 0 {
 			return fmt.Errorf("committed contract call has no events — refusing")
 		}
-		if _, verr := observer.VerifyExecutedCall(ctx, common.HexToHash(msg.ExecutionTxHash), l.events, l.state); verr != nil {
-			return fmt.Errorf("committed effect not proven on %s: %w", msg.ExecutionTxHash, verr)
+		if _, verr := observer.VerifyExecutedCall(ctx, common.HexToHash(execTx), l.events, l.state); verr != nil {
+			return fmt.Errorf("committed effect not proven on %s: %w", execTx, verr)
 		}
 	}
 	fmt.Printf("✅ [RB-SEC-1] Peer independently verified committed effect for intent %s (chain=%s tx=%s)\n",
-		msg.IntentID, msg.TargetChain, msg.ExecutionTxHash)
+		msg.IntentID, msg.TargetChain, execTx)
 	return nil
 }
 
@@ -1330,6 +1341,7 @@ func parseCommittedCallLegs(crossChainData []byte) []rbCallLeg {
 	var ccd struct {
 		Legs []struct {
 			Chain            string `json:"chain"`
+			ChainID          int64  `json:"chainId"`
 			From             string `json:"from"`
 			ExecutionPayload *struct {
 				Target         string `json:"target"`
@@ -1380,8 +1392,8 @@ func parseCommittedCallLegs(crossChainData []byte) []rbCallLeg {
 				Value:   common.HexToHash(s.Value),
 			})
 		}
-		out = append(out, rbCallLeg{chainKey: normalizeRBChainKey(leg.Chain), target: ep.Target, value: ep.Value,
-			callData: cd, account: leg.From, events: events, state: state})
+		out = append(out, rbCallLeg{chainKey: normalizeRBChainKey(leg.Chain), chainID: leg.ChainID, target: ep.Target,
+			value: ep.Value, callData: cd, account: leg.From, events: events, state: state})
 	}
 	return out
 }
