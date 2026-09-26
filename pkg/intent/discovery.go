@@ -943,10 +943,7 @@ func (id *IntentDiscovery) processBlock(job *BlockProcessJob, workerID string) e
 				id.logger.Printf("   Intent %s marked as 'failed'", intent.IntentID)
 				// Intent lifecycle: record terminal failure (non-fatal)
 				if id.repos != nil && id.repos.IntentLifecycle != nil {
-					if lcErr := id.repos.IntentLifecycle.UpdateStatus(ctx, intent.IntentID,
-						database.IntentLifecycleFailed,
-						database.WithErrorMessage(err.Error()),
-					); lcErr != nil {
+					if lcErr := recordLifecycleFailed(id.repos.IntentLifecycle, intent.IntentID, err); lcErr != nil {
 						id.logger.Printf("⚠️ [LIFECYCLE] Failed to update lifecycle to failed for %s: %v", intent.IntentID, lcErr)
 					}
 				}
@@ -1891,4 +1888,25 @@ func DeclaredEffectsFrom(envelope *consensus.CrossChainEnvelope) (json.RawMessag
 		return nil, 0, err
 	}
 	return encoded, len(declared), nil
+}
+
+// lifecycleStatusWriter is the part of the lifecycle repository the terminal-failure write needs.
+type lifecycleStatusWriter interface {
+	UpdateStatus(ctx context.Context, intentID string, newStatus database.IntentLifecycleStatus,
+		opts ...database.UpdateOption) error
+}
+
+// lifecycleWriteTimeout bounds the terminal-failure write made after an intent was processed.
+const lifecycleWriteTimeout = 15 * time.Second
+
+// recordLifecycleFailed records an intent's terminal failure on a context of its own.
+//
+// processBlock's context covers the block scan and lasts 30s; processIntent runs under the BFT
+// timeout, which is minutes, so by the time it returns a failure that context has expired. Writing
+// the failure on it failed every time with "context deadline exceeded", and failed intents were
+// never recorded as failed.
+func recordLifecycleFailed(w lifecycleStatusWriter, intentID string, cause error) error {
+	ctx, cancel := context.WithTimeout(context.Background(), lifecycleWriteTimeout)
+	defer cancel()
+	return w.UpdateStatus(ctx, intentID, database.IntentLifecycleFailed, database.WithErrorMessage(cause.Error()))
 }
