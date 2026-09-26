@@ -20,7 +20,7 @@ func TestPeekForPeriod_IsIdenticalAcrossValidators(t *testing.T) {
 			ADIURL:       "acc://" + id + ".acme",
 			ChainID:      11155111,
 			Account:      common.HexToAddress("0x32b4687bE3c02d52e2d94Dc1cFAF03a0E5af0C8B"),
-			OperationID:  opid(byte(len(id))),
+			OperationID:  opidOf(id),
 			Legs:         []LegExecution{{LegID: "l", ChainID: 11155111, Target: tgt(1), Value: big.NewInt(1)}},
 			CommitHeight: height,
 			EnqueuedAt:   enqueued,
@@ -76,7 +76,7 @@ func TestPeekForPeriod_SelectsExactlyOneWindow(t *testing.T) {
 	add := func(id string, h uint64) {
 		if err := m.Add(&PendingBatchIntent{
 			IntentID: id, ADIURL: "acc://" + id + ".acme", ChainID: 11155111,
-			Account: common.HexToAddress("0x01"), OperationID: opid(1),
+			Account: common.HexToAddress("0x01"), OperationID: opidOf(id),
 			Legs:         []LegExecution{{LegID: "l", ChainID: 11155111, Target: tgt(1), Value: big.NewInt(1)}},
 			CommitHeight: h,
 		}); err != nil {
@@ -118,7 +118,7 @@ func TestPeekForPeriod_IsUnaffectedByNeighbouringPeriods(t *testing.T) {
 	}{{"p1a", 100}, {"p1b", 105}, {"p2a", 110}, {"p2b", 115}} {
 		if err := m.Add(&PendingBatchIntent{
 			IntentID: c.id, ADIURL: "acc://" + c.id + ".acme", ChainID: 11155111,
-			Account: common.HexToAddress("0x01"), OperationID: opid(1),
+			Account: common.HexToAddress("0x01"), OperationID: opidOf(c.id),
 			Legs:         []LegExecution{{LegID: "l", ChainID: 11155111, Target: tgt(1), Value: big.NewInt(1)}},
 			CommitHeight: c.h,
 		}); err != nil {
@@ -146,7 +146,7 @@ func TestPendingPeriods_ReportsClosedPeriodsOnly(t *testing.T) {
 	for _, h := range []uint64{100, 105, 130, 200} {
 		if err := m.Add(&PendingBatchIntent{
 			IntentID: fmt.Sprintf("i%d", h), ADIURL: "acc://x.acme", ChainID: 11155111,
-			Account: common.HexToAddress("0x01"), OperationID: opid(1),
+			Account: common.HexToAddress("0x01"), OperationID: opidOf(fmt.Sprintf("i%d", h)),
 			Legs:         []LegExecution{{LegID: "l", ChainID: 11155111, Target: tgt(1), Value: big.NewInt(1)}},
 			CommitHeight: h,
 		}); err != nil {
@@ -172,7 +172,7 @@ func TestPruneOlderThan(t *testing.T) {
 	for _, h := range []uint64{10, 500, 900} {
 		if err := m.Add(&PendingBatchIntent{
 			IntentID: fmt.Sprintf("i%d", h), ADIURL: "acc://x.acme", ChainID: 11155111,
-			Account: common.HexToAddress("0x01"), OperationID: opid(1),
+			Account: common.HexToAddress("0x01"), OperationID: opidOf(fmt.Sprintf("i%d", h)),
 			Legs:         []LegExecution{{LegID: "l", ChainID: 11155111, Target: tgt(1), Value: big.NewInt(1)}},
 			CommitHeight: h,
 		}); err != nil {
@@ -283,7 +283,7 @@ func TestDropMembers(t *testing.T) {
 	for _, id := range []string{"a", "b", "c"} {
 		p := &PendingBatchIntent{
 			IntentID: id, ADIURL: "acc://" + id + ".acme", ChainID: 11155111,
-			Account: common.HexToAddress("0x01"), OperationID: opid(1),
+			Account: common.HexToAddress("0x01"), OperationID: opidOf(id),
 			Legs:         []LegExecution{{LegID: "l", ChainID: 11155111, Target: tgt(1), Value: big.NewInt(1)}},
 			CommitHeight: 10,
 		}

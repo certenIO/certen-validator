@@ -89,8 +89,21 @@ func (m *BatchMempool) addOnDemand(p *PendingBatchIntent) error {
 		byOp = make(map[[32]byte]*PendingBatchIntent)
 		m.onDemand[p.ChainID] = byOp
 	}
-	if _, dup := byOp[p.OperationID]; dup {
-		return fmt.Errorf("intent %s is already queued on-demand for chain %d", p.IntentID, p.ChainID)
+	if held, dup := byOp[p.OperationID]; dup {
+		if held.IntentID == p.IntentID {
+			return fmt.Errorf("%w: intent %s on chain %d (on-demand)", ErrMemberAlreadyQueued, p.IntentID, p.ChainID)
+		}
+		return fmt.Errorf("%w: intent %s carries operation %x, already queued on chain %d by intent %s",
+			ErrOperationAlreadyQueued, p.IntentID, p.OperationID[:8], p.ChainID, held.IntentID)
+	}
+	// Queued in the period lane already (the lane flag changed between two runs of the same
+	// intent): it is queued, and a second member would settle it twice.
+	if m.seen[memberKey(p.IntentID, p.ChainID)] {
+		return fmt.Errorf("%w: intent %s on chain %d (period lane)", ErrMemberAlreadyQueued, p.IntentID, p.ChainID)
+	}
+	if holder := m.operationHolderLocked(p.ChainID, p.OperationID, p.IntentID); holder != "" {
+		return fmt.Errorf("%w: intent %s carries operation %x, already queued on chain %d by intent %s",
+			ErrOperationAlreadyQueued, p.IntentID, p.OperationID[:8], p.ChainID, holder)
 	}
 	byOp[p.OperationID] = p
 	return nil

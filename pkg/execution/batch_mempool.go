@@ -1,6 +1,7 @@
 package execution
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -8,6 +9,23 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+)
+
+// Admission outcomes a caller must be able to tell apart. Consensus refuses an intent the batch
+// path cannot settle, and it may only do that for a reason that is the intent's own.
+var (
+	// ErrMemberAlreadyQueued is the SAME intent arriving again for a chain it is already queued on
+	// - a workflow re-run. It is not a refusal, and the intent must not be executed a second time.
+	ErrMemberAlreadyQueued = errors.New("member already queued")
+
+	// ErrOperationAlreadyQueued is a DIFFERENT intent carrying an operation (the same four
+	// Accumulate blobs) that is already queued on the chain: a replay, refused for good.
+	ErrOperationAlreadyQueued = errors.New("operation already queued by another intent")
+
+	// ErrBatchUnavailable is CERTEN being unable to settle the member right now - no anchor
+	// configured for the chain, or no commit height resolved yet. It is never the intent's defect,
+	// so the intent is retried, not refused.
+	ErrBatchUnavailable = errors.New("batch settlement unavailable")
 )
 
 // =============================================================================
@@ -433,7 +451,16 @@ func (m *BatchMempool) add(p *PendingBatchIntent) error {
 
 	key := memberKey(p.IntentID, p.ChainID)
 	if m.seen[key] {
-		return fmt.Errorf("intent %s is already queued for chain %d", p.IntentID, p.ChainID)
+		return fmt.Errorf("%w: intent %s on chain %d", ErrMemberAlreadyQueued, p.IntentID, p.ChainID)
+	}
+	// Queued in the on-demand lane already (the lane flag changed between two runs of the same
+	// intent): it is queued, and a second member would settle it twice.
+	if held := m.onDemand[p.ChainID][p.OperationID]; held != nil && held.IntentID == p.IntentID {
+		return fmt.Errorf("%w: intent %s on chain %d (on-demand lane)", ErrMemberAlreadyQueued, p.IntentID, p.ChainID)
+	}
+	if holder := m.operationHolderLocked(p.ChainID, p.OperationID, p.IntentID); holder != "" {
+		return fmt.Errorf("%w: intent %s carries operation %x, already queued on chain %d by intent %s",
+			ErrOperationAlreadyQueued, p.IntentID, p.OperationID[:8], p.ChainID, holder)
 	}
 	m.seen[key] = true
 	m.pool[p.ChainID] = append(m.pool[p.ChainID], p)
@@ -753,17 +780,22 @@ func (m *BatchMempool) DropMembers(members []*PendingBatchIntent) {
 func (m *BatchMempool) dropMembers(members []*PendingBatchIntent) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// Keyed by member (intent AND chain), exactly like the dedupe index. Keyed by intent alone, a
+	// multi-chain intent dropped on one chain lost its member on every other chain too - removed
+	// from the pool while still marked queued, so it could never be queued again and never settled
+	// (RB3-F38).
 	remove := make(map[string]bool, len(members))
 	for _, p := range members {
 		if p != nil {
-			remove[p.IntentID] = true
-			delete(m.seen, memberKey(p.IntentID, p.ChainID))
+			key := memberKey(p.IntentID, p.ChainID)
+			remove[key] = true
+			delete(m.seen, key)
 		}
 	}
 	for chainID, pool := range m.pool {
 		var rest []*PendingBatchIntent
 		for _, p := range pool {
-			if p != nil && !remove[p.IntentID] {
+			if p != nil && !remove[memberKey(p.IntentID, p.ChainID)] {
 				rest = append(rest, p)
 			}
 		}
@@ -778,4 +810,37 @@ func (m *BatchMempool) dropMembers(members []*PendingBatchIntent) {
 // memberKey identifies a batch member: one intent may have a member on each chain it touches.
 func memberKey(intentID string, chainID int64) string {
 	return intentID + "|" + strconv.FormatInt(chainID, 10)
+}
+
+// OperationHolder reports which OTHER intent already has the operation queued on the chain, in
+// either lane, or "" when none does. The same intent re-running is not a holder of its own
+// operation.
+func (m *BatchMempool) OperationHolder(chainID int64, operationID [32]byte, intentID string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.operationHolderLocked(chainID, operationID, intentID)
+}
+
+// operationHolderLocked is OperationHolder for a caller that holds m.mu.
+func (m *BatchMempool) operationHolderLocked(chainID int64, operationID [32]byte, intentID string) string {
+	for _, p := range m.pool[chainID] {
+		if p != nil && p.OperationID == operationID && p.IntentID != intentID {
+			return p.IntentID
+		}
+	}
+	if p := m.onDemand[chainID][operationID]; p != nil && p.IntentID != intentID {
+		return p.IntentID
+	}
+	return ""
+}
+
+// OnDemandCount is the number of members queued in the on-demand lane, across chains.
+func (m *BatchMempool) OnDemandCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for _, byOp := range m.onDemand {
+		n += len(byOp)
+	}
+	return n
 }

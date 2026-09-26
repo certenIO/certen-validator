@@ -740,11 +740,118 @@ type enqueueLeg struct {
 	Data    []byte
 }
 
-// EnqueueForBatch satisfies consensus.BatchEnqueuer.
+// admit applies the admission rules both lanes share and returns the member it would queue.
 //
-// legs arrives as interface{} because the concrete slice type lives in pkg/consensus.
-// It is converted reflectively via a structural mirror; anything that does not match is
-// REJECTED so the caller falls back rather than silently queueing a malformed member.
+// It is the single definition of what the batch path accepts: EnqueueForBatch, EnqueueOnDemand
+// and CheckMember all run it, so a check before signing and the enqueue after it cannot disagree.
+// A condition on CERTEN's side - no anchor configured for the chain, no commit height resolved
+// yet - wraps ErrBatchUnavailable; every other rejection is a defect of the intent itself.
+//
+// legs arrives as interface{} because the concrete slice type lives in pkg/consensus. It is
+// converted reflectively via a structural mirror; anything that does not match is rejected.
+func (s *BatchStack) admit(
+	intentID string,
+	adiURL string,
+	chainID int64,
+	account [20]byte,
+	operationID [32]byte,
+	legs interface{},
+	attestation interface{},
+	commitHeight uint64,
+	commitPartition string,
+	commitTime time.Time,
+	accumTxHash string,
+) (*PendingBatchIntent, error) {
+	if _, err := s.OrchestratorFor(chainID); err != nil {
+		// No orchestrator means no anchor for this chain — the member could never settle.
+		return nil, fmt.Errorf("%w: chain %d is not configured for batching: %v", ErrBatchUnavailable, chainID, err)
+	}
+
+	converted, err := convertLegs(legs, chainID, common.BytesToAddress(account[:]))
+	if err != nil {
+		return nil, err
+	}
+	if len(converted) == 0 {
+		return nil, fmt.Errorf("intent %s produced no batch legs", intentID)
+	}
+	for _, l := range converted {
+		if err := checkCallAnchorPin(s, chainID, common.BytesToAddress(account[:]), l.Target, l.Data); err != nil {
+			return nil, fmt.Errorf("intent %s: %w", intentID, err)
+		}
+	}
+
+	// The commit height is bound into the bundleId and places the member in a period. Without it
+	// validators derive different ids and PeekForPeriod skips the member forever. It is resolved
+	// by CERTEN's own discovery, so its absence is an outage, not the intent's defect.
+	if commitHeight == 0 {
+		return nil, fmt.Errorf("%w: intent %s has no BFT commit height yet; its bundleId is not derivable",
+			ErrBatchUnavailable, intentID)
+	}
+
+	return &PendingBatchIntent{
+		IntentID:        intentID,
+		ADIURL:          adiURL,
+		ChainID:         chainID,
+		Account:         common.BytesToAddress(account[:]),
+		OperationID:     operationID,
+		AccumTxHash:     accumTxHash,
+		Legs:            converted,
+		Attestation:     attestation,
+		CommitHeight:    commitHeight,
+		CommitPartition: commitPartition,
+		CommitTime:      commitTime,
+	}, nil
+}
+
+// CheckMember reports whether EnqueueForBatch (onDemand false) or EnqueueOnDemand (onDemand true)
+// would accept this member, without queueing anything. Consensus runs it before a validator signs,
+// so an intent the batch path cannot settle is refused before any signature exists.
+//
+// It returns ErrOperationAlreadyQueued when a DIFFERENT intent holds the operation (a replay). The
+// same intent already queued is not an error here; its enqueue reports ErrMemberAlreadyQueued.
+func (s *BatchStack) CheckMember(
+	onDemand bool,
+	intentID string,
+	adiURL string,
+	chainID int64,
+	account [20]byte,
+	operationID [32]byte,
+	legs interface{},
+	commitHeight uint64,
+) error {
+	p, err := s.admit(intentID, adiURL, chainID, account, operationID, legs, nil, commitHeight, "", time.Time{}, "")
+	if err != nil {
+		return err
+	}
+	// validateMember stamps EnqueuedAt; p is a throwaway built only for this check.
+	if err := validateMember(p); err != nil {
+		return err
+	}
+	if holder := s.Mempool.OperationHolder(chainID, operationID, intentID); holder != "" {
+		return fmt.Errorf("%w: intent %s carries operation %x, already queued on chain %d by intent %s",
+			ErrOperationAlreadyQueued, intentID, operationID[:8], chainID, holder)
+	}
+	return nil
+}
+
+// RemoveMember takes a member back out of its lane, dedupe entry included, as if it had never been
+// queued. Consensus uses it to keep a multi-chain intent all-or-nothing: if one chain's member
+// cannot be queued, the members already queued for its other chains are rolled back.
+func (s *BatchStack) RemoveMember(onDemand bool, intentID string, chainID int64, operationID [32]byte) {
+	if onDemand {
+		if p := s.Mempool.GetOnDemand(chainID, operationID); p != nil && p.IntentID == intentID {
+			s.Mempool.RemoveOnDemand(chainID, operationID)
+		}
+		return
+	}
+	s.Mempool.DropMembers([]*PendingBatchIntent{{IntentID: intentID, ChainID: chainID}})
+}
+
+// EnqueueForBatch satisfies consensus.BatchEnqueuer: it queues a member in the period lane.
+//
+// Errors are typed: ErrMemberAlreadyQueued (this intent is already queued - not a refusal),
+// ErrOperationAlreadyQueued (a replay), ErrBatchUnavailable (CERTEN cannot settle it now); any
+// other error is a defect of the intent.
 func (s *BatchStack) EnqueueForBatch(
 	intentID string,
 	adiURL string,
@@ -758,52 +865,19 @@ func (s *BatchStack) EnqueueForBatch(
 	commitTime time.Time,
 	accumTxHash string,
 ) error {
-	if _, err := s.OrchestratorFor(chainID); err != nil {
-		// No orchestrator means no anchor for this chain — the member could never settle.
-		return fmt.Errorf("chain %d is not configured for batching: %w", chainID, err)
-	}
-
-	converted, err := convertLegs(legs, chainID, common.BytesToAddress(account[:]))
+	p, err := s.admit(intentID, adiURL, chainID, account, operationID, legs, attestation,
+		commitHeight, commitPartition, commitTime, accumTxHash)
 	if err != nil {
 		return err
 	}
-	if len(converted) == 0 {
-		return fmt.Errorf("intent %s produced no batch legs", intentID)
-	}
-	for _, l := range converted {
-		if err := checkCallAnchorPin(s, chainID, common.BytesToAddress(account[:]), l.Target, l.Data); err != nil {
-			return fmt.Errorf("intent %s: %w", intentID, err)
-		}
-	}
-
-	// A member with no commit height can never be placed in a period deterministically, so
-	// PeekForPeriod skips it and it would sit in the pool forever. Refuse it here, where the
-	// caller can still fall back to the per-intent path, rather than silently stranding it.
-	if commitHeight == 0 {
-		return fmt.Errorf("intent %s has no BFT commit height and could never be batched "+
-			"deterministically", intentID)
-	}
-
-	return s.Mempool.Add(&PendingBatchIntent{
-		IntentID:        intentID,
-		ADIURL:          adiURL,
-		ChainID:         chainID,
-		Account:         common.BytesToAddress(account[:]),
-		OperationID:     operationID,
-		AccumTxHash:     accumTxHash,
-		Legs:            converted,
-		Attestation:     attestation,
-		CommitHeight:    commitHeight,
-		CommitPartition: commitPartition,
-		CommitTime:      commitTime,
-	})
+	return s.Mempool.Add(p)
 }
 
 // EnqueueOnDemand queues an intent-keyed member: one intent, one anchor, no period.
 //
-// Identical admission rules to EnqueueForBatch — the two differ ONLY in which structure the
-// member lands in, and therefore which mechanism settles it. Routing is the caller's decision,
-// made from the intent's proofClass; this function does not inspect it.
+// Identical admission rules to EnqueueForBatch (both run admit) — the two differ ONLY in which
+// structure the member lands in, and therefore which mechanism settles it. Routing is the caller's
+// decision, made from the intent's proofClass; this function does not inspect it.
 //
 // Signals the submitter so settlement starts immediately rather than on the next sweep. The
 // signal is best-effort: a member whose signal is lost is picked up by the backstop ticker.
@@ -820,42 +894,12 @@ func (s *BatchStack) EnqueueOnDemand(
 	commitTime time.Time,
 	accumTxHash string,
 ) error {
-	if _, err := s.OrchestratorFor(chainID); err != nil {
-		return fmt.Errorf("chain %d is not configured for batching: %w", chainID, err)
-	}
-
-	converted, err := convertLegs(legs, chainID, common.BytesToAddress(account[:]))
+	p, err := s.admit(intentID, adiURL, chainID, account, operationID, legs, attestation,
+		commitHeight, commitPartition, commitTime, accumTxHash)
 	if err != nil {
 		return err
 	}
-	if len(converted) == 0 {
-		return fmt.Errorf("intent %s produced no batch legs", intentID)
-	}
-	for _, l := range converted {
-		if err := checkCallAnchorPin(s, chainID, common.BytesToAddress(account[:]), l.Target, l.Data); err != nil {
-			return fmt.Errorf("intent %s: %w", intentID, err)
-		}
-	}
-	// The commit height is bound into the bundleId. Without it every validator with a different
-	// local view derives a different id, exactly as on the period path.
-	if commitHeight == 0 {
-		return fmt.Errorf("intent %s has no BFT commit height; its bundleId is not derivable",
-			intentID)
-	}
-
-	if err := s.Mempool.AddOnDemand(&PendingBatchIntent{
-		IntentID:        intentID,
-		ADIURL:          adiURL,
-		ChainID:         chainID,
-		Account:         common.BytesToAddress(account[:]),
-		OperationID:     operationID,
-		AccumTxHash:     accumTxHash,
-		Legs:            converted,
-		Attestation:     attestation,
-		CommitHeight:    commitHeight,
-		CommitPartition: commitPartition,
-		CommitTime:      commitTime,
-	}); err != nil {
+	if err := s.Mempool.AddOnDemand(p); err != nil {
 		return err
 	}
 	if w := s.onDemandWaker.Load(); w != nil {
