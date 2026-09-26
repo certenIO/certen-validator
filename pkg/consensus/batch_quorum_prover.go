@@ -181,6 +181,12 @@ func (bv *BFTValidator) batchInputsFromIntentForChain(
 			}
 		}
 
+		// RB-1 / CRITICAL-003: the leg executes exactly what the user committed to, and a contract
+		// call only where this deployment executes contract calls (contract_calls.go).
+		if err := checkLegCommitment(i, leg.ChainID, target, val, data, ep); err != nil {
+			return nil, 0, account, operationID, err
+		}
+
 		// Every leg must come from the SAME account: one member is one account call.
 		var from [20]byte
 		fb, ferr := hex.DecodeString(strings.TrimPrefix(leg.From, "0x"))
