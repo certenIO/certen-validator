@@ -271,7 +271,7 @@ func (g1 *G1Layer) collectViaEnumeration(ctx context.Context, keyPage string,
 				enumerationMaxEntries, total, page)
 		}
 
-		entries, err := g1.enumerateSignatureEntryHashes(ctx, page, start, total)
+		entries, err := g1.enumerateSignatureEntries(ctx, page, start, total)
 		if err != nil {
 			return nil, &SignatureEvidenceIncomplete{
 				Route:     routeEnumeration,
@@ -283,11 +283,21 @@ func (g1 *G1Layer) collectViaEnumeration(ctx context.Context, keyPage string,
 		}
 		ev.Candidates += len(entries)
 
-		for i, entryHash := range entries {
+		for i, entry := range entries {
+			entryHash := entry.Hash
 			messageID := fmt.Sprintf("acc://%s@%s", entryHash, strings.TrimPrefix(page, "acc://"))
-			res := g1.evaluateCandidateWithRetry(ctx, sigCandidate{
-				MessageID: messageID, MessageHash: entryHash, Page: page,
-			}, page, snapshot, txHash, fmt.Sprintf("g1_enum_%s_%d", sanitizeLabel(page), i))
+
+			// Most entries on a busy page belong to other transactions. The range already carried
+			// their message, and classifyMessage settles "not a signature" and "covers another
+			// transaction" from it exactly as evaluateCandidate would after fetching the same
+			// message again. Anything it cannot settle - this transaction's signatures, a body it
+			// cannot read, a record without a body - takes the full evaluation below.
+			res, settled := g1.settleFromRangeBody(entry, messageID, txHash)
+			if !settled {
+				res = g1.evaluateCandidateWithRetry(ctx, sigCandidate{
+					MessageID: messageID, MessageHash: entryHash, Page: page,
+				}, page, snapshot, txHash, fmt.Sprintf("g1_enum_%s_%d", sanitizeLabel(page), i))
+			}
 
 			switch res.Outcome {
 			case SigUnavailable:
@@ -431,10 +441,31 @@ func (g1 *G1Layer) signatureChainCount(ctx context.Context, keyPage string) (int
 	return int(countFloat), nil
 }
 
-// enumerateSignatureEntryHashes pages through [start,total) and returns the
-// entry hashes. A short page is an error, never a silent truncation.
-func (g1 *G1Layer) enumerateSignatureEntryHashes(ctx context.Context, keyPage string, start, total int) ([]string, error) {
-	var out []string
+// signatureChainEntry is one P#signature entry: its hash, and the message the range returned
+// for it when asked to expand (nil when it did not).
+type signatureChainEntry struct {
+	Hash string
+	Body map[string]interface{}
+}
+
+// signatureRangeQuery reads a window of the P#signature chain WITH each entry's message.
+//
+// Expand is a field of RangeOptions (accumulate pkg/api/v3 options.yml), not of ChainQuery. The
+// "expand" that QueryBuilder.BuildChainQuery sets at the top level of a chain query is not a field
+// the server reads, so BuildSignatureChainRangeQuery never returned bodies.
+func signatureRangeQuery(start, count int) map[string]interface{} {
+	return map[string]interface{}{
+		"queryType": "chain",
+		"name":      "signature",
+		"range":     map[string]interface{}{"start": start, "count": count, "expand": true},
+	}
+}
+
+// enumerateSignatureEntries pages through [start,total) and returns every entry with the message
+// body the range carried. A short page is an error, never a silent truncation. A missing body is
+// not an error: that entry is evaluated in full instead.
+func (g1 *G1Layer) enumerateSignatureEntries(ctx context.Context, keyPage string, start, total int) ([]signatureChainEntry, error) {
+	var out []signatureChainEntry
 	pu := ProofUtilities{}
 
 	for s := start; s < total; s += enumerationPageSize {
@@ -442,7 +473,7 @@ func (g1 *G1Layer) enumerateSignatureEntryHashes(ctx context.Context, keyPage st
 		if s+count > total {
 			count = total - s
 		}
-		query := g1.queryBuilder.BuildSignatureChainRangeQuery(s, count)
+		query := signatureRangeQuery(s, count)
 		response, err := g1.artifactManager.SaveRPCArtifact(ctx,
 			fmt.Sprintf("signature_entries_%s_%d_%d", sanitizeLabel(keyPage), s, count),
 			g1.client, keyPage, query)
@@ -479,7 +510,8 @@ func (g1 *G1Layer) enumerateSignatureEntryHashes(ctx context.Context, keyPage st
 			if entry == "" {
 				return nil, fmt.Errorf("enumerate P#signature [%d:%d]: record has no entry hash", s, s+count)
 			}
-			out = append(out, entry)
+			body, _ := pu.CaseInsensitiveGet(recMap, "value").(map[string]interface{})
+			out = append(out, signatureChainEntry{Hash: entry, Body: body})
 		}
 		if got := len(out) - before; got != count {
 			return nil, fmt.Errorf("enumerate P#signature [%d:%d]: expected %d entries, got %d", s, s+count, count, got)
@@ -559,23 +591,9 @@ func (g1 *G1Layer) evaluateCandidate(ctx context.Context, cand sigCandidate, key
 	if err != nil {
 		return evalResult{Outcome: SigUnavailable, Stage: "extract-message-result", Reason: err.Error()}
 	}
-	signature, err := g1.signatureVerifier.ExtractSignatureFromMessageResult(result)
-	if err != nil {
-		// The chain holds several message kinds (signatureRequest,
-		// creditPayment, ...). Those are not ed25519 signatures and are a
-		// legitimate rejection, not an outage. Anything else is an outage.
-		if isNotASignatureMessage(err) {
-			return evalResult{Outcome: SigRejected, Stage: "extract-signature", Reason: "not an ed25519 signature message"}
-		}
-		_, capability := IsUnsupportedSignatureType(err)
-		return evalResult{Outcome: SigUnavailable, Stage: "extract-signature", Reason: err.Error(), Permanent: capability}
-	}
-
-	// --- does it belong to this transaction? (section 7.1) ----------------
-	if !g1.signatureVerifier.ValidateTransactionHash(signature, txHash) {
-		return evalResult{Outcome: SigRejected, Stage: "transaction-hash",
-			Reason: fmt.Sprintf("signature covers %s, not %s",
-				SafeTruncate(signature.TransactionHash, 16), SafeTruncate(txHash, 16))}
+	signature, res, verdict := g1.classifyMessage(result, txHash)
+	if verdict != messageForThisTransaction {
+		return res
 	}
 
 	// --- receipt, for timing (section 6.2 / 7.1) --------------------------
@@ -694,6 +712,68 @@ func (g1 *G1Layer) evaluateCandidate(ctx context.Context, cand sigCandidate, key
 	validated.CryptographicallyVerified = true
 
 	return evalResult{Outcome: SigCounted, Validated: validated, Stage: "counted", TimingBasis: timingBasis}
+}
+
+// messageVerdict is what a signature message alone says about a candidate.
+type messageVerdict int
+
+const (
+	messageForThisTransaction messageVerdict = iota // a signature over this transaction: evaluate it
+	messageRejected                                 // not a signature, or a signature over another transaction
+	messageUnavailable                              // could not be classified: an outage
+)
+
+// classifyMessage is the part of a candidate's evaluation that needs only its message: is it a
+// signature at all, and does it cover this transaction. evaluateCandidate runs it on the message
+// it fetched; the enumeration route runs it on the message its range returned. One function, so
+// the two cannot drift.
+func (g1 *G1Layer) classifyMessage(result map[string]interface{}, txHash string) (SignatureData, evalResult, messageVerdict) {
+	signature, err := g1.signatureVerifier.ExtractSignatureFromMessageResult(result)
+	if err != nil {
+		// The chain holds several message kinds (signatureRequest,
+		// creditPayment, ...). Those are not ed25519 signatures and are a
+		// legitimate rejection, not an outage. Anything else is an outage.
+		if isNotASignatureMessage(err) {
+			return SignatureData{}, evalResult{Outcome: SigRejected, Stage: "extract-signature",
+				Reason: "not an ed25519 signature message"}, messageRejected
+		}
+		_, capability := IsUnsupportedSignatureType(err)
+		return SignatureData{}, evalResult{Outcome: SigUnavailable, Stage: "extract-signature",
+			Reason: err.Error(), Permanent: capability}, messageUnavailable
+	}
+
+	// --- does it belong to this transaction? (section 7.1) ----------------
+	if !g1.signatureVerifier.ValidateTransactionHash(signature, txHash) {
+		return signature, evalResult{Outcome: SigRejected, Stage: "transaction-hash",
+			Reason: fmt.Sprintf("signature covers %s, not %s",
+				SafeTruncate(signature.TransactionHash, 16), SafeTruncate(txHash, 16))}, messageRejected
+	}
+	return signature, evalResult{}, messageForThisTransaction
+}
+
+// settleFromRangeBody decides an enumerated entry from the message the range returned for it, but
+// only when classifyMessage would settle it without any further evidence: a message that is not a
+// signature, or a signature over another transaction. Those are the rejections evaluateCandidate
+// reaches from the same message after fetching it again.
+//
+// It never counts a signature and never declares an outage. A body that is missing, names another
+// message, or does not classify cleanly is left to evaluateCandidate. The body is the endpoint's
+// word, exactly as the message query's answer is; a body that lies can hide a signature from this
+// route, which leaving the entry out of the range already could, and the routes then disagree and
+// G1 fails closed.
+func (g1 *G1Layer) settleFromRangeBody(entry signatureChainEntry, messageID, txHash string) (evalResult, bool) {
+	if entry.Body == nil {
+		return evalResult{}, false
+	}
+	pu := ProofUtilities{}
+	if id, _ := pu.CaseInsensitiveGet(entry.Body, "id").(string); !strings.EqualFold(id, messageID) {
+		return evalResult{}, false
+	}
+	_, res, verdict := g1.classifyMessage(entry.Body, txHash)
+	if verdict != messageRejected {
+		return evalResult{}, false
+	}
+	return res, true
 }
 
 // isNotASignatureMessage reports whether an extraction error means the entry
