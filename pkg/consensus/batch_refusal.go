@@ -94,6 +94,11 @@ func (bv *BFTValidator) planBatch(ci *CertenIntent, commitHeight uint64) (*batch
 		return nil, refuse(fmt.Errorf("intent %s has no legs", ci.IntentID))
 	}
 
+	// Executed as it declares, or refused with the declaration (declared_semantics.go).
+	if err := CheckDeclaredSemantics(ci, ci.BlockTime); err != nil {
+		return nil, refuse(fmt.Errorf("intent %s: %w", ci.IntentID, err))
+	}
+
 	// The ADI URL is keccak'd into the member's Merkle leaf, and the account contract recomputes
 	// that leaf from its OWN immutable adiURL; see memberADIURL.
 	adiURL, err := memberADIURL(ci)

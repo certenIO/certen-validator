@@ -92,9 +92,11 @@ func batchableIntent(t *testing.T, id string, chains ...int64) *CertenIntent {
 		OrganizationADI: "acc://org.acme",
 		AccountURL:      "acc://org.acme/data",
 		IntentData:      must(map[string]interface{}{"intent_id": id, "proof_class": "on_cadence"}),
-		CrossChainData:  must(map[string]interface{}{"protocol": "CERTEN", "version": "2.0", "legs": legs}),
-		GovernanceData:  must(map[string]interface{}{"organizationAdi": "acc://org.acme"}),
-		ReplayData:      must(map[string]interface{}{"nonce": id}),
+		// "parallel": a cross-chain intent is settled one chain member at a time, independently -
+		// the only cross-chain mode CERTEN implements (declared_semantics.go).
+		CrossChainData: must(map[string]interface{}{"protocol": "CERTEN", "version": "2.0", "legs": legs, "execution_mode": "parallel"}),
+		GovernanceData: must(map[string]interface{}{"organizationAdi": "acc://org.acme"}),
+		ReplayData:     must(map[string]interface{}{"nonce": id}),
 	}
 }
 
