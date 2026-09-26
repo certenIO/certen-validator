@@ -16,7 +16,7 @@
 //
 // Usage:
 //
-//	go run ./cmd/batchpreflight -rpc <url> -anchor 0x... [-pubkeys file]
+//	go run ./cmd/batchpreflight -rpc <url> -anchor 0x... -pubkeys running-pubkeys.json
 //
 // Exit code is non-zero if any check fails, so it can gate a deploy.
 package main
@@ -24,6 +24,7 @@ package main
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"math/big"
@@ -58,17 +59,103 @@ const preflightABI = `[
   "outputs":[{"name":"","type":"bool"}],"stateMutability":"view"}
 ]`
 
-// liveValidatorPubkeys are the BLS public keys the seven running containers report at startup
-// ("BLS PUBLIC KEY FOR CONTRACT REGISTRATION"). Passing them here lets the tool prove the
-// identity resolution each node will perform, without needing any node's private key.
-var liveValidatorPubkeys = map[string]string{
-	"validator-1": "88eb4560b4147983e3d72bc6ddb04812d84be905d97f400f5c378b1fc0e252d53d9e2069891d56e2696fe43f2cd153df10bebf7f0fd4da4497f6d24f3cf9a82ff27ef2a8b731c609b732202334a4115b034dd18193d860c75837e46729c90a05",
-	"validator-2": "b6034ecded6be69758a7bfe10dd6f38eba8068433821419762cdad9d1b9d423a02f6fe69f49d720315565700437302ca0edb2af84b1b2ae1114a9f131bcf6fa8ebe00bfa02834ac598ea9aa285a79c07d626e2b89f2784fce679d6e8b25e9ea5",
-	"validator-3": "a060ce250119479f1cb22f0f55941f56204b4d291caff3a268f5f2e4c4a55dddcd5db8f8f7c9251eebbb613ddc8a0db20d59d4f9f90e49f0d91f7c4d87c7f1c5ef4d9106cb17295f807870dc400a6e8f54a0c250f40c66ef0ba0e1ae9e272827",
-	"validator-4": "b3847f042172f34c28ad930ab6ea12057c23b80c018f8db7c073c7656c2b04049cee2accbf0f7162024af91f4c6def2216e55d59ab5203d9958d44ea6555dae20f9b98cd485f883c9cc3be2d3ca0c7fc454edf097f4c4b3dd8130922dda9bded",
-	"validator-5": "a41cd7cfa2b90210776218db3e574cf31db620a0db69e0829682826fc0693a67759cd07c0f4c817f43d50f37e643aafe0047a6e84ebb4257dd7aa51208b7efe6814a04638ca2f12ae98e8709552b00fa954164819c283f0c5c52d7f8f7f5bcc0",
-	"validator-6": "a02890dfab5831e608af5794245e5f3204358ff9d5ee6db86d77c08eb66406dfb7e4d19af8600a4f912987a8192b1cb008ec3829bbf78c5b6a62b284130477c6c5372d95b5c4e5f766e9c7d355dbf06495643b7fe62d3c50ceaff89336ed3ba1",
-	"validator-7": "a533372f8b8b25660ae1908bf2de04a2fdafcef38d9fe4eb35022858b2e015bffd17423c23bd0ea2db7b5d5ce9dd51900be37c74bddd23d6cf246fef2b156c8878958350934a796b7fd60de9e795e7d19ec6bf5910db3f7770794d9cf4ddf26f",
+// The running validators' BLS public keys come from -pubkeys, the same
+// {"validators":[{"validator_id","bls_public_key"}]} file the rotation runbook builds from each
+// node's bls-key-info output. There is deliberately no compiled-in list: after a key rotation such a
+// list names retired keys, and the identity check would silently judge the wrong set.
+
+type pubkeyFile struct {
+	Validators []struct {
+		ValidatorID   string `json:"validator_id"`
+		BLSPublicKey  string `json:"bls_public_key"`
+		BLSPrivateKey string `json:"bls_private_key"`
+	} `json:"validators"`
+}
+
+// loadRunningPubkeys reads validator ID -> lowercase hex public key (no 0x). It refuses anything it
+// cannot use unambiguously, and a file carrying private keys, which this tool must never be handed.
+func loadRunningPubkeys(path string) (map[string]string, error) {
+	if path == "" {
+		return nil, fmt.Errorf("no -pubkeys file: the running validators' BLS public keys must be supplied " +
+			"(bls-key-info output collected into {\"validators\":[{\"validator_id\",\"bls_public_key\"}]})")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read -pubkeys %s: %w", path, err)
+	}
+	var f pubkeyFile
+	if err := json.Unmarshal(raw, &f); err != nil {
+		return nil, fmt.Errorf("parse -pubkeys %s: %w", path, err)
+	}
+	if len(f.Validators) == 0 {
+		return nil, fmt.Errorf("-pubkeys %s lists no validators", path)
+	}
+	out := make(map[string]string, len(f.Validators))
+	seenKey := map[string]string{}
+	for i, v := range f.Validators {
+		if v.BLSPrivateKey != "" {
+			return nil, fmt.Errorf("-pubkeys %s entry %d carries a private key; supply public keys only", path, i)
+		}
+		id := strings.TrimSpace(v.ValidatorID)
+		if id == "" {
+			return nil, fmt.Errorf("-pubkeys %s entry %d has no validator_id", path, i)
+		}
+		key := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(v.BLSPublicKey), "0x"))
+		if key == "" {
+			return nil, fmt.Errorf("-pubkeys %s: %s has no bls_public_key", path, id)
+		}
+		b, err := hex.DecodeString(key)
+		if err != nil {
+			return nil, fmt.Errorf("-pubkeys %s: %s key is not hex: %w", path, id, err)
+		}
+		if _, err := bls.PublicKeyFromBytes(b); err != nil {
+			return nil, fmt.Errorf("-pubkeys %s: %s key is not a BLS12-381 G2 point: %w", path, id, err)
+		}
+		if _, dup := out[id]; dup {
+			return nil, fmt.Errorf("-pubkeys %s lists %s twice", path, id)
+		}
+		if other, dup := seenKey[key]; dup {
+			return nil, fmt.Errorf("-pubkeys %s gives %s and %s the same key", path, other, id)
+		}
+		out[id], seenKey[key] = key, id
+	}
+	return out, nil
+}
+
+// resolveIdentities performs, for every running validator, the match each node performs on itself
+// (execution.ResolveOwnEVMAddress): its key must be registered under exactly one address, and no two
+// nodes may claim the same address. registry maps lowercase address -> hex key.
+func resolveIdentities(running, registry map[string]string) (claimed map[string]string, fails []string) {
+	ids := make([]string, 0, len(running))
+	for id := range running {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	claimed = map[string]string{}
+	for _, id := range ids {
+		want := strings.ToLower(strings.TrimPrefix(running[id], "0x"))
+		var matches []string
+		for addr, pub := range registry {
+			if strings.ToLower(strings.TrimPrefix(pub, "0x")) == want {
+				matches = append(matches, addr)
+			}
+		}
+		sort.Strings(matches)
+		switch len(matches) {
+		case 1:
+			if other, dup := claimed[matches[0]]; dup {
+				fails = append(fails, fmt.Sprintf("%s and %s both resolve to %s — voting power is ambiguous", id, other, matches[0]))
+				continue
+			}
+			claimed[matches[0]] = id
+		case 0:
+			fails = append(fails, fmt.Sprintf("%s: its BLS key is NOT in the anchor registry. This node will REFUSE every "+
+				"peer attestation request and quorum runs a signer short.", id))
+		default:
+			fails = append(fails, fmt.Sprintf("%s: BLS key registered under %d addresses %v — refuses to attest", id, len(matches), matches))
+		}
+	}
+	return claimed, fails
 }
 
 var failures []string
@@ -84,7 +171,14 @@ func okf(format string, a ...interface{}) { fmt.Printf("  ✅ %s\n", fmt.Sprintf
 func main() {
 	rpc := flag.String("rpc", "https://ethereum-sepolia-rpc.publicnode.com", "EVM RPC URL")
 	anchorHex := flag.String("anchor", "0xb39b707D50089C9Eb92818f9B2870eba6DA5C2a0", "CertenAnchorV8_1 address")
+	pubkeysPath := flag.String("pubkeys", "", "running validators' BLS public keys (JSON: validators[].validator_id, bls_public_key) — required")
 	flag.Parse()
+
+	running, err := loadRunningPubkeys(*pubkeysPath)
+	if err != nil {
+		fmt.Printf("❌ %v\n", err)
+		os.Exit(1)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
@@ -180,35 +274,15 @@ func main() {
 
 	// ---- 2. Identity resolution ---------------------------------------------
 	fmt.Println("\n[2] Identity self-configuration (each node matches its own BLS key)")
-	ids := make([]string, 0, len(liveValidatorPubkeys))
-	for id := range liveValidatorPubkeys {
-		ids = append(ids, id)
+	claimed, idFails := resolveIdentities(running, registry)
+	for _, f := range idFails {
+		fail("%s", f)
 	}
-	sort.Strings(ids)
-
-	claimed := map[string]string{} // address -> validatorID, to catch two nodes claiming one entry
-	for _, id := range ids {
-		want := strings.ToLower(liveValidatorPubkeys[id])
-		var matches []string
-		for addr, pub := range registry {
-			if strings.ToLower(pub) == want {
-				matches = append(matches, addr)
-			}
-		}
-		switch len(matches) {
-		case 1:
-			if other, dup := claimed[matches[0]]; dup {
-				fail("%s and %s both resolve to %s — voting power is ambiguous", id, other, matches[0])
-				continue
-			}
-			claimed[matches[0]] = id
-			okf("%s → %s", id, matches[0])
-		case 0:
-			fail("%s: its BLS key is NOT in the anchor registry. This node will REFUSE every "+
-				"peer attestation request and quorum runs a signer short.", id)
-		default:
-			fail("%s: BLS key registered under %d addresses %v — refuses to attest", id, len(matches), matches)
-		}
+	for addr, id := range claimed {
+		okf("%s → %s", id, addr)
+	}
+	if len(claimed) != len(registry) {
+		fail("%d registered validators but only %d are claimed by a supplied running key", len(registry), len(claimed))
 	}
 	if len(claimed) == len(registry) && len(failures) == 0 {
 		okf("all %d registered validators are claimed by exactly one running node", len(registry))
