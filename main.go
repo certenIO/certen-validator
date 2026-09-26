@@ -1529,7 +1529,7 @@ func startValidator(
 	//
 	// ORDER MATTERS. The flush loop is started BEFORE SetBatchEnqueuer, so the mempool can
 	// never accept a member while nothing is draining it — a pool that fills and never
-	// flushes would strand intents, which is strictly worse than the per-intent path.
+	// flushes would strand intents, and there is no other path to settle them.
 	//
 	// Requires CERTEN_ANCHOR_V8_<chainId> per chain. Absent config leaves the batch path
 	// off and on_cadence falls back to the deferred-serial scheduler above, which still
@@ -1601,13 +1601,14 @@ func startValidator(
 								// closes its own proof cycle back to Accumulate.
 								validator.RunBatchMemberAttestation(ctx, att, txHash, chainID, ok)
 							},
-							// Members dropped after the anchor is mined go to the per-intent
-							// path. Approved policy: fall back, never requeue.
-							Fallback: func(ctx context.Context, m *execution.PendingBatchIntent) {
+							// Members that leave the batch path for good are recorded as FAILED
+							// with the cause they were dropped for; there is no other path to
+							// settle them (owner decision 2026-09-26).
+							OnDropped: func(ctx context.Context, m *execution.PendingBatchIntent, cause string) {
 								if m == nil {
 									return
 								}
-								validator.RunBatchMemberFallback(ctx, m.Attestation)
+								validator.RunBatchMemberRefusal(ctx, m.Attestation, cause)
 							},
 						},
 						log.Printf,
@@ -1630,11 +1631,11 @@ func startValidator(
 						Attest: func(ctx context.Context, att interface{}, txHash string, chainID int64, ok bool) {
 							validator.RunBatchMemberAttestation(ctx, att, txHash, chainID, ok)
 						},
-						Fallback: func(ctx context.Context, m *execution.PendingBatchIntent) {
+						OnDropped: func(ctx context.Context, m *execution.PendingBatchIntent, cause string) {
 							if m == nil {
 								return
 							}
-							validator.RunBatchMemberFallback(ctx, m.Attestation)
+							validator.RunBatchMemberRefusal(ctx, m.Attestation, cause)
 						},
 						// The Accumulate block time of a member queued without it: the failover clock.
 						CommitTime: liteClientAdapter.MinorBlockTime,

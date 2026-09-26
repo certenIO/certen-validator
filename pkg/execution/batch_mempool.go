@@ -737,10 +737,9 @@ func (m *BatchMempool) PendingPeriods(chainID int64, periodBlocks, beforeStart u
 // at: on a validator that is not the leader, every member it has ever seen would otherwise
 // accumulate for the life of the process.
 //
-// It deliberately does NOT route the pruned members to the per-intent fallback. On a non-leader
-// those members were settled by whichever node did lead their period, and re-executing them
-// individually would double-spend the intent. Only FlushChain, which the leader alone runs,
-// produces members that genuinely need a fallback.
+// It deliberately does NOT record the pruned members as failed. On a non-leader those members
+// were settled by whichever node did lead their period. Only FlushChain, which the leader alone
+// runs, produces members that genuinely failed (Dropped, recorded with their cause).
 func (m *BatchMempool) PruneOlderThan(horizonStart uint64) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -766,9 +765,8 @@ func (m *BatchMempool) PruneOlderThan(horizonStart uint64) int {
 }
 
 // DropMembers removes specific members, used when a batch settled elsewhere (the leader landed
-// it) or when members fall back to the per-intent path. Fallback is the approved policy on
-// quorum failure: requeueing risks a permanently stuck batch, whereas falling back costs more
-// gas but always settles.
+// it) or when members leave the batch path for good and are recorded as FAILED with their cause
+// (quorum never reached after the bounded retries, or an anchor that rejects their leaves).
 func (m *BatchMempool) DropMembers(members []*PendingBatchIntent) {
 	if len(members) == 0 {
 		return

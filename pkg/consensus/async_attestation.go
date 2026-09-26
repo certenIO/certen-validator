@@ -142,23 +142,16 @@ type PendingAttestation struct {
 	//	failed  : the caller KNOWS this settlement failed — quorum was never
 	//	          reached, or the batch member did not settle. Stated explicitly so
 	//	          the pending default can never launder a real failure into "still
-	//	          waiting". See RunBatchMemberAttestation and RunBatchMemberFallback.
+	//	          waiting". See RunBatchMemberAttestation and RunBatchMemberRefusal.
 	//
 	// The zero value normalizes to pending, which is why the failure sites set it
 	// deliberately rather than relying on a bool being false.
 	TargetChainOutcome TargetChainOutcome
 
-	// SubmitVB / SubmitBFT are the two metadata structs the per-intent (on_demand) submission
-	// path takes. Captured only on the batch path, and only so a member the batch had to drop
-	// can still be executed individually.
-	//
-	// Without them a dropped member has nowhere to go. The approved failure policy is "fall
-	// back to the per-intent path, never requeue" — requeueing re-derives the same bundleId
-	// and reverts AnchorAlreadyExists — and SubmitAnchorFromValidatorBlock IS that path.
-	// Holding the snapshot rather than the live structs keeps a late fallback from observing
-	// a round that has since moved on.
-	SubmitVB  *verification.ValidatorBlockMetadata
-	SubmitBFT *verification.BFTExecutionMetadata
+	// FailureReason is why the caller KNOWS this settlement failed, when it does - e.g. the cause a
+	// batch member was dropped for. It is what the failed proof cycle records as its reason. Empty
+	// means no cause beyond what the cycle itself establishes.
+	FailureReason string
 
 	// BatchedWith lists the other intent IDs settled by the SAME on-chain batch
 	// transaction, empty for a solo execution. Recorded in the commitment map so the
@@ -770,10 +763,18 @@ func (bv *BFTValidator) recordFailedProofCycle(
 	if decoded, derr := hex.DecodeString(strings.TrimPrefix(att.BundleIDHex, "0x")); derr == nil && len(decoded) >= 32 {
 		copy(bundleID[:], decoded[:32])
 	}
+	// The reason states what is KNOWN. Both callers reach here only when no settlement transaction
+	// reached the target chain - which is all that can be said unless the caller knows why (a
+	// dropped batch member carries its cause). It used to say "execution reverted on the target
+	// chain" for every failure, which is false whenever nothing was sent (RB3-F37).
+	reason := "no settlement transaction reached the target chain"
+	if att.FailureReason != "" {
+		reason = reason + ": " + att.FailureReason
+	}
 	commitment := map[string]interface{}{
 		"intentId":                 att.IntentID,
 		"outcome":                  "failed",
-		"reason":                   "no settlement transaction; execution reverted on the target chain",
+		"reason":                   reason,
 		"allTransactionsConfirmed": false,
 		"network":                  failed.Network,
 	}

@@ -101,9 +101,9 @@ type BatchLeg struct {
 
 // batchInputsFromIntent extracts what the batch mempool needs from a consensus intent.
 //
-// Rejects anything the batch path cannot represent honestly, so a malformed member is
-// refused at enqueue time and falls back to the per-intent path — rather than poisoning a
-// tree that other ADIs' intents are waiting on.
+// Rejects anything the batch path cannot represent honestly, so a malformed member is refused
+// by name before it is signed or queued (planBatch) - rather than poisoning a tree that other
+// ADIs' intents are waiting on.
 // onlyChain, when non-zero, restricts extraction to the legs on that chain. A cross-chain intent
 // is a valid batch input once split: each chain contributes its OWN member, with its own source
 // account and its own leaf. The leaf binds chainid, so two members of the same intent on different
@@ -376,60 +376,44 @@ func onDemandLaneEnabled() bool {
 // OnDemandLaneEnabled is onDemandLaneEnabled exported so the wiring can log which lane is live.
 func OnDemandLaneEnabled() bool { return onDemandLaneEnabled() }
 
-// RunBatchMemberFallback closes out a member the batch path could not settle.
+// RunBatchMemberRefusal records a member that left the batch path for good as FAILED, with the
+// cause it was dropped for.
 //
-// # WHY THIS NO LONGER RE-EXECUTES
+// There is no other path to settle it. The per-intent path the old "fall back, never requeue"
+// policy pointed at could not land against CertenAnchorV8_1 - it declared voting power from
+// invented defaults that _verifyBLSProof rejects against the registered total, and proved against
+// a key that did not necessarily sign - and it was removed (owner decision 2026-09-26: a member
+// that cannot settle is refused by name). Quorum failures are retried for the same period before a
+// member is dropped, so reaching here means the batch genuinely cannot settle it.
 //
-// It used to call SubmitAnchorFromValidatorBlock, on the policy "fall back to the per-intent
-// path, never requeue". That path CANNOT LAND against CertenAnchorV8_1:
-//
-//   - extractVotingPower declared power from invented defaults (300/200) rather than from any
-//     real signer set, and _verifyBLSProof requires totalVotingPower to equal the registered
-//     total (700), so the submission is rejected before the pairing is reached;
-//   - its ZK witness proves against the block signer's recorded key, which is not always the
-//     key that signed, giving the unsatisfied constraint #774716 seen live.
-//
-// So routing members there reported a fallback that never occurred, and stranded them. Since
-// quorum failures are now RETRIED for the same period (see FlushChain — createBatchAnchor
-// treats an existing anchor as success and an already-attested one short-circuits), reaching
-// here means the retries are exhausted and the batch genuinely cannot settle.
-//
-// The honest close-out is therefore to attest the FAILURE, loudly. An intent recorded as failed
-// can be reprocessed deliberately; one silently handed to an impossible path cannot, and the
-// round has already told the caller it was handled.
-//
-// Restoring a real per-intent path means giving it the same quorum the batch path uses — a
-// one-member batch, which the design already anticipates ("N=1 IS NOT A SPECIAL CASE"), and
-// which CertenAccountV7 effectively requires anyway since _authorizeLeaf only ever computes the
-// batch-form leaf. That is a change in its own right, not a branch to bolt on here.
-func (bv *BFTValidator) RunBatchMemberFallback(ctx context.Context, attestation interface{}) {
+// The honest close-out is to attest the FAILURE with its real cause. An intent recorded as failed
+// can be resubmitted deliberately; one handed to an impossible path, or recorded with a reason
+// that is not its own, cannot be reasoned about.
+func (bv *BFTValidator) RunBatchMemberRefusal(ctx context.Context, attestation interface{}, cause string) {
 	att, ok := attestation.(*PendingAttestation)
 	if !ok || att == nil {
-		bv.logger.Printf("⚠️ [BATCH-FALLBACK] snapshot was not a *PendingAttestation; member cannot be closed out")
+		bv.logger.Printf("⚠️ [BATCH-REFUSED] snapshot was not a *PendingAttestation; the dropped member (%s) "+
+			"cannot be recorded as failed", cause)
 		return
 	}
+	if cause == "" {
+		cause = "dropped from its batch (cause not recorded)"
+	} else {
+		cause = "dropped from its batch: " + cause
+	}
 
-	bv.logger.Printf("❌ [BATCH-FALLBACK] intent %s could not reach quorum after %d attempts and is "+
-		"being attested as FAILED. It is NOT being re-executed: the per-intent submitter declares "+
-		"voting power the anchor rejects (registered total is authoritative) and proves against a "+
-		"key that did not necessarily sign. Re-run it deliberately once the per-intent path uses "+
-		"the same aggregate the batch path does.", att.IntentID, maxQuorumAttemptsForLog)
+	bv.logger.Printf("❌ [BATCH-REFUSED] intent %s is attested as FAILED and not re-executed — %s. "+
+		"There is no other path to settle it; the ADI resubmits it deliberately.", att.IntentID, cause)
 
-	// STAGE 1: a GENUINE failure, stated as one. The function's own log line
-	// already says "attested as FAILED" — quorum was never reached after the full
-	// retry budget and the member is deliberately not re-executed — so there is
-	// nothing unresolved about it. Left to the pending default it would report as
-	// a settlement still in flight that never lands.
+	// A GENUINE failure, stated as one, with its cause. Left to the pending default it would
+	// report as a settlement still in flight that never lands.
 	att.TargetChainOutcome = TargetChainFailed
+	att.FailureReason = cause
 
 	bv.RunProofCycle(ctx, att, &verification.AnchorExecutionResult{
 		AllTransactionsConfirmed: false,
 	})
 }
-
-// maxQuorumAttemptsForLog mirrors execution.maxQuorumAttempts for the message above. Kept as a
-// constant rather than plumbed through, because it is only ever used to explain the failure.
-const maxQuorumAttemptsForLog = 5
 
 // =============================================================================
 // Batch period leadership
@@ -550,8 +534,7 @@ func batchLeaderRoster() []string {
 //
 // The "/data" trim is a fallback for intents whose OrganizationADI was never populated, not
 // the primary path. Anything still carrying a "/data" suffix, or empty, or not an acc:// URL,
-// is refused: falling back to the per-intent path costs more gas but settles, whereas a wrong
-// leaf cannot settle at all.
+// is refused by name: a wrong leaf could never settle, and there is no other path that could.
 func memberADIURL(ci *CertenIntent) (string, error) {
 	if ci == nil {
 		return "", fmt.Errorf("nil intent")

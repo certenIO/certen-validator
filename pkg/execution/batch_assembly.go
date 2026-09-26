@@ -21,10 +21,9 @@ import (
 // =============================================================================
 //
 // Constructs the pieces the batch path needs and wires them together. Everything below is
-// inert until BatchMempool.Add has a caller — deliberately. A mempool that fills but never
-// flushes is strictly WORSE than the current per-intent path, because intents would
-// accumulate and silently never settle, whereas today they take the single-call path and do
-// settle. So this file builds the machinery; it does not switch anything on.
+// inert until BatchMempool.Add has a caller — deliberately. The batch path is the only way an
+// intent settles, so a mempool that fills but never flushes would leave intents accumulating and
+// silently never settling. So this file builds the machinery; it does not switch anything on.
 //
 // The remaining wiring, in order:
 //   1. (this file) construct resolver -> submitter -> prover -> orchestrator
@@ -41,7 +40,7 @@ type EVMChainResolverImpl struct {
 	anchorCfg *config.AnchorConfig
 
 	// anchorOverrides maps chainID -> CertenAnchorV8 address. The batch path needs the V8
-	// anchor, which is NOT the AnchorV4Address the per-intent path uses — V8 is a separate
+	// anchor, which is NOT the AnchorV4Address the retired per-intent path used — V8 is a separate
 	// deployment carrying createBatchAnchor and the CRYPTO-007 binding.
 	anchorOverrides map[int64]common.Address
 
@@ -262,7 +261,7 @@ func (s *BatchStack) FlushDueChains(
 	force bool,
 	cutoffHeight uint64,
 	attest BatchAttestFn,
-	fallback BatchFallbackFn,
+	onDropped BatchDropFn,
 	logf func(string, ...interface{}),
 ) {
 	if logf == nil {
@@ -279,7 +278,7 @@ func (s *BatchStack) FlushDueChains(
 	}
 
 	for _, chainID := range s.Mempool.DueChains(now, force) {
-		s.flushChainPeriods(ctx, chainID, cutoffHeight, DefaultBatchPeriodBlocks, nil, 0, now, attest, fallback, logf)
+		s.flushChainPeriods(ctx, chainID, cutoffHeight, DefaultBatchPeriodBlocks, nil, 0, now, attest, onDropped, logf)
 	}
 }
 
@@ -300,7 +299,7 @@ func (s *BatchStack) flushChainPeriods(
 	grace time.Duration,
 	now time.Time,
 	attest BatchAttestFn,
-	fallback BatchFallbackFn,
+	onDropped BatchDropFn,
 	logf func(string, ...interface{}),
 ) {
 	// Strictly older than the current period: a period still accepting members must not be
@@ -362,7 +361,7 @@ func (s *BatchStack) flushChainPeriods(
 			continue
 		}
 		logf("[BATCH-FLUSH] chain %d period %d: leading and past grace — flushing", chainID, start)
-		s.flushOneChain(ctx, chainID, start, periodBlocks, attest, fallback, logf)
+		s.flushOneChain(ctx, chainID, start, periodBlocks, attest, onDropped, logf)
 	}
 }
 
@@ -442,7 +441,7 @@ func (s *BatchStack) flushOneChain(
 	cutoffHeight uint64,
 	periodBlocks uint64,
 	attest BatchAttestFn,
-	fallback BatchFallbackFn,
+	onDropped BatchDropFn,
 	logf func(string, ...interface{}),
 ) {
 	orch, err := s.OrchestratorFor(chainID)
@@ -454,28 +453,16 @@ func (s *BatchStack) flushOneChain(
 	res, err := orch.FlushChain(ctx, chainID, cutoffHeight, periodBlocks)
 	if err != nil {
 		// FlushChain requeues on any pre-anchor failure, so nothing is lost there. Past the
-		// anchor it DROPS instead, and those members are handed to the fallback below.
+		// anchor it DROPS instead, and those members are recorded as FAILED below.
 		logf("[BATCH-FLUSH] chain %d flush failed: %v", chainID, err)
 	}
 	if res == nil {
 		return
 	}
 
-	// Dropped members have left the batch path for good. Routing them to the per-intent path
-	// is the approved failure policy; skipping this would strand them silently, which is
-	// precisely the outcome the policy exists to avoid.
-	if len(res.Dropped) > 0 {
-		if fallback == nil {
-			logf("[BATCH-FLUSH] ⚠️ chain %d dropped %d member(s) but NO FALLBACK is wired — "+
-				"they will never settle", chainID, len(res.Dropped))
-		} else {
-			logf("[BATCH-FLUSH] chain %d routing %d dropped member(s) to the per-intent path",
-				chainID, len(res.Dropped))
-			for _, m := range res.Dropped {
-				fallback(ctx, m)
-			}
-		}
-	}
+	// Dropped members have left the batch path for good and there is no other path to settle
+	// them: each is recorded as FAILED with the cause it was dropped for.
+	routeDropped(ctx, chainID, res, onDropped, logf)
 
 	// Released because a previous leader had already anchored this period.
 	//
@@ -541,13 +528,28 @@ func (s *BatchStack) flushOneChain(
 	}
 }
 
-// BatchFallbackFn routes a member that has left the batch path to the per-intent on_demand
-// path. Supplied by pkg/consensus, which owns that path.
-//
-// It is not optional in production: FlushChain drops members after the anchor is mined rather
-// than requeueing them (a requeue re-derives the same bundleId and reverts), so without this
-// they never settle.
-type BatchFallbackFn func(ctx context.Context, member *PendingBatchIntent)
+// BatchDropFn records a member that has left the batch path for good as FAILED, with the cause
+// it was dropped for. Supplied by pkg/consensus (RunBatchMemberRefusal). There is no other path to
+// settle such a member, so without this it would be settled nowhere and recorded nowhere.
+type BatchDropFn func(ctx context.Context, member *PendingBatchIntent, cause string)
+
+// routeDropped hands every dropped member of a flush to onDropped with its own cause. A drop with
+// no handler wired is a wiring defect and is reported as one, never passed over.
+func routeDropped(ctx context.Context, chainID int64, res *BatchFlushResult, onDropped BatchDropFn,
+	logf func(string, ...interface{})) {
+	if res == nil || len(res.Dropped) == 0 {
+		return
+	}
+	if onDropped == nil {
+		logf("[BATCH-FLUSH] ⚠️ chain %d dropped %d member(s) but no drop handler is wired — they will "+
+			"never be recorded as failed", chainID, len(res.Dropped))
+		return
+	}
+	logf("[BATCH-FLUSH] chain %d recording %d dropped member(s) as FAILED", chainID, len(res.Dropped))
+	for _, m := range res.Dropped {
+		onDropped(ctx, m, res.DropCauseOf(m))
+	}
+}
 
 // BatchFlushConfig is what RunFlushLoop needs from the node around it.
 type BatchFlushConfig struct {
@@ -580,8 +582,8 @@ type BatchFlushConfig struct {
 	// Attest closes each settled member's proof cycle.
 	Attest BatchAttestFn
 
-	// Fallback routes dropped members to the per-intent path.
-	Fallback BatchFallbackFn
+	// OnDropped records each member that left the batch path for good as FAILED, with its cause.
+	OnDropped BatchDropFn
 
 	// SettleGrace delays forming a closed period so peers can finish processing its members.
 	// Zero means DefaultBatchSettleGrace.
@@ -685,7 +687,7 @@ func (s *BatchStack) RunFlushLoop(
 		}
 		for _, chainID := range s.Resolver.Chains() {
 			s.flushChainPeriods(passCtx, chainID, cutoff, periodBlocks,
-				cfg.IsLeaderFn, grace, now, cfg.Attest, cfg.Fallback, logf)
+				cfg.IsLeaderFn, grace, now, cfg.Attest, cfg.OnDropped, logf)
 		}
 
 		// Memory backstop. Correctness does not depend on it — selection is bucket-scoped, so

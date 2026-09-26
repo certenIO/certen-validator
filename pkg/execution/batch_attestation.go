@@ -105,8 +105,9 @@ type BatchAttesterIdentity struct {
 // HandleBatchAttestationRequest is the peer-side handler.
 //
 // Returns a response with Error set (and no signature) whenever this validator cannot honestly
-// attest. Refusing is always safe: the proposer simply fails to reach quorum and the members
-// fall back to the per-intent path.
+// attest. Refusing is always safe: the proposer simply fails to reach quorum, retries, and if
+// quorum is never reached the members are recorded as FAILED - never settled on a weaker
+// signature.
 func (s *BatchStack) HandleBatchAttestationRequest(
 	req *BatchAttestationRequest,
 	me BatchAttesterIdentity,
