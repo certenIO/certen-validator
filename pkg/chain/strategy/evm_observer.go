@@ -175,6 +175,12 @@ func (o *EVMObserver) ObserveTransaction(ctx context.Context, txHash common.Hash
 	// TRON returns non-standard fields ("stateRoot":"0x") that break Go's header unmarshal,
 	// so we handle this gracefully with a receipt-only fallback.
 	header, headerErr := o.client.HeaderByHash(ctx, receipt.BlockHash)
+	if headerErr != nil && !tronChainIDs[o.chainID] {
+		// On every chain but TRON a header that cannot be read is a node or network fault. The
+		// receipt-only observation below would stand in the validator's clock for the block time and,
+		// at its deadline, declare the receipt final (RB3-F69).
+		return nil, fmt.Errorf("read the header of block %s on chain %d: %w", receipt.BlockHash.Hex(), o.chainID, headerErr)
+	}
 
 	var result *ObservationResult
 	if headerErr != nil {
@@ -294,9 +300,13 @@ func (o *EVMObserver) ObserveTransaction(ctx context.Context, txHash common.Hash
 		signer := types.LatestSignerForChainID(big.NewInt(o.chainID))
 		if from, sErr := types.Sender(signer, tx); sErr == nil {
 			result.TxFrom = from.Hex()
+		} else if !tronChainIDs[o.chainID] {
+			return nil, fmt.Errorf("recover the sender of %s on chain %d: %w", txHash.Hex(), o.chainID, sErr)
 		} else {
 			log.Printf("⚠️ [EVM-OBSERVER] types.Sender failed (non-standard chain?): %v", sErr)
 		}
+	} else if txErr != nil && !tronChainIDs[o.chainID] {
+		return nil, fmt.Errorf("read transaction %s on chain %d: %w", txHash.Hex(), o.chainID, txErr)
 	} else if txErr != nil {
 		log.Printf("⚠️ [EVM-OBSERVER] TransactionByHash failed: %v — trying raw RPC fallback for tx_from", txErr)
 		// Fallback: raw JSON-RPC call to extract "from" field (works on TRON jsonrpc)
@@ -316,6 +326,12 @@ func (o *EVMObserver) ObserveTransaction(ctx context.Context, txHash common.Hash
 
 	return result, nil
 }
+
+// tronChainIDs are TRON's EVM-compatible JSON-RPC networks (mainnet, Shasta, Nile). Their nodes return
+// headers go-ethereum cannot decode, and the receipt-only observation and raw-RPC reads in
+// ObserveTransaction exist for them alone. TRON is outside the supported scope and keeps that path for
+// its restoration (runbook RB8); every other chain gets an error where it would have got a stand-in.
+var tronChainIDs = map[int64]bool{728126428: true, 2494104990: true, 3448148188: true}
 
 // waitForReceipt waits for a transaction receipt
 func (o *EVMObserver) waitForReceipt(ctx context.Context, txHash common.Hash, deadline time.Time) (*types.Receipt, error) {
