@@ -547,13 +547,21 @@ func TestPersisterAdvancesPastHeightsTheBlockStoreNoLongerHas(t *testing.T) {
 	}
 }
 
-func TestPersisterWithoutASourceRecordsGapsInsteadOfStalling(t *testing.T) {
+// Without a block source the missing heights are not written off as gaps: they are still in the block
+// store, and once the source is wired they are rebuilt. The persister used to advance past them (RB3
+// sweep), losing rows that could have been produced.
+func TestPersisterWithoutASourceWaitsAndRebuildsInsteadOfRecordingGaps(t *testing.T) {
 	store := &fakeRecordStore{watermark: 3, found: true}
 	p := startTestPersister(t, store, 0)
 	p.enqueue(committedBlock{height: 6}, 7)
-	waitUntil(t, "heights 4-6", time.Second, func() bool { return len(store.heights()) == 3 })
-	if p.gaps.Load() != 2 {
-		t.Fatalf("gaps = %d, want 2", p.gaps.Load())
+	time.Sleep(200 * time.Millisecond)
+	if n := len(store.heights()); n != 0 {
+		t.Fatalf("%d height(s) written with no source to rebuild the missing ones from", n)
+	}
+	p.setSource(&fakeBlockSource{})
+	waitUntil(t, "heights 4-6", 5*time.Second, func() bool { return len(store.heights()) == 3 })
+	if p.gaps.Load() != 0 {
+		t.Fatalf("gaps = %d, want 0: every height could be rebuilt", p.gaps.Load())
 	}
 }
 

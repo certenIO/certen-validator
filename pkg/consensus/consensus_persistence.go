@@ -338,10 +338,14 @@ func (p *consensusPersister) rebuild(ctx context.Context, height int64, validato
 	for attempt := 1; ; attempt++ {
 		src := p.getSource()
 		if src == nil {
-			n := p.gaps.Add(1)
-			metrics.RecordConsensusPersistGap()
-			p.logger.Printf("⚠️ [PERSIST] height %d was not handed off and no block source is configured; skipping (gaps=%d)", height, n)
-			return p.advanceOnly(ctx, height)
+			// A wiring defect, not a lost height: wait for the source rather than move the watermark past
+			// rows that can still be rebuilt. It used to record a gap and advance (RB3 sweep).
+			metrics.RecordConsensusPersistError("no_block_source")
+			p.logger.Printf("❌ [PERSIST] height %d was not handed off and no block source is configured (attempt %d); waiting", height, attempt)
+			if !p.sleep(ctx, attempt) {
+				return false
+			}
+			continue
 		}
 		cctx, cancel := p.call(ctx)
 		blk, err := src.CommittedValidatorBlocks(cctx, height)

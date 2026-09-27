@@ -1475,7 +1475,9 @@ func (id *IntentDiscovery) processIntent(intent *CertenIntent, blockHeight uint6
 		id.logger.Printf("✅ Canonical BFT consensus execution completed for intent: %s (target chain: %s)",
 			intent.IntentID, outcome.Normalize())
 	} else {
-		id.logger.Printf("⚠️ No BFT consensus configured - skipping ValidatorBlock creation for %s", intent.IntentID)
+		// An intent is never counted as processed without consensus. It used to be skipped here and
+		// returned as handled, with an unset outcome (RB3 sweep).
+		return consensus.TargetChainFailed, fmt.Errorf("intent %s: no BFT consensus is configured; it cannot be processed", intent.IntentID)
 	}
 
 	id.mu.Lock()
@@ -1595,6 +1597,8 @@ func (id *IntentDiscovery) processMultiLegIntent(intent *CertenIntent, blockHeig
 		}
 		id.logger.Printf("✅ BFT consensus completed for multi-leg intent: %s (target chain: %s)",
 			intent.IntentID, outcome.Normalize())
+	} else {
+		return consensus.TargetChainFailed, fmt.Errorf("multi-leg intent %s: no BFT consensus is configured; it cannot be processed", intent.IntentID)
 	}
 
 	id.mu.Lock()
