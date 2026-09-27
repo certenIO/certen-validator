@@ -1556,7 +1556,7 @@ func startValidator(
 			Attest: func(ctx context.Context, att interface{}, txHash string, chainID int64, ok bool) {
 				// Replay the captured Phase 7-9 snapshot so each settled member
 				// closes its own proof cycle back to Accumulate.
-				validator.RunBatchMemberAttestation(ctx, att, txHash, chainID, ok)
+				validator.RunBatchMemberAttestation(ctx, att, txHash, chainID, ok, string(execution.LaneOnCadence))
 			},
 			// Members that leave the batch path for good are recorded as FAILED
 			// with the cause they were dropped for; there is no other path to
@@ -1565,7 +1565,7 @@ func startValidator(
 				if m == nil {
 					return
 				}
-				validator.RunBatchMemberRefusal(ctx, m.Attestation, m.ChainID, cause)
+				validator.RunBatchMemberRefusal(ctx, m.Attestation, m.ChainID, cause, string(execution.LaneOnCadence))
 			},
 		},
 		log.Printf,
@@ -1585,13 +1585,13 @@ func startValidator(
 		ValidatorID: cfg.ValidatorID,
 		Roster:      consensus.BatchLeaderRoster,
 		Attest: func(ctx context.Context, att interface{}, txHash string, chainID int64, ok bool) {
-			validator.RunBatchMemberAttestation(ctx, att, txHash, chainID, ok)
+			validator.RunBatchMemberAttestation(ctx, att, txHash, chainID, ok, string(execution.LaneOnDemand))
 		},
 		OnDropped: func(ctx context.Context, m *execution.PendingBatchIntent, cause string) {
 			if m == nil {
 				return
 			}
-			validator.RunBatchMemberRefusal(ctx, m.Attestation, m.ChainID, cause)
+			validator.RunBatchMemberRefusal(ctx, m.Attestation, m.ChainID, cause, string(execution.LaneOnDemand))
 		},
 		// The Accumulate block time of a member queued without it: the failover clock.
 		CommitTime: liteClientAdapter.MinorBlockTime,

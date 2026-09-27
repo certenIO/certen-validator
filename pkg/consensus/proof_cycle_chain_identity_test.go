@@ -74,7 +74,7 @@ func TestProofCycle_ObservesTheChainTheMemberSettledOn(t *testing.T) {
 	att := &PendingAttestation{IntentID: "i1", Replayed: true,
 		CertenIntent: memberIntent(t, leg("ethereum-sepolia", 84532, "0x"))}
 
-	bv.RunBatchMemberAttestation(context.Background(), att, settledTx, 84532, true)
+	bv.RunBatchMemberAttestation(context.Background(), att, settledTx, 84532, true, "on_cadence")
 
 	if orch.method != "StartProofCycleWithAccumulateRef" {
 		t.Fatalf("member cycle routed to %s", orch.method)
@@ -91,7 +91,7 @@ func TestProofCycle_RecordedFailureNamesItsChain(t *testing.T) {
 	att := &PendingAttestation{IntentID: "i1", Replayed: true,
 		CertenIntent: memberIntent(t, leg("base-sepolia", 84532, "0x"))}
 
-	bv.RunBatchMemberAttestation(context.Background(), att, "", 84532, false)
+	bv.RunBatchMemberAttestation(context.Background(), att, "", 84532, false, "on_cadence")
 
 	if orch.commitment == nil || orch.commitment["outcome"] != "failed" {
 		t.Fatalf("failure not recorded: %v", orch.commitment)
@@ -110,7 +110,7 @@ func TestProofCycle_MemberCallLegsCarryTheirSignedChain(t *testing.T) {
 	att := &PendingAttestation{IntentID: "i1",
 		CertenIntent: memberIntent(t, leg("base sepolia", 84532, "0x33d425c411"), leg("base sepolia", 421614, "0x33d425c422"))}
 
-	bv.RunBatchMemberAttestation(context.Background(), att, settledTx, 84532, true)
+	bv.RunBatchMemberAttestation(context.Background(), att, settledTx, 84532, true, "on_cadence")
 
 	if orch.method != "StartProofCycleWithAccumulateRef" {
 		t.Fatalf("a chain member was routed to %s", orch.method)
@@ -144,7 +144,7 @@ func TestProofCycle_CommitmentCarriesTheMemberSet(t *testing.T) {
 	att := &PendingAttestation{IntentID: "i1", CertenIntent: memberIntent(t,
 		leg("base", 84532, "0x"), leg("arb", 421614, "0x"), leg("base", 84532, "0x"))}
 
-	bv.RunBatchMemberAttestation(context.Background(), att, settledTx, 84532, true)
+	bv.RunBatchMemberAttestation(context.Background(), att, settledTx, 84532, true, "on_cadence")
 	if chains, _ := orch.commitment["memberChains"].([]int64); len(chains) != 2 || chains[0] != 84532 || chains[1] != 421614 {
 		t.Fatalf("member set = %v, want [84532 421614]", orch.commitment["memberChains"])
 	}
@@ -153,7 +153,7 @@ func TestProofCycle_CommitmentCarriesTheMemberSet(t *testing.T) {
 	}
 
 	// A failure record carries it too.
-	bv.RunBatchMemberAttestation(context.Background(), att, "", 421614, false)
+	bv.RunBatchMemberAttestation(context.Background(), att, "", 421614, false, "on_cadence")
 	if legs := orch.commitment["memberLegs"]; legs != 1 || orch.commitment["outcome"] != "failed" {
 		t.Fatalf("failure record: %v", orch.commitment)
 	}

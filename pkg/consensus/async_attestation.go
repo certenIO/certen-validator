@@ -80,8 +80,12 @@ const (
 type PendingAttestation struct {
 	// Identity
 	IntentID string
-	UserID   string
-	BundleID [32]byte
+	// SettlementLane is the batch lane that settled - or dropped - this member: "on_cadence" (a
+	// height-bucketed period sharing one anchor) or "on_demand" (one member, one anchor). It is the
+	// member's proof class as stored, stamped by the lane itself (RB3-F74).
+	SettlementLane string
+	UserID         string
+	BundleID       [32]byte
 
 	// The canonical intent and its proof — needed to rebuild the commitment map and to
 	// resolve leg/chain structure at replay time.
@@ -314,6 +318,8 @@ func (bv *BFTValidator) RunProofCycle(
 		}
 		commitMap["targetChain"] = strconv.FormatInt(settledChainID, 10)
 		commitMap["chainID"] = settledChainID
+		// The lane that settled it: the proof class its artifact states (RB3-F74).
+		commitMap["proofClass"] = att.SettlementLane
 		// The intent's member set and this member's share of its legs: the intent's status is
 		// derived from every member's outcome over this set (RB3-F50).
 		if chains, legs, merr := memberSetOf(att.CertenIntent, settledChainID); merr == nil {
@@ -663,6 +669,7 @@ func (bv *BFTValidator) recordFailedProofCycle(
 		"network":                  failed.Network,
 		"targetChain":              strconv.FormatInt(chainID, 10),
 		"chainID":                  chainID,
+		"proofClass":               att.SettlementLane,
 	}
 	// The member's operation: the executor finds its own copy of the member by it, and every peer
 	// verifies the non-settlement from its own copy (RB3-F49).

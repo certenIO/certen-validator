@@ -60,12 +60,16 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 		// quorum-attested non-settlement (RB3-F49) instead of being refused for having none.
 		if commitMap, _ := commitment.(map[string]interface{}); commitMap[commitmentNonSettlementOperationID] != nil {
 			targetChain, _ := commitMap["targetChain"].(string)
+			proofClass, _ := commitMap["proofClass"].(string)
+			if proofClass != string(LaneOnCadence) && proofClass != string(LaneOnDemand) {
+				return fmt.Errorf("intent %s: the failure record names no settlement lane (proofClass %q) - refusing rather than labelling it", intentID, proofClass)
+			}
 			var userIDPtr *string
 			if userID != "" {
 				userIDPtr = &userID
 			}
 			return a.unified.QueueNonSettlement(&UnifiedProofCycleRequest{
-				IntentID: intentID, BundleID: bundleID, TargetChain: targetChain, UserID: userIDPtr,
+				IntentID: intentID, BundleID: bundleID, TargetChain: targetChain, UserID: userIDPtr, ProofClass: proofClass,
 				AccumulateAccountURL: accumulateAccountURL, AccumulateTxHash: accumulateTxHash, AccumulateBVN: bvn,
 				CommitmentData: commitMap,
 			})
@@ -175,11 +179,18 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 
 		fmt.Printf("[UnifiedAdapter] Target chain for Phase 7-9: %s\n", targetChain)
 
+		// The lane that settled the member is its proof class (RB3-F74). It used to be "on_demand" for
+		// every member, cadence-batched or not.
+		proofClass, _ := commitMap["proofClass"].(string)
+		if proofClass != string(LaneOnCadence) && proofClass != string(LaneOnDemand) {
+			return fmt.Errorf("intent %s: the proof cycle names no settlement lane (proofClass %q) - refusing rather than labelling it", intentID, proofClass)
+		}
+
 		req := &UnifiedProofCycleRequest{
 			IntentID:             intentID,
 			BundleID:             bundleID,
 			TxHashes:             txHashStrs,
-			ProofClass:           "on_demand",
+			ProofClass:           proofClass,
 			TargetChain:          targetChain,
 			UserID:               userIDPtr,
 			AccumulateAccountURL: accumulateAccountURL,

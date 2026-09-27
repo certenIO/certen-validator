@@ -60,6 +60,7 @@ func (o *UnifiedOrchestrator) QueueNonSettlement(req *UnifiedProofCycleRequest) 
 		AccountURL: req.AccumulateAccountURL, AccumTxHash: req.AccumulateTxHash, BVN: req.AccumulateBVN,
 		MemberChains: commitmentInt64s(req.CommitmentData["memberChains"]),
 		MemberLegs:   int(commitmentInt64(req.CommitmentData["memberLegs"])),
+		ProofClass:   req.ProofClass,
 		QueuedAt:     time.Now().UTC(),
 	}
 	if req.UserID != nil {
@@ -162,7 +163,7 @@ func nonSettlementCycle(rec *NonSettlementRecord, claim *NonSettlementClaim) *ac
 	}
 	cycleID := fmt.Sprintf("nonsettlement-%s-%s-%d", rec.Facts.IntentID, chainID, block)
 	req := &UnifiedProofCycleRequest{
-		IntentID: rec.Facts.IntentID, CycleID: cycleID, TargetChain: chainID, ProofClass: "on_cadence",
+		IntentID: rec.Facts.IntentID, CycleID: cycleID, TargetChain: chainID, ProofClass: rec.ProofClass,
 		AccumulateAccountURL: rec.AccountURL, AccumulateTxHash: rec.AccumTxHash, AccumulateBVN: rec.BVN,
 		CommitmentData: map[string]interface{}{
 			"memberChains": rec.MemberChains, "memberLegs": rec.MemberLegs,

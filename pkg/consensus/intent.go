@@ -469,18 +469,13 @@ func (ci *CertenIntent) ExtractAndSetProofClass() error {
 		return fmt.Errorf("parse intent data for proof class: %w", err)
 	}
 
-	// Extract proof class from canonical IntentData
-	if intentData.ProofClass != "" {
-		ci.ProofClass = intentData.ProofClass
-	} else {
-		// Fallback: infer from priority or other fields if not explicitly set
-		// High priority typically indicates on-demand
-		if intentData.Priority == "high" || intentData.Priority == "urgent" {
-			ci.ProofClass = "on_demand"
-		} else {
-			ci.ProofClass = "on_cadence"
-		}
+	// The proof class is the user's declaration in the signed intent. An intent that declares none is
+	// refused by name: inferring it from "priority" chose the member's lane - and price - for it
+	// (RB3-F74).
+	if intentData.ProofClass == "" {
+		return fmt.Errorf("the signed intent declares no proof_class (on_demand or on_cadence)")
 	}
+	ci.ProofClass = intentData.ProofClass
 
 	// Validate proof class
 	if ci.ProofClass != "on_demand" && ci.ProofClass != "on_cadence" {
