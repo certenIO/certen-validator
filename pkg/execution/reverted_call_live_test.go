@@ -35,7 +35,12 @@ func TestVerifyRevertedCall_LiveBaseSepolia(t *testing.T) {
 		t.Fatal(err)
 	}
 	blobs := liveIntentBlobs(t)
-	call, _ := parseCommittedCallLegs(blobs[1])[0].committedCall()
+	t.Setenv("CERTEN_ALLOW_CONTRACT_CALLS", "true")
+	legs, _, _, err := memberLegsFromSignedIntent(blobs, 84532)
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := legs[0].Call
 	opBytes, _, _ := proof.ComputeCanonical4BlobHash(blobs[0], blobs[1], blobs[2], blobs[3])
 	var opID [32]byte
 	copy(opID[:], opBytes)
@@ -70,7 +75,12 @@ func TestVerifyRevertedCall_LiveBaseSepolia_WrongAccountRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	blobs := liveIntentBlobs(t)
-	call, _ := parseCommittedCallLegs(blobs[1])[0].committedCall()
+	t.Setenv("CERTEN_ALLOW_CONTRACT_CALLS", "true")
+	legs, _, _, err := memberLegsFromSignedIntent(blobs, 84532)
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := legs[0].Call
 	opBytes, _, _ := proof.ComputeCanonical4BlobHash(blobs[0], blobs[1], blobs[2], blobs[3])
 	var opID [32]byte
 	copy(opID[:], opBytes)

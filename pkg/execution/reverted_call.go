@@ -3,7 +3,6 @@ package execution
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/big"
@@ -480,31 +479,6 @@ func accountLeafAndAnchor(ctx context.Context, chain bind.ContractCaller, accoun
 	return leaf, anchorAddr, nil
 }
 
-// ParseCommittedCall builds a CommittedCall from the intent's hex/decimal string forms.
-func ParseCommittedCall(target, value, callData string) (CommittedCall, error) {
-	var c CommittedCall
-	t := strings.TrimSpace(target)
-	if !common.IsHexAddress(t) {
-		return c, fmt.Errorf("target %q is not an address", target)
-	}
-	c.Target = common.HexToAddress(t)
-	if v := strings.TrimSpace(value); v != "" {
-		n, ok := new(big.Int).SetString(strings.TrimPrefix(v, "0x"), 10)
-		if !ok {
-			if n, ok = new(big.Int).SetString(strings.TrimPrefix(v, "0x"), 16); !ok {
-				return c, fmt.Errorf("value %q does not parse", value)
-			}
-		}
-		c.Value = n
-	}
-	d, err := hex.DecodeString(strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(callData), "0x"), "0X"))
-	if err != nil {
-		return c, fmt.Errorf("callData does not decode: %w", err)
-	}
-	c.Data = d
-	return c, nil
-}
-
 // VerifyRevertedCall proves that txHash is the committed execution, that it was an attempt the
 // member's account authorised, and that it reverted.
 //
@@ -520,7 +494,7 @@ func (o *ExternalChainObserver) VerifyRevertedCall(
 	if account == (common.Address{}) {
 		return nil, fmt.Errorf("no member account to bind the reverted call to")
 	}
-	result, err := o.ObserveTransaction(ctx, txHash, nil)
+	result, err := o.ObserveTransaction(ctx, txHash)
 	if err != nil {
 		return nil, fmt.Errorf("observe reverted call tx %s: %w", txHash.Hex(), err)
 	}

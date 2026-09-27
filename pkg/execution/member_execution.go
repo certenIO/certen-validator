@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"strconv"
-	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
 
@@ -48,9 +47,10 @@ func committedCalls(legs []CommittedLeg) []CommittedCall {
 }
 
 // memberLegsFromSignedIntent is the member the user-signed intent (its four blobs) contributes on one
-// chain: its legs with their committed effects, its source account and its operationID. A contract
-// call that commits no event is refused, as at admission: its success would be indistinguishable from
-// a no-op that did not revert.
+// chain: its legs with their committed effects, its source account and its operationID. The legs pass
+// admission's own rules on the way (consensus.MemberLegsForChain): the execution commitment, a contract
+// call only where this deployment executes them, and at least one well-formed committed event for it -
+// its success would otherwise be indistinguishable from a no-op that did not revert.
 func memberLegsFromSignedIntent(blobs [][]byte, chainID int64) ([]CommittedLeg, common.Address, [32]byte, error) {
 	var opID [32]byte
 	if len(blobs) < 4 {
@@ -79,9 +79,6 @@ func memberLegsFromSignedIntent(blobs [][]byte, chainID int64) ([]CommittedLeg, 
 	for i, l := range legs {
 		cl := CommittedLeg{Call: CommittedCall{Target: common.Address(l.Target), Value: l.Value, Data: l.Data}}
 		for _, e := range payloads[i].ExpectedEvents {
-			if !common.IsHexAddress(e.Contract) || strings.TrimSpace(e.Topic0) == "" {
-				return nil, common.Address{}, opID, fmt.Errorf("leg %d commits a malformed event", i)
-			}
 			ev := ExpectedEvent{Contract: common.HexToAddress(e.Contract), Topic0: common.HexToHash(e.Topic0)}
 			if e.DataHash != "" {
 				ev.DataHash = [32]byte(common.HexToHash(e.DataHash))
@@ -89,19 +86,8 @@ func memberLegsFromSignedIntent(blobs [][]byte, chainID int64) ([]CommittedLeg, 
 			cl.Events = append(cl.Events, ev)
 		}
 		for _, s := range payloads[i].ExpectedState {
-			if !common.IsHexAddress(s.Account) {
-				return nil, common.Address{}, opID, fmt.Errorf("leg %d commits a malformed state slot", i)
-			}
 			cl.State = append(cl.State, ExpectedStateSlot{Account: common.HexToAddress(s.Account),
 				Slot: common.HexToHash(s.Slot), Value: common.HexToHash(s.Value)})
-		}
-		if len(l.Data) > 0 {
-			if !contractCallsAllowed() {
-				return nil, common.Address{}, opID, fmt.Errorf("leg %d is a contract call and this deployment executes none", i)
-			}
-			if len(cl.Events) == 0 {
-				return nil, common.Address{}, opID, fmt.Errorf("leg %d is a contract call that commits no event", i)
-			}
 		}
 		out = append(out, cl)
 	}
@@ -186,7 +172,7 @@ func (o *ExternalChainObserver) observeMemberExecution(
 		return nil, leaf, fmt.Errorf("settlement %s carries operationID 0x%x, not the intent's 0x%x",
 			txHash.Hex(), exec.OperationID[:8], opID[:8])
 	}
-	result, err := o.ObserveTransaction(ctx, txHash, nil)
+	result, err := o.ObserveTransaction(ctx, txHash)
 	if err != nil {
 		return nil, leaf, fmt.Errorf("observe settlement %s: %w", txHash.Hex(), err)
 	}
@@ -211,15 +197,20 @@ func (o *ExternalChainObserver) observeMemberExecution(
 	return nil, leaf, fmt.Errorf("settlement %s does not consume the member's leaf 0x%x in its inclusion-proven logs", txHash.Hex(), leaf[:8])
 }
 
-// committedSlotsHold reports, per committed slot, whether it is proven, against the block's stateRoot, to hold
-// the committed value. An error when no verifying proof could be read: neither presence nor absence is
-// then established.
+// committedSlotsHold reports, per committed slot, whether it is proven, against the block's stateRoot,
+// to hold the committed value. An error when no verifying proof could be read: neither presence nor
+// absence is then established.
 func (o *ExternalChainObserver) committedSlotsHold(ctx context.Context, result *ExternalChainResult, state []ExpectedStateSlot) ([]bool, error) {
-	holds := make([]bool, len(state))
 	if len(state) == 0 {
-		return holds, nil
+		return nil, nil
 	}
-	proofs := o.fetchStateProofs(ctx, result.BlockNumber, state)
+	return slotsHoldAt(o.fetchStateProofs(ctx, result.BlockNumber, state), result.StateRoot, state)
+}
+
+// slotsHoldAt is committedSlotsHold over proofs already read: each committed slot needs a proof that
+// verifies against stateRoot, and holds when that proven value is the committed one.
+func slotsHoldAt(proofs []*StateProof, stateRoot common.Hash, state []ExpectedStateSlot) ([]bool, error) {
+	holds := make([]bool, len(state))
 	for i, want := range state {
 		var p *StateProof
 		for _, sp := range proofs {
@@ -228,7 +219,7 @@ func (o *ExternalChainObserver) committedSlotsHold(ctx context.Context, result *
 				break
 			}
 		}
-		if p == nil || !p.Verify(result.StateRoot) {
+		if p == nil || !p.Verify(stateRoot) {
 			return nil, readErr(fmt.Errorf("committed slot %d on %s has no verifying state proof", i, want.Account.Hex()))
 		}
 		holds[i] = p.Value == want.Value

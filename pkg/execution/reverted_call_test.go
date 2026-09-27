@@ -41,14 +41,16 @@ func TestRevertedSettlementBindsToTheSignedIntent(t *testing.T) {
 		t.Fatalf("operationID from the signed blobs %s", got)
 	}
 
-	legs := parseCommittedCallLegs(blobs[1])
-	if len(legs) != 1 {
-		t.Fatalf("committed call legs %d, want 1", len(legs))
+	t.Setenv("CERTEN_ALLOW_CONTRACT_CALLS", "true")
+	legs, account, memberOp, err := memberLegsFromSignedIntent(blobs, 84532)
+	if err != nil {
+		t.Fatalf("the signed intent's Base member: %v", err)
 	}
-	call, ok := legs[0].committedCall()
-	if !ok {
-		t.Fatal("the committed FDBUSD call cannot be bound")
+	if len(legs) != 1 || account != common.HexToAddress("0xfa96ed9b2bc7139fa671e1faf53f901adeea5b32") ||
+		hex.EncodeToString(memberOp[:]) != hex.EncodeToString(opBytes) {
+		t.Fatalf("member legs %d account %s operationID %x", len(legs), account.Hex(), memberOp)
 	}
+	call := legs[0].Call
 
 	input, _ := hex.DecodeString(liveRevertedSettlementInput)
 	exec, err := decodeAccountExecution(input)
@@ -78,37 +80,6 @@ func TestRevertedSettlementBindsToTheSignedIntent(t *testing.T) {
 	}
 	if err := matchCommittedCalls(exec.Calls, nil); err == nil {
 		t.Fatal("bound a transaction to no commitment at all")
-	}
-}
-
-// The executor's commitment carries the committed calldata, so its gate can bind a revert too; a
-// commitment without it cannot be bound, and the gate then refuses rather than guessing.
-func TestRBCallLegCarriesTheCommittedCall(t *testing.T) {
-	legs := parseRBContractCallLegs([]interface{}{map[string]interface{}{
-		"chainKey": "base-sepolia", "target": "0x2d9e724dE974A81E97ee553B3482cAFA6d5Fe46b",
-		"value": "0", "callData": "0xe2233eb8", "execTxHash": "0x01",
-	}})
-	if len(legs) != 1 {
-		t.Fatalf("legs %d", len(legs))
-	}
-	c, ok := legs[0].committedCall()
-	if !ok || c.Target != common.HexToAddress("0x2d9e724dE974A81E97ee553B3482cAFA6d5Fe46b") ||
-		hex.EncodeToString(c.Data) != "e2233eb8" || c.Value.Sign() != 0 {
-		t.Fatalf("committed call %+v, %v", c, ok)
-	}
-	old := parseRBContractCallLegs([]interface{}{map[string]interface{}{"chainKey": "base-sepolia", "target": "0x2d9e724dE974A81E97ee553B3482cAFA6d5Fe46b"}})
-	if _, ok := old[0].committedCall(); ok {
-		t.Fatal("a leg without calldata was treated as bindable")
-	}
-}
-
-func TestCycleOperationID(t *testing.T) {
-	if cycleOperationID(map[string]interface{}{}) != nil {
-		t.Fatal("absent operationID must be nil")
-	}
-	op := cycleOperationID(map[string]interface{}{"operationID": "0x8f57121501d6a592cb54f3eb6e73dd856b39909348fcbb8c1df4f9b8acf07941"})
-	if op == nil || op[0] != 0x8f {
-		t.Fatalf("got %v", op)
 	}
 }
 

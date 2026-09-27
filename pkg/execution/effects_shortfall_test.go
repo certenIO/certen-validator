@@ -86,12 +86,6 @@ func TestEventPresenceFollowsTheSuccessGatesRule(t *testing.T) {
 	if !eventPresent(logs, ExpectedEvent{Contract: weth, Topic0: approval, DataHash: [32]byte(crypto.Keccak256Hash([]byte{1}))}) {
 		t.Fatal("a matching data hash is present")
 	}
-	// The success gate agrees on every case.
-	gate := &ExecutionCommitment{}
-	res := &ExternalChainResult{Logs: logs}
-	if !gate.verifyExpectedEventsStrict(res, []ExpectedEvent{{Contract: weth, Topic0: approval}}) {
-		t.Fatal("success gate disagrees on a present event")
-	}
 }
 
 func TestMemberOutcomeStatesWhetherEffectsWereProven(t *testing.T) {

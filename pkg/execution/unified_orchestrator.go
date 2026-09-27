@@ -997,33 +997,6 @@ func (o *UnifiedOrchestrator) verifyContractCallGate(ctx context.Context, cycle 
 	return nil, fmt.Errorf("no observed transaction is the member's settlement (chain=%s): %w", chainStrategy.ChainID(), lastErr)
 }
 
-// rbCallLeg is a per-leg contract-call verification descriptor carried in CommitmentData.
-type rbCallLeg struct {
-	chainKey   string
-	chainID    int64 // the leg's signed chainId - the chain it executes on
-	target     string
-	value      string
-	callData   string
-	account    string // the member account the call is sent from (the leg's source)
-	execTxHash string
-	events     []ExpectedEvent
-	state      []ExpectedStateSlot
-}
-
-// committedCall is the call this leg committed to, for binding a REVERTED execution to it. The
-// boolean is false when the leg does not carry enough to bind (a commitment written before
-// callData was carried), in which case a revert cannot be attested for it.
-func (l rbCallLeg) committedCall() (CommittedCall, bool) {
-	if l.target == "" || l.callData == "" {
-		return CommittedCall{}, false
-	}
-	c, err := ParseCommittedCall(l.target, l.value, l.callData)
-	if err != nil {
-		return CommittedCall{}, false
-	}
-	return c, true
-}
-
 // observationReverted reports whether an observed transaction is a finalized REVERT.
 //
 // Not TargetChainOutcomeFromReceiptStatus alone: the EVM strategy reports a reverted receipt as
@@ -1032,32 +1005,6 @@ func (l rbCallLeg) committedCall() (CommittedCall, bool) {
 // The same rule HandlePeerAttestationRequest applies.
 func observationReverted(obs *chain.ObservationResult) bool {
 	return obs != nil && obs.IsFinalized && obs.Status != 1
-}
-
-// cycleOperationID is the intent's operationID carried in the commitment, when it is.
-func cycleOperationID(cm map[string]interface{}) *[32]byte {
-	s, _ := cm["operationID"].(string)
-	if s == "" {
-		return nil
-	}
-	b, err := hex.DecodeString(strings.TrimPrefix(s, "0x"))
-	if err != nil || len(b) != 32 {
-		return nil
-	}
-	var out [32]byte
-	copy(out[:], b)
-	return &out
-}
-
-func normalizeRBChainKey(s string) string {
-	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(s), " ", "-"))
-}
-
-func rbStateNote(state []ExpectedStateSlot) string {
-	if len(state) > 0 {
-		return " + RB-5 state"
-	}
-	return ""
 }
 
 // commitmentInt64 reads an integer the commitment map carries: an int64 in-process, a float64 after
@@ -1078,106 +1025,6 @@ func commitmentInt64(v interface{}) int64 {
 		}
 	}
 	return 0
-}
-
-// parseRBContractCallLegs reconstructs the per-leg gate descriptors from CommitmentData,
-// tolerating both []map[string]interface{} (same-process) and []interface{} (JSON roundtrip).
-func parseRBContractCallLegs(v interface{}) []rbCallLeg {
-	var maps []map[string]interface{}
-	switch t := v.(type) {
-	case []map[string]interface{}:
-		maps = t
-	case []interface{}:
-		for _, it := range t {
-			if m, ok := it.(map[string]interface{}); ok {
-				maps = append(maps, m)
-			}
-		}
-	default:
-		return nil
-	}
-	out := make([]rbCallLeg, 0, len(maps))
-	for _, m := range maps {
-		ck, _ := m["chainKey"].(string)
-		tgt, _ := m["target"].(string)
-		val, _ := m["value"].(string)
-		cd, _ := m["callData"].(string)
-		acct, _ := m["account"].(string)
-		etx, _ := m["execTxHash"].(string)
-		out = append(out, rbCallLeg{
-			chainKey:   ck,
-			chainID:    commitmentInt64(m["chainId"]),
-			target:     tgt,
-			value:      val,
-			callData:   cd,
-			account:    acct,
-			execTxHash: etx,
-			events:     parseRBExpectedEvents(m["expectedEvents"]),
-			state:      parseRBExpectedState(m["expectedState"]),
-		})
-	}
-	return out
-}
-
-// parseRBExpectedEvents reconstructs []ExpectedEvent from the commitment-map form,
-// tolerating both []map[string]interface{} (same-process) and []interface{} (JSON roundtrip).
-func parseRBExpectedEvents(v interface{}) []ExpectedEvent {
-	var maps []map[string]interface{}
-	switch t := v.(type) {
-	case []map[string]interface{}:
-		maps = t
-	case []interface{}:
-		for _, item := range t {
-			if m, ok := item.(map[string]interface{}); ok {
-				maps = append(maps, m)
-			}
-		}
-	default:
-		return nil
-	}
-	out := make([]ExpectedEvent, 0, len(maps))
-	for _, m := range maps {
-		contract, _ := m["contract"].(string)
-		topic0, _ := m["topic0"].(string)
-		if topic0 == "" {
-			continue
-		}
-		ev := ExpectedEvent{Contract: common.HexToAddress(contract), Topic0: common.HexToHash(topic0)}
-		if dh, _ := m["dataHash"].(string); dh != "" {
-			ev.DataHash = [32]byte(common.HexToHash(dh))
-		}
-		out = append(out, ev)
-	}
-	return out
-}
-
-// parseRBExpectedState reconstructs []ExpectedStateSlot from the commitment-map form.
-func parseRBExpectedState(v interface{}) []ExpectedStateSlot {
-	var maps []map[string]interface{}
-	switch t := v.(type) {
-	case []map[string]interface{}:
-		maps = t
-	case []interface{}:
-		for _, item := range t {
-			if m, ok := item.(map[string]interface{}); ok {
-				maps = append(maps, m)
-			}
-		}
-	default:
-		return nil
-	}
-	out := make([]ExpectedStateSlot, 0, len(maps))
-	for _, m := range maps {
-		account, _ := m["account"].(string)
-		slot, _ := m["slot"].(string)
-		value, _ := m["value"].(string)
-		out = append(out, ExpectedStateSlot{
-			Account: common.HexToAddress(account),
-			Slot:    common.HexToHash(slot),
-			Value:   common.HexToHash(value),
-		})
-	}
-	return out
 }
 
 // peerVerifyCommittedEffect (RB-SEC-1, bound to the member - RB3-F77) is a peer's own proof, before it
@@ -1299,69 +1146,6 @@ func intentIDFromBlob(b []byte) string {
 	}
 	_ = json.Unmarshal(b, &m)
 	return m.IntentID
-}
-
-// parseCommittedCallLegs parses the signed crossChainData blob into contract-call legs
-// (calldata-derived). Local struct — pkg/execution cannot import pkg/consensus (cycle).
-func parseCommittedCallLegs(crossChainData []byte) []rbCallLeg {
-	var ccd struct {
-		Legs []struct {
-			Chain            string `json:"chain"`
-			ChainID          int64  `json:"chainId"`
-			From             string `json:"from"`
-			ExecutionPayload *struct {
-				Target         string `json:"target"`
-				Value          string `json:"value"`
-				CallData       string `json:"callData"`
-				ExpectedEvents []struct {
-					Contract string `json:"contract"`
-					Topic0   string `json:"topic0"`
-					DataHash string `json:"dataHash"`
-				} `json:"expectedEvents"`
-				ExpectedState []struct {
-					Account string `json:"account"`
-					Slot    string `json:"slot"`
-					Value   string `json:"value"`
-				} `json:"expectedState"`
-			} `json:"executionPayload"`
-		} `json:"legs"`
-	}
-	if json.Unmarshal(crossChainData, &ccd) != nil {
-		return nil
-	}
-	var out []rbCallLeg
-	for _, leg := range ccd.Legs {
-		ep := leg.ExecutionPayload
-		if ep == nil {
-			continue
-		}
-		cd := strings.TrimSpace(ep.CallData)
-		if cd == "" || cd == "0x" || cd == "0X" {
-			continue
-		}
-		var events []ExpectedEvent
-		for _, e := range ep.ExpectedEvents {
-			if e.Topic0 == "" {
-				continue
-			}
-			ee := ExpectedEvent{Contract: common.HexToAddress(e.Contract), Topic0: common.HexToHash(e.Topic0)}
-			if e.DataHash != "" {
-				ee.DataHash = [32]byte(common.HexToHash(e.DataHash))
-			}
-			events = append(events, ee)
-		}
-		var state []ExpectedStateSlot
-		for _, s := range ep.ExpectedState {
-			state = append(state, ExpectedStateSlot{
-				Account: common.HexToAddress(s.Account),
-				Slot:    common.HexToHash(s.Slot),
-				Value:   common.HexToHash(s.Value),
-			})
-		}
-		out = append(out, rbCallLeg{chainKey: normalizeRBChainKey(leg.Chain), chainID: leg.ChainID, target: ep.Target,
-			value: ep.Value, callData: cd, account: leg.From, events: events, state: state})
-	}
-	return out
 }
 
 // persistChainExecution persists a chain execution result to the database

@@ -70,16 +70,6 @@ func TestRBSec1_IntentIDBinding(t *testing.T) {
 	}
 }
 
-func TestRBSec1_ParseCommittedCallLegs(t *testing.T) {
-	legs := parseCommittedCallLegs(ccdBlobCall("ethereum-sepolia", "0xE3b7678231642e4de600C601Ff422654D17203f3"))
-	if len(legs) != 1 || len(legs[0].events) != 1 || legs[0].chainKey != "ethereum-sepolia" {
-		t.Fatalf("expected 1 call leg with 1 event, got %+v", legs)
-	}
-	if n := parseCommittedCallLegs(ccdBlobNative("ethereum-sepolia")); len(n) != 0 {
-		t.Errorf("native leg must yield 0 call legs, got %d", len(n))
-	}
-}
-
 // Fail-closed: no query client + contract calls enabled ⇒ refuse.
 func TestRBSec1_NoQueryClientFailsClosed(t *testing.T) {
 	t.Setenv("CERTEN_ALLOW_CONTRACT_CALLS", "true")
