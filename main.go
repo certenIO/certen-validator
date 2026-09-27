@@ -1503,6 +1503,11 @@ func startValidator(
 	if cfgErr != nil {
 		return nil, nil, fmt.Errorf("batch path: anchor config: %w", cfgErr)
 	}
+	// Every settlement carries a BLS ZK proof made with the deployed verifier's keys: a node without them
+	// would pay for anchors whose verification can only revert (RB3-F36), so it does not start.
+	if _, zkErr := execution.GetBLSZKProver(); zkErr != nil {
+		return nil, nil, fmt.Errorf("batch path: %w", zkErr)
+	}
 	batchChains := strategy.SupportedChainIDs // sepolia, base-sepolia, arbitrum-sepolia
 	// The chain resolver is shared with Phase 8, which counts its post-execution quorum against the
 	// same on-chain validator registry the batch quorum does.

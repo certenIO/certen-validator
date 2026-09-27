@@ -77,32 +77,25 @@ func GetBLSZKProver() (*bls_zkp.BLSZKProver, error) {
 		vkPath := keysDir + "/verification_key.bin"
 		csPath := keysDir + "/constraint_system.bin"
 
-		// Check if all key files exist
-		if fileExists(pkPath) && fileExists(vkPath) && fileExists(csPath) {
-			log.Printf("🔑 [BLS-ZK] Loading pre-generated keys from %s", keysDir)
-			blsZKProverErr = blsZKProver.InitializeFromKeys(pkPath, vkPath, csPath)
-			if blsZKProverErr == nil {
-				log.Printf("✅ [BLS-ZK] ZK prover initialized with pre-generated keys")
-				log.Printf("   - Proving key: %s", pkPath)
-				log.Printf("   - Verification key: %s", vkPath)
-				log.Printf("   - Constraint system: %s", csPath)
+		// Only the keys whose verification key the on-chain verifier holds. Keys generated here would
+		// verify locally and revert on chain after the anchor was paid for (RB3-F36), so there is no
+		// such fallback: missing or unloadable keys are an error that names the files.
+		for _, p := range []string{pkPath, vkPath, csPath} {
+			if !fileExists(p) {
+				blsZKProverErr = fmt.Errorf("BLS ZK proving keys missing: %s (BLS_ZK_KEYS_DIR=%s needs proving_key.bin, "+
+					"verification_key.bin and constraint_system.bin - the keys whose verification key is deployed; "+
+					"never generated here)", p, keysDir)
+				log.Printf("❌ [BLS-ZK] %v", blsZKProverErr)
 				return
 			}
-			log.Printf("⚠️ [BLS-ZK] Failed to load pre-generated keys: %v", blsZKProverErr)
-		} else {
-			log.Printf("⚠️ [BLS-ZK] Pre-generated keys not found in %s", keysDir)
-			log.Printf("   - Expected: proving_key.bin, verification_key.bin, constraint_system.bin")
 		}
-
-		// Fallback: Generate fresh keys (WARNING: will not match on-chain VK!)
-		log.Printf("⚠️ [BLS-ZK] GENERATING FRESH KEYS - proofs will NOT verify on-chain!")
-		log.Printf("   To fix: run 'go run ./cmd/bls-zk-setup' and deploy the generated VK")
-		blsZKProverErr = blsZKProver.Initialize()
-		if blsZKProverErr != nil {
-			log.Printf("❌ [BLS-ZK] Failed to initialize ZK prover: %v", blsZKProverErr)
-		} else {
-			log.Printf("✅ [BLS-ZK] ZK prover initialized with FRESH keys (on-chain verification will fail)")
+		log.Printf("🔑 [BLS-ZK] Loading pre-generated keys from %s", keysDir)
+		if err := blsZKProver.InitializeFromKeys(pkPath, vkPath, csPath); err != nil {
+			blsZKProverErr = fmt.Errorf("BLS ZK proving keys in %s could not be loaded: %w", keysDir, err)
+			log.Printf("❌ [BLS-ZK] %v", blsZKProverErr)
+			return
 		}
+		log.Printf("✅ [BLS-ZK] ZK prover initialized with pre-generated keys from %s", keysDir)
 	})
 	return blsZKProver, blsZKProverErr
 }
