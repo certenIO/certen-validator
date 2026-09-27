@@ -27,6 +27,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 
 	"github.com/google/uuid"
 )
@@ -118,10 +119,12 @@ func (r *ProofArtifactRepository) GetLayer5Binding(ctx context.Context, intentID
 		       ab.merkle_root,
 		       COALESCE(ab.target_chain, ''),
 		       -- The ANCHOR-CREATE transaction, never the settlement transaction: this field answers
-		       -- "where was this root published", and the settlement tx published a different root.
-		       COALESCE(ab.anchor_create_tx, ab.anchor_tx_hash, ''),
-		       CASE WHEN ab.anchor_create_tx IS NULL
-		              OR LOWER(ab.anchor_create_tx) = LOWER(COALESCE(ab.anchor_tx_hash, ''))
+		       -- "where was this root published", and the settlement tx published a different root. Only
+		       -- anchor_create_tx: anchor_tx_hash held the settlement transaction on rows whose create
+		       -- transaction was not known (RB3-F134), so it is not a stand-in for it.
+		       COALESCE(ab.anchor_create_tx, ''),
+		       CASE WHEN ab.anchor_create_tx IS NOT NULL
+		              AND LOWER(ab.anchor_create_tx) = LOWER(COALESCE(ab.anchor_tx_hash, ab.anchor_create_tx))
 		            THEN COALESCE(ab.anchor_block_num, 0) ELSE 0 END
 		FROM batch_transactions bt
 		JOIN anchor_batches ab ON ab.id = bt.batch_id
@@ -208,8 +211,10 @@ func (r *ProofArtifactRepository) BindProofToBatch(
 func (r *ProofArtifactRepository) SetAnchorBatchTxHash(
 	ctx context.Context, batchID uuid.UUID, txHash string, blockNum int64,
 ) error {
-	if txHash == "" {
-		return fmt.Errorf("refusing to record an empty anchor tx hash for batch %s", batchID)
+	if !transactionHashPattern.MatchString(txHash) {
+		// The column is constrained to a transaction hash (migration 00010, RB3-F130); refused here with the
+		// reason rather than as a constraint violation.
+		return fmt.Errorf("refusing to record %q as the anchor tx of batch %s: not a transaction hash", txHash, batchID)
 	}
 	const q = `
 		UPDATE anchor_batches
@@ -232,6 +237,9 @@ func (r *ProofArtifactRepository) SetAnchorBatchTxHash(
 	}
 	return nil
 }
+
+// transactionHashPattern is a 32-byte transaction hash, as anchor_batches constrains anchor_tx_hash.
+var transactionHashPattern = regexp.MustCompile(`^0x[0-9a-fA-F]{64}$`)
 
 // ErrAnchorTxAlreadyRecorded reports that the batch already had an anchor
 // transaction, so nothing was overwritten.

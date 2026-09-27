@@ -267,7 +267,7 @@ func (a *BatchQuorumAttestor) prove(
 		chainID, agg.SignedVotingPower, agg.TotalVotingPower, len(agg.Signers), agg.Signers)
 
 	// ---- Submit --------------------------------------------------------------
-	verifyTx, verifyBlockNum, err := a.submitter.SubmitBatchQuorumProof(
+	verifyTx, verifyBlockNum, verifySender, err := a.submitter.SubmitBatchQuorumProof(
 		ctx, chainID, tree.BundleID, tree.Root, tree.BatchOperationID, agg, msgHash,
 	)
 	if err != nil {
@@ -327,8 +327,10 @@ func (a *BatchQuorumAttestor) prove(
 			SetRoot:               setRoot,
 			VerifyTx:              verifyTx,
 			VerifyBlock:           int64(verifyBlockNum),
+			VerifySender:          verifySender,
 			AnchorCreateTx:        tree.AnchorCreateTx,
 			AnchorCreateBlock:     int64(tree.AnchorCreateBlock),
+			AnchorCreateSender:    tree.AnchorCreateSender,
 			AggregateSignatureHex: agg.AggregateSignatureHex,
 			AggregatePublicKeyHex: agg.AggregatePublicKeyHex,
 			Signers:               agg.Signers,
@@ -341,6 +343,11 @@ func (a *BatchQuorumAttestor) prove(
 		})
 	}
 	return nil
+}
+
+// VerifyBlockTime is the time of a verify block on a chain; see BatchProofSubmitterImpl.VerifyBlockTime.
+func (a *BatchQuorumAttestor) VerifyBlockTime(ctx context.Context, chainID int64, block uint64) (time.Time, error) {
+	return a.submitter.VerifyBlockTime(ctx, chainID, block)
 }
 
 // QuorumNotReadyError means the quorum came up short but the shortfall is peers that have not

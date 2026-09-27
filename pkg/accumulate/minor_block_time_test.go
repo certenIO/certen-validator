@@ -50,6 +50,7 @@ func TestMinorBlockTime_ReadsThePartitionsOwnBlock(t *testing.T) {
 	l, scopes := blockServer(t, map[string]map[string]interface{}{
 		"acc://bvn-bvn1.acme/ledger|8000000": {
 			"recordType": "minorBlock", "index": 8000000, "time": "2026-07-27T23:43:08Z", "source": "acc://bvn-BVN1.acme",
+			"entries": map[string]interface{}{"recordType": "range", "start": 0, "total": 0},
 		},
 	})
 	// The intent carries its partition lowercased; Accumulate URLs are case-insensitive.
@@ -71,6 +72,7 @@ func TestMinorBlockTime_RefusesAnAnswerFromAnotherPartition(t *testing.T) {
 	l, _ := blockServer(t, map[string]map[string]interface{}{
 		"acc://bvn1.acme/ledger|8000000": {
 			"recordType": "minorBlock", "index": 8000000, "time": "2026-07-27T23:40:55Z", "source": "acc://bvn-BVN3.acme",
+			"entries": map[string]interface{}{"recordType": "range", "start": 0, "total": 0},
 		},
 	})
 	if _, err := l.MinorBlockTime(context.Background(), "acc://bvn1.acme/ledger", 8000000); err == nil {

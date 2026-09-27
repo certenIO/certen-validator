@@ -283,7 +283,13 @@ func (h *BundleHandlers) HandleDownloadBundle(w http.ResponseWriter, r *http.Req
 	if bundle == nil {
 		// Try to generate bundle on-the-fly if proof exists
 		proofDetails, err := h.repos.ProofArtifacts.GetProofWithDetails(ctx, proofID)
-		if err != nil || proofDetails == nil {
+		if err != nil {
+			// A failed lookup is not an absent proof (RB3-F120).
+			h.logger.Printf("Error getting proof %s: %v", proofID, err)
+			h.writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to retrieve proof")
+			return
+		}
+		if proofDetails == nil {
 			h.writeError(w, http.StatusNotFound, "BUNDLE_NOT_FOUND", fmt.Sprintf("No bundle found for proof: %s", proofID))
 			return
 		}
@@ -451,7 +457,13 @@ func (h *BundleHandlers) HandleVerifyBundle(w http.ResponseWriter, r *http.Reque
 
 	// Get bundle
 	bundle, err := h.repos.ProofArtifacts.GetBundleByProofID(ctx, proofID)
-	if err != nil || bundle == nil {
+	if err != nil {
+		// A failed lookup is not an absent bundle (RB3-F120).
+		h.logger.Printf("Error getting bundle: %v", err)
+		h.writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to retrieve bundle")
+		return
+	}
+	if bundle == nil {
 		h.writeError(w, http.StatusNotFound, "BUNDLE_NOT_FOUND", fmt.Sprintf("No bundle found for proof: %s", proofID))
 		return
 	}

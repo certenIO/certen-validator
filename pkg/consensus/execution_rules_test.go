@@ -79,8 +79,26 @@ func TestCurrentVersionIsSet(t *testing.T) {
 	if CurrentExecutionRulesVersion == 0 {
 		t.Fatal("CurrentExecutionRulesVersion is 0, which disables every check")
 	}
-	if CurrentExecutionRulesVersion != executionRulesV7 {
+	if CurrentExecutionRulesVersion != executionRulesV8 {
 		t.Fatalf("current = %d; if rules changed, bump the constant AND add a "+
 			"changelog entry in execution_rules.go", CurrentExecutionRulesVersion)
+	}
+}
+
+// RB3-F95: a v8 binary continues state committed under v7 - the production chain - without a reset, and
+// stamps it v8 from then on. Nothing else is continued: v6 state still refuses, and a v7 binary still
+// refuses v8 state (it cannot replay a rotation).
+func TestV8ContinuesV7StateAndNothingElse(t *testing.T) {
+	got, err := checkExecutionRulesVersion(executionRulesV7, 1000)
+	if err != nil || got != executionRulesV8 {
+		t.Fatalf("v7 state under the v8 binary: (%d, %v); want continued as v8", got, err)
+	}
+	if _, err := checkExecutionRulesVersion(executionRulesV6, 1000); err == nil {
+		t.Fatal("v6 state was continued")
+	}
+	for from, to := range compatibleContinuations {
+		if to != from+1 {
+			t.Fatalf("continuation %d -> %d skips a version: each is a claim about one bump", from, to)
+		}
 	}
 }

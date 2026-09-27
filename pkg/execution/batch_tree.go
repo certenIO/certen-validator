@@ -306,11 +306,14 @@ type BatchTree struct {
 	// It travels on the tree because it is the one fact about a batch that only the creating step knows
 	// and that layer 5 must state: "this root is in THIS transaction". Layer 5 previously fell back to
 	// whatever observation the settlement produced, which published a real transaction hash next to a
-	// root that transaction never contained. Empty is honest — a tree that has not been anchored yet, or
-	// one anchored by another leader — and readers fall back rather than assert.
+	// root that transaction never contained. Empty only on a tree that has not been anchored yet: an anchor
+	// another validator created is located on chain (RB3-F33) - it used to be left empty, and 235 of 289
+	// canonical rows never learned their create transaction.
 	AnchorCreateTx string
-	// AnchorCreateBlock is the block AnchorCreateTx was mined in, from its receipt; zero with it.
+	// AnchorCreateBlock is the block AnchorCreateTx was mined in; zero with it.
 	AnchorCreateBlock uint64
+	// AnchorCreateSender is the address that signed AnchorCreateTx, lower-case (RB3-F127).
+	AnchorCreateSender string
 }
 
 // BuildBatchTree assembles the tree and self-verifies every branch before returning.

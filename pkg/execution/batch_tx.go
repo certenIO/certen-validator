@@ -28,6 +28,11 @@ func txOutboxDir() string {
 // batchSender returns this manager's sender, creating it on first use. An outbox that exists but
 // cannot be read is an error, not an empty outbox: see openTxOutbox.
 func (ecm *EthereumContractManager) batchSender() (*txSender, error) {
+	// Checked on every call, before the sender is built: nothing is sent until the key is verified to be
+	// this validator's identity (RB3-F64). Unavailable, like an unreadable outbox: members wait, none fails.
+	if !SendersVerified() {
+		return nil, &SenderUnavailableError{Err: errSendersUnverified}
+	}
 	ecm.senderOnce.Do(func() {
 		path := filepath.Join(txOutboxDir(),
 			fmt.Sprintf("%d_%s.json", ecm.config.ChainID, strings.ToLower(ecm.auth.From.Hex())))

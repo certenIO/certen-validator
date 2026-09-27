@@ -8,8 +8,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"strconv"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -181,14 +182,17 @@ func (ab *AuthorityBuilder) BuildAuthoritySnapshotFor(ctx context.Context, keyPa
 	return snapshot, nil
 }
 
-// getMainChainCount gets the total count of main chain entries for the given scope
-// Handles both V2 and V3 Accumulate API response formats:
-//   - V2/V3 chain metadata:  { "recordType":"chain", "count": N, ... }
-//   - V3 range response:     { "type":"rangeResponse", "total": N, "records": [...] }
-//   - V3 chain state:        { "type":"chainState", "count": N, ... }
+// getMainChainCount gets the total count of main chain entries for the given scope.
+//
+// A v3 chain query with a name and no range answers with the chain record,
+// {"recordType":"chain","name":"main","count":N,...} (verified against Kermit 2026-09-27). Its count is
+// the only authoritative number: the response is refused unless it is that record (RB3-F36). The count
+// used to be guessed from "total", "range.total" or the length of whatever records came back when a
+// response had no pagination field - a guessed count bounds the enumeration of the page's history, so
+// a short guess silently drops the entries that authorise a signer.
 func (ab *AuthorityBuilder) getMainChainCount(ctx context.Context, scopeURL string) (int, error) {
-	// Build count query — no range params returns chain metadata with count
-	query := ab.queryBuilder.BuildChainQuery("main", nil, nil, nil, false, &[]bool{false}[0])
+	// No range: the chain record. (A top-level expand is not a v3 chain-query field - RB3-F18.)
+	query := ab.queryBuilder.BuildChainQuery("main", nil, nil, nil, false, nil)
 
 	// scopeURL should already be a full acc:// URL
 	response, err := ab.artifactManager.SaveRPCArtifact(
@@ -202,127 +206,58 @@ func (ab *AuthorityBuilder) getMainChainCount(ctx context.Context, scopeURL stri
 		return 0, fmt.Errorf("failed to query main chain count: %v", err)
 	}
 
-	// Extract result from RPC response
 	pu := ProofUtilities{}
 	result, err := pu.ExpectResult(response)
 	if err != nil {
 		return 0, fmt.Errorf("failed to extract result: %v", err)
 	}
-
-	// Try multiple field names for count (V2/V3 API compatibility)
-	// V2 and V3 chain metadata queries return "count"
-	countField := pu.CaseInsensitiveGet(result, "count")
-
-	// V3 range responses use "total" instead of "count"
-	if countField == nil {
-		countField = pu.CaseInsensitiveGet(result, "total")
+	totalEntries, err := chainRecordCount(result)
+	if err != nil {
+		return 0, err
 	}
-
-	// Some V3 responses nest count inside a "range" object
-	if countField == nil {
-		if rangeObj := pu.CaseInsensitiveGet(result, "range"); rangeObj != nil {
-			if rangeMap, ok := rangeObj.(map[string]interface{}); ok {
-				countField = pu.CaseInsensitiveGet(rangeMap, "total")
-				if countField == nil {
-					countField = pu.CaseInsensitiveGet(rangeMap, "count")
-				}
-			}
-		}
-	}
-
-	// Fallback: if this is a records-based response, infer from total or records length
-	if countField == nil {
-		if records := pu.CaseInsensitiveGet(result, "records"); records != nil {
-			if recordsArray, ok := records.([]interface{}); ok {
-				// If this is a range response with records but no total field,
-				// we need to know if this is a complete result. Check for "start" field.
-				start := pu.CaseInsensitiveGet(result, "start")
-				if start == nil {
-					// No pagination — records length IS the total
-					fmt.Printf("[AUTHORITY] Using records array length (%d) as chain count\n", len(recordsArray))
-					return len(recordsArray), nil
-				}
-			}
-		}
-	}
-
-	if countField == nil {
-		// Log the actual response keys for debugging
-		var keys []string
-		for k, v := range result {
-			keys = append(keys, fmt.Sprintf("%s(%T)", k, v))
-		}
-		fmt.Printf("[AUTHORITY] [ERROR] Chain query response keys: %v\n", keys)
-		return 0, ValidationError{Msg: fmt.Sprintf("Missing count in chain query response (available fields: %v)", keys)}
-	}
-
-	var totalEntries int
-	switch count := countField.(type) {
-	case float64:
-		totalEntries = int(count)
-	case int:
-		totalEntries = count
-	case int64:
-		totalEntries = int(count)
-	case string:
-		// Some API versions return count as string
-		parsed, parseErr := strconv.Atoi(count)
-		if parseErr != nil {
-			return 0, ValidationError{Msg: fmt.Sprintf("Invalid count string: %q", count)}
-		}
-		totalEntries = parsed
-	default:
-		return 0, ValidationError{Msg: fmt.Sprintf("Invalid count type: %T", countField)}
-	}
-
 	fmt.Printf("[AUTHORITY] Chain count for %s: %d\n", scopeURL, totalEntries)
 	return totalEntries, nil
 }
 
+// chainRecordCount is the count a v3 chain record states, or an error naming what came back instead.
+func chainRecordCount(result map[string]interface{}) (int, error) {
+	pu := ProofUtilities{}
+	if rt, _ := pu.CaseInsensitiveGet(result, "recordType").(string); !strings.EqualFold(rt, "chain") {
+		var keys []string
+		for k := range result {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		return 0, ValidationError{Msg: fmt.Sprintf("the chain query did not answer with a chain record "+
+			"(recordType %q, fields %v): its entry count is not known", rt, keys)}
+	}
+	switch count := pu.CaseInsensitiveGet(result, "count").(type) {
+	case float64:
+		if count < 0 || count != float64(int64(count)) {
+			return 0, ValidationError{Msg: fmt.Sprintf("the chain record's count %v is not a non-negative integer", count)}
+		}
+		return int(count), nil
+	case json.Number:
+		n, err := count.Int64()
+		if err != nil || n < 0 {
+			return 0, ValidationError{Msg: fmt.Sprintf("the chain record's count %q is not a non-negative integer", count)}
+		}
+		return int(n), nil
+	case nil:
+		return 0, ValidationError{Msg: "the chain record states no count"}
+	default:
+		return 0, ValidationError{Msg: fmt.Sprintf("the chain record's count has type %T", count)}
+	}
+}
+
 // enumerateMainEntries enumerates all main chain entries with paging for the given scope
 func (ab *AuthorityBuilder) enumerateMainEntries(ctx context.Context, scopeURL string, totalCount int) ([]map[string]interface{}, error) {
-	var allEntries []map[string]interface{}
-	pageSize := 50 // Reasonable page size for enumeration
-
-	for start := 0; start < totalCount; start += pageSize {
-		count := pageSize
-		if start+count > totalCount {
-			count = totalCount - start
-		}
-
-		query := ab.queryBuilder.BuildMainChainRangeQuery(start, count)
-
-		// scopeURL should already be a full acc:// URL
-		response, err := ab.artifactManager.SaveRPCArtifact(
-			ctx,
-			fmt.Sprintf("main_entries_%d_%d", start, count),
-			ab.client,
-			scopeURL,
-			query,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to enumerate main entries [%d:%d]: %v", start, start+count, err)
-		}
-
-		// Extract entries from response (JSON-RPC 2.0 standard format - aligned with Python)
-		pu := ProofUtilities{}
-		var data interface{}
-		if data = pu.CaseInsensitiveGet(response, "result"); data == nil {
-			data = pu.CaseInsensitiveGet(response, "data") // Fallback
-		}
-		if data != nil {
-			if dataMap, ok := data.(map[string]interface{}); ok {
-				if records := pu.CaseInsensitiveGet(dataMap, "records"); records != nil {
-					if recordsArray, ok := records.([]interface{}); ok {
-						for _, record := range recordsArray {
-							if recordMap, ok := record.(map[string]interface{}); ok {
-								allEntries = append(allEntries, recordMap)
-							}
-						}
-					}
-				}
-			}
-		}
+	// Index and entry hash only: collectPageHistory re-reads every entry with its receipt, so the range
+	// carries neither messages nor receipts (RB3-F18), and it is read in pieces the endpoint can deliver,
+	// exactly and in order (RB3-F126).
+	allEntries, err := readChainRange(ctx, ab.artifactManager, ab.client, "main_entries", scopeURL, "main", 0, totalCount, 50, false)
+	if err != nil {
+		return nil, fmt.Errorf("failed to enumerate main entries [0:%d]: %v", totalCount, err)
 	}
 
 	if len(allEntries) != totalCount {
@@ -342,16 +277,15 @@ func normalizeURL(url string) string {
 	return url
 }
 
-// expandSingleEntry expands a chain entry to get full transaction details (with receipt).
-// Bounded by a timeout: on Kermit an anchored receipt for an OLD entry can hang indefinitely,
-// so the caller falls back to a receipt-free ranged expand (graceful degradation).
+// expandSingleEntry reads a chain entry with its value and receipt. Bounded by a timeout: on Kermit an
+// anchored receipt for an OLD entry can hang; the caller retries and then fails - there is no receipt-free
+// substitute.
 func (ab *AuthorityBuilder) expandSingleEntry(entryHash, scopeURL string) (map[string]interface{}, error) {
 	// Build query for individual chain entry with expansion (aligned with Python approach)
 	query := map[string]interface{}{
 		"queryType":      "chain",
 		"name":           "main",
 		"entry":          entryHash,
-		"expand":         true,
 		"includeReceipt": true,
 	}
 

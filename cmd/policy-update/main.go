@@ -12,7 +12,7 @@
 //	    Generate an admin keypair. The public half goes in
 //	    CERTEN_ENTITLEMENT_ADMIN_KEYS at genesis; the private half signs updates.
 //
-//	policy-update propose --mode enforce --activation-in 900 --version V \
+//	policy-update propose --chain-id certen-testnet --mode enforce --activation-in 900 --version V \
 //	    --entitlement-keys entitlement-v1:<hex> --admin-key-id A --admin-secret <hex|@file>
 //	    Build and sign an update. Prints the transaction JSON.
 //
@@ -139,6 +139,7 @@ func parseKeyList(s string) (map[string]string, error) {
 
 func propose(args []string) error {
 	fs := flag.NewFlagSet("propose", flag.ExitOnError)
+	chainID := fs.String("chain-id", "", "the CometBFT chain id the update is for (its signatures cover it)")
 	mode := fs.String("mode", "", "off | observe | enforce")
 	activationIn := fs.Int64("activation-in", 900, "seconds from now until the rule takes effect")
 	activationAt := fs.Int64("activation-unix", 0, "absolute unix time (overrides --activation-in)")
@@ -150,9 +151,10 @@ func propose(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if *mode == "" || *version == 0 || *keyID == "" || *secret == "" {
+	if *chainID == "" || *mode == "" || *version == 0 || *keyID == "" || *secret == "" {
 		fs.Usage()
-		return fmt.Errorf("--mode, --version, --admin-key-id and --admin-secret are required")
+		return fmt.Errorf("--chain-id, --mode, --version, --admin-key-id and --admin-secret are required " +
+			"(an update not bound to its chain is refused under rules v8)")
 	}
 	// Activation is judged against BLOCK time; the local clock only approximates
 	// it. The minimum delay is generous enough to absorb ordinary skew, and a
@@ -173,6 +175,7 @@ func propose(args []string) error {
 
 	tx := &consensus.PolicyUpdateTx{
 		Kind:           consensus.PolicyUpdateKind,
+		ChainID:        *chainID,
 		Mode:           *mode,
 		Keys:           keys,
 		ActivationUnix: activation,

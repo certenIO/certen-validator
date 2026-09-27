@@ -294,7 +294,11 @@ func AnchorQuorumRecordFrom(ev *AnchorQuorumEvidence) *database.AnchorQuorumReco
 		VerifyBlock:        ev.VerifyBlock,
 		AnchorCreateTx:     ev.AnchorCreateTx,
 		AnchorCreateBlock:  ev.AnchorCreateBlock,
-		VerifiedAt:         ev.AttestedAt,
+		AnchorCreateSender: ev.AnchorCreateSender,
+		VerifySender:       ev.VerifySender,
+		// Not ev.AttestedAt, this validator's clock after it confirmed the anchor (RB3-F133): the completion
+		// time is the verify block's, filled from the chain by BlockTimedAnchorQuorumStore.
+		VerifiedAt:         ev.VerifyBlockTime,
 		AggregateSignature: decodeHexOrNil(ev.AggregateSignatureHex),
 		AggregatePubKey:    decodeHexOrNil(ev.AggregatePublicKeyHex),
 		Signers:            signers,

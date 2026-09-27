@@ -52,37 +52,11 @@ func (f *fakeAnchorReads) read(_ context.Context, block *big.Int) (bool, error) 
 	return a.executed, a.err
 }
 
-// confirmWithRetry mirrors AnchorProofExecutedConfirmed's loop over an injectable read.
-//
-// The production function reaches the chain through EVMChainResolver, which needs a live
-// client; this exercises the DECISION LOGIC — how many times it asks, and what it concludes
-// from each shape of answer — which is the part that was wrong.
+// confirmWithRetry runs the production decision (confirmProofExecuted) with the receipt already known.
+// It used to be a copy of the loop, so the tests could pass whatever the production code did.
 func confirmWithRetry(ctx context.Context, read func(context.Context, *big.Int) (bool, error),
 	pinned *big.Int, attempts int, delay time.Duration) (bool, error) {
-	var lastErr error
-	for attempt := 1; attempt <= attempts; attempt++ {
-		executed, err := read(ctx, pinned)
-		if err == nil {
-			if executed {
-				return true, nil
-			}
-			lastErr = nil
-		} else {
-			lastErr = err
-		}
-		if attempt == attempts {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			return false, ctx.Err()
-		case <-time.After(delay):
-		}
-	}
-	if lastErr != nil {
-		return false, lastErr
-	}
-	return false, nil
+	return confirmProofExecuted(ctx, func(context.Context) (*big.Int, error) { return pinned, nil }, read, attempts, delay)
 }
 
 // THE REGRESSION. A read that is merely early must not become a failure.
@@ -213,4 +187,37 @@ func TestAnchorConfirm_BudgetCoversRealisticLag(t *testing.T) {
 			"block or two", total)
 	}
 	t.Logf("confirmation budget: %d attempts over %s", anchorFlagConfirmAttempts, total)
+}
+
+// RB3-F129: an unreadable receipt is retried and never replaced by an unpinned read - that read can come
+// from a block before the attestation and say "not executed".
+func TestAnchorConfirm_NoReadBeforeTheReceipt(t *testing.T) {
+	f := &fakeAnchorReads{answers: []struct {
+		executed bool
+		err      error
+	}{{true, nil}}}
+	receipts := 0
+	got, err := confirmProofExecuted(context.Background(), func(context.Context) (*big.Int, error) {
+		receipts++
+		if receipts < 3 {
+			return nil, errors.New("receipt not found")
+		}
+		return big.NewInt(77), nil
+	}, f.read, 8, time.Millisecond)
+	if err != nil || !got {
+		t.Fatalf("(%v, %v)", got, err)
+	}
+	for _, b := range f.pinned {
+		if b == nil || b.Int64() != 77 {
+			t.Fatalf("a read was not pinned to the attestation's block: %v", f.pinned)
+		}
+	}
+	// A receipt that never comes is unknown - an error - and no read is made at all.
+	g := &fakeAnchorReads{}
+	got, err = confirmProofExecuted(context.Background(), func(context.Context) (*big.Int, error) {
+		return nil, errors.New("receipt not found")
+	}, g.read, 4, time.Millisecond)
+	if err == nil || got || g.calls != 0 {
+		t.Fatalf("(%v, %v) after %d reads; want an error and no read", got, err, g.calls)
+	}
 }

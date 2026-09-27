@@ -88,8 +88,12 @@ type AnchorOnChainState struct {
 	OperationCommitment [32]byte
 	ExecutionCommitment [32]byte
 	Timestamp           time.Time
-	Valid               bool
-	ProofExecuted       bool
+	// CreatedAt is the creating block's timestamp (block.timestamp in createBatchAnchor) and Validator
+	// the address that created it (msg.sender): together they locate the create transaction.
+	CreatedAt     uint64
+	Validator     common.Address
+	Valid         bool
+	ProofExecuted bool
 }
 
 // BackfillChain is the chain access the reconstruction needs. Satisfied by the live EVM stack; an
@@ -165,9 +169,12 @@ func ReconstructAnchorQuorum(
 
 	verifiedAt, err := chain.BlockTime(ctx, cand.ChainID, blockNumber)
 	if err != nil || verifiedAt.IsZero() {
-		// The quorum is established; only the block's clock is not. Fall back to the anchor's own
-		// timestamp rather than to now(), which would assert a completion time that never happened.
-		verifiedAt = state.Timestamp
+		// The quorum is established; the time it completed on-chain - the verify block's - is not read.
+		// No other time is that time: now() never happened, and the anchor's own timestamp is when it
+		// was CREATED, before any quorum proved it (RB3-F131 - this used to be stored as the completion
+		// time). Unread is an access failure, examined again on the next run.
+		out.Err = fmt.Errorf("reading the time of verify block %d: %v", blockNumber, err)
+		return out
 	}
 
 	signers := make([]database.AnchorQuorumSigner, 0, len(call.Signers))
@@ -191,7 +198,8 @@ func ReconstructAnchorQuorum(
 		VerifiedAt:       verifiedAt,
 		// The anchor-create transaction is a DIFFERENT transaction and is not named in this calldata, so
 		// it stays empty rather than being filled with this one. Conflating the two is precisely what
-		// published the false layer-5 binding.
+		// published the false layer-5 binding. `validator repair anchor-blocks` then locates it from the
+		// anchor's own record and log, and records both transactions' senders (RB3-F33/F127).
 		AnchorCreateTx: "",
 		// No aggregate bytes: see the header. The signature was verified by the anchor, not here.
 		AggregateSignature: nil,

@@ -85,7 +85,7 @@ type onDemandChain interface {
 	verifyLeavesAgainstAccounts(ctx context.Context, members []*PendingBatchIntent, tree *BatchTree) error
 	beginSettlementSequence(ctx context.Context) error
 	endSettlementSequence()
-	createBatchAnchor(ctx context.Context, tree *BatchTree) (txHash string, gasUsed uint64, block uint64, err error)
+	createBatchAnchor(ctx context.Context, tree *BatchTree) (anchorCreation, error)
 	verifyLeavesAgainstAnchor(ctx context.Context, tree *BatchTree) error
 	settleMember(ctx context.Context, p *PendingBatchIntent, tree *BatchTree, branch [][32]byte, fence time.Time) (string, error)
 	settlementStatus(ctx context.Context, txHash string) (found, mined, reverted bool, err error)
@@ -99,7 +99,8 @@ type onDemandChain interface {
 	// settlementInFlight reports whether this node still has a transaction outstanding at nonce.
 	settlementInFlight(nonce uint64) bool
 	// settlementHashesAt is every hash this node's key broadcast at nonce for p's settlement.
-	settlementHashesAt(p *PendingBatchIntent, nonce uint64) []string
+	// An error means the history could not be read, never that it is empty.
+	settlementHashesAt(p *PendingBatchIntent, nonce uint64) ([]string, error)
 	// anchorAttester names the transaction that attested bundleID and its sender. found=false
 	// means none is in view: nothing may be concluded.
 	anchorAttester(ctx context.Context, bundleID [32]byte, floor uint64) (txHash string, from common.Address, found bool, err error)
@@ -172,6 +173,12 @@ func (o *BatchOrchestrator) SettleOnDemandMember(
 	}
 	if member == nil {
 		return nil, fmt.Errorf("nil member")
+	}
+	if !SendersVerified() {
+		// Every settlement decision below reads this validator's address; until it is proven to be its
+		// registered identity nothing is decided, sent or claimed (RB3-F64).
+		o.logf("[OD] intent=%s waiting: %v", member.IntentID, errSendersUnverified)
+		return &OnDemandOutcome{Deferred: true}, nil
 	}
 	if member.CommitHeight == 0 {
 		// The height is bound into the bundleId. Zero would make every validator that had a
@@ -255,7 +262,7 @@ func (o *BatchOrchestrator) SettleOnDemandMember(
 	}
 
 	// ---- Create the anchor --------------------------------------------------
-	anchorTx, gasUsed, anchorBlock, err := chain.createBatchAnchor(ctx, tree)
+	created, err := chain.createBatchAnchor(ctx, tree)
 	if err != nil {
 		if isTransientSendError(err) || IsChainReadError(err) {
 			// Not yet known, refused on price before anything was sent, or the anchor's existence
@@ -264,19 +271,19 @@ func (o *BatchOrchestrator) SettleOnDemandMember(
 		}
 		return nil, fmt.Errorf("createBatchAnchor: %w", err)
 	}
-	out.GasAnchor = gasUsed
-	// The transaction that published this root. Carried on the tree so the quorum evidence — and through
-	// it layer 5 — can say which transaction contains the root, instead of borrowing the settlement's.
-	// Only a real transaction hash. createBatchAnchor returns "already-exists" when another
-	// validator created the anchor first; this node then does not know the creating transaction, and
-	// empty is how that is said. See IsTransactionHash.
-	if IsTransactionHash(anchorTx) {
-		tree.AnchorCreateTx, tree.AnchorCreateBlock = anchorTx, anchorBlock
-		// The floor for finding this member's LeafConsumed log later.
-		o.noteOnDemandProgress(member, func(p *PendingBatchIntent) { p.AnchorBlock = anchorBlock })
+	out.GasAnchor = created.GasUsed
+	// The transaction that published this root and who sent it - this node's, or the one another
+	// validator's landed with, located on chain (RB3-F33). Carried on the tree so the quorum evidence -
+	// and through it layer 5 - can say which transaction contains the root, instead of borrowing the
+	// settlement's.
+	if !IsTransactionHash(created.TxHash) || created.Block == 0 || created.Sender == "" {
+		return nil, fmt.Errorf("createBatchAnchor returned no creating transaction for anchor 0x%x (%+v)", tree.BundleID[:8], created)
 	}
-	o.logf("[OD] chain=%d intent=%s anchor created tx=%s gas=%d",
-		chainID, member.IntentID, anchorTx, gasUsed)
+	created.onTree(tree)
+	// The floor for finding this member's LeafConsumed log later.
+	o.noteOnDemandProgress(member, func(p *PendingBatchIntent) { p.AnchorBlock = created.Block })
+	o.logf("[OD] chain=%d intent=%s anchor created tx=%s by %s gas=%d",
+		chainID, member.IntentID, created.TxHash, created.Sender, created.GasUsed)
 
 	// ---- VERIFY: the deployed anchor accepts the leaf -----------------------
 	if err := chain.verifyLeavesAgainstAnchor(ctx, tree); err != nil {
@@ -296,8 +303,8 @@ func (o *BatchOrchestrator) SettleOnDemandMember(
 		if verifyTx, broadcast := verifyBroadcast(err); broadcast {
 			o.noteOnDemandProgress(member, func(p *PendingBatchIntent) {
 				p.AnchorProved = true
-				if IsTransactionHash(anchorTx) {
-					p.AnchorTx = anchorTx
+				if IsTransactionHash(created.Paid) {
+					p.AnchorTx = created.Paid
 				}
 				if IsTransactionHash(verifyTx) {
 					p.VerifyTx = verifyTx
@@ -326,8 +333,8 @@ func (o *BatchOrchestrator) SettleOnDemandMember(
 	verifyTx := chain.lastVerifyTx(tree.BundleID)
 	o.noteOnDemandProgress(member, func(p *PendingBatchIntent) {
 		p.AnchorProved = true
-		if IsTransactionHash(anchorTx) {
-			p.AnchorTx = anchorTx
+		if IsTransactionHash(created.Paid) {
+			p.AnchorTx = created.Paid
 		}
 		if IsTransactionHash(verifyTx) {
 			p.VerifyTx = verifyTx
@@ -386,7 +393,22 @@ func (o *BatchOrchestrator) resolveUnderAttestedAnchor(
 
 	own := member.settlementHashes()
 	if member.SettlementNonceSet {
-		own = mergeHashes(own, chain.settlementHashesAt(member, member.SettlementNonce))
+		history, herr := chain.settlementHashesAt(member, member.SettlementNonce)
+		if herr != nil {
+			// RB3-F118: an unreadable history is not an empty one; what this node sent is unknown.
+			out.Deferred = true
+			o.logf("[OD] intent=%s this validator's settlement history at nonce %d is unreadable (%v) — deferring",
+				member.IntentID, member.SettlementNonce, herr)
+			return true
+		}
+		own = mergeHashes(own, history)
+		if len(own) == 0 && chain.settlementInFlight(member.SettlementNonce) {
+			// RB3-F118: no hash on record is not "nothing sent" while the nonce is still outstanding.
+			out.Deferred = true
+			o.logf("[OD] intent=%s nonce %d is still in flight with no hash on record — deferring",
+				member.IntentID, member.SettlementNonce)
+			return true
+		}
 	}
 	if len(own) > 0 {
 		unknown := false

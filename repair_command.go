@@ -19,25 +19,36 @@ import (
 	"github.com/certen/independant-validator/pkg/execution"
 )
 
-const repairUsage = "usage: certen-validator repair anchor-blocks [--apply] [--min-depth N]"
+const repairUsage = "usage: certen-validator repair anchor-blocks [--apply] [--min-depth N] | repair projections [--apply]"
 
-// runRepairCommand runs `validator repair anchor-blocks`: it reads every canonical anchor's create
-// transaction back from its chain and corrects the anchor block stored on the anchor row, on layer-5 rows
-// and on the Certen anchor proofs this validator signed (see execution.RepairAnchorBlocks). Without --apply
-// it only reports. Run it on every validator: each revises the proofs it signed.
+// runRepairCommand runs `validator repair anchor-blocks`: it reads every canonical anchor's verify and
+// create transactions back from their chain - locating the create transaction where the row does not name
+// it (RB3-F33) - and completes or corrects what the chain contradicts: the create transaction, its block
+// and the verify block on the anchor row, both transactions' senders (RB3-F127), the layer-5 rows, and the
+// Certen anchor proofs this validator signed (see execution.RepairAnchorBlocks). Without --apply it only
+// reports. Run it on every validator: each revises the proofs it signed.
+//
+// `validator repair projections` moves the settlement transaction out of the anchor columns of
+// proof_artifacts, anchor_references and validator_attestations, deciding each proof from chain facts (see
+// execution.RepairProofProjections, RB3-F135). Run it once, on any validator, after anchor-blocks.
 //
 // Exit status: 0 when nothing was refused, 2 when something was refused or could not be read, 1 on error.
 func runRepairCommand(args []string) int {
-	if len(args) == 0 || args[0] != "anchor-blocks" {
+	if len(args) == 0 || (args[0] != "anchor-blocks" && args[0] != "projections") {
 		log.Print(repairUsage)
 		return 1
 	}
+	what := args[0]
 	apply, minDepth := false, 0
 	for i := 1; i < len(args); i++ {
 		switch args[i] {
 		case "--apply":
 			apply = true
 		case "--min-depth":
+			if what != "anchor-blocks" {
+				log.Print(repairUsage)
+				return 1
+			}
 			if i+1 >= len(args) {
 				log.Print(repairUsage)
 				return 1
@@ -77,6 +88,10 @@ func runRepairCommand(args []string) int {
 	if err != nil {
 		log.Printf("the schema is older than this binary (%v); run `validator migrate up` first", err)
 		return 1
+	}
+
+	if what == "projections" {
+		return runProjectionRepair(client, cfg.ValidatorID, apply)
 	}
 
 	signers, err := repairSigners(cfg)
@@ -149,4 +164,35 @@ func repairSigners(cfg *config.Config) (map[string]func([]byte) []byte, error) {
 		return blsKey.SignWithDomain(message[:], bls.DomainResult).Bytes()
 	}
 	return signers, nil
+}
+
+// runProjectionRepair runs `validator repair projections`.
+func runProjectionRepair(client *database.Client, validatorID string, apply bool) int {
+	reader := execution.NewEthAnchorTxReader()
+	defer reader.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
+	defer cancel()
+	report, err := execution.RepairProofProjections(ctx, execution.ProjectionRepairConfig{
+		Repair: database.NewEvidenceRepair(client), Reader: reader, ValidatorID: validatorID, Apply: apply,
+	})
+	if report != nil {
+		out, _ := json.MarshalIndent(report, "", "  ")
+		fmt.Println(string(out))
+	}
+	if err != nil {
+		log.Printf("projection repair stopped: %v", err)
+		return 1
+	}
+	mode := "dry run: nothing was changed; re-run with --apply"
+	if apply {
+		mode = "applied"
+	}
+	log.Printf("projection repair (%s) by %s: %d proofs, %d already stated their anchor, %d settlements moved "+
+		"(%d with layer 5's anchor, %d with none established), %d refused, %d changed underneath",
+		mode, validatorID, report.Proofs, report.AlreadyAnchor, report.Moved, report.AnchorsStated, report.AnchorsUnknown,
+		len(report.Refused), len(report.Changed))
+	if len(report.Refused) > 0 || len(report.Changed) > 0 {
+		return 2
+	}
+	return 0
 }

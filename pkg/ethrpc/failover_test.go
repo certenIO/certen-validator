@@ -37,6 +37,8 @@ func TestShouldFailover(t *testing.T) {
 		"502 Bad Gateway",
 		"dial tcp: connection refused",
 		"context deadline exceeded: timeout",
+		// RB3-F132: publicnode/drpc/sepolia.base.org below their retention.
+		`{"code":4444,"message":"pruned history unavailable: requested 45196255, earliest available 46000000"}`,
 	}
 	for _, m := range failover {
 		if !ShouldFailover(errors.New(m)) {

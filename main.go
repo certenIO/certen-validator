@@ -102,8 +102,11 @@ type HealthStatus struct {
 	Discovery     string `json:"discovery"`
 	DiscoveryLag  uint64 `json:"discovery_lag_blocks"`
 	DiscoveryIdle int64  `json:"discovery_seconds_since_advance"`
-	startTime     time.Time
-	mu            sync.RWMutex
+	// DiscoveryUnsearched is how many blocks wait to be searched again, and the oldest's age (RB3-F125).
+	DiscoveryUnsearched          int   `json:"discovery_unsearched_blocks"`
+	DiscoveryUnsearchedOldestAge int64 `json:"discovery_unsearched_oldest_seconds"`
+	startTime                    time.Time
+	mu                           sync.RWMutex
 }
 
 // Global health status - updated during startup and runtime
@@ -148,6 +151,14 @@ func (h *HealthStatus) SetDiscovery(status string, lagBlocks uint64, secondsSinc
 	h.DiscoveryLag = lagBlocks
 	h.DiscoveryIdle = secondsSinceAdvance
 	h.updateOverallStatus()
+}
+
+// SetDiscoveryUnsearched records the blocks waiting to be searched again.
+func (h *HealthStatus) SetDiscoveryUnsearched(count int, oldestAgeSeconds int64) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.DiscoveryUnsearched = count
+	h.DiscoveryUnsearchedOldestAge = oldestAgeSeconds
 }
 
 func (h *HealthStatus) SetBatchSystem(status string) {
@@ -259,7 +270,8 @@ func resolveBatchAttesterIdentity(resolver *execution.EVMChainResolverImpl, vali
 	publish := func(addr, how string) {
 		// The sending key must be this identity, or the node sends and claims settlements as another
 		// validator (RB3-F64). A configuration error that no retry fixes: the validator does not run.
-		if err := execution.CheckSendersAreIdentity(resolver, addr); err != nil {
+		// Verified here, and only here, is this process allowed to send or claim settlements.
+		if err := execution.VerifySendersAreIdentity(resolver, addr); err != nil {
 			log.Fatalf("❌ [BATCH] %s: %v", validatorID, err)
 		}
 		batchAttesterIdentity.Store(&execution.BatchAttesterIdentity{
@@ -270,9 +282,17 @@ func resolveBatchAttesterIdentity(resolver *execution.EVMChainResolverImpl, vali
 			validatorID, addr, how, execution.BatchAttestationEndpoint)
 	}
 
-	if override := strings.TrimSpace(os.Getenv("VALIDATOR_EVM_ADDRESS")); override != "" {
-		publish(strings.ToLower(override), "VALIDATOR_EVM_ADDRESS override")
-		return
+	// VALIDATOR_EVM_ADDRESS is an assertion, never a substitute: the identity is always the registry
+	// entry matching this node's BLS key, and a configured address that differs stops the validator. It
+	// used to be published as-is, so an override equal to a shared key's address passed the sender check
+	// without the registry ever being read (RB3-F64).
+	override := strings.ToLower(strings.TrimSpace(os.Getenv("VALIDATOR_EVM_ADDRESS")))
+	publishResolved := func(addr, how string) {
+		if override != "" && !strings.EqualFold(override, addr) {
+			log.Fatalf("❌ [BATCH] %s: VALIDATOR_EVM_ADDRESS %s is not this validator's registered identity %s",
+				validatorID, override, addr)
+		}
+		publish(addr, how)
 	}
 
 	chains := resolver.Chains()
@@ -305,7 +325,7 @@ func resolveBatchAttesterIdentity(resolver *execution.EVMChainResolverImpl, vali
 				addr, err = execution.ResolveOwnEVMAddress(registry)
 				if err == nil {
 					cancel()
-					publish(addr, "matched on-chain BLS registry")
+					publishResolved(addr, "matched on-chain BLS registry")
 					return
 				}
 			}
@@ -386,6 +406,13 @@ func watchDiscoveryLiveness(d *intent.IntentDiscovery) {
 			state = "stalled"
 		}
 		healthStatus.SetDiscovery(state, st.LagBlocks, int64(st.SecondsSinceAdvance))
+		healthStatus.SetDiscoveryUnsearched(st.Unsearched, int64(st.OldestUnsearchedSeconds))
+		if st.UnsearchedError != "" {
+			log.Printf("🚨 [DISCOVERY] the unsearched-block store cannot be read: %s", st.UnsearchedError)
+		} else if st.Unsearched > 0 && st.OldestUnsearchedSeconds > 600 {
+			log.Printf("🚨 [DISCOVERY] %d block(s) not yet searched; the oldest, %d, has waited %.0fs. Intents "+
+				"anchored in them are not discovered until they are.", st.Unsearched, st.OldestUnsearched, st.OldestUnsearchedSeconds)
+		}
 
 		// Log the EDGES only. A per-tick line would be noise nobody reads, which is the
 		// failure mode that let the original outage hide in plain sight.
@@ -1503,6 +1530,11 @@ func startValidator(
 	if cfgErr != nil {
 		return nil, nil, fmt.Errorf("batch path: anchor config: %w", cfgErr)
 	}
+	// Every settlement carries a BLS ZK proof made with the deployed verifier's keys: a node without them
+	// would pay for anchors whose verification can only revert (RB3-F36), so it does not start.
+	if _, zkErr := execution.GetBLSZKProver(); zkErr != nil {
+		return nil, nil, fmt.Errorf("batch path: %w", zkErr)
+	}
 	batchChains := strategy.SupportedChainIDs // sepolia, base-sepolia, arbitrum-sepolia
 	// The chain resolver is shared with Phase 8, which counts its post-execution quorum against the
 	// same on-chain validator registry the batch quorum does.
@@ -1820,6 +1852,16 @@ func startValidator(
 	}).Start(context.Background())
 	log.Printf("✅ [Phase 9] Member outcome outbox at %s; reconciler replaying on startup and every minute", memberOutcomes.Dir())
 
+	// Level-record completions the store fails wait here until it takes them (RB3-F123).
+	proofCompletions, pcErr := execution.NewFileProofCompletionOutbox(filepath.Join(nsDataDir, "proof_completion_outbox"))
+	if pcErr != nil {
+		return nil, nil, fmt.Errorf("proof cycle: proof completion outbox: %w", pcErr)
+	}
+	(&execution.ProofCompletionReconciler{
+		Outbox: proofCompletions, Store: batchComponents.Repos.ProofArtifacts, Logf: log.Printf,
+	}).Start(context.Background())
+	log.Printf("✅ [Phase 9] Proof completion outbox at %s; reconciler replaying on startup and every minute", proofCompletions.Dir())
+
 	unifiedConfig := &execution.UnifiedOrchestratorConfig{
 		ValidatorID:              cfg.ValidatorID,
 		ValidatorIndex:           0,
@@ -1843,6 +1885,7 @@ func startValidator(
 		NonSettlementChain:       execution.NonSettlementChainFromResolver(resolver),
 		NonSettlements:           nonSettlements,
 		MemberOutcomes:           memberOutcomes,
+		ProofCompletions:         proofCompletions,
 	}
 
 	unifiedOrchestrator, unifiedErr := execution.NewUnifiedOrchestrator(unifiedConfig)
@@ -1916,6 +1959,14 @@ func startValidator(
 
 	// Create IntentDiscovery with proper configuration and persistence
 	intentDiscovery := intent.NewIntentDiscovery(accClient, cfg.AccumulateURL, intentConfig, ledgerWrapper, liteClientProofGen, cfg.ValidatorID)
+	// Blocks whose search fails wait here until they are searched (RB3-F125): the watermark never passes a
+	// block that is neither searched nor kept.
+	unsearchedBlocks, ubErr := intent.OpenFileUnsearchedBlocks(filepath.Join(nsDataDir, "unsearched_blocks.json"))
+	if ubErr != nil {
+		return nil, nil, fmt.Errorf("intent discovery: %w", ubErr)
+	}
+	intentDiscovery.SetUnsearchedBlocks(unsearchedBlocks)
+	log.Printf("✅ [DISCOVERY] unsearched blocks kept at %s; searched again every 30s", unsearchedBlocks.Path())
 
 	// This is the critical hook: IntentDiscovery calls the canonical BFT consensus method
 	// BFTValidator.ExecuteCanonicalIntentWithBFTConsensus(ctx, certenIntent, certenProof, blockHeight)
@@ -2010,7 +2061,10 @@ func startValidator(
 			return nil, nil, fmt.Errorf("anchor quorum evidence: the batch quorum attestor was not built")
 		}
 		{
-			anchorQuorumWriter := execution.NewAnchorQuorumWriter(batchComponents.Repos.Batches, log.Printf)
+			// The completion time is the verify block's, read from its chain before any write; a record
+			// whose block cannot be read yet waits in the retry and the outbox (RB3-F133).
+			anchorQuorumStore := execution.BlockTimedAnchorQuorumStore{Store: batchComponents.Repos.Batches, BlockTime: attestor.VerifyBlockTime}
+			anchorQuorumWriter := execution.NewAnchorQuorumWriter(anchorQuorumStore, log.Printf)
 
 			// The durable half. Every way the in-memory hand-off can lose a proven anchor — a saturated
 			// queue, a database that is down, a shutdown with records still in flight — is a way the
@@ -2031,7 +2085,7 @@ func startValidator(
 			anchorQuorumWriter.SetOutbox(outbox)
 			reconciler := &execution.AnchorQuorumReconciler{
 				Outbox: outbox,
-				Store:  batchComponents.Repos.Batches,
+				Store:  anchorQuorumStore,
 				Logf:   log.Printf,
 			}
 			reconciler.Start(context.Background())
@@ -2182,6 +2236,7 @@ func checkEnvironment() error {
 		func() error { _, err := batchPeriodBlocksFromEnv(); return err },
 		func() error { _, err := bftTimeoutFromEnv(); return err },
 		func() error { _, err := envvar.Bool("MIGRATE_ON_START", false); return err },
+		func() error { _, err := accumulate.LogLevelFromEnv(); return err },
 		func() error {
 			enabled, err := envvar.Bool("CHECKPOINT_ANCHOR_ENABLED", false)
 			if err != nil || !enabled {

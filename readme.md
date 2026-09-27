@@ -255,7 +255,6 @@ See [Proof Classes](#proof-classes) for what these control.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `BLS_ZK_TESTING_MODE` | No | false | Use test mode for BLS ZK proofs |
 | `BLS_ZK_KEYS_DIR` | No | /app/bls_zk_keys | Groth16 keys directory |
 | `GOV_PROOF_CLI_PATH` | No | /app/govproof | Governance proof CLI binary path |
 | `ENABLE_MERKLE_VERIFICATION` | No | true | Enable Merkle proof verification |
@@ -677,7 +676,6 @@ docker run -d \
 
 # Configure and run
 export DATABASE_URL="postgres://certen:certen@localhost:5432/certen_validator?sslmode=disable"
-export BLS_ZK_TESTING_MODE=true
 go run .
 ```
 
@@ -686,9 +684,9 @@ go run .
 ### Pre-Deployment Checklist
 
 - Generate unique Ed25519 keys per validator
-- Fund validator wallets with gas tokens on each target chain (ETH, SOL, APT, SUI, NEAR, TON)
-- Pre-generate BLS ZK keys via `bls-zk-setup`
-- Set `BLS_ZK_TESTING_MODE=false` for production
+- Fund validator wallets with gas on each supported chain (Ethereum Sepolia, Base Sepolia, Arbitrum Sepolia)
+- Provide the BLS ZK keys whose verification key is deployed (`BLS_ZK_KEYS_DIR`); the validator refuses to start without them and never generates keys
+- Run `cmd/batchpreflight` (including `-sender-envs`) against every chain
 - Configure `ATTESTATION_PEERS` with all peer validator URLs
 - Use production Ethereum RPC endpoints
 - Set strong PostgreSQL credentials

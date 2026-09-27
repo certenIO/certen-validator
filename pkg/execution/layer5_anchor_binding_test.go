@@ -154,7 +154,7 @@ func TestLayer5RefusesAShadowRootThatNoBranchSupports(t *testing.T) {
 		t.Fatalf("no canonical row must bind nothing, got (%+v, %v)", l5, err)
 	}
 	// And a row naming the shadow root with no branch from the leaf to it is refused.
-	l5, err := BuildLayer5(&database.Layer5Binding{BatchID: uuid.New(), LeafHash: leaf, BatchRoot: shadowRoot}, settlementObservation(), 84532)
+	l5, err := BuildLayer5(&database.Layer5Binding{BatchID: uuid.New(), LeafHash: leaf, BatchRoot: shadowRoot, AnchorTxHash: anchorCreateTx, AnchorBlockNum: anchorBlockNo}, settlementObservation(), 84532)
 	if err == nil || l5 != nil {
 		t.Fatalf("expected a refusal; got %+v", l5)
 	}
@@ -189,20 +189,14 @@ func TestLayer5OneMemberAnchorKeepsTheAnchorTx(t *testing.T) {
 	}
 }
 
-// Where the canonical row carries no anchor-create transaction yet, the observation is still used — but
-// the published root is the binding's, so the claim remains about the right root.
-func TestLayer5FallsBackToTheObservationOnlyWhenTheRowHasNoAnchorTx(t *testing.T) {
+// RB3-F134: where the canonical row carries no anchor-create transaction, there is no layer 5. It used to
+// fall back to the settlement observation - publishing the settlement's transaction and block as where the
+// root is, which three live anchors did on 2026-09-19..21.
+func TestLayer5IsAbsentWhenTheRowHasNoAnchorCreateTx(t *testing.T) {
 	binding := canonicalBinding(t)
 	binding.AnchorTxHash = ""
 	binding.AnchorBlockNum = 0
-	l5, err := BuildLayer5(binding, settlementObservation(), 84532)
-	if err != nil || l5 == nil {
-		t.Fatalf("BuildLayer5: %v", err)
-	}
-	if l5.AnchorTx != settlementTxHash || l5.BlockNumber != settlementBlockNo {
-		t.Fatalf("expected the observation as the fallback, got %s @ %d", l5.AnchorTx, l5.BlockNumber)
-	}
-	if l5.BatchRoot != hex.EncodeToString(binding.BatchRoot) {
-		t.Fatalf("root came from somewhere other than the binding: %s", l5.BatchRoot)
+	if l5, err := BuildLayer5(binding, settlementObservation(), 84532); err != nil || l5 != nil {
+		t.Fatalf("a row with no anchor-create transaction built %+v (%v); the settlement's transaction is not where the root is", l5, err)
 	}
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/certen/independant-validator/pkg/ledger"
 	"github.com/certen/independant-validator/pkg/metrics"
 	abcitypes "github.com/cometbft/cometbft/abci/types"
+	cmttypes "github.com/cometbft/cometbft/types"
 )
 
 // ValidatorApp implements the ABCI interface for validator consensus
@@ -89,6 +90,50 @@ type ValidatorApp struct {
 	// How many blocks of consensus history CometBFT keeps. <= 0 retains all,
 	// which is the default; see retainHeightFor for why pruning is opt-in.
 	blockRetention int64
+
+	// Validator consensus-key rotation (RB3-F95, validator_rotation.go). genesisValidators and
+	// cometChainID come from the chain's genesis file (SetGenesis) - identical on every node - and with the
+	// ledger's rotation log define the validator set at every height. blockValidatorUpdates is what this
+	// block returns to CometBFT; blockRotations counts rotations accepted in it (at most one).
+	genesisValidators     []GenesisValidator
+	cometChainID          string
+	blockValidatorUpdates []abcitypes.ValidatorUpdate
+	blockRotations        int
+	// rotationAccepted: the chain has accepted a rotation, so only v8 rules reproduce its history. Until
+	// then v7 rules do too, and the state is stamped v7 - which keeps a rollback to the v7 binary open
+	// right up to the first rotation (see committedRulesVersion).
+	rotationAccepted bool
+}
+
+// committedRulesVersion is the lowest rules version that reproduces the committed history: v7 until the
+// chain accepts a validator rotation, v8 from then on. Stamping it (rather than the binary's version)
+// is truthful - both produce the same app hash on a chain with no rotation - and it leaves the v7 binary
+// able to start on this state until a rotation makes that genuinely impossible.
+func (app *ValidatorApp) committedRulesVersion() uint64 {
+	if CurrentExecutionRulesVersion == executionRulesV8 && !app.rotationAccepted {
+		return executionRulesV7
+	}
+	return CurrentExecutionRulesVersion
+}
+
+// SetGenesis gives the app the chain's genesis validator set and chain id, which rotation is judged against.
+// Called once, before the node starts, from the genesis file CometBFT itself runs on.
+//
+// The chain id is kept even when the validators cannot be used for rotation: policy updates are bound to it
+// (RB3-F117), and it is identical on every node.
+func (app *ValidatorApp) SetGenesis(doc *cmttypes.GenesisDoc) error {
+	if doc == nil {
+		return fmt.Errorf("no genesis")
+	}
+	app.mu.Lock()
+	defer app.mu.Unlock()
+	app.cometChainID = doc.ChainID
+	validators, err := GenesisValidatorsFrom(doc)
+	if err != nil {
+		return err
+	}
+	app.genesisValidators = validators
+	return nil
 }
 
 // LatestHeight returns the height of the last block this app committed.
@@ -164,10 +209,22 @@ func NewValidatorApp(ledgerStore *ledger.LedgerStore, chainID string) *Validator
 	app.logger.Printf("🔐 [ENTITLEMENT] gate mode=%s trusted_keys=%d",
 		entCfg.Mode, len(entCfg.Keys))
 
+	// Whether this chain has accepted a validator rotation decides which rules its state is stamped with
+	// (committedRulesVersion). An unreadable log is not an empty one.
+	if ledgerStore != nil {
+		rotations, err := ledgerStore.LoadValidatorRotations()
+		if err != nil {
+			app.logger.Fatalf("❌ the validator rotation log could not be read: %v - not starting on a ledger this node cannot read", err)
+		}
+		app.rotationAccepted = len(rotations.Rotations) > 0
+	}
+
 	// Restore persisted ABCI state for CometBFT recovery
 	if ledgerStore != nil {
 		if state, err := ledgerStore.LoadABCIState(); err != nil {
-			app.logger.Printf("⚠️ Failed to load ABCI state: %v (starting fresh)", err)
+			// RB3-F116: an unreadable state is not an empty one. Starting at height 0 under a chain
+			// with history replays it (or, on a pruned block store, never starts) - refuse instead.
+			app.logger.Fatalf("❌ the persisted ABCI state could not be read: %v - not starting on a ledger this node cannot read", err)
 		} else if state != nil {
 			// Execution-rules check, BEFORE adopting the state.
 			//
@@ -323,10 +380,10 @@ func (app *ValidatorApp) Info(ctx context.Context, req *abcitypes.RequestInfo) (
 				}
 			}
 		} else if err != nil {
-			// Do NOT silently answer 0 — that triggers a full replay and, on a
-			// pruned store, an unrecoverable node. Surface it loudly instead.
-			app.logger.Printf("❌ Could not load persisted ABCI state (%v); "+
-				"reporting height %d, which will force a replay", err, app.latestHeight)
+			// Do NOT answer a height this node cannot vouch for — that triggers a
+			// full replay and, on a pruned store, an unrecoverable node. The
+			// handshake fails with the reason instead (RB3-F116).
+			return nil, fmt.Errorf("the persisted ABCI state could not be read: %w", err)
 		}
 	}
 
@@ -363,6 +420,21 @@ func (app *ValidatorApp) CheckTx(ctx context.Context, req *abcitypes.RequestChec
 	// mempool filter, and a lenient filter costs a wasted block, while a strict
 	// one costs the ability to govern the chain.
 	if _, ok := DecodePolicyUpdate(req.Tx); ok {
+		return &abcitypes.ResponseCheckTx{Code: 0, GasWanted: 1, GasUsed: 1}, nil
+	}
+	// A validator rotation likewise (RB3-F95). Its stateless checks - shape and the new key's proof of
+	// possession - filter the mempool; the admin quorum, the version and the set are judged in FinalizeBlock.
+	if vr, ok := DecodeValidatorRotation(req.Tx); ok {
+		if err := vr.CheckShape(); err != nil {
+			return &abcitypes.ResponseCheckTx{Code: 6, Log: "validator rotation refused: " + err.Error()}, nil
+		}
+		return &abcitypes.ResponseCheckTx{Code: 0, GasWanted: 1, GasUsed: 1}, nil
+	}
+	// A chain tick (chain_tick.go): nothing but a reason for a block.
+	if tick, ok := DecodeChainTick(req.Tx); ok {
+		if err := tick.CheckShape(); err != nil {
+			return &abcitypes.ResponseCheckTx{Code: 7, Log: "tick refused: " + err.Error()}, nil
+		}
 		return &abcitypes.ResponseCheckTx{Code: 0, GasWanted: 1, GasUsed: 1}, nil
 	}
 
@@ -608,6 +680,12 @@ func (app *ValidatorApp) FinalizeBlock(ctx context.Context, req *abcitypes.Reque
 	// every node does it at the same height and replay reproduces it exactly.
 	app.activatePolicyForBlock(req.Height, req.Time.UTC().Unix())
 
+	// VALIDATOR ROTATION (RB3-F95): note whether the pending rotation's new key signed the commit this
+	// block carries, before any transaction is judged - adoption is what lets the next rotation in.
+	app.blockValidatorUpdates = nil
+	app.blockRotations = 0
+	app.recordRotationAdoption(req.Height, req.DecidedLastCommit)
+
 	txResults := make([]*abcitypes.ExecTxResult, len(req.Txs))
 	app.blockBundles = app.blockBundles[:0] // reset per-block bundle list; txs append to it
 	// A fresh slice, never [:0]: the previous block's slice may already belong to the persister.
@@ -617,6 +695,21 @@ func (app *ValidatorApp) FinalizeBlock(ctx context.Context, req *abcitypes.Reque
 		// A policy update is not a ValidatorBlock and must not be judged as one.
 		if pu, ok := DecodePolicyUpdate(tx); ok {
 			result := app.processPolicyUpdate(pu, req.Height)
+			txResults[i] = &result
+			continue
+		}
+		// Nor is a validator rotation (RB3-F95).
+		if vr, ok := DecodeValidatorRotation(tx); ok {
+			result := app.processValidatorRotation(vr, req.Height)
+			txResults[i] = &result
+			continue
+		}
+		// A tick changes nothing (chain_tick.go).
+		if tick, ok := DecodeChainTick(tx); ok {
+			result := abcitypes.ExecTxResult{Code: 0, GasWanted: 1, GasUsed: 1}
+			if err := tick.CheckShape(); err != nil {
+				result = abcitypes.ExecTxResult{Code: 7, Log: "tick refused: " + err.Error()}
+			}
 			txResults[i] = &result
 			continue
 		}
@@ -651,8 +744,9 @@ func (app *ValidatorApp) FinalizeBlock(ctx context.Context, req *abcitypes.Reque
 		req.Height, len(req.Txs), app.pendingAppHash[:min(8, len(app.pendingAppHash))])
 
 	return &abcitypes.ResponseFinalizeBlock{
-		TxResults: txResults,
-		AppHash:   app.pendingAppHash,
+		TxResults:        txResults,
+		ValidatorUpdates: app.blockValidatorUpdates,
+		AppHash:          app.pendingAppHash,
 	}, nil
 }
 
@@ -721,7 +815,7 @@ func (app *ValidatorApp) Commit(ctx context.Context, req *abcitypes.RequestCommi
 		LastBlockAppHash: appHash,
 		// Stamp the rules that produced this hash, so a future binary can tell
 		// whether it is able to replay this state at all.
-		ExecutionRulesVersion: CurrentExecutionRulesVersion,
+		ExecutionRulesVersion: app.committedRulesVersion(),
 	}); err != nil {
 		app.logger.Printf("❌ Failed to persist ABCI state: %v", err)
 	}
@@ -831,6 +925,21 @@ func (app *ValidatorApp) Query(ctx context.Context, req *abcitypes.RequestQuery)
 	case "/certen/anchor_ledger":
 		resp := app.queryAnchorLedger(*req)
 		return &resp, nil
+
+	case "/certen/validator_rotations":
+		// The rotation log (RB3-F95): what the chain accepted, and whether each new key has signed yet.
+		if app.ledgerStore == nil {
+			return &abcitypes.ResponseQuery{Code: 1, Log: "ledger store not available"}, nil
+		}
+		log, err := app.ledgerStore.LoadValidatorRotations()
+		if err != nil {
+			return &abcitypes.ResponseQuery{Code: 1, Log: "failed to read the rotation log: " + err.Error()}, nil
+		}
+		b, err := json.Marshal(log)
+		if err != nil {
+			return &abcitypes.ResponseQuery{Code: 1, Log: err.Error()}, nil
+		}
+		return &abcitypes.ResponseQuery{Code: 0, Value: b, Height: app.latestHeight}, nil
 
 	default:
 		return &abcitypes.ResponseQuery{

@@ -94,9 +94,37 @@ const (
 	// to accept/reject and therefore to the app hash.
 	executionRulesV7 uint64 = 7
 
+	// v8 — validator consensus-key rotation (RB3-F95), and policy updates bound to the chain (RB3-F117:
+	// an update's admin signatures now cover its chain id; an unbound one is accepted only if it is one
+	// of the two committed on certen-testnet before v8, so their replay is unchanged). Two recognised
+	// transaction kinds:
+	// `certen.validator.rotate/v1` (signed by the sealed admin quorum; accepted, it contributes its id
+	// to the app hash and returns ValidatorUpdates) and `certen.chain.tick/v1` (accepted, changes
+	// nothing - it makes an idle chain produce a block). Under v7 both were judged as ValidatorBlocks and
+	// refused with a different result code.
+	//
+	// v8 CONTINUES v7 state without a reset (see compatibleContinuations). The two rule sets differ only
+	// on transactions of those two kinds - in result code as well as app hash, and the result codes are
+	// hashed into the next block header (LastResultsHash), so the claim has to cover every such
+	// transaction, valid or not. It is checked, not assumed: `validator-rotate history-check` reads
+	// every committed block and finds no transaction of either kind (run on the production chain
+	// 2026-09-27 before this shipped; runbook step 0 repeats it before the deploy). The fleet then runs
+	// v8 together, verified by every node reporting app version 8 before the first rotation.
+	executionRulesV8 uint64 = 8
+
 	// CurrentExecutionRulesVersion is what THIS binary implements.
-	CurrentExecutionRulesVersion = executionRulesV7
+	CurrentExecutionRulesVersion = executionRulesV8
 )
+
+// compatibleContinuations names the older rules whose committed state this binary may continue, and why
+// that is sound: an entry says the newer rules accept and reject exactly what the older ones did on every
+// block the older ones could have committed. Anything not listed refuses to start, as before. An entry is
+// a claim about history, made once per bump and never by default.
+var compatibleContinuations = map[uint64]uint64{
+	// v8 adds only the rotation and tick kinds, which pre-v8 history does not contain (see
+	// executionRulesV8 - checked against every committed block before the deploy).
+	executionRulesV7: executionRulesV8,
+}
 
 // ExecutionRulesMismatchError explains a refusal to start in terms an operator
 // can act on. The failure it replaces is a raw hash comparison that names
@@ -138,6 +166,10 @@ func (e *ExecutionRulesMismatchError) Error() string {
 // the first run after upgrading simply stamps the state it already had.
 func checkExecutionRulesVersion(persisted uint64, height int64) (uint64, error) {
 	if persisted == 0 {
+		return CurrentExecutionRulesVersion, nil
+	}
+	if next, ok := compatibleContinuations[persisted]; ok && next == CurrentExecutionRulesVersion {
+		// Continued, and from the next commit stamped with the rules that commit it.
 		return CurrentExecutionRulesVersion, nil
 	}
 	if persisted != CurrentExecutionRulesVersion {

@@ -252,6 +252,11 @@ func ShouldFailover(err error) bool {
 	switch {
 	case strings.Contains(m, "archive"): // "Archive requests require a personal token"
 		return true
+	// publicnode, drpc and sepolia.base.org answer a header or log read below their retention with
+	// code 4444 "pruned history unavailable: requested N, earliest available M" (RB3-F132, 2026-09-27).
+	// An endpoint that lacks the history is not the chain lacking it: another provider may hold it.
+	case strings.Contains(m, "pruned history"), strings.Contains(m, "history unavailable"):
+		return true
 	case strings.Contains(m, "429"), strings.Contains(m, "too many requests"), strings.Contains(m, "rate limit"):
 		return true
 	case strings.Contains(m, "quota"), strings.Contains(m, "credits"), strings.Contains(m, "capacity"):

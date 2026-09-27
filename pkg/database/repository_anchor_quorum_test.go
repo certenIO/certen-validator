@@ -788,3 +788,53 @@ func TestLayer5BindingSelectsTheMemberOnItsChain(t *testing.T) {
 		t.Fatalf("a chain the intent has no member on: %v", err)
 	}
 }
+
+// RB3-F127: the senders of both transactions are stored with the anchor, and a row written without them
+// (by a validator that did not know them) is completed by one that does - never overwritten.
+func TestAnchorQuorumRecordsWhoSentEachTransaction(t *testing.T) {
+	repo := anchorRepoForTest(t)
+	ctx := context.Background()
+	const creator, verifier = "0xd4a3dbbae0c04d4307c5e00a5e05b66acc289f5d", "0xf150ff923e29f797b4598b89bd7d02002d00db3a"
+	senders := func(bundle string) (string, string) {
+		t.Helper()
+		var c, v sql.NullString
+		if err := testDB.QueryRow(`SELECT anchor_create_sender, verify_sender FROM anchor_batches WHERE chain_id = 84532 AND bundle_id = $1`, bundle).Scan(&c, &v); err != nil {
+			t.Fatal(err)
+		}
+		return c.String, v.String
+	}
+
+	stored := bundleHex(1301)
+	rec := anchorRecordForTest(84532, stored, 0xb1)
+	rec.AnchorCreateSender, rec.VerifySender = strings.ToUpper(creator[:2])+creator[2:], verifier
+	if written, err := repo.RecordAnchorQuorum(ctx, rec); err != nil || !written {
+		t.Fatalf("write: %v %v", written, err)
+	}
+	if c, v := senders(stored); c != creator || v != verifier {
+		t.Fatalf("stored senders %q %q", c, v)
+	}
+
+	completed := bundleHex(1302)
+	if written, err := repo.RecordAnchorQuorum(ctx, anchorRecordForTest(84532, completed, 0xb2)); err != nil || !written {
+		t.Fatalf("first write: %v %v", written, err)
+	}
+	if c, v := senders(completed); c != "" || v != "" {
+		t.Fatalf("senders nobody stated: %q %q", c, v)
+	}
+	knows := anchorRecordForTest(84532, completed, 0xb2)
+	knows.AnchorCreateSender, knows.VerifySender = creator, verifier
+	if _, err := repo.RecordAnchorQuorum(ctx, knows); err != nil {
+		t.Fatal(err)
+	}
+	if c, v := senders(completed); c != creator || v != verifier {
+		t.Fatalf("senders not completed: %q %q", c, v)
+	}
+	contradicts := anchorRecordForTest(84532, completed, 0xb2)
+	contradicts.AnchorCreateSender, contradicts.VerifySender = verifier, creator
+	if _, err := repo.RecordAnchorQuorum(ctx, contradicts); err != nil {
+		t.Fatal(err)
+	}
+	if c, v := senders(completed); c != creator || v != verifier {
+		t.Fatalf("recorded senders were overwritten: %q %q", c, v)
+	}
+}

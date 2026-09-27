@@ -67,15 +67,23 @@ func BuildLayer5(
 	if obs == nil || obs.TxHash == "" || obs.BlockNumber == 0 {
 		return nil, nil // no actionable external coordinates
 	}
+	// The anchor transaction is where the ROOT was published: the anchor-create transaction the canonical
+	// row carries, and nothing else. `obs` describes the settlement, which published no root. A row that
+	// does not name its create transaction has no honest layer 5, and it is absent (summary-only) - it used
+	// to fall back to the settlement's transaction and block, and published exactly that claim for three
+	// anchors on 2026-09-19..21 (RB3-F134), in their layer 5 and in the Certen proofs built from it.
+	if binding == nil || !IsTransactionHash(binding.AnchorTxHash) {
+		return nil, nil
+	}
 
 	l5 := &Layer5{
-		ChainID:     chainID,
-		Network:     obs.ChainName,
-		AnchorTx:    obs.TxHash,
-		BlockNumber: obs.BlockNumber,
-		BlockHash:   obs.BlockHash,
-
-		Confirmations: obs.Confirmations,
+		ChainID:  chainID,
+		Network:  obs.ChainName,
+		AnchorTx: binding.AnchorTxHash,
+		// The anchor's block is the one recorded with it (the create receipt's), and unknown (zero) until
+		// the anchor transaction itself is read. Never the verify transaction's block, and never the
+		// settlement's; nor the settlement block's hash or depth.
+		BlockNumber: uint64(max(binding.AnchorBlockNum, 0)),
 	}
 	if l5.Network == "" {
 		// The strategy did not name its chain. The canonical row does, and a known chain id has a name;
@@ -84,24 +92,6 @@ func BuildLayer5(
 		if binding != nil && binding.TargetChain != "" {
 			l5.Network = binding.TargetChain
 		}
-	}
-
-	// The anchor transaction is where the ROOT was published, which is not where this member settled.
-	// `obs` describes settlement; binding.AnchorTxHash is the anchor-create transaction carried on the
-	// canonical row. Using the observation for both is what produced the live claim that root d2d24ab3…
-	// is in tx 0x9e4ff6ab… — a transaction that settled a different root entirely.
-	if binding != nil && binding.AnchorTxHash != "" && !strings.EqualFold(binding.AnchorTxHash, obs.TxHash) {
-		// None of the observation's coordinates belong to the anchor: its block, block hash and depth
-		// are the settlement's. The anchor's block is the one recorded with it (the create receipt's),
-		// and unknown (zero) until the anchor transaction itself is observed. Never the verify
-		// transaction's block, and never the settlement's.
-		l5.AnchorTx = binding.AnchorTxHash
-		l5.BlockNumber = 0
-		if binding.AnchorBlockNum > 0 {
-			l5.BlockNumber = uint64(binding.AnchorBlockNum)
-		}
-		l5.BlockHash = ""
-		l5.Confirmations = 0
 	}
 
 	switch {

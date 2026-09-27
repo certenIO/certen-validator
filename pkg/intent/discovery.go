@@ -226,6 +226,9 @@ type IntentDiscovery struct {
 	// queue is empty, so no double-execution is possible; failed records remain lifecycle=failed
 	// in PostgreSQL for alerting.
 	retryCh chan *intentRetryJob
+
+	// unsearched keeps blocks whose search failed until they are searched (RB3-F125, unsearched_blocks.go).
+	unsearched UnsearchedBlockStore
 }
 
 // LedgerStoreInterface defines the interface for ledger operations needed by intent discovery
@@ -381,6 +384,7 @@ func (id *IntentDiscovery) StartMonitoring() {
 	if workerCount <= 0 {
 		workerCount = DefaultBlockWorkers
 	}
+	go id.searchUnsearchedLoop()
 	for i := 0; i < workerCount; i++ {
 		workerID := fmt.Sprintf("worker-%d", i+1)
 		id.logger.Printf("🔧 Starting block processor: %s", workerID)
@@ -420,23 +424,33 @@ func (id *IntentDiscovery) monitoringLoop() {
 
 	id.logger.Printf("🔄 Starting intent discovery monitoring loop...")
 
-	// E.3 remediation: Initialize starting block height with retry and exponential backoff
+	// E.3 remediation: Initialize starting block height with retry and exponential backoff.
+	//
+	// RB3-F116: until a starting height is known, discovery does not start. It used to fall back to
+	// the configured minimum after five attempts, which is a height nobody chose for this chain.
 	ctx := context.Background()
-	var lastErr error
-	for retries := 0; retries < 5; retries++ {
-		if err := id.initializeStartingHeight(ctx); err != nil {
-			lastErr = err
-			backoff := time.Duration(1<<retries) * time.Second // 1s, 2s, 4s, 8s, 16s
-			id.logger.Printf("⚠️ Failed to initialize height (attempt %d/5): %v, retrying in %v", retries+1, err, backoff)
-			time.Sleep(backoff)
-			continue
+	for attempt := 1; ; attempt++ {
+		err := id.initializeStartingHeight(ctx)
+		// Health reports why discovery has not started, the way it reports a failing poll.
+		id.watermarkMu.Lock()
+		if err != nil {
+			id.lastPollErr = "discovery not started: " + err.Error()
+		} else {
+			id.lastPollErr = ""
 		}
-		lastErr = nil
-		break
-	}
-	if lastErr != nil {
-		id.logger.Printf("❌ Failed to initialize starting height after 5 attempts, using fallback: %d", id.config.MinStartHeight)
-		id.lastProcessedBlock = id.config.MinStartHeight
+		id.watermarkMu.Unlock()
+		if err == nil {
+			break
+		}
+		backoff := time.Duration(1<<min(attempt-1, 5)) * time.Second // 1s, 2s, 4s, 8s, 16s, then 32s
+		id.logger.Printf("❌ Intent discovery NOT started: no starting height (attempt %d): %v, retrying in %v",
+			attempt, err, backoff)
+		select {
+		case <-id.stopCh:
+			id.logger.Printf("🛑 Intent discovery monitoring loop stopping before it started")
+			return
+		case <-time.After(backoff):
+		}
 	}
 
 	for {
@@ -466,7 +480,9 @@ func (id *IntentDiscovery) initializeStartingHeight(ctx context.Context) error {
 	if id.ledgerStore != nil {
 		persistedHeight, err := id.ledgerStore.LoadIntentLastBlock()
 		if err != nil {
-			id.logger.Printf("⚠️ Failed to load persisted block height: %v", err)
+			// RB3-F116: an unreadable watermark is not an absent one. Starting at the tip instead
+			// never looks at any intent between the watermark and the tip.
+			return fmt.Errorf("load the persisted discovery watermark: %w", err)
 		} else if persistedHeight > 0 {
 			startHeight = persistedHeight
 			id.logger.Printf("📊 Loaded persisted last processed block: %d, will start from %d", persistedHeight, startHeight)
@@ -477,11 +493,12 @@ func (id *IntentDiscovery) initializeStartingHeight(ctx context.Context) error {
 	if startHeight == 0 {
 		latestBlock, err := id.client.GetLatestBlock(ctx)
 		if err != nil {
-			id.logger.Printf("❌ Failed to get latest block: %v", err)
-			startHeight = id.config.MinStartHeight
-			id.logger.Printf("📊 Using configured minimum starting height: %d", startHeight)
+			// No starting height is invented for a tip that could not be read; the caller retries.
+			return fmt.Errorf("read the latest block to start discovery from: %w", err)
 		} else {
-			startHeight = latestBlock.Height - 5 // Start 5 blocks back to catch any missed
+			if latestBlock.Height > 5 {
+				startHeight = latestBlock.Height - 5 // Start 5 blocks back to catch any missed
+			}
 			id.logger.Printf("📊 Starting from latest block - 5: %d (latest: %d)", startHeight, latestBlock.Height)
 
 			// Ensure we're not starting too far in the past
@@ -494,7 +511,7 @@ func (id *IntentDiscovery) initializeStartingHeight(ctx context.Context) error {
 		// Persist the initial height
 		if id.ledgerStore != nil {
 			if err := id.ledgerStore.SaveIntentLastBlock(startHeight); err != nil {
-				id.logger.Printf("⚠️ Failed to persist initial block height: %v", err)
+				return fmt.Errorf("persist the initial discovery watermark %d: %w", startHeight, err)
 			}
 		}
 	}
@@ -662,14 +679,91 @@ func (id *IntentDiscovery) blockProcessor(workerID string) {
 		case job := <-id.blockProcessCh:
 			id.logger.Printf("📦 Worker %s received job for block %d", workerID, job.BlockHeight)
 			if err := id.processBlock(job, workerID); err != nil {
-				id.logger.Printf("❌ Worker %s failed to process block %d: %v",
-					workerID, job.BlockHeight, err)
+				id.logger.Printf("❌ Worker %s failed to search block %d: %v", workerID, job.BlockHeight, err)
+				// The watermark passes a block only once it is searched or kept to be searched
+				// (RB3-F125). It used to pass it regardless, on the theory that it would "appear again
+				// on a future polling cycle" - it never did, and its intents were lost.
+				if !id.keepUnsearched(job.BlockHeight, err) {
+					go id.requeueLater(job)
+					continue
+				}
 			}
-			// Advance watermark regardless of success/failure to prevent getting stuck.
-			// Failed blocks are logged above; if the error was transient the block will
-			// appear again on a future polling cycle once the watermark catches up.
 			id.advanceWatermark(job.BlockHeight)
 		}
+	}
+}
+
+// keepUnsearched records a block whose search failed; false when it could not be kept (the caller then
+// must not let the watermark pass it).
+func (id *IntentDiscovery) keepUnsearched(height uint64, cause error) bool {
+	if id.unsearched == nil {
+		id.logger.Printf("🚨 [DISCOVERY] block %d could not be searched and there is no unsearched-block store; "+
+			"it is searched again instead of passed", height)
+		return false
+	}
+	if err := id.unsearched.Put(height, cause.Error()); err != nil {
+		id.logger.Printf("🚨 [DISCOVERY] block %d could not be searched (%v) nor kept (%v); it is searched again "+
+			"instead of passed", height, cause, err)
+		return false
+	}
+	id.logger.Printf("⚠️ [DISCOVERY] block %d kept for another search: %v", height, cause)
+	return true
+}
+
+// requeueLater hands a block that could be neither searched nor kept back to the workers after a pause.
+func (id *IntentDiscovery) requeueLater(job *BlockProcessJob) {
+	select {
+	case <-id.stopCh:
+	case <-time.After(unsearchedRetryInterval):
+		select {
+		case <-id.stopCh:
+		case id.blockProcessCh <- job:
+		}
+	}
+}
+
+// unsearchedRetryInterval is how often kept blocks are searched again.
+const unsearchedRetryInterval = 30 * time.Second
+
+// SetUnsearchedBlocks gives discovery the store its unsearched blocks are kept in.
+func (id *IntentDiscovery) SetUnsearchedBlocks(s UnsearchedBlockStore) { id.unsearched = s }
+
+// searchUnsearchedLoop searches kept blocks again until each is searched.
+func (id *IntentDiscovery) searchUnsearchedLoop() {
+	t := time.NewTicker(unsearchedRetryInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-id.stopCh:
+			return
+		case <-t.C:
+			id.searchUnsearchedOnce()
+		}
+	}
+}
+
+// searchUnsearchedOnce searches every kept block once, lowest first.
+func (id *IntentDiscovery) searchUnsearchedOnce() {
+	if id.unsearched == nil {
+		return
+	}
+	blocks, err := id.unsearched.List()
+	if err != nil {
+		id.logger.Printf("🚨 [DISCOVERY] unsearched blocks unreadable: %v", err)
+		return
+	}
+	for _, b := range blocks {
+		if err := id.processBlock(&BlockProcessJob{BlockHeight: b.Height}, "unsearched"); err != nil {
+			if pErr := id.unsearched.Put(b.Height, err.Error()); pErr != nil {
+				id.logger.Printf("🚨 [DISCOVERY] block %d: %v (and its attempt was not recorded: %v)", b.Height, err, pErr)
+			}
+			continue
+		}
+		if err := id.unsearched.Remove(b.Height); err != nil {
+			id.logger.Printf("🚨 [DISCOVERY] block %d searched, but not removed from the unsearched blocks: %v", b.Height, err)
+			continue
+		}
+		id.logger.Printf("✅ [DISCOVERY] block %d searched after %d failed attempt(s)", b.Height, b.Attempts)
 	}
 }
 
@@ -700,6 +794,13 @@ type DiscoveryStatus struct {
 	// Started is false until the first watermark advance, so a node that has only just booted
 	// is not reported as stalled.
 	Started bool
+	// Unsearched is how many blocks are kept to be searched again, OldestUnsearched the lowest of them
+	// and OldestUnsearchedSeconds how long it has waited (RB3-F125). UnsearchedError is set when the
+	// store itself cannot be read.
+	Unsearched              int
+	OldestUnsearched        uint64
+	OldestUnsearchedSeconds float64
+	UnsearchedError         string
 }
 
 // StallLagFloor is how far behind the head a node must be before a still watermark counts as a
@@ -749,6 +850,14 @@ func (id *IntentDiscovery) Status() DiscoveryStatus {
 		ChainHead:     id.chainHead,
 		LastPollError: id.lastPollErr,
 		Started:       !id.lastAdvanceAt.IsZero(),
+	}
+	if id.unsearched != nil {
+		if kept, err := id.unsearched.List(); err != nil {
+			st.UnsearchedError = err.Error()
+		} else if len(kept) > 0 {
+			st.Unsearched, st.OldestUnsearched = len(kept), kept[0].Height
+			st.OldestUnsearchedSeconds = time.Since(kept[0].FirstSeen).Seconds()
+		}
 	}
 	if id.chainHead > id.lastProcessedBlock {
 		st.LagBlocks = id.chainHead - id.lastProcessedBlock

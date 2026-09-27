@@ -227,6 +227,29 @@ type ScheduledPolicyChange struct {
 	ProposedAtHeight int64 `json:"proposedAtHeight"`
 }
 
+// ====== Validator consensus-key rotations (RB3-F95) ======
+
+// ValidatorRotationLog is every validator consensus-key rotation this chain has accepted, oldest first.
+// The validator set at a height is the genesis set with every rotation accepted below that height applied.
+type ValidatorRotationLog struct {
+	Rotations []ValidatorRotationRecord `json:"rotations"`
+}
+
+// ValidatorRotationRecord is one accepted rotation: the old key left the set and the new key took its power,
+// effective (CometBFT) two blocks after Height.
+type ValidatorRotationRecord struct {
+	Version   uint64 `json:"version"`
+	Height    int64  `json:"height"`      // the block that accepted it
+	OldPubKey string `json:"old_pub_key"` // hex ed25519
+	NewPubKey string `json:"new_pub_key"` // hex ed25519
+	Power     int64  `json:"power"`
+	ID        string `json:"id"` // folded into the app hash of Height
+	// AdoptedHeight is the first block whose commit carries a signature by the new key: from then on the
+	// rotated validator is known to be signing. Zero until then. Another rotation is refused while one is
+	// not adopted, so a rotation whose new key is not running can never be compounded by a second one.
+	AdoptedHeight int64 `json:"adopted_height,omitempty"`
+}
+
 // ====== Anchor Targets Configuration ======
 
 // AnchorTargets contains the fixed list of known anchor targets for iteration

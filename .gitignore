@@ -16,6 +16,9 @@
 !.env.example
 !.env.*.example
 
+# Per-validator secrets: sending key, BLS key material, CometBFT key seeds (RB3-F64, RB3-F95)
+secrets/
+
 # Docker Compose (contains per-validator private keys)
 docker-compose.yml
 docker-compose.override.yml

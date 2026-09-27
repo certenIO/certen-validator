@@ -433,8 +433,7 @@ func (g1 *G1Layer) ExtractSignatureSetUsingMessageID(ctx context.Context, messag
 
 	// Build query for transaction message (following Python approach exactly)
 	includeReceipt := map[string]bool{"forAny": true}
-	expand := true
-	query := g1.queryBuilder.BuildDefaultQuery(includeReceipt, &expand)
+	query := g1.queryBuilder.BuildDefaultQuery(includeReceipt)
 
 	// Execute query and save artifact
 	// Create safe filename

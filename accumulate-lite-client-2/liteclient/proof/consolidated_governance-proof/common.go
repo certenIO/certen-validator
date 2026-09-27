@@ -850,26 +850,28 @@ type QueryBuilder struct{}
 
 // BuildNormativeChainQuery builds a CERTEN normative chain query (Appendix A.1)
 // This implementation directly matches the CERTEN specification templates
-func (QueryBuilder) BuildNormativeChainQuery(name, entryHex string, includeReceipt, expand bool) map[string]interface{} {
+//
+// An entry query has no expand field: the v3 server always returns the entry's value (RB3-F18 - it used
+// to send a top-level "expand" the server does not read).
+func (QueryBuilder) BuildNormativeChainQuery(name, entryHex string, includeReceipt bool) map[string]interface{} {
 	return map[string]interface{}{
 		"queryType":      "chain",
 		"name":           name,
 		"entry":          entryHex,
 		"includeReceipt": includeReceipt, // Boolean as required by spec
-		"expand":         expand,         // Boolean as required by spec
 	}
 }
 
 // BuildDefaultQuery builds default transaction query
-func (QueryBuilder) BuildDefaultQuery(includeReceipt interface{}, expand *bool) map[string]interface{} {
+//
+// DefaultQuery's only field is includeReceipt (accumulate pkg/api/v3 queries.yml); the "expand" this used
+// to send was not read by the server (RB3-F18).
+func (QueryBuilder) BuildDefaultQuery(includeReceipt interface{}) map[string]interface{} {
 	query := map[string]interface{}{
 		"queryType": "default",
 	}
 	if includeReceipt != nil {
 		query["includeReceipt"] = includeReceipt
-	}
-	if expand != nil {
-		query["expand"] = *expand
 	}
 	return query
 }
@@ -886,17 +888,20 @@ func (QueryBuilder) BuildChainQuery(name string, entryHex *string, rangeStart, r
 	}
 
 	if rangeStart != nil && rangeCount != nil {
-		query["range"] = map[string]interface{}{
+		rng := map[string]interface{}{
 			"start": *rangeStart,
 			"count": *rangeCount,
 		}
+		// Expand is a RangeOptions field; a top-level "expand" is not a v3 chain-query field and the server
+		// ignored it (RB3-F18). Entry queries always carry the value, and a count query has none.
+		if expand != nil {
+			rng["expand"] = *expand
+		}
+		query["range"] = rng
 	}
 
 	if includeReceipt != nil {
 		query["includeReceipt"] = includeReceipt
-	}
-	if expand != nil {
-		query["expand"] = *expand
 	}
 
 	return query
@@ -917,7 +922,6 @@ func (QueryBuilder) BuildMsgIDQuery() map[string]interface{} {
 		"includeReceipt": map[string]bool{
 			"forAny": true,
 		},
-		"expand": true,
 	}
 }
 
@@ -1176,27 +1180,12 @@ func (qb QueryBuilder) BuildMainChainQuery(entryHex *string) map[string]interfac
 	return qb.BuildChainCountQuery("main")
 }
 
-// BuildMainChainRangeQuery builds main chain range query
-func (qb QueryBuilder) BuildMainChainRangeQuery(start, count int) map[string]interface{} {
-	return qb.BuildChainQuery("main", nil, &start, &count, map[string]interface{}{"forAny": true}, &[]bool{true}[0])
-}
-
 // BuildSignatureChainQuery builds signature chain query
 func (qb QueryBuilder) BuildSignatureChainQuery(entryHex *string, start, count int) map[string]interface{} {
 	if entryHex != nil {
 		return qb.BuildChainQuery("signature", entryHex, nil, nil, true, nil)
 	}
 	return qb.BuildChainCountQuery("signature")
-}
-
-// BuildSignatureChainRangeQuery builds signature chain range query
-func (qb QueryBuilder) BuildSignatureChainRangeQuery(start, count int) map[string]interface{} {
-	return qb.BuildChainQuery("signature", nil, &start, &count, false, &[]bool{false}[0])
-}
-
-// BuildSignatureEntryQuery builds single signature entry query
-func (qb QueryBuilder) BuildSignatureEntryQuery(entryHex string) map[string]interface{} {
-	return qb.BuildChainQuery("signature", &entryHex, nil, nil, true, &[]bool{true}[0])
 }
 
 // BuildExecutionInclusionQuery builds execution inclusion query

@@ -166,6 +166,9 @@ func isCallVerdict(err error) bool {
 // A member whose anchor is attested is marked as such: it is held past the memory-backstop prune,
 // because this validator may yet hold a settlement window for it.
 func (o *BatchOrchestrator) OnDemandMemberNeedsThisValidator(ctx context.Context, member *PendingBatchIntent) (bool, error) {
+	if !SendersVerified() {
+		return false, errSendersUnverified // not "not needed": unknown until this validator's address is proven
+	}
 	in, err := member.LeafInput()
 	if err != nil {
 		return false, err

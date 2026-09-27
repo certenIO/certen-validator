@@ -1,7 +1,12 @@
 ## Certen Validator Network - Docker Compose Template
 ##
-## Copy to docker-compose.yml and fill in per-validator secrets.
-## Shared config lives in .env.shared (copy from .env.shared.example).
+## Copy to docker-compose.yml. Nothing secret is written here:
+##   - .env.shared (from .env.shared.example): what every validator shares.
+##   - secrets/validator-N.env (gitignored, root-only, 0600): what is ONE validator's - ETH_PRIVATE_KEY
+##     (its own registered identity; the node refuses to send otherwise - RB3-F64), BLS key material,
+##     COMET_PRIVVAL_SEED / COMET_NODE_KEY_SEED (RB3-F95).
+##   - POSTGRES_PASSWORD comes from the environment (a .env file next to this one), never a literal.
+## Only Sepolia, Base Sepolia and Arbitrum Sepolia are supported chains.
 
 services:
   postgres:
@@ -10,7 +15,7 @@ services:
     environment:
       POSTGRES_DB: certen_proofs
       POSTGRES_USER: certen
-      POSTGRES_PASSWORD: certen_testnet_2026
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -31,18 +36,11 @@ services:
       - "8081:8080"
       - "26656:26656"
       - "26657:26657"
-    env_file: .env.shared
+    env_file: [.env.shared, secrets/validator-1.env]
     environment:
       VALIDATOR_ID: validator-1
-      ETH_PRIVATE_KEY: "<VALIDATOR_1_ETH_PRIVATE_KEY>"
       COMETBFT_P2P_SEEDS: "<COMMA_SEPARATED_PEER_LIST_EXCLUDING_SELF>"
       ATTESTATION_PEERS: "<COMMA_SEPARATED_PEER_LIST_EXCLUDING_SELF>"
-      SOLANA_PRIVATE_KEY: "<VALIDATOR_1_SOLANA_PRIVATE_KEY>"
-      APTOS_PRIVATE_KEY: "<VALIDATOR_1_APTOS_PRIVATE_KEY>"
-      SUI_PRIVATE_KEY: "<VALIDATOR_1_SUI_PRIVATE_KEY>"
-      NEAR_SIGNER_ACCOUNT_ID: "<VALIDATOR_1_NEAR_ACCOUNT>"
-      NEAR_PRIVATE_KEY: "<VALIDATOR_1_NEAR_PRIVATE_KEY>"
-      TON_WALLET_MNEMONIC: "<VALIDATOR_1_TON_MNEMONIC>"
     volumes:
       - validator1_data:/app/data
       - validator1_keys:/app/bft-keys
@@ -57,7 +55,7 @@ services:
 
   # Repeat for validator-2 through validator-7 with:
   #   - Incrementing ports (8082-8087, 26666-26716)
-  #   - Unique private keys per validator
+  #   - env_file: [.env.shared, secrets/validator-N.env] - each validator's own keys in its own file
   #   - COMETBFT_P2P_SEEDS excluding self
   #   - ATTESTATION_PEERS excluding self
 

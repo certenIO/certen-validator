@@ -30,7 +30,8 @@ func fakeV3(t *testing.T, status func() (interface{}, bool)) *LiteClientAdapter 
 			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{"jsonrpc": "2.0", "id": 1, "result": map[string]interface{}{
-			"recordType": "minorBlock", "index": 777, "time": "2026-09-27T09:59:42Z"}})
+			"recordType": "minorBlock", "index": 777, "time": "2026-09-27T09:59:42Z",
+			"entries": map[string]interface{}{"recordType": "range", "start": 0, "total": 0}}})
 	}))
 	t.Cleanup(srv.Close)
 	a, err := NewLiteClientAdapter(&LiteClientConfig{NetworkURL: srv.URL, RequestTimeout: 5 * time.Second})

@@ -508,8 +508,12 @@ func (r *ProofArtifactRepository) UpdateProofGovLevel(ctx context.Context, proof
 }
 
 // UpdateProofFinalState updates the final state of a proof after cycle completes
-// This is a comprehensive update that sets anchor info, status, gov_level, and verification in one call
-func (r *ProofArtifactRepository) UpdateProofFinalState(ctx context.Context, proofID uuid.UUID, anchorTxHash string, anchorBlockNumber int64, anchorChain string, govLevel GovernanceLevel, verified bool) error {
+// This is a comprehensive update that sets anchor info, status, gov_level, and verification in one call.
+//
+// anchorTxHash/anchorBlockNumber are where the proof's batch root was published (its layer 5), "" and 0 when
+// it has none; settlementTxHash/settlementBlockNumber are the settlement the cycle attested. They were one
+// pair, filled with the settlement (RB3-F135).
+func (r *ProofArtifactRepository) UpdateProofFinalState(ctx context.Context, proofID uuid.UUID, anchorTxHash string, anchorBlockNumber int64, settlementTxHash string, settlementBlockNumber int64, anchorChain string, govLevel GovernanceLevel, verified bool) error {
 	verificationStatus := VerificationStatusVerified
 	if !verified {
 		verificationStatus = VerificationStatusFailed
@@ -517,14 +521,16 @@ func (r *ProofArtifactRepository) UpdateProofFinalState(ctx context.Context, pro
 
 	query := `
 		UPDATE proof_artifacts
-		SET anchor_tx_hash = $2, anchor_block_number = $3, anchor_chain = $4,
+		SET anchor_tx_hash = NULLIF($2, ''), anchor_block_number = NULLIF($3, 0), anchor_chain = $4,
 			gov_level = $5, status = 'anchored', verification_status = $6,
+			settlement_tx_hash = NULLIF($7, ''), settlement_block_number = NULLIF($8, 0),
 			anchored_at = NOW(), verified_at = NOW()
 		WHERE proof_id = $1`
 
 	// No governance level proven is stored as none (NULL), never as G0 (RB3-F73).
 	level := sql.NullString{String: string(govLevel), Valid: govLevel != ""}
-	result, err := r.db.ExecContext(ctx, query, proofID, anchorTxHash, anchorBlockNumber, anchorChain, level, verificationStatus)
+	result, err := r.db.ExecContext(ctx, query, proofID, anchorTxHash, anchorBlockNumber, anchorChain, level, verificationStatus,
+		settlementTxHash, settlementBlockNumber)
 	if err != nil {
 		return fmt.Errorf("failed to update proof final state: %w", err)
 	}
@@ -947,9 +953,10 @@ func (r *ProofArtifactRepository) CreateProofAttestation(ctx context.Context, in
 		INSERT INTO validator_attestations (
 			proof_id, batch_id, validator_id, validator_pubkey,
 			attested_hash, signature, anchor_tx_hash, merkle_root, block_number,
+			settlement_tx_hash, settlement_block_number,
 			signature_valid, attested_at, created_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW()
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $12, $13, $10, $11, NOW()
 		)
 		RETURNING attestation_id, created_at`
 
@@ -971,7 +978,7 @@ func (r *ProofArtifactRepository) CreateProofAttestation(ctx context.Context, in
 	err := r.db.QueryRowContext(ctx, query,
 		input.ProofArtifactID, input.BatchID, input.ValidatorID, input.ValidatorPubkey,
 		input.AttestedHash, input.Signature, input.AnchorTxHash, input.MerkleRoot, input.BlockNumber,
-		input.SignatureValid, input.AttestedAt,
+		input.SignatureValid, input.AttestedAt, input.SettlementTxHash, input.SettlementBlockNumber,
 	).Scan(&att.AttestationID, &att.CreatedAt)
 
 	if err != nil {
@@ -1187,9 +1194,12 @@ func (r *ProofArtifactRepository) CreateAnchorReference(ctx context.Context, inp
 			proof_id, target_chain, chain_id, network_name,
 			anchor_tx_hash, anchor_block_number, anchor_block_hash, anchor_timestamp,
 			contract_address, confirmations, required_confirmations, is_confirmed, confirmed_at,
-			gas_used, gas_price_wei, total_cost_wei, created_at
+			gas_used, gas_price_wei, total_cost_wei,
+			settlement_tx_hash, settlement_block_number, settlement_block_hash, settlement_timestamp, settlement_gas_used,
+			created_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW()
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
+			NULLIF($17, ''), NULLIF($18, 0), $19, $20, $21, NOW()
 		)
 		RETURNING reference_id, created_at`
 
@@ -1216,6 +1226,7 @@ func (r *ProofArtifactRepository) CreateAnchorReference(ctx context.Context, inp
 		input.AnchorTxHash, input.AnchorBlockNumber, input.AnchorBlockHash, input.AnchorTimestamp,
 		input.ContractAddress, input.Confirmations, input.RequiredConfirmations, input.IsConfirmed, input.ConfirmedAt,
 		input.GasUsed, input.GasPriceWei, input.TotalCostWei,
+		input.SettlementTxHash, input.SettlementBlockNumber, input.SettlementBlockHash, input.SettlementTimestamp, input.SettlementGasUsed,
 	).Scan(&ref.ReferenceID, &ref.CreatedAt)
 
 	if err != nil {
@@ -1229,7 +1240,8 @@ func (r *ProofArtifactRepository) CreateAnchorReference(ctx context.Context, inp
 func (r *ProofArtifactRepository) GetAnchorReference(ctx context.Context, proofID uuid.UUID) (*AnchorReferenceRecord, error) {
 	query := `
 		SELECT reference_id, proof_id, target_chain, chain_id, network_name,
-			   anchor_tx_hash, anchor_block_number, anchor_block_hash, anchor_timestamp,
+			   -- Empty where the proof's anchor is not established (migration 00011, RB3-F135).
+			   COALESCE(anchor_tx_hash, ''), COALESCE(anchor_block_number, 0), anchor_block_hash, anchor_timestamp,
 			   contract_address, confirmations, required_confirmations, is_confirmed, confirmed_at,
 			   gas_used, gas_price_wei, total_cost_wei, created_at
 		FROM anchor_references

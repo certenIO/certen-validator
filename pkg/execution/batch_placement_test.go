@@ -37,7 +37,7 @@ func TestTheArtifactStatesTheMembersPlaceInItsBatch(t *testing.T) {
 	nonce := strings.ReplaceAll(fmt.Sprintf("%032x", time.Now().UnixNano()), "-", "")
 	rec := &database.AnchorQuorumRecord{
 		ChainID: 84532, BundleID: "0x" + nonce + nonce, Root: root[:], BatchOperationID: "0x" + strings.Repeat("99", 32),
-		MessageHash: "0x" + strings.Repeat("88", 32), AnchorCreateTx: "0x" + strings.Repeat("5a", 32),
+		MessageHash: "0x" + strings.Repeat("88", 32), AnchorCreateTx: "0x" + strings.Repeat("5a", 32), AnchorCreateBlock: 90,
 		VerifyTx: "0x" + strings.Repeat("5b", 32), VerifyBlock: 100, VerifiedAt: time.Now().UTC(),
 		AggregateSignature: []byte{1}, AggregatePubKey: []byte{2},
 		Signers:           []database.AnchorQuorumSigner{{Address: "0xaaa", VotingPower: big.NewInt(100)}},
@@ -66,6 +66,36 @@ func TestTheArtifactStatesTheMembersPlaceInItsBatch(t *testing.T) {
 	if !bytes.Equal(gotRoot, root[:]) || !bytes.Equal(gotLeaf, l1[:]) || !gotIndex.Valid || gotIndex.Int64 != 1 {
 		t.Fatalf("artifact states root %x… leaf %x… index %v; the member is leaf %x… at index 1 under root %x…",
 			head(gotRoot), head(gotLeaf), gotIndex, l1[:4], root[:4])
+	}
+
+	// RB3-F135: the anchor columns state where the root was published - layer 5's create transaction and
+	// block - and the settlement has its own; they used to hold the settlement under the anchor's name.
+	createTx, settleTx := "0x"+strings.Repeat("5a", 32), c.SettlementTx
+	var paAnchor, paSettle sql.NullString
+	var paAnchorBlock, paSettleBlock sql.NullInt64
+	if err := db.QueryRow(`SELECT anchor_tx_hash, anchor_block_number, settlement_tx_hash, settlement_block_number FROM proof_artifacts WHERE intent_id=$1`, intentID).
+		Scan(&paAnchor, &paAnchorBlock, &paSettle, &paSettleBlock); err != nil {
+		t.Fatal(err)
+	}
+	if paAnchor.String != createTx || paAnchorBlock.Int64 != 90 || paSettle.String != settleTx || paSettleBlock.Int64 != 100 {
+		t.Fatalf("proof_artifacts anchor %v @ %v, settlement %v @ %v", paAnchor, paAnchorBlock, paSettle, paSettleBlock)
+	}
+	var refAnchor, refSettle string
+	var refConfirmed bool
+	if err := db.QueryRow(`SELECT ar.anchor_tx_hash, ar.settlement_tx_hash, ar.is_confirmed FROM anchor_references ar JOIN proof_artifacts pa ON pa.proof_id = ar.proof_id WHERE pa.intent_id=$1`, intentID).
+		Scan(&refAnchor, &refSettle, &refConfirmed); err != nil {
+		t.Fatal(err)
+	}
+	if refAnchor != createTx || refSettle != settleTx || !refConfirmed {
+		t.Fatalf("anchor_references anchor %s settlement %s confirmed %v", refAnchor, refSettle, refConfirmed)
+	}
+	var attAnchor, attSettle sql.NullString
+	if err := db.QueryRow(`SELECT va.anchor_tx_hash, va.settlement_tx_hash FROM validator_attestations va JOIN proof_artifacts pa ON pa.proof_id = va.proof_id WHERE pa.intent_id=$1`, intentID).
+		Scan(&attAnchor, &attSettle); err != nil {
+		t.Fatal(err)
+	}
+	if attAnchor.String != createTx || attSettle.String != settleTx {
+		t.Fatalf("validator_attestations anchor %v settlement %v", attAnchor, attSettle)
 	}
 }
 

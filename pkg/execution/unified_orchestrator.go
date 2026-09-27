@@ -113,6 +113,8 @@ type UnifiedOrchestratorConfig struct {
 	NonSettlements     *NonSettlementQueue
 	// MemberOutcomes keeps member outcomes the lifecycle store refused until it takes them (RB3-F78).
 	MemberOutcomes MemberOutcomeOutbox
+	// ProofCompletions keeps level-record completions the store failed until it takes them (RB3-F123).
+	ProofCompletions ProofCompletionOutbox
 }
 
 // ChainedProofGenerator interface for generating Accumulate chained proofs
@@ -399,6 +401,9 @@ func NewUnifiedOrchestrator(config *UnifiedOrchestratorConfig) (*UnifiedOrchestr
 	if config.MemberOutcomes == nil {
 		return nil, fmt.Errorf("a member outcome outbox is required - an outcome the lifecycle store refuses would otherwise leave its intent short of a terminal status")
 	}
+	if config.ProofCompletions == nil {
+		return nil, fmt.Errorf("a proof completion outbox is required - a completion the store fails would otherwise leave a complete proof marked incomplete")
+	}
 
 	// Write-back is part of every proof cycle (RB3-F75): results that never reach Accumulate are not a
 	// mode this validator runs in.
@@ -577,7 +582,7 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 	result.CompletedAt = &now
 	result.Success = true
 
-	o.completeProofCycles(ctx, req.CycleID, cycle.Completions, result, req.MerkleRoot, result.WriteBackTxHash)
+	o.closeLevelRecords(ctx, req.CycleID, cycle.Completions, result, req.MerkleRoot)
 
 	// This member's outcome; the intent's status is derived from every member's (RB3-F50). A
 	// settlement that reverted is a failed member even when its revert was written back, and a
@@ -1908,6 +1913,21 @@ func (o *UnifiedOrchestrator) HandlePeerAttestationRequest(
 // PHASE 9: RESULT WRITE-BACK
 // =============================================================================
 
+// closeLevelRecords closes a cycle's level records on a write-back that happened: the cycle hash binds its
+// transaction, so a cycle whose write-back was refused or failed leaves them open (RB3-F123).
+func (o *UnifiedOrchestrator) closeLevelRecords(ctx context.Context, cycleID string, completions []uuid.UUID, result *UnifiedProofCycleResult, merkleRoot [32]byte) bool {
+	if result == nil || result.WriteBackState != WriteBackWritten || result.WriteBackTxHash == "" {
+		state := ""
+		if result != nil {
+			state = result.WriteBackState
+		}
+		fmt.Printf("⚠️ [PROOF-LEVELS] cycle %s: write-back %q - level records stay open\n", cycleID, state)
+		return false
+	}
+	o.completeProofCycles(ctx, cycleID, completions, result, merkleRoot, result.WriteBackTxHash)
+	return true
+}
+
 // Phase 9 write-back states, recorded on every cycle.
 const (
 	WriteBackWritten             = "written"
@@ -2557,48 +2577,7 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 
 	// Step 2: Populate related tables for GetProofWithDetails support
 
-	// 2a. Create anchor_references entry (from chain execution results)
-	if len(result.ObservationResults) > 0 {
-		obs := result.ObservationResults[0]
-		networkName := getNetworkName(result.ChainID)
-		blockTimestamp := obs.BlockTimestamp
-		confirmedAt := time.Now().UTC()
-
-		// When finalized, ensure confirmations reflects at least the required amount
-		confirmations := obs.Confirmations
-		if obs.IsFinalized && obs.RequiredConfirmations > 0 && confirmations < obs.RequiredConfirmations {
-			confirmations = obs.RequiredConfirmations
-		}
-
-		// Get required confirmations (default to 12 if not set)
-		reqConfirmations := obs.RequiredConfirmations
-		if reqConfirmations <= 0 {
-			reqConfirmations = 12
-		}
-
-		anchorRef := &database.NewAnchorReference{
-			ProofID:               proofArtifact.ProofID,
-			TargetChain:           result.ChainPlatform,
-			ChainID:               result.ChainID,
-			NetworkName:           networkName,
-			AnchorTxHash:          obs.TxHash,
-			AnchorBlockNumber:     int64(obs.BlockNumber),
-			AnchorBlockHash:       &obs.BlockHash,
-			AnchorTimestamp:       &blockTimestamp,
-			Confirmations:         confirmations,
-			RequiredConfirmations: ptrInt(reqConfirmations),
-			IsConfirmed:           obs.IsFinalized,
-			ConfirmedAt:           &confirmedAt,
-			GasUsed:               ptrInt64(int64(obs.GasUsed)),
-		}
-
-		if _, err := o.config.Repos.ProofArtifacts.CreateAnchorReference(ctx, anchorRef); err != nil {
-			return fmt.Errorf("create anchor reference: %w", err)
-		} else {
-			fmt.Printf("Created anchor_reference for proof_id=%s, confirmations=%d, finalized=%v\n",
-				proofArtifact.ProofID, confirmations, obs.IsFinalized)
-		}
-	}
+	// 2a (anchor_references) is written after layer 5, below: the anchor it states is layer 5's (RB3-F135).
 
 	// 2b. Create governance_proof_levels entries (G0, G1, G2)
 	isAnchored := len(result.ObservationResults) > 0
@@ -2974,16 +2953,29 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 		return fmt.Errorf("cycle %s: no chained-proof generator is configured; the bundle is not stored without its L1-L5 proof", req.CycleID)
 	}
 
+	// The settlement this cycle attested, and the anchor its layer 5 states: two different transactions,
+	// which anchor_references, validator_attestations and proof_artifacts used to record as one - the
+	// settlement, under the anchor's name (RB3-F135).
+	settled := attestedSettlement(cycle, result)
+	if settled == nil {
+		return fmt.Errorf("cycle %s: no attested settlement observation to record", cycle.CycleID)
+	}
+
+	// 2a. Create the anchor_references entry: where the root was published (layer 5) and the settlement.
+	if err := o.writeAnchorReference(ctx, proofArtifact.ProofID, result, anchorL5, settled); err != nil {
+		return err
+	}
+
 	// 2d. Create validator_attestations entries
 	if result.Attestations != nil {
 		for _, att := range result.Attestations {
 			var anchorTxHash *string
 			var blockNumber *int64
-			if len(result.ObservationResults) > 0 {
-				anchorTxHash = &result.ObservationResults[0].TxHash
-				bn := int64(result.ObservationResults[0].BlockNumber)
-				blockNumber = &bn
+			if anchorL5 != nil {
+				tx, bn := anchorL5.AnchorTx, int64(anchorL5.BlockNumber)
+				anchorTxHash, blockNumber = &tx, &bn
 			}
+			settlementTx, settlementBlock := settled.TxHash, int64(settled.BlockNumber)
 
 			// Attestations from the proof cycle are validated signatures
 			signatureValid := true
@@ -2997,8 +2989,11 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 				AnchorTxHash:    anchorTxHash,
 				MerkleRoot:      req.MerkleRoot[:],
 				BlockNumber:     blockNumber,
-				AttestedAt:      att.Timestamp,
-				SignatureValid:  &signatureValid,
+				// What the attestation message names and the validators attested.
+				SettlementTxHash:      &settlementTx,
+				SettlementBlockNumber: &settlementBlock,
+				AttestedAt:            att.Timestamp,
+				SignatureValid:        &signatureValid,
 			}
 
 			if _, err := o.config.Repos.ProofArtifacts.CreateProofAttestation(ctx, proofAttest); err != nil {
@@ -3266,9 +3261,7 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 
 	// Step 4: Update proof_artifacts with final state (status, anchor info, gov_level, verification)
 	// This ensures the main proof record reflects the completed cycle
-	if len(result.ObservationResults) > 0 {
-		obs := result.ObservationResults[0]
-
+	{
 		// The highest governance level the proofs establish (RB3-F73): each level needs its own proof and
 		// every level below it. None proven is stated as none, not as G0.
 		var govLevel database.GovernanceLevel
@@ -3283,11 +3276,19 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 		}
 
 		// Update the proof_artifacts record with final state
+		// The anchor is layer 5's - none when the proof has no layer 5 - and the settlement is the attested
+		// observation (RB3-F135).
+		anchorTx, anchorBlock := "", int64(0)
+		if anchorL5 != nil {
+			anchorTx, anchorBlock = anchorL5.AnchorTx, int64(anchorL5.BlockNumber)
+		}
 		if err := o.config.Repos.ProofArtifacts.UpdateProofFinalState(
 			ctx,
 			proofArtifact.ProofID,
-			obs.TxHash,
-			int64(obs.BlockNumber),
+			anchorTx,
+			anchorBlock,
+			settled.TxHash,
+			int64(settled.BlockNumber),
 			result.ChainID,
 			govLevel,
 			result.ThresholdMet,
@@ -3329,4 +3330,81 @@ func placementPath(p *database.Layer5Binding) []database.MerklePathNode {
 		return nil
 	}
 	return p.MerklePath
+}
+
+// attestedSettlement is the observation Phase 8 attested: the proven settlement, or a non-settlement's one
+// observation - the same selection Phase 8 signs over (RB3-F77, RB3-F49).
+func attestedSettlement(cycle *activeCycle, result *UnifiedProofCycleResult) *chain.ObservationResult {
+	if result == nil || len(result.ObservationResults) == 0 {
+		return nil
+	}
+	if cycle != nil && cycle.NonSettlement != nil {
+		return result.ObservationResults[0]
+	}
+	if cycle == nil {
+		return nil
+	}
+	return provenSettlementObservation(result.ObservationResults, cycle.SettlementTx)
+}
+
+// writeAnchorReference records where the proof's batch root was published - its layer 5's anchor-create
+// transaction and block - and the settlement the cycle attested. A proof without a layer 5 has no
+// established anchor and gets no anchor reference (it is summary-only for L5); its settlement is on
+// proof_artifacts. The row used to state the settlement's transaction, block, hash, time and gas as the
+// anchor's (RB3-F135).
+func (o *UnifiedOrchestrator) writeAnchorReference(ctx context.Context, proofID uuid.UUID, result *UnifiedProofCycleResult,
+	l5 *Layer5, settled *chain.ObservationResult) error {
+	if l5 == nil {
+		return nil
+	}
+	if !IsTransactionHash(l5.AnchorTx) || l5.BlockNumber == 0 {
+		return fmt.Errorf("proof %s: layer 5 states anchor %q at block %d; not recorded as its anchor", proofID, l5.AnchorTx, l5.BlockNumber)
+	}
+	reqConfirmations := settled.RequiredConfirmations
+	if reqConfirmations <= 0 {
+		reqConfirmations = 12
+	}
+	// The anchor is at or before the settlement, which needed its root: once the settlement is final, so is
+	// the anchor, by at least the blocks between them. Otherwise its depth is not known here.
+	confirmations, final := 0, false
+	var confirmedAt *time.Time
+	if settled.IsFinalized && l5.BlockNumber <= settled.BlockNumber {
+		confirmations = settled.Confirmations + int(settled.BlockNumber-l5.BlockNumber)
+		if confirmations < reqConfirmations {
+			confirmations = reqConfirmations
+		}
+		final = true
+		now := time.Now().UTC()
+		confirmedAt = &now
+	}
+	var anchorHash *string
+	if l5.BlockHash != "" {
+		h := l5.BlockHash
+		anchorHash = &h
+	}
+	settlementHash, settlementTime := settled.BlockHash, settled.BlockTimestamp
+	ref := &database.NewAnchorReference{
+		ProofID:               proofID,
+		TargetChain:           result.ChainPlatform,
+		ChainID:               result.ChainID,
+		NetworkName:           getNetworkName(result.ChainID),
+		AnchorTxHash:          l5.AnchorTx,
+		AnchorBlockNumber:     int64(l5.BlockNumber),
+		AnchorBlockHash:       anchorHash,
+		Confirmations:         confirmations,
+		RequiredConfirmations: ptrInt(reqConfirmations),
+		IsConfirmed:           final,
+		ConfirmedAt:           confirmedAt,
+		SettlementTxHash:      settled.TxHash,
+		SettlementBlockNumber: int64(settled.BlockNumber),
+		SettlementBlockHash:   &settlementHash,
+		SettlementTimestamp:   &settlementTime,
+		SettlementGasUsed:     ptrInt64(int64(settled.GasUsed)),
+	}
+	if _, err := o.config.Repos.ProofArtifacts.CreateAnchorReference(ctx, ref); err != nil {
+		return fmt.Errorf("create anchor reference: %w", err)
+	}
+	fmt.Printf("Created anchor_reference for proof_id=%s: anchor %s @ %d, settlement %s @ %d\n",
+		proofID, l5.AnchorTx, l5.BlockNumber, settled.TxHash, settled.BlockNumber)
+	return nil
 }
