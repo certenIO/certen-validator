@@ -132,9 +132,13 @@ func TestLegWrittenAfterItsDeadlineIsRefused(t *testing.T) {
 	ci.BlockTime = time.Unix(1_700_000_001, 0)
 	refusedWith(t, ci, ErrPastDeadline)
 
-	ci.BlockTime = time.Unix(1_699_999_999, 0)
+	// Written before its deadline, but too close to it for any settlement to land.
+	ci.BlockTime = time.Unix(1_700_000_000, 0).Add(-MinSettlementLead + time.Second)
+	refusedWith(t, ci, ErrDeadlineTooSoon)
+
+	ci.BlockTime = time.Unix(1_700_000_000, 0).Add(-MinSettlementLead)
 	if err := enqueue(refusalValidator(newFakeEnqueuer()), ci); err != nil {
-		t.Fatalf("a leg written before its deadline is admitted: %v", err)
+		t.Fatalf("a leg written with the settlement lead to spare is admitted: %v", err)
 	}
 }
 

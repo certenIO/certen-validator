@@ -35,6 +35,17 @@ var ErrUnimplementedSemantics = errors.New("intent declares execution semantics 
 // ErrPastDeadline is a leg whose signed deadline had passed when the intent was written.
 var ErrPastDeadline = errors.New("leg deadline passed")
 
+// ErrDeadlineTooSoon is a leg whose signed deadline leaves less time after the intent was written
+// than CERTEN needs to settle it.
+var ErrDeadlineTooSoon = errors.New("leg deadline too soon to settle")
+
+// MinSettlementLead is the least time between an intent's consensus block and a leg's deadline that
+// CERTEN can settle within: a batch period closing (100 Accumulate blocks, ~2.4 min), the settle
+// grace for peers to finish processing (4 min), then anchor, quorum attestation and settlement
+// (~2 min measured) - with a margin. A deadline inside it is a declaration CERTEN cannot honour, so
+// the intent is refused rather than accepted and failed (RB3-F53).
+const MinSettlementLead = 10 * time.Minute
+
 type rawLeg struct {
 	LegID                string   `json:"legId"`
 	ChainID              int64    `json:"chainId"`
@@ -151,9 +162,16 @@ func CheckDeclaredSemantics(ci *CertenIntent, writtenAt time.Time) error {
 			return fmt.Errorf("%w: leg %q declares conditional_execution, which has no defined condition to evaluate",
 				ErrUnimplementedSemantics, l.LegID)
 		}
-		if l.DeadlineTimestamp > 0 && !writtenAt.IsZero() && writtenAt.Unix() > l.DeadlineTimestamp {
-			return fmt.Errorf("%w: leg %q was written at %s, after its deadline %s",
-				ErrPastDeadline, l.LegID, writtenAt.UTC().Format(time.RFC3339), time.Unix(l.DeadlineTimestamp, 0).UTC().Format(time.RFC3339))
+		if l.DeadlineTimestamp > 0 && !writtenAt.IsZero() {
+			deadline := time.Unix(l.DeadlineTimestamp, 0).UTC()
+			if writtenAt.After(deadline) {
+				return fmt.Errorf("%w: leg %q was written at %s, after its deadline %s",
+					ErrPastDeadline, l.LegID, writtenAt.UTC().Format(time.RFC3339), deadline.Format(time.RFC3339))
+			}
+			if deadline.Sub(writtenAt) < MinSettlementLead {
+				return fmt.Errorf("%w: leg %q was written at %s with deadline %s; CERTEN needs at least %s to settle",
+					ErrDeadlineTooSoon, l.LegID, writtenAt.UTC().Format(time.RFC3339), deadline.Format(time.RFC3339), MinSettlementLead)
+			}
 		}
 	}
 	return nil
