@@ -1,549 +1,169 @@
 // Copyright 2025 Certen Protocol
 //
 // Strategy Registry Initialization
-// Provides helper functions to initialize the strategy registry with all
-// attestation and chain execution strategies.
 //
-// Per Unified Multi-Chain Architecture:
-// - BLS12-381 for EVM chains (ZK-verified on-chain)
-// - Ed25519 for non-EVM chains (native support, cost-effective)
+// The registry serves the proof cycle: Phase 7 observes a settlement on its chain, a peer re-observes
+// it, and Phase 8 signs with the attestation scheme the chain's platform uses. CERTEN settles on
+// exactly three chains, all EVM, all attested with BLS12-381 - so the registry holds exactly those
+// three, each observed at the anchor the batch path settles on, and nothing else (RB3-F44).
 
 package strategy
 
 import (
-	"crypto/ed25519"
 	"fmt"
-	"github.com/certen/independant-validator/pkg/ethrpc"
 	"log"
-	"os"
+	"sort"
 	"strconv"
+	"strings"
+
+	"github.com/ethereum/go-ethereum/common"
 
 	attestation "github.com/certen/independant-validator/pkg/attestation/strategy"
 	chain "github.com/certen/independant-validator/pkg/chain/strategy"
-	"github.com/certen/independant-validator/pkg/config"
 	"github.com/certen/independant-validator/pkg/crypto/bls"
+	"github.com/certen/independant-validator/pkg/ethrpc"
 )
 
-// RegistryConfig holds configuration for initializing the strategy registry
-type RegistryConfig struct {
-	// Validator identity
-	ValidatorID    string
-	ValidatorIndex uint32
+// SupportedChainIDs are the chains CERTEN settles on: Ethereum Sepolia, Base Sepolia and Arbitrum
+// Sepolia.
+var SupportedChainIDs = []int64{11155111, 84532, 421614}
 
-	// BLS key for EVM attestations
+// supportedNetworks names each supported chain for its RPC fallback tier (ethrpc.EndpointsForChain).
+var supportedNetworks = map[int64]string{
+	11155111: "sepolia",
+	84532:    "base-sepolia",
+	421614:   "arbitrum-sepolia",
+}
+
+// requiredConfirmations is the depth Phase 7 waits for on each supported chain.
+const requiredConfirmations = 2
+
+// ChainEndpoint is one supported chain as the batch path is configured for it: its RPC and the
+// CertenAnchorV8 it settles on.
+type ChainEndpoint struct {
+	ChainID int64
+	RPC     string
+	Anchor  common.Address
+}
+
+// RegistryConfig holds what the registry is built from.
+type RegistryConfig struct {
+	ValidatorID string
+
+	// BLSPrivateKey signs Phase 8 attestations. Required.
 	BLSPrivateKey []byte
 
-	// Ed25519 key for non-EVM attestations
-	Ed25519PrivateKey ed25519.PrivateKey
+	// EthPrivateKey is the key the chain strategies are constructed with.
+	EthPrivateKey string
 
-	// Ethereum configuration
-	EthereumRPC    string
-	EthPrivateKey  string
-	EthChainID     int64
-	AnchorContract string
-	CertenContract string
-	NetworkName    string
+	// Chains is every supported chain, exactly once.
+	Chains []ChainEndpoint
 
-	// Logger
 	Logger *log.Logger
 }
 
-// NewRegistryFromConfig creates a strategy registry from config
-func NewRegistryFromConfig(cfg *config.Config, blsKey []byte, ed25519Key ed25519.PrivateKey) (*Registry, error) {
-	regConfig := &RegistryConfig{
-		ValidatorID:       cfg.ValidatorID,
-		ValidatorIndex:    0, // Would come from validator set
-		BLSPrivateKey:     blsKey,
-		Ed25519PrivateKey: ed25519Key,
-		EthereumRPC:       cfg.EthereumURL,
-		EthPrivateKey:     cfg.EthPrivateKey,
-		EthChainID:        cfg.EthChainID,
-		AnchorContract:    cfg.AnchorContractAddress,
-		CertenContract:    cfg.CertenContractAddress,
-		NetworkName:       cfg.NetworkName,
-		Logger:            log.New(log.Writer(), "[StrategyRegistry] ", log.LstdFlags),
+// ChainKey is the registry key of a chain: its decimal chain id. It accepts the decimal id and the
+// "evm-<id>" form the batch path records on anchor rows; anything else - a network name, an
+// unsupported chain - is refused rather than guessed at.
+func ChainKey(chain string) (string, error) {
+	s := strings.TrimPrefix(strings.TrimSpace(chain), "evm-")
+	id, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return "", fmt.Errorf("chain %q is not a chain id", chain)
 	}
-
-	return InitializeRegistry(regConfig)
+	if !isSupported(id) {
+		return "", fmt.Errorf("chain %d is not a chain CERTEN settles on (supported: %v)", id, SupportedChainIDs)
+	}
+	return strconv.FormatInt(id, 10), nil
 }
 
-// InitializeRegistry creates and populates a strategy registry with all strategies
+func isSupported(id int64) bool {
+	for _, s := range SupportedChainIDs {
+		if s == id {
+			return true
+		}
+	}
+	return false
+}
+
+// InitializeRegistry builds the registry: the BLS12-381 attestation strategy and one EVM observer per
+// supported chain. Anything missing is an error - a validator that cannot observe a supported chain,
+// or cannot sign, cannot take part in a proof cycle.
 func InitializeRegistry(cfg *RegistryConfig) (*Registry, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("no registry config")
+	}
 	registry := NewRegistry()
 
-	// Initialize attestation strategies
-	if err := initializeAttestationStrategies(registry, cfg); err != nil {
-		return nil, fmt.Errorf("initialize attestation strategies: %w", err)
+	if len(cfg.BLSPrivateKey) == 0 {
+		return nil, fmt.Errorf("no BLS key: Phase 8 attestations could not be signed")
 	}
-
-	// Initialize chain execution strategies
-	if err := initializeChainStrategies(registry, cfg); err != nil {
-		return nil, fmt.Errorf("initialize chain strategies: %w", err)
-	}
-
-	if cfg.Logger != nil {
-		cfg.Logger.Printf("✅ Strategy registry initialized with %d attestation schemes and %d chains",
-			len(registry.attestationStrategies), len(registry.chainStrategies))
-	}
-
-	return registry, nil
-}
-
-// initializeAttestationStrategies registers all attestation strategies
-func initializeAttestationStrategies(registry *Registry, cfg *RegistryConfig) error {
-	// BLS12-381 strategy (for EVM chains)
-	if cfg.BLSPrivateKey != nil && len(cfg.BLSPrivateKey) > 0 {
-		blsPrivKey, err := bls.PrivateKeyFromBytes(cfg.BLSPrivateKey)
-		if err != nil {
-			if cfg.Logger != nil {
-				cfg.Logger.Printf("⚠️ BLS key deserialization failed: %v (BLS attestation disabled)", err)
-			}
-		} else {
-			blsConfig := attestation.DefaultBLSStrategyConfig()
-			blsConfig.ValidatorID = cfg.ValidatorID
-			blsConfig.ValidatorIndex = cfg.ValidatorIndex
-			blsConfig.PrivateKeyBytes = blsPrivKey.Bytes()
-
-			blsStrategy, err := attestation.NewBLSStrategy(blsConfig)
-			if err != nil {
-				return fmt.Errorf("create BLS strategy: %w", err)
-			}
-			if err := registry.RegisterAttestationStrategy(blsStrategy); err != nil {
-				return fmt.Errorf("register BLS strategy: %w", err)
-			}
-			if cfg.Logger != nil {
-				cfg.Logger.Printf("✅ BLS12-381 attestation strategy registered")
-			}
-		}
-	}
-
-	// Ed25519 strategy (for non-EVM chains)
-	if cfg.Ed25519PrivateKey != nil && len(cfg.Ed25519PrivateKey) > 0 {
-		ed25519Config := attestation.DefaultEd25519StrategyConfig()
-		ed25519Config.ValidatorID = cfg.ValidatorID
-		ed25519Config.ValidatorIndex = cfg.ValidatorIndex
-		ed25519Config.PrivateKey = cfg.Ed25519PrivateKey
-
-		ed25519Strategy, err := attestation.NewEd25519Strategy(ed25519Config)
-		if err != nil {
-			return fmt.Errorf("create Ed25519 strategy: %w", err)
-		}
-		if err := registry.RegisterAttestationStrategy(ed25519Strategy); err != nil {
-			return fmt.Errorf("register Ed25519 strategy: %w", err)
-		}
-		if cfg.Logger != nil {
-			cfg.Logger.Printf("✅ Ed25519 attestation strategy registered")
-		}
-	}
-
-	return nil
-}
-
-// initializeChainStrategies registers all chain execution strategies
-func initializeChainStrategies(registry *Registry, cfg *RegistryConfig) error {
-	// Determine Ethereum network from chain ID
-	var evmStrategy *chain.EVMStrategy
-	var err error
-
-	switch cfg.EthChainID {
-	case 1:
-		// Ethereum Mainnet
-		evmStrategy, err = chain.NewMainnetStrategy(
-			cfg.EthereumRPC,
-			cfg.EthPrivateKey,
-			cfg.AnchorContract,
-			cfg.ValidatorID,
-		)
-	case 11155111:
-		// Sepolia Testnet
-		evmStrategy, err = chain.NewSepoliaStrategy(
-			cfg.EthereumRPC,
-			cfg.EthPrivateKey,
-			cfg.AnchorContract,
-			cfg.ValidatorID,
-		)
-	default:
-		// Custom EVM chain
-		evmConfig := chain.DefaultEVMStrategyConfig()
-		evmConfig.ChainConfig = &chain.ChainConfig{
-			Platform:              chain.ChainPlatformEVM,
-			ChainID:               fmt.Sprintf("%d", cfg.EthChainID),
-			NetworkName:           cfg.NetworkName,
-			RPC:                   cfg.EthereumRPC,
-			Endpoints:             ethrpc.EndpointsForChain(cfg.NetworkName),
-			ContractAddress:       cfg.AnchorContract,
-			RequiredConfirmations: 12,
-			Enabled:               true,
-		}
-		evmConfig.PrivateKeyHex = cfg.EthPrivateKey
-		evmConfig.AnchorContractAddress = cfg.AnchorContract
-		evmConfig.ValidatorID = cfg.ValidatorID
-
-		evmStrategy, err = chain.NewEVMStrategy(evmConfig)
-	}
-
+	blsPrivKey, err := bls.PrivateKeyFromBytes(cfg.BLSPrivateKey)
 	if err != nil {
-		return fmt.Errorf("create EVM strategy: %w", err)
+		return nil, fmt.Errorf("BLS key cannot be read: %w", err)
+	}
+	blsConfig := attestation.DefaultBLSStrategyConfig()
+	blsConfig.ValidatorID = cfg.ValidatorID
+	blsConfig.PrivateKeyBytes = blsPrivKey.Bytes()
+	blsStrategy, err := attestation.NewBLSStrategy(blsConfig)
+	if err != nil {
+		return nil, fmt.Errorf("create BLS strategy: %w", err)
+	}
+	if err := registry.RegisterAttestationStrategy(blsStrategy); err != nil {
+		return nil, fmt.Errorf("register BLS strategy: %w", err)
 	}
 
-	// Register EVM strategy for all configured chain IDs
-	chainID := evmStrategy.ChainID()
-	if err := registry.RegisterChainStrategy(chainID, evmStrategy.Config(), evmStrategy); err != nil {
-		return fmt.Errorf("register EVM strategy for %s: %w", chainID, err)
+	byID := map[int64]ChainEndpoint{}
+	for _, c := range cfg.Chains {
+		if !isSupported(c.ChainID) {
+			return nil, fmt.Errorf("chain %d is not a chain CERTEN settles on (supported: %v)", c.ChainID, SupportedChainIDs)
+		}
+		if _, dup := byID[c.ChainID]; dup {
+			return nil, fmt.Errorf("chain %d is configured twice", c.ChainID)
+		}
+		byID[c.ChainID] = c
 	}
-	if cfg.Logger != nil {
-		cfg.Logger.Printf("✅ EVM chain strategy registered: %s", chainID)
-	}
-
-	// Register additional chain aliases
-	if cfg.NetworkName != "" && cfg.NetworkName != chainID {
-		if err := registry.RegisterChainStrategy(cfg.NetworkName, evmStrategy.Config(), evmStrategy); err != nil {
-			// Don't fail on alias registration
-			if cfg.Logger != nil {
-				cfg.Logger.Printf("⚠️ Could not register alias %s: %v", cfg.NetworkName, err)
-			}
+	for _, id := range SupportedChainIDs {
+		c, ok := byID[id]
+		if !ok {
+			return nil, fmt.Errorf("supported chain %d is not configured", id)
 		}
-	}
-
-	// Register well-known network name aliases for common chains
-	// Include both hyphenated and space-separated variants for intent compatibility
-	knownAliases := map[int64][]string{
-		1:          {"ethereum", "mainnet", "eth-mainnet"},
-		11155111:   {"sepolia", "eth-sepolia", "ethereum-sepolia", "ethereum sepolia"},
-		137:        {"polygon", "matic"},
-		80002:      {"polygon-amoy", "polygon amoy", "amoy"},
-		42161:      {"arbitrum", "arbitrum-one"},
-		421614:     {"arbitrum-sepolia", "arbitrum sepolia"},
-		10:         {"optimism", "op-mainnet"},
-		11155420:   {"optimism-sepolia", "optimism sepolia", "op-sepolia"},
-		8453:       {"base", "base-mainnet"},
-		84532:      {"base-sepolia", "base sepolia"},
-		97:         {"bsc-testnet", "bsc testnet", "binance-testnet"},
-		56:         {"bsc", "binance", "bsc-mainnet"},
-		1287:       {"moonbase-alpha", "moonbase alpha", "moonbeam-testnet", "moonbeam moonbase alpha"},
-		1284:       {"moonbeam"},
-		2494104990: {"tron-shasta", "tron shasta", "tron-shasta-testnet", "tron shasta testnet", "tron"},
-		296:        {"hedera", "hedera-testnet", "hedera testnet"},
-		295:        {"hedera-mainnet", "hedera mainnet"},
-	}
-	if aliases, ok := knownAliases[int64(cfg.EthChainID)]; ok {
-		for _, alias := range aliases {
-			if alias != chainID && alias != cfg.NetworkName {
-				if err := registry.RegisterChainStrategy(alias, evmStrategy.Config(), evmStrategy); err == nil {
-					if cfg.Logger != nil {
-						cfg.Logger.Printf("   ✅ Registered alias: %s -> %s", alias, chainID)
-					}
-				}
-			}
+		if strings.TrimSpace(c.RPC) == "" {
+			return nil, fmt.Errorf("chain %d has no RPC endpoint", id)
 		}
-	}
-
-	// Register L2 EVM chain strategies from environment variables
-	// Each L2 chain with a configured RPC URL gets its own EVMStrategy instance
-	if err := registerL2EVMStrategies(registry, cfg, knownAliases); err != nil {
-		if cfg.Logger != nil {
-			cfg.Logger.Printf("⚠️ Some L2 EVM chain strategies failed to register: %v", err)
+		if c.Anchor == (common.Address{}) {
+			return nil, fmt.Errorf("chain %d has no CertenAnchorV8", id)
 		}
-	}
-
-	// Register stub strategies for other chains (future implementation)
-	if err := registerStubChainStrategies(registry, cfg); err != nil {
-		if cfg.Logger != nil {
-			cfg.Logger.Printf("⚠️ Some stub chain strategies failed to register: %v", err)
-		}
-	}
-
-	return nil
-}
-
-// l2ChainDef defines an L2 EVM chain to register
-type l2ChainDef struct {
-	chainID       int64
-	networkName   string
-	rpcEnvVar     string
-	anchorEnvVar  string
-	anchorDefault string
-	confirmations int
-}
-
-// registerL2EVMStrategies registers EVM strategies for all configured L2 chains.
-// Each chain with an RPC URL env var set gets its own EVMStrategy instance so the
-// orchestrator can observe transactions and write back proofs on any target chain.
-func registerL2EVMStrategies(registry *Registry, cfg *RegistryConfig, knownAliases map[int64][]string) error {
-	l2Chains := []l2ChainDef{
-		{421614, "arbitrum-sepolia", "ARBITRUM_SEPOLIA_RPC_URL", "ARBITRUM_SEPOLIA_ANCHORV4_ADDRESS", "0xD2f19FfF59d9eADA39cf5a3737914Aa1F6B4ca12", 2},
-		{11155420, "optimism-sepolia", "OPTIMISM_SEPOLIA_RPC_URL", "OPTIMISM_SEPOLIA_ANCHORV4_ADDRESS", "0xA8CB329e6867296084f87Bf0bB800E44932feac7", 2},
-		{84532, "base-sepolia", "BASE_SEPOLIA_RPC_URL", "BASE_SEPOLIA_ANCHORV4_ADDRESS", "0x7a8c5DC01C2d2Ba498F76832dBcbf0Fe2f69a6C3", 2},
-		{80002, "polygon-amoy", "POLYGON_AMOY_RPC_URL", "POLYGON_AMOY_ANCHORV4_ADDRESS", "0x7a8c5DC01C2d2Ba498F76832dBcbf0Fe2f69a6C3", 2},
-		{97, "bsc-testnet", "BSC_TESTNET_RPC_URL", "BSC_TESTNET_ANCHORV4_ADDRESS", "0x3E7b37a517dec735e06126781A5D01d73d3c26D6", 2},
-		{1287, "moonbase-alpha", "MOONBASE_ALPHA_RPC_URL", "MOONBASE_ALPHA_ANCHORV4_ADDRESS", "0x7a8c5DC01C2d2Ba498F76832dBcbf0Fe2f69a6C3", 2},
-		// TRON Shasta - EVM-compatible via /jsonrpc for observation; writes use native HTTP API in tron_client.go
-		{2494104990, "tron-shasta", "TRON_SHASTA_RPC_URL", "TRON_SHASTA_ANCHORV4_ADDRESS", "0xca04231da28aab992fdffd3c9a7f8ddcd1f26027", 1},
-		// Hedera Testnet - EVM chain 296 via JSON-RPC relay; full A+++/V6.1 parity (BN254 BLS verify on-chain)
-		{296, "hedera-testnet", "HEDERA_TESTNET_RPC_URL", "HEDERA_TESTNET_ANCHORV4_ADDRESS", "0xca67409d872B04cc2a13dEAb2eaa2AD070029F59", 1},
-	}
-
-	for _, l2 := range l2Chains {
-		// Skip if this L2 is actually the primary chain (already registered)
-		if l2.chainID == cfg.EthChainID {
-			continue
-		}
-
-		rpcURL := os.Getenv(l2.rpcEnvVar)
-		if rpcURL == "" {
-			continue
-		}
-
-		// Resolve anchor address newest-first: V8.1 → V8 → V6.1 → V6 → V5 → V4, so the watcher
-		// observes the newest anchor on each chain without forcing operators to rename env vars
-		// in lockstep with contract redeploys.
-		//
-		// V8.1 and V8 were missing from this chain. An operator deploying CertenAnchorV8_1 to an
-		// L2 and setting <CHAIN>_ANCHORV8_1_ADDRESS would have it SILENTLY IGNORED, and the
-		// strategy would keep using whatever older anchor was still configured — a different
-		// contract with a different validator set. Nothing fails at startup; it surfaces as a
-		// batch that cannot settle on that chain.
-		chainPrefix := l2.anchorEnvVar[:len(l2.anchorEnvVar)-len("_ANCHORV4_ADDRESS")]
-		anchorSrc := chainPrefix + "_ANCHORV8_1_ADDRESS"
-		anchorAddr := os.Getenv(anchorSrc)
-		if anchorAddr == "" {
-			anchorSrc = chainPrefix + "_ANCHORV8_ADDRESS"
-			anchorAddr = os.Getenv(anchorSrc)
-		}
-		if anchorAddr == "" {
-			anchorSrc = chainPrefix + "_ANCHORV6_1_ADDRESS"
-			anchorAddr = os.Getenv(anchorSrc)
-		}
-		if anchorAddr == "" {
-			anchorSrc = chainPrefix + "_ANCHORV6_ADDRESS"
-			anchorAddr = os.Getenv(anchorSrc)
-		}
-		if anchorAddr == "" {
-			anchorSrc = chainPrefix + "_ANCHORV5_ADDRESS"
-			anchorAddr = os.Getenv(anchorSrc)
-		}
-		if anchorAddr == "" {
-			anchorSrc = l2.anchorEnvVar
-			anchorAddr = os.Getenv(anchorSrc)
-		}
-		if anchorAddr == "" {
-			anchorSrc = "compiled-in default"
-			anchorAddr = l2.anchorDefault
-		}
-
-		// Say WHICH variable won. The resolution silently fell through to an older anchor when a
-		// newer one was configured under a name this chain did not check, and nothing in the logs
-		// revealed it — the mismatch surfaced only later, as a batch that could not settle.
-		if cfg.Logger != nil {
-			cfg.Logger.Printf("   ⚓ %s anchor %s (from %s)", l2.networkName, anchorAddr, anchorSrc)
-		}
-
-		chainConfig := &chain.ChainConfig{
-			Platform:    chain.ChainPlatformEVM,
-			ChainID:     strconv.FormatInt(l2.chainID, 10),
-			NetworkName: l2.networkName,
-			RPC:         rpcURL,
-			// Every chain gets its own fallback tier, not just Ethereum. The free L2 endpoints
-			// refuse historical eth_getLogs, so without this a leg on an L2 can never complete
-			// Phase 7 — and the failure looks like an aggregation bug rather than an RPC one.
-			Endpoints:             ethrpc.EndpointsForChain(l2.networkName),
-			ContractAddress:       anchorAddr,
-			RequiredConfirmations: l2.confirmations,
+		key := strconv.FormatInt(id, 10)
+		evm, err := chain.NewEVMStrategyFromConfig(&chain.ChainConfig{
+			Platform:              chain.ChainPlatformEVM,
+			ChainID:               key,
+			NetworkName:           supportedNetworks[id],
+			RPC:                   c.RPC,
+			Endpoints:             ethrpc.EndpointsForChainID(id, c.RPC),
+			ContractAddress:       c.Anchor.Hex(),
+			RequiredConfirmations: requiredConfirmations,
 			Enabled:               true,
-		}
-
-		l2Strategy, err := chain.NewEVMStrategyFromConfig(chainConfig, cfg.EthPrivateKey, cfg.ValidatorID)
+		}, cfg.EthPrivateKey, cfg.ValidatorID)
 		if err != nil {
-			if cfg.Logger != nil {
-				cfg.Logger.Printf("⚠️ Failed to create EVM strategy for %s: %v", l2.networkName, err)
-			}
-			continue
+			return nil, fmt.Errorf("create observer for chain %d: %w", id, err)
 		}
-
-		l2ChainID := l2Strategy.ChainID()
-		if err := registry.RegisterChainStrategy(l2ChainID, l2Strategy.Config(), l2Strategy); err != nil {
-			if cfg.Logger != nil {
-				cfg.Logger.Printf("⚠️ Failed to register %s (chainID %s): %v", l2.networkName, l2ChainID, err)
-			}
-			continue
+		// The observer's chain is what its RPC reports: an RPC for another chain would observe that chain.
+		if evm.ChainID() != key {
+			return nil, fmt.Errorf("the RPC configured for chain %d serves chain %s", id, evm.ChainID())
 		}
-
+		if err := registry.RegisterChainStrategy(key, evm.Config(), evm); err != nil {
+			return nil, fmt.Errorf("register chain %d: %w", id, err)
+		}
 		if cfg.Logger != nil {
-			cfg.Logger.Printf("✅ L2 EVM chain strategy registered: %s (chainID %s)", l2.networkName, l2ChainID)
-		}
-
-		// Register aliases
-		if aliases, ok := knownAliases[l2.chainID]; ok {
-			for _, alias := range aliases {
-				if alias != l2ChainID {
-					if err := registry.RegisterChainStrategy(alias, l2Strategy.Config(), l2Strategy); err == nil {
-						if cfg.Logger != nil {
-							cfg.Logger.Printf("   ✅ Registered alias: %s -> %s", alias, l2ChainID)
-						}
-					}
-				}
-			}
+			cfg.Logger.Printf("✅ chain %d (%s) observed at anchor %s", id, supportedNetworks[id], c.Anchor.Hex())
 		}
 	}
 
-	return nil
-}
-
-// registerNonEVMChainStrategies registers non-EVM chain strategies.
-// TON is fully implemented; others are stubs pending implementation.
-func registerStubChainStrategies(registry *Registry, cfg *RegistryConfig) error {
-	// =========================================================================
-	// TON — Full implementation using TON Center API v2
-	// =========================================================================
-	tonAPIURL := os.Getenv("TON_TESTNET_API_URL")
-	tonAPIKey := os.Getenv("TON_TESTNET_API_KEY")
-	tonAnchorContract := os.Getenv("TON_ANCHOR_CONTRACT")
-	tonBLSVerifier := os.Getenv("TON_BLS_VERIFIER_CONTRACT")
-
-	if tonAPIURL != "" {
-		// Register TON testnet strategy (primary — matches "ton testnet", "ton-testnet")
-		tonTestnetStrategy, err := chain.NewTONTestnetStrategy(
-			tonAPIURL, tonAnchorContract, tonBLSVerifier, cfg.ValidatorID,
-		)
-		if err == nil && tonTestnetStrategy != nil {
-			// Set API key if available
-			if tonAPIKey != "" {
-				tonTestnetStrategy.SetAPIKey(tonAPIKey)
-			}
-
-			// Register with all common name variants that intents may use
-			tonTestnetAliases := []string{
-				"ton-testnet", "ton testnet", "ton_testnet", "ton-test",
-			}
-			for _, alias := range tonTestnetAliases {
-				if regErr := registry.RegisterChainStrategy(alias, tonTestnetStrategy.Config(), tonTestnetStrategy); regErr == nil {
-					if cfg.Logger != nil {
-						cfg.Logger.Printf("   ✅ TON testnet registered: %s", alias)
-					}
-				}
-			}
-		} else if err != nil && cfg.Logger != nil {
-			cfg.Logger.Printf("⚠️ Failed to create TON testnet strategy: %v", err)
-		}
-
-		// Register TON mainnet strategy (same implementation, different config)
-		tonMainnetAPIURL := os.Getenv("TON_MAINNET_API_URL")
-		if tonMainnetAPIURL == "" {
-			tonMainnetAPIURL = "https://toncenter.com/api/v2"
-		}
-		tonMainnetStrategy, err := chain.NewTONMainnetStrategy(
-			tonMainnetAPIURL, tonAnchorContract, cfg.ValidatorID,
-		)
-		if err == nil && tonMainnetStrategy != nil {
-			tonMainnetAliases := []string{
-				"ton-mainnet", "ton mainnet", "ton_mainnet", "ton",
-			}
-			for _, alias := range tonMainnetAliases {
-				if regErr := registry.RegisterChainStrategy(alias, tonMainnetStrategy.Config(), tonMainnetStrategy); regErr == nil {
-					if cfg.Logger != nil {
-						cfg.Logger.Printf("   ✅ TON mainnet registered: %s", alias)
-					}
-				}
-			}
-		}
-	} else {
-		// No TON API URL configured — register stub for interface compliance
-		tonStrategy, _ := chain.NewTONMainnetStrategy("", "", cfg.ValidatorID)
-		if tonStrategy != nil {
-			_ = registry.RegisterChainStrategy("ton-mainnet", tonStrategy.Config(), tonStrategy)
-		}
-		if cfg.Logger != nil {
-			cfg.Logger.Printf("⚠️ TON_TESTNET_API_URL not set — TON strategies registered as stubs")
-		}
+	if cfg.Logger != nil {
+		ids := registry.ListChainIDs()
+		sort.Strings(ids)
+		cfg.Logger.Printf("✅ Strategy registry: BLS12-381 attestation, chains %v", ids)
 	}
-
-	// =========================================================================
-	// Solana — Full implementation using Solana JSON-RPC
-	// =========================================================================
-	solanaRPCURL := os.Getenv("SOLANA_DEVNET_RPC_URL")
-	solanaAnchorProgram := os.Getenv("SOLANA_ANCHOR_PROGRAM_ID")
-
-	solanaStrategy, _ := chain.NewSolanaDevnetStrategy(solanaRPCURL, solanaAnchorProgram, cfg.ValidatorID)
-	if solanaStrategy != nil {
-		solanaAliases := []string{"solana-devnet", "solana devnet", "solana_devnet", "solana-testnet", "solana testnet"}
-		for _, alias := range solanaAliases {
-			_ = registry.RegisterChainStrategy(alias, solanaStrategy.Config(), solanaStrategy)
-		}
-		if cfg.Logger != nil {
-			cfg.Logger.Printf("   ✅ Solana devnet registered: rpc=%s, program=%s", solanaRPCURL, solanaAnchorProgram)
-		}
-	}
-
-	// =========================================================================
-	// Sui — Full implementation using Sui JSON-RPC
-	// =========================================================================
-	suiRPCURL := os.Getenv("SUI_TESTNET_RPC_URL")
-	suiAnchorPackage := os.Getenv("SUI_ANCHOR_PACKAGE")
-
-	suiStrategy, _ := chain.NewSuiTestnetStrategy(suiRPCURL, suiAnchorPackage, cfg.ValidatorID)
-	if suiStrategy != nil {
-		suiAliases := []string{"sui-testnet", "sui testnet", "sui_testnet"}
-		for _, alias := range suiAliases {
-			_ = registry.RegisterChainStrategy(alias, suiStrategy.Config(), suiStrategy)
-		}
-		if cfg.Logger != nil {
-			cfg.Logger.Printf("   ✅ Sui testnet registered: rpc=%s, package=%s", suiRPCURL, suiAnchorPackage)
-		}
-	}
-
-	// =========================================================================
-	// Aptos — Full implementation using Aptos REST API
-	// =========================================================================
-	aptosRPCURL := os.Getenv("APTOS_TESTNET_RPC_URL")
-	aptosAnchorPackage := os.Getenv("APTOS_ANCHOR_PACKAGE")
-
-	aptosStrategy, _ := chain.NewAptosTestnetStrategy(aptosRPCURL, aptosAnchorPackage, cfg.ValidatorID)
-	if aptosStrategy != nil {
-		aptosAliases := []string{"aptos-testnet", "aptos testnet", "aptos_testnet"}
-		for _, alias := range aptosAliases {
-			_ = registry.RegisterChainStrategy(alias, aptosStrategy.Config(), aptosStrategy)
-		}
-		if cfg.Logger != nil {
-			cfg.Logger.Printf("   ✅ Aptos testnet registered: rpc=%s, module=%s", aptosRPCURL, aptosAnchorPackage)
-		}
-	}
-
-	// =========================================================================
-	// NEAR — Full implementation using NEAR JSON-RPC
-	// =========================================================================
-	nearRPCURL := os.Getenv("NEAR_TESTNET_RPC_URL")
-	nearAnchorContract := os.Getenv("NEAR_ANCHOR_CONTRACT")
-	nearSignerAccount := os.Getenv("NEAR_SIGNER_ACCOUNT_ID")
-
-	nearStrategy, _ := chain.NewNEARTestnetStrategy(nearRPCURL, nearAnchorContract, nearSignerAccount, cfg.ValidatorID)
-	if nearStrategy != nil {
-		nearAliases := []string{"near-testnet", "near testnet", "near_testnet"}
-		for _, alias := range nearAliases {
-			_ = registry.RegisterChainStrategy(alias, nearStrategy.Config(), nearStrategy)
-		}
-		if cfg.Logger != nil {
-			cfg.Logger.Printf("   ✅ NEAR testnet registered: rpc=%s, contract=%s", nearRPCURL, nearAnchorContract)
-		}
-	}
-
-	// =========================================================================
-	// Cardano — Full implementation using Blockfrost HTTP API.
-	// On-chain proof verification is BLS12-381 Groth16+BSB22 (A+++ parity).
-	// Phase 7-9 observation watches tx finality via Blockfrost.
-	// =========================================================================
-	cardanoProjectID := os.Getenv("BLOCKFROST_PROJECT_ID")
-	cardanoAnchorAddr := os.Getenv("CARDANO_PREVIEW_ANCHOR_ADDRESS")
-
-	cardanoStrategy, _ := chain.NewCardanoPreviewStrategy(cardanoProjectID, cardanoAnchorAddr, cfg.ValidatorID)
-	if cardanoStrategy != nil {
-		cardanoAliases := []string{"cardano-preview", "cardano preview", "cardano_preview", "cardano"}
-		for _, alias := range cardanoAliases {
-			_ = registry.RegisterChainStrategy(alias, cardanoStrategy.Config(), cardanoStrategy)
-		}
-		if cfg.Logger != nil {
-			cfg.Logger.Printf("   ✅ Cardano Preview registered: blockfrost=%t, anchor=%s", cardanoProjectID != "", cardanoAnchorAddr)
-		}
-	}
-
-	return nil
+	return registry, nil
 }

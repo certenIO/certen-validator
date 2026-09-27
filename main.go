@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -1497,7 +1496,7 @@ func startValidator(
 	if cfgErr != nil {
 		return nil, nil, fmt.Errorf("batch path: anchor config: %w", cfgErr)
 	}
-	batchChains := []int64{11155111, 84532, 421614} // sepolia, base-sepolia, arbitrum-sepolia
+	batchChains := strategy.SupportedChainIDs // sepolia, base-sepolia, arbitrum-sepolia
 	// The chain resolver is shared with Phase 8, which counts its post-execution quorum against the
 	// same on-chain validator registry the batch quorum does.
 	resolver, rErr := execution.NewEVMChainResolverFromEnv(anchorCfg, batchChains)
@@ -1830,7 +1829,7 @@ func startValidator(
 	}
 	log.Printf("🔄 [Unified] Initializing Unified Multi-Chain Orchestrator...")
 
-	strategyRegistry, registryErr := initializeStrategyRegistry(cfg, blsKeyManager, privateKey)
+	strategyRegistry, registryErr := initializeStrategyRegistry(cfg, blsKeyManager, resolver)
 	if registryErr != nil {
 		return nil, nil, fmt.Errorf("proof cycle: strategy registry cannot be created: %w", registryErr)
 	}
@@ -2110,49 +2109,28 @@ func startValidator(
 	return validator, batchComponents, nil
 }
 
-// generateDeterministicValidatorKey remains if you still need it for validator sets elsewhere
-func generateDeterministicValidatorKey(validatorID string) ed25519.PrivateKey {
-	baseKey := os.Getenv("ACCUM_PRIV_KEY")
-	if baseKey == "" {
-		baseKey = "833224d93dde732803e77a52d51a1ba5aa0d5f53c105772fe2e42d8b94ff151e2f07a1a5681a8149d38c8fd08b8470dfc9ad87c8bb541ddd74342d088b29fcb7"
-	}
-
-	hasher := sha256.New()
-	hasher.Write([]byte(baseKey))
-	hasher.Write([]byte(validatorID))
-	hasher.Write([]byte("CERTEN_VALIDATOR_BFT_CONSENSUS"))
-	seed := hasher.Sum(nil)
-
-	privateKeySeed := seed[:32]
-	privateKey := ed25519.NewKeyFromSeed(privateKeySeed)
-	return privateKey
-}
-
-// initializeStrategyRegistry creates and populates the strategy registry
-// with all attestation and chain execution strategies
-// Per Unified Multi-Chain Architecture plan
+// initializeStrategyRegistry builds the proof cycle's strategy registry: BLS12-381 attestation and one
+// observer per chain CERTEN settles on, each at the RPC and anchor the batch path uses (RB3-F44).
 func initializeStrategyRegistry(
 	cfg *config.Config,
 	blsKeyManager *bls.KeyManager,
-	ed25519Key ed25519.PrivateKey,
+	resolver *execution.EVMChainResolverImpl,
 ) (*strategy.Registry, error) {
-	// Create registry configuration
-	regConfig := &strategy.RegistryConfig{
-		ValidatorID:       cfg.ValidatorID,
-		ValidatorIndex:    0, // Would come from validator set
-		BLSPrivateKey:     blsKeyManager.GetPrivateKeyBytes(),
-		Ed25519PrivateKey: ed25519Key,
-		EthereumRPC:       cfg.EthereumURL,
-		EthPrivateKey:     cfg.EthPrivateKey,
-		EthChainID:        cfg.EthChainID,
-		AnchorContract:    cfg.AnchorContractAddress,
-		CertenContract:    cfg.CertenContractAddress,
-		NetworkName:       cfg.NetworkName,
-		Logger:            log.New(log.Writer(), "[StrategyRegistry] ", log.LstdFlags),
+	chains := make([]strategy.ChainEndpoint, 0, len(strategy.SupportedChainIDs))
+	for _, id := range strategy.SupportedChainIDs {
+		rpc, anchor, err := resolver.Endpoint(id)
+		if err != nil {
+			return nil, err
+		}
+		chains = append(chains, strategy.ChainEndpoint{ChainID: id, RPC: rpc, Anchor: anchor})
 	}
-
-	// Initialize the registry with all strategies
-	return strategy.InitializeRegistry(regConfig)
+	return strategy.InitializeRegistry(&strategy.RegistryConfig{
+		ValidatorID:   cfg.ValidatorID,
+		BLSPrivateKey: blsKeyManager.GetPrivateKeyBytes(),
+		EthPrivateKey: cfg.EthPrivateKey,
+		Chains:        chains,
+		Logger:        log.New(log.Writer(), "[StrategyRegistry] ", log.LstdFlags),
+	})
 }
 
 func printHelp() {
