@@ -2772,9 +2772,8 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 			// transaction, or of none.
 			return fmt.Errorf("cycle %s names no Accumulate account and transaction to prove", req.CycleID)
 		}
-		// BVN calculation is handled by the ProofGenerator adapter
-		// which uses deterministic routing from account URL
-		// (see proof.CalculateBVNFromAccountURL)
+		// The BVN is the partition the transaction was discovered on (RB3-F89); the adapter refuses an
+		// empty one rather than recomputing it.
 
 		if accountURL != "" && txHash != "" {
 			chainedProof, err := o.config.ProofGenerator.GenerateChainedProofForTx(ctx, accountURL, txHash, bvn)
@@ -2799,10 +2798,14 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 				}
 				if _, createErr := o.config.Repos.ProofArtifacts.CreateChainedProofLayer(ctx, failLayer); createErr != nil {
 					return fmt.Errorf("record chained proof failure: %w", createErr)
-				} else {
-					fmt.Printf("Recorded chained proof generation failure for proof_id=%s\n", proofArtifact.ProofID)
 				}
-			} else if chainedProof != nil {
+				fmt.Printf("Recorded chained proof generation failure for proof_id=%s\n", proofArtifact.ProofID)
+				// The attempt is recorded; the bundle is not stored without the proof. It used to go on and
+				// store the bundle with no L1-L4 layers after a "Warning" line (RB3-F93).
+				return fmt.Errorf("cycle %s: chained proof of tx %s: %w", req.CycleID, txHash, err)
+			} else if chainedProof == nil {
+				return fmt.Errorf("cycle %s: the chained-proof generator returned no proof and no error for tx %s", req.CycleID, txHash)
+			} else {
 				// Store for bundle creation later
 				storedChainedProof = chainedProof
 
@@ -2921,16 +2924,22 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 				// and G0-G2, so what the proof CONTAINS has to be settled before
 				// the layer attesting to it is built. It is deliberately NOT in
 				// the govRoot — it cannot be inside what it describes.
-				anchorL5, anchorBatch = o.writeLayer5(ctx, proofArtifact.ProofID, placement, result)
+				anchorL5, anchorBatch, err = o.writeLayer5(ctx, proofArtifact.ProofID, placement, result)
+				if err != nil {
+					return err
+				}
 				anchorResolved = true
 
 				fmt.Printf("Created chained_proof_layers L1/L2/L3/L4/L5 for proof_id=%s\n", proofArtifact.ProofID)
 			}
 		} else {
-			fmt.Printf("Note: Cannot generate chained proof - missing accountURL or txHash\n")
+			return fmt.Errorf("cycle %s names no Accumulate account and transaction to prove", req.CycleID)
 		}
 	} else {
-		fmt.Printf("Note: ProofGenerator not configured, skipping chained proof layers\n")
+		// A validator does not boot without its proof builder (main.go), so this is a wiring defect -
+		// and the bundle is not stored without its chained proof. It used to be stored with no L1-L5
+		// layers at all, after a "skipping" note (RB3-F93).
+		return fmt.Errorf("cycle %s: no chained-proof generator is configured; the bundle is not stored without its L1-L5 proof", req.CycleID)
 	}
 
 	// 2d. Create validator_attestations entries
