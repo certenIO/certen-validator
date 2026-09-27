@@ -32,7 +32,6 @@ import (
 	cmthttp "github.com/cometbft/cometbft/rpc/client/http"
 	cmttypes "github.com/cometbft/cometbft/types"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/mr-tron/base58"
 
 	lcproof "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof"
 
@@ -2987,16 +2986,16 @@ func (bv *BFTValidator) buildExecutionCommitmentFromIntent(certenIntent *CertenI
 		return nil, fmt.Errorf("intent %s has no leg on chain %d, the chain its member settled on", certenIntent.IntentID, chainID)
 	}
 
-	// The member's first leg on its chain: the batch path executes the committed executionPayload's
-	// target and value, never a leg's top-level to/amount (batchInputsFromIntentForChain).
+	// The member's first leg on its chain, as the settlement reads it: the committed executionPayload's
+	// target and value, parsed by the same MemberLegsForChain the batch path executes - so the commitment
+	// can never state a target or value the settlement would not execute (a malformed or non-EVM target is
+	// an error, not a base58 decode or an unvalidated HexToAddress; RB3-F69).
 	leg := member[0]
-	finalTarget, finalValue := leg.To, leg.AmountWei
-	if ep := leg.ExecutionPayload; ep != nil && strings.TrimSpace(ep.Target) != "" {
-		finalTarget, finalValue = ep.Target, ep.Value
+	parsed, _, _, _, perr := MemberLegsForChain(certenIntent, chainID)
+	if perr != nil {
+		return nil, fmt.Errorf("intent %s member on chain %d: %w", certenIntent.IntentID, chainID, perr)
 	}
-	if strings.TrimSpace(finalValue) == "" {
-		finalValue = "0"
-	}
+	finalTarget, finalValue := common.BytesToAddress(parsed[0].Target[:]).Hex(), parsed[0].Value.String()
 
 	commitment := map[string]interface{}{
 		"bundleID":    hex.EncodeToString(bundleID[:]),
@@ -3005,7 +3004,7 @@ func (bv *BFTValidator) buildExecutionCommitmentFromIntent(certenIntent *CertenI
 		"targetChain": leg.Chain,
 		"chainID":     chainID,
 		"network":     leg.Network,
-		"finalTarget": parseChainAddress(finalTarget).Hex(),
+		"finalTarget": finalTarget,
 		"finalValue":  finalValue,
 		// Multi-leg metadata, for the write-back's per-leg aggregation over the whole intent.
 		"legCount": len(crossChainData.Legs),
@@ -3038,18 +3037,6 @@ func (bv *BFTValidator) buildExecutionCommitmentFromIntent(certenIntent *CertenI
 	bv.logger.Printf("✅ [COMMITMENT] Built execution commitment for intent %s on chain %d: target=%s, value=%s",
 		certenIntent.IntentID, chainID, commitment["finalTarget"], finalValue)
 	return commitment, nil
-}
-
-// parseChainAddress parses an address that may be hex (0x...) or TRON base58 (T...).
-// TRON base58check: base58decode → 21 bytes (0x41 + 20-byte address) + 4-byte checksum.
-func parseChainAddress(addr string) common.Address {
-	if strings.HasPrefix(addr, "T") && len(addr) == 34 {
-		decoded, err := base58.Decode(addr)
-		if err == nil && len(decoded) >= 21 && decoded[0] == 0x41 {
-			return common.BytesToAddress(decoded[1:21])
-		}
-	}
-	return common.HexToAddress(addr)
 }
 
 // computeCommitmentHash computes a deterministic hash of the commitment

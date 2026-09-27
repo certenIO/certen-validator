@@ -122,6 +122,29 @@ func (bv *BFTValidator) batchInputsFromIntentForChain(
 // anchors it: its legs in signed order (target, value, data), its source account and its operationID.
 // The settlement gates bind an observed transaction to THIS - the executor's and every peer's - so
 // what is attested is what was anchored (RB3-F77).
+// ParseLegValue reads an executionPayload value exactly as the intent's author computed its commitment
+// (JavaScript BigInt, api-bridge computeExecutionPayload): "0x"-prefixed is hexadecimal, anything else is
+// decimal, empty is zero. A "0x10" used to be read as decimal 10 - so a signed intent whose value was
+// written in hex had its commitment refused, or a different amount stated (RB3-F69 sweep).
+func ParseLegValue(s string) (*big.Int, error) {
+	s = strings.TrimSpace(s)
+	val := new(big.Int)
+	if s == "" {
+		return val, nil
+	}
+	base, digits := 10, s
+	if strings.HasPrefix(s, "0x") || strings.HasPrefix(s, "0X") {
+		base, digits = 16, s[2:]
+	}
+	if digits == "" || strings.HasPrefix(digits, "+") || strings.HasPrefix(digits, "-") {
+		return nil, fmt.Errorf("malformed: %q", s)
+	}
+	if _, ok := val.SetString(digits, base); !ok {
+		return nil, fmt.Errorf("malformed: %q", s)
+	}
+	return val, nil
+}
+
 func MemberLegsForChain(
 	ci *CertenIntent,
 	onlyChain int64,
@@ -178,13 +201,9 @@ func MemberLegsForChain(
 		}
 		copy(target[:], tb)
 
-		val := new(big.Int)
-		if ep.Value != "" {
-			if _, ok := val.SetString(strings.TrimPrefix(ep.Value, "0x"), 10); !ok {
-				if _, ok16 := val.SetString(strings.TrimPrefix(ep.Value, "0x"), 16); !ok16 {
-					return nil, 0, account, operationID, fmt.Errorf("leg %d value malformed: %q", i, ep.Value)
-				}
-			}
+		val, verr := ParseLegValue(ep.Value)
+		if verr != nil {
+			return nil, 0, account, operationID, fmt.Errorf("leg %d value: %w", i, verr)
 		}
 
 		var data []byte
