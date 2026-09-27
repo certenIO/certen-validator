@@ -150,11 +150,26 @@ func (r resolverNonSettlementChain) LeafConsumedAt(ctx context.Context, chainID 
 	if err != nil {
 		return false, err
 	}
-	acct, err := contracts.NewCertenAccountV7(account, ecm.client)
+	return leafConsumedAt(ctx, ecm.client, account, leaf, number)
+}
+
+// leafConsumedAt reads the account's isLeafConsumed(leaf) as of block number.
+//
+// An account with no code at that block has consumed nothing there, so the answer is "not consumed".
+// It used to be a failed read: a successor whose predecessor's account was deployed after the chain's
+// finalized block waited on a read error, and a member whose account never deployed could never have
+// its non-settlement attested or stop the member after it (RB3-F63). Any other failure stays a read
+// error, which decides nothing.
+func leafConsumedAt(ctx context.Context, backend bind.ContractBackend, account common.Address, leaf [32]byte, number uint64) (bool, error) {
+	acct, err := contracts.NewCertenAccountV7(account, backend)
 	if err != nil {
 		return false, err
 	}
-	return acct.IsLeafConsumed(&bind.CallOpts{Context: ctx, BlockNumber: new(big.Int).SetUint64(number)}, leaf)
+	consumed, err := acct.IsLeafConsumed(&bind.CallOpts{Context: ctx, BlockNumber: new(big.Int).SetUint64(number)}, leaf)
+	if errors.Is(err, bind.ErrNoCode) {
+		return false, nil
+	}
+	return consumed, err
 }
 
 // Outcomes of looking for a non-settlement that are not a failure of the look.
