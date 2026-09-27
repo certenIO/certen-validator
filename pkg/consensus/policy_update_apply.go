@@ -26,7 +26,12 @@ func (app *ValidatorApp) activatePolicyForBlock(height int64, blockTimeUnix int6
 		return
 	}
 	state, err := app.ledgerStore.LoadEntitlementPolicy()
-	if err != nil || state == nil {
+	if err != nil {
+		// RB3-F116: keeping the previous rule because the committed one could not be read would
+		// judge this block by a rule the fleet may not be applying. Stop rather than drift.
+		app.logger.Fatalf("❌ [POLICY] the committed policy could not be read at height %d: %v", height, err)
+	}
+	if state == nil {
 		return
 	}
 
@@ -58,7 +63,10 @@ func (app *ValidatorApp) processPolicyUpdate(pu *PolicyUpdateTx, height int64) a
 
 	current, err := app.ledgerStore.LoadEntitlementPolicy()
 	if err != nil {
-		return abcitypes.ExecTxResult{Code: 5, Log: "could not load the committed policy: " + err.Error()}
+		// RB3-F116: refusing here withholds the update's id from this node's app hash while the
+		// nodes that could read their ledger include it - a fork. Stop rather than drift, as a
+		// failed persist below does.
+		app.logger.Fatalf("❌ [POLICY] the committed policy could not be read at height %d: %v", height, err)
 	}
 
 	// REPLAY. On re-execution the schedule already contains this update, so

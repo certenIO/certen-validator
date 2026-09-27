@@ -420,23 +420,33 @@ func (id *IntentDiscovery) monitoringLoop() {
 
 	id.logger.Printf("🔄 Starting intent discovery monitoring loop...")
 
-	// E.3 remediation: Initialize starting block height with retry and exponential backoff
+	// E.3 remediation: Initialize starting block height with retry and exponential backoff.
+	//
+	// RB3-F116: until a starting height is known, discovery does not start. It used to fall back to
+	// the configured minimum after five attempts, which is a height nobody chose for this chain.
 	ctx := context.Background()
-	var lastErr error
-	for retries := 0; retries < 5; retries++ {
-		if err := id.initializeStartingHeight(ctx); err != nil {
-			lastErr = err
-			backoff := time.Duration(1<<retries) * time.Second // 1s, 2s, 4s, 8s, 16s
-			id.logger.Printf("⚠️ Failed to initialize height (attempt %d/5): %v, retrying in %v", retries+1, err, backoff)
-			time.Sleep(backoff)
-			continue
+	for attempt := 1; ; attempt++ {
+		err := id.initializeStartingHeight(ctx)
+		// Health reports why discovery has not started, the way it reports a failing poll.
+		id.watermarkMu.Lock()
+		if err != nil {
+			id.lastPollErr = "discovery not started: " + err.Error()
+		} else {
+			id.lastPollErr = ""
 		}
-		lastErr = nil
-		break
-	}
-	if lastErr != nil {
-		id.logger.Printf("❌ Failed to initialize starting height after 5 attempts, using fallback: %d", id.config.MinStartHeight)
-		id.lastProcessedBlock = id.config.MinStartHeight
+		id.watermarkMu.Unlock()
+		if err == nil {
+			break
+		}
+		backoff := time.Duration(1<<min(attempt-1, 5)) * time.Second // 1s, 2s, 4s, 8s, 16s, then 32s
+		id.logger.Printf("❌ Intent discovery NOT started: no starting height (attempt %d): %v, retrying in %v",
+			attempt, err, backoff)
+		select {
+		case <-id.stopCh:
+			id.logger.Printf("🛑 Intent discovery monitoring loop stopping before it started")
+			return
+		case <-time.After(backoff):
+		}
 	}
 
 	for {
@@ -466,7 +476,9 @@ func (id *IntentDiscovery) initializeStartingHeight(ctx context.Context) error {
 	if id.ledgerStore != nil {
 		persistedHeight, err := id.ledgerStore.LoadIntentLastBlock()
 		if err != nil {
-			id.logger.Printf("⚠️ Failed to load persisted block height: %v", err)
+			// RB3-F116: an unreadable watermark is not an absent one. Starting at the tip instead
+			// never looks at any intent between the watermark and the tip.
+			return fmt.Errorf("load the persisted discovery watermark: %w", err)
 		} else if persistedHeight > 0 {
 			startHeight = persistedHeight
 			id.logger.Printf("📊 Loaded persisted last processed block: %d, will start from %d", persistedHeight, startHeight)
@@ -477,11 +489,12 @@ func (id *IntentDiscovery) initializeStartingHeight(ctx context.Context) error {
 	if startHeight == 0 {
 		latestBlock, err := id.client.GetLatestBlock(ctx)
 		if err != nil {
-			id.logger.Printf("❌ Failed to get latest block: %v", err)
-			startHeight = id.config.MinStartHeight
-			id.logger.Printf("📊 Using configured minimum starting height: %d", startHeight)
+			// No starting height is invented for a tip that could not be read; the caller retries.
+			return fmt.Errorf("read the latest block to start discovery from: %w", err)
 		} else {
-			startHeight = latestBlock.Height - 5 // Start 5 blocks back to catch any missed
+			if latestBlock.Height > 5 {
+				startHeight = latestBlock.Height - 5 // Start 5 blocks back to catch any missed
+			}
 			id.logger.Printf("📊 Starting from latest block - 5: %d (latest: %d)", startHeight, latestBlock.Height)
 
 			// Ensure we're not starting too far in the past
@@ -494,7 +507,7 @@ func (id *IntentDiscovery) initializeStartingHeight(ctx context.Context) error {
 		// Persist the initial height
 		if id.ledgerStore != nil {
 			if err := id.ledgerStore.SaveIntentLastBlock(startHeight); err != nil {
-				id.logger.Printf("⚠️ Failed to persist initial block height: %v", err)
+				return fmt.Errorf("persist the initial discovery watermark %d: %w", startHeight, err)
 			}
 		}
 	}

@@ -167,7 +167,9 @@ func NewValidatorApp(ledgerStore *ledger.LedgerStore, chainID string) *Validator
 	// Restore persisted ABCI state for CometBFT recovery
 	if ledgerStore != nil {
 		if state, err := ledgerStore.LoadABCIState(); err != nil {
-			app.logger.Printf("⚠️ Failed to load ABCI state: %v (starting fresh)", err)
+			// RB3-F116: an unreadable state is not an empty one. Starting at height 0 under a chain
+			// with history replays it (or, on a pruned block store, never starts) - refuse instead.
+			app.logger.Fatalf("❌ the persisted ABCI state could not be read: %v - not starting on a ledger this node cannot read", err)
 		} else if state != nil {
 			// Execution-rules check, BEFORE adopting the state.
 			//
@@ -323,10 +325,10 @@ func (app *ValidatorApp) Info(ctx context.Context, req *abcitypes.RequestInfo) (
 				}
 			}
 		} else if err != nil {
-			// Do NOT silently answer 0 — that triggers a full replay and, on a
-			// pruned store, an unrecoverable node. Surface it loudly instead.
-			app.logger.Printf("❌ Could not load persisted ABCI state (%v); "+
-				"reporting height %d, which will force a replay", err, app.latestHeight)
+			// Do NOT answer a height this node cannot vouch for — that triggers a
+			// full replay and, on a pruned store, an unrecoverable node. The
+			// handshake fails with the reason instead (RB3-F116).
+			return nil, fmt.Errorf("the persisted ABCI state could not be read: %w", err)
 		}
 	}
 

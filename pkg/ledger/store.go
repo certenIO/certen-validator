@@ -31,6 +31,21 @@ func NewLedgerStore(kv KV) *LedgerStore {
 	return &LedgerStore{kv: kv}
 }
 
+// read returns a key's value, nil when the key is absent, and an error only when the read itself
+// failed. RB3-F116: a failed read is never reported as an absent key - that re-sealed the entitlement
+// policy from the environment, restarted the ABCI state at height 0, reset anchor-target counters and
+// restarted intent discovery at the chain tip, each on a disk error.
+func (s *LedgerStore) read(key []byte, what string) ([]byte, error) {
+	b, err := s.kv.Get(key)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", what, err)
+	}
+	if len(b) == 0 {
+		return nil, nil
+	}
+	return b, nil
+}
+
 // ====== KV Key Layout ======
 
 var (
@@ -95,14 +110,8 @@ func (s *LedgerStore) UpdateSystemLedgerOnCommit(
 	if err != nil {
 		return fmt.Errorf("failed to marshal SystemLedgerBlockMeta: %w", err)
 	}
-	if err := s.kv.Set(systemBlockKey(height), b); err != nil {
-		return fmt.Errorf("failed to set system block key: %w", err)
-	}
-	if err := s.kv.Set(keySysLatestBlock, b); err != nil {
-		return fmt.Errorf("failed to set system latest block key: %w", err)
-	}
 
-	// 2. Update global meta
+	// 2. Read the global meta BEFORE writing anything, so a failed read leaves the ledger as it was.
 	gm, err := s.loadSystemLedgerMeta()
 	if err != nil {
 		// F.4 remediation: Handle ErrMetaNotFound as expected (first write)
@@ -111,6 +120,13 @@ func (s *LedgerStore) UpdateSystemLedgerOnCommit(
 		} else {
 			return fmt.Errorf("failed to load system ledger meta: %w", err)
 		}
+	}
+
+	if err := s.kv.Set(systemBlockKey(height), b); err != nil {
+		return fmt.Errorf("failed to set system block key: %w", err)
+	}
+	if err := s.kv.Set(keySysLatestBlock, b); err != nil {
+		return fmt.Errorf("failed to set system latest block key: %w", err)
 	}
 	if height > gm.LatestHeight {
 		gm.LatestHeight = height
@@ -127,8 +143,11 @@ func (s *LedgerStore) UpdateSystemLedgerOnCommit(
 
 // loadSystemLedgerMeta loads the global system ledger metadata
 func (s *LedgerStore) loadSystemLedgerMeta() (*SystemLedgerMeta, error) {
-	b, err := s.kv.Get(keySysMeta)
-	if err != nil || len(b) == 0 {
+	b, err := s.read(keySysMeta, "system ledger meta")
+	if err != nil {
+		return nil, err
+	}
+	if b == nil {
 		// F.4 remediation: Return explicit error instead of nil, nil
 		return nil, ErrMetaNotFound
 	}
@@ -146,9 +165,12 @@ func (s *LedgerStore) GetSystemLedgerLatest(chainID string) (*SystemLedgerState,
 		return nil, fmt.Errorf("failed to load system ledger meta: %w", err)
 	}
 
-	b, err := s.kv.Get(keySysLatestBlock)
-	if err != nil || len(b) == 0 {
-		return nil, fmt.Errorf("failed to get latest block: %w", err)
+	b, err := s.read(keySysLatestBlock, "system ledger latest block")
+	if err != nil {
+		return nil, err
+	}
+	if b == nil {
+		return nil, fmt.Errorf("system ledger latest block not found")
 	}
 	var blockMeta SystemLedgerBlockMeta
 	if err := json.Unmarshal(b, &blockMeta); err != nil {
@@ -199,8 +221,11 @@ func (s *LedgerStore) buildSystemLedgerState(
 
 // loadAnchorMeta loads the global anchor ledger metadata
 func (s *LedgerStore) loadAnchorMeta() (*AnchorLedgerMeta, error) {
-	b, err := s.kv.Get(keyAnchorMeta)
-	if err != nil || len(b) == 0 {
+	b, err := s.read(keyAnchorMeta, "anchor ledger meta")
+	if err != nil {
+		return nil, err
+	}
+	if b == nil {
 		// F.4 remediation: Return explicit error instead of nil, nil
 		return nil, ErrAnchorMetaNotFound
 	}
@@ -222,8 +247,11 @@ func (s *LedgerStore) saveAnchorMeta(m *AnchorLedgerMeta) error {
 
 // loadAnchorTarget loads the state for a specific anchor target
 func (s *LedgerStore) loadAnchorTarget(url string) (*AnchorTargetState, error) {
-	b, err := s.kv.Get(anchorTargetKey(url))
-	if err != nil || len(b) == 0 {
+	b, err := s.read(anchorTargetKey(url), "anchor target "+url)
+	if err != nil {
+		return nil, err
+	}
+	if b == nil {
 		return &AnchorTargetState{TargetURL: url}, nil
 	}
 	var t AnchorTargetState
@@ -362,8 +390,11 @@ func (s *LedgerStore) SaveIntentLastBlock(height uint64) error {
 // LoadIntentLastBlock loads the last processed block height for intent discovery
 // Returns 0 if no height has been persisted yet
 func (s *LedgerStore) LoadIntentLastBlock() (uint64, error) {
-	b, err := s.kv.Get(keyIntentLastBlock)
-	if err != nil || len(b) == 0 {
+	b, err := s.read(keyIntentLastBlock, "intent discovery height")
+	if err != nil {
+		return 0, err
+	}
+	if b == nil {
 		return 0, nil // No height persisted yet
 	}
 	if len(b) != 8 {
@@ -385,10 +416,13 @@ func (s *LedgerStore) SaveABCIState(state *ABCIState) error {
 }
 
 // LoadABCIState loads the persisted ABCI state for recovery after restart.
-// Returns nil, nil if no state has been persisted yet (fresh start).
+// Returns nil, nil if no state has been persisted yet (fresh start), and an error if it could not be read.
 func (s *LedgerStore) LoadABCIState() (*ABCIState, error) {
-	b, err := s.kv.Get(keyABCIState)
-	if err != nil || len(b) == 0 {
+	b, err := s.read(keyABCIState, "ABCI state")
+	if err != nil {
+		return nil, err
+	}
+	if b == nil {
 		return nil, nil // No state persisted yet - fresh start
 	}
 	var state ABCIState
@@ -414,11 +448,15 @@ func (s *LedgerStore) SaveEntitlementPolicy(p *EntitlementPolicyState) error {
 	return s.kv.Set(keyEntitlementPolicy, b)
 }
 
-// LoadEntitlementPolicy returns the sealed policy, or nil if this chain has
-// none yet (genesis).
+// LoadEntitlementPolicy returns the sealed policy, nil if this chain has none
+// yet (genesis), and an error if it could not be read - never nil for an
+// unreadable policy, which the caller would re-seal from the environment.
 func (s *LedgerStore) LoadEntitlementPolicy() (*EntitlementPolicyState, error) {
-	b, err := s.kv.Get(keyEntitlementPolicy)
-	if err != nil || len(b) == 0 {
+	b, err := s.read(keyEntitlementPolicy, "entitlement policy")
+	if err != nil {
+		return nil, err
+	}
+	if b == nil {
 		return nil, nil // no policy sealed yet - genesis
 	}
 	var p EntitlementPolicyState
@@ -434,8 +472,11 @@ func (s *LedgerStore) LoadEntitlementPolicy() (*EntitlementPolicyState, error) {
 // This provides time-travel capability for debugging and dashboards
 func (s *LedgerStore) GetSystemLedgerAtHeight(chainID string, height uint64) (*SystemLedgerState, error) {
 	// Read the specific block metadata instead of latest
-	b, err := s.kv.Get(systemBlockKey(height))
-	if err != nil || len(b) == 0 {
+	b, err := s.read(systemBlockKey(height), fmt.Sprintf("block metadata for height %d", height))
+	if err != nil {
+		return nil, err
+	}
+	if b == nil {
 		return nil, fmt.Errorf("block metadata not found for height %d", height)
 	}
 
