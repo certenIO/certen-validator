@@ -531,6 +531,11 @@ func (o *BatchOrchestrator) settleFlushMembers(
 			res.stopSending = true
 			continue
 		}
+		if serr != nil && errors.Is(serr, errMemberPastDeadline) {
+			o.logf("[BATCH] member %s: %v — not sent", p.IntentID, serr)
+			res.drop(fmt.Sprintf("its deadline passed before it could settle on chain %d: %v", p.ChainID, serr), p)
+			continue
+		}
 		if serr != nil && errors.Is(serr, errLeafAlreadyConsumed) {
 			// Already spent when this node went to settle it. The chain's own record says who spent
 			// it: this node's key (a settlement of its own that landed meanwhile) is this member's
@@ -871,13 +876,9 @@ func (o *BatchOrchestrator) settleMember(
 		return "", readErr(fmt.Errorf("reading chain head for the settlement's timestamp: %w", err))
 	}
 	notBefore := int64(head.Time)
-	expiresAt := notBefore + int64(time.Hour/time.Second)
-	if !fence.IsZero() {
-		expiresAt = fence.Unix()
-		if expiresAt <= notBefore {
-			return "", fmt.Errorf("settlement window closed at %s (chain time %d): %w",
-				fence.UTC().Format(time.RFC3339), notBefore, errSettlementWindowClosed)
-		}
+	expiresAt, err := settlementExpiry(p, notBefore, fence)
+	if err != nil {
+		return "", err
 	}
 	proof := contracts.AccountProofV7{
 		AdiURL:      p.ADIURL, // advisory; the contract uses its own immutable adiURL
@@ -1014,6 +1015,42 @@ const settlementWaitTimeout = 10 * time.Minute
 
 // errSettlementWindowClosed: the settlement's window ended before it could be sent. Nothing was sent.
 var errSettlementWindowClosed = errors.New("settlement window closed")
+
+// errMemberPastDeadline: the chain's time is past the member's deadline, so its settlement is not sent.
+// Terminal: the member can never execute within its deadline (RB3-F53).
+var errMemberPastDeadline = errors.New("member past its deadline")
+
+// settlementExpiry is the expiresAt a member's settlement carries, from the chain time it is sent at.
+//
+// CertenAccountV7 refuses a settlement mined after its proof's expiresAt (block.timestamp <=
+// proof.expiresAt), so this is where a member's deadline is ENFORCED ON CHAIN for every settlement
+// this validator sends: expiresAt is the earliest of the settlement horizon (an hour), the window's
+// fence, and the member's own deadline (PendingBatchIntent.Deadline). A settlement that does not mine
+// before the deadline reverts instead of executing late. The deadline was parsed from the signed
+// intent and enforced nowhere before (RB3-F53).
+//
+// A window that already closed is errSettlementWindowClosed (not the member's outcome); a deadline
+// that already passed is errMemberPastDeadline (its outcome).
+func settlementExpiry(p *PendingBatchIntent, notBefore int64, fence time.Time) (int64, error) {
+	expiresAt := notBefore + int64(time.Hour/time.Second)
+	if !fence.IsZero() {
+		expiresAt = fence.Unix()
+		if expiresAt <= notBefore {
+			return 0, fmt.Errorf("settlement window closed at %s (chain time %d): %w",
+				fence.UTC().Format(time.RFC3339), notBefore, errSettlementWindowClosed)
+		}
+	}
+	if deadline, ok := p.Deadline(); ok {
+		if notBefore >= deadline.Unix() {
+			return 0, fmt.Errorf("member %s: chain time %s is past its deadline %s: %w", p.IntentID,
+				time.Unix(notBefore, 0).UTC().Format(time.RFC3339), deadline.Format(time.RFC3339), errMemberPastDeadline)
+		}
+		if deadline.Unix() < expiresAt {
+			expiresAt = deadline.Unix()
+		}
+	}
+	return expiresAt, nil
+}
 
 // errSettlementReverted is a settlement that was mined and reverted: a terminal, observed outcome.
 var errSettlementReverted = errors.New("member execution reverted on-chain (leaf still spendable)")

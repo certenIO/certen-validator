@@ -574,6 +574,12 @@ func (o *BatchOrchestrator) settleAndClassify(
 		return out, nil
 	}
 
+	// Past its deadline on chain: nothing was sent, and nothing ever can be. The member's outcome.
+	if errors.Is(serr, errMemberPastDeadline) {
+		o.logf("[OD] ❌ intent=%s %v — not sent", member.IntentID, serr)
+		return out, serr
+	}
+
 	// Nothing was sent, and nothing about the member was learned: its window closed first, or a
 	// chain read failed. The next pass decides again.
 	if errors.Is(serr, errSettlementWindowClosed) || IsChainReadError(serr) {

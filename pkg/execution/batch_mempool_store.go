@@ -58,6 +58,8 @@ type persistedLeg struct {
 	Target string `json:"target"`
 	Value  string `json:"value"`
 	Data   string `json:"data"`
+	// Deadline: omitempty, for the same version-skew reason as persistedMember.Lane.
+	Deadline int64 `json:"deadline,omitempty"`
 }
 
 // persistedMember is one queued batch member on disk.
@@ -251,10 +253,11 @@ func (s *BatchMempoolStore) encodeMember(p *PendingBatchIntent, lane BatchLane) 
 			v = l.Value.String()
 		}
 		pm.Legs = append(pm.Legs, persistedLeg{
-			LegID:  l.LegID,
-			Target: l.Target.Hex(),
-			Value:  v,
-			Data:   "0x" + common.Bytes2Hex(l.Data),
+			LegID:    l.LegID,
+			Target:   l.Target.Hex(),
+			Value:    v,
+			Data:     "0x" + common.Bytes2Hex(l.Data),
+			Deadline: l.Deadline,
 		})
 	}
 	if s.codec != nil && p.Attestation != nil {
@@ -337,10 +340,11 @@ func (s *BatchMempoolStore) Load(m *BatchMempool) (int, error) {
 				// Not persisted per leg: Add enforces that every leg targets the member's own
 				// chain, so it is the member's ChainID by construction. Omitting it here left it
 				// zero and the restore was silently rejected.
-				ChainID: pm.ChainID,
-				Target:  common.HexToAddress(l.Target),
-				Value:   v,
-				Data:    common.FromHex(l.Data),
+				ChainID:  pm.ChainID,
+				Target:   common.HexToAddress(l.Target),
+				Value:    v,
+				Data:     common.FromHex(l.Data),
+				Deadline: l.Deadline,
 			})
 		}
 		if s.codec != nil && len(pm.Attestation) > 0 {

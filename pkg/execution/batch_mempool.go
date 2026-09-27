@@ -148,6 +148,28 @@ const (
 	MemberReleased MemberOutcome = "released"
 )
 
+// Deadline is the latest time the member may execute, and whether it has one: the earliest of its
+// legs' signed deadlines and CERTEN's own settlement horizon (its commit time + maxGasDeferral).
+// Both parts are the same on every validator - signed data and Accumulate consensus time - so
+// validators agree on it. A member with neither has no deadline.
+func (p *PendingBatchIntent) Deadline() (time.Time, bool) {
+	var d time.Time
+	for _, l := range p.Legs {
+		if l.Deadline <= 0 {
+			continue
+		}
+		if t := time.Unix(l.Deadline, 0).UTC(); d.IsZero() || t.Before(d) {
+			d = t
+		}
+	}
+	if !p.CommitTime.IsZero() {
+		if h := p.CommitTime.Add(maxGasDeferral).UTC(); d.IsZero() || h.Before(d) {
+			d = h
+		}
+	}
+	return d, !d.IsZero()
+}
+
 // pending reports whether the member still has no terminal outcome here.
 func (p *PendingBatchIntent) pending() bool { return p != nil && p.Outcome == "" }
 

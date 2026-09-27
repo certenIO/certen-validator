@@ -955,13 +955,19 @@ func convertLegs(legs interface{}, chainID int64, account common.Address) ([]Leg
 			val = new(big.Int)
 		}
 		data, _ := dataF.Interface().([]byte)
+		// Deadline is optional in the mirror: a leg that declares none carries 0.
+		var deadline int64
+		if f := e.FieldByName("Deadline"); f.IsValid() && f.Kind() == reflect.Int64 {
+			deadline = f.Int()
+		}
 
 		out = append(out, LegExecution{
-			LegID:   legIDF.String(),
-			ChainID: chainID,
-			Target:  target,
-			Value:   val,
-			Data:    data,
+			LegID:    legIDF.String(),
+			ChainID:  chainID,
+			Target:   target,
+			Value:    val,
+			Data:     data,
+			Deadline: deadline,
 			// Every leg of a member executes from that member's own account — consensus
 			// already rejected an intent whose legs span two source accounts.
 			SourceAddress: account,

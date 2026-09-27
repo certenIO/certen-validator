@@ -97,6 +97,8 @@ type BatchLeg struct {
 	Target  [20]byte
 	Value   *big.Int
 	Data    []byte
+	// Deadline is the leg's signed deadline_timestamp (unix seconds); 0 when it declares none.
+	Deadline int64
 }
 
 // batchInputsFromIntent extracts what the batch mempool needs from a consensus intent.
@@ -202,11 +204,12 @@ func (bv *BFTValidator) batchInputsFromIntentForChain(
 		}
 
 		legs = append(legs, BatchLeg{
-			LegID:   leg.LegID,
-			ChainID: leg.ChainID,
-			Target:  target,
-			Value:   val,
-			Data:    data,
+			LegID:    leg.LegID,
+			ChainID:  leg.ChainID,
+			Target:   target,
+			Value:    val,
+			Data:     data,
+			Deadline: leg.DeadlineTimestamp,
 		})
 	}
 

@@ -150,3 +150,17 @@ func TestLiveIntentDeclarationsAreAdmitted(t *testing.T) {
 		t.Fatalf("the live intent's declarations are ones CERTEN implements: %v", err)
 	}
 }
+
+// RB3-F53: a leg's signed deadline travels with it into the batch member, where it is enforced.
+func TestBatchLegCarriesItsSignedDeadline(t *testing.T) {
+	ci := declaring(t, []int64{84532}, func(_ map[string]any, legs []map[string]any) {
+		legs[0]["deadline_timestamp"] = 1_800_000_600
+	})
+	legs, _, _, _, err := refusalValidator(newFakeEnqueuer()).batchInputsFromIntentForChain(ci, 84532)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(legs) != 1 || legs[0].Deadline != 1_800_000_600 {
+		t.Fatalf("legs %+v; the leg's deadline did not reach the member", legs)
+	}
+}

@@ -363,10 +363,18 @@ func (s *OnDemandSubmitter) dispose(
 	s.cfg.Logf("[OD] ❌ intent=%s attested as FAILED (tx=%q): %v — it is not re-executed; there is "+
 		"no other path to settle it. The ADI resubmits it deliberately.",
 		member.IntentID, txHash, cause)
-	if s.cfg.Attest != nil {
+	// With a transaction, the failure is proved from it (Attest). Without one there is nothing on chain
+	// to prove, and the cause is the record: it goes to the drop handler, which records the member
+	// failed WITH that cause - Attest would record only "no settlement transaction reached the chain".
+	switch {
+	case txHash != "" && s.cfg.Attest != nil:
 		s.cfg.Attest(ctx, member.Attestation, txHash, member.ChainID, false)
-	} else if s.cfg.OnDropped != nil {
+	case s.cfg.OnDropped != nil:
 		s.cfg.OnDropped(ctx, member, fmt.Sprintf("%v", cause))
+	case s.cfg.Attest != nil:
+		s.cfg.Attest(ctx, member.Attestation, txHash, member.ChainID, false)
+	default:
+		s.cfg.Logf("[OD] ⚠️ intent=%s failed with no attest or drop handler wired; it is recorded nowhere", member.IntentID)
 	}
 	s.cfg.Stack.Mempool.RemoveOnDemand(member.ChainID, member.OperationID)
 }
