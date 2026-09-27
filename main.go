@@ -263,6 +263,11 @@ func batchPeriodBlocksFromEnv() uint64 {
 // than spend the process lifetime unable to attest.
 func resolveBatchAttesterIdentity(resolver *execution.EVMChainResolverImpl, validatorID string) {
 	publish := func(addr, how string) {
+		// The sending key must be this identity, or the node sends and claims settlements as another
+		// validator (RB3-F64). A configuration error that no retry fixes: the validator does not run.
+		if err := execution.CheckSendersAreIdentity(resolver, addr); err != nil {
+			log.Fatalf("❌ [BATCH] %s: %v", validatorID, err)
+		}
 		batchAttesterIdentity.Store(&execution.BatchAttesterIdentity{
 			ValidatorID: validatorID,
 			EVMAddress:  addr,
