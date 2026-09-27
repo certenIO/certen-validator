@@ -190,7 +190,10 @@ func submitValidatorBlock(ctx context.Context, rpc broadcastRPC, payload []byte,
 	//
 	// A Status that does not answer leaves h0 at 0, which scans the whole cap window instead: costlier,
 	// but it can only add history, never hide the block this transaction is in.
-	scanning := inclusionScanEnabled()
+	scanning, err := inclusionScanEnabled()
+	if err != nil {
+		return nil, err
+	}
 	var h0 int64
 	if scanning {
 		var err error

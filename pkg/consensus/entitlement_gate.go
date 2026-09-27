@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"fmt"
+	"github.com/certen/independant-validator/pkg/envvar"
 	"os"
 	"strconv"
 	"strings"
@@ -191,13 +192,10 @@ func EntitlementConfigFromEnv() (EntitlementConfig, error) {
 // was written can surface pre-existing malformed intents. Set
 // CERTEN_EXEC_VALIDATION=false to restore the old behaviour without redeploying
 // a binary; expect replayed and expired intents to execute again if you do.
-func executionValidationEnabled() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("CERTEN_EXEC_VALIDATION"))) {
-	case "false", "0", "no":
-		return false
-	default:
-		return true
-	}
+//
+// A value that is not a switch is refused rather than read as "on".
+func executionValidationEnabled() (bool, error) {
+	return envvar.Bool("CERTEN_EXEC_VALIDATION", true)
 }
 
 // VerifyEntitlement is the gate.

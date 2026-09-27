@@ -4,8 +4,8 @@ package consensus
 
 import (
 	"fmt"
+	"github.com/certen/independant-validator/pkg/envvar"
 	"math/big"
-	"os"
 	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -25,13 +25,10 @@ import (
 // ContractCallsAllowed reports whether this deployment executes arbitrary contract calls (legs with
 // non-empty calldata). Default OFF: proof-gated arbitrary calls are a deliberate opt-in per
 // deployment via CERTEN_ALLOW_CONTRACT_CALLS.
-func ContractCallsAllowed() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("CERTEN_ALLOW_CONTRACT_CALLS"))) {
-	case "1", "true", "yes", "on":
-		return true
-	default:
-		return false
-	}
+//
+// A value that is not a switch is refused: it used to mean "off", so a typo in an opt-in was silent.
+func ContractCallsAllowed() (bool, error) {
+	return envvar.Bool("CERTEN_ALLOW_CONTRACT_CALLS", false)
 }
 
 // ComputeExecutionCommitment is keccak256(abi.encodePacked(uint256 chainId, address target,
@@ -72,7 +69,11 @@ func ComputeExecutionCommitment(chainID int64, target common.Address, value *big
 // all the same, and the account recomputes it from the runtime call.
 func checkLegCommitment(i int, chainID int64, target [20]byte, value *big.Int, data []byte, ep *ExecutionPayload) error {
 	isContractCall := len(data) > 0
-	if isContractCall && !ContractCallsAllowed() {
+	allowed, err := ContractCallsAllowed()
+	if err != nil {
+		return fmt.Errorf("leg %d: %w", i, err)
+	}
+	if isContractCall && !allowed {
 		return fmt.Errorf("leg %d carries contract calldata but this deployment does not execute contract calls "+
 			"(CERTEN_ALLOW_CONTRACT_CALLS is not enabled)", i)
 	}

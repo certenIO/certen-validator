@@ -72,7 +72,10 @@ func (ecm *EthereumContractManager) batchSender() (*txSender, error) {
 // paid as is. Clamping there would sign a transaction priced below the network - one guaranteed to
 // sit in the mempool and block the key.
 func (ecm *EthereumContractManager) feeCeiling(networkPrice, bid *big.Int, gas uint64) (*big.Int, error) {
-	enforce := gasCeilingEnforced()
+	enforce, err := gasCeilingEnforced()
+	if err != nil {
+		return nil, err
+	}
 	if !enforce {
 		return new(big.Int).Set(bid), nil
 	}
@@ -86,7 +89,7 @@ func (ecm *EthereumContractManager) feeCeiling(networkPrice, bid *big.Int, gas u
 	if maxWei.Sign() > 0 && out.Cmp(maxWei) > 0 {
 		out = maxWei
 	}
-	if err := checkTxCostCeiling(gas, out, nativeUSDMicro(), maxTxCostMicroUSD(), ecm.config.ChainID); err != nil {
+	if err := txCostCeiling(gas, out, ecm.config.ChainID); err != nil {
 		return nil, err
 	}
 	return out, nil

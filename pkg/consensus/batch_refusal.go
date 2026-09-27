@@ -117,7 +117,12 @@ func (bv *BFTValidator) planBatch(ci *CertenIntent, commitHeight uint64) (*batch
 	if err != nil {
 		return nil, refuse(fmt.Errorf("intent %s has no usable proof class: %w", ci.IntentID, err))
 	}
-	plan := &batchPlan{adiURL: adiURL, onDemand: proofClass == "on_demand" && onDemandLaneEnabled()}
+	lane, err := onDemandLaneEnabled()
+	if err != nil {
+		// The deployment's configuration, not the intent: retried, never held against it.
+		return nil, refuse(fmt.Errorf("%w: %v", ErrBatchUnavailable, err))
+	}
+	plan := &batchPlan{adiURL: adiURL, onDemand: proofClass == "on_demand" && lane}
 
 	// A sequential cross-chain intent's members are queued in its declared order, each after the one
 	// before it (declared_semantics.go; pkg/execution batch_sequence.go).

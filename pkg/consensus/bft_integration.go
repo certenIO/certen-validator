@@ -1219,7 +1219,11 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	// would not be fine in the consensus invariant, where it would make
 	// validators disagree.
 	// ====================================================================
-	if executionValidationEnabled() {
+	execValidation, err := executionValidationEnabled()
+	if err != nil {
+		return &ExecutionTaskResult{Success: false, ExecutorID: bv.validatorID, Error: err}, nil
+	}
+	if execValidation {
 		if err := certenIntent.ValidateForExecution(blockHeight); err != nil {
 			bv.logger.Printf("🚫 [EXEC-VALIDATION] refusing intent %s: %v", certenIntent.IntentID, err)
 			return &ExecutionTaskResult{

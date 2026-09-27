@@ -16,10 +16,9 @@ import (
 	"errors"
 	"fmt"
 	"github.com/certen/independant-validator/pkg/entitlement"
+	"github.com/certen/independant-validator/pkg/envvar"
 	"log"
-	"os"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -255,7 +254,7 @@ func DefaultIntentDiscoveryConfig() *IntentDiscoveryConfig {
 		// every value-moving intent. Keep in step with main.go's CERTEN_BFT_TIMEOUT default.
 		BFTTimeout:          360 * time.Second,
 		MaxConcurrentBlocks: MAX_CONCURRENT_BLOCKS,
-		BlockWorkers:        blockWorkersFromEnv(),
+		BlockWorkers:        DefaultBlockWorkers,
 		IntentBatchSize:     INTENT_BATCH_SIZE,
 		MinStartHeight:      946000, // Current testnet baseline
 		// Short in-line retry catches the common few-second DN-anchoring lag without holding
@@ -518,7 +517,11 @@ func (id *IntentDiscovery) initializeStartingHeight(ctx context.Context) error {
 	// refuses every request for a period it should be able to reproduce, which is silent
 	// quorum degradation — one or two restarts are absorbed by 5-of-7, a rolling deploy
 	// touching three is not.
-	if rewind := intentRewindBlocks(); rewind > 0 && startHeight > rewind {
+	rewind, err := intentRewindBlocks()
+	if err != nil {
+		return err
+	}
+	if rewind > 0 && startHeight > rewind {
 		id.logger.Printf("⏪ Rewinding the discovery watermark %d blocks (from %d to %d) so intents "+
 			"still in flight for a batch are re-derived rather than lost to the restart",
 			rewind, startHeight, startHeight-rewind)
@@ -536,13 +539,10 @@ func (id *IntentDiscovery) initializeStartingHeight(ctx context.Context) error {
 // It must comfortably exceed one batch settle window: the period width plus the settle grace
 // plus the member pipeline. Overshooting only costs a re-scan; undershooting silently strands
 // whatever was in flight.
-func intentRewindBlocks() uint64 {
-	if raw := strings.TrimSpace(os.Getenv("INTENT_REWIND_BLOCKS")); raw != "" {
-		if n, err := strconv.ParseUint(raw, 10, 64); err == nil {
-			return n
-		}
-	}
-	return 600
+//
+// A value that is not a non-negative integer is refused; it used to become 600 without a word.
+func intentRewindBlocks() (uint64, error) {
+	return envvar.Uint64("INTENT_REWIND_BLOCKS", 600, 0)
 }
 
 // checkForNewBlocks scans every block from the watermark up to the latest directory
@@ -673,22 +673,12 @@ func (id *IntentDiscovery) blockProcessor(workerID string) {
 	}
 }
 
-// blockWorkersFromEnv reads BLOCK_WORKERS, falling back to DefaultBlockWorkers.
-//
-// A malformed or non-positive value uses the default rather than failing startup: discovery
-// running at a sane rate is always better than a validator that refuses to boot over a tuning
-// knob, and the value is logged at startup either way.
-func blockWorkersFromEnv() int {
-	raw := strings.TrimSpace(os.Getenv("BLOCK_WORKERS"))
-	if raw == "" {
-		return DefaultBlockWorkers
-	}
-	n, err := strconv.Atoi(raw)
-	if err != nil || n <= 0 {
-		log.Printf("⚠️ BLOCK_WORKERS=%q is not a positive integer — using %d", raw, DefaultBlockWorkers)
-		return DefaultBlockWorkers
-	}
-	return n
+// BlockWorkersFromEnv reads BLOCK_WORKERS: unset means DefaultBlockWorkers, and a value that is not a
+// positive integer is refused. It used to become the default with a log line - and the live validator
+// never read it at all, building its discovery config without it, so "raise via BLOCK_WORKERS" did
+// nothing (RB3-F71 sweep). main now reads it through here.
+func BlockWorkersFromEnv() (int, error) {
+	return envvar.Int("BLOCK_WORKERS", DefaultBlockWorkers, 1)
 }
 
 // DiscoveryStatus is a point-in-time view of whether block discovery is alive and keeping up.

@@ -16,8 +16,7 @@ package intent
 import (
 	"encoding/json"
 	"fmt"
-	"os"
-	"strings"
+	"github.com/certen/independant-validator/pkg/envvar"
 )
 
 // rawIntentMeta represents the structure for parsing intent metadata blob
@@ -84,7 +83,11 @@ func BuildCertenIntent(
 	orgADI := firstNonEmpty(gv.OrganizationAdi, im.Organization)
 
 	// Extract ProofClass from intent blob - CRITICAL for routing
-	proofClass := firstNonEmpty(im.ProofClass, extractProofClassFromBlob(intentBlob))
+	blobClass, err := extractProofClassFromBlob(intentBlob)
+	if err != nil {
+		return nil, err
+	}
+	proofClass := firstNonEmpty(im.ProofClass, blobClass)
 
 	// Derive principal account URL (where the writeData TX lives)
 	// Convention: <orgAdi>/data
@@ -156,28 +159,28 @@ func firstNonEmpty(s1, s2 string) string {
 }
 
 // extractProofClassFromBlob extracts proof_class from intent blob map
-func extractProofClassFromBlob(intentBlob map[string]interface{}) string {
+func extractProofClassFromBlob(intentBlob map[string]interface{}) (string, error) {
 	if intentBlob == nil {
-		return ""
+		return "", nil
 	}
 
 	// Try proof_class field (snake_case)
 	if pc, ok := intentBlob["proof_class"].(string); ok {
-		return pc
+		return pc, nil
 	}
 
 	// Try proofClass field (camelCase)
 	if pc, ok := intentBlob["proofClass"].(string); ok {
-		return pc
+		return pc, nil
 	}
 
 	// Legacy: infer from priority field
 	if priority, ok := intentBlob["priority"].(string); ok {
 		switch priority {
 		case "high", "urgent":
-			return "on_demand"
+			return "on_demand", nil
 		case "low", "normal":
-			return "on_cadence"
+			return "on_cadence", nil
 		}
 	}
 
@@ -201,9 +204,8 @@ func extractProofClassFromBlob(intentBlob map[string]interface{}) string {
 // defaultProofClass returns the proof class used when an intent does not
 // specify one. Overridable via CERTEN_DEFAULT_PROOF_CLASS for a deployment that
 // genuinely wants the legacy behaviour, but the safe default is the cheap path.
-func defaultProofClass() string {
-	if v := strings.ToLower(strings.TrimSpace(os.Getenv("CERTEN_DEFAULT_PROOF_CLASS"))); v == "on_demand" {
-		return "on_demand"
-	}
-	return "on_cadence"
+//
+// A value that is neither class is refused; it used to mean on_cadence without a word.
+func defaultProofClass() (string, error) {
+	return envvar.OneOf("CERTEN_DEFAULT_PROOF_CLASS", "on_cadence", "on_cadence", "on_demand")
 }

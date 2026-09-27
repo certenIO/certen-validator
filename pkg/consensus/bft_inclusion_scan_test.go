@@ -723,15 +723,19 @@ func TestD1HappyPathIsFastAndCheap(t *testing.T) {
 
 // The escape hatch has to actually work: with INCLUSION_SCAN=off nothing scans.
 func TestInclusionScanCanBeTurnedOff(t *testing.T) {
-	if !inclusionScanEnabled() {
-		t.Fatal("the scan is not on by default")
+	if on, err := inclusionScanEnabled(); !on || err != nil {
+		t.Fatalf("the scan is not on by default (%v, %v)", on, err)
 	}
 	t.Setenv("INCLUSION_SCAN", "off")
-	if inclusionScanEnabled() {
-		t.Fatal("INCLUSION_SCAN=off did not disable the scan")
+	if on, err := inclusionScanEnabled(); on || err != nil {
+		t.Fatalf("INCLUSION_SCAN=off did not disable the scan (%v, %v)", on, err)
+	}
+	t.Setenv("INCLUSION_SCAN", "of")
+	if _, err := inclusionScanEnabled(); err == nil {
+		t.Fatal("INCLUSION_SCAN=of was not refused; it used to leave the scan on")
 	}
 	t.Setenv("INCLUSION_SCAN", "on")
-	if !inclusionScanEnabled() {
+	if on, _ := inclusionScanEnabled(); !on {
 		t.Fatal("INCLUSION_SCAN=on disabled the scan")
 	}
 }

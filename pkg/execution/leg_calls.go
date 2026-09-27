@@ -42,7 +42,7 @@ func (l LegExecution) IsContractCall() bool {
 
 // contractCallsAllowed reports whether this deployment executes arbitrary contract calls. The
 // definition lives in consensus (ContractCallsAllowed), which enforces it at batch admission.
-func contractCallsAllowed() bool { return consensus.ContractCallsAllowed() }
+func contractCallsAllowed() (bool, error) { return consensus.ContractCallsAllowed() }
 
 // decodeHexBytes decodes a hex string (with or without "0x" prefix) into bytes.
 // "" and "0x" decode to an empty (non-nil) slice. RB-1: used to parse the raw

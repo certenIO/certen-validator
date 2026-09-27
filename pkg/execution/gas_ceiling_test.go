@@ -3,6 +3,7 @@ package execution
 import (
 	"errors"
 	"math/big"
+	"strings"
 	"testing"
 )
 
@@ -177,12 +178,12 @@ func TestUnconfiguredPriceLeavesTheDollarCeilingInactive(t *testing.T) {
 	t.Setenv("CERTEN_NATIVE_USD", "")
 	t.Setenv("CERTEN_MAX_TX_COST_USD", "")
 
-	if got := nativeUSDMicro(); got != 0 {
+	if got := mustMicro(t, nativeUSDMicro); got != 0 {
 		t.Fatalf("an unconfigured token price must be 0 (inactive), got %d", got)
 	}
 
 	// The realistic testnet case that the old default refused.
-	err := checkTxCostCeiling(500_000, big.NewInt(24*gwei), nativeUSDMicro(), maxTxCostMicroUSD(), 11155111)
+	err := txCostCeiling(500_000, big.NewInt(24*gwei), 11155111)
 	if err != nil {
 		t.Fatalf("an unconfigured deployment must not refuse ordinary work: %v", err)
 	}
@@ -192,11 +193,11 @@ func TestConfiguringBothActivatesTheDollarCeiling(t *testing.T) {
 	t.Setenv("CERTEN_NATIVE_USD", "3000")
 	t.Setenv("CERTEN_MAX_TX_COST_USD", "25")
 
-	if nativeUSDMicro() != 3000*usd || maxTxCostMicroUSD() != 25*usd {
+	if mustMicro(t, nativeUSDMicro) != 3000*usd || mustMicro(t, maxTxCostMicroUSD) != 25*usd {
 		t.Fatal("explicit configuration should be honoured")
 	}
 	// 2.5M gas at 50 gwei with ETH at $3,000 = $375. Refused.
-	if err := checkTxCostCeiling(2_500_000, big.NewInt(50*gwei), nativeUSDMicro(), maxTxCostMicroUSD(), 1); err == nil {
+	if err := txCostCeiling(2_500_000, big.NewInt(50*gwei), 1); err == nil {
 		t.Fatal("a configured ceiling must still refuse a genuinely expensive transaction")
 	}
 }
@@ -207,37 +208,64 @@ func TestExplicitZeroCapDisablesTheDollarCeiling(t *testing.T) {
 
 	// An operator on a testnet, where a dollar ceiling is meaningless, must be
 	// able to turn it off without also giving up the gwei ceiling.
-	if err := checkTxCostCeiling(10_000_000, big.NewInt(500*gwei), nativeUSDMicro(), maxTxCostMicroUSD(), 1); err != nil {
+	if err := txCostCeiling(10_000_000, big.NewInt(500*gwei), 1); err != nil {
 		t.Fatalf("an explicit zero cap must disable the dollar ceiling: %v", err)
 	}
 }
 
 func TestCostCeilingOverridable(t *testing.T) {
 	t.Setenv("CERTEN_MAX_TX_COST_USD", "0.50")
-	if got := maxTxCostMicroUSD(); got != 500_000 {
+	if got := mustMicro(t, maxTxCostMicroUSD); got != 500_000 {
 		t.Fatalf("expected 500000 micro-USD, got %d", got)
 	}
 	t.Setenv("CERTEN_NATIVE_USD", "3000")
-	if got := nativeUSDMicro(); got != 3000*usd {
+	if got := mustMicro(t, nativeUSDMicro); got != 3000*usd {
 		t.Fatalf("expected 3000000000 micro-USD, got %d", got)
 	}
 }
 
 func TestGasCeilingEnforcedDefaultsOn(t *testing.T) {
 	t.Setenv("CERTEN_GAS_CEILING_ENFORCE", "")
-	if !gasCeilingEnforced() {
-		t.Fatal("must default to enforcing: refusing is the safe direction under Model B")
+	if on, err := gasCeilingEnforced(); !on || err != nil {
+		t.Fatalf("must default to enforcing (%v, %v): refusing is the safe direction under Model B", on, err)
 	}
 	for _, off := range []string{"false", "FALSE", "0", "no"} {
 		t.Setenv("CERTEN_GAS_CEILING_ENFORCE", off)
-		if gasCeilingEnforced() {
-			t.Fatalf("%q should disable enforcement", off)
+		if on, err := gasCeilingEnforced(); on || err != nil {
+			t.Fatalf("%q should disable enforcement (%v, %v)", off, on, err)
 		}
 	}
-	for _, on := range []string{"true", "1", "yes", "anything-else"} {
+	for _, on := range []string{"true", "1", "yes"} {
 		t.Setenv("CERTEN_GAS_CEILING_ENFORCE", on)
-		if !gasCeilingEnforced() {
-			t.Fatalf("%q should leave enforcement on", on)
+		if enforced, err := gasCeilingEnforced(); !enforced || err != nil {
+			t.Fatalf("%q should leave enforcement on (%v, %v)", on, enforced, err)
 		}
 	}
+	// RB3-F71 sweep: a value that is not a switch is refused by name. It used to read as "on".
+	t.Setenv("CERTEN_GAS_CEILING_ENFORCE", "anything-else")
+	if _, err := gasCeilingEnforced(); err == nil {
+		t.Fatal("CERTEN_GAS_CEILING_ENFORCE=anything-else was not refused")
+	}
+}
+
+// A dollar figure that is not a non-negative number is refused. The price used to become 0 - the dollar
+// ceiling switched off - and the cap the $25 default, each without a word.
+func TestAnUnreadableDollarFigureIsRefused(t *testing.T) {
+	for key, v := range map[string]string{"CERTEN_NATIVE_USD": "$3000", "CERTEN_MAX_TX_COST_USD": "-1"} {
+		t.Setenv("CERTEN_NATIVE_USD", "3000")
+		t.Setenv("CERTEN_MAX_TX_COST_USD", "25")
+		t.Setenv(key, v)
+		if err := txCostCeiling(21000, big.NewInt(1), 1); err == nil || !strings.Contains(err.Error(), key) {
+			t.Errorf("%s=%q was not refused by name: %v", key, v, err)
+		}
+	}
+}
+
+func mustMicro(t *testing.T, read func() (int64, error)) int64 {
+	t.Helper()
+	v, err := read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
 }

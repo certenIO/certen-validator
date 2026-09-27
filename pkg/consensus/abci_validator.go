@@ -11,11 +11,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/certen/independant-validator/pkg/envvar"
 	"log"
-	"os"
 	"sort"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -118,19 +116,12 @@ func (app *ValidatorApp) SetCheckpointHook(fn func(height int64, blockHash strin
 
 // blockRetentionFromEnv reads CERTEN_BLOCK_RETENTION.
 //
-// Unset, zero or unparseable means retain ALL consensus history — the safe
-// default. Pruning is opt-in because losing old blocks both destroys the BFT
-// quorum record and makes a mismatched volume reset unrecoverable.
-func blockRetentionFromEnv() int64 {
-	raw := strings.TrimSpace(os.Getenv("CERTEN_BLOCK_RETENTION"))
-	if raw == "" {
-		return 0
-	}
-	n, err := strconv.ParseInt(raw, 10, 64)
-	if err != nil || n < 0 {
-		return 0
-	}
-	return n
+// Unset or zero means retain ALL consensus history — the safe default. Pruning is opt-in because
+// losing old blocks both destroys the BFT quorum record and makes a mismatched volume reset
+// unrecoverable. A value that is not a non-negative integer is refused; it used to mean "retain all"
+// too, so an operator who meant to prune was told nothing.
+func blockRetentionFromEnv() (int64, error) {
+	return envvar.Int64("CERTEN_BLOCK_RETENTION", 0, 0)
 }
 
 // NewValidatorApp creates a new ABCI application for validator consensus.
@@ -143,8 +134,13 @@ func NewValidatorApp(ledgerStore *ledger.LedgerStore, chainID string) *Validator
 		validatorBlocks: make(map[string]*ValidatorBlock),
 		ledgerStore:     ledgerStore,
 		chainID:         chainID,
-		blockRetention:  blockRetentionFromEnv(),
 	}
+
+	retention, err := blockRetentionFromEnv()
+	if err != nil {
+		app.logger.Fatalf("invalid block retention: %v", err)
+	}
+	app.blockRetention = retention
 
 	// Entitlement gate. A misconfiguration here is fatal on purpose: starting
 	// with a silently-off gate that the operator believes is enforcing is worse

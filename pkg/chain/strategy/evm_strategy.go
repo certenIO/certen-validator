@@ -136,10 +136,19 @@ func NewEVMStrategy(config *EVMStrategyConfig) (*EVMStrategy, error) {
 	// the free L2 providers connect fine and then refuse archive eth_getLogs/receipt lookups, so
 	// connect-time selection alone never reaches the paid tier. The pool rotates on the refusal
 	// itself, which is what makes an L2 leg observable in Phase 7.
+	//
+	// A pool that cannot be built is refused: it used to be dropped silently, leaving the strategy on the
+	// one connect-time endpoint that the comment above explains cannot observe an L2 leg (RB3-F102).
 	if len(dialed) > 1 {
-		if pool, perr := ethrpc.NewPool(dialed, ethrpc.CooldownFromEnv(), nil); perr == nil {
-			strategy.pool = pool
+		cooldown, err := ethrpc.CooldownFromEnv()
+		if err != nil {
+			return nil, err
 		}
+		pool, err := ethrpc.NewPool(dialed, cooldown, nil)
+		if err != nil {
+			return nil, fmt.Errorf("%s: read failover pool over %d endpoints: %w", config.ChainConfig.NetworkName, len(dialed), err)
+		}
+		strategy.pool = pool
 	}
 
 	// Get chain ID

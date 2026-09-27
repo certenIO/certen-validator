@@ -2,9 +2,9 @@ package ethrpc
 
 import (
 	"fmt"
+	"github.com/certen/independant-validator/pkg/envvar"
 	"log"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -46,14 +46,10 @@ func EndpointsFromEnv() []string {
 	)
 }
 
-// CooldownFromEnv reads the cooldown override, falling back to DefaultCooldown.
-func CooldownFromEnv() time.Duration {
-	if v := os.Getenv(EnvCooldownSeconds); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			return time.Duration(n) * time.Second
-		}
-	}
-	return DefaultCooldown
+// CooldownFromEnv reads the cooldown override: unset means DefaultCooldown, and a value that is not a
+// positive whole number of seconds is refused (it used to become the default).
+func CooldownFromEnv() (time.Duration, error) {
+	return envvar.Seconds(EnvCooldownSeconds, DefaultCooldown, 1)
 }
 
 // FromEnv builds a Pool from the environment.
@@ -65,7 +61,11 @@ func FromEnv(logger *log.Logger) (*Pool, error) {
 	if len(urls) == 0 {
 		return nil, fmt.Errorf("ethrpc: neither %s nor %s is set", EnvPrimary, EnvPrimaryAlt)
 	}
-	return NewPool(urls, CooldownFromEnv(), logger)
+	cooldown, err := CooldownFromEnv()
+	if err != nil {
+		return nil, err
+	}
+	return NewPool(urls, cooldown, logger)
 }
 
 // =============================================================================
@@ -136,7 +136,11 @@ func PoolForChain(chainKey string, logger *log.Logger) (*Pool, error) {
 		return nil, fmt.Errorf("ethrpc: no endpoint configured for chain %q (set %s_RPC_URL)",
 			chainKey, ChainEnvPrefix(chainKey))
 	}
-	return NewPool(urls, CooldownFromEnv(), logger)
+	cooldown, err := CooldownFromEnv()
+	if err != nil {
+		return nil, err
+	}
+	return NewPool(urls, cooldown, logger)
 }
 
 // ChainKeyForID maps an EVM chain ID to the key used for its environment variables.
