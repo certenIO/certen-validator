@@ -153,7 +153,9 @@ type ChainedProofResult struct {
 	L2ReceiptEntries []database.MerklePathNode // Receipt path entries
 
 	// L3: DN to Consensus
-	L3ConsensusTimestamp time.Time
+	// L3ConsensusTimestamp is the DN block's own time at L3DNBlockHeight, read from the chain; nil when
+	// the chain did not answer. It used to be the validator's clock at proof-building time (RB3-F90).
+	L3ConsensusTimestamp *time.Time
 	L3DNBlockHeight      int64
 	L3SourceHash         []byte                    // Receipt start hash
 	L3TargetHash         []byte                    // Receipt anchor hash
@@ -454,7 +456,9 @@ func hashChainRepo(config *UnifiedOrchestratorConfig) *database.UnifiedRepositor
 func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedProofCycleRequest) (*UnifiedProofCycleResult, error) {
 	// Validate request
 	if err := o.validateRequest(req); err != nil {
-		return nil, fmt.Errorf("validate request: %w", err)
+		err = fmt.Errorf("validate request: %w", err)
+		o.recordStartFailure(ctx, req, nil, err)
+		return nil, err
 	}
 
 	// Generate cycle ID if not provided
@@ -477,12 +481,22 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 	if targetChain == "" {
 		err := fmt.Errorf("proof cycle %s names no target chain", req.CycleID)
 		result.Error = err.Error()
+		o.recordStartFailure(ctx, req, result, err)
 		return result, err
 	}
 
+	// No registry is a wiring defect, refused by name and recorded. It used to be a nil dereference inside
+	// the adapter's goroutine - a panic that takes the whole validator down (RB3-F108).
+	if o.config.Registry == nil {
+		err := fmt.Errorf("proof cycle %s: no strategy registry is configured", req.CycleID)
+		result.Error = err.Error()
+		o.recordStartFailure(ctx, req, result, err)
+		return result, err
+	}
 	chainStrategy, attestStrategy, err := o.config.Registry.GetStrategiesForChain(targetChain)
 	if err != nil {
 		result.Error = fmt.Sprintf("get strategies: %v", err)
+		o.recordStartFailure(ctx, req, result, fmt.Errorf("get strategies: %w", err))
 		return result, err
 	}
 
@@ -787,6 +801,26 @@ func observedSettlement(obs []*chain.ObservationResult) database.MemberSettlemen
 // as far as it was observed, and its proof cycle failed, with why. A settlement Phase 7 saw mined stays
 // settled (or reverted) whatever failed after it - Phase 7's own contract-call gate included. It used to
 // be recorded "unobserved" for every Phase 7 failure, contradicting a receipt Phase 7 had read (RB3-F65).
+// recordStartFailure records the member outcome of a proof cycle that could not start: not observed,
+// proof cycle failed, with why (RB3-F103). A start failure used to be a log line only, and the member's
+// intent stayed "settling" with nothing recorded to say why. A request that cannot even be placed in its
+// member set is said to be unrecorded, by name.
+func (o *UnifiedOrchestrator) recordStartFailure(ctx context.Context, req *UnifiedProofCycleRequest, result *UnifiedProofCycleResult, err error) {
+	if req == nil {
+		fmt.Printf("❌ [LIFECYCLE] a proof cycle with no request could not start (%v); nothing identifies its member\n", err)
+		return
+	}
+	if result == nil {
+		result = &UnifiedProofCycleResult{CycleID: req.CycleID}
+	}
+	cycle := &activeCycle{CycleID: req.CycleID, Request: req, Result: result}
+	reason := fmt.Sprintf("proof cycle not started: %v", err)
+	if rErr := o.recordMemberOutcome(ctx, cycle, database.MemberSettlementUnobserved, database.MemberProofCycleFailed, reason); rErr != nil {
+		fmt.Printf("❌ [LIFECYCLE] intent %s: its proof cycle could not start (%v) and that could not be recorded: %v\n",
+			req.IntentID, err, rErr)
+	}
+}
+
 func (o *UnifiedOrchestrator) recordPhaseFailure(ctx context.Context, cycle *activeCycle, phase int, err error) {
 	reason := fmt.Sprintf("phase %d failed: %v", phase, err)
 	cycle.Result.Error = reason
@@ -2770,9 +2804,8 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 			// transaction, or of none.
 			return fmt.Errorf("cycle %s names no Accumulate account and transaction to prove", req.CycleID)
 		}
-		// BVN calculation is handled by the ProofGenerator adapter
-		// which uses deterministic routing from account URL
-		// (see proof.CalculateBVNFromAccountURL)
+		// The BVN is the partition the transaction was discovered on (RB3-F89); the adapter refuses an
+		// empty one rather than recomputing it.
 
 		if accountURL != "" && txHash != "" {
 			chainedProof, err := o.config.ProofGenerator.GenerateChainedProofForTx(ctx, accountURL, txHash, bvn)
@@ -2797,10 +2830,14 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 				}
 				if _, createErr := o.config.Repos.ProofArtifacts.CreateChainedProofLayer(ctx, failLayer); createErr != nil {
 					return fmt.Errorf("record chained proof failure: %w", createErr)
-				} else {
-					fmt.Printf("Recorded chained proof generation failure for proof_id=%s\n", proofArtifact.ProofID)
 				}
-			} else if chainedProof != nil {
+				fmt.Printf("Recorded chained proof generation failure for proof_id=%s\n", proofArtifact.ProofID)
+				// The attempt is recorded; the bundle is not stored without the proof. It used to go on and
+				// store the bundle with no L1-L4 layers after a "Warning" line (RB3-F93).
+				return fmt.Errorf("cycle %s: chained proof of tx %s: %w", req.CycleID, txHash, err)
+			} else if chainedProof == nil {
+				return fmt.Errorf("cycle %s: the chained-proof generator returned no proof and no error for tx %s", req.CycleID, txHash)
+			} else {
 				// Store for bundle creation later
 				storedChainedProof = chainedProof
 
@@ -2885,13 +2922,12 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 				})
 
 				l3JSON = WithCanonicalL3(l3JSON, canonicalCP)
-				consensusTS := chainedProof.L3ConsensusTimestamp
 				l3Layer := &database.NewChainedProofLayer{
 					ProofID:            proofArtifact.ProofID,
 					LayerNumber:        3,
 					LayerName:          "L3 - DN to Consensus",
 					DNBlockHeight:      &chainedProof.L3DNBlockHeight,
-					ConsensusTimestamp: &consensusTS,
+					ConsensusTimestamp: chainedProof.L3ConsensusTimestamp,
 					SourceHash:         chainedProof.L3SourceHash,
 					TargetHash:         chainedProof.L3TargetHash,
 					ReceiptEntries:     chainedProof.L3ReceiptEntries,
@@ -2920,16 +2956,22 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 				// and G0-G2, so what the proof CONTAINS has to be settled before
 				// the layer attesting to it is built. It is deliberately NOT in
 				// the govRoot — it cannot be inside what it describes.
-				anchorL5, anchorBatch = o.writeLayer5(ctx, proofArtifact.ProofID, placement, result)
+				anchorL5, anchorBatch, err = o.writeLayer5(ctx, proofArtifact.ProofID, placement, result)
+				if err != nil {
+					return err
+				}
 				anchorResolved = true
 
 				fmt.Printf("Created chained_proof_layers L1/L2/L3/L4/L5 for proof_id=%s\n", proofArtifact.ProofID)
 			}
 		} else {
-			fmt.Printf("Note: Cannot generate chained proof - missing accountURL or txHash\n")
+			return fmt.Errorf("cycle %s names no Accumulate account and transaction to prove", req.CycleID)
 		}
 	} else {
-		fmt.Printf("Note: ProofGenerator not configured, skipping chained proof layers\n")
+		// A validator does not boot without its proof builder (main.go), so this is a wiring defect -
+		// and the bundle is not stored without its chained proof. It used to be stored with no L1-L5
+		// layers at all, after a "skipping" note (RB3-F93).
+		return fmt.Errorf("cycle %s: no chained-proof generator is configured; the bundle is not stored without its L1-L5 proof", req.CycleID)
 	}
 
 	// 2d. Create validator_attestations entries

@@ -58,7 +58,15 @@ func main() {
 	if err != nil {
 		fatal("%v", err)
 	}
-	bvn := proofpkg.CalculateBVNFromAccountURL(*account)
+	// The partition as the network routes it, with the table it publishes (RB3-F107).
+	router, err := proofpkg.LoadNetworkRouter(ctx, *endpoint)
+	if err != nil {
+		fatal("%v", err)
+	}
+	bvn, err := router.Partition(*account)
+	if err != nil {
+		fatal("%v", err)
+	}
 	cp, err := gen.GenerateChainedProof(ctx, *account, *txHash, bvn)
 	if err != nil {
 		fatal("production GenerateChainedProof: %v", err)

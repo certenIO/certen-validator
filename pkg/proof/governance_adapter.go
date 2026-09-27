@@ -113,6 +113,17 @@ func (g *CLIGovernanceProofGenerator) GenerateAtLevel(ctx context.Context, level
 		return nil, fmt.Errorf("governance proof CLI not configured (govProofPath is empty)")
 	}
 
+	// The network's routing table, for naming signers' partitions in the timing evidence (RB3-F107).
+	// Read before the CLI runs, so a network that cannot answer fails the proof here, by name.
+	var router *NetworkRouter
+	if level != GovLevelG0 {
+		r, err := LoadNetworkRouter(ctx, g.endpointFor(req))
+		if err != nil {
+			return nil, fmt.Errorf("governance proof %s: %w", level, err)
+		}
+		router = r
+	}
+
 	// Build command arguments
 	args := g.buildCLIArgs(level, req)
 
@@ -163,7 +174,19 @@ func (g *CLIGovernanceProofGenerator) GenerateAtLevel(ctx context.Context, level
 	}
 
 	// Parse JSON output
-	return g.parseOutput(level, output)
+	return g.parseOutput(level, output, router)
+}
+
+// endpointFor is the v3 endpoint a request uses: its own, else the generator's, ending in /v3.
+func (g *CLIGovernanceProofGenerator) endpointFor(req *GovernanceRequest) string {
+	endpoint := req.V3Endpoint
+	if endpoint == "" {
+		endpoint = g.v3Endpoint
+	}
+	if endpoint != "" && !strings.HasSuffix(endpoint, "/v3") {
+		endpoint = strings.TrimSuffix(endpoint, "/") + "/v3"
+	}
+	return endpoint
 }
 
 // buildCLIArgs builds CLI arguments for governance proof generation
@@ -264,7 +287,7 @@ func extractJSON(output []byte) []byte {
 }
 
 // parseOutput parses CLI JSON output into GovernanceProof
-func (g *CLIGovernanceProofGenerator) parseOutput(level GovernanceLevel, output []byte) (*GovernanceProof, error) {
+func (g *CLIGovernanceProofGenerator) parseOutput(level GovernanceLevel, output []byte, router *NetworkRouter) (*GovernanceProof, error) {
 	govProof := &GovernanceProof{
 		Level:       level,
 		SpecVersion: GovernanceSpecVersion,
@@ -316,7 +339,11 @@ func (g *CLIGovernanceProofGenerator) parseOutput(level GovernanceLevel, output 
 	// G0 is skipped: a G0 result records that the transaction executed and
 	// evaluates no signatures, so it has no timing claim to qualify.
 	if level != GovLevelG0 {
-		if tb := TimingBasisFromRaw(string(level), jsonData); len(tb) > 0 {
+		tb, err := TimingBasisFromRaw(string(level), jsonData, router)
+		if err != nil {
+			return nil, err
+		}
+		if len(tb) > 0 {
 			govProof.TimingBasis = append(govProof.TimingBasis, tb...)
 			if weak := WeakenedTimingBasis(tb); len(weak) > 0 {
 				g.logger.Printf("[GOV-PROOF] %s timing basis: %d of %d counted signature(s) are "+

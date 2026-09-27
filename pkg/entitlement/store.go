@@ -6,11 +6,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/certen/independant-validator/pkg/envvar"
 	"io"
 	"log"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -110,22 +110,21 @@ type Document struct {
 // — because refusing every intent the moment one poll fails would make a
 // transient network blip look like a fee-layer outage. The epoch's own NotAfter
 // remains the authoritative bound.
-func StoreConfigFromEnv() StoreConfig {
-	return StoreConfig{
-		URL:             strings.TrimSpace(os.Getenv("CERTEN_ENTITLEMENT_URL")),
-		RefreshInterval: envDuration("CERTEN_ENTITLEMENT_REFRESH_SEC", 30*time.Second),
-		MaxAge:          envDuration("CERTEN_ENTITLEMENT_MAX_AGE_SEC", 900*time.Second),
-		Timeout:         envDuration("CERTEN_ENTITLEMENT_TIMEOUT_SEC", 10*time.Second),
+//
+// A value that is not a positive whole number of seconds is refused; each used to keep its default.
+func StoreConfigFromEnv() (StoreConfig, error) {
+	cfg := StoreConfig{URL: strings.TrimSpace(os.Getenv("CERTEN_ENTITLEMENT_URL"))}
+	var err error
+	if cfg.RefreshInterval, err = envvar.Seconds("CERTEN_ENTITLEMENT_REFRESH_SEC", 30*time.Second, 1); err != nil {
+		return cfg, err
 	}
-}
-
-func envDuration(key string, def time.Duration) time.Duration {
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			return time.Duration(n) * time.Second
-		}
+	if cfg.MaxAge, err = envvar.Seconds("CERTEN_ENTITLEMENT_MAX_AGE_SEC", 900*time.Second, 1); err != nil {
+		return cfg, err
 	}
-	return def
+	if cfg.Timeout, err = envvar.Seconds("CERTEN_ENTITLEMENT_TIMEOUT_SEC", 10*time.Second, 1); err != nil {
+		return cfg, err
+	}
+	return cfg, nil
 }
 
 // NewStore builds a store. It does not fetch; call Start.

@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"os"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -798,6 +797,15 @@ func (c *AnchorConfig) IsChainSupported(chainID int64) bool {
 // LoadAnchorConfigFromEnv creates AnchorConfig from environment variables
 // This provides compatibility with the existing env-based configuration
 func LoadAnchorConfigFromEnv() (*AnchorConfig, error) {
+	done := readingEnv()
+	cfg, err := loadAnchorConfigFromEnv()
+	if perr := done(); perr != nil {
+		return nil, perr
+	}
+	return cfg, err
+}
+
+func loadAnchorConfigFromEnv() (*AnchorConfig, error) {
 	cfg := &AnchorConfig{
 		Environment: getEnv("ENVIRONMENT", "development"),
 		Version:     "3.0.0",
@@ -886,7 +894,7 @@ func LoadAnchorConfigFromEnv() (*AnchorConfig, error) {
 		},
 
 		Validator: ValidatorSettings{
-			ID:                getEnv("VALIDATOR_ID", "validator-default"),
+			ID:                getEnv("VALIDATOR_ID", ""),
 			Role:              getEnv("VALIDATOR_ROLE", "validator"),
 			BLSPrivateKeyPath: getEnv("BLS_PRIVATE_KEY_PATH", ""),
 			BLSPublicKeyPath:  getEnv("BLS_PUBLIC_KEY_PATH", ""),
@@ -978,16 +986,6 @@ func LoadAnchorConfigFromEnv() (*AnchorConfig, error) {
 	}
 
 	return cfg, nil
-}
-
-// Utility function for int64 parsing
-func getEnvInt64Local(key string, defaultValue int64) int64 {
-	if value := os.Getenv(key); value != "" {
-		if intValue, err := strconv.ParseInt(value, 10, 64); err == nil {
-			return intValue
-		}
-	}
-	return defaultValue
 }
 
 // ==============================================================================

@@ -125,37 +125,54 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 		// layer — it simply waits for a receipt that can never arrive and stalls the whole cycle,
 		// taking Phases 8 and 9 with it. Nothing downstream can recover from that, so it is
 		// rejected here rather than diagnosed later.
-		txHashStrs = dropUnobservableHashes(txHashStrs)
-		if len(txHashStrs) == 0 {
-			return fmt.Errorf("intent %s: no observable transaction for Phase 7 "+
-				"(every candidate hash was empty or zero) — refusing to start a proof cycle that "+
-				"cannot complete", intentID)
-		}
-		fmt.Printf("[UnifiedAdapter] Phase 7 will observe %d transaction(s): %v\n", len(txHashStrs), txHashStrs)
-
 		// The chain the member settled on, stamped by consensus from the chain its batch was flushed
 		// on. There is no default to fall back to: a cycle that names no chain is refused rather
 		// than observed somewhere guessed (RB3-F45).
 		commitMap, _ := commitment.(map[string]interface{})
 		targetChain, _ := commitMap["targetChain"].(string)
+
+		// A refusal from here on is recorded as the member's outcome where the member can be placed
+		// (RB3-F103), not only returned to a caller that can do nothing but log it.
+		refuse := func(err error) error {
+			if targetChain != "" {
+				a.unified.recordStartFailure(ctx, &UnifiedProofCycleRequest{
+					IntentID: intentID, TargetChain: targetChain, CommitmentData: commitMap,
+					AccumulateAccountURL: accumulateAccountURL, AccumulateTxHash: accumulateTxHash, AccumulateBVN: bvn,
+				}, nil, err)
+			}
+			return err
+		}
+
+		txHashStrs = dropUnobservableHashes(txHashStrs)
+		if len(txHashStrs) == 0 {
+			return refuse(fmt.Errorf("intent %s: no observable transaction for Phase 7 "+
+				"(every candidate hash was empty or zero) — refusing to start a proof cycle that "+
+				"cannot complete", intentID))
+		}
+		fmt.Printf("[UnifiedAdapter] Phase 7 will observe %d transaction(s): %v\n", len(txHashStrs), txHashStrs)
+
 		if targetChain == "" {
 			return fmt.Errorf("intent %s: the proof cycle names no target chain - refusing rather than guessing one", intentID)
 		}
 
 		// Extract governance data from commitment (for G1/G2 proof levels)
 		var governanceRoot, operationCommitment [32]byte
+		// A value that is present and does not decode refuses the cycle: it used to leave a zero root in
+		// the request, as if consensus had committed to nothing (RB3-F105).
 		if commitMap != nil {
-			// Extract governanceRoot (hex string -> [32]byte)
 			if govRootStr, ok := commitMap["governanceRoot"].(string); ok && govRootStr != "" {
-				if decoded, err := hexStringToBytes32(govRootStr); err == nil {
-					governanceRoot = decoded
+				decoded, err := hexStringToBytes32(govRootStr)
+				if err != nil {
+					return refuse(fmt.Errorf("intent %s: the commitment's governanceRoot %q does not decode: %w", intentID, govRootStr, err))
 				}
+				governanceRoot = decoded
 			}
-			// Extract operationCommitment (hex string -> [32]byte)
 			if opCommitStr, ok := commitMap["operationCommitment"].(string); ok && opCommitStr != "" {
-				if decoded, err := hexStringToBytes32(opCommitStr); err == nil {
-					operationCommitment = decoded
+				decoded, err := hexStringToBytes32(opCommitStr)
+				if err != nil {
+					return refuse(fmt.Errorf("intent %s: the commitment's operationCommitment %q does not decode: %w", intentID, opCommitStr, err))
 				}
+				operationCommitment = decoded
 			}
 		}
 
@@ -183,7 +200,7 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 		// every member, cadence-batched or not.
 		proofClass, _ := commitMap["proofClass"].(string)
 		if proofClass != string(LaneOnCadence) && proofClass != string(LaneOnDemand) {
-			return fmt.Errorf("intent %s: the proof cycle names no settlement lane (proofClass %q) - refusing rather than labelling it", intentID, proofClass)
+			return refuse(fmt.Errorf("intent %s: the proof cycle names no settlement lane (proofClass %q) - refusing rather than labelling it", intentID, proofClass))
 		}
 
 		req := &UnifiedProofCycleRequest{
@@ -266,13 +283,12 @@ func hexStringToBytes32(hexStr string) ([32]byte, error) {
 		return result, fmt.Errorf("failed to decode hex string: %w", err)
 	}
 
-	// Copy to fixed-size array (pad or truncate as needed)
-	if len(decoded) > 32 {
-		copy(result[:], decoded[:32])
-	} else {
-		copy(result[32-len(decoded):], decoded)
+	// Exactly 32 bytes. A longer value used to be truncated and a shorter one left-padded - a different
+	// root from the one committed, with no error (RB3-F105).
+	if len(decoded) != 32 {
+		return result, fmt.Errorf("%d bytes, not 32", len(decoded))
 	}
-
+	copy(result[:], decoded)
 	return result, nil
 }
 

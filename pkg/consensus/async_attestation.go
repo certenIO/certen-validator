@@ -454,9 +454,13 @@ func (bv *BFTValidator) RunProofCycle(
 		commitment,
 		att.CertenIntent.AccountURL,
 		att.CertenIntent.TransactionHash,
-		"",
+		// The partition the transaction was discovered on - the chain's answer, and the one consensus
+		// built its proof on. It used to be "", leaving the cycle to recompute it (RB3-F89).
+		att.CertenIntent.Partition,
 	); err != nil {
-		bv.logger.Printf("⚠️ [PROOF-CYCLE] Failed to start proof cycle: %v", err)
+		// The orchestrator records the refusal as the member's outcome where the member can be placed
+		// (RB3-F103); this line is the validator's own record of it.
+		bv.logger.Printf("❌ [PROOF-CYCLE] intent %s: proof cycle not started: %v", att.IntentID, err)
 	}
 }
 
@@ -632,7 +636,9 @@ func (bv *BFTValidator) recordFailedProofCycle(
 		commitment,
 		att.CertenIntent.AccountURL,
 		att.CertenIntent.TransactionHash,
-		"",
+		// The partition the transaction was discovered on - the chain's answer, and the one consensus
+		// built its proof on. It used to be "", leaving the cycle to recompute it (RB3-F89).
+		att.CertenIntent.Partition,
 	); err != nil {
 		bv.logger.Printf("⚠️ [PROOF-CYCLE] could not record the failure of intent %s: %v — the "+
 			"intent is settled nowhere AND recorded nowhere, which needs operator attention",

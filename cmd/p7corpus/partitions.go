@@ -188,6 +188,10 @@ func reportPartitions(ctx context.Context, endpoint string, raw map[string]json.
 	}
 	sort.Strings(names)
 
+	validatorRouter, err := proofpkg.LoadNetworkRouter(ctx, endpoint)
+	if err != nil {
+		return err
+	}
 	fmt.Println("== account -> partition, from the network's live routing table ==")
 	part := map[string]string{}
 	var disagreed int
@@ -197,8 +201,12 @@ func reportPartitions(ctx context.Context, endpoint string, raw map[string]json.
 			return err
 		}
 		part[a] = p
-		// The validator ships its own copy of Kermit's routing table. Compare.
-		ours := proofpkg.CalculateBVNFromAccountURL(a)
+		// The validator routes with the network's table and its own implementation of Accumulate's
+		// routing rule (proof.NetworkRouter, RB3-F107). Compare it with this tool's.
+		ours, err := validatorRouter.Partition(a)
+		if err != nil {
+			return err
+		}
 		mark := "ok"
 		if !strings.EqualFold(ours, p) {
 			mark = "DISAGREES"

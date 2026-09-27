@@ -214,8 +214,9 @@ func WriteLayer5Row(
 
 	if binding != nil {
 		if err := repo.BindProofToBatch(ctx, proofID, binding.BatchID, binding.TreeIndex, binding.MerklePath); err != nil {
-			logf("⚠️ [L5-PERSIST] proof %s: layer-5 row written but proof_artifacts.batch_id/"+
+			logf("🚨 [L5-PERSIST] proof %s: layer-5 row written but proof_artifacts.batch_id/"+
 				"merkle_path were NOT populated: %v", proofID, err)
+			return fmt.Errorf("bind proof to its batch: %w", err)
 		}
 		err := repo.SetAnchorBatchTxHash(ctx, binding.BatchID, l5.AnchorTx, int64(l5.BlockNumber))
 		switch {
@@ -228,7 +229,8 @@ func WriteLayer5Row(
 			// recorded" is never confused with "recorded by us".
 			logf("ℹ️ [L5-PERSIST] batch %s already carries an anchor tx; left unchanged", binding.BatchID)
 		default:
-			logf("⚠️ [L5-PERSIST] proof %s: failed to record the batch's anchor tx: %v", proofID, err)
+			logf("🚨 [L5-PERSIST] proof %s: failed to record the batch's anchor tx: %v", proofID, err)
+			return fmt.Errorf("record the batch's anchor tx: %w", err)
 		}
 	}
 
@@ -243,24 +245,25 @@ func WriteLayer5Row(
 // and the repository in one place, and so there is ONE call site rather than a
 // copy per path — the same rule L4 follows, for the same reason.
 //
-// Never fatal. The intent already settled on chain; a missing anchor binding
-// makes the stored proof summary-only for L5, which is honest, and is strictly
-// better than failing a cycle that succeeded.
+// A binding that cannot be stated (no canonical row, no observed coordinates) leaves the proof
+// summary-only for L5, said by name. A binding that can be stated and that the database refuses is an
+// error: the bundle is not stored as if it carried the evidence (RB3-F91, the rule RB3-F73 set for the
+// governance rows). The settlement itself is recorded separately, whatever happens here.
 func (o *UnifiedOrchestrator) writeLayer5(
 	ctx context.Context,
 	proofID uuid.UUID,
 	member *database.Layer5Binding,
 	result *UnifiedProofCycleResult,
-) (*Layer5, *database.Layer5Binding) {
+) (*Layer5, *database.Layer5Binding, error) {
 	l5, binding := o.resolveAnchorBinding(ctx, proofID, member, result)
 	if l5 == nil {
-		return nil, binding
+		return nil, binding, nil
 	}
 	if err := WriteLayer5Row(ctx, o.config.Repos.ProofArtifacts, proofID, l5, binding, logfPrintf); err != nil {
-		return l5, binding
+		return nil, binding, fmt.Errorf("layer 5 of proof %s: %w", proofID, err)
 	}
 	logfPrintf("   L5 claim: %s", l5.ExternalClaim())
-	return l5, binding
+	return l5, binding, nil
 }
 
 // resolveAnchorBinding works out where a proof's root was anchored: the canonical batch row covering the

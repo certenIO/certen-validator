@@ -74,21 +74,26 @@ func TestUnknownProofClassIsRefusedRatherThanDefaulted(t *testing.T) {
 // The lane must be OFF by default, so deploying this code changes nothing until the flag is set.
 func TestOnDemandLaneIsOffByDefault(t *testing.T) {
 	t.Setenv("ON_DEMAND_INTENT_KEYED", "")
-	if onDemandLaneEnabled() {
-		t.Fatal("the on-demand lane is enabled with the flag unset; deploying would change " +
-			"settlement behaviour immediately")
+	if on, err := onDemandLaneEnabled(); on || err != nil {
+		t.Fatalf("the on-demand lane is enabled (%v, %v) with the flag unset; deploying would change "+
+			"settlement behaviour immediately", on, err)
 	}
-	for _, v := range []string{"false", "0", "no", "off", "TRUE-ish"} {
+	for _, v := range []string{"false", "0", "no", "off"} {
 		t.Setenv("ON_DEMAND_INTENT_KEYED", v)
-		if onDemandLaneEnabled() {
-			t.Fatalf("ON_DEMAND_INTENT_KEYED=%q enabled the lane; only \"true\" may", v)
+		if on, err := onDemandLaneEnabled(); on || err != nil {
+			t.Fatalf("ON_DEMAND_INTENT_KEYED=%q: (%v, %v); want off", v, on, err)
 		}
 	}
-	for _, v := range []string{"true", "TRUE", "True", " true "} {
+	for _, v := range []string{"true", "TRUE", "True", " true ", "1", "on"} {
 		t.Setenv("ON_DEMAND_INTENT_KEYED", v)
-		if !onDemandLaneEnabled() {
-			t.Fatalf("ON_DEMAND_INTENT_KEYED=%q did not enable the lane", v)
+		if on, err := onDemandLaneEnabled(); !on || err != nil {
+			t.Fatalf("ON_DEMAND_INTENT_KEYED=%q: (%v, %v); want on", v, on, err)
 		}
+	}
+	// RB3-F71 sweep: a value that is not a switch is refused by name. It used to read as "off".
+	t.Setenv("ON_DEMAND_INTENT_KEYED", "TRUE-ish")
+	if _, err := onDemandLaneEnabled(); err == nil || !strings.Contains(err.Error(), "ON_DEMAND_INTENT_KEYED") {
+		t.Fatalf("ON_DEMAND_INTENT_KEYED=TRUE-ish was not refused by name: %v", err)
 	}
 }
 
@@ -96,7 +101,8 @@ func TestOnDemandLaneIsOffByDefault(t *testing.T) {
 // today. That is what makes the deploy a no-op and the flag flip the only behavioural change.
 func TestFlagOffKeepsOnDemandOnThePeriodPath(t *testing.T) {
 	src := laneSource(t)
-	if !strings.Contains(src, `proofClass == "on_demand" && onDemandLaneEnabled()`) {
+	if !strings.Contains(src, "lane, err := onDemandLaneEnabled()") ||
+		!strings.Contains(src, `proofClass == "on_demand" && lane`) {
 		t.Fatal("the on-demand lane is not gated on the flag; deploying would immediately " +
 			"change how on_demand intents settle")
 	}

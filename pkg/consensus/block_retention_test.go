@@ -53,15 +53,21 @@ func TestBlockRetentionFromEnv(t *testing.T) {
 		"":      0,
 		"0":     0,
 		"  ":    0,
-		"abc":   0, // unparseable must not silently enable pruning
-		"-10":   0, // negative must not silently enable pruning
 		"100":   100,
 		" 250 ": 250,
 	}
 	for raw, want := range cases {
 		t.Setenv("CERTEN_BLOCK_RETENTION", raw)
-		if got := blockRetentionFromEnv(); got != want {
-			t.Errorf("CERTEN_BLOCK_RETENTION=%q -> %d, want %d", raw, got, want)
+		if got, err := blockRetentionFromEnv(); err != nil || got != want {
+			t.Errorf("CERTEN_BLOCK_RETENTION=%q -> (%d, %v), want %d", raw, got, err, want)
+		}
+	}
+	// Neither enables pruning, and neither is read as "retain all" any more: an operator who wrote one
+	// meant something, and is told the value was not understood (RB3-F71 sweep).
+	for _, raw := range []string{"abc", "-10"} {
+		t.Setenv("CERTEN_BLOCK_RETENTION", raw)
+		if _, err := blockRetentionFromEnv(); err == nil {
+			t.Errorf("CERTEN_BLOCK_RETENTION=%q was not refused", raw)
 		}
 	}
 }

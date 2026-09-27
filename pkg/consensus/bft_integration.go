@@ -1219,7 +1219,11 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	// would not be fine in the consensus invariant, where it would make
 	// validators disagree.
 	// ====================================================================
-	if executionValidationEnabled() {
+	execValidation, err := executionValidationEnabled()
+	if err != nil {
+		return &ExecutionTaskResult{Success: false, ExecutorID: bv.validatorID, Error: err}, nil
+	}
+	if execValidation {
 		if err := certenIntent.ValidateForExecution(blockHeight); err != nil {
 			bv.logger.Printf("🚫 [EXEC-VALIDATION] refusing intent %s: %v", certenIntent.IntentID, err)
 			return &ExecutionTaskResult{
@@ -1340,29 +1344,18 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 		}, nil
 	}
 
-	// Note: Height=0 means poll timeout but transaction was validated and is in mempool.
-	// The ValidatorBlock itself contains all cryptographic proofs (L1-L3, governance, BLS).
-	// CometBFT consensus will commit it - we can proceed since CheckTx validated the block.
-	if bftRes.Height > 0 {
-		bv.logger.Printf("✅ [CANONICAL-BFT] ValidatorBlock COMMITTED at height %d, tx=%X", bftRes.Height, bftRes.TxHash)
-	} else if os.Getenv("REQUIRE_BFT_COMMIT") == "true" {
-		// Strict mode (opt-in): the ValidatorBlock passed CheckTx but did NOT commit
-		// within the inclusion-poll window, so BFT agreement is not yet proven. Fail
-		// closed (retryable) rather than executing a target-chain side effect on an
-		// uncommitted block. The intent is requeued and succeeds once consensus commits.
-		bv.logger.Printf("⛔ [CANONICAL-BFT] ValidatorBlock NOT committed within inclusion window and REQUIRE_BFT_COMMIT=true — failing closed (retryable), tx=%X", bftRes.TxHash)
+	// Nothing past this point may act on a ValidatorBlock consensus has not committed (RB3-F98). It used
+	// to proceed on CheckTx alone - "CometBFT is expected to commit it shortly" - unless the operator had
+	// opted in to failing closed; production had not. A block admitted but not seen committed is
+	// a retryable refusal: the resubmission finds the committed transaction by hash (bft_broadcast_confirm.go).
+	if err := requireCommitted(bftRes); err != nil {
 		return &ExecutionTaskResult{
 			Success:    false,
 			ExecutorID: bv.validatorID,
-			Error:      fmt.Errorf("BFT commit required but ValidatorBlock not committed within inclusion window (retryable)"),
+			Error:      err,
 		}, nil
-	} else {
-		// Default (backward-compatible): proceed. The proofs live in the ValidatorBlock
-		// and CometBFT is expected to commit it shortly. Set REQUIRE_BFT_COMMIT=true to
-		// enforce a committed block before any target-chain side effect (fail closed).
-		bv.logger.Printf("⚠️ [CANONICAL-BFT] ValidatorBlock validated (CheckTx passed) but NOT yet committed, tx=%X — proceeding (set REQUIRE_BFT_COMMIT=true to fail closed)", bftRes.TxHash)
-		bv.logger.Printf("   Cryptographic proofs are in ValidatorBlock, CometBFT height is audit metadata only")
 	}
+	bv.logger.Printf("✅ [CANONICAL-BFT] ValidatorBlock COMMITTED at height %d, tx=%X", bftRes.Height, bftRes.TxHash)
 
 	// =======================================================================
 	// EVERY VALIDATOR RECORDS THE COMMITTED HEIGHT
@@ -3418,4 +3411,20 @@ func accumulateAnchorOf(p *proof.CertenProof) (AccumulateAnchorReference, error)
 		return AccumulateAnchorReference{}, fmt.Errorf("the proof's Accumulate anchor names no transaction")
 	}
 	return AccumulateAnchorReference{BlockHash: a.BlockHash, BlockHeight: a.BlockHeight, TxHash: a.TxHash, AccountURL: p.AccountURL}, nil
+}
+
+// ErrValidatorBlockNotCommitted is the retryable refusal for a ValidatorBlock admitted to the mempool but
+// not seen committed within the inclusion window.
+var ErrValidatorBlockNotCommitted = errors.New("ValidatorBlock admitted but not committed within the inclusion window (retryable)")
+
+// requireCommitted refuses a broadcast result that does not show the block committed.
+func requireCommitted(res *BFTExecutionResult) error {
+	if res == nil || res.Height <= 0 {
+		var tx []byte
+		if res != nil {
+			tx = res.TxHash
+		}
+		return fmt.Errorf("%w: tx=%X", ErrValidatorBlockNotCommitted, tx)
+	}
+	return nil
 }

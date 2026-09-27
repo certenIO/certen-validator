@@ -21,6 +21,7 @@ package contracts
 
 import (
 	"fmt"
+	"github.com/certen/independant-validator/pkg/envvar"
 	"math/big"
 	"os"
 	"strings"
@@ -115,7 +116,10 @@ func computeV6_1ValidatorSetRoot() ([32]byte, error) {
 	if err != nil {
 		return [32]byte{}, fmt.Errorf("resolve voting powers: %w", err)
 	}
-	num, den := resolveThreshold()
+	num, den, err := resolveThreshold()
+	if err != nil {
+		return [32]byte{}, err
+	}
 
 	sortedAddrs, sortedPowers := SortValidatorsForSetRoot(addrs, powers)
 	return ComputeValidatorSetRootV6_1(sortedAddrs, sortedPowers, num, den)
@@ -168,25 +172,22 @@ func resolveVotingPowers(want int) ([]*big.Int, error) {
 	return out, nil
 }
 
-func resolveThreshold() (num, den *big.Int) {
-	num = big.NewInt(parseInt64Env(envValidatorSetThresholdNum, defaultThresholdNum))
-	den = big.NewInt(parseInt64Env(envValidatorSetThresholdDen, defaultThresholdDen))
-	return
-}
-
-func parseInt64Env(name string, fallback int64) int64 {
-	s := strings.TrimSpace(os.Getenv(name))
-	if s == "" {
-		return fallback
+// resolveThreshold is the quorum threshold committed into the validator-set root. A value that is not a
+// positive integer, or a numerator above its denominator (which the anchor's setThreshold refuses), is
+// refused: an unreadable value used to become 2/3 silently, committing a root the operator did not choose.
+func resolveThreshold() (num, den *big.Int, err error) {
+	n, err := envvar.Int64(envValidatorSetThresholdNum, defaultThresholdNum, 1)
+	if err != nil {
+		return nil, nil, err
 	}
-	v, ok := new(big.Int).SetString(s, 10)
-	if !ok {
-		return fallback
+	d, err := envvar.Int64(envValidatorSetThresholdDen, defaultThresholdDen, 1)
+	if err != nil {
+		return nil, nil, err
 	}
-	if !v.IsInt64() {
-		return fallback
+	if n > d {
+		return nil, nil, fmt.Errorf("%s=%d exceeds %s=%d", envValidatorSetThresholdNum, n, envValidatorSetThresholdDen, d)
 	}
-	return v.Int64()
+	return big.NewInt(n), big.NewInt(d), nil
 }
 
 func splitCSV(s string) []string {

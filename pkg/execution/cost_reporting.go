@@ -10,6 +10,7 @@ package execution
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -84,42 +85,49 @@ func firstNonEmpty(vals ...string) string {
 // It deliberately takes no receiver: the batch orchestrator has no BFTTargetChainExecutor, and
 // calling the method on a nil one worked only by accident (the body never touched the receiver).
 // One field access added later would have turned that into a panic during settlement.
-func resolveCostEndpointForChain(chain string) (string, string) {
+func resolveCostEndpointForChain(chain string) (string, string, error) {
 	c := strings.ToLower(strings.TrimSpace(chain))
 	c = strings.ReplaceAll(c, " ", "-")
 
 	switch {
 	case strings.HasPrefix(c, "solana"):
-		return firstNonEmpty(os.Getenv("SOLANA_RPC_URL"), os.Getenv("SOLANA_DEVNET_RPC_URL")), ""
+		return firstNonEmpty(os.Getenv("SOLANA_RPC_URL"), os.Getenv("SOLANA_DEVNET_RPC_URL")), "", nil
 	case strings.HasPrefix(c, "sui"):
-		return firstNonEmpty(os.Getenv("SUI_RPC_URL"), os.Getenv("SUI_TESTNET_RPC_URL")), ""
+		return firstNonEmpty(os.Getenv("SUI_RPC_URL"), os.Getenv("SUI_TESTNET_RPC_URL")), "", nil
 	case strings.HasPrefix(c, "aptos"):
-		return firstNonEmpty(os.Getenv("APTOS_RPC_URL"), os.Getenv("APTOS_TESTNET_RPC_URL")), ""
+		return firstNonEmpty(os.Getenv("APTOS_RPC_URL"), os.Getenv("APTOS_TESTNET_RPC_URL")), "", nil
 	case strings.HasPrefix(c, "near"):
 		// The NEAR probe needs the signer account id to query tx status.
 		return firstNonEmpty(os.Getenv("NEAR_RPC_URL"), os.Getenv("NEAR_TESTNET_RPC_URL")),
-			firstNonEmpty(os.Getenv("NEAR_ACCOUNT_ID"), os.Getenv("NEAR_SIGNER_ACCOUNT_ID"))
+			firstNonEmpty(os.Getenv("NEAR_ACCOUNT_ID"), os.Getenv("NEAR_SIGNER_ACCOUNT_ID")), nil
 	case strings.HasPrefix(c, "ton"):
 		return firstNonEmpty(os.Getenv("TON_API_URL"), os.Getenv("TON_TESTNET_API_URL")),
-			os.Getenv("TON_API_KEY")
+			os.Getenv("TON_API_KEY"), nil
 	case strings.HasPrefix(c, "tron"):
 		return firstNonEmpty(os.Getenv("TRON_FULL_NODE_URL"), os.Getenv("TRON_API_URL")),
-			os.Getenv("TRON_PRO_API_KEY")
+			os.Getenv("TRON_PRO_API_KEY"), nil
 	case strings.HasPrefix(c, "cardano"):
 		return firstNonEmpty(os.Getenv("CARDANO_API_URL"), os.Getenv("CARDANO_SUBMIT_API_URL")),
-			os.Getenv("CARDANO_PROJECT_ID")
+			os.Getenv("CARDANO_PROJECT_ID"), nil
 	}
 
-	// EVM family: use the per-chain URL the executor itself was configured
-	// with, so the probe queries the node that actually saw the transaction.
-	if anchorCfg, err := config.LoadAnchorConfigFromEnv(); err == nil && anchorCfg != nil {
-		if chainID, ok := evmChainIDForName(c); ok {
-			if cfg := anchorCfg.GetEVMChainConfig(chainID); cfg != nil && cfg.RPCURL != "" {
-				return cfg.RPCURL, ""
-			}
-		}
+	// EVM family: the per-chain URL the executor itself was configured with, so the probe queries the
+	// node that actually saw the transaction - or none. It used to fall back to ETHEREUM_URL (the Sepolia
+	// node) whenever the chain's own was missing or the configuration failed to load, and measured a Base
+	// or Arbitrum transaction against a chain that never saw it (RB3-F96).
+	chainID, ok := evmChainIDForName(c)
+	if !ok {
+		return "", "", fmt.Errorf("chain %q is not an EVM chain this fleet names", chain)
 	}
-	return os.Getenv("ETHEREUM_URL"), ""
+	anchorCfg, err := config.LoadAnchorConfigFromEnv()
+	if err != nil {
+		return "", "", fmt.Errorf("anchor configuration: %w", err)
+	}
+	cfg := anchorCfg.GetEVMChainConfig(chainID)
+	if cfg == nil || cfg.RPCURL == "" {
+		return "", "", fmt.Errorf("chain %s (%d) has no configured RPC endpoint", chain, chainID)
+	}
+	return cfg.RPCURL, "", nil
 }
 
 // evmCanonicalSlugForChainID is the single spelling this fleet uses for each EVM chain.

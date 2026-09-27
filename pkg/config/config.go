@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -118,6 +119,15 @@ type Config struct {
 // SECURITY: Required variables have no defaults and must be explicitly set.
 // Call Validate() after Load() to ensure all required configuration is present.
 func Load() (*Config, error) {
+	done := readingEnv()
+	cfg, err := loadConfig()
+	if perr := done(); perr != nil {
+		return nil, perr
+	}
+	return cfg, err
+}
+
+func loadConfig() (*Config, error) {
 	cfg := &Config{
 		// Network Configuration - REQUIRED, no defaults for production security
 		AccumulateURL:       getEnv("ACCUMULATE_URL", ""),
@@ -167,7 +177,7 @@ func Load() (*Config, error) {
 		CertenContractAddress:     getEnv("CERTEN_CONTRACT_ADDRESS", ""),
 
 		// Service Configuration
-		ValidatorID:   getEnv("VALIDATOR_ID", "validator-default"),
+		ValidatorID:   getEnv("VALIDATOR_ID", ""), // required: see main.requireValidatorID (RB3-F89)
 		ValidatorRole: getEnv("VALIDATOR_ROLE", "validator"),
 		LogLevel:      getEnv("LOG_LEVEL", "info"),
 
@@ -301,6 +311,43 @@ func (c *Config) ValidateForDevelopment() error {
 	return nil
 }
 
+// RequireValidatorID refuses a configuration that names no validator. An unset VALIDATOR_ID used to
+// become "validator-default" (RB3-F89).
+func (c *Config) RequireValidatorID() error {
+	if strings.TrimSpace(c.ValidatorID) == "" {
+		return fmt.Errorf("VALIDATOR_ID is not set (nor --validator-id): a validator, and a migration, must say who it is")
+	}
+	return nil
+}
+
+// A variable that is set is the operator's statement. One whose value does not parse used to be replaced,
+// silently, by the default - the node ran on a number nobody chose and said nothing. The loaders now
+// collect every such value and refuse to load, naming each one.
+var (
+	envMu       sync.Mutex
+	envProblems []string
+)
+
+// readingEnv holds the environment readers for one loader and returns the call that ends it: nil, or the
+// error naming every set value that did not parse.
+func readingEnv() func() error {
+	envMu.Lock()
+	envProblems = nil
+	return func() error {
+		defer envMu.Unlock()
+		problems := envProblems
+		envProblems = nil
+		if len(problems) == 0 {
+			return nil
+		}
+		return fmt.Errorf("environment values that do not parse:\n  - %s", strings.Join(problems, "\n  - "))
+	}
+}
+
+func envUnparseable(key, value, want string) {
+	envProblems = append(envProblems, fmt.Sprintf("%s=%q is not %s", key, value, want))
+}
+
 // Helper functions for environment variable parsing
 func getEnv(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
@@ -311,36 +358,48 @@ func getEnv(key, defaultValue string) string {
 
 func getEnvInt(key string, defaultValue int) int {
 	if value := os.Getenv(key); value != "" {
-		if intValue, err := strconv.Atoi(value); err == nil {
-			return intValue
+		intValue, err := strconv.Atoi(value)
+		if err != nil {
+			envUnparseable(key, value, "an integer")
+			return defaultValue
 		}
+		return intValue
 	}
 	return defaultValue
 }
 
 func getEnvInt64(key string, defaultValue int64) int64 {
 	if value := os.Getenv(key); value != "" {
-		if intValue, err := strconv.ParseInt(value, 10, 64); err == nil {
-			return intValue
+		intValue, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			envUnparseable(key, value, "a 64-bit integer")
+			return defaultValue
 		}
+		return intValue
 	}
 	return defaultValue
 }
 
 func getEnvBool(key string, defaultValue bool) bool {
 	if value := os.Getenv(key); value != "" {
-		if boolValue, err := strconv.ParseBool(value); err == nil {
-			return boolValue
+		boolValue, err := strconv.ParseBool(value)
+		if err != nil {
+			envUnparseable(key, value, "a boolean (true/false/1/0)")
+			return defaultValue
 		}
+		return boolValue
 	}
 	return defaultValue
 }
 
 func getEnvDuration(key string, defaultValue time.Duration) time.Duration {
 	if value := os.Getenv(key); value != "" {
-		if duration, err := time.ParseDuration(value); err == nil {
-			return duration
+		duration, err := time.ParseDuration(value)
+		if err != nil {
+			envUnparseable(key, value, "a duration (e.g. 30s, 5m)")
+			return defaultValue
 		}
+		return duration
 	}
 	return defaultValue
 }

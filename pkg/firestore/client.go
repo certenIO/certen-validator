@@ -8,6 +8,7 @@ package firestore
 import (
 	"context"
 	"fmt"
+	"github.com/certen/independant-validator/pkg/envvar"
 	"log"
 	"os"
 	"sync"
@@ -45,20 +46,28 @@ type ClientConfig struct {
 	Logger *log.Logger
 }
 
-// DefaultConfig returns a ClientConfig with values from environment variables
-func DefaultConfig() *ClientConfig {
+// DefaultConfig returns a ClientConfig with values from environment variables. A FIRESTORE_ENABLED
+// that is not a switch is refused; it used to mean "off" for anything but true/1/yes.
+func DefaultConfig() (*ClientConfig, error) {
+	enabled, err := envvar.Bool("FIRESTORE_ENABLED", false)
+	if err != nil {
+		return nil, err
+	}
 	return &ClientConfig{
 		ProjectID:       os.Getenv("FIREBASE_PROJECT_ID"),
 		CredentialsFile: os.Getenv("GOOGLE_APPLICATION_CREDENTIALS"),
-		Enabled:         getEnvBool("FIRESTORE_ENABLED", false),
+		Enabled:         enabled,
 		Logger:          log.New(os.Stdout, "[Firestore] ", log.LstdFlags),
-	}
+	}, nil
 }
 
 // NewClient creates a new Firestore client
 func NewClient(ctx context.Context, cfg *ClientConfig) (*Client, error) {
 	if cfg == nil {
-		cfg = DefaultConfig()
+		var err error
+		if cfg, err = DefaultConfig(); err != nil {
+			return nil, err
+		}
 	}
 
 	if cfg.Logger == nil {
@@ -444,13 +453,4 @@ func (c *Client) Health(ctx context.Context) error {
 	}
 
 	return nil
-}
-
-// helper to parse bool from env
-func getEnvBool(key string, defaultValue bool) bool {
-	val := os.Getenv(key)
-	if val == "" {
-		return defaultValue
-	}
-	return val == "true" || val == "1" || val == "yes"
 }

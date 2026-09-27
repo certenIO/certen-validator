@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/certen/independant-validator/pkg/proof"
 )
@@ -91,5 +92,38 @@ func TestABLSSigningFailureIsRefusedByName(t *testing.T) {
 	next := src[at : at+strings.Index(src[at:], "blsSignature = sig")]
 	if !strings.Contains(next, "if err != nil {\n\t\t\t// Refused here by name.") || !strings.Contains(next, "return nil, fmt.Errorf(") {
 		t.Fatalf("a BLS signing error does not end the workflow:\n%s", next)
+	}
+}
+
+// RB3-F99: a validator block is stamped with its intent's Accumulate block time, not a local clock, so
+// a retry proposes the same bytes. An intent with no block time is refused.
+func TestAValidatorBlockIsStampedWithItsIntentsBlockTime(t *testing.T) {
+	whole := AccumulateAnchorReference{BlockHash: strings.Repeat("ab", 32), BlockHeight: 1234, TxHash: strings.Repeat("cd", 32)}
+	build := func(ci *CertenIntent) (*ValidatorBlock, error) {
+		return NewValidatorBlockBuilder(BuilderConfig{ValidatorID: "validator-test", BLSValidatorSetPubKey: "aa"}).BuildFromIntent(BuilderInputs{
+			Intent:      ci,
+			Governance:  GovernanceInputs{BLSAggregateSignature: "bb", GovernanceLevel: "G2"},
+			Execution:   ExecutionInputs{Stage: ExecutionStagePre, ProofClass: "on_cadence", ValidatorSignatures: []string{"cc"}},
+			AnchorRef:   whole,
+			BlockHeight: 7,
+		})
+	}
+	ci := batchableIntent(t, "i1", 84532)
+	ci.BlockTime = time.Date(2026, 9, 27, 9, 59, 42, 0, time.UTC)
+	a, err := build(ci)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(1100 * time.Millisecond)
+	b, err := build(ci)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Timestamp != "2026-09-27T09:59:42Z" || b.Timestamp != a.Timestamp {
+		t.Fatalf("stamped %s then %s; want the intent's block time 2026-09-27T09:59:42Z both times", a.Timestamp, b.Timestamp)
+	}
+	ci.BlockTime = time.Time{}
+	if vb, err := build(ci); err == nil {
+		t.Fatalf("an intent with no block time was stamped %s", vb.Timestamp)
 	}
 }

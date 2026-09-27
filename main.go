@@ -13,7 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -29,8 +29,11 @@ import (
 	"github.com/certen/independant-validator/pkg/crypto/bls"
 	"github.com/certen/independant-validator/pkg/database"
 	"github.com/certen/independant-validator/pkg/entitlement"
+	"github.com/certen/independant-validator/pkg/envvar"
 	"github.com/certen/independant-validator/pkg/ethereum"
+	"github.com/certen/independant-validator/pkg/ethrpc"
 	"github.com/certen/independant-validator/pkg/execution"
+	"github.com/certen/independant-validator/pkg/execution/contracts"
 	"github.com/certen/independant-validator/pkg/firestore"
 	"github.com/certen/independant-validator/pkg/intent"
 	"github.com/certen/independant-validator/pkg/ledger"
@@ -230,18 +233,11 @@ var batchAttesterIdentity atomic.Pointer[execution.BatchAttesterIdentity]
 // cutoff becomes the batch's accumulateBlockHeight, and that height is hashed into the
 // bundleId. A node configured differently derives a different bundleId from identical
 // membership, so it can neither propose a batch its peers will co-sign nor co-sign theirs.
-func batchPeriodBlocksFromEnv() uint64 {
-	raw := strings.TrimSpace(os.Getenv("BATCH_PERIOD_BLOCKS"))
-	if raw == "" {
-		return execution.DefaultBatchPeriodBlocks
-	}
-	n, err := strconv.ParseUint(raw, 10, 64)
-	if err != nil || n == 0 {
-		log.Printf("⚠️ [BATCH] BATCH_PERIOD_BLOCKS=%q is not a positive integer — using %d",
-			raw, execution.DefaultBatchPeriodBlocks)
-		return execution.DefaultBatchPeriodBlocks
-	}
-	return n
+//
+// A value that is not a positive integer is refused: it used to become the default, so a node with a typo
+// silently bucketed on a different period from its peers - the one disagreement this value must never have.
+func batchPeriodBlocksFromEnv() (uint64, error) {
+	return envvar.Uint64("BATCH_PERIOD_BLOCKS", execution.DefaultBatchPeriodBlocks, 1)
 }
 
 // resolveBatchAttesterIdentity determines the EVM address this validator attests as, and
@@ -503,6 +499,10 @@ func main() {
 		log.Printf("📋 CLI flag override: using validator ID from command line: %s", *validatorID)
 		cfg.ValidatorID = *validatorID
 	}
+	requireValidatorID(cfg)
+	if err := checkEnvironment(); err != nil {
+		log.Fatalf("❌ environment values that cannot be used:\n%v", err)
+	}
 	log.Printf("📋 Validator ID: %s (from %s)", cfg.ValidatorID, func() string {
 		if *validatorID != "" {
 			return "CLI flag"
@@ -519,6 +519,9 @@ func main() {
 	// It does not start; the deployment waits for its database (compose: postgres healthy, schema-migrate
 	// completed) and restarts it.
 	// ==========================================================================
+	if v := os.Getenv("REQUIRE_BFT_COMMIT"); v != "" && v != "true" {
+		log.Fatalf("❌ REQUIRE_BFT_COMMIT=%s is not supported: nothing acts on a ValidatorBlock consensus has not committed (RB3-F98)", v)
+	}
 	if v := os.Getenv("DATABASE_REQUIRED"); v != "" && v != "true" {
 		log.Fatalf("❌ [Phase 5] DATABASE_REQUIRED=%s is not supported: a validator cannot start without its database", v)
 	}
@@ -533,7 +536,11 @@ func main() {
 	healthStatus.SetDatabase("connected")
 
 	runner := schema.Runner{DB: dbClient.DB()}
-	if os.Getenv("MIGRATE_ON_START") == "true" {
+	migrateOnStart, err := envvar.Bool("MIGRATE_ON_START", false)
+	if err != nil {
+		log.Fatalf("❌ [Phase 5] %v", err)
+	}
+	if migrateOnStart {
 		if err := runner.Up(context.Background(), cfg.ValidatorID); err != nil {
 			log.Fatalf("❌ [Phase 5] Database migration failed: %v", err)
 		}
@@ -596,8 +603,8 @@ func main() {
 		var firestoreErr error
 		firestoreClient, firestoreErr = firestore.NewClient(context.Background(), firestoreCfg)
 		if firestoreErr != nil {
-			log.Printf("⚠️ [Firestore] Failed to create Firestore client: %v", firestoreErr)
-			log.Printf("   Real-time UI sync DISABLED - web app will not receive status updates")
+			// Enabled means working or not starting; it used to switch itself off with a warning.
+			log.Fatalf("❌ [Firestore] FIRESTORE_ENABLED is set but the client could not be created: %v", firestoreErr)
 		} else {
 			log.Println("✅ [Firestore] Connected to Firestore")
 
@@ -984,6 +991,15 @@ func main() {
 	log.Printf("✅ BFT Validator stopped")
 }
 
+// requireValidatorID refuses to run as nobody in particular. An unset VALIDATOR_ID used to become
+// "validator-default" - the name signed into blocks, attestations and certen_schema_history, which
+// production's history carries once (RB3-F89).
+func requireValidatorID(cfg *config.Config) {
+	if err := cfg.RequireValidatorID(); err != nil {
+		log.Fatal(err)
+	}
+}
+
 func runMigrationCommand(args []string) {
 	if !validMigrationCommand(args) {
 		log.Fatal("usage: certen-validator migrate <up|verify [--require VERSION]|fingerprint|catalog|adopt [--dry-run]|data NAME>")
@@ -992,6 +1008,7 @@ func runMigrationCommand(args []string) {
 	if err != nil {
 		log.Fatalf("load configuration: %v", err)
 	}
+	requireValidatorID(cfg)
 	client, err := database.NewClient(cfg)
 	if err != nil {
 		log.Fatalf("connect database: %v", err)
@@ -1303,36 +1320,29 @@ func startValidator(
 	// P3: optional async Accumulate block-checkpoint anchor. Gated OFF by default. A single
 	// designated writer validator mirrors each committed block's roots to a Certen data account
 	// (e.g. acc://certen-protocol.acme/block-history) for external tamper-evidence / audit.
-	if os.Getenv("CHECKPOINT_ANCHOR_ENABLED") == "true" {
-		writer := os.Getenv("CHECKPOINT_WRITER_VALIDATOR")
-		if writer == "" {
-			writer = "validator-1"
+	checkpointEnabled, err := envvar.Bool("CHECKPOINT_ANCHOR_ENABLED", false)
+	if err != nil {
+		return nil, nil, err
+	}
+	if checkpointEnabled {
+		// Enabled means configured, whole, or the node does not start (RB3-F89). The writer used to
+		// default to "validator-1", a missing account or signer and a missing ValidatorApp each turned
+		// the anchor off with a log line, and an invalid or absent write-back key fell back to the
+		// validator's own key - which is not on the checkpoint key page, so every write would fail.
+		cp, err := checkpointSettingsFromEnv()
+		if err != nil {
+			return nil, nil, err
 		}
-		cpAccount := os.Getenv("CHECKPOINT_DATA_ACCOUNT") // acc://certen-protocol.acme/block-history
-		cpSigner := os.Getenv("CHECKPOINT_SIGNER_URL")    // acc://certen-protocol.acme/book/1
+		writer, cpAccount, cpSigner := cp.writer, cp.account, cp.signer
 		if cfg.ValidatorID != writer {
-			log.Printf("ℹ️ [CHECKPOINT] anchor enabled but this node (%s) is not the designated writer (%s) — skipping", cfg.ValidatorID, writer)
-		} else if cpAccount == "" || cpSigner == "" {
-			log.Printf("⚠️ [CHECKPOINT] anchor enabled but CHECKPOINT_DATA_ACCOUNT/CHECKPOINT_SIGNER_URL not set — disabled")
+			log.Printf("ℹ️ [CHECKPOINT] anchor enabled; this node (%s) is not the designated writer (%s)", cfg.ValidatorID, writer)
 		} else if va := cometEngine.GetValidatorApp(); va == nil {
-			log.Printf("⚠️ [CHECKPOINT] anchor enabled but ValidatorApp not available on engine — disabled")
+			return nil, nil, fmt.Errorf("CHECKPOINT_ANCHOR_ENABLED: this node is the writer but its engine has no ValidatorApp to hook")
 		} else {
 			// The checkpoint account lives under the same ADI as Phase-9 write-back
-			// (acc://certen-protocol.acme), so sign with the write-back key authorized on that
-			// key page — NOT the validator's local ed25519 key. Prefer a dedicated override,
-			// else the Phase-9 write-back key, else fall back to the validator key.
-			cpKey := privateKey
-			cpKeyHex := os.Getenv("CHECKPOINT_WRITEBACK_PRIV_KEY")
-			if cpKeyHex == "" {
-				cpKeyHex = os.Getenv("ACCUMULATE_WRITEBACK_PRIV_KEY")
-			}
-			if cpKeyHex != "" {
-				if kb, decErr := hex.DecodeString(strings.TrimSpace(cpKeyHex)); decErr == nil && len(kb) == ed25519.PrivateKeySize {
-					cpKey = ed25519.PrivateKey(kb)
-				} else {
-					log.Printf("⚠️ [CHECKPOINT] invalid checkpoint write-back key — falling back to validator key")
-				}
-			}
+			// (acc://certen-protocol.acme), so it is signed with the write-back key authorized on that
+			// key page: CHECKPOINT_WRITEBACK_PRIV_KEY when set, else ACCUMULATE_WRITEBACK_PRIV_KEY.
+			cpKey := cp.key
 			cpSub, cpErr := execution.NewAccumulateSubmitter(&execution.AccumulateSubmitterConfig{
 				Client:              liteClientAdapter,
 				PrivateKey:          cpKey,
@@ -1346,7 +1356,7 @@ func startValidator(
 				Logger:              log.New(log.Writer(), "[CheckpointSubmitter] ", log.LstdFlags),
 			})
 			if cpErr != nil {
-				log.Printf("⚠️ [CHECKPOINT] failed to create submitter: %v (anchor disabled)", cpErr)
+				return nil, nil, fmt.Errorf("CHECKPOINT_ANCHOR_ENABLED: create the checkpoint submitter: %w", cpErr)
 			} else {
 				cpDataDir := cfg.DataDir
 				if cpDataDir == "" {
@@ -1518,7 +1528,11 @@ func startValidator(
 	}
 	// The attester compares an incoming request's period width against this and
 	// refuses a mismatch, so a proposer cannot widen what this node selects.
-	stack.PeriodBlocks = batchPeriodBlocksFromEnv()
+	periodBlocks, err := batchPeriodBlocksFromEnv()
+	if err != nil {
+		return nil, nil, err
+	}
+	stack.PeriodBlocks = periodBlocks
 
 	// DURABILITY. Restore anything queued before a restart, BEFORE the enqueuer
 	// is published below, so a restored member cannot race a freshly discovered
@@ -1532,14 +1546,16 @@ func startValidator(
 	if mErr != nil {
 		return nil, nil, fmt.Errorf("batch path: mempool persistence at %s unavailable - a restart would lose queued members: %w", storePath, mErr)
 	}
-	stack.Mempool.SetStore(mstore, log.Printf)
+	if err := stack.Mempool.SetStore(mstore, log.Printf); err != nil {
+		return nil, nil, fmt.Errorf("batch path: %w (the file is left in place; resolve it before restarting)", err)
+	}
 	log.Printf("💾 [BATCH] Mempool persisted at %s", storePath)
 	// Drain first, enqueue second.
 	go stack.RunFlushLoop(
 		context.Background(),
 		execution.BatchFlushConfig{
 			Interval:     mempoolCfg.FlushInterval,
-			PeriodBlocks: batchPeriodBlocksFromEnv(),
+			PeriodBlocks: periodBlocks,
 			// The ACCUMULATE chain height — the same units member CommitHeights
 			// are keyed in, and the only height every validator agrees on.
 			//
@@ -1602,7 +1618,11 @@ func startValidator(
 	}
 	stack.SetOnDemandWaker(odSubmitter.Wake)
 	go odSubmitter.Run(context.Background())
-	if consensus.OnDemandLaneEnabled() {
+	odLane, err := consensus.OnDemandLaneEnabled()
+	if err != nil {
+		return nil, nil, err
+	}
+	if odLane {
 		log.Printf("⚡ [OD] intent-keyed on-demand lane ENABLED — on_demand " +
 			"intents settle one-per-anchor with no period and no settle grace")
 	} else {
@@ -1630,7 +1650,7 @@ func startValidator(
 
 	log.Printf("✅ [BATCH] Cross-ADI batching ACTIVE on chains %v (flush every %s, "+
 		"period %d blocks)",
-		resolver.Chains(), mempoolCfg.FlushInterval, batchPeriodBlocksFromEnv())
+		resolver.Chains(), mempoolCfg.FlushInterval, periodBlocks)
 
 	// ==========================================================================
 	// PHASE 5: Wire Batch System for Real Merkle Roots
@@ -1869,22 +1889,22 @@ func startValidator(
 	// Sized to exceed three CLI budgets (the adapter allows 120s per level and passes the CLI
 	// 115s of that), so the CLI always reaches its OWN timeout and reports a real reason
 	// rather than being SIGKILLed here with empty stderr.
-	bftTimeout := 360 * time.Second
-	if v := os.Getenv("CERTEN_BFT_TIMEOUT"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil && d > 0 {
-			bftTimeout = d
-			log.Printf("⏱️  BFT timeout overridden by CERTEN_BFT_TIMEOUT=%v", d)
-		} else {
-			log.Printf("⚠️  CERTEN_BFT_TIMEOUT=%q is not a valid duration; using %v", v, bftTimeout)
-		}
+	bftTimeout, err := bftTimeoutFromEnv()
+	if err != nil {
+		return nil, nil, err
 	}
 	log.Printf("⏱️  BFT timeout: %v (must cover G0+G1+G2 govproof CLI round trips)", bftTimeout)
 
+	blockWorkers, err := intent.BlockWorkersFromEnv()
+	if err != nil {
+		return nil, nil, err
+	}
 	intentConfig := &intent.IntentDiscoveryConfig{
 		BlockPollInterval:   5 * time.Second,
 		BFTTimeout:          bftTimeout,
 		MaxConcurrentBlocks: 2000, // Increased from 10 to handle high block rate
-		IntentBatchSize:     100,  // Increased from 50 to process more intents per batch
+		BlockWorkers:        blockWorkers,
+		IntentBatchSize:     100, // Increased from 50 to process more intents per batch
 		MinStartHeight:      0,
 	}
 
@@ -1915,8 +1935,12 @@ func startValidator(
 	if entGateCfg, err := consensus.EntitlementConfigFromEnv(); err != nil {
 		log.Fatalf("invalid entitlement configuration: %v", err)
 	} else {
+		entStoreCfg, err := entitlement.StoreConfigFromEnv()
+		if err != nil {
+			log.Fatalf("invalid entitlement configuration: %v", err)
+		}
 		entStore := entitlement.NewStore(
-			entitlement.StoreConfigFromEnv(),
+			entStoreCfg,
 			entGateCfg.Keys,
 			log.New(log.Writer(), "[Entitlement] ", log.LstdFlags),
 		)
@@ -2079,7 +2103,7 @@ func printHelp() {
 	fmt.Println("  validator-service [OPTIONS]")
 	fmt.Println()
 	fmt.Println("Options:")
-	fmt.Println("  --validator-id=ID        Validator ID (default: validator-1)")
+	fmt.Println("  --validator-id=ID        Validator ID (required unless VALIDATOR_ID is set)")
 	fmt.Println("  --help                   Show this help message")
 	fmt.Println()
 	fmt.Println("BFT Consensus Features:")
@@ -2090,4 +2114,81 @@ func printHelp() {
 	fmt.Println("  ✅ Target chain execution capabilities")
 	fmt.Println("  ✅ Anchor creation and verification")
 	fmt.Println("  ❌ NO SIMULATION, NO SELF-CONSENSUS")
+}
+
+// bftTimeoutFromEnv is the time an intent gets through consensus: CERTEN_BFT_TIMEOUT, or 360s.
+func bftTimeoutFromEnv() (time.Duration, error) {
+	d, err := envvar.Duration("CERTEN_BFT_TIMEOUT", 360*time.Second, time.Second)
+	if err == nil && os.Getenv("CERTEN_BFT_TIMEOUT") != "" {
+		log.Printf("⏱️  BFT timeout overridden by CERTEN_BFT_TIMEOUT=%v", d)
+	}
+	return d, err
+}
+
+// checkpointSettings is the block-checkpoint anchor's configuration, all of it.
+type checkpointSettings struct {
+	writer, account, signer string
+	key                     ed25519.PrivateKey
+}
+
+// checkpointSettingsFromEnv reads the checkpoint anchor's settings, refusing any that is missing or
+// malformed. Read on every node, writer or not, so a misconfiguration is found wherever it is deployed.
+func checkpointSettingsFromEnv() (checkpointSettings, error) {
+	cp := checkpointSettings{
+		writer:  strings.TrimSpace(os.Getenv("CHECKPOINT_WRITER_VALIDATOR")),
+		account: strings.TrimSpace(os.Getenv("CHECKPOINT_DATA_ACCOUNT")), // acc://certen-protocol.acme/block-history
+		signer:  strings.TrimSpace(os.Getenv("CHECKPOINT_SIGNER_URL")),   // acc://certen-protocol.acme/book/1
+	}
+	var missing []string
+	for name, v := range map[string]string{
+		"CHECKPOINT_WRITER_VALIDATOR": cp.writer, "CHECKPOINT_DATA_ACCOUNT": cp.account, "CHECKPOINT_SIGNER_URL": cp.signer,
+	} {
+		if v == "" {
+			missing = append(missing, name)
+		}
+	}
+	keyVar := "CHECKPOINT_WRITEBACK_PRIV_KEY"
+	keyHex := strings.TrimSpace(os.Getenv(keyVar))
+	if keyHex == "" {
+		keyVar = "ACCUMULATE_WRITEBACK_PRIV_KEY"
+		keyHex = strings.TrimSpace(os.Getenv(keyVar))
+	}
+	if keyHex == "" {
+		missing = append(missing, "CHECKPOINT_WRITEBACK_PRIV_KEY or ACCUMULATE_WRITEBACK_PRIV_KEY")
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		return cp, fmt.Errorf("CHECKPOINT_ANCHOR_ENABLED is set but %s is not", strings.Join(missing, ", "))
+	}
+	kb, err := hex.DecodeString(keyHex)
+	if err != nil || len(kb) != ed25519.PrivateKeySize {
+		// The value is a secret: named, never printed.
+		return cp, fmt.Errorf("CHECKPOINT_ANCHOR_ENABLED: %s is not a %d-byte hex ed25519 private key", keyVar, ed25519.PrivateKeySize)
+	}
+	cp.key = ed25519.PrivateKey(kb)
+	return cp, nil
+}
+
+// checkEnvironment reads every environment knob the validator consults after boot, so one that does not
+// parse stops the node before it does anything, naming each value, rather than refusing work later.
+func checkEnvironment() error {
+	return envvar.Check(
+		consensus.CheckEnv,
+		execution.CheckEnv,
+		contracts.CheckEnv,
+		intent.CheckEnv,
+		ethrpc.CheckEnv,
+		func() error { _, err := entitlement.StoreConfigFromEnv(); return err },
+		func() error { _, err := batchPeriodBlocksFromEnv(); return err },
+		func() error { _, err := bftTimeoutFromEnv(); return err },
+		func() error { _, err := envvar.Bool("MIGRATE_ON_START", false); return err },
+		func() error {
+			enabled, err := envvar.Bool("CHECKPOINT_ANCHOR_ENABLED", false)
+			if err != nil || !enabled {
+				return err
+			}
+			_, err = checkpointSettingsFromEnv()
+			return err
+		},
+	)
 }

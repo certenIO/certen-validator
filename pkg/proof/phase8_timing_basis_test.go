@@ -23,6 +23,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gitlab.com/accumulatenetwork/accumulate/protocol"
 )
 
 // A G1 document as the govproof CLI emits it for a DELEGATED, cross-partition
@@ -91,7 +93,7 @@ const p8SamePartitionG1 = `{
 
 // TestP8_CrossPartitionTimingIsNamed is Gate 2's third criterion.
 func TestP8_CrossPartitionTimingIsNamed(t *testing.T) {
-	tb := TimingBasisFromRaw("G1", json.RawMessage(p8CrossPartitionG1))
+	tb := mustTimingBasis(t, json.RawMessage(p8CrossPartitionG1))
 	if len(tb) != 2 {
 		t.Fatalf("expected 2 timing records, got %d", len(tb))
 	}
@@ -137,7 +139,7 @@ func TestP8_CrossPartitionTimingIsNamed(t *testing.T) {
 // TestP8_SamePartitionNamesNoWeakerBasis is the other half of Gate 2's third
 // criterion: the marker must not appear on an ordinary proof.
 func TestP8_SamePartitionNamesNoWeakerBasis(t *testing.T) {
-	tb := TimingBasisFromRaw("G1", json.RawMessage(p8SamePartitionG1))
+	tb := mustTimingBasis(t, json.RawMessage(p8SamePartitionG1))
 	if len(tb) != 1 {
 		t.Fatalf("expected 1 timing record, got %d", len(tb))
 	}
@@ -162,7 +164,7 @@ func TestP8_AbsentTimingBasisIsNotAClaim(t *testing.T) {
 		`{"tx_hash":"aa","timingBasis":[]}`,           // present and empty
 		``,                                            // nothing at all
 	} {
-		if tb := TimingBasisFromRaw("G1", json.RawMessage(doc)); tb != nil {
+		if tb, err := TimingBasisFromRaw("G1", json.RawMessage(doc), kermitRouter(t)); tb != nil || err != nil {
 			t.Errorf("document %q produced %d record(s); an absent basis must be nil so a "+
 				"reader cannot mistake it for 'checked, none weakened'", doc, len(tb))
 		}
@@ -174,7 +176,7 @@ func TestP8_AbsentTimingBasisIsNotAClaim(t *testing.T) {
 // borrowed from another level's signature set, the way ReceiptFor legitimately
 // borrows the shared execution receipt.
 func TestP8_G0CarriesNoTimingBasis(t *testing.T) {
-	tb := TimingBasisFromRaw("G1", json.RawMessage(p8CrossPartitionG1))
+	tb := mustTimingBasis(t, json.RawMessage(p8CrossPartitionG1))
 	if got := TimingBasisFor(tb, "G0"); len(got) != 0 {
 		t.Fatalf("G1 records leaked into G0: got %d", len(got))
 	}
@@ -275,4 +277,31 @@ func readGovproofTypes(t *testing.T) string {
 		t.Fatalf("cannot read govproof types.go: %v", err)
 	}
 	return string(b)
+}
+
+// kermitRouter routes with Kermit's routing table as network-status published it on 2026-09-27.
+func kermitRouter(t *testing.T) *NetworkRouter {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("testdata", "kermit_routing_2026-09-27.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	table := new(protocol.RoutingTable)
+	if err := json.Unmarshal(raw, table); err != nil {
+		t.Fatal(err)
+	}
+	r, err := NewNetworkRouter(table)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+func mustTimingBasis(t *testing.T, raw json.RawMessage) []SignatureTimingBasis {
+	t.Helper()
+	tb, err := TimingBasisFromRaw("G1", raw, kermitRouter(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tb
 }

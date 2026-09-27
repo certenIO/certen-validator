@@ -7,9 +7,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
+	chained_proof "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/working-proof_do_not_edit"
 	attestation "github.com/certen/independant-validator/pkg/attestation/strategy"
 	chain "github.com/certen/independant-validator/pkg/chain/strategy"
 	"github.com/certen/independant-validator/pkg/consensus"
@@ -45,7 +48,8 @@ func f73Cycle(t *testing.T, g0, g1 json.RawMessage) (*activeCycle, string) {
 
 func f73Orchestrator(db *sql.DB) *UnifiedOrchestrator {
 	return &UnifiedOrchestrator{
-		config:       &UnifiedOrchestratorConfig{Repos: database.NewRepositories(database.NewClientFromDB(db)), ValidatorID: "validator-test"},
+		config: &UnifiedOrchestratorConfig{Repos: database.NewRepositories(database.NewClientFromDB(db)), ValidatorID: "validator-test",
+			ProofGenerator: fixtureFileGenerator{name: "proof_bvn1.json"}},
 		resultChains: map[string]*ResultHashChain{},
 	}
 }
@@ -123,4 +127,21 @@ func TestGovernanceLevelsSayOnlyWhatTheirProofsEstablish(t *testing.T) {
 			t.Errorf("%s: outcome_bound %v with no G2 proof", name, outcomeBound)
 		}
 	}
+}
+
+// fixtureFileGenerator serves a committed chained-proof fixture as every transaction's proof: the bundle
+// writer refuses to store a bundle without one (RB3-F93).
+type fixtureFileGenerator struct{ name string }
+
+func (g fixtureFileGenerator) GenerateChainedProofForTx(context.Context, string, string, string) (*ChainedProofResult, error) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "accumulate-lite-client-2", "liteclient", "proof",
+		"working-proof_do_not_edit", "testdata", g.name))
+	if err != nil {
+		return nil, err
+	}
+	cp := new(chained_proof.ChainedProof)
+	if err := json.Unmarshal(raw, cp); err != nil {
+		return nil, err
+	}
+	return &ChainedProofResult{CompleteProof: cp}, nil
 }

@@ -36,8 +36,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os"
-	"strings"
+	"github.com/certen/independant-validator/pkg/envvar"
 	"time"
 
 	cmttypes "github.com/cometbft/cometbft/types"
@@ -56,8 +55,10 @@ type inclusion struct {
 // off a path that decides whether a target-chain side effect executes deserves a way back that does not
 // need a rebuild. Nothing here touches ABCI, the app hash or FinalizeBlock — it changes only how a node
 // observes its own submission — so a rolling deploy is safe and mixed versions are fine.
-func inclusionScanEnabled() bool {
-	return !strings.EqualFold(strings.TrimSpace(os.Getenv("INCLUSION_SCAN")), "off")
+//
+// A value that is not a switch is refused; it used to mean "on" for anything but "off".
+func inclusionScanEnabled() (bool, error) {
+	return envvar.Bool("INCLUSION_SCAN", true)
 }
 
 // blockchainInfoPageSize is CometBFT's hard limit for one BlockchainInfo call (rpc/core/blocks.go).

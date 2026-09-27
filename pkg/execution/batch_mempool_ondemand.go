@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"time"
+
+	"github.com/certen/independant-validator/pkg/consensus"
 )
 
 // =============================================================================
@@ -66,8 +68,12 @@ func (m *BatchMempool) AddOnDemand(p *PendingBatchIntent) error {
 	if err := m.addOnDemand(p); err != nil {
 		return err
 	}
-	// Snapshot after the lock is released — persist() re-acquires m.mu.
-	m.persist()
+	// Snapshot after the lock is released — persist() re-acquires m.mu. A member the disk does not hold
+	// is taken back and refused as this validator's outage (see Add).
+	if err := m.persist(); err != nil {
+		m.removeOnDemand(p.ChainID, p.OperationID)
+		return fmt.Errorf("%w: intent %s on chain %d could not be persisted: %v", consensus.ErrBatchUnavailable, p.IntentID, p.ChainID, err)
+	}
 	return nil
 }
 

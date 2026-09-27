@@ -10,12 +10,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/certen/independant-validator/pkg/envvar"
 	"log"
 	"math"
 	"math/big"
 	"os"
 	"reflect"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -357,7 +357,7 @@ type ValidatorSignatureStruct struct {
 
 // loadContractConfigFromEnv loads contract configuration from environment variables
 // Supports both new dual-contract env vars and legacy single-contract fallback
-func loadContractConfigFromEnv() *CertenContractConfig {
+func loadContractConfigFromEnv() (*CertenContractConfig, error) {
 	config := &CertenContractConfig{
 		EthereumRPC:          os.Getenv("ETHEREUM_URL"),
 		PrivateKey:           os.Getenv("ETH_PRIVATE_KEY"),
@@ -380,28 +380,20 @@ func loadContractConfigFromEnv() *CertenContractConfig {
 	// Also set deprecated AnchorContract for backward compatibility
 	config.AnchorContract = config.VerificationContract
 
-	// Parse chain ID from environment
-	if chainIDStr := os.Getenv("ETHEREUM_CHAIN_ID"); chainIDStr != "" {
-		if parsed, err := strconv.ParseInt(chainIDStr, 10, 64); err == nil {
-			config.ChainID = parsed
-		}
+	// Chain ID, gas limit and gas ceiling from the environment. A set value that does not parse is
+	// refused; each used to keep its default silently (RB3-F71 sweep).
+	var err error
+	if config.ChainID, err = envvar.Int64("ETHEREUM_CHAIN_ID", config.ChainID, 1); err != nil {
+		return nil, err
+	}
+	if config.GasLimit, err = envvar.Uint64("ETH_GAS_LIMIT", config.GasLimit, 21000); err != nil {
+		return nil, err
+	}
+	if config.MaxGasPriceGwei, err = envvar.Int64("ETH_MAX_GAS_PRICE_GWEI", config.MaxGasPriceGwei, 1); err != nil {
+		return nil, err
 	}
 
-	// Parse gas limit from environment
-	if gasLimitStr := os.Getenv("ETH_GAS_LIMIT"); gasLimitStr != "" {
-		if parsed, err := strconv.ParseUint(gasLimitStr, 10, 64); err == nil {
-			config.GasLimit = parsed
-		}
-	}
-
-	// Parse max gas price from environment
-	if maxGasPriceStr := os.Getenv("ETH_MAX_GAS_PRICE_GWEI"); maxGasPriceStr != "" {
-		if parsed, err := strconv.ParseInt(maxGasPriceStr, 10, 64); err == nil {
-			config.MaxGasPriceGwei = parsed
-		}
-	}
-
-	return config
+	return config, nil
 }
 
 // NewEthereumContractManager creates a new Ethereum contract manager
@@ -410,7 +402,10 @@ func loadContractConfigFromEnv() *CertenContractConfig {
 //   - Verification contract (0x9B29...) for executeComprehensiveProof
 func NewEthereumContractManager(config *CertenContractConfig) (*EthereumContractManager, error) {
 	if config == nil {
-		config = loadContractConfigFromEnv()
+		var err error
+		if config, err = loadContractConfigFromEnv(); err != nil {
+			return nil, err
+		}
 	}
 
 	// Connect to Ethereum
@@ -535,13 +530,10 @@ func (e *ErrGasCeilingExceeded) Error() string {
 // transaction. Default TRUE — refusing is the safe behaviour under Model B,
 // where CERTEN fronts the gas. Set CERTEN_GAS_CEILING_ENFORCE=false to restore
 // the legacy clamp-and-send behaviour for a deployment that needs it.
-func gasCeilingEnforced() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("CERTEN_GAS_CEILING_ENFORCE"))) {
-	case "false", "0", "no":
-		return false
-	default:
-		return true
-	}
+//
+// A value that is not a switch is refused rather than read as "on".
+func gasCeilingEnforced() (bool, error) {
+	return envvar.Bool("CERTEN_GAS_CEILING_ENFORCE", true)
 }
 
 // Cost ceiling configuration.
@@ -566,27 +558,34 @@ func gasCeilingEnforced() bool {
 // silently held to a number nobody chose.
 const defaultMaxTxCostUSD = 25.0
 
-// maxTxCostMicroUSD returns the per-transaction dollar cap, or 0 for no cap.
-func maxTxCostMicroUSD() int64 {
-	if v := strings.TrimSpace(os.Getenv("CERTEN_MAX_TX_COST_USD")); v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 {
-			return int64(f * 1e6) // 0 explicitly disables
-		}
-	}
-	// A cap is only meaningful alongside a price. With no price configured the
-	// ceiling is inactive regardless, so the default here never stands alone.
-	return int64(defaultMaxTxCostUSD * 1e6)
+// maxTxCostMicroUSD returns the per-transaction dollar cap, or 0 for no cap (0 explicitly disables).
+// A cap is only meaningful alongside a price: with no price configured the ceiling is inactive
+// regardless, so the default never stands alone. A value that is not a non-negative number is refused;
+// it used to become the $25 default.
+func maxTxCostMicroUSD() (int64, error) {
+	f, err := envvar.Float("CERTEN_MAX_TX_COST_USD", defaultMaxTxCostUSD, 0)
+	return int64(f * 1e6), err
 }
 
-// nativeUSDMicro returns the native token price, or 0 when unconfigured — which
-// leaves the dollar ceiling inactive rather than enforcing an invented figure.
-func nativeUSDMicro() int64 {
-	if v := strings.TrimSpace(os.Getenv("CERTEN_NATIVE_USD")); v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
-			return int64(f * 1e6)
-		}
+// nativeUSDMicro returns the native token price, or 0 when unconfigured — which leaves the dollar
+// ceiling inactive rather than enforcing an invented figure. A value that is not a non-negative number
+// is refused; it used to become 0, switching the dollar ceiling off without a word.
+func nativeUSDMicro() (int64, error) {
+	f, err := envvar.Float("CERTEN_NATIVE_USD", 0, 0)
+	return int64(f * 1e6), err
+}
+
+// txCostCeiling checks a transaction's worst-case cost against the configured dollar ceiling.
+func txCostCeiling(gas uint64, bid *big.Int, chainID int64) error {
+	native, err := nativeUSDMicro()
+	if err != nil {
+		return err
 	}
-	return 0
+	max, err := maxTxCostMicroUSD()
+	if err != nil {
+		return err
+	}
+	return checkTxCostCeiling(gas, bid, native, max, chainID)
 }
 
 // refreshGasPrice updates auth.GasPrice with the current network-suggested price.
@@ -611,10 +610,17 @@ func nativeUSDMicro() int64 {
 func (ecm *EthereumContractManager) refreshGasPrice(ctx context.Context) error {
 	gasPrice, err := ecm.client.SuggestGasPrice(ctx)
 	if err != nil {
-		return nil // keep existing gas price; RPC hiccup is not a ceiling breach
+		// Nothing is sent on a price nobody checked. This used to keep the previous gas price and
+		// send, past both ceilings, whenever the RPC failed (RB3-F101).
+		return fmt.Errorf("chain %d: read the network gas price: %w; the ceilings cannot be checked, so nothing is sent",
+			ecm.config.ChainID, err)
 	}
 
-	bid, err := evaluateGasPrice(gasPrice, ecm.config.MaxGasPriceGwei, ecm.config.ChainID, gasCeilingEnforced())
+	enforce, err := gasCeilingEnforced()
+	if err != nil {
+		return err
+	}
+	bid, err := evaluateGasPrice(gasPrice, ecm.config.MaxGasPriceGwei, ecm.config.ChainID, enforce)
 	if err != nil {
 		fmt.Printf("[GAS-CEILING] %v\n", err)
 		return err
@@ -622,10 +628,8 @@ func (ecm *EthereumContractManager) refreshGasPrice(ctx context.Context) error {
 
 	// The ceiling that actually bounds the money. The gwei check above is a
 	// backstop against an absurd RPC response; this is the policy.
-	if gasCeilingEnforced() {
-		if err := checkTxCostCeiling(
-			ecm.auth.GasLimit, bid, nativeUSDMicro(), maxTxCostMicroUSD(), ecm.config.ChainID,
-		); err != nil {
+	if enforce {
+		if err := txCostCeiling(ecm.auth.GasLimit, bid, ecm.config.ChainID); err != nil {
 			fmt.Printf("[COST-CEILING] %v\n", err)
 			return err
 		}

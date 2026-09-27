@@ -16,10 +16,9 @@ import (
 	"errors"
 	"fmt"
 	"github.com/certen/independant-validator/pkg/entitlement"
+	"github.com/certen/independant-validator/pkg/envvar"
 	"log"
-	"os"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -255,7 +254,7 @@ func DefaultIntentDiscoveryConfig() *IntentDiscoveryConfig {
 		// every value-moving intent. Keep in step with main.go's CERTEN_BFT_TIMEOUT default.
 		BFTTimeout:          360 * time.Second,
 		MaxConcurrentBlocks: MAX_CONCURRENT_BLOCKS,
-		BlockWorkers:        blockWorkersFromEnv(),
+		BlockWorkers:        DefaultBlockWorkers,
 		IntentBatchSize:     INTENT_BATCH_SIZE,
 		MinStartHeight:      946000, // Current testnet baseline
 		// Short in-line retry catches the common few-second DN-anchoring lag without holding
@@ -518,7 +517,11 @@ func (id *IntentDiscovery) initializeStartingHeight(ctx context.Context) error {
 	// refuses every request for a period it should be able to reproduce, which is silent
 	// quorum degradation — one or two restarts are absorbed by 5-of-7, a rolling deploy
 	// touching three is not.
-	if rewind := intentRewindBlocks(); rewind > 0 && startHeight > rewind {
+	rewind, err := intentRewindBlocks()
+	if err != nil {
+		return err
+	}
+	if rewind > 0 && startHeight > rewind {
 		id.logger.Printf("⏪ Rewinding the discovery watermark %d blocks (from %d to %d) so intents "+
 			"still in flight for a batch are re-derived rather than lost to the restart",
 			rewind, startHeight, startHeight-rewind)
@@ -536,13 +539,10 @@ func (id *IntentDiscovery) initializeStartingHeight(ctx context.Context) error {
 // It must comfortably exceed one batch settle window: the period width plus the settle grace
 // plus the member pipeline. Overshooting only costs a re-scan; undershooting silently strands
 // whatever was in flight.
-func intentRewindBlocks() uint64 {
-	if raw := strings.TrimSpace(os.Getenv("INTENT_REWIND_BLOCKS")); raw != "" {
-		if n, err := strconv.ParseUint(raw, 10, 64); err == nil {
-			return n
-		}
-	}
-	return 600
+//
+// A value that is not a non-negative integer is refused; it used to become 600 without a word.
+func intentRewindBlocks() (uint64, error) {
+	return envvar.Uint64("INTENT_REWIND_BLOCKS", 600, 0)
 }
 
 // checkForNewBlocks scans every block from the watermark up to the latest directory
@@ -673,22 +673,12 @@ func (id *IntentDiscovery) blockProcessor(workerID string) {
 	}
 }
 
-// blockWorkersFromEnv reads BLOCK_WORKERS, falling back to DefaultBlockWorkers.
-//
-// A malformed or non-positive value uses the default rather than failing startup: discovery
-// running at a sane rate is always better than a validator that refuses to boot over a tuning
-// knob, and the value is logged at startup either way.
-func blockWorkersFromEnv() int {
-	raw := strings.TrimSpace(os.Getenv("BLOCK_WORKERS"))
-	if raw == "" {
-		return DefaultBlockWorkers
-	}
-	n, err := strconv.Atoi(raw)
-	if err != nil || n <= 0 {
-		log.Printf("⚠️ BLOCK_WORKERS=%q is not a positive integer — using %d", raw, DefaultBlockWorkers)
-		return DefaultBlockWorkers
-	}
-	return n
+// BlockWorkersFromEnv reads BLOCK_WORKERS: unset means DefaultBlockWorkers, and a value that is not a
+// positive integer is refused. It used to become the default with a log line - and the live validator
+// never read it at all, building its discovery config without it, so "raise via BLOCK_WORKERS" did
+// nothing (RB3-F71 sweep). main now reads it through here.
+func BlockWorkersFromEnv() (int, error) {
+	return envvar.Int("BLOCK_WORKERS", DefaultBlockWorkers, 1)
 }
 
 // DiscoveryStatus is a point-in-time view of whether block discovery is alive and keeping up.
@@ -1014,47 +1004,28 @@ func (id *IntentDiscovery) convertCertenTransactionToIntent(certenTx *accumulate
 		id.logger.Printf("✅ [4-BLOB-EXTRACT] Found replayData blob with %d fields", len(replayData))
 	}
 
-	// Fallback: If no structured blobs found, copy remaining data to intentData
-	if len(intentData) == 0 && len(crossChainData) == 0 && len(governanceData) == 0 && len(replayData) == 0 {
-		id.logger.Printf("⚠️ [4-BLOB-EXTRACT] No structured blobs found, using fallback categorization")
-		for key, value := range certenTx.IntentData {
-			if dataElement, ok := value.(map[string]interface{}); ok {
-				// Check if this element contains intent type information
-				if typeVal, exists := dataElement["type"].(string); exists {
-					intentType = typeVal
-				}
-
-				// Categorize data based on content and known patterns
-				if id.isIntentData(dataElement) {
-					for k, v := range dataElement {
-						intentData[k] = v
-					}
-				} else if id.isCrossChainData(dataElement) {
-					for k, v := range dataElement {
-						crossChainData[k] = v
-					}
-				} else if id.isGovernanceData(dataElement) {
-					for k, v := range dataElement {
-						governanceData[k] = v
-					}
-				} else if id.isReplayData(dataElement) {
-					for k, v := range dataElement {
-						replayData[k] = v
-					}
-				} else {
-					// Default to intent data if unknown
-					intentData[key] = value
-				}
-			} else {
-				// Non-structured data goes to intent data
-				intentData[key] = value
-			}
+	// A CERTEN intent is exactly the four JSON blobs, in order (data[0..3]: intent, cross-chain,
+	// governance, replay) - what every client writes. Anything else is refused by name. When none of the
+	// four was found this used to guess each element's role from its contents, and a transaction with
+	// only some of them was built with the rest empty; the operation id is the hash of the four, so a
+	// wrong guess made a different intent (RB3-F113).
+	var missing, extra []string
+	for _, name := range []string{"intentData", "crossChainData", "governanceData", "replayData"} {
+		if _, ok := certenTx.IntentData[name].(map[string]interface{}); !ok {
+			missing = append(missing, name)
 		}
 	}
-
-	// Validate that we have at least some intent data before building
-	if len(intentData) == 0 && len(crossChainData) == 0 && len(governanceData) == 0 && len(replayData) == 0 {
-		return nil, fmt.Errorf("transaction %s has no valid 4-blob structure", certenTx.Hash)
+	for key := range certenTx.IntentData {
+		switch key {
+		case "intentData", "crossChainData", "governanceData", "replayData":
+		default:
+			extra = append(extra, key)
+		}
+	}
+	if len(missing) > 0 || len(extra) > 0 {
+		sort.Strings(missing)
+		sort.Strings(extra)
+		return nil, fmt.Errorf("transaction %s is not a CERTEN intent of four JSON blobs (missing %v, unexpected %v)", certenTx.Hash, missing, extra)
 	}
 
 	// Use BuildCertenIntent to construct the canonical struct.
@@ -1085,8 +1056,12 @@ func (id *IntentDiscovery) convertCertenTransactionToIntent(certenTx *accumulate
 	// can declare a wrong / non-existent org ADI (e.g. "acc://o.acme"); trusting it
 	// sends the L1 chained-proof lookup to an account that has no such entry, which
 	// then stalls forever as "chained proof unavailable (retryable)". The discovered
-	// principal (already including the /data suffix) is the source of truth.
-	if certenTx.AccountURL != "" {
+	// principal (already including the /data suffix) is the source of truth - and without it there is
+	// no account to prove: the declared organization is never used in its place (RB3-F112).
+	if certenTx.AccountURL == "" {
+		return nil, fmt.Errorf("transaction %s: no principal was read; the intent's declared organization is not an authority for which account to prove", certenTx.Hash)
+	}
+	{
 		derived := intent.AccountURL
 		intent.AccountURL = certenTx.AccountURL
 		intent.OrganizationADI = strings.TrimSuffix(certenTx.AccountURL, "/data")
@@ -1369,10 +1344,10 @@ func (id *IntentDiscovery) processIntent(intent *CertenIntent, blockHeight uint6
 		return id.processMultiLegIntent(intent, blockHeight)
 	}
 
-	// Prefer canonical AccountURL; fall back to orgAdi/data if missing
+	// The discovered principal, never the declared organization (RB3-F112).
 	accountURL := intent.AccountURL
-	if accountURL == "" && intent.OrganizationADI != "" {
-		accountURL = fmt.Sprintf("%s/data", intent.OrganizationADI)
+	if accountURL == "" {
+		return consensus.TargetChainFailed, fmt.Errorf("intent %s: no discovered principal to prove", intent.IntentID)
 	}
 	id.logger.Printf("🏗️ Using data account for proof: %s", accountURL)
 
@@ -1485,7 +1460,9 @@ func (id *IntentDiscovery) processIntent(intent *CertenIntent, blockHeight uint6
 		id.logger.Printf("✅ Canonical BFT consensus execution completed for intent: %s (target chain: %s)",
 			intent.IntentID, outcome.Normalize())
 	} else {
-		id.logger.Printf("⚠️ No BFT consensus configured - skipping ValidatorBlock creation for %s", intent.IntentID)
+		// An intent is never counted as processed without consensus. It used to be skipped here and
+		// returned as handled, with an unset outcome (RB3 sweep).
+		return consensus.TargetChainFailed, fmt.Errorf("intent %s: no BFT consensus is configured; it cannot be processed", intent.IntentID)
 	}
 
 	id.mu.Lock()
@@ -1532,15 +1509,16 @@ func (id *IntentDiscovery) processMultiLegIntent(intent *CertenIntent, blockHeig
 		return keys
 	}())
 
-	// Generate proofs (same for all legs)
+	// Generate proofs (same for all legs). The discovered principal, never the declared organization,
+	// and the intent's own proof class, never a default (RB3-F112).
 	accountURL := intent.AccountURL
-	if accountURL == "" && intent.OrganizationADI != "" {
-		accountURL = fmt.Sprintf("%s/data", intent.OrganizationADI)
+	if accountURL == "" {
+		return consensus.TargetChainFailed, fmt.Errorf("multi-leg intent %s: no discovered principal to prove", intent.IntentID)
 	}
 
 	proofClass, err := intent.GetProofClass()
 	if err != nil {
-		proofClass = "on_cadence"
+		return consensus.TargetChainFailed, fmt.Errorf("extract proof class for multi-leg intent %s: %w", intent.IntentID, err)
 	}
 
 	// Generate CertenProof
@@ -1605,6 +1583,8 @@ func (id *IntentDiscovery) processMultiLegIntent(intent *CertenIntent, blockHeig
 		}
 		id.logger.Printf("✅ BFT consensus completed for multi-leg intent: %s (target chain: %s)",
 			intent.IntentID, outcome.Normalize())
+	} else {
+		return consensus.TargetChainFailed, fmt.Errorf("multi-leg intent %s: no BFT consensus is configured; it cannot be processed", intent.IntentID)
 	}
 
 	id.mu.Lock()

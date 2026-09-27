@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/certen/independant-validator/pkg/envvar"
 	"math/big"
 	"os"
 	"sort"
@@ -400,12 +401,14 @@ func (bv *BFTValidator) enqueueForBatch(
 // Default OFF. With the flag off an on_demand intent takes the period path exactly as it does
 // today, so deploying this code changes nothing until the flag is set — and turning it off again
 // is a restart, not a rollback.
-func onDemandLaneEnabled() bool {
-	return strings.EqualFold(strings.TrimSpace(os.Getenv("ON_DEMAND_INTENT_KEYED")), "true")
+//
+// A value that is not a switch is refused; it used to mean "off" for anything but "true".
+func onDemandLaneEnabled() (bool, error) {
+	return envvar.Bool("ON_DEMAND_INTENT_KEYED", false)
 }
 
 // OnDemandLaneEnabled is onDemandLaneEnabled exported so the wiring can log which lane is live.
-func OnDemandLaneEnabled() bool { return onDemandLaneEnabled() }
+func OnDemandLaneEnabled() (bool, error) { return onDemandLaneEnabled() }
 
 // RunBatchMemberRefusal records a member that left the batch path for good as FAILED, with the
 // cause it was dropped for.

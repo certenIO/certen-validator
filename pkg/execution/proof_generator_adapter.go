@@ -10,6 +10,10 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3"
+	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3/jsonrpc"
+	"gitlab.com/accumulatenetwork/accumulate/protocol"
+	"strings"
 	"time"
 
 	chained_proof "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/working-proof_do_not_edit"
@@ -53,19 +57,11 @@ func (a *LiteClientProofGeneratorAdapter) GenerateChainedProofForTx(ctx context.
 		return nil, fmt.Errorf("txHash is required for chained proof generation")
 	}
 
-	// Calculate BVN from account URL using deterministic routing algorithm
-	// This uses SHA256-based prefix matching per Accumulate's routing spec
-	// For Kermit testnet: returns "bvn1", "bvn2", or "bvn3"
-	if bvn == "" || bvn == "bvn0" {
-		calculatedBVN := proof.CalculateBVNFromAccountURL(accountURL)
-		if calculatedBVN != "" {
-			fmt.Printf("Calculated BVN from account URL routing: %s -> %s\n", accountURL, calculatedBVN)
-			bvn = calculatedBVN
-		} else {
-			// Fallback to bvn1 if calculation fails (should be rare)
-			bvn = "bvn1"
-			fmt.Printf("Could not calculate BVN from account URL, defaulting to %s\n", bvn)
-		}
+	// The BVN is the partition the transaction was discovered on. It used to be recomputed from the account
+	// URL through a hard-coded Kermit routing table whenever it was empty or "bvn0", and defaulted to bvn1
+	// when that failed - a proof of the transaction on whichever partition was guessed (RB3-F89).
+	if strings.TrimSpace(bvn) == "" {
+		return nil, fmt.Errorf("no partition for tx %s on %s: the proof is built on the partition the transaction was discovered on, never a guessed one", txHash, accountURL)
 	}
 
 	fmt.Printf("Generating chained proof: accountURL=%s, txHash=%s, bvn=%s\n", accountURL, txHash, bvn)
@@ -112,8 +108,15 @@ func (a *LiteClientProofGeneratorAdapter) GenerateChainedProofForTx(ctx context.
 	// Extract L3 data (DN to Consensus)
 	if chainedProof.Layer3.DNConsensusHeight > 0 {
 		result.L3DNBlockHeight = int64(chainedProof.Layer3.DNConsensusHeight)
-		// Consensus timestamp is approximately now since we just fetched it
-		result.L3ConsensusTimestamp = time.Now().UTC()
+		// The DN block's own time at the consensus height, read from the chain. It used to be the clock
+		// at proof-building time ("approximately now since we just fetched it") - the validator's clock stated as the network's.
+		// A chain that does not answer leaves it unstated, named in the log, never approximated (RB3-F90).
+		if ts, err := dnBlockTime(ctx, a.generator.GetEndpoint(), chainedProof.Layer3.DNConsensusHeight); err != nil {
+			fmt.Printf("🚨 [L3] DN block %d time not read: %v - the L3 consensus time is left unstated\n",
+				chainedProof.Layer3.DNConsensusHeight, err)
+		} else {
+			result.L3ConsensusTimestamp = ts
+		}
 		// Extract source/target hashes and receipt entries for visualization
 		result.L3SourceHash = hexToBytes(chainedProof.Layer3.RootReceipt.Start)
 		result.L3TargetHash = hexToBytes(chainedProof.Layer3.RootReceipt.Anchor)
@@ -149,4 +152,26 @@ func hexToBytes(s string) []byte {
 	}
 	b, _ := hex.DecodeString(s)
 	return b
+}
+
+// dnBlockTime reads the Directory Network minor block at height and returns its own time.
+func dnBlockTime(ctx context.Context, endpoint string, height uint64) (*time.Time, error) {
+	if endpoint == "" {
+		return nil, fmt.Errorf("no Accumulate v3 endpoint")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	rec, err := jsonrpc.NewClient(endpoint).Query(ctx, protocol.DnUrl(), &api.BlockQuery{Minor: &height})
+	if err != nil {
+		return nil, fmt.Errorf("query DN minor block %d: %w", height, err)
+	}
+	mb, ok := rec.(*api.MinorBlockRecord)
+	if !ok || mb == nil || mb.Time == nil || mb.Time.IsZero() {
+		return nil, fmt.Errorf("DN minor block %d: the chain returned no block time (%T)", height, rec)
+	}
+	if mb.Index != height {
+		return nil, fmt.Errorf("asked for DN minor block %d, the chain returned %d", height, mb.Index)
+	}
+	t := mb.Time.UTC()
+	return &t, nil
 }
