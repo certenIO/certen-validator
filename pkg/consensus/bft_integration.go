@@ -32,7 +32,6 @@ import (
 	cmthttp "github.com/cometbft/cometbft/rpc/client/http"
 	cmttypes "github.com/cometbft/cometbft/types"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/mr-tron/base58"
 
 	lcproof "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof"
@@ -3146,151 +3145,54 @@ func (bv *BFTValidator) extractTargetChainData(intent *Intent) []byte {
 // EXECUTION COMMITMENT BUILDING - SECURITY CRITICAL
 // =============================================================================
 
-// buildExecutionCommitmentFromIntent creates a cryptographic commitment that binds
-// the intent to expected execution parameters. This commitment specifies exactly
-// what transaction should be executed on the external chain, and is used by other
-// validators to verify the executor didn't substitute a different operation.
+// buildExecutionCommitmentFromIntent builds the execution commitment of ONE member: what the intent
+// commits to on chainID - the chain the member settled on - taken from the signed legs on that chain.
 //
-// SECURITY: This is the mechanism that prevents a malicious executor from executing
-// arbitrary transactions instead of the operation specified in the intent.
-//
-// The commitment includes:
-// - Target contract address (CertenAnchorV3)
-// - Function selectors for all 3 execution steps
-// - Expected events (AnchorCreated, ProofVerified, GovernanceExecuted)
-// - Final target address and value (where ETH/tokens go)
-// - Chain ID verification
-// - Bundle ID binding
-func (bv *BFTValidator) buildExecutionCommitmentFromIntent(certenIntent *CertenIntent, bundleID [32]byte) interface{} {
-	// Parse CrossChainData to extract execution parameters
+// It used to describe the retired per-intent workflow (CertenAnchorV3 createAnchor /
+// executeComprehensiveProof / executeWithGovernance and their events) for the intent's FIRST leg,
+// whichever chain the member settled on, on the leg's self-declared anchor or a compiled-in retired one,
+// and to hash that together with "verified": true and the time it was built - and all of it was written
+// back to Accumulate (RB3-F66). The calls a member was settled by are stated by the proof cycle from the
+// chain (pkg/execution settlementSteps); this commitment carries only what the signed intent binds, and
+// its hash is reproducible from the intent.
+func (bv *BFTValidator) buildExecutionCommitmentFromIntent(certenIntent *CertenIntent, bundleID [32]byte, chainID int64) (map[string]interface{}, error) {
 	crossChainData, err := certenIntent.ParseCrossChain()
 	if err != nil {
-		bv.logger.Printf("⚠️ [COMMITMENT] Failed to parse CrossChainData: %v", err)
-		// Return minimal commitment with error flag
-		return map[string]interface{}{
-			"bundleID": hex.EncodeToString(bundleID[:]),
-			"intentID": certenIntent.IntentID,
-			"error":    fmt.Sprintf("failed to parse CrossChainData: %v", err),
-			"verified": false,
+		return nil, fmt.Errorf("crossChainData cannot be read: %w", err)
+	}
+	var member []CCLeg
+	for _, l := range crossChainData.Legs {
+		if l.ChainID == chainID {
+			member = append(member, l)
 		}
 	}
-
-	if len(crossChainData.Legs) == 0 {
-		bv.logger.Printf("⚠️ [COMMITMENT] No legs in CrossChainData")
-		return map[string]interface{}{
-			"bundleID": hex.EncodeToString(bundleID[:]),
-			"intentID": certenIntent.IntentID,
-			"error":    "no legs in CrossChainData",
-			"verified": false,
-		}
+	if len(member) == 0 {
+		return nil, fmt.Errorf("intent %s has no leg on chain %d, the chain its member settled on", certenIntent.IntentID, chainID)
 	}
 
-	// Use first leg (primary execution target)
-	leg := crossChainData.Legs[0]
-
-	// Extract anchor contract address from leg or use environment default
-	anchorContractAddress := leg.AnchorContract.Address
-	if anchorContractAddress == "" {
-		// Fallback to known Sepolia anchor contract
-		anchorContractAddress = "0x4C8F0141cE43a77D6b80276B83AB092DeCEa050B" // CertenAnchorV5
+	// The member's first leg on its chain: the batch path executes the committed executionPayload's
+	// target and value, never a leg's top-level to/amount (batchInputsFromIntentForChain).
+	leg := member[0]
+	finalTarget, finalValue := leg.To, leg.AmountWei
+	if ep := leg.ExecutionPayload; ep != nil && strings.TrimSpace(ep.Target) != "" {
+		finalTarget, finalValue = ep.Target, ep.Value
 	}
-	anchorContract := common.HexToAddress(anchorContractAddress)
-
-	// Extract final target (where ETH/tokens are forwarded to)
-	// Uses parseChainAddress to handle both hex (0x...) and TRON base58 (T...) formats
-	finalTarget := parseChainAddress(leg.To)
-
-	// Parse value
-	finalValueStr := leg.AmountWei
-	if finalValueStr == "" {
-		finalValueStr = "0"
+	if strings.TrimSpace(finalValue) == "" {
+		finalValue = "0"
 	}
 
-	// Compute function selectors (Keccak256 first 4 bytes)
-	// These are fixed for CertenAnchorV3 contract
-	createAnchorSelector := computeSelector("createAnchor(bytes32,bytes32,bytes32,bytes32,uint256)")
-	executeProofSelector := computeSelector("executeComprehensiveProof(bytes32,uint256[8],uint256[2],uint256[2][2],uint256[2],bytes32[],uint8[],bytes)")
-	executeGovSelector := computeSelector("executeWithGovernance(bytes32,address,uint256,bytes)")
-
-	// Compute event signatures
-	anchorCreatedSig := computeEventSignature("AnchorCreated(bytes32,bytes32,bytes32,bytes32,uint256)")
-	proofVerifiedSig := computeEventSignature("ProofVerified(bytes32,bool,uint256)")
-	govExecutedSig := computeEventSignature("GovernanceExecuted(bytes32,address,uint256,bool)")
-
-	// Build comprehensive commitment
 	commitment := map[string]interface{}{
-		// Identity
-		"bundleID": hex.EncodeToString(bundleID[:]),
-		"intentID": certenIntent.IntentID,
-		"txHash":   certenIntent.TransactionHash,
-
-		// Chain info
+		"bundleID":    hex.EncodeToString(bundleID[:]),
+		"intentID":    certenIntent.IntentID,
+		"txHash":      certenIntent.TransactionHash,
 		"targetChain": leg.Chain,
-		"chainID":     leg.ChainID,
+		"chainID":     chainID,
 		"network":     leg.Network,
-
-		// Contract addresses
-		"anchorContract": anchorContract.Hex(),
-		"finalTarget":    finalTarget.Hex(),
-		"finalValue":     finalValueStr,
-
-		// Step 1: createAnchor
-		"step1": map[string]interface{}{
-			"name":          "createAnchor",
-			"contract":      anchorContract.Hex(),
-			"selector":      hex.EncodeToString(createAnchorSelector),
-			"expectedValue": "0", // No ETH transfer
-		},
-
-		// Step 2: executeComprehensiveProof
-		"step2": map[string]interface{}{
-			"name":          "executeComprehensiveProof",
-			"contract":      anchorContract.Hex(),
-			"selector":      hex.EncodeToString(executeProofSelector),
-			"expectedValue": "0", // No ETH transfer
-		},
-
-		// Step 3: executeWithGovernance
-		// NOTE: expectedValue is "0" because the anchor contract handles value transfer internally
-		// The finalValue is transferred FROM the anchor TO the target, not via msg.value
-		"step3": map[string]interface{}{
-			"name":          "executeWithGovernance",
-			"contract":      anchorContract.Hex(),
-			"selector":      hex.EncodeToString(executeGovSelector),
-			"expectedValue": "0", // Anchor contract transfers value internally, not via msg.value
-		},
-
-		// Expected events
-		"expectedEvents": []map[string]interface{}{
-			{
-				"name":     "AnchorCreated",
-				"contract": anchorContract.Hex(),
-				"topic0":   anchorCreatedSig,
-				"indexed":  []string{hex.EncodeToString(bundleID[:])}, // bundleId indexed
-			},
-			{
-				"name":     "ProofVerified",
-				"contract": anchorContract.Hex(),
-				"topic0":   proofVerifiedSig,
-				"indexed":  []string{hex.EncodeToString(bundleID[:])},
-			},
-			{
-				"name":     "GovernanceExecuted",
-				"contract": anchorContract.Hex(),
-				"topic0":   govExecutedSig,
-				"indexed":  []string{hex.EncodeToString(bundleID[:])},
-			},
-		},
-
-		// Verification flags
-		"verified":  true,
-		"createdAt": time.Now().UTC().Format(time.RFC3339),
-
-		// Multi-leg metadata (for write-back aggregation)
+		"finalTarget": parseChainAddress(finalTarget).Hex(),
+		"finalValue":  finalValue,
+		// Multi-leg metadata, for the write-back's per-leg aggregation over the whole intent.
 		"legCount": len(crossChainData.Legs),
 	}
-
-	// Add per-leg summaries for multi-leg write-back
 	if len(crossChainData.Legs) > 1 {
 		var legSummaries []map[string]interface{}
 		for i, l := range crossChainData.Legs {
@@ -3310,14 +3212,15 @@ func (bv *BFTValidator) buildExecutionCommitmentFromIntent(certenIntent *CertenI
 		commitment["legs"] = legSummaries
 	}
 
-	// Compute commitment hash for integrity verification
-	commitmentHash := computeCommitmentHash(commitment)
+	commitmentHash, err := computeCommitmentHash(commitment)
+	if err != nil {
+		return nil, err
+	}
 	commitment["commitmentHash"] = hex.EncodeToString(commitmentHash[:])
 
-	bv.logger.Printf("✅ [COMMITMENT] Built execution commitment for intent %s: anchor=%s, target=%s, value=%s",
-		certenIntent.IntentID, anchorContract.Hex(), finalTarget.Hex(), finalValueStr)
-
-	return commitment
+	bv.logger.Printf("✅ [COMMITMENT] Built execution commitment for intent %s on chain %d: target=%s, value=%s",
+		certenIntent.IntentID, chainID, commitment["finalTarget"], finalValue)
+	return commitment, nil
 }
 
 // parseChainAddress parses an address that may be hex (0x...) or TRON base58 (T...).
@@ -3332,29 +3235,14 @@ func parseChainAddress(addr string) common.Address {
 	return common.HexToAddress(addr)
 }
 
-// computeSelector computes the 4-byte function selector from signature using Keccak256
-// This matches Ethereum's standard for function selectors
-func computeSelector(signature string) []byte {
-	hash := crypto.Keccak256([]byte(signature))
-	return hash[:4]
-}
-
-// computeEventSignature computes the event signature hash using Keccak256
-// This matches Ethereum's standard for event topic0
-func computeEventSignature(signature string) string {
-	hash := crypto.Keccak256([]byte(signature))
-	return hex.EncodeToString(hash)
-}
-
 // computeCommitmentHash computes a deterministic hash of the commitment
-func computeCommitmentHash(commitment map[string]interface{}) [32]byte {
-	// Marshal to JSON for deterministic hashing
+func computeCommitmentHash(commitment map[string]interface{}) ([32]byte, error) {
+	// encoding/json writes map keys sorted, so the same commitment always hashes the same.
 	data, err := json.Marshal(commitment)
 	if err != nil {
-		// Fallback to empty hash on error
-		return [32]byte{}
+		return [32]byte{}, fmt.Errorf("commitment cannot be encoded for its hash: %w", err)
 	}
-	return sha256.Sum256(data)
+	return sha256.Sum256(data), nil
 }
 
 // NOTE: delegateTargetChainExecution removed per Golden Spec - validators cannot send HTTP
