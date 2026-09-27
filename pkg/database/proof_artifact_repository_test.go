@@ -60,7 +60,7 @@ func TestMain(m *testing.M) {
 
 func TestCreateProofArtifact(t *testing.T) {
 	if testDB == nil {
-		t.Skip("Test database not configured")
+		t.Fatal("CERTEN_TEST_DB is required: this test runs against PostgreSQL (a skipped gate is not a green gate)")
 	}
 
 	repo := NewProofArtifactRepository(testDB)
@@ -112,7 +112,7 @@ func TestCreateProofArtifact(t *testing.T) {
 
 func TestGetProofByTxHash(t *testing.T) {
 	if testDB == nil {
-		t.Skip("Test database not configured")
+		t.Fatal("CERTEN_TEST_DB is required: this test runs against PostgreSQL (a skipped gate is not a green gate)")
 	}
 
 	repo := NewProofArtifactRepository(testDB)
@@ -161,7 +161,7 @@ func TestGetProofByTxHash(t *testing.T) {
 
 func TestGetProofsByAccount(t *testing.T) {
 	if testDB == nil {
-		t.Skip("Test database not configured")
+		t.Fatal("CERTEN_TEST_DB is required: this test runs against PostgreSQL (a skipped gate is not a green gate)")
 	}
 
 	repo := NewProofArtifactRepository(testDB)
@@ -222,7 +222,7 @@ func TestGetProofsByAccount(t *testing.T) {
 
 func TestUpdateProofAnchoredSimple(t *testing.T) {
 	if testDB == nil {
-		t.Skip("Test database not configured")
+		t.Fatal("CERTEN_TEST_DB is required: this test runs against PostgreSQL (a skipped gate is not a green gate)")
 	}
 
 	repo := NewProofArtifactRepository(testDB)
@@ -275,7 +275,7 @@ func TestUpdateProofAnchoredSimple(t *testing.T) {
 
 func TestChainedProofLayers(t *testing.T) {
 	if testDB == nil {
-		t.Skip("Test database not configured")
+		t.Fatal("CERTEN_TEST_DB is required: this test runs against PostgreSQL (a skipped gate is not a green gate)")
 	}
 
 	repo := NewProofArtifactRepository(testDB)
@@ -346,7 +346,7 @@ func TestChainedProofLayers(t *testing.T) {
 
 func TestGovernanceProofLevels(t *testing.T) {
 	if testDB == nil {
-		t.Skip("Test database not configured")
+		t.Fatal("CERTEN_TEST_DB is required: this test runs against PostgreSQL (a skipped gate is not a green gate)")
 	}
 
 	repo := NewProofArtifactRepository(testDB)
@@ -425,7 +425,7 @@ func TestGovernanceProofLevels(t *testing.T) {
 
 func TestProofAttestations(t *testing.T) {
 	if testDB == nil {
-		t.Skip("Test database not configured")
+		t.Fatal("CERTEN_TEST_DB is required: this test runs against PostgreSQL (a skipped gate is not a green gate)")
 	}
 
 	repo := NewProofArtifactRepository(testDB)
@@ -484,7 +484,7 @@ func TestProofAttestations(t *testing.T) {
 
 func TestVerificationRecords(t *testing.T) {
 	if testDB == nil {
-		t.Skip("Test database not configured")
+		t.Fatal("CERTEN_TEST_DB is required: this test runs against PostgreSQL (a skipped gate is not a green gate)")
 	}
 
 	repo := NewProofArtifactRepository(testDB)
@@ -542,7 +542,7 @@ func TestVerificationRecords(t *testing.T) {
 
 func TestVerifyArtifactIntegrity(t *testing.T) {
 	if testDB == nil {
-		t.Skip("Test database not configured")
+		t.Fatal("CERTEN_TEST_DB is required: this test runs against PostgreSQL (a skipped gate is not a green gate)")
 	}
 
 	repo := NewProofArtifactRepository(testDB)
@@ -581,7 +581,7 @@ func TestVerifyArtifactIntegrity(t *testing.T) {
 
 func TestQueryProofsWithFilters(t *testing.T) {
 	if testDB == nil {
-		t.Skip("Test database not configured")
+		t.Fatal("CERTEN_TEST_DB is required: this test runs against PostgreSQL (a skipped gate is not a green gate)")
 	}
 
 	repo := NewProofArtifactRepository(testDB)

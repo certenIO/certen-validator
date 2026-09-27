@@ -19,7 +19,7 @@ func loadBinding(t *testing.T) *AccumulateBinding {
 	t.Helper()
 	raw, err := os.ReadFile(vspFixture)
 	if err != nil {
-		t.Skipf("fixture unavailable: %v", err)
+		t.Fatalf("a committed test input is missing (RB3-F83): fixture unavailable: %v", err)
 	}
 	vsp := new(certenproof.ValidatorSetProof)
 	if err := json.Unmarshal(raw, vsp); err != nil {

@@ -295,7 +295,7 @@ func TestMutatedProofPathIsRefused(t *testing.T) {
 	t.Run("truncated", func(t *testing.T) {
 		ev := f.evidence(t, payerA)
 		if len(ev.Proof) == 0 {
-			t.Skip("proof has no steps to truncate")
+			t.Fatal("the fixture's proof has no steps to truncate: the fixture must give it some")
 		}
 		ev.Proof = ev.Proof[:len(ev.Proof)-1]
 		if err := Verify(ev, payerA, advNow, f.keys); err == nil {
@@ -305,7 +305,7 @@ func TestMutatedProofPathIsRefused(t *testing.T) {
 	t.Run("flipped direction", func(t *testing.T) {
 		ev := f.evidence(t, payerA)
 		if len(ev.Proof) == 0 {
-			t.Skip("proof has no steps to flip")
+			t.Fatal("the fixture's proof has no steps to flip: the fixture must give it some")
 		}
 		ev.Proof[0].Right = !ev.Proof[0].Right
 		if err := Verify(ev, payerA, advNow, f.keys); err == nil {

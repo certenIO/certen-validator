@@ -1,3 +1,8 @@
+//go:build live
+
+// Behind the live build tag rather than a skip (00_STANDARD §2, RB3-F83): without the tag it is not
+// compiled; with it, a missing input is a failure, never a pass.
+
 package execution
 
 import (
@@ -17,14 +22,14 @@ import (
 // trie roots to equal the header's. Network-bound, so it runs only when RAW_BLOCK_RPCS is set,
 // e.g.
 //
-//	RAW_BLOCK_RPCS=https://sepolia.base.org,https://sepolia-rollup.arbitrum.io/rpc go test ./pkg/execution -run TestRawBlockRoots -v
+//	RAW_BLOCK_RPCS=https://sepolia.base.org,https://sepolia-rollup.arbitrum.io/rpc go test -tags live ./pkg/execution -run TestRawBlockRoots -v
 //
 // A failure here means an encoder is wrong for that chain and the observer would (correctly)
 // refuse to prove there — which is exactly what to know before shipping.
 func TestRawBlockRootsAgainstLiveChains(t *testing.T) {
 	urls := os.Getenv("RAW_BLOCK_RPCS")
 	if urls == "" {
-		t.Skip("RAW_BLOCK_RPCS not set")
+		t.Fatal("the live build requires RAW_BLOCK_RPCS")
 	}
 	for _, url := range strings.Split(urls, ",") {
 		url = strings.TrimSpace(url)

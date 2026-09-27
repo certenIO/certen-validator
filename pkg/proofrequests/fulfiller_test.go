@@ -24,10 +24,7 @@ func openDB(t *testing.T) (*sql.DB, *database.Repositories) {
 	t.Helper()
 	conn := os.Getenv("CERTEN_TEST_DB")
 	if conn == "" {
-		if os.Getenv("CI") != "" {
-			t.Fatal("CERTEN_TEST_DB is required in CI")
-		}
-		t.Skip("CERTEN_TEST_DB not set — the proof request fulfiller needs PostgreSQL")
+		t.Fatal("CERTEN_TEST_DB is required: the proof request fulfiller needs PostgreSQL (a skipped gate is not a green gate)")
 	}
 	db, err := sql.Open("postgres", conn)
 	if err != nil {

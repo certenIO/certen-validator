@@ -24,7 +24,7 @@ func TestRunnerDatabaseGates(t *testing.T) {
 		if os.Getenv("CI") != "" {
 			t.Fatal("CERTEN_TEST_DB is required in CI")
 		}
-		t.Skip("CERTEN_TEST_DB not configured")
+		t.Fatal("CERTEN_TEST_DB is required: this test runs against PostgreSQL (a skipped gate is not a green gate)")
 	}
 
 	t.Run("fresh install", func(t *testing.T) {
