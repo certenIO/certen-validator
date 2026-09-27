@@ -125,19 +125,32 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 		// layer — it simply waits for a receipt that can never arrive and stalls the whole cycle,
 		// taking Phases 8 and 9 with it. Nothing downstream can recover from that, so it is
 		// rejected here rather than diagnosed later.
-		txHashStrs = dropUnobservableHashes(txHashStrs)
-		if len(txHashStrs) == 0 {
-			return fmt.Errorf("intent %s: no observable transaction for Phase 7 "+
-				"(every candidate hash was empty or zero) — refusing to start a proof cycle that "+
-				"cannot complete", intentID)
-		}
-		fmt.Printf("[UnifiedAdapter] Phase 7 will observe %d transaction(s): %v\n", len(txHashStrs), txHashStrs)
-
 		// The chain the member settled on, stamped by consensus from the chain its batch was flushed
 		// on. There is no default to fall back to: a cycle that names no chain is refused rather
 		// than observed somewhere guessed (RB3-F45).
 		commitMap, _ := commitment.(map[string]interface{})
 		targetChain, _ := commitMap["targetChain"].(string)
+
+		// A refusal from here on is recorded as the member's outcome where the member can be placed
+		// (RB3-F103), not only returned to a caller that can do nothing but log it.
+		refuse := func(err error) error {
+			if targetChain != "" {
+				a.unified.recordStartFailure(ctx, &UnifiedProofCycleRequest{
+					IntentID: intentID, TargetChain: targetChain, CommitmentData: commitMap,
+					AccumulateAccountURL: accumulateAccountURL, AccumulateTxHash: accumulateTxHash, AccumulateBVN: bvn,
+				}, nil, err)
+			}
+			return err
+		}
+
+		txHashStrs = dropUnobservableHashes(txHashStrs)
+		if len(txHashStrs) == 0 {
+			return refuse(fmt.Errorf("intent %s: no observable transaction for Phase 7 "+
+				"(every candidate hash was empty or zero) — refusing to start a proof cycle that "+
+				"cannot complete", intentID))
+		}
+		fmt.Printf("[UnifiedAdapter] Phase 7 will observe %d transaction(s): %v\n", len(txHashStrs), txHashStrs)
+
 		if targetChain == "" {
 			return fmt.Errorf("intent %s: the proof cycle names no target chain - refusing rather than guessing one", intentID)
 		}
@@ -183,7 +196,7 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 		// every member, cadence-batched or not.
 		proofClass, _ := commitMap["proofClass"].(string)
 		if proofClass != string(LaneOnCadence) && proofClass != string(LaneOnDemand) {
-			return fmt.Errorf("intent %s: the proof cycle names no settlement lane (proofClass %q) - refusing rather than labelling it", intentID, proofClass)
+			return refuse(fmt.Errorf("intent %s: the proof cycle names no settlement lane (proofClass %q) - refusing rather than labelling it", intentID, proofClass))
 		}
 
 		req := &UnifiedProofCycleRequest{

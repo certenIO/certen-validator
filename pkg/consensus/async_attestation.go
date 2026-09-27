@@ -458,7 +458,9 @@ func (bv *BFTValidator) RunProofCycle(
 		// built its proof on. It used to be "", leaving the cycle to recompute it (RB3-F89).
 		att.CertenIntent.Partition,
 	); err != nil {
-		bv.logger.Printf("⚠️ [PROOF-CYCLE] Failed to start proof cycle: %v", err)
+		// The orchestrator records the refusal as the member's outcome where the member can be placed
+		// (RB3-F103); this line is the validator's own record of it.
+		bv.logger.Printf("❌ [PROOF-CYCLE] intent %s: proof cycle not started: %v", att.IntentID, err)
 	}
 }
 

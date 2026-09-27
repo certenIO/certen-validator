@@ -456,7 +456,9 @@ func hashChainRepo(config *UnifiedOrchestratorConfig) *database.UnifiedRepositor
 func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedProofCycleRequest) (*UnifiedProofCycleResult, error) {
 	// Validate request
 	if err := o.validateRequest(req); err != nil {
-		return nil, fmt.Errorf("validate request: %w", err)
+		err = fmt.Errorf("validate request: %w", err)
+		o.recordStartFailure(ctx, req, nil, err)
+		return nil, err
 	}
 
 	// Generate cycle ID if not provided
@@ -479,12 +481,14 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 	if targetChain == "" {
 		err := fmt.Errorf("proof cycle %s names no target chain", req.CycleID)
 		result.Error = err.Error()
+		o.recordStartFailure(ctx, req, result, err)
 		return result, err
 	}
 
 	chainStrategy, attestStrategy, err := o.config.Registry.GetStrategiesForChain(targetChain)
 	if err != nil {
 		result.Error = fmt.Sprintf("get strategies: %v", err)
+		o.recordStartFailure(ctx, req, result, fmt.Errorf("get strategies: %w", err))
 		return result, err
 	}
 
@@ -789,6 +793,26 @@ func observedSettlement(obs []*chain.ObservationResult) database.MemberSettlemen
 // as far as it was observed, and its proof cycle failed, with why. A settlement Phase 7 saw mined stays
 // settled (or reverted) whatever failed after it - Phase 7's own contract-call gate included. It used to
 // be recorded "unobserved" for every Phase 7 failure, contradicting a receipt Phase 7 had read (RB3-F65).
+// recordStartFailure records the member outcome of a proof cycle that could not start: not observed,
+// proof cycle failed, with why (RB3-F103). A start failure used to be a log line only, and the member's
+// intent stayed "settling" with nothing recorded to say why. A request that cannot even be placed in its
+// member set is said to be unrecorded, by name.
+func (o *UnifiedOrchestrator) recordStartFailure(ctx context.Context, req *UnifiedProofCycleRequest, result *UnifiedProofCycleResult, err error) {
+	if req == nil {
+		fmt.Printf("❌ [LIFECYCLE] a proof cycle with no request could not start (%v); nothing identifies its member\n", err)
+		return
+	}
+	if result == nil {
+		result = &UnifiedProofCycleResult{CycleID: req.CycleID}
+	}
+	cycle := &activeCycle{CycleID: req.CycleID, Request: req, Result: result}
+	reason := fmt.Sprintf("proof cycle not started: %v", err)
+	if rErr := o.recordMemberOutcome(ctx, cycle, database.MemberSettlementUnobserved, database.MemberProofCycleFailed, reason); rErr != nil {
+		fmt.Printf("❌ [LIFECYCLE] intent %s: its proof cycle could not start (%v) and that could not be recorded: %v\n",
+			req.IntentID, err, rErr)
+	}
+}
+
 func (o *UnifiedOrchestrator) recordPhaseFailure(ctx context.Context, cycle *activeCycle, phase int, err error) {
 	reason := fmt.Sprintf("phase %d failed: %v", phase, err)
 	cycle.Result.Error = reason
