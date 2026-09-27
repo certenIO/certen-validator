@@ -30,7 +30,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/google/uuid"
 
-	"github.com/certen/independant-validator/pkg/accumulate"
 	attestation "github.com/certen/independant-validator/pkg/attestation/strategy"
 	chain "github.com/certen/independant-validator/pkg/chain/strategy"
 	// One vocabulary for the settlement tri-state, not two. pkg/execution already
@@ -125,13 +124,9 @@ type ChainedProofGenerator interface {
 	GenerateChainedProofForTx(ctx context.Context, accountURL, txHash, bvn string) (*ChainedProofResult, error)
 }
 
-// AccumulateQueryClient interface for querying transaction governance data
-// This provides read-only access to Accumulate transaction data for extracting
-// key page M-of-N threshold values (signatureBooks.pages.signer.acceptThreshold)
+// AccumulateQueryClient is the orchestrator's read-only access to Accumulate. Key page terms are not
+// read through it: they come from the proven G1 result (keyPageTermsFromG1).
 type AccumulateQueryClient interface {
-	// GetTransactionGovernanceData queries a transaction and extracts key page governance data
-	// Returns ThresholdM (signatures collected) and ThresholdN (signatures required)
-	GetTransactionGovernanceData(ctx context.Context, txHash, accountURL string) (*accumulate.TransactionGovernanceData, error)
 	// GetIntentBlobs fetches the 4 signed intent blobs (intentData, crossChainData,
 	// governanceData, replayData) so a peer can INDEPENDENTLY re-derive committed effects
 	// from the user-signed intent (RB-SEC-1).
@@ -245,11 +240,6 @@ type UnifiedProofCycleRequest struct {
 	AccumulateAccountURL string `json:"accumulate_account_url,omitempty"` // Account URL where intent was created
 	AccumulateTxHash     string `json:"accumulate_tx_hash,omitempty"`     // Transaction hash on Accumulate
 	AccumulateBVN        string `json:"accumulate_bvn,omitempty"`         // BVN partition (bvn0, bvn1, bvn2)
-
-	// Key page governance data (M of N multi-sig threshold)
-	// These come from the Accumulate key page that authorized the transaction
-	KeyPageThreshold int `json:"key_page_threshold,omitempty"` // M - required signatures
-	KeyPageKeyCount  int `json:"key_page_key_count,omitempty"` // N - total keys on page
 
 	// CommitmentData holds the full commitment map from BFT consensus
 	// Contains step selectors, anchor contract, intent hash, chain info, expected events
@@ -2766,27 +2756,6 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 
 	// 2b. Create governance_proof_levels entries (G0, G1, G2)
 	isAnchored := len(result.ObservationResults) > 0
-	sigCount := len(result.Attestations)
-
-	// Query transaction governance data (M-of-N key page threshold) from Accumulate
-	// This extracts signatureBooks[].pages[].signer.acceptThreshold and signatures count
-	var txGovData *accumulate.TransactionGovernanceData
-	if o.config.AccumulateQueryClient != nil && req.AccumulateTxHash != "" && req.AccumulateAccountURL != "" {
-		govQueryCtx, govCancel := context.WithTimeout(ctx, 10*time.Second)
-		var err error
-		txGovData, err = o.config.AccumulateQueryClient.GetTransactionGovernanceData(
-			govQueryCtx,
-			req.AccumulateTxHash,
-			req.AccumulateAccountURL,
-		)
-		govCancel()
-		if err != nil {
-			fmt.Printf("Warning: failed to query transaction governance data: %v\n", err)
-		} else if txGovData != nil {
-			fmt.Printf("Retrieved transaction governance data: ThresholdM=%d, ThresholdN=%d, Authority=%s\n",
-				txGovData.ThresholdM, txGovData.ThresholdN, txGovData.AuthorityURL)
-		}
-	}
 
 	// STAGE 2 — the real governance results, recovered once for all three levels.
 	//
@@ -2800,6 +2769,9 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 			"level written below is verdict flags only and is summary-only by construction",
 			proofArtifact.ProofID)
 	}
+
+	// What the proven G1 result establishes about the key page that authorised the intent (RB3-F69).
+	keyPage := keyPageTermsFromG1(govIn.ResultFor("G1"))
 
 	// The highest governance level actually written, and its evidence: the authority proof of the
 	// four-component Certen proof.
@@ -2823,49 +2795,8 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 			}
 		}
 
-		// Use key page threshold values from transaction governance data (M of N multi-sig)
-		// These come from signatureBooks in the Accumulate transaction query
-		var thresholdM, thresholdN *int
-		var authorityURL *string
-		var keyPageURL *string
-
-		if txGovData != nil {
-			// Use actual values from the transaction's signatureBooks
-			if txGovData.ThresholdM > 0 {
-				m := txGovData.ThresholdM
-				thresholdM = &m
-			}
-			if txGovData.ThresholdN > 0 {
-				n := txGovData.ThresholdN
-				thresholdN = &n
-			}
-			if txGovData.AuthorityURL != "" {
-				authorityURL = &txGovData.AuthorityURL
-			}
-			if txGovData.KeyPageURL != "" {
-				keyPageURL = &txGovData.KeyPageURL
-			}
-		} else {
-			// Fallback to request values if transaction query failed
-			if req.KeyPageThreshold > 0 {
-				m := req.KeyPageThreshold
-				thresholdM = &m
-			}
-			if req.KeyPageKeyCount > 0 {
-				n := req.KeyPageKeyCount
-				thresholdN = &n
-			}
-			// Authority URL from Accumulate account
-			if req.AccumulateAccountURL != "" {
-				authURL := req.AccumulateAccountURL
-				if idx := strings.LastIndex(authURL, "/"); idx > 0 {
-					authURL = authURL[:idx]
-				}
-				authorityURL = &authURL
-			}
-		}
-		// Use keyPageURL for logging (avoid unused variable warning)
-		_ = keyPageURL
+		// The key page's M-of-N and its book from the proven G1 result (RB3-F69).
+		thresholdM, thresholdN, authorityURL := keyPage.Threshold, keyPage.Keys, keyPage.Authority
 
 		// STAGE 2 — the flags stay, EXACTLY as they were, and the governance proof
 		// is added beside them.
@@ -2901,7 +2832,7 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 			IsAnchored:        &isAnchored,
 			ThresholdM:        thresholdM,
 			ThresholdN:        thresholdN,
-			SignatureCount:    &sigCount,
+			SignatureCount:    keyPage.Signatures,
 			AuthorityURL:      authorityURL,
 			LevelJSON:         g0JSON,
 			Verified:          &g0Verified,
@@ -2917,41 +2848,8 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 
 	// G1 - Governance Correctness (created if we have governance root and attestations)
 	if req.GovernanceRoot != [32]byte{} {
-		// Use key page threshold values from transaction governance data (M of N multi-sig)
-		var thresholdM, thresholdN *int
-		var authorityURL string
-
-		if txGovData != nil {
-			// Use actual values from the transaction's signatureBooks
-			if txGovData.ThresholdM > 0 {
-				m := txGovData.ThresholdM
-				thresholdM = &m
-			}
-			if txGovData.ThresholdN > 0 {
-				n := txGovData.ThresholdN
-				thresholdN = &n
-			}
-			if txGovData.AuthorityURL != "" {
-				authorityURL = txGovData.AuthorityURL
-			}
-		}
-
-		// Fallback to request values if transaction query didn't provide them
-		if thresholdM == nil && req.KeyPageThreshold > 0 {
-			m := req.KeyPageThreshold
-			thresholdM = &m
-		}
-		if thresholdN == nil && req.KeyPageKeyCount > 0 {
-			n := req.KeyPageKeyCount
-			thresholdN = &n
-		}
-		if authorityURL == "" {
-			// Derive authority URL from Accumulate account URL
-			authorityURL = req.AccumulateAccountURL
-			if idx := strings.LastIndex(authorityURL, "/"); idx > 0 {
-				authorityURL = authorityURL[:idx]
-			}
-		}
+		// The key page's M-of-N and its book from the proven G1 result (RB3-F69).
+		thresholdM, thresholdN, authorityURL := keyPage.Threshold, keyPage.Keys, keyPage.Authority
 
 		// STAGE 2. G1 is the product's central claim — "did the right key page
 		// authorize this" — and until now it was persisted as threshold_met, a
@@ -2977,11 +2875,11 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 			ProofID:        proofArtifact.ProofID,
 			GovLevel:       database.GovLevelG1,
 			LevelName:      "G1 - Governance Correctness",
-			AuthorityURL:   &authorityURL,
+			AuthorityURL:   authorityURL,
 			ThresholdM:     thresholdM,
 			ThresholdN:     thresholdN,
 			IsAnchored:     &isAnchored,
-			SignatureCount: &sigCount,
+			SignatureCount: keyPage.Signatures,
 			LevelJSON:      g1JSON,
 			Verified:       &g1Verified,
 		}
@@ -2999,33 +2897,8 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 		outcomeType := "execution_complete"
 		bindingEnforced := true
 
-		// Use key page threshold values from transaction governance data (M of N multi-sig)
-		var thresholdM, thresholdN *int
-		var authorityURL *string
-
-		if txGovData != nil {
-			if txGovData.ThresholdM > 0 {
-				m := txGovData.ThresholdM
-				thresholdM = &m
-			}
-			if txGovData.ThresholdN > 0 {
-				n := txGovData.ThresholdN
-				thresholdN = &n
-			}
-			if txGovData.AuthorityURL != "" {
-				authorityURL = &txGovData.AuthorityURL
-			}
-		} else {
-			// Fallback to request values
-			if req.KeyPageThreshold > 0 {
-				m := req.KeyPageThreshold
-				thresholdM = &m
-			}
-			if req.KeyPageKeyCount > 0 {
-				n := req.KeyPageKeyCount
-				thresholdN = &n
-			}
-		}
+		// The key page's M-of-N from the proven G1 result (RB3-F69).
+		thresholdM, thresholdN, authorityURL := keyPage.Threshold, keyPage.Keys, keyPage.Authority
 
 		// STAGE 2: flags kept, real G2Result and receipt path added beside them.
 		g2Flags := map[string]interface{}{
@@ -3052,7 +2925,7 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 			ThresholdN:      thresholdN,
 			AuthorityURL:    authorityURL,
 			IsAnchored:      &isAnchored,
-			SignatureCount:  &sigCount,
+			SignatureCount:  keyPage.Signatures,
 			OutcomeType:     &outcomeType,
 			OutcomeHash:     req.OperationCommitment[:],
 			BindingEnforced: &bindingEnforced,
@@ -3809,46 +3682,10 @@ func (o *UnifiedOrchestrator) populateRelatedTablesForBatchTx(
 		blockHeight := &bh
 		anchorHeight := &bh
 
-		// Extract threshold values from governance proof if available
-		// These represent the Accumulate key page M-of-N signature requirements
-		var thresholdM, thresholdN, signatureCount *int
-		var authorityURL *string
-
-		if len(batchTx.GovProof) > 0 {
-			var govProof struct {
-				RequiredThreshold uint64 `json:"required_threshold"`
-				AchievedWeight    uint64 `json:"achieved_weight"`
-				AuthorityURL      string `json:"authority_url"`
-				KeyPageURL        string `json:"key_page_url"`
-				Signatures        []struct {
-					Weight uint64 `json:"weight"`
-				} `json:"signatures"`
-			}
-			if err := json.Unmarshal(batchTx.GovProof, &govProof); err == nil {
-				// ThresholdM = required threshold (minimum weight needed)
-				if govProof.RequiredThreshold > 0 {
-					m := int(govProof.RequiredThreshold)
-					thresholdM = &m
-				}
-				// SignatureCount = number of signatures collected
-				sigCount := len(govProof.Signatures)
-				if sigCount > 0 {
-					signatureCount = &sigCount
-				}
-				// ThresholdN = total possible weight (sum of all key weights, or use signature count as proxy)
-				// In Accumulate, the total weight depends on key page configuration
-				// For now, use achieved weight as a proxy if available
-				if govProof.AchievedWeight > 0 {
-					n := int(govProof.AchievedWeight)
-					thresholdN = &n
-				} else if sigCount > 0 {
-					thresholdN = &sigCount
-				}
-				if govProof.AuthorityURL != "" {
-					authorityURL = &govProof.AuthorityURL
-				}
-			}
-		}
+		// The key page's M-of-N, its verified signatures and its book, from this transaction's own proven
+		// G1 result (RB3-F69); nil where that proof does not establish them.
+		batchKeyPage := keyPageTermsFromG1(batchTx.GovProof)
+		thresholdM, thresholdN, signatureCount, authorityURL := batchKeyPage.Threshold, batchKeyPage.Keys, batchKeyPage.Signatures, batchKeyPage.Authority
 
 		// STAGE 2 — the SECOND G-level writer, through the SAME helper.
 		//

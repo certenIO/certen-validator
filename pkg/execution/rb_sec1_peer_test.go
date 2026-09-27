@@ -10,7 +10,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 
-	"github.com/certen/independant-validator/pkg/accumulate"
 	attestation "github.com/certen/independant-validator/pkg/attestation/strategy"
 )
 
@@ -23,9 +22,6 @@ type mockQueryClient struct {
 	err   error
 }
 
-func (m *mockQueryClient) GetTransactionGovernanceData(ctx context.Context, txHash, accountURL string) (*accumulate.TransactionGovernanceData, error) {
-	return nil, nil
-}
 func (m *mockQueryClient) GetIntentBlobs(ctx context.Context, txHash, accountURL string) ([][]byte, error) {
 	return m.blobs, m.err
 }
