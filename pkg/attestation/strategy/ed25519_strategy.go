@@ -17,7 +17,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -335,14 +334,7 @@ func (s *Ed25519Strategy) ValidatorIndex() uint32 {
 
 // ComputeMessageHash computes the canonical hash of an attestation message
 func (s *Ed25519Strategy) ComputeMessageHash(message *AttestationMessage) ([32]byte, error) {
-	// Serialize message to canonical JSON
-	data, err := json.Marshal(message)
-	if err != nil {
-		return [32]byte{}, fmt.Errorf("marshal message: %w", err)
-	}
-
-	// SHA-256 hash
-	return sha256.Sum256(data), nil
+	return message.Hash()
 }
 
 // =============================================================================

@@ -112,9 +112,9 @@ func TestShortfallIsWrittenBackAsItsOutcome(t *testing.T) {
 	c := memberCycle("i-shortfall", "84532", []int64{84532}, 1, obs)
 	c.EffectsShortfall = shortfallClaim()
 	o := &UnifiedOrchestrator{config: &UnifiedOrchestratorConfig{}, resultChains: map[string]*ResultHashChain{}}
-	bundle := o.buildAttestationBundleFromCycle(c)
-	if bundle == nil || bundle.Result == nil {
-		t.Fatal("no bundle")
+	bundle, _, err := o.buildAttestationBundleFromCycle(c)
+	if err != nil || bundle == nil || bundle.Result == nil {
+		t.Fatalf("no bundle: %v", err)
 	}
 	if bundle.Result.Outcome != ResultOutcomeEffectsNotProven || bundle.Result.OutcomeReason == "" {
 		t.Fatalf("outcome %q (%q); want %q with the missing effects named", bundle.Result.Outcome, bundle.Result.OutcomeReason, ResultOutcomeEffectsNotProven)

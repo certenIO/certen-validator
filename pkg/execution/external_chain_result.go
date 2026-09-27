@@ -664,8 +664,9 @@ func canonicalJSONMarshal(v interface{}) []byte {
 	// Convert to a map for consistent handling
 	data, err := json.Marshal(v)
 	if err != nil {
-		// Fallback: empty hash on error
-		return []byte{}
+		// Hashing an empty input instead would give every unencodable result the same identity
+		// (RB3-F81). Callers pass fixed-shape maps of encodable values; an error here is a defect.
+		panic(fmt.Sprintf("canonical JSON of a result: %v", err))
 	}
 
 	// Unmarshal and re-marshal with sorted keys

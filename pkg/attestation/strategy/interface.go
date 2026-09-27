@@ -12,6 +12,9 @@ package strategy
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -150,12 +153,15 @@ type NonSettlementClaim struct {
 
 // Hash computes the canonical hash of the attestation message
 // This is what validators actually sign
-func (m *AttestationMessage) Hash() [32]byte {
-	// Import is avoided to keep interface clean
-	// Implementation will use commitment.HashCanonical
-	var hash [32]byte
-	// Hash computation delegated to strategy implementations
-	return hash
+//
+// It is SHA-256 over the message's JSON encoding - what every strategy signs (ComputeMessageHash
+// delegates here). It used to return a zero hash, "delegated to strategy implementations" (RB3-F81).
+func (m *AttestationMessage) Hash() ([32]byte, error) {
+	data, err := json.Marshal(m)
+	if err != nil {
+		return [32]byte{}, fmt.Errorf("marshal message: %w", err)
+	}
+	return sha256.Sum256(data), nil
 }
 
 // =============================================================================

@@ -1932,21 +1932,28 @@ func (o *UnifiedOrchestrator) executePhase9(ctx context.Context, cycle *activeCy
 		return fmt.Errorf("write-back cannot state what was executed: %w", proofCtx.StepsError)
 	}
 
-	// Build attestation bundle from cycle result
-	bundle := o.buildAttestationBundleFromCycle(cycle)
-	if bundle == nil {
-		return fmt.Errorf("failed to build attestation bundle")
+	// Build the attestation bundle and persist its hash chain link under one lock: the link takes the
+	// next sequence number only if it is stored (RB3-F82).
+	o.resultChainsLock.Lock()
+	bundle, rollback, err := o.buildAttestationBundleFromCycle(cycle)
+	if err != nil {
+		o.resultChainsLock.Unlock()
+		return fmt.Errorf("build attestation bundle: %w", err)
 	}
-	cycle.PrimaryResultHash = bundle.Result.ResultHash
 	if cycle.NonSettlement != nil {
 		// A non-settlement has no transaction and no chain-execution row; its link has a table of its own.
-		if err := persistNonSettlementChainLink(ctx, hashChainRepo(o.config), o.config.ValidatorID, cycle, bundle.Result); err != nil {
-			return fmt.Errorf("persist result hash chain link: %w", err)
-		}
-	} else if err := persistResultHashChainLink(ctx, hashChainRepo(o.config), cycle.Result.ChainExecutionIDs,
-		len(cycle.Result.ObservationResults), bundle.Result); err != nil {
+		err = persistNonSettlementChainLink(ctx, hashChainRepo(o.config), o.config.ValidatorID, cycle, bundle.Result)
+	} else {
+		err = persistResultHashChainLink(ctx, hashChainRepo(o.config), cycle.Result.ChainExecutionIDs,
+			len(cycle.Result.ObservationResults), bundle.Result)
+	}
+	if err != nil {
+		rollback()
+		o.resultChainsLock.Unlock()
 		return fmt.Errorf("persist result hash chain link: %w", err)
 	}
+	o.resultChainsLock.Unlock()
+	cycle.PrimaryResultHash = bundle.Result.ResultHash
 
 	// Enrich bundle with per-leg data for multi-leg intents
 	if cycle.Request.CommitmentData != nil {
@@ -2097,23 +2104,41 @@ func (o *UnifiedOrchestrator) buildComprehensiveProofContext(cycle *activeCycle)
 }
 
 // buildAttestationBundleFromCycle creates an AttestationBundle from the cycle result
-func (o *UnifiedOrchestrator) buildAttestationBundleFromCycle(cycle *activeCycle) *AttestationBundle {
+//
+// It binds the result into its chain's result hash chain. The caller holds resultChainsLock until the
+// link is persisted and calls rollback if it is not, so a link that was never stored does not consume a
+// sequence number (RB3-F82).
+func (o *UnifiedOrchestrator) buildAttestationBundleFromCycle(cycle *activeCycle) (*AttestationBundle, func(), error) {
 	result := cycle.Result
 
 	if len(result.ObservationResults) == 0 {
-		return nil
+		return nil, nil, fmt.Errorf("the cycle observed nothing to attest")
+	}
+	if result.ChainID == "" {
+		return nil, nil, fmt.Errorf("the result names no chain")
 	}
 
 	// Get the primary observation result
 	obs := result.ObservationResults[0]
 
+	// A non-settlement has no transaction: its hash is zero, stated as such beside its outcome. Every
+	// other hash is the chain's own 32 bytes - never a stand-in computed from whatever string was there.
+	txHash, err := hash32(obs.TxHash, cycle.NonSettlement != nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("settlement transaction: %w", err)
+	}
+	blockHash, err := hash32(obs.BlockHash, false)
+	if err != nil {
+		return nil, nil, fmt.Errorf("block: %w", err)
+	}
+
 	// Build external chain result
 	extResult := &ExternalChainResult{
 		Chain:               getNetworkName(result.ChainID),
 		ChainID:             parseChainIDInt(result.ChainID),
-		TxHash:              parseHash(obs.TxHash),
+		TxHash:              txHash,
 		BlockNumber:         parseBigInt(obs.BlockNumber),
-		BlockHash:           parseHash(obs.BlockHash),
+		BlockHash:           blockHash,
 		Status:              uint64(obs.Status), // 1=success, 0=revert
 		StateRoot:           obs.StateRoot,
 		TransactionsRoot:    obs.TransactionsRoot,
@@ -2156,36 +2181,37 @@ func (o *UnifiedOrchestrator) buildAttestationBundleFromCycle(cycle *activeCycle
 	// Compute anchor proof hash from the MerkleRoot (L3→L4 binding)
 	anchorProofHash := cycle.Request.MerkleRoot
 
-	// Apply result hash chain tracking (sequence_number, previous_result_hash, anchor_proof_hash)
-	o.resultChainsLock.Lock()
+	// Apply result hash chain tracking (sequence_number, previous_result_hash, anchor_proof_hash). The
+	// caller holds resultChainsLock.
 	chainKey := result.ChainID
-	if chainKey == "" {
-		chainKey = "default"
-	}
 	hashChain, exists := o.resultChains[chainKey]
 	if !exists {
 		hashChain = NewResultHashChain(chainKey, anchorProofHash)
 		o.resultChains[chainKey] = hashChain
 	}
-	_ = hashChain.AddResult(extResult) // Sets PreviousResultHash, AnchorProofHash, SequenceNumber
-	o.resultChainsLock.Unlock()
+	before := *hashChain
+	if err := hashChain.AddResult(extResult); err != nil { // Sets PreviousResultHash, AnchorProofHash, SequenceNumber
+		return nil, nil, fmt.Errorf("result hash chain: %w", err)
+	}
+	rollback := func() {
+		if exists {
+			*hashChain = before
+		} else {
+			delete(o.resultChains, chainKey)
+		}
+	}
 
 	// Build aggregated attestation
 	var agg *AggregatedAttestation
 	if result.AggregatedAttestation != nil {
-		validatorCount := result.AggregatedAttestation.ParticipantCount
-		if result.AggregatedAttestation.TotalWeight > 0 {
-			validatorCount = int(result.AggregatedAttestation.TotalWeight)
-		}
-		achievedWeight := int64(result.AggregatedAttestation.AchievedWeight)
-		if achievedWeight == 0 {
-			achievedWeight = int64(result.AggregatedAttestation.ParticipantCount)
-		}
+		// Counts as counts and voting power as voting power (RB3-F81): the validator count used to be the
+		// total WEIGHT, and a zero achieved weight was replaced by the participant COUNT.
 		agg = &AggregatedAttestation{
 			MessageHash:        result.AggregatedAttestation.MessageHash,
 			AggregateSignature: result.AggregatedAttestation.AggregatedSignature,
-			ValidatorCount:     validatorCount,
-			SignedVotingPower:  big.NewInt(achievedWeight),
+			ValidatorCount:     result.AggregatedAttestation.ParticipantCount,
+			SignedVotingPower:  new(big.Int).SetUint64(uint64(result.AggregatedAttestation.AchievedWeight)),
+			TotalVotingPower:   new(big.Int).SetUint64(uint64(result.AggregatedAttestation.TotalWeight)),
 			ThresholdMet:       result.AggregatedAttestation.ThresholdMet,
 			Finalized:          result.AggregatedAttestation.ThresholdMet && result.AggregatedAttestation.Verified,
 			FinalizedAt:        time.Now().UTC(),
@@ -2197,7 +2223,21 @@ func (o *UnifiedOrchestrator) buildAttestationBundleFromCycle(cycle *activeCycle
 		ResultHash: obs.ResultHash,
 		Result:     extResult,
 		Aggregated: agg,
+	}, rollback, nil
+}
+
+// hash32 decodes a chain's 32-byte hash from its hex form. Empty is the zero hash only where there is,
+// by definition, nothing to name (a non-settlement's transaction).
+func hash32(s string, emptyIsNone bool) (common.Hash, error) {
+	t := strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(s), "0x"), "0X")
+	if t == "" && emptyIsNone {
+		return common.Hash{}, nil
 	}
+	b, err := hex.DecodeString(t)
+	if err != nil || len(b) != 32 {
+		return common.Hash{}, fmt.Errorf("%q is not a 32-byte hash", s)
+	}
+	return common.BytesToHash(b), nil
 }
 
 // enrichBundleWithLegData adds per-leg proof data to the bundle for multi-leg intents.
@@ -2293,26 +2333,6 @@ func (o *UnifiedOrchestrator) enrichBundleWithLegData(bundle *AttestationBundle,
 	bundle.MultiLegResultHash = ComputeMultiLegResultHash(bundle.LegResults)
 	fmt.Printf("[MULTI-LEG] Recorded %d leg result(s) on chain %d for intent %s (hash=%x)\n",
 		len(bundle.LegResults), cycleChainID, cycle.Request.IntentID, bundle.MultiLegResultHash[:8])
-}
-
-// parseHash parses a hex string to common.Hash.
-// If hex decoding fails (e.g., NEAR base58 hashes), it falls back to
-// SHA256-hashing the raw string to produce a deterministic 32-byte value.
-func parseHash(s string) common.Hash {
-	if len(s) >= 2 && s[:2] == "0x" {
-		s = s[2:]
-	}
-	b, err := hex.DecodeString(s)
-	if err != nil || len(b) == 0 {
-		// Non-hex hash (e.g., NEAR base58): SHA256 the raw string for a deterministic common.Hash
-		h := sha256.Sum256([]byte(s))
-		return common.BytesToHash(h[:])
-	}
-	var h common.Hash
-	if len(b) >= 32 {
-		copy(h[:], b[:32])
-	}
-	return h
 }
 
 // parseBigInt parses a uint64 to *big.Int
