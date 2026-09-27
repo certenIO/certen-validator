@@ -292,6 +292,11 @@ func (s *BatchStack) flushChainPeriods(
 	if logf == nil {
 		logf = func(string, ...interface{}) {}
 	}
+	// Nothing is sent while the queue is not on disk: a restart would forget the settlement.
+	if err := s.Mempool.Durable(); err != nil {
+		logf("❌ [BATCH] chain %d: not flushing: %v", chainID, err)
+		return
+	}
 	// Strictly older than the current period: a period still accepting members must not be
 	// formed, or two validators at different heights inside it derive different trees.
 	periods := s.Mempool.PendingPeriods(chainID, periodBlocks, currentPeriodStart)

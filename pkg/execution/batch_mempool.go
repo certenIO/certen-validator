@@ -339,6 +339,9 @@ type BatchMempool struct {
 	// intents the round has already reported as batch_queued. Nil disables persistence and
 	// leaves only the discovery watermark rewind as the recovery path.
 	store *BatchMempoolStore
+	// unsaved is the last snapshot write's failure, nil once the disk holds the queue. While it is set
+	// nothing new is sent (Durable), so no settlement happens that a restart could forget.
+	unsaved error
 }
 
 // BatchLane identifies which settlement mechanism owns a member.
@@ -358,7 +361,7 @@ const (
 //
 // Called once during wiring, BEFORE the enqueuer is published, so a restored member cannot race
 // a freshly discovered one.
-func (m *BatchMempool) SetStore(store *BatchMempoolStore, logf func(string, ...interface{})) {
+func (m *BatchMempool) SetStore(store *BatchMempoolStore, logf func(string, ...interface{})) error {
 	if logf == nil {
 		logf = func(string, ...interface{}) {}
 	}
@@ -367,34 +370,54 @@ func (m *BatchMempool) SetStore(store *BatchMempoolStore, logf func(string, ...i
 	m.mu.Unlock()
 
 	if store == nil {
-		return
+		return nil
 	}
 	n, err := store.Load(m)
 	if err != nil {
-		logf("[BATCH-STORE] restore failed: %v", err)
-		return
+		return fmt.Errorf("restore the queued batch members: %w", err)
 	}
 	if n > 0 {
 		logf("[BATCH-STORE] restored %d queued batch member(s) from the previous run; they keep "+
 			"their original CommitHeight, so they land in exactly the period they would have", n)
 	}
+	return nil
 }
 
-// persist writes the queue. Caller must NOT hold m.mu — Save takes it.
-func (m *BatchMempool) persist() {
+// persist writes the queue and returns the write's failure. Caller must NOT hold m.mu — Save takes it.
+//
+// A failed write used to be logged as harmless - "re-derivation remains available" - but re-deriving
+// from Accumulate cannot recover a member's anchor, settlement transactions or nonce. The failure is now
+// kept (unsaved) and nothing is sent until a write succeeds (RB3 sweep).
+func (m *BatchMempool) persist() error {
 	m.mu.Lock()
 	st := m.store
 	m.mu.Unlock()
 	if st == nil {
-		return
+		return nil
 	}
-	if err := st.Save(m); err != nil {
-		// A failed write is not fatal: the in-memory queue is still correct and the discovery
-		// rewind remains as a backstop. Losing the process now costs a re-derivation, not an
-		// intent.
-		st.logf("[BATCH-STORE] snapshot write failed (%v); the queue is intact in memory and "+
-			"re-derivation remains available", err)
+	err := st.Save(m)
+	m.mu.Lock()
+	m.unsaved = err
+	m.mu.Unlock()
+	if err != nil {
+		st.logf("❌ [BATCH-STORE] snapshot write failed (%v); nothing is sent until the queue is on disk", err)
 	}
+	return err
+}
+
+// Durable is nil when the disk holds the queue. After a failed write it tries the write again and
+// reports the result: the senders call it before sending anything.
+func (m *BatchMempool) Durable() error {
+	m.mu.Lock()
+	unsaved := m.unsaved
+	m.mu.Unlock()
+	if unsaved == nil {
+		return nil
+	}
+	if err := m.persist(); err != nil {
+		return fmt.Errorf("the batch queue is not on disk: %w", err)
+	}
+	return nil
 }
 
 func NewBatchMempool(cfg BatchMempoolConfig) *BatchMempool {
@@ -418,7 +441,13 @@ func (m *BatchMempool) Add(p *PendingBatchIntent) error {
 	if err := m.add(p); err != nil {
 		return err
 	}
-	m.persist()
+	if err := m.persist(); err != nil {
+		// Not queued: a member the disk does not hold would be lost by a restart after it was reported
+		// queued. Taken back, and refused as this validator's outage - retried, never held against the
+		// intent.
+		m.dropMembers([]*PendingBatchIntent{p})
+		return fmt.Errorf("%w: intent %s on chain %d could not be persisted: %v", consensus.ErrBatchUnavailable, p.IntentID, p.ChainID, err)
+	}
 	return nil
 }
 

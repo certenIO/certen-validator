@@ -202,6 +202,11 @@ func (s *OnDemandSubmitter) Run(ctx context.Context) {
 
 // pass walks every queued member on every configured chain.
 func (s *OnDemandSubmitter) pass(ctx context.Context) {
+	// Nothing is sent while the queue is not on disk: a restart would forget the settlement.
+	if err := s.cfg.Stack.Mempool.Durable(); err != nil {
+		s.cfg.Logf("❌ [OD] not submitting: %v", err)
+		return
+	}
 	for _, chainID := range s.cfg.Stack.Resolver.Chains() {
 		for _, member := range s.cfg.Stack.Mempool.PendingOnDemand(chainID) {
 			if ctx.Err() != nil {

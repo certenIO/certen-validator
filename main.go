@@ -1546,7 +1546,9 @@ func startValidator(
 	if mErr != nil {
 		return nil, nil, fmt.Errorf("batch path: mempool persistence at %s unavailable - a restart would lose queued members: %w", storePath, mErr)
 	}
-	stack.Mempool.SetStore(mstore, log.Printf)
+	if err := stack.Mempool.SetStore(mstore, log.Printf); err != nil {
+		return nil, nil, fmt.Errorf("batch path: %w (the file is left in place; resolve it before restarting)", err)
+	}
 	log.Printf("💾 [BATCH] Mempool persisted at %s", storePath)
 	// Drain first, enqueue second.
 	go stack.RunFlushLoop(

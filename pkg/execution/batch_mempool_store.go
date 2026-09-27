@@ -181,18 +181,24 @@ func (s *BatchMempoolStore) Save(m *BatchMempool) error {
 	var out []persistedMember
 	for _, members := range m.pool {
 		for _, p := range members {
-			if pm, ok := s.encodeMember(p, LaneOnCadence); ok {
-				out = append(out, pm)
+			pm, err := s.encodeMember(p, LaneOnCadence)
+			if err != nil {
+				m.mu.Unlock()
+				return fmt.Errorf("encoding batch mempool: %w", err)
 			}
+			out = append(out, pm)
 		}
 	}
 	// On-demand members live in their own index and must be snapshotted too, or a restart would
 	// strand exactly the intents that were meant to settle fastest.
 	for _, byOp := range m.onDemand {
 		for _, p := range byOp {
-			if pm, ok := s.encodeMember(p, LaneOnDemand); ok {
-				out = append(out, pm)
+			pm, err := s.encodeMember(p, LaneOnDemand)
+			if err != nil {
+				m.mu.Unlock()
+				return fmt.Errorf("encoding batch mempool: %w", err)
 			}
+			out = append(out, pm)
 		}
 	}
 	m.mu.Unlock()
@@ -231,9 +237,9 @@ func (s *BatchMempoolStore) Save(m *BatchMempool) error {
 //
 // Shared by both lanes so a field added to one can never be silently missing from the other —
 // a member restored without its legs or its attestation is a member that cannot settle.
-func (s *BatchMempoolStore) encodeMember(p *PendingBatchIntent, lane BatchLane) (persistedMember, bool) {
+func (s *BatchMempoolStore) encodeMember(p *PendingBatchIntent, lane BatchLane) (persistedMember, error) {
 	if p == nil {
-		return persistedMember{}, false
+		return persistedMember{}, fmt.Errorf("a nil member in the %s lane", lane)
 	}
 	pm := persistedMember{
 		IntentID:           p.IntentID,
@@ -282,15 +288,15 @@ func (s *BatchMempoolStore) encodeMember(p *PendingBatchIntent, lane BatchLane) 
 		})
 	}
 	if s.codec != nil && p.Attestation != nil {
-		if raw, err := s.codec.Encode(p.Attestation); err == nil {
-			pm.Attestation = raw
-		} else {
-			s.logf("[BATCH-STORE] intent %s: attestation not encodable (%v); persisting "+
-				"the member without it — it can still settle but its proof cycle will not replay",
-				p.IntentID, err)
+		// Encoded or the snapshot fails: a member saved without its attestation settles but its proof
+		// cycle can never replay after a restart. It used to be saved without it (RB3 sweep).
+		raw, err := s.codec.Encode(p.Attestation)
+		if err != nil {
+			return pm, fmt.Errorf("intent %s: attestation does not encode: %w", p.IntentID, err)
 		}
+		pm.Attestation = raw
 	}
-	return pm, true
+	return pm, nil
 }
 
 // Load restores members into the mempool and reports how many were restored.
@@ -309,14 +315,18 @@ func (s *BatchMempoolStore) Load(m *BatchMempool) (int, error) {
 	if os.IsNotExist(err) {
 		return 0, nil
 	}
+	// The queue on disk is restored whole or the node does not start, and the file is left where it is
+	// for the operator. Every path below used to drop what it could not read - the file ("falling back to
+	// re-derivation from Accumulate", which cannot recover a member's anchor, settlement transactions or
+	// nonce), a member without its commit height, a leg value that did not parse (it became 0), an
+	// attestation that did not decode, a lane this binary does not know - with at most a log line
+	// (RB3 sweep).
 	if err != nil {
-		s.logf("[BATCH-STORE] cannot read %s (%v); falling back to re-derivation from Accumulate", s.path, err)
-		return 0, nil
+		return 0, fmt.Errorf("batch mempool %s cannot be read: %w", s.path, err)
 	}
 	var in []persistedMember
 	if err := json.Unmarshal(blob, &in); err != nil {
-		s.logf("[BATCH-STORE] %s is unreadable (%v); falling back to re-derivation from Accumulate", s.path, err)
-		return 0, nil
+		return 0, fmt.Errorf("batch mempool %s does not decode: %w", s.path, err)
 	}
 
 	restored := 0
@@ -324,7 +334,7 @@ func (s *BatchMempoolStore) Load(m *BatchMempool) (int, error) {
 		// A member with no commit height could never be selected deterministically. Dropping it
 		// here is the same rule Add enforces, applied to persisted state.
 		if pm.CommitHeight == 0 || pm.IntentID == "" {
-			continue
+			return restored, fmt.Errorf("batch mempool %s: a member (intent %q, chain %d) has no commit height or intent id", s.path, pm.IntentID, pm.ChainID)
 		}
 		var opID [32]byte
 		copy(opID[:], common.FromHex(pm.OperationID))
@@ -356,9 +366,8 @@ func (s *BatchMempoolStore) Load(m *BatchMempool) (int, error) {
 			op, lf := common.FromHex(a.OperationID), common.FromHex(a.Leaf)
 			if len(op) != 32 || len(lf) != 32 || a.Deadline <= 0 {
 				// A successor restored without its predecessor would settle out of its declared order.
-				s.logf("[BATCH-STORE] intent %s on chain %d: its predecessor record is malformed; the member is NOT "+
-					"restored, since without it the member would settle out of its declared order", pm.IntentID, pm.ChainID)
-				continue
+				return restored, fmt.Errorf("batch mempool %s: intent %s on chain %d: its predecessor record is malformed, "+
+					"and without it the member would settle out of its declared order", s.path, pm.IntentID, pm.ChainID)
 			}
 			pred := &MemberPredecessor{ChainID: a.ChainID, Account: common.HexToAddress(a.Account),
 				Deadline: time.Unix(a.Deadline, 0).UTC(), ContinueOnFailure: a.ContinueOnFailure}
@@ -367,9 +376,9 @@ func (s *BatchMempoolStore) Load(m *BatchMempool) (int, error) {
 			p.After = pred
 		}
 		for _, l := range pm.Legs {
-			v := new(big.Int)
-			if _, ok := v.SetString(l.Value, 10); !ok {
-				v = big.NewInt(0)
+			v, ok := new(big.Int).SetString(l.Value, 10)
+			if !ok {
+				return restored, fmt.Errorf("batch mempool %s: intent %s leg %s: value %q is not an integer", s.path, pm.IntentID, l.LegID, l.Value)
 			}
 			p.Legs = append(p.Legs, LegExecution{
 				LegID: l.LegID,
@@ -384,16 +393,14 @@ func (s *BatchMempoolStore) Load(m *BatchMempool) (int, error) {
 			})
 		}
 		if s.codec != nil && len(pm.Attestation) > 0 {
-			if att, derr := s.codec.Decode(pm.Attestation); derr == nil {
-				p.Attestation = att
-			} else {
-				s.logf("[BATCH-STORE] intent %s: attestation not decodable (%v); restoring the "+
-					"member without it", pm.IntentID, derr)
+			att, derr := s.codec.Decode(pm.Attestation)
+			if derr != nil {
+				return restored, fmt.Errorf("batch mempool %s: intent %s: attestation does not decode: %w", s.path, pm.IntentID, derr)
 			}
+			p.Attestation = att
 		}
-		// Route by lane. An unrecognised value restores to the period pool rather than being
-		// dropped: that is where every member went before lanes existed, so an unknown lane
-		// written by a NEWER binary degrades to slower settlement, never to a lost intent.
+		// Route by lane. An empty lane is a member written before lanes existed: the period pool, where
+		// every member then went. A lane this binary does not know is refused, not re-routed.
 		//
 		// m.add / m.addOnDemand, NOT the exported forms: those snapshot the queue, and this call
 		// already holds s.mu, so re-entering Save here would deadlock. Load restores what is
@@ -402,12 +409,13 @@ func (s *BatchMempoolStore) Load(m *BatchMempool) (int, error) {
 		switch BatchLane(pm.Lane) {
 		case LaneOnDemand:
 			err = m.addOnDemand(p)
-		default:
+		case LaneOnCadence, "":
 			err = m.add(p)
+		default:
+			return restored, fmt.Errorf("batch mempool %s: intent %s: lane %q is not one this binary settles", s.path, pm.IntentID, pm.Lane)
 		}
 		if err != nil {
-			s.logf("[BATCH-STORE] intent %s not restored: %v", pm.IntentID, err)
-			continue
+			return restored, fmt.Errorf("batch mempool %s: intent %s not restored: %w", s.path, pm.IntentID, err)
 		}
 		restored++
 	}
