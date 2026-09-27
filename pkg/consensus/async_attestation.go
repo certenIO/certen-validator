@@ -330,72 +330,10 @@ func (bv *BFTValidator) RunProofCycle(
 		}
 		commitMap["accumulateBlockHeight"] = att.AccumulateBlockHeight
 		commitMap["accumulateTxHash"] = att.CertenIntent.TransactionHash
-		commitMap["rawCreateTxHashes"] = res.CreateTxHash
-		commitMap["rawVerifyTxHashes"] = res.VerifyTxHash
-		commitMap["rawGovernanceTxHashes"] = res.GovernanceTxHash
 
-		// RB-2/RB-4/RB-5: surface per-leg contract-call verification data so the
-		// Phase 7 attestation gate can cryptographically verify EACH executed call.
-		// Inspect ALL legs (not just leg 0) so a contract-call leg anywhere in a
-		// multi-leg intent is gated — otherwise a native leg 0 + call leg 1 would slip
-		// through. Each entry carries its chain (for per-chain-group matching), target,
-		// and committed events/state; the gate verifies the effect against that chain
-		// group's inclusion-proven receipt(s).
-		if ccEnv, ccErr := att.CertenIntent.ParseCrossChain(); ccErr == nil && len(ccEnv.Legs) > 0 {
-			rbLegs := make([]map[string]interface{}, 0, len(ccEnv.Legs))
-			for _, leg := range ccEnv.Legs {
-				ep := leg.ExecutionPayload
-				if ep == nil {
-					continue
-				}
-				cd := strings.TrimSpace(ep.CallData)
-				if cd == "" || cd == "0x" || cd == "0X" {
-					continue // native/ERC-20 leg — CRITICAL-003 already binds it, no event gate
-				}
-				chainKey := strings.ToLower(strings.ReplaceAll(leg.Chain, " ", "-"))
-				// This member's transaction is the execution of the legs on ITS chain only. A leg on
-				// another chain is that chain's member's to prove; handing it this transaction had it
-				// checked against the wrong chain's execution.
-				execTx := ""
-				if leg.ChainID == settledChainID {
-					execTx = extractRawTxHash(res.GovernanceTxHash)
-				}
-				evs := make([]map[string]interface{}, 0, len(ep.ExpectedEvents))
-				for _, e := range ep.ExpectedEvents {
-					evs = append(evs, map[string]interface{}{"contract": e.Contract, "topic0": e.Topic0, "dataHash": e.DataHash})
-				}
-				sts := make([]map[string]interface{}, 0, len(ep.ExpectedState))
-				for _, s := range ep.ExpectedState {
-					sts = append(sts, map[string]interface{}{"account": s.Account, "slot": s.Slot, "value": s.Value})
-				}
-				rbLegs = append(rbLegs, map[string]interface{}{
-					"chainKey": chainKey,
-					// The leg's signed chain id: what the gate matches legs to a chain by.
-					"chainId": leg.ChainID,
-					"target":  ep.Target,
-					"value":   ep.Value,
-					// The committed calldata, so a REVERTED execution can be bound to this call
-					// rather than refused: see VerifyRevertedCall.
-					"callData": cd,
-					// The member account the call is sent from; a reverted execution must be
-					// addressed to it.
-					"account":        leg.From,
-					"execTxHash":     execTx,
-					"expectedEvents": evs,
-					"expectedState":  sts,
-				})
-			}
-			if len(rbLegs) > 0 {
-				commitMap["rbContractCall"] = true
-				commitMap["rbContractCallLegs"] = rbLegs
-				// The intent's operationID, which the settlement is authorised under. The gate
-				// requires a reverted execution to carry it, so a failure is bound to THIS intent.
-				if opID, oerr := att.CertenIntent.OperationID(); oerr == nil {
-					commitMap["operationID"] = opID
-				}
-				bv.logger.Printf("🔒 [RB-GATE] %d contract-call leg(s) flagged for Phase 7 verification", len(rbLegs))
-			}
-		}
+		// The committed calls, their effects and the operationID are not carried here: every validator
+		// reads them from the user-signed intent itself (execution.signedMemberLegs, RB3-F77). The
+		// descriptors that used to be written here were read by nothing once that landed (RB3-F69).
 
 		// Wire L1-L3 chained proof data so persistProofArtifact can store it
 		if att.CertenProof != nil && att.CertenProof.LiteClientProof != nil {
