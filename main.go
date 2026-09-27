@@ -2233,6 +2233,7 @@ func checkEnvironment() error {
 		func() error { _, err := batchPeriodBlocksFromEnv(); return err },
 		func() error { _, err := bftTimeoutFromEnv(); return err },
 		func() error { _, err := envvar.Bool("MIGRATE_ON_START", false); return err },
+		func() error { _, err := accumulate.LogLevelFromEnv(); return err },
 		func() error {
 			enabled, err := envvar.Bool("CHECKPOINT_ANCHOR_ENABLED", false)
 			if err != nil || !enabled {

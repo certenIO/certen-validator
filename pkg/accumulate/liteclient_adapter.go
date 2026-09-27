@@ -447,7 +447,7 @@ func (l *LiteClientAdapter) isWriteDataTransactionWithCertenMemo(entry BlockEntr
 		if memo, ok := header["memo"].(string); ok {
 			if memo == "CERTEN_INTENT" || strings.EqualFold(memo, "certen-intent") {
 				hasCertenMemo = true
-				log.Printf("✅ [STRICT-CHECK] Found CERTEN_INTENT memo in header (value: %s)", memo)
+				debugf("✅ [STRICT-CHECK] Found CERTEN_INTENT memo in header (value: %s)", memo)
 			} else {
 				log.Printf("❌ [STRICT-CHECK] Header memo is '%s', not 'CERTEN_INTENT' or 'certen-intent'", memo)
 			}
@@ -477,7 +477,7 @@ func (l *LiteClientAdapter) isWriteDataTransactionWithCertenMemo(entry BlockEntr
 					if entryType, ok := dataEntry["type"].(string); ok {
 						if entryType == "doubleHash" {
 							if data, ok := dataEntry["data"].([]interface{}); ok && len(data) >= 1 {
-								log.Printf("✅ [STRICT-CHECK] Valid writeData transaction with CERTEN_INTENT memo and %d data elements", len(data))
+								debugf("✅ [STRICT-CHECK] Valid writeData transaction with CERTEN_INTENT memo and %d data elements", len(data))
 								return true
 							} else {
 								log.Printf("❌ [STRICT-CHECK] DoubleHash entry missing data array or data is empty")
@@ -581,9 +581,9 @@ func (l *LiteClientAdapter) parseCertenTransaction(entry BlockEntry, block *Mino
 	hash := "unknown"
 
 	// Debug: Log the entire entry structure to understand the V3 API response format
-	log.Printf("🔍 [DEBUG-ENTRY] Full entry structure: %+v", entry.Data)
+	debugf("🔍 [DEBUG-ENTRY] Full entry structure: %+v", entry.Data)
 	if entryBytes, err := json.MarshalIndent(entry.Data, "", "  "); err == nil {
-		log.Printf("🔍 [DEBUG-ENTRY] JSON structure:\n%s", string(entryBytes))
+		debugf("🔍 [DEBUG-ENTRY] JSON structure:\n%s", string(entryBytes))
 	}
 
 	// Try multiple ways to extract the transaction hash from Accumulate V3 API response
@@ -591,10 +591,10 @@ func (l *LiteClientAdapter) parseCertenTransaction(entry BlockEntry, block *Mino
 	// First check if there's an "entry" field at the root level (this is the transaction hash)
 	if entryHash, ok := entry.Data["entry"].(string); ok {
 		hash = entryHash
-		log.Printf("🔍 [HASH-EXTRACT] Found transaction hash from root entry field: %s", hash)
+		debugf("🔍 [HASH-EXTRACT] Found transaction hash from root entry field: %s", hash)
 	} else if hashVal, ok := entry.Data["hash"].(string); ok {
 		hash = hashVal
-		log.Printf("🔍 [HASH-EXTRACT] Found transaction hash from hash field: %s", hash)
+		debugf("🔍 [HASH-EXTRACT] Found transaction hash from hash field: %s", hash)
 	} else if value, ok := entry.Data["value"].(map[string]interface{}); ok {
 		if message, ok := value["message"].(map[string]interface{}); ok {
 			if id, ok := message["id"].(string); ok {
@@ -619,7 +619,7 @@ func (l *LiteClientAdapter) parseCertenTransaction(entry BlockEntry, block *Mino
 				if header, ok := transaction["header"].(map[string]interface{}); ok {
 					if principal, ok := header["principal"].(string); ok {
 						accountURL = principal
-						log.Printf("✅ [ACCOUNT-EXTRACT] Found real account URL from principal: %s", accountURL)
+						debugf("✅ [ACCOUNT-EXTRACT] Found real account URL from principal: %s", accountURL)
 					}
 				}
 			}
@@ -642,7 +642,7 @@ func (l *LiteClientAdapter) parseCertenTransaction(entry BlockEntry, block *Mino
 		for key, value := range intentData {
 			certenTx.IntentData[key] = value
 		}
-		log.Printf("✅ [CERTEN-PARSE] Successfully extracted %d intent data elements from %s", len(intentData), hash)
+		debugf("✅ [CERTEN-PARSE] Successfully extracted %d intent data elements from %s", len(intentData), hash)
 	} else {
 		log.Printf("⚠️ [CERTEN-PARSE] No intent data found in transaction %s", hash)
 	}
@@ -1282,20 +1282,20 @@ func (l *LiteClientAdapter) getBlockEntries(blockData map[string]interface{}, bl
 	if entries, ok := blockData["entries"].(map[string]interface{}); ok {
 		if records, ok := entries["records"].([]interface{}); ok {
 			allEntries = append(allEntries, records...)
-			log.Printf("🔍 [BLOCK-PARSE] Found %d direct entries.records in block %d from %s", len(records), blockHeight, partition)
+			debugf("🔍 [BLOCK-PARSE] Found %d direct entries.records in block %d from %s", len(records), blockHeight, partition)
 		}
 	}
 
 	// Get anchored entries from block.anchored.records.flatMap(x => x.entries.records)
 	if anchored, ok := blockData["anchored"].(map[string]interface{}); ok {
 		if anchoredRecords, ok := anchored["records"].([]interface{}); ok {
-			log.Printf("🔍 [ANCHORED] Found %d anchored records in block %d", len(anchoredRecords), blockHeight)
+			debugf("🔍 [ANCHORED] Found %d anchored records in block %d", len(anchoredRecords), blockHeight)
 			for _, anchoredRecord := range anchoredRecords {
 				if anchoredMap, ok := anchoredRecord.(map[string]interface{}); ok {
 					if anchoredEntries, ok := anchoredMap["entries"].(map[string]interface{}); ok {
 						if anchoredEntriesRecords, ok := anchoredEntries["records"].([]interface{}); ok {
 							allEntries = append(allEntries, anchoredEntriesRecords...)
-							log.Printf("🔍 [ANCHORED] Added %d anchored entries.records from block %d", len(anchoredEntriesRecords), blockHeight)
+							debugf("🔍 [ANCHORED] Added %d anchored entries.records from block %d", len(anchoredEntriesRecords), blockHeight)
 						}
 					}
 				}
@@ -1318,11 +1318,11 @@ func (l *LiteClientAdapter) getBlockEntries(blockData map[string]interface{}, bl
 			}
 
 			blockEntries = append(blockEntries, blockEntry)
-			log.Printf("📝 [ENTRY-PARSE] Entry %d: type=%s", entryIdx, blockEntry.Type)
+			debugf("📝 [ENTRY-PARSE] Entry %d: type=%s", entryIdx, blockEntry.Type)
 		}
 	}
 
-	log.Printf("✅ [BLOCK-ENTRIES] Block %d from %s: found %d total entries (%d direct + anchored)",
+	debugf("✅ [BLOCK-ENTRIES] Block %d from %s: found %d total entries (%d direct + anchored)",
 		blockHeight, partition, len(blockEntries), len(allEntries))
 
 	return blockEntries
