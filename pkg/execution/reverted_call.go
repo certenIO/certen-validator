@@ -347,35 +347,10 @@ func checkAuthorizedAttempt(
 		return out[0], nil
 	}
 
-	anchorOut, err := call(acct, "anchorContract")
+	leaf, anchorAddr, err := accountLeafAndAnchor(ctx, chain, account, exec)
 	if err != nil {
 		return err
 	}
-	anchorAddr, _ := anchorOut.(common.Address)
-	var commitmentOut interface{}
-	if exec.Batch {
-		targets := make([]common.Address, len(exec.Calls))
-		values := make([]*big.Int, len(exec.Calls))
-		datas := make([][]byte, len(exec.Calls))
-		for i, c := range exec.Calls {
-			targets[i], values[i], datas[i] = c.Target, c.Value, c.Data
-		}
-		commitmentOut, err = call(acct, "computeBatchCommitment", targets, values, datas)
-	} else if len(exec.Calls) == 1 {
-		c := exec.Calls[0]
-		commitmentOut, err = call(acct, "computeSingleCommitment", c.Target, c.Value, c.Data)
-	} else {
-		return fmt.Errorf("no executed call")
-	}
-	if err != nil {
-		return err
-	}
-	commitment, _ := commitmentOut.([32]byte)
-	leafOut, err := call(acct, "computeLeaf", commitment, exec.OperationID)
-	if err != nil {
-		return err
-	}
-	leaf, _ := leafOut.([32]byte)
 
 	if consumedOut, err := call(acct, "isLeafConsumed", leaf); err != nil {
 		return err
@@ -447,6 +422,57 @@ func matchCommittedCalls(executed, committed []CommittedCall) error {
 		}
 	}
 	return nil
+}
+
+// accountLeafAndAnchor is the member's leaf for an account execution, as the account itself computes it
+// (computeSingleCommitment / computeBatchCommitment over the executed calls, then computeLeaf with the
+// operationID), and the anchor the account is pinned to.
+func accountLeafAndAnchor(ctx context.Context, chain bind.ContractCaller, account common.Address, exec *accountExecution) ([32]byte, common.Address, error) {
+	accountABI, err := abi.JSON(strings.NewReader(accountAttemptABIJSON))
+	if err != nil {
+		return [32]byte{}, common.Address{}, err
+	}
+	acct := bind.NewBoundContract(account, accountABI, chain, nil, nil)
+	call := func(method string, args ...interface{}) (interface{}, error) {
+		var out []interface{}
+		if err := acct.Call(&bind.CallOpts{Context: ctx}, &out, method, args...); err != nil {
+			return nil, readErr(fmt.Errorf("%s: %w", method, err))
+		}
+		if len(out) == 0 {
+			return nil, fmt.Errorf("%s returned nothing", method)
+		}
+		return out[0], nil
+	}
+	anchorOut, err := call("anchorContract")
+	if err != nil {
+		return [32]byte{}, common.Address{}, err
+	}
+	anchorAddr, _ := anchorOut.(common.Address)
+	var commitmentOut interface{}
+	if exec.Batch {
+		targets := make([]common.Address, len(exec.Calls))
+		values := make([]*big.Int, len(exec.Calls))
+		datas := make([][]byte, len(exec.Calls))
+		for i, c := range exec.Calls {
+			targets[i], values[i], datas[i] = c.Target, c.Value, c.Data
+		}
+		commitmentOut, err = call("computeBatchCommitment", targets, values, datas)
+	} else if len(exec.Calls) == 1 {
+		c := exec.Calls[0]
+		commitmentOut, err = call("computeSingleCommitment", c.Target, c.Value, c.Data)
+	} else {
+		return [32]byte{}, common.Address{}, fmt.Errorf("no executed call")
+	}
+	if err != nil {
+		return [32]byte{}, common.Address{}, err
+	}
+	commitment, _ := commitmentOut.([32]byte)
+	leafOut, err := call("computeLeaf", commitment, exec.OperationID)
+	if err != nil {
+		return [32]byte{}, common.Address{}, err
+	}
+	leaf, _ := leafOut.([32]byte)
+	return leaf, anchorAddr, nil
 }
 
 // ParseCommittedCall builds a CommittedCall from the intent's hex/decimal string forms.

@@ -359,6 +359,9 @@ type activeCycle struct {
 	// VerifiedCalls are the executed calls Phase 7's contract-call gate proved - committed events (and
 	// state) from the inclusion-proven receipt - keyed by lowercase transaction hash without 0x.
 	VerifiedCalls verifiedCallProofs
+	// EffectsShortfall is set when the gate proved the settlement executed this intent's committed calls
+	// under its leaf but a committed effect is absent (RB3-F67): the cycle attests and writes back that.
+	EffectsShortfall *attestation.EffectsShortfallClaim
 }
 
 // NewUnifiedOrchestrator creates a new unified orchestrator
@@ -692,6 +695,7 @@ func (o *UnifiedOrchestrator) recordMemberOutcome(
 	out := database.MemberOutcome{
 		IntentID: req.IntentID, ChainID: chainID, MemberChains: chains, Legs: legs,
 		Settlement: settlement, ProofCycle: proofCycle, CycleID: req.CycleID, Reason: reason,
+		EffectsProven: cycleEffectsProven(cycle),
 	}
 	if result != nil {
 		out.WriteBackTx = result.WriteBackTxHash
@@ -838,6 +842,21 @@ func (o *UnifiedOrchestrator) executePhase7(ctx context.Context, cycle *activeCy
 		return fmt.Errorf("RB contract-call verification gate failed: %w", err)
 	}
 	cycle.VerifiedCalls = verified
+	// A shortfall is the result this cycle attests: the settlement observation's result hash is bound to
+	// the claim, so Phase 8 signs it and the write-back carries it - never the settlement's plain hash,
+	// which would read as a success.
+	if c := cycle.EffectsShortfall; c != nil {
+		bound := false
+		for _, obs := range observationResults {
+			if obs != nil && strings.EqualFold(strings.TrimPrefix(obs.TxHash, "0x"), strings.TrimPrefix(c.TxHash, "0x")) {
+				obs.ResultHash = effectsShortfallResultHash(obs.ResultHash, c)
+				bound = true
+			}
+		}
+		if !bound {
+			return fmt.Errorf("effects shortfall names settlement %s, which this cycle did not observe", c.TxHash)
+		}
+	}
 
 	// Persist the proofs the gate verified onto the rows written above, so the database carries the
 	// real trie proofs (tx and receipt, bound to the header roots) rather than what the strategy
@@ -990,6 +1009,28 @@ func (o *UnifiedOrchestrator) verifyContractCallGate(ctx context.Context, cycle 
 					verified[key] = rres
 					break
 				}
+			}
+			// Neither proven nor a proven revert: the committed call may have EXECUTED without its committed
+			// effects. That is proven over all of this chain's committed legs at once - one settlement
+			// executes them all - and attested as the outcome it is (RB3-F67).
+			if cycle.EffectsShortfall == nil {
+				if sl, account, ok := shortfallLegsOf(applicable); ok {
+					if opID := cycleOperationID(cm); opID != nil {
+						if sres, claim, serr := observer.VerifyEffectsNotProven(ctx, common.HexToHash(tx), sl, *opID, account); serr == nil {
+							fmt.Printf("❌ [RB-GATE] Contract call EXECUTED WITHOUT its committed effects, proven (missing events %v, unset state %v): chain=%s tx=%s block=%s - attesting that\n",
+								claim.MissingEvents, claim.UnsetState, l.chainKey, tx, sres.BlockNumber.String())
+							cycle.EffectsShortfall = claim
+							legOK = true
+							break
+						} else if IsChainReadError(serr) {
+							lastErr = serr
+						}
+					}
+				}
+			} else if strings.EqualFold(strings.TrimPrefix(cycle.EffectsShortfall.TxHash, "0x"), key) {
+				// This settlement's shortfall is already proven over every committed leg.
+				legOK = true
+				break
 			}
 			lastErr = verr
 		}
@@ -1221,67 +1262,15 @@ func (o *UnifiedOrchestrator) peerVerifyCommittedEffect(ctx context.Context, msg
 		return nil
 	}
 
-	// Without an Accumulate query client we cannot independently verify — fail closed.
-	if o.config.AccumulateQueryClient == nil {
-		return fmt.Errorf("no Accumulate query client (contract calls enabled)")
-	}
-	// H1: an empty intent id would let a non-JSON/benign blob satisfy the binding below via
-	// intentIDFromBlob("")=="" — refuse. A real contract-call attestation always carries one.
-	if msg.IntentID == "" {
-		return fmt.Errorf("contract-call attestation missing intent id")
-	}
-	if msg.AccumulateTxHash == "" || msg.AccumulateAccountURL == "" {
-		return fmt.Errorf("attestation missing Accumulate intent pointer")
-	}
-
 	// An observer (chain RPC) is required to independently re-observe execution, but ONLY
 	// when there is actually something on-chain to check (a contract-call leg, or an exec tx
 	// to cross-check). A genuinely native intent with no execution tx needs no observer, so
 	// build it lazily and fail closed if it is needed but unavailable.
-	buildObserver := func() (*ExternalChainObserver, error) {
-		if chainStrategy == nil {
-			return nil, fmt.Errorf("no chain strategy for %s (cannot independently verify)", msg.TargetChain)
-		}
-		cfg := chainStrategy.Config()
-		if cfg == nil || cfg.RPC == "" {
-			return nil, fmt.Errorf("no RPC for chain %s", chainStrategy.ChainID())
-		}
-		chainID, _ := strconv.ParseInt(chainStrategy.ChainID(), 10, 64)
-		return NewExternalChainObserver(&ExternalChainObserverConfig{
-			EthereumRPC:           cfg.RPC,
-			ChainID:               chainID,
-			ValidatorID:           o.config.ValidatorID,
-			RequiredConfirmations: 1,
-			Timeout:               90 * time.Second,
-		})
-	}
+	buildObserver := func() (*ExternalChainObserver, error) { return o.observerForChain(msg, chainStrategy) }
 
-	blobs, err := o.config.AccumulateQueryClient.GetIntentBlobs(ctx, msg.AccumulateTxHash, msg.AccumulateAccountURL)
-	if err != nil || len(blobs) < 2 {
-		return fmt.Errorf("fetch signed intent: %v", err)
-	}
-	// Bind: the fetched signed intent MUST be the one being attested. A user cannot forge a
-	// signed intent bearing another intent's id, so intent_id equality anchors trust.
-	if got := intentIDFromBlob(blobs[0]); got != msg.IntentID {
-		return fmt.Errorf("fetched intent_id %q != attested %q", got, msg.IntentID)
-	}
-
-	// Committed contract-call leg(s) for this chain group, from the SIGNED intent: every leg whose
-	// signed chainId is the chain this peer itself observed the execution on. Not the chain NAME the
-	// requesting executor supplied - matching that against the leg's free-text name let an executor
-	// select no legs at all (RB3-F46).
-	if chainStrategy == nil {
-		return fmt.Errorf("no observed chain to select the committed calls by")
-	}
-	observedChainID, perr := strconv.ParseInt(chainStrategy.ChainID(), 10, 64)
-	if perr != nil {
-		return fmt.Errorf("observed chain %q is not a numeric chain id", chainStrategy.ChainID())
-	}
-	var applicable []rbCallLeg
-	for _, l := range parseCommittedCallLegs(blobs[1]) {
-		if l.chainID == observedChainID {
-			applicable = append(applicable, l)
-		}
+	blobs, applicable, observedChainID, err := o.signedIntentCallLegs(ctx, msg, chainStrategy)
+	if err != nil {
+		return err
 	}
 	// The execution this peer verifies: the one named, or else the transaction the peer has just
 	// re-observed. Never nothing - "no execution hash" is the requester's claim, not a fact.
@@ -1363,6 +1352,133 @@ func (o *UnifiedOrchestrator) peerVerifyCommittedEffect(ctx context.Context, msg
 	fmt.Printf("✅ [RB-SEC-1] Peer independently verified committed effect for intent %s (chain=%s tx=%s)\n",
 		msg.IntentID, msg.TargetChain, execTx)
 	return nil
+}
+
+// signedIntentCallLegs fetches the USER-SIGNED intent a contract-call attestation names - never
+// trusting the requester's copy - binds it to the attested intent id, and selects its committed
+// contract-call legs on the chain this peer itself observed (by each leg's signed chainId).
+func (o *UnifiedOrchestrator) signedIntentCallLegs(ctx context.Context, msg *attestation.AttestationMessage, chainStrategy chain.ChainExecutionStrategy) ([][]byte, []rbCallLeg, int64, error) {
+	// Without an Accumulate query client we cannot independently verify — fail closed.
+	if o.config.AccumulateQueryClient == nil {
+		return nil, nil, 0, fmt.Errorf("no Accumulate query client (contract calls enabled)")
+	}
+	// H1: an empty intent id would let a non-JSON/benign blob satisfy the binding below via
+	// intentIDFromBlob("")=="" — refuse. A real contract-call attestation always carries one.
+	if msg.IntentID == "" {
+		return nil, nil, 0, fmt.Errorf("contract-call attestation missing intent id")
+	}
+	if msg.AccumulateTxHash == "" || msg.AccumulateAccountURL == "" {
+		return nil, nil, 0, fmt.Errorf("attestation missing Accumulate intent pointer")
+	}
+	blobs, err := o.config.AccumulateQueryClient.GetIntentBlobs(ctx, msg.AccumulateTxHash, msg.AccumulateAccountURL)
+	if err != nil || len(blobs) < 2 {
+		return nil, nil, 0, fmt.Errorf("fetch signed intent: %v", err)
+	}
+	// Bind: the fetched signed intent MUST be the one being attested. A user cannot forge a
+	// signed intent bearing another intent's id, so intent_id equality anchors trust.
+	if got := intentIDFromBlob(blobs[0]); got != msg.IntentID {
+		return nil, nil, 0, fmt.Errorf("fetched intent_id %q != attested %q", got, msg.IntentID)
+	}
+	// Committed contract-call leg(s) for this chain group, from the SIGNED intent: every leg whose
+	// signed chainId is the chain this peer itself observed the execution on. Not the chain NAME the
+	// requesting executor supplied - matching that against the leg's free-text name let an executor
+	// select no legs at all (RB3-F46).
+	if chainStrategy == nil {
+		return nil, nil, 0, fmt.Errorf("no observed chain to select the committed calls by")
+	}
+	observedChainID, perr := strconv.ParseInt(chainStrategy.ChainID(), 10, 64)
+	if perr != nil {
+		return nil, nil, 0, fmt.Errorf("observed chain %q is not a numeric chain id", chainStrategy.ChainID())
+	}
+	var applicable []rbCallLeg
+	for _, l := range parseCommittedCallLegs(blobs[1]) {
+		if l.chainID == observedChainID {
+			applicable = append(applicable, l)
+		}
+	}
+	return blobs, applicable, observedChainID, nil
+}
+
+// observerForChain builds an independent observer on the chain this peer re-observed.
+func (o *UnifiedOrchestrator) observerForChain(msg *attestation.AttestationMessage, chainStrategy chain.ChainExecutionStrategy) (*ExternalChainObserver, error) {
+	if chainStrategy == nil {
+		return nil, fmt.Errorf("no chain strategy for %s (cannot independently verify)", msg.TargetChain)
+	}
+	cfg := chainStrategy.Config()
+	if cfg == nil || cfg.RPC == "" {
+		return nil, fmt.Errorf("no RPC for chain %s", chainStrategy.ChainID())
+	}
+	chainID, _ := strconv.ParseInt(chainStrategy.ChainID(), 10, 64)
+	return NewExternalChainObserver(&ExternalChainObserverConfig{
+		EthereumRPC:           cfg.RPC,
+		ChainID:               chainID,
+		ValidatorID:           o.config.ValidatorID,
+		RequiredConfirmations: 1,
+		Timeout:               90 * time.Second,
+	})
+}
+
+// peerDeriveEffectsShortfall is a peer's own derivation of a settlement's effects shortfall (RB3-F67):
+// from the user-signed intent's committed legs on the chain it observed, the intent's operationID
+// derived from the signed intent itself, and its own chain reads.
+func (o *UnifiedOrchestrator) peerDeriveEffectsShortfall(ctx context.Context, msg *attestation.AttestationMessage, chainStrategy chain.ChainExecutionStrategy) (*attestation.EffectsShortfallClaim, error) {
+	if !contractCallsAllowed() {
+		return nil, fmt.Errorf("this deployment executes no contract calls; a contract-call shortfall cannot be its outcome")
+	}
+	blobs, applicable, _, err := o.signedIntentCallLegs(ctx, msg, chainStrategy)
+	if err != nil {
+		return nil, err
+	}
+	legs, account, ok := shortfallLegsOf(applicable)
+	if !ok {
+		return nil, fmt.Errorf("the signed intent commits no bindable contract call on this chain")
+	}
+	if len(blobs) < 4 {
+		return nil, fmt.Errorf("signed intent incomplete (%d blobs); cannot derive its operationID", len(blobs))
+	}
+	opBytes, _, operr := proof.ComputeCanonical4BlobHash(blobs[0], blobs[1], blobs[2], blobs[3])
+	if operr != nil || len(opBytes) != 32 {
+		return nil, fmt.Errorf("derive operationID from the signed intent: %v", operr)
+	}
+	var opID [32]byte
+	copy(opID[:], opBytes)
+	execTx := msg.ExecutionTxHash
+	if execTx == "" {
+		execTx = msg.AnchorTxHash
+	}
+	if execTx == "" {
+		return nil, fmt.Errorf("no settlement transaction named")
+	}
+	observer, err := o.observerForChain(msg, chainStrategy)
+	if err != nil {
+		return nil, err
+	}
+	_, claim, err := observer.VerifyEffectsNotProven(ctx, common.HexToHash(execTx), legs, opID, account)
+	if err != nil {
+		return nil, err
+	}
+	return claim, nil
+}
+
+// sameShortfall reports whether two shortfall claims state the same facts.
+func sameShortfall(a, b *attestation.EffectsShortfallClaim) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	eq := func(x, y []string) bool {
+		if len(x) != len(y) {
+			return false
+		}
+		for i := range x {
+			if x[i] != y[i] {
+				return false
+			}
+		}
+		return true
+	}
+	return a.ChainID == b.ChainID && strings.EqualFold(a.TxHash, b.TxHash) && strings.EqualFold(a.Account, b.Account) &&
+		strings.EqualFold(a.OperationID, b.OperationID) && strings.EqualFold(a.Leaf, b.Leaf) &&
+		eq(a.MissingEvents, b.MissingEvents) && eq(a.UnsetState, b.UnsetState)
 }
 
 // intentIDFromBlob extracts intent_id from the signed intentData blob.
@@ -1591,6 +1707,7 @@ func (o *UnifiedOrchestrator) executePhase8(ctx context.Context, cycle *activeCy
 		AccumulateTxHash:     req.AccumulateTxHash,
 		AccumulateAccountURL: req.AccumulateAccountURL,
 		NonSettlement:        cycle.NonSettlement,
+		EffectsShortfall:     cycle.EffectsShortfall,
 	}
 
 	// Create timeout context
@@ -2050,15 +2167,32 @@ func (o *UnifiedOrchestrator) HandlePeerAttestationRequest(
 		fmt.Printf("[Phase 8] attesting a REVERTED execution (%s) — outcome is failure, bound by result hash\n",
 			msg.AnchorTxHash)
 	}
-	if obs.ResultHash != msg.ResultHash {
-		return fail("independently-observed result hash does not match requested message — refusing to attest")
-	}
+	if msg.EffectsShortfall != nil {
+		// RB3-F67: the requester attests that the settlement EXECUTED without a committed effect. This
+		// peer derives the shortfall itself - from the user-signed intent and its own chain reads - and
+		// signs only the identical claim, bound to the settlement it re-observed.
+		own, serr := o.peerDeriveEffectsShortfall(ctx, msg, chainStrategy)
+		if serr != nil {
+			return fail(fmt.Sprintf("effects shortfall not reproduced: %v", serr))
+		}
+		if !sameShortfall(own, msg.EffectsShortfall) {
+			return fail(fmt.Sprintf("effects shortfall differs: this validator finds missing events %v, unset state %v",
+				own.MissingEvents, own.UnsetState))
+		}
+		if effectsShortfallResultHash(obs.ResultHash, own) != msg.ResultHash {
+			return fail("result hash is not the re-observed settlement bound to the shortfall — refusing to attest")
+		}
+	} else {
+		if obs.ResultHash != msg.ResultHash {
+			return fail("independently-observed result hash does not match requested message — refusing to attest")
+		}
 
-	// 3b. RB-SEC-1: independently verify the committed CONTRACT-CALL effect from the
-	//     USER-SIGNED intent (fetched from Accumulate), so the quorum — not just the
-	//     executor — enforces RB-2/RB-4/RB-5. Fails closed on any doubt.
-	if err := o.peerVerifyCommittedEffect(ctx, msg, chainStrategy, obs.Status != 1); err != nil {
-		return fail(fmt.Sprintf("committed-effect verification failed: %v", err))
+		// 3b. RB-SEC-1: independently verify the committed CONTRACT-CALL effect from the
+		//     USER-SIGNED intent (fetched from Accumulate), so the quorum — not just the
+		//     executor — enforces RB-2/RB-4/RB-5. Fails closed on any doubt.
+		if err := o.peerVerifyCommittedEffect(ctx, msg, chainStrategy, obs.Status != 1); err != nil {
+			return fail(fmt.Sprintf("committed-effect verification failed: %v", err))
+		}
 	}
 
 	// 4. Verified — sign with the requested scheme so the signature aggregates
@@ -2347,6 +2481,12 @@ func (o *UnifiedOrchestrator) buildAttestationBundleFromCycle(cycle *activeCycle
 	if cycle.NonSettlement != nil {
 		extResult.Outcome = ResultOutcomeNotSettled
 		extResult.OutcomeReason = cycle.NonSettlement.Cause
+	}
+	// A settlement that executed without its committed effects: the record says so and names them.
+	if c := cycle.EffectsShortfall; c != nil {
+		extResult.Outcome = ResultOutcomeEffectsNotProven
+		extResult.OutcomeReason = fmt.Sprintf("settlement %s executed the committed call(s) under leaf %s, but committed effects are absent: events %v, state %v",
+			c.TxHash, c.Leaf, c.MissingEvents, c.UnsetState)
 	}
 
 	// Copy logs from all observation results (not just primary)

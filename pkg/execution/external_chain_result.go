@@ -42,6 +42,10 @@ import (
 // ResultOutcomeNotSettled is the outcome of a member that never settled.
 const ResultOutcomeNotSettled = "not_settled"
 
+// ResultOutcomeEffectsNotProven is the outcome of a member whose settlement executed its committed calls
+// under its leaf while a committed effect is provably absent (RB3-F67).
+const ResultOutcomeEffectsNotProven = "effects_not_proven"
+
 type ExternalChainResult struct {
 	// ==========================================================================
 	// RESULT IDENTIFICATION (Hash Chain Binding - Phase 2.5)
