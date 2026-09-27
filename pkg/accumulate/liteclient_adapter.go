@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -29,6 +30,11 @@ type LiteClientAdapter struct {
 	client     *api.Client
 	config     *LiteClientConfig
 	httpClient *http.Client // reused across all v3 API calls for TCP connection pooling
+	// anchorCursor speeds up finding consecutive DN blocks on the anchor pool's index chain (anchored_blocks.go).
+	anchorCursor anchorIndexCursor
+	// routingCheckedAt is when dnHostsNoUserAccounts last confirmed the Directory hosts no user accounts.
+	routingMu        sync.Mutex
+	routingCheckedAt time.Time
 
 	// Partition discovery cache - dynamically discovers partitions from network-status API
 	partitionsMu      sync.RWMutex
@@ -223,72 +229,119 @@ func (l *LiteClientAdapter) constructPartitionLedgerURL(partitionID string) stri
 	return fmt.Sprintf("acc://bvn-%s.acme/ledger", partitionID)
 }
 
-// SearchCertenTransactions searches for CERTEN_INTENT transactions across DN and all BVN partitions
-// Scans both DN (for anchored transactions) and all BVNs (for direct transactions) with expand=true
+// SearchCertenTransactions returns the CERTEN_INTENT transactions of one Directory Network minor block:
+// the entries of every BVN block it anchored. An intent is a writeData on a user ADI's data account; the
+// routing table puts every user account on a BVN (checked, dnHostsNoUserAccounts), and it reaches
+// discovery through the DN block that anchors its BVN block.
 //
-// NOTE: a CERTEN_INTENT is a writeData against a user ADI's data account, which lives on a BVN. A DN
-// minor block carries directoryAnchor/blockAnchor entries and anchor chain entries under
-// acc://dn.acme/anchors — NOT the BVN transaction bodies. So the BVN partitions must be scanned to
-// find intents; the DN is what later PROVES their inclusion. Scanning the DN alone finds nothing.
+// The block is searched completely or not at all (RB3-F125). A partition whose query failed used to be
+// logged and skipped and the block counted as searched: on Kermit about 2% of DN block records cannot be
+// delivered (the endpoint cuts responses near 98 KB - the DN record carries every anchored BVN block in
+// full), and every intent anchored in them was lost. The BVN partitions were also queried at the DN's
+// height, which names an unrelated BVN block. Now the anchored blocks come from the anchor pool's index
+// chain (anchored_blocks.go - identical to the server's list on every block checked) and each is read
+// page by page to its stated total; an error leaves the DN block unsearched, and discovery keeps it.
 //
-// `blockHeight` is currently applied to every partition, which is only correct for the DN: each
-// partition keeps an independent index (on kermit DN ≈ 6.28M while BVN1 ≈ 8.27M at the same wall
-// clock). Tracking a cursor per partition is the outstanding fix — see the partition-height work.
+// Every transaction is stated at the DN block's height and time, exactly as before: the consensus round
+// of an intent is keyed on it.
 func (l *LiteClientAdapter) SearchCertenTransactions(ctx context.Context, blockHeight int64) ([]*CertenTransaction, error) {
-	// Dynamically discover partitions from network-status API
-	partitions, err := l.getPartitions(ctx)
+	const dn = "acc://dn.acme"
+	if err := l.dnHostsNoUserAccounts(ctx); err != nil {
+		return nil, fmt.Errorf("DN block %d: %w", blockHeight, err)
+	}
+	header, err := l.queryMinorBlockHeader(ctx, dn, blockHeight)
+	anchored, aErr := l.AnchoredBlocks(ctx, blockHeight)
+	if aErr != nil {
+		return nil, fmt.Errorf("DN block %d: %w", blockHeight, aErr)
+	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to discover partitions: %w", err)
+		// The DN keeps no ledger for a block with no entries: the server says so with not-found. That is
+		// an empty block only if the anchor index agrees nothing was anchored in it; any other failure,
+		// or a not-found for a block the index says anchored something, is an error.
+		var apiErr *V3APIError
+		if errors.As(err, &apiErr) && apiErr.Code == v3NotFound && len(anchored) == 0 {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("DN block %d: %w", blockHeight, err)
 	}
-
-	// Query all partitions in parallel to reduce per-block latency
-	type partitionResult struct {
-		transactions []*CertenTransaction
-		err          error
-		partition    string
+	block := &MinorBlock{Height: blockHeight, Index: blockHeight, Time: header.Time, Source: header.Source, Partition: dn}
+	for _, ab := range anchored {
+		scope := l.convertToLedgerScope(ab.Source)
+		_, records, _, err := l.readBlockEntries(ctx, scope, ab.Index, 0)
+		if err != nil {
+			return nil, fmt.Errorf("DN block %d: anchored block %d on %s: %w", blockHeight, ab.Index, ab.Source, err)
+		}
+		block.Entries = append(block.Entries, l.getBlockEntries(map[string]interface{}{
+			"entries": map[string]interface{}{"records": records},
+		}, ab.Index, ab.Source)...)
 	}
-	results := make(chan partitionResult, len(partitions))
-
-	for _, partition := range partitions {
-		go func(p string) {
-			blocks, err := l.queryMinorBlocks(ctx, p, blockHeight)
-			if err != nil {
-				results <- partitionResult{partition: p, err: err}
-				return
-			}
-			var txs []*CertenTransaction
-			if len(blocks) > 0 {
-				for _, entry := range blocks[0].Entries {
-					if !l.isCertenTransaction(entry) {
-						continue
-					}
-					certenTx := l.parseCertenTransaction(entry, blocks[0], p)
-					if certenTx != nil {
-						txs = append(txs, certenTx)
-					}
-				}
-			}
-			results <- partitionResult{partition: p, transactions: txs}
-		}(partition)
-	}
-
-	// Collect results from all partitions
-	var allTransactions []*CertenTransaction
-	for i := 0; i < len(partitions); i++ {
-		r := <-results
-		if r.err != nil {
-			log.Printf("⚠️ [CERTEN-SEARCH] Failed to query %s block %d: %v", r.partition, blockHeight, r.err)
+	var txs []*CertenTransaction
+	for _, entry := range block.Entries {
+		if !l.isCertenTransaction(entry) {
 			continue
 		}
-		allTransactions = append(allTransactions, r.transactions...)
+		if certenTx := l.parseCertenTransaction(entry, block, dn); certenTx != nil {
+			txs = append(txs, certenTx)
+		}
 	}
-
-	if len(allTransactions) > 0 {
-		log.Printf("🎯 [CERTEN-SEARCH] Block %d: found %d CERTEN transactions across %d partitions",
-			blockHeight, len(allTransactions), len(partitions))
+	if len(txs) > 0 {
+		log.Printf("🎯 [CERTEN-SEARCH] DN block %d: found %d CERTEN transactions in %d anchored blocks", blockHeight, len(txs), len(anchored))
 	}
+	return txs, nil
+}
 
-	return allTransactions, nil
+// v3NotFound is the v3 API's not-found error code.
+const v3NotFound = -33404
+
+// V3APIError is an error the v3 API returned, with its code.
+type V3APIError struct {
+	Code    int
+	Message string
+}
+
+func (e *V3APIError) Error() string { return fmt.Sprintf("API error: %s (%d)", e.Message, e.Code) }
+
+// dnRoutingTTL is how long the routing check holds.
+const dnRoutingTTL = 5 * time.Minute
+
+// dnHostsNoUserAccounts checks, from network-status, that no user account can live on the Directory
+// Network: every route goes to a BVN and the only Directory overrides are its system accounts. If that
+// ever changes, discovery refuses rather than miss intents on the DN.
+func (l *LiteClientAdapter) dnHostsNoUserAccounts(ctx context.Context) error {
+	l.routingMu.Lock()
+	ok := time.Since(l.routingCheckedAt) < dnRoutingTTL
+	l.routingMu.Unlock()
+	if ok {
+		return nil
+	}
+	result, err := l.queryV3API(ctx, "network-status", map[string]interface{}{})
+	if err != nil {
+		return fmt.Errorf("network-status for the routing table: %w", err)
+	}
+	routing, _ := result["routing"].(map[string]interface{})
+	routes, _ := routing["routes"].([]interface{})
+	if len(routes) == 0 {
+		return fmt.Errorf("network-status carries no routing table")
+	}
+	for _, r := range routes {
+		m, _ := r.(map[string]interface{})
+		if p, _ := m["partition"].(string); strings.EqualFold(p, "directory") || p == "" {
+			return fmt.Errorf("the routing table routes accounts to %q: user accounts can live on the Directory Network, whose own entries discovery does not read", p)
+		}
+	}
+	overrides, _ := routing["overrides"].([]interface{})
+	for _, o := range overrides {
+		m, _ := o.(map[string]interface{})
+		p, _ := m["partition"].(string)
+		acct, _ := m["account"].(string)
+		if strings.EqualFold(p, "directory") && !strings.EqualFold(acct, "acc://ACME") && !strings.EqualFold(acct, "acc://dn.acme") {
+			return fmt.Errorf("the routing table puts %s on the Directory Network, whose own entries discovery does not read", acct)
+		}
+	}
+	l.routingMu.Lock()
+	l.routingCheckedAt = time.Now()
+	l.routingMu.Unlock()
+	return nil
 }
 
 // CertenTransaction represents a discovered CERTEN intent transaction
@@ -981,15 +1034,12 @@ func (l *LiteClientAdapter) GetBlock(ctx context.Context, height uint64) (*Block
 
 	// Use DN ledger as canonical scope
 	minorHeight := int64(height)
-	blocks, err := l.queryMinorBlocks(ctx, "acc://dn", minorHeight)
+	// The block's own fields only: its entries are not needed here, and a DN block's full record can be
+	// larger than the endpoint delivers (RB3-F125).
+	b, err := l.queryMinorBlockHeader(ctx, "acc://dn", minorHeight)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query DN minor block %d: %w", minorHeight, err)
 	}
-	if len(blocks) == 0 || blocks[0] == nil {
-		return nil, fmt.Errorf("no DN minor block found at height %d", minorHeight)
-	}
-
-	b := blocks[0]
 
 	log.Printf("✅ [BLOCK-DATA] Found DN minor block %d at %s (partition=%s, entries=%d)",
 		b.Height, b.Time.Format(time.RFC3339), b.Partition, len(b.Entries))
@@ -1079,7 +1129,7 @@ func (l *LiteClientAdapter) queryV3API(ctx context.Context, method string, param
 	}
 
 	if apiResp.Error != nil {
-		return nil, fmt.Errorf("API error: %s (%d)", apiResp.Error.Message, apiResp.Error.Code)
+		return nil, &V3APIError{Code: apiResp.Error.Code, Message: apiResp.Error.Message}
 	}
 
 	// Return just the result as a map for easier parsing
@@ -1113,40 +1163,182 @@ func (l *LiteClientAdapter) getNetworkStatusV3(ctx context.Context) (*NetworkSta
 	return status, nil
 }
 
-// queryMinorBlocks queries exactly one minor block from a partition using v3 API
+// blockPageSize is how many entries one block query asks for. A block query loads every entry's full
+// message, and Kermit's endpoint cuts responses near 98 KB, so pages stay small; a block is read page by
+// page until its stated total is reached (RB3-F125).
+const blockPageSize = 10
+
+// queryMinorBlocks reads exactly one minor block, completely: every entry up to the block's stated total
+// and, for a DN block, every anchored block with all of its entries. Anything short of that is an error,
+// never a partial block (RB3-F125) - it used to ask for "up to 500 entries" and use whatever came back.
 func (l *LiteClientAdapter) queryMinorBlocks(ctx context.Context, partitionURL string, blockHeight int64) ([]*MinorBlock, error) {
-	ledgerScope := l.convertToLedgerScope(partitionURL)
-
-	// Query exactly one block with expand=true to get full transaction details including memo
-	// Include entryRange with high count to get ALL entries (blocks can have many entries)
-	queryParams := map[string]interface{}{
-		"scope": ledgerScope,
-		"query": map[string]interface{}{
-			"queryType": "block",
-			"minor":     blockHeight,
-			"expand":    true,
-			"entryRange": map[string]interface{}{
-				"start": 0,
-				"count": 500, // Get up to 500 entries per block
-			},
-		},
-	}
-
-	response, err := l.queryV3API(ctx, "query", queryParams)
+	record, err := l.readMinorBlockRecord(ctx, partitionURL, blockHeight, true)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query block %d from %s: %w", blockHeight, partitionURL, err)
 	}
-
-	// Parse the block response
-	block, err := l.parseMinorBlockRecord(response, partitionURL, blockHeight)
+	block, err := l.parseMinorBlockRecord(record, partitionURL, blockHeight)
 	if err != nil {
 		return nil, err
 	}
-	if block != nil {
-		return []*MinorBlock{block}, nil
-	}
+	return []*MinorBlock{block}, nil
+}
 
-	return nil, nil
+// queryMinorBlockHeader reads a minor block's record without its entries: index, time and source.
+func (l *LiteClientAdapter) queryMinorBlockHeader(ctx context.Context, partitionURL string, blockHeight int64) (*MinorBlock, error) {
+	record, err := l.readMinorBlockRecord(ctx, partitionURL, blockHeight, false)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query block %d from %s: %w", blockHeight, partitionURL, err)
+	}
+	return l.parseMinorBlockRecord(record, partitionURL, blockHeight)
+}
+
+// readMinorBlockRecord returns the block record; with entries, all of them and every anchored block
+// complete.
+func (l *LiteClientAdapter) readMinorBlockRecord(ctx context.Context, partitionURL string, blockHeight int64, withEntries bool) (map[string]interface{}, error) {
+	if blockHeight <= 0 {
+		return nil, fmt.Errorf("a minor block index is positive, got %d", blockHeight)
+	}
+	scope := l.convertToLedgerScope(partitionURL)
+	if !withEntries {
+		rec, _, _, err := l.readBlockPage(ctx, scope, blockHeight, 0, 0)
+		return rec, err
+	}
+	first, records, anchored, err := l.readBlockEntries(ctx, scope, blockHeight, 0)
+	if err != nil {
+		return nil, err
+	}
+	first["entries"] = map[string]interface{}{"recordType": "range", "start": float64(0), "total": float64(len(records)), "records": records}
+	if anchored == nil {
+		delete(first, "anchored")
+		return first, nil
+	}
+	// The anchored blocks: all of them, each with all of its entries.
+	anchoredRecords, _ := anchored["records"].([]interface{})
+	total, ok := anchored["total"].(float64)
+	if !ok || int(total) != len(anchoredRecords) {
+		return nil, fmt.Errorf("block %d on %s lists %d anchored blocks of %v", blockHeight, scope, len(anchoredRecords), anchored["total"])
+	}
+	for i, r := range anchoredRecords {
+		ab, ok := r.(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("block %d on %s: anchored block %d is not a record", blockHeight, scope, i)
+		}
+		if err := l.completeAnchoredBlock(ctx, ab); err != nil {
+			return nil, fmt.Errorf("block %d on %s: %w", blockHeight, scope, err)
+		}
+	}
+	first["anchored"] = anchored
+	return first, nil
+}
+
+// completeAnchoredBlock makes an anchored block's entries complete, reading any the DN record did not
+// carry from the block's own partition.
+func (l *LiteClientAdapter) completeAnchoredBlock(ctx context.Context, ab map[string]interface{}) error {
+	source, _ := ab["source"].(string)
+	index, ok := ab["index"].(float64)
+	if source == "" || !ok || index <= 0 {
+		return fmt.Errorf("anchored block without a source and index: %v/%v", ab["source"], ab["index"])
+	}
+	entries, _ := ab["entries"].(map[string]interface{})
+	var have []interface{}
+	total := -1.0
+	if entries != nil {
+		have, _ = entries["records"].([]interface{})
+		if t, ok := entries["total"].(float64); ok {
+			total = t
+		}
+	}
+	if total >= 0 && int(total) == len(have) {
+		return nil
+	}
+	_, rest, _, err := l.readBlockEntries(ctx, l.convertToLedgerScope(source), int64(index), len(have))
+	if err != nil {
+		return fmt.Errorf("anchored block %d on %s: %w", int64(index), source, err)
+	}
+	all := append(append([]interface{}{}, have...), rest...)
+	ab["entries"] = map[string]interface{}{"recordType": "range", "start": float64(0), "total": float64(len(all)), "records": all}
+	return nil
+}
+
+// readBlockEntries reads a block's entries from `from` to its stated total, page by page. It returns the
+// first page's record (for the block's own fields), the entries, and the anchored range if a page carried it.
+func (l *LiteClientAdapter) readBlockEntries(ctx context.Context, scope string, height int64, from int) (map[string]interface{}, []interface{}, map[string]interface{}, error) {
+	var first, anchored map[string]interface{}
+	var records []interface{}
+	start, total := from, -1
+	for total < 0 || start < total {
+		// A page the endpoint cannot deliver whole is asked for again smaller, down to one entry; one
+		// entry that still cannot be delivered is an error.
+		var rec map[string]interface{}
+		var page []interface{}
+		var t int
+		var err error
+		for count := blockPageSize; ; count /= 2 {
+			if rec, page, t, err = l.readBlockPage(ctx, scope, height, start, count); err == nil || count == 1 {
+				break
+			}
+		}
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		if total >= 0 && t != total {
+			return nil, nil, nil, fmt.Errorf("block %d on %s changed its entry total from %d to %d while being read", height, scope, total, t)
+		}
+		total = t
+		if first == nil {
+			first = rec
+		}
+		if a, ok := rec["anchored"].(map[string]interface{}); ok {
+			anchored = a
+		}
+		if start < total && len(page) == 0 {
+			return nil, nil, nil, fmt.Errorf("block %d on %s returned no entries from %d of %d", height, scope, start, total)
+		}
+		records = append(records, page...)
+		start += len(page)
+	}
+	if start != total {
+		return nil, nil, nil, fmt.Errorf("block %d on %s: read %d entries of %d", height, scope, start, total)
+	}
+	return first, records, anchored, nil
+}
+
+// readBlockPage is one block query: the record, its entry page and the block's entry total. A response
+// that is not a complete block record (a truncated body fails to decode before this) is an error.
+func (l *LiteClientAdapter) readBlockPage(ctx context.Context, scope string, height int64, start, count int) (map[string]interface{}, []interface{}, int, error) {
+	result, err := l.queryV3API(ctx, "query", map[string]interface{}{
+		"scope": scope,
+		"query": map[string]interface{}{
+			"queryType":  "block",
+			"minor":      height,
+			"entryRange": map[string]interface{}{"start": start, "count": count},
+		},
+	})
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	if rt, _ := result["recordType"].(string); rt != "minorBlock" {
+		return nil, nil, 0, fmt.Errorf("block %d on %s: the answer is a %q record, not a minor block", height, scope, rt)
+	}
+	if idx, ok := result["index"].(float64); !ok || int64(idx) != height {
+		return nil, nil, 0, fmt.Errorf("block %d on %s: the answer is block %v", height, scope, result["index"])
+	}
+	entries, ok := result["entries"].(map[string]interface{})
+	if !ok {
+		return nil, nil, 0, fmt.Errorf("block %d on %s: no entry range in the answer", height, scope)
+	}
+	t, ok := entries["total"].(float64)
+	if !ok || t < 0 {
+		return nil, nil, 0, fmt.Errorf("block %d on %s: the entry range states no total", height, scope)
+	}
+	page, _ := entries["records"].([]interface{})
+	if st, ok := entries["start"].(float64); len(page) > 0 && (!ok || int(st) != start) {
+		return nil, nil, 0, fmt.Errorf("block %d on %s: asked for entries from %d, got them from %v", height, scope, start, entries["start"])
+	}
+	if len(page) > count {
+		return nil, nil, 0, fmt.Errorf("block %d on %s: asked for %d entries, got %d", height, scope, count, len(page))
+	}
+	return result, page, int(t), nil
 }
 
 // convertToLedgerScope converts partition URLs to correct ledger scopes for v3 API
@@ -1184,14 +1376,11 @@ func (l *LiteClientAdapter) MinorBlockTime(ctx context.Context, partition string
 	if partition == "" || height == 0 {
 		return time.Time{}, fmt.Errorf("minor block time needs a partition and a height (got %q, %d)", partition, height)
 	}
-	blocks, err := l.queryMinorBlocks(ctx, partition, int64(height))
+	// The block's time only - not its entries (RB3-F125).
+	b, err := l.queryMinorBlockHeader(ctx, partition, int64(height))
 	if err != nil {
 		return time.Time{}, err
 	}
-	if len(blocks) == 0 || blocks[0] == nil {
-		return time.Time{}, fmt.Errorf("no minor block %d on %s", height, partition)
-	}
-	b := blocks[0]
 	if b.Index != int64(height) {
 		return time.Time{}, fmt.Errorf("minor block query for %d on %s returned block %d", height, partition, b.Index)
 	}

@@ -226,6 +226,9 @@ type IntentDiscovery struct {
 	// queue is empty, so no double-execution is possible; failed records remain lifecycle=failed
 	// in PostgreSQL for alerting.
 	retryCh chan *intentRetryJob
+
+	// unsearched keeps blocks whose search failed until they are searched (RB3-F125, unsearched_blocks.go).
+	unsearched UnsearchedBlockStore
 }
 
 // LedgerStoreInterface defines the interface for ledger operations needed by intent discovery
@@ -381,6 +384,7 @@ func (id *IntentDiscovery) StartMonitoring() {
 	if workerCount <= 0 {
 		workerCount = DefaultBlockWorkers
 	}
+	go id.searchUnsearchedLoop()
 	for i := 0; i < workerCount; i++ {
 		workerID := fmt.Sprintf("worker-%d", i+1)
 		id.logger.Printf("🔧 Starting block processor: %s", workerID)
@@ -675,14 +679,91 @@ func (id *IntentDiscovery) blockProcessor(workerID string) {
 		case job := <-id.blockProcessCh:
 			id.logger.Printf("📦 Worker %s received job for block %d", workerID, job.BlockHeight)
 			if err := id.processBlock(job, workerID); err != nil {
-				id.logger.Printf("❌ Worker %s failed to process block %d: %v",
-					workerID, job.BlockHeight, err)
+				id.logger.Printf("❌ Worker %s failed to search block %d: %v", workerID, job.BlockHeight, err)
+				// The watermark passes a block only once it is searched or kept to be searched
+				// (RB3-F125). It used to pass it regardless, on the theory that it would "appear again
+				// on a future polling cycle" - it never did, and its intents were lost.
+				if !id.keepUnsearched(job.BlockHeight, err) {
+					go id.requeueLater(job)
+					continue
+				}
 			}
-			// Advance watermark regardless of success/failure to prevent getting stuck.
-			// Failed blocks are logged above; if the error was transient the block will
-			// appear again on a future polling cycle once the watermark catches up.
 			id.advanceWatermark(job.BlockHeight)
 		}
+	}
+}
+
+// keepUnsearched records a block whose search failed; false when it could not be kept (the caller then
+// must not let the watermark pass it).
+func (id *IntentDiscovery) keepUnsearched(height uint64, cause error) bool {
+	if id.unsearched == nil {
+		id.logger.Printf("🚨 [DISCOVERY] block %d could not be searched and there is no unsearched-block store; "+
+			"it is searched again instead of passed", height)
+		return false
+	}
+	if err := id.unsearched.Put(height, cause.Error()); err != nil {
+		id.logger.Printf("🚨 [DISCOVERY] block %d could not be searched (%v) nor kept (%v); it is searched again "+
+			"instead of passed", height, cause, err)
+		return false
+	}
+	id.logger.Printf("⚠️ [DISCOVERY] block %d kept for another search: %v", height, cause)
+	return true
+}
+
+// requeueLater hands a block that could be neither searched nor kept back to the workers after a pause.
+func (id *IntentDiscovery) requeueLater(job *BlockProcessJob) {
+	select {
+	case <-id.stopCh:
+	case <-time.After(unsearchedRetryInterval):
+		select {
+		case <-id.stopCh:
+		case id.blockProcessCh <- job:
+		}
+	}
+}
+
+// unsearchedRetryInterval is how often kept blocks are searched again.
+const unsearchedRetryInterval = 30 * time.Second
+
+// SetUnsearchedBlocks gives discovery the store its unsearched blocks are kept in.
+func (id *IntentDiscovery) SetUnsearchedBlocks(s UnsearchedBlockStore) { id.unsearched = s }
+
+// searchUnsearchedLoop searches kept blocks again until each is searched.
+func (id *IntentDiscovery) searchUnsearchedLoop() {
+	t := time.NewTicker(unsearchedRetryInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-id.stopCh:
+			return
+		case <-t.C:
+			id.searchUnsearchedOnce()
+		}
+	}
+}
+
+// searchUnsearchedOnce searches every kept block once, lowest first.
+func (id *IntentDiscovery) searchUnsearchedOnce() {
+	if id.unsearched == nil {
+		return
+	}
+	blocks, err := id.unsearched.List()
+	if err != nil {
+		id.logger.Printf("🚨 [DISCOVERY] unsearched blocks unreadable: %v", err)
+		return
+	}
+	for _, b := range blocks {
+		if err := id.processBlock(&BlockProcessJob{BlockHeight: b.Height}, "unsearched"); err != nil {
+			if pErr := id.unsearched.Put(b.Height, err.Error()); pErr != nil {
+				id.logger.Printf("🚨 [DISCOVERY] block %d: %v (and its attempt was not recorded: %v)", b.Height, err, pErr)
+			}
+			continue
+		}
+		if err := id.unsearched.Remove(b.Height); err != nil {
+			id.logger.Printf("🚨 [DISCOVERY] block %d searched, but not removed from the unsearched blocks: %v", b.Height, err)
+			continue
+		}
+		id.logger.Printf("✅ [DISCOVERY] block %d searched after %d failed attempt(s)", b.Height, b.Attempts)
 	}
 }
 
@@ -713,6 +794,13 @@ type DiscoveryStatus struct {
 	// Started is false until the first watermark advance, so a node that has only just booted
 	// is not reported as stalled.
 	Started bool
+	// Unsearched is how many blocks are kept to be searched again, OldestUnsearched the lowest of them
+	// and OldestUnsearchedSeconds how long it has waited (RB3-F125). UnsearchedError is set when the
+	// store itself cannot be read.
+	Unsearched              int
+	OldestUnsearched        uint64
+	OldestUnsearchedSeconds float64
+	UnsearchedError         string
 }
 
 // StallLagFloor is how far behind the head a node must be before a still watermark counts as a
@@ -762,6 +850,14 @@ func (id *IntentDiscovery) Status() DiscoveryStatus {
 		ChainHead:     id.chainHead,
 		LastPollError: id.lastPollErr,
 		Started:       !id.lastAdvanceAt.IsZero(),
+	}
+	if id.unsearched != nil {
+		if kept, err := id.unsearched.List(); err != nil {
+			st.UnsearchedError = err.Error()
+		} else if len(kept) > 0 {
+			st.Unsearched, st.OldestUnsearched = len(kept), kept[0].Height
+			st.OldestUnsearchedSeconds = time.Since(kept[0].FirstSeen).Seconds()
+		}
 	}
 	if id.chainHead > id.lastProcessedBlock {
 		st.LagBlocks = id.chainHead - id.lastProcessedBlock

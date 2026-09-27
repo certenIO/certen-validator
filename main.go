@@ -102,8 +102,11 @@ type HealthStatus struct {
 	Discovery     string `json:"discovery"`
 	DiscoveryLag  uint64 `json:"discovery_lag_blocks"`
 	DiscoveryIdle int64  `json:"discovery_seconds_since_advance"`
-	startTime     time.Time
-	mu            sync.RWMutex
+	// DiscoveryUnsearched is how many blocks wait to be searched again, and the oldest's age (RB3-F125).
+	DiscoveryUnsearched          int   `json:"discovery_unsearched_blocks"`
+	DiscoveryUnsearchedOldestAge int64 `json:"discovery_unsearched_oldest_seconds"`
+	startTime                    time.Time
+	mu                           sync.RWMutex
 }
 
 // Global health status - updated during startup and runtime
@@ -148,6 +151,14 @@ func (h *HealthStatus) SetDiscovery(status string, lagBlocks uint64, secondsSinc
 	h.DiscoveryLag = lagBlocks
 	h.DiscoveryIdle = secondsSinceAdvance
 	h.updateOverallStatus()
+}
+
+// SetDiscoveryUnsearched records the blocks waiting to be searched again.
+func (h *HealthStatus) SetDiscoveryUnsearched(count int, oldestAgeSeconds int64) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.DiscoveryUnsearched = count
+	h.DiscoveryUnsearchedOldestAge = oldestAgeSeconds
 }
 
 func (h *HealthStatus) SetBatchSystem(status string) {
@@ -386,6 +397,13 @@ func watchDiscoveryLiveness(d *intent.IntentDiscovery) {
 			state = "stalled"
 		}
 		healthStatus.SetDiscovery(state, st.LagBlocks, int64(st.SecondsSinceAdvance))
+		healthStatus.SetDiscoveryUnsearched(st.Unsearched, int64(st.OldestUnsearchedSeconds))
+		if st.UnsearchedError != "" {
+			log.Printf("🚨 [DISCOVERY] the unsearched-block store cannot be read: %s", st.UnsearchedError)
+		} else if st.Unsearched > 0 && st.OldestUnsearchedSeconds > 600 {
+			log.Printf("🚨 [DISCOVERY] %d block(s) not yet searched; the oldest, %d, has waited %.0fs. Intents "+
+				"anchored in them are not discovered until they are.", st.Unsearched, st.OldestUnsearched, st.OldestUnsearchedSeconds)
+		}
 
 		// Log the EDGES only. A per-tick line would be noise nobody reads, which is the
 		// failure mode that let the original outage hide in plain sight.
@@ -1932,6 +1950,14 @@ func startValidator(
 
 	// Create IntentDiscovery with proper configuration and persistence
 	intentDiscovery := intent.NewIntentDiscovery(accClient, cfg.AccumulateURL, intentConfig, ledgerWrapper, liteClientProofGen, cfg.ValidatorID)
+	// Blocks whose search fails wait here until they are searched (RB3-F125): the watermark never passes a
+	// block that is neither searched nor kept.
+	unsearchedBlocks, ubErr := intent.OpenFileUnsearchedBlocks(filepath.Join(nsDataDir, "unsearched_blocks.json"))
+	if ubErr != nil {
+		return nil, nil, fmt.Errorf("intent discovery: %w", ubErr)
+	}
+	intentDiscovery.SetUnsearchedBlocks(unsearchedBlocks)
+	log.Printf("✅ [DISCOVERY] unsearched blocks kept at %s; searched again every 30s", unsearchedBlocks.Path())
 
 	// This is the critical hook: IntentDiscovery calls the canonical BFT consensus method
 	// BFTValidator.ExecuteCanonicalIntentWithBFTConsensus(ctx, certenIntent, certenProof, blockHeight)
