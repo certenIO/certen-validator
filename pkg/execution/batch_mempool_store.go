@@ -114,6 +114,20 @@ type persistedMember struct {
 	// same version-skew reason as Lane: an older binary restores such a member as pending, and its
 	// settlement pre-check finds the leaf already consumed.
 	Outcome string `json:"outcome,omitempty"`
+	// After and SequencePosition: a successor in a sequential cross-chain intent (batch_sequence.go).
+	// omitempty for the same version-skew reason as Lane.
+	After            *persistedPredecessor `json:"after,omitempty"`
+	SequencePosition int                   `json:"sequence_position,omitempty"`
+}
+
+// persistedPredecessor is a MemberPredecessor on disk.
+type persistedPredecessor struct {
+	ChainID           int64  `json:"chain_id"`
+	OperationID       string `json:"operation_id"`
+	Account           string `json:"account"`
+	Leaf              string `json:"leaf"`
+	Deadline          int64  `json:"deadline"` // unix seconds
+	ContinueOnFailure bool   `json:"continue_on_failure,omitempty"`
 }
 
 // AttestationCodec converts the opaque Phase 7-9 snapshot to and from JSON.
@@ -242,6 +256,13 @@ func (s *BatchMempoolStore) encodeMember(p *PendingBatchIntent, lane BatchLane) 
 		SettlementNonce:    p.SettlementNonce,
 		SettlementNonceSet: p.SettlementNonceSet,
 		Outcome:            string(p.Outcome),
+		SequencePosition:   p.SequencePosition,
+	}
+	if a := p.After; a != nil {
+		pm.After = &persistedPredecessor{
+			ChainID: a.ChainID, OperationID: "0x" + common.Bytes2Hex(a.OperationID[:]), Account: a.Account.Hex(),
+			Leaf: "0x" + common.Bytes2Hex(a.Leaf[:]), Deadline: a.Deadline.Unix(), ContinueOnFailure: a.ContinueOnFailure,
+		}
 	}
 	// on_cadence is the absent default, so it is never written. See persistedMember.Lane.
 	if lane == LaneOnDemand {
@@ -329,6 +350,21 @@ func (s *BatchMempoolStore) Load(m *BatchMempool) (int, error) {
 			SettlementNonce:    pm.SettlementNonce,
 			SettlementNonceSet: pm.SettlementNonceSet,
 			Outcome:            MemberOutcome(pm.Outcome),
+			SequencePosition:   pm.SequencePosition,
+		}
+		if a := pm.After; a != nil {
+			op, lf := common.FromHex(a.OperationID), common.FromHex(a.Leaf)
+			if len(op) != 32 || len(lf) != 32 || a.Deadline <= 0 {
+				// A successor restored without its predecessor would settle out of its declared order.
+				s.logf("[BATCH-STORE] intent %s on chain %d: its predecessor record is malformed; the member is NOT "+
+					"restored, since without it the member would settle out of its declared order", pm.IntentID, pm.ChainID)
+				continue
+			}
+			pred := &MemberPredecessor{ChainID: a.ChainID, Account: common.HexToAddress(a.Account),
+				Deadline: time.Unix(a.Deadline, 0).UTC(), ContinueOnFailure: a.ContinueOnFailure}
+			copy(pred.OperationID[:], op)
+			copy(pred.Leaf[:], lf)
+			p.After = pred
 		}
 		for _, l := range pm.Legs {
 			v := new(big.Int)

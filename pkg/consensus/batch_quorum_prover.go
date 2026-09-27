@@ -342,11 +342,16 @@ func (bv *BFTValidator) enqueueForBatch(
 		// outcome stand in for the other's (RB3-F47).
 		memberAtt := *batchAtt
 		var enqErr error
-		if plan.onDemand {
+		switch {
+		case m.after != nil:
+			enqErr = bv.batchEnqueuer.EnqueueAfter(
+				certenIntent.IntentID, plan.adiURL, m.chainID, m.account, m.opID, m.legs, &memberAtt, commitHeight,
+				certenIntent.Partition, certenIntent.BlockTime, certenIntent.TransactionHash, *m.after)
+		case m.onDemand:
 			enqErr = bv.batchEnqueuer.EnqueueOnDemand(
 				certenIntent.IntentID, plan.adiURL, m.chainID, m.account, m.opID, m.legs, &memberAtt, commitHeight,
 				certenIntent.Partition, certenIntent.BlockTime, certenIntent.TransactionHash)
-		} else {
+		default:
 			enqErr = bv.batchEnqueuer.EnqueueForBatch(
 				certenIntent.IntentID, plan.adiURL, m.chainID, m.account, m.opID, m.legs, &memberAtt, commitHeight,
 				certenIntent.Partition, certenIntent.BlockTime, certenIntent.TransactionHash)
@@ -362,7 +367,7 @@ func (bv *BFTValidator) enqueueForBatch(
 			// All-or-nothing: take back what this call queued for the intent's other chains, or the
 			// intent would settle on one chain while being reported refused.
 			for _, r := range added {
-				bv.batchEnqueuer.RemoveMember(plan.onDemand, certenIntent.IntentID, r.chainID, r.opID)
+				bv.batchEnqueuer.RemoveMember(r.onDemand, certenIntent.IntentID, r.chainID, r.opID)
 			}
 			return refuse(fmt.Errorf("intent %s on chain %d: %w", certenIntent.IntentID, m.chainID, enqErr))
 		}

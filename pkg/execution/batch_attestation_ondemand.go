@@ -109,6 +109,27 @@ func (s *BatchStack) HandleOnDemandAttestationRequest(
 			shortHex(req.OperationID), req.ChainID)
 	}
 
+	// A successor in a sequential intent is co-signed only once THIS validator reads its predecessor's
+	// outcome on chain (batch_sequence.go) - so no quorum anchors it out of order.
+	if member.After != nil {
+		if s.SequenceChain == nil {
+			return refuseWith(CodeNotReady, "no sequence chain reader: member %s's predecessor cannot be read", member.IntentID)
+		}
+		seqCtx, seqCancel := context.WithTimeout(context.Background(), batchAttestationScreenTimeout)
+		state, cause, serr := sequenceReadiness(seqCtx, s.SequenceChain, member)
+		seqCancel()
+		switch {
+		case serr != nil:
+			return refuseWith(CodePredecessorPending, "member %s: reading its predecessor on chain %d: %v",
+				member.IntentID, member.After.ChainID, serr)
+		case state == sequenceWaiting:
+			return refuseWith(CodePredecessorPending, "member %s: its predecessor on chain %d has no outcome at this "+
+				"validator's finalized block yet", member.IntentID, member.After.ChainID)
+		case state == sequenceStopped:
+			return refuseWith(CodeRefused, "member %s is not to be executed: %s", member.IntentID, cause)
+		}
+	}
+
 	// The same account screen the leader applies before it anchors (SettleOnDemandMember): a peer
 	// co-signs only a member it would have settled itself (RB3-F54).
 	screenCtx, cancel := context.WithTimeout(context.Background(), batchAttestationScreenTimeout)

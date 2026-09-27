@@ -1304,7 +1304,7 @@ func (o *BatchOrchestrator) memberPastDeadline(p *PendingBatchIntent) bool {
 	if origin.IsZero() {
 		return false
 	}
-	return time.Since(origin) > maxGasDeferral
+	return time.Since(origin) > p.settlementHorizon()
 }
 
 // maxGasDeferral is how long a member may be deferred on gas before it is failed outright.

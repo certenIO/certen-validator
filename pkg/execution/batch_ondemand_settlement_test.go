@@ -378,6 +378,7 @@ func settlementSubmitter(t *testing.T, f *fakeODChain) (*OnDemandSubmitter, *[]a
 	stack := &BatchStack{
 		Mempool:       NewBatchMempool(BatchMempoolConfig{}),
 		Orchestrators: map[int64]*BatchOrchestrator{odChain: odOrchestrator(f)},
+		SequenceChain: &fakeNSChain{},
 	}
 	var calls []attestCall
 	cfg := OnDemandSubmitterConfig{

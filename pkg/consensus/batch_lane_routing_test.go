@@ -38,14 +38,17 @@ func TestOnDemandRoutesToADifferentLaneNotOffThePath(t *testing.T) {
 	if !strings.Contains(src, "EnqueueForBatch(") {
 		t.Fatal("no EnqueueForBatch call — the on_cadence period lane is gone")
 	}
-	// Neither branch may simply skip enqueueing: the two lanes are the two arms of one choice,
-	// and each arm enqueues.
-	arm := strings.Index(src, "if plan.onDemand {\n\t\t\tenqErr = bv.batchEnqueuer.EnqueueOnDemand(")
+	// No arm may simply skip enqueueing: a sequential intent's later member, the intent-keyed lane
+	// and the period lane are the arms of one choice, and each arm enqueues.
+	arm := strings.Index(src, "case m.after != nil:\n\t\t\tenqErr = bv.batchEnqueuer.EnqueueAfter(")
 	if arm < 0 {
+		t.Fatal("the sequential successor arm does not enqueue")
+	}
+	window := src[arm:min(arm+1200, len(src))]
+	if !strings.Contains(window, "case m.onDemand:\n\t\t\tenqErr = bv.batchEnqueuer.EnqueueOnDemand(") {
 		t.Fatal("the on-demand arm does not enqueue")
 	}
-	window := src[arm:min(arm+700, len(src))]
-	if !strings.Contains(window, "} else {\n\t\t\tenqErr = bv.batchEnqueuer.EnqueueForBatch(") {
+	if !strings.Contains(window, "default:\n\t\t\tenqErr = bv.batchEnqueuer.EnqueueForBatch(") {
 		t.Fatal("the period arm does not enqueue")
 	}
 }

@@ -41,8 +41,11 @@ import (
 type OnDemandCollectResult struct {
 	// Responses are the peers that agreed and returned a usable partial.
 	Responses []*BatchAttestationResponse
-	// NotHeld counts peers that do not yet hold the member. These are the retryable ones.
+	// NotHeld counts peers that do not yet hold the member. Retryable.
 	NotHeld int
+	// PredecessorPending counts peers that do not yet read the member's predecessor settled at their
+	// finalized block. Retryable.
+	PredecessorPending int
 	// Mismatch counts peers that hold it and derived a different bundleId. For a one-member
 	// batch this is a real disagreement about the intent itself, not a membership race.
 	Mismatch int
@@ -58,7 +61,7 @@ func (r OnDemandCollectResult) Agreed() int { return len(r.Responses) }
 // CouldStillConverge reports whether waiting is worth it: at least one peer is merely behind or
 // briefly unreachable, as opposed to actively disagreeing.
 func (r OnDemandCollectResult) CouldStillConverge() bool {
-	return r.NotHeld > 0 || r.Unreachable > 0
+	return r.NotHeld > 0 || r.PredecessorPending > 0 || r.Unreachable > 0
 }
 
 // CollectOnDemandAttestations asks every peer to co-sign a one-member batch.
@@ -151,6 +154,8 @@ func CollectOnDemandAttestations(
 				switch out.Code {
 				case CodeMemberNotHeld:
 					result.NotHeld++
+				case CodePredecessorPending:
+					result.PredecessorPending++
 				case CodeBundleMismatch:
 					result.Mismatch++
 				default:
@@ -161,6 +166,8 @@ func CollectOnDemandAttestations(
 				case CodeMemberNotHeld:
 					// The expected answer for the first seconds. Not a warning.
 					logf("⏳ [OD-ATTEST] %s does not hold it yet", peer)
+				case CodePredecessorPending:
+					logf("⏳ [OD-ATTEST] %s does not see its predecessor settled yet: %s", peer, out.Error)
 				case CodeBundleMismatch:
 					logf("❌ [OD-ATTEST] %s DISAGREES on a one-member batch: %s", peer, out.Error)
 				default:

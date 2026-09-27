@@ -129,6 +129,12 @@ type PendingBatchIntent struct {
 	// they settle made the leader's view of a period drift from its peers' (RB3-F54). Settlement
 	// acts only on members without an outcome.
 	Outcome MemberOutcome
+
+	// After is the member the intent's declared order places immediately before this one on another
+	// chain; nil for a member that waits on none. SequencePosition is this member's place in that
+	// order (0 for the first, or for an intent that declares none). See batch_sequence.go.
+	After            *MemberPredecessor
+	SequencePosition int
 }
 
 // MemberOutcome is a batch member's terminal outcome on this validator.
@@ -149,7 +155,7 @@ const (
 )
 
 // Deadline is the latest time the member may execute, and whether it has one: the earliest of its
-// legs' signed deadlines and CERTEN's own settlement horizon (its commit time + maxGasDeferral).
+// legs' signed deadlines and CERTEN's own settlement horizon (its commit time + settlementHorizon).
 // Both parts are the same on every validator - signed data and Accumulate consensus time - so
 // validators agree on it. A member with neither has no deadline.
 func (p *PendingBatchIntent) Deadline() (time.Time, bool) {
@@ -163,7 +169,7 @@ func (p *PendingBatchIntent) Deadline() (time.Time, bool) {
 		}
 	}
 	if !p.CommitTime.IsZero() {
-		if h := p.CommitTime.Add(maxGasDeferral).UTC(); d.IsZero() || h.Before(d) {
+		if h := p.CommitTime.Add(p.settlementHorizon()).UTC(); d.IsZero() || h.Before(d) {
 			d = h
 		}
 	}

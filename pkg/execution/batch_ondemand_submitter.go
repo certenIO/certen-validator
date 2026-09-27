@@ -141,6 +141,10 @@ func NewOnDemandSubmitter(cfg OnDemandSubmitterConfig) (*OnDemandSubmitter, erro
 	if cfg.Prover == nil {
 		return nil, fmt.Errorf("on-demand submitter requires a quorum prover")
 	}
+	if cfg.Stack.SequenceChain == nil {
+		return nil, fmt.Errorf("on-demand submitter requires the stack's sequence chain reader - " +
+			"without it a sequential intent's later members could never be settled in order")
+	}
 	cfg.withDefaults()
 	return &OnDemandSubmitter{
 		cfg:    cfg,
@@ -247,6 +251,26 @@ func (s *OnDemandSubmitter) consider(ctx context.Context, member *PendingBatchIn
 	if err != nil {
 		logf("[OD] chain %d has no orchestrator: %v", member.ChainID, err)
 		return
+	}
+
+	// A successor in a sequential intent is settled only once its predecessor has an outcome on its
+	// chain (batch_sequence.go). A member already acted on is past that point.
+	if member.After != nil && !member.AnchorProved && !member.AttestedSeen {
+		state, cause, serr := sequenceReadiness(ctx, s.cfg.Stack.SequenceChain, member)
+		switch {
+		case serr != nil:
+			logf("[OD] intent=%s on chain %d: its predecessor on chain %d could not be read (%v); it waits",
+				member.IntentID, member.ChainID, member.After.ChainID, serr)
+			return false
+		case state == sequenceWaiting:
+			return false
+		case state == sequenceStopped:
+			logf("[OD] intent=%s on chain %d is not executed: %s", member.IntentID, member.ChainID, cause)
+			s.dispose(ctx, member, nil, false, errors.New(cause))
+			return false
+		}
+		logf("[OD] intent=%s on chain %d: its predecessor on chain %d has its outcome; settling",
+			member.IntentID, member.ChainID, member.After.ChainID)
 	}
 
 	outcome, err := s.settleWithReadinessRetry(ctx, orch, member)

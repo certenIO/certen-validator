@@ -94,6 +94,11 @@ const (
 	// Retryable, but it is a local startup condition rather than a view difference.
 	CodeNotReady AttestationRefusalCode = "not_ready"
 
+	// CodePredecessorPending — the member follows another in a sequential intent, and this validator
+	// does not yet read that predecessor's outcome at its finalized block. RETRYABLE: finality
+	// reaches every validator within moments of the proposer.
+	CodePredecessorPending AttestationRefusalCode = "predecessor_pending"
+
 	// CodeRefused — anything else. Not retryable by default.
 	CodeRefused AttestationRefusalCode = "refused"
 )

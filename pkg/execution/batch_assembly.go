@@ -14,6 +14,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/certen/independant-validator/pkg/config"
+	"github.com/certen/independant-validator/pkg/consensus"
 )
 
 // =============================================================================
@@ -178,6 +179,10 @@ type BatchStack struct {
 	// wired, and nil forever when the on-demand lane is disabled — EnqueueOnDemand is simply
 	// never called in that case.
 	onDemandWaker atomic.Pointer[func()]
+
+	// SequenceChain reads a successor's predecessor on its chain (batch_sequence.go): the leader
+	// before it settles one, and a peer before it co-signs one.
+	SequenceChain NonSettlementChain
 }
 
 // NewBatchStack assembles resolver -> submitter -> orchestrator for every configured chain.
@@ -224,6 +229,7 @@ func NewBatchStack(
 		Submitter:     submitter,
 		Mempool:       mempool,
 		Orchestrators: orchestrators,
+		SequenceChain: NonSettlementChainFromResolver(resolver),
 	}, nil
 }
 
@@ -868,6 +874,63 @@ func (s *BatchStack) EnqueueOnDemand(
 		commitHeight, commitPartition, commitTime, accumTxHash)
 	if err != nil {
 		return err
+	}
+	if err := s.Mempool.AddOnDemand(p); err != nil {
+		return err
+	}
+	if w := s.onDemandWaker.Load(); w != nil {
+		(*w)()
+	}
+	return nil
+}
+
+// EnqueueAfter queues a successor of a sequential cross-chain intent: a member settled only once its
+// predecessor - the intent's member on after.ChainID, queued before it - has an outcome on its chain
+// (batch_sequence.go). It always takes the intent-keyed lane, whatever the intent's proof class: a
+// one-member anchor makes readiness a question about one member.
+//
+// The predecessor's facts are computed from THIS validator's own copy of the predecessor member,
+// the same way every validator computes them. A predecessor not held here is CERTEN's condition
+// (it was to be queued first), and the successor is not queued.
+func (s *BatchStack) EnqueueAfter(
+	intentID string,
+	adiURL string,
+	chainID int64,
+	account [20]byte,
+	operationID [32]byte,
+	legs interface{},
+	attestation interface{},
+	commitHeight uint64,
+	commitPartition string,
+	commitTime time.Time,
+	accumTxHash string,
+	after consensus.SequencePredecessor,
+) error {
+	if after.Position <= 0 {
+		return fmt.Errorf("intent %s on chain %d: a successor's sequence position must be at least 1, not %d",
+			intentID, chainID, after.Position)
+	}
+	if after.ChainID == chainID {
+		return fmt.Errorf("intent %s: a member cannot follow a member on its own chain %d", intentID, chainID)
+	}
+	pred, ok := s.Mempool.FindMember(after.ChainID, after.OperationID)
+	if !ok || pred.IntentID != intentID {
+		return fmt.Errorf("%w: intent %s on chain %d follows its member on chain %d, which is not queued here",
+			ErrBatchUnavailable, intentID, chainID, after.ChainID)
+	}
+	facts, err := memberFacts(pred)
+	if err != nil {
+		return fmt.Errorf("intent %s: its predecessor on chain %d: %w", intentID, after.ChainID, err)
+	}
+	p, err := s.admit(intentID, adiURL, chainID, account, operationID, legs, attestation,
+		commitHeight, commitPartition, commitTime, accumTxHash)
+	if err != nil {
+		return err
+	}
+	p.SequencePosition = after.Position
+	p.After = &MemberPredecessor{
+		ChainID: facts.ChainID, OperationID: facts.OperationID, Account: facts.Account, Leaf: facts.Leaf,
+		Deadline: facts.Deadline, ContinueOnFailure: after.ContinueOnFailure,
 	}
 	if err := s.Mempool.AddOnDemand(p); err != nil {
 		return err

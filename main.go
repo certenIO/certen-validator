@@ -1579,11 +1579,10 @@ func startValidator(
 	// ON-DEMAND LANE. Intent-keyed settlement: one intent, one anchor, no
 	// period, no settle grace — see docs/ON_DEMAND_LANE_BUILD_PLAN.md.
 	//
-	// The submitter is started whenever batching is active, but nothing reaches
-	// it unless ON_DEMAND_INTENT_KEYED=true makes enqueueForBatch route
-	// on_demand intents to EnqueueOnDemand. Running it unconditionally means
-	// the flag flip is a config change on an already-exercised code path rather
-	// than a first run in production.
+	// The submitter is started whenever batching is active. It settles the later
+	// members of every sequential cross-chain intent (EnqueueAfter, RB3-F52), and
+	// on_demand intents too once ON_DEMAND_INTENT_KEYED=true routes them to
+	// EnqueueOnDemand.
 	odSubmitter, odErr := execution.NewOnDemandSubmitter(execution.OnDemandSubmitterConfig{
 		Stack:       stack,
 		Prover:      prover,
@@ -1611,8 +1610,8 @@ func startValidator(
 		log.Printf("⚡ [OD] intent-keyed on-demand lane ENABLED — on_demand " +
 			"intents settle one-per-anchor with no period and no settle grace")
 	} else {
-		log.Printf("💤 [OD] on-demand submitter running but IDLE " +
-			"(ON_DEMAND_INTENT_KEYED is not true; on_demand intents take the period path)")
+		log.Printf("⚡ [OD] on-demand submitter running for the later members of sequential cross-chain " +
+			"intents only (ON_DEMAND_INTENT_KEYED is not true; on_demand intents take the period path)")
 	}
 
 	// Publish to the peer attestation handler. Without this a proposer's

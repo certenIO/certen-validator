@@ -13,7 +13,7 @@ func odRoster() []string {
 func odSubmitter(t *testing.T, me string) *OnDemandSubmitter {
 	t.Helper()
 	s, err := NewOnDemandSubmitter(OnDemandSubmitterConfig{
-		Stack:       &BatchStack{Mempool: NewBatchMempool(BatchMempoolConfig{})},
+		Stack:       &BatchStack{Mempool: NewBatchMempool(BatchMempoolConfig{}), SequenceChain: &fakeNSChain{}},
 		Prover:      &BatchQuorumAttestor{},
 		ValidatorID: me,
 		Roster:      odRoster,
@@ -102,7 +102,7 @@ func TestOnDemandFailoverExceedsOneSettleCycle(t *testing.T) {
 // nil-IsLeaderFn behaviour.
 func TestOnDemandLeadershipWithEmptyRosterAlwaysLeads(t *testing.T) {
 	s, err := NewOnDemandSubmitter(OnDemandSubmitterConfig{
-		Stack:       &BatchStack{Mempool: NewBatchMempool(BatchMempoolConfig{})},
+		Stack:       &BatchStack{Mempool: NewBatchMempool(BatchMempoolConfig{}), SequenceChain: &fakeNSChain{}},
 		Prover:      &BatchQuorumAttestor{},
 		ValidatorID: "solo",
 		Roster:      func() []string { return nil },
