@@ -99,7 +99,8 @@ type onDemandChain interface {
 	// settlementInFlight reports whether this node still has a transaction outstanding at nonce.
 	settlementInFlight(nonce uint64) bool
 	// settlementHashesAt is every hash this node's key broadcast at nonce for p's settlement.
-	settlementHashesAt(p *PendingBatchIntent, nonce uint64) []string
+	// An error means the history could not be read, never that it is empty.
+	settlementHashesAt(p *PendingBatchIntent, nonce uint64) ([]string, error)
 	// anchorAttester names the transaction that attested bundleID and its sender. found=false
 	// means none is in view: nothing may be concluded.
 	anchorAttester(ctx context.Context, bundleID [32]byte, floor uint64) (txHash string, from common.Address, found bool, err error)
@@ -386,7 +387,22 @@ func (o *BatchOrchestrator) resolveUnderAttestedAnchor(
 
 	own := member.settlementHashes()
 	if member.SettlementNonceSet {
-		own = mergeHashes(own, chain.settlementHashesAt(member, member.SettlementNonce))
+		history, herr := chain.settlementHashesAt(member, member.SettlementNonce)
+		if herr != nil {
+			// RB3-F118: an unreadable history is not an empty one; what this node sent is unknown.
+			out.Deferred = true
+			o.logf("[OD] intent=%s this validator's settlement history at nonce %d is unreadable (%v) — deferring",
+				member.IntentID, member.SettlementNonce, herr)
+			return true
+		}
+		own = mergeHashes(own, history)
+		if len(own) == 0 && chain.settlementInFlight(member.SettlementNonce) {
+			// RB3-F118: no hash on record is not "nothing sent" while the nonce is still outstanding.
+			out.Deferred = true
+			o.logf("[OD] intent=%s nonce %d is still in flight with no hash on record — deferring",
+				member.IntentID, member.SettlementNonce)
+			return true
+		}
 	}
 	if len(own) > 0 {
 		unknown := false

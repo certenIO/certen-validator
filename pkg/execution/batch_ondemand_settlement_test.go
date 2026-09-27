@@ -45,8 +45,10 @@ type fakeODChain struct {
 	spentBy      string
 	spentFrom    common.Address
 	spentByKnown bool
-	// history answers settlementHashesAt: the sender's record of hashes per nonce.
-	history map[uint64][]string
+	// history answers settlementHashesAt: the sender's record of hashes per nonce; historyErr makes
+	// it unreadable.
+	history    map[uint64][]string
+	historyErr error
 	// attester answers anchorAttester (the ProofExecuted transaction's sender); attesterUnknown
 	// makes it not in view.
 	attester        common.Address
@@ -128,8 +130,11 @@ func (f *fakeODChain) reportOnDemandCosts(_ context.Context, m *PendingBatchInte
 func (f *fakeODChain) leafConsumedTx(context.Context, *PendingBatchIntent, [32]byte) (string, common.Address, bool, error) {
 	return f.spentBy, f.spentFrom, f.spentByKnown, nil
 }
-func (f *fakeODChain) settlementHashesAt(_ *PendingBatchIntent, nonce uint64) []string {
-	return f.history[nonce]
+func (f *fakeODChain) settlementHashesAt(_ *PendingBatchIntent, nonce uint64) ([]string, error) {
+	if f.historyErr != nil {
+		return nil, f.historyErr
+	}
+	return f.history[nonce], nil
 }
 func (f *fakeODChain) anchorAttester(context.Context, [32]byte, uint64) (string, common.Address, bool, error) {
 	if f.attesterUnknown {
@@ -729,5 +734,31 @@ func TestOD_RejectedBroadcastLeavesNoSettlementInFlight(t *testing.T) {
 	o.forgetUnbroadcastSettlement(m, odSettleTx)
 	if m.SettlementNonceSet || len(m.SettlementTxs) != 0 || m.SettlementTx != "" {
 		t.Fatalf("member %+v still claims a settlement that never left", m)
+	}
+}
+
+// RB3-F118: a nonce still in flight defers the member whether or not any hash of it is on record -
+// the member's own record and the sender's history can both be empty (a lost write, or an outbox
+// that cannot be read, which reports every nonce as in flight), and "no hash known" is not "nothing
+// sent".
+func TestOD_InFlightNonceDefersEvenWithNoHashOnRecord(t *testing.T) {
+	m := odMember(1, odChain, 100)
+	m.AnchorProved = true
+	m.SettlementNonce, m.SettlementNonceSet = 7, true
+	f := &fakeODChain{attested: true, attester: odOwnAddr, settleTx: odReplacementTx, inFlight: map[uint64]bool{7: true}}
+	out := settle(t, f, m)
+	if !out.Deferred || f.settleCalls != 0 {
+		t.Fatalf("outcome %+v settle calls %d; a nonce in flight must defer", out, f.settleCalls)
+	}
+}
+
+// RB3-F118: an unreadable settlement history defers - it is never read as "this node sent nothing".
+func TestOD_UnreadableSettlementHistoryDefers(t *testing.T) {
+	m := withOwnSettlement(odMember(1, odChain, 100), 7, odSettleTx)
+	f := &fakeODChain{attested: true, attester: odOwnAddr, settleTx: odReplacementTx,
+		inFlight: map[uint64]bool{7: false}, historyErr: errors.New("outbox unreadable")}
+	out := settle(t, f, m)
+	if !out.Deferred || f.settleCalls != 0 {
+		t.Fatalf("outcome %+v settle calls %d; an unreadable history must defer", out, f.settleCalls)
 	}
 }

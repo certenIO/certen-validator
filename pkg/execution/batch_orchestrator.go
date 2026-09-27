@@ -1000,12 +1000,16 @@ func (o *BatchOrchestrator) settlementInFlight(nonce uint64) bool {
 
 // settlementHashesAt is every hash this node's key broadcast at nonce for member p's settlement, from
 // the sender's durable history - including replacements made while no caller was listening (Resume).
-func (o *BatchOrchestrator) settlementHashesAt(p *PendingBatchIntent, nonce uint64) []string {
+// An unavailable sender is an error, not an empty history (RB3-F118).
+func (o *BatchOrchestrator) settlementHashesAt(p *PendingBatchIntent, nonce uint64) ([]string, error) {
 	sender, err := o.ecm.batchSender()
-	if err != nil || sender == nil {
-		return nil
+	if err != nil {
+		return nil, err
 	}
-	return sender.outbox.hashesAt(nonce, settlementOwner(p))
+	if sender == nil {
+		return nil, fmt.Errorf("the transaction sender is not available")
+	}
+	return sender.outbox.hashesAt(nonce, settlementOwner(p)), nil
 }
 
 // settlementOwner names a member's settlement in the sender's outbox.
