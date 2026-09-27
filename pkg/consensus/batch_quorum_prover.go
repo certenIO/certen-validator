@@ -114,6 +114,17 @@ func (bv *BFTValidator) batchInputsFromIntentForChain(
 	ci *CertenIntent,
 	onlyChain int64,
 ) (legs []BatchLeg, chainID int64, account [20]byte, operationID [32]byte, err error) {
+	return MemberLegsForChain(ci, onlyChain)
+}
+
+// MemberLegsForChain is the member an intent contributes on one chain, exactly as the batch path
+// anchors it: its legs in signed order (target, value, data), its source account and its operationID.
+// The settlement gates bind an observed transaction to THIS - the executor's and every peer's - so
+// what is attested is what was anchored (RB3-F77).
+func MemberLegsForChain(
+	ci *CertenIntent,
+	onlyChain int64,
+) (legs []BatchLeg, chainID int64, account [20]byte, operationID [32]byte, err error) {
 	if ci == nil {
 		return nil, 0, account, operationID, fmt.Errorf("nil intent")
 	}

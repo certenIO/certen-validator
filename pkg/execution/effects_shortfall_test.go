@@ -98,8 +98,15 @@ func TestMemberOutcomeStatesWhetherEffectsWereProven(t *testing.T) {
 	if cycleEffectsProven(&activeCycle{}) != nil {
 		t.Fatal("no committed call: nothing to state")
 	}
-	if p := cycleEffectsProven(&activeCycle{VerifiedCalls: verifiedCallProofs{"ab": &ExternalChainResult{}}}); p == nil || !*p {
+	if p := cycleEffectsProven(&activeCycle{CommittedEffects: true, VerifiedCalls: verifiedCallProofs{"ab": &ExternalChainResult{Status: 1}}}); p == nil || !*p {
 		t.Fatal("proven effects must be stated proven")
+	}
+	// A native member committed no effect; a reverted settlement assessed none: neither is "proven".
+	if p := cycleEffectsProven(&activeCycle{VerifiedCalls: verifiedCallProofs{"ab": &ExternalChainResult{Status: 1}}}); p != nil {
+		t.Fatal("a member that committed no effect has none to state")
+	}
+	if p := cycleEffectsProven(&activeCycle{CommittedEffects: true, VerifiedCalls: verifiedCallProofs{"ab": &ExternalChainResult{Status: 0}}}); p != nil {
+		t.Fatal("a reverted settlement's effects were never assessed")
 	}
 	if p := cycleEffectsProven(&activeCycle{EffectsShortfall: shortfallClaim(), VerifiedCalls: verifiedCallProofs{"ab": nil}}); p == nil || *p {
 		t.Fatal("a proven shortfall must be stated not proven, whatever else the gate saw")

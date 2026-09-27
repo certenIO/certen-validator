@@ -41,14 +41,6 @@ import (
 // effectsShortfallDomain separates a shortfall's result hash from any settlement's or non-settlement's.
 const effectsShortfallDomain = "certen:effects-not-proven:v1"
 
-// ShortfallLeg is one committed contract-call leg on the settlement's chain: its call and the effects
-// it committed.
-type ShortfallLeg struct {
-	Call   CommittedCall
-	Events []ExpectedEvent
-	State  []ExpectedStateSlot
-}
-
 // effectsShortfallResultHash is what a shortfall attestation signs: the observed settlement's own result
 // hash, bound to the claim.
 func effectsShortfallResultHash(observed [32]byte, c *attestation.EffectsShortfallClaim) [32]byte {
@@ -91,78 +83,20 @@ func eventPresent(logs []LogEntry, exp ExpectedEvent) bool {
 	return false
 }
 
-// VerifyEffectsNotProven proves that txHash executed this intent's committed calls under the member's
-// leaf and that at least one committed effect is absent. It returns the claim; an error when any part
-// cannot be established, or when every committed effect is in fact present.
+// VerifyEffectsNotProven proves that txHash is the member's execution (observeMemberExecution: its
+// account, exactly its committed calls, its operationID, its leaf consumed) and that at least one
+// committed effect is absent. It returns the claim; an error when any part cannot be established, or
+// when every committed effect is in fact present.
 func (o *ExternalChainObserver) VerifyEffectsNotProven(
 	ctx context.Context,
 	txHash common.Hash,
-	legs []ShortfallLeg,
+	legs []CommittedLeg,
 	opID [32]byte,
 	account common.Address,
 ) (*ExternalChainResult, *attestation.EffectsShortfallClaim, error) {
-	if len(legs) == 0 {
-		return nil, nil, fmt.Errorf("no committed contract-call leg to hold the settlement to")
-	}
-	if account == (common.Address{}) {
-		return nil, nil, fmt.Errorf("no member account to bind the settlement to")
-	}
-	result, err := o.ObserveTransaction(ctx, txHash, nil)
-	if err != nil {
-		return nil, nil, fmt.Errorf("observe settlement %s: %w", txHash.Hex(), err)
-	}
-	if result.Status != 1 {
-		return nil, nil, fmt.Errorf("settlement %s did not execute (status=%d)", txHash.Hex(), result.Status)
-	}
-	// RB-2: the logs and status read below are the ones committed in the block.
-	if result.TxInclusionProof == nil || !result.TxInclusionProof.Verify() {
-		return nil, nil, fmt.Errorf("RB-2: tx inclusion proof failed to verify for %s", txHash.Hex())
-	}
-	if result.ReceiptInclusionProof == nil || !result.ReceiptInclusionProof.Verify() {
-		return nil, nil, fmt.Errorf("RB-2: receipt inclusion proof failed to verify for %s", txHash.Hex())
-	}
-
-	// This intent's execution: the member's account, exactly the committed calls, the intent's operationID.
-	tx, _, err := o.ethClient.TransactionByHash(ctx, txHash)
-	if err != nil || tx == nil {
-		return nil, nil, readErr(fmt.Errorf("fetch settlement %s: %v", txHash.Hex(), err))
-	}
-	if to := tx.To(); to == nil || *to != account {
-		return nil, nil, fmt.Errorf("settlement %s is not addressed to the member's account %s", txHash.Hex(), account.Hex())
-	}
-	exec, err := decodeAccountExecution(tx.Data())
-	if err != nil {
-		return nil, nil, fmt.Errorf("settlement %s is not an account execution: %w", txHash.Hex(), err)
-	}
-	committed := make([]CommittedCall, 0, len(legs))
-	for _, l := range legs {
-		committed = append(committed, l.Call)
-	}
-	if len(exec.Calls) != len(committed) {
-		return nil, nil, fmt.Errorf("settlement %s executed %d call(s); the intent committed %d on this chain",
-			txHash.Hex(), len(exec.Calls), len(committed))
-	}
-	if err := matchCommittedCalls(exec.Calls, committed); err != nil {
-		return nil, nil, fmt.Errorf("settlement %s: %w", txHash.Hex(), err)
-	}
-	if exec.OperationID != opID {
-		return nil, nil, fmt.Errorf("settlement %s carries operationID 0x%x, not the intent's 0x%x",
-			txHash.Hex(), exec.OperationID[:8], opID[:8])
-	}
-	// Authorised: the account consumed the member's leaf, computed by the account from these calls.
-	leaf, _, err := accountLeafAndAnchor(ctx, o.ethClient, account, exec)
+	result, leaf, err := o.observeMemberExecution(ctx, txHash, legs, opID, account)
 	if err != nil {
 		return nil, nil, err
-	}
-	consumed := false
-	for _, lg := range result.Logs {
-		if lg.Address == account && len(lg.Topics) >= 3 && lg.Topics[0] == leafConsumedTopic && lg.Topics[2] == common.Hash(leaf) {
-			consumed = true
-			break
-		}
-	}
-	if !consumed {
-		return nil, nil, fmt.Errorf("settlement %s does not consume the member's leaf 0x%x in its inclusion-proven logs", txHash.Hex(), leaf[:8])
 	}
 
 	// The shortfall: absent events among the inclusion-proven logs; slots proven to hold another value.
@@ -176,23 +110,13 @@ func (o *ExternalChainObserver) VerifyEffectsNotProven(
 				claim.MissingEvents = append(claim.MissingEvents, strconv.Itoa(li)+":"+strconv.Itoa(ei))
 			}
 		}
-		if len(l.State) > 0 {
-			proofs := o.fetchStateProofs(ctx, result.BlockNumber, l.State)
-			for si, want := range l.State {
-				var p *StateProof
-				for _, sp := range proofs {
-					if sp != nil && sp.Account == want.Account && sp.Slot == want.Slot {
-						p = sp
-						break
-					}
-				}
-				if p == nil || !p.Verify(result.StateRoot) {
-					return nil, nil, readErr(fmt.Errorf("committed slot %d:%d on %s has no verifying state proof - its absence cannot be claimed",
-						li, si, want.Account.Hex()))
-				}
-				if p.Value != want.Value {
-					claim.UnsetState = append(claim.UnsetState, strconv.Itoa(li)+":"+strconv.Itoa(si))
-				}
+		holds, err := o.committedSlotsHold(ctx, result, l.State)
+		if err != nil {
+			return nil, nil, fmt.Errorf("the absence of a committed slot cannot be claimed: %w", err)
+		}
+		for si, ok := range holds {
+			if !ok {
+				claim.UnsetState = append(claim.UnsetState, strconv.Itoa(li)+":"+strconv.Itoa(si))
 			}
 		}
 	}
@@ -202,27 +126,6 @@ func (o *ExternalChainObserver) VerifyEffectsNotProven(
 		return nil, nil, fmt.Errorf("every committed effect of settlement %s is proven: there is no shortfall", txHash.Hex())
 	}
 	return result, claim, nil
-}
-
-// shortfallLegsOf is the committed legs as the shortfall proof takes them: each leg's committed call and
-// effects, and the one member account they are all sent from. False when a leg's call cannot be bound or
-// the legs name two accounts.
-func shortfallLegsOf(applicable []rbCallLeg) ([]ShortfallLeg, common.Address, bool) {
-	out := make([]ShortfallLeg, 0, len(applicable))
-	var account common.Address
-	for _, l := range applicable {
-		c, ok := l.committedCall()
-		if !ok || !common.IsHexAddress(l.account) {
-			return nil, common.Address{}, false
-		}
-		a := common.HexToAddress(l.account)
-		if account != (common.Address{}) && a != account {
-			return nil, common.Address{}, false
-		}
-		account = a
-		out = append(out, ShortfallLeg{Call: c, Events: l.events, State: l.state})
-	}
-	return out, account, len(out) > 0
 }
 
 // cycleEffectsProven is what the member's outcome records about its committed effects: false when a
@@ -235,9 +138,16 @@ func cycleEffectsProven(cycle *activeCycle) *bool {
 		f := false
 		return &f
 	}
-	if len(cycle.VerifiedCalls) > 0 {
-		t := true
-		return &t
+	// TRUE only for a settlement that executed with every committed effect proven. A member that
+	// committed none (a native transfer) and a settlement that reverted assessed no effect: NULL.
+	if !cycle.CommittedEffects {
+		return nil
+	}
+	for _, res := range cycle.VerifiedCalls {
+		if res != nil && res.Status == 1 {
+			t := true
+			return &t
+		}
 	}
 	return nil
 }

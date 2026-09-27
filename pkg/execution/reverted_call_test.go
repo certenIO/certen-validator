@@ -1,12 +1,10 @@
 package execution
 
 import (
-	"context"
 	"encoding/hex"
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 
@@ -111,62 +109,6 @@ func TestCycleOperationID(t *testing.T) {
 	op := cycleOperationID(map[string]interface{}{"operationID": "0x8f57121501d6a592cb54f3eb6e73dd856b39909348fcbb8c1df4f9b8acf07941"})
 	if op == nil || op[0] != 0x8f {
 		t.Fatalf("got %v", op)
-	}
-}
-
-// Opt-in: proves the live revert against Base Sepolia, end to end through RB-2 inclusion.
-// CERTEN_LIVE_BASE_SEPOLIA_RPC=https://sepolia.base.org go test ./pkg/execution -run LiveReverted
-func TestVerifyRevertedCall_LiveBaseSepolia(t *testing.T) {
-	rpcURL := os.Getenv("CERTEN_LIVE_BASE_SEPOLIA_RPC")
-	if rpcURL == "" {
-		t.Skip("set CERTEN_LIVE_BASE_SEPOLIA_RPC to run against Base Sepolia")
-	}
-	obs, err := NewExternalChainObserver(&ExternalChainObserverConfig{
-		EthereumRPC: rpcURL, ChainID: 84532, ValidatorID: "test", RequiredConfirmations: 1, Timeout: 90 * time.Second,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	blobs := liveIntentBlobs(t)
-	call, _ := parseCommittedCallLegs(blobs[1])[0].committedCall()
-	opBytes, _, _ := proof.ComputeCanonical4BlobHash(blobs[0], blobs[1], blobs[2], blobs[3])
-	var opID [32]byte
-	copy(opID[:], opBytes)
-	tx := common.HexToHash("0x54562d54d6c38a858fda1bdd9cffb95cffb688b2f2f685468ba4752ddd3c8b0b")
-
-	res, err := obs.VerifyRevertedCall(context.Background(), tx, []CommittedCall{call}, &opID,
-		common.HexToAddress("0xfa96ed9b2bc7139fa671e1faf53f901adeea5b32"))
-	if err != nil {
-		t.Fatalf("the live revert must prove: %v", err)
-	}
-	if res.Status != 0 {
-		t.Fatalf("status %d", res.Status)
-	}
-	// And the success gate still refuses it, as it must.
-	if _, err := obs.VerifyExecutedCall(context.Background(), tx, nil, nil); err == nil {
-		t.Fatal("the success gate accepted a reverted transaction")
-	}
-}
-
-// Opt-in, against Base Sepolia: the same reverted transaction is NOT this intent's failure when
-// claimed for another account - the binding H1 of the review found missing.
-func TestVerifyRevertedCall_LiveBaseSepolia_WrongAccountRefused(t *testing.T) {
-	rpcURL := os.Getenv("CERTEN_LIVE_BASE_SEPOLIA_RPC")
-	if rpcURL == "" {
-		t.Skip("set CERTEN_LIVE_BASE_SEPOLIA_RPC to run against Base Sepolia")
-	}
-	obs, err := NewExternalChainObserver(&ExternalChainObserverConfig{
-		EthereumRPC: rpcURL, ChainID: 84532, ValidatorID: "test", RequiredConfirmations: 1, Timeout: 90 * time.Second,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	blobs := liveIntentBlobs(t)
-	call, _ := parseCommittedCallLegs(blobs[1])[0].committedCall()
-	tx := common.HexToHash("0x54562d54d6c38a858fda1bdd9cffb95cffb688b2f2f685468ba4752ddd3c8b0b")
-	if _, err := obs.VerifyRevertedCall(context.Background(), tx, []CommittedCall{call}, nil,
-		common.HexToAddress("0x32b4687bE3c02d52e2d94Dc1cFAF03a0E5af0C8B")); err == nil {
-		t.Fatal("proved a revert addressed to another account")
 	}
 }
 

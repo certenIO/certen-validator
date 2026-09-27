@@ -273,8 +273,9 @@ func TestRB3F41_Phase8CountsAgainstTheRegistry(t *testing.T) {
 		httpClient: &http.Client{Timeout: 5 * time.Second},
 	}
 	cycle := &activeCycle{
-		CycleID: "c1",
-		Request: &UnifiedProofCycleRequest{IntentID: "i1", TxHashes: []string{"0xabc"}, TargetChain: "11155111"},
+		CycleID:      "c1",
+		SettlementTx: "0xabc",
+		Request:      &UnifiedProofCycleRequest{IntentID: "i1", TxHashes: []string{"0xabc"}, TargetChain: "11155111"},
 		Result: &UnifiedProofCycleResult{
 			ChainID:            "11155111",
 			ObservationResults: []*chain.ObservationResult{{TxHash: "0xabc", BlockNumber: 7, ResultHash: [32]byte{0xAA}}},
@@ -297,9 +298,10 @@ func TestRB3F41_RegistryIsRequired(t *testing.T) {
 	vals, _ := rb3Validators(t, 1)
 	o := &UnifiedOrchestrator{config: &UnifiedOrchestratorConfig{ValidatorID: "v", AttestationTimeout: time.Second}}
 	cycle := &activeCycle{
-		CycleID: "c1",
-		Request: &UnifiedProofCycleRequest{TxHashes: []string{"0xabc"}},
-		Result:  &UnifiedProofCycleResult{ChainID: "11155111", ObservationResults: []*chain.ObservationResult{{ResultHash: [32]byte{1}}}},
+		CycleID:      "c1",
+		SettlementTx: "0xabc",
+		Request:      &UnifiedProofCycleRequest{TxHashes: []string{"0xabc"}},
+		Result:       &UnifiedProofCycleResult{ChainID: "11155111", ObservationResults: []*chain.ObservationResult{{TxHash: "0xabc", ResultHash: [32]byte{1}}}},
 	}
 	if err := o.executePhase8(context.Background(), cycle, vals[0].strat); err == nil || !strings.Contains(err.Error(), "registry") {
 		t.Fatalf("phase 8 without a registry: %v", err)

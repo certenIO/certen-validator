@@ -181,7 +181,8 @@ func TestIntentStatus_ASettlementWithoutItsCommittedEffectsFailsTheIntent(t *tes
 		memberCycle(okID, "84532", members, 1, settledObs("0xbase")),
 		memberCycle(okID, "421614", members, 1, settledObs("0xarb")),
 	} {
-		c.VerifiedCalls = verifiedCallProofs{"proven": &ExternalChainResult{}}
+		c.CommittedEffects = true
+		c.VerifiedCalls = verifiedCallProofs{"proven": &ExternalChainResult{Status: 1}}
 		finish(ctx, o, c)
 	}
 	if status, _, _, _ := lifecycleRow(t, db, okID); status != "complete" {
