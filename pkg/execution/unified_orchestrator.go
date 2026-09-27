@@ -494,10 +494,7 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 
 	// Execute phases
 	if err := o.executePhase7(cycleCtx, cycle, chainStrategy); err != nil {
-		result.Error = fmt.Sprintf("phase 7 failed: %v", err)
-		result.FailPhase = 7
-		o.recordMemberOutcome(ctx, cycle, database.MemberSettlementUnobserved, database.MemberProofCycleFailed,
-			fmt.Sprintf("phase 7 failed: %v", err))
+		o.recordPhaseFailure(ctx, cycle, 7, err)
 		if o.config.OnCycleFailed != nil {
 			o.config.OnCycleFailed(result, err)
 		}
@@ -505,10 +502,7 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 	}
 
 	if err := o.executePhase8(cycleCtx, cycle, attestStrategy); err != nil {
-		result.Error = fmt.Sprintf("phase 8 failed: %v", err)
-		result.FailPhase = 8
-		o.recordMemberOutcome(ctx, cycle, observedSettlement(result.ObservationResults), database.MemberProofCycleFailed,
-			fmt.Sprintf("phase 8 failed: %v", err))
+		o.recordPhaseFailure(ctx, cycle, 8, err)
 		if o.config.OnCycleFailed != nil {
 			o.config.OnCycleFailed(result, err)
 		}
@@ -524,10 +518,7 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 	}
 
 	if err := o.executePhase9(cycleCtx, cycle); err != nil {
-		result.Error = fmt.Sprintf("phase 9 failed: %v", err)
-		result.FailPhase = 9
-		o.recordMemberOutcome(ctx, cycle, observedSettlement(result.ObservationResults), database.MemberProofCycleFailed,
-			fmt.Sprintf("phase 9 failed: %v", err))
+		o.recordPhaseFailure(ctx, cycle, 9, err)
 		if o.config.OnCycleFailed != nil {
 			o.config.OnCycleFailed(result, err)
 		}
@@ -721,10 +712,23 @@ func observedSettlement(obs []*chain.ObservationResult) database.MemberSettlemen
 	if _, reverted := revertedObservation(obs); reverted {
 		return database.MemberSettlementReverted
 	}
-	if len(obs) == 0 {
-		return database.MemberSettlementUnobserved
+	for _, o := range obs {
+		if o != nil {
+			return database.MemberSettlementSettled
+		}
 	}
-	return database.MemberSettlementSettled
+	return database.MemberSettlementUnobserved
+}
+
+// recordPhaseFailure records the member's outcome when a phase of its proof cycle fails: its settlement
+// as far as it was observed, and its proof cycle failed, with why. A settlement Phase 7 saw mined stays
+// settled (or reverted) whatever failed after it - Phase 7's own contract-call gate included. It used to
+// be recorded "unobserved" for every Phase 7 failure, contradicting a receipt Phase 7 had read (RB3-F65).
+func (o *UnifiedOrchestrator) recordPhaseFailure(ctx context.Context, cycle *activeCycle, phase int, err error) {
+	reason := fmt.Sprintf("phase %d failed: %v", phase, err)
+	cycle.Result.Error = reason
+	cycle.Result.FailPhase = phase
+	o.recordMemberOutcome(ctx, cycle, observedSettlement(cycle.Result.ObservationResults), database.MemberProofCycleFailed, reason)
 }
 
 // commitmentInt64s reads a list of integers the commitment map carries ([]int64 in-process,
