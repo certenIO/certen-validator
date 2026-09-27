@@ -315,8 +315,9 @@ func TestReconstructRefusesARevertedTransaction(t *testing.T) {
 	}
 }
 
-// A block whose timestamp cannot be read must not fall back to now(): the row would assert a completion
-// time that never happened.
+// A block whose timestamp cannot be read must not fall back to now() - nor to the anchor's own timestamp,
+// which is when it was created, not when a quorum proved it (RB3-F131): either row would assert a
+// completion time that never happened. It is an access failure, and no row is built.
 func TestReconstructNeverInventsACompletionTime(t *testing.T) {
 	f := &fakeBackfillChain{
 		input: []byte("x"), block: 1, success: true,
@@ -326,12 +327,8 @@ func TestReconstructNeverInventsACompletionTime(t *testing.T) {
 	out := ReconstructAnchorQuorum(context.Background(), f,
 		BackfillCandidate{ChainID: backfillChainID, TxHash: "0xverify"},
 		func([]byte) (*DecodedVerifyCall, error) { return bfCall(t), nil })
-	if out.Record == nil {
-		t.Fatalf("rejected: %s %v", out.Rejected, out.Err)
-	}
-	if !out.Record.VerifiedAt.Equal(bfState().Timestamp) {
-		t.Fatalf("verified_at = %v, want the anchor's own timestamp %v",
-			out.Record.VerifiedAt, bfState().Timestamp)
+	if out.Record != nil || out.Err == nil || out.Rejected != "" {
+		t.Fatalf("record %+v, err %v, rejected %q; want no record and an access error", out.Record, out.Err, out.Rejected)
 	}
 }
 
@@ -541,6 +538,10 @@ func TestDecodeAnchorStateReadsTheLiveAnchorLayout(t *testing.T) {
 	}
 	if state.Timestamp.IsZero() {
 		t.Fatal("timestamp was not decoded")
+	}
+	// The creating block's time and the creator: what locates the create transaction (RB3-F33/F127).
+	if state.CreatedAt != 0x6a9c84ba || state.Validator != common.HexToAddress("0xd4a3dbbae0c04d4307c5e00a5e05b66acc289f5d") {
+		t.Fatalf("createdAt=%d validator=%s", state.CreatedAt, state.Validator.Hex())
 	}
 }
 

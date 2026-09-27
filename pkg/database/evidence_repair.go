@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -46,7 +47,7 @@ func NewEvidenceRepair(client *Client) *EvidenceRepair {
 	return &EvidenceRepair{client: client}
 }
 
-// CanonicalAnchor is a canonical anchor row whose create transaction is known.
+// CanonicalAnchor is a canonical anchor row. Empty strings and zeros are columns not recorded.
 type CanonicalAnchor struct {
 	BatchID        uuid.UUID
 	ChainID        int64
@@ -55,7 +56,14 @@ type CanonicalAnchor struct {
 	Root           []byte
 	AnchorCreateTx string
 	AnchorTxHash   string
-	AnchorBlockNum int64 // zero when not recorded
+	AnchorBlockNum int64
+	VerifyTx       string
+	VerifyBlock    int64
+	// The signers of anchor_create_tx and verify_tx (migration 00009).
+	AnchorCreateSender string
+	VerifySender       string
+	// CompletedAt is consensus_completed_at as stored (zero when NULL).
+	CompletedAt time.Time
 }
 
 // AnchorChainFacts is what reading an anchor transaction back from its chain established. It is stored
@@ -67,22 +75,30 @@ type AnchorChainFacts struct {
 	Succeeded   bool   `json:"succeeded"`
 	BlockNumber int64  `json:"block_number"`
 	BlockHash   string `json:"block_hash"`
-	Head        int64  `json:"head"`
-	Depth       int    `json:"depth"`
+	// BlockTime is the block's timestamp (unix seconds); zero where it was not read.
+	BlockTime int64 `json:"block_time,omitempty"`
+	Head      int64 `json:"head"`
+	Depth     int   `json:"depth"`
 	// BundleID and Root are what the transaction's createBatchAnchor calldata carries; the reading is only
 	// accepted when they are the canonical row's.
 	BundleID string `json:"bundle_id"`
 	Root     string `json:"root"`
+	// Sender is the transaction's signer, recovered from its signature; Contract the anchor it called.
+	Sender   string `json:"sender,omitempty"`
+	Contract string `json:"contract,omitempty"`
 	ReadAt   string `json:"read_at"`
 }
 
-// ListCanonicalAnchors returns every canonical anchor row that names its create transaction.
+// ListCanonicalAnchors returns every canonical anchor row, including those that do not yet name their
+// create transaction: the repair finds it (RB3-F33).
 func (r *EvidenceRepair) ListCanonicalAnchors(ctx context.Context) ([]CanonicalAnchor, error) {
 	rows, err := r.client.QueryContext(ctx, `
 		SELECT id, COALESCE(chain_id, 0), COALESCE(target_chain, ''), bundle_id, merkle_root,
-		       anchor_create_tx, COALESCE(anchor_tx_hash, ''), COALESCE(anchor_block_num, 0)
+		       COALESCE(anchor_create_tx, ''), COALESCE(anchor_tx_hash, ''), COALESCE(anchor_block_num, 0),
+		       COALESCE(verify_tx, ''), COALESCE(verify_block, 0),
+		       COALESCE(anchor_create_sender, ''), COALESCE(verify_sender, ''), consensus_completed_at
 		FROM anchor_batches
-		WHERE bundle_id IS NOT NULL AND anchor_create_tx IS NOT NULL
+		WHERE bundle_id IS NOT NULL
 		ORDER BY created_at, id`)
 	if err != nil {
 		return nil, fmt.Errorf("list canonical anchors: %w", err)
@@ -91,9 +107,14 @@ func (r *EvidenceRepair) ListCanonicalAnchors(ctx context.Context) ([]CanonicalA
 	var anchors []CanonicalAnchor
 	for rows.Next() {
 		var a CanonicalAnchor
+		var completed sql.NullTime
 		if err := rows.Scan(&a.BatchID, &a.ChainID, &a.TargetChain, &a.BundleID, &a.Root,
-			&a.AnchorCreateTx, &a.AnchorTxHash, &a.AnchorBlockNum); err != nil {
+			&a.AnchorCreateTx, &a.AnchorTxHash, &a.AnchorBlockNum, &a.VerifyTx, &a.VerifyBlock,
+			&a.AnchorCreateSender, &a.VerifySender, &completed); err != nil {
 			return nil, fmt.Errorf("scan canonical anchor: %w", err)
+		}
+		if completed.Valid {
+			a.CompletedAt = completed.Time
 		}
 		anchors = append(anchors, a)
 	}
@@ -162,6 +183,192 @@ func (r *EvidenceRepair) CorrectAnchorBlock(ctx context.Context, a CanonicalAnch
 		map[string]any{"anchor_block_num": prevValue, "anchor_tx_hash": a.AnchorTxHash},
 		map[string]any{"anchor_block_num": facts.BlockNumber, "anchor_tx_hash": a.AnchorCreateTx},
 		facts, by); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// CompleteAnchorCreate records the create transaction of a canonical row that has none (RB3-F33), with
+// its block, and names it in anchor_tx_hash where that column is empty or already names it. A row that
+// names another transaction there, or changed since it was read, is not touched: ErrEvidenceChanged.
+func (r *EvidenceRepair) CompleteAnchorCreate(ctx context.Context, a CanonicalAnchor, facts AnchorChainFacts, by string) error {
+	if a.AnchorCreateTx != "" || facts.TxHash == "" {
+		return fmt.Errorf("complete anchor create for batch %s: the row already names %q, or no transaction was read", a.BatchID, a.AnchorCreateTx)
+	}
+	tx, err := r.client.BeginTx(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck // a no-op after Commit
+
+	previousBlock := sql.NullInt64{Int64: a.AnchorBlockNum, Valid: a.AnchorBlockNum != 0}
+	res, err := tx.Tx().ExecContext(ctx, `
+		UPDATE anchor_batches
+		SET anchor_create_tx = $2,
+		    anchor_block_num = $3,
+		    anchor_tx_hash   = $2,
+		    updated_at       = NOW()
+		WHERE id = $1
+		  AND anchor_create_tx IS NULL
+		  AND anchor_block_num IS NOT DISTINCT FROM $4
+		  AND COALESCE(anchor_tx_hash, '') = $5
+		  AND (COALESCE(anchor_tx_hash, '') = '' OR LOWER(anchor_tx_hash) = LOWER($2))`,
+		a.BatchID, facts.TxHash, facts.BlockNumber, previousBlock, a.AnchorTxHash)
+	if err != nil {
+		return fmt.Errorf("complete anchor create for batch %s: %w", a.BatchID, err)
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return ErrEvidenceChanged
+	}
+	var prevBlock, prevTx any
+	if previousBlock.Valid {
+		prevBlock = previousBlock.Int64
+	}
+	if a.AnchorTxHash != "" {
+		prevTx = a.AnchorTxHash
+	}
+	reason := fmt.Sprintf("anchor %s on %s was created by transaction %s in block %d: the anchor's BatchAnchorCreated "+
+		"log at its recorded creation time, and the transaction's own createBatchAnchor calldata",
+		a.BundleID, facts.TargetChain, facts.TxHash, facts.BlockNumber)
+	if _, err := recordCorrection(ctx, tx.Tx(), CorrectionRecordAnchorBatch, a.BatchID.String(), reason,
+		map[string]any{"anchor_create_tx": nil, "anchor_tx_hash": prevTx, "anchor_block_num": prevBlock},
+		map[string]any{"anchor_create_tx": facts.TxHash, "anchor_tx_hash": facts.TxHash, "anchor_block_num": facts.BlockNumber},
+		facts, by); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// CorrectVerifyBlock records the verify transaction's block where the row has none or a different one.
+func (r *EvidenceRepair) CorrectVerifyBlock(ctx context.Context, a CanonicalAnchor, facts AnchorChainFacts, by string) error {
+	tx, err := r.client.BeginTx(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck // a no-op after Commit
+
+	previous := sql.NullInt64{Int64: a.VerifyBlock, Valid: a.VerifyBlock != 0}
+	res, err := tx.Tx().ExecContext(ctx, `
+		UPDATE anchor_batches SET verify_block = $2, updated_at = NOW()
+		WHERE id = $1 AND LOWER(verify_tx) = LOWER($3) AND verify_block IS NOT DISTINCT FROM $4`,
+		a.BatchID, facts.BlockNumber, facts.TxHash, previous)
+	if err != nil {
+		return fmt.Errorf("correct verify block for batch %s: %w", a.BatchID, err)
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return ErrEvidenceChanged
+	}
+	var prevValue any
+	if previous.Valid {
+		prevValue = previous.Int64
+	}
+	reason := fmt.Sprintf("verify transaction %s is in block %d on %s (read from its receipt)", facts.TxHash, facts.BlockNumber, facts.TargetChain)
+	if _, err := recordCorrection(ctx, tx.Tx(), CorrectionRecordAnchorBatch, a.BatchID.String(), reason,
+		map[string]any{"verify_block": prevValue}, map[string]any{"verify_block": facts.BlockNumber}, facts, by); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// CorrectCompletedAt sets consensus_completed_at to the verify block's time, where the row states another
+// (RB3-F131: the anchor's creation time; RB3-F133: a validator's clock), and the signer attestations that
+// were stamped with the same stated time. Conditional on the stored time; recorded as one correction.
+func (r *EvidenceRepair) CorrectCompletedAt(ctx context.Context, a CanonicalAnchor, verify AnchorChainFacts, by string) error {
+	if verify.BlockTime <= 0 {
+		return fmt.Errorf("correct completion time for batch %s: the verify block's time was not read", a.BatchID)
+	}
+	onChain := time.Unix(verify.BlockTime, 0).UTC()
+	previous := sql.NullTime{Time: a.CompletedAt, Valid: !a.CompletedAt.IsZero()}
+	tx, err := r.client.BeginTx(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck // a no-op after Commit
+
+	res, err := tx.Tx().ExecContext(ctx, `
+		UPDATE anchor_batches SET consensus_completed_at = $2, updated_at = NOW()
+		WHERE id = $1 AND LOWER(verify_tx) = LOWER($3) AND consensus_completed_at IS NOT DISTINCT FROM $4`,
+		a.BatchID, onChain, verify.TxHash, previous)
+	if err != nil {
+		return fmt.Errorf("correct completion time for batch %s: %w", a.BatchID, err)
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return ErrEvidenceChanged
+	}
+	var attestations int64
+	if previous.Valid {
+		res, err := tx.Tx().ExecContext(ctx, `
+			UPDATE batch_attestations SET attestation_time = $2 WHERE batch_id = $1 AND attestation_time = $3`,
+			a.BatchID, onChain, previous.Time)
+		if err != nil {
+			return fmt.Errorf("correct attestation times for batch %s: %w", a.BatchID, err)
+		}
+		attestations, _ = res.RowsAffected()
+	}
+	var prevValue any
+	if previous.Valid {
+		prevValue = previous.Time.UTC().Format(time.RFC3339Nano)
+	}
+	reason := fmt.Sprintf("the quorum over anchor %s was confirmed on %s in verify block %d, at %s (the block's timestamp); "+
+		"the row stated another time. %d signer attestation(s) stamped with the stated time were set to it too",
+		a.BundleID, verify.TargetChain, verify.BlockNumber, onChain.Format(time.RFC3339), attestations)
+	if _, err := recordCorrection(ctx, tx.Tx(), CorrectionRecordAnchorBatch, a.BatchID.String(), reason,
+		map[string]any{"consensus_completed_at": prevValue, "batch_attestations.attestation_time": prevValue},
+		map[string]any{"consensus_completed_at": onChain.Format(time.RFC3339), "batch_attestations.attestation_time": onChain.Format(time.RFC3339),
+			"batch_attestations_updated": attestations},
+		verify, by); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// Anchor transactions whose sender RecordAnchorSender records.
+const (
+	AnchorSenderCreate = "anchor_create"
+	AnchorSenderVerify = "verify"
+)
+
+// RecordAnchorSender records the signer of the row's create or verify transaction (RB3-F127): where the
+// row has none, or - corrected - where it records one the signature contradicts. previous is the stored
+// sender ("" for none); a row that no longer holds it, or no longer names the transaction the facts are
+// about, is not touched (ErrEvidenceChanged).
+func (r *EvidenceRepair) RecordAnchorSender(ctx context.Context, a CanonicalAnchor, which, previous string, facts AnchorChainFacts, by string) error {
+	// One complete statement per column, so every statement is visible to the schema prepare gate.
+	var senderCol, update string
+	switch which {
+	case AnchorSenderCreate:
+		senderCol, update = "anchor_create_sender", `
+		UPDATE anchor_batches SET anchor_create_sender = $2, updated_at = NOW()
+		WHERE id = $1 AND anchor_create_sender IS NOT DISTINCT FROM NULLIF($4, '') AND LOWER(anchor_create_tx) = LOWER($3)`
+	case AnchorSenderVerify:
+		senderCol, update = "verify_sender", `
+		UPDATE anchor_batches SET verify_sender = $2, updated_at = NOW()
+		WHERE id = $1 AND verify_sender IS NOT DISTINCT FROM NULLIF($4, '') AND LOWER(verify_tx) = LOWER($3)`
+	default:
+		return fmt.Errorf("record anchor sender: unknown transaction %q", which)
+	}
+	sender := strings.ToLower(facts.Sender)
+	tx, err := r.client.BeginTx(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck // a no-op after Commit
+
+	res, err := tx.Tx().ExecContext(ctx, update, a.BatchID, sender, facts.TxHash, previous)
+	if err != nil {
+		return fmt.Errorf("record %s sender for batch %s: %w", which, a.BatchID, err)
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return ErrEvidenceChanged
+	}
+	reason := fmt.Sprintf("%s transaction %s on %s is signed by %s (recovered from its signature)", which, facts.TxHash, facts.TargetChain, sender)
+	var prevValue any
+	if previous != "" {
+		prevValue = previous
+		reason += fmt.Sprintf(", not %s as this row recorded", previous)
+	}
+	if _, err := recordCorrection(ctx, tx.Tx(), CorrectionRecordAnchorBatch, a.BatchID.String(), reason,
+		map[string]any{senderCol: prevValue}, map[string]any{senderCol: sender}, facts, by); err != nil {
 		return err
 	}
 	return tx.Commit()

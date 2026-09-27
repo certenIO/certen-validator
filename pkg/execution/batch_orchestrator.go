@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"strings"
 	"sync"
 	"time"
 
@@ -402,21 +403,16 @@ func (o *BatchOrchestrator) FlushChain(
 	}
 
 	// ---- Create the anchor --------------------------------------------------
-	anchorTx, gasUsed, anchorBlock, err := o.createBatchAnchor(ctx, tree)
+	created, err := o.createBatchAnchor(ctx, tree)
 	if err != nil {
 		return res, fmt.Errorf("createBatchAnchor: %w", err)
 	}
-	res.AnchorTxHash = anchorTx
-	res.GasAnchor = gasUsed
-	// Same as the on-demand lane: the tree carries the transaction that published its root, so the
-	// quorum evidence records where the root actually is.
-	// Only a real transaction hash. createBatchAnchor returns "already-exists" when another
-	// validator created the anchor first; this node then does not know the creating transaction, and
-	// empty is how that is said. See IsTransactionHash.
-	if IsTransactionHash(anchorTx) {
-		tree.AnchorCreateTx, tree.AnchorCreateBlock = anchorTx, anchorBlock
-	}
-	o.logf("[BATCH] chain=%d anchor created tx=%s gas=%d", chainID, anchorTx, gasUsed)
+	res.AnchorTxHash = created.TxHash
+	res.GasAnchor = created.GasUsed
+	// Same as the on-demand lane: the tree carries the transaction that published its root and who sent
+	// it, so the quorum evidence records where the root actually is.
+	created.onTree(tree)
+	o.logf("[BATCH] chain=%d anchor created tx=%s by %s gas=%d", chainID, created.TxHash, created.Sender, created.GasUsed)
 
 	// ---- VERIFY 3: the deployed anchor accepts every member leaf ------------
 	if err := o.verifyLeavesAgainstAnchor(ctx, tree); err != nil {
@@ -787,27 +783,29 @@ func (o *BatchOrchestrator) verifyLeavesAgainstAnchor(ctx context.Context, tree 
 }
 
 // createBatchAnchor submits the anchor and waits for it to mine.
-func (o *BatchOrchestrator) createBatchAnchor(
-	ctx context.Context,
-	tree *BatchTree,
-) (txHash string, gasUsed uint64, block uint64, err error) {
+func (o *BatchOrchestrator) createBatchAnchor(ctx context.Context, tree *BatchTree) (anchorCreation, error) {
 	anchor, err := contracts.NewCertenAnchorV7Batch(o.anchorV7, o.ecm.client)
 	if err != nil {
-		return "", 0, 0, err
+		return anchorCreation{}, err
 	}
 
 	// Idempotence: a retry after a timeout must not revert with "Anchor already exists"
 	// and lose the batch. bundleId is deterministic, so an existing anchor for this exact
-	// tree is a SUCCESS, not a conflict.
+	// tree is a SUCCESS, not a conflict - and the transaction that created it is located, not left
+	// unknown (RB3-F33).
 	exists, eerr := anchor.AnchorExists(&bind.CallOpts{Context: ctx}, tree.BundleID)
 	if eerr != nil {
 		// Unknown is not "absent": sending on an unreadable answer created a second anchor attempt
 		// that reverts, and the revert was then read as the member failing.
-		return "", 0, 0, readErr(fmt.Errorf("reading anchorExists for 0x%x: %w", tree.BundleID[:8], eerr))
+		return anchorCreation{}, readErr(fmt.Errorf("reading anchorExists for 0x%x: %w", tree.BundleID[:8], eerr))
 	}
 	if exists {
-		o.logf("[BATCH] anchor 0x%x already exists — treating as created", tree.BundleID[:8])
-		return "already-exists", 0, 0, nil
+		created, err := o.existingAnchorCreation(ctx, tree, 0)
+		if err != nil {
+			return anchorCreation{}, err
+		}
+		o.logf("[BATCH] anchor 0x%x already exists — created by %s in %s", tree.BundleID[:8], created.Sender, created.TxHash)
+		return created, nil
 	}
 
 	// Priced when sent, replaced at the same nonce while it does not mine, and bounded: see
@@ -825,19 +823,75 @@ func (o *BatchOrchestrator) createBatchAnchor(
 			)
 		}, nil)
 	if err != nil {
-		return "", 0, 0, err
+		return anchorCreation{}, err
 	}
 	if receipt.Status == 0 {
 		// The usual cause is another validator's anchor for this exact bundleId landing first -
 		// the anchor this node wanted now exists. Anything else is a real failure.
 		if now, rerr := anchor.AnchorExists(&bind.CallOpts{Context: ctx}, tree.BundleID); rerr == nil && now {
-			o.logf("[BATCH] createBatchAnchor %s reverted because anchor 0x%x already exists — treating as created",
-				txHash, tree.BundleID[:8])
-			return "already-exists", receipt.GasUsed, 0, nil
+			created, err := o.existingAnchorCreation(ctx, tree, receipt.GasUsed)
+			if err != nil {
+				return anchorCreation{}, err
+			}
+			o.logf("[BATCH] createBatchAnchor %s reverted because anchor 0x%x already exists — created by %s in %s",
+				txHash, tree.BundleID[:8], created.Sender, created.TxHash)
+			return created, nil
 		}
-		return txHash, receipt.GasUsed, 0, fmt.Errorf("createBatchAnchor reverted")
+		return anchorCreation{TxHash: txHash, GasUsed: receipt.GasUsed}, fmt.Errorf("createBatchAnchor reverted")
 	}
-	return txHash, receipt.GasUsed, receipt.BlockNumber.Uint64(), nil
+	// This node's own transaction: its signer is the key it was sent with.
+	return anchorCreation{
+		TxHash: txHash, GasUsed: receipt.GasUsed, Block: receipt.BlockNumber.Uint64(),
+		Sender: strings.ToLower(o.ecm.SenderAddress().Hex()), Paid: txHash,
+	}, nil
+}
+
+// anchorCreation is the transaction that created a batch anchor: this node's own, or - when another
+// validator's landed first - the one located on chain. GasUsed is what this node spent (zero, or its own
+// reverted attempt); Paid is TxHash when this node sent it, and empty when another validator did, whose
+// spend it is (see PendingBatchIntent.AnchorTx).
+type anchorCreation struct {
+	TxHash  string
+	GasUsed uint64
+	Block   uint64
+	Sender  string
+	Paid    string
+}
+
+// onTree records the creation on the tree, for the quorum evidence and layer 5.
+func (c anchorCreation) onTree(tree *BatchTree) {
+	tree.AnchorCreateTx, tree.AnchorCreateBlock, tree.AnchorCreateSender = c.TxHash, c.Block, c.Sender
+}
+
+// existingAnchorCreation locates the transaction that created an anchor another validator created (see
+// LocateAnchorCreate) and reads it back: accepted only as the successful createBatchAnchor call of this
+// bundle and root at this anchor, signed by the creator the anchor records. Anything it cannot read is a
+// read error - the anchor exists, and the pass that retries will find it.
+func (o *BatchOrchestrator) existingAnchorCreation(ctx context.Context, tree *BatchTree, gasUsed uint64) (anchorCreation, error) {
+	head, err := o.ecm.client.BlockNumber(ctx)
+	if err != nil {
+		return anchorCreation{}, readErr(fmt.Errorf("reading the head to locate anchor 0x%x's creation: %w", tree.BundleID[:8], err))
+	}
+	loc, err := LocateAnchorCreate(ctx, clientCreateChain{o.ecm.client}, o.anchorV7, tree.BundleID, tree.Root, head)
+	if err != nil {
+		return anchorCreation{}, readErr(fmt.Errorf("locating the transaction that created anchor 0x%x: %w", tree.BundleID[:8], err))
+	}
+	reading, err := ReadAnchorTxFrom(ctx, o.ecm.client, tree.ChainID, loc.TxHash)
+	if err != nil {
+		return anchorCreation{}, readErr(fmt.Errorf("reading anchor 0x%x's create transaction %s: %w", tree.BundleID[:8], loc.TxHash, err))
+	}
+	bundle, root, derr := createBatchAnchorArgs(reading.Input)
+	switch {
+	case !reading.Found || !reading.Succeeded || reading.BlockNumber != loc.Block:
+		return anchorCreation{}, readErr(fmt.Errorf("anchor 0x%x's located create transaction %s reads as found=%v succeeded=%v in block %d, not block %d",
+			tree.BundleID[:8], loc.TxHash, reading.Found, reading.Succeeded, reading.BlockNumber, loc.Block))
+	case derr != nil || bundle != tree.BundleID || root != tree.Root:
+		return anchorCreation{}, fmt.Errorf("anchor 0x%x's located create transaction %s is not its createBatchAnchor call: %v", tree.BundleID[:8], loc.TxHash, derr)
+	case !strings.EqualFold(reading.To, o.anchorV7.Hex()) || !strings.EqualFold(reading.From, loc.Validator.Hex()):
+		return anchorCreation{}, fmt.Errorf("anchor 0x%x's located create transaction %s called %s from %s; the anchor is %s and records creator %s",
+			tree.BundleID[:8], loc.TxHash, reading.To, reading.From, o.anchorV7.Hex(), loc.Validator.Hex())
+	}
+	return anchorCreation{TxHash: loc.TxHash, GasUsed: gasUsed, Block: loc.Block, Sender: reading.From}, nil
 }
 
 // settleMember submits one member's account call carrying its Merkle branch.

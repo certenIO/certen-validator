@@ -1,12 +1,21 @@
 // Copyright 2025 Certen Protocol
 //
-// Repair of anchor coordinates stored before 2026-09-18, when layer 5 and the Certen anchor proof stated
-// the verify transaction's block for the anchor-create transaction. Each canonical anchor's create
-// transaction is read back from its own chain and accepted only when it succeeded, is final and its
-// createBatchAnchor calldata names the row's bundle and root. Then, and only where the stored value
-// differs from the chain:
+// Repair of stored anchor evidence against the anchor's own chain.
 //
+// Each canonical anchor's verify transaction is read back and accepted only when it succeeded, is final and
+// its executeComprehensiveProof calldata names the row's bundle and root; the contract it called is the
+// anchor. The create transaction is the one the row names or, where it names none (RB3-F33: 235 of 289
+// rows, because a validator whose createBatchAnchor found the anchor already there recorded nothing), the
+// one LocateAnchorCreate finds from the anchor's own record and its BatchAnchorCreated log. It is accepted
+// only when it succeeded, is final, called the same anchor, and its createBatchAnchor calldata names the
+// row's bundle and root; a located one must also be signed by the creator the anchor records. Every
+// transaction is taken as signed (see signedTransaction) and its signer recovered. Then, and only where
+// the stored value is missing or differs from the chain:
+//
+//	anchor_batches.anchor_create_tx   completed (with anchor_block_num and anchor_tx_hash)
 //	anchor_batches.anchor_block_num   filled or corrected
+//	anchor_batches.verify_block       filled or corrected
+//	anchor_batches.*_sender           the signers of both transactions, recorded or corrected (RB3-F127)
 //	layer-5 rows naming the anchor    withdrawn and replaced by a corrected row
 //	Certen anchor proofs              anchor reference revised and re-signed by the validator that signed
 //	                                  them; another validator's proofs are left for that validator's run
@@ -23,6 +32,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"strings"
 	"sync"
 	"time"
@@ -41,6 +51,9 @@ import (
 )
 
 // AnchorTxReading is an anchor transaction as its chain reports it.
+//
+// From, To and Input come from the signed transaction itself, accepted only when it hashes to the hash
+// asked for: From is recovered from the signature (RB3-F127), never taken from the endpoint's word.
 type AnchorTxReading struct {
 	Found       bool
 	Succeeded   bool
@@ -48,11 +61,18 @@ type AnchorTxReading struct {
 	BlockHash   string
 	Head        uint64
 	Input       []byte
+	// From is the signer, lower-case 0x-hex; To the called contract, lower-case ("" for a creation).
+	From string
+	To   string
+	// BlockTime is the timestamp of the block that mined it, from the header its block hash names.
+	BlockTime uint64
 }
 
-// AnchorTxReader reads a transaction, its receipt and the chain head.
+// AnchorTxReader reads a transaction, its receipt and the chain head, and locates an anchor's create
+// transaction (see LocateAnchorCreate).
 type AnchorTxReader interface {
 	ReadAnchorTx(ctx context.Context, chainID int64, txHash string) (*AnchorTxReading, error)
+	LocateAnchorCreate(ctx context.Context, chainID int64, anchor string, bundle, root [32]byte, notAfter uint64) (*AnchorCreateLocation, error)
 }
 
 // AnchorRepairConfig configures RepairAnchorBlocks.
@@ -75,16 +95,23 @@ type AnchorRepairConfig struct {
 
 // AnchorRepairReport says what a run found and did (or, without Apply, would do).
 type AnchorRepairReport struct {
-	Anchors         int      `json:"anchors"`
-	Confirmed       int      `json:"confirmed"`
-	BlocksFilled    int      `json:"anchor_blocks_filled"`
-	BlocksCorrected int      `json:"anchor_blocks_corrected"`
-	Layer5Replaced  int      `json:"layer5_rows_replaced"`
-	ProofsRevised   int      `json:"certen_proofs_revised"`
-	Actions         []string `json:"actions"`
-	LeftForOwner    []string `json:"left_for_signing_validator"`
-	NotYetFinal     []string `json:"not_yet_final"`
-	Refused         []string `json:"refused"`
+	Anchors               int `json:"anchors"`
+	Confirmed             int `json:"confirmed"`
+	CreatesCompleted      int `json:"anchor_creates_completed"`
+	BlocksFilled          int `json:"anchor_blocks_filled"`
+	BlocksCorrected       int `json:"anchor_blocks_corrected"`
+	VerifyBlocksFilled    int `json:"verify_blocks_filled"`
+	VerifyBlocksCorrected int `json:"verify_blocks_corrected"`
+	SendersRecorded       int `json:"senders_recorded"`
+	SendersCorrected      int `json:"senders_corrected"`
+	// CompletionTimesCorrected counts consensus_completed_at set to the verify block's time.
+	CompletionTimesCorrected int      `json:"completion_times_corrected"`
+	Layer5Replaced           int      `json:"layer5_rows_replaced"`
+	ProofsRevised            int      `json:"certen_proofs_revised"`
+	Actions                  []string `json:"actions"`
+	LeftForOwner             []string `json:"left_for_signing_validator"`
+	NotYetFinal              []string `json:"not_yet_final"`
+	Refused                  []string `json:"refused"`
 }
 
 // Clean reports whether nothing was refused or left over.
@@ -192,29 +219,150 @@ func confirmAnchor(ctx context.Context, cfg AnchorRepairConfig, anchor database.
 		BlockNumber: int64(reading.BlockNumber), BlockHash: reading.BlockHash,
 		Head: int64(reading.Head), Depth: depth,
 		BundleID: "0x" + hex.EncodeToString(bundle[:]), Root: "0x" + hex.EncodeToString(root[:]),
+		Sender: reading.From, Contract: reading.To,
+		ReadAt: cfg.Now().UTC().Format(time.RFC3339Nano),
+	}, "", nil
+}
+
+// confirmVerify reads the anchor's verify transaction back and checks it proved this anchor: it succeeded
+// and its executeComprehensiveProof calldata names the row's bundle and root. The contract it called is
+// the anchor, where the create transaction must be too.
+func confirmVerify(ctx context.Context, cfg AnchorRepairConfig, anchor database.CanonicalAnchor) (*database.AnchorChainFacts, string, error) {
+	if !IsTransactionHash(anchor.VerifyTx) {
+		return nil, "the row names no verify transaction", nil
+	}
+	reading, err := cfg.Reader.ReadAnchorTx(ctx, anchor.ChainID, anchor.VerifyTx)
+	if err != nil {
+		return nil, "", err
+	}
+	name := anchor.TargetChain
+	if name == "" {
+		name = chainName(anchor.ChainID)
+	}
+	switch {
+	case reading == nil || !reading.Found:
+		return nil, "the chain has no such verify transaction", nil
+	case !reading.Succeeded:
+		return nil, "the verify transaction reverted", nil
+	case reading.BlockNumber == 0 || reading.BlockHash == "":
+		return nil, "the verify receipt has no block", nil
+	case reading.To == "":
+		return nil, "the verify transaction called no contract", nil
+	}
+	call, err := DecodeExecuteComprehensiveProof(reading.Input)
+	if err != nil {
+		return nil, "the verify transaction is not an executeComprehensiveProof call: " + err.Error(), nil
+	}
+	if !sameHex(hex.EncodeToString(call.BundleID[:]), anchor.BundleID) {
+		return nil, fmt.Sprintf("the verify transaction proved bundle 0x%x, not %s", call.BundleID, anchor.BundleID), nil
+	}
+	if !bytes.Equal(call.MerkleRoot[:], anchor.Root) {
+		return nil, fmt.Sprintf("the verify transaction proved root 0x%x, not 0x%x", call.MerkleRoot, anchor.Root), nil
+	}
+	depth := 0
+	if reading.Head >= reading.BlockNumber {
+		depth = int(reading.Head-reading.BlockNumber) + 1
+	}
+	if reading.BlockTime == 0 {
+		return nil, "the verify block has no time", nil
+	}
+	return &database.AnchorChainFacts{
+		ChainID: anchor.ChainID, TargetChain: name, TxHash: anchor.VerifyTx, Succeeded: true,
+		BlockNumber: int64(reading.BlockNumber), BlockHash: reading.BlockHash, BlockTime: int64(reading.BlockTime),
+		Head: int64(reading.Head), Depth: depth,
+		BundleID: "0x" + hex.EncodeToString(call.BundleID[:]), Root: "0x" + hex.EncodeToString(call.MerkleRoot[:]),
+		Sender: reading.From, Contract: reading.To,
 		ReadAt: cfg.Now().UTC().Format(time.RFC3339Nano),
 	}, "", nil
 }
 
 func repairAnchor(ctx context.Context, cfg AnchorRepairConfig, anchor database.CanonicalAnchor, report *AnchorRepairReport) error {
-	label := fmt.Sprintf("anchor %s (batch %s)", anchor.AnchorCreateTx, anchor.BatchID)
-	facts, refusal, err := confirmAnchor(ctx, cfg, anchor)
+	label := fmt.Sprintf("anchor %s (batch %s)", anchor.BundleID, anchor.BatchID)
+
+	// The verify transaction first: it names the anchor contract the create transaction must have called.
+	verify, refusal, err := confirmVerify(ctx, cfg, anchor)
 	if err != nil {
-		report.Refused = append(report.Refused, fmt.Sprintf("%s: could not be read: %v", label, err))
+		report.Refused = append(report.Refused, fmt.Sprintf("%s: verify transaction %s could not be read: %v", label, anchor.VerifyTx, err))
 		return nil
 	}
 	if refusal != "" {
 		report.Refused = append(report.Refused, fmt.Sprintf("%s: %s; nothing changed", label, refusal))
 		return nil
 	}
+	if verify.Depth < cfg.MinDepth {
+		report.NotYetFinal = append(report.NotYetFinal, fmt.Sprintf("%s: verify transaction has %d confirmations, %d required", label, verify.Depth, cfg.MinDepth))
+		return nil
+	}
+
+	// The create transaction: the one the row names, or else the one the chain says created the anchor.
+	stored := anchor
+	var creator string
+	if anchor.AnchorCreateTx == "" {
+		bundle, err := bytes32FromHex(anchor.BundleID)
+		if err != nil || len(anchor.Root) != 32 {
+			report.Refused = append(report.Refused, fmt.Sprintf("%s: the row's bundle or root is not 32 bytes; nothing changed", label))
+			return nil
+		}
+		var root [32]byte
+		copy(root[:], anchor.Root)
+		loc, err := cfg.Reader.LocateAnchorCreate(ctx, anchor.ChainID, verify.Contract, bundle, root, uint64(verify.BlockNumber))
+		if err != nil {
+			report.Refused = append(report.Refused, fmt.Sprintf("%s: its create transaction could not be located: %v; nothing changed", label, err))
+			return nil
+		}
+		if anchor.AnchorTxHash != "" && !sameHex(anchor.AnchorTxHash, loc.TxHash) {
+			report.Refused = append(report.Refused, fmt.Sprintf("%s: the row names %s as publishing its root, but the chain says %s created it; nothing changed",
+				label, anchor.AnchorTxHash, loc.TxHash))
+			return nil
+		}
+		anchor.AnchorCreateTx = loc.TxHash
+		creator = strings.ToLower(loc.Validator.Hex())
+	}
+	facts, refusal, err := confirmAnchor(ctx, cfg, anchor)
+	if err != nil {
+		report.Refused = append(report.Refused, fmt.Sprintf("%s: create transaction %s could not be read: %v", label, anchor.AnchorCreateTx, err))
+		return nil
+	}
+	if refusal != "" {
+		report.Refused = append(report.Refused, fmt.Sprintf("%s: create transaction %s: %s; nothing changed", label, anchor.AnchorCreateTx, refusal))
+		return nil
+	}
+	if !sameHex(facts.Contract, verify.Contract) {
+		report.Refused = append(report.Refused, fmt.Sprintf("%s: created at %s but verified at %s; nothing changed", label, facts.Contract, verify.Contract))
+		return nil
+	}
+	if creator != "" && !sameHex(facts.Sender, creator) {
+		report.Refused = append(report.Refused, fmt.Sprintf("%s: create transaction %s is signed by %s, but the anchor records %s as its creator; nothing changed",
+			label, anchor.AnchorCreateTx, facts.Sender, creator))
+		return nil
+	}
 	if facts.Depth < cfg.MinDepth {
-		report.NotYetFinal = append(report.NotYetFinal, fmt.Sprintf("%s: %d confirmations, %d required", label, facts.Depth, cfg.MinDepth))
+		report.NotYetFinal = append(report.NotYetFinal, fmt.Sprintf("%s: create transaction %s has %d confirmations, %d required",
+			label, anchor.AnchorCreateTx, facts.Depth, cfg.MinDepth))
 		return nil
 	}
 	report.Confirmed++
 
-	// 1. The canonical row's block.
-	if anchor.AnchorBlockNum != facts.BlockNumber {
+	// The canonical row's create transaction and its block. createKnown says whether the row names it, so
+	// that its sender can be recorded against it.
+	createKnown := stored.AnchorCreateTx != ""
+	switch {
+	case !createKnown:
+		action := fmt.Sprintf("%s: anchor_create_tx NULL -> %s (block %d, located by the anchor's BatchAnchorCreated log)",
+			label, facts.TxHash, facts.BlockNumber)
+		if cfg.Apply {
+			switch err := cfg.Repair.CompleteAnchorCreate(ctx, stored, *facts, cfg.ValidatorID); {
+			case errors.Is(err, database.ErrEvidenceChanged):
+				action += " (changed underneath; left for the next run)"
+			case err != nil:
+				return err
+			default:
+				report.CreatesCompleted++
+				createKnown = true
+			}
+		}
+		report.Actions = append(report.Actions, action)
+	case anchor.AnchorBlockNum != facts.BlockNumber:
 		action := fmt.Sprintf("%s: anchor_block_num %d -> %d", label, anchor.AnchorBlockNum, facts.BlockNumber)
 		if cfg.Apply {
 			switch err := cfg.Repair.CorrectAnchorBlock(ctx, anchor, *facts, cfg.ValidatorID); {
@@ -231,7 +379,53 @@ func repairAnchor(ctx context.Context, cfg AnchorRepairConfig, anchor database.C
 		report.Actions = append(report.Actions, action)
 	}
 
-	// 2. Layer-5 rows naming this anchor.
+	// The verify transaction's block.
+	if anchor.VerifyBlock != verify.BlockNumber {
+		action := fmt.Sprintf("%s: verify_block %d -> %d", label, anchor.VerifyBlock, verify.BlockNumber)
+		if cfg.Apply {
+			switch err := cfg.Repair.CorrectVerifyBlock(ctx, anchor, *verify, cfg.ValidatorID); {
+			case errors.Is(err, database.ErrEvidenceChanged):
+				action += " (changed underneath; left for the next run)"
+			case err != nil:
+				return err
+			case anchor.VerifyBlock == 0:
+				report.VerifyBlocksFilled++
+			default:
+				report.VerifyBlocksCorrected++
+			}
+		}
+		report.Actions = append(report.Actions, action)
+	}
+
+	// When the quorum was confirmed on-chain: the verify block's time (RB3-F131, RB3-F133).
+	if onChain := time.Unix(verify.BlockTime, 0).UTC(); !anchor.CompletedAt.Equal(onChain) {
+		action := fmt.Sprintf("%s: consensus_completed_at %s -> %s (verify block %d)", label,
+			anchor.CompletedAt.UTC().Format(time.RFC3339Nano), onChain.Format(time.RFC3339), verify.BlockNumber)
+		if cfg.Apply {
+			switch err := cfg.Repair.CorrectCompletedAt(ctx, anchor, *verify, cfg.ValidatorID); {
+			case errors.Is(err, database.ErrEvidenceChanged):
+				action += " (changed underneath; left for the next run)"
+			case err != nil:
+				return err
+			default:
+				report.CompletionTimesCorrected++
+			}
+		}
+		report.Actions = append(report.Actions, action)
+	}
+
+	// Who sent them (RB3-F127). The create sender is recorded against the row's create transaction, so only
+	// once the row names it; in a dry run it is reported as it would be.
+	if createKnown || !cfg.Apply {
+		if err := recordSender(ctx, cfg, anchor, database.AnchorSenderCreate, stored.AnchorCreateSender, facts, label, report); err != nil {
+			return err
+		}
+	}
+	if err := recordSender(ctx, cfg, anchor, database.AnchorSenderVerify, stored.VerifySender, verify, label, report); err != nil {
+		return err
+	}
+
+	// Layer-5 rows naming this anchor.
 	claims, err := cfg.Repair.ListLayer5ForAnchorTx(ctx, anchor.AnchorCreateTx)
 	if err != nil {
 		return err
@@ -242,7 +436,7 @@ func repairAnchor(ctx context.Context, cfg AnchorRepairConfig, anchor database.C
 		}
 	}
 
-	// 3. Certen anchor proofs naming this anchor.
+	// Certen anchor proofs naming this anchor.
 	proofs, err := cfg.Proofs.GetProofsByAnchorTxHash(ctx, anchor.AnchorCreateTx)
 	if err != nil {
 		return err
@@ -253,6 +447,50 @@ func repairAnchor(ctx context.Context, cfg AnchorRepairConfig, anchor database.C
 		}
 	}
 	return nil
+}
+
+// recordSender records a transaction's signer on the row where it has none, and corrects one the
+// signature contradicts.
+func recordSender(ctx context.Context, cfg AnchorRepairConfig, anchor database.CanonicalAnchor, which, stored string,
+	facts *database.AnchorChainFacts, label string, report *AnchorRepairReport) error {
+	if facts.Sender == "" {
+		return fmt.Errorf("%s: %s transaction %s was read without its signer", label, which, facts.TxHash)
+	}
+	if sameHex(stored, facts.Sender) {
+		return nil
+	}
+	action := fmt.Sprintf("%s: %s sender -> %s", label, which, facts.Sender)
+	if stored != "" {
+		action = fmt.Sprintf("%s: %s sender %s -> %s (the signature contradicts the row)", label, which, stored, facts.Sender)
+	}
+	if cfg.Apply {
+		switch err := cfg.Repair.RecordAnchorSender(ctx, anchor, which, stored, *facts, cfg.ValidatorID); {
+		case errors.Is(err, database.ErrEvidenceChanged):
+			action += " (changed underneath; left for the next run)"
+		case err != nil:
+			return err
+		case stored == "":
+			report.SendersRecorded++
+		default:
+			report.SendersCorrected++
+		}
+	}
+	report.Actions = append(report.Actions, action)
+	return nil
+}
+
+// bytes32FromHex parses a 0x-prefixed or bare 32-byte hex value.
+func bytes32FromHex(s string) ([32]byte, error) {
+	var out [32]byte
+	b, err := hex.DecodeString(strings.TrimPrefix(strings.TrimSpace(s), "0x"))
+	if err != nil {
+		return out, err
+	}
+	if len(b) != 32 {
+		return out, fmt.Errorf("%d bytes, not 32", len(b))
+	}
+	copy(out[:], b)
+	return out, nil
 }
 
 func repairLayer5(ctx context.Context, cfg AnchorRepairConfig, anchor database.CanonicalAnchor, facts *database.AnchorChainFacts, claim database.Layer5Claim, report *AnchorRepairReport) error {
@@ -439,7 +677,7 @@ func (r *EthAnchorTxReader) ReadAnchorTx(ctx context.Context, chainID int64, txH
 	}
 	var reading *AnchorTxReading
 	err = p.Do(ctx, func(c *ethclient.Client) error {
-		got, err := ReadAnchorTxFrom(ctx, c, txHash)
+		got, err := ReadAnchorTxFrom(ctx, c, chainID, txHash)
 		if err == nil {
 			reading = got
 		}
@@ -451,28 +689,67 @@ func (r *EthAnchorTxReader) ReadAnchorTx(ctx context.Context, chainID int64, txH
 	return reading, nil
 }
 
-// rpcTransaction is the part of eth_getTransactionByHash the reading needs, including the block it was
-// mined in, which ethclient's TransactionByHash does not return.
+// rpcTransaction is the part of eth_getTransactionByHash the reading needs besides the signed transaction:
+// the block it was mined in, which ethclient's TransactionByHash does not return, and the sender the
+// endpoint states, which is only compared with the one recovered from the signature.
 type rpcTransaction struct {
-	BlockNumber *hexutil.Big  `json:"blockNumber"`
-	BlockHash   *common.Hash  `json:"blockHash"`
-	Input       hexutil.Bytes `json:"input"`
+	BlockNumber *hexutil.Big    `json:"blockNumber"`
+	BlockHash   *common.Hash    `json:"blockHash"`
+	From        *common.Address `json:"from"`
+}
+
+// signedTransaction decodes an eth_getTransactionByHash result into the transaction that was signed and
+// returns it with its signer. It is accepted only when it hashes to want - so its calldata, destination
+// and signature are the transaction's own, not an endpoint's paraphrase - and was signed for chainID;
+// the signer is recovered from the signature and must be the sender the endpoint states (RB3-F127).
+func signedTransaction(raw json.RawMessage, chainID int64, want common.Hash) (*types.Transaction, common.Address, error) {
+	var tx types.Transaction
+	if err := tx.UnmarshalJSON(raw); err != nil {
+		return nil, common.Address{}, fmt.Errorf("transaction %s does not decode as a signed transaction: %w", want.Hex(), err)
+	}
+	if tx.Hash() != want {
+		return nil, common.Address{}, fmt.Errorf("the endpoint's transaction for %s hashes to %s", want.Hex(), tx.Hash().Hex())
+	}
+	if !tx.Protected() || tx.ChainId() == nil || tx.ChainId().Cmp(big.NewInt(chainID)) != 0 {
+		return nil, common.Address{}, fmt.Errorf("transaction %s is signed for chain %v, not %d", want.Hex(), tx.ChainId(), chainID)
+	}
+	from, err := types.Sender(types.LatestSignerForChainID(big.NewInt(chainID)), &tx)
+	if err != nil {
+		return nil, common.Address{}, fmt.Errorf("transaction %s: recovering its signer: %w", want.Hex(), err)
+	}
+	var stated rpcTransaction
+	if err := json.Unmarshal(raw, &stated); err != nil {
+		return nil, common.Address{}, fmt.Errorf("transaction %s: %w", want.Hex(), err)
+	}
+	if stated.From == nil || *stated.From != from {
+		return nil, common.Address{}, fmt.Errorf("transaction %s is signed by %s but the endpoint states sender %v",
+			want.Hex(), from.Hex(), stated.From)
+	}
+	return &tx, from, nil
 }
 
 // ReadAnchorTxFrom reads a transaction, its receipt and the head from one endpoint. The receipt is taken
 // by hash, or else from its block's receipts, which do not depend on a transaction index. An endpoint that
 // returns the transaction but neither receipt does not hold that block's receipts; that is
 // ethrpc.ErrEndpointLacksHistory, never "no such transaction".
-func ReadAnchorTxFrom(ctx context.Context, c *ethclient.Client, txHash string) (*AnchorTxReading, error) {
+func ReadAnchorTxFrom(ctx context.Context, c *ethclient.Client, chainID int64, txHash string) (*AnchorTxReading, error) {
 	hash := common.HexToHash(txHash)
-	var tx *rpcTransaction
-	if err := c.Client().CallContext(ctx, &tx, "eth_getTransactionByHash", hash); err != nil {
+	var raw json.RawMessage
+	if err := c.Client().CallContext(ctx, &raw, "eth_getTransactionByHash", hash); err != nil {
 		return nil, err
 	}
-	if tx == nil {
+	if len(raw) == 0 || string(raw) == "null" {
 		// Unknown here. The pool asks the next provider; absent from every provider is reported by the
 		// caller as unreadable, not as proven absent.
 		return nil, fmt.Errorf("transaction %s: %w", txHash, ethrpc.ErrEndpointLacksHistory)
+	}
+	signed, from, err := signedTransaction(raw, chainID, hash)
+	if err != nil {
+		return nil, err
+	}
+	var tx rpcTransaction
+	if err := json.Unmarshal(raw, &tx); err != nil {
+		return nil, fmt.Errorf("transaction %s: %w", txHash, err)
 	}
 	if tx.BlockNumber == nil || tx.BlockHash == nil {
 		return &AnchorTxReading{Found: true}, nil // pending: no block to state
@@ -503,13 +780,25 @@ func ReadAnchorTxFrom(ctx context.Context, c *ethclient.Client, txHash string) (
 		return nil, fmt.Errorf("receipt of %s names block %v %s, the transaction block %d %s",
 			txHash, receipt.BlockNumber, receipt.BlockHash.Hex(), block, tx.BlockHash.Hex())
 	}
+	header, err := c.HeaderByHash(ctx, *tx.BlockHash)
+	if err != nil {
+		return nil, fmt.Errorf("header of block %d (%s): %w", block, tx.BlockHash.Hex(), err)
+	}
+	if header == nil || header.Number == nil || header.Number.Uint64() != block || header.Hash() != *tx.BlockHash || header.Time == 0 {
+		return nil, fmt.Errorf("the header for block hash %s is not block %d", tx.BlockHash.Hex(), block)
+	}
 	head, err := c.BlockNumber(ctx)
 	if err != nil {
 		return nil, err
 	}
+	to := ""
+	if signed.To() != nil {
+		to = strings.ToLower(signed.To().Hex())
+	}
 	return &AnchorTxReading{
 		Found: true, Succeeded: receipt.Status == types.ReceiptStatusSuccessful,
-		BlockNumber: block, BlockHash: tx.BlockHash.Hex(), Head: head, Input: tx.Input,
+		BlockNumber: block, BlockHash: tx.BlockHash.Hex(), Head: head, Input: signed.Data(),
+		From: strings.ToLower(from.Hex()), To: to, BlockTime: header.Time,
 	}, nil
 }
 

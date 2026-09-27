@@ -41,8 +41,13 @@ type AnchorQuorumEvidence struct {
 
 	/// VerifyTx is the executeComprehensiveProof transaction that carried the aggregate on-chain.
 	VerifyTx string
+	// VerifySender is the address that signed VerifyTx (RB3-F127).
+	VerifySender string
 	// VerifyBlock is the block that transaction landed in. Zero means the receipt was not observed.
 	VerifyBlock int64
+	// VerifyBlockTime is that block's timestamp: when the quorum was confirmed on-chain. Zero when not yet
+	// read; BlockTimedAnchorQuorumStore reads it before the evidence is stored (RB3-F133).
+	VerifyBlockTime time.Time
 	// AnchorCreateTx is the transaction that PUBLISHED the root — createBatchAnchor's, never the
 	// settlement's. This is the field layer 5 states as "the root is in this transaction", and
 	// conflating it with a settlement observation is what published a binding no chain supported.
@@ -51,6 +56,8 @@ type AnchorQuorumEvidence struct {
 	AnchorCreateTx string
 	// AnchorCreateBlock is the block AnchorCreateTx was mined in; zero when the transaction is not known.
 	AnchorCreateBlock int64
+	// AnchorCreateSender is the address that signed AnchorCreateTx (RB3-F127).
+	AnchorCreateSender string
 
 	AggregateSignatureHex string
 	AggregatePublicKeyHex string

@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"testing"
 
 	chain "github.com/certen/independant-validator/pkg/chain/strategy"
@@ -373,27 +374,27 @@ func TestS3_BatchJoinsArePopulated(t *testing.T) {
 	repo := database.NewProofArtifactRepository(db)
 
 	// anchor_batches.anchor_tx_hash: written once.
-	if err := repo.SetAnchorBatchTxHash(ctx, batchID, "0xdeadbeef", 45937480); err != nil {
+	if err := repo.SetAnchorBatchTxHash(ctx, batchID, "0xdeadbeef"+strings.Repeat("00", 28), 45937480); err != nil {
 		t.Fatalf("record anchor tx: %v", err)
 	}
 	var got string
 	if err := db.QueryRow(`SELECT anchor_tx_hash FROM anchor_batches WHERE id = $1`, batchID).Scan(&got); err != nil {
 		t.Fatal(err)
 	}
-	if got != "0xdeadbeef" {
+	if got != "0xdeadbeef"+strings.Repeat("00", 28) {
 		t.Fatalf("anchor_tx_hash not recorded: %q", got)
 	}
 
 	// A second, different hash must NOT overwrite the first. A re-anchor and a
 	// bug look identical once the original is gone.
-	err := repo.SetAnchorBatchTxHash(ctx, batchID, "0xcafebabe", 1)
+	err := repo.SetAnchorBatchTxHash(ctx, batchID, "0xcafebabe"+strings.Repeat("00", 28), 1)
 	if !errors.Is(err, database.ErrAnchorTxAlreadyRecorded) {
 		t.Fatalf("expected ErrAnchorTxAlreadyRecorded on a second write, got %v", err)
 	}
 	if err := db.QueryRow(`SELECT anchor_tx_hash FROM anchor_batches WHERE id = $1`, batchID).Scan(&got); err != nil {
 		t.Fatal(err)
 	}
-	if got != "0xdeadbeef" {
+	if got != "0xdeadbeef"+strings.Repeat("00", 28) {
 		t.Fatalf("the first anchor tx was overwritten: %q", got)
 	}
 }

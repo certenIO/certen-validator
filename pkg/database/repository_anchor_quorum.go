@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -55,7 +56,12 @@ type AnchorQuorumRecord struct {
 	AnchorCreateBlock int64
 	VerifyTx          string
 	VerifyBlock       int64
-	// VerifiedAt is the time the quorum was confirmed on-chain, used as consensus_completed_at.
+	// The addresses that signed AnchorCreateTx and VerifyTx, lower-case (RB3-F127); empty when not known.
+	AnchorCreateSender string
+	VerifySender       string
+	// VerifiedAt is the time the quorum was confirmed on-chain - the verify block's timestamp - used as
+	// consensus_completed_at. Required: never a validator's clock (RB3-F133) or the anchor's creation time
+	// (RB3-F131).
 	VerifiedAt time.Time
 
 	AggregateSignature []byte
@@ -112,6 +118,9 @@ func (r *BatchRepository) RecordAnchorQuorum(
 	if len(rec.Root) == 0 {
 		return false, fmt.Errorf("record anchor quorum: bundle %s has no root", rec.BundleID)
 	}
+	if rec.VerifiedAt.IsZero() {
+		return false, fmt.Errorf("record anchor quorum: bundle %s has no completion time (its verify block's time)", rec.BundleID)
+	}
 	if rec.EvidenceSource != "live" && rec.EvidenceSource != "chain_backfill" {
 		return false, fmt.Errorf("record anchor quorum: evidence_source must be live or chain_backfill, got %q",
 			rec.EvidenceSource)
@@ -167,6 +176,19 @@ func (r *BatchRepository) RecordAnchorQuorum(
 				return false, fmt.Errorf("record anchor quorum: completing anchor %s: %w", rec.BundleID, err)
 			}
 		}
+		// The senders, where the row lacks them and names the same transaction.
+		if _, err := tx.Tx().ExecContext(ctx, `
+			UPDATE anchor_batches
+			SET anchor_create_sender = CASE WHEN anchor_create_sender IS NULL AND $2 <> '' AND LOWER(anchor_create_tx) = LOWER($3)
+			                                THEN $2 ELSE anchor_create_sender END,
+			    verify_sender        = CASE WHEN verify_sender IS NULL AND $4 <> '' AND LOWER(verify_tx) = LOWER($5)
+			                                THEN $4 ELSE verify_sender END
+			WHERE id = $1
+			  AND (   (anchor_create_sender IS NULL AND $2 <> '' AND LOWER(anchor_create_tx) = LOWER($3))
+			       OR (verify_sender IS NULL AND $4 <> '' AND LOWER(verify_tx) = LOWER($5)))`,
+			existingID, strings.ToLower(rec.AnchorCreateSender), rec.AnchorCreateTx, strings.ToLower(rec.VerifySender), rec.VerifyTx); err != nil {
+			return false, fmt.Errorf("record anchor quorum: completing anchor %s's senders: %w", rec.BundleID, err)
+		}
 		return false, tx.Commit()
 	case err != sql.ErrNoRows:
 		return false, fmt.Errorf("record anchor quorum: reading existing row: %w", err)
@@ -187,7 +209,8 @@ func (r *BatchRepository) RecordAnchorQuorum(
 			message_hash, signers, signed_voting_power, total_voting_power,
 			proof_data_included, attestation_count, aggregated_signature, aggregated_public_key,
 			quorum_reached, consensus_completed_at, evidence_source, lane,
-			anchor_tx_hash, anchored_at, confirmed_at, closed_at, anchor_block_num
+			anchor_tx_hash, anchored_at, confirmed_at, closed_at, anchor_block_num,
+			anchor_create_sender, verify_sender
 		) VALUES (
 			$1, $2, 'confirmed', $3, $4, NULL,
 			$5, $5,
@@ -195,7 +218,8 @@ func (r *BatchRepository) RecordAnchorQuorum(
 			$12, $13::jsonb, $14, $15,
 			TRUE, $16, $17, $18,
 			TRUE, $19, $20, $21,
-			$9, $19, $19, $19, $22
+			$9, $19, $19, $19, $22,
+			$23, $24
 		)
 		ON CONFLICT (chain_id, bundle_id) WHERE bundle_id IS NOT NULL DO NOTHING
 		RETURNING TRUE`,
@@ -208,6 +232,7 @@ func (r *BatchRepository) RecordAnchorQuorum(
 		len(rec.Signers), rec.AggregateSignature, rec.AggregatePubKey,
 		rec.VerifiedAt.UTC(), rec.EvidenceSource, nullIfEmpty(rec.Lane),
 		anchorCreateBlock(rec),
+		nullIfEmpty(strings.ToLower(rec.AnchorCreateSender)), nullIfEmpty(strings.ToLower(rec.VerifySender)),
 	).Scan(&inserted)
 
 	if err == sql.ErrNoRows {

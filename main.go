@@ -2061,7 +2061,10 @@ func startValidator(
 			return nil, nil, fmt.Errorf("anchor quorum evidence: the batch quorum attestor was not built")
 		}
 		{
-			anchorQuorumWriter := execution.NewAnchorQuorumWriter(batchComponents.Repos.Batches, log.Printf)
+			// The completion time is the verify block's, read from its chain before any write; a record
+			// whose block cannot be read yet waits in the retry and the outbox (RB3-F133).
+			anchorQuorumStore := execution.BlockTimedAnchorQuorumStore{Store: batchComponents.Repos.Batches, BlockTime: attestor.VerifyBlockTime}
+			anchorQuorumWriter := execution.NewAnchorQuorumWriter(anchorQuorumStore, log.Printf)
 
 			// The durable half. Every way the in-memory hand-off can lose a proven anchor — a saturated
 			// queue, a database that is down, a shutdown with records still in flight — is a way the
@@ -2082,7 +2085,7 @@ func startValidator(
 			anchorQuorumWriter.SetOutbox(outbox)
 			reconciler := &execution.AnchorQuorumReconciler{
 				Outbox: outbox,
-				Store:  batchComponents.Repos.Batches,
+				Store:  anchorQuorumStore,
 				Logf:   log.Printf,
 			}
 			reconciler.Start(context.Background())

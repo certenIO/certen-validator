@@ -52,6 +52,8 @@ func evidenceFixture() *AnchorQuorumEvidence {
 		TotalVotingPower:      big.NewInt(700),
 		Lane:                  AnchorLaneOnDemand,
 		AttestedAt:            time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC),
+		// The verify block's time: two seconds before this validator's clock read the anchor attested.
+		VerifyBlockTime: time.Date(2026, 9, 15, 11, 59, 58, 0, time.UTC),
 		Members: []AnchorQuorumMember{{
 			IntentID:    "f6cea77e-0000-0000-0000-000000000000",
 			OperationID: memberOp,
@@ -92,7 +94,8 @@ func TestAnchorQuorumRecordCarriesWhatWasProven(t *testing.T) {
 	if rec.EvidenceSource != "live" || rec.Lane != AnchorLaneOnDemand {
 		t.Fatalf("source=%s lane=%s", rec.EvidenceSource, rec.Lane)
 	}
-	if rec.VerifyTx != ev.VerifyTx || !rec.VerifiedAt.Equal(ev.AttestedAt) {
+	// The completion time is the verify block's, never this validator's clock (RB3-F133).
+	if rec.VerifyTx != ev.VerifyTx || !rec.VerifiedAt.Equal(ev.VerifyBlockTime) || rec.VerifiedAt.Equal(ev.AttestedAt) {
 		t.Fatalf("verify tx/time not carried: %s %v", rec.VerifyTx, rec.VerifiedAt)
 	}
 	if rec.SignedVotingPower.Cmp(big.NewInt(300)) != 0 || rec.TotalVotingPower.Cmp(big.NewInt(700)) != 0 {

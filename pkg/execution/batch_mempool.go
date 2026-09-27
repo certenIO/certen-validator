@@ -107,8 +107,9 @@ type PendingBatchIntent struct {
 	AnchorProved bool
 	AnchorTx     string
 	VerifyTx     string
-	// AnchorBlock is the block the member's anchor was created in, when this validator created it:
-	// the floor for searching the account's LeafConsumed log.
+	// AnchorBlock is the block the member's anchor was created in - by this validator, or by another and
+	// located on chain (RB3-F33): the floor for searching the account's LeafConsumed log and the anchor's
+	// attestation.
 	AnchorBlock uint64
 	// AttestedSeen: this validator has seen the member's anchor attested. Such a member may still be
 	// this validator's to settle in a later settlement window, so the memory-backstop prune keeps it.

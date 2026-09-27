@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -95,12 +96,17 @@ func (f *fakeODChain) verifyLeavesAgainstAccounts(context.Context, []*PendingBat
 }
 func (f *fakeODChain) beginSettlementSequence(context.Context) error { return f.beginErr }
 func (f *fakeODChain) endSettlementSequence()                        {}
-func (f *fakeODChain) createBatchAnchor(context.Context, *BatchTree) (string, uint64, uint64, error) {
+func (f *fakeODChain) createBatchAnchor(context.Context, *BatchTree) (anchorCreation, error) {
 	f.createCalls++
 	if f.createErr != nil {
-		return "", 0, 0, f.createErr
+		return anchorCreation{}, f.createErr
 	}
-	return f.anchorTx, 100, 1, nil
+	// What createBatchAnchor returns: always the creating transaction. A fake with no anchorTx of its own
+	// stands for an anchor another validator created - located, and not this validator's spend.
+	if f.anchorTx == "" {
+		return anchorCreation{TxHash: "0x" + strings.Repeat("a1", 32), GasUsed: 0, Block: 1, Sender: "0x00000000000000000000000000000000000000c2"}, nil
+	}
+	return anchorCreation{TxHash: f.anchorTx, GasUsed: 100, Block: 1, Sender: "0x00000000000000000000000000000000000000c1", Paid: f.anchorTx}, nil
 }
 func (f *fakeODChain) verifyLeavesAgainstAnchor(context.Context, *BatchTree) error { return nil }
 func (f *fakeODChain) settleMember(_ context.Context, p *PendingBatchIntent, _ *BatchTree, _ [][32]byte, fence time.Time) (string, error) {

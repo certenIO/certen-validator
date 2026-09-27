@@ -21,10 +21,12 @@ import (
 
 const repairUsage = "usage: certen-validator repair anchor-blocks [--apply] [--min-depth N]"
 
-// runRepairCommand runs `validator repair anchor-blocks`: it reads every canonical anchor's create
-// transaction back from its chain and corrects the anchor block stored on the anchor row, on layer-5 rows
-// and on the Certen anchor proofs this validator signed (see execution.RepairAnchorBlocks). Without --apply
-// it only reports. Run it on every validator: each revises the proofs it signed.
+// runRepairCommand runs `validator repair anchor-blocks`: it reads every canonical anchor's verify and
+// create transactions back from their chain - locating the create transaction where the row does not name
+// it (RB3-F33) - and completes or corrects what the chain contradicts: the create transaction, its block
+// and the verify block on the anchor row, both transactions' senders (RB3-F127), the layer-5 rows, and the
+// Certen anchor proofs this validator signed (see execution.RepairAnchorBlocks). Without --apply it only
+// reports. Run it on every validator: each revises the proofs it signed.
 //
 // Exit status: 0 when nothing was refused, 2 when something was refused or could not be read, 1 on error.
 func runRepairCommand(args []string) int {

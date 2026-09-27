@@ -144,8 +144,16 @@ func decodeAnchorState(out []interface{}) (AnchorOnChainState, error) {
 	if state.ExecutionCommitment, ok = out[6].([32]byte); !ok {
 		return AnchorOnChainState{}, fmt.Errorf("executionCommitment has an unexpected type")
 	}
-	if ts, tsOK := out[9].(*big.Int); tsOK && ts != nil && ts.Sign() > 0 {
+	ts, tsOK := out[9].(*big.Int)
+	if !tsOK || ts == nil || !ts.IsUint64() {
+		return AnchorOnChainState{}, fmt.Errorf("timestamp has an unexpected type or value")
+	}
+	if ts.Sign() > 0 {
+		state.CreatedAt = ts.Uint64()
 		state.Timestamp = time.Unix(ts.Int64(), 0).UTC()
+	}
+	if state.Validator, ok = out[10].(common.Address); !ok {
+		return AnchorOnChainState{}, fmt.Errorf("validator has an unexpected type")
 	}
 	if state.Valid, ok = out[11].(bool); !ok {
 		return AnchorOnChainState{}, fmt.Errorf("valid has an unexpected type")
