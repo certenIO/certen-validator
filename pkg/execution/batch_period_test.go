@@ -29,7 +29,7 @@ func TestPeekForPeriod_IsIdenticalAcrossValidators(t *testing.T) {
 
 	now := time.Now()
 	// Validator A: arrives c, a, b — and with wall-clock times in that order.
-	a := NewBatchMempool(BatchMempoolConfig{MinBatchSize: 1, MaxBatchSize: 64})
+	a := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64})
 	for _, p := range []*PendingBatchIntent{
 		mk("c", 100, now), mk("a", 100, now.Add(time.Second)), mk("b", 90, now.Add(2*time.Second)),
 	} {
@@ -38,7 +38,7 @@ func TestPeekForPeriod_IsIdenticalAcrossValidators(t *testing.T) {
 		}
 	}
 	// Validator B: same intents, reverse arrival, different clock entirely.
-	b := NewBatchMempool(BatchMempoolConfig{MinBatchSize: 1, MaxBatchSize: 64})
+	b := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64})
 	for _, p := range []*PendingBatchIntent{
 		mk("b", 90, now.Add(-time.Hour)), mk("a", 100, now.Add(-time.Minute)), mk("c", 100, now),
 	} {
@@ -47,8 +47,8 @@ func TestPeekForPeriod_IsIdenticalAcrossValidators(t *testing.T) {
 		}
 	}
 
-	ga := a.PeekForPeriod(11155111, 50, 100)
-	gb := b.PeekForPeriod(11155111, 50, 100)
+	ga := a.PeriodMembers(11155111, 50, 100)
+	gb := b.PeriodMembers(11155111, 50, 100)
 
 	if len(ga) != 3 || len(gb) != 3 {
 		t.Fatalf("expected 3 members each, got %d and %d", len(ga), len(gb))
@@ -72,7 +72,7 @@ func TestPeekForPeriod_IsIdenticalAcrossValidators(t *testing.T) {
 // after the first batch an attester still held the previous period's members and folded them
 // into the next period's tree — different root, different bundleId, permanent refusal.
 func TestPeekForPeriod_SelectsExactlyOneWindow(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{MinBatchSize: 1, MaxBatchSize: 64})
+	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64})
 	add := func(id string, h uint64) {
 		if err := m.Add(&PendingBatchIntent{
 			IntentID: id, ADIURL: "acc://" + id + ".acme", ChainID: 11155111,
@@ -88,7 +88,7 @@ func TestPeekForPeriod_SelectsExactlyOneWindow(t *testing.T) {
 	add("windowEnd", 109)     // last height inside [100,110)
 	add("nextPeriod", 110)    // exclusive upper bound
 
-	got := m.PeekForPeriod(11155111, 100, 10)
+	got := m.PeriodMembers(11155111, 100, 10)
 	if len(got) != 2 {
 		ids := make([]string, len(got))
 		for i, p := range got {
@@ -111,7 +111,7 @@ func TestPeekForPeriod_SelectsExactlyOneWindow(t *testing.T) {
 // was taken. Bucket scoping is what makes an attester's Peek reproducible against a leader's
 // Take, no matter what either removed.
 func TestPeekForPeriod_IsUnaffectedByNeighbouringPeriods(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{MinBatchSize: 1, MaxBatchSize: 64})
+	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64})
 	for _, c := range []struct {
 		id string
 		h  uint64
@@ -125,24 +125,26 @@ func TestPeekForPeriod_IsUnaffectedByNeighbouringPeriods(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	before := m.PeekForPeriod(11155111, 110, 10)
+	before := m.PeriodMembers(11155111, 110, 10)
 	if len(before) != 2 {
 		t.Fatalf("period [110,120) should hold 2, got %d", len(before))
 	}
-	// A leader takes the EARLIER period. The later one must be untouched.
-	if taken := m.TakeForPeriod(11155111, 100, 10); len(taken) != 2 {
-		t.Fatalf("period [100,110) should hold 2, got %d", len(taken))
+	// A leader resolves the EARLIER period. The later one must be untouched.
+	earlier := m.PeriodMembers(11155111, 100, 10)
+	if len(earlier) != 2 {
+		t.Fatalf("period [100,110) should hold 2, got %d", len(earlier))
 	}
-	after := m.PeekForPeriod(11155111, 110, 10)
-	if len(after) != len(before) || after[0].IntentID != before[0].IntentID {
-		t.Fatal("taking one period changed another period's membership")
+	m.MarkOutcome(earlier, MemberSettled)
+	after := m.PeriodMembers(11155111, 110, 10)
+	if len(after) != len(before) || after[0].IntentID != before[0].IntentID || !after[0].pending() {
+		t.Fatal("resolving one period changed another period's membership")
 	}
 }
 
 // PendingPeriods drives the flush loop. It must report every CLOSED period holding members, so
 // a straggler whose leader was down is picked up by a later one rather than stranded.
 func TestPendingPeriods_ReportsClosedPeriodsOnly(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{MinBatchSize: 1, MaxBatchSize: 64})
+	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64})
 	for _, h := range []uint64{100, 105, 130, 200} {
 		if err := m.Add(&PendingBatchIntent{
 			IntentID: fmt.Sprintf("i%d", h), ADIURL: "acc://x.acme", ChainID: 11155111,
@@ -168,7 +170,7 @@ func TestPendingPeriods_ReportsClosedPeriodsOnly(t *testing.T) {
 
 // The memory backstop must not touch members whose period is still within the horizon.
 func TestPruneOlderThan(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{MinBatchSize: 1, MaxBatchSize: 64})
+	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64})
 	for _, h := range []uint64{10, 500, 900} {
 		if err := m.Add(&PendingBatchIntent{
 			IntentID: fmt.Sprintf("i%d", h), ADIURL: "acc://x.acme", ChainID: 11155111,
@@ -190,7 +192,7 @@ func TestPruneOlderThan(t *testing.T) {
 // A member with no commit height cannot be placed deterministically — a validator that has it
 // would diverge from one that does not. It must be skipped, not guessed at.
 func TestPeekForPeriod_SkipsUnknownCommitHeight(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{MinBatchSize: 1, MaxBatchSize: 64})
+	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64})
 	if err := m.Add(&PendingBatchIntent{
 		IntentID: "noheight", ADIURL: "acc://x.acme", ChainID: 11155111,
 		Account: common.HexToAddress("0x01"), OperationID: opid(1),
@@ -199,14 +201,14 @@ func TestPeekForPeriod_SkipsUnknownCommitHeight(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if got := m.PeekForPeriod(11155111, 1000, 100); len(got) != 0 {
+	if got := m.PeriodMembers(11155111, 1000, 100); len(got) != 0 {
 		t.Fatal("a member with no commit height must be skipped")
 	}
 }
 
 // Peek must not consume: an attester needs its copy back if the proposer never lands the batch.
 func TestPeekForPeriod_DoesNotConsume(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{MinBatchSize: 1, MaxBatchSize: 64})
+	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64})
 	if err := m.Add(&PendingBatchIntent{
 		IntentID: "x", ADIURL: "acc://x.acme", ChainID: 11155111,
 		Account: common.HexToAddress("0x01"), OperationID: opid(1),
@@ -216,26 +218,27 @@ func TestPeekForPeriod_DoesNotConsume(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 3; i++ {
-		if len(m.PeekForPeriod(11155111, 10, 100)) != 1 {
+		if len(m.PeriodMembers(11155111, 10, 100)) != 1 {
 			t.Fatalf("peek %d lost the member", i)
 		}
 	}
 	if m.PendingCount() != 1 {
 		t.Fatal("peek must leave the pool intact")
 	}
-	if len(m.TakeForPeriod(11155111, 10, 100)) != 1 {
-		t.Fatal("take should return the member")
-	}
+	m.MarkOutcome(m.PeriodMembers(11155111, 10, 100), MemberSettled)
 	if m.PendingCount() != 0 {
-		t.Fatal("take must consume")
+		t.Fatal("a member with an outcome is no longer pending")
+	}
+	if len(m.PeriodMembers(11155111, 10, 100)) != 1 {
+		t.Fatal("a member with an outcome must stay in its period")
 	}
 }
 
-// The cap must be applied AFTER sorting, or two validators holding the same members could
-// truncate to different subsets and diverge.
-func TestPeekForPeriod_CapAppliedAfterSort(t *testing.T) {
+// Trees must be cut AFTER sorting, or two validators holding the same members could cut different
+// trees and diverge.
+func TestPeriodTrees_CutAfterSort(t *testing.T) {
 	mkPool := func(order []string) *BatchMempool {
-		m := NewBatchMempool(BatchMempoolConfig{MinBatchSize: 1, MaxBatchSize: 2})
+		m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 2})
 		for i, id := range order {
 			if err := m.Add(&PendingBatchIntent{
 				IntentID: id, ADIURL: "acc://" + id + ".acme", ChainID: 11155111,
@@ -248,11 +251,12 @@ func TestPeekForPeriod_CapAppliedAfterSort(t *testing.T) {
 		}
 		return m
 	}
-	g1 := mkPool([]string{"aaa", "bbb", "ccc"}).PeekForPeriod(11155111, 10, 100)
-	g2 := mkPool([]string{"ccc", "bbb", "aaa"}).PeekForPeriod(11155111, 10, 100)
+	m1, m2 := mkPool([]string{"aaa", "bbb", "ccc"}), mkPool([]string{"ccc", "bbb", "aaa"})
+	g1 := chunkMembers(m1.PeriodMembers(11155111, 10, 100), m1.MaxBatchSize())[0]
+	g2 := chunkMembers(m2.PeriodMembers(11155111, 10, 100), m2.MaxBatchSize())[0]
 
 	if len(g1) != 2 || len(g2) != 2 {
-		t.Fatalf("cap not applied: %d %d", len(g1), len(g2))
+		t.Fatalf("tree size not applied: %d %d", len(g1), len(g2))
 	}
 	if g1[0].IntentID != g2[0].IntentID || g1[1].IntentID != g2[1].IntentID {
 		t.Fatal("truncation must pick the same subset regardless of arrival order")
@@ -278,7 +282,7 @@ func TestBatchPeriodCutoff(t *testing.T) {
 }
 
 func TestDropMembers(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{MinBatchSize: 1, MaxBatchSize: 64})
+	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64})
 	var all []*PendingBatchIntent
 	for _, id := range []string{"a", "b", "c"} {
 		p := &PendingBatchIntent{

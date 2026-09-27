@@ -247,41 +247,6 @@ func (s *BatchStack) OrchestratorFor(chainID int64) (*BatchOrchestrator, error) 
 // actually settled on chain.
 type BatchAttestFn func(ctx context.Context, attestation interface{}, txHash string, chainID int64, success bool)
 
-// FlushDueChains drains every chain whose pool is due and attests each settled member.
-//
-// Attestation is per-member even though one anchor and one batch tx covered them all: each
-// intent keeps its own operationID and its own Accumulate write-back, so collapsing them
-// would destroy per-intent status tracking.
-//
-// A member that failed is attested as UNSUCCESSFUL rather than skipped. Silently dropping it
-// would leave the intent pending forever with nothing recording why.
-func (s *BatchStack) FlushDueChains(
-	ctx context.Context,
-	now time.Time,
-	force bool,
-	cutoffHeight uint64,
-	attest BatchAttestFn,
-	onDropped BatchDropFn,
-	logf func(string, ...interface{}),
-) {
-	if logf == nil {
-		logf = func(string, ...interface{}) {}
-	}
-	// Without a real consensus height there is no period, and TakeForPeriod would select
-	// nothing. Say so once per pass rather than spinning silently.
-	if cutoffHeight == 0 {
-		if s.Mempool.PendingCount() > 0 {
-			logf("[BATCH-FLUSH] %d member(s) queued but the consensus height is 0 — no period "+
-				"can be formed; check the height source wiring", s.Mempool.PendingCount())
-		}
-		return
-	}
-
-	for _, chainID := range s.Mempool.DueChains(now, force) {
-		s.flushChainPeriods(ctx, chainID, cutoffHeight, DefaultBatchPeriodBlocks, nil, 0, now, attest, onDropped, logf)
-	}
-}
-
 // flushChainPeriods flushes every CLOSED period this chain still holds members for.
 //
 // Iterating periods rather than flushing only the newest closed one is what stops a straggler
@@ -302,6 +267,9 @@ func (s *BatchStack) flushChainPeriods(
 	onDropped BatchDropFn,
 	logf func(string, ...interface{}),
 ) {
+	if logf == nil {
+		logf = func(string, ...interface{}) {}
+	}
 	// Strictly older than the current period: a period still accepting members must not be
 	// formed, or two validators at different heights inside it derive different trees.
 	periods := s.Mempool.PendingPeriods(chainID, periodBlocks, currentPeriodStart)
@@ -349,7 +317,7 @@ func (s *BatchStack) flushChainPeriods(
 		// soloSettleGrace still leaves ~15x margin over the observed spread, because that sample
 		// was a healthy idle set and a loaded or catching-up node will be slower.
 		effectiveGrace := grace
-		if n := len(s.Mempool.PeekForPeriod(chainID, start, periodBlocks)); n == 1 && grace > soloSettleGrace {
+		if n := len(s.Mempool.PeriodMembers(chainID, start, periodBlocks)); n == 1 && grace > soloSettleGrace {
 			effectiveGrace = soloSettleGrace
 			logf("[BATCH-FLUSH] chain %d period %d: solo member — grace %s instead of %s",
 				chainID, start, effectiveGrace, grace)
@@ -618,7 +586,7 @@ const soloSettleGrace = time.Minute
 // leadership rotates, so the set has many chances to pick a straggler up.
 const DefaultBatchRetentionPeriods uint64 = 50
 
-// RunFlushLoop drives FlushDueChains on the cadence until ctx is cancelled.
+// RunFlushLoop flushes every closed period on the cadence until ctx is cancelled.
 //
 // On shutdown it performs one final forced flush so queued intents are not abandoned
 // mid-window — the same drain-on-exit contract BatchAccumulator honours.
@@ -646,8 +614,8 @@ func (s *BatchStack) RunFlushLoop(
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	// A faster sub-tick so MaxAge is honoured with reasonable granularity even when the
-	// cadence interval is long.
+	// A faster sub-tick so a period's settle grace is honoured with reasonable granularity even
+	// when the cadence interval is long.
 	sub := interval / 4
 	if sub < time.Second {
 		sub = time.Second
@@ -675,7 +643,7 @@ func (s *BatchStack) RunFlushLoop(
 	}
 
 	// flush runs one pass: every closed period, leader-gated per period.
-	flush := func(passCtx context.Context, now time.Time, force bool) {
+	flush := func(passCtx context.Context, now time.Time) {
 		height := heightFn()
 		cutoff := BatchPeriodCutoff(height, periodBlocks)
 		if cutoff == 0 {
@@ -705,12 +673,12 @@ func (s *BatchStack) RunFlushLoop(
 		select {
 		case <-ctx.Done():
 			logf("[BATCH-FLUSH] shutting down — draining %d queued members", s.Mempool.PendingCount())
-			flush(context.Background(), time.Now(), true)
+			flush(context.Background(), time.Now())
 			return
 		case now := <-ticker.C:
-			flush(ctx, now, true)
+			flush(ctx, now)
 		case now := <-subTicker.C:
-			flush(ctx, now, false)
+			flush(ctx, now)
 		}
 	}
 }

@@ -1,6 +1,8 @@
 package execution
 
 import (
+	"errors"
+	"fmt"
 	"math/big"
 	"sync"
 	"testing"
@@ -17,6 +19,8 @@ func pending(id, adi string, chainID int64, acct common.Address, opID uint64, le
 		Account:     acct,
 		OperationID: b32(opID),
 		Legs:        legs,
+		// A committed member: it belongs to period [0, periodBlocks). Height 0 belongs to no period.
+		CommitHeight: 1,
 	}
 }
 
@@ -132,140 +136,91 @@ func TestMempool_AddIsIdempotentPerIntentID(t *testing.T) {
 // Members from different chains can never share a tree: the leaf binds block.chainid and the
 // anchor is per-chain.
 func TestMempool_PoolsAreSeparatedByChain(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{MinBatchSize: 1})
+	m := NewBatchMempool(BatchMempoolConfig{})
 	_ = m.Add(pending("a", "acc://a.acme", 11155111, acct1, 1, oneLeg(11155111, dst, 1)))
 	_ = m.Add(pending("b", "acc://b.acme", 8453, acct2, 2, oneLeg(8453, dst, 1)))
 
 	if m.PendingCountForChain(11155111) != 1 || m.PendingCountForChain(8453) != 1 {
 		t.Fatal("pools must be keyed by chain")
 	}
-	taken := m.Take(11155111)
-	if len(taken) != 1 || taken[0].IntentID != "a" {
-		t.Fatal("Take must only drain the requested chain")
-	}
-	if m.PendingCountForChain(8453) != 1 {
-		t.Fatal("the other chain's pool must be untouched")
+	got := m.PeriodMembers(11155111, 0, 100)
+	if len(got) != 1 || got[0].IntentID != "a" {
+		t.Fatal("a chain's period must hold only that chain's members")
 	}
 }
 
-func TestMempool_TakeRespectsMaxBatchSize(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 3, MinBatchSize: 1})
+// A period with more members than a tree holds is cut into fixed trees, identically everywhere, and
+// nothing is removed by cutting.
+func TestMempool_PeriodIsCutIntoFixedTrees(t *testing.T) {
+	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 3})
 	for i := 0; i < 10; i++ {
 		p := pending(string(rune('a'+i)), "acc://x.acme", 1, acct1, uint64(i+1), oneLeg(1, dst, 1))
 		if err := m.Add(p); err != nil {
 			t.Fatal(err)
 		}
 	}
-	taken := m.Take(1)
-	if len(taken) != 3 {
-		t.Fatalf("took %d, want MaxBatchSize=3", len(taken))
+	chunks := chunkMembers(m.PeriodMembers(1, 0, 100), m.MaxBatchSize())
+	sizes := []int{}
+	for _, c := range chunks {
+		sizes = append(sizes, len(c))
 	}
-	if m.PendingCountForChain(1) != 7 {
-		t.Fatalf("remaining=%d want 7", m.PendingCountForChain(1))
+	if fmt.Sprint(sizes) != "[3 3 3 1]" {
+		t.Fatalf("trees = %v, want [3 3 3 1]", sizes)
+	}
+	if chunks[1][0].IntentID != "d" || chunks[3][0].IntentID != "j" {
+		t.Fatalf("trees not cut in period order: %s, %s", chunks[1][0].IntentID, chunks[3][0].IntentID)
+	}
+	if m.PendingCountForChain(1) != 10 {
+		t.Fatalf("cutting a period removed members: %d left", m.PendingCountForChain(1))
+	}
+	// Resolving the first tree's members does not change how the rest are cut.
+	m.MarkOutcome(chunks[0], MemberSettled)
+	again := chunkMembers(m.PeriodMembers(1, 0, 100), m.MaxBatchSize())
+	if len(again) != 4 || again[1][0].IntentID != "d" {
+		t.Fatal("a period's trees changed after some of its members settled")
 	}
 }
 
-// Oldest-first, or a busy chain could starve an early intent forever.
-func TestMempool_TakeIsOldestFirst(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 2, MinBatchSize: 1})
+// Order is by (CommitHeight, IntentID), never by arrival: a validator that saw the members in
+// another order must cut the same trees.
+func TestMempool_PeriodOrderIgnoresArrival(t *testing.T) {
+	m := NewBatchMempool(BatchMempoolConfig{})
 	now := time.Now()
-
-	newest := pending("newest", "acc://x.acme", 1, acct1, 1, oneLeg(1, dst, 1))
-	newest.EnqueuedAt = now
-	middle := pending("middle", "acc://x.acme", 1, acct1, 2, oneLeg(1, dst, 1))
-	middle.EnqueuedAt = now.Add(-time.Minute)
-	oldest := pending("oldest", "acc://x.acme", 1, acct1, 3, oneLeg(1, dst, 1))
-	oldest.EnqueuedAt = now.Add(-time.Hour)
-
-	for _, p := range []*PendingBatchIntent{newest, middle, oldest} {
+	late := pending("b", "acc://x.acme", 1, acct1, 1, oneLeg(1, dst, 1))
+	late.CommitHeight, late.EnqueuedAt = 5, now.Add(-time.Hour)
+	early := pending("a", "acc://x.acme", 1, acct1, 2, oneLeg(1, dst, 1))
+	early.CommitHeight, early.EnqueuedAt = 5, now
+	first := pending("z", "acc://x.acme", 1, acct1, 3, oneLeg(1, dst, 1))
+	first.CommitHeight, first.EnqueuedAt = 3, now
+	for _, p := range []*PendingBatchIntent{late, early, first} {
 		if err := m.Add(p); err != nil {
 			t.Fatal(err)
 		}
 	}
-
-	taken := m.Take(1)
-	if len(taken) != 2 || taken[0].IntentID != "oldest" || taken[1].IntentID != "middle" {
-		t.Fatalf("oldest-first violated: %s, %s", taken[0].IntentID, taken[1].IntentID)
+	got := m.PeriodMembers(1, 0, 100)
+	if got[0].IntentID != "z" || got[1].IntentID != "a" || got[2].IntentID != "b" {
+		t.Fatalf("order = %s %s %s, want z a b", got[0].IntentID, got[1].IntentID, got[2].IntentID)
 	}
 }
 
-// =============================================================================
-// Flush triggers
-// =============================================================================
-
-func TestMempool_DueOnMinBatchSize(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{MinBatchSize: 3, MaxAge: time.Hour})
-	for i := 0; i < 2; i++ {
-		_ = m.Add(pending(string(rune('a'+i)), "acc://x.acme", 1, acct1, uint64(i+1), oneLeg(1, dst, 1)))
+// A member with an outcome still holds its place in the dedupe index: the same intent arriving
+// again (a workflow re-run) is queued already, never queued - and settled - a second time.
+func TestMempool_AMemberWithAnOutcomeCannotBeQueuedAgain(t *testing.T) {
+	m := NewBatchMempool(BatchMempoolConfig{})
+	p := pending("a", "acc://x.acme", 1, acct1, 1, oneLeg(1, dst, 1))
+	if err := m.Add(p); err != nil {
+		t.Fatal(err)
 	}
-	if len(m.DueChains(time.Now(), false)) != 0 {
-		t.Fatal("below MinBatchSize and within MaxAge must not be due")
+	m.MarkOutcome([]*PendingBatchIntent{p}, MemberSettled)
+	again := pending("a", "acc://x.acme", 1, acct1, 1, oneLeg(1, dst, 1))
+	if err := m.Add(again); !errors.Is(err, ErrMemberAlreadyQueued) {
+		t.Fatalf("a settled member was queued again: %v", err)
 	}
-	_ = m.Add(pending("c", "acc://x.acme", 1, acct1, 3, oneLeg(1, dst, 1)))
-	if len(m.DueChains(time.Now(), false)) != 1 {
-		t.Fatal("reaching MinBatchSize must make the chain due")
-	}
-}
-
-// A quiet chain must not strand an intent behind a long interval.
-func TestMempool_DueOnMaxAge(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{MinBatchSize: 100, MaxAge: 50 * time.Millisecond})
-	p := pending("old", "acc://x.acme", 1, acct1, 1, oneLeg(1, dst, 1))
-	p.EnqueuedAt = time.Now().Add(-time.Hour)
-	_ = m.Add(p)
-
-	if len(m.DueChains(time.Now(), false)) != 1 {
-		t.Fatal("an aged member must force its chain due")
-	}
-}
-
-func TestMempool_ForceMakesAllNonEmptyChainsDue(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{MinBatchSize: 100, MaxAge: time.Hour})
-	_ = m.Add(pending("a", "acc://a.acme", 1, acct1, 1, oneLeg(1, dst, 1)))
-	_ = m.Add(pending("b", "acc://b.acme", 2, acct2, 2, oneLeg(2, dst, 1)))
-
-	due := m.DueChains(time.Now(), true)
-	if len(due) != 2 {
-		t.Fatalf("force must make every non-empty chain due, got %d", len(due))
-	}
-	if due[0] != 1 || due[1] != 2 {
-		t.Fatal("due chains must be returned in deterministic order")
-	}
-}
-
-// =============================================================================
-// Requeue
-// =============================================================================
-
-// A failed flush before the anchor exists must lose nothing.
-func TestMempool_RequeueRestoresMembers(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{MinBatchSize: 1})
-	for i := 0; i < 3; i++ {
-		_ = m.Add(pending(string(rune('a'+i)), "acc://x.acme", 1, acct1, uint64(i+1), oneLeg(1, dst, 1)))
-	}
-	taken := m.Take(1)
 	if m.PendingCount() != 0 {
-		t.Fatal("Take must drain")
+		t.Fatalf("pending = %d, want 0", m.PendingCount())
 	}
-	m.Requeue(taken)
-	if m.PendingCount() != 3 {
-		t.Fatalf("requeued=%d want 3", m.PendingCount())
-	}
-	// And they can be taken again — the dedupe set must have been released.
-	if len(m.Take(1)) != 3 {
-		t.Fatal("requeued members must be takeable again")
-	}
-}
-
-func TestMempool_RequeueIsIdempotent(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{MinBatchSize: 1})
-	_ = m.Add(pending("a", "acc://x.acme", 1, acct1, 1, oneLeg(1, dst, 1)))
-	taken := m.Take(1)
-
-	m.Requeue(taken)
-	m.Requeue(taken) // double requeue must not duplicate
-	if m.PendingCount() != 1 {
-		t.Fatalf("pending=%d want 1", m.PendingCount())
+	if len(m.PendingPeriods(1, 100, 1000)) != 0 {
+		t.Fatal("a period whose members all have outcomes is still pending")
 	}
 }
 
@@ -274,7 +229,7 @@ func TestMempool_RequeueIsIdempotent(t *testing.T) {
 // =============================================================================
 
 func TestMempool_ConcurrentAddIsSafe(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 1000, MinBatchSize: 1})
+	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 1000})
 	var wg sync.WaitGroup
 	for i := 0; i < 100; i++ {
 		wg.Add(1)
@@ -289,9 +244,9 @@ func TestMempool_ConcurrentAddIsSafe(t *testing.T) {
 	wg.Wait()
 
 	got := m.PendingCount()
-	taken := m.Take(1)
-	if len(taken) != got {
-		t.Fatalf("Take returned %d but PendingCount said %d", len(taken), got)
+	period := m.PeriodMembers(1, 0, 1000)
+	if len(period) != got {
+		t.Fatalf("PeriodMembers returned %d but PendingCount said %d", len(period), got)
 	}
 }
 
@@ -302,7 +257,7 @@ func TestMempool_ConcurrentAddIsSafe(t *testing.T) {
 // The whole point, checked without a chain: N members from N different ADIs form ONE tree
 // whose every branch verifies.
 func TestMempool_DrainsIntoAVerifiableTree(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 50, MinBatchSize: 1})
+	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 50})
 
 	const N = 12
 	adis := make([]string, N)
@@ -316,7 +271,7 @@ func TestMempool_DrainsIntoAVerifiableTree(t *testing.T) {
 		}
 	}
 
-	members := m.Take(11155111)
+	members := m.PeriodMembers(11155111, 0, 10000)
 	if len(members) != N {
 		t.Fatalf("took %d want %d", len(members), N)
 	}
@@ -371,7 +326,7 @@ func TestMempool_DrainsIntoAVerifiableTree(t *testing.T) {
 
 // Mixed single-leg and multi-leg members in ONE tree — both nesting levels together.
 func TestMempool_MixedSingleAndMultiLegMembers(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 10, MinBatchSize: 1})
+	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 10})
 
 	single := pending("single", "acc://a.acme", 1, acct1, 1, oneLeg(1, dst, 5))
 	multi := pending("multi", "acc://b.acme", 1, acct2, 2,
@@ -384,7 +339,7 @@ func TestMempool_MixedSingleAndMultiLegMembers(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	members := m.Take(1)
+	members := m.PeriodMembers(1, 0, 100)
 	inputs := make([]BatchLeafInput, 0, 2)
 	for _, p := range members {
 		in, err := p.LeafInput()

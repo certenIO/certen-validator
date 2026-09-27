@@ -207,7 +207,7 @@ var (
 func (f *fakeODChain) settlementInFlight(nonce uint64) bool { return f.inFlight[nonce] }
 
 func odOrchestrator(f *fakeODChain) *BatchOrchestrator {
-	return &BatchOrchestrator{odChain: f, logf: func(string, ...interface{}) {}, attempts: map[uint64]int{}}
+	return &BatchOrchestrator{odChain: f, logf: func(string, ...interface{}) {}, attempts: map[[32]byte]int{}}
 }
 
 const odSettleNonce = 42

@@ -1,9 +1,11 @@
 package execution
 
 import (
+	"context"
 	"encoding/hex"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/certen/independant-validator/pkg/crypto/bls"
 	"github.com/certen/independant-validator/pkg/crypto/bls_zkp"
@@ -96,6 +98,9 @@ const (
 	CodeRefused AttestationRefusalCode = "refused"
 )
 
+// batchAttestationScreenTimeout bounds the chain reads a peer makes to screen a period before it co-signs.
+const batchAttestationScreenTimeout = 30 * time.Second
+
 // BatchAttesterIdentity is who this validator is when attesting.
 type BatchAttesterIdentity struct {
 	ValidatorID string
@@ -179,40 +184,59 @@ func (s *BatchStack) HandleBatchAttestationRequest(
 	periodBlocks := myPeriodBlocks
 
 	// ---- Rebuild from OUR OWN view. Never from the request. --------------------
-	members := s.Mempool.PeekForPeriod(req.ChainID, req.CutoffHeight, periodBlocks)
+	// The same rule the leader forms its trees by (periodChunks): the period's whole member set,
+	// screened identically, cut into the same trees. Screening here too is what lets a period with
+	// an ineligible member reach quorum at all (RB3-F54).
+	orch, err := s.OrchestratorFor(req.ChainID)
+	if err != nil {
+		return refuse("chain %d is not configured for batching here: %v", req.ChainID, err)
+	}
+	members := s.Mempool.PeriodMembers(req.ChainID, req.CutoffHeight, periodBlocks)
 	if len(members) == 0 {
 		return refuseWith(CodeMemberNotHeld,
 			"no members for chain %d in period [%d,%d) in this validator's mempool",
 			req.ChainID, req.CutoffHeight, req.CutoffHeight+periodBlocks)
 	}
-
-	inputs := make([]BatchLeafInput, 0, len(members))
-	for _, m := range members {
-		if err := checkMemberAnchorPin(s, m); err != nil {
-			return refuse("%v", err)
-		}
-		in, err := m.LeafInput()
-		if err != nil {
-			return refuse("member %s: %v", m.IntentID, err)
-		}
-		inputs = append(inputs, in)
-	}
-
-	tree, err := BuildBatchTree(req.ChainID, inputs, req.CutoffHeight)
+	screenCtx, cancel := context.WithTimeout(context.Background(), batchAttestationScreenTimeout)
+	defer cancel()
+	chunks, _, err := orch.periodChunks(screenCtx, members, s.Mempool.MaxBatchSize())
 	if err != nil {
-		return refuse("rebuilding batch: %v", err)
+		// A read that failed decides nothing; the proposer retries.
+		return refuseWith(CodeNotReady, "screening period %d on chain %d: %v", req.CutoffHeight, req.ChainID, err)
 	}
-	resp.BundleID = "0x" + hex.EncodeToString(tree.BundleID[:])
 
 	// ---- THE SECURITY BOUNDARY -------------------------------------------------
-	// Any disagreement — an extra leaf, a missing one, a different height, a substituted
-	// executionCommitment — changes the root and therefore the bundleId. Refuse.
-	if tree.BundleID != wantBundle {
-		return refuseWith(CodeBundleMismatch,
-			"bundleId mismatch: proposer %s, this validator derived %s over %d member(s) — "+
-				"refusing to attest a batch it did not independently reproduce",
-			shortHex(req.BundleID), shortHex(resp.BundleID), len(members))
+	// Only a tree this validator cut itself is signed. Any disagreement — an extra leaf, a missing
+	// one, a different height, a substituted executionCommitment — changes the root and therefore
+	// the bundleId, and matches none of our trees.
+	var tree *BatchTree
+	derived := make([]string, 0, len(chunks))
+	for _, chunk := range chunks {
+		inputs := make([]BatchLeafInput, 0, len(chunk))
+		for _, m := range chunk {
+			in, err := m.LeafInput()
+			if err != nil {
+				return refuse("member %s: %v", m.IntentID, err)
+			}
+			inputs = append(inputs, in)
+		}
+		t, err := BuildBatchTree(req.ChainID, inputs, req.CutoffHeight)
+		if err != nil {
+			return refuse("rebuilding batch: %v", err)
+		}
+		derived = append(derived, shortHex("0x"+hex.EncodeToString(t.BundleID[:])))
+		if t.BundleID == wantBundle {
+			tree = t
+			break
+		}
 	}
+	if tree == nil {
+		return refuseWith(CodeBundleMismatch,
+			"bundleId mismatch: proposer %s, this validator derived %v over %d member(s) — "+
+				"refusing to attest a batch it did not independently reproduce",
+			shortHex(req.BundleID), derived, len(members))
+	}
+	resp.BundleID = "0x" + hex.EncodeToString(tree.BundleID[:])
 
 	// ---- Sign the same 6-field pre-exec message the contract reconstructs -------
 	setRoot, err := contracts.GetV6_1ValidatorSetRoot()

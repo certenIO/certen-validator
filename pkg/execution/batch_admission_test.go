@@ -33,7 +33,7 @@ func twoChainStack(t *testing.T, a, b int64) *BatchStack {
 	}
 	return &BatchStack{
 		Resolver:      r,
-		Mempool:       NewBatchMempool(BatchMempoolConfig{MinBatchSize: 1, MaxBatchSize: 64}),
+		Mempool:       NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64}),
 		Orchestrators: map[int64]*BatchOrchestrator{a: {}, b: {}},
 	}
 }
@@ -177,8 +177,35 @@ func TestRemoveMember_RollsBackEitherLane(t *testing.T) {
 	}
 }
 
-// RB3-F38: dropping one chain's member of a multi-chain intent must not remove its member on
-// another chain - that one would vanish while still marked as queued, and never settle.
+// RB3-F38: dropping one chain's member of a multi-chain intent must not touch its member on
+// another chain - that one would vanish while still marked as queued, and never settle. A drop is
+// an outcome marked on the member (RB3-F54), keyed by member exactly as the removal was.
+func TestMarkOutcome_TouchesOnlyTheMarkedChainsMember(t *testing.T) {
+	s := twoChainStack(t, 11155111, 84532)
+	if err := s.EnqueueForBatch("i1", "acc://a.acme", 11155111, acct(1), opid(1), admissionLeg(11155111), "att", 100, "", time.Time{}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EnqueueForBatch("i1", "acc://a.acme", 84532, acct(1), opid(1), admissionLeg(84532), "att", 100, "", time.Time{}, ""); err != nil {
+		t.Fatal(err)
+	}
+	onA := s.Mempool.PeriodMembers(11155111, 100, DefaultBatchPeriodBlocks)
+	if len(onA) != 1 {
+		t.Fatalf("precondition: one member on chain A, got %d", len(onA))
+	}
+	s.Mempool.MarkOutcome([]*PendingBatchIntent{{IntentID: "i1", ChainID: 11155111}}, MemberDropped)
+	if got := s.Mempool.PendingCountForChain(84532); got != 1 {
+		t.Fatalf("dropping chain A's member resolved chain B's member too (pending on B = %d)", got)
+	}
+	if got := s.Mempool.PendingCountForChain(11155111); got != 0 {
+		t.Fatalf("chain A's member was not dropped (pending on A = %d)", got)
+	}
+	// It stays in its period, so the period's trees are what every validator derives.
+	if got := s.Mempool.PeriodMembers(11155111, 100, DefaultBatchPeriodBlocks); len(got) != 1 || got[0].Outcome != MemberDropped {
+		t.Fatalf("a dropped member must stay in its period with its outcome, got %+v", got)
+	}
+}
+
+// The enqueue rollback (DropMembers) still removes outright, and only the named chain's member.
 func TestDropMembers_RemovesOnlyTheDroppedChainsMember(t *testing.T) {
 	s := twoChainStack(t, 11155111, 84532)
 	if err := s.EnqueueForBatch("i1", "acc://a.acme", 11155111, acct(1), opid(1), admissionLeg(11155111), "att", 100, "", time.Time{}, ""); err != nil {
@@ -187,8 +214,7 @@ func TestDropMembers_RemovesOnlyTheDroppedChainsMember(t *testing.T) {
 	if err := s.EnqueueForBatch("i1", "acc://a.acme", 84532, acct(1), opid(1), admissionLeg(84532), "att", 100, "", time.Time{}, ""); err != nil {
 		t.Fatal(err)
 	}
-	onA := s.Mempool.Take(11155111)
-	s.Mempool.Requeue(onA)
+	onA := s.Mempool.PeriodMembers(11155111, 100, DefaultBatchPeriodBlocks)
 	if len(onA) != 1 {
 		t.Fatalf("precondition: one member on chain A, got %d", len(onA))
 	}

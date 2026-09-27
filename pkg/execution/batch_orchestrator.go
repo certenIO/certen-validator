@@ -128,7 +128,16 @@ const maxQuorumAttempts = 5
 
 type BatchOrchestrator struct {
 	attemptsMu sync.Mutex
-	attempts   map[uint64]int
+	// attempts counts failed quorum attempts per tree (bundleId): a period may be cut into several.
+	attempts map[[32]byte]int
+
+	// usable caches definitive account-screen verdicts (nil = usable) by member and account. The
+	// properties screened are fixed once an account exists, so a verdict never changes; a read that
+	// failed is not a verdict and is never cached.
+	usableMu sync.Mutex
+	usable   map[string]error
+	// screen replaces memberAccountUsable for tests that have no chain. Nil in production.
+	screen func(context.Context, *PendingBatchIntent) error
 
 	ecm      *EthereumContractManager
 	anchorV7 common.Address
@@ -207,7 +216,7 @@ func NewBatchOrchestrator(
 	}
 	return &BatchOrchestrator{
 		ecm: ecm, anchorV7: anchorV7, prover: prover, mempool: mempool, logf: logf,
-		attempts: make(map[uint64]int),
+		attempts: make(map[[32]byte]int),
 	}
 }
 
@@ -247,74 +256,68 @@ func (o *BatchOrchestrator) FlushChain(
 	}
 	// Height 0 is not a period. Forming a batch at it would bind accumulateBlockHeight=0 into
 	// the bundleId on every validator that happened to have a different local view, and
-	// TakeForPeriod would select nothing anyway.
+	// PeriodMembers would select nothing anyway.
 	if cutoffHeight == 0 {
 		return nil, fmt.Errorf("chain %d: cutoff height 0 is not a valid period; the consensus "+
 			"height source is not wired", chainID)
 	}
 
-	members := o.mempool.TakeForPeriod(chainID, cutoffHeight, periodBlocks)
-	if len(members) == 0 {
+	// The period's WHOLE member set - settled and pending alike - cut into trees by the one
+	// eligibility rule every validator applies (periodChunks). A peer asked to co-sign cuts the same
+	// trees from its own copy; the leader never works from a subset it alone holds (RB3-F54).
+	periodMembers := o.mempool.PeriodMembers(chainID, cutoffHeight, periodBlocks)
+	if !anyPending(periodMembers) {
 		return nil, nil
+	}
+	chunks, excluded, err := o.periodChunks(ctx, periodMembers, o.mempool.MaxBatchSize())
+	if err != nil {
+		// A read that failed is not the on-chain state every validator reads. Nothing is decided;
+		// the period is flushed again once the read succeeds.
+		return nil, fmt.Errorf("period %d on chain %d: %w", cutoffHeight, chainID, err)
 	}
 
 	res := &BatchFlushResult{
-		ChainID:     chainID,
-		MemberCount: len(members),
-		TxHashes:    make(map[string]string, len(members)),
+		ChainID:  chainID,
+		TxHashes: make(map[string]string, len(periodMembers)),
+	}
+	// Every exit records the outcomes this flush reached on the pooled members.
+	defer o.markOutcomes(res)
+
+	// A member whose account cannot take part is excluded by every validator alike, so it is in no
+	// tree anywhere. It is dropped here - recorded as failed with its cause - once.
+	for _, x := range excluded {
+		if x.member.pending() {
+			o.logf("[BATCH] chain=%d dropping member %s from period %d: %v", chainID, x.member.IntentID, cutoffHeight, x.cause)
+			res.drop(fmt.Sprintf("its account cannot take part in a batch on chain %d: %v", chainID, x.cause), x.member)
+		}
 	}
 
-	// ---- Build the tree -----------------------------------------------------
-	// Screen out members whose account cannot participate, BEFORE the tree is formed.
-	//
-	// A member whose account is not a CertenAccountV7 fails verification, and that check used to
-	// abort the ENTIRE flush — one bad member blocked every other ADI's intent in the same period
-	// indefinitely. Observed live 2026-08-04 on chain 84532: account 0x12565E20 (11765 bytes, an
-	// older account version) stalled the Base batch and nothing settled for over 20 minutes.
-	//
-	// Dropping is deterministic across validators because the predicate is on-chain state every
-	// node reads identically, so all seven form the same tree from the same survivors. Dropped
-	// members are returned with their cause and recorded as FAILED by the caller, never silently
-	// lost.
-	screened := make([]*PendingBatchIntent, 0, len(members))
-	for _, p := range members {
-		if err := o.memberAccountUsable(ctx, p); err != nil {
-			if IsChainReadError(err) {
-				// A read that failed is not the on-chain state every validator reads: dropping on it
-				// would give this validator a different tree from its peers. Put the period back.
-				o.mempool.Requeue(members)
-				return nil, fmt.Errorf("period %d on chain %d: screening %s: %w", cutoffHeight, chainID, p.IntentID, err)
-			}
-			o.logf("[BATCH] chain=%d dropping member %s from this period: %v", chainID, p.IntentID, err)
-			res.drop(fmt.Sprintf("its account cannot take part in a batch on chain %d: %v", chainID, err), p)
-			continue
+	// One tree per flush: the first with a member still to resolve. The next flush takes the next.
+	var members []*PendingBatchIntent
+	for _, c := range chunks {
+		if anyPending(c) {
+			members = c
+			break
 		}
-		screened = append(screened, p)
 	}
-	if len(screened) == 0 {
-		o.mempool.DropMembers(members)
-		return res, fmt.Errorf("every member of period %d has an unusable account; %d dropped",
-			cutoffHeight, len(members))
+	if members == nil {
+		return res, nil
 	}
-	if len(screened) != len(members) {
-		o.mempool.DropMembers(res.Dropped)
-		members = screened
-	}
+	res.MemberCount = len(members)
+	pendingMembers := pendingOf(members)
 
 	inputs := make([]BatchLeafInput, 0, len(members))
 	for _, p := range members {
 		in, err := p.LeafInput()
 		if err != nil {
-			o.mempool.Requeue(members)
-			return nil, fmt.Errorf("building leaf for %s: %w", p.IntentID, err)
+			return res, fmt.Errorf("building leaf for %s: %w", p.IntentID, err)
 		}
 		inputs = append(inputs, in)
 	}
 
 	tree, err := BuildBatchTree(chainID, inputs, cutoffHeight)
 	if err != nil {
-		o.mempool.Requeue(members)
-		return nil, fmt.Errorf("building batch tree: %w", err)
+		return res, fmt.Errorf("building batch tree: %w", err)
 	}
 	res.BundleID = tree.BundleID
 	res.Root = tree.Root
@@ -333,8 +336,7 @@ func (o *BatchOrchestrator) FlushChain(
 	// transaction this key still has in flight to a result. Reading "is the anchor attested?" before
 	// that could see an attestation this node already sent as not yet landed, and send it again.
 	if err := o.ecm.beginNonceSequenceWaiting(ctx); err != nil {
-		o.mempool.Requeue(members)
-		return nil, err
+		return res, err
 	}
 	defer o.ecm.endNonceSequence()
 
@@ -348,8 +350,7 @@ func (o *BatchOrchestrator) FlushChain(
 	// and record every member as FAILED although it already moved funds. A false failure
 	// produced by a retry contradicts the chain; a skipped flush does not.
 	if settled, serr := o.anchorAlreadyAttested(ctx, tree.BundleID); serr != nil {
-		o.mempool.Requeue(members)
-		return nil, fmt.Errorf("checking whether anchor 0x%x already settled: %w", tree.BundleID[:8], serr)
+		return res, fmt.Errorf("checking whether anchor 0x%x already settled: %w", tree.BundleID[:8], serr)
 	} else if settled {
 		// Whose attestation is it? The chain says: the sender of its ProofExecuted transaction. If it
 		// is THIS node's - a verify of its own that had no result when an earlier flush gave up on it,
@@ -358,15 +359,14 @@ func (o *BatchOrchestrator) FlushChain(
 		// itself and never got to settle.
 		attesterTx, attester, found, aerr := o.anchorAttester(ctx, tree.BundleID, 0)
 		if aerr != nil || !found {
-			o.mempool.Requeue(members)
-			return nil, fmt.Errorf("anchor 0x%x is attested but its attester is not in view (found=%t): %v",
+			return res, fmt.Errorf("anchor 0x%x is attested but its attester is not in view (found=%t): %v",
 				tree.BundleID[:8], found, aerr)
 		}
 		if attester == o.ecm.auth.From {
 			o.logf("[BATCH] chain=%d period %d: anchor 0x%x was attested by this node; settling its %d member(s) under it",
 				chainID, cutoffHeight, tree.BundleID[:8], len(members))
 			o.attemptsMu.Lock()
-			delete(o.attempts, cutoffHeight)
+			delete(o.attempts, tree.BundleID)
 			o.attemptsMu.Unlock()
 			// The verify is the attester's transaction, read from the chain - this flush sent none.
 			// The anchor was created by an earlier flush whose cost was not reported; its hash is not
@@ -395,9 +395,9 @@ func (o *BatchOrchestrator) FlushChain(
 		// Attesting it unsettled here wrote FAILED for members that went on to settle. It is
 		// requeued, and a later flush sees its leaf spent. (Settling in the attester's place when
 		// the attester has died is the dead-leader takeover, deliberately not done here.)
-		res.AlreadySettledOutcome = make(map[string]bool, len(members))
+		res.AlreadySettledOutcome = make(map[string]bool, len(pendingMembers))
 		var awaiting []*PendingBatchIntent
-		for _, m := range members {
+		for _, m := range pendingMembers {
 			ok, cerr := o.memberLeafConsumed(ctx, m)
 			if cerr != nil || !ok {
 				if cerr != nil {
@@ -424,14 +424,13 @@ func (o *BatchOrchestrator) FlushChain(
 		}
 		awaiting = kept
 		if len(expired) > 0 {
-			o.mempool.DropMembers(expired)
+			o.mempool.MarkOutcome(expired, MemberReleased)
 			for _, m := range expired {
 				o.logf("⚠️ [BATCH] member %s: past its deadline, unsettled under anchor 0x%x attested by %s; "+
 					"removed from this node's pool - its outcome is that validator's record", m.IntentID, tree.BundleID[:8], attester.Hex())
 			}
 		}
 		if len(awaiting) > 0 {
-			o.mempool.Requeue(awaiting)
 			o.logf("[BATCH] chain=%d period %d: %d member(s) under anchor 0x%x attested by %s are not settled yet; "+
 				"requeued until that validator settles them", chainID, cutoffHeight, len(awaiting), tree.BundleID[:8], attester.Hex())
 		}
@@ -442,15 +441,13 @@ func (o *BatchOrchestrator) FlushChain(
 	// Checked against DEPLOYED bytecode, not a fixture. A drift here would mint an anchor
 	// whose leaves no account can reproduce — unspendable, and paid for.
 	if err := o.verifyLeavesAgainstAccounts(ctx, members, tree); err != nil {
-		o.mempool.Requeue(members)
-		return nil, err
+		return res, err
 	}
 
 	// ---- Create the anchor --------------------------------------------------
 	anchorTx, gasUsed, anchorBlock, err := o.createBatchAnchor(ctx, tree)
 	if err != nil {
-		o.mempool.Requeue(members)
-		return nil, fmt.Errorf("createBatchAnchor: %w", err)
+		return res, fmt.Errorf("createBatchAnchor: %w", err)
 	}
 	res.AnchorTxHash = anchorTx
 	res.GasAnchor = gasUsed
@@ -470,9 +467,8 @@ func (o *BatchOrchestrator) FlushChain(
 		// derives the same bundleId, finds the same anchor, and fails this same check again - the
 		// rejection is a property of the tree, not a transient. Drop the members, recorded as
 		// FAILED with this cause by the caller.
-		o.mempool.DropMembers(members)
 		res.drop(fmt.Sprintf("its batch anchor 0x%x on chain %d was created but rejects the member leaves: %v",
-			tree.BundleID[:8], chainID, err), members...)
+			tree.BundleID[:8], chainID, err), pendingMembers...)
 		return res, fmt.Errorf("anchor created but membership verification failed (%d member(s) "+
 			"dropped and recorded as FAILED): %w", len(members), err)
 	}
@@ -489,7 +485,6 @@ func (o *BatchOrchestrator) FlushChain(
 		if isTransientSendError(err) || isAnchorConfirmUnread(err) || errors.Is(err, ErrAttestedByAnother) {
 			// No result yet, or the anchor was attested by another validator's transaction: the next
 			// flush reads the anchor attested and decides from its attester who settles.
-			o.mempool.Requeue(members)
 			return res, fmt.Errorf("quorum attestation over batch root has no result of this node's yet (%d member(s) "+
 				"requeued; not counted as a failed attempt): %w", len(members), err)
 		}
@@ -511,27 +506,25 @@ func (o *BatchOrchestrator) FlushChain(
 		// Attempts are bounded so a genuinely unreachable quorum surfaces as a loud failure
 		// rather than an endless retry.
 		o.attemptsMu.Lock()
-		o.attempts[cutoffHeight]++
-		n := o.attempts[cutoffHeight]
+		o.attempts[tree.BundleID]++
+		n := o.attempts[tree.BundleID]
 		o.attemptsMu.Unlock()
 
 		if n < maxQuorumAttempts {
-			o.mempool.Requeue(members)
 			return res, fmt.Errorf("quorum attestation over batch root failed (attempt %d/%d; "+
 				"%d member(s) requeued for retry): %w", n, maxQuorumAttempts, len(members), err)
 		}
 
 		o.attemptsMu.Lock()
-		delete(o.attempts, cutoffHeight)
+		delete(o.attempts, tree.BundleID)
 		o.attemptsMu.Unlock()
-		o.mempool.DropMembers(members)
 		res.drop(fmt.Sprintf("quorum over its batch root 0x%x on chain %d was not reached after %d attempts: %v",
-			tree.BundleID[:8], chainID, n, err), members...)
+			tree.BundleID[:8], chainID, n, err), pendingMembers...)
 		return res, fmt.Errorf("quorum attestation over batch root failed %d times; %d member(s) "+
 			"dropped and recorded as FAILED: %w", n, len(members), err)
 	}
 	o.attemptsMu.Lock()
-	delete(o.attempts, cutoffHeight)
+	delete(o.attempts, tree.BundleID)
 	o.attemptsMu.Unlock()
 	o.logf("[BATCH] chain=%d quorum verified root 0x%x", chainID, tree.Root[:8])
 
@@ -551,6 +544,10 @@ func (o *BatchOrchestrator) settleFlushMembers(
 ) *BatchFlushResult {
 	// ---- Settle each member -------------------------------------------------
 	for i, p := range members {
+		// Its position in the tree is fixed; only a member without an outcome is acted on.
+		if !p.pending() {
+			continue
+		}
 		// A settlement still in flight holds its nonce: every later member would queue behind it and
 		// wait out the same bound. Stop, and leave the rest for the next flush, which first drives
 		// the in-flight transaction to a result.
@@ -645,12 +642,10 @@ func (o *BatchOrchestrator) settleFlushMembers(
 		res.TxHashes[p.IntentID] = txHash
 	}
 
-	// Put deferred members back so a later period retries them. Requeue, never Drop: a dropped
-	// member is recorded as FAILED for good, and an intent that simply could not afford gas this
-	// minute has not failed.
+	// Deferred members keep no outcome, so the next flush of this period retries them. Never an
+	// outcome: an intent that simply could not afford gas this minute has not failed.
 	if len(res.Retryable) > 0 {
-		o.mempool.Requeue(res.Retryable)
-		o.logf("[BATCH] chain=%d %d member(s) deferred on gas and requeued", chainID, len(res.Retryable))
+		o.logf("[BATCH] chain=%d %d member(s) deferred; retried by the next flush", chainID, len(res.Retryable))
 	}
 
 	o.logf("[BATCH] chain=%d complete: %d settled, %d failed (anchor amortised across %d)",
@@ -1157,6 +1152,93 @@ func (o *BatchOrchestrator) memberLeafConsumed(ctx context.Context, p *PendingBa
 	return acct.IsLeafConsumed(&bind.CallOpts{Context: ctx}, leaf)
 }
 
+// excludedMember is a period member the eligibility rule leaves out of every tree, with why.
+type excludedMember struct {
+	member *PendingBatchIntent
+	cause  error
+}
+
+// periodChunks is THE eligibility rule for a period, applied identically by the leader forming its
+// trees and by every peer asked to co-sign one (HandleBatchAttestationRequest). It screens every
+// member - settled or pending - with memberAccountUsable, keeps the eligible ones in the period's
+// fixed order and cuts them into trees of at most maxBatch (the mempool's MaxBatchSize).
+//
+// The leader used to screen and a peer did not: one member with an unusable account made every peer
+// derive a different bundleId, no quorum formed, and after the bounded retries the whole period was
+// dropped as failed (RB3-F54). A read that fails decides nothing: it is returned, and the caller
+// neither forms nor co-signs a tree until it succeeds.
+func (o *BatchOrchestrator) periodChunks(ctx context.Context, members []*PendingBatchIntent, maxBatch int) ([][]*PendingBatchIntent, []excludedMember, error) {
+	eligible := make([]*PendingBatchIntent, 0, len(members))
+	var excluded []excludedMember
+	for _, p := range members {
+		verdict, err := o.accountVerdict(ctx, p)
+		if err != nil {
+			return nil, nil, err
+		}
+		if verdict != nil {
+			excluded = append(excluded, excludedMember{member: p, cause: verdict})
+			continue
+		}
+		eligible = append(eligible, p)
+	}
+	return chunkMembers(eligible, maxBatch), excluded, nil
+}
+
+// accountVerdict is memberAccountUsable, cached. It returns (nil, nil) for a usable account,
+// (verdict, nil) for one the chain disqualifies, and (nil, err) when the chain could not be read.
+func (o *BatchOrchestrator) accountVerdict(ctx context.Context, p *PendingBatchIntent) (error, error) {
+	key := memberKey(p.IntentID, p.ChainID) + "|" + p.Account.Hex()
+	o.usableMu.Lock()
+	verdict, known := o.usable[key]
+	o.usableMu.Unlock()
+	if known {
+		return verdict, nil
+	}
+	screen := o.memberAccountUsable
+	if o.screen != nil {
+		screen = o.screen
+	}
+	err := screen(ctx, p)
+	if err != nil && IsChainReadError(err) {
+		return nil, err
+	}
+	o.usableMu.Lock()
+	// Bounded: a verdict is only a saved read, recomputed identically if dropped, and members leave
+	// the pool at the retention horizon while this map would otherwise keep them for ever.
+	if o.usable == nil || len(o.usable) >= maxCachedAccountVerdicts {
+		o.usable = make(map[string]error)
+	}
+	o.usable[key] = err
+	o.usableMu.Unlock()
+	return err, nil
+}
+
+// maxCachedAccountVerdicts bounds accountVerdict's cache.
+const maxCachedAccountVerdicts = 10000
+
+// pendingOf returns the members still without an outcome, in order.
+func pendingOf(members []*PendingBatchIntent) []*PendingBatchIntent {
+	out := make([]*PendingBatchIntent, 0, len(members))
+	for _, p := range members {
+		if p.pending() {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// markOutcomes records on the pooled members the terminal outcomes a flush reached.
+func (o *BatchOrchestrator) markOutcomes(res *BatchFlushResult) {
+	if res == nil {
+		return
+	}
+	o.mempool.MarkOutcome(res.Settled, MemberSettled)
+	o.mempool.MarkOutcome(res.Failed, MemberFailed)
+	o.mempool.MarkOutcome(res.Dropped, MemberDropped)
+	o.mempool.MarkOutcome(res.SpentElsewhere, MemberSettledElsewhere)
+	o.mempool.MarkOutcome(res.AlreadySettled, MemberSettledElsewhere)
+}
+
 // memberAccountUsable reports whether this member's account can take part in a batch.
 //
 // Screens the two properties that make a member unanchorable regardless of the tree: the account
@@ -1171,6 +1253,9 @@ func (o *BatchOrchestrator) memberAccountUsable(ctx context.Context, p *PendingB
 	// calldata alone, the same way on every validator.
 	if err := checkMemberAnchorPin(orchestratorAnchorPolicy{o}, p); err != nil {
 		return err
+	}
+	if o.ecm == nil || o.ecm.client == nil {
+		return readErr(fmt.Errorf("no chain client for chain %d", p.ChainID))
 	}
 	code, err := o.ecm.client.CodeAt(ctx, p.Account, nil)
 	if err != nil {

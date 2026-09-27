@@ -49,7 +49,7 @@ func TestOnDemandIndexIsInvisibleToPeriodSelection(t *testing.T) {
 	}
 
 	// Period selection must see ONLY the period member.
-	got := m.PeekForPeriod(odChain, 100, 100)
+	got := m.PeriodMembers(odChain, 100, 100)
 	if len(got) != 1 {
 		t.Fatalf("PeekForPeriod returned %d member(s), want 1 — the on-demand member leaked into "+
 			"the period path and would be batched with members it must never share an anchor with", len(got))
@@ -68,8 +68,8 @@ func TestOnDemandIndexIsInvisibleToPeriodSelection(t *testing.T) {
 	if periods := m.PendingPeriods(odChain, 100, 1000); len(periods) != 1 {
 		t.Errorf("PendingPeriods = %v, want exactly the period member's bucket", periods)
 	}
-	if due := m.DueChains(time.Now(), true); len(due) != 1 {
-		t.Errorf("DueChains = %v, want only the period pool's chain", due)
+	if pm := m.PeriodMembers(odChain, 100, 100); len(pm) != 1 {
+		t.Errorf("PeriodMembers = %d, want only the period pool's member", len(pm))
 	}
 
 	// And the reverse: the period member must not appear in the on-demand index.
@@ -81,9 +81,9 @@ func TestOnDemandIndexIsInvisibleToPeriodSelection(t *testing.T) {
 	}
 }
 
-// TakeForPeriod removes members. It must not remove on-demand ones — a member silently taken
-// out from under the on-demand submitter would never settle and never fail.
-func TestTakeForPeriodDoesNotConsumeOnDemandMembers(t *testing.T) {
+// A period flush records outcomes on the period's members. It must never touch an on-demand
+// member — one resolved out from under the on-demand submitter would never settle and never fail.
+func TestPeriodOutcomesDoNotTouchOnDemandMembers(t *testing.T) {
 	m := NewBatchMempool(BatchMempoolConfig{})
 	if err := m.AddOnDemand(odMember(1, odChain, 105)); err != nil {
 		t.Fatalf("AddOnDemand: %v", err)
@@ -92,11 +92,12 @@ func TestTakeForPeriodDoesNotConsumeOnDemandMembers(t *testing.T) {
 		t.Fatalf("Add: %v", err)
 	}
 
-	taken := m.TakeForPeriod(odChain, 100, 100)
-	if len(taken) != 1 {
-		t.Fatalf("TakeForPeriod took %d, want 1", len(taken))
+	period := m.PeriodMembers(odChain, 100, 100)
+	if len(period) != 1 {
+		t.Fatalf("PeriodMembers returned %d, want 1", len(period))
 	}
-	if m.GetOnDemand(odChain, [32]byte{1}) == nil {
+	m.MarkOutcome(period, MemberSettled)
+	if od := m.GetOnDemand(odChain, [32]byte{1}); od == nil || od.Outcome != "" {
 		t.Fatal("the on-demand member was consumed by a period flush; it can now never settle")
 	}
 }

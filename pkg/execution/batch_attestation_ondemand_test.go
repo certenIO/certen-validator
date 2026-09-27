@@ -18,7 +18,7 @@ func odStack(t *testing.T, chainID int64, members ...*PendingBatchIntent) *Batch
 	}
 	return &BatchStack{
 		Mempool:       m,
-		Orchestrators: map[int64]*BatchOrchestrator{chainID: {}},
+		Orchestrators: map[int64]*BatchOrchestrator{chainID: {screen: acceptEveryAccount}},
 	}
 }
 
@@ -161,7 +161,7 @@ func TestOnDemandHandlerCannotAttestAPeriodMember(t *testing.T) {
 	if err := m.Add(odMember(1, odChain, 105)); err != nil { // PERIOD pool
 		t.Fatalf("Add: %v", err)
 	}
-	s := &BatchStack{Mempool: m, Orchestrators: map[int64]*BatchOrchestrator{odChain: {}}}
+	s := &BatchStack{Mempool: m, Orchestrators: map[int64]*BatchOrchestrator{odChain: {screen: acceptEveryAccount}}}
 
 	resp := s.HandleOnDemandAttestationRequest(&OnDemandAttestationRequest{
 		ChainID:     odChain,
@@ -184,7 +184,7 @@ func TestPeriodHandlerStillRefusesUnheldWithNotHeldCode(t *testing.T) {
 	m := NewBatchMempool(BatchMempoolConfig{})
 	s := &BatchStack{
 		Mempool:       m,
-		Orchestrators: map[int64]*BatchOrchestrator{odChain: {}},
+		Orchestrators: map[int64]*BatchOrchestrator{odChain: {screen: acceptEveryAccount}},
 		PeriodBlocks:  DefaultBatchPeriodBlocks,
 	}
 
@@ -206,7 +206,7 @@ func TestPeriodHandlerStillRefusesUnheldWithNotHeldCode(t *testing.T) {
 func TestPeriodHandlerLabelsWidthMismatchAsConfig(t *testing.T) {
 	s := &BatchStack{
 		Mempool:       NewBatchMempool(BatchMempoolConfig{}),
-		Orchestrators: map[int64]*BatchOrchestrator{odChain: {}},
+		Orchestrators: map[int64]*BatchOrchestrator{odChain: {screen: acceptEveryAccount}},
 		PeriodBlocks:  100,
 	}
 	resp := s.HandleBatchAttestationRequest(&BatchAttestationRequest{

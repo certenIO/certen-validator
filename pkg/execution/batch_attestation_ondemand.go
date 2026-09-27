@@ -1,6 +1,7 @@
 package execution
 
 import (
+	"context"
 	"encoding/hex"
 	"fmt"
 
@@ -93,7 +94,8 @@ func (s *BatchStack) HandleOnDemandAttestationRequest(
 
 	// This chain must be one we can actually anchor on, or our signature would endorse a batch
 	// we could not verify the destination of.
-	if _, err := s.OrchestratorFor(req.ChainID); err != nil {
+	orch, err := s.OrchestratorFor(req.ChainID)
+	if err != nil {
 		return refuseWith(CodeConfigMismatch,
 			"chain %d is not configured for batching here: %v", req.ChainID, err)
 	}
@@ -107,8 +109,17 @@ func (s *BatchStack) HandleOnDemandAttestationRequest(
 			shortHex(req.OperationID), req.ChainID)
 	}
 
-	if err := checkMemberAnchorPin(s, member); err != nil {
-		return refuseWith(CodeRefused, "%v", err)
+	// The same account screen the leader applies before it anchors (SettleOnDemandMember): a peer
+	// co-signs only a member it would have settled itself (RB3-F54).
+	screenCtx, cancel := context.WithTimeout(context.Background(), batchAttestationScreenTimeout)
+	defer cancel()
+	verdict, err := orch.accountVerdict(screenCtx, member)
+	if err != nil {
+		return refuseWith(CodeNotReady, "screening member %s: %v", member.IntentID, err)
+	}
+	if verdict != nil {
+		return refuseWith(CodeRefused, "member %s cannot take part in a batch on chain %d: %v",
+			member.IntentID, req.ChainID, verdict)
 	}
 	in, err := member.LeafInput()
 	if err != nil {

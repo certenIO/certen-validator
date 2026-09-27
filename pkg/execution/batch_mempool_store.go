@@ -108,6 +108,10 @@ type persistedMember struct {
 	SettlementTxs      []string `json:"settlement_txs,omitempty"`
 	SettlementNonce    uint64   `json:"settlement_nonce,omitempty"`
 	SettlementNonceSet bool     `json:"settlement_nonce_set,omitempty"`
+	// Outcome is the member's terminal outcome here; absent while it is pending. omitempty for the
+	// same version-skew reason as Lane: an older binary restores such a member as pending, and its
+	// settlement pre-check finds the leaf already consumed.
+	Outcome string `json:"outcome,omitempty"`
 }
 
 // AttestationCodec converts the opaque Phase 7-9 snapshot to and from JSON.
@@ -235,6 +239,7 @@ func (s *BatchMempoolStore) encodeMember(p *PendingBatchIntent, lane BatchLane) 
 		SettlementTxs:      append([]string(nil), p.SettlementTxs...),
 		SettlementNonce:    p.SettlementNonce,
 		SettlementNonceSet: p.SettlementNonceSet,
+		Outcome:            string(p.Outcome),
 	}
 	// on_cadence is the absent default, so it is never written. See persistedMember.Lane.
 	if lane == LaneOnDemand {
@@ -320,6 +325,7 @@ func (s *BatchMempoolStore) Load(m *BatchMempool) (int, error) {
 			SettlementTxs:      pm.SettlementTxs,
 			SettlementNonce:    pm.SettlementNonce,
 			SettlementNonceSet: pm.SettlementNonceSet,
+			Outcome:            MemberOutcome(pm.Outcome),
 		}
 		for _, l := range pm.Legs {
 			v := new(big.Int)

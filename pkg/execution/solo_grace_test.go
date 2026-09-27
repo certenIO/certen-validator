@@ -40,7 +40,7 @@ func TestSharedPeriodKeepsFullGrace(t *testing.T) {
 			t.Fatalf("add %s: %v", id, err)
 		}
 	}
-	if n := len(m.PeekForPeriod(chain, period, width)); n != 2 {
+	if n := len(m.PeriodMembers(chain, period, width)); n != 2 {
 		t.Fatalf("expected 2 members in the period, got %d — the solo shortcut would fire "+
 			"on a shared period", n)
 	}
