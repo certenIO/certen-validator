@@ -636,14 +636,6 @@ func (l *LiteClientAdapter) parseCertenTransaction(entry BlockEntry, block *Mino
 		IntentData:  make(map[string]interface{}),
 	}
 
-	// Extract transaction data
-	var transactionData map[string]interface{}
-	if tx, ok := entry.Data["transaction"].(map[string]interface{}); ok {
-		transactionData = tx
-	} else {
-		transactionData = entry.Data
-	}
-
 	// Try to extract intent data from the correct transaction structure
 	intentData := l.extractIntentDataFromEntry(entry)
 	if len(intentData) > 0 {
@@ -655,91 +647,10 @@ func (l *LiteClientAdapter) parseCertenTransaction(entry BlockEntry, block *Mino
 		log.Printf("⚠️ [CERTEN-PARSE] No intent data found in transaction %s", hash)
 	}
 
-	// Fallback: Extract intent data from the transaction body (old method)
-	if body, ok := transactionData["body"].(map[string]interface{}); ok {
-		if writeDataEntry, ok := body["entry"].(map[string]interface{}); ok {
-			if data, ok := writeDataEntry["data"].([]interface{}); ok && len(data) > 0 {
-				log.Printf("🔍 [CERTEN-PARSE] Fallback: Found DoubleHashDataEntry with %d data elements for %s", len(data), hash)
-
-				// Decode ALL data elements with structured field assignment
-				for i, hexData := range data {
-					if hexStr, ok := hexData.(string); ok {
-						if decodedBytes, err := hex.DecodeString(hexStr); err == nil {
-							var jsonData map[string]interface{}
-							if err := json.Unmarshal(decodedBytes, &jsonData); err == nil {
-								// Store with structured field names for CERTEN protocol
-								switch i {
-								case 0:
-									certenTx.IntentData["intentData"] = jsonData
-									log.Printf("✅ [CERTEN-PARSE] Fallback decoded intentData from element %d: %+v", i, jsonData)
-								case 1:
-									certenTx.IntentData["crossChainData"] = jsonData
-									log.Printf("✅ [CERTEN-PARSE] Fallback decoded crossChainData from element %d: %+v", i, jsonData)
-								case 2:
-									certenTx.IntentData["governanceData"] = jsonData
-									log.Printf("✅ [CERTEN-PARSE] Fallback decoded governanceData from element %d: %+v", i, jsonData)
-								case 3:
-									certenTx.IntentData["replayData"] = jsonData
-									log.Printf("✅ [CERTEN-PARSE] Fallback decoded replayData from element %d: %+v", i, jsonData)
-								default:
-									// Handle additional data elements beyond the core 4
-									fieldKey := fmt.Sprintf("additionalData_%d", i)
-									certenTx.IntentData[fieldKey] = jsonData
-									log.Printf("✅ [CERTEN-PARSE] Fallback decoded additional data element %s: %+v", fieldKey, jsonData)
-								}
-							} else {
-								// Some elements might be raw text or other formats, store as hex string
-								certenTx.IntentData[fmt.Sprintf("rawElement_%d", i)] = hexStr
-								log.Printf("🔄 [CERTEN-PARSE] Fallback stored raw hex from element %d (not JSON): %s", i, hexStr[:50]+"...")
-							}
-						} else {
-							log.Printf("⚠️ [CERTEN-PARSE] Fallback failed to decode hex from element %d: %v", i, err)
-						}
-					}
-				}
-				log.Printf("✅ [CERTEN-PARSE] Fallback successfully parsed %d data elements from %s", len(data), hash)
-			}
-		}
-
-		// Check if this is a signature transaction that references the actual CERTEN writeData transaction
-		if txType, ok := body["type"].(string); ok && txType == "signature" {
-			if signature, ok := body["signature"].(map[string]interface{}); ok {
-				if txID, ok := signature["txID"].(string); ok && strings.Contains(txID, "certen") {
-					log.Printf("🔍 [CERTEN-PARSE] Found signature transaction referencing CERTEN txID: %s", txID)
-
-					// Extract the actual transaction hash from the txID
-					if parts := strings.Split(txID, "@"); len(parts) > 0 {
-						actualTxHash := parts[0]
-						if after, ok0 := strings.CutPrefix(actualTxHash, "acc://"); ok0 {
-							actualTxHash = after
-						}
-						log.Printf("🔍 [CERTEN-PARSE] Extracted actual CERTEN transaction hash: %s", actualTxHash)
-
-						// Fetch the referenced transaction to get the actual intent data
-						if referencedTx := l.fetchReferencedTransaction(actualTxHash); referencedTx != nil {
-							log.Printf("✅ [CERTEN-PARSE] Successfully fetched referenced transaction %s", actualTxHash)
-							// Parse the referenced transaction for intent data
-							if intentData := l.parseIntentDataFromTransaction(referencedTx); intentData != nil {
-								for key, value := range intentData {
-									certenTx.IntentData[key] = value
-								}
-								log.Printf("✅ [CERTEN-PARSE] Extracted %d intent data elements from referenced transaction", len(intentData))
-							}
-						} else {
-							// If we can't fetch it, at least mark it as a reference
-							certenTx.IntentData["referencedTransaction"] = actualTxHash
-							certenTx.IntentData["transactionType"] = "signature_reference"
-						}
-					}
-				}
-			}
-		}
-
-		// Also store the memo if it exists
-		if memo, ok := body["memo"].(string); ok {
-			certenTx.IntentData["memo"] = memo
-		}
-	}
+	// One decoder: the v3 entry's value.message.transaction (extractIntentDataFromEntry). A second, positional
+	// "fallback" read a top-level transaction body and wrote over the same keys, fetched a "referenced"
+	// transaction for any signature whose txID merely contained "certen", and sliced hexStr[:50] on
+	// elements that could be shorter (RB3-F36).
 
 	// Debug: Log final IntentData before returning
 	log.Printf("🔍 [DEBUG-INTENT-DATA] Final IntentData for %s contains %d elements: %+v",
@@ -814,98 +725,6 @@ func (l *LiteClientAdapter) GetTransaction(ctx context.Context, hash string) (*T
 
 	// Transaction not found
 	return nil, fmt.Errorf("transaction not found: %s", hash)
-}
-
-// fetchReferencedTransaction fetches a transaction by its hash to extract intent data
-func (l *LiteClientAdapter) fetchReferencedTransaction(txHash string) map[string]interface{} {
-	log.Printf("🔍 [FETCH-REF] Attempting to fetch referenced transaction: %s", txHash)
-
-	// Use GetTransaction to fetch the real transaction data
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	transaction, err := l.GetTransaction(ctx, txHash)
-	if err != nil {
-		log.Printf("❌ [FETCH-REF] Failed to fetch transaction %s: %v", txHash, err)
-		return nil
-	}
-
-	// Extract the transaction data and parse it for intent data
-	if transaction.Data != nil {
-		// Parse the transaction data to extract intent information
-		intentData := l.parseIntentDataFromTransaction(transaction.Data)
-		if intentData != nil {
-			log.Printf("✅ [FETCH-REF] Successfully extracted intent data from transaction %s", txHash)
-			return intentData
-		}
-	}
-
-	log.Printf("⚠️ [FETCH-REF] No intent data found in transaction %s", txHash)
-	return nil
-}
-
-// parseIntentDataFromTransaction extracts intent data from a fetched transaction
-func (l *LiteClientAdapter) parseIntentDataFromTransaction(transactionData map[string]interface{}) map[string]interface{} {
-	log.Printf("🔍 [PARSE-REF] Parsing intent data from referenced transaction")
-
-	intentData := make(map[string]interface{})
-
-	// Look for transaction data within the entry
-	var txData map[string]interface{}
-	if tx, ok := transactionData["transaction"].(map[string]interface{}); ok {
-		txData = tx
-	} else {
-		txData = transactionData
-	}
-
-	// Extract intent data from the transaction body - decode ALL data elements dynamically
-	if body, ok := txData["body"].(map[string]interface{}); ok {
-		if writeDataEntry, ok := body["entry"].(map[string]interface{}); ok {
-			if data, ok := writeDataEntry["data"].([]interface{}); ok && len(data) > 0 {
-				log.Printf("🔍 [PARSE-REF] Found DoubleHashDataEntry with %d data elements", len(data))
-
-				// Decode ALL data elements with structured field assignment
-				for i, hexData := range data {
-					if hexStr, ok := hexData.(string); ok {
-						if decodedBytes, err := hex.DecodeString(hexStr); err == nil {
-							var jsonData map[string]interface{}
-							if err := json.Unmarshal(decodedBytes, &jsonData); err == nil {
-								// Store with structured field names for CERTEN protocol
-								switch i {
-								case 0:
-									intentData["intentData"] = jsonData
-									log.Printf("✅ [PARSE-REF] Decoded intentData from element %d: %+v", i, jsonData)
-								case 1:
-									intentData["crossChainData"] = jsonData
-									log.Printf("✅ [PARSE-REF] Decoded crossChainData from element %d: %+v", i, jsonData)
-								case 2:
-									intentData["governanceData"] = jsonData
-									log.Printf("✅ [PARSE-REF] Decoded governanceData from element %d: %+v", i, jsonData)
-								case 3:
-									intentData["replayData"] = jsonData
-									log.Printf("✅ [PARSE-REF] Decoded replayData from element %d: %+v", i, jsonData)
-								default:
-									// Handle additional data elements beyond the core 4
-									fieldKey := fmt.Sprintf("additionalData_%d", i)
-									intentData[fieldKey] = jsonData
-									log.Printf("✅ [PARSE-REF] Decoded additional data element %s: %+v", fieldKey, jsonData)
-								}
-							} else {
-								// Some elements might be raw text or other formats, store as hex string
-								intentData[fmt.Sprintf("rawElement_%d", i)] = hexStr
-								log.Printf("🔄 [PARSE-REF] Stored raw hex from element %d (not JSON)", i)
-							}
-						} else {
-							log.Printf("⚠️ [PARSE-REF] Failed to decode hex from element %d: %v", i, err)
-						}
-					}
-				}
-				log.Printf("✅ [PARSE-REF] Successfully parsed %d intent data elements", len(intentData))
-			}
-		}
-	}
-
-	return intentData
 }
 
 // extractIntentDataFromEntry extracts intent data from the correct transaction structure
