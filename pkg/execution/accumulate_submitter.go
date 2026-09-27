@@ -554,6 +554,13 @@ func (e *CertenDataEntry) ToDoubleHashFormat() [][]byte {
 	entries = append(entries, labeled("threshold_numerator", fmt.Sprintf("%d", e.ThresholdNumerator)))
 	entries = append(entries, labeled("threshold_denominator", fmt.Sprintf("%d", e.ThresholdDenominator)))
 
+	// OUTCOME - appended after every positional entry, and only when set, so a settlement's record is
+	// unchanged. A member that never settled says so, with why (RB3-F49).
+	if e.Outcome != "" {
+		entries = append(entries, labeled("outcome", e.Outcome))
+		entries = append(entries, labeled("outcome_reason", e.OutcomeReason))
+	}
+
 	return entries
 }
 

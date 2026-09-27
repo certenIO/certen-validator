@@ -107,6 +107,13 @@ type UnifiedOrchestratorConfig struct {
 	// ResultQuorumRegistry is the on-chain validator registry Phase 8 counts its quorum against.
 	// Required: without it there is no quorum to count.
 	ResultQuorumRegistry ResultQuorumRegistryFn
+
+	// Non-settlement (RB3-F49): a member that never settled is attested by quorum and written back.
+	// MemberLookup finds this validator's own copy of a member; NonSettlementChain reads the chain
+	// facts; NonSettlements holds failures until they are attestable. All required.
+	MemberLookup       MemberLookupFn
+	NonSettlementChain NonSettlementChain
+	NonSettlements     *NonSettlementQueue
 }
 
 // ChainedProofGenerator interface for generating Accumulate chained proofs
@@ -348,6 +355,8 @@ type activeCycle struct {
 	Completions []uuid.UUID
 	// PrimaryResultHash is the result hash the write-back bundle committed to for this cycle.
 	PrimaryResultHash [32]byte
+	// NonSettlement is set for a cycle attesting that a member never settled (RB3-F49).
+	NonSettlement *NonSettlementClaim
 }
 
 // NewUnifiedOrchestrator creates a new unified orchestrator
@@ -366,6 +375,11 @@ func NewUnifiedOrchestrator(config *UnifiedOrchestratorConfig) (*UnifiedOrchestr
 
 	if config.ResultQuorumRegistry == nil {
 		return nil, fmt.Errorf("a validator registry source is required - Phase 8 counts its quorum against it")
+	}
+
+	if config.MemberLookup == nil || config.NonSettlementChain == nil || config.NonSettlements == nil {
+		return nil, fmt.Errorf("a member lookup, a non-settlement chain reader and a non-settlement queue are required - " +
+			"without them a member that never settled is recorded nowhere")
 	}
 
 	orch := &UnifiedOrchestrator{
@@ -1556,7 +1570,7 @@ func (o *UnifiedOrchestrator) executePhase8(ctx context.Context, cycle *activeCy
 	message := &attestation.AttestationMessage{
 		IntentID:     req.IntentID,
 		ResultHash:   primaryResultHash,
-		AnchorTxHash: req.TxHashes[0],
+		AnchorTxHash: firstTx(req.TxHashes),
 		BlockNumber:  result.ObservationResults[0].BlockNumber,
 		TargetChain:  req.TargetChain,
 		ChainID:      result.ChainID,
@@ -1569,6 +1583,7 @@ func (o *UnifiedOrchestrator) executePhase8(ctx context.Context, cycle *activeCy
 		ExecutionTxHash:      o.executionTxHashForChain(req),
 		AccumulateTxHash:     req.AccumulateTxHash,
 		AccumulateAccountURL: req.AccumulateAccountURL,
+		NonSettlement:        cycle.NonSettlement,
 	}
 
 	// Create timeout context
@@ -1679,6 +1694,14 @@ func (o *UnifiedOrchestrator) executePhase8(ctx context.Context, cycle *activeCy
 	result.ThresholdMet = aggAttestation.ThresholdMet
 
 	return nil
+}
+
+// firstTx is the first transaction hash, or "" when the cycle has none (a non-settlement).
+func firstTx(hashes []string) string {
+	if len(hashes) == 0 {
+		return ""
+	}
+	return hashes[0]
 }
 
 // persistUnifiedAttestation persists an attestation to the unified table
@@ -1962,6 +1985,11 @@ func (o *UnifiedOrchestrator) HandlePeerAttestationRequest(
 		return fail("missing requesting validator id")
 	}
 	msg := req.Message
+	// A member that never settled has no transaction: it is verified from this validator's own copy of
+	// the member and its own chain reads (RB3-F49).
+	if msg.NonSettlement != nil {
+		return o.handlePeerNonSettlement(ctx, req, fail)
+	}
 	if msg.TargetChain == "" || msg.AnchorTxHash == "" {
 		return fail("attestation message missing target_chain/anchor_tx_hash")
 	}
@@ -2354,6 +2382,12 @@ func (o *UnifiedOrchestrator) buildAttestationBundleFromCycle(cycle *activeCycle
 		NativeTxHash:    obs.TxHash,
 		NativeBlockHash: obs.BlockHash,
 		NativeTxFrom:    obs.TxFrom,
+	}
+	// A member that never settled: the record says so, with why - not a zero transaction that reads
+	// like a revert.
+	if cycle.NonSettlement != nil {
+		extResult.Outcome = ResultOutcomeNotSettled
+		extResult.OutcomeReason = cycle.NonSettlement.Cause
 	}
 
 	// Copy logs from all observation results (not just primary)

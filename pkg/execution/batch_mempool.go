@@ -802,6 +802,24 @@ func memberKey(intentID string, chainID int64) string {
 	return intentID + "|" + strconv.FormatInt(chainID, 10)
 }
 
+// FindMember returns this validator's own copy of the member holding operationID on chainID, in
+// either lane - whatever its outcome - and whether it is held.
+func (m *BatchMempool) FindMember(chainID int64, operationID [32]byte) (*PendingBatchIntent, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if p := m.onDemand[chainID][operationID]; p != nil {
+		c := *p
+		return &c, true
+	}
+	for _, p := range m.pool[chainID] {
+		if p != nil && p.OperationID == operationID {
+			c := *p
+			return &c, true
+		}
+	}
+	return nil, false
+}
+
 // OperationHolder reports which OTHER intent already has the operation queued on the chain, in
 // either lane, or "" when none does. The same intent re-running is not a holder of its own
 // operation.

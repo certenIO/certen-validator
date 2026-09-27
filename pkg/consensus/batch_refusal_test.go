@@ -97,6 +97,8 @@ func batchableIntent(t *testing.T, id string, chains ...int64) *CertenIntent {
 		CrossChainData: must(map[string]interface{}{"protocol": "CERTEN", "version": "2.0", "legs": legs, "execution_mode": "parallel"}),
 		GovernanceData: must(map[string]interface{}{"organizationAdi": "acc://org.acme"}),
 		ReplayData:     must(map[string]interface{}{"nonce": id}),
+		// The consensus block time every admitted intent has (RB3-F49).
+		BlockTime: time.Unix(1_800_000_000, 0).UTC(),
 	}
 }
 

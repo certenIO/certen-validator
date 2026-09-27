@@ -39,6 +39,9 @@ import (
 // - Merkle inclusion proofs for transaction and receipt
 // - Execution outcome details
 // - Hash chain binding for verifiable lineage
+// ResultOutcomeNotSettled is the outcome of a member that never settled.
+const ResultOutcomeNotSettled = "not_settled"
+
 type ExternalChainResult struct {
 	// ==========================================================================
 	// RESULT IDENTIFICATION (Hash Chain Binding - Phase 2.5)
@@ -117,7 +120,12 @@ type ExternalChainResult struct {
 	// EXECUTION OUTCOME
 	// ==========================================================================
 
-	Status          uint64          `json:"status"`                     // 1=success, 0=revert
+	Status uint64 `json:"status"` // 1=success, 0=revert
+	// Outcome is set when the result is not a transaction's: ResultOutcomeNotSettled for a member that
+	// never settled (RB3-F49), with OutcomeReason saying why. Empty for a settlement, whose Status says
+	// what happened. Not part of ComputeResultHash; the attested result is the non-settlement's own.
+	Outcome         string          `json:"outcome,omitempty"`
+	OutcomeReason   string          `json:"outcome_reason,omitempty"`
 	ContractAddress *common.Address `json:"contract_address,omitempty"` // For contract creation
 	Logs            []LogEntry      `json:"logs"`                       // Event logs emitted
 	ReturnData      []byte          `json:"return_data,omitempty"`      // Return data (if available)

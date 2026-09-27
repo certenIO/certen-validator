@@ -125,6 +125,14 @@ func (bv *BFTValidator) planBatch(ci *CertenIntent, commitHeight uint64) (*batch
 		}
 		plan.members = append(plan.members, batchMember{legs: legs, chainID: chainID, account: account, opID: opID})
 	}
+
+	// Every member needs a deadline its failure can be final against (RB3-F49), and its commit time -
+	// the intent's consensus block time - is what bounds it. Checked after every defect of the intent's
+	// own, which is refused for good whatever its time; a time not yet read is CERTEN's condition, and
+	// the intent is retried.
+	if ci.BlockTime.IsZero() {
+		return nil, refuse(fmt.Errorf("%w: intent %s's consensus block time is not known yet", ErrBatchUnavailable, ci.IntentID))
+	}
 	return plan, nil
 }
 

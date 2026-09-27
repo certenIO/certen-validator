@@ -107,6 +107,26 @@ type AttestationMessage struct {
 	ExecutionTxHash      string `json:"execution_tx_hash,omitempty"`
 	AccumulateTxHash     string `json:"accumulate_tx_hash,omitempty"`
 	AccumulateAccountURL string `json:"accumulate_account_url,omitempty"`
+
+	// NonSettlement is set when the result attested is that a member NEVER settled (RB3-F49): there is
+	// no transaction to observe, and each peer re-derives the claim from its own copy of the member and
+	// its own chain reads. Nil - and absent from the JSON, so every settlement message hashes exactly as
+	// before - for a settlement.
+	NonSettlement *NonSettlementClaim `json:"non_settlement,omitempty"`
+}
+
+// NonSettlementClaim is a member's non-settlement: at finalized block Block (hash, time), past the
+// member's deadline, its leaf is not consumed on its account.
+type NonSettlementClaim struct {
+	ChainID     int64  `json:"chain_id"`
+	Account     string `json:"account"`
+	OperationID string `json:"operation_id"`
+	Leaf        string `json:"leaf"`
+	Deadline    int64  `json:"deadline"`
+	Block       uint64 `json:"block"`
+	BlockHash   string `json:"block_hash"`
+	BlockTime   int64  `json:"block_time"`
+	Cause       string `json:"cause"`
 }
 
 // Hash computes the canonical hash of the attestation message

@@ -1844,6 +1844,17 @@ func startValidator(
 	// Chained proofs (L1/L2/L3) come from the real proof builder, required at startup above.
 	proofGenAdapter := execution.NewLiteClientProofGeneratorAdapter(liteClientProofGen)
 
+	// Members that never settled are attested and written back (RB3-F49). Their records wait in a
+	// durable queue beside the validator's other state until the chain is past their deadline.
+	nsDataDir := cfg.DataDir
+	if nsDataDir == "" {
+		nsDataDir = "data"
+	}
+	nonSettlements, nsErr := execution.OpenNonSettlementQueue(filepath.Join(nsDataDir, "non_settlement_queue.json"))
+	if nsErr != nil {
+		return nil, nil, fmt.Errorf("proof cycle: non-settlement queue: %w", nsErr)
+	}
+
 	unifiedConfig := &execution.UnifiedOrchestratorConfig{
 		ValidatorID:              cfg.ValidatorID,
 		ValidatorIndex:           0,
@@ -1865,6 +1876,9 @@ func startValidator(
 		ProofGenerator:           proofGenAdapter,
 		AccumulateQueryClient:    liteClientAdapter, // For querying tx governance data (M-of-N threshold)
 		ResultQuorumRegistry:     execution.ResultQuorumRegistryFromChains(resolver),
+		MemberLookup:             stack.Mempool.FindMember,
+		NonSettlementChain:       execution.NonSettlementChainFromResolver(resolver),
+		NonSettlements:           nonSettlements,
 	}
 
 	unifiedOrchestrator, unifiedErr := execution.NewUnifiedOrchestrator(unifiedConfig)
@@ -1877,6 +1891,8 @@ func startValidator(
 	// Phase 8 quorum: publish the orchestrator so main()'s HTTP mux can route peer attestation
 	// requests to it (UnifiedOrchestrator.HandlePeerAttestationRequest).
 	unifiedOrchestratorForAttestation.Store(unifiedOrchestrator)
+	go unifiedOrchestrator.RunNonSettlements(context.Background(), time.Minute)
+	log.Printf("✅ [Unified] Non-settlement attestation running (%d queued)", len(nonSettlements.All()))
 	log.Printf("✅ [Unified] Phase 8 peer attestation handler published for HTTP routing")
 	log.Printf("   - Strategy Registry: %d attestation schemes, %d chains",
 		len(strategyRegistry.ListAttestationSchemes()),

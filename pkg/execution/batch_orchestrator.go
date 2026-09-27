@@ -514,7 +514,9 @@ func (o *BatchOrchestrator) settleFlushMembers(
 		}
 		branch, berr := tree.BranchFor(i)
 		if berr != nil {
-			res.Failed = append(res.Failed, p)
+			// Nothing reached the chain: the failure is recorded with its cause, and attested as the
+			// member's non-settlement (RB3-F49).
+			res.drop(fmt.Sprintf("its settlement on chain %d could not be formed: %v", p.ChainID, berr), p)
 			o.logf("[BATCH] member %s: branch error: %v", p.IntentID, berr)
 			continue
 		}
@@ -571,7 +573,7 @@ func (o *BatchOrchestrator) settleFlushMembers(
 				if o.memberPastDeadline(p) {
 					o.logf("[BATCH] member %s: gas ceiling %v but the intent has expired — "+
 						"failing rather than retrying forever", p.IntentID, serr)
-					res.Failed = append(res.Failed, p)
+					res.drop(fmt.Sprintf("the gas price on chain %d stayed above the ceiling until its settlement horizon: %v", p.ChainID, serr), p)
 					continue
 				}
 				o.logf("[BATCH] member %s deferred: %v (leaf untouched; will retry in a later period)",
@@ -587,6 +589,13 @@ func (o *BatchOrchestrator) settleFlushMembers(
 				res.Retryable = append(res.Retryable, p)
 				continue
 			}
+			if txHash == "" {
+				// Nothing reached the chain: no transaction to prove the failure from, so its cause is
+				// the record, and the member's non-settlement is attested (RB3-F49).
+				res.drop(fmt.Sprintf("its settlement on chain %d failed before reaching the chain: %v", p.ChainID, serr), p)
+				o.logf("[BATCH] member %s FAILED before reaching the chain: %v", p.IntentID, serr)
+				continue
+			}
 			res.Failed = append(res.Failed, p)
 			// Keep the hash of a member that REVERTED. settleMember returns one whenever the
 			// transaction was mined, and a reverted transaction is on chain and independently
@@ -594,9 +603,7 @@ func (o *BatchOrchestrator) settleFlushMembers(
 			// Discarding it left Phase 7 with nothing to observe, so the failure never reached
 			// acc://certen-protocol.acme/execution-results and the ADI could not tell a reverted
 			// intent from one that was never processed.
-			if txHash != "" {
-				res.TxHashes[p.IntentID] = txHash
-			}
+			res.TxHashes[p.IntentID] = txHash
 			o.logf("[BATCH] member %s FAILED: %v (tx=%s)", p.IntentID, serr, txHash)
 			continue
 		}

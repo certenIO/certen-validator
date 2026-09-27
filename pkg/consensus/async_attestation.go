@@ -654,6 +654,13 @@ func (bv *BFTValidator) recordFailedProofCycle(
 		"targetChain":              strconv.FormatInt(chainID, 10),
 		"chainID":                  chainID,
 	}
+	// The member's operation: the executor finds its own copy of the member by it, and every peer
+	// verifies the non-settlement from its own copy (RB3-F49).
+	if opID, oerr := att.CertenIntent.OperationID(); oerr == nil {
+		commitment["nonSettlementOperationID"] = opID
+	} else {
+		bv.logger.Printf("❌ [PROOF-CYCLE] intent %s: operation id: %v — its failure cannot be attested", att.IntentID, oerr)
+	}
 	if chains, legs, merr := memberSetOf(att.CertenIntent, chainID); merr == nil {
 		commitment["memberChains"] = chains
 		commitment["memberLegs"] = legs

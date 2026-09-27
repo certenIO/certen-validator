@@ -157,4 +157,8 @@ func TestProofCycle_CommitmentCarriesTheMemberSet(t *testing.T) {
 	if legs := orch.commitment["memberLegs"]; legs != 1 || orch.commitment["outcome"] != "failed" {
 		t.Fatalf("failure record: %v", orch.commitment)
 	}
+	// RB3-F49: it names the member's operation, so its non-settlement can be attested.
+	if op, _ := att.CertenIntent.OperationID(); op == "" || orch.commitment["nonSettlementOperationID"] != op {
+		t.Fatalf("failure record carries operation %v, want %s", orch.commitment["nonSettlementOperationID"], op)
+	}
 }
