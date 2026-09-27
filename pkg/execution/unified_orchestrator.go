@@ -208,9 +208,6 @@ type UnifiedProofCycleRequest struct {
 	// IntentID for the original intent
 	IntentID string `json:"intent_id,omitempty"`
 
-	// BatchID if this is a batch proof
-	BatchID *uuid.UUID `json:"batch_id,omitempty"`
-
 	// TargetChain for the anchor
 	TargetChain string `json:"target_chain"`
 
@@ -2492,16 +2489,17 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 	}
 	var leafIndexPtr *int
 	var artifactRoot, artifactLeaf []byte
+	var artifactBatch *uuid.UUID
 	if placement != nil {
-		idx := placement.TreeIndex
-		leafIndexPtr, artifactRoot, artifactLeaf = &idx, placement.BatchRoot, placement.LeafHash
+		idx, batch := placement.TreeIndex, placement.BatchID
+		leafIndexPtr, artifactRoot, artifactLeaf, artifactBatch = &idx, placement.BatchRoot, placement.LeafHash, &batch
 	}
 
 	newArtifact := &database.NewProofArtifact{
 		ProofType:    database.ProofTypeCertenAnchor,
 		AccumTxHash:  accumTxHash,
 		AccountURL:   req.AccumulateAccountURL, // Use actual Accumulate account URL (ADI)
-		BatchID:      req.BatchID,
+		BatchID:      artifactBatch,            // the member's canonical anchored batch (a request batch id was never set)
 		MerkleRoot:   artifactRoot,
 		LeafHash:     artifactLeaf,
 		LeafIndex:    leafIndexPtr, // Position in the tree

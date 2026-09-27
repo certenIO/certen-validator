@@ -1171,6 +1171,12 @@ func (r *ProofArtifactRepository) GetProofWithDetails(ctx context.Context, proof
 	}
 	result.Verifications = verifications
 
+	quorum, err := r.GetValidatorQuorum(ctx, proof.BatchID)
+	if err != nil {
+		return nil, err
+	}
+	result.ValidatorQuorum = quorum
+
 	return result, nil
 }
 
