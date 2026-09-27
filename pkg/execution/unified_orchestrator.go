@@ -1938,7 +1938,12 @@ func (o *UnifiedOrchestrator) executePhase9(ctx context.Context, cycle *activeCy
 		return fmt.Errorf("failed to build attestation bundle")
 	}
 	cycle.PrimaryResultHash = bundle.Result.ResultHash
-	if err := persistResultHashChainLink(ctx, hashChainRepo(o.config), cycle.Result.ChainExecutionIDs,
+	if cycle.NonSettlement != nil {
+		// A non-settlement has no transaction and no chain-execution row; its link has a table of its own.
+		if err := persistNonSettlementChainLink(ctx, hashChainRepo(o.config), o.config.ValidatorID, cycle, bundle.Result); err != nil {
+			return fmt.Errorf("persist result hash chain link: %w", err)
+		}
+	} else if err := persistResultHashChainLink(ctx, hashChainRepo(o.config), cycle.Result.ChainExecutionIDs,
 		len(cycle.Result.ObservationResults), bundle.Result); err != nil {
 		return fmt.Errorf("persist result hash chain link: %w", err)
 	}

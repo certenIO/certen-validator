@@ -792,6 +792,32 @@ func (r *UnifiedRepository) UpdateChainExecutionHashChain(ctx context.Context, i
 	return nil
 }
 
+// ResultHashChainLink is one link of a validator's result hash chain for a result that has no
+// chain-execution row: a member that never settled (RB3-F80).
+type ResultHashChainLink struct {
+	ObserverValidatorID string
+	ChainID             string
+	SequenceNumber      int64
+	PreviousResultHash  []byte
+	ChainResultHash     []byte
+	AnchorProofHash     []byte
+	CycleID             string
+	Kind                string // "non_settlement"
+}
+
+// InsertResultHashChainLink persists one such link.
+func (r *UnifiedRepository) InsertResultHashChainLink(ctx context.Context, l ResultHashChainLink) error {
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO result_hash_chain_links
+			(observer_validator_id, chain_id, sequence_number, previous_result_hash, chain_result_hash, anchor_proof_hash, cycle_id, kind)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		l.ObserverValidatorID, l.ChainID, l.SequenceNumber, l.PreviousResultHash, l.ChainResultHash, l.AnchorProofHash, l.CycleID, l.Kind)
+	if err != nil {
+		return fmt.Errorf("insert result hash chain link: %w", err)
+	}
+	return nil
+}
+
 // ChainHashChainHead is the newest persisted link of one validator's result hash chain for one target
 // chain.
 type ChainHashChainHead struct {
@@ -805,10 +831,19 @@ type ChainHashChainHead struct {
 // so a restarted validator continues its chains instead of starting them again at sequence 0. Chains are
 // per observer: seven validators share this table and each keeps its own.
 func (r *UnifiedRepository) GetChainHashChainHeads(ctx context.Context, observerValidatorID string) ([]ChainHashChainHead, error) {
+	// Both tables hold links of the same chains: a settlement's on its chain_execution_results row, a
+	// non-settlement's in result_hash_chain_links (RB3-F80).
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT DISTINCT ON (chain_id) chain_id, sequence_number, chain_result_hash, anchor_proof_hash
-		FROM chain_execution_results
-		WHERE observer_validator_id = $1 AND sequence_number IS NOT NULL AND chain_result_hash IS NOT NULL
+		FROM (
+			SELECT chain_id, sequence_number, chain_result_hash, anchor_proof_hash
+			FROM chain_execution_results
+			WHERE observer_validator_id = $1 AND sequence_number IS NOT NULL AND chain_result_hash IS NOT NULL
+			UNION ALL
+			SELECT chain_id, sequence_number, chain_result_hash, anchor_proof_hash
+			FROM result_hash_chain_links
+			WHERE observer_validator_id = $1
+		) links
 		ORDER BY chain_id, sequence_number DESC`, observerValidatorID)
 	if err != nil {
 		return nil, fmt.Errorf("query hash chain heads: %w", err)
@@ -832,9 +867,15 @@ func (r *UnifiedRepository) GetChainHashChainHeads(ctx context.Context, observer
 // link. It returns the number of links checked.
 func (r *UnifiedRepository) VerifyChainExecutionHashChain(ctx context.Context, observerValidatorID, chainID string) (int, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT sequence_number, previous_result_hash, chain_result_hash
-		FROM chain_execution_results
-		WHERE observer_validator_id = $1 AND chain_id = $2 AND sequence_number IS NOT NULL
+		SELECT sequence_number, previous_result_hash, chain_result_hash FROM (
+			SELECT sequence_number, previous_result_hash, chain_result_hash
+			FROM chain_execution_results
+			WHERE observer_validator_id = $1 AND chain_id = $2 AND sequence_number IS NOT NULL
+			UNION ALL
+			SELECT sequence_number, previous_result_hash, chain_result_hash
+			FROM result_hash_chain_links
+			WHERE observer_validator_id = $1 AND chain_id = $2
+		) links
 		ORDER BY sequence_number ASC`, observerValidatorID, chainID)
 	if err != nil {
 		return 0, fmt.Errorf("query hash chain: %w", err)
