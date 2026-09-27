@@ -56,6 +56,10 @@ type MemberOutcome struct {
 	WriteBackTx  string
 	CycleID      string
 	Reason       string
+	// EffectsProven says whether the member's committed contract-call effects were proven: nil when it
+	// committed none (a native transfer) or they were not assessed, true proven, false provably absent -
+	// the member settled but did not do what the intent committed to, and counts as failed (RB3-F67).
+	EffectsProven *bool
 }
 
 // ErrMemberOutcomeInvalid is a report that cannot be recorded as given.
@@ -153,14 +157,15 @@ func (r *IntentLifecycleRepository) RecordMemberOutcome(ctx context.Context, o M
 
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO intent_member_outcomes
-			(intent_id, chain_id, settlement, proof_cycle, legs, settlement_tx, write_back_tx, cycle_id, reason, recorded_at)
-		VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''), NULLIF($7, ''), NULLIF($8, ''), NULLIF($9, ''), now())
+			(intent_id, chain_id, settlement, proof_cycle, legs, settlement_tx, write_back_tx, cycle_id, reason, effects_proven, recorded_at)
+		VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''), NULLIF($7, ''), NULLIF($8, ''), NULLIF($9, ''), $10, now())
 		ON CONFLICT (intent_id, chain_id) DO UPDATE SET
 			settlement = EXCLUDED.settlement, proof_cycle = EXCLUDED.proof_cycle, legs = EXCLUDED.legs,
 			settlement_tx = EXCLUDED.settlement_tx, write_back_tx = EXCLUDED.write_back_tx,
-			cycle_id = EXCLUDED.cycle_id, reason = EXCLUDED.reason, recorded_at = now()`,
+			cycle_id = EXCLUDED.cycle_id, reason = EXCLUDED.reason, effects_proven = EXCLUDED.effects_proven,
+			recorded_at = now()`,
 		o.IntentID, o.ChainID, string(o.Settlement), string(o.ProofCycle), o.Legs,
-		o.SettlementTx, o.WriteBackTx, o.CycleID, o.Reason); err != nil {
+		o.SettlementTx, o.WriteBackTx, o.CycleID, o.Reason, o.EffectsProven); err != nil {
 		return derived, fmt.Errorf("record member outcome %s/%d: %w", o.IntentID, o.ChainID, err)
 	}
 
@@ -169,7 +174,8 @@ func (r *IntentLifecycleRepository) RecordMemberOutcome(ctx context.Context, o M
 	}
 
 	rows, err := tx.QueryContext(ctx, `
-		SELECT chain_id, settlement, proof_cycle, legs, COALESCE(settlement_tx, ''), COALESCE(write_back_tx, ''), COALESCE(reason, '')
+		SELECT chain_id, settlement, proof_cycle, legs, COALESCE(settlement_tx, ''), COALESCE(write_back_tx, ''), COALESCE(reason, ''),
+		       effects_proven
 		FROM intent_member_outcomes WHERE intent_id = $1 ORDER BY chain_id`, o.IntentID)
 	if err != nil {
 		return derived, fmt.Errorf("read member outcomes of %s: %w", o.IntentID, err)
@@ -177,12 +183,13 @@ func (r *IntentLifecycleRepository) RecordMemberOutcome(ctx context.Context, o M
 	type row struct {
 		settlement, proofCycle, settlementTx, writeBackTx, reason string
 		legs                                                      int
+		effectsProven                                             sql.NullBool
 	}
 	got := map[int64]row{}
 	for rows.Next() {
 		var c int64
 		var rr row
-		if err := rows.Scan(&c, &rr.settlement, &rr.proofCycle, &rr.legs, &rr.settlementTx, &rr.writeBackTx, &rr.reason); err != nil {
+		if err := rows.Scan(&c, &rr.settlement, &rr.proofCycle, &rr.legs, &rr.settlementTx, &rr.writeBackTx, &rr.reason, &rr.effectsProven); err != nil {
 			rows.Close()
 			return derived, fmt.Errorf("scan member outcome: %w", err)
 		}
@@ -209,16 +216,21 @@ func (r *IntentLifecycleRepository) RecordMemberOutcome(ctx context.Context, o M
 		if rr.settlementTx != "" {
 			part += " (tx " + rr.settlementTx + ")"
 		}
+		// Settled but a committed effect provably absent: it did not do what the intent committed to.
+		unproven := rr.effectsProven.Valid && !rr.effectsProven.Bool
+		if unproven {
+			part += ", committed effects NOT proven"
+		}
 		if rr.reason != "" {
 			part += " - " + rr.reason
 		}
 		parts = append(parts, part)
-		if rr.settlement == string(MemberSettlementSettled) {
+		if rr.settlement == string(MemberSettlementSettled) && !unproven {
 			legsDone += rr.legs
 		} else {
 			legsFailed += rr.legs
 		}
-		if rr.settlement != string(MemberSettlementSettled) || rr.proofCycle != string(MemberProofCycleWritten) {
+		if rr.settlement != string(MemberSettlementSettled) || unproven || rr.proofCycle != string(MemberProofCycleWritten) {
 			complete = false
 		}
 		if rr.writeBackTx != "" {
