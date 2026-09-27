@@ -2,6 +2,7 @@ package execution
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -75,16 +76,41 @@ func TestResolver_ChainsListsConfigured(t *testing.T) {
 // Env resolver
 // =============================================================================
 
+// anchorCfgWithRPC is an anchor config with an RPC for each given chain.
+func anchorCfgWithRPC(ids ...int64) *config.AnchorConfig {
+	c := &config.AnchorConfig{}
+	c.Network.EVMChains = map[int64]*config.EVMChainConfig{}
+	for _, id := range ids {
+		c.Network.EVMChains[id] = &config.EVMChainConfig{ChainID: id, RPCURL: "http://127.0.0.1:1"}
+	}
+	return c
+}
+
+// RB3-F44: every chain CERTEN settles on needs its anchor and its RPC. A chain left out used to be
+// "simply absent": this validator then refused, and never co-signed, intents its peers accepted.
 func TestNewEVMChainResolverFromEnv(t *testing.T) {
 	t.Setenv("CERTEN_ANCHOR_V8_11155111", "0x3c0bf2dCC9D2945a933E36F8Ee1E10D8feEA9a32")
+	t.Setenv("CERTEN_ANCHOR_V8_84532", "0x3c0bf2dCC9D2945a933E36F8Ee1E10D8feEA9a33")
 
-	r, err := NewEVMChainResolverFromEnv(minimalAnchorCfg(), []int64{11155111, 84532})
+	r, err := NewEVMChainResolverFromEnv(anchorCfgWithRPC(11155111, 84532), []int64{11155111, 84532})
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Only the configured chain is present; the unset one is absent rather than defaulted.
-	if len(r.Chains()) != 1 || r.Chains()[0] != 11155111 {
-		t.Fatalf("expected only chain 11155111, got %v", r.Chains())
+	if len(r.Chains()) != 2 {
+		t.Fatalf("expected both chains, got %v", r.Chains())
+	}
+	rpc, anchor, err := r.Endpoint(84532)
+	if err != nil || rpc != "http://127.0.0.1:1" || anchor != common.HexToAddress("0x3c0bf2dCC9D2945a933E36F8Ee1E10D8feEA9a33") {
+		t.Fatalf("endpoint of 84532: %q %s %v", rpc, anchor.Hex(), err)
+	}
+
+	if _, err := NewEVMChainResolverFromEnv(anchorCfgWithRPC(11155111, 84532, 421614), []int64{11155111, 84532, 421614}); err == nil ||
+		!strings.Contains(err.Error(), "CERTEN_ANCHOR_V8_421614") {
+		t.Fatalf("a supported chain without its anchor must be a startup error naming it, got %v", err)
+	}
+	if _, err := NewEVMChainResolverFromEnv(anchorCfgWithRPC(11155111), []int64{11155111, 84532}); err == nil ||
+		!strings.Contains(err.Error(), "84532") {
+		t.Fatalf("a supported chain without its RPC must be a startup error naming it, got %v", err)
 	}
 }
 

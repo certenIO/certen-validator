@@ -78,28 +78,44 @@ func NewEVMChainResolver(
 
 // NewEVMChainResolverFromEnv reads the V8 anchor addresses from environment.
 //
-// Looks for CERTEN_ANCHOR_V8_<chainID>, e.g. CERTEN_ANCHOR_V8_11155111. Chains without an
-// entry are simply absent from the batch path rather than silently falling back to a
-// different anchor.
+// Looks for CERTEN_ANCHOR_V8_<chainID>, e.g. CERTEN_ANCHOR_V8_11155111, for EVERY chain given, and
+// requires each chain's RPC. A chain CERTEN settles on that is not configured here is a startup
+// error: it used to be left out silently, and this validator then refused, and never co-signed, any
+// intent on it while its peers accepted them (RB3-F44).
 func NewEVMChainResolverFromEnv(anchorCfg *config.AnchorConfig, chainIDs []int64) (*EVMChainResolverImpl, error) {
+	if anchorCfg == nil {
+		return nil, fmt.Errorf("anchor config required")
+	}
 	out := make(map[int64]common.Address)
 	for _, id := range chainIDs {
 		key := fmt.Sprintf("CERTEN_ANCHOR_V8_%d", id)
 		v := strings.TrimSpace(os.Getenv(key))
 		if v == "" {
-			continue
+			return nil, fmt.Errorf("%s is not set: chain %d is a chain CERTEN settles on", key, id)
 		}
 		if !common.IsHexAddress(v) {
 			return nil, fmt.Errorf("%s is not a valid address: %q", key, v)
 		}
+		if c := anchorCfg.GetEVMChainConfig(id); c == nil || strings.TrimSpace(c.RPCURL) == "" {
+			return nil, fmt.Errorf("chain %d has no RPC configured: chain %d is a chain CERTEN settles on", id, id)
+		}
 		out[id] = common.HexToAddress(v)
 	}
-	if len(out) == 0 {
-		return nil, fmt.Errorf(
-			"no CERTEN_ANCHOR_V8_<chainId> variables set for chains %v; the batch path cannot run",
-			chainIDs)
-	}
 	return NewEVMChainResolver(anchorCfg, out)
+}
+
+// Endpoint is a configured chain's RPC and its CertenAnchorV8 - what the batch path settles on, and
+// so what the proof cycle observes.
+func (r *EVMChainResolverImpl) Endpoint(chainID int64) (string, common.Address, error) {
+	anchorAddr, ok := r.anchorOverrides[chainID]
+	if !ok {
+		return "", common.Address{}, fmt.Errorf("chain %d has no CertenAnchorV8 configured", chainID)
+	}
+	c := r.anchorCfg.GetEVMChainConfig(chainID)
+	if c == nil || strings.TrimSpace(c.RPCURL) == "" {
+		return "", common.Address{}, fmt.Errorf("no RPC configuration for chainId=%d", chainID)
+	}
+	return c.RPCURL, anchorAddr, nil
 }
 
 // ManagerForChain satisfies EVMChainResolver.

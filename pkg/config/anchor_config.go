@@ -134,11 +134,8 @@ type EVMChainConfig struct {
 	MaxConnections     int      `yaml:"max_connections"`
 	MaxIdleConnections int      `yaml:"max_idle_connections"`
 
-	// Contract addresses for this chain
-	AnchorV4Address    string `yaml:"anchor_v4_address"`
-	AnchorV3Address    string `yaml:"anchor_v3_address"`
-	BLSVerifierAddress string `yaml:"bls_verifier_address"`
-	AccountFactory     string `yaml:"account_factory_address"`
+	// AccountFactory is the account factory on this chain, when configured. Never defaulted.
+	AccountFactory string `yaml:"account_factory_address"`
 
 	// Gas settings (optional, falls back to global)
 	MaxGasPriceGwei    int64 `yaml:"max_gas_price_gwei"`
@@ -750,28 +747,14 @@ func (c *AnchorConfig) GetMaxGasPriceWei() int64 {
 }
 
 // GetEVMChainConfig returns configuration for a specific EVM chain by chainID
-// Falls back to default Ethereum config if chain not found
 func (c *AnchorConfig) GetEVMChainConfig(chainID int64) *EVMChainConfig {
-	if c.Network.EVMChains != nil {
-		if cfg, ok := c.Network.EVMChains[chainID]; ok {
-			return cfg
-		}
+	// Nil for a chain that is not configured. It used to answer with the Ethereum settings instead,
+	// so a manager for Base or Arbitrum would have dialled Sepolia's RPC under Sepolia's chain id
+	// (RB3-F44).
+	if c == nil || c.Network.EVMChains == nil {
+		return nil
 	}
-
-	// Fallback to default Ethereum config (for backward compatibility)
-	return &EVMChainConfig{
-		Name:               c.Network.Ethereum.Name,
-		ChainID:            c.Network.Ethereum.ChainID,
-		RPCURL:             c.Network.Ethereum.RPCURL,
-		WSURL:              c.Network.Ethereum.WSURL,
-		RPCTimeout:         c.Network.Ethereum.RPCTimeout,
-		MaxConnections:     c.Network.Ethereum.MaxConnections,
-		MaxIdleConnections: c.Network.Ethereum.MaxIdleConnections,
-		AnchorV4Address:    c.Anchor.Contract.Address,
-		MaxGasPriceGwei:    c.Anchor.Gas.MaxGasPriceGwei,
-		MaxPriorityFeeGwei: c.Anchor.Gas.MaxPriorityFeeGwei,
-		GasLimitAnchor:     c.Anchor.Gas.GasLimitAnchor,
-	}
+	return c.Network.EVMChains[chainID]
 }
 
 // GetSupportedChainIDs returns a list of all configured EVM chain IDs
@@ -1015,216 +998,48 @@ func getEnvInt64Local(key string, defaultValue int64) int64 {
 // Multi-Chain EVM Configuration
 // ==============================================================================
 
-// loadEVMChainsFromEnv loads multi-chain EVM configurations from environment variables
-// Supports Ethereum Sepolia, Arbitrum Sepolia, Optimism Sepolia, Base Sepolia, Polygon Amoy, BSC Testnet, Moonbase Alpha
+// loadEVMChainsFromEnv loads the configuration of the chains CERTEN settles on - Ethereum Sepolia,
+// Base Sepolia and Arbitrum Sepolia - from environment variables. A chain whose RPC is not set is
+// absent, and the batch path refuses to start without it (execution.NewEVMChainResolverFromEnv).
+// No contract address is compiled in: the anchors are CERTEN_ANCHOR_V8_<chainId>, and a retired
+// default was a different contract with a different validator set (RB3-F44).
 func loadEVMChainsFromEnv() map[int64]*EVMChainConfig {
 	chains := make(map[int64]*EVMChainConfig)
-
-	// Ethereum Sepolia (11155111) - Primary chain
-	if rpc := getEnv("ETHEREUM_SEPOLIA_RPC_URL", getEnv("ETHEREUM_URL", "")); rpc != "" {
-		chains[11155111] = &EVMChainConfig{
-			Name:               "Ethereum Sepolia",
-			ChainID:            11155111,
+	for _, c := range []struct {
+		chainID                  int64
+		name, rpcEnv, wsEnv      string
+		gasPrefix, factoryPrefix string
+		maxGasGwei, maxPriority  int64
+		gasLimitAnchor           int64
+		explorer                 string
+	}{
+		{11155111, "Ethereum Sepolia", "ETHEREUM_SEPOLIA_RPC_URL", "ETHEREUM_SEPOLIA_WS_URL", "SEPOLIA", "SEPOLIA", 100, 2, 500000, "https://sepolia.etherscan.io"},
+		{84532, "Base Sepolia", "BASE_SEPOLIA_RPC_URL", "BASE_SEPOLIA_WS_URL", "BASE", "BASE_SEPOLIA", 1, 0, 2000000, "https://sepolia.basescan.org"},
+		{421614, "Arbitrum Sepolia", "ARBITRUM_SEPOLIA_RPC_URL", "ARBITRUM_SEPOLIA_WS_URL", "ARBITRUM", "ARBITRUM_SEPOLIA", 1, 0, 2000000, "https://sepolia.arbiscan.io"},
+	} {
+		rpc := getEnv(c.rpcEnv, "")
+		if c.chainID == 11155111 && rpc == "" {
+			// Sepolia's RPC has been set as ETHEREUM_URL since before the per-chain names existed.
+			rpc = getEnv("ETHEREUM_URL", "")
+		}
+		if rpc == "" {
+			continue
+		}
+		chains[c.chainID] = &EVMChainConfig{
+			Name:               c.name,
+			ChainID:            c.chainID,
 			RPCURL:             rpc,
-			WSURL:              getEnv("ETHEREUM_SEPOLIA_WS_URL", ""),
+			WSURL:              getEnv(c.wsEnv, ""),
 			RPCTimeout:         Duration(30 * time.Second),
 			MaxConnections:     10,
 			MaxIdleConnections: 5,
-			// V6.1 A+++ binding takes precedence on Sepolia. Falls back through V6/V5/V4
-			// so an unset SEPOLIA_ANCHORV6_1_ADDRESS still resolves to a usable anchor
-			// during transition. Once all 7 chains are V6.1, the V6/V5/V4 fallbacks can
-			// be removed.
-			AnchorV4Address:    getEnv("SEPOLIA_ANCHORV8_1_ADDRESS", getEnv("SEPOLIA_ANCHORV8_ADDRESS", getEnv("SEPOLIA_ANCHORV6_1_ADDRESS", getEnv("SEPOLIA_ANCHORV6_ADDRESS", getEnv("SEPOLIA_ANCHORV5_ADDRESS", getEnv("SEPOLIA_ANCHORV4_ADDRESS", "0x7Ff94194B1D18De3D5813690868B24006A6AeC2C")))))),
-			AnchorV3Address:    getEnv("SEPOLIA_ANCHORV3_ADDRESS", "0xEb17eBd351D2e040a0cB3026a3D04BEc182d8b98"),
-			BLSVerifierAddress: getEnv("SEPOLIA_BLS_VERIFIER_V2_ADAPTER", getEnv("SEPOLIA_BLSZKVERIFIER_ADDRESS", "0x8EEDa48f99709e90e30bE1510972b80163fd1aC7")),
-			AccountFactory:     getEnv("SEPOLIA_ACCOUNTFACTORY_V6_ADDRESS", getEnv("SEPOLIA_ACCOUNTFACTORY_ADDRESS", "0x81690a11b356E196A5caEF59792f1d2485Bde316")),
-			MaxGasPriceGwei:    getEnvInt64("SEPOLIA_MAX_GAS_PRICE_GWEI", 100),
-			MaxPriorityFeeGwei: getEnvInt64("SEPOLIA_MAX_PRIORITY_FEE_GWEI", 2),
-			GasLimitAnchor:     getEnvInt64("SEPOLIA_GAS_LIMIT_ANCHOR", 500000),
-			ExplorerURL:        "https://sepolia.etherscan.io",
+			AccountFactory:     getEnv(c.factoryPrefix+"_ACCOUNTFACTORY_V6_ADDRESS", getEnv(c.factoryPrefix+"_ACCOUNTFACTORY_ADDRESS", "")),
+			MaxGasPriceGwei:    getEnvInt64(c.gasPrefix+"_MAX_GAS_PRICE_GWEI", c.maxGasGwei),
+			MaxPriorityFeeGwei: getEnvInt64(c.gasPrefix+"_MAX_PRIORITY_FEE_GWEI", c.maxPriority),
+			GasLimitAnchor:     getEnvInt64(c.gasPrefix+"_GAS_LIMIT_ANCHOR", c.gasLimitAnchor),
+			ExplorerURL:        c.explorer,
 		}
 	}
-
-	// Arbitrum Sepolia (421614) - Updated 2026-02-04
-	if rpc := getEnv("ARBITRUM_SEPOLIA_RPC_URL", ""); rpc != "" {
-		chains[421614] = &EVMChainConfig{
-			Name:               "Arbitrum Sepolia",
-			ChainID:            421614,
-			RPCURL:             rpc,
-			WSURL:              getEnv("ARBITRUM_SEPOLIA_WS_URL", ""),
-			RPCTimeout:         Duration(30 * time.Second),
-			MaxConnections:     10,
-			MaxIdleConnections: 5,
-			// V6.1 A+++ binding takes precedence on Arbitrum Sepolia. Falls back through V6/V5/V4
-			// so an unset ARBITRUM_SEPOLIA_ANCHORV6_1_ADDRESS still resolves during transition.
-			AnchorV4Address:    getEnv("ARBITRUM_SEPOLIA_ANCHORV8_1_ADDRESS", getEnv("ARBITRUM_SEPOLIA_ANCHORV8_ADDRESS", getEnv("ARBITRUM_SEPOLIA_ANCHORV6_1_ADDRESS", getEnv("ARBITRUM_SEPOLIA_ANCHORV6_ADDRESS", getEnv("ARBITRUM_SEPOLIA_ANCHORV5_ADDRESS", getEnv("ARBITRUM_SEPOLIA_ANCHORV4_ADDRESS", "0xD2f19FfF59d9eADA39cf5a3737914Aa1F6B4ca12")))))),
-			AnchorV3Address:    getEnv("ARBITRUM_SEPOLIA_ANCHORV3_ADDRESS", "0x609987770BCEE4fB7F2e0e81685CE912c437f7f1"),
-			BLSVerifierAddress: getEnv("ARBITRUM_SEPOLIA_BLS_VERIFIER_V2_ADAPTER", getEnv("ARBITRUM_SEPOLIA_BLSZKVERIFIER_ADDRESS", "0x4A7035Ba7099629F8dF70109F654f4B6Cfb6Da1b")),
-			AccountFactory:     getEnv("ARBITRUM_SEPOLIA_ACCOUNTFACTORY_V6_ADDRESS", getEnv("ARBITRUM_SEPOLIA_ACCOUNTFACTORY_ADDRESS", "0x842271e696EFC9EC05161FAfBB611ccFC37F5cfa")),
-			MaxGasPriceGwei:    getEnvInt64("ARBITRUM_MAX_GAS_PRICE_GWEI", 1),
-			MaxPriorityFeeGwei: getEnvInt64("ARBITRUM_MAX_PRIORITY_FEE_GWEI", 0),
-			GasLimitAnchor:     getEnvInt64("ARBITRUM_GAS_LIMIT_ANCHOR", 2000000),
-			ExplorerURL:        "https://sepolia.arbiscan.io",
-		}
-	}
-
-	// Optimism Sepolia (11155420) - Updated 2026-02-04
-	if rpc := getEnv("OPTIMISM_SEPOLIA_RPC_URL", ""); rpc != "" {
-		chains[11155420] = &EVMChainConfig{
-			Name:               "Optimism Sepolia",
-			ChainID:            11155420,
-			RPCURL:             rpc,
-			WSURL:              getEnv("OPTIMISM_SEPOLIA_WS_URL", ""),
-			RPCTimeout:         Duration(30 * time.Second),
-			MaxConnections:     10,
-			MaxIdleConnections: 5,
-			// V6.1 A+++ binding takes precedence on Optimism Sepolia.
-			AnchorV4Address:    getEnv("OPTIMISM_SEPOLIA_ANCHORV8_1_ADDRESS", getEnv("OPTIMISM_SEPOLIA_ANCHORV8_ADDRESS", getEnv("OPTIMISM_SEPOLIA_ANCHORV6_1_ADDRESS", getEnv("OPTIMISM_SEPOLIA_ANCHORV6_ADDRESS", getEnv("OPTIMISM_SEPOLIA_ANCHORV5_ADDRESS", getEnv("OPTIMISM_SEPOLIA_ANCHORV4_ADDRESS", "0xA8CB329e6867296084f87Bf0bB800E44932feac7")))))),
-			AnchorV3Address:    getEnv("OPTIMISM_SEPOLIA_ANCHORV3_ADDRESS", "0xc0e54d4D1A5B25e4Cc719Bec436c44241F2BA5d9"),
-			BLSVerifierAddress: getEnv("OPTIMISM_SEPOLIA_BLS_VERIFIER_V2_ADAPTER", getEnv("OPTIMISM_SEPOLIA_BLSZKVERIFIER_ADDRESS", "0x55dE0Bb7aE396257765fC1eC7b8251ecCFC0384E")),
-			AccountFactory:     getEnv("OPTIMISM_SEPOLIA_ACCOUNTFACTORY_V6_ADDRESS", getEnv("OPTIMISM_SEPOLIA_ACCOUNTFACTORY_ADDRESS", "0x7a8c5DC01C2d2Ba498F76832dBcbf0Fe2f69a6C3")),
-			MaxGasPriceGwei:    getEnvInt64("OPTIMISM_MAX_GAS_PRICE_GWEI", 1),
-			MaxPriorityFeeGwei: getEnvInt64("OPTIMISM_MAX_PRIORITY_FEE_GWEI", 0),
-			GasLimitAnchor:     getEnvInt64("OPTIMISM_GAS_LIMIT_ANCHOR", 2000000),
-			ExplorerURL:        "https://sepolia-optimism.etherscan.io",
-		}
-	}
-
-	// Base Sepolia (84532) - Updated 2026-02-08
-	if rpc := getEnv("BASE_SEPOLIA_RPC_URL", ""); rpc != "" {
-		chains[84532] = &EVMChainConfig{
-			Name:               "Base Sepolia",
-			ChainID:            84532,
-			RPCURL:             rpc,
-			WSURL:              getEnv("BASE_SEPOLIA_WS_URL", ""),
-			RPCTimeout:         Duration(30 * time.Second),
-			MaxConnections:     10,
-			MaxIdleConnections: 5,
-			// V6.1 A+++ binding takes precedence on Base Sepolia.
-			AnchorV4Address:    getEnv("BASE_SEPOLIA_ANCHORV8_1_ADDRESS", getEnv("BASE_SEPOLIA_ANCHORV8_ADDRESS", getEnv("BASE_SEPOLIA_ANCHORV6_1_ADDRESS", getEnv("BASE_SEPOLIA_ANCHORV6_ADDRESS", getEnv("BASE_SEPOLIA_ANCHORV5_ADDRESS", getEnv("BASE_SEPOLIA_ANCHORV4_ADDRESS", "0x7a8c5DC01C2d2Ba498F76832dBcbf0Fe2f69a6C3")))))),
-			AnchorV3Address:    getEnv("BASE_SEPOLIA_ANCHORV3_ADDRESS", "0x609987770BCEE4fB7F2e0e81685CE912c437f7f1"),
-			BLSVerifierAddress: getEnv("BASE_SEPOLIA_BLS_VERIFIER_V2_ADAPTER", getEnv("BASE_SEPOLIA_BLSZKVERIFIER_ADDRESS", "0xC09A75BCEd2176687A0995b0906e5995B3F8b692")),
-			AccountFactory:     getEnv("BASE_SEPOLIA_ACCOUNTFACTORY_V6_ADDRESS", getEnv("BASE_SEPOLIA_ACCOUNTFACTORY_V4_ADDRESS", getEnv("BASE_SEPOLIA_ACCOUNTFACTORY_ADDRESS", "0x4e8a1F68f8965C136D505737dEfB154deD34EbFb"))),
-			MaxGasPriceGwei:    getEnvInt64("BASE_MAX_GAS_PRICE_GWEI", 1),
-			MaxPriorityFeeGwei: getEnvInt64("BASE_MAX_PRIORITY_FEE_GWEI", 0),
-			GasLimitAnchor:     getEnvInt64("BASE_GAS_LIMIT_ANCHOR", 2000000),
-			ExplorerURL:        "https://sepolia.basescan.org",
-		}
-	}
-
-	// Hedera Testnet (296) - EVM-compatible Smart Contract Service via JSON-RPC relay.
-	// Hedera's eth_estimateGas returns INSUFFICIENT_TX_FEE, but the EVM client falls
-	// back to GasLimitAnchor on estimate failure and auth.GasLimit is always explicit,
-	// so no estimation happens at submit. Gas price is ~920 gwei; cap well above it.
-	if rpc := getEnv("HEDERA_TESTNET_RPC_URL", ""); rpc != "" {
-		chains[296] = &EVMChainConfig{
-			Name:               "Hedera Testnet",
-			ChainID:            296,
-			RPCURL:             rpc,
-			WSURL:              getEnv("HEDERA_TESTNET_WS_URL", ""),
-			RPCTimeout:         Duration(30 * time.Second),
-			MaxConnections:     10,
-			MaxIdleConnections: 5,
-			// V6.1 A+++ binding takes precedence on Hedera Testnet.
-			AnchorV4Address:    getEnv("HEDERA_TESTNET_ANCHORV8_1_ADDRESS", getEnv("HEDERA_TESTNET_ANCHORV8_ADDRESS", getEnv("HEDERA_TESTNET_ANCHORV6_1_ADDRESS", getEnv("HEDERA_TESTNET_ANCHORV6_ADDRESS", getEnv("HEDERA_TESTNET_ANCHORV5_ADDRESS", getEnv("HEDERA_TESTNET_ANCHORV4_ADDRESS", "")))))),
-			AnchorV3Address:    getEnv("HEDERA_TESTNET_ANCHORV3_ADDRESS", ""),
-			BLSVerifierAddress: getEnv("HEDERA_TESTNET_BLS_VERIFIER_V2_ADAPTER", getEnv("HEDERA_TESTNET_BLSZKVERIFIER_ADDRESS", "")),
-			AccountFactory:     getEnv("HEDERA_TESTNET_ACCOUNTFACTORY_V6_ADDRESS", getEnv("HEDERA_TESTNET_ACCOUNTFACTORY_ADDRESS", "")),
-			MaxGasPriceGwei:    getEnvInt64("HEDERA_MAX_GAS_PRICE_GWEI", 2500),
-			MaxPriorityFeeGwei: getEnvInt64("HEDERA_MAX_PRIORITY_FEE_GWEI", 0),
-			GasLimitAnchor:     getEnvInt64("HEDERA_GAS_LIMIT_ANCHOR", 8000000),
-			ExplorerURL:        "https://hashscan.io/testnet",
-		}
-	}
-
-	// Polygon Amoy (80002) - Updated 2026-02-08
-	if rpc := getEnv("POLYGON_AMOY_RPC_URL", ""); rpc != "" {
-		chains[80002] = &EVMChainConfig{
-			Name:               "Polygon Amoy",
-			ChainID:            80002,
-			RPCURL:             rpc,
-			WSURL:              getEnv("POLYGON_AMOY_WS_URL", ""),
-			RPCTimeout:         Duration(30 * time.Second),
-			MaxConnections:     10,
-			MaxIdleConnections: 5,
-			AnchorV4Address:    getEnv("POLYGON_AMOY_ANCHORV6_ADDRESS", getEnv("POLYGON_AMOY_ANCHORV5_ADDRESS", getEnv("POLYGON_AMOY_ANCHORV4_ADDRESS", "0x7a8c5DC01C2d2Ba498F76832dBcbf0Fe2f69a6C3"))),
-			AnchorV3Address:    getEnv("POLYGON_AMOY_ANCHORV3_ADDRESS", "0x609987770BCEE4fB7F2e0e81685CE912c437f7f1"),
-			BLSVerifierAddress: getEnv("POLYGON_AMOY_BLS_VERIFIER_V2_ADAPTER", getEnv("POLYGON_AMOY_BLSZKVERIFIER_ADDRESS", "0xC09A75BCEd2176687A0995b0906e5995B3F8b692")),
-			AccountFactory:     getEnv("POLYGON_AMOY_ACCOUNTFACTORY_V4_ADDRESS", getEnv("POLYGON_AMOY_ACCOUNTFACTORY_ADDRESS", "0x4e8a1F68f8965C136D505737dEfB154deD34EbFb")),
-			MaxGasPriceGwei:    getEnvInt64("POLYGON_MAX_GAS_PRICE_GWEI", 50),
-			MaxPriorityFeeGwei: getEnvInt64("POLYGON_MAX_PRIORITY_FEE_GWEI", 30),
-			GasLimitAnchor:     getEnvInt64("POLYGON_GAS_LIMIT_ANCHOR", 500000),
-			ExplorerURL:        "https://amoy.polygonscan.com",
-		}
-	}
-
-	// BSC Testnet (97) - Added 2026-02-08
-	if rpc := getEnv("BSC_TESTNET_RPC_URL", ""); rpc != "" {
-		chains[97] = &EVMChainConfig{
-			Name:               "BSC Testnet",
-			ChainID:            97,
-			RPCURL:             rpc,
-			WSURL:              getEnv("BSC_TESTNET_WS_URL", ""),
-			RPCTimeout:         Duration(30 * time.Second),
-			MaxConnections:     10,
-			MaxIdleConnections: 5,
-			// V6.1 A+++ binding takes precedence on BSC Testnet.
-			AnchorV4Address:    getEnv("BSC_TESTNET_ANCHORV8_1_ADDRESS", getEnv("BSC_TESTNET_ANCHORV8_ADDRESS", getEnv("BSC_TESTNET_ANCHORV6_1_ADDRESS", getEnv("BSC_TESTNET_ANCHORV6_ADDRESS", getEnv("BSC_TESTNET_ANCHORV5_ADDRESS", getEnv("BSC_TESTNET_ANCHORV4_ADDRESS", "0x3E7b37a517dec735e06126781A5D01d73d3c26D6")))))),
-			AnchorV3Address:    getEnv("BSC_TESTNET_ANCHORV3_ADDRESS", ""),
-			BLSVerifierAddress: getEnv("BSC_TESTNET_BLS_VERIFIER_V2_ADAPTER", getEnv("BSC_TESTNET_BLSZKVERIFIER_ADDRESS", "0xC96e81bbDD57B5E3C300C4D5905813f590ce40c2")),
-			AccountFactory:     getEnv("BSC_TESTNET_ACCOUNTFACTORY_V6_ADDRESS", getEnv("BSC_TESTNET_ACCOUNTFACTORY_V4_ADDRESS", "0x4e8a1F68f8965C136D505737dEfB154deD34EbFb")),
-			MaxGasPriceGwei:    getEnvInt64("BSC_MAX_GAS_PRICE_GWEI", 10),
-			MaxPriorityFeeGwei: getEnvInt64("BSC_MAX_PRIORITY_FEE_GWEI", 1),
-			GasLimitAnchor:     getEnvInt64("BSC_GAS_LIMIT_ANCHOR", 500000),
-			ExplorerURL:        "https://testnet.bscscan.com",
-		}
-	}
-
-	// Moonbase Alpha (1287) - Added 2026-02-08
-	if rpc := getEnv("MOONBASE_ALPHA_RPC_URL", ""); rpc != "" {
-		chains[1287] = &EVMChainConfig{
-			Name:               "Moonbase Alpha",
-			ChainID:            1287,
-			RPCURL:             rpc,
-			WSURL:              getEnv("MOONBASE_ALPHA_WS_URL", ""),
-			RPCTimeout:         Duration(30 * time.Second),
-			MaxConnections:     10,
-			MaxIdleConnections: 5,
-			// V6.1 A+++ binding takes precedence on Moonbase Alpha.
-			AnchorV4Address:    getEnv("MOONBASE_ALPHA_ANCHORV8_1_ADDRESS", getEnv("MOONBASE_ALPHA_ANCHORV8_ADDRESS", getEnv("MOONBASE_ALPHA_ANCHORV6_1_ADDRESS", getEnv("MOONBASE_ALPHA_ANCHORV6_ADDRESS", getEnv("MOONBASE_ALPHA_ANCHORV5_ADDRESS", getEnv("MOONBASE_ALPHA_ANCHORV4_ADDRESS", "0x7a8c5DC01C2d2Ba498F76832dBcbf0Fe2f69a6C3")))))),
-			AnchorV3Address:    getEnv("MOONBASE_ALPHA_ANCHORV3_ADDRESS", ""),
-			BLSVerifierAddress: getEnv("MOONBASE_ALPHA_BLS_VERIFIER_V2_ADAPTER", getEnv("MOONBASE_ALPHA_BLSZKVERIFIER_ADDRESS", "0xC09A75BCEd2176687A0995b0906e5995B3F8b692")),
-			AccountFactory:     getEnv("MOONBASE_ALPHA_ACCOUNTFACTORY_V6_ADDRESS", getEnv("MOONBASE_ALPHA_ACCOUNTFACTORY_V4_ADDRESS", "0x4e8a1F68f8965C136D505737dEfB154deD34EbFb")),
-			MaxGasPriceGwei:    getEnvInt64("MOONBASE_MAX_GAS_PRICE_GWEI", 1),
-			MaxPriorityFeeGwei: getEnvInt64("MOONBASE_MAX_PRIORITY_FEE_GWEI", 0),
-			GasLimitAnchor:     getEnvInt64("MOONBASE_GAS_LIMIT_ANCHOR", 500000),
-			ExplorerURL:        "https://moonbase.moonscan.io",
-		}
-	}
-
-	// TRON Shasta (2494104990) - Added 2026-02-09
-	// TRON provides EVM-compatible JSON-RPC at /jsonrpc endpoint
-	// Chain ID 0x94a9059e = 2494104990
-	if rpc := getEnv("TRON_SHASTA_RPC_URL", ""); rpc != "" {
-		chains[2494104990] = &EVMChainConfig{
-			Name:               "TRON Shasta",
-			ChainID:            2494104990,
-			RPCURL:             rpc,
-			WSURL:              "",
-			RPCTimeout:         Duration(30 * time.Second),
-			MaxConnections:     10,
-			MaxIdleConnections: 5,
-			AnchorV4Address:    getEnv("TRON_SHASTA_ANCHORV4_ADDRESS", "0xa5adc728e61cc4ab07ec4c29957952ac167eed33"),
-			AnchorV3Address:    "",
-			BLSVerifierAddress: getEnv("TRON_SHASTA_BLSZKVERIFIER_ADDRESS", "0x069d4a29221d721a7af1e7229d5e30803609b420"),
-			AccountFactory:     getEnv("TRON_SHASTA_ACCOUNTFACTORY_ADDRESS", "0xf1c6331f6be11c84e2884acb7f26e3a1c8bfcfca"),
-			MaxGasPriceGwei:    getEnvInt64("TRON_MAX_GAS_PRICE_GWEI", 420),
-			MaxPriorityFeeGwei: 0,
-			GasLimitAnchor:     getEnvInt64("TRON_GAS_LIMIT_ANCHOR", 150000000),
-			ExplorerURL:        "https://shasta.tronscan.org",
-		}
-	}
-
 	return chains
 }
 

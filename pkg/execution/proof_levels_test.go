@@ -44,7 +44,7 @@ func canonicalSingleLeafAnchor(t *testing.T, db *sql.DB, intentID, accumTx strin
 	bundle := "0x" + hex.EncodeToString(levelBytes("bundle-"+intentID))
 	if _, err := db.ExecContext(ctx, `
 		INSERT INTO anchor_batches (id, batch_type, status, merkle_root, target_chain, chain_id, bundle_id, anchor_create_tx, anchor_tx_hash, anchor_block_num, verify_block, quorum_reached)
-		VALUES ($1, 'on_demand', 'confirmed', $2, 'base-sepolia', 84532, $3, $4, $4, 4231, 4242, TRUE)`,
+		VALUES ($1, 'on_demand', 'confirmed', $2, 'evm-84532', 84532, $3, $4, $4, 4231, 4242, TRUE)`,
 		batchID, leaf[:], bundle, anchorTx); err != nil {
 		t.Fatalf("canonical anchor row: %v", err)
 	}
@@ -264,8 +264,8 @@ func TestTheCertenProofStatesTheAnchorsOwnBlockAndChain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if certen.AnchorBlockNumber != 4231 || certen.AnchorChain != "base-sepolia" {
-		t.Fatalf("anchor %s @ %d on %q, want block 4231 (not the verify block 4242 or the settlement 5000) on base-sepolia",
+	if certen.AnchorBlockNumber != 4231 || certen.AnchorChain != "evm-84532" {
+		t.Fatalf("anchor %s @ %d on %q, want block 4231 (not the verify block 4242 or the settlement 5000) on evm-84532",
 			certen.AnchorTxHash, certen.AnchorBlockNumber, certen.AnchorChain)
 	}
 	if certen.AnchorConfirms != 0 || certen.AnchorBlockHash.Valid {
@@ -278,13 +278,16 @@ func TestTheCertenProofStatesTheAnchorsOwnBlockAndChain(t *testing.T) {
 
 // With an observer for the anchor's chain, the anchor transaction is read back: the chain's block wins over
 // a recorded one that disagrees, and its block hash and depth are recorded. One read per anchor per cycle.
+// The canonical row names its chain as the batch path writes it ("evm-84532") and the registry keys the
+// observer by chain id, as InitializeRegistry does; the lookup used to miss, and every proof was recorded
+// without its anchor's block hash or depth (RB3-F44).
 func TestTheAnchorIsReadBackForItsBlockHashAndDepth(t *testing.T) {
 	f := newLevelFixture(t)
 	observer := &anchorChain{obs: &chain.ObservationResult{
 		TxHash: f.anchorTx, BlockNumber: 4230, BlockHash: "0xanchorblock", Confirmations: 812, IsFinalized: true,
 	}}
 	registry := strategy.NewRegistry()
-	if err := registry.RegisterChainStrategy("base-sepolia", &chain.ChainConfig{}, observer); err != nil {
+	if err := registry.RegisterChainStrategy("84532", &chain.ChainConfig{}, observer); err != nil {
 		t.Fatal(err)
 	}
 	f.orch.config.Registry = registry
