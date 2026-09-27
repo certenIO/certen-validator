@@ -18,9 +18,15 @@ import (
 
 // memberCycle is a finished member cycle as Phase 7-9 leave it.
 func memberCycle(intentID, chainID string, members []int64, legs int, obs *chain.ObservationResult) *activeCycle {
+	// Phase 7 records the observed settlement on the cycle; the storage path records it as the settlement.
+	settlementTx := ""
+	if obs != nil {
+		settlementTx = obs.TxHash
+	}
 	return &activeCycle{
-		CycleID:   "cycle-" + chainID,
-		StartedAt: time.Now().UTC(),
+		SettlementTx: settlementTx,
+		CycleID:      "cycle-" + chainID,
+		StartedAt:    time.Now().UTC(),
 		Request: &UnifiedProofCycleRequest{
 			IntentID: intentID, CycleID: "cycle-" + chainID, TargetChain: chainID,
 			CommitmentData: map[string]interface{}{"memberChains": members, "memberLegs": legs},

@@ -363,11 +363,16 @@ type NewProofAttestation struct {
 	ValidatorPubkey []byte     `json:"validator_pubkey"`
 	AttestedHash    []byte     `json:"attested_hash"`
 	Signature       []byte     `json:"signature"`
-	AnchorTxHash    *string    `json:"anchor_tx_hash,omitempty"`
-	MerkleRoot      []byte     `json:"merkle_root,omitempty"`
-	BlockNumber     *int64     `json:"block_number,omitempty"`
-	AttestedAt      time.Time  `json:"attested_at"`
-	SignatureValid  *bool      `json:"signature_valid,omitempty"` // Set to true when signature is validated
+	// AnchorTxHash and BlockNumber are the transaction that published the batch root (layer 5's) and its
+	// block; nil where the proof has none. The settlement the attestation message names is
+	// SettlementTxHash (RB3-F135).
+	AnchorTxHash          *string   `json:"anchor_tx_hash,omitempty"`
+	MerkleRoot            []byte    `json:"merkle_root,omitempty"`
+	BlockNumber           *int64    `json:"block_number,omitempty"`
+	SettlementTxHash      *string   `json:"settlement_tx_hash,omitempty"`
+	SettlementBlockNumber *int64    `json:"settlement_block_number,omitempty"`
+	AttestedAt            time.Time `json:"attested_at"`
+	SignatureValid        *bool     `json:"signature_valid,omitempty"` // Set to true when signature is validated
 }
 
 // ============================================================================
@@ -407,7 +412,8 @@ type AnchorReferenceRecord struct {
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
 }
 
-// NewAnchorReference is input for creating an anchor reference
+// NewAnchorReference is input for creating an anchor reference: where the proof's batch root was
+// published (anchor_*, from its layer 5) and the settlement it attests (settlement_*) - RB3-F135.
 type NewAnchorReference struct {
 	ProofID               uuid.UUID  `json:"proof_id"`
 	TargetChain           string     `json:"target_chain"`
@@ -425,6 +431,12 @@ type NewAnchorReference struct {
 	GasUsed               *int64     `json:"gas_used,omitempty"`
 	GasPriceWei           *string    `json:"gas_price_wei,omitempty"`
 	TotalCostWei          *string    `json:"total_cost_wei,omitempty"`
+
+	SettlementTxHash      string     `json:"settlement_tx_hash"`
+	SettlementBlockNumber int64      `json:"settlement_block_number"`
+	SettlementBlockHash   *string    `json:"settlement_block_hash,omitempty"`
+	SettlementTimestamp   *time.Time `json:"settlement_timestamp,omitempty"`
+	SettlementGasUsed     *int64     `json:"settlement_gas_used,omitempty"`
 }
 
 // ============================================================================

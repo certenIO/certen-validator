@@ -16,6 +16,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -240,5 +241,66 @@ func TestLiveRepairConfirmsEveryExportedAnchor(t *testing.T) {
 	}
 	for _, f := range failures {
 		t.Errorf("would be refused: %s", f)
+	}
+}
+
+// Every unclassified proof projection in a read-only export (CERTEN_TEST_PROJECTION_EXPORT) classified by the
+// repair's own decision (RB3-F135), so `validator repair projections` is known before it runs.
+func TestLiveProjectionClassification(t *testing.T) {
+	path := os.Getenv("CERTEN_TEST_PROJECTION_EXPORT")
+	if path == "" {
+		t.Fatal("the live build requires CERTEN_TEST_PROJECTION_EXPORT")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows []struct {
+		Proof, Chain, Tx, L5, Created string
+	}
+	if err := json.Unmarshal(raw, &rows); err != nil {
+		t.Fatal(err)
+	}
+	r := NewEthAnchorTxReader()
+	defer r.Close()
+	for _, id := range []int64{84532, 421614, 11155111} {
+		urls := ethrpc.ParseEndpoints(os.Getenv(fmt.Sprintf("CERTEN_TEST_RPC_%d", id)))
+		if len(urls) == 0 {
+			t.Fatalf("the live build requires CERTEN_TEST_RPC_%d", id)
+		}
+		pool, err := ethrpc.NewPool(urls, 5*time.Second, log.New(io.Discard, "", 0))
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.pools[id] = pool
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
+	defer cancel()
+	counts := map[string]int{}
+	for _, row := range rows {
+		time.Sleep(300 * time.Millisecond)
+		key := "no layer 5"
+		if row.L5 != "" {
+			key = "layer 5"
+			if sameHex(row.L5, row.Tx) {
+				counts["layer 5 already names it"]++
+				continue
+			}
+		}
+		chainID, _ := strconv.ParseInt(row.Chain, 10, 64)
+		class, reading, why := classifyStated(ctx, r, chainID, row.Tx, row.L5)
+		switch class {
+		case statedRefused:
+			counts[key+": refused"]++
+			t.Errorf("would be refused: proof %s (%s, chain %s, %s): %s", row.Proof, row.Tx, row.Chain, row.Created, why)
+		case statedAnchor:
+			counts[key+": an anchor-create call, kept"]++
+			t.Logf("anchor kept: proof %s %s (%s) to %s", row.Proof, row.Tx, row.Created, reading.To)
+		default:
+			counts[key+": settlement, moved"]++
+		}
+	}
+	for k, n := range counts {
+		t.Logf("%s: %d", k, n)
 	}
 }
