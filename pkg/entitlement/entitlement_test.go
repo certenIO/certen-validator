@@ -285,7 +285,7 @@ func TestProofSideIsChecked(t *testing.T) {
 	f := newFixture(t, activeLeaf("acc://a.acme/data"), activeLeaf("acc://b.acme/data"))
 	ev := f.evidence(t, "acc://a.acme/data")
 	if len(ev.Proof) == 0 {
-		t.Skip("no sibling to flip")
+		t.Fatal("the fixture's proof has no sibling to flip: the fixture must give it one")
 	}
 	ev.Proof[0].Right = !ev.Proof[0].Right
 	if err := Verify(ev, "acc://a.acme/data", now, f.keys); err == nil {

@@ -34,7 +34,7 @@ func TestLegacyMigrationCatalogIsFrozen(t *testing.T) {
 		// The directory may be deleted outright once the 019/020 regression tests are ported. That is a
 		// valid end state, not a failure.
 		if os.IsNotExist(err) {
-			t.Skip("legacy migration directory has been removed entirely")
+			t.Fatal("the legacy migration directory is gone: remove this test with it, deliberately")
 		}
 		t.Fatalf("read legacy migration directory: %v", err)
 	}

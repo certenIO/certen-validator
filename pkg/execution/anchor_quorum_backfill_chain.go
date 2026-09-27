@@ -12,7 +12,6 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 
-	"github.com/certen/independant-validator/pkg/anchor"
 	"github.com/certen/independant-validator/pkg/consensus"
 )
 
@@ -197,11 +196,7 @@ func (r *ChainBackfillReader) ScanProofExecuted(
 	if err != nil {
 		return nil, err
 	}
-	parsed, err := abiFromJSON(anchor.CertenAnchorV3EventsABI)
-	if err != nil {
-		return nil, fmt.Errorf("parsing anchor event ABI: %w", err)
-	}
-	event, ok := parsed.Events["ProofExecuted"]
+	event, ok := anchorEventsABI.Events["ProofExecuted"]
 	if !ok {
 		return nil, fmt.Errorf("the anchor event ABI declares no ProofExecuted event")
 	}

@@ -67,7 +67,7 @@ func TestSettledWithoutATransactionIsNotRecordedAsAFailure(t *testing.T) {
 	bv := failureTestValidator(orch)
 	att := &PendingAttestation{IntentID: "x", CertenIntent: liveFailedIntent(t)}
 
-	bv.RunBatchMemberAttestation(context.Background(), att, "", 84532, true)
+	bv.RunBatchMemberAttestation(context.Background(), att, "", 84532, true, "on_cadence")
 
 	if orch.cycles != 0 {
 		t.Fatalf("started %d cycle(s) for a settled member with no transaction", orch.cycles)

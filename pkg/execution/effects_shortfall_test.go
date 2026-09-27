@@ -108,13 +108,14 @@ func TestMemberOutcomeStatesWhetherEffectsWereProven(t *testing.T) {
 }
 
 func TestShortfallIsWrittenBackAsItsOutcome(t *testing.T) {
-	obs := &chain.ObservationResult{TxHash: "0x7a2c8522fb60d37e63fa2b68bf1abc69c6a70dd25da501ab21ec02c1b50204e7", Status: 1, IsFinalized: true, BlockNumber: 47368146}
+	obs := &chain.ObservationResult{TxHash: "0x7a2c8522fb60d37e63fa2b68bf1abc69c6a70dd25da501ab21ec02c1b50204e7", Status: 1, IsFinalized: true, BlockNumber: 47368146,
+		BlockHash: "0x1111111111111111111111111111111111111111111111111111111111111111"}
 	c := memberCycle("i-shortfall", "84532", []int64{84532}, 1, obs)
 	c.EffectsShortfall = shortfallClaim()
 	o := &UnifiedOrchestrator{config: &UnifiedOrchestratorConfig{}, resultChains: map[string]*ResultHashChain{}}
-	bundle := o.buildAttestationBundleFromCycle(c)
-	if bundle == nil || bundle.Result == nil {
-		t.Fatal("no bundle")
+	bundle, _, err := o.buildAttestationBundleFromCycle(c)
+	if err != nil || bundle == nil || bundle.Result == nil {
+		t.Fatalf("no bundle: %v", err)
 	}
 	if bundle.Result.Outcome != ResultOutcomeEffectsNotProven || bundle.Result.OutcomeReason == "" {
 		t.Fatalf("outcome %q (%q); want %q with the missing effects named", bundle.Result.Outcome, bundle.Result.OutcomeReason, ResultOutcomeEffectsNotProven)

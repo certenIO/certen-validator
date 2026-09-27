@@ -20,7 +20,7 @@ func TestComputeCanonical4BlobHash_GoldenVectors(t *testing.T) {
 	vectorPath := "../../../certen-contracts/test/vectors/operation_id_test_vectors.json"
 	data, err := os.ReadFile(vectorPath)
 	if err != nil {
-		t.Skipf("Golden test vectors not found at %s: %v", vectorPath, err)
+		t.Fatalf("a committed test input is missing (RB3-F83): Golden test vectors not found at %s: %v", vectorPath, err)
 	}
 
 	var vectors []testVector

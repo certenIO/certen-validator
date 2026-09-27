@@ -28,6 +28,8 @@ type NonSettlementRecord struct {
 	BVN          string  `json:"bvn,omitempty"`
 	MemberChains []int64 `json:"member_chains"`
 	MemberLegs   int     `json:"member_legs"`
+	// ProofClass is the lane the member was queued in; empty on records queued before it was kept.
+	ProofClass string `json:"proof_class,omitempty"`
 
 	QueuedAt  time.Time `json:"queued_at"`
 	Attempts  int       `json:"attempts,omitempty"`

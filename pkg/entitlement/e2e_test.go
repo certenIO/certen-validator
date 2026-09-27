@@ -41,7 +41,7 @@ func loadE2E(t *testing.T) (string, KeySet) {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("testdata", "gateway_e2e.json"))
 	if err != nil {
-		t.Skipf("no e2e fixture: %v", err)
+		t.Fatalf("a committed test input is missing (RB3-F83): no e2e fixture: %v", err)
 	}
 	var fx e2eFixture
 	if err := json.Unmarshal(raw, &fx); err != nil {

@@ -79,6 +79,23 @@ func persistResultHashChainLink(ctx context.Context, repo *database.UnifiedRepos
 
 // seedResultHashChains continues each of this validator's persisted result hash chains, so a restart does
 // not begin them again at sequence 0 (which would fork every chain it had written).
+// persistNonSettlementChainLink persists the result hash chain link of a non-settlement (RB3-F80).
+func persistNonSettlementChainLink(ctx context.Context, repo *database.UnifiedRepository, validatorID string, cycle *activeCycle, linked *ExternalChainResult) error {
+	if repo == nil || linked == nil {
+		return nil
+	}
+	return repo.InsertResultHashChainLink(ctx, database.ResultHashChainLink{
+		ObserverValidatorID: validatorID,
+		ChainID:             cycle.Result.ChainID,
+		SequenceNumber:      int64(linked.SequenceNumber),
+		PreviousResultHash:  linked.PreviousResultHash[:],
+		ChainResultHash:     linked.ResultHash[:],
+		AnchorProofHash:     linked.AnchorProofHash[:],
+		CycleID:             cycle.CycleID,
+		Kind:                "non_settlement",
+	})
+}
+
 func seedResultHashChains(ctx context.Context, repo *database.UnifiedRepository, validatorID string, chains map[string]*ResultHashChain) (int, error) {
 	if repo == nil {
 		return 0, nil

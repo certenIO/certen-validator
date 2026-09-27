@@ -20,7 +20,7 @@ var migrateConsensusOnce sync.Once
 func consensusRepoForTest(t *testing.T) *ConsensusRepository {
 	t.Helper()
 	if testDB == nil {
-		t.Skip("Test database not configured")
+		t.Fatal("CERTEN_TEST_DB is required: this test runs against PostgreSQL (a skipped gate is not a green gate)")
 	}
 	client := NewClientFromDB(testDB)
 	var migErr error

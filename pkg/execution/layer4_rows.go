@@ -29,6 +29,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -172,6 +173,10 @@ func buildLayer4Row(proofID uuid.UUID, name string, leg *chained_proof.Layer4) (
 	}, nil
 }
 
+// errLayer4Write marks a layer-4 row the database refused: a half-written record, unlike a proof that
+// carries no layer-4 evidence at all (stored summary-only).
+var errLayer4Write = errors.New("write layer-4 row")
+
 // WriteLayer4Rows builds and persists both layer-4 rows.
 //
 // logf is the caller's logger, so the loud failure lands in the same stream as
@@ -189,7 +194,7 @@ func WriteLayer4Rows(ctx context.Context, repo layer4RowWriter, proofID uuid.UUI
 			// defect it is rather than as a warning.
 			logf("🚨 [L4-PERSIST] proof %s: failed to write %s — the stored proof is now incomplete "+
 				"and must not be read as offline-verifiable: %v", proofID, row.LayerName, err)
-			return fmt.Errorf("write layer-4 row %q: %w", row.LayerName, err)
+			return fmt.Errorf("%w %q: %v", errLayer4Write, row.LayerName, err)
 		}
 	}
 	parts := make([]string, 0, len(rows))

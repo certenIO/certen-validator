@@ -23,22 +23,8 @@ func phase9Cycle() *activeCycle {
 	}
 }
 
-func TestPhase9_DisabledWriteBackIsNotRecordedAsWritten(t *testing.T) {
-	o := &UnifiedOrchestrator{config: &UnifiedOrchestratorConfig{EnableWriteBack: false}}
-	c := phase9Cycle()
-	if err := o.executePhase9(context.Background(), c); err != nil {
-		t.Fatalf("disabled write-back is a stated mode, not a failure: %v", err)
-	}
-	if c.Result.WriteBackSuccess {
-		t.Fatal("write-back disabled by configuration was recorded as a successful write-back")
-	}
-	if c.Result.WriteBackState != WriteBackDisabledByConfiguration {
-		t.Fatalf("write-back state = %q, want %q", c.Result.WriteBackState, WriteBackDisabledByConfiguration)
-	}
-}
-
 func TestPhase9_QuorumNotMetRecordsTheRefusal(t *testing.T) {
-	o := &UnifiedOrchestrator{config: &UnifiedOrchestratorConfig{EnableWriteBack: true}}
+	o := &UnifiedOrchestrator{config: &UnifiedOrchestratorConfig{}}
 	c := phase9Cycle()
 	c.Result.ThresholdMet = false
 	if err := o.executePhase9(context.Background(), c); err == nil {

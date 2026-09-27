@@ -292,7 +292,7 @@ func TestRealIndexerLetsAFailedDuplicateOverwriteASuccess(t *testing.T) {
 		t.Fatal("the index lost the transaction entirely")
 	}
 	if got.Result.Code == abcitypes.CodeTypeOK {
-		t.Skip("this CometBFT build keeps the successful result in AddBatch; the scan is then belt and braces")
+		t.Fatal("this CometBFT build keeps the successful result in AddBatch: the premise the inclusion scan was built on has changed - re-examine it")
 	}
 	if got.Height != 101 || got.Result.Code != 7 {
 		t.Fatalf("index returned height=%d code=%d, want the later failure (101, 7)", got.Height, got.Result.Code)

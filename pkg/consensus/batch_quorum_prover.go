@@ -246,12 +246,14 @@ func (bv *BFTValidator) RunBatchMemberAttestation(
 	txHash string,
 	chainID int64,
 	success bool,
+	lane string,
 ) {
 	att, ok := attestation.(*PendingAttestation)
 	if !ok || att == nil {
 		bv.logger.Printf("⚠️ [BATCH-ATTEST] snapshot was not a *PendingAttestation; member cannot attest")
 		return
 	}
+	att.SettlementLane = lane
 
 	res := &verification.AnchorExecutionResult{
 		AnchorTxID:               txHash,
@@ -418,13 +420,14 @@ func OnDemandLaneEnabled() bool { return onDemandLaneEnabled() }
 // The honest close-out is to attest the FAILURE with its real cause. An intent recorded as failed
 // can be resubmitted deliberately; one handed to an impossible path, or recorded with a reason
 // that is not its own, cannot be reasoned about.
-func (bv *BFTValidator) RunBatchMemberRefusal(ctx context.Context, attestation interface{}, chainID int64, cause string) {
+func (bv *BFTValidator) RunBatchMemberRefusal(ctx context.Context, attestation interface{}, chainID int64, cause, lane string) {
 	att, ok := attestation.(*PendingAttestation)
 	if !ok || att == nil {
 		bv.logger.Printf("⚠️ [BATCH-REFUSED] snapshot was not a *PendingAttestation; the dropped member (%s) "+
 			"cannot be recorded as failed", cause)
 		return
 	}
+	att.SettlementLane = lane
 	if cause == "" {
 		cause = "dropped from its batch (cause not recorded)"
 	} else {

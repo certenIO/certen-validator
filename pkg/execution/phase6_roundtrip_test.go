@@ -97,7 +97,7 @@ func p6LoadFixture(t *testing.T, name string) *chained_proof.ChainedProof {
 		"working-proof_do_not_edit", "testdata", name)
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		t.Skipf("fixture %s unavailable: %v", name, err)
+		t.Fatalf("a committed test input is missing (RB3-F83): fixture %s unavailable: %v", name, err)
 	}
 	cp := new(chained_proof.ChainedProof)
 	if err := json.Unmarshal(raw, cp); err != nil {

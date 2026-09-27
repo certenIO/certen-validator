@@ -48,8 +48,10 @@ import (
 // be admitted. That is the correct direction to fail for a fee layer, but it is
 // a real availability coupling and should be understood rather than discovered.
 type Store struct {
-	mu     sync.RWMutex
-	set    *Set
+	mu  sync.RWMutex
+	set *Set
+	// index answers proofs and lookups for set, built once when it is installed (RB3-F79).
+	index  *ProofIndex
 	header *Header
 	// fetchedAt is local wall time, used ONLY for refresh scheduling and
 	// staleness reporting. It never influences a consensus decision — expiry for
@@ -220,7 +222,12 @@ func (s *Store) Refresh(ctx context.Context) error {
 		return s.fail(fmt.Errorf("refusing epoch %d, older than cached epoch %d", doc.Header.Epoch, prevEpoch))
 	}
 	set := doc.Set
-	s.set = &set
+	index := NewProofIndex(set.Leaves)
+	if !strings.EqualFold(index.Root(), doc.Header.Root) {
+		s.mu.Unlock()
+		return s.fail(fmt.Errorf("proof index root %s differs from the verified root %s", index.Root(), doc.Header.Root))
+	}
+	s.set, s.index = &set, index
 	h := doc.Header
 	s.header = &h
 	s.fetchedAt = time.Now()
@@ -293,10 +300,10 @@ func (s *Store) BuildEvidence(adiURL string) *Evidence {
 		return nil
 	}
 	s.mu.RLock()
-	set, header, fetchedAt := s.set, s.header, s.fetchedAt
+	index, header, fetchedAt := s.index, s.header, s.fetchedAt
 	s.mu.RUnlock()
 
-	if set == nil || header == nil {
+	if index == nil || header == nil {
 		return nil
 	}
 	// Local staleness bound, on top of the epoch's own NotAfter. Uses wall time,
@@ -306,7 +313,7 @@ func (s *Store) BuildEvidence(adiURL string) *Evidence {
 		return nil
 	}
 
-	proof, leaf, ok := set.BuildProof(adiURL)
+	proof, leaf, ok := index.Proof(adiURL)
 	if !ok {
 		// THE ONBOARDING WINDOW.
 		//
@@ -349,10 +356,10 @@ func (s *Store) Lookup(adiURL string) (Leaf, bool) {
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.set == nil {
+	if s.index == nil {
 		return Leaf{}, false
 	}
-	return s.set.Lookup(adiURL)
+	return s.index.Lookup(adiURL)
 }
 
 // Snapshot reports store health for logging and metrics.
@@ -444,12 +451,12 @@ func (s *Store) lookupAfterRefresh(adiURL string) ([]ProofStep, Leaf, bool) {
 		return nil, Leaf{}, false
 	}
 	s.mu.RLock()
-	set := s.set
+	index := s.index
 	s.mu.RUnlock()
-	if set == nil {
+	if index == nil {
 		return nil, Leaf{}, false
 	}
-	proof, leaf, ok := set.BuildProof(adiURL)
+	proof, leaf, ok := index.Proof(adiURL)
 	if ok {
 		s.logger.Printf("✅ entitlement refetch resolved %s that was missing from the cached epoch "+
 			"(newly onboarded account)", adiURL)

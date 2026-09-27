@@ -593,33 +593,3 @@ func (s *AccumulateSubmitterImpl) GetPublicKey() ed25519.PublicKey {
 func (s *AccumulateSubmitterImpl) GetPublicKeyHex() string {
 	return hex.EncodeToString(s.publicKey)
 }
-
-// =============================================================================
-// NULL SUBMITTER FOR TESTING
-// =============================================================================
-
-// NullAccumulateSubmitter is a no-op implementation for testing
-type NullAccumulateSubmitter struct {
-	logger *log.Logger
-}
-
-// NewNullAccumulateSubmitter creates a null submitter that logs but doesn't submit
-func NewNullAccumulateSubmitter(logger *log.Logger) *NullAccumulateSubmitter {
-	if logger == nil {
-		logger = log.New(log.Writer(), "[NullSubmitter] ", log.LstdFlags)
-	}
-	return &NullAccumulateSubmitter{logger: logger}
-}
-
-// SubmitTransaction logs the transaction but doesn't submit
-func (s *NullAccumulateSubmitter) SubmitTransaction(ctx context.Context, tx *SyntheticTransaction) (string, error) {
-	s.logger.Printf("⚠️ [NULL] Would submit transaction: %s (write-back disabled)", tx.ToHex())
-	// Return a fake hash for testing
-	return fmt.Sprintf("null-tx-%s", tx.ToHex()[:16]), nil
-}
-
-// GetTransactionStatus always returns confirmed for null submitter
-func (s *NullAccumulateSubmitter) GetTransactionStatus(ctx context.Context, txHash string) (string, error) {
-	s.logger.Printf("⚠️ [NULL] Would check status for: %s", txHash)
-	return "confirmed", nil
-}
