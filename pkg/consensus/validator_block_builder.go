@@ -218,19 +218,12 @@ func (builder *ValidatorBlockBuilder) BuildFromIntent(inputs BuilderInputs) (*Va
 	}
 
 	// === 3.8 Anchor reference and lite client proof ===
-	// Ensure anchor reference has required fields populated
+	// The anchor reference is the proof's, whole. A missing height used to become the CometBFT height and
+	// a missing transaction the intent's hash or the operation ID (RB3-F88).
 	anchorRef := inputs.AnchorRef
-	if anchorRef.BlockHeight == 0 && inputs.BlockHeight > 0 {
-		anchorRef.BlockHeight = inputs.BlockHeight
-	}
-	// If TxHash is empty, use a derived value from the intent
-	if anchorRef.TxHash == "" {
-		// Use intent's transaction hash or operation ID as fallback
-		if inputs.Intent.TransactionHash != "" {
-			anchorRef.TxHash = inputs.Intent.TransactionHash
-		} else {
-			anchorRef.TxHash = opID // Use operation ID as fallback
-		}
+	if anchorRef.BlockHash == "" || anchorRef.BlockHeight == 0 || anchorRef.TxHash == "" {
+		return nil, fmt.Errorf("accumulate anchor reference is incomplete (block hash %q, height %d, tx %q)",
+			anchorRef.BlockHash, anchorRef.BlockHeight, anchorRef.TxHash)
 	}
 
 	// === 3.9 Metadata (BlockHeight/Timestamp/ValidatorID) ===
@@ -238,7 +231,7 @@ func (builder *ValidatorBlockBuilder) BuildFromIntent(inputs BuilderInputs) (*Va
 	timestamp := time.Now().UTC().Format(time.RFC3339)
 	validatorID := builder.validatorID
 	if validatorID == "" {
-		validatorID = "validator-default" // Fallback if not configured
+		return nil, fmt.Errorf("validator block builder has no validator ID")
 	}
 
 	// BLS signature validation - must be set before reaching builder
