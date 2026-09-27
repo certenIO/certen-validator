@@ -2810,6 +2810,13 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 				// the visualisation fields drop, plus both L4 legs.
 				canonicalCP := ChainedProofFromResult(chainedProof)
 
+				// The proof stored is the one consensus signed over, or nothing is stored (RB3-F87).
+				if compared, err := matchesConsensusProof(req.CommitmentData, canonicalCP); err != nil {
+					return fmt.Errorf("cycle %s: chained proof is not the one consensus signed over: %w", req.CycleID, err)
+				} else if !compared {
+					fmt.Printf("🚨 cycle %s: consensus signed over no L1-L3 proof for tx %s; the stored proof cannot be checked against it (RB3-F88)\n", req.CycleID, txHash)
+				}
+
 				// L1: Transaction → BVN
 				l1JSON, _ := json.Marshal(map[string]interface{}{
 					"layer":          "L1",
