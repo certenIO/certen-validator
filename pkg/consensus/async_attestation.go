@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -303,6 +304,14 @@ func (bv *BFTValidator) RunProofCycle(
 		}
 		commitMap["targetChain"] = strconv.FormatInt(settledChainID, 10)
 		commitMap["chainID"] = settledChainID
+		// The intent's member set and this member's share of its legs: the intent's status is
+		// derived from every member's outcome over this set (RB3-F50).
+		if chains, legs, merr := memberSetOf(att.CertenIntent, settledChainID); merr == nil {
+			commitMap["memberChains"] = chains
+			commitMap["memberLegs"] = legs
+		} else {
+			bv.logger.Printf("❌ [PROOF-CYCLE] intent %s: %v — its outcome cannot be placed in its member set", att.IntentID, merr)
+		}
 		commitMap["accumulateBlockHeight"] = att.AccumulateBlockHeight
 		commitMap["accumulateTxHash"] = att.CertenIntent.TransactionHash
 		commitMap["rawCreateTxHashes"] = res.CreateTxHash
@@ -645,6 +654,19 @@ func (bv *BFTValidator) recordFailedProofCycle(
 		"targetChain":              strconv.FormatInt(chainID, 10),
 		"chainID":                  chainID,
 	}
+	// The member's operation: the executor finds its own copy of the member by it, and every peer
+	// verifies the non-settlement from its own copy (RB3-F49).
+	if opID, oerr := att.CertenIntent.OperationID(); oerr == nil {
+		commitment["nonSettlementOperationID"] = opID
+	} else {
+		bv.logger.Printf("❌ [PROOF-CYCLE] intent %s: operation id: %v — its failure cannot be attested", att.IntentID, oerr)
+	}
+	if chains, legs, merr := memberSetOf(att.CertenIntent, chainID); merr == nil {
+		commitment["memberChains"] = chains
+		commitment["memberLegs"] = legs
+	} else {
+		bv.logger.Printf("❌ [PROOF-CYCLE] intent %s: %v — its failure cannot be placed in its member set", att.IntentID, merr)
+	}
 
 	if err := bv.proofCycleOrchestrator.StartProofCycleWithAccumulateRef(
 		ctx,
@@ -661,6 +683,35 @@ func (bv *BFTValidator) recordFailedProofCycle(
 			"intent is settled nowhere AND recorded nowhere, which needs operator attention",
 			att.IntentID, err)
 	}
+}
+
+// memberSetOf is the intent's member set - the distinct chains of its signed legs, ascending, one batch
+// member each - and how many of its legs the member on chainID carries.
+func memberSetOf(ci *CertenIntent, chainID int64) ([]int64, int, error) {
+	if ci == nil {
+		return nil, 0, fmt.Errorf("no intent")
+	}
+	env, err := ci.ParseCrossChain()
+	if err != nil {
+		return nil, 0, fmt.Errorf("legs cannot be read: %w", err)
+	}
+	seen := map[int64]bool{}
+	var chains []int64
+	legs := 0
+	for _, l := range env.Legs {
+		if !seen[l.ChainID] {
+			seen[l.ChainID] = true
+			chains = append(chains, l.ChainID)
+		}
+		if l.ChainID == chainID {
+			legs++
+		}
+	}
+	if legs == 0 {
+		return nil, 0, fmt.Errorf("chain %d carries none of the intent's legs", chainID)
+	}
+	sort.Slice(chains, func(i, j int) bool { return chains[i] < chains[j] })
+	return chains, legs, nil
 }
 
 // settledChainOf is the chain a member settled on, from its execution result's Network

@@ -14,6 +14,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/certen/independant-validator/pkg/config"
+	"github.com/certen/independant-validator/pkg/consensus"
 )
 
 // =============================================================================
@@ -178,6 +179,10 @@ type BatchStack struct {
 	// wired, and nil forever when the on-demand lane is disabled — EnqueueOnDemand is simply
 	// never called in that case.
 	onDemandWaker atomic.Pointer[func()]
+
+	// SequenceChain reads a successor's predecessor on its chain (batch_sequence.go): the leader
+	// before it settles one, and a peer before it co-signs one.
+	SequenceChain NonSettlementChain
 }
 
 // NewBatchStack assembles resolver -> submitter -> orchestrator for every configured chain.
@@ -224,6 +229,7 @@ func NewBatchStack(
 		Submitter:     submitter,
 		Mempool:       mempool,
 		Orchestrators: orchestrators,
+		SequenceChain: NonSettlementChainFromResolver(resolver),
 	}, nil
 }
 
@@ -247,41 +253,6 @@ func (s *BatchStack) OrchestratorFor(chainID int64) (*BatchOrchestrator, error) 
 // actually settled on chain.
 type BatchAttestFn func(ctx context.Context, attestation interface{}, txHash string, chainID int64, success bool)
 
-// FlushDueChains drains every chain whose pool is due and attests each settled member.
-//
-// Attestation is per-member even though one anchor and one batch tx covered them all: each
-// intent keeps its own operationID and its own Accumulate write-back, so collapsing them
-// would destroy per-intent status tracking.
-//
-// A member that failed is attested as UNSUCCESSFUL rather than skipped. Silently dropping it
-// would leave the intent pending forever with nothing recording why.
-func (s *BatchStack) FlushDueChains(
-	ctx context.Context,
-	now time.Time,
-	force bool,
-	cutoffHeight uint64,
-	attest BatchAttestFn,
-	onDropped BatchDropFn,
-	logf func(string, ...interface{}),
-) {
-	if logf == nil {
-		logf = func(string, ...interface{}) {}
-	}
-	// Without a real consensus height there is no period, and TakeForPeriod would select
-	// nothing. Say so once per pass rather than spinning silently.
-	if cutoffHeight == 0 {
-		if s.Mempool.PendingCount() > 0 {
-			logf("[BATCH-FLUSH] %d member(s) queued but the consensus height is 0 — no period "+
-				"can be formed; check the height source wiring", s.Mempool.PendingCount())
-		}
-		return
-	}
-
-	for _, chainID := range s.Mempool.DueChains(now, force) {
-		s.flushChainPeriods(ctx, chainID, cutoffHeight, DefaultBatchPeriodBlocks, nil, 0, now, attest, onDropped, logf)
-	}
-}
-
 // flushChainPeriods flushes every CLOSED period this chain still holds members for.
 //
 // Iterating periods rather than flushing only the newest closed one is what stops a straggler
@@ -302,6 +273,9 @@ func (s *BatchStack) flushChainPeriods(
 	onDropped BatchDropFn,
 	logf func(string, ...interface{}),
 ) {
+	if logf == nil {
+		logf = func(string, ...interface{}) {}
+	}
 	// Strictly older than the current period: a period still accepting members must not be
 	// formed, or two validators at different heights inside it derive different trees.
 	periods := s.Mempool.PendingPeriods(chainID, periodBlocks, currentPeriodStart)
@@ -349,7 +323,7 @@ func (s *BatchStack) flushChainPeriods(
 		// soloSettleGrace still leaves ~15x margin over the observed spread, because that sample
 		// was a healthy idle set and a loaded or catching-up node will be slower.
 		effectiveGrace := grace
-		if n := len(s.Mempool.PeekForPeriod(chainID, start, periodBlocks)); n == 1 && grace > soloSettleGrace {
+		if n := len(s.Mempool.PeriodMembers(chainID, start, periodBlocks)); n == 1 && grace > soloSettleGrace {
 			effectiveGrace = soloSettleGrace
 			logf("[BATCH-FLUSH] chain %d period %d: solo member — grace %s instead of %s",
 				chainID, start, effectiveGrace, grace)
@@ -618,7 +592,7 @@ const soloSettleGrace = time.Minute
 // leadership rotates, so the set has many chances to pick a straggler up.
 const DefaultBatchRetentionPeriods uint64 = 50
 
-// RunFlushLoop drives FlushDueChains on the cadence until ctx is cancelled.
+// RunFlushLoop flushes every closed period on the cadence until ctx is cancelled.
 //
 // On shutdown it performs one final forced flush so queued intents are not abandoned
 // mid-window — the same drain-on-exit contract BatchAccumulator honours.
@@ -646,8 +620,8 @@ func (s *BatchStack) RunFlushLoop(
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	// A faster sub-tick so MaxAge is honoured with reasonable granularity even when the
-	// cadence interval is long.
+	// A faster sub-tick so a period's settle grace is honoured with reasonable granularity even
+	// when the cadence interval is long.
 	sub := interval / 4
 	if sub < time.Second {
 		sub = time.Second
@@ -675,7 +649,7 @@ func (s *BatchStack) RunFlushLoop(
 	}
 
 	// flush runs one pass: every closed period, leader-gated per period.
-	flush := func(passCtx context.Context, now time.Time, force bool) {
+	flush := func(passCtx context.Context, now time.Time) {
 		height := heightFn()
 		cutoff := BatchPeriodCutoff(height, periodBlocks)
 		if cutoff == 0 {
@@ -705,12 +679,12 @@ func (s *BatchStack) RunFlushLoop(
 		select {
 		case <-ctx.Done():
 			logf("[BATCH-FLUSH] shutting down — draining %d queued members", s.Mempool.PendingCount())
-			flush(context.Background(), time.Now(), true)
+			flush(context.Background(), time.Now())
 			return
 		case now := <-ticker.C:
-			flush(ctx, now, true)
+			flush(ctx, now)
 		case now := <-subTicker.C:
-			flush(ctx, now, false)
+			flush(ctx, now)
 		}
 	}
 }
@@ -910,6 +884,63 @@ func (s *BatchStack) EnqueueOnDemand(
 	return nil
 }
 
+// EnqueueAfter queues a successor of a sequential cross-chain intent: a member settled only once its
+// predecessor - the intent's member on after.ChainID, queued before it - has an outcome on its chain
+// (batch_sequence.go). It always takes the intent-keyed lane, whatever the intent's proof class: a
+// one-member anchor makes readiness a question about one member.
+//
+// The predecessor's facts are computed from THIS validator's own copy of the predecessor member,
+// the same way every validator computes them. A predecessor not held here is CERTEN's condition
+// (it was to be queued first), and the successor is not queued.
+func (s *BatchStack) EnqueueAfter(
+	intentID string,
+	adiURL string,
+	chainID int64,
+	account [20]byte,
+	operationID [32]byte,
+	legs interface{},
+	attestation interface{},
+	commitHeight uint64,
+	commitPartition string,
+	commitTime time.Time,
+	accumTxHash string,
+	after consensus.SequencePredecessor,
+) error {
+	if after.Position <= 0 {
+		return fmt.Errorf("intent %s on chain %d: a successor's sequence position must be at least 1, not %d",
+			intentID, chainID, after.Position)
+	}
+	if after.ChainID == chainID {
+		return fmt.Errorf("intent %s: a member cannot follow a member on its own chain %d", intentID, chainID)
+	}
+	pred, ok := s.Mempool.FindMember(after.ChainID, after.OperationID)
+	if !ok || pred.IntentID != intentID {
+		return fmt.Errorf("%w: intent %s on chain %d follows its member on chain %d, which is not queued here",
+			ErrBatchUnavailable, intentID, chainID, after.ChainID)
+	}
+	facts, err := memberFacts(pred)
+	if err != nil {
+		return fmt.Errorf("intent %s: its predecessor on chain %d: %w", intentID, after.ChainID, err)
+	}
+	p, err := s.admit(intentID, adiURL, chainID, account, operationID, legs, attestation,
+		commitHeight, commitPartition, commitTime, accumTxHash)
+	if err != nil {
+		return err
+	}
+	p.SequencePosition = after.Position
+	p.After = &MemberPredecessor{
+		ChainID: facts.ChainID, OperationID: facts.OperationID, Account: facts.Account, Leaf: facts.Leaf,
+		Deadline: facts.Deadline, ContinueOnFailure: after.ContinueOnFailure,
+	}
+	if err := s.Mempool.AddOnDemand(p); err != nil {
+		return err
+	}
+	if w := s.onDemandWaker.Load(); w != nil {
+		(*w)()
+	}
+	return nil
+}
+
 // SetOnDemandWaker installs the callback that signals the on-demand submitter after an enqueue.
 //
 // Stored as a pointer-to-func in an atomic so the submitter can be wired AFTER the stack is
@@ -987,13 +1018,19 @@ func convertLegs(legs interface{}, chainID int64, account common.Address) ([]Leg
 			val = new(big.Int)
 		}
 		data, _ := dataF.Interface().([]byte)
+		// Deadline is optional in the mirror: a leg that declares none carries 0.
+		var deadline int64
+		if f := e.FieldByName("Deadline"); f.IsValid() && f.Kind() == reflect.Int64 {
+			deadline = f.Int()
+		}
 
 		out = append(out, LegExecution{
-			LegID:   legIDF.String(),
-			ChainID: chainID,
-			Target:  target,
-			Value:   val,
-			Data:    data,
+			LegID:    legIDF.String(),
+			ChainID:  chainID,
+			Target:   target,
+			Value:    val,
+			Data:     data,
+			Deadline: deadline,
 			// Every leg of a member executes from that member's own account — consensus
 			// already rejected an intent whose legs span two source accounts.
 			SourceAddress: account,

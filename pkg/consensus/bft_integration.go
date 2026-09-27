@@ -312,6 +312,24 @@ type BatchEnqueuer interface {
 	CheckMember(onDemand bool, intentID, adiURL string, chainID int64, account [20]byte,
 		operationID [32]byte, legs interface{}, commitHeight uint64) error
 
+	// EnqueueAfter queues a later member of a sequential cross-chain intent: settled only once its
+	// predecessor (the intent's member on after.ChainID, queued first) has its outcome on chain.
+	// Same errors as EnqueueForBatch.
+	EnqueueAfter(
+		intentID string,
+		adiURL string,
+		chainID int64,
+		account [20]byte,
+		operationID [32]byte,
+		legs interface{},
+		attestation interface{},
+		commitHeight uint64,
+		commitPartition string,
+		commitTime time.Time,
+		accumTxHash string,
+		after SequencePredecessor,
+	) error
+
 	// RemoveMember takes a member back out of its lane as if it had never been queued, so a
 	// multi-chain intent can be rolled back when one of its chains cannot be queued.
 	RemoveMember(onDemand bool, intentID string, chainID int64, operationID [32]byte)
@@ -3516,4 +3534,16 @@ func isTransientBroadcastError(err error) bool {
 		}
 	}
 	return false
+}
+
+// SequencePredecessor places a later member of a sequential cross-chain intent: the intent's member
+// immediately before it, on another chain, and how a failure of that member is treated.
+type SequencePredecessor struct {
+	// ChainID and OperationID name the predecessor member (queued before this one).
+	ChainID     int64
+	OperationID [32]byte
+	// Position is this member's place in the intent's order: 1 for the second member, and so on.
+	Position int
+	// ContinueOnFailure: the intent's rollback policy is continue_on_failure.
+	ContinueOnFailure bool
 }

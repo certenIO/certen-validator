@@ -108,7 +108,9 @@ func TestS1_LifecyclePassesThroughSettling(t *testing.T) {
 	}
 
 	// Terminal resolution, from settling.
-	o.updateLifecycleComplete(ctx, intentID, "cycle-1", "0xwriteback")
+	c := memberCycle(intentID, "84532", []int64{84532}, 1, settledObs("0xsettled"))
+	c.Result.WriteBackTxHash, c.Result.WriteBackState = "0xwriteback", WriteBackWritten
+	o.recordMemberOutcome(ctx, c, database.MemberSettlementSettled, database.MemberProofCycleWritten, "")
 	st, _, settlingAfter, completedAt, _ := s1Status(t, db, intentID)
 	if st != string(database.IntentLifecycleComplete) {
 		t.Fatalf("settling -> complete did not take effect: status=%q", st)
@@ -137,7 +139,9 @@ func TestS1_SettlingResolvesToFailed(t *testing.T) {
 
 	o.updateLifecycleInProcess(ctx, intentID, "cycle-2")
 	o.updateLifecycleSettling(ctx, intentID, "cycle-2")
-	o.updateLifecycleFailed(ctx, intentID, "cycle-2", 7, context.DeadlineExceeded)
+	o.recordMemberOutcome(ctx, memberCycle(intentID, "84532", []int64{84532}, 1, nil),
+		database.MemberSettlementUnobserved, database.MemberProofCycleFailed,
+		"phase 7 failed: "+context.DeadlineExceeded.Error())
 
 	st, _, settlingAt, _, failedAt := s1Status(t, db, intentID)
 	if st != string(database.IntentLifecycleFailed) {

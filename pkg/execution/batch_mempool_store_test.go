@@ -40,7 +40,7 @@ func TestMempoolStore_SurvivesRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	before := NewBatchMempool(BatchMempoolConfig{MinBatchSize: 1, MaxBatchSize: 64})
+	before := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64})
 	before.SetStore(st, nil)
 	for _, m := range []*PendingBatchIntent{member("alpha", 6259279, 11155111), member("beta", 6259282, 11155111)} {
 		if err := before.Add(m); err != nil {
@@ -53,7 +53,7 @@ func TestMempoolStore_SurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	after := NewBatchMempool(BatchMempoolConfig{MinBatchSize: 1, MaxBatchSize: 64})
+	after := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64})
 	after.SetStore(st2, nil)
 
 	if got := after.PendingCount(); got != 2 {
@@ -62,8 +62,8 @@ func TestMempoolStore_SurvivesRestart(t *testing.T) {
 	}
 
 	// Same period, same order, same leaf inputs => same root and bundleId.
-	pa := before.PeekForPeriod(11155111, 6259200, 100)
-	pb := after.PeekForPeriod(11155111, 6259200, 100)
+	pa := before.PeriodMembers(11155111, 6259200, 100)
+	pb := after.PeriodMembers(11155111, 6259200, 100)
 	if len(pa) != 2 || len(pb) != 2 {
 		t.Fatalf("period selection differs after restart: %d vs %d", len(pa), len(pb))
 	}
@@ -87,25 +87,27 @@ func TestMempoolStore_SurvivesRestart(t *testing.T) {
 	}
 }
 
-// Taking a period must be reflected on disk, or a restart would resurrect members that have
-// already been anchored and attested.
-func TestMempoolStore_TakeIsPersisted(t *testing.T) {
+// A member's outcome must be reflected on disk, or a restart would resurrect as pending a member that
+// has already settled, and settle it again.
+func TestMempoolStore_OutcomeIsPersisted(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mempool.json")
 	st, _ := NewBatchMempoolStore(path, jsonCodec{}, nil)
-	m := NewBatchMempool(BatchMempoolConfig{MinBatchSize: 1, MaxBatchSize: 64})
+	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64})
 	m.SetStore(st, nil)
 	if err := m.Add(member("gamma", 100, 11155111)); err != nil {
 		t.Fatal(err)
 	}
-	if n := len(m.TakeForPeriod(11155111, 100, 100)); n != 1 {
-		t.Fatalf("took %d, want 1", n)
-	}
+	m.MarkOutcome(m.PeriodMembers(11155111, 100, 100), MemberSettled)
 
 	st2, _ := NewBatchMempoolStore(path, jsonCodec{}, nil)
-	after := NewBatchMempool(BatchMempoolConfig{MinBatchSize: 1, MaxBatchSize: 64})
+	after := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64})
 	after.SetStore(st2, nil)
 	if got := after.PendingCount(); got != 0 {
-		t.Fatalf("%d member(s) resurrected after being taken; they would be re-anchored", got)
+		t.Fatalf("%d member(s) resurrected as pending after they settled; they would be settled again", got)
+	}
+	// Still in its period, with its outcome: the period's trees are unchanged by the restart.
+	if got := after.PeriodMembers(11155111, 100, 100); len(got) != 1 || got[0].Outcome != MemberSettled {
+		t.Fatalf("restored period = %+v, want the member with outcome settled", got)
 	}
 }
 
@@ -115,7 +117,7 @@ func TestMempoolStore_MissingFileIsNotFatal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := NewBatchMempool(BatchMempoolConfig{MinBatchSize: 1, MaxBatchSize: 64})
+	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64})
 	m.SetStore(st, nil) // must not panic or block
 	if m.PendingCount() != 0 {
 		t.Fatal("unexpected members")

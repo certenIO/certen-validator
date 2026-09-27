@@ -134,3 +134,31 @@ func TestProofCycle_MemberCallLegsCarryTheirSignedChain(t *testing.T) {
 		}
 	}
 }
+
+// RB3-F50: every cycle carries the intent's member set and the member's share of its legs, so the
+// intent's status can be derived from all its members. A member carries every leg of the intent on
+// its chain - they execute in its one transaction - and none of another chain's.
+func TestProofCycle_CommitmentCarriesTheMemberSet(t *testing.T) {
+	orch := &routeOrchestrator{}
+	bv := failureTestValidator(orch)
+	att := &PendingAttestation{IntentID: "i1", CertenIntent: memberIntent(t,
+		leg("base", 84532, "0x"), leg("arb", 421614, "0x"), leg("base", 84532, "0x"))}
+
+	bv.RunBatchMemberAttestation(context.Background(), att, settledTx, 84532, true)
+	if chains, _ := orch.commitment["memberChains"].([]int64); len(chains) != 2 || chains[0] != 84532 || chains[1] != 421614 {
+		t.Fatalf("member set = %v, want [84532 421614]", orch.commitment["memberChains"])
+	}
+	if legs := orch.commitment["memberLegs"]; legs != 2 {
+		t.Fatalf("the Base member carries 2 legs, commitment says %v", legs)
+	}
+
+	// A failure record carries it too.
+	bv.RunBatchMemberAttestation(context.Background(), att, "", 421614, false)
+	if legs := orch.commitment["memberLegs"]; legs != 1 || orch.commitment["outcome"] != "failed" {
+		t.Fatalf("failure record: %v", orch.commitment)
+	}
+	// RB3-F49: it names the member's operation, so its non-settlement can be attested.
+	if op, _ := att.CertenIntent.OperationID(); op == "" || orch.commitment["nonSettlementOperationID"] != op {
+		t.Fatalf("failure record carries operation %v, want %s", orch.commitment["nonSettlementOperationID"], op)
+	}
+}

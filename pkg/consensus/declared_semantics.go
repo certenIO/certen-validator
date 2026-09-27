@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -20,9 +21,13 @@ import (
 //
 // So a declaration the batch path does not implement was simply not honoured - a "sequential"
 // or "atomic" cross-chain intent could settle on one chain and fail on the other, in any order,
-// and a leg could execute after the deadline its signer set (RB3-F52, RB3-F53). Until each is
-// implemented, an intent declaring it is refused here, before anything is queued or signed,
-// with the declaration it made - never executed against it (owner decision 2026-09-27).
+// and a leg could execute after the deadline its signer set (RB3-F52, RB3-F53). A declaration that
+// is not implemented is refused here, before anything is queued or signed, with the declaration it
+// made - never executed against it (owner decision 2026-09-27).
+//
+// "sequential" across chains IS implemented: each chain's member settles only once the member before
+// it has its outcome on chain (DeclaredCrossChainOrder, pkg/execution batch_sequence.go). An order
+// one member per chain cannot honour - one chain's legs interleaved with another's - is refused.
 //
 // The raw signed JSON is read, not the CrossChainEnvelope structs: those drop fields the intent
 // builder actually sends (rollback_policy.mode, timeout_policy.total_timeout_seconds), and a
@@ -34,6 +39,17 @@ var ErrUnimplementedSemantics = errors.New("intent declares execution semantics 
 
 // ErrPastDeadline is a leg whose signed deadline had passed when the intent was written.
 var ErrPastDeadline = errors.New("leg deadline passed")
+
+// ErrDeadlineTooSoon is a leg whose signed deadline leaves less time after the intent was written
+// than CERTEN needs to settle it.
+var ErrDeadlineTooSoon = errors.New("leg deadline too soon to settle")
+
+// MinSettlementLead is the least time between an intent's consensus block and a leg's deadline that
+// CERTEN can settle within: a batch period closing (100 Accumulate blocks, ~2.4 min), the settle
+// grace for peers to finish processing (4 min), then anchor, quorum attestation and settlement
+// (~2 min measured) - with a margin. A deadline inside it is a declaration CERTEN cannot honour, so
+// the intent is refused rather than accepted and failed (RB3-F53).
+const MinSettlementLead = 10 * time.Minute
 
 type rawLeg struct {
 	LegID                string   `json:"legId"`
@@ -56,6 +72,29 @@ type rawDeclarations struct {
 type rawDependency struct {
 	LegID          string `json:"leg_id"`
 	DependsOnLegID string `json:"depends_on_leg_id"`
+	// The api-bridge multi-leg builder's shape: {legId, dependsOn: [...], condition}.
+	BridgeLegID string   `json:"legId"`
+	DependsOn   []string `json:"dependsOn"`
+}
+
+// pairs is the dependency as (leg, depends-on) pairs, in either shape.
+func (r rawDependency) pairs() []rawDependency {
+	var out []rawDependency
+	if r.LegID != "" || r.DependsOnLegID != "" {
+		out = append(out, rawDependency{LegID: r.LegID, DependsOnLegID: r.DependsOnLegID})
+	}
+	leg := r.BridgeLegID
+	if leg == "" {
+		leg = r.LegID
+	}
+	for _, on := range r.DependsOn {
+		out = append(out, rawDependency{LegID: leg, DependsOnLegID: on})
+	}
+	if len(out) == 0 {
+		// Neither shape: kept as-is, so it is refused as naming no leg rather than ignored.
+		out = append(out, rawDependency{LegID: r.LegID, DependsOnLegID: r.DependsOnLegID})
+	}
+	return out
 }
 
 // CheckDeclaredSemantics refuses an intent whose declared execution semantics the batch path does
@@ -81,22 +120,11 @@ func CheckDeclaredSemantics(ci *CertenIntent, writtenAt time.Time) error {
 	crossChain := len(chains) > 1
 
 	// ---- Cross-chain ordering and atomicity -----------------------------------------------
+	var order *CrossChainOrder
 	if crossChain {
-		mode := strings.ToLower(strings.TrimSpace(d.ExecutionMode))
-		if mode == "" {
-			if m, ok := d.ExecutionConstraints["mode"].(string); ok {
-				mode = strings.ToLower(strings.TrimSpace(m))
-			}
-		}
-		if mode == "" {
-			mode = "sequential" // the schema's default (CertenIntent.GetExecutionMode)
-		}
-		if mode != "parallel" {
-			return fmt.Errorf("%w: a cross-chain intent declaring execution_mode %q - CERTEN settles each chain independently and implements only \"parallel\" across chains",
-				ErrUnimplementedSemantics, mode)
-		}
-		if pe, ok := d.ExecutionConstraints["parallel_execution"].(bool); ok && !pe {
-			return fmt.Errorf("%w: execution_mode \"parallel\" contradicts execution_constraints.parallel_execution=false", ErrUnimplementedSemantics)
+		var err error
+		if order, err = crossChainOrderOf(&d); err != nil {
+			return err
 		}
 		if allOrNothing(d.Atomicity) {
 			return fmt.Errorf("%w: a cross-chain intent declaring all-or-nothing atomicity %v - a chain that settled is not undone when another fails",
@@ -110,7 +138,9 @@ func CheckDeclaredSemantics(ci *CertenIntent, writtenAt time.Time) error {
 
 	// ---- Dependencies: only on an earlier leg of the same chain ------------------------------
 	deps := make([]rawDependency, 0, len(d.LegDependencies))
-	deps = append(deps, d.LegDependencies...)
+	for _, dep := range d.LegDependencies {
+		deps = append(deps, dep.pairs()...)
+	}
 	for _, l := range d.Legs {
 		for _, on := range l.DependsOnLegs {
 			deps = append(deps, rawDependency{LegID: l.LegID, DependsOnLegID: on})
@@ -123,7 +153,16 @@ func CheckDeclaredSemantics(ci *CertenIntent, writtenAt time.Time) error {
 			return fmt.Errorf("%w: leg dependency %q -> %q names a leg the intent does not have", ErrUnimplementedSemantics, dep.LegID, dep.DependsOnLegID)
 		}
 		if d.Legs[i].ChainID != d.Legs[j].ChainID {
-			return fmt.Errorf("%w: leg %q depends on leg %q on another chain - cross-chain dependencies are not implemented",
+			// Across chains a dependency is honoured by the declared order: the leg's chain settles only
+			// after the chain it depends on has settled (or, with continue_on_failure, has its outcome).
+			if order == nil || order.position(d.Legs[j].ChainID) >= order.position(d.Legs[i].ChainID) {
+				return fmt.Errorf("%w: leg %q depends on leg %q on another chain, which the intent's declared order does not settle before it",
+					ErrUnimplementedSemantics, dep.LegID, dep.DependsOnLegID)
+			}
+			if !order.ContinueOnFailure {
+				continue
+			}
+			return fmt.Errorf("%w: leg %q depends on leg %q on another chain, but rollback_policy continue_on_failure would execute it when that leg failed",
 				ErrUnimplementedSemantics, dep.LegID, dep.DependsOnLegID)
 		}
 		if j >= i {
@@ -151,12 +190,141 @@ func CheckDeclaredSemantics(ci *CertenIntent, writtenAt time.Time) error {
 			return fmt.Errorf("%w: leg %q declares conditional_execution, which has no defined condition to evaluate",
 				ErrUnimplementedSemantics, l.LegID)
 		}
-		if l.DeadlineTimestamp > 0 && !writtenAt.IsZero() && writtenAt.Unix() > l.DeadlineTimestamp {
-			return fmt.Errorf("%w: leg %q was written at %s, after its deadline %s",
-				ErrPastDeadline, l.LegID, writtenAt.UTC().Format(time.RFC3339), time.Unix(l.DeadlineTimestamp, 0).UTC().Format(time.RFC3339))
+		if l.DeadlineTimestamp > 0 && !writtenAt.IsZero() {
+			deadline := time.Unix(l.DeadlineTimestamp, 0).UTC()
+			if writtenAt.After(deadline) {
+				return fmt.Errorf("%w: leg %q was written at %s, after its deadline %s",
+					ErrPastDeadline, l.LegID, writtenAt.UTC().Format(time.RFC3339), deadline.Format(time.RFC3339))
+			}
+			if deadline.Sub(writtenAt) < MinSettlementLead {
+				return fmt.Errorf("%w: leg %q was written at %s with deadline %s; CERTEN needs at least %s to settle",
+					ErrDeadlineTooSoon, l.LegID, writtenAt.UTC().Format(time.RFC3339), deadline.Format(time.RFC3339), MinSettlementLead)
+			}
 		}
 	}
 	return nil
+}
+
+// CrossChainOrder is a sequential cross-chain intent's declared order: its chains, first to last, and
+// whether a chain that does not settle lets the chains after it proceed (rollback_policy
+// continue_on_failure) or stops them.
+type CrossChainOrder struct {
+	Chains            []int64
+	ContinueOnFailure bool
+}
+
+func (o *CrossChainOrder) position(chainID int64) int {
+	for i, c := range o.Chains {
+		if c == chainID {
+			return i
+		}
+	}
+	return -1
+}
+
+// DeclaredCrossChainOrder is the intent's declared order across chains, or nil when it has none to
+// honour: its legs are on one chain, or it declares "parallel". An intent CheckDeclaredSemantics
+// refuses is refused here too.
+func DeclaredCrossChainOrder(ci *CertenIntent) (*CrossChainOrder, error) {
+	if ci == nil {
+		return nil, fmt.Errorf("%w: no intent", ErrUnimplementedSemantics)
+	}
+	var d rawDeclarations
+	if err := json.Unmarshal(ci.CrossChainData, &d); err != nil {
+		return nil, fmt.Errorf("%w: crossChainData cannot be read: %v", ErrUnimplementedSemantics, err)
+	}
+	chains := map[int64]bool{}
+	for _, l := range d.Legs {
+		chains[l.ChainID] = true
+	}
+	if len(chains) < 2 {
+		return nil, nil
+	}
+	return crossChainOrderOf(&d)
+}
+
+// crossChainOrderOf reads a cross-chain intent's execution mode and, for "sequential", its order.
+//
+// The order is the legs' sequence_order (listing order when no leg declares one). One member per
+// chain executes all of that chain's legs in one transaction, so it can honour an order only where
+// each chain's legs are consecutive; two chains at the same step, or one chain's legs split around
+// another's, are orders it cannot honour, and are refused by name rather than approximated.
+func crossChainOrderOf(d *rawDeclarations) (*CrossChainOrder, error) {
+	mode := strings.ToLower(strings.TrimSpace(d.ExecutionMode))
+	if mode == "" {
+		if m, ok := d.ExecutionConstraints["mode"].(string); ok {
+			mode = strings.ToLower(strings.TrimSpace(m))
+		}
+	}
+	if mode == "" {
+		mode = "sequential" // the schema's default (CertenIntent.GetExecutionMode)
+	}
+	pe, peSet := d.ExecutionConstraints["parallel_execution"].(bool)
+	switch mode {
+	case "parallel":
+		if peSet && !pe {
+			return nil, fmt.Errorf("%w: execution_mode \"parallel\" contradicts execution_constraints.parallel_execution=false", ErrUnimplementedSemantics)
+		}
+		return nil, nil
+	case "sequential":
+		if peSet && pe {
+			return nil, fmt.Errorf("%w: execution_mode \"sequential\" contradicts execution_constraints.parallel_execution=true", ErrUnimplementedSemantics)
+		}
+	default:
+		return nil, fmt.Errorf("%w: a cross-chain intent declaring execution_mode %q - CERTEN implements \"sequential\" and \"parallel\" across chains",
+			ErrUnimplementedSemantics, mode)
+	}
+
+	declared := 0
+	for _, l := range d.Legs {
+		if l.SequenceOrder != nil {
+			declared++
+		}
+	}
+	if declared != 0 && declared != len(d.Legs) {
+		return nil, fmt.Errorf("%w: %d of the intent's %d legs declare sequence_order - its order across chains is ambiguous",
+			ErrUnimplementedSemantics, declared, len(d.Legs))
+	}
+	type step struct {
+		key, index int
+		leg        rawLeg
+	}
+	steps := make([]step, len(d.Legs))
+	for i, l := range d.Legs {
+		k := i
+		if l.SequenceOrder != nil {
+			k = *l.SequenceOrder
+		}
+		steps[i] = step{key: k, index: i, leg: l}
+	}
+	sort.SliceStable(steps, func(a, b int) bool { return steps[a].key < steps[b].key })
+
+	order := &CrossChainOrder{ContinueOnFailure: continuesOnFailure(d.RollbackPolicy)}
+	done := map[int64]bool{}
+	for i, s := range steps {
+		if i > 0 && s.key == steps[i-1].key && s.leg.ChainID != steps[i-1].leg.ChainID {
+			return nil, fmt.Errorf("%w: legs %q (chain %d) and %q (chain %d) declare the same sequence_order %d - a sequential intent needs one order across chains",
+				ErrUnimplementedSemantics, steps[i-1].leg.LegID, steps[i-1].leg.ChainID, s.leg.LegID, s.leg.ChainID, s.key)
+		}
+		n := len(order.Chains)
+		if n > 0 && order.Chains[n-1] == s.leg.ChainID {
+			continue
+		}
+		if done[s.leg.ChainID] {
+			return nil, fmt.Errorf("%w: leg %q on chain %d is ordered after legs on chain %d that follow chain %d's earlier legs - one transaction per chain cannot execute that order",
+				ErrUnimplementedSemantics, s.leg.LegID, s.leg.ChainID, order.Chains[n-1], s.leg.ChainID)
+		}
+		done[s.leg.ChainID] = true
+		order.Chains = append(order.Chains, s.leg.ChainID)
+	}
+	return order, nil
+}
+
+// continuesOnFailure reports whether a rollback policy lets later chains proceed when an earlier one
+// did not settle. Any other admitted policy (none declared, or "none") stops them.
+func continuesOnFailure(r map[string]any) bool {
+	m, _ := r["mode"].(string)
+	return strings.EqualFold(strings.TrimSpace(m), "continue_on_failure")
 }
 
 // allOrNothing reports whether an atomicity declaration asks for all-or-nothing execution.

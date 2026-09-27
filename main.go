@@ -1579,11 +1579,10 @@ func startValidator(
 	// ON-DEMAND LANE. Intent-keyed settlement: one intent, one anchor, no
 	// period, no settle grace — see docs/ON_DEMAND_LANE_BUILD_PLAN.md.
 	//
-	// The submitter is started whenever batching is active, but nothing reaches
-	// it unless ON_DEMAND_INTENT_KEYED=true makes enqueueForBatch route
-	// on_demand intents to EnqueueOnDemand. Running it unconditionally means
-	// the flag flip is a config change on an already-exercised code path rather
-	// than a first run in production.
+	// The submitter is started whenever batching is active. It settles the later
+	// members of every sequential cross-chain intent (EnqueueAfter, RB3-F52), and
+	// on_demand intents too once ON_DEMAND_INTENT_KEYED=true routes them to
+	// EnqueueOnDemand.
 	odSubmitter, odErr := execution.NewOnDemandSubmitter(execution.OnDemandSubmitterConfig{
 		Stack:       stack,
 		Prover:      prover,
@@ -1611,8 +1610,8 @@ func startValidator(
 		log.Printf("⚡ [OD] intent-keyed on-demand lane ENABLED — on_demand " +
 			"intents settle one-per-anchor with no period and no settle grace")
 	} else {
-		log.Printf("💤 [OD] on-demand submitter running but IDLE " +
-			"(ON_DEMAND_INTENT_KEYED is not true; on_demand intents take the period path)")
+		log.Printf("⚡ [OD] on-demand submitter running for the later members of sequential cross-chain " +
+			"intents only (ON_DEMAND_INTENT_KEYED is not true; on_demand intents take the period path)")
 	}
 
 	// Publish to the peer attestation handler. Without this a proposer's
@@ -1844,6 +1843,17 @@ func startValidator(
 	// Chained proofs (L1/L2/L3) come from the real proof builder, required at startup above.
 	proofGenAdapter := execution.NewLiteClientProofGeneratorAdapter(liteClientProofGen)
 
+	// Members that never settled are attested and written back (RB3-F49). Their records wait in a
+	// durable queue beside the validator's other state until the chain is past their deadline.
+	nsDataDir := cfg.DataDir
+	if nsDataDir == "" {
+		nsDataDir = "data"
+	}
+	nonSettlements, nsErr := execution.OpenNonSettlementQueue(filepath.Join(nsDataDir, "non_settlement_queue.json"))
+	if nsErr != nil {
+		return nil, nil, fmt.Errorf("proof cycle: non-settlement queue: %w", nsErr)
+	}
+
 	unifiedConfig := &execution.UnifiedOrchestratorConfig{
 		ValidatorID:              cfg.ValidatorID,
 		ValidatorIndex:           0,
@@ -1865,6 +1875,9 @@ func startValidator(
 		ProofGenerator:           proofGenAdapter,
 		AccumulateQueryClient:    liteClientAdapter, // For querying tx governance data (M-of-N threshold)
 		ResultQuorumRegistry:     execution.ResultQuorumRegistryFromChains(resolver),
+		MemberLookup:             stack.Mempool.FindMember,
+		NonSettlementChain:       execution.NonSettlementChainFromResolver(resolver),
+		NonSettlements:           nonSettlements,
 	}
 
 	unifiedOrchestrator, unifiedErr := execution.NewUnifiedOrchestrator(unifiedConfig)
@@ -1877,6 +1890,8 @@ func startValidator(
 	// Phase 8 quorum: publish the orchestrator so main()'s HTTP mux can route peer attestation
 	// requests to it (UnifiedOrchestrator.HandlePeerAttestationRequest).
 	unifiedOrchestratorForAttestation.Store(unifiedOrchestrator)
+	go unifiedOrchestrator.RunNonSettlements(context.Background(), time.Minute)
+	log.Printf("✅ [Unified] Non-settlement attestation running (%d queued)", len(nonSettlements.All()))
 	log.Printf("✅ [Unified] Phase 8 peer attestation handler published for HTTP routing")
 	log.Printf("   - Strategy Registry: %d attestation schemes, %d chains",
 		len(strategyRegistry.ListAttestationSchemes()),
@@ -2013,43 +2028,11 @@ func startValidator(
 		intentDiscovery.SetRepositories(batchComponents.Repos)
 		log.Printf("✅ Intent lifecycle tracking wired to intent discovery")
 
-		// Multi-leg coordination.
-		//
-		// SetLegCompletionHandler had NO caller, so multiLegEnabled was permanently false and
-		// every multi-leg intent fell through to the single-leg path. Two consequences: legs
-		// were never tracked as a set, and UpdateLegProgress — which is the only writer of
-		// legs_completed / legs_failed — could never run. All 542 lifecycle rows sat at 0
-		// completed legs, including 238 marked 'complete'.
-		//
-		// OnProgress persists after every transition rather than only at the end, so a crash
-		// mid-intent cannot leave the durable record claiming no legs were done.
-		lifecycleRepo := batchComponents.Repos.IntentLifecycle
-		legHandler := intent.NewLegCompletionHandler(&intent.LegCompletionHandlerConfig{
-			OnProgress: func(ctx context.Context, intentID string, completed, failed int) {
-				if lifecycleRepo == nil {
-					return
-				}
-				if err := lifecycleRepo.UpdateLegProgress(ctx, intentID, completed, failed); err != nil {
-					// Never fatal: leg progress is a record of work already done, so failing to
-					// write it must not affect whether the remaining legs execute.
-					log.Printf("⚠️ [LIFECYCLE] leg progress not persisted for %s (%d done, %d failed): %v",
-						intentID, completed, failed, err)
-				}
-			},
-		})
-		intentDiscovery.SetLegCompletionHandler(legHandler)
-		log.Printf("✅ [Phase 5] Multi-leg coordination enabled; leg progress persisted to intent_lifecycle")
+		// Leg counts (legs_completed / legs_failed) and the intent's status are derived from each
+		// chain member's recorded outcome (IntentLifecycleRepository.RecordMemberOutcome, RB3-F50).
+		// The additive per-report counters that used to write them are gone: two writers of one
+		// column disagreed, and a member reported twice was counted twice.
 
-		// Leg progress from the SETTLE path.
-		//
-		// The handler above only learns of a leg through OnLegCompleted/OnLegFailed, and nothing
-		// in any execution path calls them — so wiring the handler alone left legs_completed at
-		// 0 even on intents that settled. Observed live on 2026-08-07: two calibration intents
-		// reached status 'complete' with leg_count 2 and 5 and legs_completed 0.
-		//
-		// Settlement is where the outcome is actually known: one transaction per chain settles
-		// every leg the member carries there — the 5-leg intent produced exactly one transaction
-		// of 281,407 gas. So the settle path reports len(Legs), not 1.
 		// Anchor quorum evidence. The quorum proven over each anchor — aggregate signature, signer set and
 		// voting power — used to be computed and dropped, leaving anchor_batches' Phase 5 columns empty on
 		// all 70,236 rows and proofs_service reporting batch_quorum_met=false for every intent. The writer
@@ -2104,24 +2087,6 @@ func startValidator(
 				"contradicted layer 5, schema-behind-binary)")
 		}
 
-		if stack := batchStackForAttestation.Load(); stack != nil {
-			legProgress := func(ctx context.Context, intentID string, completed, failed int) {
-				if lifecycleRepo == nil {
-					return
-				}
-				if err := lifecycleRepo.UpdateLegProgress(ctx, intentID, completed, failed); err != nil {
-					log.Printf("⚠️ [LIFECYCLE] settle-path leg progress not persisted for %s "+
-						"(%d done, %d failed): %v", intentID, completed, failed, err)
-				}
-			}
-			for chainID, orch := range stack.Orchestrators {
-				orch.SetLegProgressHook(legProgress)
-				log.Printf("✅ [Phase 5] Leg progress hook wired for chain %d", chainID)
-			}
-		} else {
-			log.Printf("⚠️ [Phase 5] Batch stack unavailable; settled legs will not update " +
-				"intent_lifecycle.legs_completed")
-		}
 	} else {
 		log.Printf("⚠️ [Phase 5] Batch system not available - intents will bypass PostgreSQL")
 	}

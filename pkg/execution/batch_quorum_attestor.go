@@ -391,7 +391,7 @@ func (a *BatchQuorumAttestor) ProveBatchRootOnDemand(
 	// of waiting fixes that — it must surface, not spin.
 	if last.Mismatch == 0 && last.CouldStillConverge() {
 		return &QuorumNotReadyError{
-			NotHeld:     last.NotHeld,
+			NotHeld:     last.NotHeld + last.PredecessorPending,
 			Unreachable: last.Unreachable,
 			Agreed:      last.Agreed(),
 			Err:         err,

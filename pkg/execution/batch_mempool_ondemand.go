@@ -260,6 +260,12 @@ func (m *BatchMempool) pruneOnDemandOlderThan(ttl time.Duration, now time.Time) 
 				}
 				continue
 			}
+			// Held until its non-settlement can no longer be attested: a peer verifies a member's
+			// failure from its own copy of the member (RB3-F49), and a successor's deadline may lie
+			// well past the TTL (batch_sequence.go).
+			if d, ok := p.Deadline(); ok && now.Before(d.Add(nonSettlementFinality+nonSettlementGiveUp)) {
+				continue
+			}
 			if now.Sub(p.EnqueuedAt) >= ttl {
 				delete(byOp, opID)
 				pruned++

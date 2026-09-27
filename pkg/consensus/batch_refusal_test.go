@@ -27,6 +27,8 @@ type fakeEnqueuer struct {
 	queued   map[string]bool
 	removed  []string
 	adds     int
+	after    map[int64]SequencePredecessor // EnqueueAfter's predecessor per chain
+	order    []int64                       // chains in the order they were queued
 }
 
 func newFakeEnqueuer() *fakeEnqueuer {
@@ -43,6 +45,7 @@ func (f *fakeEnqueuer) add(intentID string, chainID int64) error {
 		return fmt.Errorf("%w: %s", ErrMemberAlreadyQueued, key)
 	}
 	f.queued[key] = true
+	f.order = append(f.order, chainID)
 	return nil
 }
 
@@ -54,6 +57,18 @@ func (f *fakeEnqueuer) EnqueueForBatch(intentID, _ string, chainID int64, _ [20]
 func (f *fakeEnqueuer) EnqueueOnDemand(intentID, _ string, chainID int64, _ [20]byte, _ [32]byte, _, _ interface{},
 	_ uint64, _ string, _ time.Time, _ string) error {
 	return f.add(intentID, chainID)
+}
+
+func (f *fakeEnqueuer) EnqueueAfter(intentID, _ string, chainID int64, _ [20]byte, _ [32]byte, _, _ interface{},
+	_ uint64, _ string, _ time.Time, _ string, after SequencePredecessor) error {
+	if f.after == nil {
+		f.after = map[int64]SequencePredecessor{}
+	}
+	if err := f.add(intentID, chainID); err != nil {
+		return err
+	}
+	f.after[chainID] = after
+	return nil
 }
 
 func (f *fakeEnqueuer) CheckMember(_ bool, _ string, _ string, chainID int64, _ [20]byte, _ [32]byte, _ interface{}, _ uint64) error {
@@ -97,6 +112,8 @@ func batchableIntent(t *testing.T, id string, chains ...int64) *CertenIntent {
 		CrossChainData: must(map[string]interface{}{"protocol": "CERTEN", "version": "2.0", "legs": legs, "execution_mode": "parallel"}),
 		GovernanceData: must(map[string]interface{}{"organizationAdi": "acc://org.acme"}),
 		ReplayData:     must(map[string]interface{}{"nonce": id}),
+		// The consensus block time every admitted intent has (RB3-F49).
+		BlockTime: time.Unix(1_800_000_000, 0).UTC(),
 	}
 }
 

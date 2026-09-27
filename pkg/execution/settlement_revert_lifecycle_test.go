@@ -8,6 +8,9 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	chain "github.com/certen/independant-validator/pkg/chain/strategy"
+	"github.com/certen/independant-validator/pkg/database"
 )
 
 // A cycle that proved and wrote back a reverted settlement ends the intent FAILED, carrying the
@@ -19,8 +22,12 @@ func TestS1_FailedRevertedSettlementIsNotComplete(t *testing.T) {
 	const intentID = "s1-reverted"
 	s1Seed(ctx, t, db, intentID)
 
-	o.updateLifecycleReverted(ctx, intentID, "cycle-1",
-		"0x54562d54d6c38a858fda1bdd9cffb95cffb688b2f2f685468ba4752ddd3c8b0b", "writeback-tx")
+	cycle := memberCycle(intentID, "84532", []int64{84532}, 1, &chain.ObservationResult{
+		TxHash: "0x54562d54d6c38a858fda1bdd9cffb95cffb688b2f2f685468ba4752ddd3c8b0b", IsFinalized: true, Status: 0,
+	})
+	cycle.Result.WriteBackTxHash, cycle.Result.WriteBackState = "writeback-tx", WriteBackWritten
+	o.recordMemberOutcome(ctx, cycle, observedSettlement(cycle.Result.ObservationResults), database.MemberProofCycleWritten,
+		"settlement transaction 0x54562d54d6c38a858fda1bdd9cffb95cffb688b2f2f685468ba4752ddd3c8b0b reverted on the target chain")
 	status, _, _, completed, failed := s1Status(t, db, intentID)
 	if status != "failed" || failed == nil || completed != nil {
 		t.Fatalf("status %q completed %v failed %v; want failed, never completed", status, completed, failed)

@@ -141,6 +141,10 @@ func NewOnDemandSubmitter(cfg OnDemandSubmitterConfig) (*OnDemandSubmitter, erro
 	if cfg.Prover == nil {
 		return nil, fmt.Errorf("on-demand submitter requires a quorum prover")
 	}
+	if cfg.Stack.SequenceChain == nil {
+		return nil, fmt.Errorf("on-demand submitter requires the stack's sequence chain reader - " +
+			"without it a sequential intent's later members could never be settled in order")
+	}
 	cfg.withDefaults()
 	return &OnDemandSubmitter{
 		cfg:    cfg,
@@ -247,6 +251,26 @@ func (s *OnDemandSubmitter) consider(ctx context.Context, member *PendingBatchIn
 	if err != nil {
 		logf("[OD] chain %d has no orchestrator: %v", member.ChainID, err)
 		return
+	}
+
+	// A successor in a sequential intent is settled only once its predecessor has an outcome on its
+	// chain (batch_sequence.go). A member already acted on is past that point.
+	if member.After != nil && !member.AnchorProved && !member.AttestedSeen {
+		state, cause, serr := sequenceReadiness(ctx, s.cfg.Stack.SequenceChain, member)
+		switch {
+		case serr != nil:
+			logf("[OD] intent=%s on chain %d: its predecessor on chain %d could not be read (%v); it waits",
+				member.IntentID, member.ChainID, member.After.ChainID, serr)
+			return false
+		case state == sequenceWaiting:
+			return false
+		case state == sequenceStopped:
+			logf("[OD] intent=%s on chain %d is not executed: %s", member.IntentID, member.ChainID, cause)
+			s.dispose(ctx, member, nil, false, errors.New(cause))
+			return false
+		}
+		logf("[OD] intent=%s on chain %d: its predecessor on chain %d has its outcome; settling",
+			member.IntentID, member.ChainID, member.After.ChainID)
 	}
 
 	outcome, err := s.settleWithReadinessRetry(ctx, orch, member)
@@ -363,10 +387,18 @@ func (s *OnDemandSubmitter) dispose(
 	s.cfg.Logf("[OD] ❌ intent=%s attested as FAILED (tx=%q): %v — it is not re-executed; there is "+
 		"no other path to settle it. The ADI resubmits it deliberately.",
 		member.IntentID, txHash, cause)
-	if s.cfg.Attest != nil {
+	// With a transaction, the failure is proved from it (Attest). Without one there is nothing on chain
+	// to prove, and the cause is the record: it goes to the drop handler, which records the member
+	// failed WITH that cause - Attest would record only "no settlement transaction reached the chain".
+	switch {
+	case txHash != "" && s.cfg.Attest != nil:
 		s.cfg.Attest(ctx, member.Attestation, txHash, member.ChainID, false)
-	} else if s.cfg.OnDropped != nil {
+	case s.cfg.OnDropped != nil:
 		s.cfg.OnDropped(ctx, member, fmt.Sprintf("%v", cause))
+	case s.cfg.Attest != nil:
+		s.cfg.Attest(ctx, member.Attestation, txHash, member.ChainID, false)
+	default:
+		s.cfg.Logf("[OD] ⚠️ intent=%s failed with no attest or drop handler wired; it is recorded nowhere", member.IntentID)
 	}
 	s.cfg.Stack.Mempool.RemoveOnDemand(member.ChainID, member.OperationID)
 }

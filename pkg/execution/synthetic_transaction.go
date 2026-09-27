@@ -249,6 +249,10 @@ type CertenDataEntry struct {
 	LegCount           int             `json:"leg_count"`
 	MultiLegResultHash string          `json:"multi_leg_result_hash,omitempty"`
 	LegProofs          []LegProofEntry `json:"leg_proofs,omitempty"`
+
+	// OUTCOME (appended last, only when set): a result that is not a transaction's.
+	Outcome       string `json:"outcome,omitempty"`
+	OutcomeReason string `json:"outcome_reason,omitempty"`
 }
 
 // LegProofEntry contains per-leg proof summary for multi-leg intents
@@ -502,6 +506,13 @@ func (b *SyntheticTxBuilder) BuildFromBundleWithContext(bundle *AttestationBundl
 	}
 	if result.NativeTxFrom != "" {
 		dataEntry.TxFrom = result.NativeTxFrom
+	}
+	// A member that never settled has no transaction: none is written, and the outcome says why.
+	if result.Outcome != "" {
+		dataEntry.Outcome, dataEntry.OutcomeReason = result.Outcome, result.OutcomeReason
+		if result.Outcome == ResultOutcomeNotSettled {
+			dataEntry.TxHash = ""
+		}
 	}
 
 	// Populate signed power

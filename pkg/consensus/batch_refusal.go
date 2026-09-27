@@ -64,6 +64,10 @@ type batchMember struct {
 	chainID int64
 	account [20]byte
 	opID    [32]byte
+	// after is set for a later member of a sequential intent: it waits on the member before it, and
+	// is queued in the intent-keyed lane (onDemand) whatever the intent's lane.
+	after    *SequencePredecessor
+	onDemand bool
 }
 
 // batchPlan is how an intent will be queued: its members, the ADI their leaves bind, and the lane.
@@ -115,15 +119,43 @@ func (bv *BFTValidator) planBatch(ci *CertenIntent, commitHeight uint64) (*batch
 	}
 	plan := &batchPlan{adiURL: adiURL, onDemand: proofClass == "on_demand" && onDemandLaneEnabled()}
 
-	for _, ch := range chains {
+	// A sequential cross-chain intent's members are queued in its declared order, each after the one
+	// before it (declared_semantics.go; pkg/execution batch_sequence.go).
+	order, err := DeclaredCrossChainOrder(ci)
+	if err != nil {
+		return nil, refuse(fmt.Errorf("intent %s: %w", ci.IntentID, err))
+	}
+	if order != nil {
+		if len(order.Chains) != len(chains) {
+			return nil, refuse(fmt.Errorf("intent %s: its declared order names %d chains, its members %d", ci.IntentID, len(order.Chains), len(chains)))
+		}
+		chains = append([]int64(nil), order.Chains...)
+	}
+
+	for i, ch := range chains {
 		legs, chainID, account, opID, err := bv.batchInputsFromIntentForChain(ci, ch)
 		if err != nil {
 			return nil, refuse(fmt.Errorf("intent %s cannot be represented on chain %d: %w", ci.IntentID, ch, err))
 		}
-		if err := bv.batchEnqueuer.CheckMember(plan.onDemand, ci.IntentID, adiURL, chainID, account, opID, legs, commitHeight); err != nil {
+		m := batchMember{legs: legs, chainID: chainID, account: account, opID: opID, onDemand: plan.onDemand}
+		if order != nil && i > 0 {
+			prev := plan.members[i-1]
+			m.after = &SequencePredecessor{ChainID: prev.chainID, OperationID: prev.opID, Position: i,
+				ContinueOnFailure: order.ContinueOnFailure}
+			m.onDemand = true
+		}
+		if err := bv.batchEnqueuer.CheckMember(m.onDemand, ci.IntentID, adiURL, chainID, account, opID, legs, commitHeight); err != nil {
 			return nil, refuse(fmt.Errorf("intent %s on chain %d: %w", ci.IntentID, chainID, err))
 		}
-		plan.members = append(plan.members, batchMember{legs: legs, chainID: chainID, account: account, opID: opID})
+		plan.members = append(plan.members, m)
+	}
+
+	// Every member needs a deadline its failure can be final against (RB3-F49), and its commit time -
+	// the intent's consensus block time - is what bounds it. Checked after every defect of the intent's
+	// own, which is refused for good whatever its time; a time not yet read is CERTEN's condition, and
+	// the intent is retried.
+	if ci.BlockTime.IsZero() {
+		return nil, refuse(fmt.Errorf("%w: intent %s's consensus block time is not known yet", ErrBatchUnavailable, ci.IntentID))
 	}
 	return plan, nil
 }

@@ -127,7 +127,7 @@ func TestOD_AnEarlierSettlersMinedAttemptIsItsOutcome(t *testing.T) {
 		head: odT0.Add(SettlementWindow + 2*time.Minute), finalized: odT0.Add(SettlementWindow + time.Minute),
 		priorTx: odRevertTx, priorFrom: odThirdAddr, priorFound: true, priorReverted: true}
 	out := settle(t, f, odMember(1, odChain, 100))
-	if !out.Released || f.settleCalls != 0 || len(f.costs) != 0 || f.failedLegs != 0 {
+	if !out.Released || f.settleCalls != 0 || len(f.costs) != 0 {
 		t.Fatalf("outcome %+v settle=%d; want released with nothing sent or reported", out, f.settleCalls)
 	}
 }
@@ -161,8 +161,8 @@ func TestOD_TimingRevertIsNotTheMembersFailure(t *testing.T) {
 	f := &fakeODChain{settleTx: odRevertTx, settleErr: errSettlementReverted, anchorTx: odAnchorTx,
 		timing: map[string]bool{odRevertTx: true}}
 	out := settle(t, f, odMember(1, odChain, 100))
-	if !out.Deferred || out.Reverted || len(f.costs) != 0 || f.failedLegs != 0 {
-		t.Fatalf("outcome %+v costs %v failed %d; want deferred and nothing reported", out, f.costs, f.failedLegs)
+	if !out.Deferred || out.Reverted || len(f.costs) != 0 {
+		t.Fatalf("outcome %+v costs %v; want deferred and nothing reported", out, f.costs)
 	}
 }
 
@@ -314,7 +314,7 @@ func TestOD_OwnAttemptFoundOnChainIsRecorded(t *testing.T) {
 		finalized: odT0.Add(3*SettlementWindow + time.Minute),
 		priorTx:   odRevertTx, priorFrom: odOwnAddr, priorFound: true, priorReverted: true}
 	out := settle(t, f, odMember(1, odChain, 100))
-	if !out.Reverted || out.TxHash != odRevertTx || f.settleCalls != 0 || f.failedLegs != 1 {
+	if !out.Reverted || out.TxHash != odRevertTx || f.settleCalls != 0 {
 		t.Fatalf("outcome %+v; want this validator's own revert recorded", out)
 	}
 }

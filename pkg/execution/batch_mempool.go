@@ -122,7 +122,62 @@ type PendingBatchIntent struct {
 	SettlementTxs      []string
 	SettlementNonce    uint64
 	SettlementNonceSet bool
+
+	// Outcome is the member's terminal outcome as THIS validator knows it, once it has one. A member
+	// with an outcome stays in its period until the retention horizon: a period's member set is
+	// fixed, and every validator must keep deriving the same trees over it - removing members as
+	// they settle made the leader's view of a period drift from its peers' (RB3-F54). Settlement
+	// acts only on members without an outcome.
+	Outcome MemberOutcome
+
+	// After is the member the intent's declared order places immediately before this one on another
+	// chain; nil for a member that waits on none. SequencePosition is this member's place in that
+	// order (0 for the first, or for an intent that declares none). See batch_sequence.go.
+	After            *MemberPredecessor
+	SequencePosition int
 }
+
+// MemberOutcome is a batch member's terminal outcome on this validator.
+type MemberOutcome string
+
+const (
+	// MemberSettled: this validator's settlement executed the member.
+	MemberSettled MemberOutcome = "settled"
+	// MemberSettledElsewhere: the member's leaf was consumed by a transaction this validator did not send.
+	MemberSettledElsewhere MemberOutcome = "settled_elsewhere"
+	// MemberFailed: this validator's settlement was mined and reverted, or could not be formed.
+	MemberFailed MemberOutcome = "failed"
+	// MemberDropped: the member cannot settle through the batch path, with a recorded cause.
+	MemberDropped MemberOutcome = "dropped"
+	// MemberReleased: past its deadline and unsettled under another validator's attested anchor - that
+	// validator's outcome to record.
+	MemberReleased MemberOutcome = "released"
+)
+
+// Deadline is the latest time the member may execute, and whether it has one: the earliest of its
+// legs' signed deadlines and CERTEN's own settlement horizon (its commit time + settlementHorizon).
+// Both parts are the same on every validator - signed data and Accumulate consensus time - so
+// validators agree on it. A member with neither has no deadline.
+func (p *PendingBatchIntent) Deadline() (time.Time, bool) {
+	var d time.Time
+	for _, l := range p.Legs {
+		if l.Deadline <= 0 {
+			continue
+		}
+		if t := time.Unix(l.Deadline, 0).UTC(); d.IsZero() || t.Before(d) {
+			d = t
+		}
+	}
+	if !p.CommitTime.IsZero() {
+		if h := p.CommitTime.Add(p.settlementHorizon()).UTC(); d.IsZero() || h.Before(d) {
+			d = h
+		}
+	}
+	return d, !d.IsZero()
+}
+
+// pending reports whether the member still has no terminal outcome here.
+func (p *PendingBatchIntent) pending() bool { return p != nil && p.Outcome == "" }
 
 // settlementHashes is every hash this validator's settlement for p was broadcast under.
 func (p *PendingBatchIntent) settlementHashes() []string {
@@ -216,26 +271,24 @@ func (p *PendingBatchIntent) provenance() MemberProvenance {
 	return prov
 }
 
-// BatchMempoolConfig tunes when a tree is formed.
+// BatchMempoolConfig tunes tree formation.
+//
+// There is no early-flush trigger: a tree is formed when its period closes (consensus height), so
+// every validator forms it over the same members. Count- and age-based triggers belonged to the
+// removed EnqueuedAt path.
 type BatchMempoolConfig struct {
-	// FlushInterval is the cadence at which a non-empty pool is drained.
+	// FlushInterval is the cadence at which closed periods are flushed.
 	FlushInterval time.Duration
-	// MaxBatchSize caps members per tree. Bounds worst-case anchor calldata and keeps the
-	// Merkle branches short (depth = ceil(log2 N)).
+	// MaxBatchSize caps members per tree; a period with more is cut into several trees
+	// (chunkMembers). Bounds worst-case anchor calldata and keeps the Merkle branches short
+	// (depth = ceil(log2 N)).
 	MaxBatchSize int
-	// MinBatchSize is the count that triggers an EARLY flush, before the interval elapses.
-	MinBatchSize int
-	// MaxAge force-flushes a pool whose oldest member exceeds this, so a quiet chain does
-	// not strand an intent behind a long interval.
-	MaxAge time.Duration
 }
 
 func DefaultBatchMempoolConfig() BatchMempoolConfig {
 	return BatchMempoolConfig{
 		FlushInterval: 60 * time.Second,
 		MaxBatchSize:  64,
-		MinBatchSize:  16,
-		MaxAge:        5 * time.Minute,
 	}
 }
 
@@ -246,15 +299,6 @@ func (c BatchMempoolConfig) withDefaults() BatchMempoolConfig {
 	}
 	if c.MaxBatchSize <= 0 {
 		c.MaxBatchSize = d.MaxBatchSize
-	}
-	if c.MinBatchSize <= 0 {
-		c.MinBatchSize = d.MinBatchSize
-	}
-	if c.MaxAge <= 0 {
-		c.MaxAge = d.MaxAge
-	}
-	if c.MinBatchSize > c.MaxBatchSize {
-		c.MinBatchSize = c.MaxBatchSize
 	}
 	return c
 }
@@ -467,98 +511,32 @@ func (m *BatchMempool) add(p *PendingBatchIntent) error {
 	return nil
 }
 
-// DueChains lists chains whose pool should be drained now.
-func (m *BatchMempool) DueChains(now time.Time, force bool) []int64 {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	var due []int64
-	for chainID, members := range m.pool {
-		if len(members) == 0 {
-			continue
-		}
-		if force || len(members) >= m.cfg.MinBatchSize {
-			due = append(due, chainID)
-			continue
-		}
-		oldest := members[0].EnqueuedAt
-		for _, p := range members {
-			if p.EnqueuedAt.Before(oldest) {
-				oldest = p.EnqueuedAt
-			}
-		}
-		if now.Sub(oldest) >= m.cfg.MaxAge {
-			due = append(due, chainID)
-		}
-	}
-	sort.Slice(due, func(i, j int) bool { return due[i] < due[j] })
-	return due
-}
-
-// Take removes up to MaxBatchSize members from a chain's pool, oldest first.
-//
-// Oldest-first matters: without it a busy chain could starve an early intent indefinitely
-// while newer ones keep filling each tree.
-func (m *BatchMempool) Take(chainID int64) []*PendingBatchIntent {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	members := m.pool[chainID]
-	if len(members) == 0 {
-		return nil
-	}
-	sort.SliceStable(members, func(i, j int) bool {
-		return members[i].EnqueuedAt.Before(members[j].EnqueuedAt)
-	})
-
-	n := len(members)
-	if n > m.cfg.MaxBatchSize {
-		n = m.cfg.MaxBatchSize
-	}
-	taken := members[:n]
-	rest := members[n:]
-
-	if len(rest) == 0 {
-		delete(m.pool, chainID)
-	} else {
-		m.pool[chainID] = append([]*PendingBatchIntent(nil), rest...)
-	}
-	for _, p := range taken {
-		delete(m.seen, memberKey(p.IntentID, p.ChainID))
-	}
-	return taken
-}
-
-// Requeue puts members back after a failed flush, preserving their original enqueue times so
-// they keep their place in the oldest-first ordering.
-func (m *BatchMempool) Requeue(members []*PendingBatchIntent) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, p := range members {
-		if p == nil || m.seen[memberKey(p.IntentID, p.ChainID)] {
-			continue
-		}
-		m.seen[memberKey(p.IntentID, p.ChainID)] = true
-		m.pool[p.ChainID] = append(m.pool[p.ChainID], p)
-	}
-}
-
-// PendingCount returns queued members across all chains.
+// PendingCount returns queued members without a terminal outcome, across all chains.
 func (m *BatchMempool) PendingCount() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	n := 0
 	for _, v := range m.pool {
-		n += len(v)
+		for _, p := range v {
+			if p.pending() {
+				n++
+			}
+		}
 	}
 	return n
 }
 
-// PendingCountForChain returns queued members on one chain.
+// PendingCountForChain returns queued members without a terminal outcome on one chain.
 func (m *BatchMempool) PendingCountForChain(chainID int64) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return len(m.pool[chainID])
+	n := 0
+	for _, p := range m.pool[chainID] {
+		if p.pending() {
+			n++
+		}
+	}
+	return n
 }
 
 // =============================================================================
@@ -583,52 +561,47 @@ func BatchPeriodCutoff(consensusHeight uint64, periodBlocks uint64) uint64 {
 	return (consensusHeight / periodBlocks) * periodBlocks
 }
 
-// PeekForPeriod returns the members a batch for periodStart WOULD contain, without removing
-// them. Attesters use this: they must be able to recompute a proposer's batch and compare
-// bundleIds before signing, but must not lose their copy if the proposer never lands it.
+// PeriodMembers returns every member of the period - with or without an outcome - in the
+// deterministic order (CommitHeight, IntentID). It removes nothing.
 //
-// Ordering is by (CommitHeight, IntentID) ascending — deterministic and independent of arrival
+// The whole period, not a capped prefix and not only the members still pending: a period's trees are
+// cut from this list (periodChunks), and every validator must cut the same trees from it long after
+// some of its members settled. A leader that removed members as it went derived trees over a
+// subset its peers did not hold (RB3-F54).
+//
+// Ordering is by (CommitHeight, IntentID) ascending - deterministic and independent of arrival
 // order. Do NOT change this to EnqueuedAt; that is local wall-clock and reintroduces divergence.
-func (m *BatchMempool) PeekForPeriod(chainID int64, periodStart, periodBlocks uint64) []*PendingBatchIntent {
+func (m *BatchMempool) PeriodMembers(chainID int64, periodStart, periodBlocks uint64) []*PendingBatchIntent {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.selectForPeriodLocked(chainID, periodStart, periodBlocks)
 }
 
-// TakeForPeriod is PeekForPeriod plus removal. Only the validator that actually submits the
-// batch calls this.
-func (m *BatchMempool) TakeForPeriod(chainID int64, periodStart, periodBlocks uint64) []*PendingBatchIntent {
-	taken := m.takeForPeriod(chainID, periodStart, periodBlocks)
-	// Snapshot after the lock is released — persist() re-acquires m.mu.
-	m.persist()
-	return taken
-}
+// MaxBatchSize is the member cap per tree; a period with more members is cut into several trees.
+func (m *BatchMempool) MaxBatchSize() int { return m.cfg.MaxBatchSize }
 
-func (m *BatchMempool) takeForPeriod(chainID int64, periodStart, periodBlocks uint64) []*PendingBatchIntent {
+// MarkOutcome records a terminal outcome on the pooled copies of members, and persists it.
+func (m *BatchMempool) MarkOutcome(members []*PendingBatchIntent, outcome MemberOutcome) {
+	if len(members) == 0 {
+		return
+	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	taken := m.selectForPeriodLocked(chainID, periodStart, periodBlocks)
-	if len(taken) == 0 {
-		return nil
-	}
-	remove := make(map[string]bool, len(taken))
-	for _, p := range taken {
-		remove[p.IntentID] = true
-		delete(m.seen, memberKey(p.IntentID, p.ChainID))
-	}
-	var rest []*PendingBatchIntent
-	for _, p := range m.pool[chainID] {
-		if !remove[p.IntentID] {
-			rest = append(rest, p)
+	byKey := make(map[string]bool, len(members))
+	for _, p := range members {
+		if p != nil {
+			byKey[memberKey(p.IntentID, p.ChainID)] = true
+			p.Outcome = outcome
 		}
 	}
-	if len(rest) == 0 {
-		delete(m.pool, chainID)
-	} else {
-		m.pool[chainID] = rest
+	for _, pool := range m.pool {
+		for _, p := range pool {
+			if p != nil && byKey[memberKey(p.IntentID, p.ChainID)] {
+				p.Outcome = outcome
+			}
+		}
 	}
-	return taken
+	m.mu.Unlock()
+	m.persist()
 }
 
 // selectForPeriodLocked is the shared, deterministic selection. Caller holds m.mu.
@@ -686,13 +659,35 @@ func (m *BatchMempool) selectForPeriodLocked(
 		}
 		return eligible[i].IntentID < eligible[j].IntentID
 	})
-
-	// The cap must be applied identically everywhere, and after sorting, or two validators
-	// holding the same members could truncate to different subsets.
-	if len(eligible) > m.cfg.MaxBatchSize {
-		eligible = eligible[:m.cfg.MaxBatchSize]
-	}
 	return eligible
+}
+
+// chunkMembers cuts an ordered member list into trees of at most max members. Applied to the same
+// ordered list, it cuts the same trees on every validator.
+func chunkMembers(members []*PendingBatchIntent, max int) [][]*PendingBatchIntent {
+	if max <= 0 {
+		max = len(members)
+	}
+	var chunks [][]*PendingBatchIntent
+	for len(members) > 0 {
+		n := max
+		if n > len(members) {
+			n = len(members)
+		}
+		chunks = append(chunks, members[:n:n])
+		members = members[n:]
+	}
+	return chunks
+}
+
+// anyPending reports whether any member still lacks a terminal outcome.
+func anyPending(members []*PendingBatchIntent) bool {
+	for _, p := range members {
+		if p.pending() {
+			return true
+		}
+	}
+	return false
 }
 
 // PendingPeriods returns the period starts, ascending, that hold members for this chain and are
@@ -711,7 +706,9 @@ func (m *BatchMempool) PendingPeriods(chainID int64, periodBlocks, beforeStart u
 
 	seen := map[uint64]bool{}
 	for _, p := range m.pool[chainID] {
-		if p == nil || p.CommitHeight == 0 {
+		// A period whose members all have outcomes has nothing left to do; it stays in the pool,
+		// fixed, until the retention horizon.
+		if p == nil || p.CommitHeight == 0 || !p.pending() {
 			continue
 		}
 		start := (p.CommitHeight / periodBlocks) * periodBlocks
@@ -764,9 +761,10 @@ func (m *BatchMempool) PruneOlderThan(horizonStart uint64) int {
 	return pruned
 }
 
-// DropMembers removes specific members, used when a batch settled elsewhere (the leader landed
-// it) or when members leave the batch path for good and are recorded as FAILED with their cause
-// (quorum never reached after the bounded retries, or an anchor that rejects their leaves).
+// DropMembers removes specific members outright. Used only to take back a member this validator
+// queued moments ago for an intent whose other members could not be queued (the all-or-nothing
+// enqueue): it never reached a period. A member that leaves the batch path after it was queued is
+// marked (MarkOutcome), not removed, so its period's trees stay what every validator derives.
 func (m *BatchMempool) DropMembers(members []*PendingBatchIntent) {
 	if len(members) == 0 {
 		return
@@ -808,6 +806,24 @@ func (m *BatchMempool) dropMembers(members []*PendingBatchIntent) {
 // memberKey identifies a batch member: one intent may have a member on each chain it touches.
 func memberKey(intentID string, chainID int64) string {
 	return intentID + "|" + strconv.FormatInt(chainID, 10)
+}
+
+// FindMember returns this validator's own copy of the member holding operationID on chainID, in
+// either lane - whatever its outcome - and whether it is held.
+func (m *BatchMempool) FindMember(chainID int64, operationID [32]byte) (*PendingBatchIntent, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if p := m.onDemand[chainID][operationID]; p != nil {
+		c := *p
+		return &c, true
+	}
+	for _, p := range m.pool[chainID] {
+		if p != nil && p.OperationID == operationID {
+			c := *p
+			return &c, true
+		}
+	}
+	return nil, false
 }
 
 // OperationHolder reports which OTHER intent already has the operation queued on the chain, in

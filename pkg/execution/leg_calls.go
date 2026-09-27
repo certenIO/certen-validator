@@ -24,6 +24,9 @@ type LegExecution struct {
 	Chain         string         // Chain name (e.g., "ethereum sepolia", "arbitrum sepolia")
 	SourceAddress common.Address // User's Abstract Account address (from leg.From)
 	AccountOwner  common.Address // Owner wallet address for account factory deployment
+	// Deadline is the leg's signed deadline_timestamp (unix seconds); 0 when it declares none. The leg
+	// must not execute after it (PendingBatchIntent.Deadline).
+	Deadline int64
 	// RB-4: events the user signed as required proof of a contract call's success.
 	// Present only for contract-call legs (Data non-empty). The validator refuses to
 	// attest success unless every one appears in the inclusion-proven receipt logs.

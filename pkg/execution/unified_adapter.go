@@ -56,6 +56,20 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 		intentID, accumulateAccountURL, accumulateTxHash, bvn)
 
 	if a.unified != nil {
+		// A member that never settled has no transaction to observe: its failure is queued for a
+		// quorum-attested non-settlement (RB3-F49) instead of being refused for having none.
+		if commitMap, _ := commitment.(map[string]interface{}); commitMap[commitmentNonSettlementOperationID] != nil {
+			targetChain, _ := commitMap["targetChain"].(string)
+			var userIDPtr *string
+			if userID != "" {
+				userIDPtr = &userID
+			}
+			return a.unified.QueueNonSettlement(&UnifiedProofCycleRequest{
+				IntentID: intentID, BundleID: bundleID, TargetChain: targetChain, UserID: userIDPtr,
+				AccumulateAccountURL: accumulateAccountURL, AccumulateTxHash: accumulateTxHash, AccumulateBVN: bvn,
+				CommitmentData: commitMap,
+			})
+		}
 		// Extract tx hashes from the interface
 		var txHashStrs []string
 		switch hashes := txHashes.(type) {

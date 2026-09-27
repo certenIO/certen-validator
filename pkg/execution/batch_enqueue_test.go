@@ -31,14 +31,18 @@ func stackForChain(t *testing.T, chainID int64) *BatchStack {
 		t.Fatal(err)
 	}
 	// Assemble by hand: NewBatchStack would dial RPC, which these tests do not need. The
-	// orchestrator is left as a zero value on purpose — FlushChain must ERROR on it, not
-	// panic, which TestFlushDueChains_NoAttestFnDoesNotPanic asserts.
+	// orchestrator has no chain client on purpose — FlushChain must ERROR on it, not panic, which
+	// TestFlushChainPeriods_NoAttestFnDoesNotPanic asserts. Its account screen accepts every
+	// account, standing in for the chain reads a peer makes before it co-signs.
 	return &BatchStack{
 		Resolver:      r,
-		Mempool:       NewBatchMempool(BatchMempoolConfig{MinBatchSize: 1, MaxBatchSize: 64}),
-		Orchestrators: map[int64]*BatchOrchestrator{chainID: {}},
+		Mempool:       NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64}),
+		Orchestrators: map[int64]*BatchOrchestrator{chainID: {screen: acceptEveryAccount}},
 	}
 }
+
+// acceptEveryAccount is an account screen that finds every account usable.
+func acceptEveryAccount(context.Context, *PendingBatchIntent) error { return nil }
 
 func tgt(b byte) [20]byte {
 	var a [20]byte
@@ -75,7 +79,7 @@ func TestEnqueueForBatch_QueuesAMember(t *testing.T) {
 		t.Fatalf("pending=%d want 1", s.Mempool.PendingCount())
 	}
 
-	m := s.Mempool.Take(11155111)
+	m := s.Mempool.PeriodMembers(11155111, 100, DefaultBatchPeriodBlocks)
 	if len(m) != 1 {
 		t.Fatalf("took %d", len(m))
 	}
@@ -173,7 +177,7 @@ func TestEnqueueForBatch_MultiLegMemberUsesBatchCommitment(t *testing.T) {
 	if err := s.EnqueueForBatch("i", "acc://a.acme", 11155111, acct(1), opid(1), legs, "att", 100, "", time.Time{}, "0xaccumfictional"); err != nil {
 		t.Fatal(err)
 	}
-	m := s.Mempool.Take(11155111)[0]
+	m := s.Mempool.PeriodMembers(11155111, 100, DefaultBatchPeriodBlocks)[0]
 	if !m.IsMultiLeg() {
 		t.Fatal("two legs must report as multi-leg")
 	}
@@ -197,7 +201,7 @@ func TestEnqueueForBatch_MultiLegMemberUsesBatchCommitment(t *testing.T) {
 
 // A flush with no attestation function must not silently drop the proof cycles — the
 // condition is logged, and this asserts the loop does not panic or lose members.
-func TestFlushDueChains_NoAttestFnDoesNotPanic(t *testing.T) {
+func TestFlushChainPeriods_NoAttestFnDoesNotPanic(t *testing.T) {
 	s := stackForChain(t, 11155111)
 	legs := []mirrorLeg{{LegID: "l0", ChainID: 11155111, Target: tgt(1), Value: big.NewInt(1)}}
 	if err := s.EnqueueForBatch("i", "acc://a.acme", 11155111, acct(1), opid(1), legs, "att", 100, "", time.Time{}, "0xaccumfictional"); err != nil {
@@ -205,14 +209,17 @@ func TestFlushDueChains_NoAttestFnDoesNotPanic(t *testing.T) {
 	}
 	// The orchestrator here is a zero value, so FlushChain errors out — the point is that
 	// the driver handles it without panicking and without losing the member silently.
-	s.FlushDueChains(context.Background(), time.Now(), true, 1, nil, nil, nil)
+	s.flushChainPeriods(context.Background(), 11155111, 200, DefaultBatchPeriodBlocks, nil, 0, time.Now(), nil, nil, nil)
+	if s.Mempool.PendingCount() != 1 {
+		t.Fatal("a flush that could not form its batch lost the member")
+	}
 }
 
 // Nothing is due when the pool is empty — the loop must not create empty batches.
-func TestFlushDueChains_EmptyPoolIsNoOp(t *testing.T) {
+func TestFlushChainPeriods_EmptyPoolIsNoOp(t *testing.T) {
 	s := stackForChain(t, 11155111)
 	called := 0
-	s.FlushDueChains(context.Background(), time.Now(), true, 1,
+	s.flushChainPeriods(context.Background(), 11155111, 200, DefaultBatchPeriodBlocks, nil, 0, time.Now(),
 		func(context.Context, interface{}, string, int64, bool) { called++ }, nil, nil)
 	if called != 0 {
 		t.Fatal("an empty pool must produce no attestations")
@@ -260,7 +267,7 @@ func TestEnqueueForBatch_CarriesCommitHeight(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 4242 falls in the period starting at 4200 at the default width of 100.
-	got := s.Mempool.PeekForPeriod(11155111, 4200, DefaultBatchPeriodBlocks)
+	got := s.Mempool.PeriodMembers(11155111, 4200, DefaultBatchPeriodBlocks)
 	if len(got) != 1 {
 		t.Fatalf("member not selectable for the period covering its height (got %d)", len(got))
 	}
@@ -268,10 +275,10 @@ func TestEnqueueForBatch_CarriesCommitHeight(t *testing.T) {
 		t.Fatalf("commit height not carried through: %d", got[0].CommitHeight)
 	}
 	// A member belongs to exactly ONE period — neither the one before nor the one after.
-	if n := len(s.Mempool.PeekForPeriod(11155111, 4100, DefaultBatchPeriodBlocks)); n != 0 {
+	if n := len(s.Mempool.PeriodMembers(11155111, 4100, DefaultBatchPeriodBlocks)); n != 0 {
 		t.Fatalf("member appeared in the previous period (%d)", n)
 	}
-	if n := len(s.Mempool.PeekForPeriod(11155111, 4300, DefaultBatchPeriodBlocks)); n != 0 {
+	if n := len(s.Mempool.PeriodMembers(11155111, 4300, DefaultBatchPeriodBlocks)); n != 0 {
 		t.Fatalf("member appeared in the next period (%d)", n)
 	}
 }
