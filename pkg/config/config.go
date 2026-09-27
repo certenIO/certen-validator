@@ -103,7 +103,6 @@ type Config struct {
 	// Per Unified Multi-Chain Architecture plan
 	UseUnifiedOrchestrator bool // Use unified orchestrator for proof cycles
 	EnableMultiChain       bool // Enable multi-chain execution strategies
-	EnableUnifiedTables    bool // Write to unified PostgreSQL tables
 }
 
 // Load reads configuration from environment variables
@@ -211,7 +210,6 @@ func Load() (*Config, error) {
 		// Per Unified Multi-Chain Architecture plan
 		UseUnifiedOrchestrator: getEnvBool("FF_UNIFIED_ORCHESTRATOR", true),
 		EnableMultiChain:       getEnvBool("FF_MULTI_CHAIN", true),
-		EnableUnifiedTables:    getEnvBool("FF_UNIFIED_TABLES", true),
 	}
 
 	return cfg, nil

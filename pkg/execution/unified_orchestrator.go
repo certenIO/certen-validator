@@ -95,8 +95,7 @@ type UnifiedOrchestratorConfig struct {
 	OnPhaseComplete func(cycleID string, phase int)
 
 	// Feature flags
-	EnableMultiChain    bool
-	EnableUnifiedTables bool
+	EnableMultiChain bool
 
 	// Chained proof generator for L1/L2/L3 proofs
 	// Used to fetch Accumulate proof chain: Transaction → BVN → DN → Consensus
@@ -165,12 +164,11 @@ type ChainedProofResult struct {
 // DefaultUnifiedOrchestratorConfig returns default configuration
 func DefaultUnifiedOrchestratorConfig() *UnifiedOrchestratorConfig {
 	return &UnifiedOrchestratorConfig{
-		ThresholdConfig:     attestation.DefaultThresholdConfig(),
-		ObservationTimeout:  30 * time.Minute,
-		AttestationTimeout:  5 * time.Minute,
-		WriteBackTimeout:    2 * time.Minute,
-		EnableMultiChain:    true,
-		EnableUnifiedTables: true,
+		ThresholdConfig:    attestation.DefaultThresholdConfig(),
+		ObservationTimeout: 30 * time.Minute,
+		AttestationTimeout: 5 * time.Minute,
+		WriteBackTimeout:   2 * time.Minute,
+		EnableMultiChain:   true,
 	}
 }
 
@@ -393,6 +391,11 @@ func NewUnifiedOrchestrator(config *UnifiedOrchestratorConfig) (*UnifiedOrchestr
 		return nil, fmt.Errorf("a validator registry source is required - Phase 8 counts its quorum against it")
 	}
 
+	// The evidence store is part of every proof cycle (RB3-F73): its rows are what the result is proven by.
+	if config.Repos == nil || config.Repos.ProofArtifacts == nil || config.Repos.IntentLifecycle == nil || config.UnifiedRepo == nil {
+		return nil, fmt.Errorf("the proof artifact, intent lifecycle and unified evidence repositories are required")
+	}
+
 	// Write-back is part of every proof cycle (RB3-F75): results that never reach Accumulate are not a
 	// mode this validator runs in.
 	if config.ResultsPrincipal == "" || len(config.Ed25519Key) == 0 || config.AccumulateClient == nil {
@@ -421,7 +424,7 @@ func NewUnifiedOrchestrator(config *UnifiedOrchestratorConfig) (*UnifiedOrchestr
 	)
 
 	// Continue this validator's persisted result hash chains rather than restarting them at sequence 0.
-	if config.EnableUnifiedTables && config.UnifiedRepo != nil {
+	if config.UnifiedRepo != nil {
 		seedCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		seeded, err := seedResultHashChains(seedCtx, config.UnifiedRepo, config.ValidatorID, orch.resultChains)
 		cancel()
@@ -436,11 +439,8 @@ func NewUnifiedOrchestrator(config *UnifiedOrchestratorConfig) (*UnifiedOrchestr
 	return orch, nil
 }
 
-// hashChainRepo is where result hash chain links are persisted, or nil when unified tables are off.
+// hashChainRepo is where result hash chain links are persisted.
 func hashChainRepo(config *UnifiedOrchestratorConfig) *database.UnifiedRepository {
-	if !config.EnableUnifiedTables {
-		return nil
-	}
 	return config.UnifiedRepo
 }
 
@@ -504,7 +504,12 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 	o.mu.Unlock()
 
 	// Intent lifecycle: mark as in_process
-	o.updateLifecycleInProcess(ctx, req.IntentID, req.CycleID)
+	if err := o.updateLifecycleInProcess(ctx, req.IntentID, req.CycleID); err != nil {
+		o.mu.Lock()
+		delete(o.activeCycles, req.CycleID)
+		o.mu.Unlock()
+		return nil, err
+	}
 
 	defer func() {
 		o.mu.Lock()
@@ -532,7 +537,7 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 	// Generate and persist the proof bundle BEFORE Phase 9 so its ProofID is written back. The bundle is
 	// the product: a cycle whose evidence was not stored does not write its result back as if it had
 	// been (RB3-F73) - it fails, and says why.
-	if o.config.EnableUnifiedTables && o.config.Repos != nil {
+	if o.config.Repos != nil {
 		if err := o.generateAndPersistBundle(cycleCtx, cycle); err != nil {
 			err = fmt.Errorf("proof bundle not stored: %w", err)
 			o.recordPhaseFailure(ctx, cycle, 9, err)
@@ -581,37 +586,39 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 // INTENT LIFECYCLE HELPERS
 // =============================================================================
 
-// updateLifecycleInProcess marks an intent as in_process in the lifecycle table.
-// Non-fatal: logs warning on error, never blocks proof cycle.
-func (o *UnifiedOrchestrator) updateLifecycleInProcess(ctx context.Context, intentID, cycleID string) {
+// updateLifecycleInProcess marks an intent as in_process in the lifecycle table. A status the lifecycle
+// could not record is an error: the gateway reads the intent's state from it (RB3-F73).
+func (o *UnifiedOrchestrator) updateLifecycleInProcess(ctx context.Context, intentID, cycleID string) error {
 	if o.config.Repos == nil || o.config.Repos.IntentLifecycle == nil || intentID == "" {
-		return
+		return nil
 	}
 	if err := o.config.Repos.IntentLifecycle.UpdateStatus(ctx, intentID,
 		database.IntentLifecycleInProcess,
 		database.WithCycleID(cycleID),
 	); err != nil {
-		fmt.Printf("Warning: [LIFECYCLE] failed to update %s to in_process: %v\n", intentID, err)
+		return fmt.Errorf("lifecycle: mark %s in_process: %w", intentID, err)
 	}
+	return nil
 }
 
-// updateLifecycleSettling marks an intent as waiting on its target-chain receipt.
-// Non-fatal: logs warning on error, never blocks the proof cycle.
+// updateLifecycleSettling marks an intent as waiting on its target-chain receipt. A status the
+// lifecycle could not record is an error (RB3-F73).
 //
 // STAGE 1. Sits between in_process and the terminal states. Before it existed,
 // 'complete' covered this interval and an intent was reported successful ~51s
 // before its transaction confirmed (intent 1638327d…, 2026-08-25). Never terminal:
 // executePhase7 resolves it from the observed receipt.
-func (o *UnifiedOrchestrator) updateLifecycleSettling(ctx context.Context, intentID, cycleID string) {
+func (o *UnifiedOrchestrator) updateLifecycleSettling(ctx context.Context, intentID, cycleID string) error {
 	if o.config.Repos == nil || o.config.Repos.IntentLifecycle == nil || intentID == "" {
-		return
+		return nil
 	}
 	if err := o.config.Repos.IntentLifecycle.UpdateStatus(ctx, intentID,
 		database.IntentLifecycleSettling,
 		database.WithCycleID(cycleID),
 	); err != nil {
-		fmt.Printf("Warning: [LIFECYCLE] failed to update %s to settling: %v\n", intentID, err)
+		return fmt.Errorf("lifecycle: mark %s settling: %w", intentID, err)
 	}
+	return nil
 }
 
 // logTargetChainResolution prints the TERMINAL settlement line for one observed
@@ -810,7 +817,9 @@ func (o *UnifiedOrchestrator) executePhase7(ctx context.Context, cycle *activeCy
 	// and the terminal states, an intent is waiting on a target-chain receipt, and
 	// until now nothing recorded that. 'complete' absorbed it and reported success
 	// ~51s early; see migration 014.
-	o.updateLifecycleSettling(ctx, req.IntentID, req.CycleID)
+	if err := o.updateLifecycleSettling(ctx, req.IntentID, req.CycleID); err != nil {
+		return err
+	}
 
 	// Create timeout context
 	observeCtx, cancel := context.WithTimeout(ctx, o.config.ObservationTimeout)
@@ -841,14 +850,12 @@ func (o *UnifiedOrchestrator) executePhase7(ctx context.Context, cycle *activeCy
 		observationResults = append(observationResults, obsResult)
 
 		// Persist to unified tables if enabled
-		if o.config.EnableUnifiedTables && o.config.UnifiedRepo != nil {
+		if o.config.UnifiedRepo != nil {
 			execID, err := o.persistChainExecution(ctx, cycle, obsResult, i+1)
 			if err != nil {
-				// Log but don't fail
-				fmt.Printf("Warning: failed to persist chain execution: %v\n", err)
-			} else {
-				chainExecutionIDs = append(chainExecutionIDs, execID)
+				return fmt.Errorf("persist chain execution %s: %w", txHash, err)
 			}
+			chainExecutionIDs = append(chainExecutionIDs, execID)
 		}
 	}
 
@@ -882,7 +889,9 @@ func (o *UnifiedOrchestrator) executePhase7(ctx context.Context, cycle *activeCy
 	// Persist the proofs the gate verified onto the rows written above, so the database carries the
 	// real trie proofs (tx and receipt, bound to the header roots) rather than what the strategy
 	// observer could build — which on Ethereum is a hash list and on Base/Arbitrum is nothing.
-	o.persistVerifiedProofs(ctx, observationResults, chainExecutionIDs, verified)
+	if err := o.persistVerifiedProofs(ctx, observationResults, chainExecutionIDs, verified); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -892,11 +901,15 @@ func (o *UnifiedOrchestrator) executePhase7(ctx context.Context, cycle *activeCy
 type verifiedCallProofs map[string]*ExternalChainResult
 
 // persistVerifiedProofs writes the gate's verified tx and receipt inclusion proofs onto the
-// chain_execution_results rows persisted during observation, matched by transaction hash. Best
-// effort: the attestation is already decided by the gate, and a failed write must not undo it.
-func (o *UnifiedOrchestrator) persistVerifiedProofs(ctx context.Context, observations []*chain.ObservationResult, execIDs []uuid.UUID, verified verifiedCallProofs) {
-	if len(verified) == 0 || o.config.UnifiedRepo == nil || len(execIDs) != len(observations) {
-		return
+// chain_execution_results rows persisted during observation, matched by transaction hash. A proof the
+// gate verified and the store did not keep is an error: the stored settlement would be missing the
+// proof it was attested on (RB3-F73).
+func (o *UnifiedOrchestrator) persistVerifiedProofs(ctx context.Context, observations []*chain.ObservationResult, execIDs []uuid.UUID, verified verifiedCallProofs) error {
+	if len(verified) == 0 || o.config.UnifiedRepo == nil {
+		return nil
+	}
+	if len(execIDs) != len(observations) {
+		return fmt.Errorf("persist verified proofs: %d chain-execution rows for %d observations", len(execIDs), len(observations))
 	}
 	for i, obs := range observations {
 		key := strings.ToLower(strings.TrimPrefix(obs.TxHash, "0x"))
@@ -907,18 +920,17 @@ func (o *UnifiedOrchestrator) persistVerifiedProofs(ctx context.Context, observa
 		txJSON, err1 := json.Marshal(res.TxInclusionProof)
 		rcJSON, err2 := json.Marshal(res.ReceiptInclusionProof)
 		if err1 != nil || err2 != nil {
-			fmt.Printf("⚠️ [RB-GATE] could not encode verified proofs for %s: %v %v\n", obs.TxHash, err1, err2)
-			continue
+			return fmt.Errorf("encode verified proofs for %s: %v %v", obs.TxHash, err1, err2)
 		}
 		// The observation object travels on into the artifact, so carry the real proofs there too.
 		obs.MerkleProof = txJSON
 		obs.ReceiptProof = rcJSON
 		if err := o.config.UnifiedRepo.UpdateChainExecutionProofs(ctx, execIDs[i], txJSON, rcJSON); err != nil {
-			fmt.Printf("⚠️ [RB-GATE] could not persist verified proofs for %s: %v\n", obs.TxHash, err)
-			continue
+			return fmt.Errorf("persist verified proofs for %s: %w", obs.TxHash, err)
 		}
 		fmt.Printf("💾 [RB-GATE] Persisted verified tx+receipt inclusion proofs for %s (%d + %d bytes)\n", obs.TxHash, len(txJSON), len(rcJSON))
 	}
+	return nil
 }
 
 // verifyContractCallGate is Phase 7's settlement gate (RB-2/RB-4/RB-5, bound to the member - RB3-F77).
@@ -1360,17 +1372,16 @@ func (o *UnifiedOrchestrator) executePhase8(ctx context.Context, cycle *activeCy
 
 	// Record the validator set this quorum is counted against, so a reader can check the threshold
 	// against the membership rather than trusting the stored weights.
-	if o.config.EnableUnifiedTables && o.config.Repos != nil && o.config.Repos.ProofArtifacts != nil {
+	if o.config.Repos != nil && o.config.Repos.ProofArtifacts != nil {
 		set, err := registryAttestationSet(registry, thresholdConfig.CalculateThresholdWeight, result.ObservationResults[0].BlockNumber)
 		if err != nil {
 			return fmt.Errorf("phase 8: validator set snapshot: %w", err)
 		}
 		snapshotID, err := persistValidatorSetSnapshot(ctx, o.config.Repos.ProofArtifacts, set, result.ChainID, getNetworkName(result.ChainID))
 		if err != nil {
-			fmt.Printf("Warning: failed to persist validator set snapshot for cycle %s: %v\n", cycle.CycleID, err)
-		} else {
-			cycle.SnapshotID = snapshotID
+			return fmt.Errorf("phase 8: persist validator set snapshot: %w", err)
 		}
+		cycle.SnapshotID = snapshotID
 	}
 
 	// Count against the registry: registered keys at registered power, one per validator, over this
@@ -1387,11 +1398,10 @@ func (o *UnifiedOrchestrator) executePhase8(ctx context.Context, cycle *activeCy
 
 	// Persist the attestations that COUNTED - each is recorded as verified, which an excluded one is not.
 	counted := aggAttestation.Attestations
-	if o.config.EnableUnifiedTables && o.config.UnifiedRepo != nil {
+	if o.config.UnifiedRepo != nil {
 		for _, att := range counted {
-			_, err := o.persistUnifiedAttestation(ctx, cycle, att)
-			if err != nil {
-				fmt.Printf("Warning: failed to persist attestation: %v\n", err)
+			if _, err := o.persistUnifiedAttestation(ctx, cycle, att); err != nil {
+				return fmt.Errorf("phase 8: persist attestation of %s: %w", att.ValidatorID, err)
 			}
 		}
 	}
@@ -1409,17 +1419,16 @@ func (o *UnifiedOrchestrator) executePhase8(ctx context.Context, cycle *activeCy
 	aggAttestation.VerifiedAt = &now
 
 	// Persist aggregated attestation
-	if o.config.EnableUnifiedTables && o.config.UnifiedRepo != nil {
+	if o.config.UnifiedRepo != nil {
 		messageHashes := make([][]byte, len(counted))
 		for i, att := range counted {
 			messageHashes[i] = att.MessageHash[:]
 		}
 		aggID, err := o.persistAggregatedAttestation(ctx, cycle, aggAttestation, attestationMessagesAgree(messageHashes))
 		if err != nil {
-			fmt.Printf("Warning: failed to persist aggregated attestation: %v\n", err)
-		} else {
-			result.AttestationID = &aggID
+			return fmt.Errorf("phase 8: persist aggregated attestation: %w", err)
 		}
+		result.AttestationID = &aggID
 	}
 
 	result.Attestations = counted
@@ -1476,7 +1485,7 @@ func (o *UnifiedOrchestrator) persistUnifiedAttestation(ctx context.Context, cyc
 
 	// Mark as verified (attestations are verified before persisting)
 	if err := o.config.UnifiedRepo.MarkUnifiedAttestationVerified(ctx, attID, true, "signature verified during collection"); err != nil {
-		fmt.Printf("Warning: failed to mark attestation verified: %v\n", err)
+		return uuid.Nil, fmt.Errorf("mark attestation verified: %w", err)
 	}
 
 	return attID, nil
@@ -1532,7 +1541,7 @@ func (o *UnifiedOrchestrator) persistAggregatedAttestation(ctx context.Context, 
 	// Mark as verified if threshold was met and aggregation succeeded
 	if agg.ThresholdMet && agg.Verified {
 		if err := o.config.UnifiedRepo.MarkAggregatedAttestationVerified(ctx, aggID, true, "threshold met, aggregation verified"); err != nil {
-			fmt.Printf("Warning: failed to mark aggregation verified: %v\n", err)
+			return uuid.Nil, fmt.Errorf("mark aggregation verified: %w", err)
 		}
 	}
 
@@ -1893,7 +1902,7 @@ func (o *UnifiedOrchestrator) executePhase9(ctx context.Context, cycle *activeCy
 	cycle.PrimaryResultHash = bundle.Result.ResultHash
 	if err := persistResultHashChainLink(ctx, hashChainRepo(o.config), cycle.Result.ChainExecutionIDs,
 		len(cycle.Result.ObservationResults), bundle.Result); err != nil {
-		fmt.Printf("Warning: failed to persist result hash chain link for cycle %s: %v\n", cycle.CycleID, err)
+		return fmt.Errorf("persist result hash chain link: %w", err)
 	}
 
 	// Enrich bundle with per-leg data for multi-leg intents

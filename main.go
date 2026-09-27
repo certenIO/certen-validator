@@ -1705,6 +1705,9 @@ func startValidator(
 
 	accWritebackPrincipal := os.Getenv("ACCUMULATE_RESULTS_PRINCIPAL")
 	accSignerURL := os.Getenv("ACCUMULATE_SIGNER_URL")
+	if v := os.Getenv("FF_UNIFIED_TABLES"); v != "" && v != "true" {
+		return nil, nil, fmt.Errorf("FF_UNIFIED_TABLES=%s is not supported: every proof cycle stores its evidence", v)
+	}
 	if v := os.Getenv("PROOF_CYCLE_WRITEBACK"); v != "" && v != "true" {
 		return nil, nil, fmt.Errorf("PROOF_CYCLE_WRITEBACK=%s is not supported: proof cycles always write their results back", v)
 	}
@@ -1802,7 +1805,6 @@ func startValidator(
 		ResultsPrincipal:         accWritebackPrincipal,
 		Ed25519Key:               privateKey,
 		EnableMultiChain:         cfg.EnableMultiChain,
-		EnableUnifiedTables:      cfg.EnableUnifiedTables,
 		ProofGenerator:           proofGenAdapter,
 		AccumulateQueryClient:    liteClientAdapter, // For querying tx governance data (M-of-N threshold)
 		ResultQuorumRegistry:     execution.ResultQuorumRegistryFromChains(resolver),
@@ -1828,7 +1830,6 @@ func startValidator(
 		len(strategyRegistry.ListAttestationSchemes()),
 		len(strategyRegistry.ListChainIDs()))
 	log.Printf("   - Multi-Chain: %v", cfg.EnableMultiChain)
-	log.Printf("   - Unified Tables: %v", cfg.EnableUnifiedTables)
 	healthStatus.SetProofCycle("active")
 
 	// --- Intent discovery wiring ---
