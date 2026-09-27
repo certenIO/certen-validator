@@ -113,6 +113,8 @@ type UnifiedOrchestratorConfig struct {
 	NonSettlements     *NonSettlementQueue
 	// MemberOutcomes keeps member outcomes the lifecycle store refused until it takes them (RB3-F78).
 	MemberOutcomes MemberOutcomeOutbox
+	// ProofCompletions keeps level-record completions the store failed until it takes them (RB3-F123).
+	ProofCompletions ProofCompletionOutbox
 }
 
 // ChainedProofGenerator interface for generating Accumulate chained proofs
@@ -399,6 +401,9 @@ func NewUnifiedOrchestrator(config *UnifiedOrchestratorConfig) (*UnifiedOrchestr
 	if config.MemberOutcomes == nil {
 		return nil, fmt.Errorf("a member outcome outbox is required - an outcome the lifecycle store refuses would otherwise leave its intent short of a terminal status")
 	}
+	if config.ProofCompletions == nil {
+		return nil, fmt.Errorf("a proof completion outbox is required - a completion the store fails would otherwise leave a complete proof marked incomplete")
+	}
 
 	// Write-back is part of every proof cycle (RB3-F75): results that never reach Accumulate are not a
 	// mode this validator runs in.
@@ -577,7 +582,7 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 	result.CompletedAt = &now
 	result.Success = true
 
-	o.completeProofCycles(ctx, req.CycleID, cycle.Completions, result, req.MerkleRoot, result.WriteBackTxHash)
+	o.closeLevelRecords(ctx, req.CycleID, cycle.Completions, result, req.MerkleRoot)
 
 	// This member's outcome; the intent's status is derived from every member's (RB3-F50). A
 	// settlement that reverted is a failed member even when its revert was written back, and a
@@ -1907,6 +1912,21 @@ func (o *UnifiedOrchestrator) HandlePeerAttestationRequest(
 // =============================================================================
 // PHASE 9: RESULT WRITE-BACK
 // =============================================================================
+
+// closeLevelRecords closes a cycle's level records on a write-back that happened: the cycle hash binds its
+// transaction, so a cycle whose write-back was refused or failed leaves them open (RB3-F123).
+func (o *UnifiedOrchestrator) closeLevelRecords(ctx context.Context, cycleID string, completions []uuid.UUID, result *UnifiedProofCycleResult, merkleRoot [32]byte) bool {
+	if result == nil || result.WriteBackState != WriteBackWritten || result.WriteBackTxHash == "" {
+		state := ""
+		if result != nil {
+			state = result.WriteBackState
+		}
+		fmt.Printf("⚠️ [PROOF-LEVELS] cycle %s: write-back %q - level records stay open\n", cycleID, state)
+		return false
+	}
+	o.completeProofCycles(ctx, cycleID, completions, result, merkleRoot, result.WriteBackTxHash)
+	return true
+}
 
 // Phase 9 write-back states, recorded on every cycle.
 const (

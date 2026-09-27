@@ -20,7 +20,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"strings"
 
 	"github.com/google/uuid"
@@ -287,7 +286,9 @@ func proofCycleHash(record *database.ProofCycleCompletionRecord, writeBackTx str
 }
 
 // completeProofCycles closes the level records of a cycle once its write-back is done. A record missing a
-// level is not completed; it is reported with the levels it lacks and stays in the incomplete list.
+// level is not completed; it is reported with the levels it lacks and stays in the incomplete list. A
+// record the store could not read or close goes to the completion outbox, and the reconciler closes it once
+// the store answers (RB3-F123) - one failed call no longer leaves a complete proof marked incomplete.
 func (o *UnifiedOrchestrator) completeProofCycles(ctx context.Context, cycleID string, completions []uuid.UUID, result *UnifiedProofCycleResult, merkleRoot [32]byte, writeBackTx string) {
 	if o.config.Repos == nil || o.config.Repos.ProofArtifacts == nil {
 		return
@@ -295,26 +296,23 @@ func (o *UnifiedOrchestrator) completeProofCycles(ctx context.Context, cycleID s
 	repo := o.config.Repos.ProofArtifacts
 	bindings := levelsBoundByAttestations(result, merkleRoot)
 	for _, completionID := range completions {
-		record, err := repo.GetProofCycleCompletionByID(ctx, completionID)
-		if err != nil || record == nil {
-			logfPrintf("⚠️ [PROOF-LEVELS] cycle %s: level record %s unreadable: %v", cycleID, completionID, err)
-			continue
-		}
-		var missing []string
-		for level, done := range []bool{record.Level1Complete, record.Level2Complete, record.Level3Complete, record.Level4Complete} {
-			if !done {
-				missing = append(missing, fmt.Sprintf("L%d", level+1))
+		c := ProofCompletion{CompletionID: completionID, CycleID: cycleID, WriteBackTx: writeBackTx, BindingsValid: bindings}
+		err := closeProofCompletion(ctx, repo, c)
+		var unclosable *errCompletionUnclosable
+		switch {
+		case err == nil:
+			logfPrintf("✅ [PROOF-LEVELS] cycle %s level record %s: all four levels complete (bindings_valid=%v)", cycleID, completionID, bindings)
+		case asUnclosable(err, &unclosable):
+			logfPrintf("⚠️ [PROOF-LEVELS] cycle %s wrote back but %s; its cycle stays incomplete", cycleID, unclosable.reason)
+		case o.config.ProofCompletions == nil:
+			logfPrintf("❌ [PROOF-LEVELS] cycle %s level record %s: completion not recorded (%v) and no outbox to keep it", cycleID, completionID, err)
+		default:
+			if qErr := o.config.ProofCompletions.Put(c); qErr != nil {
+				logfPrintf("❌ [PROOF-LEVELS] cycle %s level record %s: completion not recorded (%v) and the outbox could not keep it: %v",
+					cycleID, completionID, err, qErr)
+				continue
 			}
+			logfPrintf("⚠️ [PROOF-LEVELS] cycle %s level record %s: completion queued for the store (%v)", cycleID, completionID, err)
 		}
-		if len(missing) > 0 {
-			logfPrintf("⚠️ [PROOF-LEVELS] cycle %s proof %s wrote back without %s; its cycle stays incomplete",
-				cycleID, record.ProofID, strings.Join(missing, ","))
-			continue
-		}
-		if err := repo.CompleteProofCycle(ctx, completionID, bindings, proofCycleHash(record, writeBackTx)); err != nil {
-			logfPrintf("⚠️ [PROOF-LEVELS] cycle %s proof %s: completion not recorded: %v", cycleID, record.ProofID, err)
-			continue
-		}
-		logfPrintf("✅ [PROOF-LEVELS] cycle %s proof %s: all four levels complete (bindings_valid=%v)", cycleID, record.ProofID, bindings)
 	}
 }

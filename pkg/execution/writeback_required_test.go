@@ -28,6 +28,10 @@ func TestOrchestratorWithoutWriteBackIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	completions, err := NewFileProofCompletionOutbox(filepath.Join(t.TempDir(), "completions"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, key, _ := ed25519.GenerateKey(nil)
 	base := func() *UnifiedOrchestratorConfig {
 		return &UnifiedOrchestratorConfig{
@@ -38,7 +42,7 @@ func TestOrchestratorWithoutWriteBackIsRefused(t *testing.T) {
 			MemberLookup:       func(int64, [32]byte) (*PendingBatchIntent, bool) { return nil, false },
 			NonSettlementChain: nsChainPast(nsCommit), NonSettlements: q,
 			ResultsPrincipal: "acc://results.acme/data", Ed25519Key: key, AccumulateClient: &recordingSubmitter{},
-			Repos: repos, UnifiedRepo: repos.Unified, MemberOutcomes: outbox,
+			Repos: repos, UnifiedRepo: repos.Unified, MemberOutcomes: outbox, ProofCompletions: completions,
 		}
 	}
 	if _, err := NewUnifiedOrchestrator(base()); err != nil {
@@ -57,9 +61,10 @@ func TestOrchestratorWithoutWriteBackIsRefused(t *testing.T) {
 	}
 	// RB3-F73: nor without the store its evidence is kept in.
 	for name, strip := range map[string]func(*UnifiedOrchestratorConfig){
-		"no repositories":          func(c *UnifiedOrchestratorConfig) { c.Repos = nil },
-		"no unified repository":    func(c *UnifiedOrchestratorConfig) { c.UnifiedRepo = nil },
-		"no member outcome outbox": func(c *UnifiedOrchestratorConfig) { c.MemberOutcomes = nil },
+		"no repositories":            func(c *UnifiedOrchestratorConfig) { c.Repos = nil },
+		"no unified repository":      func(c *UnifiedOrchestratorConfig) { c.UnifiedRepo = nil },
+		"no member outcome outbox":   func(c *UnifiedOrchestratorConfig) { c.MemberOutcomes = nil },
+		"no proof completion outbox": func(c *UnifiedOrchestratorConfig) { c.ProofCompletions = nil },
 	} {
 		c := base()
 		strip(c)

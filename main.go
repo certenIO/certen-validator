@@ -1820,6 +1820,16 @@ func startValidator(
 	}).Start(context.Background())
 	log.Printf("✅ [Phase 9] Member outcome outbox at %s; reconciler replaying on startup and every minute", memberOutcomes.Dir())
 
+	// Level-record completions the store fails wait here until it takes them (RB3-F123).
+	proofCompletions, pcErr := execution.NewFileProofCompletionOutbox(filepath.Join(nsDataDir, "proof_completion_outbox"))
+	if pcErr != nil {
+		return nil, nil, fmt.Errorf("proof cycle: proof completion outbox: %w", pcErr)
+	}
+	(&execution.ProofCompletionReconciler{
+		Outbox: proofCompletions, Store: batchComponents.Repos.ProofArtifacts, Logf: log.Printf,
+	}).Start(context.Background())
+	log.Printf("✅ [Phase 9] Proof completion outbox at %s; reconciler replaying on startup and every minute", proofCompletions.Dir())
+
 	unifiedConfig := &execution.UnifiedOrchestratorConfig{
 		ValidatorID:              cfg.ValidatorID,
 		ValidatorIndex:           0,
@@ -1843,6 +1853,7 @@ func startValidator(
 		NonSettlementChain:       execution.NonSettlementChainFromResolver(resolver),
 		NonSettlements:           nonSettlements,
 		MemberOutcomes:           memberOutcomes,
+		ProofCompletions:         proofCompletions,
 	}
 
 	unifiedOrchestrator, unifiedErr := execution.NewUnifiedOrchestrator(unifiedConfig)
