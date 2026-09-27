@@ -143,6 +143,57 @@ const (
 	anchorFlagConfirmDelay    = 3 * time.Second
 )
 
+// confirmProofExecuted is AnchorProofExecutedConfirmed's decision, over an injectable receipt and read.
+//
+// Every read is pinned to the block that mined the attestation: until receiptBlock answers there is no
+// read at all, and the receipt is retried within the same budget (RB3-F129 - an unreadable receipt used
+// to become an unpinned read). A read that is early is retried, never taken as "not executed"; errors
+// that exhaust the budget are reported as unknown (an error), never as not executed.
+func confirmProofExecuted(ctx context.Context, receiptBlock func(context.Context) (*big.Int, error),
+	read func(context.Context, *big.Int) (bool, error), attempts int, delay time.Duration) (bool, error) {
+	var pinned *big.Int
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if pinned == nil {
+			b, err := receiptBlock(ctx)
+			if err != nil || b == nil {
+				if err == nil {
+					err = fmt.Errorf("no receipt block")
+				}
+				lastErr = err
+			} else {
+				pinned = b
+			}
+		}
+		if pinned != nil {
+			executed, err := read(ctx, pinned)
+			if err == nil {
+				if executed {
+					return true, nil
+				}
+				lastErr = nil
+			} else {
+				lastErr = err
+			}
+		}
+		if attempt == attempts {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-time.After(delay):
+		}
+	}
+	if pinned == nil {
+		return false, fmt.Errorf("the attestation's block was never read: %w", lastErr)
+	}
+	if lastErr != nil {
+		return false, lastErr
+	}
+	return false, nil
+}
+
 // AnchorProofExecutedConfirmed reports whether the quorum attestation has landed, reading
 // the flag AT THE BLOCK THAT MINED IT and retrying while the RPC catches up.
 //
@@ -170,8 +221,10 @@ const (
 //	BOUNDED  transient lag is retried, and exhausting the budget is reported as NOT OBSERVED
 //	         rather than as not executed.
 //
-// verifyTxHash is the attestation transaction. Empty falls back to an unpinned read, which is
-// strictly weaker and says so in the error.
+// verifyTxHash is the attestation transaction, and it is required: the read is ALWAYS pinned to the
+// block that mined it. An unreadable receipt is retried within the same budget and never replaced by an
+// unpinned read (RB3-F129) - an unpinned read can answer from a block before the attestation, which is
+// exactly the stale "not executed" that marked executed members FAILED on 2026-08-25.
 func (s *BatchProofSubmitterImpl) AnchorProofExecutedConfirmed(
 	ctx context.Context,
 	chainID int64,
@@ -183,51 +236,27 @@ func (s *BatchProofSubmitterImpl) AnchorProofExecutedConfirmed(
 		return false, err
 	}
 
-	// Pin to the block that mined the attestation, when we know it.
-	var pinned *big.Int
-	if verifyTxHash != "" {
-		if rcpt, rerr := ecm.client.TransactionReceipt(ctx, common.HexToHash(verifyTxHash)); rerr == nil && rcpt != nil {
-			pinned = rcpt.BlockNumber
-		} else if rerr != nil {
-			s.logf("[BATCH-PROOF] chain=%d could not fetch receipt for attestation %s (%v); "+
-				"falling back to an unpinned read, which can answer from a stale block",
-				chainID, verifyTxHash, rerr)
-		}
+	if !IsTransactionHash(verifyTxHash) {
+		return false, fmt.Errorf("confirming anchor 0x%x needs the attestation transaction (got %q)", bundleID[:8], verifyTxHash)
 	}
-
-	var lastErr error
-	for attempt := 1; attempt <= anchorFlagConfirmAttempts; attempt++ {
-		executed, err := s.anchorProofExecutedAt(ctx, chainID, bundleID, pinned)
-		if err == nil {
-			if executed {
-				if attempt > 1 {
-					s.logf("[BATCH-PROOF] chain=%d anchor 0x%x proofExecuted observed on attempt %d/%d "+
-						"— the earlier reads were RPC lag, not a failed attestation",
-						chainID, bundleID[:8], attempt, anchorFlagConfirmAttempts)
-				}
-				return true, nil
-			}
-			lastErr = nil
-		} else {
-			// A pinned read against a node without that block errors. That is the
-			// mechanism working: it refused to answer from stale state.
-			lastErr = err
+	receiptBlock := func(ctx context.Context) (*big.Int, error) {
+		rcpt, err := ecm.client.TransactionReceipt(ctx, common.HexToHash(verifyTxHash))
+		if err != nil {
+			return nil, fmt.Errorf("attestation %s receipt: %w", verifyTxHash, err)
 		}
-		if attempt == anchorFlagConfirmAttempts {
-			break
+		if rcpt == nil || rcpt.BlockNumber == nil {
+			return nil, fmt.Errorf("attestation %s has no receipt block yet", verifyTxHash)
 		}
-		select {
-		case <-ctx.Done():
-			return false, ctx.Err()
-		case <-time.After(anchorFlagConfirmDelay):
-		}
+		return rcpt.BlockNumber, nil
 	}
-
-	if lastErr != nil {
-		return false, fmt.Errorf("could not read proofExecuted for anchor 0x%x within %d attempt(s): %w",
-			bundleID[:8], anchorFlagConfirmAttempts, lastErr)
+	read := func(ctx context.Context, block *big.Int) (bool, error) {
+		return s.anchorProofExecutedAt(ctx, chainID, bundleID, block)
 	}
-	return false, nil
+	executed, err := confirmProofExecuted(ctx, receiptBlock, read, anchorFlagConfirmAttempts, anchorFlagConfirmDelay)
+	if err != nil {
+		return false, fmt.Errorf("could not read proofExecuted for anchor 0x%x: %w", bundleID[:8], err)
+	}
+	return executed, nil
 }
 
 // AnchorProofExecuted reports whether the quorum attestation has landed, reading at "latest".
