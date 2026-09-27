@@ -1004,47 +1004,28 @@ func (id *IntentDiscovery) convertCertenTransactionToIntent(certenTx *accumulate
 		id.logger.Printf("✅ [4-BLOB-EXTRACT] Found replayData blob with %d fields", len(replayData))
 	}
 
-	// Fallback: If no structured blobs found, copy remaining data to intentData
-	if len(intentData) == 0 && len(crossChainData) == 0 && len(governanceData) == 0 && len(replayData) == 0 {
-		id.logger.Printf("⚠️ [4-BLOB-EXTRACT] No structured blobs found, using fallback categorization")
-		for key, value := range certenTx.IntentData {
-			if dataElement, ok := value.(map[string]interface{}); ok {
-				// Check if this element contains intent type information
-				if typeVal, exists := dataElement["type"].(string); exists {
-					intentType = typeVal
-				}
-
-				// Categorize data based on content and known patterns
-				if id.isIntentData(dataElement) {
-					for k, v := range dataElement {
-						intentData[k] = v
-					}
-				} else if id.isCrossChainData(dataElement) {
-					for k, v := range dataElement {
-						crossChainData[k] = v
-					}
-				} else if id.isGovernanceData(dataElement) {
-					for k, v := range dataElement {
-						governanceData[k] = v
-					}
-				} else if id.isReplayData(dataElement) {
-					for k, v := range dataElement {
-						replayData[k] = v
-					}
-				} else {
-					// Default to intent data if unknown
-					intentData[key] = value
-				}
-			} else {
-				// Non-structured data goes to intent data
-				intentData[key] = value
-			}
+	// A CERTEN intent is exactly the four JSON blobs, in order (data[0..3]: intent, cross-chain,
+	// governance, replay) - what every client writes. Anything else is refused by name. When none of the
+	// four was found this used to guess each element's role from its contents, and a transaction with
+	// only some of them was built with the rest empty; the operation id is the hash of the four, so a
+	// wrong guess made a different intent (RB3-F113).
+	var missing, extra []string
+	for _, name := range []string{"intentData", "crossChainData", "governanceData", "replayData"} {
+		if _, ok := certenTx.IntentData[name].(map[string]interface{}); !ok {
+			missing = append(missing, name)
 		}
 	}
-
-	// Validate that we have at least some intent data before building
-	if len(intentData) == 0 && len(crossChainData) == 0 && len(governanceData) == 0 && len(replayData) == 0 {
-		return nil, fmt.Errorf("transaction %s has no valid 4-blob structure", certenTx.Hash)
+	for key := range certenTx.IntentData {
+		switch key {
+		case "intentData", "crossChainData", "governanceData", "replayData":
+		default:
+			extra = append(extra, key)
+		}
+	}
+	if len(missing) > 0 || len(extra) > 0 {
+		sort.Strings(missing)
+		sort.Strings(extra)
+		return nil, fmt.Errorf("transaction %s is not a CERTEN intent of four JSON blobs (missing %v, unexpected %v)", certenTx.Hash, missing, extra)
 	}
 
 	// Use BuildCertenIntent to construct the canonical struct.
