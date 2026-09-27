@@ -269,7 +269,10 @@ func repairLayer5(ctx context.Context, cfg AnchorRepairConfig, anchor database.C
 	}
 	blockWrong := int64(stated.BlockNumber) != facts.BlockNumber
 	hashWrong := stated.BlockHash != "" && !sameHex(stated.BlockHash, facts.BlockHash)
-	if !blockWrong && !hashWrong {
+	// RB3-F119: a row written while the anchor could not be read back states no hash. Missing is completed,
+	// exactly as wrong is corrected - it used to stay missing for ever.
+	hashMissing := stated.BlockHash == ""
+	if !blockWrong && !hashWrong && !hashMissing {
 		return nil
 	}
 
@@ -295,10 +298,22 @@ func repairLayer5(ctx context.Context, cfg AnchorRepairConfig, anchor database.C
 		return nil
 	}
 	action := fmt.Sprintf("%s: block %d -> %d (hash %s), replaced", label, stated.BlockNumber, facts.BlockNumber, facts.BlockHash)
+	reason := fmt.Sprintf("anchor %s is in block %d (%s) on %s, not block %d as this row stated; "+
+		"the stated block was the verify transaction's. Corrected by `validator repair anchor-blocks`.",
+		anchor.AnchorCreateTx, facts.BlockNumber, facts.BlockHash, facts.TargetChain, stated.BlockNumber)
+	switch {
+	case !blockWrong && hashWrong:
+		action = fmt.Sprintf("%s: block %d hash %s -> %s, replaced", label, stated.BlockNumber, stated.BlockHash, facts.BlockHash)
+		reason = fmt.Sprintf("anchor %s is in block %d on %s with hash %s, not %s as this row stated. "+
+			"Corrected by `validator repair anchor-blocks`.",
+			anchor.AnchorCreateTx, facts.BlockNumber, facts.TargetChain, facts.BlockHash, stated.BlockHash)
+	case !blockWrong:
+		action = fmt.Sprintf("%s: block %d stated without its hash, completed (hash %s), replaced", label, stated.BlockNumber, facts.BlockHash)
+		reason = fmt.Sprintf("this row stated anchor %s's block %d on %s without its hash (the anchor could not be "+
+			"read back when the row was written); completed with the chain's %s by `validator repair anchor-blocks`.",
+			anchor.AnchorCreateTx, facts.BlockNumber, facts.TargetChain, facts.BlockHash)
+	}
 	if cfg.Apply {
-		reason := fmt.Sprintf("anchor %s is in block %d (%s) on %s, not block %d as this row stated; "+
-			"the stated block was the verify transaction's. Corrected by `validator repair anchor-blocks`.",
-			anchor.AnchorCreateTx, facts.BlockNumber, facts.BlockHash, facts.TargetChain, stated.BlockNumber)
 		replacement, err := cfg.Repair.ReplaceLayer5(ctx, claim, corrected, reason, *facts, cfg.ValidatorID)
 		switch {
 		case errors.Is(err, database.ErrEvidenceChanged):
@@ -318,13 +333,19 @@ func repairCertenProof(ctx context.Context, cfg AnchorRepairConfig, facts *datab
 	label := fmt.Sprintf("Certen proof %s", proof.ProofID)
 	blockWrong := proof.AnchorBlockNumber != facts.BlockNumber
 	hashWrong := proof.AnchorBlockHash.Valid && proof.AnchorBlockHash.String != "" && !sameHex(proof.AnchorBlockHash.String, facts.BlockHash)
-	if !blockWrong && !hashWrong {
+	// RB3-F119: a proof stating no hash is completed, as a wrong one is corrected.
+	hashMissing := !proof.AnchorBlockHash.Valid || proof.AnchorBlockHash.String == ""
+	if !blockWrong && !hashWrong && !hashMissing {
 		return nil
+	}
+	change := fmt.Sprintf("block %d -> %d", proof.AnchorBlockNumber, facts.BlockNumber)
+	if !blockWrong {
+		change = fmt.Sprintf("block %d hash -> %s", proof.AnchorBlockNumber, facts.BlockHash)
 	}
 	owner := proof.ValidatorID
 	if owner != cfg.ValidatorID {
-		report.LeftForOwner = append(report.LeftForOwner, fmt.Sprintf("%s: signed by %s, which must revise it (block %d -> %d)",
-			label, owner, proof.AnchorBlockNumber, facts.BlockNumber))
+		report.LeftForOwner = append(report.LeftForOwner, fmt.Sprintf("%s: signed by %s, which must revise it (%s)",
+			label, owner, change))
 		return nil
 	}
 	scheme := signatureScheme(proof.VerifyDetails)
@@ -333,13 +354,23 @@ func repairCertenProof(ctx context.Context, cfg AnchorRepairConfig, facts *datab
 		report.Refused = append(report.Refused, fmt.Sprintf("%s: signed with scheme %q, for which this run has no key", label, scheme))
 		return nil
 	}
-	action := fmt.Sprintf("%s: anchor block %d -> %d on %s, revised and re-signed (%s)",
-		label, proof.AnchorBlockNumber, facts.BlockNumber, facts.TargetChain, scheme)
+	action := fmt.Sprintf("%s: anchor %s on %s, revised and re-signed (%s)", label, change, facts.TargetChain, scheme)
 	if cfg.Apply {
 		reason := fmt.Sprintf("anchor %s is in block %d (%s) on %s, not block %d as the proof stated; the "+
 			"stated block was the verify transaction's. The anchor reference was revised, the proof hash "+
 			"recomputed and the proof re-signed by %s.",
 			facts.TxHash, facts.BlockNumber, facts.BlockHash, facts.TargetChain, proof.AnchorBlockNumber, cfg.ValidatorID)
+		switch {
+		case !blockWrong && hashWrong:
+			reason = fmt.Sprintf("anchor %s is in block %d on %s with hash %s, not %s as the proof stated. The anchor "+
+				"reference was revised, the proof hash recomputed and the proof re-signed by %s.",
+				facts.TxHash, facts.BlockNumber, facts.TargetChain, facts.BlockHash, proof.AnchorBlockHash.String, cfg.ValidatorID)
+		case !blockWrong:
+			reason = fmt.Sprintf("the proof stated anchor %s's block %d on %s without its hash (the anchor could not "+
+				"be read back when it was written); completed with the chain's %s, the proof hash recomputed and "+
+				"the proof re-signed by %s.",
+				facts.TxHash, facts.BlockNumber, facts.TargetChain, facts.BlockHash, cfg.ValidatorID)
+		}
 		revised, err := cfg.Repair.ReviseCertenProofAnchor(ctx, proof.ProofID, proof.ProofHash, database.CertenAnchorRevision{
 			Chain: database.TargetChain(facts.TargetChain), BlockNumber: facts.BlockNumber, BlockHash: facts.BlockHash,
 			Confirmations: facts.Depth,

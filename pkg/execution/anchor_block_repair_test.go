@@ -50,6 +50,7 @@ type repairFixture struct {
 	bundle      [32]byte
 	root        [32]byte
 	verifyBlock int64
+	statedBlock int64 // the block the stored layer and proofs state (the verify block, unless set)
 	chainBlock  uint64
 	chainHash   string
 	layerID     uuid.UUID
@@ -62,12 +63,22 @@ const repairValidator = "repair-validator"
 
 func newRepairFixture(t *testing.T) *repairFixture {
 	t.Helper()
+	return newRepairFixtureStating(t, false)
+}
+
+// newRepairFixtureStating builds the fixture; with rightBlock the canonical row, the layer and the proofs
+// state the anchor's true block but no block hash - what an anchor read-back failure leaves (RB3-F119).
+func newRepairFixtureStating(t *testing.T, rightBlock bool) *repairFixture {
+	t.Helper()
 	ctx := context.Background()
 	db := openMigratedTestDB(t, "anchor repair")
 	repos := database.NewRepositories(database.NewClientFromDB(db))
 	f := &repairFixture{
 		db: db, repos: repos, repair: database.NewEvidenceRepair(database.NewClientFromDB(db)),
-		verifyBlock: 47002149, chainBlock: 47002138,
+		verifyBlock: 47002149, statedBlock: 47002149, chainBlock: 47002138,
+	}
+	if rightBlock {
+		f.statedBlock = int64(f.chainBlock)
 	}
 	tag := uuid.NewString()
 	f.bundle, f.root = levelHash("bundle-"+tag), levelHash("root-"+tag)
@@ -80,6 +91,11 @@ func newRepairFixture(t *testing.T) *repairFixture {
 		VALUES ($1, 'on_demand', 'confirmed', $2, 'base-sepolia', 84532, $3, $4, $4, $5, TRUE, 'live', 'on_demand')`,
 		f.batchID, f.root[:], "0x"+hex.EncodeToString(f.bundle[:]), f.anchorTx, f.verifyBlock); err != nil {
 		t.Fatalf("canonical row: %v", err)
+	}
+	if rightBlock {
+		if _, err := db.ExecContext(ctx, `UPDATE anchor_batches SET anchor_block_num = $2 WHERE id = $1`, f.batchID, f.chainBlock); err != nil {
+			t.Fatal(err)
+		}
 	}
 	t.Cleanup(func() {
 		bg := context.Background()
@@ -127,7 +143,7 @@ func (f *repairFixture) newProof(t *testing.T, label, validator string, key ed25
 	})
 	if withLayer {
 		layer, _ := json.Marshal(Layer5{
-			ChainID: 84532, Network: "chain-84532", AnchorTx: f.anchorTx, BlockNumber: uint64(f.verifyBlock),
+			ChainID: 84532, Network: "chain-84532", AnchorTx: f.anchorTx, BlockNumber: uint64(f.statedBlock),
 			BatchRoot: hex.EncodeToString(f.root[:]), LeafHash: hex.EncodeToString(f.root[:]),
 		})
 		row, err := f.repos.ProofArtifacts.CreateChainedProofLayer(ctx, &database.NewChainedProofLayer{
@@ -141,7 +157,7 @@ func (f *repairFixture) newProof(t *testing.T, label, validator string, key ed25
 	proof, err := f.repos.Proofs.CreateProof(ctx, &database.NewCertenAnchorProof{
 		ProofArtifactID: artifact.ProofID, BatchID: f.batchID, AccumTxHash: accumTx, AccountURL: artifact.AccountURL,
 		MerkleRoot: f.root[:], LeafHash: f.root[:], AnchorChain: "chain-84532", AnchorTxHash: f.anchorTx,
-		AnchorBlockNumber: f.verifyBlock, GovLevel: database.GovLevelG2, GovValid: true, ValidatorID: validator,
+		AnchorBlockNumber: f.statedBlock, GovLevel: database.GovLevelG2, GovValid: true, ValidatorID: validator,
 		GovProof: json.RawMessage(`{"level":"G2","signers":["a","b"]}`),
 	})
 	if err != nil {
@@ -404,5 +420,59 @@ func TestAnchorRepairDoesNotCorrectALayerNamingAnotherRoot(t *testing.T) {
 	var superseded sql.NullTime
 	if err := f.db.QueryRow(`SELECT superseded_at FROM chained_proof_layers WHERE layer_id = $1`, f.layerID).Scan(&superseded); err != nil || superseded.Valid {
 		t.Fatalf("the row was replaced: %v %v", superseded, err)
+	}
+}
+
+// RB3-F119: a layer and a proof written while the anchor could not be read back state the right block but
+// no block hash. The repair completes them from the chain - it used to act only on a hash that was present
+// and wrong, so a missing one stayed missing for ever.
+func TestAnchorRepairCompletesAMissingBlockHash(t *testing.T) {
+	f := newRepairFixtureStating(t, true)
+	report := f.run(t, true)
+	if !f.mentions(report.Actions, f.layerID.String()) || !f.mentions(report.Actions, f.mine.ProofID.String()) {
+		t.Fatalf("the layer and the proof stated without a block hash were not completed: %+v", report)
+	}
+	if report.BlocksFilled+report.BlocksCorrected != 0 || report.Layer5Replaced != 1 || report.ProofsRevised != 1 {
+		t.Fatalf("report %+v; want the layer replaced and the proof revised, the canonical row untouched", report)
+	}
+
+	var layerJSON []byte
+	if err := f.db.QueryRow(`SELECT layer_json FROM chained_proof_layers WHERE proof_id = $1 AND superseded_by IS NULL AND layer_number = $2`,
+		f.mine.ProofArtifactID, Layer5LayerNumber).Scan(&layerJSON); err != nil {
+		t.Fatal(err)
+	}
+	var completed Layer5
+	if err := json.Unmarshal(layerJSON, &completed); err != nil {
+		t.Fatal(err)
+	}
+	if completed.BlockNumber != f.chainBlock || !sameHex(completed.BlockHash, f.chainHash) {
+		t.Fatalf("completed layer states block %d hash %q; want %d %s", completed.BlockNumber, completed.BlockHash, f.chainBlock, f.chainHash)
+	}
+	var reason sql.NullString
+	if err := f.db.QueryRow(`SELECT superseded_reason FROM chained_proof_layers WHERE layer_id = $1`, f.layerID).Scan(&reason); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(reason.String, "without its hash") {
+		t.Fatalf("the completed layer's reason does not say what was missing: %q", reason.String)
+	}
+
+	mine, err := f.repos.Proofs.GetProof(context.Background(), f.mine.ProofID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !mine.AnchorBlockHash.Valid || !sameHex(mine.AnchorBlockHash.String, f.chainHash) || mine.AnchorBlockNumber != int64(f.chainBlock) {
+		t.Fatalf("my proof states block %d hash %v", mine.AnchorBlockNumber, mine.AnchorBlockHash)
+	}
+	if !ed25519.Verify(f.publicKey, mine.ProofHash, mine.ValidatorSig) {
+		t.Fatal("the completed proof is not signed over its new hash")
+	}
+	if !f.mentions(report.LeftForOwner, f.other.ProofID.String()) {
+		t.Fatalf("another validator's proof without a hash is not left for it: %+v", report.LeftForOwner)
+	}
+
+	// Complete now: a second run finds nothing.
+	again := f.run(t, true)
+	if again.Layer5Replaced+again.ProofsRevised != 0 || f.mentions(again.Actions, f.anchorTx) {
+		t.Fatalf("second run still acts: %+v", again)
 	}
 }
