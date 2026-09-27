@@ -8,6 +8,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -74,8 +75,14 @@ func (h *BatchHandlers) HandleBatchStatus(w http.ResponseWriter, r *http.Request
 	defer cancel()
 
 	batch, err := h.repos.Batches.GetBatch(ctx, batchID)
+	if errors.Is(err, database.ErrBatchNotFound) {
+		writeJSONError(w, "batch not found", http.StatusNotFound)
+		return
+	}
 	if err != nil {
-		writeJSONError(w, fmt.Sprintf("batch not found: %v", err), http.StatusNotFound)
+		// A failed lookup is not an absent batch (RB3-F120).
+		h.logger.Printf("Error getting batch %s: %v", batchID, err)
+		writeJSONError(w, "failed to retrieve batch", http.StatusInternalServerError)
 		return
 	}
 
@@ -118,8 +125,14 @@ func (h *BatchHandlers) HandleGetProof(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	proof, err := h.repos.ProofArtifacts.GetProofByID(ctx, proofID)
-	if err != nil || proof == nil {
-		writeJSONError(w, fmt.Sprintf("proof not found: %v", err), http.StatusNotFound)
+	if err != nil {
+		// A failed lookup is not an absent proof (RB3-F120).
+		h.logger.Printf("Error getting proof %s: %v", proofID, err)
+		writeJSONError(w, "failed to retrieve proof", http.StatusInternalServerError)
+		return
+	}
+	if proof == nil {
+		writeJSONError(w, "proof not found", http.StatusNotFound)
 		return
 	}
 
@@ -152,8 +165,14 @@ func (h *BatchHandlers) HandleGetProofByTxHash(w http.ResponseWriter, r *http.Re
 	defer cancel()
 
 	proof, err := h.repos.ProofArtifacts.GetProofByTxHash(ctx, path)
-	if err != nil || proof == nil {
-		writeJSONError(w, fmt.Sprintf("proof not found: %v", err), http.StatusNotFound)
+	if err != nil {
+		// A failed lookup is not an absent proof (RB3-F120).
+		h.logger.Printf("Error getting proof by tx %s: %v", path, err)
+		writeJSONError(w, "failed to retrieve proof", http.StatusInternalServerError)
+		return
+	}
+	if proof == nil {
+		writeJSONError(w, "proof not found", http.StatusNotFound)
 		return
 	}
 
@@ -234,8 +253,14 @@ func (h *BatchHandlers) HandleGetAnchor(w http.ResponseWriter, r *http.Request) 
 	defer cancel()
 
 	anchor, err := h.repos.Anchors.GetAnchor(ctx, anchorID)
+	if errors.Is(err, database.ErrAnchorNotFound) {
+		writeJSONError(w, "anchor not found", http.StatusNotFound)
+		return
+	}
 	if err != nil {
-		writeJSONError(w, fmt.Sprintf("anchor not found: %v", err), http.StatusNotFound)
+		// A failed lookup is not an absent anchor (RB3-F120).
+		h.logger.Printf("Error getting anchor %s: %v", anchorID, err)
+		writeJSONError(w, "failed to retrieve anchor", http.StatusInternalServerError)
 		return
 	}
 
@@ -274,8 +299,14 @@ func (h *BatchHandlers) HandleGetAnchorByBatch(w http.ResponseWriter, r *http.Re
 	defer cancel()
 
 	anchor, err := h.repos.Anchors.GetAnchorByBatchID(ctx, batchID)
+	if errors.Is(err, database.ErrAnchorNotFound) {
+		writeJSONError(w, "anchor not found", http.StatusNotFound)
+		return
+	}
 	if err != nil {
-		writeJSONError(w, fmt.Sprintf("anchor not found: %v", err), http.StatusNotFound)
+		// A failed lookup is not an absent anchor (RB3-F120).
+		h.logger.Printf("Error getting anchor for batch %s: %v", batchID, err)
+		writeJSONError(w, "failed to retrieve anchor", http.StatusInternalServerError)
 		return
 	}
 
