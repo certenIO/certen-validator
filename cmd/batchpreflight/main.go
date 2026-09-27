@@ -13,10 +13,13 @@
 //     If not, every quorum signature is over a message the contract will not reconstruct, and
 //     executeComprehensiveProof reverts after the anchor has been paid for.
 //  4. Is the anchor's authorized-subset binding enforced, and does it hold commitments?
+//  5. Does each validator's sending key (ETH_PRIVATE_KEY in its secrets file) derive to the address its
+//     BLS key resolves to? One that does not refuses to start; one shared by two validators sends and
+//     claims settlements as the other (RB3-F64). Only addresses are printed.
 //
 // Usage:
 //
-//	go run ./cmd/batchpreflight -rpc <url> -anchor 0x... -pubkeys running-pubkeys.json
+//	go run ./cmd/batchpreflight -rpc <url> -anchor 0x... -pubkeys running-pubkeys.json \n//	    -sender-envs validator-1=/root/certen-validators/secrets/validator-1.env,...   (run as root on the host)
 //
 // Exit code is non-zero if any check fails, so it can gate a deploy.
 package main
@@ -36,6 +39,7 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
 
 	"github.com/certen/independant-validator/pkg/crypto/bls"
@@ -158,6 +162,83 @@ func resolveIdentities(running, registry map[string]string) (claimed map[string]
 	return claimed, fails
 }
 
+// loadSenderAddresses derives each validator's sending address from ETH_PRIVATE_KEY in its secrets file
+// (spec: validator-1=/path/secrets/validator-1.env,...). Only the address leaves this function: the key is
+// never printed or kept (RB3-F64).
+func loadSenderAddresses(spec string) (map[string]common.Address, error) {
+	if strings.TrimSpace(spec) == "" {
+		return nil, fmt.Errorf("no -sender-envs: each validator's secrets file must be supplied so its sending key " +
+			"can be checked against its registered identity (RB3-F64)")
+	}
+	out := map[string]common.Address{}
+	for _, part := range strings.Split(spec, ",") {
+		id, path, ok := strings.Cut(strings.TrimSpace(part), "=")
+		if !ok || id == "" || path == "" {
+			return nil, fmt.Errorf("-sender-envs entry %q is not validator-id=path", part)
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("%s: read %s: %w", id, path, err)
+		}
+		var key string
+		for _, line := range strings.Split(string(raw), "\n") {
+			line = strings.TrimSpace(strings.TrimSuffix(line, "\r"))
+			if v, found := strings.CutPrefix(line, "ETH_PRIVATE_KEY="); found {
+				key = strings.Trim(strings.TrimSpace(v), `"'`)
+			}
+		}
+		if key == "" {
+			return nil, fmt.Errorf("%s: %s sets no ETH_PRIVATE_KEY", id, path)
+		}
+		priv, err := crypto.HexToECDSA(strings.TrimPrefix(key, "0x"))
+		if err != nil {
+			return nil, fmt.Errorf("%s: the ETH_PRIVATE_KEY in %s is not a secp256k1 key (the value is not shown)", id, path)
+		}
+		if _, dup := out[id]; dup {
+			return nil, fmt.Errorf("-sender-envs lists %s twice", id)
+		}
+		out[id] = crypto.PubkeyToAddress(priv.PublicKey)
+	}
+	return out, nil
+}
+
+// senderMismatches compares each validator's sending address with the registry address its BLS key
+// resolved to (claimed: registry address -> validator id).
+func senderMismatches(claimed map[string]string, senders map[string]common.Address) []string {
+	byID := map[string]string{}
+	for addr, id := range claimed {
+		byID[id] = strings.ToLower(addr)
+	}
+	ids := make([]string, 0, len(senders))
+	for id := range senders {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	var out []string
+	seen := map[common.Address]string{}
+	for _, id := range ids {
+		s := senders[id]
+		if other, dup := seen[s]; dup {
+			out = append(out, fmt.Sprintf("%s and %s send with the same key %s - one would send and claim as the other", other, id, s.Hex()))
+		}
+		seen[s] = id
+		want, ok := byID[id]
+		switch {
+		case !ok:
+			out = append(out, fmt.Sprintf("%s sends as %s but has no registered identity", id, s.Hex()))
+		case strings.ToLower(s.Hex()) != want:
+			out = append(out, fmt.Sprintf("%s sends as %s but its registered identity is %s - it would refuse to start (RB3-F64)", id, s.Hex(), want))
+		}
+	}
+	for id := range byID {
+		if _, ok := senders[id]; !ok {
+			out = append(out, fmt.Sprintf("%s: no secrets file supplied, its sending key is unchecked", id))
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 var failures []string
 
 func fail(format string, a ...interface{}) {
@@ -172,7 +253,14 @@ func main() {
 	rpc := flag.String("rpc", "https://ethereum-sepolia-rpc.publicnode.com", "EVM RPC URL")
 	anchorHex := flag.String("anchor", "0xb39b707D50089C9Eb92818f9B2870eba6DA5C2a0", "CertenAnchorV8_1 address")
 	pubkeysPath := flag.String("pubkeys", "", "running validators' BLS public keys (JSON: validators[].validator_id, bls_public_key) — required")
+	senderEnvs := flag.String("sender-envs", "", "validator-1=/path/secrets/validator-1.env,... — required: each sending key is checked against its registered identity; only addresses are printed")
 	flag.Parse()
+
+	senders, err := loadSenderAddresses(*senderEnvs)
+	if err != nil {
+		fmt.Printf("❌ %v\n", err)
+		os.Exit(1)
+	}
 
 	running, err := loadRunningPubkeys(*pubkeysPath)
 	if err != nil {
@@ -286,6 +374,16 @@ func main() {
 	}
 	if len(claimed) == len(registry) && len(failures) == 0 {
 		okf("all %d registered validators are claimed by exactly one running node", len(registry))
+	}
+
+	// ---- 2b. Sending keys ------------------------------------------------------
+	fmt.Println("\n[2b] Sending keys are each validator's own registered identity (RB3-F64)")
+	if mism := senderMismatches(claimed, senders); len(mism) > 0 {
+		for _, m := range mism {
+			fail("%s", m)
+		}
+	} else {
+		okf("every validator sends as its own registered identity")
 	}
 
 	// ---- 3. Validator-set root ----------------------------------------------
