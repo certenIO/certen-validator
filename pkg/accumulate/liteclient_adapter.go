@@ -748,13 +748,9 @@ func (l *LiteClientAdapter) GetTransaction(ctx context.Context, hash string) (*T
 						tx.Timestamp = parsedTime
 					}
 				}
-				if tx.Timestamp.IsZero() {
-					// Fallback if timestamp parsing fails
-					tx.Timestamp = time.Now()
-				}
-
-				// Extract signatures if available
-				tx.Signatures = []Signature{} // Real signatures would be extracted from transaction data
+				// A record without a readable timestamp leaves it unstated (zero), and signatures are not
+				// read here, so none are claimed. They used to be the validator's clock and an empty list
+				// standing for "no signatures" (RB3-F104).
 
 				log.Printf("✅ [LITE-CLIENT] Retrieved real transaction: hash=%s, type=%s, height=%d",
 					hash, tx.Type, tx.BlockHeight)
@@ -1096,43 +1092,25 @@ func (l *LiteClientAdapter) queryV3API(ctx context.Context, method string, param
 
 // getNetworkStatusV3 gets current network status using direct v3 API calls
 func (l *LiteClientAdapter) getNetworkStatusV3(ctx context.Context) (*NetworkStatus, error) {
-	// Primary: direct network-status
+	// The Directory Network's height from network-status, or an error (RB3-F104). A failed query used
+	// to fall back to "the latest block of whichever partition answers" - a BVN height, which GetBlock
+	// then read as a DN height - and the status carried an invented hash ("block_<height>"), the
+	// validator's clock as the block time, and a hard-coded "kermit"/"testnet" (Kermit calls itself
+	// "DevNet"). Only what network-status states is stated.
 	result, err := l.queryV3API(ctx, "network-status", map[string]interface{}{})
 	if err != nil {
-		return l.queryBVNStatus(ctx)
+		return nil, fmt.Errorf("network-status: %w", err)
 	}
-
-	// Preferred: directoryHeight (current DN directory height)
-	if directoryHeight, ok := result["directoryHeight"].(float64); ok {
-		actualBlockHeight := int64(directoryHeight)
-
-		return &NetworkStatus{
-			Network: struct {
-				ID     string `json:"id"`
-				Type   string `json:"type"`
-				Status struct {
-					LastBlockHeight int64  `json:"last_block_height"`
-					LastBlockHash   string `json:"last_block_hash"`
-					LastBlockTime   string `json:"last_block_time"`
-				} `json:"status"`
-			}{
-				ID:   "kermit",
-				Type: "testnet",
-				Status: struct {
-					LastBlockHeight int64  `json:"last_block_height"`
-					LastBlockHash   string `json:"last_block_hash"`
-					LastBlockTime   string `json:"last_block_time"`
-				}{
-					LastBlockHeight: actualBlockHeight,
-					LastBlockHash:   fmt.Sprintf("block_%d", actualBlockHeight),
-					LastBlockTime:   time.Now().Format(time.RFC3339),
-				},
-			},
-		}, nil
+	directoryHeight, ok := result["directoryHeight"].(float64)
+	if !ok || directoryHeight <= 0 {
+		return nil, fmt.Errorf("network-status carries no directory height (%v)", result["directoryHeight"])
 	}
-
-	// If schema changes and directoryHeight is absent, we *still* don't guess.
-	return l.queryBVNStatus(ctx)
+	status := &NetworkStatus{}
+	if network, ok := result["network"].(map[string]interface{}); ok {
+		status.Network.ID, _ = network["networkName"].(string)
+	}
+	status.Network.Status.LastBlockHeight = int64(directoryHeight)
+	return status, nil
 }
 
 // queryMinorBlocks queries exactly one minor block from a partition using v3 API
@@ -1160,7 +1138,10 @@ func (l *LiteClientAdapter) queryMinorBlocks(ctx context.Context, partitionURL s
 	}
 
 	// Parse the block response
-	block := l.parseMinorBlockRecord(response, partitionURL, blockHeight)
+	block, err := l.parseMinorBlockRecord(response, partitionURL, blockHeight)
+	if err != nil {
+		return nil, err
+	}
 	if block != nil {
 		return []*MinorBlock{block}, nil
 	}
@@ -1246,7 +1227,7 @@ type BlockEntry struct {
 }
 
 // parseMinorBlockRecord parses a single MinorBlockRecord from the v3 API response
-func (l *LiteClientAdapter) parseMinorBlockRecord(recordMap map[string]interface{}, partition string, defaultHeight int64) *MinorBlock {
+func (l *LiteClientAdapter) parseMinorBlockRecord(recordMap map[string]interface{}, partition string, defaultHeight int64) (*MinorBlock, error) {
 	// Look for the value field which contains the MinorBlockRecord
 	var blockData map[string]interface{}
 	if value, ok := recordMap["value"].(map[string]interface{}); ok {
@@ -1267,12 +1248,14 @@ func (l *LiteClientAdapter) parseMinorBlockRecord(recordMap map[string]interface
 		block.Index = int64(index)
 	}
 
-	// Extract block time
-	if timeStr, ok := blockData["time"].(string); ok {
-		if parsedTime, err := time.Parse(time.RFC3339, timeStr); err == nil {
-			block.Time = parsedTime
-		}
+	// The block's own time. Every minor block record carries one; a record without a readable time is
+	// refused rather than given the zero time, which became the intent's BlockTime (RB3-F104).
+	timeStr, _ := blockData["time"].(string)
+	parsedTime, err := time.Parse(time.RFC3339, timeStr)
+	if err != nil {
+		return nil, fmt.Errorf("minor block %d on %s: time %q: %w", block.Height, partition, timeStr, err)
 	}
+	block.Time = parsedTime
 	if source, ok := blockData["source"].(string); ok {
 		block.Source = source
 	}
@@ -1280,7 +1263,7 @@ func (l *LiteClientAdapter) parseMinorBlockRecord(recordMap map[string]interface
 	// Extract entries using the TypeScript getBlockEntries pattern
 	block.Entries = l.getBlockEntries(blockData, block.Height, partition)
 
-	return block
+	return block, nil
 }
 
 // getBlockEntries implements the TypeScript getBlockEntries.ts pattern
