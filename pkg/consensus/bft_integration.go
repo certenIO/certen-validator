@@ -1552,7 +1552,10 @@ func NewValidatorChainEngine(
 	// CRITICAL: Recover state from ledger before CometBFT calls Info()
 	// This ensures the app reports the correct height/appHash so CometBFT can sync properly
 	if err := app.RecoverState(); err != nil {
-		logger.Printf("⚠️ State recovery failed (will start fresh): %v", err)
+		// Starting fresh under a chain that has history is an app-hash mismatch at the handshake - a
+		// crash loop - so the node does not start, and says why (RB3-F114). A genuine first boot has no
+		// persisted state and recovers without error.
+		return nil, nil, fmt.Errorf("recover the validator ledger: %w", err)
 	}
 
 	// Create minimal CometBFT config for ValidatorBlock consensus
@@ -1724,10 +1727,10 @@ func NewRealCometBFTEngine(
 		return nil, fmt.Errorf("load node key: %w", err)
 	}
 
-	// CRITICAL FIX: Write shared deterministic genesis before creating node
-	tempEngine := &RealCometBFTEngine{logger: logger}
-	if err := tempEngine.writeDeterministicGenesisIfNeeded(cometCfg); err != nil {
-		return nil, fmt.Errorf("write shared genesis: %w", err)
+	// The genesis is the chain's, provided by the operator; it is never generated here (RB3-F95). A
+	// genesis written from code on a wiped volume is a different chain.
+	if _, err := os.Stat(cometCfg.GenesisFile()); err != nil {
+		return nil, fmt.Errorf("CometBFT genesis %s: %w - it is never generated at boot", cometCfg.GenesisFile(), err)
 	}
 
 	// CRITICAL FIX: Enable CometBFT logging to see consensus activity
@@ -2272,49 +2275,6 @@ func (app *CertenApplication) computeAppHash() []byte {
 	return hash.Sum(nil)
 }
 
-// generateDeterministicNodeKey creates a deterministic node key based on validator ID and chain ID
-// IMPORTANT: This MUST match the exact seed format used by generate-genesis to ensure consistent node IDs
-func generateDeterministicNodeKey(validatorID string) cmted25519.PrivKey {
-	// Get chain ID from environment - MUST match the genesis generator's chain ID
-	chainID := os.Getenv("COMETBFT_CHAIN_ID")
-	if chainID == "" {
-		chainID = "certen-testnet" // Default to match typical testnet deployment
-	}
-
-	// Use EXACT same seed format as genesis generator:
-	// seed := sha256.Sum256([]byte(fmt.Sprintf("certen-validator-key-%s-%s", chainID, validatorID)))
-	seedStr := fmt.Sprintf("certen-validator-key-%s-%s", chainID, validatorID)
-	seed := sha256.Sum256([]byte(seedStr))
-
-	// Generate proper ed25519 key from seed (same as genesis generator)
-	privateKey := ed25519.NewKeyFromSeed(seed[:])
-	publicKey := privateKey.Public().(ed25519.PublicKey)
-
-	// CometBFT expects 64-byte format: private key seed (32) + public key (32)
-	combined := make([]byte, 64)
-	copy(combined[:32], privateKey[:32]) // First 32 bytes: private key
-	copy(combined[32:], publicKey)       // Last 32 bytes: public key
-
-	return cmted25519.PrivKey(combined)
-}
-
-// generateDeterministicValidatorPublicKey creates the public key for any validator ID
-// IMPORTANT: Uses SAME seed as node key (matching genesis generator behavior)
-func generateDeterministicValidatorPublicKey(validatorID string) cmted25519.PubKey {
-	// Use the SAME key as node key (genesis generator uses one key for both)
-	privKey := generateDeterministicNodeKey(validatorID)
-	pubKey := privKey.PubKey()
-
-	// Type assert to the specific ed25519 public key type
-	ed25519PubKey, ok := pubKey.(cmted25519.PubKey)
-	if !ok {
-		// Fallback - should not happen with our deterministic generation
-		return cmted25519.GenPrivKey().PubKey().(cmted25519.PubKey)
-	}
-
-	return ed25519PubKey
-}
-
 // NewUnifiedCometBFTEngine creates a unified CometBFT engine for dev testing (use NewProductionEngine for production)
 func NewUnifiedCometBFTEngine(validatorID string) (*RealCometBFTEngine, error) {
 	logger := log.New(os.Stdout, fmt.Sprintf("[CometBFT-%s] ", validatorID), log.LstdFlags|log.Lmicroseconds)
@@ -2389,68 +2349,11 @@ func NewUnifiedCometBFTEngine(validatorID string) (*RealCometBFTEngine, error) {
 	cfg.P2P.AllowDuplicateIP = true                         // Allow duplicate IPs in Docker network
 	cfg.P2P.PersistentPeersMaxDialPeriod = 60 * time.Second // Keep trying persistent peers
 
-	// Generate deterministic node key (always overwrite existing)
-	nodeKeyFile := filepath.Join(homeDir, "config", "node_key.json")
-	os.MkdirAll(filepath.Dir(nodeKeyFile), 0755)
-
-	// Remove existing node key to ensure deterministic generation
-	os.Remove(nodeKeyFile)
-
-	// Generate deterministic node key
-	nodePrivKey := generateDeterministicNodeKey(validatorID)
-	nodeKey := &p2p.NodeKey{
-		PrivKey: nodePrivKey,
-	}
-
-	// Save the deterministic node key
-	if err := nodeKey.SaveAs(nodeKeyFile); err != nil {
-		return nil, fmt.Errorf("failed to save node key: %w", err)
-	}
-
-	logger.Printf("✅ Generated deterministic node key for %s: %s", validatorID, nodeKey.ID())
-
-	// Create private validator with deterministic keys
-	privValKeyFile := filepath.Join(homeDir, "config", "priv_validator_key.json")
-	privValStateFile := filepath.Join(homeDir, "data", "priv_validator_state.json")
-	os.MkdirAll(filepath.Dir(privValKeyFile), 0755)
-	os.MkdirAll(filepath.Dir(privValStateFile), 0755)
-
-	// Remove existing keys to ensure deterministic generation
-	os.Remove(privValKeyFile)
-	os.Remove(privValStateFile)
-
-	// Generate deterministic private validator key using SAME seed as node key (matches genesis generator)
-	privValidatorKey := generateDeterministicNodeKey(validatorID)
-
-	// Create the private validator - NewFilePV expects (PrivKey, keyFilePath, stateFilePath)
-	privValidator := privval.NewFilePV(privValidatorKey, privValKeyFile, privValStateFile)
-	privValidator.Save()
-
-	// Create a unified validator set of 7 BFT validators
-	totalValidators := 7
-	byzantineFaultThreshold := (totalValidators - 1) / 3 // f = 2 (can tolerate 2 Byzantine faults)
-	consensusThreshold := 2*byzantineFaultThreshold + 1  // 2f+1 = 5 (need 5 for consensus)
-
-	logger.Printf("🏛️ Unified BFT validator network configuration:")
-	logger.Printf("   • Total validators: %d", totalValidators)
-	logger.Printf("   • Byzantine fault threshold: %d", byzantineFaultThreshold)
-	logger.Printf("   • Consensus threshold: %d", consensusThreshold)
-	logger.Printf("   • Current validator: %s", validatorID)
-
-	// Create the unified validator set for 7 BFT validators
-	validatorMap := make(map[string]*SimpleBFTValidator)
-	validatorIDs := []string{"validator-1", "validator-2", "validator-3", "validator-4", "validator-5", "validator-6", "validator-7"}
-
-	for _, vID := range validatorIDs {
-		validatorPubKey := generateDeterministicValidatorPublicKey(vID)
-		bftValidator := &SimpleBFTValidator{
-			ID:          vID,
-			PublicKey:   validatorPubKey.Bytes(),
-			VotingPower: 10, // Equal voting power
-			IsActive:    true,
-		}
-		validatorMap[vID] = bftValidator
-		logger.Printf("   • Validator %s: %s (power: %d)", vID, validatorPubKey.Address(), bftValidator.VotingPower)
+	// Consensus key, node key, signing state and genesis by the key-management rules (comet_keys.go,
+	// RB3-F95): read from the persistent volume, never deleted, never overwritten, never derived from the
+	// validator's name; a missing key is re-created only from its secret seed, or the node does not start.
+	if _, err := ensureCometKeys(homeDir, validatorID, cometChainIDForFormulaCheck(), os.Getenv, logger); err != nil {
+		return nil, fmt.Errorf("CometBFT keys for %s: %w", validatorID, err)
 	}
 
 	// CRITICAL FIX: Use ValidatorApp for ValidatorBlock consensus, NOT CertenApplication
@@ -2468,7 +2371,10 @@ func NewUnifiedCometBFTEngine(validatorID string) (*RealCometBFTEngine, error) {
 	// CRITICAL: Recover state from ledger before CometBFT calls Info()
 	// This ensures the app reports the correct height/appHash so CometBFT can sync properly
 	if err := app.RecoverState(); err != nil {
-		logger.Printf("⚠️ State recovery failed (will start fresh): %v", err)
+		// Starting fresh under a chain that has history is an app-hash mismatch at the handshake - a
+		// crash loop - so the node does not start, and says why (RB3-F114). A genuine first boot has no
+		// persisted state and recovers without error.
+		return nil, fmt.Errorf("recover the validator ledger: %w", err)
 	}
 
 	// Use the new, clean RealCometBFTEngine constructor instead of manual struct literal
@@ -2640,77 +2546,6 @@ func (e *RealCometBFTEngine) SetValidatorCount(count int) {
 		validatorApp.SetValidatorCount(count)
 		e.logger.Printf("✅ [PERSIST] Validator count set to %d for quorum calculations", count)
 	}
-}
-
-// writeDeterministicGenesisIfNeeded writes shared genesis for all 7 validators
-func (engine *RealCometBFTEngine) writeDeterministicGenesisIfNeeded(cfg *config.Config) error {
-	genFile := cfg.GenesisFile()
-
-	// Check if genesis already exists
-	if _, err := os.Stat(genFile); err == nil {
-		engine.logger.Printf("📄 Using existing shared genesis: %s", genFile)
-		return nil
-	}
-
-	// Create directory if needed
-	if err := os.MkdirAll(filepath.Dir(genFile), 0755); err != nil {
-		return fmt.Errorf("create genesis dir: %w", err)
-	}
-
-	// Generate deterministic genesis document
-	genesisDoc, err := engine.createGenesisDocument()
-	if err != nil {
-		return fmt.Errorf("create genesis doc: %w", err)
-	}
-
-	// Write genesis to file
-	if err := genesisDoc.SaveAs(genFile); err != nil {
-		return fmt.Errorf("write genesis doc: %w", err)
-	}
-
-	engine.logger.Printf("✅ [GENESIS] Written shared deterministic genesis for 7-validator BFT network: %s", genFile)
-	engine.logger.Printf("   • ChainID: %s", genesisDoc.ChainID)
-	engine.logger.Printf("   • Validators: %d", len(genesisDoc.Validators))
-
-	return nil
-}
-
-// createGenesisDocument creates the genesis document with all validators
-func (engine *RealCometBFTEngine) createGenesisDocument() (*cmttypes.GenesisDoc, error) {
-	allValidatorIDs := []string{"validator-1", "validator-2", "validator-3", "validator-4", "validator-5", "validator-6", "validator-7"}
-	validators := make([]cmttypes.GenesisValidator, 0, len(allValidatorIDs))
-
-	for _, validatorID := range allValidatorIDs {
-		validatorPubKey := generateDeterministicValidatorPublicKey(validatorID)
-		genesisValidator := cmttypes.GenesisValidator{
-			Address: validatorPubKey.Address(),
-			PubKey:  validatorPubKey,
-			Power:   1,
-			Name:    validatorID,
-		}
-		validators = append(validators, genesisValidator)
-	}
-
-	// Use deterministic genesis time
-	deterministicGenesisTime := time.Date(2025, 11, 20, 12, 0, 0, 0, time.UTC)
-
-	// Get chainID from environment, with consistent default for all validators
-	chainID := os.Getenv("COMETBFT_CHAIN_ID")
-	if chainID == "" {
-		chainID = "certen-testnet" // Default chain ID for the testnet
-	}
-
-	genesisDoc := &cmttypes.GenesisDoc{
-		ChainID:         chainID,
-		GenesisTime:     deterministicGenesisTime,
-		InitialHeight:   1,
-		ConsensusParams: cmttypes.DefaultConsensusParams(),
-		Validators:      validators,
-		AppHash:         nil,
-		AppState:        json.RawMessage(`{}`),
-	}
-
-	return genesisDoc, nil
 }
 
 // getChainIDFromEnv returns the consistent chain ID from environment variable
@@ -3310,28 +3145,10 @@ func NewProductionEngine(cfg EngineConfig, app abcitypes.Application, logger *lo
 		logger.Printf("🔗 [PRODUCTION-ENGINE] Configured persistent peers: %s", cometConfig.P2P.PersistentPeers)
 	}
 
-	// 2. Generate deterministic node keys
-	nodeKeyFile := filepath.Join(cfg.HomeDir, "config", "node_key.json")
-	os.MkdirAll(filepath.Dir(nodeKeyFile), 0755)
-	os.Remove(nodeKeyFile) // Ensure deterministic generation
-
-	nodePrivKey := generateDeterministicNodeKey(cfg.ValidatorID)
-	nodeKey := &p2p.NodeKey{PrivKey: nodePrivKey}
-	if err := nodeKey.SaveAs(nodeKeyFile); err != nil {
-		return nil, fmt.Errorf("failed to save node key: %w", err)
+	// 2-3. Keys, signing state and genesis by the key-management rules (comet_keys.go, RB3-F95).
+	if _, err := ensureCometKeys(cfg.HomeDir, cfg.ValidatorID, cometChainIDForFormulaCheck(), os.Getenv, logger); err != nil {
+		return nil, fmt.Errorf("CometBFT keys for %s: %w", cfg.ValidatorID, err)
 	}
-
-	// 3. Create deterministic private validator
-	privValKeyFile := filepath.Join(cfg.HomeDir, "config", "priv_validator_key.json")
-	privValStateFile := filepath.Join(cfg.HomeDir, "data", "priv_validator_state.json")
-	os.MkdirAll(filepath.Dir(privValKeyFile), 0755)
-	os.MkdirAll(filepath.Dir(privValStateFile), 0755)
-	os.Remove(privValKeyFile)
-	os.Remove(privValStateFile)
-
-	privValidatorKey := generateDeterministicNodeKey(cfg.ValidatorID)
-	privValidator := privval.NewFilePV(privValidatorKey, privValKeyFile, privValStateFile)
-	privValidator.Save()
 
 	// 4. Create unified production engine using NewRealCometBFTEngine constructor
 	// Note: This replaces the old struct literal which had invalid field names
@@ -3427,4 +3244,13 @@ func requireCommitted(res *BFTExecutionResult) error {
 		return fmt.Errorf("%w: tx=%X", ErrValidatorBlockNotCommitted, tx)
 	}
 	return nil
+}
+
+// cometChainIDForFormulaCheck is the chain id the retired public formula used (COMETBFT_CHAIN_ID, default
+// certen-testnet), needed only to recognise a key that is still the formula's.
+func cometChainIDForFormulaCheck() string {
+	if id := strings.TrimSpace(os.Getenv("COMETBFT_CHAIN_ID")); id != "" {
+		return id
+	}
+	return "certen-testnet"
 }
