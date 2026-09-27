@@ -228,7 +228,14 @@ func (builder *ValidatorBlockBuilder) BuildFromIntent(inputs BuilderInputs) (*Va
 
 	// === 3.9 Metadata (BlockHeight/Timestamp/ValidatorID) ===
 	// These must be populated for invariant validation
-	timestamp := time.Now().UTC().Format(time.RFC3339)
+	// The intent's own Accumulate block time: the same on every validator and on every retry, so a
+	// resubmitted block is the same transaction and a late commit is found by its hash. It was
+	// time.Now(), so each retry proposed new bytes and one intent could commit twice (RB3-F99). The
+	// committed block's timestamp is the ABCI block time either way (applyCommitMetadata).
+	if inputs.Intent.BlockTime.IsZero() {
+		return nil, fmt.Errorf("intent %s carries no Accumulate block time; a validator block is not stamped with a local clock", inputs.Intent.IntentID)
+	}
+	timestamp := inputs.Intent.BlockTime.UTC().Format(time.RFC3339)
 	validatorID := builder.validatorID
 	if validatorID == "" {
 		return nil, fmt.Errorf("validator block builder has no validator ID")
