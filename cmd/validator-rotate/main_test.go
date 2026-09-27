@@ -119,6 +119,15 @@ func TestPreflightIsGoOnlyWhenEverythingHolds(t *testing.T) {
 			}
 			return v, tx
 		},
+		"a lagging validator": func(v []*nodeView) ([]*nodeView, *consensus.ValidatorRotationTx) {
+			for i, n := range v {
+				n.height = 100
+				if i == 5 {
+					n.height = 90
+				}
+			}
+			return v, tx
+		},
 		"a formula key": func(v []*nodeView) ([]*nodeView, *consensus.ValidatorRotationTx) {
 			r := rotationFor(t, 1)
 			r.NewPubKey = hex.EncodeToString(formulaPub(t, "validator-3"))

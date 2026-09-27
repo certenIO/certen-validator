@@ -65,6 +65,9 @@ const rotationRulesVersion = 8
 // headroom so a future validator-8.. cannot be handed a derivable key either.
 const formulaIDs = 64
 
+// maxHeightLag is how far behind the highest node a validator may be at preflight.
+const maxHeightLag = 2
+
 func main() {
 	if len(os.Args) < 2 {
 		usage()
@@ -516,6 +519,19 @@ func preflightChecks(tx *consensus.ValidatorRotationTx, views []*nodeView) []str
 	}
 	if total > 0 && remaining*3 <= total*2 {
 		nogo = append(nogo, fmt.Sprintf("with this validator out, %d of %d power remains - not more than two thirds", remaining, total))
+	}
+	// Every validator must be keeping up: the rotation takes one slot out until its new key runs, so the
+	// others must all be live to keep the margin the chain has.
+	var top int64
+	for _, v := range views {
+		if v.height > top {
+			top = v.height
+		}
+	}
+	for _, v := range views {
+		if top-v.height > maxHeightLag {
+			nogo = append(nogo, fmt.Sprintf("%s is at height %d, %d behind: every validator must be caught up", v.rpc, v.height, top-v.height))
+		}
 	}
 	if len(views) < len(views[0].set) {
 		nogo = append(nogo, fmt.Sprintf("only %d of %d validators were checked: preflight every validator", len(views), len(views[0].set)))
