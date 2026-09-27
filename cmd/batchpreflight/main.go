@@ -19,7 +19,8 @@
 //
 // Usage:
 //
-//	go run ./cmd/batchpreflight -rpc <url> -anchor 0x... -pubkeys running-pubkeys.json \n//	    -sender-envs validator-1=/root/certen-validators/secrets/validator-1.env,...   (run as root on the host)
+//	go run ./cmd/batchpreflight -rpc <url> -anchor 0x... -pubkeys running-pubkeys.json \
+//	    -sender-envs validator-1=/root/certen-validators/secrets/validator-1.env,...   (run as root on the host)
 //
 // Exit code is non-zero if any check fails, so it can gate a deploy.
 package main
