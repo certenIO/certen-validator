@@ -20,8 +20,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ethereum/go-ethereum/common"
-
 	"github.com/certen/independant-validator/db"
 	"github.com/certen/independant-validator/pkg/accumulate"
 	"github.com/certen/independant-validator/pkg/anchor"
@@ -1669,62 +1667,12 @@ func startValidator(
 		requestFulfiller.Start(context.Background())
 		log.Println("✅ [Phase 5] Proof request fulfiller started")
 
-		// ==========================================================================
-		// PHASE 4 Task 4.3: Event Watcher for Contract Event Monitoring
-		// Per Implementation Plan: Monitor CertenAnchorV3 contract events
-		// This provides visibility into on-chain anchor confirmations and proof executions
-		// ==========================================================================
-		if cfg.CertenContractAddress != "" && cfg.EthereumURL != "" {
-			eventWatcherConfig := &anchor.EventWatcherConfig{
-				ContractAddress: common.HexToAddress(cfg.CertenContractAddress),
-				EthereumURL:     cfg.EthereumURL,
-				ChainID:         cfg.EthChainID,
-				PollInterval:    30 * time.Second,
-				BlockLookback:   100,
-				EventBufferSize: 500,
-				RetryAttempts:   3,
-				RetryDelay:      5 * time.Second,
-			}
-
-			eventWatcher, eventWatcherErr := anchor.NewEventWatcher(
-				eventWatcherConfig,
-				log.New(log.Writer(), "[EventWatcher] ", log.LstdFlags),
-			)
-
-			if eventWatcherErr != nil {
-				log.Printf("⚠️ [Phase 4] Failed to create event watcher: %v", eventWatcherErr)
-			} else {
-				// Register handlers for contract events
-				eventWatcher.RegisterHandler(anchor.EventTypeAnchorCreated, func(event anchor.ContractEvent) error {
-					e := event.(*anchor.AnchorCreatedEvent)
-					log.Printf("📡 [EventWatcher] AnchorCreated: bundleId=%x..., block=%d, validator=%s",
-						e.BundleID[:8], e.BlockNumber, e.Validator.Hex()[:10])
-					return nil
-				})
-
-				eventWatcher.RegisterHandler(anchor.EventTypeProofExecuted, func(event anchor.ContractEvent) error {
-					e := event.(*anchor.ProofExecutedEvent)
-					log.Printf("📡 [EventWatcher] ProofExecuted: anchorId=%x..., merkle=%v, bls=%v, gov=%v",
-						e.AnchorID[:8], e.MerkleVerified, e.BLSVerified, e.GovernanceVerified)
-					return nil
-				})
-
-				eventWatcher.RegisterHandler(anchor.EventTypeProofVerificationFailed, func(event anchor.ContractEvent) error {
-					e := event.(*anchor.ProofVerificationFailedEvent)
-					log.Printf("⚠️ [EventWatcher] ProofVerificationFailed: anchorId=%x..., reason=%s",
-						e.AnchorID[:8], e.Reason)
-					return nil
-				})
-
-				// Start the event watcher
-				if err := eventWatcher.Start(context.Background()); err != nil {
-					log.Printf("⚠️ [Phase 4] Failed to start event watcher: %v", err)
-				} else {
-					log.Printf("✅ [Phase 4] Event watcher started - monitoring contract %s", cfg.CertenContractAddress[:10])
-				}
-			}
-		} else {
-			log.Printf("⚠️ [Phase 4] Event watcher not started - contract address or Ethereum URL not configured")
+		// The live anchors' events on every supported chain (RB3-F72). This used to watch
+		// CERTEN_CONTRACT_ADDRESS - the retired CertenAnchorV5 on Sepolia alone - with a V3 ABI the live
+		// anchors no longer emit.
+		anchorEvents := &execution.AnchorEventMonitor{Endpoints: resolver, Logf: log.Printf}
+		if err := anchorEvents.Start(context.Background()); err != nil {
+			return nil, nil, fmt.Errorf("anchor event monitor: %w", err)
 		}
 
 		// Package all batch components
