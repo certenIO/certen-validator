@@ -1749,24 +1749,21 @@ func startValidator(
 	// ==========================================================================
 	log.Println("🔄 [Phase 7-9] Initializing Proof Cycle Orchestrator...")
 
-	// Phase 9 write-back. Enabled (PROOF_CYCLE_WRITEBACK=true) means it must actually work: the
-	// principal, the signer and the submitter are required, and a validator that cannot build them
-	// does not start. There is no null-submitter fallback for an enabled write-back and no fallback
-	// to the validator's key for a malformed write-back key - each of those used to let the
-	// validator run while the proof cycle's results were written nowhere, or signed by an identity
-	// the operator did not configure.
-	//
-	// Disabled is an explicit, stated mode: the null submitter writes nothing and every proof cycle
-	// records its write-back as not performed.
+	// Phase 9 write-back is part of every proof cycle (RB3-F75): the principal, the signer and the
+	// submitter are required, and a validator that cannot build them does not start. There is no
+	// disabled mode - it used to run every cycle with its results written nowhere - no null submitter,
+	// and no fallback to the validator's key for a malformed write-back key.
 	var accSubmitter execution.AccumulateSubmitter
 
 	accWritebackPrincipal := os.Getenv("ACCUMULATE_RESULTS_PRINCIPAL")
 	accSignerURL := os.Getenv("ACCUMULATE_SIGNER_URL")
-	writebackEnabled := os.Getenv("PROOF_CYCLE_WRITEBACK") == "true"
+	if v := os.Getenv("PROOF_CYCLE_WRITEBACK"); v != "" && v != "true" {
+		return nil, nil, fmt.Errorf("PROOF_CYCLE_WRITEBACK=%s is not supported: proof cycles always write their results back", v)
+	}
 
-	if writebackEnabled {
+	{
 		if accWritebackPrincipal == "" || accSignerURL == "" {
-			return nil, nil, fmt.Errorf("PROOF_CYCLE_WRITEBACK=true requires ACCUMULATE_RESULTS_PRINCIPAL and ACCUMULATE_SIGNER_URL " +
+			return nil, nil, fmt.Errorf("write-back requires ACCUMULATE_RESULTS_PRINCIPAL and ACCUMULATE_SIGNER_URL " +
 				"(write-back cannot run without them)")
 		}
 		log.Printf("📝 [Phase 9] Configuring Accumulate write-back:")
@@ -1802,14 +1799,10 @@ func startValidator(
 		}
 		submitter, submitErr := execution.NewAccumulateSubmitter(submitterCfg)
 		if submitErr != nil {
-			return nil, nil, fmt.Errorf("PROOF_CYCLE_WRITEBACK=true but the Accumulate submitter cannot be created: %w", submitErr)
+			return nil, nil, fmt.Errorf("write-back: the Accumulate submitter cannot be created: %w", submitErr)
 		}
 		accSubmitter = submitter
 		log.Printf("✅ [Phase 9] Accumulate submitter configured")
-	} else {
-		log.Printf("⚠️ [Phase 9] Write-back is DISABLED by configuration (PROOF_CYCLE_WRITEBACK is not \"true\") — " +
-			"proof cycles run and record their write-back as not performed")
-		accSubmitter = execution.NewNullAccumulateSubmitter(log.New(log.Writer(), "[NullSubmitter] ", log.LstdFlags))
 	}
 
 	orchestratorRepos := batchComponents.Repos
@@ -1862,7 +1855,6 @@ func startValidator(
 		Ed25519Key:               privateKey,
 		EnableMultiChain:         cfg.EnableMultiChain,
 		EnableUnifiedTables:      cfg.EnableUnifiedTables,
-		EnableWriteBack:          writebackEnabled,
 		ProofGenerator:           proofGenAdapter,
 		AccumulateQueryClient:    liteClientAdapter, // For querying tx governance data (M-of-N threshold)
 		ResultQuorumRegistry:     execution.ResultQuorumRegistryFromChains(resolver),

@@ -268,7 +268,7 @@ See [Proof Classes](#proof-classes) for what these control.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `PROOF_CYCLE_WRITEBACK` | No | false | Write results back to Accumulate |
+| `PROOF_CYCLE_WRITEBACK` | No | — | Only `true` is accepted; any other value is refused. Proof cycles always write their results back (requires `ACCUMULATE_RESULTS_PRINCIPAL`, `ACCUMULATE_SIGNER_URL`) |
 | `FIRESTORE_ENABLED` | No | false | Enable Firestore real-time sync |
 | `FIREBASE_PROJECT_ID` | No | - | Firebase project ID |
 | `GOOGLE_APPLICATION_CREDENTIALS` | No | - | Service account JSON path |

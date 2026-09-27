@@ -96,7 +96,6 @@ type UnifiedOrchestratorConfig struct {
 	// Feature flags
 	EnableMultiChain    bool
 	EnableUnifiedTables bool
-	EnableWriteBack     bool // Enable Phase 9 write-back to Accumulate
 
 	// Chained proof generator for L1/L2/L3 proofs
 	// Used to fetch Accumulate proof chain: Transaction → BVN → DN → Consensus
@@ -369,6 +368,12 @@ func NewUnifiedOrchestrator(config *UnifiedOrchestratorConfig) (*UnifiedOrchestr
 		return nil, fmt.Errorf("a validator registry source is required - Phase 8 counts its quorum against it")
 	}
 
+	// Write-back is part of every proof cycle (RB3-F75): results that never reach Accumulate are not a
+	// mode this validator runs in.
+	if config.ResultsPrincipal == "" || len(config.Ed25519Key) == 0 || config.AccumulateClient == nil {
+		return nil, fmt.Errorf("write-back requires a results principal, a signing key and an Accumulate client")
+	}
+
 	if config.MemberLookup == nil || config.NonSettlementChain == nil || config.NonSettlements == nil {
 		return nil, fmt.Errorf("a member lookup, a non-settlement chain reader and a non-settlement queue are required - " +
 			"without them a member that never settled is recorded nowhere")
@@ -384,14 +389,11 @@ func NewUnifiedOrchestrator(config *UnifiedOrchestratorConfig) (*UnifiedOrchestr
 		},
 	}
 
-	// Initialize synthetic transaction builder if write-back is enabled
-	if config.EnableWriteBack && config.ResultsPrincipal != "" && len(config.Ed25519Key) > 0 {
-		orch.txBuilder = NewSyntheticTxBuilder(
-			config.ResultsPrincipal,
-			config.ValidatorID,
-			config.Ed25519Key,
-		)
-	}
+	orch.txBuilder = NewSyntheticTxBuilder(
+		config.ResultsPrincipal,
+		config.ValidatorID,
+		config.Ed25519Key,
+	)
 
 	// Continue this validator's persisted result hash chains rather than restarting them at sequence 0.
 	if config.EnableUnifiedTables && config.UnifiedRepo != nil {
@@ -2079,10 +2081,9 @@ func (o *UnifiedOrchestrator) HandlePeerAttestationRequest(
 
 // Phase 9 write-back states, recorded on every cycle.
 const (
-	WriteBackWritten                 = "written"
-	WriteBackDisabledByConfiguration = "disabled_by_configuration"
-	WriteBackRefusedQuorumNotMet     = "refused_quorum_not_met"
-	WriteBackFailed                  = "failed"
+	WriteBackWritten             = "written"
+	WriteBackRefusedQuorumNotMet = "refused_quorum_not_met"
+	WriteBackFailed              = "failed"
 )
 
 func (o *UnifiedOrchestrator) executePhase9(ctx context.Context, cycle *activeCycle) (err error) {
@@ -2114,16 +2115,8 @@ func (o *UnifiedOrchestrator) executePhase9(ctx context.Context, cycle *activeCy
 		return fmt.Errorf("attestation threshold not met — refusing write-back")
 	}
 
-	// Write-back disabled by configuration is a stated mode: nothing is written, and it is recorded
-	// as not written. Enabled but without its builder or client is a misconfiguration.
-	if !o.config.EnableWriteBack {
-		fmt.Printf("Write-back disabled by configuration: cycle=%s — recorded as not written\n", cycle.CycleID)
-		cycle.Result.WriteBackSuccess = false
-		cycle.Result.WriteBackState = WriteBackDisabledByConfiguration
-		return nil
-	}
 	if o.txBuilder == nil || o.config.AccumulateClient == nil {
-		return fmt.Errorf("write-back is enabled but has no transaction builder or Accumulate client")
+		return fmt.Errorf("write-back has no transaction builder or Accumulate client")
 	}
 
 	// Create timeout context
