@@ -30,6 +30,11 @@ func checkProductionPath(ctx context.Context, endpoint string, raw map[string]js
 	if err != nil {
 		return err
 	}
+	// Partitions as the validator now names them: the network's routing table (RB3-F107).
+	netRouter, err := proofpkg.LoadNetworkRouter(ctx, endpoint)
+	if err != nil {
+		return err
+	}
 	traces, err := readJSON[captureResult](traceFile)
 	if err != nil {
 		return err
@@ -64,7 +69,10 @@ func checkProductionPath(ctx context.Context, endpoint string, raw map[string]js
 		// The union with the PRINCIPAL's partition, which is what decides how
 		// many legs the proof needs. Case F has one signer account and still
 		// needs two legs, because the principal is on another partition.
-		principalPart := proofpkg.CalculateBVNFromAccountURL(account)
+		principalPart, err := netRouter.Partition(account)
+		if err != nil {
+			return fmt.Errorf("case %s: %w", name, err)
+		}
 		parts := proofpkg.DistinctPartitions(append(
 			append([]chained_proof.SignerLeg{}, legs...),
 			chained_proof.SignerLeg{Account: account, Partition: principalPart},
@@ -101,8 +109,11 @@ func checkProductionPath(ctx context.Context, endpoint string, raw map[string]js
 		return err
 	}
 	account := f.Principal + "/data"
-	cp, err := gen.GenerateChainedProof(ctx, account, fTrace.TransactionHash,
-		proofpkg.CalculateBVNFromAccountURL(account))
+	fPart, err := netRouter.Partition(account)
+	if err != nil {
+		return err
+	}
+	cp, err := gen.GenerateChainedProof(ctx, account, fTrace.TransactionHash, fPart)
 	if err != nil {
 		return fmt.Errorf("production GenerateChainedProof for case F: %w", err)
 	}
@@ -123,8 +134,11 @@ func checkProductionPath(ctx context.Context, endpoint string, raw map[string]js
 	// cross-partition case that has none yet.
 	if baselineTx != "" {
 		baseAcct := "acc://certen-kermit-12.acme/data"
-		bcp, err := gen.GenerateChainedProof(ctx, baseAcct, baselineTx,
-			proofpkg.CalculateBVNFromAccountURL(baseAcct))
+		basePart, err := netRouter.Partition(baseAcct)
+		if err != nil {
+			return err
+		}
+		bcp, err := gen.GenerateChainedProof(ctx, baseAcct, baselineTx, basePart)
 		if err != nil {
 			return fmt.Errorf("production baseline (1-of-1) build: %w", err)
 		}

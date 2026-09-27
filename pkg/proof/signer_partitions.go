@@ -90,6 +90,11 @@ func DiscoverSignerLegs(ctx context.Context, endpoint, txID string) ([]chained_p
 		return nil, fmt.Errorf("discover signer partitions: %w", err)
 	}
 
+	router, err := LoadNetworkRouter(ctx, endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("discover signer partitions: %w", err)
+	}
+
 	txHash := hashOfTxID(txID)
 	seen := map[string]bool{}
 	var out []chained_proof.SignerLeg
@@ -124,11 +129,11 @@ func DiscoverSignerLegs(ctx context.Context, endpoint, txID string) ([]chained_p
 			}
 			seen[key] = true
 
-			partition := CalculateBVNFromAccountURL(set.Account.URL)
-			if partition == "" {
-				return nil, fmt.Errorf("discover signer partitions: %s does not route to a "+
-					"partition; a leg whose partition is unknown cannot be checked against the "+
-					"quorum that signed it", set.Account.URL)
+			// The network's routing table, read from the network (RB3-F107).
+			partition, err := router.Partition(set.Account.URL)
+			if err != nil {
+				return nil, fmt.Errorf("discover signer partitions: %v; a leg whose partition is unknown "+
+					"cannot be checked against the quorum that signed it", err)
 			}
 			out = append(out, chained_proof.SignerLeg{
 				Account:     set.Account.URL,

@@ -46,6 +46,7 @@ package proof
 
 import (
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 )
@@ -142,39 +143,48 @@ type rawTimingBasisEnvelope struct {
 }
 
 // TimingBasisFromRaw lifts the timing-basis records out of a governance
-// result's raw JSON and names each signer's partition from this module's
-// routing table.
+// result's raw JSON and names each signer's partition with the network's own
+// routing table (RB3-F107; it used to be a table written into this module).
 //
 // Returns nil — not an error — when the result carries none. A generator that
 // never emitted them is a govproof build predating this evidence, and the
 // honest record for it is ABSENCE. Manufacturing empty records would produce
 // something that reads like evidence and says nothing, and an absent record
 // must not read as "every signature was locally ordered".
-func TimingBasisFromRaw(level string, raw json.RawMessage) []SignatureTimingBasis {
+//
+// A result that does not decode, or records with no router to name their partitions, are errors: the
+// first used to return nil - read as "no timing evidence" - whatever the JSON held.
+func TimingBasisFromRaw(level string, raw json.RawMessage, router *NetworkRouter) ([]SignatureTimingBasis, error) {
 	if len(raw) == 0 {
-		return nil
+		return nil, nil
 	}
 	var env rawTimingBasisEnvelope
 	if err := json.Unmarshal(raw, &env); err != nil {
-		return nil
+		return nil, fmt.Errorf("%s timing basis: %w", level, err)
 	}
 	if len(env.TimingBasis) == 0 {
-		return nil
+		return nil, nil
+	}
+	if router == nil {
+		return nil, fmt.Errorf("%s timing basis: no network router to name the signers' partitions", level)
 	}
 
 	out := make([]SignatureTimingBasis, 0, len(env.TimingBasis))
 	for _, t := range env.TimingBasis {
 		t.Level = level
-		// Named from the routing table production actually routes with, so a
-		// record that says "bvn2" means the same thing the proof's legs mean.
-		// An account that does not route leaves the field EMPTY rather than
-		// guessing: an unnamed partition is honest, a wrong one is not.
-		t.SignerPartition = CalculateBVNFromAccountURL(t.SignerPage)
-		t.PrincipalPartition = CalculateBVNFromAccountURL(t.PrincipalPage)
+		// Named with the same network routing table the proof's signer legs use, so a record that says
+		// "bvn2" means what the legs mean. An account that cannot be routed is an error, never a guess.
+		var err error
+		if t.SignerPartition, err = router.Partition(t.SignerPage); err != nil {
+			return nil, fmt.Errorf("%s timing basis: signer page: %w", level, err)
+		}
+		if t.PrincipalPartition, err = router.Partition(t.PrincipalPage); err != nil {
+			return nil, fmt.Errorf("%s timing basis: principal page: %w", level, err)
+		}
 		out = append(out, t)
 	}
 	sortTimingBasis(out)
-	return out
+	return out, nil
 }
 
 // sortTimingBasis puts records in a canonical order: level, then message hash,

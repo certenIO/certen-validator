@@ -172,7 +172,10 @@ func (g *LiteClientProofGenerator) GenerateChainedProof(ctx context.Context, acc
 	// CRITICAL FIX: Validate and normalize BVN partition
 	// The BVN must be a valid partition name like "bvn0", "bvn1", etc.
 	// It should NOT be "acc://dn" or empty - those are invalid for L1-L3 proofs
-	bvn = normalizeBVNPartition(bvn, accountURL)
+	bvn, err := normalizeBVNPartition(bvn, accountURL)
+	if err != nil {
+		return nil, err
+	}
 
 	ctx, cancel := context.WithTimeout(ctx, g.timeout)
 	defer cancel()
@@ -615,34 +618,17 @@ func truncateString(s string, maxLen int) string {
 	return s[:maxLen-3] + "..."
 }
 
-// normalizeBVNPartition validates and normalizes the BVN partition for L1-L3 proofs.
-// Returns a valid BVN name like "bvn0", "bvn1", etc.
-// If the input is invalid (e.g., "acc://dn", empty), it determines the correct BVN.
-// DEPRECATED: Use LiteClientProofGenerator.routeBVNForAccount() instead for proper routing.
-func normalizeBVNPartition(bvn, accountURL string) string {
+// normalizeBVNPartition validates the BVN partition for L1-L3 proofs: a BVN name ("bvn1") passes,
+// lower-cased; anything else is refused. It used to recompute a missing or non-BVN partition from the
+// account URL through a routing table written for Kermit and default to bvn1 when that failed - the
+// RB3-F89 fallback, one layer down (RB3-F107). The caller supplies the partition the transaction was
+// discovered on.
+func normalizeBVNPartition(bvn, accountURL string) (string, error) {
 	bvn = strings.ToLower(strings.TrimSpace(bvn))
-
-	// Check if already a valid BVN partition name
 	if strings.HasPrefix(bvn, "bvn") && len(bvn) >= 4 {
-		// Already looks like a valid BVN (bvn0, bvn1, bvn2, etc.)
-		log.Printf("[PROOF] BVN partition validated: %s", bvn)
-		return bvn
+		return bvn, nil
 	}
-
-	// Invalid or missing BVN - try to calculate from account URL
-	log.Printf("[PROOF] ⚠️ Invalid BVN partition '%s' for account %s - calculating from routing", bvn, accountURL)
-
-	// Calculate BVN from account URL routing number
-	calculatedBVN := calculateBVNFromAccountURL(accountURL)
-	if calculatedBVN != "" {
-		log.Printf("[PROOF] ✅ Calculated BVN partition: %s (from account URL routing)", calculatedBVN)
-		return calculatedBVN
-	}
-
-	// Fallback to bvn1 if calculation fails
-	defaultBVN := "bvn1"
-	log.Printf("[PROOF] ⚠️ Could not calculate BVN, defaulting to %s", defaultBVN)
-	return defaultBVN
+	return "", fmt.Errorf("partition %q for %s is not a BVN; an L1-L3 proof is built on the BVN the transaction was discovered on, never a computed or default one", bvn, accountURL)
 }
 
 // calculateBVNFromAccountURL calculates the BVN partition from an account URL
@@ -733,6 +719,11 @@ func routeByPrefixTable(routingNumber uint64) string {
 	return "bvn1"
 }
 
+// Deprecated: a routing table written into this module for Kermit on one day - it ignores the network's
+// overrides (acc://dn.acme routes to the Directory on the network) and cannot follow a change to the
+// table. Nothing in the validator routes with it (RB3-F107); use NetworkRouter, built from the table the
+// network publishes.
+//
 // CalculateBVNFromAccountURL is the exported version of calculateBVNFromAccountURL.
 // It calculates the BVN partition from an account URL using Accumulate's
 // deterministic routing algorithm (SHA256-based prefix matching).

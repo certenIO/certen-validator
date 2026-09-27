@@ -1,0 +1,40 @@
+{
+ "overrides": [
+  {
+   "account": "acc://ACME",
+   "partition": "Directory"
+  },
+  {
+   "account": "acc://bvn-BVN1.acme",
+   "partition": "BVN1"
+  },
+  {
+   "account": "acc://bvn-BVN2.acme",
+   "partition": "BVN2"
+  },
+  {
+   "account": "acc://bvn-BVN3.acme",
+   "partition": "BVN3"
+  },
+  {
+   "account": "acc://dn.acme",
+   "partition": "Directory"
+  }
+ ],
+ "routes": [
+  {
+   "length": 1,
+   "partition": "BVN1"
+  },
+  {
+   "length": 2,
+   "value": 2,
+   "partition": "BVN2"
+  },
+  {
+   "length": 2,
+   "value": 3,
+   "partition": "BVN3"
+  }
+ ]
+}
