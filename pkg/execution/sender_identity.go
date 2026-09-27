@@ -3,9 +3,11 @@
 package execution
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
+	"sync/atomic"
 
 	"github.com/ethereum/go-ethereum/common"
 )
@@ -35,6 +37,28 @@ func (ecm *EthereumContractManager) SenderAddress() common.Address {
 
 // CheckSendersAreIdentity requires every configured chain's sending key to be the validator's
 // registered identity.
+// sendersVerified is set once this process has proven that every chain's sending key is the validator's
+// registered identity. Until then nothing is sent and no settlement is claimed (RB3-F64): the check used to
+// run in the background after batching was live, so a node with another validator's key could act first.
+var sendersVerified atomic.Bool
+
+// errSendersUnverified is why a send or a settlement decision waits.
+var errSendersUnverified = errors.New("the sending key has not yet been verified to be this validator's registered " +
+	"identity; nothing is sent or claimed until it is (RB3-F64)")
+
+// SendersVerified reports whether the sending keys have been verified this process.
+func SendersVerified() bool { return sendersVerified.Load() }
+
+// VerifySendersAreIdentity checks the sending keys against the identity and, when they match, lets this
+// process send and claim settlements.
+func VerifySendersAreIdentity(resolver *EVMChainResolverImpl, identity string) error {
+	if err := CheckSendersAreIdentity(resolver, identity); err != nil {
+		return err
+	}
+	sendersVerified.Store(true)
+	return nil
+}
+
 func CheckSendersAreIdentity(resolver *EVMChainResolverImpl, identity string) error {
 	if resolver == nil {
 		return fmt.Errorf("no chain resolver")

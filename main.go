@@ -270,7 +270,8 @@ func resolveBatchAttesterIdentity(resolver *execution.EVMChainResolverImpl, vali
 	publish := func(addr, how string) {
 		// The sending key must be this identity, or the node sends and claims settlements as another
 		// validator (RB3-F64). A configuration error that no retry fixes: the validator does not run.
-		if err := execution.CheckSendersAreIdentity(resolver, addr); err != nil {
+		// Verified here, and only here, is this process allowed to send or claim settlements.
+		if err := execution.VerifySendersAreIdentity(resolver, addr); err != nil {
 			log.Fatalf("❌ [BATCH] %s: %v", validatorID, err)
 		}
 		batchAttesterIdentity.Store(&execution.BatchAttesterIdentity{
@@ -281,9 +282,17 @@ func resolveBatchAttesterIdentity(resolver *execution.EVMChainResolverImpl, vali
 			validatorID, addr, how, execution.BatchAttestationEndpoint)
 	}
 
-	if override := strings.TrimSpace(os.Getenv("VALIDATOR_EVM_ADDRESS")); override != "" {
-		publish(strings.ToLower(override), "VALIDATOR_EVM_ADDRESS override")
-		return
+	// VALIDATOR_EVM_ADDRESS is an assertion, never a substitute: the identity is always the registry
+	// entry matching this node's BLS key, and a configured address that differs stops the validator. It
+	// used to be published as-is, so an override equal to a shared key's address passed the sender check
+	// without the registry ever being read (RB3-F64).
+	override := strings.ToLower(strings.TrimSpace(os.Getenv("VALIDATOR_EVM_ADDRESS")))
+	publishResolved := func(addr, how string) {
+		if override != "" && !strings.EqualFold(override, addr) {
+			log.Fatalf("❌ [BATCH] %s: VALIDATOR_EVM_ADDRESS %s is not this validator's registered identity %s",
+				validatorID, override, addr)
+		}
+		publish(addr, how)
 	}
 
 	chains := resolver.Chains()
@@ -316,7 +325,7 @@ func resolveBatchAttesterIdentity(resolver *execution.EVMChainResolverImpl, vali
 				addr, err = execution.ResolveOwnEVMAddress(registry)
 				if err == nil {
 					cancel()
-					publish(addr, "matched on-chain BLS registry")
+					publishResolved(addr, "matched on-chain BLS registry")
 					return
 				}
 			}

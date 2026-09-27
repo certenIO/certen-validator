@@ -174,6 +174,12 @@ func (o *BatchOrchestrator) SettleOnDemandMember(
 	if member == nil {
 		return nil, fmt.Errorf("nil member")
 	}
+	if !SendersVerified() {
+		// Every settlement decision below reads this validator's address; until it is proven to be its
+		// registered identity nothing is decided, sent or claimed (RB3-F64).
+		o.logf("[OD] intent=%s waiting: %v", member.IntentID, errSendersUnverified)
+		return &OnDemandOutcome{Deferred: true}, nil
+	}
 	if member.CommitHeight == 0 {
 		// The height is bound into the bundleId. Zero would make every validator that had a
 		// different local view derive a different id, exactly as on the period path.
