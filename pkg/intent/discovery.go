@@ -1075,8 +1075,12 @@ func (id *IntentDiscovery) convertCertenTransactionToIntent(certenTx *accumulate
 	// can declare a wrong / non-existent org ADI (e.g. "acc://o.acme"); trusting it
 	// sends the L1 chained-proof lookup to an account that has no such entry, which
 	// then stalls forever as "chained proof unavailable (retryable)". The discovered
-	// principal (already including the /data suffix) is the source of truth.
-	if certenTx.AccountURL != "" {
+	// principal (already including the /data suffix) is the source of truth - and without it there is
+	// no account to prove: the declared organization is never used in its place (RB3-F112).
+	if certenTx.AccountURL == "" {
+		return nil, fmt.Errorf("transaction %s: no principal was read; the intent's declared organization is not an authority for which account to prove", certenTx.Hash)
+	}
+	{
 		derived := intent.AccountURL
 		intent.AccountURL = certenTx.AccountURL
 		intent.OrganizationADI = strings.TrimSuffix(certenTx.AccountURL, "/data")
@@ -1359,10 +1363,10 @@ func (id *IntentDiscovery) processIntent(intent *CertenIntent, blockHeight uint6
 		return id.processMultiLegIntent(intent, blockHeight)
 	}
 
-	// Prefer canonical AccountURL; fall back to orgAdi/data if missing
+	// The discovered principal, never the declared organization (RB3-F112).
 	accountURL := intent.AccountURL
-	if accountURL == "" && intent.OrganizationADI != "" {
-		accountURL = fmt.Sprintf("%s/data", intent.OrganizationADI)
+	if accountURL == "" {
+		return consensus.TargetChainFailed, fmt.Errorf("intent %s: no discovered principal to prove", intent.IntentID)
 	}
 	id.logger.Printf("🏗️ Using data account for proof: %s", accountURL)
 
@@ -1524,15 +1528,16 @@ func (id *IntentDiscovery) processMultiLegIntent(intent *CertenIntent, blockHeig
 		return keys
 	}())
 
-	// Generate proofs (same for all legs)
+	// Generate proofs (same for all legs). The discovered principal, never the declared organization,
+	// and the intent's own proof class, never a default (RB3-F112).
 	accountURL := intent.AccountURL
-	if accountURL == "" && intent.OrganizationADI != "" {
-		accountURL = fmt.Sprintf("%s/data", intent.OrganizationADI)
+	if accountURL == "" {
+		return consensus.TargetChainFailed, fmt.Errorf("multi-leg intent %s: no discovered principal to prove", intent.IntentID)
 	}
 
 	proofClass, err := intent.GetProofClass()
 	if err != nil {
-		proofClass = "on_cadence"
+		return consensus.TargetChainFailed, fmt.Errorf("extract proof class for multi-leg intent %s: %w", intent.IntentID, err)
 	}
 
 	// Generate CertenProof
