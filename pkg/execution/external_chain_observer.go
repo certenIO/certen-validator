@@ -28,14 +28,7 @@ import (
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/ethereum/go-ethereum/trie"
-
-	"github.com/certen/independant-validator/pkg/execution/contracts"
 )
-
-// certenAccountABI is parsed once for decoding the V6.1 abstract-account execution wrapper
-// (executeGovernanceProofDirect). Nil only if the generated metadata fails to parse, in which
-// case EffectHasCalldata falls back to the raw-tx check.
-var certenAccountABI, _ = contracts.CertenAccountV2MetaData.GetAbi()
 
 // =============================================================================
 // EXTERNAL CHAIN OBSERVER
@@ -136,27 +129,12 @@ func NewExternalChainObserver(config *ExternalChainObserverConfig) (*ExternalCha
 func (o *ExternalChainObserver) ObserveTransaction(
 	ctx context.Context,
 	txHash common.Hash,
-	commitment *ExecutionCommitment,
 ) (*ExternalChainResult, error) {
 
 	o.log("📡 [OBSERVER] Starting observation for tx: %s", txHash.Hex())
 
 	startTime := time.Now()
 	deadline := startTime.Add(o.timeout)
-
-	// Create pending execution tracker
-	pending := &PendingExecution{
-		TxHash:                txHash,
-		SubmittedAt:           startTime,
-		RequiredConfirmations: o.requiredConfirmations,
-		Status:                "pending",
-	}
-
-	if commitment != nil {
-		pending.OperationID = commitment.OperationID
-		pending.ExpectedTarget = commitment.TargetContract
-		pending.ExpectedValue = commitment.ExpectedValue
-	}
 
 	// Wait for receipt
 	receipt, err := o.waitForReceipt(ctx, txHash, deadline)
@@ -225,24 +203,6 @@ func (o *ExternalChainObserver) ObserveTransaction(
 			result.ReceiptInclusionProof = receiptProof
 			o.log("✅ [OBSERVER] Inclusion proofs built from the raw block (chain %d); both roots matched the header", o.chainID)
 		}
-	}
-
-	// RB-5: if the intent committed storage-slot effects, fetch and attach state proofs
-	// so the commitment gate can independently verify them against the block stateRoot.
-	if commitment != nil && len(commitment.ExpectedState) > 0 {
-		result.StateProofs = o.fetchStateProofs(ctx, receipt.BlockNumber, commitment.ExpectedState)
-	}
-
-	// Verify commitment if provided
-	if commitment != nil {
-		o.log("🔍 [OBSERVER] Commitment provided, verifying against result...")
-		if !commitment.VerifyAgainstResult(result) {
-			o.log("❌ [OBSERVER] Commitment verification FAILED")
-			return nil, fmt.Errorf("result does not match execution commitment")
-		}
-		o.log("✅ [OBSERVER] Result verified against execution commitment")
-	} else {
-		o.log("⏭️ [OBSERVER] No commitment provided, skipping verification")
 	}
 
 	o.log("🎉 [OBSERVER] External chain result complete: hash=%s status=%d", result.ToHex()[:16], result.Status)
@@ -543,178 +503,6 @@ func (o *ExternalChainObserver) fetchStateProofs(ctx context.Context, blockNumbe
 	return proofs
 }
 
-// VerifyExecutedCall is the RB-2/RB-4/RB-5 attestation gate for a proof-gated contract
-// call. It independently re-observes the executed governance transaction and:
-//   - RB-2: rebuilds the tx & receipt inclusion proofs (canonical encoding, header-bound)
-//     and verifies them via go-ethereum trie.VerifyProof against the block roots;
-//   - RB-4: requires every committed event to appear in the inclusion-proven receipt logs
-//     (the call's effect — an internal-call event by the target — not just non-revert);
-//   - RB-5: if committed state slots are present, fetches eth_getProof and verifies each
-//     slot holds the committed value against the finalized stateRoot.
-//
-// Returns an error (⇒ caller must refuse to attest / write back) on any failure. The
-// outer tx targets the abstract account, not the call target, so this deliberately does
-// NOT use VerifyAgainstResult (which checks the outer target/selector); it checks the
-// receipt logs directly, which capture the target's event via the internal call.
-func (o *ExternalChainObserver) VerifyExecutedCall(
-	ctx context.Context,
-	txHash common.Hash,
-	expectedEvents []ExpectedEvent,
-	expectedState []ExpectedStateSlot,
-) (*ExternalChainResult, error) {
-	// Observe (nil commitment ⇒ build result + inclusion proofs, skip outer-target checks).
-	result, err := o.ObserveTransaction(ctx, txHash, nil)
-	if err != nil {
-		return nil, fmt.Errorf("observe executed call tx %s: %w", txHash.Hex(), err)
-	}
-	if result.Status != 1 {
-		return nil, fmt.Errorf("executed call tx %s failed (status=%d)", txHash.Hex(), result.Status)
-	}
-
-	// RB-2: independently verify tx + receipt inclusion against the header roots.
-	if result.TxInclusionProof == nil || !result.TxInclusionProof.Verify() {
-		return nil, fmt.Errorf("RB-2: tx inclusion proof failed to verify for %s", txHash.Hex())
-	}
-	if result.ReceiptInclusionProof == nil || !result.ReceiptInclusionProof.Verify() {
-		return nil, fmt.Errorf("RB-2: receipt inclusion proof failed to verify for %s", txHash.Hex())
-	}
-
-	gate := &ExecutionCommitment{ExpectedCallEvents: expectedEvents, ExpectedState: expectedState}
-
-	// RB-4: the committed event(s) must be present in the inclusion-proven receipt logs.
-	if len(expectedEvents) > 0 {
-		if !gate.verifyExpectedEventsStrict(result, expectedEvents) {
-			return nil, fmt.Errorf("RB-4: committed event(s) not found in inclusion-proven logs for %s", txHash.Hex())
-		}
-	}
-
-	// RB-5: optional storage-slot state proofs against the finalized stateRoot.
-	if len(expectedState) > 0 {
-		result.StateProofs = o.fetchStateProofs(ctx, result.BlockNumber, expectedState)
-		if !gate.verifyExpectedState(result) {
-			return nil, fmt.Errorf("RB-5: committed state slot(s) not proven for %s", txHash.Hex())
-		}
-	}
-
-	return result, nil
-}
-
-// EffectHasCalldata reports whether the EXECUTED EFFECT carried calldata — i.e. whether the
-// value-moving call was a contract call rather than a native transfer. This is the correct
-// signal for RB-SEC-1's "native classification" cross-check.
-//
-// In the V6.1 model the execution tx is a call to the user's abstract account via
-//
-//	executeGovernanceProofDirect(address target, uint256 value, bytes data, <proof>)
-//
-// so the OUTER tx input is ALWAYS non-empty (it is the account-method call itself). Using
-// len(tx.Data())>0 there would flag every native transfer as a contract call and make peers
-// refuse to attest (the Phase-8 quorum failure). The real effect is the INNER `data` the
-// account forwards to `target`; this decodes that argument via the account ABI. For any
-// non-wrapper (legacy direct-call) execution shape it falls back to the raw tx calldata.
-func (o *ExternalChainObserver) EffectHasCalldata(ctx context.Context, txHash common.Hash) (bool, error) {
-	tx, _, err := o.ethClient.TransactionByHash(ctx, txHash)
-	if err != nil {
-		return false, fmt.Errorf("fetch execution tx %s: %w", txHash.Hex(), err)
-	}
-	if tx == nil {
-		return false, fmt.Errorf("execution tx %s not found", txHash.Hex())
-	}
-	input := tx.Data()
-
-	inner, matched, derr := decodeAbstractAccountEffectCalldata(input)
-	if derr != nil {
-		// Selector matched the wrapper but the body won't decode — anomalous; fail closed so
-		// the caller refuses rather than silently treating it as native.
-		return false, fmt.Errorf("cross-check %s: %w", txHash.Hex(), derr)
-	}
-	if matched {
-		return inner, nil
-	}
-
-	// Legacy / direct execution: the tx input IS the effect calldata.
-	return len(input) > 0, nil
-}
-
-// decodeAbstractAccountEffectCalldata inspects a raw execution-tx input. If it is the V6.1
-// abstract-account executeGovernanceProofDirect(target,value,data,proof) wrapper, it returns
-// (innerHasCalldata, true, nil) — where innerHasCalldata reflects the INNER `data` the account
-// forwards to `target`. If the input is not that wrapper, it returns (false, false, nil) and the
-// caller should use the raw-input length. If it IS the wrapper but the body won't decode, it
-// returns (false, true, err) so the caller fails closed. Pure/uses only the parsed ABI so it is
-// unit-testable without an RPC.
-func decodeAbstractAccountEffectCalldata(input []byte) (innerHasCalldata bool, matched bool, err error) {
-	if len(input) < 4 {
-		return false, false, nil
-	}
-
-	// Try every known account ABI, not just one.
-	//
-	// This matched ONLY the CertenAccountV2 binding. Accounts minted by factory V9 are
-	// CertenAccountV7, whose ADIGovernanceProof tuple gained operationID — a different type list,
-	// therefore a different 4-byte selector. MethodById missed, the function reported
-	// matched=false, and EffectHasCalldata fell back to `len(input) > 0` on the OUTER wrapper
-	// input, which is never empty. So every native-transfer intent looked like a contract call
-	// and every peer refused to attest with
-	//
-	//	execution tx … carries calldata but committed intent has no contract-call leg
-	//
-	// leaving Phase 8 at achieved=1 of required=5 and blocking every write-back to
-	// acc://certen-protocol.acme/execution-results from 2026-07-29. A version-specific decoder is
-	// a latent version trap: each new account release silently re-breaks attestation. Matching
-	// across all known ABIs by NAME removes that.
-	for _, abiDef := range certenAccountABIs() {
-		if abiDef == nil {
-			continue
-		}
-		m, mErr := abiDef.MethodById(input[:4])
-		if mErr != nil {
-			continue
-		}
-		switch m.Name {
-		case "executeGovernanceProofDirect":
-			args, uErr := m.Inputs.Unpack(input[4:])
-			if uErr != nil {
-				return false, true, fmt.Errorf("decode %s wrapper: %w", m.Name, uErr)
-			}
-			// (target address, value uint256, data bytes, proof tuple) — data is index 2.
-			if len(args) < 3 {
-				return false, true, fmt.Errorf("unexpected %s arg count (%d)", m.Name, len(args))
-			}
-			data, ok := args[2].([]byte)
-			if !ok {
-				return false, true, fmt.Errorf("unexpected inner data type in %s", m.Name)
-			}
-			return len(data) > 0, true, nil
-
-		case "batchExecuteGovernanceProofDirect":
-			args, uErr := m.Inputs.Unpack(input[4:])
-			if uErr != nil {
-				return false, true, fmt.Errorf("decode %s wrapper: %w", m.Name, uErr)
-			}
-			// (targets address[], values uint256[], datas bytes[], proof tuple) — datas is index 2.
-			if len(args) < 3 {
-				return false, true, fmt.Errorf("unexpected %s arg count (%d)", m.Name, len(args))
-			}
-			datas, ok := args[2].([][]byte)
-			if !ok {
-				return false, true, fmt.Errorf("unexpected inner datas type in %s", m.Name)
-			}
-			// A multi-leg batch is a contract call if ANY leg carries calldata. Requiring all of
-			// them would let a contract-call leg ride along beside native legs unverified.
-			for _, d := range datas {
-				if len(d) > 0 {
-					return true, true, nil
-				}
-			}
-			return false, true, nil
-		}
-	}
-
-	// Not an account wrapper: legacy / direct execution, where the tx input IS the effect.
-	return false, false, nil
-}
-
 // =============================================================================
 // MERKLE PROOF COLLECTOR (implements ethdb.KeyValueWriter for trie.Prove)
 // =============================================================================
@@ -860,19 +648,3 @@ const certenAccountV7ABIJSON = `[
      {"name":"requiredLevel","type":"uint8"}]}]}]`
 
 var certenAccountV7ABI, certenAccountV7ABIErr = abi.JSON(strings.NewReader(certenAccountV7ABIJSON))
-
-// certenAccountABIs returns every account ABI the decoder should try, newest first.
-//
-// Add each new account version here. A version absent from this list is not a decode failure — it
-// silently degrades to treating the wrapper input as the effect, which is exactly the false
-// positive that stopped attestation for six days.
-func certenAccountABIs() []*abi.ABI {
-	out := make([]*abi.ABI, 0, 2)
-	if certenAccountV7ABIErr == nil {
-		out = append(out, &certenAccountV7ABI)
-	}
-	if certenAccountABI != nil {
-		out = append(out, certenAccountABI)
-	}
-	return out
-}

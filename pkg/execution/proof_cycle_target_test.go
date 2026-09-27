@@ -32,34 +32,34 @@ func TestOrchestratorRefusesACycleThatNamesNoChain(t *testing.T) {
 	}
 }
 
-// The gate checks the call legs whose signed chain is this cycle's, and only those.
+// The gate holds the cycle to the signed intent's member on THIS cycle's chain, selected by each leg's
+// signed chain id - never by the free-text chain name or the commitment the executor carries.
 func TestContractCallGateSelectsLegsBySignedChain(t *testing.T) {
-	legs := []map[string]interface{}{
-		{"chainKey": "base-sepolia", "chainId": int64(421614), "execTxHash": "", "expectedEvents": []map[string]interface{}{}},
-		{"chainKey": "base-sepolia", "chainId": int64(84532), "execTxHash": "0xaa", "expectedEvents": []map[string]interface{}{}},
-	}
+	t.Setenv("CERTEN_ALLOW_CONTRACT_CALLS", "true")
+	// Base's call commits no event: selecting it is a named refusal, reached before any RPC call.
+	// Arbitrum's leg is well-formed and must not be what is checked.
+	blobs := signedBlobs(t, "x", f77CallLeg(421614, true), f77CallLeg(84532, false))
+	o := &UnifiedOrchestrator{config: &UnifiedOrchestratorConfig{ValidatorID: "v", AccumulateQueryClient: &mockQueryClient{blobs: blobs}}}
 	cycle := &activeCycle{Request: &UnifiedProofCycleRequest{
-		TargetChain: "84532", TxHashes: []string{"0xaa"},
-		CommitmentData: map[string]interface{}{"rbContractCall": true, "rbContractCallLegs": legs},
+		IntentID: "x", TargetChain: "84532", TxHashes: []string{"0xaa"}, AccumulateTxHash: "h", AccumulateAccountURL: "a",
 	}}
-	o := &UnifiedOrchestrator{config: &UnifiedOrchestratorConfig{ValidatorID: "v"}}
-	// Base's call leg committed no events, so selecting it is a named refusal; Arbitrum's must not
-	// be selected at all. The error must be about the Base leg's chain, reached with no RPC call.
 	_, err := o.verifyContractCallGate(context.Background(), cycle, observedChain{id: "84532", rpc: "http://127.0.0.1:1"})
-	if err == nil || !strings.Contains(err.Error(), "committed no events") {
+	if err == nil || !strings.Contains(err.Error(), "commits no event") {
 		t.Fatalf("the Base leg was not the one checked: %v", err)
 	}
 
-	// A cycle on Arbitrum whose commitment holds only Base's call selects nothing: a no-op.
+	// A cycle on a chain the signed intent has no leg on has no member: refused, not a no-op.
+	o.config.AccumulateQueryClient = &mockQueryClient{blobs: signedBlobs(t, "x", f77CallLeg(84532, true))}
 	cycle.Request.TargetChain = "421614"
-	cycle.Request.CommitmentData["rbContractCallLegs"] = legs[1:]
-	if proofs, err := o.verifyContractCallGate(context.Background(), cycle, observedChain{id: "421614", rpc: "http://127.0.0.1:1"}); err != nil || len(proofs) != 0 {
-		t.Fatalf("Base's call leg was checked against the Arbitrum cycle: proofs=%v err=%v", proofs, err)
+	if _, err := o.verifyContractCallGate(context.Background(), cycle, observedChain{id: "421614", rpc: "http://127.0.0.1:1"}); err == nil ||
+		!strings.Contains(err.Error(), "no legs on chain 421614") {
+		t.Fatalf("Base's leg was held against the Arbitrum cycle: %v", err)
 	}
 
 	// A leg with no signed chain cannot be placed - refused, not guessed.
-	cycle.Request.CommitmentData["rbContractCallLegs"] = []map[string]interface{}{{"chainKey": "x", "expectedEvents": []map[string]interface{}{}}}
+	noChain := f77CallLeg(0, true)
+	o.config.AccumulateQueryClient = &mockQueryClient{blobs: signedBlobs(t, "x", noChain)}
 	if _, err := o.verifyContractCallGate(context.Background(), cycle, observedChain{id: "421614", rpc: "http://127.0.0.1:1"}); err == nil {
-		t.Fatal("a call leg with no chain id was accepted")
+		t.Fatal("a leg with no chain id was accepted")
 	}
 }

@@ -113,6 +113,25 @@ type AttestationMessage struct {
 	// its own chain reads. Nil - and absent from the JSON, so every settlement message hashes exactly as
 	// before - for a settlement.
 	NonSettlement *NonSettlementClaim `json:"non_settlement,omitempty"`
+
+	// EffectsShortfall is set when the result attested is that a settlement EXECUTED under the member's
+	// leaf but a committed effect is provably absent from it (RB3-F67). Each peer re-derives it from the
+	// user-signed intent and its own chain reads. Nil - absent from the JSON - for every other message.
+	EffectsShortfall *EffectsShortfallClaim `json:"effects_shortfall,omitempty"`
+}
+
+// EffectsShortfallClaim names the settlement and the committed effects it lacks. MissingEvents and
+// UnsetState identify each committed effect as "<leg>:<index>" - the leg's position among the intent's
+// contract-call legs on this chain in the signed intent, and the effect's position in that leg's
+// expectedEvents / expectedState - sorted.
+type EffectsShortfallClaim struct {
+	ChainID       int64    `json:"chain_id"`
+	TxHash        string   `json:"tx_hash"`
+	Account       string   `json:"account"`
+	OperationID   string   `json:"operation_id"`
+	Leaf          string   `json:"leaf"`
+	MissingEvents []string `json:"missing_events,omitempty"`
+	UnsetState    []string `json:"unset_state,omitempty"`
 }
 
 // NonSettlementClaim is a member's non-settlement: at finalized block Block (hash, time), past the

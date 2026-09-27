@@ -149,3 +149,47 @@ func TestIntentStatus_NoMemberSetRecordsNothing(t *testing.T) {
 		t.Fatalf("an outcome with no member set changed the intent: %q", status)
 	}
 }
+
+// RB3-F67: a member that settled and was written back, but whose committed effects are provably
+// absent, did not do what the intent committed to - the intent is failed, and says why. Proven effects
+// complete it.
+func TestIntentStatus_ASettlementWithoutItsCommittedEffectsFailsTheIntent(t *testing.T) {
+	db := s1OpenDB(t)
+	ctx := context.Background()
+	o := s1Orchestrator(t, db)
+	members := []int64{84532, 421614}
+
+	const failedID = "f67-effects-not-proven"
+	s1Seed(ctx, t, db, failedID)
+	t.Cleanup(func() { db.Exec(`DELETE FROM intent_member_outcomes WHERE intent_id=$1`, failedID) })
+	finish(ctx, o, memberCycle(failedID, "11155111", []int64{11155111, 84532}, 1, settledObs("0xsep")))
+	short := memberCycle(failedID, "84532", []int64{11155111, 84532}, 1, settledObs("0xbase"))
+	short.EffectsShortfall = shortfallClaim()
+	finish(ctx, o, short)
+	status, done, failed, msg := lifecycleRow(t, db, failedID)
+	if status != "failed" || done != 1 || failed != 1 {
+		t.Fatalf("status %q done %d failed %d; a settlement without its committed effects fails the intent", status, done, failed)
+	}
+	if !strings.Contains(msg, "84532: settled") || !strings.Contains(msg, "committed effects NOT proven") {
+		t.Fatalf("error_message must say the Base member settled without its committed effects: %q", msg)
+	}
+
+	const okID = "f67-effects-proven"
+	s1Seed(ctx, t, db, okID)
+	t.Cleanup(func() { db.Exec(`DELETE FROM intent_member_outcomes WHERE intent_id=$1`, okID) })
+	for _, c := range []*activeCycle{
+		memberCycle(okID, "84532", members, 1, settledObs("0xbase")),
+		memberCycle(okID, "421614", members, 1, settledObs("0xarb")),
+	} {
+		c.CommittedEffects = true
+		c.VerifiedCalls = verifiedCallProofs{"proven": &ExternalChainResult{Status: 1}}
+		finish(ctx, o, c)
+	}
+	if status, _, _, _ := lifecycleRow(t, db, okID); status != "complete" {
+		t.Fatalf("status %q; proven effects complete the intent", status)
+	}
+	var proven sql.NullBool
+	if err := db.QueryRow(`SELECT effects_proven FROM intent_member_outcomes WHERE intent_id=$1 AND chain_id=84532`, okID).Scan(&proven); err != nil || !proven.Valid || !proven.Bool {
+		t.Fatalf("effects_proven stored %v (%v); want true", proven, err)
+	}
+}

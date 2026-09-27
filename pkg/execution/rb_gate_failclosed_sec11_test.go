@@ -27,30 +27,33 @@ func TestSec11_RBContractCallWithNoLegs_FailsClosed(t *testing.T) {
 	}
 }
 
-// A cycle with NO commitment data (native transfer / batch anchoring) legitimately no-ops.
-func TestSec11_NoCommitmentData_NoOp(t *testing.T) {
+// A cycle with NO contract-call commitment used to pass the gate untouched - a native transfer, or a
+// cycle whose commitment simply omitted the flag, was attested on whatever transaction it named. Every
+// member is now held to its signed intent (RB3-F77): without it the gate refuses.
+func TestSec11_NoCommitmentData_IsStillBound(t *testing.T) {
 	o := &UnifiedOrchestrator{config: &UnifiedOrchestratorConfig{ValidatorID: "test"}}
 	cycle := &activeCycle{
 		CycleID: "c2",
-		Request: &UnifiedProofCycleRequest{CycleID: "c2", TargetChain: "ethereum-sepolia"},
+		Request: &UnifiedProofCycleRequest{CycleID: "c2", IntentID: "x", TargetChain: "11155111", TxHashes: []string{"0xaa"},
+			AccumulateTxHash: "h", AccumulateAccountURL: "a"},
 	}
-	if _, err := o.verifyContractCallGate(context.Background(), cycle, nil); err != nil {
-		t.Errorf("no commitment data must be a no-op (native/anchoring), got %v", err)
+	if _, err := o.verifyContractCallGate(context.Background(), cycle, nil); err == nil {
+		t.Error("a cycle with no commitment data passed the gate unbound")
 	}
 }
 
-// rbContractCall=false (native leg) with commitment data present is a no-op.
-func TestSec11_RBContractCallFalse_NoOp(t *testing.T) {
+// rbContractCall=false (a native leg) is bound like any other member.
+func TestSec11_RBContractCallFalse_IsStillBound(t *testing.T) {
 	o := &UnifiedOrchestrator{config: &UnifiedOrchestratorConfig{ValidatorID: "test"}}
 	cycle := &activeCycle{
 		CycleID: "c3",
 		Request: &UnifiedProofCycleRequest{
-			CycleID:        "c3",
-			TargetChain:    "ethereum-sepolia",
+			CycleID: "c3", IntentID: "x", TargetChain: "11155111", TxHashes: []string{"0xaa"},
+			AccumulateTxHash: "h", AccumulateAccountURL: "a",
 			CommitmentData: map[string]interface{}{"rbContractCall": false},
 		},
 	}
-	if _, err := o.verifyContractCallGate(context.Background(), cycle, nil); err != nil {
-		t.Errorf("rbContractCall=false must be a no-op, got %v", err)
+	if _, err := o.verifyContractCallGate(context.Background(), cycle, nil); err == nil {
+		t.Error("a native member passed the gate unbound")
 	}
 }

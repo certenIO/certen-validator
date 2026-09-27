@@ -134,26 +134,28 @@ func TestRB5_MismatchedStorageHashRejected(t *testing.T) {
 	}
 }
 
-// TestRB5_GateEnforcesCommittedState drives the VerifyAgainstResult-level gate.
+// TestRB5_GateEnforcesCommittedState drives the member gate's slot rule (slotsHoldAt).
 func TestRB5_GateEnforcesCommittedState(t *testing.T) {
 	sp, root := buildStateWithSlot(t, rb5Account, rb5Slot, big.NewInt(42))
-	result := &ExternalChainResult{StateRoot: root, StateProofs: []*StateProof{sp}}
+	proofs := []*StateProof{sp}
 
-	// Committed value matches ⇒ pass.
-	c := &ExecutionCommitment{ExpectedState: []ExpectedStateSlot{{Account: rb5Account, Slot: rb5Slot, Value: common.BigToHash(big.NewInt(42))}}}
-	if !c.verifyExpectedState(result) {
-		t.Error("gate must accept a correctly-proven committed slot value")
+	// Committed value matches ⇒ holds.
+	holds, err := slotsHoldAt(proofs, root, []ExpectedStateSlot{{Account: rb5Account, Slot: rb5Slot, Value: common.BigToHash(big.NewInt(42))}})
+	if err != nil || len(holds) != 1 || !holds[0] {
+		t.Errorf("gate must accept a correctly-proven committed slot value: %v %v", holds, err)
 	}
 
-	// Committed a different value ⇒ reject (proof proves 42, commit says 43).
-	cBad := &ExecutionCommitment{ExpectedState: []ExpectedStateSlot{{Account: rb5Account, Slot: rb5Slot, Value: common.BigToHash(big.NewInt(43))}}}
-	if cBad.verifyExpectedState(result) {
-		t.Error("gate must reject when committed value != proven value")
+	// Committed a different value ⇒ proven NOT to hold (proof proves 42, commit says 43).
+	holds, err = slotsHoldAt(proofs, root, []ExpectedStateSlot{{Account: rb5Account, Slot: rb5Slot, Value: common.BigToHash(big.NewInt(43))}})
+	if err != nil || holds[0] {
+		t.Errorf("gate must find the committed value absent when it differs from the proven one: %v %v", holds, err)
 	}
 
-	// No proof present for the committed slot ⇒ reject.
-	cMissing := &ExecutionCommitment{ExpectedState: []ExpectedStateSlot{{Account: rb5Account, Slot: common.HexToHash("0x09"), Value: common.BigToHash(big.NewInt(1))}}}
-	if cMissing.verifyExpectedState(result) {
-		t.Error("gate must reject when no state proof is present for the committed slot")
+	// No proof for the committed slot, or one against another root ⇒ nothing established: an error.
+	if _, err := slotsHoldAt(proofs, root, []ExpectedStateSlot{{Account: rb5Account, Slot: common.HexToHash("0x09"), Value: common.BigToHash(big.NewInt(1))}}); err == nil {
+		t.Error("gate must refuse when no state proof is present for the committed slot")
+	}
+	if _, err := slotsHoldAt(proofs, common.Hash{1}, []ExpectedStateSlot{{Account: rb5Account, Slot: rb5Slot, Value: common.BigToHash(big.NewInt(42))}}); err == nil {
+		t.Error("gate must refuse a proof that does not verify against the block's stateRoot")
 	}
 }
