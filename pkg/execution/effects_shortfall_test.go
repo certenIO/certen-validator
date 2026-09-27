@@ -108,7 +108,8 @@ func TestMemberOutcomeStatesWhetherEffectsWereProven(t *testing.T) {
 }
 
 func TestShortfallIsWrittenBackAsItsOutcome(t *testing.T) {
-	obs := &chain.ObservationResult{TxHash: "0x7a2c8522fb60d37e63fa2b68bf1abc69c6a70dd25da501ab21ec02c1b50204e7", Status: 1, IsFinalized: true, BlockNumber: 47368146}
+	obs := &chain.ObservationResult{TxHash: "0x7a2c8522fb60d37e63fa2b68bf1abc69c6a70dd25da501ab21ec02c1b50204e7", Status: 1, IsFinalized: true, BlockNumber: 47368146,
+		BlockHash: "0x1111111111111111111111111111111111111111111111111111111111111111"}
 	c := memberCycle("i-shortfall", "84532", []int64{84532}, 1, obs)
 	c.EffectsShortfall = shortfallClaim()
 	o := &UnifiedOrchestrator{config: &UnifiedOrchestratorConfig{}, resultChains: map[string]*ResultHashChain{}}
