@@ -153,7 +153,9 @@ type ChainedProofResult struct {
 	L2ReceiptEntries []database.MerklePathNode // Receipt path entries
 
 	// L3: DN to Consensus
-	L3ConsensusTimestamp time.Time
+	// L3ConsensusTimestamp is the DN block's own time at L3DNBlockHeight, read from the chain; nil when
+	// the chain did not answer. It used to be the validator's clock at proof-building time (RB3-F90).
+	L3ConsensusTimestamp *time.Time
 	L3DNBlockHeight      int64
 	L3SourceHash         []byte                    // Receipt start hash
 	L3TargetHash         []byte                    // Receipt anchor hash
@@ -2885,13 +2887,12 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 				})
 
 				l3JSON = WithCanonicalL3(l3JSON, canonicalCP)
-				consensusTS := chainedProof.L3ConsensusTimestamp
 				l3Layer := &database.NewChainedProofLayer{
 					ProofID:            proofArtifact.ProofID,
 					LayerNumber:        3,
 					LayerName:          "L3 - DN to Consensus",
 					DNBlockHeight:      &chainedProof.L3DNBlockHeight,
-					ConsensusTimestamp: &consensusTS,
+					ConsensusTimestamp: chainedProof.L3ConsensusTimestamp,
 					SourceHash:         chainedProof.L3SourceHash,
 					TargetHash:         chainedProof.L3TargetHash,
 					ReceiptEntries:     chainedProof.L3ReceiptEntries,
