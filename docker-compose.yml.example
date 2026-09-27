@@ -1,9 +1,14 @@
 # Certen validator topology — SEVEN validators plus postgres.
 #
 # This is the tracked template. The live file is docker-compose.yml, which is gitignored ONLY
-# because it used to carry secrets inline; those now live in .env.shared (also gitignored) and
-# are injected via `env_file:`. Nothing secret should ever reappear here — if you add a key,
-# put it in .env.shared and let env_file deliver it.
+# because it used to carry secrets inline. Nothing secret appears here:
+#   - .env.shared (gitignored) holds what EVERY validator shares - endpoints, contract addresses, flags.
+#   - secrets/validator-N.env (gitignored, root-only, 0600) holds what is ONE validator's: its
+#     ETH_PRIVATE_KEY (sending key - must be the validator's own registered identity; the node refuses
+#     to send otherwise), its BLS key material, and its CometBFT key seeds COMET_PRIVVAL_SEED /
+#     COMET_NODE_KEY_SEED (RB3-F95 runbook).
+# A per-validator secret in .env.shared gives every validator the same key: in RB3-F64 every node sent
+# and claimed settlements as one validator. Each service below reads [.env.shared, its own secrets file].
 #
 # Note that `env_file:` populates variables INSIDE the container. It does NOT provide values for
 # ${VAR} substitution in this file — compose takes those from the shell or a file literally named
@@ -53,7 +58,7 @@ services:
       - "8081:8080"
       - "26656:26656"
       - "26657:26657"
-    env_file: .env.shared
+    env_file: [.env.shared, secrets/validator-1.env]
     environment:
       VALIDATOR_ID: validator-1
       COMETBFT_P2P_SEEDS: "e24dcf6bcdf202b991ce0d0a3a6fc623f260ba0d@validator-2:26656,af2acabc841ab5622556d01021c9f1a6a038d97a@validator-3:26656,960da0d351187c61f1732308e1168833c9610946@validator-4:26656,1b6cbe9bafe79fb977ba59dbe237f64cc91fbe2b@validator-5:26656,faa57dcd8de29025d52785044e21cf1f703c63ac@validator-6:26656,2ff901c93ec6d8ede51767c56eaf678b7901a611@validator-7:26656"
@@ -81,7 +86,7 @@ services:
       - "8082:8080"
       - "26666:26656"
       - "26667:26657"
-    env_file: .env.shared
+    env_file: [.env.shared, secrets/validator-2.env]
     environment:
       VALIDATOR_ID: validator-2
       COMETBFT_P2P_SEEDS: "6678a01f08728ef00ff438c3517213773d92136d@validator-1:26656,af2acabc841ab5622556d01021c9f1a6a038d97a@validator-3:26656,960da0d351187c61f1732308e1168833c9610946@validator-4:26656,1b6cbe9bafe79fb977ba59dbe237f64cc91fbe2b@validator-5:26656,faa57dcd8de29025d52785044e21cf1f703c63ac@validator-6:26656,2ff901c93ec6d8ede51767c56eaf678b7901a611@validator-7:26656"
@@ -109,7 +114,7 @@ services:
       - "8093:8080"
       - "26766:26656"
       - "26767:26657"
-    env_file: .env.shared
+    env_file: [.env.shared, secrets/validator-3.env]
     environment:
       VALIDATOR_ID: validator-3
       COMETBFT_P2P_SEEDS: "6678a01f08728ef00ff438c3517213773d92136d@validator-1:26656,e24dcf6bcdf202b991ce0d0a3a6fc623f260ba0d@validator-2:26656,960da0d351187c61f1732308e1168833c9610946@validator-4:26656,1b6cbe9bafe79fb977ba59dbe237f64cc91fbe2b@validator-5:26656,faa57dcd8de29025d52785044e21cf1f703c63ac@validator-6:26656,2ff901c93ec6d8ede51767c56eaf678b7901a611@validator-7:26656"
@@ -137,7 +142,7 @@ services:
       - "8084:8080"
       - "26686:26656"
       - "26687:26657"
-    env_file: .env.shared
+    env_file: [.env.shared, secrets/validator-4.env]
     environment:
       VALIDATOR_ID: validator-4
       COMETBFT_P2P_SEEDS: "6678a01f08728ef00ff438c3517213773d92136d@validator-1:26656,e24dcf6bcdf202b991ce0d0a3a6fc623f260ba0d@validator-2:26656,af2acabc841ab5622556d01021c9f1a6a038d97a@validator-3:26656,1b6cbe9bafe79fb977ba59dbe237f64cc91fbe2b@validator-5:26656,faa57dcd8de29025d52785044e21cf1f703c63ac@validator-6:26656,2ff901c93ec6d8ede51767c56eaf678b7901a611@validator-7:26656"
@@ -165,7 +170,7 @@ services:
       - "8095:8080"
       - "26696:26656"
       - "26697:26657"
-    env_file: .env.shared
+    env_file: [.env.shared, secrets/validator-5.env]
     environment:
       VALIDATOR_ID: validator-5
       COMETBFT_P2P_SEEDS: "6678a01f08728ef00ff438c3517213773d92136d@validator-1:26656,e24dcf6bcdf202b991ce0d0a3a6fc623f260ba0d@validator-2:26656,af2acabc841ab5622556d01021c9f1a6a038d97a@validator-3:26656,960da0d351187c61f1732308e1168833c9610946@validator-4:26656,faa57dcd8de29025d52785044e21cf1f703c63ac@validator-6:26656,2ff901c93ec6d8ede51767c56eaf678b7901a611@validator-7:26656"
@@ -193,7 +198,7 @@ services:
       - "8086:8080"
       - "26706:26656"
       - "26707:26657"
-    env_file: .env.shared
+    env_file: [.env.shared, secrets/validator-6.env]
     environment:
       VALIDATOR_ID: validator-6
       COMETBFT_P2P_SEEDS: "6678a01f08728ef00ff438c3517213773d92136d@validator-1:26656,e24dcf6bcdf202b991ce0d0a3a6fc623f260ba0d@validator-2:26656,af2acabc841ab5622556d01021c9f1a6a038d97a@validator-3:26656,960da0d351187c61f1732308e1168833c9610946@validator-4:26656,1b6cbe9bafe79fb977ba59dbe237f64cc91fbe2b@validator-5:26656,2ff901c93ec6d8ede51767c56eaf678b7901a611@validator-7:26656"
@@ -221,7 +226,7 @@ services:
       - "8087:8080"
       - "26716:26656"
       - "26717:26657"
-    env_file: .env.shared
+    env_file: [.env.shared, secrets/validator-7.env]
     environment:
       VALIDATOR_ID: validator-7
       COMETBFT_P2P_SEEDS: "6678a01f08728ef00ff438c3517213773d92136d@validator-1:26656,e24dcf6bcdf202b991ce0d0a3a6fc623f260ba0d@validator-2:26656,af2acabc841ab5622556d01021c9f1a6a038d97a@validator-3:26656,960da0d351187c61f1732308e1168833c9610946@validator-4:26656,1b6cbe9bafe79fb977ba59dbe237f64cc91fbe2b@validator-5:26656,faa57dcd8de29025d52785044e21cf1f703c63ac@validator-6:26656"
