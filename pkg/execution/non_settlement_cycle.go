@@ -136,8 +136,15 @@ func (o *UnifiedOrchestrator) retryNonSettlement(ctx context.Context, rec *NonSe
 	if time.Since(rec.Facts.Deadline) > nonSettlementGiveUp {
 		fmt.Printf("❌ [NON-SETTLEMENT] intent %s on chain %d: could not be attested in %d attempt(s) (%v); recorded unattested\n",
 			rec.Facts.IntentID, rec.Facts.ChainID, rec.Attempts, cause)
-		o.recordMemberOutcome(ctx, nonSettlementCycle(rec, nil), database.MemberSettlementNone, database.MemberProofCycleFailed,
-			fmt.Sprintf("%s; its non-settlement could not be attested: %v", rec.Cause, cause))
+		if err := o.recordMemberOutcome(ctx, nonSettlementCycle(rec, nil), database.MemberSettlementNone, database.MemberProofCycleFailed,
+			fmt.Sprintf("%s; its non-settlement could not be attested: %v", rec.Cause, cause)); err != nil {
+			// Neither the store nor the outbox kept the failure: keep the record, so the next pass records it.
+			if pErr := o.config.NonSettlements.Put(rec); pErr != nil {
+				fmt.Printf("❌ [NON-SETTLEMENT] intent %s: its unattested failure could not be recorded (%v) nor kept (%v)\n",
+					rec.Facts.IntentID, err, pErr)
+			}
+			return
+		}
 		o.removeNonSettlement(rec)
 		return
 	}
@@ -190,7 +197,12 @@ func (o *UnifiedOrchestrator) runNonSettlementCycle(ctx context.Context, rec *No
 	if cycle.Result.WriteBackState != WriteBackWritten {
 		proofCycle = database.MemberProofCycleFailed
 	}
-	o.recordMemberOutcome(ctx, cycle, database.MemberSettlementNone, proofCycle, rec.Cause)
+	if err := o.recordMemberOutcome(ctx, cycle, database.MemberSettlementNone, proofCycle, rec.Cause); err != nil {
+		// Written back already: re-running the cycle would write it back twice. The store and the outbox
+		// both refused the outcome - a double fault, reported as such (RB3-F78).
+		fmt.Printf("❌ [NON-SETTLEMENT] intent %s on chain %d: written back (%s) but its outcome was neither stored nor queued: %v\n",
+			rec.Facts.IntentID, rec.Facts.ChainID, cycle.Result.WriteBackTxHash, err)
+	}
 	fmt.Printf("✅ [NON-SETTLEMENT] intent %s on chain %d: not settled by its deadline - attested at block %d and written back (%s)\n",
 		rec.Facts.IntentID, rec.Facts.ChainID, claim.Block, cycle.Result.WriteBackTxHash)
 	return nil

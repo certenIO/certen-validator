@@ -111,6 +111,8 @@ type UnifiedOrchestratorConfig struct {
 	MemberLookup       MemberLookupFn
 	NonSettlementChain NonSettlementChain
 	NonSettlements     *NonSettlementQueue
+	// MemberOutcomes keeps member outcomes the lifecycle store refused until it takes them (RB3-F78).
+	MemberOutcomes MemberOutcomeOutbox
 }
 
 // ChainedProofGenerator interface for generating Accumulate chained proofs
@@ -395,6 +397,9 @@ func NewUnifiedOrchestrator(config *UnifiedOrchestratorConfig) (*UnifiedOrchestr
 	if config.Repos == nil || config.Repos.ProofArtifacts == nil || config.Repos.IntentLifecycle == nil || config.UnifiedRepo == nil {
 		return nil, fmt.Errorf("the proof artifact, intent lifecycle and unified evidence repositories are required")
 	}
+	if config.MemberOutcomes == nil {
+		return nil, fmt.Errorf("a member outcome outbox is required - an outcome the lifecycle store refuses would otherwise leave its intent short of a terminal status")
+	}
 
 	// Write-back is part of every proof cycle (RB3-F75): results that never reach Accumulate are not a
 	// mode this validator runs in.
@@ -565,7 +570,7 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 
 	// This member's outcome; the intent's status is derived from every member's (RB3-F50). A
 	// settlement that reverted is a failed member even when its revert was written back, and a
-	// write-back that did not happen (disabled by configuration) is not recorded as written.
+	// write-back that did not happen is not recorded as written.
 	proofCycle, reason := database.MemberProofCycleWritten, ""
 	if result.WriteBackState != WriteBackWritten {
 		proofCycle, reason = database.MemberProofCycleFailed, "write-back "+result.WriteBackState
@@ -573,7 +578,12 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 	if tx, reverted := revertedObservation(result.ObservationResults); reverted {
 		reason = strings.TrimPrefix(reason+"; settlement transaction "+tx+" reverted on the target chain", "; ")
 	}
-	o.recordMemberOutcome(ctx, cycle, observedSettlement(result.ObservationResults), proofCycle, reason)
+	if err := o.recordMemberOutcome(ctx, cycle, observedSettlement(result.ObservationResults), proofCycle, reason); err != nil {
+		if o.config.OnCycleFailed != nil {
+			o.config.OnCycleFailed(result, err)
+		}
+		return result, err
+	}
 
 	if o.config.OnCycleComplete != nil {
 		o.config.OnCycleComplete(result)
@@ -702,23 +712,15 @@ func (o *UnifiedOrchestrator) recordMemberOutcome(
 	settlement database.MemberSettlement,
 	proofCycle database.MemberProofCycle,
 	reason string,
-) {
+) error {
 	if o.config.Repos == nil || o.config.Repos.IntentLifecycle == nil || cycle == nil || cycle.Request == nil {
-		return
+		return nil
 	}
 	req, result := cycle.Request, cycle.Result
-	chainID, err := strconv.ParseInt(req.TargetChain, 10, 64)
+	chainID, chains, legs, err := memberSetOf(req)
 	if err != nil {
-		fmt.Printf("❌ [LIFECYCLE] intent %s cycle %s: target chain %q is not a chain id; member outcome not recorded\n",
-			req.IntentID, req.CycleID, req.TargetChain)
-		return
-	}
-	chains := commitmentInt64s(req.CommitmentData["memberChains"])
-	legs := int(commitmentInt64(req.CommitmentData["memberLegs"]))
-	if len(chains) == 0 || legs <= 0 {
-		fmt.Printf("❌ [LIFECYCLE] intent %s cycle %s: the commitment carries no member set (chains=%v legs=%d); "+
-			"member outcome not recorded\n", req.IntentID, req.CycleID, chains, legs)
-		return
+		fmt.Printf("❌ [LIFECYCLE] intent %s cycle %s: %v; member outcome not recorded\n", req.IntentID, req.CycleID, err)
+		return err
 	}
 	out := database.MemberOutcome{
 		IntentID: req.IntentID, ChainID: chainID, MemberChains: chains, Legs: legs,
@@ -733,12 +735,42 @@ func (o *UnifiedOrchestrator) recordMemberOutcome(
 	}
 	derived, err := o.config.Repos.IntentLifecycle.RecordMemberOutcome(ctx, out)
 	if err != nil {
-		fmt.Printf("❌ [LIFECYCLE] intent %s member %d: %v\n", req.IntentID, chainID, err)
-		return
+		// The intent's status waits on this record (RB3-F78): the outbox keeps it until the store takes it.
+		if o.config.MemberOutcomes == nil {
+			fmt.Printf("❌ [LIFECYCLE] intent %s member %d: %v\n", req.IntentID, chainID, err)
+			return fmt.Errorf("record member outcome: %w", err)
+		}
+		if qErr := o.config.MemberOutcomes.Put(out); qErr != nil {
+			fmt.Printf("❌ [LIFECYCLE] intent %s member %d: the store refused the outcome (%v) and the outbox could not keep it: %v\n",
+				req.IntentID, chainID, err, qErr)
+			return fmt.Errorf("record member outcome: %v; queue it: %w", err, qErr)
+		}
+		fmt.Printf("⚠️ [LIFECYCLE] intent %s member %d: outcome queued for the lifecycle store (%v)\n", req.IntentID, chainID, err)
+		return nil
 	}
 	if derived.Terminal {
 		fmt.Printf("[LIFECYCLE] intent %s is %s: %s\n", req.IntentID, derived.Status, derived.Summary)
 	}
+	return nil
+}
+
+// memberSetOf is the member a cycle reports: its chain and the intent's member set. Every cycle must carry
+// it - the intent's status is derived from every member's outcome (RB3-F50) - so a request without it is
+// refused before anything is attested, rather than discovered after its write-back (RB3-F78).
+func memberSetOf(req *UnifiedProofCycleRequest) (int64, []int64, int, error) {
+	if strings.TrimSpace(req.TargetChain) == "" {
+		return 0, nil, 0, fmt.Errorf("the proof cycle names no target chain")
+	}
+	chainID, err := strconv.ParseInt(req.TargetChain, 10, 64)
+	if err != nil {
+		return 0, nil, 0, fmt.Errorf("target chain %q is not a chain id", req.TargetChain)
+	}
+	chains := commitmentInt64s(req.CommitmentData["memberChains"])
+	legs := int(commitmentInt64(req.CommitmentData["memberLegs"]))
+	if len(chains) == 0 || legs <= 0 {
+		return 0, nil, 0, fmt.Errorf("the commitment carries no member set (chains=%v legs=%d)", chains, legs)
+	}
+	return chainID, chains, legs, nil
 }
 
 // observedSettlement is what the cycle's observation shows for the member.
@@ -762,7 +794,9 @@ func (o *UnifiedOrchestrator) recordPhaseFailure(ctx context.Context, cycle *act
 	reason := fmt.Sprintf("phase %d failed: %v", phase, err)
 	cycle.Result.Error = reason
 	cycle.Result.FailPhase = phase
-	o.recordMemberOutcome(ctx, cycle, observedSettlement(cycle.Result.ObservationResults), database.MemberProofCycleFailed, reason)
+	if rErr := o.recordMemberOutcome(ctx, cycle, observedSettlement(cycle.Result.ObservationResults), database.MemberProofCycleFailed, reason); rErr != nil {
+		fmt.Printf("❌ [LIFECYCLE] cycle %s failed in phase %d and its failure could not be recorded: %v\n", cycle.CycleID, phase, rErr)
+	}
 }
 
 // commitmentInt64s reads a list of integers the commitment map carries ([]int64 in-process,
@@ -793,6 +827,10 @@ func (o *UnifiedOrchestrator) validateRequest(req *UnifiedProofCycleRequest) err
 
 	if req.ProofClass != "on_demand" && req.ProofClass != "on_cadence" {
 		return fmt.Errorf("invalid proof class: %s", req.ProofClass)
+	}
+
+	if _, _, _, err := memberSetOf(req); err != nil {
+		return err
 	}
 
 	return nil

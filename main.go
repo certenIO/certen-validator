@@ -1789,6 +1789,17 @@ func startValidator(
 		return nil, nil, fmt.Errorf("proof cycle: non-settlement queue: %w", nsErr)
 	}
 
+	// Member outcomes the lifecycle store refuses wait here until it takes them (RB3-F78): an intent's
+	// status is derived from every member's outcome, and each is recorded after its write-back.
+	memberOutcomes, moErr := execution.NewFileMemberOutcomeOutbox(filepath.Join(nsDataDir, "member_outcome_outbox"))
+	if moErr != nil {
+		return nil, nil, fmt.Errorf("proof cycle: member outcome outbox: %w", moErr)
+	}
+	(&execution.MemberOutcomeReconciler{
+		Outbox: memberOutcomes, Store: batchComponents.Repos.IntentLifecycle, Logf: log.Printf,
+	}).Start(context.Background())
+	log.Printf("✅ [Phase 9] Member outcome outbox at %s; reconciler replaying on startup and every minute", memberOutcomes.Dir())
+
 	unifiedConfig := &execution.UnifiedOrchestratorConfig{
 		ValidatorID:              cfg.ValidatorID,
 		ValidatorIndex:           0,
@@ -1811,6 +1822,7 @@ func startValidator(
 		MemberLookup:             stack.Mempool.FindMember,
 		NonSettlementChain:       execution.NonSettlementChainFromResolver(resolver),
 		NonSettlements:           nonSettlements,
+		MemberOutcomes:           memberOutcomes,
 	}
 
 	unifiedOrchestrator, unifiedErr := execution.NewUnifiedOrchestrator(unifiedConfig)
