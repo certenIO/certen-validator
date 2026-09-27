@@ -178,7 +178,7 @@ func TestNonSettlement_AFailureRecordIsQueuedNotRefused(t *testing.T) {
 	commitment := map[string]interface{}{
 		"outcome": "failed", "reason": "no settlement transaction reached the target chain: dropped from its batch",
 		"targetChain": odChainStr, "memberChains": []int64{odChain}, "memberLegs": 1,
-		commitmentNonSettlementOperationID: common.Hash(own.OperationID).Hex(),
+		commitmentNonSettlementOperationID: common.Hash(own.OperationID).Hex(), "proofClass": "on_demand",
 	}
 	err := a.StartProofCycleWithAccumulateRef(context.Background(), own.IntentID, "", [32]byte{},
 		&struct{ RawTxHashes []string }{}, commitment, "acc://x.acme/data", "tx", "")
@@ -186,7 +186,7 @@ func TestNonSettlement_AFailureRecordIsQueuedNotRefused(t *testing.T) {
 		t.Fatalf("the failure record was refused: %v", err)
 	}
 	recs := o.config.NonSettlements.All()
-	if len(recs) != 1 || recs[0].Facts.IntentID != own.IntentID || !strings.Contains(recs[0].Cause, "dropped") {
+	if len(recs) != 1 || recs[0].Facts.IntentID != own.IntentID || !strings.Contains(recs[0].Cause, "dropped") || recs[0].ProofClass != "on_demand" {
 		t.Fatalf("queued %+v", recs)
 	}
 }
@@ -303,5 +303,24 @@ func TestNonSettlement_IsAttestedByTheRegistryQuorum(t *testing.T) {
 	}
 	if !cycle.Result.ThresholdMet || cycle.Result.AggregatedAttestation.AchievedWeight != 400 {
 		t.Fatalf("threshold met %v, achieved %d of 400", cycle.Result.ThresholdMet, cycle.Result.AggregatedAttestation.AchievedWeight)
+	}
+}
+
+// RB3-F74: a cycle that names no settlement lane is refused, not labelled "on_demand".
+func TestAdapterRefusesACycleThatNamesNoLane(t *testing.T) {
+	own := nsMember()
+	o := nsOrchestrator(t, own, nsChainPast(nsCommit.Add(maxGasDeferral)))
+	a := NewUnifiedOrchestratorAdapter(o)
+	for _, commitment := range []map[string]interface{}{
+		{"targetChain": odChainStr, "memberChains": []int64{odChain}, "memberLegs": 1},
+		{"targetChain": odChainStr, "memberChains": []int64{odChain}, "memberLegs": 1, "proofClass": "urgent"},
+		{"outcome": "failed", "reason": "dropped", "targetChain": odChainStr, "memberChains": []int64{odChain}, "memberLegs": 1,
+			commitmentNonSettlementOperationID: common.Hash(own.OperationID).Hex()},
+	} {
+		err := a.StartProofCycleWithAccumulateRef(context.Background(), own.IntentID, "", [32]byte{1},
+			&struct{ RawTxHashes []string }{RawTxHashes: []string{"0x" + strings.Repeat("ab", 32)}}, commitment, "acc://x.acme/data", "tx", "")
+		if err == nil || !strings.Contains(err.Error(), "names no settlement lane") {
+			t.Fatalf("commitment %v: %v", commitment, err)
+		}
 	}
 }

@@ -1,3 +1,8 @@
+//go:build live
+
+// Behind the live build tag rather than a skip (00_STANDARD §2, RB3-F83): without the tag it is not
+// compiled; with it, a missing input is a failure, never a pass.
+
 package execution
 
 import (
@@ -26,12 +31,12 @@ import (
 //
 //	CERTEN_TEST_RPC_11155111  — a Sepolia RPC URL
 //	CERTEN_TEST_ANCHOR_V8_1   — the deployed CertenAnchorV8_1 address
-//	CERTEN_TEST_BATCH_BUNDLE  — (optional) a known batch anchor bundleId to decode
+//	CERTEN_TEST_BATCH_BUNDLE  — a known batch anchor bundleId to decode
 func TestAnchorsTupleLayoutMatchesDeployedContract(t *testing.T) {
 	rpc := os.Getenv("CERTEN_TEST_RPC_11155111")
 	anchor := os.Getenv("CERTEN_TEST_ANCHOR_V8_1")
 	if rpc == "" || anchor == "" {
-		t.Skip("set CERTEN_TEST_RPC_11155111 and CERTEN_TEST_ANCHOR_V8_1 to run this live check")
+		t.Fatal("the live build requires CERTEN_TEST_RPC_11155111 and CERTEN_TEST_ANCHOR_V8_1")
 	}
 
 	client, err := ethclient.Dial(rpc)
@@ -48,7 +53,7 @@ func TestAnchorsTupleLayoutMatchesDeployedContract(t *testing.T) {
 
 	bundleHex := os.Getenv("CERTEN_TEST_BATCH_BUNDLE")
 	if bundleHex == "" {
-		t.Skip("set CERTEN_TEST_BATCH_BUNDLE to a known batch anchor to check field positions")
+		t.Fatal("the live build requires CERTEN_TEST_BATCH_BUNDLE: the field positions are what this checks")
 	}
 	raw, err := hex.DecodeString(strings.TrimPrefix(bundleHex, "0x"))
 	if err != nil || len(raw) != 32 {

@@ -69,7 +69,7 @@ func bfCall(t *testing.T) *DecodedVerifyCall {
 	st := bfState()
 	setRoot, err := contracts.GetV6_1ValidatorSetRoot()
 	if err != nil {
-		t.Skipf("no validator-set root configured in this environment: %v", err)
+		t.Fatalf("a committed test input is missing (RB3-F83): no validator-set root configured in this environment: %v", err)
 	}
 	signers := make([]string, 0, 5)
 	powers := make([]*big.Int, 0, 5)
@@ -434,7 +434,7 @@ func TestDecodeRoundTripsASubmittedProof(t *testing.T) {
 	// And the decoded call must survive verification against matching state.
 	setRoot, err := contracts.GetV6_1ValidatorSetRoot()
 	if err != nil {
-		t.Skipf("no validator-set root configured: %v", err)
+		t.Fatalf("a committed test input is missing (RB3-F83): no validator-set root configured: %v", err)
 	}
 	call.MessageHash = contracts.ComputeEvmMessageHashV6_1_Pre(backfillChainID, bundleID, root, opID, setRoot)
 	state := AnchorOnChainState{

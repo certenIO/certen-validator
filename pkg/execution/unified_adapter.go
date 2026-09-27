@@ -60,12 +60,16 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 		// quorum-attested non-settlement (RB3-F49) instead of being refused for having none.
 		if commitMap, _ := commitment.(map[string]interface{}); commitMap[commitmentNonSettlementOperationID] != nil {
 			targetChain, _ := commitMap["targetChain"].(string)
+			proofClass, _ := commitMap["proofClass"].(string)
+			if proofClass != string(LaneOnCadence) && proofClass != string(LaneOnDemand) {
+				return fmt.Errorf("intent %s: the failure record names no settlement lane (proofClass %q) - refusing rather than labelling it", intentID, proofClass)
+			}
 			var userIDPtr *string
 			if userID != "" {
 				userIDPtr = &userID
 			}
 			return a.unified.QueueNonSettlement(&UnifiedProofCycleRequest{
-				IntentID: intentID, BundleID: bundleID, TargetChain: targetChain, UserID: userIDPtr,
+				IntentID: intentID, BundleID: bundleID, TargetChain: targetChain, UserID: userIDPtr, ProofClass: proofClass,
 				AccumulateAccountURL: accumulateAccountURL, AccumulateTxHash: accumulateTxHash, AccumulateBVN: bvn,
 				CommitmentData: commitMap,
 			})
@@ -140,7 +144,6 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 
 		// Extract governance data from commitment (for G1/G2 proof levels)
 		var governanceRoot, operationCommitment [32]byte
-		var keyPageThreshold, keyPageKeyCount int
 		if commitMap != nil {
 			// Extract governanceRoot (hex string -> [32]byte)
 			if govRootStr, ok := commitMap["governanceRoot"].(string); ok && govRootStr != "" {
@@ -153,20 +156,6 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 				if decoded, err := hexStringToBytes32(opCommitStr); err == nil {
 					operationCommitment = decoded
 				}
-			}
-			// Extract key page governance threshold (M of N multi-sig)
-			if threshold, ok := commitMap["signatureThreshold"].(float64); ok {
-				keyPageThreshold = int(threshold)
-			}
-			if keyCount, ok := commitMap["keyPageKeyCount"].(float64); ok {
-				keyPageKeyCount = int(keyCount)
-			}
-			// Fallback: if not provided, default to 1 of 1 (single sig)
-			if keyPageThreshold == 0 {
-				keyPageThreshold = 1
-			}
-			if keyPageKeyCount == 0 {
-				keyPageKeyCount = 1
 			}
 		}
 
@@ -190,11 +179,18 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 
 		fmt.Printf("[UnifiedAdapter] Target chain for Phase 7-9: %s\n", targetChain)
 
+		// The lane that settled the member is its proof class (RB3-F74). It used to be "on_demand" for
+		// every member, cadence-batched or not.
+		proofClass, _ := commitMap["proofClass"].(string)
+		if proofClass != string(LaneOnCadence) && proofClass != string(LaneOnDemand) {
+			return fmt.Errorf("intent %s: the proof cycle names no settlement lane (proofClass %q) - refusing rather than labelling it", intentID, proofClass)
+		}
+
 		req := &UnifiedProofCycleRequest{
 			IntentID:             intentID,
 			BundleID:             bundleID,
 			TxHashes:             txHashStrs,
-			ProofClass:           "on_demand",
+			ProofClass:           proofClass,
 			TargetChain:          targetChain,
 			UserID:               userIDPtr,
 			AccumulateAccountURL: accumulateAccountURL,
@@ -202,9 +198,6 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 			AccumulateBVN:        bvn,
 			GovernanceRoot:       governanceRoot,
 			OperationCommitment:  operationCommitment,
-			// Key page governance threshold (M of N)
-			KeyPageThreshold: keyPageThreshold,
-			KeyPageKeyCount:  keyPageKeyCount,
 			// Merkle inclusion proof data (for MerkleTreeVisualization)
 			LeafHash:       leafHash,
 			LeafIndex:      0,   // Single transaction, always index 0

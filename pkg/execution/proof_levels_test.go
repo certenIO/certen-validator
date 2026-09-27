@@ -87,7 +87,7 @@ func newLevelFixture(t *testing.T) *levelFixture {
 	f := &levelFixture{db: db, repos: repos, publicKey: publicKey}
 	f.orch = &UnifiedOrchestrator{config: &UnifiedOrchestratorConfig{
 		ValidatorID: "levels-validator", Repos: repos, UnifiedRepo: repos.Unified,
-		EnableUnifiedTables: true, Ed25519Key: privateKey,
+		Ed25519Key: privateKey,
 	}}
 
 	intentID := "levels-intent-" + uuid.NewString()

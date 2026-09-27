@@ -30,9 +30,8 @@ type Config struct {
 	DatabaseURL         string
 	DatabaseMaxConns    int
 	DatabaseMinConns    int
-	DatabaseMaxIdleTime int  // seconds
-	DatabaseMaxLifetime int  // seconds
-	DatabaseRequired    bool // If true, startup fails if database connection fails
+	DatabaseMaxIdleTime int // seconds
+	DatabaseMaxLifetime int // seconds
 
 	// Database Configuration (individual fields for client.go)
 	DBHost            string
@@ -104,7 +103,6 @@ type Config struct {
 	// Per Unified Multi-Chain Architecture plan
 	UseUnifiedOrchestrator bool // Use unified orchestrator for proof cycles
 	EnableMultiChain       bool // Enable multi-chain execution strategies
-	EnableUnifiedTables    bool // Write to unified PostgreSQL tables
 }
 
 // Load reads configuration from environment variables
@@ -143,7 +141,6 @@ func Load() (*Config, error) {
 		DatabaseMinConns:    getEnvInt("DATABASE_MIN_CONNS", 5),
 		DatabaseMaxIdleTime: getEnvInt("DATABASE_MAX_IDLE_TIME", 300), // 5 minutes
 		DatabaseMaxLifetime: getEnvInt("DATABASE_MAX_LIFETIME", 3600), // 1 hour
-		DatabaseRequired:    getEnvBool("DATABASE_REQUIRED", false),   // If true, fail startup on DB error
 
 		// Database Configuration - individual fields for client.go
 		DBHost:            getEnv("DB_HOST", "localhost"),
@@ -213,7 +210,6 @@ func Load() (*Config, error) {
 		// Per Unified Multi-Chain Architecture plan
 		UseUnifiedOrchestrator: getEnvBool("FF_UNIFIED_ORCHESTRATOR", true),
 		EnableMultiChain:       getEnvBool("FF_MULTI_CHAIN", true),
-		EnableUnifiedTables:    getEnvBool("FF_UNIFIED_TABLES", true),
 	}
 
 	return cfg, nil

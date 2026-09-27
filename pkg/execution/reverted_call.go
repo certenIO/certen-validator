@@ -3,7 +3,6 @@ package execution
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/big"
@@ -400,28 +399,33 @@ func checkAuthorizedAttempt(
 	return nil
 }
 
-// matchCommittedCalls reports whether every committed call is among the executed ones.
+// matchCommittedCalls reports whether the transaction executed exactly the committed calls: as many,
+// in the committed order, each with the committed target, data and value (a value left uncommitted is
+// zero, as the leaf commits it). The account's leaf commits to that ordered sequence; matching each
+// committed call to ANY executed one, as this used to, accepted a transaction executing other calls
+// besides, or the same call counted twice (RB3-F77).
 func matchCommittedCalls(executed, committed []CommittedCall) error {
 	if len(committed) == 0 {
 		return fmt.Errorf("no committed call to bind the transaction to")
 	}
+	if len(executed) != len(committed) {
+		return fmt.Errorf("the transaction executed %d call(s); the intent committed %d", len(executed), len(committed))
+	}
 	for i, c := range committed {
-		found := false
-		for _, e := range executed {
-			if e.Target != c.Target || !bytes.Equal(e.Data, c.Data) {
-				continue
-			}
-			if c.Value != nil && (e.Value == nil || e.Value.Cmp(c.Value) != 0) {
-				continue
-			}
-			found = true
-			break
-		}
-		if !found {
-			return fmt.Errorf("committed call %d (target %s) is not what the transaction executed", i, c.Target.Hex())
+		e := executed[i]
+		if e.Target != c.Target || !bytes.Equal(e.Data, c.Data) || callValue(e.Value).Cmp(callValue(c.Value)) != 0 {
+			return fmt.Errorf("executed call %d is not committed call %d (target %s)", i, i, c.Target.Hex())
 		}
 	}
 	return nil
+}
+
+// callValue is a call's value, zero when none is given.
+func callValue(v *big.Int) *big.Int {
+	if v == nil {
+		return new(big.Int)
+	}
+	return v
 }
 
 // accountLeafAndAnchor is the member's leaf for an account execution, as the account itself computes it
@@ -475,47 +479,22 @@ func accountLeafAndAnchor(ctx context.Context, chain bind.ContractCaller, accoun
 	return leaf, anchorAddr, nil
 }
 
-// ParseCommittedCall builds a CommittedCall from the intent's hex/decimal string forms.
-func ParseCommittedCall(target, value, callData string) (CommittedCall, error) {
-	var c CommittedCall
-	t := strings.TrimSpace(target)
-	if !common.IsHexAddress(t) {
-		return c, fmt.Errorf("target %q is not an address", target)
-	}
-	c.Target = common.HexToAddress(t)
-	if v := strings.TrimSpace(value); v != "" {
-		n, ok := new(big.Int).SetString(strings.TrimPrefix(v, "0x"), 10)
-		if !ok {
-			if n, ok = new(big.Int).SetString(strings.TrimPrefix(v, "0x"), 16); !ok {
-				return c, fmt.Errorf("value %q does not parse", value)
-			}
-		}
-		c.Value = n
-	}
-	d, err := hex.DecodeString(strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(callData), "0x"), "0X"))
-	if err != nil {
-		return c, fmt.Errorf("callData does not decode: %w", err)
-	}
-	c.Data = d
-	return c, nil
-}
-
 // VerifyRevertedCall proves that txHash is the committed execution, that it was an attempt the
 // member's account authorised, and that it reverted.
 //
-// opID, when non-nil, must equal the operationID the execution was authorised under. account is the
+// opID is the operationID the execution must have been authorised under (required). account is the
 // member's account - the source the intent committed to - which the transaction must be sent to.
 func (o *ExternalChainObserver) VerifyRevertedCall(
 	ctx context.Context,
 	txHash common.Hash,
 	committed []CommittedCall,
-	opID *[32]byte,
+	opID [32]byte,
 	account common.Address,
 ) (*ExternalChainResult, error) {
 	if account == (common.Address{}) {
 		return nil, fmt.Errorf("no member account to bind the reverted call to")
 	}
-	result, err := o.ObserveTransaction(ctx, txHash, nil)
+	result, err := o.ObserveTransaction(ctx, txHash)
 	if err != nil {
 		return nil, fmt.Errorf("observe reverted call tx %s: %w", txHash.Hex(), err)
 	}
@@ -541,7 +520,7 @@ func (o *ExternalChainObserver) VerifyRevertedCall(
 	if err := matchCommittedCalls(exec.Calls, committed); err != nil {
 		return nil, fmt.Errorf("reverted tx %s: %w", txHash.Hex(), err)
 	}
-	if opID != nil && exec.OperationID != *opID {
+	if opID == ([32]byte{}) || exec.OperationID != opID {
 		return nil, fmt.Errorf("reverted tx %s carries operationID 0x%x, not the intent's 0x%x",
 			txHash.Hex(), exec.OperationID[:8], opID[:8])
 	}

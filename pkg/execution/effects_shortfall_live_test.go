@@ -67,7 +67,7 @@ func TestLiveEffectsShortfall_BaseSepolia(t *testing.T) {
 	opID := exec.OperationID
 
 	// 1. Committed effects that ARE there: no shortfall - the verifier refuses to claim one.
-	legs := []ShortfallLeg{{Call: call, Events: []ExpectedEvent{{Contract: weth, Topic0: approval}}}}
+	legs := []CommittedLeg{{Call: call, Events: []ExpectedEvent{{Contract: weth, Topic0: approval}}}}
 	if _, _, err := obs.VerifyEffectsNotProven(ctx, tx, legs, opID, account); err == nil || !strings.Contains(err.Error(), "no shortfall") {
 		t.Fatalf("a settlement whose committed event is present must not be claimed a shortfall: %v", err)
 	}

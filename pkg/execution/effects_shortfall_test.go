@@ -86,20 +86,21 @@ func TestEventPresenceFollowsTheSuccessGatesRule(t *testing.T) {
 	if !eventPresent(logs, ExpectedEvent{Contract: weth, Topic0: approval, DataHash: [32]byte(crypto.Keccak256Hash([]byte{1}))}) {
 		t.Fatal("a matching data hash is present")
 	}
-	// The success gate agrees on every case.
-	gate := &ExecutionCommitment{}
-	res := &ExternalChainResult{Logs: logs}
-	if !gate.verifyExpectedEventsStrict(res, []ExpectedEvent{{Contract: weth, Topic0: approval}}) {
-		t.Fatal("success gate disagrees on a present event")
-	}
 }
 
 func TestMemberOutcomeStatesWhetherEffectsWereProven(t *testing.T) {
 	if cycleEffectsProven(&activeCycle{}) != nil {
 		t.Fatal("no committed call: nothing to state")
 	}
-	if p := cycleEffectsProven(&activeCycle{VerifiedCalls: verifiedCallProofs{"ab": &ExternalChainResult{}}}); p == nil || !*p {
+	if p := cycleEffectsProven(&activeCycle{CommittedEffects: true, VerifiedCalls: verifiedCallProofs{"ab": &ExternalChainResult{Status: 1}}}); p == nil || !*p {
 		t.Fatal("proven effects must be stated proven")
+	}
+	// A native member committed no effect; a reverted settlement assessed none: neither is "proven".
+	if p := cycleEffectsProven(&activeCycle{VerifiedCalls: verifiedCallProofs{"ab": &ExternalChainResult{Status: 1}}}); p != nil {
+		t.Fatal("a member that committed no effect has none to state")
+	}
+	if p := cycleEffectsProven(&activeCycle{CommittedEffects: true, VerifiedCalls: verifiedCallProofs{"ab": &ExternalChainResult{Status: 0}}}); p != nil {
+		t.Fatal("a reverted settlement's effects were never assessed")
 	}
 	if p := cycleEffectsProven(&activeCycle{EffectsShortfall: shortfallClaim(), VerifiedCalls: verifiedCallProofs{"ab": nil}}); p == nil || *p {
 		t.Fatal("a proven shortfall must be stated not proven, whatever else the gate saw")
@@ -107,13 +108,14 @@ func TestMemberOutcomeStatesWhetherEffectsWereProven(t *testing.T) {
 }
 
 func TestShortfallIsWrittenBackAsItsOutcome(t *testing.T) {
-	obs := &chain.ObservationResult{TxHash: "0x7a2c8522fb60d37e63fa2b68bf1abc69c6a70dd25da501ab21ec02c1b50204e7", Status: 1, IsFinalized: true, BlockNumber: 47368146}
+	obs := &chain.ObservationResult{TxHash: "0x7a2c8522fb60d37e63fa2b68bf1abc69c6a70dd25da501ab21ec02c1b50204e7", Status: 1, IsFinalized: true, BlockNumber: 47368146,
+		BlockHash: "0x1111111111111111111111111111111111111111111111111111111111111111"}
 	c := memberCycle("i-shortfall", "84532", []int64{84532}, 1, obs)
 	c.EffectsShortfall = shortfallClaim()
 	o := &UnifiedOrchestrator{config: &UnifiedOrchestratorConfig{}, resultChains: map[string]*ResultHashChain{}}
-	bundle := o.buildAttestationBundleFromCycle(c)
-	if bundle == nil || bundle.Result == nil {
-		t.Fatal("no bundle")
+	bundle, _, err := o.buildAttestationBundleFromCycle(c)
+	if err != nil || bundle == nil || bundle.Result == nil {
+		t.Fatalf("no bundle: %v", err)
 	}
 	if bundle.Result.Outcome != ResultOutcomeEffectsNotProven || bundle.Result.OutcomeReason == "" {
 		t.Fatalf("outcome %q (%q); want %q with the missing effects named", bundle.Result.Outcome, bundle.Result.OutcomeReason, ResultOutcomeEffectsNotProven)

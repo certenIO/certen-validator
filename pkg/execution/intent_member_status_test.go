@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	chain "github.com/certen/independant-validator/pkg/chain/strategy"
 	"github.com/certen/independant-validator/pkg/database"
@@ -18,7 +19,8 @@ import (
 // memberCycle is a finished member cycle as Phase 7-9 leave it.
 func memberCycle(intentID, chainID string, members []int64, legs int, obs *chain.ObservationResult) *activeCycle {
 	return &activeCycle{
-		CycleID: "cycle-" + chainID,
+		CycleID:   "cycle-" + chainID,
+		StartedAt: time.Now().UTC(),
 		Request: &UnifiedProofCycleRequest{
 			IntentID: intentID, CycleID: "cycle-" + chainID, TargetChain: chainID,
 			CommitmentData: map[string]interface{}{"memberChains": members, "memberLegs": legs},
@@ -181,7 +183,8 @@ func TestIntentStatus_ASettlementWithoutItsCommittedEffectsFailsTheIntent(t *tes
 		memberCycle(okID, "84532", members, 1, settledObs("0xbase")),
 		memberCycle(okID, "421614", members, 1, settledObs("0xarb")),
 	} {
-		c.VerifiedCalls = verifiedCallProofs{"proven": &ExternalChainResult{}}
+		c.CommittedEffects = true
+		c.VerifiedCalls = verifiedCallProofs{"proven": &ExternalChainResult{Status: 1}}
 		finish(ctx, o, c)
 	}
 	if status, _, _, _ := lifecycleRow(t, db, okID); status != "complete" {

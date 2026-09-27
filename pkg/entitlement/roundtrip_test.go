@@ -25,7 +25,7 @@ type roundTripFixture struct {
 func TestGatewayProducedDocumentVerifiesInGo(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("testdata", "gateway_roundtrip.json"))
 	if err != nil {
-		t.Skipf("no round-trip fixture: %v", err)
+		t.Fatalf("a committed test input is missing (RB3-F83): no round-trip fixture: %v", err)
 	}
 	var fx roundTripFixture
 	if err := json.Unmarshal(raw, &fx); err != nil {

@@ -374,7 +374,7 @@ func TestS2_GraftedReceiptFromAnotherProofIsRejected(t *testing.T) {
 	mine := s2Evidence(t, "proof_bvn1.json", "G1")
 	theirs := s2Evidence(t, "proof_bvn3.json", "G1")
 	if mine.Anchor == theirs.Anchor {
-		t.Skip("the two fixtures share an anchor; this graft would not be a graft")
+		t.Fatal("the two fixtures share an anchor, so this graft would not be a graft: the fixtures must differ")
 	}
 
 	proofID := s2StoreProof(ctx, t, db)

@@ -441,11 +441,10 @@ row whose `blockNumber` differs from its canonical row's `anchor_block_num`; eve
 
 ### 7.8 Still open
 
-1. **Database unreachable at startup.** Verify is fatal when the database connects and the schema is
-   old. But when the connection itself fails and `DATABASE_REQUIRED` is false (the default), the
-   validator still starts in degraded mode (`main.go`, Phase 5), so E2 as written does not hold. Whether
-   a validator should refuse to start without its database is a fleet-availability decision, so it is
-   left for the owner.
+1. **Database unreachable at startup.** CLOSED (RB3-F70, owner direction 2026-09-27): a validator
+   whose database connection fails does not start; there is no degraded mode, and `DATABASE_REQUIRED`
+   accepts only `true`. Compose already starts validators only after postgres is healthy and
+   schema-migrate has completed, and restarts them.
 2. **DDL privileges.** Validators and proofs_service still connect as `certen`, which owns the schema.
    Now that no service runs DDL outside `migrate up` / `MIGRATE_ON_START`, they can move to a DML-only role.
 3. **§3 Step 6 cleanups**, each its own decision: `chain_execution_results.status` → NOT NULL; one

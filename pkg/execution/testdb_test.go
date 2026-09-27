@@ -17,10 +17,7 @@ func openMigratedTestDB(t *testing.T, gate string) *sql.DB {
 	t.Helper()
 	conn := os.Getenv("CERTEN_TEST_DB")
 	if conn == "" {
-		if os.Getenv("CI") != "" {
-			t.Fatalf("CERTEN_TEST_DB is required in CI (%s)", gate)
-		}
-		t.Skipf("CERTEN_TEST_DB not set — %s needs PostgreSQL. A skipped gate is not a green gate.", gate)
+		t.Fatalf("CERTEN_TEST_DB is required: %s needs PostgreSQL. A skipped gate is not a green gate.", gate)
 	}
 	db, err := sql.Open("postgres", conn)
 	if err != nil {

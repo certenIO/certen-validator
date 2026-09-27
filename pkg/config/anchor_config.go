@@ -233,7 +233,6 @@ type DatabaseSettings struct {
 	MinConnections int      `yaml:"min_connections"`
 	MaxIdleTime    Duration `yaml:"max_idle_time"`
 	MaxLifetime    Duration `yaml:"max_lifetime"`
-	Required       bool     `yaml:"required"`
 	LogQueries     bool     `yaml:"log_queries"`
 	AutoMigrate    bool     `yaml:"auto_migrate"`
 	MigrationPath  string   `yaml:"migration_path"`
@@ -629,11 +628,9 @@ func (c *AnchorConfig) ValidateAnchorConfig() error {
 		errors = append(errors, "validator.eth_private_key is required")
 	}
 
-	// Database validation
-	if c.Database.Required {
-		if c.Database.URL == "" || strings.HasPrefix(c.Database.URL, "${") {
-			errors = append(errors, "database.url is required when database.required is true")
-		}
+	// Database validation: a validator does not run without its database.
+	if c.Database.URL == "" || strings.HasPrefix(c.Database.URL, "${") {
+		errors = append(errors, "database.url is required")
 	}
 
 	// Security validation for production
@@ -904,7 +901,6 @@ func LoadAnchorConfigFromEnv() (*AnchorConfig, error) {
 			MinConnections: getEnvInt("DATABASE_MIN_CONNS", 5),
 			MaxIdleTime:    Duration(5 * time.Minute),
 			MaxLifetime:    Duration(1 * time.Hour),
-			Required:       getEnvBool("DATABASE_REQUIRED", false),
 			LogQueries:     getEnvBool("DATABASE_LOG_QUERIES", false),
 			AutoMigrate:    getEnvBool("DATABASE_AUTO_MIGRATE", false),
 			MigrationPath:  getEnv("DATABASE_MIGRATION_PATH", "./migrations"),

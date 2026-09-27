@@ -12,8 +12,6 @@ package strategy
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -342,14 +340,7 @@ func (s *BLSStrategy) ValidatorIndex() uint32 {
 
 // ComputeMessageHash computes the canonical hash of an attestation message
 func (s *BLSStrategy) ComputeMessageHash(message *AttestationMessage) ([32]byte, error) {
-	// Serialize message to canonical JSON
-	data, err := json.Marshal(message)
-	if err != nil {
-		return [32]byte{}, fmt.Errorf("marshal message: %w", err)
-	}
-
-	// SHA-256 hash
-	return sha256.Sum256(data), nil
+	return message.Hash()
 }
 
 // =============================================================================
