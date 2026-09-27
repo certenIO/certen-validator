@@ -196,10 +196,6 @@ type IntentDiscovery struct {
 	// Intent lifecycle tracking (PostgreSQL)
 	repos *database.Repositories // For lifecycle status persistence
 
-	// Multi-leg intent support
-	legCompletionHandler *LegCompletionHandler // For multi-leg coordination
-	multiLegEnabled      bool                  // Toggle for multi-leg processing
-
 	// Block monitoring state
 	lastProcessedBlock uint64
 	lastQueuedBlock    uint64 // highest block sent to workers (prevents re-queuing)
@@ -325,20 +321,6 @@ func NewIntentDiscoveryLegacy(client accumulate.Client, accumulateURL string) *I
 func (id *IntentDiscovery) SetBFTConsensus(consensus BFTConsensusProtocol) {
 	id.bftConsensus = consensus
 	id.logger.Printf("🎯 BFT consensus configured for intent processing")
-}
-
-// SetLegCompletionHandler configures the leg completion handler for multi-leg intent coordination
-func (id *IntentDiscovery) SetLegCompletionHandler(handler *LegCompletionHandler) {
-	id.legCompletionHandler = handler
-	id.multiLegEnabled = (handler != nil)
-	if id.multiLegEnabled {
-		id.logger.Printf("✅ Multi-leg intent coordination enabled via LegCompletionHandler")
-	}
-}
-
-// IsMultiLegEnabled returns whether multi-leg processing is enabled
-func (id *IntentDiscovery) IsMultiLegEnabled() bool {
-	return id.multiLegEnabled
 }
 
 // SetRepositories configures database repositories for intent lifecycle tracking
@@ -1380,7 +1362,10 @@ func (id *IntentDiscovery) processIntent(intent *CertenIntent, blockHeight uint6
 		id.logger.Printf("⚠️ Failed to detect multi-leg status for %s: %v", intent.IntentID, err)
 	}
 
-	if isMultiLeg && id.multiLegEnabled {
+	// A multi-leg intent always takes the multi-leg path. It used to be gated on a leg-completion
+	// handler being wired - a handler whose completion callbacks nothing called, so it coordinated
+	// nothing; each chain member's outcome is recorded where it is known instead (RB3-F50).
+	if isMultiLeg {
 		return id.processMultiLegIntent(intent, blockHeight)
 	}
 
@@ -1533,15 +1518,6 @@ func (id *IntentDiscovery) processMultiLegIntent(intent *CertenIntent, blockHeig
 		return consensus.TargetChainFailed, fmt.Errorf("get leg count: %w", err)
 	}
 	id.logger.Printf("   Leg count: %d", legCount)
-
-	// Register intent with leg completion handler
-	if id.legCompletionHandler != nil {
-		record, err := id.legCompletionHandler.RegisterIntent((*consensus.CertenIntent)(intent), blockHeight)
-		if err != nil {
-			return consensus.TargetChainFailed, fmt.Errorf("register multi-leg intent: %w", err)
-		}
-		id.logger.Printf("   Registered with %d chain groups", len(record.ChainGroups))
-	}
 
 	// Group legs by target chain
 	legsGrouped, err := intent.GetLegsGroupedByChain()

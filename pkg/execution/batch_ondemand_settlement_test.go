@@ -77,8 +77,6 @@ type fakeODChain struct {
 	createCalls int
 	settleCalls int
 	costs       []costCall
-	settledLegs int
-	failedLegs  int
 }
 
 func (f *fakeODChain) memberAccountUsable(context.Context, *PendingBatchIntent) error { return nil }
@@ -125,10 +123,6 @@ func (f *fakeODChain) memberPastDeadline(*PendingBatchIntent) bool { return fals
 func (f *fakeODChain) lastVerifyTx([32]byte) string                { return f.verifyTx }
 func (f *fakeODChain) reportOnDemandCosts(_ context.Context, m *PendingBatchIntent, settleTx string) {
 	f.costs = append(f.costs, costCall{m.AnchorTx, m.VerifyTx, settleTx})
-}
-func (f *fakeODChain) recordLegProgress(_ context.Context, settled, failed []*PendingBatchIntent) {
-	f.settledLegs += len(settled)
-	f.failedLegs += len(failed)
 }
 
 func (f *fakeODChain) leafConsumedTx(context.Context, *PendingBatchIntent, [32]byte) (string, common.Address, bool, error) {
@@ -232,8 +226,9 @@ func settle(t *testing.T, f *fakeODChain, m *PendingBatchIntent) *OnDemandOutcom
 
 // Defect 1 and the leader's half of Defect 2: this validator's own settlement reverts with the
 // leaf unspent. It is the member's failure against that transaction: the reverted vault_execute is
-// reported to the gateway beside the anchor and verify this validator paid for, the legs are
-// recorded failed, and the outcome carries the transaction Phase 7 proves.
+// reported to the gateway beside the anchor and verify this validator paid for, and the outcome
+// carries the transaction Phase 7 proves (the member's legs are counted failed from that outcome,
+// RecordMemberOutcome).
 func TestOD_OwnRevertIsReportedWithItsTransaction(t *testing.T) {
 	f := &fakeODChain{settleTx: odRevertTx, settleErr: errSettlementReverted, anchorTx: odAnchorTx, verifyTx: odVerifyTx}
 	m := odMember(1, odChain, 100)
@@ -243,9 +238,6 @@ func TestOD_OwnRevertIsReportedWithItsTransaction(t *testing.T) {
 	}
 	if len(f.costs) != 1 || f.costs[0] != (costCall{odAnchorTx, odVerifyTx, odRevertTx}) {
 		t.Fatalf("costs %+v; the gateway must be told of the anchor, the verify and the reverted settlement", f.costs)
-	}
-	if f.failedLegs != 1 || f.settledLegs != 0 {
-		t.Fatalf("legs settled=%d failed=%d; want the member's legs failed", f.settledLegs, f.failedLegs)
 	}
 	if !m.AnchorProved || m.AnchorTx != odAnchorTx || m.VerifyTx != odVerifyTx {
 		t.Fatalf("member %+v does not record that this validator proved its anchor", m)
@@ -261,8 +253,8 @@ func TestOD_LostSettlementRaceIsReleasedNotReported(t *testing.T) {
 	if !out.Released || out.Reverted || out.Settled {
 		t.Fatalf("outcome %+v; want released", out)
 	}
-	if len(f.costs) != 0 || f.failedLegs != 0 {
-		t.Fatalf("costs %+v failed legs %d; a lost race reports nothing", f.costs, f.failedLegs)
+	if len(f.costs) != 0 {
+		t.Fatalf("costs %+v; a lost race reports nothing", f.costs)
 	}
 }
 
@@ -570,8 +562,8 @@ func TestOD_TransientSendsDeferAndNeverFail(t *testing.T) {
 		t.Errorf("an anchor with no result yet: outcome %+v", out)
 	}
 	f = &fakeODChain{settleTx: "", settleErr: priced, anchorTx: odAnchorTx}
-	if out := settle(t, f, odMember(1, odChain, 100)); !out.Deferred || out.Reverted || f.failedLegs != 0 {
-		t.Errorf("a settlement refused on cost: outcome %+v failed legs %d", out, f.failedLegs)
+	if out := settle(t, f, odMember(1, odChain, 100)); !out.Deferred || out.Reverted {
+		t.Errorf("a settlement refused on cost: outcome %+v", out)
 	}
 	f = &fakeODChain{settleTx: "", settleErr: ErrNonceConsumedElsewhere, anchorTx: odAnchorTx}
 	if out := settle(t, f, odMember(1, odChain, 100)); !out.Deferred || out.Reverted {
@@ -584,8 +576,8 @@ func TestOD_LeafSpentAtSendIsReleased(t *testing.T) {
 	f := &fakeODChain{anchorTx: odAnchorTx, settleErr: fmt.Errorf("leaf 0xaa already consumed: %w", errLeafAlreadyConsumed),
 		spentBy: odRevertTx, spentFrom: odOtherAddr, spentByKnown: true}
 	out := settle(t, f, odMember(1, odChain, 100))
-	if !out.Released || out.Reverted || f.failedLegs != 0 {
-		t.Fatalf("outcome %+v failed legs %d; want released", out, f.failedLegs)
+	if !out.Released || out.Reverted {
+		t.Fatalf("outcome %+v; want released", out)
 	}
 }
 

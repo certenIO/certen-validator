@@ -482,7 +482,8 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 	if err := o.executePhase7(cycleCtx, cycle, chainStrategy); err != nil {
 		result.Error = fmt.Sprintf("phase 7 failed: %v", err)
 		result.FailPhase = 7
-		o.updateLifecycleFailed(ctx, req.IntentID, req.CycleID, 7, err)
+		o.recordMemberOutcome(ctx, cycle, database.MemberSettlementUnobserved, database.MemberProofCycleFailed,
+			fmt.Sprintf("phase 7 failed: %v", err))
 		if o.config.OnCycleFailed != nil {
 			o.config.OnCycleFailed(result, err)
 		}
@@ -492,7 +493,8 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 	if err := o.executePhase8(cycleCtx, cycle, attestStrategy); err != nil {
 		result.Error = fmt.Sprintf("phase 8 failed: %v", err)
 		result.FailPhase = 8
-		o.updateLifecycleFailed(ctx, req.IntentID, req.CycleID, 8, err)
+		o.recordMemberOutcome(ctx, cycle, observedSettlement(result.ObservationResults), database.MemberProofCycleFailed,
+			fmt.Sprintf("phase 8 failed: %v", err))
 		if o.config.OnCycleFailed != nil {
 			o.config.OnCycleFailed(result, err)
 		}
@@ -510,7 +512,8 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 	if err := o.executePhase9(cycleCtx, cycle); err != nil {
 		result.Error = fmt.Sprintf("phase 9 failed: %v", err)
 		result.FailPhase = 9
-		o.updateLifecycleFailed(ctx, req.IntentID, req.CycleID, 9, err)
+		o.recordMemberOutcome(ctx, cycle, observedSettlement(result.ObservationResults), database.MemberProofCycleFailed,
+			fmt.Sprintf("phase 9 failed: %v", err))
 		if o.config.OnCycleFailed != nil {
 			o.config.OnCycleFailed(result, err)
 		}
@@ -524,14 +527,17 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 
 	o.completeProofCycles(ctx, req.CycleID, cycle.Completions, result, req.MerkleRoot, result.WriteBackTxHash)
 
-	// Intent lifecycle: complete - or FAILED, when what the cycle proved and wrote back is that
-	// the settlement reverted. The write-back records the failure; the lifecycle must say the
-	// same thing, not "complete".
-	if tx, reverted := revertedObservation(result.ObservationResults); reverted {
-		o.updateLifecycleReverted(ctx, req.IntentID, req.CycleID, tx, result.WriteBackTxHash)
-	} else {
-		o.updateLifecycleComplete(ctx, req.IntentID, req.CycleID, result.WriteBackTxHash)
+	// This member's outcome; the intent's status is derived from every member's (RB3-F50). A
+	// settlement that reverted is a failed member even when its revert was written back, and a
+	// write-back that did not happen (disabled by configuration) is not recorded as written.
+	proofCycle, reason := database.MemberProofCycleWritten, ""
+	if result.WriteBackState != WriteBackWritten {
+		proofCycle, reason = database.MemberProofCycleFailed, "write-back "+result.WriteBackState
 	}
+	if tx, reverted := revertedObservation(result.ObservationResults); reverted {
+		reason = strings.TrimPrefix(reason+"; settlement transaction "+tx+" reverted on the target chain", "; ")
+	}
+	o.recordMemberOutcome(ctx, cycle, observedSettlement(result.ObservationResults), proofCycle, reason)
 
 	if o.config.OnCycleComplete != nil {
 		o.config.OnCycleComplete(result)
@@ -614,40 +620,6 @@ func (o *UnifiedOrchestrator) logTargetChainResolution(intentID, txHash string, 
 	}
 }
 
-// updateLifecycleFailed marks an intent as failed in the lifecycle table.
-// Non-fatal: logs warning on error, never blocks proof cycle.
-func (o *UnifiedOrchestrator) updateLifecycleFailed(ctx context.Context, intentID, cycleID string, phase int, phaseErr error) {
-	if o.config.Repos == nil || o.config.Repos.IntentLifecycle == nil || intentID == "" {
-		return
-	}
-	errMsg := fmt.Sprintf("phase %d failed: %v", phase, phaseErr)
-	if err := o.config.Repos.IntentLifecycle.UpdateStatus(ctx, intentID,
-		database.IntentLifecycleFailed,
-		database.WithCycleID(cycleID),
-		database.WithErrorMessage(errMsg),
-	); err != nil {
-		fmt.Printf("Warning: [LIFECYCLE] failed to update %s to failed: %v\n", intentID, err)
-	}
-}
-
-// updateLifecycleComplete marks an intent as complete in the lifecycle table.
-// Non-fatal: logs warning on error, never blocks proof cycle.
-func (o *UnifiedOrchestrator) updateLifecycleComplete(ctx context.Context, intentID, cycleID, writeBackTxHash string) {
-	if o.config.Repos == nil || o.config.Repos.IntentLifecycle == nil || intentID == "" {
-		return
-	}
-	opts := []database.UpdateOption{database.WithCycleID(cycleID)}
-	if writeBackTxHash != "" {
-		opts = append(opts, database.WithWriteBackTx(writeBackTxHash))
-	}
-	if err := o.config.Repos.IntentLifecycle.UpdateStatus(ctx, intentID,
-		database.IntentLifecycleComplete,
-		opts...,
-	); err != nil {
-		fmt.Printf("Warning: [LIFECYCLE] failed to update %s to complete: %v\n", intentID, err)
-	}
-}
-
 // executionOutcome is what the cycle's observed executions did: "succeeded" when every observed
 // transaction is a finalized success, "reverted" when every one is a finalized revert, and "" when
 // they are not all final or do not agree - a batch whose members ended differently has no single
@@ -682,22 +654,83 @@ func revertedObservation(obs []*chain.ObservationResult) (string, bool) {
 	return "", false
 }
 
-// updateLifecycleReverted marks an intent failed because its settlement reverted, keeping the
-// write-back that recorded the failure.
-func (o *UnifiedOrchestrator) updateLifecycleReverted(ctx context.Context, intentID, cycleID, txHash, writeBackTxHash string) {
-	if o.config.Repos == nil || o.config.Repos.IntentLifecycle == nil || intentID == "" {
+// recordMemberOutcome records this cycle's member outcome; the intent's status is derived from all of
+// its members' (IntentLifecycleRepository.RecordMemberOutcome). The member set and the member's leg
+// count come from consensus through the commitment; without them the outcome cannot be placed and
+// that is said, never guessed.
+func (o *UnifiedOrchestrator) recordMemberOutcome(
+	ctx context.Context,
+	cycle *activeCycle,
+	settlement database.MemberSettlement,
+	proofCycle database.MemberProofCycle,
+	reason string,
+) {
+	if o.config.Repos == nil || o.config.Repos.IntentLifecycle == nil || cycle == nil || cycle.Request == nil {
 		return
 	}
-	opts := []database.UpdateOption{
-		database.WithCycleID(cycleID),
-		database.WithErrorMessage(fmt.Sprintf("settlement transaction %s reverted on the target chain", txHash)),
+	req, result := cycle.Request, cycle.Result
+	chainID, err := strconv.ParseInt(req.TargetChain, 10, 64)
+	if err != nil {
+		fmt.Printf("❌ [LIFECYCLE] intent %s cycle %s: target chain %q is not a chain id; member outcome not recorded\n",
+			req.IntentID, req.CycleID, req.TargetChain)
+		return
 	}
-	if writeBackTxHash != "" {
-		opts = append(opts, database.WithWriteBackTx(writeBackTxHash))
+	chains := commitmentInt64s(req.CommitmentData["memberChains"])
+	legs := int(commitmentInt64(req.CommitmentData["memberLegs"]))
+	if len(chains) == 0 || legs <= 0 {
+		fmt.Printf("❌ [LIFECYCLE] intent %s cycle %s: the commitment carries no member set (chains=%v legs=%d); "+
+			"member outcome not recorded\n", req.IntentID, req.CycleID, chains, legs)
+		return
 	}
-	if err := o.config.Repos.IntentLifecycle.UpdateStatus(ctx, intentID, database.IntentLifecycleFailed, opts...); err != nil {
-		fmt.Printf("Warning: [LIFECYCLE] failed to update %s to failed: %v\n", intentID, err)
+	out := database.MemberOutcome{
+		IntentID: req.IntentID, ChainID: chainID, MemberChains: chains, Legs: legs,
+		Settlement: settlement, ProofCycle: proofCycle, CycleID: req.CycleID, Reason: reason,
 	}
+	if result != nil {
+		out.WriteBackTx = result.WriteBackTxHash
+		if len(result.ObservationResults) > 0 && result.ObservationResults[0] != nil {
+			out.SettlementTx = result.ObservationResults[0].TxHash
+		}
+	}
+	derived, err := o.config.Repos.IntentLifecycle.RecordMemberOutcome(ctx, out)
+	if err != nil {
+		fmt.Printf("❌ [LIFECYCLE] intent %s member %d: %v\n", req.IntentID, chainID, err)
+		return
+	}
+	if derived.Terminal {
+		fmt.Printf("[LIFECYCLE] intent %s is %s: %s\n", req.IntentID, derived.Status, derived.Summary)
+	}
+}
+
+// observedSettlement is what the cycle's observation shows for the member.
+func observedSettlement(obs []*chain.ObservationResult) database.MemberSettlement {
+	if _, reverted := revertedObservation(obs); reverted {
+		return database.MemberSettlementReverted
+	}
+	if len(obs) == 0 {
+		return database.MemberSettlementUnobserved
+	}
+	return database.MemberSettlementSettled
+}
+
+// commitmentInt64s reads a list of integers the commitment map carries ([]int64 in-process,
+// []interface{} of float64 after a JSON round trip).
+func commitmentInt64s(v interface{}) []int64 {
+	switch t := v.(type) {
+	case []int64:
+		return append([]int64(nil), t...)
+	case []interface{}:
+		out := make([]int64, 0, len(t))
+		for _, x := range t {
+			n := commitmentInt64(x)
+			if n == 0 {
+				return nil
+			}
+			out = append(out, n)
+		}
+		return out
+	}
+	return nil
 }
 
 // validateRequest validates a proof cycle request

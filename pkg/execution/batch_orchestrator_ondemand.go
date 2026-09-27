@@ -92,7 +92,6 @@ type onDemandChain interface {
 	memberPastDeadline(p *PendingBatchIntent) bool
 	lastVerifyTx(bundleID [32]byte) string
 	reportOnDemandCosts(ctx context.Context, member *PendingBatchIntent, settleTx string)
-	recordLegProgress(ctx context.Context, settled, failed []*PendingBatchIntent)
 	// leafConsumedTx names the transaction that spent the member's leaf, from the account's own
 	// LeafConsumed log, and the address that sent it. found=false means no such log was seen:
 	// nothing may be concluded.
@@ -492,7 +491,6 @@ func (o *BatchOrchestrator) markOwnSettled(ctx context.Context, chain onDemandCh
 	out.TxHash = txHash
 	o.logf("[OD] intent=%s this validator's settlement %s succeeded", member.IntentID, txHash)
 	chain.reportOnDemandCosts(ctx, member, txHash)
-	chain.recordLegProgress(ctx, []*PendingBatchIntent{member}, nil)
 }
 
 // deferOnSend marks the member deferred because a transaction's result is not known yet, or a send
@@ -540,7 +538,6 @@ func (o *BatchOrchestrator) settleAndClassify(
 		// One transaction settles every leg this member carries — measured on 2026-08-07, a 5-leg
 		// on_demand intent produced exactly one settlement transaction. So a settled member has
 		// completed all of its legs, not one.
-		chain.recordLegProgress(ctx, []*PendingBatchIntent{member}, nil)
 		return out, nil
 	}
 
@@ -647,7 +644,6 @@ func (o *BatchOrchestrator) markReverted(
 	o.logf("[OD] ❌ chain=%d intent=%s settlement %s REVERTED with the leaf unspent — the member "+
 		"failed against this transaction", member.ChainID, member.IntentID, txHash)
 	chain.reportOnDemandCosts(ctx, member, txHash)
-	chain.recordLegProgress(ctx, nil, []*PendingBatchIntent{member})
 }
 
 // costMemberFor extracts the identifiers cost attribution needs from a settled member.

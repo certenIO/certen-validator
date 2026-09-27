@@ -2013,43 +2013,11 @@ func startValidator(
 		intentDiscovery.SetRepositories(batchComponents.Repos)
 		log.Printf("✅ Intent lifecycle tracking wired to intent discovery")
 
-		// Multi-leg coordination.
-		//
-		// SetLegCompletionHandler had NO caller, so multiLegEnabled was permanently false and
-		// every multi-leg intent fell through to the single-leg path. Two consequences: legs
-		// were never tracked as a set, and UpdateLegProgress — which is the only writer of
-		// legs_completed / legs_failed — could never run. All 542 lifecycle rows sat at 0
-		// completed legs, including 238 marked 'complete'.
-		//
-		// OnProgress persists after every transition rather than only at the end, so a crash
-		// mid-intent cannot leave the durable record claiming no legs were done.
-		lifecycleRepo := batchComponents.Repos.IntentLifecycle
-		legHandler := intent.NewLegCompletionHandler(&intent.LegCompletionHandlerConfig{
-			OnProgress: func(ctx context.Context, intentID string, completed, failed int) {
-				if lifecycleRepo == nil {
-					return
-				}
-				if err := lifecycleRepo.UpdateLegProgress(ctx, intentID, completed, failed); err != nil {
-					// Never fatal: leg progress is a record of work already done, so failing to
-					// write it must not affect whether the remaining legs execute.
-					log.Printf("⚠️ [LIFECYCLE] leg progress not persisted for %s (%d done, %d failed): %v",
-						intentID, completed, failed, err)
-				}
-			},
-		})
-		intentDiscovery.SetLegCompletionHandler(legHandler)
-		log.Printf("✅ [Phase 5] Multi-leg coordination enabled; leg progress persisted to intent_lifecycle")
+		// Leg counts (legs_completed / legs_failed) and the intent's status are derived from each
+		// chain member's recorded outcome (IntentLifecycleRepository.RecordMemberOutcome, RB3-F50).
+		// The additive per-report counters that used to write them are gone: two writers of one
+		// column disagreed, and a member reported twice was counted twice.
 
-		// Leg progress from the SETTLE path.
-		//
-		// The handler above only learns of a leg through OnLegCompleted/OnLegFailed, and nothing
-		// in any execution path calls them — so wiring the handler alone left legs_completed at
-		// 0 even on intents that settled. Observed live on 2026-08-07: two calibration intents
-		// reached status 'complete' with leg_count 2 and 5 and legs_completed 0.
-		//
-		// Settlement is where the outcome is actually known: one transaction per chain settles
-		// every leg the member carries there — the 5-leg intent produced exactly one transaction
-		// of 281,407 gas. So the settle path reports len(Legs), not 1.
 		// Anchor quorum evidence. The quorum proven over each anchor — aggregate signature, signer set and
 		// voting power — used to be computed and dropped, leaving anchor_batches' Phase 5 columns empty on
 		// all 70,236 rows and proofs_service reporting batch_quorum_met=false for every intent. The writer
@@ -2104,24 +2072,6 @@ func startValidator(
 				"contradicted layer 5, schema-behind-binary)")
 		}
 
-		if stack := batchStackForAttestation.Load(); stack != nil {
-			legProgress := func(ctx context.Context, intentID string, completed, failed int) {
-				if lifecycleRepo == nil {
-					return
-				}
-				if err := lifecycleRepo.UpdateLegProgress(ctx, intentID, completed, failed); err != nil {
-					log.Printf("⚠️ [LIFECYCLE] settle-path leg progress not persisted for %s "+
-						"(%d done, %d failed): %v", intentID, completed, failed, err)
-				}
-			}
-			for chainID, orch := range stack.Orchestrators {
-				orch.SetLegProgressHook(legProgress)
-				log.Printf("✅ [Phase 5] Leg progress hook wired for chain %d", chainID)
-			}
-		} else {
-			log.Printf("⚠️ [Phase 5] Batch stack unavailable; settled legs will not update " +
-				"intent_lifecycle.legs_completed")
-		}
 	} else {
 		log.Printf("⚠️ [Phase 5] Batch system not available - intents will bypass PostgreSQL")
 	}

@@ -145,18 +145,6 @@ type BatchOrchestrator struct {
 	mempool  *BatchMempool
 	logf     func(string, ...interface{})
 
-	// onLegProgress persists how many of a member's legs executed.
-	//
-	// Settlement is where a leg's outcome becomes a fact: one transaction per chain settles
-	// every leg the member has on it — measured 2026-08-07, a 5-leg intent produced exactly one
-	// transaction of 281,407 gas. LegCompletionHandler.OnLegCompleted was written to record
-	// this and has no caller in any execution path, so intent_lifecycle.legs_completed stayed 0
-	// even on intents whose status was 'complete'.
-	//
-	// A callback rather than a repository handle, so the orchestrator keeps no database
-	// dependency and the wiring stays visible in main.go alongside the other lifecycle hooks.
-	onLegProgress func(ctx context.Context, intentID string, legsCompleted, legsFailed int)
-
 	// odChain replaces the orchestrator's own chain operations for on-demand settlement. Nil in
 	// production, where the orchestrator IS the chain; set by tests to drive the decisions.
 	odChain onDemandChain
@@ -170,37 +158,6 @@ type BatchOrchestrator struct {
 	// scanned is, per anchor, the last finalized block already searched for earlier windows' attempts.
 	scanMu  sync.Mutex
 	scanned map[[32]byte]uint64
-}
-
-// SetLegProgressHook wires persistence of per-member leg outcomes. Optional: unset, settlement
-// proceeds exactly as before and only the durable leg counters go unwritten.
-func (o *BatchOrchestrator) SetLegProgressHook(
-	fn func(ctx context.Context, intentID string, legsCompleted, legsFailed int),
-) {
-	o.onLegProgress = fn
-}
-
-// recordLegProgress reports each member's leg outcome after a settled batch.
-//
-// Settled members have executed every leg they carry on this chain; failed members have not.
-// Counting len(p.Legs) rather than 1 is the point: a member is an INTENT, and an intent may
-// carry many legs that all rode in the same transaction.
-func (o *BatchOrchestrator) recordLegProgress(ctx context.Context, settled, failed []*PendingBatchIntent) {
-	if o.onLegProgress == nil {
-		return
-	}
-	for _, p := range settled {
-		if p == nil {
-			continue
-		}
-		o.onLegProgress(ctx, p.IntentID, len(p.Legs), 0)
-	}
-	for _, p := range failed {
-		if p == nil {
-			continue
-		}
-		o.onLegProgress(ctx, p.IntentID, 0, len(p.Legs))
-	}
 }
 
 // NewBatchOrchestrator wires an orchestrator to a chain.
@@ -667,10 +624,6 @@ func (o *BatchOrchestrator) settleFlushMembers(
 	// sized for a batch, which is what the customer was quoted for.
 	o.reportBatchCosts(ctx, chainID, res.AnchorTxHash, verifyTx, costMembers,
 		string(LaneOnCadence))
-
-	// Record which legs actually executed. Same membership as cost attribution, and for the same
-	// reason: settlement is the moment a leg's outcome is known.
-	o.recordLegProgress(ctx, res.Settled, res.Failed)
 
 	return res
 }
