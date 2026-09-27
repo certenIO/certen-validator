@@ -236,3 +236,28 @@ func TestNothingDeletesOrDerivesCometKeys(t *testing.T) {
 		}
 	}
 }
+
+// RB3-F95 phase 2: the rotation tool's key for a seed is the key a node started with that seed runs - so the
+// key the chain is told about is the key the validator signs with.
+func TestTheToolsSeedKeyIsTheNodesSeedKey(t *testing.T) {
+	home := t.TempDir()
+	p := cometPaths(home)
+	if err := os.MkdirAll(filepath.Dir(p.genesis), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.genesis, []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := bytes.Repeat([]byte{0x3c}, 32)
+	rep, err := ensureCometKeys(home, "validator-3", testChain,
+		env(map[string]string{envPrivvalSeed: hex.EncodeToString(s), envNodeKeySeed: seedHex(0x3d)}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rep.PrivvalPubKey.Equals(CometPrivvalKeyFromSeed(s).PubKey()) {
+		t.Fatal("the tool derives a different consensus key from the seed than the node runs")
+	}
+	if string(rep.NodeID) != string(p2p.PubKeyToID(CometNodeKeyFromSeed(bytes.Repeat([]byte{0x3d}, 32)).PubKey())) {
+		t.Fatal("the tool derives a different node id from the seed than the node runs")
+	}
+}

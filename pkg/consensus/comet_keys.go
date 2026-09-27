@@ -180,6 +180,25 @@ func keyFromSeed(seed []byte, label string) cmted25519.PrivKey {
 	return cmted25519.PrivKey(ed25519.NewKeyFromSeed(mac.Sum(nil)))
 }
 
+// CometPrivvalKeyFromSeed is the consensus key a COMET_PRIVVAL_SEED backs - exactly what a node started with
+// that seed writes. The rotation tool derives the new key's public half and possession proof from it.
+func CometPrivvalKeyFromSeed(seed []byte) cmted25519.PrivKey { return keyFromSeed(seed, labelPrivval) }
+
+// CometNodeKeyFromSeed is the P2P node key a COMET_NODE_KEY_SEED backs.
+func CometNodeKeyFromSeed(seed []byte) cmted25519.PrivKey { return keyFromSeed(seed, labelNodeKey) }
+
+// IsFormulaKey reports whether pub is the retired public-formula key of any validator-1..maxID on chainID -
+// a key anyone can derive, which a rotation must never install.
+func IsFormulaKey(chainID string, pub []byte, maxID int) (string, bool) {
+	for i := 1; i <= maxID; i++ {
+		id := fmt.Sprintf("validator-%d", i)
+		if bytes.Equal(formulaKey(chainID, id).PubKey().Bytes(), pub) {
+			return id, true
+		}
+	}
+	return "", false
+}
+
 // formulaKey is the retired public-formula key, computed only to recognise it.
 func formulaKey(chainID, validatorID string) cmted25519.PrivKey {
 	s := sha256.Sum256([]byte(fmt.Sprintf("certen-validator-key-%s-%s", chainID, validatorID)))

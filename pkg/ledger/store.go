@@ -68,6 +68,10 @@ var (
 	// genesis from the environment and immutable afterwards, so a node can
 	// never disagree with its own committed past about which rule was in force.
 	keyEntitlementPolicy = []byte("entitlement:policy") // -> EntitlementPolicyState
+
+	// Validator consensus-key rotations the chain has accepted (RB3-F95), in order. With the genesis they
+	// define the validator set at every height.
+	keyValidatorRotations = []byte("abci:validator_rotations") // -> ValidatorRotationLog
 )
 
 // systemBlockKey generates a KV key for a specific system ledger block
@@ -529,4 +533,33 @@ func (s *LedgerStore) buildSystemLedgerStateFromBlock(chainID string, blockMeta 
 		ChainID:       chainID,
 		LastBlockTime: blockMeta.Time,
 	}, nil
+}
+
+// ====== Validator consensus-key rotations (RB3-F95) ======
+
+// SaveValidatorRotations records the rotation log. Called from FinalizeBlock when a rotation is accepted or
+// adopted; the log is append-only and every entry names the height that accepted it, so replay reproduces it.
+func (s *LedgerStore) SaveValidatorRotations(l *ValidatorRotationLog) error {
+	b, err := json.Marshal(l)
+	if err != nil {
+		return fmt.Errorf("failed to marshal ValidatorRotationLog: %w", err)
+	}
+	return s.kv.Set(keyValidatorRotations, b)
+}
+
+// LoadValidatorRotations returns the rotation log: empty when the chain has rotated nothing, an error when it
+// could not be read - never empty for an unreadable log, which would put retired keys back in the set.
+func (s *LedgerStore) LoadValidatorRotations() (*ValidatorRotationLog, error) {
+	b, err := s.read(keyValidatorRotations, "validator rotations")
+	if err != nil {
+		return nil, err
+	}
+	if b == nil {
+		return &ValidatorRotationLog{}, nil
+	}
+	var l ValidatorRotationLog
+	if err := json.Unmarshal(b, &l); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal ValidatorRotationLog: %w", err)
+	}
+	return &l, nil
 }

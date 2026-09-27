@@ -168,20 +168,28 @@ func VerifyPolicyUpdate(t *PolicyUpdateTx, current *ledger.EntitlementPolicyStat
 
 // verifyPolicyQuorum requires AdminThreshold distinct, valid admin signatures.
 func verifyPolicyQuorum(t *PolicyUpdateTx, current *ledger.EntitlementPolicyState) error {
+	return verifyAdminQuorum(t.SigningBytes(), t.Signatures, current, "policy update", "the policy cannot be updated")
+}
+
+// verifyAdminQuorum requires the sealed AdminThreshold of distinct, valid signatures by the sealed admin keys
+// over digest. The admin quorum is the chain's one authority for changing its rules and its validator keys.
+func verifyAdminQuorum(digest []byte, sigs []PolicySignature, current *ledger.EntitlementPolicyState, what, cannot string) error {
+	if current == nil {
+		return fmt.Errorf("no sealed policy exists, so %s", cannot)
+	}
 	threshold := current.AdminThreshold
 	if threshold <= 0 {
-		return fmt.Errorf("this chain sealed no admin threshold, so the policy cannot be updated; " +
-			"it is immutable for the life of the chain")
+		return fmt.Errorf("this chain sealed no admin threshold, so %s; "+
+			"it is immutable for the life of the chain", cannot)
 	}
 	if len(current.AdminKeys) == 0 {
-		return fmt.Errorf("this chain sealed no admin keys, so the policy cannot be updated")
+		return fmt.Errorf("this chain sealed no admin keys, so %s", cannot)
 	}
 
-	digest := t.SigningBytes()
-	seen := make(map[string]struct{}, len(t.Signatures))
+	seen := make(map[string]struct{}, len(sigs))
 	valid := 0
 
-	for _, s := range t.Signatures {
+	for _, s := range sigs {
 		// Distinct signers only: the same key repeated must not reach the
 		// threshold on its own.
 		if _, dup := seen[s.KeyID]; dup {
@@ -204,7 +212,7 @@ func verifyPolicyQuorum(t *PolicyUpdateTx, current *ledger.EntitlementPolicyStat
 	}
 
 	if valid < threshold {
-		return fmt.Errorf("policy update has %d valid admin signatures, needs %d", valid, threshold)
+		return fmt.Errorf("%s has %d valid admin signatures, needs %d", what, valid, threshold)
 	}
 	return nil
 }

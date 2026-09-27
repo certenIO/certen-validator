@@ -1536,6 +1536,23 @@ func createValidatorLedgerStore(cfg *config.Config, validatorID string) (*ledger
 	return ledgerStore, nil
 }
 
+// adoptGenesisForRotation gives the app the genesis validator set that consensus-key rotation is judged
+// against (RB3-F95). It never stops the node: a genesis the rotation rules cannot use leaves the app with no
+// set, and then every rotation is refused - identically on every node, since they share the genesis - while
+// the chain runs exactly as before.
+func adoptGenesisForRotation(app *ValidatorApp, genesisFile string, logger *log.Logger) {
+	doc, err := cmttypes.GenesisDocFromFile(genesisFile)
+	if err == nil {
+		err = app.SetGenesis(doc)
+	}
+	if err != nil {
+		logger.Printf("🚨 [ROTATION] the genesis %s cannot be used for validator rotation (%v): every rotation "+
+			"will be refused on this chain", genesisFile, err)
+		return
+	}
+	logger.Printf("🔑 [ROTATION] genesis validator set loaded: %d validators, chain %s", len(app.genesisValidators), doc.ChainID)
+}
+
 // NewValidatorChainEngine creates a CometBFT engine specifically for ValidatorBlock consensus
 // This enforces ValidatorBlock invariants via ValidatorApp, separate from system/proof chain
 func NewValidatorChainEngine(
@@ -1566,6 +1583,8 @@ func NewValidatorChainEngine(
 	cfg.Moniker = validatorID
 	cfg.DBBackend = "goleveldb"
 	cfg.TxIndex.Indexer = "kv" // Enable tx indexing for Tx query support
+
+	adoptGenesisForRotation(app, cfg.GenesisFile(), logger)
 
 	// Create engine with ValidatorApp
 	engine, err := NewRealCometBFTEngine(cfg, app, logger)
@@ -2376,6 +2395,8 @@ func NewUnifiedCometBFTEngine(validatorID string) (*RealCometBFTEngine, error) {
 		// persisted state and recovers without error.
 		return nil, fmt.Errorf("recover the validator ledger: %w", err)
 	}
+
+	adoptGenesisForRotation(app, cfg.GenesisFile(), logger)
 
 	// Use the new, clean RealCometBFTEngine constructor instead of manual struct literal
 	engine, err := NewRealCometBFTEngine(cfg, app, logger)
