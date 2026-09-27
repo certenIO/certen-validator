@@ -515,51 +515,10 @@ func (s *Set) Root() string {
 	return hex.EncodeToString(level[0])
 }
 
-// BuildProof returns the inclusion path for an ADI, or false if absent.
+// BuildProof returns the inclusion path for an ADI, or false if absent. It reads the set and does not
+// normalise it in place (RB3-F79); a caller proving many ADIs builds a ProofIndex once instead.
 func (s *Set) BuildProof(adiURL string) ([]ProofStep, Leaf, bool) {
-	s.Normalize()
-	idx := -1
-	for i, l := range s.Leaves {
-		if SameADI(l.ADIURL, adiURL) {
-			idx = i
-			break
-		}
-	}
-	if idx < 0 {
-		return nil, Leaf{}, false
-	}
-	leaf := s.Leaves[idx]
-
-	level := make([][]byte, 0, len(s.Leaves))
-	for _, l := range s.Leaves {
-		h := l.Hash()
-		level = append(level, h[:])
-	}
-
-	var steps []ProofStep
-	pos := idx
-	for len(level) > 1 {
-		next := make([][]byte, 0, (len(level)+1)/2)
-		for i := 0; i < len(level); i += 2 {
-			if i+1 == len(level) {
-				next = append(next, level[i])
-				if i == pos {
-					pos = len(next) - 1 // promoted; no sibling to record
-				}
-				continue
-			}
-			if i == pos {
-				steps = append(steps, ProofStep{Hash: hex.EncodeToString(level[i+1]), Right: true})
-				pos = len(next)
-			} else if i+1 == pos {
-				steps = append(steps, ProofStep{Hash: hex.EncodeToString(level[i]), Right: false})
-				pos = len(next)
-			}
-			next = append(next, interiorHash(level[i], level[i+1]))
-		}
-		level = next
-	}
-	return steps, leaf, true
+	return NewProofIndex(s.Leaves).Proof(adiURL)
 }
 
 // Lookup returns an account's leaf.
