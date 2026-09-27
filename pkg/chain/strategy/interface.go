@@ -390,6 +390,12 @@ type ObservationResult struct {
 	// TxFrom is the transaction sender address
 	TxFrom string `json:"tx_from,omitempty"`
 
+	// TxTo is the address the transaction called, and TxSelector the first four bytes of its input
+	// (the function it called), read from the transaction itself. Empty for a contract creation or a
+	// call with no input.
+	TxTo       string `json:"tx_to,omitempty"`
+	TxSelector string `json:"tx_selector,omitempty"`
+
 	// Chain identification (populated by each strategy)
 	ChainName      string `json:"chain_name,omitempty"`
 	ChainIDNumeric int64  `json:"chain_id_numeric,omitempty"`

@@ -292,10 +292,20 @@ func (bv *BFTValidator) RunProofCycle(
 	}
 
 	// SECURITY CRITICAL: Build execution commitment from intent's CrossChainData
-	commitment := bv.buildExecutionCommitmentFromIntent(att.CertenIntent, bundleID)
+	commitMap, cerr := bv.buildExecutionCommitmentFromIntent(att.CertenIntent, bundleID, settledChainID)
+	if cerr != nil {
+		// The cycle still runs - Phase 7 observes and records the settlement - but Phase 9 refuses to
+		// write back a record it cannot state the commitment of (commitmentError).
+		bv.logger.Printf("❌ [COMMITMENT] intent %s on chain %d: %v", att.IntentID, settledChainID, cerr)
+		commitMap = map[string]interface{}{
+			"bundleID": hex.EncodeToString(bundleID[:]), "intentID": att.IntentID,
+			"commitmentError": cerr.Error(),
+		}
+	}
+	var commitment interface{} = commitMap
 
 	// Add governance data from ValidatorBlock for G1/G2 proof levels
-	if commitMap, ok := commitment.(map[string]interface{}); ok {
+	{
 		if att.GovernanceProofRoot != "" {
 			commitMap["governanceRoot"] = att.GovernanceProofRoot
 		}

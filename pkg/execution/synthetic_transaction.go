@@ -367,6 +367,9 @@ type ComprehensiveProofContext struct {
 	Step3Contract    string `json:"step3_contract"`
 	Step3FinalTarget string `json:"step3_final_target"`
 	Step3FinalValue  string `json:"step3_final_value"`
+	// StepsError is why the step entries could not be derived (settlementSteps); nothing is stated
+	// in their place.
+	StepsError error `json:"-"`
 
 	// Event verification
 	EventsHash           [32]byte `json:"events_hash"`

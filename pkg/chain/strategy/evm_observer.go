@@ -13,6 +13,7 @@ package strategy
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"math/big"
@@ -283,6 +284,13 @@ func (o *EVMObserver) ObserveTransaction(ctx context.Context, txHash common.Hash
 	// Fetch full transaction to get sender address
 	tx, _, txErr := o.client.TransactionByHash(ctx, txHash)
 	if txErr == nil && tx != nil {
+		// What the transaction called: the write-back states it from here, never from a template.
+		if to := tx.To(); to != nil {
+			result.TxTo = to.Hex()
+		}
+		if data := tx.Data(); len(data) >= 4 {
+			result.TxSelector = hex.EncodeToString(data[:4])
+		}
 		signer := types.LatestSignerForChainID(big.NewInt(o.chainID))
 		if from, sErr := types.Sender(signer, tx); sErr == nil {
 			result.TxFrom = from.Hex()

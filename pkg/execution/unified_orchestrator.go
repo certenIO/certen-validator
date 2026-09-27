@@ -28,7 +28,6 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/google/uuid"
 
 	"github.com/certen/independant-validator/pkg/accumulate"
@@ -357,6 +356,9 @@ type activeCycle struct {
 	PrimaryResultHash [32]byte
 	// NonSettlement is set for a cycle attesting that a member never settled (RB3-F49).
 	NonSettlement *NonSettlementClaim
+	// VerifiedCalls are the executed calls Phase 7's contract-call gate proved - committed events (and
+	// state) from the inclusion-proven receipt - keyed by lowercase transaction hash without 0x.
+	VerifiedCalls verifiedCallProofs
 }
 
 // NewUnifiedOrchestrator creates a new unified orchestrator
@@ -494,10 +496,7 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 
 	// Execute phases
 	if err := o.executePhase7(cycleCtx, cycle, chainStrategy); err != nil {
-		result.Error = fmt.Sprintf("phase 7 failed: %v", err)
-		result.FailPhase = 7
-		o.recordMemberOutcome(ctx, cycle, database.MemberSettlementUnobserved, database.MemberProofCycleFailed,
-			fmt.Sprintf("phase 7 failed: %v", err))
+		o.recordPhaseFailure(ctx, cycle, 7, err)
 		if o.config.OnCycleFailed != nil {
 			o.config.OnCycleFailed(result, err)
 		}
@@ -505,10 +504,7 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 	}
 
 	if err := o.executePhase8(cycleCtx, cycle, attestStrategy); err != nil {
-		result.Error = fmt.Sprintf("phase 8 failed: %v", err)
-		result.FailPhase = 8
-		o.recordMemberOutcome(ctx, cycle, observedSettlement(result.ObservationResults), database.MemberProofCycleFailed,
-			fmt.Sprintf("phase 8 failed: %v", err))
+		o.recordPhaseFailure(ctx, cycle, 8, err)
 		if o.config.OnCycleFailed != nil {
 			o.config.OnCycleFailed(result, err)
 		}
@@ -524,10 +520,7 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 	}
 
 	if err := o.executePhase9(cycleCtx, cycle); err != nil {
-		result.Error = fmt.Sprintf("phase 9 failed: %v", err)
-		result.FailPhase = 9
-		o.recordMemberOutcome(ctx, cycle, observedSettlement(result.ObservationResults), database.MemberProofCycleFailed,
-			fmt.Sprintf("phase 9 failed: %v", err))
+		o.recordPhaseFailure(ctx, cycle, 9, err)
 		if o.config.OnCycleFailed != nil {
 			o.config.OnCycleFailed(result, err)
 		}
@@ -721,10 +714,23 @@ func observedSettlement(obs []*chain.ObservationResult) database.MemberSettlemen
 	if _, reverted := revertedObservation(obs); reverted {
 		return database.MemberSettlementReverted
 	}
-	if len(obs) == 0 {
-		return database.MemberSettlementUnobserved
+	for _, o := range obs {
+		if o != nil {
+			return database.MemberSettlementSettled
+		}
 	}
-	return database.MemberSettlementSettled
+	return database.MemberSettlementUnobserved
+}
+
+// recordPhaseFailure records the member's outcome when a phase of its proof cycle fails: its settlement
+// as far as it was observed, and its proof cycle failed, with why. A settlement Phase 7 saw mined stays
+// settled (or reverted) whatever failed after it - Phase 7's own contract-call gate included. It used to
+// be recorded "unobserved" for every Phase 7 failure, contradicting a receipt Phase 7 had read (RB3-F65).
+func (o *UnifiedOrchestrator) recordPhaseFailure(ctx context.Context, cycle *activeCycle, phase int, err error) {
+	reason := fmt.Sprintf("phase %d failed: %v", phase, err)
+	cycle.Result.Error = reason
+	cycle.Result.FailPhase = phase
+	o.recordMemberOutcome(ctx, cycle, observedSettlement(cycle.Result.ObservationResults), database.MemberProofCycleFailed, reason)
 }
 
 // commitmentInt64s reads a list of integers the commitment map carries ([]int64 in-process,
@@ -831,6 +837,7 @@ func (o *UnifiedOrchestrator) executePhase7(ctx context.Context, cycle *activeCy
 	if err != nil {
 		return fmt.Errorf("RB contract-call verification gate failed: %w", err)
 	}
+	cycle.VerifiedCalls = verified
 
 	// Persist the proofs the gate verified onto the rows written above, so the database carries the
 	// real trie proofs (tx and receipt, bound to the header roots) rather than what the strategy
@@ -2134,7 +2141,15 @@ func (o *UnifiedOrchestrator) executePhase9(ctx context.Context, cycle *activeCy
 	defer cancel()
 
 	// Build ComprehensiveProofContext from the cycle data
+	if ce, _ := cycle.Request.CommitmentData["commitmentError"].(string); ce != "" {
+		return fmt.Errorf("write-back refused: the member's execution commitment could not be built: %s", ce)
+	}
 	proofCtx := o.buildComprehensiveProofContext(cycle)
+	// A record of a settlement states the calls it was settled by. One that cannot is not written: it
+	// would carry blank steps as if nothing had executed (RB3-F66). A non-settlement executed nothing.
+	if proofCtx.StepsError != nil && cycle.NonSettlement == nil {
+		return fmt.Errorf("write-back cannot state what was executed: %w", proofCtx.StepsError)
+	}
 
 	// Build attestation bundle from cycle result
 	bundle := o.buildAttestationBundleFromCycle(cycle)
@@ -2220,10 +2235,6 @@ func (o *UnifiedOrchestrator) buildComprehensiveProofContext(cycle *activeCycle)
 			BundleID:    req.BundleID,
 		}
 		if cm != nil {
-			// Anchor contract
-			if ac, ok := cm["anchorContract"].(string); ok {
-				ctx.Commitment.TargetContract = common.HexToAddress(ac)
-			}
 			// Commitment hash
 			if ch, ok := cm["commitmentHash"].(string); ok {
 				if decoded, err := hex.DecodeString(ch); err == nil && len(decoded) == 32 {
@@ -2234,14 +2245,6 @@ func (o *UnifiedOrchestrator) buildComprehensiveProofContext(cycle *activeCycle)
 			if txh, ok := cm["txHash"].(string); ok {
 				ctx.Commitment.IntentTxHash = txh
 			}
-			// Function selector from step1 (primary anchor call)
-			if step1, ok := cm["step1"].(map[string]interface{}); ok {
-				if s, ok := step1["selector"].(string); ok {
-					if decoded, err := hex.DecodeString(s); err == nil && len(decoded) >= 4 {
-						copy(ctx.Commitment.FunctionSelector[:], decoded[:4])
-					}
-				}
-			}
 			// Expected value (final transfer amount)
 			if fv, ok := cm["finalValue"].(string); ok && fv != "" && fv != "0" {
 				if val, ok := new(big.Int).SetString(fv, 10); ok {
@@ -2251,49 +2254,22 @@ func (o *UnifiedOrchestrator) buildComprehensiveProofContext(cycle *activeCycle)
 		}
 	}
 
-	// Step 1/2/3 details from commitment map
+	// The three calls, as this member actually executed them (settlementSteps): never a template.
+	if steps, err := o.settlementSteps(req.TargetChain, result.ObservationResults); err == nil {
+		ctx.Step1Contract, ctx.Step1Selector = steps.anchor.Hex(), steps.step1Selector
+		ctx.Step2Contract, ctx.Step2Selector = steps.anchor.Hex(), steps.step2Selector
+		ctx.Step3Contract, ctx.Step3Selector = steps.step3Contract, steps.step3Selector
+		if ctx.Commitment != nil {
+			ctx.Commitment.TargetContract = steps.anchor
+			copy(ctx.Commitment.FunctionSelector[:], common.FromHex(steps.step1Selector))
+		}
+	} else {
+		ctx.StepsError = err
+	}
 	if cm != nil {
-		if step1, ok := cm["step1"].(map[string]interface{}); ok {
-			if s, ok := step1["selector"].(string); ok {
-				ctx.Step1Selector = s
-			}
-			if c, ok := step1["contract"].(string); ok {
-				ctx.Step1Contract = c
-			}
-		}
-		if step2, ok := cm["step2"].(map[string]interface{}); ok {
-			if s, ok := step2["selector"].(string); ok {
-				ctx.Step2Selector = s
-			}
-			if c, ok := step2["contract"].(string); ok {
-				ctx.Step2Contract = c
-			}
-		}
-		if step3, ok := cm["step3"].(map[string]interface{}); ok {
-			if s, ok := step3["selector"].(string); ok {
-				ctx.Step3Selector = s
-			}
-			if c, ok := step3["contract"].(string); ok {
-				ctx.Step3Contract = c
-			}
-			// Also check step3 sub-keys for finalTarget
-			if ft, ok := step3["finalTarget"].(string); ok && ft != "" {
-				ctx.Step3FinalTarget = ft
-			} else if ft, ok := step3["final_target"].(string); ok && ft != "" {
-				ctx.Step3FinalTarget = ft
-			} else if ft, ok := step3["to"].(string); ok && ft != "" {
-				ctx.Step3FinalTarget = ft
-			}
-		}
-		// Final target and value (top-level fallback)
-		if ctx.Step3FinalTarget == "" {
-			if ft, ok := cm["finalTarget"].(string); ok {
-				ctx.Step3FinalTarget = ft
-			} else if ft, ok := cm["to"].(string); ok {
-				ctx.Step3FinalTarget = ft
-			} else if ft, ok := cm["recipient"].(string); ok {
-				ctx.Step3FinalTarget = ft
-			}
+		// The member's committed final target and value: its own chain's leg (consensus, member-scoped).
+		if ft, ok := cm["finalTarget"].(string); ok {
+			ctx.Step3FinalTarget = ft
 		}
 		if fv, ok := cm["finalValue"].(string); ok {
 			ctx.Step3FinalValue = fv
@@ -2308,39 +2284,22 @@ func (o *UnifiedOrchestrator) buildComprehensiveProofContext(cycle *activeCycle)
 		}
 	}
 
-	// Event verification from observation results
-	if len(result.ObservationResults) > 0 {
-		totalEvents := 0
-		for _, obs := range result.ObservationResults {
-			totalEvents += len(obs.Logs)
+	// Events, as observed and as proven (RB3-F66). The transfer was executed by the member's settlement
+	// transaction - the observed call step 3 states - not by a V3 GovernanceExecuted event the batch path
+	// never emits, and never by whichever observation happened to be third. events_verified says the
+	// committed events were PROVEN (Phase 7's contract-call gate, from the inclusion-proven receipt), not
+	// merely that a receipt had logs; a native transfer commits none, so it states false: nothing verified.
+	for _, obs := range result.ObservationResults {
+		if obs == nil {
+			continue
 		}
-		ctx.EventCount = totalEvents
-		ctx.EventsVerified = totalEvents > 0
-
-		// Extract transfer_executed_hash: find the GovernanceExecuted event tx hash
-		// GovernanceExecuted is emitted in step 3 (executeWithGovernance)
-		// keccak256("GovernanceExecuted(bytes32,address,uint256,bool)") = topic0
-		govExecutedTopic := crypto.Keccak256Hash([]byte("GovernanceExecuted(bytes32,address,uint256,bool)"))
-		for _, obs := range result.ObservationResults {
-			for _, l := range obs.Logs {
-				if len(l.Topics) > 0 {
-					topicBytes := common.FromHex(l.Topics[0])
-					if len(topicBytes) == 32 && common.BytesToHash(topicBytes) == govExecutedTopic {
-						ctx.TransferExecutedHash = obs.TxHash
-						break
-					}
-				}
-			}
-			if ctx.TransferExecutedHash != "" {
-				break
-			}
+		ctx.EventCount += len(obs.Logs)
+		if ctx.TransferExecutedHash == "" && common.IsHexAddress(obs.TxTo) {
+			ctx.TransferExecutedHash = obs.TxHash
 		}
-
-		// Fallback: if no GovernanceExecuted event found but 3+ observations exist,
-		// the 3rd observation IS the governance tx (executeWithGovernance)
-		if ctx.TransferExecutedHash == "" && len(result.ObservationResults) >= 3 {
-			ctx.TransferExecutedHash = result.ObservationResults[2].TxHash
-		}
+	}
+	if ctx.TransferExecutedHash != "" {
+		_, ctx.EventsVerified = cycle.VerifiedCalls[strings.ToLower(strings.TrimPrefix(ctx.TransferExecutedHash, "0x"))]
 	}
 
 	// Set proof artifact ID for PostgreSQL lookup

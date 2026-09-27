@@ -43,6 +43,9 @@ type callLeg struct {
 	dataHash   string // "" omits the field
 	commitment string // "" omits the field
 	payloadCID int64
+	// events and state are the committed effects (expectedEvents / expectedState); nil omits them.
+	events []map[string]interface{}
+	state  []map[string]interface{}
 }
 
 func callIntent(t *testing.T, l callLeg) *CertenIntent {
@@ -54,6 +57,12 @@ func callIntent(t *testing.T, l callLeg) *CertenIntent {
 	}
 	if l.commitment != "" {
 		ep["executionCommitment"] = l.commitment
+	}
+	if l.events != nil {
+		ep["expectedEvents"] = l.events
+	}
+	if l.state != nil {
+		ep["expectedState"] = l.state
 	}
 	legs := []map[string]interface{}{{
 		"legId": "leg-0", "chain": "evm", "chainId": l.chainID,
@@ -75,6 +84,49 @@ func goodCallLeg() callLeg {
 		dataHash:   crypto.Keccak256Hash(data).Hex(),
 		commitment: packedCommitment(84532, target, big.NewInt(0), data).Hex(),
 		payloadCID: 84532,
+		// transfer(...) on an ERC-20 emits Transfer(address,address,uint256) from the token.
+		events: []map[string]interface{}{{"contract": target.Hex(), "topic0": erc20TransferTopic}},
+	}
+}
+
+const erc20TransferTopic = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+
+// RB3-F65: a contract call is admitted only with the effects its success is proven by. Live, intent
+// 3b990fe3's note(bytes32) calls committed no event: they were admitted, settled on both chains and paid
+// for, then refused at attestation and written back nowhere.
+func TestRB1Gate_ContractCallMustCommitProvableEffects(t *testing.T) {
+	t.Setenv("CERTEN_ALLOW_CONTRACT_CALLS", "true")
+	for name, mutate := range map[string]func(*callLeg){
+		"no committed event":            func(l *callLeg) { l.events = nil },
+		"an empty event list":           func(l *callLeg) { l.events = []map[string]interface{}{} },
+		"an event with no contract":     func(l *callLeg) { l.events[0]["contract"] = "" },
+		"an event with a bad contract":  func(l *callLeg) { l.events[0]["contract"] = "0x1234" },
+		"an event with no topic":        func(l *callLeg) { l.events[0]["topic0"] = "" },
+		"an event with a short topic":   func(l *callLeg) { l.events[0]["topic0"] = "0xddf252ad" },
+		"an event with a bad data hash": func(l *callLeg) { l.events[0]["dataHash"] = "0x01" },
+		"a state slot with no account": func(l *callLeg) {
+			l.state = []map[string]interface{}{{"account": "", "slot": erc20TransferTopic, "value": erc20TransferTopic}}
+		},
+		"a state slot with a short value": func(l *callLeg) {
+			l.state = []map[string]interface{}{{"account": l.target, "slot": erc20TransferTopic, "value": "0x01"}}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			l := goodCallLeg()
+			mutate(&l)
+			err := enqueue(refusalValidator(newFakeEnqueuer()), callIntent(t, l))
+			var r *BatchRefusal
+			if err == nil || !errors.As(err, &r) || !r.Permanent {
+				t.Fatalf("want a permanent refusal before anything is signed, got %v", err)
+			}
+		})
+	}
+	// Committed effects well formed - events with a data hash, and a state slot - are admitted.
+	l := goodCallLeg()
+	l.events[0]["dataHash"] = erc20TransferTopic
+	l.state = []map[string]interface{}{{"account": l.target, "slot": erc20TransferTopic, "value": erc20TransferTopic}}
+	if err := enqueue(refusalValidator(newFakeEnqueuer()), callIntent(t, l)); err != nil {
+		t.Fatalf("a call committing well-formed effects was refused: %v", err)
 	}
 }
 

@@ -65,7 +65,8 @@ func ComputeExecutionCommitment(chainID int64, target common.Address, value *big
 //   - keccak256(calldata) must equal dataHash when one is given;
 //   - executionCommitment, when given, must equal ComputeExecutionCommitment for the chain the leg
 //     EXECUTES on (the member's chain, not a self-declared one) and the executed target, value and
-//     calldata.
+//     calldata;
+//   - a contract call must commit the effects its success is proven by (checkCommittedEffects).
 //
 // A native transfer with no commitment is accepted: its leaf binds (target, value, empty calldata)
 // all the same, and the account recomputes it from the runtime call.
@@ -104,6 +105,46 @@ func checkLegCommitment(i int, chainID int64, target [20]byte, value *big.Int, d
 		if common.Hash(want) != common.HexToHash(ec) {
 			return fmt.Errorf("leg %d executionCommitment does not match the target, value and calldata it would execute "+
 				"on chain %d", i, chainID)
+		}
+	}
+	if isContractCall {
+		return checkCommittedEffects(i, ep)
+	}
+	return nil
+}
+
+// checkCommittedEffects refuses a contract call whose success could never be proven.
+//
+// A call that does not revert has not necessarily done anything: a call to an address with no code, or
+// to a function that silently returns, succeeds too. So a contract call's result is attested only
+// against the effects it committed to - at least one event it must emit (RB-4), and optionally storage
+// slots it must set (RB-5) - which the Phase 7 gate proves from the inclusion-proven receipt. A call
+// committing no event used to be admitted, settled and paid for, and then refused at attestation, its
+// result written back nowhere (RB3-F65, intent 3b990fe3). It is refused here, by name, before anything
+// is signed or spent. Each committed effect must also be well formed: the gate would read a malformed
+// address as the zero address and skip an event without a topic.
+func checkCommittedEffects(i int, ep *ExecutionPayload) error {
+	if len(ep.ExpectedEvents) == 0 {
+		return fmt.Errorf("leg %d is a contract call that commits no event: success could not be told apart from a call "+
+			"that did nothing, so its result could never be attested - commit the event(s) it must emit (expectedEvents)", i)
+	}
+	for j, e := range ep.ExpectedEvents {
+		if !common.IsHexAddress(strings.TrimSpace(e.Contract)) {
+			return fmt.Errorf("leg %d expected event %d names no contract address (%q)", i, j, e.Contract)
+		}
+		if !isHash32(strings.TrimSpace(e.Topic0)) {
+			return fmt.Errorf("leg %d expected event %d topic0 is not a 32-byte hash: %q", i, j, e.Topic0)
+		}
+		if dh := strings.TrimSpace(e.DataHash); dh != "" && !isHash32(dh) {
+			return fmt.Errorf("leg %d expected event %d dataHash is not a 32-byte hash: %q", i, j, e.DataHash)
+		}
+	}
+	for j, s := range ep.ExpectedState {
+		if !common.IsHexAddress(strings.TrimSpace(s.Account)) {
+			return fmt.Errorf("leg %d expected state %d names no account address (%q)", i, j, s.Account)
+		}
+		if !isHash32(strings.TrimSpace(s.Slot)) || !isHash32(strings.TrimSpace(s.Value)) {
+			return fmt.Errorf("leg %d expected state %d slot and value must be 32-byte hashes", i, j)
 		}
 	}
 	return nil
