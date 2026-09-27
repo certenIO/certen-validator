@@ -520,6 +520,9 @@ func main() {
 	// It does not start; the deployment waits for its database (compose: postgres healthy, schema-migrate
 	// completed) and restarts it.
 	// ==========================================================================
+	if v := os.Getenv("REQUIRE_BFT_COMMIT"); v != "" && v != "true" {
+		log.Fatalf("❌ REQUIRE_BFT_COMMIT=%s is not supported: nothing acts on a ValidatorBlock consensus has not committed (RB3-F98)", v)
+	}
 	if v := os.Getenv("DATABASE_REQUIRED"); v != "" && v != "true" {
 		log.Fatalf("❌ [Phase 5] DATABASE_REQUIRED=%s is not supported: a validator cannot start without its database", v)
 	}
