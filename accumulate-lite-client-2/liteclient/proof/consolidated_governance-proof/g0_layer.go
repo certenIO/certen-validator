@@ -178,9 +178,8 @@ func (g0 *G0Layer) proveExecutionInclusion(ctx context.Context, request G0Reques
 func (g0 *G0Layer) bindExpandedExecutionMessage(ctx context.Context, request G0Request, execEntry string) (string, map[string]interface{}, error) {
 	fmt.Printf("[G0] [BINDING] Binding expanded execution message for %s\n", execEntry[:16])
 
-	// Build expanded execution query (with expand=true)
+	// The entry query returns the entry's value (the message) by itself; ChainQuery has no expand field (RB3-F18).
 	query := g0.queryBuilder.BuildExecutionInclusionQuery(request.TxHash, request.Chain)
-	query["expand"] = true
 
 	// Execute query and save artifact
 	response, err := g0.artifactManager.SaveRPCArtifact(

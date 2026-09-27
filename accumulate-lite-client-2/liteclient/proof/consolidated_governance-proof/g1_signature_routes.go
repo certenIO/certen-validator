@@ -569,7 +569,7 @@ func (g1 *G1Layer) evaluateCandidate(ctx context.Context, cand sigCandidate, key
 	}
 
 	// --- receipt, for timing (section 6.2 / 7.1) --------------------------
-	receiptQuery := g1.queryBuilder.BuildNormativeChainQuery("signature", cand.MessageHash, true, false)
+	receiptQuery := g1.queryBuilder.BuildNormativeChainQuery("signature", cand.MessageHash, true)
 	// The candidate's OWN page, not the route's. A delegated signature lives on
 	// the innermost signer's chain, and asking the principal's chain for it
 	// returns not-found - an outage, not a rejection, which takes the whole

@@ -277,16 +277,15 @@ func normalizeURL(url string) string {
 	return url
 }
 
-// expandSingleEntry expands a chain entry to get full transaction details (with receipt).
-// Bounded by a timeout: on Kermit an anchored receipt for an OLD entry can hang indefinitely,
-// so the caller falls back to a receipt-free ranged expand (graceful degradation).
+// expandSingleEntry reads a chain entry with its value and receipt. Bounded by a timeout: on Kermit an
+// anchored receipt for an OLD entry can hang; the caller retries and then fails - there is no receipt-free
+// substitute.
 func (ab *AuthorityBuilder) expandSingleEntry(entryHash, scopeURL string) (map[string]interface{}, error) {
 	// Build query for individual chain entry with expansion (aligned with Python approach)
 	query := map[string]interface{}{
 		"queryType":      "chain",
 		"name":           "main",
 		"entry":          entryHash,
-		"expand":         true,
 		"includeReceipt": true,
 	}
 

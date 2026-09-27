@@ -234,7 +234,7 @@ func (g1 *G1Layer) collectArrivals(ctx context.Context, txID string) ([]arrivalF
 // page's signature chain, from a receipt that starts at the message and
 // recomputes to its anchor.
 func (g1 *G1Layer) boundSignatureChainBlock(ctx context.Context, page, messageHash, label string) (int64, error) {
-	query := g1.queryBuilder.BuildNormativeChainQuery("signature", messageHash, true, false)
+	query := g1.queryBuilder.BuildNormativeChainQuery("signature", messageHash, true)
 	resp, err := g1.artifactManager.SaveRPCArtifact(ctx, label, g1.client, page, query)
 	if err != nil {
 		return 0, fmt.Errorf("read its signature chain receipt: %w", err)
