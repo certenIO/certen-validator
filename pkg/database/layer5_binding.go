@@ -97,9 +97,16 @@ var ErrNoBatchBinding = errors.New("no batch_transactions row for this accumulat
 // canonical row exists the answer is ErrNoBatchBinding: the caller then treats the
 // proof as a one-member tree, which is honest, rather than receiving a binding to
 // a root nobody anchored.
-func (r *ProofArtifactRepository) GetLayer5Binding(ctx context.Context, intentID, accumTxHash string) (*Layer5Binding, error) {
+//
+// chainID selects the member on that chain: an intent has one member per chain, and looking it up by
+// intent alone returned whichever member was written last - for an intent settling on two chains at
+// once, the other chain's leaf, root and anchor (RB3-F86).
+func (r *ProofArtifactRepository) GetLayer5Binding(ctx context.Context, intentID, accumTxHash string, chainID int64) (*Layer5Binding, error) {
 	if intentID == "" && accumTxHash == "" {
 		return nil, ErrNoBatchBinding
+	}
+	if chainID == 0 {
+		return nil, fmt.Errorf("layer5 binding: no chain to select the member by")
 	}
 	// $1 matches intent_id, $2 accumulate_tx_hash. An empty key must match nothing rather than every row
 	// whose column happens to be empty too.
@@ -119,6 +126,7 @@ func (r *ProofArtifactRepository) GetLayer5Binding(ctx context.Context, intentID
 		FROM batch_transactions bt
 		JOIN anchor_batches ab ON ab.id = bt.batch_id
 		WHERE ab.bundle_id IS NOT NULL
+		  AND ab.chain_id = $3
 		  AND (   ($1 <> '' AND bt.intent_id = $1)
 		       OR ($2 <> '' AND bt.accumulate_tx_hash = $2))
 		ORDER BY (CASE WHEN $1 <> '' AND bt.intent_id = $1 THEN 0 ELSE 1 END), bt.created_at DESC
@@ -130,7 +138,7 @@ func (r *ProofArtifactRepository) GetLayer5Binding(ctx context.Context, intentID
 		root    []byte
 	)
 	var leaf []byte
-	err := r.db.QueryRowContext(ctx, q, intentID, accumTxHash).Scan(
+	err := r.db.QueryRowContext(ctx, q, intentID, accumTxHash, chainID).Scan(
 		&b.BatchID, &leaf, &b.TreeIndex, &rawPath, &root, &b.TargetChain, &b.AnchorTxHash, &b.AnchorBlockNum)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("tx %s: %w", accumTxHash, ErrNoBatchBinding)

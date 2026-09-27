@@ -48,12 +48,13 @@ const Layer5LayerNumber = 5
 
 // BuildLayer5 assembles the external-anchor layer from what actually settled.
 //
-// binding is the batch join (nil when this proof settled outside the batch
-// path); obs is the observed target-chain receipt; leafHash and merkleRoot come
-// from the proof cycle request.
+// binding is the member's canonical batch row (nil when there is none); obs is the observed
+// target-chain receipt.
 //
-// Returns nil, nil when there is not enough to make an honest L5 — no leaf, or
-// no external transaction. That is not a failure: an L5 that cannot be built is
+// Returns nil, nil when there is not enough to make an honest L5 — no canonical row, or no external
+// transaction. It used to accept, with no row, the proof cycle's own leaf and root when they were
+// equal: they were the operation commitment twice, so every such L5 stated a one-leaf tree of a value
+// that is not the leaf and verified offline all the same (RB3-F85). That is not a failure: an L5 that cannot be built is
 // simply absent, and absent reads as summary-only downstream. Building a
 // half-populated one would put a row in the database that looks like an anchor
 // binding and cannot be checked, which is the condition this whole line of work
@@ -61,8 +62,6 @@ const Layer5LayerNumber = 5
 func BuildLayer5(
 	binding *database.Layer5Binding,
 	obs *chain.ObservationResult,
-	fallbackLeaf []byte,
-	fallbackRoot []byte,
 	chainID int64,
 ) (*Layer5, error) {
 	if obs == nil || obs.TxHash == "" || obs.BlockNumber == 0 {
@@ -125,29 +124,9 @@ func BuildLayer5(
 		l5.LeafIndex = uint64(binding.TreeIndex)
 		l5.Path = merkleStepsFromNodes(binding.MerklePath)
 
-	case len(fallbackRoot) == 32 && len(fallbackLeaf) == 32 &&
-		hex.EncodeToString(fallbackLeaf) == hex.EncodeToString(fallbackRoot):
-		// No batch row, and the caller's leaf IS its root. A genuine one-member tree:
-		// MerkleRoot over a single leaf returns that leaf, so this shape is real rather
-		// than assumed. Accepted only on that equality — never inferred.
-		l5.BatchRoot = hex.EncodeToString(fallbackRoot)
-		l5.LeafHash = hex.EncodeToString(fallbackLeaf)
-		l5.LeafIndex = 0
-		l5.Path = nil
-
-	case len(fallbackRoot) == 32 && len(fallbackLeaf) == 32:
-		// A leaf and a root that DISAGREE, with no branch to bridge them. Loud, because it
-		// means the plumbing handed us two values that do not belong together — and staying
-		// quiet about it is how the operationCommitment/batch-leaf conflation survived until
-		// a live run. This is the shape that produced the 50376476 refusal.
-		return nil, fmt.Errorf(
-			"layer5: no batch branch is available and leaf %s… != root %s…; this proof cannot be "+
-				"shown to be under that root, and no L5 row will be written",
-			hex.EncodeToString(fallbackLeaf)[:16], hex.EncodeToString(fallbackRoot)[:16])
-
 	default:
-		// Genuinely nothing to bind: no batch row and no usable leaf/root pair. Returning nil
-		// is not a failure — an absent L5 reads as summary-only, which is true.
+		// No canonical row: nothing to bind. Returning nil is not a failure - an absent L5 reads as
+		// summary-only, which is true.
 		return nil, nil
 	}
 
@@ -270,10 +249,10 @@ func WriteLayer5Row(
 func (o *UnifiedOrchestrator) writeLayer5(
 	ctx context.Context,
 	proofID uuid.UUID,
-	req *UnifiedProofCycleRequest,
+	member *database.Layer5Binding,
 	result *UnifiedProofCycleResult,
 ) (*Layer5, *database.Layer5Binding) {
-	l5, binding := o.resolveAnchorBinding(ctx, proofID, req.IntentID, req.AccumulateTxHash, req.LeafHash, req.MerkleRoot[:], result)
+	l5, binding := o.resolveAnchorBinding(ctx, proofID, member, result)
 	if l5 == nil {
 		return nil, binding
 	}
@@ -285,14 +264,13 @@ func (o *UnifiedOrchestrator) writeLayer5(
 }
 
 // resolveAnchorBinding works out where a proof's root was anchored: the canonical batch row covering the
-// intent's leaf when there is one, or the one-member tree whose root is its leaf. It returns nil when no
-// honest binding can be built, never a binding to the settlement transaction. Layer 5, level 3 of the
+// member's leaf from its canonical batch row. It returns nil when no honest binding can be built, never
+// a binding to the settlement transaction. Layer 5, level 3 of the
 // proof cycle and the Certen anchor proof all take their anchor from here, so they cannot disagree.
 func (o *UnifiedOrchestrator) resolveAnchorBinding(
 	ctx context.Context,
 	proofID uuid.UUID,
-	intentID, accumTxHash string,
-	leafHash, merkleRoot []byte,
+	member *database.Layer5Binding,
 	result *UnifiedProofCycleResult,
 ) (*Layer5, *database.Layer5Binding) {
 	if o.config.Repos == nil || o.config.Repos.ProofArtifacts == nil || result == nil {
@@ -304,26 +282,14 @@ func (o *UnifiedOrchestrator) resolveAnchorBinding(
 		return nil, nil
 	}
 	obs := result.ObservationResults[0]
-
-	// The batch join. Absent is a legitimate state — an intent that settled
-	// alone has no batch row — and is distinguished from a real lookup failure,
-	// because treating "settled alone" as "lookup failed" would suppress L5 for
-	// exactly the proofs where it is simplest to produce.
-	var binding *database.Layer5Binding
-	// Keyed on the intent first: a canonical member row carries intent_id, not the Accumulate tx hash,
-	// which the batch path never sees. See GetLayer5Binding.
-	if intentID != "" || accumTxHash != "" {
-		b, err := o.config.Repos.ProofArtifacts.GetLayer5Binding(ctx, intentID, accumTxHash)
-		switch {
-		case err == nil:
-			binding = b
-		case errors.Is(err, database.ErrNoBatchBinding):
-			logfPrintf("ℹ️ [L5-PERSIST] proof %s settled outside the batch path; treating it as a "+
-				"one-member tree whose root IS its leaf", proofID)
-		default:
-			logfPrintf("⚠️ [L5-PERSIST] proof %s: batch binding lookup failed, falling back to the "+
-				"single-leaf case: %v", proofID, err)
-		}
+	binding := member
+	if binding == nil {
+		// Every member settles through the batch path and has a canonical row; one without it has no
+		// place in any anchored tree that can be stated. It used to be written as a one-member tree of
+		// the operation commitment (RB3-F85).
+		logfPrintf("🚨 [L5-PERSIST] proof %s: no canonical batch row for this member - no L5 row; the proof "+
+			"is summary-only for layer 5", proofID)
+		return nil, nil
 	}
 
 	// result.ChainID is the strategy's string id; the layer records the numeric
@@ -350,15 +316,14 @@ func (o *UnifiedOrchestrator) resolveAnchorBinding(
 		}
 	}
 
-	l5, err := BuildLayer5(binding, obs, leafHash, merkleRoot, chainIDNum)
+	l5, err := BuildLayer5(binding, obs, chainIDNum)
 	if err != nil {
 		logfPrintf("🚨 [L5-PERSIST] proof %s: %v", proofID, err)
 		return nil, binding
 	}
 	if l5 == nil {
 		logfPrintf("ℹ️ [L5-PERSIST] proof %s: not enough to build an honest external anchor binding "+
-			"(leaf=%d bytes, tx=%q, block=%d); no L5 row rather than a half one",
-			proofID, len(leafHash), obs.TxHash, obs.BlockNumber)
+			"(tx=%q, block=%d); no L5 row rather than a half one", proofID, obs.TxHash, obs.BlockNumber)
 		return nil, binding
 	}
 	if anchorObs != nil && l5.BlockNumber == anchorObs.BlockNumber {
@@ -410,4 +375,47 @@ func (o *UnifiedOrchestrator) observeAnchor(ctx context.Context, proofID uuid.UU
 		result.anchorObservations[key] = anchorObs
 	}
 	return anchorObs
+}
+
+// batchPlacement is the member's place in its anchored batch: its canonical row, looked up by intent and
+// chain (RB3-F85/F86), with its path checked to reach the root it names. nil, nil when the member has
+// no row - its place is then stated as unknown, never as a one-leaf tree of its operation commitment.
+func (o *UnifiedOrchestrator) batchPlacement(ctx context.Context, intentID, accumTxHash string, chainID int64) (*database.Layer5Binding, error) {
+	b, err := o.config.Repos.ProofArtifacts.GetLayer5Binding(ctx, intentID, accumTxHash, chainID)
+	if errors.Is(err, database.ErrNoBatchBinding) {
+		logfPrintf("🚨 [BATCH-PLACEMENT] intent %s on chain %d has no canonical batch row: its leaf, path and "+
+			"root are unknown and stated as such", intentID, chainID)
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read the member's batch placement: %w", err)
+	}
+	if err := checkBatchPlacement(b); err != nil {
+		return nil, fmt.Errorf("the member's canonical batch row contradicts itself: %w", err)
+	}
+	return b, nil
+}
+
+// checkBatchPlacement folds the row's leaf up its path (sorted-pair keccak, as the anchor verifies) and
+// requires the root it names.
+func checkBatchPlacement(b *database.Layer5Binding) error {
+	if len(b.LeafHash) != 32 || len(b.BatchRoot) != 32 {
+		return fmt.Errorf("leaf %d bytes, root %d bytes", len(b.LeafHash), len(b.BatchRoot))
+	}
+	var cur, rootHash [32]byte
+	copy(cur[:], b.LeafHash)
+	copy(rootHash[:], b.BatchRoot)
+	for i, node := range b.MerklePath {
+		sib, err := hex.DecodeString(strings.TrimPrefix(node.Hash, "0x"))
+		if err != nil || len(sib) != 32 {
+			return fmt.Errorf("path step %d is not a 32-byte hash", i)
+		}
+		var s [32]byte
+		copy(s[:], sib)
+		cur = hashPair(cur, s)
+	}
+	if cur != rootHash {
+		return fmt.Errorf("leaf %x… does not reach root %x… by its path", b.LeafHash[:8], b.BatchRoot[:8])
+	}
+	return nil
 }

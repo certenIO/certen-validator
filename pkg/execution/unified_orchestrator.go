@@ -2482,14 +2482,19 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 		return fmt.Errorf("cycle %s names no Accumulate transaction to key its proof artifact by", req.CycleID)
 	}
 
-	// Determine leaf index pointer - for on-demand single-tx, always set to 0
+	// The member's place in its anchored batch, from its canonical row (RB3-F85). The request's
+	// LeafHash and MerkleRoot are the operation commitment - an input to the leaf - and were stored as
+	// both leaf and root, with index 0 and no path, for members of multi-intent batches too.
+	placementChain, _ := strconv.ParseInt(req.TargetChain, 10, 64)
+	placement, err := o.batchPlacement(ctx, req.IntentID, accumTxHash, placementChain)
+	if err != nil {
+		return err
+	}
 	var leafIndexPtr *int
-	leafIndex := req.LeafIndex
-	if req.ProofClass == "on_demand" {
-		// For on-demand, always set leaf_index (0 for single tx)
-		leafIndexPtr = &leafIndex
-	} else if req.LeafIndex > 0 || len(req.LeafHash) > 0 {
-		leafIndexPtr = &leafIndex
+	var artifactRoot, artifactLeaf []byte
+	if placement != nil {
+		idx := placement.TreeIndex
+		leafIndexPtr, artifactRoot, artifactLeaf = &idx, placement.BatchRoot, placement.LeafHash
 	}
 
 	newArtifact := &database.NewProofArtifact{
@@ -2497,8 +2502,8 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 		AccumTxHash:  accumTxHash,
 		AccountURL:   req.AccumulateAccountURL, // Use actual Accumulate account URL (ADI)
 		BatchID:      req.BatchID,
-		MerkleRoot:   req.MerkleRoot[:],
-		LeafHash:     req.LeafHash, // Transaction hash (leaf in Merkle tree)
+		MerkleRoot:   artifactRoot,
+		LeafHash:     artifactLeaf,
 		LeafIndex:    leafIndexPtr, // Position in the tree
 		ProofClass:   proofClass,
 		ValidatorID:  o.config.ValidatorID,
@@ -2910,7 +2915,7 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 				// and G0-G2, so what the proof CONTAINS has to be settled before
 				// the layer attesting to it is built. It is deliberately NOT in
 				// the govRoot — it cannot be inside what it describes.
-				anchorL5, anchorBatch = o.writeLayer5(ctx, proofArtifact.ProofID, req, result)
+				anchorL5, anchorBatch = o.writeLayer5(ctx, proofArtifact.ProofID, placement, result)
 				anchorResolved = true
 
 				fmt.Printf("Created chained_proof_layers L1/L2/L3/L4/L5 for proof_id=%s\n", proofArtifact.ProofID)
@@ -2978,7 +2983,7 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 
 	// 2f. The four proof levels and the four-component Certen proof.
 	if !anchorResolved {
-		anchorL5, anchorBatch = o.resolveAnchorBinding(ctx, proofArtifact.ProofID, req.IntentID, req.AccumulateTxHash, req.LeafHash, req.MerkleRoot[:], result)
+		anchorL5, anchorBatch = o.resolveAnchorBinding(ctx, proofArtifact.ProofID, placement, result)
 	}
 	var chainedProofJSON json.RawMessage
 	if storedChainedProof != nil {
@@ -2993,10 +2998,10 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 		IntentID:         req.IntentID,
 		AccumTxHash:      accumTxHash,
 		AccountURL:       req.AccumulateAccountURL,
-		MerkleRoot:       req.MerkleRoot[:],
-		LeafHash:         req.LeafHash,
-		LeafIndex:        req.LeafIndex,
-		MerklePath:       req.MerklePath,
+		MerkleRoot:       placementRoot(placement),
+		LeafHash:         placementLeaf(placement),
+		LeafIndex:        placementIndex(placement),
+		MerklePath:       placementPath(placement),
 		ChainedProof:     chainedProofJSON,
 		AccumBlockHeight: req.AccumulateHeight,
 		AccumBVN:         req.AccumulateBVN,
@@ -3018,28 +3023,17 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 	// (proof_cycle_orchestrator.go, artifact_service.go) already pass a real account URL.
 	bundle.SetTransactionRef(accumTxHash, req.AccumulateAccountURL, req.ProofClass)
 
-	// Set Merkle inclusion proof if available
-	if req.MerkleRoot != [32]byte{} {
-		// Use actual leaf hash if available, otherwise fall back to operation commitment
-		leafHashStr := hex.EncodeToString(req.OperationCommitment[:])
-		if len(req.LeafHash) > 0 {
-			leafHashStr = hex.EncodeToString(req.LeafHash)
-		}
-
-		// Convert MerklePath to bundle format
-		// database.MerklePathNode uses Position ("left"/"right"), proof.MerklePathEntry uses Right (bool)
+	// The member's inclusion in its anchored batch, as its canonical row states it - or none. It used to
+	// be the operation commitment as leaf and root, and to fall back to it for the leaf (RB3-F85).
+	if placement != nil {
 		var merklePath []proof.MerklePathEntry
-		for _, node := range req.MerklePath {
-			merklePath = append(merklePath, proof.MerklePathEntry{
-				Hash:  node.Hash,
-				Right: node.Position == "right",
-			})
+		for _, node := range placement.MerklePath {
+			merklePath = append(merklePath, proof.MerklePathEntry{Hash: node.Hash, Right: node.Position == "right"})
 		}
-
 		bundle.SetMerkleInclusion(
-			hex.EncodeToString(req.MerkleRoot[:]),
-			leafHashStr,
-			int64(req.LeafIndex),
+			hex.EncodeToString(placement.BatchRoot),
+			hex.EncodeToString(placement.LeafHash),
+			int64(placement.TreeIndex),
 			merklePath,
 		)
 	}
@@ -3259,4 +3253,33 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 	}
 
 	return nil
+}
+
+// The member's placement as the proof levels record it; empty when it has no canonical row.
+func placementRoot(p *database.Layer5Binding) []byte {
+	if p == nil {
+		return nil
+	}
+	return p.BatchRoot
+}
+
+func placementLeaf(p *database.Layer5Binding) []byte {
+	if p == nil {
+		return nil
+	}
+	return p.LeafHash
+}
+
+func placementIndex(p *database.Layer5Binding) int {
+	if p == nil {
+		return 0
+	}
+	return p.TreeIndex
+}
+
+func placementPath(p *database.Layer5Binding) []database.MerklePathNode {
+	if p == nil {
+		return nil
+	}
+	return p.MerklePath
 }

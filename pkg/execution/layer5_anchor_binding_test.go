@@ -2,6 +2,7 @@ package execution
 
 import (
 	"encoding/hex"
+	"github.com/google/uuid"
 	"strings"
 	"testing"
 
@@ -81,12 +82,12 @@ func settlementObservation() *chain.ObservationResult {
 func TestLayer5NeverPairsTheAnchorWithTheSettlementBlock(t *testing.T) {
 	binding := canonicalBinding(t)
 	binding.AnchorBlockNum = 0
-	l5, err := BuildLayer5(binding, settlementObservation(), nil, nil, 84532)
+	l5, err := BuildLayer5(binding, settlementObservation(), 84532)
 	if err == nil {
 		t.Fatalf("built %s @ %d (%s) with no block for the anchor", l5.AnchorTx, l5.BlockNumber, l5.BlockHash)
 	}
 	binding.AnchorBlockNum = anchorBlockNo
-	if l5, err = BuildLayer5(binding, settlementObservation(), nil, nil, 84532); err != nil || l5.BlockHash != "" || l5.Confirmations != 0 {
+	if l5, err = BuildLayer5(binding, settlementObservation(), 84532); err != nil || l5.BlockHash != "" || l5.Confirmations != 0 {
 		t.Fatalf("the settlement block's hash or depth travelled with the anchor: %+v, %v", l5, err)
 	}
 }
@@ -97,18 +98,18 @@ func TestLayer5NamesTheChainLikeTheAnchorRow(t *testing.T) {
 	obs := settlementObservation()
 	obs.ChainName = ""
 	binding := canonicalBinding(t)
-	if l5, err := BuildLayer5(binding, obs, nil, nil, 84532); err != nil || l5.Network != "base-sepolia" {
+	if l5, err := BuildLayer5(binding, obs, 84532); err != nil || l5.Network != "base-sepolia" {
 		t.Fatalf("network = %q (%v), want the anchor row's base-sepolia", l5.Network, err)
 	}
 	binding.TargetChain = ""
-	if l5, err := BuildLayer5(binding, obs, nil, nil, 84532); err != nil || l5.Network != "base-sepolia" {
+	if l5, err := BuildLayer5(binding, obs, 84532); err != nil || l5.Network != "base-sepolia" {
 		t.Fatalf("network = %q (%v), want the name of chain 84532", l5.Network, err)
 	}
-	if l5, err := BuildLayer5(binding, obs, nil, nil, 999999); err != nil || l5.Network != "chain-999999" {
+	if l5, err := BuildLayer5(binding, obs, 999999); err != nil || l5.Network != "chain-999999" {
 		t.Fatalf("network = %q (%v), want chain-999999 for a chain this build cannot name", l5.Network, err)
 	}
 	binding.TargetChain = "private-net"
-	if l5, err := BuildLayer5(binding, obs, nil, nil, 999999); err != nil || l5.Network != "private-net" {
+	if l5, err := BuildLayer5(binding, obs, 999999); err != nil || l5.Network != "private-net" {
 		t.Fatalf("network = %q (%v), want the anchor row's name for a chain this build cannot name", l5.Network, err)
 	}
 }
@@ -116,7 +117,7 @@ func TestLayer5NamesTheChainLikeTheAnchorRow(t *testing.T) {
 // The core regression: the anchor transaction must describe where the ROOT was published.
 func TestLayer5AnchorTxIsTheAnchorCreateTxNotTheSettlementTx(t *testing.T) {
 	binding := canonicalBinding(t)
-	l5, err := BuildLayer5(binding, settlementObservation(), nil, nil, 84532)
+	l5, err := BuildLayer5(binding, settlementObservation(), 84532)
 	if err != nil {
 		t.Fatalf("BuildLayer5: %v", err)
 	}
@@ -148,16 +149,16 @@ func TestLayer5RefusesAShadowRootThatNoBranchSupports(t *testing.T) {
 	shadowRoot := hexBytes(t, shadowRootHex)
 	leaf := hexBytes(t, memberLeafHex)
 
-	// No binding (the canonical query returns none for a shadow-only transaction) and a leaf that does
-	// not equal the root: exactly the shape the old code papered over by taking the shadow row.
-	l5, err := BuildLayer5(nil, settlementObservation(), leaf, shadowRoot, 84532)
-	if err == nil {
+	// The canonical query returns no row for a shadow-only transaction: nothing is bound.
+	if l5, err := BuildLayer5(nil, settlementObservation(), 84532); err != nil || l5 != nil {
+		t.Fatalf("no canonical row must bind nothing, got (%+v, %v)", l5, err)
+	}
+	// And a row naming the shadow root with no branch from the leaf to it is refused.
+	l5, err := BuildLayer5(&database.Layer5Binding{BatchID: uuid.New(), LeafHash: leaf, BatchRoot: shadowRoot}, settlementObservation(), 84532)
+	if err == nil || l5 != nil {
 		t.Fatalf("expected a refusal; got %+v", l5)
 	}
-	if l5 != nil {
-		t.Fatal("a row was built for a leaf that cannot be shown under that root")
-	}
-	if !strings.Contains(err.Error(), "cannot be shown to be under that root") {
+	if !strings.Contains(err.Error(), "unverifiable") {
 		t.Fatalf("unexpected refusal reason: %v", err)
 	}
 }
@@ -173,7 +174,7 @@ func TestLayer5OneMemberAnchorKeepsTheAnchorTx(t *testing.T) {
 		AnchorTxHash:   anchorCreateTx,
 		AnchorBlockNum: anchorBlockNo,
 	}
-	l5, err := BuildLayer5(binding, settlementObservation(), nil, nil, 84532)
+	l5, err := BuildLayer5(binding, settlementObservation(), 84532)
 	if err != nil || l5 == nil {
 		t.Fatalf("BuildLayer5: %v (%+v)", err, l5)
 	}
@@ -194,7 +195,7 @@ func TestLayer5FallsBackToTheObservationOnlyWhenTheRowHasNoAnchorTx(t *testing.T
 	binding := canonicalBinding(t)
 	binding.AnchorTxHash = ""
 	binding.AnchorBlockNum = 0
-	l5, err := BuildLayer5(binding, settlementObservation(), nil, nil, 84532)
+	l5, err := BuildLayer5(binding, settlementObservation(), 84532)
 	if err != nil || l5 == nil {
 		t.Fatalf("BuildLayer5: %v", err)
 	}
