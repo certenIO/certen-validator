@@ -513,45 +513,41 @@ func main() {
 	}())
 
 	// ==========================================================================
-	// PHASE 5: Initialize PostgreSQL Database Connection
-	// Per Implementation Plan: Wire batch system with real Merkle roots
-	// Per E.2 remediation: Proper degradation handling with DatabaseRequired flag
+	// PHASE 5: PostgreSQL Database Connection
+	//
+	// Required. A validator without its database used to start "in DEGRADED mode" unless
+	// DATABASE_REQUIRED=true, with the batch system, proof storage, lifecycle tracking and the evidence
+	// writers switched off - taking part in consensus and executing intents it could record nothing about.
+	// It does not start; the deployment waits for its database (compose: postgres healthy, schema-migrate
+	// completed) and restarts it.
 	// ==========================================================================
+	if v := os.Getenv("DATABASE_REQUIRED"); v != "" && v != "true" {
+		log.Fatalf("❌ [Phase 5] DATABASE_REQUIRED=%s is not supported: a validator cannot start without its database", v)
+	}
 	log.Println("🗄️ [Phase 5] Connecting to PostgreSQL database...")
 	dbClient, err := database.NewClient(cfg, database.WithLogger(
 		log.New(log.Writer(), "[Database] ", log.LstdFlags),
 	))
 	if err != nil {
-		// E.2 remediation: Check if database is required
-		if cfg.DatabaseRequired {
-			log.Fatalf("❌ [Phase 5] Database connection REQUIRED but failed: %v", err)
-		}
-		// Database is optional in development - log warning with explicit degradation notice
-		log.Printf("⚠️ [Phase 5] Database connection failed - running in DEGRADED mode")
-		log.Printf("⚠️ WARNING: Batch system, proof storage, and confirmation tracking DISABLED")
-		log.Printf("   Error: %v", err)
-		dbClient = nil
-		healthStatus.SetDatabase("disconnected")
-		healthStatus.SetBatchSystem("disabled")
-	} else {
-		log.Println("✅ [Phase 5] Connected to PostgreSQL database")
-		healthStatus.SetDatabase("connected")
+		log.Fatalf("❌ [Phase 5] The validator cannot start without its database: %v", err)
+	}
+	log.Println("✅ [Phase 5] Connected to PostgreSQL database")
+	healthStatus.SetDatabase("connected")
 
-		runner := schema.Runner{DB: dbClient.DB()}
-		if os.Getenv("MIGRATE_ON_START") == "true" {
-			if err := runner.Up(context.Background(), cfg.ValidatorID); err != nil {
-				log.Fatalf("❌ [Phase 5] Database migration failed: %v", err)
-			}
-		} else {
-			required, err := schema.LatestVersion()
-			if err != nil {
-				log.Fatalf("❌ [Phase 5] Cannot load schema catalog: %v", err)
-			}
-			if err := runner.Verify(context.Background(), required); err != nil {
-				log.Fatalf("❌ [Phase 5] Database schema verification failed: %v", err)
-			}
-			log.Printf("✅ [Phase 5] Database schema verified through migration %s", required)
+	runner := schema.Runner{DB: dbClient.DB()}
+	if os.Getenv("MIGRATE_ON_START") == "true" {
+		if err := runner.Up(context.Background(), cfg.ValidatorID); err != nil {
+			log.Fatalf("❌ [Phase 5] Database migration failed: %v", err)
 		}
+	} else {
+		required, err := schema.LatestVersion()
+		if err != nil {
+			log.Fatalf("❌ [Phase 5] Cannot load schema catalog: %v", err)
+		}
+		if err := runner.Verify(context.Background(), required); err != nil {
+			log.Fatalf("❌ [Phase 5] Database schema verification failed: %v", err)
+		}
+		log.Printf("✅ [Phase 5] Database schema verified through migration %s", required)
 	}
 
 	// ==========================================================================
@@ -853,7 +849,7 @@ func main() {
 	// ==========================================================================
 	// PHASE 5: Batch and Proof API Endpoints
 	// ==========================================================================
-	if batchComponents != nil {
+	{
 		batchHandlers := server.NewBatchHandlers(
 			batchComponents.Repos,
 			cfg.ValidatorID,
@@ -936,8 +932,6 @@ func main() {
 		log.Printf("   - GET  /api/proofs/by-account/:url (proofs by account)")
 		log.Printf("   - GET  /api/costs              (cost structure)")
 		log.Printf("   - GET  /api/costs/estimate     (estimate anchoring cost)")
-	} else {
-		log.Printf("⚠️ [Phase 5] Batch API endpoints not available - database not connected")
 	}
 
 	httpServer := &http.Server{
@@ -1644,8 +1638,11 @@ func startValidator(
 	// PHASE 5: Wire Batch System for Real Merkle Roots
 	// Per Implementation Plan: Connect batch collector/processor to AnchorManager
 	// ==========================================================================
+	if dbClient == nil {
+		return nil, nil, fmt.Errorf("the validator cannot start without its database")
+	}
 	var batchComponents *BatchComponents
-	if dbClient != nil {
+	{
 		log.Println("📦 [Phase 5] Initializing batch system with database storage...")
 
 		// Create database repositories
@@ -1667,11 +1664,10 @@ func startValidator(
 			ValidatorID:      cfg.ValidatorID,
 		})
 		if err != nil {
-			log.Printf("⚠️ [Phase 5] Proof request fulfiller not started: %v", err)
-		} else {
-			requestFulfiller.Start(context.Background())
-			log.Println("✅ [Phase 5] Proof request fulfiller started")
+			return nil, nil, fmt.Errorf("proof request fulfiller: %w", err)
 		}
+		requestFulfiller.Start(context.Background())
+		log.Println("✅ [Phase 5] Proof request fulfiller started")
 
 		// ==========================================================================
 		// PHASE 4 Task 4.3: Event Watcher for Contract Event Monitoring
@@ -1745,9 +1741,6 @@ func startValidator(
 		} else {
 			log.Println("⚠️ [Firestore] Sync service not enabled - web app will not receive real-time status updates")
 		}
-	} else {
-		log.Println("⚠️ [Phase 5] Database not available - batch system disabled")
-		// E.2 remediation: Health status already set to disconnected/disabled in main
 	}
 
 	// ==========================================================================
@@ -1819,10 +1812,7 @@ func startValidator(
 		accSubmitter = execution.NewNullAccumulateSubmitter(log.New(log.Writer(), "[NullSubmitter] ", log.LstdFlags))
 	}
 
-	var orchestratorRepos *database.Repositories
-	if batchComponents != nil {
-		orchestratorRepos = batchComponents.Repos
-	}
+	orchestratorRepos := batchComponents.Repos
 
 	// The unified orchestrator is the only proof-cycle orchestrator. The legacy one it used to fall
 	// back to ran with a one-member validator set and could not produce a quorum attestation; a
@@ -1839,10 +1829,7 @@ func startValidator(
 		return nil, nil, fmt.Errorf("proof cycle: strategy registry cannot be created: %w", registryErr)
 	}
 
-	var unifiedRepo *database.UnifiedRepository
-	if batchComponents != nil && batchComponents.Repos != nil {
-		unifiedRepo = batchComponents.Repos.Unified
-	}
+	unifiedRepo := batchComponents.Repos.Unified
 
 	// Chained proofs (L1/L2/L3) come from the real proof builder, required at startup above.
 	proofGenAdapter := execution.NewLiteClientProofGeneratorAdapter(liteClientProofGen)
@@ -2027,7 +2014,7 @@ func startValidator(
 			entGateCfg.Mode, entStore.Enabled(), len(entGateCfg.Keys))
 	}
 
-	if batchComponents != nil {
+	{
 		// Wire repositories for intent lifecycle tracking
 		intentDiscovery.SetRepositories(batchComponents.Repos)
 		log.Printf("✅ Intent lifecycle tracking wired to intent discovery")
@@ -2041,7 +2028,11 @@ func startValidator(
 		// voting power — used to be computed and dropped, leaving anchor_batches' Phase 5 columns empty on
 		// all 70,236 rows and proofs_service reporting batch_quorum_met=false for every intent. The writer
 		// records it off the proving path; see pkg/execution/anchor_quorum_writer.go.
-		if attestor := batchQuorumAttestorForEvidence.Load(); attestor != nil && batchComponents.Repos != nil {
+		attestor := batchQuorumAttestorForEvidence.Load()
+		if attestor == nil {
+			return nil, nil, fmt.Errorf("anchor quorum evidence: the batch quorum attestor was not built")
+		}
+		{
 			anchorQuorumWriter := execution.NewAnchorQuorumWriter(batchComponents.Repos.Batches, log.Printf)
 
 			// The durable half. Every way the in-memory hand-off can lose a proven anchor — a saturated
@@ -2054,45 +2045,35 @@ func startValidator(
 				aqDataDir = "data"
 			}
 			outboxDir := filepath.Join(aqDataDir, "anchor_quorum_outbox")
-			if outbox, obErr := execution.NewFileAnchorQuorumOutbox(outboxDir); obErr != nil {
-				// Not fatal: without the outbox the writer still records everything the database accepts,
-				// and the chain remains the backstop. But say so plainly — this is the difference between
-				// "recovers by itself" and "someone must run the backfill".
-				log.Printf("⚠️ [Phase 5] Anchor quorum outbox unavailable at %s (%v); evidence that cannot be "+
-					"written will be recoverable only with `anchorquorumbackfill`", outboxDir, obErr)
-			} else {
-				anchorQuorumWriter.SetOutbox(outbox)
-				reconciler := &execution.AnchorQuorumReconciler{
-					Outbox: outbox,
-					Store:  batchComponents.Repos.Batches,
-					Logf:   log.Printf,
-				}
-				reconciler.Start(context.Background())
-				log.Printf("✅ [Phase 5] Anchor quorum outbox at %s; reconciler replaying on startup and every %s",
-					outboxDir, 5*time.Minute)
+			// Required: without the outbox, evidence the database does not accept at that moment would be
+			// recoverable only by someone running `anchorquorumbackfill`.
+			outbox, obErr := execution.NewFileAnchorQuorumOutbox(outboxDir)
+			if obErr != nil {
+				return nil, nil, fmt.Errorf("anchor quorum outbox at %s: %w", outboxDir, obErr)
 			}
+			anchorQuorumWriter.SetOutbox(outbox)
+			reconciler := &execution.AnchorQuorumReconciler{
+				Outbox: outbox,
+				Store:  batchComponents.Repos.Batches,
+				Logf:   log.Printf,
+			}
+			reconciler.Start(context.Background())
+			log.Printf("✅ [Phase 5] Anchor quorum outbox at %s; reconciler replaying on startup and every %s",
+				outboxDir, 5*time.Minute)
 
 			anchorQuorumWriter.Start()
 			attestor.SetAnchorAttestedHook(anchorQuorumWriter.Hook())
 			log.Printf("✅ [Phase 5] Anchor quorum evidence hook wired (canonical rows keyed by chain_id + bundle_id)")
-		} else {
-			log.Printf("⚠️ [Phase 5] Anchor quorum evidence NOT recorded (attestor or repositories unavailable); " +
-				"proven anchors will have no canonical row")
 		}
 
 		// Standing evidence checks. The counters above report what the writer DID; these report what is
 		// WRONG, on a timer, whether or not anything is happening — including whether this database is
 		// behind this binary's migration catalog, which is fatal on the NEXT restart and therefore has to
 		// be visible before someone rolls the fleet rather than after.
-		if dbClient != nil {
-			monitor := &execution.EvidenceMonitor{DB: dbClient.DB(), Logf: log.Printf}
-			monitor.Start(context.Background())
-			log.Printf("✅ [Phase 5] Standing evidence checks started (settled-without-canonical, " +
-				"contradicted layer 5, schema-behind-binary)")
-		}
-
-	} else {
-		log.Printf("⚠️ [Phase 5] Batch system not available - intents will bypass PostgreSQL")
+		monitor := &execution.EvidenceMonitor{DB: dbClient.DB(), Logf: log.Printf}
+		monitor.Start(context.Background())
+		log.Printf("✅ [Phase 5] Standing evidence checks started (settled-without-canonical, " +
+			"contradicted layer 5, schema-behind-binary)")
 	}
 
 	go intentDiscovery.StartMonitoring()

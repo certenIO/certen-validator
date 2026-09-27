@@ -30,9 +30,8 @@ type Config struct {
 	DatabaseURL         string
 	DatabaseMaxConns    int
 	DatabaseMinConns    int
-	DatabaseMaxIdleTime int  // seconds
-	DatabaseMaxLifetime int  // seconds
-	DatabaseRequired    bool // If true, startup fails if database connection fails
+	DatabaseMaxIdleTime int // seconds
+	DatabaseMaxLifetime int // seconds
 
 	// Database Configuration (individual fields for client.go)
 	DBHost            string
@@ -143,7 +142,6 @@ func Load() (*Config, error) {
 		DatabaseMinConns:    getEnvInt("DATABASE_MIN_CONNS", 5),
 		DatabaseMaxIdleTime: getEnvInt("DATABASE_MAX_IDLE_TIME", 300), // 5 minutes
 		DatabaseMaxLifetime: getEnvInt("DATABASE_MAX_LIFETIME", 3600), // 1 hour
-		DatabaseRequired:    getEnvBool("DATABASE_REQUIRED", false),   // If true, fail startup on DB error
 
 		// Database Configuration - individual fields for client.go
 		DBHost:            getEnv("DB_HOST", "localhost"),
