@@ -70,7 +70,11 @@ type PolicySignature struct {
 
 // PolicyUpdateTx schedules a change to the entitlement rule.
 type PolicyUpdateTx struct {
-	Kind           string            `json:"kind"`
+	Kind string `json:"kind"`
+	// ChainID binds the admins' signatures to one chain (RB3-F117): without it, an update signed for one
+	// chain verified on any chain that sealed the same admin keys. Required under rules v8, except for the
+	// updates committed before it (committedLegacyPolicyUpdates).
+	ChainID        string            `json:"chain_id,omitempty"`
 	Mode           string            `json:"mode"`
 	Keys           map[string]string `json:"keys,omitempty"`
 	ActivationUnix int64             `json:"activation_unix"`
@@ -96,9 +100,45 @@ func (t *PolicyUpdateTx) SigningBytes() []byte {
 		payload += id + "=" + t.Keys[id] + ";"
 	}
 	payload += fmt.Sprintf("\n%d\n%d", t.ActivationUnix, t.Version)
+	if t.ChainID != "" {
+		// Appended, so an unbound update's digest is exactly what it always was.
+		payload += "\nchain:" + t.ChainID
+	}
 
 	sum := sha256.Sum256([]byte(payload))
 	return sum[:]
+}
+
+// committedLegacyPolicyUpdates are the policy updates committed before rules v8 required a chain binding,
+// by chain and SigningBytes digest (hex). Rules v8 accepts an unbound update only if it is one of these,
+// so the chain's own history replays exactly - their result codes are in the next headers' LastResultsHash -
+// and no unbound update is accepted anywhere else, ever. Read from the production chain on 2026-09-27
+// (every block 1..2622; testdata/committed_policy_updates_certen-testnet.jsonl).
+var committedLegacyPolicyUpdates = map[string]map[string]bool{
+	"certen-testnet": {
+		"a22f5dd65c719cdcd8f86a42378a02d12cfcbad7ace97931aa6556516ebc227b": true, // version 2, height 3
+		"2976a1dcee18108b72a0d0de0d3ae9e541fdb788430ca271c08dad942d1a7346": true, // version 3, height 10
+	},
+}
+
+// IsCommittedLegacyPolicyUpdate reports whether an unbound update is one committed on chainID before v8.
+func IsCommittedLegacyPolicyUpdate(chainID string, t *PolicyUpdateTx) bool {
+	return t.ChainID == "" && committedLegacyPolicyUpdates[chainID][hex.EncodeToString(t.SigningBytes())]
+}
+
+// VerifyPolicyUpdateOnChain is the consensus check: the update is bound to this chain (or is one of the
+// updates committed here before the binding existed), and VerifyPolicyUpdate holds.
+func VerifyPolicyUpdateOnChain(t *PolicyUpdateTx, current *ledger.EntitlementPolicyState, blockTimeUnix int64, chainID string) error {
+	switch {
+	case t.ChainID == "":
+		if !IsCommittedLegacyPolicyUpdate(chainID, t) {
+			return fmt.Errorf("the update is not bound to a chain (chain_id): its signatures would verify on any " +
+				"chain with the same admin keys")
+		}
+	case t.ChainID != chainID:
+		return fmt.Errorf("the update is for chain %q, this is %q", t.ChainID, chainID)
+	}
+	return VerifyPolicyUpdate(t, current, blockTimeUnix)
 }
 
 // PolicyUpdateID is the identifier this transaction contributes to the app

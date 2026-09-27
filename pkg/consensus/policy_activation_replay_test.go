@@ -66,6 +66,7 @@ func appOn(t *testing.T, kv *memKV, blockTime time.Time) *ValidatorApp {
 		validatorBlocks:  make(map[string]*ValidatorBlock),
 		ledgerStore:      store,
 		chainID:          "certen-test",
+		cometChainID:     "certen-test",
 		entitlement:      cfg,
 		currentBlockTime: blockTime,
 	}
@@ -103,6 +104,7 @@ func signedUpdate(t *testing.T, priv ed25519.PrivateKey, mode string, keys entit
 	}
 	tx := &PolicyUpdateTx{
 		Kind:           PolicyUpdateKind,
+		ChainID:        "certen-test",
 		Mode:           mode,
 		Keys:           hexKeys,
 		ActivationUnix: activationUnix,

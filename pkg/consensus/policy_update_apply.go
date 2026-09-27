@@ -78,7 +78,7 @@ func (app *ValidatorApp) processPolicyUpdate(pu *PolicyUpdateTx, height int64) a
 		return abcitypes.ExecTxResult{Code: 0, GasWanted: 1, GasUsed: 1}
 	}
 
-	if err := VerifyPolicyUpdate(pu, current, app.currentBlockTime.UTC().Unix()); err != nil {
+	if err := VerifyPolicyUpdateOnChain(pu, current, app.currentBlockTime.UTC().Unix(), app.cometChainID); err != nil {
 		app.logger.Printf("🚫 [POLICY] rejected update at height %d: %v", height, err)
 		return abcitypes.ExecTxResult{Code: 5, Log: "policy update rejected: " + err.Error()}
 	}

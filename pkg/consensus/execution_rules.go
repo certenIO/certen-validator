@@ -94,7 +94,10 @@ const (
 	// to accept/reject and therefore to the app hash.
 	executionRulesV7 uint64 = 7
 
-	// v8 — validator consensus-key rotation (RB3-F95). Two recognised transaction kinds:
+	// v8 — validator consensus-key rotation (RB3-F95), and policy updates bound to the chain (RB3-F117:
+	// an update's admin signatures now cover its chain id; an unbound one is accepted only if it is one
+	// of the two committed on certen-testnet before v8, so their replay is unchanged). Two recognised
+	// transaction kinds:
 	// `certen.validator.rotate/v1` (signed by the sealed admin quorum; accepted, it contributes its id
 	// to the app hash and returns ValidatorUpdates) and `certen.chain.tick/v1` (accepted, changes
 	// nothing - it makes an idle chain produce a block). Under v7 both were judged as ValidatorBlocks and

@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -262,4 +263,52 @@ func captureStdout(t *testing.T, fn func()) string {
 	w.Close()
 	b, _ := io.ReadAll(r)
 	return string(b)
+}
+
+// history-check reads every block: GO only when nothing in it would be judged differently under rules v8.
+func TestHistoryCheck(t *testing.T) {
+	committed, err := os.ReadFile("../../pkg/consensus/testdata/committed_policy_updates_certen-testnet.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := strings.SplitN(strings.TrimSpace(string(committed)), "\n", 2)[0]
+	run := func(extra string) error {
+		blocks := [][]string{{`{"bundle_id":"x"}`}, {}, {legacy}}
+		if extra != "" {
+			blocks = append(blocks, []string{extra})
+		}
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			var req struct {
+				Method string            `json:"method"`
+				Params map[string]string `json:"params"`
+			}
+			_ = json.Unmarshal(body, &req)
+			switch req.Method {
+			case "status":
+				_, _ = w.Write([]byte(`{"result":{"node_info":{"network":"certen-testnet"},"sync_info":{"latest_block_height":"` +
+					strconv.Itoa(len(blocks)) + `","earliest_block_height":"1"}}}`))
+			case "block":
+				h, _ := strconv.Atoi(req.Params["height"])
+				var enc []string
+				for _, tx := range blocks[h-1] {
+					enc = append(enc, `"`+base64.StdEncoding.EncodeToString([]byte(tx))+`"`)
+				}
+				_, _ = w.Write([]byte(`{"result":{"block":{"data":{"txs":[` + strings.Join(enc, ",") + `]}}}}`))
+			}
+		}))
+		defer srv.Close()
+		var err error
+		captureStdout(t, func() { err = historyCheck([]string{"--rpc", srv.URL}, srv.Client()) })
+		return err
+	}
+	if err := run(""); err != nil {
+		t.Fatalf("a clean history: %v", err)
+	}
+	if err := run(`{"kind":"certen.chain.tick/v1","nonce":"0011223344556677"}`); err == nil {
+		t.Fatal("a history holding a tick passed")
+	}
+	if err := run(`{"kind":"certen.policy.update/v1","mode":"off","activation_unix":1,"version":9}`); err == nil {
+		t.Fatal("a history holding an unrecognised policy update passed")
+	}
 }

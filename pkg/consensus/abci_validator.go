@@ -118,15 +118,21 @@ func (app *ValidatorApp) committedRulesVersion() uint64 {
 
 // SetGenesis gives the app the chain's genesis validator set and chain id, which rotation is judged against.
 // Called once, before the node starts, from the genesis file CometBFT itself runs on.
+//
+// The chain id is kept even when the validators cannot be used for rotation: policy updates are bound to it
+// (RB3-F117), and it is identical on every node.
 func (app *ValidatorApp) SetGenesis(doc *cmttypes.GenesisDoc) error {
+	if doc == nil {
+		return fmt.Errorf("no genesis")
+	}
+	app.mu.Lock()
+	defer app.mu.Unlock()
+	app.cometChainID = doc.ChainID
 	validators, err := GenesisValidatorsFrom(doc)
 	if err != nil {
 		return err
 	}
-	app.mu.Lock()
-	defer app.mu.Unlock()
 	app.genesisValidators = validators
-	app.cometChainID = doc.ChainID
 	return nil
 }
 

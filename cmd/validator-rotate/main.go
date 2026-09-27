@@ -727,6 +727,15 @@ func historyCheck(args []string, c rpcDoer) error {
 	if err := rpcCall(c, *rpc, "status", map[string]any{}, &st); err != nil {
 		return err
 	}
+	var chainStatus struct {
+		NodeInfo struct {
+			Network string `json:"network"`
+		} `json:"node_info"`
+	}
+	if err := rpcCall(c, *rpc, "status", map[string]any{}, &chainStatus); err != nil {
+		return err
+	}
+	chainID := chainStatus.NodeInfo.Network
 	var latest, earliest int64
 	fmt.Sscanf(st.SyncInfo.LatestBlockHeight, "%d", &latest)
 	fmt.Sscanf(st.SyncInfo.EarliestBlockHeight, "%d", &earliest)
@@ -761,6 +770,14 @@ func historyCheck(args []string, c rpcDoer) error {
 			if v8Kinds[k] {
 				found = append(found, fmt.Sprintf("block %d: %s", h, k))
 			}
+			// Rules v8 accepts a policy update committed before it only if it is one of the allowlisted
+			// ones (RB3-F117); any other would be judged differently on replay.
+			if k == consensus.PolicyUpdateKind {
+				pu, ok := consensus.DecodePolicyUpdate(raw)
+				if !ok || pu.ChainID != "" || !consensus.IsCommittedLegacyPolicyUpdate(chainID, pu) {
+					found = append(found, fmt.Sprintf("block %d: a policy update rules v8 does not recognise as committed before it", h))
+				}
+			}
 		}
 	}
 	fmt.Printf("blocks 1..%d read: %d with transactions, %d transactions\n", latest, blocksWithTxs, txs)
@@ -774,8 +791,8 @@ func historyCheck(args []string, c rpcDoer) error {
 		for _, f := range found {
 			fmt.Println("  FOUND:", f)
 		}
-		return errors.New("the chain holds transactions of a kind rules v8 adds: v8 must NOT continue this state")
+		return errors.New("the chain holds transactions rules v8 would judge differently: v8 must NOT continue this state")
 	}
-	fmt.Println("no transaction of a kind rules v8 adds: v8 continues this chain's history exactly")
+	fmt.Println("no transaction of a kind rules v8 adds, and every policy update is one v8 recognises: v8 continues this chain's history exactly")
 	return nil
 }
