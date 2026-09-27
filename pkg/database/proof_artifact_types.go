@@ -559,6 +559,8 @@ type ProofArtifactWithDetails struct {
 	Attestations     []ProofAttestation        `json:"attestations,omitempty"`
 	AnchorReference  *AnchorReferenceRecord    `json:"anchor_reference,omitempty"`
 	Verifications    []ProofVerificationRecord `json:"verifications,omitempty"`
+	// ValidatorQuorum is what the independent checkers were held to and what met it (RB3-F76).
+	ValidatorQuorum *ValidatorQuorum `json:"validator_quorum,omitempty"`
 }
 
 // ProofSummary is a lightweight proof listing

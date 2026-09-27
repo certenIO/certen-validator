@@ -1,6 +1,7 @@
 package database
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/hex"
@@ -161,7 +162,7 @@ func TestAnchorQuorumRecordsTheCreateTransactionsOwnBlock(t *testing.T) {
 	if block.Int64 != rec.AnchorCreateBlock || anchorTx.String != rec.AnchorCreateTx {
 		t.Fatalf("anchor_block_num=%v anchor_tx_hash=%v, want %d and the create transaction", block, anchorTx, rec.AnchorCreateBlock)
 	}
-	binding, err := NewProofArtifactRepository(testDB).GetLayer5Binding(ctx, rec.Members[0].IntentID, "")
+	binding, err := NewProofArtifactRepository(testDB).GetLayer5Binding(ctx, rec.Members[0].IntentID, "", 84532)
 	if err != nil {
 		t.Fatalf("binding: %v", err)
 	}
@@ -238,14 +239,14 @@ func TestTheLayer5BindingPairsABlockOnlyWithItsOwnTransaction(t *testing.T) {
 		t.Fatalf("row: %v", err)
 	}
 	artifacts := NewProofArtifactRepository(testDB)
-	binding, err := artifacts.GetLayer5Binding(ctx, rec.Members[0].IntentID, "")
+	binding, err := artifacts.GetLayer5Binding(ctx, rec.Members[0].IntentID, "", 84532)
 	if err != nil || binding.AnchorBlockNum != 0 {
 		t.Fatalf("with no recorded block the binding states block %d (the verify block is %d): %v", binding.AnchorBlockNum, rec.VerifyBlock, err)
 	}
 	if err := artifacts.SetAnchorBatchTxHash(ctx, row.BatchID, rec.AnchorCreateTx, 45943091); err != nil {
 		t.Fatalf("filling the block of the recorded transaction: %v", err)
 	}
-	if binding, err = artifacts.GetLayer5Binding(ctx, rec.Members[0].IntentID, ""); err != nil || binding.AnchorBlockNum != 45943091 {
+	if binding, err = artifacts.GetLayer5Binding(ctx, rec.Members[0].IntentID, "", 84532); err != nil || binding.AnchorBlockNum != 45943091 {
 		t.Fatalf("binding block = %d after it was recorded: %v", binding.AnchorBlockNum, err)
 	}
 	if err := artifacts.SetAnchorBatchTxHash(ctx, row.BatchID, "0x0bad"+strings.Repeat("11", 30), 7); !errors.Is(err, ErrAnchorTxAlreadyRecorded) {
@@ -254,7 +255,7 @@ func TestTheLayer5BindingPairsABlockOnlyWithItsOwnTransaction(t *testing.T) {
 	if _, err := testDB.ExecContext(ctx, `UPDATE anchor_batches SET anchor_tx_hash = $2 WHERE id = $1`, row.BatchID, "0x0bad"+strings.Repeat("22", 30)); err != nil {
 		t.Fatal(err)
 	}
-	if binding, err = artifacts.GetLayer5Binding(ctx, rec.Members[0].IntentID, ""); err != nil || binding.AnchorBlockNum != 0 {
+	if binding, err = artifacts.GetLayer5Binding(ctx, rec.Members[0].IntentID, "", 84532); err != nil || binding.AnchorBlockNum != 0 {
 		t.Fatalf("a block recorded with another transaction was stated for the create transaction: %d, %v", binding.AnchorBlockNum, err)
 	}
 }
@@ -396,7 +397,7 @@ func TestLayer5BindingIgnoresShadowRowsAndUsesTheAnchorCreateTx(t *testing.T) {
 	}
 
 	artifacts := NewProofArtifactRepository(testDB)
-	binding, err := artifacts.GetLayer5Binding(ctx, "", accumTx)
+	binding, err := artifacts.GetLayer5Binding(ctx, "", accumTx, 84532)
 	if err != nil {
 		t.Fatalf("binding lookup failed: %v", err)
 	}
@@ -434,7 +435,7 @@ func TestLayer5BindingReportsNoneWhenOnlyShadowRowsExist(t *testing.T) {
 	}
 
 	artifacts := NewProofArtifactRepository(testDB)
-	_, err := artifacts.GetLayer5Binding(ctx, "", accumTx)
+	_, err := artifacts.GetLayer5Binding(ctx, "", accumTx, 84532)
 	if !errors.Is(err, ErrNoBatchBinding) {
 		t.Fatalf("err = %v, want ErrNoBatchBinding", err)
 	}
@@ -497,7 +498,7 @@ func TestLayer5BindingFindsTheCanonicalRowByIntentWhenTheAccumHashIsOnlyOnShadow
 	}
 
 	// The live call: the orchestrator knows both, and the intent id is what reaches the canonical row.
-	binding, err := artifacts.GetLayer5Binding(ctx, intentID, accumTx)
+	binding, err := artifacts.GetLayer5Binding(ctx, intentID, accumTx, 84532)
 	if err != nil {
 		t.Fatalf("no binding found for an intent that HAS a canonical anchor: %v", err)
 	}
@@ -535,7 +536,7 @@ func TestLayer5BindingRefusesWhenOnlyShadowRowsExistForTheIntent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := artifacts.GetLayer5Binding(ctx, intentID, accumTx); !errors.Is(err, ErrNoBatchBinding) {
+	if _, err := artifacts.GetLayer5Binding(ctx, intentID, accumTx, 84532); !errors.Is(err, ErrNoBatchBinding) {
 		t.Fatalf("expected ErrNoBatchBinding, got %v", err)
 	}
 }
@@ -752,5 +753,38 @@ func TestAnchorCreateTxAcceptsARealHash(t *testing.T) {
 	}
 	if got != real {
 		t.Fatalf("anchor_create_tx = %q, want %q", got, real)
+	}
+}
+
+// RB3-F86: an intent has one member per chain. Looked up by intent alone, the binding returned
+// whichever member was written last - for an intent settling on two chains at once, the other chain's
+// leaf, root and anchor.
+func TestLayer5BindingSelectsTheMemberOnItsChain(t *testing.T) {
+	repo := anchorRepoForTest(t)
+	ctx := context.Background()
+	artifacts := NewProofArtifactRepository(testDB)
+	intentID := "intent-f86-" + uuid.NewString()
+
+	base := anchorRecordForTest(84532, bundleHex(8601), 0xb1)
+	base.Members[0].IntentID, base.Members[0].AccumTxHash = intentID, ""
+	arb := anchorRecordForTest(421614, bundleHex(8602), 0xa2)
+	arb.TargetChain = "arbitrum-sepolia"
+	arb.Members[0].IntentID, arb.Members[0].AccumTxHash = intentID, ""
+	for _, rec := range []*AnchorQuorumRecord{base, arb} { // Arbitrum's written last
+		if _, err := repo.RecordAnchorQuorum(ctx, rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for chainID, want := range map[int64][]byte{84532: base.Root, 421614: arb.Root} {
+		b, err := artifacts.GetLayer5Binding(ctx, intentID, "", chainID)
+		if err != nil {
+			t.Fatalf("chain %d: %v", chainID, err)
+		}
+		if !bytes.Equal(b.BatchRoot, want) {
+			t.Fatalf("chain %d's member was bound to root %x…, the other chain's member", chainID, b.BatchRoot[:4])
+		}
+	}
+	if _, err := artifacts.GetLayer5Binding(ctx, intentID, "", 11155111); !errors.Is(err, ErrNoBatchBinding) {
+		t.Fatalf("a chain the intent has no member on: %v", err)
 	}
 }

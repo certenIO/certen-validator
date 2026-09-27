@@ -101,9 +101,9 @@ func TestProofCycle_RecordedFailureNamesItsChain(t *testing.T) {
 	}
 }
 
-// Every member is one chain's: a two-chain intent's member closes its own cycle, and its committed
-// call legs say which chain each executes on - the member's transaction is the execution only for
-// the legs on its own chain.
+// Every member is one chain's: a two-chain intent's member closes its own cycle on its own chain. What
+// it is held to - only the legs on that chain - is read from the signed intent by the gate itself
+// (execution: TestMemberLegsAreTheSignedMemberOnTheChain, TestContractCallGateSelectsLegsBySignedChain).
 func TestProofCycle_MemberCallLegsCarryTheirSignedChain(t *testing.T) {
 	orch := &routeOrchestrator{}
 	bv := failureTestValidator(orch)
@@ -115,22 +115,15 @@ func TestProofCycle_MemberCallLegsCarryTheirSignedChain(t *testing.T) {
 	if orch.method != "StartProofCycleWithAccumulateRef" {
 		t.Fatalf("a chain member was routed to %s", orch.method)
 	}
-	legs, _ := orch.commitment["rbContractCallLegs"].([]map[string]interface{})
-	if len(legs) != 2 {
-		t.Fatalf("call legs = %v", orch.commitment["rbContractCallLegs"])
+	if got := orch.commitment["targetChain"]; got != "84532" {
+		t.Fatalf("the member's cycle is on chain %v, want 84532", got)
 	}
-	for _, l := range legs {
-		switch l["chainId"] {
-		case int64(84532):
-			if l["execTxHash"] != settledTx {
-				t.Errorf("the member's own leg does not carry its transaction: %v", l["execTxHash"])
-			}
-		case int64(421614):
-			if l["execTxHash"] != "" {
-				t.Errorf("the other chain's leg was given this member's transaction %v", l["execTxHash"])
-			}
-		default:
-			t.Errorf("call leg without its signed chain id: %v", l)
+	if chains, _ := orch.commitment["memberChains"].([]int64); len(chains) != 2 {
+		t.Fatalf("member set %v, want both chains", orch.commitment["memberChains"])
+	}
+	for _, dead := range []string{"rbContractCall", "rbContractCallLegs", "operationID", "rawCreateTxHashes", "rawVerifyTxHashes", "rawGovernanceTxHashes"} {
+		if _, ok := orch.commitment[dead]; ok {
+			t.Errorf("the commitment still carries %q, which nothing reads (RB3-F69)", dead)
 		}
 	}
 }

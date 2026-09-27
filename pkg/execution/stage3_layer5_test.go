@@ -243,17 +243,17 @@ func TestS3_BuildLayer5RefusesAnUnverifiableBinding(t *testing.T) {
 	root := make([]byte, 32)
 	root[0] = 2
 
-	// No batch binding and leaf != root: there is no path, so this proof cannot
-	// be shown to be under that root. It must be refused, not stored.
-	_, err := BuildLayer5(nil, testObservation("0xabc", 42), leaf, root, 84532)
+	// A canonical row whose leaf is not the root and which carries no path: this proof cannot be shown
+	// to be under that root. It must be refused, not stored.
+	_, err := BuildLayer5(&database.Layer5Binding{BatchID: uuid.New(), LeafHash: leaf, BatchRoot: root}, testObservation("0xabc", 42), 84532)
 	if err == nil {
 		t.Fatal("CRITICAL DEFECT: BuildLayer5 accepted a leaf that is not under the root it names, " +
 			"with no path to bridge them")
 	}
 	t.Logf("refused: %v", err)
 
-	// Same leaf and root: a legitimate one-member batch. Must build.
-	l5, err := BuildLayer5(nil, testObservation("0xabc", 42), leaf, leaf, 84532)
+	// A one-member batch's canonical row: leaf IS root, empty path. Must build.
+	l5, err := BuildLayer5(&database.Layer5Binding{BatchID: uuid.New(), LeafHash: leaf, BatchRoot: leaf}, testObservation("0xabc", 42), 84532)
 	if err != nil {
 		t.Fatalf("a one-member batch must build: %v", err)
 	}
@@ -261,9 +261,14 @@ func TestS3_BuildLayer5RefusesAnUnverifiableBinding(t *testing.T) {
 		t.Fatalf("expected a one-member binding with an empty path, got %+v", l5)
 	}
 
-	// No external transaction: nothing to bind to, so nothing is written. Not an
-	// error — an absent L5 is honest, a fabricated one is not.
-	l5, err = BuildLayer5(nil, testObservation("", 0), leaf, leaf, 84532)
+	// No canonical row: nothing to bind. It used to accept the cycle's own leaf and root when they
+	// were equal - the operation commitment twice - as a one-member tree (RB3-F85).
+	if l5, err := BuildLayer5(nil, testObservation("0xabc", 42), 84532); err != nil || l5 != nil {
+		t.Fatalf("with no canonical row BuildLayer5 must return (nil, nil), got (%v, %v)", l5, err)
+	}
+
+	// No external transaction: nothing to bind to, so nothing is written.
+	l5, err = BuildLayer5(&database.Layer5Binding{BatchID: uuid.New(), LeafHash: leaf, BatchRoot: leaf}, testObservation("", 0), 84532)
 	if err != nil || l5 != nil {
 		t.Fatalf("with no external coordinates BuildLayer5 must return (nil, nil), got (%v, %v)", l5, err)
 	}
@@ -284,7 +289,7 @@ func TestS3_SixLayerRowsPerProof(t *testing.T) {
 	// L5, through the shared writer, for a one-member batch.
 	leaf := make([]byte, 32)
 	leaf[0] = 7
-	l5, err := BuildLayer5(nil, testObservation("0xfeedface", 45937480), leaf, leaf, 84532)
+	l5, err := BuildLayer5(&database.Layer5Binding{BatchID: uuid.New(), LeafHash: leaf, BatchRoot: leaf}, testObservation("0xfeedface", 45937480), 84532)
 	if err != nil || l5 == nil {
 		t.Fatalf("build layer 5: %v", err)
 	}
@@ -437,9 +442,6 @@ func TestS3_BuildLayer5UsesTheBatchLeafNotTheOperationCommitment(t *testing.T) {
 	leafArr := s3Leaf("acc://certen-demo.acme", 1, 1)
 	root := leafArr // one-member batch: MerkleRoot returns the leaf itself
 
-	opCommitment := make([]byte, 32)
-	opCommitment[0] = 0x4b // stands in for 4b0149…, which is NOT the leaf
-
 	binding := &database.Layer5Binding{
 		BatchID:   uuid.New(),
 		LeafHash:  leafArr[:],
@@ -447,7 +449,7 @@ func TestS3_BuildLayer5UsesTheBatchLeafNotTheOperationCommitment(t *testing.T) {
 		TreeIndex: 0,
 	}
 
-	l5, err := BuildLayer5(binding, testObservation("0xabc", 42), opCommitment, opCommitment, 84532)
+	l5, err := BuildLayer5(binding, testObservation("0xabc", 42), 84532)
 	if err != nil {
 		t.Fatalf("BuildLayer5: %v", err)
 	}

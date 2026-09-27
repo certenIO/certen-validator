@@ -9,6 +9,7 @@ import (
 
 	"github.com/certen/independant-validator/pkg/consensus"
 	"github.com/certen/independant-validator/pkg/crypto/bls"
+	"github.com/certen/independant-validator/pkg/database"
 	"github.com/certen/independant-validator/pkg/execution/contracts"
 )
 
@@ -47,10 +48,11 @@ import (
 // is retried and, if quorum never forms, its members are recorded as FAILED - never settled on a
 // weaker signature.
 
-// batchQuorumThresholdNum / Den express the quorum rule the anchor enforces (2/3 by power).
+// batchQuorumThresholdNum / Den express the quorum rule the anchor enforces (2/3 by power), stated
+// once, where proof details report it as the checkers' requirement.
 const (
-	batchQuorumThresholdNum int64 = 2
-	batchQuorumThresholdDen int64 = 3
+	batchQuorumThresholdNum = database.AnchorQuorumThresholdNumerator
+	batchQuorumThresholdDen = database.AnchorQuorumThresholdDenominator
 )
 
 // BatchQuorumAttestor implements QuorumProver by running a real peer quorum.

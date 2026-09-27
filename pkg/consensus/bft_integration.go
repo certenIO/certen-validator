@@ -911,12 +911,13 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 
 	bv.logger.Printf("🎯 [PROOF-CLASS] Intent %s has proof class: %s", certenIntent.IntentID, proofClass)
 
-	// CRITICAL: on_demand intents MUST have a non-nil CertenProof
-	if proofClass == "on_demand" && certenProof == nil {
-		return nil, fmt.Errorf(
-			"on_demand intent %s requires a non-nil CertenProof (got nil); ProofGenerator must be wired before calling ExecuteCanonicalIntentWithBFTConsensus",
-			certenIntent.IntentID,
-		)
+	// Every intent, whatever its proof class, is built on its L1-L4 proof. on_cadence used to be built
+	// without one, on anchor references that named no block ("pending_anchor_block_<height>",
+	// "pending_anchor_tx_<intent>"), no governance and no BLS signature (RB3-F88); discovery already
+	// refuses to reach consensus without the proof, so this is where that rule is kept, not assumed.
+	if certenProof == nil {
+		return nil, fmt.Errorf("%s intent %s reached consensus without its CertenProof; Certen has no degraded proof mode",
+			proofClass, certenIntent.IntentID)
 	}
 
 	// Handle proof data extraction
@@ -925,10 +926,7 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	var anchorRef AccumulateAnchorReference
 	var liteClientProof *lcproof.CompleteProof
 
-	// Governance proof variables — declared OUTSIDE the if-block so the
-	// validator-block builder (further below) and on_cadence fallback both
-	// see them as nil/empty when proofs weren't generated. V6.1 A+++ requires
-	// these to be available BEFORE BLS signing, hence the move from below.
+	// Governance proof variables. V6.1 A+++ requires these to be available BEFORE BLS signing.
 	var g0Proof *proof.G0Result
 	var g1Proof *proof.G1Result
 	var g2Proof *proof.G2Result
@@ -949,252 +947,222 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	var resolvedKeyPageURL string
 	resolvedKeyBookURL := governanceData.Authorization.RequiredKeyBook
 
-	if certenProof != nil {
-		bv.logger.Printf("✅ [CANONICAL-VB] Using real proof data for intent: %s", certenIntent.IntentID)
-		blsSignature = certenProof.BLSAggregateSignature
-		validatorSignatures = certenProof.ValidatorSignatures
+	bv.logger.Printf("✅ [CANONICAL-VB] Using real proof data for intent: %s", certenIntent.IntentID)
+	blsSignature = certenProof.BLSAggregateSignature
+	validatorSignatures = certenProof.ValidatorSignatures
 
-		// Safely extract anchor reference with nil checks
-		if certenProof.AccumulateAnchor != nil {
-			anchorRef = AccumulateAnchorReference{
-				BlockHash:   certenProof.AccumulateAnchor.BlockHash,
-				BlockHeight: certenProof.AccumulateAnchor.BlockHeight,
-				TxHash:      certenProof.AccumulateAnchor.TxHash,
-				AccountURL:  certenProof.AccountURL,
-			}
-		} else {
-			// Fallback anchor reference when AccumulateAnchor is nil (partial proof)
-			bv.logger.Printf("⚠️ [CANONICAL-VB] AccumulateAnchor is nil for intent %s, using fallback values", certenIntent.IntentID)
-			anchorRef = AccumulateAnchorReference{
-				BlockHash:   fmt.Sprintf("proof_pending_block_%d", blockHeight),
-				BlockHeight: blockHeight,
-				TxHash:      certenProof.TransactionHash, // Use transaction hash from proof if available
-				AccountURL:  certenProof.AccountURL,
-			}
-		}
-
-		if certenProof.LiteClientProof != nil {
-			liteClientProof = certenProof.LiteClientProof.CompleteProof
-		}
-
-		// Validator's individual ed25519 signature over opID. This is for
-		// BFT consensus votes (CometBFT layer), NOT the EVM-side BLS sig.
-		// Keep signing opID here — CometBFT consensus is opID-based.
-		if len(validatorSignatures) == 0 && bv.privateKey != nil {
-			opID, err := certenIntent.OperationID()
-			if err == nil {
-				message := []byte(opID)
-				signature := ed25519.Sign(bv.privateKey, message)
-				signatureHex := hex.EncodeToString(signature)
-				validatorSignatures = []string{signatureHex}
-				bv.logger.Printf("🔑 [VALIDATOR-SIG] Generated initial validator signature for intent %s (opID: %s...)",
-					certenIntent.IntentID, opID[:16])
-			} else {
-				bv.logger.Printf("⚠️ [VALIDATOR-SIG] Failed to compute operationID for signing: %v", err)
-			}
-		}
-
-		// ====================================================================
-		// V6.1 A+++ ORDERING: Generate G0/G1/G2 governance proofs BEFORE the
-		// EVM-side BLS signature, so the messageHash the validator signs is
-		// bound to the same governance outputs the EVM submission path will
-		// recompute. Pre-V6.1 this block ran AFTER BLS signing, which is why
-		// govRoot was forced into a `keccak256(BLS sig)` shortcut that
-		// produced unverifiable circular hashes.
-		//
-		// Per CERTEN spec v3-governance-kpsw-exec-4.0:
-		// - G0/G1/G2 proofs are generated AFTER L1-L4 lite client proof completes
-		// - L1-L4 provides the cryptographic foundation that the transaction EXISTS
-		// - G0 extracts TXID, EXEC_MBI from the PROVEN transaction
-		// - G1 validates key page authority AT execution time
-		// - G2 verifies Accumulate intent payload authenticity and effect binding
-		// NOTE: G2 is about the Accumulate intent, NOT external chain execution
-		// ====================================================================
-		if liteClientProof != nil && bv.governanceProofGen != nil {
-			bv.logger.Printf("🔗 [GOV-PROOF] L1-L4 proof complete, generating G0/G1/G2 governance proofs for intent %s",
-				certenIntent.IntentID)
-
-			// Build governance proof request from intent data
-			keyPageURL, keyPageErr := bv.resolveSigningKeyPage(ctx, certenIntent, governanceData)
-			if keyPageErr != nil {
-				return nil, fmt.Errorf("governance proof for intent %s cannot name its key page: %w",
-					certenIntent.IntentID, keyPageErr)
-			}
-			bv.logger.Printf("🔑 [GOV-PROOF] intent %s signed by key page %s (declared %q)",
-				certenIntent.IntentID, keyPageURL, governanceData.Authorization.RequiredKeyPage)
-			resolvedKeyPageURL = keyPageURL
-			govRequest := &proof.GovernanceRequest{
-				AccountURL:      certenIntent.AccountURL,
-				TransactionHash: certenIntent.TransactionHash,
-				KeyPage:         keyPageURL,
-				Chain:           "main",
-			}
-
-			// G0, G1 AND G2 are ALL required. None is optional.
-			//
-			// This block previously logged a warning on every failure and
-			// carried on at whatever level it had reached, leaving
-			// governanceLevel at "G0" or "G1" while the intent was still
-			// signed and submitted. That is the same defect class as the
-			// signature-evidence and outcome-binding bugs: a proof succeeding
-			// with less evidence than the spec requires, with the shortfall
-			// visible only as a warning in a log nobody reads.
-			//
-			// A governance proof that does not bind its outcome is not a
-			// governance proof. Fail the intent instead of attesting to a
-			// weaker claim than the one being made.
-			if govRequest.KeyPage == "" {
-				return nil, fmt.Errorf("governance proof requires a key page: "+
-					"G1/G2 cannot be established without one, and G0 alone is not a governance proof "+
-					"(intent %s)", certenIntent.IntentID)
-			}
-
-			g0ProofWrapper, g0Err := bv.governanceProofGen.GenerateG0(ctx, govRequest)
-			if g0Err != nil {
-				return nil, fmt.Errorf("G0 governance proof failed for intent %s: %w", certenIntent.IntentID, g0Err)
-			}
-			if g0ProofWrapper == nil || g0ProofWrapper.G0 == nil {
-				return nil, fmt.Errorf("G0 governance proof returned no result for intent %s", certenIntent.IntentID)
-			}
-			g0Proof = g0ProofWrapper.G0
-			govReceipts = append(govReceipts, g0ProofWrapper.Receipts...)
-			if !g0Proof.G0ProofComplete {
-				return nil, fmt.Errorf("G0 governance proof incomplete for intent %s", certenIntent.IntentID)
-			}
-			// G0 is final because its receipt is the chained proof's L1
-			// receipt, ending at the root the BVN quorum signed, at the block
-			// it signed it (pkg/proof/g0_binding.go). Two proofs of one entry
-			// that disagree describe different facts.
-			if err := proof.BindG0ToChainedProof(g0Proof, liteClientProof); err != nil {
-				return nil, fmt.Errorf("G0 governance proof for intent %s does not bind to its chained proof: %w",
-					certenIntent.IntentID, err)
-			}
-			governanceLevel = "G0"
-			bv.logger.Printf("✅ [GOV-PROOF] G0 proof generated: TXID=%s, ExecMBI=%d, Complete=%v",
-				g0Proof.TXID, g0Proof.ExecMBI, g0Proof.G0ProofComplete)
-
-			g1ProofWrapper, g1Err := bv.governanceProofGen.GenerateG1(ctx, govRequest)
-			if g1Err != nil {
-				return nil, fmt.Errorf("G1 governance proof failed for intent %s: %w", certenIntent.IntentID, g1Err)
-			}
-			if g1ProofWrapper == nil || g1ProofWrapper.G1 == nil {
-				return nil, fmt.Errorf("G1 governance proof returned no result for intent %s", certenIntent.IntentID)
-			}
-			g1Proof = g1ProofWrapper.G1
-			govReceipts = append(govReceipts, g1ProofWrapper.Receipts...)
-			govTimingBasis = append(govTimingBasis, g1ProofWrapper.TimingBasis...)
-			if !g1Proof.G1ProofComplete || !g1Proof.ThresholdSatisfied {
-				return nil, fmt.Errorf("G1 governance proof incomplete for intent %s "+
-					"(complete=%v thresholdSatisfied=%v uniqueKeys=%d)",
-					certenIntent.IntentID, g1Proof.G1ProofComplete, g1Proof.ThresholdSatisfied, g1Proof.UniqueValidKeys)
-			}
-			governanceLevel = "G1"
-			bv.logger.Printf("✅ [GOV-PROOF] G1 proof generated: ThresholdSatisfied=%v, UniqueKeys=%d, Complete=%v",
-				g1Proof.ThresholdSatisfied, g1Proof.UniqueValidKeys, g1Proof.G1ProofComplete)
-
-			g2ProofWrapper, g2Err := bv.governanceProofGen.GenerateG2(ctx, govRequest)
-			if g2Err != nil {
-				return nil, fmt.Errorf("G2 governance proof failed for intent %s: %w", certenIntent.IntentID, g2Err)
-			}
-			if g2ProofWrapper == nil || g2ProofWrapper.G2 == nil {
-				return nil, fmt.Errorf("G2 governance proof returned no result for intent %s", certenIntent.IntentID)
-			}
-			g2Proof = g2ProofWrapper.G2
-			govReceipts = append(govReceipts, g2ProofWrapper.Receipts...)
-			govTimingBasis = append(govTimingBasis, g2ProofWrapper.TimingBasis...)
-			if !g2Proof.G2ProofComplete {
-				return nil, fmt.Errorf("G2 governance proof incomplete for intent %s "+
-					"(payloadVerified=%v effectVerified=%v): the outcome is not bound, so this is a G1 claim "+
-					"and must not be recorded as governance",
-					certenIntent.IntentID, g2Proof.PayloadVerified, g2Proof.EffectVerified)
-			}
-			governanceLevel = "G2"
-			bv.logger.Printf("✅ [GOV-PROOF] G2 proof generated: PayloadVerified=%v, EffectVerified=%v, Complete=%v",
-				g2Proof.PayloadVerified, g2Proof.EffectVerified, g2Proof.G2ProofComplete)
-		} else {
-			// Neither branch may proceed without governance. L1-L4 establishes
-			// that the transaction exists; G0-G2 establishes that it was
-			// authorised and what it did. Attesting with one and not the other
-			// claims more than has been proven.
-			if liteClientProof == nil {
-				return nil, fmt.Errorf("cannot generate governance proofs for intent %s: "+
-					"the L1-L4 lite client proof is not available", certenIntent.IntentID)
-			}
-			if bv.governanceProofGen == nil {
-				return nil, fmt.Errorf("cannot generate governance proofs for intent %s: "+
-					"the governance proof generator is not configured", certenIntent.IntentID)
-			}
-			return nil, fmt.Errorf("governance proofs were not generated for intent %s", certenIntent.IntentID)
-		}
-
-		// Plumb governance proofs + authority URLs onto certenProof so the
-		// EVM submission path (pkg/execution/ethereum_contracts.go::
-		// buildComprehensiveProof) sees identical inputs and recomputes the
-		// SAME A+++ messageHash this validator is about to sign. Both sides
-		// call contracts.BuildV6_1PreExecBundleFromIntent with this proof.
-		certenProof.G0Result = g0Proof
-		certenProof.G1Result = g1Proof
-		certenProof.G2Result = g2Proof
-		// Beside the results, never inside them. RequireL4Committed and the BLS
-		// signing below both run AFTER this assignment and neither reads this
-		// field, which is the point: it cannot reach a hash.
-		certenProof.GovReceipts = govReceipts
-		certenProof.GovTimingBasis = govTimingBasis
-		certenProof.KeypageURL = resolvedKeyPageURL
-		certenProof.KeybookURL = resolvedKeyBookURL
-
-		// L4 must be committed into the governance root before anything is
-		// signed. SetL4ConsensusProofFromJSON leaves the slot ZERO on an absent
-		// payload, so nothing downstream can tell a missing quorum apart from a
-		// committed one without this check.
-		//
-		// Before this change the chain committed to L1-L3 and G0-G2 but not to
-		// the validator quorum that signed the anchors. Note that the old slot
-		// was NOT zero: every call site passes a typed *ConsensusProof, and a
-		// nil typed pointer is not `v == nil`, so json.Marshal produced "null"
-		// and the slot carried a constant non-zero hash. See isAbsentPayload.
-		//
-		// Both L4 legs are already mandatory for the proof to exist at all
-		// (ProofVerifier.Verify rejects a nil leg), so reaching here without a
-		// payload means the plumbing broke, not that L4 was unavailable.
-		if err := proof.RequireL4Committed(certenProof); err != nil {
-			return nil, fmt.Errorf("intent %s: %w", certenIntent.IntentID, err)
-		}
-
-		// V6.1 A+++ BLS signing: sign the messageHash that CertenAnchorV6_1
-		// will recompute and verify. Pre-V6.1 this signed []byte(opID),
-		// which is why every TX2 reverted with "BLS signature verification
-		// failed" — the contract checked a chain-bound 6-field hash that
-		// committed exec, opID, validatorSetRoot, AND a 10-field A+++ govRoot.
-		if blsSignature == "" {
-			sig, err := signV6_1PreExecBLS(bv.logger, certenIntent, certenProof)
-			if err != nil {
-				bv.logger.Printf("⚠️ [BLS-SIG-V6.1] %v", err)
-			} else {
-				blsSignature = sig
-				bv.logger.Printf("🔐 [BLS-SIG-V6.1] Generated A+++ BLS signature for intent %s (gov=%s)",
-					certenIntent.IntentID, governanceLevel)
-			}
-		}
-	} else {
-		// This branch should ONLY be used for on_cadence flows where proof comes later
-		if proofClass != "on_cadence" {
-			return nil, fmt.Errorf("proof class %s requires a CertenProof, but got nil", proofClass)
-		}
-		bv.logger.Printf("⚠️ [CANONICAL-VB] Using fallback values for on_cadence intent without immediate proof: %s", certenIntent.IntentID)
-		blsSignature = ""
-		validatorSignatures = []string{} // This will trigger validation error for pre-execution
-		anchorRef = AccumulateAnchorReference{
-			BlockHash:   fmt.Sprintf("pending_anchor_block_%d", blockHeight),
-			BlockHeight: blockHeight,
-			TxHash:      fmt.Sprintf("pending_anchor_tx_%s", certenIntent.IntentID),
-		}
-		liteClientProof = nil
+	// The block's Accumulate anchor is the one its proof established, all of it, or there is no block
+	// (RB3-F88). A partial proof used to be given "proof_pending_block_<height>" - the CometBFT height
+	// standing in for an Accumulate one.
+	anchorRef, err = accumulateAnchorOf(certenProof)
+	if err != nil {
+		return nil, fmt.Errorf("intent %s: %w", certenIntent.IntentID, err)
 	}
-	// Suppress "declared and not used" if the on_cadence branch left these zero.
-	_ = resolvedKeyPageURL
-	_ = resolvedKeyBookURL
 
+	if certenProof.LiteClientProof != nil {
+		liteClientProof = certenProof.LiteClientProof.CompleteProof
+	}
+
+	// Validator's individual ed25519 signature over opID. This is for
+	// BFT consensus votes (CometBFT layer), NOT the EVM-side BLS sig.
+	// Keep signing opID here — CometBFT consensus is opID-based.
+	if len(validatorSignatures) == 0 && bv.privateKey != nil {
+		opID, err := certenIntent.OperationID()
+		if err == nil {
+			message := []byte(opID)
+			signature := ed25519.Sign(bv.privateKey, message)
+			signatureHex := hex.EncodeToString(signature)
+			validatorSignatures = []string{signatureHex}
+			bv.logger.Printf("🔑 [VALIDATOR-SIG] Generated initial validator signature for intent %s (opID: %s...)",
+				certenIntent.IntentID, opID[:16])
+		} else {
+			bv.logger.Printf("⚠️ [VALIDATOR-SIG] Failed to compute operationID for signing: %v", err)
+		}
+	}
+
+	// ====================================================================
+	// V6.1 A+++ ORDERING: Generate G0/G1/G2 governance proofs BEFORE the
+	// EVM-side BLS signature, so the messageHash the validator signs is
+	// bound to the same governance outputs the EVM submission path will
+	// recompute. Pre-V6.1 this block ran AFTER BLS signing, which is why
+	// govRoot was forced into a `keccak256(BLS sig)` shortcut that
+	// produced unverifiable circular hashes.
+	//
+	// Per CERTEN spec v3-governance-kpsw-exec-4.0:
+	// - G0/G1/G2 proofs are generated AFTER L1-L4 lite client proof completes
+	// - L1-L4 provides the cryptographic foundation that the transaction EXISTS
+	// - G0 extracts TXID, EXEC_MBI from the PROVEN transaction
+	// - G1 validates key page authority AT execution time
+	// - G2 verifies Accumulate intent payload authenticity and effect binding
+	// NOTE: G2 is about the Accumulate intent, NOT external chain execution
+	// ====================================================================
+	if liteClientProof != nil && bv.governanceProofGen != nil {
+		bv.logger.Printf("🔗 [GOV-PROOF] L1-L4 proof complete, generating G0/G1/G2 governance proofs for intent %s",
+			certenIntent.IntentID)
+
+		// Build governance proof request from intent data
+		keyPageURL, keyPageErr := bv.resolveSigningKeyPage(ctx, certenIntent, governanceData)
+		if keyPageErr != nil {
+			return nil, fmt.Errorf("governance proof for intent %s cannot name its key page: %w",
+				certenIntent.IntentID, keyPageErr)
+		}
+		bv.logger.Printf("🔑 [GOV-PROOF] intent %s signed by key page %s (declared %q)",
+			certenIntent.IntentID, keyPageURL, governanceData.Authorization.RequiredKeyPage)
+		resolvedKeyPageURL = keyPageURL
+		govRequest := &proof.GovernanceRequest{
+			AccountURL:      certenIntent.AccountURL,
+			TransactionHash: certenIntent.TransactionHash,
+			KeyPage:         keyPageURL,
+			Chain:           "main",
+		}
+
+		// G0, G1 AND G2 are ALL required. None is optional.
+		//
+		// This block previously logged a warning on every failure and
+		// carried on at whatever level it had reached, leaving
+		// governanceLevel at "G0" or "G1" while the intent was still
+		// signed and submitted. That is the same defect class as the
+		// signature-evidence and outcome-binding bugs: a proof succeeding
+		// with less evidence than the spec requires, with the shortfall
+		// visible only as a warning in a log nobody reads.
+		//
+		// A governance proof that does not bind its outcome is not a
+		// governance proof. Fail the intent instead of attesting to a
+		// weaker claim than the one being made.
+		if govRequest.KeyPage == "" {
+			return nil, fmt.Errorf("governance proof requires a key page: "+
+				"G1/G2 cannot be established without one, and G0 alone is not a governance proof "+
+				"(intent %s)", certenIntent.IntentID)
+		}
+
+		g0ProofWrapper, g0Err := bv.governanceProofGen.GenerateG0(ctx, govRequest)
+		if g0Err != nil {
+			return nil, fmt.Errorf("G0 governance proof failed for intent %s: %w", certenIntent.IntentID, g0Err)
+		}
+		if g0ProofWrapper == nil || g0ProofWrapper.G0 == nil {
+			return nil, fmt.Errorf("G0 governance proof returned no result for intent %s", certenIntent.IntentID)
+		}
+		g0Proof = g0ProofWrapper.G0
+		govReceipts = append(govReceipts, g0ProofWrapper.Receipts...)
+		if !g0Proof.G0ProofComplete {
+			return nil, fmt.Errorf("G0 governance proof incomplete for intent %s", certenIntent.IntentID)
+		}
+		// G0 is final because its receipt is the chained proof's L1
+		// receipt, ending at the root the BVN quorum signed, at the block
+		// it signed it (pkg/proof/g0_binding.go). Two proofs of one entry
+		// that disagree describe different facts.
+		if err := proof.BindG0ToChainedProof(g0Proof, liteClientProof); err != nil {
+			return nil, fmt.Errorf("G0 governance proof for intent %s does not bind to its chained proof: %w",
+				certenIntent.IntentID, err)
+		}
+		governanceLevel = "G0"
+		bv.logger.Printf("✅ [GOV-PROOF] G0 proof generated: TXID=%s, ExecMBI=%d, Complete=%v",
+			g0Proof.TXID, g0Proof.ExecMBI, g0Proof.G0ProofComplete)
+
+		g1ProofWrapper, g1Err := bv.governanceProofGen.GenerateG1(ctx, govRequest)
+		if g1Err != nil {
+			return nil, fmt.Errorf("G1 governance proof failed for intent %s: %w", certenIntent.IntentID, g1Err)
+		}
+		if g1ProofWrapper == nil || g1ProofWrapper.G1 == nil {
+			return nil, fmt.Errorf("G1 governance proof returned no result for intent %s", certenIntent.IntentID)
+		}
+		g1Proof = g1ProofWrapper.G1
+		govReceipts = append(govReceipts, g1ProofWrapper.Receipts...)
+		govTimingBasis = append(govTimingBasis, g1ProofWrapper.TimingBasis...)
+		if !g1Proof.G1ProofComplete || !g1Proof.ThresholdSatisfied {
+			return nil, fmt.Errorf("G1 governance proof incomplete for intent %s "+
+				"(complete=%v thresholdSatisfied=%v uniqueKeys=%d)",
+				certenIntent.IntentID, g1Proof.G1ProofComplete, g1Proof.ThresholdSatisfied, g1Proof.UniqueValidKeys)
+		}
+		governanceLevel = "G1"
+		bv.logger.Printf("✅ [GOV-PROOF] G1 proof generated: ThresholdSatisfied=%v, UniqueKeys=%d, Complete=%v",
+			g1Proof.ThresholdSatisfied, g1Proof.UniqueValidKeys, g1Proof.G1ProofComplete)
+
+		g2ProofWrapper, g2Err := bv.governanceProofGen.GenerateG2(ctx, govRequest)
+		if g2Err != nil {
+			return nil, fmt.Errorf("G2 governance proof failed for intent %s: %w", certenIntent.IntentID, g2Err)
+		}
+		if g2ProofWrapper == nil || g2ProofWrapper.G2 == nil {
+			return nil, fmt.Errorf("G2 governance proof returned no result for intent %s", certenIntent.IntentID)
+		}
+		g2Proof = g2ProofWrapper.G2
+		govReceipts = append(govReceipts, g2ProofWrapper.Receipts...)
+		govTimingBasis = append(govTimingBasis, g2ProofWrapper.TimingBasis...)
+		if !g2Proof.G2ProofComplete {
+			return nil, fmt.Errorf("G2 governance proof incomplete for intent %s "+
+				"(payloadVerified=%v effectVerified=%v): the outcome is not bound, so this is a G1 claim "+
+				"and must not be recorded as governance",
+				certenIntent.IntentID, g2Proof.PayloadVerified, g2Proof.EffectVerified)
+		}
+		governanceLevel = "G2"
+		bv.logger.Printf("✅ [GOV-PROOF] G2 proof generated: PayloadVerified=%v, EffectVerified=%v, Complete=%v",
+			g2Proof.PayloadVerified, g2Proof.EffectVerified, g2Proof.G2ProofComplete)
+	} else {
+		// Neither branch may proceed without governance. L1-L4 establishes
+		// that the transaction exists; G0-G2 establishes that it was
+		// authorised and what it did. Attesting with one and not the other
+		// claims more than has been proven.
+		if liteClientProof == nil {
+			return nil, fmt.Errorf("cannot generate governance proofs for intent %s: "+
+				"the L1-L4 lite client proof is not available", certenIntent.IntentID)
+		}
+		if bv.governanceProofGen == nil {
+			return nil, fmt.Errorf("cannot generate governance proofs for intent %s: "+
+				"the governance proof generator is not configured", certenIntent.IntentID)
+		}
+		return nil, fmt.Errorf("governance proofs were not generated for intent %s", certenIntent.IntentID)
+	}
+
+	// Plumb governance proofs + authority URLs onto certenProof so the
+	// EVM submission path (pkg/execution/ethereum_contracts.go::
+	// buildComprehensiveProof) sees identical inputs and recomputes the
+	// SAME A+++ messageHash this validator is about to sign. Both sides
+	// call contracts.BuildV6_1PreExecBundleFromIntent with this proof.
+	certenProof.G0Result = g0Proof
+	certenProof.G1Result = g1Proof
+	certenProof.G2Result = g2Proof
+	// Beside the results, never inside them. RequireL4Committed and the BLS
+	// signing below both run AFTER this assignment and neither reads this
+	// field, which is the point: it cannot reach a hash.
+	certenProof.GovReceipts = govReceipts
+	certenProof.GovTimingBasis = govTimingBasis
+	certenProof.KeypageURL = resolvedKeyPageURL
+	certenProof.KeybookURL = resolvedKeyBookURL
+
+	// L4 must be committed into the governance root before anything is
+	// signed. SetL4ConsensusProofFromJSON leaves the slot ZERO on an absent
+	// payload, so nothing downstream can tell a missing quorum apart from a
+	// committed one without this check.
+	//
+	// Before this change the chain committed to L1-L3 and G0-G2 but not to
+	// the validator quorum that signed the anchors. Note that the old slot
+	// was NOT zero: every call site passes a typed *ConsensusProof, and a
+	// nil typed pointer is not `v == nil`, so json.Marshal produced "null"
+	// and the slot carried a constant non-zero hash. See isAbsentPayload.
+	//
+	// Both L4 legs are already mandatory for the proof to exist at all
+	// (ProofVerifier.Verify rejects a nil leg), so reaching here without a
+	// payload means the plumbing broke, not that L4 was unavailable.
+	if err := proof.RequireL4Committed(certenProof); err != nil {
+		return nil, fmt.Errorf("intent %s: %w", certenIntent.IntentID, err)
+	}
+
+	// V6.1 A+++ BLS signing: sign the messageHash that CertenAnchorV6_1
+	// will recompute and verify. Pre-V6.1 this signed []byte(opID),
+	// which is why every TX2 reverted with "BLS signature verification
+	// failed" — the contract checked a chain-bound 6-field hash that
+	// committed exec, opID, validatorSetRoot, AND a 10-field A+++ govRoot.
+	if blsSignature == "" {
+		sig, err := signV6_1PreExecBLS(bv.logger, certenIntent, certenProof)
+		if err != nil {
+			// Refused here by name. It used to be logged and the block refused later by the builder
+			// as "ensure BLS key is initialized", whatever the reason had been.
+			return nil, fmt.Errorf("intent %s: BLS pre-execution signature: %w", certenIntent.IntentID, err)
+		}
+		blsSignature = sig
+		bv.logger.Printf("🔐 [BLS-SIG-V6.1] Generated A+++ BLS signature for intent %s (gov=%s)",
+			certenIntent.IntentID, governanceLevel)
+	}
 	// ====================================================================
 	// PHASE 3 ENTITLEMENT — does CERTEN agree to spend on this intent?
 	//
@@ -3434,4 +3402,20 @@ type SequencePredecessor struct {
 	Position int
 	// ContinueOnFailure: the intent's rollback policy is continue_on_failure.
 	ContinueOnFailure bool
+}
+
+// accumulateAnchorOf is the Accumulate anchor a proof established: its block hash, height and transaction.
+func accumulateAnchorOf(p *proof.CertenProof) (AccumulateAnchorReference, error) {
+	a := p.AccumulateAnchor
+	switch {
+	case a == nil:
+		return AccumulateAnchorReference{}, fmt.Errorf("the proof states no Accumulate anchor")
+	case a.BlockHash == "":
+		return AccumulateAnchorReference{}, fmt.Errorf("the proof's Accumulate anchor names no block hash")
+	case a.BlockHeight == 0:
+		return AccumulateAnchorReference{}, fmt.Errorf("the proof's Accumulate anchor names no block height")
+	case a.TxHash == "":
+		return AccumulateAnchorReference{}, fmt.Errorf("the proof's Accumulate anchor names no transaction")
+	}
+	return AccumulateAnchorReference{BlockHash: a.BlockHash, BlockHeight: a.BlockHeight, TxHash: a.TxHash, AccountURL: p.AccountURL}, nil
 }

@@ -153,7 +153,7 @@ func newLevelFixture(t *testing.T) *levelFixture {
 
 func (f *levelFixture) record(t *testing.T) {
 	t.Helper()
-	anchor, batch := f.orch.resolveAnchorBinding(context.Background(), f.artifact.ProofID, f.inputs.IntentID, f.inputs.AccumTxHash, f.root[:], f.root[:], f.cycle.Result)
+	anchor, batch := f.orch.resolveAnchorBinding(context.Background(), f.artifact.ProofID, f.placement(t), f.cycle.Result)
 	if anchor == nil || batch == nil {
 		t.Fatal("the canonical single-leaf anchor did not resolve")
 	}
@@ -232,7 +232,7 @@ func (c *anchorChain) ObserveTransaction(_ context.Context, txHash string) (*cha
 // layer5Of writes the proof's layer-5 row as the cycle does and reads it back.
 func layer5Of(t *testing.T, f *levelFixture) Layer5 {
 	t.Helper()
-	l5, binding := f.orch.resolveAnchorBinding(context.Background(), f.artifact.ProofID, f.inputs.IntentID, f.inputs.AccumTxHash, f.root[:], f.root[:], f.cycle.Result)
+	l5, binding := f.orch.resolveAnchorBinding(context.Background(), f.artifact.ProofID, f.placement(t), f.cycle.Result)
 	if err := WriteLayer5Row(context.Background(), f.repos.ProofArtifacts, f.artifact.ProofID, l5, binding, t.Logf); err != nil {
 		t.Fatalf("write layer 5: %v", err)
 	}
@@ -304,7 +304,7 @@ func TestTheAnchorIsReadBackForItsBlockHashAndDepth(t *testing.T) {
 	if l5 := layer5Of(t, f); l5.BlockNumber != 4230 || l5.BlockHash != "0xanchorblock" {
 		t.Fatalf("layer 5 states block %d (%s)", l5.BlockNumber, l5.BlockHash)
 	}
-	f.orch.resolveAnchorBinding(context.Background(), f.artifact.ProofID, f.inputs.IntentID, f.inputs.AccumTxHash, f.root[:], f.root[:], f.cycle.Result)
+	f.orch.resolveAnchorBinding(context.Background(), f.artifact.ProofID, f.placement(t), f.cycle.Result)
 	if observer.calls != 1 {
 		t.Fatalf("the anchor was read %d times in one cycle", observer.calls)
 	}
@@ -484,3 +484,13 @@ func TestResultHashChainIsPersistedVerifiedAndContinuedAfterRestart(t *testing.T
 type testLogger struct{ t *testing.T }
 
 func (l testLogger) Printf(format string, v ...interface{}) { l.t.Logf(format, v...) }
+
+// placement is the fixture member's canonical batch row, as the bundle writer looks it up.
+func (f *levelFixture) placement(t *testing.T) *database.Layer5Binding {
+	t.Helper()
+	p, err := f.orch.batchPlacement(context.Background(), f.inputs.IntentID, f.inputs.AccumTxHash, 84532)
+	if err != nil {
+		t.Fatalf("placement: %v", err)
+	}
+	return p
+}
