@@ -167,7 +167,9 @@ func nonSettlementCycle(rec *NonSettlementRecord, claim *NonSettlementClaim) *ac
 		req.UserID = &u
 	}
 	result := &UnifiedProofCycleResult{CycleID: cycleID, ChainID: chainID, StartedAt: time.Now().UTC()}
-	return &activeCycle{CycleID: cycleID, Request: req, Result: result, NonSettlement: claim}
+	// StartedAt, like any cycle's: the verification record's duration is measured from it. Without it
+	// every non-settlement's verification record was refused as out of range, and a warning hid that.
+	return &activeCycle{CycleID: cycleID, Request: req, Result: result, NonSettlement: claim, StartedAt: result.StartedAt}
 }
 
 // runNonSettlementCycle attests the non-settlement by quorum and writes it back.

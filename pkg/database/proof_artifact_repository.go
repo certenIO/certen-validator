@@ -522,7 +522,9 @@ func (r *ProofArtifactRepository) UpdateProofFinalState(ctx context.Context, pro
 			anchored_at = NOW(), verified_at = NOW()
 		WHERE proof_id = $1`
 
-	result, err := r.db.ExecContext(ctx, query, proofID, anchorTxHash, anchorBlockNumber, anchorChain, govLevel, verificationStatus)
+	// No governance level proven is stored as none (NULL), never as G0 (RB3-F73).
+	level := sql.NullString{String: string(govLevel), Valid: govLevel != ""}
+	result, err := r.db.ExecContext(ctx, query, proofID, anchorTxHash, anchorBlockNumber, anchorChain, level, verificationStatus)
 	if err != nil {
 		return fmt.Errorf("failed to update proof final state: %w", err)
 	}
