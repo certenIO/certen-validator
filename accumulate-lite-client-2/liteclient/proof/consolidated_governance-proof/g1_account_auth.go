@@ -107,39 +107,18 @@ func (g1 *G1Layer) accountAuthAt(ctx context.Context, u *url.URL, block int64) (
 func (g1 *G1Layer) readMainChain(ctx context.Context, scope string, count int) ([]*protocol.Transaction, error) {
 	out := make([]*protocol.Transaction, 0, count)
 	pu := ProofUtilities{}
-	for start := 0; start < count; start += 50 {
-		n := 50
-		if start+n > count {
-			n = count - start
-		}
-		resp, err := g1.artifactManager.SaveRPCArtifact(ctx, fmt.Sprintf("g1_account_main_%s_%d", sanitizeLabel(scope), start),
-			g1.client, scope, map[string]interface{}{
-				"queryType": "chain", "name": "main",
-				"range": map[string]interface{}{"start": start, "count": n, "expand": true},
-			})
-		if err != nil {
-			return nil, fmt.Errorf("read %s's main chain: %w", scope, err)
-		}
-		result, err := pu.ExpectResult(resp)
+	records, err := readChainRange(ctx, g1.artifactManager, g1.client, "g1_account_main_"+sanitizeLabel(scope),
+		scope, "main", 0, count, 50, true)
+	if err != nil {
+		return nil, fmt.Errorf("read %s's main chain: %w", scope, err)
+	}
+	for _, rec := range records {
+		entry, _ := pu.CaseInsensitiveGet(rec, "entry").(string)
+		txn, err := decodeEntryTransaction(rec, strings.ToLower(entry))
 		if err != nil {
 			return nil, err
 		}
-		records, _ := pu.CaseInsensitiveGet(result, "records").([]interface{})
-		if len(records) != n {
-			return nil, fmt.Errorf("%s's main chain returned %d of %d entries from %d", scope, len(records), n, start)
-		}
-		for i, r := range records {
-			rec, _ := r.(map[string]interface{})
-			if idx, ok := chainIndexOf(rec); !ok || idx != start+i {
-				return nil, fmt.Errorf("%s's main chain entry %d reports index %d", scope, start+i, idx)
-			}
-			entry, _ := pu.CaseInsensitiveGet(rec, "entry").(string)
-			txn, err := decodeEntryTransaction(rec, strings.ToLower(entry))
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, txn)
-		}
+		out = append(out, txn)
 	}
 	return out, nil
 }

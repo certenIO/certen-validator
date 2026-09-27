@@ -467,55 +467,27 @@ func signatureRangeQuery(start, count int) map[string]interface{} {
 func (g1 *G1Layer) enumerateSignatureEntries(ctx context.Context, keyPage string, start, total int) ([]signatureChainEntry, error) {
 	var out []signatureChainEntry
 	pu := ProofUtilities{}
-
-	for s := start; s < total; s += enumerationPageSize {
-		count := enumerationPageSize
-		if s+count > total {
-			count = total - s
-		}
-		query := signatureRangeQuery(s, count)
-		response, err := g1.artifactManager.SaveRPCArtifact(ctx,
-			fmt.Sprintf("signature_entries_%s_%d_%d", sanitizeLabel(keyPage), s, count),
-			g1.client, keyPage, query)
-		if err != nil {
-			return nil, fmt.Errorf("enumerate P#signature [%d:%d]: %w", s, s+count, err)
-		}
-
-		data := pu.CaseInsensitiveGet(response, "result")
-		if data == nil {
-			data = pu.CaseInsensitiveGet(response, "data")
-		}
-		dataMap, ok := data.(map[string]interface{})
-		if !ok {
-			return nil, fmt.Errorf("enumerate P#signature [%d:%d]: response has no result object", s, s+count)
-		}
-		records, ok := pu.CaseInsensitiveGet(dataMap, "records").([]interface{})
-		if !ok {
-			return nil, fmt.Errorf("enumerate P#signature [%d:%d]: response has no records array", s, s+count)
-		}
-
-		before := len(out)
-		for _, rec := range records {
-			recMap, ok := rec.(map[string]interface{})
-			if !ok {
-				return nil, fmt.Errorf("enumerate P#signature [%d:%d]: malformed record", s, s+count)
+	if total < start {
+		return nil, fmt.Errorf("enumerate P#signature: range [%d:%d]", start, total)
+	}
+	records, err := readChainRange(ctx, g1.artifactManager, g1.client, "signature_entries_"+sanitizeLabel(keyPage),
+		keyPage, "signature", start, total-start, enumerationPageSize, true)
+	if err != nil {
+		return nil, fmt.Errorf("enumerate P#signature [%d:%d]: %w", start, total, err)
+	}
+	for i, recMap := range records {
+		entry, _ := pu.CaseInsensitiveGet(recMap, "entry").(string)
+		if entry == "" {
+			// Some records nest the chain entry.
+			if ceMap, ok := pu.CaseInsensitiveGet(recMap, "chainEntry").(map[string]interface{}); ok {
+				entry, _ = pu.CaseInsensitiveGet(ceMap, "entry").(string)
 			}
-			entry, _ := pu.CaseInsensitiveGet(recMap, "entry").(string)
-			if entry == "" {
-				// Some records nest the chain entry.
-				if ceMap, ok := pu.CaseInsensitiveGet(recMap, "chainEntry").(map[string]interface{}); ok {
-					entry, _ = pu.CaseInsensitiveGet(ceMap, "entry").(string)
-				}
-			}
-			if entry == "" {
-				return nil, fmt.Errorf("enumerate P#signature [%d:%d]: record has no entry hash", s, s+count)
-			}
-			body, _ := pu.CaseInsensitiveGet(recMap, "value").(map[string]interface{})
-			out = append(out, signatureChainEntry{Hash: entry, Body: body})
 		}
-		if got := len(out) - before; got != count {
-			return nil, fmt.Errorf("enumerate P#signature [%d:%d]: expected %d entries, got %d", s, s+count, count, got)
+		if entry == "" {
+			return nil, fmt.Errorf("enumerate P#signature entry %d: record has no entry hash", start+i)
 		}
+		body, _ := pu.CaseInsensitiveGet(recMap, "value").(map[string]interface{})
+		out = append(out, signatureChainEntry{Hash: entry, Body: body})
 	}
 	if len(out) != total-start {
 		return nil, fmt.Errorf("enumerate P#signature: expected %d entries, got %d", total-start, len(out))

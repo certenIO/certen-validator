@@ -252,48 +252,12 @@ func chainRecordCount(result map[string]interface{}) (int, error) {
 
 // enumerateMainEntries enumerates all main chain entries with paging for the given scope
 func (ab *AuthorityBuilder) enumerateMainEntries(ctx context.Context, scopeURL string, totalCount int) ([]map[string]interface{}, error) {
-	var allEntries []map[string]interface{}
-	pageSize := 50 // Reasonable page size for enumeration
-
-	for start := 0; start < totalCount; start += pageSize {
-		count := pageSize
-		if start+count > totalCount {
-			count = totalCount - start
-		}
-
-		query := ab.queryBuilder.BuildMainChainRangeQuery(start, count)
-
-		// scopeURL should already be a full acc:// URL
-		response, err := ab.artifactManager.SaveRPCArtifact(
-			ctx,
-			fmt.Sprintf("main_entries_%d_%d", start, count),
-			ab.client,
-			scopeURL,
-			query,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to enumerate main entries [%d:%d]: %v", start, start+count, err)
-		}
-
-		// Extract entries from response (JSON-RPC 2.0 standard format - aligned with Python)
-		pu := ProofUtilities{}
-		var data interface{}
-		if data = pu.CaseInsensitiveGet(response, "result"); data == nil {
-			data = pu.CaseInsensitiveGet(response, "data") // Fallback
-		}
-		if data != nil {
-			if dataMap, ok := data.(map[string]interface{}); ok {
-				if records := pu.CaseInsensitiveGet(dataMap, "records"); records != nil {
-					if recordsArray, ok := records.([]interface{}); ok {
-						for _, record := range recordsArray {
-							if recordMap, ok := record.(map[string]interface{}); ok {
-								allEntries = append(allEntries, recordMap)
-							}
-						}
-					}
-				}
-			}
-		}
+	// Index and entry hash only: collectPageHistory re-reads every entry with its receipt, so the range
+	// carries neither messages nor receipts (RB3-F18), and it is read in pieces the endpoint can deliver,
+	// exactly and in order (RB3-F126).
+	allEntries, err := readChainRange(ctx, ab.artifactManager, ab.client, "main_entries", scopeURL, "main", 0, totalCount, 50, false)
+	if err != nil {
+		return nil, fmt.Errorf("failed to enumerate main entries [0:%d]: %v", totalCount, err)
 	}
 
 	if len(allEntries) != totalCount {
