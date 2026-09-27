@@ -101,7 +101,9 @@ type repairFixture struct {
 	bundle      [32]byte
 	root        [32]byte
 	verifyBlock int64
-	statedBlock int64 // the block the stored layer and proofs state (the verify block, unless set)
+	statedBlock int64  // the block the stored layer and proofs state (the verify block, unless set)
+	statedTx    string // the transaction the stored layer and proofs name as the anchor's (anchorTx, unless set)
+	settleTx    string // the member's settlement transaction
 	chainBlock  uint64
 	chainHash   string
 	layerID     uuid.UUID
@@ -121,6 +123,24 @@ func newRepairFixture(t *testing.T) *repairFixture {
 // state the anchor's true block but no block hash - what an anchor read-back failure leaves (RB3-F119).
 func newRepairFixtureStating(t *testing.T, rightBlock bool) *repairFixture {
 	t.Helper()
+	return newRepairFixtureWith(t, rightBlock, false)
+}
+
+// newRepairFixtureMisnamed is the RB3-F134 shape, live on 2026-09-19..21: a canonical row with no create
+// transaction whose anchor_tx_hash, layer-5 row and Certen proofs all name the member's SETTLEMENT
+// transaction, at the settlement's block, as where the root was published.
+func newRepairFixtureMisnamed(t *testing.T) *repairFixture {
+	t.Helper()
+	f := newRepairFixtureWith(t, false, true)
+	if _, err := f.db.Exec(`UPDATE anchor_batches SET anchor_create_tx = NULL, anchor_tx_hash = $2, anchor_block_num = $3 WHERE id = $1`,
+		f.batchID, f.settleTx, f.statedBlock); err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+func newRepairFixtureWith(t *testing.T, rightBlock, misnamed bool) *repairFixture {
+	t.Helper()
 	ctx := context.Background()
 	db := openMigratedTestDB(t, "anchor repair")
 	repos := database.NewRepositories(database.NewClientFromDB(db))
@@ -135,6 +155,11 @@ func newRepairFixtureStating(t *testing.T, rightBlock bool) *repairFixture {
 	f.bundle, f.root = levelHash("bundle-"+tag), levelHash("root-"+tag)
 	f.anchorTx = "0x" + hex.EncodeToString(levelBytes("create-"+tag))
 	f.verifyTx = "0x" + hex.EncodeToString(levelBytes("verify-"+tag))
+	f.settleTx = "0x" + hex.EncodeToString(levelBytes("settle-"+tag))
+	f.statedTx = f.anchorTx
+	if misnamed {
+		f.statedTx, f.statedBlock = f.settleTx, f.verifyBlock+1 // the settlement follows the verify
+	}
 	f.chainHash = "0x" + hex.EncodeToString(levelBytes("block-"+tag))
 	f.batchID = uuid.New()
 	if _, err := db.ExecContext(ctx, `
@@ -151,7 +176,7 @@ func newRepairFixtureStating(t *testing.T, rightBlock bool) *repairFixture {
 	}
 	t.Cleanup(func() {
 		bg := context.Background()
-		_, _ = db.ExecContext(bg, `DELETE FROM evidence_corrections WHERE chain_evidence->>'tx_hash' IN ($1, $2)`, f.anchorTx, f.verifyTx)
+		_, _ = db.ExecContext(bg, `DELETE FROM evidence_corrections WHERE chain_evidence->>'tx_hash' IN ($1, $2) OR record_id = $3`, f.anchorTx, f.verifyTx, f.batchID.String())
 		_, _ = db.ExecContext(bg, `DELETE FROM anchor_batches WHERE id = $1`, f.batchID)
 	})
 
@@ -172,6 +197,11 @@ func newRepairFixtureStating(t *testing.T, rightBlock bool) *repairFixture {
 				Found: true, Succeeded: true, BlockNumber: f.chainBlock, BlockHash: f.chainHash,
 				Head: f.chainBlock + 100, Input: createBatchAnchorCall(t, f.bundle, f.root),
 				From: repairCreator, To: repairContract, BlockTime: repairVerifyTime - 22,
+			},
+			// The settlement: a successful call that published no root.
+			strings.ToLower(f.settleTx): {
+				Found: true, Succeeded: true, BlockNumber: uint64(f.verifyBlock + 1), BlockHash: "0x" + hex.EncodeToString(levelBytes("sblock-"+tag)),
+				Head: f.chainBlock + 100, Input: []byte{0xa9, 0x05, 0x9c, 0xbb, 0x00}, From: repairVerifier, To: "0x00000000000000000000000000000000000acc00",
 			},
 			strings.ToLower(f.verifyTx): {
 				Found: true, Succeeded: true, BlockNumber: uint64(f.verifyBlock), BlockHash: "0x" + hex.EncodeToString(levelBytes("vblock-"+tag)),
@@ -210,7 +240,7 @@ func (f *repairFixture) newProof(t *testing.T, label, validator string, key ed25
 	})
 	if withLayer {
 		layer, _ := json.Marshal(Layer5{
-			ChainID: 84532, Network: "chain-84532", AnchorTx: f.anchorTx, BlockNumber: uint64(f.statedBlock),
+			ChainID: 84532, Network: "chain-84532", AnchorTx: f.statedTx, BlockNumber: uint64(f.statedBlock),
 			BatchRoot: hex.EncodeToString(f.root[:]), LeafHash: hex.EncodeToString(f.root[:]),
 		})
 		row, err := f.repos.ProofArtifacts.CreateChainedProofLayer(ctx, &database.NewChainedProofLayer{
@@ -223,7 +253,7 @@ func (f *repairFixture) newProof(t *testing.T, label, validator string, key ed25
 	}
 	proof, err := f.repos.Proofs.CreateProof(ctx, &database.NewCertenAnchorProof{
 		ProofArtifactID: artifact.ProofID, BatchID: f.batchID, AccumTxHash: accumTx, AccountURL: artifact.AccountURL,
-		MerkleRoot: f.root[:], LeafHash: f.root[:], AnchorChain: "chain-84532", AnchorTxHash: f.anchorTx,
+		MerkleRoot: f.root[:], LeafHash: f.root[:], AnchorChain: "chain-84532", AnchorTxHash: f.statedTx,
 		AnchorBlockNumber: f.statedBlock, GovLevel: database.GovLevelG2, GovValid: true, ValidatorID: validator,
 		GovProof: json.RawMessage(`{"level":"G2","signers":["a","b"]}`),
 	})
@@ -732,5 +762,78 @@ func TestAnchorRepairCorrectsACompletionTimeThatIsNotTheVerifyBlocks(t *testing.
 	}
 	if again := f.run(t, true); again.CompletionTimesCorrected != 0 {
 		t.Fatalf("not idempotent: %+v", again)
+	}
+}
+
+// RB3-F134: a row, its layer 5 and its Certen proofs that name the settlement's transaction as the anchor's
+// are corrected to the anchor's own create transaction and block - the proof revised and re-signed by the
+// validator that signed it, what was stated kept in the corrections.
+func TestAnchorRepairCorrectsTheSettlementNamedAsTheAnchor(t *testing.T) {
+	f := newRepairFixtureMisnamed(t)
+	ctx := context.Background()
+
+	dry := f.run(t, false)
+	if !f.mentions(dry.Actions, "anchor_tx_hash "+f.settleTx+", which did not publish the root") || !f.mentions(dry.Actions, f.layerID.String()) {
+		t.Fatalf("the dry run does not report the correction: %+v %+v", dry.Actions, dry.Refused)
+	}
+
+	report := f.run(t, true)
+	if report.CreatesCompleted != 1 || report.Layer5Replaced != 1 || report.ProofsRevised != 1 || f.mentions(report.Refused, f.batchID.String()) {
+		t.Fatalf("report %+v", report)
+	}
+	createTx, anchorTx, block := f.createColumns(t)
+	if createTx.String != f.anchorTx || anchorTx.String != f.anchorTx || block.Int64 != int64(f.chainBlock) {
+		t.Fatalf("row: create %v anchor_tx_hash %v block %v", createTx, anchorTx, block)
+	}
+	layers, err := f.repos.ProofArtifacts.GetChainedProofLayers(ctx, f.mine.ProofArtifactID.UUID)
+	if err != nil || len(layers) != 1 {
+		t.Fatalf("readers see %d layers (%v)", len(layers), err)
+	}
+	var corrected Layer5
+	if err := json.Unmarshal(layers[0].LayerJSON, &corrected); err != nil {
+		t.Fatal(err)
+	}
+	if corrected.AnchorTx != f.anchorTx || corrected.BlockNumber != f.chainBlock || corrected.BlockHash != f.chainHash || corrected.VerifyOffline() != nil {
+		t.Fatalf("replacement layer %+v", corrected)
+	}
+	proof, err := f.repos.Proofs.GetProof(ctx, f.mine.ProofID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		Anchor struct {
+			TxHash      string `json:"tx_hash"`
+			BlockNumber int64  `json:"block_number"`
+		} `json:"anchor_reference"`
+	}
+	_ = json.Unmarshal(proof.FullProof, &document)
+	if proof.AnchorTxHash != f.anchorTx || document.Anchor.TxHash != f.anchorTx || document.Anchor.BlockNumber != int64(f.chainBlock) ||
+		!proof.VerifyProofHash() || !ed25519.Verify(f.publicKey, proof.ProofHash, proof.ValidatorSig) {
+		t.Fatalf("revised proof names %s / %s @ %d", proof.AnchorTxHash, document.Anchor.TxHash, document.Anchor.BlockNumber)
+	}
+	corrections, err := f.repair.GetCorrections(ctx, database.CorrectionRecordCertenProof, f.mine.ProofID.String())
+	if err != nil || len(corrections) != 1 || !strings.Contains(string(corrections[0].Previous), f.settleTx) {
+		t.Fatalf("the proof as published is not kept: %d corrections (%v)", len(corrections), err)
+	}
+	// The other validator's proof names the settlement too: left for that validator's own run.
+	if !f.mentions(report.LeftForOwner, f.other.ProofID.String()) {
+		t.Fatalf("another validator's proof is not left for it: %+v", report.LeftForOwner)
+	}
+	if again := f.run(t, true); again.CreatesCompleted+again.Layer5Replaced+again.ProofsRevised != 0 {
+		t.Fatalf("not idempotent: %+v", again)
+	}
+}
+
+// A row naming a transaction that IS this anchor's createBatchAnchor call, while the chain locates another,
+// contradicts the chain and is refused.
+func TestAnchorRepairRefusesARowNamingAnotherCreationOfItsAnchor(t *testing.T) {
+	f := newRepairFixtureMisnamed(t)
+	f.chain.txs[strings.ToLower(f.settleTx)].Input = createBatchAnchorCall(t, f.bundle, f.root)
+	report := f.run(t, true)
+	if !f.mentions(report.Refused, f.batchID.String()) || report.CreatesCompleted != 0 {
+		t.Fatalf("report %+v", report)
+	}
+	if c, _, _ := f.createColumns(t); c.Valid {
+		t.Fatal("a contradiction was written")
 	}
 }

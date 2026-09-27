@@ -246,7 +246,7 @@ func TestS3_BuildLayer5RefusesAnUnverifiableBinding(t *testing.T) {
 
 	// A canonical row whose leaf is not the root and which carries no path: this proof cannot be shown
 	// to be under that root. It must be refused, not stored.
-	_, err := BuildLayer5(&database.Layer5Binding{BatchID: uuid.New(), LeafHash: leaf, BatchRoot: root}, testObservation("0xabc", 42), 84532)
+	_, err := BuildLayer5(&database.Layer5Binding{BatchID: uuid.New(), LeafHash: leaf, BatchRoot: root, AnchorTxHash: s3AnchorTx, AnchorBlockNum: s3AnchorBlock}, testObservation("0xabc", 42), 84532)
 	if err == nil {
 		t.Fatal("CRITICAL DEFECT: BuildLayer5 accepted a leaf that is not under the root it names, " +
 			"with no path to bridge them")
@@ -254,7 +254,7 @@ func TestS3_BuildLayer5RefusesAnUnverifiableBinding(t *testing.T) {
 	t.Logf("refused: %v", err)
 
 	// A one-member batch's canonical row: leaf IS root, empty path. Must build.
-	l5, err := BuildLayer5(&database.Layer5Binding{BatchID: uuid.New(), LeafHash: leaf, BatchRoot: leaf}, testObservation("0xabc", 42), 84532)
+	l5, err := BuildLayer5(&database.Layer5Binding{BatchID: uuid.New(), LeafHash: leaf, BatchRoot: leaf, AnchorTxHash: s3AnchorTx, AnchorBlockNum: s3AnchorBlock}, testObservation("0xabc", 42), 84532)
 	if err != nil {
 		t.Fatalf("a one-member batch must build: %v", err)
 	}
@@ -269,7 +269,7 @@ func TestS3_BuildLayer5RefusesAnUnverifiableBinding(t *testing.T) {
 	}
 
 	// No external transaction: nothing to bind to, so nothing is written.
-	l5, err = BuildLayer5(&database.Layer5Binding{BatchID: uuid.New(), LeafHash: leaf, BatchRoot: leaf}, testObservation("", 0), 84532)
+	l5, err = BuildLayer5(&database.Layer5Binding{BatchID: uuid.New(), LeafHash: leaf, BatchRoot: leaf, AnchorTxHash: s3AnchorTx, AnchorBlockNum: s3AnchorBlock}, testObservation("", 0), 84532)
 	if err != nil || l5 != nil {
 		t.Fatalf("with no external coordinates BuildLayer5 must return (nil, nil), got (%v, %v)", l5, err)
 	}
@@ -290,7 +290,7 @@ func TestS3_SixLayerRowsPerProof(t *testing.T) {
 	// L5, through the shared writer, for a one-member batch.
 	leaf := make([]byte, 32)
 	leaf[0] = 7
-	l5, err := BuildLayer5(&database.Layer5Binding{BatchID: uuid.New(), LeafHash: leaf, BatchRoot: leaf}, testObservation("0xfeedface", 45937480), 84532)
+	l5, err := BuildLayer5(&database.Layer5Binding{BatchID: uuid.New(), LeafHash: leaf, BatchRoot: leaf, AnchorTxHash: s3AnchorTx, AnchorBlockNum: s3AnchorBlock}, testObservation("0xfeedface", 45937480), 84532)
 	if err != nil || l5 == nil {
 		t.Fatalf("build layer 5: %v", err)
 	}
@@ -325,7 +325,7 @@ func TestS3_SixLayerRowsPerProof(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stored L5 does not verify: %v", err)
 	}
-	if got.AnchorTx != "0xfeedface" || got.BlockNumber != 45937480 {
+	if got.AnchorTx != s3AnchorTx || got.BlockNumber != s3AnchorBlock {
 		t.Errorf("stored L5 came back with different coordinates: %+v", got)
 	}
 	t.Logf("six rows, L1-L4 verified, L5 recomputed: %s", got.ExternalClaim())
@@ -400,6 +400,13 @@ func TestS3_BatchJoinsArePopulated(t *testing.T) {
 }
 
 // testObservation builds the minimum ObservationResult BuildLayer5 reads.
+// s3AnchorTx and s3AnchorBlock are the anchor-create transaction and its block that a canonical row carries:
+// layer 5's coordinates, which are never the settlement observation's (RB3-F134).
+const (
+	s3AnchorTx    = "0xfeedface00000000000000000000000000000000000000000000000000000000"
+	s3AnchorBlock = 45937480
+)
+
 func testObservation(txHash string, block uint64) *chain.ObservationResult {
 	return &chain.ObservationResult{
 		TxHash:         txHash,
@@ -448,6 +455,9 @@ func TestS3_BuildLayer5UsesTheBatchLeafNotTheOperationCommitment(t *testing.T) {
 		LeafHash:  leafArr[:],
 		BatchRoot: root[:],
 		TreeIndex: 0,
+		// The anchor-create transaction the canonical row carries: without it there is no layer 5 (RB3-F134).
+		AnchorTxHash:   s3AnchorTx,
+		AnchorBlockNum: s3AnchorBlock,
 	}
 
 	l5, err := BuildLayer5(binding, testObservation("0xabc", 42), 84532)

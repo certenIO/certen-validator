@@ -189,8 +189,10 @@ func (r *EvidenceRepair) CorrectAnchorBlock(ctx context.Context, a CanonicalAnch
 }
 
 // CompleteAnchorCreate records the create transaction of a canonical row that has none (RB3-F33), with
-// its block, and names it in anchor_tx_hash where that column is empty or already names it. A row that
-// names another transaction there, or changed since it was read, is not touched: ErrEvidenceChanged.
+// its block, and names it in anchor_tx_hash. anchor_tx_hash is replaced only from exactly the value read
+// (a.AnchorTxHash) - empty, the create transaction, or a transaction the caller has established is not
+// this anchor's creation (RB3-F134: the settlement's) - and the replaced value is kept in the correction.
+// A row that changed since it was read is not touched: ErrEvidenceChanged.
 func (r *EvidenceRepair) CompleteAnchorCreate(ctx context.Context, a CanonicalAnchor, facts AnchorChainFacts, by string) error {
 	if a.AnchorCreateTx != "" || facts.TxHash == "" {
 		return fmt.Errorf("complete anchor create for batch %s: the row already names %q, or no transaction was read", a.BatchID, a.AnchorCreateTx)
@@ -211,8 +213,7 @@ func (r *EvidenceRepair) CompleteAnchorCreate(ctx context.Context, a CanonicalAn
 		WHERE id = $1
 		  AND anchor_create_tx IS NULL
 		  AND anchor_block_num IS NOT DISTINCT FROM $4
-		  AND COALESCE(anchor_tx_hash, '') = $5
-		  AND (COALESCE(anchor_tx_hash, '') = '' OR LOWER(anchor_tx_hash) = LOWER($2))`,
+		  AND COALESCE(anchor_tx_hash, '') = $5`,
 		a.BatchID, facts.TxHash, facts.BlockNumber, previousBlock, a.AnchorTxHash)
 	if err != nil {
 		return fmt.Errorf("complete anchor create for batch %s: %w", a.BatchID, err)
@@ -230,6 +231,9 @@ func (r *EvidenceRepair) CompleteAnchorCreate(ctx context.Context, a CanonicalAn
 	reason := fmt.Sprintf("anchor %s on %s was created by transaction %s in block %d: the anchor's BatchAnchorCreated "+
 		"log at its recorded creation time, and the transaction's own createBatchAnchor calldata",
 		a.BundleID, facts.TargetChain, facts.TxHash, facts.BlockNumber)
+	if a.AnchorTxHash != "" && !strings.EqualFold(a.AnchorTxHash, facts.TxHash) {
+		reason += fmt.Sprintf("; anchor_tx_hash named %s, which is not this anchor's creation (RB3-F134)", a.AnchorTxHash)
+	}
 	if _, err := recordCorrection(ctx, tx.Tx(), CorrectionRecordAnchorBatch, a.BatchID.String(), reason,
 		map[string]any{"anchor_create_tx": nil, "anchor_tx_hash": prevTx, "anchor_block_num": prevBlock},
 		map[string]any{"anchor_create_tx": facts.TxHash, "anchor_tx_hash": facts.TxHash, "anchor_block_num": facts.BlockNumber},
@@ -474,11 +478,15 @@ type CertenAnchorRevision struct {
 	BlockNumber   int64
 	BlockHash     string
 	Confirmations int
+	// TxHash, when set, replaces the anchor transaction the proof names (RB3-F134: proofs built from a
+	// layer 5 that named the settlement's transaction).
+	TxHash string
 }
 
 // certenProofState is what a revision replaces, kept in its correction record.
 type certenProofState struct {
 	FullProofJSON      string          `json:"full_proof_json"`
+	AnchorTxHash       string          `json:"anchor_tx_hash"`
 	ProofHash          string          `json:"proof_hash"`
 	ValidatorSignature string          `json:"validator_signature"`
 	AnchorChain        string          `json:"anchor_chain"`
@@ -512,11 +520,11 @@ func (r *EvidenceRepair) ReviseCertenProofAnchor(ctx context.Context, proofID uu
 		details  []byte
 	)
 	err = tx.Tx().QueryRowContext(ctx, `
-		SELECT full_proof_json, proof_hash, COALESCE(validator_signature, ''::bytea), COALESCE(anchor_chain, ''),
+		SELECT full_proof_json, anchor_tx_hash, proof_hash, COALESCE(validator_signature, ''::bytea), COALESCE(anchor_chain, ''),
 		       COALESCE(anchor_block_number, 0), anchor_block_hash, COALESCE(anchor_confirmations, 0),
 		       COALESCE(is_verified, FALSE), verification_details
 		FROM certen_anchor_proofs WHERE id = $1 FOR UPDATE`, proofID).Scan(
-		&prev.FullProofJSON, &hash, &sig, &prev.AnchorChain, &prev.AnchorBlockNumber, &hashText,
+		&prev.FullProofJSON, &prev.AnchorTxHash, &hash, &sig, &prev.AnchorChain, &prev.AnchorBlockNumber, &hashText,
 		&prev.AnchorConfirmation, &prev.IsVerified, &details)
 	if err == sql.ErrNoRows {
 		return nil, ErrProofNotFound
@@ -544,6 +552,11 @@ func (r *EvidenceRepair) ReviseCertenProofAnchor(ctx context.Context, proofID uu
 	document.AnchorReference.Chain = rev.Chain
 	document.AnchorReference.BlockNumber = rev.BlockNumber
 	document.AnchorReference.BlockHash = rev.BlockHash
+	anchorTx := prev.AnchorTxHash
+	if rev.TxHash != "" {
+		document.AnchorReference.TxHash = rev.TxHash
+		anchorTx = rev.TxHash
+	}
 	fullJSON, err := json.Marshal(document)
 	if err != nil {
 		return nil, fmt.Errorf("serialise revised proof: %w", err)
@@ -584,6 +597,7 @@ func (r *EvidenceRepair) ReviseCertenProofAnchor(ctx context.Context, proofID uu
 		    anchor_block_number  = $6,
 		    anchor_block_hash    = $7,
 		    anchor_confirmations = $8,
+		    anchor_tx_hash       = $13,
 		    validator_signature  = $9,
 		    is_verified          = $10,
 		    verified_at          = CASE WHEN $10 THEN COALESCE(verified_at, NOW()) ELSE NULL END,
@@ -592,7 +606,7 @@ func (r *EvidenceRepair) ReviseCertenProofAnchor(ctx context.Context, proofID uu
 		WHERE id = $1 AND proof_hash = $12`,
 		proofID, string(fullJSON), newHash[:], string(anchorRefJSON), string(rev.Chain), rev.BlockNumber,
 		sql.NullString{String: rev.BlockHash, Valid: rev.BlockHash != ""}, rev.Confirmations, signature,
-		verified, string(mergedJSON), expectedHash)
+		verified, string(mergedJSON), expectedHash, anchorTx)
 	if err != nil {
 		return nil, fmt.Errorf("revise certen proof %s: %w", proofID, err)
 	}
@@ -601,7 +615,7 @@ func (r *EvidenceRepair) ReviseCertenProofAnchor(ctx context.Context, proofID uu
 	}
 	blockHash := rev.BlockHash
 	next := certenProofState{
-		FullProofJSON: string(fullJSON), ProofHash: hex.EncodeToString(newHash[:]),
+		FullProofJSON: string(fullJSON), AnchorTxHash: anchorTx, ProofHash: hex.EncodeToString(newHash[:]),
 		ValidatorSignature: hex.EncodeToString(signature), AnchorChain: string(rev.Chain),
 		AnchorBlockNumber: rev.BlockNumber, AnchorBlockHash: &blockHash,
 		AnchorConfirmation: rev.Confirmations, IsVerified: verified, Verification: mergedJSON,

@@ -297,6 +297,9 @@ func repairAnchor(ctx context.Context, cfg AnchorRepairConfig, anchor database.C
 	// The create transaction: the one the row names, or else the one the chain says created the anchor.
 	stored := anchor
 	var creator string
+	// misnamed is a transaction the row states as publishing the root that did not (RB3-F134): its layer-5
+	// rows and Certen proofs are corrected below with the rest.
+	var misnamed string
 	if anchor.AnchorCreateTx == "" {
 		bundle, err := bytes32FromHex(anchor.BundleID)
 		if err != nil || len(anchor.Root) != 32 {
@@ -311,9 +314,27 @@ func repairAnchor(ctx context.Context, cfg AnchorRepairConfig, anchor database.C
 			return nil
 		}
 		if anchor.AnchorTxHash != "" && !sameHex(anchor.AnchorTxHash, loc.TxHash) {
-			report.Refused = append(report.Refused, fmt.Sprintf("%s: the row names %s as publishing its root, but the chain says %s created it; nothing changed",
-				label, anchor.AnchorTxHash, loc.TxHash))
-			return nil
+			// The row names another transaction as publishing its root. The anchor can be created once, so
+			// only the located one did - unless the named one is itself this anchor's successful
+			// createBatchAnchor call, which would contradict the chain and is refused.
+			named, err := cfg.Reader.ReadAnchorTx(ctx, anchor.ChainID, anchor.AnchorTxHash)
+			if err != nil {
+				report.Refused = append(report.Refused, fmt.Sprintf("%s: the transaction the row names, %s, could not be read: %v; nothing changed",
+					label, anchor.AnchorTxHash, err))
+				return nil
+			}
+			if named == nil || !named.Found || named.BlockNumber == 0 {
+				report.Refused = append(report.Refused, fmt.Sprintf("%s: the row names %s, which the chain does not show mined; it cannot be established what it is, so nothing changed",
+					label, anchor.AnchorTxHash))
+				return nil
+			}
+			if b, r, err := createBatchAnchorArgs(named.Input); err == nil && named.Succeeded &&
+				sameHex(hex.EncodeToString(b[:]), anchor.BundleID) && bytes.Equal(r[:], anchor.Root) {
+				report.Refused = append(report.Refused, fmt.Sprintf("%s: the row names %s and the chain locates %s as this anchor's creation; nothing changed",
+					label, anchor.AnchorTxHash, loc.TxHash))
+				return nil
+			}
+			misnamed = anchor.AnchorTxHash
 		}
 		anchor.AnchorCreateTx = loc.TxHash
 		creator = strings.ToLower(loc.Validator.Hex())
@@ -350,6 +371,9 @@ func repairAnchor(ctx context.Context, cfg AnchorRepairConfig, anchor database.C
 	case !createKnown:
 		action := fmt.Sprintf("%s: anchor_create_tx NULL -> %s (block %d, located by the anchor's BatchAnchorCreated log)",
 			label, facts.TxHash, facts.BlockNumber)
+		if misnamed != "" {
+			action += fmt.Sprintf("; anchor_tx_hash %s, which did not publish the root, -> %s", misnamed, facts.TxHash)
+		}
 		if cfg.Apply {
 			switch err := cfg.Repair.CompleteAnchorCreate(ctx, stored, *facts, cfg.ValidatorID); {
 			case errors.Is(err, database.ErrEvidenceChanged):
@@ -425,10 +449,17 @@ func repairAnchor(ctx context.Context, cfg AnchorRepairConfig, anchor database.C
 		return err
 	}
 
-	// Layer-5 rows naming this anchor.
+	// Layer-5 rows naming this anchor - and those naming the transaction the row misnamed as it.
 	claims, err := cfg.Repair.ListLayer5ForAnchorTx(ctx, anchor.AnchorCreateTx)
 	if err != nil {
 		return err
+	}
+	if misnamed != "" {
+		more, err := cfg.Repair.ListLayer5ForAnchorTx(ctx, misnamed)
+		if err != nil {
+			return err
+		}
+		claims = append(claims, more...)
 	}
 	for _, claim := range claims {
 		if err := repairLayer5(ctx, cfg, anchor, facts, claim, report); err != nil {
@@ -436,13 +467,20 @@ func repairAnchor(ctx context.Context, cfg AnchorRepairConfig, anchor database.C
 		}
 	}
 
-	// Certen anchor proofs naming this anchor.
+	// Certen anchor proofs naming this anchor, or the transaction the row misnamed as it.
 	proofs, err := cfg.Proofs.GetProofsByAnchorTxHash(ctx, anchor.AnchorCreateTx)
 	if err != nil {
 		return err
 	}
+	if misnamed != "" {
+		more, err := cfg.Proofs.GetProofsByAnchorTxHash(ctx, misnamed)
+		if err != nil {
+			return err
+		}
+		proofs = append(proofs, more...)
+	}
 	for _, proof := range proofs {
-		if err := repairCertenProof(ctx, cfg, facts, proof, report); err != nil {
+		if err := repairCertenProof(ctx, cfg, anchor, facts, proof, report); err != nil {
 			return err
 		}
 	}
@@ -505,12 +543,15 @@ func repairLayer5(ctx context.Context, cfg AnchorRepairConfig, anchor database.C
 		report.Refused = append(report.Refused, fmt.Sprintf("%s: names root %s, which this anchor did not publish; not corrected", label, stated.BatchRoot))
 		return nil
 	}
+	// RB3-F134: a layer that named the settlement's transaction as the anchor's states the wrong transaction
+	// and, with it, the settlement's block.
+	txWrong := !sameHex(stated.AnchorTx, facts.TxHash)
 	blockWrong := int64(stated.BlockNumber) != facts.BlockNumber
 	hashWrong := stated.BlockHash != "" && !sameHex(stated.BlockHash, facts.BlockHash)
 	// RB3-F119: a row written while the anchor could not be read back states no hash. Missing is completed,
 	// exactly as wrong is corrected - it used to stay missing for ever.
 	hashMissing := stated.BlockHash == ""
-	if !blockWrong && !hashWrong && !hashMissing {
+	if !txWrong && !blockWrong && !hashWrong && !hashMissing {
 		return nil
 	}
 
@@ -520,6 +561,7 @@ func repairLayer5(ctx context.Context, cfg AnchorRepairConfig, anchor database.C
 		report.Refused = append(report.Refused, fmt.Sprintf("%s: unreadable: %v", label, err))
 		return nil
 	}
+	fields["anchorTx"], _ = json.Marshal(facts.TxHash)
 	fields["blockNumber"], _ = json.Marshal(facts.BlockNumber)
 	fields["blockHash"], _ = json.Marshal(facts.BlockHash)
 	fields["network"], _ = json.Marshal(facts.TargetChain)
@@ -540,6 +582,13 @@ func repairLayer5(ctx context.Context, cfg AnchorRepairConfig, anchor database.C
 		"the stated block was the verify transaction's. Corrected by `validator repair anchor-blocks`.",
 		anchor.AnchorCreateTx, facts.BlockNumber, facts.BlockHash, facts.TargetChain, stated.BlockNumber)
 	switch {
+	case txWrong:
+		action = fmt.Sprintf("%s: anchorTx %s @ %d -> %s @ %d (hash %s), replaced", label, stated.AnchorTx, stated.BlockNumber,
+			facts.TxHash, facts.BlockNumber, facts.BlockHash)
+		reason = fmt.Sprintf("this row stated that root %s was published in %s at block %d; that transaction did not "+
+			"publish it (it is the settlement's). Anchor %s published it: transaction %s in block %d (%s) on %s. "+
+			"Corrected by `validator repair anchor-blocks` (RB3-F134).",
+			stated.BatchRoot, stated.AnchorTx, stated.BlockNumber, anchor.BundleID, facts.TxHash, facts.BlockNumber, facts.BlockHash, facts.TargetChain)
 	case !blockWrong && hashWrong:
 		action = fmt.Sprintf("%s: block %d hash %s -> %s, replaced", label, stated.BlockNumber, stated.BlockHash, facts.BlockHash)
 		reason = fmt.Sprintf("anchor %s is in block %d on %s with hash %s, not %s as this row stated. "+
@@ -567,16 +616,25 @@ func repairLayer5(ctx context.Context, cfg AnchorRepairConfig, anchor database.C
 	return nil
 }
 
-func repairCertenProof(ctx context.Context, cfg AnchorRepairConfig, facts *database.AnchorChainFacts, proof *database.CertenAnchorProof, report *AnchorRepairReport) error {
+func repairCertenProof(ctx context.Context, cfg AnchorRepairConfig, anchor database.CanonicalAnchor, facts *database.AnchorChainFacts, proof *database.CertenAnchorProof, report *AnchorRepairReport) error {
 	label := fmt.Sprintf("Certen proof %s", proof.ProofID)
+	txWrong := !sameHex(proof.AnchorTxHash, facts.TxHash)
+	if txWrong && !bytes.Equal(proof.MerkleRoot, anchor.Root) {
+		report.Refused = append(report.Refused, fmt.Sprintf("%s: names %s but proves root %x, not anchor %s's; not revised",
+			label, proof.AnchorTxHash, proof.MerkleRoot, anchor.BundleID))
+		return nil
+	}
 	blockWrong := proof.AnchorBlockNumber != facts.BlockNumber
 	hashWrong := proof.AnchorBlockHash.Valid && proof.AnchorBlockHash.String != "" && !sameHex(proof.AnchorBlockHash.String, facts.BlockHash)
 	// RB3-F119: a proof stating no hash is completed, as a wrong one is corrected.
 	hashMissing := !proof.AnchorBlockHash.Valid || proof.AnchorBlockHash.String == ""
-	if !blockWrong && !hashWrong && !hashMissing {
+	if !txWrong && !blockWrong && !hashWrong && !hashMissing {
 		return nil
 	}
 	change := fmt.Sprintf("block %d -> %d", proof.AnchorBlockNumber, facts.BlockNumber)
+	if txWrong {
+		change = fmt.Sprintf("anchor tx %s @ %d -> %s @ %d", proof.AnchorTxHash, proof.AnchorBlockNumber, facts.TxHash, facts.BlockNumber)
+	}
 	if !blockWrong {
 		change = fmt.Sprintf("block %d hash -> %s", proof.AnchorBlockNumber, facts.BlockHash)
 	}
@@ -599,6 +657,12 @@ func repairCertenProof(ctx context.Context, cfg AnchorRepairConfig, facts *datab
 			"recomputed and the proof re-signed by %s.",
 			facts.TxHash, facts.BlockNumber, facts.BlockHash, facts.TargetChain, proof.AnchorBlockNumber, cfg.ValidatorID)
 		switch {
+		case txWrong:
+			reason = fmt.Sprintf("the proof named %s at block %d as its anchor; that transaction did not publish root %x (it is "+
+				"the settlement's). Transaction %s in block %d (%s) on %s did. The anchor reference was revised, the proof "+
+				"hash recomputed and the proof re-signed by %s (RB3-F134).",
+				proof.AnchorTxHash, proof.AnchorBlockNumber, anchor.Root, facts.TxHash, facts.BlockNumber, facts.BlockHash,
+				facts.TargetChain, cfg.ValidatorID)
 		case !blockWrong && hashWrong:
 			reason = fmt.Sprintf("anchor %s is in block %d on %s with hash %s, not %s as the proof stated. The anchor "+
 				"reference was revised, the proof hash recomputed and the proof re-signed by %s.",
@@ -611,7 +675,7 @@ func repairCertenProof(ctx context.Context, cfg AnchorRepairConfig, facts *datab
 		}
 		revised, err := cfg.Repair.ReviseCertenProofAnchor(ctx, proof.ProofID, proof.ProofHash, database.CertenAnchorRevision{
 			Chain: database.TargetChain(facts.TargetChain), BlockNumber: facts.BlockNumber, BlockHash: facts.BlockHash,
-			Confirmations: facts.Depth,
+			Confirmations: facts.Depth, TxHash: facts.TxHash,
 		}, scheme, sign, reason, *facts, cfg.ValidatorID)
 		switch {
 		case errors.Is(err, database.ErrEvidenceChanged):

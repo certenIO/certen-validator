@@ -8,6 +8,7 @@
 package execution
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -148,7 +149,7 @@ func TestLiveRepairConfirmsEveryExportedAnchor(t *testing.T) {
 		r.pools[id] = pool
 	}
 	cfg := AnchorRepairConfig{Reader: r, Now: time.Now}
-	var completedDiffers []string
+	var completedDiffers, misnamed []string
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
 	defer cancel()
 	senders := map[string]int{}
@@ -181,8 +182,18 @@ func TestLiveRepairConfirmsEveryExportedAnchor(t *testing.T) {
 				continue
 			}
 			if row.Atx != "" && !sameHex(row.Atx, loc.TxHash) {
-				fail("anchor_tx_hash %s, located %s", row.Atx, loc.TxHash)
-				continue
+				// RB3-F134: the repair corrects a named transaction only when it is mined and is not this
+				// anchor's creation.
+				named, err := r.ReadAnchorTx(ctx, row.Chain, row.Atx)
+				if err != nil || named == nil || !named.Found || named.BlockNumber == 0 {
+					fail("anchor_tx_hash %s cannot be read: %v", row.Atx, err)
+					continue
+				}
+				if b, rt, derr := createBatchAnchorArgs(named.Input); derr == nil && named.Succeeded && sameHex(hex.EncodeToString(b[:]), row.Bundle) && bytes.Equal(rt[:], root) {
+					fail("anchor_tx_hash %s is itself this anchor's creation, but %s is located", row.Atx, loc.TxHash)
+					continue
+				}
+				misnamed = append(misnamed, fmt.Sprintf("%s: anchor_tx_hash %s (block %d, to %s; verify block %d) -> create %s", row.Batch, row.Atx, named.BlockNumber, named.To, verify.BlockNumber, loc.TxHash))
 			}
 			anchor.AnchorCreateTx, creator = loc.TxHash, strings.ToLower(loc.Validator.Hex())
 			located++
@@ -218,6 +229,9 @@ func TestLiveRepairConfirmsEveryExportedAnchor(t *testing.T) {
 	t.Logf("%d anchors: %d create transactions located, %d anchor blocks and %d verify blocks the repair would fill or correct",
 		len(rows), located, blockDiffers, vblockDiffers)
 	t.Logf("%d rows whose consensus_completed_at is not their verify block's time", len(completedDiffers))
+	for _, m := range misnamed {
+		t.Logf("misnamed (RB3-F134): %s", m)
+	}
 	for _, d := range completedDiffers {
 		t.Logf("completed differs: %s", d)
 	}
