@@ -75,10 +75,9 @@ func (o *BatchOrchestrator) reportBatchCosts(
 			"at the gateway, which keys everything by slug", chainID)
 		return
 	}
-	rpcURL, apiKey := costEndpointForChain(chain)
-	if rpcURL == "" {
-		o.logf("[COST] no RPC endpoint for %s; this batch will be unmeasured and the chain will "+
-			"stay unpriceable", chain)
+	rpcURL, apiKey, err := costEndpointForChain(chain)
+	if err != nil {
+		o.logf("🚨 [COST] %s: %v; this batch is unmeasured and the chain stays unpriceable", chain, err)
 		return
 	}
 
@@ -173,7 +172,7 @@ func canonicalChainSlugForChainID(chainID int64) (string, int64) {
 
 // costEndpointForChain resolves the RPC to probe for a chain's fee data. Shared with the
 // executor path so both probe the endpoint that actually executed the transaction.
-func costEndpointForChain(chain string) (string, string) {
+func costEndpointForChain(chain string) (string, string, error) {
 	return resolveCostEndpointForChain(chain)
 }
 

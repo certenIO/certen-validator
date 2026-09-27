@@ -76,10 +76,12 @@ type CostBackfillReport struct {
 	Candidates   int
 	Reported     int
 	SkippedChain int // no canonical slug or no RPC endpoint configured
-	SkippedNoTx  int
-	Errors       int
-	ByChain      map[string]int
-	ByLeg        map[string]int
+	// SkipReasons states, per chain, why its rows were not measured.
+	SkipReasons map[string]string
+	SkippedNoTx int
+	Errors      int
+	ByChain     map[string]int
+	ByLeg       map[string]int
 }
 
 // backfillLegForStep maps a three-row cycle's workflow_step to its leg.
@@ -113,7 +115,7 @@ func RunCostBackfill(ctx context.Context, db *sql.DB, opts CostBackfillOptions) 
 	if opts.Pause <= 0 {
 		opts.Pause = 250 * time.Millisecond
 	}
-	rep := &CostBackfillReport{ByChain: map[string]int{}, ByLeg: map[string]int{}}
+	rep := &CostBackfillReport{ByChain: map[string]int{}, ByLeg: map[string]int{}, SkipReasons: map[string]string{}}
 
 	reporter := CostReporter()
 	if reporter == nil && !opts.DryRun {
@@ -198,10 +200,9 @@ func RunCostBackfill(ctx context.Context, db *sql.DB, opts CostBackfillOptions) 
 		//
 		// Some rows were written with network_name "unknown-296" or
 		// "unknown-cardano-preview" — the validator did not recognise the chain at execution
-		// time. Those names resolve to nothing, and resolveCostEndpointForChain's EVM fallback
-		// would then hand them ETHEREUM_URL, probing a Hedera or Cardano transaction against an
-		// Ethereum node. That cannot succeed, and if it somehow returned a receipt it would
-		// price the wrong chain's gas.
+		// time. Those names resolve to no chain's endpoint (the ETHEREUM_URL
+		// fallback that once handed them the Sepolia node is gone, RB3-F96); probing a Hedera or Cardano
+		// transaction against another chain's node could only price the wrong chain's gas.
 		//
 		// 296 IS Hedera and could be mapped by hand, but the name records that the writer did
 		// not know — inferring it now is a guess about money. Skip and count.
@@ -220,12 +221,12 @@ func RunCostBackfill(ctx context.Context, db *sql.DB, opts CostBackfillOptions) 
 				chainID = parsed
 			}
 		}
-		rpcURL, apiKey := costEndpointForChain(chain)
-		if rpcURL == "" {
-			// No endpoint configured for this chain in THIS process's environment. Not an
-			// error: a validator is not required to hold RPC credentials for every chain it has
-			// ever touched.
+		rpcURL, apiKey, err := costEndpointForChain(chain)
+		if err != nil {
+			// No endpoint configured for this chain in THIS process's environment: a validator is not
+			// required to hold RPC credentials for every chain it has ever touched. Counted and stated.
 			rep.SkippedChain++
+			rep.SkipReasons[chain] = err.Error()
 			continue
 		}
 
@@ -271,6 +272,9 @@ func RunCostBackfill(ctx context.Context, db *sql.DB, opts CostBackfillOptions) 
 		rep.Reported, rep.SkippedChain, rep.Errors, rep.Candidates)
 	for chain, n := range rep.ByChain {
 		logf("[BACKFILL]   %-24s %d", chain, n)
+	}
+	for chain, why := range rep.SkipReasons {
+		logf("[BACKFILL]   %-24s unmeasured: %s", chain, why)
 	}
 	return rep, nil
 }

@@ -503,6 +503,7 @@ func main() {
 		log.Printf("📋 CLI flag override: using validator ID from command line: %s", *validatorID)
 		cfg.ValidatorID = *validatorID
 	}
+	requireValidatorID(cfg)
 	log.Printf("📋 Validator ID: %s (from %s)", cfg.ValidatorID, func() string {
 		if *validatorID != "" {
 			return "CLI flag"
@@ -984,6 +985,15 @@ func main() {
 	log.Printf("✅ BFT Validator stopped")
 }
 
+// requireValidatorID refuses to run as nobody in particular. An unset VALIDATOR_ID used to become
+// "validator-default" - the name signed into blocks, attestations and certen_schema_history, which
+// production's history carries once (RB3-F89).
+func requireValidatorID(cfg *config.Config) {
+	if err := cfg.RequireValidatorID(); err != nil {
+		log.Fatal(err)
+	}
+}
+
 func runMigrationCommand(args []string) {
 	if !validMigrationCommand(args) {
 		log.Fatal("usage: certen-validator migrate <up|verify [--require VERSION]|fingerprint|catalog|adopt [--dry-run]|data NAME>")
@@ -992,6 +1002,7 @@ func runMigrationCommand(args []string) {
 	if err != nil {
 		log.Fatalf("load configuration: %v", err)
 	}
+	requireValidatorID(cfg)
 	client, err := database.NewClient(cfg)
 	if err != nil {
 		log.Fatalf("connect database: %v", err)
@@ -2079,7 +2090,7 @@ func printHelp() {
 	fmt.Println("  validator-service [OPTIONS]")
 	fmt.Println()
 	fmt.Println("Options:")
-	fmt.Println("  --validator-id=ID        Validator ID (default: validator-1)")
+	fmt.Println("  --validator-id=ID        Validator ID (required unless VALIDATOR_ID is set)")
 	fmt.Println("  --help                   Show this help message")
 	fmt.Println()
 	fmt.Println("BFT Consensus Features:")
