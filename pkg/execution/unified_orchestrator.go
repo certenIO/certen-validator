@@ -485,6 +485,14 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 		return result, err
 	}
 
+	// No registry is a wiring defect, refused by name and recorded. It used to be a nil dereference inside
+	// the adapter's goroutine - a panic that takes the whole validator down (RB3-F108).
+	if o.config.Registry == nil {
+		err := fmt.Errorf("proof cycle %s: no strategy registry is configured", req.CycleID)
+		result.Error = err.Error()
+		o.recordStartFailure(ctx, req, result, err)
+		return result, err
+	}
 	chainStrategy, attestStrategy, err := o.config.Registry.GetStrategiesForChain(targetChain)
 	if err != nil {
 		result.Error = fmt.Sprintf("get strategies: %v", err)

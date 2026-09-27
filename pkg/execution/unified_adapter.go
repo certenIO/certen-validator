@@ -157,18 +157,22 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 
 		// Extract governance data from commitment (for G1/G2 proof levels)
 		var governanceRoot, operationCommitment [32]byte
+		// A value that is present and does not decode refuses the cycle: it used to leave a zero root in
+		// the request, as if consensus had committed to nothing (RB3-F105).
 		if commitMap != nil {
-			// Extract governanceRoot (hex string -> [32]byte)
 			if govRootStr, ok := commitMap["governanceRoot"].(string); ok && govRootStr != "" {
-				if decoded, err := hexStringToBytes32(govRootStr); err == nil {
-					governanceRoot = decoded
+				decoded, err := hexStringToBytes32(govRootStr)
+				if err != nil {
+					return refuse(fmt.Errorf("intent %s: the commitment's governanceRoot %q does not decode: %w", intentID, govRootStr, err))
 				}
+				governanceRoot = decoded
 			}
-			// Extract operationCommitment (hex string -> [32]byte)
 			if opCommitStr, ok := commitMap["operationCommitment"].(string); ok && opCommitStr != "" {
-				if decoded, err := hexStringToBytes32(opCommitStr); err == nil {
-					operationCommitment = decoded
+				decoded, err := hexStringToBytes32(opCommitStr)
+				if err != nil {
+					return refuse(fmt.Errorf("intent %s: the commitment's operationCommitment %q does not decode: %w", intentID, opCommitStr, err))
 				}
+				operationCommitment = decoded
 			}
 		}
 
@@ -279,13 +283,12 @@ func hexStringToBytes32(hexStr string) ([32]byte, error) {
 		return result, fmt.Errorf("failed to decode hex string: %w", err)
 	}
 
-	// Copy to fixed-size array (pad or truncate as needed)
-	if len(decoded) > 32 {
-		copy(result[:], decoded[:32])
-	} else {
-		copy(result[32-len(decoded):], decoded)
+	// Exactly 32 bytes. A longer value used to be truncated and a shorter one left-padded - a different
+	// root from the one committed, with no error (RB3-F105).
+	if len(decoded) != 32 {
+		return result, fmt.Errorf("%d bytes, not 32", len(decoded))
 	}
-
+	copy(result[:], decoded)
 	return result, nil
 }
 
