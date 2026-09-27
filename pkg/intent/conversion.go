@@ -74,10 +74,16 @@ func BuildCertenIntent(
 		return nil, fmt.Errorf("decode governance data: %w", err)
 	}
 
-	// Optional: decode replay protection for sanity checking (not required here)
-	// We keep this in case you want to add validation hooks later.
-	var _rp rawReplay
-	_ = mapToStruct(replayBlob, &_rp)
+	// Replay protection must at least decode: a blob that does not is refused here, by name, as a
+	// malformed governance blob is. It used to be decoded into a discarded value with the error ignored
+	// (RB3-F100). Its expiry is enforced at execution (CertenIntent.ValidateForExecution).
+	var rp rawReplay
+	if err := mapToStruct(replayBlob, &rp); err != nil {
+		return nil, fmt.Errorf("decode replay protection: %w", err)
+	}
+	if rp.ExpiresAt < 0 {
+		return nil, fmt.Errorf("decode replay protection: expires_at %d is negative", rp.ExpiresAt)
+	}
 
 	// Compute OrganizationADI using governance first, then intent
 	orgADI := firstNonEmpty(gv.OrganizationAdi, im.Organization)
