@@ -35,9 +35,10 @@ func stackForChain(t *testing.T, chainID int64) *BatchStack {
 	// TestFlushChainPeriods_NoAttestFnDoesNotPanic asserts. Its account screen accepts every
 	// account, standing in for the chain reads a peer makes before it co-signs.
 	return &BatchStack{
-		Resolver:      r,
-		Mempool:       NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64}),
-		Orchestrators: map[int64]*BatchOrchestrator{chainID: {screen: acceptEveryAccount}},
+		Resolver:       r,
+		Mempool:        NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64}),
+		Orchestrators:  map[int64]*BatchOrchestrator{chainID: {screen: acceptEveryAccount}},
+		MemberOutcomes: recordedOutcomes{},
 	}
 }
 

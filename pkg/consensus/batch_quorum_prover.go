@@ -396,6 +396,11 @@ func (bv *BFTValidator) enqueueForBatch(
 			// This intent's member for the chain is already queued by an earlier run. Queued.
 			bv.logger.Printf("📦 [BATCH-QUEUE] intent %s already queued on chain %d — not queued twice",
 				certenIntent.IntentID, m.chainID)
+		case errors.Is(enqErr, ErrMemberAlreadyDecided):
+			// An earlier run settled this member (or recorded why it did not): finished, never re-run. A
+			// re-driven intent - discovery rewinding after a restart - arrives here (RB3-F141).
+			bv.logger.Printf("📦 [BATCH-QUEUE] intent %s on chain %d is already decided — not queued again: %v",
+				certenIntent.IntentID, m.chainID, enqErr)
 		default:
 			// All-or-nothing: take back what this call queued for the intent's other chains, or the
 			// intent would settle on one chain while being reported refused.

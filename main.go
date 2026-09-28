@@ -1554,6 +1554,11 @@ func startValidator(
 	if sErr != nil {
 		return nil, nil, fmt.Errorf("batch path: stack assembly: %w", sErr)
 	}
+	// A member with a recorded outcome is never queued again (RB3-F141).
+	if dbClient == nil {
+		return nil, nil, fmt.Errorf("the validator cannot start without its database")
+	}
+	stack.MemberOutcomes = database.NewIntentLifecycleRepository(dbClient)
 	// The attester compares an incoming request's period width against this and
 	// refuses a mismatch, so a proposer cannot widen what this node selects.
 	periodBlocks, err := batchPeriodBlocksFromEnv()

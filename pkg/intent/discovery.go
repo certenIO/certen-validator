@@ -518,17 +518,18 @@ func (id *IntentDiscovery) initializeStartingHeight(ctx context.Context) error {
 
 	// REWIND FOR IN-FLIGHT INTENTS.
 	//
-	// The batch mempool is in-memory, so a restart empties it — but the round has already
-	// returned batch_queued and the intent will not take any other path. Without a rewind the
-	// watermark resumes ahead of those intents, they are never rediscovered, and they are
-	// neither settled, failed, nor retried.
+	// The watermark can be ahead of an intent whose round had not finished when the process
+	// stopped - discovered, not yet queued. Without a rewind it is never rediscovered, and it is
+	// neither settled, failed, nor retried. (Queued members survive a restart on their own: the
+	// batch mempool is persisted, BATCH_MEMPOOL_PATH.)
 	//
-	// Membership is a pure function of committed Accumulate state, so the queue is a cache of
-	// a derivation rather than a source of truth: rewinding re-derives it. Re-processing is
-	// safe by construction — leaves are single-use on chain (_consumedLeaf), bundleId is
-	// deterministic so a re-derived period reproduces the same anchor, and FlushChain
-	// short-circuits when that anchor is already attested, releasing members without
-	// re-executing. The worst case is wasted proof work.
+	// Re-processing a finished intent does the proof work again and nothing else (RB3-F141). Its
+	// ValidatorBlock is not broadcast again - the app's committed-operation index answers that it
+	// committed, and from execution rules v9 consensus refuses a second one - and its members are
+	// not queued again - a member with a recorded outcome is answered as decided. Before those two
+	// checks this was not so: rewound intents were rebuilt and committed a second time (161 bundles
+	// in production), and an on-demand member re-queued after disposal was attested and written
+	// back again.
 	//
 	// It also restores a RESTARTED PEER's ability to attest. A peer with an empty mempool
 	// refuses every request for a period it should be able to reproduce, which is silent

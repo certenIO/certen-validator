@@ -15,6 +15,7 @@ import (
 
 	"github.com/certen/independant-validator/pkg/config"
 	"github.com/certen/independant-validator/pkg/consensus"
+	"github.com/certen/independant-validator/pkg/database"
 )
 
 // =============================================================================
@@ -199,6 +200,39 @@ type BatchStack struct {
 	// SequenceChain reads a successor's predecessor on its chain (batch_sequence.go): the leader
 	// before it settles one, and a peer before it co-signs one.
 	SequenceChain NonSettlementChain
+
+	// MemberOutcomes reads a member's recorded outcome (RB3-F141). A member that has one is finished and is
+	// never queued again: the mempool forgets a member once it is disposed, and a re-driven intent - a
+	// restart's rewind, a retry after a commit the proposer did not see - would otherwise settle, attest
+	// and write it back a second time. Required: without it that cannot be told, so nothing is queued.
+	MemberOutcomes MemberOutcomeReader
+}
+
+// MemberOutcomeReader reads the recorded outcome of an intent's member on a chain (nil: none recorded).
+type MemberOutcomeReader interface {
+	MemberOutcomeOf(ctx context.Context, intentID string, chainID int64) (*database.RecordedMemberOutcome, error)
+}
+
+// memberOutcomeTimeout bounds one outcome read on the enqueue path.
+const memberOutcomeTimeout = 10 * time.Second
+
+// undecided returns nil when the intent's member on the chain has no recorded outcome, ErrMemberAlreadyDecided
+// naming the outcome when it has one, and ErrBatchUnavailable when that cannot be read.
+func (s *BatchStack) undecided(intentID string, chainID int64) error {
+	if s.MemberOutcomes == nil {
+		return fmt.Errorf("%w: no member outcome store is wired, so a finished member cannot be told from a new one", ErrBatchUnavailable)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), memberOutcomeTimeout)
+	defer cancel()
+	o, err := s.MemberOutcomes.MemberOutcomeOf(ctx, intentID, chainID)
+	if err != nil {
+		return fmt.Errorf("%w: the outcome of intent %s on chain %d could not be read: %v", ErrBatchUnavailable, intentID, chainID, err)
+	}
+	if o == nil {
+		return nil
+	}
+	return fmt.Errorf("%w: intent %s on chain %d: settlement %s, proof cycle %s, settlement tx %q, cycle %q, recorded %s",
+		ErrMemberAlreadyDecided, intentID, chainID, o.Settlement, o.ProofCycle, o.SettlementTx, o.CycleID, o.RecordedAt.UTC().Format(time.RFC3339))
 }
 
 // NewBatchStack assembles resolver -> submitter -> orchestrator for every configured chain.
@@ -862,6 +896,9 @@ func (s *BatchStack) EnqueueForBatch(
 	commitTime time.Time,
 	accumTxHash string,
 ) error {
+	if err := s.undecided(intentID, chainID); err != nil {
+		return err
+	}
 	p, err := s.admit(intentID, adiURL, chainID, account, operationID, legs, attestation,
 		commitHeight, commitPartition, commitTime, accumTxHash)
 	if err != nil {
@@ -891,6 +928,9 @@ func (s *BatchStack) EnqueueOnDemand(
 	commitTime time.Time,
 	accumTxHash string,
 ) error {
+	if err := s.undecided(intentID, chainID); err != nil {
+		return err
+	}
 	p, err := s.admit(intentID, adiURL, chainID, account, operationID, legs, attestation,
 		commitHeight, commitPartition, commitTime, accumTxHash)
 	if err != nil {
@@ -933,6 +973,14 @@ func (s *BatchStack) EnqueueAfter(
 	}
 	if after.ChainID == chainID {
 		return fmt.Errorf("intent %s: a member cannot follow a member on its own chain %d", intentID, chainID)
+	}
+	// A finished or already-queued successor is answered before its predecessor is looked for: on a
+	// re-driven intent the predecessor may be finished and gone from the mempool (RB3-F141).
+	if err := s.undecided(intentID, chainID); err != nil {
+		return err
+	}
+	if held := s.Mempool.GetOnDemand(chainID, operationID); held != nil && held.IntentID == intentID {
+		return fmt.Errorf("%w: intent %s on chain %d", ErrMemberAlreadyQueued, intentID, chainID)
 	}
 	pred, ok := s.Mempool.FindMember(after.ChainID, after.OperationID)
 	if !ok || pred.IntentID != intentID {
