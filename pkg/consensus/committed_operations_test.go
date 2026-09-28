@@ -12,6 +12,7 @@ import (
 	"time"
 
 	abcitypes "github.com/cometbft/cometbft/abci/types"
+	"github.com/cometbft/cometbft/config"
 )
 
 // Blocks at gateNow (2027-01-15) are judged by the v9 rule; beforeV9 is before duplicateOperationRuleFrom.
@@ -324,5 +325,17 @@ func TestTheMempoolRefusesABlockForACommittedOperation(t *testing.T) {
 	}
 	if res, _ := app.CheckTx(context.Background(), &abcitypes.RequestCheckTx{Tx: persistTestBlockJSON(t, "op-mem", "G2", "validator-2")}); res.Code == codeDuplicateOperation {
 		t.Fatalf("another validator's block for the operation refused: %s", res.Log)
+	}
+}
+
+// RB3-F97: the node never serves CometBFT's gRPC broadcast API (GO-2026-6443 has no released fix).
+func TestTheCometBFTGRPCServerIsNeverServed(t *testing.T) {
+	cfg := config.DefaultConfig()
+	if cfg.RPC.GRPCListenAddress != "" {
+		t.Fatalf("CometBFT's default serves gRPC at %q", cfg.RPC.GRPCListenAddress)
+	}
+	cfg.RPC.GRPCListenAddress = "tcp://127.0.0.1:36658"
+	if _, err := NewRealCometBFTEngine(cfg, newPersistTestApp(t), persistQuietLog); err == nil || !strings.Contains(err.Error(), "GO-2026-6443") {
+		t.Fatalf("a gRPC listen address was accepted: %v", err)
 	}
 }

@@ -3,5 +3,8 @@
     "ethers": "^6.17.0",
     "pptxgenjs": "^4.0.1",
     "puppeteer-core": "^25.4.0"
+  },
+  "overrides": {
+    "image-size": "2.0.4"
   }
 }

@@ -5,7 +5,7 @@
 # Configuration
 BINARY_NAME = liteclient
 CLI_BINARIES = lc-verify proof-runner proofcheck crystal-step1 crystal-step3
-GO_VERSION = 1.21
+GO_VERSION = 1.25
 COVERAGE_THRESHOLD = 80
 
 # Build settings

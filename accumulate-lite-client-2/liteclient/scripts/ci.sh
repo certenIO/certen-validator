@@ -6,7 +6,7 @@ set -euo pipefail
 
 # Configuration
 COVERAGE_THRESHOLD=70
-GO_VERSION_MIN="1.21"
+GO_VERSION_MIN="1.25"
 TIMEOUT="10m"
 
 # Colors for output
