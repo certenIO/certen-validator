@@ -79,26 +79,39 @@ func TestCurrentVersionIsSet(t *testing.T) {
 	if CurrentExecutionRulesVersion == 0 {
 		t.Fatal("CurrentExecutionRulesVersion is 0, which disables every check")
 	}
-	if CurrentExecutionRulesVersion != executionRulesV8 {
+	if CurrentExecutionRulesVersion != executionRulesV9 {
 		t.Fatalf("current = %d; if rules changed, bump the constant AND add a "+
 			"changelog entry in execution_rules.go", CurrentExecutionRulesVersion)
 	}
 }
 
-// RB3-F95: a v8 binary continues state committed under v7 - the production chain - without a reset, and
-// stamps it v8 from then on. Nothing else is continued: v6 state still refuses, and a v7 binary still
-// refuses v8 state (it cannot replay a rotation).
-func TestV8ContinuesV7StateAndNothingElse(t *testing.T) {
-	got, err := checkExecutionRulesVersion(executionRulesV7, 1000)
-	if err != nil || got != executionRulesV8 {
-		t.Fatalf("v7 state under the v8 binary: (%d, %v); want continued as v8", got, err)
+// RB3-F95, RB3-F141: the v9 binary continues state committed under v7 - the production chain - and v8
+// without a reset. Nothing else is continued: v6 state still refuses. Every continuation leads to the
+// binary's own version, and the claims form an unbroken chain: v7 state is continued only because the
+// v7->v8 claim and the v8->v9 claim both hold, so no version between the oldest continued one and the
+// current one may be missing its entry.
+func TestV9ContinuesV7AndV8StateAndNothingElse(t *testing.T) {
+	for _, from := range []uint64{executionRulesV7, executionRulesV8} {
+		got, err := checkExecutionRulesVersion(from, 1000)
+		if err != nil || got != executionRulesV9 {
+			t.Fatalf("v%d state under the v9 binary: (%d, %v); want continued as v9", from, got, err)
+		}
 	}
 	if _, err := checkExecutionRulesVersion(executionRulesV6, 1000); err == nil {
 		t.Fatal("v6 state was continued")
 	}
+	oldest := CurrentExecutionRulesVersion
 	for from, to := range compatibleContinuations {
-		if to != from+1 {
-			t.Fatalf("continuation %d -> %d skips a version: each is a claim about one bump", from, to)
+		if to != CurrentExecutionRulesVersion {
+			t.Fatalf("continuation %d -> %d does not lead to this binary's v%d", from, to, CurrentExecutionRulesVersion)
+		}
+		if from < oldest {
+			oldest = from
+		}
+	}
+	for v := oldest; v < CurrentExecutionRulesVersion; v++ {
+		if _, ok := compatibleContinuations[v]; !ok {
+			t.Fatalf("v%d is continued but v%d is not: the chain of claims is broken", oldest, v)
 		}
 	}
 }

@@ -180,28 +180,29 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 //
 // Returns Height > 0 when the block was observed committed, and Height == 0 when it was admitted to the
 // mempool but not yet observed in a block (callers already treat this as pending consensus).
-func submitValidatorBlock(ctx context.Context, rpc broadcastRPC, payload []byte, timing broadcastTiming, logger *log.Logger) (*BFTExecutionResult, error) {
+//
+// committedThrough is the height through which the app's committed-operation index has answered that this
+// validator's block for this operation has not committed (BroadcastValidatorBlockCommit, RB3-F141). It is the
+// floor of every scan in this call. It used to be the chain height read from Status just before the
+// broadcast, which excluded an earlier copy committed at or below that height - and since the builder no
+// longer stamps wall time (RB3-F99), a rebuilt block is byte-identical to the one that committed, so a retry
+// was told "already in the mempool cache", scanned above the old commit, and reported the committed block as
+// not committed. Status also runs ahead of the app: CometBFT saves a block before the app commits it, so a
+// height read there could exclude the block the first copy was being committed in. The index height is the
+// app's own committed height, and the index has already said no copy committed at or below it.
+func submitValidatorBlock(ctx context.Context, rpc broadcastRPC, payload []byte, committedThrough int64, timing broadcastTiming, logger *log.Logger) (*BFTExecutionResult, error) {
 	start := time.Now()
 	sum := sha256.Sum256(payload)
 	txHash := sum[:]
 
-	// The floor for every scan in this call. Anything already committed at or below h0 belongs to an
-	// earlier submission of identical bytes, not to this one.
-	//
-	// A Status that does not answer leaves h0 at 0, which scans the whole cap window instead: costlier,
-	// but it can only add history, never hide the block this transaction is in.
 	scanning, err := inclusionScanEnabled()
 	if err != nil {
 		return nil, err
 	}
-	var h0 int64
-	if scanning {
-		var err error
-		if h0, err = statusHeight(ctx, rpc, timing.lookupTimeout); err != nil {
-			logger.Printf("⚠️ [COMETBFT] Could not read the chain height before broadcasting (%v); "+
-				"the inclusion scan will search its whole window", err)
-		}
+	if committedThrough < 0 {
+		return nil, fmt.Errorf("the scan floor must be a committed height, got %d", committedThrough)
 	}
+	h0 := committedThrough
 	// One entry per attempt: the height the chain was at when that copy was offered. A failure cannot be
 	// final while a copy offered at or after it may still commit.
 	var admittedAt []int64
@@ -466,8 +467,7 @@ func (s *rpcCommittedBlockSource) CommitQuorum(ctx context.Context, height int64
 // store: the block's transactions and time, and the FinalizeBlock result code of each transaction (a
 // rejected transaction was never stored by FinalizeBlock, so it is not persisted).
 type rpcCommittedBlockSource struct {
-	reader  blockReader
-	chainID string
+	reader blockReader
 }
 
 func (s *rpcCommittedBlockSource) CommittedValidatorBlocks(ctx context.Context, height int64) (*committedBlock, error) {
@@ -496,14 +496,14 @@ func (s *rpcCommittedBlockSource) CommittedValidatorBlocks(ctx context.Context, 
 		if results.TxsResults[i] == nil || results.TxsResults[i].Code != 0 {
 			continue // rejected by FinalizeBlock
 		}
-		if _, ok := DecodePolicyUpdate(tx); ok {
-			continue // not a ValidatorBlock
+		if !isValidatorBlockTx(tx) {
+			continue // a policy update, a validator rotation or a tick (RB3-F145)
 		}
 		var vb ValidatorBlock
 		if err := json.Unmarshal(tx, &vb); err != nil {
 			continue // FinalizeBlock would have rejected it; a code-0 result makes this unreachable
 		}
-		applyCommitMetadata(&vb, height, blk.Block.Header.Time, s.chainID)
+		applyCommitMetadata(&vb, height, blk.Block.Header.Time)
 		out.blocks = append(out.blocks, vb)
 	}
 	return out, nil

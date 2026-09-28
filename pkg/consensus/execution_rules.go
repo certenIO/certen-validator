@@ -112,8 +112,26 @@ const (
 	// v8 together, verified by every node reporting app version 8 before the first rotation.
 	executionRulesV8 uint64 = 8
 
+	// v9 - two changes to accept/reject (RB3-F140, RB3-F141):
+	//
+	//   - A ValidatorBlock naming no validator fails the invariants (code 2). v8 filled in the chain id
+	//     first, which made the check unreachable and committed such a block under the chain's name.
+	//   - From block time duplicateOperationRuleFrom, a validator's second ValidatorBlock for an operation
+	//     its block already committed is refused (code 8). Before that time it is accepted, as v8 did:
+	//     history holds 161 such blocks and replay must reproduce them.
+	//
+	// v9 CONTINUES v7 and v8 state without a reset. The claim is that v9 decides every committed block of
+	// that history exactly as it was decided - the same outcome and the same result code. It is checked,
+	// not assumed: before CometBFT's handshake every node reads its committed blocks (IndexCommittedHistory)
+	// and refuses to start on any transaction v9 would decide differently. On the production chain it holds
+	// by construction as well as by that check: every committed ValidatorBlock names its validator, no
+	// transaction was ever refused, and the chain's last block (height 2622, 2026-09-27T14:14Z) precedes
+	// duplicateOperationRuleFrom. The state stays stamped v7 or v8 until a block is decided in a way only
+	// v9 decides it (committedRulesVersion), so a rollback stays open until then.
+	executionRulesV9 uint64 = 9
+
 	// CurrentExecutionRulesVersion is what THIS binary implements.
-	CurrentExecutionRulesVersion = executionRulesV8
+	CurrentExecutionRulesVersion = executionRulesV9
 )
 
 // compatibleContinuations names the older rules whose committed state this binary may continue, and why
@@ -121,9 +139,11 @@ const (
 // block the older ones could have committed. Anything not listed refuses to start, as before. An entry is
 // a claim about history, made once per bump and never by default.
 var compatibleContinuations = map[uint64]uint64{
-	// v8 adds only the rotation and tick kinds, which pre-v8 history does not contain (see
-	// executionRulesV8 - checked against every committed block before the deploy).
-	executionRulesV7: executionRulesV8,
+	// v8 added only the rotation and tick kinds, which pre-v8 history does not contain (see
+	// executionRulesV8 - checked against every committed block before the deploy). v9 decides v7 and v8
+	// history as they did, which every node checks before it starts (see executionRulesV9).
+	executionRulesV7: executionRulesV9,
+	executionRulesV8: executionRulesV9,
 }
 
 // ExecutionRulesMismatchError explains a refusal to start in terms an operator

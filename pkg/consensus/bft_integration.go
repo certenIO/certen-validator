@@ -1352,7 +1352,8 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	// Nothing past this point may act on a ValidatorBlock consensus has not committed (RB3-F98). It used
 	// to proceed on CheckTx alone - "CometBFT is expected to commit it shortly" - unless the operator had
 	// opted in to failing closed; production had not. A block admitted but not seen committed is
-	// a retryable refusal: the resubmission finds the committed transaction by hash (bft_broadcast_confirm.go).
+	// a retryable refusal: the resubmission asks the app's committed-operation index first, finds the
+	// block committed, and continues from its height without broadcasting it again (RB3-F141).
 	if err := requireCommitted(bftRes); err != nil {
 		return &ExecutionTaskResult{
 			Success:    false,
@@ -1768,6 +1769,16 @@ func NewRealCometBFTEngine(
 	// CRITICAL FIX: Enable CometBFT logging to see consensus activity
 	tmLogger := cmtlog.NewTMLogger(cmtlog.NewSyncWriter(os.Stdout))
 	tmLogger = tmLogger.With("module", "cometbft")
+
+	// Index the committed chain before the node opens its stores: the handshake below replays blocks through
+	// FinalizeBlock, and the committed-operation rule judges them against this index (RB3-F141). The check
+	// that v9 rules reproduce this history runs here too, so a node never starts on state it would decide
+	// differently.
+	if va, ok := app.(*ValidatorApp); ok {
+		if err := indexCommittedHistoryFromStores(cometCfg, dbProvider, va); err != nil {
+			return nil, fmt.Errorf("index the committed chain: %w", err)
+		}
+	}
 
 	// Create the in-process node.
 	n, err := node.NewNode(
@@ -2482,6 +2493,22 @@ func (e *RealCometBFTEngine) BroadcastValidatorBlockCommit(
 
 	e.logger.Printf("📡 [COMETBFT] BroadcastValidatorBlockCommit: starting for bundle=%s", vb.BundleID)
 
+	// Has this validator's block for this operation already committed? The app's committed-operation index
+	// answers from committed state (RB3-F141). A proposer that did not see its first commit - the inclusion
+	// poll gave up, discovery re-drove the intent, a restart forgot it - used to rebuild the block and
+	// broadcast it again, and the chain committed it twice.
+	app, ok := e.app.(*ValidatorApp)
+	if !ok {
+		return nil, fmt.Errorf("ValidatorBlocks commit through the ValidatorApp; this engine runs %T", e.app)
+	}
+	prior, committedThrough, err := app.CommittedOperation(vb.ValidatorID, vb.CrossChainProof.OperationID)
+	if err != nil {
+		return nil, err
+	}
+	if prior != nil {
+		return alreadyCommitted(vb, prior, e.logger)
+	}
+
 	if err := e.Start(); err != nil {
 		e.logger.Printf("❌ [COMETBFT] Failed to start engine: %v", err)
 		return nil, err
@@ -2497,7 +2524,27 @@ func (e *RealCometBFTEngine) BroadcastValidatorBlockCommit(
 	// Submit, then confirm inclusion. The outcome is decided by whether the transaction is admitted or
 	// committed — looked up by hash when a reply is lost — not by the RPC acknowledgement alone
 	// (bft_broadcast_confirm.go).
-	return submitValidatorBlock(ctx, e.rpcClient, payload, defaultBroadcastTiming, e.logger)
+	return submitValidatorBlock(ctx, e.rpcClient, payload, committedThrough, defaultBroadcastTiming, e.logger)
+}
+
+// ErrOperationCommittedAsAnotherBlock is a validator's block for an operation that committed with a
+// different bundle than the one just built. The chain holds the committed one; this one is never broadcast.
+var ErrOperationCommittedAsAnotherBlock = errors.New("this validator's block for the operation committed as a different bundle")
+
+// alreadyCommitted is the result of a ValidatorBlock whose operation this validator already committed: the
+// committed block's height and transaction when it is the same bundle, a refusal naming both when not.
+func alreadyCommitted(vb *ValidatorBlock, prior *ledger.CommittedOperation, logger *log.Logger) (*BFTExecutionResult, error) {
+	if prior.BundleID != vb.BundleID {
+		return nil, fmt.Errorf("%w: operation %s committed at height %d as bundle %s; the rebuilt block is bundle %s",
+			ErrOperationCommittedAsAnotherBlock, vb.CrossChainProof.OperationID, prior.Height, prior.BundleID, vb.BundleID)
+	}
+	txHash, err := hex.DecodeString(prior.TxHash)
+	if err != nil {
+		return nil, fmt.Errorf("committed operation %s names transaction %q: %w", vb.CrossChainProof.OperationID, prior.TxHash, err)
+	}
+	logger.Printf("✅ [COMETBFT] ValidatorBlock %s already COMMITTED at height %d (tx %s) - not broadcast again",
+		vb.BundleID, prior.Height, prior.TxHash)
+	return &BFTExecutionResult{Height: prior.Height, TxHash: txHash, CommittedAt: prior.BlockTime}, nil
 }
 
 // BroadcastAppTxSync broadcasts ABCI transactions via in-process CometBFT engine
@@ -2569,7 +2616,7 @@ func (e *RealCometBFTEngine) SetValidatorRepositories(repos *database.Repositori
 			writerID = e.nodeID
 		}
 		validatorApp.EnableConsensusPersistence(repos, writerID,
-			&rpcCommittedBlockSource{reader: e.rpcClient, chainID: validatorApp.GetChainID()})
+			&rpcCommittedBlockSource{reader: e.rpcClient})
 		e.logger.Printf("✅ [PERSIST] Database repositories wired to ValidatorApp for consensus persistence (writer=%s)", writerID)
 	}
 }

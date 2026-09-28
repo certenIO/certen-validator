@@ -34,6 +34,7 @@ func runBlockFull(app *ValidatorApp, height int64, blockTime time.Time, txs ...[
 	app.activatePolicyForBlock(height, blockTime.UTC().Unix())
 	app.currentBlockHeight = uint64(height)
 	app.blockBundles = app.blockBundles[:0]
+	app.blockOperations = nil // FinalizeBlock's per-block reset
 	for _, tx := range txs {
 		if pu, ok := DecodePolicyUpdate(tx); ok {
 			app.processPolicyUpdate(pu, height)

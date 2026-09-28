@@ -599,7 +599,7 @@ func TestSubmitReportsSuccessWhenAResendCommittedAfterARejection(t *testing.T) {
 		}
 	}
 
-	res, err := submitValidatorBlock(context.Background(), chain, testPayload, scanTiming(), broadcastQuietLog)
+	res, err := submitValidatorBlock(context.Background(), chain, testPayload, startFloor(chain), scanTiming(), broadcastQuietLog)
 	if err != nil {
 		t.Fatalf("a committed ValidatorBlock was reported as failed: %v", err)
 	}
@@ -634,7 +634,7 @@ func TestTheIndexLyingAboutAFailureDoesNotOverrideTheBlocks(t *testing.T) {
 		return ok()
 	}
 
-	res, err := submitValidatorBlock(context.Background(), chain, testPayload, scanTiming(), broadcastQuietLog)
+	res, err := submitValidatorBlock(context.Background(), chain, testPayload, startFloor(chain), scanTiming(), broadcastQuietLog)
 	if err != nil {
 		t.Fatalf("the index's stale failure was believed over the block that committed: %v", err)
 	}
@@ -660,7 +660,7 @@ func TestTheIndexLyingDuringALostReplyDoesNotOverrideTheBlocks(t *testing.T) {
 		return nil, eofErr // the reply is lost
 	}
 
-	res, err := submitValidatorBlock(context.Background(), chain, testPayload, scanTiming(), broadcastQuietLog)
+	res, err := submitValidatorBlock(context.Background(), chain, testPayload, startFloor(chain), scanTiming(), broadcastQuietLog)
 	if err != nil {
 		t.Fatalf("lost reply + a lying index produced a false failure: %v", err)
 	}
@@ -678,7 +678,7 @@ func TestSubmitStillReportsAGenuineRejection(t *testing.T) {
 		chain.tip = 100
 		return ok()
 	}
-	_, err := submitValidatorBlock(context.Background(), chain, testPayload, scanTiming(), broadcastQuietLog)
+	_, err := submitValidatorBlock(context.Background(), chain, testPayload, startFloor(chain), scanTiming(), broadcastQuietLog)
 	if err == nil || !strings.Contains(err.Error(), "transaction failed in block: code=7") {
 		t.Fatalf("err = %v, want the block rejection", err)
 	}
@@ -688,7 +688,7 @@ func TestSubmitStillReportsAGenuineRejection(t *testing.T) {
 // "admitted, consensus will commit it".
 func TestSubmitReturnsPendingWhenNothingCommitsInTheWindow(t *testing.T) {
 	chain := &scriptedChain{tip: 99, blocks: map[int64][]scriptedTx{}}
-	res, err := submitValidatorBlock(context.Background(), chain, testPayload, scanTiming(), broadcastQuietLog)
+	res, err := submitValidatorBlock(context.Background(), chain, testPayload, startFloor(chain), scanTiming(), broadcastQuietLog)
 	if err != nil {
 		t.Fatalf("err = %v, want a pending result", err)
 	}
@@ -708,7 +708,7 @@ func TestD1HappyPathIsFastAndCheap(t *testing.T) {
 	}
 
 	start := time.Now()
-	res, err := submitValidatorBlock(context.Background(), chain, testPayload, scanTiming(), broadcastQuietLog)
+	res, err := submitValidatorBlock(context.Background(), chain, testPayload, startFloor(chain), scanTiming(), broadcastQuietLog)
 	elapsed := time.Since(start)
 	if err != nil || res.Height != 100 {
 		t.Fatalf("res=%+v err=%v, want committed at 100", res, err)
@@ -743,7 +743,7 @@ func TestInclusionScanCanBeTurnedOff(t *testing.T) {
 func TestInclusionScanOffUsesTheIndexPath(t *testing.T) {
 	t.Setenv("INCLUSION_SCAN", "off")
 	chain := &scriptedChain{tip: 99, blocks: map[int64][]scriptedTx{}}
-	res, err := submitValidatorBlock(context.Background(), chain, testPayload, scanTiming(), broadcastQuietLog)
+	res, err := submitValidatorBlock(context.Background(), chain, testPayload, startFloor(chain), scanTiming(), broadcastQuietLog)
 	if err != nil || res.Height != 0 {
 		t.Fatalf("res=%+v err=%v", res, err)
 	}

@@ -384,7 +384,7 @@ func TestCommitHandsOffOnlyThisBlocksAcceptedValidatorBlocks(t *testing.T) {
 	app.persister = startTestPersister(t, store, 0)
 
 	base := time.Unix(gateNow, 0).UTC()
-	a, b, c := persistTestBlockJSON(t, "op-a", "G2", "validator-1"), persistTestBlockJSON(t, "op-b", "G1", "validator-2"), persistTestBlockJSON(t, "op-c", "G0", "")
+	a, b, c := persistTestBlockJSON(t, "op-a", "G2", "validator-1"), persistTestBlockJSON(t, "op-b", "G1", "validator-2"), persistTestBlockJSON(t, "op-c", "G0", "validator-3")
 	invalid := []byte(`{"bundle_id":"not-a-valid-block"}`)
 
 	_, fb1 := commitBlock(t, app, nil, 1, base, a, invalid, b)
@@ -489,7 +489,7 @@ func TestCommitNeverWaitsOnTheDatabaseAndDroppedHeightsAreRebuilt(t *testing.T) 
 	p := newConsensusPersister(store, "validator-test", log.New(&debugBuf, "", 0))
 	p.queue = make(chan persistJob, 4)
 	p.retryBase, p.retryMax, p.idleCheck = time.Millisecond, 5*time.Millisecond, 2*time.Millisecond
-	p.setSource(&rpcCommittedBlockSource{reader: reader, chainID: app.chainID})
+	p.setSource(&rpcCommittedBlockSource{reader: reader})
 	p.start()
 	t.Cleanup(p.stop)
 	app.persister = p
@@ -699,7 +699,7 @@ func TestConsensusRecordsStateTheCommitThatCommittedTheHeight(t *testing.T) {
 // commit without more than two thirds of the power refused.
 func TestCommitQuorumIsTheHeightsOwnCommit(t *testing.T) {
 	reader := newFakeBlockReader()
-	src := &rpcCommittedBlockSource{reader: reader, chainID: "certen-fictional-test"}
+	src := &rpcCommittedBlockSource{reader: reader}
 	reader.signed[5] = []bool{true, true, true, true, true, false, false}
 	q, err := src.CommitQuorum(context.Background(), 5)
 	if err != nil || q.Signers != 5 || q.SignedPower != 5 || q.TotalPower != 7 || q.Validators != 7 {
@@ -715,14 +715,18 @@ func TestCommitQuorumIsTheHeightsOwnCommit(t *testing.T) {
 
 func TestRPCCommittedBlockSourceMatchesWhatFinalizeBlockAccepted(t *testing.T) {
 	bt := time.Unix(gateNow, 0).UTC()
-	accepted := persistTestBlockJSON(t, "op-src-a", "G2", "")
+	accepted := persistTestBlockJSON(t, "op-src-a", "G2", "validator-1")
 	rejected := persistTestBlockJSON(t, "op-src-r", "G2", "validator-2")
 	policy := []byte(fmt.Sprintf(`{"kind":%q}`, PolicyUpdateKind))
+	// A committed rotation and tick are not ValidatorBlocks either (RB3-F145): they decode as JSON, so a
+	// source that skipped only policy updates rebuilt them as empty blocks.
+	rotation := []byte(fmt.Sprintf(`{"kind":%q,"version":1}`, ValidatorRotationKind))
+	tick := []byte(fmt.Sprintf(`{"kind":%q,"nonce":"0011223344556677"}`, ChainTickKind))
 	reader := newFakeBlockReader()
-	reader.record(5, bt, [][]byte{accepted, rejected, policy, []byte("not json")},
-		[]*abcitypes.ExecTxResult{{Code: 0}, {Code: 4}, {Code: 0}, {Code: 0}})
+	reader.record(5, bt, [][]byte{accepted, rejected, policy, []byte("not json"), rotation, tick},
+		[]*abcitypes.ExecTxResult{{Code: 0}, {Code: 4}, {Code: 0}, {Code: 0}, {Code: 0}, {Code: 0}})
 
-	src := &rpcCommittedBlockSource{reader: reader, chainID: "certen-fictional-test"}
+	src := &rpcCommittedBlockSource{reader: reader}
 	blk, err := src.CommittedValidatorBlocks(context.Background(), 5)
 	if err != nil {
 		t.Fatal(err)
@@ -731,7 +735,7 @@ func TestRPCCommittedBlockSourceMatchesWhatFinalizeBlockAccepted(t *testing.T) {
 		t.Fatalf("rebuilt blocks = %v, want only the accepted ValidatorBlock", blk)
 	}
 	vb := blk.blocks[0]
-	if vb.BlockHeight != 5 || vb.Timestamp != bt.Format(time.RFC3339) || vb.ValidatorID != "certen-fictional-test" || !blk.time.Equal(bt) {
+	if vb.BlockHeight != 5 || vb.Timestamp != bt.Format(time.RFC3339) || vb.ValidatorID != "validator-1" || !blk.time.Equal(bt) {
 		t.Fatalf("commit metadata not applied: height=%d ts=%s validator=%q", vb.BlockHeight, vb.Timestamp, vb.ValidatorID)
 	}
 
@@ -785,6 +789,10 @@ func TestCacheEvictionDoesNotWrapBelowTheMargin(t *testing.T) {
 	for i := 0; i < 1000; i++ {
 		id := fmt.Sprintf("0xlow%061d", i)
 		app.validatorBlocks[id] = &ValidatorBlock{BundleID: id, BlockHeight: 3}
+	}
+	// This chain begins at height 5.
+	if _, err := app.InitChain(context.Background(), &abcitypes.RequestInitChain{InitialHeight: 5}); err != nil {
+		t.Fatal(err)
 	}
 	commitBlock(t, app, nil, 5, time.Unix(gateNow, 0).UTC(), persistTestBlockJSON(t, "op-evict", "G2", "validator-1"))
 	if n := len(app.validatorBlocks); n < 900 {
@@ -885,7 +893,7 @@ func TestEnablingPersistenceRebuildsBlocksCommittedBeforeIt(t *testing.T) {
 	store := &fakeRecordStore{}
 	p := newConsensusPersister(store, "validator-test", persistQuietLog)
 	p.retryBase, p.retryMax, p.idleCheck = time.Millisecond, 2*time.Millisecond, 2*time.Millisecond
-	p.setSource(&rpcCommittedBlockSource{reader: reader, chainID: app.chainID})
+	p.setSource(&rpcCommittedBlockSource{reader: reader})
 	p.seedCommitted(app.startHeight, app.latestHeight)
 	p.start()
 	t.Cleanup(p.stop)

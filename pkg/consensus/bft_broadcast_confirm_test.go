@@ -122,7 +122,7 @@ func TestLostReplyForACommittedValidatorBlockIsSuccess(t *testing.T) {
 		committedAfter: 1,
 		height:         2187,
 	}
-	res, err := submitValidatorBlock(context.Background(), rpc, testPayload, fastTiming(), broadcastQuietLog)
+	res, err := submitValidatorBlock(context.Background(), rpc, testPayload, startFloor(rpc), fastTiming(), broadcastQuietLog)
 	if err != nil {
 		t.Fatalf("committed block reported as failure: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestLostReplyForAnAdmittedValidatorBlockPollsForInclusion(t *testing.T) {
 		height:                2188,
 		mempoolTxs:            []cmttypes.Tx{cmttypes.Tx("other-fictional-tx")},
 	}
-	res, err := submitValidatorBlock(context.Background(), rpc, testPayload, fastTiming(), broadcastQuietLog)
+	res, err := submitValidatorBlock(context.Background(), rpc, testPayload, startFloor(rpc), fastTiming(), broadcastQuietLog)
 	if err != nil {
 		t.Fatalf("admitted block reported as failure: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestRetriesOutlastASlowCommit(t *testing.T) {
 		committedAfter: 7,
 		height:         2190,
 	}
-	res, err := submitValidatorBlock(context.Background(), rpc, testPayload, timing, broadcastQuietLog)
+	res, err := submitValidatorBlock(context.Background(), rpc, testPayload, startFloor(rpc), timing, broadcastQuietLog)
 	if err != nil {
 		t.Fatalf("gave up during a slow commit: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestAlreadyInCacheAfterALostReplyIsSubmittedAndPolled(t *testing.T) {
 		committedAfterTxCalls: 3,
 		height:                2191,
 	}
-	res, err := submitValidatorBlock(context.Background(), rpc, testPayload, fastTiming(), broadcastQuietLog)
+	res, err := submitValidatorBlock(context.Background(), rpc, testPayload, startFloor(rpc), fastTiming(), broadcastQuietLog)
 	if err != nil || res.Height != 2191 {
 		t.Fatalf("res=%+v err=%v, want committed at 2191", res, err)
 	}
@@ -199,7 +199,7 @@ func TestNeverAdmittedFailsAfterTheBudget(t *testing.T) {
 	timing := fastTiming()
 	rpc := &fakeCometRPC{broadcastReply: func(int) (*coretypes.ResultBroadcastTx, error) { return nil, eofErr }}
 	start := time.Now()
-	_, err := submitValidatorBlock(context.Background(), rpc, testPayload, timing, broadcastQuietLog)
+	_, err := submitValidatorBlock(context.Background(), rpc, testPayload, startFloor(rpc), timing, broadcastQuietLog)
 	elapsed := time.Since(start)
 	if err == nil || !strings.Contains(err.Error(), "BroadcastTxSync") || !strings.Contains(err.Error(), "not committed and not in the mempool") {
 		t.Fatalf("err = %v", err)
@@ -219,7 +219,7 @@ func TestCheckTxRejectionIsReportedWithoutRetry(t *testing.T) {
 	rpc := &fakeCometRPC{broadcastReply: func(int) (*coretypes.ResultBroadcastTx, error) {
 		return &coretypes.ResultBroadcastTx{Code: 4, Log: "entitlement check failed: fictional"}, nil
 	}}
-	_, err := submitValidatorBlock(context.Background(), rpc, testPayload, fastTiming(), broadcastQuietLog)
+	_, err := submitValidatorBlock(context.Background(), rpc, testPayload, startFloor(rpc), fastTiming(), broadcastQuietLog)
 	if err == nil || !strings.Contains(err.Error(), "CheckTx failed: code=4") || rpc.broadcasts != 1 {
 		t.Fatalf("err=%v broadcasts=%d, want CheckTx code 4 and one broadcast", err, rpc.broadcasts)
 	}
@@ -229,7 +229,7 @@ func TestNonTransientBroadcastErrorIsReportedWithoutRetry(t *testing.T) {
 	rpc := &fakeCometRPC{broadcastReply: func(int) (*coretypes.ResultBroadcastTx, error) {
 		return nil, errors.New("RPC error -32600 - Invalid request: fictional")
 	}}
-	_, err := submitValidatorBlock(context.Background(), rpc, testPayload, fastTiming(), broadcastQuietLog)
+	_, err := submitValidatorBlock(context.Background(), rpc, testPayload, startFloor(rpc), fastTiming(), broadcastQuietLog)
 	if err == nil || rpc.broadcasts != 1 || rpc.txCalls != 0 {
 		t.Fatalf("err=%v broadcasts=%d txCalls=%d, want an error, one broadcast, no lookups", err, rpc.broadcasts, rpc.txCalls)
 	}
@@ -243,7 +243,7 @@ func TestCommittedWithAFailureCodeIsReported(t *testing.T) {
 		"ack":        func(int) (*coretypes.ResultBroadcastTx, error) { return ok() },
 	} {
 		rpc := &fakeCometRPC{broadcastReply: reply, committedAfter: 1, txCode: 2, height: 2192}
-		_, err := submitValidatorBlock(context.Background(), rpc, testPayload, fastTiming(), broadcastQuietLog)
+		_, err := submitValidatorBlock(context.Background(), rpc, testPayload, startFloor(rpc), fastTiming(), broadcastQuietLog)
 		if err == nil || !strings.Contains(err.Error(), "transaction failed in block: code=2") {
 			t.Fatalf("%s: err = %v", name, err)
 		}
@@ -253,7 +253,7 @@ func TestCommittedWithAFailureCodeIsReported(t *testing.T) {
 // Admitted but not yet in a block within the inclusion poll: Height 0 (pending consensus), as before.
 func TestAdmittedButNotYetCommittedReturnsPending(t *testing.T) {
 	rpc := &fakeCometRPC{broadcastReply: func(int) (*coretypes.ResultBroadcastTx, error) { return ok() }}
-	res, err := submitValidatorBlock(context.Background(), rpc, testPayload, fastTiming(), broadcastQuietLog)
+	res, err := submitValidatorBlock(context.Background(), rpc, testPayload, startFloor(rpc), fastTiming(), broadcastQuietLog)
 	if err != nil || res.Height != 0 || string(res.TxHash) != string(testHash()) {
 		t.Fatalf("res=%+v err=%v, want pending with the tx hash", res, err)
 	}
@@ -268,7 +268,7 @@ func TestHonoursTheCallersDeadline(t *testing.T) {
 	defer cancel()
 	rpc := &fakeCometRPC{broadcastReply: func(int) (*coretypes.ResultBroadcastTx, error) { return nil, eofErr }}
 	start := time.Now()
-	_, err := submitValidatorBlock(ctx, rpc, testPayload, timing, broadcastQuietLog)
+	_, err := submitValidatorBlock(ctx, rpc, testPayload, startFloor(rpc), timing, broadcastQuietLog)
 	elapsed := time.Since(start)
 	if err == nil || !strings.Contains(err.Error(), "not committed and not in the mempool") {
 		t.Fatalf("err = %v, want the budget failure (not the caller's context expiring)", err)
@@ -288,7 +288,7 @@ func TestUnansweredLookupIsNotReportedAsAbsence(t *testing.T) {
 		broadcastReply: func(int) (*coretypes.ResultBroadcastTx, error) { return nil, eofErr },
 		mempoolLocked:  true,
 	}
-	_, err := submitValidatorBlock(context.Background(), rpc, testPayload, fastTiming(), broadcastQuietLog)
+	_, err := submitValidatorBlock(context.Background(), rpc, testPayload, startFloor(rpc), fastTiming(), broadcastQuietLog)
 	if err == nil || strings.Contains(err.Error(), "not in the mempool") || !strings.Contains(err.Error(), "admission could not be confirmed") {
 		t.Fatalf("err = %v, want an 'admission could not be confirmed' failure", err)
 	}
@@ -316,7 +316,7 @@ func TestSlowCommitWithBlockedLookupsStillConfirmsInclusion(t *testing.T) {
 		}
 		return nil, errors.New("tx already exists in cache")
 	}
-	res, err := submitValidatorBlock(context.Background(), rpc, testPayload, timing, broadcastQuietLog)
+	res, err := submitValidatorBlock(context.Background(), rpc, testPayload, startFloor(rpc), timing, broadcastQuietLog)
 	if err != nil || res.Height != 2187 {
 		t.Fatalf("res=%+v err=%v, want committed at 2187", res, err)
 	}
@@ -327,4 +327,14 @@ func TestCometHTTPClientSatisfiesTheBroadcastInterfaces(t *testing.T) {
 	var e RealCometBFTEngine
 	var _ broadcastRPC = e.rpcClient
 	var _ blockReader = e.rpcClient
+}
+
+// startFloor is the scan floor a test's submission starts from: the chain height when it begins, which is
+// what the committed-operation index covers in production (BroadcastValidatorBlockCommit).
+func startFloor(rpc broadcastRPC) int64 {
+	h, err := statusHeight(context.Background(), rpc, time.Second)
+	if err != nil {
+		return 0
+	}
+	return h
 }
