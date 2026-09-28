@@ -253,10 +253,13 @@ func storeCertenAnchorProof(ctx context.Context, repos *database.Repositories, p
 		in.Artifact.ProofID, stored.ProofID, verified, anchor.AnchorTx)
 }
 
+// levelsBoundByAttestations checks the attestations agree on the result and on the operation commitment the
+// cycle's validators signed (RB3-F106: the argument was named merkleRoot and carried the same commitment).
+//
 // levelsBoundByAttestations reports whether the quorum signed the cross-level binding: every attestation
 // carries a message naming this cycle's level-4 result and level-3 root, and they all signed the same
 // message. A quorum over a different result or root binds nothing.
-func levelsBoundByAttestations(result *UnifiedProofCycleResult, merkleRoot [32]byte) bool {
+func levelsBoundByAttestations(result *UnifiedProofCycleResult, operationCommitment [32]byte) bool {
 	if result == nil || !result.ThresholdMet || len(result.Attestations) == 0 || len(result.ObservationResults) == 0 {
 		return false
 	}
@@ -266,7 +269,7 @@ func levelsBoundByAttestations(result *UnifiedProofCycleResult, merkleRoot [32]b
 		if att == nil || att.Message == nil {
 			return false
 		}
-		if att.Message.ResultHash != resultHash || att.Message.MerkleRoot != merkleRoot {
+		if att.Message.ResultHash != resultHash || att.Message.OperationCommitment != operationCommitment {
 			return false
 		}
 		hashes = append(hashes, att.MessageHash[:])

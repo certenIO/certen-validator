@@ -25,7 +25,7 @@ func TestANonSettlementsChainLinkIsPersistedAndContinued(t *testing.T) {
 
 	_, key, _ := ed25519.GenerateKey(nil)
 	o := &UnifiedOrchestrator{
-		config: &UnifiedOrchestratorConfig{ValidatorID: validator, UnifiedRepo: repos.Unified,
+		config: &UnifiedOrchestratorConfig{ValidatorID: validator, UnifiedRepo: repos.Unified, Repos: repos,
 			ResultsPrincipal: "acc://results.acme/data", Ed25519Key: key, AccumulateClient: &recordingSubmitter{}},
 		resultChains: map[string]*ResultHashChain{},
 		txBuilder:    NewSyntheticTxBuilder("acc://results.acme/data", validator, key),

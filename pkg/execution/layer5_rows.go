@@ -374,6 +374,9 @@ func (o *UnifiedOrchestrator) observeAnchor(ctx context.Context, proofID uuid.UU
 // chain (RB3-F85/F86), with its path checked to reach the root it names. nil, nil when the member has
 // no row - its place is then stated as unknown, never as a one-leaf tree of its operation commitment.
 func (o *UnifiedOrchestrator) batchPlacement(ctx context.Context, intentID, accumTxHash string, chainID int64) (*database.Layer5Binding, error) {
+	if o.config.Repos == nil || o.config.Repos.ProofArtifacts == nil {
+		return nil, fmt.Errorf("no proof-artifact repository is wired to read the member's batch placement")
+	}
 	b, err := o.config.Repos.ProofArtifacts.GetLayer5Binding(ctx, intentID, accumTxHash, chainID)
 	if errors.Is(err, database.ErrNoBatchBinding) {
 		logfPrintf("🚨 [BATCH-PLACEMENT] intent %s on chain %d has no canonical batch row: its leaf, path and "+

@@ -12,9 +12,9 @@ import (
 	"context"
 	"time"
 
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/legacy-proof-attempts-do-not-use/production-proof/interfaces"
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/legacy-proof-attempts-do-not-use/production-proof/manager"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
-	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/production-proof/interfaces"
-	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/production-proof/manager"
 )
 
 // EnhancedProofSystem provides the complete enhanced proof system
@@ -257,25 +257,25 @@ func (e *EnhancedProofSystem) VerifyAccountWithDetails(accountURL *url.URL) (*Pr
 // ProofResult maintains compatibility with existing proof result structure
 type ProofResult struct {
 	// Layer 1: Account → BPT
-	AccountHash     []byte `json:"accountHash"`
-	BPTRoot         []byte `json:"bptRoot"`
-	Layer1Verified  bool   `json:"layer1Verified"`
+	AccountHash    []byte `json:"accountHash"`
+	BPTRoot        []byte `json:"bptRoot"`
+	Layer1Verified bool   `json:"layer1Verified"`
 
 	// Layer 2: BPT → Block
-	BlockHeight     uint64 `json:"blockHeight"`
-	BlockHash       []byte `json:"blockHash"`
-	Layer2Verified  bool   `json:"layer2Verified"`
+	BlockHeight    uint64 `json:"blockHeight"`
+	BlockHash      []byte `json:"blockHash"`
+	Layer2Verified bool   `json:"layer2Verified"`
 
 	// Layer 3: Block → Validators (when available)
-	ValidatorCount  int    `json:"validatorCount"`
-	SignatureCount  int    `json:"signatureCount"`
-	Layer3Available bool   `json:"layer3Available"`
-	Layer3Verified  bool   `json:"layer3Verified"`
+	ValidatorCount  int  `json:"validatorCount"`
+	SignatureCount  int  `json:"signatureCount"`
+	Layer3Available bool `json:"layer3Available"`
+	Layer3Verified  bool `json:"layer3Verified"`
 
 	// Overall status
-	FullyVerified   bool   `json:"fullyVerified"`
-	TrustRequired   string `json:"trustRequired"` // "none" | "api" | "validators"
-	ErrorMessage    string `json:"errorMessage,omitempty"`
+	FullyVerified bool   `json:"fullyVerified"`
+	TrustRequired string `json:"trustRequired"` // "none" | "api" | "validators"
+	ErrorMessage  string `json:"errorMessage,omitempty"`
 }
 
 // ConfigurableVerifier maintains compatibility with existing interfaces

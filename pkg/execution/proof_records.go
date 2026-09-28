@@ -111,7 +111,6 @@ func seedResultHashChains(ctx context.Context, repo *database.UnifiedRepository,
 		}
 		chain := &ResultHashChain{ChainID: key, LatestSequence: uint64(head.SequenceNumber) + 1}
 		copy(chain.LatestHash[:], head.ChainResultHash)
-		copy(chain.AnchorProofHash[:], head.AnchorProofHash)
 		chains[key] = chain
 	}
 	return len(heads), nil

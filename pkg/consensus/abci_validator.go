@@ -80,9 +80,6 @@ type ValidatorApp struct {
 	startHeight    int64
 	startHeightSet bool
 
-	// Validator count for quorum calculation
-	validatorCount int
-
 	// Optional block-checkpoint hook (P3): invoked non-blocking after each committed block so a
 	// single designated writer can mirror block roots to Accumulate. nil unless wired in main.go.
 	checkpointHook func(height int64, blockHash string, appHash []byte, ts time.Time)
@@ -103,17 +100,43 @@ type ValidatorApp struct {
 	// then v7 rules do too, and the state is stamped v7 - which keeps a rollback to the v7 binary open
 	// right up to the first rotation (see committedRulesVersion).
 	rotationAccepted bool
+
+	// The committed-operation index (committed_operations.go, RB3-F141). blockOperations are this block's
+	// accepted ValidatorBlocks, written by Commit.
+	blockOperations      []ledger.CommittedOperationEntry
+	genesisInitialHeight int64 // the chain's first height (SetGenesis); no block below it exists
+
+	// The first committed height at which v8 or v9 rules decided something no older version decides that
+	// way (0: none) - when a rollback past that version stops being possible (committedRulesVersion). The
+	// block flags are set in FinalizeBlock and written by Commit.
+	blockRulesV8Verdict bool
+	blockRulesV9Verdict bool
+	rulesV8FirstVerdict int64
+	rulesV9FirstVerdict int64
 }
 
-// committedRulesVersion is the lowest rules version that reproduces the committed history: v7 until the
-// chain accepts a validator rotation, v8 from then on. Stamping it (rather than the binary's version)
-// is truthful - both produce the same app hash on a chain with no rotation - and it leaves the v7 binary
-// able to start on this state until a rotation makes that genuinely impossible.
+// committedRulesVersion is the lowest rules version that reproduces the committed history, result codes
+// included (they are hashed into the next header):
+//
+//   - v7 until the chain commits a validator rotation or a tick, accepted or refused - v7 judged both as
+//     ValidatorBlocks and refused them with code 2, where v8 accepts them or refuses them with its own code.
+//     (Stamping v7 until the first ACCEPTED rotation, as before, called a chain with a tick v7 history,
+//     which v7 cannot replay - RB3-F146.)
+//   - v8 from then on,
+//   - v9 once a block is decided in a way only v9 decides it: a refused second block for a committed
+//     operation, or a block naming no validator that v8 would have accepted under the chain's name.
+//
+// Stamping it (rather than the binary's version) is truthful, and it leaves the older binary able to start
+// on this state until a block makes that genuinely impossible.
 func (app *ValidatorApp) committedRulesVersion() uint64 {
-	if CurrentExecutionRulesVersion == executionRulesV8 && !app.rotationAccepted {
+	switch {
+	case app.rulesV9FirstVerdict > 0:
+		return executionRulesV9
+	case app.rotationAccepted || app.rulesV8FirstVerdict > 0:
+		return executionRulesV8
+	default:
 		return executionRulesV7
 	}
-	return CurrentExecutionRulesVersion
 }
 
 // SetGenesis gives the app the chain's genesis validator set and chain id, which rotation is judged against.
@@ -128,6 +151,7 @@ func (app *ValidatorApp) SetGenesis(doc *cmttypes.GenesisDoc) error {
 	app.mu.Lock()
 	defer app.mu.Unlock()
 	app.cometChainID = doc.ChainID
+	app.genesisInitialHeight = doc.InitialHeight
 	validators, err := GenesisValidatorsFrom(doc)
 	if err != nil {
 		return err
@@ -217,6 +241,16 @@ func NewValidatorApp(ledgerStore *ledger.LedgerStore, chainID string) *Validator
 			app.logger.Fatalf("❌ the validator rotation log could not be read: %v - not starting on a ledger this node cannot read", err)
 		}
 		app.rotationAccepted = len(rotations.Rotations) > 0
+		for _, v := range []struct {
+			version uint64
+			into    *int64
+		}{{executionRulesV8, &app.rulesV8FirstVerdict}, {executionRulesV9, &app.rulesV9FirstVerdict}} {
+			first, err := ledgerStore.RulesFirstVerdict(v.version)
+			if err != nil {
+				app.logger.Fatalf("❌ the first v%d verdict could not be read: %v - not starting on a ledger this node cannot read", v.version, err)
+			}
+			*v.into = first
+		}
 	}
 
 	// Restore persisted ABCI state for CometBFT recovery
@@ -318,22 +352,16 @@ func (app *ValidatorApp) StopConsensusPersistence() {
 	}
 }
 
-// SetValidatorCount sets the total number of validators for quorum calculation
-func (app *ValidatorApp) SetValidatorCount(count int) {
-	app.mu.Lock()
-	defer app.mu.Unlock()
-	app.validatorCount = count
-}
-
 // applyCommitMetadata stamps the ABCI-authoritative metadata onto a ValidatorBlock: the committing block's
-// height and time, and the chain id when the block names no validator. FinalizeBlock and the consensus
-// persister's block-store rebuild both use it, so a rebuilt block is identical to the one committed.
-func applyCommitMetadata(vb *ValidatorBlock, height int64, blockTime time.Time, chainID string) {
+// height and time. FinalizeBlock and the consensus persister's block-store rebuild both use it, so a
+// rebuilt block is identical to the one committed.
+//
+// It no longer names a validator for a block that names none (RB3-F140, execution rules v9). Filling in the
+// chain id before the invariants ran made "validator_id must not be empty" unreachable, and committed a
+// block attributed to no validator under the chain's name.
+func applyCommitMetadata(vb *ValidatorBlock, height int64, blockTime time.Time) {
 	vb.BlockHeight = uint64(height)
 	vb.Timestamp = blockTime.UTC().Format(time.RFC3339)
-	if vb.ValidatorID == "" {
-		vb.ValidatorID = chainID // or from config
-	}
 }
 
 // Info returns application information
@@ -455,6 +483,24 @@ func (app *ValidatorApp) CheckTx(ctx context.Context, req *abcitypes.RequestChec
 		}, nil
 	}
 
+	// A block for an operation this validator's block already committed is refused by FinalizeBlock
+	// (RB3-F141); it is not admitted to the mempool either, and the recheck after each commit evicts one
+	// that was waiting there. A filter, not the authority: it reads the wall clock like the entitlement
+	// filter below, and an index it cannot read admits the block for FinalizeBlock to judge.
+	if app.ledgerStore != nil && !checkTxClock().Before(duplicateOperationRuleFrom) {
+		rec, err := app.ledgerStore.GetCommittedOperation(vb.ValidatorID, vb.CrossChainProof.OperationID)
+		switch {
+		case err != nil:
+			app.logger.Printf("⚠️ [COMMITTED-OP] CheckTx could not read the index for bundle %s: %v", vb.BundleID, err)
+		case rec != nil:
+			return &abcitypes.ResponseCheckTx{
+				Code: codeDuplicateOperation,
+				Log: fmt.Sprintf("validator %s's block for operation %s already committed at height %d (bundle %s)",
+					vb.ValidatorID, vb.CrossChainProof.OperationID, rec.Height, rec.BundleID),
+			}, nil
+		}
+	}
+
 	// Entitlement gate — MEMPOOL FILTER, not the authority.
 	//
 	// CheckTx runs before a block exists, so there is no ABCI block time to
@@ -512,7 +558,7 @@ func (app *ValidatorApp) processValidatorTransaction(tx []byte) abcitypes.ExecTx
 
 	// === ABCI metadata authority ===
 	// Override metadata before calling invariants per Golden Spec section 4.1
-	applyCommitMetadata(&vb, int64(app.currentBlockHeight), app.currentBlockTime, app.chainID)
+	applyCommitMetadata(&vb, int64(app.currentBlockHeight), app.currentBlockTime)
 
 	// CRITICAL: Validate ProofClass per FIRST_PRINCIPLES 2.5 before invariant check
 	if vb.ExecutionProof.ProofClass != "" {
@@ -527,6 +573,15 @@ func (app *ValidatorApp) processValidatorTransaction(tx []byte) abcitypes.ExecTx
 
 	// Now validate invariants with corrected metadata
 	if err := VerifyValidatorBlockInvariants(&vb); err != nil {
+		// v8 named the chain as the validator of a block that named none, and then judged it: when that
+		// would have passed, refusing it here is a decision only v9 makes (committedRulesVersion).
+		if vb.ValidatorID == "" {
+			v8 := vb
+			v8.ValidatorID = app.chainID
+			if VerifyValidatorBlockInvariants(&v8) == nil {
+				app.blockRulesV9Verdict = true
+			}
+		}
 		return abcitypes.ExecTxResult{
 			Code: 2,
 			Log:  "validator block invariant violations: " + err.Error(),
@@ -557,6 +612,12 @@ func (app *ValidatorApp) processValidatorTransaction(tx []byte) abcitypes.ExecTx
 			vb.BundleID, principal, reason, app.currentBlockHeight)
 	} else {
 		metrics.RecordEntitlementDecision("finalizeblock", "admitted", "", "")
+	}
+
+	// One committed block per validator per operation (RB3-F141, execution rules v9). Last, so it can only
+	// turn an acceptance into a refusal.
+	if refused := app.refuseCommittedOperation(&vb, tx); refused != nil {
+		return *refused
 	}
 
 	// Store ValidatorBlock with basic memory retention (query cache ONLY — it no longer feeds the
@@ -602,14 +663,16 @@ func (app *ValidatorApp) processValidatorTransaction(tx []byte) abcitypes.ExecTx
 		app.logger.Printf("🗑️ VB cache cleanup: removed %d old entries (below height %d)", count, minHeightToKeep)
 	}
 
-	// Wire AccumulateAnchorReference into current anchor tracking
+	// Wire AccumulateAnchorReference into current anchor tracking. It states what the block states: the
+	// Accumulate transaction, its account, and the partition block (minor block) the proof established. The
+	// block states no major block, so none is recorded - the ledger omits an unknown major index rather
+	// than recording 0 (RB3-F140).
 	anchorRef := vb.AccumulateAnchorReference
 	if anchorRef.TxHash != "" && anchorRef.BlockHeight > 0 {
 		app.currentAccAnchor = &ledger.SystemAccumulateAnchorRef{
 			TxHash:     anchorRef.TxHash,
-			AccountURL: anchorRef.AccountURL,  // Use AccountURL from the anchor reference
-			MinorIndex: anchorRef.BlockHeight, // Use block height as minor index for now
-			MajorIndex: 0,                     // Default to 0, can be enhanced later
+			AccountURL: anchorRef.AccountURL,
+			MinorIndex: anchorRef.BlockHeight,
 		}
 		app.logger.Printf("📍 Wired AccumulateAnchorReference: TxHash=%s, AccountURL=%s, BlockHeight=%d",
 			anchorRef.TxHash, anchorRef.AccountURL, anchorRef.BlockHeight)
@@ -623,8 +686,10 @@ func (app *ValidatorApp) processValidatorTransaction(tx []byte) abcitypes.ExecTx
 		{
 			Type: "validator_block",
 			Attributes: []abcitypes.EventAttribute{
-				{Key: "bundle_id", Value: vb.BundleID},
-				{Key: "validator_id", Value: vb.ValidatorID},
+				// Indexed, so `tx_search` can find a validator's block by bundle or operation. Events are not
+				// part of the results hash, so indexing changes no consensus outcome.
+				{Key: "bundle_id", Value: vb.BundleID, Index: true},
+				{Key: "validator_id", Value: vb.ValidatorID, Index: true},
 				{Key: "block_height", Value: fmt.Sprintf("%d", vb.BlockHeight)},
 				{Key: "organization_adi", Value: vb.GovernanceProof.OrganizationADI},
 			},
@@ -632,7 +697,7 @@ func (app *ValidatorApp) processValidatorTransaction(tx []byte) abcitypes.ExecTx
 		{
 			Type: "cross_chain_operations",
 			Attributes: []abcitypes.EventAttribute{
-				{Key: "operation_id", Value: vb.CrossChainProof.OperationID},
+				{Key: "operation_id", Value: vb.CrossChainProof.OperationID, Index: true},
 				{Key: "chain_targets", Value: fmt.Sprintf("%d", len(vb.CrossChainProof.ChainTargets))},
 				{Key: "execution_stage", Value: vb.ExecutionProof.Stage},
 			},
@@ -688,6 +753,11 @@ func (app *ValidatorApp) FinalizeBlock(ctx context.Context, req *abcitypes.Reque
 
 	txResults := make([]*abcitypes.ExecTxResult, len(req.Txs))
 	app.blockBundles = app.blockBundles[:0] // reset per-block bundle list; txs append to it
+	// This block's committed operations and v9 verdict, written by Commit. Reset here: a FinalizeBlock that
+	// was not followed by Commit (a replay) must not carry its staging into the next one.
+	app.blockOperations = nil
+	app.blockRulesV8Verdict = false
+	app.blockRulesV9Verdict = false
 	// A fresh slice, never [:0]: the previous block's slice may already belong to the persister.
 	app.blockValidatorBlocks = nil
 
@@ -700,12 +770,14 @@ func (app *ValidatorApp) FinalizeBlock(ctx context.Context, req *abcitypes.Reque
 		}
 		// Nor is a validator rotation (RB3-F95).
 		if vr, ok := DecodeValidatorRotation(tx); ok {
+			app.blockRulesV8Verdict = true // v7 judged it as a ValidatorBlock (RB3-F146)
 			result := app.processValidatorRotation(vr, req.Height)
 			txResults[i] = &result
 			continue
 		}
 		// A tick changes nothing (chain_tick.go).
 		if tick, ok := DecodeChainTick(tx); ok {
+			app.blockRulesV8Verdict = true // v7 judged it as a ValidatorBlock (RB3-F146)
 			result := abcitypes.ExecTxResult{Code: 0, GasWanted: 1, GasUsed: 1}
 			if err := tick.CheckShape(); err != nil {
 				result = abcitypes.ExecTxResult{Code: 7, Log: "tick refused: " + err.Error()}
@@ -778,6 +850,9 @@ func (app *ValidatorApp) Commit(ctx context.Context, req *abcitypes.RequestCommi
 		app.logger.Printf("✅ Updated system ledger for block %d", height)
 	}
 
+	// The committed-operation index, and the first v9 verdict, before the rules stamp below reads it.
+	app.recordCommittedOperations(int64(height))
+
 	// PROMOTE the staged accumulator computed in FinalizeBlock to committed. This is the ONLY place
 	// committedAccum is mutated — which is precisely what makes FinalizeBlock idempotent under
 	// replay/retry. The persisted app-hash is byte-identical to what CometBFT recorded from
@@ -837,7 +912,7 @@ func (app *ValidatorApp) Commit(ctx context.Context, req *abcitypes.RequestCommi
 			height: int64(app.currentBlockHeight),
 			time:   app.currentBlockTime,
 			blocks: blockVBs,
-		}, app.validatorCount)
+		})
 	}
 
 	// Bounded slice: a log line must never be able to abort a commit.
@@ -952,6 +1027,15 @@ func (app *ValidatorApp) Query(ctx context.Context, req *abcitypes.RequestQuery)
 // InitChain initializes the application
 func (app *ValidatorApp) InitChain(ctx context.Context, req *abcitypes.RequestInitChain) (*abcitypes.ResponseInitChain, error) {
 	app.logger.Printf("🚀 Initializing Validator ABCI Application - Chain: %s", req.ChainId)
+	// The chain's first block is its genesis initial height; the committed-operation index starts there.
+	if app.ledgerStore != nil {
+		app.mu.Lock()
+		err := app.ledgerStore.StartCommittedOperations(req.InitialHeight)
+		app.mu.Unlock()
+		if err != nil {
+			return nil, fmt.Errorf("start the committed-operation index at height %d: %w", req.InitialHeight, err)
+		}
+	}
 	return &abcitypes.ResponseInitChain{}, nil
 }
 
@@ -1197,22 +1281,31 @@ func (app *ValidatorApp) RecoverState() error {
 
 // ForceResetState performs an emergency state reset (use with caution!)
 // This should only be used when consensus is completely stuck and manual recovery is needed
-func (app *ValidatorApp) ForceResetState(targetHeight int64) error {
+func (app *ValidatorApp) ForceResetState(targetHeight int64, appHash []byte) error {
 	app.mu.Lock()
 	defer app.mu.Unlock()
 
 	app.logger.Printf("⚠️ [FORCE-RESET] Resetting state to height %d (was %d)", targetHeight, app.latestHeight)
 
+	// The app hash CometBFT recorded for the target height is the only one its handshake accepts; a
+	// placeholder would stop the node at its next start (RB3-F144).
+	if len(appHash) != 32 {
+		return fmt.Errorf("a reset needs the 32-byte app hash CometBFT recorded for height %d, got %d bytes", targetHeight, len(appHash))
+	}
+
 	// Reset in-memory state
 	app.latestHeight = targetHeight
-	app.lastCommitHash = []byte("reset_state")
+	app.lastCommitHash = append([]byte(nil), appHash...)
+	app.seedAppHash(app.lastCommitHash)
 	app.validatorBlocks = make(map[string]*ValidatorBlock)
 
-	// Persist the reset state
+	// Persist the reset state, stamped with the rules that committed it: a state without a stamp is
+	// adopted by any binary (checkExecutionRulesVersion).
 	if app.ledgerStore != nil {
 		if err := app.ledgerStore.SaveABCIState(&ledger.ABCIState{
-			LastBlockHeight:  app.latestHeight,
-			LastBlockAppHash: app.lastCommitHash,
+			LastBlockHeight:       app.latestHeight,
+			LastBlockAppHash:      app.lastCommitHash,
+			ExecutionRulesVersion: app.committedRulesVersion(),
 		}); err != nil {
 			return fmt.Errorf("failed to persist reset state: %w", err)
 		}
@@ -1230,11 +1323,13 @@ func (app *ValidatorApp) Shutdown() error {
 
 	app.logger.Printf("🛑 Graceful shutdown - flushing state...")
 
-	// Flush current state to ledger
+	// Flush current state to ledger, with its rules stamp: without one, the next start adopts whatever rules
+	// its binary implements and the replay check is gone (RB3-F144).
 	if app.ledgerStore != nil {
 		if err := app.ledgerStore.SaveABCIState(&ledger.ABCIState{
-			LastBlockHeight:  app.latestHeight,
-			LastBlockAppHash: app.lastCommitHash,
+			LastBlockHeight:       app.latestHeight,
+			LastBlockAppHash:      app.lastCommitHash,
+			ExecutionRulesVersion: app.committedRulesVersion(),
 		}); err != nil {
 			app.logger.Printf("❌ Failed to save state on shutdown: %v", err)
 			return fmt.Errorf("failed to save state on shutdown: %w", err)

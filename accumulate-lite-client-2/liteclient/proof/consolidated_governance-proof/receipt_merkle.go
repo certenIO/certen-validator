@@ -11,7 +11,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/certen/certen-protocol/services/validator/accumulate-lite-client-2/liteclient/proof/govreceipt"
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govreceipt"
 )
 
 // Merkle recomputation for governance receipts.

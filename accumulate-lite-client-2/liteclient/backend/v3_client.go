@@ -13,12 +13,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/types"
 	v3 "gitlab.com/accumulatenetwork/accumulate/pkg/api/v3"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3/jsonrpc"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/database/merkle"
 	acc_url "gitlab.com/accumulatenetwork/accumulate/pkg/url"
 	"gitlab.com/accumulatenetwork/accumulate/protocol"
-	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/types"
 )
 
 // RPCDataBackendV3 implements the DataBackend interface using the Accumulate v3 JSON-RPC API.
@@ -114,8 +114,8 @@ func (b *RPCDataBackendV3) GetNetworkStatus(ctx context.Context) (*types.Network
 		}
 		status.Partitions[i] = types.PartitionInfo{
 			ID:   partition.ID,
-			Type: partition.Type.String(),  // Convert enum to string
-			URL:  partitionURL.URL(),       // Convert acc_url.URL to *url.URL
+			Type: partition.Type.String(), // Convert enum to string
+			URL:  partitionURL.URL(),      // Convert acc_url.URL to *url.URL
 		}
 	}
 

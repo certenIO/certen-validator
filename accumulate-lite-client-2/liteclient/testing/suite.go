@@ -17,9 +17,9 @@ import (
 	"testing"
 	"time"
 
-	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3/jsonrpc"
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/config"
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/logging"
+	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3/jsonrpc"
 )
 
 // TestSuite provides a comprehensive testing framework
@@ -36,12 +36,12 @@ type TestSuite struct {
 
 // TestOptions configures test suite behavior
 type TestOptions struct {
-	EnableNetwork     bool
-	UseRealEndpoints  bool
-	TestDataDir       string
-	LogLevel          string
-	TestAccounts      []string
-	ConfigOverrides   map[string]interface{}
+	EnableNetwork    bool
+	UseRealEndpoints bool
+	TestDataDir      string
+	LogLevel         string
+	TestAccounts     []string
+	ConfigOverrides  map[string]interface{}
 }
 
 // NewTestSuite creates a new test suite
@@ -148,7 +148,7 @@ func (ts *TestSuite) RequireNetwork() {
 // CreateTempFile creates a temporary file in the test directory
 func (ts *TestSuite) CreateTempFile(name, content string) string {
 	filePath := filepath.Join(ts.TempDir, name)
-	
+
 	// Create directory if needed
 	dir := filepath.Dir(filePath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -247,14 +247,14 @@ func (ts *TestSuite) LogTestStep(step string, args ...interface{}) {
 // LogTestResult logs a test result
 func (ts *TestSuite) LogTestResult(success bool, message string, args ...interface{}) {
 	formattedMessage := fmt.Sprintf(message, args...)
-	
+
 	if success {
-		ts.Logger.Info("Test result", 
+		ts.Logger.Info("Test result",
 			logging.Field{Key: "success", Value: true},
 			logging.Field{Key: "message", Value: formattedMessage})
 		ts.T.Logf("✅ %s", formattedMessage)
 	} else {
-		ts.Logger.Error("Test result", 
+		ts.Logger.Error("Test result",
 			logging.Field{Key: "success", Value: false},
 			logging.Field{Key: "message", Value: formattedMessage})
 		ts.T.Logf("❌ %s", formattedMessage)
@@ -264,7 +264,7 @@ func (ts *TestSuite) LogTestResult(success bool, message string, args ...interfa
 // createTestConfig creates a configuration for testing
 func createTestConfig(opts *TestOptions, tempDir string) *config.Config {
 	cfg := config.DefaultConfig()
-	
+
 	// Override for testing
 	cfg.Network.V3Endpoint = "https://testnet.accumulatenetwork.io/v3"
 	cfg.Network.Timeout = 30 * time.Second
@@ -350,7 +350,7 @@ type BenchmarkSuite struct {
 func NewBenchmarkSuite(b *testing.B) *BenchmarkSuite {
 	cfg := config.DefaultConfig()
 	cfg.Logging.Level = "error" // Minimal logging for benchmarks
-	
+
 	logger, _ := logging.NewLogger(&logging.Config{
 		Level:  slog.LevelError,
 		Format: "text",

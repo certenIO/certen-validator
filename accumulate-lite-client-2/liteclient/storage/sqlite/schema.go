@@ -9,7 +9,6 @@ package sqlite
 import (
 	"database/sql"
 	"fmt"
-
 	// Note: modernc.org/sqlite import removed for vendor compatibility
 	// Add back: _ "modernc.org/sqlite" // Pure Go SQLite driver
 )
@@ -244,12 +243,12 @@ func InitSchema(db *sql.DB) error {
 	if _, err := db.Exec(Schema); err != nil {
 		return fmt.Errorf("failed to initialize schema: %w", err)
 	}
-	
+
 	// Verify schema was created correctly
 	if err := verifySchema(db); err != nil {
 		return fmt.Errorf("schema verification failed: %w", err)
 	}
-	
+
 	return nil
 }
 
@@ -260,19 +259,19 @@ func verifySchema(db *sql.DB) error {
 		"anchors", "receipts", "bundles", "operators", "operator_signatures",
 		"cache_entries", "metadata",
 	}
-	
+
 	for _, table := range requiredTables {
 		var count int
 		query := "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?"
 		if err := db.QueryRow(query, table).Scan(&count); err != nil {
 			return fmt.Errorf("failed to check table %s: %w", table, err)
 		}
-		
+
 		if count == 0 {
 			return fmt.Errorf("required table %s not found", table)
 		}
 	}
-	
+
 	return nil
 }
 
@@ -283,7 +282,7 @@ func GetSchemaVersion(db *sql.DB) (string, error) {
 	if err := db.QueryRow(query).Scan(&version); err != nil {
 		return "", fmt.Errorf("failed to get schema version: %w", err)
 	}
-	
+
 	return version, nil
 }
 

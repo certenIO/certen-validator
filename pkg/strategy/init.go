@@ -22,18 +22,21 @@ import (
 	chain "github.com/certen/independant-validator/pkg/chain/strategy"
 	"github.com/certen/independant-validator/pkg/crypto/bls"
 	"github.com/certen/independant-validator/pkg/ethrpc"
+	"github.com/certen/independant-validator/pkg/supportedchains"
 )
 
 // SupportedChainIDs are the chains CERTEN settles on: Ethereum Sepolia, Base Sepolia and Arbitrum
 // Sepolia.
-var SupportedChainIDs = []int64{11155111, 84532, 421614}
+var SupportedChainIDs = supportedchains.IDs()
 
 // supportedNetworks names each supported chain for its RPC fallback tier (ethrpc.EndpointsForChain).
-var supportedNetworks = map[int64]string{
-	11155111: "sepolia",
-	84532:    "base-sepolia",
-	421614:   "arbitrum-sepolia",
-}
+var supportedNetworks = func() map[int64]string {
+	out := map[int64]string{}
+	for _, c := range supportedchains.All {
+		out[c.ID] = c.Network
+	}
+	return out
+}()
 
 // requiredConfirmations is the depth Phase 7 waits for on each supported chain.
 const requiredConfirmations = 2

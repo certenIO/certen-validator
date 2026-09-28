@@ -25,7 +25,7 @@ func main() {
 
 	// Look up a token account
 	accountURL := url.MustParse("acc://alice/tokens")
-	
+
 	// Query the account state
 	resp, err := client.Query(context.Background(), &api.DefaultQuery{
 		Scope: accountURL,
@@ -50,8 +50,8 @@ func main() {
 		Scope: accountURL,
 		Name:  "main", // Main chain contains transaction history
 		Range: &api.RangeOptions{
-			Count:   10,      // Get last 10
-			FromEnd: true,    // Start from the end
+			Count:   10,   // Get last 10
+			FromEnd: true, // Start from the end
 		},
 	})
 	if err != nil {
@@ -63,7 +63,7 @@ func main() {
 	for i, record := range histResp.Records {
 		entry := record.Value.(*api.ChainEntryRecord[api.Record])
 		fmt.Printf("\n[%d] Entry at index %d:\n", i+1, entry.Index)
-		
+
 		// The entry contains the transaction
 		switch tx := entry.Value.Value.(type) {
 		case *protocol.Transaction:
@@ -77,23 +77,23 @@ func main() {
 func printTransaction(tx *protocol.Transaction) {
 	fmt.Printf("  Principal: %s\n", tx.Header.Principal)
 	fmt.Printf("  Initiator: %x\n", tx.Header.Initiator[:8])
-	
+
 	switch body := tx.Body.(type) {
 	case *protocol.SendTokens:
 		fmt.Printf("  Type: Send Tokens\n")
 		for _, to := range body.To {
 			fmt.Printf("    To: %s, Amount: %s\n", to.Url, to.Amount)
 		}
-		
+
 	case *protocol.CreateTokenAccount:
 		fmt.Printf("  Type: Create Token Account\n")
 		fmt.Printf("    URL: %s\n", body.Url)
 		fmt.Printf("    Token: %s\n", body.TokenUrl)
-		
+
 	case *protocol.BurnTokens:
 		fmt.Printf("  Type: Burn Tokens\n")
 		fmt.Printf("    Amount: %s\n", body.Amount)
-		
+
 	default:
 		fmt.Printf("  Type: %s\n", body.Type())
 	}

@@ -182,18 +182,6 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 			userIDPtr = &userID
 		}
 
-		// For on-demand proofs (single transaction):
-		// - LeafIndex = 0 (single transaction in batch)
-		// - LeafHash = operation commitment (the leaf hash)
-		// - MerklePath = nil (single leaf, leaf is the root)
-		// - MerkleRoot = operation commitment (for single leaf, root = leaf)
-		var leafHash []byte
-		var merkleRoot [32]byte
-		if operationCommitment != [32]byte{} {
-			leafHash = operationCommitment[:]
-			merkleRoot = operationCommitment // For single tx, merkle root = leaf
-		}
-
 		fmt.Printf("[UnifiedAdapter] Target chain for Phase 7-9: %s\n", targetChain)
 
 		// The lane that settled the member is its proof class (RB3-F74). It used to be "on_demand" for
@@ -215,12 +203,7 @@ func (a *UnifiedOrchestratorAdapter) StartProofCycleWithAccumulateRef(
 			AccumulateBVN:        bvn,
 			GovernanceRoot:       governanceRoot,
 			OperationCommitment:  operationCommitment,
-			// Merkle inclusion proof data (for MerkleTreeVisualization)
-			LeafHash:       leafHash,
-			LeafIndex:      0,   // Single transaction, always index 0
-			MerklePath:     nil, // Empty path for single leaf (leaf = root)
-			MerkleRoot:     merkleRoot,
-			CommitmentData: commitMap,
+			CommitmentData:       commitMap,
 		}
 
 		fmt.Printf("[UnifiedAdapter] Starting unified proof cycle with Accumulate ref for intent %s\n", intentID)

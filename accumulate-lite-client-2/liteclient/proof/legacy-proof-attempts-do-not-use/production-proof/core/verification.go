@@ -51,9 +51,9 @@ func NewCryptographicVerifierWithEndpoints(apiEndpoint, cometEndpoint string) *C
 	// Create Layer 4 with placeholder genesis data (to be set from network)
 	// In a full implementation, genesis hash and validators would be obtained from network configuration
 	layer4 := types.NewLayer4Verifier(
-		[]byte{}, // Placeholder genesis hash - should be set from network config
+		[]byte{},            // Placeholder genesis hash - should be set from network config
 		[]types.Validator{}, // Placeholder genesis validators - should be set from network config
-		false, // Debug mode
+		false,               // Debug mode
 	)
 
 	return &CryptographicVerifier{

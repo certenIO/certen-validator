@@ -222,13 +222,19 @@ type IntentDiscovery struct {
 	entitlementEnforce bool
 
 	// on_demand consensus-bound proof retry queue (decoupled from block workers).
-	// In-session only: across restart the persisted watermark prevents block re-scan and the
-	// queue is empty, so no double-execution is possible; failed records remain lifecycle=failed
-	// in PostgreSQL for alerting.
+	// In-session only: after a restart the rewound watermark rediscovers the intent, and a second
+	// execution is prevented where it would happen - its committed ValidatorBlock is not broadcast
+	// again and a member with an outcome is not queued again (RB3-F141). Failed records remain
+	// lifecycle=failed in PostgreSQL for alerting.
 	retryCh chan *intentRetryJob
 
 	// unsearched keeps blocks whose search failed until they are searched (RB3-F125, unsearched_blocks.go).
 	unsearched UnsearchedBlockStore
+
+	// Intake pause (intake_pause.go, RB3-F8): the file whose presence pauses intake, and whether it
+	// was present at the last look (guarded by watermarkMu).
+	pauseFile string
+	paused    bool
 }
 
 // LedgerStoreInterface defines the interface for ledger operations needed by intent discovery
@@ -310,6 +316,7 @@ func NewIntentDiscovery(
 		validatorID:        validatorID,
 		intentStatus:       make(map[string]IntentStatus), // E.4 remediation: Two-phase status tracking
 		lastProcessedBlock: 0,
+		pauseFile:          intakePauseFile(),
 	}
 }
 
@@ -518,17 +525,18 @@ func (id *IntentDiscovery) initializeStartingHeight(ctx context.Context) error {
 
 	// REWIND FOR IN-FLIGHT INTENTS.
 	//
-	// The batch mempool is in-memory, so a restart empties it — but the round has already
-	// returned batch_queued and the intent will not take any other path. Without a rewind the
-	// watermark resumes ahead of those intents, they are never rediscovered, and they are
-	// neither settled, failed, nor retried.
+	// The watermark can be ahead of an intent whose round had not finished when the process
+	// stopped - discovered, not yet queued. Without a rewind it is never rediscovered, and it is
+	// neither settled, failed, nor retried. (Queued members survive a restart on their own: the
+	// batch mempool is persisted, BATCH_MEMPOOL_PATH.)
 	//
-	// Membership is a pure function of committed Accumulate state, so the queue is a cache of
-	// a derivation rather than a source of truth: rewinding re-derives it. Re-processing is
-	// safe by construction — leaves are single-use on chain (_consumedLeaf), bundleId is
-	// deterministic so a re-derived period reproduces the same anchor, and FlushChain
-	// short-circuits when that anchor is already attested, releasing members without
-	// re-executing. The worst case is wasted proof work.
+	// Re-processing a finished intent does the proof work again and nothing else (RB3-F141). Its
+	// ValidatorBlock is not broadcast again - the app's committed-operation index answers that it
+	// committed, and from execution rules v9 consensus refuses a second one - and its members are
+	// not queued again - a member with a recorded outcome is answered as decided. Before those two
+	// checks this was not so: rewound intents were rebuilt and committed a second time (161 bundles
+	// in production), and an on-demand member re-queued after disposal was attested and written
+	// back again.
 	//
 	// It also restores a RESTARTED PEER's ability to attest. A peer with an empty mempool
 	// refuses every request for a period it should be able to reproduce, which is silent
@@ -591,6 +599,17 @@ func (id *IntentDiscovery) checkForNewBlocks(ctx context.Context) error {
 		return fmt.Errorf("failed to get latest block: %w", err)
 	}
 	latest := latestBlock.Height
+
+	// A paused intake queues nothing (RB3-F8); the head is still recorded, so the lag stays visible.
+	if paused, why := id.intakePaused(); paused {
+		id.notePause(true, why)
+		id.watermarkMu.Lock()
+		id.lastPollErr = ""
+		id.chainHead = latest
+		id.watermarkMu.Unlock()
+		return nil
+	}
+	id.notePause(false, "")
 
 	id.watermarkMu.Lock()
 	id.lastPollErr = ""
@@ -677,6 +696,10 @@ func (id *IntentDiscovery) blockProcessor(workerID string) {
 			id.logger.Printf("🛑 Block processor %s stopping due to stop signal", workerID)
 			return
 		case job := <-id.blockProcessCh:
+			// A job queued before a pause waits for it to lift (RB3-F8).
+			if !id.waitWhilePaused() {
+				return
+			}
 			id.logger.Printf("📦 Worker %s received job for block %d", workerID, job.BlockHeight)
 			if err := id.processBlock(job, workerID); err != nil {
 				id.logger.Printf("❌ Worker %s failed to search block %d: %v", workerID, job.BlockHeight, err)
@@ -801,6 +824,10 @@ type DiscoveryStatus struct {
 	OldestUnsearched        uint64
 	OldestUnsearchedSeconds float64
 	UnsearchedError         string
+	// IntakePaused is true while intake is paused (RB3-F8); InProgress is how many intents are still
+	// being processed - zero is "nothing in flight".
+	IntakePaused bool
+	InProgress   int
 }
 
 // StallLagFloor is how far behind the head a node must be before a still watermark counts as a
@@ -831,7 +858,8 @@ const StallLagFloor = 10
 // a node that boots into a dead upstream never advances and never learns a head, so its lag
 // reads zero.
 func (s DiscoveryStatus) Stalled(threshold time.Duration) bool {
-	if !s.Started {
+	// A paused intake is still on purpose (RB3-F8).
+	if !s.Started || s.IntakePaused {
 		return false
 	}
 	if s.LagBlocks <= StallLagFloor {
@@ -842,6 +870,7 @@ func (s DiscoveryStatus) Stalled(threshold time.Duration) bool {
 
 // Status returns the current discovery health. Safe to call from any goroutine.
 func (id *IntentDiscovery) Status() DiscoveryStatus {
+	inProgress := id.inProgress() // before watermarkMu: the two locks are never held together
 	id.watermarkMu.Lock()
 	defer id.watermarkMu.Unlock()
 
@@ -850,6 +879,8 @@ func (id *IntentDiscovery) Status() DiscoveryStatus {
 		ChainHead:     id.chainHead,
 		LastPollError: id.lastPollErr,
 		Started:       !id.lastAdvanceAt.IsZero(),
+		IntakePaused:  id.paused,
+		InProgress:    inProgress,
 	}
 	if id.unsearched != nil {
 		if kept, err := id.unsearched.List(); err != nil {
@@ -1366,6 +1397,10 @@ func (id *IntentDiscovery) handleRetryJob(job *intentRetryJob) {
 	select {
 	case <-time.After(backoff):
 	case <-id.stopCh:
+		return
+	}
+	// A retry is an intent starting again: it waits for a paused intake too (RB3-F8).
+	if !id.waitWhilePaused() {
 		return
 	}
 

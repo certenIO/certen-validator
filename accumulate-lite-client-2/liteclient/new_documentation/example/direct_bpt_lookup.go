@@ -17,7 +17,7 @@ import (
 func main() {
 	// The account we want to look up
 	accountURL := url.MustParse("acc://alice/tokens")
-	
+
 	// Open the database
 	store, err := badger.Open("/path/to/accumulate/data")
 	if err != nil {
@@ -33,7 +33,7 @@ func main() {
 	// Step 1: The BPT contains the account key and hash
 	// The account key is constructed from the URL
 	account := batch.Account(accountURL)
-	
+
 	// Step 2: Get the BPT hash for this account
 	// This is what's stored as the VALUE in the BPT
 	bptHash, err := account.Hash()
@@ -50,7 +50,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to get main state: %v", err)
 	}
-	
+
 	tokenAccount, ok := mainState.(*protocol.TokenAccount)
 	if !ok {
 		log.Fatalf("Not a token account: %T", mainState)
@@ -79,10 +79,10 @@ func main() {
 	if height < int64(count) {
 		count = int(height)
 	}
-	
+
 	fmt.Printf("Last %d Transactions:\n", count)
 	fmt.Println("=" + "="*50)
-	
+
 	for i := height - int64(count); i < height; i++ {
 		// Get chain entry
 		entry, err := mainChain.Entry(i)
@@ -98,7 +98,7 @@ func main() {
 		// This demonstrates that the BPT value (hash) is ALSO a database key
 		txHash := *(*[32]byte)(entry.Hash)
 		transaction := batch.Transaction(txHash)
-		
+
 		// Get transaction message
 		msg, err := transaction.Main().Get()
 		if err != nil {
@@ -108,7 +108,7 @@ func main() {
 
 		// Get transaction status
 		status, _ := transaction.Status().Get()
-		
+
 		// Print transaction details
 		switch tx := msg.(type) {
 		case *protocol.Transaction:
@@ -117,7 +117,7 @@ func main() {
 			if status != nil {
 				fmt.Printf("     Status: %s\n", status.Code)
 			}
-			
+
 			// Show transaction-specific details
 			switch body := tx.Body.(type) {
 			case *protocol.SendTokens:
@@ -128,11 +128,11 @@ func main() {
 			case *protocol.SyntheticDepositTokens:
 				fmt.Printf("     → Deposit Amount: %s\n", body.Amount)
 			}
-			
+
 		case *protocol.SyntheticDepositTokens:
 			fmt.Printf("     Type: Synthetic Deposit\n")
 			fmt.Printf("     Amount: %s\n", tx.Amount)
-			
+
 		default:
 			fmt.Printf("     Message Type: %T\n", msg)
 		}

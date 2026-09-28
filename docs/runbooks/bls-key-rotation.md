@@ -32,88 +32,84 @@ address and power leaves it at `a85a69…`, so no validator configuration change
 
 ## One-time rotation
 
-The on-chain swap and the key switch must happen back to back. Between them the registry and the
-validators' keys disagree, and no quorum forms.
+Done on 2026-09-26 on all three anchors (the executed plan, its rehearsal and rollback:
+`runbooks/2026-09-proof-integrity/rb3-rotation/WINDOW_PLAN.md`). This section is the order to use for any
+future rotation. Two facts decide it:
 
-Pause intent intake at the gateway for the duration. An on-demand intent that cannot reach quorum within
-3 minutes is attested as failed.
+- The anchor never reads `validators(addr).blsPublicKey`: acceptance depends only on the authorized pubkey
+  commitments. The validators' batch path DOES read it - every batch takes each signer's key from the
+  registry, and a node finds its own identity by matching its key against it. So between re-registering and
+  the validators' switch the batch path is down, and nothing may be in flight.
+- The old commitments must stay authorized until the new keys are proven end to end. Revoking them earlier
+  leaves no quorum any proof can satisfy and no way back.
 
-### 1. Deploy this branch
+### 0. Ownership
 
-### 2. Read the new public keys
+If the anchors' owner key has ever been exposed, move ownership first (anchor, verifier, factory), or anyone
+holding the old owner key can undo the rotation.
 
-The new key is the one each validator will derive from its own secret. Build the tool:
+### 1. Read the new public keys
+
+Each validator derives its new key from `BLS_KEY_SEED` (set per validator on the host, never printed). Build the
+tool, and on the host, for each validator N, derive the public key in a subshell that sources that validator's
+env file, so the secret is never on a command line:
 
 ```
 GOOS=linux GOARCH=amd64 go build -o bls-key-info ./cmd/bls-key-info
+( set -a; . <env file of validator-N>; set +a; ./bls-key-info -derive validator-N )
 ```
 
-Copy it to the host. Then, for each validator N:
+Collect the 7 public keys into `new-pubkeys.json` (`{"validators":[{"validator_id":"validator-1","bls_public_key":"0x…"}, …]}`).
 
-```
-docker cp bls-key-info certen-validator-N:/tmp/bls-key-info
-docker exec certen-validator-N /tmp/bls-key-info -derive validator-N
-```
-
-The tool prints only the public key. Private keys never leave the container, and nothing is written.
-
-### 3. Compute the commitments
-
-Build `new-pubkeys.json` from the 7 printed keys:
-
-```
-{"validators":[{"validator_id":"validator-1","bls_public_key":"0x…"}, …]}
-```
-
-Build `old-pubkeys.json` from the chain: `validators(addr).blsPublicKey` on each anchor.
-
-Then run:
+### 2. Compute the commitments
 
 ```
 go run ./cmd/subsetcommit -keys new-pubkeys.json -json   # new29
-go run ./cmd/subsetcommit -keys old-pubkeys.json -json   # old29
+go run ./cmd/subsetcommit -keys old-pubkeys.json -json   # old29 (old keys read from the chain)
 ```
 
 Both must report 29 subsets, no collisions, and "selfcheck: fold matches the production prover".
 
-### 4. Swap on each anchor (owner key)
+### 3. Authorize the new commitments (harmless, can be done a day early)
 
-Run these on Sepolia `0xb39b707D50089C9Eb92818f9B2870eba6DA5C2a0`, Base Sepolia
-`0xEA9eeeE42a7971792B11Fd2f682C9c1172490272` and Arbitrum Sepolia
-`0x4b9eA187772E115641Fd40F35BF7a84925e7A035`:
+On each anchor: `setAuthorizedPubkeyCommitments(new29, true)`. The old keys keep working.
 
-1. `setAuthorizedPubkeyCommitments(new29, true)`. Authorize the new set first, so the authorized count
-   never reaches zero while binding is enforced.
-2. For each validator address, `removeValidator(addr)`, then `registerValidator(addr, 100, newPubkey)`.
-3. `setAuthorizedPubkeyCommitments(old29, false)`.
+### 4. The window
 
-Verify all four:
-- `currentValidatorSetRoot()` still reads `a85a69…`.
-- `validators(addr).blsPublicKey` equals the new key for all 7.
-- `authorizedPubkeyCommitmentCount()` is 29.
-- `pubkeyBindingEnforced()` is true.
+1. **Pause intake on all 7 validators** and wait until nothing is in flight:
 
-Legacy anchors (for example Sepolia V6.1 `0x14885Fe8…`) register the same public-formula keys and have
-no pubkey binding. Any account still pinned to one of them and holding value is exposed. Re-register the
-new keys there too (step 4.2), or retire those accounts.
+   ```
+   docker exec certen-validator-N touch /app/data/intake.paused
+   # each validator's /health: "discovery": "paused", then wait for "discovery_intents_in_progress": 0
+   ```
 
-### 5. Switch the validators to the new keys
+   While the file exists a validator queues and starts no intent (intents written directly to Accumulate
+   included - the pause is at discovery, not at the gateway); intents already running finish; nothing is
+   lost, discovery resumes at the first block it had not processed. The path is `INTENT_INTAKE_PAUSE_FILE`
+   (default `data/intake.paused`).
+2. **Re-register** on each anchor: for each validator address `removeValidator(addr)` then
+   `registerValidator(addr, 100, newPubkey)`. Verify: `currentValidatorSetRoot()` unchanged,
+   `validators(addr).blsPublicKey` equals the new key for all 7, `pubkeyBindingEnforced()` true.
+3. **Switch all 7 validators together** (a mixed fleet's aggregate matches no commitment): in each container move
+   the old key file aside, `mv /app/data/bls_key_validator-N.hex /app/data/bls_key_validator-N.retired.hex`, then
+   recreate all 7 so the new `BLS_KEY_SEED` is loaded. Each logs `derived its key from its secret … (public key X)`
+   with X from step 1, and `Attesting as … matched on-chain BLS registry`.
+4. **Prove the new keys**: `batchpreflight -pubkeys new-pubkeys.json` passes on every anchor; lift the pause
+   (`docker exec certen-validator-N rm /app/data/intake.paused` on all 7); one on-demand intent per chain settles
+   (status 1) and its stored proof verifies offline.
+5. **Only then revoke**: `setAuthorizedPubkeyCommitments(old29, false)` on each anchor, then `subsetaudit`.
 
-Move each old key file out of the way. The validator then derives the new key from its secret on start:
+### Rollback
 
-```
-docker exec certen-validator-N mv /app/data/bls_key_validator-N.hex /app/data/bls_key_validator-N.public-formula-retired.hex
-```
+- Before step 4.3: re-register the old keys (they were never revoked).
+- After 4.3, before 4.5: in each container move the derived key aside and the retired one back, recreate all 7,
+  re-register the old keys.
+- After 4.5 there is no rollback by design; 4.4 proves the new keys first.
 
-Restart all 7. Each logs `derived its key from its secret` and `BLS key initialized: <new key>`. Check it
-against step 2.
+### Afterwards
 
-### 6. Verify, then destroy
-
-- Run one on-demand intent end to end. It must attest 5 or more of 7 and settle.
-- Delete every `*.public-formula-retired.hex` and every `bls_keys_backup_MASTER.json`.
-- The old keys also appear in git history (commit `cdbf40e`). After step 4 they sign nothing that any
-  anchor accepts.
+Delete every `*.retired.hex` and any key backup file. Keys that ever appeared in git history sign nothing any
+anchor accepts once revoked.
 
 ## After the rotation
 

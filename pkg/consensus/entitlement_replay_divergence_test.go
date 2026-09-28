@@ -41,6 +41,7 @@ import (
 
 func newGateTestApp(cfg EntitlementConfig, committed []byte, blockTime time.Time) *ValidatorApp {
 	return &ValidatorApp{
+		ledgerStore:      newInMemLedger(),
 		logger:           log.New(io.Discard, "", 0),
 		validatorBlocks:  make(map[string]*ValidatorBlock),
 		committedAppHash: committed,

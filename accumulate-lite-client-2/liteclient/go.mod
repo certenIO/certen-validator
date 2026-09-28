@@ -1,4 +1,4 @@
-module github.com/certen/certen-protocol/services/validator/accumulate-lite-client-2/liteclient
+module github.com/certen/independant-validator/accumulate-lite-client-2/liteclient
 
 go 1.22.1
 

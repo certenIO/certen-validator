@@ -17,9 +17,9 @@ import (
 
 // Layer4Verifier handles validator set to genesis trust chain (Validator Set → Genesis Trust)
 type Layer4Verifier struct {
-	debug        bool
-	genesisHash  []byte
-	genesisVals  []Validator
+	debug       bool
+	genesisHash []byte
+	genesisVals []Validator
 }
 
 // NewLayer4Verifier creates a new Layer 4 verifier

@@ -14,6 +14,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 
 	"github.com/certen/independant-validator/pkg/database"
+	"github.com/certen/independant-validator/pkg/supportedchains"
 )
 
 // The settlement is not the anchor (RB3-F135). proof_artifacts, anchor_references and validator_attestations
@@ -29,7 +30,13 @@ import (
 // Only the supported chains (Sepolia, Base Sepolia, Arbitrum Sepolia) are classified.
 
 // projectionChains are the supported chains' ids as proof_artifacts.anchor_chain stores them.
-var projectionChains = []string{"11155111", "84532", "421614"}
+var projectionChains = func() []string {
+	out := []string{}
+	for _, id := range supportedchains.IDs() {
+		out = append(out, strconv.FormatInt(id, 10))
+	}
+	return out
+}()
 
 // anchorCreateSelectors are the calls that publish a root: createBatchAnchor (the V7/V8 batch generation) and
 // the per-intent createAnchor of every generation that has one - 7 arguments in CertenAnchorV5/V6, 8 (with

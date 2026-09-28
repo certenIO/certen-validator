@@ -9,6 +9,8 @@
 package config
 
 import (
+	"github.com/certen/independant-validator/pkg/supportedchains"
+
 	"fmt"
 	"os"
 	"regexp"
@@ -753,41 +755,22 @@ func (c *AnchorConfig) GetEVMChainConfig(chainID int64) *EVMChainConfig {
 	return c.Network.EVMChains[chainID]
 }
 
-// GetSupportedChainIDs returns a list of all configured EVM chain IDs
+// GetSupportedChainIDs returns the supported chains that are configured (have an RPC), in the supported
+// order. It used to add a "default Ethereum" chain whatever it was, and every configured chain whether
+// supported or not (RB3-F26).
 func (c *AnchorConfig) GetSupportedChainIDs() []int64 {
 	chainIDs := make([]int64, 0)
-
-	// Always include the default Ethereum chain
-	chainIDs = append(chainIDs, c.Network.Ethereum.ChainID)
-
-	// Add all configured EVM chains
-	if c.Network.EVMChains != nil {
-		for chainID := range c.Network.EVMChains {
-			// Avoid duplicates
-			if chainID != c.Network.Ethereum.ChainID {
-				chainIDs = append(chainIDs, chainID)
-			}
+	for _, id := range supportedchains.IDs() {
+		if c.IsChainSupported(id) {
+			chainIDs = append(chainIDs, id)
 		}
 	}
-
 	return chainIDs
 }
 
-// IsChainSupported returns true if the given chainID is configured
+// IsChainSupported reports whether the chain is one CERTEN settles on AND is configured here.
 func (c *AnchorConfig) IsChainSupported(chainID int64) bool {
-	// Check default Ethereum config
-	if c.Network.Ethereum.ChainID == chainID {
-		return true
-	}
-
-	// Check EVM chains map
-	if c.Network.EVMChains != nil {
-		if _, ok := c.Network.EVMChains[chainID]; ok {
-			return true
-		}
-	}
-
-	return false
+	return supportedchains.IsSupported(chainID) && c.GetEVMChainConfig(chainID) != nil
 }
 
 // ==============================================================================

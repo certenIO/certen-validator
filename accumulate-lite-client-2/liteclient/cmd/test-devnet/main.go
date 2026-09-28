@@ -11,7 +11,7 @@ import (
 
 	"strings"
 
-	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/production"
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/legacy-proof-attempts-do-not-use/production"
 )
 
 func main() {
@@ -60,10 +60,10 @@ func main() {
 	fmt.Println("\n" + repeatStr("═", 58))
 	fmt.Println("                    PROOF SUMMARY")
 	fmt.Println(repeatStr("═", 58))
-	
+
 	fmt.Printf("\n%-20s %s\n", "Observer Enabled:", formatBool(observerEnabled))
 	fmt.Printf("%-20s %s\n", "Proof Complete:", formatBool(result.Complete))
-	
+
 	fmt.Println("\nSteps Completed:")
 	fmt.Printf("  Step 1 (BPT Hash):    %s\n", formatStep(result.Step1BPTHash != ""))
 	fmt.Printf("  Step 2 (BPT Lookup):  %s\n", formatStep(result.Step2BPTLookup != nil && result.Step2BPTLookup.Found))
@@ -93,7 +93,7 @@ func main() {
 	// Provide next steps based on results
 	fmt.Println("\n" + repeatStr("─", 58))
 	fmt.Println("NEXT STEPS:")
-	
+
 	if !observerEnabled {
 		fmt.Println("1. Enable observer in your Accumulate API config:")
 		fmt.Println("   - Set EnableObserver: true in API configuration")
@@ -115,7 +115,7 @@ func main() {
 		fmt.Println("✅ Full cryptographic proof successful!")
 		fmt.Println("   The devnet API modifications are working correctly.")
 	}
-	
+
 	fmt.Println(repeatStr("═", 58))
 }
 

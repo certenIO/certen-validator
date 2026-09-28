@@ -5,6 +5,8 @@ package consensus
 import (
 	"errors"
 	"fmt"
+
+	"github.com/certen/independant-validator/pkg/supportedchains"
 )
 
 // =============================================================================
@@ -25,17 +27,9 @@ import (
 // ErrUnsupportedTargetChain is an intent with a leg CERTEN cannot place on a supported chain.
 var ErrUnsupportedTargetChain = errors.New("unsupported target chain")
 
-// supportedTargetChains maps each supported chain ID to its name for refusal messages.
-var supportedTargetChains = map[int64]string{
-	11155111: "ethereum-sepolia",
-	84532:    "base-sepolia",
-	421614:   "arbitrum-sepolia",
-}
-
-// IsSupportedTargetChain reports whether CERTEN executes on the chain.
+// IsSupportedTargetChain reports whether CERTEN executes on the chain (supportedchains, RB3-F26).
 func IsSupportedTargetChain(chainID int64) bool {
-	_, ok := supportedTargetChains[chainID]
-	return ok
+	return supportedchains.IsSupported(chainID)
 }
 
 // CheckIntentTargetChains refuses an intent unless every leg names a supported chain, and names the
@@ -70,5 +64,5 @@ func CheckIntentTargetChains(ci *CertenIntent) error {
 
 // supportedChainList renders the supported chains in a fixed order for messages.
 func supportedChainList() string {
-	return "ethereum-sepolia (11155111), base-sepolia (84532), arbitrum-sepolia (421614)"
+	return supportedchains.Describe()
 }

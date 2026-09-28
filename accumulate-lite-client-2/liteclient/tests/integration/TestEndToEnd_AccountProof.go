@@ -18,9 +18,9 @@ import (
 
 // Environment variables for configuration
 const (
-	envV3RPC     = "ACC_V3_RPC"
-	envV2RPC     = "ACC_V2_RPC"
-	envExplorer  = "ACC_EXPLORER_BASE"
+	envV3RPC      = "ACC_V3_RPC"
+	envV2RPC      = "ACC_V2_RPC"
+	envExplorer   = "ACC_EXPLORER_BASE"
 	envAccountURL = "TEST_ACCOUNT_URL"
 )
 
@@ -88,10 +88,10 @@ func TestEndToEnd_AccountProof(t *testing.T) {
 	// Step 1: Query account and compute component hashes
 	fmt.Println("📊 Step 1: Query Account State")
 	fmt.Println(strings.Repeat("-", 41))
-	
+
 	ctx := context.Background()
 	client := jsonrpc.NewClient(v3Endpoint)
-	
+
 	accURL, err := url.Parse(accountURL)
 	if err != nil {
 		t.Fatalf("❌ Invalid account URL: %v", err)
@@ -101,22 +101,22 @@ func TestEndToEnd_AccountProof(t *testing.T) {
 	query := &api.DefaultQuery{
 		IncludeReceipt: &api.ReceiptOptions{},
 	}
-	
+
 	resp, err := client.Query(ctx, accURL, query)
 	if err != nil {
 		t.Fatalf("❌ Failed to query account: %v", err)
 	}
 
 	artifacts.SourcesUsed["account_state"] = []string{"V3 API"}
-	
+
 	// Log account type
 	if accRecord, ok := resp.(*api.AccountRecord); ok {
 		fmt.Printf("✅ Account Type: %s\n", accRecord.Account.Type())
-		
+
 		// Marshal for artifacts
 		stateJSON, _ := json.Marshal(accRecord.Account)
 		artifacts.AccountState = stateJSON
-		
+
 		// Check for receipt
 		if accRecord.Receipt != nil {
 			fmt.Printf("✅ Account Receipt Available\n")
@@ -130,17 +130,17 @@ func TestEndToEnd_AccountProof(t *testing.T) {
 	// Step 2: Compute BPT component hashes
 	fmt.Println("\n📊 Step 2: Compute BPT Component Hashes")
 	fmt.Println(strings.Repeat("-", 41))
-	
+
 	// Note: This is where we would compute the actual component hashes
 	// Per Paul's spec (bpt-complete-guide.md lines 99-109):
 	// BPT_Value = MerkleHash(Main, Secondary, Chains, Pending)
-	
+
 	// For now, we'll query the chains to demonstrate the pattern
 	chainQuery := &api.ChainQuery{
 		Name:           "main",
 		IncludeReceipt: &api.ReceiptOptions{},
 	}
-	
+
 	chainResp, err := client.Query(ctx, accURL, chainQuery)
 	if err == nil {
 		if chainRecord, ok := chainResp.(*api.ChainRecord); ok {
@@ -158,13 +158,13 @@ func TestEndToEnd_AccountProof(t *testing.T) {
 	// Step 3: Build receipt chain Account → BVN → DN
 	fmt.Println("\n📊 Step 3: Build Receipt Chain (Account → BVN → DN)")
 	fmt.Println(strings.Repeat("-", 41))
-	
+
 	// Check if we have account receipt
 	if artifacts.AccountReceipt != nil {
 		fmt.Printf("✅ Account Receipt Start: %x\n", artifacts.AccountReceipt.Start[:16])
 		fmt.Printf("   Receipt Anchor: %x\n", artifacts.AccountReceipt.Anchor[:16])
 		fmt.Printf("   Receipt Entries: %d\n", len(artifacts.AccountReceipt.Entries))
-		
+
 		// Validate the receipt
 		validated := artifacts.AccountReceipt.Validate(nil)
 		if validated {
@@ -185,7 +185,7 @@ func TestEndToEnd_AccountProof(t *testing.T) {
 	// Step 4: Verify DN block commit with validator signatures
 	fmt.Println("\n📊 Step 4: Verify DN Block Commit")
 	fmt.Println(strings.Repeat("-", 41))
-	
+
 	// This is where we would verify validator signatures
 	// Current finding: Not exposed via public API
 	fmt.Printf("❌ Validator signatures not accessible via API\n")
@@ -196,9 +196,9 @@ func TestEndToEnd_AccountProof(t *testing.T) {
 	fmt.Println("\n" + strings.Repeat("=", 61))
 	fmt.Println("📋 Verification Summary")
 	fmt.Println(strings.Repeat("=", 61))
-	
+
 	artifacts.ProofComplete = len(artifacts.MissingArtifacts) == 0
-	
+
 	if artifacts.ProofComplete {
 		fmt.Println("✅ PROOF VERIFIED - All cryptographic links validated")
 	} else {

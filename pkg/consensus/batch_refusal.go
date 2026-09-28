@@ -35,6 +35,11 @@ var (
 
 	// ErrBatchUnavailable is CERTEN being unable to settle the member right now.
 	ErrBatchUnavailable = errors.New("batch settlement unavailable")
+
+	// ErrMemberAlreadyDecided is the SAME intent arriving again for a chain on which its member already
+	// has a recorded outcome - settled, reverted, unobserved or never sent. Not a refusal: the member is
+	// finished, and queueing it again could only execute it a second time (RB3-F34, RB3-F141).
+	ErrMemberAlreadyDecided = errors.New("member already has an outcome")
 )
 
 // BatchRefusal is the batch path declining an intent. Permanent refusals are the intent's own

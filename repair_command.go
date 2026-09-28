@@ -14,12 +14,13 @@ import (
 
 	schema "github.com/certen/independant-validator/db"
 	"github.com/certen/independant-validator/pkg/config"
+	"github.com/certen/independant-validator/pkg/consensus"
 	"github.com/certen/independant-validator/pkg/crypto/bls"
 	"github.com/certen/independant-validator/pkg/database"
 	"github.com/certen/independant-validator/pkg/execution"
 )
 
-const repairUsage = "usage: certen-validator repair anchor-blocks [--apply] [--min-depth N] | repair projections [--apply]"
+const repairUsage = "usage: certen-validator repair anchor-blocks [--apply] [--min-depth N] | repair projections [--apply] | repair consensus-records --rpc ADDR [--apply]"
 
 // runRepairCommand runs `validator repair anchor-blocks`: it reads every canonical anchor's verify and
 // create transactions back from their chain - locating the create transaction where the row does not name
@@ -32,18 +33,29 @@ const repairUsage = "usage: certen-validator repair anchor-blocks [--apply] [--m
 // proof_artifacts, anchor_references and validator_attestations, deciding each proof from chain facts (see
 // execution.RepairProofProjections, RB3-F135). Run it once, on any validator, after anchor-blocks.
 //
+// `validator repair consensus-records --rpc ADDR` restates the consensus entries written before RB3-F138 from
+// the commit that committed their height, read from the CometBFT node at ADDR (this validator's own, e.g.
+// tcp://127.0.0.1:26657), and withdraws the unverified signature validity of their batch rows. Run it once.
+//
 // Exit status: 0 when nothing was refused, 2 when something was refused or could not be read, 1 on error.
 func runRepairCommand(args []string) int {
-	if len(args) == 0 || (args[0] != "anchor-blocks" && args[0] != "projections") {
+	if len(args) == 0 || (args[0] != "anchor-blocks" && args[0] != "projections" && args[0] != "consensus-records") {
 		log.Print(repairUsage)
 		return 1
 	}
 	what := args[0]
-	apply, minDepth := false, 0
+	apply, minDepth, rpcAddr := false, 0, ""
 	for i := 1; i < len(args); i++ {
 		switch args[i] {
 		case "--apply":
 			apply = true
+		case "--rpc":
+			if what != "consensus-records" || i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
+				log.Print(repairUsage)
+				return 1
+			}
+			rpcAddr = strings.TrimSpace(args[i+1])
+			i++
 		case "--min-depth":
 			if what != "anchor-blocks" {
 				log.Print(repairUsage)
@@ -64,6 +76,11 @@ func runRepairCommand(args []string) int {
 			log.Print(repairUsage)
 			return 1
 		}
+	}
+
+	if what == "consensus-records" && rpcAddr == "" {
+		log.Print("repair consensus-records needs --rpc: the CometBFT node whose block store holds the commits")
+		return 1
 	}
 
 	cfg, err := config.Load()
@@ -92,6 +109,9 @@ func runRepairCommand(args []string) int {
 
 	if what == "projections" {
 		return runProjectionRepair(client, cfg.ValidatorID, apply)
+	}
+	if what == "consensus-records" {
+		return runConsensusRecordsRepair(client, rpcAddr, cfg.ValidatorID, apply)
 	}
 
 	signers, err := repairSigners(cfg)
@@ -192,6 +212,37 @@ func runProjectionRepair(client *database.Client, validatorID string, apply bool
 		mode, validatorID, report.Proofs, report.AlreadyAnchor, report.Moved, report.AnchorsStated, report.AnchorsUnknown,
 		len(report.Refused), len(report.Changed))
 	if len(report.Refused) > 0 || len(report.Changed) > 0 {
+		return 2
+	}
+	return 0
+}
+
+// runConsensusRecordsRepair runs `validator repair consensus-records`.
+func runConsensusRecordsRepair(client *database.Client, rpcAddr, validatorID string, apply bool) int {
+	commits, err := consensus.NewBlockStoreCommitReader(rpcAddr)
+	if err != nil {
+		log.Printf("block store: %v", err)
+		return 1
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
+	defer cancel()
+	report, err := consensus.RepairConsensusRecords(ctx, database.NewEvidenceRepair(client), commits, validatorID, apply)
+	if report != nil {
+		out, _ := json.MarshalIndent(report, "", "  ")
+		fmt.Println(string(out))
+	}
+	if err != nil {
+		log.Printf("consensus records repair stopped: %v", err)
+		return 1
+	}
+	mode := "dry run: nothing was changed; re-run with --apply"
+	if apply {
+		mode = "applied"
+	}
+	log.Printf("consensus records repair (%s) by %s: %d entries, %d restated from their commit, %d attestation rows withdrawn, "+
+		"%d heights not in the block store, %d refused, %d changed underneath",
+		mode, validatorID, report.Entries, report.Corrected, report.AttestationsWithdrawn, len(report.Unavailable), len(report.Refused), len(report.Changed))
+	if len(report.Refused) > 0 || len(report.Changed) > 0 || len(report.Unavailable) > 0 {
 		return 2
 	}
 	return 0

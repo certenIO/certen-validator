@@ -21,19 +21,19 @@ import (
 type Config struct {
 	// Network configuration
 	Network NetworkConfig `json:"network"`
-	
+
 	// Server configuration for API endpoints
 	Server ServerConfig `json:"server"`
-	
+
 	// Logging configuration
 	Logging LoggingConfig `json:"logging"`
-	
+
 	// Security configuration
 	Security SecurityConfig `json:"security"`
-	
+
 	// Storage configuration
 	Storage StorageConfig `json:"storage"`
-	
+
 	// Development/testing options
 	Development DevelopmentConfig `json:"development"`
 }
@@ -42,19 +42,19 @@ type Config struct {
 type NetworkConfig struct {
 	// Primary V3 API endpoint
 	V3Endpoint string `json:"v3_endpoint"`
-	
+
 	// Legacy V2 API endpoint (if needed)
 	V2Endpoint string `json:"v2_endpoint"`
-	
+
 	// Explorer API endpoint
 	ExplorerEndpoint string `json:"explorer_endpoint"`
-	
+
 	// Request timeout
 	Timeout time.Duration `json:"timeout"`
-	
+
 	// Max retries for failed requests
 	MaxRetries int `json:"max_retries"`
-	
+
 	// Retry backoff multiplier
 	RetryBackoff time.Duration `json:"retry_backoff"`
 }
@@ -63,19 +63,19 @@ type NetworkConfig struct {
 type ServerConfig struct {
 	// Listen address for HTTP server
 	Address string `json:"address"`
-	
+
 	// Listen port
 	Port int `json:"port"`
-	
+
 	// Read timeout
 	ReadTimeout time.Duration `json:"read_timeout"`
-	
+
 	// Write timeout
 	WriteTimeout time.Duration `json:"write_timeout"`
-	
+
 	// Enable CORS
 	EnableCORS bool `json:"enable_cors"`
-	
+
 	// Allowed CORS origins
 	CORSOrigins []string `json:"cors_origins"`
 }
@@ -84,16 +84,16 @@ type ServerConfig struct {
 type LoggingConfig struct {
 	// Log level (debug, info, warn, error)
 	Level string `json:"level"`
-	
+
 	// Log format (json, text)
 	Format string `json:"format"`
-	
+
 	// Output destination (stdout, stderr, file path)
 	Output string `json:"output"`
-	
+
 	// Enable structured logging
 	Structured bool `json:"structured"`
-	
+
 	// Enable request logging
 	EnableRequestLogging bool `json:"enable_request_logging"`
 }
@@ -102,16 +102,16 @@ type LoggingConfig struct {
 type SecurityConfig struct {
 	// Enable rate limiting
 	EnableRateLimit bool `json:"enable_rate_limit"`
-	
+
 	// Rate limit: requests per minute
 	RateLimitRPM int `json:"rate_limit_rpm"`
-	
+
 	// Enable request validation
 	EnableValidation bool `json:"enable_validation"`
-	
+
 	// Max request size in bytes
 	MaxRequestSize int64 `json:"max_request_size"`
-	
+
 	// Allowed account URL patterns
 	AllowedAccountPatterns []string `json:"allowed_account_patterns"`
 }
@@ -120,16 +120,16 @@ type SecurityConfig struct {
 type StorageConfig struct {
 	// Storage type (memory, sqlite, postgres)
 	Type string `json:"type"`
-	
+
 	// Connection string or file path
 	ConnectionString string `json:"connection_string"`
-	
+
 	// Enable caching
 	EnableCache bool `json:"enable_cache"`
-	
+
 	// Cache TTL
 	CacheTTL time.Duration `json:"cache_ttl"`
-	
+
 	// Max cache size
 	MaxCacheSize int `json:"max_cache_size"`
 }
@@ -138,16 +138,16 @@ type StorageConfig struct {
 type DevelopmentConfig struct {
 	// Enable debug mode
 	Debug bool `json:"debug"`
-	
+
 	// Enable pprof endpoints
 	EnablePprof bool `json:"enable_pprof"`
-	
+
 	// Enable metrics endpoints
 	EnableMetrics bool `json:"enable_metrics"`
-	
+
 	// Test account URLs for integration tests
 	TestAccounts []string `json:"test_accounts"`
-	
+
 	// Disable proof verification (testing only)
 	DisableProofVerification bool `json:"disable_proof_verification"`
 }
@@ -179,7 +179,7 @@ func DefaultConfig() *Config {
 		},
 		Security: SecurityConfig{
 			EnableRateLimit:        true,
-			RateLimitRPM:          100,
+			RateLimitRPM:           100,
 			EnableValidation:       true,
 			MaxRequestSize:         1024 * 1024, // 1MB
 			AllowedAccountPatterns: []string{"acc://*"},
@@ -192,9 +192,9 @@ func DefaultConfig() *Config {
 		},
 		Development: DevelopmentConfig{
 			Debug:                    false,
-			EnablePprof:             false,
-			EnableMetrics:           true,
-			TestAccounts:            []string{"acc://RenatoDAP.acme", "acc://DefiDevs.acme"},
+			EnablePprof:              false,
+			EnableMetrics:            true,
+			TestAccounts:             []string{"acc://RenatoDAP.acme", "acc://DefiDevs.acme"},
 			DisableProofVerification: false,
 		},
 	}
@@ -203,24 +203,24 @@ func DefaultConfig() *Config {
 // LoadConfig loads configuration from environment variables and config files
 func LoadConfig() (*Config, error) {
 	config := DefaultConfig()
-	
+
 	// Load from environment variables
 	if err := loadFromEnv(config); err != nil {
 		return nil, fmt.Errorf("failed to load from environment: %w", err)
 	}
-	
+
 	// Load from config file if specified
 	if configFile := os.Getenv("LITECLIENT_CONFIG_FILE"); configFile != "" {
 		if err := loadFromFile(config, configFile); err != nil {
 			return nil, fmt.Errorf("failed to load config file %s: %w", configFile, err)
 		}
 	}
-	
+
 	// Validate configuration
 	if err := config.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
-	
+
 	return config, nil
 }
 
@@ -246,7 +246,7 @@ func loadFromEnv(config *Config) error {
 			config.Network.MaxRetries = retries
 		}
 	}
-	
+
 	// Server configuration
 	if v := os.Getenv("LITECLIENT_ADDRESS"); v != "" {
 		config.Server.Address = v
@@ -259,7 +259,7 @@ func loadFromEnv(config *Config) error {
 	if v := os.Getenv("LITECLIENT_CORS_ORIGINS"); v != "" {
 		config.Server.CORSOrigins = strings.Split(v, ",")
 	}
-	
+
 	// Logging configuration
 	if v := os.Getenv("LITECLIENT_LOG_LEVEL"); v != "" {
 		config.Logging.Level = v
@@ -275,7 +275,7 @@ func loadFromEnv(config *Config) error {
 			config.Logging.Structured = structured
 		}
 	}
-	
+
 	// Security configuration
 	if v := os.Getenv("LITECLIENT_RATE_LIMIT_RPM"); v != "" {
 		if rpm, err := strconv.Atoi(v); err == nil {
@@ -287,7 +287,7 @@ func loadFromEnv(config *Config) error {
 			config.Security.MaxRequestSize = size
 		}
 	}
-	
+
 	// Storage configuration
 	if v := os.Getenv("LITECLIENT_STORAGE_TYPE"); v != "" {
 		config.Storage.Type = v
@@ -300,7 +300,7 @@ func loadFromEnv(config *Config) error {
 			config.Storage.CacheTTL = ttl
 		}
 	}
-	
+
 	// Development configuration
 	if v := os.Getenv("LITECLIENT_DEBUG"); v != "" {
 		if debug, err := strconv.ParseBool(v); err == nil {
@@ -315,7 +315,7 @@ func loadFromEnv(config *Config) error {
 	if v := os.Getenv("LITECLIENT_TEST_ACCOUNTS"); v != "" {
 		config.Development.TestAccounts = strings.Split(v, ",")
 	}
-	
+
 	return nil
 }
 
@@ -325,15 +325,15 @@ func loadFromFile(config *Config, filename string) error {
 	if err != nil {
 		return fmt.Errorf("failed to read config file: %w", err)
 	}
-	
+
 	var fileConfig Config
 	if err := json.Unmarshal(data, &fileConfig); err != nil {
 		return fmt.Errorf("failed to parse config file: %w", err)
 	}
-	
+
 	// Merge file config into existing config
 	mergeConfig(config, &fileConfig)
-	
+
 	return nil
 }
 
@@ -370,12 +370,12 @@ func (c *Config) Validate() error {
 	if c.Network.MaxRetries < 0 {
 		return fmt.Errorf("max_retries must be non-negative")
 	}
-	
+
 	// Validate server configuration
 	if c.Server.Port <= 0 || c.Server.Port > 65535 {
 		return fmt.Errorf("port must be between 1 and 65535")
 	}
-	
+
 	// Validate logging configuration
 	validLogLevels := map[string]bool{
 		"debug": true, "info": true, "warn": true, "error": true,
@@ -383,7 +383,7 @@ func (c *Config) Validate() error {
 	if !validLogLevels[c.Logging.Level] {
 		return fmt.Errorf("invalid log level: %s", c.Logging.Level)
 	}
-	
+
 	// Validate security configuration
 	if c.Security.RateLimitRPM <= 0 {
 		return fmt.Errorf("rate_limit_rpm must be positive")
@@ -391,7 +391,7 @@ func (c *Config) Validate() error {
 	if c.Security.MaxRequestSize <= 0 {
 		return fmt.Errorf("max_request_size must be positive")
 	}
-	
+
 	// Validate storage configuration
 	validStorageTypes := map[string]bool{
 		"memory": true, "sqlite": true, "postgres": true,
@@ -399,7 +399,7 @@ func (c *Config) Validate() error {
 	if !validStorageTypes[c.Storage.Type] {
 		return fmt.Errorf("invalid storage type: %s", c.Storage.Type)
 	}
-	
+
 	return nil
 }
 

@@ -17,6 +17,8 @@ var (
 	// ErrMemberAlreadyQueued is the SAME intent arriving again for a chain it is already queued on
 	// - a workflow re-run. It is not a refusal, and the intent must not be executed a second time.
 	ErrMemberAlreadyQueued = consensus.ErrMemberAlreadyQueued
+	// ErrMemberAlreadyDecided: the member has a recorded outcome (BatchStack.MemberOutcomes).
+	ErrMemberAlreadyDecided = consensus.ErrMemberAlreadyDecided
 
 	// ErrOperationAlreadyQueued is a DIFFERENT intent carrying an operation (the same four
 	// Accumulate blobs) that is already queued on the chain: a replay, refused for good.

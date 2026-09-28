@@ -20,14 +20,15 @@ package consensus
 // as failed. The realistic trigger is an entitlement policy activation landing between the two blocks;
 // most other FinalizeBlock rejections are deterministic and cannot flip.
 //
-// The reverse — a false SUCCESS through the index — is not possible: an OK record can only exist if these
-// exact bytes committed OK, and each attempt's bytes are unique per second because the builder stamps
-// Timestamp = time.Now().
+// The reverse — a false SUCCESS — is not possible either way: an OK record can only exist if these exact
+// bytes committed OK. Since the builder stopped stamping wall time (RB3-F99), a rebuilt block is byte-identical
+// to an earlier one, so identical bytes committed OK ARE this validator's block for this operation - which is
+// why the floor below is where the committed-operation index stopped looking, not an arbitrary height.
 //
 // WHAT THIS DOES
 //
-// Records the chain height before the first broadcast and scans the committed blocks above it for every
-// inclusion of the hash, with its code. The first OK inclusion is the verdict, whatever a later copy did.
+// Starts from the height through which the app's committed-operation index has already answered "not
+// committed" (RB3-F141) and scans the committed blocks above it for every inclusion of the hash, with its code. The first OK inclusion is the verdict, whatever a later copy did.
 // A failure is final only when the scan was complete, no copy is still in the mempool, and no attempt was
 // admitted at or after that failure. Anything unreadable makes the scan incomplete, which is reported as
 // unknown and never as absence.

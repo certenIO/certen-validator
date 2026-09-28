@@ -207,7 +207,7 @@ func TestFullProofCycle_AllLevelsPass(t *testing.T) {
 	// First create the result without ResultHash
 	execResult := &ExternalChainResultData{
 		ResultID:        sha256.Sum256([]byte("result_id")),
-		AnchorProofHash: level3.ProofHash, // Bind to Level 3
+		AnchorProofHash: level3.AnchorBinding.MerkleRootHash, // Bind to Level 3: the root the anchor published (RB3-F106)
 		Chain:           "ethereum",
 		ChainID:         1,
 		BlockNumber:     17000000,
@@ -338,10 +338,11 @@ func TestCrossLevelBinding_L2toL3(t *testing.T) {
 
 // TestCrossLevelBinding_L3toL4 tests Level 3 → Level 4 binding
 func TestCrossLevelBinding_L3toL4(t *testing.T) {
-	anchorProofHash := sha256.Sum256([]byte("anchor_proof"))
+	// Level 3's hash is the root its anchor published (RB3-F106).
+	anchorProofHash := sha256.Sum256([]byte("anchored root"))
 
-	level3 := &AnchorProofBundle{}
-	level3.ProofHash = anchorProofHash
+	level3 := &AnchorProofBundle{AnchorBinding: &AnchorBindingData{MerkleRootHash: anchorProofHash}}
+	level3.ProofHash = sha256.Sum256([]byte("anchor proof document"))
 
 	level4 := &ExecutionProofBundle{
 		Result: &ExternalChainResultData{

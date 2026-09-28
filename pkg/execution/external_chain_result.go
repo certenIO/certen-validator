@@ -59,8 +59,9 @@ type ExternalChainResult struct {
 	// For the first result in a chain, this is all zeros
 	PreviousResultHash [32]byte `json:"previous_result_hash"`
 
-	// AnchorProofHash binds this Level 4 result to Level 3 anchor proof
-	// This ensures cryptographic continuity from L1→L2→L3→L4
+	// AnchorProofHash binds this Level 4 result to its Level 3: the batch root its member's anchor published
+	// (proof_levels.go), zero where that anchor is not established. Per result - results on one chain belong
+	// to different intents and anchors (RB3-F106).
 	AnchorProofHash [32]byte `json:"anchor_proof_hash"`
 
 	// SequenceNumber is the position in the result hash chain
@@ -731,28 +732,28 @@ func marshalCanonical(v interface{}) []byte {
 // RESULT HASH CHAIN MANAGER
 // =============================================================================
 
-// ResultHashChain manages the hash chain of external chain results
+// ResultHashChain manages the hash chain of external chain results. It links results in order; each result
+// carries its own anchor binding. It used to carry one AnchorProofHash for the whole chain - the first
+// cycle's operation commitment - stamped on every later result (RB3-F106).
 type ResultHashChain struct {
-	ChainID         string   `json:"chain_id"`
-	LatestHash      [32]byte `json:"latest_hash"`
-	LatestSequence  uint64   `json:"latest_sequence"`
-	AnchorProofHash [32]byte `json:"anchor_proof_hash"`
+	ChainID        string   `json:"chain_id"`
+	LatestHash     [32]byte `json:"latest_hash"`
+	LatestSequence uint64   `json:"latest_sequence"`
 }
 
 // NewResultHashChain creates a new hash chain for results
-func NewResultHashChain(chainID string, anchorProofHash [32]byte) *ResultHashChain {
+func NewResultHashChain(chainID string) *ResultHashChain {
 	return &ResultHashChain{
-		ChainID:         chainID,
-		LatestHash:      [32]byte{}, // Genesis - all zeros
-		LatestSequence:  0,
-		AnchorProofHash: anchorProofHash,
+		ChainID:        chainID,
+		LatestHash:     [32]byte{}, // Genesis - all zeros
+		LatestSequence: 0,
 	}
 }
 
-// AddResult adds a result to the hash chain and returns the updated result
-func (c *ResultHashChain) AddResult(result *ExternalChainResult) error {
+// AddResult links a result into the chain, binding it to its own anchor (anchorProofHash).
+func (c *ResultHashChain) AddResult(result *ExternalChainResult, anchorProofHash [32]byte) error {
 	// Set hash chain binding
-	result.SetHashChainBinding(c.LatestHash, c.AnchorProofHash, c.LatestSequence)
+	result.SetHashChainBinding(c.LatestHash, anchorProofHash, c.LatestSequence)
 
 	// Update chain state
 	c.LatestHash = result.ResultHash
@@ -784,10 +785,6 @@ func (c *ResultHashChain) VerifyChain(results []*ExternalChainResult) error {
 			return fmt.Errorf("result %d hash invalid: %w", i, err)
 		}
 
-		// Verify anchor proof binding is consistent
-		if results[i].AnchorProofHash != c.AnchorProofHash {
-			return fmt.Errorf("result %d anchor proof hash mismatch", i)
-		}
 	}
 
 	return nil

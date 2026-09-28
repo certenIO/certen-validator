@@ -32,9 +32,10 @@ func twoChainStack(t *testing.T, a, b int64) *BatchStack {
 		t.Fatal(err)
 	}
 	return &BatchStack{
-		Resolver:      r,
-		Mempool:       NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64}),
-		Orchestrators: map[int64]*BatchOrchestrator{a: {}, b: {}},
+		Resolver:       r,
+		Mempool:        NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64}),
+		Orchestrators:  map[int64]*BatchOrchestrator{a: {}, b: {}},
+		MemberOutcomes: recordedOutcomes{},
 	}
 }
 

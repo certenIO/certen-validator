@@ -1,3 +1,5 @@
+//go:build integration
+
 // Copyright 2025 The Accumulate Authors
 //
 // Use of this source code is governed by an MIT-style
@@ -12,9 +14,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/legacy-proof-attempts-do-not-use/production-proof/core"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
 	"gitlab.com/accumulatenetwork/accumulate/protocol"
-	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/production-proof/core"
 )
 
 // TestCompleteProofChain demonstrates the complete 3-layer cryptographic proof
@@ -157,6 +159,11 @@ func TestCompleteProofChain(t *testing.T) {
 	}
 
 	fmt.Println("\n" + repeatStr("═", 60))
+
+	// The summary above defines success as layers 1-2 verified; a run that verifies nothing fails.
+	if !result.Layers["layer1"].Verified || !result.Layers["layer2"].Verified {
+		t.Fatalf("layers 1-2 not verified: layer1=%q layer2=%q", result.Layers["layer1"].Error, result.Layers["layer2"].Error)
+	}
 }
 
 // TestWithDifferentAccounts tests verification with various account types
@@ -186,7 +193,7 @@ func TestWithDifferentAccounts(t *testing.T) {
 			} else if verified {
 				t.Logf("✅ %s verified successfully", tc.account)
 			} else {
-				t.Logf("❌ %s verification failed", tc.account)
+				t.Errorf("❌ %s verification failed", tc.account)
 			}
 		})
 	}

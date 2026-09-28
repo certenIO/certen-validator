@@ -1,3 +1,5 @@
+//go:build integration
+
 // Copyright 2025 CERTEN
 //
 // Use of this source code is governed by an MIT-style
@@ -21,7 +23,7 @@ import (
 	"testing"
 	"time"
 
-	. "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/new_chained-proof"
+	. "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/legacy-proof-attempts-do-not-use/new_chained-proof"
 )
 
 // getenv returns environment variable value or default
@@ -42,8 +44,8 @@ func getenv(key, defaultValue string) string {
 var (
 	// Test endpoints - configurable via environment variables
 	V3_API_ENDPOINT    = getenv("CERTEN_V3_ENDPOINT", "http://localhost:26660/v3")
-	COMET_RPC_ENDPOINT = getenv("CERTEN_COMET_ENDPOINT", "http://localhost:26657")        // DN CometBFT
-	BVN_COMET_ENDPOINT = getenv("CERTEN_BVN_COMET_ENDPOINT", "http://localhost:26757")   // BVN CometBFT
+	COMET_RPC_ENDPOINT = getenv("CERTEN_COMET_ENDPOINT", "http://localhost:26657")     // DN CometBFT
+	BVN_COMET_ENDPOINT = getenv("CERTEN_BVN_COMET_ENDPOINT", "http://localhost:26757") // BVN CometBFT
 
 	// Test account data - configurable for different networks
 	TEST_ACCOUNT_URL = getenv("CERTEN_TEST_ACCOUNT", "acc://testtesttest10.acme/data1")
@@ -432,10 +434,6 @@ func TestReceiptMathematicsValidation(t *testing.T) {
 
 // TestNetworkEndpointConfiguration validates endpoint configuration
 func TestNetworkEndpointConfiguration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping endpoint test in short mode")
-	}
-
 	t.Log("🔧 Testing network endpoint configuration...")
 
 	// Test if we can create a builder (validates endpoints)
@@ -453,7 +451,7 @@ func TestNetworkEndpointConfiguration(t *testing.T) {
 		t.Log("📝 Update TEST_ENDPOINTS constants with your running node URLs")
 		t.Log("📝 Required: V3 API endpoint (usually port 26660)")
 		t.Log("📝 Required: CometBFT RPC endpoint mapping per partition")
-		t.Skip("Skipping tests due to endpoint configuration")
+		t.Fatalf("endpoint configuration: %v", err)
 	}
 
 	if builder == nil {

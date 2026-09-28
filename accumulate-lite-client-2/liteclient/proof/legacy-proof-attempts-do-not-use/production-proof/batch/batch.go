@@ -13,26 +13,26 @@ import (
 	"sync"
 	"time"
 
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/legacy-proof-attempts-do-not-use/production-proof/core"
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/legacy-proof-attempts-do-not-use/production-proof/interfaces"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
-	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/production-proof/core"
-	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/production-proof/interfaces"
 )
 
 // BatchProofGenerator efficiently generates multiple proofs concurrently
 type BatchProofGenerator struct {
-	verifier       *core.CryptographicVerifier
-	cache          interfaces.ProofCache
-	maxWorkers     int
-	batchTimeout   time.Duration
-	maxBatchSize   int
-	debug          bool
+	verifier     *core.CryptographicVerifier
+	cache        interfaces.ProofCache
+	maxWorkers   int
+	batchTimeout time.Duration
+	maxBatchSize int
+	debug        bool
 
 	// Metrics
-	totalBatches   int64
-	totalProofs    int64
-	totalErrors    int64
-	averageTime    time.Duration
-	mu             sync.Mutex
+	totalBatches int64
+	totalProofs  int64
+	totalErrors  int64
+	averageTime  time.Duration
+	mu           sync.Mutex
 }
 
 // BatchRequest represents a request for proof generation
@@ -459,13 +459,13 @@ func (b *BatchProofGenerator) GetMetrics() map[string]interface{} {
 	defer b.mu.Unlock()
 
 	return map[string]interface{}{
-		"total_batches":   b.totalBatches,
-		"total_proofs":    b.totalProofs,
-		"total_errors":    b.totalErrors,
-		"average_time":    b.averageTime.Seconds(),
-		"max_workers":     b.maxWorkers,
-		"max_batch_size":  b.maxBatchSize,
-		"batch_timeout":   b.batchTimeout.Seconds(),
+		"total_batches":  b.totalBatches,
+		"total_proofs":   b.totalProofs,
+		"total_errors":   b.totalErrors,
+		"average_time":   b.averageTime.Seconds(),
+		"max_workers":    b.maxWorkers,
+		"max_batch_size": b.maxBatchSize,
+		"batch_timeout":  b.batchTimeout.Seconds(),
 	}
 }
 
@@ -491,9 +491,9 @@ func (b *BatchProofGenerator) GetConfiguration() map[string]interface{} {
 	defer b.mu.Unlock()
 
 	return map[string]interface{}{
-		"max_workers":     b.maxWorkers,
-		"max_batch_size":  b.maxBatchSize,
-		"batch_timeout":   b.batchTimeout.Seconds(),
-		"debug_enabled":   b.debug,
+		"max_workers":    b.maxWorkers,
+		"max_batch_size": b.maxBatchSize,
+		"batch_timeout":  b.batchTimeout.Seconds(),
+		"debug_enabled":  b.debug,
 	}
 }

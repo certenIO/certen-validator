@@ -35,7 +35,7 @@ package govreceipt
 import (
 	"fmt"
 
-	cp "github.com/certen/certen-protocol/services/validator/accumulate-lite-client-2/liteclient/proof/working-proof_do_not_edit"
+	cp "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/working-proof_do_not_edit"
 )
 
 // Step is one step of a receipt's merkle path.

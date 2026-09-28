@@ -62,6 +62,37 @@ type MemberOutcome struct {
 	EffectsProven *bool
 }
 
+// RecordedMemberOutcome is a member's outcome as recorded.
+type RecordedMemberOutcome struct {
+	Settlement   MemberSettlement
+	ProofCycle   MemberProofCycle
+	SettlementTx string
+	WriteBackTx  string
+	CycleID      string
+	RecordedAt   time.Time
+}
+
+// MemberOutcomeOf returns the recorded outcome of an intent's member on a chain, or nil when none is
+// recorded. A recorded outcome is terminal: the batch path never queues that member again (RB3-F141).
+func (r *IntentLifecycleRepository) MemberOutcomeOf(ctx context.Context, intentID string, chainID int64) (*RecordedMemberOutcome, error) {
+	var o RecordedMemberOutcome
+	var settlement, cycle string
+	var settlementTx, writeBackTx, cycleID sql.NullString
+	err := r.client.db.QueryRowContext(ctx, `
+		SELECT settlement, proof_cycle, settlement_tx, write_back_tx, cycle_id, recorded_at
+		FROM intent_member_outcomes WHERE intent_id = $1 AND chain_id = $2`, intentID, chainID).
+		Scan(&settlement, &cycle, &settlementTx, &writeBackTx, &cycleID, &o.RecordedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read the outcome of %s on chain %d: %w", intentID, chainID, err)
+	}
+	o.Settlement, o.ProofCycle = MemberSettlement(settlement), MemberProofCycle(cycle)
+	o.SettlementTx, o.WriteBackTx, o.CycleID = settlementTx.String, writeBackTx.String, cycleID.String
+	return &o, nil
+}
+
 // ErrMemberOutcomeInvalid is a report that cannot be recorded as given.
 var ErrMemberOutcomeInvalid = errors.New("invalid member outcome")
 

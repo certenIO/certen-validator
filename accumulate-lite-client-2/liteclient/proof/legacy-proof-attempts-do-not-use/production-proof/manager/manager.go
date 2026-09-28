@@ -13,12 +13,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/legacy-proof-attempts-do-not-use/production-proof/batch"
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/legacy-proof-attempts-do-not-use/production-proof/cache"
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/legacy-proof-attempts-do-not-use/production-proof/core"
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/legacy-proof-attempts-do-not-use/production-proof/debug"
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/legacy-proof-attempts-do-not-use/production-proof/interfaces"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
-	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/production-proof/batch"
-	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/production-proof/cache"
-	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/production-proof/core"
-	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/production-proof/debug"
-	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/production-proof/interfaces"
 )
 
 // ProductionProofManager implements ProofManager with all enhanced features
@@ -31,12 +31,12 @@ type ProductionProofManager struct {
 	backend        interfaces.DataBackend
 
 	// Metrics
-	metrics        *interfaces.ProofSystemMetrics
-	startTime      time.Time
-	mu             sync.RWMutex
+	metrics   *interfaces.ProofSystemMetrics
+	startTime time.Time
+	mu        sync.RWMutex
 
 	// State
-	initialized    bool
+	initialized bool
 }
 
 // NewProductionProofManager creates a new production-ready proof manager
@@ -51,9 +51,9 @@ func NewProductionProofManager(config *interfaces.ProofConfig) *ProductionProofM
 	}
 
 	return &ProductionProofManager{
-		config:     config,
-		metrics:    metrics,
-		startTime:  time.Now(),
+		config:      config,
+		metrics:     metrics,
+		startTime:   time.Now(),
 		initialized: false,
 	}
 }
@@ -139,6 +139,8 @@ func (m *ProductionProofManager) GenerateProof(
 	m.mu.Lock()
 	m.metrics.ProofsGenerated++
 	m.mu.Unlock()
+	// Every strategy returns from the switch below, so the average is recorded on the way out.
+	defer func() { m.updateAverageTime(time.Since(startTime)) }()
 
 	// Handle different strategies
 	switch strategy {
@@ -156,12 +158,6 @@ func (m *ProductionProofManager) GenerateProof(
 	default:
 		return m.generateOptimizedProof(ctx, accountURL)
 	}
-
-	// Update average time
-	duration := time.Since(startTime)
-	m.updateAverageTime(duration)
-
-	return nil, fmt.Errorf("strategy not implemented")
 }
 
 // GenerateBatchProof generates proofs for multiple accounts efficiently

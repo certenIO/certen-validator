@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/certen/certen-protocol/services/validator/accumulate-lite-client-2/liteclient/proof/govreceipt"
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govreceipt"
 )
 
 // CERTEN Governance Proof Types

@@ -14,6 +14,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1280,12 +1281,17 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 		return bv.refusalResult(certenIntent, err), nil
 	}
 
+	// The authorization the governance proof states: the keys G1 counted, from Accumulate (RB3-F139).
+	authLeaves, err := authorizationLeavesFromG1(g1Proof)
+	if err != nil {
+		return nil, fmt.Errorf("intent %s: %w", certenIntent.IntentID, err)
+	}
+
 	// Create builder inputs STRICTLY from canonical sources
 	builderInputs := BuilderInputs{
 		Intent: certenIntent, // canonical 4 blobs from IntentDiscovery
 		Governance: GovernanceInputs{
-			// Extract from canonical GovernanceData, not fake values
-			Leaves:                extractAuthorizationLeavesFromGovernance(governanceData),
+			Leaves:                authLeaves,
 			BLSAggregateSignature: blsSignature, // from ProofGenerator or fallback
 			// Full governance proofs (generated AFTER L1-L4)
 			// G0: Inclusion & Finality
@@ -1346,7 +1352,8 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	// Nothing past this point may act on a ValidatorBlock consensus has not committed (RB3-F98). It used
 	// to proceed on CheckTx alone - "CometBFT is expected to commit it shortly" - unless the operator had
 	// opted in to failing closed; production had not. A block admitted but not seen committed is
-	// a retryable refusal: the resubmission finds the committed transaction by hash (bft_broadcast_confirm.go).
+	// a retryable refusal: the resubmission asks the app's committed-operation index first, finds the
+	// block committed, and continues from its height without broadcasting it again (RB3-F141).
 	if err := requireCommitted(bftRes); err != nil {
 		return &ExecutionTaskResult{
 			Success:    false,
@@ -1472,47 +1479,55 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	}, nil
 }
 
-// extractAuthorizationLeavesFromGovernance extracts AuthorizationLeaf structs from canonical GovernanceData
-// This replaces fake "test" governance with real authorization data from the canonical blob
-func extractAuthorizationLeavesFromGovernance(governanceData *GovernanceData) []AuthorizationLeaf {
-	// Extract real authorization leaves from the canonical governance blob
-	// This data comes from Accumulate's on-chain governance, not generated locally
+// authorizationLeavesFromG1 builds the governance proof's authorization leaves from the G1 proof: one leaf
+// per key whose signature G1 counted - the key page that signed, the SHA-256 of the key (as key pages store
+// keys), and the signature itself - in a fixed order. The field is documented as derived from key book
+// lookups, and G1 is that lookup: the governing pages read from Accumulate as of execution.
+//
+// They used to be built from the intent's own declared governance blob, with an invented key hash
+// ("<authorization hash>-<i>"), the signer's id where the signature belongs, and a fabricated leaf when the
+// intent declared none, so that the consensus invariant requiring leaves would pass (RB3-F139). G1 with a
+// satisfied threshold is required before a block is built, so its counted signatures are never empty; a
+// proof without them is refused, never given a leaf.
+func authorizationLeavesFromG1(g1 *proof.G1Result) ([]AuthorizationLeaf, error) {
+	if g1 == nil || !g1.G1ProofComplete || !g1.ThresholdSatisfied {
+		return nil, fmt.Errorf("no complete G1 proof with a satisfied threshold to take the authorization from")
+	}
+	seen := map[string]bool{}
 	var leaves []AuthorizationLeaf
-
-	// Convert required signers to AuthorizationLeaf structs
-	for i, signer := range governanceData.Authorization.RequiredSigners {
+	for i, vs := range g1.ValidatedSignatures {
+		sig := vs.Signature
+		pub, err := hex.DecodeString(strings.TrimPrefix(strings.ToLower(strings.TrimSpace(sig.PublicKey)), "0x"))
+		if err != nil || len(pub) == 0 {
+			return nil, fmt.Errorf("G1 counted signature %d carries no readable public key", i)
+		}
+		if strings.TrimSpace(sig.Signature) == "" || strings.TrimSpace(sig.Signer) == "" {
+			return nil, fmt.Errorf("G1 counted signature %d names no signature or signer", i)
+		}
+		keyHash := sha256.Sum256(pub)
 		leaf := AuthorizationLeaf{
-			KeyPage:   governanceData.Authorization.RequiredKeyPage,
-			KeyHash:   fmt.Sprintf("%s-%d", governanceData.Authorization.AuthorizationHash, i),
+			KeyPage:   strings.TrimSpace(sig.Signer),
+			KeyHash:   hex.EncodeToString(keyHash[:]),
 			Role:      "signer",
-			Signature: signer, // Real signature from governance data
+			Signature: strings.ToLower(strings.TrimPrefix(strings.TrimSpace(sig.Signature), "0x")),
 		}
+		id := leaf.KeyPage + "|" + leaf.KeyHash
+		if seen[id] {
+			continue // one key, one leaf: the vote counts unique keys
+		}
+		seen[id] = true
 		leaves = append(leaves, leaf)
 	}
-
-	// Handle explicit role mapping if present
-	for _, role := range governanceData.Authorization.Roles {
-		leaf := AuthorizationLeaf{
-			KeyPage:   role.KeyPage,
-			KeyHash:   governanceData.Authorization.AuthorizationHash,
-			Role:      role.Role,
-			Signature: "", // Will be filled by BLS aggregation
-		}
-		leaves = append(leaves, leaf)
-	}
-
-	// Ensure at least one leaf exists for governance
 	if len(leaves) == 0 {
-		// Fallback from canonical governance data, not hardcoded
-		leaves = []AuthorizationLeaf{{
-			KeyPage:   governanceData.Authorization.RequiredKeyPage,
-			KeyHash:   governanceData.Authorization.AuthorizationHash,
-			Role:      "signer",
-			Signature: "", // BLS signature will be added separately
-		}}
+		return nil, fmt.Errorf("G1 counted no signature to state as an authorization")
 	}
-
-	return leaves
+	sort.Slice(leaves, func(i, j int) bool {
+		if leaves[i].KeyPage != leaves[j].KeyPage {
+			return leaves[i].KeyPage < leaves[j].KeyPage
+		}
+		return leaves[i].KeyHash < leaves[j].KeyHash
+	})
+	return leaves, nil
 }
 
 // createValidatorLedgerStore creates a LedgerStore for the ValidatorApp
@@ -1754,6 +1769,16 @@ func NewRealCometBFTEngine(
 	// CRITICAL FIX: Enable CometBFT logging to see consensus activity
 	tmLogger := cmtlog.NewTMLogger(cmtlog.NewSyncWriter(os.Stdout))
 	tmLogger = tmLogger.With("module", "cometbft")
+
+	// Index the committed chain before the node opens its stores: the handshake below replays blocks through
+	// FinalizeBlock, and the committed-operation rule judges them against this index (RB3-F141). The check
+	// that v9 rules reproduce this history runs here too, so a node never starts on state it would decide
+	// differently.
+	if va, ok := app.(*ValidatorApp); ok {
+		if err := indexCommittedHistoryFromStores(cometCfg, dbProvider, va); err != nil {
+			return nil, fmt.Errorf("index the committed chain: %w", err)
+		}
+	}
 
 	// Create the in-process node.
 	n, err := node.NewNode(
@@ -2468,6 +2493,22 @@ func (e *RealCometBFTEngine) BroadcastValidatorBlockCommit(
 
 	e.logger.Printf("📡 [COMETBFT] BroadcastValidatorBlockCommit: starting for bundle=%s", vb.BundleID)
 
+	// Has this validator's block for this operation already committed? The app's committed-operation index
+	// answers from committed state (RB3-F141). A proposer that did not see its first commit - the inclusion
+	// poll gave up, discovery re-drove the intent, a restart forgot it - used to rebuild the block and
+	// broadcast it again, and the chain committed it twice.
+	app, ok := e.app.(*ValidatorApp)
+	if !ok {
+		return nil, fmt.Errorf("ValidatorBlocks commit through the ValidatorApp; this engine runs %T", e.app)
+	}
+	prior, committedThrough, err := app.CommittedOperation(vb.ValidatorID, vb.CrossChainProof.OperationID)
+	if err != nil {
+		return nil, err
+	}
+	if prior != nil {
+		return alreadyCommitted(vb, prior, e.logger)
+	}
+
 	if err := e.Start(); err != nil {
 		e.logger.Printf("❌ [COMETBFT] Failed to start engine: %v", err)
 		return nil, err
@@ -2483,7 +2524,27 @@ func (e *RealCometBFTEngine) BroadcastValidatorBlockCommit(
 	// Submit, then confirm inclusion. The outcome is decided by whether the transaction is admitted or
 	// committed — looked up by hash when a reply is lost — not by the RPC acknowledgement alone
 	// (bft_broadcast_confirm.go).
-	return submitValidatorBlock(ctx, e.rpcClient, payload, defaultBroadcastTiming, e.logger)
+	return submitValidatorBlock(ctx, e.rpcClient, payload, committedThrough, defaultBroadcastTiming, e.logger)
+}
+
+// ErrOperationCommittedAsAnotherBlock is a validator's block for an operation that committed with a
+// different bundle than the one just built. The chain holds the committed one; this one is never broadcast.
+var ErrOperationCommittedAsAnotherBlock = errors.New("this validator's block for the operation committed as a different bundle")
+
+// alreadyCommitted is the result of a ValidatorBlock whose operation this validator already committed: the
+// committed block's height and transaction when it is the same bundle, a refusal naming both when not.
+func alreadyCommitted(vb *ValidatorBlock, prior *ledger.CommittedOperation, logger *log.Logger) (*BFTExecutionResult, error) {
+	if prior.BundleID != vb.BundleID {
+		return nil, fmt.Errorf("%w: operation %s committed at height %d as bundle %s; the rebuilt block is bundle %s",
+			ErrOperationCommittedAsAnotherBlock, vb.CrossChainProof.OperationID, prior.Height, prior.BundleID, vb.BundleID)
+	}
+	txHash, err := hex.DecodeString(prior.TxHash)
+	if err != nil {
+		return nil, fmt.Errorf("committed operation %s names transaction %q: %w", vb.CrossChainProof.OperationID, prior.TxHash, err)
+	}
+	logger.Printf("✅ [COMETBFT] ValidatorBlock %s already COMMITTED at height %d (tx %s) - not broadcast again",
+		vb.BundleID, prior.Height, prior.TxHash)
+	return &BFTExecutionResult{Height: prior.Height, TxHash: txHash, CommittedAt: prior.BlockTime}, nil
 }
 
 // BroadcastAppTxSync broadcasts ABCI transactions via in-process CometBFT engine
@@ -2555,16 +2616,8 @@ func (e *RealCometBFTEngine) SetValidatorRepositories(repos *database.Repositori
 			writerID = e.nodeID
 		}
 		validatorApp.EnableConsensusPersistence(repos, writerID,
-			&rpcCommittedBlockSource{reader: e.rpcClient, chainID: validatorApp.GetChainID()})
+			&rpcCommittedBlockSource{reader: e.rpcClient})
 		e.logger.Printf("✅ [PERSIST] Database repositories wired to ValidatorApp for consensus persistence (writer=%s)", writerID)
-	}
-}
-
-// SetValidatorCount sets the total validator count on the ValidatorApp for quorum calculations.
-func (e *RealCometBFTEngine) SetValidatorCount(count int) {
-	if validatorApp := e.GetValidatorApp(); validatorApp != nil {
-		validatorApp.SetValidatorCount(count)
-		e.logger.Printf("✅ [PERSIST] Validator count set to %d for quorum calculations", count)
 	}
 }
 

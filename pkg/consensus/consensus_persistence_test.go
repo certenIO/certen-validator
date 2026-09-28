@@ -125,6 +125,13 @@ type fakeBlockSource struct {
 	asked       []int64
 }
 
+// sevenOfSeven is a commit every one of seven power-1 validators signed.
+var sevenOfSeven = &commitQuorum{Signers: 7, Validators: 7, SignedPower: 7, TotalPower: 7}
+
+func (f *fakeBlockSource) CommitQuorum(ctx context.Context, height int64) (*commitQuorum, error) {
+	return sevenOfSeven, nil
+}
+
 func (f *fakeBlockSource) CommittedValidatorBlocks(ctx context.Context, height int64) (*committedBlock, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -144,10 +151,48 @@ type fakeBlockReader struct {
 	blocks  map[int64]*coretypes.ResultBlock
 	results map[int64]*coretypes.ResultBlockResults
 	errs    map[int64]error
+	// signed[h][i] says whether validator i's precommit is in height h's commit; seven validators signing
+	// unless set.
+	signed map[int64][]bool
 }
 
 func newFakeBlockReader() *fakeBlockReader {
-	return &fakeBlockReader{blocks: map[int64]*coretypes.ResultBlock{}, results: map[int64]*coretypes.ResultBlockResults{}, errs: map[int64]error{}}
+	return &fakeBlockReader{blocks: map[int64]*coretypes.ResultBlock{}, results: map[int64]*coretypes.ResultBlockResults{},
+		errs: map[int64]error{}, signed: map[int64][]bool{}}
+}
+
+func fakeValidatorAddress(i int) []byte { return bytes.Repeat([]byte{byte(i + 1)}, 20) }
+
+func (r *fakeBlockReader) Commit(ctx context.Context, height *int64) (*coretypes.ResultCommit, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	signed, ok := r.signed[*height]
+	if !ok {
+		signed = []bool{true, true, true, true, true, true, true}
+	}
+	commit := &cmttypes.Commit{Height: *height}
+	for i, s := range signed {
+		sig := cmttypes.CommitSig{BlockIDFlag: cmttypes.BlockIDFlagAbsent}
+		if s {
+			sig = cmttypes.CommitSig{BlockIDFlag: cmttypes.BlockIDFlagCommit, ValidatorAddress: fakeValidatorAddress(i)}
+		}
+		commit.Signatures = append(commit.Signatures, sig)
+	}
+	return &coretypes.ResultCommit{SignedHeader: cmttypes.SignedHeader{Header: &cmttypes.Header{Height: *height}, Commit: commit}}, nil
+}
+
+func (r *fakeBlockReader) Validators(ctx context.Context, height *int64, page, perPage *int) (*coretypes.ResultValidators, error) {
+	r.mu.Lock()
+	n := 7
+	if signed, ok := r.signed[*height]; ok {
+		n = len(signed)
+	}
+	r.mu.Unlock()
+	out := &coretypes.ResultValidators{BlockHeight: *height, Total: n, Count: n}
+	for i := 0; i < n; i++ {
+		out.Validators = append(out.Validators, &cmttypes.Validator{Address: fakeValidatorAddress(i), VotingPower: 1})
+	}
+	return out, nil
 }
 
 func (r *fakeBlockReader) record(height int64, t time.Time, txs [][]byte, res []*abcitypes.ExecTxResult) {
@@ -201,6 +246,12 @@ func waitUntil(t *testing.T, what string, timeout time.Duration, cond func() boo
 
 func startTestPersister(t *testing.T, store consensusRecordStore, queueCap int) *consensusPersister {
 	t.Helper()
+	return startTestPersisterWith(t, store, queueCap, &fakeBlockSource{})
+}
+
+// startTestPersisterWith starts a test persister over source (nil for none).
+func startTestPersisterWith(t *testing.T, store consensusRecordStore, queueCap int, source committedBlockSource) *consensusPersister {
+	t.Helper()
 	p := newConsensusPersister(store, "validator-test", persistQuietLog)
 	if queueCap > 0 {
 		p.queue = make(chan persistJob, queueCap)
@@ -208,6 +259,11 @@ func startTestPersister(t *testing.T, store consensusRecordStore, queueCap int) 
 	p.retryBase = time.Millisecond
 	p.retryMax = 5 * time.Millisecond
 	p.idleCheck = 2 * time.Millisecond
+	// A block source, as production always wires (bft_integration.go): the commit of each height is read
+	// from it (RB3-F138).
+	if source != nil {
+		p.setSource(source)
+	}
 	p.start()
 	t.Cleanup(p.stop)
 	return p
@@ -287,7 +343,6 @@ func newPersistTestApp(t *testing.T) *ValidatorApp {
 	t.Setenv("CERTEN_ENTITLEMENT_MODE", "")
 	app := NewValidatorApp(newInMemLedger(), "certen-fictional-test")
 	app.logger = persistQuietLog
-	app.validatorCount = 7
 	return app
 }
 
@@ -329,7 +384,7 @@ func TestCommitHandsOffOnlyThisBlocksAcceptedValidatorBlocks(t *testing.T) {
 	app.persister = startTestPersister(t, store, 0)
 
 	base := time.Unix(gateNow, 0).UTC()
-	a, b, c := persistTestBlockJSON(t, "op-a", "G2", "validator-1"), persistTestBlockJSON(t, "op-b", "G1", "validator-2"), persistTestBlockJSON(t, "op-c", "G0", "")
+	a, b, c := persistTestBlockJSON(t, "op-a", "G2", "validator-1"), persistTestBlockJSON(t, "op-b", "G1", "validator-2"), persistTestBlockJSON(t, "op-c", "G0", "validator-3")
 	invalid := []byte(`{"bundle_id":"not-a-valid-block"}`)
 
 	_, fb1 := commitBlock(t, app, nil, 1, base, a, invalid, b)
@@ -370,12 +425,16 @@ func TestCommitHandsOffOnlyThisBlocksAcceptedValidatorBlocks(t *testing.T) {
 	if e1.BlockNumber != 1 || !e1.StartTime.Equal(base) || e1.State != "completed" || e1.CompletedAt == nil || !e1.CompletedAt.Equal(base) {
 		t.Fatalf("height 1 entry metadata wrong: block=%d start=%v state=%s completed=%v", e1.BlockNumber, e1.StartTime, e1.State, e1.CompletedAt)
 	}
-	if w[1].Entries[1].State != "quorum_met" || w[2].Entries[0].State != "collecting" || w[2].Entries[0].CompletedAt != nil {
-		t.Fatalf("governance level -> state mapping changed")
+	// Every committed block states its commit: completed, with the commit's signers and power, whatever its
+	// governance level (RB3-F138).
+	for _, e := range append(append([]database.CommittedConsensusEntry{}, w[1].Entries...), w[2].Entries...) {
+		if e.State != "completed" || e.CompletedAt == nil || e.AttestationCount != 7 || e.RequiredCount != 5 || e.QuorumFraction != 1 {
+			t.Fatalf("entry does not state its commit: state=%s completed=%v signers=%d required=%d fraction=%v",
+				e.State, e.CompletedAt, e.AttestationCount, e.RequiredCount, e.QuorumFraction)
+		}
 	}
-	if len(w[1].Attestations) != 2 || w[2].Attestations[0].ValidatorID != "certen-fictional-test" {
-		t.Fatalf("attestations: got %d at height 1; height 2 validator id %q (want chain id default)",
-			len(w[1].Attestations), w[2].Attestations[0].ValidatorID)
+	if len(w[1].Attestations) != 0 || len(w[2].Attestations) != 0 {
+		t.Fatalf("attestation rows were written for a signature nothing verified: %d, %d", len(w[1].Attestations), len(w[2].Attestations))
 	}
 	for _, r := range w {
 		for _, e := range r.Entries {
@@ -430,7 +489,7 @@ func TestCommitNeverWaitsOnTheDatabaseAndDroppedHeightsAreRebuilt(t *testing.T) 
 	p := newConsensusPersister(store, "validator-test", log.New(&debugBuf, "", 0))
 	p.queue = make(chan persistJob, 4)
 	p.retryBase, p.retryMax, p.idleCheck = time.Millisecond, 5*time.Millisecond, 2*time.Millisecond
-	p.setSource(&rpcCommittedBlockSource{reader: reader, chainID: app.chainID})
+	p.setSource(&rpcCommittedBlockSource{reader: reader})
 	p.start()
 	t.Cleanup(p.stop)
 	app.persister = p
@@ -493,10 +552,10 @@ func TestPersisterResumesFromItsWatermarkAndIgnoresReplays(t *testing.T) {
 	p.start()
 	t.Cleanup(p.stop)
 
-	p.enqueue(committedBlock{height: 13}, 7)
+	p.enqueue(committedBlock{height: 13})
 	waitUntil(t, "heights 11-13", time.Second, func() bool { return len(store.heights()) == 3 })
-	p.enqueue(committedBlock{height: 12}, 7) // replay below the watermark
-	p.enqueue(committedBlock{height: 14}, 7)
+	p.enqueue(committedBlock{height: 12}) // replay below the watermark
+	p.enqueue(committedBlock{height: 14})
 	waitUntil(t, "height 14", time.Second, func() bool { return len(store.heights()) == 4 })
 
 	if got := store.heights(); !reflect.DeepEqual(got, []int64{11, 12, 13, 14}) {
@@ -514,7 +573,7 @@ func TestPersisterFirstRunDoesNotRebuildHistory(t *testing.T) {
 	source := &fakeBlockSource{}
 	p := startTestPersister(t, store, 0)
 	p.setSource(source)
-	p.enqueue(committedBlock{height: 500}, 7)
+	p.enqueue(committedBlock{height: 500})
 	waitUntil(t, "height 500", time.Second, func() bool { return len(store.heights()) == 1 })
 	if len(source.asked) != 0 {
 		t.Fatalf("rebuilt history on first run: %v", source.asked)
@@ -524,7 +583,7 @@ func TestPersisterFirstRunDoesNotRebuildHistory(t *testing.T) {
 func TestPersisterRetriesUntilTheDatabaseRecovers(t *testing.T) {
 	store := &fakeRecordStore{loadErrs: 2, failN: 3}
 	p := startTestPersister(t, store, 0)
-	p.enqueue(committedBlock{height: 7}, 7)
+	p.enqueue(committedBlock{height: 7})
 	waitUntil(t, "height 7 persisted", 2*time.Second, func() bool { return len(store.heights()) == 1 })
 	if got := store.calls.Load(); got != 4 {
 		t.Fatalf("PersistCommittedBlock calls = %d, want 4 (3 failures + 1 success)", got)
@@ -539,7 +598,7 @@ func TestPersisterAdvancesPastHeightsTheBlockStoreNoLongerHas(t *testing.T) {
 	source := &fakeBlockSource{unavailable: map[int64]bool{11: true}}
 	p := startTestPersister(t, store, 0)
 	p.setSource(source)
-	p.enqueue(committedBlock{height: 12}, 7)
+	p.enqueue(committedBlock{height: 12})
 	waitUntil(t, "heights 11-12", time.Second, func() bool { return len(store.heights()) == 2 })
 	w := store.byHeight()
 	if len(w[11].Entries) != 0 || p.gaps.Load() != 1 {
@@ -552,8 +611,8 @@ func TestPersisterAdvancesPastHeightsTheBlockStoreNoLongerHas(t *testing.T) {
 // sweep), losing rows that could have been produced.
 func TestPersisterWithoutASourceWaitsAndRebuildsInsteadOfRecordingGaps(t *testing.T) {
 	store := &fakeRecordStore{watermark: 3, found: true}
-	p := startTestPersister(t, store, 0)
-	p.enqueue(committedBlock{height: 6}, 7)
+	p := startTestPersisterWith(t, store, 0, nil)
+	p.enqueue(committedBlock{height: 6})
 	time.Sleep(200 * time.Millisecond)
 	if n := len(store.heights()); n != 0 {
 		t.Fatalf("%d height(s) written with no source to rebuild the missing ones from", n)
@@ -572,7 +631,7 @@ func TestEnqueueNeverBlocks(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		for h := int64(1); h <= 1000; h++ {
-			p.enqueue(committedBlock{height: h}, 7)
+			p.enqueue(committedBlock{height: h})
 		}
 		close(done)
 	}()
@@ -588,7 +647,7 @@ func TestEnqueueNeverBlocks(t *testing.T) {
 
 // ─── records ────────────────────────────────────────────────────────────────────────────────────────
 
-func TestConsensusRecordsForIsDeterministicAndKeepsTheOriginalMapping(t *testing.T) {
+func TestConsensusRecordsStateTheCommitThatCommittedTheHeight(t *testing.T) {
 	bt := time.Unix(gateNow, 0).UTC()
 	good := func(id, level string) ValidatorBlock {
 		return ValidatorBlock{BundleID: id, ValidatorID: "validator-9", BlockHeight: 42, Timestamp: bt.Format(time.RFC3339),
@@ -602,27 +661,53 @@ func TestConsensusRecordsForIsDeterministicAndKeepsTheOriginalMapping(t *testing
 	noSig := good("no-sig", "G1")
 	noSig.GovernanceProof.BLSAggregateSignature = ""
 
-	blk := &committedBlock{height: 42, time: bt, blocks: []ValidatorBlock{good("g2", "G2"), noRoot, badRoot, noSig, good("g0", "G0")}}
-	r1 := consensusRecordsFor(blk, 7, persistQuietLog)
+	// Five of seven power-1 validators signed height 42's commit.
+	quorum := &commitQuorum{Signers: 5, Validators: 7, SignedPower: 5, TotalPower: 7}
+	blk := &committedBlock{height: 42, time: bt, quorum: quorum, blocks: []ValidatorBlock{good("g2", "G2"), noRoot, badRoot, noSig, good("g0", "G0")}}
+	r1 := consensusRecordsFor(blk, persistQuietLog)
 	time.Sleep(5 * time.Millisecond)
-	r2 := consensusRecordsFor(blk, 7, persistQuietLog)
+	r2 := consensusRecordsFor(blk, persistQuietLog)
 	if !recordsEqualIgnoringNothing(*r1, *r2) {
 		t.Fatal("records depend on when they are derived (wall clock leaked in)")
 	}
-	if len(r1.Entries) != 5 {
-		t.Fatalf("entries = %d, want 5 (one per accepted ValidatorBlock, as before)", len(r1.Entries))
+	// A root that is absent or does not decode is not stored as empty bytes: that block gets no row.
+	if len(r1.Entries) != 3 {
+		t.Fatalf("entries = %d, want 3 (the blocks whose governance root decodes)", len(r1.Entries))
 	}
-	if len(r1.Entries[1].MerkleRoot) != 0 || len(r1.Entries[2].MerkleRoot) != 0 {
-		t.Fatal("an absent or undecodable merkle root must be stored as empty bytes, as before")
+	if len(r1.Attestations) != 0 {
+		t.Fatalf("attestations = %d: a single unverified V6.1 signature is not a verified attestation", len(r1.Attestations))
 	}
-	if len(r1.Attestations) != 4 {
-		t.Fatalf("attestations = %d, want 4 (every block with a BLS signature, as before)", len(r1.Attestations))
+	for _, e := range r1.Entries {
+		if e.State != "completed" || e.CompletedAt == nil || !e.CompletedAt.Equal(bt) || e.AttestationCount != 5 ||
+			e.RequiredCount != 5 || e.QuorumFraction != 5.0/7 || len(e.AggregateSignature) != 0 || len(e.AggregatePubKey) != 0 {
+			t.Fatalf("entry: state=%s completed=%v signers=%d required=%d fraction=%v aggregate=%x",
+				e.State, e.CompletedAt, e.AttestationCount, e.RequiredCount, e.QuorumFraction, e.AggregateSignature)
+		}
 	}
-	if e := r1.Entries[0]; e.CompletedAt == nil || !e.CompletedAt.Equal(bt) || e.RequiredCount != 5 || e.QuorumFraction != 1.0/7 {
-		t.Fatalf("G2 entry: completed=%v required=%d fraction=%v", e.CompletedAt, e.RequiredCount, e.QuorumFraction)
+	result, _ := r1.Entries[0].ResultJSON.(map[string]interface{})
+	sig, ok := result["proposer_v6_1_pre_exec_bls_signature"].(map[string]interface{})
+	if !ok || sig["verified"] != false || sig["validator_id"] != "validator-9" {
+		t.Fatalf("the proposer's signature is not recorded under its name as unverified: %v", r1.Entries[0].ResultJSON)
 	}
-	if r1.Entries[4].CompletedAt != nil {
-		t.Fatal("G0 entry must not be completed")
+	// Without the commit, nothing is stated.
+	if r := consensusRecordsFor(&committedBlock{height: 42, time: bt, blocks: blk.blocks}, persistQuietLog); len(r.Entries) != 0 {
+		t.Fatalf("%d entries written without the height's commit", len(r.Entries))
+	}
+}
+
+// The commit is read from the block store: its signers matched to the height's validators by address, and a
+// commit without more than two thirds of the power refused.
+func TestCommitQuorumIsTheHeightsOwnCommit(t *testing.T) {
+	reader := newFakeBlockReader()
+	src := &rpcCommittedBlockSource{reader: reader}
+	reader.signed[5] = []bool{true, true, true, true, true, false, false}
+	q, err := src.CommitQuorum(context.Background(), 5)
+	if err != nil || q.Signers != 5 || q.SignedPower != 5 || q.TotalPower != 7 || q.Validators != 7 {
+		t.Fatalf("quorum %+v, %v", q, err)
+	}
+	reader.signed[6] = []bool{true, true, true, true, false, false, false}
+	if q, err := src.CommitQuorum(context.Background(), 6); err == nil {
+		t.Fatalf("four of seven accepted as a commit: %+v", q)
 	}
 }
 
@@ -630,14 +715,18 @@ func TestConsensusRecordsForIsDeterministicAndKeepsTheOriginalMapping(t *testing
 
 func TestRPCCommittedBlockSourceMatchesWhatFinalizeBlockAccepted(t *testing.T) {
 	bt := time.Unix(gateNow, 0).UTC()
-	accepted := persistTestBlockJSON(t, "op-src-a", "G2", "")
+	accepted := persistTestBlockJSON(t, "op-src-a", "G2", "validator-1")
 	rejected := persistTestBlockJSON(t, "op-src-r", "G2", "validator-2")
 	policy := []byte(fmt.Sprintf(`{"kind":%q}`, PolicyUpdateKind))
+	// A committed rotation and tick are not ValidatorBlocks either (RB3-F145): they decode as JSON, so a
+	// source that skipped only policy updates rebuilt them as empty blocks.
+	rotation := []byte(fmt.Sprintf(`{"kind":%q,"version":1}`, ValidatorRotationKind))
+	tick := []byte(fmt.Sprintf(`{"kind":%q,"nonce":"0011223344556677"}`, ChainTickKind))
 	reader := newFakeBlockReader()
-	reader.record(5, bt, [][]byte{accepted, rejected, policy, []byte("not json")},
-		[]*abcitypes.ExecTxResult{{Code: 0}, {Code: 4}, {Code: 0}, {Code: 0}})
+	reader.record(5, bt, [][]byte{accepted, rejected, policy, []byte("not json"), rotation, tick},
+		[]*abcitypes.ExecTxResult{{Code: 0}, {Code: 4}, {Code: 0}, {Code: 0}, {Code: 0}, {Code: 0}})
 
-	src := &rpcCommittedBlockSource{reader: reader, chainID: "certen-fictional-test"}
+	src := &rpcCommittedBlockSource{reader: reader}
 	blk, err := src.CommittedValidatorBlocks(context.Background(), 5)
 	if err != nil {
 		t.Fatal(err)
@@ -646,7 +735,7 @@ func TestRPCCommittedBlockSourceMatchesWhatFinalizeBlockAccepted(t *testing.T) {
 		t.Fatalf("rebuilt blocks = %v, want only the accepted ValidatorBlock", blk)
 	}
 	vb := blk.blocks[0]
-	if vb.BlockHeight != 5 || vb.Timestamp != bt.Format(time.RFC3339) || vb.ValidatorID != "certen-fictional-test" || !blk.time.Equal(bt) {
+	if vb.BlockHeight != 5 || vb.Timestamp != bt.Format(time.RFC3339) || vb.ValidatorID != "validator-1" || !blk.time.Equal(bt) {
 		t.Fatalf("commit metadata not applied: height=%d ts=%s validator=%q", vb.BlockHeight, vb.Timestamp, vb.ValidatorID)
 	}
 
@@ -701,6 +790,10 @@ func TestCacheEvictionDoesNotWrapBelowTheMargin(t *testing.T) {
 		id := fmt.Sprintf("0xlow%061d", i)
 		app.validatorBlocks[id] = &ValidatorBlock{BundleID: id, BlockHeight: 3}
 	}
+	// This chain begins at height 5.
+	if _, err := app.InitChain(context.Background(), &abcitypes.RequestInitChain{InitialHeight: 5}); err != nil {
+		t.Fatal(err)
+	}
 	commitBlock(t, app, nil, 5, time.Unix(gateNow, 0).UTC(), persistTestBlockJSON(t, "op-evict", "G2", "validator-1"))
 	if n := len(app.validatorBlocks); n < 900 {
 		t.Fatalf("cache size after eviction = %d; the height subtraction wrapped and evicted everything", n)
@@ -731,8 +824,8 @@ func tail(s string, n int) string {
 func TestPersisterSkipsContentRejectionsInsteadOfStalling(t *testing.T) {
 	store := &fakeRecordStore{reject: []database.RejectedRecord{{Table: "consensus_entries", Err: errors.New("fictional: value too long for type character varying(66)")}}}
 	p := startTestPersister(t, store, 0)
-	p.enqueue(committedBlock{height: 1}, 7)
-	p.enqueue(committedBlock{height: 2}, 7)
+	p.enqueue(committedBlock{height: 1})
+	p.enqueue(committedBlock{height: 2})
 	waitUntil(t, "heights 1-2", time.Second, func() bool { return len(store.heights()) == 2 })
 	if got := store.calls.Load(); got != 2 || p.rejected.Load() != 2 {
 		t.Fatalf("calls=%d rejected=%d, want 2 and 2 (no retries for content rejections)", got, p.rejected.Load())
@@ -745,7 +838,7 @@ func TestPersisterRewindsAWatermarkAheadOfTheChain(t *testing.T) {
 	store := &fakeRecordStore{watermark: 5000, found: true}
 	p := startTestPersister(t, store, 0)
 	for h := int64(1); h <= 50; h++ {
-		p.enqueue(committedBlock{height: h}, 7)
+		p.enqueue(committedBlock{height: h})
 	}
 	waitUntil(t, "the new chain persisted", 2*time.Second, func() bool { return len(store.heights()) == 50 })
 	if got := store.heights(); got[0] != 1 || got[49] != 50 {
@@ -763,7 +856,7 @@ func TestPersisterRewindsAWatermarkAheadOfTheChain(t *testing.T) {
 func TestPersisterDoesNotRewindOnANormalRestart(t *testing.T) {
 	store := &fakeRecordStore{watermark: 99, found: true}
 	p := startTestPersister(t, store, 0)
-	p.enqueue(committedBlock{height: 100}, 7)
+	p.enqueue(committedBlock{height: 100})
 	waitUntil(t, "height 100", time.Second, func() bool { return len(store.heights()) == 1 })
 	if p.rewinds.Load() != 0 || len(store.resets) != 0 {
 		t.Fatalf("rewound on a normal restart: rewinds=%d resets=%v", p.rewinds.Load(), store.resets)
@@ -777,7 +870,7 @@ func TestPersisterBoundsHungDatabaseCalls(t *testing.T) {
 	p.retryBase, p.retryMax, p.idleCheck, p.callTimeout = time.Millisecond, 2*time.Millisecond, 2*time.Millisecond, 10*time.Millisecond
 	p.start()
 	t.Cleanup(p.stop)
-	p.enqueue(committedBlock{height: 1}, 7)
+	p.enqueue(committedBlock{height: 1})
 	waitUntil(t, "several bounded attempts", 2*time.Second, func() bool { return store.calls.Load() >= 3 })
 	store.mu.Lock()
 	store.hang = false
@@ -800,7 +893,7 @@ func TestEnablingPersistenceRebuildsBlocksCommittedBeforeIt(t *testing.T) {
 	store := &fakeRecordStore{}
 	p := newConsensusPersister(store, "validator-test", persistQuietLog)
 	p.retryBase, p.retryMax, p.idleCheck = time.Millisecond, 2*time.Millisecond, 2*time.Millisecond
-	p.setSource(&rpcCommittedBlockSource{reader: reader, chainID: app.chainID})
+	p.setSource(&rpcCommittedBlockSource{reader: reader})
 	p.seedCommitted(app.startHeight, app.latestHeight)
 	p.start()
 	t.Cleanup(p.stop)
