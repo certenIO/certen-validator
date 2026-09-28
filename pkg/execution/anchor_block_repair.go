@@ -44,6 +44,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rpc"
+	"github.com/google/uuid"
 
 	"github.com/certen/independant-validator/pkg/database"
 	"github.com/certen/independant-validator/pkg/ethrpc"
@@ -449,7 +450,10 @@ func repairAnchor(ctx context.Context, cfg AnchorRepairConfig, anchor database.C
 		return err
 	}
 
-	// Layer-5 rows naming this anchor - and those naming the transaction the row misnamed as it.
+	// Layer-5 rows naming this anchor, those naming the transaction the row misnamed as it, and those of the
+	// proofs placed in its batch whatever they name. The batch is what finds a proof that names the wrong
+	// transaction once another validator's run has already completed the row (RB3-F136): the misnamed
+	// transaction is then no longer on the row to look for.
 	claims, err := cfg.Repair.ListLayer5ForAnchorTx(ctx, anchor.AnchorCreateTx)
 	if err != nil {
 		return err
@@ -461,6 +465,11 @@ func repairAnchor(ctx context.Context, cfg AnchorRepairConfig, anchor database.C
 		}
 		claims = append(claims, more...)
 	}
+	inBatch, err := cfg.Repair.ListLayer5ForBatch(ctx, anchor.BatchID)
+	if err != nil {
+		return err
+	}
+	claims = uniqueLayer5Claims(append(claims, inBatch...))
 	for _, claim := range claims {
 		if err := repairLayer5(ctx, cfg, anchor, facts, claim, report); err != nil {
 			return err
@@ -479,12 +488,43 @@ func repairAnchor(ctx context.Context, cfg AnchorRepairConfig, anchor database.C
 		}
 		proofs = append(proofs, more...)
 	}
+	inBatchProofs, err := cfg.Proofs.GetProofsByBatchID(ctx, anchor.BatchID)
+	if err != nil {
+		return err
+	}
+	proofs = uniqueCertenProofs(append(proofs, inBatchProofs...))
 	for _, proof := range proofs {
 		if err := repairCertenProof(ctx, cfg, anchor, facts, proof, report); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// uniqueLayer5Claims keeps each layer-5 row once, in order.
+func uniqueLayer5Claims(claims []database.Layer5Claim) []database.Layer5Claim {
+	seen := map[uuid.UUID]bool{}
+	out := claims[:0]
+	for _, c := range claims {
+		if !seen[c.LayerID] {
+			seen[c.LayerID] = true
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// uniqueCertenProofs keeps each Certen proof once, in order.
+func uniqueCertenProofs(proofs []*database.CertenAnchorProof) []*database.CertenAnchorProof {
+	seen := map[uuid.UUID]bool{}
+	out := proofs[:0]
+	for _, p := range proofs {
+		if p != nil && !seen[p.ProofID] {
+			seen[p.ProofID] = true
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // recordSender records a transaction's signer on the row where it has none, and corrects one the

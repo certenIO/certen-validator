@@ -411,6 +411,35 @@ func (r *EvidenceRepair) ListLayer5ForAnchorTx(ctx context.Context, anchorTx str
 	return claims, rows.Err()
 }
 
+// ListLayer5ForBatch returns the standing layer-5 rows of the proofs placed in a batch, whatever anchor
+// transaction they name - so a row naming the wrong one is found however the batch's own row reads now
+// (RB3-F136).
+func (r *EvidenceRepair) ListLayer5ForBatch(ctx context.Context, batchID uuid.UUID) ([]Layer5Claim, error) {
+	rows, err := r.client.QueryContext(ctx, `
+		SELECT c.layer_id, c.proof_id, c.layer_json
+		FROM chained_proof_layers c
+		JOIN proof_artifacts pa ON pa.proof_id = c.proof_id
+		WHERE pa.batch_id = $1
+		  AND c.layer_number = 5
+		  AND c.superseded_at IS NULL
+		ORDER BY c.created_at, c.layer_id`, batchID)
+	if err != nil {
+		return nil, fmt.Errorf("list layer-5 rows for batch %s: %w", batchID, err)
+	}
+	defer rows.Close()
+	var claims []Layer5Claim
+	for rows.Next() {
+		var c Layer5Claim
+		var raw []byte
+		if err := rows.Scan(&c.LayerID, &c.ProofID, &raw); err != nil {
+			return nil, fmt.Errorf("scan layer-5 row: %w", err)
+		}
+		c.LayerJSON = raw
+		claims = append(claims, c)
+	}
+	return claims, rows.Err()
+}
+
 // ReplaceLayer5 withdraws a standing layer-5 row and adds its corrected replacement: the withdrawn row is
 // kept, marked superseded with the reason and linked to the row that replaces it.
 func (r *EvidenceRepair) ReplaceLayer5(ctx context.Context, old Layer5Claim, corrected json.RawMessage, reason string, facts AnchorChainFacts, by string) (uuid.UUID, error) {

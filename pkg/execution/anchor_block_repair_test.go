@@ -110,6 +110,9 @@ type repairFixture struct {
 	mine, other *database.CertenAnchorProof
 	publicKey   ed25519.PublicKey
 	signers     map[string]func([]byte) []byte
+	// otherSigners sign as "validator-elsewhere", the other proof's validator.
+	otherSigners map[string]func([]byte) []byte
+	otherPublic  ed25519.PublicKey
 }
 
 const repairValidator = "repair-validator"
@@ -186,7 +189,9 @@ func newRepairFixtureWith(t *testing.T, rightBlock, misnamed bool) *repairFixtur
 	}
 	f.publicKey = publicKey
 	f.signers = map[string]func([]byte) []byte{"ed25519": func(h []byte) []byte { return ed25519.Sign(privateKey, h) }}
-	_, otherKey, _ := ed25519.GenerateKey(rand.Reader)
+	otherPublic, otherKey, _ := ed25519.GenerateKey(rand.Reader)
+	f.otherPublic = otherPublic
+	f.otherSigners = map[string]func([]byte) []byte{"ed25519": func(h []byte) []byte { return ed25519.Sign(otherKey, h) }}
 
 	f.mine = f.newProof(t, "mine-"+tag, repairValidator, privateKey, true)
 	f.other = f.newProof(t, "other-"+tag, "validator-elsewhere", otherKey, false)
@@ -835,5 +840,33 @@ func TestAnchorRepairRefusesARowNamingAnotherCreationOfItsAnchor(t *testing.T) {
 	}
 	if c, _, _ := f.createColumns(t); c.Valid {
 		t.Fatal("a contradiction was written")
+	}
+}
+
+// RB3-F136, production 2026-09-28: validator-1's run completed the row and corrected its own proof; each
+// other validator's run must then still find and revise the proof it signed, which names the settlement -
+// found by the batch now that the row no longer names the settlement to look for.
+func TestAnchorRepairRevisesEachSignersProofAfterAnotherRunCompletedTheRow(t *testing.T) {
+	f := newRepairFixtureMisnamed(t)
+	first := f.run(t, true)
+	if first.CreatesCompleted != 1 || first.ProofsRevised != 1 || !f.mentions(first.LeftForOwner, f.other.ProofID.String()) {
+		t.Fatalf("first run: %+v", first)
+	}
+	second, err := RepairAnchorBlocks(context.Background(), AnchorRepairConfig{
+		Repair: f.repair, Proofs: f.repos.Proofs, Reader: f.chain, ValidatorID: "validator-elsewhere",
+		Signers: f.otherSigners, Apply: true, Logf: t.Logf,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ProofsRevised != 1 {
+		t.Fatalf("the other validator's run did not revise its proof: %+v", second)
+	}
+	other, err := f.repos.Proofs.GetProof(context.Background(), f.other.ProofID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other.AnchorTxHash != f.anchorTx || other.AnchorBlockNumber != int64(f.chainBlock) || !ed25519.Verify(f.otherPublic, other.ProofHash, other.ValidatorSig) {
+		t.Fatalf("the other validator's proof names %s @ %d", other.AnchorTxHash, other.AnchorBlockNumber)
 	}
 }
