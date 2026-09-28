@@ -14,6 +14,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1280,12 +1281,17 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 		return bv.refusalResult(certenIntent, err), nil
 	}
 
+	// The authorization the governance proof states: the keys G1 counted, from Accumulate (RB3-F139).
+	authLeaves, err := authorizationLeavesFromG1(g1Proof)
+	if err != nil {
+		return nil, fmt.Errorf("intent %s: %w", certenIntent.IntentID, err)
+	}
+
 	// Create builder inputs STRICTLY from canonical sources
 	builderInputs := BuilderInputs{
 		Intent: certenIntent, // canonical 4 blobs from IntentDiscovery
 		Governance: GovernanceInputs{
-			// Extract from canonical GovernanceData, not fake values
-			Leaves:                extractAuthorizationLeavesFromGovernance(governanceData),
+			Leaves:                authLeaves,
 			BLSAggregateSignature: blsSignature, // from ProofGenerator or fallback
 			// Full governance proofs (generated AFTER L1-L4)
 			// G0: Inclusion & Finality
@@ -1472,47 +1478,55 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	}, nil
 }
 
-// extractAuthorizationLeavesFromGovernance extracts AuthorizationLeaf structs from canonical GovernanceData
-// This replaces fake "test" governance with real authorization data from the canonical blob
-func extractAuthorizationLeavesFromGovernance(governanceData *GovernanceData) []AuthorizationLeaf {
-	// Extract real authorization leaves from the canonical governance blob
-	// This data comes from Accumulate's on-chain governance, not generated locally
+// authorizationLeavesFromG1 builds the governance proof's authorization leaves from the G1 proof: one leaf
+// per key whose signature G1 counted - the key page that signed, the SHA-256 of the key (as key pages store
+// keys), and the signature itself - in a fixed order. The field is documented as derived from key book
+// lookups, and G1 is that lookup: the governing pages read from Accumulate as of execution.
+//
+// They used to be built from the intent's own declared governance blob, with an invented key hash
+// ("<authorization hash>-<i>"), the signer's id where the signature belongs, and a fabricated leaf when the
+// intent declared none, so that the consensus invariant requiring leaves would pass (RB3-F139). G1 with a
+// satisfied threshold is required before a block is built, so its counted signatures are never empty; a
+// proof without them is refused, never given a leaf.
+func authorizationLeavesFromG1(g1 *proof.G1Result) ([]AuthorizationLeaf, error) {
+	if g1 == nil || !g1.G1ProofComplete || !g1.ThresholdSatisfied {
+		return nil, fmt.Errorf("no complete G1 proof with a satisfied threshold to take the authorization from")
+	}
+	seen := map[string]bool{}
 	var leaves []AuthorizationLeaf
-
-	// Convert required signers to AuthorizationLeaf structs
-	for i, signer := range governanceData.Authorization.RequiredSigners {
+	for i, vs := range g1.ValidatedSignatures {
+		sig := vs.Signature
+		pub, err := hex.DecodeString(strings.TrimPrefix(strings.ToLower(strings.TrimSpace(sig.PublicKey)), "0x"))
+		if err != nil || len(pub) == 0 {
+			return nil, fmt.Errorf("G1 counted signature %d carries no readable public key", i)
+		}
+		if strings.TrimSpace(sig.Signature) == "" || strings.TrimSpace(sig.Signer) == "" {
+			return nil, fmt.Errorf("G1 counted signature %d names no signature or signer", i)
+		}
+		keyHash := sha256.Sum256(pub)
 		leaf := AuthorizationLeaf{
-			KeyPage:   governanceData.Authorization.RequiredKeyPage,
-			KeyHash:   fmt.Sprintf("%s-%d", governanceData.Authorization.AuthorizationHash, i),
+			KeyPage:   strings.TrimSpace(sig.Signer),
+			KeyHash:   hex.EncodeToString(keyHash[:]),
 			Role:      "signer",
-			Signature: signer, // Real signature from governance data
+			Signature: strings.ToLower(strings.TrimPrefix(strings.TrimSpace(sig.Signature), "0x")),
 		}
+		id := leaf.KeyPage + "|" + leaf.KeyHash
+		if seen[id] {
+			continue // one key, one leaf: the vote counts unique keys
+		}
+		seen[id] = true
 		leaves = append(leaves, leaf)
 	}
-
-	// Handle explicit role mapping if present
-	for _, role := range governanceData.Authorization.Roles {
-		leaf := AuthorizationLeaf{
-			KeyPage:   role.KeyPage,
-			KeyHash:   governanceData.Authorization.AuthorizationHash,
-			Role:      role.Role,
-			Signature: "", // Will be filled by BLS aggregation
-		}
-		leaves = append(leaves, leaf)
-	}
-
-	// Ensure at least one leaf exists for governance
 	if len(leaves) == 0 {
-		// Fallback from canonical governance data, not hardcoded
-		leaves = []AuthorizationLeaf{{
-			KeyPage:   governanceData.Authorization.RequiredKeyPage,
-			KeyHash:   governanceData.Authorization.AuthorizationHash,
-			Role:      "signer",
-			Signature: "", // BLS signature will be added separately
-		}}
+		return nil, fmt.Errorf("G1 counted no signature to state as an authorization")
 	}
-
-	return leaves
+	sort.Slice(leaves, func(i, j int) bool {
+		if leaves[i].KeyPage != leaves[j].KeyPage {
+			return leaves[i].KeyPage < leaves[j].KeyPage
+		}
+		return leaves[i].KeyHash < leaves[j].KeyHash
+	})
+	return leaves, nil
 }
 
 // createValidatorLedgerStore creates a LedgerStore for the ValidatorApp
