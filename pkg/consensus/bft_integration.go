@@ -311,6 +311,10 @@ type BatchEnqueuer interface {
 	CheckMember(onDemand bool, intentID, adiURL string, chainID int64, account [20]byte,
 		operationID [32]byte, legs interface{}, commitHeight uint64) error
 
+	// AnchorOf names the anchor the batch path settles chainID's members on (CERTEN_ANCHOR_V8_<chainId>).
+	// An error is CERTEN unable to name it, never the intent's defect.
+	AnchorOf(chainID int64) (common.Address, error)
+
 	// EnqueueAfter queues a later member of a sequential cross-chain intent: settled only once its
 	// predecessor (the intent's member on after.ChainID, queued first) has its outcome on chain.
 	// Same errors as EnqueueForBatch.

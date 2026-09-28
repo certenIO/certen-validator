@@ -108,6 +108,11 @@ func (bv *BFTValidator) planBatch(ci *CertenIntent, commitHeight uint64) (*batch
 		return nil, refuse(fmt.Errorf("intent %s: %w", ci.IntentID, err))
 	}
 
+	// Settled on the anchor each leg declares, or refused naming both (declared_anchor.go, RB4-F9).
+	if err := CheckDeclaredAnchors(ci, bv.batchEnqueuer.AnchorOf); err != nil {
+		return nil, refuse(fmt.Errorf("intent %s: %w", ci.IntentID, err))
+	}
+
 	// The ADI URL is keccak'd into the member's Merkle leaf, and the account contract recomputes
 	// that leaf from its OWN immutable adiURL; see memberADIURL.
 	adiURL, err := memberADIURL(ci)

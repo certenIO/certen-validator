@@ -137,9 +137,12 @@ type ChainTarget struct {
 	ChainID          int64  `json:"chain_id"`          // [INTENT] - 11155111 for Sepolia, -3 for TON Testnet
 	ContractAddress  string `json:"contract_address"`  // [INTENT] - Anchor contract address
 	FunctionSelector string `json:"function_selector"` // [INTENT] - Function selector
-	EncodedCallData  string `json:"encoded_call_data"` // [DERIVED] - ABI encoded call data
-	Commitment       string `json:"commitment"`        // [DERIVED] - Per-leg commitment hash
-	Expiry           string `json:"expiry"`            // [DERIVED FROM INTENT] - RFC3339 from ReplayData.ExpiresAt
+	// EncodedCallData is not set (RB4-F9): the batch anchor's call data carries the batch root, which does
+	// not exist when the block is built. Blocks built before carried a value made up from sha256; the field
+	// stays, omitted when empty, so those blocks still hash to their recorded bundle id.
+	EncodedCallData string `json:"encoded_call_data,omitempty"`
+	Commitment      string `json:"commitment"` // [DERIVED] - Per-leg commitment hash
+	Expiry          string `json:"expiry"`     // [DERIVED FROM INTENT] - RFC3339 from ReplayData.ExpiresAt
 }
 
 // ExternalChainResult represents the result of an external chain operation

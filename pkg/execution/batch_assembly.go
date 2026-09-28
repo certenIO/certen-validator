@@ -865,6 +865,16 @@ func (s *BatchStack) CheckMember(
 	return nil
 }
 
+// AnchorOf names the CertenAnchorV8 the batch path settles chainID's members on - the resolver's,
+// read from CERTEN_ANCHOR_V8_<chainId>. Consensus refuses a leg that declares any other (RB4-F9).
+func (s *BatchStack) AnchorOf(chainID int64) (common.Address, error) {
+	if s == nil || s.Resolver == nil {
+		return common.Address{}, fmt.Errorf("no chain resolver")
+	}
+	_, anchor, err := s.Resolver.Endpoint(chainID)
+	return anchor, err
+}
+
 // RemoveMember takes a member back out of its lane, dedupe entry included, as if it had never been
 // queued. Consensus uses it to keep a multi-chain intent all-or-nothing: if one chain's member
 // cannot be queued, the members already queued for its other chains are rolled back.

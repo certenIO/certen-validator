@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ethereum/go-ethereum/common"
 )
 
 // =============================================================================
@@ -22,13 +24,14 @@ import (
 // queued all-or-nothing.
 
 type fakeEnqueuer struct {
-	checkErr map[int64]error // CheckMember result per chain
-	addErr   map[int64]error // EnqueueForBatch/EnqueueOnDemand result per chain (after the first add)
-	queued   map[string]bool
-	removed  []string
-	adds     int
-	after    map[int64]SequencePredecessor // EnqueueAfter's predecessor per chain
-	order    []int64                       // chains in the order they were queued
+	checkErr  map[int64]error // CheckMember result per chain
+	addErr    map[int64]error // EnqueueForBatch/EnqueueOnDemand result per chain (after the first add)
+	queued    map[string]bool
+	removed   []string
+	adds      int
+	after     map[int64]SequencePredecessor // EnqueueAfter's predecessor per chain
+	order     []int64                       // chains in the order they were queued
+	anchorErr map[int64]error               // AnchorOf failure per chain
 }
 
 func newFakeEnqueuer() *fakeEnqueuer {
@@ -75,6 +78,18 @@ func (f *fakeEnqueuer) CheckMember(_ bool, _ string, _ string, chainID int64, _ 
 	return f.checkErr[chainID]
 }
 
+// testAnchor is the anchor the fake names for a chain; batchableIntent's legs declare it.
+func testAnchor(chainID int64) common.Address {
+	return common.HexToAddress(fmt.Sprintf("0x%040x", 0xa0000000+chainID))
+}
+
+func (f *fakeEnqueuer) AnchorOf(chainID int64) (common.Address, error) {
+	if err := f.anchorErr[chainID]; err != nil {
+		return common.Address{}, err
+	}
+	return testAnchor(chainID), nil
+}
+
 func (f *fakeEnqueuer) RemoveMember(_ bool, intentID string, chainID int64, _ [32]byte) {
 	key := fmt.Sprintf("%s|%d", intentID, chainID)
 	delete(f.queued, key)
@@ -89,7 +104,8 @@ func batchableIntent(t *testing.T, id string, chains ...int64) *CertenIntent {
 	for i, c := range chains {
 		legs = append(legs, map[string]interface{}{
 			"legId": fmt.Sprintf("leg-%d", i), "chain": "evm", "chainId": c,
-			"from": "0x32b4687bE3c02d52e2d94Dc1cFAF03a0E5af0C8B",
+			"from":           "0x32b4687bE3c02d52e2d94Dc1cFAF03a0E5af0C8B",
+			"anchorContract": map[string]interface{}{"address": testAnchor(c).Hex(), "functionSelector": BatchAnchorCreateSignature},
 			"executionPayload": map[string]interface{}{
 				"target": "0x1111111111111111111111111111111111111111", "value": "1000", "chainId": c,
 			},

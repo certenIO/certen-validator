@@ -67,6 +67,8 @@ func callIntent(t *testing.T, l callLeg) *CertenIntent {
 	legs := []map[string]interface{}{{
 		"legId": "leg-0", "chain": "evm", "chainId": l.chainID,
 		"from": "0x32b4687bE3c02d52e2d94Dc1cFAF03a0E5af0C8B", "executionPayload": ep,
+		// The chain's live anchor, as the fake names it (declared_anchor.go).
+		"anchorContract": map[string]interface{}{"address": testAnchor(l.chainID).Hex(), "functionSelector": BatchAnchorCreateSignature},
 	}}
 	b, err := json.Marshal(map[string]interface{}{"protocol": "CERTEN", "version": "2.0", "legs": legs})
 	if err != nil {
