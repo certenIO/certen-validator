@@ -42,8 +42,8 @@ func getenv(key, defaultValue string) string {
 var (
 	// Test endpoints - configurable via environment variables
 	V3_API_ENDPOINT    = getenv("CERTEN_V3_ENDPOINT", "http://localhost:26660/v3")
-	COMET_RPC_ENDPOINT = getenv("CERTEN_COMET_ENDPOINT", "http://localhost:26657")        // DN CometBFT
-	BVN_COMET_ENDPOINT = getenv("CERTEN_BVN_COMET_ENDPOINT", "http://localhost:26757")   // BVN CometBFT
+	COMET_RPC_ENDPOINT = getenv("CERTEN_COMET_ENDPOINT", "http://localhost:26657")     // DN CometBFT
+	BVN_COMET_ENDPOINT = getenv("CERTEN_BVN_COMET_ENDPOINT", "http://localhost:26757") // BVN CometBFT
 
 	// Test account data - configurable for different networks
 	TEST_ACCOUNT_URL = getenv("CERTEN_TEST_ACCOUNT", "acc://testtesttest10.acme/data1")

@@ -146,14 +146,14 @@ type ValidatorTransition struct {
 
 // VerificationResult represents the result of proof verification
 type VerificationResult struct {
-	Valid           bool   `json:"valid"`
-	Layer1Verified  bool   `json:"layer1Verified"`
-	Layer2Verified  bool   `json:"layer2Verified"`
-	Layer3Verified  bool   `json:"layer3Verified"`
-	Layer4Verified  bool   `json:"layer4Verified"`
-	Error           string `json:"error"`
-	VerifiedHeight  int64  `json:"verifiedHeight"`
-	TrustPath       string `json:"trustPath"`
+	Valid          bool   `json:"valid"`
+	Layer1Verified bool   `json:"layer1Verified"`
+	Layer2Verified bool   `json:"layer2Verified"`
+	Layer3Verified bool   `json:"layer3Verified"`
+	Layer4Verified bool   `json:"layer4Verified"`
+	Error          string `json:"error"`
+	VerifiedHeight int64  `json:"verifiedHeight"`
+	TrustPath      string `json:"trustPath"`
 }
 
 // Block represents a blockchain block
@@ -177,19 +177,19 @@ type StateComponents struct {
 // ProofChain represents a complete proof chain
 type ProofChain struct {
 	AccountState    *AccountState         `json:"accountState"`
-	Block           *Block               `json:"block"`
-	StateComponents *StateComponents     `json:"stateComponents"`
-	ConsensusProof  *ConsensusProof      `json:"consensusProof"`
+	Block           *Block                `json:"block"`
+	StateComponents *StateComponents      `json:"stateComponents"`
+	ConsensusProof  *ConsensusProof       `json:"consensusProof"`
 	ValidatorChain  []ValidatorTransition `json:"validatorChain"`
 }
 
 // AccountState represents the state of an account with its proof
 type AccountState struct {
-	AccountData  *AccountData  `json:"accountData"`
-	MerkleProof  *MerkleProof  `json:"merkleProof"`
-	Data         []byte        `json:"data"`        // Raw account data for proof
-	Hash         []byte        `json:"hash"`        // Hash of account data
-	Height       int64         `json:"height"`      // Block height
+	AccountData *AccountData `json:"accountData"`
+	MerkleProof *MerkleProof `json:"merkleProof"`
+	Data        []byte       `json:"data"`   // Raw account data for proof
+	Hash        []byte       `json:"hash"`   // Hash of account data
+	Height      int64        `json:"height"` // Block height
 }
 
 // MerkleProof represents a Merkle proof for account inclusion
@@ -200,10 +200,10 @@ type MerkleProof struct {
 
 // ConsensusProof represents consensus-level proof data
 type ConsensusProof struct {
-	BlockHash          []byte                `json:"blockHash"`
+	BlockHash           []byte               `json:"blockHash"`
 	ValidatorSignatures []ValidatorSignature `json:"validatorSignatures"`
 	ValidatorSet        ValidatorSet         `json:"validatorSet"`
-	SignedPower        int64                `json:"signedPower"`
-	TotalPower         int64                `json:"totalPower"`
-	Timestamp          time.Time            `json:"timestamp"`
+	SignedPower         int64                `json:"signedPower"`
+	TotalPower          int64                `json:"totalPower"`
+	Timestamp           time.Time            `json:"timestamp"`
 }

@@ -9,8 +9,8 @@ package tests
 import (
 	"testing"
 
-	"gitlab.com/accumulatenetwork/accumulate/protocol"
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/production-proof/core"
+	"gitlab.com/accumulatenetwork/accumulate/protocol"
 )
 
 // TestCompleteVerification tests both Layer 1 and Layer 2 verification

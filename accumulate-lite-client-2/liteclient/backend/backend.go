@@ -74,11 +74,11 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/types"
 	v2api "gitlab.com/accumulatenetwork/accumulate/pkg/client/api/v2"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/database/merkle"
 	acc_url "gitlab.com/accumulatenetwork/accumulate/pkg/url"
 	"gitlab.com/accumulatenetwork/accumulate/protocol"
-	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/types"
 )
 
 // RPCDataBackend implements DataBackend using the Accumulate v2 RPC API.

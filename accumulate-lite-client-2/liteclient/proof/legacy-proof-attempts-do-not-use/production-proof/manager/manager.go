@@ -13,12 +13,12 @@ import (
 	"sync"
 	"time"
 
-	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/production-proof/batch"
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/production-proof/cache"
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/production-proof/core"
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/production-proof/debug"
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/production-proof/interfaces"
+	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
 )
 
 // ProductionProofManager implements ProofManager with all enhanced features
@@ -31,12 +31,12 @@ type ProductionProofManager struct {
 	backend        interfaces.DataBackend
 
 	// Metrics
-	metrics        *interfaces.ProofSystemMetrics
-	startTime      time.Time
-	mu             sync.RWMutex
+	metrics   *interfaces.ProofSystemMetrics
+	startTime time.Time
+	mu        sync.RWMutex
 
 	// State
-	initialized    bool
+	initialized bool
 }
 
 // NewProductionProofManager creates a new production-ready proof manager
@@ -51,9 +51,9 @@ func NewProductionProofManager(config *interfaces.ProofConfig) *ProductionProofM
 	}
 
 	return &ProductionProofManager{
-		config:     config,
-		metrics:    metrics,
-		startTime:  time.Now(),
+		config:      config,
+		metrics:     metrics,
+		startTime:   time.Now(),
 		initialized: false,
 	}
 }

@@ -14,55 +14,55 @@ import (
 	"sync"
 	"time"
 
-	"gitlab.com/accumulatenetwork/accumulate/pkg/database/merkle"
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/production-proof/interfaces"
+	"gitlab.com/accumulatenetwork/accumulate/pkg/database/merkle"
 )
 
 // MemoryProofCache implements ProofCache using in-memory storage with LRU eviction
 type MemoryProofCache struct {
-	mu              sync.RWMutex
-	accountProofs   map[string]*CachedAccountProof
-	bptProofs       map[string]*CachedBPTProof
-	receipts        map[string]*CachedReceipt
-	maxSize         int
-	ttl             time.Duration
+	mu            sync.RWMutex
+	accountProofs map[string]*CachedAccountProof
+	bptProofs     map[string]*CachedBPTProof
+	receipts      map[string]*CachedReceipt
+	maxSize       int
+	ttl           time.Duration
 
 	// Access tracking for LRU
-	accessTimes     map[string]time.Time
+	accessTimes map[string]time.Time
 
 	// Metrics
-	metrics         *interfaces.ProofCacheMetrics
-	totalHits       int64
-	totalMisses     int64
-	totalEvictions  int64
-	lastCleanup     time.Time
+	metrics        *interfaces.ProofCacheMetrics
+	totalHits      int64
+	totalMisses    int64
+	totalEvictions int64
+	lastCleanup    time.Time
 }
 
 // CachedAccountProof wraps a CompleteProof with cache metadata
 type CachedAccountProof struct {
-	Proof     *interfaces.CompleteProof
-	CachedAt  time.Time
-	AccessAt  time.Time
-	HitCount  int64
-	Size      int64
+	Proof    *interfaces.CompleteProof
+	CachedAt time.Time
+	AccessAt time.Time
+	HitCount int64
+	Size     int64
 }
 
 // CachedBPTProof wraps a BPTProof with cache metadata
 type CachedBPTProof struct {
-	Proof     *interfaces.BPTProof
-	CachedAt  time.Time
-	AccessAt  time.Time
-	HitCount  int64
-	Size      int64
+	Proof    *interfaces.BPTProof
+	CachedAt time.Time
+	AccessAt time.Time
+	HitCount int64
+	Size     int64
 }
 
 // CachedReceipt wraps a merkle.Receipt with cache metadata
 type CachedReceipt struct {
-	Receipt   *merkle.Receipt
-	CachedAt  time.Time
-	AccessAt  time.Time
-	HitCount  int64
-	Size      int64
+	Receipt  *merkle.Receipt
+	CachedAt time.Time
+	AccessAt time.Time
+	HitCount int64
+	Size     int64
 }
 
 // NewMemoryProofCache creates a new in-memory proof cache
@@ -102,11 +102,11 @@ func (c *MemoryProofCache) StoreAccountProof(accountURL string, proof *interface
 	c.evictIfNecessary()
 
 	cached := &CachedAccountProof{
-		Proof:     proof,
-		CachedAt:  time.Now(),
-		AccessAt:  time.Now(),
-		HitCount:  0,
-		Size:      size,
+		Proof:    proof,
+		CachedAt: time.Now(),
+		AccessAt: time.Now(),
+		HitCount: 0,
+		Size:     size,
 	}
 
 	c.accountProofs[key] = cached
@@ -164,11 +164,11 @@ func (c *MemoryProofCache) StoreBPTProof(partition string, hash []byte, proof *i
 	c.evictIfNecessary()
 
 	cached := &CachedBPTProof{
-		Proof:     proof,
-		CachedAt:  time.Now(),
-		AccessAt:  time.Now(),
-		HitCount:  0,
-		Size:      size,
+		Proof:    proof,
+		CachedAt: time.Now(),
+		AccessAt: time.Now(),
+		HitCount: 0,
+		Size:     size,
 	}
 
 	c.bptProofs[key] = cached
@@ -511,16 +511,16 @@ func (c *MemoryProofCache) GetCacheStats() map[string]interface{} {
 	defer c.mu.RUnlock()
 
 	return map[string]interface{}{
-		"total_entries":     len(c.accountProofs) + len(c.bptProofs) + len(c.receipts),
-		"account_proofs":    len(c.accountProofs),
-		"bpt_proofs":        len(c.bptProofs),
-		"receipts":          len(c.receipts),
-		"total_hits":        c.totalHits,
-		"total_misses":      c.totalMisses,
-		"total_evictions":   c.totalEvictions,
-		"hit_rate":          c.metrics.HitRate,
-		"last_cleanup":      c.lastCleanup,
-		"ttl_seconds":       c.ttl.Seconds(),
-		"max_size":          c.maxSize,
+		"total_entries":   len(c.accountProofs) + len(c.bptProofs) + len(c.receipts),
+		"account_proofs":  len(c.accountProofs),
+		"bpt_proofs":      len(c.bptProofs),
+		"receipts":        len(c.receipts),
+		"total_hits":      c.totalHits,
+		"total_misses":    c.totalMisses,
+		"total_evictions": c.totalEvictions,
+		"hit_rate":        c.metrics.HitRate,
+		"last_cleanup":    c.lastCleanup,
+		"ttl_seconds":     c.ttl.Seconds(),
+		"max_size":        c.maxSize,
 	}
 }

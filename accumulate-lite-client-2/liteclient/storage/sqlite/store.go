@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
-
 	// Note: modernc.org/sqlite import removed for vendor compatibility
 	// Add back: _ "modernc.org/sqlite" // Pure Go SQLite driver
 )
@@ -24,13 +23,13 @@ type Store struct {
 
 // Config configures the SQLite store
 type Config struct {
-	Path            string        `json:"path"`              // Database file path
-	MaxConnections  int           `json:"max_connections"`   // Max concurrent connections
-	BusyTimeout     time.Duration `json:"busy_timeout"`      // SQLite busy timeout
-	CacheSize       int           `json:"cache_size"`        // SQLite cache size (KB)
-	JournalMode     string        `json:"journal_mode"`      // WAL, DELETE, TRUNCATE
-	SynchronousMode string        `json:"synchronous_mode"`  // FULL, NORMAL, OFF
-	ForeignKeys     bool          `json:"foreign_keys"`      // Enable foreign key constraints
+	Path            string        `json:"path"`             // Database file path
+	MaxConnections  int           `json:"max_connections"`  // Max concurrent connections
+	BusyTimeout     time.Duration `json:"busy_timeout"`     // SQLite busy timeout
+	CacheSize       int           `json:"cache_size"`       // SQLite cache size (KB)
+	JournalMode     string        `json:"journal_mode"`     // WAL, DELETE, TRUNCATE
+	SynchronousMode string        `json:"synchronous_mode"` // FULL, NORMAL, OFF
+	ForeignKeys     bool          `json:"foreign_keys"`     // Enable foreign key constraints
 }
 
 // DefaultConfig returns a production-ready configuration
@@ -51,30 +50,30 @@ func NewStore(config *Config) (*Store, error) {
 	if config == nil {
 		config = DefaultConfig()
 	}
-	
+
 	// Open database with configuration
 	db, err := sql.Open("sqlite", config.Path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
-	
+
 	// Configure connection pool
 	db.SetMaxOpenConns(config.MaxConnections)
 	db.SetMaxIdleConns(config.MaxConnections)
 	db.SetConnMaxLifetime(time.Hour)
-	
+
 	// Apply SQLite pragmas
 	if err := configureSQLite(db, config); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("failed to configure SQLite: %w", err)
 	}
-	
+
 	// Initialize schema
 	if err := InitSchema(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("failed to initialize schema: %w", err)
 	}
-	
+
 	return &Store{
 		db:   db,
 		path: config.Path,
@@ -89,17 +88,17 @@ func configureSQLite(db *sql.DB, config *Config) error {
 		fmt.Sprintf("PRAGMA journal_mode = %s", config.JournalMode),
 		fmt.Sprintf("PRAGMA synchronous = %s", config.SynchronousMode),
 	}
-	
+
 	if config.ForeignKeys {
 		pragmas = append(pragmas, "PRAGMA foreign_keys = ON")
 	}
-	
+
 	for _, pragma := range pragmas {
 		if _, err := db.Exec(pragma); err != nil {
 			return fmt.Errorf("failed to execute pragma %s: %w", pragma, err)
 		}
 	}
-	
+
 	return nil
 }
 
@@ -113,21 +112,21 @@ func (s *Store) Close() error {
 
 // Bundle represents a stored proof bundle
 type Bundle struct {
-	ID               int       `json:"id"`
-	AccountURL       string    `json:"account_url"`
-	Strategy         string    `json:"strategy"`
-	SchemaVersion    string    `json:"schema_version"`
-	BundleHash       []byte    `json:"bundle_hash"`
-	BundleData       []byte    `json:"bundle_data"`
-	VerificationStatus string  `json:"verification_status"`
-	VerificationError string   `json:"verification_error,omitempty"`
-	ComponentsCount  int       `json:"components_count"`
-	MissingComponents []string `json:"missing_components,omitempty"`
-	ProvenAt         time.Time `json:"proven_at"`
-	ExpiresAt        *time.Time `json:"expires_at,omitempty"`
-	SourceEndpoints  []string  `json:"source_endpoints"`
-	HealingActions   []string  `json:"healing_actions,omitempty"`
-	CreatedAt        time.Time `json:"created_at"`
+	ID                 int        `json:"id"`
+	AccountURL         string     `json:"account_url"`
+	Strategy           string     `json:"strategy"`
+	SchemaVersion      string     `json:"schema_version"`
+	BundleHash         []byte     `json:"bundle_hash"`
+	BundleData         []byte     `json:"bundle_data"`
+	VerificationStatus string     `json:"verification_status"`
+	VerificationError  string     `json:"verification_error,omitempty"`
+	ComponentsCount    int        `json:"components_count"`
+	MissingComponents  []string   `json:"missing_components,omitempty"`
+	ProvenAt           time.Time  `json:"proven_at"`
+	ExpiresAt          *time.Time `json:"expires_at,omitempty"`
+	SourceEndpoints    []string   `json:"source_endpoints"`
+	HealingActions     []string   `json:"healing_actions,omitempty"`
+	CreatedAt          time.Time  `json:"created_at"`
 }
 
 // SaveBundle stores a proof bundle in the database
@@ -137,23 +136,23 @@ func (s *Store) SaveBundle(bundle *Bundle) error {
 	if err != nil {
 		return fmt.Errorf("failed to ensure account: %w", err)
 	}
-	
+
 	// Serialize JSON arrays
 	missingComponentsJSON, err := json.Marshal(bundle.MissingComponents)
 	if err != nil {
 		return fmt.Errorf("failed to marshal missing components: %w", err)
 	}
-	
+
 	sourceEndpointsJSON, err := json.Marshal(bundle.SourceEndpoints)
 	if err != nil {
 		return fmt.Errorf("failed to marshal source endpoints: %w", err)
 	}
-	
+
 	healingActionsJSON, err := json.Marshal(bundle.HealingActions)
 	if err != nil {
 		return fmt.Errorf("failed to marshal healing actions: %w", err)
 	}
-	
+
 	query := `
 		INSERT INTO bundles (
 			account_id, strategy, schema_version, bundle_hash, bundle_data,
@@ -161,7 +160,7 @@ func (s *Store) SaveBundle(bundle *Bundle) error {
 			proven_at, expires_at, source_endpoints, healing_actions
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
-	
+
 	result, err := s.db.Exec(query,
 		accountID, bundle.Strategy, bundle.SchemaVersion, bundle.BundleHash, bundle.BundleData,
 		bundle.VerificationStatus, bundle.VerificationError, bundle.ComponentsCount, missingComponentsJSON,
@@ -170,12 +169,12 @@ func (s *Store) SaveBundle(bundle *Bundle) error {
 	if err != nil {
 		return fmt.Errorf("failed to insert bundle: %w", err)
 	}
-	
+
 	bundleID, err := result.LastInsertId()
 	if err != nil {
 		return fmt.Errorf("failed to get bundle ID: %w", err)
 	}
-	
+
 	bundle.ID = int(bundleID)
 	return nil
 }
@@ -190,10 +189,10 @@ func (s *Store) GetBundle(bundleHash []byte) (*Bundle, error) {
 		JOIN accounts a ON b.account_id = a.id
 		WHERE b.bundle_hash = ?
 	`
-	
+
 	var bundle Bundle
 	var missingComponentsJSON, sourceEndpointsJSON, healingActionsJSON string
-	
+
 	err := s.db.QueryRow(query, bundleHash).Scan(
 		&bundle.ID, &bundle.AccountURL, &bundle.Strategy, &bundle.SchemaVersion,
 		&bundle.BundleHash, &bundle.BundleData, &bundle.VerificationStatus,
@@ -207,20 +206,20 @@ func (s *Store) GetBundle(bundleHash []byte) (*Bundle, error) {
 		}
 		return nil, fmt.Errorf("failed to query bundle: %w", err)
 	}
-	
+
 	// Deserialize JSON arrays
 	if err := json.Unmarshal([]byte(missingComponentsJSON), &bundle.MissingComponents); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal missing components: %w", err)
 	}
-	
+
 	if err := json.Unmarshal([]byte(sourceEndpointsJSON), &bundle.SourceEndpoints); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal source endpoints: %w", err)
 	}
-	
+
 	if err := json.Unmarshal([]byte(healingActionsJSON), &bundle.HealingActions); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal healing actions: %w", err)
 	}
-	
+
 	return &bundle, nil
 }
 
@@ -235,19 +234,19 @@ func (s *Store) GetBundlesByAccount(accountURL string) ([]*Bundle, error) {
 		WHERE a.url = ?
 		ORDER BY b.created_at DESC
 	`
-	
+
 	rows, err := s.db.Query(query, accountURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query bundles: %w", err)
 	}
 	defer rows.Close()
-	
+
 	var bundles []*Bundle
-	
+
 	for rows.Next() {
 		var bundle Bundle
 		var missingComponentsJSON, sourceEndpointsJSON, healingActionsJSON string
-		
+
 		err := rows.Scan(
 			&bundle.ID, &bundle.AccountURL, &bundle.Strategy, &bundle.SchemaVersion,
 			&bundle.BundleHash, &bundle.BundleData, &bundle.VerificationStatus,
@@ -258,23 +257,23 @@ func (s *Store) GetBundlesByAccount(accountURL string) ([]*Bundle, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan bundle: %w", err)
 		}
-		
+
 		// Deserialize JSON arrays
 		if err := json.Unmarshal([]byte(missingComponentsJSON), &bundle.MissingComponents); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal missing components: %w", err)
 		}
-		
+
 		if err := json.Unmarshal([]byte(sourceEndpointsJSON), &bundle.SourceEndpoints); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal source endpoints: %w", err)
 		}
-		
+
 		if err := json.Unmarshal([]byte(healingActionsJSON), &bundle.HealingActions); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal healing actions: %w", err)
 		}
-		
+
 		bundles = append(bundles, &bundle)
 	}
-	
+
 	return bundles, nil
 }
 
@@ -287,29 +286,29 @@ func (s *Store) ensureAccount(accountURL string) (int, error) {
 	if err == nil {
 		return accountID, nil
 	}
-	
+
 	if err != sql.ErrNoRows {
 		return 0, fmt.Errorf("failed to query account: %w", err)
 	}
-	
+
 	// Account doesn't exist, create it
 	accountType, authority, localName := parseAccountURL(accountURL)
-	
+
 	insertQuery := `
 		INSERT INTO accounts (url, type, authority, local_name)
 		VALUES (?, ?, ?, ?)
 	`
-	
+
 	result, err := s.db.Exec(insertQuery, accountURL, accountType, authority, localName)
 	if err != nil {
 		return 0, fmt.Errorf("failed to insert account: %w", err)
 	}
-	
+
 	id, err := result.LastInsertId()
 	if err != nil {
 		return 0, fmt.Errorf("failed to get account ID: %w", err)
 	}
-	
+
 	return int(id), nil
 }
 
@@ -335,17 +334,17 @@ type CacheEntry struct {
 // SetCache stores a cache entry with TTL
 func (s *Store) SetCache(key, cacheType string, data []byte, ttl time.Duration) error {
 	expiresAt := time.Now().Add(ttl)
-	
+
 	query := `
 		INSERT OR REPLACE INTO cache_entries (cache_key, cache_type, data, ttl_seconds, expires_at)
 		VALUES (?, ?, ?, ?, ?)
 	`
-	
+
 	_, err := s.db.Exec(query, key, cacheType, data, int(ttl.Seconds()), expiresAt)
 	if err != nil {
 		return fmt.Errorf("failed to set cache entry: %w", err)
 	}
-	
+
 	return nil
 }
 
@@ -356,7 +355,7 @@ func (s *Store) GetCache(key string) (*CacheEntry, error) {
 		FROM cache_entries
 		WHERE cache_key = ? AND expires_at > datetime('now')
 	`
-	
+
 	var entry CacheEntry
 	err := s.db.QueryRow(query, key).Scan(
 		&entry.Key, &entry.Type, &entry.Data, &entry.TTLSeconds,
@@ -368,7 +367,7 @@ func (s *Store) GetCache(key string) (*CacheEntry, error) {
 		}
 		return nil, fmt.Errorf("failed to get cache entry: %w", err)
 	}
-	
+
 	// Update access count
 	updateQuery := `
 		UPDATE cache_entries 
@@ -376,7 +375,7 @@ func (s *Store) GetCache(key string) (*CacheEntry, error) {
 		WHERE cache_key = ?
 	`
 	s.db.Exec(updateQuery, key)
-	
+
 	return &entry, nil
 }
 
@@ -387,14 +386,14 @@ func (s *Store) CleanupExpiredCache() error {
 	if err != nil {
 		return fmt.Errorf("failed to cleanup expired cache: %w", err)
 	}
-	
+
 	return nil
 }
 
 // GetStats returns database statistics
 func (s *Store) GetStats() (map[string]interface{}, error) {
 	stats := make(map[string]interface{})
-	
+
 	// Table counts
 	tables := map[string]string{
 		"accounts": "SELECT COUNT(*) FROM accounts",
@@ -404,7 +403,7 @@ func (s *Store) GetStats() (map[string]interface{}, error) {
 		"anchors":  "SELECT COUNT(*) FROM anchors",
 		"cache":    "SELECT COUNT(*) FROM cache_entries",
 	}
-	
+
 	for table, query := range tables {
 		var count int
 		if err := s.db.QueryRow(query).Scan(&count); err != nil {
@@ -412,7 +411,7 @@ func (s *Store) GetStats() (map[string]interface{}, error) {
 		}
 		stats[table+"_count"] = count
 	}
-	
+
 	// Database size
 	var pageCount, pageSize int
 	if err := s.db.QueryRow("PRAGMA page_count").Scan(&pageCount); err == nil {
@@ -420,6 +419,6 @@ func (s *Store) GetStats() (map[string]interface{}, error) {
 			stats["database_size_bytes"] = pageCount * pageSize
 		}
 	}
-	
+
 	return stats, nil
 }

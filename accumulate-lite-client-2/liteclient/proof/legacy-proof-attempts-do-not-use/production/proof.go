@@ -13,32 +13,32 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/production-proof/core"
+	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
 )
 
 // ProofResult contains the detailed results of proof verification
 type ProofResult struct {
 	// Layer 1: Account → BPT
-	AccountHash     []byte `json:"accountHash"`
-	BPTRoot         []byte `json:"bptRoot"`
-	Layer1Verified  bool   `json:"layer1Verified"`
-	
+	AccountHash    []byte `json:"accountHash"`
+	BPTRoot        []byte `json:"bptRoot"`
+	Layer1Verified bool   `json:"layer1Verified"`
+
 	// Layer 2: BPT → Block
-	BlockHeight     uint64 `json:"blockHeight"`
-	BlockHash       []byte `json:"blockHash"`
-	Layer2Verified  bool   `json:"layer2Verified"`
-	
+	BlockHeight    uint64 `json:"blockHeight"`
+	BlockHash      []byte `json:"blockHash"`
+	Layer2Verified bool   `json:"layer2Verified"`
+
 	// Layer 3: Block → Validators (when available)
-	ValidatorCount  int    `json:"validatorCount"`
-	SignatureCount  int    `json:"signatureCount"`
-	Layer3Available bool   `json:"layer3Available"`
-	Layer3Verified  bool   `json:"layer3Verified"`
-	
+	ValidatorCount  int  `json:"validatorCount"`
+	SignatureCount  int  `json:"signatureCount"`
+	Layer3Available bool `json:"layer3Available"`
+	Layer3Verified  bool `json:"layer3Verified"`
+
 	// Overall status
-	FullyVerified   bool   `json:"fullyVerified"`
-	TrustRequired   string `json:"trustRequired"` // "none" | "api" | "validators"
-	ErrorMessage    string `json:"errorMessage,omitempty"`
+	FullyVerified bool   `json:"fullyVerified"`
+	TrustRequired string `json:"trustRequired"` // "none" | "api" | "validators"
+	ErrorMessage  string `json:"errorMessage,omitempty"`
 }
 
 // VerifyAccountWithDetails performs complete verification and returns detailed results
@@ -126,11 +126,11 @@ func NewConfigurableVerifier(apiEndpoint, cometEndpoint string) *ConfigurableVer
 	if cometEndpoint == "" {
 		cometEndpoint = "http://127.0.0.2:26657"
 	}
-	
+
 	return &ConfigurableVerifier{
 		CryptographicVerifier: core.NewCryptographicVerifierWithEndpoints(apiEndpoint, cometEndpoint),
-		apiEndpoint:   apiEndpoint,
-		cometEndpoint: cometEndpoint,
+		apiEndpoint:           apiEndpoint,
+		cometEndpoint:         cometEndpoint,
 	}
 }
 

@@ -13,9 +13,9 @@ import (
 	"strings"
 	"time"
 
-	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/production-proof/core"
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/production-proof/interfaces"
+	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
 )
 
 // DebugVerifier wraps the CryptographicVerifier with rich debug output
@@ -504,7 +504,6 @@ func (d *DebugVerifier) formatHash(hashStr string) string {
 
 	return hashStr
 }
-
 
 // GetDebugLevelFromString converts string to DebugLevel
 func GetDebugLevelFromString(level string) DebugLevel {

@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/production-proof/core"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
 	"gitlab.com/accumulatenetwork/accumulate/protocol"
-	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/production-proof/core"
 )
 
 // TestCompleteProofChain demonstrates the complete 3-layer cryptographic proof

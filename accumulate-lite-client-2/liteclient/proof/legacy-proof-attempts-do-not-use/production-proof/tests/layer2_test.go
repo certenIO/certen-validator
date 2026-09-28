@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/production-proof/core"
+	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
 )
 
 // TestLayer2Verification tests Layer 2: BPT Root → Block Hash verification

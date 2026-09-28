@@ -360,9 +360,9 @@ func (v *Layer3Verifier) VerifyValidatorSet(validators *ValidatorSetResponse) (*
 // This implements Paul Snow's Byzantine agreement verification helper
 func (v *Layer3Verifier) VerifyByzantineAgreement(totalPower, signedPower int64, signatures []ValidatorSig) (*ByzantineCheck, error) {
 	check := &ByzantineCheck{
-		TotalPower:       totalPower,
-		SignedPower:      signedPower,
-		TotalSignatures:  len(signatures),
+		TotalPower:      totalPower,
+		SignedPower:     signedPower,
+		TotalSignatures: len(signatures),
 	}
 
 	if totalPower <= 0 {
@@ -452,8 +452,8 @@ type CommitResponse struct {
 type ValidatorSetResponse struct {
 	BlockHeight string `json:"block_height"`
 	Validators  []struct {
-		Address     string `json:"address"`
-		PubKey      struct {
+		Address string `json:"address"`
+		PubKey  struct {
 			Type  string `json:"type"`
 			Value string `json:"value"`
 		} `json:"pub_key"`
@@ -472,15 +472,15 @@ type ValidatorSetCheck struct {
 
 // ByzantineCheck represents the result of Paul Snow's Byzantine agreement verification
 type ByzantineCheck struct {
-	Valid            bool     `json:"valid"`
-	TotalPower       int64    `json:"totalPower"`
-	SignedPower      int64    `json:"signedPower"`
-	RequiredPower    int64    `json:"requiredPower"`
-	PowerPercentage  float64  `json:"powerPercentage"`
-	ThresholdMet     bool     `json:"thresholdMet"`
-	TotalSignatures  int      `json:"totalSignatures"`
-	ValidSignatures  int      `json:"validSignatures"`
-	Issues           []string `json:"issues,omitempty"`
+	Valid           bool     `json:"valid"`
+	TotalPower      int64    `json:"totalPower"`
+	SignedPower     int64    `json:"signedPower"`
+	RequiredPower   int64    `json:"requiredPower"`
+	PowerPercentage float64  `json:"powerPercentage"`
+	ThresholdMet    bool     `json:"thresholdMet"`
+	TotalSignatures int      `json:"totalSignatures"`
+	ValidSignatures int      `json:"validSignatures"`
+	Issues          []string `json:"issues,omitempty"`
 }
 
 // SetDebug enables or disables debug output for Layer 3 verification

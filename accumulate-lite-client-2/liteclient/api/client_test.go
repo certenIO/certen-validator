@@ -17,8 +17,8 @@ import (
 	"testing"
 	"time"
 
-	"gitlab.com/accumulatenetwork/accumulate/protocol"
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/types"
+	"gitlab.com/accumulatenetwork/accumulate/protocol"
 )
 
 // Test constants for URL patterns

@@ -34,13 +34,13 @@ import (
 	"log"
 	"time"
 
-	v2api "gitlab.com/accumulatenetwork/accumulate/pkg/client/api/v2"
-	"gitlab.com/accumulatenetwork/accumulate/pkg/database/merkle"
-	"gitlab.com/accumulatenetwork/accumulate/protocol"
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/backend"
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/cache"
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof"
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/types"
+	v2api "gitlab.com/accumulatenetwork/accumulate/pkg/client/api/v2"
+	"gitlab.com/accumulatenetwork/accumulate/pkg/database/merkle"
+	"gitlab.com/accumulatenetwork/accumulate/protocol"
 )
 
 // LiteClient is the core orchestrator implementing the crystal clear proof path.

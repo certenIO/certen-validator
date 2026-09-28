@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"gitlab.com/accumulatenetwork/accumulate/protocol"
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/types"
+	"gitlab.com/accumulatenetwork/accumulate/protocol"
 )
 
 // determineAccountCategory determines the category of an account

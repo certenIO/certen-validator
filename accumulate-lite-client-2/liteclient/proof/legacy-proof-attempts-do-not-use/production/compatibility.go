@@ -21,13 +21,13 @@ type DevnetProof struct {
 
 // ProofResult represents the result of proof generation (compatibility)
 type FullProofResult struct {
-	Complete        bool                   `json:"complete"`
-	Step1BPTHash    string                 `json:"step1BPTHash,omitempty"`
-	Step2BPTLookup  *BPTLookupResult      `json:"step2BPTLookup,omitempty"`
-	Step3BVNReceipt interface{}           `json:"step3BVNReceipt,omitempty"`
-	Step4DNAnchor   interface{}           `json:"step4DNAnchor,omitempty"`
-	Step5Consensus  *ConsensusResult      `json:"step5Consensus,omitempty"`
-	Errors          []string              `json:"errors,omitempty"`
+	Complete        bool             `json:"complete"`
+	Step1BPTHash    string           `json:"step1BPTHash,omitempty"`
+	Step2BPTLookup  *BPTLookupResult `json:"step2BPTLookup,omitempty"`
+	Step3BVNReceipt interface{}      `json:"step3BVNReceipt,omitempty"`
+	Step4DNAnchor   interface{}      `json:"step4DNAnchor,omitempty"`
+	Step5Consensus  *ConsensusResult `json:"step5Consensus,omitempty"`
+	Errors          []string         `json:"errors,omitempty"`
 }
 
 type BPTLookupResult struct {
@@ -65,7 +65,7 @@ func (d *DevnetProof) GenerateFullProof(ctx context.Context, accountURL string) 
 	if err != nil {
 		return nil, fmt.Errorf("invalid account URL: %w", err)
 	}
-	
+
 	proofDetails, err := VerifyAccountWithDetails(d.verifier.CryptographicVerifier, accURL)
 	if err != nil {
 		return &FullProofResult{
@@ -73,17 +73,17 @@ func (d *DevnetProof) GenerateFullProof(ctx context.Context, accountURL string) 
 			Errors:   []string{err.Error()},
 		}, nil
 	}
-	
+
 	result := &FullProofResult{
 		Complete: proofDetails.FullyVerified,
 	}
-	
+
 	// Map new proof results to old structure
 	if proofDetails.Layer1Verified {
 		result.Step1BPTHash = fmt.Sprintf("%x", proofDetails.AccountHash)
 		result.Step2BPTLookup = &BPTLookupResult{Found: true}
 	}
-	
+
 	if proofDetails.Layer2Verified {
 		result.Step3BVNReceipt = map[string]interface{}{
 			"blockHeight": proofDetails.BlockHeight,
@@ -93,17 +93,17 @@ func (d *DevnetProof) GenerateFullProof(ctx context.Context, accountURL string) 
 			"verified": true,
 		}
 	}
-	
+
 	if proofDetails.Layer3Verified {
 		result.Step5Consensus = &ConsensusResult{
 			Threshold: true,
 		}
 	}
-	
+
 	if proofDetails.ErrorMessage != "" {
 		result.Errors = append(result.Errors, proofDetails.ErrorMessage)
 	}
-	
+
 	return result, nil
 }
 

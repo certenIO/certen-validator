@@ -17,9 +17,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/types"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/database/merkle"
 	"gitlab.com/accumulatenetwork/accumulate/protocol"
-	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/types"
 )
 
 // MockDataBackend provides a test implementation of the DataBackend interface

@@ -24,40 +24,40 @@ const (
 	ErrorCodeNetworkTimeout    ErrorCode = "NETWORK_TIMEOUT"
 	ErrorCodeNetworkConnection ErrorCode = "NETWORK_CONNECTION"
 	ErrorCodeNetworkUnknown    ErrorCode = "NETWORK_UNKNOWN"
-	
+
 	// API-related errors
-	ErrorCodeAPIInvalidRequest  ErrorCode = "API_INVALID_REQUEST"
-	ErrorCodeAPIUnauthorized    ErrorCode = "API_UNAUTHORIZED"
-	ErrorCodeAPIRateLimit       ErrorCode = "API_RATE_LIMIT"
-	ErrorCodeAPIServerError     ErrorCode = "API_SERVER_ERROR"
-	ErrorCodeAPINotFound        ErrorCode = "API_NOT_FOUND"
-	
+	ErrorCodeAPIInvalidRequest ErrorCode = "API_INVALID_REQUEST"
+	ErrorCodeAPIUnauthorized   ErrorCode = "API_UNAUTHORIZED"
+	ErrorCodeAPIRateLimit      ErrorCode = "API_RATE_LIMIT"
+	ErrorCodeAPIServerError    ErrorCode = "API_SERVER_ERROR"
+	ErrorCodeAPINotFound       ErrorCode = "API_NOT_FOUND"
+
 	// Validation errors
-	ErrorCodeValidationFailed    ErrorCode = "VALIDATION_FAILED"
-	ErrorCodeValidationURL       ErrorCode = "VALIDATION_URL"
-	ErrorCodeValidationAccount   ErrorCode = "VALIDATION_ACCOUNT"
-	ErrorCodeValidationBPT       ErrorCode = "VALIDATION_BPT"
-	
+	ErrorCodeValidationFailed  ErrorCode = "VALIDATION_FAILED"
+	ErrorCodeValidationURL     ErrorCode = "VALIDATION_URL"
+	ErrorCodeValidationAccount ErrorCode = "VALIDATION_ACCOUNT"
+	ErrorCodeValidationBPT     ErrorCode = "VALIDATION_BPT"
+
 	// Proof-related errors
-	ErrorCodeProofGeneration     ErrorCode = "PROOF_GENERATION"
-	ErrorCodeProofVerification   ErrorCode = "PROOF_VERIFICATION"
-	ErrorCodeProofIncomplete     ErrorCode = "PROOF_INCOMPLETE"
-	ErrorCodeProofInvalidHash    ErrorCode = "PROOF_INVALID_HASH"
-	
+	ErrorCodeProofGeneration   ErrorCode = "PROOF_GENERATION"
+	ErrorCodeProofVerification ErrorCode = "PROOF_VERIFICATION"
+	ErrorCodeProofIncomplete   ErrorCode = "PROOF_INCOMPLETE"
+	ErrorCodeProofInvalidHash  ErrorCode = "PROOF_INVALID_HASH"
+
 	// Configuration errors
-	ErrorCodeConfigInvalid       ErrorCode = "CONFIG_INVALID"
-	ErrorCodeConfigMissing       ErrorCode = "CONFIG_MISSING"
-	ErrorCodeConfigFormat        ErrorCode = "CONFIG_FORMAT"
-	
+	ErrorCodeConfigInvalid ErrorCode = "CONFIG_INVALID"
+	ErrorCodeConfigMissing ErrorCode = "CONFIG_MISSING"
+	ErrorCodeConfigFormat  ErrorCode = "CONFIG_FORMAT"
+
 	// Storage errors
-	ErrorCodeStorageConnection   ErrorCode = "STORAGE_CONNECTION"
-	ErrorCodeStorageQuery        ErrorCode = "STORAGE_QUERY"
-	ErrorCodeStorageCorrupted    ErrorCode = "STORAGE_CORRUPTED"
-	
+	ErrorCodeStorageConnection ErrorCode = "STORAGE_CONNECTION"
+	ErrorCodeStorageQuery      ErrorCode = "STORAGE_QUERY"
+	ErrorCodeStorageCorrupted  ErrorCode = "STORAGE_CORRUPTED"
+
 	// Internal errors
-	ErrorCodeInternalError       ErrorCode = "INTERNAL_ERROR"
-	ErrorCodeNotImplemented      ErrorCode = "NOT_IMPLEMENTED"
-	ErrorCodeDeprecated          ErrorCode = "DEPRECATED"
+	ErrorCodeInternalError  ErrorCode = "INTERNAL_ERROR"
+	ErrorCodeNotImplemented ErrorCode = "NOT_IMPLEMENTED"
+	ErrorCodeDeprecated     ErrorCode = "DEPRECATED"
 )
 
 // LiteClientError represents a structured error with context
@@ -87,8 +87,8 @@ func (e *LiteClientError) Unwrap() error {
 // HTTPStatus returns the appropriate HTTP status code for this error
 func (e *LiteClientError) HTTPStatus() int {
 	switch e.Code {
-	case ErrorCodeAPIInvalidRequest, ErrorCodeValidationFailed, 
-		 ErrorCodeValidationURL, ErrorCodeValidationAccount, ErrorCodeValidationBPT:
+	case ErrorCodeAPIInvalidRequest, ErrorCodeValidationFailed,
+		ErrorCodeValidationURL, ErrorCodeValidationAccount, ErrorCodeValidationBPT:
 		return http.StatusBadRequest
 	case ErrorCodeAPIUnauthorized:
 		return http.StatusUnauthorized
@@ -203,7 +203,7 @@ func getStackTrace() string {
 	var pcs [depth]uintptr
 	n := runtime.Callers(3, pcs[:])
 	frames := runtime.CallersFrames(pcs[:n])
-	
+
 	var trace string
 	for {
 		frame, more := frames.Next()
@@ -228,7 +228,7 @@ func NetworkError(err error, details string) *LiteClientError {
 			code = ErrorCodeNetworkConnection
 		}
 	}
-	
+
 	return WrapError(err, code, "Network error occurred").
 		WithDetails(details).
 		WithStackTrace()
@@ -273,7 +273,7 @@ func APIError(statusCode int, message string) *LiteClientError {
 	default:
 		code = ErrorCodeAPIServerError
 	}
-	
+
 	return NewError(code, message).
 		WithContext("status_code", statusCode).
 		WithStackTrace()
@@ -294,16 +294,16 @@ func NotImplementedError(feature string) *LiteClientError {
 
 // Helper function to check if a string contains a substring (case-insensitive)
 func contains(s, substr string) bool {
-	return len(s) >= len(substr) && 
-		   (s == substr || 
-		   (len(s) > len(substr) && 
-		   fmt.Sprintf("%s", s[:len(substr)]) == substr))
+	return len(s) >= len(substr) &&
+		(s == substr ||
+			(len(s) > len(substr) &&
+				fmt.Sprintf("%s", s[:len(substr)]) == substr))
 }
 
 // ErrorRecovery provides utilities for error recovery and retry logic
 type ErrorRecovery struct {
-	MaxRetries    int
-	BackoffFactor time.Duration
+	MaxRetries     int
+	BackoffFactor  time.Duration
 	RetryableCodes []ErrorCode
 }
 
@@ -326,7 +326,7 @@ func (er *ErrorRecovery) IsRetryable(err error) bool {
 	if !ok {
 		return false
 	}
-	
+
 	for _, code := range er.RetryableCodes {
 		if lce.Code == code {
 			return true

@@ -200,43 +200,43 @@ type ProofConfig struct {
 
 // ProofSystemMetrics contains overall proof system metrics
 type ProofSystemMetrics struct {
-	ProofsGenerated     int64
-	ProofsVerified      int64
-	AverageProofTime    time.Duration
-	CacheMetrics        *ProofCacheMetrics
-	FailureCount        int64
-	LastError           error
-	Layer1SuccessRate   float64
-	Layer2SuccessRate   float64
-	Layer3SuccessRate   float64
+	ProofsGenerated      int64
+	ProofsVerified       int64
+	AverageProofTime     time.Duration
+	CacheMetrics         *ProofCacheMetrics
+	FailureCount         int64
+	LastError            error
+	Layer1SuccessRate    float64
+	Layer2SuccessRate    float64
+	Layer3SuccessRate    float64
 	BatchProofsGenerated int64
 	TotalUptime          time.Duration
 }
 
 // ProofCacheMetrics contains cache performance metrics
 type ProofCacheMetrics struct {
-	TotalEntries      int
-	AccountProofs     int
-	BPTProofs         int
-	Receipts          int
-	HitRate           float64
-	MissRate          float64
-	EvictionCount     int64
-	AverageProofAge   time.Duration
-	CacheSize         int64
-	MaxCacheSize      int64
-	LastCleanupTime   time.Time
+	TotalEntries    int
+	AccountProofs   int
+	BPTProofs       int
+	Receipts        int
+	HitRate         float64
+	MissRate        float64
+	EvictionCount   int64
+	AverageProofAge time.Duration
+	CacheSize       int64
+	MaxCacheSize    int64
+	LastCleanupTime time.Time
 }
 
 // DebugInfo contains debug information for proof generation
 type DebugInfo struct {
-	AccountURL     string
-	GenerationTime time.Duration
-	LayerTimes     map[string]time.Duration
-	CacheHits      map[string]bool
-	Errors         []string
-	Warnings       []string
-	ProofSize      int64
+	AccountURL        string
+	GenerationTime    time.Duration
+	LayerTimes        map[string]time.Duration
+	CacheHits         map[string]bool
+	Errors            []string
+	Warnings          []string
+	ProofSize         int64
 	VerificationSteps []VerificationStep
 }
 
@@ -282,9 +282,9 @@ type CompleteProof struct {
 	TrustChain []ValidatorTransition `json:"trustChain,omitempty"`
 
 	// Metadata
-	GeneratedAt time.Time `json:"generatedAt"`
+	GeneratedAt time.Time     `json:"generatedAt"`
 	Strategy    ProofStrategy `json:"strategy"`
-	TrustLevel  string `json:"trustLevel"`
+	TrustLevel  string        `json:"trustLevel"`
 
 	// Combined proof receipt
 	CombinedReceipt *merkle.Receipt `json:"combinedReceipt"`
@@ -326,12 +326,12 @@ type ValidatorSignature struct {
 
 // ValidatorTransition represents a validator set change
 type ValidatorTransition struct {
-	FromHeight    uint64          `json:"fromHeight"`
-	ToHeight      uint64          `json:"toHeight"`
-	OldValidators []ValidatorInfo `json:"oldValidators"`
-	NewValidators []ValidatorInfo `json:"newValidators"`
-	Approvals     int64           `json:"approvals"`
-	TransitionHash []byte         `json:"transitionHash"`
+	FromHeight     uint64          `json:"fromHeight"`
+	ToHeight       uint64          `json:"toHeight"`
+	OldValidators  []ValidatorInfo `json:"oldValidators"`
+	NewValidators  []ValidatorInfo `json:"newValidators"`
+	Approvals      int64           `json:"approvals"`
+	TransitionHash []byte          `json:"transitionHash"`
 }
 
 // PartitionAnchor represents an anchor between partitions
@@ -362,13 +362,13 @@ type AccountProof struct {
 
 // CompleteChain represents a complete proof chain
 type CompleteChain struct {
-	AccountProof   *AccountProof     `json:"accountProof"`
-	BPTProof       *BPTProof         `json:"bptProof"`
-	MainChainProof *merkle.Receipt   `json:"mainChainProof"`
-	BVNAnchorProof *merkle.Receipt   `json:"bvnAnchorProof"`
-	DNAnchorProof  *merkle.Receipt   `json:"dnAnchorProof"`
+	AccountProof   *AccountProof        `json:"accountProof"`
+	BPTProof       *BPTProof            `json:"bptProof"`
+	MainChainProof *merkle.Receipt      `json:"mainChainProof"`
+	BVNAnchorProof *merkle.Receipt      `json:"bvnAnchorProof"`
+	DNAnchorProof  *merkle.Receipt      `json:"dnAnchorProof"`
 	Validators     []ValidatorSignature `json:"validators"`
-	ChainID        string            `json:"chainId"`
+	ChainID        string               `json:"chainId"`
 }
 
 // ReceiptRequest specifies a receipt needed for proof
@@ -392,19 +392,19 @@ type AnchorRequest struct {
 type AnchorProof struct {
 	Request   AnchorRequest   `json:"request"`
 	Receipt   *merkle.Receipt `json:"receipt"`
-	Validated bool           `json:"validated"`
-	Timestamp time.Time      `json:"timestamp"`
+	Validated bool            `json:"validated"`
+	Timestamp time.Time       `json:"timestamp"`
 }
 
 // ProofData contains all data needed for proof generation
 type ProofData struct {
-	Account      *AccountData             `json:"account"`
-	BPTProof     *BPTProof               `json:"bptProof"`
-	Receipts     []*merkle.Receipt       `json:"receipts"`
+	Account      *AccountData               `json:"account"`
+	BPTProof     *BPTProof                  `json:"bptProof"`
+	Receipts     []*merkle.Receipt          `json:"receipts"`
 	Validators   map[string][]ValidatorInfo `json:"validators"`
-	AnchorProofs []*AnchorProof          `json:"anchorProofs"`
-	CollectedAt  time.Time               `json:"collectedAt"`
-	Version      string                  `json:"version"`
+	AnchorProofs []*AnchorProof             `json:"anchorProofs"`
+	CollectedAt  time.Time                  `json:"collectedAt"`
+	Version      string                     `json:"version"`
 }
 
 // Layer verification result types
@@ -436,19 +436,19 @@ type Layer2Result struct {
 
 // Layer3Result contains results from Layer 3 verification
 type Layer3Result struct {
-	Verified            bool   `json:"verified"`
-	BlockHash           string `json:"blockHash"`
-	BlockHeight         int64  `json:"blockHeight"`
-	ChainID             string `json:"chainId"`
-	Round               int32  `json:"round"`
-	TotalValidators     int    `json:"totalValidators"`
-	SignedValidators    int    `json:"signedValidators"`
-	TotalPower          int64  `json:"totalPower"`
-	SignedPower         int64  `json:"signedPower"`
-	ThresholdMet        bool   `json:"thresholdMet"`
-	Status              string `json:"status,omitempty"`
-	APILimitation       bool   `json:"apiLimitation,omitempty"`
-	Error               string `json:"error,omitempty"`
+	Verified         bool   `json:"verified"`
+	BlockHash        string `json:"blockHash"`
+	BlockHeight      int64  `json:"blockHeight"`
+	ChainID          string `json:"chainId"`
+	Round            int32  `json:"round"`
+	TotalValidators  int    `json:"totalValidators"`
+	SignedValidators int    `json:"signedValidators"`
+	TotalPower       int64  `json:"totalPower"`
+	SignedPower      int64  `json:"signedPower"`
+	ThresholdMet     bool   `json:"thresholdMet"`
+	Status           string `json:"status,omitempty"`
+	APILimitation    bool   `json:"apiLimitation,omitempty"`
+	Error            string `json:"error,omitempty"`
 }
 
 // Backend interfaces

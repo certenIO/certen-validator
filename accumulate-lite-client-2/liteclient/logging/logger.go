@@ -32,8 +32,8 @@ type Logger struct {
 // Config represents logging configuration
 type Config struct {
 	Level      slog.Level `json:"level"`
-	Format     string     `json:"format"`     // "json" or "text"
-	Output     string     `json:"output"`     // "stdout", "stderr", or file path
+	Format     string     `json:"format"` // "json" or "text"
+	Output     string     `json:"output"` // "stdout", "stderr", or file path
 	Structured bool       `json:"structured"`
 	AddSource  bool       `json:"add_source"`
 	TimeFormat string     `json:"time_format"`
@@ -400,13 +400,13 @@ func (rl *RequestLogger) MiddlewareFunc() func(next http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
-			
+
 			// Create a response writer wrapper to capture status code
 			wrapper := &responseWriter{ResponseWriter: w, statusCode: 200}
-			
+
 			// Process request
 			next.ServeHTTP(wrapper, r)
-			
+
 			// Log the request
 			duration := time.Since(start)
 			rl.logger.LogRequest(
