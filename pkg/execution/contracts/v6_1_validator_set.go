@@ -21,51 +21,54 @@ package contracts
 
 import (
 	"fmt"
-	"github.com/certen/independant-validator/pkg/envvar"
 	"math/big"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
 )
 
-// Default 7-validator operator set. THESE MUST MATCH the addresses
-// registered on the V6.1 anchor at deployment time — otherwise the locally-
-// computed setRoot disagrees with the contract's currentValidatorSetRoot,
-// the BFT-signed messageHash diverges from the one the contract recomputes,
-// and TX2 (executeComprehensiveProof) reverts with
-// "BLS signature verification failed".
+// The validator set this node signs for: the addresses, voting powers and threshold registered on the
+// anchors, whose set root every quorum message and BLS proof commits to. It is the validators' own pin -
+// a registry that changed under them is refused, not followed (batch_settlement_window compares the two).
 //
-// These are the rotated V6 addresses (SEPOLIA_V6_VALIDATOR_1..7 from
-// certen-contracts/evm/.env) registered by deploy_v6_1_chain.sh on
-// 2026-05-25. If you redeploy with a different operator set, override via
-// CERTEN_V6_1_VALIDATOR_ADDRESSES env on every validator.
-var defaultValidatorAddrs = []string{
-	"0xd4A3dBbAE0C04D4307c5E00A5E05b66AcC289f5D",
-	"0x5555afA8Ff8048BddAAC1554AFd790c9bf7ec6E0",
-	"0x6ACaa68417F5ad5d4a02D9d3d72E291efFcDf30A",
-	"0x16aB06F3634218a8f1F3B01dCdd32DDFbdc8a69D",
-	"0xf150Ff923E29F797b4598b89bD7D02002D00Db3a",
-	"0x70A6A81bb5E3B63B1929301239DE1F5c63Ec4F3a",
-	"0xee2EfA29989Fe6E53572087680c661EC29e045Fe",
-}
-
-// Default voting power per validator (matches deploy script's
-// DEFAULT_VOTING_POWER = 100).
-const defaultVotingPower int64 = 100
-
-// Default BLS threshold: 2/3 (Byzantine-fault-tolerant majority).
-const defaultThresholdNum int64 = 2
-const defaultThresholdDen int64 = 3
-
-// Env var names for operator-override of the V6.1 validator set.
+// It is CONFIGURED, never assumed (RB3-F21): the set used to fall back to seven addresses, power 100 and
+// 2/3 compiled into the binary whenever the variables were absent - which is how production ran - so a
+// rotated key or a changed set would have needed a code change, and a deployment that lost its
+// configuration signed for a set nobody had chosen. Absent, the node does not start.
+//
+// The names are version-neutral; the CERTEN_V6_1_VALIDATOR_* names they replace are still read, and a
+// node given both refuses to start unless they say the same thing.
 const (
-	envValidatorSetAddrs        = "CERTEN_V6_1_VALIDATOR_ADDRESSES"     // comma-separated 0x hex
-	envValidatorSetPowers       = "CERTEN_V6_1_VALIDATOR_POWERS"        // comma-separated ints
-	envValidatorSetThresholdNum = "CERTEN_V6_1_VALIDATOR_THRESHOLD_NUM" // default 2
-	envValidatorSetThresholdDen = "CERTEN_V6_1_VALIDATOR_THRESHOLD_DEN" // default 3
+	envValidatorSetAddrs        = "CERTEN_VALIDATOR_SET_ADDRESSES"     // comma-separated 0x hex
+	envValidatorSetPowers       = "CERTEN_VALIDATOR_SET_POWERS"        // comma-separated integers, one per address
+	envValidatorSetThresholdNum = "CERTEN_VALIDATOR_SET_THRESHOLD_NUM" // numerator of the quorum threshold
+	envValidatorSetThresholdDen = "CERTEN_VALIDATOR_SET_THRESHOLD_DEN" // denominator of the quorum threshold
+
+	legacyValidatorSetAddrs        = "CERTEN_V6_1_VALIDATOR_ADDRESSES"
+	legacyValidatorSetPowers       = "CERTEN_V6_1_VALIDATOR_POWERS"
+	legacyValidatorSetThresholdNum = "CERTEN_V6_1_VALIDATOR_THRESHOLD_NUM"
+	legacyValidatorSetThresholdDen = "CERTEN_V6_1_VALIDATOR_THRESHOLD_DEN"
 )
+
+// validatorSetSetting reads one setting under its name and its former name: the value either states, and
+// an error when both are set and differ, or when neither is.
+func validatorSetSetting(name, legacy string) (string, error) {
+	v := strings.TrimSpace(os.Getenv(name))
+	l := strings.TrimSpace(os.Getenv(legacy))
+	if v != "" && l != "" && !strings.EqualFold(strings.Join(splitCSV(v), ","), strings.Join(splitCSV(l), ",")) {
+		return "", fmt.Errorf("%s and %s are both set and disagree; set only %s", name, legacy, name)
+	}
+	if v == "" {
+		v = l
+	}
+	if v == "" {
+		return "", fmt.Errorf("the validator set is not configured: set %s (the registered set, as on the anchors)", name)
+	}
+	return v, nil
+}
 
 var (
 	cachedSetRoot     [32]byte
@@ -126,13 +129,11 @@ func computeV6_1ValidatorSetRoot() ([32]byte, error) {
 }
 
 func resolveValidatorAddrs() ([]common.Address, error) {
-	override := strings.TrimSpace(os.Getenv(envValidatorSetAddrs))
-	var raw []string
-	if override != "" {
-		raw = splitCSV(override)
-	} else {
-		raw = defaultValidatorAddrs
+	setting, err := validatorSetSetting(envValidatorSetAddrs, legacyValidatorSetAddrs)
+	if err != nil {
+		return nil, err
 	}
+	raw := splitCSV(setting)
 	if len(raw) == 0 {
 		return nil, fmt.Errorf("no validator addresses configured (set %s)", envValidatorSetAddrs)
 	}
@@ -148,15 +149,11 @@ func resolveValidatorAddrs() ([]common.Address, error) {
 }
 
 func resolveVotingPowers(want int) ([]*big.Int, error) {
-	override := strings.TrimSpace(os.Getenv(envValidatorSetPowers))
-	if override == "" {
-		out := make([]*big.Int, want)
-		for i := range out {
-			out[i] = big.NewInt(defaultVotingPower)
-		}
-		return out, nil
+	setting, err := validatorSetSetting(envValidatorSetPowers, legacyValidatorSetPowers)
+	if err != nil {
+		return nil, err
 	}
-	raw := splitCSV(override)
+	raw := splitCSV(setting)
 	if len(raw) != want {
 		return nil, fmt.Errorf("%s has %d entries but %d validators configured",
 			envValidatorSetPowers, len(raw), want)
@@ -164,8 +161,8 @@ func resolveVotingPowers(want int) ([]*big.Int, error) {
 	out := make([]*big.Int, want)
 	for i, s := range raw {
 		v, ok := new(big.Int).SetString(strings.TrimSpace(s), 10)
-		if !ok {
-			return nil, fmt.Errorf("voting power %d (%q) is not a decimal integer", i, s)
+		if !ok || v.Sign() <= 0 {
+			return nil, fmt.Errorf("voting power %d (%q) is not a positive decimal integer", i, s)
 		}
 		out[i] = v
 	}
@@ -174,13 +171,14 @@ func resolveVotingPowers(want int) ([]*big.Int, error) {
 
 // resolveThreshold is the quorum threshold committed into the validator-set root. A value that is not a
 // positive integer, or a numerator above its denominator (which the anchor's setThreshold refuses), is
-// refused: an unreadable value used to become 2/3 silently, committing a root the operator did not choose.
+// refused, and so is an absent one: it used to become 2/3 silently, committing a root the operator did not
+// choose.
 func resolveThreshold() (num, den *big.Int, err error) {
-	n, err := envvar.Int64(envValidatorSetThresholdNum, defaultThresholdNum, 1)
+	n, err := thresholdPart(envValidatorSetThresholdNum, legacyValidatorSetThresholdNum)
 	if err != nil {
 		return nil, nil, err
 	}
-	d, err := envvar.Int64(envValidatorSetThresholdDen, defaultThresholdDen, 1)
+	d, err := thresholdPart(envValidatorSetThresholdDen, legacyValidatorSetThresholdDen)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -188,6 +186,18 @@ func resolveThreshold() (num, den *big.Int, err error) {
 		return nil, nil, fmt.Errorf("%s=%d exceeds %s=%d", envValidatorSetThresholdNum, n, envValidatorSetThresholdDen, d)
 	}
 	return big.NewInt(n), big.NewInt(d), nil
+}
+
+func thresholdPart(name, legacy string) (int64, error) {
+	setting, err := validatorSetSetting(name, legacy)
+	if err != nil {
+		return 0, err
+	}
+	v, err := strconv.ParseInt(setting, 10, 64)
+	if err != nil || v < 1 {
+		return 0, fmt.Errorf("%s=%q is not a positive integer", name, setting)
+	}
+	return v, nil
 }
 
 func splitCSV(s string) []string {

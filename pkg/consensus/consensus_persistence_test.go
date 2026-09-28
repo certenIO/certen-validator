@@ -584,7 +584,12 @@ func TestPersisterRetriesUntilTheDatabaseRecovers(t *testing.T) {
 	store := &fakeRecordStore{loadErrs: 2, failN: 3}
 	p := startTestPersister(t, store, 0)
 	p.enqueue(committedBlock{height: 7})
-	waitUntil(t, "height 7 persisted", 2*time.Second, func() bool { return len(store.heights()) == 1 })
+	// The persister marks a height persisted after the store's write returns; waiting on the store alone
+	// read the mark in between under load (RB3-F150).
+	waitUntil(t, "height 7 persisted", 2*time.Second, func() bool { return p.persisted.Load() == 7 })
+	if n := len(store.heights()); n != 1 {
+		t.Fatalf("heights written = %d, want 1", n)
+	}
 	if got := store.calls.Load(); got != 4 {
 		t.Fatalf("PersistCommittedBlock calls = %d, want 4 (3 failures + 1 success)", got)
 	}
