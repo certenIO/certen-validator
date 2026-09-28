@@ -10,20 +10,20 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
 	"testing"
 
 	"github.com/google/uuid"
 	_ "github.com/lib/pq"
 
 	schema "github.com/certen/independant-validator/db"
+	"github.com/certen/independant-validator/internal/testdb"
 	"github.com/certen/independant-validator/pkg/database"
 )
 
 func TestCertenProofEndpoints(t *testing.T) {
-	conn := os.Getenv("CERTEN_TEST_DB")
-	if conn == "" {
-		t.Fatal("CERTEN_TEST_DB is required: the Certen proof endpoints need PostgreSQL (a skipped gate is not a green gate)")
+	conn, err := testdb.PackageURL("server")
+	if err != nil {
+		t.Fatalf("the Certen proof endpoints need PostgreSQL: %v", err)
 	}
 	db, err := sql.Open("postgres", conn)
 	if err != nil {

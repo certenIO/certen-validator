@@ -1744,6 +1744,12 @@ func NewRealCometBFTEngine(
 	if app == nil {
 		return nil, fmt.Errorf("abci app must not be nil")
 	}
+	// CometBFT's gRPC broadcast API is not served (RB3-F97): the HTTP/2 server behind it is open to
+	// GO-2026-6443 (a request without :authority/Host panics the server) and no released grpc fixes it
+	// yet. Nothing here sets it; a configuration that does is refused rather than served.
+	if cometCfg.RPC != nil && cometCfg.RPC.GRPCListenAddress != "" {
+		return nil, fmt.Errorf("the CometBFT gRPC broadcast API (rpc.grpc_laddr %q) is not served: GO-2026-6443", cometCfg.RPC.GRPCListenAddress)
+	}
 
 	// DB provider – on-disk (Pebble / whatever cfg.DBBackend says)
 	dbProvider := config.DBProvider(func(ctx *config.DBContext) (dbm.DB, error) {

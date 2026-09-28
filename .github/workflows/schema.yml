@@ -34,7 +34,7 @@ jobs:
           path: certen-contracts
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.24.0"
+          go-version: "1.25.0"
       - run: go mod tidy
       - run: git diff --exit-code -- go.mod go.sum
       # Several legacy integration packages share CERTEN_TEST_DB. Run packages serially so each

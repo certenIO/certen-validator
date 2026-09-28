@@ -11,19 +11,19 @@ import (
 // RB3-F71 sweep: the validator refuses to boot on any runtime knob that does not parse, naming each.
 func TestBootRefusesEveryUnreadableKnobByName(t *testing.T) {
 	bad := map[string]string{
-		"BATCH_PERIOD_BLOCKS":                 "0",
-		"CERTEN_BFT_TIMEOUT":                  "6 minutes",
-		"CERTEN_BLOCK_RETENTION":              "all",
-		"CERTEN_ALLOW_CONTRACT_CALLS":         "ture",
-		"CERTEN_GAS_CEILING_ENFORCE":          "maybe",
-		"CERTEN_NATIVE_USD":                   "$3000",
-		"INTENT_REWIND_BLOCKS":                "-5",
-		"BLOCK_WORKERS":                       "many",
-		"CERTEN_DEFAULT_PROOF_CLASS":          "fast",
-		"ETHEREUM_RPC_COOLDOWN_SECONDS":       "30s",
-		"CERTEN_ENTITLEMENT_MAX_AGE_SEC":      "15m",
-		"CERTEN_V6_1_VALIDATOR_THRESHOLD_NUM": "two",
-		"MIGRATE_ON_START":                    "yes please",
+		"BATCH_PERIOD_BLOCKS":                "0",
+		"CERTEN_BFT_TIMEOUT":                 "6 minutes",
+		"CERTEN_BLOCK_RETENTION":             "all",
+		"CERTEN_ALLOW_CONTRACT_CALLS":        "ture",
+		"CERTEN_GAS_CEILING_ENFORCE":         "maybe",
+		"CERTEN_NATIVE_USD":                  "$3000",
+		"INTENT_REWIND_BLOCKS":               "-5",
+		"BLOCK_WORKERS":                      "many",
+		"CERTEN_DEFAULT_PROOF_CLASS":         "fast",
+		"ETHEREUM_RPC_COOLDOWN_SECONDS":      "30s",
+		"CERTEN_ENTITLEMENT_MAX_AGE_SEC":     "15m",
+		"CERTEN_VALIDATOR_SET_THRESHOLD_NUM": "two",
+		"MIGRATE_ON_START":                   "yes please",
 	}
 	for k, v := range bad {
 		t.Setenv(k, v)

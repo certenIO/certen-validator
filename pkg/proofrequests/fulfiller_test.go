@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,14 +16,16 @@ import (
 	_ "github.com/lib/pq"
 
 	schema "github.com/certen/independant-validator/db"
+	"github.com/certen/independant-validator/internal/testdb"
 	"github.com/certen/independant-validator/pkg/database"
 )
 
 func openDB(t *testing.T) (*sql.DB, *database.Repositories) {
 	t.Helper()
-	conn := os.Getenv("CERTEN_TEST_DB")
-	if conn == "" {
-		t.Fatal("CERTEN_TEST_DB is required: the proof request fulfiller needs PostgreSQL (a skipped gate is not a green gate)")
+	// Its own database (RB3-F150): the fulfiller claims every pending request, and took other packages' rows.
+	conn, err := testdb.PackageURL("proofrequests")
+	if err != nil {
+		t.Fatalf("the proof request fulfiller needs PostgreSQL: %v", err)
 	}
 	db, err := sql.Open("postgres", conn)
 	if err != nil {

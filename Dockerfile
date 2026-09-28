@@ -1,7 +1,7 @@
 # Dockerfile for Certen Protocol Independent Validator
 # Production-Grade Multi-Stage Build
 
-FROM golang:1.24-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 # Install build dependencies
 RUN apk add --no-cache git gcc musl-dev

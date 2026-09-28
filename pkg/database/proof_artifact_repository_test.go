@@ -19,22 +19,21 @@ import (
 	_ "github.com/lib/pq" // PostgreSQL driver
 
 	schema "github.com/certen/independant-validator/db"
+	"github.com/certen/independant-validator/internal/testdb"
 )
 
 // Test database connection string (use test database or skip)
 var testDB *sql.DB
 
 func TestMain(m *testing.M) {
-	connStr := os.Getenv("CERTEN_TEST_DB")
-	if connStr == "" {
-		if os.Getenv("CI") != "" {
-			fmt.Fprintln(os.Stderr, "CERTEN_TEST_DB is required in CI")
-			os.Exit(1)
-		}
-		os.Exit(0)
+	// The package's own database (RB3-F150). Without CERTEN_TEST_DB this used to exit 0 outside CI - the
+	// whole package reported "ok" having run nothing.
+	connStr, err := testdb.PackageURL("database")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
 
-	var err error
 	testDB, err = sql.Open("postgres", connStr)
 	if err != nil {
 		panic("Failed to connect to test database: " + err.Error())
