@@ -52,6 +52,25 @@ const (
 	IntentLifecycleFailed IntentLifecycleStatus = "failed"
 )
 
+// IntentFailureClass is why a failed intent failed, set from typed errors where the failure is recorded
+// (RB4-F13; migration 00014). A failed intent recorded before the class existed has none.
+type IntentFailureClass string
+
+const (
+	// FailureRefused: the intent itself cannot be settled; its bytes are final on Accumulate.
+	FailureRefused IntentFailureClass = "refused"
+	// FailureNotEntitled: its principal holds no CERTEN entitlement.
+	FailureNotEntitled IntentFailureClass = "not_entitled"
+	// FailureGovernanceUnsatisfied: its governance proof shows it lacks the authority it needs.
+	FailureGovernanceUnsatisfied IntentFailureClass = "governance_unsatisfied"
+	// FailureGovernanceUnavailable: its governance proof could not be produced - not a verdict on the intent.
+	FailureGovernanceUnavailable IntentFailureClass = "governance_unavailable"
+	// FailureSettlementFailed: a chain member did not settle, or was not proven or written back.
+	FailureSettlementFailed IntentFailureClass = "settlement_failed"
+	// FailureProcessingFailed: CERTEN could not complete processing it.
+	FailureProcessingFailed IntentFailureClass = "processing_failed"
+)
+
 // IsTerminal returns true if this status represents a final state.
 //
 // settling is deliberately NOT terminal: it is the one state whose whole purpose
@@ -97,4 +116,7 @@ type IntentLifecycle struct {
 	InProcessAt   *time.Time            `json:"in_process_at,omitempty" db:"in_process_at"`
 	CompletedAt   *time.Time            `json:"completed_at,omitempty" db:"completed_at"`
 	FailedAt      *time.Time            `json:"failed_at,omitempty" db:"failed_at"`
+	// FailureClass is why a failed intent failed (IntentFailureClass); nil when it has not failed, or failed
+	// before the class was recorded.
+	FailureClass *string `json:"failure_class,omitempty" db:"failure_class"`
 }

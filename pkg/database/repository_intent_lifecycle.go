@@ -31,6 +31,15 @@ type updateOptions struct {
 	errorMessage *string
 	cycleID      *string
 	writeBackTx  *string
+	failureClass *string
+}
+
+// WithFailureClass records why a failed intent failed. Only a transition to failed takes one.
+func WithFailureClass(class IntentFailureClass) UpdateOption {
+	return func(o *updateOptions) {
+		c := string(class)
+		o.failureClass = &c
+	}
 }
 
 // WithErrorMessage sets the error message on status update
@@ -121,6 +130,13 @@ func (r *IntentLifecycleRepository) UpdateStatus(
 		opt(options)
 	}
 
+	if options.failureClass != nil && newStatus != IntentLifecycleFailed {
+		return fmt.Errorf("update intent lifecycle: a failure class (%s) is recorded only on failed, not %s", *options.failureClass, newStatus)
+	}
+	if newStatus == IntentLifecycleFailed && options.failureClass == nil {
+		return fmt.Errorf("update intent lifecycle: %s fails without a failure class; say why (RB4-F13)", intentID)
+	}
+
 	now := time.Now().UTC()
 
 	// Build the SET clause dynamically based on the target status
@@ -163,13 +179,14 @@ func (r *IntentLifecycleRepository) UpdateStatus(
 		    %s = $3,
 		    error_message = COALESCE($4, error_message),
 		    cycle_id = COALESCE($5, cycle_id),
-		    write_back_tx = COALESCE($6, write_back_tx)
+		    write_back_tx = COALESCE($6, write_back_tx),
+		    failure_class = $8
 		WHERE intent_id = $7
 		  AND status NOT IN ('complete', 'failed')
 	`, timestampCol)
 		args = []interface{}{
 			string(newStatus), now, now,
-			options.errorMessage, options.cycleID, options.writeBackTx, intentID,
+			options.errorMessage, options.cycleID, options.writeBackTx, intentID, options.failureClass,
 		}
 	} else {
 		query = `
@@ -178,13 +195,14 @@ func (r *IntentLifecycleRepository) UpdateStatus(
 		    updated_at = $2,
 		    error_message = COALESCE($3, error_message),
 		    cycle_id = COALESCE($4, cycle_id),
-		    write_back_tx = COALESCE($5, write_back_tx)
+		    write_back_tx = COALESCE($5, write_back_tx),
+		    failure_class = $7
 		WHERE intent_id = $6
 		  AND status NOT IN ('complete', 'failed')
 	`
 		args = []interface{}{
 			string(newStatus), now,
-			options.errorMessage, options.cycleID, options.writeBackTx, intentID,
+			options.errorMessage, options.cycleID, options.writeBackTx, intentID, options.failureClass,
 		}
 	}
 
@@ -218,7 +236,7 @@ func (r *IntentLifecycleRepository) GetByIntentID(ctx context.Context, intentID 
 		       error_message, block_height, cycle_id, write_back_tx,
 		       target_chains, leg_count, execution_mode, legs_completed, legs_failed,
 		       created_at, updated_at, submitted_at, authorized_at,
-		       in_process_at, completed_at, failed_at
+		       in_process_at, completed_at, failed_at, failure_class
 		FROM intent_lifecycle
 		WHERE intent_id = $1
 	`
@@ -230,7 +248,7 @@ func (r *IntentLifecycleRepository) GetByIntentID(ctx context.Context, intentID 
 		&lc.CycleID, &lc.WriteBackTx,
 		&lc.TargetChains, &lc.LegCount, &lc.ExecutionMode, &lc.LegsCompleted, &lc.LegsFailed,
 		&lc.CreatedAt, &lc.UpdatedAt, &lc.SubmittedAt, &lc.AuthorizedAt,
-		&lc.InProcessAt, &lc.CompletedAt, &lc.FailedAt,
+		&lc.InProcessAt, &lc.CompletedAt, &lc.FailedAt, &lc.FailureClass,
 	)
 	if err == sql.ErrNoRows {
 		return nil, ErrIntentLifecycleNotFound
@@ -248,7 +266,7 @@ func (r *IntentLifecycleRepository) GetByTxHash(ctx context.Context, txHash stri
 		       error_message, block_height, cycle_id, write_back_tx,
 		       target_chains, leg_count, execution_mode, legs_completed, legs_failed,
 		       created_at, updated_at, submitted_at, authorized_at,
-		       in_process_at, completed_at, failed_at
+		       in_process_at, completed_at, failed_at, failure_class
 		FROM intent_lifecycle
 		WHERE accum_tx_hash = $1
 	`
@@ -260,7 +278,7 @@ func (r *IntentLifecycleRepository) GetByTxHash(ctx context.Context, txHash stri
 		&lc.CycleID, &lc.WriteBackTx,
 		&lc.TargetChains, &lc.LegCount, &lc.ExecutionMode, &lc.LegsCompleted, &lc.LegsFailed,
 		&lc.CreatedAt, &lc.UpdatedAt, &lc.SubmittedAt, &lc.AuthorizedAt,
-		&lc.InProcessAt, &lc.CompletedAt, &lc.FailedAt,
+		&lc.InProcessAt, &lc.CompletedAt, &lc.FailedAt, &lc.FailureClass,
 	)
 	if err == sql.ErrNoRows {
 		return nil, ErrIntentLifecycleNotFound
@@ -285,7 +303,7 @@ func (r *IntentLifecycleRepository) ListByStatus(ctx context.Context, status Int
 		       error_message, block_height, cycle_id, write_back_tx,
 		       target_chains, leg_count, execution_mode, legs_completed, legs_failed,
 		       created_at, updated_at, submitted_at, authorized_at,
-		       in_process_at, completed_at, failed_at
+		       in_process_at, completed_at, failed_at, failure_class
 		FROM intent_lifecycle
 		WHERE status = $1
 		ORDER BY created_at DESC
@@ -309,7 +327,7 @@ func (r *IntentLifecycleRepository) ListByUser(ctx context.Context, userID strin
 		       error_message, block_height, cycle_id, write_back_tx,
 		       target_chains, leg_count, execution_mode, legs_completed, legs_failed,
 		       created_at, updated_at, submitted_at, authorized_at,
-		       in_process_at, completed_at, failed_at
+		       in_process_at, completed_at, failed_at, failure_class
 		FROM intent_lifecycle
 		WHERE user_id = $1
 		ORDER BY created_at DESC
@@ -335,7 +353,7 @@ func (r *IntentLifecycleRepository) ListRecentEnriched(ctx context.Context, limi
 		       il.cycle_id, il.write_back_tx,
 		       il.target_chains, il.leg_count, il.execution_mode, il.legs_completed, il.legs_failed,
 		       il.created_at, il.updated_at, il.submitted_at, il.authorized_at,
-		       il.in_process_at, il.completed_at, il.failed_at,
+		       il.in_process_at, il.completed_at, il.failed_at, il.failure_class,
 		       bt.from_chain, bt.to_chain, bt.from_address, bt.to_address,
 		       bt.amount, bt.token_symbol, bt.account_url
 		FROM intent_lifecycle il
@@ -363,7 +381,7 @@ func (r *IntentLifecycleRepository) ListByUserEnriched(ctx context.Context, user
 		       il.cycle_id, il.write_back_tx,
 		       il.target_chains, il.leg_count, il.execution_mode, il.legs_completed, il.legs_failed,
 		       il.created_at, il.updated_at, il.submitted_at, il.authorized_at,
-		       il.in_process_at, il.completed_at, il.failed_at,
+		       il.in_process_at, il.completed_at, il.failed_at, il.failure_class,
 		       bt.from_chain, bt.to_chain, bt.from_address, bt.to_address,
 		       bt.amount, bt.token_symbol, bt.account_url
 		FROM intent_lifecycle il
@@ -393,7 +411,7 @@ func (r *IntentLifecycleRepository) scanEnrichedRows(ctx context.Context, query 
 			&e.CycleID, &e.WriteBackTx,
 			&e.TargetChains, &e.LegCount, &e.ExecutionMode, &e.LegsCompleted, &e.LegsFailed,
 			&e.CreatedAt, &e.UpdatedAt, &e.SubmittedAt, &e.AuthorizedAt,
-			&e.InProcessAt, &e.CompletedAt, &e.FailedAt,
+			&e.InProcessAt, &e.CompletedAt, &e.FailedAt, &e.FailureClass,
 			&e.FromChain, &e.ToChain, &e.FromAddress, &e.ToAddress,
 			&e.Amount, &e.TokenSymbol, &e.AccountURL,
 		); err != nil {
@@ -423,7 +441,7 @@ func (r *IntentLifecycleRepository) ListRecent(ctx context.Context, limit int) (
 		       error_message, block_height, cycle_id, write_back_tx,
 		       target_chains, leg_count, execution_mode, legs_completed, legs_failed,
 		       created_at, updated_at, submitted_at, authorized_at,
-		       in_process_at, completed_at, failed_at
+		       in_process_at, completed_at, failed_at, failure_class
 		FROM intent_lifecycle
 		ORDER BY created_at DESC
 		LIMIT $1
@@ -449,7 +467,7 @@ func (r *IntentLifecycleRepository) scanRows(ctx context.Context, query string, 
 			&lc.CycleID, &lc.WriteBackTx,
 			&lc.TargetChains, &lc.LegCount, &lc.ExecutionMode, &lc.LegsCompleted, &lc.LegsFailed,
 			&lc.CreatedAt, &lc.UpdatedAt, &lc.SubmittedAt, &lc.AuthorizedAt,
-			&lc.InProcessAt, &lc.CompletedAt, &lc.FailedAt,
+			&lc.InProcessAt, &lc.CompletedAt, &lc.FailedAt, &lc.FailureClass,
 		); err != nil {
 			return nil, fmt.Errorf("scan intent lifecycle row: %w", err)
 		}

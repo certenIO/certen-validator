@@ -287,7 +287,7 @@ func (r *IntentLifecycleRepository) RecordMemberOutcome(ctx context.Context, o M
 		derived.Status = IntentLifecycleComplete
 		_, err = tx.ExecContext(ctx, `
 			UPDATE intent_lifecycle SET status = $1, legs_completed = $2, legs_failed = $3,
-				completed_at = COALESCE(completed_at, $4), failed_at = NULL, error_message = NULL,
+				completed_at = COALESCE(completed_at, $4), failed_at = NULL, error_message = NULL, failure_class = NULL,
 				write_back_tx = COALESCE(NULLIF($5, ''), write_back_tx), updated_at = $4
 			WHERE intent_id = $6`,
 			string(IntentLifecycleComplete), legsDone, legsFailed, now, lastWriteBack, o.IntentID)
@@ -296,6 +296,7 @@ func (r *IntentLifecycleRepository) RecordMemberOutcome(ctx context.Context, o M
 		_, err = tx.ExecContext(ctx, `
 			UPDATE intent_lifecycle SET status = $1, legs_completed = $2, legs_failed = $3,
 				failed_at = COALESCE(failed_at, $4), completed_at = NULL, error_message = $5,
+				failure_class = 'settlement_failed',
 				write_back_tx = COALESCE(NULLIF($6, ''), write_back_tx), updated_at = $4
 			WHERE intent_id = $7`,
 			string(IntentLifecycleFailed), legsDone, legsFailed, now, derived.Summary, lastWriteBack, o.IntentID)
