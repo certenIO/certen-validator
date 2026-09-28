@@ -121,7 +121,7 @@ func (r *EvidenceRepair) ListCanonicalAnchors(ctx context.Context) ([]CanonicalA
 	return anchors, rows.Err()
 }
 
-func recordCorrection(ctx context.Context, tx *sql.Tx, recordType, recordID, reason string, previous, corrected any, facts AnchorChainFacts, by string) (uuid.UUID, error) {
+func recordCorrection(ctx context.Context, tx *sql.Tx, recordType, recordID, reason string, previous, corrected any, facts any, by string) (uuid.UUID, error) {
 	prev, err := json.Marshal(previous)
 	if err != nil {
 		return uuid.Nil, err
