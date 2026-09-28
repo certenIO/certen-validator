@@ -330,10 +330,14 @@ func looksLikeRepositorySQL(value string) bool {
 	if strings.Contains(value, "%") {
 		return false
 	}
-	for _, prefix := range []string{"SELECT ", "INSERT ", "UPDATE ", "DELETE ", "WITH "} {
-		if strings.HasPrefix(value, prefix) {
-			return true
-		}
+	// The keyword may be followed by any whitespace: a statement written "SELECT" then a newline was skipped.
+	words := strings.Fields(value)
+	if len(words) < 2 {
+		return false
+	}
+	switch words[0] {
+	case "SELECT", "INSERT", "UPDATE", "DELETE", "WITH":
+		return true
 	}
 	return false
 }

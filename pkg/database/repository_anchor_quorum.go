@@ -290,7 +290,7 @@ func (r *BatchRepository) RecordAnchorQuorum(
 }
 
 // AnchorQuorumRow is a canonical anchor as stored: the identity the contract uses, and the quorum proven
-// over it. Distinct from AnchorBatch, which models the legacy collector's row.
+// over it: the fields the quorum identity needs. The whole row is AnchorBatchRecord (GetBatch).
 type AnchorQuorumRow struct {
 	BatchID           uuid.UUID
 	ChainID           int64

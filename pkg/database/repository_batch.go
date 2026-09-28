@@ -27,34 +27,7 @@ func NewBatchRepository(client *Client) *BatchRepository {
 // ANCHOR BATCH OPERATIONS
 // ============================================================================
 
-// GetBatch retrieves a batch by ID
-func (r *BatchRepository) GetBatch(ctx context.Context, batchID uuid.UUID) (*AnchorBatch, error) {
-	query := `
-		SELECT id, batch_type, merkle_root, transaction_count,
-			batch_start_time, batch_end_time, accumulate_block_height,
-			accumulate_block_hash, validator_id, status, error_message,
-			created_at, updated_at
-		FROM anchor_batches
-		WHERE id = $1`
-
-	batch := &AnchorBatch{}
-	err := r.client.QueryRowContext(ctx, query, batchID).Scan(
-		&batch.BatchID, &batch.BatchType, &batch.MerkleRoot, &batch.TxCount,
-		&batch.StartTime, &batch.EndTime, &batch.AccumHeight,
-		&batch.AccumHash, &batch.ValidatorID, &batch.Status, &batch.ErrorMessage,
-		&batch.CreatedAt, &batch.UpdatedAt,
-	)
-
-	if err == sql.ErrNoRows {
-		// F.4 remediation: Return explicit error instead of nil, nil
-		return nil, ErrBatchNotFound
-	}
-	if err != nil {
-		return nil, fmt.Errorf("failed to get batch: %w", err)
-	}
-
-	return batch, nil
-}
+// GetBatch, the complete record of one batch, is in repository_anchor_batch_record.go.
 
 // ============================================================================
 // BATCH TRANSACTION OPERATIONS
