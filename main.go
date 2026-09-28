@@ -1702,7 +1702,6 @@ func startValidator(
 		// ValidatorBlocks to a background writer (pkg/consensus/consensus_persistence.go); Commit itself never
 		// touches the database.
 		cometEngine.SetValidatorRepositories(repos)
-		cometEngine.SetValidatorCount(7) // 7 validators in the network
 		log.Println("✅ [Phase 5] Database repositories wired to ValidatorApp for consensus persistence")
 
 		// Proof requests: the API records them as pending; this works them through to a proof.

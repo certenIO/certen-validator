@@ -80,9 +80,6 @@ type ValidatorApp struct {
 	startHeight    int64
 	startHeightSet bool
 
-	// Validator count for quorum calculation
-	validatorCount int
-
 	// Optional block-checkpoint hook (P3): invoked non-blocking after each committed block so a
 	// single designated writer can mirror block roots to Accumulate. nil unless wired in main.go.
 	checkpointHook func(height int64, blockHash string, appHash []byte, ts time.Time)
@@ -316,13 +313,6 @@ func (app *ValidatorApp) StopConsensusPersistence() {
 	if p != nil {
 		p.stop()
 	}
-}
-
-// SetValidatorCount sets the total number of validators for quorum calculation
-func (app *ValidatorApp) SetValidatorCount(count int) {
-	app.mu.Lock()
-	defer app.mu.Unlock()
-	app.validatorCount = count
 }
 
 // applyCommitMetadata stamps the ABCI-authoritative metadata onto a ValidatorBlock: the committing block's
@@ -837,7 +827,7 @@ func (app *ValidatorApp) Commit(ctx context.Context, req *abcitypes.RequestCommi
 			height: int64(app.currentBlockHeight),
 			time:   app.currentBlockTime,
 			blocks: blockVBs,
-		}, app.validatorCount)
+		})
 	}
 
 	// Bounded slice: a log line must never be able to abort a commit.

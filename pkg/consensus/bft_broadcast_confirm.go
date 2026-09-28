@@ -401,6 +401,65 @@ submit:
 type blockReader interface {
 	Block(ctx context.Context, height *int64) (*coretypes.ResultBlock, error)
 	BlockResults(ctx context.Context, height *int64) (*coretypes.ResultBlockResults, error)
+	Commit(ctx context.Context, height *int64) (*coretypes.ResultCommit, error)
+	Validators(ctx context.Context, height *int64, page, perPage *int) (*coretypes.ResultValidators, error)
+}
+
+// CommitQuorum reads the commit that committed a height and the height's validator set: the validators
+// whose precommit for the block is in it and the voting power behind them (RB3-F138). Each signature is
+// matched to its validator by address; a commit that does not carry more than two thirds of the power is
+// not a commit and is refused.
+func (s *rpcCommittedBlockSource) CommitQuorum(ctx context.Context, height int64) (*commitQuorum, error) {
+	h := height
+	c, err := s.reader.Commit(ctx, &h)
+	if err != nil {
+		return nil, classifyBlockStoreError(height, err)
+	}
+	if c == nil || c.SignedHeader.Commit == nil || c.SignedHeader.Header == nil {
+		return nil, fmt.Errorf("height %d: empty commit response", height)
+	}
+	commit := c.SignedHeader.Commit
+	if commit.Height != height || c.SignedHeader.Header.Height != height {
+		return nil, fmt.Errorf("height %d: the commit returned is for height %d", height, commit.Height)
+	}
+	var vals []*cmttypes.Validator
+	for page, perPage := 1, 100; ; page++ {
+		pg, pp := page, perPage
+		r, err := s.reader.Validators(ctx, &h, &pg, &pp)
+		if err != nil {
+			return nil, classifyBlockStoreError(height, err)
+		}
+		if r == nil {
+			return nil, fmt.Errorf("height %d: empty validator set response", height)
+		}
+		vals = append(vals, r.Validators...)
+		if len(vals) >= r.Total || len(r.Validators) == 0 {
+			if len(vals) != r.Total {
+				return nil, fmt.Errorf("height %d: read %d of %d validators", height, len(vals), r.Total)
+			}
+			break
+		}
+	}
+	if len(commit.Signatures) != len(vals) {
+		return nil, fmt.Errorf("height %d: the commit has %d signatures for %d validators", height, len(commit.Signatures), len(vals))
+	}
+	q := &commitQuorum{Validators: len(vals)}
+	for i, v := range vals {
+		q.TotalPower += v.VotingPower
+		sig := commit.Signatures[i]
+		if sig.BlockIDFlag != cmttypes.BlockIDFlagCommit {
+			continue
+		}
+		if !bytes.Equal(sig.ValidatorAddress, v.Address) {
+			return nil, fmt.Errorf("height %d: commit signature %d is from %X, the validator set has %X there", height, i, sig.ValidatorAddress, v.Address)
+		}
+		q.Signers++
+		q.SignedPower += v.VotingPower
+	}
+	if q.TotalPower <= 0 || q.SignedPower*3 <= q.TotalPower*2 {
+		return nil, fmt.Errorf("height %d: the commit carries %d of %d voting power, not more than two thirds", height, q.SignedPower, q.TotalPower)
+	}
+	return q, nil
 }
 
 // rpcCommittedBlockSource rebuilds a committed block's accepted ValidatorBlocks from this node's block

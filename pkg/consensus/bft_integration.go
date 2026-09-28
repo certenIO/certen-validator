@@ -2574,14 +2574,6 @@ func (e *RealCometBFTEngine) SetValidatorRepositories(repos *database.Repositori
 	}
 }
 
-// SetValidatorCount sets the total validator count on the ValidatorApp for quorum calculations.
-func (e *RealCometBFTEngine) SetValidatorCount(count int) {
-	if validatorApp := e.GetValidatorApp(); validatorApp != nil {
-		validatorApp.SetValidatorCount(count)
-		e.logger.Printf("✅ [PERSIST] Validator count set to %d for quorum calculations", count)
-	}
-}
-
 // getChainIDFromEnv returns the consistent chain ID from environment variable
 // All validators MUST use the same chainID to participate in the same consensus network
 func getChainIDFromEnv() string {

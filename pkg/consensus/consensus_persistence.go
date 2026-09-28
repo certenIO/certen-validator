@@ -35,6 +35,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -50,6 +51,18 @@ type committedBlock struct {
 	height int64
 	time   time.Time
 	blocks []ValidatorBlock
+	// quorum is the CometBFT commit that committed this height: who signed it and with what power. Read
+	// from the block store before the rows are written; the rows state it (RB3-F138).
+	quorum *commitQuorum
+}
+
+// commitQuorum is the commit of one height: the validators whose precommit for the block is in it, and the
+// voting power behind them, of the height's validator set.
+type commitQuorum struct {
+	Signers     int
+	Validators  int
+	SignedPower int64
+	TotalPower  int64
 }
 
 // consensusRecordStore is the database side of consensus persistence (database.ConsensusRepository).
@@ -68,12 +81,13 @@ var errCommittedBlockUnavailable = errors.New("committed block unavailable")
 // never received (dropped hand-off, restart).
 type committedBlockSource interface {
 	CommittedValidatorBlocks(ctx context.Context, height int64) (*committedBlock, error)
+	// CommitQuorum reads the commit of a height and its validator set (RB3-F138).
+	CommitQuorum(ctx context.Context, height int64) (*commitQuorum, error)
 }
 
 // persistJob is one hand-off from Commit.
 type persistJob struct {
-	block          committedBlock
-	validatorCount int
+	block committedBlock
 }
 
 const (
@@ -102,9 +116,8 @@ type consensusPersister struct {
 	// Committed heights seen by enqueue, INCLUDING refused hand-offs. The writer uses them to rebuild a
 	// dropped tail without waiting for another block: this chain produces blocks only for real work, so
 	// the next hand-off can be hours away.
-	firstSeen      atomic.Int64 // first height ever offered (0 = none)
-	latest         atomic.Int64 // highest height offered
-	validatorCount atomic.Int64 // validator count of the latest offer, for rebuilt heights
+	firstSeen atomic.Int64 // first height ever offered (0 = none)
+	latest    atomic.Int64 // highest height offered
 
 	// Observability for operators and tests.
 	dropped   atomic.Uint64 // hand-offs refused because the queue was full
@@ -183,11 +196,10 @@ func (p *consensusPersister) getSource() committedBlockSource {
 // enqueue hands a committed block to the writer WITHOUT blocking. It is called from ABCI Commit, which
 // must never wait on the database. A refused hand-off is not lost: the writer rebuilds that height from
 // the block store before its next hand-off, or as soon as its queue is empty.
-func (p *consensusPersister) enqueue(b committedBlock, validatorCount int) bool {
+func (p *consensusPersister) enqueue(b committedBlock) bool {
 	// firstSeen before the send, so the writer never handles a job without knowing where it started;
 	// latest after it, so an idle writer never races a job that is about to be queued.
 	p.firstSeen.CompareAndSwap(0, b.height)
-	p.validatorCount.Store(int64(validatorCount))
 	defer func() {
 		for {
 			cur := p.latest.Load()
@@ -197,7 +209,7 @@ func (p *consensusPersister) enqueue(b committedBlock, validatorCount int) bool 
 		}
 	}()
 	select {
-	case p.queue <- persistJob{block: b, validatorCount: validatorCount}:
+	case p.queue <- persistJob{block: b}:
 		return true
 	default:
 		n := p.dropped.Add(1)
@@ -301,12 +313,12 @@ func (p *consensusPersister) run(ctx context.Context) {
 				continue // already persisted (a replayed or duplicate hand-off, or rebuilt while idle)
 			}
 			for gap := last + 1; gap < h; gap++ {
-				if !p.rebuild(ctx, gap, job.validatorCount) {
+				if !p.rebuild(ctx, gap) {
 					return
 				}
 				last = gap
 			}
-			if !p.write(ctx, &job.block, job.validatorCount) {
+			if !p.write(ctx, &job.block) {
 				return
 			}
 			last = h
@@ -324,7 +336,7 @@ func (p *consensusPersister) run(ctx context.Context) {
 				continue // nothing offered yet
 			}
 			for target := p.latest.Load(); last < target; {
-				if !p.rebuild(ctx, last+1, int(p.validatorCount.Load())) {
+				if !p.rebuild(ctx, last+1) {
 					return
 				}
 				last++
@@ -334,7 +346,7 @@ func (p *consensusPersister) run(ctx context.Context) {
 }
 
 // rebuild persists a height the writer never received. It returns false only when ctx ends.
-func (p *consensusPersister) rebuild(ctx context.Context, height int64, validatorCount int) bool {
+func (p *consensusPersister) rebuild(ctx context.Context, height int64) bool {
 	for attempt := 1; ; attempt++ {
 		src := p.getSource()
 		if src == nil {
@@ -352,7 +364,7 @@ func (p *consensusPersister) rebuild(ctx context.Context, height int64, validato
 		cancel()
 		if err == nil {
 			p.logger.Printf("🔁 [PERSIST] rebuilt height %d from the block store (%d ValidatorBlocks)", height, len(blk.blocks))
-			return p.write(ctx, blk, validatorCount)
+			return p.write(ctx, blk)
 		}
 		if errors.Is(err, errCommittedBlockUnavailable) {
 			n := p.gaps.Add(1)
@@ -370,12 +382,21 @@ func (p *consensusPersister) rebuild(ctx context.Context, height int64, validato
 
 // advanceOnly moves the watermark past a height whose rows cannot be produced.
 func (p *consensusPersister) advanceOnly(ctx context.Context, height int64) bool {
-	return p.write(ctx, &committedBlock{height: height}, 0)
+	return p.write(ctx, &committedBlock{height: height})
 }
 
-// write persists one block, retrying until it succeeds or ctx ends.
-func (p *consensusPersister) write(ctx context.Context, b *committedBlock, validatorCount int) bool {
-	rec := consensusRecordsFor(b, validatorCount, p.logger)
+// write persists one block, retrying until it succeeds or ctx ends. A block with validator blocks is written
+// with the commit that committed it, read first and retried like the write: its rows state that quorum,
+// never a count assumed in its place (RB3-F138).
+func (p *consensusPersister) write(ctx context.Context, b *committedBlock) bool {
+	if len(b.blocks) > 0 && b.quorum == nil {
+		q, ok := p.readQuorum(ctx, b.height)
+		if !ok {
+			return false
+		}
+		b.quorum = q
+	}
+	rec := consensusRecordsFor(b, p.logger)
 	for attempt := 1; ; attempt++ {
 		cctx, cancel := p.call(ctx)
 		rejected, err := p.store.PersistCommittedBlock(cctx, p.writerID, rec)
@@ -407,6 +428,29 @@ func (p *consensusPersister) write(ctx context.Context, b *committedBlock, valid
 	}
 }
 
+// readQuorum reads the commit of a height from the block source, retrying until it is read or ctx ends.
+func (p *consensusPersister) readQuorum(ctx context.Context, height int64) (*commitQuorum, bool) {
+	for attempt := 1; ; attempt++ {
+		src := p.getSource()
+		if src == nil {
+			metrics.RecordConsensusPersistError("no_block_source")
+			p.logger.Printf("❌ [PERSIST] height %d: no block source to read its commit from (attempt %d); waiting", height, attempt)
+		} else {
+			cctx, cancel := p.call(ctx)
+			q, err := src.CommitQuorum(cctx, height)
+			cancel()
+			if err == nil {
+				return q, true
+			}
+			metrics.RecordConsensusPersistError("read_commit")
+			p.logger.Printf("⚠️ [PERSIST] could not read the commit of height %d (attempt %d): %v", height, attempt, err)
+		}
+		if !p.sleep(ctx, attempt) {
+			return nil, false
+		}
+	}
+}
+
 // sleep waits an exponential backoff for attempt, returning false if ctx ends first.
 func (p *consensusPersister) sleep(ctx context.Context, attempt int) bool {
 	d := p.retryBase
@@ -426,58 +470,44 @@ func (p *consensusPersister) sleep(ctx context.Context, attempt int) bool {
 	}
 }
 
-// consensusRecordsFor derives the rows a committed block contributes. It is a pure function of the block,
-// so the Commit hand-off and a block-store rebuild produce identical rows.
+// consensusRecordsFor maps a committed height to its consensus rows. Every value is one the height
+// established (RB3-F138):
 //
-// The per-block mapping is exactly the one the Commit path always used — governance level -> state, an
-// undecodable hex field stored as empty bytes, one self-attestation when a BLS signature is present; what
-// changed is when and how often it is written. completed_at is the block time, not the wall clock.
-func consensusRecordsFor(b *committedBlock, validatorCount int, logger *log.Logger) *database.CommittedConsensusRecords {
+//   - state is completed at the block's time: the validator block is in a committed block, which is
+//     what CometBFT's commit of more than two thirds of the voting power means. It used to be derived
+//     from the governance level (G0 "collecting", G1 "quorum_met").
+//   - attestation_count, required_count and quorum_fraction are that commit's: the validators whose
+//     precommit is in it, the voting power a commit needs (more than two thirds of the set's), and the
+//     power it carries. They were one self-attestation, a count of 7 compiled into main, and 1/7.
+//   - no aggregate signature is stated: none exists. The validator block carries one validator's BLS
+//     signature over the retired per-intent (V6.1) pre-execution message; it is recorded under that name
+//     in the result, not verified. It used to be stored as the batch's aggregate beside the validator
+//     SET's public key, with a batch attestation row marked signature_valid=true that nothing had
+//     verified - so no such row is written.
+//
+// A hex field that does not decode is an error for that row, not an empty value.
+func consensusRecordsFor(b *committedBlock, logger *log.Logger) *database.CommittedConsensusRecords {
 	rec := &database.CommittedConsensusRecords{Height: b.height}
 	for i := range b.blocks {
 		vb := &b.blocks[i]
 		batchUUID := uuid.NewSHA1(uuid.NameSpaceOID, []byte(vb.BundleID))
 
 		merkleRoot, err := database.DecodeHexString(vb.GovernanceProof.MerkleRoot)
-		if err != nil {
-			logger.Printf("⚠️ [PERSIST] Failed to decode merkle_root for bundle %s: %v", vb.BundleID, err)
-			merkleRoot = nil
+		if err != nil || len(merkleRoot) == 0 {
+			logger.Printf("❌ [PERSIST] height %d bundle %s: governance merkle root %q does not decode (%v); no row is written for it",
+				b.height, vb.BundleID, vb.GovernanceProof.MerkleRoot, err)
+			continue
 		}
-		blsSig, err := database.DecodeHexString(vb.GovernanceProof.BLSAggregateSignature)
-		if err != nil {
-			logger.Printf("⚠️ [PERSIST] Failed to decode BLS signature for bundle %s: %v", vb.BundleID, err)
-			blsSig = nil
-		}
-		blsPub, err := database.DecodeHexString(vb.GovernanceProof.BLSValidatorSetPubKey)
-		if err != nil {
-			logger.Printf("⚠️ [PERSIST] Failed to decode BLS pubkey for bundle %s: %v", vb.BundleID, err)
-			blsPub = nil
-		}
-
 		startTime, err := time.Parse(time.RFC3339, vb.Timestamp)
 		if err != nil {
 			startTime = b.time
 		}
-
-		state := "initiated"
-		switch vb.GovernanceProof.GovernanceLevel {
-		case "G2":
-			state = "completed"
-		case "G1":
-			state = "quorum_met"
-		case "G0":
-			state = "collecting"
+		q := b.quorum
+		if q == nil || q.TotalPower <= 0 {
+			logger.Printf("❌ [PERSIST] height %d bundle %s: no commit read for the height; no row is written for it", b.height, vb.BundleID)
+			continue
 		}
-		var completedAt *time.Time
-		if state == "completed" || state == "quorum_met" {
-			t := b.time
-			completedAt = &t
-		}
-
-		quorumFraction := 0.0
-		if validatorCount > 0 {
-			quorumFraction = 1.0 / float64(validatorCount) // one self-attestation
-		}
+		completedAt := b.time
 
 		resultJSON := map[string]interface{}{
 			"bundle_id":             vb.BundleID,
@@ -486,6 +516,17 @@ func consensusRecordsFor(b *committedBlock, validatorCount int, logger *log.Logg
 			"execution_stage":       vb.ExecutionProof.Stage,
 			"proof_class":           vb.ExecutionProof.ProofClass,
 			"cross_chain_operation": vb.CrossChainProof.OperationID,
+			"commit": map[string]interface{}{
+				"signers": q.Signers, "validators": q.Validators,
+				"signed_power": q.SignedPower, "total_power": q.TotalPower,
+			},
+		}
+		if sig := strings.TrimSpace(vb.GovernanceProof.BLSAggregateSignature); sig != "" {
+			resultJSON["proposer_v6_1_pre_exec_bls_signature"] = map[string]interface{}{
+				"validator_id": vb.ValidatorID,
+				"signature":    sig,
+				"verified":     false,
+			}
 		}
 		if vb.GovernanceProof.G0Proof != nil {
 			resultJSON["g0_complete"] = vb.GovernanceProof.G0Proof.G0ProofComplete
@@ -502,38 +543,21 @@ func consensusRecordsFor(b *committedBlock, validatorCount int, logger *log.Logg
 
 		rec.Entries = append(rec.Entries, database.CommittedConsensusEntry{
 			NewConsensusEntry: database.NewConsensusEntry{
-				BatchID:            batchUUID,
-				MerkleRoot:         merkleRoot,
-				AnchorTxHash:       vb.AccumulateAnchorReference.TxHash,
-				BlockNumber:        int64(vb.BlockHeight),
-				TxCount:            len(vb.SyntheticTransactions),
-				State:              state,
-				AttestationCount:   1,
-				RequiredCount:      (validatorCount * 2 / 3) + 1,
-				QuorumFraction:     quorumFraction,
-				AggregateSignature: blsSig,
-				AggregatePubKey:    blsPub,
-				StartTime:          startTime,
-				ResultJSON:         resultJSON,
+				BatchID:          batchUUID,
+				MerkleRoot:       merkleRoot,
+				AnchorTxHash:     vb.AccumulateAnchorReference.TxHash,
+				BlockNumber:      int64(vb.BlockHeight),
+				TxCount:          len(vb.SyntheticTransactions),
+				State:            "completed",
+				AttestationCount: q.Signers,
+				// More than two thirds of the set's voting power, in voting power.
+				RequiredCount:  int(q.TotalPower*2/3 + 1),
+				QuorumFraction: float64(q.SignedPower) / float64(q.TotalPower),
+				StartTime:      startTime,
+				ResultJSON:     resultJSON,
 			},
-			CompletedAt: completedAt,
+			CompletedAt: &completedAt,
 		})
-
-		// This validator's self-attestation, when the block carries a BLS signature.
-		if len(blsSig) > 0 {
-			valid := true
-			rec.Attestations = append(rec.Attestations, database.NewBatchAttestation{
-				BatchID:         batchUUID,
-				ValidatorID:     vb.ValidatorID,
-				MerkleRoot:      merkleRoot,
-				BLSSignature:    blsSig,
-				BLSPublicKey:    blsPub,
-				TxCount:         len(vb.SyntheticTransactions),
-				BlockHeight:     int64(vb.BlockHeight),
-				AttestationTime: startTime,
-				SignatureValid:  &valid,
-			})
-		}
 	}
 	return rec
 }
