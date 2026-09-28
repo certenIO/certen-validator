@@ -1329,12 +1329,6 @@ func startValidator(
 		return nil, nil, fmt.Errorf("failed to create proof generator: %w", err)
 	}
 
-	// --- Anchor manager for Ethereum (now uses shared proof generator) ---
-	// We'll create the anchor manager after the engine is set up in the validator
-
-	// Create placeholder anchor wrapper for now - will be updated after engine is configured
-	var anchorWrapper *execution.AnchorManagerWrapper
-
 	log.Printf("✅ BFT execution components initialized (legacy IntentExecutor replaced)")
 
 	// --- REAL CometBFT engine wiring (unified engine) ---
@@ -1460,6 +1454,23 @@ func startValidator(
 		}
 	}
 
+	// --- Anchor manager, built from the engine's ledger store before the BFT validator that holds it
+	// (RB3-F137: the validator was handed a typed-nil wrapper that was only assigned afterwards) ---
+	var anchorWrapper *execution.AnchorManagerWrapper
+	var anchorManager *anchor.AnchorManager
+	if ledgerProvider := cometEngine.GetLedgerStoreProvider(); ledgerProvider != nil && ledgerProvider.GetLedgerStore() != nil {
+		anchorLogger := log.New(log.Writer(), "[AnchorManager] ", log.LstdFlags)
+		anchorManager, err = anchor.NewAnchorManager(liteClientAdapter, cfg, proofGenerator, ledgerProvider.GetLedgerStore(), anchorLogger)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to create anchor manager: %w", err)
+		}
+		// Now create the wrapper with the real anchor manager
+		anchorWrapper = execution.NewAnchorManagerWrapper(anchorManager)
+		log.Printf("✅ AnchorManager created with LedgerStore integration")
+	} else {
+		return nil, nil, fmt.Errorf("ABCI application or ledger store not available for anchor manager")
+	}
+
 	// Create BFT validator with engine injection (NEW SIGNATURE)
 	validator := consensus.NewBFTValidator(
 		cometEngine, // NEW: injected engine
@@ -1489,21 +1500,6 @@ func startValidator(
 	// LedgerStore is automatically configured within the ABCI application
 	if ledgerProvider := cometEngine.GetLedgerStoreProvider(); ledgerProvider != nil {
 		log.Printf("✅ LedgerStore configured in ABCI app for chain: %s", ledgerProvider.GetChainID())
-	}
-
-	// --- Create anchor manager now that engine is configured ---
-	var anchorManager *anchor.AnchorManager
-	if ledgerProvider := cometEngine.GetLedgerStoreProvider(); ledgerProvider != nil && ledgerProvider.GetLedgerStore() != nil {
-		anchorLogger := log.New(log.Writer(), "[AnchorManager] ", log.LstdFlags)
-		anchorManager, err = anchor.NewAnchorManager(liteClientAdapter, cfg, proofGenerator, ledgerProvider.GetLedgerStore(), anchorLogger)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to create anchor manager: %w", err)
-		}
-		// Now create the wrapper with the real anchor manager
-		anchorWrapper = execution.NewAnchorManagerWrapper(anchorManager)
-		log.Printf("✅ AnchorManager created with LedgerStore integration")
-	} else {
-		return nil, nil, fmt.Errorf("ABCI application or ledger store not available for anchor manager")
 	}
 
 	log.Printf("✅ Unified BFT consensus with real CometBFT networking active for validator: %s", cfg.ValidatorID)
