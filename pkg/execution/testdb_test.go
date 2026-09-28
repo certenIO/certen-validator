@@ -3,10 +3,10 @@ package execution
 import (
 	"context"
 	"database/sql"
-	"os"
 	"testing"
 
 	schema "github.com/certen/independant-validator/db"
+	"github.com/certen/independant-validator/internal/testdb"
 	_ "github.com/lib/pq"
 )
 
@@ -15,9 +15,9 @@ import (
 // Without a database the test skips locally but fails in CI: a skipped gate is not a green gate.
 func openMigratedTestDB(t *testing.T, gate string) *sql.DB {
 	t.Helper()
-	conn := os.Getenv("CERTEN_TEST_DB")
-	if conn == "" {
-		t.Fatalf("CERTEN_TEST_DB is required: %s needs PostgreSQL. A skipped gate is not a green gate.", gate)
+	conn, err := testdb.PackageURL("execution")
+	if err != nil {
+		t.Fatalf("%s needs PostgreSQL: %v", gate, err)
 	}
 	db, err := sql.Open("postgres", conn)
 	if err != nil {

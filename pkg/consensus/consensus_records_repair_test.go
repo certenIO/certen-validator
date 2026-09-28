@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	schema "github.com/certen/independant-validator/db"
+	"github.com/certen/independant-validator/internal/testdb"
 	"github.com/certen/independant-validator/pkg/database"
 )
 
@@ -50,9 +50,9 @@ func (f *fakeCommitReader) BlockTime(_ context.Context, h int64) (time.Time, err
 
 func consensusRepairDB(t *testing.T) *sql.DB {
 	t.Helper()
-	conn := os.Getenv("CERTEN_TEST_DB")
-	if conn == "" {
-		t.Fatal("CERTEN_TEST_DB is required: a skipped gate is not a green gate")
+	conn, err := testdb.PackageURL("consensus")
+	if err != nil {
+		t.Fatal(err)
 	}
 	db, err := sql.Open("postgres", conn)
 	if err != nil {
