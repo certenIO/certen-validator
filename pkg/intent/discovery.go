@@ -1500,6 +1500,7 @@ func (id *IntentDiscovery) handleRetryJob(job *intentRetryJob) {
 		if lcErr := id.repos.IntentLifecycle.UpdateStatus(lctx, job.intent.IntentID,
 			database.IntentLifecycleFailed,
 			database.WithErrorMessage(err.Error()),
+			database.WithFailureClass(failureClassOf(err)),
 		); lcErr != nil {
 			id.logger.Printf("⚠️ [LIFECYCLE] Failed to mark retry-exhausted intent %s failed: %v", job.intent.IntentID, lcErr)
 		}
@@ -2066,5 +2067,23 @@ const lifecycleWriteTimeout = 15 * time.Second
 func recordLifecycleFailed(w lifecycleStatusWriter, intentID string, cause error) error {
 	ctx, cancel := context.WithTimeout(context.Background(), lifecycleWriteTimeout)
 	defer cancel()
-	return w.UpdateStatus(ctx, intentID, database.IntentLifecycleFailed, database.WithErrorMessage(cause.Error()))
+	return w.UpdateStatus(ctx, intentID, database.IntentLifecycleFailed,
+		database.WithErrorMessage(cause.Error()), database.WithFailureClass(failureClassOf(cause)))
+}
+
+// failureClassOf is why processing an intent failed, read from the typed error the failure carries - never
+// from its message (RB4-F13). Its own defect first: a permanently invalid intent is refused whatever else
+// went wrong. An error none of the classes types is CERTEN failing to process it.
+func failureClassOf(err error) database.IntentFailureClass {
+	switch {
+	case errors.Is(err, consensus.ErrIntentPermanentlyInvalid):
+		return database.FailureRefused
+	case errors.Is(err, consensus.ErrNotEntitled):
+		return database.FailureNotEntitled
+	case errors.Is(err, consensus.ErrGovernanceUnsatisfied):
+		return database.FailureGovernanceUnsatisfied
+	case errors.Is(err, consensus.ErrGovernanceUnavailable):
+		return database.FailureGovernanceUnavailable
+	}
+	return database.FailureProcessingFailed
 }

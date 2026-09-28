@@ -47,6 +47,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -122,6 +123,11 @@ func NewChainKeyPageResolver(endpoint string, logf func(string, ...interface{}))
 // structurally, a page's book is the URL it sits under, whether or not the last
 // segment is a valid index. With both empty there is no book to look in and the
 // call fails.
+// ErrNoSigningKeyPage is an intent whose signing key page cannot be established from what it declared and how it
+// was signed: it declared no key book or page, or no signature on its transaction is from a page of the declared
+// book. A fact about the intent, not an outage (RB4-F13).
+var ErrNoSigningKeyPage = errors.New("no signing key page")
+
 func (r *ChainKeyPageResolver) ResolveSigningKeyPage(
 	ctx context.Context,
 	principal, txHash, keyBook, declaredPage string,
@@ -140,7 +146,7 @@ func (r *ChainKeyPageResolver) ResolveSigningKeyPage(
 		r.logf("[KEYPAGE-RESOLVE] tx %s: %s", scope, n)
 	}
 	if err != nil {
-		return "", fmt.Errorf("resolve signing key page of %s for %s: %w", book, scope, err)
+		return "", fmt.Errorf("resolve signing key page of %s for %s: %w: %w", book, scope, ErrNoSigningKeyPage, err)
 	}
 	return page, nil
 }
@@ -154,8 +160,8 @@ func keyBookFor(keyBook, declaredPage string) (string, error) {
 	if i := strings.LastIndex(p, "/"); i > len("acc://") {
 		return p[:i], nil
 	}
-	return "", fmt.Errorf("neither a key book nor a key page was declared; there is no book to " +
-		"resolve the signing page in")
+	return "", fmt.Errorf("%w: neither a key book nor a key page was declared; there is no book to "+
+		"resolve the signing page in", ErrNoSigningKeyPage)
 }
 
 // selectSigningKeyPage is the decision, separated from the network read so it can

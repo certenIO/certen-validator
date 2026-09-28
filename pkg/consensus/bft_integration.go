@@ -55,6 +55,16 @@ import (
 // retry — so when in doubt, leave it retryable.
 var ErrIntentPermanentlyInvalid = errors.New("intent is permanently invalid")
 
+// Why an intent that is not permanently invalid failed, for the lifecycle's failure class (RB4-F13).
+var (
+	// ErrNotEntitled is an intent whose principal holds no CERTEN entitlement.
+	ErrNotEntitled = errors.New("principal is not entitled to CERTEN execution")
+	// ErrGovernanceUnsatisfied is an intent whose governance proof shows it lacks the authority it needs.
+	ErrGovernanceUnsatisfied = errors.New("governance unsatisfied")
+	// ErrGovernanceUnavailable is a governance proof that could not be produced - not a verdict on the intent.
+	ErrGovernanceUnavailable = errors.New("governance proof unavailable")
+)
+
 // Version information - can be set at build time via ldflags:
 // go build -ldflags "-X github.com/certen/independant-validator/pkg/consensus.Version=v1.0.0"
 var (
@@ -1007,8 +1017,12 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 		// Build governance proof request from intent data
 		keyPageURL, keyPageErr := bv.resolveSigningKeyPage(ctx, certenIntent, governanceData)
 		if keyPageErr != nil {
-			return nil, fmt.Errorf("governance proof for intent %s cannot name its key page: %w",
-				certenIntent.IntentID, keyPageErr)
+			class := ErrGovernanceUnavailable
+			if errors.Is(keyPageErr, proof.ErrNoSigningKeyPage) {
+				class = ErrGovernanceUnsatisfied
+			}
+			return nil, fmt.Errorf("%w: governance proof for intent %s cannot name its key page: %w",
+				class, certenIntent.IntentID, keyPageErr)
 		}
 		bv.logger.Printf("🔑 [GOV-PROOF] intent %s signed by key page %s (declared %q)",
 			certenIntent.IntentID, keyPageURL, governanceData.Authorization.RequiredKeyPage)
@@ -1034,30 +1048,30 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 		// governance proof. Fail the intent instead of attesting to a
 		// weaker claim than the one being made.
 		if govRequest.KeyPage == "" {
-			return nil, fmt.Errorf("governance proof requires a key page: "+
+			return nil, fmt.Errorf("%w: governance proof requires a key page: "+
 				"G1/G2 cannot be established without one, and G0 alone is not a governance proof "+
-				"(intent %s)", certenIntent.IntentID)
+				"(intent %s)", ErrGovernanceUnsatisfied, certenIntent.IntentID)
 		}
 
 		g0ProofWrapper, g0Err := bv.governanceProofGen.GenerateG0(ctx, govRequest)
 		if g0Err != nil {
-			return nil, fmt.Errorf("G0 governance proof failed for intent %s: %w", certenIntent.IntentID, g0Err)
+			return nil, fmt.Errorf("%w: G0 governance proof failed for intent %s: %w", ErrGovernanceUnavailable, certenIntent.IntentID, g0Err)
 		}
 		if g0ProofWrapper == nil || g0ProofWrapper.G0 == nil {
-			return nil, fmt.Errorf("G0 governance proof returned no result for intent %s", certenIntent.IntentID)
+			return nil, fmt.Errorf("%w: G0 governance proof returned no result for intent %s", ErrGovernanceUnavailable, certenIntent.IntentID)
 		}
 		g0Proof = g0ProofWrapper.G0
 		govReceipts = append(govReceipts, g0ProofWrapper.Receipts...)
 		if !g0Proof.G0ProofComplete {
-			return nil, fmt.Errorf("G0 governance proof incomplete for intent %s", certenIntent.IntentID)
+			return nil, fmt.Errorf("%w: G0 governance proof incomplete for intent %s", ErrGovernanceUnavailable, certenIntent.IntentID)
 		}
 		// G0 is final because its receipt is the chained proof's L1
 		// receipt, ending at the root the BVN quorum signed, at the block
 		// it signed it (pkg/proof/g0_binding.go). Two proofs of one entry
 		// that disagree describe different facts.
 		if err := proof.BindG0ToChainedProof(g0Proof, liteClientProof); err != nil {
-			return nil, fmt.Errorf("G0 governance proof for intent %s does not bind to its chained proof: %w",
-				certenIntent.IntentID, err)
+			return nil, fmt.Errorf("%w: G0 governance proof for intent %s does not bind to its chained proof: %w",
+				ErrGovernanceUnavailable, certenIntent.IntentID, err)
 		}
 		governanceLevel = "G0"
 		bv.logger.Printf("✅ [GOV-PROOF] G0 proof generated: TXID=%s, ExecMBI=%d, Complete=%v",
@@ -1065,18 +1079,18 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 
 		g1ProofWrapper, g1Err := bv.governanceProofGen.GenerateG1(ctx, govRequest)
 		if g1Err != nil {
-			return nil, fmt.Errorf("G1 governance proof failed for intent %s: %w", certenIntent.IntentID, g1Err)
+			return nil, fmt.Errorf("%w: G1 governance proof failed for intent %s: %w", ErrGovernanceUnavailable, certenIntent.IntentID, g1Err)
 		}
 		if g1ProofWrapper == nil || g1ProofWrapper.G1 == nil {
-			return nil, fmt.Errorf("G1 governance proof returned no result for intent %s", certenIntent.IntentID)
+			return nil, fmt.Errorf("%w: G1 governance proof returned no result for intent %s", ErrGovernanceUnavailable, certenIntent.IntentID)
 		}
 		g1Proof = g1ProofWrapper.G1
 		govReceipts = append(govReceipts, g1ProofWrapper.Receipts...)
 		govTimingBasis = append(govTimingBasis, g1ProofWrapper.TimingBasis...)
 		if !g1Proof.G1ProofComplete || !g1Proof.ThresholdSatisfied {
-			return nil, fmt.Errorf("G1 governance proof incomplete for intent %s "+
+			return nil, fmt.Errorf("%w: G1 governance proof incomplete for intent %s "+
 				"(complete=%v thresholdSatisfied=%v uniqueKeys=%d)",
-				certenIntent.IntentID, g1Proof.G1ProofComplete, g1Proof.ThresholdSatisfied, g1Proof.UniqueValidKeys)
+				ErrGovernanceUnsatisfied, certenIntent.IntentID, g1Proof.G1ProofComplete, g1Proof.ThresholdSatisfied, g1Proof.UniqueValidKeys)
 		}
 		governanceLevel = "G1"
 		bv.logger.Printf("✅ [GOV-PROOF] G1 proof generated: ThresholdSatisfied=%v, UniqueKeys=%d, Complete=%v",
@@ -1084,19 +1098,19 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 
 		g2ProofWrapper, g2Err := bv.governanceProofGen.GenerateG2(ctx, govRequest)
 		if g2Err != nil {
-			return nil, fmt.Errorf("G2 governance proof failed for intent %s: %w", certenIntent.IntentID, g2Err)
+			return nil, fmt.Errorf("%w: G2 governance proof failed for intent %s: %w", ErrGovernanceUnavailable, certenIntent.IntentID, g2Err)
 		}
 		if g2ProofWrapper == nil || g2ProofWrapper.G2 == nil {
-			return nil, fmt.Errorf("G2 governance proof returned no result for intent %s", certenIntent.IntentID)
+			return nil, fmt.Errorf("%w: G2 governance proof returned no result for intent %s", ErrGovernanceUnavailable, certenIntent.IntentID)
 		}
 		g2Proof = g2ProofWrapper.G2
 		govReceipts = append(govReceipts, g2ProofWrapper.Receipts...)
 		govTimingBasis = append(govTimingBasis, g2ProofWrapper.TimingBasis...)
 		if !g2Proof.G2ProofComplete {
-			return nil, fmt.Errorf("G2 governance proof incomplete for intent %s "+
+			return nil, fmt.Errorf("%w: G2 governance proof incomplete for intent %s "+
 				"(payloadVerified=%v effectVerified=%v): the outcome is not bound, so this is a G1 claim "+
 				"and must not be recorded as governance",
-				certenIntent.IntentID, g2Proof.PayloadVerified, g2Proof.EffectVerified)
+				ErrGovernanceUnsatisfied, certenIntent.IntentID, g2Proof.PayloadVerified, g2Proof.EffectVerified)
 		}
 		governanceLevel = "G2"
 		bv.logger.Printf("✅ [GOV-PROOF] G2 proof generated: PayloadVerified=%v, EffectVerified=%v, Complete=%v",
@@ -1107,14 +1121,14 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 		// authorised and what it did. Attesting with one and not the other
 		// claims more than has been proven.
 		if liteClientProof == nil {
-			return nil, fmt.Errorf("cannot generate governance proofs for intent %s: "+
-				"the L1-L4 lite client proof is not available", certenIntent.IntentID)
+			return nil, fmt.Errorf("%w: cannot generate governance proofs for intent %s: "+
+				"the L1-L4 lite client proof is not available", ErrGovernanceUnavailable, certenIntent.IntentID)
 		}
 		if bv.governanceProofGen == nil {
-			return nil, fmt.Errorf("cannot generate governance proofs for intent %s: "+
-				"the governance proof generator is not configured", certenIntent.IntentID)
+			return nil, fmt.Errorf("%w: cannot generate governance proofs for intent %s: "+
+				"the governance proof generator is not configured", ErrGovernanceUnavailable, certenIntent.IntentID)
 		}
-		return nil, fmt.Errorf("governance proofs were not generated for intent %s", certenIntent.IntentID)
+		return nil, fmt.Errorf("%w: governance proofs were not generated for intent %s", ErrGovernanceUnavailable, certenIntent.IntentID)
 	}
 
 	// Plumb governance proofs + authority URLs onto certenProof so the
@@ -1200,8 +1214,8 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 		return &ExecutionTaskResult{
 			Success:    false,
 			ExecutorID: bv.validatorID,
-			Error: fmt.Errorf("intent %s refused: principal %q is not entitled to CERTEN execution",
-				certenIntent.IntentID, principal),
+			Error: fmt.Errorf("intent %s refused: %w: principal %q has no entitlement evidence",
+				certenIntent.IntentID, ErrNotEntitled, principal),
 		}, nil
 	}
 	if bv.entitlementMode == EntitlementObserve && entEvidence == nil {
