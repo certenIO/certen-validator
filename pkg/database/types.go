@@ -46,23 +46,10 @@ const (
 	BatchStatusFailed          BatchStatus = "failed"                    // Anchoring failed
 )
 
-// AnchorBatch represents a batch of transactions anchored together
-// Maps to: anchor_batches table
-type AnchorBatch struct {
-	BatchID      uuid.UUID      `db:"batch_id" json:"batch_id"`
-	BatchType    BatchType      `db:"batch_type" json:"batch_type"`
-	MerkleRoot   []byte         `db:"merkle_root" json:"merkle_root"` // 32 bytes SHA256
-	TxCount      int            `db:"transaction_count" json:"transaction_count"`
-	StartTime    time.Time      `db:"batch_start_time" json:"batch_start_time"`
-	EndTime      sql.NullTime   `db:"batch_end_time" json:"batch_end_time,omitempty"`
-	AccumHeight  sql.NullInt64  `db:"accumulate_block_height" json:"accumulate_block_height,omitempty"`
-	AccumHash    sql.NullString `db:"accumulate_block_hash" json:"accumulate_block_hash,omitempty"`
-	ValidatorID  string         `db:"validator_id" json:"validator_id"`
-	Status       BatchStatus    `db:"status" json:"status"`
-	ErrorMessage sql.NullString `db:"error_message" json:"error_message,omitempty"`
-	CreatedAt    time.Time      `db:"created_at" json:"created_at"`
-	UpdatedAt    time.Time      `db:"updated_at" json:"updated_at"`
-}
+// AnchorBatch is an anchor_batches row: the complete record (repository_anchor_batch_record.go). It was a 13-column
+// struct whose validator_id and batch_start_time could not hold the NULLs the quorum path writes, so GetBatch failed
+// on every batch the validators record.
+type AnchorBatch = AnchorBatchRecord
 
 // ============================================================================
 // BATCH TRANSACTION TYPES

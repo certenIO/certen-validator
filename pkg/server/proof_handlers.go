@@ -7,6 +7,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -482,7 +483,20 @@ func (h *ProofHandlers) HandleGetBatchStats(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	if h.repos == nil {
+		h.writeError(w, http.StatusServiceUnavailable, "DATABASE_UNAVAILABLE", "Database not available")
+		return
+	}
 	ctx := r.Context()
+	// The counts of a batch that does not exist are not zero; the batch is not found (they were zero for any ID).
+	if _, err := h.repos.Batches.GetBatch(ctx, batchID); errors.Is(err, database.ErrBatchNotFound) {
+		h.writeError(w, http.StatusNotFound, "BATCH_NOT_FOUND", "No anchor batch with ID "+batchID.String())
+		return
+	} else if err != nil {
+		h.logger.Printf("Error getting batch %s: %v", batchID, err)
+		h.writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to retrieve batch")
+		return
+	}
 	stats, err := h.repos.ProofArtifacts.GetBatchProofStats(ctx, batchID)
 	if err != nil {
 		h.logger.Printf("Error getting batch stats: %v", err)

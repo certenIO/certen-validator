@@ -1314,7 +1314,7 @@ func (r *ProofArtifactRepository) GetProofsModifiedSince(ctx context.Context, si
 func (r *ProofArtifactRepository) GetBatchProofStats(ctx context.Context, batchID uuid.UUID) (*BatchProofStats, error) {
 	query := `
 		SELECT
-			$1 as batch_id,
+			$1::uuid as batch_id,
 			COUNT(*) as proof_count,
 			(SELECT COUNT(*) FROM validator_attestations WHERE batch_id = $1) as attestation_count,
 			COUNT(*) FILTER (WHERE verification_status = 'verified') as verified_count,
