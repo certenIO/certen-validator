@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/certen/independant-validator/pkg/envvar"
 	"log"
@@ -852,6 +853,9 @@ func (ecm *EthereumContractManager) SubmitCertenProofToAnchor(
 	certenProof *proof.CertenProof,
 	anchorResult *anchor.AnchorResponse,
 ) (string, error) {
+	if perIntentSubmissionRetired {
+		return "", errPerIntentSubmissionRetired
+	}
 	if err := ecm.refreshGasPrice(ctx); err != nil {
 		return "", err // TX2: refuse before the BLS-ZK verify call
 	}
@@ -1259,6 +1263,9 @@ func (ecm *EthereumContractManager) ExecuteUnifiedAnchorWorkflowFull(
 	targetValue *big.Int,
 	targetCallData []byte,
 ) (createTxHash string, verifyTxHash string, govTxHash string, err error) {
+	if perIntentSubmissionRetired {
+		return "", "", "", errPerIntentSubmissionRetired
+	}
 	fmt.Printf("🔗 [UNIFIED-FULL] Starting 3-step anchor workflow...\n")
 
 	// Acquire explicit nonce to prevent "replacement transaction underpriced" errors.
@@ -1348,6 +1355,9 @@ func (ecm *EthereumContractManager) ExecuteUnifiedAnchorWorkflow(
 	certenProof *proof.CertenProof,
 	anchorResult *anchor.AnchorResponse,
 ) (createTxHash string, verifyTxHash string, err error) {
+	if perIntentSubmissionRetired {
+		return "", "", errPerIntentSubmissionRetired
+	}
 	fmt.Printf("🔗 [UNIFIED] Starting 2-step anchor workflow (legacy)...\n")
 
 	// Acquire explicit nonce to prevent "replacement transaction underpriced" errors.
@@ -2067,12 +2077,29 @@ func (ecm *EthereumContractManager) SubmitGovernanceProofToAccount(
 	return tx.Hash().Hex(), nil
 }
 
-// convertToContractProof converts CERTEN proof to contract-compatible format
+// perIntentSubmissionRetired retires the per-intent V6.1 submission path (RB3-F124): SubmitCertenProofToAnchor,
+// ExecuteUnifiedAnchorWorkflow(Full) and convertToContractProof. CERTEN settles through the batch path; nothing
+// calls these, and on reaching the chain they would send what they fabricate - an empty aggregate (48 zero
+// bytes) when there is none, and a governance proof hardcoded as 3 validators, 2 required, threshold met.
+// They refuse by name instead. RB5 Phase C builds the V8.2 per-intent submission (10-argument createAnchor,
+// signV8_2PreExecBLS) against the deployed contract; this code is kept as the record of the V6.1 shape.
+const perIntentSubmissionRetired = true
+
+// errPerIntentSubmissionRetired is the refusal the retired per-intent path returns.
+var errPerIntentSubmissionRetired = errors.New("the per-intent V6.1 anchor submission path is retired: CERTEN settles " +
+	"through the batch path, and the V8.2 per-intent submission is RB5 Phase C (RB3-F124)")
+
+// convertToContractProof converts CERTEN proof to contract-compatible format. Retired with the per-intent
+// path (perIntentSubmissionRetired): it returns nil rather than a proof with a zero signature and a
+// hardcoded governance claim.
 func (ecm *EthereumContractManager) convertToContractProof(
 	certenIntent *intent.CertenIntent,
 	certenProof *proof.CertenProof,
 	anchorResult *anchor.AnchorResponse,
 ) *CertenProofStruct {
+	if perIntentSubmissionRetired {
+		return nil
+	}
 
 	// Parse transaction hash - decode hex string properly
 	var txHash [32]byte
