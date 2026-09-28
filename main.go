@@ -105,6 +105,7 @@ type HealthStatus struct {
 	// DiscoveryUnsearched is how many blocks wait to be searched again, and the oldest's age (RB3-F125).
 	DiscoveryUnsearched          int   `json:"discovery_unsearched_blocks"`
 	DiscoveryUnsearchedOldestAge int64 `json:"discovery_unsearched_oldest_seconds"`
+	DiscoveryInProgress          int   `json:"discovery_intents_in_progress"` // zero while "paused" = nothing in flight (RB3-F8)
 	startTime                    time.Time
 	mu                           sync.RWMutex
 }
@@ -153,6 +154,13 @@ func (h *HealthStatus) SetDiscovery(status string, lagBlocks uint64, secondsSinc
 	h.updateOverallStatus()
 }
 
+// SetDiscoveryInProgress records how many intents are being processed now.
+func (h *HealthStatus) SetDiscoveryInProgress(n int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.DiscoveryInProgress = n
+}
+
 // SetDiscoveryUnsearched records the blocks waiting to be searched again.
 func (h *HealthStatus) SetDiscoveryUnsearched(count int, oldestAgeSeconds int64) {
 	h.mu.Lock()
@@ -192,7 +200,8 @@ func (h *HealthStatus) updateOverallStatus() {
 	}
 
 	// Check for degraded state (non-critical components)
-	if h.Database == "disconnected" || h.BatchSystem == "disabled" || h.ProofCycle == "disabled" {
+	// A paused intake (RB3-F8) is deliberate: the node is up and takes no new intent.
+	if h.Database == "disconnected" || h.BatchSystem == "disabled" || h.ProofCycle == "disabled" || h.Discovery == "paused" {
 		h.Status = "degraded"
 		return
 	}
@@ -400,6 +409,8 @@ func watchDiscoveryLiveness(d *intent.IntentDiscovery) {
 
 		state := "advancing"
 		switch {
+		case st.IntakePaused:
+			state = "paused"
 		case !st.Started:
 			state = "starting"
 		case stalled:
@@ -407,6 +418,7 @@ func watchDiscoveryLiveness(d *intent.IntentDiscovery) {
 		}
 		healthStatus.SetDiscovery(state, st.LagBlocks, int64(st.SecondsSinceAdvance))
 		healthStatus.SetDiscoveryUnsearched(st.Unsearched, int64(st.OldestUnsearchedSeconds))
+		healthStatus.SetDiscoveryInProgress(st.InProgress)
 		if st.UnsearchedError != "" {
 			log.Printf("🚨 [DISCOVERY] the unsearched-block store cannot be read: %s", st.UnsearchedError)
 		} else if st.Unsearched > 0 && st.OldestUnsearchedSeconds > 600 {
