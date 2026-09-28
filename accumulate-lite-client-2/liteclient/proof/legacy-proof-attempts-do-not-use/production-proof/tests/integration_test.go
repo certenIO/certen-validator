@@ -133,7 +133,7 @@ func TestCompleteProofChain(t *testing.T) {
 	}
 
 	// Overall result
-	fmt.Printf("\n" + repeatStr("═", 60) + "\n")
+	fmt.Print("\n" + repeatStr("═", 60) + "\n")
 	fmt.Printf("🎯 OVERALL VERIFICATION:\n")
 	fmt.Printf("  Fully Verified: %v\n", result.FullyVerified)
 	fmt.Printf("  Trust Level: %s\n", result.TrustLevel)
@@ -144,7 +144,7 @@ func TestCompleteProofChain(t *testing.T) {
 	}
 
 	// Summary
-	fmt.Printf("\n" + repeatStr("═", 60) + "\n")
+	fmt.Print("\n" + repeatStr("═", 60) + "\n")
 	if result.Layers["layer1"].Verified && result.Layers["layer2"].Verified {
 		fmt.Println("✅ SUCCESS: Layers 1-2 cryptographically verified!")
 		fmt.Println("   Account state is provably included in the blockchain.")
