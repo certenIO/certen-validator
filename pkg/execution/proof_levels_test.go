@@ -124,11 +124,12 @@ func newLevelFixture(t *testing.T) *levelFixture {
 		_, _ = db.ExecContext(context.Background(), `DELETE FROM chain_execution_results WHERE result_id = $1`, f.execID)
 	})
 
-	message := &attestation.AttestationMessage{IntentID: intentID, ResultHash: resultHash, MerkleRoot: f.root}
+	// What the cycle's validators sign besides the result: the intent's operation commitment (RB3-F106).
+	message := &attestation.AttestationMessage{IntentID: intentID, ResultHash: resultHash, OperationCommitment: f.root}
 	messageHash := levelHash("signed-message-" + intentID)
 	f.cycle = &activeCycle{
 		CycleID: "cycle-" + intentID,
-		Request: &UnifiedProofCycleRequest{IntentID: intentID, AccumulateTxHash: accumTx, MerkleRoot: f.root, LeafHash: f.root[:], GovernanceRoot: f.govRoot},
+		Request: &UnifiedProofCycleRequest{IntentID: intentID, AccumulateTxHash: accumTx, OperationCommitment: f.root, GovernanceRoot: f.govRoot},
 		Result: &UnifiedProofCycleResult{
 			ChainID: "84532", ThresholdMet: true,
 			ObservationResults: []*chain.ObservationResult{{
@@ -324,11 +325,11 @@ func TestUnifiedProofCycleWithAMissingLevelIsNotCompleted(t *testing.T) {
 	}
 }
 
-func TestUnifiedProofCycleBindingsNeedTheQuorumToSignThisResultAndRoot(t *testing.T) {
+func TestUnifiedProofCycleBindingsNeedTheQuorumToSignThisResultAndOperationCommitment(t *testing.T) {
 	f := newLevelFixture(t)
 	f.record(t)
 	other := *f.cycle.Result.Attestations[1].Message
-	other.MerkleRoot = levelHash("a different root")
+	other.OperationCommitment = levelHash("a different operation commitment")
 	f.cycle.Result.Attestations[1].Message = &other
 	f.orch.completeProofCycles(context.Background(), f.cycle.CycleID, f.cycle.Completions, f.cycle.Result, f.root, "writeback-tx")
 	record, err := f.repos.ProofArtifacts.GetProofCycleCompletionByProof(context.Background(), f.artifact.ProofID)
@@ -342,7 +343,7 @@ func TestUnifiedProofCycleBindingsNeedTheQuorumToSignThisResultAndRoot(t *testin
 
 func TestLevelsBoundByAttestations(t *testing.T) {
 	root, result := levelHash("root"), levelHash("result")
-	message := &attestation.AttestationMessage{ResultHash: result, MerkleRoot: root}
+	message := &attestation.AttestationMessage{ResultHash: result, OperationCommitment: root}
 	make := func(threshold bool, atts ...*attestation.Attestation) *UnifiedProofCycleResult {
 		return &UnifiedProofCycleResult{ThresholdMet: threshold, Attestations: atts,
 			ObservationResults: []*chain.ObservationResult{{ResultHash: result}}}
@@ -357,8 +358,8 @@ func TestLevelsBoundByAttestations(t *testing.T) {
 		"quorum over this result and root": {make(true, signed(message, "m"), signed(message, "m")), true},
 		"below threshold":                  {make(false, signed(message, "m")), false},
 		"no attestations":                  {make(true), false},
-		"a different result":               {make(true, signed(&attestation.AttestationMessage{ResultHash: levelHash("x"), MerkleRoot: root}, "m")), false},
-		"a different root":                 {make(true, signed(&attestation.AttestationMessage{ResultHash: result, MerkleRoot: levelHash("x")}, "m")), false},
+		"a different result":               {make(true, signed(&attestation.AttestationMessage{ResultHash: levelHash("x"), OperationCommitment: root}, "m")), false},
+		"a different operation commitment": {make(true, signed(&attestation.AttestationMessage{ResultHash: result, OperationCommitment: levelHash("x")}, "m")), false},
 		"no message":                       {make(true, &attestation.Attestation{}), false},
 		"different signed messages":        {make(true, signed(message, "m"), signed(message, "n")), false},
 	}
@@ -429,8 +430,9 @@ func TestResultHashChainIsPersistedVerifiedAndContinuedAfterRestart(t *testing.T
 	ctx := context.Background()
 	unified := database.NewUnifiedRepository(db)
 	validator := "hash-chain-" + uuid.NewString()
+	// Each result binds its own member's anchored root (RB3-F106); these three share one.
 	anchorProof := levelHash("anchor-proof-" + validator)
-	chainState := NewResultHashChain("84532", anchorProof)
+	chainState := NewResultHashChain("84532")
 
 	var ids []uuid.UUID
 	var linked []*ExternalChainResult
@@ -449,7 +451,7 @@ func TestResultHashChainIsPersistedVerifiedAndContinuedAfterRestart(t *testing.T
 		})
 		ext := &ExternalChainResult{Chain: "base-sepolia", ChainID: 84532, TxHash: common.BytesToHash(levelBytes(validator + string(rune('a'+i)))),
 			BlockNumber: big.NewInt(int64(100 + i)), Status: 1, FinalizedAt: time.Unix(int64(1700000000+i), 0).UTC()}
-		if err := chainState.AddResult(ext); err != nil {
+		if err := chainState.AddResult(ext, anchorProof); err != nil {
 			t.Fatal(err)
 		}
 		if err := persistResultHashChainLink(ctx, unified, []uuid.UUID{id}, 1, ext); err != nil {
@@ -466,7 +468,7 @@ func TestResultHashChainIsPersistedVerifiedAndContinuedAfterRestart(t *testing.T
 		t.Fatalf("seeded %d chains, %v", n, err)
 	}
 	continued := restarted["84532"]
-	if continued == nil || continued.LatestSequence != 3 || continued.LatestHash != linked[2].ResultHash || continued.AnchorProofHash != anchorProof {
+	if continued == nil || continued.LatestSequence != 3 || continued.LatestHash != linked[2].ResultHash {
 		t.Fatalf("a restarted validator would not continue the chain: %+v", continued)
 	}
 

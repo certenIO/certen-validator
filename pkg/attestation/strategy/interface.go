@@ -93,8 +93,11 @@ type AttestationMessage struct {
 	// BundleID is the operation bundle identifier
 	BundleID [32]byte `json:"bundle_id,omitempty"`
 
-	// MerkleRoot is the root of the transaction merkle tree (for batches)
-	MerkleRoot [32]byte `json:"merkle_root,omitempty"`
+	// OperationCommitment is the intent's operation commitment - the value the proof cycle's validators
+	// sign here. Its wire key is "merkle_root" for historical reasons: every stored attestation's signature
+	// is over the JSON that uses that key, so the key cannot change without making them unverifiable. It is
+	// not a Merkle root; the member's batch root is its anchor's (RB3-F106).
+	OperationCommitment [32]byte `json:"merkle_root,omitempty"`
 
 	// Multi-leg fields (populated when intent spans multiple chains)
 	LegCount           int      `json:"leg_count,omitempty"`

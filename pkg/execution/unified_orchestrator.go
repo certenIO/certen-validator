@@ -218,16 +218,12 @@ type UnifiedProofCycleRequest struct {
 	// Transaction hashes to observe (from anchor workflow)
 	TxHashes []string `json:"tx_hashes"`
 
-	// Merkle root and proofs
-	MerkleRoot          [32]byte `json:"merkle_root"`
+	// The intent's operation commitment, governance root and bundle. The member's place in its batch - leaf,
+	// index, path and root - is its canonical anchor row's (batchPlacement), not the request's: the request
+	// used to restate the operation commitment as a one-leaf tree's leaf and root (RB3-F106, RB3-F85).
 	OperationCommitment [32]byte `json:"operation_commitment"`
 	GovernanceRoot      [32]byte `json:"governance_root"`
 	BundleID            [32]byte `json:"bundle_id"`
-
-	// Merkle inclusion proof details (for MerkleTreeVisualization)
-	LeafHash   []byte                    `json:"leaf_hash,omitempty"`   // The leaf (transaction) hash
-	LeafIndex  int                       `json:"leaf_index,omitempty"`  // Position in the tree (0-indexed)
-	MerklePath []database.MerklePathNode `json:"merkle_path,omitempty"` // Sibling hashes for proof
 
 	// Additional context
 	AccumulateHeight int64             `json:"accumulate_height,omitempty"`
@@ -331,12 +327,15 @@ type UnifiedOrchestrator struct {
 
 // activeCycle tracks a running proof cycle
 type activeCycle struct {
-	CycleID   string
-	Request   *UnifiedProofCycleRequest
-	StartedAt time.Time
-	Phase     int
-	Result    *UnifiedProofCycleResult
-	Cancel    context.CancelFunc
+	CycleID string
+	// AnchoredRoot is the batch root the member's anchor published (its Level 3 hash), read from its
+	// canonical anchor row before the write-back; zero where the member has no placement (RB3-F106).
+	AnchoredRoot [32]byte
+	Request      *UnifiedProofCycleRequest
+	StartedAt    time.Time
+	Phase        int
+	Result       *UnifiedProofCycleResult
+	Cancel       context.CancelFunc
 
 	// SnapshotID is the validator_set_snapshots row this cycle's attestations were counted against.
 	SnapshotID *uuid.UUID
@@ -582,7 +581,7 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 	result.CompletedAt = &now
 	result.Success = true
 
-	o.closeLevelRecords(ctx, req.CycleID, cycle.Completions, result, req.MerkleRoot)
+	o.closeLevelRecords(ctx, req.CycleID, cycle.Completions, result, req.OperationCommitment)
 
 	// This member's outcome; the intent's status is derived from every member's (RB3-F50). A
 	// settlement that reverted is a failed member even when its revert was written back, and a
@@ -1386,16 +1385,16 @@ func (o *UnifiedOrchestrator) executePhase8(ctx context.Context, cycle *activeCy
 	primaryResultHash := settlementObs.ResultHash
 
 	message := &attestation.AttestationMessage{
-		IntentID:     req.IntentID,
-		ResultHash:   primaryResultHash,
-		AnchorTxHash: settlementTx,
-		BlockNumber:  settlementObs.BlockNumber,
-		TargetChain:  req.TargetChain,
-		ChainID:      result.ChainID,
-		Timestamp:    time.Now().Unix(),
-		CycleID:      cycle.CycleID,
-		BundleID:     req.BundleID,
-		MerkleRoot:   req.MerkleRoot,
+		IntentID:            req.IntentID,
+		ResultHash:          primaryResultHash,
+		AnchorTxHash:        settlementTx,
+		BlockNumber:         settlementObs.BlockNumber,
+		TargetChain:         req.TargetChain,
+		ChainID:             result.ChainID,
+		Timestamp:           time.Now().Unix(),
+		CycleID:             cycle.CycleID,
+		BundleID:            req.BundleID,
+		OperationCommitment: req.OperationCommitment,
 		// RB-SEC-1: bind the execution (governance) tx + Accumulate pointer so peers can
 		// independently re-verify the committed effect against the signed intent.
 		ExecutionTxHash:      settlementTx,
@@ -1983,6 +1982,17 @@ func (o *UnifiedOrchestrator) executePhase9(ctx context.Context, cycle *activeCy
 		return fmt.Errorf("write-back cannot state what was executed: %w", proofCtx.StepsError)
 	}
 
+	// The result binds its member's anchor: the batch root from its canonical row (RB3-F106).
+	placementChain, _ := strconv.ParseInt(cycle.Request.TargetChain, 10, 64)
+	placement, err := o.batchPlacement(ctx, cycle.Request.IntentID, cycle.Request.AccumulateTxHash, placementChain)
+	if err != nil {
+		return fmt.Errorf("write-back cannot bind the result to its anchor: %w", err)
+	}
+	cycle.AnchoredRoot = [32]byte{}
+	if root := placementRoot(placement); len(root) == 32 {
+		copy(cycle.AnchoredRoot[:], root)
+	}
+
 	// Build the attestation bundle and persist its hash chain link under one lock: the link takes the
 	// next sequence number only if it is stored (RB3-F82).
 	o.resultChainsLock.Lock()
@@ -2075,7 +2085,7 @@ func (o *UnifiedOrchestrator) buildComprehensiveProofContext(cycle *activeCycle)
 	// Populate commitment from request + commitment map
 	if req.BundleID != [32]byte{} {
 		ctx.Commitment = &ExecutionCommitment{
-			OperationID: req.MerkleRoot,
+			OperationID: req.OperationCommitment,
 			BundleID:    req.BundleID,
 		}
 		if cm != nil {
@@ -2229,19 +2239,22 @@ func (o *UnifiedOrchestrator) buildAttestationBundleFromCycle(cycle *activeCycle
 		}
 	}
 
-	// Compute anchor proof hash from the MerkleRoot (L3→L4 binding)
-	anchorProofHash := cycle.Request.MerkleRoot
+	// The L3->L4 binding: this result's own Level 3 hash - the batch root its member's anchor published -
+	// or zero where the member's anchor is not established. It used to be the request's "MerkleRoot" (the
+	// operation commitment), fixed for the whole chain at the first cycle after a restart, so every result
+	// published that first intent's commitment as its anchor proof hash (RB3-F106).
+	anchorProofHash := cycle.AnchoredRoot
 
 	// Apply result hash chain tracking (sequence_number, previous_result_hash, anchor_proof_hash). The
 	// caller holds resultChainsLock.
 	chainKey := result.ChainID
 	hashChain, exists := o.resultChains[chainKey]
 	if !exists {
-		hashChain = NewResultHashChain(chainKey, anchorProofHash)
+		hashChain = NewResultHashChain(chainKey)
 		o.resultChains[chainKey] = hashChain
 	}
 	before := *hashChain
-	if err := hashChain.AddResult(extResult); err != nil { // Sets PreviousResultHash, AnchorProofHash, SequenceNumber
+	if err := hashChain.AddResult(extResult, anchorProofHash); err != nil { // Sets PreviousResultHash, AnchorProofHash, SequenceNumber
 		return nil, nil, fmt.Errorf("result hash chain: %w", err)
 	}
 	rollback := func() {
@@ -2987,8 +3000,9 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 				AttestedHash:    att.MessageHash[:],
 				Signature:       att.Signature,
 				AnchorTxHash:    anchorTxHash,
-				MerkleRoot:      req.MerkleRoot[:],
-				BlockNumber:     blockNumber,
+				// The member's batch root, from its canonical anchor row; none where it has no placement.
+				MerkleRoot:  placementRoot(placement),
+				BlockNumber: blockNumber,
 				// What the attestation message names and the validators attested.
 				SettlementTxHash:      &settlementTx,
 				SettlementBlockNumber: &settlementBlock,

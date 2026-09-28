@@ -243,9 +243,11 @@ func TestMerkleProof_TamperDetection(t *testing.T) {
 
 // TestResultHashChain_BasicChaining tests hash chain creation and verification
 func TestResultHashChain_BasicChaining(t *testing.T) {
-	anchorProofHash := sha256.Sum256([]byte("anchor_proof"))
+	// Each result binds its own member's anchor (RB3-F106): two intents, two anchored roots, one chain.
+	anchorProofHash := sha256.Sum256([]byte("anchored root of intent 1"))
+	secondAnchor := sha256.Sum256([]byte("anchored root of intent 2"))
 
-	chain := NewResultHashChain("ethereum", anchorProofHash)
+	chain := NewResultHashChain("ethereum")
 
 	// Create first result
 	result1 := &ExternalChainResult{
@@ -257,7 +259,7 @@ func TestResultHashChain_BasicChaining(t *testing.T) {
 	}
 
 	// Add to chain
-	if err := chain.AddResult(result1); err != nil {
+	if err := chain.AddResult(result1, anchorProofHash); err != nil {
 		t.Fatalf("Failed to add result1: %v", err)
 	}
 
@@ -281,7 +283,7 @@ func TestResultHashChain_BasicChaining(t *testing.T) {
 		Status:      1,
 	}
 
-	if err := chain.AddResult(result2); err != nil {
+	if err := chain.AddResult(result2, secondAnchor); err != nil {
 		t.Fatalf("Failed to add result2: %v", err)
 	}
 
@@ -291,6 +293,12 @@ func TestResultHashChain_BasicChaining(t *testing.T) {
 	}
 	if result2.PreviousResultHash != result1.ResultHash {
 		t.Error("Second result should chain to first result")
+	}
+	if result2.AnchorProofHash != secondAnchor {
+		t.Errorf("the second result binds %x, not its own anchor %x - the first result's was stamped on it", result2.AnchorProofHash[:8], secondAnchor[:8])
+	}
+	if err := chain.VerifyChain([]*ExternalChainResult{result1, result2}); err != nil {
+		t.Errorf("a chain of results bound to their own anchors does not verify: %v", err)
 	}
 
 	t.Logf("PASS: Hash chain created correctly")
@@ -302,7 +310,7 @@ func TestResultHashChain_BasicChaining(t *testing.T) {
 // TestResultHashChain_VerifyChain tests chain verification
 func TestResultHashChain_VerifyChain(t *testing.T) {
 	anchorProofHash := sha256.Sum256([]byte("anchor"))
-	chain := NewResultHashChain("ethereum", anchorProofHash)
+	chain := NewResultHashChain("ethereum")
 
 	// Create chain of 5 results
 	results := make([]*ExternalChainResult, 5)
@@ -314,7 +322,7 @@ func TestResultHashChain_VerifyChain(t *testing.T) {
 			TxHash:      common.HexToHash("0x" + string(rune('a'+i))),
 			Status:      1,
 		}
-		if err := chain.AddResult(results[i]); err != nil {
+		if err := chain.AddResult(results[i], anchorProofHash); err != nil {
 			t.Fatalf("Failed to add result %d: %v", i, err)
 		}
 	}
@@ -330,7 +338,7 @@ func TestResultHashChain_VerifyChain(t *testing.T) {
 // TestResultHashChain_TamperDetection tests that chain tampering is detected
 func TestResultHashChain_TamperDetection(t *testing.T) {
 	anchorProofHash := sha256.Sum256([]byte("anchor"))
-	chain := NewResultHashChain("ethereum", anchorProofHash)
+	chain := NewResultHashChain("ethereum")
 
 	results := make([]*ExternalChainResult, 3)
 	for i := 0; i < 3; i++ {
@@ -341,7 +349,7 @@ func TestResultHashChain_TamperDetection(t *testing.T) {
 			TxHash:      common.HexToHash("0xabc"),
 			Status:      1,
 		}
-		chain.AddResult(results[i])
+		chain.AddResult(results[i], anchorProofHash)
 	}
 
 	// Tamper with middle result's hash
@@ -621,7 +629,7 @@ func TestExecutionResult_FullLifecycle(t *testing.T) {
 	anchorProofHash := sha256.Sum256([]byte("level3_complete"))
 
 	// Step 2: Create hash chain
-	chain := NewResultHashChain("ethereum", anchorProofHash)
+	chain := NewResultHashChain("ethereum")
 
 	// Step 3: Create execution result
 	result := &ExternalChainResult{
@@ -656,7 +664,7 @@ func TestExecutionResult_FullLifecycle(t *testing.T) {
 	}
 
 	// Step 4: Add to hash chain
-	if err := chain.AddResult(result); err != nil {
+	if err := chain.AddResult(result, anchorProofHash); err != nil {
 		t.Fatalf("Failed to add result to chain: %v", err)
 	}
 

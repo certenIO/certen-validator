@@ -51,10 +51,16 @@ func TestTheAttestationMessageHashIsWhatStrategiesSign(t *testing.T) {
 	}
 }
 
-func f81Orchestrator(repo *database.UnifiedRepository, validator string) *UnifiedOrchestrator {
+// f81Orchestrator is a write-back orchestrator over repos (nil for none). Phase 9 reads the member's batch
+// placement to bind its result to its anchor (RB3-F106), so the proof-artifact repository is wired too.
+func f81Orchestrator(repos *database.Repositories, validator string) *UnifiedOrchestrator {
 	_, key, _ := ed25519.GenerateKey(nil)
+	var unified *database.UnifiedRepository
+	if repos != nil {
+		unified = repos.Unified
+	}
 	return &UnifiedOrchestrator{
-		config: &UnifiedOrchestratorConfig{ValidatorID: validator, UnifiedRepo: repo,
+		config: &UnifiedOrchestratorConfig{ValidatorID: validator, UnifiedRepo: unified, Repos: repos,
 			ResultsPrincipal: "acc://results.acme/data", Ed25519Key: key, AccumulateClient: &recordingSubmitter{}},
 		resultChains: map[string]*ResultHashChain{},
 		txBuilder:    NewSyntheticTxBuilder("acc://results.acme/data", validator, key),
@@ -107,7 +113,7 @@ func TestAResultWhoseLinkIsNotStoredDoesNotConsumeASequenceNumber(t *testing.T) 
 	repos := database.NewRepositories(database.NewClientFromDB(db))
 	validator := fmt.Sprintf("f82-validator-%d", time.Now().UnixNano())
 	t.Cleanup(func() { db.Exec(`DELETE FROM result_hash_chain_links WHERE observer_validator_id=$1`, validator) })
-	o := f81Orchestrator(repos.Unified, validator)
+	o := f81Orchestrator(repos, validator)
 
 	if _, err := db.Exec(`CREATE OR REPLACE FUNCTION f82_refuse() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'f82: refused'; END $$;
 		CREATE TRIGGER f82_refuse BEFORE INSERT ON result_hash_chain_links FOR EACH ROW EXECUTE FUNCTION f82_refuse();`); err != nil {
@@ -135,5 +141,40 @@ func TestAResultWhoseLinkIsNotStoredDoesNotConsumeASequenceNumber(t *testing.T) 
 	}
 	if n, err := repos.Unified.VerifyChainExecutionHashChain(ctx, validator, odChainStr); err != nil || n != 1 {
 		t.Fatalf("the chain after a refused link then a stored one: %d links, %v", n, err)
+	}
+}
+
+// RB3-F106: each written-back result binds its own member's anchored root (its Level 3 hash) - two intents
+// on one chain bind two roots - and a member without an established anchor binds none. The binding used to
+// be the operation commitment of whichever cycle first created the chain, stamped on every later result.
+func TestEachWrittenBackResultBindsItsOwnAnchor(t *testing.T) {
+	o := f81Orchestrator(nil, "v")
+	first, second := f81NonSettlementCycle(t), f81NonSettlementCycle(t)
+	first.Request.OperationCommitment = levelHash("operation of intent 1")
+	second.Request.OperationCommitment = levelHash("operation of intent 2")
+	first.AnchoredRoot, second.AnchoredRoot = levelHash("root anchored for intent 1"), levelHash("root anchored for intent 2")
+	b1, _, err := o.buildAttestationBundleFromCycle(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b2, _, err := o.buildAttestationBundleFromCycle(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b1.Result.AnchorProofHash != first.AnchoredRoot || b2.Result.AnchorProofHash != second.AnchoredRoot {
+		t.Fatalf("results bind %x and %x; want their own anchored roots %x and %x",
+			b1.Result.AnchorProofHash[:8], b2.Result.AnchorProofHash[:8], first.AnchoredRoot[:8], second.AnchoredRoot[:8])
+	}
+	if b2.Result.PreviousResultHash != b1.Result.ResultHash {
+		t.Fatal("the second result does not chain to the first")
+	}
+	unanchored := f81NonSettlementCycle(t)
+	unanchored.Request.OperationCommitment = levelHash("operation of intent 3")
+	b3, _, err := o.buildAttestationBundleFromCycle(unanchored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b3.Result.AnchorProofHash != ([32]byte{}) {
+		t.Fatalf("a member without an established anchor binds %x", b3.Result.AnchorProofHash[:8])
 	}
 }

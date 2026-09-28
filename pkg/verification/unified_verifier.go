@@ -763,14 +763,17 @@ func (v *UnifiedVerifier) verifyCrossLevelBindings(bundle *ProofBundle, result *
 		}
 	}
 
-	// Verify Level 3 → Level 4 binding
-	// The execution proof should reference the anchor proof hash
+	// Verify Level 3 → Level 4 binding: the execution result names the batch root its anchor published,
+	// the Level 3 hash (proof_levels.go; RB3-F106 - this compared it with the anchor proof's own hash,
+	// a third meaning no writer produced).
 	if bundle.AnchorProof != nil && bundle.ExecutionProof != nil {
 		if bundle.ExecutionProof.Result != nil {
-			// The execution result's anchor proof hash should match
-			if bundle.ExecutionProof.Result.AnchorProofHash != bundle.AnchorProof.ProofHash {
-				return fmt.Errorf("Level 3→4 binding: anchor proof hash mismatch: expected %x, got %x",
-					bundle.AnchorProof.ProofHash, bundle.ExecutionProof.Result.AnchorProofHash)
+			if bundle.AnchorProof.AnchorBinding == nil {
+				return fmt.Errorf("Level 3→4 binding: the anchor proof carries no anchor binding to bind the result to")
+			}
+			if bundle.ExecutionProof.Result.AnchorProofHash != bundle.AnchorProof.AnchorBinding.MerkleRootHash {
+				return fmt.Errorf("Level 3→4 binding: the result names anchored root %x, the anchor published %x",
+					bundle.ExecutionProof.Result.AnchorProofHash, bundle.AnchorProof.AnchorBinding.MerkleRootHash)
 			}
 		}
 	}
