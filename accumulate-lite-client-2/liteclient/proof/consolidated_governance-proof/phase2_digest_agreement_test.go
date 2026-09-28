@@ -11,7 +11,7 @@ import (
 	"encoding/hex"
 	"testing"
 
-	cp "github.com/certen/certen-protocol/services/validator/accumulate-lite-client-2/liteclient/proof/working-proof_do_not_edit"
+	cp "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/working-proof_do_not_edit"
 )
 
 // Runbook rule 9 says to reuse the existing verified signature machinery rather

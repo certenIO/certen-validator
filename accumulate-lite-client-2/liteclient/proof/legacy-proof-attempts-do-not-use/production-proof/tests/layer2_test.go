@@ -1,3 +1,5 @@
+//go:build integration
+
 // Copyright 2025 The Accumulate Authors
 //
 // Use of this source code is governed by an MIT-style
@@ -11,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/production-proof/core"
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/legacy-proof-attempts-do-not-use/production-proof/core"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
 )
 

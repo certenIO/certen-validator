@@ -1,3 +1,5 @@
+//go:build integration
+
 // Copyright 2025 CERTEN
 //
 // Use of this source code is governed by an MIT-style
@@ -21,7 +23,7 @@ import (
 	"testing"
 	"time"
 
-	. "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/new_chained-proof"
+	. "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/legacy-proof-attempts-do-not-use/new_chained-proof"
 )
 
 // getenv returns environment variable value or default
@@ -432,10 +434,6 @@ func TestReceiptMathematicsValidation(t *testing.T) {
 
 // TestNetworkEndpointConfiguration validates endpoint configuration
 func TestNetworkEndpointConfiguration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping endpoint test in short mode")
-	}
-
 	t.Log("🔧 Testing network endpoint configuration...")
 
 	// Test if we can create a builder (validates endpoints)
@@ -453,7 +451,7 @@ func TestNetworkEndpointConfiguration(t *testing.T) {
 		t.Log("📝 Update TEST_ENDPOINTS constants with your running node URLs")
 		t.Log("📝 Required: V3 API endpoint (usually port 26660)")
 		t.Log("📝 Required: CometBFT RPC endpoint mapping per partition")
-		t.Skip("Skipping tests due to endpoint configuration")
+		t.Fatalf("endpoint configuration: %v", err)
 	}
 
 	if builder == nil {

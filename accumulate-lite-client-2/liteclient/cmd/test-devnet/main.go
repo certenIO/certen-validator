@@ -11,7 +11,7 @@ import (
 
 	"strings"
 
-	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/production"
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/legacy-proof-attempts-do-not-use/production"
 )
 
 func main() {

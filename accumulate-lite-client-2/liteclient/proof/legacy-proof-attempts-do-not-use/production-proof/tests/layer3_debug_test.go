@@ -1,3 +1,5 @@
+//go:build integration
+
 // Copyright 2025 The Accumulate Authors
 //
 // Use of this source code is governed by an MIT-style
@@ -7,6 +9,7 @@
 package tests
 
 import (
+	"context"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/hex"
@@ -16,6 +19,9 @@ import (
 
 	cmtproto "github.com/cometbft/cometbft/proto/tendermint/types"
 	"github.com/cometbft/cometbft/types"
+	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
+
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/legacy-proof-attempts-do-not-use/production-proof/core"
 )
 
 // TestDebugLayer3 helps debug why Layer 3 signature verification is failing
@@ -130,6 +136,7 @@ func TestDebugLayer3(t *testing.T) {
 	}
 
 	fmt.Println("❌ Could not find matching configuration")
+	defer t.Errorf("no chain id / timestamp variant verifies the recorded block-8 precommit signature")
 	fmt.Println("\nPossible issues:")
 	fmt.Println("1. The signature was created with different chain ID")
 	fmt.Println("2. The timestamp format might be different")
@@ -180,4 +187,19 @@ func TestLayer3WithLiveData(t *testing.T) {
 	fmt.Println("Layer 3 is NOT broken - it's waiting for API support")
 	fmt.Println("The test signature is from a specific historical moment")
 	fmt.Println("The implementation will work with live validator data")
+
+	// The claim above, checked: layer 3 verifies against the live devnet.
+	accountURL, err := url.Parse("acc://dn.acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	result, err := core.NewCryptographicVerifier().VerifyAccount(ctx, accountURL)
+	if err != nil {
+		t.Fatalf("verification: %v", err)
+	}
+	if l3 := result.Layers["layer3"]; !l3.Verified {
+		t.Fatalf("layer 3 not verified with live data: %s", l3.Error)
+	}
 }

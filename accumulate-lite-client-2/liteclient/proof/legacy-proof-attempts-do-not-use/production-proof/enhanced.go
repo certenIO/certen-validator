@@ -12,8 +12,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/production-proof/interfaces"
-	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/production-proof/manager"
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/legacy-proof-attempts-do-not-use/production-proof/interfaces"
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/legacy-proof-attempts-do-not-use/production-proof/manager"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
 )
 

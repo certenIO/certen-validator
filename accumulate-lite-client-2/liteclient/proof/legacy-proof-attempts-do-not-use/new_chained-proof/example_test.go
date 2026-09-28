@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	chained_proof "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/new_chained-proof"
+	chained_proof "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/legacy-proof-attempts-do-not-use/new_chained-proof"
 )
 
 // -----------------------------------------------------------------------------
