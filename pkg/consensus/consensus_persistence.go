@@ -490,7 +490,7 @@ func consensusRecordsFor(b *committedBlock, logger *log.Logger) *database.Commit
 	rec := &database.CommittedConsensusRecords{Height: b.height}
 	for i := range b.blocks {
 		vb := &b.blocks[i]
-		batchUUID := uuid.NewSHA1(uuid.NameSpaceOID, []byte(vb.BundleID))
+		batchUUID := consensusBatchID(vb.BundleID)
 
 		merkleRoot, err := database.DecodeHexString(vb.GovernanceProof.MerkleRoot)
 		if err != nil || len(merkleRoot) == 0 {
@@ -560,6 +560,11 @@ func consensusRecordsFor(b *committedBlock, logger *log.Logger) *database.Commit
 		})
 	}
 	return rec
+}
+
+// consensusBatchID is the batch id a validator block's consensus entry is written under.
+func consensusBatchID(bundleID string) uuid.UUID {
+	return uuid.NewSHA1(uuid.NameSpaceOID, []byte(bundleID))
 }
 
 // String is used in logs and tests.

@@ -10,6 +10,8 @@ import (
 
 	cmthttp "github.com/cometbft/cometbft/rpc/client/http"
 
+	"github.com/google/uuid"
+
 	"github.com/certen/independant-validator/pkg/database"
 )
 
@@ -20,6 +22,21 @@ import (
 type commitReader interface {
 	CommitQuorum(ctx context.Context, height int64) (*commitQuorum, error)
 	BlockTime(ctx context.Context, height int64) (time.Time, error)
+	// BatchIDsAt are the consensus batch ids of the validator blocks the block at a height accepted.
+	BatchIDsAt(ctx context.Context, height int64) (map[uuid.UUID]bool, error)
+}
+
+// BatchIDsAt implements commitReader: the batch id each accepted validator block's entry is written under.
+func (s *rpcCommittedBlockSource) BatchIDsAt(ctx context.Context, height int64) (map[uuid.UUID]bool, error) {
+	blk, err := s.CommittedValidatorBlocks(ctx, height)
+	if err != nil {
+		return nil, err
+	}
+	out := map[uuid.UUID]bool{}
+	for _, vb := range blk.blocks {
+		out[consensusBatchID(vb.BundleID)] = true
+	}
+	return out, nil
 }
 
 // BlockTime is the committed block's header time.
@@ -38,7 +55,8 @@ func (s *rpcCommittedBlockSource) BlockTime(ctx context.Context, height int64) (
 // ConsensusRecordsRepairReport says what a run found and did (or, without Apply, would do).
 type ConsensusRecordsRepairReport struct {
 	Entries               int      `json:"entries"`
-	Corrected             int      `json:"corrected"`
+	Corrected             int      `json:"corrected_from_commit"`
+	EarlierIncarnation    int      `json:"restated_as_earlier_incarnation"`
 	AttestationsWithdrawn int64    `json:"attestations_withdrawn"`
 	Unavailable           []string `json:"heights_not_in_block_store"`
 	Refused               []string `json:"refused"`
@@ -65,7 +83,33 @@ func RepairConsensusRecords(ctx context.Context, repair *database.EvidenceRepair
 			report.Refused = append(report.Refused, label+": the entry names no height")
 			continue
 		}
-		q, err := commits.CommitQuorum(ctx, e.Height)
+		// The block at this height must be the entry's: the chain has restarted, and an earlier incarnation's
+		// height is a different block now. Its commit is not this entry's.
+		batches, err := commits.BatchIDsAt(ctx, e.Height)
+		if err == nil && !batches[e.BatchID] {
+			facts := database.EarlierIncarnationFacts{Height: e.Height, BlockTime: e.StartTime, BundlesAtThat: len(batches),
+				Basis:  fmt.Sprintf("the block at height %d in this node's block store holds %d other validator block(s), not this entry's bundle", e.Height, len(batches)),
+				ReadAt: time.Now().UTC().Format(time.RFC3339Nano)}
+			if !apply {
+				report.EarlierIncarnation++
+				continue
+			}
+			n, cerr := repair.CorrectConsensusEntryFromEarlierIncarnation(ctx, e, facts, by)
+			switch {
+			case errors.Is(cerr, database.ErrEvidenceChanged):
+				report.Changed = append(report.Changed, label)
+			case cerr != nil:
+				return report, cerr
+			default:
+				report.EarlierIncarnation++
+				report.AttestationsWithdrawn += n
+			}
+			continue
+		}
+		var q *commitQuorum
+		if err == nil {
+			q, err = commits.CommitQuorum(ctx, e.Height)
+		}
 		if err == nil {
 			var t time.Time
 			t, err = commits.BlockTime(ctx, e.Height)

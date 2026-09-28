@@ -19,6 +19,19 @@ type fakeCommitReader struct {
 	quorum      map[int64]*commitQuorum
 	times       map[int64]time.Time
 	unavailable map[int64]bool
+	batches     map[int64]map[uuid.UUID]bool
+}
+
+func (f *fakeCommitReader) BatchIDsAt(_ context.Context, h int64) (map[uuid.UUID]bool, error) {
+	if f.unavailable[h] {
+		return nil, errCommittedBlockUnavailable
+	}
+	b, ok := f.batches[h]
+	if !ok {
+		// A height this fake does not hold: another suite's row in the shared test database, left alone.
+		return nil, errors.New("height not in this fake block store")
+	}
+	return b, nil
 }
 
 func (f *fakeCommitReader) CommitQuorum(_ context.Context, h int64) (*commitQuorum, error) {
@@ -82,7 +95,8 @@ func TestConsensusRecordsAreRestatedFromTheirCommit(t *testing.T) {
 
 	blockTime := time.Unix(1_790_000_000, 0).UTC()
 	commits := &fakeCommitReader{quorum: map[int64]*commitQuorum{height: {Signers: 6, Validators: 7, SignedPower: 6, TotalPower: 7}},
-		times: map[int64]time.Time{height: blockTime}, unavailable: map[int64]bool{}}
+		times: map[int64]time.Time{height: blockTime}, unavailable: map[int64]bool{},
+		batches: map[int64]map[uuid.UUID]bool{height: {batch: true}}}
 	repair := database.NewEvidenceRepair(database.NewClientFromDB(db))
 
 	// Other tests' stale entries share the database; this one is judged by its own rows.
@@ -150,5 +164,46 @@ func TestAConsensusRecordWithoutItsCommitIsNotRestated(t *testing.T) {
 	_ = db.QueryRow(`SELECT state FROM consensus_entries WHERE entry_id = $1`, entry).Scan(&state)
 	if !found || state != "collecting" {
 		t.Fatalf("unavailable=%v state=%s; want it reported and unchanged", report.Unavailable, state)
+	}
+}
+
+// The chain has restarted, and heights began again at 1: an entry whose height now holds other blocks was
+// committed by an earlier incarnation. It is restated as committed at its own block time with its counts
+// unknown - never from the commit of the block that now has its height.
+func TestAnEarlierIncarnationsEntryIsNotRestatedFromAnotherBlocksCommit(t *testing.T) {
+	db := consensusRepairDB(t)
+	ctx := context.Background()
+	height := time.Now().UnixNano()%1_000_000_000 + 2
+	entry, batch := uuid.New(), uuid.New()
+	blockTime := time.Unix(1_770_000_000, 0).UTC()
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO consensus_entries (entry_id, batch_id, merkle_root, block_number, tx_count, state, attestation_count,
+		                               required_count, quorum_fraction, aggregate_signature, start_time, last_update, result_json)
+		VALUES ($1, $2, 'ª', $3, 1, 'quorum_met', 1, 5, 0.1429, '»bb', $4, NOW(), '{}')`, entry, batch, height, blockTime); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		bg := context.Background()
+		_, _ = db.ExecContext(bg, `DELETE FROM evidence_corrections WHERE record_id IN ($1, $2)`, entry.String(), batch.String())
+		_, _ = db.ExecContext(bg, `DELETE FROM consensus_entries WHERE entry_id = $1`, entry)
+	})
+	commits := &fakeCommitReader{
+		quorum:  map[int64]*commitQuorum{height: {Signers: 7, Validators: 7, SignedPower: 7, TotalPower: 7}},
+		times:   map[int64]time.Time{height: time.Unix(1_790_000_000, 0).UTC()},
+		batches: map[int64]map[uuid.UUID]bool{height: {uuid.New(): true}}, // another block's
+	}
+	if _, err := RepairConsensusRecords(ctx, database.NewEvidenceRepair(database.NewClientFromDB(db)), commits, "validator-test", true); err != nil {
+		t.Fatal(err)
+	}
+	var state string
+	var signers sql.NullInt64
+	var completed time.Time
+	var result string
+	if err := db.QueryRow(`SELECT state, attestation_count, completed_at, result_json::text FROM consensus_entries WHERE entry_id = $1`, entry).
+		Scan(&state, &signers, &completed, &result); err != nil {
+		t.Fatal(err)
+	}
+	if state != "completed" || signers.Valid || !completed.Equal(blockTime) || !strings.Contains(result, "commit_unavailable") {
+		t.Fatalf("state=%s signers=%v completed=%v result=%s; want completed at its own block time, counts unknown", state, signers, completed, result)
 	}
 }
