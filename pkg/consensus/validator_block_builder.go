@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/certen/independant-validator/pkg/commitment"
+	"github.com/ethereum/go-ethereum/common"
 )
 
 // ValidatorBlockBuilder constructs ValidatorBlock from CertenIntent and validator context
@@ -97,21 +98,17 @@ func (builder *ValidatorBlockBuilder) BuildFromIntent(inputs BuilderInputs) (*Va
 			return nil, fmt.Errorf("compute leg commitment for leg %d: %w", i, err)
 		}
 
-		// Encode call data for this leg
-		encodedCallData, err := builder.encodeAnchorCallData(leg, legCommitment, expiryString)
+		// What will execute for this leg: its chain's anchor, called with createBatchAnchor - the leg's
+		// declaration, which admission has already held to the chain's live anchor (declared_anchor.go).
+		// No call data: the batch anchor's carries the batch root, which does not exist until the batch
+		// closes; it was made up here from sha256 (RB4-F9).
+		target, err := legChainTarget(leg)
 		if err != nil {
-			return nil, fmt.Errorf("encode call data for leg %d: %w", i, err)
+			return nil, fmt.Errorf("leg %d: %w", i, err)
 		}
-
-		chainTargets[i] = ChainTarget{
-			Chain:            leg.Chain,
-			ChainID:          leg.ChainID,
-			ContractAddress:  resolveAnchorIdentifier(leg),
-			FunctionSelector: leg.AnchorContract.FunctionSelector,
-			EncodedCallData:  encodedCallData,
-			Commitment:       legCommitment,
-			Expiry:           expiryString,
-		}
+		target.Commitment = legCommitment
+		target.Expiry = expiryString
+		chainTargets[i] = target
 
 		commitments[i] = legCommitment
 	}
@@ -298,65 +295,24 @@ func (builder *ValidatorBlockBuilder) parseIntentBlobs(intent *CertenIntent) (*I
 	return &intentData, &crossChainData, &govData, &replayData, nil
 }
 
-// buildChainTargets builds ChainTarget array from cross-chain legs
-func (builder *ValidatorBlockBuilder) buildChainTargets(crossChainData *CrossChainEnvelope, expiryString string) ([]ChainTarget, error) {
-	targets := make([]ChainTarget, len(crossChainData.Legs))
-
-	for i, leg := range crossChainData.Legs {
-		// Compute per-leg commitment - convert CCLeg to map for commitment function
-		legData, err := json.Marshal(leg)
-		if err != nil {
-			return nil, fmt.Errorf("marshal leg %d: %w", i, err)
-		}
-		var legMap map[string]interface{}
-		if err := json.Unmarshal(legData, &legMap); err != nil {
-			return nil, fmt.Errorf("unmarshal leg %d to map: %w", i, err)
-		}
-		legCommitment, err := commitment.ComputeLegCommitment(legMap)
-		if err != nil {
-			return nil, fmt.Errorf("compute commitment for leg %d: %w", i, err)
-		}
-
-		// ABI-encode the call data for the anchor contract
-		encodedCallData, err := builder.encodeAnchorCallData(leg, legCommitment, expiryString)
-		if err != nil {
-			return nil, fmt.Errorf("ABI encode call data for leg %d: %w", i, err)
-		}
-
-		targets[i] = ChainTarget{
-			Chain:            leg.Chain,
-			ChainID:          leg.ChainID,
-			ContractAddress:  resolveAnchorIdentifier(leg),
-			FunctionSelector: leg.AnchorContract.FunctionSelector,
-			EncodedCallData:  encodedCallData,
-			Commitment:       legCommitment,
-			Expiry:           expiryString,
-		}
+// legChainTarget is the call a leg's chain will execute: the anchor the leg declares (an EVM address;
+// its type string was put here when it had none, "so invariant doesn't fail") with the selector of the
+// call it declares.
+func legChainTarget(leg CCLeg) (ChainTarget, error) {
+	addr := strings.TrimSpace(leg.AnchorContract.Address)
+	if !common.IsHexAddress(addr) {
+		return ChainTarget{}, fmt.Errorf("chain %d: the leg declares no anchor address (%q)", leg.ChainID, addr)
 	}
-
-	return targets, nil
-}
-
-// resolveAnchorIdentifier returns the anchor/program/contract identifier for a leg,
-// checking chain-specific fields when the EVM Address field is empty.
-func resolveAnchorIdentifier(leg CCLeg) string {
-	if leg.AnchorContract.Address != "" {
-		return leg.AnchorContract.Address
+	sel, err := DeclaredSelector(leg.AnchorContract.FunctionSelector)
+	if err != nil {
+		return ChainTarget{}, fmt.Errorf("chain %d: %w", leg.ChainID, err)
 	}
-	if leg.AnchorContract.ProgramID != "" {
-		return leg.AnchorContract.ProgramID
-	}
-	if leg.AnchorContract.ContractID != "" {
-		return leg.AnchorContract.ContractID
-	}
-	if leg.AnchorContract.ModuleAddress != "" {
-		return leg.AnchorContract.ModuleAddress
-	}
-	// Fallback: use the type field as a placeholder so invariant doesn't fail
-	if leg.AnchorContract.Type != "" {
-		return leg.AnchorContract.Type
-	}
-	return ""
+	return ChainTarget{
+		Chain:            leg.Chain,
+		ChainID:          leg.ChainID,
+		ContractAddress:  common.HexToAddress(addr).Hex(),
+		FunctionSelector: "0x" + hex.EncodeToString(sel[:]),
+	}, nil
 }
 
 // buildMerkleBranches constructs Merkle branches for authorization leaves
@@ -386,45 +342,4 @@ func (builder *ValidatorBlockBuilder) buildMerkleBranches(leaves []Authorization
 	}
 
 	return branches
-}
-
-// encodeAnchorCallData ABI-encodes the call data for Ethereum anchor contracts
-func (builder *ValidatorBlockBuilder) encodeAnchorCallData(leg CCLeg, commitment, expiry string) (string, error) {
-	// TODO: Replace with true Ethereum ABI encoding using keccak256 selector
-	// and uint256 expiry. This simplified encoding is ONLY OK for dev/test.
-	// Simplified ABI encoding for anchor function call
-	// Typically this would be: anchorCommitment(bytes32 commitment, uint256 expiry, bytes calldata proof)
-
-	// Convert hex commitment to bytes32
-	commitmentBytes, err := hex.DecodeString(strings.TrimPrefix(commitment, "0x"))
-	if err != nil {
-		return "", fmt.Errorf("invalid commitment hex: %w", err)
-	}
-
-	// Pad to 32 bytes if needed
-	if len(commitmentBytes) < 32 {
-		padded := make([]byte, 32)
-		copy(padded[32-len(commitmentBytes):], commitmentBytes)
-		commitmentBytes = padded
-	}
-
-	// Create minimal ABI-encoded call data
-	// Function selector (first 4 bytes of keccak256("anchorCommitment(bytes32,uint256,bytes)"))
-	functionSelector := leg.AnchorContract.FunctionSelector
-	if functionSelector == "" {
-		// Default anchor commitment function selector
-		hash := sha256.Sum256([]byte("anchorCommitment(bytes32,uint256,bytes)"))
-		functionSelector = hex.EncodeToString(hash[:4])
-	}
-
-	// Simple encoding: selector + commitment (32 bytes) + expiry timestamp
-	// This is a simplified implementation - real ABI encoding would be more complex
-	callData := functionSelector
-	callData += hex.EncodeToString(commitmentBytes)
-
-	// Add expiry as uint256 (32 bytes, simplified)
-	expiryHash := sha256.Sum256([]byte(expiry))
-	callData += hex.EncodeToString(expiryHash[:])
-
-	return "0x" + callData, nil
 }
