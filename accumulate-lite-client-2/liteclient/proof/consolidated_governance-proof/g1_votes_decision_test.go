@@ -27,7 +27,8 @@ func TestVotes_ARotationAfterThePageVotedDoesNotReopenIt(t *testing.T) {
 		vPage{version: 1, accept: 1, keys: []string{"a"}},
 		vPage{version: 2, accept: 2, keys: []string{"a", "b"}})}
 	// a decides at v1, block 10. The page is rotated at 60 and b signs the executed transaction at v2, block 70.
-	av, err := account(t, tls, voteFacts{Sigs: []sigFact{sig(pPage, "a", 1, 10), sig(pPage, "b", 2, 70)}}, pBook)
+	av, err := account(t, tls, voteFacts{Sigs: []sigFact{sig(pPage, "a", 1, 10), sig(pPage, "b", 2, 70)},
+		Votes: []recordedVote{recorded(pBook, pPage, 10)}}, pBook)
 	requireSatisfied(t, av, err, true)
 	pv := av.Authorities[0].Vote.Pages[0]
 	if pv.Version != 1 || pv.DecidedAt != 10 {
@@ -39,7 +40,8 @@ func TestVotes_ARotationAfterThePageVotedDoesNotReopenIt(t *testing.T) {
 func TestVotes_ASignatureAfterThePageVotedIsNotCounted(t *testing.T) {
 	tls := memTimelines{normalizeAccURL(pPage): timeline(t, pPage, []int64{1},
 		vPage{version: 1, accept: 1, keys: []string{"a", "b"}})}
-	av, err := account(t, tls, voteFacts{Sigs: []sigFact{sig(pPage, "b", 1, 70), sig(pPage, "a", 1, 10)}}, pBook)
+	av, err := account(t, tls, voteFacts{Sigs: []sigFact{sig(pPage, "b", 1, 70), sig(pPage, "a", 1, 10)},
+		Votes: []recordedVote{recorded(pBook, pPage, 10)}}, pBook)
 	requireSatisfied(t, av, err, true)
 	pv := av.Authorities[0].Vote.Pages[0]
 	if len(pv.Counted) != 1 || pv.Counted[0].Entry != "key:"+kh("a") || pv.Counted[0].Block != 10 {
@@ -61,7 +63,8 @@ func TestVotes_AnArrivalAfterThePageVotedIsNotCounted(t *testing.T) {
 	}
 	facts := voteFacts{
 		Sigs:     []sigFact{sig(pPage, "a", 1, 10), sig(dPage, "d", 1, 500, pPage)},
-		Arrivals: []arrivalFact{arrival(pPage, dBook, 80)},
+		Arrivals: []arrivalFact{from(arrival(pPage, dBook, 80), dPage)},
+		Votes:    []recordedVote{recorded(pBook, pPage, 10)},
 	}
 	av, err := account(t, tls, facts, pBook)
 	requireSatisfied(t, av, err, true)
@@ -78,8 +81,9 @@ func TestVotes_TheRecordDoesNotDependOnReadOrder(t *testing.T) {
 		vPage{version: 1, accept: 2, keys: []string{"a", "b", "c"}})}
 	one := []sigFact{sig(pPage, "a", 1, 10), sig(pPage, "b", 1, 12), sig(pPage, "c", 1, 90)}
 	two := []sigFact{one[2], one[0], one[1]}
-	a1, err1 := account(t, tls, voteFacts{Sigs: one}, pBook)
-	a2, err2 := account(t, tls, voteFacts{Sigs: two}, pBook)
+	rec := []recordedVote{recorded(pBook, pPage, 12)}
+	a1, err1 := account(t, tls, voteFacts{Sigs: one, Votes: rec}, pBook)
+	a2, err2 := account(t, tls, voteFacts{Sigs: two, Votes: rec}, pBook)
 	requireSatisfied(t, a1, err1, true)
 	requireSatisfied(t, a2, err2, true)
 	j1, _ := json.Marshal(a1)
@@ -96,7 +100,8 @@ func TestVotes_TheRecordDoesNotDependOnReadOrder(t *testing.T) {
 func TestVotes_ThePageRecordsEveryThreshold(t *testing.T) {
 	tls := memTimelines{normalizeAccURL(pPage): timeline(t, pPage, []int64{1},
 		vPage{version: 1, accept: 2, reject: 3, response: 2, keys: []string{"a", "b", "c"}})}
-	av, err := account(t, tls, voteFacts{Sigs: []sigFact{sig(pPage, "a", 1, 10), sig(pPage, "b", 1, 11)}}, pBook)
+	av, err := account(t, tls, voteFacts{Sigs: []sigFact{sig(pPage, "a", 1, 10), sig(pPage, "b", 1, 11)},
+		Votes: []recordedVote{recorded(pBook, pPage, 11)}}, pBook)
 	requireSatisfied(t, av, err, true)
 	pv := av.Authorities[0].Vote.Pages[0]
 	if pv.Threshold != 2 || pv.RejectThreshold != 3 || pv.ResponseThreshold != 2 {

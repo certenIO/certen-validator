@@ -90,6 +90,19 @@ type arrivalFact struct {
 	Authority string   // the delegate book that voted, normalised
 	Path      []string // delegators beyond Page, outermost first
 	Block     int64    // on Page's partition
+	// Origin is the delegate's page that cast the vote, and Vote the vote, as the network recorded them.
+	Origin string
+	Vote   protocol.VoteType
+}
+
+// recordedVote is one authority's vote on the transaction as the network recorded it on the principal: the
+// authority signature core produced when the book voted, naming the page that cast it.
+type recordedVote struct {
+	ID        string
+	Authority string // the book, normalised
+	Origin    string // the page that cast the book's vote, normalised
+	Vote      protocol.VoteType
+	Block     int64 // on the principal's partition
 }
 
 // voteFacts is what the model reads.
@@ -97,6 +110,8 @@ type voteFacts struct {
 	TxType   protocol.TransactionType
 	Sigs     []sigFact
 	Arrivals []arrivalFact
+	// Votes are the authorities' votes recorded on the principal.
+	Votes []recordedVote
 }
 
 // timelineSource supplies page timelines (authority_history.go).
@@ -187,6 +202,14 @@ type contribution struct {
 }
 
 // bookVote returns a book's vote on a delegation path.
+//
+// A book votes with whichever of its pages decides first: core asks each page, in order, at the moment a signature
+// is processed (AuthorityWillVote), and records the page that answered as the origin of the authority signature it
+// produces - on the principal for the account's own authorities, on the delegator page for a delegate. So the page
+// is not chosen here. It is the one the network names, and it is checked: replaying that page must reach the recorded
+// vote, and no page of the book may have decided in an earlier block, or the replay and the network disagree and
+// the vote is not evaluated. A book the network records no vote for did not vote; if the replay finds that one of
+// its pages did, that too is a disagreement (RB4-F67).
 func (m *voteModel) bookVote(ctx context.Context, book string, path []string, depth int) (*BookVote, error) {
 	book = normalizeAccURL(book)
 	key := book + "|" + strings.Join(path, ",")
@@ -213,20 +236,144 @@ func (m *voteModel) bookVote(ctx context.Context, book string, path []string, de
 	}
 	sort.Slice(pages, func(i, j int) bool { return pageIndex(pages[i]) < pageIndex(pages[j]) })
 
+	rec, err := m.recordedBookVote(book, path)
+	if err != nil {
+		return nil, err
+	}
 	bv := &BookVote{Book: book}
+
+	if rec == nil {
+		// No vote recorded: the book did not vote. Every page with records is evaluated so the evidence says what
+		// each recorded, and none of them may have decided.
+		for _, p := range pages {
+			pv, err := m.pageVote(ctx, p, path, depth)
+			if err != nil {
+				return nil, err
+			}
+			if pv.Voted {
+				return nil, &VoteUnevaluable{Page: p, Reason: fmt.Sprintf(
+					"its signatures decide %s's vote (%s at block %d), but the network records no vote by %s",
+					book, pv.Vote, pv.DecidedAt, book)}
+			}
+			bv.Pages = append(bv.Pages, *pv)
+		}
+		m.books[key] = bv
+		return bv, nil
+	}
+
+	if bookOfPage(rec.origin) != book {
+		return nil, &VoteUnevaluable{Page: rec.origin, Reason: fmt.Sprintf(
+			"the network records %s's vote as cast by %s, which is not one of its pages", book, rec.origin)}
+	}
+	pv, err := m.pageVote(ctx, rec.origin, path, depth)
+	if err != nil {
+		return nil, err
+	}
+	if !pv.Voted || pv.vote != rec.vote {
+		got := "no vote"
+		if pv.Voted {
+			got = pv.Vote
+		}
+		return nil, &VoteUnevaluable{Page: rec.origin, Reason: fmt.Sprintf(
+			"the network records %s's vote as %s cast by this page (%s), but replaying its signatures reaches %s",
+			book, rec.vote, rec.id, got)}
+	}
 	for _, p := range pages {
-		pv, err := m.pageVote(ctx, p, path, depth)
+		if p == rec.origin {
+			continue
+		}
+		earlier, at, err := m.pageDecidedBefore(ctx, p, path, depth, pv.DecidedAt)
 		if err != nil {
 			return nil, err
 		}
-		bv.Pages = append(bv.Pages, *pv)
-		if pv.Voted {
-			bv.Voted, bv.Vote, bv.By, bv.vote = true, pv.Vote, p, pv.vote
-			break
+		if earlier {
+			return nil, &VoteUnevaluable{Page: p, Reason: fmt.Sprintf(
+				"its signatures decide %s's vote at block %d, before %s decided it at block %d, yet the network "+
+					"records %s as the page that cast it", book, at, rec.origin, pv.DecidedAt, rec.origin)}
 		}
 	}
+	bv.Pages = append(bv.Pages, *pv)
+	bv.Voted, bv.Vote, bv.By, bv.vote = true, pv.Vote, rec.origin, pv.vote
 	m.books[key] = bv
 	return bv, nil
+}
+
+// bookRecord is the network's record of a book's vote on one path.
+type bookRecord struct {
+	id     string
+	origin string
+	vote   protocol.VoteType
+}
+
+// recordedBookVote is the vote the network recorded for book on path: for the account's own authorities (an empty
+// path) the authority signature on the principal, for a delegate the delegated vote recorded on the page it was
+// delegated from. More than one record naming different pages or votes is not a record of one vote.
+func (m *voteModel) recordedBookVote(book string, path []string) (*bookRecord, error) {
+	var recs []bookRecord
+	if len(path) == 0 {
+		for _, v := range m.facts.Votes {
+			if normalizeAccURL(v.Authority) == book {
+				recs = append(recs, bookRecord{id: v.ID, origin: normalizeAccURL(v.Origin), vote: v.Vote})
+			}
+		}
+	} else {
+		at, beyond := path[len(path)-1], path[:len(path)-1]
+		for _, a := range m.facts.Arrivals {
+			if normalizeAccURL(a.Authority) == book && a.Page == at && pathEqual(a.Path, beyond) {
+				if a.Origin == "" {
+					return nil, &VoteUnevaluable{Page: at, Reason: fmt.Sprintf(
+						"the delegated vote %s by %s names no originating page", short(a.ID), book)}
+				}
+				recs = append(recs, bookRecord{id: a.ID, origin: normalizeAccURL(a.Origin), vote: a.Vote})
+			}
+		}
+	}
+	if len(recs) == 0 {
+		return nil, nil
+	}
+	for _, r := range recs[1:] {
+		if r.origin != recs[0].origin || r.vote != recs[0].vote {
+			return nil, &VoteUnevaluable{Page: book, Reason: fmt.Sprintf(
+				"the network records more than one vote by %s (%s from %s, %s from %s)",
+				book, short(recs[0].id), recs[0].origin, short(r.id), r.origin)}
+		}
+	}
+	return &recs[0], nil
+}
+
+// pageDecidedBefore reports whether page's records, on path, decide a vote in a block before b, and in which.
+func (m *voteModel) pageDecidedBefore(ctx context.Context, page string, path []string, depth int, b int64) (bool, int64, error) {
+	var direct []sigFact
+	for _, s := range m.facts.Sigs {
+		if s.Signer == page && pathEqual(s.Path, path) && s.Block < b {
+			direct = append(direct, s)
+		}
+	}
+	var arrived []arrivalFact
+	for _, a := range m.facts.Arrivals {
+		if a.Page == page && pathEqual(a.Path, path) && a.Block < b {
+			arrived = append(arrived, a)
+		}
+	}
+	if len(direct) == 0 && len(arrived) == 0 {
+		return false, 0, nil
+	}
+	tl, err := m.src.Timeline(ctx, page)
+	if err != nil {
+		return false, 0, &VoteUnevaluable{Page: page, Reason: fmt.Sprintf("its history could not be replayed: %v", err)}
+	}
+	eval := &pageEvaluation{m: m, page: page, path: path, depth: depth, tl: tl,
+		direct: direct, arrived: arrived, holding: map[string]int{}, cands: map[string]int{}}
+	for _, blk := range recordBlocks(direct, arrived) {
+		d, err := eval.decideThrough(ctx, blk)
+		if err != nil {
+			return false, 0, err
+		}
+		if d.voted {
+			return true, blk, nil
+		}
+	}
+	return false, 0, nil
 }
 
 // pageVote returns a page's vote on a delegation path.

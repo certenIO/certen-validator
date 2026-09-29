@@ -39,9 +39,10 @@ func oneKeyPages(t *testing.T, pages map[string]string) memTimelines {
 	return tls
 }
 
-func authVote(t *testing.T, tls memTimelines, sigs []sigFact, auths []AccountAuthority, extra []string, ignoreDisabled bool) (*AccountVote, error) {
+// authVote runs the model on sigs, with votes as the network recorded them on the principal.
+func authVote(t *testing.T, tls memTimelines, sigs []sigFact, votes []recordedVote, auths []AccountAuthority, extra []string, ignoreDisabled bool) (*AccountVote, error) {
 	t.Helper()
-	m := newVoteModel(voteFacts{TxType: protocol.TransactionTypeWriteData, Sigs: sigs}, tls)
+	m := newVoteModel(voteFacts{TxType: protocol.TransactionTypeWriteData, Sigs: sigs, Votes: votes}, tls)
 	return m.accountVote(context.Background(), alphaData, auths, extra, ignoreDisabled)
 }
 
@@ -50,10 +51,12 @@ func TestAuthVotes_AllAuthoritiesMustVote(t *testing.T) {
 	tls := oneKeyPages(t, map[string]string{alphaPage: "a1", betaPage: "b1"})
 	auths := []AccountAuthority{{URL: alphaBook}, {URL: betaBook}}
 
-	one, err := authVote(t, tls, []sigFact{sig(alphaPage, "a1", 1, 10)}, auths, nil, false)
+	one, err := authVote(t, tls, []sigFact{sig(alphaPage, "a1", 1, 10)},
+		[]recordedVote{recorded(alphaBook, alphaPage, 10)}, auths, nil, false)
 	requireSatisfied(t, one, err, false)
 
-	both, err := authVote(t, tls, []sigFact{sig(alphaPage, "a1", 1, 10), sig(betaPage, "b1", 1, 10)}, auths, nil, false)
+	both, err := authVote(t, tls, []sigFact{sig(alphaPage, "a1", 1, 10), sig(betaPage, "b1", 1, 10)},
+		[]recordedVote{recorded(alphaBook, alphaPage, 10), recorded(betaBook, betaPage, 10)}, auths, nil, false)
 	requireSatisfied(t, both, err, true)
 	if len(both.Authorities) != 2 {
 		t.Fatalf("evidence records %d authorities, expected 2", len(both.Authorities))
@@ -65,7 +68,7 @@ func TestAuthVotes_AllAuthoritiesMustVote(t *testing.T) {
 func TestAuthVotes_AnyPageSatisfiesTheBook(t *testing.T) {
 	tls := oneKeyPages(t, map[string]string{multiPage1: "m1", multiPage2: "m2"})
 	av, err := authVote(t, tls, []sigFact{sig(multiPage2, "m2", 1, 10)},
-		[]AccountAuthority{{URL: multiBook}}, nil, false)
+		[]recordedVote{recorded(multiBook, multiPage2, 10)}, []AccountAuthority{{URL: multiBook}}, nil, false)
 	requireSatisfied(t, av, err, true)
 	if by := av.Authorities[0].Vote.By; by != normalizeAccURL(multiPage2) {
 		t.Fatalf("the book voted by %q, expected page 2", by)
@@ -78,10 +81,11 @@ func TestAuthVotes_DisabledAuthorityIsSkipped(t *testing.T) {
 	tls := oneKeyPages(t, map[string]string{alphaPage: "a1", betaPage: "b1"})
 	auths := []AccountAuthority{{URL: alphaBook}, {URL: betaBook, Disabled: true}}
 	sigs := []sigFact{sig(alphaPage, "a1", 1, 10)}
+	votes := []recordedVote{recorded(alphaBook, alphaPage, 10)}
 
-	av, err := authVote(t, tls, sigs, auths, nil, false)
+	av, err := authVote(t, tls, sigs, votes, auths, nil, false)
 	requireSatisfied(t, av, err, true)
-	strict, err := authVote(t, tls, sigs, auths, nil, true)
+	strict, err := authVote(t, tls, sigs, votes, auths, nil, true)
 	requireSatisfied(t, strict, err, false)
 }
 
@@ -91,6 +95,7 @@ func TestAuthVotes_UnreadableAuthorityIsNotAFailure(t *testing.T) {
 	tls := oneKeyPages(t, map[string]string{alphaPage: "a1"})
 	gone := "acc://gone.acme/book/1"
 	_, err := authVote(t, tls, []sigFact{sig(alphaPage, "a1", 1, 10), sig(gone, "g1", 1, 10)},
+		[]recordedVote{recorded(alphaBook, alphaPage, 10), recorded("acc://gone.acme/book", gone, 10)},
 		[]AccountAuthority{{URL: alphaBook}, {URL: "acc://gone.acme/book"}}, nil, false)
 	requireUnevaluable(t, err)
 }
@@ -108,9 +113,11 @@ func TestAuthVotes_DerivedExtrasAreRequired(t *testing.T) {
 	tls := oneKeyPages(t, map[string]string{alphaPage: "a1", extraPage: "e1"})
 	auths := []AccountAuthority{{URL: alphaBook}}
 
-	only, err := authVote(t, tls, []sigFact{sig(alphaPage, "a1", 1, 10)}, auths, derived.URLs, derived.IgnoreDisabled)
+	only, err := authVote(t, tls, []sigFact{sig(alphaPage, "a1", 1, 10)},
+		[]recordedVote{recorded(alphaBook, alphaPage, 10)}, auths, derived.URLs, derived.IgnoreDisabled)
 	requireSatisfied(t, only, err, false)
 	both, err := authVote(t, tls, []sigFact{sig(alphaPage, "a1", 1, 10), sig(extraPage, "e1", 1, 10)},
+		[]recordedVote{recorded(alphaBook, alphaPage, 10), recorded(extraBook, extraPage, 10)},
 		auths, derived.URLs, derived.IgnoreDisabled)
 	requireSatisfied(t, both, err, true)
 }
