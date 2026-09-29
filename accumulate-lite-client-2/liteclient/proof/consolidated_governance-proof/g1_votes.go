@@ -117,12 +117,18 @@ func (e *VoteUnevaluable) Error() string {
 
 // PageVote is one page's vote on one delegation path, with its evidence.
 type PageVote struct {
-	Page      string            `json:"page"`
-	Path      []string          `json:"path,omitempty"`
-	Voted     bool              `json:"voted"`
-	Vote      string            `json:"vote,omitempty"`
-	Version   uint64            `json:"version,omitempty"`
-	Threshold uint64            `json:"threshold,omitempty"`
+	Page      string   `json:"page"`
+	Path      []string `json:"path,omitempty"`
+	Voted     bool     `json:"voted"`
+	Vote      string   `json:"vote,omitempty"`
+	Version   uint64   `json:"version,omitempty"`
+	Threshold uint64   `json:"threshold,omitempty"`
+	// RejectThreshold and ResponseThreshold decide the vote as much as Threshold (the accept threshold) does.
+	RejectThreshold   uint64 `json:"rejectThreshold,omitempty"`
+	ResponseThreshold uint64 `json:"responseThreshold,omitempty"`
+	// DecidedAt is the block, on the page's own partition, in which its signature set first reached the vote -
+	// the moment Accumulate's page voted. Records after it are not part of the decision (RB4-F67).
+	DecidedAt int64             `json:"decidedAt,omitempty"`
 	Counted   []CountedEntry    `json:"counted,omitempty"`
 	Excluded  []ExcludedMessage `json:"excluded,omitempty"`
 
@@ -138,6 +144,8 @@ type CountedEntry struct {
 	Entry string `json:"entry"`
 	Vote  string `json:"vote"`
 	By    string `json:"by"`
+	// Block is where the counted message was recorded, on the page's partition.
+	Block int64 `json:"block"`
 }
 
 // ExcludedMessage is a recorded signature or vote that did not count, and why.
@@ -256,9 +264,117 @@ func (m *voteModel) pageVote(ctx context.Context, page string, path []string, de
 		return nil, &VoteUnevaluable{Page: page, Reason: fmt.Sprintf("its history could not be replayed: %v", err)}
 	}
 
-	// The version the page's signature set stood at. A signature at a newer
-	// version replaces the set, so the newest version recorded is the one that
-	// voted, and anything recorded at an older one was discarded.
+	// The page votes the way Accumulate's page does: at the first block in which its active signature set reaches a
+	// decision (SignerWillVote), the set being replaced whenever an entry at a newer version arrives (addSignature).
+	// So the records are walked in block order and the vote is decided on each prefix. What was recorded after the
+	// deciding block is not part of the decision: Accumulate records signatures on a transaction that has already
+	// executed, and on another partition nothing else filters them (RB4-F67).
+	eval := &pageEvaluation{m: m, page: page, path: path, depth: depth, tl: tl,
+		direct: direct, arrived: arrived, holding: map[string]int{}, cands: map[string]int{}}
+	var d *pageDecision
+	for _, b := range recordBlocks(direct, arrived) {
+		d, err = eval.decideThrough(ctx, b)
+		if err != nil {
+			return nil, err
+		}
+		if d.voted {
+			break
+		}
+	}
+
+	pv.Version = d.version
+	pv.Threshold = acceptThreshold(d.state)
+	pv.RejectThreshold = d.state.RejectThreshold
+	pv.ResponseThreshold = d.state.ResponseThreshold
+	pv.Excluded = append(pv.Excluded, d.excluded...)
+	for _, c := range sortedEntries(d.counted) {
+		pv.Counted = append(pv.Counted, CountedEntry{Entry: c.entry, Vote: c.vote.String(), By: c.by, Block: c.block})
+	}
+	pv.Delegates = d.delegates
+	if d.voted {
+		pv.Voted, pv.Vote, pv.vote, pv.DecidedAt = true, d.vote.String(), d.vote, d.through
+		after := func(id string, block int64) {
+			pv.Excluded = append(pv.Excluded, ExcludedMessage{By: id, Reason: fmt.Sprintf(
+				"recorded at block %d, after the page's vote was decided at block %d; not part of the decision",
+				block, d.through)})
+		}
+		for _, s := range direct {
+			if s.Block > d.through {
+				after(s.ID, s.Block)
+			}
+		}
+		for _, a := range arrived {
+			if a.Block > d.through {
+				after(a.ID, a.Block)
+			}
+		}
+	}
+	m.pages[key] = pv
+	return pv, nil
+}
+
+// recordBlocks is every block a page's records were recorded in, ascending.
+func recordBlocks(direct []sigFact, arrived []arrivalFact) []int64 {
+	seen := map[int64]bool{}
+	for _, s := range direct {
+		seen[s.Block] = true
+	}
+	for _, a := range arrived {
+		seen[a.Block] = true
+	}
+	out := make([]int64, 0, len(seen))
+	for b := range seen {
+		out = append(out, b)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+// pageEvaluation is one page's records on one delegation path, decided prefix by prefix.
+type pageEvaluation struct {
+	m       *voteModel
+	page    string
+	path    []string
+	depth   int
+	tl      *pageTimeline
+	direct  []sigFact
+	arrived []arrivalFact
+	// holding and cands cache, per record and version, how many states of the page during the record's block held
+	// its entry, and how many states at that version there were.
+	holding map[string]int
+	cands   map[string]int
+}
+
+// pageDecision is the page's signature set through one block, and what it decided.
+type pageDecision struct {
+	through   int64
+	version   uint64
+	state     *protocol.KeyPage
+	counted   map[string]contribution
+	excluded  []ExcludedMessage
+	delegates []BookVote
+	voted     bool
+	vote      protocol.VoteType
+}
+
+// decideThrough decides the page's vote on the records up to and including block b.
+func (e *pageEvaluation) decideThrough(ctx context.Context, b int64) (*pageDecision, error) {
+	page, tl := e.page, e.tl
+	var direct []sigFact
+	for _, s := range e.direct {
+		if s.Block <= b {
+			direct = append(direct, s)
+		}
+	}
+	var arrived []arrivalFact
+	for _, a := range e.arrived {
+		if a.Block <= b {
+			arrived = append(arrived, a)
+		}
+	}
+
+	// The version the page's signature set stood at. A signature at a newer version replaces the set, so the newest
+	// version recorded so far is the one the set held, and anything recorded at an older one was discarded.
 	var v uint64
 	for _, s := range direct {
 		if s.Version > v {
@@ -289,76 +405,40 @@ func (m *voteModel) pageVote(ctx context.Context, page string, path []string, de
 		return nil, &VoteUnevaluable{Page: page, Reason: fmt.Sprintf(
 			"the chain records messages at version %d, a version its replayed history never reached", v)}
 	}
-	pv.Version = v
+	d := &pageDecision{through: b, version: v, state: state}
 
 	var contribs []contribution
 	for _, s := range direct {
 		if s.Version < v {
-			pv.Excluded = append(pv.Excluded, ExcludedMessage{By: s.ID, Reason: fmt.Sprintf(
+			d.excluded = append(d.excluded, ExcludedMessage{By: s.ID, Reason: fmt.Sprintf(
 				"made at version %d; a signature at version %d replaced the page's signature set", s.Version, v)})
 			continue
 		}
-		cands := ofVersion(tl.CandidatesDuring(s.Block), v)
-		if len(cands) == 0 {
-			return nil, &VoteUnevaluable{Page: page, Reason: fmt.Sprintf(
-				"signature %s is recorded at block %d at version %d, which the page did not hold during that block",
-				short(s.ID), s.Block, v)}
-		}
-		kh, err := decodeHash(s.KeyHash)
+		holding, cands, err := e.keyHolding(s, v)
 		if err != nil {
-			return nil, &VoteUnevaluable{Page: page, Reason: fmt.Sprintf("signature %s: %v", short(s.ID), err)}
-		}
-		holding := 0
-		for _, c := range cands {
-			if blacklisted(c, m.facts.TxType) {
-				continue
-			}
-			if _, _, ok := c.EntryByKeyHash(kh); ok {
-				holding++
-			}
-		}
-		if holding == 0 {
-			return nil, &VoteUnevaluable{Page: page, Reason: fmt.Sprintf(
-				"signature %s is recorded, but no state of the page at version %d during block %d both holds "+
-					"its key and allows a %v - the network accepted what the replay cannot",
-				short(s.ID), v, s.Block, m.facts.TxType)}
+			return nil, err
 		}
 		contribs = append(contribs, contribution{
 			entry: "key:" + strings.ToLower(s.KeyHash), vote: s.Vote, by: s.ID, block: s.Block,
-			ambiguous: holding < len(cands),
+			ambiguous: holding < cands,
 		})
 	}
 
 	for i, a := range arrived {
 		if !arrivalVersions[i][v] {
-			pv.Excluded = append(pv.Excluded, ExcludedMessage{By: a.ID, Reason: fmt.Sprintf(
+			d.excluded = append(d.excluded, ExcludedMessage{By: a.ID, Reason: fmt.Sprintf(
 				"recorded while the page was not at version %d; a newer signature set replaced it", v)})
 			continue
 		}
-		authority, err := url.Parse(a.Authority)
+		holding, cands, err := e.delegateHolding(a, v)
 		if err != nil {
-			return nil, &VoteUnevaluable{Page: page, Reason: fmt.Sprintf("delegated vote %s names %q", short(a.ID), a.Authority)}
-		}
-		holding := 0
-		cands := ofVersion(tl.CandidatesDuring(a.Block), v)
-		for _, c := range cands {
-			if blacklisted(c, m.facts.TxType) {
-				continue
-			}
-			if _, _, ok := c.EntryByDelegate(authority); ok {
-				holding++
-			}
-		}
-		if holding == 0 {
-			return nil, &VoteUnevaluable{Page: page, Reason: fmt.Sprintf(
-				"the delegated vote of %s is recorded at block %d, but the page at version %d then carries no "+
-					"entry delegating to it", a.Authority, a.Block, v)}
+			return nil, err
 		}
 
 		// The delegate's vote, recomputed from its own signatures rather than
 		// taken from the record that it was cast.
-		inner := append(append([]string{}, path...), page)
-		dv, err := m.bookVote(ctx, a.Authority, inner, depth+1)
+		inner := append(append([]string{}, e.path...), page)
+		dv, err := e.m.bookVote(ctx, a.Authority, inner, e.depth+1)
 		if err != nil {
 			return nil, err
 		}
@@ -368,9 +448,9 @@ func (m *voteModel) pageVote(ctx context.Context, page string, path []string, de
 		}
 		contribs = append(contribs, contribution{
 			entry: "delegate:" + normalizeAccURL(a.Authority), vote: dv.vote, by: a.ID, block: a.Block,
-			ambiguous: holding < len(cands),
+			ambiguous: holding < cands,
 		})
-		pv.Delegates = append(pv.Delegates, *dv)
+		d.delegates = append(d.delegates, *dv)
 	}
 
 	// Decide with every ambiguous contribution counted and with none. If the
@@ -384,16 +464,74 @@ func (m *voteModel) pageVote(ctx context.Context, page string, path []string, de
 		return nil, &VoteUnevaluable{Page: page, Reason: "within one block the page held states that " +
 			"decide its vote differently, and which one each message saw is not recorded"}
 	}
+	d.counted = all
+	d.voted, d.vote = votedAll, withAll
+	return d, nil
+}
 
-	pv.Threshold = acceptThreshold(state)
-	for _, c := range sortedEntries(all) {
-		pv.Counted = append(pv.Counted, CountedEntry{Entry: c.entry, Vote: c.vote.String(), By: c.by})
+// keyHolding is how many states of the page at version v during s's block held s's key and allowed the transaction,
+// and how many states at v there were. A signature the page could not have accepted stops the vote.
+func (e *pageEvaluation) keyHolding(s sigFact, v uint64) (int, int, error) {
+	ck := fmt.Sprintf("%s|%d", s.ID, v)
+	if h, ok := e.holding[ck]; ok {
+		return h, e.cands[ck], nil
 	}
-	if votedAll {
-		pv.Voted, pv.Vote, pv.vote = true, withAll.String(), withAll
+	cands := ofVersion(e.tl.CandidatesDuring(s.Block), v)
+	if len(cands) == 0 {
+		return 0, 0, &VoteUnevaluable{Page: e.page, Reason: fmt.Sprintf(
+			"signature %s is recorded at block %d at version %d, which the page did not hold during that block",
+			short(s.ID), s.Block, v)}
 	}
-	m.pages[key] = pv
-	return pv, nil
+	kh, err := decodeHash(s.KeyHash)
+	if err != nil {
+		return 0, 0, &VoteUnevaluable{Page: e.page, Reason: fmt.Sprintf("signature %s: %v", short(s.ID), err)}
+	}
+	holding := 0
+	for _, c := range cands {
+		if blacklisted(c, e.m.facts.TxType) {
+			continue
+		}
+		if _, _, ok := c.EntryByKeyHash(kh); ok {
+			holding++
+		}
+	}
+	if holding == 0 {
+		return 0, 0, &VoteUnevaluable{Page: e.page, Reason: fmt.Sprintf(
+			"signature %s is recorded, but no state of the page at version %d during block %d both holds "+
+				"its key and allows a %v - the network accepted what the replay cannot",
+			short(s.ID), v, s.Block, e.m.facts.TxType)}
+	}
+	e.holding[ck], e.cands[ck] = holding, len(cands)
+	return holding, len(cands), nil
+}
+
+// delegateHolding is keyHolding for a delegated vote: the states that carried an entry delegating to its authority.
+func (e *pageEvaluation) delegateHolding(a arrivalFact, v uint64) (int, int, error) {
+	ck := fmt.Sprintf("%s|%d", a.ID, v)
+	if h, ok := e.holding[ck]; ok {
+		return h, e.cands[ck], nil
+	}
+	authority, err := url.Parse(a.Authority)
+	if err != nil {
+		return 0, 0, &VoteUnevaluable{Page: e.page, Reason: fmt.Sprintf("delegated vote %s names %q", short(a.ID), a.Authority)}
+	}
+	holding := 0
+	cands := ofVersion(e.tl.CandidatesDuring(a.Block), v)
+	for _, c := range cands {
+		if blacklisted(c, e.m.facts.TxType) {
+			continue
+		}
+		if _, _, ok := c.EntryByDelegate(authority); ok {
+			holding++
+		}
+	}
+	if holding == 0 {
+		return 0, 0, &VoteUnevaluable{Page: e.page, Reason: fmt.Sprintf(
+			"the delegated vote of %s is recorded at block %d, but the page at version %d then carries no "+
+				"entry delegating to it", a.Authority, a.Block, v)}
+	}
+	e.holding[ck], e.cands[ck] = holding, len(cands)
+	return holding, len(cands), nil
 }
 
 // tally reduces contributions to one vote per entry: a later contribution for
