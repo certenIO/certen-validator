@@ -44,11 +44,14 @@
 //
 // # WHAT L5 IS NOT
 //
-// It does NOT add a security property. CERTEN already anchors the govRoot
-// externally on every intent — createBatchAnchor on base-sepolia — so the
-// immutability/timestamp property ALREADY EXISTS. L5 makes it CHECKABLE, and
-// closes the gap between "we have a tx hash somewhere" and "here is the path
-// proving this proof is in that anchored batch".
+// It does NOT add a security property of its own. What the anchor commits to is its batch root and its batch
+// operation id (createBatchAnchor), which the quorum's BLS message also covers. The A+++ govRoot is NOT anchored:
+// this comment used to say "CERTEN already anchors the govRoot externally on every intent", and createBatchAnchor
+// stores a zero governanceRoot - the govRoot was used only in each validator's own pre-execution signature
+// (RB4-F66). What IS anchored about governance is the v2 batch operation id, which commits to every member's
+// governance decision (batch_tree.go, DeriveBatchOperationIDV2); L5 carries the members so it recomputes
+// (Layer5.Governance). L5 makes the anchored values CHECKABLE, and closes the gap between "we have a tx hash
+// somewhere" and "here is the path proving this proof is in that anchored batch".
 //
 // It does NOT establish that the Accumulate validator set which signed L4 is the
 // legitimate one. NOTHING in this stage does. An external timestamp attests to
