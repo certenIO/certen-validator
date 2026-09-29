@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -153,23 +154,52 @@ func (r resolverNonSettlementChain) LeafConsumedAt(ctx context.Context, chainID 
 	return leafConsumedAt(ctx, ecm.client, account, leaf, number)
 }
 
-// leafConsumedAt reads the account's isLeafConsumed(leaf) as of block number.
+// leafChain is what reading a leaf needs: the account's state, headers and logs.
+type leafChain interface {
+	bind.ContractBackend
+	HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error)
+}
+
+// leafConsumedAt answers whether the account had consumed leaf as of block number.
 //
-// An account with no code at that block has consumed nothing there, so the answer is "not consumed".
-// It used to be a failed read: a successor whose predecessor's account was deployed after the chain's
-// finalized block waited on a read error, and a member whose account never deployed could never have
-// its non-settlement attested or stop the member after it (RB3-F63). Any other failure stays a read
-// error, which decides nothing.
-func leafConsumedAt(ctx context.Context, backend bind.ContractBackend, account common.Address, leaf [32]byte, number uint64) (bool, error) {
-	acct, err := contracts.NewCertenAccountV7(account, backend)
+// A consumed leaf stays consumed, and every consumption emits LeafConsumed(anchorId, leaf, operationID). So the leaf
+// was consumed as of number exactly when it is consumed at the chain's head and no LeafConsumed for it was emitted
+// after number. That needs contract state only at the head and logs for the blocks since: it used to be an eth_call
+// AT number, and a node that keeps no state that old - Arbitrum Sepolia's finalized block trails its head by ~4,500
+// blocks - failed every read ("historical state … is not available"), so a sequential successor whose predecessor
+// was on Arbitrum waited forever (RB4-F65).
+//
+// An account with no code at the head has consumed nothing (RB3-F63: it used to be a failed read). Any other failure
+// - the head, the call, the logs - stays a read error, which decides nothing.
+func leafConsumedAt(ctx context.Context, c leafChain, account common.Address, leaf [32]byte, number uint64) (bool, error) {
+	head, err := c.HeaderByNumber(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("reading the chain head: %w", err)
+	}
+	latest := head.Number.Uint64()
+	if number > latest {
+		return false, fmt.Errorf("block %d is past the chain head %d", number, latest)
+	}
+	acct, err := contracts.NewCertenAccountV7(account, c)
 	if err != nil {
 		return false, err
 	}
-	consumed, err := acct.IsLeafConsumed(&bind.CallOpts{Context: ctx, BlockNumber: new(big.Int).SetUint64(number)}, leaf)
+	consumed, err := acct.IsLeafConsumed(&bind.CallOpts{Context: ctx, BlockNumber: new(big.Int).SetUint64(latest)}, leaf)
 	if errors.Is(err, bind.ErrNoCode) {
 		return false, nil
 	}
-	return consumed, err
+	if err != nil || !consumed || number == latest {
+		return consumed, err
+	}
+	q := ethereum.FilterQuery{
+		Addresses: []common.Address{account},
+		Topics:    [][]common.Hash{{leafConsumedTopic}, nil, {common.Hash(leaf)}},
+	}
+	after, err := filterLogsSplitting(ctx, c, q, number+1, latest)
+	if err != nil {
+		return false, fmt.Errorf("reading LeafConsumed for leaf %x after block %d: %w", leaf[:8], number, err)
+	}
+	return len(after) == 0, nil
 }
 
 // Outcomes of looking for a non-settlement that are not a failure of the look.
