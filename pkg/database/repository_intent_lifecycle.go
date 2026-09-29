@@ -66,11 +66,16 @@ func WithWriteBackTx(txHash string) UpdateOption {
 // UpsertOnDiscovery inserts a new lifecycle record when the validator first discovers an intent.
 // Uses INSERT ON CONFLICT DO NOTHING to be idempotent — if the intent already exists, this is a no-op.
 // Sets status=authorized since the validator only sees intents after Accumulate delivery (statusNo=201).
+//
+// executedBy is the consensus time of the partition block the intent executed in (discovery's BlockTime, RB4-F74). It
+// is stored as authorized_at; zero (the block's time unknown) stores NULL. submitted_at is NULL: when the transaction was submitted is not on the chain and not known to a validator
+// (RB4-F73). Both used to be the validator's own clock at discovery.
 func (r *IntentLifecycleRepository) UpsertOnDiscovery(
 	ctx context.Context,
 	intentID string,
 	txHash string,
 	blockHeight int64,
+	executedBy time.Time,
 	userID string,
 	proofClass string,
 	targetChain string,
@@ -106,10 +111,10 @@ func (r *IntentLifecycleRepository) UpsertOnDiscovery(
 		proofClassPtr,
 		targetChainPtr,
 		string(IntentLifecycleAuthorized),
-		now, // submitted_at
-		now, // authorized_at
-		now, // created_at
-		now, // updated_at
+		nil,                       // submitted_at: not known to a validator (RB4-F73)
+		executionTime(executedBy), // authorized_at: the partition block it executed in
+		now,                       // created_at
+		now,                       // updated_at
 	)
 	if err != nil {
 		return fmt.Errorf("upsert intent lifecycle: %w", err)
@@ -489,6 +494,7 @@ func (r *IntentLifecycleRepository) UpsertOnDiscoveryMultiLeg(
 	intentID string,
 	txHash string,
 	blockHeight int64,
+	executedBy time.Time,
 	userID string,
 	proofClass string,
 	targetChain string,
@@ -537,13 +543,22 @@ func (r *IntentLifecycleRepository) UpsertOnDiscoveryMultiLeg(
 		0, // legs_completed
 		0, // legs_failed
 		string(IntentLifecycleAuthorized),
-		now, // submitted_at
-		now, // authorized_at
-		now, // created_at
-		now, // updated_at
+		nil,                       // submitted_at: not known to a validator (RB4-F73)
+		executionTime(executedBy), // authorized_at: the partition block it executed in
+		now,                       // created_at
+		now,                       // updated_at
 	)
 	if err != nil {
 		return fmt.Errorf("upsert multi-leg intent lifecycle: %w", err)
 	}
 	return nil
+}
+
+// executionTime is an execution block time as stored: NULL when it is unknown, never the validator's clock.
+func executionTime(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	u := t.UTC()
+	return &u
 }

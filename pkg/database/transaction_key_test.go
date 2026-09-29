@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -85,7 +86,7 @@ func TestTransactionLookupsAcceptTheTransactionID(t *testing.T) {
 		t.Fatal(err)
 	}
 	lifecycle := NewIntentLifecycleRepository(client)
-	if err := lifecycle.UpsertOnDiscovery(ctx, intentID, hash, 1, "", "on_demand", "base-sepolia"); err != nil {
+	if err := lifecycle.UpsertOnDiscovery(ctx, intentID, hash, 1, time.Time{}, "", "on_demand", "base-sepolia"); err != nil {
 		t.Fatalf("create lifecycle: %v", err)
 	}
 	proofs := NewProofRepository(client)

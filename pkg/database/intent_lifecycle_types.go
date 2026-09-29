@@ -15,7 +15,8 @@ import (
 type IntentLifecycleStatus string
 
 const (
-	// IntentLifecycleSubmitted - Intent written to Accumulate (set retroactively by validator)
+	// IntentLifecycleSubmitted - Intent written to Accumulate. Not written by the validators: they see an intent only once
+	// it executed, and record it authorized (RB4-F73 - this said "set retroactively by validator", which nothing does).
 	IntentLifecycleSubmitted IntentLifecycleStatus = "submitted"
 
 	// IntentLifecyclePendingSignatures - Multi-sig awaiting signatures. Never written by the validators, and never
