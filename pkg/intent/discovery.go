@@ -182,7 +182,9 @@ func (s IntentStatus) String() string {
 
 // IntentDiscovery monitors Accumulate blockchain for Certen transaction intents
 type IntentDiscovery struct {
-	client         accumulate.Client
+	client accumulate.Client
+	// reprocess runs one intent's round for ReprocessIntent; nil is processIntent (tests replace it).
+	reprocess      func(intent *CertenIntent, blockHeight uint64) (consensus.TargetChainOutcome, error)
 	accumulateURL  string
 	config         *IntentDiscoveryConfig
 	ledgerStore    LedgerStoreInterface // For persistence
@@ -1515,6 +1517,56 @@ func (id *IntentDiscovery) handleRetryJob(job *intentRetryJob) {
 // STAGE 1: returns the target-chain outcome alongside the error. A nil error means
 // CONSENSUS committed; it says nothing about whether the chain write landed, and
 // the caller used to read it as though it did.
+// ReprocessIntent processes one intent again exactly as discovery processes it: found in its Directory Network
+// block by the Accumulate transaction that carries it, converted as discovery converts it, and run through
+// processIntent - so its round is re-derived and checked against the committed block. It exists for a repair that
+// must reach one of the intent's members (RB4-F55; consensus.ArmMemberRepair). Nothing else in the block is
+// touched; an intent being processed now, or permanently invalid, is refused; a transaction carrying another intent
+// than the one named is refused.
+func (id *IntentDiscovery) ReprocessIntent(ctx context.Context, dnBlock uint64, accumTxHash, intentID string) error {
+	txs, err := id.client.SearchCertenTransactions(ctx, int64(dnBlock))
+	if err != nil {
+		return fmt.Errorf("search DN block %d: %w", dnBlock, err)
+	}
+	want := strings.ToLower(strings.TrimPrefix(accumTxHash, "0x"))
+	for _, tx := range txs {
+		if tx.BlockHeight != int64(dnBlock) || strings.ToLower(strings.TrimPrefix(tx.Hash, "0x")) != want {
+			continue
+		}
+		ci, err := id.convertCertenTransactionToIntent(tx)
+		if err != nil {
+			return fmt.Errorf("transaction %s in DN block %d: %w", tx.Hash, dnBlock, err)
+		}
+		if ci.IntentID != intentID {
+			return fmt.Errorf("transaction %s in DN block %d carries intent %s, not %s", tx.Hash, dnBlock, ci.IntentID, intentID)
+		}
+		id.mu.Lock()
+		switch id.intentStatus[intentID] {
+		case IntentStatusInProgress:
+			id.mu.Unlock()
+			return fmt.Errorf("intent %s is being processed now; not processed twice", intentID)
+		case IntentStatusFailedPermanent:
+			id.mu.Unlock()
+			return fmt.Errorf("intent %s is permanently invalid; it is not processed again", intentID)
+		}
+		id.intentStatus[intentID] = IntentStatusInProgress
+		id.mu.Unlock()
+
+		id.logger.Printf("🔧 [REPROCESS] intent %s from DN block %d (transaction %s)", intentID, dnBlock, tx.Hash)
+		run := id.reprocess
+		if run == nil {
+			run = id.processIntent
+		}
+		if _, err := run(ci, dnBlock); err != nil {
+			id.markFailedClassified(intentID, err)
+			return fmt.Errorf("reprocess intent %s: %w", intentID, err)
+		}
+		id.markCompleted(intentID)
+		return nil
+	}
+	return fmt.Errorf("transaction %s is not in DN block %d", accumTxHash, dnBlock)
+}
+
 func (id *IntentDiscovery) processIntent(intent *CertenIntent, blockHeight uint64) (consensus.TargetChainOutcome, error) {
 	id.logger.Printf("🚀 Processing Certen intent: %s", intent.IntentID)
 

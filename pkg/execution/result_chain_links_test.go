@@ -38,6 +38,9 @@ func TestANonSettlementsChainLinkIsPersistedAndContinued(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 2; i++ {
+		// Two members on one chain: a member is written back once (RB4-F59).
+		f := f
+		f.IntentID = fmt.Sprintf("%s-%s-%d", f.IntentID, validator, i)
 		rec := &NonSettlementRecord{Facts: f, Cause: claim.Cause, MemberChains: []int64{odChain}, MemberLegs: 1}
 		cycle := nonSettlementCycle(rec, claim)
 		cycle.CycleID = fmt.Sprintf("%s-%d", cycle.CycleID, i)

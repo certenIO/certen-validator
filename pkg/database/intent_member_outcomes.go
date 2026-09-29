@@ -60,6 +60,9 @@ type MemberOutcome struct {
 	// committed none (a native transfer) or they were not assessed, true proven, false provably absent -
 	// the member settled but did not do what the intent committed to, and counts as failed (RB3-F67).
 	EffectsProven *bool
+	// ReportedBy is the validator reporting the outcome. A report that replaces a recorded outcome is recorded
+	// as a correction under its name (RB4-F58).
+	ReportedBy string
 }
 
 // RecordedMemberOutcome is a member's outcome as recorded.
@@ -104,6 +107,8 @@ func (o *MemberOutcome) validate() error {
 		return fmt.Errorf("%w: no chain id", ErrMemberOutcomeInvalid)
 	case o.Legs <= 0:
 		return fmt.Errorf("%w: a member carries at least one leg", ErrMemberOutcomeInvalid)
+	case o.ReportedBy == "":
+		return fmt.Errorf("%w: no reporting validator", ErrMemberOutcomeInvalid)
 	}
 	inSet := false
 	for _, c := range o.MemberChains {
@@ -160,10 +165,15 @@ func (r *IntentLifecycleRepository) RecordMemberOutcome(ctx context.Context, o M
 	}
 	defer tx.Rollback() //nolint:errcheck // a committed transaction ignores it
 
-	// Lock the intent row first: every report for this intent derives in turn.
+	// Lock the intent row first: every report for this intent derives in turn. Its terminal outcome is read
+	// with it, so a change to it can be recorded (RB4-F58).
 	var stored pq.Int64Array
-	err = tx.QueryRowContext(ctx,
-		`SELECT member_chains FROM intent_lifecycle WHERE intent_id = $1 FOR UPDATE`, o.IntentID).Scan(&stored)
+	var before lifecycleOutcome
+	err = tx.QueryRowContext(ctx, `
+		SELECT member_chains, status, legs_completed, legs_failed, failed_at, completed_at, error_message, failure_class, write_back_tx
+		FROM intent_lifecycle WHERE intent_id = $1 FOR UPDATE`, o.IntentID).
+		Scan(&stored, &before.Status, &before.LegsCompleted, &before.LegsFailed, &before.FailedAt, &before.CompletedAt,
+			&before.ErrorMessage, &before.FailureClass, &before.WriteBackTx)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		derived.Found = false
@@ -183,6 +193,27 @@ func (r *IntentLifecycleRepository) RecordMemberOutcome(ctx context.Context, o M
 		} else if !sameChains(stored, chains) {
 			return derived, fmt.Errorf("%w: intent %s was recorded with members %v, this report names %v",
 				ErrMemberOutcomeInvalid, o.IntentID, []int64(stored), chains)
+		}
+	}
+
+	// The member's recorded outcome, if any. A member written back under a quorum attestation is never replaced by a
+	// report that it was not: the write-back is on Accumulate, so that report can only be stale (a broken cycle's
+	// outbox entry replayed after a repair). Any other change is recorded as a correction.
+	prior, err := recordedMemberRow(ctx, tx, o.IntentID, o.ChainID)
+	if err != nil {
+		return derived, err
+	}
+	next := memberRowOf(o)
+	if prior != nil && prior.ProofCycle == string(MemberProofCycleWritten) && o.ProofCycle != MemberProofCycleWritten {
+		return derived, fmt.Errorf("%w: intent %s member %d was written back by cycle %s (%s); a later report that it was not (cycle %s) is stale",
+			ErrMemberOutcomeInvalid, o.IntentID, o.ChainID, prior.CycleID, prior.WriteBackTx, o.CycleID)
+	}
+	if prior != nil && !prior.sameAs(next) {
+		reason := fmt.Sprintf("member outcome replaced by a later report: cycle %s replaces cycle %s", o.CycleID, prior.CycleID)
+		evidence := map[string]any{"settlement_tx": o.SettlementTx, "write_back_tx": o.WriteBackTx, "cycle_id": o.CycleID}
+		if _, err := recordCorrection(ctx, tx, "intent_member_outcome", fmt.Sprintf("%s/%d", o.IntentID, o.ChainID),
+			reason, prior, next, evidence, o.ReportedBy); err != nil {
+			return derived, fmt.Errorf("record the replaced outcome of %s/%d: %w", o.IntentID, o.ChainID, err)
 		}
 	}
 
@@ -304,7 +335,113 @@ func (r *IntentLifecycleRepository) RecordMemberOutcome(ctx context.Context, o M
 	if err != nil {
 		return derived, fmt.Errorf("derive status of %s: %w", o.IntentID, err)
 	}
+
+	// A terminal outcome that changes is a correction of a published outcome (RB4-F58): keep what it was.
+	if before.terminal() {
+		var after lifecycleOutcome
+		if err := tx.QueryRowContext(ctx, `
+			SELECT status, legs_completed, legs_failed, failed_at, completed_at, error_message, failure_class, write_back_tx
+			FROM intent_lifecycle WHERE intent_id = $1`, o.IntentID).
+			Scan(&after.Status, &after.LegsCompleted, &after.LegsFailed, &after.FailedAt, &after.CompletedAt,
+				&after.ErrorMessage, &after.FailureClass, &after.WriteBackTx); err != nil {
+			return derived, fmt.Errorf("read the derived status of %s: %w", o.IntentID, err)
+		}
+		if before.Status != after.Status || before.ErrorMessage != after.ErrorMessage || before.FailureClass != after.FailureClass {
+			reason := fmt.Sprintf("intent outcome derived again after member %d's outcome was replaced (cycle %s)", o.ChainID, o.CycleID)
+			evidence := map[string]any{"chain_id": o.ChainID, "settlement_tx": o.SettlementTx, "write_back_tx": o.WriteBackTx, "cycle_id": o.CycleID}
+			if _, err := recordCorrection(ctx, tx, "intent_lifecycle", o.IntentID, reason, before.view(), after.view(), evidence, o.ReportedBy); err != nil {
+				return derived, fmt.Errorf("record the replaced outcome of %s: %w", o.IntentID, err)
+			}
+		}
+	}
 	return derived, tx.Commit()
+}
+
+// memberRow is a member outcome as stored, as a correction records it.
+type memberRow struct {
+	Settlement    string `json:"settlement"`
+	ProofCycle    string `json:"proof_cycle"`
+	Legs          int    `json:"legs"`
+	SettlementTx  string `json:"settlement_tx"`
+	WriteBackTx   string `json:"write_back_tx"`
+	CycleID       string `json:"cycle_id"`
+	Reason        string `json:"reason"`
+	EffectsProven *bool  `json:"effects_proven"`
+}
+
+func memberRowOf(o MemberOutcome) memberRow {
+	return memberRow{Settlement: string(o.Settlement), ProofCycle: string(o.ProofCycle), Legs: o.Legs,
+		SettlementTx: o.SettlementTx, WriteBackTx: o.WriteBackTx, CycleID: o.CycleID, Reason: o.Reason, EffectsProven: o.EffectsProven}
+}
+
+func (m *memberRow) sameAs(n memberRow) bool {
+	sameEffects := (m.EffectsProven == nil) == (n.EffectsProven == nil) &&
+		(m.EffectsProven == nil || *m.EffectsProven == *n.EffectsProven)
+	return m.Settlement == n.Settlement && m.ProofCycle == n.ProofCycle && m.Legs == n.Legs && m.SettlementTx == n.SettlementTx &&
+		m.WriteBackTx == n.WriteBackTx && m.CycleID == n.CycleID && m.Reason == n.Reason && sameEffects
+}
+
+// recordedMemberRow reads (and locks) a member's recorded outcome, or nil when none is recorded.
+func recordedMemberRow(ctx context.Context, tx *sql.Tx, intentID string, chainID int64) (*memberRow, error) {
+	var m memberRow
+	var settlementTx, writeBackTx, cycleID, reason sql.NullString
+	var effects sql.NullBool
+	err := tx.QueryRowContext(ctx, `
+		SELECT settlement, proof_cycle, legs, settlement_tx, write_back_tx, cycle_id, reason, effects_proven
+		FROM intent_member_outcomes WHERE intent_id = $1 AND chain_id = $2 FOR UPDATE`, intentID, chainID).
+		Scan(&m.Settlement, &m.ProofCycle, &m.Legs, &settlementTx, &writeBackTx, &cycleID, &reason, &effects)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read the recorded outcome of %s/%d: %w", intentID, chainID, err)
+	}
+	m.SettlementTx, m.WriteBackTx, m.CycleID, m.Reason = settlementTx.String, writeBackTx.String, cycleID.String, reason.String
+	if effects.Valid {
+		v := effects.Bool
+		m.EffectsProven = &v
+	}
+	return &m, nil
+}
+
+// lifecycleOutcome is an intent's recorded outcome, as a correction records it.
+type lifecycleOutcome struct {
+	Status                    sql.NullString
+	LegsCompleted, LegsFailed sql.NullInt64
+	FailedAt, CompletedAt     sql.NullTime
+	ErrorMessage              sql.NullString
+	FailureClass              sql.NullString
+	WriteBackTx               sql.NullString
+}
+
+func (l lifecycleOutcome) terminal() bool {
+	return l.Status.String == string(IntentLifecycleComplete) || l.Status.String == string(IntentLifecycleFailed)
+}
+
+func (l lifecycleOutcome) view() map[string]any {
+	opt := func(v sql.NullString) any {
+		if v.Valid {
+			return v.String
+		}
+		return nil
+	}
+	optTime := func(v sql.NullTime) any {
+		if v.Valid {
+			return v.Time.UTC().Format(time.RFC3339Nano)
+		}
+		return nil
+	}
+	optInt := func(v sql.NullInt64) any {
+		if v.Valid {
+			return v.Int64
+		}
+		return nil
+	}
+	return map[string]any{
+		"status": opt(l.Status), "legs_completed": optInt(l.LegsCompleted), "legs_failed": optInt(l.LegsFailed),
+		"failed_at": optTime(l.FailedAt), "completed_at": optTime(l.CompletedAt), "error_message": opt(l.ErrorMessage),
+		"failure_class": opt(l.FailureClass), "write_back_tx": opt(l.WriteBackTx),
+	}
 }
 
 func sameChains(a pq.Int64Array, b []int64) bool {

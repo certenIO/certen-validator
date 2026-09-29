@@ -376,6 +376,9 @@ type BatchEnqueuer interface {
 // BFTValidator represents a decentralized BFT validator with elected executor consensus
 // Phase 3: BFTValidator now uses only CometBFT for consensus (no ExecutionConsensus)
 type BFTValidator struct {
+	// memberRepairs: members named for a re-driven proof cycle (RB4-F55 repair, member_repair.go).
+	memberRepairState
+
 	engine                BFTConsensusEngine
 	anchorManager         AnchorManager
 	proofGenerator        ProofGenerator

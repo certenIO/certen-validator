@@ -20,7 +20,7 @@ import (
 	"github.com/certen/independant-validator/pkg/execution"
 )
 
-const repairUsage = "usage: certen-validator repair anchor-blocks [--apply] [--min-depth N] | repair projections [--apply] | repair consensus-records --rpc ADDR [--apply]"
+const repairUsage = "usage: certen-validator repair anchor-blocks [--apply] [--min-depth N] | repair projections [--apply] | repair consensus-records --rpc ADDR [--apply] | repair member-proof-cycle --intent ID --chain CHAIN_ID --tx SETTLEMENT_TX [--apply] [--wait DURATION]"
 
 // runRepairCommand runs `validator repair anchor-blocks`: it reads every canonical anchor's verify and
 // create transactions back from their chain - locating the create transaction where the row does not name
@@ -39,6 +39,10 @@ const repairUsage = "usage: certen-validator repair anchor-blocks [--apply] [--m
 //
 // Exit status: 0 when nothing was refused, 2 when something was refused or could not be read, 1 on error.
 func runRepairCommand(args []string) int {
+	// Served by the running validator, not by this process (member_repair_command.go).
+	if len(args) > 0 && args[0] == "member-proof-cycle" {
+		return runMemberRepairCommand(args[1:])
+	}
 	if len(args) == 0 || (args[0] != "anchor-blocks" && args[0] != "projections" && args[0] != "consensus-records") {
 		log.Print(repairUsage)
 		return 1

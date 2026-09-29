@@ -14,6 +14,7 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -143,6 +144,10 @@ func NewAccumulateSubmitter(cfg *AccumulateSubmitterConfig) (*AccumulateSubmitte
 	return submitter, nil
 }
 
+// ErrWriteBackNotSent: a write-back failed before anything was sent to Accumulate - it is certainly not there
+// (RB4-F59). Any other submission error may have reached it.
+var ErrWriteBackNotSent = errors.New("write-back not sent")
+
 // SubmitTransaction submits a synthetic transaction to Accumulate
 // Returns the transaction hash on success
 func (s *AccumulateSubmitterImpl) SubmitTransaction(ctx context.Context, tx *SyntheticTransaction) (string, error) {
@@ -154,24 +159,24 @@ func (s *AccumulateSubmitterImpl) SubmitTransaction(ctx context.Context, tx *Syn
 	// Step 1: Check credit balance
 	hasCredits, balance, err := s.creditChecker.HasSufficientCredits(ctx, MinCreditsForWriteData)
 	if err != nil {
-		return "", fmt.Errorf("failed to check credits: %w", err)
+		return "", fmt.Errorf("%w: failed to check credits: %w", ErrWriteBackNotSent, err)
 	}
 	if !hasCredits {
-		return "", fmt.Errorf("insufficient credits: have %d, need %d", balance, MinCreditsForWriteData)
+		return "", fmt.Errorf("%w: insufficient credits: have %d, need %d", ErrWriteBackNotSent, balance, MinCreditsForWriteData)
 	}
 	s.logger.Printf("✅ Credit check passed: %d credits available", balance)
 
 	// Step 2: Create the Accumulate Transaction with proper protocol types
 	accTx, err := s.createAccumulateTransaction(tx)
 	if err != nil {
-		return "", fmt.Errorf("failed to create Accumulate transaction: %w", err)
+		return "", fmt.Errorf("%w: failed to create Accumulate transaction: %w", ErrWriteBackNotSent, err)
 	}
 
 	// Step 3: Create and sign the signature using proper Accumulate signing
 	timestamp := uint64(time.Now().UnixMicro())
 	sig, err := s.createAndSignSignature(ctx, accTx, timestamp)
 	if err != nil {
-		return "", fmt.Errorf("failed to create signature: %w", err)
+		return "", fmt.Errorf("%w: failed to create signature: %w", ErrWriteBackNotSent, err)
 	}
 
 	// Step 4: Create the envelope

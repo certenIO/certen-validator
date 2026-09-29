@@ -40,6 +40,7 @@ func s1Orchestrator(t *testing.T, db *sql.DB) *UnifiedOrchestrator {
 	t.Helper()
 	return &UnifiedOrchestrator{
 		config: &UnifiedOrchestratorConfig{
+			ValidatorID: "validator-test",
 			Repos: &database.Repositories{
 				IntentLifecycle: database.NewIntentLifecycleRepository(database.NewClientFromDB(db)),
 			},

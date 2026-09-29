@@ -128,16 +128,16 @@ func TestIntentStatus_AMemberSetThatDisagreesIsRefused(t *testing.T) {
 	s1Seed(ctx, t, db, id)
 	t.Cleanup(func() { db.Exec(`DELETE FROM intent_member_outcomes WHERE intent_id=$1`, id) })
 
-	if _, err := repo.RecordMemberOutcome(ctx, database.MemberOutcome{IntentID: id, ChainID: 84532, MemberChains: []int64{84532, 421614},
+	if _, err := repo.RecordMemberOutcome(ctx, database.MemberOutcome{IntentID: id, ReportedBy: "validator-test", ChainID: 84532, MemberChains: []int64{84532, 421614},
 		Settlement: database.MemberSettlementSettled, ProofCycle: database.MemberProofCycleWritten, Legs: 1}); err != nil {
 		t.Fatal(err)
 	}
-	_, err := repo.RecordMemberOutcome(ctx, database.MemberOutcome{IntentID: id, ChainID: 421614, MemberChains: []int64{421614},
+	_, err := repo.RecordMemberOutcome(ctx, database.MemberOutcome{IntentID: id, ReportedBy: "validator-test", ChainID: 421614, MemberChains: []int64{421614},
 		Settlement: database.MemberSettlementSettled, ProofCycle: database.MemberProofCycleWritten, Legs: 1})
 	if !errors.Is(err, database.ErrMemberOutcomeInvalid) {
 		t.Fatalf("a report naming another member set was accepted: %v", err)
 	}
-	_, err = repo.RecordMemberOutcome(ctx, database.MemberOutcome{IntentID: id, ChainID: 11155111, MemberChains: []int64{84532, 421614},
+	_, err = repo.RecordMemberOutcome(ctx, database.MemberOutcome{IntentID: id, ReportedBy: "validator-test", ChainID: 11155111, MemberChains: []int64{84532, 421614},
 		Settlement: database.MemberSettlementSettled, ProofCycle: database.MemberProofCycleWritten, Legs: 1})
 	if !errors.Is(err, database.ErrMemberOutcomeInvalid) {
 		t.Fatalf("a chain outside the member set was accepted: %v", err)

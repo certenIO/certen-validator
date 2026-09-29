@@ -71,6 +71,8 @@ func f81NonSettlementCycle(t *testing.T) *activeCycle {
 	t.Helper()
 	own := nsMember()
 	f, _ := memberFacts(own)
+	// Each cycle its own member: a member is written back once (RB4-F59).
+	f.IntentID = fmt.Sprintf("f81-%d", time.Now().UnixNano())
 	claim, obs, err := observeNonSettlement(context.Background(), nsChainPast(f.Deadline), f, "its batch quorum was never reached")
 	if err != nil {
 		t.Fatal(err)

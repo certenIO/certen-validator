@@ -1837,7 +1837,7 @@ func startValidator(
 		return nil, nil, fmt.Errorf("proof cycle: member outcome outbox: %w", moErr)
 	}
 	(&execution.MemberOutcomeReconciler{
-		Outbox: memberOutcomes, Store: batchComponents.Repos.IntentLifecycle, Logf: log.Printf,
+		Outbox: memberOutcomes, Store: batchComponents.Repos.IntentLifecycle, ValidatorID: cfg.ValidatorID, Logf: log.Printf,
 	}).Start(context.Background())
 	log.Printf("✅ [Phase 9] Member outcome outbox at %s; reconciler replaying on startup and every minute", memberOutcomes.Dir())
 
@@ -1961,6 +1961,19 @@ func startValidator(
 	// BFTValidator.ExecuteCanonicalIntentWithBFTConsensus(ctx, certenIntent, certenProof, blockHeight)
 	// with properly structured CertenIntent (4-blob canonical) and CertenProof from lite client
 	intentDiscovery.SetBFTConsensus(validator)
+
+	// RB4-F55 repair: one decided member's proof cycle is re-driven on request, here, where the orchestrator, its
+	// keys, its peers and the committed-operation index are (`validator repair member-proof-cycle`).
+	memberRepairs := &execution.MemberRepairRunner{
+		Dir: execution.MemberRepairDir(nsDataDir), ValidatorID: cfg.ValidatorID, DB: dbClient.DB(),
+		Lifecycle: batchComponents.Repos.IntentLifecycle, Outbox: memberOutcomes,
+		Observe: unifiedOrchestrator.ObserveSettlement, Arm: validator.ArmMemberRepair,
+		Reprocess: intentDiscovery.ReprocessIntent, Logf: log.Printf,
+	}
+	if err := memberRepairs.Start(context.Background()); err != nil {
+		return nil, nil, fmt.Errorf("member repair runner: %w", err)
+	}
+	log.Printf("✅ [MEMBER-REPAIR] repair requests served from %s", memberRepairs.Dir)
 
 	// ENTITLEMENT — wire the epoch snapshot to the two places that consume it.
 	//
