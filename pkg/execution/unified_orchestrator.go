@@ -1957,6 +1957,19 @@ const (
 	WriteBackUnresolved            = "outcome_unknown"         // submitted, and whether it reached Accumulate is unknown
 )
 
+// ObserveSettlement reads a settlement from its chain with the strategy Phase 7 observes it with (the RB4-F55
+// repair runner checks a settlement is final and executed before re-driving its member).
+func (o *UnifiedOrchestrator) ObserveSettlement(ctx context.Context, chainID int64, tx string) (*chain.ObservationResult, error) {
+	if o.config.Registry == nil {
+		return nil, fmt.Errorf("no strategy registry is configured")
+	}
+	chainStrategy, _, err := o.config.Registry.GetStrategiesForChain(strconv.FormatInt(chainID, 10))
+	if err != nil {
+		return nil, fmt.Errorf("strategies for chain %d: %w", chainID, err)
+	}
+	return chainStrategy.ObserveTransaction(ctx, tx)
+}
+
 // memberWriteBackRegister is where a member's write-back is claimed and recorded (RB4-F59).
 func (o *UnifiedOrchestrator) memberWriteBackRegister() (*database.IntentLifecycleRepository, error) {
 	if o.config.Repos == nil || o.config.Repos.IntentLifecycle == nil {

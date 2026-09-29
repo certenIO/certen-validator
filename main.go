@@ -1962,6 +1962,19 @@ func startValidator(
 	// with properly structured CertenIntent (4-blob canonical) and CertenProof from lite client
 	intentDiscovery.SetBFTConsensus(validator)
 
+	// RB4-F55 repair: one decided member's proof cycle is re-driven on request, here, where the orchestrator, its
+	// keys, its peers and the committed-operation index are (`validator repair member-proof-cycle`).
+	memberRepairs := &execution.MemberRepairRunner{
+		Dir: execution.MemberRepairDir(nsDataDir), ValidatorID: cfg.ValidatorID, DB: dbClient.DB(),
+		Lifecycle: batchComponents.Repos.IntentLifecycle, Outbox: memberOutcomes,
+		Observe: unifiedOrchestrator.ObserveSettlement, Arm: validator.ArmMemberRepair,
+		Reprocess: intentDiscovery.ReprocessIntent, Logf: log.Printf,
+	}
+	if err := memberRepairs.Start(context.Background()); err != nil {
+		return nil, nil, fmt.Errorf("member repair runner: %w", err)
+	}
+	log.Printf("✅ [MEMBER-REPAIR] repair requests served from %s", memberRepairs.Dir)
+
 	// ENTITLEMENT — wire the epoch snapshot to the two places that consume it.
 	//
 	// The gate inside the ABCI validator only VERIFIES evidence; something has
