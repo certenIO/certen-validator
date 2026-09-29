@@ -379,6 +379,19 @@ func (g *CLIGovernanceProofGenerator) parseOutput(level GovernanceLevel, output 
 		}
 	}
 
+	// RB4-F66 - the vote record, kept the same way: who decided the transaction, which the batch commits to.
+	if level != GovLevelG0 {
+		rec, err := AuthorizationRecordFromRaw(jsonData)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", level, err)
+		}
+		if rec == nil {
+			g.logger.Printf("[GOV-PROOF] %s carries NO vote record - who decided the transaction is not recorded, "+
+				"and no governance decision can be committed for it", level)
+		}
+		govProof.Authorization = rec
+	}
+
 	if ev := GovReceiptEvidenceFromRaw(string(level), jsonData); ev != nil {
 		govProof.Receipts = append(govProof.Receipts, *ev)
 		g.logger.Printf("[GOV-PROOF] %s receipt evidence captured: %d merkle step(s), anchor=%s",

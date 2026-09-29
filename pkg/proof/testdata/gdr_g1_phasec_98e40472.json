@@ -1,0 +1,451 @@
+{
+ "entry_hash_exec": "98e404721458521e872d683f85db0cead068a5fdfc77f6fb88a7542f6fc930ed",
+ "txid": "98e404721458521e872d683f85db0cead068a5fdfc77f6fb88a7542f6fc930ed",
+ "tx_hash": "98e404721458521e872d683f85db0cead068a5fdfc77f6fb88a7542f6fc930ed",
+ "exec_mbi": 13127747,
+ "exec_witness": "6c94a9670c13cbf8d1219dd1454fe3dafbd82695cf0e1f0c12e1f495092e8dcf",
+ "scope": "acc://rb4-phase-c-09282125.acme/data",
+ "chain": "main",
+ "expanded_message_id": "acc://98e404721458521e872d683f85db0cead068a5fdfc77f6fb88a7542f6fc930ed@rb4-phase-c-09282125.acme/data",
+ "principal": "rb4-phase-c-09282125.acme",
+ "receipt": {
+  "start": "98e404721458521e872d683f85db0cead068a5fdfc77f6fb88a7542f6fc930ed",
+  "anchor": "6c94a9670c13cbf8d1219dd1454fe3dafbd82695cf0e1f0c12e1f495092e8dcf",
+  "localBlock": 13127747,
+  "localBlockTime": null,
+  "majorBlock": null,
+  "end": "98e404721458521e872d683f85db0cead068a5fdfc77f6fb88a7542f6fc930ed",
+  "entries": [
+   {
+    "hash": "2dddc10bf10a9cc018681e510a44c170d7ac5f9f98582fd39b0bad26b0ebd67c",
+    "right": false
+   },
+   {
+    "hash": "ed0dc32c2ec290c602197a28755dfefba8b6e1bab35a50edc35855485fc6446b",
+    "right": false
+   },
+   {
+    "hash": "d10e5c3e2c140f84fa3e5bcd00d6bca289e709f6762d79317194e7b006abae14",
+    "right": false
+   },
+   {
+    "hash": "b3cf87d6712895506be1779381ed5a2ce4c4791583f69c2f13a480057d4d2d5a",
+    "right": false
+   },
+   {
+    "hash": "0350f60fe7390465939003686c3c8419d5897d02572805d545627feb8f053d49",
+    "right": false
+   },
+   {
+    "hash": "404720ab7c97771e2136af49dc7cb4c3fee15b8f11d77e823a10b4a9c9bca71a",
+    "right": true
+   },
+   {
+    "hash": "01902086291ba249f19723091314f8cac2a283fb64081c3983a4db860e1a6ec2",
+    "right": false
+   },
+   {
+    "hash": "78337618a4e863ba663c71522c7e6d08b54522c87f19d33711ed66a92b9a5ded",
+    "right": false
+   },
+   {
+    "hash": "0dec62ef80b997ad19d214579a779a8a7439d3d301fba18a3798c1a0560cc6f7",
+    "right": false
+   },
+   {
+    "hash": "124adbae798cdaadefa2a86461261bae2741d980c088b8f521c58af557276ba5",
+    "right": false
+   },
+   {
+    "hash": "c9c1c1995e54e1c14acf7d8ba861fb9c3f23c282cd4089593cd99a25e866a46a",
+    "right": false
+   },
+   {
+    "hash": "dd1967f8198e41ce01ed9204d2ae3f1e3b33b3356dcbe6580ad47e4f5b42edc7",
+    "right": false
+   },
+   {
+    "hash": "7452535e04641e1a929e44cd4edae706f2c3993bd0908fe32f64358521b59cb2",
+    "right": false
+   },
+   {
+    "hash": "437773e2f26f549c224549f9c034f88d84f7951c1e215dcfbab5e627b0fa017f",
+    "right": false
+   },
+   {
+    "hash": "ac502540bc34b4ce71bd8108a461337cd4374f1e119c86f83ee46bf502fe5cca",
+    "right": false
+   }
+  ]
+ },
+ "g0_proof_complete": true,
+ "authority_snapshot": {
+  "page": "acc://rb4-phase-c-09282125.acme/book/1",
+  "execTerms": {
+   "mbi": 13127747,
+   "witness": "6c94a9670c13cbf8d1219dd1454fe3dafbd82695cf0e1f0c12e1f495092e8dcf"
+  },
+  "stateExec": {
+   "version": 2,
+   "entries": [
+    {
+     "keyHash": "87d2927e691b31c8ce8137b74f38493386d41a63e6d0111baa800890130a7f25"
+    }
+   ],
+   "keys": [
+    "87d2927e691b31c8ce8137b74f38493386d41a63e6d0111baa800890130a7f25"
+   ],
+   "threshold": 1
+  },
+  "genesis": {
+   "entryHash": "a0c400574d597fbf096c777663fc74fa9890a9faf6b056ddc1a8990a187b5810",
+   "localBlock": 13087927,
+   "receipt": {
+    "start": "a0c400574d597fbf096c777663fc74fa9890a9faf6b056ddc1a8990a187b5810",
+    "anchor": "6d6f84cececd8a2255bd1c76412ff62e49754ac3674d29248e030471e2c7f6d4",
+    "localBlock": 13087927,
+    "localBlockTime": null,
+    "majorBlock": null,
+    "end": null,
+    "entries": [
+     {
+      "hash": "a0c400574d597fbf096c777663fc74fa9890a9faf6b056ddc1a8990a187b5810",
+      "right": false
+     },
+     {
+      "hash": "b197fcf8cf83ff9fd8818adc5475d05f1740f656977267c2a1d44efdab68c544",
+      "right": false
+     },
+     {
+      "hash": "c460c12ea60cbc74bf030b4c5a4d47eb156761cf2a3cdce3070815b05d24db83",
+      "right": true
+     },
+     {
+      "hash": "5de8a3971f9baea2b015b2d57eacb074889838fa6b8dde9ad27932f481715272",
+      "right": false
+     },
+     {
+      "hash": "d8203d92e38ebf72e995351c67ade230cd7135e0925e152ddb318afe534f19f4",
+      "right": false
+     },
+     {
+      "hash": "35310a4db266a9598702ffd963d017ce42fd976b728dbd3cdaecd34bc19a084e",
+      "right": false
+     },
+     {
+      "hash": "f0eb649169c6a86f103298fa6ffd1a658847577c35c5e8ecaf4e687ff4a8034b",
+      "right": false
+     },
+     {
+      "hash": "fa93f0c8de33bdacb38bb2532c1f054aee0553684b9409855aaf59d9a2d520ce",
+      "right": false
+     },
+     {
+      "hash": "e517c4c77e5647016ddb70ea4b3fd8c5849605d5375a1debaf03775a8aab0583",
+      "right": false
+     },
+     {
+      "hash": "a8e61d07500b9ef0cfabc3ca281e96b4f1ca6074cae8d37db10dac4729f54774",
+      "right": false
+     },
+     {
+      "hash": "7452535e04641e1a929e44cd4edae706f2c3993bd0908fe32f64358521b59cb2",
+      "right": false
+     },
+     {
+      "hash": "437773e2f26f549c224549f9c034f88d84f7951c1e215dcfbab5e627b0fa017f",
+      "right": false
+     },
+     {
+      "hash": "ac502540bc34b4ce71bd8108a461337cd4374f1e119c86f83ee46bf502fe5cca",
+      "right": false
+     }
+    ]
+   },
+   "txType": "syntheticcreateidentity",
+   "pageState": {
+    "version": 1,
+    "entries": [
+     {
+      "keyHash": "64250b1e4f16aa9b10b14106611b6fce2e7bb5ac8900c674193680eb7e25ffe2"
+     }
+    ],
+    "keys": [
+     "64250b1e4f16aa9b10b14106611b6fce2e7bb5ac8900c674193680eb7e25ffe2"
+    ],
+    "threshold": 1
+   }
+  },
+  "mutations": [
+   {
+    "entryHash": "4c38f2fc446a48f6699e38343cc3d855a175b1ab7808c74e8742248826cfe513",
+    "localBlock": 13087950,
+    "receipt": {
+     "start": "4c38f2fc446a48f6699e38343cc3d855a175b1ab7808c74e8742248826cfe513",
+     "anchor": "85b357a47c1171263c06cc228ecf231e5062b56770c58ec62d35fb771017151e",
+     "localBlock": 13087950,
+     "localBlockTime": null,
+     "majorBlock": null,
+     "end": null,
+     "entries": [
+      {
+       "hash": "104d9a9e0307c0f4812b24ded06e50897c1f6dfbd0b79d1e48e0169ea962ea41",
+       "right": false
+      },
+      {
+       "hash": "dd674470ce9390a01a6e14f4d78648261d701da41f40390811e8379ca7e9a818",
+       "right": false
+      },
+      {
+       "hash": "e7cc57448c8083e845c3997708e6ab3dec4ce508e63c608d011f04a06faab561",
+       "right": false
+      },
+      {
+       "hash": "09935b06434ee2fb00be8d1dfd6bfcd70c7259643416fc52b0715bcabbba0a49",
+       "right": false
+      },
+      {
+       "hash": "3c2cf8193b3832c28b89fe3acd3112023cc834bc21bcacca44ee00416b7a0114",
+       "right": false
+      },
+      {
+       "hash": "73b0336c0e74d06eeaaf98a9f62ea9355ebabd9064bd45a6e7999a38e30baca4",
+       "right": true
+      },
+      {
+       "hash": "8bf10d1c1fdda7175f8727922bc415e375c12529004fa205a74cc476f453ed18",
+       "right": false
+      },
+      {
+       "hash": "f0eb649169c6a86f103298fa6ffd1a658847577c35c5e8ecaf4e687ff4a8034b",
+       "right": false
+      },
+      {
+       "hash": "fa93f0c8de33bdacb38bb2532c1f054aee0553684b9409855aaf59d9a2d520ce",
+       "right": false
+      },
+      {
+       "hash": "e517c4c77e5647016ddb70ea4b3fd8c5849605d5375a1debaf03775a8aab0583",
+       "right": false
+      },
+      {
+       "hash": "a8e61d07500b9ef0cfabc3ca281e96b4f1ca6074cae8d37db10dac4729f54774",
+       "right": false
+      },
+      {
+       "hash": "7452535e04641e1a929e44cd4edae706f2c3993bd0908fe32f64358521b59cb2",
+       "right": false
+      },
+      {
+       "hash": "437773e2f26f549c224549f9c034f88d84f7951c1e215dcfbab5e627b0fa017f",
+       "right": false
+      },
+      {
+       "hash": "ac502540bc34b4ce71bd8108a461337cd4374f1e119c86f83ee46bf502fe5cca",
+       "right": false
+      }
+     ]
+    },
+    "txType": "updateKeyPage",
+    "previousState": {
+     "version": 1,
+     "entries": [
+      {
+       "keyHash": "64250b1e4f16aa9b10b14106611b6fce2e7bb5ac8900c674193680eb7e25ffe2"
+      }
+     ],
+     "keys": [
+      "64250b1e4f16aa9b10b14106611b6fce2e7bb5ac8900c674193680eb7e25ffe2"
+     ],
+     "threshold": 1
+    },
+    "newState": {
+     "version": 2,
+     "entries": [
+      {
+       "keyHash": "87d2927e691b31c8ce8137b74f38493386d41a63e6d0111baa800890130a7f25"
+      }
+     ],
+     "keys": [
+      "87d2927e691b31c8ce8137b74f38493386d41a63e6d0111baa800890130a7f25"
+     ],
+     "threshold": 1
+    }
+   }
+  ],
+  "validation": {
+   "genesisFound": true,
+   "mutationsApplied": 1,
+   "totalEntries": 4,
+   "finalVersion": 2,
+   "finalThreshold": 1,
+   "finalKeyCount": 1
+  }
+ },
+ "validated_signatures": [
+  {
+   "messageID": "acc://83e042a86471d4a40ded65b6e17a24958329e8a3798d722c6677d429264fe8b5@rb4-phase-c-09282125.acme/book/1",
+   "messageHash": "83e042a86471d4a40ded65b6e17a24958329e8a3798d722c6677d429264fe8b5",
+   "receipt": {
+    "start": "83e042a86471d4a40ded65b6e17a24958329e8a3798d722c6677d429264fe8b5",
+    "anchor": "6c94a9670c13cbf8d1219dd1454fe3dafbd82695cf0e1f0c12e1f495092e8dcf",
+    "localBlock": 13127747,
+    "localBlockTime": null,
+    "majorBlock": null,
+    "end": "83e042a86471d4a40ded65b6e17a24958329e8a3798d722c6677d429264fe8b5",
+    "entries": [
+     {
+      "hash": "ca48cbf34bb79898012ea8988780983fb238d67e210629487fb913edab8906b7",
+      "right": false
+     },
+     {
+      "hash": "129fc769cbac31227fadaf839559abd88f7ff61fda7212b6cdd7a7883a7d9b06",
+      "right": false
+     },
+     {
+      "hash": "1f1ad545928182451b4f2f98a944cfb71bc15c697c6bd0d6b265b1fc65e88296",
+      "right": false
+     },
+     {
+      "hash": "cfff0b9175af5f5e5424c8ce1e40a80a30a8a07ac4e18d407e78c285c2d17da9",
+      "right": true
+     },
+     {
+      "hash": "0350f60fe7390465939003686c3c8419d5897d02572805d545627feb8f053d49",
+      "right": false
+     },
+     {
+      "hash": "404720ab7c97771e2136af49dc7cb4c3fee15b8f11d77e823a10b4a9c9bca71a",
+      "right": true
+     },
+     {
+      "hash": "01902086291ba249f19723091314f8cac2a283fb64081c3983a4db860e1a6ec2",
+      "right": false
+     },
+     {
+      "hash": "78337618a4e863ba663c71522c7e6d08b54522c87f19d33711ed66a92b9a5ded",
+      "right": false
+     },
+     {
+      "hash": "0dec62ef80b997ad19d214579a779a8a7439d3d301fba18a3798c1a0560cc6f7",
+      "right": false
+     },
+     {
+      "hash": "124adbae798cdaadefa2a86461261bae2741d980c088b8f521c58af557276ba5",
+      "right": false
+     },
+     {
+      "hash": "c9c1c1995e54e1c14acf7d8ba861fb9c3f23c282cd4089593cd99a25e866a46a",
+      "right": false
+     },
+     {
+      "hash": "dd1967f8198e41ce01ed9204d2ae3f1e3b33b3356dcbe6580ad47e4f5b42edc7",
+      "right": false
+     },
+     {
+      "hash": "7452535e04641e1a929e44cd4edae706f2c3993bd0908fe32f64358521b59cb2",
+      "right": false
+     },
+     {
+      "hash": "437773e2f26f549c224549f9c034f88d84f7951c1e215dcfbab5e627b0fa017f",
+      "right": false
+     },
+     {
+      "hash": "ac502540bc34b4ce71bd8108a461337cd4374f1e119c86f83ee46bf502fe5cca",
+      "right": false
+     }
+    ]
+   },
+   "signature": {
+    "type": "ed25519",
+    "digestForm": "metadata",
+    "vote": "accept",
+    "publicKey": "2f95ee700781ead72734a7f3db95977aac8e933e22f42d5deffa94bc13b33f44",
+    "signature": "937938ec1535cca2e3edf06eadde06083f86b0bf83c74977ce67f6a5acd8b389545ce8eecf89cca5c7fddaf36595ea26198e4d9d52a38e804bc99e8609812107",
+    "signer": "acc://rb4-phase-c-09282125.acme/book/1",
+    "signerVersion": 2,
+    "timestamp": 1790685292178000,
+    "transactionHash": "98e404721458521e872d683f85db0cead068a5fdfc77f6fb88a7542f6fc930ed",
+    "txID": "",
+    "securityLevel": "",
+    "verifiedTime": "0001-01-01T00:00:00Z"
+   },
+   "timingVerified": true,
+   "transactionHashVerified": true,
+   "cryptographicallyVerified": true,
+   "securityLevel": "",
+   "verificationTime": "0001-01-01T00:00:00Z",
+   "integrityHash": ""
+  }
+ ],
+ "unique_valid_keys": 1,
+ "required_threshold": 1,
+ "threshold_satisfied": true,
+ "execution_success": true,
+ "timing_valid": true,
+ "g1_proof_complete": true,
+ "concurrency_enabled": false,
+ "worker_count": 0,
+ "processing_time_ms": 0,
+ "cryptographic_security": false,
+ "security_report": null,
+ "ed25519_verified": 0,
+ "audit_trail_events": 0,
+ "bundle_integrity_hash": "",
+ "signatureRouteStatus": {
+  "primaryRoute": "signatureSet",
+  "routesAgreed": true,
+  "degraded": false,
+  "artifacts": [
+   "signatureSet",
+   "enumeration"
+  ]
+ },
+ "timingBasis": [
+  {
+   "messageID": "acc://83e042a86471d4a40ded65b6e17a24958329e8a3798d722c6677d429264fe8b5@rb4-phase-c-09282125.acme/book/1",
+   "messageHash": "83e042a86471d4a40ded65b6e17a24958329e8a3798d722c6677d429264fe8b5",
+   "signerPage": "acc://rb4-phase-c-09282125.acme/book/1",
+   "signerIdentity": "rb4-phase-c-09282125.acme",
+   "principalPage": "acc://rb4-phase-c-09282125.acme/book/1",
+   "principalIdentity": "rb4-phase-c-09282125.acme",
+   "localOrderingChecked": true,
+   "receiptLocalBlock": 13127747,
+   "execMBI": 13127747,
+   "basis": "local-ordering"
+  }
+ ],
+ "authorization": {
+  "account": "acc://rb4-phase-c-09282125.acme/data",
+  "authorities": [
+   {
+    "authority": "acc://rb4-phase-c-09282125.acme/book",
+    "vote": {
+     "book": "acc://rb4-phase-c-09282125.acme/book",
+     "voted": true,
+     "vote": "accept",
+     "by": "acc://rb4-phase-c-09282125.acme/book/1",
+     "pages": [
+      {
+       "page": "acc://rb4-phase-c-09282125.acme/book/1",
+       "voted": true,
+       "vote": "accept",
+       "version": 2,
+       "threshold": 1,
+       "decidedAt": 13127747,
+       "counted": [
+        {
+         "entry": "key:87d2927e691b31c8ce8137b74f38493386d41a63e6d0111baa800890130a7f25",
+         "vote": "accept",
+         "by": "acc://83e042a86471d4a40ded65b6e17a24958329e8a3798d722c6677d429264fe8b5@rb4-phase-c-09282125.acme/book/1",
+         "block": 13127747
+        }
+       ]
+      }
+     ]
+    }
+   }
+  ],
+  "satisfied": true
+ }
+}

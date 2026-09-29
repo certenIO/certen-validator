@@ -290,6 +290,13 @@ type GovernanceProof struct {
 	// must never be read as "every signature was locally ordered" - see
 	// timing_evidence.go.
 	TimingBasis []SignatureTimingBasis `json:"timing_basis,omitempty"`
+
+	// Authorization is the G1 vote record: who decided the transaction (governance_decision.go). HERE for the same
+	// structural reason again: G1Result is inside the ValidatorBlock's BundleID and the A+++ govRoot, and a field
+	// added there would make an older binary, which drops it, recompute a different BundleID. Nil means the
+	// generator emitted none - which, for G1 and G2, means no decision record can be derived and the member cannot
+	// be anchored (RB4-F66).
+	Authorization *AuthorizationRecord `json:"authorization,omitempty"`
 }
 
 // IsValid returns whether the governance proof is valid at its level
