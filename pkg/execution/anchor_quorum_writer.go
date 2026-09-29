@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/certen/independant-validator/pkg/database"
+	"github.com/certen/independant-validator/pkg/execution/contracts"
 	"github.com/certen/independant-validator/pkg/metrics"
 )
 
@@ -293,12 +294,19 @@ func AnchorQuorumRecordFrom(ev *AnchorQuorumEvidence) *database.AnchorQuorumReco
 		BatchOperationID:        hexPrefixed(ev.BatchOperationID[:]),
 		BatchOperationIDVersion: ev.BatchOperationIDVersion,
 		MessageHash:             hexPrefixed(ev.MessageHash[:]),
-		VerifyTx:                ev.VerifyTx,
-		VerifyBlock:             ev.VerifyBlock,
-		AnchorCreateTx:          ev.AnchorCreateTx,
-		AnchorCreateBlock:       ev.AnchorCreateBlock,
-		AnchorCreateSender:      ev.AnchorCreateSender,
-		VerifySender:            ev.VerifySender,
+		// Everything the V8.2 anchor derived its bundle id from and its quorum signed (RB5-F9): with the root, the
+		// member count and the batch operation id, these re-derive BundleID and MessageHash offline.
+		AnchorVersion:         string(contracts.BatchAnchorV8_2),
+		AccumulateBlockHeight: int64(ev.AccumulateBlockHeight),
+		CertenSetRoot:         hexPrefixed(ev.SetRoot[:]),
+		AccumulateSetRoot:     hexPrefixed(ev.AccumulateSetRoot[:]),
+		AccumulateIncarnation: hexPrefixed(ev.Incarnation[:]),
+		VerifyTx:              ev.VerifyTx,
+		VerifyBlock:           ev.VerifyBlock,
+		AnchorCreateTx:        ev.AnchorCreateTx,
+		AnchorCreateBlock:     ev.AnchorCreateBlock,
+		AnchorCreateSender:    ev.AnchorCreateSender,
+		VerifySender:          ev.VerifySender,
 		// Not ev.AttestedAt, this validator's clock after it confirmed the anchor (RB3-F133): the completion
 		// time is the verify block's, filled from the chain by BlockTimedAnchorQuorumStore.
 		VerifiedAt:         ev.VerifyBlockTime,

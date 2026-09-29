@@ -66,12 +66,18 @@ func anchorRecordForTest(chainID int64, bundle string, rootByte byte) *AnchorQuo
 		// A v2 anchor: its operation id commits to every member's governance decision (RB4-F66).
 		BatchOperationIDVersion: "v2",
 		MessageHash:             bundleHex(888),
-		AnchorCreateTx:          "0x51a1c0de" + strings.Repeat("00", 28), // a real hash is 0x + 64 hex chars
-		VerifyTx:                "0xbeef" + strings.Repeat("11", 30),
-		VerifyBlock:             45943100,
-		VerifiedAt:              time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC),
-		AggregateSignature:      []byte{0xab, 0xcd},
-		AggregatePubKey:         []byte{0x12, 0x34},
+		// A V8.2 anchor: it committed the Accumulate set and incarnation (RB5-F9).
+		AnchorVersion:         "v8_2",
+		AccumulateBlockHeight: 9360888,
+		CertenSetRoot:         bundleHex(555),
+		AccumulateSetRoot:     bundleHex(777),
+		AccumulateIncarnation: bundleHex(666),
+		AnchorCreateTx:        "0x51a1c0de" + strings.Repeat("00", 28), // a real hash is 0x + 64 hex chars
+		VerifyTx:              "0xbeef" + strings.Repeat("11", 30),
+		VerifyBlock:           45943100,
+		VerifiedAt:            time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC),
+		AggregateSignature:    []byte{0xab, 0xcd},
+		AggregatePubKey:       []byte{0x12, 0x34},
 		Signers: []AnchorQuorumSigner{
 			{Address: "0xaaa", VotingPower: big.NewInt(100)},
 			{Address: "0xbbb", VotingPower: big.NewInt(100)},

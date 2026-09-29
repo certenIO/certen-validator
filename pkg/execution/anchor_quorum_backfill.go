@@ -99,6 +99,8 @@ type AnchorOnChainState struct {
 	Version           contracts.BatchAnchorVersion
 	AccumulateSetRoot [32]byte
 	Incarnation       [32]byte
+	// AccumulateBlockHeight is the height the anchor's bundle id derives from.
+	AccumulateBlockHeight uint64
 }
 
 // BackfillChain is the chain access the reconstruction needs. Satisfied by the live EVM stack; an
@@ -198,9 +200,17 @@ func ReconstructAnchorQuorum(
 		Root:             append([]byte(nil), state.MerkleRoot[:]...),
 		BatchOperationID: hexPrefixed(state.OperationID[:]),
 		MessageHash:      hexPrefixed(call.MessageHash[:]),
-		VerifyTx:         cand.TxHash,
-		VerifyBlock:      int64(blockNumber),
-		VerifiedAt:       verifiedAt,
+		// From the anchor's own record (RB5-F9): its generation, the height its bundle id derives from, and - on V8.2 -
+		// the Accumulate set and incarnation it committed. The CERTEN set root is the one the message was verified
+		// against above.
+		AnchorVersion:         string(state.Version),
+		AccumulateBlockHeight: int64(state.AccumulateBlockHeight),
+		CertenSetRoot:         certenSetRootHex(),
+		AccumulateSetRoot:     accumulateHexIfV8_2(state.Version, state.AccumulateSetRoot),
+		AccumulateIncarnation: accumulateHexIfV8_2(state.Version, state.Incarnation),
+		VerifyTx:              cand.TxHash,
+		VerifyBlock:           int64(blockNumber),
+		VerifiedAt:            verifiedAt,
 		// The anchor-create transaction is a DIFFERENT transaction and is not named in this calldata, so
 		// it stays empty rather than being filled with this one. Conflating the two is precisely what
 		// published the false layer-5 binding. `validator repair anchor-blocks` then locates it from the
@@ -318,9 +328,20 @@ func VerifyBackfilledQuorum(
 	if err != nil {
 		return fmt.Errorf("validator-set root: %w", err)
 	}
-	want := contracts.ComputeEvmMessageHashV6_1_Pre(
-		chainID, call.BundleID, state.MerkleRoot, state.OperationID, setRoot,
-	)
+	var want [32]byte
+	switch state.Version {
+	case contracts.BatchAnchorV8_2:
+		// A V8.2 anchor's quorum signed the eight-field message, over the Accumulate set and incarnation it stores.
+		if state.AccumulateSetRoot == ([32]byte{}) || state.Incarnation == ([32]byte{}) {
+			return fmt.Errorf("the V8.2 anchor stores no Accumulate validator set root or incarnation")
+		}
+		want = contracts.ComputeEvmMessageHashV8_2_Pre(chainID, call.BundleID, state.MerkleRoot, state.OperationID, setRoot,
+			state.AccumulateSetRoot, state.Incarnation)
+	case contracts.BatchAnchorV8_1:
+		want = contracts.ComputeEvmMessageHashV6_1_Pre(chainID, call.BundleID, state.MerkleRoot, state.OperationID, setRoot)
+	default:
+		return fmt.Errorf("the anchor record's generation %q is not one this validator verifies", state.Version)
+	}
 	if call.MessageHash != want {
 		return fmt.Errorf(
 			"the proof's message 0x%x is not the message this batch commits to (0x%x); the on-chain "+
@@ -328,4 +349,22 @@ func VerifyBackfilledQuorum(
 			call.MessageHash[:8], want[:8])
 	}
 	return nil
+}
+
+// certenSetRootHex is the CERTEN validator-set root the backfill verified the message against (the configured one;
+// RB5-F23: the root and registry in force at the verify block are owned by RB2 §8).
+func certenSetRootHex() string {
+	root, err := contracts.GetV6_1ValidatorSetRoot()
+	if err != nil {
+		return ""
+	}
+	return hexPrefixed(root[:])
+}
+
+// accumulateHexIfV8_2 is a V8.2 anchor's Accumulate value, 0x-hex; empty on a V8.1 anchor, which committed none.
+func accumulateHexIfV8_2(v contracts.BatchAnchorVersion, b [32]byte) string {
+	if v != contracts.BatchAnchorV8_2 {
+		return ""
+	}
+	return hexPrefixed(b[:])
 }

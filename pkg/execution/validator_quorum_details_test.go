@@ -30,7 +30,8 @@ func TestProofDetailsStateTheCheckersQuorum(t *testing.T) {
 	nonce := fmt.Sprintf("%032x", time.Now().UnixNano())
 	verifyTx := "0x" + strings.Repeat("7b", 32)
 	if _, err := repos.Batches.RecordAnchorQuorum(ctx, &database.AnchorQuorumRecord{
-		ChainID: 84532, BundleID: "0x" + nonce + nonce, Root: leaf[:], BatchOperationID: testBatchOperationID("0x" + strings.Repeat("77", 32)),
+		AnchorVersion: "v8_1",
+		ChainID:       84532, BundleID: "0x" + nonce + nonce, Root: leaf[:], BatchOperationID: testBatchOperationID("0x" + strings.Repeat("77", 32)),
 		BatchOperationIDVersion: "v2",
 		MessageHash:             "0x" + strings.Repeat("88", 32), AnchorCreateTx: "0x" + strings.Repeat("7a", 32), AnchorCreateBlock: 99,
 		VerifyTx: verifyTx, VerifyBlock: 100, VerifiedAt: time.Now().UTC(),

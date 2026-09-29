@@ -36,7 +36,8 @@ func TestTheArtifactStatesTheMembersPlaceInItsBatch(t *testing.T) {
 	root := hashPair(hashPair(l1, l0), l2)
 	nonce := strings.ReplaceAll(fmt.Sprintf("%032x", time.Now().UnixNano()), "-", "")
 	rec := &database.AnchorQuorumRecord{
-		ChainID: 84532, BundleID: "0x" + nonce + nonce, Root: root[:], BatchOperationID: testBatchOperationID("0x" + strings.Repeat("77", 32)),
+		AnchorVersion: "v8_1",
+		ChainID:       84532, BundleID: "0x" + nonce + nonce, Root: root[:], BatchOperationID: testBatchOperationID("0x" + strings.Repeat("77", 32)),
 		BatchOperationIDVersion: "v2",
 		MessageHash:             "0x" + strings.Repeat("88", 32), AnchorCreateTx: "0x" + strings.Repeat("5a", 32), AnchorCreateBlock: 90,
 		VerifyTx: "0x" + strings.Repeat("5b", 32), VerifyBlock: 100, VerifiedAt: time.Now().UTC(),

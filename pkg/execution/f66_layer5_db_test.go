@@ -45,6 +45,7 @@ func TestF66_Layer5CarriesTheAnchoredGovernance(t *testing.T) {
 	ev := &AnchorQuorumEvidence{
 		ChainID: 84532, BundleID: tree.BundleID, Root: tree.Root, BatchOperationID: tree.BatchOperationID,
 		BatchOperationIDVersion: tree.BatchOperationIDVersion, MessageHash: [32]byte{0x88},
+		AccumulateBlockHeight: tree.BlockHeight, AccumulateSetRoot: tree.AccumulateSetRoot, Incarnation: tree.Incarnation,
 		VerifyTx: "0x" + strings.Repeat("6b", 32), VerifyBlock: 100, VerifyBlockTime: time.Now().UTC(),
 		AnchorCreateTx: "0x" + strings.Repeat("6a", 32), AnchorCreateBlock: 99,
 		AggregateSignatureHex: "0x01", AggregatePublicKeyHex: "0x02",

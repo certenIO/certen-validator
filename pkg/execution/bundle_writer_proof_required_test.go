@@ -69,7 +69,8 @@ func TestBundleWriterFailsWhenTheLayer5RowIsRefused(t *testing.T) {
 	leaf := crypto.Keccak256Hash([]byte("f91"))
 	nonce := fmt.Sprintf("%032x", time.Now().UnixNano())
 	if _, err := repos.Batches.RecordAnchorQuorum(ctx, &database.AnchorQuorumRecord{
-		ChainID: 84532, BundleID: "0x" + nonce + nonce, Root: leaf[:], BatchOperationID: testBatchOperationID("0x" + strings.Repeat("77", 32)),
+		AnchorVersion: "v8_1",
+		ChainID:       84532, BundleID: "0x" + nonce + nonce, Root: leaf[:], BatchOperationID: testBatchOperationID("0x" + strings.Repeat("77", 32)),
 		BatchOperationIDVersion: "v2",
 		MessageHash:             "0x" + strings.Repeat("88", 32), AnchorCreateTx: "0x" + strings.Repeat("9a", 32), AnchorCreateBlock: 99,
 		VerifyTx: "0x" + strings.Repeat("9b", 32), VerifyBlock: 100, VerifiedAt: time.Now().UTC(),

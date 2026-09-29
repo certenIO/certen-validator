@@ -31,9 +31,9 @@ func NewChainBackfillReader(chains *ReadOnlyChains) *ChainBackfillReader {
 	return &ChainBackfillReader{chains: chains}
 }
 
-// The `anchors(bytes32)` layout comes from anchorsABIJSON in batch_proof_submitter.go — one transcription
-// of the deployed struct, checked against a DEPLOYED anchor by TestAnchorsTupleLayoutMatchesDeployedContract.
-// A second copy here would be a second thing to get wrong.
+// The `anchors(bytes32)` record is read through ReadAnchorState - the one reader, decoding a V8.1 or V8.2 anchor from
+// the layout embedded from the compiled contract, checked against a DEPLOYED anchor by
+// TestAnchorsTupleLayoutMatchesDeployedContract. A second copy here would be a second thing to get wrong.
 
 // VerifyTransaction reads a mined transaction's calldata and receipt status.
 func (r *ChainBackfillReader) VerifyTransaction(
@@ -128,6 +128,10 @@ func decodeAnchorState(st *contracts.AnchorState) (AnchorOnChainState, error) {
 		ExecutionCommitment: st.ExecutionCommitment, Validator: st.Validator, Valid: st.Valid, ProofExecuted: st.ProofExecuted,
 		Version: st.Version, AccumulateSetRoot: st.AccumulateSetRoot, Incarnation: st.Incarnation,
 	}
+	if st.AccumulateBlockHeight == nil || !st.AccumulateBlockHeight.IsUint64() {
+		return AnchorOnChainState{}, fmt.Errorf("accumulateBlockHeight has an unexpected value")
+	}
+	state.AccumulateBlockHeight = st.AccumulateBlockHeight.Uint64()
 	if st.Timestamp.Sign() > 0 {
 		state.CreatedAt = st.Timestamp.Uint64()
 		state.Timestamp = time.Unix(st.Timestamp.Int64(), 0).UTC()
