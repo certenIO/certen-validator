@@ -18,7 +18,12 @@ const (
 	// IntentLifecycleSubmitted - Intent written to Accumulate (set retroactively by validator)
 	IntentLifecycleSubmitted IntentLifecycleStatus = "submitted"
 
-	// IntentLifecyclePendingSignatures - Multi-sig awaiting signatures (future: set by api-bridge)
+	// IntentLifecyclePendingSignatures - Multi-sig awaiting signatures. Never written by the validators, and never
+	// will be: they read executed transactions, and a transaction awaiting signatures has not executed. Nor can the
+	// bridge write it - seven independent databases behind a read-only lifecycle API, and a validator does not record
+	// state on another service's word. An intent awaiting signatures is reported from Accumulate's own records by the
+	// api-bridge (src/intent-state.ts, `intent.state: awaiting_signatures`, source accumulate) and shown by the gateway
+	// (RB4-F63). Kept so a reader of the bridge's mapping of it finds why it is never produced.
 	IntentLifecyclePendingSignatures IntentLifecycleStatus = "pending_signatures"
 
 	// IntentLifecycleAuthorized - Accumulate delivered (statusNo=201), committed to block
