@@ -201,6 +201,11 @@ func TestADNBlockIsSearchedThroughEveryAnchoredBlock(t *testing.T) {
 	if len(txs) != 1 || !strings.EqualFold(txs[0].Hash, intentTx) || txs[0].BlockHeight != dnH || txs[0].AccountURL != "acc://user.acme/data" {
 		t.Fatalf("found %+v; want the one intent, at DN height %d", txs, dnH)
 	}
+	// RB4-F46: the BVN the transaction was written on, and its block there - the L1-L3 proof is built on it. Both
+	// were dropped, so every intent was proved on "acc://dn.acme" and no proof could be built.
+	if txs[0].ProofPartition != "bvn1" || txs[0].ProofBlockIndex != bvn1Block {
+		t.Fatalf("the intent was written on bvn1 block %d; it carries proof partition %q block %d", bvn1Block, txs[0].ProofPartition, txs[0].ProofBlockIndex)
+	}
 	// The BVNs were read at their own block, never at the DN's height.
 	for _, q := range f.blockQueries {
 		if strings.HasPrefix(q, "acc://bvn") && strings.Contains(q, fmt.Sprintf("|%d|", dnH)) {
@@ -268,5 +273,17 @@ func TestAnAnchorEntryThatIsNotAnAnchorIsAnError(t *testing.T) {
 	f.notAnAnchor = true
 	if _, err := f.serve(t).SearchCertenTransactions(context.Background(), dnH); err == nil {
 		t.Fatal("an anchor-pool entry that is not an anchor was skipped")
+	}
+}
+
+// RB4-F46: a BVN partition name is read from its partition URL exactly; anything else is no BVN, never a default.
+func TestTheBVNNameIsReadFromItsPartitionURL(t *testing.T) {
+	for in, want := range map[string]string{
+		"acc://bvn-BVN1.acme": "bvn1", "acc://bvn-bvn0.acme": "bvn0", "acc://BVN-Apollo.acme": "apollo",
+		"acc://dn.acme": "", "acc://bvn-.acme": "", "acc://bvn-BVN1.acme/ledger": "", "": "", "bvn1": "",
+	} {
+		if got := BVNNameOf(in); got != want {
+			t.Errorf("BVNNameOf(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

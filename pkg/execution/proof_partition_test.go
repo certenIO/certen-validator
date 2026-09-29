@@ -27,14 +27,15 @@ func TestAProofIsNeverBuiltOnAGuessedPartition(t *testing.T) {
 	}
 }
 
-// The proof cycle is started with the partition consensus used, not "".
+// The proof cycle is started with the partition consensus used, not "": the BVN the transaction was written on
+// (RB4-F46 - the intent Partition holds the Directory Network block discovery found it through).
 func TestTheProofCycleIsGivenTheDiscoveredPartition(t *testing.T) {
 	raw, err := os.ReadFile("../consensus/async_attestation.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 	src := string(raw)
-	if n := strings.Count(src, "att.CertenIntent.Partition,\n\t); err != nil {"); n != 2 {
+	if n := strings.Count(src, "att.CertenIntent.ProofPartition,\n\t); err != nil {"); n != 2 {
 		t.Fatalf("%d of the 2 proof-cycle starts pass the discovered partition", n)
 	}
 }
