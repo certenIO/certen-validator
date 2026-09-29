@@ -41,10 +41,8 @@ type AccumulateSubmitterImpl struct {
 	publicKey  ed25519.PublicKey
 
 	// Account configuration
-	accountURL   string // Principal account for write-back (e.g., "acc://certen.acme/proof-results")
-	signerURL    string // Key page URL for signing (e.g., "acc://certen.acme/book/1")
-	keyPageIndex uint64 // Key page index (signer version)
-	keyIndex     uint64 // Key index within the page
+	accountURL string // Principal account for write-back (e.g., "acc://certen.acme/proof-results")
+	signerURL  string // Key page URL for signing (e.g., "acc://certen.acme/book/1")
 
 	// Nonce and credit management
 	nonceTracker  *NonceTracker
@@ -68,10 +66,8 @@ type AccumulateSubmitterConfig struct {
 	PrivateKey ed25519.PrivateKey
 
 	// Account configuration
-	AccountURL   string // Data account for write-back
-	SignerURL    string // Key page URL
-	KeyPageIndex uint64
-	KeyIndex     uint64
+	AccountURL string // Data account for write-back
+	SignerURL  string // Key page URL
 
 	// Timing configuration
 	ConfirmationTimeout time.Duration
@@ -136,8 +132,6 @@ func NewAccumulateSubmitter(cfg *AccumulateSubmitterConfig) (*AccumulateSubmitte
 		publicKey:           publicKey,
 		accountURL:          cfg.AccountURL,
 		signerURL:           cfg.SignerURL,
-		keyPageIndex:        cfg.KeyPageIndex,
-		keyIndex:            cfg.KeyIndex,
 		nonceTracker:        nonceTracker,
 		creditChecker:       creditChecker,
 		confirmationTimeout: confirmationTimeout,
@@ -271,8 +265,9 @@ func (s *AccumulateSubmitterImpl) getKeyPageVersion(ctx context.Context) (uint64
 	// Query the key page to get current version
 	version, err := s.client.GetKeyPageVersion(ctx, s.signerURL)
 	if err != nil {
-		s.logger.Printf("⚠️ Failed to query key page version, using fallback: %v", err)
-		return s.keyPageIndex, nil // Fall back to configured value
+		// A guessed version is rejected by the network once the page has changed (every key added or
+		// removed bumps it), so the write-back fails here, naming why, rather than there.
+		return 0, fmt.Errorf("key page version of %s: %w", s.signerURL, err)
 	}
 	s.logger.Printf("🔑 Key page version from query: %d", version)
 	return version, nil

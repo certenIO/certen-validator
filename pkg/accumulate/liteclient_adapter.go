@@ -2114,8 +2114,7 @@ func (l *LiteClientAdapter) GetKeyPageVersion(ctx context.Context, signerURL str
 		}
 	}
 
-	// Default to 1 if not found (most key pages start at version 1)
-	return 1, nil
+	return 0, fmt.Errorf("%s: the response carries no key page version", signerURL)
 }
 
 // GetSignerNonce returns the current nonce for a signer (key page or lite identity)
