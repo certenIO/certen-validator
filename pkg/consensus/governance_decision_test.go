@@ -1,6 +1,7 @@
 package consensus
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -17,7 +18,7 @@ import (
 
 func g1Wrapper(t *testing.T) (*proof.G0Result, *proof.GovernanceProof) {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("..", "proof", "testdata", "gdr_g1_phasec_98e40472.json"))
+	raw, err := os.ReadFile(filepath.Join("..", "proof", "testdata", "vote_evidence_g1_phasec_98e40472.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,13 +30,17 @@ func g1Wrapper(t *testing.T) (*proof.G0Result, *proof.GovernanceProof) {
 	if err != nil || rec == nil {
 		t.Fatalf("record: %v", err)
 	}
-	return &g0, &proof.GovernanceProof{Level: proof.GovLevelG1, Authorization: rec}
+	ev, err := proof.VoteEvidenceFromRaw(raw)
+	if err != nil || ev == nil {
+		t.Fatalf("vote evidence: %v", err)
+	}
+	return &g0, &proof.GovernanceProof{Level: proof.GovLevelG1, Authorization: rec, VoteEvidence: ev}
 }
 
 func TestGovernanceDecisionIsDerivedFromG1AndConfirmedByG2(t *testing.T) {
 	g0, g1 := g1Wrapper(t)
 	_, g2 := g1Wrapper(t)
-	gdr, rec, err := deriveGovernanceDecision(g0, g1, g2)
+	gdr, rec, err := deriveGovernanceDecision(context.Background(), g0, g1, g2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,20 +54,46 @@ func TestGovernanceDecisionRefusesWhatItCannotEstablish(t *testing.T) {
 	g0, g1 := g1Wrapper(t)
 	_, g2 := g1Wrapper(t)
 	g2.Authorization.Authorities[0].Vote.Pages[0].Counted[0].By += "-other"
-	if _, _, err := deriveGovernanceDecision(g0, g1, g2); !errors.Is(err, ErrGovernanceUnavailable) {
+	if _, _, err := deriveGovernanceDecision(context.Background(), g0, g1, g2); !errors.Is(err, ErrGovernanceUnavailable) {
 		t.Fatalf("G1 and G2 recorded different decisions: %v", err)
 	}
 
 	_, g2 = g1Wrapper(t)
 	g1.Authorization = nil
-	if _, _, err := deriveGovernanceDecision(g0, g1, g2); !errors.Is(err, ErrGovernanceUnavailable) {
+	if _, _, err := deriveGovernanceDecision(context.Background(), g0, g1, g2); !errors.Is(err, ErrGovernanceUnavailable) {
 		t.Fatalf("no G1 vote record: %v", err)
 	}
 
 	g0, g1 = g1Wrapper(t)
 	g2.Authorization = nil
-	if _, _, err := deriveGovernanceDecision(g0, g1, g2); !errors.Is(err, ErrGovernanceUnavailable) {
+	if _, _, err := deriveGovernanceDecision(context.Background(), g0, g1, g2); !errors.Is(err, ErrGovernanceUnavailable) {
 		t.Fatalf("no G2 vote record: %v", err)
+	}
+
+	// The vote record must be reached, here, from its chain-bound evidence: without it, or from evidence that does
+	// not reach it, the record is only the proof's word for who decided.
+	g0, g1 = g1Wrapper(t)
+	_, g2 = g1Wrapper(t)
+	g1.VoteEvidence = nil
+	if _, _, err := deriveGovernanceDecision(context.Background(), g0, g1, g2); !errors.Is(err, ErrGovernanceUnavailable) {
+		t.Fatalf("no vote evidence: %v", err)
+	}
+	g0, g1 = g1Wrapper(t)
+	g1.VoteEvidence.Signatures[0].Fact.Block++
+	if _, _, err := deriveGovernanceDecision(context.Background(), g0, g1, g2); !errors.Is(err, ErrGovernanceUnavailable) {
+		t.Fatalf("tampered vote evidence: %v", err)
+	}
+	g0, g1 = g1Wrapper(t)
+	g1.Authorization.Authorities[0].Vote.Pages[0].Counted[0].By += "-other"
+	g2.Authorization.Authorities[0].Vote.Pages[0].Counted[0].By += "-other"
+	if _, _, err := deriveGovernanceDecision(context.Background(), g0, g1, g2); !errors.Is(err, ErrGovernanceUnavailable) {
+		t.Fatalf("a vote record its evidence does not reach: %v", err)
+	}
+	g0, g1 = g1Wrapper(t)
+	_, g2 = g1Wrapper(t)
+	g0.TxHash = "00" + g0.TxHash[2:]
+	if _, _, err := deriveGovernanceDecision(context.Background(), g0, g1, g2); !errors.Is(err, ErrGovernanceUnavailable) {
+		t.Fatalf("evidence about another transaction: %v", err)
 	}
 }
 

@@ -418,6 +418,9 @@ func TestS2_EvidenceShapesAreNotHashed(t *testing.T) {
 		// (inside the govRoot and the ValidatorBlock's BundleID). TestGovernanceDecision_TheAdapterKeepsTheRecord
 		// checks by value that it does not reach G1Result.
 		{"Authorization", "authorization,omitempty"},
+		// RB4-F66 E2: the vote record's chain-bound evidence, beside the record for the same reason.
+		// TestVoteEvidence_TheAdapterKeepsItOffG1Result checks by value that it does not reach G1Result.
+		{"VoteEvidence", "vote_evidence,omitempty"},
 	})
 
 	assertShape(t, "proof.SignatureTimingBasis (NOT HASHED)", certenproof.SignatureTimingBasis{}, []fieldSpec{

@@ -8,6 +8,7 @@ package proof
 import (
 	"context"
 	"fmt"
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govvote"
 	"time"
 
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/api"
@@ -110,6 +111,8 @@ type CertenProof struct {
 	// reason as GovReceipts; the decision's COMMITMENT is what the batch operation id commits to (RB4-F66).
 	GovDecision      []byte               `json:"gov_decision,omitempty"`
 	GovAuthorization *AuthorizationRecord `json:"gov_authorization,omitempty"`
+	// GovVoteEvidence is what the vote record was evaluated from, verified to reach it (governance_vote_evidence.go).
+	GovVoteEvidence *govvote.Evidence `json:"gov_vote_evidence,omitempty"`
 
 	// Verification status
 	VerificationStatus *VerificationStatusData `json:"verification_status"`

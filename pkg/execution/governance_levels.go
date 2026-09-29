@@ -43,9 +43,11 @@
 package execution
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govvote"
 
 	"github.com/certen/independant-validator/pkg/consensus"
 	certenproof "github.com/certen/independant-validator/pkg/proof"
@@ -109,6 +111,8 @@ type GovernanceLevelInputs struct {
 	// (RB4-F66). Both or neither.
 	Decision      []byte
 	Authorization *certenproof.AuthorizationRecord
+	// VoteEvidence is what Authorization was evaluated from. All three or none.
+	VoteEvidence *govvote.Evidence
 
 	// Level is the governance level actually achieved ("G0"|"G1"|"G2").
 	Level string
@@ -229,9 +233,17 @@ func GovernanceInputsFromCommitment(cm map[string]interface{}) (*GovernanceLevel
 		in.Authorization = &rec
 		found = true
 	}
-	if (in.Decision == nil) != (in.Authorization == nil) {
-		return nil, fmt.Errorf("the commitment carries a governance decision without the vote record it was " +
-			"derived from, or the reverse")
+	if s, ok := cm[consensus.GovVoteEvidenceCommitmentKey].(string); ok && s != "" {
+		ev, err := certenproof.DecodeVoteEvidence([]byte(s))
+		if err != nil {
+			return nil, fmt.Errorf("the governance vote evidence in the commitment: %w", err)
+		}
+		in.VoteEvidence = ev
+		found = true
+	}
+	if (in.Decision == nil) != (in.Authorization == nil) || (in.Decision == nil) != (in.VoteEvidence == nil) {
+		return nil, fmt.Errorf("the commitment carries a governance decision, its vote record and the vote's " +
+			"evidence only in part")
 	}
 	if s, ok := cm[consensus.GovTimingBasisCommitmentKey].(string); ok && s != "" {
 		var tb []certenproof.SignatureTimingBasis
@@ -344,6 +356,7 @@ const (
 	GovLevelDecisionKey      = "decision_record"
 	GovLevelCommitmentKey    = "governance_commitment"
 	GovLevelAuthorizationKey = "authorization"
+	GovLevelVoteEvidenceKey  = "vote_evidence"
 )
 
 // DecisionEvidence is what the G1 level stores of who decided the transaction: the decision record, its commitment
@@ -367,6 +380,13 @@ func (in *GovernanceLevelInputs) DecisionEvidence() (map[string]interface{}, err
 	if string(again) != string(in.Decision) {
 		return nil, fmt.Errorf("the governance decision is not the one its vote record and G0 result derive")
 	}
+	if err := certenproof.VerifyVoteEvidence(context.Background(), &g0, in.VoteEvidence, in.Authorization); err != nil {
+		return nil, fmt.Errorf("the governance decision's vote record: %w", err)
+	}
+	ev, err := json.Marshal(in.VoteEvidence)
+	if err != nil {
+		return nil, fmt.Errorf("the governance vote evidence: %w", err)
+	}
 	auth, err := json.Marshal(in.Authorization)
 	if err != nil {
 		return nil, fmt.Errorf("the governance vote record: %w", err)
@@ -376,5 +396,6 @@ func (in *GovernanceLevelInputs) DecisionEvidence() (map[string]interface{}, err
 		GovLevelDecisionKey:      hex.EncodeToString(in.Decision),
 		GovLevelCommitmentKey:    hex.EncodeToString(c[:]),
 		GovLevelAuthorizationKey: json.RawMessage(auth),
+		GovLevelVoteEvidenceKey:  json.RawMessage(ev),
 	}, nil
 }

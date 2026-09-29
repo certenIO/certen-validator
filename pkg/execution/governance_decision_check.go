@@ -7,6 +7,8 @@
 // member's (operation id, governance commitment) and the batch operation id the anchor stores and the quorum signed.
 // From those alone, offline:
 //
+//   - the vote record is evaluated again from its stored evidence - the chain-bound signatures, votes and page
+//     histories - and must be reached exactly;
 //   - the decision is derived again from the stored vote record and G0 result, and must be the stored decision;
 //   - its commitment must be the one the batch lists for this member;
 //   - the batch operation id must recompute from the members (Layer5.VerifyOffline).
@@ -17,6 +19,7 @@
 package execution
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -36,8 +39,12 @@ var ErrGovernanceNotAnchored = errors.New("the governance decision is recorded a
 
 // GovernanceDecisionCheck is what CheckGovernanceDecision established.
 type GovernanceDecisionCheck struct {
-	Commitment       string // 0x-hex
-	Authorities      int
+	Commitment  string // 0x-hex
+	Authorities int
+	// Evidence is what the vote record was evaluated again from: signatures, recorded and delegated votes, and
+	// page histories replayed from genesis.
+	EvidenceMessages int
+	EvidencePages    int
 	BatchOperationID string // 0x-hex, when anchored
 	BatchVersion     string
 }
@@ -81,6 +88,17 @@ func CheckGovernanceDecision(levels []certenproof.StoredGovernanceLevel, l5 *Lay
 	if err := json.Unmarshal(g1.Result, &g0); err != nil {
 		return nil, fmt.Errorf("the stored G1 result does not decode: %w", err)
 	}
+	rawEvidence, ok := g1.Flags[GovLevelVoteEvidenceKey]
+	if !ok {
+		return nil, fmt.Errorf("the G1 level stores a governance decision without the evidence of its vote record")
+	}
+	ev, err := certenproof.DecodeVoteEvidence(rawEvidence)
+	if err != nil {
+		return nil, err
+	}
+	if err := certenproof.VerifyVoteEvidence(context.Background(), &g0, ev, &rec); err != nil {
+		return nil, fmt.Errorf("the stored vote record: %w", err)
+	}
 	again, err := certenproof.GovernanceDecisionRecord(&g0, &rec)
 	if err != nil {
 		return nil, fmt.Errorf("the stored vote record does not support a decision: %w", err)
@@ -93,7 +111,8 @@ func CheckGovernanceDecision(levels []certenproof.StoredGovernanceLevel, l5 *Lay
 	if !strings.EqualFold(strings.TrimPrefix(commitmentHex, "0x"), hex.EncodeToString(c[:])) {
 		return nil, fmt.Errorf("the stored commitment %s is not the decision's (%s)", commitmentHex, commitment)
 	}
-	out := &GovernanceDecisionCheck{Commitment: commitment, Authorities: len(rec.Authorities)}
+	out := &GovernanceDecisionCheck{Commitment: commitment, Authorities: len(rec.Authorities),
+		EvidenceMessages: len(ev.Signatures) + len(ev.Votes) + len(ev.Arrivals), EvidencePages: len(ev.Pages)}
 
 	if l5 == nil || l5.Governance == nil {
 		return out, fmt.Errorf("%w: the proof's layer 5 carries no batch governance", ErrGovernanceNotAnchored)

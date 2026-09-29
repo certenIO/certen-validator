@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govvote"
 	"github.com/certen/independant-validator/pkg/entitlement"
 	"io"
 	"log"
@@ -973,6 +974,7 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	// results like the receipts: it must not reach G1Result, which is inside the ValidatorBlock's BundleID.
 	var govDecision []byte
 	var govAuthorization *proof.AuthorizationRecord
+	var govVoteEvidence *govvote.Evidence
 	var governanceLevel string
 	var resolvedKeyPageURL string
 	resolvedKeyBookURL := governanceData.Authorization.RequiredKeyBook
@@ -1134,11 +1136,11 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 		bv.logger.Printf("✅ [GOV-PROOF] G2 proof generated: PayloadVerified=%v, EffectVerified=%v, Complete=%v",
 			g2Proof.PayloadVerified, g2Proof.EffectVerified, g2Proof.G2ProofComplete)
 
-		gdr, rec, derr := deriveGovernanceDecision(g0Proof, g1ProofWrapper, g2ProofWrapper)
+		gdr, rec, derr := deriveGovernanceDecision(ctx, g0Proof, g1ProofWrapper, g2ProofWrapper)
 		if derr != nil {
 			return nil, fmt.Errorf("%w: intent %s: %w", ErrGovernanceUnavailable, certenIntent.IntentID, derr)
 		}
-		govDecision, govAuthorization = gdr, rec
+		govDecision, govAuthorization, govVoteEvidence = gdr, rec, g1ProofWrapper.VoteEvidence
 		commitment := proof.GovernanceCommitment(gdr)
 		bv.logger.Printf("🧾 [GOV-DECISION] intent %s: governance decision %x (%d authority/ies)",
 			certenIntent.IntentID, commitment[:8], len(rec.Authorities))
@@ -1173,6 +1175,7 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	certenProof.GovTimingBasis = govTimingBasis
 	certenProof.GovDecision = govDecision
 	certenProof.GovAuthorization = govAuthorization
+	certenProof.GovVoteEvidence = govVoteEvidence
 	certenProof.KeypageURL = resolvedKeyPageURL
 	certenProof.KeybookURL = resolvedKeyBookURL
 
@@ -3392,13 +3395,23 @@ func governanceProofFailureClass(err error) error {
 }
 
 // deriveGovernanceDecision is who decided the transaction, from this validator's own G1 vote record: the record the
-// batch commits to (RB4-F66). G2 evaluates G1 again, and its record must state the same decision - two runs of one
-// proof that disagree about who decided establish neither. A record that is missing or cannot support a decision is
-// an outage of the proof, not a verdict: G1 already found the authorities satisfied.
-func deriveGovernanceDecision(g0 *proof.G0Result, g1, g2 *proof.GovernanceProof) ([]byte, *proof.AuthorizationRecord, error) {
+// batch commits to (RB4-F66). The record is evaluated again, here, from the evidence the proof carries for it - the
+// chain-bound signatures, votes and page histories - and must be reached exactly. G2 evaluates G1 again, and its
+// record must state the same decision - two runs of one proof that disagree about who decided establish neither. A
+// record that is missing, unevidenced or cannot support a decision is an outage of the proof, not a verdict: G1
+// already found the authorities satisfied.
+func deriveGovernanceDecision(ctx context.Context, g0 *proof.G0Result, g1, g2 *proof.GovernanceProof) ([]byte,
+	*proof.AuthorizationRecord, error) {
 	if g1 == nil || g1.Authorization == nil {
 		return nil, nil, fmt.Errorf("%w: the G1 proof carries no vote record, so who decided the transaction is not "+
 			"established", ErrGovernanceUnavailable)
+	}
+	if g1.VoteEvidence == nil {
+		return nil, nil, fmt.Errorf("%w: the G1 proof carries no evidence for its vote record, so the record is the "+
+			"proof's word for who decided", ErrGovernanceUnavailable)
+	}
+	if err := proof.VerifyVoteEvidence(ctx, g0, g1.VoteEvidence, g1.Authorization); err != nil {
+		return nil, nil, fmt.Errorf("%w: the G1 vote record: %w", ErrGovernanceUnavailable, err)
 	}
 	gdr, err := proof.GovernanceDecisionRecord(g0, g1.Authorization)
 	if err != nil {

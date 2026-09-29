@@ -390,6 +390,16 @@ func (g *CLIGovernanceProofGenerator) parseOutput(level GovernanceLevel, output 
 				"and no governance decision can be committed for it", level)
 		}
 		govProof.Authorization = rec
+
+		ve, err := VoteEvidenceFromRaw(jsonData)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", level, err)
+		}
+		if ve == nil {
+			g.logger.Printf("[GOV-PROOF] %s carries NO vote evidence - its vote record cannot be evaluated again, "+
+				"and no governance decision can be committed for it", level)
+		}
+		govProof.VoteEvidence = ve
 	}
 
 	ev, err := GovReceiptEvidenceFromRaw(string(level), jsonData)

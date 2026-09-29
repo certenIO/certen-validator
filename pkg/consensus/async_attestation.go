@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govvote"
 	"sort"
 	"strconv"
 	"strings"
@@ -70,6 +71,8 @@ const (
 	// the G1 vote record it was derived from as JSON (RB4-F66).
 	GovDecisionCommitmentKey      = "att.GovDecision"
 	GovAuthorizationCommitmentKey = "att.GovAuthorization"
+	// GovVoteEvidenceCommitmentKey carries the vote record's evidence as JSON.
+	GovVoteEvidenceCommitmentKey = "att.GovVoteEvidence"
 
 	// GovTimingBasisCommitmentKey carries []proof.SignatureTimingBasis as JSON —
 	// which counted signatures' ordering rests on execution inclusion rather
@@ -136,6 +139,7 @@ type PendingAttestation struct {
 	// commits to the decision.
 	GovDecision      []byte
 	GovAuthorization *proof.AuthorizationRecord
+	GovVoteEvidence  *govvote.Evidence
 
 	// Signatures and level captured during the round.
 	BLSSignature        string
@@ -500,6 +504,7 @@ func (bv *BFTValidator) captureAttestation(
 		att.GovTimingBasis = certenProof.GovTimingBasis
 		att.GovDecision = certenProof.GovDecision
 		att.GovAuthorization = certenProof.GovAuthorization
+		att.GovVoteEvidence = certenProof.GovVoteEvidence
 	}
 
 	bundleIDHex := strings.TrimPrefix(att.BundleIDHex, "0x")
@@ -747,5 +752,8 @@ func putProofEvidence(commitMap map[string]interface{}, att *PendingAttestation,
 	}
 	if att.GovAuthorization != nil {
 		putJSON(GovAuthorizationCommitmentKey, att.GovAuthorization)
+	}
+	if att.GovVoteEvidence != nil {
+		putJSON(GovVoteEvidenceCommitmentKey, att.GovVoteEvidence)
 	}
 }

@@ -382,7 +382,10 @@ func reportGovernanceDecision(ctx context.Context, store *certenproof.PostgresPr
 	got, err := execution.CheckGovernanceDecision(levels, l5)
 	switch {
 	case err == nil:
-		fmt.Printf("  GOV decision: %d authority/ies, commitment %s… re-derived from the stored vote record\n",
+		fmt.Printf("  GOV vote: evaluated again from %d chain-bound message(s) and %d page history/ies replayed\n",
+			got.EvidenceMessages, got.EvidencePages)
+		fmt.Printf("      from genesis; it reaches the stored vote record exactly\n")
+		fmt.Printf("  GOV decision: %d authority/ies, commitment %s… re-derived from that vote record\n",
 			got.Authorities, short(strings.TrimPrefix(got.Commitment, "0x")))
 		fmt.Printf("  GOV anchored: the batch operation id %s… (%s) recomputes from its members, this one\n",
 			short(strings.TrimPrefix(got.BatchOperationID, "0x")), got.BatchVersion)
@@ -395,6 +398,8 @@ func reportGovernanceDecision(ctx context.Context, store *certenproof.PostgresPr
 		return exitSummaryOnly
 	case errors.Is(err, execution.ErrGovernanceNotAnchored):
 		fmt.Printf("SUMMARY-ONLY (governance decision)  %s\n  %v\n", id, err)
+		fmt.Printf("  GOV vote: evaluated again from %d chain-bound message(s) and %d page history/ies\n",
+			got.EvidenceMessages, got.EvidencePages)
 		fmt.Printf("  GOV decision: %d authority/ies, commitment %s… re-derived from the stored vote record,\n",
 			got.Authorities, short(strings.TrimPrefix(got.Commitment, "0x")))
 		fmt.Printf("  and NOT anchored: no quorum signature or anchor commits to it.\n")

@@ -19,7 +19,7 @@ import (
 
 func f66Commitment(t *testing.T) (map[string]interface{}, []byte) {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("..", "proof", "testdata", "gdr_g1_phasec_98e40472.json"))
+	raw, err := os.ReadFile(filepath.Join("..", "proof", "testdata", "vote_evidence_g1_phasec_98e40472.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,12 +35,18 @@ func f66Commitment(t *testing.T) (map[string]interface{}, []byte) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	ev, err := certenproof.VoteEvidenceFromRaw(raw)
+	if err != nil || ev == nil {
+		t.Fatal(err)
+	}
 	g0JSON, _ := json.Marshal(g0)
 	recJSON, _ := json.Marshal(rec)
+	evJSON, _ := json.Marshal(ev)
 	return map[string]interface{}{
 		consensus.G0ProofCommitmentKey:          string(g0JSON),
 		consensus.GovDecisionCommitmentKey:      hex.EncodeToString(gdr),
 		consensus.GovAuthorizationCommitmentKey: string(recJSON),
+		consensus.GovVoteEvidenceCommitmentKey:  string(evJSON),
 	}, gdr
 }
 
@@ -64,7 +70,7 @@ func TestF66_TheDecisionIsStoredWithItsCommitment(t *testing.T) {
 	out := mustLevelJSON(t, "G1", nil, nil, nil, ev)
 	var obj map[string]json.RawMessage
 	_ = json.Unmarshal(out, &obj)
-	for _, k := range []string{GovLevelDecisionKey, GovLevelCommitmentKey, GovLevelAuthorizationKey} {
+	for _, k := range []string{GovLevelDecisionKey, GovLevelCommitmentKey, GovLevelAuthorizationKey, GovLevelVoteEvidenceKey} {
 		if _, ok := obj[k]; !ok {
 			t.Errorf("level_json lacks %s", k)
 		}
@@ -96,6 +102,35 @@ func TestF66_ADecisionWithoutItsVoteRecordIsRefused(t *testing.T) {
 	if _, err := GovernanceInputsFromCommitment(cm); err == nil {
 		t.Fatal("a vote record without its decision was accepted")
 	}
+	cm, _ = f66Commitment(t)
+	delete(cm, consensus.GovVoteEvidenceCommitmentKey)
+	if _, err := GovernanceInputsFromCommitment(cm); err == nil {
+		t.Fatal("a decision without the evidence of its vote record was accepted")
+	}
+	cm, _ = f66Commitment(t)
+	cm[consensus.GovVoteEvidenceCommitmentKey] = `{"version":"certen:govvote-evidence:v1","unknown":1}`
+	if _, err := GovernanceInputsFromCommitment(cm); err == nil {
+		t.Fatal("malformed vote evidence was accepted")
+	}
+}
+
+// The vote record is stored only when its evidence, evaluated again, reaches it.
+func TestF66_AVoteRecordItsEvidenceDoesNotReachIsRefused(t *testing.T) {
+	cm, _ := f66Commitment(t)
+	var ev map[string]interface{}
+	_ = json.Unmarshal([]byte(cm[consensus.GovVoteEvidenceCommitmentKey].(string)), &ev)
+	sigs := ev["signatures"].([]interface{})
+	fact := sigs[0].(map[string]interface{})["fact"].(map[string]interface{})
+	fact["Block"] = fact["Block"].(float64) + 1
+	b, _ := json.Marshal(ev)
+	cm[consensus.GovVoteEvidenceCommitmentKey] = string(b)
+	in, err := GovernanceInputsFromCommitment(cm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := in.DecisionEvidence(); err == nil {
+		t.Fatal("a decision whose vote evidence does not verify was stored")
+	}
 }
 
 // A stored proof's decision is re-derived and checked against the batch its layer 5 names.
@@ -115,7 +150,7 @@ func f66StoredG1(t *testing.T) (certenproof.StoredGovernanceLevel, [32]byte) {
 		b, _ := json.Marshal(v)
 		flags[k] = b
 	}
-	raw, err := os.ReadFile(filepath.Join("..", "proof", "testdata", "gdr_g1_phasec_98e40472.json"))
+	raw, err := os.ReadFile(filepath.Join("..", "proof", "testdata", "vote_evidence_g1_phasec_98e40472.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,5 +226,31 @@ func TestF66_AStoredDecisionIsCheckedAgainstItsAnchoredBatch(t *testing.T) {
 	if _, err := CheckGovernanceDecision([]certenproof.StoredGovernanceLevel{tampered}, nil); err == nil ||
 		errors.Is(err, ErrGovernanceNotAnchored) || errors.Is(err, ErrNoGovernanceDecision) {
 		t.Fatalf("an altered vote record: %v", err)
+	}
+
+	// The stored vote record is evaluated again from its stored evidence: without it, or from evidence altered
+	// after the fact, the decision is refused - not demoted to a weaker named state.
+	noEvidence := certenproof.StoredGovernanceLevel{Level: "G1", Result: g1.Result, Flags: map[string]json.RawMessage{}}
+	for k, v := range g1.Flags {
+		if k != GovLevelVoteEvidenceKey {
+			noEvidence.Flags[k] = v
+		}
+	}
+	if _, err := CheckGovernanceDecision([]certenproof.StoredGovernanceLevel{noEvidence}, nil); err == nil ||
+		errors.Is(err, ErrGovernanceNotAnchored) || errors.Is(err, ErrNoGovernanceDecision) {
+		t.Fatalf("a decision stored without its vote evidence: %v", err)
+	}
+	altered := certenproof.StoredGovernanceLevel{Level: "G1", Result: g1.Result, Flags: map[string]json.RawMessage{}}
+	for k, v := range g1.Flags {
+		altered.Flags[k] = v
+	}
+	altered.Flags[GovLevelVoteEvidenceKey] = json.RawMessage(strings.Replace(string(g1.Flags[GovLevelVoteEvidenceKey]),
+		`"Vote":"accept"`, `"Vote":"reject"`, 1))
+	if string(altered.Flags[GovLevelVoteEvidenceKey]) == string(g1.Flags[GovLevelVoteEvidenceKey]) {
+		t.Fatal("the tamper did not change the stored vote evidence")
+	}
+	if _, err := CheckGovernanceDecision([]certenproof.StoredGovernanceLevel{altered}, nil); err == nil ||
+		errors.Is(err, ErrGovernanceNotAnchored) || errors.Is(err, ErrNoGovernanceDecision) {
+		t.Fatalf("altered vote evidence: %v", err)
 	}
 }

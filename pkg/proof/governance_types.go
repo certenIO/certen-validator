@@ -13,6 +13,7 @@ package proof
 
 import (
 	"encoding/json"
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govvote"
 	"time"
 )
 
@@ -297,6 +298,10 @@ type GovernanceProof struct {
 	// generator emitted none - which, for G1 and G2, means no decision record can be derived and the member cannot
 	// be anchored (RB4-F66).
 	Authorization *AuthorizationRecord `json:"authorization,omitempty"`
+
+	// VoteEvidence is what the vote read, each item bound to the chain, so Authorization can be evaluated again
+	// offline (governance_vote_evidence.go). Here for the same reason as Authorization.
+	VoteEvidence *govvote.Evidence `json:"vote_evidence,omitempty"`
 }
 
 // IsValid returns whether the governance proof is valid at its level
