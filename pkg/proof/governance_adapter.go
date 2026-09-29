@@ -392,7 +392,11 @@ func (g *CLIGovernanceProofGenerator) parseOutput(level GovernanceLevel, output 
 		govProof.Authorization = rec
 	}
 
-	if ev := GovReceiptEvidenceFromRaw(string(level), jsonData); ev != nil {
+	ev, err := GovReceiptEvidenceFromRaw(string(level), jsonData)
+	if err != nil {
+		return nil, err
+	}
+	if ev != nil {
 		govProof.Receipts = append(govProof.Receipts, *ev)
 		g.logger.Printf("[GOV-PROOF] %s receipt evidence captured: %d merkle step(s), anchor=%s",
 			level, len(ev.Entries), truncHex(ev.Anchor))

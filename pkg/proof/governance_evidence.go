@@ -162,21 +162,25 @@ type rawReceiptEnvelope struct {
 // GovReceiptEvidenceFromRaw lifts the receipt evidence out of a governance
 // result's raw JSON.
 //
-// Returns nil — not an error — when the result carries no receipt or no path.
+// Returns nil and no error when the result carries no receipt or no path.
 // A generator that never emitted entries is a proof written before this
 // evidence existed, and the honest record for it is ABSENCE, marked
 // summary-only downstream. Manufacturing an empty path here would produce a
 // record that reads like evidence and cannot be checked.
-func GovReceiptEvidenceFromRaw(level string, raw json.RawMessage) *GovReceiptEvidence {
+//
+// A receipt that is present and does not parse is an error. It used to return
+// nil too, and the level was stored summary-only as though the generator had
+// emitted no path: a defect in the evidence recorded as its absence (RB4-F68).
+func GovReceiptEvidenceFromRaw(level string, raw json.RawMessage) (*GovReceiptEvidence, error) {
 	if len(raw) == 0 {
-		return nil
+		return nil, nil
 	}
 	var env rawReceiptEnvelope
 	if err := json.Unmarshal(raw, &env); err != nil {
-		return nil
+		return nil, fmt.Errorf("%s receipt evidence is malformed: %w", level, err)
 	}
 	if env.Receipt.Start == "" || env.Receipt.Anchor == "" {
-		return nil
+		return nil, nil
 	}
 	return &GovReceiptEvidence{
 		Level:      level,
@@ -184,7 +188,7 @@ func GovReceiptEvidenceFromRaw(level string, raw json.RawMessage) *GovReceiptEvi
 		Anchor:     env.Receipt.Anchor,
 		LocalBlock: env.Receipt.LocalBlock,
 		Entries:    env.Receipt.Entries,
-	}
+	}, nil
 }
 
 // GovReceiptEvidenceFor returns the evidence recorded for one level, or nil.
