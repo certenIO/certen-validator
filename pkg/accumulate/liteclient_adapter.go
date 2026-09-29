@@ -242,8 +242,9 @@ func (l *LiteClientAdapter) constructPartitionLedgerURL(partitionID string) stri
 // chain (anchored_blocks.go - identical to the server's list on every block checked) and each is read
 // page by page to its stated total; an error leaves the DN block unsearched, and discovery keeps it.
 //
-// Every transaction is stated at the DN block's height and time, exactly as before: the consensus round
-// of an intent is keyed on it.
+// Every transaction is stated at the DN block's height, exactly as before: the consensus round of an intent
+// is keyed on it. Its time is its own partition block's - when it executed - and not the DN block's, which is
+// later: deadlines were judged by the DN time (RB4-F74).
 func (l *LiteClientAdapter) SearchCertenTransactions(ctx context.Context, blockHeight int64) ([]*CertenTransaction, error) {
 	const dn = "acc://dn.acme"
 	if err := l.dnHostsNoUserAccounts(ctx); err != nil {
@@ -267,13 +268,23 @@ func (l *LiteClientAdapter) SearchCertenTransactions(ctx context.Context, blockH
 	block := &MinorBlock{Height: blockHeight, Index: blockHeight, Time: header.Time, Source: header.Source, Partition: dn}
 	for _, ab := range anchored {
 		scope := l.convertToLedgerScope(ab.Source)
-		_, records, _, err := l.readBlockEntries(ctx, scope, ab.Index, 0)
+		first, records, _, err := l.readBlockEntries(ctx, scope, ab.Index, 0)
 		if err != nil {
 			return nil, fmt.Errorf("DN block %d: anchored block %d on %s: %w", blockHeight, ab.Index, ab.Source, err)
 		}
-		block.Entries = append(block.Entries, l.getBlockEntries(map[string]interface{}{
+		// The anchored block's own consensus time: when its transactions executed (RB4-F74). They were stated at
+		// the DN block's time, which is later - the block that anchored them - and deadlines were judged by it.
+		partitionBlock, err := l.parseMinorBlockRecord(first, ab.Source, ab.Index)
+		if err != nil {
+			return nil, fmt.Errorf("DN block %d: anchored block %d on %s: %w", blockHeight, ab.Index, ab.Source, err)
+		}
+		entries := l.getBlockEntries(map[string]interface{}{
 			"entries": map[string]interface{}{"records": records},
-		}, ab.Index, ab.Source)...)
+		}, ab.Index, ab.Source)
+		for i := range entries {
+			entries[i].PartitionTime = partitionBlock.Time
+		}
+		block.Entries = append(block.Entries, entries...)
 	}
 	var txs []*CertenTransaction
 	for _, entry := range block.Entries {
@@ -650,7 +661,7 @@ func (l *LiteClientAdapter) parseCertenTransaction(entry BlockEntry, block *Mino
 		AccountURL:  accountURL,
 		BlockHeight: block.Height, // Fixed: direct assignment since both are int64
 		Partition:   partition,
-		Timestamp:   block.Time,
+		Timestamp:   entry.PartitionTime, // the partition block it executed in, not the DN block (RB4-F74)
 		RawTx:       entry.Data,
 		IntentData:  make(map[string]interface{}),
 	}
@@ -1259,6 +1270,9 @@ type BlockEntry struct {
 	// (RB4-F46: a DN block's transactions are read from the BVN blocks it anchored, and which BVN was lost).
 	Partition      string `json:"partition,omitempty"`
 	PartitionBlock int64  `json:"partition_block,omitempty"`
+	// PartitionTime is the consensus time of that partition block - when the transaction executed (RB4-F74). Not
+	// serialized.
+	PartitionTime time.Time `json:"-"`
 }
 
 // parseMinorBlockRecord parses a single MinorBlockRecord from the v3 API response
