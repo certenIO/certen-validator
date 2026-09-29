@@ -143,17 +143,49 @@ func (r *BatchRepository) RecordAnchorQuorum(
 
 	// Is it already here? Read inside the transaction so the conflict check and the insert see one state.
 	var (
-		existingID   uuid.UUID
-		existingRoot []byte
-		existingSig  []byte
+		existingID     uuid.UUID
+		existingRoot   []byte
+		existingSig    []byte
+		existingSource string
+		existingOpID   string
 	)
 	err = tx.Tx().QueryRowContext(ctx,
-		`SELECT id, merkle_root, aggregated_signature FROM anchor_batches
+		`SELECT id, merkle_root, aggregated_signature, COALESCE(evidence_source, ''), COALESCE(batch_operation_id, '')
+		   FROM anchor_batches
 		  WHERE chain_id = $1 AND bundle_id = $2`,
 		rec.ChainID, rec.BundleID,
-	).Scan(&existingID, &existingRoot, &existingSig)
+	).Scan(&existingID, &existingRoot, &existingSig, &existingSource, &existingOpID)
 
 	switch {
+	case err == nil && existingSource == "chain_backfill" && rec.EvidenceSource == "live" &&
+		bytesEqual(existingRoot, rec.Root) && strings.EqualFold(existingOpID, rec.BatchOperationID):
+		// A row rebuilt from the chain carries the quorum and no aggregate and no members: an anchor commits to a
+		// root, not a member list. Live evidence for the same anchor - the same root and batch operation id, which the
+		// bundle id derives from - completes it. It used to be refused as different evidence, and the anchor's
+		// members, with every member's layer 5, were never recorded (RB4-F71).
+		if _, err := tx.Tx().ExecContext(ctx, `
+			UPDATE anchor_batches
+			SET aggregated_signature       = $2,
+			    aggregated_public_key      = $3,
+			    evidence_source            = 'live',
+			    lane                       = COALESCE(lane, $4),
+			    batch_operation_id_version = $5,
+			    transaction_count          = $6,
+			    tx_count                   = $6,
+			    updated_at                 = NOW()
+			WHERE id = $1 AND evidence_source = 'chain_backfill'`,
+			existingID, rec.AggregateSignature, rec.AggregatePubKey, nullIfEmpty(rec.Lane),
+			nullIfEmpty(rec.BatchOperationIDVersion), len(rec.Members)); err != nil {
+			return false, fmt.Errorf("record anchor quorum: completing rebuilt anchor %s: %w", rec.BundleID, err)
+		}
+		if err := insertAnchorMembers(ctx, tx, existingID, rec); err != nil {
+			return false, err
+		}
+		if err := tx.Commit(); err != nil {
+			return false, fmt.Errorf("record anchor quorum: commit for anchor %s: %w", rec.BundleID, err)
+		}
+		return true, nil
+
 	case err == nil:
 		// Same anchor, same evidence: nothing to add. Different evidence: refuse and report.
 		if !bytesEqual(existingRoot, rec.Root) || !bytesEqual(existingSig, rec.AggregateSignature) {
@@ -254,29 +286,8 @@ func (r *BatchRepository) RecordAnchorQuorum(
 		return false, fmt.Errorf("record anchor quorum: inserting anchor %s: %w", rec.BundleID, err)
 	}
 
-	for i := range rec.Members {
-		m := &rec.Members[i]
-		pathJSON, mErr := json.Marshal(m.Branch)
-		if mErr != nil {
-			return false, fmt.Errorf("record anchor quorum: encoding branch for member %d: %w", i, mErr)
-		}
-		if _, mErr = tx.Tx().ExecContext(ctx, `
-			INSERT INTO batch_transactions (
-				batch_id, accumulate_tx_hash, account_url, tree_index, merkle_path, transaction_hash,
-				intent_id, adi_url, from_chain, to_chain, from_address, to_address, amount, token_symbol,
-				user_id, created_at, operation_id, governance_commitment
-			) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8,
-			          COALESCE($9,''), COALESCE($10,''), COALESCE($11,''), COALESCE($12,''),
-			          COALESCE($13,'0'), COALESCE($14,''), $15, NOW(), $16, $17)`,
-			batchID, m.AccumTxHash, m.ADIURL, m.LeafIndex, string(pathJSON), m.Leaf,
-			nullIfEmpty(m.IntentID), nullIfEmpty(m.ADIURL),
-			nullIfEmpty(m.FromChain), nullIfEmpty(m.ToChain), nullIfEmpty(m.FromAddress),
-			nullIfEmpty(m.ToAddress), nullIfEmpty(m.Amount), nullIfEmpty(m.TokenSymbol),
-			nullIfEmpty(m.UserID), nullIfEmpty(strings.ToLower(m.OperationID)),
-			nullIfEmpty(strings.ToLower(m.GovernanceCommitment)),
-		); mErr != nil {
-			return false, fmt.Errorf("record anchor quorum: member %d of anchor %s: %w", i, rec.BundleID, mErr)
-		}
+	if err := insertAnchorMembers(ctx, tx, batchID, rec); err != nil {
+		return false, err
 	}
 
 	for _, s := range rec.Signers {
@@ -452,6 +463,35 @@ func checkBatchGovernance(rec *AnchorQuorumRecord) error {
 		}
 	default:
 		return fmt.Errorf("unknown batch operation id version %q", rec.BatchOperationIDVersion)
+	}
+	return nil
+}
+
+// insertAnchorMembers writes an anchor's members into batch_transactions under batchID.
+func insertAnchorMembers(ctx context.Context, tx *Tx, batchID uuid.UUID, rec *AnchorQuorumRecord) error {
+	for i := range rec.Members {
+		m := &rec.Members[i]
+		pathJSON, mErr := json.Marshal(m.Branch)
+		if mErr != nil {
+			return fmt.Errorf("record anchor quorum: encoding branch for member %d: %w", i, mErr)
+		}
+		if _, mErr = tx.Tx().ExecContext(ctx, `
+			INSERT INTO batch_transactions (
+				batch_id, accumulate_tx_hash, account_url, tree_index, merkle_path, transaction_hash,
+				intent_id, adi_url, from_chain, to_chain, from_address, to_address, amount, token_symbol,
+				user_id, created_at, operation_id, governance_commitment
+			) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8,
+			          COALESCE($9,''), COALESCE($10,''), COALESCE($11,''), COALESCE($12,''),
+			          COALESCE($13,'0'), COALESCE($14,''), $15, NOW(), $16, $17)`,
+			batchID, m.AccumTxHash, m.ADIURL, m.LeafIndex, string(pathJSON), m.Leaf,
+			nullIfEmpty(m.IntentID), nullIfEmpty(m.ADIURL),
+			nullIfEmpty(m.FromChain), nullIfEmpty(m.ToChain), nullIfEmpty(m.FromAddress),
+			nullIfEmpty(m.ToAddress), nullIfEmpty(m.Amount), nullIfEmpty(m.TokenSymbol),
+			nullIfEmpty(m.UserID), nullIfEmpty(strings.ToLower(m.OperationID)),
+			nullIfEmpty(strings.ToLower(m.GovernanceCommitment)),
+		); mErr != nil {
+			return fmt.Errorf("record anchor quorum: member %d of anchor %s: %w", i, rec.BundleID, mErr)
+		}
 	}
 	return nil
 }

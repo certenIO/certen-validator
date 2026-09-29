@@ -848,3 +848,51 @@ func TestAnchorQuorumRecordsWhoSentEachTransaction(t *testing.T) {
 		t.Fatalf("recorded senders were overwritten: %q %q", c, v)
 	}
 }
+
+// RB4-F71: a row rebuilt from the chain carries the quorum but no aggregate and no members - an anchor commits to a
+// root, not a member list. Live evidence for the same anchor arriving after it was refused as "different evidence",
+// so the anchor's members, and with them every member's layer 5, were never recorded. The same anchor - same root,
+// same batch operation id - completes the row; different evidence is still refused.
+func TestLiveEvidenceCompletesARowRebuiltFromTheChain(t *testing.T) {
+	repo := anchorRepoForTest(t)
+	ctx := context.Background()
+	live := anchorRecordForTest(84532, bundleHex(96601), 0x71)
+
+	backfill := anchorRecordForTest(84532, live.BundleID, 0x71)
+	backfill.EvidenceSource, backfill.AggregateSignature, backfill.AggregatePubKey = "chain_backfill", nil, nil
+	backfill.Members, backfill.BatchOperationIDVersion, backfill.Lane = nil, "", ""
+	backfill.AnchorCreateTx = ""
+	if written, err := repo.RecordAnchorQuorum(ctx, backfill); err != nil || !written {
+		t.Fatalf("backfill: %v %v", written, err)
+	}
+	if _, err := repo.RecordAnchorQuorum(ctx, live); err != nil {
+		t.Fatalf("live evidence for the same anchor was refused: %v", err)
+	}
+	var members int
+	var version, source string
+	var sig []byte
+	if err := testDB.QueryRowContext(ctx, `
+		SELECT (SELECT count(*) FROM batch_transactions bt WHERE bt.batch_id = ab.id),
+		       COALESCE(ab.batch_operation_id_version, ''), ab.evidence_source, ab.aggregated_signature
+		FROM anchor_batches ab WHERE ab.chain_id = $1 AND ab.bundle_id = $2`, live.ChainID, live.BundleID).Scan(
+		&members, &version, &source, &sig); err != nil {
+		t.Fatal(err)
+	}
+	if members != 1 || version != "v2" || source != "live" || len(sig) == 0 {
+		t.Fatalf("the row was not completed: members=%d version=%q source=%q sig=%x", members, version, source, sig)
+	}
+
+	// Different evidence for a rebuilt row is still refused.
+	other := anchorRecordForTest(84532, bundleHex(96602), 0x72)
+	bf2 := anchorRecordForTest(84532, other.BundleID, 0x72)
+	bf2.EvidenceSource, bf2.AggregateSignature, bf2.AggregatePubKey = "chain_backfill", nil, nil
+	bf2.Members, bf2.BatchOperationIDVersion, bf2.Lane, bf2.AnchorCreateTx = nil, "", "", ""
+	if _, err := repo.RecordAnchorQuorum(ctx, bf2); err != nil {
+		t.Fatal(err)
+	}
+	other.BatchOperationID = bundleHex(96603)
+	var conflict *AnchorQuorumConflict
+	if _, err := repo.RecordAnchorQuorum(ctx, other); !errors.As(err, &conflict) {
+		t.Fatalf("live evidence naming another batch operation id completed a rebuilt row: %v", err)
+	}
+}
