@@ -2691,7 +2691,10 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 	// G0/G1/G2 results and their receipt evidence under the shared key constants.
 	// This writer never looked for them at all, which is why every row it produced
 	// held verdict flags and no governance proof.
-	govIn := GovernanceInputsFromCommitment(req.CommitmentData)
+	govIn, err := GovernanceInputsFromCommitment(req.CommitmentData)
+	if err != nil {
+		return fmt.Errorf("governance evidence of proof %s: %w", proofArtifact.ProofID, err)
+	}
 	if govIn == nil {
 		logfPrintf("🚨 [GOV-LEVEL] proof %s: the commitment carries NO governance results — every "+
 			"level written below is verdict flags only and is summary-only by construction",
@@ -2746,7 +2749,10 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 		}
 		g0Result, g0Ev := govIn.ResultFor("G0"), govIn.ReceiptFor("G0")
 		g0TB := govIn.TimingBasisFor("G0")
-		g0JSON := BuildGovernanceLevelJSON("G0", g0Result, g0Ev, g0TB, g0Flags)
+		g0JSON, err := BuildGovernanceLevelJSON("G0", g0Result, g0Ev, g0TB, g0Flags)
+		if err != nil {
+			return fmt.Errorf("governance level of proof %s: %w", proofArtifact.ProofID, err)
+		}
 		LogGovernanceLevelEvidence(logfPrintf, proofArtifact.ProofID, "G0", g0Result, g0Ev, g0TB)
 
 		g0Verified := levelProven("G0", g0Result)
@@ -2794,7 +2800,10 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 		}
 		g1Result, g1Ev := govIn.ResultFor("G1"), govIn.ReceiptFor("G1")
 		g1TB := govIn.TimingBasisFor("G1")
-		g1JSON := BuildGovernanceLevelJSON("G1", g1Result, g1Ev, g1TB, g1Flags)
+		g1JSON, err := BuildGovernanceLevelJSON("G1", g1Result, g1Ev, g1TB, g1Flags)
+		if err != nil {
+			return fmt.Errorf("governance level of proof %s: %w", proofArtifact.ProofID, err)
+		}
 		LogGovernanceLevelEvidence(logfPrintf, proofArtifact.ProofID, "G1", g1Result, g1Ev, g1TB)
 
 		g1Verified := levelProven("G1", g1Result)
@@ -2839,7 +2848,10 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 			"threshold_n":          thresholdN,
 		}
 		g2TB := govIn.TimingBasisFor("G2")
-		g2JSON := BuildGovernanceLevelJSON("G2", g2Result, g2Ev, g2TB, g2Flags)
+		g2JSON, err := BuildGovernanceLevelJSON("G2", g2Result, g2Ev, g2TB, g2Flags)
+		if err != nil {
+			return fmt.Errorf("governance level of proof %s: %w", proofArtifact.ProofID, err)
+		}
 		LogGovernanceLevelEvidence(logfPrintf, proofArtifact.ProofID, "G2", g2Result, g2Ev, g2TB)
 
 		g2Verified := bindingEnforced

@@ -167,9 +167,16 @@ func (in *GovernanceLevelInputs) ReceiptFor(level string) *certenproof.GovReceip
 // Returns nil when the map carries nothing governance-related, so a caller can
 // tell "this cycle had no governance data" apart from "it had empty governance
 // data" — the first is a plumbing state, the second would be a claim.
-func GovernanceInputsFromCommitment(cm map[string]interface{}) *GovernanceLevelInputs {
+//
+// Evidence that is present and does not parse is an error. It used to be
+// skipped, and the level was stored as though the generator had recorded none
+// (RB4-F69).
+func GovernanceInputsFromCommitment(cm map[string]interface{}) (*GovernanceLevelInputs, error) {
 	if cm == nil {
-		return nil
+		return nil, nil
+	}
+	if s, ok := cm[consensus.EvidenceErrorCommitmentKey].(string); ok && s != "" {
+		return nil, fmt.Errorf("governance evidence could not be carried from the round: %s", s)
 	}
 	in := &GovernanceLevelInputs{}
 	found := false
@@ -192,22 +199,28 @@ func GovernanceInputsFromCommitment(cm map[string]interface{}) *GovernanceLevelI
 	}
 	if s, ok := cm[consensus.GovReceiptsCommitmentKey].(string); ok && s != "" {
 		var receipts []certenproof.GovReceiptEvidence
-		if err := json.Unmarshal([]byte(s), &receipts); err == nil && len(receipts) > 0 {
+		if err := json.Unmarshal([]byte(s), &receipts); err != nil {
+			return nil, fmt.Errorf("the governance receipts in the commitment are malformed: %w", err)
+		}
+		if len(receipts) > 0 {
 			in.Receipts = receipts
 			found = true
 		}
 	}
 	if s, ok := cm[consensus.GovTimingBasisCommitmentKey].(string); ok && s != "" {
 		var tb []certenproof.SignatureTimingBasis
-		if err := json.Unmarshal([]byte(s), &tb); err == nil && len(tb) > 0 {
+		if err := json.Unmarshal([]byte(s), &tb); err != nil {
+			return nil, fmt.Errorf("the timing basis in the commitment is malformed: %w", err)
+		}
+		if len(tb) > 0 {
 			in.TimingBasis = tb
 			found = true
 		}
 	}
 	if !found {
-		return nil
+		return nil, nil
 	}
-	return in
+	return in, nil
 }
 
 // BuildGovernanceLevelJSON returns level_json for one governance level.
@@ -232,41 +245,43 @@ func BuildGovernanceLevelJSON(
 	ev *certenproof.GovReceiptEvidence,
 	timingBasis []certenproof.SignatureTimingBasis,
 	existing map[string]interface{},
-) json.RawMessage {
+) (json.RawMessage, error) {
 	obj := map[string]interface{}{}
 	for k, v := range existing {
 		obj[k] = v
 	}
 
-	if len(result) > 0 && json.Valid(result) {
+	// A result that is present and not JSON, or evidence that does not marshal, is an error: it used to be left
+	// out, or the whole level stored as its flags alone, which reads as "nothing was recorded" (RB4-F69).
+	if len(result) > 0 {
+		if !json.Valid(result) {
+			return nil, fmt.Errorf("%s: the governance result is not valid JSON", level)
+		}
 		obj[GovLevelResultKey] = json.RawMessage(result)
 	}
 	if ev.HasPath() {
-		if raw, err := json.Marshal(ev); err == nil {
-			obj[GovLevelReceiptKey] = json.RawMessage(raw)
+		raw, err := json.Marshal(ev)
+		if err != nil {
+			return nil, fmt.Errorf("%s: receipt evidence: %w", level, err)
 		}
+		obj[GovLevelReceiptKey] = json.RawMessage(raw)
 	}
 	// Written only when there is something to write. An empty array would
 	// assert "we looked and none were weakened", which is a different claim
 	// from "this generator did not record it".
 	if len(timingBasis) > 0 {
-		if raw, err := json.Marshal(timingBasis); err == nil {
-			obj[GovLevelTimingBasisKey] = json.RawMessage(raw)
+		raw, err := json.Marshal(timingBasis)
+		if err != nil {
+			return nil, fmt.Errorf("%s: timing basis: %w", level, err)
 		}
+		obj[GovLevelTimingBasisKey] = json.RawMessage(raw)
 	}
 
 	out, err := json.Marshal(obj)
 	if err != nil {
-		// Fall back to the flags alone rather than dropping the row. A row that
-		// describes the level is worth more than no row, and its lack of the
-		// evidence key is exactly what makes it read summary-only downstream —
-		// the read path will not mistake it for a verified one.
-		if fallback, ferr := json.Marshal(existing); ferr == nil {
-			return fallback
-		}
-		return json.RawMessage(`{}`)
+		return nil, fmt.Errorf("%s: level_json: %w", level, err)
 	}
-	return out
+	return out, nil
 }
 
 // LogGovernanceLevelEvidence reports, per level, whether real evidence was
