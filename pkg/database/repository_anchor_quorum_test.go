@@ -69,6 +69,7 @@ func anchorRecordForTest(chainID int64, bundle string, rootByte byte) *AnchorQuo
 		// A V8.2 anchor: it committed the Accumulate set and incarnation (RB5-F9).
 		AnchorVersion:         "v8_2",
 		AccumulateBlockHeight: 9360888,
+		BatchLeafCount:        1,
 		CertenSetRoot:         bundleHex(555),
 		AccumulateSetRoot:     bundleHex(777),
 		AccumulateIncarnation: bundleHex(666),

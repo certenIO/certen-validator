@@ -4,6 +4,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os"
+	"testing"
+
+	"github.com/certen/independant-validator/pkg/database"
+	"github.com/certen/independant-validator/pkg/execution/contracts"
 
 	chained_proof "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/working-proof_do_not_edit"
 	"github.com/certen/independant-validator/pkg/accumulateset"
@@ -81,4 +85,21 @@ func testBatchOperationID(ops ...string) string {
 		panic(err)
 	}
 	return "0x" + hex.EncodeToString(id[:])
+}
+
+// asV8_2Anchor makes rec a self-consistent V8.2 anchor record over its own root and batch operation id, at height, with
+// leafCount leaves: the bundle id and the message are what createBatchAnchor and the quorum would derive (RB5), so a
+// layer 5 built from the row re-derives both.
+func asV8_2Anchor(t *testing.T, rec *database.AnchorQuorumRecord, leafCount int, height uint64) {
+	t.Helper()
+	var root, opID [32]byte
+	copy(root[:], rec.Root)
+	copy(opID[:], common.FromHex(rec.BatchOperationID))
+	setRoot := [32]byte{0x5e}
+	bundle := contracts.DeriveV8_2BatchBundleID(rec.ChainID, root, uint64(leafCount), opID, height, testAccSet, testIncarnation)
+	msg := contracts.ComputeEvmMessageHashV8_2_Pre(rec.ChainID, bundle, root, opID, setRoot, testAccSet, testIncarnation)
+	rec.AnchorVersion, rec.BundleID, rec.MessageHash = "v8_2", "0x"+hex.EncodeToString(bundle[:]), "0x"+hex.EncodeToString(msg[:])
+	rec.BatchLeafCount, rec.AccumulateBlockHeight = int64(leafCount), int64(height)
+	rec.CertenSetRoot = "0x" + hex.EncodeToString(setRoot[:])
+	rec.AccumulateSetRoot, rec.AccumulateIncarnation = "0x"+hex.EncodeToString(testAccSet[:]), "0x"+hex.EncodeToString(testIncarnation[:])
 }

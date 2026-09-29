@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/certen/independant-validator/pkg/consensus"
@@ -110,7 +111,24 @@ func (r *ChainBackfillReader) AnchorState(
 	if err != nil {
 		return AnchorOnChainState{}, err
 	}
-	return decodeAnchorState(st)
+	state, err := decodeAnchorState(st)
+	if err != nil {
+		return AnchorOnChainState{}, err
+	}
+	// The leaf count the bundle id derives from is the anchor's own (batchLeafCount; the same selector on V8.1 and V8.2).
+	anchor, err := contracts.NewCertenAnchorV8_2Batch(anchorAddr, client)
+	if err != nil {
+		return AnchorOnChainState{}, err
+	}
+	count, err := anchor.BatchLeafCount(&bind.CallOpts{Context: ctx}, bundleID)
+	if err != nil {
+		return AnchorOnChainState{}, fmt.Errorf("reading batchLeafCount(0x%x): %w", bundleID[:8], err)
+	}
+	if count == nil || !count.IsUint64() || count.Sign() <= 0 {
+		return AnchorOnChainState{}, fmt.Errorf("anchor 0x%x records no leaves", bundleID[:8])
+	}
+	state.LeafCount = count.Uint64()
+	return state, nil
 }
 
 // decodeAnchorState maps an anchor record (either generation, ReadAnchorState) onto the fields the backfill and the

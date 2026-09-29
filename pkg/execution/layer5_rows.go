@@ -128,6 +128,21 @@ func BuildLayer5(
 				Members:              binding.BatchMembers,
 			}
 		}
+		// What the anchor committed, from the row that records it (RB5). A row written before migration 00018
+		// states no generation and carries none: its layer 5 is commitment_not_recorded, never a guessed one.
+		if binding.AnchorVersion != "" {
+			l5.Commitment = &AnchorCommitment{
+				Version:               binding.AnchorVersion,
+				BundleID:              binding.BundleID,
+				LeafCount:             uint64(max(binding.LeafCount, 0)),
+				BatchOperationID:      binding.BatchOperationID,
+				AccumulateBlockHeight: uint64(max(binding.AccumulateBlockHeight, 0)),
+				CertenSetRoot:         binding.CertenSetRoot,
+				MessageHash:           binding.MessageHash,
+				AccumulateSetRoot:     binding.AccumulateSetRoot,
+				Incarnation:           binding.AccumulateIncarnation,
+			}
+		}
 
 	default:
 		// No canonical row: nothing to bind. Returning nil is not a failure - an absent L5 reads as

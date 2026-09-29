@@ -101,6 +101,8 @@ type AnchorOnChainState struct {
 	Incarnation       [32]byte
 	// AccumulateBlockHeight is the height the anchor's bundle id derives from.
 	AccumulateBlockHeight uint64
+	// LeafCount is the anchor's batchLeafCount, which its bundle id also derives from.
+	LeafCount uint64
 }
 
 // BackfillChain is the chain access the reconstruction needs. Satisfied by the live EVM stack; an
@@ -205,6 +207,7 @@ func ReconstructAnchorQuorum(
 		// against above.
 		AnchorVersion:         string(state.Version),
 		AccumulateBlockHeight: int64(state.AccumulateBlockHeight),
+		BatchLeafCount:        int64(state.LeafCount),
 		CertenSetRoot:         certenSetRootHex(),
 		AccumulateSetRoot:     accumulateHexIfV8_2(state.Version, state.AccumulateSetRoot),
 		AccumulateIncarnation: accumulateHexIfV8_2(state.Version, state.Incarnation),

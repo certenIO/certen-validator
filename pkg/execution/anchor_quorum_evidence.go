@@ -49,6 +49,8 @@ type AnchorQuorumEvidence struct {
 	AccumulateBlockHeight uint64
 	AccumulateSetRoot     [32]byte
 	Incarnation           [32]byte
+	// LeafCount is the tree's size, which the bundle id derives from.
+	LeafCount uint64
 
 	/// VerifyTx is the executeComprehensiveProof transaction that carried the aggregate on-chain.
 	VerifyTx string

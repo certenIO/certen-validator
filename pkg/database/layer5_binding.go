@@ -67,6 +67,18 @@ type Layer5Binding struct {
 	MemberOperationID          string
 	MemberGovernanceCommitment string
 	BatchMembers               []BatchMemberGovernance
+
+	// What the anchor committed beyond the root (RB5-F9, migration 00018), so layer 5 re-derives its bundle id and
+	// signed message offline. AnchorVersion is empty on a row written before migration 00018; the Accumulate values
+	// are empty on a V8.1 anchor.
+	BundleID              string
+	LeafCount             int
+	AnchorVersion         string
+	AccumulateBlockHeight int64
+	CertenSetRoot         string
+	MessageHash           string
+	AccumulateSetRoot     string
+	AccumulateIncarnation string
 }
 
 // BatchMemberGovernance is one member's operation id and governance commitment, 0x-hex; the commitment is empty
@@ -146,7 +158,15 @@ func (r *ProofArtifactRepository) GetLayer5Binding(ctx context.Context, intentID
 		       COALESCE(ab.batch_operation_id, ''),
 		       COALESCE(ab.batch_operation_id_version, ''),
 		       COALESCE(bt.operation_id, ''),
-		       COALESCE(bt.governance_commitment, '')
+		       COALESCE(bt.governance_commitment, ''),
+		       COALESCE(ab.bundle_id, ''),
+		       COALESCE(ab.batch_leaf_count, 0),
+		       COALESCE(ab.anchor_version, ''),
+		       COALESCE(ab.accumulate_block_height, 0),
+		       COALESCE(ab.certen_validator_set_root, ''),
+		       COALESCE(ab.message_hash, ''),
+		       COALESCE(ab.accumulate_set_root, ''),
+		       COALESCE(ab.accumulate_incarnation, '')
 		FROM batch_transactions bt
 		JOIN anchor_batches ab ON ab.id = bt.batch_id
 		WHERE ab.bundle_id IS NOT NULL
@@ -164,7 +184,9 @@ func (r *ProofArtifactRepository) GetLayer5Binding(ctx context.Context, intentID
 	var leaf []byte
 	err := r.db.QueryRowContext(ctx, q, intentID, accumTxHash, chainID).Scan(
 		&b.BatchID, &leaf, &b.TreeIndex, &rawPath, &root, &b.TargetChain, &b.AnchorTxHash, &b.AnchorBlockNum,
-		&b.BatchOperationID, &b.BatchOperationIDVersion, &b.MemberOperationID, &b.MemberGovernanceCommitment)
+		&b.BatchOperationID, &b.BatchOperationIDVersion, &b.MemberOperationID, &b.MemberGovernanceCommitment,
+		&b.BundleID, &b.LeafCount, &b.AnchorVersion, &b.AccumulateBlockHeight, &b.CertenSetRoot, &b.MessageHash,
+		&b.AccumulateSetRoot, &b.AccumulateIncarnation)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("tx %s: %w", accumTxHash, ErrNoBatchBinding)
 	}

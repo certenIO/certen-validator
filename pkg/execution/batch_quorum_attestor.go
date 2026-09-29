@@ -335,6 +335,7 @@ func (a *BatchQuorumAttestor) prove(
 			MessageHash:             msgHash,
 			SetRoot:                 setRoot,
 			AccumulateBlockHeight:   tree.BlockHeight,
+			LeafCount:               uint64(tree.Size()),
 			AccumulateSetRoot:       tree.AccumulateSetRoot,
 			Incarnation:             tree.Incarnation,
 			VerifyTx:                verifyTx,

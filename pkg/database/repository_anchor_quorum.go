@@ -63,6 +63,9 @@ type AnchorQuorumRecord struct {
 	// quorum message covers; AccumulateSetRoot and AccumulateIncarnation what a V8.2 anchor committed (empty on V8.1).
 	// All 0x-hex except the height (RB5-F9).
 	AccumulateBlockHeight int64
+	// BatchLeafCount is the anchor's own leaf count, which its bundle id derives from (not len(Members): a row rebuilt
+	// from the chain records none).
+	BatchLeafCount        int64
 	CertenSetRoot         string
 	AccumulateSetRoot     string
 	AccumulateIncarnation string
@@ -199,12 +202,14 @@ func (r *BatchRepository) RecordAnchorQuorum(
 			    certen_validator_set_root  = COALESCE(certen_validator_set_root, $9),
 			    accumulate_set_root        = COALESCE(accumulate_set_root, $10),
 			    accumulate_incarnation     = COALESCE(accumulate_incarnation, $11),
+			    batch_leaf_count           = COALESCE(batch_leaf_count, $12),
 			    updated_at                 = NOW()
 			WHERE id = $1 AND evidence_source = 'chain_backfill'`,
 			existingID, rec.AggregateSignature, rec.AggregatePubKey, nullIfEmpty(rec.Lane),
 			nullIfEmpty(rec.BatchOperationIDVersion), len(rec.Members), nullIfEmpty(rec.AnchorVersion),
 			nullIfZero(rec.AccumulateBlockHeight), nullIfEmpty(strings.ToLower(rec.CertenSetRoot)),
-			nullIfEmpty(strings.ToLower(rec.AccumulateSetRoot)), nullIfEmpty(strings.ToLower(rec.AccumulateIncarnation))); err != nil {
+			nullIfEmpty(strings.ToLower(rec.AccumulateSetRoot)), nullIfEmpty(strings.ToLower(rec.AccumulateIncarnation)),
+			nullIfZero(rec.BatchLeafCount)); err != nil {
 			return false, fmt.Errorf("record anchor quorum: completing rebuilt anchor %s: %w", rec.BundleID, err)
 		}
 		if err := insertAnchorMembers(ctx, tx, existingID, rec); err != nil {
@@ -281,7 +286,8 @@ func (r *BatchRepository) RecordAnchorQuorum(
 			quorum_reached, consensus_completed_at, evidence_source, lane,
 			anchor_tx_hash, anchored_at, confirmed_at, closed_at, anchor_block_num,
 			anchor_create_sender, verify_sender, batch_operation_id_version,
-			anchor_version, accumulate_block_height, certen_validator_set_root, accumulate_set_root, accumulate_incarnation
+			anchor_version, accumulate_block_height, certen_validator_set_root, accumulate_set_root, accumulate_incarnation,
+			batch_leaf_count
 		) VALUES (
 			$1, $2, 'confirmed', $3, $4, NULL,
 			$5, $5,
@@ -291,7 +297,8 @@ func (r *BatchRepository) RecordAnchorQuorum(
 			TRUE, $19, $20, $21,
 			$9, $19, $19, $19, $22,
 			$23, $24, $25,
-			$26, $27, $28, $29, $30
+			$26, $27, $28, $29, $30,
+			$31
 		)
 		ON CONFLICT (chain_id, bundle_id) WHERE bundle_id IS NOT NULL DO NOTHING
 		RETURNING TRUE`,
@@ -308,6 +315,7 @@ func (r *BatchRepository) RecordAnchorQuorum(
 		nullIfEmpty(rec.BatchOperationIDVersion),
 		nullIfEmpty(rec.AnchorVersion), nullIfZero(rec.AccumulateBlockHeight), nullIfEmpty(strings.ToLower(rec.CertenSetRoot)),
 		nullIfEmpty(strings.ToLower(rec.AccumulateSetRoot)), nullIfEmpty(strings.ToLower(rec.AccumulateIncarnation)),
+		nullIfZero(rec.BatchLeafCount),
 	).Scan(&inserted)
 
 	if err == sql.ErrNoRows {
@@ -532,6 +540,9 @@ func insertAnchorMembers(ctx context.Context, tx *Tx, batchID uuid.UUID, rec *An
 // checkAnchorCommitment requires a record to state its anchor generation, and a V8.2 record to carry the Accumulate
 // validator-set root and incarnation its anchor committed (the columns' own constraints hold them to 0x-hex).
 func checkAnchorCommitment(rec *AnchorQuorumRecord) error {
+	if rec.BatchLeafCount <= 0 {
+		return fmt.Errorf("the anchor record states no leaf count, which its bundle id derives from")
+	}
 	switch rec.AnchorVersion {
 	case "v8_2":
 		if rec.AccumulateSetRoot == "" || rec.AccumulateIncarnation == "" {

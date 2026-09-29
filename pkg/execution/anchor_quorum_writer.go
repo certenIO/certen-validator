@@ -298,6 +298,7 @@ func AnchorQuorumRecordFrom(ev *AnchorQuorumEvidence) *database.AnchorQuorumReco
 		// member count and the batch operation id, these re-derive BundleID and MessageHash offline.
 		AnchorVersion:         string(contracts.BatchAnchorV8_2),
 		AccumulateBlockHeight: int64(ev.AccumulateBlockHeight),
+		BatchLeafCount:        int64(ev.LeafCount),
 		CertenSetRoot:         hexPrefixed(ev.SetRoot[:]),
 		AccumulateSetRoot:     hexPrefixed(ev.AccumulateSetRoot[:]),
 		AccumulateIncarnation: hexPrefixed(ev.Incarnation[:]),

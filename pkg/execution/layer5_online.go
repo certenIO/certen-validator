@@ -23,6 +23,8 @@ type Layer5OnlineCheck struct {
 	AnchorVersion     string
 	AccumulateSetRoot string
 	Incarnation       string
+	// AnchorRecordChecked is true when the anchor's own record (anchors(bundleId)) was read and matched.
+	AnchorRecordChecked bool
 }
 
 // VerifyLayer5Online is the online half of layer 5: the anchor-create transaction the layer names mined, called
@@ -79,6 +81,35 @@ func VerifyLayer5Online(ctx context.Context, rpcURL string, l5 *Layer5) (*Layer5
 	if l5.Governance != nil && !strings.EqualFold(l5.Governance.BatchOperationID, out.BatchOperationID) {
 		return out, fmt.Errorf("anchor transaction %s stored batch operation id %s, the layer's members recompute %s",
 			l5.AnchorTx, out.BatchOperationID, l5.Governance.BatchOperationID)
+	}
+	if c := l5.Commitment; c != nil {
+		// The transaction created exactly the anchor the layer says was committed: its generation, bundle id and, on
+		// V8.2, the Accumulate set and incarnation.
+		if c.Version != out.AnchorVersion || !strings.EqualFold(strings.TrimPrefix(c.BundleID, "0x"), strings.TrimPrefix(out.BundleID, "0x")) {
+			return out, fmt.Errorf("anchor transaction %s created a %s anchor %s, the layer names a %s anchor %s",
+				l5.AnchorTx, out.AnchorVersion, out.BundleID, c.Version, c.BundleID)
+		}
+		if c.Version == string(contracts.BatchAnchorV8_2) &&
+			(!strings.EqualFold(strings.TrimPrefix(c.AccumulateSetRoot, "0x"), strings.TrimPrefix(out.AccumulateSetRoot, "0x")) ||
+				!strings.EqualFold(strings.TrimPrefix(c.Incarnation, "0x"), strings.TrimPrefix(out.Incarnation, "0x"))) {
+			return out, fmt.Errorf("anchor transaction %s committed Accumulate set %s under incarnation %s, the layer names %s under %s",
+				l5.AnchorTx, out.AccumulateSetRoot, out.Incarnation, c.AccumulateSetRoot, c.Incarnation)
+		}
+		// And the anchor still holds it: its own record, read from its contract.
+		if tx.To() == nil {
+			return out, fmt.Errorf("anchor transaction %s created no contract call", l5.AnchorTx)
+		}
+		st, err := ReadAnchorState(ctx, client, *tx.To(), call.BundleID, nil)
+		if err != nil {
+			return out, fmt.Errorf("anchor %s: %w", out.BundleID, err)
+		}
+		if string(st.Version) != c.Version || st.MerkleRoot != call.Root || st.AccumulateSetRoot != call.AccumulateSetRoot ||
+			st.Incarnation != call.Incarnation || !st.Valid {
+			return out, fmt.Errorf("anchor %s holds a %s record (root %x…, Accumulate set %x…, incarnation %x…, valid %v) that is "+
+				"not what its create transaction committed", out.BundleID, st.Version, st.MerkleRoot[:8],
+				st.AccumulateSetRoot[:8], st.Incarnation[:8], st.Valid)
+		}
+		out.AnchorRecordChecked = true
 	}
 	return out, nil
 }

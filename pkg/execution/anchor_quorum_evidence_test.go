@@ -45,6 +45,7 @@ func evidenceFixture() *AnchorQuorumEvidence {
 		MessageHash:             msg,
 		SetRoot:                 setRoot,
 		AccumulateBlockHeight:   9360888,
+		LeafCount:               2,
 		AccumulateSetRoot:       testAccSet,
 		Incarnation:             testIncarnation,
 		VerifyTx:                "0x9e4ff6ab00000000000000000000000000000000000000000000000000000000",

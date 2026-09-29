@@ -144,6 +144,12 @@ type Layer5 struct {
 	// batch formed before it - whose anchor commits to no governance, which is stated, never passed off as
 	// committed.
 	Governance *BatchGovernance `json:"governance,omitempty"`
+
+	// Commitment is what the anchor committed beyond the root: its generation, bundle id, member count, height, the
+	// CERTEN set root and message its quorum signed, and on V8.2 the Accumulate validator-set root and incarnation
+	// (RB5). VerifyOffline re-derives the bundle id and message from it; CheckAccumulateCommitment compares the set with
+	// the proof's own L4. Absent on a proof whose anchor row predates migration 00018 (commitment_not_recorded).
+	Commitment *AnchorCommitment `json:"commitment,omitempty"`
 }
 
 // BatchGovernance is the governance half of a batch's operation id (see Layer5.Governance).
@@ -245,6 +251,17 @@ func (l *Layer5) VerifyOffline() error {
 	if l.Governance != nil {
 		if err := l.Governance.Verify(); err != nil {
 			return err
+		}
+	}
+	if l.Commitment != nil {
+		if err := l.Commitment.Verify(l.ChainID, l.BatchRoot); err != nil {
+			return err
+		}
+		// The governance half and the anchor must name one batch operation id.
+		if l.Governance != nil && !strings.EqualFold(strings.TrimPrefix(l.Governance.BatchOperationID, "0x"),
+			strings.TrimPrefix(l.Commitment.BatchOperationID, "0x")) {
+			return fmt.Errorf("layer5: the governance half names batch operation id %s, the anchor committed %s",
+				l.Governance.BatchOperationID, l.Commitment.BatchOperationID)
 		}
 	}
 

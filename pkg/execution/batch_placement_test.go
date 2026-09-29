@@ -52,6 +52,7 @@ func TestTheArtifactStatesTheMembersPlaceInItsBatch(t *testing.T) {
 			Branch: []database.MerklePathNode{{Hash: hex.EncodeToString(l0[:]), Position: "left"}, {Hash: hex.EncodeToString(l2[:]), Position: "right"}},
 		}},
 	}
+	asV8_2Anchor(t, rec, 3, uint64(time.Now().UnixNano()%1_000_000_000))
 	if _, err := repos.Batches.RecordAnchorQuorum(ctx, rec); err != nil {
 		t.Fatal(err)
 	}
