@@ -401,6 +401,12 @@ func (bv *BFTValidator) enqueueForBatch(
 			// re-driven intent - discovery rewinding after a restart - arrives here (RB3-F141).
 			bv.logger.Printf("📦 [BATCH-QUEUE] intent %s on chain %d is already decided — not queued again: %v",
 				certenIntent.IntentID, m.chainID, enqErr)
+			// Unless a repair names it: its proof cycle is then run from this round's snapshot (member_repair.go).
+			memberLane := "on_cadence"
+			if plan.onDemand {
+				memberLane = "on_demand"
+			}
+			bv.repairDecidedMember(&memberAtt, m.chainID, memberLane)
 		default:
 			// All-or-nothing: take back what this call queued for the intent's other chains, or the
 			// intent would settle on one chain while being reported refused.
