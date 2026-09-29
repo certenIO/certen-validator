@@ -28,7 +28,7 @@ func TestSharedPeriodKeepsFullGrace(t *testing.T) {
 	const period, width = uint64(100), uint64(100)
 
 	for _, id := range []string{"a", "b"} {
-		if err := m.Add(&PendingBatchIntent{
+		if err := m.Add(&PendingBatchIntent{GovernanceCommitment: testGov,
 			IntentID:     id,
 			ADIURL:       "acc://" + id + ".acme",
 			ChainID:      chain,

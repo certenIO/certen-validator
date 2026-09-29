@@ -38,6 +38,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	chained_proof "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/working-proof_do_not_edit"
@@ -69,11 +70,18 @@ func main() {
 		verbose = flag.Bool("v", false, "print the reassembled proof's layer summary")
 		govern  = flag.Bool("governance", false, "also recompute the stored G0/G1/G2 receipts from level_json")
 		l5      = flag.Bool("l5", false, "also recompute the stored external-anchor binding (leaf -> batch root)")
+		online  = flag.String("online-rpc", "", "with --l5 and --offline=false: also check, at this JSON-RPC endpoint of "+
+			"the anchor's chain, that the anchor-create transaction published the batch root and batch operation id")
 	)
 	flag.Parse()
 
 	if *proofID == "" || *dsn == "" {
-		fmt.Fprintln(os.Stderr, "usage: proofverify --proof-id <uuid> --db <dsn> [--offline] [--governance] [--l5] [-v]")
+		fmt.Fprintln(os.Stderr, "usage: proofverify --proof-id <uuid> --db <dsn> [--offline] [--governance] [--l5] "+
+			"[--online-rpc <url> --offline=false] [-v]")
+		os.Exit(exitUsage)
+	}
+	if *online != "" && (*offline || !*l5) {
+		fmt.Fprintln(os.Stderr, "--online-rpc checks the anchor on its chain: it needs --l5 and --offline=false")
 		os.Exit(exitUsage)
 	}
 	id, err := uuid.Parse(*proofID)
@@ -174,6 +182,12 @@ func main() {
 		if *l5 {
 			code = worseExit(code, reportLayer5(ctx, store, id))
 		}
+		if *govern && *l5 {
+			code = worseExit(code, reportGovernanceDecision(ctx, store, id))
+		}
+		if *online != "" {
+			code = worseExit(code, reportLayer5Online(ctx, store, id, *online))
+		}
 		os.Exit(code)
 
 	case errors.Is(err, certenproof.ErrSummaryOnly), errors.Is(err, certenproof.ErrNoStoredProof):
@@ -181,8 +195,9 @@ func main() {
 		fmt.Printf("SUMMARY-ONLY  %s\n", id)
 		fmt.Printf("  %v\n", err)
 		fmt.Printf("  Nothing about this proof is known to be wrong — its quorum was checked in\n")
-		fmt.Printf("  flight and the governance root commits to that conclusion. What is missing is\n")
-		fmt.Printf("  the evidence needed to check it again, and it cannot be recovered.\n")
+		fmt.Printf("  flight. What is missing is the evidence needed to check it again, and it cannot\n")
+		fmt.Printf("  be recovered. (The governance root is not anchored anywhere: it was used only in\n")
+		fmt.Printf("  each validator's own pre-execution signature - RB4-F66.)\n")
 		os.Exit(exitSummaryOnly)
 
 	default:
@@ -242,8 +257,8 @@ func reportGovernance(ctx context.Context, store *certenproof.PostgresProofStora
 		fmt.Printf("SUMMARY-ONLY (governance)  %s\n", id)
 		fmt.Printf("  %v\n", err)
 		fmt.Printf("  L1-L4 verified. Nothing about the governance levels is known to be wrong — the\n")
-		fmt.Printf("  proof was generated and checked in flight and the govRoot commits to its\n")
-		fmt.Printf("  canonical hash. What is missing is the receipt merkle path needed to check it\n")
+		fmt.Printf("  proof was generated and checked in flight. What is missing is the receipt\n")
+		fmt.Printf("  merkle path needed to check it\n")
 		fmt.Printf("  again, and it cannot be recovered: a receipt fetched today is not necessarily\n")
 		fmt.Printf("  the one this proof was built on.\n")
 		return exitSummaryOnly
@@ -350,4 +365,84 @@ func reportLayer5(ctx context.Context, store *certenproof.PostgresProofStorage, 
 		fmt.Printf("  names. This proof is not in the batch it claims to be in.\n")
 		return exitFailed
 	}
+}
+
+// reportGovernanceDecision re-derives who decided the proof's transaction from the stored vote record and checks
+// that the batch the proof settled in commits to it (RB4-F66). Offline.
+func reportGovernanceDecision(ctx context.Context, store *certenproof.PostgresProofStorage, id uuid.UUID) int {
+	levels, err := certenproof.GovernanceLevelsFromStorage(ctx, store, id)
+	if err != nil {
+		fmt.Printf("FAILED (governance decision)  %s\n  %v\n", id, err)
+		return exitFailed
+	}
+	l5, l5err := execution.VerifyStoredLayer5(ctx, store, id)
+	if l5err != nil {
+		l5 = nil // reportLayer5 has already reported it; the decision is checked against no batch
+	}
+	got, err := execution.CheckGovernanceDecision(levels, l5)
+	switch {
+	case err == nil:
+		fmt.Printf("  GOV vote: evaluated again from %d chain-bound message(s) and %d page history/ies replayed\n",
+			got.EvidenceMessages, got.EvidencePages)
+		fmt.Printf("      from genesis; it reaches the stored vote record exactly\n")
+		reportAuthoritySetBasis(got)
+		fmt.Printf("  GOV decision: %d authority/ies, commitment %s… re-derived from that vote record\n",
+			got.Authorities, short(strings.TrimPrefix(got.Commitment, "0x")))
+		fmt.Printf("  GOV anchored: the batch operation id %s… (%s) recomputes from its members, this one\n",
+			short(strings.TrimPrefix(got.BatchOperationID, "0x")), got.BatchVersion)
+		fmt.Printf("      committing to that decision - the quorum signed, and the anchor stores, who decided\n")
+		return exitVerified
+	case errors.Is(err, execution.ErrNoGovernanceDecision):
+		fmt.Printf("SUMMARY-ONLY (governance decision)  %s\n  %v\n", id, err)
+		fmt.Printf("  Who decided the transaction is not recorded for this proof. Nothing about it is known\n")
+		fmt.Printf("  to be wrong.\n")
+		return exitSummaryOnly
+	case errors.Is(err, execution.ErrGovernanceNotAnchored):
+		fmt.Printf("SUMMARY-ONLY (governance decision)  %s\n  %v\n", id, err)
+		fmt.Printf("  GOV vote: evaluated again from %d chain-bound message(s) and %d page history/ies\n",
+			got.EvidenceMessages, got.EvidencePages)
+		fmt.Printf("  GOV decision: %d authority/ies, commitment %s… re-derived from the stored vote record,\n",
+			got.Authorities, short(strings.TrimPrefix(got.Commitment, "0x")))
+		fmt.Printf("  and NOT anchored: no quorum signature or anchor commits to it.\n")
+		return exitSummaryOnly
+	default:
+		fmt.Printf("FAILED (governance decision)  %s\n  %v\n", id, err)
+		fmt.Printf("  The stored decision does not agree with its own evidence or with its anchored batch.\n")
+		return exitFailed
+	}
+}
+
+// reportAuthoritySetBasis says what the authority set at execution was replayed from, and names each account whose
+// part of it rests on the network's present set rather than on the chain alone.
+func reportAuthoritySetBasis(got *execution.GovernanceDecisionCheck) {
+	fmt.Printf("  GOV authorities: the set at execution replayed from %d account history/ies\n", got.EvidenceAccounts)
+	if got.Declared == nil {
+		fmt.Printf("  GOV declared: the intent declares no authority set; nothing it claims is checked beyond the chain\n")
+	} else {
+		fmt.Printf("  GOV declared: %s - the governance that executed the intent\n",
+			certenproof.DescribeDeclaredGovernance(got.Declared))
+	}
+	for _, a := range got.DecidedByLiveState {
+		fmt.Printf("      %s: which creation rule applied was chosen by the set the network held when read,\n", a)
+		fmt.Printf("      not by the chain alone\n")
+	}
+}
+
+// reportLayer5Online checks the stored layer 5 against the anchor's chain.
+func reportLayer5Online(ctx context.Context, store *certenproof.PostgresProofStorage, id uuid.UUID, rpc string) int {
+	l5, err := execution.VerifyStoredLayer5(ctx, store, id)
+	if err != nil {
+		fmt.Printf("FAILED (L5 online)  %s\n  no layer 5 to check online: %v\n", id, err)
+		return exitFailed
+	}
+	got, err := execution.VerifyLayer5Online(ctx, rpc, l5)
+	if err != nil {
+		fmt.Printf("FAILED (L5 online)  %s\n  %v\n", id, err)
+		return exitFailed
+	}
+	fmt.Printf("  L5  ONLINE: anchor tx %s (to %s) published root %s… and batch operation id %s…\n",
+		l5.AnchorTx, got.AnchorContract, short(strings.TrimPrefix(got.BatchRoot, "0x")),
+		short(strings.TrimPrefix(got.BatchOperationID, "0x")))
+	fmt.Printf("      compare the contract with the chain's published CERTEN anchor\n")
+	return exitVerified
 }

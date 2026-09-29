@@ -567,6 +567,12 @@ func (g1 *G1Layer) evaluateCandidate(ctx context.Context, cand sigCandidate, key
 	if verdict != messageForThisTransaction {
 		return res
 	}
+	// The signature as the chain holds it, for the vote's evidence (RB4-F66). A signature this proof cannot carry
+	// as evidence is one it cannot count.
+	binary, err := signatureBytes(pu.CaseInsensitiveGet(result, "message"))
+	if err != nil {
+		return evalResult{Outcome: SigUnavailable, Stage: "evidence-signature", Reason: err.Error()}
+	}
 
 	// --- receipt, for timing (section 6.2 / 7.1) --------------------------
 	receiptQuery := g1.queryBuilder.BuildNormativeChainQuery("signature", cand.MessageHash, true)
@@ -643,6 +649,7 @@ func (g1 *G1Layer) evaluateCandidate(ctx context.Context, cand sigCandidate, key
 		MessageHash:             cand.MessageHash,
 		Signature:               signature,
 		Receipt:                 receipt,
+		Binary:                  binary,
 		TimingVerified:          true,
 		TransactionHashVerified: true,
 	}

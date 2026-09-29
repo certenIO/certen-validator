@@ -1058,7 +1058,7 @@ func (id *IntentDiscovery) processBlock(job *BlockProcessJob, workerID string) e
 					}
 					if mlErr := id.repos.IntentLifecycle.UpsertOnDiscoveryMultiLeg(
 						ctx, intent.IntentID, intent.TransactionHash,
-						int64(job.BlockHeight), intent.UserID, intent.ProofClass, targetChain,
+						int64(job.BlockHeight), intent.BlockTime, intent.UserID, intent.ProofClass, targetChain,
 						chains, legCount, execMode,
 					); mlErr != nil {
 						id.logger.Printf("⚠️ [LIFECYCLE] Failed to upsert multi-leg lifecycle for %s: %v",
@@ -1075,7 +1075,7 @@ func (id *IntentDiscovery) processBlock(job *BlockProcessJob, workerID string) e
 			if !recorded {
 				if lcErr := id.repos.IntentLifecycle.UpsertOnDiscovery(
 					ctx, intent.IntentID, intent.TransactionHash,
-					int64(job.BlockHeight), intent.UserID, intent.ProofClass, targetChain,
+					int64(job.BlockHeight), intent.BlockTime, intent.UserID, intent.ProofClass, targetChain,
 				); lcErr != nil {
 					id.logger.Printf("⚠️ [LIFECYCLE] Failed to upsert lifecycle for %s: %v", intent.IntentID, lcErr)
 				}

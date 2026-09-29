@@ -43,6 +43,9 @@ func anchorRepoForTest(t *testing.T) *BatchRepository {
 // measure the first run's row instead of this one's.
 var bundleRunNonce = uuid.New()
 
+// testMemberGovernance is a member's governance commitment (RB4-F66).
+var testMemberGovernance = "0x" + strings.Repeat("ab", 32)
+
 func bundleHex(n int) string {
 	nonce := strings.ReplaceAll(bundleRunNonce.String(), "-", "") // 32 hex chars
 	return fmt.Sprintf("0x%s%s%08x", nonce, nonce[:24], n)        // 32 + 24 + 8 = 64
@@ -56,17 +59,19 @@ func anchorRecordForTest(chainID int64, bundle string, rootByte byte) *AnchorQuo
 	leaf := make([]byte, 32)
 	leaf[0] = 0x11
 	return &AnchorQuorumRecord{
-		ChainID:            chainID,
-		BundleID:           bundle,
-		Root:               root,
-		BatchOperationID:   bundleHex(999),
-		MessageHash:        bundleHex(888),
-		AnchorCreateTx:     "0x51a1c0de" + strings.Repeat("00", 28), // a real hash is 0x + 64 hex chars
-		VerifyTx:           "0xbeef" + strings.Repeat("11", 30),
-		VerifyBlock:        45943100,
-		VerifiedAt:         time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC),
-		AggregateSignature: []byte{0xab, 0xcd},
-		AggregatePubKey:    []byte{0x12, 0x34},
+		ChainID:          chainID,
+		BundleID:         bundle,
+		Root:             root,
+		BatchOperationID: bundleHex(999),
+		// A v2 anchor: its operation id commits to every member's governance decision (RB4-F66).
+		BatchOperationIDVersion: "v2",
+		MessageHash:             bundleHex(888),
+		AnchorCreateTx:          "0x51a1c0de" + strings.Repeat("00", 28), // a real hash is 0x + 64 hex chars
+		VerifyTx:                "0xbeef" + strings.Repeat("11", 30),
+		VerifyBlock:             45943100,
+		VerifiedAt:              time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC),
+		AggregateSignature:      []byte{0xab, 0xcd},
+		AggregatePubKey:         []byte{0x12, 0x34},
 		Signers: []AnchorQuorumSigner{
 			{Address: "0xaaa", VotingPower: big.NewInt(100)},
 			{Address: "0xbbb", VotingPower: big.NewInt(100)},
@@ -77,13 +82,14 @@ func anchorRecordForTest(chainID int64, bundle string, rootByte byte) *AnchorQuo
 		EvidenceSource:    "live",
 		TargetChain:       "base-sepolia",
 		Members: []AnchorQuorumMemberRecord{{
-			IntentID:    "f6cea77e-0000-0000-0000-000000000001",
-			AccumTxHash: "member-" + bundle,
-			ADIURL:      "acc://fictional-payer.acme",
-			OperationID: bundleHex(777),
-			Leaf:        leaf,
-			LeafIndex:   0,
-			Branch:      []MerklePathNode{{Hash: strings.Repeat("22", 32), Position: "right"}},
+			IntentID:             "f6cea77e-0000-0000-0000-000000000001",
+			AccumTxHash:          "member-" + bundle,
+			ADIURL:               "acc://fictional-payer.acme",
+			OperationID:          bundleHex(777),
+			GovernanceCommitment: testMemberGovernance,
+			Leaf:                 leaf,
+			LeafIndex:            0,
+			Branch:               []MerklePathNode{{Hash: strings.Repeat("22", 32), Position: "right"}},
 		}},
 	}
 }
@@ -468,11 +474,13 @@ func TestLayer5BindingFindsTheCanonicalRowByIntentWhenTheAccumHashIsOnlyOnShadow
 	rec.AnchorCreateTx = anchorCreateTx
 	// Exactly as the live writer produces it: a member with an intent id and NO Accumulate tx hash.
 	rec.Members = []AnchorQuorumMemberRecord{{
-		IntentID:    intentID,
-		AccumTxHash: "",
-		ADIURL:      "acc://fictional-payer.acme",
-		Leaf:        rec.Root,
-		LeafIndex:   0,
+		IntentID:             intentID,
+		AccumTxHash:          "",
+		ADIURL:               "acc://fictional-payer.acme",
+		OperationID:          bundleHex(7759),
+		GovernanceCommitment: testMemberGovernance,
+		Leaf:                 rec.Root,
+		LeafIndex:            0,
 	}}
 	if _, err := repo.RecordAnchorQuorum(ctx, rec); err != nil {
 		t.Fatal(err)
@@ -621,19 +629,20 @@ func TestCanonicalMemberRowCarriesTheAccumulateTransactionAndLeg(t *testing.T) {
 	const accumTx = "3e595d2c526dfacb5e332cd11f4f0306d2648cf1291bed63a9bcfd6ef44a7a12"
 	rec := anchorRecordForTest(84532, bundleHex(3101), 0xc1)
 	rec.Members = []AnchorQuorumMemberRecord{{
-		IntentID:    "intent-canonical-rich",
-		AccumTxHash: accumTx,
-		ADIURL:      "acc://spk-cust-tcl1.acme",
-		OperationID: "0x" + strings.Repeat("01", 32),
-		Leaf:        rec.Root,
-		LeafIndex:   0,
-		FromChain:   "accumulate",
-		ToChain:     "base-sepolia",
-		FromAddress: "0x9cc158f77DAdF9a605E141262338c89588825f6c",
-		ToAddress:   "0x12dD00C619C1Ac3F58eC68ed44ec1023fE33B9Ff",
-		Amount:      "0",
-		TokenSymbol: "ETH",
-		UserID:      "acc://spk-cust-tcl1.acme",
+		IntentID:             "intent-canonical-rich",
+		AccumTxHash:          accumTx,
+		ADIURL:               "acc://spk-cust-tcl1.acme",
+		OperationID:          "0x" + strings.Repeat("01", 32),
+		GovernanceCommitment: testMemberGovernance,
+		Leaf:                 rec.Root,
+		LeafIndex:            0,
+		FromChain:            "accumulate",
+		ToChain:              "base-sepolia",
+		FromAddress:          "0x9cc158f77DAdF9a605E141262338c89588825f6c",
+		ToAddress:            "0x12dD00C619C1Ac3F58eC68ed44ec1023fE33B9Ff",
+		Amount:               "0",
+		TokenSymbol:          "ETH",
+		UserID:               "acc://spk-cust-tcl1.acme",
 	}}
 
 	if _, err := repo.RecordAnchorQuorum(ctx, rec); err != nil {
@@ -671,6 +680,7 @@ func TestCanonicalMemberRowAcceptsMissingProvenance(t *testing.T) {
 	rec := anchorRecordForTest(84532, bundleHex(3102), 0xc2)
 	rec.Members = []AnchorQuorumMemberRecord{{
 		IntentID: "intent-bare", ADIURL: "acc://bare.acme", Leaf: rec.Root, LeafIndex: 0,
+		OperationID: bundleHex(3103), GovernanceCommitment: testMemberGovernance,
 	}}
 	if _, err := repo.RecordAnchorQuorum(ctx, rec); err != nil {
 		t.Fatalf("a member with no provenance could not be written: %v", err)
@@ -836,5 +846,53 @@ func TestAnchorQuorumRecordsWhoSentEachTransaction(t *testing.T) {
 	}
 	if c, v := senders(completed); c != creator || v != verifier {
 		t.Fatalf("recorded senders were overwritten: %q %q", c, v)
+	}
+}
+
+// RB4-F71: a row rebuilt from the chain carries the quorum but no aggregate and no members - an anchor commits to a
+// root, not a member list. Live evidence for the same anchor arriving after it was refused as "different evidence",
+// so the anchor's members, and with them every member's layer 5, were never recorded. The same anchor - same root,
+// same batch operation id - completes the row; different evidence is still refused.
+func TestLiveEvidenceCompletesARowRebuiltFromTheChain(t *testing.T) {
+	repo := anchorRepoForTest(t)
+	ctx := context.Background()
+	live := anchorRecordForTest(84532, bundleHex(96601), 0x71)
+
+	backfill := anchorRecordForTest(84532, live.BundleID, 0x71)
+	backfill.EvidenceSource, backfill.AggregateSignature, backfill.AggregatePubKey = "chain_backfill", nil, nil
+	backfill.Members, backfill.BatchOperationIDVersion, backfill.Lane = nil, "", ""
+	backfill.AnchorCreateTx = ""
+	if written, err := repo.RecordAnchorQuorum(ctx, backfill); err != nil || !written {
+		t.Fatalf("backfill: %v %v", written, err)
+	}
+	if _, err := repo.RecordAnchorQuorum(ctx, live); err != nil {
+		t.Fatalf("live evidence for the same anchor was refused: %v", err)
+	}
+	var members int
+	var version, source string
+	var sig []byte
+	if err := testDB.QueryRowContext(ctx, `
+		SELECT (SELECT count(*) FROM batch_transactions bt WHERE bt.batch_id = ab.id),
+		       COALESCE(ab.batch_operation_id_version, ''), ab.evidence_source, ab.aggregated_signature
+		FROM anchor_batches ab WHERE ab.chain_id = $1 AND ab.bundle_id = $2`, live.ChainID, live.BundleID).Scan(
+		&members, &version, &source, &sig); err != nil {
+		t.Fatal(err)
+	}
+	if members != 1 || version != "v2" || source != "live" || len(sig) == 0 {
+		t.Fatalf("the row was not completed: members=%d version=%q source=%q sig=%x", members, version, source, sig)
+	}
+
+	// Different evidence for a rebuilt row is still refused.
+	other := anchorRecordForTest(84532, bundleHex(96602), 0x72)
+	bf2 := anchorRecordForTest(84532, other.BundleID, 0x72)
+	bf2.EvidenceSource, bf2.AggregateSignature, bf2.AggregatePubKey = "chain_backfill", nil, nil
+	bf2.Members, bf2.BatchOperationIDVersion, bf2.Lane, bf2.AnchorCreateTx = nil, "", "", ""
+	if _, err := repo.RecordAnchorQuorum(ctx, bf2); err != nil {
+		t.Fatal(err)
+	}
+	other.BatchOperationID = bundleHex(96603)
+	var conflict *AnchorQuorumConflict
+	if _, err := repo.RecordAnchorQuorum(ctx, other); !errors.As(err, &conflict) {
+		t.Fatalf("live evidence naming another batch operation id completed a rebuilt row: %v", err)
 	}
 }

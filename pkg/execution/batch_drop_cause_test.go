@@ -18,8 +18,8 @@ import (
 // the same reason whatever the cause (RB3-F37). Each drop now carries its own cause to the caller.
 
 func TestBatchFlushResult_DropRecordsTheCausePerMember(t *testing.T) {
-	a := &PendingBatchIntent{IntentID: "a", ChainID: 84532}
-	b := &PendingBatchIntent{IntentID: "b", ChainID: 84532}
+	a := &PendingBatchIntent{GovernanceCommitment: testGov, IntentID: "a", ChainID: 84532}
+	b := &PendingBatchIntent{GovernanceCommitment: testGov, IntentID: "b", ChainID: 84532}
 	res := &BatchFlushResult{}
 	res.drop("account 0xabc is not a CertenAccountV7", a)
 	res.drop("quorum over root not reached after 5 attempts", b)
@@ -35,8 +35,8 @@ func TestBatchFlushResult_DropRecordsTheCausePerMember(t *testing.T) {
 }
 
 func TestRouteDropped_HandsEachMemberItsOwnCause(t *testing.T) {
-	a := &PendingBatchIntent{IntentID: "a", ChainID: 84532}
-	b := &PendingBatchIntent{IntentID: "b", ChainID: 84532}
+	a := &PendingBatchIntent{GovernanceCommitment: testGov, IntentID: "a", ChainID: 84532}
+	b := &PendingBatchIntent{GovernanceCommitment: testGov, IntentID: "b", ChainID: 84532}
 	res := &BatchFlushResult{}
 	res.drop("cause-a", a)
 	res.drop("cause-b", b)
@@ -52,7 +52,7 @@ func TestRouteDropped_HandsEachMemberItsOwnCause(t *testing.T) {
 // A drop with nowhere to go is a wiring defect, and it must say so rather than pass silently.
 func TestRouteDropped_WithNoHandlerSaysTheMembersAreStranded(t *testing.T) {
 	res := &BatchFlushResult{}
-	res.drop("cause", &PendingBatchIntent{IntentID: "a", ChainID: 84532})
+	res.drop("cause", &PendingBatchIntent{GovernanceCommitment: testGov, IntentID: "a", ChainID: 84532})
 	var logged string
 	routeDropped(context.Background(), 84532, res, nil, func(f string, a ...interface{}) { logged += f })
 	if !strings.Contains(logged, "never be recorded") {

@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"errors"
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govvote"
 	"strings"
 	"testing"
 
@@ -104,7 +105,7 @@ func corpusFacts(t *testing.T, cf corpusFile, caseName string) (voteFacts, strin
 func corpusVote(t *testing.T, cf corpusFile, caseName string) (*AccountVote, error) {
 	t.Helper()
 	facts, principal, _ := corpusFacts(t, cf, caseName)
-	return newVoteModel(facts, corpusTimelines(t, cf)).accountVote(context.Background(),
+	return govvote.Evaluate(context.Background(), facts, corpusTimelines(t, cf),
 		"acc://corpus.acme/data", []AccountAuthority{{URL: bookOfPage(principal)}}, nil, false)
 }
 
@@ -120,7 +121,7 @@ func TestCorpusVotes_DeliveredCasesAreSatisfied(t *testing.T) {
 			if !av.Satisfied {
 				t.Fatalf("a transaction Kermit delivered is not authorized: %s", av.Describe())
 			}
-			t.Logf("%s: %s, %d accepting key(s)", name, av.Describe(), av.acceptingKeys())
+			t.Logf("%s: %s, %d accepting key(s)", name, av.Describe(), av.AcceptingKeys())
 		})
 	}
 }
@@ -265,8 +266,8 @@ func TestCorpusVotes_DirectSignaturesAndVersionBinding(t *testing.T) {
 			t.Fatal(err)
 		}
 		page := f.Signer
-		m := newVoteModel(voteFacts{TxType: protocol.TransactionTypeWriteData, Sigs: []sigFact{f}}, tls)
-		pv, err := m.pageVote(context.Background(), page, nil, 0)
+		pv, err := govvote.EvaluatePage(context.Background(), voteFacts{TxType: protocol.TransactionTypeWriteData,
+			Sigs: []sigFact{f}}, tls, page, nil)
 		if err != nil {
 			t.Fatalf("%s: %v", tr.Label, err)
 		}
@@ -276,8 +277,8 @@ func TestCorpusVotes_DirectSignaturesAndVersionBinding(t *testing.T) {
 
 		wrong := f
 		wrong.Version++
-		m = newVoteModel(voteFacts{TxType: protocol.TransactionTypeWriteData, Sigs: []sigFact{wrong}}, tls)
-		if _, err := m.pageVote(context.Background(), page, nil, 0); err == nil {
+		if _, err := govvote.EvaluatePage(context.Background(), voteFacts{TxType: protocol.TransactionTypeWriteData,
+			Sigs: []sigFact{wrong}}, tls, page, nil); err == nil {
 			t.Fatalf("%s: a signature at a version the page never held was believed", tr.Label)
 		}
 		checked++

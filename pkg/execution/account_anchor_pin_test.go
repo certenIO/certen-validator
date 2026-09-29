@@ -64,7 +64,7 @@ func TestEnqueueRefusesAForeignAnchorRepoint(t *testing.T) {
 	self := [20]byte(common.BytesToAddress(account[:]))
 	rogue := common.HexToAddress("0x000000000000000000000000000000000000dEaD")
 	legs := []mirrorLeg{{LegID: "l0", ChainID: 84532, Target: self, Value: big.NewInt(0), Data: repointData(rogue)}}
-	err := s.EnqueueOnDemand("i", "acc://a.acme", 84532, account, opid(1), legs, "att", 100, "", time.Time{}, "0xaccum")
+	err := s.EnqueueOnDemand("i", "acc://a.acme", 84532, account, opid(1), legs, testAtt, testGov, 100, "", time.Time{}, "0xaccum")
 	if !errors.Is(err, consensus.ErrAnchorRepointRefused) {
 		t.Fatalf("err %v; want the repoint refused", err)
 	}
@@ -72,7 +72,7 @@ func TestEnqueueRefusesAForeignAnchorRepoint(t *testing.T) {
 		t.Fatalf("%d member(s) queued", n)
 	}
 	legs[0].Data = repointData(pinAnchorV8)
-	if err := s.EnqueueOnDemand("i", "acc://a.acme", 84532, account, opid(1), legs, "att", 100, "", time.Time{}, "0xaccum"); err != nil {
+	if err := s.EnqueueOnDemand("i", "acc://a.acme", 84532, account, opid(1), legs, testAtt, testGov, 100, "", time.Time{}, "0xaccum"); err != nil {
 		t.Fatalf("a repoint to CERTEN's own anchor was refused: %v", err)
 	}
 }

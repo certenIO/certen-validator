@@ -39,7 +39,7 @@ func committedRound(ci *CertenIntent) func(bv *BFTValidator) error {
 	vb := &ValidatorBlock{BundleID: "0x" + strings.Repeat("0a", 32), OperationCommitment: "0x" + strings.Repeat("0b", 32)}
 	vb.GovernanceProof.MerkleRoot = "0x" + strings.Repeat("0c", 32)
 	return func(bv *BFTValidator) error {
-		return bv.enqueueForBatch(ci, &proof.CertenProof{}, vb, 10007772, &proof.G0Result{}, &proof.G1Result{}, &proof.G2Result{},
+		return bv.enqueueForBatch(ci, &proof.CertenProof{GovDecision: testGovDecision}, vb, 10007772, &proof.G0Result{}, &proof.G1Result{}, &proof.G2Result{},
 			"bls-signature", []string{"validator-signature"}, "G2", 10007772)
 	}
 }

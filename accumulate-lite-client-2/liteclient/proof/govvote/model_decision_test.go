@@ -1,6 +1,6 @@
 // Copyright 2026 Certen Protocol
 
-package main
+package govvote
 
 import (
 	"encoding/json"
@@ -27,8 +27,8 @@ func TestVotes_ARotationAfterThePageVotedDoesNotReopenIt(t *testing.T) {
 		vPage{version: 1, accept: 1, keys: []string{"a"}},
 		vPage{version: 2, accept: 2, keys: []string{"a", "b"}})}
 	// a decides at v1, block 10. The page is rotated at 60 and b signs the executed transaction at v2, block 70.
-	av, err := account(t, tls, voteFacts{Sigs: []sigFact{sig(pPage, "a", 1, 10), sig(pPage, "b", 2, 70)},
-		Votes: []recordedVote{recorded(pBook, pPage, 10)}}, pBook)
+	av, err := account(t, tls, Facts{Sigs: []SigFact{sig(pPage, "a", 1, 10), sig(pPage, "b", 2, 70)},
+		Votes: []RecordedVote{recorded(pBook, pPage, 10)}}, pBook)
 	requireSatisfied(t, av, err, true)
 	pv := av.Authorities[0].Vote.Pages[0]
 	if pv.Version != 1 || pv.DecidedAt != 10 {
@@ -40,8 +40,8 @@ func TestVotes_ARotationAfterThePageVotedDoesNotReopenIt(t *testing.T) {
 func TestVotes_ASignatureAfterThePageVotedIsNotCounted(t *testing.T) {
 	tls := memTimelines{normalizeAccURL(pPage): timeline(t, pPage, []int64{1},
 		vPage{version: 1, accept: 1, keys: []string{"a", "b"}})}
-	av, err := account(t, tls, voteFacts{Sigs: []sigFact{sig(pPage, "b", 1, 70), sig(pPage, "a", 1, 10)},
-		Votes: []recordedVote{recorded(pBook, pPage, 10)}}, pBook)
+	av, err := account(t, tls, Facts{Sigs: []SigFact{sig(pPage, "b", 1, 70), sig(pPage, "a", 1, 10)},
+		Votes: []RecordedVote{recorded(pBook, pPage, 10)}}, pBook)
 	requireSatisfied(t, av, err, true)
 	pv := av.Authorities[0].Vote.Pages[0]
 	if len(pv.Counted) != 1 || pv.Counted[0].Entry != "key:"+kh("a") || pv.Counted[0].Block != 10 {
@@ -61,10 +61,10 @@ func TestVotes_AnArrivalAfterThePageVotedIsNotCounted(t *testing.T) {
 			vPage{version: 1, accept: 1, keys: []string{"a"}, delegates: []string{dBook}}),
 		normalizeAccURL(dPage): timeline(t, dPage, []int64{1}, vPage{version: 1, accept: 1, keys: []string{"d"}}),
 	}
-	facts := voteFacts{
-		Sigs:     []sigFact{sig(pPage, "a", 1, 10), sig(dPage, "d", 1, 500, pPage)},
-		Arrivals: []arrivalFact{from(arrival(pPage, dBook, 80), dPage)},
-		Votes:    []recordedVote{recorded(pBook, pPage, 10)},
+	facts := Facts{
+		Sigs:     []SigFact{sig(pPage, "a", 1, 10), sig(dPage, "d", 1, 500, pPage)},
+		Arrivals: []ArrivalFact{from(arrival(pPage, dBook, 80), dPage)},
+		Votes:    []RecordedVote{recorded(pBook, pPage, 10)},
 	}
 	av, err := account(t, tls, facts, pBook)
 	requireSatisfied(t, av, err, true)
@@ -79,11 +79,11 @@ func TestVotes_AnArrivalAfterThePageVotedIsNotCounted(t *testing.T) {
 func TestVotes_TheRecordDoesNotDependOnReadOrder(t *testing.T) {
 	tls := memTimelines{normalizeAccURL(pPage): timeline(t, pPage, []int64{1},
 		vPage{version: 1, accept: 2, keys: []string{"a", "b", "c"}})}
-	one := []sigFact{sig(pPage, "a", 1, 10), sig(pPage, "b", 1, 12), sig(pPage, "c", 1, 90)}
-	two := []sigFact{one[2], one[0], one[1]}
-	rec := []recordedVote{recorded(pBook, pPage, 12)}
-	a1, err1 := account(t, tls, voteFacts{Sigs: one, Votes: rec}, pBook)
-	a2, err2 := account(t, tls, voteFacts{Sigs: two, Votes: rec}, pBook)
+	one := []SigFact{sig(pPage, "a", 1, 10), sig(pPage, "b", 1, 12), sig(pPage, "c", 1, 90)}
+	two := []SigFact{one[2], one[0], one[1]}
+	rec := []RecordedVote{recorded(pBook, pPage, 12)}
+	a1, err1 := account(t, tls, Facts{Sigs: one, Votes: rec}, pBook)
+	a2, err2 := account(t, tls, Facts{Sigs: two, Votes: rec}, pBook)
 	requireSatisfied(t, a1, err1, true)
 	requireSatisfied(t, a2, err2, true)
 	j1, _ := json.Marshal(a1)
@@ -100,8 +100,8 @@ func TestVotes_TheRecordDoesNotDependOnReadOrder(t *testing.T) {
 func TestVotes_ThePageRecordsEveryThreshold(t *testing.T) {
 	tls := memTimelines{normalizeAccURL(pPage): timeline(t, pPage, []int64{1},
 		vPage{version: 1, accept: 2, reject: 3, response: 2, keys: []string{"a", "b", "c"}})}
-	av, err := account(t, tls, voteFacts{Sigs: []sigFact{sig(pPage, "a", 1, 10), sig(pPage, "b", 1, 11)},
-		Votes: []recordedVote{recorded(pBook, pPage, 11)}}, pBook)
+	av, err := account(t, tls, Facts{Sigs: []SigFact{sig(pPage, "a", 1, 10), sig(pPage, "b", 1, 11)},
+		Votes: []RecordedVote{recorded(pBook, pPage, 11)}}, pBook)
 	requireSatisfied(t, av, err, true)
 	pv := av.Authorities[0].Vote.Pages[0]
 	if pv.Threshold != 2 || pv.RejectThreshold != 3 || pv.ResponseThreshold != 2 {
@@ -118,4 +118,35 @@ func requireExcludedAfterDecision(t *testing.T, pv PageVote, byPrefix string) {
 		}
 	}
 	t.Fatalf("no exclusion of %s* as recorded after the decision: %+v", byPrefix, pv.Excluded)
+}
+
+// The same key recorded twice in one block: which message core processed last is not in the block number. The same
+// vote credits one message deterministically; different votes make the vote itself unknown.
+func TestVotes_OneKeyTwiceInOneBlockIsCreditedDeterministically(t *testing.T) {
+	tls := memTimelines{normalizeAccURL(pPage): timeline(t, pPage, []int64{1},
+		vPage{version: 1, accept: 1, keys: []string{"a"}})}
+	s1, s2 := sig(pPage, "a", 1, 10), sig(pPage, "a", 1, 10)
+	s1.ID, s2.ID = "sig-a-first", "sig-a-second"
+	rec := []RecordedVote{recorded(pBook, pPage, 10)}
+	a1, err1 := account(t, tls, Facts{Sigs: []SigFact{s1, s2}, Votes: rec}, pBook)
+	a2, err2 := account(t, tls, Facts{Sigs: []SigFact{s2, s1}, Votes: rec}, pBook)
+	requireSatisfied(t, a1, err1, true)
+	requireSatisfied(t, a2, err2, true)
+	j1, _ := json.Marshal(a1)
+	j2, _ := json.Marshal(a2)
+	if string(j1) != string(j2) {
+		t.Fatalf("read in another order the record differs:\n%s\n%s", j2, j1)
+	}
+}
+
+func TestVotes_OneKeyVotingBothWaysInOneBlockIsUnevaluable(t *testing.T) {
+	tls := memTimelines{normalizeAccURL(pPage): timeline(t, pPage, []int64{1},
+		vPage{version: 1, accept: 1, keys: []string{"a"}})}
+	s1, s2 := sig(pPage, "a", 1, 10), vote(sig(pPage, "a", 1, 10), protocol.VoteTypeReject)
+	s1.ID, s2.ID = "sig-a-accept", "sig-a-reject"
+	_, err := account(t, tls, Facts{Sigs: []SigFact{s1, s2}, Votes: []RecordedVote{recorded(pBook, pPage, 10)}}, pBook)
+	requireUnevaluable(t, err)
+	if !strings.Contains(err.Error(), "in the same block") {
+		t.Fatalf("unevaluable for another reason: %v", err)
+	}
 }

@@ -18,9 +18,9 @@ type snapshotEnqueuer struct {
 }
 
 func (s *snapshotEnqueuer) EnqueueForBatch(intentID, adi string, chainID int64, acct [20]byte, op [32]byte, legs, att interface{},
-	h uint64, p string, bt time.Time, tx string) error {
+	gov [32]byte, h uint64, p string, bt time.Time, tx string) error {
 	s.atts[chainID] = att
-	return s.fakeEnqueuer.EnqueueForBatch(intentID, adi, chainID, acct, op, legs, att, h, p, bt, tx)
+	return s.fakeEnqueuer.EnqueueForBatch(intentID, adi, chainID, acct, op, legs, att, gov, h, p, bt, tx)
 }
 
 func TestEnqueueForBatch_EachChainMemberHasItsOwnSnapshot(t *testing.T) {

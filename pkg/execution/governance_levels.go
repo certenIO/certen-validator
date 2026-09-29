@@ -43,8 +43,11 @@
 package execution
 
 import (
+	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govvote"
 
 	"github.com/certen/independant-validator/pkg/consensus"
 	certenproof "github.com/certen/independant-validator/pkg/proof"
@@ -103,6 +106,13 @@ type GovernanceLevelInputs struct {
 	// TimingBasis is the per-signature timing basis, across all levels. Filed
 	// per level by TimingBasisFor when the row is built.
 	TimingBasis []certenproof.SignatureTimingBasis
+
+	// Decision is the governance decision record and Authorization the G1 vote record it was derived from
+	// (RB4-F66). Both or neither.
+	Decision      []byte
+	Authorization *certenproof.AuthorizationRecord
+	// VoteEvidence is what Authorization was evaluated from. All three or none.
+	VoteEvidence *govvote.Evidence
 
 	// Level is the governance level actually achieved ("G0"|"G1"|"G2").
 	Level string
@@ -167,9 +177,16 @@ func (in *GovernanceLevelInputs) ReceiptFor(level string) *certenproof.GovReceip
 // Returns nil when the map carries nothing governance-related, so a caller can
 // tell "this cycle had no governance data" apart from "it had empty governance
 // data" — the first is a plumbing state, the second would be a claim.
-func GovernanceInputsFromCommitment(cm map[string]interface{}) *GovernanceLevelInputs {
+//
+// Evidence that is present and does not parse is an error. It used to be
+// skipped, and the level was stored as though the generator had recorded none
+// (RB4-F69).
+func GovernanceInputsFromCommitment(cm map[string]interface{}) (*GovernanceLevelInputs, error) {
 	if cm == nil {
-		return nil
+		return nil, nil
+	}
+	if s, ok := cm[consensus.EvidenceErrorCommitmentKey].(string); ok && s != "" {
+		return nil, fmt.Errorf("governance evidence could not be carried from the round: %s", s)
 	}
 	in := &GovernanceLevelInputs{}
 	found := false
@@ -192,22 +209,56 @@ func GovernanceInputsFromCommitment(cm map[string]interface{}) *GovernanceLevelI
 	}
 	if s, ok := cm[consensus.GovReceiptsCommitmentKey].(string); ok && s != "" {
 		var receipts []certenproof.GovReceiptEvidence
-		if err := json.Unmarshal([]byte(s), &receipts); err == nil && len(receipts) > 0 {
+		if err := json.Unmarshal([]byte(s), &receipts); err != nil {
+			return nil, fmt.Errorf("the governance receipts in the commitment are malformed: %w", err)
+		}
+		if len(receipts) > 0 {
 			in.Receipts = receipts
 			found = true
 		}
 	}
+	if s, ok := cm[consensus.GovDecisionCommitmentKey].(string); ok && s != "" {
+		d, err := hex.DecodeString(s)
+		if err != nil || len(d) == 0 {
+			return nil, fmt.Errorf("the governance decision in the commitment is malformed")
+		}
+		in.Decision = d
+		found = true
+	}
+	if s, ok := cm[consensus.GovAuthorizationCommitmentKey].(string); ok && s != "" {
+		var rec certenproof.AuthorizationRecord
+		if err := json.Unmarshal([]byte(s), &rec); err != nil {
+			return nil, fmt.Errorf("the governance vote record in the commitment is malformed: %w", err)
+		}
+		in.Authorization = &rec
+		found = true
+	}
+	if s, ok := cm[consensus.GovVoteEvidenceCommitmentKey].(string); ok && s != "" {
+		ev, err := certenproof.DecodeVoteEvidence([]byte(s))
+		if err != nil {
+			return nil, fmt.Errorf("the governance vote evidence in the commitment: %w", err)
+		}
+		in.VoteEvidence = ev
+		found = true
+	}
+	if (in.Decision == nil) != (in.Authorization == nil) || (in.Decision == nil) != (in.VoteEvidence == nil) {
+		return nil, fmt.Errorf("the commitment carries a governance decision, its vote record and the vote's " +
+			"evidence only in part")
+	}
 	if s, ok := cm[consensus.GovTimingBasisCommitmentKey].(string); ok && s != "" {
 		var tb []certenproof.SignatureTimingBasis
-		if err := json.Unmarshal([]byte(s), &tb); err == nil && len(tb) > 0 {
+		if err := json.Unmarshal([]byte(s), &tb); err != nil {
+			return nil, fmt.Errorf("the timing basis in the commitment is malformed: %w", err)
+		}
+		if len(tb) > 0 {
 			in.TimingBasis = tb
 			found = true
 		}
 	}
 	if !found {
-		return nil
+		return nil, nil
 	}
-	return in
+	return in, nil
 }
 
 // BuildGovernanceLevelJSON returns level_json for one governance level.
@@ -232,41 +283,43 @@ func BuildGovernanceLevelJSON(
 	ev *certenproof.GovReceiptEvidence,
 	timingBasis []certenproof.SignatureTimingBasis,
 	existing map[string]interface{},
-) json.RawMessage {
+) (json.RawMessage, error) {
 	obj := map[string]interface{}{}
 	for k, v := range existing {
 		obj[k] = v
 	}
 
-	if len(result) > 0 && json.Valid(result) {
+	// A result that is present and not JSON, or evidence that does not marshal, is an error: it used to be left
+	// out, or the whole level stored as its flags alone, which reads as "nothing was recorded" (RB4-F69).
+	if len(result) > 0 {
+		if !json.Valid(result) {
+			return nil, fmt.Errorf("%s: the governance result is not valid JSON", level)
+		}
 		obj[GovLevelResultKey] = json.RawMessage(result)
 	}
 	if ev.HasPath() {
-		if raw, err := json.Marshal(ev); err == nil {
-			obj[GovLevelReceiptKey] = json.RawMessage(raw)
+		raw, err := json.Marshal(ev)
+		if err != nil {
+			return nil, fmt.Errorf("%s: receipt evidence: %w", level, err)
 		}
+		obj[GovLevelReceiptKey] = json.RawMessage(raw)
 	}
 	// Written only when there is something to write. An empty array would
 	// assert "we looked and none were weakened", which is a different claim
 	// from "this generator did not record it".
 	if len(timingBasis) > 0 {
-		if raw, err := json.Marshal(timingBasis); err == nil {
-			obj[GovLevelTimingBasisKey] = json.RawMessage(raw)
+		raw, err := json.Marshal(timingBasis)
+		if err != nil {
+			return nil, fmt.Errorf("%s: timing basis: %w", level, err)
 		}
+		obj[GovLevelTimingBasisKey] = json.RawMessage(raw)
 	}
 
 	out, err := json.Marshal(obj)
 	if err != nil {
-		// Fall back to the flags alone rather than dropping the row. A row that
-		// describes the level is worth more than no row, and its lack of the
-		// evidence key is exactly what makes it read summary-only downstream —
-		// the read path will not mistake it for a verified one.
-		if fallback, ferr := json.Marshal(existing); ferr == nil {
-			return fallback
-		}
-		return json.RawMessage(`{}`)
+		return nil, fmt.Errorf("%s: level_json: %w", level, err)
 	}
-	return out
+	return out, nil
 }
 
 // LogGovernanceLevelEvidence reports, per level, whether real evidence was
@@ -296,4 +349,53 @@ func LogGovernanceLevelEvidence(logf func(string, ...interface{}), proofID fmt.S
 		logf("🚨 [GOV-LEVEL] proof %s %s: no governance result reached persistence; storing verdict "+
 			"flags only. This row does NOT contain the governance proof", proofID, level)
 	}
+}
+
+// Keys the G1 level stores the governance decision under (RB4-F66).
+const (
+	GovLevelDecisionKey      = "decision_record"
+	GovLevelCommitmentKey    = "governance_commitment"
+	GovLevelAuthorizationKey = "authorization"
+	GovLevelVoteEvidenceKey  = "vote_evidence"
+)
+
+// DecisionEvidence is what the G1 level stores of who decided the transaction: the decision record, its commitment
+// and the vote record it was derived from - after deriving the record again from the stored G0 result and that vote
+// record, so what is stored is what re-derives. Nil with no error when the round recorded no decision.
+func (in *GovernanceLevelInputs) DecisionEvidence() (map[string]interface{}, error) {
+	if in == nil || in.Decision == nil {
+		return nil, nil
+	}
+	if len(in.G0) == 0 {
+		return nil, fmt.Errorf("a governance decision without the G0 result it names")
+	}
+	var g0 certenproof.G0Result
+	if err := json.Unmarshal(in.G0, &g0); err != nil {
+		return nil, fmt.Errorf("the G0 result of the governance decision: %w", err)
+	}
+	again, err := certenproof.GovernanceDecisionRecord(&g0, in.Authorization)
+	if err != nil {
+		return nil, fmt.Errorf("the governance decision does not re-derive from its vote record: %w", err)
+	}
+	if string(again) != string(in.Decision) {
+		return nil, fmt.Errorf("the governance decision is not the one its vote record and G0 result derive")
+	}
+	if err := certenproof.VerifyVoteEvidence(context.Background(), &g0, in.VoteEvidence, in.Authorization); err != nil {
+		return nil, fmt.Errorf("the governance decision's vote record: %w", err)
+	}
+	ev, err := json.Marshal(in.VoteEvidence)
+	if err != nil {
+		return nil, fmt.Errorf("the governance vote evidence: %w", err)
+	}
+	auth, err := json.Marshal(in.Authorization)
+	if err != nil {
+		return nil, fmt.Errorf("the governance vote record: %w", err)
+	}
+	c := certenproof.GovernanceCommitment(in.Decision)
+	return map[string]interface{}{
+		GovLevelDecisionKey:      hex.EncodeToString(in.Decision),
+		GovLevelCommitmentKey:    hex.EncodeToString(c[:]),
+		GovLevelAuthorizationKey: json.RawMessage(auth),
+		GovLevelVoteEvidenceKey:  json.RawMessage(ev),
+	}, nil
 }

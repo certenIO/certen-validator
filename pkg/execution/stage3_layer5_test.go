@@ -38,7 +38,7 @@ import (
 func s3Leaf(adi string, execByte, opByte byte) [32]byte {
 	var exec, op [32]byte
 	exec[0], op[0] = execByte, opByte
-	return ComputeBatchLeaf(84532, BatchLeafInput{
+	return ComputeBatchLeaf(84532, BatchLeafInput{GovernanceCommitment: testGov,
 		ADIURL: adi, ExecutionCommitment: exec, OperationID: op,
 	})
 }

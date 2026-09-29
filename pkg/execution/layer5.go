@@ -44,11 +44,14 @@
 //
 // # WHAT L5 IS NOT
 //
-// It does NOT add a security property. CERTEN already anchors the govRoot
-// externally on every intent — createBatchAnchor on base-sepolia — so the
-// immutability/timestamp property ALREADY EXISTS. L5 makes it CHECKABLE, and
-// closes the gap between "we have a tx hash somewhere" and "here is the path
-// proving this proof is in that anchored batch".
+// It does NOT add a security property of its own. What the anchor commits to is its batch root and its batch
+// operation id (createBatchAnchor), which the quorum's BLS message also covers. The A+++ govRoot is NOT anchored:
+// this comment used to say "CERTEN already anchors the govRoot externally on every intent", and createBatchAnchor
+// stores a zero governanceRoot - the govRoot was used only in each validator's own pre-execution signature
+// (RB4-F66). What IS anchored about governance is the v2 batch operation id, which commits to every member's
+// governance decision (batch_tree.go, DeriveBatchOperationIDV2); L5 carries the members so it recomputes
+// (Layer5.Governance). L5 makes the anchored values CHECKABLE, and closes the gap between "we have a tx hash
+// somewhere" and "here is the path proving this proof is in that anchored batch".
 //
 // It does NOT establish that the Accumulate validator set which signed L4 is the
 // legitimate one. NOTHING in this stage does. An external timestamp attests to
@@ -75,6 +78,11 @@
 package execution
 
 import (
+	"bytes"
+	"strings"
+
+	"github.com/certen/independant-validator/pkg/database"
+
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -129,6 +137,86 @@ type Layer5 struct {
 	// It is additive to the stored layer JSON and is NOT part of govRoot, which
 	// commits L1-L4 and G0-G2 only. See layer5_accumulate.go.
 	Accumulate *AccumulateBinding `json:"accumulate,omitempty"`
+
+	// Governance is what the anchored batch operation id commits to about who authorised each member (RB4-F66):
+	// every member's (operation id, governance commitment) and how the id was derived. VerifyOffline recomputes the
+	// id from it. Absent on a proof stored before governance was anchored; present with version v1 on a member of a
+	// batch formed before it - whose anchor commits to no governance, which is stated, never passed off as
+	// committed.
+	Governance *BatchGovernance `json:"governance,omitempty"`
+}
+
+// BatchGovernance is the governance half of a batch's operation id (see Layer5.Governance).
+type BatchGovernance struct {
+	Version              string                           `json:"version"`
+	BatchOperationID     string                           `json:"batchOperationId"`
+	OperationID          string                           `json:"operationId"`
+	GovernanceCommitment string                           `json:"governanceCommitment,omitempty"`
+	Members              []database.BatchMemberGovernance `json:"members"`
+}
+
+// Verify recomputes the batch operation id from the members and requires this proof's member among them. With
+// version v2 every member, this one included, must commit to a governance decision.
+func (g *BatchGovernance) Verify() error {
+	if g == nil {
+		return fmt.Errorf("layer5.governance: absent")
+	}
+	want, err := decodeHex32(strings.TrimPrefix(g.BatchOperationID, "0x"), "layer5.governance.batchOperationId")
+	if err != nil {
+		return err
+	}
+	if len(g.Members) == 0 {
+		return fmt.Errorf("layer5.governance: no members, so the batch operation id cannot be recomputed")
+	}
+	inputs := make([]BatchLeafInput, 0, len(g.Members))
+	found := false
+	for i, m := range g.Members {
+		op, err := decodeHex32(strings.TrimPrefix(m.OperationID, "0x"), fmt.Sprintf("layer5.governance.members[%d].operationId", i))
+		if err != nil {
+			return err
+		}
+		in := BatchLeafInput{ADIURL: fmt.Sprintf("member %d", i)}
+		copy(in.OperationID[:], op)
+		switch g.Version {
+		case BatchOperationIDV2:
+			c, err := decodeHex32(strings.TrimPrefix(m.GovernanceCommitment, "0x"),
+				fmt.Sprintf("layer5.governance.members[%d].governanceCommitment", i))
+			if err != nil {
+				return err
+			}
+			copy(in.GovernanceCommitment[:], c)
+		case BatchOperationIDV1:
+			if m.GovernanceCommitment != "" {
+				return fmt.Errorf("layer5.governance: member %d of a v1 batch states a governance commitment", i)
+			}
+			in.LegacyNoGovernance = true
+		default:
+			return fmt.Errorf("layer5.governance: unknown version %q", g.Version)
+		}
+		if strings.EqualFold(m.OperationID, g.OperationID) {
+			if !strings.EqualFold(m.GovernanceCommitment, g.GovernanceCommitment) {
+				return fmt.Errorf("layer5.governance: this proof's member commits to %s, the batch lists %s",
+					g.GovernanceCommitment, m.GovernanceCommitment)
+			}
+			found = true
+		}
+		inputs = append(inputs, in)
+	}
+	if !found {
+		return fmt.Errorf("layer5.governance: this proof's operation %s is not a member of the batch", g.OperationID)
+	}
+	if g.Version == BatchOperationIDV2 && g.GovernanceCommitment == "" {
+		return fmt.Errorf("layer5.governance: a v2 batch member without a governance commitment")
+	}
+	got, _, err := batchOperationIDOf(inputs)
+	if err != nil {
+		return fmt.Errorf("layer5.governance: %w", err)
+	}
+	if !bytes.Equal(got[:], want) {
+		return fmt.Errorf("layer5.governance: the members recompute to batch operation id %x, the batch states %s",
+			got, g.BatchOperationID)
+	}
+	return nil
 }
 
 // VerifyOffline recomputes leaf -> batchRoot and checks the coordinates are
@@ -153,6 +241,11 @@ type Layer5 struct {
 func (l *Layer5) VerifyOffline() error {
 	if l == nil {
 		return fmt.Errorf("layer5: absent")
+	}
+	if l.Governance != nil {
+		if err := l.Governance.Verify(); err != nil {
+			return err
+		}
 	}
 
 	leaf, err := decodeHex32(l.LeafHash, "layer5.leafHash")

@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govreceipt"
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govvote"
+	"gitlab.com/accumulatenetwork/accumulate/protocol"
 )
 
 // CERTEN Governance Proof Types
@@ -108,6 +110,10 @@ type ValidatedSignature struct {
 	SecurityLevel             string        `json:"securityLevel"`             // Security verification level
 	VerificationTime          time.Time     `json:"verificationTime"`          // When verification occurred
 	IntegrityHash             string        `json:"integrityHash"`             // Artifact integrity hash
+
+	// Binary is the signature in Accumulate's binary encoding, hex - the vote's evidence (RB4-F66). Not
+	// serialized: this struct is inside the shape hashed into the govRoot.
+	Binary string `json:"-"`
 }
 
 // SignatureSetData represents extracted signature set information with enhanced security tracking
@@ -170,6 +176,10 @@ type GenesisEvent struct {
 	Receipt    ReceiptData  `json:"receipt"`    // Genesis receipt
 	TxType     string       `json:"txType"`     // Should be "syntheticCreateIdentity"
 	PageState  KeyPageState `json:"pageState"`  // Initial key page state
+
+	// Txn is the genesis transaction, decoded and bound to EntryHash - the vote's evidence (RB4-F66). Not
+	// serialized: the snapshot's shape is hashed.
+	Txn *protocol.Transaction `json:"-"`
 }
 
 // MutationEvent represents an updateKeyPage mutation
@@ -436,6 +446,11 @@ type G1Result struct {
 	// validator's G1Result has no such field, so it is dropped on the way into
 	// the govRoot preimage and the hash is unchanged by its presence.
 	Authorization *AccountVote `json:"authorization,omitempty"`
+
+	// VoteEvidence is what the authority vote read, each item bound to the chain, so it can be evaluated again
+	// offline and compared with Authorization (govvote.VerifyEvidence, RB4-F66). Top-level for the same reason
+	// Authorization is.
+	VoteEvidence *govvote.Evidence `json:"voteEvidence,omitempty"`
 }
 
 // G2Result represents G2 proof result (Governance + Outcome Binding)

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govvote"
 	"github.com/certen/independant-validator/pkg/entitlement"
 	"io"
 	"log"
@@ -301,6 +302,9 @@ type BatchEnqueuer interface {
 		operationID [32]byte,
 		legs interface{},
 		attestation interface{},
+		// governanceCommitment commits to who decided the intent (proof.GovernanceCommitment of the round's
+		// decision, RB4-F66); the batch operation id aggregates it. It must equal the one the snapshot states.
+		governanceCommitment [32]byte,
 		commitHeight uint64,
 		// commitPartition and commitTime identify the Accumulate minor block the intent was written
 		// in (commitHeight is its height on commitPartition) and that block's consensus time. The time
@@ -336,6 +340,9 @@ type BatchEnqueuer interface {
 		operationID [32]byte,
 		legs interface{},
 		attestation interface{},
+		// governanceCommitment commits to who decided the intent (proof.GovernanceCommitment of the round's
+		// decision, RB4-F66); the batch operation id aggregates it. It must equal the one the snapshot states.
+		governanceCommitment [32]byte,
 		commitHeight uint64,
 		commitPartition string,
 		commitTime time.Time,
@@ -359,6 +366,9 @@ type BatchEnqueuer interface {
 		operationID [32]byte,
 		legs interface{},
 		attestation interface{},
+		// governanceCommitment commits to who decided the intent (proof.GovernanceCommitment of the round's
+		// decision, RB4-F66); the batch operation id aggregates it. It must equal the one the snapshot states.
+		governanceCommitment [32]byte,
 		commitHeight uint64,
 		// commitPartition and commitTime identify the Accumulate minor block the intent was written
 		// in (commitHeight is its height on commitPartition) and that block's consensus time. The time
@@ -960,6 +970,11 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	// (ValidatedSignature.TimingVerified) is inside the govRoot preimage and
 	// this must never be able to reach it.
 	var govTimingBasis []proof.SignatureTimingBasis
+	// RB4-F66: who decided the transaction, from the G1 vote record - the record the batch commits to. Beside the
+	// results like the receipts: it must not reach G1Result, which is inside the ValidatorBlock's BundleID.
+	var govDecision []byte
+	var govAuthorization *proof.AuthorizationRecord
+	var govVoteEvidence *govvote.Evidence
 	var governanceLevel string
 	var resolvedKeyPageURL string
 	resolvedKeyBookURL := governanceData.Authorization.RequiredKeyBook
@@ -1120,6 +1135,25 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 		governanceLevel = "G2"
 		bv.logger.Printf("✅ [GOV-PROOF] G2 proof generated: PayloadVerified=%v, EffectVerified=%v, Complete=%v",
 			g2Proof.PayloadVerified, g2Proof.EffectVerified, g2Proof.G2ProofComplete)
+
+		gdr, rec, derr := deriveGovernanceDecision(ctx, g0Proof, g1ProofWrapper, g2ProofWrapper)
+		if derr != nil {
+			return nil, fmt.Errorf("%w: intent %s: %w", ErrGovernanceUnavailable, certenIntent.IntentID, derr)
+		}
+		// The governance the intent declares must be the governance that executed it (RB4-F64d). Read from the
+		// governed transaction the vote's evidence carries - the claim the user signed.
+		declared, derr := declaredGovernanceVerdict(g1ProofWrapper.VoteEvidence, rec)
+		if derr != nil {
+			return nil, fmt.Errorf("%w: intent %s: %w", ErrGovernanceUnsatisfied, certenIntent.IntentID, derr)
+		}
+		if declared == nil {
+			bv.logger.Printf("🧾 [GOV-DECISION] intent %s declares no authority set; the decision is the chain's alone",
+				certenIntent.IntentID)
+		}
+		govDecision, govAuthorization, govVoteEvidence = gdr, rec, g1ProofWrapper.VoteEvidence
+		commitment := proof.GovernanceCommitment(gdr)
+		bv.logger.Printf("🧾 [GOV-DECISION] intent %s: governance decision %x (%d authority/ies)",
+			certenIntent.IntentID, commitment[:8], len(rec.Authorities))
 	} else {
 		// Neither branch may proceed without governance. L1-L4 establishes
 		// that the transaction exists; G0-G2 establishes that it was
@@ -1149,6 +1183,9 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	// field, which is the point: it cannot reach a hash.
 	certenProof.GovReceipts = govReceipts
 	certenProof.GovTimingBasis = govTimingBasis
+	certenProof.GovDecision = govDecision
+	certenProof.GovAuthorization = govAuthorization
+	certenProof.GovVoteEvidence = govVoteEvidence
 	certenProof.KeypageURL = resolvedKeyPageURL
 	certenProof.KeybookURL = resolvedKeyBookURL
 
@@ -3365,4 +3402,60 @@ func governanceProofFailureClass(err error) error {
 		return ErrGovernanceUnsatisfied
 	}
 	return ErrGovernanceUnavailable
+}
+
+// declaredGovernanceVerdict requires the governance an intent declares - read from the governed transaction its
+// vote evidence carries - to be the governance its vote record says executed it (RB4-F64d). A declaration that cannot
+// be read, or does not match, is a verdict on the intent: the caller classes it ErrGovernanceUnsatisfied. Nil, nil: it
+// declares none.
+func declaredGovernanceVerdict(ev *govvote.Evidence, rec *proof.AuthorizationRecord) (*proof.DeclaredGovernance, error) {
+	declared, err := proof.DeclaredGovernanceOfEvidence(ev)
+	if err != nil {
+		return nil, fmt.Errorf("its declared governance cannot be read: %w", err)
+	}
+	if declared == nil {
+		return nil, nil
+	}
+	if err := proof.CheckDeclaredGovernance(declared, rec); err != nil {
+		return nil, err
+	}
+	return declared, nil
+}
+
+// deriveGovernanceDecision is who decided the transaction, from this validator's own G1 vote record: the record the
+// batch commits to (RB4-F66). The record is evaluated again, here, from the evidence the proof carries for it - the
+// chain-bound signatures, votes and page histories - and must be reached exactly. G2 evaluates G1 again, and its
+// record must state the same decision - two runs of one proof that disagree about who decided establish neither. A
+// record that is missing, unevidenced or cannot support a decision is an outage of the proof, not a verdict: G1
+// already found the authorities satisfied.
+func deriveGovernanceDecision(ctx context.Context, g0 *proof.G0Result, g1, g2 *proof.GovernanceProof) ([]byte,
+	*proof.AuthorizationRecord, error) {
+	if g1 == nil || g1.Authorization == nil {
+		return nil, nil, fmt.Errorf("%w: the G1 proof carries no vote record, so who decided the transaction is not "+
+			"established", ErrGovernanceUnavailable)
+	}
+	if g1.VoteEvidence == nil {
+		return nil, nil, fmt.Errorf("%w: the G1 proof carries no evidence for its vote record, so the record is the "+
+			"proof's word for who decided", ErrGovernanceUnavailable)
+	}
+	if err := proof.VerifyVoteEvidence(ctx, g0, g1.VoteEvidence, g1.Authorization); err != nil {
+		return nil, nil, fmt.Errorf("%w: the G1 vote record: %w", ErrGovernanceUnavailable, err)
+	}
+	gdr, err := proof.GovernanceDecisionRecord(g0, g1.Authorization)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: the governance decision cannot be recorded: %w", ErrGovernanceUnavailable, err)
+	}
+	if g2 == nil || g2.Authorization == nil {
+		return nil, nil, fmt.Errorf("%w: the G2 proof carries no vote record, so its evaluation of G1 cannot be "+
+			"compared", ErrGovernanceUnavailable)
+	}
+	again, err := proof.GovernanceDecisionRecord(g0, g2.Authorization)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: G2's evaluation of G1 cannot be recorded: %w", ErrGovernanceUnavailable, err)
+	}
+	if string(again) != string(gdr) {
+		a, b := proof.GovernanceCommitment(gdr), proof.GovernanceCommitment(again)
+		return nil, nil, fmt.Errorf("%w: G1 and G2 recorded different decisions (%x, %x)", ErrGovernanceUnavailable, a[:8], b[:8])
+	}
+	return gdr, g1.Authorization, nil
 }

@@ -102,7 +102,7 @@ func TestDynamicRepositoryQueriesExecuteAgainstSharedSchema(t *testing.T) {
 	}
 
 	lifecycle := &IntentLifecycleRepository{client: &Client{db: db}}
-	if err := lifecycle.UpsertOnDiscovery(ctx, "dynamic-intent", "dynamic-lifecycle-tx", 1, "", "", ""); err != nil {
+	if err := lifecycle.UpsertOnDiscovery(ctx, "dynamic-intent", "dynamic-lifecycle-tx", 1, time.Time{}, "", "", ""); err != nil {
 		t.Fatalf("create lifecycle fixture: %v", err)
 	}
 	if err := lifecycle.UpdateStatus(ctx, "dynamic-intent", IntentLifecyclePendingSignatures); err != nil {

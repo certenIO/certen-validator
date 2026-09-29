@@ -4,6 +4,7 @@ package execution
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"math/big"
 	"strings"
@@ -29,8 +30,9 @@ func TestProofDetailsStateTheCheckersQuorum(t *testing.T) {
 	nonce := fmt.Sprintf("%032x", time.Now().UnixNano())
 	verifyTx := "0x" + strings.Repeat("7b", 32)
 	if _, err := repos.Batches.RecordAnchorQuorum(ctx, &database.AnchorQuorumRecord{
-		ChainID: 84532, BundleID: "0x" + nonce + nonce, Root: leaf[:], BatchOperationID: "0x" + strings.Repeat("99", 32),
-		MessageHash: "0x" + strings.Repeat("88", 32), AnchorCreateTx: "0x" + strings.Repeat("7a", 32), AnchorCreateBlock: 99,
+		ChainID: 84532, BundleID: "0x" + nonce + nonce, Root: leaf[:], BatchOperationID: testBatchOperationID("0x" + strings.Repeat("77", 32)),
+		BatchOperationIDVersion: "v2",
+		MessageHash:             "0x" + strings.Repeat("88", 32), AnchorCreateTx: "0x" + strings.Repeat("7a", 32), AnchorCreateBlock: 99,
 		VerifyTx: verifyTx, VerifyBlock: 100, VerifiedAt: time.Now().UTC(),
 		AggregateSignature: []byte{1}, AggregatePubKey: []byte{2},
 		Signers: []database.AnchorQuorumSigner{
@@ -41,7 +43,8 @@ func TestProofDetailsStateTheCheckersQuorum(t *testing.T) {
 		SignedVotingPower: big.NewInt(500), TotalVotingPower: big.NewInt(700),
 		Lane: "on_cadence", EvidenceSource: "live", TargetChain: "base-sepolia",
 		Members: []database.AnchorQuorumMemberRecord{{IntentID: intentID, ADIURL: "acc://harbor.acme",
-			OperationID: "0x" + strings.Repeat("77", 32), Leaf: leaf[:], LeafIndex: 0}},
+			OperationID: "0x" + strings.Repeat("77", 32), Leaf: leaf[:], LeafIndex: 0,
+			GovernanceCommitment: "0x" + hex.EncodeToString(testGov[:])}},
 	}); err != nil {
 		t.Fatal(err)
 	}

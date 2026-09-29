@@ -57,7 +57,7 @@
 // ours - the proof reports the vote as unevaluable. Where more than one state
 // is possible within a block and the choice could change a vote, the vote is
 // unevaluable too; where it cannot, the vote stands.
-package main
+package govvote
 
 import (
 	"context"
@@ -72,7 +72,7 @@ import (
 )
 
 // sigFact is one user signature, as the chain recorded it on its signer page.
-type sigFact struct {
+type SigFact struct {
 	ID      string
 	Signer  string   // the signing page, normalised
 	Path    []string // delegators, outermost first, normalised
@@ -84,7 +84,7 @@ type sigFact struct {
 
 // arrivalFact is one delegated vote, as the chain recorded it on the delegator
 // page that received it.
-type arrivalFact struct {
+type ArrivalFact struct {
 	ID        string
 	Page      string   // the delegator page, normalised
 	Authority string   // the delegate book that voted, normalised
@@ -97,7 +97,7 @@ type arrivalFact struct {
 
 // recordedVote is one authority's vote on the transaction as the network recorded it on the principal: the
 // authority signature core produced when the book voted, naming the page that cast it.
-type recordedVote struct {
+type RecordedVote struct {
 	ID        string
 	Authority string // the book, normalised
 	Origin    string // the page that cast the book's vote, normalised
@@ -106,17 +106,24 @@ type recordedVote struct {
 }
 
 // voteFacts is what the model reads.
-type voteFacts struct {
+type Facts struct {
 	TxType   protocol.TransactionType
-	Sigs     []sigFact
-	Arrivals []arrivalFact
+	Sigs     []SigFact
+	Arrivals []ArrivalFact
 	// Votes are the authorities' votes recorded on the principal.
-	Votes []recordedVote
+	Votes []RecordedVote
 }
 
 // timelineSource supplies page timelines (authority_history.go).
-type timelineSource interface {
-	Timeline(ctx context.Context, page string) (*pageTimeline, error)
+type TimelineSource interface {
+	Timeline(ctx context.Context, page string) (Timeline, error)
+}
+
+// Timeline is what the model reads of a page's history: the states it may have been in during a block, and a state
+// at a version. The CLI's timeline is read from the network; the verifier's is replayed from stored evidence (States).
+type Timeline interface {
+	CandidatesDuring(block int64) []*protocol.KeyPage
+	OfVersion(v uint64) (*protocol.KeyPage, bool)
 }
 
 // VoteUnevaluable reports a vote the chain records but this model could not
@@ -181,14 +188,14 @@ type BookVote struct {
 }
 
 type voteModel struct {
-	facts voteFacts
-	src   timelineSource
+	facts Facts
+	src   TimelineSource
 
 	pages map[string]*PageVote
 	books map[string]*BookVote
 }
 
-func newVoteModel(facts voteFacts, src timelineSource) *voteModel {
+func newVoteModel(facts Facts, src TimelineSource) *voteModel {
 	return &voteModel{facts: facts, src: src, pages: map[string]*PageVote{}, books: map[string]*BookVote{}}
 }
 
@@ -221,12 +228,12 @@ func (m *voteModel) bookVote(ctx context.Context, book string, path []string, de
 	// fact names. A page with nothing recorded does not vote.
 	seen := map[string]bool{}
 	for _, s := range m.facts.Sigs {
-		if bookOfPage(s.Signer) == book && pathEqual(s.Path, path) {
+		if BookOfPage(s.Signer) == book && pathEqual(s.Path, path) {
 			seen[s.Signer] = true
 		}
 	}
 	for _, a := range m.facts.Arrivals {
-		if bookOfPage(a.Page) == book && pathEqual(a.Path, path) {
+		if BookOfPage(a.Page) == book && pathEqual(a.Path, path) {
 			seen[a.Page] = true
 		}
 	}
@@ -261,7 +268,7 @@ func (m *voteModel) bookVote(ctx context.Context, book string, path []string, de
 		return bv, nil
 	}
 
-	if bookOfPage(rec.origin) != book {
+	if BookOfPage(rec.origin) != book {
 		return nil, &VoteUnevaluable{Page: rec.origin, Reason: fmt.Sprintf(
 			"the network records %s's vote as cast by %s, which is not one of its pages", book, rec.origin)}
 	}
@@ -343,13 +350,13 @@ func (m *voteModel) recordedBookVote(book string, path []string) (*bookRecord, e
 
 // pageDecidedBefore reports whether page's records, on path, decide a vote in a block before b, and in which.
 func (m *voteModel) pageDecidedBefore(ctx context.Context, page string, path []string, depth int, b int64) (bool, int64, error) {
-	var direct []sigFact
+	var direct []SigFact
 	for _, s := range m.facts.Sigs {
 		if s.Signer == page && pathEqual(s.Path, path) && s.Block < b {
 			direct = append(direct, s)
 		}
 	}
-	var arrived []arrivalFact
+	var arrived []ArrivalFact
 	for _, a := range m.facts.Arrivals {
 		if a.Page == page && pathEqual(a.Path, path) && a.Block < b {
 			arrived = append(arrived, a)
@@ -389,13 +396,13 @@ func (m *voteModel) pageVote(ctx context.Context, page string, path []string, de
 	}
 
 	pv := &PageVote{Page: page, Path: path}
-	var direct []sigFact
+	var direct []SigFact
 	for _, s := range m.facts.Sigs {
 		if s.Signer == page && pathEqual(s.Path, path) {
 			direct = append(direct, s)
 		}
 	}
-	var arrived []arrivalFact
+	var arrived []ArrivalFact
 	for _, a := range m.facts.Arrivals {
 		if a.Page == page && pathEqual(a.Path, path) {
 			arrived = append(arrived, a)
@@ -461,7 +468,7 @@ func (m *voteModel) pageVote(ctx context.Context, page string, path []string, de
 }
 
 // recordBlocks is every block a page's records were recorded in, ascending.
-func recordBlocks(direct []sigFact, arrived []arrivalFact) []int64 {
+func recordBlocks(direct []SigFact, arrived []ArrivalFact) []int64 {
 	seen := map[int64]bool{}
 	for _, s := range direct {
 		seen[s.Block] = true
@@ -483,9 +490,9 @@ type pageEvaluation struct {
 	page    string
 	path    []string
 	depth   int
-	tl      *pageTimeline
-	direct  []sigFact
-	arrived []arrivalFact
+	tl      Timeline
+	direct  []SigFact
+	arrived []ArrivalFact
 	// holding and cands cache, per record and version, how many states of the page during the record's block held
 	// its entry, and how many states at that version there were.
 	holding map[string]int
@@ -507,13 +514,13 @@ type pageDecision struct {
 // decideThrough decides the page's vote on the records up to and including block b.
 func (e *pageEvaluation) decideThrough(ctx context.Context, b int64) (*pageDecision, error) {
 	page, tl := e.page, e.tl
-	var direct []sigFact
+	var direct []SigFact
 	for _, s := range e.direct {
 		if s.Block <= b {
 			direct = append(direct, s)
 		}
 	}
-	var arrived []arrivalFact
+	var arrived []ArrivalFact
 	for _, a := range e.arrived {
 		if a.Block <= b {
 			arrived = append(arrived, a)
@@ -600,6 +607,10 @@ func (e *pageEvaluation) decideThrough(ctx context.Context, b int64) (*pageDecis
 		d.delegates = append(d.delegates, *dv)
 	}
 
+	if err := sameBlockConflict(page, contribs); err != nil {
+		return nil, err
+	}
+
 	// Decide with every ambiguous contribution counted and with none. If the
 	// two agree the vote stands; if they do not, which state the page was in
 	// decides the vote and it is not ours to guess.
@@ -618,7 +629,7 @@ func (e *pageEvaluation) decideThrough(ctx context.Context, b int64) (*pageDecis
 
 // keyHolding is how many states of the page at version v during s's block held s's key and allowed the transaction,
 // and how many states at v there were. A signature the page could not have accepted stops the vote.
-func (e *pageEvaluation) keyHolding(s sigFact, v uint64) (int, int, error) {
+func (e *pageEvaluation) keyHolding(s SigFact, v uint64) (int, int, error) {
 	ck := fmt.Sprintf("%s|%d", s.ID, v)
 	if h, ok := e.holding[ck]; ok {
 		return h, e.cands[ck], nil
@@ -653,7 +664,7 @@ func (e *pageEvaluation) keyHolding(s sigFact, v uint64) (int, int, error) {
 }
 
 // delegateHolding is keyHolding for a delegated vote: the states that carried an entry delegating to its authority.
-func (e *pageEvaluation) delegateHolding(a arrivalFact, v uint64) (int, int, error) {
+func (e *pageEvaluation) delegateHolding(a ArrivalFact, v uint64) (int, int, error) {
 	ck := fmt.Sprintf("%s|%d", a.ID, v)
 	if h, ok := e.holding[ck]; ok {
 		return h, e.cands[ck], nil
@@ -689,12 +700,36 @@ func tally(contribs []contribution, includeAmbiguous bool) map[string]contributi
 		if c.ambiguous && !includeAmbiguous {
 			continue
 		}
-		if prev, ok := out[c.entry]; ok && prev.block > c.block {
+		if prev, ok := out[c.entry]; ok && (prev.block > c.block || (prev.block == c.block && prev.by < c.by)) {
+			// A later block's contribution replaces an earlier one, as the signature set does. Within one block
+			// the order core processed them in is not recorded; when they agree (sameBlockConflict refuses the
+			// case where they do not) the lowest message id is credited, so the record does not depend on the
+			// order it was read in.
 			continue
 		}
 		out[c.entry] = c
 	}
 	return out
+}
+
+// sameBlockConflict refuses one entry recorded with different votes in the same block: the set keeps whichever core
+// processed last, and that order is not recorded, so the entry's vote - and the page's - is not known.
+func sameBlockConflict(page string, contribs []contribution) error {
+	type slot struct {
+		entry string
+		block int64
+	}
+	seen := map[slot]contribution{}
+	for _, c := range contribs {
+		k := slot{c.entry, c.block}
+		if prev, ok := seen[k]; ok && prev.vote != c.vote {
+			return &VoteUnevaluable{Page: page, Reason: fmt.Sprintf(
+				"%s voted %s (%s) and %s (%s) in the same block %d; which one the page's set kept is not recorded",
+				c.entry, prev.vote, short(prev.by), c.vote, short(c.by), c.block)}
+		}
+		seen[k] = c
+	}
+	return nil
 }
 
 // decideVote mirrors SignerWillVote for one path.
@@ -877,10 +912,10 @@ func (m *voteModel) accountVote(ctx context.Context, account string, authorities
 	return out, nil
 }
 
-// acceptingKeys counts the distinct keys whose acceptance was counted by a page
+// AcceptingKeys counts the distinct keys whose acceptance was counted by a page
 // that voted, across every authority and every delegate that voted for one -
 // the "unique valid keys" G1 reports.
-func (av *AccountVote) acceptingKeys() int {
+func (av *AccountVote) AcceptingKeys() int {
 	keys := map[string]bool{}
 	var walk func(bv BookVote)
 	walk = func(bv BookVote) {
@@ -950,7 +985,7 @@ type AccountAuthority struct {
 
 // bookOfPage returns the key book a page belongs to: acc://foo.acme/book/1 ->
 // acc://foo.acme/book.
-func bookOfPage(page string) string {
+func BookOfPage(page string) string {
 	p := normalizeAccURL(page)
 	i := strings.LastIndex(p, "/")
 	if i <= 0 {
@@ -989,4 +1024,17 @@ func (av *AccountVote) SignerPages() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// Evaluate is the authority vote on a transaction: every authority account required (authorities, plus extra the
+// transaction itself names; disabled authorities count only when ignoreDisabled), each decided from facts - the
+// signatures, delegated votes and recorded votes - over the page histories src supplies.
+func Evaluate(ctx context.Context, facts Facts, src TimelineSource, account string, authorities []AccountAuthority,
+	extra []string, ignoreDisabled bool) (*AccountVote, error) {
+	return newVoteModel(facts, src).accountVote(ctx, account, authorities, extra, ignoreDisabled)
+}
+
+// EvaluatePage is one page's vote on one delegation path, decided from facts over the page histories src supplies.
+func EvaluatePage(ctx context.Context, facts Facts, src TimelineSource, page string, path []string) (*PageVote, error) {
+	return newVoteModel(facts, src).pageVote(ctx, page, path, 0)
 }

@@ -28,6 +28,9 @@ var (
 	// configured for the chain, or no commit height resolved yet. It is never the intent's defect,
 	// so the intent is retried, not refused.
 	ErrBatchUnavailable = consensus.ErrBatchUnavailable
+
+	// ErrNoGovernanceCommitment: a member without a governance decision to commit to (RB4-F66).
+	ErrNoGovernanceCommitment = consensus.ErrNoGovernanceCommitment
 )
 
 // =============================================================================
@@ -61,6 +64,12 @@ type PendingBatchIntent struct {
 	// OperationID is the Accumulate 4-blob intent hash. Bound into the leaf, so third
 	// parties can still verify a single member against the batch root.
 	OperationID [32]byte
+
+	// GovernanceCommitment commits to who decided the intent (RB4-F66): the batch operation id aggregates it.
+	// Required on admission. Zero only on a member restored from a mempool written before it existed, which is
+	// then LegacyNoGovernance: formed with the v1 operation id its anchor may already carry.
+	GovernanceCommitment [32]byte
+	LegacyNoGovernance   bool
 
 	// AccumTxHash is the Accumulate transaction that carried this intent. Evidence only — never hashed
 	// into the leaf. Empty is honest for a member restored from a pre-2026-09-18 mempool blob.
@@ -238,11 +247,13 @@ func (p *PendingBatchIntent) LeafInput() (BatchLeafInput, error) {
 		return BatchLeafInput{}, err
 	}
 	return BatchLeafInput{
-		ADIURL:              p.ADIURL,
-		ExecutionCommitment: exec,
-		OperationID:         p.OperationID,
-		IntentID:            p.IntentID,
-		Provenance:          p.provenance(),
+		ADIURL:               p.ADIURL,
+		ExecutionCommitment:  exec,
+		OperationID:          p.OperationID,
+		GovernanceCommitment: p.GovernanceCommitment,
+		LegacyNoGovernance:   p.LegacyNoGovernance,
+		IntentID:             p.IntentID,
+		Provenance:           p.provenance(),
 	}, nil
 }
 

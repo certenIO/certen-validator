@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+
+	"github.com/certen/independant-validator/pkg/proof"
 )
 
 // =============================================================================
@@ -24,25 +26,34 @@ import (
 // queued all-or-nothing.
 
 type fakeEnqueuer struct {
-	checkErr  map[int64]error // CheckMember result per chain
-	addErr    map[int64]error // EnqueueForBatch/EnqueueOnDemand result per chain (after the first add)
-	queued    map[string]bool
-	removed   []string
-	adds      int
-	after     map[int64]SequencePredecessor // EnqueueAfter's predecessor per chain
-	order     []int64                       // chains in the order they were queued
-	anchorErr map[int64]error               // AnchorOf failure per chain
+	checkErr   map[int64]error // CheckMember result per chain
+	addErr     map[int64]error // EnqueueForBatch/EnqueueOnDemand result per chain (after the first add)
+	queued     map[string]bool
+	removed    []string
+	adds       int
+	after      map[int64]SequencePredecessor // EnqueueAfter's predecessor per chain
+	order      []int64                       // chains in the order they were queued
+	anchorErr  map[int64]error               // AnchorOf failure per chain
+	governance map[int64][32]byte            // the governance commitment each chain's member was queued with
 }
 
 func newFakeEnqueuer() *fakeEnqueuer {
 	return &fakeEnqueuer{checkErr: map[int64]error{}, addErr: map[int64]error{}, queued: map[string]bool{}}
 }
 
-func (f *fakeEnqueuer) add(intentID string, chainID int64) error {
+func (f *fakeEnqueuer) add(intentID string, chainID int64, governance [32]byte) error {
 	f.adds++
 	if err := f.addErr[chainID]; err != nil {
 		return err
 	}
+	// As admission does: a member it would queue must commit to a governance decision.
+	if governance == ([32]byte{}) {
+		return fmt.Errorf("%w: the fake was handed no governance commitment", ErrNoGovernanceCommitment)
+	}
+	if f.governance == nil {
+		f.governance = map[int64][32]byte{}
+	}
+	f.governance[chainID] = governance
 	key := fmt.Sprintf("%s|%d", intentID, chainID)
 	if f.queued[key] {
 		return fmt.Errorf("%w: %s", ErrMemberAlreadyQueued, key)
@@ -53,21 +64,21 @@ func (f *fakeEnqueuer) add(intentID string, chainID int64) error {
 }
 
 func (f *fakeEnqueuer) EnqueueForBatch(intentID, _ string, chainID int64, _ [20]byte, _ [32]byte, _, _ interface{},
-	_ uint64, _ string, _ time.Time, _ string) error {
-	return f.add(intentID, chainID)
+	gov [32]byte, _ uint64, _ string, _ time.Time, _ string) error {
+	return f.add(intentID, chainID, gov)
 }
 
 func (f *fakeEnqueuer) EnqueueOnDemand(intentID, _ string, chainID int64, _ [20]byte, _ [32]byte, _, _ interface{},
-	_ uint64, _ string, _ time.Time, _ string) error {
-	return f.add(intentID, chainID)
+	gov [32]byte, _ uint64, _ string, _ time.Time, _ string) error {
+	return f.add(intentID, chainID, gov)
 }
 
 func (f *fakeEnqueuer) EnqueueAfter(intentID, _ string, chainID int64, _ [20]byte, _ [32]byte, _, _ interface{},
-	_ uint64, _ string, _ time.Time, _ string, after SequencePredecessor) error {
+	gov [32]byte, _ uint64, _ string, _ time.Time, _ string, after SequencePredecessor) error {
 	if f.after == nil {
 		f.after = map[int64]SequencePredecessor{}
 	}
-	if err := f.add(intentID, chainID); err != nil {
+	if err := f.add(intentID, chainID, gov); err != nil {
 		return err
 	}
 	f.after[chainID] = after
@@ -133,8 +144,11 @@ func batchableIntent(t *testing.T, id string, chains ...int64) *CertenIntent {
 	}
 }
 
+// testGovDecision stands for the round's governance decision record; the batch path commits to its hash.
+var testGovDecision = []byte("certen:gdr:v1 test decision")
+
 func enqueue(bv *BFTValidator, ci *CertenIntent) error {
-	return bv.enqueueForBatch(ci, nil, nil, 7, nil, nil, nil, "", nil, "", 7)
+	return bv.enqueueForBatch(ci, &proof.CertenProof{GovDecision: testGovDecision}, nil, 7, nil, nil, nil, "", nil, "", 7)
 }
 
 func refusalValidator(e BatchEnqueuer) *BFTValidator {

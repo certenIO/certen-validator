@@ -84,7 +84,11 @@ func (f *dnFake) block(scope string, minor int64, start, count int) (map[string]
 	if len(recs) > 0 {
 		rng["records"] = recs
 	}
-	return map[string]interface{}{"recordType": "minorBlock", "index": float64(minor), "time": "2026-09-27T14:12:55Z", "source": src, "entries": rng}, nil
+	// Each partition's block at its own time; the DN block that anchors the BVN blocks is the latest, as on the
+	// network (RB4-F74: a transaction was stated at the DN time, which every block here once shared).
+	blockTime := map[string]string{"acc://dn.acme": "2026-09-27T14:12:55Z", "acc://bvn-BVN1.acme": "2026-09-27T14:12:49Z",
+		"acc://bvn-BVN2.acme": "2026-09-27T14:12:51Z"}[src]
+	return map[string]interface{}{"recordType": "minorBlock", "index": float64(minor), "time": blockTime, "source": src, "entries": rng}, nil
 }
 
 func (f *dnFake) chain(scope, name string, start, count int64) (map[string]interface{}, *V3APIError) {
@@ -205,6 +209,11 @@ func TestADNBlockIsSearchedThroughEveryAnchoredBlock(t *testing.T) {
 	// were dropped, so every intent was proved on "acc://dn.acme" and no proof could be built.
 	if txs[0].ProofPartition != "bvn1" || txs[0].ProofBlockIndex != bvn1Block {
 		t.Fatalf("the intent was written on bvn1 block %d; it carries proof partition %q block %d", bvn1Block, txs[0].ProofPartition, txs[0].ProofBlockIndex)
+	}
+	// RB4-F74: stated at the time of the block it executed in - BVN1's - not the later DN block's, which the deadline
+	// checks judged it by.
+	if want := time.Date(2026, 9, 27, 14, 12, 49, 0, time.UTC); !txs[0].Timestamp.Equal(want) {
+		t.Fatalf("the intent executed in bvn1 block %d at %s; it is stated at %s", bvn1Block, want, txs[0].Timestamp)
 	}
 	// The BVNs were read at their own block, never at the DN's height.
 	for _, q := range f.blockQueries {

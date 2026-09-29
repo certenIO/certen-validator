@@ -14,6 +14,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govvote"
 	"io"
 	"net/http"
 	"os"
@@ -176,7 +177,7 @@ func (URLUtils) NormalizeURL(u string) string {
 // Both NormalizeURL and normalizeAccURL delegate here so the two cannot drift
 // apart again.
 func canonicalAccSpelling(u string) string {
-	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(u)), "/")
+	return govvote.CanonicalAccSpelling(u)
 }
 
 // NormalizeScope normalizes scope string for RPC queries

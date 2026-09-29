@@ -160,18 +160,18 @@ func TestEnqueueAfterBindsThePredecessor(t *testing.T) {
 	}
 	after := consensus.SequencePredecessor{ChainID: seqPredChain, OperationID: opid(7), Position: 1, ContinueOnFailure: true}
 
-	if err := s.EnqueueAfter("i1", "acc://a.acme", odChain, acct(1), opid(7), legsOn(odChain), "att", 100, "", commit, "", after); !errors.Is(err, ErrBatchUnavailable) {
+	if err := s.EnqueueAfter("i1", "acc://a.acme", odChain, acct(1), opid(7), legsOn(odChain), testAtt, testGov, 100, "", commit, "", after); !errors.Is(err, ErrBatchUnavailable) {
 		t.Fatalf("a successor whose predecessor is not queued must not be queued: %v", err)
 	}
-	if err := s.EnqueueForBatch("i1", "acc://a.acme", seqPredChain, acct(1), opid(7), legsOn(seqPredChain), "att", 100, "", commit, ""); err != nil {
+	if err := s.EnqueueForBatch("i1", "acc://a.acme", seqPredChain, acct(1), opid(7), legsOn(seqPredChain), testAtt, testGov, 100, "", commit, ""); err != nil {
 		t.Fatal(err)
 	}
 	bad := after
 	bad.Position = 0
-	if err := s.EnqueueAfter("i1", "acc://a.acme", odChain, acct(1), opid(7), legsOn(odChain), "att", 100, "", commit, "", bad); err == nil {
+	if err := s.EnqueueAfter("i1", "acc://a.acme", odChain, acct(1), opid(7), legsOn(odChain), testAtt, testGov, 100, "", commit, "", bad); err == nil {
 		t.Fatal("position 0 is the first member, which follows nothing")
 	}
-	if err := s.EnqueueAfter("i1", "acc://a.acme", odChain, acct(1), opid(7), legsOn(odChain), "att", 100, "", commit, "", after); err != nil {
+	if err := s.EnqueueAfter("i1", "acc://a.acme", odChain, acct(1), opid(7), legsOn(odChain), testAtt, testGov, 100, "", commit, "", after); err != nil {
 		t.Fatalf("EnqueueAfter: %v", err)
 	}
 	got := s.Mempool.GetOnDemand(odChain, opid(7))

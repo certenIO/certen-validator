@@ -458,7 +458,7 @@ func (sv *SignatureVerifier) ValidateSignatureSet(ctx context.Context, signature
 		}
 	}
 	thresholdSatisfied := vote.Satisfied
-	uniqueValidKeys := vote.acceptingKeys()
+	uniqueValidKeys := vote.AcceptingKeys()
 
 	// Timing starts FALSE and is earned. It previously started true and could
 	// only be falsified by a signature in validSignatures, so an empty set

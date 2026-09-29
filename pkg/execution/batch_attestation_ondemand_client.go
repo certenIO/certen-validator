@@ -156,7 +156,7 @@ func CollectOnDemandAttestations(
 					result.NotHeld++
 				case CodePredecessorPending:
 					result.PredecessorPending++
-				case CodeBundleMismatch:
+				case CodeBundleMismatch, CodeGovernanceMismatch:
 					result.Mismatch++
 				default:
 					result.Other++
@@ -170,6 +170,8 @@ func CollectOnDemandAttestations(
 					logf("⏳ [OD-ATTEST] %s does not see its predecessor settled yet: %s", peer, out.Error)
 				case CodeBundleMismatch:
 					logf("❌ [OD-ATTEST] %s DISAGREES on a one-member batch: %s", peer, out.Error)
+				case CodeGovernanceMismatch:
+					logf("❌ [OD-ATTEST] %s DISAGREES about who authorised the member: %s", peer, out.Error)
 				default:
 					logf("↩️  [OD-ATTEST] %s declined (%s): %s", peer, out.Code, out.Error)
 				}
@@ -230,10 +232,12 @@ func NewOnDemandAttestationRequest(
 	if member.OperationID == ([32]byte{}) {
 		return nil, fmt.Errorf("intent %s has a zero operationID", member.IntentID)
 	}
+	gov := tree.Inputs[0].GovernanceCommitment
 	return &OnDemandAttestationRequest{
-		ChainID:     tree.ChainID,
-		OperationID: "0x" + hex.EncodeToString(member.OperationID[:]),
-		BundleID:    "0x" + hex.EncodeToString(tree.BundleID[:]),
-		ProposerID:  proposerID,
+		ChainID:              tree.ChainID,
+		OperationID:          "0x" + hex.EncodeToString(member.OperationID[:]),
+		BundleID:             "0x" + hex.EncodeToString(tree.BundleID[:]),
+		ProposerID:           proposerID,
+		GovernanceCommitment: "0x" + hex.EncodeToString(gov[:]),
 	}, nil
 }

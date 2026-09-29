@@ -57,6 +57,23 @@ type Layer5Binding struct {
 	// anchor_batches.anchor_tx_hash is the third unwritten join.
 	AnchorTxHash   string
 	AnchorBlockNum int64
+
+	// BatchOperationID is the value the anchor stores as its operationID and the quorum signed, and
+	// BatchOperationIDVersion how it was derived: "v2" commits to every member's governance decision, "v1" does
+	// not, "" on a row rebuilt from the chain (RB4-F66). MemberOperationID and MemberGovernanceCommitment are this
+	// proof's member's; BatchMembers every member's, in tree order, so the id recomputes offline.
+	BatchOperationID           string
+	BatchOperationIDVersion    string
+	MemberOperationID          string
+	MemberGovernanceCommitment string
+	BatchMembers               []BatchMemberGovernance
+}
+
+// BatchMemberGovernance is one member's operation id and governance commitment, 0x-hex; the commitment is empty
+// for a member of a v1 batch.
+type BatchMemberGovernance struct {
+	OperationID          string `json:"operationId"`
+	GovernanceCommitment string `json:"governanceCommitment,omitempty"`
 }
 
 // ErrNoBatchBinding reports that no batch row covers this transaction.
@@ -125,7 +142,11 @@ func (r *ProofArtifactRepository) GetLayer5Binding(ctx context.Context, intentID
 		       COALESCE(ab.anchor_create_tx, ''),
 		       CASE WHEN ab.anchor_create_tx IS NOT NULL
 		              AND LOWER(ab.anchor_create_tx) = LOWER(COALESCE(ab.anchor_tx_hash, ab.anchor_create_tx))
-		            THEN COALESCE(ab.anchor_block_num, 0) ELSE 0 END
+		            THEN COALESCE(ab.anchor_block_num, 0) ELSE 0 END,
+		       COALESCE(ab.batch_operation_id, ''),
+		       COALESCE(ab.batch_operation_id_version, ''),
+		       COALESCE(bt.operation_id, ''),
+		       COALESCE(bt.governance_commitment, '')
 		FROM batch_transactions bt
 		JOIN anchor_batches ab ON ab.id = bt.batch_id
 		WHERE ab.bundle_id IS NOT NULL
@@ -142,7 +163,8 @@ func (r *ProofArtifactRepository) GetLayer5Binding(ctx context.Context, intentID
 	)
 	var leaf []byte
 	err := r.db.QueryRowContext(ctx, q, intentID, accumTxHash, chainID).Scan(
-		&b.BatchID, &leaf, &b.TreeIndex, &rawPath, &root, &b.TargetChain, &b.AnchorTxHash, &b.AnchorBlockNum)
+		&b.BatchID, &leaf, &b.TreeIndex, &rawPath, &root, &b.TargetChain, &b.AnchorTxHash, &b.AnchorBlockNum,
+		&b.BatchOperationID, &b.BatchOperationIDVersion, &b.MemberOperationID, &b.MemberGovernanceCommitment)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("tx %s: %w", accumTxHash, ErrNoBatchBinding)
 	}
@@ -159,6 +181,28 @@ func (r *ProofArtifactRepository) GetLayer5Binding(ctx context.Context, intentID
 			// single-leaf claim, which is the one shape that passes vacuously.
 			return nil, fmt.Errorf("tx %s: batch_transactions.merkle_path does not parse: %w",
 				accumTxHash, err)
+		}
+	}
+
+	// Every member of the batch, so its operation id recomputes (RB4-F66). Only a batch that states how its id
+	// was derived has them to state.
+	if b.BatchOperationIDVersion != "" {
+		rows, err := r.db.QueryContext(ctx, `
+			SELECT COALESCE(operation_id, ''), COALESCE(governance_commitment, '')
+			FROM batch_transactions WHERE batch_id = $1 ORDER BY tree_index`, b.BatchID)
+		if err != nil {
+			return nil, fmt.Errorf("look up the members of batch %s: %w", b.BatchID, err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var m BatchMemberGovernance
+			if err := rows.Scan(&m.OperationID, &m.GovernanceCommitment); err != nil {
+				return nil, fmt.Errorf("read a member of batch %s: %w", b.BatchID, err)
+			}
+			b.BatchMembers = append(b.BatchMembers, m)
+		}
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("read the members of batch %s: %w", b.BatchID, err)
 		}
 	}
 	return &b, nil

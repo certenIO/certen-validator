@@ -37,30 +37,32 @@ func evidenceFixture() *AnchorQuorumEvidence {
 	copy(sibling[:], mustHex("2222222222222222222222222222222222222222222222222222222222222222"))
 
 	return &AnchorQuorumEvidence{
-		ChainID:               84532,
-		BundleID:              bundle,
-		Root:                  root,
-		BatchOperationID:      opID,
-		MessageHash:           msg,
-		SetRoot:               setRoot,
-		VerifyTx:              "0x9e4ff6ab00000000000000000000000000000000000000000000000000000000",
-		AggregateSignatureHex: "0xabcdef",
-		AggregatePublicKeyHex: "0x123456",
-		Signers:               []string{"0xaaa", "0xbbb", "0xccc"},
-		SignerPowers:          []*big.Int{big.NewInt(100), big.NewInt(100), big.NewInt(100)},
-		SignedVotingPower:     big.NewInt(300),
-		TotalVotingPower:      big.NewInt(700),
-		Lane:                  AnchorLaneOnDemand,
-		AttestedAt:            time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC),
+		ChainID:                 84532,
+		BundleID:                bundle,
+		Root:                    root,
+		BatchOperationID:        opID,
+		BatchOperationIDVersion: BatchOperationIDV2,
+		MessageHash:             msg,
+		SetRoot:                 setRoot,
+		VerifyTx:                "0x9e4ff6ab00000000000000000000000000000000000000000000000000000000",
+		AggregateSignatureHex:   "0xabcdef",
+		AggregatePublicKeyHex:   "0x123456",
+		Signers:                 []string{"0xaaa", "0xbbb", "0xccc"},
+		SignerPowers:            []*big.Int{big.NewInt(100), big.NewInt(100), big.NewInt(100)},
+		SignedVotingPower:       big.NewInt(300),
+		TotalVotingPower:        big.NewInt(700),
+		Lane:                    AnchorLaneOnDemand,
+		AttestedAt:              time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC),
 		// The verify block's time: two seconds before this validator's clock read the anchor attested.
 		VerifyBlockTime: time.Date(2026, 9, 15, 11, 59, 58, 0, time.UTC),
 		Members: []AnchorQuorumMember{{
-			IntentID:    "f6cea77e-0000-0000-0000-000000000000",
-			OperationID: memberOp,
-			ADIURL:      "acc://fictional-payer.acme",
-			Leaf:        leaf,
-			LeafIndex:   0,
-			Branch:      [][32]byte{sibling},
+			IntentID:             "f6cea77e-0000-0000-0000-000000000000",
+			OperationID:          memberOp,
+			GovernanceCommitment: testGov,
+			ADIURL:               "acc://fictional-payer.acme",
+			Leaf:                 leaf,
+			LeafIndex:            0,
+			Branch:               [][32]byte{sibling},
 			Provenance: MemberProvenance{
 				AccumTxHash: "3e595d2c526dfacb5e332cd11f4f0306d2648cf1291bed63a9bcfd6ef44a7a12",
 				FromChain:   "accumulate",
@@ -295,17 +297,19 @@ func TestWriterNeverRetriesOrOverwritesAConflict(t *testing.T) {
 // ─── membership ─────────────────────────────────────────────────────────────────────────────────────
 
 func TestMembersFromTreeCarryBranchesAndKnownIntentIDs(t *testing.T) {
-	inputs := []BatchLeafInput{
-		{ADIURL: "acc://a.acme", OperationID: [32]byte{1}, ExecutionCommitment: [32]byte{9}},
-		{ADIURL: "acc://b.acme", OperationID: [32]byte{2}, ExecutionCommitment: [32]byte{8}},
-		{ADIURL: "acc://c.acme", OperationID: [32]byte{3}, ExecutionCommitment: [32]byte{7}},
+	inputs := []BatchLeafInput{{GovernanceCommitment: testGov, ADIURL: "acc://a.acme", OperationID: [32]byte{1}, ExecutionCommitment: [32]byte{9}},
+		{GovernanceCommitment: testGov, ADIURL: "acc://b.acme", OperationID: [32]byte{2}, ExecutionCommitment: [32]byte{8}},
+		{GovernanceCommitment: testGov, ADIURL: "acc://c.acme", OperationID: [32]byte{3}, ExecutionCommitment: [32]byte{7}},
 	}
 	tree, err := BuildBatchTree(84532, inputs, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	members := membersFromTree(tree, map[[32]byte]string{{2}: "intent-b"})
+	members, mErr := membersFromTree(tree, map[[32]byte]string{{2}: "intent-b"})
+	if mErr != nil {
+		t.Fatal(mErr)
+	}
 	if len(members) != 3 {
 		t.Fatalf("members = %d", len(members))
 	}
@@ -338,9 +342,8 @@ func TestMembersFromTreeCarryBranchesAndKnownIntentIDs(t *testing.T) {
 // canonical anchor and fell back to the settlement observation. That is the false binding this work
 // removed, reappearing on the lane the live gate had not exercised.
 func TestMembersFromTreeCarryTheIntentIdOnTheCadenceLane(t *testing.T) {
-	inputs := []BatchLeafInput{
-		{ADIURL: "acc://payer-one.acme", ExecutionCommitment: [32]byte{0xe1}, OperationID: [32]byte{0x01}, IntentID: "intent-one"},
-		{ADIURL: "acc://payer-two.acme", ExecutionCommitment: [32]byte{0xe2}, OperationID: [32]byte{0x02}, IntentID: "intent-two"},
+	inputs := []BatchLeafInput{{GovernanceCommitment: testGov, ADIURL: "acc://payer-one.acme", ExecutionCommitment: [32]byte{0xe1}, OperationID: [32]byte{0x01}, IntentID: "intent-one"},
+		{GovernanceCommitment: testGov, ADIURL: "acc://payer-two.acme", ExecutionCommitment: [32]byte{0xe2}, OperationID: [32]byte{0x02}, IntentID: "intent-two"},
 	}
 	tree, err := BuildBatchTree(84532, inputs, 100)
 	if err != nil {
@@ -348,7 +351,10 @@ func TestMembersFromTreeCarryTheIntentIdOnTheCadenceLane(t *testing.T) {
 	}
 
 	// nil map: exactly what ProveBatchRoot passes.
-	members := membersFromTree(tree, nil)
+	members, mErr := membersFromTree(tree, nil)
+	if mErr != nil {
+		t.Fatal(mErr)
+	}
 	if len(members) != 2 {
 		t.Fatalf("got %d members", len(members))
 	}
@@ -362,7 +368,7 @@ func TestMembersFromTreeCarryTheIntentIdOnTheCadenceLane(t *testing.T) {
 
 // The explicit map still wins where a caller supplies it, and the leaf is unaffected by the new field.
 func TestIntentIdOverrideAndLeafStability(t *testing.T) {
-	in := BatchLeafInput{ADIURL: "acc://payer-one.acme", ExecutionCommitment: [32]byte{0xe1}, OperationID: [32]byte{0x01}}
+	in := BatchLeafInput{GovernanceCommitment: testGov, ADIURL: "acc://payer-one.acme", ExecutionCommitment: [32]byte{0xe1}, OperationID: [32]byte{0x01}}
 	withID := in
 	withID.IntentID = "intent-one"
 
@@ -375,7 +381,10 @@ func TestIntentIdOverrideAndLeafStability(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	members := membersFromTree(tree, map[[32]byte]string{{0x01}: "override"})
+	members, mErr := membersFromTree(tree, map[[32]byte]string{{0x01}: "override"})
+	if mErr != nil {
+		t.Fatal(mErr)
+	}
 	if members[0].IntentID != "override" {
 		t.Fatalf("explicit map did not win: %q", members[0].IntentID)
 	}
@@ -384,7 +393,7 @@ func TestIntentIdOverrideAndLeafStability(t *testing.T) {
 // The plumbing itself: LeafInput is the single funnel both lanes build their leaves through, so the
 // intent id has to survive that conversion or the cadence lane records nothing.
 func TestLeafInputCarriesTheIntentIdIntoTheTree(t *testing.T) {
-	p := &PendingBatchIntent{
+	p := &PendingBatchIntent{GovernanceCommitment: testGov,
 		IntentID:    "intent-cadence-one",
 		ADIURL:      "acc://payer-one.acme",
 		ChainID:     84532,
@@ -420,7 +429,7 @@ func TestLeafInputCarriesTheIntentIdIntoTheTree(t *testing.T) {
 // operation id) with every display column empty, while the shadow row held 3e595d2c… (the real
 // Accumulate transaction) and the full leg.
 func TestLeafInputCarriesProvenanceForTheCanonicalRow(t *testing.T) {
-	p := &PendingBatchIntent{
+	p := &PendingBatchIntent{GovernanceCommitment: testGov,
 		IntentID:    "intent-prov-1",
 		ADIURL:      "acc://payer-one.acme",
 		ChainID:     84532,
@@ -461,7 +470,10 @@ func TestLeafInputCarriesProvenanceForTheCanonicalRow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildBatchTree: %v", err)
 	}
-	members := membersFromTree(tree, nil)
+	members, mErr := membersFromTree(tree, nil)
+	if mErr != nil {
+		t.Fatal(mErr)
+	}
 	if len(members) != 1 || members[0].Provenance.AccumTxHash != p.AccumTxHash {
 		t.Fatalf("provenance did not reach the member evidence: %+v", members)
 	}
@@ -469,7 +481,7 @@ func TestLeafInputCarriesProvenanceForTheCanonicalRow(t *testing.T) {
 
 // Provenance must never move a leaf. If it could, adding a display field would change a bundle id.
 func TestProvenanceDoesNotAffectTheLeaf(t *testing.T) {
-	bare := BatchLeafInput{
+	bare := BatchLeafInput{GovernanceCommitment: testGov,
 		ADIURL: "acc://payer-one.acme", ExecutionCommitment: [32]byte{0xe1}, OperationID: [32]byte{0x01},
 	}
 	rich := bare

@@ -51,6 +51,37 @@ type BatchAttestationRequest struct {
 	PeriodBlocks uint64 `json:"period_blocks"`
 	BundleID     string `json:"bundle_id"` // hex, for comparison ONLY
 	ProposerID   string `json:"proposer_id"`
+	// Members is the proposer's (operation id, governance commitment) per member, for DIAGNOSIS only: a peer
+	// never builds from it. When the peer's own tree differs, it compares these with its own members to name a
+	// governance disagreement - which member, and both decisions - instead of an anonymous bundle mismatch
+	// (RB4-F66). omitempty: an older proposer sends none.
+	Members []MemberGovernance `json:"members,omitempty"`
+}
+
+// MemberGovernance is one member's operation id and governance commitment, 0x-hex.
+type MemberGovernance struct {
+	OperationID          string `json:"operation_id"`
+	GovernanceCommitment string `json:"governance_commitment"`
+}
+
+// governanceDisagreement names the first member the proposer and this validator committed to different governance
+// decisions for, or "" when they agree on every member both hold. mine maps operation id to commitment.
+func governanceDisagreement(theirs []MemberGovernance, mine map[[32]byte][32]byte) string {
+	for _, m := range theirs {
+		op, err := parseHex32(m.OperationID)
+		if err != nil {
+			continue // a malformed diagnostic names nothing; the mismatch is still refused
+		}
+		gov, err := parseHex32(m.GovernanceCommitment)
+		if err != nil {
+			continue
+		}
+		if own, held := mine[op]; held && own != gov {
+			return fmt.Sprintf("operation %x: the proposer committed to governance decision %x, this validator's own "+
+				"G1 decided %x", op[:8], gov[:8], own[:8])
+		}
+	}
+	return ""
 }
 
 // BatchAttestationResponse is the peer's partial signature, or a refusal.
@@ -85,6 +116,10 @@ const (
 	// A REAL disagreement. For a one-member batch it means the two nodes disagree about the
 	// intent's own data, which is a bug worth surfacing, not a race to retry away.
 	CodeBundleMismatch AttestationRefusalCode = "bundle_mismatch"
+
+	// CodeGovernanceMismatch — this validator holds the member(s), and its own G1 decided a member's governance
+	// differently from the proposer's: who authorised it is in dispute. Never signed (RB4-F66).
+	CodeGovernanceMismatch AttestationRefusalCode = "governance_mismatch"
 
 	// CodeConfigMismatch — the request cannot be served because the two nodes are configured
 	// differently. Retrying cannot help; an operator has to fix it.
@@ -216,6 +251,7 @@ func (s *BatchStack) HandleBatchAttestationRequest(
 	// the bundleId, and matches none of our trees.
 	var tree *BatchTree
 	derived := make([]string, 0, len(chunks))
+	mine := map[[32]byte][32]byte{}
 	for _, chunk := range chunks {
 		inputs := make([]BatchLeafInput, 0, len(chunk))
 		for _, m := range chunk {
@@ -224,6 +260,7 @@ func (s *BatchStack) HandleBatchAttestationRequest(
 				return refuse("member %s: %v", m.IntentID, err)
 			}
 			inputs = append(inputs, in)
+			mine[in.OperationID] = in.GovernanceCommitment
 		}
 		t, err := BuildBatchTree(req.ChainID, inputs, req.CutoffHeight)
 		if err != nil {
@@ -236,6 +273,11 @@ func (s *BatchStack) HandleBatchAttestationRequest(
 		}
 	}
 	if tree == nil {
+		if why := governanceDisagreement(req.Members, mine); why != "" {
+			return refuseWith(CodeGovernanceMismatch, "governance disagreement in the batch proposed as %s: %s - "+
+				"refusing to attest who authorised a member when this validator's proof says otherwise",
+				shortHex(req.BundleID), why)
+		}
 		return refuseWith(CodeBundleMismatch,
 			"bundleId mismatch: proposer %s, this validator derived %v over %d member(s) — "+
 				"refusing to attest a batch it did not independently reproduce",

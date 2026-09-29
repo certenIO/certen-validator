@@ -1,6 +1,8 @@
 package execution
 
 import (
+	"fmt"
+
 	"context"
 	"math/big"
 	"time"
@@ -34,6 +36,8 @@ type AnchorQuorumEvidence struct {
 	BundleID         [32]byte
 	Root             [32]byte
 	BatchOperationID [32]byte
+	// BatchOperationIDVersion is how BatchOperationID was derived (BatchTree.BatchOperationIDVersion).
+	BatchOperationIDVersion string
 	// MessageHash is what every partial signed: the V6.1 pre-execution message over
 	// (chainID, bundleID, root, batchOperationID, validatorSetRoot).
 	MessageHash [32]byte
@@ -84,10 +88,14 @@ type AnchorQuorumMember struct {
 	// is the Accumulate 4-blob intent hash and the value bound into the leaf.
 	IntentID    string
 	OperationID [32]byte
-	ADIURL      string
-	Leaf        [32]byte
-	LeafIndex   int
-	Branch      [][32]byte
+	// GovernanceCommitment is the member's commitment to who decided it (RB4-F66); zero, with LegacyNoGovernance,
+	// for a member admitted before commitments.
+	GovernanceCommitment [32]byte
+	LegacyNoGovernance   bool
+	ADIURL               string
+	Leaf                 [32]byte
+	LeafIndex            int
+	Branch               [][32]byte
 
 	// Provenance is what the row records about the member beyond its position in the tree: the
 	// Accumulate transaction that carried it, and the leg it settles. Never hashed.
@@ -107,26 +115,27 @@ const (
 // anchor already happened on-chain and the database is a projection of it.
 type AnchorAttestedHook func(ctx context.Context, ev *AnchorQuorumEvidence)
 
-// membersFromTree derives the member list (leaf, index, branch) from the tree that was attested.
+// membersFromTree derives the member list (leaf, index, branch, governance commitment) from the tree that was
+// attested.
 //
 // intentByOperation supplies intent ids where the caller knows them (the on-demand lane knows exactly
 // one). A missing id is left empty rather than guessed: the operation id is the durable identifier and
 // the join the backfill uses.
-func membersFromTree(tree *BatchTree, intentByOperation map[[32]byte]string) []AnchorQuorumMember {
+//
+// A member whose branch cannot be derived is an error. BuildBatchTree self-verifies every branch, so it cannot
+// happen for a tree that was built; it used to be recorded without a branch rather than refused (RB4-F69).
+func membersFromTree(tree *BatchTree, intentByOperation map[[32]byte]string) ([]AnchorQuorumMember, error) {
 	if tree == nil {
-		return nil
+		return nil, fmt.Errorf("no batch tree")
+	}
+	if len(tree.Leaves) != len(tree.Inputs) {
+		return nil, fmt.Errorf("the batch tree carries %d leaves for %d members", len(tree.Leaves), len(tree.Inputs))
 	}
 	members := make([]AnchorQuorumMember, 0, len(tree.Inputs))
 	for i, in := range tree.Inputs {
 		branch, err := tree.BranchFor(i)
 		if err != nil {
-			// BuildBatchTree self-verifies every branch, so this cannot happen for a tree that was
-			// attested; record the member without a branch rather than dropping it from the evidence.
-			branch = nil
-		}
-		var leaf [32]byte
-		if i < len(tree.Leaves) {
-			leaf = tree.Leaves[i]
+			return nil, fmt.Errorf("member %d (%s): its branch: %w", i, in.ADIURL, err)
 		}
 		// The tree's own intent id first: both lanes populate it through PendingBatchIntent.LeafInput.
 		// intentByOperation remains as an override for callers that know better (the on-demand lane
@@ -136,14 +145,16 @@ func membersFromTree(tree *BatchTree, intentByOperation map[[32]byte]string) []A
 			intentID = v
 		}
 		members = append(members, AnchorQuorumMember{
-			IntentID:    intentID,
-			Provenance:  in.Provenance,
-			OperationID: in.OperationID,
-			ADIURL:      in.ADIURL,
-			Leaf:        leaf,
-			LeafIndex:   i,
-			Branch:      branch,
+			IntentID:             intentID,
+			Provenance:           in.Provenance,
+			OperationID:          in.OperationID,
+			GovernanceCommitment: in.GovernanceCommitment,
+			LegacyNoGovernance:   in.LegacyNoGovernance,
+			ADIURL:               in.ADIURL,
+			Leaf:                 tree.Leaves[i],
+			LeafIndex:            i,
+			Branch:               branch,
 		})
 	}
-	return members
+	return members, nil
 }

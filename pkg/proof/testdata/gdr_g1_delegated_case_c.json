@@ -1,0 +1,475 @@
+{
+ "entry_hash_exec": "f25a6dfd561fc8e8fbda779341be6a2d0d90d3b64ad7db69f95d88b49d2f5be3",
+ "txid": "f25a6dfd561fc8e8fbda779341be6a2d0d90d3b64ad7db69f95d88b49d2f5be3",
+ "tx_hash": "f25a6dfd561fc8e8fbda779341be6a2d0d90d3b64ad7db69f95d88b49d2f5be3",
+ "exec_mbi": 10199334,
+ "exec_witness": "b2dce42e8e5847b81db9de692fe3662451776f47bce3013e25ee72f3f55059cd",
+ "scope": "acc://certen-p7c.acme/data",
+ "chain": "main",
+ "expanded_message_id": "acc://f25a6dfd561fc8e8fbda779341be6a2d0d90d3b64ad7db69f95d88b49d2f5be3@certen-p7c.acme/data",
+ "principal": "certen-p7c.acme",
+ "receipt": {
+  "start": "f25a6dfd561fc8e8fbda779341be6a2d0d90d3b64ad7db69f95d88b49d2f5be3",
+  "anchor": "b2dce42e8e5847b81db9de692fe3662451776f47bce3013e25ee72f3f55059cd",
+  "localBlock": 10199334,
+  "localBlockTime": null,
+  "majorBlock": 412,
+  "end": "f25a6dfd561fc8e8fbda779341be6a2d0d90d3b64ad7db69f95d88b49d2f5be3",
+  "entries": [
+   {
+    "hash": "f6c3e01918a8dc2e5c8a8e4e6b2534d357b1804c6b67eb5d299b295091200b28",
+    "right": false
+   },
+   {
+    "hash": "f8c60030285cbda9b51f6e11c35e1d6a79c0caa5723be4b614cdd63b8b46c7fb",
+    "right": false
+   },
+   {
+    "hash": "6f37c01a55ccb8360cebc93563f695a832ec88f5fe5814c27f999429660310da",
+    "right": true
+   },
+   {
+    "hash": "f2138afa0babca4b3bb88e84b836872a58f31ab55bca0d64b652a9f77a9ab9eb",
+    "right": false
+   },
+   {
+    "hash": "dd9dae40cf3353a433b85b3b4fc99883d1cd8208a5146a70d3907eb86738c3fe",
+    "right": false
+   },
+   {
+    "hash": "3ad8188f3795c42edce0916fe9bbe9651a4465a479f4cec5204305edbeae16ae",
+    "right": false
+   },
+   {
+    "hash": "eb12375fb0f79803ae9a6df5bcf2b061e7d65803b22f73c1e8b25aef8e26539a",
+    "right": false
+   },
+   {
+    "hash": "9ca7e30b7d91dd762ebfac89a66842a62f733cbc0203b2aa938494092a14ac4a",
+    "right": false
+   },
+   {
+    "hash": "4df3a1ea3a63a8affa2774ef78248ebd085cbb2149d3f0c9f39fd7f80e166eaa",
+    "right": false
+   },
+   {
+    "hash": "5e5b0ee0ad14a538b11496857a7ca22d83683514bf09491b8cc0306567ca32c8",
+    "right": false
+   },
+   {
+    "hash": "1b59e22ccfb02d8a4e05e167149770c49e303383baf99a6116034b3cffee219e",
+    "right": false
+   },
+   {
+    "hash": "29b9aa087bbd27720ea49743e91a8b092d8b26ae15b2f9fd95fe0bd9a594066e",
+    "right": false
+   },
+   {
+    "hash": "8dfd54bb3b109b76b999ff438f1b3dc9fb3ddef9cbbf8b8a07435371f202119f",
+    "right": false
+   },
+   {
+    "hash": "9ad139280c4f50f7aff8047e2c5cbeb4b2d7fc286ddd079b11c1468efae5b975",
+    "right": false
+   },
+   {
+    "hash": "104b8edd002ca642b4cefab6506c19da3f3cafab4f6599470bdee45c4ccaac6d",
+    "right": false
+   }
+  ]
+ },
+ "g0_proof_complete": true,
+ "authority_snapshot": {
+  "page": "acc://certen-p7c.acme/book/1",
+  "execTerms": {
+   "mbi": 10199334,
+   "witness": "b2dce42e8e5847b81db9de692fe3662451776f47bce3013e25ee72f3f55059cd"
+  },
+  "stateExec": {
+   "version": 2,
+   "entries": [
+    {
+     "delegate": "acc://certen-p7c.acme/book2"
+    },
+    {
+     "keyHash": "c0265bd3e745825832605b75cbd40e5bde38fd21037769bbb202b5f7822fc465"
+    }
+   ],
+   "keys": [
+    "c0265bd3e745825832605b75cbd40e5bde38fd21037769bbb202b5f7822fc465"
+   ],
+   "threshold": 1
+  },
+  "genesis": {
+   "entryHash": "c5873a82f3740413370a48f37163dcf08486459869aa3c55de13570b9e46dd61",
+   "localBlock": 10186021,
+   "receipt": {
+    "start": "c5873a82f3740413370a48f37163dcf08486459869aa3c55de13570b9e46dd61",
+    "anchor": "5257661036afba4c86606b1830bf7f98264f2a08f6c3d6ebd28e89587018fac7",
+    "localBlock": 10186021,
+    "localBlockTime": null,
+    "majorBlock": null,
+    "end": null,
+    "entries": [
+     {
+      "hash": "c5873a82f3740413370a48f37163dcf08486459869aa3c55de13570b9e46dd61",
+      "right": false
+     },
+     {
+      "hash": "9ff486a4921d9ddca966a62d2519bf4406d724b05ddba9836f8ca668712972c3",
+      "right": false
+     },
+     {
+      "hash": "7f0c9ac2ee78fe4029ff877129b2d4a26bad12fa67a28c4708a8989a35a38b84",
+      "right": false
+     },
+     {
+      "hash": "0fef2bc7b8eab55eb66b68db97f300676dff9653bfa0f1d9cb9c0b29c6703a3d",
+      "right": false
+     },
+     {
+      "hash": "1b59e22ccfb02d8a4e05e167149770c49e303383baf99a6116034b3cffee219e",
+      "right": false
+     },
+     {
+      "hash": "29b9aa087bbd27720ea49743e91a8b092d8b26ae15b2f9fd95fe0bd9a594066e",
+      "right": false
+     },
+     {
+      "hash": "8dfd54bb3b109b76b999ff438f1b3dc9fb3ddef9cbbf8b8a07435371f202119f",
+      "right": false
+     },
+     {
+      "hash": "9ad139280c4f50f7aff8047e2c5cbeb4b2d7fc286ddd079b11c1468efae5b975",
+      "right": false
+     },
+     {
+      "hash": "104b8edd002ca642b4cefab6506c19da3f3cafab4f6599470bdee45c4ccaac6d",
+      "right": false
+     }
+    ]
+   },
+   "txType": "syntheticcreateidentity",
+   "pageState": {
+    "version": 1,
+    "entries": [
+     {
+      "keyHash": "c0265bd3e745825832605b75cbd40e5bde38fd21037769bbb202b5f7822fc465"
+     }
+    ],
+    "keys": [
+     "c0265bd3e745825832605b75cbd40e5bde38fd21037769bbb202b5f7822fc465"
+    ],
+    "threshold": 1
+   }
+  },
+  "mutations": [
+   {
+    "entryHash": "9df0be6961d1626b8c9a2293ff6409c7fc9d60ccb68ff4e6c41fa55dc561b43f",
+    "localBlock": 10188028,
+    "receipt": {
+     "start": "9df0be6961d1626b8c9a2293ff6409c7fc9d60ccb68ff4e6c41fa55dc561b43f",
+     "anchor": "3231817cf4c44ae40788ac4711241c600ded8b451b45e8150d188015a78adab7",
+     "localBlock": 10188028,
+     "localBlockTime": null,
+     "majorBlock": null,
+     "end": null,
+     "entries": [
+      {
+       "hash": "4dbf02f03c4e2b05c7620fb84fb2d99cce27ff853439809cfd194e7085a7893d",
+       "right": false
+      },
+      {
+       "hash": "49b7db54275cc9749a70cc624a243af2186efafbdd74bdca70b60f839cf6baac",
+       "right": false
+      },
+      {
+       "hash": "eb23e5afdd201e4d0b586e1ce22db4675f26409d020fdd7b5362aaa32fe20a67",
+       "right": true
+      },
+      {
+       "hash": "8d79ed0f45d81453f44f1d995b79585c9576a32b7b15f88fddca0eeb5827a268",
+       "right": false
+      },
+      {
+       "hash": "414a71b61670f52b05304a6d7265579d37fdb47218dfe6da1a3a98e12e06997c",
+       "right": false
+      },
+      {
+       "hash": "4cd832038e4f8a74024f69832ef13e186b8d582169a257043b44cc7c73b8bf1b",
+       "right": false
+      },
+      {
+       "hash": "1d8153679cae47a1cd9ad49d81be4cff915c232e4414ab95fee0021f7c32c5d1",
+       "right": false
+      },
+      {
+       "hash": "7f0c9ac2ee78fe4029ff877129b2d4a26bad12fa67a28c4708a8989a35a38b84",
+       "right": false
+      },
+      {
+       "hash": "0fef2bc7b8eab55eb66b68db97f300676dff9653bfa0f1d9cb9c0b29c6703a3d",
+       "right": false
+      },
+      {
+       "hash": "1b59e22ccfb02d8a4e05e167149770c49e303383baf99a6116034b3cffee219e",
+       "right": false
+      },
+      {
+       "hash": "29b9aa087bbd27720ea49743e91a8b092d8b26ae15b2f9fd95fe0bd9a594066e",
+       "right": false
+      },
+      {
+       "hash": "8dfd54bb3b109b76b999ff438f1b3dc9fb3ddef9cbbf8b8a07435371f202119f",
+       "right": false
+      },
+      {
+       "hash": "9ad139280c4f50f7aff8047e2c5cbeb4b2d7fc286ddd079b11c1468efae5b975",
+       "right": false
+      },
+      {
+       "hash": "104b8edd002ca642b4cefab6506c19da3f3cafab4f6599470bdee45c4ccaac6d",
+       "right": false
+      }
+     ]
+    },
+    "txType": "updateKeyPage",
+    "previousState": {
+     "version": 1,
+     "entries": [
+      {
+       "keyHash": "c0265bd3e745825832605b75cbd40e5bde38fd21037769bbb202b5f7822fc465"
+      }
+     ],
+     "keys": [
+      "c0265bd3e745825832605b75cbd40e5bde38fd21037769bbb202b5f7822fc465"
+     ],
+     "threshold": 1
+    },
+    "newState": {
+     "version": 2,
+     "entries": [
+      {
+       "delegate": "acc://certen-p7c.acme/book2"
+      },
+      {
+       "keyHash": "c0265bd3e745825832605b75cbd40e5bde38fd21037769bbb202b5f7822fc465"
+      }
+     ],
+     "keys": [
+      "c0265bd3e745825832605b75cbd40e5bde38fd21037769bbb202b5f7822fc465"
+     ],
+     "threshold": 1
+    }
+   }
+  ],
+  "validation": {
+   "genesisFound": true,
+   "mutationsApplied": 1,
+   "totalEntries": 6,
+   "finalVersion": 2,
+   "finalThreshold": 1,
+   "finalKeyCount": 1
+  }
+ },
+ "validated_signatures": [
+  {
+   "messageID": "acc://98e79e43a89e82e9c134fd429d1895614fb1f0df175ef0a2ceb460e04ca43ad2@certen-p7c.acme/book2/1",
+   "messageHash": "98e79e43a89e82e9c134fd429d1895614fb1f0df175ef0a2ceb460e04ca43ad2",
+   "receipt": {
+    "start": "98e79e43a89e82e9c134fd429d1895614fb1f0df175ef0a2ceb460e04ca43ad2",
+    "anchor": "b2dce42e8e5847b81db9de692fe3662451776f47bce3013e25ee72f3f55059cd",
+    "localBlock": 10199334,
+    "localBlockTime": null,
+    "majorBlock": 412,
+    "end": "98e79e43a89e82e9c134fd429d1895614fb1f0df175ef0a2ceb460e04ca43ad2",
+    "entries": [
+     {
+      "hash": "0d25c7627cfbe03712ffc9492612f44fbb92e4bb0bf164d407b7e844441faea5",
+      "right": false
+     },
+     {
+      "hash": "ee437eea03055c9e60240e92f449681e9d8f0305e77f1fafd105ee9808f2441b",
+      "right": false
+     },
+     {
+      "hash": "e394c513dfa7a6b4011066c2c623917e0e250f2c81d894d7d2ab879e870baa09",
+      "right": false
+     },
+     {
+      "hash": "86cdf3d56fc88c11a50fb88f1356c982b81b635a9cb676221269b425ba5cf41f",
+      "right": true
+     },
+     {
+      "hash": "dd9dae40cf3353a433b85b3b4fc99883d1cd8208a5146a70d3907eb86738c3fe",
+      "right": false
+     },
+     {
+      "hash": "3ad8188f3795c42edce0916fe9bbe9651a4465a479f4cec5204305edbeae16ae",
+      "right": false
+     },
+     {
+      "hash": "eb12375fb0f79803ae9a6df5bcf2b061e7d65803b22f73c1e8b25aef8e26539a",
+      "right": false
+     },
+     {
+      "hash": "9ca7e30b7d91dd762ebfac89a66842a62f733cbc0203b2aa938494092a14ac4a",
+      "right": false
+     },
+     {
+      "hash": "4df3a1ea3a63a8affa2774ef78248ebd085cbb2149d3f0c9f39fd7f80e166eaa",
+      "right": false
+     },
+     {
+      "hash": "5e5b0ee0ad14a538b11496857a7ca22d83683514bf09491b8cc0306567ca32c8",
+      "right": false
+     },
+     {
+      "hash": "1b59e22ccfb02d8a4e05e167149770c49e303383baf99a6116034b3cffee219e",
+      "right": false
+     },
+     {
+      "hash": "29b9aa087bbd27720ea49743e91a8b092d8b26ae15b2f9fd95fe0bd9a594066e",
+      "right": false
+     },
+     {
+      "hash": "8dfd54bb3b109b76b999ff438f1b3dc9fb3ddef9cbbf8b8a07435371f202119f",
+      "right": false
+     },
+     {
+      "hash": "9ad139280c4f50f7aff8047e2c5cbeb4b2d7fc286ddd079b11c1468efae5b975",
+      "right": false
+     },
+     {
+      "hash": "104b8edd002ca642b4cefab6506c19da3f3cafab4f6599470bdee45c4ccaac6d",
+      "right": false
+     }
+    ]
+   },
+   "signature": {
+    "type": "delegated",
+    "chain": [
+     {
+      "delegator": "acc://certen-p7c.acme/book/1"
+     }
+    ],
+    "digestForm": "metadata",
+    "vote": "accept",
+    "publicKey": "b3be1fb8a8d158423e086c855a1c04b8d9e80a3805f8dcb6fd606a24bd054e11",
+    "signature": "412f8e83fa9c96ce94f2d7fe0d8dcb0d911940760fce937229eea307687e60ece087531cc380524fc8244dd1d929374012da5238b830737669fc45783ba7540d",
+    "signer": "acc://certen-p7c.acme/book2/1",
+    "signerVersion": 1,
+    "timestamp": 1787690447248086,
+    "transactionHash": "f25a6dfd561fc8e8fbda779341be6a2d0d90d3b64ad7db69f95d88b49d2f5be3",
+    "txID": "",
+    "securityLevel": "",
+    "verifiedTime": "0001-01-01T00:00:00Z"
+   },
+   "timingVerified": true,
+   "transactionHashVerified": true,
+   "cryptographicallyVerified": true,
+   "securityLevel": "",
+   "verificationTime": "0001-01-01T00:00:00Z",
+   "integrityHash": ""
+  }
+ ],
+ "unique_valid_keys": 1,
+ "required_threshold": 1,
+ "threshold_satisfied": true,
+ "execution_success": true,
+ "timing_valid": true,
+ "g1_proof_complete": true,
+ "concurrency_enabled": false,
+ "worker_count": 0,
+ "processing_time_ms": 0,
+ "cryptographic_security": false,
+ "security_report": null,
+ "ed25519_verified": 0,
+ "audit_trail_events": 0,
+ "bundle_integrity_hash": "",
+ "signatureRouteStatus": {
+  "primaryRoute": "signatureSet",
+  "routesAgreed": true,
+  "degraded": false,
+  "artifacts": [
+   "signatureSet",
+   "enumeration"
+  ]
+ },
+ "timingBasis": [
+  {
+   "messageID": "acc://98e79e43a89e82e9c134fd429d1895614fb1f0df175ef0a2ceb460e04ca43ad2@certen-p7c.acme/book2/1",
+   "messageHash": "98e79e43a89e82e9c134fd429d1895614fb1f0df175ef0a2ceb460e04ca43ad2",
+   "signerPage": "acc://certen-p7c.acme/book2/1",
+   "signerIdentity": "certen-p7c.acme",
+   "principalPage": "acc://certen-p7c.acme/book/1",
+   "principalIdentity": "certen-p7c.acme",
+   "localOrderingChecked": true,
+   "receiptLocalBlock": 10199334,
+   "execMBI": 10199334,
+   "basis": "local-ordering"
+  }
+ ],
+ "authorization": {
+  "account": "acc://certen-p7c.acme/data",
+  "authorities": [
+   {
+    "authority": "acc://certen-p7c.acme/book",
+    "vote": {
+     "book": "acc://certen-p7c.acme/book",
+     "voted": true,
+     "vote": "accept",
+     "by": "acc://certen-p7c.acme/book/1",
+     "pages": [
+      {
+       "page": "acc://certen-p7c.acme/book/1",
+       "voted": true,
+       "vote": "accept",
+       "version": 2,
+       "threshold": 1,
+       "decidedAt": 10199334,
+       "counted": [
+        {
+         "entry": "delegate:acc://certen-p7c.acme/book2",
+         "vote": "accept",
+         "by": "acc://6b36d0b8b5267e02752c161b39123cff59ce0f1b4bb49cc0ce1d2f94c7da9355@certen-p7c.acme/book/1",
+         "block": 10199334
+        }
+       ],
+       "delegates": [
+        {
+         "book": "acc://certen-p7c.acme/book2",
+         "voted": true,
+         "vote": "accept",
+         "by": "acc://certen-p7c.acme/book2/1",
+         "pages": [
+          {
+           "page": "acc://certen-p7c.acme/book2/1",
+           "path": [
+            "acc://certen-p7c.acme/book/1"
+           ],
+           "voted": true,
+           "vote": "accept",
+           "version": 1,
+           "threshold": 1,
+           "decidedAt": 10199334,
+           "counted": [
+            {
+             "entry": "key:c0265bd3e745825832605b75cbd40e5bde38fd21037769bbb202b5f7822fc465",
+             "vote": "accept",
+             "by": "acc://98e79e43a89e82e9c134fd429d1895614fb1f0df175ef0a2ceb460e04ca43ad2@certen-p7c.acme/book2/1",
+             "block": 10199334
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   }
+  ],
+  "satisfied": true
+ }
+}

@@ -788,6 +788,7 @@ func (s *BatchStack) admit(
 	operationID [32]byte,
 	legs interface{},
 	attestation interface{},
+	governanceCommitment [32]byte,
 	commitHeight uint64,
 	commitPartition string,
 	commitTime time.Time,
@@ -819,19 +820,47 @@ func (s *BatchStack) admit(
 			ErrBatchUnavailable, intentID)
 	}
 
+	// The member commits to who decided the intent: its batch operation id aggregates it (RB4-F66). The commitment is
+	// an explicit input, and the round's snapshot - which carries the decision itself, and is what the proof cycle
+	// stores - must state the same one, so the two cannot disagree. CheckMember queues nothing and passes neither.
+	if attestation != nil || governanceCommitment != ([32]byte{}) {
+		if governanceCommitment == ([32]byte{}) {
+			return nil, fmt.Errorf("%w: intent %s on chain %d", ErrNoGovernanceCommitment, intentID, chainID)
+		}
+		gc, ok := attestation.(governanceCommitter)
+		if !ok {
+			return nil, fmt.Errorf("%w: intent %s: its round's snapshot (%T) states no governance decision",
+				ErrNoGovernanceCommitment, intentID, attestation)
+		}
+		stated, err := gc.GovernanceCommitment()
+		if err != nil {
+			return nil, fmt.Errorf("intent %s: %w", intentID, err)
+		}
+		if stated != governanceCommitment {
+			return nil, fmt.Errorf("intent %s: the governance commitment %x is not the one its round's snapshot states "+
+				"(%x)", intentID, governanceCommitment[:8], stated[:8])
+		}
+	}
+
 	return &PendingBatchIntent{
-		IntentID:        intentID,
-		ADIURL:          adiURL,
-		ChainID:         chainID,
-		Account:         common.BytesToAddress(account[:]),
-		OperationID:     operationID,
-		AccumTxHash:     accumTxHash,
-		Legs:            converted,
-		Attestation:     attestation,
-		CommitHeight:    commitHeight,
-		CommitPartition: commitPartition,
-		CommitTime:      commitTime,
+		IntentID:             intentID,
+		GovernanceCommitment: governanceCommitment,
+		ADIURL:               adiURL,
+		ChainID:              chainID,
+		Account:              common.BytesToAddress(account[:]),
+		OperationID:          operationID,
+		AccumTxHash:          accumTxHash,
+		Legs:                 converted,
+		Attestation:          attestation,
+		CommitHeight:         commitHeight,
+		CommitPartition:      commitPartition,
+		CommitTime:           commitTime,
 	}, nil
+}
+
+// governanceCommitter is the round's snapshot as admission reads it: the commitment to who decided the intent.
+type governanceCommitter interface {
+	GovernanceCommitment() ([32]byte, error)
 }
 
 // CheckMember reports whether EnqueueForBatch (onDemand false) or EnqueueOnDemand (onDemand true)
@@ -850,7 +879,7 @@ func (s *BatchStack) CheckMember(
 	legs interface{},
 	commitHeight uint64,
 ) error {
-	p, err := s.admit(intentID, adiURL, chainID, account, operationID, legs, nil, commitHeight, "", time.Time{}, "")
+	p, err := s.admit(intentID, adiURL, chainID, account, operationID, legs, nil, [32]byte{}, commitHeight, "", time.Time{}, "")
 	if err != nil {
 		return err
 	}
@@ -901,6 +930,7 @@ func (s *BatchStack) EnqueueForBatch(
 	operationID [32]byte,
 	legs interface{},
 	attestation interface{},
+	governanceCommitment [32]byte,
 	commitHeight uint64,
 	commitPartition string,
 	commitTime time.Time,
@@ -909,7 +939,7 @@ func (s *BatchStack) EnqueueForBatch(
 	if err := s.undecided(intentID, chainID); err != nil {
 		return err
 	}
-	p, err := s.admit(intentID, adiURL, chainID, account, operationID, legs, attestation,
+	p, err := s.admit(intentID, adiURL, chainID, account, operationID, legs, attestation, governanceCommitment,
 		commitHeight, commitPartition, commitTime, accumTxHash)
 	if err != nil {
 		return err
@@ -933,6 +963,7 @@ func (s *BatchStack) EnqueueOnDemand(
 	operationID [32]byte,
 	legs interface{},
 	attestation interface{},
+	governanceCommitment [32]byte,
 	commitHeight uint64,
 	commitPartition string,
 	commitTime time.Time,
@@ -941,7 +972,7 @@ func (s *BatchStack) EnqueueOnDemand(
 	if err := s.undecided(intentID, chainID); err != nil {
 		return err
 	}
-	p, err := s.admit(intentID, adiURL, chainID, account, operationID, legs, attestation,
+	p, err := s.admit(intentID, adiURL, chainID, account, operationID, legs, attestation, governanceCommitment,
 		commitHeight, commitPartition, commitTime, accumTxHash)
 	if err != nil {
 		return err
@@ -971,6 +1002,7 @@ func (s *BatchStack) EnqueueAfter(
 	operationID [32]byte,
 	legs interface{},
 	attestation interface{},
+	governanceCommitment [32]byte,
 	commitHeight uint64,
 	commitPartition string,
 	commitTime time.Time,
@@ -1001,7 +1033,7 @@ func (s *BatchStack) EnqueueAfter(
 	if err != nil {
 		return fmt.Errorf("intent %s: its predecessor on chain %d: %w", intentID, after.ChainID, err)
 	}
-	p, err := s.admit(intentID, adiURL, chainID, account, operationID, legs, attestation,
+	p, err := s.admit(intentID, adiURL, chainID, account, operationID, legs, attestation, governanceCommitment,
 		commitHeight, commitPartition, commitTime, accumTxHash)
 	if err != nil {
 		return err

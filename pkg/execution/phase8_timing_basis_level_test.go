@@ -39,7 +39,7 @@ func TestP8_TimingBasisReachesLevelJSON(t *testing.T) {
 	tb := []certenproof.SignatureTimingBasis{
 		p8Basis("G1", "acc://certen-p7f-omega.acme/book/1", "acc://certen-kermit-12.acme/book/1", false),
 	}
-	out := BuildGovernanceLevelJSON("G1", json.RawMessage(`{"threshold_satisfied":true}`), nil, tb,
+	out := mustLevelJSON(t, "G1", json.RawMessage(`{"threshold_satisfied":true}`), nil, tb,
 		map[string]interface{}{"level": "G1", "verified": true})
 
 	var obj map[string]json.RawMessage
@@ -78,7 +78,7 @@ func TestP8_SamePartitionRowNamesNothingWeakened(t *testing.T) {
 	tb := []certenproof.SignatureTimingBasis{
 		p8Basis("G1", "acc://certen-kermit-12.acme/book/1", "acc://certen-kermit-12.acme/book/1", true),
 	}
-	out := BuildGovernanceLevelJSON("G1", json.RawMessage(`{"threshold_satisfied":true}`), nil, tb, nil)
+	out := mustLevelJSON(t, "G1", json.RawMessage(`{"threshold_satisfied":true}`), nil, tb, nil)
 
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal(out, &obj); err != nil {
@@ -98,7 +98,7 @@ func TestP8_SamePartitionRowNamesNothingWeakened(t *testing.T) {
 // produce no key at all, so the two cannot be confused.
 func TestP8_AbsentTimingBasisWritesNoKey(t *testing.T) {
 	for _, tb := range [][]certenproof.SignatureTimingBasis{nil, {}} {
-		out := BuildGovernanceLevelJSON("G1", json.RawMessage(`{"x":1}`), nil, tb, nil)
+		out := mustLevelJSON(t, "G1", json.RawMessage(`{"x":1}`), nil, tb, nil)
 		var obj map[string]json.RawMessage
 		if err := json.Unmarshal(out, &obj); err != nil {
 			t.Fatal(err)
