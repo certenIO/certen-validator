@@ -15,6 +15,7 @@ package proof
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os/exec"
@@ -50,6 +51,16 @@ type GovernanceRequest struct {
 	WorkDir       string `json:"work_dir,omitempty"`       // Working directory for artifacts
 	SigningDomain string `json:"signing_domain,omitempty"` // Signing domain
 }
+
+// GovProofExitNotSatisfied is the governance proof CLI's exit status for a transaction whose authority set did not
+// vote to accept it - a verdict on the transaction. Every other failure exits 1 and decides nothing. It is the CLI's
+// exitGovernanceNotSatisfied, and a test holds the two equal (RB4-F62).
+const GovProofExitNotSatisfied = 3
+
+// ErrGovernanceNotSatisfied is a governance proof that established that the transaction's authority set did not vote
+// to accept it. It is a verdict, never an outage: before RB4-F62 the CLI exited 1 for both and this adapter reported
+// both as the same plain failure, so every governance rejection was recorded as "governance proof unavailable".
+var ErrGovernanceNotSatisfied = errors.New("governance not satisfied")
 
 // CLIGovernanceProofGenerator implements governance proof generation via CLI subprocess
 type CLIGovernanceProofGenerator struct {
@@ -166,6 +177,10 @@ func (g *CLIGovernanceProofGenerator) GenerateAtLevel(ctx context.Context, level
 			}
 			if detail == "" {
 				detail = fmt.Sprintf("exit status %d with no output on stdout or stderr", exitErr.ExitCode())
+			}
+			if exitErr.ExitCode() == GovProofExitNotSatisfied {
+				g.logger.Printf("[GOV-PROOF] %s: governance not satisfied: %s", level, detail)
+				return nil, fmt.Errorf("%w: governance proof CLI for %s: %s", ErrGovernanceNotSatisfied, level, detail)
 			}
 			g.logger.Printf("[GOV-PROOF] %s CLI failed: %s", level, detail)
 			return nil, fmt.Errorf("governance proof CLI for %s failed: %s", level, detail)

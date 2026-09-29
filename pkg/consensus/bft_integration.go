@@ -1082,7 +1082,8 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 
 		g1ProofWrapper, g1Err := bv.governanceProofGen.GenerateG1(ctx, govRequest)
 		if g1Err != nil {
-			return nil, fmt.Errorf("%w: G1 governance proof failed for intent %s: %w", ErrGovernanceUnavailable, certenIntent.IntentID, g1Err)
+			class := governanceProofFailureClass(g1Err)
+			return nil, fmt.Errorf("%w: G1 governance proof failed for intent %s: %w", class, certenIntent.IntentID, g1Err)
 		}
 		if g1ProofWrapper == nil || g1ProofWrapper.G1 == nil {
 			return nil, fmt.Errorf("%w: G1 governance proof returned no result for intent %s", ErrGovernanceUnavailable, certenIntent.IntentID)
@@ -1101,7 +1102,8 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 
 		g2ProofWrapper, g2Err := bv.governanceProofGen.GenerateG2(ctx, govRequest)
 		if g2Err != nil {
-			return nil, fmt.Errorf("%w: G2 governance proof failed for intent %s: %w", ErrGovernanceUnavailable, certenIntent.IntentID, g2Err)
+			class := governanceProofFailureClass(g2Err)
+			return nil, fmt.Errorf("%w: G2 governance proof failed for intent %s: %w", class, certenIntent.IntentID, g2Err)
 		}
 		if g2ProofWrapper == nil || g2ProofWrapper.G2 == nil {
 			return nil, fmt.Errorf("%w: G2 governance proof returned no result for intent %s", ErrGovernanceUnavailable, certenIntent.IntentID)
@@ -3352,4 +3354,15 @@ func cometChainIDForFormulaCheck() string {
 		return id
 	}
 	return "certen-testnet"
+}
+
+// governanceProofFailureClass is what a failed G1 or G2 proof says about its intent: a proof that established the
+// authority set did not vote to accept the transaction is a verdict (ErrGovernanceUnsatisfied); any other failure is
+// a proof that could not be produced (ErrGovernanceUnavailable). Every G1/G2 failure used to be the latter, so the
+// unsatisfied class could not be reached from the proofs that decide it (RB4-F62).
+func governanceProofFailureClass(err error) error {
+	if errors.Is(err, proof.ErrGovernanceNotSatisfied) {
+		return ErrGovernanceUnsatisfied
+	}
+	return ErrGovernanceUnavailable
 }

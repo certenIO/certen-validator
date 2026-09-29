@@ -222,18 +222,7 @@ func (g1 *G1Layer) ProveG1(ctx context.Context, request G1Request) (*G1Result, e
 
 	authorizationResult, err := g1.signatureVerifier.ValidateSignatureSet(ctx, validatedSignatures, *authoritySnapshot, g0Result.TxHash, g0Result.G0ProofComplete, request.G0Request.Account, authz, extraAuthorities)
 	if err != nil {
-		// An evidence outage is returned AS-IS, exactly as step 3 does.
-		//
-		// Wrapping it with %v would flatten the typed error to a string, and
-		// IsEvidenceIncomplete upstream would then classify "we could not
-		// establish the page state at execution" as an ordinary authorization
-		// failure - which is to say, as a governance rejection. That is the
-		// conflation this layer spends its whole length avoiding, and it would
-		// have been reintroduced by an error-formatting verb.
-		if inc, ok := IsEvidenceIncomplete(err); ok {
-			return nil, inc
-		}
-		return nil, fmt.Errorf("authorization evaluation failed: %v", err)
+		return nil, authorizationEvaluationFailed(err)
 	}
 
 	// Step 5: Build G1 result
@@ -728,4 +717,22 @@ func (g1 *G1Layer) AnalyzeG1Performance(result *G1Result) map[string]interface{}
 	}
 
 	return analysis
+}
+
+// authorizationEvaluationFailed is how a failed authorization evaluation leaves G1.
+//
+// An evidence outage is returned AS-IS, exactly as step 3 does. Wrapping it with %v would flatten the typed error to
+// a string, and IsEvidenceIncomplete upstream would then classify "we could not establish the page state at
+// execution" as an ordinary authorization failure - which is to say, as a governance rejection. That is the
+// conflation this layer spends its whole length avoiding, and it would have been reintroduced by an error-formatting
+// verb.
+//
+// Everything else is wrapped with %w, never %v: the same verb flattened the opposite case too, so an
+// AuthorizationNotSatisfied verdict reached the process exit as an ordinary failure and was recorded as an outage
+// (RB4-F62).
+func authorizationEvaluationFailed(err error) error {
+	if inc, ok := IsEvidenceIncomplete(err); ok {
+		return inc
+	}
+	return fmt.Errorf("authorization evaluation failed: %w", err)
 }
