@@ -38,7 +38,6 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum"
-	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -122,31 +121,15 @@ func (r *AnchorRepairReport) Clean() bool {
 
 const defaultAnchorRepairDepth = 12
 
-var createBatchAnchorMethod = func() abi.Method {
-	parsed, err := abi.JSON(strings.NewReader(contracts.CertenAnchorV7BatchABI))
+// createBatchAnchorArgs decodes the bundle id and root a createBatchAnchor call of either anchor generation carries,
+// through the one decoder (contracts.DecodeCreateBatchAnchor), which also requires the bundle id to be the one the
+// anchor derives from the call's other arguments on this chain.
+func createBatchAnchorArgs(chainID int64, input []byte) (bundle, root [32]byte, err error) {
+	call, err := contracts.DecodeCreateBatchAnchor(chainID, input)
 	if err != nil {
-		panic(fmt.Sprintf("CertenAnchorV7 batch ABI: %v", err))
+		return bundle, root, fmt.Errorf("the transaction is not a createBatchAnchor call: %w", err)
 	}
-	return parsed.Methods["createBatchAnchor"]
-}()
-
-// createBatchAnchorArgs decodes the bundle id and root a createBatchAnchor call carries.
-func createBatchAnchorArgs(input []byte) (bundle, root [32]byte, err error) {
-	if len(input) < 4 || !bytes.Equal(input[:4], createBatchAnchorMethod.ID) {
-		return bundle, root, errors.New("the transaction is not a createBatchAnchor call")
-	}
-	args, err := createBatchAnchorMethod.Inputs.Unpack(input[4:])
-	if err != nil || len(args) < 2 {
-		return bundle, root, fmt.Errorf("createBatchAnchor calldata does not decode: %v", err)
-	}
-	var ok bool
-	if bundle, ok = args[0].([32]byte); !ok {
-		return bundle, root, errors.New("createBatchAnchor bundleId is not bytes32")
-	}
-	if root, ok = args[1].([32]byte); !ok {
-		return bundle, root, errors.New("createBatchAnchor batchRoot is not bytes32")
-	}
-	return bundle, root, nil
+	return call.BundleID, call.Root, nil
 }
 
 func sameHex(a, b string) bool {
@@ -201,7 +184,7 @@ func confirmAnchor(ctx context.Context, cfg AnchorRepairConfig, anchor database.
 	case reading.BlockNumber == 0 || reading.BlockHash == "":
 		return nil, "the receipt has no block", nil
 	}
-	bundle, root, err := createBatchAnchorArgs(reading.Input)
+	bundle, root, err := createBatchAnchorArgs(anchor.ChainID, reading.Input)
 	if err != nil {
 		return nil, err.Error(), nil
 	}
@@ -329,7 +312,7 @@ func repairAnchor(ctx context.Context, cfg AnchorRepairConfig, anchor database.C
 					label, anchor.AnchorTxHash))
 				return nil
 			}
-			if b, r, err := createBatchAnchorArgs(named.Input); err == nil && named.Succeeded &&
+			if b, r, err := createBatchAnchorArgs(anchor.ChainID, named.Input); err == nil && named.Succeeded &&
 				sameHex(hex.EncodeToString(b[:]), anchor.BundleID) && bytes.Equal(r[:], anchor.Root) {
 				report.Refused = append(report.Refused, fmt.Sprintf("%s: the row names %s and the chain locates %s as this anchor's creation; nothing changed",
 					label, anchor.AnchorTxHash, loc.TxHash))

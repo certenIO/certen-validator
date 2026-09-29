@@ -33,7 +33,7 @@ func TestWriteBackStatesTheCallsTheMemberWasSettledBy(t *testing.T) {
 		t.Fatalf("steps %+v; want the registry's anchor and the observed settlement call", steps)
 	}
 	// The selectors the batch path packs its anchor calls with - not the V3 createAnchor/executeWithGovernance.
-	if steps.step1Selector != hexSel("createBatchAnchor(bytes32,bytes32,uint256,bytes32,uint256)") {
+	if steps.step1Selector != hexSel("createBatchAnchor(bytes32,bytes32,uint256,bytes32,uint256,bytes32,bytes32)") {
 		t.Fatalf("step 1 selector %s is not createBatchAnchor", steps.step1Selector)
 	}
 	if steps.step1Selector == hexSel("createAnchor(bytes32,bytes32,bytes32,bytes32,uint256)") ||

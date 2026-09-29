@@ -38,10 +38,17 @@ type AnchorQuorumEvidence struct {
 	BatchOperationID [32]byte
 	// BatchOperationIDVersion is how BatchOperationID was derived (BatchTree.BatchOperationIDVersion).
 	BatchOperationIDVersion string
-	// MessageHash is what every partial signed: the V6.1 pre-execution message over
-	// (chainID, bundleID, root, batchOperationID, validatorSetRoot).
+	// MessageHash is what every partial signed: the V8.2 pre-execution message over (chainID, bundleID, root,
+	// batchOperationID, SetRoot, AccumulateSetRoot, Incarnation) - ComputeBatchQuorumMessage.
 	MessageHash [32]byte
 	SetRoot     [32]byte
+
+	// AccumulateBlockHeight, AccumulateSetRoot and Incarnation are the rest of what the V8.2 anchor derived its bundle
+	// id from and committed: with Root, the member count and BatchOperationID they let a verifier re-derive BundleID
+	// and MessageHash offline (RB5-F9), and they name the Accumulate validator set and chain the batch was proven on.
+	AccumulateBlockHeight uint64
+	AccumulateSetRoot     [32]byte
+	Incarnation           [32]byte
 
 	/// VerifyTx is the executeComprehensiveProof transaction that carried the aggregate on-chain.
 	VerifyTx string

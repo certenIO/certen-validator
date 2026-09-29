@@ -30,8 +30,8 @@ import (
 // the address it called and the function it called.
 
 var (
-	// batchAnchorCreateSelector is createBatchAnchor, packed from CertenAnchorV7BatchABI (createBatchAnchorMethod).
-	batchAnchorCreateSelector = hex.EncodeToString(createBatchAnchorMethod.ID)
+	// batchAnchorCreateSelector is the V8.2 createBatchAnchor the batch path calls (contracts.CertenAnchorV8_2Batch).
+	batchAnchorCreateSelector = hex.EncodeToString(contracts.CreateBatchAnchorV8_2Selector[:])
 	// batchAnchorProveSelector is executeComprehensiveProof, packed from the CertenAnchorV4 binding the
 	// batch path submits its quorum proof through (BatchProofSubmitter).
 	batchAnchorProveSelector = func() string {

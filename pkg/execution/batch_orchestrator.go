@@ -721,7 +721,7 @@ func (o *BatchOrchestrator) anchorAlreadyAttested(ctx context.Context, bundleID 
 // verifyLeavesAgainstAnchor confirms the deployed anchor stored what we think it did and
 // accepts every member's branch.
 func (o *BatchOrchestrator) verifyLeavesAgainstAnchor(ctx context.Context, tree *BatchTree) error {
-	anchor, err := contracts.NewCertenAnchorV7Batch(o.anchorV7, o.ecm.client)
+	anchor, err := contracts.NewCertenAnchorV8_2Batch(o.anchorV7, o.ecm.client)
 	if err != nil {
 		return fmt.Errorf("binding anchor: %w", err)
 	}
@@ -770,6 +770,18 @@ func (o *BatchOrchestrator) verifyLeavesAgainstAnchor(ctx context.Context, tree 
 			"(re-read %d times, so this is not RPC lag)", count, tree.Size(), 6)
 	}
 
+	// The anchor committed exactly the Accumulate validator set and incarnation this tree carries: the fields the
+	// quorum's message covers and a verifier reads back (RB5).
+	stored, serr := anchor.Anchors(opts, tree.BundleID)
+	if serr != nil {
+		return fmt.Errorf("reading anchor 0x%x: %w", tree.BundleID[:8], serr)
+	}
+	if stored.AccumulateValidatorSetRoot != tree.AccumulateSetRoot || stored.AccumulateIncarnation != tree.Incarnation {
+		return fmt.Errorf("anchor 0x%x committed Accumulate set %x under incarnation %x; the tree carries %x under %x",
+			tree.BundleID[:8], stored.AccumulateValidatorSetRoot[:8], stored.AccumulateIncarnation[:8],
+			tree.AccumulateSetRoot[:8], tree.Incarnation[:8])
+	}
+
 	for i := range tree.Leaves {
 		branch, berr := tree.BranchFor(i)
 		if berr != nil {
@@ -788,7 +800,7 @@ func (o *BatchOrchestrator) verifyLeavesAgainstAnchor(ctx context.Context, tree 
 
 // createBatchAnchor submits the anchor and waits for it to mine.
 func (o *BatchOrchestrator) createBatchAnchor(ctx context.Context, tree *BatchTree) (anchorCreation, error) {
-	anchor, err := contracts.NewCertenAnchorV7Batch(o.anchorV7, o.ecm.client)
+	anchor, err := contracts.NewCertenAnchorV8_2Batch(o.anchorV7, o.ecm.client)
 	if err != nil {
 		return anchorCreation{}, err
 	}
@@ -824,6 +836,8 @@ func (o *BatchOrchestrator) createBatchAnchor(ctx context.Context, tree *BatchTr
 				big.NewInt(int64(tree.Size())),
 				tree.BatchOperationID,
 				new(big.Int).SetUint64(tree.BlockHeight),
+				tree.AccumulateSetRoot,
+				tree.Incarnation,
 			)
 		}, nil)
 	if err != nil {
@@ -884,7 +898,7 @@ func (o *BatchOrchestrator) existingAnchorCreation(ctx context.Context, tree *Ba
 	if err != nil {
 		return anchorCreation{}, readErr(fmt.Errorf("reading anchor 0x%x's create transaction %s: %w", tree.BundleID[:8], loc.TxHash, err))
 	}
-	bundle, root, derr := createBatchAnchorArgs(reading.Input)
+	bundle, root, derr := createBatchAnchorArgs(tree.ChainID, reading.Input)
 	switch {
 	case !reading.Found || !reading.Succeeded || reading.BlockNumber != loc.Block:
 		return anchorCreation{}, readErr(fmt.Errorf("anchor 0x%x's located create transaction %s reads as found=%v succeeded=%v in block %d, not block %d",

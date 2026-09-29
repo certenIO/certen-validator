@@ -221,9 +221,10 @@ func (a *BatchQuorumAttestor) prove(
 	if err != nil {
 		return fmt.Errorf("validator-set root: %w", err)
 	}
-	msgHash := contracts.ComputeEvmMessageHashV6_1_Pre(
-		chainID, tree.BundleID, tree.Root, tree.BatchOperationID, setRoot,
-	)
+	msgHash, err := ComputeBatchQuorumMessage(tree, setRoot)
+	if err != nil {
+		return fmt.Errorf("batch 0x%x: %w", tree.BundleID[:8], err)
+	}
 
 	// ---- This validator's own partial ---------------------------------------
 	km := bls.GetValidatorBLSKey()
@@ -333,6 +334,9 @@ func (a *BatchQuorumAttestor) prove(
 			BatchOperationIDVersion: tree.BatchOperationIDVersion,
 			MessageHash:             msgHash,
 			SetRoot:                 setRoot,
+			AccumulateBlockHeight:   tree.BlockHeight,
+			AccumulateSetRoot:       tree.AccumulateSetRoot,
+			Incarnation:             tree.Incarnation,
 			VerifyTx:                verifyTx,
 			VerifyBlock:             int64(verifyBlockNum),
 			VerifySender:            verifySender,
@@ -417,13 +421,25 @@ func (a *BatchQuorumAttestor) ProveBatchRootOnDemand(
 	return err
 }
 
-// ComputeBatchQuorumMessage is the message a batch quorum signs, exported so an operator or a
-// test can reproduce independently what the validator set actually attested to.
+// ComputeBatchQuorumMessage is THE message a batch quorum signs - the leader, the cadence peer and the on-demand peer
+// all call it - exported so an operator or a test can reproduce what the validator set attested to. It is exactly
+// what CertenAnchorV8_2._verifyBLSProof reconstructs for a batch anchor:
+//
+//	keccak256(abi.encode(bytes32("certen:bls:v2:pre"), chainId, bundleId, batchRoot, batchOperationID,
+//	                     currentValidatorSetRoot, accumulateValidatorSetRoot, accumulateIncarnation))
+//
+// A tree without the Accumulate half is refused: the anchor would reject it at creation, and a signature over a
+// zero field is a weaker claim wearing the same shape as the real one.
 func ComputeBatchQuorumMessage(tree *BatchTree, setRoot [32]byte) ([32]byte, error) {
 	if tree == nil {
 		return [32]byte{}, fmt.Errorf("nil tree")
 	}
-	return contracts.ComputeEvmMessageHashV6_1_Pre(
+	if tree.AccumulateSetRoot == ([32]byte{}) || tree.Incarnation == ([32]byte{}) {
+		return [32]byte{}, fmt.Errorf("%w: the tree 0x%x carries no Accumulate validator set root or incarnation",
+			ErrNoAccumulateSetRoot, tree.BundleID[:8])
+	}
+	return contracts.ComputeEvmMessageHashV8_2_Pre(
 		tree.ChainID, tree.BundleID, tree.Root, tree.BatchOperationID, setRoot,
+		tree.AccumulateSetRoot, tree.Incarnation,
 	), nil
 }

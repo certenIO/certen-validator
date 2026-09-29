@@ -167,3 +167,43 @@ func TestV8_2Batch_StackRequiresTheIncarnation(t *testing.T) {
 		t.Fatal("a batch stack was assembled without the Accumulate incarnation")
 	}
 }
+
+// THE batch message: the V8.2 pre-exec formula over the tree, identical to the consensus helper, and never a message
+// over a tree without the Accumulate half. Pinned against an independent Python computation (RUNLOG_RB5).
+func TestV8_2Batch_QuorumMessage(t *testing.T) {
+	tree, err := BuildBatchTree(vecChainID, []BatchLeafInput{v82Input(1), v82Input(2)}, vecHeight, testIncarnation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	setRoot := b32(0x44)
+	msg, err := ComputeBatchQuorumMessage(tree, setRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := contracts.ComputeEvmMessageHashV8_2_Pre(vecChainID, tree.BundleID, tree.Root, tree.BatchOperationID, setRoot, testAccSet, testIncarnation)
+	if msg != want {
+		t.Fatal("the batch message is not the V8.2 pre-exec message")
+	}
+	if consensus.ComputeBatchPreExecMessage(vecChainID, tree.BundleID, tree.Root, tree.BatchOperationID, setRoot, testAccSet, testIncarnation) != msg {
+		t.Fatal("the consensus helper computes a different batch message")
+	}
+	// A fixed tree's message, pinned: bundle/root/op/set/acc/inc as below on sepolia.
+	fixed := &BatchTree{ChainID: vecChainID, BundleID: b32(1), Root: b32(2), BatchOperationID: b32(3), AccumulateSetRoot: testAccSet, Incarnation: testIncarnation}
+	got, err := ComputeBatchQuorumMessage(fixed, b32(4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hex.EncodeToString(got[:]) != "265622b496437a77802078d8780f41d43a49a1963ea781b0455036fdd842d7d9" {
+		t.Fatalf("pinned batch message: got %x", got)
+	}
+	for name, mut := range map[string]func(*BatchTree){
+		"no set root":    func(x *BatchTree) { x.AccumulateSetRoot = [32]byte{} },
+		"no incarnation": func(x *BatchTree) { x.Incarnation = [32]byte{} },
+	} {
+		c := *tree
+		mut(&c)
+		if _, err := ComputeBatchQuorumMessage(&c, setRoot); !errors.Is(err, ErrNoAccumulateSetRoot) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}

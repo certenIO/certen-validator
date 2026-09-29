@@ -3,19 +3,14 @@
 package execution
 
 import (
-	"bytes"
 	"context"
 	"fmt"
+	"github.com/certen/independant-validator/pkg/execution/contracts"
 	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
 )
-
-// createBatchAnchorSelector is CertenAnchorV8_1/V8_2 createBatchAnchor(bytes32 bundleId, bytes32 batchRoot,
-// uint256 leafCount, bytes32 batchOperationID, uint256 accumulateBlockHeight).
-var createBatchAnchorSelector = crypto.Keccak256([]byte("createBatchAnchor(bytes32,bytes32,uint256,bytes32,uint256)"))[:4]
 
 // Layer5OnlineCheck is what VerifyLayer5Online read from the chain.
 type Layer5OnlineCheck struct {
@@ -23,6 +18,11 @@ type Layer5OnlineCheck struct {
 	BundleID         string
 	BatchRoot        string
 	BatchOperationID string
+	// AnchorVersion is the generation of the createBatchAnchor call ("v8_1", "v8_2"). On a V8.2 call the anchor also
+	// committed AccumulateSetRoot and Incarnation; both are empty on a V8.1 call, which committed neither.
+	AnchorVersion     string
+	AccumulateSetRoot string
+	Incarnation       string
 }
 
 // VerifyLayer5Online is the online half of layer 5: the anchor-create transaction the layer names mined, called
@@ -60,12 +60,19 @@ func VerifyLayer5Online(ctx context.Context, rpcURL string, l5 *Layer5) (*Layer5
 	if tx.To() != nil {
 		out.AnchorContract = strings.ToLower(tx.To().Hex())
 	}
-	call, err := decodeCreateBatchAnchor(tx.Data())
+	if tx.ChainId() == nil || !tx.ChainId().IsInt64() {
+		return out, fmt.Errorf("anchor transaction %s names no chain id", l5.AnchorTx)
+	}
+	call, err := contracts.DecodeCreateBatchAnchor(tx.ChainId().Int64(), tx.Data())
 	if err != nil {
 		return out, fmt.Errorf("anchor transaction %s: %w", l5.AnchorTx, err)
 	}
-	out.BundleID, out.BatchRoot, out.BatchOperationID = hexPrefixed(call.bundleID[:]), hexPrefixed(call.root[:]),
-		hexPrefixed(call.batchOpID[:])
+	out.BundleID, out.BatchRoot, out.BatchOperationID = hexPrefixed(call.BundleID[:]), hexPrefixed(call.Root[:]),
+		hexPrefixed(call.BatchOperationID[:])
+	out.AnchorVersion = string(call.Version)
+	if call.Version == contracts.BatchAnchorV8_2 {
+		out.AccumulateSetRoot, out.Incarnation = hexPrefixed(call.AccumulateSetRoot[:]), hexPrefixed(call.Incarnation[:])
+	}
 	if !strings.EqualFold(strings.TrimPrefix(l5.BatchRoot, "0x"), strings.TrimPrefix(out.BatchRoot, "0x")) {
 		return out, fmt.Errorf("anchor transaction %s published root %s, the layer names %s", l5.AnchorTx, out.BatchRoot, l5.BatchRoot)
 	}
@@ -74,44 +81,4 @@ func VerifyLayer5Online(ctx context.Context, rpcURL string, l5 *Layer5) (*Layer5
 			l5.AnchorTx, out.BatchOperationID, l5.Governance.BatchOperationID)
 	}
 	return out, nil
-}
-
-type batchAnchorCall struct {
-	bundleID, root, batchOpID [32]byte
-	leafCount, height         uint64
-}
-
-// decodeCreateBatchAnchor reads createBatchAnchor calldata: the selector and five 32-byte words.
-func decodeCreateBatchAnchor(data []byte) (*batchAnchorCall, error) {
-	if len(data) != 4+5*32 {
-		return nil, fmt.Errorf("calldata is %d bytes, not a createBatchAnchor call", len(data))
-	}
-	if !bytes.Equal(data[:4], createBatchAnchorSelector) {
-		return nil, fmt.Errorf("calldata selector %x is not createBatchAnchor", data[:4])
-	}
-	w := func(i int) []byte { return data[4+32*i : 4+32*(i+1)] }
-	c := &batchAnchorCall{}
-	copy(c.bundleID[:], w(0))
-	copy(c.root[:], w(1))
-	copy(c.batchOpID[:], w(3))
-	for _, i := range []int{2, 4} {
-		word := w(i)
-		for _, b := range word[:24] {
-			if b != 0 {
-				return nil, fmt.Errorf("calldata word %d does not fit in 64 bits", i)
-			}
-		}
-	}
-	c.leafCount = uint64Word(w(2))
-	c.height = uint64Word(w(4))
-	return c, nil
-}
-
-// uint64Word is a 32-byte big-endian word whose value fits in 64 bits (checked by the caller).
-func uint64Word(word []byte) uint64 {
-	var v uint64
-	for _, b := range word[24:] {
-		v = v<<8 | uint64(b)
-	}
-	return v
 }

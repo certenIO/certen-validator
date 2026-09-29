@@ -59,10 +59,14 @@ func ComputeBatchPreExecMessage(
 	batchRoot [32]byte,
 	batchOperationID [32]byte,
 	validatorSetRoot [32]byte,
+	accumulateValidatorSetRoot [32]byte,
+	accumulateIncarnation [32]byte,
 ) [32]byte {
-	// executionCommitment slot carries the batch root — see createBatchAnchor.
-	return contracts.ComputeEvmMessageHashV6_1_Pre(
+	// executionCommitment slot carries the batch root — see createBatchAnchor. The Accumulate half is what
+	// CertenAnchorV8_2 adds (RB5): the set every member's L4 was verified against, and which chain that is.
+	return contracts.ComputeEvmMessageHashV8_2_Pre(
 		chainID, bundleID, batchRoot, batchOperationID, validatorSetRoot,
+		accumulateValidatorSetRoot, accumulateIncarnation,
 	)
 }
 

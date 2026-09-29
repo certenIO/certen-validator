@@ -268,21 +268,7 @@ func DeriveBatchBundleID(
 	batchOperationID [32]byte,
 	accumulateBlockHeight uint64,
 ) [32]byte {
-	w := func(v *big.Int) []byte {
-		b := make([]byte, 32)
-		v.FillBytes(b)
-		return b
-	}
-
-	packed := make([]byte, 0, len(BatchBundleDomain)+160)
-	packed = append(packed, []byte(BatchBundleDomain)...)
-	packed = append(packed, w(big.NewInt(chainID))...)
-	packed = append(packed, batchRoot[:]...)
-	packed = append(packed, w(new(big.Int).SetUint64(leafCount))...)
-	packed = append(packed, batchOperationID[:]...)
-	packed = append(packed, w(new(big.Int).SetUint64(accumulateBlockHeight))...)
-
-	return ethcrypto.Keccak256Hash(packed)
+	return contracts.DeriveV8_1BatchBundleID(chainID, batchRoot, leafCount, batchOperationID, accumulateBlockHeight)
 }
 
 // DeriveBatchOperationID is the v1 batch operation id: the member operationIDs alone. Batches are formed with

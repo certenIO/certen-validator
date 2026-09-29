@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/certen/independant-validator/pkg/execution/contracts"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -145,15 +147,16 @@ func newCreatedAnchorChain(t *testing.T, signer *ecdsa.PrivateKey) *createdAncho
 		chainID: 84532, anchor: common.HexToAddress("0x00000000000000000000000000000000000a1c40"),
 		times: make([]uint64, 600), createdIn: 431,
 		creator: crypto.PubkeyToAddress(testKey("anchor creator").PublicKey),
-		bundle:  [32]byte{0xb0}, root: [32]byte{0x0e},
+		root:    [32]byte{0x0e},
 	}
+	c.bundle = v82CreateBundle(c.chainID, c.root)
 	for i := range c.times {
 		c.times[i] = 1_790_000_000 + uint64(i)*2
 	}
 	anchor := c.anchor
 	tx, err := types.SignNewTx(signer, types.LatestSignerForChainID(big.NewInt(c.chainID)), &types.DynamicFeeTx{
 		ChainID: big.NewInt(c.chainID), Nonce: 3, GasTipCap: big.NewInt(1), GasFeeCap: big.NewInt(2), Gas: 500000,
-		To: &anchor, Data: createBatchAnchorCall(t, c.bundle, c.root),
+		To: &anchor, Data: v82CreateCall(c.chainID, c.root),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -195,4 +198,25 @@ func TestALocatedCreateTransactionMustBeSignedByTheRecordedCreator(t *testing.T)
 	if IsChainReadError(err) {
 		t.Fatal("a contradiction was reported as an unread chain - it would be retried for ever as if transient")
 	}
+}
+
+// v82CreateOpID and v82CreateHeight are the created anchor's one-member V8.2 batch, committing the fixture's Accumulate
+// set and incarnation; its bundle is the one those arguments derive, as a real V8.2 anchor's is.
+var v82CreateOpID = [32]byte{0x0f}
+
+const v82CreateHeight = 9360888
+
+func v82CreateBundle(chainID int64, root [32]byte) [32]byte {
+	return contracts.DeriveV8_2BatchBundleID(chainID, root, 1, v82CreateOpID, v82CreateHeight, testAccSet, testIncarnation)
+}
+
+// v82CreateCall is that anchor's createBatchAnchor calldata (seven arguments).
+func v82CreateCall(chainID int64, root [32]byte) []byte {
+	w := func(v uint64) []byte { b := make([]byte, 32); new(big.Int).SetUint64(v).FillBytes(b); return b }
+	bundle := v82CreateBundle(chainID, root)
+	d := append([]byte{}, contracts.CreateBatchAnchorV8_2Selector[:]...)
+	for _, x := range [][]byte{bundle[:], root[:], w(1), v82CreateOpID[:], w(v82CreateHeight), testAccSet[:], testIncarnation[:]} {
+		d = append(d, x...)
+	}
+	return d
 }

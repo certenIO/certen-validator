@@ -51,6 +51,8 @@ type OnDemandAttestationRequest struct {
 	// GovernanceCommitment is the proposer's commitment for the member, for DIAGNOSIS only (see
 	// BatchAttestationRequest.Members). omitempty: an older proposer sends none.
 	GovernanceCommitment string `json:"governance_commitment,omitempty"`
+	// AccumulateSetRoot is the proposer's Accumulate validator set root for the member, for DIAGNOSIS only.
+	AccumulateSetRoot string `json:"accumulate_set_root,omitempty"`
 }
 
 // HandleOnDemandAttestationRequest is the peer-side handler.
@@ -168,6 +170,11 @@ func (s *BatchStack) HandleOnDemandAttestationRequest(
 			return refuseWith(CodeGovernanceMismatch, "governance disagreement on a one-member batch: %s - "+
 				"refusing to attest who authorised it when this validator's proof says otherwise", why)
 		}
+		if why := accumulateSetDisagreement([]MemberGovernance{{OperationID: req.OperationID,
+			AccumulateSetRoot: req.AccumulateSetRoot}}, map[[32]byte][32]byte{in.OperationID: in.AccumulateSetRoot}); why != "" {
+			return refuseWith(CodeAccumulateSetMismatch, "Accumulate validator-set disagreement on a one-member batch: %s - "+
+				"refusing to attest a set this validator's proof does not reach", why)
+		}
 		return refuseWith(CodeBundleMismatch,
 			"bundleId mismatch on a ONE-MEMBER batch: proposer %s, this validator derived %s "+
 				"for operationID %s at height %d — the two nodes disagree about the intent "+
@@ -176,15 +183,16 @@ func (s *BatchStack) HandleOnDemandAttestationRequest(
 			member.CommitHeight)
 	}
 
-	// ---- Sign the same 6-field pre-exec message the contract reconstructs -------
+	// ---- Sign the same V8.2 pre-exec message the contract reconstructs -----------
 	// Identical to the period path: one anchor is one anchor, whatever formed it.
 	setRoot, err := contracts.GetV6_1ValidatorSetRoot()
 	if err != nil {
 		return refuseWith(CodeNotReady, "validator-set root: %v", err)
 	}
-	msgHash := contracts.ComputeEvmMessageHashV6_1_Pre(
-		req.ChainID, tree.BundleID, tree.Root, tree.BatchOperationID, setRoot,
-	)
+	msgHash, err := ComputeBatchQuorumMessage(tree, setRoot)
+	if err != nil {
+		return refuseWith(CodeRefused, "%v", err)
+	}
 	resp.MessageHash = "0x" + hex.EncodeToString(msgHash[:])
 
 	km := bls.GetValidatorBLSKey()
