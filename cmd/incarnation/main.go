@@ -19,22 +19,8 @@ import (
 	"os"
 	"time"
 
-	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3/jsonrpc"
-
-	chained_proof "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/working-proof_do_not_edit"
 	certenproof "github.com/certen/independant-validator/pkg/proof"
 )
-
-// layer4Genesis adapts the lite client's Layer4 builder: the genesis anchor is an ordinary Directory anchor, so its
-// signed delivery is built and checked by exactly the code every CERTEN proof's L4 uses.
-type layer4Genesis struct{ b *chained_proof.Layer4Builder }
-
-func (g layer4Genesis) BuildGenesisDNLeg(ctx context.Context, bvn, root, state string) (*chained_proof.Layer4, error) {
-	// The genesis anchor is position 0 of the Directory's anchor-sequence (BuildIncarnationEvidence reads it there).
-	return g.b.BuildDNLegAtSequence(ctx, bvn, 0,
-		chained_proof.Layer2{DNRootChainAnchor: root, DNMinorBlockIndex: 1},
-		chained_proof.Layer3{DNStateTreeAnchor: state})
-}
 
 func main() {
 	endpoint := flag.String("endpoint", "https://kermit.accumulatenetwork.io/v3", "Accumulate v3 endpoint")
@@ -62,7 +48,7 @@ func main() {
 		fmt.Printf("Fetching from %s\n\n", *endpoint)
 		var err error
 		ev, err = certenproof.BuildIncarnationEvidence(ctx, certenproof.NewHTTPQuerier(*endpoint),
-			layer4Genesis{chained_proof.NewLayer4Builder(jsonrpc.NewClient(*endpoint), false)}, *endpoint, *bvn)
+			certenproof.NewLiveGenesisLegBuilder(*endpoint), *endpoint, *bvn)
 		if err != nil {
 			fmt.Printf("COULD NOT DERIVE\n  %v\n", err)
 			os.Exit(1)

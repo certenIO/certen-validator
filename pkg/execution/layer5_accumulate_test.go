@@ -97,7 +97,7 @@ func TestL5Ext_VerdictsCarryThrough(t *testing.T) {
 	b := loadBinding(t)
 	set, thr := assertedFrom(t, b)
 	pin := b.Incarnation
-	other := "672f89ffc3cc87cff9a7fea1529ec893ec775e49e0cf4da1ab9c927979176e17"
+	other := "90721b40a0114a1c6d1a22b95d47e168e8c5d8c4fbc885f7cd36c6fe07fc91c0"
 
 	cases := []struct {
 		name  string
@@ -140,7 +140,7 @@ func TestL5Ext_RefusesInconsistentEvidence(t *testing.T) {
 			b.ValidatorSetRoot = strings.Repeat("ab", 32)
 		},
 		"binding and proof name different incarnations": func(b *AccumulateBinding) {
-			b.Incarnation = "672f89ffc3cc87cff9a7fea1529ec893ec775e49e0cf4da1ab9c927979176e17"
+			b.Incarnation = "90721b40a0114a1c6d1a22b95d47e168e8c5d8c4fbc885f7cd36c6fe07fc91c0"
 		},
 	}
 	for name, mutate := range cases {

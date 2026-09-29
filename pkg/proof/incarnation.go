@@ -59,6 +59,7 @@ import (
 	"strings"
 
 	"github.com/ethereum/go-ethereum/crypto"
+	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3/jsonrpc"
 
 	chained_proof "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/working-proof_do_not_edit"
 	"gitlab.com/accumulatenetwork/accumulate/protocol"
@@ -438,6 +439,22 @@ func verifyGenesisOnly(a *AccountStateProof, main0 *ChainEntryEvidence, txHex, a
 // interface so the offline tests can supply a recorded leg; cmd/incarnation wires chained_proof.Layer4Builder.
 type GenesisLegBuilder interface {
 	BuildGenesisDNLeg(ctx context.Context, bvn string, rootChainAnchor, stateTreeAnchor string) (*chained_proof.Layer4, error)
+}
+
+// liveGenesisLegs builds the genesis anchor's signed delivery with the lite client's Layer4 builder: the genesis
+// anchor is an ordinary Directory anchor, so it is built and checked by exactly the code every CERTEN proof's L4 uses.
+type liveGenesisLegs struct{ b *chained_proof.Layer4Builder }
+
+// NewLiveGenesisLegBuilder returns the GenesisLegBuilder that reads a v3 endpoint.
+func NewLiveGenesisLegBuilder(endpoint string) GenesisLegBuilder {
+	return liveGenesisLegs{chained_proof.NewLayer4Builder(jsonrpc.NewClient(endpoint), false)}
+}
+
+func (g liveGenesisLegs) BuildGenesisDNLeg(ctx context.Context, bvn, root, state string) (*chained_proof.Layer4, error) {
+	// The genesis anchor is position 0 of the Directory's anchor-sequence (BuildIncarnationEvidence reads it there).
+	return g.b.BuildDNLegAtSequence(ctx, bvn, 0,
+		chained_proof.Layer2{DNRootChainAnchor: root, DNMinorBlockIndex: protocol.GenesisBlock},
+		chained_proof.Layer3{DNStateTreeAnchor: state})
 }
 
 // BuildIncarnationEvidence fetches and self-verifies the evidence. deliveryBVN names the BVN whose anchor pool the

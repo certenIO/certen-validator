@@ -236,8 +236,8 @@ type AccountStateProof struct {
 // without a commitment to how many were required cannot tell a real quorum from
 // three arbitrary keys.
 type ValidatorSetProof struct {
-	// Incarnation is the genesis root anchor of the Accumulate chain this proof
-	// is about — anchor(directory)-root[0]. Nothing in an L4 leg identifies its
+	// Incarnation is the v1 incarnation identity of the Accumulate chain this
+	// proof is about (docs/l4/INCARNATION_ANCHOR.md). Nothing in an L4 leg identifies its
 	// chain: the signed preimage is a SequencedMessage over a PartitionAnchor,
 	// and every URL in it is a protocol constant identical across MainNet,
 	// Kermit, and every incarnation of both.

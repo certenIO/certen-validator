@@ -99,18 +99,19 @@ func (q *HTTPQuerier) Query(ctx context.Context, params any) (json.RawMessage, e
 //
 // It fetches, for acc://dn.acme/network and acc://dn.acme/globals: the account
 // state with its BPT membership receipt, and the chain list with each chain's
-// merkle state. It also fetches the incarnation identity —
-// anchor(directory)-root[0], the genesis root anchor — which is the only value
-// measured to differ between chains and which nothing in an L4 leg carries.
+// merkle state. The incarnation is SUPPLIED: it is the v1 incarnation identity
+// (docs/l4/INCARNATION_ANCHOR.md) of the network being read, which the caller
+// derives from the same endpoint with BuildIncarnationEvidence. Nothing in an L4
+// leg carries it.
 //
 // The two accounts MUST land on the same BPT root or Verify refuses them: the
 // set and the threshold have to have coexisted. Because both queries hit a
 // moving chain, this retries until they agree.
-func BuildValidatorSetProof(ctx context.Context, q AccumulateQuerier) (*ValidatorSetProof, error) {
-	inc, err := fetchIncarnation(ctx, q)
-	if err != nil {
-		return nil, fmt.Errorf("incarnation: %w", err)
+func BuildValidatorSetProof(ctx context.Context, q AccumulateQuerier, incarnation [32]byte) (*ValidatorSetProof, error) {
+	if incarnation == ([32]byte{}) {
+		return nil, fmt.Errorf("incarnation: required; derive it with BuildIncarnationEvidence")
 	}
+	inc := hex.EncodeToString(incarnation[:])
 
 	const attempts = 5
 	var lastErr error
@@ -153,33 +154,6 @@ func BuildValidatorSetProof(ctx context.Context, q AccumulateQuerier) (*Validato
 	}
 	return nil, fmt.Errorf("could not read both accounts at one block after %d attempts: %w",
 		attempts, lastErr)
-}
-
-// fetchIncarnation reads anchor(directory)-root[0] — the genesis root anchor.
-//
-// It is fetched BY INDEX deliberately. The by-hash form fails for genesis-era
-// entries on every node, including one built from scratch: ElementIndex is a
-// locally derived index record and genesis entries never receive one.
-func fetchIncarnation(ctx context.Context, q AccumulateQuerier) (string, error) {
-	raw, err := q.Query(ctx, map[string]any{
-		"scope": "acc://dn.acme/anchors",
-		"query": map[string]any{
-			"queryType": "chain", "name": "anchor(directory)-root", "index": 0,
-		},
-	})
-	if err != nil {
-		return "", err
-	}
-	var rec struct {
-		Entry string `json:"entry"`
-	}
-	if err := json.Unmarshal(raw, &rec); err != nil {
-		return "", err
-	}
-	if _, err := chained_proof.MustHex32Lower(rec.Entry, "incarnation"); err != nil {
-		return "", err
-	}
-	return strings.ToLower(rec.Entry), nil
 }
 
 func fetchAccountStateProof(ctx context.Context, q AccumulateQuerier, url string) (*AccountStateProof, error) {
