@@ -43,6 +43,9 @@ func anchorRepoForTest(t *testing.T) *BatchRepository {
 // measure the first run's row instead of this one's.
 var bundleRunNonce = uuid.New()
 
+// testMemberGovernance is a member's governance commitment (RB4-F66).
+var testMemberGovernance = "0x" + strings.Repeat("ab", 32)
+
 func bundleHex(n int) string {
 	nonce := strings.ReplaceAll(bundleRunNonce.String(), "-", "") // 32 hex chars
 	return fmt.Sprintf("0x%s%s%08x", nonce, nonce[:24], n)        // 32 + 24 + 8 = 64
@@ -56,17 +59,19 @@ func anchorRecordForTest(chainID int64, bundle string, rootByte byte) *AnchorQuo
 	leaf := make([]byte, 32)
 	leaf[0] = 0x11
 	return &AnchorQuorumRecord{
-		ChainID:            chainID,
-		BundleID:           bundle,
-		Root:               root,
-		BatchOperationID:   bundleHex(999),
-		MessageHash:        bundleHex(888),
-		AnchorCreateTx:     "0x51a1c0de" + strings.Repeat("00", 28), // a real hash is 0x + 64 hex chars
-		VerifyTx:           "0xbeef" + strings.Repeat("11", 30),
-		VerifyBlock:        45943100,
-		VerifiedAt:         time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC),
-		AggregateSignature: []byte{0xab, 0xcd},
-		AggregatePubKey:    []byte{0x12, 0x34},
+		ChainID:          chainID,
+		BundleID:         bundle,
+		Root:             root,
+		BatchOperationID: bundleHex(999),
+		// A v2 anchor: its operation id commits to every member's governance decision (RB4-F66).
+		BatchOperationIDVersion: "v2",
+		MessageHash:             bundleHex(888),
+		AnchorCreateTx:          "0x51a1c0de" + strings.Repeat("00", 28), // a real hash is 0x + 64 hex chars
+		VerifyTx:                "0xbeef" + strings.Repeat("11", 30),
+		VerifyBlock:             45943100,
+		VerifiedAt:              time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC),
+		AggregateSignature:      []byte{0xab, 0xcd},
+		AggregatePubKey:         []byte{0x12, 0x34},
 		Signers: []AnchorQuorumSigner{
 			{Address: "0xaaa", VotingPower: big.NewInt(100)},
 			{Address: "0xbbb", VotingPower: big.NewInt(100)},
@@ -77,13 +82,14 @@ func anchorRecordForTest(chainID int64, bundle string, rootByte byte) *AnchorQuo
 		EvidenceSource:    "live",
 		TargetChain:       "base-sepolia",
 		Members: []AnchorQuorumMemberRecord{{
-			IntentID:    "f6cea77e-0000-0000-0000-000000000001",
-			AccumTxHash: "member-" + bundle,
-			ADIURL:      "acc://fictional-payer.acme",
-			OperationID: bundleHex(777),
-			Leaf:        leaf,
-			LeafIndex:   0,
-			Branch:      []MerklePathNode{{Hash: strings.Repeat("22", 32), Position: "right"}},
+			IntentID:             "f6cea77e-0000-0000-0000-000000000001",
+			AccumTxHash:          "member-" + bundle,
+			ADIURL:               "acc://fictional-payer.acme",
+			OperationID:          bundleHex(777),
+			GovernanceCommitment: testMemberGovernance,
+			Leaf:                 leaf,
+			LeafIndex:            0,
+			Branch:               []MerklePathNode{{Hash: strings.Repeat("22", 32), Position: "right"}},
 		}},
 	}
 }
@@ -468,11 +474,13 @@ func TestLayer5BindingFindsTheCanonicalRowByIntentWhenTheAccumHashIsOnlyOnShadow
 	rec.AnchorCreateTx = anchorCreateTx
 	// Exactly as the live writer produces it: a member with an intent id and NO Accumulate tx hash.
 	rec.Members = []AnchorQuorumMemberRecord{{
-		IntentID:    intentID,
-		AccumTxHash: "",
-		ADIURL:      "acc://fictional-payer.acme",
-		Leaf:        rec.Root,
-		LeafIndex:   0,
+		IntentID:             intentID,
+		AccumTxHash:          "",
+		ADIURL:               "acc://fictional-payer.acme",
+		OperationID:          bundleHex(7759),
+		GovernanceCommitment: testMemberGovernance,
+		Leaf:                 rec.Root,
+		LeafIndex:            0,
 	}}
 	if _, err := repo.RecordAnchorQuorum(ctx, rec); err != nil {
 		t.Fatal(err)
@@ -621,19 +629,20 @@ func TestCanonicalMemberRowCarriesTheAccumulateTransactionAndLeg(t *testing.T) {
 	const accumTx = "3e595d2c526dfacb5e332cd11f4f0306d2648cf1291bed63a9bcfd6ef44a7a12"
 	rec := anchorRecordForTest(84532, bundleHex(3101), 0xc1)
 	rec.Members = []AnchorQuorumMemberRecord{{
-		IntentID:    "intent-canonical-rich",
-		AccumTxHash: accumTx,
-		ADIURL:      "acc://spk-cust-tcl1.acme",
-		OperationID: "0x" + strings.Repeat("01", 32),
-		Leaf:        rec.Root,
-		LeafIndex:   0,
-		FromChain:   "accumulate",
-		ToChain:     "base-sepolia",
-		FromAddress: "0x9cc158f77DAdF9a605E141262338c89588825f6c",
-		ToAddress:   "0x12dD00C619C1Ac3F58eC68ed44ec1023fE33B9Ff",
-		Amount:      "0",
-		TokenSymbol: "ETH",
-		UserID:      "acc://spk-cust-tcl1.acme",
+		IntentID:             "intent-canonical-rich",
+		AccumTxHash:          accumTx,
+		ADIURL:               "acc://spk-cust-tcl1.acme",
+		OperationID:          "0x" + strings.Repeat("01", 32),
+		GovernanceCommitment: testMemberGovernance,
+		Leaf:                 rec.Root,
+		LeafIndex:            0,
+		FromChain:            "accumulate",
+		ToChain:              "base-sepolia",
+		FromAddress:          "0x9cc158f77DAdF9a605E141262338c89588825f6c",
+		ToAddress:            "0x12dD00C619C1Ac3F58eC68ed44ec1023fE33B9Ff",
+		Amount:               "0",
+		TokenSymbol:          "ETH",
+		UserID:               "acc://spk-cust-tcl1.acme",
 	}}
 
 	if _, err := repo.RecordAnchorQuorum(ctx, rec); err != nil {
@@ -671,6 +680,7 @@ func TestCanonicalMemberRowAcceptsMissingProvenance(t *testing.T) {
 	rec := anchorRecordForTest(84532, bundleHex(3102), 0xc2)
 	rec.Members = []AnchorQuorumMemberRecord{{
 		IntentID: "intent-bare", ADIURL: "acc://bare.acme", Leaf: rec.Root, LeafIndex: 0,
+		OperationID: bundleHex(3103), GovernanceCommitment: testMemberGovernance,
 	}}
 	if _, err := repo.RecordAnchorQuorum(ctx, rec); err != nil {
 		t.Fatalf("a member with no provenance could not be written: %v", err)

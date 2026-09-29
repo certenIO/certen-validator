@@ -48,6 +48,9 @@ type OnDemandAttestationRequest struct {
 	// BundleID is what the proposer derived, for comparison ONLY — never to build from.
 	BundleID   string `json:"bundle_id"`
 	ProposerID string `json:"proposer_id"`
+	// GovernanceCommitment is the proposer's commitment for the member, for DIAGNOSIS only (see
+	// BatchAttestationRequest.Members). omitempty: an older proposer sends none.
+	GovernanceCommitment string `json:"governance_commitment,omitempty"`
 }
 
 // HandleOnDemandAttestationRequest is the peer-side handler.
@@ -160,6 +163,11 @@ func (s *BatchStack) HandleOnDemandAttestationRequest(
 	// there is no set. It means the two nodes disagree about the intent's own data (its legs,
 	// its ADI, its account, its commit height), which is a bug, not a timing artifact.
 	if tree.BundleID != wantBundle {
+		if why := governanceDisagreement([]MemberGovernance{{OperationID: req.OperationID,
+			GovernanceCommitment: req.GovernanceCommitment}}, map[[32]byte][32]byte{in.OperationID: in.GovernanceCommitment}); why != "" {
+			return refuseWith(CodeGovernanceMismatch, "governance disagreement on a one-member batch: %s - "+
+				"refusing to attest who authorised it when this validator's proof says otherwise", why)
+		}
 		return refuseWith(CodeBundleMismatch,
 			"bundleId mismatch on a ONE-MEMBER batch: proposer %s, this validator derived %s "+
 				"for operationID %s at height %d — the two nodes disagree about the intent "+

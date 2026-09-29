@@ -19,7 +19,7 @@ func (jsonCodec) Decode(r json.RawMessage) (interface{}, error) {
 }
 
 func member(id string, h uint64, chain int64) *PendingBatchIntent {
-	return &PendingBatchIntent{
+	return &PendingBatchIntent{GovernanceCommitment: testGov,
 		IntentID: id, ADIURL: "acc://" + id + ".acme", ChainID: chain,
 		Account:     common.HexToAddress("0x32b4687bE3c02d52e2d94Dc1cFAF03a0E5af0C8B"),
 		OperationID: opid(byte(len(id))),

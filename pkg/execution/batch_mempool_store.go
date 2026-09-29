@@ -118,6 +118,10 @@ type persistedMember struct {
 	// omitempty for the same version-skew reason as Lane.
 	After            *persistedPredecessor `json:"after,omitempty"`
 	SequencePosition int                   `json:"sequence_position,omitempty"`
+	// GovernanceCommitment is the commitment to who decided the intent (RB4-F66), 0x-hex. Absent on a member
+	// written before it existed: that member restores as LegacyNoGovernance and is batched with the v1 operation
+	// id its anchor may already carry. omitempty for the same version-skew reason as Lane.
+	GovernanceCommitment string `json:"governance_commitment,omitempty"`
 }
 
 // persistedPredecessor is a MemberPredecessor on disk.
@@ -264,6 +268,15 @@ func (s *BatchMempoolStore) encodeMember(p *PendingBatchIntent, lane BatchLane) 
 		Outcome:            string(p.Outcome),
 		SequencePosition:   p.SequencePosition,
 	}
+	switch {
+	case p.LegacyNoGovernance:
+		// Absent: it restores as the legacy member it is.
+	case p.GovernanceCommitment == ([32]byte{}):
+		return persistedMember{}, fmt.Errorf("intent %s on chain %d has no governance commitment and is not a member "+
+			"admitted before commitments existed", p.IntentID, p.ChainID)
+	default:
+		pm.GovernanceCommitment = "0x" + common.Bytes2Hex(p.GovernanceCommitment[:])
+	}
 	if a := p.After; a != nil {
 		pm.After = &persistedPredecessor{
 			ChainID: a.ChainID, OperationID: "0x" + common.Bytes2Hex(a.OperationID[:]), Account: a.Account.Hex(),
@@ -337,30 +350,48 @@ func (s *BatchMempoolStore) Load(m *BatchMempool) (int, error) {
 			return restored, fmt.Errorf("batch mempool %s: a member (intent %q, chain %d) has no commit height or intent id", s.path, pm.IntentID, pm.ChainID)
 		}
 		var opID [32]byte
-		copy(opID[:], common.FromHex(pm.OperationID))
+		rawOp := common.FromHex(pm.OperationID)
+		if len(rawOp) != 32 {
+			// It used to be copied as it came: a short id restored zero-padded, a long one truncated.
+			return restored, fmt.Errorf("batch mempool %s: intent %s on chain %d: operation id %q is not 32 bytes",
+				s.path, pm.IntentID, pm.ChainID, pm.OperationID)
+		}
+		copy(opID[:], rawOp)
+		var governance [32]byte
+		legacy := pm.GovernanceCommitment == ""
+		if !legacy {
+			raw := common.FromHex(pm.GovernanceCommitment)
+			if len(raw) != 32 || common.BytesToHash(raw) == (common.Hash{}) {
+				return restored, fmt.Errorf("batch mempool %s: intent %s on chain %d: governance commitment %q is not a "+
+					"32-byte commitment", s.path, pm.IntentID, pm.ChainID, pm.GovernanceCommitment)
+			}
+			copy(governance[:], raw)
+		}
 
 		p := &PendingBatchIntent{
-			IntentID:           pm.IntentID,
-			ADIURL:             pm.ADIURL,
-			ChainID:            pm.ChainID,
-			Account:            common.HexToAddress(pm.Account),
-			OperationID:        opID,
-			AccumTxHash:        pm.AccumTxHash,
-			CommitHeight:       pm.CommitHeight,
-			AnchorProved:       pm.AnchorProved,
-			AnchorTx:           pm.AnchorTx,
-			VerifyTx:           pm.VerifyTx,
-			AnchorBlock:        pm.AnchorBlock,
-			AttestedSeen:       pm.AttestedSeen,
-			FirstSeen:          timeOrZero(pm.FirstSeen),
-			CommitPartition:    pm.CommitPartition,
-			CommitTime:         timeOrZeroMilli(pm.CommitTimeMs),
-			SettlementTx:       pm.SettlementTx,
-			SettlementTxs:      pm.SettlementTxs,
-			SettlementNonce:    pm.SettlementNonce,
-			SettlementNonceSet: pm.SettlementNonceSet,
-			Outcome:            MemberOutcome(pm.Outcome),
-			SequencePosition:   pm.SequencePosition,
+			IntentID:             pm.IntentID,
+			ADIURL:               pm.ADIURL,
+			ChainID:              pm.ChainID,
+			Account:              common.HexToAddress(pm.Account),
+			OperationID:          opID,
+			GovernanceCommitment: governance,
+			LegacyNoGovernance:   legacy,
+			AccumTxHash:          pm.AccumTxHash,
+			CommitHeight:         pm.CommitHeight,
+			AnchorProved:         pm.AnchorProved,
+			AnchorTx:             pm.AnchorTx,
+			VerifyTx:             pm.VerifyTx,
+			AnchorBlock:          pm.AnchorBlock,
+			AttestedSeen:         pm.AttestedSeen,
+			FirstSeen:            timeOrZero(pm.FirstSeen),
+			CommitPartition:      pm.CommitPartition,
+			CommitTime:           timeOrZeroMilli(pm.CommitTimeMs),
+			SettlementTx:         pm.SettlementTx,
+			SettlementTxs:        pm.SettlementTxs,
+			SettlementNonce:      pm.SettlementNonce,
+			SettlementNonceSet:   pm.SettlementNonceSet,
+			Outcome:              MemberOutcome(pm.Outcome),
+			SequencePosition:     pm.SequencePosition,
 		}
 		if a := pm.After; a != nil {
 			op, lf := common.FromHex(a.OperationID), common.FromHex(a.Leaf)

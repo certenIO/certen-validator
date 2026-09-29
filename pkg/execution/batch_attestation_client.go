@@ -179,11 +179,19 @@ func NewBatchAttestationRequest(
 	if periodBlocks == 0 {
 		return nil, fmt.Errorf("period width 0 selects no members")
 	}
+	members := make([]MemberGovernance, 0, len(tree.Inputs))
+	for _, in := range tree.Inputs {
+		members = append(members, MemberGovernance{
+			OperationID:          "0x" + hex.EncodeToString(in.OperationID[:]),
+			GovernanceCommitment: "0x" + hex.EncodeToString(in.GovernanceCommitment[:]),
+		})
+	}
 	return &BatchAttestationRequest{
 		ChainID:      tree.ChainID,
 		CutoffHeight: cutoffHeight,
 		PeriodBlocks: periodBlocks,
 		BundleID:     "0x" + hex.EncodeToString(tree.BundleID[:]),
 		ProposerID:   proposerID,
+		Members:      members,
 	}, nil
 }

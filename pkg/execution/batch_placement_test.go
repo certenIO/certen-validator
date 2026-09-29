@@ -36,8 +36,9 @@ func TestTheArtifactStatesTheMembersPlaceInItsBatch(t *testing.T) {
 	root := hashPair(hashPair(l1, l0), l2)
 	nonce := strings.ReplaceAll(fmt.Sprintf("%032x", time.Now().UnixNano()), "-", "")
 	rec := &database.AnchorQuorumRecord{
-		ChainID: 84532, BundleID: "0x" + nonce + nonce, Root: root[:], BatchOperationID: "0x" + strings.Repeat("99", 32),
-		MessageHash: "0x" + strings.Repeat("88", 32), AnchorCreateTx: "0x" + strings.Repeat("5a", 32), AnchorCreateBlock: 90,
+		ChainID: 84532, BundleID: "0x" + nonce + nonce, Root: root[:], BatchOperationID: testBatchOperationID("0x" + strings.Repeat("77", 32)),
+		BatchOperationIDVersion: "v2",
+		MessageHash:             "0x" + strings.Repeat("88", 32), AnchorCreateTx: "0x" + strings.Repeat("5a", 32), AnchorCreateBlock: 90,
 		VerifyTx: "0x" + strings.Repeat("5b", 32), VerifyBlock: 100, VerifiedAt: time.Now().UTC(),
 		AggregateSignature: []byte{1}, AggregatePubKey: []byte{2},
 		Signers:           []database.AnchorQuorumSigner{{Address: "0xaaa", VotingPower: big.NewInt(100)}},
@@ -45,7 +46,8 @@ func TestTheArtifactStatesTheMembersPlaceInItsBatch(t *testing.T) {
 		Lane: "on_cadence", EvidenceSource: "live", TargetChain: "base-sepolia",
 		Members: []database.AnchorQuorumMemberRecord{{
 			IntentID: intentID, ADIURL: "acc://harbor.acme", OperationID: "0x" + strings.Repeat("77", 32),
-			Leaf: l1[:], LeafIndex: 1,
+			GovernanceCommitment: "0x" + hex.EncodeToString(testGov[:]),
+			Leaf:                 l1[:], LeafIndex: 1,
 			Branch: []database.MerklePathNode{{Hash: hex.EncodeToString(l0[:]), Position: "left"}, {Hash: hex.EncodeToString(l2[:]), Position: "right"}},
 		}},
 	}

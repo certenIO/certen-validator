@@ -52,15 +52,15 @@ func TestAMemberWithARecordedOutcomeIsNeverQueuedAgain(t *testing.T) {
 		return []mirrorLeg{{LegID: "leg", ChainID: c, Target: tgt(1), Value: big.NewInt(1)}}
 	}
 
-	if err := s.EnqueueForBatch("done", "acc://a.acme", seqPredChain, acct(1), opid(3), legsOn(seqPredChain), "att", 100, "", commit, ""); !errors.Is(err, ErrMemberAlreadyDecided) {
+	if err := s.EnqueueForBatch("done", "acc://a.acme", seqPredChain, acct(1), opid(3), legsOn(seqPredChain), testAtt, testGov, 100, "", commit, ""); !errors.Is(err, ErrMemberAlreadyDecided) {
 		t.Fatalf("period lane: %v", err)
 	}
-	if err := s.EnqueueOnDemand("done", "acc://a.acme", odChain, acct(1), opid(4), legsOn(odChain), "att", 100, "", commit, ""); !errors.Is(err, ErrMemberAlreadyDecided) {
+	if err := s.EnqueueOnDemand("done", "acc://a.acme", odChain, acct(1), opid(4), legsOn(odChain), testAtt, testGov, 100, "", commit, ""); !errors.Is(err, ErrMemberAlreadyDecided) {
 		t.Fatalf("intent-keyed lane: %v", err)
 	}
 	// A decided successor is answered before its predecessor - finished and gone - is looked for.
 	after := consensus.SequencePredecessor{ChainID: seqPredChain, OperationID: opid(3), Position: 1}
-	if err := s.EnqueueAfter("done", "acc://a.acme", odChain, acct(1), opid(4), legsOn(odChain), "att", 100, "", commit, "", after); !errors.Is(err, ErrMemberAlreadyDecided) {
+	if err := s.EnqueueAfter("done", "acc://a.acme", odChain, acct(1), opid(4), legsOn(odChain), testAtt, testGov, 100, "", commit, "", after); !errors.Is(err, ErrMemberAlreadyDecided) {
 		t.Fatalf("successor: %v", err)
 	}
 	if n := s.Mempool.PendingCount() + s.Mempool.OnDemandCount(); n != 0 {
@@ -68,18 +68,18 @@ func TestAMemberWithARecordedOutcomeIsNeverQueuedAgain(t *testing.T) {
 	}
 
 	// An undecided intent is queued as before.
-	if err := s.EnqueueForBatch("new", "acc://a.acme", seqPredChain, acct(1), opid(5), legsOn(seqPredChain), "att", 100, "", commit, ""); err != nil {
+	if err := s.EnqueueForBatch("new", "acc://a.acme", seqPredChain, acct(1), opid(5), legsOn(seqPredChain), testAtt, testGov, 100, "", commit, ""); err != nil {
 		t.Fatalf("undecided member: %v", err)
 	}
 
 	// Without the store, or when it cannot be read, a finished member cannot be told from a new one:
 	// nothing is queued, and the intent is retried rather than held against it.
 	s.MemberOutcomes = nil
-	if err := s.EnqueueForBatch("other", "acc://a.acme", seqPredChain, acct(1), opid(6), legsOn(seqPredChain), "att", 100, "", commit, ""); !errors.Is(err, ErrBatchUnavailable) {
+	if err := s.EnqueueForBatch("other", "acc://a.acme", seqPredChain, acct(1), opid(6), legsOn(seqPredChain), testAtt, testGov, 100, "", commit, ""); !errors.Is(err, ErrBatchUnavailable) {
 		t.Fatalf("unwired store: %v", err)
 	}
 	s.MemberOutcomes = unreadableOutcomes{}
-	if err := s.EnqueueOnDemand("other", "acc://a.acme", odChain, acct(1), opid(6), legsOn(odChain), "att", 100, "", commit, ""); !errors.Is(err, ErrBatchUnavailable) {
+	if err := s.EnqueueOnDemand("other", "acc://a.acme", odChain, acct(1), opid(6), legsOn(odChain), testAtt, testGov, 100, "", commit, ""); !errors.Is(err, ErrBatchUnavailable) {
 		t.Fatalf("unreadable store: %v", err)
 	}
 }

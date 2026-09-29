@@ -40,6 +40,11 @@ var (
 	// has a recorded outcome - settled, reverted, unobserved or never sent. Not a refusal: the member is
 	// finished, and queueing it again could only execute it a second time (RB3-F34, RB3-F141).
 	ErrMemberAlreadyDecided = errors.New("member already has an outcome")
+
+	// ErrNoGovernanceCommitment is a member without a governance decision to commit to: the batch operation id
+	// commits to every member's (RB4-F66). CERTEN not having established it is an outage, never the intent's
+	// defect, so it is an ErrBatchUnavailable and the intent is retried.
+	ErrNoGovernanceCommitment = fmt.Errorf("%w: no governance decision to commit to", ErrBatchUnavailable)
 )
 
 // BatchRefusal is the batch path declining an intent. Permanent refusals are the intent's own

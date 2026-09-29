@@ -38,18 +38,18 @@ func TestOrdinaryErrorIsNotTreatedAsGasRefusal(t *testing.T) {
 func TestGasDeferralIsBounded(t *testing.T) {
 	o := &BatchOrchestrator{}
 
-	fresh := &PendingBatchIntent{EnqueuedAt: time.Now()}
+	fresh := &PendingBatchIntent{GovernanceCommitment: testGov, EnqueuedAt: time.Now()}
 	if o.memberPastDeadline(fresh) {
 		t.Fatal("a freshly queued member was treated as expired")
 	}
 
-	stale := &PendingBatchIntent{EnqueuedAt: time.Now().Add(-maxGasDeferral - time.Minute)}
+	stale := &PendingBatchIntent{GovernanceCommitment: testGov, EnqueuedAt: time.Now().Add(-maxGasDeferral - time.Minute)}
 	if !o.memberPastDeadline(stale) {
 		t.Fatal("a member past maxGasDeferral was not failed — it would retry forever")
 	}
 
 	// EnqueuedAt is stamped once and survives requeue, so the window must not restart on defer.
-	if !o.memberPastDeadline(&PendingBatchIntent{EnqueuedAt: time.Now().Add(-2 * maxGasDeferral)}) {
+	if !o.memberPastDeadline(&PendingBatchIntent{GovernanceCommitment: testGov, EnqueuedAt: time.Now().Add(-2 * maxGasDeferral)}) {
 		t.Fatal("deadline did not hold for a long-deferred member")
 	}
 }

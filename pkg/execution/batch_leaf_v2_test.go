@@ -12,16 +12,16 @@ func TestBatchLeafV2Vector(t *testing.T) {
 	for i := range ec {
 		ec[i], op[i] = 0x11, 0x22
 	}
-	leaf := ComputeBatchLeafV2(84532, BatchLeafInput{ADIURL: "acc://vector.acme", ExecutionCommitment: ec, OperationID: op}, 3)
+	leaf := ComputeBatchLeafV2(84532, BatchLeafInput{GovernanceCommitment: testGov, ADIURL: "acc://vector.acme", ExecutionCommitment: ec, OperationID: op}, 3)
 	t.Logf("v2 leaf vector: 0x%s", hex.EncodeToString(leaf[:]))
 	if got := hex.EncodeToString(leaf[:]); got != v2LeafVector {
 		t.Fatalf("v2 leaf 0x%s, want 0x%s", got, v2LeafVector)
 	}
 	// The page is bound: another page, another leaf; and v1 is a different leaf altogether.
-	if ComputeBatchLeafV2(84532, BatchLeafInput{ADIURL: "acc://vector.acme", ExecutionCommitment: ec, OperationID: op}, 1) == leaf {
+	if ComputeBatchLeafV2(84532, BatchLeafInput{GovernanceCommitment: testGov, ADIURL: "acc://vector.acme", ExecutionCommitment: ec, OperationID: op}, 1) == leaf {
 		t.Fatal("page 1 and page 3 give the same leaf")
 	}
-	if ComputeBatchLeaf(84532, BatchLeafInput{ADIURL: "acc://vector.acme", ExecutionCommitment: ec, OperationID: op}) == leaf {
+	if ComputeBatchLeaf(84532, BatchLeafInput{GovernanceCommitment: testGov, ADIURL: "acc://vector.acme", ExecutionCommitment: ec, OperationID: op}) == leaf {
 		t.Fatal("v1 and v2 leaves coincide")
 	}
 }

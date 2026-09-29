@@ -194,6 +194,13 @@ func (a *BatchQuorumAttestor) prove(
 	}
 	chainID := tree.ChainID
 
+	// The evidence recorded once the anchor is attested, derived before anything is sent: a tree whose members
+	// cannot be stated is refused while nothing has been spent.
+	members, err := membersFromTree(tree, intentByOperation)
+	if err != nil {
+		return fmt.Errorf("batch 0x%x: %w", tree.BundleID[:8], err)
+	}
+
 	ecm, anchorAddr, err := a.chains.ManagerForChain(chainID)
 	if err != nil {
 		return fmt.Errorf("resolving chain %d: %w", chainID, err)
@@ -319,27 +326,28 @@ func (a *BatchQuorumAttestor) prove(
 	// anchor that had not been confirmed, which is the shape of claim this whole path refuses to make.
 	if a.onAnchorAttested != nil {
 		a.onAnchorAttested(ctx, &AnchorQuorumEvidence{
-			ChainID:               chainID,
-			BundleID:              tree.BundleID,
-			Root:                  tree.Root,
-			BatchOperationID:      tree.BatchOperationID,
-			MessageHash:           msgHash,
-			SetRoot:               setRoot,
-			VerifyTx:              verifyTx,
-			VerifyBlock:           int64(verifyBlockNum),
-			VerifySender:          verifySender,
-			AnchorCreateTx:        tree.AnchorCreateTx,
-			AnchorCreateBlock:     int64(tree.AnchorCreateBlock),
-			AnchorCreateSender:    tree.AnchorCreateSender,
-			AggregateSignatureHex: agg.AggregateSignatureHex,
-			AggregatePublicKeyHex: agg.AggregatePublicKeyHex,
-			Signers:               agg.Signers,
-			SignerPowers:          agg.SignerPowers,
-			SignedVotingPower:     agg.SignedVotingPower,
-			TotalVotingPower:      agg.TotalVotingPower,
-			Lane:                  lane,
-			Members:               membersFromTree(tree, intentByOperation),
-			AttestedAt:            time.Now().UTC(),
+			ChainID:                 chainID,
+			BundleID:                tree.BundleID,
+			Root:                    tree.Root,
+			BatchOperationID:        tree.BatchOperationID,
+			BatchOperationIDVersion: tree.BatchOperationIDVersion,
+			MessageHash:             msgHash,
+			SetRoot:                 setRoot,
+			VerifyTx:                verifyTx,
+			VerifyBlock:             int64(verifyBlockNum),
+			VerifySender:            verifySender,
+			AnchorCreateTx:          tree.AnchorCreateTx,
+			AnchorCreateBlock:       int64(tree.AnchorCreateBlock),
+			AnchorCreateSender:      tree.AnchorCreateSender,
+			AggregateSignatureHex:   agg.AggregateSignatureHex,
+			AggregatePublicKeyHex:   agg.AggregatePublicKeyHex,
+			Signers:                 agg.Signers,
+			SignerPowers:            agg.SignerPowers,
+			SignedVotingPower:       agg.SignedVotingPower,
+			TotalVotingPower:        agg.TotalVotingPower,
+			Lane:                    lane,
+			Members:                 members,
+			AttestedAt:              time.Now().UTC(),
 		})
 	}
 	return nil

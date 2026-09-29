@@ -29,9 +29,12 @@ type AnchorQuorumMemberRecord struct {
 	AccumTxHash string
 	ADIURL      string
 	OperationID string
-	Leaf        []byte
-	LeafIndex   int
-	Branch      []MerklePathNode
+	// GovernanceCommitment is the member's commitment to who decided it, 0x-hex (RB4-F66). Empty for a member
+	// admitted before commitments existed.
+	GovernanceCommitment string
+	Leaf                 []byte
+	LeafIndex            int
+	Branch               []MerklePathNode
 
 	// The settled leg. Recorded because the canonical row replaces a shadow row that carried it, and a
 	// replacement that drops columns the console reads is a regression dressed as a cleanup.
@@ -50,8 +53,11 @@ type AnchorQuorumRecord struct {
 	BundleID         string
 	Root             []byte
 	BatchOperationID string
-	MessageHash      string
-	AnchorCreateTx   string
+	// BatchOperationIDVersion is how BatchOperationID was derived: "v2" commits to every member's governance
+	// decision, "v1" does not; empty for a record rebuilt from the chain, which cannot tell (RB4-F66).
+	BatchOperationIDVersion string
+	MessageHash             string
+	AnchorCreateTx          string
 	// AnchorCreateBlock is the block AnchorCreateTx was mined in (anchor_block_num); not VerifyBlock.
 	AnchorCreateBlock int64
 	VerifyTx          string
@@ -124,6 +130,9 @@ func (r *BatchRepository) RecordAnchorQuorum(
 	if rec.EvidenceSource != "live" && rec.EvidenceSource != "chain_backfill" {
 		return false, fmt.Errorf("record anchor quorum: evidence_source must be live or chain_backfill, got %q",
 			rec.EvidenceSource)
+	}
+	if err := checkBatchGovernance(rec); err != nil {
+		return false, fmt.Errorf("record anchor quorum: bundle %s: %w", rec.BundleID, err)
 	}
 
 	tx, err := r.client.BeginTx(ctx)
@@ -210,7 +219,7 @@ func (r *BatchRepository) RecordAnchorQuorum(
 			proof_data_included, attestation_count, aggregated_signature, aggregated_public_key,
 			quorum_reached, consensus_completed_at, evidence_source, lane,
 			anchor_tx_hash, anchored_at, confirmed_at, closed_at, anchor_block_num,
-			anchor_create_sender, verify_sender
+			anchor_create_sender, verify_sender, batch_operation_id_version
 		) VALUES (
 			$1, $2, 'confirmed', $3, $4, NULL,
 			$5, $5,
@@ -219,7 +228,7 @@ func (r *BatchRepository) RecordAnchorQuorum(
 			TRUE, $16, $17, $18,
 			TRUE, $19, $20, $21,
 			$9, $19, $19, $19, $22,
-			$23, $24
+			$23, $24, $25
 		)
 		ON CONFLICT (chain_id, bundle_id) WHERE bundle_id IS NOT NULL DO NOTHING
 		RETURNING TRUE`,
@@ -233,6 +242,7 @@ func (r *BatchRepository) RecordAnchorQuorum(
 		rec.VerifiedAt.UTC(), rec.EvidenceSource, nullIfEmpty(rec.Lane),
 		anchorCreateBlock(rec),
 		nullIfEmpty(strings.ToLower(rec.AnchorCreateSender)), nullIfEmpty(strings.ToLower(rec.VerifySender)),
+		nullIfEmpty(rec.BatchOperationIDVersion),
 	).Scan(&inserted)
 
 	if err == sql.ErrNoRows {
@@ -254,15 +264,16 @@ func (r *BatchRepository) RecordAnchorQuorum(
 			INSERT INTO batch_transactions (
 				batch_id, accumulate_tx_hash, account_url, tree_index, merkle_path, transaction_hash,
 				intent_id, adi_url, from_chain, to_chain, from_address, to_address, amount, token_symbol,
-				user_id, created_at
+				user_id, created_at, operation_id, governance_commitment
 			) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8,
 			          COALESCE($9,''), COALESCE($10,''), COALESCE($11,''), COALESCE($12,''),
-			          COALESCE($13,'0'), COALESCE($14,''), $15, NOW())`,
+			          COALESCE($13,'0'), COALESCE($14,''), $15, NOW(), $16, $17)`,
 			batchID, m.AccumTxHash, m.ADIURL, m.LeafIndex, string(pathJSON), m.Leaf,
 			nullIfEmpty(m.IntentID), nullIfEmpty(m.ADIURL),
 			nullIfEmpty(m.FromChain), nullIfEmpty(m.ToChain), nullIfEmpty(m.FromAddress),
 			nullIfEmpty(m.ToAddress), nullIfEmpty(m.Amount), nullIfEmpty(m.TokenSymbol),
-			nullIfEmpty(m.UserID),
+			nullIfEmpty(m.UserID), nullIfEmpty(strings.ToLower(m.OperationID)),
+			nullIfEmpty(strings.ToLower(m.GovernanceCommitment)),
 		); mErr != nil {
 			return false, fmt.Errorf("record anchor quorum: member %d of anchor %s: %w", i, rec.BundleID, mErr)
 		}
@@ -411,4 +422,36 @@ func bytesEqual(a, b []byte) bool {
 		}
 	}
 	return true
+}
+
+// checkBatchGovernance requires a record to state its members' governance consistently with how its batch
+// operation id was derived (RB4-F66): a v2 anchor commits to every member's decision, a v1 anchor to none, and a
+// record with members states which it is. A record rebuilt from the chain carries no members and cannot tell.
+func checkBatchGovernance(rec *AnchorQuorumRecord) error {
+	switch rec.BatchOperationIDVersion {
+	case "v2":
+		for i, m := range rec.Members {
+			if m.GovernanceCommitment == "" {
+				return fmt.Errorf("member %d (%s) of a v2 batch states no governance commitment", i, m.OperationID)
+			}
+			if m.OperationID == "" {
+				return fmt.Errorf("member %d of a v2 batch states no operation id", i)
+			}
+		}
+	case "v1":
+		for i, m := range rec.Members {
+			if m.GovernanceCommitment != "" {
+				return fmt.Errorf("member %d (%s) of a v1 batch states a governance commitment its batch does not "+
+					"commit to", i, m.OperationID)
+			}
+		}
+	case "":
+		if len(rec.Members) > 0 {
+			return fmt.Errorf("a record with %d member(s) does not state how its batch operation id was derived",
+				len(rec.Members))
+		}
+	default:
+		return fmt.Errorf("unknown batch operation id version %q", rec.BatchOperationIDVersion)
+	}
+	return nil
 }

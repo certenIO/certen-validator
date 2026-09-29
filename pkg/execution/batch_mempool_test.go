@@ -12,7 +12,7 @@ import (
 )
 
 func pending(id, adi string, chainID int64, acct common.Address, opID uint64, legs ...LegExecution) *PendingBatchIntent {
-	return &PendingBatchIntent{
+	return &PendingBatchIntent{GovernanceCommitment: testGov,
 		IntentID:    id,
 		ADIURL:      adi,
 		ChainID:     chainID,
@@ -88,7 +88,7 @@ func TestMempool_AddRejectsMalformed(t *testing.T) {
 		p    *PendingBatchIntent
 	}{
 		{"nil", nil},
-		{"no id", &PendingBatchIntent{ADIURL: "a", Account: acct1, OperationID: b32(1),
+		{"no id", &PendingBatchIntent{GovernanceCommitment: testGov, ADIURL: "a", Account: acct1, OperationID: b32(1),
 			Legs: []LegExecution{oneLeg(1, dst, 1)}}},
 		{"no adi", pending("i", "", 1, acct1, 1, oneLeg(1, dst, 1))},
 		{"no account", pending("i", "acc://a.acme", 1, common.Address{}, 1, oneLeg(1, dst, 1))},

@@ -30,10 +30,9 @@ const (
 )
 
 func vecInputs() []BatchLeafInput {
-	return []BatchLeafInput{
-		{ADIURL: "acc://alice.acme", ExecutionCommitment: b32(0x1111), OperationID: b32(0xaaaa)},
-		{ADIURL: "acc://bob.acme", ExecutionCommitment: b32(0x2222), OperationID: b32(0xbbbb)},
-		{ADIURL: "acc://carol.acme", ExecutionCommitment: b32(0x3333), OperationID: b32(0xcccc)},
+	return []BatchLeafInput{{GovernanceCommitment: testGov, ADIURL: "acc://alice.acme", ExecutionCommitment: b32(0x1111), OperationID: b32(0xaaaa)},
+		{GovernanceCommitment: testGov, ADIURL: "acc://bob.acme", ExecutionCommitment: b32(0x2222), OperationID: b32(0xbbbb)},
+		{GovernanceCommitment: testGov, ADIURL: "acc://carol.acme", ExecutionCommitment: b32(0x3333), OperationID: b32(0xcccc)},
 	}
 }
 
@@ -130,7 +129,7 @@ func TestBatchTree_EveryBranchVerifies(t *testing.T) {
 	for _, n := range []int{1, 2, 3, 4, 5, 7, 8, 16, 17, 31, 64} {
 		inputs := make([]BatchLeafInput, n)
 		for i := range inputs {
-			inputs[i] = BatchLeafInput{
+			inputs[i] = BatchLeafInput{GovernanceCommitment: testGov,
 				ADIURL:              "acc://adi" + string(rune('a'+i%26)) + string(rune('0'+i/26)) + ".acme",
 				ExecutionCommitment: b32(uint64(1000 + i)),
 				OperationID:         b32(uint64(2000 + i)),
@@ -157,7 +156,7 @@ func TestBatchTree_EveryBranchVerifies(t *testing.T) {
 
 // N=1: root == leaf, empty branch. Proves single intents need no special case.
 func TestBatchTree_SingleMemberRootIsTheLeaf(t *testing.T) {
-	in := []BatchLeafInput{{ADIURL: "acc://solo.acme", ExecutionCommitment: b32(1), OperationID: b32(2)}}
+	in := []BatchLeafInput{{GovernanceCommitment: testGov, ADIURL: "acc://solo.acme", ExecutionCommitment: b32(1), OperationID: b32(2)}}
 	tree, err := BuildBatchTree(vecChainID, in, vecHeight)
 	if err != nil {
 		t.Fatal(err)
@@ -181,7 +180,7 @@ func TestBatchTree_ForeignLeafNeverVerifies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	foreign := ComputeBatchLeaf(vecChainID, BatchLeafInput{
+	foreign := ComputeBatchLeaf(vecChainID, BatchLeafInput{GovernanceCommitment: testGov,
 		ADIURL: "acc://mallory.acme", ExecutionCommitment: b32(9), OperationID: b32(9),
 	})
 	for i := range tree.Leaves {
@@ -194,22 +193,22 @@ func TestBatchTree_ForeignLeafNeverVerifies(t *testing.T) {
 
 // The leaf binds the ADI: same commitment + opID under a different ADI is a different leaf.
 func TestBatchTree_LeafBindsADI(t *testing.T) {
-	a := ComputeBatchLeaf(vecChainID, BatchLeafInput{ADIURL: "acc://a.acme", ExecutionCommitment: b32(1), OperationID: b32(2)})
-	b := ComputeBatchLeaf(vecChainID, BatchLeafInput{ADIURL: "acc://b.acme", ExecutionCommitment: b32(1), OperationID: b32(2)})
+	a := ComputeBatchLeaf(vecChainID, BatchLeafInput{GovernanceCommitment: testGov, ADIURL: "acc://a.acme", ExecutionCommitment: b32(1), OperationID: b32(2)})
+	b := ComputeBatchLeaf(vecChainID, BatchLeafInput{GovernanceCommitment: testGov, ADIURL: "acc://b.acme", ExecutionCommitment: b32(1), OperationID: b32(2)})
 	if a == b {
 		t.Fatal("leaf must bind the ADI — otherwise one ADI could spend another's authorization")
 	}
 }
 
 func TestBatchTree_LeafBindsChain(t *testing.T) {
-	in := BatchLeafInput{ADIURL: "acc://a.acme", ExecutionCommitment: b32(1), OperationID: b32(2)}
+	in := BatchLeafInput{GovernanceCommitment: testGov, ADIURL: "acc://a.acme", ExecutionCommitment: b32(1), OperationID: b32(2)}
 	if ComputeBatchLeaf(11155111, in) == ComputeBatchLeaf(8453, in) {
 		t.Fatal("leaf must be chain-bound")
 	}
 }
 
 func TestBatchTree_LeafBindsOperationID(t *testing.T) {
-	base := BatchLeafInput{ADIURL: "acc://a.acme", ExecutionCommitment: b32(1), OperationID: b32(2)}
+	base := BatchLeafInput{GovernanceCommitment: testGov, ADIURL: "acc://a.acme", ExecutionCommitment: b32(1), OperationID: b32(2)}
 	other := base
 	other.OperationID = b32(3)
 	if ComputeBatchLeaf(vecChainID, base) == ComputeBatchLeaf(vecChainID, other) {
@@ -225,23 +224,20 @@ func TestBuildBatchTree_RejectsEmptyAndZeroFields(t *testing.T) {
 	if _, err := BuildBatchTree(vecChainID, nil, vecHeight); err == nil {
 		t.Fatal("empty batch must be rejected")
 	}
-	if _, err := BuildBatchTree(vecChainID, []BatchLeafInput{
-		{ADIURL: "", ExecutionCommitment: b32(1), OperationID: b32(1)}}, vecHeight); err == nil {
+	if _, err := BuildBatchTree(vecChainID, []BatchLeafInput{{GovernanceCommitment: testGov, ADIURL: "", ExecutionCommitment: b32(1), OperationID: b32(1)}}, vecHeight); err == nil {
 		t.Fatal("missing ADI URL must be rejected")
 	}
-	if _, err := BuildBatchTree(vecChainID, []BatchLeafInput{
-		{ADIURL: "acc://a.acme", ExecutionCommitment: b32(1)}}, vecHeight); err == nil {
+	if _, err := BuildBatchTree(vecChainID, []BatchLeafInput{{GovernanceCommitment: testGov, ADIURL: "acc://a.acme", ExecutionCommitment: b32(1)}}, vecHeight); err == nil {
 		t.Fatal("zero operationID must be rejected — the anchor rejects it too")
 	}
-	if _, err := BuildBatchTree(vecChainID, []BatchLeafInput{
-		{ADIURL: "acc://a.acme", OperationID: b32(1)}}, vecHeight); err == nil {
+	if _, err := BuildBatchTree(vecChainID, []BatchLeafInput{{GovernanceCommitment: testGov, ADIURL: "acc://a.acme", OperationID: b32(1)}}, vecHeight); err == nil {
 		t.Fatal("zero executionCommitment must be rejected")
 	}
 }
 
 // Duplicate leaves would strand the second member: single-use is keyed on the leaf.
 func TestBuildBatchTree_RejectsDuplicateLeaves(t *testing.T) {
-	dup := BatchLeafInput{ADIURL: "acc://a.acme", ExecutionCommitment: b32(1), OperationID: b32(2)}
+	dup := BatchLeafInput{GovernanceCommitment: testGov, ADIURL: "acc://a.acme", ExecutionCommitment: b32(1), OperationID: b32(2)}
 	_, err := BuildBatchTree(vecChainID, []BatchLeafInput{dup, dup}, vecHeight)
 	if err == nil {
 		t.Fatal("identical leaves must be rejected — the second could never be consumed")
@@ -251,9 +247,8 @@ func TestBuildBatchTree_RejectsDuplicateLeaves(t *testing.T) {
 // The same ADI may appear twice with DIFFERENT operations — that is the legitimate case
 // CertenAccountV7's per-leaf single-use exists to support.
 func TestBuildBatchTree_AllowsSameADITwiceWithDistinctOps(t *testing.T) {
-	in := []BatchLeafInput{
-		{ADIURL: "acc://a.acme", ExecutionCommitment: b32(1), OperationID: b32(10)},
-		{ADIURL: "acc://a.acme", ExecutionCommitment: b32(2), OperationID: b32(11)},
+	in := []BatchLeafInput{{GovernanceCommitment: testGov, ADIURL: "acc://a.acme", ExecutionCommitment: b32(1), OperationID: b32(10)},
+		{GovernanceCommitment: testGov, ADIURL: "acc://a.acme", ExecutionCommitment: b32(2), OperationID: b32(11)},
 	}
 	tree, err := BuildBatchTree(vecChainID, in, vecHeight)
 	if err != nil {

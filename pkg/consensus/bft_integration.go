@@ -301,6 +301,9 @@ type BatchEnqueuer interface {
 		operationID [32]byte,
 		legs interface{},
 		attestation interface{},
+		// governanceCommitment commits to who decided the intent (proof.GovernanceCommitment of the round's
+		// decision, RB4-F66); the batch operation id aggregates it. It must equal the one the snapshot states.
+		governanceCommitment [32]byte,
 		commitHeight uint64,
 		// commitPartition and commitTime identify the Accumulate minor block the intent was written
 		// in (commitHeight is its height on commitPartition) and that block's consensus time. The time
@@ -336,6 +339,9 @@ type BatchEnqueuer interface {
 		operationID [32]byte,
 		legs interface{},
 		attestation interface{},
+		// governanceCommitment commits to who decided the intent (proof.GovernanceCommitment of the round's
+		// decision, RB4-F66); the batch operation id aggregates it. It must equal the one the snapshot states.
+		governanceCommitment [32]byte,
 		commitHeight uint64,
 		commitPartition string,
 		commitTime time.Time,
@@ -359,6 +365,9 @@ type BatchEnqueuer interface {
 		operationID [32]byte,
 		legs interface{},
 		attestation interface{},
+		// governanceCommitment commits to who decided the intent (proof.GovernanceCommitment of the round's
+		// decision, RB4-F66); the batch operation id aggregates it. It must equal the one the snapshot states.
+		governanceCommitment [32]byte,
 		commitHeight uint64,
 		// commitPartition and commitTime identify the Accumulate minor block the intent was written
 		// in (commitHeight is its height on commitPartition) and that block's consensus time. The time

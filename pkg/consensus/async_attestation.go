@@ -510,6 +510,15 @@ func (bv *BFTValidator) captureAttestation(
 	return att
 }
 
+// GovernanceCommitment is the commitment to who decided the intent, from the decision the round derived: what its
+// batch member commits to (RB4-F66). An error when the round recorded none.
+func (att *PendingAttestation) GovernanceCommitment() ([32]byte, error) {
+	if att == nil || len(att.GovDecision) == 0 {
+		return [32]byte{}, fmt.Errorf("%w: the round recorded no governance decision", ErrNoGovernanceCommitment)
+	}
+	return proof.GovernanceCommitment(att.GovDecision), nil
+}
+
 // nonEmptyTxHashes returns the raw hashes that are actually present.
 //
 // Phase 7 observes one transaction per entry, so an empty entry is not a harmless placeholder —

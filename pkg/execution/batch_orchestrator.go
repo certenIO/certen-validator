@@ -1224,8 +1224,15 @@ type excludedMember struct {
 // neither forms nor co-signs a tree until it succeeds.
 func (o *BatchOrchestrator) periodChunks(ctx context.Context, members []*PendingBatchIntent, maxBatch int) ([][]*PendingBatchIntent, []excludedMember, error) {
 	eligible := make([]*PendingBatchIntent, 0, len(members))
+	var legacy []*PendingBatchIntent
 	var excluded []excludedMember
 	for _, p := range members {
+		if p.GovernanceCommitment == ([32]byte{}) && !p.LegacyNoGovernance {
+			// Not reachable through admission, which requires the commitment; refused by name if it ever is.
+			excluded = append(excluded, excludedMember{member: p, cause: fmt.Errorf("%w: intent %s on chain %d",
+				ErrNoGovernanceCommitment, p.IntentID, p.ChainID)})
+			continue
+		}
 		verdict, err := o.accountVerdict(ctx, p)
 		if err != nil {
 			return nil, nil, err
@@ -1234,9 +1241,15 @@ func (o *BatchOrchestrator) periodChunks(ctx context.Context, members []*Pending
 			excluded = append(excluded, excludedMember{member: p, cause: verdict})
 			continue
 		}
+		if p.LegacyNoGovernance {
+			legacy = append(legacy, p)
+			continue
+		}
 		eligible = append(eligible, p)
 	}
-	return chunkMembers(eligible, maxBatch), excluded, nil
+	// Members admitted before governance commitments are batched apart, with the v1 operation id their anchors
+	// carry; every validator restored the same members the same way, so every validator cuts the same chunks.
+	return append(chunkMembers(legacy, maxBatch), chunkMembers(eligible, maxBatch)...), excluded, nil
 }
 
 // accountVerdict is memberAccountUsable, cached. It returns (nil, nil) for a usable account,

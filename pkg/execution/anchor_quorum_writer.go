@@ -271,31 +271,34 @@ func AnchorQuorumRecordFrom(ev *AnchorQuorumEvidence) *database.AnchorQuorumReco
 			AccumTxHash: m.Provenance.AccumTxHash,
 			ADIURL:      m.ADIURL,
 			OperationID: hexPrefixed(m.OperationID[:]),
-			FromChain:   m.Provenance.FromChain,
-			ToChain:     m.Provenance.ToChain,
-			FromAddress: m.Provenance.FromAddress,
-			ToAddress:   m.Provenance.ToAddress,
-			Amount:      m.Provenance.Amount,
-			TokenSymbol: m.Provenance.TokenSymbol,
-			UserID:      m.Provenance.UserID,
-			Leaf:        append([]byte(nil), m.Leaf[:]...),
-			LeafIndex:   m.LeafIndex,
-			Branch:      branch,
+			// Empty for a member admitted before governance commitments; it has none (RB4-F66).
+			GovernanceCommitment: governanceHex(m),
+			FromChain:            m.Provenance.FromChain,
+			ToChain:              m.Provenance.ToChain,
+			FromAddress:          m.Provenance.FromAddress,
+			ToAddress:            m.Provenance.ToAddress,
+			Amount:               m.Provenance.Amount,
+			TokenSymbol:          m.Provenance.TokenSymbol,
+			UserID:               m.Provenance.UserID,
+			Leaf:                 append([]byte(nil), m.Leaf[:]...),
+			LeafIndex:            m.LeafIndex,
+			Branch:               branch,
 		})
 	}
 
 	return &database.AnchorQuorumRecord{
-		ChainID:            ev.ChainID,
-		BundleID:           hexPrefixed(ev.BundleID[:]),
-		Root:               append([]byte(nil), ev.Root[:]...),
-		BatchOperationID:   hexPrefixed(ev.BatchOperationID[:]),
-		MessageHash:        hexPrefixed(ev.MessageHash[:]),
-		VerifyTx:           ev.VerifyTx,
-		VerifyBlock:        ev.VerifyBlock,
-		AnchorCreateTx:     ev.AnchorCreateTx,
-		AnchorCreateBlock:  ev.AnchorCreateBlock,
-		AnchorCreateSender: ev.AnchorCreateSender,
-		VerifySender:       ev.VerifySender,
+		ChainID:                 ev.ChainID,
+		BundleID:                hexPrefixed(ev.BundleID[:]),
+		Root:                    append([]byte(nil), ev.Root[:]...),
+		BatchOperationID:        hexPrefixed(ev.BatchOperationID[:]),
+		BatchOperationIDVersion: ev.BatchOperationIDVersion,
+		MessageHash:             hexPrefixed(ev.MessageHash[:]),
+		VerifyTx:                ev.VerifyTx,
+		VerifyBlock:             ev.VerifyBlock,
+		AnchorCreateTx:          ev.AnchorCreateTx,
+		AnchorCreateBlock:       ev.AnchorCreateBlock,
+		AnchorCreateSender:      ev.AnchorCreateSender,
+		VerifySender:            ev.VerifySender,
 		// Not ev.AttestedAt, this validator's clock after it confirmed the anchor (RB3-F133): the completion
 		// time is the verify block's, filled from the chain by BlockTimedAnchorQuorumStore.
 		VerifiedAt:         ev.VerifyBlockTime,
@@ -341,4 +344,13 @@ func chainName(chainID int64) string {
 	default:
 		return fmt.Sprintf("chain-%d", chainID)
 	}
+}
+
+// governanceHex is a member's governance commitment as recorded: 0x-hex, or empty for a member admitted before
+// commitments existed.
+func governanceHex(m AnchorQuorumMember) string {
+	if m.LegacyNoGovernance {
+		return ""
+	}
+	return hexPrefixed(m.GovernanceCommitment[:])
 }

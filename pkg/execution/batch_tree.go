@@ -37,6 +37,16 @@ type BatchLeafInput struct {
 	ExecutionCommitment [32]byte // single-call OR multi-leg batch commitment
 	OperationID         [32]byte // the Accumulate 4-blob intent hash
 
+	// GovernanceCommitment is the commitment to who decided the intent (proof.GovernanceCommitment of its
+	// governance decision record, RB4-F66). NOT part of the leaf - the account reconstructs the leaf and never sees
+	// governance - but part of the batch operation id the quorum signs and the anchor stores.
+	GovernanceCommitment [32]byte
+
+	// LegacyNoGovernance marks a member admitted before governance commitments existed (restored from a mempool
+	// written by an earlier binary). Its batch was, or will be, formed with the v1 operation id - the id its anchor
+	// may already carry - and records that its governance is not committed. Only restore sets it.
+	LegacyNoGovernance bool
+
 	// Provenance is what the database records ABOUT this member: which Accumulate transaction carried
 	// it, and the leg it settles. Evidence only — see MemberProvenance.
 	Provenance MemberProvenance
@@ -266,6 +276,9 @@ func DeriveBatchBundleID(
 	return ethcrypto.Keccak256Hash(packed)
 }
 
+// DeriveBatchOperationID is the v1 batch operation id: the member operationIDs alone. Batches are formed with
+// DeriveBatchOperationIDV2 (RB4-F66); v1 is kept to verify anchors created before it, which committed no governance.
+//
 // DeriveBatchOperationID aggregates the member operationIDs into the batch's own id.
 //
 // Sorted before hashing so the value depends only on the SET of members, not on the order
@@ -297,8 +310,11 @@ type BatchTree struct {
 	Inputs           []BatchLeafInput
 	Root             [32]byte
 	BatchOperationID [32]byte
-	BundleID         [32]byte
-	BlockHeight      uint64
+	// BatchOperationIDVersion is how BatchOperationID was derived: "v2" commits to every member's governance
+	// decision, "v1" is the operation ids alone - a batch of members admitted before commitments (RB4-F66).
+	BatchOperationIDVersion string
+	BundleID                [32]byte
+	BlockHeight             uint64
 
 	// AnchorCreateTx is the transaction that PUBLISHED this root — createBatchAnchor's own transaction,
 	// set by the orchestrator once it returns and before the quorum proves the root.
@@ -331,7 +347,6 @@ func BuildBatchTree(
 	}
 
 	leaves := make([][32]byte, 0, len(inputs))
-	opIDs := make([][32]byte, 0, len(inputs))
 	seen := make(map[[32]byte]int, len(inputs))
 
 	for i, in := range inputs {
@@ -358,7 +373,6 @@ func BuildBatchTree(
 		seen[leaf] = i
 
 		leaves = append(leaves, leaf)
-		opIDs = append(opIDs, in.OperationID)
 	}
 
 	root, err := MerkleRoot(leaves)
@@ -366,17 +380,21 @@ func BuildBatchTree(
 		return nil, err
 	}
 
-	batchOpID := DeriveBatchOperationID(opIDs)
+	batchOpID, opVersion, err := batchOperationIDOf(inputs)
+	if err != nil {
+		return nil, err
+	}
 	bundleID := DeriveBatchBundleID(chainID, root, uint64(len(leaves)), batchOpID, blockHeight)
 
 	tree := &BatchTree{
-		ChainID:          chainID,
-		Leaves:           leaves,
-		Inputs:           inputs,
-		Root:             root,
-		BatchOperationID: batchOpID,
-		BundleID:         bundleID,
-		BlockHeight:      blockHeight,
+		ChainID:                 chainID,
+		Leaves:                  leaves,
+		Inputs:                  inputs,
+		Root:                    root,
+		BatchOperationID:        batchOpID,
+		BatchOperationIDVersion: opVersion,
+		BundleID:                bundleID,
+		BlockHeight:             blockHeight,
 	}
 
 	// Self-verify every branch against the algorithm the anchor will actually run.
@@ -428,3 +446,80 @@ func AccountAddressForADI(adiURL string) common.Address {
 // bigZero is a shared zero used where a nil *big.Int must encode as 0, matching how the
 // Solidity side treats an absent value.
 func bigZero() *big.Int { return new(big.Int) }
+
+// batchOperationIDOf is the operation id a batch is formed with: v2 for members that commit to their governance
+// decision, v1 for members admitted before that existed (LegacyNoGovernance) - the id their anchors carry. The two are
+// never mixed in one batch, and a member that is neither is refused.
+func batchOperationIDOf(inputs []BatchLeafInput) ([32]byte, string, error) {
+	legacy := 0
+	for _, in := range inputs {
+		if in.LegacyNoGovernance {
+			if in.GovernanceCommitment != ([32]byte{}) {
+				return [32]byte{}, "", fmt.Errorf("member %s is marked legacy but carries a governance commitment", in.ADIURL)
+			}
+			legacy++
+		}
+	}
+	switch legacy {
+	case 0:
+		id, err := DeriveBatchOperationIDV2(inputs)
+		return id, BatchOperationIDV2, err
+	case len(inputs):
+		ids := make([][32]byte, 0, len(inputs))
+		for _, in := range inputs {
+			ids = append(ids, in.OperationID)
+		}
+		return DeriveBatchOperationID(ids), BatchOperationIDV1, nil
+	default:
+		return [32]byte{}, "", fmt.Errorf("a batch cannot mix %d member(s) admitted before governance commitments with %d "+
+			"that commit to theirs", legacy, len(inputs)-legacy)
+	}
+}
+
+// BatchOperationIDV1 and BatchOperationIDV2 name how a batch operation id was derived (BatchTree).
+const (
+	BatchOperationIDV1 = "v1"
+	BatchOperationIDV2 = "v2"
+)
+
+// BatchOperationIDDomainV2 opens the v2 batch operation id.
+const BatchOperationIDDomainV2 = "certen:batchopid:v2"
+
+// DeriveBatchOperationIDV2 is the batch's own id, committing to each member's operation AND to who decided it
+// (RB4-F66):
+//
+//	keccak256("certen:batchopid:v2" || for each member, sorted by (operationID, governanceCommitment):
+//	          operationID || governanceCommitment)
+//
+// The anchor stores it as its operationID and the quorum's BLS message covers it, so the quorum signature and the
+// anchor commit to every member's governance decision - with no contract change: the anchor only requires it to be
+// non-zero and derives the bundle id from it, and the account never reads it. The v1 id aggregated the operation ids
+// alone. Sorted so it depends only on the SET of members; a member without a governance commitment has no decision
+// to commit to, and is refused rather than committed as zero.
+func DeriveBatchOperationIDV2(inputs []BatchLeafInput) ([32]byte, error) {
+	type pair struct{ op, gov [32]byte }
+	pairs := make([]pair, 0, len(inputs))
+	for i, in := range inputs {
+		if in.OperationID == ([32]byte{}) {
+			return [32]byte{}, fmt.Errorf("member %d (%s) has a zero operationID", i, in.ADIURL)
+		}
+		if in.GovernanceCommitment == ([32]byte{}) {
+			return [32]byte{}, fmt.Errorf("member %d (%s, operation %x) has no governance decision to commit to",
+				i, in.ADIURL, in.OperationID[:8])
+		}
+		pairs = append(pairs, pair{in.OperationID, in.GovernanceCommitment})
+	}
+	sort.Slice(pairs, func(i, j int) bool {
+		if pairs[i].op != pairs[j].op {
+			return bytesLess(pairs[i].op, pairs[j].op)
+		}
+		return bytesLess(pairs[i].gov, pairs[j].gov)
+	})
+	packed := make([]byte, 0, len(BatchOperationIDDomainV2)+len(pairs)*64)
+	packed = append(packed, []byte(BatchOperationIDDomainV2)...)
+	for _, p := range pairs {
+		packed = append(packed, p.op[:]...)
+		packed = append(packed, p.gov[:]...)
+	}
+	return ethcrypto.Keccak256Hash(packed), nil
+}

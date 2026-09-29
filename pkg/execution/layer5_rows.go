@@ -117,6 +117,17 @@ func BuildLayer5(
 			return nil, fmt.Errorf("layer5: the batch row's path: %w", err)
 		}
 		l5.Path = path
+		// What the anchored batch operation id commits to about this member's governance (RB4-F66). A batch row
+		// that does not state how its id was derived was rebuilt from the chain and has no members to state.
+		if binding.BatchOperationIDVersion != "" {
+			l5.Governance = &BatchGovernance{
+				Version:              binding.BatchOperationIDVersion,
+				BatchOperationID:     binding.BatchOperationID,
+				OperationID:          binding.MemberOperationID,
+				GovernanceCommitment: binding.MemberGovernanceCommitment,
+				Members:              binding.BatchMembers,
+			}
+		}
 
 	default:
 		// No canonical row: nothing to bind. Returning nil is not a failure - an absent L5 reads as

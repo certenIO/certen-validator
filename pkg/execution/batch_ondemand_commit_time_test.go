@@ -193,7 +193,7 @@ func TestEnqueueOnDemand_CarriesTheBlock(t *testing.T) {
 	s := stackForChain(t, odChain)
 	legs := []mirrorLeg{{LegID: "l0", ChainID: odChain, Target: tgt(1), Value: big.NewInt(1)}}
 	blockTime := time.Date(2026, 7, 27, 23, 43, 8, 0, time.UTC)
-	if err := s.EnqueueOnDemand("i", "acc://a.acme", odChain, acct(1), opid(1), legs, "att", 4242,
+	if err := s.EnqueueOnDemand("i", "acc://a.acme", odChain, acct(1), opid(1), legs, testAtt, testGov, 4242,
 		odPartition, blockTime, "0xaccumfictional"); err != nil {
 		t.Fatal(err)
 	}

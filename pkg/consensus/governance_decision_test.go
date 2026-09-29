@@ -92,3 +92,32 @@ func TestGovernanceDecisionTravelsToTheProofCycle(t *testing.T) {
 		t.Fatal("an evidence error was recorded for evidence that marshals")
 	}
 }
+
+// Every chain member of an intent is queued committing to the round's governance decision.
+func TestEveryMemberCommitsToTheRoundsDecision(t *testing.T) {
+	f := newFakeEnqueuer()
+	if err := enqueue(refusalValidator(f), batchableIntent(t, "i1", 84532, 421614)); err != nil {
+		t.Fatal(err)
+	}
+	want := proof.GovernanceCommitment(testGovDecision)
+	for _, c := range []int64{84532, 421614} {
+		if f.governance[c] != want {
+			t.Fatalf("chain %d was queued with governance %x, want %x", c, f.governance[c], want)
+		}
+	}
+}
+
+// A round that recorded no decision is not queued - and CERTEN not having established it is retried, not a
+// refusal of the intent.
+func TestARoundWithoutADecisionIsRetriedNotRefused(t *testing.T) {
+	f := newFakeEnqueuer()
+	err := refusalValidator(f).enqueueForBatch(batchableIntent(t, "i1", 84532), &proof.CertenProof{}, nil, 7,
+		nil, nil, nil, "", nil, "", 7)
+	var r *BatchRefusal
+	if !errors.As(err, &r) || r.Permanent || !errors.Is(err, ErrNoGovernanceCommitment) {
+		t.Fatalf("got %v", err)
+	}
+	if len(f.queued) != 0 {
+		t.Fatal("a member was queued without a decision")
+	}
+}

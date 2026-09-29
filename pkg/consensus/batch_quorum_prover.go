@@ -368,6 +368,15 @@ func (bv *BFTValidator) enqueueForBatch(
 		g0Proof, g1Proof, g2Proof, blsSignature, validatorSignatures, governanceLevel)
 	batchAtt.Replayed = true
 
+	// Every member the intent queues commits to who decided it: its batch operation id aggregates this (RB4-F66).
+	// A round that recorded no decision hands over none, and admission refuses any member it would queue - by name,
+	// and retried. A member that is already decided (a re-driven round, a repair) is never queued, so it needs none.
+	governance, gerr := batchAtt.GovernanceCommitment()
+	if gerr != nil {
+		bv.logger.Printf("🧾 [GOV-DECISION] intent %s: %v - a member that is not already decided will not be queued",
+			certenIntent.IntentID, gerr)
+	}
+
 	var added []batchMember
 	for _, m := range plan.members {
 		// Each chain member records its OWN outcome on its snapshot (TargetChainOutcome,
@@ -378,15 +387,15 @@ func (bv *BFTValidator) enqueueForBatch(
 		switch {
 		case m.after != nil:
 			enqErr = bv.batchEnqueuer.EnqueueAfter(
-				certenIntent.IntentID, plan.adiURL, m.chainID, m.account, m.opID, m.legs, &memberAtt, commitHeight,
+				certenIntent.IntentID, plan.adiURL, m.chainID, m.account, m.opID, m.legs, &memberAtt, governance, commitHeight,
 				certenIntent.Partition, certenIntent.BlockTime, certenIntent.TransactionHash, *m.after)
 		case m.onDemand:
 			enqErr = bv.batchEnqueuer.EnqueueOnDemand(
-				certenIntent.IntentID, plan.adiURL, m.chainID, m.account, m.opID, m.legs, &memberAtt, commitHeight,
+				certenIntent.IntentID, plan.adiURL, m.chainID, m.account, m.opID, m.legs, &memberAtt, governance, commitHeight,
 				certenIntent.Partition, certenIntent.BlockTime, certenIntent.TransactionHash)
 		default:
 			enqErr = bv.batchEnqueuer.EnqueueForBatch(
-				certenIntent.IntentID, plan.adiURL, m.chainID, m.account, m.opID, m.legs, &memberAtt, commitHeight,
+				certenIntent.IntentID, plan.adiURL, m.chainID, m.account, m.opID, m.legs, &memberAtt, governance, commitHeight,
 				certenIntent.Partition, certenIntent.BlockTime, certenIntent.TransactionHash)
 		}
 		switch {

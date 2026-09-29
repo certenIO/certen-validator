@@ -15,7 +15,7 @@ import (
 // odMember builds a valid member. id varies the intentID and operationID together, the way a
 // real intent does — the operationID IS the intent's identity.
 func odMember(id byte, chainID int64, height uint64) *PendingBatchIntent {
-	return &PendingBatchIntent{
+	return &PendingBatchIntent{GovernanceCommitment: testGov,
 		IntentID:     string(rune('a'+id)) + "-intent",
 		ADIURL:       "acc://org" + string(rune('a'+id)) + ".acme",
 		ChainID:      chainID,

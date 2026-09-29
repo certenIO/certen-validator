@@ -45,10 +45,10 @@ func admissionLeg(chainID int64) []mirrorLeg {
 
 func TestEnqueueForBatch_SameIntentAgainIsAlreadyQueued(t *testing.T) {
 	s := stackForChain(t, 11155111)
-	if err := s.EnqueueForBatch("i1", "acc://a.acme", 11155111, acct(1), opid(1), admissionLeg(11155111), "att", 100, "", time.Time{}, ""); err != nil {
+	if err := s.EnqueueForBatch("i1", "acc://a.acme", 11155111, acct(1), opid(1), admissionLeg(11155111), testAtt, testGov, 100, "", time.Time{}, ""); err != nil {
 		t.Fatal(err)
 	}
-	err := s.EnqueueForBatch("i1", "acc://a.acme", 11155111, acct(1), opid(1), admissionLeg(11155111), "att", 100, "", time.Time{}, "")
+	err := s.EnqueueForBatch("i1", "acc://a.acme", 11155111, acct(1), opid(1), admissionLeg(11155111), testAtt, testGov, 100, "", time.Time{}, "")
 	if !errors.Is(err, ErrMemberAlreadyQueued) {
 		t.Fatalf("re-enqueueing the same intent must report ErrMemberAlreadyQueued, got %v", err)
 	}
@@ -59,10 +59,10 @@ func TestEnqueueForBatch_SameIntentAgainIsAlreadyQueued(t *testing.T) {
 
 func TestEnqueueOnDemand_SameIntentAgainIsAlreadyQueued(t *testing.T) {
 	s := stackForChain(t, 11155111)
-	if err := s.EnqueueOnDemand("i1", "acc://a.acme", 11155111, acct(1), opid(1), admissionLeg(11155111), "att", 100, "", time.Time{}, ""); err != nil {
+	if err := s.EnqueueOnDemand("i1", "acc://a.acme", 11155111, acct(1), opid(1), admissionLeg(11155111), testAtt, testGov, 100, "", time.Time{}, ""); err != nil {
 		t.Fatal(err)
 	}
-	err := s.EnqueueOnDemand("i1", "acc://a.acme", 11155111, acct(1), opid(1), admissionLeg(11155111), "att", 100, "", time.Time{}, "")
+	err := s.EnqueueOnDemand("i1", "acc://a.acme", 11155111, acct(1), opid(1), admissionLeg(11155111), testAtt, testGov, 100, "", time.Time{}, "")
 	if !errors.Is(err, ErrMemberAlreadyQueued) {
 		t.Fatalf("re-enqueueing the same on-demand intent must report ErrMemberAlreadyQueued, got %v", err)
 	}
@@ -75,10 +75,10 @@ func TestEnqueue_OtherIntentWithAQueuedOperationIsAReplay(t *testing.T) {
 		if onDemand {
 			enq = s.EnqueueOnDemand
 		}
-		if err := enq("first", "acc://a.acme", 11155111, acct(1), opid(7), admissionLeg(11155111), "att", 100, "", time.Time{}, ""); err != nil {
+		if err := enq("first", "acc://a.acme", 11155111, acct(1), opid(7), admissionLeg(11155111), testAtt, testGov, 100, "", time.Time{}, ""); err != nil {
 			t.Fatal(err)
 		}
-		err := enq("second", "acc://a.acme", 11155111, acct(1), opid(7), admissionLeg(11155111), "att", 101, "", time.Time{}, "")
+		err := enq("second", "acc://a.acme", 11155111, acct(1), opid(7), admissionLeg(11155111), testAtt, testGov, 101, "", time.Time{}, "")
 		if !errors.Is(err, ErrOperationAlreadyQueued) {
 			t.Fatalf("onDemand=%v: a second intent with a queued operation must be ErrOperationAlreadyQueued, got %v", onDemand, err)
 		}
@@ -90,10 +90,10 @@ func TestEnqueue_OtherIntentWithAQueuedOperationIsAReplay(t *testing.T) {
 
 func TestEnqueue_UnconfiguredChainAndMissingHeightAreUnavailable(t *testing.T) {
 	s := stackForChain(t, 11155111)
-	if err := s.EnqueueForBatch("i1", "acc://a.acme", 84532, acct(1), opid(1), admissionLeg(84532), "att", 100, "", time.Time{}, ""); !errors.Is(err, ErrBatchUnavailable) {
+	if err := s.EnqueueForBatch("i1", "acc://a.acme", 84532, acct(1), opid(1), admissionLeg(84532), testAtt, testGov, 100, "", time.Time{}, ""); !errors.Is(err, ErrBatchUnavailable) {
 		t.Fatalf("a chain with no orchestrator is CERTEN's outage, not the intent's defect: %v", err)
 	}
-	if err := s.EnqueueForBatch("i1", "acc://a.acme", 11155111, acct(1), opid(1), admissionLeg(11155111), "att", 0, "", time.Time{}, ""); !errors.Is(err, ErrBatchUnavailable) {
+	if err := s.EnqueueForBatch("i1", "acc://a.acme", 11155111, acct(1), opid(1), admissionLeg(11155111), testAtt, testGov, 0, "", time.Time{}, ""); !errors.Is(err, ErrBatchUnavailable) {
 		t.Fatalf("a member with no commit height is CERTEN's outage, not the intent's defect: %v", err)
 	}
 }
@@ -128,9 +128,9 @@ func TestCheckMember_AgreesWithEnqueueAndAddsNothing(t *testing.T) {
 			enq := stackForChain(t, 11155111)
 			var enqErr error
 			if onDemand {
-				enqErr = enq.EnqueueOnDemand("i1", c.adi, c.chain, acct(1), c.op, c.legs, "att", c.height, "", time.Time{}, "")
+				enqErr = enq.EnqueueOnDemand("i1", c.adi, c.chain, acct(1), c.op, c.legs, testAtt, testGov, c.height, "", time.Time{}, "")
 			} else {
-				enqErr = enq.EnqueueForBatch("i1", c.adi, c.chain, acct(1), c.op, c.legs, "att", c.height, "", time.Time{}, "")
+				enqErr = enq.EnqueueForBatch("i1", c.adi, c.chain, acct(1), c.op, c.legs, testAtt, testGov, c.height, "", time.Time{}, "")
 			}
 			if (checkErr == nil) != c.wantAccepted || (enqErr == nil) != c.wantAccepted {
 				t.Fatalf("%s (onDemand=%v): check=%v enqueue=%v, want accepted=%v", c.name, onDemand, checkErr, enqErr, c.wantAccepted)
@@ -144,7 +144,7 @@ func TestCheckMember_AgreesWithEnqueueAndAddsNothing(t *testing.T) {
 
 func TestCheckMember_ReportsAReplayBeforeAnythingIsAdded(t *testing.T) {
 	s := stackForChain(t, 11155111)
-	if err := s.EnqueueForBatch("first", "acc://a.acme", 11155111, acct(1), opid(7), admissionLeg(11155111), "att", 100, "", time.Time{}, ""); err != nil {
+	if err := s.EnqueueForBatch("first", "acc://a.acme", 11155111, acct(1), opid(7), admissionLeg(11155111), testAtt, testGov, 100, "", time.Time{}, ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.CheckMember(false, "second", "acc://a.acme", 11155111, acct(1), opid(7), admissionLeg(11155111), 101); !errors.Is(err, ErrOperationAlreadyQueued) {
@@ -165,14 +165,14 @@ func TestRemoveMember_RollsBackEitherLane(t *testing.T) {
 		if onDemand {
 			enq = s.EnqueueOnDemand
 		}
-		if err := enq("i1", "acc://a.acme", 11155111, acct(1), opid(1), admissionLeg(11155111), "att", 100, "", time.Time{}, ""); err != nil {
+		if err := enq("i1", "acc://a.acme", 11155111, acct(1), opid(1), admissionLeg(11155111), testAtt, testGov, 100, "", time.Time{}, ""); err != nil {
 			t.Fatal(err)
 		}
 		s.RemoveMember(onDemand, "i1", 11155111, opid(1))
 		if s.Mempool.PendingCount() != 0 || s.Mempool.OnDemandCount() != 0 {
 			t.Fatalf("onDemand=%v: member still pooled after rollback", onDemand)
 		}
-		if err := enq("i1", "acc://a.acme", 11155111, acct(1), opid(1), admissionLeg(11155111), "att", 100, "", time.Time{}, ""); err != nil {
+		if err := enq("i1", "acc://a.acme", 11155111, acct(1), opid(1), admissionLeg(11155111), testAtt, testGov, 100, "", time.Time{}, ""); err != nil {
 			t.Fatalf("onDemand=%v: a rolled-back member could not be queued again: %v", onDemand, err)
 		}
 	}
@@ -183,17 +183,17 @@ func TestRemoveMember_RollsBackEitherLane(t *testing.T) {
 // an outcome marked on the member (RB3-F54), keyed by member exactly as the removal was.
 func TestMarkOutcome_TouchesOnlyTheMarkedChainsMember(t *testing.T) {
 	s := twoChainStack(t, 11155111, 84532)
-	if err := s.EnqueueForBatch("i1", "acc://a.acme", 11155111, acct(1), opid(1), admissionLeg(11155111), "att", 100, "", time.Time{}, ""); err != nil {
+	if err := s.EnqueueForBatch("i1", "acc://a.acme", 11155111, acct(1), opid(1), admissionLeg(11155111), testAtt, testGov, 100, "", time.Time{}, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.EnqueueForBatch("i1", "acc://a.acme", 84532, acct(1), opid(1), admissionLeg(84532), "att", 100, "", time.Time{}, ""); err != nil {
+	if err := s.EnqueueForBatch("i1", "acc://a.acme", 84532, acct(1), opid(1), admissionLeg(84532), testAtt, testGov, 100, "", time.Time{}, ""); err != nil {
 		t.Fatal(err)
 	}
 	onA := s.Mempool.PeriodMembers(11155111, 100, DefaultBatchPeriodBlocks)
 	if len(onA) != 1 {
 		t.Fatalf("precondition: one member on chain A, got %d", len(onA))
 	}
-	s.Mempool.MarkOutcome([]*PendingBatchIntent{{IntentID: "i1", ChainID: 11155111}}, MemberDropped)
+	s.Mempool.MarkOutcome([]*PendingBatchIntent{{GovernanceCommitment: testGov, IntentID: "i1", ChainID: 11155111}}, MemberDropped)
 	if got := s.Mempool.PendingCountForChain(84532); got != 1 {
 		t.Fatalf("dropping chain A's member resolved chain B's member too (pending on B = %d)", got)
 	}
@@ -209,10 +209,10 @@ func TestMarkOutcome_TouchesOnlyTheMarkedChainsMember(t *testing.T) {
 // The enqueue rollback (DropMembers) still removes outright, and only the named chain's member.
 func TestDropMembers_RemovesOnlyTheDroppedChainsMember(t *testing.T) {
 	s := twoChainStack(t, 11155111, 84532)
-	if err := s.EnqueueForBatch("i1", "acc://a.acme", 11155111, acct(1), opid(1), admissionLeg(11155111), "att", 100, "", time.Time{}, ""); err != nil {
+	if err := s.EnqueueForBatch("i1", "acc://a.acme", 11155111, acct(1), opid(1), admissionLeg(11155111), testAtt, testGov, 100, "", time.Time{}, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.EnqueueForBatch("i1", "acc://a.acme", 84532, acct(1), opid(1), admissionLeg(84532), "att", 100, "", time.Time{}, ""); err != nil {
+	if err := s.EnqueueForBatch("i1", "acc://a.acme", 84532, acct(1), opid(1), admissionLeg(84532), testAtt, testGov, 100, "", time.Time{}, ""); err != nil {
 		t.Fatal(err)
 	}
 	onA := s.Mempool.PeriodMembers(11155111, 100, DefaultBatchPeriodBlocks)
