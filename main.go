@@ -1837,7 +1837,7 @@ func startValidator(
 		return nil, nil, fmt.Errorf("proof cycle: member outcome outbox: %w", moErr)
 	}
 	(&execution.MemberOutcomeReconciler{
-		Outbox: memberOutcomes, Store: batchComponents.Repos.IntentLifecycle, Logf: log.Printf,
+		Outbox: memberOutcomes, Store: batchComponents.Repos.IntentLifecycle, ValidatorID: cfg.ValidatorID, Logf: log.Printf,
 	}).Start(context.Background())
 	log.Printf("✅ [Phase 9] Member outcome outbox at %s; reconciler replaying on startup and every minute", memberOutcomes.Dir())
 

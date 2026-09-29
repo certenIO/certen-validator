@@ -27,7 +27,7 @@ func TestARefusedMemberOutcomeIsRecordedOnceTheStoreRecovers(t *testing.T) {
 		t.Fatal(err)
 	}
 	repos := database.NewRepositories(database.NewClientFromDB(db))
-	o := &UnifiedOrchestrator{config: &UnifiedOrchestratorConfig{Repos: repos, MemberOutcomes: outbox}}
+	o := &UnifiedOrchestrator{config: &UnifiedOrchestratorConfig{Repos: repos, MemberOutcomes: outbox, ValidatorID: "validator-test"}}
 
 	if _, err := db.Exec(`CREATE OR REPLACE FUNCTION f78_refuse() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'f78: store unavailable'; END $$;
 		CREATE TRIGGER f78_refuse BEFORE INSERT ON intent_member_outcomes FOR EACH ROW EXECUTE FUNCTION f78_refuse();`); err != nil {
@@ -52,7 +52,7 @@ func TestARefusedMemberOutcomeIsRecordedOnceTheStoreRecovers(t *testing.T) {
 	}
 
 	drop()
-	rep, err := (&MemberOutcomeReconciler{Outbox: outbox, Store: repos.IntentLifecycle, Logf: t.Logf}).RunOnce(ctx)
+	rep, err := (&MemberOutcomeReconciler{Outbox: outbox, ValidatorID: "validator-test", Store: repos.IntentLifecycle, Logf: t.Logf}).RunOnce(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,11 +80,11 @@ func TestAContradictedMemberOutcomeIsQuarantinedAndATransientOneWaits(t *testing
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	rep, err := (&MemberOutcomeReconciler{Outbox: outbox, Store: refusingRecorder{fmt.Errorf("connection refused")}, Logf: t.Logf}).RunOnce(ctx)
+	rep, err := (&MemberOutcomeReconciler{Outbox: outbox, ValidatorID: "validator-test", Store: refusingRecorder{fmt.Errorf("connection refused")}, Logf: t.Logf}).RunOnce(ctx)
 	if err != nil || rep.Deferred != 1 || rep.Remaining != 1 {
 		t.Fatalf("a transient refusal waits: %+v %v", rep, err)
 	}
-	rep, err = (&MemberOutcomeReconciler{Outbox: outbox, Store: refusingRecorder{fmt.Errorf("%w: member set differs", database.ErrMemberOutcomeInvalid)}, Logf: t.Logf}).RunOnce(ctx)
+	rep, err = (&MemberOutcomeReconciler{Outbox: outbox, ValidatorID: "validator-test", Store: refusingRecorder{fmt.Errorf("%w: member set differs", database.ErrMemberOutcomeInvalid)}, Logf: t.Logf}).RunOnce(ctx)
 	if err != nil || rep.Quarantined != 1 || rep.Remaining != 0 {
 		t.Fatalf("a contradiction is quarantined, not retried forever or deleted: %+v %v", rep, err)
 	}
@@ -106,5 +106,37 @@ func TestACycleWithoutItsMemberSetIsRefusedBeforeItRuns(t *testing.T) {
 		t.Fatal(err)
 	} else if err != nil {
 		t.Fatalf("a request with its member set: %v", err)
+	}
+}
+
+type capturingRecorder struct{ got []database.MemberOutcome }
+
+func (r *capturingRecorder) RecordMemberOutcome(_ context.Context, o database.MemberOutcome) (database.DerivedIntentStatus, error) {
+	r.got = append(r.got, o)
+	return database.DerivedIntentStatus{}, nil
+}
+
+// RB4-F58: an outcome names the validator that reported it. An outbox entry written before outcomes did is this
+// validator's own report (the outbox is local), so the reconciler names it; a reconciler that does not know which
+// validator it is refuses to run rather than record reports under no name.
+func TestAnOutboxEntryFromBeforeReportersIsRecordedAsThisValidators(t *testing.T) {
+	outbox, err := NewFileMemberOutcomeOutbox(filepath.Join(t.TempDir(), "outbox"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := outbox.Put(database.MemberOutcome{IntentID: "i", ChainID: 84532, CycleID: "c", MemberChains: []int64{84532}, Legs: 1}); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := (&MemberOutcomeReconciler{Outbox: outbox, Store: &capturingRecorder{}, Logf: t.Logf}).RunOnce(ctx); err == nil {
+		t.Fatal("a reconciler without its validator id ran")
+	}
+	rec := &capturingRecorder{}
+	rep, err := (&MemberOutcomeReconciler{Outbox: outbox, ValidatorID: "validator-6", Store: rec, Logf: t.Logf}).RunOnce(ctx)
+	if err != nil || rep.Recorded != 1 {
+		t.Fatalf("replay: %+v %v", rep, err)
+	}
+	if len(rec.got) != 1 || rec.got[0].ReportedBy != "validator-6" {
+		t.Fatalf("the entry was recorded under %+v, want validator-6", rec.got)
 	}
 }

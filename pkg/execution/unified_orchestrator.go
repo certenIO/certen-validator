@@ -740,7 +740,7 @@ func (o *UnifiedOrchestrator) recordMemberOutcome(
 	out := database.MemberOutcome{
 		IntentID: req.IntentID, ChainID: chainID, MemberChains: chains, Legs: legs,
 		Settlement: settlement, ProofCycle: proofCycle, CycleID: req.CycleID, Reason: reason,
-		EffectsProven: cycleEffectsProven(cycle),
+		EffectsProven: cycleEffectsProven(cycle), ReportedBy: o.config.ValidatorID,
 	}
 	if result != nil {
 		out.WriteBackTx = result.WriteBackTxHash

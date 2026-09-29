@@ -98,10 +98,13 @@ type MemberOutcomeRecorder interface {
 
 // MemberOutcomeReconciler replays the outbox into the lifecycle store: at start, then every Interval.
 type MemberOutcomeReconciler struct {
-	Outbox   MemberOutcomeOutbox
-	Store    MemberOutcomeRecorder
-	Interval time.Duration // zero: one minute
-	Logf     func(string, ...interface{})
+	Outbox MemberOutcomeOutbox
+	Store  MemberOutcomeRecorder
+	// ValidatorID reports an entry written before outcomes named their reporter (RB4-F58): the outbox is this
+	// validator's own, so every entry in it is this validator's report.
+	ValidatorID string
+	Interval    time.Duration // zero: one minute
+	Logf        func(string, ...interface{})
 }
 
 // MemberOutcomeReconcileReport is what one pass did.
@@ -144,8 +147,8 @@ func (r *MemberOutcomeReconciler) passAndLog(ctx context.Context) {
 
 // RunOnce replays every pending outcome once.
 func (r *MemberOutcomeReconciler) RunOnce(ctx context.Context) (*MemberOutcomeReconcileReport, error) {
-	if r.Outbox == nil || r.Store == nil {
-		return nil, fmt.Errorf("member outcome reconciler: outbox and store are required")
+	if r.Outbox == nil || r.Store == nil || r.ValidatorID == "" {
+		return nil, fmt.Errorf("member outcome reconciler: outbox, store and validator id are required")
 	}
 	entries, err := r.Outbox.List()
 	if err != nil {
@@ -159,6 +162,9 @@ func (r *MemberOutcomeReconciler) RunOnce(ctx context.Context) (*MemberOutcomeRe
 			}
 			rep.Quarantined++
 			continue
+		}
+		if e.Outcome.ReportedBy == "" {
+			e.Outcome.ReportedBy = r.ValidatorID
 		}
 		derived, err := r.Store.RecordMemberOutcome(ctx, *e.Outcome)
 		switch {

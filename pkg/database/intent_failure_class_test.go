@@ -63,14 +63,14 @@ func TestAFailedIntentCarriesItsFailureClass(t *testing.T) {
 
 	// A chain member that did not settle fails its intent as settlement_failed; settling it after clears the class.
 	m := newIntent()
-	if _, err := repo.RecordMemberOutcome(ctx, MemberOutcome{IntentID: m, ChainID: 84532, MemberChains: []int64{84532},
+	if _, err := repo.RecordMemberOutcome(ctx, MemberOutcome{IntentID: m, ReportedBy: "validator-test", ChainID: 84532, MemberChains: []int64{84532},
 		Settlement: MemberSettlementReverted, ProofCycle: MemberProofCycleWritten, Legs: 1, SettlementTx: "0x" + uuid.NewString()[:8], Reason: "reverted"}); err != nil {
 		t.Fatal(err)
 	}
 	if st, class := read(m); st != "failed" || class == nil || *class != "settlement_failed" {
 		t.Fatalf("a reverted member left the intent %s / %v", st, class)
 	}
-	if _, err := repo.RecordMemberOutcome(ctx, MemberOutcome{IntentID: m, ChainID: 84532, MemberChains: []int64{84532},
+	if _, err := repo.RecordMemberOutcome(ctx, MemberOutcome{IntentID: m, ReportedBy: "validator-test", ChainID: 84532, MemberChains: []int64{84532},
 		Settlement: MemberSettlementSettled, ProofCycle: MemberProofCycleWritten, Legs: 1, SettlementTx: "0x" + uuid.NewString()[:8]}); err != nil {
 		t.Fatal(err)
 	}
