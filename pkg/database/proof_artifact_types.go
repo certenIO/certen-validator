@@ -55,8 +55,9 @@ const (
 	// proof cannot be verified offline from storage.
 	//
 	// It is not a failure. Nothing about such a proof is known to be wrong —
-	// the quorum was checked in flight, and the governance root commits to its
-	// conclusion. What is missing is the signatures, validator set and signed
+	// the quorum was checked in flight. (The governance root hashes that
+	// conclusion, but the governance root is anchored nowhere: RB4-F66.) What is
+	// missing is the signatures, validator set and signed
 	// bytes an independent verifier would need to check that conclusion for
 	// itself. Every proof written before Phase 6 is in this state.
 	//
