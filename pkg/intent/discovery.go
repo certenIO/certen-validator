@@ -1245,6 +1245,8 @@ func (id *IntentDiscovery) convertCertenTransactionToIntent(certenTx *accumulate
 	if certenTx.Partition != "" {
 		intent.Partition = strings.ToLower(certenTx.Partition)
 	}
+	// The BVN it was written on, for its L1-L3 proof (RB4-F46).
+	intent.ProofPartition = certenTx.ProofPartition
 	// The minor block's own time, read with the block that carried the transaction: consensus data.
 	intent.BlockTime = certenTx.Timestamp
 
@@ -1570,7 +1572,7 @@ func (id *IntentDiscovery) processIntent(intent *CertenIntent, blockHeight uint6
 		defer cancel()
 
 		// REAL L1-L3 consensus-bound chained proof (requires txHash, partition, CometBFT binding).
-		realProofApplicable := id.proofGenerator.HasRealProofBuilder() && intent.TransactionHash != "" && intent.Partition != ""
+		realProofApplicable := id.proofGenerator.HasRealProofBuilder() && intent.TransactionHash != "" && intent.ProofPartition != ""
 		if realProofApplicable {
 			// on_demand (financial) gets in-line retry to absorb DN-anchoring latency / transient
 			// DN-BVN RPC blips; on_cadence makes a single attempt and may fall back to a basic proof.
@@ -1579,9 +1581,9 @@ func (id *IntentDiscovery) processIntent(intent *CertenIntent, blockHeight uint6
 				inlineAttempts = id.config.ChainedProofInlineRetries
 			}
 			id.logger.Printf("🔗 [REAL-PROOF] Generating L1-L4 chained proof for %s (txHash=%s, partition=%s, attempts=%d)",
-				intent.IntentID, intent.TransactionHash[:16]+"...", intent.Partition, inlineAttempts)
+				intent.IntentID, intent.TransactionHash[:16]+"...", intent.ProofPartition, inlineAttempts)
 
-			cp, perr := id.buildChainedCertenProof(ctx, accountURL, intent.TransactionHash, intent.Partition, intent.IntentID, inlineAttempts)
+			cp, perr := id.buildChainedCertenProof(ctx, accountURL, intent.TransactionHash, intent.ProofPartition, intent.IntentID, inlineAttempts)
 			if perr != nil {
 				id.logger.Printf("⚠️ [REAL-PROOF] L1-L4 chained proof unavailable for %s: %v", intent.IntentID, perr)
 			} else {
@@ -1610,9 +1612,9 @@ func (id *IntentDiscovery) processIntent(intent *CertenIntent, blockHeight uint6
 		// each must be backed by the same chained proof.
 		if certenProof == nil {
 			if !realProofApplicable {
-				return consensus.TargetChainFailed, fmt.Errorf("intent %s (proofClass=%s): %w (realBuilder=%v txHash=%q partition=%q)",
+				return consensus.TargetChainFailed, fmt.Errorf("intent %s (proofClass=%s): %w (realBuilder=%v txHash=%q proof partition=%q)",
 					intent.IntentID, proofClass, errChainedProofTerminal,
-					id.proofGenerator.HasRealProofBuilder(), intent.TransactionHash, intent.Partition)
+					id.proofGenerator.HasRealProofBuilder(), intent.TransactionHash, intent.ProofPartition)
 			}
 			return consensus.TargetChainFailed, fmt.Errorf("intent %s (proofClass=%s): %w", intent.IntentID, proofClass, errChainedProofUnavailable)
 		}
@@ -1732,7 +1734,7 @@ func (id *IntentDiscovery) processMultiLegIntent(intent *CertenIntent, blockHeig
 		defer cancel()
 
 		// REAL L1-L3 consensus-bound chained proof (same fail-closed policy as single-leg).
-		realProofApplicable := id.proofGenerator.HasRealProofBuilder() && intent.TransactionHash != "" && intent.Partition != ""
+		realProofApplicable := id.proofGenerator.HasRealProofBuilder() && intent.TransactionHash != "" && intent.ProofPartition != ""
 		if realProofApplicable {
 			inlineAttempts := 1
 			if proofClass == "on_demand" {
@@ -1740,7 +1742,7 @@ func (id *IntentDiscovery) processMultiLegIntent(intent *CertenIntent, blockHeig
 			}
 			id.logger.Printf("🔗 [MULTI-LEG] Generating L1-L3 chained proof for %s (attempts=%d)", intent.IntentID, inlineAttempts)
 
-			cp, perr := id.buildChainedCertenProof(ctx, accountURL, intent.TransactionHash, intent.Partition, intent.IntentID, inlineAttempts)
+			cp, perr := id.buildChainedCertenProof(ctx, accountURL, intent.TransactionHash, intent.ProofPartition, intent.IntentID, inlineAttempts)
 			if perr != nil {
 				id.logger.Printf("⚠️ [MULTI-LEG] L1-L3 chained proof unavailable for %s: %v", intent.IntentID, perr)
 			} else {
@@ -1754,9 +1756,9 @@ func (id *IntentDiscovery) processMultiLegIntent(intent *CertenIntent, blockHeig
 		// idempotent so the requeue is replay-safe.
 		if certenProof == nil {
 			if !realProofApplicable {
-				return consensus.TargetChainFailed, fmt.Errorf("multi-leg intent %s (proofClass=%s): %w (realBuilder=%v txHash=%q partition=%q)",
+				return consensus.TargetChainFailed, fmt.Errorf("multi-leg intent %s (proofClass=%s): %w (realBuilder=%v txHash=%q proof partition=%q)",
 					intent.IntentID, proofClass, errChainedProofTerminal,
-					id.proofGenerator.HasRealProofBuilder(), intent.TransactionHash, intent.Partition)
+					id.proofGenerator.HasRealProofBuilder(), intent.TransactionHash, intent.ProofPartition)
 			}
 			return consensus.TargetChainFailed, fmt.Errorf("multi-leg intent %s (proofClass=%s): %w", intent.IntentID, proofClass, errChainedProofUnavailable)
 		}

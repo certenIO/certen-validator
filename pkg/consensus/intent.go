@@ -71,11 +71,15 @@ type CertenIntent struct {
 	TransactionHash string `json:"transactionHash"`
 	AccountURL      string `json:"accountUrl"`      // Principal account URL (where TX lives): .../data
 	OrganizationADI string `json:"organizationAdi"` // Organization ADI (for policy/routing): org ADI only
-	Partition       string `json:"partition"`       // BVN partition name (e.g., "bvn1") for L1-L3 proof generation
-	IntentData      []byte `json:"intentData"`      // Raw JSON blob - canonicalized later in commitment pipeline
-	CrossChainData  []byte `json:"crossChainData"`  // Raw JSON blob - canonicalized later in commitment pipeline
-	GovernanceData  []byte `json:"governanceData"`  // Raw JSON blob - canonicalized later in commitment pipeline
-	ReplayData      []byte `json:"replayData"`      // Raw JSON blob - canonicalized later in commitment pipeline
+	// Partition is the partition whose block the intent was discovered in (the Directory Network block that
+	// anchored it), paired with the discovery height for batch settlement's commit block.
+	Partition string `json:"partition"`
+	// ProofPartition is the BVN the intent was written on ("bvn1"): the L1-L3 proof is built on it (RB4-F46).
+	ProofPartition string `json:"proof_partition,omitempty"`
+	IntentData     []byte `json:"intentData"`     // Raw JSON blob - canonicalized later in commitment pipeline
+	CrossChainData []byte `json:"crossChainData"` // Raw JSON blob - canonicalized later in commitment pipeline
+	GovernanceData []byte `json:"governanceData"` // Raw JSON blob - canonicalized later in commitment pipeline
+	ReplayData     []byte `json:"replayData"`     // Raw JSON blob - canonicalized later in commitment pipeline
 
 	// CRITICAL: Proof class determines execution routing per FIRST_PRINCIPLES 2.5
 	// On-demand vs on-cadence proofs are NEVER interchangeable

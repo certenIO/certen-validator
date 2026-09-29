@@ -352,9 +352,28 @@ type CertenTransaction struct {
 	Timestamp       time.Time              `json:"timestamp"`
 	IntentData      map[string]interface{} `json:"intent_data"`
 	TransactionType string                 `json:"transaction_type"`
-	// Legacy fields for backward compatibility
+	// Partition is the partition whose block BlockHeight counts: the Directory Network block the intent was
+	// discovered in (it anchored the BVN block that carried it). Batch settlement keeps the two as one pair.
 	Partition string                 `json:"partition,omitempty"`
 	RawTx     map[string]interface{} `json:"raw_tx,omitempty"`
+	// ProofPartition is the BVN the transaction was written on ("bvn1") and ProofBlockIndex its block there: an
+	// L1-L3 proof is built on that BVN (RB4-F46). Empty when the entry was not read from a BVN.
+	ProofPartition  string `json:"proof_partition,omitempty"`
+	ProofBlockIndex int64  `json:"proof_block_index,omitempty"`
+}
+
+// BVNNameOf reads a BVN's partition name from its partition URL, acc://bvn-<ID>.acme -> lower(<ID>), exactly.
+// Anything else - the Directory Network, a ledger URL, a malformed name - is no BVN: "".
+func BVNNameOf(partitionURL string) string {
+	u := strings.ToLower(strings.TrimSpace(partitionURL))
+	if !strings.HasPrefix(u, "acc://bvn-") || !strings.HasSuffix(u, ".acme") {
+		return ""
+	}
+	id := strings.TrimSuffix(strings.TrimPrefix(u, "acc://bvn-"), ".acme")
+	if id == "" || strings.ContainsAny(id, "/.@") {
+		return ""
+	}
+	return id
 }
 
 // isCertenTransaction checks if a block entry is a CERTEN intent transaction
@@ -634,6 +653,10 @@ func (l *LiteClientAdapter) parseCertenTransaction(entry BlockEntry, block *Mino
 		Timestamp:   block.Time,
 		RawTx:       entry.Data,
 		IntentData:  make(map[string]interface{}),
+	}
+	if bvn := BVNNameOf(entry.Partition); bvn != "" {
+		certenTx.ProofPartition = bvn
+		certenTx.ProofBlockIndex = entry.PartitionBlock
 	}
 
 	// Try to extract intent data from the correct transaction structure
@@ -1232,6 +1255,10 @@ type BlockEntry struct {
 	Index int                    `json:"index"`
 	Type  string                 `json:"type"`
 	Data  map[string]interface{} `json:"data"`
+	// Partition and PartitionBlock are the partition URL the entry was read from and its block there
+	// (RB4-F46: a DN block's transactions are read from the BVN blocks it anchored, and which BVN was lost).
+	Partition      string `json:"partition,omitempty"`
+	PartitionBlock int64  `json:"partition_block,omitempty"`
 }
 
 // parseMinorBlockRecord parses a single MinorBlockRecord from the v3 API response
@@ -1308,8 +1335,10 @@ func (l *LiteClientAdapter) getBlockEntries(blockData map[string]interface{}, bl
 	for entryIdx, entry := range allEntries {
 		if entryMap, ok := entry.(map[string]interface{}); ok {
 			blockEntry := BlockEntry{
-				Index: entryIdx,
-				Data:  entryMap,
+				Index:          entryIdx,
+				Data:           entryMap,
+				Partition:      partition,
+				PartitionBlock: blockHeight,
 			}
 
 			// Extract entry type if available
