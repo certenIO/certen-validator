@@ -112,7 +112,11 @@ func BuildLayer5(
 		l5.BatchRoot = hex.EncodeToString(binding.BatchRoot)
 		l5.LeafHash = hex.EncodeToString(binding.LeafHash)
 		l5.LeafIndex = uint64(binding.TreeIndex)
-		l5.Path = merkleStepsFromNodes(binding.MerklePath)
+		path, err := merkleStepsFromNodes(binding.MerklePath)
+		if err != nil {
+			return nil, fmt.Errorf("layer5: the batch row's path: %w", err)
+		}
+		l5.Path = path
 
 	default:
 		// No canonical row: nothing to bind. Returning nil is not a failure - an absent L5 reads as
@@ -134,15 +138,25 @@ func BuildLayer5(
 // same meaning — the SIBLING's side — so this is a rename, not a translation.
 // It is written out rather than aliased because the two types live in packages
 // with different reasons to change.
-func merkleStepsFromNodes(nodes []database.MerklePathNode) []MerkleStep {
+//
+// Each sibling is stated in one form - 64 lower-case hex characters - whichever form the row stored it in: the
+// canonical writer stores 0x-prefixed hashes, the rows before it bare ones, and the layer's reader takes bare hex.
+// Passed through as stored, every multi-member canonical batch produced a layer 5 whose path did not decode, and
+// the binding was refused as unverifiable - its members had no layer 5 at all (RB4-F72). A node that is not 32
+// bytes of hex either way is an error, not a node.
+func merkleStepsFromNodes(nodes []database.MerklePathNode) ([]MerkleStep, error) {
 	if len(nodes) == 0 {
-		return nil
+		return nil, nil
 	}
 	out := make([]MerkleStep, 0, len(nodes))
-	for _, n := range nodes {
-		out = append(out, MerkleStep{Hash: n.Hash, Position: n.Position})
+	for i, n := range nodes {
+		h := strings.ToLower(strings.TrimPrefix(strings.TrimPrefix(n.Hash, "0x"), "0X"))
+		if b, err := hex.DecodeString(h); err != nil || len(b) != 32 {
+			return nil, fmt.Errorf("merkle path node %d (%q) is not a 32-byte hash", i, n.Hash)
+		}
+		out = append(out, MerkleStep{Hash: h, Position: n.Position})
 	}
-	return out
+	return out, nil
 }
 
 // BuildLayer5Row returns the chained_proof_layers row for an external anchor.
