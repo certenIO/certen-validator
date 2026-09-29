@@ -74,6 +74,16 @@ import (
 // which is the pre-Phase-8 behaviour, arrived at by accident instead of by
 // design, and indistinguishable from it in the output.
 func (g1 *G1Layer) accountSignerPages(ctx context.Context, account, principalPage string) ([]string, error) {
+	return g1.accountSignerPagesFor(ctx, account, principalPage, nil)
+}
+
+// accountSignerPagesFor is accountSignerPages over every authority whose vote the transaction needs (RB4 G-18): the
+// principal's live authorities, its authorities at execution (atExec - one removed since still had to vote), and the
+// authorities the transaction itself requires beyond them (its header's, and those its body introduces), read from
+// the transaction G0 carried. A required authority whose pages are not searched is one whose signatures are never
+// collected, while the vote model requires it to accept.
+func (g1 *G1Layer) accountSignerPagesFor(ctx context.Context, account, principalPage string,
+	atExec []AccountAuthority) ([]string, error) {
 	principalPage = normalizeAccURL(principalPage)
 	if account == "" {
 		// No principal to resolve against. The caller keeps the single-page
@@ -91,12 +101,30 @@ func (g1 *G1Layer) accountSignerPages(ctx context.Context, account, principalPag
 		return nil, fmt.Errorf("%s reports no authorities; an account with no authority cannot "+
 			"be shown to have approved anything", account)
 	}
+	auths = append(auths, atExec...)
+	transaction := g1.g0Layer.Transaction()
+	if transaction == nil {
+		return nil, fmt.Errorf("G0 did not carry the transaction forward, so which authorities it requires beyond "+
+			"%s's cannot be read", account)
+	}
+	required, err := extraAuthoritiesFromTransaction(transaction)
+	if err != nil {
+		return nil, fmt.Errorf("which authorities the transaction requires: %w", err)
+	}
+	for _, u := range required.URLs {
+		auths = append(auths, AccountAuthority{URL: normalizeAccURL(u)})
+	}
+	books := map[string]bool{}
 
 	out := []string{principalPage}
 	seen := map[string]bool{principalPage: true}
 	var extra []string
 
 	for _, a := range auths {
+		if books[normalizeAccURL(a.URL)] {
+			continue
+		}
+		books[normalizeAccURL(a.URL)] = true
 		pages, err := src.BookPages(ctx, a.URL)
 		if err != nil {
 			// NOT skipped. An authority whose pages cannot be listed is an
@@ -120,8 +148,8 @@ func (g1 *G1Layer) accountSignerPages(ctx context.Context, account, principalPag
 	out = append(out, extra...)
 
 	if len(out) > 1 {
-		fmt.Printf("[G1] [AUTHORITY-PAGES] %s is governed by %d authority/ies; %d page(s) may "+
-			"carry a vote: %v\n", account, len(auths), len(out), out)
+		fmt.Printf("[G1] [AUTHORITY-PAGES] %s: the transaction needs the vote of %d authority/ies; %d page(s) may "+
+			"carry a vote: %v\n", account, len(books), len(out), out)
 	}
 	return out, nil
 }

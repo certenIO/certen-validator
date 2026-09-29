@@ -85,6 +85,11 @@ type g1Authorization struct {
 	txType    protocol.TransactionType
 	timelines *timelineCache
 
+	// authorities is the principal's authority set at execution and histories the account histories it was
+	// replayed from (ProveG1, before the signatures were collected).
+	authorities []AccountAuthority
+	histories   *accountHistories
+
 	// evidence is what the last Evaluate read, verified to reproduce its vote (g1_vote_evidence.go).
 	evidence *govvote.Evidence
 }
@@ -106,10 +111,9 @@ func (a *g1Authorization) Evaluate(ctx context.Context, sigs []ValidatedSignatur
 	}
 	facts.Arrivals, facts.Votes = arrivals, votes
 
-	histories := newAccountHistories()
-	authorities, err := a.g1.authoritySetAtExec(ctx, a.principal, a.execMBI, histories)
-	if err != nil {
-		return nil, err
+	authorities, histories := a.authorities, a.histories
+	if len(authorities) == 0 || histories == nil {
+		return nil, fmt.Errorf("the principal's authority set at execution was not established before the vote")
 	}
 	vote, err := govvote.Evaluate(ctx, facts, a.timelines, a.principal, authorities, extra.URLs, extra.IgnoreDisabled)
 	if err != nil {

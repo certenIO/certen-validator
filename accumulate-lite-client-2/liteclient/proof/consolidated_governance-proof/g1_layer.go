@@ -157,7 +157,19 @@ func (g1 *G1Layer) ProveG1(ctx context.Context, request G1Request) (*G1Result, e
 	// "we could not evaluate the signatures" apart from "the signatures do not
 	// authorise this transaction". Conflating the two is what recorded nine
 	// healthy proofs as governance failures.
-	validatedSignatures, timingBasis, routeStatus, err := g1.enumerateAndValidateSignatures(ctx, request, *authoritySnapshot, g0Result.TxHash)
+	// The principal's authority set at execution, replayed from its own history with the evidence of that
+	// replay: computed once, before the signatures are looked for, because its authorities' pages are among the
+	// pages searched (G-18), and handed to the vote, which is judged against exactly this set.
+	accountHistories := newAccountHistories()
+	authoritiesAtExec, err := g1.authoritySetAtExec(ctx, request.G0Request.Account, g0Result.ExecMBI, accountHistories)
+	if err != nil {
+		return nil, &SignatureEvidenceIncomplete{Route: "authority-set", Unavailable: []UnavailableSignature{{
+			MessageID: request.G0Request.Account, Stage: "authority-set-at-execution",
+			Err: "the authority set at execution could not be established: " + err.Error() +
+				". This is NOT a governance rejection"}}}
+	}
+
+	validatedSignatures, timingBasis, routeStatus, err := g1.enumerateAndValidateSignatures(ctx, request, *authoritySnapshot, g0Result.TxHash, authoritiesAtExec)
 	if err != nil {
 		if inc, ok := IsEvidenceIncomplete(err); ok {
 			return nil, inc
@@ -219,6 +231,9 @@ func (g1 *G1Layer) ProveG1(ctx context.Context, request G1Request) (*G1Result, e
 		execMBI:   g0Result.ExecMBI,
 		txType:    txType,
 		timelines: newTimelineCache(g1.authorityBuilder),
+
+		authorities: authoritiesAtExec,
+		histories:   accountHistories,
 	}
 
 	authorizationResult, err := g1.signatureVerifier.ValidateSignatureSet(ctx, validatedSignatures, *authoritySnapshot, g0Result.TxHash, g0Result.G0ProofComplete, request.G0Request.Account, authz, extraAuthorities)
@@ -276,7 +291,7 @@ func (g1 *G1Layer) ProveG1(ctx context.Context, request G1Request) (*G1Result, e
 // Now: both routes run, an unavailable route is distinguished from a route
 // that legitimately found nothing, and disagreement fails closed.
 func (g1 *G1Layer) enumerateAndValidateSignatures(ctx context.Context, request G1Request,
-	snapshot AuthoritySnapshot, txHash string) ([]ValidatedSignature, []SignatureTimingBasis, *RouteStatus, error) {
+	snapshot AuthoritySnapshot, txHash string, atExec []AccountAuthority) ([]ValidatedSignature, []SignatureTimingBasis, *RouteStatus, error) {
 
 	fmt.Printf("[G1] [EVIDENCE] Collecting signature evidence via both routes...\n")
 
@@ -292,7 +307,7 @@ func (g1 *G1Layer) enumerateAndValidateSignatures(ctx context.Context, request G
 	// the same as there being one, and quietly continuing with the principal's
 	// page alone is precisely the under-collection that produced case L's false
 	// rejection. See g1_authority_pages.go.
-	authorityPages, apErr := g1.accountSignerPages(ctx, request.G0Request.Account, request.KeyPage)
+	authorityPages, apErr := g1.accountSignerPagesFor(ctx, request.G0Request.Account, request.KeyPage, atExec)
 	if apErr != nil {
 		return nil, nil, nil, &SignatureEvidenceIncomplete{
 			Route:     "authority-pages",
