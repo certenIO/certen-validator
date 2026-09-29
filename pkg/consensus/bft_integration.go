@@ -1140,6 +1140,16 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 		if derr != nil {
 			return nil, fmt.Errorf("%w: intent %s: %w", ErrGovernanceUnavailable, certenIntent.IntentID, derr)
 		}
+		// The governance the intent declares must be the governance that executed it (RB4-F64d). Read from the
+		// governed transaction the vote's evidence carries - the claim the user signed.
+		declared, derr := declaredGovernanceVerdict(g1ProofWrapper.VoteEvidence, rec)
+		if derr != nil {
+			return nil, fmt.Errorf("%w: intent %s: %w", ErrGovernanceUnsatisfied, certenIntent.IntentID, derr)
+		}
+		if declared == nil {
+			bv.logger.Printf("🧾 [GOV-DECISION] intent %s declares no authority set; the decision is the chain's alone",
+				certenIntent.IntentID)
+		}
 		govDecision, govAuthorization, govVoteEvidence = gdr, rec, g1ProofWrapper.VoteEvidence
 		commitment := proof.GovernanceCommitment(gdr)
 		bv.logger.Printf("🧾 [GOV-DECISION] intent %s: governance decision %x (%d authority/ies)",
@@ -3392,6 +3402,24 @@ func governanceProofFailureClass(err error) error {
 		return ErrGovernanceUnsatisfied
 	}
 	return ErrGovernanceUnavailable
+}
+
+// declaredGovernanceVerdict requires the governance an intent declares - read from the governed transaction its
+// vote evidence carries - to be the governance its vote record says executed it (RB4-F64d). A declaration that cannot
+// be read, or does not match, is a verdict on the intent: the caller classes it ErrGovernanceUnsatisfied. Nil, nil: it
+// declares none.
+func declaredGovernanceVerdict(ev *govvote.Evidence, rec *proof.AuthorizationRecord) (*proof.DeclaredGovernance, error) {
+	declared, err := proof.DeclaredGovernanceOfEvidence(ev)
+	if err != nil {
+		return nil, fmt.Errorf("its declared governance cannot be read: %w", err)
+	}
+	if declared == nil {
+		return nil, nil
+	}
+	if err := proof.CheckDeclaredGovernance(declared, rec); err != nil {
+		return nil, err
+	}
+	return declared, nil
 }
 
 // deriveGovernanceDecision is who decided the transaction, from this validator's own G1 vote record: the record the

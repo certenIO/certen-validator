@@ -7,9 +7,13 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govvote"
 	"github.com/certen/independant-validator/pkg/proof"
+	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
+	"gitlab.com/accumulatenetwork/accumulate/protocol"
 )
 
 // RB4-F66: each validator derives, from its own proof, the record of who decided the transaction, and the batch
@@ -150,5 +154,42 @@ func TestARoundWithoutADecisionIsRetriedNotRefused(t *testing.T) {
 	}
 	if len(f.queued) != 0 {
 		t.Fatal("a member was queued without a decision")
+	}
+}
+
+// RB4-F64d: an intent that did not execute under the governance it declares is refused as governance - a verdict,
+// not an outage. One that declares none is checked against nothing beyond the chain, and says so.
+func TestDeclaredGovernanceIsAVerdictOnTheIntent(t *testing.T) {
+	_, g1 := g1Wrapper(t)
+	if d, err := declaredGovernanceVerdict(g1.VoteEvidence, g1.Authorization); err != nil || d != nil {
+		t.Fatalf("the Phase C intent declares no authority set: %+v %v", d, err)
+	}
+
+	declares := func(gov string) *govvote.Evidence {
+		u, _ := url.Parse("acc://rb4-phase-c-09282125.acme/data")
+		txn := &protocol.Transaction{Body: &protocol.WriteData{Entry: &protocol.DoubleHashDataEntry{Data: [][]byte{
+			[]byte(`{}`), []byte(`{}`), []byte(gov), []byte(`{}`)}}}}
+		txn.Header.Principal = u
+		b, _ := txn.MarshalBinary()
+		return &govvote.Evidence{Transaction: hex.EncodeToString(b)}
+	}
+	if _, err := declaredGovernanceVerdict(declares(
+		`{"authorization":{"authorities":[{"url":"acc://rb4-phase-c-09282125.acme/book","disabled":false}]}}`),
+		g1.Authorization); err != nil {
+		t.Fatalf("the declared governance executed the intent: %v", err)
+	}
+	if _, err := declaredGovernanceVerdict(declares(
+		`{"authorization":{"authorities":[{"url":"acc://other.acme/book","disabled":false}]}}`),
+		g1.Authorization); !errors.Is(err, proof.ErrDeclaredGovernanceMismatch) {
+		t.Fatalf("another authority set: %v", err)
+	}
+	if _, err := declaredGovernanceVerdict(declares(
+		`{"authorization":{"authorities":"acc://rb4-phase-c-09282125.acme/book"}}`), g1.Authorization); err == nil {
+		t.Fatal("a malformed declaration was read")
+	}
+	// The caller classes both as a verdict on the intent.
+	src, _ := os.ReadFile("bft_integration.go")
+	if !strings.Contains(string(src), `return nil, fmt.Errorf("%w: intent %s: %w", ErrGovernanceUnsatisfied, certenIntent.IntentID, derr)`) {
+		t.Fatal("a declared-governance failure is not classed ErrGovernanceUnsatisfied")
 	}
 }

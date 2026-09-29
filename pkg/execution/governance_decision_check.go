@@ -49,8 +49,11 @@ type GovernanceDecisionCheck struct {
 	// DecidedByLiveState names each account whose part of the authority set rests on the network's present set
 	// choosing between the two creation rules, not on the chain alone (govvote/account.go).
 	DecidedByLiveState []string
-	BatchOperationID   string // 0x-hex, when anchored
-	BatchVersion       string
+	// Declared is the authority set the intent declares (RB4-F64d), checked equal to the vote record's; nil when it
+	// declares none.
+	Declared         *certenproof.DeclaredGovernance
+	BatchOperationID string // 0x-hex, when anchored
+	BatchVersion     string
 }
 
 // CheckGovernanceDecision re-derives the stored decision and checks it against the layer 5's batch. l5 may be nil
@@ -103,6 +106,15 @@ func CheckGovernanceDecision(levels []certenproof.StoredGovernanceLevel, l5 *Lay
 	if err := certenproof.VerifyVoteEvidence(context.Background(), &g0, ev, &rec); err != nil {
 		return nil, fmt.Errorf("the stored vote record: %w", err)
 	}
+	declared, err := certenproof.DeclaredGovernanceOfEvidence(ev)
+	if err != nil {
+		return nil, fmt.Errorf("the intent's declared governance: %w", err)
+	}
+	if declared != nil {
+		if err := certenproof.CheckDeclaredGovernance(declared, &rec); err != nil {
+			return nil, err
+		}
+	}
 	again, err := certenproof.GovernanceDecisionRecord(&g0, &rec)
 	if err != nil {
 		return nil, fmt.Errorf("the stored vote record does not support a decision: %w", err)
@@ -117,7 +129,8 @@ func CheckGovernanceDecision(levels []certenproof.StoredGovernanceLevel, l5 *Lay
 	}
 	out := &GovernanceDecisionCheck{Commitment: commitment, Authorities: len(rec.Authorities),
 		EvidenceMessages: len(ev.Signatures) + len(ev.Votes) + len(ev.Arrivals), EvidencePages: len(ev.Pages),
-		EvidenceAccounts: len(ev.AuthoritySet.Accounts), DecidedByLiveState: ev.AuthoritySet.DecidedByLiveState}
+		EvidenceAccounts: len(ev.AuthoritySet.Accounts), DecidedByLiveState: ev.AuthoritySet.DecidedByLiveState,
+		Declared: declared}
 
 	if l5 == nil || l5.Governance == nil {
 		return out, fmt.Errorf("%w: the proof's layer 5 carries no batch governance", ErrGovernanceNotAnchored)

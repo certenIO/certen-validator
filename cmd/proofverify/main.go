@@ -416,6 +416,12 @@ func reportGovernanceDecision(ctx context.Context, store *certenproof.PostgresPr
 // part of it rests on the network's present set rather than on the chain alone.
 func reportAuthoritySetBasis(got *execution.GovernanceDecisionCheck) {
 	fmt.Printf("  GOV authorities: the set at execution replayed from %d account history/ies\n", got.EvidenceAccounts)
+	if got.Declared == nil {
+		fmt.Printf("  GOV declared: the intent declares no authority set; nothing it claims is checked beyond the chain\n")
+	} else {
+		fmt.Printf("  GOV declared: %s - the governance that executed the intent\n",
+			certenproof.DescribeDeclaredGovernance(got.Declared))
+	}
 	for _, a := range got.DecidedByLiveState {
 		fmt.Printf("      %s: which creation rule applied was chosen by the set the network held when read,\n", a)
 		fmt.Printf("      not by the chain alone\n")
