@@ -76,10 +76,6 @@ func (p *prunedNode) serve(t *testing.T) *ethclient.Client {
 				fail("header not found")
 				return
 			}
-			if p.callErr {
-				fail("header not found")
-				return
-			}
 			if !isHead(b) {
 				fail("historical state bff50abba4636530db13cafd199e7bc67432b1e07b19fc716db0406a0e87ebb4 is not available")
 				return
@@ -174,5 +170,23 @@ func TestALeafIsReadAsOfTheFinalizedBlockWithoutItsHistoricalState(t *testing.T)
 	p = &prunedNode{head: head, hasCode: true, consumed: true, consumedAt: finalized - 100, leaf: leaf, logsErr: true}
 	if _, err := leafConsumedAt(ctx, p.serve(t), account, leaf, finalized); err == nil || !strings.Contains(err.Error(), "LeafConsumed") {
 		t.Fatalf("unreadable logs must stay an error naming what could not be read: %v", err)
+	}
+
+	// A call that fails at the head decides nothing either.
+	p = &prunedNode{head: head, hasCode: true, consumed: true, consumedAt: finalized - 100, leaf: leaf, callErr: true}
+	if consumed, err := leafConsumedAt(ctx, p.serve(t), account, leaf, finalized); err == nil || consumed {
+		t.Fatalf("a failed call must stay an error: consumed=%v err=%v", consumed, err)
+	}
+
+	// Asked as of the head itself, the head's state is the answer: no logs are needed.
+	p = &prunedNode{head: head, hasCode: true, consumed: true, consumedAt: head, leaf: leaf, logsErr: true}
+	if consumed, err := leafConsumedAt(ctx, p.serve(t), account, leaf, head); err != nil || !consumed {
+		t.Fatalf("as of the head: consumed=%v err=%v", consumed, err)
+	}
+
+	// A block the node has not reached is not answered.
+	p = &prunedNode{head: head, hasCode: true, consumed: true, consumedAt: finalized - 100, leaf: leaf}
+	if _, err := leafConsumedAt(ctx, p.serve(t), account, leaf, head+1); err == nil || !strings.Contains(err.Error(), "past the chain head") {
+		t.Fatalf("a block past the head must be refused by name: %v", err)
 	}
 }
