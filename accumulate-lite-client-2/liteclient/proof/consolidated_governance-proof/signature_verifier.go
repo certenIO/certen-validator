@@ -493,7 +493,7 @@ func (sv *SignatureVerifier) ValidateSignatureSet(ctx context.Context, signature
 		// Name WHICH authority did not vote to accept, and what each of its
 		// pages recorded. "1/2" cannot distinguish an institution that did not
 		// authorize this from one that voted against it.
-		return nil, ValidationError{Msg: fmt.Sprintf("Threshold not satisfied: %d/%d; %s",
+		return nil, &AuthorizationNotSatisfied{Msg: fmt.Sprintf("Threshold not satisfied: %d/%d; %s",
 			uniqueValidKeys, state.Threshold, vote.Describe())}
 	}
 

@@ -49,7 +49,7 @@ func (g2 *G2Layer) ProveG2(ctx context.Context, request G2Request) (*G2Result, e
 	// Step 1: Generate G1 proof as foundation
 	g1Result, err := g2.g1Layer.ProveG1(ctx, request.G1Request)
 	if err != nil {
-		return nil, fmt.Errorf("G1 proof failed: %v", err)
+		return nil, g1ProofFailed(err)
 	}
 
 	fmt.Printf("[G2] G1 foundation established\n")
@@ -605,4 +605,10 @@ func (g2 *G2Layer) queryRawTransactionJSONWithRetry(ctx context.Context, g1Resul
 		fmt.Printf("[G2] [PAYLOAD] retry %d/%d after: %v\n", i+1, attempts, err)
 	}
 	return nil, fmt.Errorf("payload query failed after %d attempts: %w", attempts, lastErr)
+}
+
+// g1ProofFailed is how G1's failure leaves G2: wrapped with %w, so a G1 verdict is still one at the process exit
+// (RB4-F62).
+func g1ProofFailed(err error) error {
+	return fmt.Errorf("G1 proof failed: %w", err)
 }

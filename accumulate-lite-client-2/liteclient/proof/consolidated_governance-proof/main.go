@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -141,7 +142,7 @@ func main() {
 		LogError("MAIN", "Governance proof failed: %v", err)
 		// Always write to stderr so the parent process can capture the error via ExitError.Stderr
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		os.Exit(exitCodeFor(err))
 	}
 
 	LogInfo("MAIN", "Governance proof completed successfully")
@@ -336,7 +337,7 @@ func runGovernanceProof(config *CLIConfig) error {
 	}
 
 	if proofErr != nil {
-		return fmt.Errorf("proof generation failed: %v", proofErr)
+		return proofGenerationFailed(proofErr)
 	}
 
 	// Output result
@@ -588,4 +589,26 @@ func printG2Result(config *CLIConfig, result *G2Result) {
 func printVersion() {
 	fmt.Printf("%s %s\n", AppName, AppVersion)
 	fmt.Printf("CERTEN Governance Proof Specification %s\n", SpecVersion)
+}
+
+// exitGovernanceNotSatisfied is the exit status of a proof whose transaction's authority set did not vote to accept
+// it: a governance verdict. Every other failure - an outage, incomplete evidence, bad input - exits 1 and decides
+// nothing about the transaction. The validator's CLI adapter reads this status (pkg/proof GovProofExitNotSatisfied,
+// which a test there holds to this value); it used to receive 1 for both and recorded every verdict as an outage
+// (RB4-F62).
+const exitGovernanceNotSatisfied = 3
+
+// exitCodeFor is the process exit status for a failed proof.
+func exitCodeFor(err error) int {
+	var ns *AuthorizationNotSatisfied
+	if errors.As(err, &ns) {
+		return exitGovernanceNotSatisfied
+	}
+	return 1
+}
+
+// proofGenerationFailed is how a level's failure leaves the proof run: wrapped with %w, so a verdict reaches
+// exitCodeFor (RB4-F62).
+func proofGenerationFailed(err error) error {
+	return fmt.Errorf("proof generation failed: %w", err)
 }

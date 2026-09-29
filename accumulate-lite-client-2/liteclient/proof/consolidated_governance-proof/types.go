@@ -475,6 +475,21 @@ func (e ValidationError) Error() string {
 	return e.Msg
 }
 
+// AuthorizationNotSatisfied is G1's verdict that the transaction's authority set did not vote to accept it - a
+// governance rejection, never an outage. It is its own type so every layer up to the process exit can tell it
+// from a proof that could not be produced (RB4-F62); it remains the ValidationError it always was.
+type AuthorizationNotSatisfied struct {
+	Msg string
+}
+
+func (e *AuthorizationNotSatisfied) Error() string {
+	return e.Msg
+}
+
+func (e *AuthorizationNotSatisfied) Unwrap() error {
+	return ValidationError{Msg: e.Msg}
+}
+
 // RPCError represents an RPC communication error
 type RPCError struct {
 	Msg string
