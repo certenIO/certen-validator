@@ -1764,47 +1764,28 @@ func startValidator(
 	// Phase 9 write-back is part of every proof cycle (RB3-F75): the principal, the signer and the
 	// submitter are required, and a validator that cannot build them does not start. There is no
 	// disabled mode - it used to run every cycle with its results written nowhere - no null submitter,
-	// and no fallback to the validator's key for a malformed write-back key.
+	// and no fallback to the validator's key: the write-back key is required (RB4-F50).
 	var accSubmitter execution.AccumulateSubmitter
 
-	accWritebackPrincipal := os.Getenv("ACCUMULATE_RESULTS_PRINCIPAL")
-	accSignerURL := os.Getenv("ACCUMULATE_SIGNER_URL")
 	if v := os.Getenv("FF_UNIFIED_TABLES"); v != "" && v != "true" {
 		return nil, nil, fmt.Errorf("FF_UNIFIED_TABLES=%s is not supported: every proof cycle stores its evidence", v)
 	}
-	if v := os.Getenv("PROOF_CYCLE_WRITEBACK"); v != "" && v != "true" {
-		return nil, nil, fmt.Errorf("PROOF_CYCLE_WRITEBACK=%s is not supported: proof cycles always write their results back", v)
+
+	wb, err := writebackSettingsFromEnv()
+	if err != nil {
+		return nil, nil, err
 	}
-
 	{
-		if accWritebackPrincipal == "" || accSignerURL == "" {
-			return nil, nil, fmt.Errorf("write-back requires ACCUMULATE_RESULTS_PRINCIPAL and ACCUMULATE_SIGNER_URL " +
-				"(write-back cannot run without them)")
-		}
 		log.Printf("📝 [Phase 9] Configuring Accumulate write-back:")
-		log.Printf("   - Principal: %s", accWritebackPrincipal)
-		log.Printf("   - Signer: %s", accSignerURL)
-
-		// An optional dedicated write-back key. If it is set it must be valid: a malformed key is a
-		// configuration error, not a reason to sign with the validator's own key instead.
-		writebackPrivKey := privateKey
-		if writebackKeyHex := os.Getenv("ACCUMULATE_WRITEBACK_PRIV_KEY"); writebackKeyHex != "" {
-			keyBytes, err := hex.DecodeString(strings.TrimSpace(writebackKeyHex))
-			if err != nil {
-				return nil, nil, fmt.Errorf("ACCUMULATE_WRITEBACK_PRIV_KEY is not valid hex: %w", err)
-			}
-			if len(keyBytes) != ed25519.PrivateKeySize {
-				return nil, nil, fmt.Errorf("ACCUMULATE_WRITEBACK_PRIV_KEY is %d bytes, want %d", len(keyBytes), ed25519.PrivateKeySize)
-			}
-			writebackPrivKey = ed25519.PrivateKey(keyBytes)
-			log.Printf("   - Using the dedicated write-back key from ACCUMULATE_WRITEBACK_PRIV_KEY")
-		}
+		log.Printf("   - Principal: %s", wb.principal)
+		log.Printf("   - Signer: %s", wb.signer)
+		log.Printf("   - Key: %x", wb.key.Public())
 
 		submitterCfg := &execution.AccumulateSubmitterConfig{
 			Client:              liteClientAdapter,
-			PrivateKey:          writebackPrivKey,
-			AccountURL:          accWritebackPrincipal,
-			SignerURL:           accSignerURL,
+			PrivateKey:          wb.key,
+			AccountURL:          wb.principal,
+			SignerURL:           wb.signer,
 			KeyPageIndex:        1,
 			KeyIndex:            0,
 			ConfirmationTimeout: 2 * time.Minute,
@@ -1887,7 +1868,7 @@ func startValidator(
 		AttestationPeers:         cfg.AttestationPeers,
 		AttestationRequiredCount: cfg.AttestationRequiredCount,
 		AccumulateClient:         accSubmitter,
-		ResultsPrincipal:         accWritebackPrincipal,
+		ResultsPrincipal:         wb.principal,
 		Ed25519Key:               privateKey,
 		EnableMultiChain:         cfg.EnableMultiChain,
 		ProofGenerator:           proofGenAdapter,
@@ -2192,6 +2173,45 @@ func bftTimeoutFromEnv() (time.Duration, error) {
 }
 
 // checkpointSettings is the block-checkpoint anchor's configuration, all of it.
+type writebackSettings struct {
+	principal, signer string
+	key               ed25519.PrivateKey
+}
+
+// writebackSettingsFromEnv reads Phase 9 write-back's settings, refusing any that is missing or malformed.
+// The key is required: a validator without ACCUMULATE_WRITEBACK_PRIV_KEY used to sign its write-backs with
+// its own consensus key, which is not on the signer's key page (RB4-F50).
+func writebackSettingsFromEnv() (writebackSettings, error) {
+	wb := writebackSettings{
+		principal: strings.TrimSpace(os.Getenv("ACCUMULATE_RESULTS_PRINCIPAL")),
+		signer:    strings.TrimSpace(os.Getenv("ACCUMULATE_SIGNER_URL")),
+	}
+	if v := os.Getenv("PROOF_CYCLE_WRITEBACK"); v != "" && v != "true" {
+		return wb, fmt.Errorf("PROOF_CYCLE_WRITEBACK=%s is not supported: proof cycles always write their results back", v)
+	}
+	keyHex := strings.TrimSpace(os.Getenv("ACCUMULATE_WRITEBACK_PRIV_KEY"))
+	var missing []string
+	for name, v := range map[string]string{
+		"ACCUMULATE_RESULTS_PRINCIPAL": wb.principal, "ACCUMULATE_SIGNER_URL": wb.signer,
+		"ACCUMULATE_WRITEBACK_PRIV_KEY": keyHex,
+	} {
+		if v == "" {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		return wb, fmt.Errorf("proof cycles always write their results back, but %s is not set", strings.Join(missing, ", "))
+	}
+	kb, err := hex.DecodeString(keyHex)
+	if err != nil || len(kb) != ed25519.PrivateKeySize {
+		// The value is a secret: named, never printed.
+		return wb, fmt.Errorf("ACCUMULATE_WRITEBACK_PRIV_KEY is not a %d-byte hex ed25519 private key", ed25519.PrivateKeySize)
+	}
+	wb.key = ed25519.PrivateKey(kb)
+	return wb, nil
+}
+
 type checkpointSettings struct {
 	writer, account, signer string
 	key                     ed25519.PrivateKey
@@ -2249,6 +2269,7 @@ func checkEnvironment() error {
 		func() error { _, err := bftTimeoutFromEnv(); return err },
 		func() error { _, err := envvar.Bool("MIGRATE_ON_START", false); return err },
 		func() error { _, err := accumulate.LogLevelFromEnv(); return err },
+		func() error { _, err := writebackSettingsFromEnv(); return err },
 		func() error {
 			enabled, err := envvar.Bool("CHECKPOINT_ANCHOR_ENABLED", false)
 			if err != nil || !enabled {

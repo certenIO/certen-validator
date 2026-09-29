@@ -44,6 +44,8 @@ func TestBootAcceptsProductionsValues(t *testing.T) {
 	for k, v := range map[string]string{
 		"BATCH_PERIOD_BLOCKS": "100", "CERTEN_ALLOW_CONTRACT_CALLS": "true", "CERTEN_BLOCK_RETENTION": "0",
 		"CERTEN_ENTITLEMENT_REFRESH_SEC": "10", "ON_DEMAND_INTENT_KEYED": "true", "CHECKPOINT_ANCHOR_ENABLED": "false",
+		"PROOF_CYCLE_WRITEBACK": "true", "ACCUMULATE_RESULTS_PRINCIPAL": "acc://certen-protocol.acme/proof-results",
+		"ACCUMULATE_SIGNER_URL": "acc://certen-protocol.acme/book/1", "ACCUMULATE_WRITEBACK_PRIV_KEY": hex.EncodeToString(make([]byte, 64)),
 	} {
 		t.Setenv(k, v)
 	}
@@ -85,5 +87,38 @@ func TestCheckpointAnchorIsConfiguredWholeOrRefused(t *testing.T) {
 	set("", "", "", "", "")
 	if err := checkEnvironment(); err == nil || !strings.Contains(err.Error(), "CHECKPOINT_WRITER_VALIDATOR") {
 		t.Fatalf("an enabled, unconfigured checkpoint anchor passed the boot check: %v", err)
+	}
+}
+
+// RB4-F50: without ACCUMULATE_WRITEBACK_PRIV_KEY a validator signed its write-backs with its own key.
+func TestWritebackIsConfiguredWholeOrRefused(t *testing.T) {
+	key := hex.EncodeToString(make([]byte, 64))
+	set := func(principal, signer, wbKey string) {
+		t.Setenv("ACCUMULATE_RESULTS_PRINCIPAL", principal)
+		t.Setenv("ACCUMULATE_SIGNER_URL", signer)
+		t.Setenv("ACCUMULATE_WRITEBACK_PRIV_KEY", wbKey)
+	}
+	set("acc://x.acme/results", "acc://x.acme/book/1", key)
+	wb, err := writebackSettingsFromEnv()
+	if err != nil || wb.signer != "acc://x.acme/book/1" || len(wb.key) != 64 {
+		t.Fatalf("a whole configuration was refused: %+v %v", wb, err)
+	}
+	for name, args := range map[string][3]string{
+		"no principal":      {"", "acc://x.acme/book/1", key},
+		"no signer":         {"acc://x.acme/results", "", key},
+		"no write-back key": {"acc://x.acme/results", "acc://x.acme/book/1", ""},
+		"malformed key":     {"acc://x.acme/results", "acc://x.acme/book/1", "zz"},
+		"short key":         {"acc://x.acme/results", "acc://x.acme/book/1", key[:64]},
+	} {
+		set(args[0], args[1], args[2])
+		if _, err := writebackSettingsFromEnv(); err == nil {
+			t.Errorf("%s: accepted", name)
+		} else if strings.Contains(err.Error(), key[:64]) {
+			t.Errorf("%s: the refusal printed the key", name)
+		}
+	}
+	set("acc://x.acme/results", "acc://x.acme/book/1", "")
+	if err := checkEnvironment(); err == nil || !strings.Contains(err.Error(), "ACCUMULATE_WRITEBACK_PRIV_KEY") {
+		t.Fatalf("a validator without its write-back key passed the boot check: %v", err)
 	}
 }
