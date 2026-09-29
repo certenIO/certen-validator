@@ -80,9 +80,13 @@ type g1Authorization struct {
 	g1        *G1Layer
 	txID      string // acc://<hash>@<principal>
 	principal string // the principal account
+	txHash    string // the executed transaction's hash, as G0 proved it
 	execMBI   int64  // on the principal's partition
 	txType    protocol.TransactionType
 	timelines *timelineCache
+
+	// evidence is what the last Evaluate read, verified to reproduce its vote (g1_vote_evidence.go).
+	evidence *govvote.Evidence
 }
 
 func (a *g1Authorization) Evaluate(ctx context.Context, sigs []ValidatedSignature, extra ExtraAuthorities) (*AccountVote, error) {
@@ -96,7 +100,7 @@ func (a *g1Authorization) Evaluate(ctx context.Context, sigs []ValidatedSignatur
 			facts.Sigs = append(facts.Sigs, f)
 		}
 	}
-	arrivals, votes, err := a.g1.collectRecordedVotes(ctx, a.txID, a.principal)
+	arrivals, votes, recorded, err := a.g1.collectRecordedVotes(ctx, a.txID, a.principal)
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +110,15 @@ func (a *g1Authorization) Evaluate(ctx context.Context, sigs []ValidatedSignatur
 	if err != nil {
 		return nil, err
 	}
-	return govvote.Evaluate(ctx, facts, a.timelines, a.principal, authorities, extra.URLs, extra.IgnoreDisabled)
+	vote, err := govvote.Evaluate(ctx, facts, a.timelines, a.principal, authorities, extra.URLs, extra.IgnoreDisabled)
+	if err != nil {
+		return nil, err
+	}
+	a.evidence, err = a.buildVoteEvidence(ctx, facts, sigs, recorded, authorities, extra, vote)
+	if err != nil {
+		return nil, err
+	}
+	return vote, nil
 }
 
 // sigFactOf turns a validated signature into the fact the model reads. A
@@ -159,47 +171,107 @@ func normalizedChain(chain []string) []string {
 // when a book voted. One with a delegator is a delegated vote arriving at delegator[0], on that page's set; the rest
 // of the delegator list is the path beyond it, innermost first on the wire. One without is the vote of one of the
 // principal's own authorities, on the principal's set. Both name the page that cast them (origin) and the vote.
-func (g1 *G1Layer) collectRecordedVotes(ctx context.Context, txID, principal string) ([]arrivalFact, []recordedVote, error) {
+//
+// Each vote's signature bytes and bound receipt are returned beside the facts, by message id: the vote's evidence
+// (RB4-F66).
+func (g1 *G1Layer) collectRecordedVotes(ctx context.Context, txID, principal string) ([]arrivalFact, []recordedVote,
+	map[string]recordedMessage, error) {
 	resp, err := g1.artifactManager.SaveRPCArtifact(ctx, "g1_arrivals_tx", g1.client, txID,
 		map[string]interface{}{"queryType": "default"})
 	if err != nil {
-		return nil, nil, fmt.Errorf("read the signature sets of %s: %w", txID, err)
+		return nil, nil, nil, fmt.Errorf("read the signature sets of %s: %w", txID, err)
 	}
 	pu := ProofUtilities{}
 	result, err := pu.ExpectResult(resp)
 	if err != nil {
-		return nil, nil, fmt.Errorf("read the signature sets of %s: %w", txID, err)
+		return nil, nil, nil, fmt.Errorf("read the signature sets of %s: %w", txID, err)
 	}
-	arrivals, votes, err := recordedVotesOf(result, principal)
+	arrivals, votes, binaries, err := recordedVotesWithBytes(result, principal)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
+	recorded := map[string]recordedMessage{}
 	for i := range arrivals {
 		a := &arrivals[i]
-		block, err := g1.recordedBlock(ctx, a.Page, a.ID, "g1_arrival_")
+		receipt, err := g1.recordedReceipt(ctx, a.Page, a.ID, "g1_arrival_")
 		if err != nil {
-			return nil, nil, fmt.Errorf("the delegated vote %s on %s: %w", SafeTruncate(a.ID, 24), a.Page, err)
+			return nil, nil, nil, fmt.Errorf("the delegated vote %s on %s: %w", SafeTruncate(a.ID, 24), a.Page, err)
 		}
-		a.Block = block
+		a.Block = receipt.LocalBlock
+		recorded[strings.ToLower(a.ID)] = recordedMessage{Binary: binaries[strings.ToLower(a.ID)], Receipt: receipt}
 	}
 	for i := range votes {
 		v := &votes[i]
-		block, err := g1.recordedBlock(ctx, normalizeAccURL(principal), v.ID, "g1_vote_")
+		receipt, err := g1.recordedReceipt(ctx, normalizeAccURL(principal), v.ID, "g1_vote_")
 		if err != nil {
-			return nil, nil, fmt.Errorf("the recorded vote %s of %s: %w", SafeTruncate(v.ID, 24), v.Authority, err)
+			return nil, nil, nil, fmt.Errorf("the recorded vote %s of %s: %w", SafeTruncate(v.ID, 24), v.Authority, err)
 		}
-		v.Block = block
+		v.Block = receipt.LocalBlock
+		recorded[strings.ToLower(v.ID)] = recordedMessage{Binary: binaries[strings.ToLower(v.ID)], Receipt: receipt}
 	}
-	return arrivals, votes, nil
+	return arrivals, votes, recorded, nil
 }
 
-// recordedBlock is the block a recorded message (by its id) was recorded in on account's signature chain.
-func (g1 *G1Layer) recordedBlock(ctx context.Context, account, id, label string) (int64, error) {
+// recordedMessage is a recorded vote as the chain holds it: its signature bytes (hex) and its bound receipt.
+type recordedMessage struct {
+	Binary  string
+	Receipt ReceiptData
+}
+
+// recordedReceipt is the bound receipt of a recorded message (by its id) on account's signature chain.
+func (g1 *G1Layer) recordedReceipt(ctx context.Context, account, id, label string) (ReceiptData, error) {
 	hash, err := URLUtils{}.ParseAccURLHash(id)
 	if err != nil || len(hash) != 64 {
-		return 0, fmt.Errorf("%q has no message hash", id)
+		return ReceiptData{}, fmt.Errorf("%q has no message hash", id)
 	}
-	return g1.boundSignatureChainBlock(ctx, account, hash, label+SafeTruncate(hash, 16))
+	return g1.boundSignatureChainReceipt(ctx, account, hash, label+SafeTruncate(hash, 16))
+}
+
+// recordedVotesWithBytes is recordedVotesOf with each vote's signature in Accumulate's binary encoding, by id.
+func recordedVotesWithBytes(result map[string]interface{}, principal string) ([]arrivalFact, []recordedVote,
+	map[string]string, error) {
+	arrivals, votes, err := recordedVotesOf(result, principal)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	want := map[string]bool{}
+	for _, a := range arrivals {
+		want[strings.ToLower(a.ID)] = true
+	}
+	for _, v := range votes {
+		want[strings.ToLower(v.ID)] = true
+	}
+	binaries := map[string]string{}
+	pu := ProofUtilities{}
+	sets, _ := pu.CaseInsensitiveGet(result, "signatures").(map[string]interface{})
+	setRecords, _ := pu.CaseInsensitiveGet(sets, "records").([]interface{})
+	for _, sr := range setRecords {
+		set, _ := sr.(map[string]interface{})
+		sigs, _ := pu.CaseInsensitiveGet(set, "signatures").(map[string]interface{})
+		records, _ := pu.CaseInsensitiveGet(sigs, "records").([]interface{})
+		for _, r := range records {
+			rec, _ := r.(map[string]interface{})
+			id, _ := pu.CaseInsensitiveGet(rec, "id").(string)
+			if !want[strings.ToLower(id)] {
+				continue
+			}
+			b, err := signatureBytes(pu.CaseInsensitiveGet(rec, "message"))
+			if err != nil {
+				return nil, nil, nil, fmt.Errorf("the authority vote %s: %w", SafeTruncate(id, 24), err)
+			}
+			if prev, dup := binaries[strings.ToLower(id)]; dup && prev != b {
+				return nil, nil, nil, fmt.Errorf("the authority vote %s is recorded twice with different bytes",
+					SafeTruncate(id, 24))
+			}
+			binaries[strings.ToLower(id)] = b
+		}
+	}
+	for id := range want {
+		if binaries[id] == "" {
+			return nil, nil, nil, fmt.Errorf("the authority vote %s carries no signature bytes", SafeTruncate(id, 24))
+		}
+	}
+	return arrivals, votes, binaries, nil
 }
 
 // recordedVotesOf reads the authority votes out of a transaction's signature sets (see collectRecordedVotes). Blocks
@@ -282,28 +354,28 @@ func recordedVotesOf(result map[string]interface{}, principal string) ([]arrival
 	return arrivals, votes, nil
 }
 
-// boundSignatureChainBlock returns the block a message was recorded in on a
-// page's signature chain, from a receipt that starts at the message and
-// recomputes to its anchor.
-func (g1 *G1Layer) boundSignatureChainBlock(ctx context.Context, page, messageHash, label string) (int64, error) {
+// boundSignatureChainReceipt returns the receipt that records a message on a
+// page's signature chain - its block is the block the message was recorded in -
+// requiring it to start at the message and recompute to its anchor.
+func (g1 *G1Layer) boundSignatureChainReceipt(ctx context.Context, page, messageHash, label string) (ReceiptData, error) {
 	query := g1.queryBuilder.BuildNormativeChainQuery("signature", messageHash, true)
 	resp, err := g1.artifactManager.SaveRPCArtifact(ctx, label, g1.client, page, query)
 	if err != nil {
-		return 0, fmt.Errorf("read its signature chain receipt: %w", err)
+		return ReceiptData{}, fmt.Errorf("read its signature chain receipt: %w", err)
 	}
 	pu := ProofUtilities{}
 	result, err := pu.ExpectResult(resp)
 	if err != nil {
-		return 0, fmt.Errorf("read its signature chain receipt: %w", err)
+		return ReceiptData{}, fmt.Errorf("read its signature chain receipt: %w", err)
 	}
 	receipt, err := pu.ExtractReceiptFromChainEntry(result)
 	if err != nil {
-		return 0, fmt.Errorf("read its signature chain receipt: %w", err)
+		return ReceiptData{}, fmt.Errorf("read its signature chain receipt: %w", err)
 	}
 	if err := requireBoundReceipt(receipt, messageHash); err != nil {
-		return 0, err
+		return ReceiptData{}, err
 	}
-	return receipt.LocalBlock, nil
+	return receipt, nil
 }
 
 // requireBoundReceipt requires a receipt to start at the message it is for and

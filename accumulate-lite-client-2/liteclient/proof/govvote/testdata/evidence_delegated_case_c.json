@@ -1,0 +1,827 @@
+{
+ "evidence": {
+  "version": "certen:govvote-evidence:v1",
+  "account": "acc://certen-p7c.acme/data",
+  "transaction": "013d011a6163633a2f2f63657274656e2d7037632e61636d652f646174610295f812b8b8e10062e840b92bf73163be7301da879e4e22f1ce7b34376c87b00802310105022d0103021763657274656e207068617365203720636f727075732043021031373837363930343437313935353235",
+  "authorities": [
+   {
+    "url": "acc://certen-p7c.acme/book"
+   }
+  ],
+  "signatures": [
+   {
+    "fact": {
+     "ID": "acc://98e79e43a89e82e9c134fd429d1895614fb1f0df175ef0a2ceb460e04ca43ad2@certen-p7c.acme/book2/1",
+     "Signer": "acc://certen-p7c.acme/book2/1",
+     "Path": [
+      "acc://certen-p7c.acme/book/1"
+     ],
+     "Version": 1,
+     "KeyHash": "c0265bd3e745825832605b75cbd40e5bde38fd21037769bbb202b5f7822fc465",
+     "Vote": "accept",
+     "Block": 10199334
+    },
+    "signature": "010b02b10101020220b3be1fb8a8d158423e086c855a1c04b8d9e80a3805f8dcb6fd606a24bd054e110340412f8e83fa9c96ce94f2d7fe0d8dcb0d911940760fce937229eea307687e60ece087531cc380524fc8244dd1d929374012da5238b830737669fc45783ba7540d041d6163633a2f2f63657274656e2d7037632e61636d652f626f6f6b322f31050106d6b5cef0d1bc960308f25a6dfd561fc8e8fbda779341be6a2d0d90d3b64ad7db69f95d88b49d2f5be3031c6163633a2f2f63657274656e2d7037632e61636d652f626f6f6b2f31",
+    "receipt": {
+     "start": "98e79e43a89e82e9c134fd429d1895614fb1f0df175ef0a2ceb460e04ca43ad2",
+     "anchor": "b2dce42e8e5847b81db9de692fe3662451776f47bce3013e25ee72f3f55059cd",
+     "localBlock": 10199334,
+     "entries": [
+      {
+       "hash": "0d25c7627cfbe03712ffc9492612f44fbb92e4bb0bf164d407b7e844441faea5",
+       "right": false
+      },
+      {
+       "hash": "ee437eea03055c9e60240e92f449681e9d8f0305e77f1fafd105ee9808f2441b",
+       "right": false
+      },
+      {
+       "hash": "e394c513dfa7a6b4011066c2c623917e0e250f2c81d894d7d2ab879e870baa09",
+       "right": false
+      },
+      {
+       "hash": "86cdf3d56fc88c11a50fb88f1356c982b81b635a9cb676221269b425ba5cf41f",
+       "right": true
+      },
+      {
+       "hash": "dd9dae40cf3353a433b85b3b4fc99883d1cd8208a5146a70d3907eb86738c3fe",
+       "right": false
+      },
+      {
+       "hash": "3ad8188f3795c42edce0916fe9bbe9651a4465a479f4cec5204305edbeae16ae",
+       "right": false
+      },
+      {
+       "hash": "eb12375fb0f79803ae9a6df5bcf2b061e7d65803b22f73c1e8b25aef8e26539a",
+       "right": false
+      },
+      {
+       "hash": "9ca7e30b7d91dd762ebfac89a66842a62f733cbc0203b2aa938494092a14ac4a",
+       "right": false
+      },
+      {
+       "hash": "4df3a1ea3a63a8affa2774ef78248ebd085cbb2149d3f0c9f39fd7f80e166eaa",
+       "right": false
+      },
+      {
+       "hash": "5e5b0ee0ad14a538b11496857a7ca22d83683514bf09491b8cc0306567ca32c8",
+       "right": false
+      },
+      {
+       "hash": "1b59e22ccfb02d8a4e05e167149770c49e303383baf99a6116034b3cffee219e",
+       "right": false
+      },
+      {
+       "hash": "29b9aa087bbd27720ea49743e91a8b092d8b26ae15b2f9fd95fe0bd9a594066e",
+       "right": false
+      },
+      {
+       "hash": "8dfd54bb3b109b76b999ff438f1b3dc9fb3ddef9cbbf8b8a07435371f202119f",
+       "right": false
+      },
+      {
+       "hash": "9ad139280c4f50f7aff8047e2c5cbeb4b2d7fc286ddd079b11c1468efae5b975",
+       "right": false
+      },
+      {
+       "hash": "104b8edd002ca642b4cefab6506c19da3f3cafab4f6599470bdee45c4ccaac6d",
+       "right": false
+      }
+     ]
+    }
+   }
+  ],
+  "arrivals": [
+   {
+    "fact": {
+     "ID": "acc://6b36d0b8b5267e02752c161b39123cff59ce0f1b4bb49cc0ce1d2f94c7da9355@certen-p7c.acme/book/1",
+     "Page": "acc://certen-p7c.acme/book/1",
+     "Authority": "acc://certen-p7c.acme/book2",
+     "Path": [],
+     "Block": 10199334,
+     "Origin": "acc://certen-p7c.acme/book2/1",
+     "Vote": "accept"
+    },
+    "signature": "010d021d6163633a2f2f63657274656e2d7037632e61636d652f626f6f6b322f31031b6163633a2f2f63657274656e2d7037632e61636d652f626f6f6b32055b6163633a2f2f663235613664666435363166633865386662646137373933343162653661326430643930643362363461643764623639663935643838623439643266356265334063657274656e2d7037632e61636d652f64617461065e6163633a2f2f393865373965343361383965383265396331333466643432396431383935363134666231663064663137356566306132636562343630653034636134336164324063657274656e2d7037632e61636d652f626f6f6b322f31071c6163633a2f2f63657274656e2d7037632e61636d652f626f6f6b2f31",
+    "receipt": {
+     "start": "6b36d0b8b5267e02752c161b39123cff59ce0f1b4bb49cc0ce1d2f94c7da9355",
+     "anchor": "b2dce42e8e5847b81db9de692fe3662451776f47bce3013e25ee72f3f55059cd",
+     "localBlock": 10199334,
+     "entries": [
+      {
+       "hash": "ee468116c09815582957751a102973ce479bbc19cec9b01dee285075f9b315ff",
+       "right": false
+      },
+      {
+       "hash": "7f2b2d273fe2bc7eac46552afef98d45a5a6eb7d438b3d0a90d741b5daf758f2",
+       "right": false
+      },
+      {
+       "hash": "fa75d1e580bac7b49b7e5adeb8036598b6c772bcd2f281b608c3c68f1a1e1573",
+       "right": false
+      },
+      {
+       "hash": "7c90de455c9004916e390c6d55bee45ec38c0d15344ef1408e8697aa9274c1bc",
+       "right": false
+      },
+      {
+       "hash": "36dbcae37a90d5c8d72fa836dc4656c740d55bb81ce24ba21165fa846c9c7232",
+       "right": true
+      },
+      {
+       "hash": "86cdf3d56fc88c11a50fb88f1356c982b81b635a9cb676221269b425ba5cf41f",
+       "right": true
+      },
+      {
+       "hash": "dd9dae40cf3353a433b85b3b4fc99883d1cd8208a5146a70d3907eb86738c3fe",
+       "right": false
+      },
+      {
+       "hash": "3ad8188f3795c42edce0916fe9bbe9651a4465a479f4cec5204305edbeae16ae",
+       "right": false
+      },
+      {
+       "hash": "eb12375fb0f79803ae9a6df5bcf2b061e7d65803b22f73c1e8b25aef8e26539a",
+       "right": false
+      },
+      {
+       "hash": "9ca7e30b7d91dd762ebfac89a66842a62f733cbc0203b2aa938494092a14ac4a",
+       "right": false
+      },
+      {
+       "hash": "4df3a1ea3a63a8affa2774ef78248ebd085cbb2149d3f0c9f39fd7f80e166eaa",
+       "right": false
+      },
+      {
+       "hash": "5e5b0ee0ad14a538b11496857a7ca22d83683514bf09491b8cc0306567ca32c8",
+       "right": false
+      },
+      {
+       "hash": "1b59e22ccfb02d8a4e05e167149770c49e303383baf99a6116034b3cffee219e",
+       "right": false
+      },
+      {
+       "hash": "29b9aa087bbd27720ea49743e91a8b092d8b26ae15b2f9fd95fe0bd9a594066e",
+       "right": false
+      },
+      {
+       "hash": "8dfd54bb3b109b76b999ff438f1b3dc9fb3ddef9cbbf8b8a07435371f202119f",
+       "right": false
+      },
+      {
+       "hash": "9ad139280c4f50f7aff8047e2c5cbeb4b2d7fc286ddd079b11c1468efae5b975",
+       "right": false
+      },
+      {
+       "hash": "104b8edd002ca642b4cefab6506c19da3f3cafab4f6599470bdee45c4ccaac6d",
+       "right": false
+      }
+     ]
+    }
+   }
+  ],
+  "votes": [
+   {
+    "fact": {
+     "ID": "acc://a8b0f0e59674d2e06257abcd9ce15c6e49216f7ceb9fc85f5beb2d95eecce2d4@certen-p7c.acme/data",
+     "Authority": "acc://certen-p7c.acme/book",
+     "Origin": "acc://certen-p7c.acme/book/1",
+     "Vote": "accept",
+     "Block": 10199334
+    },
+    "signature": "010d021c6163633a2f2f63657274656e2d7037632e61636d652f626f6f6b2f31031a6163633a2f2f63657274656e2d7037632e61636d652f626f6f6b055b6163633a2f2f663235613664666435363166633865386662646137373933343162653661326430643930643362363461643764623639663935643838623439643266356265334063657274656e2d7037632e61636d652f64617461065d6163633a2f2f366233366430623862353236376530323735326331363162333931323363666635396365306631623462623439636330636531643266393463376461393335354063657274656e2d7037632e61636d652f626f6f6b2f31",
+    "receipt": {
+     "start": "a8b0f0e59674d2e06257abcd9ce15c6e49216f7ceb9fc85f5beb2d95eecce2d4",
+     "anchor": "b2dce42e8e5847b81db9de692fe3662451776f47bce3013e25ee72f3f55059cd",
+     "localBlock": 10199334,
+     "entries": [
+      {
+       "hash": "f19dfaf9f1dd443c0c70f6580ddc7a5b8853f1a67f56a9edf39e7c2bd811d6d2",
+       "right": false
+      },
+      {
+       "hash": "efad88a988d11775d3a6cf709ca9f628b787b3f80a70b006b36a49ec2be055a2",
+       "right": false
+      },
+      {
+       "hash": "1fa9c76d68c5efe1e6c878d494f8b683c8afe4d9210a2aa9a2baf3bdd9e44ef3",
+       "right": false
+      },
+      {
+       "hash": "bd72279f9486f7ee185029e42dbd874ada1dcaf8df9cee15b04c9c1b4a6fb585",
+       "right": false
+      },
+      {
+       "hash": "f2138afa0babca4b3bb88e84b836872a58f31ab55bca0d64b652a9f77a9ab9eb",
+       "right": false
+      },
+      {
+       "hash": "dd9dae40cf3353a433b85b3b4fc99883d1cd8208a5146a70d3907eb86738c3fe",
+       "right": false
+      },
+      {
+       "hash": "3ad8188f3795c42edce0916fe9bbe9651a4465a479f4cec5204305edbeae16ae",
+       "right": false
+      },
+      {
+       "hash": "eb12375fb0f79803ae9a6df5bcf2b061e7d65803b22f73c1e8b25aef8e26539a",
+       "right": false
+      },
+      {
+       "hash": "9ca7e30b7d91dd762ebfac89a66842a62f733cbc0203b2aa938494092a14ac4a",
+       "right": false
+      },
+      {
+       "hash": "4df3a1ea3a63a8affa2774ef78248ebd085cbb2149d3f0c9f39fd7f80e166eaa",
+       "right": false
+      },
+      {
+       "hash": "5e5b0ee0ad14a538b11496857a7ca22d83683514bf09491b8cc0306567ca32c8",
+       "right": false
+      },
+      {
+       "hash": "1b59e22ccfb02d8a4e05e167149770c49e303383baf99a6116034b3cffee219e",
+       "right": false
+      },
+      {
+       "hash": "29b9aa087bbd27720ea49743e91a8b092d8b26ae15b2f9fd95fe0bd9a594066e",
+       "right": false
+      },
+      {
+       "hash": "8dfd54bb3b109b76b999ff438f1b3dc9fb3ddef9cbbf8b8a07435371f202119f",
+       "right": false
+      },
+      {
+       "hash": "9ad139280c4f50f7aff8047e2c5cbeb4b2d7fc286ddd079b11c1468efae5b975",
+       "right": false
+      },
+      {
+       "hash": "104b8edd002ca642b4cefab6506c19da3f3cafab4f6599470bdee45c4ccaac6d",
+       "right": false
+      }
+     ]
+    }
+   }
+  ],
+  "pages": [
+   {
+    "page": "acc://certen-p7c.acme/book/1",
+    "entries": 6,
+    "genesis": {
+     "index": 0,
+     "entryHash": "c5873a82f3740413370a48f37163dcf08486459869aa3c55de13570b9e46dd61",
+     "localBlock": 10186021,
+     "receipt": {
+      "start": "c5873a82f3740413370a48f37163dcf08486459869aa3c55de13570b9e46dd61",
+      "anchor": "5257661036afba4c86606b1830bf7f98264f2a08f6c3d6ebd28e89587018fac7",
+      "localBlock": 10186021,
+      "entries": [
+       {
+        "hash": "c5873a82f3740413370a48f37163dcf08486459869aa3c55de13570b9e46dd61",
+        "right": false
+       },
+       {
+        "hash": "9ff486a4921d9ddca966a62d2519bf4406d724b05ddba9836f8ca668712972c3",
+        "right": false
+       },
+       {
+        "hash": "7f0c9ac2ee78fe4029ff877129b2d4a26bad12fa67a28c4708a8989a35a38b84",
+        "right": false
+       },
+       {
+        "hash": "0fef2bc7b8eab55eb66b68db97f300676dff9653bfa0f1d9cb9c0b29c6703a3d",
+        "right": false
+       },
+       {
+        "hash": "1b59e22ccfb02d8a4e05e167149770c49e303383baf99a6116034b3cffee219e",
+        "right": false
+       },
+       {
+        "hash": "29b9aa087bbd27720ea49743e91a8b092d8b26ae15b2f9fd95fe0bd9a594066e",
+        "right": false
+       },
+       {
+        "hash": "8dfd54bb3b109b76b999ff438f1b3dc9fb3ddef9cbbf8b8a07435371f202119f",
+        "right": false
+       },
+       {
+        "hash": "9ad139280c4f50f7aff8047e2c5cbeb4b2d7fc286ddd079b11c1468efae5b975",
+        "right": false
+       },
+       {
+        "hash": "104b8edd002ca642b4cefab6506c19da3f3cafab4f6599470bdee45c4ccaac6d",
+        "right": false
+       }
+      ]
+     },
+     "transaction": "011701156163633a2f2f63657274656e2d7037632e61636d65028803013102bc01017c6163633a2f2f31663937396561393763373832316666646363393662326163366264613634393439326336316134306566666432663236636364633338363335386531373237406330323635626433653734353832353833323630356237356362643430653562646533386664323130313839623735622f41434d4503366163633a2f2f63303236356264336537343538323538333236303562373563626434306535626465333866643231303138396237356204ec850305030339010202156163633a2f2f63657274656e2d7037632e61636d65031e011c011a6163633a2f2f63657274656e2d7037632e61636d652f626f6f6b0340010a021a6163633a2f2f63657274656e2d7037632e61636d652f626f6f6b041e011c011a6163633a2f2f63657274656e2d7037632e61636d652f626f6f6b050103480109021c6163633a2f2f63657274656e2d7037632e61636d652f626f6f6b2f310401080109220120c0265bd3e745825832605b75cbd40e5bde38fd21037769bbb202b5f7822fc465"
+    },
+    "events": [
+     {
+      "index": 1,
+      "entryHash": "8d91f7b43bbab23bb8ed62708c4d15af3c74c90b69f0cf38f2e05f832d4d0df2",
+      "localBlock": 10186086,
+      "receipt": {
+       "start": "8d91f7b43bbab23bb8ed62708c4d15af3c74c90b69f0cf38f2e05f832d4d0df2",
+       "anchor": "798e4dbe19407b509e686556eabe750606a4605b1cd677df0e93c7b3fdb24666",
+       "localBlock": 10186086,
+       "entries": [
+        {
+         "hash": "c5873a82f3740413370a48f37163dcf08486459869aa3c55de13570b9e46dd61",
+         "right": false
+        },
+        {
+         "hash": "5c64bb9fd06e80638a80b5e7b8e1fe552b159c6c0328dacdebb1da01e7f686d0",
+         "right": false
+        },
+        {
+         "hash": "42e3a3c7e8dbb83149e8b60729c5dbcb8af1793812167c32ce72f52bf58ca834",
+         "right": false
+        },
+        {
+         "hash": "1c809eeb3f7c7e24db1af5db6d3e7add6f3a577d97f82679c62ed9a3f22f1e03",
+         "right": false
+        },
+        {
+         "hash": "78c1a95c3e2523b38a3bfc5dbb9135a5d1bf8ba46f2808655b359ece384e1ed7",
+         "right": true
+        },
+        {
+         "hash": "379e762818bc7c9c4c1a268cfddb159353865664e428738cbaedcaf3fc9160a7",
+         "right": false
+        },
+        {
+         "hash": "7f0c9ac2ee78fe4029ff877129b2d4a26bad12fa67a28c4708a8989a35a38b84",
+         "right": false
+        },
+        {
+         "hash": "0fef2bc7b8eab55eb66b68db97f300676dff9653bfa0f1d9cb9c0b29c6703a3d",
+         "right": false
+        },
+        {
+         "hash": "1b59e22ccfb02d8a4e05e167149770c49e303383baf99a6116034b3cffee219e",
+         "right": false
+        },
+        {
+         "hash": "29b9aa087bbd27720ea49743e91a8b092d8b26ae15b2f9fd95fe0bd9a594066e",
+         "right": false
+        },
+        {
+         "hash": "8dfd54bb3b109b76b999ff438f1b3dc9fb3ddef9cbbf8b8a07435371f202119f",
+         "right": false
+        },
+        {
+         "hash": "9ad139280c4f50f7aff8047e2c5cbeb4b2d7fc286ddd079b11c1468efae5b975",
+         "right": false
+        },
+        {
+         "hash": "104b8edd002ca642b4cefab6506c19da3f3cafab4f6599470bdee45c4ccaac6d",
+         "right": false
+        }
+       ]
+      },
+      "transaction": "011e011c6163633a2f2f63657274656e2d7037632e61636d652f626f6f6b2f3102c801013402b801017c6163633a2f2f30336631636531666364346239376531343333633931343563323734366430366363363966643733653466656163303461373164346232373237323865393739406330323635626433653734353832353833323630356237356362643430653562646533386664323130313839623735622f41434d4503366163633a2f2f63303236356264336537343538323538333236303562373563626434306535626465333866643231303138396237356205030380c2d72f04043b9ac618"
+     },
+     {
+      "index": 2,
+      "entryHash": "f80fce828936b21319f67e49ae268ee42e185d69221e87034e470112832d5f12",
+      "localBlock": 10186207,
+      "receipt": {
+       "start": "f80fce828936b21319f67e49ae268ee42e185d69221e87034e470112832d5f12",
+       "anchor": "85d26ea884ed4931d7efff1153f3cb52be2ac6453e40e886bffde49eb6d45704",
+       "localBlock": 10186207,
+       "entries": [
+        {
+         "hash": "dac8f75b8128fadb5407e606635b1b3ed158d3c761fe858f3410ac548ccecc23",
+         "right": false
+        },
+        {
+         "hash": "604aa407d1128d863f8404f317986a067aa823dd9d9ab591dfcb9770fef02860",
+         "right": false
+        },
+        {
+         "hash": "aa358b8c9e51343615377b6687ac7253957bd38854127218db3174fecdb281d1",
+         "right": true
+        },
+        {
+         "hash": "9303f62d4ea19936287e7789d70b017eebc55ec30b78d3a448a8706dd09411fb",
+         "right": false
+        },
+        {
+         "hash": "ee7e985147f1034261c7f9d2d5e457ba3faacaebb04913da1ea9810909234f7b",
+         "right": false
+        },
+        {
+         "hash": "7f0c9ac2ee78fe4029ff877129b2d4a26bad12fa67a28c4708a8989a35a38b84",
+         "right": false
+        },
+        {
+         "hash": "0fef2bc7b8eab55eb66b68db97f300676dff9653bfa0f1d9cb9c0b29c6703a3d",
+         "right": false
+        },
+        {
+         "hash": "1b59e22ccfb02d8a4e05e167149770c49e303383baf99a6116034b3cffee219e",
+         "right": false
+        },
+        {
+         "hash": "29b9aa087bbd27720ea49743e91a8b092d8b26ae15b2f9fd95fe0bd9a594066e",
+         "right": false
+        },
+        {
+         "hash": "8dfd54bb3b109b76b999ff438f1b3dc9fb3ddef9cbbf8b8a07435371f202119f",
+         "right": false
+        },
+        {
+         "hash": "9ad139280c4f50f7aff8047e2c5cbeb4b2d7fc286ddd079b11c1468efae5b975",
+         "right": false
+        },
+        {
+         "hash": "104b8edd002ca642b4cefab6506c19da3f3cafab4f6599470bdee45c4ccaac6d",
+         "right": false
+        }
+       ]
+      },
+      "transaction": "011e011c6163633a2f2f63657274656e2d7037632e61636d652f626f6f6b2f31028a010134028201015d6163633a2f2f363233333965626336616132656636653163336330393764373538373130653937353065616539306132663336633837303236346464366361373862623631384063657274656e2d7037632e61636d652f626f6f6b2f31031c6163633a2f2f63657274656e2d7037632e61636d652f626f6f6b2f3104c801050703c801"
+     },
+     {
+      "index": 3,
+      "entryHash": "f860dde272c61db79193702a45954da899c95c7b1e2c913895a03414fbe153b3",
+      "localBlock": 10186315,
+      "receipt": {
+       "start": "f860dde272c61db79193702a45954da899c95c7b1e2c913895a03414fbe153b3",
+       "anchor": "65d6f35cf017ca7c1ffb0314767de00ffc55abde7772e343ee03501622bf5b54",
+       "localBlock": 10186315,
+       "entries": [
+        {
+         "hash": "f80fce828936b21319f67e49ae268ee42e185d69221e87034e470112832d5f12",
+         "right": false
+        },
+        {
+         "hash": "dac8f75b8128fadb5407e606635b1b3ed158d3c761fe858f3410ac548ccecc23",
+         "right": false
+        },
+        {
+         "hash": "a626ec61207b6604db2034b606a45c5dedbe40246f181b940e7fae3345e2ea7f",
+         "right": false
+        },
+        {
+         "hash": "e29757fae3b26acc55f9e1cdffb3e949e594e64674c0b60f29cd708c3c7fb3b5",
+         "right": false
+        },
+        {
+         "hash": "c03bc100e23c12b099df121dc50f95f72686dc40402da917e967653cedf01664",
+         "right": true
+        },
+        {
+         "hash": "19df7d348a54e99212f1718762826ded28a2acd4c99ce9e42079c64fb43bc3d9",
+         "right": false
+        },
+        {
+         "hash": "ee7e985147f1034261c7f9d2d5e457ba3faacaebb04913da1ea9810909234f7b",
+         "right": false
+        },
+        {
+         "hash": "7f0c9ac2ee78fe4029ff877129b2d4a26bad12fa67a28c4708a8989a35a38b84",
+         "right": false
+        },
+        {
+         "hash": "0fef2bc7b8eab55eb66b68db97f300676dff9653bfa0f1d9cb9c0b29c6703a3d",
+         "right": false
+        },
+        {
+         "hash": "1b59e22ccfb02d8a4e05e167149770c49e303383baf99a6116034b3cffee219e",
+         "right": false
+        },
+        {
+         "hash": "29b9aa087bbd27720ea49743e91a8b092d8b26ae15b2f9fd95fe0bd9a594066e",
+         "right": false
+        },
+        {
+         "hash": "8dfd54bb3b109b76b999ff438f1b3dc9fb3ddef9cbbf8b8a07435371f202119f",
+         "right": false
+        },
+        {
+         "hash": "9ad139280c4f50f7aff8047e2c5cbeb4b2d7fc286ddd079b11c1468efae5b975",
+         "right": false
+        },
+        {
+         "hash": "104b8edd002ca642b4cefab6506c19da3f3cafab4f6599470bdee45c4ccaac6d",
+         "right": false
+        }
+       ]
+      },
+      "transaction": "011e011c6163633a2f2f63657274656e2d7037632e61636d652f626f6f6b2f31028a010134028201015d6163633a2f2f373966393462393737303530333739613166303833633964303065666336366232643261383333353665333538356261326133373130663833343062633935394063657274656e2d7037632e61636d652f626f6f6b2f31031c6163633a2f2f63657274656e2d7037632e61636d652f626f6f6b2f3104c801050703c801"
+     },
+     {
+      "index": 4,
+      "entryHash": "9df0be6961d1626b8c9a2293ff6409c7fc9d60ccb68ff4e6c41fa55dc561b43f",
+      "localBlock": 10188028,
+      "receipt": {
+       "start": "9df0be6961d1626b8c9a2293ff6409c7fc9d60ccb68ff4e6c41fa55dc561b43f",
+       "anchor": "3231817cf4c44ae40788ac4711241c600ded8b451b45e8150d188015a78adab7",
+       "localBlock": 10188028,
+       "entries": [
+        {
+         "hash": "4dbf02f03c4e2b05c7620fb84fb2d99cce27ff853439809cfd194e7085a7893d",
+         "right": false
+        },
+        {
+         "hash": "49b7db54275cc9749a70cc624a243af2186efafbdd74bdca70b60f839cf6baac",
+         "right": false
+        },
+        {
+         "hash": "eb23e5afdd201e4d0b586e1ce22db4675f26409d020fdd7b5362aaa32fe20a67",
+         "right": true
+        },
+        {
+         "hash": "8d79ed0f45d81453f44f1d995b79585c9576a32b7b15f88fddca0eeb5827a268",
+         "right": false
+        },
+        {
+         "hash": "414a71b61670f52b05304a6d7265579d37fdb47218dfe6da1a3a98e12e06997c",
+         "right": false
+        },
+        {
+         "hash": "4cd832038e4f8a74024f69832ef13e186b8d582169a257043b44cc7c73b8bf1b",
+         "right": false
+        },
+        {
+         "hash": "1d8153679cae47a1cd9ad49d81be4cff915c232e4414ab95fee0021f7c32c5d1",
+         "right": false
+        },
+        {
+         "hash": "7f0c9ac2ee78fe4029ff877129b2d4a26bad12fa67a28c4708a8989a35a38b84",
+         "right": false
+        },
+        {
+         "hash": "0fef2bc7b8eab55eb66b68db97f300676dff9653bfa0f1d9cb9c0b29c6703a3d",
+         "right": false
+        },
+        {
+         "hash": "1b59e22ccfb02d8a4e05e167149770c49e303383baf99a6116034b3cffee219e",
+         "right": false
+        },
+        {
+         "hash": "29b9aa087bbd27720ea49743e91a8b092d8b26ae15b2f9fd95fe0bd9a594066e",
+         "right": false
+        },
+        {
+         "hash": "8dfd54bb3b109b76b999ff438f1b3dc9fb3ddef9cbbf8b8a07435371f202119f",
+         "right": false
+        },
+        {
+         "hash": "9ad139280c4f50f7aff8047e2c5cbeb4b2d7fc286ddd079b11c1468efae5b975",
+         "right": false
+        },
+        {
+         "hash": "104b8edd002ca642b4cefab6506c19da3f3cafab4f6599470bdee45c4ccaac6d",
+         "right": false
+        }
+       ]
+      },
+      "transaction": "013f011c6163633a2f2f63657274656e2d7037632e61636d652f626f6f6b2f31025d725acdb75f5f2eb7ec588856d7758e76b8532b296d6beff9d90eacbfb9343c0225010f02210103021d021b6163633a2f2f63657274656e2d7037632e61636d652f626f6f6b32"
+     },
+     {
+      "index": 5,
+      "entryHash": "63fdd83197b11807bb85b70ce416c8a6a5f27d1dcdaec8e60950d8d4a0137780",
+      "localBlock": 10767108,
+      "receipt": {
+       "start": "63fdd83197b11807bb85b70ce416c8a6a5f27d1dcdaec8e60950d8d4a0137780",
+       "anchor": "f7d16bd98bd9d063fc1c0a7024fd641b646eca7866d717885c299e23c76a0813",
+       "localBlock": 10767108,
+       "entries": [
+        {
+         "hash": "9df0be6961d1626b8c9a2293ff6409c7fc9d60ccb68ff4e6c41fa55dc561b43f",
+         "right": false
+        },
+        {
+         "hash": "4dbf02f03c4e2b05c7620fb84fb2d99cce27ff853439809cfd194e7085a7893d",
+         "right": false
+        },
+        {
+         "hash": "77d698436e8e5f05fa33edd304bbfaeea9c4441609138f6af5d31ebc15c53d92",
+         "right": false
+        },
+        {
+         "hash": "fa512104899687c59e307cfc308483dcb418d5146749074a9501dcb57dce45a4",
+         "right": false
+        },
+        {
+         "hash": "ef975fab02849065d32cd38bc848b6a09cc5729d7ceefb9a7d1e003dfd79dea7",
+         "right": false
+        },
+        {
+         "hash": "43e7a21965e1cbd72ecb26368cd7a4bba60fbb00b4629fa39bdc04fb98db52ed",
+         "right": false
+        },
+        {
+         "hash": "f968fe9c83fbcf61a61cf2ca09ccf377e7da007c6700bdcba339615dcb1131b8",
+         "right": false
+        },
+        {
+         "hash": "8e0dd656638dd470946fe0b1e285d014ad9dd8619185032e4606b4ccfa8a49cf",
+         "right": false
+        },
+        {
+         "hash": "712baea859a27881b03d4115582cdb3cc69cd63275e4a22b07be06d21ab47a45",
+         "right": false
+        },
+        {
+         "hash": "b573806c23afaf4bad087132b8584dfd113d988cc9f73fac6234e4a182bab216",
+         "right": false
+        },
+        {
+         "hash": "104b8edd002ca642b4cefab6506c19da3f3cafab4f6599470bdee45c4ccaac6d",
+         "right": false
+        }
+       ]
+      },
+      "transaction": "011e011c6163633a2f2f63657274656e2d7037632e61636d652f626f6f6b2f31028a010134028201015d6163633a2f2f323164373834656466623636323635393134663961663439333464396235643561613537363664313238343831616266353137353166363631663465376263384063657274656e2d7037632e61636d652f626f6f6b2f31031c6163633a2f2f63657274656e2d7037632e61636d652f626f6f6b2f3104c801050203c801"
+     }
+    ]
+   },
+   {
+    "page": "acc://certen-p7c.acme/book2/1",
+    "entries": 2,
+    "genesis": {
+     "index": 0,
+     "entryHash": "4813171126fc9587965828c97f0b2f524e623449a67729c8b11122d7aeb99d8b",
+     "localBlock": 10186404,
+     "receipt": {
+      "start": "4813171126fc9587965828c97f0b2f524e623449a67729c8b11122d7aeb99d8b",
+      "anchor": "047add4737d05b4046c7b1026c1f4ed282b0d641f7ab7f4de3816daee0324037",
+      "localBlock": 10186404,
+      "entries": [
+       {
+        "hash": "8292340e8ffa4ed59e35a1552032c7045de418e3e67494f542139fb8658bac6a",
+        "right": false
+       },
+       {
+        "hash": "1d8153679cae47a1cd9ad49d81be4cff915c232e4414ab95fee0021f7c32c5d1",
+        "right": false
+       },
+       {
+        "hash": "7f0c9ac2ee78fe4029ff877129b2d4a26bad12fa67a28c4708a8989a35a38b84",
+        "right": false
+       },
+       {
+        "hash": "0fef2bc7b8eab55eb66b68db97f300676dff9653bfa0f1d9cb9c0b29c6703a3d",
+        "right": false
+       },
+       {
+        "hash": "1b59e22ccfb02d8a4e05e167149770c49e303383baf99a6116034b3cffee219e",
+        "right": false
+       },
+       {
+        "hash": "29b9aa087bbd27720ea49743e91a8b092d8b26ae15b2f9fd95fe0bd9a594066e",
+        "right": false
+       },
+       {
+        "hash": "8dfd54bb3b109b76b999ff438f1b3dc9fb3ddef9cbbf8b8a07435371f202119f",
+        "right": false
+       },
+       {
+        "hash": "9ad139280c4f50f7aff8047e2c5cbeb4b2d7fc286ddd079b11c1468efae5b975",
+        "right": false
+       },
+       {
+        "hash": "104b8edd002ca642b4cefab6506c19da3f3cafab4f6599470bdee45c4ccaac6d",
+        "right": false
+       }
+      ]
+     },
+     "transaction": "013801156163633a2f2f63657274656e2d7037632e61636d650272d45d4ed3c08a7f7d8ecf2e492faa0ce193dafbb3c4b0261fb4c7f8f44aa0960241010d021b6163633a2f2f63657274656e2d7037632e61636d652f626f6f6b320320c0265bd3e745825832605b75cbd40e5bde38fd21037769bbb202b5f7822fc465"
+    },
+    "events": [
+     {
+      "index": 1,
+      "entryHash": "e6ef8b58f327a4c46838751a5babdec6bdc4686cb9ba359b6b3a464a147a12e5",
+      "localBlock": 10187961,
+      "receipt": {
+       "start": "e6ef8b58f327a4c46838751a5babdec6bdc4686cb9ba359b6b3a464a147a12e5",
+       "anchor": "49a267091d209d34a4fca799be272238bba2f62b2933e3154d9f5bf4e63b1b15",
+       "localBlock": 10187961,
+       "entries": [
+        {
+         "hash": "4813171126fc9587965828c97f0b2f524e623449a67729c8b11122d7aeb99d8b",
+         "right": false
+        },
+        {
+         "hash": "d0ddff2e9efe66722b2e37987e74800cb65077482db7661a5dfaedbe2a56bc22",
+         "right": true
+        },
+        {
+         "hash": "a5d88bc26ba46fefd462da7a04039cf7b57b596be3c6097b609e42f042ff8516",
+         "right": false
+        },
+        {
+         "hash": "414a71b61670f52b05304a6d7265579d37fdb47218dfe6da1a3a98e12e06997c",
+         "right": false
+        },
+        {
+         "hash": "4cd832038e4f8a74024f69832ef13e186b8d582169a257043b44cc7c73b8bf1b",
+         "right": false
+        },
+        {
+         "hash": "1d8153679cae47a1cd9ad49d81be4cff915c232e4414ab95fee0021f7c32c5d1",
+         "right": false
+        },
+        {
+         "hash": "7f0c9ac2ee78fe4029ff877129b2d4a26bad12fa67a28c4708a8989a35a38b84",
+         "right": false
+        },
+        {
+         "hash": "0fef2bc7b8eab55eb66b68db97f300676dff9653bfa0f1d9cb9c0b29c6703a3d",
+         "right": false
+        },
+        {
+         "hash": "1b59e22ccfb02d8a4e05e167149770c49e303383baf99a6116034b3cffee219e",
+         "right": false
+        },
+        {
+         "hash": "29b9aa087bbd27720ea49743e91a8b092d8b26ae15b2f9fd95fe0bd9a594066e",
+         "right": false
+        },
+        {
+         "hash": "8dfd54bb3b109b76b999ff438f1b3dc9fb3ddef9cbbf8b8a07435371f202119f",
+         "right": false
+        },
+        {
+         "hash": "9ad139280c4f50f7aff8047e2c5cbeb4b2d7fc286ddd079b11c1468efae5b975",
+         "right": false
+        },
+        {
+         "hash": "104b8edd002ca642b4cefab6506c19da3f3cafab4f6599470bdee45c4ccaac6d",
+         "right": false
+        }
+       ]
+      },
+      "transaction": "011f011d6163633a2f2f63657274656e2d7037632e61636d652f626f6f6b322f3102c801013402b801017c6163633a2f2f64316531386639386462383238306430303463643830646130663165313263653566343333643637316663343062356366356237663232353430376135393662406330323635626433653734353832353833323630356237356362643430653562646533386664323130313839623735622f41434d4503366163633a2f2f63303236356264336537343538323538333236303562373563626434306535626465333866643231303138396237356205030380c2d72f04043b9ac618"
+     }
+    ]
+   }
+  ]
+ },
+ "authorization": {
+  "account": "acc://certen-p7c.acme/data",
+  "authorities": [
+   {
+    "authority": "acc://certen-p7c.acme/book",
+    "vote": {
+     "book": "acc://certen-p7c.acme/book",
+     "voted": true,
+     "vote": "accept",
+     "by": "acc://certen-p7c.acme/book/1",
+     "pages": [
+      {
+       "page": "acc://certen-p7c.acme/book/1",
+       "voted": true,
+       "vote": "accept",
+       "version": 2,
+       "threshold": 1,
+       "decidedAt": 10199334,
+       "counted": [
+        {
+         "entry": "delegate:acc://certen-p7c.acme/book2",
+         "vote": "accept",
+         "by": "acc://6b36d0b8b5267e02752c161b39123cff59ce0f1b4bb49cc0ce1d2f94c7da9355@certen-p7c.acme/book/1",
+         "block": 10199334
+        }
+       ],
+       "delegates": [
+        {
+         "book": "acc://certen-p7c.acme/book2",
+         "voted": true,
+         "vote": "accept",
+         "by": "acc://certen-p7c.acme/book2/1",
+         "pages": [
+          {
+           "page": "acc://certen-p7c.acme/book2/1",
+           "path": [
+            "acc://certen-p7c.acme/book/1"
+           ],
+           "voted": true,
+           "vote": "accept",
+           "version": 1,
+           "threshold": 1,
+           "decidedAt": 10199334,
+           "counted": [
+            {
+             "entry": "key:c0265bd3e745825832605b75cbd40e5bde38fd21037769bbb202b5f7822fc465",
+             "vote": "accept",
+             "by": "acc://98e79e43a89e82e9c134fd429d1895614fb1f0df175ef0a2ceb460e04ca43ad2@certen-p7c.acme/book2/1",
+             "block": 10199334
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   }
+  ],
+  "satisfied": true
+ }
+}

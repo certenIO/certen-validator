@@ -215,6 +215,7 @@ func (g1 *G1Layer) ProveG1(ctx context.Context, request G1Request) (*G1Result, e
 		g1:        g1,
 		txID:      g0Result.ExpandedMessageID,
 		principal: request.G0Request.Account,
+		txHash:    g0Result.TxHash,
 		execMBI:   g0Result.ExecMBI,
 		txType:    txType,
 		timelines: newTimelineCache(g1.authorityBuilder),
@@ -240,6 +241,7 @@ func (g1 *G1Layer) ProveG1(ctx context.Context, request G1Request) (*G1Result, e
 		TimingBasis:          timingBasis,
 		UnverifiedPageRules:  g1.authorityBuilder.UnverifiedPageRules(),
 		Authorization:        authorizationResult.Authorization,
+		VoteEvidence:         authz.evidence,
 	}
 
 	// Rule 8 again, at the point a reader is looking: if any page carried a

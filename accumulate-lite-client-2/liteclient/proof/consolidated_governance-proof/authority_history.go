@@ -28,7 +28,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -111,12 +110,25 @@ func (ab *AuthorityBuilder) collectPageHistory(ctx context.Context, entries []ma
 			if err != nil {
 				return nil, nil, nil, err
 			}
+			// The page the offline verifier derives from the genesis transaction alone must be the page read here:
+			// the evidence carries the transaction, not this reading of it (RB4-F66).
+			offline, err := govvote.GenesisPage(keyPage, txn)
+			if err != nil {
+				return nil, nil, nil, ValidationError{Msg: fmt.Sprintf("genesis of %s: %v", keyPage, err)}
+			}
+			if !offline.Equal(gp) {
+				return nil, nil, nil, ValidationError{Msg: fmt.Sprintf("genesis of %s: the page derived from the "+
+					"genesis transaction disagrees with the page read from it (v%d threshold %d, %d keys vs v%d "+
+					"threshold %d, %d keys)", keyPage, offline.Version, offline.AcceptThreshold, len(offline.Keys),
+					gp.Version, gp.AcceptThreshold, len(gp.Keys))}
+			}
 			genesis = &GenesisEvent{
 				EntryHash:  entryHash,
 				LocalBlock: receipt.LocalBlock,
 				Receipt:    receipt,
 				TxType:     genesisType,
 				PageState:  state,
+				Txn:        txn,
 			}
 			genesisPage = gp
 			continue
@@ -128,7 +140,7 @@ func (ab *AuthorityBuilder) collectPageHistory(ctx context.Context, entries []ma
 
 		ev := pageEvent{Index: i, EntryHash: entryHash, LocalBlock: receipt.LocalBlock, Receipt: receipt, Txn: txn}
 		if _, isUpdateKey := txn.Body.(*protocol.UpdateKey); isUpdateKey {
-			ev.Initiator, err = ab.initiatorOf(ctx, txn, keyPage)
+			ev.Initiator, ev.InitiatorSig, err = ab.initiatorOf(ctx, txn, keyPage)
 			if err != nil {
 				return nil, nil, nil, err
 			}
@@ -234,17 +246,18 @@ func (ab *AuthorityBuilder) genesisKeyPage(genesisType string, value interface{}
 // The initiating signature is bound to the transaction: its metadata must hash
 // to the initiator the transaction header commits to, and the header is part
 // of the transaction hash the chain entry proves.
-func (ab *AuthorityBuilder) initiatorOf(ctx context.Context, txn *protocol.Transaction, keyPage string) (*pageInitiator, error) {
+func (ab *AuthorityBuilder) initiatorOf(ctx context.Context, txn *protocol.Transaction, keyPage string) (*pageInitiator,
+	protocol.Signature, error) {
 	txid := fmt.Sprintf("acc://%x@%s", txn.GetHash(), strings.TrimPrefix(normalizeAccURL(keyPage), "acc://"))
 	resp, err := ab.artifactManager.SaveRPCArtifact(ctx, fmt.Sprintf("g1_initiator_%x", txn.GetHash()[:8]),
 		ab.client, txid, map[string]interface{}{"queryType": "default"})
 	if err != nil {
-		return nil, fmt.Errorf("query %s for its initiator: %w", txid, err)
+		return nil, nil, fmt.Errorf("query %s for its initiator: %w", txid, err)
 	}
 	pu := ProofUtilities{}
 	result, err := pu.ExpectResult(resp)
 	if err != nil {
-		return nil, fmt.Errorf("query %s for its initiator: %w", txid, err)
+		return nil, nil, fmt.Errorf("query %s for its initiator: %w", txid, err)
 	}
 
 	type rec struct {
@@ -276,21 +289,21 @@ func (ab *AuthorityBuilder) initiatorOf(ctx context.Context, txn *protocol.Trans
 			continue
 		}
 		if payment != nil {
-			return nil, ValidationError{Msg: fmt.Sprintf("%s records more than one initiating credit payment", txid)}
+			return nil, nil, ValidationError{Msg: fmt.Sprintf("%s records more than one initiating credit payment", txid)}
 		}
 		payment = r.msg
 	}
 	if payment == nil {
-		return nil, ValidationError{Msg: fmt.Sprintf("%s records no initiating credit payment", txid)}
+		return nil, nil, ValidationError{Msg: fmt.Sprintf("%s records no initiating credit payment", txid)}
 	}
 	payerStr, _ := pu.CaseInsensitiveGet(payment, "payer").(string)
 	payer, err := url.Parse(payerStr)
 	if err != nil || payerStr == "" {
-		return nil, ValidationError{Msg: fmt.Sprintf("%s: the initiating credit payment names no payer", txid)}
+		return nil, nil, ValidationError{Msg: fmt.Sprintf("%s: the initiating credit payment names no payer", txid)}
 	}
 	cause, _ := pu.CaseInsensitiveGet(payment, "cause").(string)
 	if cause == "" {
-		return nil, ValidationError{Msg: fmt.Sprintf("%s: the initiating credit payment names no cause", txid)}
+		return nil, nil, ValidationError{Msg: fmt.Sprintf("%s: the initiating credit payment names no cause", txid)}
 	}
 
 	// The initiating signature: in the same response, or by its own id.
@@ -305,37 +318,39 @@ func (ab *AuthorityBuilder) initiatorOf(ctx context.Context, txn *protocol.Trans
 		causeResp, err := ab.artifactManager.SaveRPCArtifact(ctx, fmt.Sprintf("g1_initiator_cause_%x", txn.GetHash()[:8]),
 			ab.client, cause, map[string]interface{}{"queryType": "default"})
 		if err != nil {
-			return nil, fmt.Errorf("query initiating signature %s: %w", cause, err)
+			return nil, nil, fmt.Errorf("query initiating signature %s: %w", cause, err)
 		}
 		causeResult, err := pu.ExpectResult(causeResp)
 		if err != nil {
-			return nil, fmt.Errorf("query initiating signature %s: %w", cause, err)
+			return nil, nil, fmt.Errorf("query initiating signature %s: %w", cause, err)
 		}
 		if m, ok := pu.CaseInsensitiveGet(causeResult, "message").(map[string]interface{}); ok {
 			sigJSON = pu.CaseInsensitiveGet(m, "signature")
 		}
 	}
 	if sigJSON == nil {
-		return nil, ValidationError{Msg: fmt.Sprintf("%s: the initiating signature %s could not be read", txid, cause)}
+		return nil, nil, ValidationError{Msg: fmt.Sprintf("%s: the initiating signature %s could not be read", txid, cause)}
 	}
 	b, err := json.Marshal(sigJSON)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	sig, err := protocol.UnmarshalSignatureJSON(b)
 	if err != nil {
-		return nil, ValidationError{Msg: fmt.Sprintf("%s: decode initiating signature: %v", txid, err)}
+		return nil, nil, ValidationError{Msg: fmt.Sprintf("%s: decode initiating signature: %v", txid, err)}
 	}
-	if !bytes.Equal(sig.Metadata().Hash(), txn.Header.Initiator[:]) {
-		return nil, ValidationError{Msg: fmt.Sprintf("%s: the signature its credit payment names as initiator "+
-			"is not the one the transaction header commits to", txid)}
+	// The initiator is what the offline verifier derives from the signature alone (govvote.InitiatorOf: bound to the
+	// header's initiator hash, payer = the signer as core resolves it). The payment must name the same payer: two
+	// accounts of what paid for the initiation is one too many.
+	init, err := govvote.InitiatorOf(txn, sig)
+	if err != nil {
+		return nil, nil, ValidationError{Msg: fmt.Sprintf("%s: %v", txid, err)}
 	}
-
-	init := &pageInitiator{Payer: payer}
-	if ks, ok := sig.(protocol.KeySignature); ok {
-		init.KeyHash = ks.GetPublicKeyHash()
+	if !init.Payer.Equal(payer) {
+		return nil, nil, ValidationError{Msg: fmt.Sprintf("%s: the initiating credit payment names %v as its payer, "+
+			"but the initiating signature's signer pays as %v", txid, payer, init.Payer)}
 	}
-	return init, nil
+	return init, sig, nil
 }
 
 // liveKeyPage reads the page as the network holds it now.

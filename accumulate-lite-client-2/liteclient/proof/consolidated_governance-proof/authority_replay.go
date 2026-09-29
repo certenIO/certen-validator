@@ -76,6 +76,8 @@ type pageEvent struct {
 
 	// Initiator is required for UpdateKey and unused otherwise.
 	Initiator *pageInitiator
+	// InitiatorSig is the initiating signature Initiator is derived from - the vote's evidence (RB4-F66).
+	InitiatorSig protocol.Signature
 }
 
 // replay is the event as govvote's replay reads it.

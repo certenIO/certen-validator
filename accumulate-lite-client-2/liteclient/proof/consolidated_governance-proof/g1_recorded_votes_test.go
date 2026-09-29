@@ -3,6 +3,8 @@
 package main
 
 import (
+	"encoding/hex"
+	"strings"
 	"testing"
 
 	"gitlab.com/accumulatenetwork/accumulate/protocol"
@@ -79,5 +81,49 @@ func TestRecordedVotes_AVoteWithoutAnOriginIsRefused(t *testing.T) {
 	}}}
 	if _, _, err := recordedVotesOf(sets, "acc://p.acme/data"); err == nil {
 		t.Fatal("an authority signature with no origin was accepted as a record of a vote")
+	}
+}
+
+// RB4-F66: each recorded vote is kept as the chain holds it - Accumulate's binary encoding of the authority signature,
+// decoding back to the vote the fact records - so the vote's evidence can bind the fact to its bytes.
+func TestRecordedVotes_BytesAreKeptPerVote(t *testing.T) {
+	_, votes, binaries, err := recordedVotesWithBytes(recordedSets(t), "acc://certen-kermit-12.acme/data")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(votes) != 1 || len(binaries) != 1 {
+		t.Fatalf("votes %d, bytes %d", len(votes), len(binaries))
+	}
+	b, err := hex.DecodeString(binaries[strings.ToLower(votes[0].ID)])
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig, err := protocol.UnmarshalSignature(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, ok := sig.(*protocol.AuthoritySignature)
+	if !ok || a.Origin.String() != "acc://certen-kermit-12.acme/book/1" || a.Authority.String() != "acc://certen-kermit-12.acme/book" {
+		t.Fatalf("the kept bytes decode to %+v", sig)
+	}
+}
+
+// A recorded vote whose signature does not decode with Accumulate's types cannot be carried as evidence, and is
+// refused rather than counted without it.
+func TestRecordedVotes_UndecodableBytesAreRefused(t *testing.T) {
+	sets := map[string]interface{}{"signatures": map[string]interface{}{"records": []interface{}{
+		map[string]interface{}{
+			"account": map[string]interface{}{"url": "acc://p.acme/data"},
+			"signatures": map[string]interface{}{"records": []interface{}{map[string]interface{}{
+				"id": "acc://" + strings.Repeat("ab", 32) + "@p.acme/data",
+				"message": map[string]interface{}{"type": "signature", "signature": map[string]interface{}{
+					"type": "authority", "origin": "acc://p.acme/book/1", "authority": "acc://p.acme/book",
+					"vote": "accept", "txID": "not a txid",
+				}},
+			}}},
+		},
+	}}}
+	if _, _, _, err := recordedVotesWithBytes(sets, "acc://p.acme/data"); err == nil {
+		t.Fatal("a recorded vote whose signature does not decode was read without its bytes")
 	}
 }
