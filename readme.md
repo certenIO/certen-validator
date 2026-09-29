@@ -267,7 +267,8 @@ See [Proof Classes](#proof-classes) for what these control.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `PROOF_CYCLE_WRITEBACK` | No | — | Only `true` is accepted; any other value is refused. Proof cycles always write their results back (requires `ACCUMULATE_RESULTS_PRINCIPAL`, `ACCUMULATE_SIGNER_URL`) |
+| `PROOF_CYCLE_WRITEBACK` | No | — | Only `true` is accepted; any other value is refused. Proof cycles always write their results back (requires `ACCUMULATE_RESULTS_PRINCIPAL`, `ACCUMULATE_SIGNER_URL`, `ACCUMULATE_WRITEBACK_PRIV_KEY`) |
+| `ACCUMULATE_WRITEBACK_PRIV_KEY` | Yes | — | Hex ed25519 private key (64 bytes) on `ACCUMULATE_SIGNER_URL`'s key page that signs write-backs. The validator refuses to start without it (it used to sign with its own key) |
 | `FIRESTORE_ENABLED` | No | false | Enable Firestore real-time sync |
 | `FIREBASE_PROJECT_ID` | No | - | Firebase project ID |
 | `GOOGLE_APPLICATION_CREDENTIALS` | No | - | Service account JSON path |
