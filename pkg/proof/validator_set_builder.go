@@ -183,6 +183,13 @@ func fetchIncarnation(ctx context.Context, q AccumulateQuerier) (string, error) 
 }
 
 func fetchAccountStateProof(ctx context.Context, q AccumulateQuerier, url string) (*AccountStateProof, error) {
+	return fetchAccountStateProofOpt(ctx, q, url, false)
+}
+
+// fetchAccountStateProofOpt is fetchAccountStateProof for an account that may legitimately have no chains (a block
+// ledger). Its chains component is then the merkle hash of the empty list - 32 zero bytes - which verifyChainBinding
+// recomputes and checks against the receipt like any other.
+func fetchAccountStateProofOpt(ctx context.Context, q AccumulateQuerier, url string, allowNoChains bool) (*AccountStateProof, error) {
 	raw, err := q.Query(ctx, map[string]any{
 		"scope": url,
 		"query": map[string]any{"queryType": "default", "includeReceipt": true},
@@ -216,7 +223,7 @@ func fetchAccountStateProof(ctx context.Context, q AccumulateQuerier, url string
 		return nil, fmt.Errorf("re-encode account: %w", err)
 	}
 
-	chains, err := fetchChainRoots(ctx, q, url)
+	chains, err := fetchChainRoots(ctx, q, url, allowNoChains)
 	if err != nil {
 		return nil, err
 	}
@@ -246,7 +253,7 @@ func fetchAccountStateProof(ctx context.Context, q AccumulateQuerier, url string
 	}, nil
 }
 
-func fetchChainRoots(ctx context.Context, q AccumulateQuerier, url string) ([]ChainRoot, error) {
+func fetchChainRoots(ctx context.Context, q AccumulateQuerier, url string, allowNoChains bool) ([]ChainRoot, error) {
 	raw, err := q.Query(ctx, map[string]any{
 		"scope": url, "query": map[string]any{"queryType": "chain"},
 	})
@@ -263,7 +270,7 @@ func fetchChainRoots(ctx context.Context, q AccumulateQuerier, url string) ([]Ch
 	if err := json.Unmarshal(raw, &rec); err != nil {
 		return nil, err
 	}
-	if len(rec.Records) == 0 {
+	if len(rec.Records) == 0 && !allowNoChains {
 		return nil, fmt.Errorf("%s reports no chains", url)
 	}
 
