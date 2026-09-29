@@ -640,8 +640,9 @@ func (ci *CertenIntent) Validate() error {
 }
 
 // ValidateForExecution performs additional validation required before execution
-// This is stricter than basic Validate() and ensures execution readiness
-func (ci *CertenIntent) ValidateForExecution(blockHeight uint64) error {
+// This is stricter than basic Validate() and ensures execution readiness. The intent's deadline is judged at
+// deadlineAt (deadlineInstant): a committed operation's at its commit, new work now (RB4-F60).
+func (ci *CertenIntent) ValidateForExecution(blockHeight uint64, deadlineAt time.Time) error {
 	// First run basic validation
 	if err := ci.Validate(); err != nil {
 		return err
@@ -677,22 +678,12 @@ func (ci *CertenIntent) ValidateForExecution(blockHeight uint64) error {
 	}
 
 	// Validate replay data for expiration and timing
+	if err := ci.CheckDeadline(deadlineAt); err != nil {
+		return err
+	}
 	replayData, err := ci.ParseReplay()
 	if err != nil {
 		return fmt.Errorf("intent validation for execution failed: %w", err)
-	}
-	if replayData.ExpiresAt > 0 {
-		if replayData.CreatedAt <= 0 {
-			return fmt.Errorf("intent validation for execution failed: expires_at set but created_at missing")
-		}
-		// Enforce deadline: reject expired intents
-		if time.Now().Unix() > replayData.ExpiresAt {
-			return fmt.Errorf("intent expired at %d, current time %d", replayData.ExpiresAt, time.Now().Unix())
-		}
-		// Sanity: created_at must be before expires_at
-		if replayData.CreatedAt >= replayData.ExpiresAt {
-			return fmt.Errorf("created_at (%d) must be before expires_at (%d)", replayData.CreatedAt, replayData.ExpiresAt)
-		}
 	}
 
 	// Validate nonce for replay protection.
@@ -706,6 +697,28 @@ func (ci *CertenIntent) ValidateForExecution(blockHeight uint64) error {
 		return fmt.Errorf("intent validation for execution failed: %w", err)
 	}
 
+	return nil
+}
+
+// CheckDeadline judges the intent's replay deadline (expires_at) at the instant given: the intent is expired when
+// that instant is after its deadline. created_at must be set and before expires_at whenever a deadline is.
+func (ci *CertenIntent) CheckDeadline(at time.Time) error {
+	replayData, err := ci.ParseReplay()
+	if err != nil {
+		return fmt.Errorf("intent validation for execution failed: %w", err)
+	}
+	if replayData.ExpiresAt <= 0 {
+		return nil
+	}
+	if replayData.CreatedAt <= 0 {
+		return fmt.Errorf("intent validation for execution failed: expires_at set but created_at missing")
+	}
+	if at.Unix() > replayData.ExpiresAt {
+		return fmt.Errorf("intent expired at %d, judged at %d", replayData.ExpiresAt, at.Unix())
+	}
+	if replayData.CreatedAt >= replayData.ExpiresAt {
+		return fmt.Errorf("created_at (%d) must be before expires_at (%d)", replayData.CreatedAt, replayData.ExpiresAt)
+	}
 	return nil
 }
 

@@ -143,6 +143,43 @@ func (app *ValidatorApp) CommittedOperation(validatorID, operationID string) (*l
 	return rec, upTo, nil
 }
 
+// committedOperationReader answers whether a validator's block for an operation has committed (the app's
+// committed-operation index).
+type committedOperationReader interface {
+	CommittedOperation(validatorID, operationID string) (*ledger.CommittedOperation, int64, error)
+}
+
+// CommittedOperation answers from the engine's app, the committed-operation index.
+func (e *RealCometBFTEngine) CommittedOperation(validatorID, operationID string) (*ledger.CommittedOperation, int64, error) {
+	app, ok := e.app.(*ValidatorApp)
+	if !ok {
+		return nil, 0, fmt.Errorf("%w: this engine runs %T, not the ValidatorApp", ErrCommittedOperationsUnavailable, e.app)
+	}
+	return app.CommittedOperation(validatorID, operationID)
+}
+
+// deadlineInstant is the instant an intent's deadline is judged at (RB4-F60). When this validator's block for the
+// intent's operation has committed, the deadline was decided at that commit and is judged at its block time - the
+// same on every node, however long after the intent is processed again (a restart re-deriving it, a repair
+// re-driving a member). Otherwise this is new work, judged now. An index that cannot answer is not an answer.
+func deadlineInstant(r committedOperationReader, validatorID string, ci *CertenIntent, now time.Time) (time.Time, string, error) {
+	if r == nil {
+		return time.Time{}, "", fmt.Errorf("%w: no committed-operation index to say whether intent %s committed", ErrCommittedOperationsUnavailable, ci.IntentID)
+	}
+	opID, err := ci.OperationID()
+	if err != nil {
+		return time.Time{}, "", err
+	}
+	prior, _, err := r.CommittedOperation(validatorID, opID)
+	if err != nil {
+		return time.Time{}, "", err
+	}
+	if prior != nil {
+		return prior.BlockTime, fmt.Sprintf("operation %s committed at height %d", opID, prior.Height), nil
+	}
+	return now, fmt.Sprintf("operation %s not committed: new work, judged now", opID), nil
+}
+
 // committedHistory is the chain this node has committed, read from CometBFT's own stores.
 type committedHistory interface {
 	// Base and Height bound the blocks the store holds.

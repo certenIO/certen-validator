@@ -1235,17 +1235,28 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	// the same 4 blobs written to Accumulate a second time — was executed again
 	// at CERTEN's expense.
 	//
-	// Placed after the entitlement check and before any money is spent. Uses
-	// wall time for expiry, which is fine HERE (a proposer's local decision) and
-	// would not be fine in the consensus invariant, where it would make
-	// validators disagree.
+	// Placed after the entitlement check and before any money is spent. The
+	// deadline is judged at deadlineInstant: an operation this validator already
+	// committed at its commit's block time - the same on every node, however late
+	// it is processed again (a restart, a repair) - and new work now (RB4-F60).
+	// It used to be judged now, always: a committed intent re-derived after its
+	// deadline was refused as permanently invalid and its members never proven.
 	// ====================================================================
 	execValidation, err := executionValidationEnabled()
 	if err != nil {
 		return &ExecutionTaskResult{Success: false, ExecutorID: bv.validatorID, Error: err}, nil
 	}
 	if execValidation {
-		if err := certenIntent.ValidateForExecution(blockHeight); err != nil {
+		reader, _ := bv.engine.(committedOperationReader)
+		deadlineAt, basis, dErr := deadlineInstant(reader, bv.validatorID, certenIntent, time.Now())
+		if dErr != nil {
+			// Not a verdict on the intent: whether it committed is unknown, so it is not judged. Retried.
+			return &ExecutionTaskResult{Success: false, ExecutorID: bv.validatorID,
+				Error: fmt.Errorf("intent %s: its deadline cannot be judged: %w", certenIntent.IntentID, dErr)}, nil
+		}
+		bv.logger.Printf("⏱️ [EXEC-VALIDATION] intent %s: deadline judged at %s (%s)",
+			certenIntent.IntentID, deadlineAt.UTC().Format(time.RFC3339), basis)
+		if err := certenIntent.ValidateForExecution(blockHeight, deadlineAt); err != nil {
 			bv.logger.Printf("🚫 [EXEC-VALIDATION] refusing intent %s: %v", certenIntent.IntentID, err)
 			return &ExecutionTaskResult{
 				Success:    false,
