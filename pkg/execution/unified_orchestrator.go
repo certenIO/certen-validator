@@ -470,6 +470,20 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 		req.CycleID = uuid.New().String()
 	}
 
+	// RB4-F59: a member written back (or whose write-back has an unknown outcome) is not proved again - a second
+	// cycle would store a second proof bundle and write a second entry. It records nothing: the member's outcome
+	// is not this cycle's to state.
+	if chainID, _, _, err := memberSetOf(req); err == nil {
+		register, rErr := o.memberWriteBackRegister()
+		if rErr != nil {
+			return nil, rErr
+		}
+		if err := register.MemberWriteBackAllowed(ctx, req.IntentID, chainID); err != nil {
+			fmt.Printf("🛑 [Phase 9] intent %s member %d: proof cycle %s not started: %v\n", req.IntentID, chainID, req.CycleID, err)
+			return nil, fmt.Errorf("proof cycle %s not started: %w", req.CycleID, err)
+		}
+	}
+
 	// Create result
 	result := &UnifiedProofCycleResult{
 		CycleID:        req.CycleID,
@@ -829,6 +843,11 @@ func (o *UnifiedOrchestrator) recordPhaseFailure(ctx context.Context, cycle *act
 	reason := fmt.Sprintf("phase %d failed: %v", phase, err)
 	cycle.Result.Error = reason
 	cycle.Result.FailPhase = phase
+	if duplicateWriteBack(err) {
+		// RB4-F59: the member's write-back is on Accumulate, or may be. Its outcome is not this cycle's to state.
+		fmt.Printf("🛑 [LIFECYCLE] cycle %s: %s - no member outcome recorded for this cycle\n", cycle.CycleID, reason)
+		return
+	}
 	if rErr := o.recordMemberOutcome(ctx, cycle, observedSettlement(cycle.Result.ObservationResults), database.MemberProofCycleFailed, reason); rErr != nil {
 		fmt.Printf("❌ [LIFECYCLE] cycle %s failed in phase %d and its failure could not be recorded: %v\n", cycle.CycleID, phase, rErr)
 	}
@@ -1932,7 +1951,29 @@ const (
 	WriteBackWritten             = "written"
 	WriteBackRefusedQuorumNotMet = "refused_quorum_not_met"
 	WriteBackFailed              = "failed"
+	// RB4-F59: a member is written back once.
+	WriteBackRefusedAlreadyWritten = "refused_already_written" // the member's outcome is already on Accumulate
+	WriteBackRefusedUnresolved     = "refused_outcome_unknown" // an earlier write-back of it has an unknown outcome
+	WriteBackUnresolved            = "outcome_unknown"         // submitted, and whether it reached Accumulate is unknown
 )
+
+// memberWriteBackRegister is where a member's write-back is claimed and recorded (RB4-F59).
+func (o *UnifiedOrchestrator) memberWriteBackRegister() (*database.IntentLifecycleRepository, error) {
+	if o.config.Repos == nil || o.config.Repos.IntentLifecycle == nil {
+		return nil, fmt.Errorf("no write-back register: a member's write-back cannot be claimed")
+	}
+	return o.config.Repos.IntentLifecycle, nil
+}
+
+// duplicateWriteBack is true for a cycle refused because its member's write-back is already on Accumulate or has
+// an unknown outcome: such a cycle records no outcome of its own - the member's is not this cycle's to state.
+func duplicateWriteBack(err error) bool {
+	return errors.Is(err, database.ErrMemberAlreadyWrittenBack) || errors.Is(err, database.ErrMemberWriteBackUnresolved) ||
+		errors.Is(err, errWriteBackOutcomeUnknown)
+}
+
+// errWriteBackOutcomeUnknown: this cycle submitted its write-back and does not know whether it reached Accumulate.
+var errWriteBackOutcomeUnknown = errors.New("write-back submitted; whether it reached Accumulate is unknown")
 
 func (o *UnifiedOrchestrator) executePhase9(ctx context.Context, cycle *activeCycle) (err error) {
 	cycle.Phase = 9
@@ -2032,10 +2073,46 @@ func (o *UnifiedOrchestrator) executePhase9(ctx context.Context, cycle *activeCy
 		return fmt.Errorf("add signature: %w", err)
 	}
 
+	// RB4-F59: claim the member's write-back before submitting it. A member already written back, or claimed by
+	// a submission whose outcome is unknown, is refused by name.
+	memberChain, _, _, err := memberSetOf(cycle.Request)
+	if err != nil {
+		return fmt.Errorf("write-back cannot name its member: %w", err)
+	}
+	register, err := o.memberWriteBackRegister()
+	if err != nil {
+		return err
+	}
+	if err := register.ClaimMemberWriteBack(ctx, cycle.Request.IntentID, memberChain, cycle.CycleID, o.config.ValidatorID); err != nil {
+		switch {
+		case errors.Is(err, database.ErrMemberAlreadyWrittenBack):
+			cycle.Result.WriteBackState = WriteBackRefusedAlreadyWritten
+		case errors.Is(err, database.ErrMemberWriteBackUnresolved):
+			cycle.Result.WriteBackState = WriteBackRefusedUnresolved
+		}
+		return fmt.Errorf("write-back refused: %w", err)
+	}
+
 	// Submit transaction to Accumulate
 	receipt, err := o.config.AccumulateClient.SubmitTransaction(writeBackCtx, tx)
 	if err != nil {
-		return fmt.Errorf("submit to accumulate: %w", err)
+		if errors.Is(err, ErrWriteBackNotSent) {
+			// Nothing reached Accumulate: the member may be written back by another cycle.
+			if rErr := register.ReleaseMemberWriteBack(ctx, cycle.Request.IntentID, memberChain, cycle.CycleID, err.Error()); rErr != nil {
+				return fmt.Errorf("submit to accumulate: %w; and releasing its claim failed: %v", err, rErr)
+			}
+			return fmt.Errorf("submit to accumulate: %w", err)
+		}
+		// The submission may have reached Accumulate. Its claim stays, and blocks another write-back of this member
+		// until whether it did is established.
+		cycle.Result.WriteBackState = WriteBackUnresolved
+		return fmt.Errorf("%w (intent %s member %d, cycle %s; its claim is kept): %v",
+			errWriteBackOutcomeUnknown, cycle.Request.IntentID, memberChain, cycle.CycleID, err)
+	}
+	if rErr := register.RecordMemberWriteBack(ctx, cycle.Request.IntentID, memberChain, cycle.CycleID, receipt); rErr != nil {
+		// Written, and not registered as written: the claim stays, so no other write-back of the member follows.
+		fmt.Printf("❌ [Phase 9] intent %s member %d: write-back %s is on Accumulate and could not be registered: %v\n",
+			cycle.Request.IntentID, memberChain, receipt, rErr)
 	}
 
 	cycle.Result.WriteBackTxHash = receipt
