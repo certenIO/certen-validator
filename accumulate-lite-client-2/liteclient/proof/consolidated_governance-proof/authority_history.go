@@ -31,7 +31,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govvote"
 	"strings"
 	"time"
 
@@ -400,6 +402,9 @@ type pageTimeline struct {
 	Page    string
 	Genesis *GenesisEvent
 	Entries int
+	// Events is every main chain transaction replayed after the genesis, in chain order - the page's history as
+	// evidence (RB4-F66).
+	Events []pageEvent
 
 	// States[0] is the page as its genesis created it; each later state is the
 	// page after one main chain transaction that changed its authority.
@@ -433,19 +438,9 @@ func (ab *AuthorityBuilder) BuildPageTimeline(ctx context.Context, keyPage strin
 		return nil, fmt.Errorf("failed to read the key page's history: %w", err)
 	}
 
-	tl := &pageTimeline{Page: scope, Genesis: genesis, Entries: len(entries)}
-	page := genesisPage.Copy()
-	tl.States = append(tl.States, timedState{Block: genesis.LocalBlock, Page: page.Copy()})
-	for i := range events {
-		ev := events[i]
-		before := page.Copy()
-		effect, err := applyPageEvent(page, ev)
-		if err != nil {
-			return nil, err
-		}
-		if effect == effectAuthority {
-			tl.States = append(tl.States, timedState{Block: ev.LocalBlock, Page: page.Copy(), Event: &ev, Prev: before})
-		}
+	tl, page, err := replayTimeline(scope, genesis, genesisPage, events, len(entries))
+	if err != nil {
+		return nil, err
 	}
 
 	// Replayed to the head, the page must be the page the network holds.
@@ -453,6 +448,43 @@ func (ab *AuthorityBuilder) BuildPageTimeline(ctx context.Context, keyPage strin
 		return nil, err
 	}
 	return tl, nil
+}
+
+// replayTimeline replays a page from its genesis through its events with govvote's replay - the one the verifier
+// runs offline - and returns the timeline and the head page.
+func replayTimeline(scope string, genesis *GenesisEvent, genesisPage *protocol.KeyPage, events []pageEvent,
+	entries int) (*pageTimeline, *protocol.KeyPage, error) {
+	evs := make([]govvote.Event, len(events))
+	for i := range events {
+		evs[i] = events[i].replay()
+	}
+	replayed, head, err := govvote.Replay(genesisPage, genesis.LocalBlock, evs)
+	if err != nil {
+		var refused *govvote.ReplayError
+		if errors.As(err, &refused) {
+			return nil, nil, ValidationError{Msg: refused.Msg}
+		}
+		return nil, nil, err
+	}
+	tl := &pageTimeline{Page: scope, Genesis: genesis, Entries: entries, Events: events}
+	for _, r := range replayed {
+		st := timedState{Block: r.Block, Page: r.Page, Prev: r.Prev}
+		if r.EventIndex >= 0 {
+			ev := events[r.EventIndex]
+			st.Event = &ev
+		}
+		tl.States = append(tl.States, st)
+	}
+	return tl, head, nil
+}
+
+// states is the timeline as govvote's rules read it.
+func (tl *pageTimeline) states() govvote.States {
+	out := make(govvote.States, len(tl.States))
+	for i, s := range tl.States {
+		out[i] = govvote.State{Block: s.Block, Page: s.Page}
+	}
+	return out
 }
 
 // At returns the page after every change recorded at or before block, or nil
@@ -479,35 +511,12 @@ func (tl *pageTimeline) Before(entryHash string) (*protocol.KeyPage, bool) {
 	return nil, false
 }
 
-// CandidatesDuring returns every state the page may have been in during a
-// block: the state it entered the block in, and each state a change within
-// the block produced. Which of them a message processed in that block saw is
-// decided by the message itself - a signature names its signer version.
+// CandidatesDuring returns every state the page may have been in during a block (govvote.States.CandidatesDuring).
 func (tl *pageTimeline) CandidatesDuring(block int64) []*protocol.KeyPage {
-	var out []*protocol.KeyPage
-	var entering *protocol.KeyPage
-	for _, s := range tl.States {
-		switch {
-		case s.Block < block:
-			entering = s.Page
-		case s.Block == block:
-			out = append(out, s.Page)
-		}
-	}
-	if entering != nil {
-		out = append([]*protocol.KeyPage{entering}, out...)
-	}
-	return out
+	return tl.states().CandidatesDuring(block)
 }
 
-// OfVersion returns a state the page held at a version. Every state of one
-// version has the same thresholds and delegates: only UpdateKey changes a page
-// without changing its version, and it changes only a key hash.
+// OfVersion returns a state the page held at a version (govvote.States.OfVersion).
 func (tl *pageTimeline) OfVersion(v uint64) (*protocol.KeyPage, bool) {
-	for _, s := range tl.States {
-		if s.Page.Version == v {
-			return s.Page, true
-		}
-	}
-	return nil, false
+	return tl.states().OfVersion(v)
 }

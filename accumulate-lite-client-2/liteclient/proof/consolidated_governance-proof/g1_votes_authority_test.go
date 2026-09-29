@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"errors"
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govvote"
 	"testing"
 
 	"gitlab.com/accumulatenetwork/accumulate/protocol"
@@ -42,8 +43,8 @@ func oneKeyPages(t *testing.T, pages map[string]string) memTimelines {
 // authVote runs the model on sigs, with votes as the network recorded them on the principal.
 func authVote(t *testing.T, tls memTimelines, sigs []sigFact, votes []recordedVote, auths []AccountAuthority, extra []string, ignoreDisabled bool) (*AccountVote, error) {
 	t.Helper()
-	m := newVoteModel(voteFacts{TxType: protocol.TransactionTypeWriteData, Sigs: sigs, Votes: votes}, tls)
-	return m.accountVote(context.Background(), alphaData, auths, extra, ignoreDisabled)
+	return govvote.Evaluate(context.Background(), voteFacts{TxType: protocol.TransactionTypeWriteData, Sigs: sigs, Votes: votes},
+		tls, alphaData, auths, extra, ignoreDisabled)
 }
 
 // userTransactionIsReady: ALL enabled authorities must vote.

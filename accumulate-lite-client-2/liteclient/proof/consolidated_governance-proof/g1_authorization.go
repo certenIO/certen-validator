@@ -24,6 +24,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govvote"
 	"strings"
 	"sync"
 
@@ -50,7 +51,7 @@ func newTimelineCache(builder *AuthorityBuilder) *timelineCache {
 	return &timelineCache{builder: builder, pages: map[string]*pageTimeline{}, failed: map[string]error{}}
 }
 
-func (c *timelineCache) Timeline(ctx context.Context, page string) (*pageTimeline, error) {
+func (c *timelineCache) Timeline(ctx context.Context, page string) (govvote.Timeline, error) {
 	key := normalizeAccURL(page)
 	c.mu.Lock()
 	if tl, ok := c.pages[key]; ok {
@@ -105,7 +106,7 @@ func (a *g1Authorization) Evaluate(ctx context.Context, sigs []ValidatedSignatur
 	if err != nil {
 		return nil, err
 	}
-	return newVoteModel(facts, a.timelines).accountVote(ctx, a.principal, authorities, extra.URLs, extra.IgnoreDisabled)
+	return govvote.Evaluate(ctx, facts, a.timelines, a.principal, authorities, extra.URLs, extra.IgnoreDisabled)
 }
 
 // sigFactOf turns a validated signature into the fact the model reads. A

@@ -53,7 +53,9 @@ import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govvote"
 	"strings"
 
 	"gitlab.com/accumulatenetwork/accumulate/pkg/types/messaging"
@@ -61,16 +63,10 @@ import (
 	"gitlab.com/accumulatenetwork/accumulate/protocol"
 )
 
-// pageInitiator identifies what initiated a transaction, as core's
-// transactionIsInitiated reports it: the credit payment flagged Initiator,
-// its payer, and - when the payer is the page itself - the public key hash of
-// the key signature that caused it.
-type pageInitiator struct {
-	Payer   *url.URL
-	KeyHash []byte
-}
+// pageInitiator identifies what initiated a transaction (govvote.Initiator).
+type pageInitiator = govvote.Initiator
 
-// pageEvent is one transaction on a key page's main chain, in chain order.
+// pageEvent is one transaction on a key page's main chain, in chain order, with the receipt that binds it.
 type pageEvent struct {
 	Index      int
 	EntryHash  string
@@ -82,15 +78,17 @@ type pageEvent struct {
 	Initiator *pageInitiator
 }
 
+// replay is the event as govvote's replay reads it.
+func (ev pageEvent) replay() govvote.Event {
+	return govvote.Event{EntryHash: ev.EntryHash, LocalBlock: ev.LocalBlock, Txn: ev.Txn, Initiator: ev.Initiator}
+}
+
 // replayEffect says what a transaction did to the page's authority.
-type replayEffect int
+type replayEffect = govvote.Effect
 
 const (
-	// effectNone: the transaction changes nothing the authority depends on
-	// (credits only).
-	effectNone replayEffect = iota
-	// effectAuthority: keys, delegates, thresholds, blacklist or version.
-	effectAuthority
+	effectNone      = govvote.EffectNone
+	effectAuthority = govvote.EffectAuthority
 )
 
 // decodeEntryTransaction reads the transaction an expanded main chain entry
@@ -132,246 +130,13 @@ func decodeEntryTransaction(expanded map[string]interface{}, entryHash string) (
 
 // applyPageEvent applies one main chain transaction to the page, in place.
 func applyPageEvent(page *protocol.KeyPage, ev pageEvent) (replayEffect, error) {
-	txn := ev.Txn
-	if txn == nil || txn.Header.Principal == nil {
-		return effectNone, fmt.Errorf("event %s has no transaction", short(ev.EntryHash))
+	effect, err := govvote.Apply(page, ev.replay())
+	var refused *govvote.ReplayError
+	if errors.As(err, &refused) {
+		// The replay's refusals are this package's validation failures, as they always were.
+		return effect, ValidationError{Msg: refused.Msg}
 	}
-	if !txn.Header.Principal.Equal(page.Url) {
-		return effectNone, ValidationError{Msg: fmt.Sprintf("a %v on %s's main chain names %v as its principal",
-			txn.Body.Type(), page.Url, txn.Header.Principal)}
-	}
-
-	switch body := txn.Body.(type) {
-	case *protocol.UpdateKeyPage:
-		// Applied to a copy and committed only if every operation succeeds,
-		// as the executor's state manager does.
-		next := page.Copy()
-		for i, op := range body.Operation {
-			if err := applyKeyPageOperation(next, txn.Header.Principal, op); err != nil {
-				return effectNone, divergence(ev, fmt.Sprintf("operation %d (%v): %v", i, op.Type(), err))
-			}
-		}
-		// didUpdateKeyPage
-		next.Version++
-		for _, k := range next.Keys {
-			k.LastUsedOn = 0
-		}
-		*page = *next
-		return effectAuthority, nil
-
-	case *protocol.UpdateKey:
-		if ev.Initiator == nil || ev.Initiator.Payer == nil {
-			return effectNone, ValidationError{Msg: fmt.Sprintf("updateKey %s: its initiator is unknown, and the "+
-				"entry it rotates is the initiator's, so it cannot be replayed", short(ev.EntryHash))}
-		}
-		if err := requireKeyHash(body.NewKeyHash); err != nil {
-			return effectNone, divergence(ev, err.Error())
-		}
-		next := page.Copy()
-
-		// update_key.go Execute: the delegate entry naming the payer, else
-		// the key that signed, when the payer is the page itself.
-		old := new(protocol.KeySpecParams)
-		i, _, ok := next.EntryByDelegate(ev.Initiator.Payer)
-		switch {
-		case ok:
-			old.Delegate = next.Keys[i].Delegate
-		case ev.Initiator.Payer.Equal(next.Url):
-			if len(ev.Initiator.KeyHash) == 0 {
-				return effectNone, ValidationError{Msg: fmt.Sprintf("updateKey %s was initiated by %s's own key, "+
-					"but the initiating key is unknown", short(ev.EntryHash), next.Url)}
-			}
-			old.KeyHash = ev.Initiator.KeyHash
-		default:
-			return effectNone, divergence(ev, fmt.Sprintf("initiator %v is neither the principal nor a delegate",
-				ev.Initiator.Payer))
-		}
-
-		// "Do not update the key page version, do not reset LastUsedOn"
-		if err := replayUpdateKey(next, old, &protocol.KeySpecParams{KeyHash: body.NewKeyHash}, true); err != nil {
-			return effectNone, divergence(ev, err.Error())
-		}
-		*page = *next
-		return effectAuthority, nil
-
-	case *protocol.SyntheticDepositCredits, *protocol.BurnCredits:
-		// Credit balance only.
-		return effectNone, nil
-	}
-
-	// Anything else on a page's main chain is a transaction this replay has
-	// not been taught, and cannot claim leaves the authority unchanged.
-	return effectNone, ValidationError{Msg: fmt.Sprintf("a %v transaction (%s) is on %s's main chain; the replay "+
-		"cannot show it leaves the page's authority unchanged", txn.Body.Type(), short(ev.EntryHash), page.Url)}
-}
-
-// applyKeyPageOperation mirrors checkOperation followed by executeOperation.
-func applyKeyPageOperation(page *protocol.KeyPage, principal *url.URL, op protocol.KeyPageOperation) error {
-	switch op := op.(type) {
-	case *protocol.AddKeyOperation:
-		if op.Entry.IsEmpty() {
-			return fmt.Errorf("cannot add an empty entry")
-		}
-		if op.Entry.Delegate != nil && op.Entry.Delegate.ParentOf(principal) {
-			return fmt.Errorf("self-delegation is not allowed")
-		}
-		if _, _, found := findKeyPageEntry(page, &op.Entry); found {
-			return fmt.Errorf("cannot have duplicate entries on key page")
-		}
-		page.AddKeySpec(&protocol.KeySpec{PublicKeyHash: op.Entry.KeyHash, Delegate: op.Entry.Delegate})
-		return nil
-
-	case *protocol.RemoveKeyOperation:
-		if op.Entry.IsEmpty() {
-			return fmt.Errorf("cannot remove an empty entry")
-		}
-		index, _, found := findKeyPageEntry(page, &op.Entry)
-		if !found {
-			return fmt.Errorf("entry to be removed not found on the key page")
-		}
-		_, pageIndex, ok := protocol.ParseKeyPageUrl(page.Url)
-		if !ok {
-			return fmt.Errorf("principal is not a key page")
-		}
-		if len(page.Keys) == 1 && pageIndex == 1 {
-			return fmt.Errorf("cannot delete last key of the highest priority page of a key book")
-		}
-		page.RemoveKeySpecAt(index)
-
-		// The thresholds follow the key count down.
-		n := uint64(len(page.Keys))
-		if page.AcceptThreshold > n {
-			page.AcceptThreshold = n
-		}
-		if page.RejectThreshold > n {
-			page.RejectThreshold = n
-		}
-		if page.ResponseThreshold > n {
-			page.ResponseThreshold = n
-		}
-		return nil
-
-	case *protocol.UpdateKeyOperation:
-		if op.OldEntry.IsEmpty() {
-			return fmt.Errorf("cannot update: old entry is empty")
-		}
-		if op.NewEntry.IsEmpty() {
-			return fmt.Errorf("cannot update: new entry is empty")
-		}
-		if op.NewEntry.Delegate != nil && op.NewEntry.Delegate.ParentOf(principal) {
-			return fmt.Errorf("self-delegation is not allowed")
-		}
-		return replayUpdateKey(page, &op.OldEntry, &op.NewEntry, false)
-
-	case *protocol.SetThresholdKeyPageOperation:
-		if op.Threshold == 0 {
-			return fmt.Errorf("cannot require 0 signatures on a key page")
-		}
-		return page.SetThreshold(op.Threshold)
-
-	case *protocol.SetRejectThresholdKeyPageOperation:
-		if op.Threshold >= uint64(len(page.Keys)) {
-			return fmt.Errorf("cannot require %d rejections on a key page with %d keys", op.Threshold, len(page.Keys))
-		}
-		page.RejectThreshold = op.Threshold
-		return nil
-
-	case *protocol.SetResponseThresholdKeyPageOperation:
-		if op.Threshold >= uint64(len(page.Keys)) {
-			return fmt.Errorf("cannot require %d responses on a key page with %d keys", op.Threshold, len(page.Keys))
-		}
-		page.ResponseThreshold = op.Threshold
-		return nil
-
-	case *protocol.UpdateAllowedKeyPageOperation:
-		for _, txn := range op.Allow {
-			if _, ok := txn.AllowedTransactionBit(); !ok {
-				return fmt.Errorf("transaction type %v cannot be (dis)allowed", txn)
-			}
-		}
-		for _, txn := range op.Deny {
-			if _, ok := txn.AllowedTransactionBit(); !ok {
-				return fmt.Errorf("transaction type %v cannot be (dis)allowed", txn)
-			}
-		}
-		if page.TransactionBlacklist == nil {
-			page.TransactionBlacklist = new(protocol.AllowedTransactions)
-		}
-		for _, txn := range op.Allow {
-			bit, _ := txn.AllowedTransactionBit()
-			page.TransactionBlacklist.Clear(bit)
-		}
-		for _, txn := range op.Deny {
-			bit, _ := txn.AllowedTransactionBit()
-			page.TransactionBlacklist.Set(bit)
-		}
-		if *page.TransactionBlacklist == 0 {
-			page.TransactionBlacklist = nil
-		}
-		return nil
-	}
-
-	return fmt.Errorf("invalid operation: %v", op.Type())
-}
-
-// replayUpdateKey mirrors update_key.go updateKey, less its book check.
-func replayUpdateKey(page *protocol.KeyPage, old, new *protocol.KeySpecParams, preserveDelegate bool) error {
-	oldPos, entry, found := findKeyPageEntry(page, old)
-	if !found {
-		return fmt.Errorf("entry to be updated not found on the key page")
-	}
-	newPos, _, found := findKeyPageEntry(page, new)
-	if found && oldPos != newPos {
-		return fmt.Errorf("cannot have duplicate entries on key page")
-	}
-
-	entry.PublicKeyHash = new.KeyHash
-	if new.Delegate != nil || !preserveDelegate {
-		entry.Delegate = new.Delegate
-	}
-
-	// Relocate the entry, keeping the page sorted.
-	page.RemoveKeySpecAt(oldPos)
-	page.AddKeySpec(entry)
-	return nil
-}
-
-// findKeyPageEntry mirrors update_key_page.go findKeyPageEntry.
-func findKeyPageEntry(page *protocol.KeyPage, search *protocol.KeySpecParams) (int, *protocol.KeySpec, bool) {
-	var i int
-	var entry protocol.KeyEntry
-	var ok bool
-	if len(search.KeyHash) > 0 {
-		i, entry, ok = page.EntryByKeyHash(search.KeyHash)
-	}
-	if !ok && search.Delegate != nil {
-		i, entry, ok = page.EntryByDelegate(search.Delegate)
-	}
-	if !ok {
-		return -1, nil, false
-	}
-	spec, isSpec := entry.(*protocol.KeySpec)
-	if !isSpec {
-		return -1, nil, false
-	}
-	return i, spec, true
-}
-
-// requireKeyHash mirrors update_key.go requireKeyHash.
-func requireKeyHash(h []byte) error {
-	if len(h) == 0 {
-		return fmt.Errorf("public key hash is missing")
-	}
-	if len(h) > 32 {
-		return fmt.Errorf("public key hash is too long to be a hash")
-	}
-	return nil
-}
-
-func divergence(ev pageEvent, detail string) error {
-	return ValidationError{Msg: fmt.Sprintf("replay diverges from execution at %v %s (block %d): %s - the "+
-		"executor applied this transaction without error, so a replay that cannot is not the page's history",
-		ev.Txn.Body.Type(), short(ev.EntryHash), ev.LocalBlock, detail)}
+	return effect, err
 }
 
 // pageFromState builds the protocol page a KeyPageState describes. Entries
