@@ -24,7 +24,8 @@ import (
 
 func main() {
 	endpoint := flag.String("endpoint", "https://kermit.accumulatenetwork.io/v3", "Accumulate v3 endpoint")
-	bvn := flag.String("bvn", "bvn1", "the BVN whose anchor pool the genesis anchor's signed delivery is read from")
+	bvn := flag.String("bvn", "", "the BVN whose anchor pool the genesis anchor's signed delivery is read from "+
+		"(default: the first block-validator partition of the genesis network record)")
 	out := flag.String("out", "", "write the evidence as JSON to this path")
 	verify := flag.String("verify", "", "re-derive offline from this evidence file (no network)")
 	flag.Parse()

@@ -20,7 +20,7 @@ func repointData(a common.Address) []byte {
 
 func pinnedStack(t *testing.T) *BatchStack {
 	s := stackForChain(t, 84532)
-	s.Orchestrators[84532] = &BatchOrchestrator{anchorV7: pinAnchorV8}
+	s.Orchestrators[84532] = &BatchOrchestrator{incarnation: testIncarnation, anchorV7: pinAnchorV8}
 	return s
 }
 

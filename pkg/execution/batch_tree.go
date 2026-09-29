@@ -8,6 +8,8 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
+
+	"github.com/certen/independant-validator/pkg/execution/contracts"
 )
 
 // =============================================================================
@@ -27,7 +29,8 @@ const (
 	// BatchLeafDomain must equal CertenAccountV7.LEAF_DOMAIN.
 	BatchLeafDomain = "certen:batchleaf:v1"
 
-	// BatchBundleDomain must equal the literal in CertenAnchorV7.createBatchAnchor.
+	// BatchBundleDomain is the V8.1 (and V7) createBatchAnchor literal. Batches are formed for CertenAnchorV8_2
+	// (contracts.DeriveV8_2BatchBundleID, "certen:batchbundle:v2"); v1 remains to verify anchors created before it.
 	BatchBundleDomain = "certen:batchbundle:v1"
 )
 
@@ -41,6 +44,11 @@ type BatchLeafInput struct {
 	// governance decision record, RB4-F66). NOT part of the leaf - the account reconstructs the leaf and never sees
 	// governance - but part of the batch operation id the quorum signs and the anchor stores.
 	GovernanceCommitment [32]byte
+
+	// AccumulateSetRoot is the root of the Accumulate validator set this member's L4 Directory leg was verified
+	// against, under the process's incarnation (pkg/accumulateset, RB5 design D2). NOT part of the leaf or the
+	// operation id: every member of a tree must share it, and the tree's V8.2 anchor commits it once.
+	AccumulateSetRoot [32]byte
 
 	// LegacyNoGovernance marks a member admitted before governance commitments existed (restored from a mempool
 	// written by an earlier binary). Its batch was, or will be, formed with the v1 operation id - the id its anchor
@@ -243,7 +251,8 @@ func VerifyBranch(branch [][32]byte, root, leaf [32]byte) bool {
 	return computed == root
 }
 
-// DeriveBatchBundleID mirrors CertenAnchorV7.createBatchAnchor's required derivation:
+// DeriveBatchBundleID is the V8.1 (and V7) batch anchor id, kept to verify anchors created before V8.2. New batches
+// derive contracts.DeriveV8_2BatchBundleID (BuildBatchTree). It mirrors CertenAnchorV7.createBatchAnchor's derivation:
 //
 //	keccak256(abi.encodePacked(
 //	    "certen:batchbundle:v1", chainId, batchRoot, leafCount, batchOperationID, height
@@ -316,6 +325,12 @@ type BatchTree struct {
 	BundleID                [32]byte
 	BlockHeight             uint64
 
+	// AccumulateSetRoot and Incarnation are the Accumulate half CertenAnchorV8_2 commits for this tree: the one
+	// validator-set root every member's L4 was verified against, and which Accumulate chain that is. Both are in the
+	// V8.2 bundle id and in the pre-exec message the quorum signs.
+	AccumulateSetRoot [32]byte
+	Incarnation       [32]byte
+
 	// AnchorCreateTx is the transaction that PUBLISHED this root — createBatchAnchor's own transaction,
 	// set by the orchestrator once it returns and before the quorum proves the root.
 	//
@@ -341,9 +356,25 @@ func BuildBatchTree(
 	chainID int64,
 	inputs []BatchLeafInput,
 	blockHeight uint64,
+	incarnation [32]byte,
 ) (*BatchTree, error) {
 	if len(inputs) == 0 {
 		return nil, fmt.Errorf("cannot build a batch with no members")
+	}
+	if incarnation == ([32]byte{}) {
+		return nil, fmt.Errorf("cannot build a V8.2 batch without the Accumulate incarnation")
+	}
+	// One anchor commits one Accumulate set root, so every member must have been verified against the same set
+	// (periodChunks forms trees per root). A member without one has no committable set.
+	accRoot := inputs[0].AccumulateSetRoot
+	for i, in := range inputs {
+		if in.AccumulateSetRoot == ([32]byte{}) {
+			return nil, fmt.Errorf("%w: member %d (%s)", ErrNoAccumulateSetRoot, i, in.ADIURL)
+		}
+		if in.AccumulateSetRoot != accRoot {
+			return nil, fmt.Errorf("member %d (%s) was verified against Accumulate validator set %x, member 0 against %x; "+
+				"one anchor commits one set", i, in.ADIURL, in.AccumulateSetRoot[:8], accRoot[:8])
+		}
 	}
 
 	leaves := make([][32]byte, 0, len(inputs))
@@ -384,7 +415,7 @@ func BuildBatchTree(
 	if err != nil {
 		return nil, err
 	}
-	bundleID := DeriveBatchBundleID(chainID, root, uint64(len(leaves)), batchOpID, blockHeight)
+	bundleID := contracts.DeriveV8_2BatchBundleID(chainID, root, uint64(len(leaves)), batchOpID, blockHeight, accRoot, incarnation)
 
 	tree := &BatchTree{
 		ChainID:                 chainID,
@@ -395,6 +426,8 @@ func BuildBatchTree(
 		BatchOperationIDVersion: opVersion,
 		BundleID:                bundleID,
 		BlockHeight:             blockHeight,
+		AccumulateSetRoot:       accRoot,
+		Incarnation:             incarnation,
 	}
 
 	// Self-verify every branch against the algorithm the anchor will actually run.

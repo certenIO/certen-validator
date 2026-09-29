@@ -3,7 +3,9 @@ package execution
 import (
 	"encoding/json"
 	"math/big"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -19,7 +21,7 @@ func (jsonCodec) Decode(r json.RawMessage) (interface{}, error) {
 }
 
 func member(id string, h uint64, chain int64) *PendingBatchIntent {
-	return &PendingBatchIntent{GovernanceCommitment: testGov,
+	return &PendingBatchIntent{AccumulateSetRoot: testAccSet, GovernanceCommitment: testGov,
 		IntentID: id, ADIURL: "acc://" + id + ".acme", ChainID: chain,
 		Account:     common.HexToAddress("0x32b4687bE3c02d52e2d94Dc1cFAF03a0E5af0C8B"),
 		OperationID: opid(byte(len(id))),
@@ -121,5 +123,33 @@ func TestMempoolStore_MissingFileIsNotFatal(t *testing.T) {
 	m.SetStore(st, nil) // must not panic or block
 	if m.PendingCount() != 0 {
 		t.Fatal("unexpected members")
+	}
+}
+
+// A member written without an Accumulate validator set root was admitted for the retired V8.1 anchor, which its intent
+// still declares. It cannot settle on V8.2, so the restore refuses it by name - the node does not start until the batch
+// path is drained - rather than restoring a member no V8.2 anchor could commit (RB5 design D2).
+func TestRestoreRefusesAMemberAdmittedBeforeV8_2(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "batch_mempool.json")
+	pre := `[{"intent_id":"pre-v82","adi_url":"acc://orga.acme","chain_id":11155111,
+	  "account":"0x32b4687bE3c02d52e2d94Dc1cFAF03a0E5af0C8B",
+	  "operation_id":"0x0100000000000000000000000000000000000000000000000000000000000000",
+	  "legs":[{"leg_id":"leg-0","target":"0x1111111111111111111111111111111111111111","value":"0","data":"0xdead"}],
+	  "commit_height":105,
+	  "governance_commitment":"0x0200000000000000000000000000000000000000000000000000000000000000"}]`
+	if err := os.WriteFile(path, []byte(pre), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewBatchMempoolStore(path, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := NewBatchMempool(BatchMempoolConfig{})
+	_, err = store.Load(m)
+	if err == nil || !strings.Contains(err.Error(), "retired V8.1 anchor") {
+		t.Fatalf("a pre-V8.2 member was restored (err %v)", err)
+	}
+	if m.PendingCount() != 0 {
+		t.Fatalf("%d member(s) restored from a refused queue", m.PendingCount())
 	}
 }

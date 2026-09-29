@@ -128,6 +128,9 @@ type BatchFlushResult struct {
 const maxQuorumAttempts = 5
 
 type BatchOrchestrator struct {
+	// incarnation is the Accumulate incarnation every tree this orchestrator forms commits (BatchStack.Incarnation).
+	incarnation [32]byte
+
 	attemptsMu sync.Mutex
 	// attempts counts failed quorum attempts per tree (bundleId): a period may be cut into several.
 	attempts map[[32]byte]int
@@ -167,13 +170,14 @@ func NewBatchOrchestrator(
 	anchorV7 common.Address,
 	prover QuorumProver,
 	mempool *BatchMempool,
+	incarnation [32]byte,
 	logf func(string, ...interface{}),
 ) *BatchOrchestrator {
 	if logf == nil {
 		logf = func(string, ...interface{}) {}
 	}
 	return &BatchOrchestrator{
-		ecm: ecm, anchorV7: anchorV7, prover: prover, mempool: mempool, logf: logf,
+		ecm: ecm, anchorV7: anchorV7, prover: prover, mempool: mempool, incarnation: incarnation, logf: logf,
 		attempts: make(map[[32]byte]int),
 	}
 }
@@ -273,7 +277,7 @@ func (o *BatchOrchestrator) FlushChain(
 		inputs = append(inputs, in)
 	}
 
-	tree, err := BuildBatchTree(chainID, inputs, cutoffHeight)
+	tree, err := BuildBatchTree(chainID, inputs, cutoffHeight, o.incarnation)
 	if err != nil {
 		return res, fmt.Errorf("building batch tree: %w", err)
 	}
@@ -1233,6 +1237,12 @@ func (o *BatchOrchestrator) periodChunks(ctx context.Context, members []*Pending
 				ErrNoGovernanceCommitment, p.IntentID, p.ChainID)})
 			continue
 		}
+		if p.AccumulateSetRoot == ([32]byte{}) {
+			// Not reachable through admission or restore, which both require it; refused by name if it ever is.
+			excluded = append(excluded, excludedMember{member: p, cause: fmt.Errorf("%w: intent %s on chain %d",
+				ErrNoAccumulateSetRoot, p.IntentID, p.ChainID)})
+			continue
+		}
 		verdict, err := o.accountVerdict(ctx, p)
 		if err != nil {
 			return nil, nil, err
@@ -1249,7 +1259,33 @@ func (o *BatchOrchestrator) periodChunks(ctx context.Context, members []*Pending
 	}
 	// Members admitted before governance commitments are batched apart, with the v1 operation id their anchors
 	// carry; every validator restored the same members the same way, so every validator cuts the same chunks.
-	return append(chunkMembers(legacy, maxBatch), chunkMembers(eligible, maxBatch)...), excluded, nil
+	// One V8.2 anchor commits one Accumulate validator set, so members are cut into trees per set root, in the order
+	// each root first appears in the period (RB5 design D2). Every validator derives each member's root from its own
+	// proof of the same execution - measured identical across the fleet on every production operation - so every
+	// validator cuts the same chunks. On Kermit, whose set has never changed, there is one group.
+	chunks := chunkMembers(legacy, maxBatch)
+	for _, group := range groupByAccumulateSet(eligible) {
+		chunks = append(chunks, chunkMembers(group, maxBatch)...)
+	}
+	return chunks, excluded, nil
+}
+
+// groupByAccumulateSet splits members by AccumulateSetRoot, keeping their order within a group and ordering the
+// groups by first appearance.
+func groupByAccumulateSet(members []*PendingBatchIntent) [][]*PendingBatchIntent {
+	var order [][32]byte
+	groups := map[[32]byte][]*PendingBatchIntent{}
+	for _, p := range members {
+		if _, seen := groups[p.AccumulateSetRoot]; !seen {
+			order = append(order, p.AccumulateSetRoot)
+		}
+		groups[p.AccumulateSetRoot] = append(groups[p.AccumulateSetRoot], p)
+	}
+	out := make([][]*PendingBatchIntent, 0, len(order))
+	for _, r := range order {
+		out = append(out, groups[r])
+	}
+	return out
 }
 
 // accountVerdict is memberAccountUsable, cached. It returns (nil, nil) for a usable account,

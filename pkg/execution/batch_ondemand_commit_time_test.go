@@ -155,7 +155,7 @@ func TestOnDemandFailover_UnreadableBlockTimeFallsBackToFirstSightingAndRetriesL
 // restart must not restart it - measured from EnqueuedAt, a node restarting within the hour
 // deferred a member for ever.
 func TestMemberPastDeadline_MeasuredFromTheBlockNotTheLocalQueue(t *testing.T) {
-	o := &BatchOrchestrator{}
+	o := &BatchOrchestrator{incarnation: testIncarnation}
 	m := odMember(1, odChain, 105)
 	m.EnqueuedAt = time.Now()
 	m.CommitTime = time.Now().Add(-maxGasDeferral - time.Minute)

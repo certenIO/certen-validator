@@ -46,7 +46,8 @@ func main() {
 		"a quorum-signed StateTreeAnchor to bind the BPT root to (hex32). Not "+
 			"achievable today - see the note printed below.")
 	out := flag.String("out", "", "write the proof as JSON to this path")
-	bvn := flag.String("bvn", "bvn1", "the BVN whose anchor pool the genesis anchor's signed delivery is read from")
+	bvn := flag.String("bvn", "", "the BVN whose anchor pool the genesis anchor's signed delivery is read from "+
+		"(default: the first block-validator partition of the genesis network record)")
 	flag.Parse()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)

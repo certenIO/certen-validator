@@ -262,7 +262,7 @@ func (s *BatchStack) HandleBatchAttestationRequest(
 			inputs = append(inputs, in)
 			mine[in.OperationID] = in.GovernanceCommitment
 		}
-		t, err := BuildBatchTree(req.ChainID, inputs, req.CutoffHeight)
+		t, err := BuildBatchTree(req.ChainID, inputs, req.CutoffHeight, s.Incarnation)
 		if err != nil {
 			return refuse("rebuilding batch: %v", err)
 		}

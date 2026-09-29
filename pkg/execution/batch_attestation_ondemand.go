@@ -152,7 +152,7 @@ func (s *BatchStack) HandleOnDemandAttestationRequest(
 
 	// The height comes from OUR member, never from the request. That is what leaves a proposer
 	// with no input to the derivation at all: it names which member, and nothing more.
-	tree, err := BuildBatchTree(req.ChainID, []BatchLeafInput{in}, member.CommitHeight)
+	tree, err := BuildBatchTree(req.ChainID, []BatchLeafInput{in}, member.CommitHeight, s.Incarnation)
 	if err != nil {
 		return refuseWith(CodeRefused, "rebuilding batch: %v", err)
 	}

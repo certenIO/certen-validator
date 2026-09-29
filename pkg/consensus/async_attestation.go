@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govvote"
+	"github.com/certen/independant-validator/pkg/accumulateset"
 	"sort"
 	"strconv"
 	"strings"
@@ -522,6 +523,21 @@ func (att *PendingAttestation) GovernanceCommitment() ([32]byte, error) {
 		return [32]byte{}, fmt.Errorf("%w: the round recorded no governance decision", ErrNoGovernanceCommitment)
 	}
 	return proof.GovernanceCommitment(att.GovDecision), nil
+}
+
+// AccumulateSetRoot is the root of the Accumulate validator set the round's own proof was verified against - its L4
+// Directory leg - under the given incarnation, through the one reduction every path uses (pkg/accumulateset, RB5
+// design D2). It is what the member's V8.2 anchor commits.
+func (att *PendingAttestation) AccumulateSetRoot(incarnation [32]byte) ([32]byte, error) {
+	if att == nil || att.CertenProof == nil || att.CertenProof.LiteClientProof == nil ||
+		att.CertenProof.LiteClientProof.CompleteProof == nil {
+		return [32]byte{}, fmt.Errorf("%w: the round's snapshot carries no L1-L4 proof", ErrNoAccumulateSetRoot)
+	}
+	root, err := accumulateset.CommittedAccumulateSetRoot(att.CertenProof.LiteClientProof.CompleteProof.Layer4DN, incarnation)
+	if err != nil {
+		return [32]byte{}, fmt.Errorf("%w: %v", ErrNoAccumulateSetRoot, err)
+	}
+	return root, nil
 }
 
 // nonEmptyTxHashes returns the raw hashes that are actually present.

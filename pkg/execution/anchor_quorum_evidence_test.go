@@ -301,7 +301,7 @@ func TestMembersFromTreeCarryBranchesAndKnownIntentIDs(t *testing.T) {
 		{GovernanceCommitment: testGov, ADIURL: "acc://b.acme", OperationID: [32]byte{2}, ExecutionCommitment: [32]byte{8}},
 		{GovernanceCommitment: testGov, ADIURL: "acc://c.acme", OperationID: [32]byte{3}, ExecutionCommitment: [32]byte{7}},
 	}
-	tree, err := BuildBatchTree(84532, inputs, 100)
+	tree, err := BuildBatchTree(84532, withAccSet(inputs), 100, testIncarnation)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -345,7 +345,7 @@ func TestMembersFromTreeCarryTheIntentIdOnTheCadenceLane(t *testing.T) {
 	inputs := []BatchLeafInput{{GovernanceCommitment: testGov, ADIURL: "acc://payer-one.acme", ExecutionCommitment: [32]byte{0xe1}, OperationID: [32]byte{0x01}, IntentID: "intent-one"},
 		{GovernanceCommitment: testGov, ADIURL: "acc://payer-two.acme", ExecutionCommitment: [32]byte{0xe2}, OperationID: [32]byte{0x02}, IntentID: "intent-two"},
 	}
-	tree, err := BuildBatchTree(84532, inputs, 100)
+	tree, err := BuildBatchTree(84532, withAccSet(inputs), 100, testIncarnation)
 	if err != nil {
 		t.Fatalf("BuildBatchTree: %v", err)
 	}
@@ -377,7 +377,7 @@ func TestIntentIdOverrideAndLeafStability(t *testing.T) {
 		t.Fatal("adding an intent id changed the leaf; it must not be hashed")
 	}
 
-	tree, err := BuildBatchTree(84532, []BatchLeafInput{withID}, 100)
+	tree, err := BuildBatchTree(84532, withAccSet([]BatchLeafInput{withID}), 100, testIncarnation)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -393,7 +393,7 @@ func TestIntentIdOverrideAndLeafStability(t *testing.T) {
 // The plumbing itself: LeafInput is the single funnel both lanes build their leaves through, so the
 // intent id has to survive that conversion or the cadence lane records nothing.
 func TestLeafInputCarriesTheIntentIdIntoTheTree(t *testing.T) {
-	p := &PendingBatchIntent{GovernanceCommitment: testGov,
+	p := &PendingBatchIntent{AccumulateSetRoot: testAccSet, GovernanceCommitment: testGov,
 		IntentID:    "intent-cadence-one",
 		ADIURL:      "acc://payer-one.acme",
 		ChainID:     84532,
@@ -429,7 +429,7 @@ func TestLeafInputCarriesTheIntentIdIntoTheTree(t *testing.T) {
 // operation id) with every display column empty, while the shadow row held 3e595d2c… (the real
 // Accumulate transaction) and the full leg.
 func TestLeafInputCarriesProvenanceForTheCanonicalRow(t *testing.T) {
-	p := &PendingBatchIntent{GovernanceCommitment: testGov,
+	p := &PendingBatchIntent{AccumulateSetRoot: testAccSet, GovernanceCommitment: testGov,
 		IntentID:    "intent-prov-1",
 		ADIURL:      "acc://payer-one.acme",
 		ChainID:     84532,
@@ -466,7 +466,7 @@ func TestLeafInputCarriesProvenanceForTheCanonicalRow(t *testing.T) {
 	}
 
 	// And it must survive into the member evidence, on BOTH lanes (nil map = cadence).
-	tree, err := BuildBatchTree(84532, []BatchLeafInput{in}, 100)
+	tree, err := BuildBatchTree(84532, withAccSet([]BatchLeafInput{in}), 100, testIncarnation)
 	if err != nil {
 		t.Fatalf("BuildBatchTree: %v", err)
 	}

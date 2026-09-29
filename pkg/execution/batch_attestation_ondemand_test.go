@@ -16,9 +16,9 @@ func odStack(t *testing.T, chainID int64, members ...*PendingBatchIntent) *Batch
 			t.Fatalf("AddOnDemand: %v", err)
 		}
 	}
-	return &BatchStack{
+	return &BatchStack{Incarnation: testIncarnation,
 		Mempool:       m,
-		Orchestrators: map[int64]*BatchOrchestrator{chainID: {screen: acceptEveryAccount}},
+		Orchestrators: map[int64]*BatchOrchestrator{chainID: {incarnation: testIncarnation, screen: acceptEveryAccount}},
 	}
 }
 
@@ -161,7 +161,7 @@ func TestOnDemandHandlerCannotAttestAPeriodMember(t *testing.T) {
 	if err := m.Add(odMember(1, odChain, 105)); err != nil { // PERIOD pool
 		t.Fatalf("Add: %v", err)
 	}
-	s := &BatchStack{Mempool: m, Orchestrators: map[int64]*BatchOrchestrator{odChain: {screen: acceptEveryAccount}}}
+	s := &BatchStack{Incarnation: testIncarnation, Mempool: m, Orchestrators: map[int64]*BatchOrchestrator{odChain: {incarnation: testIncarnation, screen: acceptEveryAccount}}}
 
 	resp := s.HandleOnDemandAttestationRequest(&OnDemandAttestationRequest{
 		ChainID:     odChain,
@@ -182,9 +182,9 @@ func TestOnDemandHandlerCannotAttestAPeriodMember(t *testing.T) {
 // Codes are ADDITIVE. The period handler's decisions are unchanged; it merely labels them.
 func TestPeriodHandlerStillRefusesUnheldWithNotHeldCode(t *testing.T) {
 	m := NewBatchMempool(BatchMempoolConfig{})
-	s := &BatchStack{
+	s := &BatchStack{Incarnation: testIncarnation,
 		Mempool:       m,
-		Orchestrators: map[int64]*BatchOrchestrator{odChain: {screen: acceptEveryAccount}},
+		Orchestrators: map[int64]*BatchOrchestrator{odChain: {incarnation: testIncarnation, screen: acceptEveryAccount}},
 		PeriodBlocks:  DefaultBatchPeriodBlocks,
 	}
 
@@ -204,9 +204,9 @@ func TestPeriodHandlerStillRefusesUnheldWithNotHeldCode(t *testing.T) {
 }
 
 func TestPeriodHandlerLabelsWidthMismatchAsConfig(t *testing.T) {
-	s := &BatchStack{
+	s := &BatchStack{Incarnation: testIncarnation,
 		Mempool:       NewBatchMempool(BatchMempoolConfig{}),
-		Orchestrators: map[int64]*BatchOrchestrator{odChain: {screen: acceptEveryAccount}},
+		Orchestrators: map[int64]*BatchOrchestrator{odChain: {incarnation: testIncarnation, screen: acceptEveryAccount}},
 		PeriodBlocks:  100,
 	}
 	resp := s.HandleBatchAttestationRequest(&BatchAttestationRequest{

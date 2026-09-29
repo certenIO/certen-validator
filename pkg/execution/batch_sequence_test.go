@@ -151,8 +151,8 @@ func TestEnqueueAfterBindsThePredecessor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &BatchStack{Resolver: r, Mempool: NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64}),
-		Orchestrators:  map[int64]*BatchOrchestrator{odChain: {screen: acceptEveryAccount}, seqPredChain: {screen: acceptEveryAccount}},
+	s := &BatchStack{Incarnation: testIncarnation, Resolver: r, Mempool: NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64}),
+		Orchestrators:  map[int64]*BatchOrchestrator{odChain: {incarnation: testIncarnation, screen: acceptEveryAccount}, seqPredChain: {incarnation: testIncarnation, screen: acceptEveryAccount}},
 		MemberOutcomes: recordedOutcomes{}}
 	commit := time.Unix(1_800_000_000, 0).UTC()
 	legsOn := func(c int64) []mirrorLeg {

@@ -164,7 +164,7 @@ func newCreatedAnchorChain(t *testing.T, signer *ecdsa.PrivateKey) *createdAncho
 
 func TestAnAnchorAnotherValidatorCreatedIsRecordedWithItsCreateTransaction(t *testing.T) {
 	c := newCreatedAnchorChain(t, testKey("anchor creator"))
-	o := &BatchOrchestrator{ecm: &EthereumContractManager{client: c.serve(t)}, anchorV7: c.anchor, logf: t.Logf}
+	o := &BatchOrchestrator{incarnation: testIncarnation, ecm: &EthereumContractManager{client: c.serve(t)}, anchorV7: c.anchor, logf: t.Logf}
 	tree := &BatchTree{ChainID: c.chainID, BundleID: c.bundle, Root: c.root}
 
 	created, err := o.existingAnchorCreation(context.Background(), tree, 0)
@@ -187,7 +187,7 @@ func TestAnAnchorAnotherValidatorCreatedIsRecordedWithItsCreateTransaction(t *te
 // A located transaction the anchor's recorded creator did not sign is not taken as the create transaction.
 func TestALocatedCreateTransactionMustBeSignedByTheRecordedCreator(t *testing.T) {
 	c := newCreatedAnchorChain(t, testKey("someone else"))
-	o := &BatchOrchestrator{ecm: &EthereumContractManager{client: c.serve(t)}, anchorV7: c.anchor, logf: t.Logf}
+	o := &BatchOrchestrator{incarnation: testIncarnation, ecm: &EthereumContractManager{client: c.serve(t)}, anchorV7: c.anchor, logf: t.Logf}
 	_, err := o.existingAnchorCreation(context.Background(), &BatchTree{ChainID: c.chainID, BundleID: c.bundle, Root: c.root}, 0)
 	if err == nil || !strings.Contains(err.Error(), "records creator") {
 		t.Fatalf("err = %v; want the signer refused", err)

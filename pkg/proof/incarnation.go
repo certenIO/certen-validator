@@ -57,6 +57,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/ethereum/go-ethereum/crypto"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3/jsonrpc"
@@ -542,6 +543,13 @@ func BuildIncarnationEvidence(ctx context.Context, q AccumulateQuerier, legs Gen
 		*acc.main0, *acc.tx = ce, txHex
 	}
 
+	if deliveryBVN == "" {
+		// The first block-validator partition the genesis network record names: deterministic, and which BVN's
+		// delivery is read does not change the value, only whose copy of the signatures is checked.
+		if deliveryBVN, err = firstBVN(&e.Network); err != nil {
+			return nil, err
+		}
+	}
 	if e.GenesisLeg, err = legs.BuildGenesisDNLeg(ctx, deliveryBVN,
 		hex.EncodeToString(da.RootChainAnchor[:]), hex.EncodeToString(da.StateTreeAnchor[:])); err != nil {
 		return nil, fmt.Errorf("genesis anchor's signed delivery to %s: %w", deliveryBVN, err)
@@ -554,6 +562,60 @@ func BuildIncarnationEvidence(ctx context.Context, q AccumulateQuerier, legs Gen
 	}
 	e.Incarnation = hex.EncodeToString(rep.Incarnation[:])
 	return e, nil
+}
+
+// firstBVN is the first block-validator partition of a proven network account's record.
+func firstBVN(network *AccountStateProof) (string, error) {
+	raw, err := hexBytes(network.AccountState, "network.accountState")
+	if err != nil {
+		return "", err
+	}
+	blob, err := dataEntryOf(raw, "network account")
+	if err != nil {
+		return "", err
+	}
+	var nd protocol.NetworkDefinition
+	if err := nd.UnmarshalBinary(blob); err != nil {
+		return "", fmt.Errorf("network record is not a NetworkDefinition: %w", err)
+	}
+	for _, p := range nd.Partitions {
+		if p.Type == protocol.PartitionTypeBlockValidator {
+			return p.ID, nil
+		}
+	}
+	return "", fmt.Errorf("the network record names no block-validator partition")
+}
+
+// VerifyConfiguredIncarnation derives the incarnation of the Accumulate network at endpoint - with every check
+// IncarnationEvidence.Verify makes - and refuses unless it equals the configured one. A validator whose configured
+// incarnation is not the chain it actually reads would commit a false identity in every anchor, so it must not start.
+// A network read that fails is retried within the context; only a derived value that DIFFERS is final at once.
+func VerifyConfiguredIncarnation(ctx context.Context, endpoint string, configured [32]byte, retryEvery time.Duration) (*IncarnationReport, error) {
+	if configured == ([32]byte{}) {
+		return nil, fmt.Errorf("no incarnation is configured")
+	}
+	var lastErr error
+	for {
+		ev, err := BuildIncarnationEvidence(ctx, NewHTTPQuerier(endpoint), NewLiveGenesisLegBuilder(endpoint), endpoint, "")
+		if err == nil {
+			rep, verr := ev.Verify()
+			if verr != nil {
+				return nil, fmt.Errorf("the incarnation evidence from %s does not verify: %w", endpoint, verr)
+			}
+			if rep.Incarnation != configured {
+				return nil, fmt.Errorf("the configured incarnation 0x%x is not the one %s serves (0x%x, network %s, "+
+					"genesis %s): this validator would commit the wrong Accumulate chain in every anchor",
+					configured, endpoint, rep.Incarnation, rep.NetworkName, rep.GenesisTime)
+			}
+			return rep, nil
+		}
+		lastErr = err
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("could not derive the incarnation of %s before the deadline: %w", endpoint, lastErr)
+		case <-time.After(retryEvery):
+		}
+	}
 }
 
 func fetchChainEntry(ctx context.Context, q AccumulateQuerier, account, chain string, index uint64) (ChainEntryEvidence, error) {

@@ -78,6 +78,10 @@ func resolveAccumulateIncarnation() ([32]byte, error) {
 	return out, nil
 }
 
+// AccumulateIncarnation returns the configured Accumulate incarnation (ACCUMULATE_INCARNATION). It fails closed: no
+// default, no zero value.
+func AccumulateIncarnation() ([32]byte, error) { return resolveAccumulateIncarnation() }
+
 // accumulateSetFromL4 reduces the proof's Directory L4 leg to the inputs the Accumulate validator-set root commits
 // to. It is accumulateset.CommittedAccumulateSetInputs - the ONE reduction the batch paths, the L5 artifact and proofverify
 // also call (RB5 design D2) - so a signed root and a verified root cannot drift apart.

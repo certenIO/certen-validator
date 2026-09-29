@@ -34,7 +34,7 @@ func TestF66_Layer5CarriesTheAnchoredGovernance(t *testing.T) {
 	for i := range inputs {
 		inputs[i].Provenance.AccumTxHash = fmt.Sprintf("%x", crypto.Keccak256Hash([]byte(fmt.Sprintf("accum-%d-%s", i, nonce))))
 	}
-	tree, err := BuildBatchTree(84532, inputs, 100)
+	tree, err := BuildBatchTree(84532, withAccSet(inputs), 100, testIncarnation)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -367,6 +367,10 @@ func resolveBatchAttesterIdentity(resolver *execution.EVMChainResolverImpl, vali
 // identityRetryInterval is the steady-state cadence for attester-identity resolution once the
 // fast startup attempts are exhausted. One call a minute is negligible next to a node sitting
 // non-attesting indefinitely.
+// incarnationVerifyTimeout bounds how long startup keeps retrying the derivation of the Accumulate incarnation when
+// the network cannot be read; a derived value that differs from the configured one fails at once.
+const incarnationVerifyTimeout = 5 * time.Minute
+
 const identityRetryInterval = time.Minute
 
 // identityRetryLogEvery throttles the persistent-failure log to roughly every 10 minutes.
@@ -1560,7 +1564,21 @@ func startValidator(
 	}
 	batchQuorumAttestorForEvidence.Store(prover)
 	mempoolCfg := execution.DefaultBatchMempoolConfig()
-	stack, sErr := execution.NewBatchStack(resolver, prover, mempoolCfg, log.Printf)
+	// Every V8.2 anchor commits the Accumulate incarnation: the configured value must be the chain this validator
+	// actually reads, derived here with every check cmd/incarnation makes (docs/l4/INCARNATION_ANCHOR.md).
+	incarnation, incErr := consensus.AccumulateIncarnation()
+	if incErr != nil {
+		return nil, nil, fmt.Errorf("batch path: %w", incErr)
+	}
+	incCtx, incCancel := context.WithTimeout(context.Background(), incarnationVerifyTimeout)
+	incRep, incVErr := proof.VerifyConfiguredIncarnation(incCtx, strings.TrimSuffix(cfg.AccumulateURL, "/")+"/v3", incarnation, 10*time.Second)
+	incCancel()
+	if incVErr != nil {
+		return nil, nil, fmt.Errorf("batch path: Accumulate incarnation: %w", incVErr)
+	}
+	log.Printf("🧬 [INCARNATION] 0x%x verified against %s: network %s, genesis %s, %d genesis validators, genesis anchor signed %d/%d",
+		incarnation, cfg.AccumulateURL, incRep.NetworkName, incRep.GenesisTime, len(incRep.Validators), incRep.GenesisSigners, incRep.GenesisThreshold)
+	stack, sErr := execution.NewBatchStack(resolver, prover, mempoolCfg, incarnation, log.Printf)
 	if sErr != nil {
 		return nil, nil, fmt.Errorf("batch path: stack assembly: %w", sErr)
 	}

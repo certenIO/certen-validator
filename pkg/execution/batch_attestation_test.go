@@ -18,7 +18,7 @@ func attesterID() BatchAttesterIdentity {
 
 func addMember(t *testing.T, s *BatchStack, id string, height uint64, target byte, value int64) {
 	t.Helper()
-	if err := s.Mempool.Add(&PendingBatchIntent{GovernanceCommitment: testGov,
+	if err := s.Mempool.Add(&PendingBatchIntent{AccumulateSetRoot: testAccSet, GovernanceCommitment: testGov,
 		IntentID: id, ADIURL: "acc://" + id + ".acme", ChainID: 11155111,
 		Account:     common.HexToAddress("0x32b4687bE3c02d52e2d94Dc1cFAF03a0E5af0C8B"),
 		OperationID: opid(byte(len(id))),
@@ -43,7 +43,7 @@ func derivedBundle(t *testing.T, s *BatchStack, cutoff uint64) string {
 		}
 		inputs = append(inputs, in)
 	}
-	tree, err := BuildBatchTree(11155111, inputs, cutoff)
+	tree, err := BuildBatchTree(11155111, withAccSet(inputs), cutoff, testIncarnation)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -3,6 +3,7 @@ package execution
 import (
 	"errors"
 	"fmt"
+	"github.com/certen/independant-validator/pkg/execution/contracts"
 	"math/big"
 	"sync"
 	"testing"
@@ -12,7 +13,7 @@ import (
 )
 
 func pending(id, adi string, chainID int64, acct common.Address, opID uint64, legs ...LegExecution) *PendingBatchIntent {
-	return &PendingBatchIntent{GovernanceCommitment: testGov,
+	return &PendingBatchIntent{AccumulateSetRoot: testAccSet, GovernanceCommitment: testGov,
 		IntentID:    id,
 		ADIURL:      adi,
 		ChainID:     chainID,
@@ -77,7 +78,7 @@ func TestPendingIntent_MultiLegUsesBatchCommitment(t *testing.T) {
 }
 
 // =============================================================================
-// Add validation — reject at enqueue, not at tree-build time
+// Add validation â€” reject at enqueue, not at tree-build time
 // =============================================================================
 
 func TestMempool_AddRejectsMalformed(t *testing.T) {
@@ -88,7 +89,7 @@ func TestMempool_AddRejectsMalformed(t *testing.T) {
 		p    *PendingBatchIntent
 	}{
 		{"nil", nil},
-		{"no id", &PendingBatchIntent{GovernanceCommitment: testGov, ADIURL: "a", Account: acct1, OperationID: b32(1),
+		{"no id", &PendingBatchIntent{AccumulateSetRoot: testAccSet, GovernanceCommitment: testGov, ADIURL: "a", Account: acct1, OperationID: b32(1),
 			Legs: []LegExecution{oneLeg(1, dst, 1)}}},
 		{"no adi", pending("i", "", 1, acct1, 1, oneLeg(1, dst, 1))},
 		{"no account", pending("i", "acc://a.acme", 1, common.Address{}, 1, oneLeg(1, dst, 1))},
@@ -105,7 +106,7 @@ func TestMempool_AddRejectsMalformed(t *testing.T) {
 	}
 }
 
-// A leg whose chain disagrees with the intent would land in the wrong tree — and the leaf
+// A leg whose chain disagrees with the intent would land in the wrong tree â€” and the leaf
 // binds chainid, so it could never be spent.
 func TestMempool_AddRejectsChainMismatch(t *testing.T) {
 	m := NewBatchMempool(DefaultBatchMempoolConfig())
@@ -285,7 +286,7 @@ func TestMempool_DrainsIntoAVerifiableTree(t *testing.T) {
 		inputs = append(inputs, in)
 	}
 
-	tree, err := BuildBatchTree(11155111, inputs, 999)
+	tree, err := BuildBatchTree(11155111, withAccSet(inputs), 999, testIncarnation)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,14 +318,15 @@ func TestMempool_DrainsIntoAVerifiableTree(t *testing.T) {
 		}
 	}
 
-	// And the bundleId is exactly what the anchor will require.
-	want := DeriveBatchBundleID(11155111, tree.Root, uint64(N), tree.BatchOperationID, 999)
-	if tree.BundleID != want {
-		t.Fatal("bundleId must match the anchor's required derivation")
+	// And the bundleId is exactly what the V8.2 anchor will require, committing the members' Accumulate set and the
+	// incarnation.
+	want := contracts.DeriveV8_2BatchBundleID(11155111, tree.Root, uint64(N), tree.BatchOperationID, 999, testAccSet, testIncarnation)
+	if tree.BundleID != want || tree.AccumulateSetRoot != testAccSet || tree.Incarnation != testIncarnation {
+		t.Fatal("bundleId must match the V8.2 anchor's required derivation")
 	}
 }
 
-// Mixed single-leg and multi-leg members in ONE tree — both nesting levels together.
+// Mixed single-leg and multi-leg members in ONE tree â€” both nesting levels together.
 func TestMempool_MixedSingleAndMultiLegMembers(t *testing.T) {
 	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 10})
 
@@ -348,7 +350,7 @@ func TestMempool_MixedSingleAndMultiLegMembers(t *testing.T) {
 		}
 		inputs = append(inputs, in)
 	}
-	tree, err := BuildBatchTree(1, inputs, 1)
+	tree, err := BuildBatchTree(1, withAccSet(inputs), 1, testIncarnation)
 	if err != nil {
 		t.Fatal(err)
 	}

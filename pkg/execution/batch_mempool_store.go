@@ -122,6 +122,10 @@ type persistedMember struct {
 	// written before it existed: that member restores as LegacyNoGovernance and is batched with the v1 operation
 	// id its anchor may already carry. omitempty for the same version-skew reason as Lane.
 	GovernanceCommitment string `json:"governance_commitment,omitempty"`
+	// AccumulateSetRoot is the root of the Accumulate validator set the member's proof was verified against (RB5 D2),
+	// 0x-hex. Required: a member written without it was admitted for the retired V8.1 anchor, which its intent still
+	// declares, and it cannot be settled on V8.2 - the restore refuses it by name (drain before the V8.2 rollout).
+	AccumulateSetRoot string `json:"accumulate_set_root,omitempty"`
 }
 
 // persistedPredecessor is a MemberPredecessor on disk.
@@ -277,6 +281,10 @@ func (s *BatchMempoolStore) encodeMember(p *PendingBatchIntent, lane BatchLane) 
 	default:
 		pm.GovernanceCommitment = "0x" + common.Bytes2Hex(p.GovernanceCommitment[:])
 	}
+	if p.AccumulateSetRoot == ([32]byte{}) {
+		return persistedMember{}, fmt.Errorf("intent %s on chain %d has no Accumulate validator set root", p.IntentID, p.ChainID)
+	}
+	pm.AccumulateSetRoot = "0x" + common.Bytes2Hex(p.AccumulateSetRoot[:])
 	if a := p.After; a != nil {
 		pm.After = &persistedPredecessor{
 			ChainID: a.ChainID, OperationID: "0x" + common.Bytes2Hex(a.OperationID[:]), Account: a.Account.Hex(),
@@ -368,7 +376,17 @@ func (s *BatchMempoolStore) Load(m *BatchMempool) (int, error) {
 			copy(governance[:], raw)
 		}
 
+		var accSetRoot [32]byte
+		rawAcc := common.FromHex(pm.AccumulateSetRoot)
+		if len(rawAcc) != 32 || common.BytesToHash(rawAcc) == (common.Hash{}) {
+			return restored, fmt.Errorf("batch mempool %s: intent %s on chain %d carries no Accumulate validator set root "+
+				"(%q): it was admitted for the retired V8.1 anchor its intent declares and cannot settle on V8.2; drain the "+
+				"batch path before deploying the V8.2 rollout", s.path, pm.IntentID, pm.ChainID, pm.AccumulateSetRoot)
+		}
+		copy(accSetRoot[:], rawAcc)
+
 		p := &PendingBatchIntent{
+			AccumulateSetRoot:    accSetRoot,
 			IntentID:             pm.IntentID,
 			ADIURL:               pm.ADIURL,
 			ChainID:              pm.ChainID,
