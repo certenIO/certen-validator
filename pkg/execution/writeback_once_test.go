@@ -211,3 +211,35 @@ func TestAProofCycleForAWrittenBackMemberDoesNothing(t *testing.T) {
 		t.Fatalf("the refused cycle recorded an outcome (%d, %v)", n, err)
 	}
 }
+
+// A member written back before write-backs were registered has no register row; its recorded outcome states the
+// write-back, and stops another just the same (000ac79a's arbitrum member, written back 2026-09-29, is one).
+func TestAMemberWrittenBackBeforeTheRegisterIsNotWrittenBackAgain(t *testing.T) {
+	f := newWriteBackFixture(t)
+	ctx := context.Background()
+	if _, err := f.db.Exec(`INSERT INTO intent_lifecycle (intent_id, accum_tx_hash, status) VALUES ($1, $2, 'settling')`,
+		f.intentID, "f59-"+f.intentID[len(f.intentID)-12:]); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		f.db.Exec(`DELETE FROM intent_member_outcomes WHERE intent_id = $1`, f.intentID)
+		f.db.Exec(`DELETE FROM intent_lifecycle WHERE intent_id = $1`, f.intentID)
+	})
+	earlier := "acc://" + strings.Repeat("ef", 32) + "@results.acme/data"
+	if _, err := f.repos.IntentLifecycle.RecordMemberOutcome(ctx, database.MemberOutcome{IntentID: f.intentID, ChainID: odChain,
+		MemberChains: []int64{odChain}, Legs: 1, Settlement: database.MemberSettlementSettled, ProofCycle: database.MemberProofCycleWritten,
+		SettlementTx: "0x" + strings.Repeat("12", 32), WriteBackTx: earlier, CycleID: "cycle-before-the-register", ReportedBy: "validator-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if w := f.registered(t); w != nil {
+		t.Fatalf("premise: no register row, got %+v", w)
+	}
+	c := f.cycle(t)
+	err := f.o.executePhase9(ctx, c)
+	if !errors.Is(err, database.ErrMemberAlreadyWrittenBack) || f.sub.n != 0 || !strings.Contains(err.Error(), earlier) {
+		t.Fatalf("a member written back before the register: err %v, submissions %d", err, f.sub.n)
+	}
+	if err := f.repos.IntentLifecycle.MemberWriteBackAllowed(ctx, f.intentID, odChain); !errors.Is(err, database.ErrMemberAlreadyWrittenBack) {
+		t.Fatalf("the start check: %v", err)
+	}
+}

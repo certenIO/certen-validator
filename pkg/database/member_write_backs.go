@@ -81,14 +81,34 @@ func (w *MemberWriteBack) refusal() error {
 	}
 }
 
-// MemberWriteBackAllowed is nil when the member may be written back - nothing registered, or a claim that was
-// never sent - and otherwise names why not.
+// writtenBackOutcome refuses a member whose recorded outcome says it was written back. A member written back before
+// write-backs were registered has no register row; its recorded outcome states the write-back all the same.
+func writtenBackOutcome(ctx context.Context, q queryRower, intentID string, chainID int64) error {
+	var writeBackTx, cycleID sql.NullString
+	err := q.QueryRowContext(ctx, `
+		SELECT write_back_tx, cycle_id FROM intent_member_outcomes
+		WHERE intent_id = $1 AND chain_id = $2 AND proof_cycle = 'written'`, intentID, chainID).Scan(&writeBackTx, &cycleID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read the recorded outcome of %s/%d: %w", intentID, chainID, err)
+	}
+	return fmt.Errorf("%w: intent %s member %d as %s by cycle %s (its recorded outcome)",
+		ErrMemberAlreadyWrittenBack, intentID, chainID, writeBackTx.String, cycleID.String)
+}
+
+// MemberWriteBackAllowed is nil when the member may be written back - nothing registered and no recorded outcome
+// saying it was, or a claim that was never sent - and otherwise names why not.
 func (r *IntentLifecycleRepository) MemberWriteBackAllowed(ctx context.Context, intentID string, chainID int64) error {
 	w, err := r.MemberWriteBackOf(ctx, intentID, chainID)
 	if err != nil {
 		return err
 	}
-	return w.refusal()
+	if refusal := w.refusal(); refusal != nil {
+		return refusal
+	}
+	return writtenBackOutcome(ctx, r.client.db, intentID, chainID)
 }
 
 // ClaimMemberWriteBack claims the member's write-back for a cycle, before it is submitted. A member written back,
@@ -103,6 +123,9 @@ func (r *IntentLifecycleRepository) ClaimMemberWriteBack(ctx context.Context, in
 	}
 	defer tx.Rollback() //nolint:errcheck // a committed transaction ignores it
 
+	if err := writtenBackOutcome(ctx, tx, intentID, chainID); err != nil {
+		return err
+	}
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO member_write_backs (intent_id, chain_id, state, cycle_id, validator_id)
 		VALUES ($1, $2, 'claimed', $3, $4)
