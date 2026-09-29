@@ -24,7 +24,7 @@ const EvidenceVersion = "certen:govvote-evidence:v1"
 //     that starts at its message hash on its page's signature chain and names the block it was recorded in;
 //   - each page's history: its genesis and every main chain entry, binary, each with the receipt that starts at the
 //     entry; UpdateKey entries with their initiating signature;
-//   - the principal's authority set at execution, as G1 established it.
+//   - the principal's authority set at execution, and the account histories it is replayed from.
 //
 // VerifyEvidence checks every binding, replays every page from its genesis, re-runs the vote and returns it.
 type Evidence struct {
@@ -38,6 +38,8 @@ type Evidence struct {
 	Arrivals       []ArrivalEvidence   `json:"arrivals,omitempty"`
 	Votes          []VoteEvidence      `json:"votes,omitempty"`
 	Pages          []PageHistory       `json:"pages"`
+	// AuthoritySet is what Authorities is replayed from (account.go); the replay must reach it exactly.
+	AuthoritySet *AuthorityEvidence `json:"authoritySet"`
 }
 
 // SignatureEvidence is one user signature on the transaction: the fact the model read, the signature, and its receipt
@@ -134,6 +136,19 @@ func VerifyEvidence(ctx context.Context, ev *Evidence) (*AccountVote, error) {
 			return nil, fmt.Errorf("vote %d (%s): %w", i, short(v.Fact.ID), err)
 		}
 		facts.Votes = append(facts.Votes, v.Fact)
+	}
+
+	authorities, decided, err := AuthoritySetAt(ev.AuthoritySet, ev.Account)
+	if err != nil {
+		return nil, fmt.Errorf("the authority set at execution: %w", err)
+	}
+	if !authoritiesEqual(authorities, ev.Authorities) {
+		return nil, fmt.Errorf("the account histories replay to the authority set %v, not the %v the evidence states",
+			authorities, ev.Authorities)
+	}
+	if !stringsEqual(decided, ev.AuthoritySet.DecidedByLiveState) {
+		return nil, fmt.Errorf("the accounts whose set rests on the network's present state are %v, not the %v the "+
+			"evidence names", decided, ev.AuthoritySet.DecidedByLiveState)
 	}
 
 	timelines := evidenceTimelines{}
@@ -367,4 +382,28 @@ func decodeSignature(h string) (protocol.Signature, error) {
 		return nil, fmt.Errorf("the signature does not decode: %w", err)
 	}
 	return sig, nil
+}
+
+func authoritiesEqual(a, b []AccountAuthority) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if normalizeAccURL(a[i].URL) != normalizeAccURL(b[i].URL) || a[i].Disabled != b[i].Disabled {
+			return false
+		}
+	}
+	return true
+}
+
+func stringsEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

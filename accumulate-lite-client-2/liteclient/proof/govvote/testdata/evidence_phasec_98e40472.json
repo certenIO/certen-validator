@@ -447,7 +447,209 @@
      }
     ]
    }
-  ]
+  ],
+  "authoritySet": {
+   "block": 13127747,
+   "accounts": [
+    {
+     "account": "acc://rb4-phase-c-09282125.acme",
+     "entries": 2,
+     "events": [
+      {
+       "index": 0,
+       "entryHash": "a0c400574d597fbf096c777663fc74fa9890a9faf6b056ddc1a8990a187b5810",
+       "header": "011f6163633a2f2f7262342d70686173652d632d30393238323132352e61636d65",
+       "body": "013102b70101776163633a2f2f303332633163393734353861313763386335353231366436653635373164376433316138383366393066306362356234316365383534666664383066333938364036343235306231653466313661613962313062313431303636313162366663653265376262356163663361313838623903366163633a2f2f36343235306231653466313661613962313062313431303636313162366663653265376262356163663361313838623904ec85030503034d0102021f6163633a2f2f7262342d70686173652d632d30393238323132352e61636d650328012601246163633a2f2f7262342d70686173652d632d30393238323132352e61636d652f626f6f6b0354010a02246163633a2f2f7262342d70686173652d632d30393238323132352e61636d652f626f6f6b0428012601246163633a2f2f7262342d70686173652d632d30393238323132352e61636d652f626f6f6b05010352010902266163633a2f2f7262342d70686173652d632d30393238323132352e61636d652f626f6f6b2f31040108010922012064250b1e4f16aa9b10b14106611b6fce2e7bb5ac8900c674193680eb7e25ffe2",
+       "localBlock": 13087927,
+       "receipt": {
+        "start": "a0c400574d597fbf096c777663fc74fa9890a9faf6b056ddc1a8990a187b5810",
+        "anchor": "6d6f84cececd8a2255bd1c76412ff62e49754ac3674d29248e030471e2c7f6d4",
+        "localBlock": 13087927,
+        "entries": [
+         {
+          "hash": "5f9030bb79f8211a5f3f915cc326a802a7fb5231ad2684d68ed2b1e7f0feb599",
+          "right": false
+         },
+         {
+          "hash": "aae908b682a56e2d24fa465a25e860e867c0f7fc53a909486b1d89c50b06c5c4",
+          "right": true
+         },
+         {
+          "hash": "c460c12ea60cbc74bf030b4c5a4d47eb156761cf2a3cdce3070815b05d24db83",
+          "right": true
+         },
+         {
+          "hash": "5de8a3971f9baea2b015b2d57eacb074889838fa6b8dde9ad27932f481715272",
+          "right": false
+         },
+         {
+          "hash": "d8203d92e38ebf72e995351c67ade230cd7135e0925e152ddb318afe534f19f4",
+          "right": false
+         },
+         {
+          "hash": "35310a4db266a9598702ffd963d017ce42fd976b728dbd3cdaecd34bc19a084e",
+          "right": false
+         },
+         {
+          "hash": "f0eb649169c6a86f103298fa6ffd1a658847577c35c5e8ecaf4e687ff4a8034b",
+          "right": false
+         },
+         {
+          "hash": "fa93f0c8de33bdacb38bb2532c1f054aee0553684b9409855aaf59d9a2d520ce",
+          "right": false
+         },
+         {
+          "hash": "e517c4c77e5647016ddb70ea4b3fd8c5849605d5375a1debaf03775a8aab0583",
+          "right": false
+         },
+         {
+          "hash": "a8e61d07500b9ef0cfabc3ca281e96b4f1ca6074cae8d37db10dac4729f54774",
+          "right": false
+         },
+         {
+          "hash": "7452535e04641e1a929e44cd4edae706f2c3993bd0908fe32f64358521b59cb2",
+          "right": false
+         },
+         {
+          "hash": "437773e2f26f549c224549f9c034f88d84f7951c1e215dcfbab5e627b0fa017f",
+          "right": false
+         },
+         {
+          "hash": "ac502540bc34b4ce71bd8108a461337cd4374f1e119c86f83ee46bf502fe5cca",
+          "right": false
+         }
+        ]
+       }
+      },
+      {
+       "index": 1,
+       "entryHash": "50c0d276c0f0492036de650bc2818d83a0d01a7eb65af4e0721eb21ef32a6788",
+       "header": "011f6163633a2f2f7262342d70686173652d632d30393238323132352e61636d65021623c6ce10e34240a1e5afc1f4c0390586d9c3c57ea80cc4514044c8ed7c5a04",
+       "body": "010402246163633a2f2f7262342d70686173652d632d30393238323132352e61636d652f64617461"
+      }
+     ],
+     "live": [
+      {
+       "url": "acc://rb4-phase-c-09282125.acme/book"
+      }
+     ]
+    },
+    {
+     "account": "acc://rb4-phase-c-09282125.acme/data",
+     "entries": 8,
+     "events": [
+      {
+       "index": 0,
+       "entryHash": "50c0d276c0f0492036de650bc2818d83a0d01a7eb65af4e0721eb21ef32a6788",
+       "header": "011f6163633a2f2f7262342d70686173652d632d30393238323132352e61636d65021623c6ce10e34240a1e5afc1f4c0390586d9c3c57ea80cc4514044c8ed7c5a04",
+       "body": "010402246163633a2f2f7262342d70686173652d632d30393238323132352e61636d652f64617461",
+       "localBlock": 13087942,
+       "receipt": {
+        "start": "50c0d276c0f0492036de650bc2818d83a0d01a7eb65af4e0721eb21ef32a6788",
+        "anchor": "c4038d63fa872df4b67550c308590c90331e51ad140f45b41af9e198ac33954c",
+        "localBlock": 13087942,
+        "entries": [
+         {
+          "hash": "df43a26218a6348fdb4e0342a7f874407f9cdb3b602d63703fa2f0f6852130e4",
+          "right": false
+         },
+         {
+          "hash": "78669bace6ca660965b0209235136e459720ad5c71aa7e8e4de739c904944566",
+          "right": true
+         },
+         {
+          "hash": "6ed3fb8264f929fdce2e11bc710835f4cf9b91b2dbf6356f6138bc8914d45433",
+          "right": false
+         },
+         {
+          "hash": "8bf10d1c1fdda7175f8727922bc415e375c12529004fa205a74cc476f453ed18",
+          "right": false
+         },
+         {
+          "hash": "f0eb649169c6a86f103298fa6ffd1a658847577c35c5e8ecaf4e687ff4a8034b",
+          "right": false
+         },
+         {
+          "hash": "fa93f0c8de33bdacb38bb2532c1f054aee0553684b9409855aaf59d9a2d520ce",
+          "right": false
+         },
+         {
+          "hash": "e517c4c77e5647016ddb70ea4b3fd8c5849605d5375a1debaf03775a8aab0583",
+          "right": false
+         },
+         {
+          "hash": "a8e61d07500b9ef0cfabc3ca281e96b4f1ca6074cae8d37db10dac4729f54774",
+          "right": false
+         },
+         {
+          "hash": "7452535e04641e1a929e44cd4edae706f2c3993bd0908fe32f64358521b59cb2",
+          "right": false
+         },
+         {
+          "hash": "437773e2f26f549c224549f9c034f88d84f7951c1e215dcfbab5e627b0fa017f",
+          "right": false
+         },
+         {
+          "hash": "ac502540bc34b4ce71bd8108a461337cd4374f1e119c86f83ee46bf502fe5cca",
+          "right": false
+         }
+        ]
+       }
+      },
+      {
+       "index": 1,
+       "entryHash": "fc7026f329c9ba94354b9cc57422a45bf36157cef6c0f7451a490b39fb8ad0ef",
+       "header": "01246163633a2f2f7262342d70686173652d632d30393238323132352e61636d652f64617461021eee39276b8562129415b4cae9e4ce87e92520f4293297138896a22a0d4930b5030d43455254454e5f494e54454e54",
+       "body": "0105",
+       "dataEntryHash": "c97a6c34d6d696571394059e26bb07152443b38333a292a6f28a140956f8871d"
+      },
+      {
+       "index": 2,
+       "entryHash": "1cf16518e6276cc8acbdf9638de102980f123aacabd66de903e85765399d0338",
+       "header": "01246163633a2f2f7262342d70686173652d632d30393238323132352e61636d652f6461746102cedd1317a041ffd5c5bd4c645ef5f13fd1155b495547ddb084b4049b4ecde766030d43455254454e5f494e54454e54",
+       "body": "0105",
+       "dataEntryHash": "788ec240e1a32e3c66ed378d711d36d042fd1815044e5fc2fb6f2645cd609119"
+      },
+      {
+       "index": 3,
+       "entryHash": "2789438975dff95ba5e5a1b59ae42fc3fe5f19916844127fb1a2a7f66b120b11",
+       "header": "01246163633a2f2f7262342d70686173652d632d30393238323132352e61636d652f6461746102add89ecaabb19b40c1831ab6e42b44a461a530bc28fee6d01a44792dee9feed8030d43455254454e5f494e54454e54",
+       "body": "0105",
+       "dataEntryHash": "a5c574c4b1afe3303046f3a775c1f96fb73ed16bfeeaad893e76c8d34a47dac5"
+      },
+      {
+       "index": 4,
+       "entryHash": "db0236d87fa3c0fd8e6f1c21cba1ce7527bf592c5f727632ad7f329cacbe0e48",
+       "header": "01246163633a2f2f7262342d70686173652d632d30393238323132352e61636d652f646174610214cc95fb8f976f4f338754a0b7629e4ce705fdd44124b6acb8d4f15feb7c0590030d43455254454e5f494e54454e54",
+       "body": "0105",
+       "dataEntryHash": "e590a88379f9134070bd54b6e74bf7207df4f5273e6654aaf05f990f53a1d9b3"
+      },
+      {
+       "index": 5,
+       "entryHash": "fb309836522d992449bad47623128ac927c5e2935f68bf16a9d610d8415e0b36",
+       "header": "01246163633a2f2f7262342d70686173652d632d30393238323132352e61636d652f64617461029cdf6ea225a1a67c5c3609f55db32aa487372241114ac0323df2ba40f9c53f9a030d43455254454e5f494e54454e54",
+       "body": "0105",
+       "dataEntryHash": "a2bb6401b9dd25e66863c5d836bd0d118c603adee1b5997eac6f83fc2d3f37af"
+      },
+      {
+       "index": 6,
+       "entryHash": "2dddc10bf10a9cc018681e510a44c170d7ac5f9f98582fd39b0bad26b0ebd67c",
+       "header": "01246163633a2f2f7262342d70686173652d632d30393238323132352e61636d652f6461746102345522ba5d72c5587b5c495fb7d85c4b1bb9bdd196239d7a04abafd16c32cc01030d43455254454e5f494e54454e54",
+       "body": "0105",
+       "dataEntryHash": "09fb7c438c28b6cd7d328381e8def26f96a3535f94376c4c2997cca73d69e02f"
+      },
+      {
+       "index": 7,
+       "entryHash": "98e404721458521e872d683f85db0cead068a5fdfc77f6fb88a7542f6fc930ed",
+       "header": "01246163633a2f2f7262342d70686173652d632d30393238323132352e61636d652f646174610291f8c28ee78bc97f56b2bd5abf1b5ed8c499f94541ed16dcc52a656c79ee6313030d43455254454e5f494e54454e54",
+       "body": "0105",
+       "dataEntryHash": "f796bb75eaf205a1e6777ef410a89cf8d2f061ce26db956c4f17eeeea8689810"
+      }
+     ],
+     "live": []
+    }
+   ]
+  }
  },
  "authorization": {
   "account": "acc://rb4-phase-c-09282125.acme/data",

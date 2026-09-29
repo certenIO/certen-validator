@@ -106,7 +106,8 @@ func (a *g1Authorization) Evaluate(ctx context.Context, sigs []ValidatedSignatur
 	}
 	facts.Arrivals, facts.Votes = arrivals, votes
 
-	authorities, err := a.g1.authoritySetAtExec(ctx, a.principal, a.execMBI)
+	histories := newAccountHistories()
+	authorities, err := a.g1.authoritySetAtExec(ctx, a.principal, a.execMBI, histories)
 	if err != nil {
 		return nil, err
 	}
@@ -114,7 +115,7 @@ func (a *g1Authorization) Evaluate(ctx context.Context, sigs []ValidatedSignatur
 	if err != nil {
 		return nil, err
 	}
-	a.evidence, err = a.buildVoteEvidence(ctx, facts, sigs, recorded, authorities, extra, vote)
+	a.evidence, err = a.buildVoteEvidence(ctx, facts, sigs, recorded, authorities, histories, extra, vote)
 	if err != nil {
 		return nil, err
 	}
@@ -402,7 +403,8 @@ func requireBoundReceipt(r ReceiptData, messageHash string) error {
 // (chain/create_utils.go setInitialAuthorities, V2Baikonur). So the walk climbs
 // from the principal, and at each account requires that its own set did not
 // change after the execution block.
-func (g1 *G1Layer) authoritySetAtExec(ctx context.Context, account string, execMBI int64) ([]AccountAuthority, error) {
+func (g1 *G1Layer) authoritySetAtExec(ctx context.Context, account string, execMBI int64,
+	rec *accountHistories) ([]AccountAuthority, error) {
 	u, err := url.Parse(normalizeAccURL(account))
 	if err != nil {
 		return nil, fmt.Errorf("principal %q: %w", account, err)
@@ -412,7 +414,7 @@ func (g1 *G1Layer) authoritySetAtExec(ctx context.Context, account string, execM
 	for step := 0; step <= strings.Count(u.String(), "/"); step++ {
 		// This account's own set as of execution, replayed from its chain
 		// (g1_account_auth.go).
-		auth, err := g1.accountAuthAt(ctx, u, execMBI)
+		auth, err := g1.accountAuthAt(ctx, u, execMBI, rec)
 		if err != nil {
 			return nil, err
 		}

@@ -760,7 +760,224 @@
      }
     ]
    }
-  ]
+  ],
+  "authoritySet": {
+   "block": 10199334,
+   "accounts": [
+    {
+     "account": "acc://certen-p7c.acme",
+     "entries": 3,
+     "events": [
+      {
+       "index": 0,
+       "entryHash": "c5873a82f3740413370a48f37163dcf08486459869aa3c55de13570b9e46dd61",
+       "header": "01156163633a2f2f63657274656e2d7037632e61636d65",
+       "body": "013102bc01017c6163633a2f2f31663937396561393763373832316666646363393662326163366264613634393439326336316134306566666432663236636364633338363335386531373237406330323635626433653734353832353833323630356237356362643430653562646533386664323130313839623735622f41434d4503366163633a2f2f63303236356264336537343538323538333236303562373563626434306535626465333866643231303138396237356204ec850305030339010202156163633a2f2f63657274656e2d7037632e61636d65031e011c011a6163633a2f2f63657274656e2d7037632e61636d652f626f6f6b0340010a021a6163633a2f2f63657274656e2d7037632e61636d652f626f6f6b041e011c011a6163633a2f2f63657274656e2d7037632e61636d652f626f6f6b050103480109021c6163633a2f2f63657274656e2d7037632e61636d652f626f6f6b2f310401080109220120c0265bd3e745825832605b75cbd40e5bde38fd21037769bbb202b5f7822fc465",
+       "localBlock": 10186021,
+       "receipt": {
+        "start": "c5873a82f3740413370a48f37163dcf08486459869aa3c55de13570b9e46dd61",
+        "anchor": "5257661036afba4c86606b1830bf7f98264f2a08f6c3d6ebd28e89587018fac7",
+        "localBlock": 10186021,
+        "entries": [
+         {
+          "hash": "ba6cf53441f65cd90bc25a464c22be5beb8b793149f2363531132ba6938b00b5",
+          "right": false
+         },
+         {
+          "hash": "f71934309e5b839fa49f114a988d64f7e5a78bdbf5b882091d4cd6f70c787085",
+          "right": false
+         },
+         {
+          "hash": "04284b0c9c8821cd546135dc4c6576480b489c4c06dae811277b7a666bbd2502",
+          "right": false
+         },
+         {
+          "hash": "456505b5bc8a5d93500f9b0f4830304bb65d2b92ac74548d97207b9e0b7115da",
+          "right": true
+         },
+         {
+          "hash": "7f0c9ac2ee78fe4029ff877129b2d4a26bad12fa67a28c4708a8989a35a38b84",
+          "right": false
+         },
+         {
+          "hash": "0fef2bc7b8eab55eb66b68db97f300676dff9653bfa0f1d9cb9c0b29c6703a3d",
+          "right": false
+         },
+         {
+          "hash": "1b59e22ccfb02d8a4e05e167149770c49e303383baf99a6116034b3cffee219e",
+          "right": false
+         },
+         {
+          "hash": "29b9aa087bbd27720ea49743e91a8b092d8b26ae15b2f9fd95fe0bd9a594066e",
+          "right": false
+         },
+         {
+          "hash": "8dfd54bb3b109b76b999ff438f1b3dc9fb3ddef9cbbf8b8a07435371f202119f",
+          "right": false
+         },
+         {
+          "hash": "9ad139280c4f50f7aff8047e2c5cbeb4b2d7fc286ddd079b11c1468efae5b975",
+          "right": false
+         },
+         {
+          "hash": "104b8edd002ca642b4cefab6506c19da3f3cafab4f6599470bdee45c4ccaac6d",
+          "right": false
+         }
+        ]
+       }
+      },
+      {
+       "index": 1,
+       "entryHash": "4813171126fc9587965828c97f0b2f524e623449a67729c8b11122d7aeb99d8b",
+       "header": "01156163633a2f2f63657274656e2d7037632e61636d650272d45d4ed3c08a7f7d8ecf2e492faa0ce193dafbb3c4b0261fb4c7f8f44aa096",
+       "body": "010d021b6163633a2f2f63657274656e2d7037632e61636d652f626f6f6b320320c0265bd3e745825832605b75cbd40e5bde38fd21037769bbb202b5f7822fc465"
+      },
+      {
+       "index": 2,
+       "entryHash": "03b2b00cdbe74b665ffd15fd5d13fbfea31c0e6991f534ec44907698bc89afaa",
+       "header": "01156163633a2f2f63657274656e2d7037632e61636d6502c16edb1d90004917c6268a9ddf55369b99993ad2f01367ee51bcd61cc64979c5",
+       "body": "0104021a6163633a2f2f63657274656e2d7037632e61636d652f64617461"
+      }
+     ],
+     "live": [
+      {
+       "url": "acc://certen-p7c.acme/book"
+      }
+     ]
+    },
+    {
+     "account": "acc://certen-p7c.acme/data",
+     "entries": 11,
+     "events": [
+      {
+       "index": 0,
+       "entryHash": "03b2b00cdbe74b665ffd15fd5d13fbfea31c0e6991f534ec44907698bc89afaa",
+       "header": "01156163633a2f2f63657274656e2d7037632e61636d6502c16edb1d90004917c6268a9ddf55369b99993ad2f01367ee51bcd61cc64979c5",
+       "body": "0104021a6163633a2f2f63657274656e2d7037632e61636d652f64617461",
+       "localBlock": 10194117,
+       "receipt": {
+        "start": "03b2b00cdbe74b665ffd15fd5d13fbfea31c0e6991f534ec44907698bc89afaa",
+        "anchor": "6c7e3de81c10e991eca0c92812aa418be530347500b7a5981e41f7c7b401cf3f",
+        "localBlock": 10194117,
+        "entries": [
+         {
+          "hash": "7f1de340868ce476afaadc2e4173c218fb2380092f5d83712b3fd391d69c7660",
+          "right": false
+         },
+         {
+          "hash": "737aeec5a99d0112b947d00526b61c9e3edd90f196b5c088964505f8f96e80b2",
+          "right": false
+         },
+         {
+          "hash": "f3801c2df8e7a4a22b8eb1e8544353639d2eaccee995de458d88278e01ccc704",
+          "right": false
+         },
+         {
+          "hash": "c957704af3543d567efe6f00d6c03bc99c68392a3924e4a472335e3092b4a0c9",
+          "right": false
+         },
+         {
+          "hash": "0fef2bc7b8eab55eb66b68db97f300676dff9653bfa0f1d9cb9c0b29c6703a3d",
+          "right": false
+         },
+         {
+          "hash": "1b59e22ccfb02d8a4e05e167149770c49e303383baf99a6116034b3cffee219e",
+          "right": false
+         },
+         {
+          "hash": "29b9aa087bbd27720ea49743e91a8b092d8b26ae15b2f9fd95fe0bd9a594066e",
+          "right": false
+         },
+         {
+          "hash": "8dfd54bb3b109b76b999ff438f1b3dc9fb3ddef9cbbf8b8a07435371f202119f",
+          "right": false
+         },
+         {
+          "hash": "9ad139280c4f50f7aff8047e2c5cbeb4b2d7fc286ddd079b11c1468efae5b975",
+          "right": false
+         },
+         {
+          "hash": "104b8edd002ca642b4cefab6506c19da3f3cafab4f6599470bdee45c4ccaac6d",
+          "right": false
+         }
+        ]
+       }
+      },
+      {
+       "index": 1,
+       "entryHash": "df4e0769d3455c724a4c2edfe9fab2d6f2e416790e34cb8b382f21aed0d00b5d",
+       "header": "011a6163633a2f2f63657274656e2d7037632e61636d652f646174610204916ae99927998636ff5c8c4ea57ffefcbc20d15eaeaf4179604a8d260a3462",
+       "body": "0105",
+       "dataEntryHash": "e6f0f9d51beada46403b9e09f778692faed6607a8e8fe8e338e7b215505fc8f9"
+      },
+      {
+       "index": 2,
+       "entryHash": "011373c3411f532620a4993568a16a378548aeed462ef2e49b01dd5952a371a3",
+       "header": "011a6163633a2f2f63657274656e2d7037632e61636d652f6461746102226cdaa2cfbafe95b46e5f6f9ef2ea2bfdc9e365b4e8de03b4355e80c49a72f1",
+       "body": "0105",
+       "dataEntryHash": "a0af843a989c3e2d4fb8b593b1b2c5339e6e1216ff740494a537364c7659c47c"
+      },
+      {
+       "index": 3,
+       "entryHash": "9fc79db4f3c662f4c9900feae8fac4c456242fd415fc857e6b20e2a4c798d49c",
+       "header": "011a6163633a2f2f63657274656e2d7037632e61636d652f6461746102a125b669f33f6ab4f5b1db2d5669b41dd3eeca0c7aa087034cea1851a73c9179",
+       "body": "0105",
+       "dataEntryHash": "c37904b0bfb309a87ae1d99b7f9683fed9c92533bcce55f97b0dcec145d2ff3e"
+      },
+      {
+       "index": 4,
+       "entryHash": "204887984e9b6338aa4c656b568fd552727de27febede71b970d8d6f2fd85bcb",
+       "header": "011a6163633a2f2f63657274656e2d7037632e61636d652f64617461020d4e7431268fe084511264c20b1acae27cf98b27021b3978c446628dca37d6e7",
+       "body": "0105",
+       "dataEntryHash": "afc4f25602ad94849515602d2a55124158a9e636d209e0216f88e2323fd92818"
+      },
+      {
+       "index": 5,
+       "entryHash": "2473c323e4c23355a12d6dc988298d962648ec4248ef709a52cda2e04fe796d0",
+       "header": "011a6163633a2f2f63657274656e2d7037632e61636d652f6461746102c3684d1eba1ddf701ede40eb8fe49e2fd62dafe4ab6101d680f031395d6a0312",
+       "body": "0105",
+       "dataEntryHash": "afbac021cb2474fecb9014f843da84e191b0bbe4faa44e14665576ef079f05d2"
+      },
+      {
+       "index": 6,
+       "entryHash": "de0265b07b33f261eaa363f8663156e973f2b8b49dae5687fd98b8889f5e94be",
+       "header": "011a6163633a2f2f63657274656e2d7037632e61636d652f6461746102afdd82af6b278c52d52aee2ab43d2502e09cc67bd5bf139b23aa464371fa11a2",
+       "body": "0105",
+       "dataEntryHash": "b41f91d3cf73c2e4c3be05d68f5bff0971567c9761b73d8afb6eb64928e3ce67"
+      },
+      {
+       "index": 7,
+       "entryHash": "bd711ed8e69ff957bf0c5151e706e79a42d5f437520c2581da7867e3278f9794",
+       "header": "011a6163633a2f2f63657274656e2d7037632e61636d652f646174610213a38cb455ae26355fab00195ea9ee9ffc536f706d4be4a394eef03e7ae902cb",
+       "body": "0105",
+       "dataEntryHash": "7e76dd56f1e217cd5078de635d089021090017fd13be6c7446d300a7a7ecd025"
+      },
+      {
+       "index": 8,
+       "entryHash": "f6c3e01918a8dc2e5c8a8e4e6b2534d357b1804c6b67eb5d299b295091200b28",
+       "header": "011a6163633a2f2f63657274656e2d7037632e61636d652f6461746102ff2f2deac6818acab00307ae6aeca1ae2e1901c55e5eca9ac72b779879e8a628",
+       "body": "0105",
+       "dataEntryHash": "ae8244532b6bed92d11c02d6b3b04d8e47d1055cc7b636e5bd5aaaf8f68a1754"
+      },
+      {
+       "index": 9,
+       "entryHash": "f25a6dfd561fc8e8fbda779341be6a2d0d90d3b64ad7db69f95d88b49d2f5be3",
+       "header": "011a6163633a2f2f63657274656e2d7037632e61636d652f646174610295f812b8b8e10062e840b92bf73163be7301da879e4e22f1ce7b34376c87b008",
+       "body": "0105",
+       "dataEntryHash": "611aafc62d333ca8fd94a3ed17d4218d4d1f0bf31de624c1e871a170a2cb7d34"
+      },
+      {
+       "index": 10,
+       "entryHash": "60d82c093582b5d242441a125d29fe0b2b9cd4cde08e86d82e601267fe2d0662",
+       "header": "011a6163633a2f2f63657274656e2d7037632e61636d652f6461746102872829bb2e73d41a1712b0d4aea744a72b22d60615afc0faa1b1e9a2be42311f",
+       "body": "0105",
+       "dataEntryHash": "4982e413c49468e1a2aef3c071cd546aee8bd0ae472ac9c95f3a6cdcbd632aca"
+      }
+     ],
+     "live": []
+    }
+   ]
+  }
  },
  "authorization": {
   "account": "acc://certen-p7c.acme/data",

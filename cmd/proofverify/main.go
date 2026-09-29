@@ -385,6 +385,7 @@ func reportGovernanceDecision(ctx context.Context, store *certenproof.PostgresPr
 		fmt.Printf("  GOV vote: evaluated again from %d chain-bound message(s) and %d page history/ies replayed\n",
 			got.EvidenceMessages, got.EvidencePages)
 		fmt.Printf("      from genesis; it reaches the stored vote record exactly\n")
+		reportAuthoritySetBasis(got)
 		fmt.Printf("  GOV decision: %d authority/ies, commitment %s… re-derived from that vote record\n",
 			got.Authorities, short(strings.TrimPrefix(got.Commitment, "0x")))
 		fmt.Printf("  GOV anchored: the batch operation id %s… (%s) recomputes from its members, this one\n",
@@ -408,6 +409,16 @@ func reportGovernanceDecision(ctx context.Context, store *certenproof.PostgresPr
 		fmt.Printf("FAILED (governance decision)  %s\n  %v\n", id, err)
 		fmt.Printf("  The stored decision does not agree with its own evidence or with its anchored batch.\n")
 		return exitFailed
+	}
+}
+
+// reportAuthoritySetBasis says what the authority set at execution was replayed from, and names each account whose
+// part of it rests on the network's present set rather than on the chain alone.
+func reportAuthoritySetBasis(got *execution.GovernanceDecisionCheck) {
+	fmt.Printf("  GOV authorities: the set at execution replayed from %d account history/ies\n", got.EvidenceAccounts)
+	for _, a := range got.DecidedByLiveState {
+		fmt.Printf("      %s: which creation rule applied was chosen by the set the network held when read,\n", a)
+		fmt.Printf("      not by the chain alone\n")
 	}
 }
 

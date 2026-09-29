@@ -31,12 +31,15 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govvote"
+
 	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
 	"gitlab.com/accumulatenetwork/accumulate/protocol"
 )
 
-// accountAuthAt returns an account's own authority set as of a block.
-func (g1 *G1Layer) accountAuthAt(ctx context.Context, u *url.URL, block int64) (*protocol.AccountAuth, error) {
+// accountAuthAt returns an account's own authority set as of a block. Every history it reads is recorded, with
+// the receipts that bind the blocks it decided by, as the authority set's evidence (RB4-F66 E2b).
+func (g1 *G1Layer) accountAuthAt(ctx context.Context, u *url.URL, block int64, rec *accountHistories) (*protocol.AccountAuth, error) {
 	scope := u.String()
 	count, err := g1.authorityBuilder.getMainChainCount(ctx, scope)
 	if err != nil {
@@ -57,6 +60,9 @@ func (g1 *G1Layer) accountAuthAt(ctx context.Context, u *url.URL, block int64) (
 	if err != nil {
 		return nil, err
 	}
+	if err := g1.recordAccountHistory(ctx, rec, u, txns, live, block, last); err != nil {
+		return nil, err
+	}
 
 	type outcome struct {
 		atBlock *protocol.AccountAuth
@@ -64,7 +70,7 @@ func (g1 *G1Layer) accountAuthAt(ctx context.Context, u *url.URL, block int64) (
 	}
 	var reached []outcome
 	for _, inherit := range []bool{false, true} {
-		initial, err := g1.createdAuth(ctx, u, txns[0], inherit)
+		initial, err := g1.createdAuth(ctx, u, txns[0], inherit, rec)
 		if err != nil {
 			reached = append(reached, outcome{err: err})
 			continue
@@ -123,59 +129,17 @@ func (g1 *G1Layer) readMainChain(ctx context.Context, scope string, count int) (
 	return out, nil
 }
 
-// createdAuth is the authority set the creating transaction gave the account.
-func (g1 *G1Layer) createdAuth(ctx context.Context, u *url.URL, txn *protocol.Transaction, inherit bool) (*protocol.AccountAuth, error) {
-	auth := new(protocol.AccountAuth)
-	var named []*url.URL
-	switch body := txn.Body.(type) {
-	case *protocol.CreateDataAccount:
-		if !body.Url.Equal(u) {
-			return nil, fmt.Errorf("the first entry of %v creates %v", u, body.Url)
-		}
-		named = body.Authorities
-	case *protocol.CreateTokenAccount:
-		if !body.Url.Equal(u) {
-			return nil, fmt.Errorf("the first entry of %v creates %v", u, body.Url)
-		}
-		named = body.Authorities
-	case *protocol.CreateToken:
-		if !body.Url.Equal(u) {
-			return nil, fmt.Errorf("the first entry of %v creates %v", u, body.Url)
-		}
-		named = body.Authorities
-	case *protocol.CreateKeyBook:
-		if !body.Url.Equal(u) {
-			return nil, fmt.Errorf("the first entry of %v creates %v", u, body.Url)
-		}
-		auth.AddAuthority(body.Url)
-		named = body.Authorities
-	case *protocol.CreateIdentity:
-		if !body.Url.Equal(u) {
-			return nil, fmt.Errorf("the first entry of %v creates %v", u, body.Url)
-		}
-		if body.KeyBookUrl != nil {
-			auth.AddAuthority(body.KeyBookUrl)
-		}
-		named = body.Authorities
-	case *protocol.SyntheticCreateIdentity:
-		for _, a := range body.Accounts {
-			if !a.GetUrl().Equal(u) {
-				continue
-			}
-			full, ok := a.(protocol.FullAccount)
-			if !ok {
-				return nil, fmt.Errorf("%v was created as a %v, which has no authority set", u, a.Type())
-			}
-			// Created on another partition with its set already decided.
-			return full.GetAuth().Copy(), nil
-		}
-		return nil, fmt.Errorf("the synthetic creation on %v's chain does not create it", u)
-	default:
-		return nil, fmt.Errorf("%v was created by a %v, which this replay has not been taught", u, txn.Body.Type())
+// createdAuth is the authority set the creating transaction gave the account (govvote.CreatedAuth); inherit applies
+// the pre-Baikonur copy of the parent's set.
+func (g1 *G1Layer) createdAuth(ctx context.Context, u *url.URL, txn *protocol.Transaction, inherit bool,
+	rec *accountHistories) (*protocol.AccountAuth, error) {
+	auth, err := govvote.CreatedAuth(u, txn)
+	if err != nil {
+		return nil, err
 	}
-
-	for _, a := range named {
-		auth.AddAuthority(a)
+	if _, synthetic := txn.Body.(*protocol.SyntheticCreateIdentity); synthetic {
+		// Created on another partition with its set already decided.
+		return auth, nil
 	}
 	if len(auth.Authorities) > 0 || !inherit {
 		return auth, nil
@@ -190,7 +154,10 @@ func (g1 *G1Layer) createdAuth(ctx context.Context, u *url.URL, txn *protocol.Tr
 	if err != nil {
 		return nil, err
 	}
-	parent, err := g1.accountAuthAt(ctx, u.Identity(), createdAt)
+	if err := rec.requireCreatedAt(u, createdAt); err != nil {
+		return nil, err
+	}
+	parent, err := g1.accountAuthAt(ctx, u.Identity(), createdAt, rec)
 	if err != nil {
 		return nil, fmt.Errorf("the set %v would have copied from %v at creation: %w", u, u.Identity(), err)
 	}
@@ -224,39 +191,9 @@ func replayAccountAuth(u *url.URL, initial *protocol.AccountAuth, txns []*protoc
 	return atBlock, auth, nil
 }
 
-// applyAccountAuthOps mirrors UpdateAccountAuth.Execute, less the checks that
-// can only make it fail (authority existence, not-a-page, inheritance).
+// applyAccountAuthOps mirrors UpdateAccountAuth.Execute (govvote.ApplyAccountAuthOps).
 func applyAccountAuthOps(u *url.URL, auth *protocol.AccountAuth, ops []protocol.AccountAuthOperation) error {
-	for _, op := range ops {
-		switch op := op.(type) {
-		case *protocol.EnableAccountAuthOperation:
-			e, ok := auth.GetAuthority(op.Authority)
-			if !ok {
-				return fmt.Errorf("%v is not an authority of %v", op.Authority, u)
-			}
-			e.Disabled = false
-		case *protocol.DisableAccountAuthOperation:
-			e, ok := auth.GetAuthority(op.Authority)
-			if !ok {
-				return fmt.Errorf("%v is not an authority of %v", op.Authority, u)
-			}
-			e.Disabled = true
-		case *protocol.AddAccountAuthorityOperation:
-			if _, isNew := auth.AddAuthority(op.Authority); !isNew {
-				return fmt.Errorf("duplicate authority %v", op.Authority)
-			}
-		case *protocol.RemoveAccountAuthorityOperation:
-			if !auth.RemoveAuthority(op.Authority) {
-				return fmt.Errorf("no such authority %v", op.Authority)
-			}
-			if len(auth.Authorities) == 0 && u.IsRootIdentity() {
-				return fmt.Errorf("removing the last authority from a root account is not allowed")
-			}
-		default:
-			return fmt.Errorf("invalid operation %v", op.Type())
-		}
-	}
-	return nil
+	return govvote.ApplyAccountAuthOps(u, auth, ops)
 }
 
 // firstMainBlock is the block an account's first main chain entry was recorded.
@@ -293,17 +230,4 @@ func authEqual(a, b *protocol.AccountAuth) bool {
 	return a.Equal(b)
 }
 
-func describeAuth(a *protocol.AccountAuth) string {
-	if a == nil || len(a.Authorities) == 0 {
-		return "[]"
-	}
-	parts := make([]string, 0, len(a.Authorities))
-	for _, e := range a.Authorities {
-		s := e.Url.String()
-		if e.Disabled {
-			s += " (disabled)"
-		}
-		parts = append(parts, s)
-	}
-	return "[" + strings.Join(parts, ", ") + "]"
-}
+func describeAuth(a *protocol.AccountAuth) string { return govvote.DescribeAuth(a) }

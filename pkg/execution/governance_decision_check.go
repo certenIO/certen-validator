@@ -45,8 +45,12 @@ type GovernanceDecisionCheck struct {
 	// page histories replayed from genesis.
 	EvidenceMessages int
 	EvidencePages    int
-	BatchOperationID string // 0x-hex, when anchored
-	BatchVersion     string
+	EvidenceAccounts int
+	// DecidedByLiveState names each account whose part of the authority set rests on the network's present set
+	// choosing between the two creation rules, not on the chain alone (govvote/account.go).
+	DecidedByLiveState []string
+	BatchOperationID   string // 0x-hex, when anchored
+	BatchVersion       string
 }
 
 // CheckGovernanceDecision re-derives the stored decision and checks it against the layer 5's batch. l5 may be nil
@@ -112,7 +116,8 @@ func CheckGovernanceDecision(levels []certenproof.StoredGovernanceLevel, l5 *Lay
 		return nil, fmt.Errorf("the stored commitment %s is not the decision's (%s)", commitmentHex, commitment)
 	}
 	out := &GovernanceDecisionCheck{Commitment: commitment, Authorities: len(rec.Authorities),
-		EvidenceMessages: len(ev.Signatures) + len(ev.Votes) + len(ev.Arrivals), EvidencePages: len(ev.Pages)}
+		EvidenceMessages: len(ev.Signatures) + len(ev.Votes) + len(ev.Arrivals), EvidencePages: len(ev.Pages),
+		EvidenceAccounts: len(ev.AuthoritySet.Accounts), DecidedByLiveState: ev.AuthoritySet.DecidedByLiveState}
 
 	if l5 == nil || l5.Governance == nil {
 		return out, fmt.Errorf("%w: the proof's layer 5 carries no batch governance", ErrGovernanceNotAnchored)

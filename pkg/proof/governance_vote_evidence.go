@@ -73,6 +73,11 @@ func VerifyVoteEvidence(ctx context.Context, g0 *G0Result, ev *govvote.Evidence,
 			txn.Header.Principal)
 	}
 
+	if ev.AuthoritySet == nil || ev.AuthoritySet.Block != g0.ExecMBI {
+		return fmt.Errorf("the vote's evidence replays the authority set at a block other than the execution block %d",
+			g0.ExecMBI)
+	}
+
 	vote, err := govvote.VerifyEvidence(ctx, ev)
 	if err != nil {
 		return fmt.Errorf("the vote's evidence does not verify: %w", err)

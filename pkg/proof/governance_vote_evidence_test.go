@@ -68,6 +68,12 @@ func TestVoteEvidenceIsBoundToTheExecutedTransactionAndItsRecord(t *testing.T) {
 		t.Fatal("another transaction's evidence was accepted")
 	}
 
+	other = *g0
+	other.ExecMBI++
+	if err := VerifyVoteEvidence(context.Background(), &other, ev, rec); err == nil {
+		t.Fatal("an authority set replayed at another block was accepted")
+	}
+
 	ev.Account = "acc://other.acme/data"
 	if err := VerifyVoteEvidence(context.Background(), g0, ev, rec); err == nil {
 		t.Fatal("evidence evaluating another account was accepted")

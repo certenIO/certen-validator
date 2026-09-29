@@ -20,9 +20,11 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govreceipt"
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govvote"
+	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
 	"gitlab.com/accumulatenetwork/accumulate/protocol"
 )
 
@@ -94,8 +96,8 @@ func (a *g1Authorization) governedTransaction() (*protocol.Transaction, error) {
 // buildVoteEvidence assembles what the vote read, verifies it by the offline evaluation, and requires that
 // evaluation to reach the vote this proof computed.
 func (a *g1Authorization) buildVoteEvidence(ctx context.Context, facts voteFacts, sigs []ValidatedSignature,
-	recorded map[string]recordedMessage, authorities []AccountAuthority, extra ExtraAuthorities,
-	vote *AccountVote) (*govvote.Evidence, error) {
+	recorded map[string]recordedMessage, authorities []AccountAuthority, histories *accountHistories,
+	extra ExtraAuthorities, vote *AccountVote) (*govvote.Evidence, error) {
 
 	txn, err := a.governedTransaction()
 	if err != nil {
@@ -141,6 +143,19 @@ func (a *g1Authorization) buildVoteEvidence(ctx context.Context, facts voteFacts
 		}
 		ev.Pages = append(ev.Pages, ph)
 	}
+
+	// The authority set, replayed from the account histories alone, must be the set the online replay established;
+	// the accounts whose part of it rests on the network's present set are named.
+	ev.AuthoritySet = &govvote.AuthorityEvidence{Block: a.execMBI, Accounts: histories.list()}
+	offline, decided, err := govvote.AuthoritySetAt(ev.AuthoritySet, a.principal)
+	if err != nil {
+		return nil, fmt.Errorf("the vote's evidence: the authority set does not replay from the account histories: %w", err)
+	}
+	if !sameAuthorities(offline, authorities) {
+		return nil, fmt.Errorf("the vote's evidence: the account histories replay to the authority set %v, the online "+
+			"replay established %v", offline, authorities)
+	}
+	ev.AuthoritySet.DecidedByLiveState = decided
 
 	// The evidence must reproduce the vote, through the verifier's own evaluation.
 	again, err := govvote.VerifyEvidence(ctx, ev)
@@ -202,4 +217,131 @@ func pageHistoryOf(tl *pageTimeline) (govvote.PageHistory, error) {
 		ph.Events = append(ph.Events, he)
 	}
 	return ph, nil
+}
+
+func sameAuthorities(a, b []AccountAuthority) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if normalizeAccURL(a[i].URL) != normalizeAccURL(b[i].URL) || a[i].Disabled != b[i].Disabled {
+			return false
+		}
+	}
+	return true
+}
+
+// accountHistories records every account history the authority set's replay read (RB4-F66 E2b).
+type accountHistories struct {
+	mu       sync.Mutex
+	accounts map[string]*govvote.AccountHistory
+}
+
+func newAccountHistories() *accountHistories {
+	return &accountHistories{accounts: map[string]*govvote.AccountHistory{}}
+}
+
+func (h *accountHistories) list() []govvote.AccountHistory {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make([]govvote.AccountHistory, 0, len(h.accounts))
+	for _, a := range h.accounts {
+		out = append(out, *a)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Account < out[j].Account })
+	return out
+}
+
+// requireCreatedAt requires the block the main-index names for an account's creation to be the one its creation
+// entry's receipt names.
+func (h *accountHistories) requireCreatedAt(u *url.URL, block int64) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	a, ok := h.accounts[govvote.CanonicalAccSpelling(u.String())]
+	if !ok || len(a.Events) == 0 {
+		return fmt.Errorf("the history of %v was not recorded before its creation block was read", u)
+	}
+	if a.Events[0].LocalBlock != block {
+		return ValidationError{Msg: fmt.Sprintf("%v: its main-index names block %d for its creation, its creation "+
+			"entry's receipt names %d", u, block, a.Events[0].LocalBlock)}
+	}
+	return nil
+}
+
+// recordAccountHistory records an account's main chain - every entry compact, with a bound receipt on the creation
+// and on each UpdateAccountAuth - and its live set. The receipts' blocks must cut the chain where the main-index
+// did: an entry at or before `block` is one at or before `last`.
+func (g1 *G1Layer) recordAccountHistory(ctx context.Context, h *accountHistories, u *url.URL,
+	txns []*protocol.Transaction, live *protocol.AccountAuth, block int64, last int) error {
+
+	key := govvote.CanonicalAccSpelling(u.String())
+	events := make([]govvote.AccountEntry, 0, len(txns))
+	for i, txn := range txns {
+		e, err := govvote.CompactEntry(i, txn)
+		if err != nil {
+			return fmt.Errorf("%v entry %d: %w", u, i, err)
+		}
+		events = append(events, e)
+	}
+
+	h.mu.Lock()
+	prior, seen := h.accounts[key]
+	h.mu.Unlock()
+	if seen {
+		if len(prior.Events) != len(events) {
+			return ValidationError{Msg: fmt.Sprintf("%v's main chain was %d entries and is now %d, within one proof",
+				u, len(prior.Events), len(events))}
+		}
+		for i := range events {
+			if prior.Events[i].EntryHash != events[i].EntryHash {
+				return ValidationError{Msg: fmt.Sprintf("%v's main chain entry %d changed within one proof", u, i)}
+			}
+		}
+		events = prior.Events
+	} else {
+		for i, txn := range txns {
+			if !govvote.NeedsBlock(i, txn) {
+				continue
+			}
+			scope := normalizeAccURL(u.String())
+			expanded, err := g1.authorityBuilder.expandEntryWithReceipt(ctx, events[i].EntryHash, scope)
+			if err != nil {
+				return err
+			}
+			receipt, err := g1.authorityBuilder.extractReceiptFromEntry(expanded)
+			if err != nil {
+				return fmt.Errorf("%v entry %d: %w", u, i, err)
+			}
+			if !strings.EqualFold(receipt.Start, events[i].EntryHash) {
+				return ValidationError{Msg: fmt.Sprintf("%v entry %d: its receipt starts at %s", u, i, short(receipt.Start))}
+			}
+			if err := VerifyReceiptMerkle(receipt, fmt.Sprintf("%v entry %d", u, i)); err != nil {
+				return err
+			}
+			r := receiptOf(receipt)
+			events[i].Receipt, events[i].LocalBlock = &r, receipt.LocalBlock
+		}
+	}
+
+	for i, txn := range txns {
+		if !govvote.NeedsBlock(i, txn) {
+			continue
+		}
+		if (events[i].LocalBlock <= block) != (i <= last) {
+			return ValidationError{Msg: fmt.Sprintf("%v entry %d: its receipt names block %d, which the main-index "+
+				"cut at block %d (last entry %d) places on the other side", u, i, events[i].LocalBlock, block, last)}
+		}
+	}
+
+	liveSet := make([]govvote.AccountAuthority, 0, len(live.Authorities))
+	for _, e := range live.Authorities {
+		liveSet = append(liveSet, govvote.AccountAuthority{URL: normalizeAccURL(e.Url.String()), Disabled: e.Disabled})
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !seen {
+		h.accounts[key] = &govvote.AccountHistory{Account: normalizeAccURL(u.String()), Entries: len(events),
+			Events: events, Live: liveSet}
+	}
+	return nil
 }
