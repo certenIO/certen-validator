@@ -15,6 +15,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -592,6 +593,17 @@ func (r *UnifiedRepository) UpdateChainExecutionProofs(ctx context.Context, id u
 	return err
 }
 
+// ErrChainExecutionContradicts: a transaction already has a recorded observation, and the one offered now differs
+// from it in a fact the observation establishes (block, status, result, roots, or observer).
+var ErrChainExecutionContradicts = errors.New("chain execution contradicts the observation already recorded")
+
+// CreateChainExecutionResult records an observed chain execution and returns its row, once per (chain, transaction).
+//
+// RB4-F55: a proof cycle persists the settlement it observed and then goes on to attest, prove and write back. A
+// restart in between re-runs the cycle, which observes the same transaction again; the insert used to fail on its own
+// earlier write (chain_execution_results_chain_id_tx_hash_key) and the intent stayed in 'settling' for good. The same
+// observation now answers with the row already recorded, which is left as it is (its cycle_id is history). A
+// different observation of the same transaction is refused as ErrChainExecutionContradicts, naming what differs.
 func (r *UnifiedRepository) CreateChainExecutionResult(ctx context.Context, input *NewChainExecutionResult) (uuid.UUID, error) {
 	id := uuid.New()
 
@@ -605,6 +617,8 @@ func (r *UnifiedRepository) CreateChainExecutionResult(ctx context.Context, inpu
 			raw_receipt, logs, platform_data,
 			observer_validator_id, workflow_step, anchor_id, submitted_at
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)
+		ON CONFLICT (chain_id, tx_hash) DO NOTHING
+		RETURNING result_id
 	`
 
 	var proofID interface{}
@@ -632,7 +646,8 @@ func (r *UnifiedRepository) CreateChainExecutionResult(ctx context.Context, inpu
 		workflowStep = *input.WorkflowStep
 	}
 
-	_, err := r.db.ExecContext(ctx, query,
+	var created uuid.UUID
+	err := r.db.QueryRowContext(ctx, query,
 		id, proofID, input.CycleID, input.ChainPlatform, input.ChainID, input.NetworkName,
 		input.TxHash, blockNumber, input.BlockHash, input.BlockTimestamp,
 		input.Status, gasUsed, input.GasCost, input.Confirmations, requiredConfirmations, input.IsFinalized,
@@ -640,12 +655,55 @@ func (r *UnifiedRepository) CreateChainExecutionResult(ctx context.Context, inpu
 		input.StateRoot, input.TransactionsRoot, input.ReceiptsRoot,
 		nullableJSON(input.RawReceipt), nullableJSON(input.Logs), nullableJSON(input.PlatformData),
 		input.ObserverValidatorID, workflowStep, input.AnchorID, input.SubmittedAt,
-	)
-	if err != nil {
+	).Scan(&created)
+	if err == nil {
+		return created, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
 		return uuid.Nil, fmt.Errorf("create chain execution result: %w", err)
 	}
 
-	return id, nil
+	// The transaction is already recorded. Answer with that row only if it is this observation.
+	existing, err := r.GetChainExecutionResultByTxHash(ctx, input.ChainID, input.TxHash)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("create chain execution result: read the row already recorded for %s: %w", input.TxHash, err)
+	}
+	if diff := chainExecutionDifference(existing, input); diff != "" {
+		return uuid.Nil, fmt.Errorf("%w: chain %s tx %s (recorded by cycle %s): %s",
+			ErrChainExecutionContradicts, input.ChainID, input.TxHash, existing.CycleID, diff)
+	}
+	return existing.ResultID, nil
+}
+
+// chainExecutionDifference names the first fact in which a recorded observation and an offered one differ, or "" when
+// they are the same observation. Confirmation counts and proofs are not facts of the execution: they grow, or are
+// filled in later, for the same block.
+func chainExecutionDifference(rec *ChainExecutionResult, in *NewChainExecutionResult) string {
+	var inBlock sql.NullInt64
+	if in.BlockNumber != nil {
+		inBlock = sql.NullInt64{Int64: *in.BlockNumber, Valid: true}
+	}
+	switch {
+	case rec.ChainPlatform != in.ChainPlatform:
+		return fmt.Sprintf("chain platform %s, offered %s", rec.ChainPlatform, in.ChainPlatform)
+	case rec.BlockNumber != inBlock:
+		return fmt.Sprintf("block number %v, offered %v", rec.BlockNumber, inBlock)
+	case rec.BlockHash.String != in.BlockHash:
+		return fmt.Sprintf("block hash %s, offered %s", rec.BlockHash.String, in.BlockHash)
+	case rec.Status != in.Status:
+		return fmt.Sprintf("status %d, offered %d", rec.Status, in.Status)
+	case !bytes.Equal(rec.ResultHash, in.ResultHash):
+		return fmt.Sprintf("result hash %x, offered %x", rec.ResultHash, in.ResultHash)
+	case !bytes.Equal(rec.StateRoot, in.StateRoot):
+		return fmt.Sprintf("state root %x, offered %x", rec.StateRoot, in.StateRoot)
+	case !bytes.Equal(rec.TransactionsRoot, in.TransactionsRoot):
+		return fmt.Sprintf("transactions root %x, offered %x", rec.TransactionsRoot, in.TransactionsRoot)
+	case !bytes.Equal(rec.ReceiptsRoot, in.ReceiptsRoot):
+		return fmt.Sprintf("receipts root %x, offered %x", rec.ReceiptsRoot, in.ReceiptsRoot)
+	case rec.ObserverValidatorID.String != in.ObserverValidatorID:
+		return fmt.Sprintf("observer %s, offered %s", rec.ObserverValidatorID.String, in.ObserverValidatorID)
+	}
+	return ""
 }
 
 // GetChainExecutionResult retrieves a chain execution result by ID
