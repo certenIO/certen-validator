@@ -600,6 +600,10 @@ func (e *pageEvaluation) decideThrough(ctx context.Context, b int64) (*pageDecis
 		d.delegates = append(d.delegates, *dv)
 	}
 
+	if err := sameBlockConflict(page, contribs); err != nil {
+		return nil, err
+	}
+
 	// Decide with every ambiguous contribution counted and with none. If the
 	// two agree the vote stands; if they do not, which state the page was in
 	// decides the vote and it is not ours to guess.
@@ -689,12 +693,36 @@ func tally(contribs []contribution, includeAmbiguous bool) map[string]contributi
 		if c.ambiguous && !includeAmbiguous {
 			continue
 		}
-		if prev, ok := out[c.entry]; ok && prev.block > c.block {
+		if prev, ok := out[c.entry]; ok && (prev.block > c.block || (prev.block == c.block && prev.by < c.by)) {
+			// A later block's contribution replaces an earlier one, as the signature set does. Within one block
+			// the order core processed them in is not recorded; when they agree (sameBlockConflict refuses the
+			// case where they do not) the lowest message id is credited, so the record does not depend on the
+			// order it was read in.
 			continue
 		}
 		out[c.entry] = c
 	}
 	return out
+}
+
+// sameBlockConflict refuses one entry recorded with different votes in the same block: the set keeps whichever core
+// processed last, and that order is not recorded, so the entry's vote - and the page's - is not known.
+func sameBlockConflict(page string, contribs []contribution) error {
+	type slot struct {
+		entry string
+		block int64
+	}
+	seen := map[slot]contribution{}
+	for _, c := range contribs {
+		k := slot{c.entry, c.block}
+		if prev, ok := seen[k]; ok && prev.vote != c.vote {
+			return &VoteUnevaluable{Page: page, Reason: fmt.Sprintf(
+				"%s voted %s (%s) and %s (%s) in the same block %d; which one the page's set kept is not recorded",
+				c.entry, prev.vote, short(prev.by), c.vote, short(c.by), c.block)}
+		}
+		seen[k] = c
+	}
+	return nil
 }
 
 // decideVote mirrors SignerWillVote for one path.

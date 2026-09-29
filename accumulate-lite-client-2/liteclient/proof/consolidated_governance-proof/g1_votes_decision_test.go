@@ -119,3 +119,34 @@ func requireExcludedAfterDecision(t *testing.T, pv PageVote, byPrefix string) {
 	}
 	t.Fatalf("no exclusion of %s* as recorded after the decision: %+v", byPrefix, pv.Excluded)
 }
+
+// The same key recorded twice in one block: which message core processed last is not in the block number. The same
+// vote credits one message deterministically; different votes make the vote itself unknown.
+func TestVotes_OneKeyTwiceInOneBlockIsCreditedDeterministically(t *testing.T) {
+	tls := memTimelines{normalizeAccURL(pPage): timeline(t, pPage, []int64{1},
+		vPage{version: 1, accept: 1, keys: []string{"a"}})}
+	s1, s2 := sig(pPage, "a", 1, 10), sig(pPage, "a", 1, 10)
+	s1.ID, s2.ID = "sig-a-first", "sig-a-second"
+	rec := []recordedVote{recorded(pBook, pPage, 10)}
+	a1, err1 := account(t, tls, voteFacts{Sigs: []sigFact{s1, s2}, Votes: rec}, pBook)
+	a2, err2 := account(t, tls, voteFacts{Sigs: []sigFact{s2, s1}, Votes: rec}, pBook)
+	requireSatisfied(t, a1, err1, true)
+	requireSatisfied(t, a2, err2, true)
+	j1, _ := json.Marshal(a1)
+	j2, _ := json.Marshal(a2)
+	if string(j1) != string(j2) {
+		t.Fatalf("read in another order the record differs:\n%s\n%s", j2, j1)
+	}
+}
+
+func TestVotes_OneKeyVotingBothWaysInOneBlockIsUnevaluable(t *testing.T) {
+	tls := memTimelines{normalizeAccURL(pPage): timeline(t, pPage, []int64{1},
+		vPage{version: 1, accept: 1, keys: []string{"a"}})}
+	s1, s2 := sig(pPage, "a", 1, 10), vote(sig(pPage, "a", 1, 10), protocol.VoteTypeReject)
+	s1.ID, s2.ID = "sig-a-accept", "sig-a-reject"
+	_, err := account(t, tls, voteFacts{Sigs: []sigFact{s1, s2}, Votes: []recordedVote{recorded(pBook, pPage, 10)}}, pBook)
+	requireUnevaluable(t, err)
+	if !strings.Contains(err.Error(), "in the same block") {
+		t.Fatalf("unevaluable for another reason: %v", err)
+	}
+}
