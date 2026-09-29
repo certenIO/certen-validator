@@ -72,16 +72,30 @@ func corpusFacts(t *testing.T, cf corpusFile, caseName string) (voteFacts, strin
 		t.Fatalf("case %s is not in the corpus", caseName)
 	}
 	if delivered {
+		principalVote := map[string]string{} // the principal's book -> the page core records as casting its vote
 		for _, s := range facts.Sigs {
 			// The vote travels inward-out: from the signer's book to its
 			// innermost delegator, and from each delegator's book outward.
+			// Each authority signature names the page that cast it (origin).
 			hops := append(append([]string{}, s.Path...), s.Signer)
 			for i := len(hops) - 1; i > 0; i-- {
 				facts.Arrivals = append(facts.Arrivals, arrivalFact{
 					ID: "arrival:" + hops[i] + "->" + hops[i-1], Page: hops[i-1],
 					Authority: bookOfPage(hops[i]), Path: hops[:i-1], Block: corpusBlock + 1,
+					Origin: hops[i], Vote: protocol.VoteTypeAccept,
 				})
 			}
+			// The outermost hop is a page of the principal's book; core records the book's vote on the principal.
+			book := bookOfPage(hops[0])
+			if prev, ok := principalVote[book]; ok && prev != hops[0] {
+				t.Fatalf("case %s: two pages of %s (%s, %s) sign - which cast its vote is not in the corpus",
+					caseName, book, prev, hops[0])
+			}
+			principalVote[book] = hops[0]
+		}
+		for book, origin := range principalVote {
+			facts.Votes = append(facts.Votes, recordedVote{ID: "vote:" + origin, Authority: book, Origin: origin,
+				Vote: protocol.VoteTypeAccept, Block: corpusBlock + 2})
 		}
 	}
 	return facts, principal, delivered

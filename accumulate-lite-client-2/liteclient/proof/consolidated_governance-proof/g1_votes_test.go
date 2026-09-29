@@ -85,6 +85,16 @@ func arrival(page, authority string, block int64, path ...string) arrivalFact {
 		Authority: normalizeAccURL(authority), Path: normPath(path), Block: block}
 }
 
+// from is the arrival as core records it: naming the delegate's page that cast the vote.
+func from(a arrivalFact, origin string) arrivalFact { a.Origin = normalizeAccURL(origin); return a }
+
+// cast is a book's vote as core records it on the principal.
+func cast(book, origin string, block int64, v protocol.VoteType) recordedVote {
+	r := recorded(book, origin, block)
+	r.Vote = v
+	return r
+}
+
 func normPath(p []string) []string {
 	out := make([]string, len(p))
 	for i, s := range p {
@@ -155,7 +165,8 @@ func TestVotes_ForgedArrivalIsNotBelieved(t *testing.T) {
 	}
 	_, err := account(t, tls, voteFacts{
 		Sigs:     []sigFact{sig(dPage, "d1", 1, 10, pPage)},
-		Arrivals: []arrivalFact{arrival(pPage, dBook, 11)},
+		Arrivals: []arrivalFact{from(arrival(pPage, dBook, 11), dPage)},
+		Votes:    []recordedVote{recorded(pBook, pPage, 12)},
 	}, pBook)
 	requireUnevaluable(t, err)
 }
@@ -167,7 +178,8 @@ func TestVotes_DelegateMeetingItsThresholdVotes(t *testing.T) {
 	}
 	av, err := account(t, tls, voteFacts{
 		Sigs:     []sigFact{sig(dPage, "d1", 1, 10, pPage), sig(dPage, "d2", 1, 11, pPage)},
-		Arrivals: []arrivalFact{arrival(pPage, dBook, 12)},
+		Arrivals: []arrivalFact{from(arrival(pPage, dBook, 12), dPage)},
+		Votes:    []recordedVote{recorded(pBook, pPage, 13)},
 	}, pBook)
 	requireSatisfied(t, av, err, true)
 }
@@ -181,7 +193,8 @@ func TestVotes_DirectAndDelegatedCombineAtThePrincipal(t *testing.T) {
 	}
 	av, err := account(t, tls, voteFacts{
 		Sigs:     []sigFact{sig(pPage, "p1", 1, 10), sig(dPage, "d1", 1, 10, pPage)},
-		Arrivals: []arrivalFact{arrival(pPage, dBook, 11)},
+		Arrivals: []arrivalFact{from(arrival(pPage, dBook, 11), dPage)},
+		Votes:    []recordedVote{recorded(pBook, pPage, 11)},
 	}, pBook)
 	requireSatisfied(t, av, err, true)
 }
@@ -209,9 +222,10 @@ func TestVotes_TwoLevelDelegation(t *testing.T) {
 	facts := voteFacts{
 		Sigs: []sigFact{sig(ePage, "e1", 1, 10, pPage, dPage), sig(ePage, "e2", 1, 10, pPage, dPage)},
 		Arrivals: []arrivalFact{
-			arrival(dPage, eBook, 11, pPage),
-			arrival(pPage, dBook, 12),
+			from(arrival(dPage, eBook, 11, pPage), ePage),
+			from(arrival(pPage, dBook, 12), dPage),
 		},
+		Votes: []recordedVote{recorded(pBook, pPage, 13)},
 	}
 	av, err := account(t, tls, facts, pBook)
 	requireSatisfied(t, av, err, true)
@@ -229,7 +243,8 @@ func TestVotes_ArrivalWithoutDelegateEntry(t *testing.T) {
 	}
 	_, err := account(t, tls, voteFacts{
 		Sigs:     []sigFact{sig(dPage, "d1", 1, 10, pPage)},
-		Arrivals: []arrivalFact{arrival(pPage, dBook, 11)},
+		Arrivals: []arrivalFact{from(arrival(pPage, dBook, 11), dPage)},
+		Votes:    []recordedVote{recorded(pBook, pPage, 12)},
 	}, pBook)
 	requireUnevaluable(t, err)
 }
@@ -271,7 +286,8 @@ func TestVotes_ResponseThreshold(t *testing.T) {
 		vPage{version: 1, accept: 1, response: 2, keys: []string{"a", "b", "c"}})}
 	av, err := account(t, tls, voteFacts{Sigs: []sigFact{sig(pPage, "a", 1, 10)}}, pBook)
 	requireSatisfied(t, av, err, false)
-	av, err = account(t, tls, voteFacts{Sigs: []sigFact{sig(pPage, "a", 1, 10), sig(pPage, "b", 1, 11)}}, pBook)
+	av, err = account(t, tls, voteFacts{Sigs: []sigFact{sig(pPage, "a", 1, 10), sig(pPage, "b", 1, 11)},
+		Votes: []recordedVote{recorded(pBook, pPage, 11)}}, pBook)
 	requireSatisfied(t, av, err, true)
 }
 
@@ -284,7 +300,8 @@ func TestVotes_NewerVersionReplacesTheSet(t *testing.T) {
 	// a signed at v1 before the update, b at v2 after: a was discarded.
 	av, err := account(t, tls, voteFacts{Sigs: []sigFact{sig(pPage, "a", 1, 10), sig(pPage, "b", 2, 30)}}, pBook)
 	requireSatisfied(t, av, err, false)
-	av, err = account(t, tls, voteFacts{Sigs: []sigFact{sig(pPage, "b", 2, 30), sig(pPage, "c", 2, 31)}}, pBook)
+	av, err = account(t, tls, voteFacts{Sigs: []sigFact{sig(pPage, "b", 2, 30), sig(pPage, "c", 2, 31)},
+		Votes: []recordedVote{recorded(pBook, pPage, 31)}}, pBook)
 	requireSatisfied(t, av, err, true)
 }
 
@@ -318,7 +335,8 @@ func TestVotes_RotationInsideABlock(t *testing.T) {
 	_, err := account(t, tls, voteFacts{Sigs: []sigFact{sig(pPage, "old", 1, 50)}}, pBook)
 	requireUnevaluable(t, err)
 	// Not decisive: another definite signature already meets the threshold.
-	av, err := account(t, tls, voteFacts{Sigs: []sigFact{sig(pPage, "old", 1, 50), sig(pPage, "a", 1, 50)}}, pBook)
+	av, err := account(t, tls, voteFacts{Sigs: []sigFact{sig(pPage, "old", 1, 50), sig(pPage, "a", 1, 50)},
+		Votes: []recordedVote{recorded(pBook, pPage, 50)}}, pBook)
 	requireSatisfied(t, av, err, true)
 }
 
@@ -329,7 +347,7 @@ func TestVotes_SelfUpdateInItsOwnBlock(t *testing.T) {
 		vPage{version: 1, accept: 1, keys: []string{"a"}},
 		vPage{version: 2, accept: 1, keys: []string{"a", "b"}})}
 	av, err := account(t, tls, voteFacts{TxType: protocol.TransactionTypeUpdateKeyPage,
-		Sigs: []sigFact{sig(pPage, "a", 1, 40)}}, pBook)
+		Sigs: []sigFact{sig(pPage, "a", 1, 40)}, Votes: []recordedVote{recorded(pBook, pPage, 40)}}, pBook)
 	requireSatisfied(t, av, err, true)
 }
 
@@ -349,13 +367,15 @@ func TestVotes_SignerPageOnAnotherPartitionUsesItsOwnBlocks(t *testing.T) {
 	}
 	av, err := account(t, tls(), voteFacts{
 		Sigs:     []sigFact{sig(dPage, "d-old", 1, 850, pPage)},
-		Arrivals: []arrivalFact{arrival(pPage, dBook, 40)},
+		Arrivals: []arrivalFact{from(arrival(pPage, dBook, 40), dPage)},
+		Votes:    []recordedVote{recorded(pBook, pPage, 41)},
 	}, pBook)
 	requireSatisfied(t, av, err, true)
 
 	_, err = account(t, tls(), voteFacts{
 		Sigs:     []sigFact{sig(dPage, "d-new", 2, 850, pPage)},
-		Arrivals: []arrivalFact{arrival(pPage, dBook, 40)},
+		Arrivals: []arrivalFact{from(arrival(pPage, dBook, 40), dPage)},
+		Votes:    []recordedVote{recorded(pBook, pPage, 41)},
 	}, pBook)
 	requireUnevaluable(t, err)
 }
@@ -369,14 +389,14 @@ func TestVotes_BlacklistedTypeCannotBeSigned(t *testing.T) {
 		Sigs: []sigFact{sig(pPage, "a", 1, 10)}}, pBook)
 	requireUnevaluable(t, err)
 	av, err := account(t, tls, voteFacts{TxType: protocol.TransactionTypeWriteData,
-		Sigs: []sigFact{sig(pPage, "a", 1, 10)}}, pBook)
+		Sigs: []sigFact{sig(pPage, "a", 1, 10)}, Votes: []recordedVote{recorded(pBook, pPage, 10)}}, pBook)
 	requireSatisfied(t, av, err, true)
 }
 
 // ---- books and accounts ---------------------------------------------------
 
-// A book votes with its FIRST page that votes, even if a later page would
-// have voted otherwise.
+// A book votes with the page that decided first, even if another page would have voted otherwise. Here both decide
+// in block 10; which came first is not in the block number and is in the network's record, which names page 1.
 func TestVotes_BookVotesWithItsFirstVotingPage(t *testing.T) {
 	p2 := "acc://p.acme/book/2"
 	tls := memTimelines{
@@ -384,7 +404,8 @@ func TestVotes_BookVotesWithItsFirstVotingPage(t *testing.T) {
 		normalizeAccURL(p2):    timeline(t, p2, []int64{1}, vPage{version: 1, accept: 1, keys: []string{"b"}}),
 	}
 	av, err := account(t, tls, voteFacts{Sigs: []sigFact{
-		vote(sig(pPage, "a", 1, 10), protocol.VoteTypeReject), sig(p2, "b", 1, 10)}}, pBook)
+		vote(sig(pPage, "a", 1, 10), protocol.VoteTypeReject), sig(p2, "b", 1, 10)},
+		Votes: []recordedVote{cast(pBook, pPage, 10, protocol.VoteTypeReject)}}, pBook)
 	requireSatisfied(t, av, err, false)
 	if av.Authorities[0].Vote.By != normalizeAccURL(pPage) {
 		t.Fatalf("book voted by %s, want page 1", av.Authorities[0].Vote.By)
@@ -396,23 +417,24 @@ func TestVotes_EveryRequiredAuthority(t *testing.T) {
 		normalizeAccURL(pPage): timeline(t, pPage, []int64{1}, vPage{version: 1, accept: 1, keys: []string{"p1"}}),
 		normalizeAccURL(ePage): timeline(t, ePage, []int64{1}, vPage{version: 1, accept: 1, keys: []string{"e1"}}),
 	}
-	one := voteFacts{Sigs: []sigFact{sig(pPage, "p1", 1, 10)}}
+	one := voteFacts{Sigs: []sigFact{sig(pPage, "p1", 1, 10)}, Votes: []recordedVote{recorded(pBook, pPage, 10)}}
 	av, err := account(t, tls, one, pBook, eBook)
 	requireSatisfied(t, av, err, false)
 
-	both := voteFacts{Sigs: []sigFact{sig(pPage, "p1", 1, 10), sig(ePage, "e1", 1, 10)}}
+	both := voteFacts{Sigs: []sigFact{sig(pPage, "p1", 1, 10), sig(ePage, "e1", 1, 10)},
+		Votes: []recordedVote{recorded(pBook, pPage, 10), recorded(eBook, ePage, 10)}}
 	av, err = account(t, tls, both, pBook, eBook)
 	requireSatisfied(t, av, err, true)
 
-	m := newVoteModel(voteFacts{TxType: protocol.TransactionTypeWriteData, Sigs: one.Sigs}, tls)
+	m := newVoteModel(voteFacts{TxType: protocol.TransactionTypeWriteData, Sigs: one.Sigs, Votes: one.Votes}, tls)
 	disabled := []AccountAuthority{{URL: pBook}, {URL: eBook, Disabled: true}}
 	av, err = m.accountVote(context.Background(), "acc://p.acme/data", disabled, nil, false)
 	requireSatisfied(t, av, err, true)
-	m = newVoteModel(voteFacts{TxType: protocol.TransactionTypeUpdateAccountAuth, Sigs: one.Sigs}, tls)
+	m = newVoteModel(voteFacts{TxType: protocol.TransactionTypeUpdateAccountAuth, Sigs: one.Sigs, Votes: one.Votes}, tls)
 	av, err = m.accountVote(context.Background(), "acc://p.acme/data", disabled, nil, true)
 	requireSatisfied(t, av, err, false) // a type requiring authorization counts the disabled one
 
-	m = newVoteModel(voteFacts{TxType: protocol.TransactionTypeWriteData, Sigs: one.Sigs}, tls)
+	m = newVoteModel(voteFacts{TxType: protocol.TransactionTypeWriteData, Sigs: one.Sigs, Votes: one.Votes}, tls)
 	av, err = m.accountVote(context.Background(), "acc://p.acme/data",
 		[]AccountAuthority{{URL: pBook}}, []string{eBook}, false)
 	requireSatisfied(t, av, err, false) // an extra authority the transaction names

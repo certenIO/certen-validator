@@ -95,11 +95,11 @@ func (a *g1Authorization) Evaluate(ctx context.Context, sigs []ValidatedSignatur
 			facts.Sigs = append(facts.Sigs, f)
 		}
 	}
-	arrivals, err := a.g1.collectArrivals(ctx, a.txID)
+	arrivals, votes, err := a.g1.collectRecordedVotes(ctx, a.txID, a.principal)
 	if err != nil {
 		return nil, err
 	}
-	facts.Arrivals = arrivals
+	facts.Arrivals, facts.Votes = arrivals, votes
 
 	authorities, err := a.g1.authoritySetAtExec(ctx, a.principal, a.execMBI)
 	if err != nil {
@@ -151,25 +151,63 @@ func normalizedChain(chain []string) []string {
 	return out
 }
 
-// collectArrivals reads every delegated vote recorded for the transaction.
+// collectRecordedVotes reads every authority vote the network recorded for the transaction, each bound to the block
+// its signature chain recorded it in.
 //
-// Each key page's signature set for the transaction carries, beside user
-// signatures, the authority signatures it received. One with a delegator is a
-// delegated vote arriving at delegator[0]; the rest of the delegator list is
-// the path beyond it, innermost first on the wire.
-func (g1 *G1Layer) collectArrivals(ctx context.Context, txID string) ([]arrivalFact, error) {
+// Each signature set for the transaction carries, beside user signatures, the authority signatures core produced
+// when a book voted. One with a delegator is a delegated vote arriving at delegator[0], on that page's set; the rest
+// of the delegator list is the path beyond it, innermost first on the wire. One without is the vote of one of the
+// principal's own authorities, on the principal's set. Both name the page that cast them (origin) and the vote.
+func (g1 *G1Layer) collectRecordedVotes(ctx context.Context, txID, principal string) ([]arrivalFact, []recordedVote, error) {
 	resp, err := g1.artifactManager.SaveRPCArtifact(ctx, "g1_arrivals_tx", g1.client, txID,
 		map[string]interface{}{"queryType": "default"})
 	if err != nil {
-		return nil, fmt.Errorf("read the signature sets of %s: %w", txID, err)
+		return nil, nil, fmt.Errorf("read the signature sets of %s: %w", txID, err)
 	}
 	pu := ProofUtilities{}
 	result, err := pu.ExpectResult(resp)
 	if err != nil {
-		return nil, fmt.Errorf("read the signature sets of %s: %w", txID, err)
+		return nil, nil, fmt.Errorf("read the signature sets of %s: %w", txID, err)
 	}
+	arrivals, votes, err := recordedVotesOf(result, principal)
+	if err != nil {
+		return nil, nil, err
+	}
+	for i := range arrivals {
+		a := &arrivals[i]
+		block, err := g1.recordedBlock(ctx, a.Page, a.ID, "g1_arrival_")
+		if err != nil {
+			return nil, nil, fmt.Errorf("the delegated vote %s on %s: %w", SafeTruncate(a.ID, 24), a.Page, err)
+		}
+		a.Block = block
+	}
+	for i := range votes {
+		v := &votes[i]
+		block, err := g1.recordedBlock(ctx, normalizeAccURL(principal), v.ID, "g1_vote_")
+		if err != nil {
+			return nil, nil, fmt.Errorf("the recorded vote %s of %s: %w", SafeTruncate(v.ID, 24), v.Authority, err)
+		}
+		v.Block = block
+	}
+	return arrivals, votes, nil
+}
 
-	var out []arrivalFact
+// recordedBlock is the block a recorded message (by its id) was recorded in on account's signature chain.
+func (g1 *G1Layer) recordedBlock(ctx context.Context, account, id, label string) (int64, error) {
+	hash, err := URLUtils{}.ParseAccURLHash(id)
+	if err != nil || len(hash) != 64 {
+		return 0, fmt.Errorf("%q has no message hash", id)
+	}
+	return g1.boundSignatureChainBlock(ctx, account, hash, label+SafeTruncate(hash, 16))
+}
+
+// recordedVotesOf reads the authority votes out of a transaction's signature sets (see collectRecordedVotes). Blocks
+// are not in the sets; the caller binds them.
+func recordedVotesOf(result map[string]interface{}, principal string) ([]arrivalFact, []recordedVote, error) {
+	pu := ProofUtilities{}
+	principal = normalizeAccURL(principal)
+	var arrivals []arrivalFact
+	var votes []recordedVote
 	sets, _ := pu.CaseInsensitiveGet(result, "signatures").(map[string]interface{})
 	setRecords, _ := pu.CaseInsensitiveGet(sets, "records").([]interface{})
 	for _, sr := range setRecords {
@@ -190,9 +228,34 @@ func (g1 *G1Layer) collectArrivals(ctx context.Context, txID string) ([]arrivalF
 			if t, _ := pu.CaseInsensitiveGet(sig, "type").(string); !strings.EqualFold(t, "authority") {
 				continue
 			}
+			authority, _ := pu.CaseInsensitiveGet(sig, "authority").(string)
+			if authority == "" {
+				return nil, nil, fmt.Errorf("the authority vote %s names no authority", SafeTruncate(id, 24))
+			}
+			origin, _ := pu.CaseInsensitiveGet(sig, "origin").(string)
+			if origin == "" {
+				return nil, nil, fmt.Errorf("the authority vote %s by %s names no originating page, so which page "+
+					"cast it is not recorded", SafeTruncate(id, 24), authority)
+			}
+			vote := protocol.VoteTypeAccept
+			if name, _ := pu.CaseInsensitiveGet(sig, "vote").(string); name != "" {
+				parsed, ok := protocol.VoteTypeByName(name)
+				if !ok {
+					return nil, nil, fmt.Errorf("the authority vote %s casts %q, which is not a vote", SafeTruncate(id, 24), name)
+				}
+				vote = parsed
+			}
+
 			rawDelegators, _ := pu.CaseInsensitiveGet(sig, "delegator").([]interface{})
 			if len(rawDelegators) == 0 {
-				continue // a direct authority vote, recorded for the transaction itself
+				// The vote of one of the principal's own authorities: recorded on the principal, nowhere else.
+				if page != principal {
+					return nil, nil, fmt.Errorf("the authority vote %s by %s is recorded on %s, not on the principal %s",
+						SafeTruncate(id, 24), authority, page, principal)
+				}
+				votes = append(votes, recordedVote{ID: id, Authority: normalizeAccURL(authority),
+					Origin: normalizeAccURL(origin), Vote: vote})
+				continue
 			}
 			delegators := make([]string, 0, len(rawDelegators))
 			for _, d := range rawDelegators {
@@ -200,21 +263,8 @@ func (g1 *G1Layer) collectArrivals(ctx context.Context, txID string) ([]arrivalF
 				delegators = append(delegators, normalizeAccURL(ds))
 			}
 			if delegators[0] != page {
-				return nil, fmt.Errorf("the delegated vote %s is recorded on %s but names %s as its delegator",
+				return nil, nil, fmt.Errorf("the delegated vote %s is recorded on %s but names %s as its delegator",
 					SafeTruncate(id, 24), page, delegators[0])
-			}
-			authority, _ := pu.CaseInsensitiveGet(sig, "authority").(string)
-			if authority == "" {
-				return nil, fmt.Errorf("the delegated vote %s names no authority", SafeTruncate(id, 24))
-			}
-
-			hash, err := URLUtils{}.ParseAccURLHash(id)
-			if err != nil || len(hash) != 64 {
-				return nil, fmt.Errorf("the delegated vote %q has no message hash", id)
-			}
-			block, err := g1.boundSignatureChainBlock(ctx, page, hash, "g1_arrival_"+SafeTruncate(hash, 16))
-			if err != nil {
-				return nil, fmt.Errorf("the delegated vote %s on %s: %w", SafeTruncate(id, 24), page, err)
 			}
 
 			// On the wire the path beyond delegator[0] is innermost first; the
@@ -224,10 +274,11 @@ func (g1 *G1Layer) collectArrivals(ctx context.Context, txID string) ([]arrivalF
 			for i := range beyond {
 				path[i] = beyond[len(beyond)-1-i]
 			}
-			out = append(out, arrivalFact{ID: id, Page: page, Authority: normalizeAccURL(authority), Path: path, Block: block})
+			arrivals = append(arrivals, arrivalFact{ID: id, Page: page, Authority: normalizeAccURL(authority), Path: path,
+				Origin: normalizeAccURL(origin), Vote: vote})
 		}
 	}
-	return out, nil
+	return arrivals, votes, nil
 }
 
 // boundSignatureChainBlock returns the block a message was recorded in on a
