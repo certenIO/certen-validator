@@ -48,7 +48,7 @@ func testKey(label string) *ecdsa.PrivateKey {
 
 func (c *createdAnchorChain) serve(t *testing.T) *ethclient.Client {
 	t.Helper()
-	parsed, err := abiFromJSON(anchorsABIJSON)
+	parsed, err := abiFromJSON(contracts.CertenAnchorV8_2BatchABI)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,8 @@ func (c *createdAnchorChain) serve(t *testing.T) *ethclient.Client {
 			}
 		case "eth_call":
 			packed, err := parsed.Methods["anchors"].Outputs.Pack(c.bundle, c.root, [32]byte{}, [32]byte{}, [32]byte{}, [32]byte{},
-				c.root, [32]byte{7}, big.NewInt(9), new(big.Int).SetUint64(c.times[c.createdIn]), c.creator, true, true, false, uint8(2))
+				c.root, [32]byte{7}, big.NewInt(9), new(big.Int).SetUint64(c.times[c.createdIn]), c.creator, true, true, false, uint8(2),
+				testAccSet, testIncarnation)
 			if err != nil {
 				t.Error(err)
 			}

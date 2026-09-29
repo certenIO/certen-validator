@@ -363,21 +363,11 @@ func checkAuthorizedAttempt(
 	} else if ok, _ := okOut.(bool); !ok {
 		return fmt.Errorf("anchor 0x%x does not hold the member's leaf; the attempt was not authorised", exec.AnchorID[:8])
 	}
-	anchorsABI, err := abiFromJSON(anchorsABIJSON)
+	st, err := ReadAnchorState(ctx, chain, anchorAddr, exec.AnchorID, nil)
 	if err != nil {
-		return err
-	}
-	var fields []interface{}
-	if err := bind.NewBoundContract(anchorAddr, anchorsABI, chain, nil, nil).
-		Call(&bind.CallOpts{Context: ctx}, &fields, "anchors", exec.AnchorID); err != nil {
 		return readErr(fmt.Errorf("anchors: %w", err))
 	}
-	const validIndex, proofExecutedIndex = 11, 12
-	if len(fields) <= proofExecutedIndex {
-		return fmt.Errorf("anchors() returned %d fields", len(fields))
-	}
-	valid, _ := fields[validIndex].(bool)
-	executed, _ := fields[proofExecutedIndex].(bool)
+	valid, executed := st.Valid, st.ProofExecuted
 	if !valid || !executed {
 		return fmt.Errorf("anchor 0x%x is not attested; the attempt was not authorised", exec.AnchorID[:8])
 	}

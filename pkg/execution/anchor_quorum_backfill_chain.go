@@ -9,10 +9,10 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum"
-	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/certen/independant-validator/pkg/consensus"
+	"github.com/certen/independant-validator/pkg/execution/contracts"
 )
 
 // ChainBackfillReader is the live BackfillChain: the same RPC endpoints and the same anchor addresses
@@ -106,60 +106,31 @@ func (r *ChainBackfillReader) AnchorState(
 	if err != nil {
 		return AnchorOnChainState{}, err
 	}
-	parsed, err := abiFromJSON(anchorsABIJSON)
+	st, err := ReadAnchorState(ctx, client, anchorAddr, bundleID, nil)
 	if err != nil {
 		return AnchorOnChainState{}, err
 	}
-	bound := bind.NewBoundContract(anchorAddr, parsed, client, client, client)
-
-	var out []interface{}
-	if err := bound.Call(&bind.CallOpts{Context: ctx}, &out, "anchors", bundleID); err != nil {
-		return AnchorOnChainState{}, fmt.Errorf("reading anchor 0x%x: %w", bundleID[:8], err)
-	}
-	return decodeAnchorState(out)
+	return decodeAnchorState(st)
 }
 
-// decodeAnchorState maps the anchors() tuple onto the fields the backfill checks.
-//
-// Split out and tested against a REAL response (see the golden vector in the tests) because the field
-// INDEXES are the part that was wrong in production: a batch anchor binds operationID at index 7, while
-// index 3, operationCommitment, stays empty. Reading the wrong one refuses every genuine anchor.
-func decodeAnchorState(out []interface{}) (AnchorOnChainState, error) {
-	if len(out) < 15 {
-		return AnchorOnChainState{}, fmt.Errorf(
-			"anchors() returned %d fields, expected 15 — the Anchor struct layout changed", len(out))
+// decodeAnchorState maps an anchor record (either generation, ReadAnchorState) onto the fields the backfill and the
+// create locator check. A batch anchor binds its operation id at operationID, while operationCommitment stays empty:
+// reading the wrong one refused every genuine anchor in production.
+func decodeAnchorState(st *contracts.AnchorState) (AnchorOnChainState, error) {
+	if st == nil {
+		return AnchorOnChainState{}, fmt.Errorf("no anchor record")
 	}
-	state := AnchorOnChainState{}
-	var ok bool
-	if state.MerkleRoot, ok = out[1].([32]byte); !ok {
-		return AnchorOnChainState{}, fmt.Errorf("merkleRoot has an unexpected type")
+	if st.Timestamp == nil || !st.Timestamp.IsUint64() {
+		return AnchorOnChainState{}, fmt.Errorf("timestamp has an unexpected value")
 	}
-	if state.OperationCommitment, ok = out[3].([32]byte); !ok {
-		return AnchorOnChainState{}, fmt.Errorf("operationCommitment has an unexpected type")
+	state := AnchorOnChainState{
+		MerkleRoot: st.MerkleRoot, OperationCommitment: st.OperationCommitment, OperationID: st.OperationID,
+		ExecutionCommitment: st.ExecutionCommitment, Validator: st.Validator, Valid: st.Valid, ProofExecuted: st.ProofExecuted,
+		Version: st.Version, AccumulateSetRoot: st.AccumulateSetRoot, Incarnation: st.Incarnation,
 	}
-	// Index 7. A batch anchor binds here, not at index 3 — see AnchorOnChainState.
-	if state.OperationID, ok = out[7].([32]byte); !ok {
-		return AnchorOnChainState{}, fmt.Errorf("operationID has an unexpected type")
-	}
-	if state.ExecutionCommitment, ok = out[6].([32]byte); !ok {
-		return AnchorOnChainState{}, fmt.Errorf("executionCommitment has an unexpected type")
-	}
-	ts, tsOK := out[9].(*big.Int)
-	if !tsOK || ts == nil || !ts.IsUint64() {
-		return AnchorOnChainState{}, fmt.Errorf("timestamp has an unexpected type or value")
-	}
-	if ts.Sign() > 0 {
-		state.CreatedAt = ts.Uint64()
-		state.Timestamp = time.Unix(ts.Int64(), 0).UTC()
-	}
-	if state.Validator, ok = out[10].(common.Address); !ok {
-		return AnchorOnChainState{}, fmt.Errorf("validator has an unexpected type")
-	}
-	if state.Valid, ok = out[11].(bool); !ok {
-		return AnchorOnChainState{}, fmt.Errorf("valid has an unexpected type")
-	}
-	if state.ProofExecuted, ok = out[12].(bool); !ok {
-		return AnchorOnChainState{}, fmt.Errorf("proofExecuted has an unexpected type")
+	if st.Timestamp.Sign() > 0 {
+		state.CreatedAt = st.Timestamp.Uint64()
+		state.Timestamp = time.Unix(st.Timestamp.Int64(), 0).UTC()
 	}
 	return state, nil
 }

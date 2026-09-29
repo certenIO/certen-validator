@@ -5,11 +5,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/ethereum/go-ethereum"
 	"math/big"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ethereum/go-ethereum"
 
 	"github.com/ethereum/go-ethereum/common"
 
@@ -503,18 +504,17 @@ func TestDecodeAnchorStateReadsTheLiveAnchorLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bad golden vector: %v", err)
 	}
-	parsed, err := abiFromJSON(anchorsABIJSON)
+	// A live V8.1 anchor's response: fifteen words, read through the one reader of anchor state.
+	st, err := contracts.DecodeAnchorsReturn(raw)
 	if err != nil {
-		t.Fatalf("anchors ABI: %v", err)
+		t.Fatalf("decoding the live response: %v", err)
 	}
-	out, err := parsed.Methods["anchors"].Outputs.Unpack(raw)
-	if err != nil {
-		t.Fatalf("unpacking the live response: %v", err)
-	}
-
-	state, err := decodeAnchorState(out)
+	state, err := decodeAnchorState(st)
 	if err != nil {
 		t.Fatalf("decodeAnchorState: %v", err)
+	}
+	if state.Version != contracts.BatchAnchorV8_1 || state.AccumulateSetRoot != ([32]byte{}) || state.Incarnation != ([32]byte{}) {
+		t.Fatalf("a V8.1 anchor decoded as %s with Accumulate set %x incarnation %x", state.Version, state.AccumulateSetRoot, state.Incarnation)
 	}
 
 	wantRoot := "d4d5fe5ca51b390b851000cd698dcd63e831e380732e78c31020f056669662b2"
@@ -547,8 +547,11 @@ func TestDecodeAnchorStateReadsTheLiveAnchorLayout(t *testing.T) {
 
 // A truncated response must be refused rather than silently decoded from whatever words arrived.
 func TestDecodeAnchorStateRefusesAChangedLayout(t *testing.T) {
-	if _, err := decodeAnchorState(make([]interface{}, 14)); err == nil {
+	if _, err := contracts.DecodeAnchorsReturn(make([]byte, 14*32)); err == nil {
 		t.Fatal("a 14-field response was accepted")
+	}
+	if _, err := decodeAnchorState(nil); err == nil {
+		t.Fatal("no record was accepted as an anchor")
 	}
 }
 

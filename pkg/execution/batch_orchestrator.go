@@ -697,25 +697,11 @@ func (o *BatchOrchestrator) verifyLeavesAgainstAccounts(
 // only the combination matters: an anchor that exists but is NOT attested is a stranded
 // createBatchAnchor from a failed flush, and that one SHOULD be retried.
 func (o *BatchOrchestrator) anchorAlreadyAttested(ctx context.Context, bundleID [32]byte) (bool, error) {
-	parsed, err := abiFromJSON(anchorsABIJSON)
+	st, err := ReadAnchorState(ctx, o.ecm.client, o.anchorV7, bundleID, nil)
 	if err != nil {
 		return false, err
 	}
-	bound := bind.NewBoundContract(o.anchorV7, parsed, o.ecm.client, o.ecm.client, o.ecm.client)
-	var out []interface{}
-	if err := bound.Call(&bind.CallOpts{Context: ctx}, &out, "anchors", bundleID); err != nil {
-		return false, err
-	}
-	const proofExecutedIndex = 12
-	if len(out) <= proofExecutedIndex {
-		return false, fmt.Errorf("anchors() returned %d fields, need at least %d",
-			len(out), proofExecutedIndex+1)
-	}
-	executed, ok := out[proofExecutedIndex].(bool)
-	if !ok {
-		return false, fmt.Errorf("proofExecuted has unexpected type %T", out[proofExecutedIndex])
-	}
-	return executed, nil
+	return st.ProofExecuted, nil
 }
 
 // verifyLeavesAgainstAnchor confirms the deployed anchor stored what we think it did and

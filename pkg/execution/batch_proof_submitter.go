@@ -86,52 +86,16 @@ func (s *BatchProofSubmitterImpl) batchOperationIDViaV7(
 	// transcribed from CertenAnchorV8_1.sol and is asserted against the DEPLOYED contract by
 	// TestAnchorsTupleLayoutMatchesDeployedContract — if a future anchor reorders these
 	// fields, that test fails rather than this silently decoding the wrong 32 bytes.
-	const operationIDFieldIndex = 7
-
-	parsed, err := abiFromJSON(anchorsABIJSON)
+	st, err := ReadAnchorState(ctx, ecm.client, anchorAddr, bundleID, nil)
 	if err != nil {
-		return [32]byte{}, err
-	}
-	bound := bind.NewBoundContract(anchorAddr, parsed, ecm.client, ecm.client, ecm.client)
-	var out []interface{}
-	if err := bound.Call(&bind.CallOpts{Context: ctx}, &out, "anchors", bundleID); err != nil {
 		return [32]byte{}, fmt.Errorf("reading batch operationID: %w", err)
 	}
-	if len(out) <= operationIDFieldIndex {
-		return [32]byte{}, fmt.Errorf(
-			"anchors() returned %d fields, need at least %d — the Anchor struct layout changed",
-			len(out), operationIDFieldIndex+1)
-	}
-	v, ok := out[operationIDFieldIndex].([32]byte)
-	if !ok {
-		return [32]byte{}, fmt.Errorf("anchors().operationID returned unexpected type %T", out[operationIDFieldIndex])
-	}
+	v := st.OperationID
 	if v == ([32]byte{}) {
 		return [32]byte{}, fmt.Errorf("anchor 0x%x has a zero operationID — not a batch anchor?", bundleID[:8])
 	}
 	return v, nil
 }
-
-// anchorsABIJSON is the `mapping(bytes32 => Anchor) public anchors` getter, transcribed field
-// for field from CertenAnchorV8_1.sol. Shared with the layout test so both read one source of
-// truth; TestAnchorsTupleLayoutMatchesDeployedContract checks it against a DEPLOYED anchor.
-const anchorsABIJSON = `[{"type":"function","name":"anchors","inputs":[{"name":"","type":"bytes32"}],"outputs":[` +
-	`{"name":"bundleId","type":"bytes32"},` +
-	`{"name":"merkleRoot","type":"bytes32"},` +
-	`{"name":"adiURLHash","type":"bytes32"},` +
-	`{"name":"operationCommitment","type":"bytes32"},` +
-	`{"name":"crossChainCommitment","type":"bytes32"},` +
-	`{"name":"governanceRoot","type":"bytes32"},` +
-	`{"name":"executionCommitment","type":"bytes32"},` +
-	`{"name":"operationID","type":"bytes32"},` +
-	`{"name":"accumulateBlockHeight","type":"uint256"},` +
-	`{"name":"timestamp","type":"uint256"},` +
-	`{"name":"validator","type":"address"},` +
-	`{"name":"valid","type":"bool"},` +
-	`{"name":"proofExecuted","type":"bool"},` +
-	`{"name":"governanceExecuted","type":"bool"},` +
-	`{"name":"governanceLevel","type":"uint8"}` +
-	`],"stateMutability":"view"}]`
 
 // anchorFlagConfirm* bound the read-back of proofExecuted after a mined attestation.
 //
@@ -282,35 +246,13 @@ func (s *BatchProofSubmitterImpl) anchorProofExecutedAt(
 	if err != nil {
 		return false, err
 	}
-	const abiJSON = `[{"type":"function","name":"anchors","inputs":[{"name":"","type":"bytes32"}],"outputs":[
-		{"name":"bundleId","type":"bytes32"},{"name":"merkleRoot","type":"bytes32"},
-		{"name":"adiURLHash","type":"bytes32"},{"name":"operationCommitment","type":"bytes32"},
-		{"name":"crossChainCommitment","type":"bytes32"},{"name":"governanceRoot","type":"bytes32"},
-		{"name":"executionCommitment","type":"bytes32"},{"name":"operationID","type":"bytes32"},
-		{"name":"accumulateBlockHeight","type":"uint256"},{"name":"timestamp","type":"uint256"},
-		{"name":"validator","type":"address"},{"name":"valid","type":"bool"},
-		{"name":"proofExecuted","type":"bool"},{"name":"governanceExecuted","type":"bool"},
-		{"name":"governanceLevel","type":"uint8"}],"stateMutability":"view"}]`
-	parsed, err := abiFromJSON(abiJSON)
+	// BlockNumber nil means "latest". When set, a node lacking that state returns an error rather than an answer from
+	// an older block - which is the whole point.
+	st, err := ReadAnchorState(ctx, ecm.client, anchorAddr, bundleID, blockNumber)
 	if err != nil {
-		return false, err
-	}
-	bound := bind.NewBoundContract(anchorAddr, parsed, ecm.client, ecm.client, ecm.client)
-	var out []interface{}
-	// BlockNumber nil means "latest". When set, a node lacking that state returns an
-	// error rather than an answer from an older block — which is the whole point.
-	opts := &bind.CallOpts{Context: ctx, BlockNumber: blockNumber}
-	if err := bound.Call(opts, &out, "anchors", bundleID); err != nil {
 		return false, fmt.Errorf("reading anchor: %w", err)
 	}
-	if len(out) < 13 {
-		return false, fmt.Errorf("anchors returned %d fields, expected 15", len(out))
-	}
-	executed, ok := out[12].(bool)
-	if !ok {
-		return false, fmt.Errorf("proofExecuted field has unexpected type")
-	}
-	return executed, nil
+	return st.ProofExecuted, nil
 }
 
 // SubmitBatchQuorumProof submits the quorum attestation over a batch root.
@@ -326,8 +268,8 @@ func (s *BatchProofSubmitterImpl) anchorProofExecutedAt(
 //     makes usedCommitments replay protection meaningful per batch.
 //   - Commitments.ExecutionCommitment must equal batchRoot, which is what createBatchAnchor
 //     stored in that slot.
-//   - BlsProof.MessageHash must equal the six-field V6.1 pre-exec message the contract
-//     reconstructs; the quorum computed and signed exactly that.
+//   - BlsProof.MessageHash must equal the eight-field V8.2 pre-exec message the contract
+//     reconstructs (ComputeBatchQuorumMessage); the quorum computed and signed exactly that.
 //
 // # THE TWO FIELDS THAT MUST COME FROM THE AGGREGATE, NOT FROM CONFIG
 //

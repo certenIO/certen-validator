@@ -94,6 +94,11 @@ type AnchorOnChainState struct {
 	Validator     common.Address
 	Valid         bool
 	ProofExecuted bool
+	// Version is the anchor generation the record came from; AccumulateSetRoot and Incarnation are what a V8.2 anchor
+	// committed (zero on a V8.1 anchor).
+	Version           contracts.BatchAnchorVersion
+	AccumulateSetRoot [32]byte
+	Incarnation       [32]byte
 }
 
 // BackfillChain is the chain access the reconstruction needs. Satisfied by the live EVM stack; an

@@ -12,48 +12,26 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
+
+	"github.com/certen/independant-validator/pkg/execution/contracts"
 )
 
-// batchOperationIDViaV7 decodes operationID positionally out of the `anchors` struct getter,
-// because getOperationID(bytes32) — which the code called for months — exists only on V6.1 and
-// was never carried into V7/V8/V8_1. There the selector matched nothing, the call reverted with
-// empty data, and it did so AFTER the flush had already mined a batch anchor: every cadence
-// flush paid for an anchor and then died on the next read.
+// ReadAnchorState decodes the `anchors` struct getter positionally, by generation (fifteen fields on V8.1, seventeen
+// on V8.2). If a future anchor reordered the Anchor struct, a position would silently become some other 32 bytes, so
+// this asserts the layout against a DEPLOYED contract rather than a fixture.
 //
-// Positional decoding trades one fragility for another: if a future anchor reorders the Anchor
-// struct, index 7 silently becomes some other 32 bytes. So this asserts the layout against a
-// DEPLOYED contract rather than a fixture.
-//
-// Live test. Set both to run it:
+// Live test. Set all three to run it:
 //
 //	CERTEN_TEST_RPC_11155111  — a Sepolia RPC URL
-//	CERTEN_TEST_ANCHOR_V8_1   — the deployed CertenAnchorV8_1 address
-//	CERTEN_TEST_BATCH_BUNDLE  — a known batch anchor bundleId to decode
+//	CERTEN_TEST_ANCHOR        — a deployed CertenAnchorV8_1 or CertenAnchorV8_2 address
+//	CERTEN_TEST_BATCH_BUNDLE  — a known batch anchor bundleId on it
 func TestAnchorsTupleLayoutMatchesDeployedContract(t *testing.T) {
-	rpc := os.Getenv("CERTEN_TEST_RPC_11155111")
-	anchor := os.Getenv("CERTEN_TEST_ANCHOR_V8_1")
-	if rpc == "" || anchor == "" {
-		t.Fatal("the live build requires CERTEN_TEST_RPC_11155111 and CERTEN_TEST_ANCHOR_V8_1")
-	}
-
-	client, err := ethclient.Dial(rpc)
-	if err != nil {
-		t.Fatalf("dial: %v", err)
-	}
-	defer client.Close()
-
-	parsed, err := abiFromJSON(anchorsABIJSON)
-	if err != nil {
-		t.Fatalf("parse abi: %v", err)
-	}
-	bound := bind.NewBoundContract(common.HexToAddress(anchor), parsed, client, client, client)
-
+	rpc, anchor := os.Getenv("CERTEN_TEST_RPC_11155111"), os.Getenv("CERTEN_TEST_ANCHOR")
 	bundleHex := os.Getenv("CERTEN_TEST_BATCH_BUNDLE")
-	if bundleHex == "" {
-		t.Fatal("the live build requires CERTEN_TEST_BATCH_BUNDLE: the field positions are what this checks")
+	if rpc == "" || !common.IsHexAddress(anchor) || bundleHex == "" {
+		t.Fatal("the live build requires CERTEN_TEST_RPC_11155111, CERTEN_TEST_ANCHOR and CERTEN_TEST_BATCH_BUNDLE")
 	}
 	raw, err := hex.DecodeString(strings.TrimPrefix(bundleHex, "0x"))
 	if err != nil || len(raw) != 32 {
@@ -62,38 +40,24 @@ func TestAnchorsTupleLayoutMatchesDeployedContract(t *testing.T) {
 	var bundleID [32]byte
 	copy(bundleID[:], raw)
 
-	var out []interface{}
-	if err := bound.Call(&bind.CallOpts{Context: context.Background()}, &out, "anchors", bundleID); err != nil {
-		t.Fatalf("anchors() call reverted — the struct getter is not present as declared: %v", err)
+	client, err := ethclient.Dial(rpc)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
 	}
-
-	// The contract must expose every field this ABI names, or positional indexing is unsound.
-	if len(out) != 15 {
-		t.Fatalf("anchors() returned %d fields, expected 15 — the Anchor struct changed", len(out))
+	defer client.Close()
+	st, err := ReadAnchorState(context.Background(), client, common.HexToAddress(anchor), bundleID, nil)
+	if err != nil {
+		t.Fatalf("anchors(): %v", err)
 	}
-
-	// Field 0 is bundleId and MUST echo the key. This is the anchor for the whole layout: if
-	// the struct were reordered, this is the cheapest position to catch it.
-	got0, ok := out[0].([32]byte)
-	if !ok || got0 != bundleID {
-		t.Fatalf("field 0 is not the bundleId (got %T %x) — struct layout has shifted", out[0], out[0])
+	// Field 0 echoes the key: the cheapest position to catch a reordered struct.
+	if st.BundleID != bundleID {
+		t.Fatalf("field 0 is %x, not the bundleId — the struct layout has shifted", st.BundleID)
 	}
-
-	// Field 7 is what the production path reads.
-	opID, ok := out[7].([32]byte)
-	if !ok {
-		t.Fatalf("field 7 is %T, expected [32]byte for operationID", out[7])
+	if st.OperationID == ([32]byte{}) || st.MerkleRoot == ([32]byte{}) || !st.Valid {
+		t.Fatalf("a real batch anchor decoded with operationID %x root %x valid %v — a position moved", st.OperationID, st.MerkleRoot, st.Valid)
 	}
-	if opID == ([32]byte{}) {
-		t.Fatal("field 7 decoded as zero for a real batch anchor — either the anchor is not a " +
-			"batch anchor or operationID is no longer at index 7")
+	if st.Version == contracts.BatchAnchorV8_2 && (st.AccumulateSetRoot == ([32]byte{}) || st.Incarnation == ([32]byte{})) {
+		t.Fatal("a V8.2 anchor decoded without its Accumulate set root or incarnation, which createBatchAnchor requires")
 	}
-
-	// Field 11 (valid) must be a bool. A type mismatch here means the bytes32 run ended
-	// somewhere other than where this ABI claims, which would also move index 7.
-	if _, ok := out[11].(bool); !ok {
-		t.Fatalf("field 11 is %T, expected bool (valid) — the bytes32 prefix length changed", out[11])
-	}
-
-	t.Logf("layout confirmed against %s: operationID=0x%x", anchor, opID)
+	t.Logf("%s layout confirmed against %s: operationID=0x%x", st.Version, anchor, st.OperationID)
 }
