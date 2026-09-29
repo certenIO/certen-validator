@@ -66,6 +66,11 @@ const (
 	// governance levels are refused rather than stored without it (RB4-F69).
 	EvidenceErrorCommitmentKey = "att.EvidenceError"
 
+	// GovDecisionCommitmentKey carries the governance decision record as hex, and GovAuthorizationCommitmentKey
+	// the G1 vote record it was derived from as JSON (RB4-F66).
+	GovDecisionCommitmentKey      = "att.GovDecision"
+	GovAuthorizationCommitmentKey = "att.GovAuthorization"
+
 	// GovTimingBasisCommitmentKey carries []proof.SignatureTimingBasis as JSON —
 	// which counted signatures' ordering rests on execution inclusion rather
 	// than on a local block comparison. Beside the results for the same reason
@@ -125,6 +130,12 @@ type PendingAttestation struct {
 	// basis. Snapshotted with everything else here: replayed minutes later on
 	// the cadence path it must be what the proof was BUILT on.
 	GovTimingBasis []proof.SignatureTimingBasis
+
+	// GovDecision and GovAuthorization are who decided the transaction and the G1 vote record it was derived from
+	// (RB4-F66), snapshotted with the rest: the proof cycle stores them with the G1 level, and the batch member
+	// commits to the decision.
+	GovDecision      []byte
+	GovAuthorization *proof.AuthorizationRecord
 
 	// Signatures and level captured during the round.
 	BLSSignature        string
@@ -320,23 +331,6 @@ func (bv *BFTValidator) RunProofCycle(
 	}
 	var commitment interface{} = commitMap
 
-	// putJSON stores v under key. Evidence that does not marshal is not left out - that reads downstream as "the
-	// generator recorded none" - it is recorded as an evidence error, which the proof's governance levels refuse
-	// (GovernanceInputsFromCommitment, RB4-F69).
-	putJSON := func(key string, v interface{}) {
-		b, err := json.Marshal(v)
-		if err != nil {
-			prev, _ := commitMap[EvidenceErrorCommitmentKey].(string)
-			if prev != "" {
-				prev += "; "
-			}
-			commitMap[EvidenceErrorCommitmentKey] = prev + fmt.Sprintf("%s: %v", key, err)
-			bv.logger.Printf("❌ [PROOF-CYCLE] intent %s: %s does not marshal: %v", att.IntentID, key, err)
-			return
-		}
-		commitMap[key] = string(b)
-	}
-
 	// Add governance data from ValidatorBlock for G1/G2 proof levels
 	{
 		if att.GovernanceProofRoot != "" {
@@ -364,38 +358,10 @@ func (bv *BFTValidator) RunProofCycle(
 		// reads them from the user-signed intent itself (execution.signedMemberLegs, RB3-F77). The
 		// descriptors that used to be written here were read by nothing once that landed (RB3-F69).
 
-		// Wire L1-L3 chained proof data so persistProofArtifact can store it
-		if att.CertenProof != nil && att.CertenProof.LiteClientProof != nil {
-			putJSON("liteClientProof", att.CertenProof.LiteClientProof)
-		}
-
-		// Wire governance proof results (G0/G1/G2)
-		if att.G0Proof != nil {
-			putJSON(G0ProofCommitmentKey, att.G0Proof)
-		}
-		if att.G1Proof != nil {
-			putJSON(G1ProofCommitmentKey, att.G1Proof)
-		}
-		if att.G2Proof != nil {
-			putJSON(G2ProofCommitmentKey, att.G2Proof)
-		}
-
-		// STAGE 2 — the evidence for the three results above.
-		//
-		// Under its own key rather than inside att.G0Proof/G1Proof/G2Proof: those
-		// marshal G*Result, which is inside the govRoot, and this must never be
-		// able to reach that shape. The G-level writers read this key and store the
-		// path in level_json beside the result.
-		if len(att.GovReceipts) > 0 {
-			putJSON(GovReceiptsCommitmentKey, att.GovReceipts)
-		}
-
-		// PHASE 8 ITEM 2 — under its own key, and never inside att.G1Proof/G2Proof
-		// for the same reason: those marshal G*Result, which is inside the
-		// govRoot, and this must never be able to reach that shape.
-		if len(att.GovTimingBasis) > 0 {
-			putJSON(GovTimingBasisCommitmentKey, att.GovTimingBasis)
-		}
+		// The proof's evidence: L1-L4, G0-G2, their receipts, timing basis and governance decision.
+		putProofEvidence(commitMap, att, func(key string, err error) {
+			bv.logger.Printf("❌ [PROOF-CYCLE] intent %s: %s does not marshal: %v", att.IntentID, key, err)
+		})
 
 		// Wire BLS/validator signatures
 		commitMap["att.BLSSignature"] = att.BLSSignature
@@ -532,6 +498,8 @@ func (bv *BFTValidator) captureAttestation(
 	if certenProof != nil {
 		att.GovReceipts = certenProof.GovReceipts
 		att.GovTimingBasis = certenProof.GovTimingBasis
+		att.GovDecision = certenProof.GovDecision
+		att.GovAuthorization = certenProof.GovAuthorization
 	}
 
 	bundleIDHex := strings.TrimPrefix(att.BundleIDHex, "0x")
@@ -709,4 +677,66 @@ func settledChainOf(res *verification.AnchorExecutionResult) (int64, error) {
 		return 0, fmt.Errorf("settlement chain %d is not a chain CERTEN executes on", id)
 	}
 	return id, nil
+}
+
+// putProofEvidence stores the proof's evidence in the proof cycle's commitment map: the L1-L4 chained proof, the
+// G0-G2 results, their receipts and timing basis, and who decided the transaction.
+//
+// Evidence that does not marshal is not left out - that reads downstream as "the generator recorded none" - it is
+// recorded under EvidenceErrorCommitmentKey, which the proof's governance levels refuse (RB4-F69).
+func putProofEvidence(commitMap map[string]interface{}, att *PendingAttestation, logf func(key string, err error)) {
+	putJSON := func(key string, v interface{}) {
+		b, err := json.Marshal(v)
+		if err != nil {
+			prev, _ := commitMap[EvidenceErrorCommitmentKey].(string)
+			if prev != "" {
+				prev += "; "
+			}
+			commitMap[EvidenceErrorCommitmentKey] = prev + fmt.Sprintf("%s: %v", key, err)
+			logf(key, err)
+			return
+		}
+		commitMap[key] = string(b)
+	}
+
+	// Wire L1-L3 chained proof data so persistProofArtifact can store it
+	if att.CertenProof != nil && att.CertenProof.LiteClientProof != nil {
+		putJSON("liteClientProof", att.CertenProof.LiteClientProof)
+	}
+
+	// Wire governance proof results (G0/G1/G2)
+	if att.G0Proof != nil {
+		putJSON(G0ProofCommitmentKey, att.G0Proof)
+	}
+	if att.G1Proof != nil {
+		putJSON(G1ProofCommitmentKey, att.G1Proof)
+	}
+	if att.G2Proof != nil {
+		putJSON(G2ProofCommitmentKey, att.G2Proof)
+	}
+
+	// STAGE 2 — the evidence for the three results above.
+	//
+	// Under its own key rather than inside att.G0Proof/G1Proof/G2Proof: those
+	// marshal G*Result, which is inside the govRoot, and this must never be
+	// able to reach that shape. The G-level writers read this key and store the
+	// path in level_json beside the result.
+	if len(att.GovReceipts) > 0 {
+		putJSON(GovReceiptsCommitmentKey, att.GovReceipts)
+	}
+
+	// PHASE 8 ITEM 2 — under its own key, and never inside att.G1Proof/G2Proof
+	// for the same reason: those marshal G*Result, which is inside the
+	// govRoot, and this must never be able to reach that shape.
+	if len(att.GovTimingBasis) > 0 {
+		putJSON(GovTimingBasisCommitmentKey, att.GovTimingBasis)
+	}
+
+	// RB4-F66: who decided the transaction, under their own keys for the same reason as the receipts.
+	if len(att.GovDecision) > 0 {
+		commitMap[GovDecisionCommitmentKey] = hex.EncodeToString(att.GovDecision)
+	}
+	if att.GovAuthorization != nil {
+		putJSON(GovAuthorizationCommitmentKey, att.GovAuthorization)
+	}
 }

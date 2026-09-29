@@ -105,6 +105,12 @@ type CertenProof struct {
 	// never to CertenProof, so a field here moves no hash.
 	GovTimingBasis []SignatureTimingBasis `json:"gov_timing_basis,omitempty"`
 
+	// GovDecision is the governance decision record - who decided the transaction (governance_decision.go) - and
+	// GovAuthorization the G1 vote record it was derived from. Non-hashed siblings of the results, for the same
+	// reason as GovReceipts; the decision's COMMITMENT is what the batch operation id commits to (RB4-F66).
+	GovDecision      []byte               `json:"gov_decision,omitempty"`
+	GovAuthorization *AuthorizationRecord `json:"gov_authorization,omitempty"`
+
 	// Verification status
 	VerificationStatus *VerificationStatusData `json:"verification_status"`
 

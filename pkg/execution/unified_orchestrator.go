@@ -2798,6 +2798,14 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 			"threshold_m":       thresholdM,
 			"threshold_n":       thresholdN,
 		}
+		// Who decided the transaction, re-derived before it is stored (RB4-F66).
+		decision, err := govIn.DecisionEvidence()
+		if err != nil {
+			return fmt.Errorf("governance decision of proof %s: %w", proofArtifact.ProofID, err)
+		}
+		for k, v := range decision {
+			g1Flags[k] = v
+		}
 		g1Result, g1Ev := govIn.ResultFor("G1"), govIn.ReceiptFor("G1")
 		g1TB := govIn.TimingBasisFor("G1")
 		g1JSON, err := BuildGovernanceLevelJSON("G1", g1Result, g1Ev, g1TB, g1Flags)
