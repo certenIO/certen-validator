@@ -34,7 +34,8 @@ import (
 var ErrNoGovernanceDecision = errors.New("the proof stores no governance decision (it predates RB4-F66)")
 
 // ErrGovernanceNotAnchored: the decision is recorded and re-derives, and the batch the proof settled in does not
-// commit to it - a batch formed before governance commitments (v1), or a layer 5 without its governance.
+// commit to it - a batch formed before governance commitments (v1), or a layer 5 without its governance. A v2 or v3
+// batch commits to it.
 var ErrGovernanceNotAnchored = errors.New("the governance decision is recorded and not anchored")
 
 // GovernanceDecisionCheck is what CheckGovernanceDecision established.
@@ -140,7 +141,10 @@ func CheckGovernanceDecision(levels []certenproof.StoredGovernanceLevel, l5 *Lay
 	if err := g.Verify(); err != nil {
 		return out, err
 	}
-	if g.Version != BatchOperationIDV2 {
+	// v2 and v3 both commit every member's governance commitment in the batch operation id (v3 beside the member's
+	// certified intent message, which commits it too); Verify above recomputed the id from them. Only a v1 batch
+	// commits to no governance. RB5-F43: a v3 proof's decision was reported "not anchored" - the check knew only v2.
+	if g.Version != BatchOperationIDV2 && g.Version != BatchOperationIDV3 {
 		return out, fmt.Errorf("%w: the proof settled in a %s batch, whose operation id commits to no governance",
 			ErrGovernanceNotAnchored, g.Version)
 	}

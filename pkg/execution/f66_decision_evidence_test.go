@@ -184,6 +184,45 @@ func f66AnchoredLayer5(t *testing.T, member [32]byte, version string) *Layer5 {
 	return &Layer5{Governance: g}
 }
 
+// RB5-F43: a v3 batch operation id commits each member's (operation, governance commitment, certified intent message),
+// so a v3 proof's decision is anchored as a v2 one's is. It was reported "SUMMARY-ONLY: commits to no governance" for
+// intent af16e11d's proof 03e35d1c (2026-10-02) while its certificate check showed the anchored v3 id committing it.
+func TestF66_AV3BatchAnchorsTheDecision(t *testing.T) {
+	g1, c := f66StoredG1(t)
+	inputs := []BatchLeafInput{
+		{ADIURL: "a", OperationID: [32]byte{7}, GovernanceCommitment: [32]byte{0x0c}, IntentMessage: [32]byte{0x1c}},
+		{ADIURL: "b", OperationID: [32]byte{8}, GovernanceCommitment: c, IntentMessage: [32]byte{0x3c}},
+	}
+	layer5 := func(member [32]byte) *Layer5 {
+		in := append([]BatchLeafInput(nil), inputs...)
+		in[1].GovernanceCommitment = member
+		id, err := DeriveBatchOperationIDV3(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		g := &BatchGovernance{Version: BatchOperationIDV3, BatchOperationID: hexPrefixed(id[:]),
+			OperationID: hexPrefixed(in[1].OperationID[:]), GovernanceCommitment: hexPrefixed(member[:]),
+			CertifiedIntentMessage: hexPrefixed(in[1].IntentMessage[:])}
+		for _, m := range in {
+			g.Members = append(g.Members, database.BatchMemberGovernance{OperationID: hexPrefixed(m.OperationID[:]),
+				GovernanceCommitment: hexPrefixed(m.GovernanceCommitment[:]), CertifiedIntentMessage: hexPrefixed(m.IntentMessage[:])})
+		}
+		return &Layer5{Governance: g}
+	}
+	got, err := CheckGovernanceDecision([]certenproof.StoredGovernanceLevel{g1}, layer5(c))
+	if err != nil {
+		t.Fatalf("a v3 batch committing to the decision: %v", err)
+	}
+	if got.BatchVersion != BatchOperationIDV3 || got.Commitment != hexPrefixed(c[:]) {
+		t.Fatalf("%+v", got)
+	}
+	// The v3 batch lists another commitment for this member: a contradiction, not "not anchored".
+	if _, err := CheckGovernanceDecision([]certenproof.StoredGovernanceLevel{g1}, layer5([32]byte{0xdd})); err == nil ||
+		errors.Is(err, ErrGovernanceNotAnchored) {
+		t.Fatalf("a v3 batch committing to another decision: %v", err)
+	}
+}
+
 func TestF66_AStoredDecisionIsCheckedAgainstItsAnchoredBatch(t *testing.T) {
 	g1, c := f66StoredG1(t)
 	got, err := CheckGovernanceDecision([]certenproof.StoredGovernanceLevel{g1}, f66AnchoredLayer5(t, c, BatchOperationIDV2))
