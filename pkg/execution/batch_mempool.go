@@ -259,8 +259,12 @@ func (p *PendingBatchIntent) ExecutionCommitment() ([32]byte, error) {
 // IsMultiLeg reports whether this member needs batchExecuteGovernanceProofDirect.
 func (p *PendingBatchIntent) IsMultiLeg() bool { return len(p.Legs) > 1 }
 
-// LeafInput converts the member into its tree contribution.
+// LeafInput converts the member into its tree contribution. A member whose intent awaits its quorum certificate has
+// none yet (ErrIntentNotYetCertified): its tree commits the certified message, which is unknown until then (RB5-F31).
 func (p *PendingBatchIntent) LeafInput() (BatchLeafInput, error) {
+	if p.IntentMessage != ([32]byte{}) && p.CertifiedMessage == ([32]byte{}) {
+		return BatchLeafInput{}, fmt.Errorf("%w: intent %s", ErrIntentNotYetCertified, p.IntentID)
+	}
 	exec, err := p.ExecutionCommitment()
 	if err != nil {
 		return BatchLeafInput{}, err

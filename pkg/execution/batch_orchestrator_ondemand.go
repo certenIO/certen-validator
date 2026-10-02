@@ -190,6 +190,19 @@ func (o *BatchOrchestrator) SettleOnDemandMember(
 	chainID := member.ChainID
 	out := &OnDemandOutcome{}
 
+	// Its v3 operation id commits a certified intent message only once CERTEN's quorum certified it (RB5 D3): until
+	// then it waits, as a member with no height yet does. Read FIRST: the screen and the leaf both use what the
+	// certificate fixes (RB5-F31).
+	if err := o.mempool.RequireCertified(member); err != nil {
+		if o.memberPastDeadline(member) {
+			// Never certified in time: refused by name (the submitter records it FAILED with this cause).
+			return nil, fmt.Errorf("CERTEN's quorum did not certify its intent (message 0x%x) before its settlement "+
+				"deadline on chain %d", member.IntentMessage[:8], chainID)
+		}
+		o.logf("[BATCH] on-demand member %s waits: %v", member.IntentID, err)
+		return &OnDemandOutcome{Deferred: true}, nil
+	}
+
 	// ---- Screen the account BEFORE forming anything -------------------------
 	// Same predicate the period path uses, and deterministic across validators because it reads
 	// on-chain state every node sees identically.
@@ -209,17 +222,6 @@ func (o *BatchOrchestrator) SettleOnDemandMember(
 	in, err := member.LeafInput()
 	if err != nil {
 		return nil, fmt.Errorf("building leaf for %s: %w", member.IntentID, err)
-	}
-	// Its v3 operation id commits a certified intent message only once CERTEN's quorum certified it (RB5 D3): until
-	// then it waits, as a member with no height yet does.
-	if err := o.mempool.RequireCertified(member); err != nil {
-		if o.memberPastDeadline(member) {
-			// Never certified in time: refused by name (the submitter records it FAILED with this cause).
-			return nil, fmt.Errorf("CERTEN's quorum did not certify its intent (message 0x%x) before its settlement "+
-				"deadline on chain %d", member.IntentMessage[:8], chainID)
-		}
-		o.logf("[BATCH] on-demand member %s waits: %v", member.IntentID, err)
-		return &OnDemandOutcome{Deferred: true}, nil
 	}
 	tree, err := BuildBatchTree(chainID, []BatchLeafInput{in}, member.CommitHeight, o.incarnation)
 	if err != nil {

@@ -169,11 +169,11 @@ func (o *BatchOrchestrator) OnDemandMemberNeedsThisValidator(ctx context.Context
 	if !SendersVerified() {
 		return false, errSendersUnverified // not "not needed": unknown until this validator's address is proven
 	}
-	in, err := member.LeafInput()
-	if err != nil {
+	if err := o.mempool.RequireCertified(member); err != nil {
 		return false, err
 	}
-	if err := o.mempool.RequireCertified(member); err != nil {
+	in, err := member.LeafInput()
+	if err != nil {
 		return false, err
 	}
 	tree, err := BuildBatchTree(member.ChainID, []BatchLeafInput{in}, member.CommitHeight, o.incarnation)
