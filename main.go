@@ -2169,14 +2169,17 @@ func startValidator(
 }
 
 // initializeStrategyRegistry builds the proof cycle's strategy registry: BLS12-381 attestation and one
-// observer per chain CERTEN settles on, each at the RPC and anchor the batch path uses (RB3-F44).
+// observer per chain CERTEN settles on now - the resolver's chains, CERTEN_SETTLEMENT_CHAINS - each at the RPC and
+// anchor the batch path uses (RB3-F44, RB5-F33).
 func initializeStrategyRegistry(
 	cfg *config.Config,
 	blsKeyManager *bls.KeyManager,
 	resolver *execution.EVMChainResolverImpl,
 ) (*strategy.Registry, error) {
-	chains := make([]strategy.ChainEndpoint, 0, len(strategy.SupportedChainIDs))
-	for _, id := range strategy.SupportedChainIDs {
+	settled := resolver.Chains()
+	sort.Slice(settled, func(i, j int) bool { return settled[i] < settled[j] })
+	chains := make([]strategy.ChainEndpoint, 0, len(settled))
+	for _, id := range settled {
 		rpc, anchor, err := resolver.Endpoint(id)
 		if err != nil {
 			return nil, err
@@ -2184,11 +2187,12 @@ func initializeStrategyRegistry(
 		chains = append(chains, strategy.ChainEndpoint{ChainID: id, RPC: rpc, Anchor: anchor})
 	}
 	return strategy.InitializeRegistry(&strategy.RegistryConfig{
-		ValidatorID:   cfg.ValidatorID,
-		BLSPrivateKey: blsKeyManager.GetPrivateKeyBytes(),
-		EthPrivateKey: cfg.EthPrivateKey,
-		Chains:        chains,
-		Logger:        log.New(log.Writer(), "[StrategyRegistry] ", log.LstdFlags),
+		ValidatorID:      cfg.ValidatorID,
+		BLSPrivateKey:    blsKeyManager.GetPrivateKeyBytes(),
+		EthPrivateKey:    cfg.EthPrivateKey,
+		SettlementChains: settled,
+		Chains:           chains,
+		Logger:           log.New(log.Writer(), "[StrategyRegistry] ", log.LstdFlags),
 	})
 }
 

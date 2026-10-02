@@ -57,7 +57,7 @@ func supportedEndpoints() []ChainEndpoint {
 }
 
 func TestRegistryIsExactlyTheSupportedChains(t *testing.T) {
-	r, err := InitializeRegistry(&RegistryConfig{ValidatorID: "validator-1", BLSPrivateKey: blsKey(t), Chains: supportedEndpoints()})
+	r, err := InitializeRegistry(&RegistryConfig{ValidatorID: "validator-1", BLSPrivateKey: blsKey(t), SettlementChains: SupportedChainIDs, Chains: supportedEndpoints()})
 	if err != nil {
 		t.Fatalf("InitializeRegistry: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestRegistryIsExactlyTheSupportedChains(t *testing.T) {
 }
 
 func TestRegistryLookupsTakeTheChainIDInEitherRecordedForm(t *testing.T) {
-	r, err := InitializeRegistry(&RegistryConfig{ValidatorID: "validator-1", BLSPrivateKey: blsKey(t), Chains: supportedEndpoints()})
+	r, err := InitializeRegistry(&RegistryConfig{ValidatorID: "validator-1", BLSPrivateKey: blsKey(t), SettlementChains: SupportedChainIDs, Chains: supportedEndpoints()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,20 +125,42 @@ func TestRegistryRefusesAnIncompleteConfiguration(t *testing.T) {
 	wrongChain[1].RPC = rpcFor(11155111) // Base configured with an RPC that serves Sepolia
 	twice := append(supportedEndpoints(), supportedEndpoints()[0])
 
+	all := SupportedChainIDs
 	for name, cfg := range map[string]*RegistryConfig{
-		"no BLS key":                   {Chains: supportedEndpoints()},
-		"unreadable BLS key":           {BLSPrivateKey: []byte{1, 2, 3}, Chains: supportedEndpoints()},
-		"a supported chain absent":     {BLSPrivateKey: blsKey(t), Chains: without(84532)},
-		"a chain with no RPC":          {BLSPrivateKey: blsKey(t), Chains: noRPC},
-		"a chain with no anchor":       {BLSPrivateKey: blsKey(t), Chains: noAnchor},
-		"an unsupported chain":         {BLSPrivateKey: blsKey(t), Chains: extra},
-		"a chain twice":                {BLSPrivateKey: blsKey(t), Chains: twice},
-		"an RPC serving another chain": {BLSPrivateKey: blsKey(t), Chains: wrongChain},
+		"no BLS key":                           {SettlementChains: all, Chains: supportedEndpoints()},
+		"unreadable BLS key":                   {BLSPrivateKey: []byte{1, 2, 3}, SettlementChains: all, Chains: supportedEndpoints()},
+		"a settlement chain absent":            {BLSPrivateKey: blsKey(t), SettlementChains: all, Chains: without(84532)},
+		"a chain with no RPC":                  {BLSPrivateKey: blsKey(t), SettlementChains: all, Chains: noRPC},
+		"a chain with no anchor":               {BLSPrivateKey: blsKey(t), SettlementChains: all, Chains: noAnchor},
+		"an unsupported chain":                 {BLSPrivateKey: blsKey(t), SettlementChains: all, Chains: extra},
+		"a chain twice":                        {BLSPrivateKey: blsKey(t), SettlementChains: all, Chains: twice},
+		"an RPC serving another chain":         {BLSPrivateKey: blsKey(t), SettlementChains: all, Chains: wrongChain},
+		"no settlement chains":                 {BLSPrivateKey: blsKey(t), Chains: supportedEndpoints()},
+		"an unsupported settlement chain":      {BLSPrivateKey: blsKey(t), SettlementChains: []int64{84532, 97}, Chains: without(11155111)},
+		"a chain beside the settlement chains": {BLSPrivateKey: blsKey(t), SettlementChains: []int64{84532}, Chains: supportedEndpoints()},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := InitializeRegistry(cfg); err == nil {
 				t.Fatal("must be a startup error")
 			}
 		})
+	}
+}
+
+// RB5-F33: a rollout settles on the chains it names; the proof cycle observes exactly those - Base alone here - and a
+// supported chain not named is neither observed nor required.
+func TestTheRegistryObservesExactlyTheSettlementChains(t *testing.T) {
+	var base []ChainEndpoint
+	for _, c := range supportedEndpoints() {
+		if c.ChainID == 84532 {
+			base = append(base, c)
+		}
+	}
+	r, err := InitializeRegistry(&RegistryConfig{ValidatorID: "validator-1", BLSPrivateKey: blsKey(t), SettlementChains: []int64{84532}, Chains: base})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids := r.ListChainIDs(); len(ids) != 1 || ids[0] != "84532" {
+		t.Fatalf("observed chains %v, want only 84532", ids)
 	}
 }
