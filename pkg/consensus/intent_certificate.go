@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govvote"
 	chained_proof "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/working-proof_do_not_edit"
 	"github.com/certen/independant-validator/pkg/accumulateset"
 	"github.com/certen/independant-validator/pkg/crypto/bls"
@@ -251,6 +252,15 @@ func verifyIntentProof(vb *ValidatorBlock, rec *govproof.AuthorizationRecord) er
 		return fail("the block's lite_client_proof is not the projection of its verified chained proof")
 	}
 	gp := &vb.GovernanceProof
+	// The key page and book govRoot v2 commits are the ones the proof is about: the page G1 validated the
+	// signatures against, and that page's own book.
+	page, book := govvote.CanonicalAccSpelling(ev.KeyPageURL), govvote.CanonicalAccSpelling(ev.KeyBookURL)
+	if page == "" || page != govvote.CanonicalAccSpelling(gp.G1Proof.AuthoritySnapshot.Page) {
+		return fail("the key page %q is not the page G1 validated against (%q)", ev.KeyPageURL, gp.G1Proof.AuthoritySnapshot.Page)
+	}
+	if n := strings.TrimPrefix(page, book+"/"); book == "" || n == page || n == "" || strings.Trim(n, "0123456789") != "" {
+		return fail("the key page %q is not a page of the key book %q", ev.KeyPageURL, ev.KeyBookURL)
+	}
 	if err := govproof.BindG0ToChainedProof(gp.G0Proof, vb.LiteClientProof); err != nil {
 		return fail("%v", err)
 	}

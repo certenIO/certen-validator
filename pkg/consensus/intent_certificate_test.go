@@ -162,7 +162,11 @@ func TestAnIntentCertificateRefusesWhatItDoesNotProve(t *testing.T) {
 		"another key page": {func(vb *ValidatorBlock, r *ledger.BLSRegistryRecord) (*ValidatorBlock, *ledger.BLSRegistryRecord, string) {
 			vb.IntentCertificate.KeyPageURL = "acc://rb4-phase-c-09282125.acme/book/2"
 			return vb, r, intentChain
-		}, ErrIntentGovRootMismatch},
+		}, ErrIntentProofInvalid},
+		"a key book that is not the page's": {func(vb *ValidatorBlock, r *ledger.BLSRegistryRecord) (*ValidatorBlock, *ledger.BLSRegistryRecord, string) {
+			vb.IntentCertificate.KeyBookURL = "acc://rb4-phase-c-09282125.acme/other-book"
+			return vb, r, intentChain
+		}, ErrIntentProofInvalid},
 		"a changed G1 that G2 does not carry": {func(vb *ValidatorBlock, r *ledger.BLSRegistryRecord) (*ValidatorBlock, *ledger.BLSRegistryRecord, string) {
 			vb.GovernanceProof.G1Proof.RequiredThreshold++
 			return vb, r, intentChain
@@ -339,5 +343,15 @@ func TestTheSoloSignatureIsReplacedNotDropped(t *testing.T) {
 	certified.IntentCertificate = nil
 	if err := inv(certified); err == nil || !strings.Contains(err.Error(), "bls_aggregate_signature must not be empty") {
 		t.Fatalf("an uncertified block without the solo signature: %v", err)
+	}
+}
+
+// Accumulate URLs are case-insensitive: one page named two ways is one page, one govRoot and one message.
+func TestOnePageNamedTwoWaysIsOneMessage(t *testing.T) {
+	_, reg, vb := builtIntentBlock(t)
+	vb.IntentCertificate.KeyPageURL = "acc://RB4-Phase-C-09282125.acme/book/1/"
+	vb.IntentCertificate.KeyBookURL = "ACC://rb4-phase-c-09282125.ACME/book"
+	if _, err := VerifyIntentCertificate(vb, intentChain, reg); err != nil {
+		t.Fatalf("the same page spelled differently: %v", err)
 	}
 }
