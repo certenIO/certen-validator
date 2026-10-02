@@ -1386,6 +1386,7 @@ func (id *IntentDiscovery) buildChainedCertenProof(ctx context.Context, accountU
 			if certenProof == nil {
 				return nil, fmt.Errorf("chained proof adapter returned nil CertenProof for %s", intentID)
 			}
+			certenProof.LiteClientProof.ChainedProof = chainedProof
 			return certenProof, nil
 		}
 

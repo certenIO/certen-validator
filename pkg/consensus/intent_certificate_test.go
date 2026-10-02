@@ -1,6 +1,10 @@
 package consensus
 
 import (
+	chained_proof "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/working-proof_do_not_edit"
+	"github.com/certen/independant-validator/pkg/crypto/bls"
+	abcitypes "github.com/cometbft/cometbft/abci/types"
+
 	"encoding/json"
 	"errors"
 	"os"
@@ -13,40 +17,71 @@ import (
 
 const intentChain = "certen-testnet"
 
-// intentRecord is a vote record for the fixture transaction's principal: harbor-mfg-tcl1.acme's book accepted
-// through page 1, in the block G0 proved the transaction executed in.
-func intentRecord() *govproof.AuthorizationRecord {
-	page := govproof.AuthorizationPage{Page: "acc://harbor-mfg-tcl1.acme/book/1", Voted: true, Vote: "accept", Version: 1,
-		Threshold: 1, DecidedAt: 11925688, Counted: []govproof.AuthorizationEntry{{Entry: "key:" + strings.Repeat("ab", 32),
-			Vote: "accept", By: "acc://" + strings.Repeat("cd", 32) + "@harbor-mfg-tcl1.acme", Block: 11925688}}}
-	return &govproof.AuthorizationRecord{Account: "acc://harbor-mfg-tcl1.acme", Satisfied: true,
-		Authorities: []govproof.AuthorizationAuthority{{Authority: "acc://harbor-mfg-tcl1.acme/book",
-			Vote: govproof.AuthorizationBook{Book: "acc://harbor-mfg-tcl1.acme/book", Voted: true, Vote: "accept",
-				By: page.Page, Pages: []govproof.AuthorizationPage{page}}}}}
+// The production proof e1e34338-901f-4644-a23d-246f02bb6ec8 (RB4 acceptance e2e, base-sepolia, 2026-09-29), as
+// cmd/prooffixture wrote it from storage through a read-only session: its L1-L4 chained proof (verified on extraction),
+// its stored G0-G2, and the G1 level's vote record and evidence (evaluated again on extraction).
+type intentFixture struct {
+	ProofID       string                      `json:"proof_id"`
+	ChainedProof  *chained_proof.ChainedProof `json:"chained_proof"`
+	G0            json.RawMessage             `json:"g0"`
+	G1            json.RawMessage             `json:"g1"`
+	G2            json.RawMessage             `json:"g2"`
+	Authorization json.RawMessage             `json:"authorization"`
+	VoteEvidence  json.RawMessage             `json:"vote_evidence"`
 }
 
-// intentBlock is a ValidatorBlock carrying a production proof: the Kermit L1-L4 fixture (with its Directory leg)
-// and validator-1's production G0-G2 for operation 0x34b9c023.
+func loadIntentFixture(t *testing.T) *intentFixture {
+	t.Helper()
+	b, err := os.ReadFile("testdata/intent_cert/proof_e1e34338.json")
+	if err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	f := new(intentFixture)
+	if err := json.Unmarshal(b, f); err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+func (f *intentFixture) record(t *testing.T) *govproof.AuthorizationRecord {
+	t.Helper()
+	rec := new(govproof.AuthorizationRecord)
+	if err := json.Unmarshal(f.Authorization, rec); err != nil {
+		t.Fatal(err)
+	}
+	return rec
+}
+
+const (
+	intentKeyPage = "acc://rb4-phase-c-09282125.acme/book/1"
+	intentKeyBook = "acc://rb4-phase-c-09282125.acme/book"
+)
+
+// intentBlock is a ValidatorBlock carrying the production proof: its lite_client_proof is the projection of the
+// fixture's chained proof, and its G0-G2 are the stored results.
 func intentBlock(t *testing.T, validatorID string) *ValidatorBlock {
 	t.Helper()
+	f := loadIntentFixture(t)
 	vb := &ValidatorBlock{ValidatorID: validatorID}
 	vb.CrossChainProof.OperationID = "0x" + strings.Repeat("07", 32)
-	vb.LiteClientProof = govproof.ChainedProofToCompleteProof(loadLiteFixture(t, "proof_bvn1.json"))
-	read := func(level string, v interface{}) {
-		b, err := os.ReadFile("../proof/testdata/govroot_v2/0x34b9c023_validator-1_2152_" + level + ".json")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := json.Unmarshal(b, v); err != nil {
+	vb.LiteClientProof = govproof.ChainedProofToCompleteProof(f.ChainedProof)
+	gp := &vb.GovernanceProof
+	gp.G0Proof, gp.G1Proof, gp.G2Proof = new(govproof.G0Result), new(govproof.G1Result), new(govproof.G2Result)
+	for _, l := range []struct {
+		raw json.RawMessage
+		v   interface{}
+	}{{f.G0, gp.G0Proof}, {f.G1, gp.G1Proof}, {f.G2, gp.G2Proof}} {
+		if err := json.Unmarshal(l.raw, l.v); err != nil {
 			t.Fatal(err)
 		}
 	}
-	gp := &vb.GovernanceProof
-	gp.G0Proof, gp.G1Proof, gp.G2Proof = new(govproof.G0Result), new(govproof.G1Result), new(govproof.G2Result)
-	read("g0", gp.G0Proof)
-	read("g1", gp.G1Proof)
-	read("g2", gp.G2Proof)
 	return vb
+}
+
+func buildCert(t *testing.T, vb *ValidatorBlock, reg *ledger.BLSRegistryRecord, sk *bls.PrivateKey) error {
+	t.Helper()
+	f := loadIntentFixture(t)
+	return BuildIntentCertificate(vb, intentChain, reg, sk, intentKeyPage, intentKeyBook, f.record(t), f.VoteEvidence, f.ChainedProof)
 }
 
 func intentRegistry(t *testing.T) (*registryFixture, *ledger.BLSRegistryRecord) {
@@ -63,8 +98,7 @@ func builtIntentBlock(t *testing.T) (*registryFixture, *ledger.BLSRegistryRecord
 	t.Helper()
 	f, reg := intentRegistry(t)
 	vb := intentBlock(t, "validator-1")
-	if err := BuildIntentCertificate(vb, intentChain, reg, f.keys[0], "acc://harbor-mfg-tcl1.acme/book/1",
-		"acc://harbor-mfg-tcl1.acme/book", intentRecord()); err != nil {
+	if err := buildCert(t, vb, reg, f.keys[0]); err != nil {
 		t.Fatalf("building the intent certificate: %v", err)
 	}
 	return f, reg, vb
@@ -126,11 +160,16 @@ func TestAnIntentCertificateRefusesWhatItDoesNotProve(t *testing.T) {
 			return vb, r, intentChain
 		}, ErrIntentGovRootMismatch},
 		"another key page": {func(vb *ValidatorBlock, r *ledger.BLSRegistryRecord) (*ValidatorBlock, *ledger.BLSRegistryRecord, string) {
-			vb.IntentCertificate.KeyPageURL = "acc://harbor-mfg-tcl1.acme/book/2"
+			vb.IntentCertificate.KeyPageURL = "acc://rb4-phase-c-09282125.acme/book/2"
 			return vb, r, intentChain
 		}, ErrIntentGovRootMismatch},
-		"a changed G1": {func(vb *ValidatorBlock, r *ledger.BLSRegistryRecord) (*ValidatorBlock, *ledger.BLSRegistryRecord, string) {
-			vb.GovernanceProof.G1Proof.ThresholdSatisfied = !vb.GovernanceProof.G1Proof.ThresholdSatisfied
+		"a changed G1 that G2 does not carry": {func(vb *ValidatorBlock, r *ledger.BLSRegistryRecord) (*ValidatorBlock, *ledger.BLSRegistryRecord, string) {
+			vb.GovernanceProof.G1Proof.RequiredThreshold++
+			return vb, r, intentChain
+		}, ErrIntentProofInvalid},
+		"a changed G1 carried by G2 too": {func(vb *ValidatorBlock, r *ledger.BLSRegistryRecord) (*ValidatorBlock, *ledger.BLSRegistryRecord, string) {
+			vb.GovernanceProof.G1Proof.RequiredThreshold++
+			vb.GovernanceProof.G2Proof.G1Result.RequiredThreshold++
 			return vb, r, intentChain
 		}, ErrIntentGovRootMismatch},
 		"a substituted Accumulate validator": {func(vb *ValidatorBlock, r *ledger.BLSRegistryRecord) (*ValidatorBlock, *ledger.BLSRegistryRecord, string) {
@@ -141,7 +180,7 @@ func TestAnIntentCertificateRefusesWhatItDoesNotProve(t *testing.T) {
 			lp.Layer4DN = &dn
 			vb.LiteClientProof = &lp
 			return vb, r, intentChain
-		}, ErrIntentAccumulateSetMismatch},
+		}, ErrIntentProofInvalid},
 		"another incarnation in the registry": {func(vb *ValidatorBlock, r *ledger.BLSRegistryRecord) (*ValidatorBlock, *ledger.BLSRegistryRecord, string) {
 			other := *r
 			other.AccumulateIncarnation = "0x" + strings.Repeat("11", 32)
@@ -153,17 +192,46 @@ func TestAnIntentCertificateRefusesWhatItDoesNotProve(t *testing.T) {
 			return vb, &other, intentChain
 		}, ErrIntentMessageMismatch},
 		"a vote record for another account": {func(vb *ValidatorBlock, r *ledger.BLSRegistryRecord) (*ValidatorBlock, *ledger.BLSRegistryRecord, string) {
-			rec := intentRecord()
+			rec := loadIntentFixture(t).record(t)
 			rec.Account = "acc://someone-else.acme"
 			vb.IntentCertificate.AuthorizationRecord, _ = json.Marshal(rec)
 			return vb, r, intentChain
 		}, ErrIntentGovernanceUnderivable},
-		"a different vote record": {func(vb *ValidatorBlock, r *ledger.BLSRegistryRecord) (*ValidatorBlock, *ledger.BLSRegistryRecord, string) {
-			rec := intentRecord()
-			rec.Authorities[0].Vote.Pages[0].Threshold = 2
+		"a vote record its evidence does not reach": {func(vb *ValidatorBlock, r *ledger.BLSRegistryRecord) (*ValidatorBlock, *ledger.BLSRegistryRecord, string) {
+			rec := loadIntentFixture(t).record(t)
+			rec.Authorities[0].Vote.Pages[0].Threshold++
 			vb.IntentCertificate.AuthorizationRecord, _ = json.Marshal(rec)
 			return vb, r, intentChain
-		}, ErrIntentMessageMismatch},
+		}, ErrIntentProofInvalid},
+		"no vote evidence": {func(vb *ValidatorBlock, r *ledger.BLSRegistryRecord) (*ValidatorBlock, *ledger.BLSRegistryRecord, string) {
+			vb.IntentCertificate.VoteEvidence = nil
+			return vb, r, intentChain
+		}, ErrIntentProofInvalid},
+		"no chained proof": {func(vb *ValidatorBlock, r *ledger.BLSRegistryRecord) (*ValidatorBlock, *ledger.BLSRegistryRecord, string) {
+			vb.IntentCertificate.ChainedProof = nil
+			return vb, r, intentChain
+		}, ErrIntentProofInvalid},
+		"a chained proof that does not verify": {func(vb *ValidatorBlock, r *ledger.BLSRegistryRecord) (*ValidatorBlock, *ledger.BLSRegistryRecord, string) {
+			cp := *vb.IntentCertificate.ChainedProof
+			dn := *cp.Layer4DN
+			dn.Signatures = dn.Signatures[:0]
+			cp.Layer4DN = &dn
+			vb.IntentCertificate.ChainedProof = &cp
+			return vb, r, intentChain
+		}, ErrIntentProofInvalid},
+		"a lite proof that is not the chained proof's": {func(vb *ValidatorBlock, r *ledger.BLSRegistryRecord) (*ValidatorBlock, *ledger.BLSRegistryRecord, string) {
+			// Another transaction's verified proof, beside this block's lite proof.
+			vb.IntentCertificate.ChainedProof = loadLiteFixture(t, "proof_bvn1.json")
+			return vb, r, intentChain
+		}, ErrIntentProofInvalid},
+		"G2 carrying another G1": {func(vb *ValidatorBlock, r *ledger.BLSRegistryRecord) (*ValidatorBlock, *ledger.BLSRegistryRecord, string) {
+			vb.GovernanceProof.G2Proof.G1Result.RequiredThreshold++
+			return vb, r, intentChain
+		}, ErrIntentProofInvalid},
+		"G1 carrying another G0": {func(vb *ValidatorBlock, r *ledger.BLSRegistryRecord) (*ValidatorBlock, *ledger.BLSRegistryRecord, string) {
+			vb.GovernanceProof.G1Proof.G0Result.ExecMBI++
+			return vb, r, intentChain
+		}, ErrIntentProofInvalid},
 		"no vote record": {func(vb *ValidatorBlock, r *ledger.BLSRegistryRecord) (*ValidatorBlock, *ledger.BLSRegistryRecord, string) {
 			vb.IntentCertificate.AuthorizationRecord = nil
 			return vb, r, intentChain
@@ -179,8 +247,7 @@ func TestAnIntentCertificateRefusesWhatItDoesNotProve(t *testing.T) {
 		"a signature over another message": {func(vb *ValidatorBlock, r *ledger.BLSRegistryRecord) (*ValidatorBlock, *ledger.BLSRegistryRecord, string) {
 			other := intentBlock(t, "validator-1")
 			other.CrossChainProof.OperationID = "0x" + strings.Repeat("09", 32)
-			if err := BuildIntentCertificate(other, intentChain, r, f.keys[0], "acc://harbor-mfg-tcl1.acme/book/1",
-				"acc://harbor-mfg-tcl1.acme/book", intentRecord()); err != nil {
+			if err := buildCert(t, other, r, f.keys[0]); err != nil {
 				t.Fatal(err)
 			}
 			vb.IntentCertificate.Signature = other.IntentCertificate.Signature
@@ -206,11 +273,71 @@ func TestTheBuilderRefusesToBuildWhatItWouldRefuse(t *testing.T) {
 	f, reg := intentRegistry(t)
 	vb := intentBlock(t, "validator-1")
 	// validator-2's key under validator-1's name.
-	if err := BuildIntentCertificate(vb, intentChain, reg, f.keys[1], "acc://harbor-mfg-tcl1.acme/book/1",
-		"acc://harbor-mfg-tcl1.acme/book", intentRecord()); !errors.Is(err, ErrIntentSignatureInvalid) || vb.IntentCertificate != nil {
+	if err := buildCert(t, vb, reg, f.keys[1]); !errors.Is(err, ErrIntentSignatureInvalid) || vb.IntentCertificate != nil {
 		t.Fatalf("built with another validator's key: %v", err)
 	}
-	if err := BuildIntentCertificate(vb, intentChain, nil, f.keys[0], "p", "b", intentRecord()); err == nil {
+	if err := buildCert(t, vb, nil, f.keys[0]); err == nil {
 		t.Fatal("built without a registry")
+	}
+}
+
+// The rule FinalizeBlock applies: unchanged before a registry is in force (a block with no certificate passes, a
+// certificate nothing can verify is refused); once one is, every block needs a certificate that verifies.
+func TestFinalizeBlockJudgesIntentCertificatesFromTheRegistryInForce(t *testing.T) {
+	f, reg, certified := builtIntentBlock(t)
+	app, store := rotationApp(t, f.rotationFixture)
+	app.cometChainID = intentChain
+	plain := intentBlock(t, "validator-1")
+	judge := func(height uint64, vb *ValidatorBlock) *abcitypes.ExecTxResult {
+		app.currentBlockHeight = height
+		app.blockRulesV10Verdict = false
+		return app.judgeIntentCertificate(vb)
+	}
+
+	// No registry recorded.
+	if r := judge(11, plain); r != nil {
+		t.Fatalf("a block without a certificate, before any registry: %v", r.Log)
+	}
+	if r := judge(11, certified); r == nil || r.Code != codeIntentCertificateRefused || !app.blockRulesV10Verdict {
+		t.Fatal("a certificate with no registry to verify it was not refused as a v10 verdict")
+	}
+
+	// The registry accepted at height 10 is in force from height 11.
+	if err := store.SaveBLSRegistry(&ledger.BLSRegistryLog{Versions: []ledger.BLSRegistryRecord{*reg}}); err != nil {
+		t.Fatal(err)
+	}
+	if r := judge(10, plain); r != nil {
+		t.Fatalf("at the accepting height the registry is not yet in force: %v", r.Log)
+	}
+	if r := judge(11, certified); r != nil {
+		t.Fatalf("a valid certificate under the registry in force: %v", r.Log)
+	}
+	if r := judge(11, plain); r == nil || r.Code != codeIntentCertificateRefused || !app.blockRulesV10Verdict {
+		t.Fatal("a block without a certificate under a registry in force was not refused")
+	}
+	forged := *certified
+	ev := *certified.IntentCertificate
+	forged.IntentCertificate = &ev
+	forged.ValidatorID = "validator-2"
+	if r := judge(11, &forged); r == nil || !strings.Contains(r.Log, ErrIntentSignatureInvalid.Error()) {
+		t.Fatalf("validator-1's signature under validator-2's name: %+v", r)
+	}
+}
+
+// The invariants: a block with a certificate carries no V6.1 solo signature; one without needs it, as before.
+func TestTheSoloSignatureIsReplacedNotDropped(t *testing.T) {
+	_, _, certified := builtIntentBlock(t)
+	inv := func(vb *ValidatorBlock) error { return VerifyValidatorBlockInvariants(vb) }
+	certified.GovernanceProof.BLSAggregateSignature = "aa"
+	if err := inv(certified); err == nil || !strings.Contains(err.Error(), "carries no V6.1 solo signature") {
+		t.Fatalf("a certified block carrying the solo signature: %v", err)
+	}
+	certified.GovernanceProof.BLSAggregateSignature = ""
+	if err := inv(certified); err != nil && strings.Contains(err.Error(), "bls_aggregate_signature") {
+		t.Fatalf("a certified block was asked for the solo signature: %v", err)
+	}
+	certified.IntentCertificate = nil
+	if err := inv(certified); err == nil || !strings.Contains(err.Error(), "bls_aggregate_signature must not be empty") {
+		t.Fatalf("an uncertified block without the solo signature: %v", err)
 	}
 }

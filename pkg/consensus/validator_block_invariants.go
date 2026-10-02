@@ -115,8 +115,13 @@ func VerifyValidatorBlockInvariants(vb *ValidatorBlock) error {
 		}
 	}
 
-	if gov.BLSAggregateSignature == "" {
+	// A block with an intent certificate is authenticated by it, judged in FinalizeBlock against the BLS registry
+	// in force (RB5 D3); it carries no V6.1 solo signature. Every block without one is judged as before.
+	if vb.IntentCertificate == nil && gov.BLSAggregateSignature == "" {
 		add("governance_proof.bls_aggregate_signature must not be empty")
+	}
+	if vb.IntentCertificate != nil && gov.BLSAggregateSignature != "" {
+		add("a block with an intent certificate carries no V6.1 solo signature (governance_proof.bls_aggregate_signature)")
 	}
 	if gov.BLSValidatorSetPubKey == "" {
 		add("governance_proof.bls_validator_set_pubkey must not be empty")

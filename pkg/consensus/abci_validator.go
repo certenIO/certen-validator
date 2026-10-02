@@ -601,6 +601,12 @@ func (app *ValidatorApp) processValidatorTransaction(tx []byte) abcitypes.ExecTx
 		}
 	}
 
+	// The intent certificate (RB5 D3, rules v10): once CERTEN's BLS registry is in force, a ValidatorBlock is
+	// authenticated by its validator's signature over what the block itself proves (intent_certificate.go).
+	if refused := app.judgeIntentCertificate(&vb); refused != nil {
+		return *refused
+	}
+
 	// Entitlement gate — THE AUTHORITY.
 	//
 	// This is the consensus-enforced point: every validator runs it on every

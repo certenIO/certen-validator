@@ -2,12 +2,14 @@ package consensus
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 
+	chained_proof "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/working-proof_do_not_edit"
 	"github.com/certen/independant-validator/pkg/accumulateset"
 	"github.com/certen/independant-validator/pkg/crypto/bls"
 	"github.com/certen/independant-validator/pkg/crypto/bls_zkp"
@@ -36,10 +38,16 @@ type IntentCertificateEvidence struct {
 	// AuthorizationRecord is G1's vote record. The governance decision record is recomputed from it and the
 	// block's own G0, so the commitment is bound to the transaction this block proves.
 	AuthorizationRecord json.RawMessage `json:"authorization_record"`
-	GovRootV2           string          `json:"gov_root_v2"`         // hex32, claimed
-	AccumulateSetRoot   string          `json:"accumulate_set_root"` // hex32, claimed
-	Message             string          `json:"message"`             // hex32, claimed
-	Signature           string          `json:"signature"`           // hex G1 (compressed), over Message
+	// VoteEvidence is the record's evidence (govvote.Evidence): the governed transaction, the chain-bound signatures
+	// and votes, the page histories from genesis. The record is evaluated again from it (RB4-F66).
+	VoteEvidence json.RawMessage `json:"vote_evidence"`
+	// ChainedProof is the full L1-L4 proof the block's lite_client_proof is the projection of. It is verified, and
+	// the projection required to be exactly the block's (RB5-F11).
+	ChainedProof      *chained_proof.ChainedProof `json:"chained_proof"`
+	GovRootV2         string                      `json:"gov_root_v2"`         // hex32, claimed
+	AccumulateSetRoot string                      `json:"accumulate_set_root"` // hex32, claimed
+	Message           string                      `json:"message"`             // hex32, claimed
+	Signature         string                      `json:"signature"`           // hex G1 (compressed), over Message
 }
 
 // Refusals of an intent certificate, each by name.
@@ -81,13 +89,11 @@ func intentInputs(vb *ValidatorBlock, chainID string, reg *ledger.BLSRegistryRec
 	if err != nil {
 		return in, govRoot, accRoot, fmt.Errorf("%w: %v", ErrIntentAccumulateSetMismatch, err)
 	}
-	var rec govproof.AuthorizationRecord
-	dec := json.NewDecoder(bytes.NewReader(ev.AuthorizationRecord))
-	dec.DisallowUnknownFields()
-	if len(ev.AuthorizationRecord) == 0 || dec.Decode(&rec) != nil {
-		return in, govRoot, accRoot, fmt.Errorf("%w: the authorization record is missing or malformed", ErrIntentGovernanceUnderivable)
+	rec, err := authorizationOf(ev)
+	if err != nil {
+		return in, govRoot, accRoot, err
 	}
-	gdr, err := govproof.GovernanceDecisionRecord(gp.G0Proof, &rec)
+	gdr, err := govproof.GovernanceDecisionRecord(gp.G0Proof, rec)
 	if err != nil {
 		return in, govRoot, accRoot, fmt.Errorf("%w: %v", ErrIntentGovernanceUnderivable, err)
 	}
@@ -128,6 +134,13 @@ func VerifyIntentCertificate(vb *ValidatorBlock, chainID string, reg *ledger.BLS
 	if err != nil {
 		return [32]byte{}, err
 	}
+	rec, err := authorizationOf(ev)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	if err := verifyIntentProof(vb, rec); err != nil {
+		return [32]byte{}, err
+	}
 	if !hexEquals(ev.GovRootV2, govRoot) {
 		return [32]byte{}, fmt.Errorf("%w: claims %s, is %x", ErrIntentGovRootMismatch, ev.GovRootV2, govRoot)
 	}
@@ -163,19 +176,23 @@ func VerifyIntentCertificate(vb *ValidatorBlock, chainID string, reg *ledger.BLS
 // BuildIntentCertificate is the proposer's half: it fills the block's evidence for the registry reg and signs the
 // message with sk, then checks its own result with the verifier - a block this node would refuse is never built.
 func BuildIntentCertificate(vb *ValidatorBlock, chainID string, reg *ledger.BLSRegistryRecord, sk *bls.PrivateKey,
-	keyPageURL, keyBookURL string, authorization *govproof.AuthorizationRecord) error {
+	keyPageURL, keyBookURL string, authorization *govproof.AuthorizationRecord, voteEvidence json.RawMessage,
+	cp *chained_proof.ChainedProof) error {
 	if reg == nil {
 		return fmt.Errorf("no BLS registry is recorded on this chain")
 	}
-	if authorization == nil {
-		return fmt.Errorf("%w: no authorization record", ErrIntentGovernanceUnderivable)
+	if authorization == nil || len(voteEvidence) == 0 {
+		return fmt.Errorf("%w: the vote record and its evidence are both required", ErrIntentGovernanceUnderivable)
+	}
+	if cp == nil {
+		return fmt.Errorf("%w: no chained proof", ErrIntentProofInvalid)
 	}
 	rec, err := json.Marshal(authorization)
 	if err != nil {
 		return err
 	}
 	vb.IntentCertificate = &IntentCertificateEvidence{RegistryVersion: reg.Version, KeyPageURL: keyPageURL,
-		KeyBookURL: keyBookURL, AuthorizationRecord: rec}
+		KeyBookURL: keyBookURL, AuthorizationRecord: rec, VoteEvidence: voteEvidence, ChainedProof: cp}
 	in, govRoot, accRoot, err := intentInputs(vb, chainID, reg)
 	if err != nil {
 		vb.IntentCertificate = nil
@@ -196,6 +213,103 @@ func BuildIntentCertificate(vb *ValidatorBlock, chainID string, reg *ledger.BLSR
 		return fmt.Errorf("the intent certificate this node built does not verify: %w", err)
 	}
 	return nil
+}
+
+// ErrIntentProofInvalid: the block's proof does not verify offline.
+var ErrIntentProofInvalid = errors.New("the block's proof does not verify offline")
+
+// verifyIntentProof re-verifies, offline and deterministically, what the block proves - what cmd/proofverify
+// checks of a stored proof (RB5-F11; before it, consensus verified no proof content):
+//
+//   - the L1-L4 chained proof (receipts, both L4 legs' signatures, membership and quorum, and each leg's binding
+//     to the layer beneath), and that the block's lite_client_proof is exactly its projection;
+//   - G0 bound to that proof (its entry, witness and execution block are L1's and the BVN quorum's);
+//   - G1 and G2 carry the same G0 and G1 (canonical v2 forms);
+//   - the vote record evaluated again from its evidence, about the transaction G0 proved executed, reaching
+//     exactly the record carried; any authority set the intent declares equal to it;
+//   - G1 states the threshold satisfied, as the record does; G2's payload binding names G0's transaction.
+func verifyIntentProof(vb *ValidatorBlock, rec *govproof.AuthorizationRecord) error {
+	ev := vb.IntentCertificate
+	fail := func(format string, a ...interface{}) error {
+		return fmt.Errorf("%w: %s", ErrIntentProofInvalid, fmt.Sprintf(format, a...))
+	}
+	if ev.ChainedProof == nil {
+		return fail("no chained proof")
+	}
+	if err := chained_proof.NewProofVerifier(false).Verify(context.Background(), ev.ChainedProof); err != nil {
+		return fail("L1-L4: %v", err)
+	}
+	projected, err := json.Marshal(govproof.ChainedProofToCompleteProof(ev.ChainedProof))
+	if err != nil {
+		return fail("projection: %v", err)
+	}
+	carried, err := json.Marshal(vb.LiteClientProof)
+	if err != nil {
+		return fail("lite_client_proof: %v", err)
+	}
+	if !bytes.Equal(projected, carried) {
+		return fail("the block's lite_client_proof is not the projection of its verified chained proof")
+	}
+	gp := &vb.GovernanceProof
+	if err := govproof.BindG0ToChainedProof(gp.G0Proof, vb.LiteClientProof); err != nil {
+		return fail("%v", err)
+	}
+	g0c, err := govproof.CanonicalG0JSONV2(gp.G0Proof)
+	if err != nil {
+		return fail("G0: %v", err)
+	}
+	for _, e := range []struct {
+		name string
+		g0   *govproof.G0Result
+	}{{"G1", &gp.G1Proof.G0Result}, {"G2", &gp.G2Proof.G0Result}} {
+		c, err := govproof.CanonicalG0JSONV2(e.g0)
+		if err != nil || !bytes.Equal(c, g0c) {
+			return fail("%s carries another G0 than the block's", e.name)
+		}
+	}
+	g1c, err := govproof.CanonicalG1JSONV2(gp.G1Proof)
+	if err != nil {
+		return fail("G1: %v", err)
+	}
+	if c, err := govproof.CanonicalG1JSONV2(&gp.G2Proof.G1Result); err != nil || !bytes.Equal(c, g1c) {
+		return fail("G2 carries another G1 than the block's")
+	}
+	vote, err := govproof.DecodeVoteEvidence(ev.VoteEvidence)
+	if err != nil {
+		return fail("%v", err)
+	}
+	if err := govproof.VerifyVoteEvidence(context.Background(), gp.G0Proof, vote, rec); err != nil {
+		return fail("the vote record: %v", err)
+	}
+	declared, err := govproof.DeclaredGovernanceOfEvidence(vote)
+	if err != nil {
+		return fail("the intent's declared governance: %v", err)
+	}
+	if declared != nil {
+		if err := govproof.CheckDeclaredGovernance(declared, rec); err != nil {
+			return fail("%v", err)
+		}
+	}
+	if !gp.G1Proof.ThresholdSatisfied || !rec.Satisfied {
+		return fail("G1 and the vote record must both state the threshold satisfied")
+	}
+	tx := strings.ToLower(strings.TrimPrefix(gp.G0Proof.TxHash, "0x"))
+	if pb := gp.G2Proof.OutcomeLeaf.PayloadBinding; !pb.Verified ||
+		strings.ToLower(strings.TrimPrefix(pb.ComputedTxHash, "0x")) != tx {
+		return fail("G2's payload binding does not name the transaction G0 proved executed")
+	}
+	return nil
+}
+
+// authorizationOf decodes the evidence's vote record, strictly.
+func authorizationOf(ev *IntentCertificateEvidence) (*govproof.AuthorizationRecord, error) {
+	var rec govproof.AuthorizationRecord
+	dec := json.NewDecoder(bytes.NewReader(ev.AuthorizationRecord))
+	dec.DisallowUnknownFields()
+	if len(ev.AuthorizationRecord) == 0 || dec.Decode(&rec) != nil {
+		return nil, fmt.Errorf("%w: the authorization record is missing or malformed", ErrIntentGovernanceUnderivable)
+	}
+	return &rec, nil
 }
 
 func hex32(s string) ([32]byte, error) {

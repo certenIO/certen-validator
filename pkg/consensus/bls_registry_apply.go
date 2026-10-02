@@ -50,3 +50,38 @@ func (app *ValidatorApp) processBLSRegistry(rt *BLSRegistryTx, height int64) abc
 	app.blockBundles = append(app.blockBundles, rec.ID)
 	return abcitypes.ExecTxResult{Code: 0, GasWanted: 1, GasUsed: 1}
 }
+
+// codeIntentCertificateRefused is the result code of a ValidatorBlock whose intent certificate is refused.
+const codeIntentCertificateRefused uint32 = 10
+
+// judgeIntentCertificate applies the intent rule to a ValidatorBlock of the block being finalized. Before any
+// registry is in force nothing changes, except that a block claiming a certificate nothing could verify is
+// refused. Once one is, every block must carry a certificate that verifies. Each outcome here is one v9 does not
+// reach (v9 accepted every such block that passed its invariants), so each refusal is a v10 verdict.
+func (app *ValidatorApp) judgeIntentCertificate(vb *ValidatorBlock) *abcitypes.ExecTxResult {
+	if app.ledgerStore == nil {
+		return &abcitypes.ExecTxResult{Code: codeIntentCertificateRefused, Log: "intent certificate: no ledger store"}
+	}
+	log, err := app.ledgerStore.LoadBLSRegistry()
+	if err != nil {
+		// Judging without the registry would accept here what nodes that can read it refuse: a fork. Stop.
+		app.logger.Fatalf("❌ [INTENT-CERT] the BLS registry could not be read at height %d: %v", app.currentBlockHeight, err)
+	}
+	reg := RegistryAt(log, int64(app.currentBlockHeight))
+	refuse := func(why string) *abcitypes.ExecTxResult {
+		app.blockRulesV10Verdict = true
+		app.logger.Printf("🚫 [INTENT-CERT] REJECTED bundle=%s validator=%q height=%d: %s", vb.BundleID, vb.ValidatorID,
+			app.currentBlockHeight, why)
+		return &abcitypes.ExecTxResult{Code: codeIntentCertificateRefused, Log: "intent certificate refused: " + why}
+	}
+	switch {
+	case reg == nil && vb.IntentCertificate == nil:
+		return nil
+	case reg == nil:
+		return refuse("the block carries an intent certificate, but no BLS registry is in force to verify it")
+	}
+	if _, err := VerifyIntentCertificate(vb, app.cometChainID, reg); err != nil {
+		return refuse(err.Error())
+	}
+	return nil
+}

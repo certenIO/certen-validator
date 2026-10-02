@@ -358,6 +358,10 @@ type BuilderInputs struct {
 	// rule and may not look anything up. nil means "could not prove entitled",
 	// which the gate refuses in enforce mode.
 	EntitlementEvidence *entitlement.Evidence `json:"entitlement_evidence,omitempty"`
+
+	// IntentCertified: a BLS registry is in force, so the block is authenticated by its intent certificate
+	// (intent_certificate.go, built on the block after this builder returns) and carries no V6.1 solo signature.
+	IntentCertified bool `json:"-"`
 }
 
 // GovernanceInputs are supplied from chain state & signatures
