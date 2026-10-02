@@ -105,6 +105,10 @@ func (app *ValidatorApp) recordCommittedOperations(height int64) {
 		app.recordFirstVerdict(executionRulesV9, &app.rulesV9FirstVerdict, height)
 		app.blockRulesV9Verdict = false
 	}
+	if app.blockRulesV10Verdict {
+		app.recordFirstVerdict(executionRulesV10, &app.rulesV10FirstVerdict, height)
+		app.blockRulesV10Verdict = false
+	}
 }
 
 // recordFirstVerdict persists the first height a rules version decided something only it decides.
@@ -191,8 +195,8 @@ type committedHistory interface {
 	ResultCodes(height int64) ([]uint32, error)
 }
 
-// ErrCommittedHistoryUnderV9 is committed history that v9 rules would not reproduce.
-var ErrCommittedHistoryUnderV9 = errors.New("committed history that execution rules v9 do not reproduce")
+// ErrCommittedHistoryUnderCurrentRules is committed history that v9 rules would not reproduce.
+var ErrCommittedHistoryUnderCurrentRules = fmt.Errorf("committed history that execution rules v%d do not reproduce", CurrentExecutionRulesVersion)
 
 // IndexCommittedHistory indexes every block the app committed that the index does not yet cover - the
 // chain before this index existed, or blocks a binary without it committed - and checks each against the
@@ -247,6 +251,8 @@ func (app *ValidatorApp) IndexCommittedHistory(h committedHistory) error {
 				app.recordFirstVerdict(executionRulesV8, &app.rulesV8FirstVerdict, height)
 			} else if _, ok := DecodeChainTick(tx); ok {
 				app.recordFirstVerdict(executionRulesV8, &app.rulesV8FirstVerdict, height)
+			} else if _, ok := DecodeBLSRegistry(tx); ok {
+				app.recordFirstVerdict(executionRulesV10, &app.rulesV10FirstVerdict, height)
 			}
 		}
 		violations = append(violations, found...)
@@ -257,10 +263,10 @@ func (app *ValidatorApp) IndexCommittedHistory(h committedHistory) error {
 	}
 	if len(violations) > 0 {
 		return fmt.Errorf("%w (%d):\n  %s\nThis state was committed by rules this binary does not continue. Run the binary that "+
-			"committed it, or reset both CometBFT and the application ledger", ErrCommittedHistoryUnderV9, len(violations), strings.Join(violations, "\n  "))
+			"committed it, or reset both CometBFT and the application ledger", ErrCommittedHistoryUnderCurrentRules, len(violations), strings.Join(violations, "\n  "))
 	}
-	app.logger.Printf("✅ [COMMITTED-OP] indexed %d committed ValidatorBlocks through height %d; history is what v9 rules decide",
-		indexed, app.latestHeight)
+	app.logger.Printf("✅ [COMMITTED-OP] indexed %d committed ValidatorBlocks through height %d; history is what v%d rules decide",
+		indexed, app.latestHeight, CurrentExecutionRulesVersion)
 	return nil
 }
 
@@ -270,6 +276,13 @@ func (app *ValidatorApp) historicalOperations(height int64, blockTime time.Time,
 	var entries []ledger.CommittedOperationEntry
 	var violations []string
 	for i, tx := range txs {
+		// v9 judged a registry-kind transaction as a ValidatorBlock and refused it with code 2; v10 accepts it
+		// or refuses it with code 9. History holding one decided v9's way is history v10 does not reproduce.
+		if _, ok := DecodeBLSRegistry(tx); ok && codes[i] == 2 {
+			violations = append(violations, fmt.Sprintf("height %d tx %d is a BLS registry transaction that v9 judged "+
+				"as a ValidatorBlock (code 2); v10 decides it as a registry", height, i))
+			continue
+		}
 		if !isValidatorBlockTx(tx) {
 			continue
 		}
@@ -335,6 +348,9 @@ func isValidatorBlockTx(tx []byte) bool {
 		return false
 	}
 	if _, ok := DecodeChainTick(tx); ok {
+		return false
+	}
+	if _, ok := DecodeBLSRegistry(tx); ok {
 		return false
 	}
 	return true

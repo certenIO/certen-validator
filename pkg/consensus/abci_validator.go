@@ -109,10 +109,12 @@ type ValidatorApp struct {
 	// The first committed height at which v8 or v9 rules decided something no older version decides that
 	// way (0: none) - when a rollback past that version stops being possible (committedRulesVersion). The
 	// block flags are set in FinalizeBlock and written by Commit.
-	blockRulesV8Verdict bool
-	blockRulesV9Verdict bool
-	rulesV8FirstVerdict int64
-	rulesV9FirstVerdict int64
+	blockRulesV8Verdict  bool
+	blockRulesV9Verdict  bool
+	blockRulesV10Verdict bool
+	rulesV8FirstVerdict  int64
+	rulesV9FirstVerdict  int64
+	rulesV10FirstVerdict int64
 }
 
 // committedRulesVersion is the lowest rules version that reproduces the committed history, result codes
@@ -130,6 +132,8 @@ type ValidatorApp struct {
 // on this state until a block makes that genuinely impossible.
 func (app *ValidatorApp) committedRulesVersion() uint64 {
 	switch {
+	case app.rulesV10FirstVerdict > 0:
+		return executionRulesV10
 	case app.rulesV9FirstVerdict > 0:
 		return executionRulesV9
 	case app.rotationAccepted || app.rulesV8FirstVerdict > 0:
@@ -244,7 +248,8 @@ func NewValidatorApp(ledgerStore *ledger.LedgerStore, chainID string) *Validator
 		for _, v := range []struct {
 			version uint64
 			into    *int64
-		}{{executionRulesV8, &app.rulesV8FirstVerdict}, {executionRulesV9, &app.rulesV9FirstVerdict}} {
+		}{{executionRulesV8, &app.rulesV8FirstVerdict}, {executionRulesV9, &app.rulesV9FirstVerdict},
+			{executionRulesV10, &app.rulesV10FirstVerdict}} {
 			first, err := ledgerStore.RulesFirstVerdict(v.version)
 			if err != nil {
 				app.logger.Fatalf("❌ the first v%d verdict could not be read: %v - not starting on a ledger this node cannot read", v.version, err)
@@ -455,6 +460,14 @@ func (app *ValidatorApp) CheckTx(ctx context.Context, req *abcitypes.RequestChec
 	if vr, ok := DecodeValidatorRotation(req.Tx); ok {
 		if err := vr.CheckShape(); err != nil {
 			return &abcitypes.ResponseCheckTx{Code: 6, Log: "validator rotation refused: " + err.Error()}, nil
+		}
+		return &abcitypes.ResponseCheckTx{Code: 0, GasWanted: 1, GasUsed: 1}, nil
+	}
+	// CERTEN's BLS registry (RB5 D3): its shape and every key's proof of possession filter the mempool; the
+	// chain, the version and the admin quorum are judged in FinalizeBlock.
+	if rt, ok := DecodeBLSRegistry(req.Tx); ok {
+		if err := rt.CheckShape(); err != nil {
+			return &abcitypes.ResponseCheckTx{Code: codeBLSRegistryRefused, Log: "BLS registry refused: " + err.Error()}, nil
 		}
 		return &abcitypes.ResponseCheckTx{Code: 0, GasWanted: 1, GasUsed: 1}, nil
 	}
@@ -758,6 +771,7 @@ func (app *ValidatorApp) FinalizeBlock(ctx context.Context, req *abcitypes.Reque
 	app.blockOperations = nil
 	app.blockRulesV8Verdict = false
 	app.blockRulesV9Verdict = false
+	app.blockRulesV10Verdict = false
 	// A fresh slice, never [:0]: the previous block's slice may already belong to the persister.
 	app.blockValidatorBlocks = nil
 
@@ -772,6 +786,13 @@ func (app *ValidatorApp) FinalizeBlock(ctx context.Context, req *abcitypes.Reque
 		if vr, ok := DecodeValidatorRotation(tx); ok {
 			app.blockRulesV8Verdict = true // v7 judged it as a ValidatorBlock (RB3-F146)
 			result := app.processValidatorRotation(vr, req.Height)
+			txResults[i] = &result
+			continue
+		}
+		// Nor is CERTEN's BLS registry (RB5 D3). v9 judged it as a ValidatorBlock and refused it (code 2).
+		if rt, ok := DecodeBLSRegistry(tx); ok {
+			app.blockRulesV10Verdict = true
+			result := app.processBLSRegistry(rt, req.Height)
 			txResults[i] = &result
 			continue
 		}

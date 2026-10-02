@@ -72,6 +72,10 @@ var (
 	// Validator consensus-key rotations the chain has accepted (RB3-F95), in order. With the genesis they
 	// define the validator set at every height.
 	keyValidatorRotations = []byte("abci:validator_rotations") // -> ValidatorRotationLog
+
+	// CERTEN's BLS registry as the chain recorded it (RB5 D3): every accepted version, oldest first. It is the
+	// key a ValidatorBlock's intent signature verifies against, by validator id, deterministically.
+	keyBLSRegistry = []byte("abci:bls_registry") // -> BLSRegistryLog
 )
 
 // systemBlockKey generates a KV key for a specific system ledger block
@@ -560,6 +564,32 @@ func (s *LedgerStore) LoadValidatorRotations() (*ValidatorRotationLog, error) {
 	var l ValidatorRotationLog
 	if err := json.Unmarshal(b, &l); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal ValidatorRotationLog: %w", err)
+	}
+	return &l, nil
+}
+
+// SaveBLSRegistry persists the BLS registry log.
+func (s *LedgerStore) SaveBLSRegistry(l *BLSRegistryLog) error {
+	b, err := json.Marshal(l)
+	if err != nil {
+		return fmt.Errorf("failed to marshal BLSRegistryLog: %w", err)
+	}
+	return s.kv.Set(keyBLSRegistry, b)
+}
+
+// LoadBLSRegistry returns the BLS registry log: empty when the chain has recorded none, an error when it could
+// not be read - never empty for an unreadable log, which would read as "no registry" and switch a rule off.
+func (s *LedgerStore) LoadBLSRegistry() (*BLSRegistryLog, error) {
+	b, err := s.read(keyBLSRegistry, "BLS registry")
+	if err != nil {
+		return nil, err
+	}
+	if b == nil {
+		return &BLSRegistryLog{}, nil
+	}
+	var l BLSRegistryLog
+	if err := json.Unmarshal(b, &l); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal BLSRegistryLog: %w", err)
 	}
 	return &l, nil
 }

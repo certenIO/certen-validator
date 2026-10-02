@@ -259,3 +259,32 @@ var AnchorTargets = []string{
 	"btc-mainnet",
 	// add more as needed
 }
+
+// BLSRegistryLog is every version of CERTEN's BLS registry this chain has accepted, oldest first (RB5 D3). The
+// registry in force at a height is the newest version accepted below it.
+type BLSRegistryLog struct {
+	Versions []BLSRegistryRecord `json:"versions"`
+}
+
+// BLSRegistryRecord is one accepted registry version: who CERTEN's BLS quorum is, by validator id, and the
+// Accumulate incarnation the quorum attests under.
+type BLSRegistryRecord struct {
+	Version              uint64              `json:"version"`
+	Height               int64               `json:"height"` // the block that accepted it
+	Members              []BLSRegistryMember `json:"members"`
+	ThresholdNumerator   uint64              `json:"threshold_numerator"`
+	ThresholdDenominator uint64              `json:"threshold_denominator"`
+	// AccumulateIncarnation is hex32 (docs/l4/INCARNATION_ANCHOR.md).
+	AccumulateIncarnation string `json:"accumulate_incarnation"`
+	// CertenSetRoot is the anchor's currentValidatorSetRoot for these members (hex32), derived at acceptance.
+	CertenSetRoot string `json:"certen_set_root"`
+	ID            string `json:"id"` // folded into the app hash of Height
+}
+
+// BLSRegistryMember is one validator of the registry.
+type BLSRegistryMember struct {
+	ValidatorID string `json:"validator_id"`
+	EVMAddress  string `json:"evm_address"` // lowercase 0x hex
+	BLSPubKey   string `json:"bls_pub_key"` // lowercase hex, 96 bytes
+	Power       uint64 `json:"power"`
+}

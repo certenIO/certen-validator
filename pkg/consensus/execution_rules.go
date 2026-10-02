@@ -130,8 +130,19 @@ const (
 	// v9 decides it (committedRulesVersion), so a rollback stays open until then.
 	executionRulesV9 uint64 = 9
 
+	// v10 - CERTEN's BLS registry becomes consensus state (RB5 D3): a recognised transaction kind
+	// `certen.blsregistry.set/v1`, authorised by the sealed admin quorum over the chain id, every key proving
+	// possession. Accepted, it contributes its id to the app hash; refused, it returns code 9. v9 judged the
+	// same bytes as a ValidatorBlock and refused them with code 2, so the version is bumped.
+	//
+	// v10 CONTINUES v7, v8 and v9 state without a reset: the kind is new, so no committed history contains it,
+	// and that is checked, not assumed - IndexCommittedHistory refuses to start on any committed registry-kind
+	// transaction decided with v9's code. The state stays stamped with the older version until a block accepts
+	// or refuses a registry (committedRulesVersion).
+	executionRulesV10 uint64 = 10
+
 	// CurrentExecutionRulesVersion is what THIS binary implements.
-	CurrentExecutionRulesVersion = executionRulesV9
+	CurrentExecutionRulesVersion = executionRulesV10
 )
 
 // compatibleContinuations names the older rules whose committed state this binary may continue, and why
@@ -142,8 +153,10 @@ var compatibleContinuations = map[uint64]uint64{
 	// v8 added only the rotation and tick kinds, which pre-v8 history does not contain (see
 	// executionRulesV8 - checked against every committed block before the deploy). v9 decides v7 and v8
 	// history as they did, which every node checks before it starts (see executionRulesV9).
-	executionRulesV7: executionRulesV9,
-	executionRulesV8: executionRulesV9,
+	// v10 adds only the registry kind, which no committed history contains (checked at every start).
+	executionRulesV7: executionRulesV10,
+	executionRulesV8: executionRulesV10,
+	executionRulesV9: executionRulesV10,
 }
 
 // ExecutionRulesMismatchError explains a refusal to start in terms an operator
