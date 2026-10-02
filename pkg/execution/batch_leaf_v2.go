@@ -12,6 +12,7 @@ import (
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govvote"
+	"github.com/certen/independant-validator/pkg/execution/contracts"
 )
 
 // The v2 batch leaf (RB3-F39), for CertenAccountV7_2 - the account the V8.2 rollout deploys through
@@ -68,20 +69,52 @@ func AuthorityPageIndex(pageURL string) (uint64, error) {
 	return n, nil
 }
 
-// AuthorityPageOfADI is AuthorityPageIndex for a page that must belong to adiURL: acc://<adi>/<book>/<index> whose
-// <adi> is the member's own ADI (canonical spelling). CertenAccountV7_2 reads the index as one of its own ADI's pages,
-// so a page of any other identity's book is refused - its index would be read as this ADI's page of that number.
-func AuthorityPageOfADI(pageURL, adiURL string) (uint64, error) {
+// The v3 batch leaf (RB5-F30), for CertenAccountV7_2 as factory V10 creates it. v2 bound the authorizing page's index
+// alone, and an index means nothing without its book: page 1 of a book given to an operator is not page 1 of the ADI's
+// own book. v3 binds the (key book, page) pair CERTEN's quorum certified - the book as keccak256 of its canonical URL,
+// the same value govRoot v2 commits (contracts.HashURLString) - and the account gives the default levels to its
+// governing book's pages only. v2 (ComputeBatchLeafV2) was never deployed; it is kept with its pinned vector.
+
+// BatchLeafDomainV3 must equal CertenAccountV7_2.LEAF_DOMAIN.
+const BatchLeafDomainV3 = "certen:batchleaf:v3"
+
+// ComputeBatchLeafV3 mirrors CertenAccountV7_2.computeLeaf:
+//
+//	keccak256(abi.encodePacked(
+//	    "certen:batchleaf:v3", chainId, adiURLHash, executionCommitment, operationID, bytes32 authorityBook,
+//	    uint64 authorityPage
+//	))
+func ComputeBatchLeafV3(chainID int64, in BatchLeafInput) [32]byte {
+	chainIDBytes := make([]byte, 32)
+	big.NewInt(chainID).FillBytes(chainIDBytes)
+	adiHash := in.ADIURLHash()
+	page := make([]byte, 8)
+	binary.BigEndian.PutUint64(page, in.AuthorityPage)
+
+	packed := make([]byte, 0, len(BatchLeafDomainV3)+168)
+	packed = append(packed, []byte(BatchLeafDomainV3)...)
+	packed = append(packed, chainIDBytes...)
+	packed = append(packed, adiHash[:]...)
+	packed = append(packed, in.ExecutionCommitment[:]...)
+	packed = append(packed, in.OperationID[:]...)
+	packed = append(packed, in.AuthorityBook[:]...)
+	packed = append(packed, page...)
+	return ethcrypto.Keccak256Hash(packed)
+}
+
+// AuthorityOf is the (key book, page) a certified key page names: the book as keccak256 of its canonical URL (what
+// govRoot v2 commits and CertenAccountV7_2 compares with its governing book), and the page's 1-based index. The page
+// must be a page OF that book - <book>/<index> - or nothing is named. Whose book it is, the account decides: its
+// governing book's pages carry the default levels, any other book's pages carry none until its governance grants them.
+func AuthorityOf(pageURL, bookURL string) ([32]byte, uint64, error) {
 	n, err := AuthorityPageIndex(pageURL)
 	if err != nil {
-		return 0, err
+		return [32]byte{}, 0, err
 	}
+	book := govvote.CanonicalAccSpelling(bookURL)
 	page := govvote.CanonicalAccSpelling(pageURL)
-	parts := strings.Split(page[len("acc://"):], "/")
-	owner := "acc://" + strings.Join(parts[:len(parts)-2], "/")
-	if adi := govvote.CanonicalAccSpelling(adiURL); owner != adi {
-		return 0, fmt.Errorf("key page %s belongs to %s, not to the member's ADI %s; its account reads page %d as its own",
-			pageURL, owner, adi, n)
+	if book == "" || page != book+"/"+strconv.FormatUint(n, 10) {
+		return [32]byte{}, 0, fmt.Errorf("key page %s is not a page of key book %s", pageURL, bookURL)
 	}
-	return n, nil
+	return contracts.HashURLString(book), n, nil
 }

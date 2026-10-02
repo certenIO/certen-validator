@@ -79,7 +79,8 @@ func TestRevertedSettlementBindsToTheSignedIntent(t *testing.T) {
 	proofV7_2 := contracts.AccountProofV7_2{AdiURL: live.AdiURL, AnchorId: live.AnchorId, MerkleProof: live.MerkleProof,
 		OperationID: live.OperationID, KeyBookProof: live.KeyBookProof, RoleProof: live.RoleProof,
 		ThresholdProof: live.ThresholdProof, Timestamp: live.Timestamp, ExpiresAt: live.ExpiresAt,
-		ValidatorSignatures: live.ValidatorSignatures, Nonce: live.Nonce, AuthorityPage: 1}
+		ValidatorSignatures: live.ValidatorSignatures, Nonce: live.Nonce,
+		AuthorityBook: contracts.HashURLString("acc://orchid-logistics-tcl1.acme/book"), AuthorityPage: 1}
 	today, err := settlementAccountABI.Pack(m.Name, args[0], args[1], args[2], proofV7_2)
 	if err != nil {
 		t.Fatal(err)
@@ -88,8 +89,8 @@ func TestRevertedSettlementBindsToTheSignedIntent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if exec.AuthorityPage != 1 {
-		t.Fatalf("decoded authority page %d", exec.AuthorityPage)
+	if exec.AuthorityPage != 1 || exec.AuthorityBook != contracts.HashURLString("acc://orchid-logistics-tcl1.acme/book") {
+		t.Fatalf("decoded authority book %x page %d", exec.AuthorityBook, exec.AuthorityPage)
 	}
 	if err := matchCommittedCalls(exec.Calls, []CommittedCall{call}); err != nil {
 		t.Fatalf("the live settlement is the committed call: %v", err)

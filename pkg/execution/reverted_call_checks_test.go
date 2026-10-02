@@ -19,7 +19,7 @@ func TestAuthorizedAttemptRefusesADoomedCopy(t *testing.T) {
 	other := common.HexToAddress("0x32b4687bE3c02d52e2d94Dc1cFAF03a0E5af0C8B")
 	honest := func() *accountExecution {
 		return &accountExecution{Calls: []CommittedCall{{Target: other, Value: big.NewInt(0)}},
-			AuthorityPage: 1, proofDecodedOK: true, AdiURLLen: 32}
+			AuthorityBook: [32]byte{1}, AuthorityPage: 1, proofDecodedOK: true, AdiURLLen: 32}
 	}
 	plain := func(to common.Address, value *big.Int, gas uint64) *types.Transaction {
 		return types.NewTx(&types.DynamicFeeTx{To: &to, Value: value, Gas: gas})
@@ -37,11 +37,16 @@ func TestAuthorizedAttemptRefusesADoomedCopy(t *testing.T) {
 		"value to a non-payable call": func() error {
 			return checkAuthorizedAttempt(context.Background(), nil, plain(account, big.NewInt(1), 500000), reverted, honest(), account)
 		},
-		// A page other than the certified one gives a leaf in no root: that is refused by the leaf check against the
-		// anchor. A proof naming no page at all is refused before any read.
+		// A book or page other than the certified pair gives a leaf in no root: that is refused by the leaf check
+		// against the anchor. A proof naming no page, or no book, is refused before any read.
 		"no authority page": func() error {
 			e := honest()
 			e.AuthorityPage = 0
+			return checkAuthorizedAttempt(context.Background(), nil, plain(account, zero, 500000), reverted, e, account)
+		},
+		"no authority book": func() error {
+			e := honest()
+			e.AuthorityBook = [32]byte{}
 			return checkAuthorizedAttempt(context.Background(), nil, plain(account, zero, 500000), reverted, e, account)
 		},
 		"garbage sub-proofs": func() error {

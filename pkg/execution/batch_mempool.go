@@ -89,9 +89,11 @@ type PendingBatchIntent struct {
 	// record once the certificate exists. It - never this validator's own message - is what the v3 batch operation
 	// id commits, so every validator forms the same batch even one whose own proof disagreed with the quorum.
 	CertifiedMessage [32]byte
-	// CertifiedKeyPage is the ADI key page that certified message certifies (its hash is committed by the message
-	// through govRoot v2), read with it from the chain's record. The member's v2 leaf binds its index (RB5-F29).
+	// CertifiedKeyPage and CertifiedKeyBook are the key page and its key book that certified message certifies (their
+	// hashes are committed by the message through govRoot v2), read with it from the chain's record. The member's v3
+	// leaf binds the pair (RB5-F29/F30).
 	CertifiedKeyPage string
+	CertifiedKeyBook string
 
 	// AccumTxHash is the Accumulate transaction that carried this intent. Evidence only — never hashed
 	// into the leaf. Empty is honest for a member restored from a pre-2026-09-18 mempool blob.
@@ -259,34 +261,35 @@ func (p *PendingBatchIntent) ExecutionCommitment() ([32]byte, error) {
 	return computeBatchExecutionCommitment(p.ChainID, calls), nil
 }
 
-// Leaf is the member's leaf in a V8.2 tree: the v2 leaf its CertenAccountV7_2 recomputes and consumes (RB5-F29).
+// Leaf is the member's leaf in a V8.2 tree: the v3 leaf its CertenAccountV7_2 recomputes and consumes (RB5-F29/F30).
 func (p *PendingBatchIntent) Leaf() ([32]byte, error) {
 	in, err := p.LeafInput()
 	if err != nil {
 		return [32]byte{}, err
 	}
-	return ComputeBatchLeafV2(p.ChainID, in, in.AuthorityPage), nil
+	return ComputeBatchLeafV3(p.ChainID, in), nil
 }
 
-// ErrNoCertifiedAuthorityPage: the member has no key page CERTEN's quorum certified, so no v2 leaf (RB5-F29).
+// ErrNoCertifiedAuthorityPage: the member has no key page CERTEN's quorum certified, so no v3 leaf (RB5-F29).
 var ErrNoCertifiedAuthorityPage = errors.New("no key page certified by CERTEN's quorum")
 
-// AuthorityPage is the index of the ADI key page whose signatures authorized the member's intent, as CERTEN's quorum
-// certified it - what its v2 leaf binds and its CertenAccountV7_2 derives every leg's authority from (RB3-F39). A
-// member whose intent was not quorum-certified has none, and a page outside the member's own ADI is refused: the
-// account reads the index as one of its own ADI's pages.
-func (p *PendingBatchIntent) AuthorityPage() (uint64, error) {
+// Authority is the key book (keccak256 of its canonical URL) and the page index whose signatures authorized the
+// member's intent, as CERTEN's quorum certified them - what its v3 leaf binds and its CertenAccountV7_2 derives every
+// leg's authority from (RB3-F39, RB5-F30). A member whose intent was not quorum-certified has none. Which books carry
+// authority is the account's to say (its governing book's pages by default; others as its governance grants).
+func (p *PendingBatchIntent) Authority() ([32]byte, uint64, error) {
 	if p.IntentMessage == ([32]byte{}) {
-		return 0, fmt.Errorf("%w: intent %s was not quorum-certified, and a V8.2 leaf binds the key page the quorum "+
-			"certified", ErrNoCertifiedAuthorityPage, p.IntentID)
+		return [32]byte{}, 0, fmt.Errorf("%w: intent %s was not quorum-certified, and a V8.2 leaf binds the key page the "+
+			"quorum certified", ErrNoCertifiedAuthorityPage, p.IntentID)
 	}
 	if p.CertifiedMessage == ([32]byte{}) {
-		return 0, fmt.Errorf("%w: intent %s", ErrIntentNotYetCertified, p.IntentID)
+		return [32]byte{}, 0, fmt.Errorf("%w: intent %s", ErrIntentNotYetCertified, p.IntentID)
 	}
-	if p.CertifiedKeyPage == "" {
-		return 0, fmt.Errorf("%w: intent %s's certificate names no key page", ErrNoCertifiedAuthorityPage, p.IntentID)
+	if p.CertifiedKeyPage == "" || p.CertifiedKeyBook == "" {
+		return [32]byte{}, 0, fmt.Errorf("%w: intent %s's certificate names no key page or key book",
+			ErrNoCertifiedAuthorityPage, p.IntentID)
 	}
-	return AuthorityPageOfADI(p.CertifiedKeyPage, p.ADIURL)
+	return AuthorityOf(p.CertifiedKeyPage, p.CertifiedKeyBook)
 }
 
 // IsMultiLeg reports whether this member needs batchExecuteGovernanceProofDirect.
@@ -302,7 +305,7 @@ func (p *PendingBatchIntent) LeafInput() (BatchLeafInput, error) {
 	if err != nil {
 		return BatchLeafInput{}, err
 	}
-	page, err := p.AuthorityPage()
+	book, page, err := p.Authority()
 	if err != nil {
 		return BatchLeafInput{}, err
 	}
@@ -310,6 +313,7 @@ func (p *PendingBatchIntent) LeafInput() (BatchLeafInput, error) {
 		ADIURL:               p.ADIURL,
 		ExecutionCommitment:  exec,
 		OperationID:          p.OperationID,
+		AuthorityBook:        book,
 		AuthorityPage:        page,
 		GovernanceCommitment: p.GovernanceCommitment,
 		LegacyNoGovernance:   p.LegacyNoGovernance,
@@ -461,6 +465,7 @@ func (m *BatchMempool) placementHeight(p *PendingBatchIntent) (uint64, bool) {
 	if p.CertifiedMessage == ([32]byte{}) {
 		p.CertifiedMessage = msg
 		p.CertifiedKeyPage = c.KeyPageURL
+		p.CertifiedKeyBook = c.KeyBookURL
 		if msg != p.IntentMessage {
 			log.Printf("⚠️ [BATCH] intent %s: this validator signed intent message 0x%x, CERTEN's quorum certified 0x%x - "+
 				"this validator's proof of the operation disagrees with the quorum's; the batch commits the certified one",

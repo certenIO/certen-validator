@@ -63,6 +63,7 @@ type accountExecution struct {
 	// AuthorityPage is the key page the proof names: the account binds it into the leaf it checks and derives every
 	// leg's level from it (RB3-F39), so only the certified page's leaf is in the root. The three optional sub-proofs
 	// an honest settlement sends empty.
+	AuthorityBook  [32]byte
 	AuthorityPage  uint64
 	HasSubProofs   bool
 	proofDecodedOK bool
@@ -140,9 +141,11 @@ func decodeAccountExecution(input []byte) (*accountExecution, error) {
 	if f := proof.FieldByName("ExpiresAt"); f.IsValid() {
 		out.ExpiresAt, _ = f.Interface().(*big.Int)
 	}
-	if f := proof.FieldByName("AuthorityPage"); f.IsValid() {
-		if page, ok := f.Interface().(uint64); ok {
-			out.AuthorityPage = page
+	if f, g := proof.FieldByName("AuthorityBook"), proof.FieldByName("AuthorityPage"); f.IsValid() && g.IsValid() {
+		book, okB := f.Interface().([32]byte)
+		page, okP := g.Interface().(uint64)
+		if okB && okP {
+			out.AuthorityBook, out.AuthorityPage = book, page
 			out.proofDecodedOK = true
 		}
 	}
@@ -252,7 +255,7 @@ func anchorAttestedBefore(ctx context.Context, chain attemptChain, anchor common
 
 const accountAttemptABIJSON = `[` +
 	`{"type":"function","name":"anchorContract","stateMutability":"view","inputs":[],"outputs":[{"type":"address"}]},` +
-	`{"type":"function","name":"computeLeaf","stateMutability":"view","inputs":[{"type":"bytes32"},{"type":"bytes32"},{"type":"uint64"}],"outputs":[{"type":"bytes32"}]},` +
+	`{"type":"function","name":"computeLeaf","stateMutability":"view","inputs":[{"type":"bytes32"},{"type":"bytes32"},{"type":"bytes32"},{"type":"uint64"}],"outputs":[{"type":"bytes32"}]},` +
 	`{"type":"function","name":"computeSingleCommitment","stateMutability":"view","inputs":[{"type":"address"},{"type":"uint256"},{"type":"bytes"}],"outputs":[{"type":"bytes32"}]},` +
 	`{"type":"function","name":"computeBatchCommitment","stateMutability":"view","inputs":[{"type":"address[]"},{"type":"uint256[]"},{"type":"bytes[]"}],"outputs":[{"type":"bytes32"}]},` +
 	`{"type":"function","name":"isLeafConsumed","stateMutability":"view","inputs":[{"type":"bytes32"}],"outputs":[{"type":"bool"}]}]`
@@ -310,14 +313,14 @@ func checkAuthorizedAttempt(
 	if value != nil && value.Sign() != 0 {
 		return fmt.Errorf("sent with value to a non-payable function; that reverts before any authorisation")
 	}
-	// The shape of an HONEST settlement: a named authority page, no optional sub-proofs, and the gas
-	// the orchestrator sends. Anything else can be made to revert on purpose - a sub-proof that does
-	// not decode, a limit too small for the target - and none of those is the intent failing. The
-	// page is not the submitter's to choose: it is bound into the leaf, so only the page CERTEN's
-	// quorum certified gives a leaf in the root (checked below); the level each leg needs is the
-	// account's own reading of that page.
-	if !exec.proofDecodedOK || exec.AuthorityPage == 0 {
-		return fmt.Errorf("names no authority page, which no leaf in any root carries")
+	// The shape of an HONEST settlement: a named authority book and page, no optional sub-proofs, and
+	// the gas the orchestrator sends. Anything else can be made to revert on purpose - a sub-proof that
+	// does not decode, a limit too small for the target - and none of those is the intent failing. The
+	// book and page are not the submitter's to choose: they are bound into the leaf, so only the pair
+	// CERTEN's quorum certified gives a leaf in the root (checked below); the level each leg needs is
+	// the account's own reading of that pair.
+	if !exec.proofDecodedOK || exec.AuthorityPage == 0 || exec.AuthorityBook == ([32]byte{}) {
+		return fmt.Errorf("names no authority book and page, which no leaf in any root carries")
 	}
 	if exec.HasSubProofs {
 		return fmt.Errorf("carries optional sub-proofs an honest settlement does not send")
@@ -419,7 +422,7 @@ func callValue(v *big.Int) *big.Int {
 
 // accountLeafAndAnchor is the member's leaf for an account execution, as the account itself computes it
 // (computeSingleCommitment / computeBatchCommitment over the executed calls, then computeLeaf with the
-// operationID and the authority page the proof names), and the anchor the account is pinned to.
+// operationID and the authority book and page the proof names), and the anchor the account is pinned to.
 func accountLeafAndAnchor(ctx context.Context, chain bind.ContractCaller, account common.Address, exec *accountExecution) ([32]byte, common.Address, error) {
 	accountABI, err := abi.JSON(strings.NewReader(accountAttemptABIJSON))
 	if err != nil {
@@ -460,7 +463,7 @@ func accountLeafAndAnchor(ctx context.Context, chain bind.ContractCaller, accoun
 		return [32]byte{}, common.Address{}, err
 	}
 	commitment, _ := commitmentOut.([32]byte)
-	leafOut, err := call("computeLeaf", commitment, exec.OperationID, exec.AuthorityPage)
+	leafOut, err := call("computeLeaf", commitment, exec.OperationID, exec.AuthorityBook, exec.AuthorityPage)
 	if err != nil {
 		return [32]byte{}, common.Address{}, err
 	}

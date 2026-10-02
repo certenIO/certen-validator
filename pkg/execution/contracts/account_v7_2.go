@@ -15,15 +15,17 @@ import (
 
 // CertenAccountV7_2ABI is the surface of CertenAccountV7_2 - the account CertenAccountFactoryV10 creates, settling
 // against CertenAnchorV8_2 - extracted VERBATIM from the Foundry artifact out/CertenAccountV7_2.sol/CertenAccountV7_2.json
-// (certen-contracts feat/v8-2-rollout 0cbc2fa). TestCertenAccountV7_2ABI pins every signature the batch path depends on.
+// (certen-contracts feat/v8-2-rollout, the RB5-F30 source, keccak 0xb1d1a46c…255b). TestCertenAccountV7_2ABI pins every
+// signature the batch path depends on.
 //
-// What differs from CertenAccountV7: the leaf binds the index of the ADI key page that authorized the intent
-// (certen:batchleaf:v2, RB3-F39), so computeLeaf takes it and the proof's last field is uint64 authorityPage in place
-// of the self-declared uint8 requiredLevel - the account derives every leg's level from the page.
+// What differs from CertenAccountV7: the leaf binds the key book and page that authorized the intent
+// (certen:batchleaf:v3, RB3-F39, RB5-F30), so computeLeaf takes both and the proof ends in bytes32 authorityBook, uint64
+// authorityPage in place of the self-declared uint8 requiredLevel - the account derives every leg's level from the
+// pair: its governing book's pages carry the default levels, any other book's pages what its governance set.
 const CertenAccountV7_2ABI = `[
-  {"type":"function","name":"executeGovernanceProofDirect","inputs":[{"name":"target","type":"address","internalType":"address"},{"name":"value","type":"uint256","internalType":"uint256"},{"name":"data","type":"bytes","internalType":"bytes"},{"name":"proof","type":"tuple","internalType":"struct CertenAccountV7_2.ADIGovernanceProof","components":[{"name":"adiURL","type":"string","internalType":"string"},{"name":"anchorId","type":"bytes32","internalType":"bytes32"},{"name":"merkleProof","type":"bytes32[]","internalType":"bytes32[]"},{"name":"operationID","type":"bytes32","internalType":"bytes32"},{"name":"keyBookProof","type":"bytes","internalType":"bytes"},{"name":"roleProof","type":"bytes","internalType":"bytes"},{"name":"thresholdProof","type":"bytes","internalType":"bytes"},{"name":"timestamp","type":"uint256","internalType":"uint256"},{"name":"expiresAt","type":"uint256","internalType":"uint256"},{"name":"validatorSignatures","type":"bytes","internalType":"bytes"},{"name":"nonce","type":"uint256","internalType":"uint256"},{"name":"authorityPage","type":"uint64","internalType":"uint64"}]}],"outputs":[],"stateMutability":"nonpayable"},
-  {"type":"function","name":"batchExecuteGovernanceProofDirect","inputs":[{"name":"targets","type":"address[]","internalType":"address[]"},{"name":"values","type":"uint256[]","internalType":"uint256[]"},{"name":"datas","type":"bytes[]","internalType":"bytes[]"},{"name":"proof","type":"tuple","internalType":"struct CertenAccountV7_2.ADIGovernanceProof","components":[{"name":"adiURL","type":"string","internalType":"string"},{"name":"anchorId","type":"bytes32","internalType":"bytes32"},{"name":"merkleProof","type":"bytes32[]","internalType":"bytes32[]"},{"name":"operationID","type":"bytes32","internalType":"bytes32"},{"name":"keyBookProof","type":"bytes","internalType":"bytes"},{"name":"roleProof","type":"bytes","internalType":"bytes"},{"name":"thresholdProof","type":"bytes","internalType":"bytes"},{"name":"timestamp","type":"uint256","internalType":"uint256"},{"name":"expiresAt","type":"uint256","internalType":"uint256"},{"name":"validatorSignatures","type":"bytes","internalType":"bytes"},{"name":"nonce","type":"uint256","internalType":"uint256"},{"name":"authorityPage","type":"uint64","internalType":"uint64"}]}],"outputs":[],"stateMutability":"nonpayable"},
-  {"type":"function","name":"computeLeaf","inputs":[{"name":"executionCommitment","type":"bytes32","internalType":"bytes32"},{"name":"operationID","type":"bytes32","internalType":"bytes32"},{"name":"authorityPage","type":"uint64","internalType":"uint64"}],"outputs":[{"name":"","type":"bytes32","internalType":"bytes32"}],"stateMutability":"view"},
+  {"type":"function","name":"executeGovernanceProofDirect","inputs":[{"name":"target","type":"address","internalType":"address"},{"name":"value","type":"uint256","internalType":"uint256"},{"name":"data","type":"bytes","internalType":"bytes"},{"name":"proof","type":"tuple","internalType":"struct CertenAccountV7_2.ADIGovernanceProof","components":[{"name":"adiURL","type":"string","internalType":"string"},{"name":"anchorId","type":"bytes32","internalType":"bytes32"},{"name":"merkleProof","type":"bytes32[]","internalType":"bytes32[]"},{"name":"operationID","type":"bytes32","internalType":"bytes32"},{"name":"keyBookProof","type":"bytes","internalType":"bytes"},{"name":"roleProof","type":"bytes","internalType":"bytes"},{"name":"thresholdProof","type":"bytes","internalType":"bytes"},{"name":"timestamp","type":"uint256","internalType":"uint256"},{"name":"expiresAt","type":"uint256","internalType":"uint256"},{"name":"validatorSignatures","type":"bytes","internalType":"bytes"},{"name":"nonce","type":"uint256","internalType":"uint256"},{"name":"authorityBook","type":"bytes32","internalType":"bytes32"},{"name":"authorityPage","type":"uint64","internalType":"uint64"}]}],"outputs":[],"stateMutability":"nonpayable"},
+  {"type":"function","name":"batchExecuteGovernanceProofDirect","inputs":[{"name":"targets","type":"address[]","internalType":"address[]"},{"name":"values","type":"uint256[]","internalType":"uint256[]"},{"name":"datas","type":"bytes[]","internalType":"bytes[]"},{"name":"proof","type":"tuple","internalType":"struct CertenAccountV7_2.ADIGovernanceProof","components":[{"name":"adiURL","type":"string","internalType":"string"},{"name":"anchorId","type":"bytes32","internalType":"bytes32"},{"name":"merkleProof","type":"bytes32[]","internalType":"bytes32[]"},{"name":"operationID","type":"bytes32","internalType":"bytes32"},{"name":"keyBookProof","type":"bytes","internalType":"bytes"},{"name":"roleProof","type":"bytes","internalType":"bytes"},{"name":"thresholdProof","type":"bytes","internalType":"bytes"},{"name":"timestamp","type":"uint256","internalType":"uint256"},{"name":"expiresAt","type":"uint256","internalType":"uint256"},{"name":"validatorSignatures","type":"bytes","internalType":"bytes"},{"name":"nonce","type":"uint256","internalType":"uint256"},{"name":"authorityBook","type":"bytes32","internalType":"bytes32"},{"name":"authorityPage","type":"uint64","internalType":"uint64"}]}],"outputs":[],"stateMutability":"nonpayable"},
+  {"type":"function","name":"computeLeaf","inputs":[{"name":"executionCommitment","type":"bytes32","internalType":"bytes32"},{"name":"operationID","type":"bytes32","internalType":"bytes32"},{"name":"authorityBook","type":"bytes32","internalType":"bytes32"},{"name":"authorityPage","type":"uint64","internalType":"uint64"}],"outputs":[{"name":"","type":"bytes32","internalType":"bytes32"}],"stateMutability":"view"},
   {"type":"function","name":"computeSingleCommitment","inputs":[{"name":"target","type":"address","internalType":"address"},{"name":"value","type":"uint256","internalType":"uint256"},{"name":"data","type":"bytes","internalType":"bytes"}],"outputs":[{"name":"","type":"bytes32","internalType":"bytes32"}],"stateMutability":"view"},
   {"type":"function","name":"computeBatchCommitment","inputs":[{"name":"targets","type":"address[]","internalType":"address[]"},{"name":"values","type":"uint256[]","internalType":"uint256[]"},{"name":"datas","type":"bytes[]","internalType":"bytes[]"}],"outputs":[{"name":"","type":"bytes32","internalType":"bytes32"}],"stateMutability":"view"},
   {"type":"function","name":"isLeafConsumed","inputs":[{"name":"leaf","type":"bytes32","internalType":"bytes32"}],"outputs":[{"name":"","type":"bool","internalType":"bool"}],"stateMutability":"view"},
@@ -31,12 +33,14 @@ const CertenAccountV7_2ABI = `[
   {"type":"function","name":"adiURLHash","inputs":[],"outputs":[{"name":"","type":"bytes32","internalType":"bytes32"}],"stateMutability":"view"},
   {"type":"function","name":"owner","inputs":[],"outputs":[{"name":"","type":"address","internalType":"address"}],"stateMutability":"view"},
   {"type":"function","name":"LEAF_DOMAIN","inputs":[],"outputs":[{"name":"","type":"string","internalType":"string"}],"stateMutability":"view"},
-  {"type":"function","name":"authorityLevelOfPage","inputs":[{"name":"page","type":"uint64","internalType":"uint64"}],"outputs":[{"name":"","type":"uint8","internalType":"enum CertenAccountV7_2.AuthorityLevel"}],"stateMutability":"view"},
-  {"type":"function","name":"anchorContract","inputs":[],"outputs":[{"name":"","type":"address","internalType":"contract CertenAnchorV8_2"}],"stateMutability":"view"}
+  {"type":"function","name":"authorityLevelOfPage","inputs":[{"name":"book","type":"bytes32","internalType":"bytes32"},{"name":"page","type":"uint64","internalType":"uint64"}],"outputs":[{"name":"","type":"uint8","internalType":"enum CertenAccountV7_2.AuthorityLevel"}],"stateMutability":"view"},
+  {"type":"function","name":"anchorContract","inputs":[],"outputs":[{"name":"","type":"address","internalType":"contract CertenAnchorV8_2"}],"stateMutability":"view"},
+  {"type":"function","name":"governingBook","inputs":[],"outputs":[{"name":"","type":"string","internalType":"string"}],"stateMutability":"view"},
+  {"type":"function","name":"governingBookHash","inputs":[],"outputs":[{"name":"","type":"bytes32","internalType":"bytes32"}],"stateMutability":"view"}
 ]`
 
-// LeafDomainV7_2 is CertenAccountV7_2.LEAF_DOMAIN - what an account must report to take a v2 leaf.
-const LeafDomainV7_2 = "certen:batchleaf:v2"
+// LeafDomainV7_2 is CertenAccountV7_2.LEAF_DOMAIN - what an account must report to take a v3 leaf.
+const LeafDomainV7_2 = "certen:batchleaf:v3"
 
 // AccountProofV7_2 mirrors CertenAccountV7_2.ADIGovernanceProof. Field ORDER matters: abi encoding is positional.
 type AccountProofV7_2 struct {
@@ -51,6 +55,7 @@ type AccountProofV7_2 struct {
 	ExpiresAt           *big.Int
 	ValidatorSignatures []byte
 	Nonce               *big.Int
+	AuthorityBook       [32]byte
 	AuthorityPage       uint64
 }
 
@@ -93,9 +98,9 @@ func (a *CertenAccountV7_2) call1(opts *bind.CallOpts, method string, args ...in
 	return out[0], nil
 }
 
-func (a *CertenAccountV7_2) ComputeLeaf(opts *bind.CallOpts, executionCommitment, operationID [32]byte,
+func (a *CertenAccountV7_2) ComputeLeaf(opts *bind.CallOpts, executionCommitment, operationID, authorityBook [32]byte,
 	authorityPage uint64) ([32]byte, error) {
-	v, err := a.call1(opts, "computeLeaf", executionCommitment, operationID, authorityPage)
+	v, err := a.call1(opts, "computeLeaf", executionCommitment, operationID, authorityBook, authorityPage)
 	if err != nil {
 		return [32]byte{}, err
 	}
@@ -137,6 +142,25 @@ func (a *CertenAccountV7_2) LeafDomain(opts *bind.CallOpts) (string, error) {
 		return "", fmt.Errorf("LEAF_DOMAIN returned %T", v)
 	}
 	return s, nil
+}
+
+// AuthorityLevelOfPage is the account's authority level for a page of a key book (0 NONE .. 3 ROOT): its governing
+// book's pages by default, any other book's as its governance set (RB5-F30).
+func (a *CertenAccountV7_2) AuthorityLevelOfPage(opts *bind.CallOpts, book [32]byte, page uint64) (uint8, error) {
+	v, err := a.call1(opts, "authorityLevelOfPage", book, page)
+	if err != nil {
+		return 0, err
+	}
+	return *abi.ConvertType(v, new(uint8)).(*uint8), nil
+}
+
+// GoverningBookHash is keccak256 of the account's governing key book URL, fixed at creation.
+func (a *CertenAccountV7_2) GoverningBookHash(opts *bind.CallOpts) ([32]byte, error) {
+	v, err := a.call1(opts, "governingBookHash")
+	if err != nil {
+		return [32]byte{}, err
+	}
+	return *abi.ConvertType(v, new([32]byte)).(*[32]byte), nil
 }
 
 // AnchorContract is the anchor the account settles against.

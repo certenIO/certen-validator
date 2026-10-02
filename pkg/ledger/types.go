@@ -303,7 +303,10 @@ type IntentQuorumGroup struct {
 	// KeyPageURL is the ADI key page the message certifies (canonical spelling): the G1 snapshot page whose hash the
 	// message commits through govRoot v2. Recorded so a validator can read back the page a certified intent's batch
 	// leaf binds (RB5-F29); every block signing the message names this page, since the message commits its hash.
-	KeyPageURL  string                   `json:"key_page_url"`
+	KeyPageURL string `json:"key_page_url"`
+	// KeyBookURL is the key book that page belongs to (canonical spelling), whose hash the message also commits.
+	// A V8.2 leaf binds the (book, page) pair: an account's authority is a page OF a book (RB5-F30).
+	KeyBookURL  string                   `json:"key_book_url"`
 	Partials    []IntentPartial          `json:"partials"`
 	Certificate *IntentQuorumCertificate `json:"certificate,omitempty"`
 }

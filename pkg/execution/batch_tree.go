@@ -55,9 +55,10 @@ type BatchLeafInput struct {
 	// member's certified intent - its govRoot v2, Accumulate set, incarnation, governance commitment and CERTEN set.
 	IntentMessage [32]byte
 
-	// AuthorityPage is the 1-based index of the member ADI's key page CERTEN's quorum certified as authorizing the intent
-	// (PendingBatchIntent.AuthorityPage). PART of the v2 leaf (ComputeBatchLeafV2): CertenAccountV7_2 derives every leg's
-	// authority level from it (RB3-F39, RB5-F29).
+	// AuthorityBook and AuthorityPage are the key book (keccak256 of its canonical URL) and the 1-based index of its page
+	// that CERTEN's quorum certified as authorizing the intent (PendingBatchIntent.Authority). PART of the v3 leaf
+	// (ComputeBatchLeafV3): CertenAccountV7_2 derives every leg's authority level from the pair (RB3-F39, RB5-F29/F30).
+	AuthorityBook [32]byte
 	AuthorityPage uint64
 
 	// LegacyNoGovernance marks a member admitted before governance commitments existed (restored from a mempool
@@ -70,8 +71,8 @@ type BatchLeafInput struct {
 	Provenance MemberProvenance
 
 	// IntentID identifies the member for EVIDENCE only. It is deliberately NOT part of the leaf —
-	// the leaf hashes (domain, chainId, adiURLHash, executionCommitment, operationID, authorityPage) and
-	// nothing else, so adding it here cannot move a root or a bundle id.
+	// the leaf hashes (domain, chainId, adiURLHash, executionCommitment, operationID, authorityBook,
+	// authorityPage) and nothing else, so adding it here cannot move a root or a bundle id.
 	//
 	// It is here because both lanes build their leaves through PendingBatchIntent.LeafInput, so carrying
 	// it on the input is what gives the cadence lane the same member identity the on-demand lane passes
@@ -109,7 +110,7 @@ func IsTransactionHash(s string) bool {
 // MemberProvenance is everything recorded ABOUT a batch member that is not part of its leaf.
 //
 // NONE OF IT IS HASHED. The leaf covers (domain, chainId, adiURLHash, executionCommitment, operationID,
-// authorityPage) and nothing else, so adding or changing a field here cannot move a root or a bundle id.
+// authorityBook, authorityPage) and nothing else, so adding or changing a field here cannot move a root or a bundle id.
 // TestIntentIdOverrideAndLeafStability pins that.
 //
 // It exists because the canonical anchor row was, until now, strictly poorer than the shadow row it
@@ -139,7 +140,7 @@ func (l BatchLeafInput) ADIURLHash() [32]byte {
 }
 
 // ComputeBatchLeaf mirrors CertenAccountV7.computeLeaf - the V8.1 generation's v1 leaf, which proofs anchored
-// under V8.1 carry. A V8.2 tree is built of v2 leaves (ComputeBatchLeafV2, RB5-F29):
+// under V8.1 carry. A V8.2 tree is built of v3 leaves (ComputeBatchLeafV3, RB5-F29/F30):
 //
 //	keccak256(abi.encodePacked(
 //	    "certen:batchleaf:v1", chainId, adiURLHash, executionCommitment, operationID
@@ -388,11 +389,12 @@ func BuildBatchTree(
 			return nil, fmt.Errorf("member %d (%s) has a zero executionCommitment", i, in.ADIURL)
 		}
 
-		// A V8.2 tree settles CertenAccountV7_2 accounts, whose leaf binds the certified authority page (RB5-F29).
-		if in.AuthorityPage == 0 {
-			return nil, fmt.Errorf("member %d (%s) has no certified authority page; its v2 leaf cannot be formed", i, in.ADIURL)
+		// A V8.2 tree settles CertenAccountV7_2 accounts, whose leaf binds the certified key book and page (RB5-F29/F30).
+		if in.AuthorityPage == 0 || in.AuthorityBook == ([32]byte{}) {
+			return nil, fmt.Errorf("member %d (%s) has no certified authority book and page; its v3 leaf cannot be formed",
+				i, in.ADIURL)
 		}
-		leaf := ComputeBatchLeafV2(chainID, in, in.AuthorityPage)
+		leaf := ComputeBatchLeafV3(chainID, in)
 
 		// Duplicate leaves would be indistinguishable on-chain: the second could never be
 		// consumed, because CertenAccountV7 keys single-use on the leaf itself. Catch it

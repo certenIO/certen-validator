@@ -620,10 +620,12 @@ func memberADIURL(ci *CertenIntent) (string, error) {
 		return "", fmt.Errorf("nil intent")
 	}
 
-	adi := strings.TrimSpace(ci.OrganizationADI)
+	// In canonical spelling (RB5-F30): Accumulate URLs are case-insensitive, and the account factory V10 creates an
+	// ADI's account under the lower-case spelling only, so every spelling of one ADI names that one account.
+	adi := strings.ToLower(strings.TrimSpace(ci.OrganizationADI))
 	if adi == "" {
 		// Fallback only. AccountURL is the data account, so the suffix must come off.
-		adi = strings.TrimSuffix(strings.TrimSpace(ci.AccountURL), "/data")
+		adi = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(ci.AccountURL)), "/data")
 	}
 
 	if adi == "" {

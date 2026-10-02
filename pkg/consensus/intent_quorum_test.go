@@ -188,12 +188,15 @@ func TestTheCertificateCarriesTheKeyPageItsMessageCertifies(t *testing.T) {
 	if want := strings.TrimSuffix(strings.ToLower(page), "/"); c.KeyPageURL != want {
 		t.Fatalf("the certificate carries key page %q, want the page its message certifies %q", c.KeyPageURL, want)
 	}
+	if want := strings.TrimSuffix(strings.ToLower(blocks[0].IntentCertificate.KeyBookURL), "/"); want == "" || c.KeyBookURL != want {
+		t.Fatalf("the certificate carries key book %q, want the book its message certifies %q", c.KeyBookURL, want)
+	}
 	msg, _ := hex32(blocks[0].IntentCertificate.Message)
 	if c.Message != msg {
 		t.Fatalf("certified message %x, want %x", c.Message, msg)
 	}
 	ql, err := store.LoadIntentQuorum(strings.ToLower(blocks[0].CrossChainProof.OperationID))
-	if err != nil || ql.Groups[0].KeyPageURL != c.KeyPageURL {
-		t.Fatalf("the quorum record keeps page %q (%v)", ql.Groups[0].KeyPageURL, err)
+	if err != nil || ql.Groups[0].KeyPageURL != c.KeyPageURL || ql.Groups[0].KeyBookURL != c.KeyBookURL {
+		t.Fatalf("the quorum record keeps page %q of book %q (%v)", ql.Groups[0].KeyPageURL, ql.Groups[0].KeyBookURL, err)
 	}
 }

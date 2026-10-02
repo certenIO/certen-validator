@@ -66,6 +66,7 @@ type fakeCert struct {
 	height uint64
 	msg    [32]byte
 	page   string
+	book   string
 }
 
 // fakeCerts is a record of intent certificates keyed by operation.
@@ -73,7 +74,7 @@ type fakeCerts map[[32]byte]fakeCert
 
 func (f fakeCerts) IntentCertified(op [32]byte) (consensus.CertifiedIntent, bool) {
 	c, ok := f[op]
-	return consensus.CertifiedIntent{Height: c.height, Message: c.msg, KeyPageURL: c.page}, ok
+	return consensus.CertifiedIntent{Height: c.height, Message: c.msg, KeyPageURL: c.page, KeyBookURL: c.book}, ok
 }
 
 func certifiedMember(id string, op byte, own [32]byte) *PendingBatchIntent {
@@ -112,7 +113,7 @@ func TestACertifiedMemberIsPlacedByItsCertificate(t *testing.T) {
 	}
 
 	certified := fill32(0xbb) // the quorum certified another message than this validator signed
-	certs[fill32(9)] = fakeCert{height: 250, msg: certified, page: "acc://x.acme/book/1"}
+	certs[fill32(9)] = fakeCert{height: 250, msg: certified, page: "acc://x.acme/book/1", book: "acc://x.acme/book"}
 	if got := m.PeriodMembers(11155111, 0, 100); len(got) != 0 {
 		t.Fatal("placed in the period of its commit height")
 	}
@@ -147,7 +148,7 @@ func TestCertifiedAndUncertifiedMembersAreNeverOneTree(t *testing.T) {
 // placed by its certificate.
 func TestTheQueueKeepsTheIntentMessage(t *testing.T) {
 	path := t.TempDir() + "/mempool.json"
-	certs := fakeCerts{fill32(9): {height: 250, msg: fill32(0xbb), page: "acc://x.acme/book/1"}}
+	certs := fakeCerts{fill32(9): {height: 250, msg: fill32(0xbb), page: "acc://x.acme/book/1", book: "acc://x.acme/book"}}
 	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 10})
 	m.SetIntentCertificates(certs)
 	st, err := NewBatchMempoolStore(path, jsonCodec{}, nil)
