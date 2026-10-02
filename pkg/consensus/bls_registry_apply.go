@@ -1,7 +1,11 @@
 package consensus
 
 import (
+	"fmt"
+
 	abcitypes "github.com/cometbft/cometbft/abci/types"
+
+	"github.com/certen/independant-validator/pkg/ledger"
 )
 
 // processBLSRegistry validates and records a BLS registry transaction carried by block height. Like a
@@ -84,4 +88,23 @@ func (app *ValidatorApp) judgeIntentCertificate(vb *ValidatorBlock) *abcitypes.E
 		return refuse(err.Error())
 	}
 	return nil
+}
+
+// IntentCertificateContext is what a proposer builds an intent certificate against: the CERTEN chain id this
+// chain judges certificates under (its genesis, never configuration) and the BLS registry in force for the next
+// block, nil when none is recorded. Read from the same committed state FinalizeBlock judges by.
+func (app *ValidatorApp) IntentCertificateContext() (string, *ledger.BLSRegistryRecord, error) {
+	app.mu.RLock()
+	defer app.mu.RUnlock()
+	if app.ledgerStore == nil {
+		return "", nil, fmt.Errorf("the validator app has no ledger store")
+	}
+	if app.cometChainID == "" {
+		return "", nil, fmt.Errorf("the validator app has no genesis chain id")
+	}
+	log, err := app.ledgerStore.LoadBLSRegistry()
+	if err != nil {
+		return "", nil, fmt.Errorf("the BLS registry could not be read: %w", err)
+	}
+	return app.cometChainID, RegistryAt(log, app.latestHeight+1), nil
 }

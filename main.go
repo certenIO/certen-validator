@@ -1502,6 +1502,13 @@ func startValidator(
 
 	log.Printf("✅ BFT validator created with pure CometBFT consensus architecture")
 
+	// RB5 D3: intent certificates are built against the chain id and BLS registry the chain itself judges them by.
+	validatorApp := cometEngine.GetValidatorApp()
+	if validatorApp == nil {
+		return nil, nil, fmt.Errorf("the CometBFT engine has no ValidatorApp, so intent certificates cannot be built against the chain's state")
+	}
+	validator.SetIntentCertificateSource(validatorApp)
+
 	// The key page G1 is built against is the page that signed, read from the chain - never a
 	// guess. Without a resolver every governance proof fails rather than naming a page.
 	if kpResolver, kpErr := proof.NewChainKeyPageResolver(cfg.AccumulateURL, log.Printf); kpErr != nil {

@@ -433,6 +433,11 @@ type BFTValidator struct {
 	// Read-only cache lookup — never performs I/O on this path.
 	entitlementStore *entitlement.Store
 
+	// intentCertificates is where this node learns what the chain judges intent certificates by (RB5 D3): the
+	// ValidatorApp, wired in main. Required: without it the node cannot know whether a BLS registry is in force,
+	// and a block built without a certificate under one would be refused.
+	intentCertificates IntentCertificateSource
+
 	// Entitlement gate mode, so the proposer can decline to sign locally rather
 	// than build a block the fleet will reject anyway. Purely an optimisation:
 	// the authority is the consensus rule in abci_validator.go.
@@ -604,6 +609,19 @@ func (bv *BFTValidator) SetKeyPageResolver(r SigningKeyPageResolver) {
 	bv.mu.Lock()
 	defer bv.mu.Unlock()
 	bv.keyPageResolver = r
+}
+
+// IntentCertificateSource is the committed state a proposer builds an intent certificate against.
+type IntentCertificateSource interface {
+	IntentCertificateContext() (string, *ledger.BLSRegistryRecord, error)
+}
+
+// SetIntentCertificateSource installs the source of the chain id and BLS registry intent certificates are built
+// against (RB5 D3).
+func (bv *BFTValidator) SetIntentCertificateSource(s IntentCertificateSource) {
+	bv.mu.Lock()
+	defer bv.mu.Unlock()
+	bv.intentCertificates = s
 }
 
 // SetBatchEnqueuer installs the cross-ADI batch mempool.
@@ -1212,7 +1230,23 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	// which is why every TX2 reverted with "BLS signature verification
 	// failed" — the contract checked a chain-bound 6-field hash that
 	// committed exec, opID, validatorSetRoot, AND a 10-field A+++ govRoot.
-	if blsSignature == "" {
+	// RB5 D3: once a BLS registry is in force, the block is authenticated by its intent certificate, built on the
+	// block below, and carries no V6.1 solo signature. Before, the solo signature as it always was.
+	bv.mu.RLock()
+	certSource := bv.intentCertificates
+	bv.mu.RUnlock()
+	if certSource == nil {
+		return nil, fmt.Errorf("intent %s: no intent certificate source is wired, so whether a BLS registry is in force "+
+			"is not known", certenIntent.IntentID)
+	}
+	certChainID, certRegistry, err := certSource.IntentCertificateContext()
+	if err != nil {
+		return nil, fmt.Errorf("intent %s: intent certificate context: %w", certenIntent.IntentID, err)
+	}
+	certified := certRegistry != nil
+	if certified {
+		blsSignature = ""
+	} else if blsSignature == "" {
 		sig, err := signV6_1PreExecBLS(bv.logger, certenIntent, certenProof)
 		if err != nil {
 			// Refused here by name. It used to be logged and the block refused later by the builder
@@ -1385,6 +1419,8 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 		// Carried into the block so every validator can verify entitlement
 		// without performing I/O inside a consensus rule.
 		EntitlementEvidence: entEvidence,
+
+		IntentCertified: certified,
 	}
 
 	// Build ValidatorBlock using canonical method
@@ -1396,6 +1432,19 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 			ExecutorID: bv.validatorID,
 			Error:      fmt.Errorf("build canonical validator block: %w", err),
 		}, nil
+	}
+
+	if certified {
+		if err := bv.certifyIntent(vb, certChainID, certRegistry, certenProof, resolvedKeyPageURL, resolvedKeyBookURL,
+			govAuthorization, govVoteEvidence); err != nil {
+			return &ExecutionTaskResult{
+				Success:    false,
+				ExecutorID: bv.validatorID,
+				Error:      fmt.Errorf("intent %s: intent certificate: %w", certenIntent.IntentID, err),
+			}, nil
+		}
+		bv.logger.Printf("🔏 [INTENT-CERT] intent %s certified under BLS registry v%d: message %s",
+			certenIntent.IntentID, certRegistry.Version, vb.IntentCertificate.Message)
 	}
 
 	bv.logger.Printf("✅ [CANONICAL-VB] Built ValidatorBlock with real artifacts: bundle=%s op=%s",
