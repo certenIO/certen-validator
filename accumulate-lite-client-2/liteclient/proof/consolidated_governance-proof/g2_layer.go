@@ -61,13 +61,14 @@ func (g2 *G2Layer) ProveG2(ctx context.Context, request G2Request) (*G2Result, e
 		return nil, fmt.Errorf("G2 payload verification failed: %v", err)
 	}
 
-	// Step 3: Verify transaction effects if expected effect hash provided
+	// Step 3: Verify the transaction's effect - what Accumulate recorded it doing is exactly what the approved body
+	// specifies (g2_effect.go, RB5-F27).
 	var effectVerification EffectVerification
-	if request.ExpectEntryHash != nil && *request.ExpectEntryHash != "" {
-		effectVerification = g2.verifyTransactionEffect(payloadVerification.ComputedTxHash, *request.ExpectEntryHash)
+	if rec, err := g2.queryRecordedEffect(ctx, g1Result); err != nil {
+		effectVerification = EffectVerification{EffectType: EffectTypeRecordedWriteData,
+			Details: map[string]interface{}{"failure": fmt.Sprintf("the transaction record could not be read: %v", err)}}
 	} else {
-		// Default effect verification using computed vs expected hash comparison
-		effectVerification = g2.verifyTransactionEffect(payloadVerification.ComputedTxHash, payloadVerification.ExpectedTxHash)
+		effectVerification = verifyRecordedEffect(rec, g1Result.TxHash, request.ExpectEntryHash)
 	}
 
 	// Step 4: Verify outcome binding - G2's defining claim over G1.
@@ -248,21 +249,6 @@ func (g2 *G2Layer) queryRawTransactionJSON(ctx context.Context, g1Result *G1Resu
 
 	fmt.Printf("[G2] [QUERY] [OK] Got raw transaction JSON (%d bytes)\n", len(txJSON))
 	return txJSON, nil
-}
-
-// verifyTransactionEffect verifies transaction effects for outcome binding
-func (g2 *G2Layer) verifyTransactionEffect(computedHash string, expectedHash string) EffectVerification {
-	fmt.Printf("[G2] [EFFECT] Verifying transaction effect\n")
-
-	verification := *g2.goVerifier.VerifyTransactionEffect(expectedHash, computedHash)
-
-	if verification.Verified {
-		fmt.Printf("[G2] [EFFECT] [OK] Effect verification successful\n")
-	} else {
-		fmt.Printf("[G2] [EFFECT] [FAIL] Effect verification failed\n")
-	}
-
-	return verification
 }
 
 // extractTransactionPayload extracts real transaction payload from G1 execution data
