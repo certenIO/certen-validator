@@ -296,3 +296,13 @@ func TestBatchPlanIsCheckedBeforeAnythingIsSigned(t *testing.T) {
 		t.Fatalf("batch plan check at %d, validator block build at %d: the check must come first", check, build)
 	}
 }
+
+// RB5-F26: the batch path is the only settlement path. A validator without one refuses every intent by name - it is
+// never settled some other way.
+func TestWithoutABatchPathEveryIntentIsRefusedByName(t *testing.T) {
+	bv := &BFTValidator{}
+	_, err := bv.planBatch(&CertenIntent{IntentID: "i-1"}, 10)
+	if !errors.Is(err, ErrBatchUnavailable) {
+		t.Fatalf("no batch path: %v", err)
+	}
+}

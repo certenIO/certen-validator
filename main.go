@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -1438,8 +1439,16 @@ func startValidator(
 	// - G0/G1/G2 proofs are generated AFTER L1-L4 lite client proof completes
 	// - Uses the same v3 endpoint as the lite client
 	var governanceProofGen consensus.GovernanceProofGenerator
-	govProofPath := os.Getenv("GOV_PROOF_CLI_PATH") // Optional: path to govproof CLI
-	txhashPath := os.Getenv("TXHASH_CLI_PATH")      // Optional: path to txhash CLI for G2 payload verification
+	// Both are REQUIRED (RB5-F28). Every intent is attested on G0-G2, and G2's payload check needs the txhash tool;
+	// a validator without them could only refuse every intent, so it does not start.
+	govProofPath := os.Getenv("GOV_PROOF_CLI_PATH")
+	txhashPath := os.Getenv("TXHASH_CLI_PATH")
+	if err := requireExecutable("GOV_PROOF_CLI_PATH", govProofPath); err != nil {
+		return nil, nil, err
+	}
+	if err := requireExecutable("TXHASH_CLI_PATH", txhashPath); err != nil {
+		return nil, nil, err
+	}
 	govWorkDir := os.Getenv("GOV_PROOF_WORK_DIR")
 	if govWorkDir == "" {
 		govWorkDir = filepath.Join("data", "gov_proofs")
@@ -1453,20 +1462,11 @@ func startValidator(
 		120*time.Second,
 	)
 	if govErr != nil {
-		log.Printf("⚠️ [GOV-PROOF] CLI governance proof generator init failed: %v (governance proofs disabled)", govErr)
-	} else {
-		// Set txhash path for G2 payload verification
-		if txhashPath != "" {
-			cliGovProofGen.SetTxHashPath(txhashPath)
-			log.Printf("✅ TxHash tool configured for G2 payload verification: %s", txhashPath)
-		}
-		governanceProofGen = cliGovProofGen
-		if govProofPath != "" {
-			log.Printf("✅ CLI governance proof generator initialized: %s", govProofPath)
-		} else {
-			log.Printf("✅ Governance proof generator initialized (CLI not configured, using stub)")
-		}
+		return nil, nil, fmt.Errorf("the governance proof generator cannot be initialized: %w", govErr)
 	}
+	cliGovProofGen.SetTxHashPath(txhashPath)
+	governanceProofGen = cliGovProofGen
+	log.Printf("✅ Governance proof generator: %s, G2 payload verifier %s", govProofPath, txhashPath)
 
 	// --- Anchor manager, built from the engine's ledger store before the BFT validator that holds it
 	// (RB3-F137: the validator was handed a typed-nil wrapper that was only assigned afterwards) ---
@@ -1511,12 +1511,12 @@ func startValidator(
 
 	// The key page G1 is built against is the page that signed, read from the chain - never a
 	// guess. Without a resolver every governance proof fails rather than naming a page.
-	if kpResolver, kpErr := proof.NewChainKeyPageResolver(cfg.AccumulateURL, log.Printf); kpErr != nil {
-		log.Printf("❌ [GOV-PROOF] signing key page resolver unavailable (%v); governance proofs will "+
-			"fail until ACCUMULATE_URL is set", kpErr)
-	} else {
-		validator.SetKeyPageResolver(kpResolver)
+	// Without it every G1 would fail rather than name a page, so a validator without it does not start (RB5-F28).
+	kpResolver, kpErr := proof.NewChainKeyPageResolver(cfg.AccumulateURL, log.Printf)
+	if kpErr != nil {
+		return nil, nil, fmt.Errorf("the signing key page resolver cannot be initialized: %w", kpErr)
 	}
+	validator.SetKeyPageResolver(kpResolver)
 
 	// LedgerStore is automatically configured within the ABCI application
 	if ledgerProvider := cometEngine.GetLedgerStoreProvider(); ledgerProvider != nil {
@@ -2316,4 +2316,22 @@ func checkEnvironment() error {
 			return err
 		},
 	)
+}
+
+// requireExecutable refuses an environment variable that does not name an executable file.
+func requireExecutable(name, path string) error {
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("%s is required: it names a tool every intent's governance proof needs", name)
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("%s=%s: %w", name, path, err)
+	}
+	if st.IsDir() {
+		return fmt.Errorf("%s=%s is a directory, not a tool", name, path)
+	}
+	if runtime.GOOS != "windows" && st.Mode()&0o111 == 0 {
+		return fmt.Errorf("%s=%s is not executable", name, path)
+	}
+	return nil
 }

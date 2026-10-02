@@ -420,9 +420,11 @@ type BFTValidator struct {
 	// steps are 802,128 of the 987,644 gas an intent costs (81.2%), so amortising them is
 	// where essentially all the saving is.
 	//
-	// Nil means the batch path is not configured and on_cadence falls back to the existing
-	// deferred-serial scheduler — which still settles, just without the saving. Falling back
-	// rather than failing is deliberate: a misconfigured batch path must never strand intents.
+	// It is the ONLY settlement path: there is no per-intent or deferred-serial path behind it. Nil
+	// means the batch path is not configured, and every intent is then refused by name
+	// (ErrBatchUnavailable, planBatch) - never settled some other way. main refuses to start a
+	// validator whose batch stack cannot be assembled (RB5-F26: this comment used to describe a
+	// fallback that no longer exists).
 	batchEnqueuer BatchEnqueuer
 
 	// Entitlement store, used at Phase 3 to attach proof that the submitting ADI
@@ -626,8 +628,8 @@ func (bv *BFTValidator) SetIntentCertificateSource(s IntentCertificateSource) {
 
 // SetBatchEnqueuer installs the cross-ADI batch mempool.
 //
-// on_cadence intents route here in preference to the deferred-serial scheduler. If it is
-// never set, behaviour is exactly as before.
+// Every intent settles through it; a validator without one refuses each intent by name
+// (ErrBatchUnavailable) rather than settling it any other way.
 func (bv *BFTValidator) SetBatchEnqueuer(e BatchEnqueuer) {
 	bv.mu.Lock()
 	defer bv.mu.Unlock()
