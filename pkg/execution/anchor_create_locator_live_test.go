@@ -98,7 +98,7 @@ func TestLiveLocateAnchorCreateOnProductionAnchors(t *testing.T) {
 			if err != nil || !create.Succeeded || create.BlockNumber != loc.Block {
 				t.Fatalf("create tx: %+v, %v", create, err)
 			}
-			cb, cr, err := createBatchAnchorArgs(create.Input)
+			cb, cr, err := createBatchAnchorArgs(row.chainID, create.Input)
 			if err != nil || cb != bundle || cr != root {
 				t.Fatalf("create calldata does not name this anchor: %v", err)
 			}
@@ -190,7 +190,7 @@ func TestLiveRepairConfirmsEveryExportedAnchor(t *testing.T) {
 					fail("anchor_tx_hash %s cannot be read: %v", row.Atx, err)
 					continue
 				}
-				if b, rt, derr := createBatchAnchorArgs(named.Input); derr == nil && named.Succeeded && sameHex(hex.EncodeToString(b[:]), row.Bundle) && bytes.Equal(rt[:], root) {
+				if b, rt, derr := createBatchAnchorArgs(row.Chain, named.Input); derr == nil && named.Succeeded && sameHex(hex.EncodeToString(b[:]), row.Bundle) && bytes.Equal(rt[:], root) {
 					fail("anchor_tx_hash %s is itself this anchor's creation, but %s is located", row.Atx, loc.TxHash)
 					continue
 				}

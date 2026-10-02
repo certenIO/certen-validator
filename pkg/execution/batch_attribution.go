@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum"
-	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -167,21 +166,12 @@ func (o *BatchOrchestrator) anchorFloor(ctx context.Context, bundleID [32]byte) 
 	}
 	o.floors.mu.Unlock()
 
-	parsed, err := abiFromJSON(anchorsABIJSON)
+	st, err := ReadAnchorState(ctx, o.ecm.client, o.anchorV7, bundleID, nil)
 	if err != nil {
-		return 0, err
+		return 0, readErr(err)
 	}
-	bound := bind.NewBoundContract(o.anchorV7, parsed, o.ecm.client, o.ecm.client, o.ecm.client)
-	var out []interface{}
-	if err := bound.Call(&bind.CallOpts{Context: ctx}, &out, "anchors", bundleID); err != nil {
-		return 0, readErr(fmt.Errorf("reading anchor 0x%x: %w", bundleID[:8], err))
-	}
-	const timestampField = 9
-	if len(out) <= timestampField {
-		return 0, fmt.Errorf("anchors() returned %d fields; the Anchor struct layout changed", len(out))
-	}
-	ts, ok := out[timestampField].(*big.Int)
-	if !ok || ts.Sign() <= 0 {
+	ts := st.Timestamp
+	if ts == nil || ts.Sign() <= 0 {
 		return 0, fmt.Errorf("anchor 0x%x has no creation timestamp", bundleID[:8])
 	}
 	// A minute early: several blocks can share one timestamp (Arbitrum), and "the highest block at

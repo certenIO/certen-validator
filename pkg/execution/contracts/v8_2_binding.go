@@ -186,7 +186,7 @@ type AccumulateValidator struct {
 // cannot distinguish a real quorum from three arbitrary keys.
 type AccumulateValidatorSetRootInputs struct {
 	// Incarnation identifies which Accumulate chain this set belongs to —
-	// the genesis root anchor, anchor(directory)-root[0]. The network has
+	// its v1 incarnation identity (docs/l4/INCARNATION_ANCHOR.md). The network has
 	// restarted more than once and no chain commits to its predecessor, so
 	// without this the root is ambiguous across incarnations.
 	Incarnation [32]byte

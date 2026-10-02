@@ -41,8 +41,8 @@ func TestAMemberWithARecordedOutcomeIsNeverQueuedAgain(t *testing.T) {
 	}
 	decided := &database.RecordedMemberOutcome{Settlement: database.MemberSettlementSettled, ProofCycle: database.MemberProofCycleWritten,
 		SettlementTx: "0xabc", CycleID: "cycle-1", RecordedAt: time.Unix(1_800_000_100, 0)}
-	s := &BatchStack{Resolver: r, Mempool: NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64}),
-		Orchestrators: map[int64]*BatchOrchestrator{odChain: {screen: acceptEveryAccount}, seqPredChain: {screen: acceptEveryAccount}},
+	s := &BatchStack{Incarnation: testIncarnation, Resolver: r, Mempool: NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64}),
+		Orchestrators: map[int64]*BatchOrchestrator{odChain: {incarnation: testIncarnation, screen: acceptEveryAccount}, seqPredChain: {incarnation: testIncarnation, screen: acceptEveryAccount}},
 		MemberOutcomes: recordedOutcomes{
 			fmt.Sprintf("done/%d", seqPredChain): decided,
 			fmt.Sprintf("done/%d", odChain):      decided,

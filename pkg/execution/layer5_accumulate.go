@@ -38,10 +38,10 @@ package execution
 import (
 	"encoding/hex"
 	"fmt"
+	"github.com/certen/independant-validator/pkg/accumulateset"
 	"strings"
 
 	chained_proof "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/working-proof_do_not_edit"
-	"github.com/certen/independant-validator/pkg/execution/contracts"
 	certenproof "github.com/certen/independant-validator/pkg/proof"
 )
 
@@ -52,8 +52,8 @@ import (
 // steps 1-4 are untouched, and a Layer5 with a nil binding verifies exactly as
 // it did before.
 type AccumulateBinding struct {
-	// Incarnation is the genesis root anchor of the Accumulate chain —
-	// anchor(directory)-root[0]. Nothing in an L4 leg identifies its chain: the
+	// Incarnation is the v1 incarnation identity of the Accumulate chain
+	// (docs/l4/INCARNATION_ANCHOR.md). Nothing in an L4 leg identifies its chain: the
 	// signed preimage is a SequencedMessage over a PartitionAnchor, and every
 	// URL in it is a protocol constant identical across MainNet, Kermit, and
 	// every incarnation of both.
@@ -158,14 +158,9 @@ func (b *AccumulateBinding) Verify(
 	return AccumulateBindingResult{Present: true, Verdict: verdict}
 }
 
-// AccumulateSetRoot computes the canonical root that CertenAnchorV8_2's pre-exec
-// message commits, from the evidence a ValidatorSetProof carries.
-//
-// It lives here rather than in pkg/proof because the canonical encoding is in
-// pkg/execution/contracts, which is deliberately free of certen-internal imports
-// so both the signing and submission paths can use it without a cycle. Computing
-// it in one place is what stops the artifact and the anchor message disagreeing
-// about what was committed.
+// AccumulateSetRoot is the root of the set a ValidatorSetProof derives from chain bytes, through the ONE reduction
+// every path uses (accumulateset.AccumulateSetRoot; RB5 design D2), so the artifact and the anchor message cannot disagree
+// about how a set becomes a root.
 func AccumulateSetRoot(p *certenproof.ValidatorSetProof) (string, error) {
 	if p == nil {
 		return "", fmt.Errorf("no validator-set proof")
@@ -178,25 +173,9 @@ func AccumulateSetRoot(p *certenproof.ValidatorSetProof) (string, error) {
 	if err != nil || len(incRaw) != 32 {
 		return "", fmt.Errorf("incarnation must be 32 bytes of hex")
 	}
-	in := contracts.AccumulateValidatorSetRootInputs{
-		ThresholdNumerator:   thr.Numerator,
-		ThresholdDenominator: thr.Denominator,
-	}
-	copy(in.Incarnation[:], incRaw)
-	for i, v := range set {
-		pk, err := hex.DecodeString(strings.TrimPrefix(strings.ToLower(v.PublicKey), "0x"))
-		if err != nil || len(pk) != 32 {
-			return "", fmt.Errorf("validator %d: public key must be 32 bytes of hex", i)
-		}
-		var k [32]byte
-		copy(k[:], pk)
-		activeOn := make([]string, len(v.ActiveOn))
-		copy(activeOn, v.ActiveOn)
-		in.Validators = append(in.Validators, contracts.AccumulateValidator{
-			PublicKey: k, ActiveOn: activeOn,
-		})
-	}
-	root, err := contracts.ComputeAccumulateValidatorSetRoot(in)
+	var inc [32]byte
+	copy(inc[:], incRaw)
+	root, err := accumulateset.AccumulateSetRoot(set, thr, inc)
 	if err != nil {
 		return "", err
 	}

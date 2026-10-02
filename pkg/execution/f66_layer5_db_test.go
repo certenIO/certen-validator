@@ -34,7 +34,11 @@ func TestF66_Layer5CarriesTheAnchoredGovernance(t *testing.T) {
 	for i := range inputs {
 		inputs[i].Provenance.AccumTxHash = fmt.Sprintf("%x", crypto.Keccak256Hash([]byte(fmt.Sprintf("accum-%d-%s", i, nonce))))
 	}
-	tree, err := BuildBatchTree(84532, inputs, 100)
+	tree, err := BuildBatchTree(84532, withAccSet(inputs), 100, testIncarnation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f66Msg, err := ComputeBatchQuorumMessage(tree, [32]byte{0x5e})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +48,9 @@ func TestF66_Layer5CarriesTheAnchoredGovernance(t *testing.T) {
 	}
 	ev := &AnchorQuorumEvidence{
 		ChainID: 84532, BundleID: tree.BundleID, Root: tree.Root, BatchOperationID: tree.BatchOperationID,
-		BatchOperationIDVersion: tree.BatchOperationIDVersion, MessageHash: [32]byte{0x88},
+		BatchOperationIDVersion: tree.BatchOperationIDVersion, MessageHash: f66Msg,
+		AccumulateBlockHeight: tree.BlockHeight, AccumulateSetRoot: tree.AccumulateSetRoot, Incarnation: tree.Incarnation,
+		SetRoot: [32]byte{0x5e}, LeafCount: uint64(tree.Size()),
 		VerifyTx: "0x" + strings.Repeat("6b", 32), VerifyBlock: 100, VerifyBlockTime: time.Now().UTC(),
 		AnchorCreateTx: "0x" + strings.Repeat("6a", 32), AnchorCreateBlock: 99,
 		AggregateSignatureHex: "0x01", AggregatePublicKeyHex: "0x02",
@@ -76,6 +82,17 @@ func TestF66_Layer5CarriesTheAnchoredGovernance(t *testing.T) {
 	}
 	if l5.Governance.BatchOperationID != hexPrefixed(tree.BatchOperationID[:]) {
 		t.Fatalf("layer 5 states batch operation id %s, the anchor %x", l5.Governance.BatchOperationID, tree.BatchOperationID)
+	}
+	// What the V8.2 anchor committed survives the row: layer 5 re-derives the bundle id and the quorum's message, and
+	// the committed Accumulate set is the one the proof's own L4 Directory leg was verified against (RB5 Phase G).
+	if l5.Commitment == nil || l5.Commitment.Version != "v8_2" || l5.Commitment.BundleID != hexPrefixed(tree.BundleID[:]) ||
+		l5.Commitment.LeafCount != uint64(tree.Size()) || l5.Commitment.MessageHash != hexPrefixed(f66Msg[:]) {
+		t.Fatalf("layer 5 commitment %+v", l5.Commitment)
+	}
+	pin := testIncarnation
+	if st, err := CheckAccumulateCommitment(l5, testAtt.CertenProof.LiteClientProof.CompleteProof.Layer4DN, &pin); err != nil ||
+		st != AccumulateSetCommittedVerified {
+		t.Fatalf("accumulate commitment: %s %v", st, err)
 	}
 
 	// A stored member whose commitment was altered no longer recomputes to the anchored id.

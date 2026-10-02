@@ -31,6 +31,9 @@ var (
 
 	// ErrNoGovernanceCommitment: a member without a governance decision to commit to (RB4-F66).
 	ErrNoGovernanceCommitment = consensus.ErrNoGovernanceCommitment
+
+	// ErrNoAccumulateSetRoot: a member whose round's proof has no committable Accumulate validator set (RB5 D2).
+	ErrNoAccumulateSetRoot = consensus.ErrNoAccumulateSetRoot
 )
 
 // =============================================================================
@@ -70,6 +73,10 @@ type PendingBatchIntent struct {
 	// then LegacyNoGovernance: formed with the v1 operation id its anchor may already carry.
 	GovernanceCommitment [32]byte
 	LegacyNoGovernance   bool
+
+	// AccumulateSetRoot is the root of the Accumulate validator set this member's L4 Directory leg was verified
+	// against, derived at admission from the round's own proof under the process incarnation (RB5 design D2).
+	AccumulateSetRoot [32]byte
 
 	// AccumTxHash is the Accumulate transaction that carried this intent. Evidence only — never hashed
 	// into the leaf. Empty is honest for a member restored from a pre-2026-09-18 mempool blob.
@@ -252,6 +259,7 @@ func (p *PendingBatchIntent) LeafInput() (BatchLeafInput, error) {
 		OperationID:          p.OperationID,
 		GovernanceCommitment: p.GovernanceCommitment,
 		LegacyNoGovernance:   p.LegacyNoGovernance,
+		AccumulateSetRoot:    p.AccumulateSetRoot,
 		IntentID:             p.IntentID,
 		Provenance:           p.provenance(),
 	}, nil

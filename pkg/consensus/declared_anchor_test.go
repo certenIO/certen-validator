@@ -41,8 +41,8 @@ func withAnchor(t *testing.T, ci *CertenIntent, i int, anchor map[string]interfa
 }
 
 func TestTheBatchAnchorSelectorIsCreateBatchAnchor(t *testing.T) {
-	if got := fmt.Sprintf("0x%x", BatchAnchorCreateSelector); got != "0x34597e5a" {
-		t.Fatalf("createBatchAnchor selector %s, want 0x34597e5a", got)
+	if got := fmt.Sprintf("0x%x", BatchAnchorCreateSelector); got != "0x5d22872b" {
+		t.Fatalf("createBatchAnchor selector %s, want 0x5d22872b", got)
 	}
 }
 
@@ -50,7 +50,7 @@ func TestALegIsSettledOnTheAnchorItDeclares(t *testing.T) {
 	const retired = "0x8398D7EB4bF1C1F3D7F8aF9e5eFbDfC0c1b85339"
 	for name, anchor := range map[string]map[string]interface{}{
 		"the live anchor, by signature": {"address": testAnchor(84532).Hex(), "functionSelector": BatchAnchorCreateSignature},
-		"the live anchor, by selector":  {"address": strings.ToLower(testAnchor(84532).Hex()), "functionSelector": "0x34597e5a"},
+		"the live anchor, by selector":  {"address": strings.ToLower(testAnchor(84532).Hex()), "functionSelector": "0x5d22872b"},
 	} {
 		if err := enqueue(refusalValidator(newFakeEnqueuer()), withAnchor(t, batchableIntent(t, "i1", 84532), 0, anchor)); err != nil {
 			t.Errorf("%s: refused: %v", name, err)
@@ -116,8 +116,8 @@ func TestTheBlockRecordsTheCallThatWillExecute(t *testing.T) {
 		t.Fatal(err)
 	}
 	tg := vb.CrossChainProof.ChainTargets[0]
-	if tg.ContractAddress != testAnchor(84532).Hex() || tg.FunctionSelector != "0x34597e5a" {
-		t.Fatalf("chain target %s %s; want the anchor %s called with createBatchAnchor (0x34597e5a)", tg.ContractAddress, tg.FunctionSelector, testAnchor(84532).Hex())
+	if tg.ContractAddress != testAnchor(84532).Hex() || tg.FunctionSelector != "0x5d22872b" {
+		t.Fatalf("chain target %s %s; want the anchor %s called with createBatchAnchor (0x5d22872b)", tg.ContractAddress, tg.FunctionSelector, testAnchor(84532).Hex())
 	}
 	raw, err := json.Marshal(vb.CrossChainProof.ChainTargets)
 	if err != nil {

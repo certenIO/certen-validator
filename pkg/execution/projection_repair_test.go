@@ -20,7 +20,7 @@ func TestTheAnchorCreateSelectorsIncludeTheBindingsCreateAnchor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !isAnchorCreateCall(append(parsed.Methods["createAnchor"].ID, 0)) || !isAnchorCreateCall(append(createBatchAnchorMethod.ID, 0)) {
+	if !isAnchorCreateCall(append(parsed.Methods["createAnchor"].ID, 0)) || !isAnchorCreateCall(append(contracts.CreateBatchAnchorV8_1Selector[:], 0)) || !isAnchorCreateCall(append(contracts.CreateBatchAnchorV8_2Selector[:], 0)) {
 		t.Fatal("an anchor-create call is not recognised")
 	}
 	if isAnchorCreateCall([]byte{0xa9, 0x05, 0x9c, 0xbb, 0}) {

@@ -58,10 +58,33 @@ type BatchAttestationRequest struct {
 	Members []MemberGovernance `json:"members,omitempty"`
 }
 
-// MemberGovernance is one member's operation id and governance commitment, 0x-hex.
+// MemberGovernance is one member's operation id, governance commitment and Accumulate validator set root, 0x-hex.
 type MemberGovernance struct {
 	OperationID          string `json:"operation_id"`
 	GovernanceCommitment string `json:"governance_commitment"`
+	// AccumulateSetRoot is the root of the Accumulate validator set the proposer's proof of the member was verified
+	// against (RB5 design D2), for DIAGNOSIS only. omitempty: an older proposer sends none.
+	AccumulateSetRoot string `json:"accumulate_set_root,omitempty"`
+}
+
+// accumulateSetDisagreement names the first member whose Accumulate validator set the proposer and this validator
+// derived differently, or "" when they agree on every member both hold. mine maps operation id to set root.
+func accumulateSetDisagreement(theirs []MemberGovernance, mine map[[32]byte][32]byte) string {
+	for _, m := range theirs {
+		op, err := parseHex32(m.OperationID)
+		if err != nil {
+			continue
+		}
+		root, err := parseHex32(m.AccumulateSetRoot)
+		if err != nil {
+			continue
+		}
+		if own, held := mine[op]; held && own != root {
+			return fmt.Sprintf("operation %x: the proposer's proof was verified against Accumulate validator set %x, "+
+				"this validator's own proof against %x", op[:8], root[:8], own[:8])
+		}
+	}
+	return ""
 }
 
 // governanceDisagreement names the first member the proposer and this validator committed to different governance
@@ -120,6 +143,11 @@ const (
 	// CodeGovernanceMismatch — this validator holds the member(s), and its own G1 decided a member's governance
 	// differently from the proposer's: who authorised it is in dispute. Never signed (RB4-F66).
 	CodeGovernanceMismatch AttestationRefusalCode = "governance_mismatch"
+
+	// CodeAccumulateSetMismatch — this validator holds the member(s), and its own proof of a member was verified
+	// against a different Accumulate validator set than the proposer's: the set the V8.2 anchor would commit is in
+	// dispute. Never signed (RB5 design D2).
+	CodeAccumulateSetMismatch AttestationRefusalCode = "accumulate_set_mismatch"
 
 	// CodeConfigMismatch — the request cannot be served because the two nodes are configured
 	// differently. Retrying cannot help; an operator has to fix it.
@@ -252,6 +280,7 @@ func (s *BatchStack) HandleBatchAttestationRequest(
 	var tree *BatchTree
 	derived := make([]string, 0, len(chunks))
 	mine := map[[32]byte][32]byte{}
+	mineSets := map[[32]byte][32]byte{}
 	for _, chunk := range chunks {
 		inputs := make([]BatchLeafInput, 0, len(chunk))
 		for _, m := range chunk {
@@ -261,8 +290,9 @@ func (s *BatchStack) HandleBatchAttestationRequest(
 			}
 			inputs = append(inputs, in)
 			mine[in.OperationID] = in.GovernanceCommitment
+			mineSets[in.OperationID] = in.AccumulateSetRoot
 		}
-		t, err := BuildBatchTree(req.ChainID, inputs, req.CutoffHeight)
+		t, err := BuildBatchTree(req.ChainID, inputs, req.CutoffHeight, s.Incarnation)
 		if err != nil {
 			return refuse("rebuilding batch: %v", err)
 		}
@@ -278,6 +308,10 @@ func (s *BatchStack) HandleBatchAttestationRequest(
 				"refusing to attest who authorised a member when this validator's proof says otherwise",
 				shortHex(req.BundleID), why)
 		}
+		if why := accumulateSetDisagreement(req.Members, mineSets); why != "" {
+			return refuseWith(CodeAccumulateSetMismatch, "Accumulate validator-set disagreement in the batch proposed as "+
+				"%s: %s - refusing to attest a set this validator's proof does not reach", shortHex(req.BundleID), why)
+		}
 		return refuseWith(CodeBundleMismatch,
 			"bundleId mismatch: proposer %s, this validator derived %v over %d member(s) — "+
 				"refusing to attest a batch it did not independently reproduce",
@@ -285,14 +319,15 @@ func (s *BatchStack) HandleBatchAttestationRequest(
 	}
 	resp.BundleID = "0x" + hex.EncodeToString(tree.BundleID[:])
 
-	// ---- Sign the same 6-field pre-exec message the contract reconstructs -------
+	// ---- Sign the same V8.2 pre-exec message the contract reconstructs -----------
 	setRoot, err := contracts.GetV6_1ValidatorSetRoot()
 	if err != nil {
 		return refuse("validator-set root: %v", err)
 	}
-	msgHash := contracts.ComputeEvmMessageHashV6_1_Pre(
-		req.ChainID, tree.BundleID, tree.Root, tree.BatchOperationID, setRoot,
-	)
+	msgHash, err := ComputeBatchQuorumMessage(tree, setRoot)
+	if err != nil {
+		return refuse("%v", err)
+	}
 	resp.MessageHash = "0x" + hex.EncodeToString(msgHash[:])
 
 	km := bls.GetValidatorBLSKey()

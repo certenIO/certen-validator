@@ -206,6 +206,10 @@ type BatchStack struct {
 	// restart's rewind, a retry after a commit the proposer did not see - would otherwise settle, attest
 	// and write it back a second time. Required: without it that cannot be told, so nothing is queued.
 	MemberOutcomes MemberOutcomeReader
+
+	// Incarnation is the Accumulate incarnation this validator proves against (docs/l4/INCARNATION_ANCHOR.md). Every
+	// member's Accumulate set root is derived under it, and every V8.2 anchor commits it. Required, never zero.
+	Incarnation [32]byte
 }
 
 // MemberOutcomeReader reads the recorded outcome of an intent's member on a chain (nil: none recorded).
@@ -247,10 +251,15 @@ func NewBatchStack(
 	resolver *EVMChainResolverImpl,
 	prover QuorumProver,
 	mempoolCfg BatchMempoolConfig,
+	incarnation [32]byte,
 	logf func(string, ...interface{}),
 ) (*BatchStack, error) {
 	if resolver == nil {
 		return nil, fmt.Errorf("chain resolver required")
+	}
+	if incarnation == ([32]byte{}) {
+		return nil, fmt.Errorf("the Accumulate incarnation is required: every V8.2 anchor commits it, and a member's " +
+			"Accumulate set root is derived under it")
 	}
 	if prover == nil {
 		return nil, fmt.Errorf(
@@ -270,7 +279,7 @@ func NewBatchStack(
 		if err != nil {
 			return nil, fmt.Errorf("assembling chain %d: %w", chainID, err)
 		}
-		orchestrators[chainID] = NewBatchOrchestrator(ecm, anchorAddr, prover, mempool, logf)
+		orchestrators[chainID] = NewBatchOrchestrator(ecm, anchorAddr, prover, mempool, incarnation, logf)
 		logf("[BATCH-STACK] chain %d wired to CertenAnchorV8 %s", chainID, anchorAddr.Hex())
 	}
 
@@ -280,6 +289,7 @@ func NewBatchStack(
 		Mempool:       mempool,
 		Orchestrators: orchestrators,
 		SequenceChain: NonSettlementChainFromResolver(resolver),
+		Incarnation:   incarnation,
 	}, nil
 }
 
@@ -842,9 +852,26 @@ func (s *BatchStack) admit(
 		}
 	}
 
+	// The V8.2 anchor commits the Accumulate validator set the member's L4 was verified against: derived here, once,
+	// from the round's own proof (RB5 design D2). CheckMember queues nothing and has no snapshot.
+	var accSetRoot [32]byte
+	if attestation != nil {
+		ac, ok := attestation.(accumulateSetCommitter)
+		if !ok {
+			return nil, fmt.Errorf("%w: intent %s: its round's snapshot (%T) carries no Accumulate validator set",
+				ErrNoAccumulateSetRoot, intentID, attestation)
+		}
+		root, err := ac.AccumulateSetRoot(s.Incarnation)
+		if err != nil {
+			return nil, fmt.Errorf("intent %s: %w", intentID, err)
+		}
+		accSetRoot = root
+	}
+
 	return &PendingBatchIntent{
 		IntentID:             intentID,
 		GovernanceCommitment: governanceCommitment,
+		AccumulateSetRoot:    accSetRoot,
 		ADIURL:               adiURL,
 		ChainID:              chainID,
 		Account:              common.BytesToAddress(account[:]),
@@ -856,6 +883,12 @@ func (s *BatchStack) admit(
 		CommitPartition:      commitPartition,
 		CommitTime:           commitTime,
 	}, nil
+}
+
+// accumulateSetCommitter is the round's snapshot as admission reads it for the V8.2 anchor: the root of the
+// Accumulate validator set its proof was verified against, under an incarnation.
+type accumulateSetCommitter interface {
+	AccumulateSetRoot(incarnation [32]byte) ([32]byte, error)
 }
 
 // governanceCommitter is the round's snapshot as admission reads it: the commitment to who decided the intent.

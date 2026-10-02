@@ -332,7 +332,7 @@ func TestOD_WindowZeroDoesNotReadFinality(t *testing.T) {
 // in particular no failure.
 func TestOD_ZeroFenceDefersWithoutAFailure(t *testing.T) {
 	f := &fakeODChain{settleTx: odSettleTx}
-	tree, err := BuildBatchTree(odChain, []BatchLeafInput{mustLeaf(t, odMember(1, odChain, 100))}, 100)
+	tree, err := BuildBatchTree(odChain, withAccSet([]BatchLeafInput{mustLeaf(t, odMember(1, odChain, 100))}), 100, testIncarnation)
 	if err != nil {
 		t.Fatal(err)
 	}

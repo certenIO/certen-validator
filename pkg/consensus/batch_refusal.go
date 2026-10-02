@@ -45,6 +45,11 @@ var (
 	// commits to every member's (RB4-F66). CERTEN not having established it is an outage, never the intent's
 	// defect, so it is an ErrBatchUnavailable and the intent is retried.
 	ErrNoGovernanceCommitment = fmt.Errorf("%w: no governance decision to commit to", ErrBatchUnavailable)
+
+	// ErrNoAccumulateSetRoot is a member whose round's proof carries no committable Accumulate validator set (its L4
+	// Directory leg): the V8.2 anchor commits the set each member was verified against (RB5 design D2). CERTEN's own
+	// proof lacking it is an outage, never the intent's defect, so it is an ErrBatchUnavailable and retried.
+	ErrNoAccumulateSetRoot = fmt.Errorf("%w: no committable Accumulate validator set", ErrBatchUnavailable)
 )
 
 // BatchRefusal is the batch path declining an intent. Permanent refusals are the intent's own

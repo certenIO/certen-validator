@@ -212,7 +212,7 @@ var (
 func (f *fakeODChain) settlementInFlight(nonce uint64) bool { return f.inFlight[nonce] }
 
 func odOrchestrator(f *fakeODChain) *BatchOrchestrator {
-	return &BatchOrchestrator{odChain: f, logf: func(string, ...interface{}) {}, attempts: map[[32]byte]int{}}
+	return &BatchOrchestrator{incarnation: testIncarnation, odChain: f, logf: func(string, ...interface{}) {}, attempts: map[[32]byte]int{}}
 }
 
 const odSettleNonce = 42
@@ -386,7 +386,7 @@ type attestCall struct {
 
 func settlementSubmitter(t *testing.T, f *fakeODChain) (*OnDemandSubmitter, *[]attestCall) {
 	t.Helper()
-	stack := &BatchStack{
+	stack := &BatchStack{Incarnation: testIncarnation,
 		Mempool:       NewBatchMempool(BatchMempoolConfig{}),
 		Orchestrators: map[int64]*BatchOrchestrator{odChain: odOrchestrator(f)},
 		SequenceChain: &fakeNSChain{},

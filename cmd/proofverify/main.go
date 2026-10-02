@@ -32,6 +32,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -72,6 +73,9 @@ func main() {
 		l5      = flag.Bool("l5", false, "also recompute the stored external-anchor binding (leaf -> batch root)")
 		online  = flag.String("online-rpc", "", "with --l5 and --offline=false: also check, at this JSON-RPC endpoint of "+
 			"the anchor's chain, that the anchor-create transaction published the batch root and batch operation id")
+		incarnation = flag.String("incarnation", "", "with --l5: the Accumulate incarnation you trust (hex32, docs/l4/"+
+			"INCARNATION_ANCHOR.md; derive it with cmd/incarnation). Without it, which Accumulate chain a V8.2 anchor's "+
+			"committed validator set belongs to rests on the anchor alone")
 	)
 	flag.Parse()
 
@@ -88,6 +92,16 @@ func main() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "proof-id %q is not a UUID: %v\n", *proofID, err)
 		os.Exit(exitUsage)
+	}
+	var pinned *[32]byte
+	if *incarnation != "" {
+		raw, err := hex.DecodeString(strings.TrimPrefix(strings.ToLower(*incarnation), "0x"))
+		if err != nil || len(raw) != 32 {
+			fmt.Fprintf(os.Stderr, "--incarnation %q is not 32 bytes of hex\n", *incarnation)
+			os.Exit(exitUsage)
+		}
+		pinned = new([32]byte)
+		copy(pinned[:], raw)
 	}
 
 	// Cut the network BEFORE opening the database, so the block cannot be
@@ -180,7 +194,7 @@ func main() {
 			code = worseExit(code, reportG0Binding(ctx, store, id, cp))
 		}
 		if *l5 {
-			code = worseExit(code, reportLayer5(ctx, store, id))
+			code = worseExit(code, reportLayer5(ctx, store, id, cp, pinned))
 		}
 		if *govern && *l5 {
 			code = worseExit(code, reportGovernanceDecision(ctx, store, id))
@@ -323,7 +337,8 @@ func worseExit(a, b int) int {
 // written before Stage 3 is in that state, and so is every proof that settled
 // with no observable external transaction. Nothing about them is known to be
 // wrong.
-func reportLayer5(ctx context.Context, store *certenproof.PostgresProofStorage, id uuid.UUID) int {
+func reportLayer5(ctx context.Context, store *certenproof.PostgresProofStorage, id uuid.UUID,
+	cp *chained_proof.ChainedProof, pinned *[32]byte) int {
 	l5, err := execution.VerifyStoredLayer5(ctx, store, id)
 
 	switch {
@@ -338,11 +353,9 @@ func reportLayer5(ctx context.Context, store *certenproof.PostgresProofStorage, 
 		fmt.Printf("  L5  external coordinates: tx %s at block %d on %s (chainId %d)\n",
 			l5.AnchorTx, l5.BlockNumber, l5.Network, l5.ChainID)
 		fmt.Printf("  L5  NOT verified offline: that the transaction above exists and contains this\n")
-		fmt.Printf("      batch root. That is an ONLINE check; proving it offline needs a light\n")
+		fmt.Printf("      batch root. That is an ONLINE check (--online-rpc); proving it offline needs a light\n")
 		fmt.Printf("      client, which is deliberately out of scope.\n")
-		fmt.Printf("  L5  does NOT establish that the Accumulate validator set which signed L4 was\n")
-		fmt.Printf("      the legitimate one. Nothing in this proof does.\n")
-		return exitVerified
+		return reportAccumulateCommitment(id, l5, cp, pinned)
 
 	case errors.Is(err, execution.ErrNoLayer5):
 		// A DISTINCT message, not the L1-L4 one: "L1-L4 verified, L5 absent" is
@@ -364,6 +377,45 @@ func reportLayer5(ctx context.Context, store *certenproof.PostgresProofStorage, 
 		fmt.Printf("  The binding IS present and the leaf does not recompute to the batch root it\n")
 		fmt.Printf("  names. This proof is not in the batch it claims to be in.\n")
 		return exitFailed
+	}
+}
+
+// reportAccumulateCommitment says what the anchor establishes about the Accumulate validator set the proof's L4 was
+// verified against (RB5 Phase G), never more.
+func reportAccumulateCommitment(id uuid.UUID, l5 *execution.Layer5, cp *chained_proof.ChainedProof, pinned *[32]byte) int {
+	if l5.Commitment != nil {
+		fmt.Printf("  L5  anchor (%s): bundle id %s… and the quorum's message recompute from what it committed, OFFLINE\n",
+			l5.Commitment.Version, short(strings.TrimPrefix(l5.Commitment.BundleID, "0x")))
+	}
+	state, err := execution.CheckAccumulateCommitment(l5, cp.Layer4DN, pinned)
+	switch {
+	case err != nil:
+		fmt.Printf("FAILED (Accumulate validator set)  %s\n  %v\n", id, err)
+		return exitFailed
+	case state == execution.AccumulateSetCommittedVerified:
+		fmt.Printf("  L4↔L5 the Accumulate validator set this proof's L4 was verified against IS the one CERTEN's quorum\n")
+		fmt.Printf("      committed on-chain (root %s…), under the incarnation you pinned (%s…). It cannot be\n",
+			short(strings.TrimPrefix(l5.Commitment.AccumulateSetRoot, "0x")), short(strings.TrimPrefix(l5.Commitment.Incarnation, "0x")))
+		fmt.Printf("      substituted. Whether it descends from that incarnation's genesis set is not checked here.\n")
+		return exitVerified
+	case state == execution.AccumulateSetCommittedUnpinned:
+		fmt.Printf("SUMMARY-ONLY (Accumulate incarnation)  %s\n", id)
+		fmt.Printf("  the validator set this proof's L4 used IS the one its anchor committed (root %s…), under\n",
+			short(strings.TrimPrefix(l5.Commitment.AccumulateSetRoot, "0x")))
+		fmt.Printf("  incarnation %s…; no --incarnation was pinned, so which Accumulate chain that is rests on the\n",
+			short(strings.TrimPrefix(l5.Commitment.Incarnation, "0x")))
+		fmt.Printf("  anchor alone. Pin one (cmd/incarnation) to check it.\n")
+		return exitSummaryOnly
+	case state == execution.AccumulateSetNotCommittedV8_1:
+		fmt.Printf("SUMMARY-ONLY (Accumulate validator set)  %s\n", id)
+		fmt.Printf("  this proof settled under a V8.1 anchor, which committed no Accumulate validator set: the set\n")
+		fmt.Printf("  L4 was verified against is carried by the proof and bound to nothing on-chain.\n")
+		return exitSummaryOnly
+	default:
+		fmt.Printf("SUMMARY-ONLY (Accumulate validator set)  %s\n", id)
+		fmt.Printf("  this proof's layer 5 records no anchor commitment (written before it was recorded): the set L4\n")
+		fmt.Printf("  was verified against is carried by the proof and not checked against its anchor.\n")
+		return exitSummaryOnly
 	}
 }
 
@@ -443,6 +495,13 @@ func reportLayer5Online(ctx context.Context, store *certenproof.PostgresProofSto
 	fmt.Printf("  L5  ONLINE: anchor tx %s (to %s) published root %s… and batch operation id %s…\n",
 		l5.AnchorTx, got.AnchorContract, short(strings.TrimPrefix(got.BatchRoot, "0x")),
 		short(strings.TrimPrefix(got.BatchOperationID, "0x")))
+	if got.AnchorVersion == "v8_2" {
+		fmt.Printf("      as a V8.2 anchor committing Accumulate set %s… under incarnation %s…\n",
+			short(strings.TrimPrefix(got.AccumulateSetRoot, "0x")), short(strings.TrimPrefix(got.Incarnation, "0x")))
+	}
+	if got.AnchorRecordChecked {
+		fmt.Printf("      and the anchor's own record (anchors(bundleId)) holds exactly that, valid\n")
+	}
 	fmt.Printf("      compare the contract with the chain's published CERTEN anchor\n")
 	return exitVerified
 }

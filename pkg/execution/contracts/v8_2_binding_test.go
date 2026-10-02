@@ -30,7 +30,9 @@ var (
 	vecOperationID = b32("3333333333333333333333333333333333333333333333333333333333333333")
 	vecCertenRoot  = b32("4444444444444444444444444444444444444444444444444444444444444444")
 
-	// Kermit's genesis root anchor — anchor(directory)-root[0], measured live.
+	// A sample 32-byte incarnation input for the Go<->Solidity encoding vector. It is Kermit's genesis root anchor,
+	// which the v1 incarnation definition superseded (docs/l4/INCARNATION_ANCHOR.md); the real Kermit value is pinned by
+	// TestV8_2_PinnedVector_KermitIncarnation.
 	vecIncarnation = b32("e3f3119213a1ead44647659d67e47f4269a2affb13f150aa87b20baacf93cf81")
 )
 
@@ -174,7 +176,7 @@ func TestV8_2_IncarnationIsCommitted(t *testing.T) {
 		t.Fatal(err)
 	}
 	other := vecAccSet()
-	// MainNet's genesis root anchor, measured live.
+	// A second sample incarnation input (MainNet's genesis root anchor, superseded as an identity by v1).
 	other.Incarnation = b32("672f89ffc3cc87cff9a7fea1529ec893ec775e49e0cf4da1ab9c927979176e17")
 	b, err := ComputeAccumulateValidatorSetRoot(other)
 	if err != nil {
@@ -281,5 +283,45 @@ func TestV8_2_LegsMessageVector(t *testing.T) {
 	pre := ComputeEvmMessageHashV8_2_Pre(vecChainID, intentID, proofRoot, zero, zero, zero, zero)
 	if pre == msg {
 		t.Fatal("legs and pre-exec messages collide")
+	}
+}
+
+// kermitAccSet is Kermit's real validator set and threshold (network-status, 2026-09-29; unchanged since genesis)
+// under Kermit's real v1 incarnation (docs/l4/INCARNATION_ANCHOR.md): the root every V8.2 anchor over a Kermit proof
+// commits today.
+func kermitAccSet() AccumulateValidatorSetRootInputs {
+	return AccumulateValidatorSetRootInputs{
+		Incarnation:          b32("cac6698ed49a286ad8a3de94540a3354dfe964f366a439f4fdfb34533059fda0"),
+		ThresholdNumerator:   2,
+		ThresholdDenominator: 3,
+		Validators: []AccumulateValidator{
+			{PublicKey: b32("40e6e8b96de7e7ed4c38815448abe22ab555236418d813b3a02cb6a7bc42871b"), ActiveOn: []string{"Directory", "BVN1"}},
+			{PublicKey: b32("625b03bfad7d82b11d69be478954ca6293468694f7868a8dfe64d0923a81b262"), ActiveOn: []string{"Directory", "BVN2"}},
+			{PublicKey: b32("0f9f714a43c0c33731f6e097aea9567f8d0b8817b86510d888e333c84d0b8191"), ActiveOn: []string{"Directory", "BVN3"}},
+		},
+	}
+}
+
+// TestV8_2_PinnedVector_KermitIncarnation pins Kermit's committed Accumulate root and the pre-exec message over it,
+// asserted identically by certen-contracts evm/test/CertenAnchorV8_2Binding.t.sol.
+func TestV8_2_PinnedVector_KermitIncarnation(t *testing.T) {
+	in := kermitAccSet()
+	accRoot, err := ComputeAccumulateValidatorSetRoot(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg := ComputeEvmMessageHashV8_2_Pre(vecChainID, vecAnchorID, vecExecCommit, vecOperationID, vecCertenRoot, accRoot, in.Incarnation)
+	t.Logf("kermit accumulateValidatorSetRoot = %x", accRoot)
+	t.Logf("kermit messageHash (v2:pre)       = %x", msg)
+	const (
+		// Also computed by an independent Python implementation of both encodings (RUNLOG_RB5 2026-09-30).
+		wantAccRoot = "afa6bd344b04b6ff9645c97b09254af9c25a214991e0b442538e9084d4136bf5"
+		wantMsg     = "25457bd9bb917d701809f4900aaed7b01a5aa715dfca9e8516a6430d5b0e4713"
+	)
+	if got := hex.EncodeToString(accRoot[:]); got != wantAccRoot {
+		t.Errorf("Kermit accumulateValidatorSetRoot: got %s want %s", got, wantAccRoot)
+	}
+	if got := hex.EncodeToString(msg[:]); got != wantMsg {
+		t.Errorf("Kermit V8.2 pre-exec messageHash: got %s want %s", got, wantMsg)
 	}
 }

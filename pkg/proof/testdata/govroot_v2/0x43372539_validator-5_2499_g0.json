@@ -1,0 +1,20 @@
+{
+ "entry_hash_exec": "454dfddf71b0d05ca1ca7a5e16c50ed126c4d263c38bfa1a0b42ea2cba517477",
+ "txid": "454dfddf71b0d05ca1ca7a5e16c50ed126c4d263c38bfa1a0b42ea2cba517477",
+ "tx_hash": "454dfddf71b0d05ca1ca7a5e16c50ed126c4d263c38bfa1a0b42ea2cba517477",
+ "exec_mbi": 12435813,
+ "exec_witness": "7fe86fd2bfb8d73d409d1bb885c63fc463716764a0a59db05317b0d1f378c438",
+ "scope": "acc://harbor-mfg-tcl1.acme/data",
+ "chain": "main",
+ "expanded_message_id": "acc://454dfddf71b0d05ca1ca7a5e16c50ed126c4d263c38bfa1a0b42ea2cba517477@harbor-mfg-tcl1.acme/data",
+ "principal": "harbor-mfg-tcl1.acme",
+ "receipt": {
+  "start": "454dfddf71b0d05ca1ca7a5e16c50ed126c4d263c38bfa1a0b42ea2cba517477",
+  "anchor": "7fe86fd2bfb8d73d409d1bb885c63fc463716764a0a59db05317b0d1f378c438",
+  "localBlock": 12435813,
+  "localBlockTime": null,
+  "majorBlock": null,
+  "end": "454dfddf71b0d05ca1ca7a5e16c50ed126c4d263c38bfa1a0b42ea2cba517477"
+ },
+ "g0_proof_complete": true
+}

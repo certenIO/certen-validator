@@ -119,6 +119,39 @@ func (b *Layer4Builder) BuildDNLeg(ctx context.Context, bvn string, l2 Layer2, l
 	})
 }
 
+// BuildDNLegAtSequence is BuildDNLeg for an anchor whose position on the Directory's anchor-sequence chain is
+// already known, such as the genesis anchor (position 0). BuildDNLeg finds the position by looking the root up BY
+// HASH on the destination pool, and that lookup fails for every genesis-era entry on every node (the hash->index
+// record is written only by merkle.Chain.AddEntry, which genesis entries never pass through). Nothing is trusted
+// because of the supplied position: buildLeg reads the anchor at that position and refuses it unless it carries
+// exactly the expected root chain anchor, state tree anchor and minor block, then verifies its delivered signatures.
+func (b *Layer4Builder) BuildDNLegAtSequence(ctx context.Context, bvn string, seqIndex uint64, l2 Layer2, l3 Layer3) (*Layer4, error) {
+	if b.Client == nil {
+		return nil, fmt.Errorf("layer4[dn]: missing v3 client")
+	}
+	_, destPool, err := bvnPartitionAndPool(bvn)
+	if err != nil {
+		return nil, err
+	}
+	return b.buildLeg(ctx, legSpec{
+		Partition:       protocol.Directory,
+		SourcePool:      "acc://dn.acme/anchors",
+		DestPool:        destPool,
+		SequenceIndex:   seqIndex,
+		MinorBlockIndex: l2.DNMinorBlockIndex,
+		RootChainAnchor: l2.DNRootChainAnchor,
+		StateTreeAnchor: l3.DNStateTreeAnchor,
+		ArtifactPrefix:  "L4_dn",
+		DestScanLimit:   genesisDeliveryScanLimit,
+	})
+}
+
+// genesisDeliveryScanLimit bounds the index scan BuildDNLegAtSequence uses to find a genesis-era delivery on the
+// destination pool's main chain, where the by-hash lookup cannot work. The genesis anchor is delivered within the
+// partition's first blocks, so it sits among the pool's first entries; a delivery not found within the bound is an
+// error, never a guess.
+const genesisDeliveryScanLimit = 256
+
 type legSpec struct {
 	Partition       string
 	SourcePool      string
@@ -128,6 +161,10 @@ type legSpec struct {
 	RootChainAnchor string
 	StateTreeAnchor string
 	ArtifactPrefix  string
+	// DestScanLimit, when non-zero, finds the delivered anchor on the destination pool's main chain by reading its
+	// first DestScanLimit entries BY INDEX and matching the delivered transaction's hash, instead of looking the hash
+	// up. Only genesis-era entries need it: they have no hash->index record on any node.
+	DestScanLimit uint64
 }
 
 func (b *Layer4Builder) buildLeg(ctx context.Context, spec legSpec) (*Layer4, error) {
@@ -176,12 +213,24 @@ func (b *Layer4Builder) buildLeg(ctx context.Context, spec legSpec) (*Layer4, er
 	if err != nil {
 		return nil, fmt.Errorf("%s: invalid destination pool %q: %w", tag, spec.DestPool, err)
 	}
+	// The delivered transaction's hash covers its principal's URL as written, case included, and partition IDs
+	// are not all upper case (MainNet's "Cyclops"), while callers pass lower-cased labels. Use the pool URL exactly
+	// as the network stores it; a node that misreported it would yield a hash no entry or signature matches.
+	if destURL, err = b.canonicalPoolURL(ctx, destURL); err != nil {
+		return nil, fmt.Errorf("%s: %w", tag, err)
+	}
 	delivered := srcTxn.Copy()
 	delivered.Header.Principal = destURL
 	deliveredHash := delivered.Hash()
 
 	// (4) fetch the delivered anchor and its signatures.
-	ce, mr, err := b.mainByEntry(ctx, spec.DestPool, deliveredHash[:], spec.ArtifactPrefix)
+	var ce *v3.ChainEntryRecord[v3.Record]
+	var mr *v3.MessageRecord[messaging.Message]
+	if spec.DestScanLimit > 0 {
+		ce, mr, err = b.mainByIndexScan(ctx, spec.DestPool, deliveredHash[:], spec.DestScanLimit, spec.ArtifactPrefix)
+	} else {
+		ce, mr, err = b.mainByEntry(ctx, spec.DestPool, deliveredHash[:], spec.ArtifactPrefix)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%s: delivered anchor %x on %s: %w", tag, deliveredHash[:8], spec.DestPool, err)
 	}
@@ -367,6 +416,65 @@ func (b *Layer4Builder) mainByEntry(ctx context.Context, pool string, entry []by
 	return ce, mr, nil
 }
 
+// canonicalPoolURL returns the anchor pool's URL exactly as the network stores it (URL equality is case-insensitive,
+// hashes over URLs are not).
+func (b *Layer4Builder) canonicalPoolURL(ctx context.Context, pool *acc_url.URL) (*acc_url.URL, error) {
+	resp, err := b.Client.Query(ctx, pool, &v3.DefaultQuery{})
+	if err != nil {
+		return nil, fmt.Errorf("query anchor pool %v: %w", pool, err)
+	}
+	ar, ok := resp.(*v3.AccountRecord)
+	if !ok || ar.Account == nil {
+		return nil, fmt.Errorf("anchor pool %v: expected an account record, got %T", pool, resp)
+	}
+	u := ar.Account.GetUrl()
+	if u == nil || !u.Equal(pool) {
+		return nil, fmt.Errorf("anchor pool %v: the node returned the account %v", pool, u)
+	}
+	return u, nil
+}
+
+// mainByIndexScan finds the entry whose hash is `entry` among the first `limit` entries of the pool's main chain,
+// reading each BY INDEX with its receipt. The match is on the entry hash the chain itself records, so the result is
+// the same record mainByEntry would return; only the way of finding its position differs.
+func (b *Layer4Builder) mainByIndexScan(ctx context.Context, pool string, entry []byte, limit uint64, prefix string) (
+	*v3.ChainEntryRecord[v3.Record], *v3.MessageRecord[messaging.Message], error) {
+
+	scope, err := acc_url.Parse(pool)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid pool %q: %w", pool, err)
+	}
+	want := hex.EncodeToString(entry)
+	for i := uint64(0); i < limit; i++ {
+		idx := i
+		resp, err := b.Client.Query(ctx, scope, &v3.ChainQuery{
+			Name:           "main",
+			Index:          &idx,
+			IncludeReceipt: &v3.ReceiptOptions{ForAny: true},
+		})
+		if err != nil {
+			return nil, nil, fmt.Errorf("query main[%d]: %w", i, err)
+		}
+		ce, ok := resp.(*v3.ChainEntryRecord[v3.Record])
+		if !ok {
+			return nil, nil, fmt.Errorf("main[%d]: expected a chain entry, got %T", i, resp)
+		}
+		if ce.Index != i {
+			return nil, nil, fmt.Errorf("main[%d]: the node returned index %d", i, ce.Index)
+		}
+		if hex.EncodeToString(ce.Entry[:]) != want {
+			continue
+		}
+		b.saveArtifact(fmt.Sprintf("%s_delivered_anchor.json", prefix), resp)
+		mr, ok := ce.Value.(*v3.MessageRecord[messaging.Message])
+		if !ok {
+			return nil, nil, fmt.Errorf("delivered anchor: expected a message record, got %T", ce.Value)
+		}
+		return ce, mr, nil
+	}
+	return nil, nil, fmt.Errorf("the delivered anchor %x is not among the first %d entries of %s", entry[:8], limit, pool)
+}
+
 // extractAnchorSignatures pulls the validator signatures off the delivered
 // anchor. Every signature must be ed25519 and must cover signedHash; a
 // signature that does not is an error, not something to skip. Silently
@@ -422,23 +530,43 @@ func (b *Layer4Builder) saveArtifact(name string, v any) {
 	}
 }
 
-// bvnPartitionAndPool maps a BVN label ("bvn1") to its partition ID ("BVN1")
-// and anchor pool URL.
+// bvnPartitionAndPool maps a BVN label to its partition ID and anchor pool URL. A numbered label ("bvn1", "BVN2")
+// means the partition BVN<n>, as it always has. Any other label is the partition ID itself, exactly as the network
+// definition names it: MainNet's only BVN is "Cyclops", which the old "BVN"+upper(suffix) rule could not address
+// (RB5-F21). The Directory is not a BVN and is refused, as is anything that is not a bare partition ID.
 func bvnPartitionAndPool(bvn string) (partition, pool string, err error) {
 	b := strings.TrimSpace(bvn)
 	if b == "" {
 		return "", "", fmt.Errorf("layer4: empty BVN label")
 	}
-	if !strings.HasPrefix(strings.ToLower(b), "bvn") {
-		return "", "", fmt.Errorf("layer4: BVN label %q must start with 'bvn'", bvn)
+	lower := strings.ToLower(b)
+	if strings.HasPrefix(lower, "bvn") && len(b) > 3 && isDigits(b[3:]) {
+		partition = "BVN" + b[3:]
+	} else {
+		if lower == "bvn" {
+			return "", "", fmt.Errorf("layer4: BVN label %q has no index", bvn)
+		}
+		for _, r := range b {
+			if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9') {
+				return "", "", fmt.Errorf("layer4: BVN label %q is neither bvn<n> nor a partition ID", bvn)
+			}
+		}
+		if strings.EqualFold(b, protocol.Directory) {
+			return "", "", fmt.Errorf("layer4: %q is the Directory, not a BVN", bvn)
+		}
+		partition = b
 	}
-	suffix := b[3:]
-	if suffix == "" {
-		return "", "", fmt.Errorf("layer4: BVN label %q has no index", bvn)
-	}
-	partition = "BVN" + strings.ToUpper(suffix)
 	pool = fmt.Sprintf("acc://bvn-%s.acme/anchors", partition)
 	return partition, pool, nil
+}
+
+func isDigits(s string) bool {
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return s != ""
 }
 
 func mustURL(s string) *acc_url.URL {

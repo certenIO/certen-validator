@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/ethereum/go-ethereum"
-	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
@@ -147,15 +146,11 @@ func LocateAnchorCreate(ctx context.Context, chain anchorCreateChain, anchor com
 type clientCreateChain struct{ c *ethclient.Client }
 
 func (c clientCreateChain) AnchorRecord(ctx context.Context, anchor common.Address, bundle [32]byte) (AnchorOnChainState, error) {
-	parsed, err := abiFromJSON(anchorsABIJSON)
+	st, err := ReadAnchorState(ctx, c.c, anchor, bundle, nil)
 	if err != nil {
 		return AnchorOnChainState{}, err
 	}
-	var out []interface{}
-	if err := bind.NewBoundContract(anchor, parsed, c.c, c.c, c.c).Call(&bind.CallOpts{Context: ctx}, &out, "anchors", bundle); err != nil {
-		return AnchorOnChainState{}, err
-	}
-	return decodeAnchorState(out)
+	return decodeAnchorState(st)
 }
 
 func (c clientCreateChain) BlockTime(ctx context.Context, block uint64) (uint64, error) {

@@ -46,13 +46,27 @@ func main() {
 		"a quorum-signed StateTreeAnchor to bind the BPT root to (hex32). Not "+
 			"achievable today - see the note printed below.")
 	out := flag.String("out", "", "write the proof as JSON to this path")
+	bvn := flag.String("bvn", "", "the BVN whose anchor pool the genesis anchor's signed delivery is read from "+
+		"(default: the first block-validator partition of the genesis network record)")
 	flag.Parse()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
 	fmt.Printf("Building a validator-set proof from %s\n\n", *endpoint)
-	p, err := certenproof.BuildValidatorSetProof(ctx, certenproof.NewHTTPQuerier(*endpoint))
+	// The proof names its chain by the v1 incarnation, derived from the same endpoint (docs/l4/INCARNATION_ANCHOR.md).
+	q := certenproof.NewHTTPQuerier(*endpoint)
+	incEv, err := certenproof.BuildIncarnationEvidence(ctx, q, certenproof.NewLiveGenesisLegBuilder(*endpoint), *endpoint, *bvn)
+	if err != nil {
+		fmt.Printf("COULD NOT DERIVE THE INCARNATION\n  %v\n", err)
+		os.Exit(exitFailed)
+	}
+	incRep, err := incEv.Verify()
+	if err != nil {
+		fmt.Printf("THE INCARNATION EVIDENCE DOES NOT VERIFY\n  %v\n", err)
+		os.Exit(exitFailed)
+	}
+	p, err := certenproof.BuildValidatorSetProof(ctx, q, incRep.Incarnation)
 	if err != nil {
 		fmt.Printf("COULD NOT BUILD\n  %v\n", err)
 		os.Exit(exitFailed)

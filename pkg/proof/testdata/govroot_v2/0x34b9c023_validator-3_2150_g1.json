@@ -1,0 +1,223 @@
+{
+ "entry_hash_exec": "b6fe5264a16615dfd36b51d4fcf2b7a5c5877a8fa04f96eb2d23697cdb93ce53",
+ "txid": "b6fe5264a16615dfd36b51d4fcf2b7a5c5877a8fa04f96eb2d23697cdb93ce53",
+ "tx_hash": "b6fe5264a16615dfd36b51d4fcf2b7a5c5877a8fa04f96eb2d23697cdb93ce53",
+ "exec_mbi": 11925688,
+ "exec_witness": "499fe7c90e5d31c8e331de3f034851476f2b30e81f1610fac8dfd99cfebd75a9",
+ "scope": "acc://harbor-mfg-tcl1.acme/data",
+ "chain": "main",
+ "expanded_message_id": "acc://b6fe5264a16615dfd36b51d4fcf2b7a5c5877a8fa04f96eb2d23697cdb93ce53@harbor-mfg-tcl1.acme/data",
+ "principal": "harbor-mfg-tcl1.acme",
+ "receipt": {
+  "start": "b6fe5264a16615dfd36b51d4fcf2b7a5c5877a8fa04f96eb2d23697cdb93ce53",
+  "anchor": "499fe7c90e5d31c8e331de3f034851476f2b30e81f1610fac8dfd99cfebd75a9",
+  "localBlock": 11925688,
+  "localBlockTime": null,
+  "majorBlock": null,
+  "end": "b6fe5264a16615dfd36b51d4fcf2b7a5c5877a8fa04f96eb2d23697cdb93ce53"
+ },
+ "g0_proof_complete": true,
+ "authority_snapshot": {
+  "page": "acc://harbor-mfg-tcl1.acme/book/1",
+  "execTerms": {
+   "mbi": 11925688,
+   "witness": "499fe7c90e5d31c8e331de3f034851476f2b30e81f1610fac8dfd99cfebd75a9"
+  },
+  "stateExec": {
+   "version": 3,
+   "keys": [
+    "cc6c5d3cec681d7ce7ec7b35d6a0a7fc6ca56e16bc51d685a9375a985d415cd1",
+    "63250e7cd4598c520f82450366d091660d4fe826db5c2d2d2c445dd32cf4b9f6"
+   ],
+   "threshold": 1
+  },
+  "genesis": {
+   "entryHash": "a895474d5d6b8d695a42b7a13119d84b78f5ed81b70c06611757ce8d97604209",
+   "localBlock": 11909223,
+   "receipt": {
+    "start": "a895474d5d6b8d695a42b7a13119d84b78f5ed81b70c06611757ce8d97604209",
+    "anchor": "4e96b25a225da19fc5d63b1be1e5be95c5ff511ecec7aa066a794bd51ce7517e",
+    "localBlock": 11909223,
+    "localBlockTime": null,
+    "majorBlock": null,
+    "end": null
+   },
+   "txType": "syntheticcreateidentity",
+   "pageState": {
+    "version": 1,
+    "keys": [
+     "64250b1e4f16aa9b10b14106611b6fce2e7bb5ac8900c674193680eb7e25ffe2"
+    ],
+    "threshold": 1
+   }
+  },
+  "mutations": [
+   {
+    "entryHash": "2e60574c27aedb2b3a41db39e133b62ce7e92dd408b8fab733949ccd3e7e8604",
+    "localBlock": 11909244,
+    "receipt": {
+     "start": "2e60574c27aedb2b3a41db39e133b62ce7e92dd408b8fab733949ccd3e7e8604",
+     "anchor": "103c47050397a2f7f1eefef4cee2b958ad93496b0a9cabc4e1dfb7fbcbb046f6",
+     "localBlock": 11909244,
+     "localBlockTime": null,
+     "majorBlock": null,
+     "end": null
+    },
+    "txType": "updateKeyPage",
+    "previousState": {
+     "version": 0,
+     "keys": [
+      "64250b1e4f16aa9b10b14106611b6fce2e7bb5ac8900c674193680eb7e25ffe2"
+     ],
+     "threshold": 1
+    },
+    "newState": {
+     "version": 0,
+     "keys": [
+      "cc6c5d3cec681d7ce7ec7b35d6a0a7fc6ca56e16bc51d685a9375a985d415cd1"
+     ],
+     "threshold": 1
+    }
+   },
+   {
+    "entryHash": "4280a6c3c8fe7c14ef327c6be960c42dcc9ca0a4e776bfb029eddfc60930d241",
+    "localBlock": 11909270,
+    "receipt": {
+     "start": "4280a6c3c8fe7c14ef327c6be960c42dcc9ca0a4e776bfb029eddfc60930d241",
+     "anchor": "890687419d7f7c418fa030b96ad8ae977b6d94d8b48bcde08453a6a62e90c7a6",
+     "localBlock": 11909270,
+     "localBlockTime": null,
+     "majorBlock": null,
+     "end": null
+    },
+    "txType": "updateKeyPage",
+    "previousState": {
+     "version": 0,
+     "keys": [],
+     "threshold": 1
+    },
+    "newState": {
+     "version": 0,
+     "keys": [
+      "63250e7cd4598c520f82450366d091660d4fe826db5c2d2d2c445dd32cf4b9f6"
+     ],
+     "threshold": 1
+    }
+   }
+  ],
+  "validation": {
+   "genesisFound": true,
+   "mutationsApplied": 2,
+   "totalEntries": 5,
+   "finalVersion": 3,
+   "finalThreshold": 1,
+   "finalKeyCount": 2
+  }
+ },
+ "validated_signatures": [
+  {
+   "messageID": "acc://80768e9e764933486c8953f2c129a18f813ef1522d7bf1cf43f6fe2fcb561f15@harbor-mfg-tcl1.acme/book/1",
+   "messageHash": "80768e9e764933486c8953f2c129a18f813ef1522d7bf1cf43f6fe2fcb561f15",
+   "receipt": {
+    "start": "80768e9e764933486c8953f2c129a18f813ef1522d7bf1cf43f6fe2fcb561f15",
+    "anchor": "b4de648b1b0df516ab33ab92fa90fcec8869b76d9c531cb288f0d94f5be79283",
+    "localBlock": 11925611,
+    "localBlockTime": null,
+    "majorBlock": null,
+    "end": "80768e9e764933486c8953f2c129a18f813ef1522d7bf1cf43f6fe2fcb561f15"
+   },
+   "signature": {
+    "type": "ed25519",
+    "publicKey": "63044007647afa1c4fe839736a8890a521f8eee0272d90475638b3dde98cc7e6",
+    "signature": "3d11e64707dc8535acdbb5f5b620920f06585181d9c521fa67a28c167b0043b6694db87645a4ccc47ab3803a4ce26ea5a4a81363c107f8e7ab4c82b7eaf1e801",
+    "signer": "acc://harbor-mfg-tcl1.acme/book/1",
+    "signerVersion": 3,
+    "timestamp": 1789433364121000,
+    "transactionHash": "b6fe5264a16615dfd36b51d4fcf2b7a5c5877a8fa04f96eb2d23697cdb93ce53",
+    "txID": "",
+    "securityLevel": "",
+    "verifiedTime": "0001-01-01T00:00:00Z"
+   },
+   "timingVerified": true,
+   "transactionHashVerified": true,
+   "cryptographicallyVerified": true,
+   "securityLevel": "",
+   "verificationTime": "0001-01-01T00:00:00Z",
+   "integrityHash": ""
+  },
+  {
+   "messageID": "acc://0a144dbf673943597e39b6967dd799e2a05218fc31f3c3508c61ff954442a096@fdb-compliance-tcl1.acme/book/1",
+   "messageHash": "0a144dbf673943597e39b6967dd799e2a05218fc31f3c3508c61ff954442a096",
+   "receipt": {
+    "start": "0a144dbf673943597e39b6967dd799e2a05218fc31f3c3508c61ff954442a096",
+    "anchor": "edeae247d09f75d07bbd293b65be1a9327c16121e3862bb2d50717d3928447b9",
+    "localBlock": 11925677,
+    "localBlockTime": null,
+    "majorBlock": null,
+    "end": "0a144dbf673943597e39b6967dd799e2a05218fc31f3c3508c61ff954442a096"
+   },
+   "signature": {
+    "type": "ed25519",
+    "publicKey": "cdc3f4bc48c63e137b54e94910b034f5d522678a54135b2ca2e7f33b3c40839e",
+    "signature": "abf9257204cee15e227a29b97c0089d3c48c94b1647b3b3599ac9e594f7edb375e032a58ae50f0f0df6e1e5092aed03803b3605c95b6e39730847aa5fcad5f0b",
+    "signer": "acc://fdb-compliance-tcl1.acme/book/1",
+    "signerVersion": 3,
+    "timestamp": 1789433431869000,
+    "transactionHash": "b6fe5264a16615dfd36b51d4fcf2b7a5c5877a8fa04f96eb2d23697cdb93ce53",
+    "txID": "",
+    "securityLevel": "",
+    "verifiedTime": "0001-01-01T00:00:00Z"
+   },
+   "timingVerified": true,
+   "transactionHashVerified": true,
+   "cryptographicallyVerified": true,
+   "securityLevel": "",
+   "verificationTime": "0001-01-01T00:00:00Z",
+   "integrityHash": ""
+  },
+  {
+   "messageID": "acc://0cf5e5222ad6884ff6d76fbda100704d0cc7b973866162f6da23c9bd4acd23cc@fdb-risk-tcl1.acme/book/1",
+   "messageHash": "0cf5e5222ad6884ff6d76fbda100704d0cc7b973866162f6da23c9bd4acd23cc",
+   "receipt": {
+    "start": "0cf5e5222ad6884ff6d76fbda100704d0cc7b973866162f6da23c9bd4acd23cc",
+    "anchor": "303b3ea60ace0cda7efcfedcccdc0527d96f423b434f60ca1d90a025674d2fcc",
+    "localBlock": 11926466,
+    "localBlockTime": null,
+    "majorBlock": null,
+    "end": "0cf5e5222ad6884ff6d76fbda100704d0cc7b973866162f6da23c9bd4acd23cc"
+   },
+   "signature": {
+    "type": "ed25519",
+    "publicKey": "c4c76c38a02709bab7842afcd16f984185dd667f24f7772bdc4f9b6166e42b54",
+    "signature": "6e8b411603ee1d7272a40a49f1ead170d1fb3ed33b4b51158ee1c4751ceca7e87a4cf08603deffa02143989327c903154a8aea6e10c5623ab0f4a36122147106",
+    "signer": "acc://fdb-risk-tcl1.acme/book/1",
+    "signerVersion": 3,
+    "timestamp": 1789433437562000,
+    "transactionHash": "b6fe5264a16615dfd36b51d4fcf2b7a5c5877a8fa04f96eb2d23697cdb93ce53",
+    "txID": "",
+    "securityLevel": "",
+    "verifiedTime": "0001-01-01T00:00:00Z"
+   },
+   "timingVerified": true,
+   "transactionHashVerified": true,
+   "cryptographicallyVerified": true,
+   "securityLevel": "",
+   "verificationTime": "0001-01-01T00:00:00Z",
+   "integrityHash": ""
+  }
+ ],
+ "unique_valid_keys": 1,
+ "required_threshold": 1,
+ "threshold_satisfied": true,
+ "execution_success": true,
+ "timing_valid": true,
+ "g1_proof_complete": true,
+ "concurrency_enabled": false,
+ "worker_count": 0,
+ "processing_time_ms": 0,
+ "cryptographic_security": false,
+ "security_report": null,
+ "ed25519_verified": 0,
+ "audit_trail_events": 0,
+ "bundle_integrity_hash": ""
+}

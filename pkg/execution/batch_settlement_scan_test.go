@@ -174,11 +174,11 @@ func newScanFixture(t *testing.T) *scanFixture {
 	}
 	m := odMember(1, odChain, 100)
 	in, _ := m.LeafInput()
-	tree, _ := BuildBatchTree(odChain, []BatchLeafInput{in}, 100)
+	tree, _ := BuildBatchTree(odChain, withAccSet([]BatchLeafInput{in}), 100, testIncarnation)
 	cl := c.serve(t)
 	return &scanFixture{chain: c, member: m, tree: tree, key: key, settler: settler,
 		roster: []common.Address{settler, odOtherAddr},
-		orch:   &BatchOrchestrator{ecm: &EthereumContractManager{client: cl}, logf: func(string, ...interface{}) {}},
+		orch:   &BatchOrchestrator{incarnation: testIncarnation, ecm: &EthereumContractManager{client: cl}, logf: func(string, ...interface{}) {}},
 		att:    anchorAttestation{Block: 2, Time: time.Unix(int64(c.times[2]), 0), From: settler}}
 }
 

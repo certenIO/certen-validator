@@ -168,7 +168,7 @@ func f66AnchoredLayer5(t *testing.T, member [32]byte, version string) *Layer5 {
 			inputs[i].GovernanceCommitment, inputs[i].LegacyNoGovernance = [32]byte{}, true
 		}
 	}
-	tree, err := BuildBatchTree(84532, inputs, 100)
+	tree, err := BuildBatchTree(84532, withAccSet(inputs), 100, testIncarnation)
 	if err != nil {
 		t.Fatal(err)
 	}

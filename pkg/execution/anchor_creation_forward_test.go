@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/certen/independant-validator/pkg/execution/contracts"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -46,7 +48,7 @@ func testKey(label string) *ecdsa.PrivateKey {
 
 func (c *createdAnchorChain) serve(t *testing.T) *ethclient.Client {
 	t.Helper()
-	parsed, err := abiFromJSON(anchorsABIJSON)
+	parsed, err := abiFromJSON(contracts.CertenAnchorV8_2BatchABI)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +80,8 @@ func (c *createdAnchorChain) serve(t *testing.T) *ethclient.Client {
 			}
 		case "eth_call":
 			packed, err := parsed.Methods["anchors"].Outputs.Pack(c.bundle, c.root, [32]byte{}, [32]byte{}, [32]byte{}, [32]byte{},
-				c.root, [32]byte{7}, big.NewInt(9), new(big.Int).SetUint64(c.times[c.createdIn]), c.creator, true, true, false, uint8(2))
+				c.root, [32]byte{7}, big.NewInt(9), new(big.Int).SetUint64(c.times[c.createdIn]), c.creator, true, true, false, uint8(2),
+				testAccSet, testIncarnation)
 			if err != nil {
 				t.Error(err)
 			}
@@ -145,15 +148,16 @@ func newCreatedAnchorChain(t *testing.T, signer *ecdsa.PrivateKey) *createdAncho
 		chainID: 84532, anchor: common.HexToAddress("0x00000000000000000000000000000000000a1c40"),
 		times: make([]uint64, 600), createdIn: 431,
 		creator: crypto.PubkeyToAddress(testKey("anchor creator").PublicKey),
-		bundle:  [32]byte{0xb0}, root: [32]byte{0x0e},
+		root:    [32]byte{0x0e},
 	}
+	c.bundle = v82CreateBundle(c.chainID, c.root)
 	for i := range c.times {
 		c.times[i] = 1_790_000_000 + uint64(i)*2
 	}
 	anchor := c.anchor
 	tx, err := types.SignNewTx(signer, types.LatestSignerForChainID(big.NewInt(c.chainID)), &types.DynamicFeeTx{
 		ChainID: big.NewInt(c.chainID), Nonce: 3, GasTipCap: big.NewInt(1), GasFeeCap: big.NewInt(2), Gas: 500000,
-		To: &anchor, Data: createBatchAnchorCall(t, c.bundle, c.root),
+		To: &anchor, Data: v82CreateCall(c.chainID, c.root),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -164,7 +168,7 @@ func newCreatedAnchorChain(t *testing.T, signer *ecdsa.PrivateKey) *createdAncho
 
 func TestAnAnchorAnotherValidatorCreatedIsRecordedWithItsCreateTransaction(t *testing.T) {
 	c := newCreatedAnchorChain(t, testKey("anchor creator"))
-	o := &BatchOrchestrator{ecm: &EthereumContractManager{client: c.serve(t)}, anchorV7: c.anchor, logf: t.Logf}
+	o := &BatchOrchestrator{incarnation: testIncarnation, ecm: &EthereumContractManager{client: c.serve(t)}, anchorV7: c.anchor, logf: t.Logf}
 	tree := &BatchTree{ChainID: c.chainID, BundleID: c.bundle, Root: c.root}
 
 	created, err := o.existingAnchorCreation(context.Background(), tree, 0)
@@ -187,7 +191,7 @@ func TestAnAnchorAnotherValidatorCreatedIsRecordedWithItsCreateTransaction(t *te
 // A located transaction the anchor's recorded creator did not sign is not taken as the create transaction.
 func TestALocatedCreateTransactionMustBeSignedByTheRecordedCreator(t *testing.T) {
 	c := newCreatedAnchorChain(t, testKey("someone else"))
-	o := &BatchOrchestrator{ecm: &EthereumContractManager{client: c.serve(t)}, anchorV7: c.anchor, logf: t.Logf}
+	o := &BatchOrchestrator{incarnation: testIncarnation, ecm: &EthereumContractManager{client: c.serve(t)}, anchorV7: c.anchor, logf: t.Logf}
 	_, err := o.existingAnchorCreation(context.Background(), &BatchTree{ChainID: c.chainID, BundleID: c.bundle, Root: c.root}, 0)
 	if err == nil || !strings.Contains(err.Error(), "records creator") {
 		t.Fatalf("err = %v; want the signer refused", err)
@@ -195,4 +199,25 @@ func TestALocatedCreateTransactionMustBeSignedByTheRecordedCreator(t *testing.T)
 	if IsChainReadError(err) {
 		t.Fatal("a contradiction was reported as an unread chain - it would be retried for ever as if transient")
 	}
+}
+
+// v82CreateOpID and v82CreateHeight are the created anchor's one-member V8.2 batch, committing the fixture's Accumulate
+// set and incarnation; its bundle is the one those arguments derive, as a real V8.2 anchor's is.
+var v82CreateOpID = [32]byte{0x0f}
+
+const v82CreateHeight = 9360888
+
+func v82CreateBundle(chainID int64, root [32]byte) [32]byte {
+	return contracts.DeriveV8_2BatchBundleID(chainID, root, 1, v82CreateOpID, v82CreateHeight, testAccSet, testIncarnation)
+}
+
+// v82CreateCall is that anchor's createBatchAnchor calldata (seven arguments).
+func v82CreateCall(chainID int64, root [32]byte) []byte {
+	w := func(v uint64) []byte { b := make([]byte, 32); new(big.Int).SetUint64(v).FillBytes(b); return b }
+	bundle := v82CreateBundle(chainID, root)
+	d := append([]byte{}, contracts.CreateBatchAnchorV8_2Selector[:]...)
+	for _, x := range [][]byte{bundle[:], root[:], w(1), v82CreateOpID[:], w(v82CreateHeight), testAccSet[:], testIncarnation[:]} {
+		d = append(d, x...)
+	}
+	return d
 }

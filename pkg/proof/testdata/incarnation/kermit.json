@@ -1,0 +1,333 @@
+{
+  "endpoint": "https://kermit.accumulatenetwork.io/v3",
+  "genesisAnchorTx": "025901610255010d6163633a2f2f646e2e61636d650301040a05e3f3119213a1ead44647659d67e47f4269a2affb13f150aa87b20baacf93cf81065cd146ba4ba40712ab002936d29ef213a7e2ff4ebc0b5ec4183b1ae8af00d5ff",
+  "genesisAnchorEntry": "a865e0401a3274fd6f264429c5850a2c72b96a6f4e7760b288fd62ab38b8066c",
+  "rootAnchor": {
+    "account": "acc://dn.acme/anchors",
+    "chain": "anchor(directory)-root",
+    "index": 0,
+    "entry": "e3f3119213a1ead44647659d67e47f4269a2affb13f150aa87b20baacf93cf81",
+    "receipt": {
+      "start": "e3f3119213a1ead44647659d67e47f4269a2affb13f150aa87b20baacf93cf81",
+      "anchor": "1d964859bfe1062e7b2461159d5b375b11fadf1ba304260546ee251772dfa397",
+      "localBlock": 3,
+      "entries": [
+        {
+          "hash": "5cd146ba4ba40712ab002936d29ef213a7e2ff4ebc0b5ec4183b1ae8af00d5ff",
+          "right": false
+        },
+        {
+          "hash": "543dcc9bec82243a041c89eca0bbecc47e188393ec19828649bbf57f700c53e4",
+          "right": false
+        },
+        {
+          "hash": "2e43b2b44f29594ccc3eb72fbe0b3a0f2f00bf378446f26b897514638ce686e6",
+          "right": true
+        },
+        {
+          "hash": "414189450c4d9b3a7d8704ae2d7504b3a615256a7351871d0d7997d9f1775556",
+          "right": false
+        }
+      ]
+    }
+  },
+  "bptAnchor": {
+    "account": "acc://dn.acme/anchors",
+    "chain": "anchor(directory)-bpt",
+    "index": 0,
+    "entry": "5cd146ba4ba40712ab002936d29ef213a7e2ff4ebc0b5ec4183b1ae8af00d5ff",
+    "receipt": {
+      "start": "5cd146ba4ba40712ab002936d29ef213a7e2ff4ebc0b5ec4183b1ae8af00d5ff",
+      "anchor": "1d964859bfe1062e7b2461159d5b375b11fadf1ba304260546ee251772dfa397",
+      "localBlock": 3,
+      "entries": [
+        {
+          "hash": "e3f3119213a1ead44647659d67e47f4269a2affb13f150aa87b20baacf93cf81",
+          "right": true
+        },
+        {
+          "hash": "543dcc9bec82243a041c89eca0bbecc47e188393ec19828649bbf57f700c53e4",
+          "right": false
+        },
+        {
+          "hash": "2e43b2b44f29594ccc3eb72fbe0b3a0f2f00bf378446f26b897514638ce686e6",
+          "right": true
+        },
+        {
+          "hash": "414189450c4d9b3a7d8704ae2d7504b3a615256a7351871d0d7997d9f1775556",
+          "right": false
+        }
+      ]
+    }
+  },
+  "genesisLeg": {
+    "partition": "Directory",
+    "source": "acc://dn.acme",
+    "destination": "acc://bvn-BVN1.acme",
+    "anchorPool": "acc://bvn-BVN1.acme/anchors",
+    "anchorIndex": 1,
+    "sequenceNumber": 1,
+    "anchorTxHash": "604c3d2cb8587be5b8dd0df49cc5b724545ad223f89c9df2d9d2c1f4134151ab",
+    "signedHash": "de1385283098e6f0ddbe45882bcdf5be9d620c9446e8351b3de3d3d50cf96344",
+    "sequencedMessage": "0105027e0101027a011d011b6163633a2f2f62766e2d42564e312e61636d652f616e63686f7273025901610255010d6163633a2f2f646e2e61636d650301040a05e3f3119213a1ead44647659d67e47f4269a2affb13f150aa87b20baacf93cf81065cd146ba4ba40712ab002936d29ef213a7e2ff4ebc0b5ec4183b1ae8af00d5ff030d6163633a2f2f646e2e61636d6504136163633a2f2f62766e2d42564e312e61636d650501",
+    "minorBlockIndex": 1,
+    "rootChainAnchor": "e3f3119213a1ead44647659d67e47f4269a2affb13f150aa87b20baacf93cf81",
+    "stateTreeAnchor": "5cd146ba4ba40712ab002936d29ef213a7e2ff4ebc0b5ec4183b1ae8af00d5ff",
+    "signatures": [
+      {
+        "publicKey": "40e6e8b96de7e7ed4c38815448abe22ab555236418d813b3a02cb6a7bc42871b",
+        "signature": "806452c95468b7f5077ff7a553606e1c2f7838a247a84875a143e4171ae0b4d743438632e0dc705572f8b7f3d755354a5da769052a9ac07eb960364a5f531f05",
+        "signer": "acc://dn.acme/network",
+        "timestamp": 1769910293923,
+        "signerVersion": 0
+      },
+      {
+        "publicKey": "0f9f714a43c0c33731f6e097aea9567f8d0b8817b86510d888e333c84d0b8191",
+        "signature": "3eb7f3355fbd51502516c2cc50cdb7d4711e2ccee2547485c91a10b9ccb8099fc19e038dc5b8b9d43dace49ad5542e9b422ac27c5cee4f8dde1f3827b686150a",
+        "signer": "acc://dn.acme/network",
+        "timestamp": 1769910293960,
+        "signerVersion": 0
+      },
+      {
+        "publicKey": "625b03bfad7d82b11d69be478954ca6293468694f7868a8dfe64d0923a81b262",
+        "signature": "25c975f4b892bf01ad4144c6295124d5452733e48b57c9f6fe8ba56ac6c676d2215a1a8ff14b75eb9e1650ff6001f2b11f63faa3280f59ed5baafacf2d8d0809",
+        "signer": "acc://dn.acme/network",
+        "timestamp": 1769910294007,
+        "signerVersion": 0
+      }
+    ],
+    "validatorSet": [
+      {
+        "publicKey": "40e6e8b96de7e7ed4c38815448abe22ab555236418d813b3a02cb6a7bc42871b",
+        "publicKeyHash": "309068791543793065c5a36c15bbcfa5259c707dbc3ab8cccde45c8a8928d7fb",
+        "activeOn": [
+          "Directory",
+          "BVN1"
+        ]
+      },
+      {
+        "publicKey": "625b03bfad7d82b11d69be478954ca6293468694f7868a8dfe64d0923a81b262",
+        "publicKeyHash": "3184b7252ea7c152e7398a255b5423fd825f1199ce53e9a051a53f503bd2a356",
+        "activeOn": [
+          "Directory",
+          "BVN2"
+        ]
+      },
+      {
+        "publicKey": "0f9f714a43c0c33731f6e097aea9567f8d0b8817b86510d888e333c84d0b8191",
+        "publicKeyHash": "364d06669499526150676cbd922dadccd4e0155352e9477eefc79346ab15de89",
+        "activeOn": [
+          "Directory",
+          "BVN3"
+        ]
+      }
+    ],
+    "threshold": 2,
+    "acceptThreshold": {
+      "numerator": 2,
+      "denominator": 3
+    },
+    "networkVersion": 0
+  },
+  "ledger1": {
+    "accountUrl": "acc://dn.acme/ledger/1",
+    "accountState": "010602166163633a2f2f646e2e61636d652f6c65646765722f310301049cc0f5970d0514010a6163633a2f2f41434d4502046d61696e03000517010d6163633a2f2f646e2e61636d6502046d61696e0300051f01156163633a2f2f646e2e61636d652f616e63686f727302046d61696e0300052001166163633a2f2f646e2e61636d652f65766964656e636502046d61696e0300051f01156163633a2f2f646e2e61636d652f676c6f62616c7302046d61696e0300051e01146163633a2f2f646e2e61636d652f6c656467657202046d61696e0300051f01156163633a2f2f646e2e61636d652f6e6574776f726b02046d61696e0300052101176163633a2f2f646e2e61636d652f6f70657261746f727302046d61696e0300052301196163633a2f2f646e2e61636d652f6f70657261746f72732f3102046d61696e0300051e01146163633a2f2f646e2e61636d652f6f7261636c6502046d61696e0300051f01156163633a2f2f646e2e61636d652f726f7574696e6702046d61696e0300051d01136163633a2f2f646e2e61636d652f766f74657302046d61696e0301",
+    "stateReceipt": {
+      "start": "c486c26386bb1cff51512def3dfb3af0c24f9d3f03ca125718c6d10437501802",
+      "anchor": "1fc07d6ed343fdcc4ca5e83f70657f813d405462b12fe1357e21ddcacf1795dc",
+      "localBlock": 10045118,
+      "entries": [
+        {
+          "hash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "right": true
+        },
+        {
+          "hash": "f5a5fd42d16a20302798ef6ed309979b43003d2320d9f0e8ea9831a92759fb4b",
+          "right": true
+        },
+        {
+          "hash": "b77c1d195d600b1af9f890e93bdc1f2b9af7785d24b390db36860e8a16fd87c4",
+          "right": true
+        },
+        {
+          "hash": "21d2741a31fa1be3157902d96f6340dfa3608cbf0251eb23a7bd3e31c1d76a45",
+          "right": false
+        },
+        {
+          "hash": "08ce4eb1e9cc8d5da5d7749ef0ff8db877a2212ea673290885cc5ee35d61c7a0",
+          "right": false
+        }
+      ]
+    },
+    "chains": [],
+    "secondaryHash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "pendingHash": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "network": {
+    "accountUrl": "acc://dn.acme/network",
+    "accountState": "010b02156163633a2f2f646e2e61636d652f6e6574776f726b031b011901176163633a2f2f646e2e61636d652f6f70657261746f727304d402010302cf0201064465764e65740308010442564e3102020308010442564e3202020308010442564e330202030d01094469726563746f72790201045c012040e6e8b96de7e7ed4c38815448abe22ab555236418d813b3a02cb6a7bc42871b02309068791543793065c5a36c15bbcfa5259c707dbc3ab8cccde45c8a8928d7fb040d01094469726563746f727902010408010442564e310201045c0120625b03bfad7d82b11d69be478954ca6293468694f7868a8dfe64d0923a81b262023184b7252ea7c152e7398a255b5423fd825f1199ce53e9a051a53f503bd2a356040d01094469726563746f727902010408010442564e320201045c01200f9f714a43c0c33731f6e097aea9567f8d0b8817b86510d888e333c84d0b819102364d06669499526150676cbd922dadccd4e0155352e9477eefc79346ab15de89040d01094469726563746f727902010408010442564e330201",
+    "stateReceipt": {
+      "start": "733250b14876c25fb2a89c050c1793b45e12386a9d1fd5c41ab65c3ed15f0c88",
+      "anchor": "1fc07d6ed343fdcc4ca5e83f70657f813d405462b12fe1357e21ddcacf1795dc",
+      "localBlock": 10045118,
+      "entries": [
+        {
+          "hash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "right": true
+        },
+        {
+          "hash": "022a7648ef84ad35efa728b03f60d853cd01f61d007050a86a941d73ebc437a6",
+          "right": true
+        },
+        {
+          "hash": "147cf54bfcb7b72c292ef8bb919414d9db4d9f488caf7a5d0c8d99e0f3379fd6",
+          "right": false
+        },
+        {
+          "hash": "45e4e7d9fd9ef248b162e5877f0851d5480f4dcc78b4852442484c22757ca9f3",
+          "right": true
+        },
+        {
+          "hash": "71798e3792522322baa5015c83f7b2d61f067b2a373c0bae95ad6fb0ad4ffdc8",
+          "right": true
+        }
+      ]
+    },
+    "chains": [
+      {
+        "name": "main",
+        "pending": [
+          "e43be90e349210456662d8b8bdc9cc9e5e46ccb07f2129e7b57a8195e5e916d5"
+        ],
+        "count": 1,
+        "anchor": "e43be90e349210456662d8b8bdc9cc9e5e46ccb07f2129e7b57a8195e5e916d5"
+      },
+      {
+        "name": "main-index",
+        "pending": [
+          "0205030120000000000000000000000000000000000000000000000000000000"
+        ],
+        "count": 1,
+        "anchor": "0205030120000000000000000000000000000000000000000000000000000000"
+      }
+    ],
+    "secondaryHash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "pendingHash": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "networkMain0": {
+    "account": "acc://dn.acme/network",
+    "chain": "main",
+    "index": 0,
+    "entry": "e43be90e349210456662d8b8bdc9cc9e5e46ccb07f2129e7b57a8195e5e916d5",
+    "receipt": {
+      "start": "e43be90e349210456662d8b8bdc9cc9e5e46ccb07f2129e7b57a8195e5e916d5",
+      "anchor": "e3f3119213a1ead44647659d67e47f4269a2affb13f150aa87b20baacf93cf81",
+      "localBlock": 1,
+      "entries": [
+        {
+          "hash": "e43be90e349210456662d8b8bdc9cc9e5e46ccb07f2129e7b57a8195e5e916d5",
+          "right": false
+        },
+        {
+          "hash": "4fb28d185c7b2e9654d06526fb793cd75822c0096831c4cc7b37fa95812133de",
+          "right": true
+        },
+        {
+          "hash": "0b7f3c36d8b596448b3d315c3d5e11e6ee31994afba73c7df27a7a4e44f5dcc5",
+          "right": false
+        },
+        {
+          "hash": "397bdfb20a7b504d2bbddb51e9ce5a9d1f44c9b79f7da62fd3cd2f39b5e239da",
+          "right": true
+        }
+      ]
+    }
+  },
+  "networkTx0": "010c010a6163633a2f2f41434d4502020160",
+  "globals": {
+    "accountUrl": "acc://dn.acme/globals",
+    "accountState": "010b02156163633a2f2f646e2e61636d652f676c6f62616c73031b011901176163633a2f2f646e2e61636d652f6f70657261746f7273043401030230010401020203020401020203030c30202a2f3132202a202a202a050701a0c21e02904e060b016402140314046405e807",
+    "stateReceipt": {
+      "start": "4cf0061d8d333d092c57483f85c2bb067d2d96156106dd1ae1d11b0677f12e0a",
+      "anchor": "1fc07d6ed343fdcc4ca5e83f70657f813d405462b12fe1357e21ddcacf1795dc",
+      "localBlock": 10045118,
+      "entries": [
+        {
+          "hash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "right": true
+        },
+        {
+          "hash": "ebe9f050f3010a11147960e38dbfbcc12d4f8483cbf226e741a2e6f0d8be1fb0",
+          "right": true
+        },
+        {
+          "hash": "ad3a850eb7ca04ee2ce4412b132f53b1c34be16ee906baaa0c784ba88c47de54",
+          "right": true
+        },
+        {
+          "hash": "ae95903d740252956d88e718fed661f154fa0fe249ced10ae38e31661b986f9e",
+          "right": true
+        },
+        {
+          "hash": "56bd696eaf82d51575bef1c0da3f379d6ff88d284fa175414ca9e5327ab5af1e",
+          "right": true
+        },
+        {
+          "hash": "08ce4eb1e9cc8d5da5d7749ef0ff8db877a2212ea673290885cc5ee35d61c7a0",
+          "right": false
+        }
+      ]
+    },
+    "chains": [
+      {
+        "name": "main",
+        "pending": [
+          "e43be90e349210456662d8b8bdc9cc9e5e46ccb07f2129e7b57a8195e5e916d5"
+        ],
+        "count": 1,
+        "anchor": "e43be90e349210456662d8b8bdc9cc9e5e46ccb07f2129e7b57a8195e5e916d5"
+      },
+      {
+        "name": "main-index",
+        "pending": [
+          "0204030120000000000000000000000000000000000000000000000000000000"
+        ],
+        "count": 1,
+        "anchor": "0204030120000000000000000000000000000000000000000000000000000000"
+      }
+    ],
+    "secondaryHash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "pendingHash": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "globalsMain0": {
+    "account": "acc://dn.acme/globals",
+    "chain": "main",
+    "index": 0,
+    "entry": "e43be90e349210456662d8b8bdc9cc9e5e46ccb07f2129e7b57a8195e5e916d5",
+    "receipt": {
+      "start": "e43be90e349210456662d8b8bdc9cc9e5e46ccb07f2129e7b57a8195e5e916d5",
+      "anchor": "e3f3119213a1ead44647659d67e47f4269a2affb13f150aa87b20baacf93cf81",
+      "localBlock": 1,
+      "entries": [
+        {
+          "hash": "e43be90e349210456662d8b8bdc9cc9e5e46ccb07f2129e7b57a8195e5e916d5",
+          "right": true
+        },
+        {
+          "hash": "4fb28d185c7b2e9654d06526fb793cd75822c0096831c4cc7b37fa95812133de",
+          "right": true
+        },
+        {
+          "hash": "0b7f3c36d8b596448b3d315c3d5e11e6ee31994afba73c7df27a7a4e44f5dcc5",
+          "right": false
+        },
+        {
+          "hash": "397bdfb20a7b504d2bbddb51e9ce5a9d1f44c9b79f7da62fd3cd2f39b5e239da",
+          "right": true
+        }
+      ]
+    }
+  },
+  "globalsTx0": "010c010a6163633a2f2f41434d4502020160",
+  "incarnation": "cac6698ed49a286ad8a3de94540a3354dfe964f366a439f4fdfb34533059fda0"
+}

@@ -25,7 +25,7 @@ func bundleOf(t *testing.T, members []*PendingBatchIntent, cutoff uint64) string
 		}
 		inputs = append(inputs, in)
 	}
-	tree, err := BuildBatchTree(11155111, inputs, cutoff)
+	tree, err := BuildBatchTree(11155111, withAccSet(inputs), cutoff, testIncarnation)
 	if err != nil {
 		t.Fatal(err)
 	}

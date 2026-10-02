@@ -36,7 +36,7 @@ var ErrDeclaredAnchorNotLive = errors.New("declared anchor is not the chain's li
 
 // BatchAnchorCreateSignature is the call the batch path makes on a chain's anchor (step 1 of a
 // member's settlement; pkg/execution settlement_steps.go packs it from the same ABI).
-const BatchAnchorCreateSignature = "createBatchAnchor(bytes32,bytes32,uint256,bytes32,uint256)"
+const BatchAnchorCreateSignature = "createBatchAnchor(bytes32,bytes32,uint256,bytes32,uint256,bytes32,bytes32)"
 
 // BatchAnchorCreateSelector is BatchAnchorCreateSignature's 4-byte selector.
 var BatchAnchorCreateSelector = func() [4]byte {

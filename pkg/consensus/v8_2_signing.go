@@ -3,6 +3,7 @@ package consensus
 import (
 	"encoding/hex"
 	"fmt"
+	"github.com/certen/independant-validator/pkg/accumulateset"
 	"os"
 	"strings"
 
@@ -37,9 +38,9 @@ import (
 // deployment's Accumulate incarnation identity.
 const accumulateIncarnationEnv = "ACCUMULATE_INCARNATION"
 
-// resolveAccumulateIncarnation returns the incarnation identity: the genesis
-// root anchor of the Accumulate chain this validator proves against, which is
-// anchor(directory)-root[0] on the Directory's anchor pool.
+// resolveAccumulateIncarnation returns the incarnation identity of the Accumulate
+// chain this validator proves against: the v1 composite of docs/l4/INCARNATION_ANCHOR.md,
+// derived with cmd/incarnation.
 //
 // WHY THIS IS CONFIGURED RATHER THAN READ FROM THE PROOF. The L4 evidence does
 // not carry it yet. Nothing in an L4 leg identifies which Accumulate chain it
@@ -58,7 +59,7 @@ func resolveAccumulateIncarnation() ([32]byte, error) {
 	raw = strings.TrimPrefix(strings.TrimPrefix(raw, "0x"), "0X")
 	if raw == "" {
 		return out, fmt.Errorf("%s is not set: V8.2 signing requires the Accumulate "+
-			"incarnation identity (the genesis root anchor, anchor(directory)-root[0]); "+
+			"incarnation identity (docs/l4/INCARNATION_ANCHOR.md, derived with cmd/incarnation); "+
 			"there is no default because a proof that cannot name its chain is not a "+
 			"governance proof", accumulateIncarnationEnv)
 	}
@@ -77,53 +78,17 @@ func resolveAccumulateIncarnation() ([32]byte, error) {
 	return out, nil
 }
 
-// accumulateSetFromL4 reduces an L4 leg's evidence to the inputs the Accumulate
-// validator-set root commits to.
-//
-// It reads the DIRECTORY leg, because the validator set lives in
-// acc://dn.acme/network and the Directory quorum is what signs over it. The
-// full set is taken — not just the signers — because the signers alone are the
-// numerator without a denominator, which is the whole defect V8.2 removes.
+// AccumulateIncarnation returns the configured Accumulate incarnation (ACCUMULATE_INCARNATION). It fails closed: no
+// default, no zero value.
+func AccumulateIncarnation() ([32]byte, error) { return resolveAccumulateIncarnation() }
+
+// accumulateSetFromL4 reduces the proof's Directory L4 leg to the inputs the Accumulate validator-set root commits
+// to. It is accumulateset.CommittedAccumulateSetInputs - the ONE reduction the batch paths, the L5 artifact and proofverify
+// also call (RB5 design D2) - so a signed root and a verified root cannot drift apart.
 func accumulateSetFromL4(dn *chained_proof.Layer4, incarnation [32]byte) (
 	contracts.AccumulateValidatorSetRootInputs, error,
 ) {
-	var out contracts.AccumulateValidatorSetRootInputs
-
-	if dn == nil {
-		return out, fmt.Errorf("V8.2 signing requires the Directory L4 leg; a proof " +
-			"without it cannot say which Accumulate validator set it was checked against")
-	}
-	if len(dn.ValidatorSet) == 0 {
-		return out, fmt.Errorf("Directory L4 leg carries an empty validator set")
-	}
-	if dn.AcceptThreshold.Denominator == 0 {
-		return out, fmt.Errorf("Directory L4 leg carries a zero accept-threshold denominator")
-	}
-
-	out.Incarnation = incarnation
-	out.ThresholdNumerator = dn.AcceptThreshold.Numerator
-	out.ThresholdDenominator = dn.AcceptThreshold.Denominator
-
-	for i, v := range dn.ValidatorSet {
-		raw, err := hex.DecodeString(strings.TrimPrefix(v.PublicKey, "0x"))
-		if err != nil {
-			return out, fmt.Errorf("validator %d: public key is not valid hex: %w", i, err)
-		}
-		if len(raw) != 32 {
-			return out, fmt.Errorf("validator %d: public key must be 32 bytes, got %d", i, len(raw))
-		}
-		var pk [32]byte
-		copy(pk[:], raw)
-
-		activeOn := make([]string, len(v.ActiveOn))
-		copy(activeOn, v.ActiveOn)
-
-		out.Validators = append(out.Validators, contracts.AccumulateValidator{
-			PublicKey: pk,
-			ActiveOn:  activeOn,
-		})
-	}
-	return out, nil
+	return accumulateset.CommittedAccumulateSetInputs(dn, incarnation)
 }
 
 // BuildV8_2AccumulateSetInputs is the exported seam the EVM submission path uses

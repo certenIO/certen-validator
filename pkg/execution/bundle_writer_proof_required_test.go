@@ -68,8 +68,9 @@ func TestBundleWriterFailsWhenTheLayer5RowIsRefused(t *testing.T) {
 	t.Cleanup(func() { cleanupProofArtifacts(db, intentID) })
 	leaf := crypto.Keccak256Hash([]byte("f91"))
 	nonce := fmt.Sprintf("%032x", time.Now().UnixNano())
-	if _, err := repos.Batches.RecordAnchorQuorum(ctx, &database.AnchorQuorumRecord{
-		ChainID: 84532, BundleID: "0x" + nonce + nonce, Root: leaf[:], BatchOperationID: testBatchOperationID("0x" + strings.Repeat("77", 32)),
+	rec := &database.AnchorQuorumRecord{
+		AnchorVersion: "v8_1",
+		ChainID:       84532, BundleID: "0x" + nonce + nonce, Root: leaf[:], BatchOperationID: testBatchOperationID("0x" + strings.Repeat("77", 32)),
 		BatchOperationIDVersion: "v2",
 		MessageHash:             "0x" + strings.Repeat("88", 32), AnchorCreateTx: "0x" + strings.Repeat("9a", 32), AnchorCreateBlock: 99,
 		VerifyTx: "0x" + strings.Repeat("9b", 32), VerifyBlock: 100, VerifiedAt: time.Now().UTC(),
@@ -80,7 +81,9 @@ func TestBundleWriterFailsWhenTheLayer5RowIsRefused(t *testing.T) {
 		Members: []database.AnchorQuorumMemberRecord{{IntentID: intentID, ADIURL: "acc://harbor.acme",
 			OperationID: "0x" + strings.Repeat("77", 32), Leaf: leaf[:], LeafIndex: 0,
 			GovernanceCommitment: "0x" + hex.EncodeToString(testGov[:])}},
-	}); err != nil {
+	}
+	asV8_2Anchor(t, rec, 1, uint64(time.Now().UnixNano()%1_000_000_000))
+	if _, err := repos.Batches.RecordAnchorQuorum(ctx, rec); err != nil {
 		t.Fatal(err)
 	}
 	err := f73Orchestrator(db).generateAndPersistBundle(ctx, c)

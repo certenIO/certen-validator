@@ -128,6 +128,9 @@ type BatchFlushResult struct {
 const maxQuorumAttempts = 5
 
 type BatchOrchestrator struct {
+	// incarnation is the Accumulate incarnation every tree this orchestrator forms commits (BatchStack.Incarnation).
+	incarnation [32]byte
+
 	attemptsMu sync.Mutex
 	// attempts counts failed quorum attempts per tree (bundleId): a period may be cut into several.
 	attempts map[[32]byte]int
@@ -167,13 +170,14 @@ func NewBatchOrchestrator(
 	anchorV7 common.Address,
 	prover QuorumProver,
 	mempool *BatchMempool,
+	incarnation [32]byte,
 	logf func(string, ...interface{}),
 ) *BatchOrchestrator {
 	if logf == nil {
 		logf = func(string, ...interface{}) {}
 	}
 	return &BatchOrchestrator{
-		ecm: ecm, anchorV7: anchorV7, prover: prover, mempool: mempool, logf: logf,
+		ecm: ecm, anchorV7: anchorV7, prover: prover, mempool: mempool, incarnation: incarnation, logf: logf,
 		attempts: make(map[[32]byte]int),
 	}
 }
@@ -273,7 +277,7 @@ func (o *BatchOrchestrator) FlushChain(
 		inputs = append(inputs, in)
 	}
 
-	tree, err := BuildBatchTree(chainID, inputs, cutoffHeight)
+	tree, err := BuildBatchTree(chainID, inputs, cutoffHeight, o.incarnation)
 	if err != nil {
 		return res, fmt.Errorf("building batch tree: %w", err)
 	}
@@ -693,31 +697,17 @@ func (o *BatchOrchestrator) verifyLeavesAgainstAccounts(
 // only the combination matters: an anchor that exists but is NOT attested is a stranded
 // createBatchAnchor from a failed flush, and that one SHOULD be retried.
 func (o *BatchOrchestrator) anchorAlreadyAttested(ctx context.Context, bundleID [32]byte) (bool, error) {
-	parsed, err := abiFromJSON(anchorsABIJSON)
+	st, err := ReadAnchorState(ctx, o.ecm.client, o.anchorV7, bundleID, nil)
 	if err != nil {
 		return false, err
 	}
-	bound := bind.NewBoundContract(o.anchorV7, parsed, o.ecm.client, o.ecm.client, o.ecm.client)
-	var out []interface{}
-	if err := bound.Call(&bind.CallOpts{Context: ctx}, &out, "anchors", bundleID); err != nil {
-		return false, err
-	}
-	const proofExecutedIndex = 12
-	if len(out) <= proofExecutedIndex {
-		return false, fmt.Errorf("anchors() returned %d fields, need at least %d",
-			len(out), proofExecutedIndex+1)
-	}
-	executed, ok := out[proofExecutedIndex].(bool)
-	if !ok {
-		return false, fmt.Errorf("proofExecuted has unexpected type %T", out[proofExecutedIndex])
-	}
-	return executed, nil
+	return st.ProofExecuted, nil
 }
 
 // verifyLeavesAgainstAnchor confirms the deployed anchor stored what we think it did and
 // accepts every member's branch.
 func (o *BatchOrchestrator) verifyLeavesAgainstAnchor(ctx context.Context, tree *BatchTree) error {
-	anchor, err := contracts.NewCertenAnchorV7Batch(o.anchorV7, o.ecm.client)
+	anchor, err := contracts.NewCertenAnchorV8_2Batch(o.anchorV7, o.ecm.client)
 	if err != nil {
 		return fmt.Errorf("binding anchor: %w", err)
 	}
@@ -766,6 +756,18 @@ func (o *BatchOrchestrator) verifyLeavesAgainstAnchor(ctx context.Context, tree 
 			"(re-read %d times, so this is not RPC lag)", count, tree.Size(), 6)
 	}
 
+	// The anchor committed exactly the Accumulate validator set and incarnation this tree carries: the fields the
+	// quorum's message covers and a verifier reads back (RB5).
+	stored, serr := anchor.Anchors(opts, tree.BundleID)
+	if serr != nil {
+		return fmt.Errorf("reading anchor 0x%x: %w", tree.BundleID[:8], serr)
+	}
+	if stored.AccumulateValidatorSetRoot != tree.AccumulateSetRoot || stored.AccumulateIncarnation != tree.Incarnation {
+		return fmt.Errorf("anchor 0x%x committed Accumulate set %x under incarnation %x; the tree carries %x under %x",
+			tree.BundleID[:8], stored.AccumulateValidatorSetRoot[:8], stored.AccumulateIncarnation[:8],
+			tree.AccumulateSetRoot[:8], tree.Incarnation[:8])
+	}
+
 	for i := range tree.Leaves {
 		branch, berr := tree.BranchFor(i)
 		if berr != nil {
@@ -784,7 +786,7 @@ func (o *BatchOrchestrator) verifyLeavesAgainstAnchor(ctx context.Context, tree 
 
 // createBatchAnchor submits the anchor and waits for it to mine.
 func (o *BatchOrchestrator) createBatchAnchor(ctx context.Context, tree *BatchTree) (anchorCreation, error) {
-	anchor, err := contracts.NewCertenAnchorV7Batch(o.anchorV7, o.ecm.client)
+	anchor, err := contracts.NewCertenAnchorV8_2Batch(o.anchorV7, o.ecm.client)
 	if err != nil {
 		return anchorCreation{}, err
 	}
@@ -820,6 +822,8 @@ func (o *BatchOrchestrator) createBatchAnchor(ctx context.Context, tree *BatchTr
 				big.NewInt(int64(tree.Size())),
 				tree.BatchOperationID,
 				new(big.Int).SetUint64(tree.BlockHeight),
+				tree.AccumulateSetRoot,
+				tree.Incarnation,
 			)
 		}, nil)
 	if err != nil {
@@ -880,7 +884,7 @@ func (o *BatchOrchestrator) existingAnchorCreation(ctx context.Context, tree *Ba
 	if err != nil {
 		return anchorCreation{}, readErr(fmt.Errorf("reading anchor 0x%x's create transaction %s: %w", tree.BundleID[:8], loc.TxHash, err))
 	}
-	bundle, root, derr := createBatchAnchorArgs(reading.Input)
+	bundle, root, derr := createBatchAnchorArgs(tree.ChainID, reading.Input)
 	switch {
 	case !reading.Found || !reading.Succeeded || reading.BlockNumber != loc.Block:
 		return anchorCreation{}, readErr(fmt.Errorf("anchor 0x%x's located create transaction %s reads as found=%v succeeded=%v in block %d, not block %d",
@@ -1233,6 +1237,12 @@ func (o *BatchOrchestrator) periodChunks(ctx context.Context, members []*Pending
 				ErrNoGovernanceCommitment, p.IntentID, p.ChainID)})
 			continue
 		}
+		if p.AccumulateSetRoot == ([32]byte{}) {
+			// Not reachable through admission or restore, which both require it; refused by name if it ever is.
+			excluded = append(excluded, excludedMember{member: p, cause: fmt.Errorf("%w: intent %s on chain %d",
+				ErrNoAccumulateSetRoot, p.IntentID, p.ChainID)})
+			continue
+		}
 		verdict, err := o.accountVerdict(ctx, p)
 		if err != nil {
 			return nil, nil, err
@@ -1249,7 +1259,33 @@ func (o *BatchOrchestrator) periodChunks(ctx context.Context, members []*Pending
 	}
 	// Members admitted before governance commitments are batched apart, with the v1 operation id their anchors
 	// carry; every validator restored the same members the same way, so every validator cuts the same chunks.
-	return append(chunkMembers(legacy, maxBatch), chunkMembers(eligible, maxBatch)...), excluded, nil
+	// One V8.2 anchor commits one Accumulate validator set, so members are cut into trees per set root, in the order
+	// each root first appears in the period (RB5 design D2). Every validator derives each member's root from its own
+	// proof of the same execution - measured identical across the fleet on every production operation - so every
+	// validator cuts the same chunks. On Kermit, whose set has never changed, there is one group.
+	chunks := chunkMembers(legacy, maxBatch)
+	for _, group := range groupByAccumulateSet(eligible) {
+		chunks = append(chunks, chunkMembers(group, maxBatch)...)
+	}
+	return chunks, excluded, nil
+}
+
+// groupByAccumulateSet splits members by AccumulateSetRoot, keeping their order within a group and ordering the
+// groups by first appearance.
+func groupByAccumulateSet(members []*PendingBatchIntent) [][]*PendingBatchIntent {
+	var order [][32]byte
+	groups := map[[32]byte][]*PendingBatchIntent{}
+	for _, p := range members {
+		if _, seen := groups[p.AccumulateSetRoot]; !seen {
+			order = append(order, p.AccumulateSetRoot)
+		}
+		groups[p.AccumulateSetRoot] = append(groups[p.AccumulateSetRoot], p)
+	}
+	out := make([][]*PendingBatchIntent, 0, len(order))
+	for _, r := range order {
+		out = append(out, groups[r])
+	}
+	return out
 }
 
 // accountVerdict is memberAccountUsable, cached. It returns (nil, nil) for a usable account,

@@ -135,7 +135,7 @@ func TestBatchTree_EveryBranchVerifies(t *testing.T) {
 				OperationID:         b32(uint64(2000 + i)),
 			}
 		}
-		tree, err := BuildBatchTree(vecChainID, inputs, vecHeight)
+		tree, err := BuildBatchTree(vecChainID, withAccSet(inputs), vecHeight, testIncarnation)
 		if err != nil {
 			t.Fatalf("n=%d: %v", n, err)
 		}
@@ -157,7 +157,7 @@ func TestBatchTree_EveryBranchVerifies(t *testing.T) {
 // N=1: root == leaf, empty branch. Proves single intents need no special case.
 func TestBatchTree_SingleMemberRootIsTheLeaf(t *testing.T) {
 	in := []BatchLeafInput{{GovernanceCommitment: testGov, ADIURL: "acc://solo.acme", ExecutionCommitment: b32(1), OperationID: b32(2)}}
-	tree, err := BuildBatchTree(vecChainID, in, vecHeight)
+	tree, err := BuildBatchTree(vecChainID, withAccSet(in), vecHeight, testIncarnation)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestBatchTree_SingleMemberRootIsTheLeaf(t *testing.T) {
 // A foreign leaf must never verify against someone else's root.
 func TestBatchTree_ForeignLeafNeverVerifies(t *testing.T) {
 	inputs := vecInputs()
-	tree, err := BuildBatchTree(vecChainID, inputs, vecHeight)
+	tree, err := BuildBatchTree(vecChainID, withAccSet(inputs), vecHeight, testIncarnation)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,16 +221,16 @@ func TestBatchTree_LeafBindsOperationID(t *testing.T) {
 // =============================================================================
 
 func TestBuildBatchTree_RejectsEmptyAndZeroFields(t *testing.T) {
-	if _, err := BuildBatchTree(vecChainID, nil, vecHeight); err == nil {
+	if _, err := BuildBatchTree(vecChainID, withAccSet(nil), vecHeight, testIncarnation); err == nil {
 		t.Fatal("empty batch must be rejected")
 	}
-	if _, err := BuildBatchTree(vecChainID, []BatchLeafInput{{GovernanceCommitment: testGov, ADIURL: "", ExecutionCommitment: b32(1), OperationID: b32(1)}}, vecHeight); err == nil {
+	if _, err := BuildBatchTree(vecChainID, withAccSet([]BatchLeafInput{{GovernanceCommitment: testGov, ADIURL: "", ExecutionCommitment: b32(1), OperationID: b32(1)}}), vecHeight, testIncarnation); err == nil {
 		t.Fatal("missing ADI URL must be rejected")
 	}
-	if _, err := BuildBatchTree(vecChainID, []BatchLeafInput{{GovernanceCommitment: testGov, ADIURL: "acc://a.acme", ExecutionCommitment: b32(1)}}, vecHeight); err == nil {
+	if _, err := BuildBatchTree(vecChainID, withAccSet([]BatchLeafInput{{GovernanceCommitment: testGov, ADIURL: "acc://a.acme", ExecutionCommitment: b32(1)}}), vecHeight, testIncarnation); err == nil {
 		t.Fatal("zero operationID must be rejected — the anchor rejects it too")
 	}
-	if _, err := BuildBatchTree(vecChainID, []BatchLeafInput{{GovernanceCommitment: testGov, ADIURL: "acc://a.acme", OperationID: b32(1)}}, vecHeight); err == nil {
+	if _, err := BuildBatchTree(vecChainID, withAccSet([]BatchLeafInput{{GovernanceCommitment: testGov, ADIURL: "acc://a.acme", OperationID: b32(1)}}), vecHeight, testIncarnation); err == nil {
 		t.Fatal("zero executionCommitment must be rejected")
 	}
 }
@@ -238,7 +238,7 @@ func TestBuildBatchTree_RejectsEmptyAndZeroFields(t *testing.T) {
 // Duplicate leaves would strand the second member: single-use is keyed on the leaf.
 func TestBuildBatchTree_RejectsDuplicateLeaves(t *testing.T) {
 	dup := BatchLeafInput{GovernanceCommitment: testGov, ADIURL: "acc://a.acme", ExecutionCommitment: b32(1), OperationID: b32(2)}
-	_, err := BuildBatchTree(vecChainID, []BatchLeafInput{dup, dup}, vecHeight)
+	_, err := BuildBatchTree(vecChainID, withAccSet([]BatchLeafInput{dup, dup}), vecHeight, testIncarnation)
 	if err == nil {
 		t.Fatal("identical leaves must be rejected — the second could never be consumed")
 	}
@@ -250,7 +250,7 @@ func TestBuildBatchTree_AllowsSameADITwiceWithDistinctOps(t *testing.T) {
 	in := []BatchLeafInput{{GovernanceCommitment: testGov, ADIURL: "acc://a.acme", ExecutionCommitment: b32(1), OperationID: b32(10)},
 		{GovernanceCommitment: testGov, ADIURL: "acc://a.acme", ExecutionCommitment: b32(2), OperationID: b32(11)},
 	}
-	tree, err := BuildBatchTree(vecChainID, in, vecHeight)
+	tree, err := BuildBatchTree(vecChainID, withAccSet(in), vecHeight, testIncarnation)
 	if err != nil {
 		t.Fatalf("same ADI with distinct operations must be allowed: %v", err)
 	}
@@ -304,7 +304,7 @@ func TestDeriveBatchBundleID_BindsEveryField(t *testing.T) {
 }
 
 func TestBatchTree_BranchForADI(t *testing.T) {
-	tree, err := BuildBatchTree(vecChainID, vecInputs(), vecHeight)
+	tree, err := BuildBatchTree(vecChainID, withAccSet(vecInputs()), vecHeight, testIncarnation)
 	if err != nil {
 		t.Fatal(err)
 	}

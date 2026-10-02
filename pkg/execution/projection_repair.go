@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/certen/independant-validator/pkg/execution/contracts"
 	"strconv"
 	"strings"
 	"time"
@@ -38,11 +39,12 @@ var projectionChains = func() []string {
 	return out
 }()
 
-// anchorCreateSelectors are the calls that publish a root: createBatchAnchor (the V7/V8 batch generation) and
+// anchorCreateSelectors are the calls that publish a root: createBatchAnchor (V7/V8.1 five arguments, V8.2 seven) and
 // the per-intent createAnchor of every generation that has one - 7 arguments in CertenAnchorV5/V6, 8 (with
 // operationID) from V6_1 on. Selectors from the deployed contracts' own signatures.
 var anchorCreateSelectors = [][]byte{
-	createBatchAnchorMethod.ID,
+	contracts.CreateBatchAnchorV8_1Selector[:],
+	contracts.CreateBatchAnchorV8_2Selector[:],
 	crypto.Keccak256([]byte("createAnchor(bytes32,bytes32,bytes32,bytes32,bytes32,bytes32,uint256)"))[:4],
 	crypto.Keccak256([]byte("createAnchor(bytes32,bytes32,bytes32,bytes32,bytes32,bytes32,bytes32,uint256)"))[:4],
 }

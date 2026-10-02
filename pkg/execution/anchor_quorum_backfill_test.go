@@ -5,11 +5,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/ethereum/go-ethereum"
 	"math/big"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ethereum/go-ethereum"
 
 	"github.com/ethereum/go-ethereum/common"
 
@@ -60,6 +61,9 @@ func bfState() AnchorOnChainState {
 		Timestamp:           time.Unix(1_757_000_000, 0).UTC(),
 		Valid:               true,
 		ProofExecuted:       true,
+		// A historical V8.1 anchor: the six-field message, no Accumulate commitment.
+		Version:               contracts.BatchAnchorV8_1,
+		AccumulateBlockHeight: 8497779,
 	}
 }
 
@@ -435,7 +439,7 @@ func TestDecodeRoundTripsASubmittedProof(t *testing.T) {
 	}
 	call.MessageHash = contracts.ComputeEvmMessageHashV6_1_Pre(backfillChainID, bundleID, root, opID, setRoot)
 	state := AnchorOnChainState{
-		MerkleRoot: root, OperationID: opID, Valid: true, ProofExecuted: true,
+		MerkleRoot: root, OperationID: opID, Valid: true, ProofExecuted: true, Version: contracts.BatchAnchorV8_1,
 	}
 	if err := VerifyBackfilledQuorum(backfillChainID, call, state, bfRegistry(t)); err != nil {
 		t.Fatalf("a round-tripped genuine proof was refused: %v", err)
@@ -503,18 +507,17 @@ func TestDecodeAnchorStateReadsTheLiveAnchorLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bad golden vector: %v", err)
 	}
-	parsed, err := abiFromJSON(anchorsABIJSON)
+	// A live V8.1 anchor's response: fifteen words, read through the one reader of anchor state.
+	st, err := contracts.DecodeAnchorsReturn(raw)
 	if err != nil {
-		t.Fatalf("anchors ABI: %v", err)
+		t.Fatalf("decoding the live response: %v", err)
 	}
-	out, err := parsed.Methods["anchors"].Outputs.Unpack(raw)
-	if err != nil {
-		t.Fatalf("unpacking the live response: %v", err)
-	}
-
-	state, err := decodeAnchorState(out)
+	state, err := decodeAnchorState(st)
 	if err != nil {
 		t.Fatalf("decodeAnchorState: %v", err)
+	}
+	if state.Version != contracts.BatchAnchorV8_1 || state.AccumulateSetRoot != ([32]byte{}) || state.Incarnation != ([32]byte{}) {
+		t.Fatalf("a V8.1 anchor decoded as %s with Accumulate set %x incarnation %x", state.Version, state.AccumulateSetRoot, state.Incarnation)
 	}
 
 	wantRoot := "d4d5fe5ca51b390b851000cd698dcd63e831e380732e78c31020f056669662b2"
@@ -547,8 +550,11 @@ func TestDecodeAnchorStateReadsTheLiveAnchorLayout(t *testing.T) {
 
 // A truncated response must be refused rather than silently decoded from whatever words arrived.
 func TestDecodeAnchorStateRefusesAChangedLayout(t *testing.T) {
-	if _, err := decodeAnchorState(make([]interface{}, 14)); err == nil {
+	if _, err := contracts.DecodeAnchorsReturn(make([]byte, 14*32)); err == nil {
 		t.Fatal("a 14-field response was accepted")
+	}
+	if _, err := decodeAnchorState(nil); err == nil {
+		t.Fatal("no record was accepted as an anchor")
 	}
 }
 
@@ -719,5 +725,37 @@ func TestIsTransactionHashRejectsSentinelsAndAccepts32ByteHashes(t *testing.T) {
 				t.Fatalf("IsTransactionHash(%q) = %v, want %v", c.in, got, c.want)
 			}
 		})
+	}
+}
+
+// A V8.2 anchor's quorum signed the eight-field message over the Accumulate set and incarnation the anchor stores;
+// the backfill recomputes exactly that, and refuses the V8.1 message or a V8.2 anchor storing no Accumulate half.
+func TestBackfillVerifiesAV8_2AnchorsMessage(t *testing.T) {
+	setRoot, err := contracts.GetV6_1ValidatorSetRoot()
+	if err != nil {
+		t.Fatalf("a committed test input is missing (RB3-F83): %v", err)
+	}
+	state := bfState()
+	state.Version, state.AccumulateSetRoot, state.Incarnation = contracts.BatchAnchorV8_2, testAccSet, testIncarnation
+	call := bfCall(t)
+	call.MessageHash = contracts.ComputeEvmMessageHashV8_2_Pre(backfillChainID, call.BundleID, state.MerkleRoot, state.OperationID,
+		setRoot, testAccSet, testIncarnation)
+	if err := VerifyBackfilledQuorum(backfillChainID, call, state, bfRegistry(t)); err != nil {
+		t.Fatalf("a genuine V8.2 anchor was refused: %v", err)
+	}
+	v81 := *call
+	v81.MessageHash = contracts.ComputeEvmMessageHashV6_1_Pre(backfillChainID, call.BundleID, state.MerkleRoot, state.OperationID, setRoot)
+	if err := VerifyBackfilledQuorum(backfillChainID, &v81, state, bfRegistry(t)); err == nil {
+		t.Fatal("a V8.1 message was accepted for a V8.2 anchor")
+	}
+	bare := state
+	bare.AccumulateSetRoot = [32]byte{}
+	if err := VerifyBackfilledQuorum(backfillChainID, call, bare, bfRegistry(t)); err == nil {
+		t.Fatal("a V8.2 anchor storing no Accumulate set was accepted")
+	}
+	unknown := state
+	unknown.Version = ""
+	if err := VerifyBackfilledQuorum(backfillChainID, call, unknown, bfRegistry(t)); err == nil {
+		t.Fatal("an anchor of no known generation was accepted")
 	}
 }

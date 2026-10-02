@@ -1,6 +1,7 @@
 package consensus
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -56,15 +58,37 @@ type rehearsalNode struct {
 	client *local.Local
 }
 
+// freePort returns a port a node can listen on, chosen BELOW every OS's ephemeral range (Windows 49152-65535, Linux
+// 32768-60999 by default). A port from ":0" is ephemeral: once released, the next outbound connection anywhere on the
+// machine may take it as its source port before the node binds it - under a loaded run one in sixty networks failed
+// to start that way (RB5-F24). Ports in [20000, 32000) are never handed out as source ports, so only an explicit
+// listener can hold one, and this one is checked free.
 func freePort(t *testing.T) int {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	usedPortsMu.Lock()
+	defer usedPortsMu.Unlock()
+	start := 20000 + int(time.Now().UnixNano()%12000)
+	for i := 0; i < 12000; i++ {
+		port := 20000 + (start-20000+i)%12000
+		l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			continue
+		}
+		l.Close()
+		if !usedPorts[port] {
+			usedPorts[port] = true
+			return port
+		}
 	}
-	defer l.Close()
-	return l.Addr().(*net.TCPAddr).Port
+	t.Fatal("no free port below the ephemeral ranges")
+	return 0
 }
+
+// usedPorts keeps one test process from handing the same port to two nodes.
+var (
+	usedPortsMu sync.Mutex
+	usedPorts   = map[int]bool{}
+)
 
 func waitNetwork(t *testing.T, what string, timeout time.Duration, ok func() bool) {
 	t.Helper()
@@ -305,7 +329,14 @@ func TestRotationRehearsalOnALiveNetwork(t *testing.T) {
 	waitNetwork(t, "the chain to go on without the rotated validator", 30*time.Second, func() bool { return nodes[0].height() >= before+3 })
 
 	// 3. Another validator cannot be rotated while v2 is not on its new key.
-	other := ed25519.PrivateKey(keyFromSeed(append([]byte(nil), seed[:31]...), labelPrivval))
+	// Its own 32-byte seed. (A truncation of v2's seed is not another key: HMAC zero-pads a short key, so
+	// seed[:31] backs v2's new key whenever seed[31] is 0 - one run in 256 rotated "another" validator to a key
+	// already in the set, RB5-F24.)
+	otherSeed := make([]byte, 32)
+	if _, err := rand.Read(otherSeed); err != nil {
+		t.Fatal(err)
+	}
+	other := ed25519.PrivateKey(keyFromSeed(otherSeed, labelPrivval))
 	if code, logText, _ := submit(nodes[1], f.rotation(2, keys[3], other, "ops-1", "ops-2")); code == 0 ||
 		!strings.Contains(logText, "has not been adopted") {
 		t.Fatalf("a second validator was rotated while the first is mid-rotation: %d %s", code, logText)
@@ -314,6 +345,7 @@ func TestRotationRehearsalOnALiveNetwork(t *testing.T) {
 	// 4. The operator's swap, exactly as the runbook: stop v2, move the old key file aside, start with the
 	// new key's seed. ensureCometKeys writes the key from the seed and keeps the signing state.
 	nodes[2].stop(t)
+	dropStalePeer(t, nodes, 2)
 	oldKeyFile := nodes[2].cfg.PrivValidatorKeyFile()
 	if err := os.Rename(oldKeyFile, oldKeyFile+".retired-v1"); err != nil {
 		t.Fatal(err)
@@ -336,13 +368,51 @@ func TestRotationRehearsalOnALiveNetwork(t *testing.T) {
 		l, err := ledger.NewLedgerStore(nodes[0].kv).LoadValidatorRotations()
 		return err == nil && len(l.Rotations) == 1 && l.Rotations[0].AdoptedHeight > 0
 	}
-	// On an idle chain adoption needs blocks: one the new key signs, and a later one carrying that commit.
-	waitNetwork(t, "v2 to catch up", 90*time.Second, func() bool { return nodes[2].height() >= nodes[0].height() })
+	// On an idle chain adoption needs blocks: one the new key signs, and a later one carrying that commit. Only a
+	// node IN CONSENSUS signs: v2 first block-syncs, and its height reaches the others' while it is still doing so -
+	// ticks counted from then were spent before it could sign at all (RB5-F24: one full-suite run in 12 used all
+	// twenty on a still-syncing v2). From the switch to consensus the new key's signature lands within 2-3 blocks
+	// (measured over 12 runs under load), so twenty is a bound on adoption, not on the restart.
+	joined := func() bool {
+		return nodes[2].height() >= nodes[0].height() && !nodes[2].node.ConsensusReactor().WaitSync()
+	}
+	for deadline := time.Now().Add(90 * time.Second); !joined(); time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			var peers []string
+			for _, n := range nodes {
+				peers = append(peers, fmt.Sprintf("%s:%d", n.name, n.node.Switch().Peers().Size()))
+			}
+			t.Fatalf("v2 did not join consensus in 90s: heights %d/%d/%d/%d, v2 blocksyncing=%v, peers %v",
+				nodes[0].height(), nodes[1].height(), nodes[2].height(), nodes[3].height(),
+				nodes[2].node.ConsensusReactor().WaitSync(), peers)
+		}
+	}
+	newAddr := cmted25519.PubKey(newPub).Address()
+	var commits []string // per tick: the commit's height, whether it holds the new key, how many signed
 	for i := 0; i < 20 && !adopted(); i++ {
 		tick(nodes[0], 1)
+		h := nodes[0].height()
+		if c, err := nodes[0].client.Commit(context.Background(), &h); err == nil {
+			signed, hasNew := 0, false
+			for _, s := range c.Commit.Signatures {
+				if s.BlockIDFlag == cmttypes.BlockIDFlagCommit {
+					signed++
+					hasNew = hasNew || bytes.Equal(s.ValidatorAddress, newAddr)
+				}
+			}
+			commits = append(commits, fmt.Sprintf("%d:%d/%v", h, signed, hasNew))
+		}
 	}
 	if !adopted() {
-		t.Fatal("twenty blocks after the swap, the new key's signature was not recorded")
+		pv, _ := nodes[2].node.PrivValidator().GetPubKey()
+		var rs string
+		if st, err := nodes[2].client.ConsensusState(context.Background()); err == nil {
+			rs = string(st.RoundState)
+		}
+		t.Fatalf("twenty blocks after v2 joined consensus, the new key's signature was not recorded (heights %d/%d/%d/%d); "+
+			"commits height:signed/holds-new-key %v; v2 privval %s (new key %s), v2 peers %d, v2 at %s",
+			nodes[0].height(), nodes[1].height(), nodes[2].height(), nodes[3].height(), commits,
+			pv.Address(), newAddr, nodes[2].node.Switch().Peers().Size(), rs)
 	}
 	code, logText, h2 := submit(nodes[1], f.rotation(2, keys[3], other, "ops-1", "ops-3"))
 	if code != 0 {
@@ -397,6 +467,32 @@ func TestRotationRehearsalOnALiveNetwork(t *testing.T) {
 		st, err := ledger.NewLedgerStore(n.kv).LoadABCIState()
 		if err != nil || st.ExecutionRulesVersion != executionRulesV8 {
 			t.Fatalf("%s: state after the rotations is stamped (%+v, %v); want v8", n.name, st, err)
+		}
+	}
+}
+
+// dropStalePeer does for a node stopped in this process what the process exit of a production validator does: the
+// connections others still hold to it are closed. CometBFT (v0.38 p2p/switch.go addPeer) accepts a peer that dials
+// in while the switch is stopping, logs "Won't start a peer - switch is not running" and returns without closing
+// the connection; in a separate process the exit closes it, here it stays open, the others keep a live "peer" with
+// the stopped node's id, and refuse the restarted node's dials as a duplicate until their ping times out (~105 s).
+// That left a restarted v2 with no peers in 1 of 40 runs (RB5-F24). Every entry for the stopped node is stale: it
+// is not running.
+func dropStalePeer(t *testing.T, nodes []*rehearsalNode, stopped int) {
+	t.Helper()
+	key, err := p2p.LoadNodeKey(nodes[stopped].cfg.NodeKeyFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := key.ID()
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		for i, n := range nodes {
+			if i == stopped || n.node == nil {
+				continue
+			}
+			if p := n.node.Switch().Peers().Get(id); p != nil {
+				n.node.Switch().StopPeerForError(p, "the node it names was stopped (the connection a process exit closes)")
+			}
 		}
 	}
 }

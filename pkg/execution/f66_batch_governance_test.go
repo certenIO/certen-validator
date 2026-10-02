@@ -29,11 +29,11 @@ func f66Inputs(gov byte) []BatchLeafInput {
 }
 
 func TestF66_TheBatchOperationIDCommitsEachMembersGovernance(t *testing.T) {
-	one, err := BuildBatchTree(84532, f66Inputs(1), 100)
+	one, err := BuildBatchTree(84532, withAccSet(f66Inputs(1)), 100, testIncarnation)
 	if err != nil {
 		t.Fatal(err)
 	}
-	two, err := BuildBatchTree(84532, f66Inputs(2), 100)
+	two, err := BuildBatchTree(84532, withAccSet(f66Inputs(2)), 100, testIncarnation)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestF66_TheBatchOperationIDCommitsEachMembersGovernance(t *testing.T) {
 func TestF66_AMemberWithoutAGovernanceDecisionIsNotBatched(t *testing.T) {
 	in := f66Inputs(1)
 	in[1].GovernanceCommitment = [32]byte{}
-	if _, err := BuildBatchTree(84532, in, 100); err == nil {
+	if _, err := BuildBatchTree(84532, withAccSet(in), 100, testIncarnation); err == nil {
 		t.Fatal("a member with no governance commitment was batched")
 	}
 }
@@ -90,7 +90,7 @@ func TestF66_LegacyMembersKeepTheV1ID(t *testing.T) {
 		legacy[i].GovernanceCommitment = [32]byte{}
 		legacy[i].LegacyNoGovernance = true
 	}
-	tree, err := BuildBatchTree(84532, legacy, 100)
+	tree, err := BuildBatchTree(84532, withAccSet(legacy), 100, testIncarnation)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,12 +99,12 @@ func TestF66_LegacyMembersKeepTheV1ID(t *testing.T) {
 	}
 	mixed := f66Inputs(1)
 	mixed[0].GovernanceCommitment, mixed[0].LegacyNoGovernance = [32]byte{}, true
-	if _, err := BuildBatchTree(84532, mixed, 100); err == nil {
+	if _, err := BuildBatchTree(84532, withAccSet(mixed), 100, testIncarnation); err == nil {
 		t.Fatal("a batch mixed legacy members with members that commit")
 	}
 	bad := f66Inputs(1)
 	bad[0].LegacyNoGovernance = true // and still carries a commitment
-	if _, err := BuildBatchTree(84532, bad, 100); err == nil {
+	if _, err := BuildBatchTree(84532, withAccSet(bad), 100, testIncarnation); err == nil {
 		t.Fatal("a member marked legacy with a commitment was batched")
 	}
 }
@@ -134,10 +134,10 @@ func TestF66_AdmissionRequiresTheSnapshotsCommitment(t *testing.T) {
 
 // A period with legacy members cuts them into their own chunks, the same on every validator.
 func TestF66_APeriodChunksLegacyMembersApart(t *testing.T) {
-	o := &BatchOrchestrator{screen: func(context.Context, *PendingBatchIntent) error { return nil }}
-	legacy := &PendingBatchIntent{IntentID: "old", ChainID: 1, OperationID: opid(1), LegacyNoGovernance: true}
-	fresh := &PendingBatchIntent{IntentID: "new", ChainID: 1, OperationID: opid(2), GovernanceCommitment: testGov}
-	none := &PendingBatchIntent{IntentID: "none", ChainID: 1, OperationID: opid(3)}
+	o := &BatchOrchestrator{incarnation: testIncarnation, screen: func(context.Context, *PendingBatchIntent) error { return nil }}
+	legacy := &PendingBatchIntent{AccumulateSetRoot: testAccSet, IntentID: "old", ChainID: 1, OperationID: opid(1), LegacyNoGovernance: true}
+	fresh := &PendingBatchIntent{AccumulateSetRoot: testAccSet, IntentID: "new", ChainID: 1, OperationID: opid(2), GovernanceCommitment: testGov}
+	none := &PendingBatchIntent{AccumulateSetRoot: testAccSet, IntentID: "none", ChainID: 1, OperationID: opid(3)}
 	chunks, excluded, err := o.periodChunks(context.Background(), []*PendingBatchIntent{fresh, legacy, none}, 10)
 	if err != nil {
 		t.Fatal(err)
@@ -205,7 +205,7 @@ func TestF66_TheQueueKeepsEachMembersCommitment(t *testing.T) {
 func TestF66_APeerRefusesAGovernanceItDidNotDecide(t *testing.T) {
 	add := func(s *BatchStack, gov [32]byte) {
 		t.Helper()
-		if err := s.Mempool.Add(&PendingBatchIntent{GovernanceCommitment: gov,
+		if err := s.Mempool.Add(&PendingBatchIntent{AccumulateSetRoot: testAccSet, GovernanceCommitment: gov,
 			IntentID: "alpha", ADIURL: "acc://alpha.acme", ChainID: 11155111,
 			Account:      common.HexToAddress("0x32b4687bE3c02d52e2d94Dc1cFAF03a0E5af0C8B"),
 			OperationID:  opid(5),
@@ -222,7 +222,7 @@ func TestF66_APeerRefusesAGovernanceItDidNotDecide(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tree, err := BuildBatchTree(11155111, []BatchLeafInput{in}, 100)
+	tree, err := BuildBatchTree(11155111, withAccSet([]BatchLeafInput{in}), 100, testIncarnation)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +253,7 @@ func TestF66_APeerRefusesAGovernanceItDidNotDecide(t *testing.T) {
 // it offline.
 func f66Governance(t *testing.T) (*BatchTree, *BatchGovernance) {
 	t.Helper()
-	tree, err := BuildBatchTree(84532, f66Inputs(1), 100)
+	tree, err := BuildBatchTree(84532, withAccSet(f66Inputs(1)), 100, testIncarnation)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,7 +298,7 @@ func TestF66_Layer5RecomputesTheBatchOperationID(t *testing.T) {
 	for i := range legacy {
 		legacy[i].GovernanceCommitment, legacy[i].LegacyNoGovernance = [32]byte{}, true
 	}
-	lt, err := BuildBatchTree(84532, legacy, 100)
+	lt, err := BuildBatchTree(84532, withAccSet(legacy), 100, testIncarnation)
 	if err != nil {
 		t.Fatal(err)
 	}

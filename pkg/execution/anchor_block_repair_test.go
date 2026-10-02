@@ -78,13 +78,27 @@ func executeComprehensiveProofCall(t *testing.T, bundle, root [32]byte) []byte {
 	return packed
 }
 
+// repairOpID and repairHeight are the fixture's V8.1 batch: one member at Accumulate height 9360888. The fixture's
+// bundle is the one those arguments derive on base-sepolia (repairBundle), as a real V8.1 anchor's is.
+func repairOpID(root [32]byte) [32]byte { return levelHash("operation-" + hex.EncodeToString(root[:])) }
+
+const repairHeight = 9360888
+
+func repairBundle(root [32]byte) [32]byte {
+	return contracts.DeriveV8_1BatchBundleID(84532, root, 1, repairOpID(root), repairHeight)
+}
+
+// createBatchAnchorCall is a V8.1 createBatchAnchor call naming bundle over root (the anchors this fixture reproduces
+// were created before V8.2). A bundle its arguments do not derive is a call no anchor accepted, and is refused.
 func createBatchAnchorCall(t *testing.T, bundle, root [32]byte) []byte {
 	t.Helper()
-	args, err := createBatchAnchorMethod.Inputs.Pack(bundle, root, big.NewInt(1), levelHash("operation-"+hex.EncodeToString(bundle[:])), big.NewInt(9360888))
-	if err != nil {
-		t.Fatal(err)
+	w := func(v *big.Int) []byte { b := make([]byte, 32); v.FillBytes(b); return b }
+	op := repairOpID(root)
+	d := append([]byte{}, contracts.CreateBatchAnchorV8_1Selector[:]...)
+	for _, x := range [][]byte{bundle[:], root[:], w(big.NewInt(1)), op[:], w(big.NewInt(repairHeight))} {
+		d = append(d, x...)
 	}
-	return append(append([]byte{}, createBatchAnchorMethod.ID...), args...)
+	return d
 }
 
 // repairFixture is production on 2026-09-18: a canonical on-demand anchor whose row has no create block,
@@ -155,7 +169,8 @@ func newRepairFixtureWith(t *testing.T, rightBlock, misnamed bool) *repairFixtur
 		f.statedBlock = int64(f.chainBlock)
 	}
 	tag := uuid.NewString()
-	f.bundle, f.root = levelHash("bundle-"+tag), levelHash("root-"+tag)
+	f.root = levelHash("root-" + tag)
+	f.bundle = repairBundle(f.root)
 	f.anchorTx = "0x" + hex.EncodeToString(levelBytes("create-"+tag))
 	f.verifyTx = "0x" + hex.EncodeToString(levelBytes("verify-"+tag))
 	f.settleTx = "0x" + hex.EncodeToString(levelBytes("settle-"+tag))

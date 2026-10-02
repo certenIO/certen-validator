@@ -2,6 +2,7 @@ package execution
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"math/big"
 	"os"
@@ -13,9 +14,9 @@ import (
 )
 
 // odMember builds a valid member. id varies the intentID and operationID together, the way a
-// real intent does — the operationID IS the intent's identity.
+// real intent does â€” the operationID IS the intent's identity.
 func odMember(id byte, chainID int64, height uint64) *PendingBatchIntent {
-	return &PendingBatchIntent{GovernanceCommitment: testGov,
+	return &PendingBatchIntent{AccumulateSetRoot: testAccSet, GovernanceCommitment: testGov,
 		IntentID:     string(rune('a'+id)) + "-intent",
 		ADIURL:       "acc://org" + string(rune('a'+id)) + ".acme",
 		ChainID:      chainID,
@@ -35,7 +36,7 @@ func odMember(id byte, chainID int64, height uint64) *PendingBatchIntent {
 const odChain = int64(11155111)
 
 // THE load-bearing test for step 1. The whole reason on-demand members live in a separate
-// structure is that the period path must not be able to see them — if it can, every period call
+// structure is that the period path must not be able to see them â€” if it can, every period call
 // site needs a lane filter and the ones that get missed form batches over the wrong members.
 func TestOnDemandIndexIsInvisibleToPeriodSelection(t *testing.T) {
 	m := NewBatchMempool(BatchMempoolConfig{})
@@ -51,7 +52,7 @@ func TestOnDemandIndexIsInvisibleToPeriodSelection(t *testing.T) {
 	// Period selection must see ONLY the period member.
 	got := m.PeriodMembers(odChain, 100, 100)
 	if len(got) != 1 {
-		t.Fatalf("PeekForPeriod returned %d member(s), want 1 — the on-demand member leaked into "+
+		t.Fatalf("PeekForPeriod returned %d member(s), want 1 â€” the on-demand member leaked into "+
 			"the period path and would be batched with members it must never share an anchor with", len(got))
 	}
 	if got[0].OperationID != ([32]byte{2}) {
@@ -82,7 +83,7 @@ func TestOnDemandIndexIsInvisibleToPeriodSelection(t *testing.T) {
 }
 
 // A period flush records outcomes on the period's members. It must never touch an on-demand
-// member — one resolved out from under the on-demand submitter would never settle and never fail.
+// member â€” one resolved out from under the on-demand submitter would never settle and never fail.
 func TestPeriodOutcomesDoNotTouchOnDemandMembers(t *testing.T) {
 	m := NewBatchMempool(BatchMempoolConfig{})
 	if err := m.AddOnDemand(odMember(1, odChain, 105)); err != nil {
@@ -103,7 +104,7 @@ func TestPeriodOutcomesDoNotTouchOnDemandMembers(t *testing.T) {
 }
 
 // Each pruner must be blind to the other lane. A shared pruner using one lane's horizon would
-// silently delete the other's members — the highest-consequence failure in this file.
+// silently delete the other's members â€” the highest-consequence failure in this file.
 func TestOnDemandPruneDoesNotTouchPeriodPool(t *testing.T) {
 	m := NewBatchMempool(BatchMempoolConfig{})
 	old := odMember(1, odChain, 105)
@@ -145,7 +146,7 @@ func TestPeriodPruneDoesNotTouchOnDemandMembers(t *testing.T) {
 }
 
 // TTL is wall clock, not a count of periods. The period path measures retention in periods,
-// which is meaningless without a period width — scaling that constant into this lane is the
+// which is meaningless without a period width â€” scaling that constant into this lane is the
 // bug class this test exists to prevent.
 func TestOnDemandTTLIsWallClock(t *testing.T) {
 	m := NewBatchMempool(BatchMempoolConfig{})
@@ -163,7 +164,7 @@ func TestOnDemandTTLIsWallClock(t *testing.T) {
 	}
 
 	if pruned := m.PruneOnDemandOlderThan(DefaultOnDemandTTL, now); pruned != 1 {
-		t.Fatalf("pruned %d, want 1 — only the member older than the TTL", pruned)
+		t.Fatalf("pruned %d, want 1 â€” only the member older than the TTL", pruned)
 	}
 	if m.GetOnDemand(odChain, [32]byte{1}) == nil {
 		t.Error("the 30-minute-old member was pruned under a 2h TTL")
@@ -177,7 +178,7 @@ func TestOnDemandTTLIsWallClock(t *testing.T) {
 }
 
 // I3: the key is (chainID, operationID). A cross-chain intent contributes one member per chain
-// under the SAME operationID, and both must survive — this is the multi-chain case the design
+// under the SAME operationID, and both must survive â€” this is the multi-chain case the design
 // has to support even though production has never exercised it.
 func TestSameOperationIDOnTwoChainsAreDistinctMembers(t *testing.T) {
 	m := NewBatchMempool(BatchMempoolConfig{})
@@ -189,7 +190,7 @@ func TestSameOperationIDOnTwoChainsAreDistinctMembers(t *testing.T) {
 		t.Fatalf("AddOnDemand chain A: %v", err)
 	}
 	if err := m.AddOnDemand(b); err != nil {
-		t.Fatalf("AddOnDemand chain B rejected as a duplicate: %v — a cross-chain intent would "+
+		t.Fatalf("AddOnDemand chain B rejected as a duplicate: %v â€” a cross-chain intent would "+
 			"settle on one chain and silently lose the other", err)
 	}
 	if m.GetOnDemand(odChain, [32]byte{1}) == nil || m.GetOnDemand(84532, [32]byte{1}) == nil {
@@ -214,7 +215,7 @@ func TestAddOnDemandIsIdempotentPerChain(t *testing.T) {
 	}
 }
 
-// A malformed member must be refused identically in both lanes — the shared validateMember.
+// A malformed member must be refused identically in both lanes â€” the shared validateMember.
 func TestOnDemandRejectsWhatThePeriodPoolRejects(t *testing.T) {
 	cases := map[string]func(*PendingBatchIntent){
 		"no legs":       func(p *PendingBatchIntent) { p.Legs = nil },
@@ -305,7 +306,7 @@ func TestOnDemandMembersRoundTripThroughStoreIntoTheirOwnIndex(t *testing.T) {
 		t.Error("the on-demand member did not restore into the on-demand index")
 	}
 	if dst.PendingCount() != 1 {
-		t.Errorf("period pool restored %d member(s), want 1 — a lane was mis-routed",
+		t.Errorf("period pool restored %d member(s), want 1 â€” a lane was mis-routed",
 			dst.PendingCount())
 	}
 	if dst.PendingOnDemandCount() != 1 {
@@ -313,7 +314,7 @@ func TestOnDemandMembersRoundTripThroughStoreIntoTheirOwnIndex(t *testing.T) {
 	}
 	// The restored member must keep the height its bundleId derives from.
 	if got := dst.GetOnDemand(odChain, [32]byte{1}); got != nil && got.CommitHeight != 105 {
-		t.Errorf("restored CommitHeight = %d, want 105 — the bundleId would differ from its peers'",
+		t.Errorf("restored CommitHeight = %d, want 105 â€” the bundleId would differ from its peers'",
 			got.CommitHeight)
 	}
 }
@@ -333,7 +334,8 @@ func TestLaneLessSnapshotRestoresToThePeriodPool(t *testing.T) {
 	  "account": "0x32b4687bE3c02d52e2d94Dc1cFAF03a0E5af0C8B",
 	  "operation_id": "0x0100000000000000000000000000000000000000000000000000000000000000",
 	  "legs": [{"leg_id":"leg-0","target":"0x1111111111111111111111111111111111111111","value":"0","data":"0xdead"}],
-	  "commit_height": 105
+	  "commit_height": 105,
+	  "accumulate_set_root": "0x` + hex.EncodeToString(testAccSet[:]) + `"
 	}]`
 	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
 		t.Fatalf("seeding legacy snapshot: %v", err)
@@ -396,7 +398,7 @@ func TestSnapshotRemainsABareArrayForRollback(t *testing.T) {
 }
 
 // With no on-demand members queued, the file must be byte-identical to what the previous
-// format produced — omitempty keeps this change from churning every node's snapshot.
+// format produced â€” omitempty keeps this change from churning every node's snapshot.
 func TestSnapshotOmitsLaneForPeriodMembers(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "batch_mempool.json")
 	store, err := NewBatchMempoolStore(path, nil, nil)

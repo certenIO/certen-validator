@@ -23,7 +23,7 @@ func odTreeFor(t *testing.T, p *PendingBatchIntent) *BatchTree {
 	if err != nil {
 		t.Fatalf("LeafInput: %v", err)
 	}
-	tree, err := BuildBatchTree(p.ChainID, []BatchLeafInput{in}, p.CommitHeight)
+	tree, err := BuildBatchTree(p.ChainID, withAccSet([]BatchLeafInput{in}), p.CommitHeight, testIncarnation)
 	if err != nil {
 		t.Fatalf("BuildBatchTree: %v", err)
 	}

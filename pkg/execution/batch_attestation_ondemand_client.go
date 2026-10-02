@@ -233,11 +233,13 @@ func NewOnDemandAttestationRequest(
 		return nil, fmt.Errorf("intent %s has a zero operationID", member.IntentID)
 	}
 	gov := tree.Inputs[0].GovernanceCommitment
+	acc := tree.Inputs[0].AccumulateSetRoot
 	return &OnDemandAttestationRequest{
 		ChainID:              tree.ChainID,
 		OperationID:          "0x" + hex.EncodeToString(member.OperationID[:]),
 		BundleID:             "0x" + hex.EncodeToString(tree.BundleID[:]),
 		ProposerID:           proposerID,
 		GovernanceCommitment: "0x" + hex.EncodeToString(gov[:]),
+		AccumulateSetRoot:    "0x" + hex.EncodeToString(acc[:]),
 	}, nil
 }

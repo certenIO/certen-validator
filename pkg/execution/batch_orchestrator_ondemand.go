@@ -210,7 +210,7 @@ func (o *BatchOrchestrator) SettleOnDemandMember(
 	if err != nil {
 		return nil, fmt.Errorf("building leaf for %s: %w", member.IntentID, err)
 	}
-	tree, err := BuildBatchTree(chainID, []BatchLeafInput{in}, member.CommitHeight)
+	tree, err := BuildBatchTree(chainID, []BatchLeafInput{in}, member.CommitHeight, o.incarnation)
 	if err != nil {
 		return nil, fmt.Errorf("building one-member batch tree: %w", err)
 	}

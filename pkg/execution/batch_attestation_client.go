@@ -184,6 +184,7 @@ func NewBatchAttestationRequest(
 		members = append(members, MemberGovernance{
 			OperationID:          "0x" + hex.EncodeToString(in.OperationID[:]),
 			GovernanceCommitment: "0x" + hex.EncodeToString(in.GovernanceCommitment[:]),
+			AccumulateSetRoot:    "0x" + hex.EncodeToString(in.AccumulateSetRoot[:]),
 		})
 	}
 	return &BatchAttestationRequest{
