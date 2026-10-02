@@ -59,7 +59,11 @@ type RegistryConfig struct {
 	// EthPrivateKey is the key the chain strategies are constructed with.
 	EthPrivateKey string
 
-	// Chains is every supported chain, exactly once.
+	// SettlementChains are the chains CERTEN settles on now (CERTEN_SETTLEMENT_CHAINS, RB5-F33): at least one, each
+	// supported. Chains must cover exactly these, each once - none silently missing (RB3-F44), none beside them.
+	SettlementChains []int64
+
+	// Chains is every settlement chain's endpoint, exactly once.
 	Chains []ChainEndpoint
 
 	Logger *log.Logger
@@ -116,6 +120,19 @@ func InitializeRegistry(cfg *RegistryConfig) (*Registry, error) {
 		return nil, fmt.Errorf("register BLS strategy: %w", err)
 	}
 
+	if len(cfg.SettlementChains) == 0 {
+		return nil, fmt.Errorf("no settlement chains: the proof cycle would observe nothing")
+	}
+	settled := map[int64]bool{}
+	for _, id := range cfg.SettlementChains {
+		if !isSupported(id) {
+			return nil, fmt.Errorf("settlement chain %d is not a chain CERTEN settles on (supported: %v)", id, SupportedChainIDs)
+		}
+		if settled[id] {
+			return nil, fmt.Errorf("settlement chain %d is named twice", id)
+		}
+		settled[id] = true
+	}
 	byID := map[int64]ChainEndpoint{}
 	for _, c := range cfg.Chains {
 		if !isSupported(c.ChainID) {
@@ -124,12 +141,18 @@ func InitializeRegistry(cfg *RegistryConfig) (*Registry, error) {
 		if _, dup := byID[c.ChainID]; dup {
 			return nil, fmt.Errorf("chain %d is configured twice", c.ChainID)
 		}
+		if !settled[c.ChainID] {
+			return nil, fmt.Errorf("chain %d is configured but is not one CERTEN settles on now", c.ChainID)
+		}
 		byID[c.ChainID] = c
 	}
 	for _, id := range SupportedChainIDs {
+		if !settled[id] {
+			continue
+		}
 		c, ok := byID[id]
 		if !ok {
-			return nil, fmt.Errorf("supported chain %d is not configured", id)
+			return nil, fmt.Errorf("settlement chain %d is not configured", id)
 		}
 		if strings.TrimSpace(c.RPC) == "" {
 			return nil, fmt.Errorf("chain %d has no RPC endpoint", id)
