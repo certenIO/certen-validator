@@ -173,6 +173,9 @@ func (o *BatchOrchestrator) OnDemandMemberNeedsThisValidator(ctx context.Context
 	if err != nil {
 		return false, err
 	}
+	if err := o.mempool.RequireCertified(member); err != nil {
+		return false, err
+	}
 	tree, err := BuildBatchTree(member.ChainID, []BatchLeafInput{in}, member.CommitHeight, o.incarnation)
 	if err != nil {
 		return false, err

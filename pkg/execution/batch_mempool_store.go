@@ -126,6 +126,9 @@ type persistedMember struct {
 	// 0x-hex. Required: a member written without it was admitted for the retired V8.1 anchor, which its intent still
 	// declares, and it cannot be settled on V8.2 - the restore refuses it by name (drain before the V8.2 rollout).
 	AccumulateSetRoot string `json:"accumulate_set_root,omitempty"`
+	// IntentMessage is the intent message this validator's block signed (RB5 D3), 0x-hex; absent for a member
+	// committed before a BLS registry was in force. The certified message is re-read from the chain's record.
+	IntentMessage string `json:"intent_message,omitempty"`
 }
 
 // persistedPredecessor is a MemberPredecessor on disk.
@@ -285,6 +288,9 @@ func (s *BatchMempoolStore) encodeMember(p *PendingBatchIntent, lane BatchLane) 
 		return persistedMember{}, fmt.Errorf("intent %s on chain %d has no Accumulate validator set root", p.IntentID, p.ChainID)
 	}
 	pm.AccumulateSetRoot = "0x" + common.Bytes2Hex(p.AccumulateSetRoot[:])
+	if p.IntentMessage != ([32]byte{}) {
+		pm.IntentMessage = "0x" + common.Bytes2Hex(p.IntentMessage[:])
+	}
 	if a := p.After; a != nil {
 		pm.After = &persistedPredecessor{
 			ChainID: a.ChainID, OperationID: "0x" + common.Bytes2Hex(a.OperationID[:]), Account: a.Account.Hex(),
@@ -385,8 +391,19 @@ func (s *BatchMempoolStore) Load(m *BatchMempool) (int, error) {
 		}
 		copy(accSetRoot[:], rawAcc)
 
+		var intentMessage [32]byte
+		if pm.IntentMessage != "" {
+			raw := common.FromHex(pm.IntentMessage)
+			if len(raw) != 32 || common.BytesToHash(raw) == (common.Hash{}) {
+				return restored, fmt.Errorf("batch mempool %s: intent %s on chain %d: intent message %q is not a 32-byte "+
+					"message", s.path, pm.IntentID, pm.ChainID, pm.IntentMessage)
+			}
+			copy(intentMessage[:], raw)
+		}
+
 		p := &PendingBatchIntent{
 			AccumulateSetRoot:    accSetRoot,
+			IntentMessage:        intentMessage,
 			IntentID:             pm.IntentID,
 			ADIURL:               pm.ADIURL,
 			ChainID:              pm.ChainID,

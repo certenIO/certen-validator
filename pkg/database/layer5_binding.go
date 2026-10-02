@@ -62,11 +62,13 @@ type Layer5Binding struct {
 	// BatchOperationIDVersion how it was derived: "v2" commits to every member's governance decision, "v1" does
 	// not, "" on a row rebuilt from the chain (RB4-F66). MemberOperationID and MemberGovernanceCommitment are this
 	// proof's member's; BatchMembers every member's, in tree order, so the id recomputes offline.
-	BatchOperationID           string
-	BatchOperationIDVersion    string
-	MemberOperationID          string
-	MemberGovernanceCommitment string
-	BatchMembers               []BatchMemberGovernance
+	BatchOperationID        string
+	BatchOperationIDVersion string
+	// MemberCertifiedIntentMessage is this member's quorum-certified intent message, on a v3 batch (RB5 D3).
+	MemberCertifiedIntentMessage string
+	MemberOperationID            string
+	MemberGovernanceCommitment   string
+	BatchMembers                 []BatchMemberGovernance
 
 	// What the anchor committed beyond the root (RB5-F9, migration 00018), so layer 5 re-derives its bundle id and
 	// signed message offline. AnchorVersion is empty on a row written before migration 00018; the Accumulate values
@@ -86,6 +88,8 @@ type Layer5Binding struct {
 type BatchMemberGovernance struct {
 	OperationID          string `json:"operationId"`
 	GovernanceCommitment string `json:"governanceCommitment,omitempty"`
+	// CertifiedIntentMessage is the member's quorum-certified intent message, on a v3 batch (RB5 D3).
+	CertifiedIntentMessage string `json:"certifiedIntentMessage,omitempty"`
 }
 
 // ErrNoBatchBinding reports that no batch row covers this transaction.
@@ -159,6 +163,7 @@ func (r *ProofArtifactRepository) GetLayer5Binding(ctx context.Context, intentID
 		       COALESCE(ab.batch_operation_id_version, ''),
 		       COALESCE(bt.operation_id, ''),
 		       COALESCE(bt.governance_commitment, ''),
+		       COALESCE(bt.certified_intent_message, ''),
 		       COALESCE(ab.bundle_id, ''),
 		       COALESCE(ab.batch_leaf_count, 0),
 		       COALESCE(ab.anchor_version, ''),
@@ -185,6 +190,7 @@ func (r *ProofArtifactRepository) GetLayer5Binding(ctx context.Context, intentID
 	err := r.db.QueryRowContext(ctx, q, intentID, accumTxHash, chainID).Scan(
 		&b.BatchID, &leaf, &b.TreeIndex, &rawPath, &root, &b.TargetChain, &b.AnchorTxHash, &b.AnchorBlockNum,
 		&b.BatchOperationID, &b.BatchOperationIDVersion, &b.MemberOperationID, &b.MemberGovernanceCommitment,
+		&b.MemberCertifiedIntentMessage,
 		&b.BundleID, &b.LeafCount, &b.AnchorVersion, &b.AccumulateBlockHeight, &b.CertenSetRoot, &b.MessageHash,
 		&b.AccumulateSetRoot, &b.AccumulateIncarnation)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -210,7 +216,7 @@ func (r *ProofArtifactRepository) GetLayer5Binding(ctx context.Context, intentID
 	// was derived has them to state.
 	if b.BatchOperationIDVersion != "" {
 		rows, err := r.db.QueryContext(ctx, `
-			SELECT COALESCE(operation_id, ''), COALESCE(governance_commitment, '')
+			SELECT COALESCE(operation_id, ''), COALESCE(governance_commitment, ''), COALESCE(certified_intent_message, '')
 			FROM batch_transactions WHERE batch_id = $1 ORDER BY tree_index`, b.BatchID)
 		if err != nil {
 			return nil, fmt.Errorf("look up the members of batch %s: %w", b.BatchID, err)
@@ -218,7 +224,7 @@ func (r *ProofArtifactRepository) GetLayer5Binding(ctx context.Context, intentID
 		defer rows.Close()
 		for rows.Next() {
 			var m BatchMemberGovernance
-			if err := rows.Scan(&m.OperationID, &m.GovernanceCommitment); err != nil {
+			if err := rows.Scan(&m.OperationID, &m.GovernanceCommitment, &m.CertifiedIntentMessage); err != nil {
 				return nil, fmt.Errorf("read a member of batch %s: %w", b.BatchID, err)
 			}
 			b.BatchMembers = append(b.BatchMembers, m)

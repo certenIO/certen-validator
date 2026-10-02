@@ -93,6 +93,9 @@ const (
 type PendingAttestation struct {
 	// Identity
 	IntentID string
+	// IntentMessageHex is the per-intent message this validator's ValidatorBlock certified (RB5 D3), empty for a
+	// block built before a BLS registry was in force.
+	IntentMessageHex string
 	// SettlementLane is the batch lane that settled - or dropped - this member: "on_cadence" (a
 	// height-bucketed period sharing one anchor) or "on_demand" (one member, one anchor). It is the
 	// member's proof class as stored, stamped by the lane itself (RB3-F74).
@@ -486,6 +489,9 @@ func (bv *BFTValidator) captureAttestation(
 	}
 
 	if vb != nil {
+		if vb.IntentCertificate != nil {
+			att.IntentMessageHex = vb.IntentCertificate.Message
+		}
 		att.BundleIDHex = vb.BundleID
 		att.OperationCommitment = vb.OperationCommitment
 		att.GovernanceProofRoot = vb.GovernanceProof.MerkleRoot
@@ -518,6 +524,22 @@ func (bv *BFTValidator) captureAttestation(
 
 // GovernanceCommitment is the commitment to who decided the intent, from the decision the round derived: what its
 // batch member commits to (RB4-F66). An error when the round recorded none.
+// CertifiedIntentMessage is the intent message this validator's block certified, zero for a block built before a
+// BLS registry was in force.
+func (att *PendingAttestation) CertifiedIntentMessage() ([32]byte, error) {
+	if att.IntentMessageHex == "" {
+		return [32]byte{}, nil
+	}
+	m, err := hex32(att.IntentMessageHex)
+	if err != nil {
+		return [32]byte{}, fmt.Errorf("the certified intent message: %w", err)
+	}
+	if m == ([32]byte{}) {
+		return [32]byte{}, fmt.Errorf("the certified intent message is zero")
+	}
+	return m, nil
+}
+
 func (att *PendingAttestation) GovernanceCommitment() ([32]byte, error) {
 	if att == nil || len(att.GovDecision) == 0 {
 		return [32]byte{}, fmt.Errorf("%w: the round recorded no governance decision", ErrNoGovernanceCommitment)

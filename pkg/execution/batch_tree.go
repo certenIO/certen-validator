@@ -50,6 +50,11 @@ type BatchLeafInput struct {
 	// operation id: every member of a tree must share it, and the tree's V8.2 anchor commits it once.
 	AccumulateSetRoot [32]byte
 
+	// IntentMessage is the member's quorum-certified intent message (RB5 D3), zero for a member committed before a
+	// BLS registry was in force. NOT part of the leaf; part of the v3 batch operation id, so the anchor commits every
+	// member's certified intent - its govRoot v2, Accumulate set, incarnation, governance commitment and CERTEN set.
+	IntentMessage [32]byte
+
 	// LegacyNoGovernance marks a member admitted before governance commitments existed (restored from a mempool
 	// written by an earlier binary). Its batch was, or will be, formed with the v1 operation id - the id its anchor
 	// may already carry - and records that its governance is not committed. Only restore sets it.
@@ -466,10 +471,25 @@ func AccountAddressForADI(adiURL string) common.Address {
 // Solidity side treats an absent value.
 func bigZero() *big.Int { return new(big.Int) }
 
-// batchOperationIDOf is the operation id a batch is formed with: v2 for members that commit to their governance
-// decision, v1 for members admitted before that existed (LegacyNoGovernance) - the id their anchors carry. The two are
-// never mixed in one batch, and a member that is neither is refused.
+// batchOperationIDOf is the operation id a batch is formed with: v3 for members whose intent CERTEN's quorum
+// certified, v2 for members committed before a BLS registry was in force that commit to their governance decision,
+// v1 for members admitted before that existed (LegacyNoGovernance) - the id their anchors carry. The classes are
+// never mixed in one batch (memberClass partitions periods), and a member that is none is refused.
 func batchOperationIDOf(inputs []BatchLeafInput) ([32]byte, string, error) {
+	certified := 0
+	for _, in := range inputs {
+		if in.IntentMessage != ([32]byte{}) {
+			certified++
+		}
+	}
+	switch {
+	case certified == len(inputs) && certified > 0:
+		id, err := DeriveBatchOperationIDV3(inputs)
+		return id, BatchOperationIDV3, err
+	case certified > 0:
+		return [32]byte{}, "", fmt.Errorf("a batch cannot mix %d member(s) with a certified intent and %d without",
+			certified, len(inputs)-certified)
+	}
 	legacy := 0
 	for _, in := range inputs {
 		if in.LegacyNoGovernance {
@@ -499,7 +519,55 @@ func batchOperationIDOf(inputs []BatchLeafInput) ([32]byte, string, error) {
 const (
 	BatchOperationIDV1 = "v1"
 	BatchOperationIDV2 = "v2"
+	BatchOperationIDV3 = "v3"
 )
+
+// BatchOperationIDDomainV3 opens the v3 batch operation id.
+const BatchOperationIDDomainV3 = "certen:batchopid:v3"
+
+// DeriveBatchOperationIDV3 is the batch's id over every member's operation, governance decision AND quorum-certified
+// intent message (RB5 D3):
+//
+//	keccak256("certen:batchopid:v3" || for each member, sorted by (operationID, governanceCommitment, intentMessage):
+//	          operationID || governanceCommitment || intentMessage)
+//
+// The anchor stores it and the quorum's batch message covers it, so CERTEN's on-chain anchor commits to the per-intent
+// certificate of every member - govRoot v2 over its full proof among it. A member without a governance commitment or
+// a certified message is refused, never committed as zero.
+func DeriveBatchOperationIDV3(inputs []BatchLeafInput) ([32]byte, error) {
+	type triple struct{ op, gov, msg [32]byte }
+	ts := make([]triple, 0, len(inputs))
+	for i, in := range inputs {
+		switch {
+		case in.OperationID == ([32]byte{}):
+			return [32]byte{}, fmt.Errorf("member %d (%s) has a zero operationID", i, in.ADIURL)
+		case in.GovernanceCommitment == ([32]byte{}):
+			return [32]byte{}, fmt.Errorf("member %d (%s, operation %x) has no governance decision to commit to",
+				i, in.ADIURL, in.OperationID[:8])
+		case in.IntentMessage == ([32]byte{}):
+			return [32]byte{}, fmt.Errorf("member %d (%s, operation %x) has no certified intent message",
+				i, in.ADIURL, in.OperationID[:8])
+		}
+		ts = append(ts, triple{in.OperationID, in.GovernanceCommitment, in.IntentMessage})
+	}
+	sort.Slice(ts, func(i, j int) bool {
+		if ts[i].op != ts[j].op {
+			return bytesLess(ts[i].op, ts[j].op)
+		}
+		if ts[i].gov != ts[j].gov {
+			return bytesLess(ts[i].gov, ts[j].gov)
+		}
+		return bytesLess(ts[i].msg, ts[j].msg)
+	})
+	packed := make([]byte, 0, len(BatchOperationIDDomainV3)+len(ts)*96)
+	packed = append(packed, []byte(BatchOperationIDDomainV3)...)
+	for _, t := range ts {
+		packed = append(packed, t.op[:]...)
+		packed = append(packed, t.gov[:]...)
+		packed = append(packed, t.msg[:]...)
+	}
+	return ethcrypto.Keccak256Hash(packed), nil
+}
 
 // BatchOperationIDDomainV2 opens the v2 batch operation id.
 const BatchOperationIDDomainV2 = "certen:batchopid:v2"

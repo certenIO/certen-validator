@@ -424,12 +424,16 @@ func TestADatabaseBeforeIntentCertificatesSaysSo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer admin.Close()
+	t.Cleanup(func() { admin.Close() }) // cleanups run last-registered first: the drop below runs before this
 	name := fmt.Sprintf("certen_test_preqc_%d", time.Now().UnixNano())
 	if _, err := admin.Exec("CREATE DATABASE " + name); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _, _ = admin.Exec("DROP DATABASE IF EXISTS " + name + " WITH (FORCE)") })
+	t.Cleanup(func() {
+		if _, err := admin.Exec("DROP DATABASE IF EXISTS " + name + " WITH (FORCE)"); err != nil {
+			t.Errorf("dropping the test database %s: %v", name, err)
+		}
+	})
 	u, err := url.Parse(dsn)
 	if err != nil {
 		t.Fatal(err)
@@ -439,9 +443,34 @@ func TestADatabaseBeforeIntentCertificatesSaysSo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer empty.Close()
+	t.Cleanup(func() { empty.Close() })
 	_, err = NewConsensusRepository(NewClientFromDB(empty)).IntentQuorumCertificate(context.Background(), "0x"+strings.Repeat("01", 32))
 	if !errors.Is(err, ErrIntentCertificatesNotInSchema) {
 		t.Fatalf("a schema without the table: %v", err)
+	}
+}
+
+// Each batch operation id version states exactly what its members commit: v3 their operation, governance commitment
+// and certified intent message; v2 no certified message; v1 neither.
+func TestEachBatchVersionStatesWhatItsMembersCommit(t *testing.T) {
+	op, gov, msg := "0x"+strings.Repeat("01", 32), "0x"+strings.Repeat("02", 32), "0x"+strings.Repeat("03", 32)
+	rec := func(version string, m AnchorQuorumMemberRecord) *AnchorQuorumRecord {
+		return &AnchorQuorumRecord{BatchOperationIDVersion: version, Members: []AnchorQuorumMemberRecord{m}}
+	}
+	for name, c := range map[string]struct {
+		rec *AnchorQuorumRecord
+		ok  bool
+	}{
+		"v3 complete":                    {rec("v3", AnchorQuorumMemberRecord{OperationID: op, GovernanceCommitment: gov, CertifiedIntentMessage: msg}), true},
+		"v3 without the message":         {rec("v3", AnchorQuorumMemberRecord{OperationID: op, GovernanceCommitment: gov}), false},
+		"v3 without governance":          {rec("v3", AnchorQuorumMemberRecord{OperationID: op, CertifiedIntentMessage: msg}), false},
+		"v2 complete":                    {rec("v2", AnchorQuorumMemberRecord{OperationID: op, GovernanceCommitment: gov}), true},
+		"v2 stating a certified message": {rec("v2", AnchorQuorumMemberRecord{OperationID: op, GovernanceCommitment: gov, CertifiedIntentMessage: msg}), false},
+		"v1 stating a certified message": {rec("v1", AnchorQuorumMemberRecord{OperationID: op, CertifiedIntentMessage: msg}), false},
+		"a made-up version":              {rec("v2-checked", AnchorQuorumMemberRecord{OperationID: op, GovernanceCommitment: gov}), false},
+	} {
+		if err := checkBatchGovernance(c.rec); (err == nil) != c.ok {
+			t.Errorf("%s: %v", name, err)
+		}
 	}
 }

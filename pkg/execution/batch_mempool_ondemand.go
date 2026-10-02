@@ -86,6 +86,9 @@ func (m *BatchMempool) addOnDemand(p *PendingBatchIntent) error {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if err := m.certifiableLocked(p); err != nil {
+		return err
+	}
 
 	if m.onDemand == nil {
 		m.onDemand = make(map[int64]map[[32]byte]*PendingBatchIntent)

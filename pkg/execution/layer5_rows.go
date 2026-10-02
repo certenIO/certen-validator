@@ -127,6 +127,8 @@ func BuildLayer5(
 				GovernanceCommitment: binding.MemberGovernanceCommitment,
 				Members:              binding.BatchMembers,
 			}
+			// This proof's member's certified intent message, as its own row records it (RB5 D3).
+			l5.Governance.CertifiedIntentMessage = binding.MemberCertifiedIntentMessage
 		}
 		// What the anchor committed, from the row that records it (RB5). A row written before migration 00018
 		// states no generation and carries none: its layer 5 is commitment_not_recorded, never a guessed one.

@@ -473,7 +473,8 @@ func (s *BatchStack) settleGraceElapsed(
 }
 
 // flushOneChain is the shared body: form the period's tree, settle it, then dispose of every
-// member exactly once — settled and failed to the attester, dropped to the fallback.
+// member exactly once — settled and failed to the attester, dropped to the drop handler, which
+// records each as FAILED with its cause (there is no other path that settles it).
 func (s *BatchStack) flushOneChain(
 	ctx context.Context,
 	chainID int64,
@@ -868,10 +869,27 @@ func (s *BatchStack) admit(
 		accSetRoot = root
 	}
 
+	// The member's quorum-certified intent message (RB5 D3), which its v3 batch operation id commits; zero for a
+	// round built before a BLS registry was in force.
+	var intentMessage [32]byte
+	if attestation != nil {
+		ic, ok := attestation.(intentCertifier)
+		if !ok {
+			return nil, fmt.Errorf("intent %s: its round's snapshot (%T) does not state whether its intent is certified",
+				intentID, attestation)
+		}
+		m, err := ic.CertifiedIntentMessage()
+		if err != nil {
+			return nil, fmt.Errorf("intent %s: %w", intentID, err)
+		}
+		intentMessage = m
+	}
+
 	return &PendingBatchIntent{
 		IntentID:             intentID,
 		GovernanceCommitment: governanceCommitment,
 		AccumulateSetRoot:    accSetRoot,
+		IntentMessage:        intentMessage,
 		ADIURL:               adiURL,
 		ChainID:              chainID,
 		Account:              common.BytesToAddress(account[:]),
@@ -889,6 +907,11 @@ func (s *BatchStack) admit(
 // Accumulate validator set its proof was verified against, under an incarnation.
 type accumulateSetCommitter interface {
 	AccumulateSetRoot(incarnation [32]byte) ([32]byte, error)
+}
+
+// intentCertifier is the round's snapshot as admission reads its certified intent (RB5 D3).
+type intentCertifier interface {
+	CertifiedIntentMessage() ([32]byte, error)
 }
 
 // governanceCommitter is the round's snapshot as admission reads it: the commitment to who decided the intent.

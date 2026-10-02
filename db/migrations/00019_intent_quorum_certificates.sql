@@ -18,7 +18,16 @@
 --                     commitment, key page and key book), so a verifier recomputes each one from the stored proof
 --   certified_height  the CERTEN block whose commit completed the quorum
 --
--- Expand-only: one new table. A row is written once; a second write must carry the same certificate.
+-- And the v3 batch operation id, which commits every member's quorum-certified intent message:
+--   anchor_batches.batch_operation_id_version  may now be v3
+--   batch_transactions.certified_intent_message the member's certified intent message, 0x-hex; set on every member
+--                                               of a v3 batch and on no other
+--
+-- Expand-only: one new table, one nullable column, one widened constraint. A certificate row is written once; a second
+-- write must carry the same certificate.
+--
+-- schema: destructive-approved   (batch_operation_id_version_is_known is dropped and re-added WIDER, admitting v3;
+--                                 every existing value v1/v2 still satisfies it, no row changes)
 
 CREATE TABLE public.intent_quorum_certificates (
     operation_id     character varying(66) PRIMARY KEY
@@ -39,3 +48,14 @@ CREATE TABLE public.intent_quorum_certificates (
 
 COMMENT ON TABLE public.intent_quorum_certificates IS
   'CERTEN''s quorum certificate over each operation''s intent message (RB5 D3): the aggregate of the committed ValidatorBlocks'' signatures once their signers held the BLS registry''s threshold, with the registry and the message''s inputs, for offline verification.';
+
+ALTER TABLE public.anchor_batches
+    DROP CONSTRAINT batch_operation_id_version_is_known,
+    ADD CONSTRAINT batch_operation_id_version_is_known CHECK (batch_operation_id_version IN ('v1', 'v2', 'v3'));
+
+ALTER TABLE public.batch_transactions
+    ADD COLUMN certified_intent_message character varying(66)
+        CONSTRAINT batch_member_certified_intent_message_is_hex CHECK (certified_intent_message ~ '^0x[0-9a-f]{64}$');
+
+COMMENT ON COLUMN public.batch_transactions.certified_intent_message IS
+  'The member''s quorum-certified intent message (RB5 D3), which its v3 batch operation id commits, 0x-hex; NULL for a member of a v1 or v2 batch.';

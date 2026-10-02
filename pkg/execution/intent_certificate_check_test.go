@@ -231,3 +231,26 @@ func TestAStoredIntentCertificateThatIsNotTheProofsIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// On a v3 batch the anchored operation id commits the member's certified message: the certificate must be over it.
+func TestTheAnchoredBatchCommitsTheCertificate(t *testing.T) {
+	c := newStoredIntentCase(t)
+	var cert ledger.IntentQuorumCertificate
+	if err := json.Unmarshal(c.row.Certificate, &cert); err != nil {
+		t.Fatal(err)
+	}
+	c.l5.Governance.Version = BatchOperationIDV3
+	c.l5.Governance.CertifiedIntentMessage = cert.Message
+	got, err := CheckIntentCertificate(c.row, c.cp, c.levels, c.l5, nil)
+	if err != nil || !got.AnchoredInBatch {
+		t.Fatalf("anchored: %+v %v", got, err)
+	}
+	c.l5.Governance.CertifiedIntentMessage = "0x" + strings.Repeat("ee", 32)
+	if _, err := CheckIntentCertificate(c.row, c.cp, c.levels, c.l5, nil); err == nil {
+		t.Fatal("a certificate over another message than the batch anchored was accepted")
+	}
+	c.l5.Governance.Version = BatchOperationIDV2
+	if got, err := CheckIntentCertificate(c.row, c.cp, c.levels, c.l5, nil); err != nil || got.AnchoredInBatch {
+		t.Fatalf("a pre-v3 batch: %+v %v", got, err)
+	}
+}

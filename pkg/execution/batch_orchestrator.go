@@ -224,6 +224,27 @@ func (o *BatchOrchestrator) FlushChain(
 			"height source is not wired", chainID)
 	}
 
+	// A member whose intent CERTEN's quorum never certified before its settlement deadline cannot enter a v3 batch
+	// (its operation id would commit an uncertified message) and must not wait for ever: it leaves the batch path by
+	// name (RB5 D3). Every validator reads the same certificate record and the same deadline.
+	var neverCertified []*PendingBatchIntent
+	for _, p := range o.mempool.UncertifiedPending(chainID) {
+		if o.memberPastDeadline(p) {
+			neverCertified = append(neverCertified, p)
+		}
+	}
+	if len(neverCertified) > 0 {
+		res := &BatchFlushResult{ChainID: chainID, TxHashes: map[string]string{}}
+		for _, p := range neverCertified {
+			o.logf("[BATCH] chain=%d dropping member %s: its intent was not quorum-certified before its settlement deadline",
+				chainID, p.IntentID)
+			res.drop(fmt.Sprintf("CERTEN's quorum did not certify its intent (message 0x%x) before its settlement deadline "+
+				"on chain %d", p.IntentMessage[:8], chainID), p)
+		}
+		o.markOutcomes(res)
+		return res, nil
+	}
+
 	// The period's WHOLE member set - settled and pending alike - cut into trees by the one
 	// eligibility rule every validator applies (periodChunks). A peer asked to co-sign cuts the same
 	// trees from its own copy; the leader never works from a subset it alone holds (RB3-F54).
@@ -1273,13 +1294,31 @@ func (o *BatchOrchestrator) periodChunks(ctx context.Context, members []*Pending
 // groupByAccumulateSet splits members by AccumulateSetRoot, keeping their order within a group and ordering the
 // groups by first appearance.
 func groupByAccumulateSet(members []*PendingBatchIntent) [][]*PendingBatchIntent {
-	var order [][32]byte
-	groups := map[[32]byte][]*PendingBatchIntent{}
-	for _, p := range members {
-		if _, seen := groups[p.AccumulateSetRoot]; !seen {
-			order = append(order, p.AccumulateSetRoot)
+	// The key is the Accumulate set root AND the operation id class the members are formed with: v1 (admitted
+	// before governance commitments), v2, or v3 (a quorum-certified intent, RB5 D3). batchOperationIDOf refuses a
+	// tree that mixes classes, so every validator must cut them apart the same way.
+	type key struct {
+		root  [32]byte
+		class string
+	}
+	classOf := func(p *PendingBatchIntent) string {
+		switch {
+		case p.IntentMessage != ([32]byte{}):
+			return BatchOperationIDV3
+		case p.LegacyNoGovernance:
+			return BatchOperationIDV1
+		default:
+			return BatchOperationIDV2
 		}
-		groups[p.AccumulateSetRoot] = append(groups[p.AccumulateSetRoot], p)
+	}
+	var order []key
+	groups := map[key][]*PendingBatchIntent{}
+	for _, p := range members {
+		k := key{p.AccumulateSetRoot, classOf(p)}
+		if _, seen := groups[k]; !seen {
+			order = append(order, k)
+		}
+		groups[k] = append(groups[k], p)
 	}
 	out := make([][]*PendingBatchIntent, 0, len(order))
 	for _, r := range order {

@@ -332,3 +332,39 @@ func (app *ValidatorApp) intentCertificateRows(height int64, blocks []ValidatorB
 	}
 	return rows, nil
 }
+
+// IntentCertifiedHeight is, for an operation, the message CERTEN's quorum certified and the CERTEN height whose commit
+// completed the certificate, and whether there is one - the committed record batch members with a certified intent
+// are placed by. One operation has at most one certificate (an honest validator signs one block per operation, so two
+// quorums over different messages cannot form). An unreadable ledger stops the node: answering "not certified" for it
+// would place members differently from every other node.
+func (app *ValidatorApp) IntentCertifiedHeight(operationID [32]byte) (uint64, [32]byte, bool) {
+	app.mu.RLock()
+	defer app.mu.RUnlock()
+	if app.ledgerStore == nil {
+		return 0, [32]byte{}, false
+	}
+	ql, err := app.ledgerStore.LoadIntentQuorum("0x" + hex.EncodeToString(operationID[:]))
+	if err != nil {
+		app.logger.Fatalf("❌ [INTENT-QC] the intent quorum of 0x%x could not be read: %v", operationID, err)
+	}
+	var found *ledger.IntentQuorumCertificate
+	for _, g := range ql.Groups {
+		if g.Certificate == nil || g.Certificate.Height <= 0 {
+			continue
+		}
+		if found != nil {
+			app.logger.Fatalf("❌ [INTENT-QC] operation 0x%x has two quorum certificates (%s, %s): two quorums signed "+
+				"different messages", operationID, found.Message, g.Certificate.Message)
+		}
+		found = g.Certificate
+	}
+	if found == nil {
+		return 0, [32]byte{}, false
+	}
+	msg, err := hex32(found.Message)
+	if err != nil {
+		app.logger.Fatalf("❌ [INTENT-QC] operation 0x%x: its certificate's message: %v", operationID, err)
+	}
+	return uint64(found.Height), msg, true
+}

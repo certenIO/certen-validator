@@ -546,6 +546,11 @@ func reportIntentCertificate(ctx context.Context, db *sql.DB, store *certenproof
 		if got.IncarnationPinned {
 			fmt.Printf(", under the incarnation you pinned")
 		}
+		if got.AnchoredInBatch {
+			fmt.Printf("; and the anchored v3 batch operation id commits exactly this certified message")
+		} else {
+			fmt.Printf("; the batch it settled in (pre-v3) does not commit it on-chain")
+		}
 		fmt.Printf("\n")
 		return exitVerified
 	case errors.Is(err, execution.ErrNoIntentCertificate):

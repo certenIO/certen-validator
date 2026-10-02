@@ -1,7 +1,9 @@
 package execution
 
 import (
+	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"strconv"
 	"sync"
@@ -77,6 +79,16 @@ type PendingBatchIntent struct {
 	// AccumulateSetRoot is the root of the Accumulate validator set this member's L4 Directory leg was verified
 	// against, derived at admission from the round's own proof under the process incarnation (RB5 design D2).
 	AccumulateSetRoot [32]byte
+
+	// IntentMessage is the per-intent message THIS validator's ValidatorBlock signed for the member (RB5 D3). Zero
+	// for a member committed before a BLS registry was in force. Non-zero marks the member as certified-path: it is
+	// placed in the period of its operation's quorum certificate - the same chain fact on every validator - and waits
+	// until that exists.
+	IntentMessage [32]byte
+	// CertifiedMessage is the message CERTEN's quorum certified for the member's operation, read from the chain's
+	// record once the certificate exists. It - never this validator's own message - is what the v3 batch operation
+	// id commits, so every validator forms the same batch even one whose own proof disagreed with the quorum.
+	CertifiedMessage [32]byte
 
 	// AccumTxHash is the Accumulate transaction that carried this intent. Evidence only — never hashed
 	// into the leaf. Empty is honest for a member restored from a pre-2026-09-18 mempool blob.
@@ -260,6 +272,7 @@ func (p *PendingBatchIntent) LeafInput() (BatchLeafInput, error) {
 		GovernanceCommitment: p.GovernanceCommitment,
 		LegacyNoGovernance:   p.LegacyNoGovernance,
 		AccumulateSetRoot:    p.AccumulateSetRoot,
+		IntentMessage:        p.CertifiedMessage,
 		IntentID:             p.IntentID,
 		Provenance:           p.provenance(),
 	}, nil
@@ -364,6 +377,94 @@ type BatchMempool struct {
 	// unsaved is the last snapshot write's failure, nil once the disk holds the queue. While it is set
 	// nothing new is sent (Durable), so no settlement happens that a restart could forget.
 	unsaved error
+
+	// certs answers when a member's intent was quorum-certified (RB5 D3): the chain's own record, the same on every
+	// validator. Required before any member with an intent message is admitted.
+	certs IntentCertificateHeights
+}
+
+// IntentCertificateHeights is the committed record of per-intent quorum certificates: for an operation, the message
+// CERTEN's quorum certified, the CERTEN height whose commit completed the certificate, and whether there is one.
+type IntentCertificateHeights interface {
+	IntentCertifiedHeight(operationID [32]byte) (height uint64, message [32]byte, ok bool)
+}
+
+// SetIntentCertificates installs the record members with a certified intent are placed by.
+func (m *BatchMempool) SetIntentCertificates(c IntentCertificateHeights) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.certs = c
+}
+
+// ErrIntentNotYetCertified: the member's intent has no quorum certificate yet; it waits for one.
+var ErrIntentNotYetCertified = errors.New("the member's intent is not yet quorum-certified")
+
+// placementHeight is the height that places a member in a period, and whether it is known yet. A member committed
+// before a BLS registry was in force is placed by its commit height, as it always was. A member with a certified
+// intent is placed by its certificate's height - a chain fact identical on every validator - and is unplaced until
+// the certificate exists: its v3 operation id commits a message only once CERTEN's quorum certified it.
+func (m *BatchMempool) placementHeight(p *PendingBatchIntent) (uint64, bool) {
+	if p.IntentMessage == ([32]byte{}) {
+		return p.CommitHeight, p.CommitHeight != 0
+	}
+	if m.certs == nil {
+		return 0, false
+	}
+	h, msg, ok := m.certs.IntentCertifiedHeight(p.OperationID)
+	if !ok {
+		return 0, false
+	}
+	if p.CertifiedMessage == ([32]byte{}) {
+		p.CertifiedMessage = msg
+		if msg != p.IntentMessage {
+			log.Printf("⚠️ [BATCH] intent %s: this validator signed intent message 0x%x, CERTEN's quorum certified 0x%x - "+
+				"this validator's proof of the operation disagrees with the quorum's; the batch commits the certified one",
+				p.IntentID, p.IntentMessage[:8], msg[:8])
+		}
+	}
+	return h, true
+}
+
+// certifiableLocked refuses a member with an intent message on a mempool that cannot tell when it is certified: it
+// could never be placed, and would wait for ever. Caller holds m.mu.
+func (m *BatchMempool) certifiableLocked(p *PendingBatchIntent) error {
+	if p.IntentMessage != ([32]byte{}) && m.certs == nil {
+		return fmt.Errorf("%w: intent %s carries a certified intent message, and this mempool has no record of intent "+
+			"certificates to place it by", consensus.ErrBatchUnavailable, p.IntentID)
+	}
+	return nil
+}
+
+// UncertifiedPending is this chain's pending period members whose intent is awaiting its quorum certificate, in
+// IntentID order. They are in no period until it exists.
+func (m *BatchMempool) UncertifiedPending(chainID int64) []*PendingBatchIntent {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []*PendingBatchIntent
+	for _, p := range m.pool[chainID] {
+		if p == nil || p.IntentMessage == ([32]byte{}) || !p.pending() {
+			continue
+		}
+		if _, ok := m.placementHeight(p); !ok {
+			out = append(out, p)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].IntentID < out[j].IntentID })
+	return out
+}
+
+// RequireCertified refuses a member whose intent message is not yet quorum-certified (ErrIntentNotYetCertified), for
+// the lanes that form a member's tree on their own.
+func (m *BatchMempool) RequireCertified(p *PendingBatchIntent) error {
+	if p == nil || p.IntentMessage == ([32]byte{}) {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.placementHeight(p); !ok {
+		return fmt.Errorf("%w: intent %s, message %x", ErrIntentNotYetCertified, p.IntentID, p.IntentMessage[:8])
+	}
+	return nil
 }
 
 // BatchLane identifies which settlement mechanism owns a member.
@@ -543,6 +644,9 @@ func (m *BatchMempool) add(p *PendingBatchIntent) error {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if err := m.certifiableLocked(p); err != nil {
+		return err
+	}
 
 	key := memberKey(p.IntentID, p.ChainID)
 	if m.seen[key] {
@@ -686,18 +790,22 @@ func (m *BatchMempool) selectForPeriodLocked(
 	periodEnd := periodStart + periodBlocks // exclusive
 
 	eligible := make([]*PendingBatchIntent, 0, len(src))
+	heights := make(map[*PendingBatchIntent]uint64, len(src))
 	for _, p := range src {
 		if p == nil {
 			continue
 		}
-		// A member with no commit height cannot be placed in a period deterministically —
+		// A member with no placement height cannot be placed in a period deterministically —
 		// including it would make this validator's tree differ from one that had not yet seen
-		// it. Skip rather than guess; it becomes eligible once its height is known.
-		if p.CommitHeight == 0 {
+		// it. Skip rather than guess; it becomes eligible once its height is known (for a member
+		// with a certified intent, once its quorum certificate exists).
+		h, ok := m.placementHeight(p)
+		if !ok {
 			continue
 		}
-		if p.CommitHeight >= periodStart && p.CommitHeight < periodEnd {
+		if h >= periodStart && h < periodEnd {
 			eligible = append(eligible, p)
+			heights[p] = h
 		}
 	}
 	if len(eligible) == 0 {
@@ -705,8 +813,8 @@ func (m *BatchMempool) selectForPeriodLocked(
 	}
 
 	sort.SliceStable(eligible, func(i, j int) bool {
-		if eligible[i].CommitHeight != eligible[j].CommitHeight {
-			return eligible[i].CommitHeight < eligible[j].CommitHeight
+		if heights[eligible[i]] != heights[eligible[j]] {
+			return heights[eligible[i]] < heights[eligible[j]]
 		}
 		return eligible[i].IntentID < eligible[j].IntentID
 	})

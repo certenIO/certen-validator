@@ -50,6 +50,8 @@ type IntentCertificateCheck struct {
 	CertifiedHeight int64
 	// IncarnationPinned: the registry's incarnation was checked against the verifier's own pin.
 	IncarnationPinned bool
+	// AnchoredInBatch: the proof's batch is v3 and its anchored operation id commits this certified message.
+	AnchoredInBatch bool
 }
 
 // CheckIntentCertificate checks row, the certificate recorded for the proof's operation, against the stored proof.
@@ -179,9 +181,18 @@ func CheckIntentCertificate(row *database.IntentQuorumCertificateRow, cp *chaine
 	if got, err := hex32Of(cert.Message); err != nil || got != msg {
 		return nil, fmt.Errorf("the certified message %s is not the one the stored proof computes (%x)", cert.Message, msg)
 	}
+	// On a v3 batch the anchor's operation id commits the member's certified message: it must be this one.
+	anchored := false
+	if l5.Governance.Version == BatchOperationIDV3 {
+		if !strings.EqualFold(l5.Governance.CertifiedIntentMessage, cert.Message) {
+			return nil, fmt.Errorf("the batch anchored certified message %s for this member, the certificate is over %s",
+				l5.Governance.CertifiedIntentMessage, cert.Message)
+		}
+		anchored = true
+	}
 	return &IntentCertificateCheck{OperationID: op, Message: "0x" + hex.EncodeToString(msg[:]), CertenChainID: row.CertenChainID,
 		RegistryVersion: reg.Version, Signers: len(cert.Signers), SignedPower: cert.SignedPower, TotalPower: cert.TotalPower,
-		CertifiedHeight: row.CertifiedHeight, IncarnationPinned: pinned != nil}, nil
+		CertifiedHeight: row.CertifiedHeight, IncarnationPinned: pinned != nil, AnchoredInBatch: anchored}, nil
 }
 
 func hex32Of(s string) ([32]byte, error) {

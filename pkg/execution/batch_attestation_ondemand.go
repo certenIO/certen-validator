@@ -151,6 +151,10 @@ func (s *BatchStack) HandleOnDemandAttestationRequest(
 	if err != nil {
 		return refuseWith(CodeRefused, "member %s: %v", member.IntentID, err)
 	}
+	// Its v3 operation id commits a certified intent message only once CERTEN's quorum certified it (RB5 D3).
+	if err := s.Mempool.RequireCertified(member); err != nil {
+		return refuseWith(CodeNotReady, "member %s: %v", member.IntentID, err)
+	}
 
 	// The height comes from OUR member, never from the request. That is what leaves a proposer
 	// with no input to the derivation at all: it names which member, and nothing more.

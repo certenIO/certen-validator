@@ -1589,6 +1589,9 @@ func startValidator(
 	if sErr != nil {
 		return nil, nil, fmt.Errorf("batch path: stack assembly: %w", sErr)
 	}
+	// Members with a certified intent are placed by their quorum certificate's height (RB5 D3) - installed before
+	// the persisted queue is restored, so a restored certified member is placed rather than refused.
+	stack.Mempool.SetIntentCertificates(validatorApp)
 	// A member with a recorded outcome is never queued again (RB3-F141).
 	if dbClient == nil {
 		return nil, nil, fmt.Errorf("the validator cannot start without its database")
