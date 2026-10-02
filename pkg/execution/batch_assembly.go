@@ -114,7 +114,7 @@ func NewEVMChainResolverFromEnv(anchorCfg *config.AnchorConfig, chainIDs []int64
 func (r *EVMChainResolverImpl) Endpoint(chainID int64) (string, common.Address, error) {
 	anchorAddr, ok := r.anchorOverrides[chainID]
 	if !ok {
-		return "", common.Address{}, fmt.Errorf("chain %d has no CertenAnchorV8 configured", chainID)
+		return "", common.Address{}, notSettled(chainID)
 	}
 	c := r.anchorCfg.GetEVMChainConfig(chainID)
 	if c == nil || strings.TrimSpace(c.RPCURL) == "" {
@@ -127,9 +127,7 @@ func (r *EVMChainResolverImpl) Endpoint(chainID int64) (string, common.Address, 
 func (r *EVMChainResolverImpl) ManagerForChain(chainID int64) (*EthereumContractManager, common.Address, error) {
 	anchorAddr, ok := r.anchorOverrides[chainID]
 	if !ok {
-		return nil, common.Address{}, fmt.Errorf(
-			"chain %d has no CertenAnchorV8 configured; refusing to fall back to another anchor",
-			chainID)
+		return nil, common.Address{}, notSettled(chainID)
 	}
 
 	r.mu.Lock()
