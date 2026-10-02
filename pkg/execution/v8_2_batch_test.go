@@ -58,7 +58,8 @@ func TestV8_2Batch_BundleIDBindsEveryField(t *testing.T) {
 
 func v82Input(op byte) BatchLeafInput {
 	return BatchLeafInput{ADIURL: "acc://a.acme", ExecutionCommitment: b32(uint64(op) + 100), OperationID: b32(uint64(op)),
-		GovernanceCommitment: testGov, AccumulateSetRoot: testAccSet, AuthorityPage: 1}
+		GovernanceCommitment: testGov, AccumulateSetRoot: testAccSet, AuthorityPage: 1,
+		AuthorityBook: contracts.HashURLString("acc://a.acme/book")}
 }
 
 // A tree commits the one set its members share, under the incarnation, in its bundle id.

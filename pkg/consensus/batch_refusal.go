@@ -36,6 +36,10 @@ var (
 	// ErrBatchUnavailable is CERTEN being unable to settle the member right now.
 	ErrBatchUnavailable = errors.New("batch settlement unavailable")
 
+	// ErrChainNotSettled is a member on a chain CERTEN does not settle on now (CERTEN_SETTLEMENT_CHAINS): refused by name,
+	// as the bridge refuses it, never waited out - no amount of retrying brings a chain into the settlement set (RB5-F33).
+	ErrChainNotSettled = errors.New("chain not settled by CERTEN")
+
 	// ErrMemberAlreadyDecided is the SAME intent arriving again for a chain on which its member already
 	// has a recorded outcome - settled, reverted, unobserved or never sent. Not a refusal: the member is
 	// finished, and queueing it again could only execute it a second time (RB3-F34, RB3-F141).

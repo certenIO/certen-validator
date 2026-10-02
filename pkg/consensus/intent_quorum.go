@@ -73,12 +73,13 @@ func (app *ValidatorApp) recordIntentSignatures(height int64, vbs []ValidatorBlo
 		}
 		msg := strings.ToLower(ev.Message)
 		page := govvote.CanonicalAccSpelling(ev.KeyPageURL)
-		g := groupFor(ql, msg, reg.Version, page)
-		if g.KeyPageURL != page {
+		book := govvote.CanonicalAccSpelling(ev.KeyBookURL)
+		g := groupFor(ql, msg, reg.Version, page, book)
+		if g.KeyPageURL != page || g.KeyBookURL != book {
 			// FinalizeBlock accepted the block only if its message recomputes from its evidence, and the message commits
-			// the page's hash: two pages under one message is a broken invariant.
-			app.logger.Fatalf("❌ [INTENT-QC] operation %s: message %s certifies key page %s, and block %s names %s",
-				op, msg, g.KeyPageURL, vb.BundleID, page)
+			// the page's and the book's hashes: two of either under one message is a broken invariant.
+			app.logger.Fatalf("❌ [INTENT-QC] operation %s: message %s certifies key page %s of book %s, and block %s names %s of %s",
+				op, msg, g.KeyPageURL, g.KeyBookURL, vb.BundleID, page, book)
 		}
 		if hasPartial(g, vb.ValidatorID) {
 			continue // replay of a block already recorded, or a second block from the same validator (refused by v9's rule)
@@ -106,13 +107,14 @@ func (app *ValidatorApp) recordIntentSignatures(height int64, vbs []ValidatorBlo
 	}
 }
 
-func groupFor(ql *ledger.IntentQuorumLog, msg string, version uint64, keyPage string) *ledger.IntentQuorumGroup {
+func groupFor(ql *ledger.IntentQuorumLog, msg string, version uint64, keyPage, keyBook string) *ledger.IntentQuorumGroup {
 	for i := range ql.Groups {
 		if ql.Groups[i].Message == msg && ql.Groups[i].RegistryVersion == version {
 			return &ql.Groups[i]
 		}
 	}
-	ql.Groups = append(ql.Groups, ledger.IntentQuorumGroup{Message: msg, RegistryVersion: version, KeyPageURL: keyPage})
+	ql.Groups = append(ql.Groups, ledger.IntentQuorumGroup{Message: msg, RegistryVersion: version, KeyPageURL: keyPage,
+		KeyBookURL: keyBook})
 	return &ql.Groups[len(ql.Groups)-1]
 }
 
@@ -342,11 +344,12 @@ func (app *ValidatorApp) intentCertificateRows(height int64, blocks []ValidatorB
 }
 
 // CertifiedIntent is CERTEN's quorum certificate over one operation's intent, as batch members read it: the height
-// whose commit completed it, the message certified, and the key page that message certifies.
+// whose commit completed it, the message certified, and the key page and key book that message certifies.
 type CertifiedIntent struct {
 	Height     uint64
 	Message    [32]byte
 	KeyPageURL string // canonical spelling; its hash is committed by Message through govRoot v2
+	KeyBookURL string // canonical spelling; its hash is committed by Message through govRoot v2
 }
 
 // IntentCertified is, for an operation, CERTEN's quorum certificate over its intent, and whether there is one - the
@@ -383,8 +386,9 @@ func (app *ValidatorApp) IntentCertified(operationID [32]byte) (CertifiedIntent,
 	if err != nil {
 		app.logger.Fatalf("❌ [INTENT-QC] operation 0x%x: its certificate's message: %v", operationID, err)
 	}
-	if found.KeyPageURL == "" {
-		app.logger.Fatalf("❌ [INTENT-QC] operation 0x%x: its certificate records no key page", operationID)
+	if found.KeyPageURL == "" || found.KeyBookURL == "" {
+		app.logger.Fatalf("❌ [INTENT-QC] operation 0x%x: its certificate records no key page or key book", operationID)
 	}
-	return CertifiedIntent{Height: uint64(found.Certificate.Height), Message: msg, KeyPageURL: found.KeyPageURL}, true
+	return CertifiedIntent{Height: uint64(found.Certificate.Height), Message: msg, KeyPageURL: found.KeyPageURL,
+		KeyBookURL: found.KeyBookURL}, true
 }

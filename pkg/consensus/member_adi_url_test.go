@@ -100,3 +100,22 @@ func TestMemberADIURL_TrimsWhitespace(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+// RB5-F30: every spelling of an ADI names its one account. Factory V10 creates accounts under the lower-case spelling
+// only, so an intent spelling its ADI in another case resolves to that spelling - whose hash is the account's.
+func TestMemberADIURL_IsTheCanonicalSpelling(t *testing.T) {
+	want := ethcrypto.Keccak256Hash([]byte("acc://certen-kermit-12.acme"))
+	for _, ci := range []*CertenIntent{
+		{OrganizationADI: "acc://Certen-Kermit-12.ACME"},
+		{OrganizationADI: "ACC://certen-kermit-12.acme"},
+		{AccountURL: "acc://CERTEN-KERMIT-12.acme/DATA"},
+	} {
+		got, err := memberADIURL(ci)
+		if err != nil {
+			t.Fatalf("%+v: %v", ci, err)
+		}
+		if got != "acc://certen-kermit-12.acme" || ethcrypto.Keccak256Hash([]byte(got)) != want {
+			t.Fatalf("%+v resolved to %q", ci, got)
+		}
+	}
+}

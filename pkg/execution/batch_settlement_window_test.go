@@ -217,7 +217,7 @@ func TestSettlementProofOfRoundTrip(t *testing.T) {
 	want := contracts.AccountProofV7_2{
 		AdiURL: "acc://a.acme", AnchorId: [32]byte{9}, MerkleProof: [][32]byte{},
 		OperationID: [32]byte{3}, Timestamp: big.NewInt(1000), ExpiresAt: big.NewInt(1480),
-		Nonce: big.NewInt(0), AuthorityPage: 2,
+		Nonce: big.NewInt(0), AuthorityBook: fill32(0x5b), AuthorityPage: 2,
 	}
 	data, err := settlementAccountABI.Pack("executeGovernanceProofDirect",
 		common.HexToAddress("0x1111111111111111111111111111111111111111"), big.NewInt(0), []byte{0xde, 0xad}, want)
@@ -226,7 +226,7 @@ func TestSettlementProofOfRoundTrip(t *testing.T) {
 	}
 	got, ok := settlementProofOf(data)
 	if !ok || got.AnchorId != want.AnchorId || got.OperationID != want.OperationID ||
-		got.Timestamp.Cmp(want.Timestamp) != 0 || got.ExpiresAt.Cmp(want.ExpiresAt) != 0 || got.AuthorityPage != 2 {
+		got.Timestamp.Cmp(want.Timestamp) != 0 || got.ExpiresAt.Cmp(want.ExpiresAt) != 0 || got.AuthorityPage != 2 || got.AuthorityBook != fill32(0x5b) {
 		t.Fatalf("decoded %+v ok=%t; want %+v", got, ok, want)
 	}
 	if _, ok := settlementProofOf([]byte{1, 2, 3, 4, 5}); ok {

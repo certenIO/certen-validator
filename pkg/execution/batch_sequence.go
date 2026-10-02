@@ -52,8 +52,9 @@ type MemberPredecessor struct {
 	ContinueOnFailure bool
 }
 
-// leafFor is the predecessor's v2 leaf. Predecessor and successor are members of one intent - one operation, one ADI,
-// one quorum certificate - so the key page the successor's certificate certifies is the predecessor's (RB5-F29).
+// leafFor is the predecessor's v3 leaf. Predecessor and successor are members of one intent - one operation, one ADI,
+// one quorum certificate - so the key book and page the successor's certificate certifies are the predecessor's
+// (RB5-F29/F30).
 func (a *MemberPredecessor) leafFor(succ *PendingBatchIntent) ([32]byte, error) {
 	if a.OperationID != succ.OperationID {
 		return [32]byte{}, fmt.Errorf("the predecessor is operation 0x%x, the member 0x%x: not one intent",
@@ -62,12 +63,13 @@ func (a *MemberPredecessor) leafFor(succ *PendingBatchIntent) ([32]byte, error) 
 	if govvote.CanonicalAccSpelling(a.ADIURL) != govvote.CanonicalAccSpelling(succ.ADIURL) {
 		return [32]byte{}, fmt.Errorf("the predecessor belongs to %s, the member to %s: not one intent", a.ADIURL, succ.ADIURL)
 	}
-	page, err := succ.AuthorityPage()
+	book, page, err := succ.Authority()
 	if err != nil {
 		return [32]byte{}, err
 	}
-	in := BatchLeafInput{ADIURL: a.ADIURL, ExecutionCommitment: a.ExecutionCommitment, OperationID: a.OperationID}
-	return ComputeBatchLeafV2(a.ChainID, in, page), nil
+	in := BatchLeafInput{ADIURL: a.ADIURL, ExecutionCommitment: a.ExecutionCommitment, OperationID: a.OperationID,
+		AuthorityBook: book, AuthorityPage: page}
+	return ComputeBatchLeafV3(a.ChainID, in), nil
 }
 
 // sequenceState is where a successor stands against its predecessor.

@@ -87,7 +87,7 @@ func TestAnOnDemandMemberWaitsForItsCertificateUntilItsDeadline(t *testing.T) {
 func TestAnOnDemandTreeCommitsTheCertifiedMessageTheFirstTimeItIsFormed(t *testing.T) {
 	certified := fill32(0xbb)
 	certs := fakeCerts{}
-	certs[fill32(9)] = fakeCert{height: 250, msg: certified, page: "acc://od.acme/book/1"}
+	certs[fill32(9)] = fakeCert{height: 250, msg: certified, page: "acc://od.acme/book/1", book: "acc://od.acme/book"}
 	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 10})
 	m.SetIntentCertificates(certs)
 	f := &fakeODChain{}

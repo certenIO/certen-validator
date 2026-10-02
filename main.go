@@ -1552,13 +1552,25 @@ func startValidator(
 	if _, zkErr := execution.GetBLSZKProver(); zkErr != nil {
 		return nil, nil, fmt.Errorf("batch path: %w", zkErr)
 	}
-	batchChains := strategy.SupportedChainIDs // sepolia, base-sepolia, arbitrum-sepolia
+	// The chains CERTEN settles on now, of those this build supports (sepolia, base-sepolia, arbitrum-sepolia):
+	// named, never defaulted, and each one's anchor read back as a CertenAnchorV8_2 before anything starts (RB5-F33).
+	batchChains, scErr := execution.SettlementChainsFromEnv(strategy.SupportedChainIDs)
+	if scErr != nil {
+		return nil, nil, fmt.Errorf("batch path: %w", scErr)
+	}
 	// The chain resolver is shared with Phase 8, which counts its post-execution quorum against the
 	// same on-chain validator registry the batch quorum does.
 	resolver, rErr := execution.NewEVMChainResolverFromEnv(anchorCfg, batchChains)
 	if rErr != nil {
 		return nil, nil, fmt.Errorf("batch path: chain resolver: %w", rErr)
 	}
+	anchorCtx, anchorCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	gErr := execution.VerifySettlementAnchors(anchorCtx, resolver, batchChains)
+	anchorCancel()
+	if gErr != nil {
+		return nil, nil, fmt.Errorf("batch path: %w", gErr)
+	}
+	log.Printf("✅ [BATCH] settling on chains %v, each on a CertenAnchorV8_2", batchChains)
 	submitter := execution.NewBatchProofSubmitter(resolver, log.Printf)
 	peers := execution.BatchAttestationPeersFromEnv()
 	if len(peers) == 0 {

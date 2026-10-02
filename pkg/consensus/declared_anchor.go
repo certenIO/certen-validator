@@ -76,6 +76,9 @@ func CheckDeclaredAnchors(ci *CertenIntent, anchorOf func(chainID int64) (common
 	}
 	for i, leg := range env.Legs {
 		live, err := anchorOf(leg.ChainID)
+		if errors.Is(err, ErrChainNotSettled) {
+			return fmt.Errorf("%w: leg %d: %w", ErrDeclaredAnchorNotLive, i, err)
+		}
 		if err != nil {
 			return fmt.Errorf("%w: chain %d's anchor cannot be named: %v", ErrBatchUnavailable, leg.ChainID, err)
 		}

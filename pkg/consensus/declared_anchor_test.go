@@ -100,6 +100,21 @@ func TestAnAnchorCERTENCannotNameIsRetriedNotRefused(t *testing.T) {
 	}
 }
 
+// RB5-F33: a leg on a chain CERTEN does not settle on now (CERTEN_SETTLEMENT_CHAINS) is refused by name, permanently -
+// no retry brings a chain into the settlement set - while CERTEN failing to name a settled chain's anchor is retried.
+func TestALegOnAChainNotSettledIsRefusedByName(t *testing.T) {
+	f := newFakeEnqueuer()
+	f.anchorErr = map[int64]error{421614: fmt.Errorf("%w: chain 421614 is not one CERTEN settles on now", ErrChainNotSettled)}
+	err := enqueue(refusalValidator(f), batchableIntent(t, "i3", 84532, 421614))
+	var r *BatchRefusal
+	if !errors.As(err, &r) || !r.Permanent || !errors.Is(err, ErrDeclaredAnchorNotLive) || !errors.Is(err, ErrChainNotSettled) {
+		t.Fatalf("a leg on a chain not settled must be refused by name, got %v", err)
+	}
+	if f.adds != 0 {
+		t.Fatal("a refused intent's other member was queued")
+	}
+}
+
 func TestTheBlockRecordsTheCallThatWillExecute(t *testing.T) {
 	whole := AccumulateAnchorReference{BlockHash: strings.Repeat("ab", 32), BlockHeight: 1234, TxHash: strings.Repeat("cd", 32), AccountURL: "acc://org.acme/data"}
 	build := func(ci *CertenIntent) (*ValidatorBlock, error) {

@@ -676,7 +676,8 @@ func (o *BatchOrchestrator) verifyLeavesAgainstAccounts(
 		}
 
 		exec := tree.Inputs[i].ExecutionCommitment
-		onChainLeaf, err := acct.ComputeLeaf(&bind.CallOpts{Context: ctx}, exec, p.OperationID, tree.Inputs[i].AuthorityPage)
+		onChainLeaf, err := acct.ComputeLeaf(&bind.CallOpts{Context: ctx}, exec, p.OperationID, tree.Inputs[i].AuthorityBook,
+			tree.Inputs[i].AuthorityPage)
 		if err != nil {
 			return fmt.Errorf("computeLeaf on %s: %w", p.Account.Hex(), err)
 		}
@@ -916,7 +917,7 @@ func (o *BatchOrchestrator) settleMember(
 	if err != nil {
 		return "", err
 	}
-	page, err := p.AuthorityPage()
+	book, page, err := p.Authority()
 	if err != nil {
 		return "", err
 	}
@@ -953,8 +954,9 @@ func (o *BatchOrchestrator) settleMember(
 		Timestamp:   big.NewInt(notBefore),
 		ExpiresAt:   big.NewInt(expiresAt),
 		Nonce:       big.NewInt(0),
-		// The certified page, bound into the leaf: the account derives every leg's level from it (RB3-F39) - no
-		// level is declared.
+		// The certified key book and page, bound into the leaf: the account derives every leg's level from them
+		// (RB3-F39, RB5-F30) - no level is declared.
+		AuthorityBook: book,
 		AuthorityPage: page,
 	}
 
@@ -1374,9 +1376,10 @@ func (o *BatchOrchestrator) memberAccountUsable(ctx context.Context, p *PendingB
 	if err := checkMemberAnchorPin(orchestratorAnchorPolicy{o}, p); err != nil {
 		return err
 	}
-	// Its leaf binds the key page CERTEN's quorum certified, which must be one of its own ADI's pages (RB5-F29) -
-	// decided from the chain's record alone, the same on every validator.
-	if _, err := p.AuthorityPage(); err != nil {
+	// Its leaf binds the key book and page CERTEN's quorum certified (RB5-F29/F30) - decided from the chain's record
+	// alone, the same on every validator.
+	book, page, err := p.Authority()
+	if err != nil {
 		return err
 	}
 	if o.ecm == nil || o.ecm.client == nil {
@@ -1425,6 +1428,20 @@ func (o *BatchOrchestrator) memberAccountUsable(ctx context.Context, p *PendingB
 	}
 	if onChainADIHash != (BatchLeafInput{ADIURL: p.ADIURL}).ADIURLHash() {
 		return fmt.Errorf("account %s is bound to a different ADI than %q", p.Account.Hex(), p.ADIURL)
+	}
+	// The account says what the certified (key book, page) may do (RB5-F30): its governing book's pages carry the
+	// default levels, another book's pages carry none until its governance grants them. A pair it gives no authority
+	// can execute nothing, so the member is refused by name before any anchor is paid for.
+	level, err := acct.AuthorityLevelOfPage(&bind.CallOpts{Context: ctx}, book, page)
+	if err != nil {
+		if !isCallVerdict(err) {
+			return readErr(fmt.Errorf("reading authorityLevelOfPage on %s: %w", p.Account.Hex(), err))
+		}
+		return fmt.Errorf("reading authorityLevelOfPage on %s: %w", p.Account.Hex(), err)
+	}
+	if level == 0 {
+		return fmt.Errorf("account %s gives key page %s (of book %s) no authority: it is not a page of the account's "+
+			"governing book and the account's governance granted it none", p.Account.Hex(), p.CertifiedKeyPage, p.CertifiedKeyBook)
 	}
 	return nil
 }
