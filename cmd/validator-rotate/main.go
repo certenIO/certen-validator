@@ -102,6 +102,8 @@ func main() {
 		err = blsRegistryPreflight(os.Args[2:], http.DefaultClient)
 	case "bls-registry-submit":
 		err = blsRegistrySubmit(os.Args[2:], http.DefaultClient)
+	case "admin-reseal":
+		err = adminReseal(os.Args[2:], http.DefaultClient)
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -131,8 +133,10 @@ func usage() {
   bls-possession          on a validator: its BLS registry entry and the key's proof of possession
   bls-registry-propose    assemble the BLS registry (RB5 D3), verify every possession, first admin signature
   bls-registry-sign       add another admin signature
-  bls-registry-preflight  every node runs rules v10, and every anchor commits the registry's CERTEN set root
+  bls-registry-preflight  every node runs the same rules, v10 or later, and every anchor commits the registry's CERTEN set root
   bls-registry-submit     commit the registry: from the next block every ValidatorBlock carries an intent certificate
+
+  admin-reseal            every node runs rules v11, then commit the one admin re-seal they define (certen-testnet)
 
 Run any subcommand with --help for its flags. The runbook is RUNBOOK_F95_CONSENSUS_KEY_ROTATION.md.
 `)
@@ -488,6 +492,23 @@ func readNode(c rpcDoer, base string) (*nodeView, error) {
 
 // preflightChecks judges a rotation against every validator's view. It returns the reasons it must not be
 // submitted; none means GO.
+// fleetRulesProblems is why a fleet is not ready for a transaction kind that rules v<min> introduced: every node must
+// run rules v<min> or later, and all the same version - nodes on different rules judge the same block differently
+// (from v11, for instance, admin signatures are judged by the admin set in force, which a re-seal changes).
+func fleetRulesProblems(views []*nodeView, min uint64, what string) []string {
+	var problems []string
+	for _, v := range views {
+		if v.appVersion < min {
+			problems = append(problems, fmt.Sprintf("%s runs execution rules v%d; the %s needs v%d or later", v.rpc, v.appVersion, what, min))
+		}
+		if v.appVersion != views[0].appVersion {
+			problems = append(problems, fmt.Sprintf("%s runs execution rules v%d and %s v%d: the whole fleet must run the same rules",
+				v.rpc, v.appVersion, views[0].rpc, views[0].appVersion))
+		}
+	}
+	return problems
+}
+
 func preflightChecks(tx *consensus.ValidatorRotationTx, views []*nodeView) []string {
 	var nogo []string
 	if len(views) == 0 {
@@ -497,10 +518,8 @@ func preflightChecks(tx *consensus.ValidatorRotationTx, views []*nodeView) []str
 	if id, ok := consensus.IsFormulaKey(tx.ChainID, mustHex(newKey), formulaIDs); ok {
 		nogo = append(nogo, fmt.Sprintf("the new key is %s's public-formula key", id))
 	}
+	nogo = append(nogo, fleetRulesProblems(views, rotationRulesVersion, "rotation")...)
 	for _, v := range views {
-		if v.appVersion != rotationRulesVersion {
-			nogo = append(nogo, fmt.Sprintf("%s runs execution rules v%d, not v%d: the whole fleet must run the rotation rules first", v.rpc, v.appVersion, rotationRulesVersion))
-		}
 		if v.chainID != tx.ChainID {
 			nogo = append(nogo, fmt.Sprintf("%s is on chain %q, the rotation is for %q", v.rpc, v.chainID, tx.ChainID))
 		}

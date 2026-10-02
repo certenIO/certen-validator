@@ -186,92 +186,7 @@ func TestRotationRehearsalOnALiveNetwork(t *testing.T) {
 	t.Setenv("CERTEN_BLOCK_RETENTION", "0")
 
 	const size = 4
-	genesis := &cmttypes.GenesisDoc{
-		ChainID: rotChain, GenesisTime: time.Now().UTC(), ConsensusParams: cmttypes.DefaultConsensusParams(),
-		InitialHeight: 1,
-	}
-	keys := make([]ed25519.PrivateKey, size)
-	nodes := make([]*rehearsalNode, size)
-	ports := make([]int, size)
-	for i := range nodes {
-		keys[i] = f.validators[i]
-		ports[i] = freePort(t)
-		genesis.Validators = append(genesis.Validators, cmttypes.GenesisValidator{
-			PubKey: cmted25519.PubKey(keys[i].Public().(ed25519.PublicKey)), Power: 10, Name: fmt.Sprintf("v%d", i)})
-	}
-	if err := genesis.ValidateAndComplete(); err != nil {
-		t.Fatal(err)
-	}
-
-	var peers []string
-	for i := range nodes {
-		home := t.TempDir()
-		cfg := cmtcfg.DefaultConfig()
-		cfg.SetRoot(home)
-		cmtcfg.EnsureRoot(home)
-		// Realistic timeouts, scaled down: CometBFT's test values (tens of milliseconds) are tighter than four
-		// fsyncing nodes on one machine can meet, and the rounds then climb without end.
-		cfg.Consensus = cmtcfg.DefaultConsensusConfig()
-		cfg.Consensus.TimeoutPropose = 1500 * time.Millisecond
-		cfg.Consensus.TimeoutPrevote = 500 * time.Millisecond
-		cfg.Consensus.TimeoutPrecommit = 500 * time.Millisecond
-		cfg.Consensus.TimeoutCommit = 200 * time.Millisecond
-		// As production (bft_integration.go): blocks only for transactions and the proof block after an
-		// app-hash change. Everything below that needs blocks makes them with ticks, as the runbook does.
-		cfg.Consensus.CreateEmptyBlocks = false
-		cfg.Consensus.SetWalFile(filepath.Join(home, "data", "cs.wal", "wal"))
-		cfg.P2P.ListenAddress = fmt.Sprintf("tcp://127.0.0.1:%d", ports[i])
-		cfg.P2P.AllowDuplicateIP, cfg.P2P.AddrBookStrict, cfg.P2P.PexReactor = true, false, false
-		cfg.RPC.ListenAddress = ""
-		cfg.TxIndex.Indexer = "null"
-		cfg.Instrumentation.Prometheus = false
-		if err := genesis.SaveAs(cfg.GenesisFile()); err != nil {
-			t.Fatal(err)
-		}
-		privval.NewFilePV(cmted25519.PrivKey(keys[i]), cfg.PrivValidatorKeyFile(), cfg.PrivValidatorStateFile()).Save()
-		nodeKey := &p2p.NodeKey{PrivKey: cmted25519.GenPrivKey()}
-		if err := nodeKey.SaveAs(cfg.NodeKeyFile()); err != nil {
-			t.Fatal(err)
-		}
-		peers = append(peers, fmt.Sprintf("%s@127.0.0.1:%d", nodeKey.ID(), ports[i]))
-		nodes[i] = &rehearsalNode{name: fmt.Sprintf("v%d", i), home: home, cfg: cfg, kv: newMemKV()}
-	}
-	for i, n := range nodes {
-		var others []string
-		for j, p := range peers {
-			if j != i {
-				others = append(others, p)
-			}
-		}
-		n.cfg.P2P.PersistentPeers = strings.Join(others, ",")
-		n.start(t, genesis)
-	}
-	t.Cleanup(func() {
-		for _, n := range nodes {
-			n.stop(t)
-		}
-	})
-	waitNetwork(t, "the network to commit its first block", 60*time.Second, func() bool { return nodes[0].height() >= 1 })
-
-	// tick makes the chain produce n blocks, as `validator-rotate tick` does.
-	tick := func(via *rehearsalNode, n int) {
-		t.Helper()
-		for i := 0; i < n; i++ {
-			nonce := make([]byte, 16)
-			if _, err := rand.Read(nonce); err != nil {
-				t.Fatal(err)
-			}
-			res, err := via.client.BroadcastTxCommit(context.Background(),
-				cmttypes.Tx(rotJSON(t, ChainTickTx{Kind: ChainTickKind, Nonce: hex.EncodeToString(nonce)})))
-			if err != nil {
-				t.Fatalf("tick: %v", err)
-			}
-			if res.CheckTx.Code != 0 || res.TxResult.Code != 0 {
-				t.Fatalf("tick refused: %s %s", res.CheckTx.Log, res.TxResult.Log)
-			}
-		}
-	}
-	tick(nodes[0], 2)
+	nodes, genesis, keys, tick := startRehearsalNetwork(t, f, size)
 
 	submit := func(via *rehearsalNode, tx *ValidatorRotationTx) (uint32, string, int64) {
 		t.Helper()
@@ -495,4 +410,101 @@ func dropStalePeer(t *testing.T, nodes []*rehearsalNode, stopped int) {
 			}
 		}
 	}
+}
+
+// startRehearsalNetwork starts size in-process validators of f on rotChain - real CometBFT networking, the production
+// ValidatorApp, empty blocks off as in production - waits for the first block, makes two more, and returns the nodes,
+// the genesis, the validators' keys and tick (blocks on demand, as `validator-rotate tick` does). The caller sets the
+// sealed policy's environment first.
+func startRehearsalNetwork(t *testing.T, f *rotationFixture, size int) ([]*rehearsalNode, *cmttypes.GenesisDoc,
+	[]ed25519.PrivateKey, func(via *rehearsalNode, n int)) {
+	t.Helper()
+	genesis := &cmttypes.GenesisDoc{
+		ChainID: rotChain, GenesisTime: time.Now().UTC(), ConsensusParams: cmttypes.DefaultConsensusParams(),
+		InitialHeight: 1,
+	}
+	keys := make([]ed25519.PrivateKey, size)
+	nodes := make([]*rehearsalNode, size)
+	ports := make([]int, size)
+	for i := range nodes {
+		keys[i] = f.validators[i]
+		ports[i] = freePort(t)
+		genesis.Validators = append(genesis.Validators, cmttypes.GenesisValidator{
+			PubKey: cmted25519.PubKey(keys[i].Public().(ed25519.PublicKey)), Power: 10, Name: fmt.Sprintf("v%d", i)})
+	}
+	if err := genesis.ValidateAndComplete(); err != nil {
+		t.Fatal(err)
+	}
+
+	var peers []string
+	for i := range nodes {
+		home := t.TempDir()
+		cfg := cmtcfg.DefaultConfig()
+		cfg.SetRoot(home)
+		cmtcfg.EnsureRoot(home)
+		// Realistic timeouts, scaled down: CometBFT's test values (tens of milliseconds) are tighter than four
+		// fsyncing nodes on one machine can meet, and the rounds then climb without end.
+		cfg.Consensus = cmtcfg.DefaultConsensusConfig()
+		cfg.Consensus.TimeoutPropose = 1500 * time.Millisecond
+		cfg.Consensus.TimeoutPrevote = 500 * time.Millisecond
+		cfg.Consensus.TimeoutPrecommit = 500 * time.Millisecond
+		cfg.Consensus.TimeoutCommit = 200 * time.Millisecond
+		// As production (bft_integration.go): blocks only for transactions and the proof block after an
+		// app-hash change. Everything below that needs blocks makes them with ticks, as the runbook does.
+		cfg.Consensus.CreateEmptyBlocks = false
+		cfg.Consensus.SetWalFile(filepath.Join(home, "data", "cs.wal", "wal"))
+		cfg.P2P.ListenAddress = fmt.Sprintf("tcp://127.0.0.1:%d", ports[i])
+		cfg.P2P.AllowDuplicateIP, cfg.P2P.AddrBookStrict, cfg.P2P.PexReactor = true, false, false
+		cfg.RPC.ListenAddress = ""
+		cfg.TxIndex.Indexer = "null"
+		cfg.Instrumentation.Prometheus = false
+		if err := genesis.SaveAs(cfg.GenesisFile()); err != nil {
+			t.Fatal(err)
+		}
+		privval.NewFilePV(cmted25519.PrivKey(keys[i]), cfg.PrivValidatorKeyFile(), cfg.PrivValidatorStateFile()).Save()
+		nodeKey := &p2p.NodeKey{PrivKey: cmted25519.GenPrivKey()}
+		if err := nodeKey.SaveAs(cfg.NodeKeyFile()); err != nil {
+			t.Fatal(err)
+		}
+		peers = append(peers, fmt.Sprintf("%s@127.0.0.1:%d", nodeKey.ID(), ports[i]))
+		nodes[i] = &rehearsalNode{name: fmt.Sprintf("v%d", i), home: home, cfg: cfg, kv: newMemKV()}
+	}
+	for i, n := range nodes {
+		var others []string
+		for j, p := range peers {
+			if j != i {
+				others = append(others, p)
+			}
+		}
+		n.cfg.P2P.PersistentPeers = strings.Join(others, ",")
+		n.start(t, genesis)
+	}
+	t.Cleanup(func() {
+		for _, n := range nodes {
+			n.stop(t)
+		}
+	})
+	waitNetwork(t, "the network to commit its first block", 60*time.Second, func() bool { return nodes[0].height() >= 1 })
+
+	// tick makes the chain produce n blocks, as `validator-rotate tick` does.
+	tick := func(via *rehearsalNode, n int) {
+		t.Helper()
+		for i := 0; i < n; i++ {
+			nonce := make([]byte, 16)
+			if _, err := rand.Read(nonce); err != nil {
+				t.Fatal(err)
+			}
+			res, err := via.client.BroadcastTxCommit(context.Background(),
+				cmttypes.Tx(rotJSON(t, ChainTickTx{Kind: ChainTickKind, Nonce: hex.EncodeToString(nonce)})))
+			if err != nil {
+				t.Fatalf("tick: %v", err)
+			}
+			if res.CheckTx.Code != 0 || res.TxResult.Code != 0 {
+				t.Fatalf("tick refused: %s %s", res.CheckTx.Log, res.TxResult.Log)
+			}
+		}
+	}
+	tick(nodes[0], 2)
+
+	return nodes, genesis, keys, tick
 }

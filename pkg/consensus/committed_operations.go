@@ -109,6 +109,10 @@ func (app *ValidatorApp) recordCommittedOperations(height int64) {
 		app.recordFirstVerdict(executionRulesV10, &app.rulesV10FirstVerdict, height)
 		app.blockRulesV10Verdict = false
 	}
+	if app.blockRulesV11Verdict {
+		app.recordFirstVerdict(executionRulesV11, &app.rulesV11FirstVerdict, height)
+		app.blockRulesV11Verdict = false
+	}
 }
 
 // recordFirstVerdict persists the first height a rules version decided something only it decides.
@@ -253,6 +257,8 @@ func (app *ValidatorApp) IndexCommittedHistory(h committedHistory) error {
 				app.recordFirstVerdict(executionRulesV8, &app.rulesV8FirstVerdict, height)
 			} else if _, ok := DecodeBLSRegistry(tx); ok {
 				app.recordFirstVerdict(executionRulesV10, &app.rulesV10FirstVerdict, height)
+			} else if _, ok := DecodeAdminReseal(tx); ok {
+				app.recordFirstVerdict(executionRulesV11, &app.rulesV11FirstVerdict, height)
 			}
 		}
 		violations = append(violations, found...)
@@ -281,6 +287,13 @@ func (app *ValidatorApp) historicalOperations(height int64, blockTime time.Time,
 		if _, ok := DecodeBLSRegistry(tx); ok && codes[i] == 2 {
 			violations = append(violations, fmt.Sprintf("height %d tx %d is a BLS registry transaction that v9 judged "+
 				"as a ValidatorBlock (code 2); v10 decides it as a registry", height, i))
+			continue
+		}
+		// v10 judged an admin-re-seal-kind transaction as a ValidatorBlock and refused it with code 2; v11 accepts it or
+		// refuses it with code 11. History holding one decided v10's way is history v11 does not reproduce.
+		if _, ok := DecodeAdminReseal(tx); ok && codes[i] == 2 {
+			violations = append(violations, fmt.Sprintf("height %d tx %d is an admin re-seal that v10 judged as a "+
+				"ValidatorBlock (code 2); v11 decides it as a re-seal", height, i))
 			continue
 		}
 		if !isValidatorBlockTx(tx) {
@@ -351,6 +364,9 @@ func isValidatorBlockTx(tx []byte) bool {
 		return false
 	}
 	if _, ok := DecodeBLSRegistry(tx); ok {
+		return false
+	}
+	if _, ok := DecodeAdminReseal(tx); ok {
 		return false
 	}
 	return true

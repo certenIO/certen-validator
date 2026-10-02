@@ -45,7 +45,8 @@ func (app *ValidatorApp) processValidatorRotation(vr *ValidatorRotationTx, heigh
 	if err != nil {
 		app.logger.Fatalf("❌ [ROTATION] the committed policy (admin quorum) could not be read at height %d: %v", height, err)
 	}
-	power, err := VerifyValidatorRotation(vr, app.cometChainID, policy, app.genesisValidators, log, height)
+	// Judged by the admin set in force for this block (AdminSetAt, rules v11).
+	power, err := VerifyValidatorRotation(vr, app.cometChainID, withAdminSetAt(policy, height), app.genesisValidators, log, height)
 	if err != nil {
 		app.logger.Printf("🚫 [ROTATION] refused at height %d: %v", height, err)
 		return abcitypes.ExecTxResult{Code: 6, Log: "validator rotation refused: " + err.Error()}

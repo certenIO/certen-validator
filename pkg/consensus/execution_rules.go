@@ -141,8 +141,22 @@ const (
 	// or refuses a registry (committedRulesVersion).
 	executionRulesV10 uint64 = 10
 
+	// v11 - the admin re-seal (admin_reseal.go): a recognised transaction kind `certen.admin.reseal/v1` that replaces
+	// certen-testnet's sealed admin set, whose secrets were lost, ONCE, with the set written into the rule (three keys,
+	// threshold 2), and only while the lost set is in force. Accepted, it contributes its id to the app hash and is
+	// recorded append-only; refused, it returns code 11. v10 judged the same bytes as a ValidatorBlock and refused them
+	// with code 2, so the version is bumped. From v11 every admin-signed transaction (policy update, rotation, BLS
+	// registry) is judged by the admin set in force for its block (AdminSetAt) - identical to v10 on every chain that
+	// has not re-sealed, since the set in force is then the genesis seal v10 used.
+	//
+	// v11 CONTINUES v7..v10 state without a reset: the kind is new, so no committed history contains it, and that is
+	// checked, not assumed - IndexCommittedHistory refuses to start on any committed re-seal-kind transaction decided
+	// with v10's code. The state stays stamped with the older version until a block accepts or refuses a re-seal
+	// (committedRulesVersion).
+	executionRulesV11 uint64 = 11
+
 	// CurrentExecutionRulesVersion is what THIS binary implements.
-	CurrentExecutionRulesVersion = executionRulesV10
+	CurrentExecutionRulesVersion = executionRulesV11
 )
 
 // compatibleContinuations names the older rules whose committed state this binary may continue, and why
@@ -154,9 +168,12 @@ var compatibleContinuations = map[uint64]uint64{
 	// executionRulesV8 - checked against every committed block before the deploy). v9 decides v7 and v8
 	// history as they did, which every node checks before it starts (see executionRulesV9).
 	// v10 adds only the registry kind, which no committed history contains (checked at every start).
-	executionRulesV7: executionRulesV10,
-	executionRulesV8: executionRulesV10,
-	executionRulesV9: executionRulesV10,
+	// v11 adds only the re-seal kind, which no committed history contains (checked at every start), and judges admin
+	// signatures by the set in force, which is the genesis seal until a re-seal is committed.
+	executionRulesV7:  executionRulesV11,
+	executionRulesV8:  executionRulesV11,
+	executionRulesV9:  executionRulesV11,
+	executionRulesV10: executionRulesV11,
 }
 
 // ExecutionRulesMismatchError explains a refusal to start in terms an operator
