@@ -988,12 +988,6 @@ func main() {
 		Handler: mux,
 	}
 
-	// Context for background tasks
-	ctx, cancel := context.WithCancel(context.Background())
-
-	// Start internal validator services (execution queue, etc)
-	go validatorNode.Start(ctx)
-
 	// Start CometBFT consensus engine for this validator
 	go validatorNode.StartConsensus()
 
@@ -1013,9 +1007,6 @@ func main() {
 	<-quit
 
 	log.Printf("🛑 Shutting down BFT Validator...")
-
-	// Cancel background services
-	cancel()
 
 	// Graceful HTTP shutdown
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)

@@ -2,11 +2,11 @@ package execution
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/certen/independant-validator/pkg/consensus"
 )
 
 // =============================================================================
@@ -500,16 +500,8 @@ func (s *OnDemandSubmitter) resolveCommitTime(ctx context.Context, member *Pendi
 	}
 }
 
-// onDemandLeaderIndex is the deterministic election. Every validator must compute the same
-// answer from the same roster, so it depends on nothing local.
+// onDemandLeaderIndex is the deterministic election, defined once in consensus so the round that queues a member
+// names the same leader this submitter acts on (RB5-F38).
 func onDemandLeaderIndex(chainID int64, opID [32]byte, rosterLen int) int {
-	if rosterLen <= 0 {
-		return 0
-	}
-	key := fmt.Sprintf("certen:ondemand:v1|%d|%x", chainID, opID)
-	sum := sha256.Sum256([]byte(key))
-	// Fold four bytes rather than one: with a single byte and a 7-way modulus the selection is
-	// measurably biased toward the low indices (256 = 7*36 + 4).
-	base := uint64(binary.BigEndian.Uint32(sum[:4]))
-	return int(base % uint64(rosterLen))
+	return consensus.OnDemandLeaderIndex(chainID, opID, rosterLen)
 }

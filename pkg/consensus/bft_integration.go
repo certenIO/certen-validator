@@ -399,7 +399,6 @@ type BFTValidator struct {
 	validatorID           string
 	chainID               string // CometBFT chain ID (e.g., "certen-validator")
 	privateKey            ed25519.PrivateKey
-	executionQueue        chan *ExecutionTask
 	ctx                   context.Context
 	cancel                context.CancelFunc
 
@@ -456,22 +455,6 @@ func (bv *BFTValidator) SetEntitlementStore(store *entitlement.Store, mode Entit
 	bv.entitlementMode = mode
 }
 
-// Intent represents an intent to be executed
-type Intent struct {
-	ID              string `json:"id"`
-	TransactionHash string `json:"transaction_hash"` // Real Accumulate transaction hash
-	AccountURL      string `json:"account_url"`      // Real account URL from CertenIntent
-	// Add other fields as needed for your system
-}
-
-// ExecutionTask represents a task for BFT consensus execution
-type ExecutionTask struct {
-	Intent      *Intent                   `json:"intent"`
-	RoundID     string                    `json:"round_id"`
-	BlockHeight uint64                    `json:"block_height"`
-	ResultChan  chan *ExecutionTaskResult `json:"-"`
-}
-
 // ExecutionTaskResult contains the result of BFT execution
 type ExecutionTaskResult struct {
 	// Success means CONSENSUS succeeded — the validators agreed and the block
@@ -516,7 +499,6 @@ type ExecutionTaskResult struct {
 	TargetChainError string          `json:"target_chain_error,omitempty"`
 	AnchorResp       *AnchorResponse `json:"anchor_response,omitempty"`
 	Error            error           `json:"error,omitempty"`
-	ExecutorID       string          `json:"executor_id"`
 	ConsensusHash    string          `json:"consensus_hash"`
 }
 
@@ -552,7 +534,6 @@ func NewBFTValidator(
 		validatorID:           validatorID,
 		chainID:               chainID,
 		privateKey:            privateKey,
-		executionQueue:        make(chan *ExecutionTask, 100),
 		ctx:                   ctx,
 		cancel:                cancel,
 		// anchorResultChannels removed - HTTP orchestration violates audit boundary
@@ -564,8 +545,6 @@ func NewBFTValidator(
 			app.SetValidatorRef(validator)
 		}
 	}
-
-	// Note: processExecutionTasks goroutine is started in Start() method, not here
 
 	return validator
 }
@@ -639,12 +618,6 @@ func (bv *BFTValidator) SetBatchEnqueuer(e BatchEnqueuer) {
 	}
 }
 
-// Start starts the validator's background services
-func (bv *BFTValidator) Start(ctx context.Context) {
-	go bv.processExecutionTasks()
-	bv.logger.Printf("BFT Validator background services started")
-}
-
 // StartConsensus starts the CometBFT consensus engine
 func (bv *BFTValidator) StartConsensus() {
 	if bv.engine != nil {
@@ -653,182 +626,6 @@ func (bv *BFTValidator) StartConsensus() {
 		} else {
 			bv.logger.Printf("CometBFT consensus engine started successfully")
 		}
-	}
-}
-
-// ExecuteWithBFTConsensus executes an intent using BFT consensus
-func (bv *BFTValidator) ExecuteWithBFTConsensus(
-	ctx context.Context,
-	intent *Intent,
-	blockHeight uint64,
-) (*ExecutionTaskResult, error) {
-	// Use deterministic roundID: intentID:blockHeight (no timestamp to ensure all validators compute same hash)
-	roundID := fmt.Sprintf("%s:%d", intent.ID, blockHeight)
-
-	bv.logger.Printf("🎯 [BFT-COORD] Starting BFT execution: intent=%s round=%s height=%d",
-		intent.ID, roundID, blockHeight)
-
-	// Step 1: Phase 3 - Deterministic executor selection (no ExecutionConsensus)
-	selectedExecutorID := bv.selectExecutorDeterministically(roundID, intent.ID)
-
-	// Broadcast executor selection to CometBFT for consensus agreement
-	if err := bv.broadcastExecutorSelection(roundID, selectedExecutorID); err != nil {
-		return nil, fmt.Errorf("executor selection broadcast failed: %w", err)
-	}
-
-	bv.logger.Printf("🎲 [BFT-COORD] Deterministically selected executor: %s for round %s",
-		selectedExecutorID, roundID)
-
-	// Step 2: Phase 3 - CometBFT handles consensus directly (vote transactions removed)
-	// CometBFT's native consensus replaces the custom vote broadcasting system
-	bv.logger.Printf("📊 [BFT-COORD] Using CometBFT native consensus for validator=%s round=%s",
-		bv.validatorID, roundID)
-
-	// Step 3: Wait for consensus or timeout (Phase 3: no ExecutionConsensus dependency)
-	consensusCtx, consensusCancel := context.WithTimeout(ctx, 30*time.Second) // Standard timeout
-	defer consensusCancel()
-
-	consensusReached := false
-	for !consensusReached {
-		select {
-		case <-consensusCtx.Done():
-			return nil, fmt.Errorf("consensus timeout for round: %s", roundID)
-		case <-time.After(100 * time.Millisecond):
-			// Phase 3: Get ballot status from ABCI state instead of ExecutionConsensus
-			ballot, exists := bv.getABCIBallotState(roundID)
-			if exists {
-				bv.logger.Printf("🔍 [BFT-CONSENSUS] Polling ballot state for %s: finalized=%v, reached=%v, executor=%s",
-					roundID, ballot.IsFinalized, ballot.ConsensusReached, ballot.FinalExecutorID)
-			} else {
-				bv.logger.Printf("🔍 [BFT-CONSENSUS] No ballot state found for round %s, continuing to poll...", roundID)
-			}
-			if exists && ballot.IsFinalized {
-				consensusReached = true
-				if !ballot.ConsensusReached {
-					return &ExecutionTaskResult{
-						Success:       false,
-						Error:         fmt.Errorf("consensus failed: insufficient votes"),
-						ExecutorID:    ballot.FinalExecutorID,
-						ConsensusHash: bv.generateConsensusHash(roundID, selectedExecutorID),
-					}, nil
-				}
-			}
-		}
-	}
-
-	// Step 4: Execute via elected executor consensus
-	// Validators participate in voting and elect an executor for the round
-	bv.logger.Printf("⚡ [BFT-CONSENSUS] Participating in elected executor consensus: %s", bv.validatorID)
-
-	return bv.executeWithConsensus(ctx, intent, roundID, blockHeight)
-}
-
-// executeWithConsensus executes the intent using elected executor consensus
-func (bv *BFTValidator) executeWithConsensus(
-	ctx context.Context,
-	intent *Intent,
-	roundID string,
-	blockHeight uint64,
-) (*ExecutionTaskResult, error) {
-	bv.logger.Printf("⚡ [BFT-EXEC] Participating in elected executor consensus: round=%s intent=%s validator=%s",
-		roundID, intent.ID, bv.validatorID)
-
-	// Create execution task
-	task := &ExecutionTask{
-		Intent:      intent,
-		RoundID:     roundID,
-		BlockHeight: blockHeight,
-		ResultChan:  make(chan *ExecutionTaskResult, 1),
-	}
-
-	// Submit to execution queue
-	select {
-	case bv.executionQueue <- task:
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-
-	// Wait for execution result
-	select {
-	case result := <-task.ResultChan:
-		return result, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-}
-
-// processExecutionTasks processes execution tasks in the background
-func (bv *BFTValidator) processExecutionTasks() {
-	for {
-		select {
-		case <-bv.ctx.Done():
-			return
-		case task := <-bv.executionQueue:
-			bv.executeTask(task)
-		}
-	}
-}
-
-// executeTask executes a single task with cryptographic result submission
-func (bv *BFTValidator) executeTask(task *ExecutionTask) {
-	bv.logger.Printf("🔥 [BFT-EXEC] Processing execution task: round=%s intent=%s",
-		task.RoundID, task.Intent.ID)
-
-	// Get consensus ballot from ABCI app state (Phase 3: CometBFT is the only source of truth)
-	ballot, exists := bv.getABCIBallotState(task.RoundID)
-	if !exists {
-		// If no ballot exists in ABCI state, create one by broadcasting executor selection
-		bv.logger.Printf("🎯 [BFT-EXEC] No ballot in ABCI state for round %s, selecting executor via CometBFT", task.RoundID)
-
-		// Use a simple deterministic executor selection for now (could be enhanced with real voting)
-		selectedExecutor := bv.selectExecutorDeterministically(task.RoundID, task.Intent.ID)
-		if err := bv.broadcastExecutorSelection(task.RoundID, selectedExecutor); err != nil {
-			bv.logger.Printf("❌ [BFT-EXEC] Failed to broadcast executor selection: %v", err)
-			return
-		}
-
-		// Wait briefly for the transaction to be processed
-		time.Sleep(100 * time.Millisecond)
-
-		// Try to get the ballot again
-		ballot, exists = bv.getABCIBallotState(task.RoundID)
-		if !exists {
-			bv.logger.Printf("❌ [BFT-EXEC] Still no ballot found in ABCI state after selection for round %s", task.RoundID)
-			return
-		}
-	}
-
-	if !ballot.IsFinalized || !ballot.ConsensusReached {
-		bv.logger.Printf("⏳ [BFT-EXEC] Consensus not yet reached in ABCI state for round %s", task.RoundID)
-		return
-	}
-
-	// Check if this validator is the elected executor
-	if ballot.FinalExecutorID != bv.validatorID {
-		bv.logger.Printf("👁️ [BFT-EXEC] Validator %s participating in consensus (executor: %s) - NOT executing",
-			bv.validatorID, ballot.FinalExecutorID)
-		return
-	}
-
-	bv.logger.Printf("⚡ [BFT-EXEC] Validator %s is the ELECTED EXECUTOR for round %s via ABCI state - proceeding with execution",
-		bv.validatorID, task.RoundID)
-
-	// DEPRECATED: Legacy ExecutionTask with Intent struct cannot be executed via canonical workflow
-	// Per Golden Spec: All intents must flow through IntentDiscovery → ExecuteCanonicalIntentWithBFTConsensus
-	// with proper CertenIntent (4-blob) and CertenProof from lite client
-	result := &ExecutionTaskResult{
-		Success:    false,
-		ExecutorID: bv.validatorID,
-		Error:      fmt.Errorf("DEPRECATED: Legacy ExecutionTask path removed - use ExecuteCanonicalIntentWithBFTConsensus via IntentDiscovery"),
-	}
-
-	bv.logger.Printf("⚠️ [BFT-EXEC] Legacy execution path deprecated for round %s - intent must flow through IntentDiscovery", task.RoundID)
-
-	// Send result back
-	select {
-	case task.ResultChan <- result:
-	default:
-		bv.logger.Printf("⚠️ [BFT-EXEC] Result channel full, dropping result for round: %s", task.RoundID)
 	}
 }
 
@@ -1290,8 +1087,7 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 		bv.logger.Printf("🚫 [ENTITLEMENT] refusing intent %s: principal %q has no entitlement evidence (no gas will be spent)",
 			certenIntent.IntentID, principal)
 		return &ExecutionTaskResult{
-			Success:    false,
-			ExecutorID: bv.validatorID,
+			Success: false,
 			Error: fmt.Errorf("intent %s refused: %w: principal %q has no entitlement evidence",
 				certenIntent.IntentID, ErrNotEntitled, principal),
 		}, nil
@@ -1319,14 +1115,14 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	// ====================================================================
 	execValidation, err := executionValidationEnabled()
 	if err != nil {
-		return &ExecutionTaskResult{Success: false, ExecutorID: bv.validatorID, Error: err}, nil
+		return &ExecutionTaskResult{Success: false, Error: err}, nil
 	}
 	if execValidation {
 		reader, _ := bv.engine.(committedOperationReader)
 		deadlineAt, basis, dErr := deadlineInstant(reader, bv.validatorID, certenIntent, time.Now())
 		if dErr != nil {
 			// Not a verdict on the intent: whether it committed is unknown, so it is not judged. Retried.
-			return &ExecutionTaskResult{Success: false, ExecutorID: bv.validatorID,
+			return &ExecutionTaskResult{Success: false,
 				Error: fmt.Errorf("intent %s: its deadline cannot be judged: %w", certenIntent.IntentID, dErr)}, nil
 		}
 		bv.logger.Printf("⏱️ [EXEC-VALIDATION] intent %s: deadline judged at %s (%s)",
@@ -1334,8 +1130,7 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 		if err := certenIntent.ValidateForExecution(blockHeight, deadlineAt); err != nil {
 			bv.logger.Printf("🚫 [EXEC-VALIDATION] refusing intent %s: %v", certenIntent.IntentID, err)
 			return &ExecutionTaskResult{
-				Success:    false,
-				ExecutorID: bv.validatorID,
+				Success: false,
 				// PERMANENT. The intent's bytes are already final on
 				// Accumulate, so a structural defect — a missing created_at, a
 				// malformed field, an expiry that already passed — cannot
@@ -1358,8 +1153,7 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	if err := CheckIntentAccountAnchors(anchorPolicy, certenIntent); err != nil {
 		bv.logger.Printf("🚫 [ANCHOR-PIN] refusing intent %s: %v", certenIntent.IntentID, err)
 		return &ExecutionTaskResult{
-			Success:    false,
-			ExecutorID: bv.validatorID,
+			Success: false,
 			// PERMANENT: the intent's legs are final on Accumulate and will name the same anchor on
 			// every pass.
 			Error: fmt.Errorf("intent %s refused: %w: %w", certenIntent.IntentID, ErrIntentPermanentlyInvalid, err),
@@ -1372,8 +1166,7 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	if err := CheckIntentTargetChains(certenIntent); err != nil {
 		bv.logger.Printf("🚫 [TARGET-CHAIN] refusing intent %s: %v", certenIntent.IntentID, err)
 		return &ExecutionTaskResult{
-			Success:    false,
-			ExecutorID: bv.validatorID,
+			Success: false,
 			// PERMANENT: the intent's legs are final on Accumulate and name the same chains on every
 			// pass.
 			Error: fmt.Errorf("intent %s refused: %w: %w", certenIntent.IntentID, ErrIntentPermanentlyInvalid, err),
@@ -1430,9 +1223,8 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	if err != nil {
 		bv.logger.Printf("failed to build canonical ValidatorBlock: round=%s err=%v", roundID, err)
 		return &ExecutionTaskResult{
-			Success:    false,
-			ExecutorID: bv.validatorID,
-			Error:      fmt.Errorf("build canonical validator block: %w", err),
+			Success: false,
+			Error:   fmt.Errorf("build canonical validator block: %w", err),
 		}, nil
 	}
 
@@ -1440,9 +1232,8 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 		if err := bv.certifyIntent(vb, certChainID, certRegistry, certenProof, resolvedKeyPageURL, resolvedKeyBookURL,
 			govAuthorization, govVoteEvidence); err != nil {
 			return &ExecutionTaskResult{
-				Success:    false,
-				ExecutorID: bv.validatorID,
-				Error:      fmt.Errorf("intent %s: intent certificate: %w", certenIntent.IntentID, err),
+				Success: false,
+				Error:   fmt.Errorf("intent %s: intent certificate: %w", certenIntent.IntentID, err),
 			}, nil
 		}
 		bv.logger.Printf("🔏 [INTENT-CERT] intent %s certified under BLS registry v%d: message %s",
@@ -1465,9 +1256,8 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	bftRes, err := bv.engine.BroadcastValidatorBlockCommit(bftCtx, vb)
 	if err != nil {
 		return &ExecutionTaskResult{
-			Success:    false,
-			ExecutorID: bv.validatorID,
-			Error:      fmt.Errorf("BFT broadcast failed: %w", err),
+			Success: false,
+			Error:   fmt.Errorf("BFT broadcast failed: %w", err),
 		}, nil
 	}
 
@@ -1478,9 +1268,8 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	// block committed, and continues from its height without broadcasting it again (RB3-F141).
 	if err := requireCommitted(bftRes); err != nil {
 		return &ExecutionTaskResult{
-			Success:    false,
-			ExecutorID: bv.validatorID,
-			Error:      err,
+			Success: false,
+			Error:   err,
 		}, nil
 	}
 	bv.logger.Printf("✅ [CANONICAL-BFT] ValidatorBlock COMMITTED at height %d, tx=%X", bftRes.Height, bftRes.TxHash)
@@ -1534,8 +1323,8 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	// that (CheckIntentTargetChains). The per-intent path this used to fall through to could not
 	// settle, for the three reasons above, and is gone (owner decision 2026-09-26).
 	//
-	// This MUST happen before the elected-executor gate below, and it is the single change
-	// that makes cross-ADI quorum possible at all.
+	// This MUST happen on every validator - nothing below it may depend on which node this is - and
+	// it is the single change that makes cross-ADI quorum possible at all.
 	//
 	// A peer attests to a batch by rebuilding it from its OWN mempool and comparing bundleIds
 	// (HandleBatchAttestationRequest). If only the elected executor enqueued, every other
@@ -1545,9 +1334,9 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	// like ordinary peer disagreement.
 	//
 	// Enqueueing is purely local bookkeeping: it spends nothing, submits nothing, and creates
-	// no transaction. Duplicate submission is prevented where it actually matters — only the
-	// elected BATCH PERIOD LEADER flushes (IsBatchPeriodLeader), which is a separate election
-	// from this round's executor.
+	// no transaction. Duplicate submission is prevented where it actually matters - only a member's
+	// settlement leader submits: the batch period leader (IsBatchPeriodLeader) for the cadence lane,
+	// the on-demand leader (OnDemandLeaderIndex) for the intent-keyed lane (RB5-F38).
 	// =======================================================================
 	if err := bv.enqueueForBatch(certenIntent, certenProof, vb,
 		blockHeight, g0Proof, g1Proof, g2Proof, blsSignature, validatorSignatures,
@@ -1558,45 +1347,20 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	}
 
 	// =======================================================================
-	// CONSENSUS FIX: Only the elected executor should submit to external chains
-	// This prevents multiple validators from creating duplicate transactions
+	// NO ROUND EXECUTOR (RB5-F38). The round elects nobody to submit: the settlement lanes do - the
+	// intent-keyed lane per (chain, operation), the cadence lane per (chain, period) at flush - and
+	// enqueueForBatch has logged who that is for each member ([SETTLEMENT-LEAD]). A round election used
+	// to run here, over a hard-coded list of seven names, and logged "ELECTED EXECUTOR ... queued for
+	// batch settlement" on a node that settled nothing: measured live 2026-10-02, intent af16e11d named
+	// validator-4 while the on-demand leader, validator-1, anchored, attested and settled it.
 	// =======================================================================
-
-	// Deterministically select executor based on round ID
-	selectedExecutorID := bv.selectExecutorForRound(roundID)
-
-	if selectedExecutorID != bv.validatorID {
-		bv.logger.Printf("👁️ [CANONICAL-BFT] Validator %s is NOT elected executor (executor: %s) - skipping external submission",
-			bv.validatorID, selectedExecutorID)
-		// Return success - the elected executor will handle external submission
-		return &ExecutionTaskResult{
-			Success: true,
-			// Six of seven validators land here on every round. This node submitted
-			// nothing, so it holds no evidence either way — pending, with no tx
-			// hash, which renders as the informational "no target-chain submission
-			// from this node" line. Before Stage 1 these six each printed the
-			// gas-speculation warning for every healthy intent.
-			TargetChainOutcome: TargetChainPending,
-			ExecutorID:         selectedExecutorID,
-			ConsensusHash:      fmt.Sprintf("consensus_%s_%d", roundID, bftRes.Height),
-		}, nil
-	}
-
-	bv.logger.Printf("⚡ [CANONICAL-BFT] Validator %s is ELECTED EXECUTOR for round %s - intent %s is queued for batch settlement",
-		bv.validatorID, roundID, certenIntent.IntentID)
-
-	// The enqueue already happened above, on EVERY validator - see the comment there for why that
-	// is load-bearing. All that remains for the elected executor is to stop: the intent settles on
-	// the batch period leader's flush, which may be a different node, and executing it here as well
-	// would double-spend it.
 	return &ExecutionTaskResult{
 		Success: true,
-		// Queued, not settled. The batch period leader's flush resolves it, possibly on another
-		// node, and RunBatchMemberAttestation then carries the terminal outcome. Pending, with no
-		// tx hash - there is no transaction yet, and claiming a failure here would be a guess about
-		// work that has not started.
+		// Queued, not settled. The member's settlement leader resolves it, possibly on another node,
+		// and RunBatchMemberAttestation then carries the terminal outcome. Pending, with no tx hash -
+		// there is no transaction yet, and claiming a failure here would be a guess about work that
+		// has not started. No node has executed anything for this round, so none is named.
 		TargetChainOutcome: TargetChainPending,
-		ExecutorID:         bv.validatorID,
 		ConsensusHash:      fmt.Sprintf("batch_queued_%s_%d", roundID, bftRes.Height),
 	}, nil
 }
@@ -1794,7 +1558,6 @@ func (bv *BFTValidator) GetMetrics() map[string]interface{} {
 	metrics := make(map[string]interface{})
 
 	// Basic validator metrics
-	metrics["execution_queue_length"] = len(bv.executionQueue)
 	metrics["validator_id"] = bv.validatorID
 	metrics["chain_id"] = bv.chainID
 	metrics["consensus_engine"] = "CometBFT"
@@ -2977,83 +2740,6 @@ func (bv *BFTValidator) broadcastExecutionResult(roundID, intentID string, succe
 	return bv.broadcastBFTTransaction(txBytes, "execution_result")
 }
 
-// getABCIBallotState queries the ABCI app state for ballot information
-func (bv *BFTValidator) getABCIBallotState(roundID string) (*BallotInfo, bool) {
-	if bv.engine == nil || bv.engine.GetABCIApp() == nil {
-		return nil, false
-	}
-	return bv.engine.GetABCIApp().GetBallotState(roundID)
-}
-
-// getABCIExecutionState queries the ABCI app state for execution information
-func (bv *BFTValidator) getABCIExecutionState(roundID string) (*ExecutionRecord, bool) {
-	if bv.engine == nil || bv.engine.GetABCIApp() == nil {
-		return nil, false
-	}
-	return bv.engine.GetABCIApp().GetExecutionState(roundID)
-}
-
-// selectExecutorForRound selects an executor for a canonical BFT round
-// This is a simplified wrapper for the canonical workflow that uses roundID only
-// (roundID already contains intentID:blockHeight:timestamp for uniqueness)
-func (bv *BFTValidator) selectExecutorForRound(roundID string) string {
-	// Use roundID as both roundID and intentID since it already contains the intent
-	return bv.selectExecutorDeterministically(roundID, roundID)
-}
-
-// selectExecutorDeterministically selects an executor using a deterministic algorithm
-func (bv *BFTValidator) selectExecutorDeterministically(roundID, intentID string) string {
-	// Simple deterministic selection based on hash
-	hash := sha256.New()
-	hash.Write([]byte(roundID + intentID))
-	hashBytes := hash.Sum(nil)
-
-	// Convert to number and mod by available validators
-	// For now, just use a simple list of known validators
-	validators := []string{"validator-1", "validator-2", "validator-3", "validator-4", "validator-5", "validator-6", "validator-7"}
-	index := int(hashBytes[0]) % len(validators)
-
-	selected := validators[index]
-	bv.logger.Printf("🎯 [BFT-DETERMINISTIC] Selected executor %s for round %s (index %d)", selected, roundID, index)
-	return selected
-}
-
-// broadcastExecutorSelection broadcasts executor selection to CometBFT for ABCI processing
-func (bv *BFTValidator) broadcastExecutorSelection(roundID, executorID string) error {
-	if bv.engine == nil {
-		return fmt.Errorf("consensus engine not initialized")
-	}
-
-	bv.logger.Printf("🎯 [BFT-EXECUTOR] Broadcasting executor selection to ABCI: %s -> %s", roundID, executorID)
-
-	// Create transaction for executor selection
-	txData := map[string]interface{}{
-		"type":        "executor_selection",
-		"round_id":    roundID,
-		"executor_id": executorID,
-		"timestamp":   time.Now().Unix(),
-		"validator":   bv.validatorID,
-	}
-
-	// Serialize and broadcast
-	txBytes, err := json.Marshal(txData)
-	if err != nil {
-		return fmt.Errorf("failed to serialize executor selection: %w", err)
-	}
-
-	return bv.broadcastBFTTransaction(txBytes, "executor_selection")
-}
-
-// generateConsensusHash creates a consensus hash for execution results (Phase 3)
-func (bv *BFTValidator) generateConsensusHash(roundID, executorID string) string {
-	hash := sha256.New()
-	hash.Write([]byte(roundID))
-	hash.Write([]byte(executorID))
-	hash.Write([]byte(bv.validatorID))
-	hash.Write([]byte(fmt.Sprintf("%d", time.Now().Unix())))
-	return fmt.Sprintf("%x", hash.Sum(nil)[:16]) // First 16 bytes as hex
-}
-
 // =============================================================================
 // HELPER METHODS FROM ORIGINAL FUNCTIONAL WORKFLOW
 // =============================================================================
@@ -3129,13 +2815,6 @@ func (bv *BFTValidator) signAnchorResult(resp *AnchorResponse) (string, error) {
 	anchorData := fmt.Sprintf("%s:%s:%t", resp.AnchorID, resp.Message, resp.Success)
 	signature := ed25519.Sign(bv.privateKey, []byte(anchorData))
 	return fmt.Sprintf("0x%x", signature), nil
-}
-
-// extractTargetChainData extracts target chain information from intent
-func (bv *BFTValidator) extractTargetChainData(intent *Intent) []byte {
-	// Create a deterministic seed from intent data
-	chainData := fmt.Sprintf("target_chain_%s_%s", intent.ID, intent.AccountURL)
-	return []byte(chainData)
 }
 
 // =============================================================================

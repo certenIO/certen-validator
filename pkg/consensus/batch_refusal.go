@@ -206,15 +206,13 @@ func (bv *BFTValidator) refusalResult(ci *CertenIntent, err error) *ExecutionTas
 	if errors.As(err, &r) && r.Permanent {
 		bv.logger.Printf("🚫 [BATCH-REFUSED] intent %s: %v", intentID, err)
 		return &ExecutionTaskResult{
-			Success:    false,
-			ExecutorID: bv.validatorID,
-			Error:      fmt.Errorf("intent %s refused: %w: %w", intentID, ErrIntentPermanentlyInvalid, err),
+			Success: false,
+			Error:   fmt.Errorf("intent %s refused: %w: %w", intentID, ErrIntentPermanentlyInvalid, err),
 		}
 	}
 	bv.logger.Printf("⏳ [BATCH-UNAVAILABLE] intent %s: %v", intentID, err)
 	return &ExecutionTaskResult{
-		Success:    false,
-		ExecutorID: bv.validatorID,
-		Error:      fmt.Errorf("intent %s not settled yet: %w", intentID, err),
+		Success: false,
+		Error:   fmt.Errorf("intent %s not settled yet: %w", intentID, err),
 	}
 }

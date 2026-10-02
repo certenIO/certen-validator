@@ -33,45 +33,58 @@ func workflowSource(t *testing.T) string {
 	return string(b)
 }
 
-func TestBatchEnqueueHappensBeforeExecutorGate(t *testing.T) {
+// canonicalWorkflowBody is executeCanonicalBFTWorkflow's source, from its signature to its closing brace.
+func canonicalWorkflowBody(t *testing.T) string {
+	t.Helper()
 	src := workflowSource(t)
+	start := strings.Index(src, "func (bv *BFTValidator) executeCanonicalBFTWorkflow(")
+	if start < 0 {
+		t.Fatal("executeCanonicalBFTWorkflow not found")
+	}
+	end := strings.Index(src[start:], "\n}\n")
+	if end < 0 {
+		t.Fatal("executeCanonicalBFTWorkflow has no closing brace")
+	}
+	// Code only: the comments may name what the code must not do.
+	var code []string
+	for _, line := range strings.Split(src[start:start+end+3], "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(line), "//") {
+			code = append(code, line)
+		}
+	}
+	return strings.Join(code, "\n")
+}
 
-	enqueue := strings.Index(src, "bv.enqueueForBatch(")
-	if enqueue < 0 {
+// The round elects no executor, so no part of the workflow may depend on which validator runs it: every validator
+// enqueues, and the settlement lanes decide who submits (RB5-F38). A gate on the node's identity used to follow the
+// enqueue, and it was harmless only because the enqueue stayed above it; there is now nothing for the enqueue to stay
+// above, and none may come back.
+func TestTheRoundBranchesOnNoValidatorIdentity(t *testing.T) {
+	body := canonicalWorkflowBody(t)
+	if !strings.Contains(body, "bv.enqueueForBatch(") {
 		t.Fatal("enqueueForBatch call not found; the batch enqueue was removed or renamed")
 	}
-	gate := strings.Index(src, "if selectedExecutorID != bv.validatorID {")
-	if gate < 0 {
-		t.Fatal("elected-executor gate not found")
-	}
-
-	if enqueue > gate {
-		t.Fatal("the batch enqueue moved BELOW the elected-executor gate. Only the elected " +
-			"executor would populate its mempool, every peer would refuse to attest with " +
-			"\"no members in this validator's mempool\", and cross-ADI quorum would be " +
-			"impossible — while looking like ordinary peer disagreement.")
+	for _, gate := range []string{"!= bv.validatorID", "== bv.validatorID", "selectExecutor", "ELECTED EXECUTOR", "isLeader", "IsBatchPeriodLeader"} {
+		if strings.Contains(body, gate) {
+			t.Fatalf("the canonical workflow branches on %q: only some validators would reach what follows it, and a "+
+				"peer that does not enqueue cannot attest - while an executor named here settles nothing", gate)
+		}
 	}
 }
 
 // The consensus height must advance on every committed round. Recording it only on rounds that
 // enqueue a batch member means a single queued intent never settles: the period cutoff only
 // moves when a LATER intent arrives, so one intent alone waits forever.
-func TestConsensusHeightRecordedBeforeExecutorGate(t *testing.T) {
-	src := workflowSource(t)
-
-	note := strings.Index(src, "bv.noteConsensusHeight(blockHeight)")
+func TestConsensusHeightRecordedOnEveryRound(t *testing.T) {
+	body := canonicalWorkflowBody(t)
+	note := strings.Index(body, "bv.noteConsensusHeight(blockHeight)")
 	if note < 0 {
 		t.Fatal("noteConsensusHeight is not called with blockHeight; the period cutoff has no " +
 			"globally-agreed height source")
 	}
-	gate := strings.Index(src, "if selectedExecutorID != bv.validatorID {")
-	if gate < 0 {
-		t.Fatal("elected-executor gate not found")
-	}
-	if note > gate {
-		t.Fatal("the consensus height is recorded only on the elected executor. Every other " +
-			"node's cutoff would stay behind, so peers could not select the period the leader " +
-			"formed and would refuse to attest.")
+	if enq := strings.Index(body, "bv.enqueueForBatch("); enq >= 0 && note > enq {
+		t.Fatal("the consensus height is recorded after the enqueue, where a refusal returns before it: " +
+			"a refused round would not advance this node's cutoff")
 	}
 }
 
