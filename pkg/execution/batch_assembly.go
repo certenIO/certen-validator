@@ -624,6 +624,10 @@ func (s *BatchStack) flushOneChain(
 		logf("[BATCH-FLUSH] chain %d flush failed: %v", chainID, err)
 	}
 	if res == nil {
+		if err == nil {
+			// Never silent (RB5-F44): a period listed pending that forms nothing is said so.
+			logf("[BATCH-FLUSH] chain %d period %d: no pending member to form", chainID, cutoffHeight)
+		}
 		return
 	}
 
