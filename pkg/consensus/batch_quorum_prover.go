@@ -330,12 +330,12 @@ func (bv *BFTValidator) RunBatchMemberAttestation(
 
 // enqueueForBatch places an intent into THIS validator's batch mempool.
 //
-// Called by every validator on every committed round, elected executor or not. That is the point:
+// Called by every validator on every committed round. That is the point:
 // a peer can only attest to a batch it can independently rebuild from its own mempool, so a mempool
 // populated on one node alone makes quorum impossible by construction.
 //
 // It creates no transaction and spends nothing. Duplicate SUBMISSION is prevented separately, by
-// the batch period leader election - a different election from the round executor.
+// each lane's settlement leader election, which it names for every member ([SETTLEMENT-LEAD], RB5-F38).
 //
 // Returns nil when the intent is queued - including when this same intent was already queued by
 // an earlier run, which is not a refusal and must never lead to a second execution (RB3-F34).
@@ -436,6 +436,8 @@ func (bv *BFTValidator) enqueueForBatch(
 	}
 	bv.logger.Printf("📦 [BATCH-QUEUE] intent %s queued for %s settlement at height %d (%d chain member(s))",
 		certenIntent.IntentID, lane, commitHeight, len(plan.members))
+	bv.logger.Printf("📦 [SETTLEMENT-LEAD] intent %s is settled by %s", certenIntent.IntentID,
+		settlementLeadership(plan.members, batchLeaderRoster()))
 	return nil
 }
 
@@ -575,6 +577,48 @@ func (bv *BFTValidator) IsBatchPeriodLeader(chainID int64, cutoffHeight, elapsed
 // (chain, operationID) over the SAME roster. Both lanes must agree on who exists, or two nodes
 // could each believe they lead the same member.
 func BatchLeaderRoster() []string { return batchLeaderRoster() }
+
+// OnDemandLeaderIndex is the intent-keyed lane's election: the roster index of the validator that settles one
+// chain's member of an operation before any failover. Every validator must compute the same answer from the same
+// roster, so it depends on nothing local. It lives here, not in the submitter, so the round that queues a member
+// names the leader the submitter will act on - one election, not two (RB5-F38).
+func OnDemandLeaderIndex(chainID int64, opID [32]byte, rosterLen int) int {
+	if rosterLen <= 0 {
+		return 0
+	}
+	key := fmt.Sprintf("certen:ondemand:v1|%d|%x", chainID, opID)
+	sum := sha256.Sum256([]byte(key))
+	// Fold four bytes rather than one: with a single byte and a 7-way modulus the selection is
+	// measurably biased toward the low indices (256 = 7*36 + 4).
+	base := uint64(binary.BigEndian.Uint32(sum[:4]))
+	return int(base % uint64(rosterLen))
+}
+
+// settlementLeadership names who submits each queued member's settlement. The round elects no executor: the
+// settlement lanes do - the intent-keyed lane by OnDemandLeaderIndex over the roster, the cadence lane by
+// IsBatchPeriodLeader when the period is flushed - and each hands over to the next roster validator while the
+// member stays unsettled.
+func settlementLeadership(members []batchMember, roster []string) string {
+	parts := make([]string, 0, len(members))
+	for _, m := range members {
+		switch {
+		case !m.onDemand && m.after == nil:
+			parts = append(parts, fmt.Sprintf("chain %d: the batch period leader of the period it falls in, "+
+				"elected when that period is flushed", m.chainID))
+		case len(roster) == 0:
+			parts = append(parts, fmt.Sprintf("chain %d: this validator (no leader roster)", m.chainID))
+		default:
+			wait := ""
+			if m.after != nil {
+				wait = " once the member before it has settled"
+			}
+			parts = append(parts, fmt.Sprintf("chain %d: on-demand leader %s%s, the next roster validator "+
+				"taking over each failover interval it stays unsettled", m.chainID,
+				roster[OnDemandLeaderIndex(m.chainID, m.opID, len(roster))], wait))
+		}
+	}
+	return strings.Join(parts, "; ")
+}
 
 func batchLeaderRoster() []string {
 	raw := strings.TrimSpace(os.Getenv("BATCH_LEADER_VALIDATORS"))
