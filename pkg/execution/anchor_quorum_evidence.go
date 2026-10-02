@@ -101,10 +101,13 @@ type AnchorQuorumMember struct {
 	// for a member admitted before commitments.
 	GovernanceCommitment [32]byte
 	LegacyNoGovernance   bool
-	ADIURL               string
-	Leaf                 [32]byte
-	LeafIndex            int
-	Branch               [][32]byte
+	// CertifiedIntentMessage is the member's quorum-certified intent message, which a v3 batch commits (RB5 D3);
+	// zero on a v1 or v2 batch.
+	CertifiedIntentMessage [32]byte
+	ADIURL                 string
+	Leaf                   [32]byte
+	LeafIndex              int
+	Branch                 [][32]byte
 
 	// Provenance is what the row records about the member beyond its position in the tree: the
 	// Accumulate transaction that carried it, and the leg it settles. Never hashed.
@@ -154,15 +157,16 @@ func membersFromTree(tree *BatchTree, intentByOperation map[[32]byte]string) ([]
 			intentID = v
 		}
 		members = append(members, AnchorQuorumMember{
-			IntentID:             intentID,
-			Provenance:           in.Provenance,
-			OperationID:          in.OperationID,
-			GovernanceCommitment: in.GovernanceCommitment,
-			LegacyNoGovernance:   in.LegacyNoGovernance,
-			ADIURL:               in.ADIURL,
-			Leaf:                 tree.Leaves[i],
-			LeafIndex:            i,
-			Branch:               branch,
+			IntentID:               intentID,
+			Provenance:             in.Provenance,
+			OperationID:            in.OperationID,
+			GovernanceCommitment:   in.GovernanceCommitment,
+			LegacyNoGovernance:     in.LegacyNoGovernance,
+			CertifiedIntentMessage: in.IntentMessage,
+			ADIURL:                 in.ADIURL,
+			Leaf:                   tree.Leaves[i],
+			LeafIndex:              i,
+			Branch:                 branch,
 		})
 	}
 	return members, nil

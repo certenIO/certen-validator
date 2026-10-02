@@ -86,6 +86,9 @@ func (m *BatchMempool) addOnDemand(p *PendingBatchIntent) error {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if err := m.certifiableLocked(p); err != nil {
+		return err
+	}
 
 	if m.onDemand == nil {
 		m.onDemand = make(map[int64]map[[32]byte]*PendingBatchIntent)
@@ -231,17 +234,59 @@ func (m *BatchMempool) PendingOnDemandCount() int {
 // still settling would be re-derived by the discovery watermark rewind if it is inside that
 // window, and lost if it is not, which is why the horizon is generous.
 func (m *BatchMempool) PruneOnDemandOlderThan(ttl time.Duration, now time.Time) int {
+	return m.PruneOnDemandOlderThanExcept(ttl, now, nil)
+}
+
+// OnDemandPruneCandidates is every on-demand member a prune at (ttl, now) would remove, in (chain, IntentID) order.
+func (m *BatchMempool) OnDemandPruneCandidates(ttl time.Duration, now time.Time) []*PendingBatchIntent {
 	if ttl <= 0 {
 		ttl = DefaultOnDemandTTL
 	}
-	pruned := m.pruneOnDemandOlderThan(ttl, now)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []*PendingBatchIntent
+	for _, byOp := range m.onDemand {
+		for _, p := range byOp {
+			if p != nil && onDemandPrunable(p, ttl, now) {
+				out = append(out, p)
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].ChainID != out[j].ChainID {
+			return out[i].ChainID < out[j].ChainID
+		}
+		return out[i].IntentID < out[j].IntentID
+	})
+	return out
+}
+
+// PruneOnDemandOlderThanExcept is PruneOnDemandOlderThan keeping the members in keep: those whose fate could not be
+// read yet.
+func (m *BatchMempool) PruneOnDemandOlderThanExcept(ttl time.Duration, now time.Time, keep map[*PendingBatchIntent]bool) int {
+	if ttl <= 0 {
+		ttl = DefaultOnDemandTTL
+	}
+	pruned := m.pruneOnDemandOlderThan(ttl, now, keep)
 	if pruned > 0 {
 		m.persist()
 	}
 	return pruned
 }
 
-func (m *BatchMempool) pruneOnDemandOlderThan(ttl time.Duration, now time.Time) int {
+// onDemandPrunable is the prune predicate: a member this validator never acted on, past the point its
+// non-settlement can still be attested, queued for longer than the TTL.
+func onDemandPrunable(p *PendingBatchIntent, ttl time.Duration, now time.Time) bool {
+	if p.AnchorProved || p.AttestedSeen || p.SettlementNonceSet || len(p.SettlementTxs) > 0 || p.SettlementTx != "" {
+		return false
+	}
+	if d, ok := p.Deadline(); ok && now.Before(d.Add(nonSettlementFinality+nonSettlementGiveUp)) {
+		return false
+	}
+	return now.Sub(p.EnqueuedAt) >= ttl
+}
+
+func (m *BatchMempool) pruneOnDemandOlderThan(ttl time.Duration, now time.Time, keep map[*PendingBatchIntent]bool) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -268,11 +313,8 @@ func (m *BatchMempool) pruneOnDemandOlderThan(ttl time.Duration, now time.Time) 
 			}
 			// Held until its non-settlement can no longer be attested: a peer verifies a member's
 			// failure from its own copy of the member (RB3-F49), and a successor's deadline may lie
-			// well past the TTL (batch_sequence.go).
-			if d, ok := p.Deadline(); ok && now.Before(d.Add(nonSettlementFinality+nonSettlementGiveUp)) {
-				continue
-			}
-			if now.Sub(p.EnqueuedAt) >= ttl {
+			// well past the TTL (batch_sequence.go). One predicate decides, here and for the candidates.
+			if onDemandPrunable(p, ttl, now) && !keep[p] {
 				delete(byOp, opID)
 				pruned++
 			}

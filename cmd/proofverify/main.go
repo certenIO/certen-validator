@@ -43,6 +43,7 @@ import (
 	"time"
 
 	chained_proof "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/working-proof_do_not_edit"
+	"github.com/certen/independant-validator/pkg/database"
 	"github.com/certen/independant-validator/pkg/execution"
 	certenproof "github.com/certen/independant-validator/pkg/proof"
 	"github.com/google/uuid"
@@ -198,6 +199,7 @@ func main() {
 		}
 		if *govern && *l5 {
 			code = worseExit(code, reportGovernanceDecision(ctx, store, id))
+			code = worseExit(code, reportIntentCertificate(ctx, db, store, id, cp, pinned))
 		}
 		if *online != "" {
 			code = worseExit(code, reportLayer5Online(ctx, store, id, *online))
@@ -504,4 +506,60 @@ func reportLayer5Online(ctx context.Context, store *certenproof.PostgresProofSto
 	}
 	fmt.Printf("      compare the contract with the chain's published CERTEN anchor\n")
 	return exitVerified
+}
+
+// reportIntentCertificate checks, offline, CERTEN's quorum certificate over the proof's intent (RB5 D3): it verifies
+// against its registry, the registry is the quorum the anchor committed, and the certified message is the one the
+// stored proof computes.
+func reportIntentCertificate(ctx context.Context, db *sql.DB, store *certenproof.PostgresProofStorage, id uuid.UUID,
+	cp *chained_proof.ChainedProof, pinned *[32]byte) int {
+	l5, err := execution.VerifyStoredLayer5(ctx, store, id)
+	if err != nil || l5 == nil || l5.Governance == nil {
+		fmt.Printf("SUMMARY-ONLY (intent certificate)  %s\n", id)
+		fmt.Printf("  the proof's layer 5 names no operation, so no certificate can be looked up (%v)\n", err)
+		return exitSummaryOnly
+	}
+	row, err := database.NewConsensusRepository(database.NewClientFromDB(db)).IntentQuorumCertificate(ctx, l5.Governance.OperationID)
+	if errors.Is(err, database.ErrIntentCertificatesNotInSchema) {
+		fmt.Printf("SUMMARY-ONLY (intent certificate)  %s\n  %v\n", id, err)
+		fmt.Printf("  This database records no per-intent certificates at all. Nothing about the proof is known to be wrong.\n")
+		return exitSummaryOnly
+	}
+	if err != nil {
+		fmt.Printf("FAILED (intent certificate)  %s\n  %v\n", id, err)
+		return exitFailed
+	}
+	levels, err := certenproof.GovernanceLevelsFromStorage(ctx, store, id)
+	if err != nil {
+		fmt.Printf("FAILED (intent certificate)  %s\n  %v\n", id, err)
+		return exitFailed
+	}
+	got, err := execution.CheckIntentCertificate(row, cp, levels, l5, pinned)
+	switch {
+	case err == nil:
+		fmt.Printf("  QC  CERTEN's quorum certified this intent: %d signers, %s of %s power (registry v%d, %s), at CERTEN\n",
+			got.Signers, got.SignedPower, got.TotalPower, got.RegistryVersion, got.CertenChainID)
+		fmt.Printf("      height %d, over message %s… - the message this stored proof computes: its operation,\n",
+			got.CertifiedHeight, short(strings.TrimPrefix(got.Message, "0x")))
+		fmt.Printf("      govRoot v2 over its L1-L4 and G0-G2, its Directory leg's validator set, its governance\n")
+		fmt.Printf("      decision; the registry is the CERTEN quorum the anchor committed")
+		if got.IncarnationPinned {
+			fmt.Printf(", under the incarnation you pinned")
+		}
+		if got.AnchoredInBatch {
+			fmt.Printf("; and the anchored v3 batch operation id commits exactly this certified message")
+		} else {
+			fmt.Printf("; the batch it settled in (pre-v3) does not commit it on-chain")
+		}
+		fmt.Printf("\n")
+		return exitVerified
+	case errors.Is(err, execution.ErrNoIntentCertificate):
+		fmt.Printf("SUMMARY-ONLY (intent certificate)  %s\n  %v\n", id, err)
+		fmt.Printf("  This intent settled before CERTEN's BLS registry was in force: its quorum signed the batch, not the\n")
+		fmt.Printf("  intent's own message. Nothing about it is known to be wrong.\n")
+		return exitSummaryOnly
+	default:
+		fmt.Printf("FAILED (intent certificate)  %s\n  %v\n", id, err)
+		return exitFailed
+	}
 }

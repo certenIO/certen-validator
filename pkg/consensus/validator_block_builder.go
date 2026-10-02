@@ -240,7 +240,11 @@ func (builder *ValidatorBlockBuilder) BuildFromIntent(inputs BuilderInputs) (*Va
 
 	// BLS signature validation - must be set before reaching builder
 	// The bft_integration.go generates this using the validator's BLS key
-	if govProof.BLSAggregateSignature == "" {
+	// Under a BLS registry the intent certificate replaces it, and the block must not carry it (RB5 D3).
+	switch {
+	case inputs.IntentCertified && govProof.BLSAggregateSignature != "":
+		return nil, fmt.Errorf("a block certified by its intent signature carries no V6.1 solo signature")
+	case !inputs.IntentCertified && govProof.BLSAggregateSignature == "":
 		return nil, fmt.Errorf("governance_proof.bls_aggregate_signature must not be empty - ensure BLS key is initialized")
 	}
 

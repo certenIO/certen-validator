@@ -59,6 +59,11 @@ type ValidatorBlock struct {
 	// mode. That is deliberate: an unentitled account has nothing to attach, so
 	// absence IS the refusal, and no non-inclusion proof is required.
 	EntitlementEvidence *entitlement.Evidence `json:"entitlement_evidence,omitempty"`
+
+	// IntentCertificate is this validator's BLS signature over the per-intent message and what it needs to be
+	// recomputed (intent_certificate.go, RB5 D3). Absent on every block before rules v10's intent rule, so their
+	// bytes and bundle ids are unchanged.
+	IntentCertificate *IntentCertificateEvidence `json:"intent_certificate,omitempty"`
 }
 
 // GovernanceProof represents the governance verification and authorization

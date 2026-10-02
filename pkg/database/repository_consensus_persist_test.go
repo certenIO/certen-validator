@@ -2,6 +2,12 @@ package database
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -358,6 +364,113 @@ func TestWritersPersistingOneBlockInDifferentOrdersDoNotDeadlock(t *testing.T) {
 			if err != nil {
 				t.Fatalf("round %d: %v", round, err)
 			}
+		}
+	}
+}
+
+// An operation's intent quorum certificate is written with the block that completed it, once: a second writer
+// holding the same certificate changes nothing, and one holding a different certificate for the operation is refused
+// - two quorums over two messages - and the block is not written.
+func TestIntentCertificatesAreWrittenOnceAndAConflictIsRefused(t *testing.T) {
+	repo := consensusRepoForTest(t)
+	ctx := context.Background()
+	bt := time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)
+	op := "0x" + strings.Repeat(fmt.Sprintf("%02x", time.Now().UnixNano()%251), 32)
+	cert := IntentQuorumCertificateRow{OperationID: op, Message: "0x" + strings.Repeat("4c", 32), RegistryVersion: 1,
+		CertenChainID: "certen-testnet", Certificate: json.RawMessage(`{"signed_power":"500","total_power":"700"}`),
+		Registry: json.RawMessage(`{"version":1}`), MessageInputs: json.RawMessage(`{"operation_id":"` + op + `"}`),
+		CertifiedHeight: 4001}
+
+	rec, _ := committedRecordsForTest(4001, bt, "completed")
+	rec.IntentCertificates = []IntentQuorumCertificateRow{cert}
+	if _, err := repo.PersistCommittedBlock(ctx, writerForTest(), rec); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.IntentQuorumCertificate(ctx, op)
+	if err != nil || got == nil || got.Message != cert.Message || got.CertifiedHeight != 4001 || got.RegistryVersion != 1 {
+		t.Fatalf("stored certificate: %+v %v", got, err)
+	}
+
+	again, _ := committedRecordsForTest(4001, bt, "completed")
+	again.IntentCertificates = []IntentQuorumCertificateRow{cert}
+	if _, err := repo.PersistCommittedBlock(ctx, writerForTest(), again); err != nil {
+		t.Fatalf("a second writer with the same certificate: %v", err)
+	}
+
+	other := cert
+	other.Message = "0x" + strings.Repeat("5d", 32)
+	conflict, _ := committedRecordsForTest(4002, bt, "completed")
+	conflict.IntentCertificates = []IntentQuorumCertificateRow{other}
+	if _, err := repo.PersistCommittedBlock(ctx, writerForTest(), conflict); err == nil ||
+		!strings.Contains(err.Error(), "DIFFERENT intent quorum certificate") {
+		t.Fatalf("a conflicting certificate: %v", err)
+	}
+	if n, _ := repo.GetConsensusEntry(ctx, conflict.Entries[0].BatchID); n != nil {
+		t.Fatal("the block carrying a conflicting certificate was written")
+	}
+	if none, err := repo.IntentQuorumCertificate(ctx, "0x"+strings.Repeat("00", 32)); err != nil || none != nil {
+		t.Fatalf("an operation with no certificate: %+v %v", none, err)
+	}
+}
+
+// A database whose schema predates migration 00019 can hold no intent certificate: that is a named state, never a
+// query failure - a verifier reading an older database must not report a sound proof as failed.
+func TestADatabaseBeforeIntentCertificatesSaysSo(t *testing.T) {
+	dsn := os.Getenv("CERTEN_TEST_DB")
+	if dsn == "" {
+		t.Fatal("CERTEN_TEST_DB is required: this test runs against PostgreSQL (a skipped gate is not a green gate)")
+	}
+	admin, err := sql.Open("postgres", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { admin.Close() }) // cleanups run last-registered first: the drop below runs before this
+	name := fmt.Sprintf("certen_test_preqc_%d", time.Now().UnixNano())
+	if _, err := admin.Exec("CREATE DATABASE " + name); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if _, err := admin.Exec("DROP DATABASE IF EXISTS " + name + " WITH (FORCE)"); err != nil {
+			t.Errorf("dropping the test database %s: %v", name, err)
+		}
+	})
+	u, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u.Path = "/" + name
+	empty, err := sql.Open("postgres", u.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { empty.Close() })
+	_, err = NewConsensusRepository(NewClientFromDB(empty)).IntentQuorumCertificate(context.Background(), "0x"+strings.Repeat("01", 32))
+	if !errors.Is(err, ErrIntentCertificatesNotInSchema) {
+		t.Fatalf("a schema without the table: %v", err)
+	}
+}
+
+// Each batch operation id version states exactly what its members commit: v3 their operation, governance commitment
+// and certified intent message; v2 no certified message; v1 neither.
+func TestEachBatchVersionStatesWhatItsMembersCommit(t *testing.T) {
+	op, gov, msg := "0x"+strings.Repeat("01", 32), "0x"+strings.Repeat("02", 32), "0x"+strings.Repeat("03", 32)
+	rec := func(version string, m AnchorQuorumMemberRecord) *AnchorQuorumRecord {
+		return &AnchorQuorumRecord{BatchOperationIDVersion: version, Members: []AnchorQuorumMemberRecord{m}}
+	}
+	for name, c := range map[string]struct {
+		rec *AnchorQuorumRecord
+		ok  bool
+	}{
+		"v3 complete":                    {rec("v3", AnchorQuorumMemberRecord{OperationID: op, GovernanceCommitment: gov, CertifiedIntentMessage: msg}), true},
+		"v3 without the message":         {rec("v3", AnchorQuorumMemberRecord{OperationID: op, GovernanceCommitment: gov}), false},
+		"v3 without governance":          {rec("v3", AnchorQuorumMemberRecord{OperationID: op, CertifiedIntentMessage: msg}), false},
+		"v2 complete":                    {rec("v2", AnchorQuorumMemberRecord{OperationID: op, GovernanceCommitment: gov}), true},
+		"v2 stating a certified message": {rec("v2", AnchorQuorumMemberRecord{OperationID: op, GovernanceCommitment: gov, CertifiedIntentMessage: msg}), false},
+		"v1 stating a certified message": {rec("v1", AnchorQuorumMemberRecord{OperationID: op, CertifiedIntentMessage: msg}), false},
+		"a made-up version":              {rec("v2-checked", AnchorQuorumMemberRecord{OperationID: op, GovernanceCommitment: gov}), false},
+	} {
+		if err := checkBatchGovernance(c.rec); (err == nil) != c.ok {
+			t.Errorf("%s: %v", name, err)
 		}
 	}
 }

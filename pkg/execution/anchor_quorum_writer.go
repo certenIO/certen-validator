@@ -274,16 +274,18 @@ func AnchorQuorumRecordFrom(ev *AnchorQuorumEvidence) *database.AnchorQuorumReco
 			OperationID: hexPrefixed(m.OperationID[:]),
 			// Empty for a member admitted before governance commitments; it has none (RB4-F66).
 			GovernanceCommitment: governanceHex(m),
-			FromChain:            m.Provenance.FromChain,
-			ToChain:              m.Provenance.ToChain,
-			FromAddress:          m.Provenance.FromAddress,
-			ToAddress:            m.Provenance.ToAddress,
-			Amount:               m.Provenance.Amount,
-			TokenSymbol:          m.Provenance.TokenSymbol,
-			UserID:               m.Provenance.UserID,
-			Leaf:                 append([]byte(nil), m.Leaf[:]...),
-			LeafIndex:            m.LeafIndex,
-			Branch:               branch,
+			// Set on a v3 batch's members only (RB5 D3).
+			CertifiedIntentMessage: certifiedMessageHex(m),
+			FromChain:              m.Provenance.FromChain,
+			ToChain:                m.Provenance.ToChain,
+			FromAddress:            m.Provenance.FromAddress,
+			ToAddress:              m.Provenance.ToAddress,
+			Amount:                 m.Provenance.Amount,
+			TokenSymbol:            m.Provenance.TokenSymbol,
+			UserID:                 m.Provenance.UserID,
+			Leaf:                   append([]byte(nil), m.Leaf[:]...),
+			LeafIndex:              m.LeafIndex,
+			Branch:                 branch,
 		})
 	}
 
@@ -353,6 +355,14 @@ func chainName(chainID int64) string {
 	default:
 		return fmt.Sprintf("chain-%d", chainID)
 	}
+}
+
+// certifiedMessageHex is a member's quorum-certified intent message as recorded: 0x-hex on a v3 batch, empty otherwise.
+func certifiedMessageHex(m AnchorQuorumMember) string {
+	if m.CertifiedIntentMessage == ([32]byte{}) {
+		return ""
+	}
+	return hexPrefixed(m.CertifiedIntentMessage[:])
 }
 
 // governanceHex is a member's governance commitment as recorded: 0x-hex, or empty for a member admitted before

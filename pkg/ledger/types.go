@@ -259,3 +259,72 @@ var AnchorTargets = []string{
 	"btc-mainnet",
 	// add more as needed
 }
+
+// BLSRegistryLog is every version of CERTEN's BLS registry this chain has accepted, oldest first (RB5 D3). The
+// registry in force at a height is the newest version accepted below it.
+type BLSRegistryLog struct {
+	Versions []BLSRegistryRecord `json:"versions"`
+}
+
+// BLSRegistryRecord is one accepted registry version: who CERTEN's BLS quorum is, by validator id, and the
+// Accumulate incarnation the quorum attests under.
+type BLSRegistryRecord struct {
+	Version              uint64              `json:"version"`
+	Height               int64               `json:"height"` // the block that accepted it
+	Members              []BLSRegistryMember `json:"members"`
+	ThresholdNumerator   uint64              `json:"threshold_numerator"`
+	ThresholdDenominator uint64              `json:"threshold_denominator"`
+	// AccumulateIncarnation is hex32 (docs/l4/INCARNATION_ANCHOR.md).
+	AccumulateIncarnation string `json:"accumulate_incarnation"`
+	// CertenSetRoot is the anchor's currentValidatorSetRoot for these members (hex32), derived at acceptance.
+	CertenSetRoot string `json:"certen_set_root"`
+	ID            string `json:"id"` // folded into the app hash of Height
+}
+
+// BLSRegistryMember is one validator of the registry.
+type BLSRegistryMember struct {
+	ValidatorID string `json:"validator_id"`
+	EVMAddress  string `json:"evm_address"` // lowercase 0x hex
+	BLSPubKey   string `json:"bls_pub_key"` // lowercase hex, 96 bytes
+	Power       uint64 `json:"power"`
+}
+
+// IntentQuorumLog is, for one operation, every committed intent signature grouped by the message and registry it
+// was signed under, and the quorum certificate of each group that reached the registry's threshold (RB5 D3).
+type IntentQuorumLog struct {
+	OperationID string              `json:"operation_id"`
+	Groups      []IntentQuorumGroup `json:"groups"`
+}
+
+// IntentQuorumGroup is the signatures over one message under one registry version.
+type IntentQuorumGroup struct {
+	Message         string                   `json:"message"` // 0x-hex32
+	RegistryVersion uint64                   `json:"registry_version"`
+	Partials        []IntentPartial          `json:"partials"`
+	Certificate     *IntentQuorumCertificate `json:"certificate,omitempty"`
+}
+
+// IntentPartial is one validator's committed intent signature.
+type IntentPartial struct {
+	ValidatorID string `json:"validator_id"`
+	Signature   string `json:"signature"` // hex G1
+	Height      int64  `json:"height"`    // the block that committed it
+}
+
+// IntentQuorumCertificate is CERTEN's quorum over one intent message: the aggregate of the signers' signatures, the
+// aggregate of their registered keys, and the power that signed, out of the registry's.
+type IntentQuorumCertificate struct {
+	OperationID          string   `json:"operation_id"`
+	Message              string   `json:"message"`
+	RegistryVersion      uint64   `json:"registry_version"`
+	CertenSetRoot        string   `json:"certen_set_root"`
+	Height               int64    `json:"height"`           // the block whose commit completed the quorum
+	Signers              []string `json:"signers"`          // validator ids, in ascending EVM address order
+	SignerAddresses      []string `json:"signer_addresses"` // ascending
+	AggregateSignature   string   `json:"aggregate_signature"`
+	AggregatePublicKey   string   `json:"aggregate_public_key"`
+	SignedPower          string   `json:"signed_power"`
+	TotalPower           string   `json:"total_power"`
+	ThresholdNumerator   uint64   `json:"threshold_numerator"`
+	ThresholdDenominator uint64   `json:"threshold_denominator"`
+}

@@ -154,11 +154,13 @@ type Layer5 struct {
 
 // BatchGovernance is the governance half of a batch's operation id (see Layer5.Governance).
 type BatchGovernance struct {
-	Version              string                           `json:"version"`
-	BatchOperationID     string                           `json:"batchOperationId"`
-	OperationID          string                           `json:"operationId"`
-	GovernanceCommitment string                           `json:"governanceCommitment,omitempty"`
-	Members              []database.BatchMemberGovernance `json:"members"`
+	Version              string `json:"version"`
+	BatchOperationID     string `json:"batchOperationId"`
+	OperationID          string `json:"operationId"`
+	GovernanceCommitment string `json:"governanceCommitment,omitempty"`
+	// CertifiedIntentMessage is this proof's member's quorum-certified intent message, on a v3 batch (RB5 D3).
+	CertifiedIntentMessage string                           `json:"certifiedIntentMessage,omitempty"`
+	Members                []database.BatchMemberGovernance `json:"members"`
 }
 
 // Verify recomputes the batch operation id from the members and requires this proof's member among them. With
@@ -184,16 +186,27 @@ func (g *BatchGovernance) Verify() error {
 		in := BatchLeafInput{ADIURL: fmt.Sprintf("member %d", i)}
 		copy(in.OperationID[:], op)
 		switch g.Version {
-		case BatchOperationIDV2:
+		case BatchOperationIDV3, BatchOperationIDV2:
 			c, err := decodeHex32(strings.TrimPrefix(m.GovernanceCommitment, "0x"),
 				fmt.Sprintf("layer5.governance.members[%d].governanceCommitment", i))
 			if err != nil {
 				return err
 			}
 			copy(in.GovernanceCommitment[:], c)
+			if g.Version == BatchOperationIDV3 {
+				msg, err := decodeHex32(strings.TrimPrefix(m.CertifiedIntentMessage, "0x"),
+					fmt.Sprintf("layer5.governance.members[%d].certifiedIntentMessage", i))
+				if err != nil {
+					return err
+				}
+				copy(in.IntentMessage[:], msg)
+			} else if m.CertifiedIntentMessage != "" {
+				return fmt.Errorf("layer5.governance: member %d of a v2 batch states a certified intent message", i)
+			}
 		case BatchOperationIDV1:
-			if m.GovernanceCommitment != "" {
-				return fmt.Errorf("layer5.governance: member %d of a v1 batch states a governance commitment", i)
+			if m.GovernanceCommitment != "" || m.CertifiedIntentMessage != "" {
+				return fmt.Errorf("layer5.governance: member %d of a v1 batch states a governance commitment or "+
+					"certified intent message", i)
 			}
 			in.LegacyNoGovernance = true
 		default:
@@ -204,6 +217,10 @@ func (g *BatchGovernance) Verify() error {
 				return fmt.Errorf("layer5.governance: this proof's member commits to %s, the batch lists %s",
 					g.GovernanceCommitment, m.GovernanceCommitment)
 			}
+			if !strings.EqualFold(m.CertifiedIntentMessage, g.CertifiedIntentMessage) {
+				return fmt.Errorf("layer5.governance: this proof's member's certified intent message is %s, the batch "+
+					"lists %s", g.CertifiedIntentMessage, m.CertifiedIntentMessage)
+			}
 			found = true
 		}
 		inputs = append(inputs, in)
@@ -211,12 +228,18 @@ func (g *BatchGovernance) Verify() error {
 	if !found {
 		return fmt.Errorf("layer5.governance: this proof's operation %s is not a member of the batch", g.OperationID)
 	}
-	if g.Version == BatchOperationIDV2 && g.GovernanceCommitment == "" {
-		return fmt.Errorf("layer5.governance: a v2 batch member without a governance commitment")
+	if (g.Version == BatchOperationIDV2 || g.Version == BatchOperationIDV3) && g.GovernanceCommitment == "" {
+		return fmt.Errorf("layer5.governance: a %s batch member without a governance commitment", g.Version)
 	}
-	got, _, err := batchOperationIDOf(inputs)
+	if g.Version == BatchOperationIDV3 && g.CertifiedIntentMessage == "" {
+		return fmt.Errorf("layer5.governance: a v3 batch member without its certified intent message")
+	}
+	got, version, err := batchOperationIDOf(inputs)
 	if err != nil {
 		return fmt.Errorf("layer5.governance: %w", err)
+	}
+	if version != g.Version {
+		return fmt.Errorf("layer5.governance: the members form a %s batch operation id, the batch states %s", version, g.Version)
 	}
 	if !bytes.Equal(got[:], want) {
 		return fmt.Errorf("layer5.governance: the members recompute to batch operation id %x, the batch states %s",

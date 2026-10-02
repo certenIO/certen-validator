@@ -60,7 +60,7 @@ func (gv *GoVerifier) VerifyPayloadWithRawJSON(ctx context.Context, txJSON []byt
 	if gv.goVerifyPath == "" {
 		// This used to return a PayloadVerification with
 		// ComputedTxHash == expectedTxHash. That object was booby-trapped: any
-		// later code comparing the two fields - verifyTransactionEffect does
+		// later code comparing the two fields - the retired hash-comparison effect check did
 		// exactly that - compared a value to itself and passed. It was also
 		// the object the g2_layer bypass keyed on, via a string comparison
 		// against the message below.
@@ -404,36 +404,6 @@ func (gv *GoVerifier) extractGenericPayload(msg map[string]interface{}) (map[str
 	}
 
 	return payload, nil
-}
-
-// =============================================================================
-// Effect Verification for G2 Proofs
-// =============================================================================
-
-// VerifyTransactionEffect verifies transaction effects for G2 outcome binding
-func (gv *GoVerifier) VerifyTransactionEffect(expectedEffect string, computedEffect string) *EffectVerification {
-	verified := expectedEffect == computedEffect
-
-	result := &EffectVerification{
-		EffectType:    "hash_comparison", // Could be extended for other effect types
-		Verified:      verified,
-		ExpectedValue: &expectedEffect,
-		ComputedValue: &computedEffect,
-		Details: map[string]interface{}{
-			"effect_match":    verified,
-			"expected_length": len(expectedEffect),
-			"computed_length": len(computedEffect),
-		},
-	}
-
-	if verified {
-		fmt.Printf("[GO_VERIFIER] [OK] Effect verification successful\n")
-	} else {
-		fmt.Printf("[GO_VERIFIER] [FAIL] Effect mismatch: expected=%s, computed=%s\n",
-			SafeTruncate(expectedEffect, 16), SafeTruncate(computedEffect, 16))
-	}
-
-	return result
 }
 
 // BuildOutcomeLeaf constructs G2 outcome leaf with all verification results

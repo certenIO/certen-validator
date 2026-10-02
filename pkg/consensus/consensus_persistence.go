@@ -105,6 +105,9 @@ type consensusPersister struct {
 	store    consensusRecordStore
 	writerID string
 	logger   *log.Logger
+	// certificates derives, from committed state, the intent quorum certificates a block's commit completed
+	// (intent_quorum.go). Required: a block written without them would never be written again with them.
+	certificates func(height int64, blocks []ValidatorBlock) ([]database.IntentQuorumCertificateRow, error)
 
 	queue  chan persistJob
 	cancel context.CancelFunc
@@ -133,20 +136,23 @@ type consensusPersister struct {
 	callTimeout time.Duration
 }
 
-func newConsensusPersister(store consensusRecordStore, writerID string, logger *log.Logger) *consensusPersister {
+// certificates is required: every height is written with the intent certificates its commit completed.
+func newConsensusPersister(store consensusRecordStore, writerID string, logger *log.Logger,
+	certificates func(height int64, blocks []ValidatorBlock) ([]database.IntentQuorumCertificateRow, error)) *consensusPersister {
 	if logger == nil {
 		logger = log.New(log.Writer(), "[Persist] ", log.LstdFlags)
 	}
 	return &consensusPersister{
-		store:       store,
-		writerID:    writerID,
-		logger:      logger,
-		queue:       make(chan persistJob, persistQueueCapacity),
-		done:        make(chan struct{}),
-		retryBase:   persistRetryBase,
-		retryMax:    persistRetryMax,
-		idleCheck:   persistIdleCheck,
-		callTimeout: persistCallTimeout,
+		certificates: certificates,
+		store:        store,
+		writerID:     writerID,
+		logger:       logger,
+		queue:        make(chan persistJob, persistQueueCapacity),
+		done:         make(chan struct{}),
+		retryBase:    persistRetryBase,
+		retryMax:     persistRetryMax,
+		idleCheck:    persistIdleCheck,
+		callTimeout:  persistCallTimeout,
 	}
 }
 
@@ -397,6 +403,16 @@ func (p *consensusPersister) write(ctx context.Context, b *committedBlock) bool 
 		b.quorum = q
 	}
 	rec := consensusRecordsFor(b, p.logger)
+	if p.certificates == nil {
+		p.logger.Printf("❌ [PERSIST] height %d: no intent certificate source is configured; not writing it", b.height)
+		return false
+	}
+	certs, err := p.certificates(b.height, b.blocks)
+	if err != nil {
+		p.logger.Printf("❌ [PERSIST] height %d: intent certificates: %v; not writing it", b.height, err)
+		return false
+	}
+	rec.IntentCertificates = certs
 	for attempt := 1; ; attempt++ {
 		cctx, cancel := p.call(ctx)
 		rejected, err := p.store.PersistCommittedBlock(cctx, p.writerID, rec)

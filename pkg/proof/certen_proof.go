@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govvote"
+	chained_proof "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/working-proof_do_not_edit"
 	"time"
 
 	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/api"
@@ -147,6 +148,11 @@ type AccumulateAnchorData struct {
 type LiteClientProofData struct {
 	// Complete proof chain from lite client
 	CompleteProof *proof.CompleteProof `json:"complete_proof"`
+
+	// ChainedProof is the verified L1-L4 proof CompleteProof was projected from (ChainedProofToCompleteProof). Kept
+	// so a ValidatorBlock can carry it and every node re-verify it in FinalizeBlock (RB5 D3); the projection alone
+	// drops what the verifier needs.
+	ChainedProof *chained_proof.ChainedProof `json:"chained_proof,omitempty"`
 
 	// Layer-specific components
 	AccountHash []byte `json:"account_hash"`

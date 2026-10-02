@@ -65,6 +65,29 @@ type MemberGovernance struct {
 	// AccumulateSetRoot is the root of the Accumulate validator set the proposer's proof of the member was verified
 	// against (RB5 design D2), for DIAGNOSIS only. omitempty: an older proposer sends none.
 	AccumulateSetRoot string `json:"accumulate_set_root,omitempty"`
+	// CertifiedIntentMessage is the quorum-certified intent message the proposer's v3 batch commits for the member
+	// (RB5 D3), for DIAGNOSIS only. omitempty: a v2 member, or an older proposer, sends none.
+	CertifiedIntentMessage string `json:"certified_intent_message,omitempty"`
+}
+
+// intentCertificateDisagreement names the first member the proposer and this validator read different certified
+// intent messages for, or "" when they agree on every member both hold. mine maps operation id to message.
+func intentCertificateDisagreement(theirs []MemberGovernance, mine map[[32]byte][32]byte) string {
+	for _, m := range theirs {
+		op, err := parseHex32(m.OperationID)
+		if err != nil || m.CertifiedIntentMessage == "" {
+			continue
+		}
+		msg, err := parseHex32(m.CertifiedIntentMessage)
+		if err != nil {
+			continue
+		}
+		if own, held := mine[op]; held && own != msg {
+			return fmt.Sprintf("operation %x: the proposer's batch commits certified intent message %x, this "+
+				"validator's record of CERTEN's certificate holds %x", op[:8], msg[:8], own[:8])
+		}
+	}
+	return ""
 }
 
 // accumulateSetDisagreement names the first member whose Accumulate validator set the proposer and this validator
@@ -148,6 +171,9 @@ const (
 	// against a different Accumulate validator set than the proposer's: the set the V8.2 anchor would commit is in
 	// dispute. Never signed (RB5 design D2).
 	CodeAccumulateSetMismatch AttestationRefusalCode = "accumulate_set_mismatch"
+	// CodeIntentCertificateMismatch: the proposer and this validator read different quorum-certified intent
+	// messages for a member (RB5 D3) - two records of CERTEN's certificates disagree.
+	CodeIntentCertificateMismatch AttestationRefusalCode = "intent_certificate_mismatch"
 
 	// CodeConfigMismatch — the request cannot be served because the two nodes are configured
 	// differently. Retrying cannot help; an operator has to fix it.
@@ -281,6 +307,7 @@ func (s *BatchStack) HandleBatchAttestationRequest(
 	derived := make([]string, 0, len(chunks))
 	mine := map[[32]byte][32]byte{}
 	mineSets := map[[32]byte][32]byte{}
+	mineMsgs := map[[32]byte][32]byte{}
 	for _, chunk := range chunks {
 		inputs := make([]BatchLeafInput, 0, len(chunk))
 		for _, m := range chunk {
@@ -291,6 +318,9 @@ func (s *BatchStack) HandleBatchAttestationRequest(
 			inputs = append(inputs, in)
 			mine[in.OperationID] = in.GovernanceCommitment
 			mineSets[in.OperationID] = in.AccumulateSetRoot
+			if in.IntentMessage != ([32]byte{}) {
+				mineMsgs[in.OperationID] = in.IntentMessage
+			}
 		}
 		t, err := BuildBatchTree(req.ChainID, inputs, req.CutoffHeight, s.Incarnation)
 		if err != nil {
@@ -306,6 +336,11 @@ func (s *BatchStack) HandleBatchAttestationRequest(
 		if why := governanceDisagreement(req.Members, mine); why != "" {
 			return refuseWith(CodeGovernanceMismatch, "governance disagreement in the batch proposed as %s: %s - "+
 				"refusing to attest who authorised a member when this validator's proof says otherwise",
+				shortHex(req.BundleID), why)
+		}
+		if why := intentCertificateDisagreement(req.Members, mineMsgs); why != "" {
+			return refuseWith(CodeIntentCertificateMismatch, "intent-certificate disagreement in the batch proposed as "+
+				"%s: %s - refusing to attest a certified intent this validator's record does not hold",
 				shortHex(req.BundleID), why)
 		}
 		if why := accumulateSetDisagreement(req.Members, mineSets); why != "" {

@@ -256,7 +256,7 @@ func TestCommittedHistoryIsIndexedAndCheckedAgainstV9(t *testing.T) {
 			codes:  map[int64][]uint32{1: {0}, 2: {}}},
 	}
 	for name, hist := range cases {
-		if err := historyApp(t, 2).IndexCommittedHistory(hist); !errors.Is(err, ErrCommittedHistoryUnderV9) {
+		if err := historyApp(t, 2).IndexCommittedHistory(hist); !errors.Is(err, ErrCommittedHistoryUnderCurrentRules) {
 			t.Fatalf("%s: %v", name, err)
 		}
 	}

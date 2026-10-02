@@ -181,11 +181,15 @@ func NewBatchAttestationRequest(
 	}
 	members := make([]MemberGovernance, 0, len(tree.Inputs))
 	for _, in := range tree.Inputs {
-		members = append(members, MemberGovernance{
+		mg := MemberGovernance{
 			OperationID:          "0x" + hex.EncodeToString(in.OperationID[:]),
 			GovernanceCommitment: "0x" + hex.EncodeToString(in.GovernanceCommitment[:]),
 			AccumulateSetRoot:    "0x" + hex.EncodeToString(in.AccumulateSetRoot[:]),
-		})
+		}
+		if in.IntentMessage != ([32]byte{}) {
+			mg.CertifiedIntentMessage = "0x" + hex.EncodeToString(in.IntentMessage[:])
+		}
+		members = append(members, mg)
 	}
 	return &BatchAttestationRequest{
 		ChainID:      tree.ChainID,

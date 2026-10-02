@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	lcproof "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof"
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govvote"
 	"github.com/certen/independant-validator/pkg/execution/contracts"
 	"github.com/certen/independant-validator/pkg/proof"
 )
@@ -75,8 +76,10 @@ func GovRootV2(in GovRootV2Inputs) ([32]byte, contracts.AccumulateGovRootInputs,
 			slots.G2CanonicalHash = h
 		}
 	}
-	slots.KeypageURLHash = contracts.HashURLString(in.KeyPageURL)
-	slots.KeybookURLHash = contracts.HashURLString(in.KeyBookURL)
+	// In canonical spelling: Accumulate URLs are case-insensitive, and two validators naming one page two ways must
+	// commit one govRoot.
+	slots.KeypageURLHash = contracts.HashURLString(govvote.CanonicalAccSpelling(in.KeyPageURL))
+	slots.KeybookURLHash = contracts.HashURLString(govvote.CanonicalAccSpelling(in.KeyBookURL))
 	slots.OperationID = in.OperationID
 	root, err := contracts.ComputeAccumulateGovRootV2(slots)
 	return root, slots, err

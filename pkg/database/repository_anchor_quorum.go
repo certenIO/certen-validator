@@ -32,9 +32,12 @@ type AnchorQuorumMemberRecord struct {
 	// GovernanceCommitment is the member's commitment to who decided it, 0x-hex (RB4-F66). Empty for a member
 	// admitted before commitments existed.
 	GovernanceCommitment string
-	Leaf                 []byte
-	LeafIndex            int
-	Branch               []MerklePathNode
+	// CertifiedIntentMessage is the member's quorum-certified intent message (RB5 D3), 0x-hex; set exactly on the
+	// members of a v3 batch.
+	CertifiedIntentMessage string
+	Leaf                   []byte
+	LeafIndex              int
+	Branch                 []MerklePathNode
 
 	// The settled leg. Recorded because the canonical row replaces a shadow row that carried it, and a
 	// replacement that drops columns the console reads is a regression dressed as a cleanup.
@@ -481,6 +484,13 @@ func bytesEqual(a, b []byte) bool {
 // record with members states which it is. A record rebuilt from the chain carries no members and cannot tell.
 func checkBatchGovernance(rec *AnchorQuorumRecord) error {
 	switch rec.BatchOperationIDVersion {
+	case "v3":
+		for i, m := range rec.Members {
+			if m.OperationID == "" || m.GovernanceCommitment == "" || m.CertifiedIntentMessage == "" {
+				return fmt.Errorf("member %d (%s) of a v3 batch does not state its operation id, governance commitment "+
+					"and certified intent message", i, m.OperationID)
+			}
+		}
 	case "v2":
 		for i, m := range rec.Members {
 			if m.GovernanceCommitment == "" {
@@ -489,12 +499,16 @@ func checkBatchGovernance(rec *AnchorQuorumRecord) error {
 			if m.OperationID == "" {
 				return fmt.Errorf("member %d of a v2 batch states no operation id", i)
 			}
+			if m.CertifiedIntentMessage != "" {
+				return fmt.Errorf("member %d (%s) of a v2 batch states a certified intent message its batch does not "+
+					"commit to", i, m.OperationID)
+			}
 		}
 	case "v1":
 		for i, m := range rec.Members {
-			if m.GovernanceCommitment != "" {
-				return fmt.Errorf("member %d (%s) of a v1 batch states a governance commitment its batch does not "+
-					"commit to", i, m.OperationID)
+			if m.GovernanceCommitment != "" || m.CertifiedIntentMessage != "" {
+				return fmt.Errorf("member %d (%s) of a v1 batch states a governance commitment or certified intent "+
+					"message its batch does not commit to", i, m.OperationID)
 			}
 		}
 	case "":
@@ -520,16 +534,17 @@ func insertAnchorMembers(ctx context.Context, tx *Tx, batchID uuid.UUID, rec *An
 			INSERT INTO batch_transactions (
 				batch_id, accumulate_tx_hash, account_url, tree_index, merkle_path, transaction_hash,
 				intent_id, adi_url, from_chain, to_chain, from_address, to_address, amount, token_symbol,
-				user_id, created_at, operation_id, governance_commitment
+				user_id, created_at, operation_id, governance_commitment, certified_intent_message
 			) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8,
 			          COALESCE($9,''), COALESCE($10,''), COALESCE($11,''), COALESCE($12,''),
-			          COALESCE($13,'0'), COALESCE($14,''), $15, NOW(), $16, $17)`,
+			          COALESCE($13,'0'), COALESCE($14,''), $15, NOW(), $16, $17, $18)`,
 			batchID, m.AccumTxHash, m.ADIURL, m.LeafIndex, string(pathJSON), m.Leaf,
 			nullIfEmpty(m.IntentID), nullIfEmpty(m.ADIURL),
 			nullIfEmpty(m.FromChain), nullIfEmpty(m.ToChain), nullIfEmpty(m.FromAddress),
 			nullIfEmpty(m.ToAddress), nullIfEmpty(m.Amount), nullIfEmpty(m.TokenSymbol),
 			nullIfEmpty(m.UserID), nullIfEmpty(strings.ToLower(m.OperationID)),
 			nullIfEmpty(strings.ToLower(m.GovernanceCommitment)),
+			nullIfEmpty(strings.ToLower(m.CertifiedIntentMessage)),
 		); mErr != nil {
 			return fmt.Errorf("record anchor quorum: member %d of anchor %s: %w", i, rec.BundleID, mErr)
 		}

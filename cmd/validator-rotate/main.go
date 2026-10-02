@@ -49,6 +49,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 
 	cmted25519 "github.com/cometbft/cometbft/crypto/ed25519"
@@ -91,6 +92,16 @@ func main() {
 		err = tick(os.Args[2:], http.DefaultClient)
 	case "history-check":
 		err = historyCheck(os.Args[2:], http.DefaultClient)
+	case "bls-possession":
+		err = blsPossession(os.Args[2:])
+	case "bls-registry-propose":
+		err = blsRegistryPropose(os.Args[2:])
+	case "bls-registry-sign":
+		err = blsRegistrySign(os.Args[2:])
+	case "bls-registry-preflight":
+		err = blsRegistryPreflight(os.Args[2:], http.DefaultClient)
+	case "bls-registry-submit":
+		err = blsRegistrySubmit(os.Args[2:], http.DefaultClient)
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -116,6 +127,12 @@ func usage() {
   status     the chain's rotation log
   tick       make the chain produce blocks (empty blocks are disabled)
   history-check  prove no committed transaction is of a kind rules v8 adds
+
+  bls-possession          on a validator: its BLS registry entry and the key's proof of possession
+  bls-registry-propose    assemble the BLS registry (RB5 D3), verify every possession, first admin signature
+  bls-registry-sign       add another admin signature
+  bls-registry-preflight  every node runs rules v10, and every anchor commits the registry's CERTEN set root
+  bls-registry-submit     commit the registry: from the next block every ValidatorBlock carries an intent certificate
 
 Run any subcommand with --help for its flags. The runbook is RUNBOOK_F95_CONSENSUS_KEY_ROTATION.md.
 `)
@@ -352,6 +369,11 @@ type rpcDoer interface {
 }
 
 func rpcCall(c rpcDoer, base, method string, params map[string]any, out any) error {
+	return rpcCallParams(c, base, method, params, out)
+}
+
+// rpcCallParams is rpcCall with params of any JSON shape: CometBFT takes an object, Ethereum JSON-RPC a list.
+func rpcCallParams(c rpcDoer, base, method string, params any, out any) error {
 	body, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
 	if err != nil {
 		return err
@@ -589,13 +611,25 @@ func submit(args []string, c rpcDoer) error {
 	if *path == "" || *rpc == "" {
 		return errors.New("--tx and --rpc are required")
 	}
-	raw, err := os.ReadFile(*path)
+	h, err := broadcastCommit(c, *rpc, *path)
 	if err != nil {
 		return err
 	}
+	fmt.Printf("ACCEPTED at height %d. From height %d the slot belongs to the new key: switch that validator to it now "+
+		"(runbook step 5); until it signs, no further rotation is accepted.\n", h, h+2)
+	return nil
+}
+
+// broadcastCommit commits the transaction in the file at path through one validator's RPC and returns its height.
+// Any non-zero code is a refusal - reported as one, never as success.
+func broadcastCommit(c rpcDoer, rpc, path string) (int64, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
 	var compact bytes.Buffer
 	if err := json.Compact(&compact, raw); err != nil {
-		return fmt.Errorf("the transaction is not JSON: %w", err)
+		return 0, fmt.Errorf("the transaction is not JSON: %w", err)
 	}
 	var res struct {
 		CheckTx struct {
@@ -608,21 +642,20 @@ func submit(args []string, c rpcDoer) error {
 		} `json:"tx_result"`
 		Height string `json:"height"`
 	}
-	if err := rpcCall(c, *rpc, "broadcast_tx_commit", map[string]any{"tx": base64.StdEncoding.EncodeToString(compact.Bytes())}, &res); err != nil {
-		return err
+	if err := rpcCall(c, rpc, "broadcast_tx_commit", map[string]any{"tx": base64.StdEncoding.EncodeToString(compact.Bytes())}, &res); err != nil {
+		return 0, err
 	}
-	// Any non-zero code is a refusal - reported as one, never as success.
 	if res.CheckTx.Code != 0 {
-		return fmt.Errorf("REFUSED by the mempool (code %d): %s", res.CheckTx.Code, res.CheckTx.Log)
+		return 0, fmt.Errorf("REFUSED by the mempool (code %d): %s", res.CheckTx.Code, res.CheckTx.Log)
 	}
 	if res.TxResult.Code != 0 {
-		return fmt.Errorf("REFUSED by the chain at height %s (code %d): %s", res.Height, res.TxResult.Code, res.TxResult.Log)
+		return 0, fmt.Errorf("REFUSED by the chain at height %s (code %d): %s", res.Height, res.TxResult.Code, res.TxResult.Log)
 	}
-	var h int64
-	fmt.Sscanf(res.Height, "%d", &h)
-	fmt.Printf("ACCEPTED at height %d. From height %d the slot belongs to the new key: switch that validator to it now "+
-		"(runbook step 5); until it signs, no further rotation is accepted.\n", h, h+2)
-	return nil
+	h, err := strconv.ParseInt(res.Height, 10, 64)
+	if err != nil || h <= 0 {
+		return 0, fmt.Errorf("the chain accepted the transaction at an unreadable height %q", res.Height)
+	}
+	return h, nil
 }
 
 func status(args []string, c rpcDoer) error {

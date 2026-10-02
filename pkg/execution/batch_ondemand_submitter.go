@@ -183,7 +183,8 @@ func (s *OnDemandSubmitter) Run(ctx context.Context) {
 			s.pass(ctx)
 		case <-ticker.C:
 			s.pass(ctx)
-			if n := s.cfg.Stack.Mempool.PruneOnDemandOlderThan(s.cfg.TTL, time.Now()); n > 0 {
+			leads := func(m *PendingBatchIntent) bool { return s.isLeaderFor(m, s.failoverElapsed(ctx, m)) }
+			if n := s.cfg.Stack.settleOnDemandAtTTL(s.cfg.TTL, time.Now(), leads, s.cfg.OnDropped, s.cfg.Logf); n > 0 {
 				logf("[OD] pruned %d member(s) past the %s TTL", n, s.cfg.TTL)
 			}
 			for key, at := range s.commitTimeTried {
