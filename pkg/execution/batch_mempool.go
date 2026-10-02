@@ -446,13 +446,20 @@ func (m *BatchMempool) SetIntentCertificates(c IntentCertificateHeights) {
 // ErrIntentNotYetCertified: the member's intent has no quorum certificate yet; it waits for one.
 var ErrIntentNotYetCertified = errors.New("the member's intent is not yet quorum-certified")
 
-// placementHeight is the height that places a member in a period, and whether it is known yet. A member committed
-// before a BLS registry was in force is placed by its commit height, as it always was. A member with a certified
-// intent is placed by its certificate's height - a chain fact identical on every validator - and is unplaced until
-// the certificate exists: its v3 operation id commits a message only once CERTEN's quorum certified it.
+// placementHeight is the height that places a member in a period, and whether it is known yet. Every member is placed
+// by its Accumulate commit height - the scale periods, cutoffs and leader rotation are measured in. A member with a
+// certified intent is unplaced until its certificate exists: its v3 operation id commits a message only once CERTEN's
+// quorum certified it, and a period with such a member waits for it (BatchMempool.AwaitingCertificate).
+//
+// RB5-F44: a certified member used to be placed by its certificate's height - a CERTEN chain height (2,793 for intent
+// bb72e258 on 2026-10-02) on a scale unrelated to the Accumulate heights periods are cut from (10,244,973). Its
+// period was listed pending by commit height and selected nothing; no leader ever formed it, and it waited for ever.
 func (m *BatchMempool) placementHeight(p *PendingBatchIntent) (uint64, bool) {
+	if p.CommitHeight == 0 {
+		return 0, false
+	}
 	if p.IntentMessage == ([32]byte{}) {
-		return p.CommitHeight, p.CommitHeight != 0
+		return p.CommitHeight, true
 	}
 	if m.certs == nil {
 		return 0, false
@@ -461,7 +468,7 @@ func (m *BatchMempool) placementHeight(p *PendingBatchIntent) (uint64, bool) {
 	if !ok {
 		return 0, false
 	}
-	h, msg := c.Height, c.Message
+	h, msg := p.CommitHeight, c.Message
 	if p.CertifiedMessage == ([32]byte{}) {
 		p.CertifiedMessage = msg
 		p.CertifiedKeyPage = c.KeyPageURL
@@ -483,6 +490,31 @@ func (m *BatchMempool) certifiableLocked(p *PendingBatchIntent) error {
 			"certificates to place it by", consensus.ErrBatchUnavailable, p.IntentID)
 	}
 	return nil
+}
+
+// AwaitingCertificate is the pending members of one period whose intent is awaiting its quorum certificate, in
+// IntentID order. A period is not formed while it has any: formed without one, the member's certificate could arrive
+// after its period settled, and the member would be in no batch.
+func (m *BatchMempool) AwaitingCertificate(chainID int64, periodStart, periodBlocks uint64) []*PendingBatchIntent {
+	if periodBlocks == 0 {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []*PendingBatchIntent
+	for _, p := range m.pool[chainID] {
+		if p == nil || p.IntentMessage == ([32]byte{}) || !p.pending() || p.CommitHeight == 0 {
+			continue
+		}
+		if p.CommitHeight < periodStart || p.CommitHeight >= periodStart+periodBlocks {
+			continue
+		}
+		if _, ok := m.placementHeight(p); !ok {
+			out = append(out, p)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].IntentID < out[j].IntentID })
+	return out
 }
 
 // UncertifiedPending is this chain's pending period members whose intent is awaiting its quorum certificate, in

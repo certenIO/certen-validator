@@ -227,6 +227,17 @@ func (o *BatchOrchestrator) FlushChain(
 	// The period's WHOLE member set - settled and pending alike - cut into trees by the one
 	// eligibility rule every validator applies (periodChunks). A peer asked to co-sign cuts the same
 	// trees from its own copy; the leader never works from a subset it alone holds (RB3-F54).
+	// A period with a member still awaiting its quorum certificate is not formed: that member would be left out of the
+	// period's trees and could be in no batch once its certificate arrived (RB5-F44). It is formed once the
+	// certificate exists; a member never certified before its deadline is refused by name (settleNeverCertified).
+	if waiting := o.mempool.AwaitingCertificate(chainID, cutoffHeight, periodBlocks); len(waiting) > 0 {
+		ids := make([]string, 0, len(waiting))
+		for _, p := range waiting {
+			ids = append(ids, p.IntentID)
+		}
+		return nil, fmt.Errorf("%w: period %d on chain %d is not formed while %d member(s) await their quorum certificate: %s",
+			ErrIntentNotYetCertified, cutoffHeight, chainID, len(waiting), strings.Join(ids, ", "))
+	}
 	periodMembers := o.mempool.PeriodMembers(chainID, cutoffHeight, periodBlocks)
 	if !anyPending(periodMembers) {
 		return nil, nil

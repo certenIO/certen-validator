@@ -1,6 +1,7 @@
 package execution
 
 import (
+	"context"
 	"encoding/hex"
 	"errors"
 	"math/big"
@@ -83,14 +84,19 @@ func certifiedMember(id string, op byte, own [32]byte) *PendingBatchIntent {
 		Account:     common.HexToAddress("0x32b4687bE3c02d52e2d94Dc1cFAF03a0E5af0C8B"),
 		OperationID: fill32(op),
 		Legs:        []LegExecution{{LegID: "l0", ChainID: 11155111, Target: tgt(1), Value: big.NewInt(1)}},
-		// A commit height that would place it in period 0 - it must be placed by its certificate instead.
-		CommitHeight: 5,
+		// The Accumulate height intent bb72e258 committed at (2026-10-02): periods are cut from this scale.
+		CommitHeight: 10244973,
 	}
 }
 
-// A member with a certified intent waits for its certificate, is then placed by the certificate's height - the same
-// on every validator - and commits the CERTIFIED message, even when this validator's own block signed another.
-func TestACertifiedMemberIsPlacedByItsCertificate(t *testing.T) {
+// A member with a certified intent waits for its certificate, is then placed in the period of its Accumulate commit
+// height - the scale every period, cutoff and leader rotation is measured in - and commits the CERTIFIED message, even
+// when this validator's own block signed another.
+//
+// RB5-F44: it was placed by its certificate's height, a CERTEN chain height (2,793 live) on another scale entirely.
+// PendingPeriods listed its commit period, which selected nothing, and no leader ever formed it. This test used
+// heights 5 and 250, on one scale, and could not see it.
+func TestACertifiedMemberIsPlacedByItsCommitHeightOnceCertified(t *testing.T) {
 	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 10})
 	own := fill32(0xaa)
 	if err := m.Add(certifiedMember("x", 9, own)); !errors.Is(err, consensus.ErrBatchUnavailable) {
@@ -102,8 +108,12 @@ func TestACertifiedMemberIsPlacedByItsCertificate(t *testing.T) {
 	if err := m.Add(p); err != nil {
 		t.Fatal(err)
 	}
-	if got := m.PeriodMembers(11155111, 0, 100); len(got) != 0 {
-		t.Fatal("an uncertified member was placed by its commit height")
+	const period, blocks = 10244900, 100
+	if got := m.PeriodMembers(11155111, period, blocks); len(got) != 0 {
+		t.Fatal("an uncertified member was placed")
+	}
+	if got := m.AwaitingCertificate(11155111, period, blocks); len(got) != 1 || got[0].IntentID != "x" {
+		t.Fatalf("the period does not name its member awaiting a certificate: %v", got)
 	}
 	if got := m.UncertifiedPending(11155111); len(got) != 1 {
 		t.Fatalf("waiting members: %d", len(got))
@@ -113,13 +123,16 @@ func TestACertifiedMemberIsPlacedByItsCertificate(t *testing.T) {
 	}
 
 	certified := fill32(0xbb) // the quorum certified another message than this validator signed
-	certs[fill32(9)] = fakeCert{height: 250, msg: certified, page: "acc://x.acme/book/1", book: "acc://x.acme/book"}
-	if got := m.PeriodMembers(11155111, 0, 100); len(got) != 0 {
-		t.Fatal("placed in the period of its commit height")
+	certs[fill32(9)] = fakeCert{height: 2793, msg: certified, page: "acc://x.acme/book/1", book: "acc://x.acme/book"}
+	if pending := m.PendingPeriods(11155111, blocks, period+blocks); len(pending) != 1 || pending[0] != period {
+		t.Fatalf("pending periods %v", pending)
 	}
-	got := m.PeriodMembers(11155111, 200, 100)
+	got := m.PeriodMembers(11155111, period, blocks)
 	if len(got) != 1 {
-		t.Fatal("not placed in the period of its certificate's height")
+		t.Fatal("the period PendingPeriods lists does not select its certified member")
+	}
+	if got := m.PeriodMembers(11155111, 2700, blocks); len(got) != 0 {
+		t.Fatal("placed by its certificate's CERTEN height")
 	}
 	in, err := got[0].LeafInput()
 	if err != nil {
@@ -128,8 +141,36 @@ func TestACertifiedMemberIsPlacedByItsCertificate(t *testing.T) {
 	if in.IntentMessage != certified {
 		t.Fatalf("the leaf commits %x, the certified message is %x", in.IntentMessage[:4], certified[:4])
 	}
-	if len(m.UncertifiedPending(11155111)) != 0 || m.RequireCertified(p) != nil {
+	if len(m.UncertifiedPending(11155111)) != 0 || len(m.AwaitingCertificate(11155111, period, blocks)) != 0 ||
+		m.RequireCertified(p) != nil {
 		t.Fatal("a certified member still counted as waiting")
+	}
+}
+
+// A period with a member awaiting its certificate is not formed, and says why: formed without it, the member could be
+// in no batch once its certificate arrived. Once certified, the period forms with it.
+func TestAPeriodWaitsForItsMembersCertificates(t *testing.T) {
+	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 10})
+	certs := fakeCerts{}
+	m.SetIntentCertificates(certs)
+	a, b := certifiedMember("a", 1, fill32(0xa1)), certifiedMember("b", 2, fill32(0xb2))
+	for _, p := range []*PendingBatchIntent{a, b} {
+		if err := m.Add(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	certs[fill32(1)] = fakeCert{height: 2793, msg: fill32(0xa1), page: "acc://a.acme/book/1", book: "acc://a.acme/book"}
+	o := &BatchOrchestrator{mempool: m, ecm: &EthereumContractManager{}, logf: func(string, ...interface{}) {}}
+	_, err := o.FlushChain(context.Background(), 11155111, 10244900, 100)
+	if !errors.Is(err, ErrIntentNotYetCertified) || !strings.Contains(err.Error(), "b") {
+		t.Fatalf("a period with a member awaiting its certificate: %v", err)
+	}
+	if got := m.PeriodMembers(11155111, 10244900, 100); len(got) != 1 || got[0].IntentID != "a" {
+		t.Fatalf("the certified member: %v", got)
+	}
+	certs[fill32(2)] = fakeCert{height: 2794, msg: fill32(0xb2), page: "acc://b.acme/book/1", book: "acc://b.acme/book"}
+	if len(m.AwaitingCertificate(11155111, 10244900, 100)) != 0 || len(m.PeriodMembers(11155111, 10244900, 100)) != 2 {
+		t.Fatal("once both are certified the period holds both")
 	}
 }
 
@@ -171,7 +212,7 @@ func TestTheQueueKeepsTheIntentMessage(t *testing.T) {
 	if err := again.SetStore(st2, nil); err != nil {
 		t.Fatal(err)
 	}
-	got := again.PeriodMembers(11155111, 200, 100)
+	got := again.PeriodMembers(11155111, 10244900, 100) // its commit-height period (RB5-F44)
 	if len(got) != 1 || got[0].IntentMessage != fill32(0xaa) {
 		t.Fatalf("restored: %+v", got)
 	}
