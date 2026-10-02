@@ -2,8 +2,12 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -406,5 +410,38 @@ func TestIntentCertificatesAreWrittenOnceAndAConflictIsRefused(t *testing.T) {
 	}
 	if none, err := repo.IntentQuorumCertificate(ctx, "0x"+strings.Repeat("00", 32)); err != nil || none != nil {
 		t.Fatalf("an operation with no certificate: %+v %v", none, err)
+	}
+}
+
+// A database whose schema predates migration 00019 can hold no intent certificate: that is a named state, never a
+// query failure - a verifier reading an older database must not report a sound proof as failed.
+func TestADatabaseBeforeIntentCertificatesSaysSo(t *testing.T) {
+	dsn := os.Getenv("CERTEN_TEST_DB")
+	if dsn == "" {
+		t.Fatal("CERTEN_TEST_DB is required: this test runs against PostgreSQL (a skipped gate is not a green gate)")
+	}
+	admin, err := sql.Open("postgres", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	name := fmt.Sprintf("certen_test_preqc_%d", time.Now().UnixNano())
+	if _, err := admin.Exec("CREATE DATABASE " + name); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = admin.Exec("DROP DATABASE IF EXISTS " + name + " WITH (FORCE)") })
+	u, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u.Path = "/" + name
+	empty, err := sql.Open("postgres", u.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer empty.Close()
+	_, err = NewConsensusRepository(NewClientFromDB(empty)).IntentQuorumCertificate(context.Background(), "0x"+strings.Repeat("01", 32))
+	if !errors.Is(err, ErrIntentCertificatesNotInSchema) {
+		t.Fatalf("a schema without the table: %v", err)
 	}
 }

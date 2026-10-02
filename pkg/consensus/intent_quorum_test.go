@@ -132,7 +132,7 @@ func TestTheCompletingBlockCarriesItsCertificateToTheDatabase(t *testing.T) {
 		!strings.EqualFold(r.Message, blocks[4].IntentCertificate.Message) {
 		t.Fatalf("row: %+v", r)
 	}
-	var in intentMessageInputs
+	var in IntentMessageInputs
 	if err := json.Unmarshal(r.MessageInputs, &in); err != nil || !strings.EqualFold(in.GovRootV2, blocks[4].IntentCertificate.GovRootV2) ||
 		in.KeyPageURL != intentKeyPage || in.CertenSetRoot != reg.CertenSetRoot {
 		t.Fatalf("message inputs: %+v %v", in, err)

@@ -642,8 +642,19 @@ func DecodeHexString(s string) ([]byte, error) {
 	return hex.DecodeString(s)
 }
 
+// ErrIntentCertificatesNotInSchema: the database's schema predates migration 00019, so it can hold no intent
+// quorum certificate. A named state, not a failure: nothing about a proof is wrong because of it.
+var ErrIntentCertificatesNotInSchema = errors.New("the database schema predates intent_quorum_certificates (migration 00019)")
+
 // IntentQuorumCertificate returns an operation's intent quorum certificate, nil when none is recorded.
 func (r *ConsensusRepository) IntentQuorumCertificate(ctx context.Context, operationID string) (*IntentQuorumCertificateRow, error) {
+	var exists bool
+	if err := r.client.QueryRowContext(ctx, `SELECT to_regclass('public.intent_quorum_certificates') IS NOT NULL`).Scan(&exists); err != nil {
+		return nil, fmt.Errorf("intent quorum certificates: %w", err)
+	}
+	if !exists {
+		return nil, ErrIntentCertificatesNotInSchema
+	}
 	var c IntentQuorumCertificateRow
 	var cert, reg, in []byte
 	err := r.client.QueryRowContext(ctx, `

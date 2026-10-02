@@ -248,9 +248,9 @@ func VerifyIntentQuorumCertificate(c *ledger.IntentQuorumCertificate, reg *ledge
 	return nil
 }
 
-// intentMessageInputs are the inputs a certified message was computed from, as stored beside its certificate so a
+// IntentMessageInputs are the inputs a certified message was computed from, as stored beside its certificate so a
 // verifier recomputes each from the stored proof.
-type intentMessageInputs struct {
+type IntentMessageInputs struct {
 	CertenChainID        string `json:"certen_chain_id"`
 	OperationID          string `json:"operation_id"`
 	GovRootV2            string `json:"gov_root_v2"`
@@ -309,7 +309,7 @@ func (app *ValidatorApp) intentCertificateRows(height int64, blocks []ValidatorB
 			if err != nil {
 				return nil, fmt.Errorf("operation %s: the inputs of its certified message: %w", op, err)
 			}
-			inputs := intentMessageInputs{CertenChainID: in.CertenChainID, OperationID: op,
+			inputs := IntentMessageInputs{CertenChainID: in.CertenChainID, OperationID: op,
 				GovRootV2: "0x" + hex.EncodeToString(govRoot[:]), AccumulateSetRoot: "0x" + hex.EncodeToString(accRoot[:]),
 				Incarnation: "0x" + hex.EncodeToString(in.Incarnation[:]), GovernanceCommitment: "0x" + hex.EncodeToString(in.GovernanceCommitment[:]),
 				CertenSetRoot: "0x" + hex.EncodeToString(in.CertenSetRoot[:]), KeyPageURL: ev.KeyPageURL, KeyBookURL: ev.KeyBookURL}
