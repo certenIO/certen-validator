@@ -169,11 +169,11 @@ func (o *BatchOrchestrator) OnDemandMemberNeedsThisValidator(ctx context.Context
 	if !SendersVerified() {
 		return false, errSendersUnverified // not "not needed": unknown until this validator's address is proven
 	}
-	in, err := member.LeafInput()
-	if err != nil {
+	if err := o.mempool.RequireCertified(member); err != nil {
 		return false, err
 	}
-	if err := o.mempool.RequireCertified(member); err != nil {
+	in, err := member.LeafInput()
+	if err != nil {
 		return false, err
 	}
 	tree, err := BuildBatchTree(member.ChainID, []BatchLeafInput{in}, member.CommitHeight, o.incarnation)
@@ -420,38 +420,38 @@ func sortedRoster(addrs []common.Address) []common.Address {
 }
 
 // settlementProofOf decodes the account proof a settlement transaction carries.
-func settlementProofOf(input []byte) (contracts.AccountProofV7, bool) {
-	if len(input) < 4 || certenAccountV7ABIErr != nil {
-		return contracts.AccountProofV7{}, false
+func settlementProofOf(input []byte) (contracts.AccountProofV7_2, bool) {
+	if len(input) < 4 || settlementAccountABIErr != nil {
+		return contracts.AccountProofV7_2{}, false
 	}
-	m, err := certenAccountV7ABI.MethodById(input[:4])
+	m, err := settlementAccountABI.MethodById(input[:4])
 	if err != nil || (m.Name != "executeGovernanceProofDirect" && m.Name != "batchExecuteGovernanceProofDirect") {
-		return contracts.AccountProofV7{}, false
+		return contracts.AccountProofV7_2{}, false
 	}
 	args, err := m.Inputs.Unpack(input[4:])
 	if err != nil || len(args) == 0 {
-		return contracts.AccountProofV7{}, false
+		return contracts.AccountProofV7_2{}, false
 	}
-	var p contracts.AccountProofV7
+	var p contracts.AccountProofV7_2
 	if err := convertABIValue(args[len(args)-1], &p); err != nil {
-		return contracts.AccountProofV7{}, false
+		return contracts.AccountProofV7_2{}, false
 	}
 	return p, true
 }
 
-func convertABIValue(v interface{}, dst *contracts.AccountProofV7) (err error) {
+func convertABIValue(v interface{}, dst *contracts.AccountProofV7_2) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("proof tuple does not convert: %v", r)
 		}
 	}()
-	*dst = *abi.ConvertType(v, new(contracts.AccountProofV7)).(*contracts.AccountProofV7)
+	*dst = *abi.ConvertType(v, new(contracts.AccountProofV7_2)).(*contracts.AccountProofV7_2)
 	return nil
 }
 
 // timingRevert reports whether a settlement mined at blockTime reverted because of its own timing
 // fields rather than the intent: mined after its expiresAt, or before its timestamp.
-func timingRevert(p contracts.AccountProofV7, blockTime uint64) (bool, string) {
+func timingRevert(p contracts.AccountProofV7_2, blockTime uint64) (bool, string) {
 	bt := new(big.Int).SetUint64(blockTime)
 	if p.ExpiresAt != nil && bt.Cmp(p.ExpiresAt) > 0 {
 		return true, fmt.Sprintf("mined at %d, after its expiresAt %s", blockTime, p.ExpiresAt)

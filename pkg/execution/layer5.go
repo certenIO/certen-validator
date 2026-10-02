@@ -7,7 +7,8 @@
 // The runbook puts Layer5 "in the lite client, beside Layer4". It cannot be there, and it
 // cannot be in pkg/proof either. Both would put it out of reach of the ONE thing it must
 // agree with bit-for-bit: pkg/execution/batch_tree.go, which is the cross-language contract
-// with CertenAnchorV8_1._verifyMerkleProof and CertenAccountV7.computeLeaf.
+// with the anchor's _verifyMerkleProof and the account's computeLeaf (CertenAccountV7_2's v2 leaf
+// under a V8.2 anchor, CertenAccountV7's v1 leaf under a V8.1 one).
 //
 // An earlier version of this file lived in pkg/proof and verified with pkg/merkle. That was
 // WRONG, and wrong in a way a single-leaf test could not catch:

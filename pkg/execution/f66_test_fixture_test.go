@@ -67,6 +67,10 @@ func withAccSet(inputs []BatchLeafInput) []BatchLeafInput {
 		if out[i].AccumulateSetRoot == ([32]byte{}) {
 			out[i].AccumulateSetRoot = testAccSet
 		}
+		// A V8.2 leaf binds the certified authority page (RB5-F29): page 1 of the member's own book.
+		if out[i].AuthorityPage == 0 {
+			out[i].AuthorityPage = 1
+		}
 	}
 	return out
 }

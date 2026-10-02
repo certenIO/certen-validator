@@ -4,10 +4,13 @@ package execution
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govvote"
 )
 
 // =============================================================================
@@ -38,11 +41,33 @@ type MemberPredecessor struct {
 	ChainID     int64
 	OperationID [32]byte
 	Account     common.Address
-	Leaf        [32]byte
-	Deadline    time.Time
+	// ADIURL and ExecutionCommitment are the predecessor's leaf inputs. Its v2 leaf also binds the key page the
+	// intent's quorum certificate certifies, which does not exist yet when the successor is queued, so the leaf is
+	// formed when it is read (leafFor, RB5-F29).
+	ADIURL              string
+	ExecutionCommitment [32]byte
+	Deadline            time.Time
 	// ContinueOnFailure: the intent's rollback policy is continue_on_failure, so a predecessor that did
 	// not settle does not stop this member.
 	ContinueOnFailure bool
+}
+
+// leafFor is the predecessor's v2 leaf. Predecessor and successor are members of one intent - one operation, one ADI,
+// one quorum certificate - so the key page the successor's certificate certifies is the predecessor's (RB5-F29).
+func (a *MemberPredecessor) leafFor(succ *PendingBatchIntent) ([32]byte, error) {
+	if a.OperationID != succ.OperationID {
+		return [32]byte{}, fmt.Errorf("the predecessor is operation 0x%x, the member 0x%x: not one intent",
+			a.OperationID[:8], succ.OperationID[:8])
+	}
+	if govvote.CanonicalAccSpelling(a.ADIURL) != govvote.CanonicalAccSpelling(succ.ADIURL) {
+		return [32]byte{}, fmt.Errorf("the predecessor belongs to %s, the member to %s: not one intent", a.ADIURL, succ.ADIURL)
+	}
+	page, err := succ.AuthorityPage()
+	if err != nil {
+		return [32]byte{}, err
+	}
+	in := BatchLeafInput{ADIURL: a.ADIURL, ExecutionCommitment: a.ExecutionCommitment, OperationID: a.OperationID}
+	return ComputeBatchLeafV2(a.ChainID, in, page), nil
 }
 
 // sequenceState is where a successor stands against its predecessor.
@@ -69,7 +94,14 @@ func sequenceReadiness(ctx context.Context, rd NonSettlementChain, m *PendingBat
 	if err != nil {
 		return sequenceWaiting, "", readErr(fmt.Errorf("reading the finalized block of chain %d: %w", a.ChainID, err))
 	}
-	consumed, err := rd.LeafConsumedAt(ctx, a.ChainID, a.Account, a.Leaf, head.Number.Uint64())
+	leaf, err := a.leafFor(m)
+	if errors.Is(err, ErrIntentNotYetCertified) {
+		return sequenceWaiting, "", nil
+	}
+	if err != nil {
+		return sequenceStopped, fmt.Sprintf("its predecessor's leaf on chain %d cannot be formed: %v", a.ChainID, err), nil
+	}
+	consumed, err := rd.LeafConsumedAt(ctx, a.ChainID, a.Account, leaf, head.Number.Uint64())
 	if err != nil {
 		return sequenceWaiting, "", readErr(fmt.Errorf("reading the predecessor's leaf at block %d of chain %d: %w",
 			head.Number.Uint64(), a.ChainID, err))

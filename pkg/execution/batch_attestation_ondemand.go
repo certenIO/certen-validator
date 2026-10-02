@@ -114,6 +114,12 @@ func (s *BatchStack) HandleOnDemandAttestationRequest(
 			shortHex(req.OperationID), req.ChainID)
 	}
 
+	// Its v3 operation id commits a certified intent message only once CERTEN's quorum certified it (RB5 D3). Read FIRST:
+	// its predecessor's leaf, the screen and its leaf all use what the certificate fixes (RB5-F31).
+	if err := s.Mempool.RequireCertified(member); err != nil {
+		return refuseWith(CodeNotReady, "member %s: %v", member.IntentID, err)
+	}
+
 	// A successor in a sequential intent is co-signed only once THIS validator reads its predecessor's
 	// outcome on chain (batch_sequence.go) - so no quorum anchors it out of order.
 	if member.After != nil {
@@ -150,10 +156,6 @@ func (s *BatchStack) HandleOnDemandAttestationRequest(
 	in, err := member.LeafInput()
 	if err != nil {
 		return refuseWith(CodeRefused, "member %s: %v", member.IntentID, err)
-	}
-	// Its v3 operation id commits a certified intent message only once CERTEN's quorum certified it (RB5 D3).
-	if err := s.Mempool.RequireCertified(member); err != nil {
-		return refuseWith(CodeNotReady, "member %s: %v", member.IntentID, err)
 	}
 
 	// The height comes from OUR member, never from the request. That is what leaves a proposer

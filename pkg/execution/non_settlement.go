@@ -94,12 +94,12 @@ func memberFacts(p *PendingBatchIntent) (NonSettlementFacts, error) {
 		return NonSettlementFacts{}, fmt.Errorf("member %s on chain %d has no deadline; its non-settlement can never be final",
 			p.IntentID, p.ChainID)
 	}
-	in, err := p.LeafInput()
+	leaf, err := p.Leaf()
 	if err != nil {
 		return NonSettlementFacts{}, err
 	}
 	return NonSettlementFacts{IntentID: p.IntentID, ChainID: p.ChainID, OperationID: p.OperationID,
-		Account: p.Account, Leaf: ComputeBatchLeaf(p.ChainID, in), Deadline: d}, nil
+		Account: p.Account, Leaf: leaf, Deadline: d}, nil
 }
 
 // NonSettlementChain reads what a non-settlement rests on.
@@ -180,7 +180,7 @@ func leafConsumedAt(ctx context.Context, c leafChain, account common.Address, le
 	if number > latest {
 		return false, fmt.Errorf("block %d is past the chain head %d", number, latest)
 	}
-	acct, err := contracts.NewCertenAccountV7(account, c)
+	acct, err := contracts.NewCertenAccountV7_2(account, c)
 	if err != nil {
 		return false, err
 	}

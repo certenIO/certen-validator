@@ -298,10 +298,14 @@ type IntentQuorumLog struct {
 
 // IntentQuorumGroup is the signatures over one message under one registry version.
 type IntentQuorumGroup struct {
-	Message         string                   `json:"message"` // 0x-hex32
-	RegistryVersion uint64                   `json:"registry_version"`
-	Partials        []IntentPartial          `json:"partials"`
-	Certificate     *IntentQuorumCertificate `json:"certificate,omitempty"`
+	Message         string `json:"message"` // 0x-hex32
+	RegistryVersion uint64 `json:"registry_version"`
+	// KeyPageURL is the ADI key page the message certifies (canonical spelling): the G1 snapshot page whose hash the
+	// message commits through govRoot v2. Recorded so a validator can read back the page a certified intent's batch
+	// leaf binds (RB5-F29); every block signing the message names this page, since the message commits its hash.
+	KeyPageURL  string                   `json:"key_page_url"`
+	Partials    []IntentPartial          `json:"partials"`
+	Certificate *IntentQuorumCertificate `json:"certificate,omitempty"`
 }
 
 // IntentPartial is one validator's committed intent signature.

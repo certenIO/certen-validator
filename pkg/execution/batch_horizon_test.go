@@ -41,7 +41,7 @@ func horizonMember(id string, height uint64) *PendingBatchIntent {
 // At the retention horizon no member leaves without an outcome: another validator's record lets this node's copy go,
 // no outcome anywhere is a refusal by name, and an unreadable outcome keeps the member for a later pass.
 func TestNoMemberLeavesAtTheRetentionHorizonWithoutAnOutcome(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 10})
+	m := newTestMempool(BatchMempoolConfig{MaxBatchSize: 10})
 	s := &BatchStack{Mempool: m, MemberOutcomes: outcomeBook{"elsewhere": "settled", "unreadable": "unreadable"}}
 	for _, id := range []string{"elsewhere", "nowhere", "unreadable", "young"} {
 		h := uint64(5)
@@ -72,7 +72,7 @@ func TestNoMemberLeavesAtTheRetentionHorizonWithoutAnOutcome(t *testing.T) {
 		t.Fatalf("left in the pool: %v", left)
 	}
 	// Without a drop handler nothing unrecorded is removed.
-	m2 := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 10})
+	m2 := newTestMempool(BatchMempoolConfig{MaxBatchSize: 10})
 	s2 := &BatchStack{Mempool: m2, MemberOutcomes: outcomeBook{}}
 	_ = m2.Add(horizonMember("nowhere", 5))
 	if n := m2.PruneOlderThanExcept(100, s2.settleAtRetentionHorizon(4, 100, func(*PendingBatchIntent) bool { return true }, nil, t.Logf)); n != 0 {
@@ -82,7 +82,7 @@ func TestNoMemberLeavesAtTheRetentionHorizonWithoutAnOutcome(t *testing.T) {
 
 // The on-demand pool: the same three outcomes when its TTL prune would remove a member.
 func TestNoOnDemandMemberLeavesAtItsTTLWithoutAnOutcome(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 10})
+	m := newTestMempool(BatchMempoolConfig{MaxBatchSize: 10})
 	s := &BatchStack{Mempool: m, MemberOutcomes: outcomeBook{"elsewhere": "settled", "unreadable": "unreadable"}}
 	old := time.Now().Add(-72 * time.Hour)
 	for i, id := range []string{"elsewhere", "nowhere", "unreadable"} {

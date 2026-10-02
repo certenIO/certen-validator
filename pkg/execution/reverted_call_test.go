@@ -4,10 +4,13 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 
+	"github.com/certen/independant-validator/pkg/execution/contracts"
 	"github.com/certen/independant-validator/pkg/proof"
 )
 
@@ -52,10 +55,41 @@ func TestRevertedSettlementBindsToTheSignedIntent(t *testing.T) {
 	}
 	call := legs[0].Call
 
+	// The live settlement went to a CertenAccountV7. A V8.2 validator settles CertenAccountV7_2 only, and refuses that
+	// generation's calldata by name (RB5-F29) ...
 	input, _ := hex.DecodeString(liveRevertedSettlementInput)
-	exec, err := decodeAccountExecution(input)
+	if _, err := decodeAccountExecution(input); err == nil || !strings.Contains(err.Error(), "not a CertenAccountV7_2 call") {
+		t.Fatalf("a CertenAccountV7 settlement was decoded as a V8.2 one: %v", err)
+	}
+	// ... so the binding is checked on the same live call and proof, sent as the V7_2 settlement it would be today: the
+	// proof's declared level replaced by the key page the leaf binds.
+	v7, err := abi.JSON(strings.NewReader(contracts.CertenAccountV7ABI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := v7.MethodById(input[:4])
+	if err != nil {
+		t.Fatal(err)
+	}
+	args, err := m.Inputs.Unpack(input[4:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	live := abi.ConvertType(args[3], new(contracts.AccountProofV7)).(*contracts.AccountProofV7)
+	proofV7_2 := contracts.AccountProofV7_2{AdiURL: live.AdiURL, AnchorId: live.AnchorId, MerkleProof: live.MerkleProof,
+		OperationID: live.OperationID, KeyBookProof: live.KeyBookProof, RoleProof: live.RoleProof,
+		ThresholdProof: live.ThresholdProof, Timestamp: live.Timestamp, ExpiresAt: live.ExpiresAt,
+		ValidatorSignatures: live.ValidatorSignatures, Nonce: live.Nonce, AuthorityPage: 1}
+	today, err := settlementAccountABI.Pack(m.Name, args[0], args[1], args[2], proofV7_2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec, err := decodeAccountExecution(today)
 	if err != nil {
 		t.Fatalf("decode: %v", err)
+	}
+	if exec.AuthorityPage != 1 {
+		t.Fatalf("decoded authority page %d", exec.AuthorityPage)
 	}
 	if err := matchCommittedCalls(exec.Calls, []CommittedCall{call}); err != nil {
 		t.Fatalf("the live settlement is the committed call: %v", err)

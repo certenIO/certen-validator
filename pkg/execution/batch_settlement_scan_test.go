@@ -186,10 +186,14 @@ func newScanFixture(t *testing.T) *scanFixture {
 func (f *scanFixture) settle(t *testing.T, n uint64, nonce uint64, status uint64, expiresAt int64) common.Hash {
 	t.Helper()
 	leg := f.member.Legs[0]
-	proof := contracts.AccountProofV7{AdiURL: f.member.ADIURL, AnchorId: f.tree.BundleID, MerkleProof: [][32]byte{},
+	page, err := f.member.AuthorityPage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof := contracts.AccountProofV7_2{AdiURL: f.member.ADIURL, AnchorId: f.tree.BundleID, MerkleProof: [][32]byte{},
 		OperationID: f.member.OperationID, Timestamp: big.NewInt(int64(f.chain.times[n]) - 10),
-		ExpiresAt: big.NewInt(expiresAt), Nonce: big.NewInt(0), RequiredLevel: requiredLevelForLegs(f.member.Legs)}
-	data, err := certenAccountV7ABI.Pack("executeGovernanceProofDirect", leg.Target, leg.Value, leg.Data, proof)
+		ExpiresAt: big.NewInt(expiresAt), Nonce: big.NewInt(0), AuthorityPage: page}
+	data, err := settlementAccountABI.Pack("executeGovernanceProofDirect", leg.Target, leg.Value, leg.Data, proof)
 	if err != nil {
 		t.Fatal(err)
 	}

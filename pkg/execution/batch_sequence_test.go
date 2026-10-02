@@ -31,9 +31,9 @@ func successor(continueOnFailure bool) *PendingBatchIntent {
 	p := odMember(2, odChain, 100)
 	p.CommitTime = time.Unix(1_800_000_000, 0).UTC()
 	p.SequencePosition = 1
-	p.After = &MemberPredecessor{ChainID: seqPredChain, OperationID: [32]byte{2}, Account: p.Account,
-		Leaf: [32]byte{0xaa}, Deadline: seqPredDeadline, ContinueOnFailure: continueOnFailure}
-	return p
+	p.After = &MemberPredecessor{ChainID: seqPredChain, OperationID: p.OperationID, Account: p.Account,
+		ADIURL: p.ADIURL, ExecutionCommitment: [32]byte{0xaa}, Deadline: seqPredDeadline, ContinueOnFailure: continueOnFailure}
+	return certifiedForTest(p)
 }
 
 // predChain is the predecessor's chain with its finalized block at time t, the leaf consumed or not.
@@ -151,7 +151,7 @@ func TestEnqueueAfterBindsThePredecessor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &BatchStack{Incarnation: testIncarnation, Resolver: r, Mempool: NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64}),
+	s := &BatchStack{Incarnation: testIncarnation, Resolver: r, Mempool: newTestMempool(BatchMempoolConfig{MaxBatchSize: 64}),
 		Orchestrators:  map[int64]*BatchOrchestrator{odChain: {incarnation: testIncarnation, screen: acceptEveryAccount}, seqPredChain: {incarnation: testIncarnation, screen: acceptEveryAccount}},
 		MemberOutcomes: recordedOutcomes{}}
 	commit := time.Unix(1_800_000_000, 0).UTC()
@@ -176,14 +176,34 @@ func TestEnqueueAfterBindsThePredecessor(t *testing.T) {
 	}
 	got := s.Mempool.GetOnDemand(odChain, opid(7))
 	pred, _ := s.Mempool.FindMember(seqPredChain, opid(7))
-	facts, err := memberFacts(pred)
+	predExec, err := pred.ExecutionCommitment()
 	if err != nil {
 		t.Fatal(err)
 	}
+	predDeadline, _ := pred.Deadline()
 	if got == nil || got.After == nil || got.SequencePosition != 1 || !got.After.ContinueOnFailure ||
-		got.After.ChainID != seqPredChain || got.After.Leaf != facts.Leaf || got.After.Account != facts.Account ||
-		!got.After.Deadline.Equal(facts.Deadline) || got.After.OperationID != opid(7) {
-		t.Fatalf("successor %+v after %+v; want the predecessor's own facts %+v", got, got.After, facts)
+		got.After.ChainID != seqPredChain || got.After.ADIURL != pred.ADIURL || got.After.ExecutionCommitment != predExec ||
+		got.After.Account != pred.Account || !got.After.Deadline.Equal(predDeadline) || got.After.OperationID != opid(7) {
+		t.Fatalf("successor %+v after %+v; want the predecessor's own leaf inputs", got, got.After)
+	}
+	// Queued before the intent's certificate exists, the predecessor's leaf waits for it (RB5-F29) ...
+	if _, err := got.After.leafFor(got); err == nil {
+		t.Fatal("the predecessor's leaf was formed before the intent was certified")
+	}
+	// ... and, once certified, is exactly the predecessor's own v2 leaf: one intent, one certificate, one page.
+	certifiedForTest(pred)
+	certifiedForTest(got)
+	want, err := pred.Leaf()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if leaf, err := got.After.leafFor(got); err != nil || leaf != want {
+		t.Fatalf("the predecessor's leaf from the successor's record is %x (%v), want its own %x", leaf, err, want)
+	}
+	other := *got
+	other.ADIURL = "acc://someone-else.acme"
+	if _, err := got.After.leafFor(&other); err == nil {
+		t.Fatal("a predecessor of another ADI was read as this intent's")
 	}
 }
 
@@ -202,7 +222,7 @@ func TestSuccessorHorizonAndRetention(t *testing.T) {
 		t.Fatalf("second member's deadline %s, want commit + %s", d, 2*maxGasDeferral)
 	}
 
-	m := NewBatchMempool(BatchMempoolConfig{})
+	m := newTestMempool(BatchMempoolConfig{})
 	for _, p := range []*PendingBatchIntent{first, second} {
 		if err := m.AddOnDemand(p); err != nil {
 			t.Fatal(err)
@@ -229,13 +249,13 @@ func TestSuccessorPredecessorIsPersisted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := NewBatchMempool(BatchMempoolConfig{})
+	m := newTestMempool(BatchMempoolConfig{})
 	m.SetStore(store, func(string, ...interface{}) {})
 	p := successor(true)
 	if err := m.AddOnDemand(p); err != nil {
 		t.Fatal(err)
 	}
-	restored := NewBatchMempool(BatchMempoolConfig{})
+	restored := newTestMempool(BatchMempoolConfig{})
 	if n, err := store.Load(restored); err != nil || n != 1 {
 		t.Fatalf("load: %d, %v", n, err)
 	}
@@ -248,14 +268,14 @@ func TestSuccessorPredecessorIsPersisted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	damaged := strings.Replace(string(blob), common.Bytes2Hex(p.After.Leaf[:]), "00", 1)
+	damaged := strings.Replace(string(blob), common.Bytes2Hex(p.After.ExecutionCommitment[:]), "00", 1)
 	if damaged == string(blob) {
-		t.Fatal("test premise: the leaf is in the file")
+		t.Fatal("test premise: the predecessor's execution commitment is in the file")
 	}
 	if err := os.WriteFile(path, []byte(damaged), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	again := NewBatchMempool(BatchMempoolConfig{})
+	again := newTestMempool(BatchMempoolConfig{})
 	if n, _ := store.Load(again); n != 0 || again.GetOnDemand(odChain, p.OperationID) != nil {
 		t.Fatalf("restored %d member(s) with a damaged predecessor", n)
 	}

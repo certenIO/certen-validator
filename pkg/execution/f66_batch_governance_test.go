@@ -135,9 +135,9 @@ func TestF66_AdmissionRequiresTheSnapshotsCommitment(t *testing.T) {
 // A period with legacy members cuts them into their own chunks, the same on every validator.
 func TestF66_APeriodChunksLegacyMembersApart(t *testing.T) {
 	o := &BatchOrchestrator{incarnation: testIncarnation, screen: func(context.Context, *PendingBatchIntent) error { return nil }}
-	legacy := &PendingBatchIntent{AccumulateSetRoot: testAccSet, IntentID: "old", ChainID: 1, OperationID: opid(1), LegacyNoGovernance: true}
-	fresh := &PendingBatchIntent{AccumulateSetRoot: testAccSet, IntentID: "new", ChainID: 1, OperationID: opid(2), GovernanceCommitment: testGov}
-	none := &PendingBatchIntent{AccumulateSetRoot: testAccSet, IntentID: "none", ChainID: 1, OperationID: opid(3)}
+	legacy := certifiedForTest(&PendingBatchIntent{AccumulateSetRoot: testAccSet, IntentID: "old", ChainID: 1, OperationID: opid(1), LegacyNoGovernance: true})
+	fresh := certifiedForTest(&PendingBatchIntent{AccumulateSetRoot: testAccSet, IntentID: "new", ChainID: 1, OperationID: opid(2), GovernanceCommitment: testGov})
+	none := certifiedForTest(&PendingBatchIntent{AccumulateSetRoot: testAccSet, IntentID: "none", ChainID: 1, OperationID: opid(3)})
 	chunks, excluded, err := o.periodChunks(context.Background(), []*PendingBatchIntent{fresh, legacy, none}, 10)
 	if err != nil {
 		t.Fatal(err)
@@ -158,7 +158,7 @@ func TestF66_TheQueueKeepsEachMembersCommitment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64})
+	m := newTestMempool(BatchMempoolConfig{MaxBatchSize: 64})
 	if err := m.SetStore(st, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func TestF66_TheQueueKeepsEachMembersCommitment(t *testing.T) {
 
 	write(func(m map[string]interface{}) { delete(m, "governance_commitment") })
 	st, _ = NewBatchMempoolStore(path, jsonCodec{}, nil)
-	m = NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64})
+	m = newTestMempool(BatchMempoolConfig{MaxBatchSize: 64})
 	if err := m.SetStore(st, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -205,13 +205,13 @@ func TestF66_TheQueueKeepsEachMembersCommitment(t *testing.T) {
 func TestF66_APeerRefusesAGovernanceItDidNotDecide(t *testing.T) {
 	add := func(s *BatchStack, gov [32]byte) {
 		t.Helper()
-		if err := s.Mempool.Add(&PendingBatchIntent{AccumulateSetRoot: testAccSet, GovernanceCommitment: gov,
+		if err := s.Mempool.Add(certifiedForTest(&PendingBatchIntent{AccumulateSetRoot: testAccSet, GovernanceCommitment: gov,
 			IntentID: "alpha", ADIURL: "acc://alpha.acme", ChainID: 11155111,
 			Account:      common.HexToAddress("0x32b4687bE3c02d52e2d94Dc1cFAF03a0E5af0C8B"),
 			OperationID:  opid(5),
 			Legs:         []LegExecution{{LegID: "l0", ChainID: 11155111, Target: tgt(0xAA), Value: big.NewInt(1000)}},
 			CommitHeight: 100,
-		}); err != nil {
+		})); err != nil {
 			t.Fatal(err)
 		}
 	}

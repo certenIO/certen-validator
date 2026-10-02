@@ -21,7 +21,7 @@ func memberWithDeadlines(commit time.Time, deadlines ...int64) *PendingBatchInte
 	for i, d := range deadlines {
 		p.Legs = append(p.Legs, LegExecution{LegID: string(rune('a' + i)), ChainID: odChain, Deadline: d})
 	}
-	return p
+	return certifiedForTest(p)
 }
 
 func TestMemberDeadline_IsTheEarliestOfItsLegsAndTheHorizon(t *testing.T) {
@@ -69,7 +69,7 @@ func TestSettlementExpiry_CarriesTheMemberDeadline(t *testing.T) {
 func TestMemberDeadline_IsPersisted(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mempool.json")
 	st, _ := NewBatchMempoolStore(path, jsonCodec{}, nil)
-	m := NewBatchMempool(BatchMempoolConfig{})
+	m := newTestMempool(BatchMempoolConfig{})
 	m.SetStore(st, nil)
 	p := odMember(1, odChain, 100)
 	p.Legs[0].Deadline = 1_800_000_600
@@ -78,7 +78,7 @@ func TestMemberDeadline_IsPersisted(t *testing.T) {
 	}
 
 	st2, _ := NewBatchMempoolStore(path, jsonCodec{}, nil)
-	after := NewBatchMempool(BatchMempoolConfig{})
+	after := newTestMempool(BatchMempoolConfig{})
 	after.SetStore(st2, nil)
 	got := after.PeriodMembers(odChain, 100, 100)
 	if len(got) != 1 || got[0].Legs[0].Deadline != 1_800_000_600 {

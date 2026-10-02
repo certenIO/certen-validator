@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govvote"
 	"github.com/certen/independant-validator/pkg/crypto/bls"
 	"github.com/certen/independant-validator/pkg/crypto/bls_zkp"
 	"github.com/certen/independant-validator/pkg/database"
@@ -71,7 +72,14 @@ func (app *ValidatorApp) recordIntentSignatures(height int64, vbs []ValidatorBlo
 			app.logger.Fatalf("❌ [INTENT-QC] the intent quorum of %s could not be read: %v", op, err)
 		}
 		msg := strings.ToLower(ev.Message)
-		g := groupFor(ql, msg, reg.Version)
+		page := govvote.CanonicalAccSpelling(ev.KeyPageURL)
+		g := groupFor(ql, msg, reg.Version, page)
+		if g.KeyPageURL != page {
+			// FinalizeBlock accepted the block only if its message recomputes from its evidence, and the message commits
+			// the page's hash: two pages under one message is a broken invariant.
+			app.logger.Fatalf("❌ [INTENT-QC] operation %s: message %s certifies key page %s, and block %s names %s",
+				op, msg, g.KeyPageURL, vb.BundleID, page)
+		}
 		if hasPartial(g, vb.ValidatorID) {
 			continue // replay of a block already recorded, or a second block from the same validator (refused by v9's rule)
 		}
@@ -98,13 +106,13 @@ func (app *ValidatorApp) recordIntentSignatures(height int64, vbs []ValidatorBlo
 	}
 }
 
-func groupFor(ql *ledger.IntentQuorumLog, msg string, version uint64) *ledger.IntentQuorumGroup {
+func groupFor(ql *ledger.IntentQuorumLog, msg string, version uint64, keyPage string) *ledger.IntentQuorumGroup {
 	for i := range ql.Groups {
 		if ql.Groups[i].Message == msg && ql.Groups[i].RegistryVersion == version {
 			return &ql.Groups[i]
 		}
 	}
-	ql.Groups = append(ql.Groups, ledger.IntentQuorumGroup{Message: msg, RegistryVersion: version})
+	ql.Groups = append(ql.Groups, ledger.IntentQuorumGroup{Message: msg, RegistryVersion: version, KeyPageURL: keyPage})
 	return &ql.Groups[len(ql.Groups)-1]
 }
 
@@ -333,38 +341,50 @@ func (app *ValidatorApp) intentCertificateRows(height int64, blocks []ValidatorB
 	return rows, nil
 }
 
-// IntentCertifiedHeight is, for an operation, the message CERTEN's quorum certified and the CERTEN height whose commit
-// completed the certificate, and whether there is one - the committed record batch members with a certified intent
-// are placed by. One operation has at most one certificate (an honest validator signs one block per operation, so two
-// quorums over different messages cannot form). An unreadable ledger stops the node: answering "not certified" for it
-// would place members differently from every other node.
-func (app *ValidatorApp) IntentCertifiedHeight(operationID [32]byte) (uint64, [32]byte, bool) {
+// CertifiedIntent is CERTEN's quorum certificate over one operation's intent, as batch members read it: the height
+// whose commit completed it, the message certified, and the key page that message certifies.
+type CertifiedIntent struct {
+	Height     uint64
+	Message    [32]byte
+	KeyPageURL string // canonical spelling; its hash is committed by Message through govRoot v2
+}
+
+// IntentCertified is, for an operation, CERTEN's quorum certificate over its intent, and whether there is one - the
+// committed record batch members with a certified intent are placed by, and whose key page their v2 leaf binds. One
+// operation has at most one certificate (an honest validator signs one block per operation, so two quorums over
+// different messages cannot form). An unreadable ledger stops the node: answering "not certified" for it would place
+// members differently from every other node.
+func (app *ValidatorApp) IntentCertified(operationID [32]byte) (CertifiedIntent, bool) {
 	app.mu.RLock()
 	defer app.mu.RUnlock()
 	if app.ledgerStore == nil {
-		return 0, [32]byte{}, false
+		return CertifiedIntent{}, false
 	}
 	ql, err := app.ledgerStore.LoadIntentQuorum("0x" + hex.EncodeToString(operationID[:]))
 	if err != nil {
 		app.logger.Fatalf("❌ [INTENT-QC] the intent quorum of 0x%x could not be read: %v", operationID, err)
 	}
-	var found *ledger.IntentQuorumCertificate
-	for _, g := range ql.Groups {
+	var found *ledger.IntentQuorumGroup
+	for i := range ql.Groups {
+		g := &ql.Groups[i]
 		if g.Certificate == nil || g.Certificate.Height <= 0 {
 			continue
 		}
 		if found != nil {
 			app.logger.Fatalf("❌ [INTENT-QC] operation 0x%x has two quorum certificates (%s, %s): two quorums signed "+
-				"different messages", operationID, found.Message, g.Certificate.Message)
+				"different messages", operationID, found.Certificate.Message, g.Certificate.Message)
 		}
-		found = g.Certificate
+		found = g
 	}
 	if found == nil {
-		return 0, [32]byte{}, false
+		return CertifiedIntent{}, false
 	}
-	msg, err := hex32(found.Message)
+	msg, err := hex32(found.Certificate.Message)
 	if err != nil {
 		app.logger.Fatalf("❌ [INTENT-QC] operation 0x%x: its certificate's message: %v", operationID, err)
 	}
-	return uint64(found.Height), msg, true
+	if found.KeyPageURL == "" {
+		app.logger.Fatalf("❌ [INTENT-QC] operation 0x%x: its certificate records no key page", operationID)
+	}
+	return CertifiedIntent{Height: uint64(found.Certificate.Height), Message: msg, KeyPageURL: found.KeyPageURL}, true
 }

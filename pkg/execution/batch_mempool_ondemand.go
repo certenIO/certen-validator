@@ -17,7 +17,7 @@ import (
 // An on-demand batch holds exactly one intent, so its entire on-chain identity is a pure
 // function of that intent:
 //
-//	leaf   = ComputeBatchLeaf(chainID, {ADIURL, ExecutionCommitment, OperationID})
+//	leaf   = ComputeBatchLeafV2(chainID, {ADIURL, ExecutionCommitment, OperationID}, certified authority page)
 //	root   = leaf                       // N=1: MerkleRoot returns the leaf unchanged
 //	opID   = DeriveBatchOperationID([OperationID])
 //	height = the member's own CommitHeight

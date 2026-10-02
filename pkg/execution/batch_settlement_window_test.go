@@ -197,7 +197,7 @@ func mustLeaf(t *testing.T, m *PendingBatchIntent) BatchLeafInput {
 }
 
 func TestTimingRevert(t *testing.T) {
-	p := contracts.AccountProofV7{Timestamp: big.NewInt(100), ExpiresAt: big.NewInt(200)}
+	p := contracts.AccountProofV7_2{Timestamp: big.NewInt(100), ExpiresAt: big.NewInt(200)}
 	for _, c := range []struct {
 		at   uint64
 		want bool
@@ -211,22 +211,22 @@ func TestTimingRevert(t *testing.T) {
 // The proof a settlement carries is read back from its calldata exactly - it is how a revert's cause
 // and an earlier settler's attempt are judged.
 func TestSettlementProofOfRoundTrip(t *testing.T) {
-	if certenAccountV7ABIErr != nil {
-		t.Fatal(certenAccountV7ABIErr)
+	if settlementAccountABIErr != nil {
+		t.Fatal(settlementAccountABIErr)
 	}
-	want := contracts.AccountProofV7{
+	want := contracts.AccountProofV7_2{
 		AdiURL: "acc://a.acme", AnchorId: [32]byte{9}, MerkleProof: [][32]byte{},
 		OperationID: [32]byte{3}, Timestamp: big.NewInt(1000), ExpiresAt: big.NewInt(1480),
-		Nonce: big.NewInt(0), RequiredLevel: 1,
+		Nonce: big.NewInt(0), AuthorityPage: 2,
 	}
-	data, err := certenAccountV7ABI.Pack("executeGovernanceProofDirect",
+	data, err := settlementAccountABI.Pack("executeGovernanceProofDirect",
 		common.HexToAddress("0x1111111111111111111111111111111111111111"), big.NewInt(0), []byte{0xde, 0xad}, want)
 	if err != nil {
 		t.Fatal(err)
 	}
 	got, ok := settlementProofOf(data)
 	if !ok || got.AnchorId != want.AnchorId || got.OperationID != want.OperationID ||
-		got.Timestamp.Cmp(want.Timestamp) != 0 || got.ExpiresAt.Cmp(want.ExpiresAt) != 0 {
+		got.Timestamp.Cmp(want.Timestamp) != 0 || got.ExpiresAt.Cmp(want.ExpiresAt) != 0 || got.AuthorityPage != 2 {
 		t.Fatalf("decoded %+v ok=%t; want %+v", got, ok, want)
 	}
 	if _, ok := settlementProofOf([]byte{1, 2, 3, 4, 5}); ok {
@@ -345,7 +345,7 @@ func TestOD_ZeroFenceDefersWithoutAFailure(t *testing.T) {
 // Every validator that reaches an attested member marks it, and the memory-backstop prune then keeps
 // it: a later settlement window may be this validator's.
 func TestOD_AttestedMemberIsHeldPastTheTTL(t *testing.T) {
-	pool := NewBatchMempool(BatchMempoolConfig{})
+	pool := newTestMempool(BatchMempoolConfig{})
 	m := odMember(1, odChain, 100)
 	if err := pool.AddOnDemand(m); err != nil {
 		t.Fatal(err)

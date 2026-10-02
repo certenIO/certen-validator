@@ -23,7 +23,7 @@ func savedQueue(t *testing.T) (string, []map[string]interface{}) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64})
+	m := newTestMempool(BatchMempoolConfig{MaxBatchSize: 64})
 	if err := m.SetStore(st, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func restore(t *testing.T, path string) error {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64}).SetStore(st, nil)
+	return newTestMempool(BatchMempoolConfig{MaxBatchSize: 64}).SetStore(st, nil)
 }
 
 func TestAQueueThatCannotBeRestoredWholeStopsTheNode(t *testing.T) {
@@ -93,7 +93,7 @@ func TestNothingIsQueuedOrSentThatTheDiskDoesNotHold(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64})
+	m := newTestMempool(BatchMempoolConfig{MaxBatchSize: 64})
 	if err := m.SetStore(st, nil); err != nil {
 		t.Fatal(err)
 	}

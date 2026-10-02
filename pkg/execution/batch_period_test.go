@@ -15,7 +15,7 @@ import (
 // observed live on 2026-08-01 (v2 formed 0xe4c950df…, v3 formed 0x5e71d83a…).
 func TestPeekForPeriod_IsIdenticalAcrossValidators(t *testing.T) {
 	mk := func(id string, height uint64, enqueued time.Time) *PendingBatchIntent {
-		return &PendingBatchIntent{AccumulateSetRoot: testAccSet, GovernanceCommitment: testGov,
+		return certifiedForTest(&PendingBatchIntent{AccumulateSetRoot: testAccSet, GovernanceCommitment: testGov,
 			IntentID:     id,
 			ADIURL:       "acc://" + id + ".acme",
 			ChainID:      11155111,
@@ -24,19 +24,19 @@ func TestPeekForPeriod_IsIdenticalAcrossValidators(t *testing.T) {
 			Legs:         []LegExecution{{LegID: "l", ChainID: 11155111, Target: tgt(1), Value: big.NewInt(1)}},
 			CommitHeight: height,
 			EnqueuedAt:   enqueued,
-		}
+		})
 	}
 
 	now := time.Now()
 	// Validator A: arrives c, a, b — and with wall-clock times in that order.
-	a := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64})
+	a := newTestMempool(BatchMempoolConfig{MaxBatchSize: 64})
 	for _, p := range []*PendingBatchIntent{mk("c", 100, now), mk("a", 100, now.Add(time.Second)), mk("b", 90, now.Add(2*time.Second))} {
 		if err := a.Add(p); err != nil {
 			t.Fatal(err)
 		}
 	}
 	// Validator B: same intents, reverse arrival, different clock entirely.
-	b := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64})
+	b := newTestMempool(BatchMempoolConfig{MaxBatchSize: 64})
 	for _, p := range []*PendingBatchIntent{mk("b", 90, now.Add(-time.Hour)), mk("a", 100, now.Add(-time.Minute)), mk("c", 100, now)} {
 		if err := b.Add(p); err != nil {
 			t.Fatal(err)
@@ -68,14 +68,14 @@ func TestPeekForPeriod_IsIdenticalAcrossValidators(t *testing.T) {
 // after the first batch an attester still held the previous period's members and folded them
 // into the next period's tree — different root, different bundleId, permanent refusal.
 func TestPeekForPeriod_SelectsExactlyOneWindow(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64})
+	m := newTestMempool(BatchMempoolConfig{MaxBatchSize: 64})
 	add := func(id string, h uint64) {
-		if err := m.Add(&PendingBatchIntent{AccumulateSetRoot: testAccSet, GovernanceCommitment: testGov,
+		if err := m.Add(certifiedForTest(&PendingBatchIntent{AccumulateSetRoot: testAccSet, GovernanceCommitment: testGov,
 			IntentID: id, ADIURL: "acc://" + id + ".acme", ChainID: 11155111,
 			Account: common.HexToAddress("0x01"), OperationID: opidOf(id),
 			Legs:         []LegExecution{{LegID: "l", ChainID: 11155111, Target: tgt(1), Value: big.NewInt(1)}},
 			CommitHeight: h,
-		}); err != nil {
+		})); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -107,17 +107,17 @@ func TestPeekForPeriod_SelectsExactlyOneWindow(t *testing.T) {
 // was taken. Bucket scoping is what makes an attester's Peek reproducible against a leader's
 // Take, no matter what either removed.
 func TestPeekForPeriod_IsUnaffectedByNeighbouringPeriods(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64})
+	m := newTestMempool(BatchMempoolConfig{MaxBatchSize: 64})
 	for _, c := range []struct {
 		id string
 		h  uint64
 	}{{"p1a", 100}, {"p1b", 105}, {"p2a", 110}, {"p2b", 115}} {
-		if err := m.Add(&PendingBatchIntent{AccumulateSetRoot: testAccSet, GovernanceCommitment: testGov,
+		if err := m.Add(certifiedForTest(&PendingBatchIntent{AccumulateSetRoot: testAccSet, GovernanceCommitment: testGov,
 			IntentID: c.id, ADIURL: "acc://" + c.id + ".acme", ChainID: 11155111,
 			Account: common.HexToAddress("0x01"), OperationID: opidOf(c.id),
 			Legs:         []LegExecution{{LegID: "l", ChainID: 11155111, Target: tgt(1), Value: big.NewInt(1)}},
 			CommitHeight: c.h,
-		}); err != nil {
+		})); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -140,14 +140,14 @@ func TestPeekForPeriod_IsUnaffectedByNeighbouringPeriods(t *testing.T) {
 // PendingPeriods drives the flush loop. It must report every CLOSED period holding members, so
 // a straggler whose leader was down is picked up by a later one rather than stranded.
 func TestPendingPeriods_ReportsClosedPeriodsOnly(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64})
+	m := newTestMempool(BatchMempoolConfig{MaxBatchSize: 64})
 	for _, h := range []uint64{100, 105, 130, 200} {
-		if err := m.Add(&PendingBatchIntent{AccumulateSetRoot: testAccSet, GovernanceCommitment: testGov,
+		if err := m.Add(certifiedForTest(&PendingBatchIntent{AccumulateSetRoot: testAccSet, GovernanceCommitment: testGov,
 			IntentID: fmt.Sprintf("i%d", h), ADIURL: "acc://x.acme", ChainID: 11155111,
 			Account: common.HexToAddress("0x01"), OperationID: opidOf(fmt.Sprintf("i%d", h)),
 			Legs:         []LegExecution{{LegID: "l", ChainID: 11155111, Target: tgt(1), Value: big.NewInt(1)}},
 			CommitHeight: h,
-		}); err != nil {
+		})); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -166,14 +166,14 @@ func TestPendingPeriods_ReportsClosedPeriodsOnly(t *testing.T) {
 
 // The memory backstop must not touch members whose period is still within the horizon.
 func TestPruneOlderThan(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64})
+	m := newTestMempool(BatchMempoolConfig{MaxBatchSize: 64})
 	for _, h := range []uint64{10, 500, 900} {
-		if err := m.Add(&PendingBatchIntent{AccumulateSetRoot: testAccSet, GovernanceCommitment: testGov,
+		if err := m.Add(certifiedForTest(&PendingBatchIntent{AccumulateSetRoot: testAccSet, GovernanceCommitment: testGov,
 			IntentID: fmt.Sprintf("i%d", h), ADIURL: "acc://x.acme", ChainID: 11155111,
 			Account: common.HexToAddress("0x01"), OperationID: opidOf(fmt.Sprintf("i%d", h)),
 			Legs:         []LegExecution{{LegID: "l", ChainID: 11155111, Target: tgt(1), Value: big.NewInt(1)}},
 			CommitHeight: h,
-		}); err != nil {
+		})); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -188,13 +188,13 @@ func TestPruneOlderThan(t *testing.T) {
 // A member with no commit height cannot be placed deterministically — a validator that has it
 // would diverge from one that does not. It must be skipped, not guessed at.
 func TestPeekForPeriod_SkipsUnknownCommitHeight(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64})
-	if err := m.Add(&PendingBatchIntent{AccumulateSetRoot: testAccSet, GovernanceCommitment: testGov,
+	m := newTestMempool(BatchMempoolConfig{MaxBatchSize: 64})
+	if err := m.Add(certifiedForTest(&PendingBatchIntent{AccumulateSetRoot: testAccSet, GovernanceCommitment: testGov,
 		IntentID: "noheight", ADIURL: "acc://x.acme", ChainID: 11155111,
 		Account: common.HexToAddress("0x01"), OperationID: opid(1),
 		Legs: []LegExecution{{LegID: "l", ChainID: 11155111, Target: tgt(1), Value: big.NewInt(1)}},
 		// CommitHeight deliberately zero
-	}); err != nil {
+	})); err != nil {
 		t.Fatal(err)
 	}
 	if got := m.PeriodMembers(11155111, 1000, 100); len(got) != 0 {
@@ -204,13 +204,13 @@ func TestPeekForPeriod_SkipsUnknownCommitHeight(t *testing.T) {
 
 // Peek must not consume: an attester needs its copy back if the proposer never lands the batch.
 func TestPeekForPeriod_DoesNotConsume(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64})
-	if err := m.Add(&PendingBatchIntent{AccumulateSetRoot: testAccSet, GovernanceCommitment: testGov,
+	m := newTestMempool(BatchMempoolConfig{MaxBatchSize: 64})
+	if err := m.Add(certifiedForTest(&PendingBatchIntent{AccumulateSetRoot: testAccSet, GovernanceCommitment: testGov,
 		IntentID: "x", ADIURL: "acc://x.acme", ChainID: 11155111,
 		Account: common.HexToAddress("0x01"), OperationID: opid(1),
 		Legs:         []LegExecution{{LegID: "l", ChainID: 11155111, Target: tgt(1), Value: big.NewInt(1)}},
 		CommitHeight: 10,
-	}); err != nil {
+	})); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 3; i++ {
@@ -234,14 +234,14 @@ func TestPeekForPeriod_DoesNotConsume(t *testing.T) {
 // trees and diverge.
 func TestPeriodTrees_CutAfterSort(t *testing.T) {
 	mkPool := func(order []string) *BatchMempool {
-		m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 2})
+		m := newTestMempool(BatchMempoolConfig{MaxBatchSize: 2})
 		for i, id := range order {
-			if err := m.Add(&PendingBatchIntent{AccumulateSetRoot: testAccSet, GovernanceCommitment: testGov,
+			if err := m.Add(certifiedForTest(&PendingBatchIntent{AccumulateSetRoot: testAccSet, GovernanceCommitment: testGov,
 				IntentID: id, ADIURL: "acc://" + id + ".acme", ChainID: 11155111,
 				Account: common.HexToAddress("0x01"), OperationID: opid(byte(i + 1)),
 				Legs:         []LegExecution{{LegID: "l", ChainID: 11155111, Target: tgt(1), Value: big.NewInt(1)}},
 				CommitHeight: 10,
-			}); err != nil {
+			})); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -278,15 +278,15 @@ func TestBatchPeriodCutoff(t *testing.T) {
 }
 
 func TestDropMembers(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64})
+	m := newTestMempool(BatchMempoolConfig{MaxBatchSize: 64})
 	var all []*PendingBatchIntent
 	for _, id := range []string{"a", "b", "c"} {
-		p := &PendingBatchIntent{AccumulateSetRoot: testAccSet, GovernanceCommitment: testGov,
+		p := certifiedForTest(&PendingBatchIntent{AccumulateSetRoot: testAccSet, GovernanceCommitment: testGov,
 			IntentID: id, ADIURL: "acc://" + id + ".acme", ChainID: 11155111,
 			Account: common.HexToAddress("0x01"), OperationID: opidOf(id),
 			Legs:         []LegExecution{{LegID: "l", ChainID: 11155111, Target: tgt(1), Value: big.NewInt(1)}},
 			CommitHeight: 10,
-		}
+		})
 		if err := m.Add(p); err != nil {
 			t.Fatal(err)
 		}

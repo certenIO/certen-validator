@@ -77,11 +77,10 @@ func (o *BatchOrchestrator) cachedBlockAt(ctx context.Context, ts uint64) (uint6
 // under whichever anchor. bundleID is the member's own anchor when it has one, used for the floor.
 // found is false when no such log is in view: nothing may be concluded then.
 func (o *BatchOrchestrator) leafConsumedTx(ctx context.Context, p *PendingBatchIntent, bundleID [32]byte) (string, common.Address, bool, error) {
-	exec, err := p.ExecutionCommitment()
+	leaf, err := p.Leaf()
 	if err != nil {
 		return "", common.Address{}, false, err
 	}
-	leaf := ComputeBatchLeaf(p.ChainID, BatchLeafInput{ADIURL: p.ADIURL, ExecutionCommitment: exec, OperationID: p.OperationID})
 	topics := [][]common.Hash{{leafConsumedTopic}, nil, {common.Hash(leaf)}}
 
 	// The earliest block the leaf could have been spent in is the LOWEST of the floors known for it:

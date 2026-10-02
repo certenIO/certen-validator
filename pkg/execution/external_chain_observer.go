@@ -28,6 +28,8 @@ import (
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/ethereum/go-ethereum/trie"
+
+	"github.com/certen/independant-validator/pkg/execution/contracts"
 )
 
 // =============================================================================
@@ -600,51 +602,8 @@ func (o *ExternalChainObserver) log(format string, args ...interface{}) {
 // UTILITY METHODS
 // =============================================================================
 
-// certenAccountV7ABIJSON declares the V7 execution wrappers.
-//
-// Hand-declared because the validator has no generated V7 binding, and the decoder must not depend
-// on one existing. Only the two entry points that carry an effect are needed — the proof tuple is
-// spelled out solely so the selector matches; nothing reads its fields here.
-//
-// ADIGovernanceProof: (string adiURL, bytes32 anchorId, bytes32[] merkleProof, bytes32 operationID,
-// bytes keyBookProof, bytes roleProof, bytes thresholdProof, uint256 timestamp, uint256 expiresAt,
-// bytes validatorSignatures, uint256 nonce, AuthorityLevel requiredLevel) — the enum is uint8.
-const certenAccountV7ABIJSON = `[
- {"type":"function","name":"executeGovernanceProofDirect","stateMutability":"nonpayable","outputs":[],
-  "inputs":[
-   {"name":"target","type":"address"},
-   {"name":"value","type":"uint256"},
-   {"name":"data","type":"bytes"},
-   {"name":"proof","type":"tuple","components":[
-     {"name":"adiURL","type":"string"},
-     {"name":"anchorId","type":"bytes32"},
-     {"name":"merkleProof","type":"bytes32[]"},
-     {"name":"operationID","type":"bytes32"},
-     {"name":"keyBookProof","type":"bytes"},
-     {"name":"roleProof","type":"bytes"},
-     {"name":"thresholdProof","type":"bytes"},
-     {"name":"timestamp","type":"uint256"},
-     {"name":"expiresAt","type":"uint256"},
-     {"name":"validatorSignatures","type":"bytes"},
-     {"name":"nonce","type":"uint256"},
-     {"name":"requiredLevel","type":"uint8"}]}]},
- {"type":"function","name":"batchExecuteGovernanceProofDirect","stateMutability":"nonpayable","outputs":[],
-  "inputs":[
-   {"name":"targets","type":"address[]"},
-   {"name":"values","type":"uint256[]"},
-   {"name":"datas","type":"bytes[]"},
-   {"name":"proof","type":"tuple","components":[
-     {"name":"adiURL","type":"string"},
-     {"name":"anchorId","type":"bytes32"},
-     {"name":"merkleProof","type":"bytes32[]"},
-     {"name":"operationID","type":"bytes32"},
-     {"name":"keyBookProof","type":"bytes"},
-     {"name":"roleProof","type":"bytes"},
-     {"name":"thresholdProof","type":"bytes"},
-     {"name":"timestamp","type":"uint256"},
-     {"name":"expiresAt","type":"uint256"},
-     {"name":"validatorSignatures","type":"bytes"},
-     {"name":"nonce","type":"uint256"},
-     {"name":"requiredLevel","type":"uint8"}]}]}]`
-
-var certenAccountV7ABI, certenAccountV7ABIErr = abi.JSON(strings.NewReader(certenAccountV7ABIJSON))
+// settlementAccountABI decodes a settlement: the execution entry points of CertenAccountV7_2, the account factory V10
+// creates and the only one a V8.2 tree settles (RB5-F29). It is the artifact-extracted ABI the settlement is sent with
+// (contracts.CertenAccountV7_2ABI), so the decoder and the sender cannot drift. Its proof tuple ends in uint64
+// authorityPage - the certified key page the leaf binds - where CertenAccountV7's ended in a declared uint8 level.
+var settlementAccountABI, settlementAccountABIErr = abi.JSON(strings.NewReader(contracts.CertenAccountV7_2ABI))

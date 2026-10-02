@@ -89,6 +89,9 @@ type PendingBatchIntent struct {
 	// record once the certificate exists. It - never this validator's own message - is what the v3 batch operation
 	// id commits, so every validator forms the same batch even one whose own proof disagreed with the quorum.
 	CertifiedMessage [32]byte
+	// CertifiedKeyPage is the ADI key page that certified message certifies (its hash is committed by the message
+	// through govRoot v2), read with it from the chain's record. The member's v2 leaf binds its index (RB5-F29).
+	CertifiedKeyPage string
 
 	// AccumTxHash is the Accumulate transaction that carried this intent. Evidence only — never hashed
 	// into the leaf. Empty is honest for a member restored from a pre-2026-09-18 mempool blob.
@@ -256,12 +259,50 @@ func (p *PendingBatchIntent) ExecutionCommitment() ([32]byte, error) {
 	return computeBatchExecutionCommitment(p.ChainID, calls), nil
 }
 
+// Leaf is the member's leaf in a V8.2 tree: the v2 leaf its CertenAccountV7_2 recomputes and consumes (RB5-F29).
+func (p *PendingBatchIntent) Leaf() ([32]byte, error) {
+	in, err := p.LeafInput()
+	if err != nil {
+		return [32]byte{}, err
+	}
+	return ComputeBatchLeafV2(p.ChainID, in, in.AuthorityPage), nil
+}
+
+// ErrNoCertifiedAuthorityPage: the member has no key page CERTEN's quorum certified, so no v2 leaf (RB5-F29).
+var ErrNoCertifiedAuthorityPage = errors.New("no key page certified by CERTEN's quorum")
+
+// AuthorityPage is the index of the ADI key page whose signatures authorized the member's intent, as CERTEN's quorum
+// certified it - what its v2 leaf binds and its CertenAccountV7_2 derives every leg's authority from (RB3-F39). A
+// member whose intent was not quorum-certified has none, and a page outside the member's own ADI is refused: the
+// account reads the index as one of its own ADI's pages.
+func (p *PendingBatchIntent) AuthorityPage() (uint64, error) {
+	if p.IntentMessage == ([32]byte{}) {
+		return 0, fmt.Errorf("%w: intent %s was not quorum-certified, and a V8.2 leaf binds the key page the quorum "+
+			"certified", ErrNoCertifiedAuthorityPage, p.IntentID)
+	}
+	if p.CertifiedMessage == ([32]byte{}) {
+		return 0, fmt.Errorf("%w: intent %s", ErrIntentNotYetCertified, p.IntentID)
+	}
+	if p.CertifiedKeyPage == "" {
+		return 0, fmt.Errorf("%w: intent %s's certificate names no key page", ErrNoCertifiedAuthorityPage, p.IntentID)
+	}
+	return AuthorityPageOfADI(p.CertifiedKeyPage, p.ADIURL)
+}
+
 // IsMultiLeg reports whether this member needs batchExecuteGovernanceProofDirect.
 func (p *PendingBatchIntent) IsMultiLeg() bool { return len(p.Legs) > 1 }
 
-// LeafInput converts the member into its tree contribution.
+// LeafInput converts the member into its tree contribution. A member whose intent awaits its quorum certificate has
+// none yet (ErrIntentNotYetCertified): its tree commits the certified message, which is unknown until then (RB5-F31).
 func (p *PendingBatchIntent) LeafInput() (BatchLeafInput, error) {
+	if p.IntentMessage != ([32]byte{}) && p.CertifiedMessage == ([32]byte{}) {
+		return BatchLeafInput{}, fmt.Errorf("%w: intent %s", ErrIntentNotYetCertified, p.IntentID)
+	}
 	exec, err := p.ExecutionCommitment()
+	if err != nil {
+		return BatchLeafInput{}, err
+	}
+	page, err := p.AuthorityPage()
 	if err != nil {
 		return BatchLeafInput{}, err
 	}
@@ -269,6 +310,7 @@ func (p *PendingBatchIntent) LeafInput() (BatchLeafInput, error) {
 		ADIURL:               p.ADIURL,
 		ExecutionCommitment:  exec,
 		OperationID:          p.OperationID,
+		AuthorityPage:        page,
 		GovernanceCommitment: p.GovernanceCommitment,
 		LegacyNoGovernance:   p.LegacyNoGovernance,
 		AccumulateSetRoot:    p.AccumulateSetRoot,
@@ -384,9 +426,10 @@ type BatchMempool struct {
 }
 
 // IntentCertificateHeights is the committed record of per-intent quorum certificates: for an operation, the message
-// CERTEN's quorum certified, the CERTEN height whose commit completed the certificate, and whether there is one.
+// CERTEN's quorum certified, the key page it certifies, the CERTEN height whose commit completed the certificate, and
+// whether there is one.
 type IntentCertificateHeights interface {
-	IntentCertifiedHeight(operationID [32]byte) (height uint64, message [32]byte, ok bool)
+	IntentCertified(operationID [32]byte) (consensus.CertifiedIntent, bool)
 }
 
 // SetIntentCertificates installs the record members with a certified intent are placed by.
@@ -410,12 +453,14 @@ func (m *BatchMempool) placementHeight(p *PendingBatchIntent) (uint64, bool) {
 	if m.certs == nil {
 		return 0, false
 	}
-	h, msg, ok := m.certs.IntentCertifiedHeight(p.OperationID)
+	c, ok := m.certs.IntentCertified(p.OperationID)
 	if !ok {
 		return 0, false
 	}
+	h, msg := c.Height, c.Message
 	if p.CertifiedMessage == ([32]byte{}) {
 		p.CertifiedMessage = msg
+		p.CertifiedKeyPage = c.KeyPageURL
 		if msg != p.IntentMessage {
 			log.Printf("⚠️ [BATCH] intent %s: this validator signed intent message 0x%x, CERTEN's quorum certified 0x%x - "+
 				"this validator's proof of the operation disagrees with the quorum's; the batch commits the certified one",

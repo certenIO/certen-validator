@@ -36,7 +36,7 @@ func stackForChain(t *testing.T, chainID int64) *BatchStack {
 	// account, standing in for the chain reads a peer makes before it co-signs.
 	return &BatchStack{Incarnation: testIncarnation,
 		Resolver:       r,
-		Mempool:        NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64}),
+		Mempool:        newTestMempool(BatchMempoolConfig{MaxBatchSize: 64}),
 		Orchestrators:  map[int64]*BatchOrchestrator{chainID: {incarnation: testIncarnation, screen: acceptEveryAccount}},
 		MemberOutcomes: recordedOutcomes{},
 	}
