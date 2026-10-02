@@ -252,7 +252,7 @@ func startTestPersister(t *testing.T, store consensusRecordStore, queueCap int) 
 // startTestPersisterWith starts a test persister over source (nil for none).
 func startTestPersisterWith(t *testing.T, store consensusRecordStore, queueCap int, source committedBlockSource) *consensusPersister {
 	t.Helper()
-	p := newConsensusPersister(store, "validator-test", persistQuietLog)
+	p := newConsensusPersister(store, "validator-test", persistQuietLog, noIntentCertificates)
 	if queueCap > 0 {
 		p.queue = make(chan persistJob, queueCap)
 	}
@@ -486,7 +486,7 @@ func TestCommitNeverWaitsOnTheDatabaseAndDroppedHeightsAreRebuilt(t *testing.T) 
 	seedCache(app, 1000)
 	reader := newFakeBlockReader()
 	store := &fakeRecordStore{gate: make(chan struct{})}
-	p := newConsensusPersister(store, "validator-test", log.New(&debugBuf, "", 0))
+	p := newConsensusPersister(store, "validator-test", log.New(&debugBuf, "", 0), noIntentCertificates)
 	p.queue = make(chan persistJob, 4)
 	p.retryBase, p.retryMax, p.idleCheck = time.Millisecond, 5*time.Millisecond, 2*time.Millisecond
 	p.setSource(&rpcCommittedBlockSource{reader: reader})
@@ -546,7 +546,7 @@ func recordsEqualIgnoringNothing(a, b database.CommittedConsensusRecords) bool {
 func TestPersisterResumesFromItsWatermarkAndIgnoresReplays(t *testing.T) {
 	store := &fakeRecordStore{watermark: 10, found: true}
 	source := &fakeBlockSource{blocks: map[int64]*committedBlock{}}
-	p := newConsensusPersister(store, "validator-test", persistQuietLog)
+	p := newConsensusPersister(store, "validator-test", persistQuietLog, noIntentCertificates)
 	p.retryBase, p.retryMax, p.idleCheck = time.Millisecond, time.Millisecond, 2*time.Millisecond
 	p.setSource(source)
 	p.start()
@@ -871,7 +871,7 @@ func TestPersisterDoesNotRewindOnANormalRestart(t *testing.T) {
 // A hung database call is bounded and retried, not a silent permanent stall.
 func TestPersisterBoundsHungDatabaseCalls(t *testing.T) {
 	store := &fakeRecordStore{hang: true}
-	p := newConsensusPersister(store, "validator-test", persistQuietLog)
+	p := newConsensusPersister(store, "validator-test", persistQuietLog, noIntentCertificates)
 	p.retryBase, p.retryMax, p.idleCheck, p.callTimeout = time.Millisecond, 2*time.Millisecond, 2*time.Millisecond, 10*time.Millisecond
 	p.start()
 	t.Cleanup(p.stop)
@@ -896,7 +896,7 @@ func TestEnablingPersistenceRebuildsBlocksCommittedBeforeIt(t *testing.T) {
 	commitBlock(t, app, reader, 2, base.Add(time.Second))
 
 	store := &fakeRecordStore{}
-	p := newConsensusPersister(store, "validator-test", persistQuietLog)
+	p := newConsensusPersister(store, "validator-test", persistQuietLog, noIntentCertificates)
 	p.retryBase, p.retryMax, p.idleCheck = time.Millisecond, 2*time.Millisecond, 2*time.Millisecond
 	p.setSource(&rpcCommittedBlockSource{reader: reader})
 	p.seedCommitted(app.startHeight, app.latestHeight)
@@ -912,4 +912,9 @@ func TestEnablingPersistenceRebuildsBlocksCommittedBeforeIt(t *testing.T) {
 	if w := store.byHeight()[1]; len(w.Entries) != 1 || w.Entries[0].BatchID != uuid.NewSHA1(uuid.NameSpaceOID, []byte(bundleOf(t, early))) {
 		t.Fatalf("replayed height 1 not rebuilt: %+v", w)
 	}
+}
+
+// noIntentCertificates is the certificate source of a persister test whose blocks carry no intent certificates.
+func noIntentCertificates(int64, []ValidatorBlock) ([]database.IntentQuorumCertificateRow, error) {
+	return nil, nil
 }

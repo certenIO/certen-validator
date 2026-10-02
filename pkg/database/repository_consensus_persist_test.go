@@ -2,6 +2,8 @@ package database
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -359,5 +361,50 @@ func TestWritersPersistingOneBlockInDifferentOrdersDoNotDeadlock(t *testing.T) {
 				t.Fatalf("round %d: %v", round, err)
 			}
 		}
+	}
+}
+
+// An operation's intent quorum certificate is written with the block that completed it, once: a second writer
+// holding the same certificate changes nothing, and one holding a different certificate for the operation is refused
+// - two quorums over two messages - and the block is not written.
+func TestIntentCertificatesAreWrittenOnceAndAConflictIsRefused(t *testing.T) {
+	repo := consensusRepoForTest(t)
+	ctx := context.Background()
+	bt := time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)
+	op := "0x" + strings.Repeat(fmt.Sprintf("%02x", time.Now().UnixNano()%251), 32)
+	cert := IntentQuorumCertificateRow{OperationID: op, Message: "0x" + strings.Repeat("4c", 32), RegistryVersion: 1,
+		CertenChainID: "certen-testnet", Certificate: json.RawMessage(`{"signed_power":"500","total_power":"700"}`),
+		Registry: json.RawMessage(`{"version":1}`), MessageInputs: json.RawMessage(`{"operation_id":"` + op + `"}`),
+		CertifiedHeight: 4001}
+
+	rec, _ := committedRecordsForTest(4001, bt, "completed")
+	rec.IntentCertificates = []IntentQuorumCertificateRow{cert}
+	if _, err := repo.PersistCommittedBlock(ctx, writerForTest(), rec); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.IntentQuorumCertificate(ctx, op)
+	if err != nil || got == nil || got.Message != cert.Message || got.CertifiedHeight != 4001 || got.RegistryVersion != 1 {
+		t.Fatalf("stored certificate: %+v %v", got, err)
+	}
+
+	again, _ := committedRecordsForTest(4001, bt, "completed")
+	again.IntentCertificates = []IntentQuorumCertificateRow{cert}
+	if _, err := repo.PersistCommittedBlock(ctx, writerForTest(), again); err != nil {
+		t.Fatalf("a second writer with the same certificate: %v", err)
+	}
+
+	other := cert
+	other.Message = "0x" + strings.Repeat("5d", 32)
+	conflict, _ := committedRecordsForTest(4002, bt, "completed")
+	conflict.IntentCertificates = []IntentQuorumCertificateRow{other}
+	if _, err := repo.PersistCommittedBlock(ctx, writerForTest(), conflict); err == nil ||
+		!strings.Contains(err.Error(), "DIFFERENT intent quorum certificate") {
+		t.Fatalf("a conflicting certificate: %v", err)
+	}
+	if n, _ := repo.GetConsensusEntry(ctx, conflict.Entries[0].BatchID); n != nil {
+		t.Fatal("the block carrying a conflicting certificate was written")
+	}
+	if none, err := repo.IntentQuorumCertificate(ctx, "0x"+strings.Repeat("00", 32)); err != nil || none != nil {
+		t.Fatalf("an operation with no certificate: %+v %v", none, err)
 	}
 }

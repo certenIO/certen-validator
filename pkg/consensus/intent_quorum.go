@@ -2,6 +2,7 @@ package consensus
 
 import (
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/certen/independant-validator/pkg/crypto/bls"
 	"github.com/certen/independant-validator/pkg/crypto/bls_zkp"
+	"github.com/certen/independant-validator/pkg/database"
 	"github.com/certen/independant-validator/pkg/ledger"
 )
 
@@ -244,4 +246,89 @@ func VerifyIntentQuorumCertificate(c *ledger.IntentQuorumCertificate, reg *ledge
 		return fmt.Errorf("the aggregate signature does not verify over the intent message")
 	}
 	return nil
+}
+
+// intentMessageInputs are the inputs a certified message was computed from, as stored beside its certificate so a
+// verifier recomputes each from the stored proof.
+type intentMessageInputs struct {
+	CertenChainID        string `json:"certen_chain_id"`
+	OperationID          string `json:"operation_id"`
+	GovRootV2            string `json:"gov_root_v2"`
+	AccumulateSetRoot    string `json:"accumulate_set_root"`
+	Incarnation          string `json:"incarnation"`
+	GovernanceCommitment string `json:"governance_commitment"`
+	CertenSetRoot        string `json:"certen_set_root"`
+	KeyPageURL           string `json:"key_page_url"`
+	KeyBookURL           string `json:"key_book_url"`
+}
+
+// intentCertificateRows is the persister's source of certificates: those the commit of height completed, for the
+// operations of its accepted blocks, read from committed state. The block that completed a certificate carries the
+// certified message, so its evidence gives the message's inputs.
+func (app *ValidatorApp) intentCertificateRows(height int64, blocks []ValidatorBlock) ([]database.IntentQuorumCertificateRow, error) {
+	app.mu.RLock()
+	defer app.mu.RUnlock()
+	if app.ledgerStore == nil {
+		return nil, nil
+	}
+	var rows []database.IntentQuorumCertificateRow
+	var regLog *ledger.BLSRegistryLog
+	seen := map[string]bool{}
+	for i := range blocks {
+		vb := &blocks[i]
+		ev := vb.IntentCertificate
+		op := strings.ToLower(vb.CrossChainProof.OperationID)
+		if ev == nil || seen[op] {
+			continue
+		}
+		ql, err := app.ledgerStore.LoadIntentQuorum(op)
+		if err != nil {
+			return nil, err
+		}
+		for _, g := range ql.Groups {
+			c := g.Certificate
+			if c == nil || c.Height != height || !strings.EqualFold(g.Message, ev.Message) {
+				continue
+			}
+			seen[op] = true
+			if regLog == nil {
+				if regLog, err = app.ledgerStore.LoadBLSRegistry(); err != nil {
+					return nil, err
+				}
+			}
+			var reg *ledger.BLSRegistryRecord
+			for j := range regLog.Versions {
+				if regLog.Versions[j].Version == c.RegistryVersion {
+					reg = &regLog.Versions[j]
+				}
+			}
+			if reg == nil {
+				return nil, fmt.Errorf("operation %s was certified under registry v%d, which the ledger does not hold", op, c.RegistryVersion)
+			}
+			in, govRoot, accRoot, err := intentInputs(vb, app.cometChainID, reg)
+			if err != nil {
+				return nil, fmt.Errorf("operation %s: the inputs of its certified message: %w", op, err)
+			}
+			inputs := intentMessageInputs{CertenChainID: in.CertenChainID, OperationID: op,
+				GovRootV2: "0x" + hex.EncodeToString(govRoot[:]), AccumulateSetRoot: "0x" + hex.EncodeToString(accRoot[:]),
+				Incarnation: "0x" + hex.EncodeToString(in.Incarnation[:]), GovernanceCommitment: "0x" + hex.EncodeToString(in.GovernanceCommitment[:]),
+				CertenSetRoot: "0x" + hex.EncodeToString(in.CertenSetRoot[:]), KeyPageURL: ev.KeyPageURL, KeyBookURL: ev.KeyBookURL}
+			certJSON, err := json.Marshal(c)
+			if err != nil {
+				return nil, err
+			}
+			regJSON, err := json.Marshal(reg)
+			if err != nil {
+				return nil, err
+			}
+			inJSON, err := json.Marshal(inputs)
+			if err != nil {
+				return nil, err
+			}
+			rows = append(rows, database.IntentQuorumCertificateRow{OperationID: op, Message: strings.ToLower(c.Message),
+				RegistryVersion: int64(c.RegistryVersion), CertenChainID: app.cometChainID, Certificate: certJSON,
+				Registry: regJSON, MessageInputs: inJSON, CertifiedHeight: height})
+		}
+	}
+	return rows, nil
 }

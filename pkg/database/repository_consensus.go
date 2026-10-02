@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -93,6 +94,20 @@ type CommittedConsensusRecords struct {
 	Height       int64
 	Entries      []CommittedConsensusEntry
 	Attestations []NewBatchAttestation
+	// IntentCertificates are the per-intent quorum certificates this block's commit completed (RB5 D3).
+	IntentCertificates []IntentQuorumCertificateRow
+}
+
+// IntentQuorumCertificateRow is one row of intent_quorum_certificates (migration 00019).
+type IntentQuorumCertificateRow struct {
+	OperationID     string
+	Message         string
+	RegistryVersion int64
+	CertenChainID   string
+	Certificate     json.RawMessage
+	Registry        json.RawMessage
+	MessageInputs   json.RawMessage
+	CertifiedHeight int64
 }
 
 // RejectedRecord is a row the database refused on its content (SQLSTATE class 22 data exception or 23
@@ -235,6 +250,38 @@ func (r *ConsensusRepository) PersistCommittedBlock(ctx context.Context, writerI
 		}
 		if rej != nil {
 			rejected = append(rejected, RejectedRecord{Table: "batch_attestations", BatchID: a.BatchID, Err: rej})
+		}
+	}
+
+	// Each operation's certificate is written once. Every honest writer derives the same one; a writer holding a
+	// different certificate for the same operation would mean two quorums over two messages, which needs
+	// double-signing - it is refused, never skipped.
+	for _, c := range rec.IntentCertificates {
+		var inserted bool
+		err := tx.Tx().QueryRowContext(ctx, `
+			INSERT INTO intent_quorum_certificates (operation_id, message, registry_version, certen_chain_id, certificate,
+				registry, message_inputs, certified_height)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			ON CONFLICT (operation_id) DO NOTHING
+			RETURNING true`,
+			c.OperationID, c.Message, c.RegistryVersion, c.CertenChainID, []byte(c.Certificate), []byte(c.Registry),
+			[]byte(c.MessageInputs), c.CertifiedHeight).Scan(&inserted)
+		if errors.Is(err, sql.ErrNoRows) {
+			var same bool
+			if err := tx.Tx().QueryRowContext(ctx, `
+				SELECT message = $2 AND certificate = $3::jsonb AND registry_version = $4
+				FROM intent_quorum_certificates WHERE operation_id = $1`,
+				c.OperationID, c.Message, []byte(c.Certificate), c.RegistryVersion).Scan(&same); err != nil {
+				return nil, fmt.Errorf("persist committed block %d: intent certificate of %s: %w", rec.Height, c.OperationID, err)
+			}
+			if !same {
+				return nil, fmt.Errorf("persist committed block %d: operation %s already has a DIFFERENT intent quorum certificate "+
+					"- two quorums over different messages", rec.Height, c.OperationID)
+			}
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("persist committed block %d: intent certificate of %s: %w", rec.Height, c.OperationID, err)
 		}
 	}
 
@@ -593,4 +640,22 @@ func DecodeHexString(s string) ([]byte, error) {
 		return nil, nil
 	}
 	return hex.DecodeString(s)
+}
+
+// IntentQuorumCertificate returns an operation's intent quorum certificate, nil when none is recorded.
+func (r *ConsensusRepository) IntentQuorumCertificate(ctx context.Context, operationID string) (*IntentQuorumCertificateRow, error) {
+	var c IntentQuorumCertificateRow
+	var cert, reg, in []byte
+	err := r.client.QueryRowContext(ctx, `
+		SELECT operation_id, message, registry_version, certen_chain_id, certificate, registry, message_inputs, certified_height
+		FROM intent_quorum_certificates WHERE operation_id = $1`, strings.ToLower(operationID)).Scan(
+		&c.OperationID, &c.Message, &c.RegistryVersion, &c.CertenChainID, &cert, &reg, &in, &c.CertifiedHeight)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("intent quorum certificate of %s: %w", operationID, err)
+	}
+	c.Certificate, c.Registry, c.MessageInputs = cert, reg, in
+	return &c, nil
 }

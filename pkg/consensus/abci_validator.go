@@ -333,7 +333,8 @@ func (app *ValidatorApp) EnableConsensusPersistence(repos *database.Repositories
 		sum := sha256.Sum256([]byte(writerID))
 		writerID = writerID[:190] + "#" + hex.EncodeToString(sum[:])
 	}
-	p := newConsensusPersister(repos.Consensus, writerID, log.New(log.Writer(), "[ValidatorApp] ", log.LstdFlags))
+	p := newConsensusPersister(repos.Consensus, writerID, log.New(log.Writer(), "[ValidatorApp] ", log.LstdFlags),
+		app.intentCertificateRows)
 	p.setSource(source)
 	start := app.latestHeight
 	if app.startHeightSet {
