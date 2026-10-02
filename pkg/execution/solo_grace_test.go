@@ -23,12 +23,12 @@ func TestSoloGraceIsShorterThanDefault(t *testing.T) {
 // A period with co-members must keep the full grace — that is the case the 2026-08-02 quorum
 // failure came from, and shortening it there would reintroduce the bug.
 func TestSharedPeriodKeepsFullGrace(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{})
+	m := newTestMempool(BatchMempoolConfig{})
 	const chain = int64(11155111)
 	const period, width = uint64(100), uint64(100)
 
 	for _, id := range []string{"a", "b"} {
-		if err := m.Add(&PendingBatchIntent{AccumulateSetRoot: testAccSet, GovernanceCommitment: testGov,
+		if err := m.Add(certifiedForTest(&PendingBatchIntent{AccumulateSetRoot: testAccSet, GovernanceCommitment: testGov,
 			IntentID:     id,
 			ADIURL:       "acc://" + id + ".acme",
 			ChainID:      chain,
@@ -36,7 +36,7 @@ func TestSharedPeriodKeepsFullGrace(t *testing.T) {
 			OperationID:  [32]byte{id[0]},
 			CommitHeight: period + 1,
 			Legs:         []LegExecution{{ChainID: chain}},
-		}); err != nil {
+		})); err != nil {
 			t.Fatalf("add %s: %v", id, err)
 		}
 	}

@@ -59,7 +59,7 @@ var odChainStr = strconv.FormatInt(odChain, 10)
 func nsMember() *PendingBatchIntent {
 	p := odMember(1, odChain, 100)
 	p.CommitTime = nsCommit
-	return p
+	return certifiedForTest(p)
 }
 
 func nsChainPast(deadline time.Time) *fakeNSChain {

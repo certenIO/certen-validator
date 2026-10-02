@@ -94,7 +94,7 @@ func TestPeriodAgreement_TreeIsUnchangedAfterSomeMembersSettle(t *testing.T) {
 // A period larger than one tree is cut identically, so a peer co-signs its later trees too.
 func TestPeriodAgreement_PeerReproducesAPeriodsSecondTree(t *testing.T) {
 	s := stackForChain(t, 11155111)
-	s.Mempool = NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 2})
+	s.Mempool = newTestMempool(BatchMempoolConfig{MaxBatchSize: 2})
 	for i, id := range []string{"a", "bb", "ccc"} {
 		addMember(t, s, id, 100, byte(0xA0+i), int64(1000+i))
 	}

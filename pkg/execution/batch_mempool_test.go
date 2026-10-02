@@ -13,7 +13,7 @@ import (
 )
 
 func pending(id, adi string, chainID int64, acct common.Address, opID uint64, legs ...LegExecution) *PendingBatchIntent {
-	return &PendingBatchIntent{AccumulateSetRoot: testAccSet, GovernanceCommitment: testGov,
+	return certifiedForTest(&PendingBatchIntent{AccumulateSetRoot: testAccSet, GovernanceCommitment: testGov,
 		IntentID:    id,
 		ADIURL:      adi,
 		ChainID:     chainID,
@@ -22,7 +22,7 @@ func pending(id, adi string, chainID int64, acct common.Address, opID uint64, le
 		Legs:        legs,
 		// A committed member: it belongs to period [0, periodBlocks). Height 0 belongs to no period.
 		CommitHeight: 1,
-	}
+	})
 }
 
 func oneLeg(chainID int64, to common.Address, wei int64) LegExecution {
@@ -82,15 +82,15 @@ func TestPendingIntent_MultiLegUsesBatchCommitment(t *testing.T) {
 // =============================================================================
 
 func TestMempool_AddRejectsMalformed(t *testing.T) {
-	m := NewBatchMempool(DefaultBatchMempoolConfig())
+	m := newTestMempool(DefaultBatchMempoolConfig())
 
 	cases := []struct {
 		name string
 		p    *PendingBatchIntent
 	}{
 		{"nil", nil},
-		{"no id", &PendingBatchIntent{AccumulateSetRoot: testAccSet, GovernanceCommitment: testGov, ADIURL: "a", Account: acct1, OperationID: b32(1),
-			Legs: []LegExecution{oneLeg(1, dst, 1)}}},
+		{"no id", certifiedForTest(&PendingBatchIntent{AccumulateSetRoot: testAccSet, GovernanceCommitment: testGov, ADIURL: "a", Account: acct1, OperationID: b32(1),
+			Legs: []LegExecution{oneLeg(1, dst, 1)}})},
 		{"no adi", pending("i", "", 1, acct1, 1, oneLeg(1, dst, 1))},
 		{"no account", pending("i", "acc://a.acme", 1, common.Address{}, 1, oneLeg(1, dst, 1))},
 		{"zero opID", pending("i", "acc://a.acme", 1, acct1, 0, oneLeg(1, dst, 1))},
@@ -109,7 +109,7 @@ func TestMempool_AddRejectsMalformed(t *testing.T) {
 // A leg whose chain disagrees with the intent would land in the wrong tree â€” and the leaf
 // binds chainid, so it could never be spent.
 func TestMempool_AddRejectsChainMismatch(t *testing.T) {
-	m := NewBatchMempool(DefaultBatchMempoolConfig())
+	m := newTestMempool(DefaultBatchMempoolConfig())
 	p := pending("i", "acc://a.acme", 11155111, acct1, 1, oneLeg(8453, dst, 1))
 	if err := m.Add(p); err == nil {
 		t.Fatal("a leg on a different chain than its intent must be rejected")
@@ -117,7 +117,7 @@ func TestMempool_AddRejectsChainMismatch(t *testing.T) {
 }
 
 func TestMempool_AddIsIdempotentPerIntentID(t *testing.T) {
-	m := NewBatchMempool(DefaultBatchMempoolConfig())
+	m := newTestMempool(DefaultBatchMempoolConfig())
 	p := pending("dup", "acc://a.acme", 1, acct1, 1, oneLeg(1, dst, 1))
 	if err := m.Add(p); err != nil {
 		t.Fatal(err)
@@ -137,7 +137,7 @@ func TestMempool_AddIsIdempotentPerIntentID(t *testing.T) {
 // Members from different chains can never share a tree: the leaf binds block.chainid and the
 // anchor is per-chain.
 func TestMempool_PoolsAreSeparatedByChain(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{})
+	m := newTestMempool(BatchMempoolConfig{})
 	_ = m.Add(pending("a", "acc://a.acme", 11155111, acct1, 1, oneLeg(11155111, dst, 1)))
 	_ = m.Add(pending("b", "acc://b.acme", 8453, acct2, 2, oneLeg(8453, dst, 1)))
 
@@ -153,7 +153,7 @@ func TestMempool_PoolsAreSeparatedByChain(t *testing.T) {
 // A period with more members than a tree holds is cut into fixed trees, identically everywhere, and
 // nothing is removed by cutting.
 func TestMempool_PeriodIsCutIntoFixedTrees(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 3})
+	m := newTestMempool(BatchMempoolConfig{MaxBatchSize: 3})
 	for i := 0; i < 10; i++ {
 		p := pending(string(rune('a'+i)), "acc://x.acme", 1, acct1, uint64(i+1), oneLeg(1, dst, 1))
 		if err := m.Add(p); err != nil {
@@ -185,7 +185,7 @@ func TestMempool_PeriodIsCutIntoFixedTrees(t *testing.T) {
 // Order is by (CommitHeight, IntentID), never by arrival: a validator that saw the members in
 // another order must cut the same trees.
 func TestMempool_PeriodOrderIgnoresArrival(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{})
+	m := newTestMempool(BatchMempoolConfig{})
 	now := time.Now()
 	late := pending("b", "acc://x.acme", 1, acct1, 1, oneLeg(1, dst, 1))
 	late.CommitHeight, late.EnqueuedAt = 5, now.Add(-time.Hour)
@@ -207,7 +207,7 @@ func TestMempool_PeriodOrderIgnoresArrival(t *testing.T) {
 // A member with an outcome still holds its place in the dedupe index: the same intent arriving
 // again (a workflow re-run) is queued already, never queued - and settled - a second time.
 func TestMempool_AMemberWithAnOutcomeCannotBeQueuedAgain(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{})
+	m := newTestMempool(BatchMempoolConfig{})
 	p := pending("a", "acc://x.acme", 1, acct1, 1, oneLeg(1, dst, 1))
 	if err := m.Add(p); err != nil {
 		t.Fatal(err)
@@ -230,7 +230,7 @@ func TestMempool_AMemberWithAnOutcomeCannotBeQueuedAgain(t *testing.T) {
 // =============================================================================
 
 func TestMempool_ConcurrentAddIsSafe(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 1000})
+	m := newTestMempool(BatchMempoolConfig{MaxBatchSize: 1000})
 	var wg sync.WaitGroup
 	for i := 0; i < 100; i++ {
 		wg.Add(1)
@@ -258,7 +258,7 @@ func TestMempool_ConcurrentAddIsSafe(t *testing.T) {
 // The whole point, checked without a chain: N members from N different ADIs form ONE tree
 // whose every branch verifies.
 func TestMempool_DrainsIntoAVerifiableTree(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 50})
+	m := newTestMempool(BatchMempoolConfig{MaxBatchSize: 50})
 
 	const N = 12
 	adis := make([]string, N)
@@ -328,7 +328,7 @@ func TestMempool_DrainsIntoAVerifiableTree(t *testing.T) {
 
 // Mixed single-leg and multi-leg members in ONE tree â€” both nesting levels together.
 func TestMempool_MixedSingleAndMultiLegMembers(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 10})
+	m := newTestMempool(BatchMempoolConfig{MaxBatchSize: 10})
 
 	single := pending("single", "acc://a.acme", 1, acct1, 1, oneLeg(1, dst, 5))
 	multi := pending("multi", "acc://b.acme", 1, acct2, 2,

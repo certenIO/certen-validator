@@ -15,6 +15,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govvote"
 	"github.com/certen/independant-validator/pkg/config"
 	"github.com/certen/independant-validator/pkg/consensus"
 	"github.com/certen/independant-validator/pkg/database"
@@ -1219,9 +1220,18 @@ func (s *BatchStack) EnqueueAfter(
 		return fmt.Errorf("%w: intent %s on chain %d follows its member on chain %d, which is not queued here",
 			ErrBatchUnavailable, intentID, chainID, after.ChainID)
 	}
-	facts, err := memberFacts(pred)
+	predExec, err := pred.ExecutionCommitment()
 	if err != nil {
 		return fmt.Errorf("intent %s: its predecessor on chain %d: %w", intentID, after.ChainID, err)
+	}
+	predDeadline, ok := pred.Deadline()
+	if !ok {
+		return fmt.Errorf("intent %s: its predecessor on chain %d has no deadline; its non-settlement can never be final",
+			intentID, after.ChainID)
+	}
+	if govvote.CanonicalAccSpelling(pred.ADIURL) != govvote.CanonicalAccSpelling(adiURL) {
+		return fmt.Errorf("intent %s on chain %d (%s) follows a member of %s: one intent has one ADI",
+			intentID, chainID, adiURL, pred.ADIURL)
 	}
 	p, err := s.admit(intentID, adiURL, chainID, account, operationID, legs, attestation, governanceCommitment,
 		commitHeight, commitPartition, commitTime, accumTxHash)
@@ -1230,8 +1240,8 @@ func (s *BatchStack) EnqueueAfter(
 	}
 	p.SequencePosition = after.Position
 	p.After = &MemberPredecessor{
-		ChainID: facts.ChainID, OperationID: facts.OperationID, Account: facts.Account, Leaf: facts.Leaf,
-		Deadline: facts.Deadline, ContinueOnFailure: after.ContinueOnFailure,
+		ChainID: pred.ChainID, OperationID: pred.OperationID, Account: pred.Account, ADIURL: pred.ADIURL,
+		ExecutionCommitment: predExec, Deadline: predDeadline, ContinueOnFailure: after.ContinueOnFailure,
 	}
 	if err := s.Mempool.AddOnDemand(p); err != nil {
 		return err

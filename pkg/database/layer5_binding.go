@@ -38,9 +38,10 @@ type Layer5Binding struct {
 	BatchID uuid.UUID
 
 	// LeafHash is batch_transactions.transaction_hash: the BATCH-FORM leaf this member
-	// contributed to the tree —
-	// keccak256("certen:batchleaf:v1" || chainId || adiURLHash || execCommitment || operationID),
-	// the same value CertenAccountV7.computeLeaf returns.
+	// contributed to the tree, the same value its account's computeLeaf returns - under a V8.2
+	// anchor the v2 leaf of CertenAccountV7_2,
+	// keccak256("certen:batchleaf:v2" || chainId || adiURLHash || execCommitment || operationID || uint64 authorityPage),
+	// and under a V8.1 anchor CertenAccountV7's v1 leaf (no authority page).
 	//
 	// It is emphatically NOT the operationCommitment. That is an INPUT to the leaf. The two
 	// were conflated once (intent 50376476, 2026-08-25: operationCommitment 4b0149349a37ae53…

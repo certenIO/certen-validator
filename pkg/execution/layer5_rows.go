@@ -98,10 +98,10 @@ func BuildLayer5(
 	case binding != nil && len(binding.BatchRoot) == 32 && len(binding.LeafHash) == 32:
 		// THE BATCH PATH, AND THE ONLY ONE THAT CAN BE HONEST.
 		//
-		// The leaf is batch_transactions.transaction_hash — the BATCH-FORM leaf,
-		// keccak256("certen:batchleaf:v1" || chainId || adiURLHash || execCommitment ||
-		// operationID), the same value CertenAccountV7.computeLeaf returns and the same one
-		// the tree was built over.
+		// The leaf is batch_transactions.transaction_hash — the BATCH-FORM leaf the tree was
+		// built over, the same value the member's account's computeLeaf returns: the v2 leaf
+		// (certen:batchleaf:v2, binding the certified authority page) of a CertenAccountV7_2
+		// under a V8.2 anchor, the v1 leaf of a CertenAccountV7 under a V8.1 anchor.
 		//
 		// It is deliberately NOT the proof cycle's LeafHash. That field carries the
 		// operationCommitment, which is an INPUT to the leaf, not the leaf. Measured live on

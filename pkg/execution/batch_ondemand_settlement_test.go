@@ -212,7 +212,8 @@ var (
 func (f *fakeODChain) settlementInFlight(nonce uint64) bool { return f.inFlight[nonce] }
 
 func odOrchestrator(f *fakeODChain) *BatchOrchestrator {
-	return &BatchOrchestrator{incarnation: testIncarnation, odChain: f, logf: func(string, ...interface{}) {}, attempts: map[[32]byte]int{}}
+	return &BatchOrchestrator{incarnation: testIncarnation, odChain: f, logf: func(string, ...interface{}) {}, attempts: map[[32]byte]int{},
+		mempool: newTestMempool(BatchMempoolConfig{MaxBatchSize: 10})}
 }
 
 const odSettleNonce = 42
@@ -387,7 +388,7 @@ type attestCall struct {
 func settlementSubmitter(t *testing.T, f *fakeODChain) (*OnDemandSubmitter, *[]attestCall) {
 	t.Helper()
 	stack := &BatchStack{Incarnation: testIncarnation,
-		Mempool:       NewBatchMempool(BatchMempoolConfig{}),
+		Mempool:       newTestMempool(BatchMempoolConfig{}),
 		Orchestrators: map[int64]*BatchOrchestrator{odChain: odOrchestrator(f)},
 		SequenceChain: &fakeNSChain{},
 	}
@@ -453,7 +454,7 @@ func TestOD_ProgressIsPersistedWithTheMember(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := NewBatchMempool(BatchMempoolConfig{})
+	m := newTestMempool(BatchMempoolConfig{})
 	m.SetStore(store, func(string, ...interface{}) {})
 	p := odMember(1, odChain, 100)
 	if err := m.AddOnDemand(p); err != nil {
@@ -469,7 +470,7 @@ func TestOD_ProgressIsPersistedWithTheMember(t *testing.T) {
 		t.Fatal("progress noted on a member that is not queued")
 	}
 
-	restored := NewBatchMempool(BatchMempoolConfig{})
+	restored := newTestMempool(BatchMempoolConfig{})
 	if n, err := store.Load(restored); err != nil || n != 1 {
 		t.Fatalf("load: %d, %v", n, err)
 	}
@@ -694,7 +695,7 @@ func TestOD_AttestedByAnotherValidatorIsDecidedFromTheChain(t *testing.T) {
 // The 2-hour prune never drops a member this validator has acted on: its settlement may still land,
 // or it must settle under its own attestation. Such a member leaves the queue only through its outcome.
 func TestOD_PruneKeepsMembersThisValidatorActedOn(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{})
+	m := newTestMempool(BatchMempoolConfig{})
 	idle, sent, proved := odMember(1, odChain, 100), odMember(2, odChain, 101), odMember(3, odChain, 102)
 	for _, p := range []*PendingBatchIntent{idle, sent, proved} {
 		if err := m.AddOnDemand(p); err != nil {

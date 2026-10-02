@@ -38,8 +38,8 @@ func odTreeFor(t *testing.T, p *PendingBatchIntent) *BatchTree {
 // on, so a peer either has the intent (and agrees exactly) or does not (and says so).
 func TestOnDemandBundleIDIsAPureFunctionOfTheIntent(t *testing.T) {
 	// Two mempools in deliberately different states.
-	lonely := NewBatchMempool(BatchMempoolConfig{})
-	crowded := NewBatchMempool(BatchMempoolConfig{})
+	lonely := newTestMempool(BatchMempoolConfig{})
+	crowded := newTestMempool(BatchMempoolConfig{})
 	for _, id := range []byte{7, 8, 9} {
 		if err := crowded.AddOnDemand(odMember(id, odChain, 500+uint64(id))); err != nil {
 			t.Fatalf("seeding crowded mempool: %v", err)
@@ -146,7 +146,7 @@ func TestMultiLegIntentIsStillOneOnDemandMember(t *testing.T) {
 		t.Fatal("test setup: member should be multi-leg")
 	}
 
-	m := NewBatchMempool(BatchMempoolConfig{})
+	m := newTestMempool(BatchMempoolConfig{})
 	if err := m.AddOnDemand(p); err != nil {
 		t.Fatalf("AddOnDemand rejected a multi-leg member: %v", err)
 	}

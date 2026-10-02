@@ -61,15 +61,19 @@ func TestAV3BatchRefusesWhatItCannotCommit(t *testing.T) {
 	}
 }
 
-// fakeCerts is a record of intent certificates keyed by operation.
-type fakeCerts map[[32]byte]struct {
+// fakeCert is one intent certificate: its height, the message certified and the key page it certifies.
+type fakeCert struct {
 	height uint64
 	msg    [32]byte
+	page   string
 }
 
-func (f fakeCerts) IntentCertifiedHeight(op [32]byte) (uint64, [32]byte, bool) {
+// fakeCerts is a record of intent certificates keyed by operation.
+type fakeCerts map[[32]byte]fakeCert
+
+func (f fakeCerts) IntentCertified(op [32]byte) (consensus.CertifiedIntent, bool) {
 	c, ok := f[op]
-	return c.height, c.msg, ok
+	return consensus.CertifiedIntent{Height: c.height, Message: c.msg, KeyPageURL: c.page}, ok
 }
 
 func certifiedMember(id string, op byte, own [32]byte) *PendingBatchIntent {
@@ -108,10 +112,7 @@ func TestACertifiedMemberIsPlacedByItsCertificate(t *testing.T) {
 	}
 
 	certified := fill32(0xbb) // the quorum certified another message than this validator signed
-	certs[fill32(9)] = struct {
-		height uint64
-		msg    [32]byte
-	}{height: 250, msg: certified}
+	certs[fill32(9)] = fakeCert{height: 250, msg: certified, page: "acc://x.acme/book/1"}
 	if got := m.PeriodMembers(11155111, 0, 100); len(got) != 0 {
 		t.Fatal("placed in the period of its commit height")
 	}
@@ -146,7 +147,7 @@ func TestCertifiedAndUncertifiedMembersAreNeverOneTree(t *testing.T) {
 // placed by its certificate.
 func TestTheQueueKeepsTheIntentMessage(t *testing.T) {
 	path := t.TempDir() + "/mempool.json"
-	certs := fakeCerts{fill32(9): {height: 250, msg: fill32(0xbb)}}
+	certs := fakeCerts{fill32(9): {height: 250, msg: fill32(0xbb), page: "acc://x.acme/book/1"}}
 	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 10})
 	m.SetIntentCertificates(certs)
 	st, err := NewBatchMempoolStore(path, jsonCodec{}, nil)

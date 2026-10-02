@@ -21,7 +21,7 @@ func (jsonCodec) Decode(r json.RawMessage) (interface{}, error) {
 }
 
 func member(id string, h uint64, chain int64) *PendingBatchIntent {
-	return &PendingBatchIntent{AccumulateSetRoot: testAccSet, GovernanceCommitment: testGov,
+	return certifiedForTest(&PendingBatchIntent{AccumulateSetRoot: testAccSet, GovernanceCommitment: testGov,
 		IntentID: id, ADIURL: "acc://" + id + ".acme", ChainID: chain,
 		Account:     common.HexToAddress("0x32b4687bE3c02d52e2d94Dc1cFAF03a0E5af0C8B"),
 		OperationID: opid(byte(len(id))),
@@ -30,7 +30,7 @@ func member(id string, h uint64, chain int64) *PendingBatchIntent {
 		}},
 		CommitHeight: h,
 		Attestation:  map[string]interface{}{"intent": id},
-	}
+	})
 }
 
 // THE durability property: a member queued before a restart must be present after one, in the
@@ -42,7 +42,7 @@ func TestMempoolStore_SurvivesRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	before := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64})
+	before := newTestMempool(BatchMempoolConfig{MaxBatchSize: 64})
 	before.SetStore(st, nil)
 	for _, m := range []*PendingBatchIntent{member("alpha", 6259279, 11155111), member("beta", 6259282, 11155111)} {
 		if err := before.Add(m); err != nil {
@@ -55,7 +55,7 @@ func TestMempoolStore_SurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	after := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64})
+	after := newTestMempool(BatchMempoolConfig{MaxBatchSize: 64})
 	after.SetStore(st2, nil)
 
 	if got := after.PendingCount(); got != 2 {
@@ -94,7 +94,7 @@ func TestMempoolStore_SurvivesRestart(t *testing.T) {
 func TestMempoolStore_OutcomeIsPersisted(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mempool.json")
 	st, _ := NewBatchMempoolStore(path, jsonCodec{}, nil)
-	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64})
+	m := newTestMempool(BatchMempoolConfig{MaxBatchSize: 64})
 	m.SetStore(st, nil)
 	if err := m.Add(member("gamma", 100, 11155111)); err != nil {
 		t.Fatal(err)
@@ -102,7 +102,7 @@ func TestMempoolStore_OutcomeIsPersisted(t *testing.T) {
 	m.MarkOutcome(m.PeriodMembers(11155111, 100, 100), MemberSettled)
 
 	st2, _ := NewBatchMempoolStore(path, jsonCodec{}, nil)
-	after := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64})
+	after := newTestMempool(BatchMempoolConfig{MaxBatchSize: 64})
 	after.SetStore(st2, nil)
 	if got := after.PendingCount(); got != 0 {
 		t.Fatalf("%d member(s) resurrected as pending after they settled; they would be settled again", got)
@@ -119,7 +119,7 @@ func TestMempoolStore_MissingFileIsNotFatal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64})
+	m := newTestMempool(BatchMempoolConfig{MaxBatchSize: 64})
 	m.SetStore(st, nil) // must not panic or block
 	if m.PendingCount() != 0 {
 		t.Fatal("unexpected members")
@@ -144,7 +144,7 @@ func TestRestoreRefusesAMemberAdmittedBeforeV8_2(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := NewBatchMempool(BatchMempoolConfig{})
+	m := newTestMempool(BatchMempoolConfig{})
 	_, err = store.Load(m)
 	if err == nil || !strings.Contains(err.Error(), "retired V8.1 anchor") {
 		t.Fatalf("a pre-V8.2 member was restored (err %v)", err)

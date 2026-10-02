@@ -397,7 +397,7 @@ func TestIntentIdOverrideAndLeafStability(t *testing.T) {
 // The plumbing itself: LeafInput is the single funnel both lanes build their leaves through, so the
 // intent id has to survive that conversion or the cadence lane records nothing.
 func TestLeafInputCarriesTheIntentIdIntoTheTree(t *testing.T) {
-	p := &PendingBatchIntent{AccumulateSetRoot: testAccSet, GovernanceCommitment: testGov,
+	p := certifiedForTest(&PendingBatchIntent{AccumulateSetRoot: testAccSet, GovernanceCommitment: testGov,
 		IntentID:    "intent-cadence-one",
 		ADIURL:      "acc://payer-one.acme",
 		ChainID:     84532,
@@ -407,7 +407,7 @@ func TestLeafInputCarriesTheIntentIdIntoTheTree(t *testing.T) {
 			Target: common.HexToAddress("0x000000000000000000000000000000000000dEaD"),
 			Value:  big.NewInt(0),
 		}},
-	}
+	})
 	in, err := p.LeafInput()
 	if err != nil {
 		t.Fatalf("LeafInput: %v", err)
@@ -433,7 +433,7 @@ func TestLeafInputCarriesTheIntentIdIntoTheTree(t *testing.T) {
 // operation id) with every display column empty, while the shadow row held 3e595d2c… (the real
 // Accumulate transaction) and the full leg.
 func TestLeafInputCarriesProvenanceForTheCanonicalRow(t *testing.T) {
-	p := &PendingBatchIntent{AccumulateSetRoot: testAccSet, GovernanceCommitment: testGov,
+	p := certifiedForTest(&PendingBatchIntent{AccumulateSetRoot: testAccSet, GovernanceCommitment: testGov,
 		IntentID:    "intent-prov-1",
 		ADIURL:      "acc://payer-one.acme",
 		ChainID:     84532,
@@ -445,7 +445,7 @@ func TestLeafInputCarriesProvenanceForTheCanonicalRow(t *testing.T) {
 			Target: common.HexToAddress("0x12dD00C619C1Ac3F58eC68ed44ec1023fE33B9Ff"),
 			Value:  big.NewInt(0),
 		}},
-	}
+	})
 	in, err := p.LeafInput()
 	if err != nil {
 		t.Fatalf("LeafInput: %v", err)

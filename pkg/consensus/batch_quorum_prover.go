@@ -597,9 +597,9 @@ func batchLeaderRoster() []string {
 
 // memberADIURL resolves the ADI URL to hash into a batch member's Merkle leaf.
 //
-// This value is consensus-critical in a way that is easy to miss. ComputeBatchLeaf hashes
-// keccak256(adiURL) into the leaf, and CertenAccountV7.computeLeaf recomputes that leaf from
-// the account's OWN immutable adiURL, set at deployment by CertenAccountFactoryV9. If the two
+// This value is consensus-critical in a way that is easy to miss. The batch leaf hashes
+// keccak256(adiURL) into the leaf, and the account's computeLeaf recomputes that leaf from the
+// account's OWN immutable adiURL, set at deployment by its factory (V10 for CertenAccountV7_2). If the two
 // strings differ by even one character the leaf is not in the root the account checks against,
 // so executeGovernanceProofDirect reverts — AFTER the batch anchor and its BLS attestation
 // have been paid for on chain. The intent then sits pending forever with nothing recording why.

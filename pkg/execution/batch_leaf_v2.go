@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
+
+	"github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/govvote"
 )
 
 // The v2 batch leaf (RB3-F39), for CertenAccountV7_2 - the account the V8.2 rollout deploys through
@@ -62,6 +64,24 @@ func AuthorityPageIndex(pageURL string) (uint64, error) {
 	n, err := strconv.ParseUint(parts[len(parts)-1], 10, 64)
 	if err != nil || n == 0 {
 		return 0, fmt.Errorf("key page %q does not end in a page index of 1 or more", pageURL)
+	}
+	return n, nil
+}
+
+// AuthorityPageOfADI is AuthorityPageIndex for a page that must belong to adiURL: acc://<adi>/<book>/<index> whose
+// <adi> is the member's own ADI (canonical spelling). CertenAccountV7_2 reads the index as one of its own ADI's pages,
+// so a page of any other identity's book is refused - its index would be read as this ADI's page of that number.
+func AuthorityPageOfADI(pageURL, adiURL string) (uint64, error) {
+	n, err := AuthorityPageIndex(pageURL)
+	if err != nil {
+		return 0, err
+	}
+	page := govvote.CanonicalAccSpelling(pageURL)
+	parts := strings.Split(page[len("acc://"):], "/")
+	owner := "acc://" + strings.Join(parts[:len(parts)-2], "/")
+	if adi := govvote.CanonicalAccSpelling(adiURL); owner != adi {
+		return 0, fmt.Errorf("key page %s belongs to %s, not to the member's ADI %s; its account reads page %d as its own",
+			pageURL, owner, adi, n)
 	}
 	return n, nil
 }

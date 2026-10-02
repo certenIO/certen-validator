@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/common"
+
 	"github.com/certen/independant-validator/pkg/ledger"
 )
 
@@ -148,5 +150,50 @@ func TestTheCompletingBlockCarriesItsCertificateToTheDatabase(t *testing.T) {
 	p := newConsensusPersister(nil, "validator-test", persistQuietLog, nil)
 	if p.write(context.Background(), &committedBlock{height: 12}) {
 		t.Fatal("a persister without a certificate source wrote a height")
+	}
+}
+
+// RB5-F29: a member's v2 leaf binds the key page its intent's certificate certifies. The quorum record keeps that page
+// (canonical spelling) beside the message that commits its hash, and the certificate a batch member reads carries it.
+func TestTheCertificateCarriesTheKeyPageItsMessageCertifies(t *testing.T) {
+	f, reg := intentRegistry(t)
+	app, store := rotationApp(t, f.rotationFixture)
+	if err := store.SaveBLSRegistry(&ledger.BLSRegistryLog{Versions: []ledger.BLSRegistryRecord{*reg}}); err != nil {
+		t.Fatal(err)
+	}
+	blocks := make([]ValidatorBlock, 5)
+	for i := range blocks {
+		vb := intentBlock(t, fmt.Sprintf("validator-%d", i+1))
+		if err := buildCert(t, vb, reg, f.keys[i]); err != nil {
+			t.Fatalf("validator-%d: %v", i+1, err)
+		}
+		blocks[i] = *vb
+	}
+	var op [32]byte
+	copy(op[:], common.FromHex(blocks[0].CrossChainProof.OperationID))
+	page := blocks[0].IntentCertificate.KeyPageURL
+	if page == "" {
+		t.Fatal("test premise: the block names its key page")
+	}
+
+	app.recordIntentSignatures(11, blocks[:4])
+	if _, ok := app.IntentCertified(op); ok {
+		t.Fatal("certified with 400 of 700")
+	}
+	app.recordIntentSignatures(12, blocks[4:])
+	c, ok := app.IntentCertified(op)
+	if !ok || c.Height != 12 {
+		t.Fatalf("certificate (%+v, %v)", c, ok)
+	}
+	if want := strings.TrimSuffix(strings.ToLower(page), "/"); c.KeyPageURL != want {
+		t.Fatalf("the certificate carries key page %q, want the page its message certifies %q", c.KeyPageURL, want)
+	}
+	msg, _ := hex32(blocks[0].IntentCertificate.Message)
+	if c.Message != msg {
+		t.Fatalf("certified message %x, want %x", c.Message, msg)
+	}
+	ql, err := store.LoadIntentQuorum(strings.ToLower(blocks[0].CrossChainProof.OperationID))
+	if err != nil || ql.Groups[0].KeyPageURL != c.KeyPageURL {
+		t.Fatalf("the quorum record keeps page %q (%v)", ql.Groups[0].KeyPageURL, err)
 	}
 }

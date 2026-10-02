@@ -191,7 +191,7 @@ func TestAssemblyDoesNotEnqueueAnything(t *testing.T) {
 
 	// Assembly fails on the unreachable chain, but the mempool it would have used must in
 	// no case have been populated by construction.
-	m := NewBatchMempool(DefaultBatchMempoolConfig())
+	m := newTestMempool(DefaultBatchMempoolConfig())
 	if m.PendingCount() != 0 {
 		t.Fatal("a freshly built mempool must be empty")
 	}

@@ -16,7 +16,7 @@ import (
 // odMember builds a valid member. id varies the intentID and operationID together, the way a
 // real intent does â€” the operationID IS the intent's identity.
 func odMember(id byte, chainID int64, height uint64) *PendingBatchIntent {
-	return &PendingBatchIntent{AccumulateSetRoot: testAccSet, GovernanceCommitment: testGov,
+	return certifiedForTest(&PendingBatchIntent{AccumulateSetRoot: testAccSet, GovernanceCommitment: testGov,
 		IntentID:     string(rune('a'+id)) + "-intent",
 		ADIURL:       "acc://org" + string(rune('a'+id)) + ".acme",
 		ChainID:      chainID,
@@ -30,7 +30,7 @@ func odMember(id byte, chainID int64, height uint64) *PendingBatchIntent {
 			Value:   big.NewInt(0),
 			Data:    []byte{0xde, 0xad},
 		}},
-	}
+	})
 }
 
 const odChain = int64(11155111)
@@ -39,7 +39,7 @@ const odChain = int64(11155111)
 // structure is that the period path must not be able to see them â€” if it can, every period call
 // site needs a lane filter and the ones that get missed form batches over the wrong members.
 func TestOnDemandIndexIsInvisibleToPeriodSelection(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{})
+	m := newTestMempool(BatchMempoolConfig{})
 
 	// Same chain, same height window as the period member below.
 	if err := m.AddOnDemand(odMember(1, odChain, 105)); err != nil {
@@ -85,7 +85,7 @@ func TestOnDemandIndexIsInvisibleToPeriodSelection(t *testing.T) {
 // A period flush records outcomes on the period's members. It must never touch an on-demand
 // member â€” one resolved out from under the on-demand submitter would never settle and never fail.
 func TestPeriodOutcomesDoNotTouchOnDemandMembers(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{})
+	m := newTestMempool(BatchMempoolConfig{})
 	if err := m.AddOnDemand(odMember(1, odChain, 105)); err != nil {
 		t.Fatalf("AddOnDemand: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestPeriodOutcomesDoNotTouchOnDemandMembers(t *testing.T) {
 // Each pruner must be blind to the other lane. A shared pruner using one lane's horizon would
 // silently delete the other's members â€” the highest-consequence failure in this file.
 func TestOnDemandPruneDoesNotTouchPeriodPool(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{})
+	m := newTestMempool(BatchMempoolConfig{})
 	old := odMember(1, odChain, 105)
 	old.EnqueuedAt = time.Now().Add(-3 * time.Hour)
 	if err := m.AddOnDemand(old); err != nil {
@@ -127,7 +127,7 @@ func TestOnDemandPruneDoesNotTouchPeriodPool(t *testing.T) {
 
 // The converse: the period pruner is height-based and must not reach into the on-demand index.
 func TestPeriodPruneDoesNotTouchOnDemandMembers(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{})
+	m := newTestMempool(BatchMempoolConfig{})
 	if err := m.AddOnDemand(odMember(1, odChain, 105)); err != nil {
 		t.Fatalf("AddOnDemand: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestPeriodPruneDoesNotTouchOnDemandMembers(t *testing.T) {
 // which is meaningless without a period width â€” scaling that constant into this lane is the
 // bug class this test exists to prevent.
 func TestOnDemandTTLIsWallClock(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{})
+	m := newTestMempool(BatchMempoolConfig{})
 	now := time.Now()
 
 	young := odMember(1, odChain, 105)
@@ -181,7 +181,7 @@ func TestOnDemandTTLIsWallClock(t *testing.T) {
 // under the SAME operationID, and both must survive â€” this is the multi-chain case the design
 // has to support even though production has never exercised it.
 func TestSameOperationIDOnTwoChainsAreDistinctMembers(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{})
+	m := newTestMempool(BatchMempoolConfig{})
 	a := odMember(1, odChain, 105)
 	b := odMember(1, 84532, 105) // same intentID AND operationID, different chain
 	b.Legs[0].ChainID = 84532
@@ -203,7 +203,7 @@ func TestSameOperationIDOnTwoChainsAreDistinctMembers(t *testing.T) {
 
 // Idempotency matches the period pool's contract: same intent, same chain, refused.
 func TestAddOnDemandIsIdempotentPerChain(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{})
+	m := newTestMempool(BatchMempoolConfig{})
 	if err := m.AddOnDemand(odMember(1, odChain, 105)); err != nil {
 		t.Fatalf("first AddOnDemand: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestOnDemandRejectsWhatThePeriodPoolRejects(t *testing.T) {
 	}
 	for name, corrupt := range cases {
 		t.Run(name, func(t *testing.T) {
-			m := NewBatchMempool(BatchMempoolConfig{})
+			m := newTestMempool(BatchMempoolConfig{})
 			p := odMember(1, odChain, 105)
 			corrupt(p)
 			if err := m.AddOnDemand(p); err == nil {
@@ -237,7 +237,7 @@ func TestOnDemandRejectsWhatThePeriodPoolRejects(t *testing.T) {
 }
 
 func TestRemoveOnDemandReportsWhetherItRemoved(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{})
+	m := newTestMempool(BatchMempoolConfig{})
 	if err := m.AddOnDemand(odMember(1, odChain, 105)); err != nil {
 		t.Fatalf("AddOnDemand: %v", err)
 	}
@@ -253,7 +253,7 @@ func TestRemoveOnDemandReportsWhetherItRemoved(t *testing.T) {
 }
 
 func TestPendingOnDemandIsDeterministicallyOrdered(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{})
+	m := newTestMempool(BatchMempoolConfig{})
 	for _, id := range []byte{3, 1, 2} {
 		if err := m.AddOnDemand(odMember(id, odChain, uint64(100+id))); err != nil {
 			t.Fatalf("AddOnDemand: %v", err)
@@ -285,7 +285,7 @@ func TestOnDemandMembersRoundTripThroughStoreIntoTheirOwnIndex(t *testing.T) {
 		t.Fatalf("NewBatchMempoolStore: %v", err)
 	}
 
-	src := NewBatchMempool(BatchMempoolConfig{})
+	src := newTestMempool(BatchMempoolConfig{})
 	src.SetStore(store, nil)
 	if err := src.AddOnDemand(odMember(1, odChain, 105)); err != nil {
 		t.Fatalf("AddOnDemand: %v", err)
@@ -294,7 +294,7 @@ func TestOnDemandMembersRoundTripThroughStoreIntoTheirOwnIndex(t *testing.T) {
 		t.Fatalf("Add: %v", err)
 	}
 
-	dst := NewBatchMempool(BatchMempoolConfig{})
+	dst := newTestMempool(BatchMempoolConfig{})
 	n, err := store.Load(dst)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -345,7 +345,7 @@ func TestLaneLessSnapshotRestoresToThePeriodPool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewBatchMempoolStore: %v", err)
 	}
-	m := NewBatchMempool(BatchMempoolConfig{})
+	m := newTestMempool(BatchMempoolConfig{})
 	n, err := store.Load(m)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -372,7 +372,7 @@ func TestSnapshotRemainsABareArrayForRollback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewBatchMempoolStore: %v", err)
 	}
-	m := NewBatchMempool(BatchMempoolConfig{})
+	m := newTestMempool(BatchMempoolConfig{})
 	m.SetStore(store, nil)
 	if err := m.AddOnDemand(odMember(1, odChain, 105)); err != nil {
 		t.Fatalf("AddOnDemand: %v", err)
@@ -405,7 +405,7 @@ func TestSnapshotOmitsLaneForPeriodMembers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewBatchMempoolStore: %v", err)
 	}
-	m := NewBatchMempool(BatchMempoolConfig{})
+	m := newTestMempool(BatchMempoolConfig{})
 	m.SetStore(store, nil)
 	if err := m.Add(odMember(2, odChain, 106)); err != nil {
 		t.Fatalf("Add: %v", err)

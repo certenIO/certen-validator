@@ -261,7 +261,19 @@ func (s *OnDemandSubmitter) consider(ctx context.Context, member *PendingBatchIn
 
 	// A successor in a sequential intent is settled only once its predecessor has an outcome on its
 	// chain (batch_sequence.go). A member already acted on is past that point.
-	if member.After != nil && !member.AnchorProved && !member.AttestedSeen {
+	// The predecessor's leaf binds the key page the intent's certificate certifies (RB5-F29): the certificate is read
+	// first. Uncertified, a successor waits - past its deadline the settle path refuses it by name.
+	sequenced := member.After != nil && !member.AnchorProved && !member.AttestedSeen
+	if sequenced {
+		if cerr := s.cfg.Stack.Mempool.RequireCertified(member); cerr != nil {
+			if !orch.memberPastDeadline(member) {
+				logf("[OD] intent=%s on chain %d waits: %v", member.IntentID, member.ChainID, cerr)
+				return false
+			}
+			sequenced = false
+		}
+	}
+	if sequenced {
 		state, cause, serr := sequenceReadiness(ctx, s.cfg.Stack.SequenceChain, member)
 		switch {
 		case serr != nil:

@@ -10,7 +10,7 @@ import (
 // refusal under test happens before signing.
 func odStack(t *testing.T, chainID int64, members ...*PendingBatchIntent) *BatchStack {
 	t.Helper()
-	m := NewBatchMempool(BatchMempoolConfig{})
+	m := newTestMempool(BatchMempoolConfig{})
 	for _, p := range members {
 		if err := m.AddOnDemand(p); err != nil {
 			t.Fatalf("AddOnDemand: %v", err)
@@ -157,7 +157,7 @@ func TestOnDemandHandlerRefusesWithoutAttesterIdentity(t *testing.T) {
 // settling under a period anchor, and co-signing it as a one-member batch would double-spend
 // its leaf.
 func TestOnDemandHandlerCannotAttestAPeriodMember(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{})
+	m := newTestMempool(BatchMempoolConfig{})
 	if err := m.Add(odMember(1, odChain, 105)); err != nil { // PERIOD pool
 		t.Fatalf("Add: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestOnDemandHandlerCannotAttestAPeriodMember(t *testing.T) {
 
 // Codes are ADDITIVE. The period handler's decisions are unchanged; it merely labels them.
 func TestPeriodHandlerStillRefusesUnheldWithNotHeldCode(t *testing.T) {
-	m := NewBatchMempool(BatchMempoolConfig{})
+	m := newTestMempool(BatchMempoolConfig{})
 	s := &BatchStack{Incarnation: testIncarnation,
 		Mempool:       m,
 		Orchestrators: map[int64]*BatchOrchestrator{odChain: {incarnation: testIncarnation, screen: acceptEveryAccount}},
@@ -205,7 +205,7 @@ func TestPeriodHandlerStillRefusesUnheldWithNotHeldCode(t *testing.T) {
 
 func TestPeriodHandlerLabelsWidthMismatchAsConfig(t *testing.T) {
 	s := &BatchStack{Incarnation: testIncarnation,
-		Mempool:       NewBatchMempool(BatchMempoolConfig{}),
+		Mempool:       newTestMempool(BatchMempoolConfig{}),
 		Orchestrators: map[int64]*BatchOrchestrator{odChain: {incarnation: testIncarnation, screen: acceptEveryAccount}},
 		PeriodBlocks:  100,
 	}

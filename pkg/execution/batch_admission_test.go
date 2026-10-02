@@ -33,7 +33,7 @@ func twoChainStack(t *testing.T, a, b int64) *BatchStack {
 	}
 	return &BatchStack{Incarnation: testIncarnation,
 		Resolver:       r,
-		Mempool:        NewBatchMempool(BatchMempoolConfig{MaxBatchSize: 64}),
+		Mempool:        newTestMempool(BatchMempoolConfig{MaxBatchSize: 64}),
 		Orchestrators:  map[int64]*BatchOrchestrator{a: {incarnation: testIncarnation}, b: {incarnation: testIncarnation}},
 		MemberOutcomes: recordedOutcomes{},
 	}

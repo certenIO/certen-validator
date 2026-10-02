@@ -35,7 +35,7 @@ func TestOnDemandFailover_SurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pool := NewBatchMempool(BatchMempoolConfig{})
+	pool := newTestMempool(BatchMempoolConfig{})
 	pool.SetStore(st, nil)
 
 	blockTime := time.Now().Add(-9 * time.Minute).Truncate(time.Millisecond)
@@ -50,7 +50,7 @@ func TestOnDemandFailover_SurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	after := NewBatchMempool(BatchMempoolConfig{})
+	after := newTestMempool(BatchMempoolConfig{})
 	after.SetStore(st2, nil)
 	restored := after.PendingOnDemand(odChain)
 	if len(restored) != 1 {
@@ -178,7 +178,7 @@ func TestMemberPastDeadline_MeasuredFromTheBlockNotTheLocalQueue(t *testing.T) {
 // The 2-hour prune is a memory backstop and stays on the local clock on purpose: measured from the
 // block, a validator back from a 2-hour outage would drop every member it holds unrecorded.
 func TestOnDemandPrune_DoesNotDropMembersAfterAnOutage(t *testing.T) {
-	pool := NewBatchMempool(BatchMempoolConfig{})
+	pool := newTestMempool(BatchMempoolConfig{})
 	m := odMember(1, odChain, 105)
 	m.CommitTime = time.Now().Add(-3 * time.Hour)
 	if err := pool.AddOnDemand(m); err != nil {
