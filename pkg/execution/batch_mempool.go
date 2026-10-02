@@ -459,6 +459,9 @@ func (m *BatchMempool) RequireCertified(p *PendingBatchIntent) error {
 	if p == nil || p.IntentMessage == ([32]byte{}) {
 		return nil
 	}
+	if m == nil {
+		return fmt.Errorf("%w: intent %s: no mempool holds the record of intent certificates", ErrIntentNotYetCertified, p.IntentID)
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.placementHeight(p); !ok {
