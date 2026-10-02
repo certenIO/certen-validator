@@ -39,7 +39,8 @@ func (app *ValidatorApp) processBLSRegistry(rt *BLSRegistryTx, height int64) abc
 	if err != nil {
 		app.logger.Fatalf("❌ [BLS-REGISTRY] the committed policy (admin quorum) could not be read at height %d: %v", height, err)
 	}
-	rec, err := VerifyBLSRegistry(rt, app.cometChainID, policy, log, height)
+	// Judged by the admin set in force for this block (AdminSetAt, rules v11).
+	rec, err := VerifyBLSRegistry(rt, app.cometChainID, withAdminSetAt(policy, height), log, height)
 	if err != nil {
 		app.logger.Printf("🚫 [BLS-REGISTRY] refused at height %d: %v", height, err)
 		return abcitypes.ExecTxResult{Code: codeBLSRegistryRefused, Log: "BLS registry refused: " + err.Error()}

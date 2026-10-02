@@ -112,9 +112,11 @@ type ValidatorApp struct {
 	blockRulesV8Verdict  bool
 	blockRulesV9Verdict  bool
 	blockRulesV10Verdict bool
+	blockRulesV11Verdict bool
 	rulesV8FirstVerdict  int64
 	rulesV9FirstVerdict  int64
 	rulesV10FirstVerdict int64
+	rulesV11FirstVerdict int64
 }
 
 // committedRulesVersion is the lowest rules version that reproduces the committed history, result codes
@@ -132,6 +134,8 @@ type ValidatorApp struct {
 // on this state until a block makes that genuinely impossible.
 func (app *ValidatorApp) committedRulesVersion() uint64 {
 	switch {
+	case app.rulesV11FirstVerdict > 0:
+		return executionRulesV11
 	case app.rulesV10FirstVerdict > 0:
 		return executionRulesV10
 	case app.rulesV9FirstVerdict > 0:
@@ -249,7 +253,7 @@ func NewValidatorApp(ledgerStore *ledger.LedgerStore, chainID string) *Validator
 			version uint64
 			into    *int64
 		}{{executionRulesV8, &app.rulesV8FirstVerdict}, {executionRulesV9, &app.rulesV9FirstVerdict},
-			{executionRulesV10, &app.rulesV10FirstVerdict}} {
+			{executionRulesV10, &app.rulesV10FirstVerdict}, {executionRulesV11, &app.rulesV11FirstVerdict}} {
 			first, err := ledgerStore.RulesFirstVerdict(v.version)
 			if err != nil {
 				app.logger.Fatalf("❌ the first v%d verdict could not be read: %v - not starting on a ledger this node cannot read", v.version, err)
@@ -469,6 +473,14 @@ func (app *ValidatorApp) CheckTx(ctx context.Context, req *abcitypes.RequestChec
 	if rt, ok := DecodeBLSRegistry(req.Tx); ok {
 		if err := rt.CheckShape(); err != nil {
 			return &abcitypes.ResponseCheckTx{Code: codeBLSRegistryRefused, Log: "BLS registry refused: " + err.Error()}, nil
+		}
+		return &abcitypes.ResponseCheckTx{Code: 0, GasWanted: 1, GasUsed: 1}, nil
+	}
+	// The admin re-seal (rules v11): its shape filters the mempool; the chain, the admin set in force and the set it
+	// installs are judged in FinalizeBlock.
+	if rs, ok := DecodeAdminReseal(req.Tx); ok {
+		if err := rs.CheckShape(); err != nil {
+			return &abcitypes.ResponseCheckTx{Code: codeAdminResealRefused, Log: "admin re-seal refused: " + err.Error()}, nil
 		}
 		return &abcitypes.ResponseCheckTx{Code: 0, GasWanted: 1, GasUsed: 1}, nil
 	}
@@ -779,6 +791,7 @@ func (app *ValidatorApp) FinalizeBlock(ctx context.Context, req *abcitypes.Reque
 	app.blockRulesV8Verdict = false
 	app.blockRulesV9Verdict = false
 	app.blockRulesV10Verdict = false
+	app.blockRulesV11Verdict = false
 	// A fresh slice, never [:0]: the previous block's slice may already belong to the persister.
 	app.blockValidatorBlocks = nil
 
@@ -800,6 +813,13 @@ func (app *ValidatorApp) FinalizeBlock(ctx context.Context, req *abcitypes.Reque
 		if rt, ok := DecodeBLSRegistry(tx); ok {
 			app.blockRulesV10Verdict = true
 			result := app.processBLSRegistry(rt, req.Height)
+			txResults[i] = &result
+			continue
+		}
+		// Nor is the admin re-seal (rules v11). v10 judged it as a ValidatorBlock and refused it (code 2).
+		if rs, ok := DecodeAdminReseal(tx); ok {
+			app.blockRulesV11Verdict = true
+			result := app.processAdminReseal(rs, req.Height)
 			txResults[i] = &result
 			continue
 		}

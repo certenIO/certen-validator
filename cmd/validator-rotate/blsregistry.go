@@ -175,6 +175,7 @@ func blsRegistryPreflight(args []string, c rpcDoer) error {
 	}
 	fmt.Printf("registry v%d: %d members, threshold %d/%d, CERTEN set root 0x%x\n", tx.Version, len(tx.Members),
 		tx.ThresholdNumerator, tx.ThresholdDenominator, root)
+	var views []*nodeView
 	for _, base := range splitRPCs(*rpcs) {
 		v, err := readNode(c, base)
 		switch {
@@ -182,9 +183,12 @@ func blsRegistryPreflight(args []string, c rpcDoer) error {
 			problems = append(problems, fmt.Sprintf("%s: %v", base, err))
 		case v.chainID != tx.ChainID:
 			problems = append(problems, fmt.Sprintf("%s runs chain %q, the registry is for %q", base, v.chainID, tx.ChainID))
-		case v.appVersion < 10:
-			problems = append(problems, fmt.Sprintf("%s runs execution rules v%d; the registry needs v10", base, v.appVersion))
+		default:
+			views = append(views, v)
 		}
+	}
+	if len(views) > 0 {
+		problems = append(problems, fleetRulesProblems(views, 10, "registry")...)
 	}
 	selector := ethcrypto.Keccak256([]byte("currentValidatorSetRoot()"))[:4]
 	for _, a := range splitRPCs(*anchors) {
@@ -205,7 +209,7 @@ func blsRegistryPreflight(args []string, c rpcDoer) error {
 		}
 		return fmt.Errorf("NO-GO (%d problem(s))", len(problems))
 	}
-	fmt.Println("GO: every node runs rules v10 on the registry's chain, and every anchor commits its CERTEN set root")
+	fmt.Printf("GO: every node runs rules v%d on the registry's chain, and every anchor commits its CERTEN set root\n", views[0].appVersion)
 	return nil
 }
 

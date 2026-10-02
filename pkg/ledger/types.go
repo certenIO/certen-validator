@@ -183,6 +183,12 @@ type EntitlementPolicyState struct {
 	// it should not rest on a single key.
 	AdminThreshold int `json:"adminThreshold,omitempty"`
 
+	// AdminReseals is the APPEND-ONLY record of admin-set replacements (rules v11, consensus/admin_reseal.go). The
+	// admin set in force at height H is the newest re-seal recorded at a height below H, or AdminKeys/AdminThreshold
+	// above if there is none - derived like Schedule, so a block is judged by the same admins however often it is
+	// executed. AdminKeys/AdminThreshold stay the genesis seal.
+	AdminReseals []AdminReseal `json:"adminReseals,omitempty"`
+
 	// Schedule is the APPEND-ONLY list of accepted rule changes.
 	//
 	// The rule in force at height H is DERIVED from this list — the latest entry
@@ -203,6 +209,14 @@ type EntitlementPolicyState struct {
 }
 
 // ScheduledPolicyChange is one accepted rule change in the append-only schedule.
+// AdminReseal is one accepted replacement of the admin set: from Height+1 on, Keys/Threshold authorise.
+type AdminReseal struct {
+	Height    int64             `json:"height"`
+	ID        string            `json:"id"`
+	Keys      map[string]string `json:"keys"`
+	Threshold int               `json:"threshold"`
+}
+
 type ScheduledPolicyChange struct {
 	Mode string            `json:"mode"`
 	Keys map[string]string `json:"keys,omitempty"`
