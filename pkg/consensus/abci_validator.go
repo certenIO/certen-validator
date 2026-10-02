@@ -934,6 +934,8 @@ func (app *ValidatorApp) Commit(ctx context.Context, req *abcitypes.RequestCommi
 	// ValidatorBlocks, so the persister's watermark advances contiguously.
 	blockVBs := app.blockValidatorBlocks
 	app.blockValidatorBlocks = nil
+	// Their intent signatures toward each operation's quorum certificate (intent_quorum.go, RB5 D3).
+	app.recordIntentSignatures(int64(height), blockVBs)
 	if app.persister != nil && app.currentBlockHeight > 0 {
 		app.persister.enqueue(committedBlock{
 			height: int64(app.currentBlockHeight),

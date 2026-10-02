@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -76,6 +77,9 @@ var (
 	// CERTEN's BLS registry as the chain recorded it (RB5 D3): every accepted version, oldest first. It is the
 	// key a ValidatorBlock's intent signature verifies against, by validator id, deterministically.
 	keyBLSRegistry = []byte("abci:bls_registry") // -> BLSRegistryLog
+
+	// Per operation: committed intent signatures and their quorum certificates (RB5 D3).
+	keyIntentQuorumPrefix = []byte("abci:intent_quorum:") // + operation id -> IntentQuorumLog
 )
 
 // systemBlockKey generates a KV key for a specific system ledger block
@@ -590,6 +594,36 @@ func (s *LedgerStore) LoadBLSRegistry() (*BLSRegistryLog, error) {
 	var l BLSRegistryLog
 	if err := json.Unmarshal(b, &l); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal BLSRegistryLog: %w", err)
+	}
+	return &l, nil
+}
+
+func intentQuorumKey(operationID string) []byte {
+	return append(append([]byte(nil), keyIntentQuorumPrefix...), []byte(strings.ToLower(operationID))...)
+}
+
+// SaveIntentQuorum persists an operation's intent quorum log.
+func (s *LedgerStore) SaveIntentQuorum(l *IntentQuorumLog) error {
+	b, err := json.Marshal(l)
+	if err != nil {
+		return fmt.Errorf("failed to marshal IntentQuorumLog: %w", err)
+	}
+	return s.kv.Set(intentQuorumKey(l.OperationID), b)
+}
+
+// LoadIntentQuorum returns an operation's intent quorum log: empty when nothing is recorded for it, an error when
+// it could not be read.
+func (s *LedgerStore) LoadIntentQuorum(operationID string) (*IntentQuorumLog, error) {
+	b, err := s.read(intentQuorumKey(operationID), "intent quorum")
+	if err != nil {
+		return nil, err
+	}
+	if b == nil {
+		return &IntentQuorumLog{OperationID: strings.ToLower(operationID)}, nil
+	}
+	var l IntentQuorumLog
+	if err := json.Unmarshal(b, &l); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal IntentQuorumLog: %w", err)
 	}
 	return &l, nil
 }

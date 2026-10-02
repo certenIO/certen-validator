@@ -288,3 +288,43 @@ type BLSRegistryMember struct {
 	BLSPubKey   string `json:"bls_pub_key"` // lowercase hex, 96 bytes
 	Power       uint64 `json:"power"`
 }
+
+// IntentQuorumLog is, for one operation, every committed intent signature grouped by the message and registry it
+// was signed under, and the quorum certificate of each group that reached the registry's threshold (RB5 D3).
+type IntentQuorumLog struct {
+	OperationID string              `json:"operation_id"`
+	Groups      []IntentQuorumGroup `json:"groups"`
+}
+
+// IntentQuorumGroup is the signatures over one message under one registry version.
+type IntentQuorumGroup struct {
+	Message         string                   `json:"message"` // 0x-hex32
+	RegistryVersion uint64                   `json:"registry_version"`
+	Partials        []IntentPartial          `json:"partials"`
+	Certificate     *IntentQuorumCertificate `json:"certificate,omitempty"`
+}
+
+// IntentPartial is one validator's committed intent signature.
+type IntentPartial struct {
+	ValidatorID string `json:"validator_id"`
+	Signature   string `json:"signature"` // hex G1
+	Height      int64  `json:"height"`    // the block that committed it
+}
+
+// IntentQuorumCertificate is CERTEN's quorum over one intent message: the aggregate of the signers' signatures, the
+// aggregate of their registered keys, and the power that signed, out of the registry's.
+type IntentQuorumCertificate struct {
+	OperationID          string   `json:"operation_id"`
+	Message              string   `json:"message"`
+	RegistryVersion      uint64   `json:"registry_version"`
+	CertenSetRoot        string   `json:"certen_set_root"`
+	Height               int64    `json:"height"`           // the block whose commit completed the quorum
+	Signers              []string `json:"signers"`          // validator ids, in ascending EVM address order
+	SignerAddresses      []string `json:"signer_addresses"` // ascending
+	AggregateSignature   string   `json:"aggregate_signature"`
+	AggregatePublicKey   string   `json:"aggregate_public_key"`
+	SignedPower          string   `json:"signed_power"`
+	TotalPower           string   `json:"total_power"`
+	ThresholdNumerator   uint64   `json:"threshold_numerator"`
+	ThresholdDenominator uint64   `json:"threshold_denominator"`
+}
