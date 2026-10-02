@@ -261,3 +261,27 @@ func TestTheToolsSeedKeyIsTheNodesSeedKey(t *testing.T) {
 		t.Fatal("the tool derives a different node id from the seed than the node runs")
 	}
 }
+
+// A seed is exactly 32 bytes. HMAC zero-pads a short key, so a 31-byte prefix of a seed ending in 0 backed the very
+// same key (RB5-F24: it made "another" rotation key equal the first one in 1 run of 256). keyFromSeed refuses it.
+func TestASeedIsExactly32Bytes(t *testing.T) {
+	seed := make([]byte, 32)
+	for i := range seed[:31] {
+		seed[i] = byte(i + 1)
+	}
+	for _, n := range []int{0, 31, 33, 64} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("a %d-byte seed backed a key", n)
+				}
+			}()
+			s := make([]byte, n)
+			copy(s, seed)
+			keyFromSeed(s, labelPrivval)
+		}()
+	}
+	if keyFromSeed(seed, labelPrivval).Equals(keyFromSeed(seed, labelNodeKey)) {
+		t.Fatal("the consensus and node keys of one seed coincide")
+	}
+}

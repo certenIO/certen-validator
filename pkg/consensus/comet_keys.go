@@ -173,8 +173,13 @@ func seedFromEnv(getenv func(string) string, name string) ([]byte, error) {
 	return seed, nil
 }
 
-// keyFromSeed is the ed25519 key a seed backs: HMAC-SHA256(seed, label) as the ed25519 seed.
+// keyFromSeed is the ed25519 key a seed backs: HMAC-SHA256(seed, label) as the ed25519 seed. A seed is exactly
+// 32 bytes: HMAC zero-pads a shorter key, so "ab" and "ab00" would back one key (RB5-F24). Every entry point
+// (seedFromEnv, validator-rotate's loadSeed and keygen) enforces it; this refuses anything else outright.
 func keyFromSeed(seed []byte, label string) cmted25519.PrivKey {
+	if len(seed) != 32 {
+		panic(fmt.Sprintf("keyFromSeed: a seed is 32 bytes, not %d", len(seed)))
+	}
 	mac := hmac.New(sha256.New, seed)
 	mac.Write([]byte(label))
 	return cmted25519.PrivKey(ed25519.NewKeyFromSeed(mac.Sum(nil)))
