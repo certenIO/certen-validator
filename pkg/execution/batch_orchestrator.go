@@ -224,27 +224,6 @@ func (o *BatchOrchestrator) FlushChain(
 			"height source is not wired", chainID)
 	}
 
-	// A member whose intent CERTEN's quorum never certified before its settlement deadline cannot enter a v3 batch
-	// (its operation id would commit an uncertified message) and must not wait for ever: it leaves the batch path by
-	// name (RB5 D3). Every validator reads the same certificate record and the same deadline.
-	var neverCertified []*PendingBatchIntent
-	for _, p := range o.mempool.UncertifiedPending(chainID) {
-		if o.memberPastDeadline(p) {
-			neverCertified = append(neverCertified, p)
-		}
-	}
-	if len(neverCertified) > 0 {
-		res := &BatchFlushResult{ChainID: chainID, TxHashes: map[string]string{}}
-		for _, p := range neverCertified {
-			o.logf("[BATCH] chain=%d dropping member %s: its intent was not quorum-certified before its settlement deadline",
-				chainID, p.IntentID)
-			res.drop(fmt.Sprintf("CERTEN's quorum did not certify its intent (message 0x%x) before its settlement deadline "+
-				"on chain %d", p.IntentMessage[:8], chainID), p)
-		}
-		o.markOutcomes(res)
-		return res, nil
-	}
-
 	// The period's WHOLE member set - settled and pending alike - cut into trees by the one
 	// eligibility rule every validator applies (periodChunks). A peer asked to co-sign cuts the same
 	// trees from its own copy; the leader never works from a subset it alone holds (RB3-F54).

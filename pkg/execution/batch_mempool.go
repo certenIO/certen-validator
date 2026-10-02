@@ -900,6 +900,33 @@ func (m *BatchMempool) PendingPeriods(chainID int64, periodBlocks, beforeStart u
 // were settled by whichever node did lead their period. Only FlushChain, which the leader alone
 // runs, produces members that genuinely failed (Dropped, recorded with their cause).
 func (m *BatchMempool) PruneOlderThan(horizonStart uint64) int {
+	return m.PruneOlderThanExcept(horizonStart, nil)
+}
+
+// PendingOlderThan is every member older than horizonStart that has no outcome on this validator, in (chain, IntentID)
+// order: what a prune at that horizon would remove without one.
+func (m *BatchMempool) PendingOlderThan(horizonStart uint64) []*PendingBatchIntent {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []*PendingBatchIntent
+	for _, pool := range m.pool {
+		for _, p := range pool {
+			if p != nil && p.pending() && p.CommitHeight != 0 && p.CommitHeight < horizonStart {
+				out = append(out, p)
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].ChainID != out[j].ChainID {
+			return out[i].ChainID < out[j].ChainID
+		}
+		return out[i].IntentID < out[j].IntentID
+	})
+	return out
+}
+
+// PruneOlderThanExcept is PruneOlderThan keeping the members in keep: those whose fate could not be read yet.
+func (m *BatchMempool) PruneOlderThanExcept(horizonStart uint64, keep map[*PendingBatchIntent]bool) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -907,7 +934,7 @@ func (m *BatchMempool) PruneOlderThan(horizonStart uint64) int {
 	for chainID, pool := range m.pool {
 		var rest []*PendingBatchIntent
 		for _, p := range pool {
-			if p != nil && p.CommitHeight != 0 && p.CommitHeight < horizonStart {
+			if p != nil && !keep[p] && p.CommitHeight != 0 && p.CommitHeight < horizonStart {
 				delete(m.seen, memberKey(p.IntentID, p.ChainID))
 				pruned++
 				continue

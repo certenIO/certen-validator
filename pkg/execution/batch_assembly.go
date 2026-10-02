@@ -2,10 +2,12 @@ package execution
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 	"os"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -472,6 +474,132 @@ func (s *BatchStack) settleGraceElapsed(
 	return false
 }
 
+// memberLeader is whether this node leads a member's decision now: the leader of the member's commit period, rotating
+// as periods elapse - the period path's own rule, so exactly one validator records each outcome and a dead leader's
+// turn passes to the next. No leader function (a single-node devnet) leads everything.
+func (s *BatchStack) memberLeader(cutoff, periodBlocks uint64,
+	isLeader func(chainID int64, periodStart, elapsedPeriods uint64) bool) func(*PendingBatchIntent) bool {
+	return func(m *PendingBatchIntent) bool {
+		if isLeader == nil {
+			return true
+		}
+		if periodBlocks == 0 {
+			periodBlocks = 1
+		}
+		start := BatchPeriodCutoff(m.CommitHeight, periodBlocks)
+		var elapsed uint64
+		if cutoff > start {
+			elapsed = (cutoff - start) / periodBlocks
+		}
+		return isLeader(m.ChainID, start, elapsed)
+	}
+}
+
+// settleNeverCertified refuses by name every member whose intent CERTEN's quorum did not certify before its settlement
+// deadline (RB5 D3): it cannot enter a v3 batch - its operation id would commit an uncertified message - and must not
+// wait for ever. Decided by the member's leader alone; the others keep their copy until the outcome is recorded.
+func (s *BatchStack) settleNeverCertified(leads func(*PendingBatchIntent) bool, onDropped BatchDropFn,
+	logf func(string, ...interface{})) {
+	for _, chainID := range s.chainsInPool() {
+		for _, m := range s.Mempool.UncertifiedPending(chainID) {
+			origin, _ := m.Origin()
+			if origin.IsZero() || time.Since(origin) <= m.settlementHorizon() || !leads(m) {
+				continue
+			}
+			if onDropped == nil {
+				logf("[BATCH-FLUSH] ⚠️ member %s on chain %d was never certified before its deadline and no drop handler "+
+					"is wired to record it", m.IntentID, chainID)
+				continue
+			}
+			cause := fmt.Sprintf("CERTEN's quorum did not certify its intent (message 0x%x) before its settlement "+
+				"deadline on chain %d", m.IntentMessage[:8], chainID)
+			logf("[BATCH-FLUSH] refusing member %s: %s", m.IntentID, cause)
+			onDropped(context.Background(), m, cause)
+			s.Mempool.MarkOutcome([]*PendingBatchIntent{m}, MemberDropped)
+		}
+	}
+}
+
+// chainsInPool is every chain the period pool holds members for, ascending.
+func (s *BatchStack) chainsInPool() []int64 {
+	s.Mempool.mu.Lock()
+	defer s.Mempool.mu.Unlock()
+	out := make([]int64, 0, len(s.Mempool.pool))
+	for c := range s.Mempool.pool {
+		out = append(out, c)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+// settleAtRetentionHorizon decides every member still pending on this node at the retention horizon before the prune
+// removes it - it never vanishes without an outcome (sweep-2 "prune horizon", RB5). A member whose outcome another
+// validator recorded is that validator's copy, removed as cleanup. A member with no outcome recorded anywhere is
+// refused by name through the drop handler - the ADI learns it did not settle. A member whose outcome cannot be read
+// is kept and decided on a later pass. Returns the members to keep.
+func (s *BatchStack) settleAtRetentionHorizon(retention, horizon uint64, leads func(*PendingBatchIntent) bool,
+	onDropped BatchDropFn, logf func(string, ...interface{})) map[*PendingBatchIntent]bool {
+	keep := map[*PendingBatchIntent]bool{}
+	for _, m := range s.Mempool.PendingOlderThan(horizon) {
+		err := s.undecided(m.IntentID, m.ChainID)
+		switch {
+		case errors.Is(err, ErrMemberAlreadyDecided):
+			// Another validator's record: this node's copy goes.
+		case err == nil && !leads(m):
+			// Not this node's to decide: one validator records the outcome, not every one. Kept until it is
+			// recorded, then it goes as another validator's.
+			keep[m] = true
+		case err != nil:
+			keep[m] = true
+			logf("[BATCH-FLUSH] member %s on chain %d reached the retention horizon and its outcome cannot be read "+
+				"(%v); kept until it can", m.IntentID, m.ChainID, err)
+		case onDropped == nil:
+			keep[m] = true
+			logf("[BATCH-FLUSH] ⚠️ member %s on chain %d reached the retention horizon with no outcome and no drop "+
+				"handler is wired to record it; kept", m.IntentID, m.ChainID)
+		default:
+			cause := fmt.Sprintf("it reached the batch path's retention horizon (%d periods) on chain %d with no outcome "+
+				"recorded by any validator", retention, m.ChainID)
+			logf("[BATCH-FLUSH] refusing member %s: %s", m.IntentID, cause)
+			onDropped(context.Background(), m, cause)
+			s.Mempool.MarkOutcome([]*PendingBatchIntent{m}, MemberDropped)
+		}
+	}
+	return keep
+}
+
+// settleOnDemandAtTTL decides every on-demand member a TTL prune would remove before it is removed, as
+// settleAtRetentionHorizon does for the period pool: another validator's recorded outcome lets this node's copy go; no
+// outcome anywhere is a refusal by name; an unreadable outcome keeps the member for a later pass. Returns how many were
+// pruned.
+func (s *BatchStack) settleOnDemandAtTTL(ttl time.Duration, now time.Time, leads func(*PendingBatchIntent) bool,
+	onDropped BatchDropFn, logf func(string, ...interface{})) int {
+	keep := map[*PendingBatchIntent]bool{}
+	for _, m := range s.Mempool.OnDemandPruneCandidates(ttl, now) {
+		err := s.undecided(m.IntentID, m.ChainID)
+		switch {
+		case errors.Is(err, ErrMemberAlreadyDecided):
+		case err == nil && !leads(m):
+			// The member's failover leader records it; this node keeps its copy until then.
+			keep[m] = true
+		case err != nil:
+			keep[m] = true
+			logf("[OD] member %s on chain %d is past its TTL and its outcome cannot be read (%v); kept until it can",
+				m.IntentID, m.ChainID, err)
+		case onDropped == nil:
+			keep[m] = true
+			logf("[OD] ⚠️ member %s on chain %d is past its TTL with no outcome and no drop handler is wired; kept",
+				m.IntentID, m.ChainID)
+		default:
+			cause := fmt.Sprintf("its on-demand settlement window closed on chain %d with no outcome recorded by any "+
+				"validator", m.ChainID)
+			logf("[OD] refusing member %s: %s", m.IntentID, cause)
+			onDropped(context.Background(), m, cause)
+		}
+	}
+	return s.Mempool.PruneOnDemandOlderThanExcept(ttl, now, keep)
+}
+
 // flushOneChain is the shared body: form the period's tree, settle it, then dispose of every
 // member exactly once — settled and failed to the attester, dropped to the drop handler, which
 // records each as FAILED with its cause (there is no other path that settles it).
@@ -730,13 +858,19 @@ func (s *BatchStack) RunFlushLoop(
 				cfg.IsLeaderFn, grace, now, cfg.Attest, cfg.OnDropped, logf)
 		}
 
+		// A member whose intent was never quorum-certified before its deadline is decided by its own leader
+		// (RB5 D3).
+		leads := s.memberLeader(cutoff, periodBlocks, cfg.IsLeaderFn)
+		s.settleNeverCertified(leads, cfg.OnDropped, logf)
+
 		// Memory backstop. Correctness does not depend on it — selection is bucket-scoped, so
 		// stale members cannot pollute a later period's tree.
 		if horizonPeriods := retention * periodBlocks; cutoff > horizonPeriods {
-			if n := s.Mempool.PruneOlderThan(cutoff - horizonPeriods); n > 0 {
-				logf("[BATCH-FLUSH] pruned %d member(s) older than %d periods. On a node that led "+
-					"their period this means a batch never settled; on any other node it is the "+
-					"expected copy of a batch some other leader settled.", n, retention)
+			horizon := cutoff - horizonPeriods
+			keep := s.settleAtRetentionHorizon(retention, horizon, leads, cfg.OnDropped, logf)
+			if n := s.Mempool.PruneOlderThanExcept(horizon, keep); n > 0 {
+				logf("[BATCH-FLUSH] pruned %d member(s) older than %d periods, each with an outcome recorded by "+
+					"this or another validator, or refused by name here", n, retention)
 			}
 		}
 	}
