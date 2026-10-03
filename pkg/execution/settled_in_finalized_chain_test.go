@@ -71,6 +71,14 @@ func (n *reorgNode) serve(t *testing.T) *ethclient.Client {
 			reply(m)
 		case "eth_blockNumber":
 			reply(fmt.Sprintf("0x%x", n.finalized+40))
+		case "eth_getBlockByHash":
+			var asked common.Hash
+			_ = json.Unmarshal(req.Params[0], &asked)
+			if asked == n.canonical.Hash() {
+				reply(n.canonical)
+			} else {
+				reply(nil)
+			}
 		case "eth_getBlockReceipts":
 			if n.inBlock {
 				reply([]interface{}{receipt(n.canonical.Hash())})
@@ -90,7 +98,7 @@ func (n *reorgNode) serve(t *testing.T) *ethclient.Client {
 }
 
 func reorgObserver(c *ethclient.Client) *ExternalChainObserver {
-	return &ExternalChainObserver{ethClient: c, chainID: 11155111, pollingInterval: 5 * time.Millisecond}
+	return &ExternalChainObserver{ethClient: c, finality: c, chainID: 11155111, pollingInterval: 5 * time.Millisecond}
 }
 
 func canonicalAt(height uint64) *types.Header {

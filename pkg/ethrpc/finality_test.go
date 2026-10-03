@@ -31,6 +31,12 @@ func (f *fakeFinality) HeaderByNumber(_ context.Context, n *big.Int) (*types.Hea
 	}
 	return &h, nil
 }
+func (f *fakeFinality) HeaderByHash(_ context.Context, h common.Hash) (*types.Header, error) {
+	if f.canonical.Hash() != h {
+		return nil, errors.New("not found")
+	}
+	return f.canonical, nil
+}
 func (f *fakeFinality) BlockReceipts(context.Context, rpc.BlockNumberOrHash) ([]*types.Receipt, error) {
 	return f.inBlock, nil
 }

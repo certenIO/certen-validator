@@ -23,10 +23,12 @@ var ErrNotYetFinalized = errors.New("transaction not yet finalized")
 // block is final. Twice the worst observed.
 const FinalityBound = 2 * time.Hour
 
-// FinalityReader is what SettledInFinalizedChain reads; *ethclient.Client is one.
+// FinalityReader is what SettledInFinalizedChain and the observers read a settlement's finality facts through. In
+// production it is an AgreeingReader over independent providers (RB5-F53); *ethclient.Client also satisfies it.
 type FinalityReader interface {
 	TransactionReceipt(ctx context.Context, txHash common.Hash) (*types.Receipt, error)
 	HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error)
+	HeaderByHash(ctx context.Context, hash common.Hash) (*types.Header, error)
 	BlockReceipts(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) ([]*types.Receipt, error)
 }
 
@@ -63,7 +65,18 @@ func SettledInFinalizedChain(ctx context.Context, c FinalityReader, txHash commo
 		}
 		header, err := c.HeaderByNumber(ctx, receipt.BlockNumber)
 		if err != nil {
-			return nil, fmt.Errorf("get the finalized header at %d: %w", receipt.BlockNumber.Uint64(), err)
+			if !unsettledView(err) {
+				return nil, fmt.Errorf("get the finalized header at %d: %w", receipt.BlockNumber.Uint64(), err)
+			}
+			// The providers do not yet agree on the header at this height (RB5-F53): wait, then read everything again.
+			logf("⏳ [FINALITY] tx %s: %v", txHash.Hex(), err)
+			if time.Now().After(deadline) {
+				return nil, fmt.Errorf("the finalized header at %d is not agreed before the deadline: %w", receipt.BlockNumber.Uint64(), err)
+			}
+			if !sleepPoll(ctx, poll) {
+				return nil, ctx.Err()
+			}
+			continue
 		}
 		if header.Hash() == receipt.BlockHash {
 			return receipt, nil
@@ -72,7 +85,17 @@ func SettledInFinalizedChain(ctx context.Context, c FinalityReader, txHash commo
 			txHash.Hex(), receipt.BlockHash.Hex(), receipt.BlockNumber.Uint64(), header.Hash().Hex())
 		receipts, err := c.BlockReceipts(ctx, rpc.BlockNumberOrHashWithHash(header.Hash(), true))
 		if err != nil {
-			return nil, fmt.Errorf("read the receipts of finalized block %s: %w", header.Hash().Hex(), err)
+			if !unsettledView(err) {
+				return nil, fmt.Errorf("read the receipts of finalized block %s: %w", header.Hash().Hex(), err)
+			}
+			logf("⏳ [FINALITY] tx %s: %v", txHash.Hex(), err)
+			if time.Now().After(deadline) {
+				return nil, fmt.Errorf("the receipts of finalized block %s are not agreed before the deadline: %w", header.Hash().Hex(), err)
+			}
+			if !sleepPoll(ctx, poll) {
+				return nil, ctx.Err()
+			}
+			continue
 		}
 		for _, r := range receipts {
 			if r != nil && r.TxHash == txHash {
@@ -95,6 +118,20 @@ func SettledInFinalizedChain(ctx context.Context, c FinalityReader, txHash commo
 			return nil, ctx.Err()
 		case <-time.After(poll):
 		}
+	}
+}
+
+// unsettledView: the providers have not converged on a fact yet (RB5-F53), which is waited out, never taken as a verdict.
+func unsettledView(err error) bool {
+	return errors.Is(err, ErrProvidersDisagree) || errors.Is(err, ErrTooFewProviders)
+}
+
+func sleepPoll(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(d):
+		return true
 	}
 }
 

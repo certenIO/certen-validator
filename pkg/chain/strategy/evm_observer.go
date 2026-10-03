@@ -52,6 +52,11 @@ type EVMObserverConfig struct {
 	// Timeout is the maximum time to wait for finalization
 	Timeout time.Duration
 
+	// Finality is where a settlement's finality facts come from: independent providers that must agree (RB5-F53).
+	// FinalityErr says why there is none; every non-TRON observation is then refused by it.
+	Finality    ethrpc.FinalityReader
+	FinalityErr error
+
 	// Callbacks
 	OnFinalized func(*ObservationResult)
 	OnFailed    func(common.Hash, error)
@@ -70,6 +75,9 @@ func DefaultEVMObserverConfig() *EVMObserverConfig {
 // EVM OBSERVER
 // =============================================================================
 
+// FinalityError says why this observer has no agreeing providers (RB5-F53), or nil when it has them.
+func (o *EVMObserver) FinalityError() error { return o.finalityErr }
+
 // EVMObserver watches EVM chains for transaction finalization
 type EVMObserver struct {
 	mu sync.RWMutex
@@ -77,6 +85,9 @@ type EVMObserver struct {
 	client      *ethclient.Client
 	chainID     int64
 	validatorID string
+
+	finality    ethrpc.FinalityReader // RB5-F53: agreeing independent providers
+	finalityErr error
 
 	// Configuration
 	requiredConfirmations int
@@ -127,6 +138,8 @@ func NewEVMObserver(config *EVMObserverConfig) (*EVMObserver, error) {
 
 	return &EVMObserver{
 		client:                config.Client,
+		finality:              config.Finality,
+		finalityErr:           config.FinalityErr,
 		chainID:               config.ChainID,
 		validatorID:           config.ValidatorID,
 		requiredConfirmations: config.RequiredConfirmations,
@@ -177,12 +190,16 @@ func (o *EVMObserver) ObserveTransaction(ctx context.Context, txHash common.Hash
 		err       error
 	)
 	if !tronChainIDs[o.chainID] {
-		receipt, err = ethrpc.SettledInFinalizedChain(ctx, o.client, txHash, deadline, o.pollingInterval, log.Printf)
+		if o.finality == nil {
+			return nil, fmt.Errorf("chain %d: no agreeing providers to observe %s with: %v", o.chainID, txHash.Hex(), o.finalityErr)
+		}
+		receipt, err = ethrpc.SettledInFinalizedChain(ctx, o.finality, txHash, deadline, o.pollingInterval, log.Printf)
 		if err != nil {
 			return nil, fmt.Errorf("observe %s in the finalized chain %d: %w", txHash.Hex(), o.chainID, err)
 		}
-		if header, err = o.client.HeaderByNumber(ctx, receipt.BlockNumber); err != nil {
-			return nil, fmt.Errorf("read the finalized header at %d on chain %d: %w", receipt.BlockNumber.Uint64(), o.chainID, err)
+		// By HASH, from the agreeing providers: a read by height could be answered by a backend on another fork.
+		if header, err = o.finality.HeaderByHash(ctx, receipt.BlockHash); err != nil {
+			return nil, fmt.Errorf("read the finalized header %s on chain %d: %w", receipt.BlockHash.Hex(), o.chainID, err)
 		}
 		if header.Hash() != receipt.BlockHash {
 			return nil, fmt.Errorf("the finalized header at %d on chain %d is %s, the receipt names %s", receipt.BlockNumber.Uint64(),

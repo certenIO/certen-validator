@@ -178,6 +178,11 @@ func InitializeRegistry(cfg *RegistryConfig) (*Registry, error) {
 		if evm.ChainID() != key {
 			return nil, fmt.Errorf("the RPC configured for chain %d serves chain %s", id, evm.ChainID())
 		}
+		// A settlement is observed only through independent providers that agree (RB5-F53). A chain CERTEN settles on
+		// without them is refused here, at boot, instead of refusing every settlement on it later.
+		if err := evm.FinalityError(); err != nil {
+			return nil, fmt.Errorf("settlement chain %d: %w", id, err)
+		}
 		if err := registry.RegisterChainStrategy(key, evm.Config(), evm); err != nil {
 			return nil, fmt.Errorf("register chain %d: %w", id, err)
 		}

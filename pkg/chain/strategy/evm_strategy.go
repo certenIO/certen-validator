@@ -195,8 +195,19 @@ func NewEVMStrategy(config *EVMStrategyConfig) (*EVMStrategy, error) {
 		strategy.anchorContract = common.HexToAddress(config.AnchorContractAddress)
 	}
 
+	// The agreeing reader over this chain's independent providers (RB5-F53). Without it there is no settlement
+	// observation on this chain: the reason is kept and every observation refuses by it (the boot check refuses a
+	// settlement chain without one).
+	var finality ethrpc.FinalityReader
+	agreeing, finalityErr := ethrpc.NewAgreeingReader(context.Background(), chainID.Int64(), dialed, 20*time.Second)
+	if finalityErr == nil {
+		finality = agreeing
+	}
+
 	// Create observer
 	observerConfig := &EVMObserverConfig{
+		Finality:              finality,
+		FinalityErr:           finalityErr,
 		Client:                strategy.client,
 		ChainID:               chainID.Int64(),
 		ValidatorID:           config.ValidatorID,
@@ -218,6 +229,14 @@ func NewEVMStrategy(config *EVMStrategyConfig) (*EVMStrategy, error) {
 // =============================================================================
 // CHAIN EXECUTION STRATEGY INTERFACE IMPLEMENTATION
 // =============================================================================
+
+// FinalityError says why this chain has no agreeing providers to observe settlements with (RB5-F53), or nil.
+func (s *EVMStrategy) FinalityError() error {
+	if s.observer == nil {
+		return fmt.Errorf("no observer")
+	}
+	return s.observer.FinalityError()
+}
 
 // Platform returns the chain platform identifier
 func (s *EVMStrategy) Platform() ChainPlatform {

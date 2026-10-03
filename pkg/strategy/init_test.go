@@ -5,6 +5,7 @@ package strategy
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -30,8 +31,8 @@ func blsKey(t *testing.T) []byte {
 	return sk.Bytes()
 }
 
-// rpcStub answers eth_chainId with the chain id in the request path (/<id>).
-var rpcStub = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+// chainIDStub answers eth_chainId with the chain id in the request path (/<id>).
+var chainIDStub = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ID     json.RawMessage `json:"id"`
 		Method string          `json:"method"`
@@ -44,9 +45,49 @@ var rpcStub = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r 
 		return
 	}
 	_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":"0x%x"}`, req.ID, id)
-}))
+})
+
+// Two providers on distinct hosts (RB5-F53: a settlement chain needs independent providers that agree): the primary on
+// 127.0.0.1 and a second operator on [::1].
+var rpcStub = httptest.NewServer(chainIDStub)
+
+var rpcStub2 = func() *httptest.Server {
+	s := httptest.NewUnstartedServer(chainIDStub)
+	l, err := net.Listen("tcp", "[::1]:0")
+	if err != nil {
+		panic(fmt.Sprintf("second provider stub: %v", err))
+	}
+	s.Listener = l
+	s.Start()
+	return s
+}()
 
 func rpcFor(chainID int64) string { return rpcStub.URL + "/" + strconv.FormatInt(chainID, 10) }
+
+func secondProviderFor(chainID int64) string {
+	return rpcStub2.URL + "/" + strconv.FormatInt(chainID, 10)
+}
+
+// withSecondProviders configures every supported chain's second provider the way production does, through
+// <PREFIX>_URL_FALLBACKS.
+func withSecondProviders(t *testing.T) {
+	t.Helper()
+	t.Setenv("ETHEREUM_SEPOLIA_URL_FALLBACKS", secondProviderFor(11155111))
+	t.Setenv("BASE_SEPOLIA_URL_FALLBACKS", secondProviderFor(84532))
+	t.Setenv("ARBITRUM_SEPOLIA_URL_FALLBACKS", secondProviderFor(421614))
+}
+
+// RB5-F53: a settlement chain with one provider is refused at boot, naming the chain and its single host.
+func TestARegistryRefusesASettlementChainWithOneProvider(t *testing.T) {
+	_, err := InitializeRegistry(&RegistryConfig{ValidatorID: "validator-1", BLSPrivateKey: blsKey(t), SettlementChains: SupportedChainIDs, Chains: supportedEndpoints()})
+	if err == nil || !strings.Contains(err.Error(), "RB5-F53") {
+		t.Fatalf("a settlement chain observed through one provider was accepted: %v", err)
+	}
+	withSecondProviders(t)
+	if _, err := InitializeRegistry(&RegistryConfig{ValidatorID: "validator-1", BLSPrivateKey: blsKey(t), SettlementChains: SupportedChainIDs, Chains: supportedEndpoints()}); err != nil {
+		t.Fatalf("two independent providers per chain were refused: %v", err)
+	}
+}
 
 func supportedEndpoints() []ChainEndpoint {
 	return []ChainEndpoint{
@@ -57,6 +98,7 @@ func supportedEndpoints() []ChainEndpoint {
 }
 
 func TestRegistryIsExactlyTheSupportedChains(t *testing.T) {
+	withSecondProviders(t)
 	r, err := InitializeRegistry(&RegistryConfig{ValidatorID: "validator-1", BLSPrivateKey: blsKey(t), SettlementChains: SupportedChainIDs, Chains: supportedEndpoints()})
 	if err != nil {
 		t.Fatalf("InitializeRegistry: %v", err)
@@ -85,6 +127,7 @@ func TestRegistryIsExactlyTheSupportedChains(t *testing.T) {
 }
 
 func TestRegistryLookupsTakeTheChainIDInEitherRecordedForm(t *testing.T) {
+	withSecondProviders(t)
 	r, err := InitializeRegistry(&RegistryConfig{ValidatorID: "validator-1", BLSPrivateKey: blsKey(t), SettlementChains: SupportedChainIDs, Chains: supportedEndpoints()})
 	if err != nil {
 		t.Fatal(err)
@@ -107,6 +150,7 @@ func TestRegistryLookupsTakeTheChainIDInEitherRecordedForm(t *testing.T) {
 }
 
 func TestRegistryRefusesAnIncompleteConfiguration(t *testing.T) {
+	withSecondProviders(t)
 	without := func(id int64) []ChainEndpoint {
 		var out []ChainEndpoint
 		for _, c := range supportedEndpoints() {
@@ -150,6 +194,7 @@ func TestRegistryRefusesAnIncompleteConfiguration(t *testing.T) {
 // RB5-F33: a rollout settles on the chains it names; the proof cycle observes exactly those - Base alone here - and a
 // supported chain not named is neither observed nor required.
 func TestTheRegistryObservesExactlyTheSettlementChains(t *testing.T) {
+	withSecondProviders(t)
 	var base []ChainEndpoint
 	for _, c := range supportedEndpoints() {
 		if c.ChainID == 84532 {
