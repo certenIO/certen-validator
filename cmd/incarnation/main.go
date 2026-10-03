@@ -5,8 +5,11 @@
 //	incarnation -endpoint https://mainnet.accumulatenetwork.io/v3 -bvn bvnCyclops
 //	incarnation -out kermit.json                       # also write the evidence
 //	incarnation -verify kermit.json                    # re-derive offline from saved evidence, no network
+//	incarnation -expect 0xcac6698e…                    # also require this incarnation (the daily check)
 //
-// Exit codes: 0 derived and verified; 1 the evidence does not establish an incarnation; 2 usage.
+// Exit codes: 0 derived and verified (and equal to -expect); 1 the evidence does not establish an incarnation;
+// 2 usage; 3 the network derives a different incarnation from -expect - the chain every V8.2 anchor committed is
+// not the one this endpoint serves now (an Accumulate re-genesis, or the wrong network).
 package main
 
 import (
@@ -17,6 +20,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	certenproof "github.com/certen/independant-validator/pkg/proof"
@@ -28,6 +32,7 @@ func main() {
 		"(default: the first block-validator partition of the genesis network record)")
 	out := flag.String("out", "", "write the evidence as JSON to this path")
 	verify := flag.String("verify", "", "re-derive offline from this evidence file (no network)")
+	expect := flag.String("expect", "", "require this incarnation (hex); exit 3 naming both values when it differs")
 	flag.Parse()
 
 	var ev *certenproof.IncarnationEvidence
@@ -86,6 +91,29 @@ func main() {
 		}
 		fmt.Printf("evidence written to %s (%d bytes)\n", *out, len(b))
 	}
+
+	// After the evidence is written, so a changed incarnation leaves what is needed to investigate it.
+	if *expect != "" {
+		code, msg := checkExpected(*expect, rep.Incarnation)
+		fmt.Println(msg)
+		if code != 0 {
+			os.Exit(code)
+		}
+	}
+}
+
+// checkExpected compares the derived incarnation with the expected one: 0 when equal, 2 when the expected value is not
+// 32 bytes of hex, 3 when the network derives another.
+func checkExpected(expect string, got [32]byte) (int, string) {
+	raw, err := hex.DecodeString(strings.TrimPrefix(strings.ToLower(strings.TrimSpace(expect)), "0x"))
+	if err != nil || len(raw) != 32 {
+		return 2, fmt.Sprintf("-expect %q is not 32 bytes of hex", expect)
+	}
+	if [32]byte(raw) != got {
+		return 3, fmt.Sprintf("INCARNATION CHANGED: expected 0x%x, the network now derives 0x%x - every V8.2 anchor "+
+			"committed the expected one; this endpoint now serves another chain (an Accumulate re-genesis, or the wrong network)", raw, got)
+	}
+	return 0, fmt.Sprintf("incarnation equals the expected 0x%x", raw)
 }
 
 func sha(b []byte) string {

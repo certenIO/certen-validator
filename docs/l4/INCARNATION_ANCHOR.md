@@ -111,7 +111,26 @@ Reproduce:
 go run ./cmd/incarnation                                          # Kermit
 go run ./cmd/incarnation -endpoint https://mainnet.accumulatenetwork.io/v3 -bvn Cyclops
 go run ./cmd/incarnation -verify pkg/proof/testdata/incarnation/kermit.json   # offline
+go run ./cmd/incarnation -expect 0xcac6698ed49a286ad8a3de94540a3354dfe964f366a439f4fdfb34533059fda0  # require it
 ```
+
+## Publication
+
+The incarnation is published in three places, none of which needs a key of CERTEN's:
+
+1. **On chain, in every anchor.** Every CertenAnchorV8_2 anchor commits it (`anchors(bundleId).accumulateIncarnation`),
+   and the anchor's quorum message and bundle id bind it. This is the authority. A verifier pins the value it trusts
+   (`proofverify --incarnation`) and requires the anchor to equal it.
+2. **In this repository.** The pinned values above, the full evidence in `pkg/proof/testdata/incarnation/`, and
+   `cmd/incarnation`. Anyone re-derives the value from Accumulate's public API, or offline from the evidence.
+3. **Checked daily** (`.github/workflows/incarnation.yml`). Kermit's incarnation is re-derived every day and must
+   equal the pinned evidence. The run fails, keeps that day's evidence as an artifact, and alerts through ntfy in
+   two cases:
+   - the network derives another value (exit 3, naming both): an Accumulate re-genesis, or the wrong network;
+   - the network no longer serves the genesis records it is derived from (exit 1, e.g. `genesis_record_not_served`).
+
+   Either way, the chain every V8.2 anchor committed is no longer the one the endpoint shows, and nothing anchored
+   after that point may be read as continuing it.
 
 ## v2 (future, upstream ask)
 

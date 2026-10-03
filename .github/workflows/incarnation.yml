@@ -1,0 +1,45 @@
+name: Accumulate incarnation
+
+# Every CertenAnchorV8_2 anchor commits the Accumulate incarnation (docs/l4/INCARNATION_ANCHOR.md). This re-derives
+# Kermit's incarnation from public sources every day and fails, naming both values, when it is not the pinned one
+# (pkg/proof/testdata/incarnation/kermit.json): an Accumulate re-genesis becomes an alarm, not a silent mismatch
+# (RB5 close-out §3.10). The evidence of every run is kept as an artifact.
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+jobs:
+  derive:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.0"
+      - run: go build -o incarnation ./cmd/incarnation
+      - name: Derive Kermit's incarnation and require the pinned one
+        run: |
+          expected="0x$(jq -r .incarnation pkg/proof/testdata/incarnation/kermit.json)"
+          ./incarnation -out kermit-incarnation.json -expect "$expected"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kermit-incarnation-evidence
+          path: kermit-incarnation.json
+          if-no-files-found: error
+      # The owner's alert channel. A failed run without the secret still fails, and GitHub notifies the repository
+      # admins; with it, the change also reaches ntfy.
+      - name: Alert through ntfy
+        if: failure()
+        env:
+          NTFY_URL: ${{ secrets.CERTEN_NTFY_URL }}
+        run: |
+          if [ -z "$NTFY_URL" ]; then
+            echo "::error::secret CERTEN_NTFY_URL is not set: the incarnation check failed and could not alert through ntfy"
+            exit 1
+          fi
+          curl -fsS -H "Title: Accumulate incarnation check failed" -H "Priority: urgent" \
+            -d "The daily incarnation check failed on ${GITHUB_REPOSITORY}: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            "$NTFY_URL"
