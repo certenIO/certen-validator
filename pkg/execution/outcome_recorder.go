@@ -391,12 +391,24 @@ func (r *BatchOutcomeRecorder) recorded(ctx context.Context, c OutcomeRecorderCh
 	if err := r.storeRecorded(ctx, c, t, view, derived); err != nil {
 		return OutcomeStepRecorded, err
 	}
+	// The record is final once its transaction's block is at or below the finalized block and canonical at its height.
+	// It is judged by that block, never by recordedInBlock: on Arbitrum a contract's block.number is the L1 block number.
+	rec, err := c.RecordedOutcome(ctx, t.BundleID, view.RecordedIn)
+	if err != nil {
+		return OutcomeStepRecorded, err
+	}
 	fin, err := c.FinalizedHeader(ctx)
 	if err != nil {
 		return OutcomeStepRecorded, err
 	}
-	if view.RecordedIn == 0 || view.RecordedIn > fin.Number.Uint64() {
+	if rec.Block == 0 || rec.Block > fin.Number.Uint64() {
 		return OutcomeStepRecorded, nil // released once the record is final
+	}
+	if hdr, err := c.HeaderAt(ctx, rec.Block); err != nil {
+		return OutcomeStepRecorded, err
+	} else if hdr.Hash() != rec.BlockHash {
+		return OutcomeStepRecorded, fmt.Errorf("the record %s names block %s, the finalized block at %d is %s", rec.Tx.Hex(),
+			rec.BlockHash.Hex(), rec.Block, hdr.Hash().Hex())
 	}
 	if err := r.Trees.Release(t.ChainID, t.BundleID); err != nil {
 		return OutcomeStepRecorded, err

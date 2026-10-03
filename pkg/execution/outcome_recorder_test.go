@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 
 	"github.com/certen/independant-validator/pkg/consensus"
 	"github.com/certen/independant-validator/pkg/crypto/bls"
@@ -79,7 +80,11 @@ func (c *recorderChain) RecordedOutcome(context.Context, [32]byte, uint64) (*Rec
 	if c.recorded == nil {
 		return nil, outcomeNotYet("no record")
 	}
-	return c.recorded, nil
+	r := *c.recorded
+	if r.BlockHash == (common.Hash{}) {
+		r.BlockHash = c.header(r.Block).Hash() // the chain's block at the record's height
+	}
+	return &r, nil
 }
 
 type fakeOutcomeSubmitter struct {
@@ -400,5 +405,42 @@ func TestAnUnattestedAnchorKeepsItsTreeAndIsReadLessOften(t *testing.T) {
 	}
 	if _, err := f.rec.Trees.Load(84532, f.kept.BundleID); err != nil {
 		t.Fatalf("the tree of an unattested anchor was released: %v", err)
+	}
+}
+
+// finalRecord is the registry's record of the fixture's derived outcome, its transaction mined in block txBlock, the
+// registry stating recordedInBlock recordedIn.
+func (f *recorderFixture) finalRecord(recordedIn, txBlock uint64) {
+	msg := contracts.ComputeEvmMessageHashV8_2_Outcome(84532, f.kept.BundleID, f.derived.Root, peerSetRoot, f.kept.AccumulateSetRoot, f.kept.Incarnation)
+	f.chain.view.RecordedRoot, f.chain.view.RecordedIn = f.derived.Root, recordedIn
+	f.chain.recorded = &RecordedOutcomeTx{BundleID: f.kept.BundleID, Tx: common.HexToHash("0xcc"), Block: txBlock,
+		Recorder: common.HexToAddress("0x03"), Root: f.derived.Root, MessageHash: msg,
+		Proof: contracts.CertenAnchorV4BLSProofData{AggregateSignature: []byte{1}, ValidatorAddresses: []common.Address{common.HexToAddress("0x03"), common.HexToAddress("0x02")},
+			VotingPowers: []*big.Int{big.NewInt(100), big.NewInt(100)}, TotalVotingPower: big.NewInt(300), SignedVotingPower: big.NewInt(200), MessageHash: msg}}
+}
+
+// On Arbitrum the registry's recordedInBlock is an L1 block number (a contract's block.number there), far below the L2
+// chain's own heights. A record is final by ITS TRANSACTION'S block: one still above the finalized block keeps the tree,
+// whatever recordedInBlock says.
+func TestARecordIsFinalByItsTransactionsBlockNotByRecordedInBlock(t *testing.T) {
+	f := newRecorderFixture(t, true)
+	f.finalRecord(11_837_110%1000, 2050) // an L1 block number below the finalized 2000; the transaction is in 2050
+	if steps := f.rec.Pass(context.Background()); steps[f.kept.BundleID] != OutcomeStepRecorded {
+		t.Fatalf("step %s", steps[f.kept.BundleID])
+	}
+	if _, err := f.rec.Trees.Load(84532, f.kept.BundleID); err != nil {
+		t.Fatalf("the tree of a record whose transaction is not final was released: %v", err)
+	}
+}
+
+// A Nitro header carries its L1 block number in mixHash bytes 8-16 (Arbitrum Sepolia block 315400056, the block of the
+// 55d23cb0 Arbitrum outcome record, carries L1 block 11837110 - the registry's recordedInBlock for it).
+func TestAnArbitrumHeaderNamesItsL1Block(t *testing.T) {
+	h := &types.Header{MixDigest: common.HexToHash("0x000000000001cd7a0000000000b49eb6000000000000003d0001000000000000")}
+	if got := arbitrumL1Block(h); got != 11_837_110 {
+		t.Fatalf("L1 block %d", got)
+	}
+	if !contractBlockIsL1(421614) || contractBlockIsL1(84532) || contractBlockIsL1(11155111) {
+		t.Fatal("only Arbitrum's block.number is an L1 block number")
 	}
 }
