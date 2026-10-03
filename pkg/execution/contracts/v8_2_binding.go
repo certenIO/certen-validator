@@ -104,6 +104,39 @@ func ComputeEvmMessageHashV8_2_Post(
 	)
 }
 
+// ComputeEvmMessageHashV8_2_Outcome is the message CERTEN's quorum signs to record a V8.2 batch anchor's outcome
+// root in CertenOutcomeRegistryV1 (RB5 D4). It is byte-identical to the registry's outcomeMessage:
+//
+//	keccak256(abi.encode(
+//	  bytes32("certen:bls:v2:outcome"),   // domain - no pre-exec, legs or V8.1 signature fits
+//	  uint256(chainId),
+//	  bundleId,                           // the anchor the outcome is of
+//	  outcomeRoot,                        // root over the members' outcome leaves
+//	  validatorSetRoot,                   // the anchor's currentValidatorSetRoot when the record is made
+//	  accumulateValidatorSetRoot,         // the anchor's own (anchors(bundleId))
+//	  accumulateIncarnation               // the anchor's own
+//	))
+//
+// Total preimage: 224 bytes (7 × 32). There is no operationID: the outcome is of the whole batch anchor.
+func ComputeEvmMessageHashV8_2_Outcome(
+	chainID int64,
+	bundleID, outcomeRoot, validatorSetRoot [32]byte,
+	accumulateValidatorSetRoot, accumulateIncarnation [32]byte,
+) [32]byte {
+	var domain [32]byte
+	copy(domain[:], "certen:bls:v2:outcome")
+	var chainIDBE [32]byte
+	big.NewInt(chainID).FillBytes(chainIDBE[:])
+
+	preimage := make([]byte, 0, 32*7)
+	for _, w := range [][32]byte{domain, chainIDBE, bundleID, outcomeRoot, validatorSetRoot, accumulateValidatorSetRoot, accumulateIncarnation} {
+		preimage = append(preimage, w[:]...)
+	}
+	var out [32]byte
+	copy(out[:], crypto.Keccak256(preimage))
+	return out
+}
+
 // ComputeEvmMessageHashV8_2_Legs is the message a validator quorum signs to prove a
 // multi-leg intent on CertenAnchorV8_2.executeLegs:
 //
