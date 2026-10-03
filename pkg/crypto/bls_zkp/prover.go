@@ -1176,39 +1176,18 @@ func (p *BLSZKProver) VerifyFromABIBytes(abiBytes []byte) (bool, error) {
 	if !p.initialized {
 		return false, errors.New("prover not initialized")
 	}
-	if len(abiBytes) < v2ABIByteSize {
-		return false, fmt.Errorf("V2 ABI bytes too short: %d (expected %d)", len(abiBytes), v2ABIByteSize)
-	}
+	return verifyV2ABIBytes(p.vk, abiBytes)
+}
 
-	readBI := func(offset int) *big.Int {
-		return new(big.Int).SetBytes(abiBytes[offset : offset+32])
+// verifyV2ABIBytes is VerifyFromABIBytes against a given verification key: the one check the prover's round trip and
+// the offline V2Verifier (verifier_v2.go) both make.
+func verifyV2ABIBytes(vk groth16.VerifyingKey, abiBytes []byte) (bool, error) {
+	if vk == nil {
+		return false, errors.New("no verification key")
 	}
-	readBytes32 := func(offset int) [32]byte {
-		var out [32]byte
-		copy(out[:], abiBytes[offset:offset+32])
-		return out
-	}
-
-	// Wire format encodes B in EIP-197 imag-then-real (set by
-	// ToSolidityCalldata). Swap back to gnark-native real-then-imag so
-	// reconstructProof can rebuild a gnark Proof that VerifyProofLocally
-	// accepts. Without this back-swap the in-process round-trip Verify
-	// rejects valid proofs and the validator submits empty proof bytes.
-	zkProof := &BLSZKProof{
-		ProofA: [2]*big.Int{readBI(v2OffProofAX), readBI(v2OffProofAY)},
-		ProofB: [2][2]*big.Int{
-			{readBI(v2OffProofBX1), readBI(v2OffProofBX0)}, // wire[imag, real] -> struct[real, imag]
-			{readBI(v2OffProofBY1), readBI(v2OffProofBY0)}, // wire[imag, real] -> struct[real, imag]
-		},
-		ProofC:               [2]*big.Int{readBI(v2OffProofCX), readBI(v2OffProofCY)},
-		Commitments:          [2]*big.Int{readBI(v2OffCommitmentX), readBI(v2OffCommitmentY)},
-		CommitmentPok:        [2]*big.Int{readBI(v2OffCommitmentPokX), readBI(v2OffCommitmentPokY)},
-		MessageHash:          readBytes32(v2OffMessageHash),
-		PubkeyCommitment:     readBytes32(v2OffPubkeyCommit),
-		SignedVotingPower:    readBI(v2OffSignedVP).Uint64(),
-		TotalVotingPower:     readBI(v2OffTotalVP).Uint64(),
-		ThresholdNumerator:   readBI(v2OffThresholdNum).Uint64(),
-		ThresholdDenominator: readBI(v2OffThresholdDenom).Uint64(),
+	zkProof, err := decodeV2ABIProof(abiBytes)
+	if err != nil {
+		return false, err
 	}
 
 	groth16Proof, err := reconstructProof(zkProof)
@@ -1227,7 +1206,7 @@ func (p *BLSZKProver) VerifyFromABIBytes(abiBytes []byte) (bool, error) {
 		return false, fmt.Errorf("create public witness: %w", err)
 	}
 
-	err = groth16.Verify(groth16Proof, p.vk, publicWitness,
+	err = groth16.Verify(groth16Proof, vk, publicWitness,
 		backend.WithVerifierHashToFieldFunction(NewKeccakToFieldHash()),
 	)
 	if err != nil {
@@ -1236,6 +1215,44 @@ func (p *BLSZKProver) VerifyFromABIBytes(abiBytes []byte) (bool, error) {
 	}
 	log.Printf("✅ [V2-ABI-ROUNDTRIP] groth16.Verify accepted")
 	return true, nil
+}
+
+// decodeV2ABIProof reads the flat 576-byte V2 blob (ToSolidityCalldata) back into a BLSZKProof.
+func decodeV2ABIProof(abiBytes []byte) (*BLSZKProof, error) {
+	if len(abiBytes) < v2ABIByteSize {
+		return nil, fmt.Errorf("V2 ABI bytes too short: %d (expected %d)", len(abiBytes), v2ABIByteSize)
+	}
+
+	readBI := func(offset int) *big.Int {
+		return new(big.Int).SetBytes(abiBytes[offset : offset+32])
+	}
+	readBytes32 := func(offset int) [32]byte {
+		var out [32]byte
+		copy(out[:], abiBytes[offset:offset+32])
+		return out
+	}
+
+	// Wire format encodes B in EIP-197 imag-then-real (set by
+	// ToSolidityCalldata). Swap back to gnark-native real-then-imag so
+	// reconstructProof can rebuild a gnark Proof that VerifyProofLocally
+	// accepts. Without this back-swap the in-process round-trip Verify
+	// rejects valid proofs and the validator submits empty proof bytes.
+	return &BLSZKProof{
+		ProofA: [2]*big.Int{readBI(v2OffProofAX), readBI(v2OffProofAY)},
+		ProofB: [2][2]*big.Int{
+			{readBI(v2OffProofBX1), readBI(v2OffProofBX0)}, // wire[imag, real] -> struct[real, imag]
+			{readBI(v2OffProofBY1), readBI(v2OffProofBY0)}, // wire[imag, real] -> struct[real, imag]
+		},
+		ProofC:               [2]*big.Int{readBI(v2OffProofCX), readBI(v2OffProofCY)},
+		Commitments:          [2]*big.Int{readBI(v2OffCommitmentX), readBI(v2OffCommitmentY)},
+		CommitmentPok:        [2]*big.Int{readBI(v2OffCommitmentPokX), readBI(v2OffCommitmentPokY)},
+		MessageHash:          readBytes32(v2OffMessageHash),
+		PubkeyCommitment:     readBytes32(v2OffPubkeyCommit),
+		SignedVotingPower:    readBI(v2OffSignedVP).Uint64(),
+		TotalVotingPower:     readBI(v2OffTotalVP).Uint64(),
+		ThresholdNumerator:   readBI(v2OffThresholdNum).Uint64(),
+		ThresholdDenominator: readBI(v2OffThresholdDenom).Uint64(),
+	}, nil
 }
 
 // ComputeVKHash computes a SHA256 hash of all VK component bytes for comparison
