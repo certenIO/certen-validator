@@ -62,7 +62,9 @@ type OutcomeChainReader interface {
 var (
 	outcomeAnchorABI   = mustParseABI(contracts.CertenAnchorV8_2BatchABI)
 	outcomeRegistryABI = mustParseABI(contracts.CertenOutcomeRegistryV1ABI)
-	outcomeAccountABI  = mustParseABI(contracts.CertenAccountV7_2ABI)
+	// Only isLeafConsumed(bytes32) is read from an account, and it is the same in every account generation
+	// (CertenAccountV7_2 and V7_3, RB5-F57): the leaf asked about is already the chain's version's leaf.
+	outcomeAccountABI = mustParseABI(contracts.CertenAccountV7_2ABI)
 )
 
 func mustParseABI(j string) abi.ABI {

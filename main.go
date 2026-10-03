@@ -1599,6 +1599,15 @@ func startValidator(
 		return nil, nil, fmt.Errorf("batch path: %w", gErr)
 	}
 	log.Printf("✅ [BATCH] settling on chains %v, each on a CertenAnchorV8_2", batchChains)
+	// Each settlement chain's account leaf version (RB5-F57): v3 (CertenAccountV7_2) or v4 (CertenAccountV7_3, whose leaf
+	// binds the member's window), from CERTEN_ACCOUNT_LEAF_VERSIONS over the defaults. A chain on none, or on a version
+	// this validator does not implement, stops the start by name.
+	leafVersions, lvErr := execution.AccountLeafVersionsFromEnv(batchChains)
+	if lvErr != nil {
+		return nil, nil, fmt.Errorf("batch path: %w", lvErr)
+	}
+	execution.SetAccountLeafVersions(leafVersions)
+	log.Printf("✅ [BATCH] account leaf versions: %s", leafVersions)
 	// Each settlement chain's CertenOutcomeRegistryV1 (CERTEN_OUTCOME_REGISTRY_<chainId>), read back through
 	// independent providers: bound to that chain's anchor, deployed on that chain (RB5 D4). Missing or wrong stops
 	// the start by name.
