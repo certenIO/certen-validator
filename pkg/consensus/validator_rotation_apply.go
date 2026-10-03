@@ -39,14 +39,18 @@ func (app *ValidatorApp) processValidatorRotation(vr *ValidatorRotationTx, heigh
 		}
 	}
 
-	// The same version accepted earlier in this block.
+	// A version already used - below this block, or earlier in it.
 	for i := range before.Rotations {
 		r := &before.Rotations[i]
 		if r.Version != vr.Version {
 			continue
 		}
 		if r.Height == height && r.ID == vr.RotationID() {
-			return app.stageRotation(r)
+			// The rotation this block already accepted, again (in other bytes). Rules v11 accepted it a second time
+			// and returned its validator updates twice, which CometBFT refuses as a duplicate entry: every node would
+			// fail to apply the block. v12 refuses the copy - a verdict v11 does not reach (committedRulesVersion).
+			app.blockRulesV12Verdict = true
+			return abcitypes.ExecTxResult{Code: 6, Log: "validator rotation refused: this block already accepted this rotation; one rotation per block"}
 		}
 		return abcitypes.ExecTxResult{Code: 6, Log: "validator rotation refused: version already used"}
 	}

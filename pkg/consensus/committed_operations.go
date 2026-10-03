@@ -272,6 +272,11 @@ func (app *ValidatorApp) indexCommittedOperations(h committedHistory) error {
 		if err != nil {
 			return err
 		}
+		rotationFound, v12 := rotationBlockVerdicts(height, txs, codes)
+		found = append(found, rotationFound...)
+		if v12 {
+			app.recordFirstVerdict(executionRulesV12, &app.rulesV12FirstVerdict, height)
+		}
 		for _, tx := range txs {
 			if _, ok := DecodeValidatorRotation(tx); ok {
 				app.recordFirstVerdict(executionRulesV8, &app.rulesV8FirstVerdict, height)
@@ -498,6 +503,8 @@ func (app *ValidatorApp) checkCommittedKinds(h committedHistory) error {
 				violations = append(violations, v)
 			}
 		}
+		found, _ := rotationBlockVerdicts(height, txs, codes)
+		violations = append(violations, found...)
 	}
 	if len(violations) > 0 {
 		return fmt.Errorf("%w (%d):\n  %s\nThis state was committed by rules this binary does not continue. Run the binary that "+
@@ -509,4 +516,29 @@ func (app *ValidatorApp) checkCommittedKinds(h committedHistory) error {
 	app.logger.Printf("✅ [HISTORY] committed heights %d-%d hold no transaction rules v%d decide differently",
 		from+1, app.latestHeight, CurrentExecutionRulesVersion)
 	return nil
+}
+
+// rotationBlockVerdicts judges a committed block's validator rotations as a whole: at most one is accepted per block.
+// v11 accepted a second copy of the block's accepted rotation (other bytes, the same content) and returned its updates
+// twice - which CometBFT refuses, so no live chain holds such a block; v12 refuses the copy with code 6. v12 reports
+// whether the block holds such a refusal - a verdict only v12 reaches.
+func rotationBlockVerdicts(height int64, txs [][]byte, codes []uint32) (violations []string, v12 bool) {
+	accepted := map[string]int{} // rotation id -> index of the accepted one
+	for i, tx := range txs {
+		vr, ok := DecodeValidatorRotation(tx)
+		if !ok {
+			continue
+		}
+		id := vr.RotationID()
+		switch first, seen := accepted[id]; {
+		case codes[i] == 0 && len(accepted) > 0:
+			violations = append(violations, fmt.Sprintf("height %d tx %d is a second validator rotation accepted in one block; "+
+				"v12 accepts one rotation per block", height, i))
+		case codes[i] == 0:
+			accepted[id] = i
+		case seen && first < i:
+			v12 = true
+		}
+	}
+	return violations, v12
 }

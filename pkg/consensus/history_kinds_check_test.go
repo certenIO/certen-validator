@@ -41,3 +41,33 @@ func TestCommittedRegistryAndReSealCodesAreChecked(t *testing.T) {
 		}
 	}
 }
+
+// A block holding two accepted validator rotations is history v12 does not reproduce (v12 accepts one per block); a
+// block whose copy of its rotation was refused is v12's, and stamps the state v12.
+func TestCommittedRotationsAreJudgedPerBlock(t *testing.T) {
+	f := newRotationFixture()
+	tx := rotJSON(t, f.rotation(1, f.validators[3], seededKey(0x79), "ops-1", "ops-2"))
+	twin := append(append([]byte(nil), tx...), ' ')
+	hist := func(codes ...uint32) *fakeHistory {
+		return &fakeHistory{base: 1, blocks: map[int64][][]byte{1: {tx, twin}}, times: map[int64]time.Time{1: beforeV9},
+			codes: map[int64][]uint32{1: codes}}
+	}
+	if err := historyApp(t, 1).IndexCommittedHistory(hist(0, 0)); !errors.Is(err, ErrCommittedHistoryUnderCurrentRules) {
+		t.Fatalf("a block with the same rotation accepted twice: %v", err)
+	}
+	app := historyApp(t, 1)
+	if err := app.IndexCommittedHistory(hist(0, 6)); err != nil {
+		t.Fatalf("a block whose copy was refused: %v", err)
+	}
+	if app.committedRulesVersion() != executionRulesV12 {
+		t.Fatalf("stamped v%d", app.committedRulesVersion())
+	}
+	// Already indexed by the binary that committed it: still checked.
+	indexed := historyApp(t, 1)
+	if err := indexed.ledgerStore.RecordCommittedBlock(1, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := indexed.IndexCommittedHistory(hist(0, 0)); !errors.Is(err, ErrCommittedHistoryUnderCurrentRules) {
+		t.Fatalf("an indexed block with the same rotation accepted twice: %v", err)
+	}
+}

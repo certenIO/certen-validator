@@ -164,6 +164,11 @@ const (
 	// re-seal writes, in force from the next height; refused, it returns code 12. v11 judged the same bytes as a
 	// ValidatorBlock and decided them with a ValidatorBlock's code, so the version is bumped.
 	//
+	// v12 also refuses (code 6) a second copy, in other bytes, of the validator rotation its block already accepted.
+	// v11 accepted the copy and returned the rotation's validator updates twice, which CometBFT refuses as a duplicate
+	// entry - every node fails to apply such a block and the chain halts - so no live history holds one; that too is
+	// checked at every start (rotationBlockVerdicts).
+	//
 	// v12 CONTINUES v7..v11 state without a reset: the kind is new, so no committed history contains it, and that is
 	// checked, not assumed - IndexCommittedHistory refuses to start on any committed admin-rotation-kind transaction that
 	// v12 did not decide (a ValidatorBlock's code, or an acceptance with no rotation recorded for it). Every other kind

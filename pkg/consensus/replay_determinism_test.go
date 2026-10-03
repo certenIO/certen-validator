@@ -123,3 +123,26 @@ func TestARefusedPolicyUpdateIsRefusedOnReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// The same rotation twice in one block - the admins' transaction and a byte-different copy of it (a trailing space,
+// which anyone who sees the first in a mempool can submit) - used to be accepted twice, returning the old key's
+// removal and the new key's power twice. CometBFT refuses a validator update list naming a key twice ("duplicate
+// entry"), so every node would fail to apply the block and the chain would halt. Rules v12 accepts the first and
+// refuses the copy, and the state is v12's from then on (v11 decided the copy differently).
+func TestTheSameRotationTwiceInABlockIsAcceptedOnce(t *testing.T) {
+	f := newRotationFixture()
+	app, _, restart := replayFixture(t, f)
+	tx := rotJSON(t, f.rotation(1, f.validators[3], seededKey(0x79), "ops-1", "ops-2"))
+	copyOfIt := append(append([]byte(nil), tx...), ' ')
+	replayCheck(t, app, restart, 1, []uint32{0, 6}, tx, copyOfIt)
+	resp := finalize(t, app, 1, abcitypes.CommitInfo{}, tx, copyOfIt)
+	if len(resp.ValidatorUpdates) != 2 {
+		t.Fatalf("%d validator updates for one rotation", len(resp.ValidatorUpdates))
+	}
+	if _, err := app.Commit(context.Background(), &abcitypes.RequestCommit{}); err != nil {
+		t.Fatal(err)
+	}
+	if v := app.committedRulesVersion(); v != executionRulesV12 {
+		t.Fatalf("a block only v12 decides this way left the state stamped v%d", v)
+	}
+}
