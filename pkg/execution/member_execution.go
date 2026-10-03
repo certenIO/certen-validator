@@ -165,6 +165,9 @@ func (o *ExternalChainObserver) observeMemberExecution(
 	if err != nil {
 		return nil, leaf, fmt.Errorf("settlement %s is not an account execution: %w", txHash.Hex(), err)
 	}
+	if err := requireChainGeneration(o.chainID, exec); err != nil {
+		return nil, leaf, fmt.Errorf("settlement %s: %w", txHash.Hex(), err)
+	}
 	if err := matchCommittedCalls(exec.Calls, committedCalls(legs)); err != nil {
 		return nil, leaf, fmt.Errorf("settlement %s: %w", txHash.Hex(), err)
 	}

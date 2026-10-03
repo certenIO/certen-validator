@@ -51,8 +51,15 @@ type CommittedCall struct {
 	Data  []byte
 }
 
-// accountExecution is a decoded CertenAccountV7_2 execution call.
+// accountExecution is a decoded CertenAccountV7_2 or CertenAccountV7_3 execution call.
 type accountExecution struct {
+	// Generation is the account leaf version whose entry point the calldata calls (RB5-F57): the two generations'
+	// proof tuples differ, so their selectors do, and the calldata names exactly one.
+	Generation AccountLeafVersion
+	// NotBefore and NotAfter are the window a v4 (CertenAccountV7_3) proof names - the window its leaf binds. Zero on v3.
+	NotBefore uint64
+	NotAfter  uint64
+
 	Batch       bool
 	Calls       []CommittedCall
 	AnchorID    [32]byte
@@ -78,12 +85,9 @@ func decodeAccountExecution(input []byte) (*accountExecution, error) {
 	if len(input) < 4 {
 		return nil, fmt.Errorf("no calldata")
 	}
-	if settlementAccountABIErr != nil {
-		return nil, fmt.Errorf("account ABI unavailable: %w", settlementAccountABIErr)
-	}
-	m, err := settlementAccountABI.MethodById(input[:4])
+	m, generation, err := settlementMethod(input)
 	if err != nil {
-		return nil, fmt.Errorf("not a CertenAccountV7_2 call")
+		return nil, err
 	}
 	args, err := m.Inputs.Unpack(input[4:])
 	if err != nil {
@@ -92,7 +96,7 @@ func decodeAccountExecution(input []byte) (*accountExecution, error) {
 	if len(args) < 4 {
 		return nil, fmt.Errorf("unexpected %s arg count (%d)", m.Name, len(args))
 	}
-	out := &accountExecution{}
+	out := &accountExecution{Generation: generation}
 	switch m.Name {
 	case "executeGovernanceProofDirect":
 		target, okT := args[0].(common.Address)
@@ -147,6 +151,19 @@ func decodeAccountExecution(input []byte) (*accountExecution, error) {
 		if okB && okP {
 			out.AuthorityBook, out.AuthorityPage = book, page
 			out.proofDecodedOK = true
+		}
+	}
+	// A v4 proof ends in the window its leaf binds (RB5-F57); one that does not decode is not a v4 proof at all.
+	if generation == AccountLeafV4 {
+		nb, na := proof.FieldByName("NotBefore"), proof.FieldByName("NotAfter")
+		if !nb.IsValid() || !na.IsValid() {
+			return nil, fmt.Errorf("a CertenAccountV7_3 proof without notBefore/notAfter")
+		}
+		var okB, okA bool
+		out.NotBefore, okB = nb.Interface().(uint64)
+		out.NotAfter, okA = na.Interface().(uint64)
+		if !okB || !okA {
+			return nil, fmt.Errorf("a CertenAccountV7_3 proof whose notBefore/notAfter are not uint64")
 		}
 	}
 	if f := proof.FieldByName("AdiURL"); f.IsValid() {
@@ -260,6 +277,41 @@ const accountAttemptABIJSON = `[` +
 	`{"type":"function","name":"computeBatchCommitment","stateMutability":"view","inputs":[{"type":"address[]"},{"type":"uint256[]"},{"type":"bytes[]"}],"outputs":[{"type":"bytes32"}]},` +
 	`{"type":"function","name":"isLeafConsumed","stateMutability":"view","inputs":[{"type":"bytes32"}],"outputs":[{"type":"bool"}]}]`
 
+// accountAttemptV7_3ABIJSON is accountAttemptABIJSON for a CertenAccountV7_3 (RB5-F57): its computeLeaf also takes the
+// window the v4 leaf binds.
+const accountAttemptV7_3ABIJSON = `[` +
+	`{"type":"function","name":"anchorContract","stateMutability":"view","inputs":[],"outputs":[{"type":"address"}]},` +
+	`{"type":"function","name":"computeLeaf","stateMutability":"view","inputs":[{"type":"bytes32"},{"type":"bytes32"},{"type":"bytes32"},{"type":"uint64"},{"type":"uint64"},{"type":"uint64"}],"outputs":[{"type":"bytes32"}]},` +
+	`{"type":"function","name":"computeSingleCommitment","stateMutability":"view","inputs":[{"type":"address"},{"type":"uint256"},{"type":"bytes"}],"outputs":[{"type":"bytes32"}]},` +
+	`{"type":"function","name":"computeBatchCommitment","stateMutability":"view","inputs":[{"type":"address[]"},{"type":"uint256[]"},{"type":"bytes[]"}],"outputs":[{"type":"bytes32"}]},` +
+	`{"type":"function","name":"isLeafConsumed","stateMutability":"view","inputs":[{"type":"bytes32"}],"outputs":[{"type":"bool"}]}]`
+
+// accountAttemptABIFor is the attempt ABI of the account generation an execution's calldata names.
+func accountAttemptABIFor(generation AccountLeafVersion) (string, error) {
+	switch generation {
+	case AccountLeafV3:
+		return accountAttemptABIJSON, nil
+	case AccountLeafV4:
+		return accountAttemptV7_3ABIJSON, nil
+	default:
+		return "", fmt.Errorf("%w: %q", ErrUnknownAccountLeafVersion, generation)
+	}
+}
+
+// requireChainGeneration refuses, by name, an execution of another account generation than the chain is on (RB5-F57):
+// its leaf is not a leaf any tree of the chain holds, so it is no member's execution or attempt.
+func requireChainGeneration(chainID int64, exec *accountExecution) error {
+	want, err := AccountLeafVersionOf(chainID)
+	if err != nil {
+		return err
+	}
+	if exec.Generation != want {
+		return fmt.Errorf("it calls a %s (leaf %s), and chain %d is on %s (leaf %s)", exec.Generation.AccountContract(),
+			exec.Generation, chainID, want.AccountContract(), want)
+	}
+	return nil
+}
+
 const anchorAttemptABIJSON = `[` +
 	`{"type":"function","name":"verifyProof","stateMutability":"view","inputs":[{"type":"bytes32"},{"type":"bytes32[]"},{"type":"bytes32"}],"outputs":[{"type":"bool"}]}]`
 
@@ -328,7 +380,11 @@ func checkAuthorizedAttempt(
 	if want := honestSettlementGas(exec); gasLimit < want {
 		return fmt.Errorf("sent with gas limit %d, below the %d a settlement is sent with", gasLimit, want)
 	}
-	accountABI, err := abi.JSON(strings.NewReader(accountAttemptABIJSON))
+	abiJSON, err := accountAttemptABIFor(exec.Generation)
+	if err != nil {
+		return err
+	}
+	accountABI, err := abi.JSON(strings.NewReader(abiJSON))
 	if err != nil {
 		return err
 	}
@@ -388,6 +444,12 @@ func checkAuthorizedAttempt(
 	if exec.Timestamp == nil || exec.ExpiresAt == nil || ts.Cmp(exec.Timestamp) < 0 || ts.Cmp(exec.ExpiresAt) > 0 {
 		return fmt.Errorf("mined outside the proof's validity window; the attempt was not authorised")
 	}
+	// A v4 leaf's own window (RB5-F57): mined outside it, the account refused the leaf (LeafNotYetValid / LeafExpired) -
+	// the member's deadline, not its execution, decided the revert.
+	if exec.Generation == AccountLeafV4 && (header.Time < exec.NotBefore || header.Time > exec.NotAfter) {
+		return fmt.Errorf("mined at %d, outside its leaf's window [%d, %d]; the attempt was not authorised", header.Time,
+			exec.NotBefore, exec.NotAfter)
+	}
 	return nil
 }
 
@@ -424,7 +486,11 @@ func callValue(v *big.Int) *big.Int {
 // (computeSingleCommitment / computeBatchCommitment over the executed calls, then computeLeaf with the
 // operationID and the authority book and page the proof names), and the anchor the account is pinned to.
 func accountLeafAndAnchor(ctx context.Context, chain bind.ContractCaller, account common.Address, exec *accountExecution) ([32]byte, common.Address, error) {
-	accountABI, err := abi.JSON(strings.NewReader(accountAttemptABIJSON))
+	abiJSON, err := accountAttemptABIFor(exec.Generation)
+	if err != nil {
+		return [32]byte{}, common.Address{}, err
+	}
+	accountABI, err := abi.JSON(strings.NewReader(abiJSON))
 	if err != nil {
 		return [32]byte{}, common.Address{}, err
 	}
@@ -463,7 +529,14 @@ func accountLeafAndAnchor(ctx context.Context, chain bind.ContractCaller, accoun
 		return [32]byte{}, common.Address{}, err
 	}
 	commitment, _ := commitmentOut.([32]byte)
-	leafOut, err := call("computeLeaf", commitment, exec.OperationID, exec.AuthorityBook, exec.AuthorityPage)
+	var leafOut interface{}
+	if exec.Generation == AccountLeafV4 {
+		// The v4 leaf binds the window the proof names (RB5-F57).
+		leafOut, err = call("computeLeaf", commitment, exec.OperationID, exec.AuthorityBook, exec.AuthorityPage, exec.NotBefore,
+			exec.NotAfter)
+	} else {
+		leafOut, err = call("computeLeaf", commitment, exec.OperationID, exec.AuthorityBook, exec.AuthorityPage)
+	}
 	if err != nil {
 		return [32]byte{}, common.Address{}, err
 	}
@@ -508,6 +581,9 @@ func (o *ExternalChainObserver) VerifyRevertedCall(
 	exec, err := decodeAccountExecution(tx.Data())
 	if err != nil {
 		return nil, fmt.Errorf("reverted tx %s is not an account execution: %w", txHash.Hex(), err)
+	}
+	if err := requireChainGeneration(o.chainID, exec); err != nil {
+		return nil, fmt.Errorf("reverted tx %s: %w", txHash.Hex(), err)
 	}
 	if err := matchCommittedCalls(exec.Calls, committed); err != nil {
 		return nil, fmt.Errorf("reverted tx %s: %w", txHash.Hex(), err)

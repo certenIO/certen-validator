@@ -52,6 +52,13 @@ func runOutcomeTreeRepair(apply bool) int {
 		log.Print(err)
 		return 1
 	}
+	// The trees are rebuilt with each chain's account leaf version, exactly as the validator forms them (RB5-F57).
+	leafVersions, err := execution.AccountLeafVersionsFromEnv(chains)
+	if err != nil {
+		log.Print(err)
+		return 1
+	}
+	execution.SetAccountLeafVersions(leafVersions)
 	resolver, err := execution.NewEVMChainResolverFromEnv(anchorCfg, chains)
 	if err != nil {
 		log.Print(err)

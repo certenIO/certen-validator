@@ -61,6 +61,12 @@ type BatchLeafInput struct {
 	AuthorityBook [32]byte
 	AuthorityPage uint64
 
+	// NotBefore and NotAfter are the member's execution window, unix seconds (PendingBatchIntent.Window): its Accumulate
+	// commit time and its deadline (PendingBatchIntent.Deadline). PART of the v4 leaf (ComputeBatchLeafV4), so the
+	// CertenAccountV7_3 refuses execution outside them (RB5-F57); zero, and not part of the leaf, on a v3 chain.
+	NotBefore uint64
+	NotAfter  uint64
+
 	// LegacyNoGovernance marks a member admitted before governance commitments existed (restored from a mempool
 	// written by an earlier binary). Its batch was, or will be, formed with the v1 operation id - the id its anchor
 	// may already carry - and records that its governance is not committed. Only restore sets it.
@@ -322,6 +328,8 @@ type BatchTree struct {
 	BatchOperationIDVersion string
 	BundleID                [32]byte
 	BlockHeight             uint64
+	// LeafVersion is the account leaf version its leaves are of (RB5-F57).
+	LeafVersion AccountLeafVersion
 
 	// AccumulateSetRoot and Incarnation are the Accumulate half CertenAnchorV8_2 commits for this tree: the one
 	// validator-set root every member's L4 was verified against, and which Accumulate chain that is. Both are in the
@@ -350,7 +358,25 @@ type BatchTree struct {
 // The self-verification is not paranoia: a silently wrong branch would only surface as a
 // revert at TX3, after the anchor and its BLS proof had already been paid for, with the
 // batch's other members stuck behind it.
+//
+// Its leaves are of the account generation the chain is on (AccountLeafVersionOf, RB5-F57).
 func BuildBatchTree(
+	chainID int64,
+	inputs []BatchLeafInput,
+	blockHeight uint64,
+	incarnation [32]byte,
+) (*BatchTree, error) {
+	version, err := AccountLeafVersionOf(chainID)
+	if err != nil {
+		return nil, err
+	}
+	return buildBatchTreeAs(version, chainID, inputs, blockHeight, incarnation)
+}
+
+// buildBatchTreeAs is BuildBatchTree with leaves of the given account leaf version: the version a kept tree states it
+// was formed with (OutcomeTree.LeafVersion), so a tree kept before its chain moved to another version still re-derives.
+func buildBatchTreeAs(
+	version AccountLeafVersion,
 	chainID int64,
 	inputs []BatchLeafInput,
 	blockHeight uint64,
@@ -389,12 +415,17 @@ func BuildBatchTree(
 			return nil, fmt.Errorf("member %d (%s) has a zero executionCommitment", i, in.ADIURL)
 		}
 
-		// A V8.2 tree settles CertenAccountV7_2 accounts, whose leaf binds the certified key book and page (RB5-F29/F30).
+		// A V8.2 tree settles CertenAccountV7_2 or V7_3 accounts, whose leaf binds the certified key book and page
+		// (RB5-F29/F30).
 		if in.AuthorityPage == 0 || in.AuthorityBook == ([32]byte{}) {
-			return nil, fmt.Errorf("member %d (%s) has no certified authority book and page; its v3 leaf cannot be formed",
+			return nil, fmt.Errorf("member %d (%s) has no certified authority book and page; its leaf cannot be formed",
 				i, in.ADIURL)
 		}
-		leaf := ComputeBatchLeafV3(chainID, in)
+		// The leaf of the account generation the chain is on (RB5-F57): v3, or v4 with the member's window.
+		leaf, err := computeLeafAs(version, chainID, in)
+		if err != nil {
+			return nil, fmt.Errorf("member %d (%s): %w", i, in.ADIURL, err)
+		}
 
 		// Duplicate leaves would be indistinguishable on-chain: the second could never be
 		// consumed, because CertenAccountV7 keys single-use on the leaf itself. Catch it
@@ -429,6 +460,7 @@ func BuildBatchTree(
 		BatchOperationIDVersion: opVersion,
 		BundleID:                bundleID,
 		BlockHeight:             blockHeight,
+		LeafVersion:             version,
 		AccumulateSetRoot:       accRoot,
 		Incarnation:             incarnation,
 	}

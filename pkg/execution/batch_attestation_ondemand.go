@@ -3,6 +3,7 @@ package execution
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 
 	"github.com/certen/independant-validator/pkg/crypto/bls"
@@ -154,6 +155,10 @@ func (s *BatchStack) HandleOnDemandAttestationRequest(
 			member.IntentID, req.ChainID, verdict)
 	}
 	in, err := member.LeafInput()
+	if errors.Is(err, ErrNoMemberWindow) {
+		// A v4 leaf needs the member's commit time, which this validator has not read yet (RB5-F57): not a refusal.
+		return refuseWith(CodeNotReady, "member %s: %v", member.IntentID, err)
+	}
 	if err != nil {
 		return refuseWith(CodeRefused, "member %s: %v", member.IntentID, err)
 	}

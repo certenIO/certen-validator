@@ -232,7 +232,7 @@ func (b *OutcomeBackfill) Rebuild(ctx context.Context, chainID int64, bundle [32
 	}
 	ot := &OutcomeTree{ChainID: chainID, BundleID: tree.BundleID, Root: tree.Root, BatchOperationID: tree.BatchOperationID,
 		BatchOperationIDVersion: tree.BatchOperationIDVersion, BlockHeight: tree.BlockHeight, AccumulateSetRoot: tree.AccumulateSetRoot,
-		Incarnation: tree.Incarnation, Members: members, Roles: []OutcomeTreeRole{OutcomeTreeBackfilled}, RetainedAt: time.Now().UTC()}
+		Incarnation: tree.Incarnation, LeafVersion: keptLeafVersion(tree.LeafVersion), Members: members, Roles: []OutcomeTreeRole{OutcomeTreeBackfilled}, RetainedAt: time.Now().UTC()}
 	if err := ot.Verify(); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrBackfillRefused, err)
 	}
@@ -346,10 +346,21 @@ func (b *OutcomeBackfill) rebuildMember(ctx context.Context, chainID int64, view
 	if in.AuthorityBook, in.AuthorityPage, err = AuthorityOf(page, book); err != nil {
 		return in, m, err
 	}
+	// The leaf of the account generation the chain is on (RB5-F57): a v4 leaf binds the window the mempool member had -
+	// its commit time (the signed intent's Accumulate execution time) to its deadline - rebuilt here from the same facts.
+	version, err := AccountLeafVersionOf(chainID)
+	if err != nil {
+		return in, m, err
+	}
+	if version == AccountLeafV4 {
+		if in.NotBefore, in.NotAfter, err = p.Window(); err != nil {
+			return in, m, err
+		}
+	}
 	m = OutcomeTreeMember{OperationID: op, IntentID: h.IntentID, ADIURL: h.ADIURL, Account: common.Address(account),
 		AuthorityBook: in.AuthorityBook, AuthorityPage: in.AuthorityPage, GovernanceCommitment: in.GovernanceCommitment,
 		IntentMessage: in.IntentMessage, LegacyNoGovernance: in.LegacyNoGovernance, Deadline: deadline.Unix(),
-		SearchFrom: executedAt.Add(-leafSpendMargin).Unix()}
+		NotBefore: int64(in.NotBefore), SearchFrom: executedAt.Add(-leafSpendMargin).Unix()}
 	for _, l := range legs {
 		tl := OutcomeTreeLeg{Target: l.Call.Target, Value: (*hexutil.Big)(callValue(l.Call.Value)), Data: append(hexutil.Bytes(nil), l.Call.Data...),
 			State: append([]ExpectedStateSlot(nil), l.State...)}

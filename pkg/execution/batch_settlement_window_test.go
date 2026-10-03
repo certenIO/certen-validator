@@ -197,7 +197,8 @@ func mustLeaf(t *testing.T, m *PendingBatchIntent) BatchLeafInput {
 }
 
 func TestTimingRevert(t *testing.T) {
-	p := contracts.AccountProofV7_2{Timestamp: big.NewInt(100), ExpiresAt: big.NewInt(200)}
+	p := settlementProof{AccountProofV7_2: contracts.AccountProofV7_2{Timestamp: big.NewInt(100), ExpiresAt: big.NewInt(200)},
+		Generation: AccountLeafV3}
 	for _, c := range []struct {
 		at   uint64
 		want bool

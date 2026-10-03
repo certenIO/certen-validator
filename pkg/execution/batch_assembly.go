@@ -285,8 +285,14 @@ func NewBatchStack(
 		if err != nil {
 			return nil, fmt.Errorf("assembling chain %d: %w", chainID, err)
 		}
+		// Every settlement chain is on exactly one account leaf version (RB5-F57); one on none is refused by name.
+		version, err := AccountLeafVersionOf(chainID)
+		if err != nil {
+			return nil, fmt.Errorf("assembling chain %d: %w", chainID, err)
+		}
 		orchestrators[chainID] = NewBatchOrchestrator(ecm, anchorAddr, prover, mempool, incarnation, logf)
-		logf("[BATCH-STACK] chain %d wired to CertenAnchorV8 %s", chainID, anchorAddr.Hex())
+		logf("[BATCH-STACK] chain %d wired to CertenAnchorV8 %s, accounts %s (leaf %s)", chainID, anchorAddr.Hex(),
+			version.AccountContract(), version)
 	}
 
 	return &BatchStack{

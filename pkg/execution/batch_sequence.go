@@ -52,9 +52,11 @@ type MemberPredecessor struct {
 	ContinueOnFailure bool
 }
 
-// leafFor is the predecessor's v3 leaf. Predecessor and successor are members of one intent - one operation, one ADI,
-// one quorum certificate - so the key book and page the successor's certificate certifies are the predecessor's
-// (RB5-F29/F30).
+// leafFor is the predecessor's leaf, of the account generation the PREDECESSOR's chain is on (RB5-F57): one intent may
+// settle on a v4 chain and a v3 chain. Predecessor and successor are members of one intent - one operation, one ADI,
+// one quorum certificate, one Accumulate commit - so the key book and page the successor's certificate certifies are the
+// predecessor's (RB5-F29/F30), and so is its commit time, the notBefore of a v4 window; the notAfter is the
+// predecessor's own deadline, recorded with it (Deadline, its PendingBatchIntent.Deadline).
 func (a *MemberPredecessor) leafFor(succ *PendingBatchIntent) ([32]byte, error) {
 	if a.OperationID != succ.OperationID {
 		return [32]byte{}, fmt.Errorf("the predecessor is operation 0x%x, the member 0x%x: not one intent",
@@ -69,7 +71,18 @@ func (a *MemberPredecessor) leafFor(succ *PendingBatchIntent) ([32]byte, error) 
 	}
 	in := BatchLeafInput{ADIURL: a.ADIURL, ExecutionCommitment: a.ExecutionCommitment, OperationID: a.OperationID,
 		AuthorityBook: book, AuthorityPage: page}
-	return ComputeBatchLeafV3(a.ChainID, in), nil
+	version, err := AccountLeafVersionOf(a.ChainID)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	if version == AccountLeafV4 {
+		if succ.CommitTime.IsZero() || a.Deadline.IsZero() || succ.CommitTime.Unix() <= 0 || a.Deadline.Unix() <= 0 {
+			return [32]byte{}, fmt.Errorf("%w: the predecessor of intent %s on chain %d: commit time %v, deadline %v",
+				ErrNoMemberWindow, succ.IntentID, a.ChainID, succ.CommitTime, a.Deadline)
+		}
+		in.NotBefore, in.NotAfter = uint64(succ.CommitTime.Unix()), uint64(a.Deadline.Unix())
+	}
+	return ComputeAccountLeaf(a.ChainID, in)
 }
 
 // sequenceState is where a successor stands against its predecessor.
@@ -97,8 +110,12 @@ func sequenceReadiness(ctx context.Context, rd NonSettlementChain, m *PendingBat
 		return sequenceWaiting, "", readErr(fmt.Errorf("reading the finalized block of chain %d: %w", a.ChainID, err))
 	}
 	leaf, err := a.leafFor(m)
-	if errors.Is(err, ErrIntentNotYetCertified) {
+	if errors.Is(err, ErrIntentNotYetCertified) || errors.Is(err, ErrNoMemberWindow) {
 		return sequenceWaiting, "", nil
+	}
+	if errors.Is(err, ErrNoAccountLeafVersion) || errors.Is(err, ErrUnknownAccountLeafVersion) {
+		// This validator's configuration, not the predecessor's outcome: it decides nothing.
+		return sequenceWaiting, "", err
 	}
 	if err != nil {
 		return sequenceStopped, fmt.Sprintf("its predecessor's leaf on chain %d cannot be formed: %v", a.ChainID, err), nil

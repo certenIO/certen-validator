@@ -419,45 +419,71 @@ func sortedRoster(addrs []common.Address) []common.Address {
 	return out
 }
 
+// settlementProof is the account proof a settlement transaction carries: the fields both account generations share,
+// the generation its calldata calls (RB5-F57), and - for a CertenAccountV7_3 - the window its v4 leaf binds.
+type settlementProof struct {
+	contracts.AccountProofV7_2
+	Generation AccountLeafVersion
+	NotBefore  uint64
+	NotAfter   uint64
+}
+
 // settlementProofOf decodes the account proof a settlement transaction carries.
-func settlementProofOf(input []byte) (contracts.AccountProofV7_2, bool) {
-	if len(input) < 4 || settlementAccountABIErr != nil {
-		return contracts.AccountProofV7_2{}, false
-	}
-	m, err := settlementAccountABI.MethodById(input[:4])
+func settlementProofOf(input []byte) (settlementProof, bool) {
+	m, generation, err := settlementMethod(input)
 	if err != nil || (m.Name != "executeGovernanceProofDirect" && m.Name != "batchExecuteGovernanceProofDirect") {
-		return contracts.AccountProofV7_2{}, false
+		return settlementProof{}, false
 	}
 	args, err := m.Inputs.Unpack(input[4:])
 	if err != nil || len(args) == 0 {
-		return contracts.AccountProofV7_2{}, false
+		return settlementProof{}, false
 	}
-	var p contracts.AccountProofV7_2
-	if err := convertABIValue(args[len(args)-1], &p); err != nil {
-		return contracts.AccountProofV7_2{}, false
+	switch generation {
+	case AccountLeafV3:
+		p, err := convertABIValue[contracts.AccountProofV7_2](args[len(args)-1])
+		if err != nil {
+			return settlementProof{}, false
+		}
+		return settlementProof{AccountProofV7_2: p, Generation: generation}, true
+	case AccountLeafV4:
+		p, err := convertABIValue[contracts.AccountProofV7_3](args[len(args)-1])
+		if err != nil {
+			return settlementProof{}, false
+		}
+		return settlementProof{AccountProofV7_2: p.V7_2Fields(), Generation: generation, NotBefore: p.NotBefore,
+			NotAfter: p.NotAfter}, true
+	default:
+		return settlementProof{}, false
 	}
-	return p, true
 }
 
-func convertABIValue(v interface{}, dst *contracts.AccountProofV7_2) (err error) {
+func convertABIValue[T any](v interface{}) (out T, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("proof tuple does not convert: %v", r)
 		}
 	}()
-	*dst = *abi.ConvertType(v, new(contracts.AccountProofV7_2)).(*contracts.AccountProofV7_2)
-	return nil
+	return *abi.ConvertType(v, new(T)).(*T), nil
 }
 
 // timingRevert reports whether a settlement mined at blockTime reverted because of its own timing
-// fields rather than the intent: mined after its expiresAt, or before its timestamp.
-func timingRevert(p contracts.AccountProofV7_2, blockTime uint64) (bool, string) {
+// fields rather than the intent: mined after its expiresAt, or before its timestamp - or, on a v4 account, outside the
+// window its leaf binds (LeafNotYetValid / LeafExpired, RB5-F57).
+func timingRevert(p settlementProof, blockTime uint64) (bool, string) {
 	bt := new(big.Int).SetUint64(blockTime)
 	if p.ExpiresAt != nil && bt.Cmp(p.ExpiresAt) > 0 {
 		return true, fmt.Sprintf("mined at %d, after its expiresAt %s", blockTime, p.ExpiresAt)
 	}
 	if p.Timestamp != nil && bt.Cmp(p.Timestamp) < 0 {
 		return true, fmt.Sprintf("mined at %d, before its timestamp %s", blockTime, p.Timestamp)
+	}
+	if p.Generation == AccountLeafV4 {
+		if blockTime > p.NotAfter {
+			return true, fmt.Sprintf("mined at %d, after its leaf's notAfter %d", blockTime, p.NotAfter)
+		}
+		if blockTime < p.NotBefore {
+			return true, fmt.Sprintf("mined at %d, before its leaf's notBefore %d", blockTime, p.NotBefore)
+		}
 	}
 	return false, ""
 }
@@ -675,6 +701,10 @@ func (o *BatchOrchestrator) checkPriorAttempt(ctx context.Context, member *Pendi
 	}
 	exec, err := decodeAccountExecution(tx.Data())
 	if err != nil {
+		return priorAttempt{}, false, nil
+	}
+	// An execution of another account generation than the chain is on carries no leaf of this chain's trees (RB5-F57).
+	if requireChainGeneration(member.ChainID, exec) != nil {
 		return priorAttempt{}, false, nil
 	}
 	committed := make([]CommittedCall, 0, len(member.Legs))

@@ -590,8 +590,33 @@ func (o *ExternalChainObserver) log(format string, args ...interface{}) {
 // UTILITY METHODS
 // =============================================================================
 
-// settlementAccountABI decodes a settlement: the execution entry points of CertenAccountV7_2, the account factory V10
-// creates and the only one a V8.2 tree settles (RB5-F29). It is the artifact-extracted ABI the settlement is sent with
+// settlementAccountABI decodes a settlement on a v3 chain: the execution entry points of CertenAccountV7_2, the account
+// factory V10 creates (RB5-F29). It is the artifact-extracted ABI the settlement is sent with
 // (contracts.CertenAccountV7_2ABI), so the decoder and the sender cannot drift. Its proof tuple ends in uint64
 // authorityPage - the certified key page the leaf binds - where CertenAccountV7's ended in a declared uint8 level.
 var settlementAccountABI, settlementAccountABIErr = abi.JSON(strings.NewReader(contracts.CertenAccountV7_2ABI))
+
+// settlementAccountV7_3ABI decodes a settlement to a CertenAccountV7_3 (factory V11, RB5-F57), whose proof tuple ends in
+// the window its v4 leaf binds - so its entry points have other selectors than CertenAccountV7_2's.
+var settlementAccountV7_3ABI, settlementAccountV7_3ABIErr = abi.JSON(strings.NewReader(contracts.CertenAccountV7_3ABI))
+
+// settlementMethod is the account execution entry point calldata calls and the account generation it belongs to. The
+// selector names exactly one generation: the two proof tuples differ, so their selectors do.
+func settlementMethod(input []byte) (*abi.Method, AccountLeafVersion, error) {
+	if len(input) < 4 {
+		return nil, "", fmt.Errorf("no calldata")
+	}
+	if settlementAccountABIErr != nil {
+		return nil, "", fmt.Errorf("account ABI unavailable: %w", settlementAccountABIErr)
+	}
+	if settlementAccountV7_3ABIErr != nil {
+		return nil, "", fmt.Errorf("CertenAccountV7_3 ABI unavailable: %w", settlementAccountV7_3ABIErr)
+	}
+	if m, err := settlementAccountABI.MethodById(input[:4]); err == nil {
+		return m, AccountLeafV3, nil
+	}
+	if m, err := settlementAccountV7_3ABI.MethodById(input[:4]); err == nil {
+		return m, AccountLeafV4, nil
+	}
+	return nil, "", fmt.Errorf("not a CertenAccountV7_2 call, nor a CertenAccountV7_3 call")
+}

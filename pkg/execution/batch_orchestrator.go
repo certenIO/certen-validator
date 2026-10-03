@@ -676,17 +676,18 @@ func (o *BatchOrchestrator) verifyLeavesAgainstAccounts(
 	tree *BatchTree,
 ) error {
 	for i, p := range members {
-		acct, err := contracts.NewCertenAccountV7_2(p.Account, o.ecm.client)
+		// The account generation the chain is on (RB5-F57): its leaf is the one the tree holds.
+		acct, version, err := bindMemberAccount(p.ChainID, p.Account, o.ecm.client)
 		if err != nil {
 			return fmt.Errorf("binding account for %s: %w", p.IntentID, err)
 		}
 
-		// The account must be the keyless V7_2 for this ADI, or its leaf identity half is
-		// something other than what we hashed.
+		// The account must be the keyless account of the chain's generation for this ADI, or its leaf identity half
+		// is something other than what we hashed.
 		keyless, err := acct.IsKeylessOwner(&bind.CallOpts{Context: ctx})
 		if err != nil {
-			return fmt.Errorf("account %s is not a CertenAccountV7_2 (%s): %w",
-				p.Account.Hex(), p.IntentID, err)
+			return fmt.Errorf("account %s is not a %s (%s): %w",
+				p.Account.Hex(), version.AccountContract(), p.IntentID, err)
 		}
 		if !keyless {
 			return fmt.Errorf("account %s reports a non-keyless owner; refusing to anchor %s",
@@ -704,17 +705,19 @@ func (o *BatchOrchestrator) verifyLeavesAgainstAccounts(
 				p.Account.Hex(), p.IntentID, onChainADIHash[:8], p.ADIURL)
 		}
 
-		exec := tree.Inputs[i].ExecutionCommitment
-		onChainLeaf, err := acct.ComputeLeaf(&bind.CallOpts{Context: ctx}, exec, p.OperationID, tree.Inputs[i].AuthorityBook,
-			tree.Inputs[i].AuthorityPage)
+		if tree.Inputs[i].OperationID != p.OperationID {
+			return fmt.Errorf("tree member %d is operation 0x%x, the member %s 0x%x", i, tree.Inputs[i].OperationID[:8],
+				p.IntentID, p.OperationID[:8])
+		}
+		onChainLeaf, err := acct.MemberLeaf(&bind.CallOpts{Context: ctx}, tree.Inputs[i])
 		if err != nil {
 			return fmt.Errorf("computeLeaf on %s: %w", p.Account.Hex(), err)
 		}
 		if onChainLeaf != tree.Leaves[i] {
 			return fmt.Errorf(
 				"leaf mismatch for %s: Go computed 0x%x, deployed account computed 0x%x — "+
-					"cross-language drift between the validator and CertenAccountV7",
-				p.IntentID, tree.Leaves[i], onChainLeaf)
+					"cross-language drift between the validator and %s",
+				p.IntentID, tree.Leaves[i], onChainLeaf, version.AccountContract())
 		}
 	}
 	return nil
@@ -942,18 +945,20 @@ func (o *BatchOrchestrator) settleMember(
 	branch [][32]byte,
 	fence time.Time,
 ) (string, error) {
-	acct, err := contracts.NewCertenAccountV7_2(p.Account, o.ecm.client)
+	// The account generation the chain is on (RB5-F57); a v4 account's proof also carries the leaf's window.
+	acct, _, err := bindMemberAccount(p.ChainID, p.Account, o.ecm.client)
 	if err != nil {
 		return "", err
 	}
-	book, page, err := p.Authority()
+	in, err := p.LeafInput()
 	if err != nil {
 		return "", err
 	}
-	leaf, err := p.Leaf()
+	leaf, err := ComputeAccountLeaf(p.ChainID, in)
 	if err != nil {
 		return "", err
 	}
+	book, page := in.AuthorityBook, in.AuthorityPage
 
 	// VERIFY 4: a consumed leaf means this member already settled. Reporting that plainly
 	// beats paying gas to hit "leaf already consumed" on-chain.
@@ -971,39 +976,26 @@ func (o *BatchOrchestrator) settleMember(
 		return "", readErr(fmt.Errorf("reading chain head for the settlement's timestamp: %w", err))
 	}
 	notBefore := int64(head.Time)
+	// A v4 leaf's window opens at the member's commit time: before it the account refuses the leaf (LeafNotYetValid).
+	// That is not the member's outcome - only too early - so nothing is sent and nothing is decided.
+	if in.NotBefore != 0 && head.Time < in.NotBefore {
+		return "", readErr(fmt.Errorf("member %s: chain time %d is before its leaf's notBefore %d", p.IntentID, head.Time,
+			in.NotBefore))
+	}
 	expiresAt, err := settlementExpiry(p, notBefore, fence)
 	if err != nil {
 		return "", err
 	}
-	proof := contracts.AccountProofV7_2{
-		AdiURL:      p.ADIURL, // advisory; the contract uses its own immutable adiURL
-		AnchorId:    tree.BundleID,
-		MerkleProof: branch,
-		OperationID: p.OperationID,
-		Timestamp:   big.NewInt(notBefore),
-		ExpiresAt:   big.NewInt(expiresAt),
-		Nonce:       big.NewInt(0),
-		// The certified key book and page, bound into the leaf: the account derives every leg's level from them
-		// (RB3-F39, RB5-F30) - no level is declared.
-		AuthorityBook: book,
-		AuthorityPage: page,
-	}
+	proof := settlementProofFields(p, tree, branch, book, page, notBefore, expiresAt)
 
 	gas := uint64(500000)
 	if p.IsMultiLeg() {
 		gas = 400000 + uint64(len(p.Legs))*250000
 	}
 	build := func(opts *bind.TransactOpts) (*types.Transaction, error) {
-		if p.IsMultiLeg() {
-			targets, values, datas := legArrays(p.Legs)
-			return acct.BatchExecuteGovernanceProofDirect(opts, targets, values, datas, proof)
-		}
-		leg := p.Legs[0]
-		v := leg.Value
-		if v == nil {
-			v = bigZero()
-		}
-		return acct.ExecuteGovernanceProofDirect(opts, leg.Target, v, leg.Data, proof)
+		// Single leg: executeGovernanceProofDirect; several: batchExecuteGovernanceProofDirect. On a v4 chain the proof
+		// carries the window the leaf binds (RB5-F57).
+		return acct.Settle(opts, p.Legs, proof, in)
 	}
 	// Every hash this settlement is broadcast under - the first and each fee-bumped replacement at
 	// the same nonce - is recorded BEFORE its receipt is awaited. A crash, a shutdown or a lost
@@ -1051,6 +1043,26 @@ func (o *BatchOrchestrator) settleMember(
 		return txHash, errSettlementReverted
 	}
 	return txHash, nil
+}
+
+// settlementProofFields is the proof a settlement carries, in the fields both account generations share; a v4 account's
+// proof adds the window of the member's leaf (memberAccount.Settle, RB5-F57). timestamp and expiresAt are this
+// settlement's own bound, which on a v4 account only narrows the window the leaf binds.
+func settlementProofFields(p *PendingBatchIntent, tree *BatchTree, branch [][32]byte, book [32]byte, page uint64,
+	timestamp, expiresAt int64) contracts.AccountProofV7_2 {
+	return contracts.AccountProofV7_2{
+		AdiURL:      p.ADIURL, // advisory; the contract uses its own immutable adiURL
+		AnchorId:    tree.BundleID,
+		MerkleProof: branch,
+		OperationID: p.OperationID,
+		Timestamp:   big.NewInt(timestamp),
+		ExpiresAt:   big.NewInt(expiresAt),
+		Nonce:       big.NewInt(0),
+		// The certified key book and page, bound into the leaf: the account derives every leg's level from them
+		// (RB3-F39, RB5-F30) - no level is declared.
+		AuthorityBook: book,
+		AuthorityPage: page,
+	}
 }
 
 // forgetUnbroadcastSettlement removes the record of a settlement attempt that never reached a mempool
@@ -1263,7 +1275,7 @@ func (o *BatchOrchestrator) memberLeafConsumed(ctx context.Context, p *PendingBa
 	if p == nil {
 		return false, fmt.Errorf("nil member")
 	}
-	acct, err := contracts.NewCertenAccountV7_2(p.Account, o.ecm.client)
+	acct, _, err := bindMemberAccount(p.ChainID, p.Account, o.ecm.client)
 	if err != nil {
 		return false, fmt.Errorf("binding account %s: %w", p.Account.Hex(), err)
 	}
@@ -1455,12 +1467,19 @@ func (o *BatchOrchestrator) memberAccountUsable(ctx context.Context, p *PendingB
 	if len(code) == 0 {
 		return fmt.Errorf("account %s has no code", p.Account.Hex())
 	}
-	acct, err := contracts.NewCertenAccountV7_2(p.Account, o.ecm.client)
+	// The account generation the chain is on (RB5-F57). Exactly one: an account of any other generation is refused by
+	// name below, never settled through another generation's leaf.
+	acct, version, err := bindMemberAccount(p.ChainID, p.Account, o.ecm.client)
 	if err != nil {
 		return fmt.Errorf("binding account %s: %w", p.Account.Hex(), err)
 	}
-	// A V8.2 tree holds v2 leaves only. A CertenAccountV7 (v1 leaf, a self-declared authority level - RB3-F39) is
-	// superseded by CertenAccountV7_2, not migrated: it is refused by name. LEAF_DOMAIN is a constant of the code.
+	wantDomain, err := version.LeafDomain()
+	if err != nil {
+		return err
+	}
+	// A tree holds leaves of the chain's generation only. An account of another generation - a CertenAccountV7 (v1
+	// leaf, a self-declared authority level - RB3-F39), or a CertenAccountV7_2 (v3, no window) on a v4 chain - is
+	// superseded, not migrated in place: it is refused by name. LEAF_DOMAIN is a constant of the code.
 	domain, err := acct.LeafDomain(&bind.CallOpts{Context: ctx})
 	if err != nil {
 		if !isCallVerdict(err) {
@@ -1468,16 +1487,16 @@ func (o *BatchOrchestrator) memberAccountUsable(ctx context.Context, p *PendingB
 		}
 		return fmt.Errorf("account %s is not a CertenAccount: %w", p.Account.Hex(), err)
 	}
-	if domain != contracts.LeafDomainV7_2 {
-		return fmt.Errorf("account %s verifies %q leaves, not %q: it is not a CertenAccountV7_2 (an earlier account "+
-			"generation, superseded by the V8.2 rollout's factory V10)", p.Account.Hex(), domain, contracts.LeafDomainV7_2)
+	if domain != wantDomain {
+		return fmt.Errorf("account %s verifies %q leaves, not %q: it is not a %s, the account generation chain %d is on "+
+			"(%s)", p.Account.Hex(), domain, wantDomain, version.AccountContract(), p.ChainID, version)
 	}
 	keyless, err := acct.IsKeylessOwner(&bind.CallOpts{Context: ctx})
 	if err != nil {
 		if !isCallVerdict(err) {
 			return readErr(fmt.Errorf("reading isKeylessOwner on %s: %w", p.Account.Hex(), err))
 		}
-		return fmt.Errorf("account %s is not a CertenAccountV7_2: %w", p.Account.Hex(), err)
+		return fmt.Errorf("account %s is not a %s: %w", p.Account.Hex(), version.AccountContract(), err)
 	}
 	if !keyless {
 		return fmt.Errorf("account %s reports a non-keyless owner", p.Account.Hex())
