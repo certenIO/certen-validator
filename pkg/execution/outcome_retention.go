@@ -59,11 +59,15 @@ type OutcomeTree struct {
 	Root             common.Hash `json:"root"`
 	BatchOperationID common.Hash `json:"batch_operation_id"`
 	// BatchOperationIDVersion is how BatchOperationID was derived (BatchTree.BatchOperationIDVersion).
-	BatchOperationIDVersion string              `json:"batch_operation_id_version"`
-	BlockHeight             uint64              `json:"accumulate_block_height"`
-	AccumulateSetRoot       common.Hash         `json:"accumulate_set_root"`
-	Incarnation             common.Hash         `json:"incarnation"`
-	Members                 []OutcomeTreeMember `json:"members"`
+	BatchOperationIDVersion string      `json:"batch_operation_id_version"`
+	BlockHeight             uint64      `json:"accumulate_block_height"`
+	AccumulateSetRoot       common.Hash `json:"accumulate_set_root"`
+	Incarnation             common.Hash `json:"incarnation"`
+	// LeafVersion is the account leaf version the tree's leaves are of (RB5-F57), so the tree re-derives with the leaves
+	// it was formed with even after its chain moves to another version. Absent is v3: every tree kept before F57 was
+	// formed with v3 leaves, and a v3 tree is still written without it, byte for byte as before.
+	LeafVersion AccountLeafVersion  `json:"leaf_version,omitempty"`
+	Members     []OutcomeTreeMember `json:"members"`
 	// Roles is every way this validator came to hold the tree, ascending; RetainedAt is the first write.
 	Roles      []OutcomeTreeRole `json:"roles"`
 	RetainedAt time.Time         `json:"retained_at"`
@@ -85,8 +89,12 @@ type OutcomeTreeMember struct {
 	LegacyNoGovernance   bool        `json:"legacy_no_governance,omitempty"`
 	// Legs are the member's committed calls with the effects each committed, as the user-signed intent states them.
 	Legs []OutcomeTreeLeg `json:"legs"`
-	// Deadline is the latest time the member may execute (PendingBatchIntent.Deadline), unix seconds.
+	// Deadline is the latest time the member may execute (PendingBatchIntent.Deadline), unix seconds. On a v4 chain it is
+	// also the notAfter the member's leaf binds (RB5-F57).
 	Deadline int64 `json:"deadline"`
+	// NotBefore is the notBefore a v4 leaf binds - the member's Accumulate commit time - unix seconds (RB5-F57). Zero, and
+	// absent, on a v3 chain, whose leaf binds no window.
+	NotBefore int64 `json:"not_before,omitempty"`
 	// SearchFrom is the earliest time the member's leaf could have been consumed - its Accumulate commit, or this
 	// validator's first sighting, less leafSpendMargin - unix seconds. Where a search for the consumption starts; it is
 	// never a fact.
@@ -140,7 +148,7 @@ func NewOutcomeTree(tree *BatchTree, byOperation map[[32]byte]*PendingBatchInten
 	ot := &OutcomeTree{
 		ChainID: tree.ChainID, BundleID: tree.BundleID, Root: tree.Root, BatchOperationID: tree.BatchOperationID,
 		BatchOperationIDVersion: tree.BatchOperationIDVersion, BlockHeight: tree.BlockHeight,
-		AccumulateSetRoot: tree.AccumulateSetRoot, Incarnation: tree.Incarnation,
+		AccumulateSetRoot: tree.AccumulateSetRoot, Incarnation: tree.Incarnation, LeafVersion: keptLeafVersion(tree.LeafVersion),
 		Roles: []OutcomeTreeRole{role}, RetainedAt: time.Now().UTC(),
 	}
 	for i, in := range tree.Inputs {
@@ -202,11 +210,16 @@ func outcomeTreeMember(tree *BatchTree, i int, in BatchLeafInput, p *PendingBatc
 	if from.IsZero() {
 		return none, fmt.Errorf("%w: member %s has no commit time or sighting to search its chain from", ErrOutcome, p.IntentID)
 	}
+	// A v4 leaf binds the window (RB5-F57): its notAfter IS the deadline the member's non-settlement is judged at.
+	if in.NotAfter != 0 && int64(in.NotAfter) != deadline.Unix() {
+		return none, fmt.Errorf("%w: member %s: its leaf binds notAfter %d, its deadline is %d", ErrOutcome, p.IntentID,
+			in.NotAfter, deadline.Unix())
+	}
 	m := OutcomeTreeMember{
 		LeafIndex: uint64(i), Leaf: tree.Leaves[i], OperationID: in.OperationID, IntentID: p.IntentID, ADIURL: in.ADIURL,
 		Account: p.Account, AuthorityBook: in.AuthorityBook, AuthorityPage: in.AuthorityPage,
 		GovernanceCommitment: in.GovernanceCommitment, IntentMessage: in.IntentMessage, LegacyNoGovernance: in.LegacyNoGovernance,
-		Deadline: deadline.Unix(), SearchFrom: from.Add(-leafSpendMargin).Unix(),
+		Deadline: deadline.Unix(), NotBefore: int64(in.NotBefore), SearchFrom: from.Add(-leafSpendMargin).Unix(),
 	}
 	for _, l := range legs {
 		tl := OutcomeTreeLeg{Target: l.Call.Target, Value: (*hexutil.Big)(new(big.Int).Set(callValue(l.Call.Value))),
@@ -224,6 +237,11 @@ func outcomeTreeMember(tree *BatchTree, i int, in BatchLeafInput, p *PendingBatc
 func (t *OutcomeTree) Verify() error {
 	if t == nil || len(t.Members) == 0 {
 		return fmt.Errorf("%w: an empty kept tree", ErrOutcome)
+	}
+	// The leaves are re-derived as the version the tree was formed with (RB5-F57), never another.
+	version, err := t.leafVersion()
+	if err != nil {
+		return fmt.Errorf("%w: kept tree 0x%x: %v", ErrOutcome, t.BundleID[:8], err)
 	}
 	inputs := make([]BatchLeafInput, 0, len(t.Members))
 	for i, m := range t.Members {
@@ -246,13 +264,25 @@ func (t *OutcomeTree) Verify() error {
 		} else {
 			exec = computeBatchExecutionCommitment(t.ChainID, calls)
 		}
-		inputs = append(inputs, BatchLeafInput{
+		in := BatchLeafInput{
 			ADIURL: m.ADIURL, ExecutionCommitment: exec, OperationID: m.OperationID, AuthorityBook: m.AuthorityBook,
 			AuthorityPage: m.AuthorityPage, GovernanceCommitment: m.GovernanceCommitment, LegacyNoGovernance: m.LegacyNoGovernance,
 			AccumulateSetRoot: t.AccumulateSetRoot, IntentMessage: m.IntentMessage, IntentID: m.IntentID,
-		})
+		}
+		// A v4 leaf binds [notBefore, deadline] (RB5-F57); a v3 leaf binds no window.
+		switch {
+		case version == AccountLeafV4 && m.NotBefore <= 0:
+			return fmt.Errorf("%w: kept tree 0x%x: member %d of a v4 tree lacks the notBefore its leaf binds", ErrOutcome,
+				t.BundleID[:8], i)
+		case version == AccountLeafV4:
+			in.NotBefore, in.NotAfter = uint64(m.NotBefore), uint64(m.Deadline)
+		case m.NotBefore != 0:
+			return fmt.Errorf("%w: kept tree 0x%x: member %d states a window, and a %s leaf binds none", ErrOutcome,
+				t.BundleID[:8], i, version)
+		}
+		inputs = append(inputs, in)
 	}
-	rebuilt, err := BuildBatchTree(t.ChainID, inputs, t.BlockHeight, t.Incarnation)
+	rebuilt, err := buildBatchTreeAs(version, t.ChainID, inputs, t.BlockHeight, t.Incarnation)
 	if err != nil {
 		return fmt.Errorf("%w: kept tree 0x%x does not rebuild: %v", ErrOutcome, t.BundleID[:8], err)
 	}
@@ -265,6 +295,23 @@ func (t *OutcomeTree) Verify() error {
 		}
 	}
 	return nil
+}
+
+// keptLeafVersion is how a kept tree records the leaf version it was formed with: v3 absent, as every tree kept before
+// RB5-F57 was written, any other version by name.
+func keptLeafVersion(v AccountLeafVersion) AccountLeafVersion {
+	if v == AccountLeafV3 {
+		return ""
+	}
+	return v
+}
+
+// leafVersion is the account leaf version the kept tree's leaves are of (LeafVersion; absent is v3).
+func (t *OutcomeTree) leafVersion() (AccountLeafVersion, error) {
+	if t.LeafVersion == "" {
+		return AccountLeafV3, nil
+	}
+	return ParseAccountLeafVersion(string(t.LeafVersion))
 }
 
 // sameMembers reports whether two kept trees state the same members - roles, write time and each member's search floor

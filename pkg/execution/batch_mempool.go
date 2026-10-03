@@ -261,13 +261,36 @@ func (p *PendingBatchIntent) ExecutionCommitment() ([32]byte, error) {
 	return computeBatchExecutionCommitment(p.ChainID, calls), nil
 }
 
-// Leaf is the member's leaf in a V8.2 tree: the v3 leaf its CertenAccountV7_2 recomputes and consumes (RB5-F29/F30).
+// Leaf is the member's leaf in a V8.2 tree, of the account generation its chain is on: the v3 leaf a CertenAccountV7_2
+// recomputes and consumes (RB5-F29/F30), or the v4 leaf, which also binds its window, a CertenAccountV7_3 does (RB5-F57).
 func (p *PendingBatchIntent) Leaf() ([32]byte, error) {
 	in, err := p.LeafInput()
 	if err != nil {
 		return [32]byte{}, err
 	}
-	return ComputeBatchLeafV3(p.ChainID, in), nil
+	return ComputeAccountLeaf(p.ChainID, in)
+}
+
+// Window is the member's execution window, unix seconds, as its v4 leaf binds it (RB5-F57): from its Accumulate commit
+// time (CommitTime) to its deadline - exactly PendingBatchIntent.Deadline, the earliest of its legs' signed deadlines and
+// its settlement horizon - so the deadline the chain enforces is the one every validator computes. Both are the same on
+// every validator: consensus time and signed data. A member whose commit time is not known yet has no window
+// (ErrNoMemberWindow); it waits until it does.
+func (p *PendingBatchIntent) Window() (notBefore, notAfter uint64, err error) {
+	if p.CommitTime.IsZero() {
+		return 0, 0, fmt.Errorf("%w: intent %s on chain %d: its Accumulate commit time is not known yet", ErrNoMemberWindow,
+			p.IntentID, p.ChainID)
+	}
+	deadline, ok := p.Deadline()
+	if !ok {
+		return 0, 0, fmt.Errorf("%w: intent %s on chain %d states no deadline", ErrNoMemberWindow, p.IntentID, p.ChainID)
+	}
+	nb, na := p.CommitTime.Unix(), deadline.Unix()
+	if nb <= 0 || na <= 0 {
+		return 0, 0, fmt.Errorf("%w: intent %s on chain %d: commit time %d, deadline %d", ErrNoMemberWindow, p.IntentID,
+			p.ChainID, nb, na)
+	}
+	return uint64(nb), uint64(na), nil
 }
 
 // ErrNoCertifiedAuthorityPage: the member has no key page CERTEN's quorum certified, so no v3 leaf (RB5-F29).
@@ -309,7 +332,7 @@ func (p *PendingBatchIntent) LeafInput() (BatchLeafInput, error) {
 	if err != nil {
 		return BatchLeafInput{}, err
 	}
-	return BatchLeafInput{
+	in := BatchLeafInput{
 		ADIURL:               p.ADIURL,
 		ExecutionCommitment:  exec,
 		OperationID:          p.OperationID,
@@ -321,7 +344,18 @@ func (p *PendingBatchIntent) LeafInput() (BatchLeafInput, error) {
 		IntentMessage:        p.CertifiedMessage,
 		IntentID:             p.IntentID,
 		Provenance:           p.provenance(),
-	}, nil
+	}
+	// A v4 chain's leaf binds the member's window (RB5-F57); a v3 chain's binds none, and carries none.
+	version, err := AccountLeafVersionOf(p.ChainID)
+	if err != nil {
+		return BatchLeafInput{}, fmt.Errorf("intent %s: %w", p.IntentID, err)
+	}
+	if version == AccountLeafV4 {
+		if in.NotBefore, in.NotAfter, err = p.Window(); err != nil {
+			return BatchLeafInput{}, err
+		}
+	}
+	return in, nil
 }
 
 // provenance describes the member for the canonical row. It reads the FIRST leg: a member with several
