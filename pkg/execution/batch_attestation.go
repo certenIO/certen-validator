@@ -291,6 +291,9 @@ func (s *BatchStack) HandleBatchAttestationRequest(
 			"no members for chain %d in period [%d,%d) in this validator's mempool",
 			req.ChainID, req.CutoffHeight, req.CutoffHeight+periodBlocks)
 	}
+	// A member queued here without its commit time has it read from its commit block first (RB5-F57), exactly as the
+	// leader's flush does, so both rebuild the same leaves.
+	s.ensureMemberCommitTimes(members, nil)
 	screenCtx, cancel := context.WithTimeout(context.Background(), batchAttestationScreenTimeout)
 	defer cancel()
 	chunks, _, err := orch.periodChunks(screenCtx, members, s.Mempool.MaxBatchSize())

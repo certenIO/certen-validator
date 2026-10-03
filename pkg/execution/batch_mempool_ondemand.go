@@ -177,6 +177,33 @@ func (m *BatchMempool) NoteOnDemandProgress(chainID int64, opID [32]byte, update
 	return true
 }
 
+// SetCommitTime records a queued member's commit time, read from its commit block (ResolveCommitTime), and persists it -
+// in either lane. A member that already has one keeps it: it is one value, the same on every validator. It reports
+// whether the member is queued.
+func (m *BatchMempool) SetCommitTime(chainID int64, opID [32]byte, t time.Time) bool {
+	m.mu.Lock()
+	var held *PendingBatchIntent
+	if p := m.onDemand[chainID][opID]; p != nil {
+		held = p
+	} else {
+		for _, p := range m.pool[chainID] {
+			if p != nil && p.OperationID == opID {
+				held = p
+				break
+			}
+		}
+	}
+	if held != nil && held.CommitTime.IsZero() {
+		held.CommitTime = t
+	}
+	m.mu.Unlock()
+	if held == nil {
+		return false
+	}
+	m.persist()
+	return true
+}
+
 // HeldPastTTL is how many on-demand members the last prune kept past their TTL because this
 // validator has acted on them - settlements in flight, or anchors it attested - and must see resolve.
 func (m *BatchMempool) HeldPastTTL() int {
