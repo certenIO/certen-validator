@@ -211,6 +211,11 @@ type BatchStack struct {
 	// Incarnation is the Accumulate incarnation this validator proves against (docs/l4/INCARNATION_ANCHOR.md). Every
 	// member's Accumulate set root is derived under it, and every V8.2 anchor commits it. Required, never zero.
 	Incarnation [32]byte
+
+	// OutcomeTrees keeps every batch tree this validator signs or proves, on its own disk, so it can later state
+	// and certify what the tree's members did (RB5 D4, outcome_retention.go). Required: a tree is kept before it is
+	// signed, and without the store nothing is signed.
+	OutcomeTrees *OutcomeTreeStore
 }
 
 // MemberOutcomeReader reads the recorded outcome of an intent's member on a chain (nil: none recorded).

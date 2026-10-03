@@ -1600,6 +1600,15 @@ func startValidator(
 		return nil, nil, fmt.Errorf("the validator cannot start without its database")
 	}
 	stack.MemberOutcomes = database.NewIntentLifecycleRepository(dbClient)
+	// Every batch tree this validator signs or proves is kept on its own disk before it is signed, so it can state and
+	// certify what the members did once the batch settles (RB5 D4). A store that cannot be opened stops the start.
+	outcomeTrees, otErr := execution.NewOutcomeTreeStore(execution.OutcomeTreeDir())
+	if otErr != nil {
+		return nil, nil, fmt.Errorf("batch path: %w (the files are left in place; resolve them before restarting)", otErr)
+	}
+	stack.OutcomeTrees = outcomeTrees
+	prover.SetOutcomeTreeRetainer(stack)
+	log.Printf("🌳 [OUTCOME] batch trees kept at %s", outcomeTrees.Dir())
 	// The attester compares an incoming request's period width against this and
 	// refuses a mismatch, so a proposer cannot widen what this node selects.
 	periodBlocks, err := batchPeriodBlocksFromEnv()

@@ -204,6 +204,20 @@ func (p *PendingAttestation) CostAttribution() (accumTxHash string, orgID string
 	return p.TransactionHash, p.UserID
 }
 
+// SignedIntentBlobs is the user-signed intent the round admitted, as its four blobs (intent, cross-chain, governance,
+// replay): what a batch member's committed calls and effects are read from. A validator keeps them with every batch
+// tree it signs, so it can state the members' outcomes from its own copy once the batch settles (RB5 D4).
+func (p *PendingAttestation) SignedIntentBlobs() ([][]byte, error) {
+	if p == nil || p.CertenIntent == nil {
+		return nil, fmt.Errorf("the round's snapshot carries no signed intent")
+	}
+	ci := p.CertenIntent
+	if len(ci.IntentData) == 0 || len(ci.CrossChainData) == 0 {
+		return nil, fmt.Errorf("intent %s: the round's snapshot carries an incomplete signed intent", ci.IntentID)
+	}
+	return [][]byte{ci.IntentData, ci.CrossChainData, ci.GovernanceData, ci.ReplayData}, nil
+}
+
 // IsCadence reports whether this attestation is being replayed from the cadence queue.
 func (p *PendingAttestation) IsCadence() bool { return p != nil && p.Replayed }
 
