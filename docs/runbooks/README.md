@@ -13,6 +13,7 @@ what shipped, where it differs and what is still open.
 | [schema-and-evidence-hardening.md](schema-and-evidence-hardening.md) | Eight pieces of work so that the defects of 2026-09-15..18 cannot recur silently | Work list; §3 (retire the shadow pipeline) is done |
 | [apphash-idempotency.md](apphash-idempotency.md) | A restarting validator could not rejoin (`wrong Block.Header.AppHash`); the XOR state commitment was weak | Both changes are in `pkg/consensus/abci_validator.go`: staged idempotency and the SHA256 app-hash chain |
 | [bls-key-rotation.md](bls-key-rotation.md) | Every validator's BLS key was computable from public inputs | Rotation done on all three anchors on 2026-09-26 |
+| [admin-set-rotation.md](admin-set-rotation.md) | The admin set could change only by a one-time rules repair (v11 re-seal); a lost or compromised admin key needed another | Rules v12 built and rehearsed on a live 4-node network; not deployed. No key is created unless the owner rotates |
 
 Related, in the gateway repo: the hourly ~150 s event-loop freeze caused by the transparency-log audit is
 fixed on the gateway's main (the audit checkpoint, migration `044_transparency_audit_checkpoint.sql`, and
