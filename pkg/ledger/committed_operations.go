@@ -153,3 +153,46 @@ func (s *LedgerStore) StartCommittedOperations(initialHeight int64) error {
 	binary.BigEndian.PutUint64(b, uint64(initialHeight-1))
 	return s.kv.Set(keyCommittedOperationsUpTo, b)
 }
+
+// The kinds watermark: the height through which every committed block has been checked to hold no transaction of a
+// kind a later rules version added, decided the way the version before it decided it (consensus/committed_operations.go,
+// checkCommittedKinds). Kept per rules version, because each version that adds a kind has to check the whole chain
+// for it once.
+func kindsCheckedKey(version uint64) []byte {
+	return []byte(fmt.Sprintf("abci:kinds_checked_through:v%d", version))
+}
+
+// KindsCheckedThrough is the height through which committed blocks are checked for rules version (0: none).
+func (s *LedgerStore) KindsCheckedThrough(version uint64) (int64, error) {
+	b, err := s.read(kindsCheckedKey(version), fmt.Sprintf("rules v%d kinds watermark", version))
+	if err != nil || b == nil {
+		return 0, err
+	}
+	if len(b) != 8 {
+		return 0, fmt.Errorf("rules v%d kinds watermark is %d bytes, not 8", version, len(b))
+	}
+	return int64(binary.BigEndian.Uint64(b)), nil
+}
+
+// SaveKindsCheckedThrough records that every committed block through height is checked for rules version. It never
+// lowers the watermark.
+func (s *LedgerStore) SaveKindsCheckedThrough(version uint64, height int64) error {
+	have, err := s.KindsCheckedThrough(version)
+	if err != nil || height <= have {
+		return err
+	}
+	b := make([]byte, 8)
+	binary.BigEndian.PutUint64(b, uint64(height))
+	return s.kv.Set(kindsCheckedKey(version), b)
+}
+
+// AdvanceKindsChecked moves the watermark to height when height is the next one - a block the binary of that rules
+// version committed itself. A height above the next leaves it where it is: the heights between were never checked, and
+// the next start checks them.
+func (s *LedgerStore) AdvanceKindsChecked(version uint64, height int64) error {
+	have, err := s.KindsCheckedThrough(version)
+	if err != nil || height != have+1 {
+		return err
+	}
+	return s.SaveKindsCheckedThrough(version, height)
+}

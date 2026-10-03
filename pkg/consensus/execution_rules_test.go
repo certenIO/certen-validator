@@ -79,25 +79,25 @@ func TestCurrentVersionIsSet(t *testing.T) {
 	if CurrentExecutionRulesVersion == 0 {
 		t.Fatal("CurrentExecutionRulesVersion is 0, which disables every check")
 	}
-	if CurrentExecutionRulesVersion != executionRulesV11 {
+	if CurrentExecutionRulesVersion != executionRulesV12 {
 		t.Fatalf("current = %d; if rules changed, bump the constant AND add a "+
 			"changelog entry in execution_rules.go", CurrentExecutionRulesVersion)
 	}
 }
 
-// RB3-F95, RB3-F141, RB5 D3, the v11 admin re-seal: the v11 binary continues state committed under v7, v8, v9
-// and v10 - the production chain runs v10 - without a reset. Nothing else is continued: v6 state still refuses,
-// and a newer state is a rollback. Every continuation leads to the binary's own version, and the claims form an
-// unbroken chain: v7 state is continued only because the v7->v8, v8->v9, v9->v10 and v10->v11 claims all hold,
-// so no version between the oldest continued one and the current one may be missing its entry.
-func TestV11ContinuesV7ToV10StateAndNothingElse(t *testing.T) {
-	for _, from := range []uint64{executionRulesV7, executionRulesV8, executionRulesV9, executionRulesV10} {
+// RB3-F95, RB3-F141, RB5 D3, the v11 admin re-seal, the v12 admin rotation (RB5-F37): the v12 binary continues state
+// committed under v7, v8, v9, v10 and v11 - the production chain runs v11 - without a reset. Nothing else is continued:
+// v6 state still refuses, and a newer state is a rollback. Every continuation leads to the binary's own version, and the
+// claims form an unbroken chain: v7 state is continued only because the v7->v8, v8->v9, v9->v10, v10->v11 and v11->v12
+// claims all hold, so no version between the oldest continued one and the current one may be missing its entry.
+func TestV12ContinuesV7ToV11StateAndNothingElse(t *testing.T) {
+	for _, from := range []uint64{executionRulesV7, executionRulesV8, executionRulesV9, executionRulesV10, executionRulesV11} {
 		got, err := checkExecutionRulesVersion(from, 1000)
-		if err != nil || got != executionRulesV11 {
-			t.Fatalf("v%d state under the v11 binary: (%d, %v); want continued as v11", from, got, err)
+		if err != nil || got != executionRulesV12 {
+			t.Fatalf("v%d state under the v12 binary: (%d, %v); want continued as v12", from, got, err)
 		}
 	}
-	if _, err := checkExecutionRulesVersion(executionRulesV11+1, 1000); err == nil {
+	if _, err := checkExecutionRulesVersion(executionRulesV12+1, 1000); err == nil {
 		t.Fatal("a newer state was continued")
 	}
 	if _, err := checkExecutionRulesVersion(executionRulesV6, 1000); err == nil {
