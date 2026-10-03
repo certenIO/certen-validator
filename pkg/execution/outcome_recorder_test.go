@@ -87,6 +87,36 @@ func (c *recorderChain) RecordedOutcome(context.Context, [32]byte, uint64) (*Rec
 	return &r, nil
 }
 
+func (c *recorderChain) Anchor() common.Address {
+	return common.HexToAddress("0x830cfB484b6e5606687e00f64C40aeb9c7c84E3c")
+}
+
+func (c *recorderChain) TransactionInclusion(context.Context, common.Hash) (*ChainInclusionEvidence, *types.Header, error) {
+	return nil, nil, errors.New("the recorder fake proves no inclusion")
+}
+
+func (c *recorderChain) StateProofsAt(context.Context, *types.Header, []ExpectedStateSlot) ([]*StateProof, error) {
+	return nil, errors.New("the recorder fake proves no state")
+}
+
+func (c *recorderChain) QuorumRegistryAt(context.Context, *types.Header) (*OutcomeQuorumRegistry, error) {
+	return nil, errors.New("the recorder fake holds no registry")
+}
+
+// fakeEvidence records each attachment the recorder asks for.
+type fakeEvidence struct {
+	mu    sync.Mutex
+	calls []OutcomeEvidenceInput
+	err   error
+}
+
+func (f *fakeEvidence) AttachOutcomeEvidence(_ context.Context, _ OutcomeEvidenceSource, in OutcomeEvidenceInput) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, in)
+	return len(in.Leaves), f.err
+}
+
 type fakeOutcomeSubmitter struct {
 	registry map[string]consensus.ValidatorRegistryEntry
 	sub      *OutcomeSubmission
@@ -148,6 +178,7 @@ type recorderFixture struct {
 	chain    *recorderChain
 	sub      *fakeOutcomeSubmitter
 	records  *memRecords
+	evidence *fakeEvidence
 	kept     *OutcomeTree
 	derived  *DerivedOutcome
 	peerSeen *int
@@ -202,18 +233,19 @@ func newRecorderFixture(t *testing.T, elected bool) *recorderFixture {
 	sub := &fakeOutcomeSubmitter{registry: registry, sub: &OutcomeSubmission{Tx: "0x" + strings.Repeat("ab", 32), Block: 2100, Status: 1,
 		Sender: fmt.Sprintf("0x%040x", 1)}}
 	records := &memRecords{}
+	evidence := &fakeEvidence{}
 	rec := &BatchOutcomeRecorder{
 		ValidatorID: me, Roster: func() []string { return roster }, Trees: own,
 		Chains:     map[int64]OutcomeRecorderChain{84532: chain},
 		Registries: map[int64]common.Address{84532: common.HexToAddress("0xd479841a17770D89Dae94B5b41C95D2117414c21")},
-		Submitter:  sub, Records: records, Peers: []string{srv.URL},
+		Submitter:  sub, Records: records, Evidence: evidence, Peers: []string{srv.URL},
 		Key: func() *bls.PrivateKey { return keys[0] }, SetRoot: func() ([32]byte, error) { return peerSetRoot, nil },
 		Timeout: 10 * time.Second, Now: func() time.Time { return derived.ResolvedAt.Add(time.Minute) },
 	}
 	if err := rec.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	return &recorderFixture{rec: rec, chain: chain, sub: sub, records: records, kept: kept, derived: derived, peerSeen: &seen}
+	return &recorderFixture{rec: rec, chain: chain, sub: sub, records: records, evidence: evidence, kept: kept, derived: derived, peerSeen: &seen}
 }
 
 func TestTheElectedRecorderRecordsTheQuorumsOutcomeAndStoresItsEvidence(t *testing.T) {
@@ -419,6 +451,47 @@ func (f *recorderFixture) finalRecord(recordedIn, txBlock uint64) {
 			VotingPowers: []*big.Int{big.NewInt(100), big.NewInt(100)}, TotalVotingPower: big.NewInt(300), SignedVotingPower: big.NewInt(200), MessageHash: msg}}
 }
 
+// RB5-F15: a final record's offline evidence is attached to the members' proofs BEFORE the tree it is built from is
+// released - with the record, the derived leaves and the anchor view, in tree order.
+func TestAFinalRecordAttachesItsEvidenceBeforeReleasingTheTree(t *testing.T) {
+	f := newRecorderFixture(t, true)
+	f.finalRecord(1990, 1990)
+	if steps := f.rec.Pass(context.Background()); steps[f.kept.BundleID] != OutcomeStepReleased {
+		t.Fatalf("step %s", steps[f.kept.BundleID])
+	}
+	if len(f.evidence.calls) != 1 {
+		t.Fatalf("%d evidence attachment(s)", len(f.evidence.calls))
+	}
+	in := f.evidence.calls[0]
+	if in.Tree == nil || in.Tree.BundleID != f.kept.BundleID || len(in.Leaves) != 2 || in.Record == nil || in.Record.Tx != common.HexToHash("0xcc") ||
+		in.View == nil || in.Registry != common.HexToAddress("0xd479841a17770D89Dae94B5b41C95D2117414c21") {
+		t.Fatalf("attached %+v", in)
+	}
+	for i, l := range in.Leaves {
+		if l != f.derived.Leaves[i] {
+			t.Fatalf("leaf %d is not the derived leaf", i)
+		}
+	}
+}
+
+// RB5-F15: the tree is the source of the members' evidence; a record whose evidence cannot be attached keeps it, and is
+// tried again.
+func TestARecordWhoseEvidenceCannotBeAttachedKeepsTheTree(t *testing.T) {
+	f := newRecorderFixture(t, true)
+	f.finalRecord(1990, 1990)
+	f.evidence.err = errors.New("the proof store is down")
+	if steps := f.rec.Pass(context.Background()); steps[f.kept.BundleID] != OutcomeStepRecorded {
+		t.Fatalf("step %s", steps[f.kept.BundleID])
+	}
+	if _, err := f.rec.Trees.Load(84532, f.kept.BundleID); err != nil {
+		t.Fatalf("the tree was released without its evidence attached: %v", err)
+	}
+	f.evidence.err = nil
+	if steps := f.rec.Pass(context.Background()); steps[f.kept.BundleID] != OutcomeStepReleased {
+		t.Fatalf("the retry: step %s", steps[f.kept.BundleID])
+	}
+}
+
 // On Arbitrum the registry's recordedInBlock is an L1 block number (a contract's block.number there), far below the L2
 // chain's own heights. A record is final by ITS TRANSACTION'S block: one still above the finalized block keeps the tree,
 // whatever recordedInBlock says.
@@ -430,6 +503,9 @@ func TestARecordIsFinalByItsTransactionsBlockNotByRecordedInBlock(t *testing.T) 
 	}
 	if _, err := f.rec.Trees.Load(84532, f.kept.BundleID); err != nil {
 		t.Fatalf("the tree of a record whose transaction is not final was released: %v", err)
+	}
+	if len(f.evidence.calls) != 0 {
+		t.Fatal("evidence was attached for a record that is not final")
 	}
 }
 
