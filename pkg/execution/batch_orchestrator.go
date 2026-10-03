@@ -417,6 +417,24 @@ func (o *BatchOrchestrator) FlushChain(
 		return res, err
 	}
 
+	// ---- NOTHING LEFT THAT CAN SETTLE? ---------------------------------------
+	// A tree whose every pending member is past its deadline at the chain's time can settle nothing: each settlement
+	// would be refused as errMemberPastDeadline after the anchor and its attestation were paid for (RB5-F45: period
+	// 10244900 on 2026-10-02 spent 340,916 + 561,855 gas to drop its one member). They are refused by name here,
+	// before anything is sent. A tree with any member still within its deadline is anchored as before.
+	if expired, err := o.allPendingPastDeadline(ctx, pendingMembers); err != nil {
+		return res, err
+	} else if expired {
+		for _, p := range pendingMembers {
+			deadline, _ := p.Deadline()
+			o.logf("[BATCH] member %s: past its deadline %s before its batch was anchored — refused, nothing sent",
+				p.IntentID, deadline.Format(time.RFC3339))
+			res.drop(fmt.Sprintf("its deadline %s passed before its batch could be anchored on chain %d",
+				deadline.Format(time.RFC3339), chainID), p)
+		}
+		return res, nil
+	}
+
 	// ---- Create the anchor --------------------------------------------------
 	created, err := o.createBatchAnchor(ctx, tree)
 	if err != nil {
@@ -1098,6 +1116,40 @@ const settlementWaitTimeout = 10 * time.Minute
 
 // errSettlementWindowClosed: the settlement's window ended before it could be sent. Nothing was sent.
 var errSettlementWindowClosed = errors.New("settlement window closed")
+
+// allPendingPastDeadline reports whether every one of members is past its deadline at the chain's head time - the same
+// clock and rule settlementExpiry applies to each settlement. False when any member has no deadline or is still within
+// it, or when members is empty.
+func (o *BatchOrchestrator) allPendingPastDeadline(ctx context.Context, members []*PendingBatchIntent) (bool, error) {
+	if len(members) == 0 {
+		return false, nil
+	}
+	for _, p := range members {
+		if _, ok := p.Deadline(); !ok {
+			return false, nil
+		}
+	}
+	head, err := o.ecm.client.HeaderByNumber(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("reading the chain head to judge the members' deadlines: %w", err)
+	}
+	return allPastDeadlineAt(members, int64(head.Time)), nil
+}
+
+// allPastDeadlineAt is allPendingPastDeadline's rule at chain time now: past means now >= deadline, as settlementExpiry
+// refuses it.
+func allPastDeadlineAt(members []*PendingBatchIntent, now int64) bool {
+	if len(members) == 0 {
+		return false
+	}
+	for _, p := range members {
+		d, ok := p.Deadline()
+		if !ok || now < d.Unix() {
+			return false
+		}
+	}
+	return true
+}
 
 // errMemberPastDeadline: the chain's time is past the member's deadline, so its settlement is not sent.
 // Terminal: the member can never execute within its deadline (RB3-F53).
