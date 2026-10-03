@@ -63,10 +63,20 @@ func TestTheStrategyObserverReportsTheFinalizedCanonicalBlock(t *testing.T) {
 			}
 			reply(&h)
 		case "eth_getBlockByHash":
-			// The orphaned block is still served by hash, as a node that saw it does.
-			h := *canon
-			h.Extra = []byte("orphaned")
-			reply(&h)
+			// Each block by its own hash: the canonical one, and the one the index names, which a node that saw it still
+			// serves. Any other hash is unknown.
+			var asked common.Hash
+			_ = json.Unmarshal(req.Params[0], &asked)
+			orphaned := *canon
+			orphaned.Extra = []byte("orphaned")
+			switch asked {
+			case canon.Hash():
+				reply(canon)
+			case orphaned.Hash():
+				reply(&orphaned)
+			default:
+				reply(nil)
+			}
 		case "eth_getBlockReceipts":
 			reply([]interface{}{receipt(canon.Hash())})
 		case "eth_getTransactionByHash":
@@ -87,7 +97,9 @@ func TestTheStrategyObserverReportsTheFinalizedCanonicalBlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	o, err := NewEVMObserver(&EVMObserverConfig{Client: c, ChainID: 11155111, ValidatorID: "validator-4",
+	// The stub is the finality reader here: this test is about the finality rule; agreement across providers is
+	// pkg/ethrpc's agreement tests.
+	o, err := NewEVMObserver(&EVMObserverConfig{Client: c, Finality: c, ChainID: 11155111, ValidatorID: "validator-4",
 		RequiredConfirmations: 2, PollingInterval: 5 * time.Millisecond, Timeout: time.Second})
 	if err != nil {
 		t.Fatal(err)
@@ -102,7 +114,7 @@ func TestTheStrategyObserverReportsTheFinalizedCanonicalBlock(t *testing.T) {
 
 	// One block short of finality: not observed as final.
 	finalized = 11832867
-	o2, _ := NewEVMObserver(&EVMObserverConfig{Client: c, ChainID: 11155111, RequiredConfirmations: 2,
+	o2, _ := NewEVMObserver(&EVMObserverConfig{Client: c, Finality: c, ChainID: 11155111, RequiredConfirmations: 2,
 		PollingInterval: 5 * time.Millisecond, Timeout: 50 * time.Millisecond})
 	if res, err := o2.ObserveTransaction(context.Background(), tx); err == nil {
 		t.Fatalf("a block not yet finalized was observed: %+v", res)

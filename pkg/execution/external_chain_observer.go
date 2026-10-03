@@ -41,8 +41,13 @@ import (
 // ExternalChainObserver watches external chains for transaction finalization
 // and constructs cryptographic proofs of execution
 type ExternalChainObserver struct {
-	ethClient   *ethclient.Client
-	rpcClient   *rpc.Client // RB-5: raw client for eth_getProof (storage-slot state proofs)
+	ethClient *ethclient.Client
+	rpcClient *rpc.Client // RB-5: raw client for eth_getProof (storage-slot state proofs)
+
+	// finality is where a settlement's finality facts come from: independent providers that must agree (RB5-F53).
+	// finalityErr says why there is none; every observation is then refused by it, never read from one provider.
+	finality    ethrpc.FinalityReader
+	finalityErr error
 	chainID     int64
 	validatorID string
 
@@ -105,12 +110,22 @@ func NewExternalChainObserver(config *ExternalChainObserverConfig) (*ExternalCha
 
 	timeout := config.Timeout
 	if timeout == 0 {
-		timeout = 30 * time.Minute
+		timeout = ethrpc.FinalityBound
+	}
+
+	// The agreeing reader over this chain's independent providers (RB5-F53). Without it there is no observation: the
+	// reason is kept and every ObserveTransaction refuses by it.
+	var finality ethrpc.FinalityReader
+	agreeing, finalityErr := ethrpc.FinalityReaderForChain(context.Background(), config.ChainID, config.EthereumRPC)
+	if finalityErr == nil {
+		finality = agreeing
 	}
 
 	return &ExternalChainObserver{
 		ethClient:             client,
 		rpcClient:             rpcClient,
+		finality:              finality,
+		finalityErr:           finalityErr,
 		chainID:               config.ChainID,
 		validatorID:           config.ValidatorID,
 		requiredConfirmations: requiredConf,
@@ -230,7 +245,12 @@ func (o *ExternalChainObserver) fetchBlockForResult(
 	ctx context.Context,
 	receipt *types.Receipt,
 ) (headerBlock *types.Block, fullBlock *types.Block, err error) {
-	header, err := o.ethClient.HeaderByNumber(ctx, receipt.BlockNumber)
+	// By HASH, from the agreeing providers (RB5-F53): the receipt's block is the agreed, finalized one, and a read by
+	// height could be answered by a backend on another fork.
+	if o.finality == nil {
+		return nil, nil, fmt.Errorf("chain %d: no agreeing providers to read block %s with: %v", o.chainID, receipt.BlockHash.Hex(), o.finalityErr)
+	}
+	header, err := o.finality.HeaderByHash(ctx, receipt.BlockHash)
 	if err != nil {
 		return nil, nil, fmt.Errorf("get block header: %w", err)
 	}
@@ -244,7 +264,7 @@ func (o *ExternalChainObserver) fetchBlockForResult(
 	}
 	headerBlock = types.NewBlockWithHeader(header)
 
-	full, err := o.ethClient.BlockByNumber(ctx, receipt.BlockNumber)
+	full, err := o.ethClient.BlockByHash(ctx, receipt.BlockHash)
 	if err != nil {
 		o.log("ℹ️ [OBSERVER] Full block %d not decodable by go-ethereum on chain %d (%v) — inclusion proofs will be built from the raw block",
 			receipt.BlockNumber.Uint64(), o.chainID, err)
@@ -297,7 +317,10 @@ func (o *ExternalChainObserver) waitForReceipt(
 // settledInFinalizedChain is the transaction's receipt as the finalized chain holds it - ethrpc.SettledInFinalizedChain,
 // the one rule this observer and the chain strategy's observer share (RB5-F49).
 func (o *ExternalChainObserver) settledInFinalizedChain(ctx context.Context, txHash common.Hash, deadline time.Time) (*types.Receipt, error) {
-	return ethrpc.SettledInFinalizedChain(ctx, o.ethClient, txHash, deadline, o.pollingInterval, o.log)
+	if o.finality == nil {
+		return nil, fmt.Errorf("chain %d: no agreeing providers to observe %s with: %v", o.chainID, txHash.Hex(), o.finalityErr)
+	}
+	return ethrpc.SettledInFinalizedChain(ctx, o.finality, txHash, deadline, o.pollingInterval, o.log)
 }
 
 // =============================================================================

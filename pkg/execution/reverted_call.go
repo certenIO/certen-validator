@@ -516,9 +516,16 @@ func (o *ExternalChainObserver) VerifyRevertedCall(
 		return nil, fmt.Errorf("reverted tx %s carries operationID 0x%x, not the intent's 0x%x",
 			txHash.Hex(), exec.OperationID[:8], opID[:8])
 	}
-	receipt, err := o.ethClient.TransactionReceipt(ctx, txHash)
+	// The agreed receipt (RB5-F53), the one ObserveTransaction above established - never one provider's.
+	if o.finality == nil {
+		return nil, fmt.Errorf("chain %d: no agreeing providers to read the receipt of %s with: %v", o.chainID, txHash.Hex(), o.finalityErr)
+	}
+	receipt, err := o.finality.TransactionReceipt(ctx, txHash)
 	if err != nil {
 		return nil, fmt.Errorf("receipt of %s: %w", txHash.Hex(), err)
+	}
+	if receipt.BlockHash != result.BlockHash {
+		return nil, fmt.Errorf("receipt of %s names block %s, the observation %s", txHash.Hex(), receipt.BlockHash.Hex(), result.BlockHash.Hex())
 	}
 	if err := checkAuthorizedAttempt(ctx, o.ethClient, tx, receipt, exec, account); err != nil {
 		return nil, fmt.Errorf("reverted tx %s: %w", txHash.Hex(), err)
