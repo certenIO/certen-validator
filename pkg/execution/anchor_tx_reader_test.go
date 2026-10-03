@@ -9,13 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -67,13 +66,14 @@ var readerTx = readerSignedTx.Hash().Hex()
 
 // rpcEndpoint is a JSON-RPC endpoint holding one transaction, with a chosen amount of its history.
 // body, when set, replaces the transaction it returns (a lying or confused endpoint); from, when set,
-// replaces the sender it states.
+// replaces the sender it states. pruned makes it answer null for the block's receipts, as a backend
+// without the block's history does (publicnode, measured 2026-10-03).
 type rpcEndpoint struct {
-	hasTx, receiptByHash, receiptInBlock bool
-	status                               string
-	body                                 *types.Transaction
-	from                                 string
-	calls                                map[string]int
+	hasTx, receiptByHash, receiptInBlock, pruned bool
+	status                                       string
+	body                                         *types.Transaction
+	from                                         string
+	calls                                        map[string]int
 }
 
 // txResult is eth_getTransactionByHash's answer: the signed transaction plus where it was mined and who
@@ -102,7 +102,10 @@ func (e *rpcEndpoint) txResult() map[string]any {
 	return result
 }
 
-func (e *rpcEndpoint) serve(t *testing.T) string {
+// endpointHosts are distinct loopback hosts, so that each endpoint is an independent provider.
+var endpointHosts = []string{"127.0.0.1:0", "[::1]:0", "127.0.0.2:0"}
+
+func (e *rpcEndpoint) serve(t *testing.T, host string) string {
 	t.Helper()
 	e.calls = map[string]int{}
 	receipt := map[string]any{
@@ -111,7 +114,7 @@ func (e *rpcEndpoint) serve(t *testing.T) string {
 		"effectiveGasPrice": "0x1", "logs": []any{}, "logsBloom": "0x" + strings.Repeat("00", 256),
 		"status": e.status, "type": "0x2", "contractAddress": nil,
 	}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		var req struct {
 			ID     json.RawMessage `json:"id"`
@@ -136,44 +139,64 @@ func (e *rpcEndpoint) serve(t *testing.T) string {
 			if e.receiptInBlock && strings.Contains(string(req.Params), readerBlockHash) {
 				result = []any{receipt}
 			}
+			if e.pruned {
+				result = nil
+			}
 		case "eth_blockNumber":
 			result = fmt.Sprintf("0x%x", readerBlock+99)
 		case "eth_getBlockByHash":
 			if strings.Contains(string(req.Params), readerBlockHash) {
 				result = readerHeader
 			}
+		case "eth_getBlockByNumber":
+			switch {
+			case strings.Contains(string(req.Params), fmt.Sprintf(`"0x%x"`, readerBlock)):
+				result = readerHeader
+			case strings.Contains(string(req.Params), `"latest"`):
+				result = &types.Header{Number: big.NewInt(readerBlock + 99), Time: readerBlockTime + 99, Difficulty: big.NewInt(0)}
+			}
 		case "eth_chainId":
 			result = "0x14a34"
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": result})
-	}))
+	})
+	l, err := net.Listen("tcp", host)
+	if err != nil {
+		t.Fatalf("listen on %s: %v", host, err)
+	}
+	server := httptest.NewUnstartedServer(handler)
+	server.Listener = l
+	server.Start()
 	t.Cleanup(server.Close)
 	return server.URL
 }
 
+// readerOver is the repair's reader for Base Sepolia, configured as production configures it: the endpoints, in order,
+// as BASE_SEPOLIA_RPC_URL and BASE_SEPOLIA_URL_FALLBACKS, each on its own host.
 func readerOver(t *testing.T, endpoints ...*rpcEndpoint) *EthAnchorTxReader {
 	t.Helper()
 	urls := make([]string, 0, len(endpoints))
-	for _, e := range endpoints {
-		urls = append(urls, e.serve(t))
+	for i, e := range endpoints {
+		urls = append(urls, e.serve(t, endpointHosts[i]))
 	}
-	pool, err := ethrpc.NewPool(urls, time.Minute, log.New(io.Discard, "", 0))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(pool.Close)
+	t.Setenv("BASE_SEPOLIA_RPC_URL", urls[0])
+	t.Setenv("BASE_SEPOLIA_URL_FALLBACKS", strings.Join(urls[1:], ","))
+	t.Setenv("INFURA_BASE_SEPOLIA_URL", "")
+	t.Setenv("ALCHEMY_BASE_SEPOLIA_URL", "")
 	r := NewEthAnchorTxReader()
-	r.pools[readerChain] = pool
+	t.Cleanup(r.Close)
 	return r
 }
 
 // Production, 2026-09-19: publicnode returns an anchor transaction from two days earlier but holds no
-// receipts for its block. The read moves on to the next provider rather than refusing the anchor.
-func TestAnAnchorReadMovesPastAnEndpointWithoutTheReceipt(t *testing.T) {
-	pruned := &rpcEndpoint{hasTx: true, status: "0x1"}
-	full := &rpcEndpoint{hasTx: true, receiptByHash: true, status: "0x1"}
-	reading, err := readerOver(t, pruned, full).ReadAnchorTx(context.Background(), 84532, readerTx)
+// receipts for its block. The receipt is the one the other providers agree on: the pruned provider is not
+// an answer, and is never outvoted by one provider alone.
+func TestAnAnchorReadTakesTheReceiptTheOtherProvidersAgreeOn(t *testing.T) {
+	pruned := &rpcEndpoint{hasTx: true, status: "0x1", pruned: true}
+	full1 := &rpcEndpoint{hasTx: true, receiptByHash: true, receiptInBlock: true, status: "0x1"}
+	full2 := &rpcEndpoint{hasTx: true, receiptByHash: true, receiptInBlock: true, status: "0x1"}
+	reading, err := readerOver(t, pruned, full1, full2).ReadAnchorTx(context.Background(), 84532, readerTx)
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -187,15 +210,15 @@ func TestAnAnchorReadMovesPastAnEndpointWithoutTheReceipt(t *testing.T) {
 	if reading.From != signer || reading.To != strings.ToLower(readerAnchor.Hex()) || !bytes.Equal(reading.Input, readerSignedTx.Data()) {
 		t.Fatalf("reading from=%s to=%s input=%x; want the signed transaction's own", reading.From, reading.To, reading.Input)
 	}
-	if pruned.calls["eth_getBlockReceipts"] != 1 || full.calls["eth_getTransactionReceipt"] != 1 {
-		t.Fatalf("calls: pruned %v, full %v", pruned.calls, full.calls)
+	if pruned.calls["eth_getBlockReceipts"] == 0 || full1.calls["eth_getBlockReceipts"] == 0 || full2.calls["eth_getBlockReceipts"] == 0 {
+		t.Fatalf("every provider is asked: pruned %v, full %v %v", pruned.calls, full1.calls, full2.calls)
 	}
 }
 
 // A receipt missing by hash is taken from its block's receipts, which do not depend on the tx index.
 func TestAnAnchorReceiptIsTakenFromItsBlockWhenTheIndexLacksIt(t *testing.T) {
-	endpoint := &rpcEndpoint{hasTx: true, receiptInBlock: true, status: "0x1"}
-	reading, err := readerOver(t, endpoint).ReadAnchorTx(context.Background(), 84532, readerTx)
+	reading, err := readerOver(t, &rpcEndpoint{hasTx: true, receiptInBlock: true, status: "0x1"},
+		&rpcEndpoint{hasTx: true, receiptInBlock: true, status: "0x1"}).ReadAnchorTx(context.Background(), 84532, readerTx)
 	if err != nil || reading.BlockNumber != readerBlock || !reading.Succeeded {
 		t.Fatalf("reading %+v, %v", reading, err)
 	}
@@ -211,7 +234,8 @@ func TestAnAnchorNoProviderHoldsIsUnreadableNotAbsent(t *testing.T) {
 
 // A reverted anchor transaction reads as reverted.
 func TestARevertedAnchorReadsAsReverted(t *testing.T) {
-	reading, err := readerOver(t, &rpcEndpoint{hasTx: true, receiptByHash: true, status: "0x0"}).ReadAnchorTx(context.Background(), 84532, readerTx)
+	reading, err := readerOver(t, &rpcEndpoint{hasTx: true, receiptByHash: true, status: "0x0"},
+		&rpcEndpoint{hasTx: true, receiptByHash: true, status: "0x0"}).ReadAnchorTx(context.Background(), 84532, readerTx)
 	if err != nil || !reading.Found || reading.Succeeded {
 		t.Fatalf("reading %+v, %v", reading, err)
 	}
@@ -222,17 +246,20 @@ func TestARevertedAnchorReadsAsReverted(t *testing.T) {
 // signature does not bear is refused, never believed.
 func TestAnAnchorReadIsTheSignedTransactionAndItsSigner(t *testing.T) {
 	stranger, _ := crypto.GenerateKey()
-	cases := map[string]*rpcEndpoint{
-		"another transaction's body": {hasTx: true, receiptByHash: true, status: "0x1",
-			body: signReaderTx(readerKey, readerChain, []byte{0xde, 0xad})},
-		"signed for another chain": {hasTx: true, receiptByHash: true, status: "0x1",
-			body: signReaderTx(readerKey, 11155111, readerSignedTx.Data())},
-		"a sender the signature does not bear": {hasTx: true, receiptByHash: true, status: "0x1",
-			from: strings.ToLower(crypto.PubkeyToAddress(stranger.PublicKey).Hex())},
+	cases := map[string]func() *rpcEndpoint{
+		"another transaction's body": func() *rpcEndpoint {
+			return &rpcEndpoint{hasTx: true, receiptByHash: true, status: "0x1", body: signReaderTx(readerKey, readerChain, []byte{0xde, 0xad})}
+		},
+		"signed for another chain": func() *rpcEndpoint {
+			return &rpcEndpoint{hasTx: true, receiptByHash: true, status: "0x1", body: signReaderTx(readerKey, 11155111, readerSignedTx.Data())}
+		},
+		"a sender the signature does not bear": func() *rpcEndpoint {
+			return &rpcEndpoint{hasTx: true, receiptByHash: true, status: "0x1", from: strings.ToLower(crypto.PubkeyToAddress(stranger.PublicKey).Hex())}
+		},
 	}
 	for name, endpoint := range cases {
 		t.Run(name, func(t *testing.T) {
-			reading, err := readerOver(t, endpoint).ReadAnchorTx(context.Background(), readerChain, readerTx)
+			reading, err := readerOver(t, endpoint(), endpoint()).ReadAnchorTx(context.Background(), readerChain, readerTx)
 			if err == nil {
 				t.Fatalf("accepted: %+v", reading)
 			}

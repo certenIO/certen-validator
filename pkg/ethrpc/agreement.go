@@ -3,6 +3,7 @@ package ethrpc
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
@@ -472,3 +473,13 @@ func (l LocatorClient) TransactionByHash(ctx context.Context, hash common.Hash) 
 	return f.tx, f.pending, err
 }
 
+// RawTransactionByHash is the provider's eth_getTransactionByHash answer as JSON ("null" when it does not hold the
+// transaction), asked again while the provider answers transiently. A caller takes the transaction from it only as signed
+// and hashing to hash; where the provider says it was mined is a locator's claim, established by an agreed read.
+func (l LocatorClient) RawTransactionByHash(ctx context.Context, hash common.Hash) (json.RawMessage, error) {
+	return askProvider(ctx, l.health, l.Host, l.hint, l.budget(), 0, func(c context.Context) (json.RawMessage, error) {
+		var raw json.RawMessage
+		err := l.Client.Client().CallContext(c, &raw, "eth_getTransactionByHash", hash)
+		return raw, err
+	})
+}

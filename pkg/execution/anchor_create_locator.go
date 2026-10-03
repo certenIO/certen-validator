@@ -3,6 +3,7 @@
 package execution
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 
 	"github.com/certen/independant-validator/pkg/ethrpc"
+	"github.com/certen/independant-validator/pkg/execution/contracts"
 )
 
 // Locating an anchor's create transaction (RB3-F33).
@@ -189,44 +191,133 @@ func (c clientCreateChain) CreateLogs(ctx context.Context, anchor common.Address
 	return logs, nil
 }
 
-// poolCreateChain is anchorCreateChain over a provider pool: each read goes to whichever provider answers.
-type poolCreateChain struct{ p *ethrpc.Pool }
+// agreedCreateChain is anchorCreateChain over a chain's agreeing providers (RB5-F53), for the repairs that write what
+// they locate:
+//   - the anchor's record is an agreed call at a recent block every provider holds identically;
+//   - a block's time is the agreed header at its height;
+//   - BatchAnchorCreated logs are LOCATED through every provider, and each is taken only once its transaction's agreed
+//     receipt carries it, in the agreed canonical block at its height. A provider that hides a log cannot hide it from
+//     the others; one that invents a log is refused by the agreed receipt.
+type agreedCreateChain struct{ a *ethrpc.AgreeingReader }
 
-func (c poolCreateChain) AnchorRecord(ctx context.Context, anchor common.Address, bundle [32]byte) (st AnchorOnChainState, err error) {
-	err = c.p.Do(ctx, func(cl *ethclient.Client) error {
-		var e error
-		st, e = clientCreateChain{cl}.AnchorRecord(ctx, anchor, bundle)
-		return e
-	})
-	return st, err
+func (c agreedCreateChain) AnchorRecord(ctx context.Context, anchor common.Address, bundle [32]byte) (AnchorOnChainState, error) {
+	at, err := c.a.RecentAgreedHeader(ctx)
+	if err != nil {
+		return AnchorOnChainState{}, fmt.Errorf("an agreed block to read anchors(0x%x) at: %w", bundle[:8], err)
+	}
+	ret, err := c.a.CallContractAtHash(ctx, ethereum.CallMsg{To: &anchor, Data: contracts.AnchorsCallData(bundle)}, at.Hash())
+	if err != nil {
+		return AnchorOnChainState{}, fmt.Errorf("reading anchors(0x%x) on %s: %w", bundle[:8], anchor.Hex(), err)
+	}
+	st, err := contracts.DecodeAnchorsReturn(ret)
+	if err != nil {
+		return AnchorOnChainState{}, err
+	}
+	return decodeAnchorState(st)
 }
 
-func (c poolCreateChain) BlockTime(ctx context.Context, block uint64) (t uint64, err error) {
-	err = c.p.Do(ctx, func(cl *ethclient.Client) error {
-		var e error
-		t, e = clientCreateChain{cl}.BlockTime(ctx, block)
-		return e
-	})
-	return t, err
+func (c agreedCreateChain) BlockTime(ctx context.Context, block uint64) (uint64, error) {
+	h, err := c.a.HeaderByNumber(ctx, new(big.Int).SetUint64(block))
+	if err != nil {
+		return 0, fmt.Errorf("reading block %d: %w", block, err)
+	}
+	if h == nil || h.Number == nil || h.Number.Uint64() != block {
+		return 0, fmt.Errorf("the providers answered block %d with another header", block)
+	}
+	return h.Time, nil
 }
 
-func (c poolCreateChain) CreateLogs(ctx context.Context, anchor common.Address, from, to uint64, bundle, root [32]byte, validator common.Address) (logs []types.Log, err error) {
-	err = c.p.Do(ctx, func(cl *ethclient.Client) error {
-		var e error
-		logs, e = clientCreateChain{cl}.CreateLogs(ctx, anchor, from, to, bundle, root, validator)
-		return e
-	})
-	return logs, err
+func (c agreedCreateChain) CreateLogs(ctx context.Context, anchor common.Address, from, to uint64, bundle, root [32]byte, validator common.Address) ([]types.Log, error) {
+	event, ok := anchorEventsABI.Events["BatchAnchorCreated"]
+	if !ok {
+		return nil, errors.New("the anchor event ABI declares no BatchAnchorCreated event")
+	}
+	q := ethereum.FilterQuery{
+		FromBlock: new(big.Int).SetUint64(from),
+		ToBlock:   new(big.Int).SetUint64(to),
+		Addresses: []common.Address{anchor},
+		Topics:    [][]common.Hash{{event.ID}, {common.Hash(bundle)}, {common.Hash(root)}, {common.BytesToHash(validator.Bytes())}},
+	}
+	type logKey struct {
+		tx    common.Hash
+		index uint
+	}
+	located := map[logKey]types.Log{}
+	var order []logKey
+	answered := 0
+	var failures []string
+	for _, loc := range c.a.Locators() {
+		logs, err := loc.FilterLogs(ctx, q)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", loc.Host, err))
+			continue
+		}
+		answered++
+		for _, l := range logs {
+			if l.Removed {
+				continue
+			}
+			k := logKey{l.TxHash, l.Index}
+			if _, seen := located[k]; !seen {
+				located[k] = l
+				order = append(order, k)
+			}
+		}
+	}
+	// Exactly one log is the answer, so every provider's search counts: one that could not search might hold a second.
+	if answered < ethrpc.MinAgreeingProviders || len(failures) > 0 {
+		return nil, fmt.Errorf("%w: eth_getLogs %d..%d on %s: %d of %d providers searched (%s)", ethrpc.ErrTooFewProviders,
+			from, to, anchor.Hex(), answered, answered+len(failures), strings.Join(failures, "; "))
+	}
+	var established []types.Log
+	for _, k := range order {
+		l, err := c.establishLog(ctx, located[k], q, from, to)
+		if err != nil {
+			return nil, err
+		}
+		established = append(established, l)
+	}
+	return established, nil
 }
 
-// LocateAnchorCreate implements the repair's locating read over this reader's providers.
+// establishLog takes a located log only as its transaction's agreed receipt states it, in the agreed canonical block at
+// its height, inside [from, to] and matching the filter.
+func (c agreedCreateChain) establishLog(ctx context.Context, l types.Log, q ethereum.FilterQuery, from, to uint64) (types.Log, error) {
+	r, err := c.a.TransactionReceipt(ctx, l.TxHash)
+	if err != nil {
+		return types.Log{}, fmt.Errorf("the receipt of %s, which a provider says logged BatchAnchorCreated: %w", l.TxHash.Hex(), err)
+	}
+	if r.BlockNumber == nil || r.BlockNumber.Uint64() < from || r.BlockNumber.Uint64() > to {
+		return types.Log{}, fmt.Errorf("the agreed receipt of %s is in block %v, outside %d..%d", l.TxHash.Hex(), r.BlockNumber, from, to)
+	}
+	canonical, err := c.a.HeaderByNumber(ctx, r.BlockNumber)
+	if err != nil {
+		return types.Log{}, fmt.Errorf("the canonical block at %d: %w", r.BlockNumber.Uint64(), err)
+	}
+	if canonical.Hash() != r.BlockHash {
+		return types.Log{}, fmt.Errorf("the agreed receipt of %s names block %s, not the canonical block %d", l.TxHash.Hex(), r.BlockHash.Hex(), r.BlockNumber.Uint64())
+	}
+	for _, rl := range r.Logs {
+		if rl.Index != l.Index {
+			continue
+		}
+		if rl.Address != q.Addresses[0] || len(rl.Topics) != 4 || rl.Topics[0] != q.Topics[0][0] || rl.Topics[1] != q.Topics[1][0] ||
+			rl.Topics[2] != q.Topics[2][0] || rl.Topics[3] != q.Topics[3][0] || !bytes.Equal(rl.Data, l.Data) {
+			break
+		}
+		return *rl, nil
+	}
+	return types.Log{}, fmt.Errorf("the agreed receipt of %s does not carry the BatchAnchorCreated log a provider located at index %d", l.TxHash.Hex(), l.Index)
+}
+
+// LocateAnchorCreate implements the repair's locating read through the chain's agreeing providers.
 func (r *EthAnchorTxReader) LocateAnchorCreate(ctx context.Context, chainID int64, anchor string, bundle, root [32]byte, notAfter uint64) (*AnchorCreateLocation, error) {
 	if !common.IsHexAddress(anchor) {
 		return nil, fmt.Errorf("anchor %q is not an address", anchor)
 	}
-	p, err := r.pool(chainID)
+	a, err := r.reader(ctx, chainID)
 	if err != nil {
 		return nil, err
 	}
-	return LocateAnchorCreate(ctx, poolCreateChain{p}, common.HexToAddress(strings.TrimSpace(anchor)), bundle, root, notAfter)
+	return LocateAnchorCreate(ctx, agreedCreateChain{a}, common.HexToAddress(strings.TrimSpace(anchor)), bundle, root, notAfter)
 }
