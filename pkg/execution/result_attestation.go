@@ -54,7 +54,11 @@ type ResultAttestation struct {
 // =============================================================================
 
 // AggregatedAttestation combines multiple validator attestations with an
-// aggregated BLS signature. This is what gets recorded on-chain.
+// aggregated BLS signature. This is what gets recorded on chain - on Accumulate: Phase 9 writes it into the result's
+// write-back (execution-results), with the set, message, scheme and domain it is verified with, so a third party
+// checks it from the entry alone (VerifyWriteBackQuorum, RB5-F14). It is not sent to the EVM chain: there the batch's
+// outcome, which contains this result's member outcome leaf, is recorded under a ZK-verified quorum aggregate of its
+// own (CertenOutcomeRegistryV1, RB5 D4). TestThePhase8AggregateIsRecordedInTheAccumulateWriteBack pins it (RB5-F13).
 type AggregatedAttestation struct {
 	// Core data (same across all attestations)
 	ResultHash  [32]byte `json:"result_hash"`

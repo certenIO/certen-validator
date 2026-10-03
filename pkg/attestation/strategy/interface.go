@@ -28,8 +28,17 @@ import (
 type AttestationScheme string
 
 const (
-	// AttestationSchemeBLS12381 is BLS12-381 with signature aggregation
-	// Used for EVM chains with ZK-verified on-chain aggregation
+	// AttestationSchemeBLS12381 is BLS12-381 with signature aggregation, the scheme of the EVM chains, where the
+	// validators' BLS12-381 aggregates are ZK-verified on chain: the batch quorum by the V8.2 anchor and each batch's
+	// outcome by CertenOutcomeRegistryV1.recordBatchOutcome, both through BLSZKVerifierV2_1 over HashMessageToG1V2
+	// (pkg/execution quorum_bls_proof.go; the deployed verifiers on Sepolia, Base and Arbitrum accept them -
+	// TestTheQuorumProofPathIsAcceptedByTheDeployedVerifiers, live).
+	//
+	// The per-result Phase 8 aggregate this scheme's strategy folds (BLSStrategy) is NOT one of them: it hashes to G1
+	// with RFC 9380 hash_to_curve (RB5-F54), which the circuit does not compute, and no contract is sent it. It is
+	// verified by every counting validator and, from the Accumulate write-back's own entries, by VerifyWriteBackQuorum
+	// (RB5-F14); the result it attests reaches the EVM chain as its member's outcome leaf, under the batch outcome root
+	// the registry records (RB5 D4). TestWhichBLSAggregatesTheDeployedVerifiersCheck pins both halves (RB5-F13).
 	AttestationSchemeBLS12381 AttestationScheme = "bls12-381"
 
 	// AttestationSchemeEd25519 is Ed25519 for chains with native support
