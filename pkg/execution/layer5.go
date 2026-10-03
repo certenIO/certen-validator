@@ -89,6 +89,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	certenproof "github.com/certen/independant-validator/pkg/proof"
 	"github.com/google/uuid"
@@ -119,6 +120,9 @@ type Layer5 struct {
 	// Confirmations is how deep the anchor transaction was when it was observed; zero when it was not.
 	// Not part of the layer: it changes with every block, so it is recorded on the Certen proof instead.
 	Confirmations int `json:"-"`
+	// BlockTime is the anchor block's timestamp when the anchor transaction was read back; zero when it was not. Not
+	// part of the layer either: the proof bundle states it as its anchor reference's anchored_at.
+	BlockTime time.Time `json:"-"`
 
 	// The offline half.
 	BatchRoot string       `json:"batchRoot"` // hex32 — what was anchored

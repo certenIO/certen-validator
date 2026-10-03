@@ -3329,22 +3329,27 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 		)
 	}
 
-	// Set anchor reference from chain execution results
-	if len(result.ObservationResults) > 0 {
-		obs := result.ObservationResults[0]
-		bundle.SetAnchorReference(
-			result.ChainID,
-			obs.TxHash,
-			obs.BlockNumber,
-			obs.Confirmations,
-		)
-		// Also set contract address if available
-		if bundle.ProofComponents.AnchorReference != nil {
-			bundle.ProofComponents.AnchorReference.AnchorBlockHash = obs.BlockHash
+	// Component 2, the anchor reference: where this proof's batch root was published - its layer 5's anchor-create
+	// transaction and block, as anchor_references and proof_artifacts state it - never the settlement, which is
+	// component 5. It used to be filled from the settlement observation, the very conflation RB3-F135 removed from
+	// those rows (RB5-F18). A proof without a layer 5 has no established anchor and states none.
+	if anchorL5 != nil {
+		confirmations, required, _ := anchorDepth(anchorL5, settled)
+		bundle.ProofComponents.AnchorReference = &proof.AnchorReferenceProof{
+			TargetChain:       result.ChainID,
+			AnchorTxHash:      anchorL5.AnchorTx,
+			AnchorBlockNumber: anchorL5.BlockNumber,
+			AnchorBlockHash:   anchorL5.BlockHash,
+			Confirmations:     confirmations,
+			RequiredConfs:     required,
+			AnchoredAt:        anchorL5.BlockTime,
 		}
-		// Component 5: the receipt and the verified inclusion proofs, so a stranger can check the
-		// event off any RPC. Only present when the gate verified a receipt proof (persistVerifiedProofs
-		// wrote it onto the observation); never a receipt without its proof.
+	}
+
+	// Component 5: the attested settlement's receipt and verified inclusion proofs, so a stranger can check the
+	// event off any RPC. Only present when the gate verified a receipt proof (persistVerifiedProofs wrote it onto
+	// the observation); never a receipt without its proof.
+	if obs := settled; obs != nil {
 		if len(obs.ReceiptProof) > 0 {
 			logs := make([]proof.ExecutionLog, 0, len(obs.Logs))
 			for _, l := range obs.Logs {
@@ -3596,6 +3601,24 @@ func attestedSettlement(cycle *activeCycle, result *UnifiedProofCycleResult) *ch
 	return provenSettlementObservation(result.ObservationResults, cycle.SettlementTx)
 }
 
+// anchorDepth is what is known of a layer 5 anchor's depth: the confirmations the settlement requires, and - once the
+// settlement, which needed the anchor's root, is final - the anchor's confirmations, which are at least the
+// settlement's plus the blocks between them. Otherwise its depth is not known here (zero, not final).
+func anchorDepth(l5 *Layer5, settled *chain.ObservationResult) (confirmations, required int, final bool) {
+	required = 12
+	if settled != nil && settled.RequiredConfirmations > 0 {
+		required = settled.RequiredConfirmations
+	}
+	if l5 == nil || settled == nil || !settled.IsFinalized || l5.BlockNumber > settled.BlockNumber {
+		return 0, required, false
+	}
+	confirmations = settled.Confirmations + int(settled.BlockNumber-l5.BlockNumber)
+	if confirmations < required {
+		confirmations = required
+	}
+	return confirmations, required, true
+}
+
 // writeAnchorReference records where the proof's batch root was published - its layer 5's anchor-create
 // transaction and block - and the settlement the cycle attested. A proof without a layer 5 has no
 // established anchor and gets no anchor reference (it is summary-only for L5); its settlement is on
@@ -3609,20 +3632,9 @@ func (o *UnifiedOrchestrator) writeAnchorReference(ctx context.Context, proofID 
 	if !IsTransactionHash(l5.AnchorTx) || l5.BlockNumber == 0 {
 		return fmt.Errorf("proof %s: layer 5 states anchor %q at block %d; not recorded as its anchor", proofID, l5.AnchorTx, l5.BlockNumber)
 	}
-	reqConfirmations := settled.RequiredConfirmations
-	if reqConfirmations <= 0 {
-		reqConfirmations = 12
-	}
-	// The anchor is at or before the settlement, which needed its root: once the settlement is final, so is
-	// the anchor, by at least the blocks between them. Otherwise its depth is not known here.
-	confirmations, final := 0, false
+	confirmations, reqConfirmations, final := anchorDepth(l5, settled)
 	var confirmedAt *time.Time
-	if settled.IsFinalized && l5.BlockNumber <= settled.BlockNumber {
-		confirmations = settled.Confirmations + int(settled.BlockNumber-l5.BlockNumber)
-		if confirmations < reqConfirmations {
-			confirmations = reqConfirmations
-		}
-		final = true
+	if final {
 		now := time.Now().UTC()
 		confirmedAt = &now
 	}
