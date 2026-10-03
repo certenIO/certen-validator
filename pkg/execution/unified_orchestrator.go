@@ -3388,8 +3388,10 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 					G0ProofComplete: true,
 				},
 				ThresholdSatisfied: result.ThresholdMet,
-				ExecutionSuccess:   result.WriteBackSuccess,
-				G1ProofComplete:    true,
+				// What the proven G1 result says about the governed transaction's execution. It used to be the
+				// write-back's success, read here before Phase 9 runs, so it was always false (RB5-F18).
+				ExecutionSuccess: governedExecutionProven(govIn),
+				G1ProofComplete:  true,
 			},
 		}
 		bundle.SetGovernanceProof(govProof)
