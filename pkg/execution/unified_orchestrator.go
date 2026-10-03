@@ -990,10 +990,9 @@ func (o *UnifiedOrchestrator) executePhase7(ctx context.Context, cycle *activeCy
 		}
 	}
 
-	// Persist the proofs the gate verified onto the rows written above, so the database carries the
-	// real trie proofs (tx and receipt, bound to the header roots) rather than what the strategy
-	// observer could build — which on Ethereum is a hash list and on Base/Arbitrum is nothing.
-	if err := o.persistVerifiedProofs(ctx, observationResults, chainExecutionIDs, verified); err != nil {
+	// The proofs the gate verified must be the proofs the observations carry: the ones bound into the result hash Phase 8
+	// signs and already persisted on the rows written above (RB5-F16).
+	if err := sameVerifiedProofs(observationResults, verified); err != nil {
 		return err
 	}
 
@@ -1004,21 +1003,20 @@ func (o *UnifiedOrchestrator) executePhase7(ctx context.Context, cycle *activeCy
 // executed call, keyed by lowercase transaction hash without 0x.
 type verifiedCallProofs map[string]*ExternalChainResult
 
-// persistVerifiedProofs writes the gate's verified tx and receipt inclusion proofs onto the
-// chain_execution_results rows persisted during observation, matched by transaction hash. A proof the
-// gate verified and the store did not keep is an error: the stored settlement would be missing the
-// proof it was attested on (RB3-F73).
-func (o *UnifiedOrchestrator) persistVerifiedProofs(ctx context.Context, observations []*chain.ObservationResult, execIDs []uuid.UUID, verified verifiedCallProofs) error {
-	if len(verified) == 0 || o.config.UnifiedRepo == nil {
-		return nil
-	}
-	if len(execIDs) != len(observations) {
-		return fmt.Errorf("persist verified proofs: %d chain-execution rows for %d observations", len(execIDs), len(observations))
-	}
-	for i, obs := range observations {
+// sameVerifiedProofs requires, for every observation the gate verified, that the observation carries exactly the gate's
+// transaction and receipt inclusion proofs, byte for byte.
+//
+// Both observers build their proofs with pkg/ethproof from the same agreed reads of the same block, so they are
+// identical. The observation's are the ones its ResultHash binds - what Phase 8 signs - and the ones persisted on its
+// chain_execution_results row and carried into the bundle; so the stored and attested proofs are the gate's verified
+// ones, and a difference is refused by name rather than papered over by writing the gate's copy over the signed one.
+// (Before RB5-F16 the gate's proofs were written over the strategy observer's, which on Ethereum was a hash list and on
+// Base/Arbitrum nothing, and which the signed hash did not bind at all.)
+func sameVerifiedProofs(observations []*chain.ObservationResult, verified verifiedCallProofs) error {
+	for _, obs := range observations {
 		key := strings.ToLower(strings.TrimPrefix(obs.TxHash, "0x"))
 		res, ok := verified[key]
-		if !ok || res.TxInclusionProof == nil || res.ReceiptInclusionProof == nil {
+		if !ok {
 			continue
 		}
 		txJSON, err1 := json.Marshal(res.TxInclusionProof)
@@ -1026,13 +1024,12 @@ func (o *UnifiedOrchestrator) persistVerifiedProofs(ctx context.Context, observa
 		if err1 != nil || err2 != nil {
 			return fmt.Errorf("encode verified proofs for %s: %v %v", obs.TxHash, err1, err2)
 		}
-		// The observation object travels on into the artifact, so carry the real proofs there too.
-		obs.MerkleProof = txJSON
-		obs.ReceiptProof = rcJSON
-		if err := o.config.UnifiedRepo.UpdateChainExecutionProofs(ctx, execIDs[i], txJSON, rcJSON); err != nil {
-			return fmt.Errorf("persist verified proofs for %s: %w", obs.TxHash, err)
+		if res.TxInclusionProof == nil || res.ReceiptInclusionProof == nil {
+			return fmt.Errorf("the gate verified %s without its inclusion proofs", obs.TxHash)
 		}
-		fmt.Printf("💾 [RB-GATE] Persisted verified tx+receipt inclusion proofs for %s (%d + %d bytes)\n", obs.TxHash, len(txJSON), len(rcJSON))
+		if !bytes.Equal(txJSON, obs.MerkleProof) || !bytes.Equal(rcJSON, obs.ReceiptProof) {
+			return fmt.Errorf("the inclusion proofs the gate verified for %s are not the ones its observation carries and its result hash binds", obs.TxHash)
+		}
 	}
 	return nil
 }
@@ -3376,9 +3373,9 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 		}
 	}
 
-	// Component 5: the attested settlement's receipt and verified inclusion proofs, so a stranger can check the
-	// event off any RPC. Only present when the gate verified a receipt proof (persistVerifiedProofs wrote it onto
-	// the observation); never a receipt without its proof.
+	// Component 5: the attested settlement's receipt, its verified inclusion proofs and the header they resolve from,
+	// so a stranger can check the event off any RPC (ethproof.VerifySettlement). Only present when the observation
+	// carries a receipt proof; never a receipt without its proof.
 	if obs := settled; obs != nil {
 		if len(obs.ReceiptProof) > 0 {
 			logs := make([]proof.ExecutionLog, 0, len(obs.Logs))
@@ -3393,6 +3390,7 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 				Status:           obs.Status,
 				TransactionsRoot: "0x" + hex.EncodeToString(obs.TransactionsRoot[:]),
 				ReceiptsRoot:     "0x" + hex.EncodeToString(obs.ReceiptsRoot[:]),
+				BlockHeader:      "0x" + hex.EncodeToString(obs.BlockHeaderRLP),
 				RawReceipt:       "0x" + hex.EncodeToString(obs.RawReceipt),
 				Logs:             logs,
 				TxInclusion:      json.RawMessage(obs.MerkleProof),

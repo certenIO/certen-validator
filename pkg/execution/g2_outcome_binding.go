@@ -617,22 +617,15 @@ func (s *G2OutcomeBindingService) verifyReceiptBinding(
 		return result
 	}
 
-	// Verify receipt binding through Merkle proofs
-	if request.ExecutionResult.ReceiptInclusionProof != nil {
-		if request.ExecutionResult.ReceiptInclusionProof.Verified {
-			result.Verified = true
-			result.Details = fmt.Sprintf("receipt bound at block %d with %d confirmations",
-				request.ExecutionResult.BlockNumber.Uint64(),
-				request.ExecutionResult.ConfirmationBlocks)
-		} else {
-			result.Details = "receipt inclusion proof not verified"
-		}
-	} else {
-		// Without Merkle proof, use block binding
-		result.Verified = true
-		result.Details = fmt.Sprintf("receipt bound via block hash %s",
-			request.ExecutionResult.BlockHash.Hex()[:16])
+	// The receipt is bound to its block by its inclusion proofs, verified here against the block's roots (pkg/ethproof):
+	// a flag on the proof is never trusted, and a result without proofs binds nothing (RB5-F16).
+	if err := request.ExecutionResult.VerifyInclusionProofs(); err != nil {
+		result.Details = fmt.Sprintf("receipt not bound: %v", err)
+		return result
 	}
+	result.Verified = true
+	result.Details = fmt.Sprintf("receipt bound at block %d by its verified inclusion proofs, %d confirmations",
+		request.ExecutionResult.BlockNumber.Uint64(), request.ExecutionResult.ConfirmationBlocks)
 
 	return result
 }

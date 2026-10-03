@@ -180,9 +180,8 @@ func TestKeccak256_EmptyInput(t *testing.T) {
 // in place when the backing array had spare capacity, making results
 // nondeterministic.
 //
-// This rewrite tests what Verify() actually promises: trust the construction-
-// time validation flag, and reject malformed structure (ProofHashes length
-// must match ProofDirections length).
+// This rewrite tests what Verify() actually promises: it never trusts the
+// Verified flag, and it rejects a proof without its node set.
 func TestMerkleProof_Verification(t *testing.T) {
 	// Two-leaf example, built without any append-aliasing surprises so any
 	// downstream assertions are deterministic.
@@ -194,10 +193,7 @@ func TestMerkleProof_Verification(t *testing.T) {
 	copy(rootInput[32:], leaf1)
 	root := crypto.Keccak256(rootInput)
 
-	proof := &MerkleInclusionProof{
-		LeafIndex:       0,
-		ProofDirections: []uint8{1},
-	}
+	proof := &MerkleInclusionProof{LeafIndex: 0}
 	copy(proof.LeafHash[:], leaf0)
 	copy(proof.ExpectedRoot[:], root)
 	var proofHash [32]byte

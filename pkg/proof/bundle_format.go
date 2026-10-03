@@ -89,12 +89,14 @@ type ProofComponents struct {
 // Component 5: Execution Proof
 // =============================================================================
 
-// ExecutionProof binds the execution receipt to the block. `receipt_inclusion_proof` and
-// `tx_inclusion_proof` are the gate's verified MerkleInclusionProof records (leaf hash, index,
-// expected root, raw proof nodes, leaf value): re-verify with go-ethereum's trie.VerifyProof
-// (nodes keyed by keccak256(node), key = RLP(tx index)) against `receipts_root` /
-// `transactions_root`, which are the block header's, and compare the resolved value to
-// `raw_receipt`. `logs` are decoded from that receipt for reading, not for trust.
+// ExecutionProof binds the execution receipt to the block. `tx_inclusion_proof` and
+// `receipt_inclusion_proof` are ethproof.InclusionProof records (leaf hash, index, expected root,
+// node hashes, raw proof nodes, leaf value), verified by the gate and bound into the attested result
+// hash. Verify offline with ethproof.VerifySettlement(block_hash, block_header_rlp, tx_hash, tx proof,
+// receipt proof): the header hashes to `block_hash`, its roots are `transactions_root` and
+// `receipts_root`, the transaction proof resolves to the transaction whose hash is `tx_hash`, and the
+// receipt proof resolves, at the same index, to `raw_receipt`. `logs` are decoded from that receipt
+// for reading, not for trust.
 type ExecutionProof struct {
 	ChainID          string          `json:"chain_id"`
 	TxHash           string          `json:"tx_hash"`
@@ -103,6 +105,7 @@ type ExecutionProof struct {
 	Status           uint8           `json:"status"`
 	TransactionsRoot string          `json:"transactions_root,omitempty"`
 	ReceiptsRoot     string          `json:"receipts_root,omitempty"`
+	BlockHeader      string          `json:"block_header_rlp,omitempty"`
 	RawReceipt       string          `json:"raw_receipt,omitempty"`
 	Logs             []ExecutionLog  `json:"logs,omitempty"`
 	TxInclusion      json.RawMessage `json:"tx_inclusion_proof,omitempty"`

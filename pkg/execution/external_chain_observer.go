@@ -6,7 +6,7 @@
 // This service:
 // 1. Watches for transaction confirmation on Ethereum
 // 2. Waits for finalization (12+ block confirmations)
-// 3. Constructs Merkle inclusion proofs for transactions and receipts
+// 3. Builds the transaction and receipt Merkle-Patricia inclusion proofs (pkg/ethproof)
 // 4. Returns cryptographically verifiable ExternalChainResult
 
 package execution
@@ -23,12 +23,10 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
-	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
-	"github.com/ethereum/go-ethereum/trie"
 
+	"github.com/certen/independant-validator/pkg/ethproof"
 	"github.com/certen/independant-validator/pkg/ethrpc"
 
 	"github.com/certen/independant-validator/pkg/execution/contracts"
@@ -164,17 +162,19 @@ func (o *ExternalChainObserver) ObserveTransaction(
 
 	o.log("✅ [OBSERVER] Transaction %s is in finalized block %d (%s)", txHash.Hex(), receipt.BlockNumber.Uint64(), receipt.BlockHash.Hex())
 
-	// The header bound to the receipt (required), and the full block when this chain's
-	// transactions can be decoded (an enrichment, for the inclusion proofs). See fetchBlockForResult.
-	block, fullBlock, err := o.fetchBlockForResult(ctx, receipt)
+	// The header bound to the receipt, read by hash from the agreeing providers.
+	header, err := o.agreedHeader(ctx, receipt)
 	if err != nil {
 		return nil, err
 	}
 
-	// Get the transaction
+	// The transaction itself: read from one provider, and accepted only as the transaction with this hash.
 	tx, _, err := o.ethClient.TransactionByHash(ctx, txHash)
 	if err != nil {
 		return nil, fmt.Errorf("get transaction: %w", err)
+	}
+	if tx == nil || tx.Hash() != txHash {
+		return nil, fmt.Errorf("the provider's transaction for %s is not that transaction", txHash.Hex())
 	}
 
 	// Compute current confirmations
@@ -185,36 +185,17 @@ func (o *ExternalChainObserver) ObserveTransaction(
 	confirmations := int(currentBlock - receipt.BlockNumber.Uint64())
 
 	// Create the external chain result
-	result := FromEthereumReceipt(receipt, tx, block, o.chainID, confirmations, o.validatorID)
+	result := FromEthereumReceipt(receipt, tx, types.NewBlockWithHeader(header), o.chainID, confirmations, o.validatorID)
 
-	// Construct Merkle inclusion proofs. From the decoded block when go-ethereum could decode every
-	// transaction; otherwise from the raw JSON block, encoding the chain's own transaction types by
-	// hand and refusing unless both roots match the header (see raw_block_proofs.go). Never from a
-	// partial list: a trie over a subset has the wrong root and proves nothing.
-	if fullBlock != nil {
-		txProof, err := o.constructTxInclusionProof(ctx, fullBlock, receipt.TransactionIndex)
-		if err != nil {
-			o.log("⚠️ [OBSERVER] Failed to construct tx inclusion proof: %v", err)
-			// Continue without proof - result is still valid from receipt
-		} else {
-			result.TxInclusionProof = txProof
-		}
-
-		receiptProof, err := o.constructReceiptInclusionProof(ctx, fullBlock, receipt)
-		if err != nil {
-			o.log("⚠️ [OBSERVER] Failed to construct receipt inclusion proof: %v", err)
-		} else {
-			result.ReceiptInclusionProof = receiptProof
-		}
+	// The transaction and receipt inclusion proofs (RB-2, RB5-F16): built by pkg/ethproof from the block's agreed bodies,
+	// checked against the header's roots and verified before they are kept. A block whose proofs cannot be built keeps
+	// none, and says why: every caller that needs them refuses by that reason.
+	if settlement, err := o.inclusionProofs(ctx, receipt, deadline); err != nil {
+		o.log("⚠️ [OBSERVER] No inclusion proofs for %s on chain %d: %v", txHash.Hex(), o.chainID, err)
+		result.inclusionErr = err
 	} else {
-		txProof, receiptProof, err := o.inclusionProofsFromRaw(ctx, block.Header(), receipt.TransactionIndex)
-		if err != nil {
-			o.log("⚠️ [OBSERVER] Inclusion proofs from raw block failed on chain %d: %v", o.chainID, err)
-		} else {
-			result.TxInclusionProof = txProof
-			result.ReceiptInclusionProof = receiptProof
-			o.log("✅ [OBSERVER] Inclusion proofs built from the raw block (chain %d); both roots matched the header", o.chainID)
-		}
+		result.TxInclusionProof = settlement.Tx
+		result.ReceiptInclusionProof = settlement.Receipt
 	}
 
 	o.log("🎉 [OBSERVER] External chain result complete: hash=%s status=%d", result.ToHex()[:16], result.Status)
@@ -222,59 +203,32 @@ func (o *ExternalChainObserver) ObserveTransaction(
 	return result, nil
 }
 
-// fetchBlockForResult returns the block the receipt landed in, in two forms: a header-only block
-// bound to the receipt (always, or an error), and the fully decoded block when this chain allows it
-// (otherwise nil).
-//
-// WHY TWO. ethclient.BlockByNumber decodes every transaction in the block with go-ethereum's own
-// types, and rejects the whole block on the first type it does not know. Every OP-stack block (Base,
-// Optimism) carries a type-0x7e deposit transaction, and Arbitrum blocks carry Nitro's own types, so
-// on those chains the call fails with "transaction type not supported" — for every block, always.
-// Until 2026-09-04 that failure aborted the observation, the RB gate failed, and no contract call on
-// Base or Arbitrum could be proved: 54 Base artifacts existed and all were value transfers, which
-// never reach this path.
-//
-// What the result actually needs from the block is the header: its hash (RB-2 binding to the
-// receipt's block hash, so a lying RPC cannot substitute roots), its time, and its transactions,
-// receipts and state roots. HeaderByNumber decodes only the header, which is the upstream geth
-// layout on OP-stack and Nitro chains alike, so the binding and the roots hold there. The full block
-// is wanted only to build the Merkle inclusion tries, and those were already best-effort: skipping
-// them on a chain whose transactions cannot be decoded loses an enrichment, not the proof of effect,
-// which comes from the receipt bound to the header.
-func (o *ExternalChainObserver) fetchBlockForResult(
-	ctx context.Context,
-	receipt *types.Receipt,
-) (headerBlock *types.Block, fullBlock *types.Block, err error) {
-	// By HASH, from the agreeing providers (RB5-F53): the receipt's block is the agreed, finalized one, and a read by
-	// height could be answered by a backend on another fork.
+// agreedHeader is the header of the receipt's block, read by HASH from the agreeing providers (RB5-F53) and bound to the
+// receipt's block hash (RB-2): header.Hash() recomputes the hash from the header's fields, so roots that do not belong to
+// that block cannot be served in its name.
+func (o *ExternalChainObserver) agreedHeader(ctx context.Context, receipt *types.Receipt) (*types.Header, error) {
 	if o.finality == nil {
-		return nil, nil, fmt.Errorf("chain %d: no agreeing providers to read block %s with: %v", o.chainID, receipt.BlockHash.Hex(), o.finalityErr)
+		return nil, fmt.Errorf("chain %d: no agreeing providers to read block %s with: %v", o.chainID, receipt.BlockHash.Hex(), o.finalityErr)
 	}
 	header, err := o.finality.HeaderByHash(ctx, receipt.BlockHash)
 	if err != nil {
-		return nil, nil, fmt.Errorf("get block header: %w", err)
+		return nil, fmt.Errorf("get block header: %w", err)
 	}
-	// RB-2: bind the fetched header to the receipt's block hash. header.Hash() recomputes the hash
-	// from the header fields; if a lying RPC served a header whose TransactionsRoot/ReceiptsRoot do
-	// not belong to the canonical block, this catches it before those roots are treated as
-	// authoritative.
 	if header.Hash() != receipt.BlockHash {
-		return nil, nil, fmt.Errorf("header binding failed: header.Hash()=%s != receipt.BlockHash=%s (untrusted RPC header)",
+		return nil, fmt.Errorf("header binding failed: header.Hash()=%s != receipt.BlockHash=%s (untrusted RPC header)",
 			header.Hash().Hex(), receipt.BlockHash.Hex())
 	}
-	headerBlock = types.NewBlockWithHeader(header)
+	return header, nil
+}
 
-	full, err := o.ethClient.BlockByHash(ctx, receipt.BlockHash)
-	if err != nil {
-		o.log("ℹ️ [OBSERVER] Full block %d not decodable by go-ethereum on chain %d (%v) — inclusion proofs will be built from the raw block",
-			receipt.BlockNumber.Uint64(), o.chainID, err)
-		return headerBlock, nil, nil
+// inclusionProofs proves the receipt's transaction and the receipt in their block through pkg/ethproof, from the agreeing
+// providers' reads of the block's bodies.
+func (o *ExternalChainObserver) inclusionProofs(ctx context.Context, receipt *types.Receipt, deadline time.Time) (*ethproof.Settlement, error) {
+	src, ok := o.finality.(ethproof.Source)
+	if !ok {
+		return nil, fmt.Errorf("chain %d: the finality reader (%T) cannot serve a block's agreed bodies, so no proof is built from it", o.chainID, o.finality)
 	}
-	if full.Hash() != receipt.BlockHash {
-		return nil, nil, fmt.Errorf("header binding failed: block.Hash()=%s != receipt.BlockHash=%s (untrusted RPC block)",
-			full.Hash().Hex(), receipt.BlockHash.Hex())
-	}
-	return headerBlock, full, nil
+	return ethproof.BuildWithin(ctx, src, receipt.BlockHash, receipt.TxHash, uint64(receipt.TransactionIndex), deadline, o.pollingInterval)
 }
 
 // =============================================================================
@@ -324,128 +278,6 @@ func (o *ExternalChainObserver) settledInFinalizedChain(ctx context.Context, txH
 }
 
 // =============================================================================
-// MERKLE PROOF CONSTRUCTION
-// =============================================================================
-
-// constructTxInclusionProof constructs a Merkle proof that the transaction
-// is included in the block's transaction trie
-func (o *ExternalChainObserver) constructTxInclusionProof(
-	ctx context.Context,
-	block *types.Block,
-	txIndex uint,
-) (*MerkleInclusionProof, error) {
-
-	txs := block.Transactions()
-	if int(txIndex) >= len(txs) {
-		return nil, fmt.Errorf("tx index %d out of range", txIndex)
-	}
-
-	// Build the transaction trie. RB-2: use the canonical consensus encoding
-	// (tx.MarshalBinary — typed-aware EIP-2718 envelope for typed txs, RLP for legacy)
-	// so the trie root equals the block header's TransactionsRoot; otherwise the
-	// independent VerifyProof against block.TxHash() would reject valid typed-tx proofs.
-	txTrie := trie.NewEmpty(nil)
-	for i, tx := range txs {
-		key, _ := rlp.EncodeToBytes(uint(i))
-		val, err := tx.MarshalBinary()
-		if err != nil {
-			return nil, fmt.Errorf("encode tx %d: %w", i, err)
-		}
-		txTrie.Update(key, val)
-	}
-
-	// Get the proof path
-	key, _ := rlp.EncodeToBytes(uint(txIndex))
-	proof := NewMerkleProofCollector()
-	if err := txTrie.Prove(key, proof); err != nil {
-		return nil, fmt.Errorf("generate tx proof: %w", err)
-	}
-
-	// Convert to our proof format
-	tx := txs[txIndex]
-	txRLP, err := tx.MarshalBinary()
-	if err != nil {
-		return nil, fmt.Errorf("encode leaf tx: %w", err)
-	}
-	leafHash := crypto.Keccak256Hash(txRLP)
-
-	return &MerkleInclusionProof{
-		LeafHash:        [32]byte(leafHash),
-		LeafIndex:       uint64(txIndex),
-		ProofHashes:     proof.GetHashes(),
-		ProofDirections: proof.GetDirections(),
-		ExpectedRoot:    [32]byte(block.TxHash()), // RB-2: bound to the block header's TxHash
-		ProofNodes:      proof.GetNodes(),         // RB-2: raw proof set for independent VerifyProof
-		LeafValue:       txRLP,                    // RB-2: exact RLP(tx) the proof must resolve to
-		Verified:        true,                     // legacy flag; Verify() no longer trusts it
-	}, nil
-}
-
-// constructReceiptInclusionProof constructs a Merkle proof that the receipt
-// is included in the block's receipt trie
-func (o *ExternalChainObserver) constructReceiptInclusionProof(
-	ctx context.Context,
-	block *types.Block,
-	receipt *types.Receipt,
-) (*MerkleInclusionProof, error) {
-
-	// RB-2 / RB-SEC-1: fetch ALL receipts in ONE call (eth_getBlockReceipts) instead of one
-	// RPC per tx. Under concurrent peer verification, N-per-tx fetches across the fleet
-	// rate-limit the shared RPC and cause spurious proof-construction failures (nil proof →
-	// honest peers wrongly refuse valid calls).
-	txs := block.Transactions()
-	receipts, err := o.ethClient.BlockReceipts(ctx, rpc.BlockNumberOrHashWithHash(block.Hash(), false))
-	if err != nil {
-		return nil, fmt.Errorf("get block receipts: %w", err)
-	}
-	if len(receipts) != len(txs) {
-		return nil, fmt.Errorf("block receipts count %d != tx count %d", len(receipts), len(txs))
-	}
-
-	if int(receipt.TransactionIndex) >= len(receipts) {
-		return nil, fmt.Errorf("receipt index %d out of range", receipt.TransactionIndex)
-	}
-
-	// Build the receipt trie. RB-2: use the canonical consensus encoding
-	// (receipt.MarshalBinary — typed-aware) so the trie root equals the block header's
-	// ReceiptsRoot, enabling independent VerifyProof against block.ReceiptHash().
-	receiptTrie := trie.NewEmpty(nil)
-	for i, r := range receipts {
-		key, _ := rlp.EncodeToBytes(uint(i))
-		val, err := r.MarshalBinary()
-		if err != nil {
-			return nil, fmt.Errorf("encode receipt %d: %w", i, err)
-		}
-		receiptTrie.Update(key, val)
-	}
-
-	// Get the proof path
-	key, _ := rlp.EncodeToBytes(uint(receipt.TransactionIndex))
-	proof := NewMerkleProofCollector()
-	if err := receiptTrie.Prove(key, proof); err != nil {
-		return nil, fmt.Errorf("generate receipt proof: %w", err)
-	}
-
-	// Convert to our proof format
-	receiptRLP, err := receipt.MarshalBinary()
-	if err != nil {
-		return nil, fmt.Errorf("encode leaf receipt: %w", err)
-	}
-	leafHash := crypto.Keccak256Hash(receiptRLP)
-
-	return &MerkleInclusionProof{
-		LeafHash:        [32]byte(leafHash),
-		LeafIndex:       uint64(receipt.TransactionIndex),
-		ProofHashes:     proof.GetHashes(),
-		ProofDirections: proof.GetDirections(),
-		ExpectedRoot:    [32]byte(block.ReceiptHash()), // RB-2: bound to the block header's ReceiptHash
-		ProofNodes:      proof.GetNodes(),              // RB-2: raw proof set for independent VerifyProof
-		LeafValue:       receiptRLP,                    // RB-2: exact RLP(receipt) the proof must resolve to
-		Verified:        true,                          // legacy flag; Verify() no longer trusts it
-	}, nil
-}
-
-// =============================================================================
 // RB-5: STORAGE-SLOT STATE PROOF FETCH (eth_getProof)
 // =============================================================================
 
@@ -491,85 +323,6 @@ func (o *ExternalChainObserver) fetchStateProofs(ctx context.Context, blockNumbe
 		}
 	}
 	return proofs
-}
-
-// =============================================================================
-// MERKLE PROOF COLLECTOR (implements ethdb.KeyValueWriter for trie.Prove)
-// =============================================================================
-
-// MerkleProofCollector collects proof nodes during trie proving
-type MerkleProofCollector struct {
-	nodes      map[string][]byte
-	order      []string
-	hashes     [][32]byte
-	directions []uint8
-}
-
-// NewMerkleProofCollector creates a new proof collector
-func NewMerkleProofCollector() *MerkleProofCollector {
-	return &MerkleProofCollector{
-		nodes:      make(map[string][]byte),
-		order:      make([]string, 0),
-		hashes:     make([][32]byte, 0),
-		directions: make([]uint8, 0),
-	}
-}
-
-// Put implements ethdb.KeyValueWriter
-// Per CERTEN spec: Ethereum Patricia Trie uses Keccak256, NOT SHA256
-func (c *MerkleProofCollector) Put(key []byte, value []byte) error {
-	keyStr := string(key)
-	c.nodes[keyStr] = value
-	c.order = append(c.order, keyStr)
-
-	// The key IS the Keccak256 hash of the node value (from go-ethereum trie)
-	// Use the key directly as the hash instead of recomputing
-	// This ensures compatibility with Ethereum's native hash function
-	var hash [32]byte
-	if len(key) == 32 {
-		// Key is already the Keccak256 hash from the trie
-		copy(hash[:], key)
-	} else {
-		// Fallback: compute Keccak256 if key is not a hash (shouldn't happen)
-		hash = crypto.Keccak256Hash(value)
-	}
-	c.hashes = append(c.hashes, hash)
-
-	// Direction based on key nibble (for Patricia trie traversal)
-	if len(key) > 0 {
-		c.directions = append(c.directions, key[0]&0x01)
-	} else {
-		c.directions = append(c.directions, 0)
-	}
-
-	return nil
-}
-
-// Delete implements ethdb.KeyValueWriter
-func (c *MerkleProofCollector) Delete(key []byte) error {
-	delete(c.nodes, string(key))
-	return nil
-}
-
-// GetHashes returns the collected proof hashes
-func (c *MerkleProofCollector) GetHashes() [][32]byte {
-	return c.hashes
-}
-
-// GetDirections returns the proof directions
-func (c *MerkleProofCollector) GetDirections() []uint8 {
-	return c.directions
-}
-
-// GetNodes returns the raw RLP-encoded proof nodes in the order they were emitted
-// by trie.Prove (root → leaf). RB-2: this is the proof set independently re-verified
-// by MerkleInclusionProof.Verify via trie.VerifyProof.
-func (c *MerkleProofCollector) GetNodes() [][]byte {
-	nodes := make([][]byte, 0, len(c.order))
-	for _, k := range c.order {
-		nodes = append(nodes, c.nodes[k])
-	}
-	return nodes
 }
 
 // =============================================================================

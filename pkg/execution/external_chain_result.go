@@ -9,7 +9,6 @@
 package execution
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -21,9 +20,8 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/ethdb/memorydb"
-	"github.com/ethereum/go-ethereum/rlp"
-	"github.com/ethereum/go-ethereum/trie"
+
+	"github.com/certen/independant-validator/pkg/ethproof"
 )
 
 // =============================================================================
@@ -105,6 +103,10 @@ type ExternalChainResult struct {
 
 	TxInclusionProof      *MerkleInclusionProof `json:"tx_inclusion_proof"`
 	ReceiptInclusionProof *MerkleInclusionProof `json:"receipt_inclusion_proof"`
+
+	// inclusionErr says why the observer built no inclusion proofs (pkg/ethproof's refusal), for the callers that refuse
+	// a result without them.
+	inclusionErr error
 
 	// RB-5: optional storage-slot state proofs, independently verifiable against StateRoot.
 	StateProofs []*StateProof `json:"state_proofs,omitempty"`
@@ -205,36 +207,10 @@ type LogEntry struct {
 	Index   uint           `json:"index"`
 }
 
-// MerkleInclusionProof provides cryptographic proof that an item is in a Merkle tree
-type MerkleInclusionProof struct {
-	// The leaf being proven
-	LeafHash [32]byte `json:"leaf_hash"`
-
-	// The index of the leaf in the tree
-	LeafIndex uint64 `json:"leaf_index"`
-
-	// Proof path from leaf to root
-	ProofHashes [][32]byte `json:"proof_hashes"`
-
-	// Directions for proof verification (0=left, 1=right)
-	ProofDirections []uint8 `json:"proof_directions"`
-
-	// Expected root (for verification)
-	ExpectedRoot [32]byte `json:"expected_root"`
-
-	// Verified flag (set after verification)
-	Verified bool `json:"verified"`
-
-	// RB-2: the raw RLP-encoded Patricia-trie proof nodes (the proof set), enabling
-	// INDEPENDENT re-verification off the original RPC via go-ethereum trie.VerifyProof.
-	// Nodes are keyed on verify by keccak256(node) — the construction-time key is never
-	// trusted. Empty ⇒ Verify() fails closed (cannot trustlessly verify).
-	ProofNodes [][]byte `json:"proof_nodes,omitempty"`
-
-	// RB-2: the exact leaf value (RLP(tx) or RLP(receipt)) the proof must resolve to
-	// at the key. VerifyProof's returned value is asserted byte-equal to this.
-	LeafValue []byte `json:"leaf_value,omitempty"`
-}
+// MerkleInclusionProof is the Merkle-Patricia inclusion proof of a transaction or a receipt against its block's
+// transactionsRoot or receiptsRoot. There is one implementation, pkg/ethproof, shared by the settlement gate and the chain
+// strategy's observer (RB5-F16).
+type MerkleInclusionProof = ethproof.InclusionProof
 
 // =============================================================================
 // RESULT COMPUTATION METHODS (RFC8785 Canonical JSON)
@@ -395,65 +371,27 @@ func (r *ExternalChainResult) GetLogsByTopic(topic common.Hash) []LogEntry {
 	return matching
 }
 
-// =============================================================================
-// MERKLE PROOF VERIFICATION
-// =============================================================================
-
-// Verify independently verifies the Ethereum Patricia-Merkle-trie inclusion proof.
-//
-// RB-2: This no longer trusts a construction-time flag. It rebuilds the proof node
-// set in-memory (keyed by keccak256(node), recomputed from the node bytes so a
-// caller-supplied key is never trusted) and runs go-ethereum's trie.VerifyProof,
-// which walks from ExpectedRoot and errors if any node is missing/altered or the
-// path doesn't reconcile to the root. The returned leaf value is then asserted to
-// equal the exact tx/receipt RLP (LeafValue) and to hash to LeafHash.
-//
-// Trustlessness depends on ExpectedRoot being bound to the block header's
-// TxHash/ReceiptHash (done at construction in constructTx/ReceiptInclusionProof),
-// and the header itself being bound to receipt.BlockHash (checked in
-// FromEthereumReceipt). Fails closed on any error or missing proof set.
-func (p *MerkleInclusionProof) Verify() bool {
-	// Without the raw proof node set we cannot trustlessly verify. Fail closed.
-	if len(p.ProofNodes) == 0 {
-		return false
-	}
-
-	// Rebuild the trie node DB, recomputing every key as keccak256(node) so we
-	// never trust caller-provided node keys.
-	proofDB := memorydb.New()
-	for _, node := range p.ProofNodes {
-		if len(node) == 0 {
-			return false
+// VerifyInclusionProofs verifies the result's transaction and receipt inclusion proofs against its block's roots, at its
+// transaction's index, the transaction proof's leaf being this transaction (pkg/ethproof). A result without them says why
+// the observer built none.
+func (r *ExternalChainResult) VerifyInclusionProofs() error {
+	if r.TxInclusionProof == nil || r.ReceiptInclusionProof == nil {
+		if r.inclusionErr != nil {
+			return fmt.Errorf("RB-2: no inclusion proofs for %s: %w", r.TxHash.Hex(), r.inclusionErr)
 		}
-		key := crypto.Keccak256(node)
-		if err := proofDB.Put(key, node); err != nil {
-			return false
-		}
+		return fmt.Errorf("RB-2: no inclusion proofs for %s", r.TxHash.Hex())
 	}
-
-	// The trie key is the RLP encoding of the leaf index (tx/receipt index in block),
-	// matching how the trie was built and proven at construction time.
-	key, err := rlp.EncodeToBytes(uint(p.LeafIndex))
+	leaf, err := ethproof.VerifyInclusion(r.TxInclusionProof, r.TransactionsRoot, uint64(r.TxIndex))
 	if err != nil {
-		return false
+		return fmt.Errorf("RB-2: tx inclusion proof of %s: %w", r.TxHash.Hex(), err)
 	}
-
-	// Independent Patricia-trie verification against the expected (header-bound) root.
-	value, err := trie.VerifyProof(common.Hash(p.ExpectedRoot), key, proofDB)
-	if err != nil || value == nil {
-		return false
+	if got := crypto.Keccak256Hash(leaf); got != r.TxHash {
+		return fmt.Errorf("RB-2: the tx inclusion proof proves %s, not %s", got.Hex(), r.TxHash.Hex())
 	}
-
-	// The proven value must be the exact tx/receipt RLP we committed to...
-	if p.LeafValue != nil && !bytes.Equal(value, p.LeafValue) {
-		return false
+	if _, err := ethproof.VerifyInclusion(r.ReceiptInclusionProof, r.ReceiptsRoot, uint64(r.TxIndex)); err != nil {
+		return fmt.Errorf("RB-2: receipt inclusion proof of %s: %w", r.TxHash.Hex(), err)
 	}
-	// ...and must hash to the committed leaf hash.
-	if crypto.Keccak256Hash(value) != common.Hash(p.LeafHash) {
-		return false
-	}
-
-	return true
+	return nil
 }
 
 // =============================================================================
