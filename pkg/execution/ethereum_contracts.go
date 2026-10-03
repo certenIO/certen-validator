@@ -24,7 +24,6 @@ import (
 
 	"github.com/certen/independant-validator/pkg/anchor"
 	"github.com/certen/independant-validator/pkg/consensus"
-	"github.com/certen/independant-validator/pkg/crypto/bls"
 	"github.com/certen/independant-validator/pkg/crypto/bls_zkp"
 	"github.com/certen/independant-validator/pkg/execution/contracts"
 	"github.com/certen/independant-validator/pkg/intent"
@@ -1665,34 +1664,36 @@ func (ecm *EthereumContractManager) RegenerateBLSZKProofForChain(
 	return ecm.generateBLSZKProof(blsSignatureBytes, messageHash, signedVotingPower, totalVotingPower, blockPubKeyHex)
 }
 
-// resolveProverPubKey picks the public key the ZK/BLS witness must be built
-// against. The BLS signature carried in a ValidatorBlock was produced by that
-// block's signer (the BFT proposer), which is NOT necessarily this executor.
-// The pairing check e(sig,g2)==e(H(msg),pubKey) only holds for the key that
-// actually signed, so we prefer the block signer's key (blockPubKeyHex, hex,
-// same 96-byte encoding as KeyManager.GetPublicKeyBytes). We fall back to this
-// executor's own key only when the block omits a pubkey (legacy self-signed
-// path). Threading the correct key is the fix for constraint #774716 when the
-// elected executor differs from the block signer.
-func resolveProverPubKey(blockPubKeyHex string, fallback []byte) []byte {
-	if h := strings.TrimPrefix(blockPubKeyHex, "0x"); h != "" {
-		if decoded, err := hex.DecodeString(h); err == nil && len(decoded) >= 96 {
-			log.Printf("🔑 [BLS-ZK] Proving against block signer's pubkey (%d bytes) from ValidatorBlock", len(decoded))
-			return decoded
-		}
-		log.Printf("⚠️ [BLS-ZK] Block pubkey present but undecodable/short (%q); falling back to executor's own key", blockPubKeyHex)
+// resolveProverPubKey is the public key the ZK/BLS witness must be built against: the key of the validator that
+// produced the signature, carried in the ValidatorBlock (blockPubKeyHex, hex, the 96-byte encoding of
+// KeyManager.GetPublicKeyBytes). The pairing check e(sig,g2)==e(H(msg),pubKey) holds only for the key that actually
+// signed (#774716, when the elected executor differs from the block signer).
+//
+// A missing or unusable key is refused (RB5-F55). It used to fall back to this executor's own key, which can only
+// produce a witness for a signature this executor did not make - a proof that cannot verify, built anyway.
+func resolveProverPubKey(blockPubKeyHex string) ([]byte, error) {
+	h := strings.TrimPrefix(strings.TrimSpace(blockPubKeyHex), "0x")
+	if h == "" {
+		return nil, fmt.Errorf("%w: the signature carries no signer public key", ErrQuorumProof)
 	}
-	return fallback
+	decoded, err := hex.DecodeString(h)
+	if err != nil {
+		return nil, fmt.Errorf("%w: the signer public key is not hex: %v", ErrQuorumProof, err)
+	}
+	if len(decoded) < 96 {
+		return nil, fmt.Errorf("%w: the signer public key is %d bytes, a BLS12-381 G2 key is 96", ErrQuorumProof, len(decoded))
+	}
+	return decoded, nil
 }
 
-// generateBLSZKProof generates a Groth16 ZK proof from a BLS signature.
-// Returns the serialized proof bytes AND the pubkeyCommitment (a public input
-// to the Groth16 circuit that binds the proof to the validators' BLS keys).
-// The pubkeyCommitment MUST be set on BLSProofData so the on-chain verifier's
-// verifyBLSSignatureExpected() can cross-check it against the proof.
+// generateBLSZKProof is the legacy entry point of the per-intent proof path and the NEAR re-proving helper: it proves
+// against the signer key the block carries (resolveProverPubKey, refused when missing) and reports failure as an empty
+// proof, which those callers check.
 //
-// TESTING MODE: When ZK proof generation fails, falls back to mock proof format
-// that works with MockBLSVerifier contract.
+// The proving itself is the strict core every supported path uses (proveQuorumBLSWithKey, RB5-F55): local verification
+// and the ABI round-trip are enforced, not logged. The supported batch and outcome paths do not come here; they call
+// BuildQuorumBLSProofData, which proves against the aggregate's own key. Both remaining callers are recorded for the
+// consolidation decision: the per-intent workflows have no caller, and NEAR is outside the supported chains.
 func (ecm *EthereumContractManager) generateBLSZKProof(
 	blsSignatureBytes []byte,
 	messageHash [32]byte,
@@ -1700,84 +1701,18 @@ func (ecm *EthereumContractManager) generateBLSZKProof(
 	totalVotingPower *big.Int,
 	blockPubKeyHex string,
 ) ([]byte, [32]byte) {
-	var zeroPubkey [32]byte
-
-	// Get the BLS ZK prover - REQUIRED for proof generation
-	prover, err := GetBLSZKProver()
-	if err != nil || prover == nil {
-		log.Printf("⚠️ [BLS-ZK] ZK prover not available: %v", err)
-		return nil, zeroPubkey
-	}
-
-	// Get validator's BLS public key for the proof - REQUIRED
-	blsKeyManager := bls.GetValidatorBLSKey()
-	if blsKeyManager == nil {
-		log.Printf("⚠️ [BLS-ZK] BLS key manager not available")
-		return nil, zeroPubkey
-	}
-
-	// Prove against the BLOCK SIGNER's public key (carried in the ValidatorBlock),
-	// falling back to this executor's own key only when the block omits it. The
-	// BLS signature was produced by whichever validator proposed the block; when
-	// that is not this executor, pairing the signature against the executor's key
-	// fails the gnark BLS constraint (#774716). See resolveProverPubKey.
-	pubKeyBytes := resolveProverPubKey(blockPubKeyHex, blsKeyManager.GetPublicKeyBytes())
-	if len(pubKeyBytes) < 96 {
-		log.Printf("⚠️ [BLS-ZK] Invalid public key size: %d (need 96 bytes)", len(pubKeyBytes))
-		return nil, zeroPubkey
-	}
-
-	log.Printf("🔐 [BLS-ZK] Creating witness with pubkey=%d bytes, sig=%d bytes", len(pubKeyBytes), len(blsSignatureBytes))
-
-	// Create witness for ZK proof
-	witness, err := bls_zkp.CreateWitnessFromBLSData(
-		messageHash,
-		blsSignatureBytes,
-		pubKeyBytes,
-		signedVotingPower.Uint64(),
-		totalVotingPower.Uint64(),
-	)
+	pubKeyBytes, err := resolveProverPubKey(blockPubKeyHex)
 	if err != nil {
-		log.Printf("⚠️ [BLS-ZK] Failed to create witness: %v", err)
-		return nil, zeroPubkey
+		log.Printf("❌ [BLS-ZK] %v", err)
+		return nil, [32]byte{}
 	}
-
-	// Generate the ZK proof
-	log.Printf("🔐 [BLS-ZK] Generating Groth16 proof...")
-	zkProof, err := prover.GenerateProof(witness)
+	proofBytes, commitment, err := ecm.proveQuorumBLSWithKey(blsSignatureBytes, messageHash, signedVotingPower, totalVotingPower, pubKeyBytes)
 	if err != nil {
-		log.Printf("⚠️ [BLS-ZK] Failed to generate ZK proof: %v", err)
-		return nil, zeroPubkey
+		log.Printf("❌ [BLS-ZK] %v", err)
+		return nil, [32]byte{}
 	}
-
-	// Verify locally before submission
-	valid, err := prover.VerifyProofLocally(zkProof)
-	if err != nil {
-		log.Printf("⚠️ [BLS-ZK] Local verification error: %v", err)
-		return nil, zeroPubkey
-	}
-	if !valid {
-		log.Printf("⚠️ [BLS-ZK] Local verification failed - proof is invalid")
-		return nil, zeroPubkey
-	}
-
-	// Serialize proof for on-chain submission
-	proofBytes, err := zkProof.ToSolidityCalldata()
-	if err != nil {
-		log.Printf("⚠️ [BLS-ZK] Failed to serialize proof: %v", err)
-		return nil, zeroPubkey
-	}
-
-	log.Printf("✅ [BLS-ZK] Generated valid ZK proof: %d bytes, pubkeyCommitment: 0x%x", len(proofBytes), zkProof.PubkeyCommitment[:8])
-
-	// Round-trip verification: deserialize ABI bytes and verify (catches serialization bugs)
-	if roundTripOk, rtErr := prover.VerifyFromABIBytes(proofBytes); rtErr != nil {
-		log.Printf("⚠️ [BLS-ZK] ABI round-trip verification error: %v", rtErr)
-	} else {
-		log.Printf("🔍 [BLS-ZK] ABI round-trip verification (NEAR equation): %v", roundTripOk)
-	}
-
-	return proofBytes, zkProof.PubkeyCommitment
+	log.Printf("✅ [BLS-ZK] Generated valid ZK proof: %d bytes, pubkeyCommitment: 0x%x", len(proofBytes), commitment[:8])
+	return proofBytes, commitment
 }
 
 // generateBLS12381Proof generates a BLS12-381 Groth16 proof for TON chain.
@@ -1798,16 +1733,10 @@ func (ecm *EthereumContractManager) generateBLS12381Proof(
 		return
 	}
 
-	blsKeyManager := bls.GetValidatorBLSKey()
-	if blsKeyManager == nil {
-		log.Printf("⚠️ [BLS12-381] BLS key manager not available")
-		return
-	}
-
-	// Prove against the block signer's key (see resolveProverPubKey / #774716).
-	pubKeyBytes := resolveProverPubKey(blockPubKeyHex, blsKeyManager.GetPublicKeyBytes())
-	if len(pubKeyBytes) < 96 {
-		log.Printf("⚠️ [BLS12-381] Invalid public key size: %d (need 96 bytes)", len(pubKeyBytes))
+	// Prove against the block signer's key (see resolveProverPubKey / #774716); there is no other key to use.
+	pubKeyBytes, err := resolveProverPubKey(blockPubKeyHex)
+	if err != nil {
+		log.Printf("❌ [BLS12-381] %v", err)
 		return
 	}
 

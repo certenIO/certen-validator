@@ -3,40 +3,39 @@ package execution
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
 	"strings"
 	"testing"
 )
 
-// TestResolveProverPubKey locks in the #774716 fix: the ZK prover must build its
-// witness against the BLOCK SIGNER's public key (carried in the ValidatorBlock),
-// not the executor's own key, whenever the block supplies one. It falls back to
-// the executor's key only when the block omits/garbles the pubkey.
+// TestResolveProverPubKey locks in the #774716 fix - the ZK prover builds its witness against the BLOCK SIGNER's public
+// key, not the executor's own - and RB5-F55: a missing or unusable signer key is REFUSED. It used to fall back to the
+// executor's key, which can only produce a witness for a signature the executor did not make.
 func TestResolveProverPubKey(t *testing.T) {
-	fallback := bytes.Repeat([]byte{0x11}, 96) // executor's own key
-	signer := bytes.Repeat([]byte{0xab}, 96)   // block signer's key (a41cd7cf... in the wild)
+	signer := bytes.Repeat([]byte{0xab}, 96) // block signer's key (a41cd7cf... in the wild)
 	signerHex := hex.EncodeToString(signer)
 
-	cases := []struct {
-		name   string
-		hexIn  string
-		want   []byte
-		reason string
-	}{
-		{"prefers block signer key", signerHex, signer, "signer differs from executor → must use signer's key"},
-		{"accepts 0x prefix", "0x" + signerHex, signer, "hex may arrive with 0x prefix"},
-		{"empty falls back", "", fallback, "legacy self-signed path carries no block pubkey"},
-		{"short falls back", hex.EncodeToString(bytes.Repeat([]byte{0xcd}, 48)), fallback, "sub-96-byte key is unusable → fall back rather than emit a bad witness"},
-		{"non-hex falls back", "not-hex-zzzz", fallback, "undecodable key must not crash the prover"},
+	for _, tc := range []struct {
+		name  string
+		hexIn string
+	}{{"prefers block signer key", signerHex}, {"accepts 0x prefix", "0x" + signerHex}} {
+		got, err := resolveProverPubKey(tc.hexIn)
+		if err != nil || !bytes.Equal(got, signer) {
+			t.Fatalf("%s: got %s... (%v), want the signer's key", tc.name, short(got), err)
+		}
 	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := resolveProverPubKey(tc.hexIn, fallback)
-			if !bytes.Equal(got, tc.want) {
-				t.Fatalf("%s: got %s..., want %s... (%s)",
-					tc.name, short(got), short(tc.want), tc.reason)
-			}
-		})
+	for _, tc := range []struct {
+		name  string
+		hexIn string
+	}{
+		{"empty is refused", ""},
+		{"short is refused", hex.EncodeToString(bytes.Repeat([]byte{0xcd}, 48))},
+		{"non-hex is refused", "not-hex-zzzz"},
+	} {
+		got, err := resolveProverPubKey(tc.hexIn)
+		if !errors.Is(err, ErrQuorumProof) || got != nil {
+			t.Fatalf("%s: got %s... (%v); a key other than the signer's must never be used", tc.name, short(got), err)
+		}
 	}
 }
 

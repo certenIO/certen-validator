@@ -325,3 +325,25 @@ func TestV8_2_PinnedVector_KermitIncarnation(t *testing.T) {
 		t.Errorf("Kermit V8.2 pre-exec messageHash: got %s want %s", got, wantMsg)
 	}
 }
+
+// TestOutcomeMessageVector pins the outcome message (RB5 D4) to the value CertenOutcomeRegistryV1.t.sol
+// test_OutcomeMessageVector asserts and RUNLOG_RB5 computed a third way in Python. Never update it on one side only.
+func TestOutcomeMessageVector(t *testing.T) {
+	h := func(s string) (b [32]byte) {
+		raw, err := hex.DecodeString(s[2:])
+		if err != nil || len(raw) != 32 {
+			t.Fatalf("bad vector input %q", s)
+		}
+		copy(b[:], raw)
+		return
+	}
+	got := ComputeEvmMessageHashV8_2_Outcome(84532,
+		h("0x1111111111111111111111111111111111111111111111111111111111111111"),
+		h("0x7777777777777777777777777777777777777777777777777777777777777777"),
+		h("0x4444444444444444444444444444444444444444444444444444444444444444"),
+		h("0xafa6bd344b04b6ff9645c97b09254af9c25a214991e0b442538e9084d4136bf5"),
+		h("0xcac6698ed49a286ad8a3de94540a3354dfe964f366a439f4fdfb34533059fda0"))
+	if want := h("0xf0097b17cc23e68a7132b13c944dbc8ff23b645ba6d393138bbff06bd6553863"); got != want {
+		t.Fatalf("outcome message %x, the registry's vector is %x", got, want)
+	}
+}

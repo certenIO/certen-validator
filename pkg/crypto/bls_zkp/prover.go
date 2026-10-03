@@ -374,18 +374,18 @@ func (p *BLSZKProver) GenerateProof(witness *BLSSignatureWitness) (*BLSZKProof, 
 	zkProof.SignedVotingPower = witness.SignedVotingPower
 	zkProof.TotalVotingPower = witness.TotalVotingPower
 
-	// === DIAGNOSTIC: Verify proof locally + manual pairing check ===
-	localResult, localErr := p.VerifyProofLocally(zkProof)
-	log.Printf("🔍 [BLS-ZK-DIAG] gnark local verify: result=%v err=%v", localResult, localErr)
-
-	manualResult, manualErr := p.ManualPairingCheck(zkProof)
-	log.Printf("🔍 [BLS-ZK-DIAG] Manual 4-pairing check: result=%v err=%v", manualResult, manualErr)
+	// The proof must verify under gnark's commitment-aware Groth16 with the keccak-mod-R challenge - the check the V2
+	// verifier makes on chain. ManualPairingCheck is the V1 (plain 4-pairing) equation and does not apply to a V2
+	// proof (see VerifyFromABIBytes); running it here reported a failure on every valid proof (RB5-F56).
+	if ok, err := p.VerifyProofLocally(zkProof); err != nil || !ok {
+		return nil, fmt.Errorf("the proof does not verify locally (ok=%v): %v", ok, err)
+	}
 
 	vkHash, vkBuf := p.ComputeVKHash()
 	log.Printf("🔍 [BLS-ZK-DIAG] VK hash (sha256): %s", hex.EncodeToString(vkHash[:]))
 	// Also compute keccak256 for comparison with Solana on-chain VK hash
 	keccakHash := crypto.Keccak256(vkBuf)
-	log.Printf("🔍 [BLS-ZK-DIAG] VK keccak=%x (matches Rust G16-DIAG)", keccakHash[:8])
+	log.Printf("🔍 [BLS-ZK-DIAG] VK keccak=%x", keccakHash[:8])
 
 	// Log VK commitment info
 	if vkBN254, ok := p.vk.(*groth16_bn254.VerifyingKey); ok {
@@ -766,23 +766,21 @@ func extractProofComponents(proof groth16.Proof) (*BLSZKProof, error) {
 		return nil, errors.New("proof is not BN254 type")
 	}
 
-	// === DIAGNOSTIC: Check for Pedersen commitments ===
-	log.Printf("🔍 [BLS-ZK-DIAG] gnark proof Commitments count: %d", len(proofBN254.Commitments))
-	if len(proofBN254.Commitments) > 0 {
-		log.Printf("⚠️ [BLS-ZK-DIAG] PROOF HAS %d PEDERSEN COMMITMENTS - standard 4-pairing check may be INCOMPLETE!", len(proofBN254.Commitments))
-		for i, c := range proofBN254.Commitments {
-			cx := new(big.Int)
-			cy := new(big.Int)
-			c.X.BigInt(cx)
-			c.Y.BigInt(cy)
-			log.Printf("⚠️ [BLS-ZK-DIAG] Commitment[%d]: x=%s y=%s", i, cx.Text(16)[:16], cy.Text(16)[:16])
-		}
+	// The V2 circuit's emulated pairing gadget makes gnark add ONE BSB22 Pedersen commitment, and the V2 verifier's
+	// calldata (BLSSignatureProof.commitments / commitmentPok) carries exactly one commitment and its proof of
+	// knowledge. That commitment is expected, not a defect: the verification it augments is gnark's commitment-aware
+	// Groth16 (VerifyProofLocally, VerifyFromABIBytes, and on chain), not the plain 4-pairing equation. A proof with
+	// another number of commitments, or a zero proof of knowledge, cannot be what the V2 verifier checks (RB5-F56).
+	if len(proofBN254.Commitments) != 1 {
+		return nil, fmt.Errorf("the V2 verifier takes exactly one Pedersen commitment; the proof has %d", len(proofBN254.Commitments))
 	}
 	pokX := new(big.Int)
 	pokY := new(big.Int)
 	proofBN254.CommitmentPok.X.BigInt(pokX)
 	proofBN254.CommitmentPok.Y.BigInt(pokY)
-	log.Printf("🔍 [BLS-ZK-DIAG] CommitmentPok: isZero=%v", pokX.Sign() == 0 && pokY.Sign() == 0)
+	if pokX.Sign() == 0 && pokY.Sign() == 0 {
+		return nil, errors.New("the proof's commitment proof of knowledge is zero")
+	}
 
 	// Extract ProofA (Ar - G1 point)
 	proofAX := new(big.Int)
