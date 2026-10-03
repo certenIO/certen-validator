@@ -248,6 +248,10 @@ var batchQuorumAttestorForEvidence atomic.Pointer[execution.BatchQuorumAttestor]
 // voting power and the aggregate is refused.
 var batchAttesterIdentity atomic.Pointer[execution.BatchAttesterIdentity]
 
+// outcomePeerForRequests answers the outcome recorder's requests (RB5 D4): built in the batching wiring block once the kept
+// trees and the settlement chains' outcome registries are in hand; until then the endpoint answers 503.
+var outcomePeerForRequests atomic.Pointer[execution.OutcomePeer]
+
 // batchPeriodBlocksFromEnv reads BATCH_PERIOD_BLOCKS.
 //
 // Every validator MUST agree on this value. It buckets BFT heights into periods, the period
@@ -794,6 +798,39 @@ func main() {
 		// seconds before a peer finishes processing the round — so it returns 200 with Error
 		// and Code set rather than an HTTP error status.
 		resp := stack.HandleOnDemandAttestationRequest(&req, *me)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	})
+
+	// Peer OUTCOME attestation (RB5 D4). The recorder asks this validator to co-sign a batch anchor's outcome root; the
+	// handler derives every member's outcome from the tree THIS validator kept when it signed the anchor and its own
+	// agreed reads of the chain, and signs the registry's outcome message only on an exact root match - see
+	// pkg/execution/outcome_peer.go.
+	mux.HandleFunc(execution.OutcomeRequestEndpoint, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		peer := outcomePeerForRequests.Load()
+		if peer == nil {
+			http.Error(w, "outcome peer not ready", http.StatusServiceUnavailable)
+			return
+		}
+		me := batchAttesterIdentity.Load()
+		if me == nil {
+			http.Error(w, "attester identity not configured", http.StatusServiceUnavailable)
+			return
+		}
+		var req execution.OutcomeRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), execution.DefaultOutcomeRequestTimeout)
+		defer cancel()
+		// A refusal is a normal outcome (outcome_not_final especially, until every member is final everywhere), so it
+		// returns 200 with Error and Code set.
+		resp := peer.HandleOutcomeRequest(ctx, &req, *me)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
 	})
@@ -1725,6 +1762,15 @@ func startValidator(
 		log.Printf("⚡ [OD] on-demand submitter running for the later members of sequential cross-chain " +
 			"intents only (ON_DEMAND_INTENT_KEYED is not true; on_demand intents take the period path)")
 	}
+
+	// The outcome peer: certifies an anchor's outcome root only when its own derivation, over the tree it kept and its own
+	// agreed reads of the chain, reproduces it (RB5 D4).
+	outcomeReaders := make(map[int64]execution.OutcomeChainReader, len(outcomeChains))
+	for id, c := range outcomeChains {
+		outcomeReaders[id] = c
+	}
+	outcomePeerForRequests.Store(&execution.OutcomePeer{Trees: outcomeTrees, Chains: outcomeReaders,
+		Attempts: execution.StackAttemptSource{Stack: stack}})
 
 	// Publish to the peer attestation handler. Without this a proposer's
 	// request gets 503 and no quorum can ever form.

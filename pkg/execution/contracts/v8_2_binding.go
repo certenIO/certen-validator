@@ -38,7 +38,8 @@
 // Domain tags introduced by V8.2 (all bumped, so no V8.1 signature can replay):
 //
 //	"certen:bls:v2:pre"      — pre-execution BLS messageHash (was v1:pre)
-//	"certen:bls:v2:post"     — post-execution BLS messageHash (was v1:post)
+//	"certen:bls:v2:outcome"  — the outcome of a batch anchor (CertenOutcomeRegistryV1, RB5 D4). It replaces
+//	                           "certen:bls:v2:post", which no contract verifies and is no longer computed
 //	"certen:bundleid:v1.2"   — single-leg bundleId (was v1.1)
 //	"certen:batchbundle:v2"  — batch bundleId (was v1)
 //	"certen:accval:v1"       — Accumulate validator-set root (new)
@@ -84,22 +85,6 @@ func ComputeEvmMessageHashV8_2_Pre(
 	return computeEvmMessageHashV8_2(
 		[]byte("certen:bls:v2:pre"),
 		chainID, anchorId, executionCommitment, operationID, validatorSetRoot,
-		accumulateValidatorSetRoot, accumulateIncarnation,
-	)
-}
-
-// ComputeEvmMessageHashV8_2_Post is the V8.2 post-execution messageHash for
-// Phase 8 attestations. The domain tag differs from pre so a pre-exec
-// signature can never satisfy a post-exec gate, and vice versa.
-// executionResultRoot replaces executionCommitment to bind the actual outcome.
-func ComputeEvmMessageHashV8_2_Post(
-	chainID int64,
-	anchorId, executionResultRoot, operationID, validatorSetRoot [32]byte,
-	accumulateValidatorSetRoot, accumulateIncarnation [32]byte,
-) [32]byte {
-	return computeEvmMessageHashV8_2(
-		[]byte("certen:bls:v2:post"),
-		chainID, anchorId, executionResultRoot, operationID, validatorSetRoot,
 		accumulateValidatorSetRoot, accumulateIncarnation,
 	)
 }

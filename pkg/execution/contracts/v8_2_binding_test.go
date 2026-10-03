@@ -212,7 +212,7 @@ func TestV8_2_RejectsUnusableInputs(t *testing.T) {
 	}
 }
 
-// TestV8_2_DomainSeparation: pre and post must never collide, and the V8.2
+// TestV8_2_DomainSeparation: the pre-execution and outcome messages must never collide, and the V8.2
 // message must differ from V6.1's for otherwise-identical inputs. A bumped tag
 // that did not actually change the digest would be decoration.
 func TestV8_2_DomainSeparation(t *testing.T) {
@@ -221,9 +221,11 @@ func TestV8_2_DomainSeparation(t *testing.T) {
 		t.Fatal(err)
 	}
 	pre := ComputeEvmMessageHashV8_2_Pre(vecChainID, vecAnchorID, vecExecCommit, vecOperationID, vecCertenRoot, accRoot, vecIncarnation)
-	post := ComputeEvmMessageHashV8_2_Post(vecChainID, vecAnchorID, vecExecCommit, vecOperationID, vecCertenRoot, accRoot, vecIncarnation)
-	if pre == post {
-		t.Fatal("pre and post messages collide")
+	// The outcome message over the same anchor, the same root word and the same sets: a pre-execution signature
+	// must never certify an outcome, nor the reverse.
+	outcome := ComputeEvmMessageHashV8_2_Outcome(vecChainID, vecAnchorID, vecExecCommit, vecCertenRoot, accRoot, vecIncarnation)
+	if pre == outcome {
+		t.Fatal("pre-execution and outcome messages collide")
 	}
 	old := ComputeEvmMessageHashV6_1_Pre(vecChainID, vecAnchorID, vecExecCommit, vecOperationID, vecCertenRoot)
 	if pre == old {
