@@ -81,6 +81,16 @@ type AggregatedAttestation struct {
 	ThresholdNumerator   uint64   `json:"threshold_numerator"`   // e.g., 2
 	ThresholdDenominator uint64   `json:"threshold_denominator"` // e.g., 3
 
+	// What a third party needs to verify the quorum from the write-back alone (RB5-F14): the exact message signed
+	// (sha256(MessagePreimage) == MessageHash), the snapshot's validators and block, the minimum signer count, the
+	// signature scheme and its domain.
+	MessagePreimage   []byte               `json:"message_preimage,omitempty"`
+	Validators        []WriteBackValidator `json:"validators,omitempty"`
+	SnapshotBlock     uint64               `json:"snapshot_block,omitempty"`
+	MinValidators     int                  `json:"min_validators,omitempty"`
+	SignatureScheme   string               `json:"signature_scheme,omitempty"`
+	AttestationDomain string               `json:"attestation_domain,omitempty"`
+
 	// Timing
 	FirstAttestation time.Time `json:"first_attestation"`
 	LastAttestation  time.Time `json:"last_attestation"`

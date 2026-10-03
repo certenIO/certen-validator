@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	attestation "github.com/certen/independant-validator/pkg/attestation/strategy"
 	chain "github.com/certen/independant-validator/pkg/chain/strategy"
 	"github.com/certen/independant-validator/pkg/database"
 	"github.com/certen/independant-validator/pkg/strategy"
@@ -89,9 +88,7 @@ func (f *writeBackFixture) cycle(t *testing.T) *activeCycle {
 	c.Request.CycleID = c.CycleID
 	c.Result.CycleID = c.CycleID
 	c.Result.ObservationResults = []*chain.ObservationResult{obs}
-	c.Result.ThresholdMet = true
-	c.Result.AggregatedAttestation = &attestation.AggregatedAttestation{
-		ThresholdMet: true, Verified: true, AchievedWeight: 700, TotalWeight: 700, ParticipantCount: 7}
+	attestWithRealQuorum(t, f.o, c, 7)
 	return c
 }
 

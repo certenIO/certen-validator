@@ -344,6 +344,9 @@ type activeCycle struct {
 
 	// SnapshotID is the validator_set_snapshots row this cycle's attestations were counted against.
 	SnapshotID *uuid.UUID
+	// QuorumSet is the registry snapshot Phase 8 counted against: the write-back states it so a third party can
+	// verify the quorum from the entry alone (RB5-F14).
+	QuorumSet *ValidatorSetSnapshot
 	// Completions are the proof_cycle_completions rows tracking this cycle's proofs through the four
 	// levels: one for an on-demand cycle, one per transaction for a batch cycle.
 	Completions []uuid.UUID
@@ -1469,13 +1472,15 @@ func (o *UnifiedOrchestrator) executePhase8(ctx context.Context, cycle *activeCy
 		thresholdConfig = attestation.DefaultThresholdConfig()
 	}
 
-	// Record the validator set this quorum is counted against, so a reader can check the threshold
-	// against the membership rather than trusting the stored weights.
+	// The validator set this quorum is counted against, so a reader can check the threshold against the membership
+	// rather than trusting the stored weights. Always built: the write-back states it (RB5-F14); recorded too when a
+	// repository is configured.
+	set, err := registryAttestationSet(registry, thresholdConfig.CalculateThresholdWeight, result.ObservationResults[0].BlockNumber)
+	if err != nil {
+		return fmt.Errorf("phase 8: validator set snapshot: %w", err)
+	}
+	cycle.QuorumSet = set
 	if o.config.Repos != nil && o.config.Repos.ProofArtifacts != nil {
-		set, err := registryAttestationSet(registry, thresholdConfig.CalculateThresholdWeight, result.ObservationResults[0].BlockNumber)
-		if err != nil {
-			return fmt.Errorf("phase 8: validator set snapshot: %w", err)
-		}
 		snapshotID, err := persistValidatorSetSnapshot(ctx, o.config.Repos.ProofArtifacts, set, result.ChainID, getNetworkName(result.ChainID))
 		if err != nil {
 			return fmt.Errorf("phase 8: persist validator set snapshot: %w", err)
@@ -2451,6 +2456,22 @@ func (o *UnifiedOrchestrator) buildAttestationBundleFromCycle(cycle *activeCycle
 			Finalized:          result.AggregatedAttestation.ThresholdMet && result.AggregatedAttestation.Verified,
 			FinalizedAt:        time.Now().UTC(),
 		}
+		// The quorum, verifiable from the write-back alone (RB5-F14): the snapshot Phase 8 counted against, the
+		// participants, the threshold rule, the exact message, the scheme and its domain.
+		thresholdConfig := o.config.ThresholdConfig
+		if thresholdConfig == nil {
+			thresholdConfig = attestation.DefaultThresholdConfig()
+		}
+		// The hash chain was advanced above: a write-back that cannot state its quorum undoes that first.
+		domain, err := o.attestationDomain(result.AggregatedAttestation.Scheme)
+		if err != nil {
+			rollback()
+			return nil, nil, fmt.Errorf("phase 9: %w", err)
+		}
+		if err := quorumEvidence(agg, cycle.QuorumSet, result.AggregatedAttestation, thresholdConfig, domain); err != nil {
+			rollback()
+			return nil, nil, fmt.Errorf("phase 9: %w", err)
+		}
 	}
 
 	return &AttestationBundle{
@@ -2459,6 +2480,23 @@ func (o *UnifiedOrchestrator) buildAttestationBundleFromCycle(cycle *activeCycle
 		Result:     extResult,
 		Aggregated: agg,
 	}, rollback, nil
+}
+
+// attestationDomain is the signing domain of the strategy that made a scheme's signatures - what the write-back states
+// so its aggregate can be verified (RB5-F14). A strategy that states no domain is refused by name.
+func (o *UnifiedOrchestrator) attestationDomain(scheme attestation.AttestationScheme) (string, error) {
+	if o.config.Registry == nil {
+		return "", fmt.Errorf("no strategy registry to name the %s signing domain", scheme)
+	}
+	s, err := o.config.Registry.GetAttestationStrategy(scheme)
+	if err != nil {
+		return "", fmt.Errorf("the %s strategy: %w", scheme, err)
+	}
+	d, ok := s.(interface{ Domain() string })
+	if !ok || d.Domain() == "" {
+		return "", fmt.Errorf("the %s strategy states no signing domain", scheme)
+	}
+	return d.Domain(), nil
 }
 
 // hash32 decodes a chain's 32-byte hash from its hex form. Empty is the zero hash only where there is,
