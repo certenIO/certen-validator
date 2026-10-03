@@ -60,16 +60,32 @@ operator checks the live chain beforehand (step 1).
    validator-rotate history-check --rules 12 --rpc http://<validator>:26657
    ```
 
-   It reads every block and its result codes and judges them the way a v12 node does. Any `FOUND:` line means v12
-   must **not** be deployed on this chain.
+   It reads every block and its result codes and judges them the way a v12 node does. It also reads the node's
+   committed records and requires every accepted (code 0) registry, re-seal and admin rotation to be recorded at its
+   height under its id. Exit codes:
 
-   Against a v12 node the output ends with `v12 continues this chain's history exactly`: there the tool also reads the
-   node's committed records (`/certen/admin_set`, `/certen/bls_registry`) and requires each accepted registry, re-seal
-   and admin rotation to be recorded at its height under its id. A v11 node serves no records over RPC, so before the
-   deploy every accepted registry and re-seal is listed as `RECORD NOT READ`. That is not a pass: it says the record
-   check was not done here. Each v12 node does it against its own ledger in step 3 and refuses to start on an
-   acceptance without its record. On certen-testnet the runlog records two acceptances of these kinds: the re-seal at
-   height 2788 and registry version 1 at height 2790.
+   | Exit | Meaning |
+   |---|---|
+   | 0 | **Verified.** Every check made, every acceptance found in its record. Ends with `v12 continues this chain's history exactly`. |
+   | 3 | **INCOMPLETE, NOT verified.** Nothing found wrong, but the node could not serve some records, so those acceptances are listed by name as `RECORD NOT READ` with the reason, and the "exactly" line is withheld. |
+   | 4 | **FOUND.** History the rules do not reproduce (each listed as `FOUND:`). v12 must **not** continue this state. |
+   | 1 | The check could not run (an RPC or read error). |
+
+   Which records a node serves:
+   - **v11:** none. Every accepted registry and re-seal is unread (exit 3); an accepted admin rotation is `FOUND`.
+   - **The first v12 release (f15ffe5):** serves the admin record (`/certen/admin_set`), so re-seals and admin rotations
+     are checked against it. It does not serve the registry log, so every accepted registry is unread (exit 3).
+   - **This release (with `/certen/bls_registry`):** serves both. A complete chain exits 0.
+
+   An unread record is never a pass. Every v12 node checks every acceptance against its own ledger when it starts, and
+   refuses to start on one without its record.
+
+   Live facts for certen-testnet:
+   - The admin record holds the re-seal change at height 2788 (code 0), which the check finds.
+   - Registry version 1 at height 2790 (code 0) cannot be read over RPC until this release is deployed, so against
+     f15ffe5 the check exits 3 with that registry listed. Its record is evidenced by every intent certificate since
+     height 2791, each verified against that registry.
+   - After this release is deployed, the same command must exit 0.
 2. **Deploy all 7 together.** Stop every validator, install the v12 binary, and start every validator. Nodes on
    different rules judge admin signatures differently, so the fleet must never run mixed versions while
    admin-signed transactions flow.

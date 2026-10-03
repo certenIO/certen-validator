@@ -419,7 +419,7 @@ func (app *ValidatorApp) kindViolation(height int64, i int, tx []byte, code uint
 // re-seal's and every admin rotation's record, and the schedule) and the BLS registry log.
 type CommittedRecords struct {
 	Policy   *ledger.EntitlementPolicyState // nil: the chain sealed none
-	Registry *ledger.BLSRegistryLog
+	Registry *ledger.BLSRegistryLog         // nil: the registry log could not be read (every accepted registry is then unread)
 }
 
 // committedRecords reads this node's committed records.
@@ -458,15 +458,15 @@ func kindViolationWith(height int64, i int, tx []byte, code uint32,
 			if err != nil {
 				return "", true, "", fmt.Errorf("the committed records, to check the BLS registry at height %d: %w", height, err)
 			}
-			if rec == nil {
+			// No records, or records without the registry log (a node of the first v12 release serves the admin record
+			// but not the registry log): the registry's record could not be read - listed as such, never passed.
+			if rec == nil || rec.Registry == nil {
 				return "", true, fmt.Sprintf("height %d tx %d: an accepted BLS registry (version %d) whose record could not be read",
 					height, i, rt.Version), nil
 			}
-			if rec.Registry != nil {
-				for _, r := range rec.Registry.Versions {
-					if r.Version == rt.Version && r.Height == height && r.ID == rt.RegistryID() {
-						return "", true, "", nil
-					}
+			for _, r := range rec.Registry.Versions {
+				if r.Version == rt.Version && r.Height == height && r.ID == rt.RegistryID() {
+					return "", true, "", nil
 				}
 			}
 			return fmt.Sprintf("height %d tx %d is a BLS registry (version %d) that was accepted, but the committed registry "+

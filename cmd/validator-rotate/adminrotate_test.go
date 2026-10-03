@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -28,11 +29,14 @@ type fakeAdminNode struct {
 	height     int64
 	policy     *ledger.EntitlementPolicyState
 	registry   *ledger.BLSRegistryLog // /certen/bls_registry; nil serves an empty log
-	validators int
-	reply      string // broadcast_tx_commit's result; "" = accept at height+1 and record the rotation
-	broadcasts int
-	blocks     map[int64][][]byte
-	codes      map[int64][]uint32
+	// noRegistryQuery models a node of the first v12 release (f15ffe5), which serves /certen/admin_set but not
+	// /certen/bls_registry.
+	noRegistryQuery bool
+	validators      int
+	reply           string // broadcast_tx_commit's result; "" = accept at height+1 and record the rotation
+	broadcasts      int
+	blocks          map[int64][][]byte
+	codes           map[int64][]uint32
 }
 
 func (n *fakeAdminNode) serve(t *testing.T) *httptest.Server {
@@ -66,7 +70,7 @@ func (n *fakeAdminNode) serve(t *testing.T) *httptest.Server {
 			var value []byte
 			switch req.Params["path"] {
 			case "/certen/bls_registry":
-				if n.appVersion < "12" {
+				if n.appVersion < "12" || n.noRegistryQuery {
 					write(map[string]any{"response": map[string]any{"code": 2, "log": "unknown query path: /certen/bls_registry"}})
 					return
 				}
@@ -346,7 +350,8 @@ func TestHistoryCheckFindsAPolicyAcceptedAgain(t *testing.T) {
 }
 
 // An accepted BLS registry with no record in the committed registry log is FOUND against a v12 node; with its record it
-// passes; against a v11 node, which serves no records, it is listed as not read - never reported as checked.
+// passes; against a v11 node, which serves no records, it is listed as not read and the check exits incomplete (3) -
+// never reported as checked.
 func TestHistoryCheckRequiresTheRecordOfEveryAcceptance(t *testing.T) {
 	reg := &consensus.BLSRegistryTx{Kind: consensus.BLSRegistryKind, ChainID: chain, Version: 1, ThresholdNumerator: 2,
 		ThresholdDenominator: 3, AccumulateIncarnation: "0x" + strings.Repeat("ab", 32)}
@@ -367,7 +372,63 @@ func TestHistoryCheckRequiresTheRecordOfEveryAcceptance(t *testing.T) {
 	}
 	n.appVersion = "11"
 	out, err = captureOutput(t, func() error { return historyCheck([]string{"--rules", "12", "--rpc", srv.URL}, srv.Client()) })
-	if err != nil || !strings.Contains(out, "RECORD NOT READ") || strings.Contains(out, "history exactly") {
+	if historyExit(err) != 3 || !strings.Contains(out, "RECORD NOT READ") || strings.Contains(out, "history exactly") {
 		t.Fatalf("against a v11 node: %v\n%s", err, out)
+	}
+}
+
+// historyExit is the exit code a history-check error carries (0 for none).
+func historyExit(err error) int {
+	if err == nil {
+		return 0
+	}
+	var ce *checkExit
+	if errors.As(err, &ce) {
+		return ce.code
+	}
+	return 1
+}
+
+// A node of the first v12 release serves /certen/admin_set but not /certen/bls_registry. The check still runs:
+// re-seals and admin rotations are judged against the admin record - a re-seal without its record is FOUND (exit 4) -
+// every accepted registry is listed by name as RECORD NOT READ with the reason, the "exactly" line is withheld, and the
+// tool exits 3: incomplete, nothing found wrong. Never 0, and never the failure exit.
+func TestHistoryCheckAgainstAV12NodeWithoutTheRegistryQuery(t *testing.T) {
+	reg := &consensus.BLSRegistryTx{Kind: consensus.BLSRegistryKind, ChainID: chain, Version: 1, ThresholdNumerator: 2,
+		ThresholdDenominator: 3, AccumulateIncarnation: "0x" + strings.Repeat("ab", 32)}
+	regRaw, _ := json.Marshal(reg)
+	reseal := consensus.NewAdminResealTx(chain)
+	resealRaw, _ := json.Marshal(reseal)
+	policy := &ledger.EntitlementPolicyState{Mode: "off", AdminKeys: map[string]string{"ops-1": strings.Repeat("11", 32)}, AdminThreshold: 1,
+		AdminReseals: []ledger.AdminReseal{{Height: 1, ID: reseal.ResealID(), Keys: reseal.AdminKeys, Threshold: reseal.AdminThreshold}}}
+	n := &fakeAdminNode{appVersion: "12", chainID: chain, height: 2, validators: 1, policy: policy, noRegistryQuery: true,
+		blocks: map[int64][][]byte{1: {resealRaw}, 2: {regRaw}}, codes: map[int64][]uint32{1: {0}, 2: {0}}}
+	srv := n.serve(t)
+	defer srv.Close()
+	out, err := captureOutput(t, func() error { return historyCheck([]string{"--rules", "12", "--rpc", srv.URL}, srv.Client()) })
+	if historyExit(err) != 3 || !strings.Contains(out, "RECORD NOT READ") || !strings.Contains(out, "BLS registry (version 1)") ||
+		!strings.Contains(out, "predates the registry query") || strings.Contains(out, "history exactly") || strings.Contains(out, "FOUND") {
+		t.Fatalf("a v12 node without the registry query: exit %d (%v)\n%s", historyExit(err), err, out)
+	}
+	// The re-seal is still checked against the admin record: without its record it is FOUND, the failure exit.
+	bare := *policy
+	bare.AdminReseals = nil
+	n.policy = &bare
+	out, err = captureOutput(t, func() error { return historyCheck([]string{"--rules", "12", "--rpc", srv.URL}, srv.Client()) })
+	if historyExit(err) != 4 || !strings.Contains(out, "FOUND") || !strings.Contains(out, "admin re-seal that was accepted") {
+		t.Fatalf("a re-seal without its record on that node: exit %d (%v)\n%s", historyExit(err), err, out)
+	}
+	// A node that serves both queries and holds both records: verified, exit 0.
+	n.policy, n.noRegistryQuery = policy, false
+	n.registry = &ledger.BLSRegistryLog{Versions: []ledger.BLSRegistryRecord{{Version: 1, Height: 2, ID: reg.RegistryID()}}}
+	out, err = captureOutput(t, func() error { return historyCheck([]string{"--rules", "12", "--rpc", srv.URL}, srv.Client()) })
+	if historyExit(err) != 0 || !strings.Contains(out, "v12 continues this chain's history exactly") {
+		t.Fatalf("a node with both records: exit %d (%v)\n%s", historyExit(err), err, out)
+	}
+	// A v11 node serves no records: incomplete (3), never verified.
+	n.appVersion = "11"
+	out, err = captureOutput(t, func() error { return historyCheck([]string{"--rules", "12", "--rpc", srv.URL}, srv.Client()) })
+	if historyExit(err) != 3 || strings.Contains(out, "history exactly") || !strings.Contains(out, "serves no committed records") {
+		t.Fatalf("a v11 node: exit %d (%v)\n%s", historyExit(err), err, out)
 	}
 }

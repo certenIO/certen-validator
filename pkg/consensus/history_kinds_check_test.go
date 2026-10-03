@@ -149,3 +149,25 @@ func TestAnAcceptedReSealWithoutItsRecordIsRefused(t *testing.T) {
 		t.Fatalf("records not read: %v %v %v", v, u, err)
 	}
 }
+
+// Records without the registry log (a node of the first v12 release serves the admin record, not the log) leave every
+// accepted registry unread - never passed, never refused for want of a log nobody read - while re-seals are still
+// checked against the admin record. An empty log that WAS read is a log without the record: refused.
+func TestARegistryLogNotReadIsUnreadNotMissing(t *testing.T) {
+	f := newRegistryFixture(t)
+	reg := f.registry(1, "ops-1", "ops-2")
+	raw := rotJSON(t, reg)
+	_, to, _ := resealSets(f.rotationFixture)
+	reseal := resealFor(to, rotChain)
+	resealRaw := rotJSON(t, reseal)
+	policy := &ledger.EntitlementPolicyState{AdminKeys: f.policy.AdminKeys, AdminThreshold: 2}
+	v, u, err := CommittedBlockViolations(1, [][]byte{raw, resealRaw}, []uint32{0, 0}, &CommittedRecords{Policy: policy})
+	if err != nil || len(u) != 1 || !strings.Contains(u[0], "BLS registry (version 1)") || len(v) != 1 ||
+		!strings.Contains(v[0], "admin re-seal that was accepted") {
+		t.Fatalf("no registry log read: violations %v unread %v %v", v, u, err)
+	}
+	if v, u, err := CommittedBlockViolations(1, [][]byte{raw}, []uint32{0}, &CommittedRecords{Policy: policy,
+		Registry: &ledger.BLSRegistryLog{}}); err != nil || len(v) != 1 || len(u) != 0 {
+		t.Fatalf("a read registry log without the record: violations %v unread %v %v", v, u, err)
+	}
+}

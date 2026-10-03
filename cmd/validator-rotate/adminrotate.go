@@ -467,6 +467,8 @@ func historyCheckV12(rpc string, c rpcDoer) error {
 	if earliest != 1 {
 		return fmt.Errorf("this node's history starts at block %d, not 1: the check needs every block", earliest)
 	}
+	// Why the records of some acceptances cannot be read from this node, if they cannot.
+	unreadReason := fmt.Sprintf("this node runs rules v%d and serves no committed records", n.appVersion)
 	var records *consensus.CommittedRecords
 	if n.appVersion >= adminRotateRulesVersion {
 		v, err := readAdminSetView(c, rpc)
@@ -474,7 +476,13 @@ func historyCheckV12(rpc string, c rpcDoer) error {
 			return err
 		}
 		registry, err := readBLSRegistryLog(c, rpc)
-		if err != nil {
+		switch {
+		case errors.Is(err, errQueryNotServed):
+			// The first v12 release (f15ffe5) serves the admin record but not the registry log: re-seals and admin
+			// rotations are still checked against the admin record; every accepted registry is listed as unread.
+			unreadReason = "this node runs rules v12 but predates the registry query /certen/bls_registry, so it serves the " +
+				"admin record (re-seals and admin rotations are checked against it) but not the registry log"
+		case err != nil:
 			return err
 		}
 		records = &consensus.CommittedRecords{Policy: v.Policy(), Registry: registry}
@@ -554,21 +562,25 @@ func historyCheckV12(rpc string, c rpcDoer) error {
 		for _, f := range found {
 			fmt.Println("  FOUND:", f)
 		}
-		return errors.New("the chain holds history rules v12 decide differently: v12 must NOT continue this state")
+		return &checkExit{code: exitHistoryFound, msg: "FOUND: the chain holds history rules v12 decide differently: v12 must NOT continue this state"}
 	}
 	if len(unread) > 0 {
 		for _, u := range unread {
-			fmt.Println("  RECORD NOT READ:", u)
+			fmt.Printf("  RECORD NOT READ: %s - %s\n", u, unreadReason)
 		}
-		fmt.Printf("no transaction rules v12 decide differently by its result codes; this node runs rules v%d and serves "+
-			"no committed records, so the %d acceptance(s) above are NOT checked against their records here - every v12 "+
-			"node checks each against its own ledger when it starts, and refuses to start on one without its record\n",
-			n.appVersion, len(unread))
-		return nil
+		fmt.Printf("INCOMPLETE, NOT VERIFIED: nothing found that rules v12 decide differently, but the %d acceptance(s) above "+
+			"were not checked against their records here (%s). Every v12 node checks each against its own ledger when it "+
+			"starts and refuses to start on one without its record; run this again against a node that serves the records.\n",
+			len(unread), unreadReason)
+		return &checkExit{code: exitHistoryIncomplete, msg: fmt.Sprintf("INCOMPLETE: %d record(s) not read; nothing found wrong, "+
+			"history NOT verified", len(unread))}
 	}
 	fmt.Println("no transaction rules v12 decide differently: v12 continues this chain's history exactly")
 	return nil
 }
+
+// errQueryNotServed is a node answering that it does not know a query path: it predates that query.
+var errQueryNotServed = errors.New("the node does not serve this query")
 
 // readBLSRegistryLog reads a node's committed BLS registry log (/certen/bls_registry).
 func readBLSRegistryLog(c rpcDoer, base string) (*ledger.BLSRegistryLog, error) {
@@ -581,6 +593,9 @@ func readBLSRegistryLog(c rpcDoer, base string) (*ledger.BLSRegistryLog, error) 
 	}
 	if err := rpcCall(c, base, "abci_query", map[string]any{"path": "/certen/bls_registry"}, &q); err != nil {
 		return nil, err
+	}
+	if q.Response.Code == 2 && strings.HasPrefix(q.Response.Log, "unknown query path") {
+		return nil, fmt.Errorf("%s: %w (%s)", base, errQueryNotServed, q.Response.Log)
 	}
 	if q.Response.Code != 0 {
 		return nil, fmt.Errorf("%s: the BLS registry log is not available (%s)", base, q.Response.Log)
@@ -595,3 +610,22 @@ func readBLSRegistryLog(c rpcDoer, base string) (*ledger.BLSRegistryLog, error) 
 	}
 	return &l, nil
 }
+
+// checkExit is a history check's outcome other than verified, with the process exit code it maps to:
+//
+//	0  verified: every check made and nothing found
+//	1  the check could not run (an RPC or read error)
+//	3  incomplete: nothing found wrong, but some records could not be read here - NOT verified
+//	4  FOUND: history the rules do not reproduce
+type checkExit struct {
+	code int
+	msg  string
+}
+
+func (e *checkExit) Error() string { return e.msg }
+
+// Exit codes of history-check (checkExit).
+const (
+	exitHistoryIncomplete = 3
+	exitHistoryFound      = 4
+)

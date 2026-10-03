@@ -39,6 +39,8 @@
 //	    Read every committed block and its result codes and judge them as a v12 node does before it starts:
 //	    no transaction of a kind v10-v12 added decided the older way, no block with two accepted validator
 //	    rotations. Run against the live chain before deploying v12; every node repeats it when it starts.
+//	    Exit 0: verified. 3: INCOMPLETE - nothing found wrong, but some records could not be read from this node
+//	    (NOT verified). 4: FOUND. 1: the check could not run.
 //
 //	validator-rotate admin-rotate keygen|status|request|possess|sign|preflight|submit
 //	    Rotate CERTEN's admin set with the admin quorum in force (rules v12; adminrotate.go).
@@ -123,6 +125,12 @@ func main() {
 		os.Exit(2)
 	}
 	if err != nil {
+		// A history check that ran to its end exits with its own code (checkExit): 3 incomplete, 4 FOUND.
+		var ce *checkExit
+		if errors.As(err, &ce) {
+			fmt.Fprintln(os.Stderr, ce.msg)
+			os.Exit(ce.code)
+		}
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
