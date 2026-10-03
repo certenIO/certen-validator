@@ -238,8 +238,10 @@ func TestTheChainRecordsItsBLSRegistry(t *testing.T) {
 	}
 }
 
-// History holding a registry-kind transaction decided v9's way (code 2) is refused at start; one decided v10's
-// way is not.
+// History holding a registry-kind transaction decided v9's way (code 2) is refused at start. One v10 ACCEPTED (code 0)
+// is history only when the committed registry log records it - at that height, under that version and id: an
+// acceptance with no record is divergent or corrupt state and is refused by name. (This test used to pass an accepted
+// registry with no record at all - the defect it now refuses.) One v10 refused (code 9) needs no record.
 func TestHistoryWithARegistryV9RefusedIsNotContinued(t *testing.T) {
 	f := newRegistryFixture(t)
 	app, _ := rotationApp(t, f.rotationFixture)
@@ -248,7 +250,22 @@ func TestHistoryWithARegistryV9RefusedIsNotContinued(t *testing.T) {
 	if err != nil || len(violations) != 1 {
 		t.Fatalf("v9-decided registry in history: %v %v", violations, err)
 	}
+	_, violations, err = app.historicalOperations(3, time.Unix(1_800_000_003, 0), [][]byte{b}, []uint32{0})
+	if err != nil || len(violations) != 1 || !strings.Contains(violations[0], "holds no record of it") {
+		t.Fatalf("an accepted registry with no record in history: %v %v", violations, err)
+	}
+	if _, violations, err = app.historicalOperations(3, time.Unix(1_800_000_003, 0), [][]byte{b}, []uint32{codeBLSRegistryRefused}); err != nil || len(violations) != 0 {
+		t.Fatalf("a v10-refused registry in history: %v %v", violations, err)
+	}
+	// Accepted at height 3 by the chain itself, the record is there and the same history passes.
+	if r := finalize(t, app, 3, abcitypes.CommitInfo{}, b); r.TxResults[0].Code != 0 {
+		t.Fatalf("the registry: %s", r.TxResults[0].Log)
+	}
 	if _, violations, err = app.historicalOperations(3, time.Unix(1_800_000_003, 0), [][]byte{b}, []uint32{0}); err != nil || len(violations) != 0 {
-		t.Fatalf("v10-decided registry in history: %v %v", violations, err)
+		t.Fatalf("an accepted registry with its record in history: %v %v", violations, err)
+	}
+	// Recorded at another height, or another version's record, is not its record.
+	if _, violations, err = app.historicalOperations(4, time.Unix(1_800_000_004, 0), [][]byte{b}, []uint32{0}); err != nil || len(violations) != 1 {
+		t.Fatalf("an accepted registry whose record is at another height: %v %v", violations, err)
 	}
 }

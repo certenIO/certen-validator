@@ -17,6 +17,7 @@ import (
 	"time"
 
 	abcitypes "github.com/cometbft/cometbft/abci/types"
+	sm "github.com/cometbft/cometbft/state"
 	cmttypes "github.com/cometbft/cometbft/types"
 
 	"github.com/certen/independant-validator/pkg/ledger"
@@ -249,6 +250,22 @@ func TestAdminRotationRehearsalOnALiveNetwork(t *testing.T) {
 		t.Fatalf("status: %s", status)
 	}
 
+	// Every node's whole committed chain passes the record check v12 runs at start: two admin rotations and two
+	// registries accepted, each found in its record.
+	waitNetwork(t, "every node to commit the last registry", 30*time.Second, func() bool {
+		for _, n := range nodes {
+			if n.height() < nodes[0].height() {
+				return false
+			}
+		}
+		return true
+	})
+	for _, n := range nodes {
+		if got := checkLiveHistory(t, n); got != 4 {
+			t.Fatalf("%s: %d accepted registries and admin rotations found in their records, want 4", n.name, got)
+		}
+	}
+
 	// 6. The whole fleet restarts and carries on, its state v12's, every node answering the third set.
 	for _, n := range nodes {
 		n.stop(t)
@@ -313,4 +330,51 @@ func TestAdminRotationRehearsalOnALiveNetwork(t *testing.T) {
 			t.Fatalf("%s's app hash %s is not %s's %s", n.name, got, nodes[0].name, first)
 		}
 	}
+}
+
+// checkLiveHistory runs the history check every v12 node runs at start over a rehearsal node's whole committed chain -
+// its block store, the result codes CometBFT stored, and the node's committed records - and returns how many accepted
+// registries, re-seals and admin rotations it found in their records. Nothing may be refused or left unread.
+func checkLiveHistory(t *testing.T, n *rehearsalNode) int {
+	t.Helper()
+	store := ledger.NewLedgerStore(n.kv)
+	policy, err := store.LoadEntitlementPolicy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err := store.LoadBLSRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := &CommittedRecords{Policy: policy, Registry: registry}
+	hist := storeHistory{blocks: n.node.BlockStore(), results: sm.NewStore(n.dbs["state"], sm.StoreOptions{})}
+	// A block is in the block store just before CometBFT stores its results: wait until the newest one has them.
+	waitNetwork(t, n.name+"'s newest block to have its results", 30*time.Second, func() bool {
+		_, err := hist.ResultCodes(hist.Height())
+		return err == nil
+	})
+	accepted := 0
+	for h := hist.Base(); h <= hist.Height(); h++ {
+		txs, _, err := hist.Block(h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		codes, err := hist.ResultCodes(h)
+		if err != nil {
+			t.Fatalf("%s: results of block %d: %v", n.name, h, err)
+		}
+		v, u, err := CommittedBlockViolations(h, txs, codes, records)
+		if err != nil || len(v) != 0 || len(u) != 0 {
+			t.Fatalf("%s: block %d: %v %v %v", n.name, h, v, u, err)
+		}
+		for i, tx := range txs {
+			_, isRegistry := DecodeBLSRegistry(tx)
+			_, isReseal := DecodeAdminReseal(tx)
+			_, isRotation := DecodeAdminRotate(tx)
+			if codes[i] == 0 && (isRegistry || isReseal || isRotation) {
+				accepted++
+			}
+		}
+	}
+	return accepted
 }

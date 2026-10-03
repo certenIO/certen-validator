@@ -183,7 +183,9 @@ const (
 	// v12 CONTINUES v7..v11 state without a reset: the kind is new, so no committed history contains it, and that is
 	// checked, not assumed - IndexCommittedHistory refuses to start on any committed admin-rotation-kind transaction that
 	// v12 did not decide (a ValidatorBlock's code, or an acceptance with no rotation recorded for it). Every other kind
-	// is decided exactly as v11 decided it. The state stays stamped with the older version until a block accepts or
+	// is decided exactly as v11 decided it. Every accepted registry, re-seal and admin rotation must also be found in the
+	// committed records at its height under its id: an acceptance without its record is divergent or corrupt state, and
+	// the node refuses to start on it. The state stays stamped with the older version until a block accepts or
 	// refuses an admin rotation (committedRulesVersion).
 	executionRulesV12 uint64 = 12
 

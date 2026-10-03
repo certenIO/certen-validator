@@ -27,6 +27,7 @@ type fakeAdminNode struct {
 	chainID    string
 	height     int64
 	policy     *ledger.EntitlementPolicyState
+	registry   *ledger.BLSRegistryLog // /certen/bls_registry; nil serves an empty log
 	validators int
 	reply      string // broadcast_tx_commit's result; "" = accept at height+1 and record the rotation
 	broadcasts int
@@ -64,6 +65,16 @@ func (n *fakeAdminNode) serve(t *testing.T) *httptest.Server {
 		case "abci_query":
 			var value []byte
 			switch req.Params["path"] {
+			case "/certen/bls_registry":
+				if n.appVersion < "12" {
+					write(map[string]any{"response": map[string]any{"code": 2, "log": "unknown query path: /certen/bls_registry"}})
+					return
+				}
+				l := n.registry
+				if l == nil {
+					l = &ledger.BLSRegistryLog{}
+				}
+				value, _ = json.Marshal(l)
 			case "/certen/validator_rotations":
 				value, _ = json.Marshal(ledger.ValidatorRotationLog{})
 			case "/certen/admin_set":
@@ -331,5 +342,32 @@ func TestHistoryCheckFindsAPolicyAcceptedAgain(t *testing.T) {
 	n.codes[2] = []uint32{5}
 	if err := historyCheck([]string{"--rules", "12", "--rpc", srv.URL}, srv.Client()); err != nil {
 		t.Fatalf("refused a block later, and accepted twice within its own block: %v", err)
+	}
+}
+
+// An accepted BLS registry with no record in the committed registry log is FOUND against a v12 node; with its record it
+// passes; against a v11 node, which serves no records, it is listed as not read - never reported as checked.
+func TestHistoryCheckRequiresTheRecordOfEveryAcceptance(t *testing.T) {
+	reg := &consensus.BLSRegistryTx{Kind: consensus.BLSRegistryKind, ChainID: chain, Version: 1, ThresholdNumerator: 2,
+		ThresholdDenominator: 3, AccumulateIncarnation: "0x" + strings.Repeat("ab", 32)}
+	raw, _ := json.Marshal(reg)
+	policy := &ledger.EntitlementPolicyState{Mode: "off", AdminKeys: map[string]string{"ops-1": strings.Repeat("11", 32)}, AdminThreshold: 1}
+	n := &fakeAdminNode{appVersion: "12", chainID: chain, height: 1, validators: 1, policy: policy,
+		blocks: map[int64][][]byte{1: {raw}}, codes: map[int64][]uint32{1: {0}}}
+	srv := n.serve(t)
+	defer srv.Close()
+	out, err := captureOutput(t, func() error { return historyCheck([]string{"--rules", "12", "--rpc", srv.URL}, srv.Client()) })
+	if err == nil || !strings.Contains(out, "holds no record of it") {
+		t.Fatalf("an accepted registry without its record: %v\n%s", err, out)
+	}
+	n.registry = &ledger.BLSRegistryLog{Versions: []ledger.BLSRegistryRecord{{Version: 1, Height: 1, ID: reg.RegistryID()}}}
+	out, err = captureOutput(t, func() error { return historyCheck([]string{"--rules", "12", "--rpc", srv.URL}, srv.Client()) })
+	if err != nil || !strings.Contains(out, "v12 continues this chain's history exactly") {
+		t.Fatalf("an accepted registry with its record: %v\n%s", err, out)
+	}
+	n.appVersion = "11"
+	out, err = captureOutput(t, func() error { return historyCheck([]string{"--rules", "12", "--rpc", srv.URL}, srv.Client()) })
+	if err != nil || !strings.Contains(out, "RECORD NOT READ") || strings.Contains(out, "history exactly") {
+		t.Fatalf("against a v11 node: %v\n%s", err, out)
 	}
 }

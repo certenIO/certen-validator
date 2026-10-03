@@ -117,6 +117,14 @@ func TestAdminResealRehearsalOnALiveNetwork(t *testing.T) {
 		t.Fatalf("a second re-seal: code %d %s", code, logText)
 	}
 
+	// Every node's whole committed chain passes the record check v12 runs at start: the re-seal and the registry
+	// accepted, each found in its record.
+	for _, n := range nodes {
+		if got := checkLiveHistory(t, n); got != 2 {
+			t.Fatalf("%s: %d accepted re-seals and registries found in their records, want 2", n.name, got)
+		}
+	}
+
 	// 4. The whole fleet restarts and carries on, its state v11's.
 	for _, n := range nodes {
 		n.stop(t)

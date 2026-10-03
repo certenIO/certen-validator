@@ -442,9 +442,11 @@ func writeAdminRotate(tx *consensus.AdminRotateTx, path string, replace bool) er
 }
 
 // historyCheckV12 reads every committed block of the chain and its result codes and judges them as a v12 node judges
-// its history before it starts (consensus.CommittedBlockViolations). Against a v11 fleet - before the upgrade - no
-// admin rotation can be recorded, so the committed policy is not needed; against a v12 node it is read, and an
-// accepted admin rotation must be in its record.
+// its history before it starts (consensus.CommittedBlockViolations). Against a v12 node it also reads the committed
+// records - the admin record and the BLS registry log - and an accepted registry, re-seal or admin rotation without
+// its record is FOUND. A node on older rules serves no records over RPC: every acceptance whose record could not be
+// read is then listed as such - never reported as checked - and every v12 node checks it against its own ledger when
+// it starts; an accepted admin rotation, which no older node can have recorded, is FOUND.
 func historyCheckV12(rpc string, c rpcDoer) error {
 	n, err := readNode(c, rpc)
 	if err != nil {
@@ -465,17 +467,21 @@ func historyCheckV12(rpc string, c rpcDoer) error {
 	if earliest != 1 {
 		return fmt.Errorf("this node's history starts at block %d, not 1: the check needs every block", earliest)
 	}
-	var policy *ledger.EntitlementPolicyState
+	var records *consensus.CommittedRecords
 	if n.appVersion >= adminRotateRulesVersion {
 		v, err := readAdminSetView(c, rpc)
 		if err != nil {
 			return err
 		}
-		policy = v.Policy()
+		registry, err := readBLSRegistryLog(c, rpc)
+		if err != nil {
+			return err
+		}
+		records = &consensus.CommittedRecords{Policy: v.Policy(), Registry: registry}
 	}
 	kinds := map[string]int{}
 	scheduledAt := map[uint64]int64{} // policy version -> the height that accepted it first
-	var found []string
+	var found, unread []string
 	txCount := 0
 	for h := int64(1); h <= latest; h++ {
 		var blk struct {
@@ -509,11 +515,12 @@ func historyCheckV12(rpc string, c rpcDoer) error {
 		for i, r := range res.TxsResults {
 			codes[i] = r.Code
 		}
-		v, err := consensus.CommittedBlockViolations(h, txs, codes, policy)
+		v, u, err := consensus.CommittedBlockViolations(h, txs, codes, records)
 		if err != nil {
 			return err
 		}
 		found = append(found, v...)
+		unread = append(unread, u...)
 		// A policy update accepted (code 0) under a version an earlier block already scheduled: v11 accepted it as a
 		// no-op, v12 refuses it. The schedule is exactly the policy updates the chain accepted, so the blocks tell.
 		for i, raw := range txs {
@@ -549,6 +556,42 @@ func historyCheckV12(rpc string, c rpcDoer) error {
 		}
 		return errors.New("the chain holds history rules v12 decide differently: v12 must NOT continue this state")
 	}
+	if len(unread) > 0 {
+		for _, u := range unread {
+			fmt.Println("  RECORD NOT READ:", u)
+		}
+		fmt.Printf("no transaction rules v12 decide differently by its result codes; this node runs rules v%d and serves "+
+			"no committed records, so the %d acceptance(s) above are NOT checked against their records here - every v12 "+
+			"node checks each against its own ledger when it starts, and refuses to start on one without its record\n",
+			n.appVersion, len(unread))
+		return nil
+	}
 	fmt.Println("no transaction rules v12 decide differently: v12 continues this chain's history exactly")
 	return nil
+}
+
+// readBLSRegistryLog reads a node's committed BLS registry log (/certen/bls_registry).
+func readBLSRegistryLog(c rpcDoer, base string) (*ledger.BLSRegistryLog, error) {
+	var q struct {
+		Response struct {
+			Code  uint32 `json:"code"`
+			Log   string `json:"log"`
+			Value string `json:"value"`
+		} `json:"response"`
+	}
+	if err := rpcCall(c, base, "abci_query", map[string]any{"path": "/certen/bls_registry"}, &q); err != nil {
+		return nil, err
+	}
+	if q.Response.Code != 0 {
+		return nil, fmt.Errorf("%s: the BLS registry log is not available (%s)", base, q.Response.Log)
+	}
+	raw, err := base64.StdEncoding.DecodeString(q.Response.Value)
+	if err != nil {
+		return nil, err
+	}
+	var l ledger.BLSRegistryLog
+	if err := json.Unmarshal(raw, &l); err != nil {
+		return nil, fmt.Errorf("%s: unreadable BLS registry log: %w", base, err)
+	}
+	return &l, nil
 }

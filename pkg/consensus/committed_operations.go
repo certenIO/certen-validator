@@ -406,90 +406,153 @@ func isValidatorBlockTx(tx []byte) bool {
 }
 
 // kindViolation judges one committed transaction of a kind a rules version after v9 added - the BLS registry (v10),
-// the admin re-seal (v11), the admin rotation (v12) - against what this binary decides for it. isKind says whether the
-// transaction is one of those kinds; violation, when not empty, says how its recorded outcome is one this binary does
-// not reproduce: the version before each judged those bytes as a ValidatorBlock, with a ValidatorBlock's code.
+// the admin re-seal (v11), the admin rotation (v12) - and a policy update, against what this binary decides for it.
+// isKind says whether the transaction is one of those kinds; violation, when not empty, says how its recorded outcome
+// is one this binary does not reproduce: the version before judged those bytes as a ValidatorBlock, with a
+// ValidatorBlock's code - or it was accepted and the committed state holds no record of it.
 func (app *ValidatorApp) kindViolation(height int64, i int, tx []byte, code uint32) (violation string, isKind bool, err error) {
-	return kindViolationWith(height, i, tx, code, app.ledgerStore.LoadEntitlementPolicy)
+	v, isKind, _, err := kindViolationWith(height, i, tx, code, app.committedRecords)
+	return v, isKind, err
 }
 
-// kindViolationWith is kindViolation with the committed policy read through policy, only when an accepted admin rotation
-// has to be found in its record.
+// CommittedRecords is the committed state a history check finds an accepted transaction's record in: the policy (the
+// re-seal's and every admin rotation's record, and the schedule) and the BLS registry log.
+type CommittedRecords struct {
+	Policy   *ledger.EntitlementPolicyState // nil: the chain sealed none
+	Registry *ledger.BLSRegistryLog
+}
+
+// committedRecords reads this node's committed records.
+func (app *ValidatorApp) committedRecords() (*CommittedRecords, error) {
+	policy, err := app.ledgerStore.LoadEntitlementPolicy()
+	if err != nil {
+		return nil, fmt.Errorf("the committed policy: %w", err)
+	}
+	registry, err := app.ledgerStore.LoadBLSRegistry()
+	if err != nil {
+		return nil, fmt.Errorf("the BLS registry log: %w", err)
+	}
+	return &CommittedRecords{Policy: policy, Registry: registry}, nil
+}
+
+// kindViolationWith is kindViolation with the committed records read through records, only when an acceptance has to
+// be found in them. records answers nil when they cannot be read (a node on rules before v12 serves neither over
+// RPC): an accepted registry or re-seal is then reported in unchecked - never passed as checked; an accepted admin
+// rotation, which no such node can have recorded, is a violation.
 func kindViolationWith(height int64, i int, tx []byte, code uint32,
-	policy func() (*ledger.EntitlementPolicyState, error)) (violation string, isKind bool, err error) {
-	if _, ok := DecodeBLSRegistry(tx); ok {
+	records func() (*CommittedRecords, error)) (violation string, isKind bool, unchecked string, err error) {
+	if rt, ok := DecodeBLSRegistry(tx); ok {
 		// v9 judged a registry-kind transaction as a ValidatorBlock and refused it with code 2; v10 accepts it or
-		// refuses it with code 9. History holding one decided v9's way is history v10 does not reproduce.
+		// refuses it with code 9. History holding one decided v9's way is history v10 does not reproduce. Accepted, it
+		// is recorded at its height under its version and id: an acceptance without that record is divergent or corrupt
+		// state, never history to continue.
 		switch {
 		case code == 2:
 			return fmt.Sprintf("height %d tx %d is a BLS registry transaction that v9 judged as a ValidatorBlock (code 2); "+
-				"v10 decides it as a registry", height, i), true, nil
+				"v10 decides it as a registry", height, i), true, "", nil
 		case code != 0 && code != codeBLSRegistryRefused:
 			return fmt.Sprintf("height %d tx %d is a BLS registry transaction decided with code %d, which v10 never "+
-				"returns for one (it accepts, or refuses with code %d)", height, i, code, codeBLSRegistryRefused), true, nil
+				"returns for one (it accepts, or refuses with code %d)", height, i, code, codeBLSRegistryRefused), true, "", nil
+		case code == 0:
+			rec, err := records()
+			if err != nil {
+				return "", true, "", fmt.Errorf("the committed records, to check the BLS registry at height %d: %w", height, err)
+			}
+			if rec == nil {
+				return "", true, fmt.Sprintf("height %d tx %d: an accepted BLS registry (version %d) whose record could not be read",
+					height, i, rt.Version), nil
+			}
+			if rec.Registry != nil {
+				for _, r := range rec.Registry.Versions {
+					if r.Version == rt.Version && r.Height == height && r.ID == rt.RegistryID() {
+						return "", true, "", nil
+					}
+				}
+			}
+			return fmt.Sprintf("height %d tx %d is a BLS registry (version %d) that was accepted, but the committed registry "+
+				"log holds no record of it at that height: an acceptance without its record is divergent or corrupt state",
+				height, i, rt.Version), true, "", nil
 		}
-		return "", true, nil
+		return "", true, "", nil
 	}
-	if _, ok := DecodeAdminReseal(tx); ok {
+	if rs, ok := DecodeAdminReseal(tx); ok {
 		// v10 judged an admin-re-seal-kind transaction as a ValidatorBlock and refused it with code 2; v11 accepts it or
-		// refuses it with code 11. History holding one decided v10's way is history v11 does not reproduce.
+		// refuses it with code 11. History holding one decided v10's way is history v11 does not reproduce. Accepted, it
+		// is recorded at its height under its id: an acceptance without that record is divergent or corrupt state.
 		switch {
 		case code == 2:
 			return fmt.Sprintf("height %d tx %d is an admin re-seal that v10 judged as a ValidatorBlock (code 2); "+
-				"v11 decides it as a re-seal", height, i), true, nil
+				"v11 decides it as a re-seal", height, i), true, "", nil
 		case code != 0 && code != codeAdminResealRefused:
 			return fmt.Sprintf("height %d tx %d is an admin re-seal decided with code %d, which v11 never returns for "+
-				"one (it accepts, or refuses with code %d)", height, i, code, codeAdminResealRefused), true, nil
+				"one (it accepts, or refuses with code %d)", height, i, code, codeAdminResealRefused), true, "", nil
+		case code == 0:
+			rec, err := records()
+			if err != nil {
+				return "", true, "", fmt.Errorf("the committed records, to check the admin re-seal at height %d: %w", height, err)
+			}
+			if rec == nil {
+				return "", true, fmt.Sprintf("height %d tx %d: an accepted admin re-seal whose record could not be read", height, i), nil
+			}
+			if rec.Policy != nil {
+				for _, r := range rec.Policy.AdminReseals {
+					if r.Kind == "" && r.Height == height && r.ID == rs.ResealID() {
+						return "", true, "", nil
+					}
+				}
+			}
+			return fmt.Sprintf("height %d tx %d is an admin re-seal that was accepted, but the committed policy holds no "+
+				"record of it at that height: an acceptance without its record is divergent or corrupt state", height, i), true, "", nil
 		}
-		return "", true, nil
+		return "", true, "", nil
 	}
 	if pu, ok := DecodePolicyUpdate(tx); ok {
 		// v11 accepted (code 0) a policy update whose version an earlier block had scheduled, as a no-op; v12 refuses it
 		// (code 5). History holding one accepted that way is history v12 does not reproduce.
 		if code != 0 {
-			return "", true, nil
+			return "", true, "", nil
 		}
-		state, err := policy()
+		rec, err := records()
 		if err != nil {
-			return "", true, fmt.Errorf("the committed policy, to check the policy update at height %d: %w", height, err)
+			return "", true, "", fmt.Errorf("the committed records, to check the policy update at height %d: %w", height, err)
 		}
-		if state != nil {
-			for _, e := range state.Schedule {
+		if rec != nil && rec.Policy != nil {
+			for _, e := range rec.Policy.Schedule {
 				if e.Version == pu.Version && e.ProposedAtHeight < height {
 					return fmt.Sprintf("height %d tx %d is a policy update accepted again: version %d was scheduled at height %d, "+
-						"and v12 refuses it", height, i, pu.Version, e.ProposedAtHeight), true, nil
+						"and v12 refuses it", height, i, pu.Version, e.ProposedAtHeight), true, "", nil
 				}
 			}
 		}
-		return "", true, nil
+		return "", true, "", nil
 	}
 	if ar, ok := DecodeAdminRotate(tx); ok {
 		// v11 judged an admin-rotation-kind transaction as a ValidatorBlock. v12 refuses one with code 12 - a code no
 		// earlier version returns - or accepts it and records it, at its height, under its id. Anything else is a
-		// ValidatorBlock's verdict, which v12 does not reproduce.
+		// ValidatorBlock's verdict, which v12 does not reproduce; an acceptance without its record is divergent or corrupt.
 		switch code {
 		case codeAdminRotateRefused:
-			return "", true, nil
+			return "", true, "", nil
 		case 0:
-			state, err := policy()
+			rec, err := records()
 			if err != nil {
-				return "", true, fmt.Errorf("the committed policy, to check the admin rotation at height %d: %w", height, err)
+				return "", true, "", fmt.Errorf("the committed records, to check the admin rotation at height %d: %w", height, err)
 			}
-			if state != nil {
-				for _, r := range state.AdminReseals {
+			if rec != nil && rec.Policy != nil {
+				for _, r := range rec.Policy.AdminReseals {
 					if r.Kind == AdminRotateKind && r.Height == height && r.ID == ar.RotationID() {
-						return "", true, nil
+						return "", true, "", nil
 					}
 				}
 			}
 			return fmt.Sprintf("height %d tx %d is an admin rotation that was accepted, but no admin rotation is recorded "+
-				"for it: v11 accepted it as a ValidatorBlock; v12 decides it as an admin rotation", height, i), true, nil
+				"for it: v11 accepted it as a ValidatorBlock; v12 decides it as an admin rotation", height, i), true, "", nil
 		default:
 			return fmt.Sprintf("height %d tx %d is an admin rotation that v11 judged as a ValidatorBlock (code %d); "+
-				"v12 decides it as an admin rotation", height, i, code), true, nil
+				"v12 decides it as an admin rotation", height, i, code), true, "", nil
 		}
 	}
-	return "", false, nil
+	return "", false, "", nil
 }
 
 // checkCommittedKinds checks every committed block above the kinds watermark (ledger KindsCheckedThrough) with
@@ -579,24 +642,29 @@ func rotationBlockVerdicts(height int64, txs [][]byte, codes []uint32) (violatio
 
 // CommittedBlockViolations judges one committed block - its transactions and the result codes it committed - the way
 // every node judges its history before it starts (IndexCommittedHistory): each transaction of a kind rules v10-v12
-// added, and the block's validator rotations as a whole. policy is the chain's committed policy (nil when none can be
-// read: an accepted admin rotation then has no record to be found in). Tools run it over a chain before an upgrade.
-func CommittedBlockViolations(height int64, txs [][]byte, codes []uint32, policy *ledger.EntitlementPolicyState) ([]string, error) {
+// added and each policy update, and the block's validator rotations as a whole. records is the chain's committed
+// records, or nil when they cannot be read (a node on rules before v12 serves none over RPC): then every accepted
+// registry and re-seal is returned in unchecked - its record is checked by every v12 node against its own ledger when
+// it starts - and an accepted admin rotation, which no such node can have recorded, is a violation. Tools run it over
+// a chain before an upgrade.
+func CommittedBlockViolations(height int64, txs [][]byte, codes []uint32, records *CommittedRecords) (violations, unchecked []string, err error) {
 	if len(codes) != len(txs) {
-		return nil, fmt.Errorf("block %d has %d transactions and %d results", height, len(txs), len(codes))
+		return nil, nil, fmt.Errorf("block %d has %d transactions and %d results", height, len(txs), len(codes))
 	}
-	var out []string
 	for i, tx := range txs {
-		v, _, err := kindViolationWith(height, i, tx, codes[i], func() (*ledger.EntitlementPolicyState, error) { return policy, nil })
+		v, _, u, err := kindViolationWith(height, i, tx, codes[i], func() (*CommittedRecords, error) { return records, nil })
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if v != "" {
-			out = append(out, v)
+			violations = append(violations, v)
+		}
+		if u != "" {
+			unchecked = append(unchecked, u)
 		}
 	}
 	found, _ := rotationBlockVerdicts(height, txs, codes)
-	return append(out, found...), nil
+	return append(violations, found...), unchecked, nil
 }
 
 // policyReplayRefused reports whether a committed block refused a policy update whose version an earlier block had
