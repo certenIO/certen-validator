@@ -77,8 +77,8 @@ operator checks the live chain beforehand (step 1).
      are checked against it. It does not serve the registry log, so every accepted registry is unread (exit 3).
    - **This release (with `/certen/bls_registry`):** serves both. A complete chain exits 0.
 
-   An unread record is never a pass. Every v12 node checks every acceptance against its own ledger when it starts, and
-   refuses to start on one without its record.
+   An unread record is never a pass. A v12 node with history-check v2 or later checks every acceptance against its own
+   ledger when it starts, and refuses to start on one without its record (step 3).
 
    Live facts for certen-testnet:
    - The admin record holds the re-seal change at height 2788 (code 0), which the check finds.
@@ -98,6 +98,39 @@ operator checks the live chain beforehand (step 1).
      registry, admin re-seal or admin rotation must be in the node's committed records, at its height under its id
      (and, for a registry, its version). An acceptance without its record is divergent or corrupt state, and the node
      refuses by name.
+
+     **When the check runs.** The "checked through" watermark is kept per rules version AND per history-check version
+     (`CommittedHistoryCheckVersion`, pkg/consensus/committed_operations.go), under the ledger key
+     `abci:kinds_checked_through:v<rules>:checks<checks>`. A binary that adds or changes a history check bumps the
+     history-check version (`TestTheHistoryCheckVersionNamesItsChecks` fails until it does), so its first start finds
+     no watermark of its own and re-checks ALL committed history once - even when the rules version is unchanged.
+     After that, the blocks it commits advance its watermark, and later starts read nothing.
+
+     This was not always so. Until history-check versions existed, the watermark was keyed by the rules version alone
+     (`abci:kinds_checked_through:v12`). The record checks above (RB5-F37, PR #106) were added without a new rules
+     version, and the production nodes had already run the earlier v12 binary, which wrote "v12 checked through 2861".
+     The PR #106 binary read that watermark, found nothing above it, and never ran the record checks against the live
+     ledger - so the claim "each node checks every acceptance when it starts" did not hold for them. The record checks
+     are history-check v2. The old key is never written or deleted again, and it is never read as a pass.
+
+     What to look for on the first start of a binary with a new history-check version (v2 here) on a node whose ledger
+     the older v12 binary already checked:
+
+     ```
+     🗂️ [HISTORY] the rules v12 watermark at height 2861 was written by a binary without history-check v2's checks; it is kept, and not read as a pass
+     🗂️ [HISTORY] checking committed heights 1-2861 for transactions of kinds rules v10-v12 added (history-check v2)
+     ✅ [HISTORY] committed heights 1-2861 hold no transaction rules v12 decide differently (history-check v2, 4.4s)
+     ```
+
+     (The heights are the node's own; the duration is measured on the node.) A start that logs neither `[HISTORY]`
+     line already holds a history-check v2 watermark at its height. A refusal is
+     `committed history that execution rules v12 do not reproduce (N): ...`, naming each block and transaction.
+
+     **How long it takes.** Measured with `BenchmarkHistoryRecheckOf2861Blocks` (pkg/consensus) on a 2,861-block
+     ledger in CometBFT's on-disk block and state stores (goleveldb), with seven 9 KiB ValidatorBlocks in every block
+     and one accepted registry - 20,028 transactions, 182 MiB, a deliberately heavy chain of certen-testnet's length - on an AMD
+     Ryzen 5 5500U laptop: 4.2-4.6 s per full re-check. The check runs before CometBFT's handshake, so the node joins
+     consensus that much later, once.
 
      certen-testnet's real history meets this by construction. The accepted re-seal (height 2788) and registry
      version 1 (height 2790) were written to the ledger in the same FinalizeBlock that returned code 0, and a failed
