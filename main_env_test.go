@@ -122,3 +122,21 @@ func TestWritebackIsConfiguredWholeOrRefused(t *testing.T) {
 		t.Fatalf("a validator without its write-back key passed the boot check: %v", err)
 	}
 }
+
+// RB5 D4: once the settlement chains are named, a chain without its outcome registry stops the boot by name.
+func TestBootRefusesASettlementChainWithoutItsOutcomeRegistry(t *testing.T) {
+	t.Setenv("ACCUMULATE_RESULTS_PRINCIPAL", "acc://certen-protocol.acme/proof-results")
+	t.Setenv("ACCUMULATE_SIGNER_URL", "acc://certen-protocol.acme/book/1")
+	t.Setenv("ACCUMULATE_WRITEBACK_PRIV_KEY", hex.EncodeToString(make([]byte, 64)))
+	t.Setenv("CERTEN_SETTLEMENT_CHAINS", "11155111,84532,421614")
+	t.Setenv("CERTEN_OUTCOME_REGISTRY_11155111", "0xd479841a17770D89Dae94B5b41C95D2117414c21")
+	t.Setenv("CERTEN_OUTCOME_REGISTRY_84532", "0xd479841a17770D89Dae94B5b41C95D2117414c21")
+	t.Setenv("CERTEN_OUTCOME_REGISTRY_421614", "")
+	if err := checkEnvironment(); err == nil || !strings.Contains(err.Error(), "CERTEN_OUTCOME_REGISTRY_421614") {
+		t.Fatalf("a settlement chain without an outcome registry passed the boot check: %v", err)
+	}
+	t.Setenv("CERTEN_OUTCOME_REGISTRY_421614", "0xbBa0a4aE0fDF5F7cFC7DE67358a32d1E82aFEE0e")
+	if err := checkEnvironment(); err != nil {
+		t.Fatalf("the production registries were refused: %v", err)
+	}
+}

@@ -1562,6 +1562,19 @@ func startValidator(
 		return nil, nil, fmt.Errorf("batch path: %w", gErr)
 	}
 	log.Printf("✅ [BATCH] settling on chains %v, each on a CertenAnchorV8_2", batchChains)
+	// Each settlement chain's CertenOutcomeRegistryV1 (CERTEN_OUTCOME_REGISTRY_<chainId>), read back through
+	// independent providers: bound to that chain's anchor, deployed on that chain (RB5 D4). Missing or wrong stops
+	// the start by name.
+	outcomeCtx, outcomeCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	outcomeChains, ocErr := execution.OutcomeChainsFromEnv(outcomeCtx, resolver, batchChains)
+	outcomeCancel()
+	if ocErr != nil {
+		return nil, nil, fmt.Errorf("batch path: %w", ocErr)
+	}
+	for _, id := range batchChains {
+		log.Printf("✅ [OUTCOME] chain %d: outcome registry %s records anchor %s", id, outcomeChains[id].Registry().Hex(),
+			outcomeChains[id].Anchor().Hex())
+	}
 	submitter := execution.NewBatchProofSubmitter(resolver, log.Printf)
 	peers := execution.BatchAttestationPeersFromEnv()
 	if len(peers) == 0 {
@@ -2324,6 +2337,19 @@ func checkEnvironment() error {
 		ethrpc.CheckEnv,
 		func() error { _, err := entitlement.StoreConfigFromEnv(); return err },
 		func() error { _, err := batchPeriodBlocksFromEnv(); return err },
+		func() error {
+			// Every chain CERTEN settles on names its outcome registry (RB5 D4). The chains themselves are checked
+			// where the batch path starts; here, once they are named, so is each registry.
+			if strings.TrimSpace(os.Getenv(execution.SettlementChainsEnv)) == "" {
+				return nil
+			}
+			chains, err := execution.SettlementChainsFromEnv(strategy.SupportedChainIDs)
+			if err != nil {
+				return err
+			}
+			_, err = execution.OutcomeRegistriesFromEnv(chains)
+			return err
+		},
 		func() error { _, err := bftTimeoutFromEnv(); return err },
 		func() error { _, err := envvar.Bool("MIGRATE_ON_START", false); return err },
 		func() error { _, err := accumulate.LogLevelFromEnv(); return err },
