@@ -222,7 +222,7 @@ type IntentDiscovery struct {
 	// Entitlement pre-screen (see entitlement_prescreen.go). Advisory only —
 	// declines work this node would otherwise do, never admits anything.
 	entitlementStore   *entitlement.Store
-	entitlementEnforce bool
+	entitlementEnforce func() bool
 
 	// on_demand consensus-bound proof retry queue (decoupled from block workers).
 	// In-session only: after a restart the rewound watermark rediscovers the intent, and a second

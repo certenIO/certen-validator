@@ -441,17 +441,29 @@ type BFTValidator struct {
 	// Entitlement gate mode, so the proposer can decline to sign locally rather
 	// than build a block the fleet will reject anyway. Purely an optimisation:
 	// the authority is the consensus rule in abci_validator.go.
-	entitlementMode EntitlementMode
+	//
+	// The mode the CHAIN enforces, read at each use (ValidatorApp.EntitlementMode): the sealed policy and every policy
+	// update activated since. It was the environment's mode, fixed at startup (RB4-F37a) - on a chain sealed observe,
+	// a node whose env said enforce refused, as not_entitled, intents the fleet would have admitted.
+	entitlementMode func() EntitlementMode
 }
 
 // SetEntitlementStore wires the entitlement snapshot used to build evidence at
-// Phase 3. Safe to leave unset: the proposer then attaches nothing, which is
+// Phase 3, and the mode the chain enforces. Safe to leave unset: the proposer then attaches nothing, which is
 // refused only if the consensus gate is enforcing.
-func (bv *BFTValidator) SetEntitlementStore(store *entitlement.Store, mode EntitlementMode) {
+func (bv *BFTValidator) SetEntitlementStore(store *entitlement.Store, mode func() EntitlementMode) {
 	bv.mu.Lock()
 	defer bv.mu.Unlock()
 	bv.entitlementStore = store
 	bv.entitlementMode = mode
+}
+
+// enforcedEntitlementMode is the mode the chain enforces now; off when none is wired.
+func (bv *BFTValidator) enforcedEntitlementMode() EntitlementMode {
+	if bv.entitlementMode == nil {
+		return EntitlementOff
+	}
+	return bv.entitlementMode()
 }
 
 // ExecutionTaskResult contains the result of BFT execution
@@ -1076,8 +1088,9 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 	if bv.entitlementStore != nil {
 		entEvidence = bv.entitlementStore.BuildEvidence(principal)
 	}
+	entMode := bv.enforcedEntitlementMode()
 
-	if bv.entitlementMode == EntitlementEnforce && entEvidence == nil {
+	if entMode == EntitlementEnforce && entEvidence == nil {
 		// Decline locally rather than build a block the fleet will reject.
 		//
 		// An optimisation, NOT the enforcement point: this validator could be
@@ -1091,7 +1104,7 @@ func (bv *BFTValidator) executeCanonicalBFTWorkflow(
 				certenIntent.IntentID, ErrNotEntitled, principal),
 		}, nil
 	}
-	if bv.entitlementMode == EntitlementObserve && entEvidence == nil {
+	if entMode == EntitlementObserve && entEvidence == nil {
 		bv.logger.Printf("👁️ [ENTITLEMENT] OBSERVE would refuse intent %s: principal %q has no entitlement evidence",
 			certenIntent.IntentID, principal)
 	}

@@ -133,6 +133,15 @@ type ValidatorApp struct {
 	blockRegistryRecords []ledger.BLSRegistryRecord
 }
 
+// EntitlementMode is the entitlement mode this chain enforces now: the sealed policy, as changed by every policy
+// update activated since - never the environment's, which is only the genesis seed (RB4-F37a). The proposer and the
+// discovery pre-screen read it at each use, so they decline exactly what the consensus gate would refuse.
+func (app *ValidatorApp) EntitlementMode() EntitlementMode {
+	app.mu.RLock()
+	defer app.mu.RUnlock()
+	return app.entitlement.Mode
+}
+
 // committedRulesVersion is the lowest rules version that reproduces the committed history, result codes
 // included (they are hashed into the next header):
 //

@@ -6,6 +6,7 @@ import (
 	abcitypes "github.com/cometbft/cometbft/abci/types"
 
 	"github.com/certen/independant-validator/pkg/ledger"
+	"github.com/certen/independant-validator/pkg/metrics"
 )
 
 // The ABCI side of policy updates. Both functions run inside FinalizeBlock and
@@ -52,6 +53,8 @@ func (app *ValidatorApp) activatePolicyForBlock(height int64, blockTimeUnix int6
 	if cfg.Mode != app.entitlement.Mode {
 		app.logger.Printf("🔐 [POLICY] rule at height %d: mode=%s (was %s) keys=%d fingerprint=%s",
 			height, cfg.Mode, app.entitlement.Mode, len(cfg.Keys), PolicyFingerprint(active))
+		// The gauge states the mode the chain enforces, so it moves when the rule does (RB4-F37a).
+		metrics.SetEntitlementMode(string(cfg.Mode))
 	}
 	app.entitlement = cfg
 }
