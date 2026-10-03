@@ -118,7 +118,7 @@ func (app *ValidatorApp) recordCommittedOperations(height int64) {
 		app.blockRulesV12Verdict = false
 	}
 	// This binary decided this block, so it holds nothing this version decides differently (checkCommittedKinds).
-	if err := app.ledgerStore.AdvanceKindsChecked(CurrentExecutionRulesVersion, height); err != nil {
+	if err := app.ledgerStore.AdvanceKindsChecked(CurrentExecutionRulesVersion, CommittedHistoryCheckVersion, height); err != nil {
 		app.logger.Fatalf("❌ [HISTORY] could not record committed block %d as checked: %v", height, err)
 	}
 }
@@ -555,29 +555,56 @@ func kindViolationWith(height int64, i int, tx []byte, code uint32,
 	return "", false, "", nil
 }
 
-// checkCommittedKinds checks every committed block above the kinds watermark (ledger KindsCheckedThrough) with
-// kindViolation, and advances the watermark to the app's height when all of them hold. Blocks this binary commits
-// advance it themselves (Commit): this version decided them. The caller holds app.mu.
+// CommittedHistoryCheckVersion names the set of checks checkCommittedKinds runs over committed history: kindViolation
+// (with kindViolationWith and committedRecords) and rotationBlockVerdicts. The kinds watermark is kept per rules version
+// AND per this version, so a binary whose checks differ re-checks the whole chain once when it starts, whether or not it
+// also changes the rules version. A watermark says "checked through height H by these checks", never by checks a later
+// binary added.
+//
+// Bump it whenever a check is added, removed or changed - TestTheHistoryCheckVersionNamesItsChecks fails until it is.
+//
+//   - 1: the checks of the binaries before this version existed, whose watermark is keyed by the rules version alone
+//     (ledger LegacyKindsCheckedThrough). That key is never written again, and nothing reads it as a pass.
+//   - 2: an accepted (code 0) BLS registry, admin re-seal or admin rotation must have its record in the committed
+//     records (RB5-F37, PR #106). That change kept rules v12, so nodes that ran the earlier v12 binary held a v12
+//     watermark at their height and never ran the record checks against their own ledger; under this key they do.
+const CommittedHistoryCheckVersion uint64 = 2
+
+// checkCommittedKinds checks every committed block above the kinds watermark (ledger KindsCheckedThrough, for this rules
+// version and CommittedHistoryCheckVersion) with kindViolation and rotationBlockVerdicts, and advances the watermark to
+// the app's height when all of them hold. Blocks this binary commits advance it themselves (Commit): this version, with
+// these checks, decided them. The caller holds app.mu.
 func (app *ValidatorApp) checkCommittedKinds(h committedHistory) error {
-	from, err := app.ledgerStore.KindsCheckedThrough(CurrentExecutionRulesVersion)
+	from, err := app.ledgerStore.KindsCheckedThrough(CurrentExecutionRulesVersion, CommittedHistoryCheckVersion)
 	if err != nil {
 		return err
 	}
 	if from >= app.latestHeight {
 		return nil
 	}
+	if from == 0 {
+		legacy, err := app.ledgerStore.LegacyKindsCheckedThrough(CurrentExecutionRulesVersion)
+		if err != nil {
+			return err
+		}
+		if legacy > 0 {
+			app.logger.Printf("🗂️ [HISTORY] the rules v%d watermark at height %d was written by a binary without history-check "+
+				"v%d's checks; it is kept, and not read as a pass", CurrentExecutionRulesVersion, legacy, CommittedHistoryCheckVersion)
+		}
+	}
 	if from == 0 && app.genesisInitialHeight > 1 {
 		from = app.genesisInitialHeight - 1
 	}
 	if base := h.Base(); from+1 < base {
 		return fmt.Errorf("the block store starts at height %d, so heights %d-%d the app committed cannot be checked "+
-			"against execution rules v%d", base, from+1, base-1, CurrentExecutionRulesVersion)
+			"against execution rules v%d (history-check v%d)", base, from+1, base-1, CurrentExecutionRulesVersion, CommittedHistoryCheckVersion)
 	}
 	if top := h.Height(); top < app.latestHeight {
 		return fmt.Errorf("the block store ends at height %d, below the app's committed height %d", top, app.latestHeight)
 	}
-	app.logger.Printf("🗂️ [HISTORY] checking committed heights %d-%d for transactions of kinds rules v10-v%d added",
-		from+1, app.latestHeight, CurrentExecutionRulesVersion)
+	app.logger.Printf("🗂️ [HISTORY] checking committed heights %d-%d for transactions of kinds rules v10-v%d added "+
+		"(history-check v%d)", from+1, app.latestHeight, CurrentExecutionRulesVersion, CommittedHistoryCheckVersion)
+	started := time.Now()
 	var violations []string
 	for height := from + 1; height <= app.latestHeight; height++ {
 		txs, _, err := h.Block(height)
@@ -607,11 +634,12 @@ func (app *ValidatorApp) checkCommittedKinds(h committedHistory) error {
 		return fmt.Errorf("%w (%d):\n  %s\nThis state was committed by rules this binary does not continue. Run the binary that "+
 			"committed it, or reset both CometBFT and the application ledger", ErrCommittedHistoryUnderCurrentRules, len(violations), strings.Join(violations, "\n  "))
 	}
-	if err := app.ledgerStore.SaveKindsCheckedThrough(CurrentExecutionRulesVersion, app.latestHeight); err != nil {
+	if err := app.ledgerStore.SaveKindsCheckedThrough(CurrentExecutionRulesVersion, CommittedHistoryCheckVersion, app.latestHeight); err != nil {
 		return err
 	}
-	app.logger.Printf("✅ [HISTORY] committed heights %d-%d hold no transaction rules v%d decide differently",
-		from+1, app.latestHeight, CurrentExecutionRulesVersion)
+	app.logger.Printf("✅ [HISTORY] committed heights %d-%d hold no transaction rules v%d decide differently "+
+		"(history-check v%d, %s)", from+1, app.latestHeight, CurrentExecutionRulesVersion, CommittedHistoryCheckVersion,
+		time.Since(started).Round(time.Millisecond))
 	return nil
 }
 

@@ -184,7 +184,7 @@ func finalize(t *testing.T, app *ValidatorApp, height int64, commit abcitypes.Co
 	return resp
 }
 
-func rotJSON(t *testing.T, v any) []byte {
+func rotJSON(t testing.TB, v any) []byte {
 	t.Helper()
 	b, err := json.Marshal(v)
 	if err != nil {

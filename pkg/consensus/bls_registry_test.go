@@ -28,7 +28,7 @@ type registryFixture struct {
 	keys []*bls.PrivateKey
 }
 
-func newRegistryFixture(t *testing.T) *registryFixture {
+func newRegistryFixture(t testing.TB) *registryFixture {
 	t.Helper()
 	f := &registryFixture{rotationFixture: newRotationFixture()}
 	for i := range liveValidatorAddresses {

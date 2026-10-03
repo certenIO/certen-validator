@@ -271,7 +271,7 @@ func startTestPersisterWith(t *testing.T, store consensusRecordStore, queueCap i
 
 // persistTestBlockJSON builds a ValidatorBlock that passes VerifyValidatorBlockInvariants (same derivation
 // as invariantValidBlockJSON) with a unique operation, real hex BLS fields and a governance level.
-func persistTestBlockJSON(t *testing.T, op, level, validatorID string) []byte {
+func persistTestBlockJSON(t testing.TB, op, level, validatorID string) []byte {
 	t.Helper()
 	vb := ValidatorBlock{
 		ValidatorID:         validatorID,

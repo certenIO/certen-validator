@@ -154,45 +154,65 @@ func (s *LedgerStore) StartCommittedOperations(initialHeight int64) error {
 	return s.kv.Set(keyCommittedOperationsUpTo, b)
 }
 
-// The kinds watermark: the height through which every committed block has been checked to hold no transaction of a
-// kind a later rules version added, decided the way the version before it decided it (consensus/committed_operations.go,
-// checkCommittedKinds). Kept per rules version, because each version that adds a kind has to check the whole chain
-// for it once.
-func kindsCheckedKey(version uint64) []byte {
-	return []byte(fmt.Sprintf("abci:kinds_checked_through:v%d", version))
+// The kinds watermark: the height through which every committed block has been checked to hold no transaction a rules
+// version decides differently from how it was committed (consensus/committed_operations.go, checkCommittedKinds). It is
+// kept per rules version AND per history-check version: a check is judged by what it checks, so a binary that adds or
+// changes a check - with or without a new rules version - re-checks the whole chain once under its own key.
+func kindsCheckedKey(rules, checks uint64) []byte {
+	return []byte(fmt.Sprintf("abci:kinds_checked_through:v%d:checks%d", rules, checks))
 }
 
-// KindsCheckedThrough is the height through which committed blocks are checked for rules version (0: none).
-func (s *LedgerStore) KindsCheckedThrough(version uint64) (int64, error) {
-	b, err := s.read(kindsCheckedKey(version), fmt.Sprintf("rules v%d kinds watermark", version))
+// legacyKindsCheckedKey is the watermark binaries before history-check versions wrote, keyed by the rules version
+// alone. It is never written or deleted again; LegacyKindsCheckedThrough reads it so a start can say what it supersedes.
+func legacyKindsCheckedKey(rules uint64) []byte {
+	return []byte(fmt.Sprintf("abci:kinds_checked_through:v%d", rules))
+}
+
+func (s *LedgerStore) watermark(key []byte, what string) (int64, error) {
+	b, err := s.read(key, what)
 	if err != nil || b == nil {
 		return 0, err
 	}
 	if len(b) != 8 {
-		return 0, fmt.Errorf("rules v%d kinds watermark is %d bytes, not 8", version, len(b))
+		return 0, fmt.Errorf("%s is %d bytes, not 8", what, len(b))
 	}
 	return int64(binary.BigEndian.Uint64(b)), nil
 }
 
-// SaveKindsCheckedThrough records that every committed block through height is checked for rules version. It never
-// lowers the watermark.
-func (s *LedgerStore) SaveKindsCheckedThrough(version uint64, height int64) error {
-	have, err := s.KindsCheckedThrough(version)
+// KindsCheckedThrough is the height through which committed blocks are checked under rules version rules by history
+// checks version checks (0: none).
+func (s *LedgerStore) KindsCheckedThrough(rules, checks uint64) (int64, error) {
+	if checks == 0 {
+		return 0, fmt.Errorf("rules v%d kinds watermark: history-check version 0 names no check", rules)
+	}
+	return s.watermark(kindsCheckedKey(rules, checks), fmt.Sprintf("rules v%d history-check v%d kinds watermark", rules, checks))
+}
+
+// LegacyKindsCheckedThrough is the height the watermark binaries before history-check versions kept for rules version
+// rules records (0: none). It says nothing about any check added since, and nothing reads it as a pass.
+func (s *LedgerStore) LegacyKindsCheckedThrough(rules uint64) (int64, error) {
+	return s.watermark(legacyKindsCheckedKey(rules), fmt.Sprintf("rules v%d legacy kinds watermark", rules))
+}
+
+// SaveKindsCheckedThrough records that every committed block through height is checked under rules version rules by
+// history-check version checks. It never lowers the watermark.
+func (s *LedgerStore) SaveKindsCheckedThrough(rules, checks uint64, height int64) error {
+	have, err := s.KindsCheckedThrough(rules, checks)
 	if err != nil || height <= have {
 		return err
 	}
 	b := make([]byte, 8)
 	binary.BigEndian.PutUint64(b, uint64(height))
-	return s.kv.Set(kindsCheckedKey(version), b)
+	return s.kv.Set(kindsCheckedKey(rules, checks), b)
 }
 
-// AdvanceKindsChecked moves the watermark to height when height is the next one - a block the binary of that rules
-// version committed itself. A height above the next leaves it where it is: the heights between were never checked, and
-// the next start checks them.
-func (s *LedgerStore) AdvanceKindsChecked(version uint64, height int64) error {
-	have, err := s.KindsCheckedThrough(version)
+// AdvanceKindsChecked moves the watermark to height when height is the next one - a block the binary of that rules and
+// history-check version committed itself. A height above the next leaves it where it is: the heights between were never
+// checked, and the next start checks them.
+func (s *LedgerStore) AdvanceKindsChecked(rules, checks uint64, height int64) error {
+	have, err := s.KindsCheckedThrough(rules, checks)
 	if err != nil || height != have+1 {
 		return err
 	}
-	return s.SaveKindsCheckedThrough(version, height)
+	return s.SaveKindsCheckedThrough(rules, checks, height)
 }
