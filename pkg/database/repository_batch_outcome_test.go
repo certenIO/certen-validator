@@ -198,15 +198,42 @@ func TestTheAnchorMemberHintsAreTheRowsAsRecorded(t *testing.T) {
 		t.Fatalf("an unknown anchor: (%v, %v)", none, err)
 	}
 	if _, err := testDB.ExecContext(ctx, `INSERT INTO intent_quorum_certificates (operation_id, message, registry_version, certen_chain_id,
-		certificate, registry, message_inputs, certified_height) VALUES ($1, $2, 1, 'c', '{}', '{}', $3, 9)`, word(0x43), word(0x44),
+		certificate, registry, message_inputs, certified_height) VALUES ($1, $2, 1, 'c', '{}', '{}', $3, 9)`, bundleHex(942), word(0x44),
 		`{"key_page_url":"acc://x.acme/book/1","key_book_url":"acc://x.acme/book"}`); err != nil {
 		t.Fatal(err)
 	}
-	page, book, err := repo.CertifiedAuthority(ctx, word(0x43))
+	page, book, err := repo.CertifiedAuthority(ctx, bundleHex(942))
 	if err != nil || page != "acc://x.acme/book/1" || book != "acc://x.acme/book" {
 		t.Fatalf("(%q, %q, %v)", page, book, err)
 	}
-	if page, _, err := repo.CertifiedAuthority(ctx, word(0x45)); page != "" || err != nil {
+	if page, _, err := repo.CertifiedAuthority(ctx, bundleHex(943)); page != "" || err != nil {
 		t.Fatalf("an uncertified operation: (%q, %v)", page, err)
+	}
+}
+
+// The elected recorder and any other validator may store the same on-chain record at once - one from its own send, one
+// rebuilt from the chain. Neither write fails, neither contradicts, and the recorder's aggregate is kept.
+func TestConcurrentWritesOfOneRecordConverge(t *testing.T) {
+	repo := outcomeRepoForTest(t)
+	ctx := context.Background()
+	for round := 0; round < 5; round++ {
+		bundle := bundleHex(960 + round)
+		errs := make(chan error, 6)
+		for i := 0; i < 6; i++ {
+			source := BatchOutcomeEvidenceChain
+			if i%2 == 0 {
+				source = BatchOutcomeEvidenceRecorder
+			}
+			go func(s string) { errs <- repo.RecordBatchOutcome(ctx, outcomeRecordForTest(bundle, s)) }(source)
+		}
+		for i := 0; i < 6; i++ {
+			if err := <-errs; err != nil {
+				t.Fatalf("round %d: a concurrent write of the same record failed: %v", round, err)
+			}
+		}
+		got, err := repo.BatchOutcome(ctx, 84532, bundle)
+		if err != nil || got.EvidenceSource != BatchOutcomeEvidenceRecorder || got.AggregateSignature != "0xabcd" || len(got.Leaves) != 2 {
+			t.Fatalf("round %d: (%+v, %v)", round, got, err)
+		}
 	}
 }
