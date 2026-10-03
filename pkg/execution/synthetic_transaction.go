@@ -222,6 +222,16 @@ type CertenDataEntry struct {
 	ThresholdNumerator     uint64 `json:"threshold_numerator,omitempty"`      // e.g. 2
 	ThresholdDenominator   uint64 `json:"threshold_denominator,omitempty"`    // e.g. 3
 
+	// RB5-F14: what the fields above are checked WITH, so the quorum is verifiable from this entry alone
+	// (VerifyWriteBackQuorum): the exact message signed, the snapshot's validators (id, address, BLS key, power) and
+	// block, the minimum signer count, the signature scheme and its domain.
+	AttestationMessage string `json:"attestation_message,omitempty"` // hex: sha256 of it is attestation_message_hash
+	ValidatorSet       string `json:"validator_set,omitempty"`       // JSON []WriteBackValidator
+	SnapshotBlock      uint64 `json:"snapshot_block,omitempty"`      // the snapshot's block number
+	MinValidators      int    `json:"min_validators,omitempty"`      // minimum distinct signers
+	SignatureScheme    string `json:"signature_scheme,omitempty"`    // WriteBackSignatureScheme
+	AttestationDomain  string `json:"attestation_domain,omitempty"`  // the signing domain
+
 	// ==========================================================================
 	// AUDIT REFERENCES (Entries 41-44) - Links for independent verification
 	// ==========================================================================
@@ -482,6 +492,12 @@ func (b *SyntheticTxBuilder) BuildFromBundleWithContext(bundle *AttestationBundl
 		ValidatorBitfield:      hex.EncodeToString(agg.ValidatorBitfield),
 		ThresholdNumerator:     agg.ThresholdNumerator,
 		ThresholdDenominator:   agg.ThresholdDenominator,
+		AttestationMessage:     hex.EncodeToString(agg.MessagePreimage),
+		ValidatorSet:           validatorSetJSON(agg.Validators),
+		SnapshotBlock:          agg.SnapshotBlock,
+		MinValidators:          agg.MinValidators,
+		SignatureScheme:        agg.SignatureScheme,
+		AttestationDomain:      agg.AttestationDomain,
 
 		// Result hashes
 		BundleID:       hex.EncodeToString(bundle.BundleID[:]),

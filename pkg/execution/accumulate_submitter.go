@@ -561,6 +561,18 @@ func (e *CertenDataEntry) ToDoubleHashFormat() [][]byte {
 		entries = append(entries, labeled("outcome_reason", e.OutcomeReason))
 	}
 
+	// RB5-F14: what the SEC-14 fields are checked WITH, appended after everything else so no existing entry moves.
+	// With them the quorum is verifiable from this entry alone (VerifyWriteBackQuorum); a write-back without them
+	// predates RB5-F14 and states its quorum without the means to check it.
+	if e.SignatureScheme != "" {
+		entries = append(entries, labeled("attestation_message", e.AttestationMessage))
+		entries = append(entries, labeled("validator_set", e.ValidatorSet))
+		entries = append(entries, labeled("snapshot_block", fmt.Sprintf("%d", e.SnapshotBlock)))
+		entries = append(entries, labeled("min_validators", fmt.Sprintf("%d", e.MinValidators)))
+		entries = append(entries, labeled("signature_scheme", e.SignatureScheme))
+		entries = append(entries, labeled("attestation_domain", e.AttestationDomain))
+	}
+
 	return entries
 }
 

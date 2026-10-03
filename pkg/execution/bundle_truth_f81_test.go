@@ -67,7 +67,7 @@ func f81Orchestrator(repos *database.Repositories, validator string) *UnifiedOrc
 	}
 }
 
-func f81NonSettlementCycle(t *testing.T) *activeCycle {
+func f81NonSettlementCycle(t *testing.T, o *UnifiedOrchestrator) *activeCycle {
 	t.Helper()
 	own := nsMember()
 	f, _ := memberFacts(own)
@@ -81,15 +81,13 @@ func f81NonSettlementCycle(t *testing.T) *activeCycle {
 	c := nonSettlementCycle(rec, claim)
 	c.CycleID = fmt.Sprintf("%s-%d", c.CycleID, time.Now().UnixNano())
 	c.Result.ObservationResults = []*chain.ObservationResult{obs}
-	c.Result.ThresholdMet = true
-	c.Result.AggregatedAttestation = &attestation.AggregatedAttestation{
-		ThresholdMet: true, Verified: true, AchievedWeight: 500, TotalWeight: 700, ParticipantCount: 5}
+	attestWithRealQuorum(t, o, c, 5)
 	return c
 }
 
 func TestTheWrittenBackRecordStatesWhatWasObserved(t *testing.T) {
 	o := f81Orchestrator(nil, "v")
-	c := f81NonSettlementCycle(t)
+	c := f81NonSettlementCycle(t, o)
 	bundle, _, err := o.buildAttestationBundleFromCycle(c)
 	if err != nil {
 		t.Fatal(err)
@@ -101,9 +99,10 @@ func TestTheWrittenBackRecordStatesWhatWasObserved(t *testing.T) {
 	if agg.ValidatorCount != 5 || agg.SignedVotingPower.Int64() != 500 || agg.TotalVotingPower.Int64() != 700 {
 		t.Fatalf("aggregate count %d signed %v total %v; want 5 validators, 500 of 700 voting power", agg.ValidatorCount, agg.SignedVotingPower, agg.TotalVotingPower)
 	}
+	// RB3-F81: no signed power is substituted. A fold whose achieved weight is not its own signers' weight is now
+	// refused rather than stated either way (RB5-F14: the write-back states only a quorum its entries establish).
 	c.Result.AggregatedAttestation.AchievedWeight = 0
-	bundle, _, _ = o.buildAttestationBundleFromCycle(c)
-	if bundle.Aggregated.SignedVotingPower.Sign() != 0 {
+	if bundle, _, err := o.buildAttestationBundleFromCycle(c); err == nil {
 		t.Fatalf("no signed power is stated as %v", bundle.Aggregated.SignedVotingPower)
 	}
 }
@@ -130,11 +129,11 @@ func TestAResultWhoseLinkIsNotStoredDoesNotConsumeASequenceNumber(t *testing.T) 
 	}
 	t.Cleanup(drop)
 
-	if err := o.executePhase9(ctx, f81NonSettlementCycle(t)); err == nil {
+	if err := o.executePhase9(ctx, f81NonSettlementCycle(t, o)); err == nil {
 		t.Fatal("phase 9 succeeded with its link refused")
 	}
 	drop()
-	if err := o.executePhase9(ctx, f81NonSettlementCycle(t)); err != nil {
+	if err := o.executePhase9(ctx, f81NonSettlementCycle(t, o)); err != nil {
 		t.Fatal(err)
 	}
 	var seq int64
@@ -151,7 +150,7 @@ func TestAResultWhoseLinkIsNotStoredDoesNotConsumeASequenceNumber(t *testing.T) 
 // be the operation commitment of whichever cycle first created the chain, stamped on every later result.
 func TestEachWrittenBackResultBindsItsOwnAnchor(t *testing.T) {
 	o := f81Orchestrator(nil, "v")
-	first, second := f81NonSettlementCycle(t), f81NonSettlementCycle(t)
+	first, second := f81NonSettlementCycle(t, o), f81NonSettlementCycle(t, o)
 	first.Request.OperationCommitment = levelHash("operation of intent 1")
 	second.Request.OperationCommitment = levelHash("operation of intent 2")
 	first.AnchoredRoot, second.AnchoredRoot = levelHash("root anchored for intent 1"), levelHash("root anchored for intent 2")
@@ -170,7 +169,7 @@ func TestEachWrittenBackResultBindsItsOwnAnchor(t *testing.T) {
 	if b2.Result.PreviousResultHash != b1.Result.ResultHash {
 		t.Fatal("the second result does not chain to the first")
 	}
-	unanchored := f81NonSettlementCycle(t)
+	unanchored := f81NonSettlementCycle(t, o)
 	unanchored.Request.OperationCommitment = levelHash("operation of intent 3")
 	b3, _, err := o.buildAttestationBundleFromCycle(unanchored)
 	if err != nil {

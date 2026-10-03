@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	attestation "github.com/certen/independant-validator/pkg/attestation/strategy"
 	chain "github.com/certen/independant-validator/pkg/chain/strategy"
 	"github.com/certen/independant-validator/pkg/database"
 )
@@ -45,9 +44,7 @@ func TestANonSettlementsChainLinkIsPersistedAndContinued(t *testing.T) {
 		cycle := nonSettlementCycle(rec, claim)
 		cycle.CycleID = fmt.Sprintf("%s-%d", cycle.CycleID, i)
 		cycle.Result.ObservationResults = []*chain.ObservationResult{obs}
-		cycle.Result.ThresholdMet = true
-		cycle.Result.AggregatedAttestation = &attestation.AggregatedAttestation{
-			ThresholdMet: true, Verified: true, AchievedWeight: 700, TotalWeight: 700, ParticipantCount: 7}
+		attestWithRealQuorum(t, o, cycle, 7)
 		if err := o.executePhase9(ctx, cycle); err != nil {
 			t.Fatalf("non-settlement %d: phase 9: %v", i, err)
 		}

@@ -316,6 +316,9 @@ func (s *BLSStrategy) VerifyAggregated(ctx context.Context, agg *AggregatedAttes
 }
 
 // SupportsAggregation returns true - BLS supports signature aggregation
+// Domain is the signing domain this strategy's signatures are made under (the write-back states it, RB5-F14).
+func (s *BLSStrategy) Domain() string { return s.config.Domain }
+
 func (s *BLSStrategy) SupportsAggregation() bool {
 	return true
 }
