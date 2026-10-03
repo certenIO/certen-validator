@@ -106,3 +106,38 @@ func TestAProofsOutcomeEvidenceIsAttachedOnceAndNeverOverwritten(t *testing.T) {
 		}
 	}
 }
+
+// RB5-F15: a recorded anchor is listed as a hint while a member's proof lacks its outcome evidence, and no longer once
+// every such proof carries it.
+func TestRecordedAnchorsWithoutProofEvidenceAreListedAsHints(t *testing.T) {
+	ctx := context.Background()
+	repo := NewProofArtifactRepository(testDB)
+	outcomes := outcomeRepoForTest(t)
+	bundle := "0x" + strings.ReplaceAll(uuid.NewString()+uuid.NewString(), "-", "")[:64]
+	if err := outcomes.RecordBatchOutcome(ctx, outcomeRecordForTest(bundle, BatchOutcomeEvidenceChain)); err != nil {
+		t.Fatal(err)
+	}
+	id := outcomeLayer5(t, ctx, repo, 84532, strings.ToUpper(bundle[2:]), strings.Repeat("4", 64), strings.Repeat("5", 64), true)
+	listed := func() bool {
+		got, err := outcomes.RecordedAnchorsWithoutProofEvidence(ctx, 84532, 1000)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, b := range got {
+			if b == bundle {
+				return true
+			}
+		}
+		return false
+	}
+	if !listed() {
+		t.Fatal("a recorded anchor whose member's proof has no outcome evidence is not listed")
+	}
+	if _, err := repo.AttachOutcomeLayer(ctx, id, "L6 - Batch Outcome", []byte(`{"version":"x"}`),
+		func([]byte) (OutcomeLayerDecision, string, error) { return OutcomeLayerKeep, "", nil }); err != nil {
+		t.Fatal(err)
+	}
+	if listed() {
+		t.Fatal("an anchor whose members' proofs all carry outcome evidence is still listed")
+	}
+}

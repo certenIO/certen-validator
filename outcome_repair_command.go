@@ -21,8 +21,12 @@ import (
 // rebuilds the anchor on the chain exactly (execution.OutcomeBackfill). Without --apply it only reports. Nothing is
 // deleted, and a tree already kept is never overwritten. Run it on every validator: each keeps its own trees.
 //
+// With --recorded it rebuilds instead the trees of anchors whose outcome IS recorded and some of whose members' proofs
+// carry no outcome evidence (RB5-F15): the running recorder then re-derives each, requires the recorded root, attaches
+// every member's evidence to its proofs and releases the tree again.
+//
 // Exit status: 0 when nothing was refused, 2 when an anchor was refused, 1 on error.
-func runOutcomeTreeRepair(apply bool) int {
+func runOutcomeTreeRepair(apply, recorded bool) int {
 	cfg, err := config.Load()
 	if err != nil {
 		log.Printf("load configuration: %v", err)
@@ -86,7 +90,7 @@ func runOutcomeTreeRepair(apply bool) int {
 		return 1
 	}
 	b := &execution.OutcomeBackfill{Chains: readers, Hints: database.NewBatchOutcomeRepository(client),
-		Intents: execution.AccumulateIntentSource{Adapter: adapter, URL: cfg.AccumulateURL}, Trees: trees, Apply: apply, Logf: log.Printf}
+		Intents: execution.AccumulateIntentSource{Adapter: adapter, URL: cfg.AccumulateURL}, Trees: trees, Apply: apply, Recorded: recorded, Logf: log.Printf}
 	results, err := b.Run(ctx)
 	out, _ := json.MarshalIndent(results, "", "  ")
 	fmt.Println(string(out))

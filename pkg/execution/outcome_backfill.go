@@ -52,6 +52,9 @@ type AnchorHints = database.AnchorMemberHints
 // OutcomeBackfillHints reads the database's hints.
 type OutcomeBackfillHints interface {
 	AttestedAnchorsWithoutOutcome(ctx context.Context, chainID int64, limit int) ([]string, error)
+	// RecordedAnchorsWithoutProofEvidence lists anchors whose outcome is recorded and some of whose members' proofs carry
+	// no outcome evidence (RB5-F15).
+	RecordedAnchorsWithoutProofEvidence(ctx context.Context, chainID int64, limit int) ([]string, error)
 	AnchorMemberHints(ctx context.Context, chainID int64, bundleID string) (*database.AnchorMemberHints, error)
 	// CertifiedAuthority is the key page and key book CERTEN's quorum certified for an operation ("" when none).
 	CertifiedAuthority(ctx context.Context, operationID string) (keyPage, keyBook string, err error)
@@ -63,14 +66,18 @@ type SignedIntentSource interface {
 	SignedIntent(ctx context.Context, txHash, principal string) (blobs [][]byte, executedAt time.Time, err error)
 }
 
-// OutcomeBackfill rebuilds and keeps the trees of attested anchors whose outcome is not recorded.
+// OutcomeBackfill rebuilds and keeps the trees of attested anchors whose outcome is not recorded - or, with Recorded, of
+// anchors whose outcome IS recorded and some of whose members' proofs lack its offline evidence: the recorder then
+// re-derives the outcome from the kept tree, requires the recorded root, attaches each member's evidence to its proofs
+// and releases the tree again (RB5-F15).
 type OutcomeBackfill struct {
-	Chains  map[int64]OutcomeChainReader
-	Hints   OutcomeBackfillHints
-	Intents SignedIntentSource
-	Trees   *OutcomeTreeStore
-	Apply   bool
-	Logf    func(string, ...interface{})
+	Chains   map[int64]OutcomeChainReader
+	Hints    OutcomeBackfillHints
+	Intents  SignedIntentSource
+	Trees    *OutcomeTreeStore
+	Apply    bool
+	Recorded bool
+	Logf     func(string, ...interface{})
 }
 
 // OutcomeBackfillResult is what the backfill did with one anchor.
@@ -78,7 +85,8 @@ type OutcomeBackfillResult struct {
 	ChainID  int64
 	BundleID string
 	// Outcome: "kept" (written, or merged with the tree already kept), "would-keep" (dry run), "held" (already kept and
-	// equal), "recorded" (its outcome is on chain: nothing to certify), "not-attested", or "refused" with Reason.
+	// equal), "recorded" (its outcome is on chain: nothing to certify), "not-recorded" (with Recorded: no outcome on
+	// chain yet), "not-attested", or "refused" with Reason.
 	Outcome string
 	Reason  string
 }
@@ -96,7 +104,11 @@ func (b *OutcomeBackfill) Run(ctx context.Context) ([]OutcomeBackfillResult, err
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 	var out []OutcomeBackfillResult
 	for _, id := range ids {
-		bundles, err := b.Hints.AttestedAnchorsWithoutOutcome(ctx, id, 100000)
+		list := b.Hints.AttestedAnchorsWithoutOutcome
+		if b.Recorded {
+			list = b.Hints.RecordedAnchorsWithoutProofEvidence
+		}
+		bundles, err := list(ctx, id, 100000)
 		if err != nil {
 			return out, fmt.Errorf("chain %d: listing attested anchors: %w", id, err)
 		}
@@ -139,8 +151,11 @@ func (b *OutcomeBackfill) One(ctx context.Context, chainID int64, bundleHex stri
 	case !a.ProofExecuted:
 		res.Outcome = "not-attested"
 		return res
-	case view.RecordedRoot != ([32]byte{}):
+	case view.RecordedRoot != ([32]byte{}) && !b.Recorded:
 		res.Outcome = "recorded"
+		return res
+	case view.RecordedRoot == ([32]byte{}) && b.Recorded:
+		res.Outcome = "not-recorded"
 		return res
 	}
 	t, err := b.Rebuild(ctx, chainID, bundle, view)
