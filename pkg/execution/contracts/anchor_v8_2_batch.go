@@ -74,6 +74,16 @@ func (a *CertenAnchorV8_2Batch) call1(opts *bind.CallOpts, method string, args .
 	return out[0], nil
 }
 
+// CurrentValidatorSetRoot is the CERTEN validator set root the anchor checks quorums against now - the value the
+// outcome message (ComputeEvmMessageHashV8_2_Outcome) commits when an outcome is recorded.
+func (a *CertenAnchorV8_2Batch) CurrentValidatorSetRoot(opts *bind.CallOpts) ([32]byte, error) {
+	v, err := a.call1(opts, "currentValidatorSetRoot")
+	if err != nil {
+		return [32]byte{}, err
+	}
+	return v.([32]byte), nil
+}
+
 func (a *CertenAnchorV8_2Batch) IsBatchAnchor(opts *bind.CallOpts, bundleID [32]byte) (bool, error) {
 	v, err := a.call1(opts, "isBatchAnchor", bundleID)
 	if err != nil {
