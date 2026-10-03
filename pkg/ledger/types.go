@@ -183,8 +183,9 @@ type EntitlementPolicyState struct {
 	// it should not rest on a single key.
 	AdminThreshold int `json:"adminThreshold,omitempty"`
 
-	// AdminReseals is the APPEND-ONLY record of admin-set replacements (rules v11, consensus/admin_reseal.go). The
-	// admin set in force at height H is the newest re-seal recorded at a height below H, or AdminKeys/AdminThreshold
+	// AdminReseals is the APPEND-ONLY record of every admin-set change: the v11 re-seal (consensus/admin_reseal.go)
+	// and, from rules v12, every admin rotation the admin quorum in force authorised (consensus/admin_rotate.go). The
+	// admin set in force at height H is the newest change recorded at a height below H, or AdminKeys/AdminThreshold
 	// above if there is none - derived like Schedule, so a block is judged by the same admins however often it is
 	// executed. AdminKeys/AdminThreshold stay the genesis seal.
 	AdminReseals []AdminReseal `json:"adminReseals,omitempty"`
@@ -208,15 +209,24 @@ type EntitlementPolicyState struct {
 	Schedule []ScheduledPolicyChange `json:"schedule,omitempty"`
 }
 
-// ScheduledPolicyChange is one accepted rule change in the append-only schedule.
-// AdminReseal is one accepted replacement of the admin set: from Height+1 on, Keys/Threshold authorise.
+// AdminReseal is one accepted change of the admin set: from Height+1 on, Keys/Threshold authorise.
+//
+// The fields rules v12 added are omitempty, so a record v11 wrote - the re-seal - serialises to exactly the bytes it
+// always did, and a v11 record read back by v12 is the record v11 wrote.
 type AdminReseal struct {
 	Height    int64             `json:"height"`
 	ID        string            `json:"id"`
 	Keys      map[string]string `json:"keys"`
 	Threshold int               `json:"threshold"`
+	// Kind is the transaction kind that made the change: empty for the v11 re-seal (the only kind before v12),
+	// "certen.admin.rotate/v1" for an admin rotation.
+	Kind string `json:"kind,omitempty"`
+	// Sequence is an admin rotation's ordinal: one more than the number of changes recorded before it, the re-seal
+	// included. Zero on the re-seal, which carries none.
+	Sequence uint64 `json:"sequence,omitempty"`
 }
 
+// ScheduledPolicyChange is one accepted rule change in the append-only schedule.
 type ScheduledPolicyChange struct {
 	Mode string            `json:"mode"`
 	Keys map[string]string `json:"keys,omitempty"`

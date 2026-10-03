@@ -56,6 +56,8 @@ type rehearsalNode struct {
 	app    *ValidatorApp
 	node   *nm.Node
 	client *local.Local
+	// rpcURL is the node's CometBFT RPC when the network serves one (startRehearsalNetworkWith), else "".
+	rpcURL string
 }
 
 // freePort returns a port a node can listen on, chosen BELOW every OS's ephemeral range (Windows 49152-65535, Linux
@@ -419,6 +421,14 @@ func dropStalePeer(t *testing.T, nodes []*rehearsalNode, stopped int) {
 func startRehearsalNetwork(t *testing.T, f *rotationFixture, size int) ([]*rehearsalNode, *cmttypes.GenesisDoc,
 	[]ed25519.PrivateKey, func(via *rehearsalNode, n int)) {
 	t.Helper()
+	return startRehearsalNetworkWith(t, f, size, false)
+}
+
+// startRehearsalNetworkWith is startRehearsalNetwork; with rpc, every node also serves CometBFT's RPC on a loopback port
+// (rehearsalNode.rpcURL), so the operator tools can be run against the network as against the fleet.
+func startRehearsalNetworkWith(t *testing.T, f *rotationFixture, size int, rpc bool) ([]*rehearsalNode, *cmttypes.GenesisDoc,
+	[]ed25519.PrivateKey, func(via *rehearsalNode, n int)) {
+	t.Helper()
 	genesis := &cmttypes.GenesisDoc{
 		ChainID: rotChain, GenesisTime: time.Now().UTC(), ConsensusParams: cmttypes.DefaultConsensusParams(),
 		InitialHeight: 1,
@@ -456,6 +466,12 @@ func startRehearsalNetwork(t *testing.T, f *rotationFixture, size int) ([]*rehea
 		cfg.P2P.ListenAddress = fmt.Sprintf("tcp://127.0.0.1:%d", ports[i])
 		cfg.P2P.AllowDuplicateIP, cfg.P2P.AddrBookStrict, cfg.P2P.PexReactor = true, false, false
 		cfg.RPC.ListenAddress = ""
+		rpcURL := ""
+		if rpc {
+			rpcPort := freePort(t)
+			cfg.RPC.ListenAddress = fmt.Sprintf("tcp://127.0.0.1:%d", rpcPort)
+			rpcURL = fmt.Sprintf("http://127.0.0.1:%d", rpcPort)
+		}
 		cfg.TxIndex.Indexer = "null"
 		cfg.Instrumentation.Prometheus = false
 		if err := genesis.SaveAs(cfg.GenesisFile()); err != nil {
@@ -467,7 +483,7 @@ func startRehearsalNetwork(t *testing.T, f *rotationFixture, size int) ([]*rehea
 			t.Fatal(err)
 		}
 		peers = append(peers, fmt.Sprintf("%s@127.0.0.1:%d", nodeKey.ID(), ports[i]))
-		nodes[i] = &rehearsalNode{name: fmt.Sprintf("v%d", i), home: home, cfg: cfg, kv: newMemKV()}
+		nodes[i] = &rehearsalNode{name: fmt.Sprintf("v%d", i), home: home, cfg: cfg, kv: newMemKV(), rpcURL: rpcURL}
 	}
 	for i, n := range nodes {
 		var others []string

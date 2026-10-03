@@ -10,7 +10,12 @@ import (
 
 // processBLSRegistry validates and records a BLS registry transaction carried by block height. Like a
 // rotation it is written during FinalizeBlock, so the next transaction of the same block - and every later
-// block - is judged against it; replay of the block that accepted it is recognised by version, height and id.
+// block - is judged against it.
+//
+// It is judged against the versions accepted below this height and those this execution of the block accepted
+// (blockRegistryRecords) - never against a version an earlier execution of the same block wrote - so executing the
+// block again decides every transaction of it exactly as the first execution did, a refused one included. An
+// acceptance whose record an earlier execution already wrote is not written twice.
 func (app *ValidatorApp) processBLSRegistry(rt *BLSRegistryTx, height int64) abcitypes.ExecTxResult {
 	if app.ledgerStore == nil {
 		return abcitypes.ExecTxResult{Code: codeBLSRegistryRefused, Log: "BLS registry requires a ledger store"}
@@ -21,10 +26,21 @@ func (app *ValidatorApp) processBLSRegistry(rt *BLSRegistryTx, height int64) abc
 		// their ledger include it: a fork. Stop.
 		app.logger.Fatalf("❌ [BLS-REGISTRY] the registry log could not be read at height %d: %v", height, err)
 	}
+	before := &ledger.BLSRegistryLog{}
+	for _, r := range log.Versions {
+		if r.Height < height {
+			before.Versions = append(before.Versions, r)
+		}
+	}
+	for _, r := range app.blockRegistryRecords {
+		if r.Height == height {
+			before.Versions = append(before.Versions, r)
+		}
+	}
 
-	// REPLAY: this block already accepted this version.
-	for i := range log.Versions {
-		r := &log.Versions[i]
+	// The same version accepted earlier in this block: the same registry again is accepted and changes nothing.
+	for i := range before.Versions {
+		r := &before.Versions[i]
 		if r.Version != rt.Version {
 			continue
 		}
@@ -40,18 +56,31 @@ func (app *ValidatorApp) processBLSRegistry(rt *BLSRegistryTx, height int64) abc
 		app.logger.Fatalf("❌ [BLS-REGISTRY] the committed policy (admin quorum) could not be read at height %d: %v", height, err)
 	}
 	// Judged by the admin set in force for this block (AdminSetAt, rules v11).
-	rec, err := VerifyBLSRegistry(rt, app.cometChainID, withAdminSetAt(policy, height), log, height)
+	rec, err := VerifyBLSRegistry(rt, app.cometChainID, withAdminSetAt(policy, height), before, height)
 	if err != nil {
 		app.logger.Printf("🚫 [BLS-REGISTRY] refused at height %d: %v", height, err)
 		return abcitypes.ExecTxResult{Code: codeBLSRegistryRefused, Log: "BLS registry refused: " + err.Error()}
 	}
-	log.Versions = append(log.Versions, *rec)
-	if err := app.ledgerStore.SaveBLSRegistry(log); err != nil {
-		app.logger.Fatalf("❌ [BLS-REGISTRY] could not persist an accepted registry at height %d: %v", height, err)
+	written := false
+	for _, r := range log.Versions {
+		if r.Height == height && r.Version == rec.Version {
+			if r.ID != rec.ID {
+				app.logger.Fatalf("❌ [BLS-REGISTRY] height %d already records registry version %d as %s, but this execution "+
+					"of the block accepts %s: the committed record and this block disagree", height, rec.Version, r.ID, rec.ID)
+			}
+			written = true
+		}
 	}
-	app.logger.Printf("🔐 [BLS-REGISTRY] version %d accepted at height %d: %d members, threshold %d/%d, CERTEN set root %s, "+
-		"incarnation %s; in force from height %d", rec.Version, height, len(rec.Members), rec.ThresholdNumerator,
-		rec.ThresholdDenominator, rec.CertenSetRoot, rec.AccumulateIncarnation, height+1)
+	if !written {
+		log.Versions = append(log.Versions, *rec)
+		if err := app.ledgerStore.SaveBLSRegistry(log); err != nil {
+			app.logger.Fatalf("❌ [BLS-REGISTRY] could not persist an accepted registry at height %d: %v", height, err)
+		}
+		app.logger.Printf("🔐 [BLS-REGISTRY] version %d accepted at height %d: %d members, threshold %d/%d, CERTEN set root %s, "+
+			"incarnation %s; in force from height %d", rec.Version, height, len(rec.Members), rec.ThresholdNumerator,
+			rec.ThresholdDenominator, rec.CertenSetRoot, rec.AccumulateIncarnation, height+1)
+	}
+	app.blockRegistryRecords = append(app.blockRegistryRecords, *rec)
 	app.blockBundles = append(app.blockBundles, rec.ID)
 	return abcitypes.ExecTxResult{Code: 0, GasWanted: 1, GasUsed: 1}
 }

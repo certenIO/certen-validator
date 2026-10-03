@@ -155,8 +155,40 @@ const (
 	// (committedRulesVersion).
 	executionRulesV11 uint64 = 11
 
+	// v12 - the admin rotation (admin_rotate.go, RB5-F37): a recognised transaction kind `certen.admin.rotate/v1` by
+	// which the admin quorum IN FORCE replaces the admin set - replacing, adding or removing keys and changing the
+	// threshold - so a lost or compromised admin key never again needs a one-time rules repair like v11's re-seal. It is
+	// authorised by the threshold of distinct keys of the set in force for its block (AdminSetAt), bound to the chain,
+	// to its sequence (one more than the admin-set changes recorded) and to the id of the set in force, and every new
+	// key proves possession. Accepted, it contributes its id to the app hash and is appended to the same record the
+	// re-seal writes, in force from the next height; refused, it returns code 12. v11 judged the same bytes as a
+	// ValidatorBlock and decided them with a ValidatorBlock's code, so the version is bumped.
+	//
+	// v12 also refuses (code 6) a second copy, in other bytes, of the validator rotation its block already accepted.
+	// v11 accepted the copy and returned the rotation's validator updates twice, which CometBFT refuses as a duplicate
+	// entry - every node fails to apply such a block and the chain halts - so no live history holds one; that too is
+	// checked at every start (rotationBlockVerdicts).
+	//
+	// v12 refuses (code 5) a policy update whose version an EARLIER block scheduled. v11 accepted it as a no-op (code 0,
+	// its id in the app hash) whatever it carried, which made "an update cannot be replayed" untrue; every start checks
+	// that no committed block holds one accepted that way (kindViolation), and history-check --rules 12 checks it
+	// against the live chain before the deploy. The same update again within its own block stays the accepted no-op.
+	//
+	// And from v12 every admin threshold - policy update, validator rotation, BLS registry, admin rotation - counts
+	// distinct KEYS, not distinct ids: one key named under two ids used to count twice. The two counts differ only for
+	// an admin set naming one key twice, so a node refuses to continue older state if any admin set its chain has had
+	// does (checkAdminKeyCountingContinuity); certen-testnet's sets - the lost genesis pair and the re-seal's three -
+	// name distinct keys, and genesis no longer seals such a set.
+	//
+	// v12 CONTINUES v7..v11 state without a reset: the kind is new, so no committed history contains it, and that is
+	// checked, not assumed - IndexCommittedHistory refuses to start on any committed admin-rotation-kind transaction that
+	// v12 did not decide (a ValidatorBlock's code, or an acceptance with no rotation recorded for it). Every other kind
+	// is decided exactly as v11 decided it. The state stays stamped with the older version until a block accepts or
+	// refuses an admin rotation (committedRulesVersion).
+	executionRulesV12 uint64 = 12
+
 	// CurrentExecutionRulesVersion is what THIS binary implements.
-	CurrentExecutionRulesVersion = executionRulesV11
+	CurrentExecutionRulesVersion = executionRulesV12
 )
 
 // compatibleContinuations names the older rules whose committed state this binary may continue, and why
@@ -170,10 +202,12 @@ var compatibleContinuations = map[uint64]uint64{
 	// v10 adds only the registry kind, which no committed history contains (checked at every start).
 	// v11 adds only the re-seal kind, which no committed history contains (checked at every start), and judges admin
 	// signatures by the set in force, which is the genesis seal until a re-seal is committed.
-	executionRulesV7:  executionRulesV11,
-	executionRulesV8:  executionRulesV11,
-	executionRulesV9:  executionRulesV11,
-	executionRulesV10: executionRulesV11,
+	// v12 adds only the admin-rotation kind, which no committed history contains (checked at every start).
+	executionRulesV7:  executionRulesV12,
+	executionRulesV8:  executionRulesV12,
+	executionRulesV9:  executionRulesV12,
+	executionRulesV10: executionRulesV12,
+	executionRulesV11: executionRulesV12,
 }
 
 // ExecutionRulesMismatchError explains a refusal to start in terms an operator

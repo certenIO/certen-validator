@@ -113,6 +113,14 @@ func (app *ValidatorApp) recordCommittedOperations(height int64) {
 		app.recordFirstVerdict(executionRulesV11, &app.rulesV11FirstVerdict, height)
 		app.blockRulesV11Verdict = false
 	}
+	if app.blockRulesV12Verdict {
+		app.recordFirstVerdict(executionRulesV12, &app.rulesV12FirstVerdict, height)
+		app.blockRulesV12Verdict = false
+	}
+	// This binary decided this block, so it holds nothing this version decides differently (checkCommittedKinds).
+	if err := app.ledgerStore.AdvanceKindsChecked(CurrentExecutionRulesVersion, height); err != nil {
+		app.logger.Fatalf("❌ [HISTORY] could not record committed block %d as checked: %v", height, err)
+	}
 }
 
 // recordFirstVerdict persists the first height a rules version decided something only it decides.
@@ -208,12 +216,26 @@ var ErrCommittedHistoryUnderCurrentRules = fmt.Errorf("committed history that ex
 // behind continuing v7 and v8 state (compatibleContinuations), checked here on every node rather than
 // assumed. Called before CometBFT's handshake, which replays any later block through FinalizeBlock and
 // Commit, and those index themselves.
+//
+// It then checks every committed block no binary of this version has checked or decided (checkCommittedKinds): the
+// index above reads only the blocks it does not yet cover, but a block an older binary committed AND indexed can
+// still hold a transaction of a kind a later version added, decided the older way - the claim behind every
+// continuation from v10 on, which must hold for the whole chain, not only its unindexed tail.
 func (app *ValidatorApp) IndexCommittedHistory(h committedHistory) error {
 	app.mu.Lock()
 	defer app.mu.Unlock()
 	if app.ledgerStore == nil {
 		return errors.New("committed history cannot be indexed without a ledger store")
 	}
+	if err := app.indexCommittedOperations(h); err != nil {
+		return err
+	}
+	return app.checkCommittedKinds(h)
+}
+
+// indexCommittedOperations is IndexCommittedHistory's index of the blocks the committed-operation index does not
+// cover, each checked as it is read. The caller holds app.mu.
+func (app *ValidatorApp) indexCommittedOperations(h committedHistory) error {
 	upTo, err := app.ledgerStore.CommittedOperationsUpTo()
 	if err != nil {
 		return err
@@ -250,6 +272,18 @@ func (app *ValidatorApp) IndexCommittedHistory(h committedHistory) error {
 		if err != nil {
 			return err
 		}
+		rotationFound, v12 := rotationBlockVerdicts(height, txs, codes)
+		found = append(found, rotationFound...)
+		if v12 {
+			app.recordFirstVerdict(executionRulesV12, &app.rulesV12FirstVerdict, height)
+		}
+		replayRefused, err := app.policyReplayRefused(height, txs, codes)
+		if err != nil {
+			return err
+		}
+		if replayRefused {
+			app.recordFirstVerdict(executionRulesV12, &app.rulesV12FirstVerdict, height)
+		}
 		for _, tx := range txs {
 			if _, ok := DecodeValidatorRotation(tx); ok {
 				app.recordFirstVerdict(executionRulesV8, &app.rulesV8FirstVerdict, height)
@@ -259,6 +293,8 @@ func (app *ValidatorApp) IndexCommittedHistory(h committedHistory) error {
 				app.recordFirstVerdict(executionRulesV10, &app.rulesV10FirstVerdict, height)
 			} else if _, ok := DecodeAdminReseal(tx); ok {
 				app.recordFirstVerdict(executionRulesV11, &app.rulesV11FirstVerdict, height)
+			} else if _, ok := DecodeAdminRotate(tx); ok {
+				app.recordFirstVerdict(executionRulesV12, &app.rulesV12FirstVerdict, height)
 			}
 		}
 		violations = append(violations, found...)
@@ -282,21 +318,15 @@ func (app *ValidatorApp) historicalOperations(height int64, blockTime time.Time,
 	var entries []ledger.CommittedOperationEntry
 	var violations []string
 	for i, tx := range txs {
-		// v9 judged a registry-kind transaction as a ValidatorBlock and refused it with code 2; v10 accepts it
-		// or refuses it with code 9. History holding one decided v9's way is history v10 does not reproduce.
-		if _, ok := DecodeBLSRegistry(tx); ok && codes[i] == 2 {
-			violations = append(violations, fmt.Sprintf("height %d tx %d is a BLS registry transaction that v9 judged "+
-				"as a ValidatorBlock (code 2); v10 decides it as a registry", height, i))
+		violation, isKind, err := app.kindViolation(height, i, tx, codes[i])
+		if err != nil {
+			return nil, nil, err
+		}
+		if violation != "" {
+			violations = append(violations, violation)
 			continue
 		}
-		// v10 judged an admin-re-seal-kind transaction as a ValidatorBlock and refused it with code 2; v11 accepts it or
-		// refuses it with code 11. History holding one decided v10's way is history v11 does not reproduce.
-		if _, ok := DecodeAdminReseal(tx); ok && codes[i] == 2 {
-			violations = append(violations, fmt.Sprintf("height %d tx %d is an admin re-seal that v10 judged as a "+
-				"ValidatorBlock (code 2); v11 decides it as a re-seal", height, i))
-			continue
-		}
-		if !isValidatorBlockTx(tx) {
+		if isKind || !isValidatorBlockTx(tx) {
 			continue
 		}
 		var vb ValidatorBlock
@@ -369,5 +399,227 @@ func isValidatorBlockTx(tx []byte) bool {
 	if _, ok := DecodeAdminReseal(tx); ok {
 		return false
 	}
+	if _, ok := DecodeAdminRotate(tx); ok {
+		return false
+	}
 	return true
+}
+
+// kindViolation judges one committed transaction of a kind a rules version after v9 added - the BLS registry (v10),
+// the admin re-seal (v11), the admin rotation (v12) - against what this binary decides for it. isKind says whether the
+// transaction is one of those kinds; violation, when not empty, says how its recorded outcome is one this binary does
+// not reproduce: the version before each judged those bytes as a ValidatorBlock, with a ValidatorBlock's code.
+func (app *ValidatorApp) kindViolation(height int64, i int, tx []byte, code uint32) (violation string, isKind bool, err error) {
+	return kindViolationWith(height, i, tx, code, app.ledgerStore.LoadEntitlementPolicy)
+}
+
+// kindViolationWith is kindViolation with the committed policy read through policy, only when an accepted admin rotation
+// has to be found in its record.
+func kindViolationWith(height int64, i int, tx []byte, code uint32,
+	policy func() (*ledger.EntitlementPolicyState, error)) (violation string, isKind bool, err error) {
+	if _, ok := DecodeBLSRegistry(tx); ok {
+		// v9 judged a registry-kind transaction as a ValidatorBlock and refused it with code 2; v10 accepts it or
+		// refuses it with code 9. History holding one decided v9's way is history v10 does not reproduce.
+		switch {
+		case code == 2:
+			return fmt.Sprintf("height %d tx %d is a BLS registry transaction that v9 judged as a ValidatorBlock (code 2); "+
+				"v10 decides it as a registry", height, i), true, nil
+		case code != 0 && code != codeBLSRegistryRefused:
+			return fmt.Sprintf("height %d tx %d is a BLS registry transaction decided with code %d, which v10 never "+
+				"returns for one (it accepts, or refuses with code %d)", height, i, code, codeBLSRegistryRefused), true, nil
+		}
+		return "", true, nil
+	}
+	if _, ok := DecodeAdminReseal(tx); ok {
+		// v10 judged an admin-re-seal-kind transaction as a ValidatorBlock and refused it with code 2; v11 accepts it or
+		// refuses it with code 11. History holding one decided v10's way is history v11 does not reproduce.
+		switch {
+		case code == 2:
+			return fmt.Sprintf("height %d tx %d is an admin re-seal that v10 judged as a ValidatorBlock (code 2); "+
+				"v11 decides it as a re-seal", height, i), true, nil
+		case code != 0 && code != codeAdminResealRefused:
+			return fmt.Sprintf("height %d tx %d is an admin re-seal decided with code %d, which v11 never returns for "+
+				"one (it accepts, or refuses with code %d)", height, i, code, codeAdminResealRefused), true, nil
+		}
+		return "", true, nil
+	}
+	if pu, ok := DecodePolicyUpdate(tx); ok {
+		// v11 accepted (code 0) a policy update whose version an earlier block had scheduled, as a no-op; v12 refuses it
+		// (code 5). History holding one accepted that way is history v12 does not reproduce.
+		if code != 0 {
+			return "", true, nil
+		}
+		state, err := policy()
+		if err != nil {
+			return "", true, fmt.Errorf("the committed policy, to check the policy update at height %d: %w", height, err)
+		}
+		if state != nil {
+			for _, e := range state.Schedule {
+				if e.Version == pu.Version && e.ProposedAtHeight < height {
+					return fmt.Sprintf("height %d tx %d is a policy update accepted again: version %d was scheduled at height %d, "+
+						"and v12 refuses it", height, i, pu.Version, e.ProposedAtHeight), true, nil
+				}
+			}
+		}
+		return "", true, nil
+	}
+	if ar, ok := DecodeAdminRotate(tx); ok {
+		// v11 judged an admin-rotation-kind transaction as a ValidatorBlock. v12 refuses one with code 12 - a code no
+		// earlier version returns - or accepts it and records it, at its height, under its id. Anything else is a
+		// ValidatorBlock's verdict, which v12 does not reproduce.
+		switch code {
+		case codeAdminRotateRefused:
+			return "", true, nil
+		case 0:
+			state, err := policy()
+			if err != nil {
+				return "", true, fmt.Errorf("the committed policy, to check the admin rotation at height %d: %w", height, err)
+			}
+			if state != nil {
+				for _, r := range state.AdminReseals {
+					if r.Kind == AdminRotateKind && r.Height == height && r.ID == ar.RotationID() {
+						return "", true, nil
+					}
+				}
+			}
+			return fmt.Sprintf("height %d tx %d is an admin rotation that was accepted, but no admin rotation is recorded "+
+				"for it: v11 accepted it as a ValidatorBlock; v12 decides it as an admin rotation", height, i), true, nil
+		default:
+			return fmt.Sprintf("height %d tx %d is an admin rotation that v11 judged as a ValidatorBlock (code %d); "+
+				"v12 decides it as an admin rotation", height, i, code), true, nil
+		}
+	}
+	return "", false, nil
+}
+
+// checkCommittedKinds checks every committed block above the kinds watermark (ledger KindsCheckedThrough) with
+// kindViolation, and advances the watermark to the app's height when all of them hold. Blocks this binary commits
+// advance it themselves (Commit): this version decided them. The caller holds app.mu.
+func (app *ValidatorApp) checkCommittedKinds(h committedHistory) error {
+	from, err := app.ledgerStore.KindsCheckedThrough(CurrentExecutionRulesVersion)
+	if err != nil {
+		return err
+	}
+	if from >= app.latestHeight {
+		return nil
+	}
+	if from == 0 && app.genesisInitialHeight > 1 {
+		from = app.genesisInitialHeight - 1
+	}
+	if base := h.Base(); from+1 < base {
+		return fmt.Errorf("the block store starts at height %d, so heights %d-%d the app committed cannot be checked "+
+			"against execution rules v%d", base, from+1, base-1, CurrentExecutionRulesVersion)
+	}
+	if top := h.Height(); top < app.latestHeight {
+		return fmt.Errorf("the block store ends at height %d, below the app's committed height %d", top, app.latestHeight)
+	}
+	app.logger.Printf("🗂️ [HISTORY] checking committed heights %d-%d for transactions of kinds rules v10-v%d added",
+		from+1, app.latestHeight, CurrentExecutionRulesVersion)
+	var violations []string
+	for height := from + 1; height <= app.latestHeight; height++ {
+		txs, _, err := h.Block(height)
+		if err != nil {
+			return fmt.Errorf("committed block %d: %w", height, err)
+		}
+		codes, err := h.ResultCodes(height)
+		if err != nil {
+			return fmt.Errorf("results of committed block %d: %w", height, err)
+		}
+		if len(codes) != len(txs) {
+			return fmt.Errorf("committed block %d has %d transactions and %d results", height, len(txs), len(codes))
+		}
+		for i, tx := range txs {
+			v, _, err := app.kindViolation(height, i, tx, codes[i])
+			if err != nil {
+				return err
+			}
+			if v != "" {
+				violations = append(violations, v)
+			}
+		}
+		found, _ := rotationBlockVerdicts(height, txs, codes)
+		violations = append(violations, found...)
+	}
+	if len(violations) > 0 {
+		return fmt.Errorf("%w (%d):\n  %s\nThis state was committed by rules this binary does not continue. Run the binary that "+
+			"committed it, or reset both CometBFT and the application ledger", ErrCommittedHistoryUnderCurrentRules, len(violations), strings.Join(violations, "\n  "))
+	}
+	if err := app.ledgerStore.SaveKindsCheckedThrough(CurrentExecutionRulesVersion, app.latestHeight); err != nil {
+		return err
+	}
+	app.logger.Printf("✅ [HISTORY] committed heights %d-%d hold no transaction rules v%d decide differently",
+		from+1, app.latestHeight, CurrentExecutionRulesVersion)
+	return nil
+}
+
+// rotationBlockVerdicts judges a committed block's validator rotations as a whole: at most one is accepted per block.
+// v11 accepted a second copy of the block's accepted rotation (other bytes, the same content) and returned its updates
+// twice - which CometBFT refuses, so no live chain holds such a block; v12 refuses the copy with code 6. v12 reports
+// whether the block holds such a refusal - a verdict only v12 reaches.
+func rotationBlockVerdicts(height int64, txs [][]byte, codes []uint32) (violations []string, v12 bool) {
+	accepted := map[string]int{} // rotation id -> index of the accepted one
+	for i, tx := range txs {
+		vr, ok := DecodeValidatorRotation(tx)
+		if !ok {
+			continue
+		}
+		id := vr.RotationID()
+		switch first, seen := accepted[id]; {
+		case codes[i] == 0 && len(accepted) > 0:
+			violations = append(violations, fmt.Sprintf("height %d tx %d is a second validator rotation accepted in one block; "+
+				"v12 accepts one rotation per block", height, i))
+		case codes[i] == 0:
+			accepted[id] = i
+		case seen && first < i:
+			v12 = true
+		}
+	}
+	return violations, v12
+}
+
+// CommittedBlockViolations judges one committed block - its transactions and the result codes it committed - the way
+// every node judges its history before it starts (IndexCommittedHistory): each transaction of a kind rules v10-v12
+// added, and the block's validator rotations as a whole. policy is the chain's committed policy (nil when none can be
+// read: an accepted admin rotation then has no record to be found in). Tools run it over a chain before an upgrade.
+func CommittedBlockViolations(height int64, txs [][]byte, codes []uint32, policy *ledger.EntitlementPolicyState) ([]string, error) {
+	if len(codes) != len(txs) {
+		return nil, fmt.Errorf("block %d has %d transactions and %d results", height, len(txs), len(codes))
+	}
+	var out []string
+	for i, tx := range txs {
+		v, _, err := kindViolationWith(height, i, tx, codes[i], func() (*ledger.EntitlementPolicyState, error) { return policy, nil })
+		if err != nil {
+			return nil, err
+		}
+		if v != "" {
+			out = append(out, v)
+		}
+	}
+	found, _ := rotationBlockVerdicts(height, txs, codes)
+	return append(out, found...), nil
+}
+
+// policyReplayRefused reports whether a committed block refused a policy update whose version an earlier block had
+// scheduled - a verdict only v12 reaches (v11 accepted it as a no-op).
+func (app *ValidatorApp) policyReplayRefused(height int64, txs [][]byte, codes []uint32) (bool, error) {
+	var state *ledger.EntitlementPolicyState
+	for i, tx := range txs {
+		pu, ok := DecodePolicyUpdate(tx)
+		if !ok || codes[i] == 0 {
+			continue
+		}
+		if state == nil {
+			s, err := app.ledgerStore.LoadEntitlementPolicy()
+			if err != nil || s == nil {
+				return false, err
+			}
+			state = s
+		}
+		for _, e := range state.Schedule {
+			if e.Version == pu.Version && e.ProposedAtHeight < height {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }

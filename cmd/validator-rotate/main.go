@@ -34,6 +34,14 @@
 //	validator-rotate history-check --rpc http://v1:26657
 //	    Read every committed block and report any transaction of the kinds rules v8 adds. Rules v8
 //	    continues v7 state only because there are none; this proves it for the chain at hand.
+//
+//	validator-rotate history-check --rules 12 --rpc http://v1:26657
+//	    Read every committed block and its result codes and judge them as a v12 node does before it starts:
+//	    no transaction of a kind v10-v12 added decided the older way, no block with two accepted validator
+//	    rotations. Run against the live chain before deploying v12; every node repeats it when it starts.
+//
+//	validator-rotate admin-rotate keygen|status|request|possess|sign|preflight|submit
+//	    Rotate CERTEN's admin set with the admin quorum in force (rules v12; adminrotate.go).
 package main
 
 import (
@@ -104,6 +112,8 @@ func main() {
 		err = blsRegistrySubmit(os.Args[2:], http.DefaultClient)
 	case "admin-reseal":
 		err = adminReseal(os.Args[2:], http.DefaultClient)
+	case "admin-rotate":
+		err = adminRotate(os.Args[2:], http.DefaultClient)
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -128,7 +138,7 @@ func usage() {
   submit     commit the rotation
   status     the chain's rotation log
   tick       make the chain produce blocks (empty blocks are disabled)
-  history-check  prove no committed transaction is of a kind rules v8 adds
+  history-check  prove no committed transaction is of a kind rules v8 adds (--rules 12: judge history as v12 does)
 
   bls-possession          on a validator: its BLS registry entry and the key's proof of possession
   bls-registry-propose    assemble the BLS registry (RB5 D3), verify every possession, first admin signature
@@ -137,6 +147,14 @@ func usage() {
   bls-registry-submit     commit the registry: from the next block every ValidatorBlock carries an intent certificate
 
   admin-reseal            every node runs rules v11, then commit the one admin re-seal they define (certen-testnet)
+
+  admin-rotate keygen     a fresh admin key: secret to a new file, public key printed
+  admin-rotate status     the admin set in force, its id, the next sequence, every change recorded
+  admin-rotate request    the unsigned rotation to a new admin set (rules v12)
+  admin-rotate possess    a new key's proof of possession
+  admin-rotate sign       a current admin's approval, offline
+  admin-rotate preflight  every node on rules v12 reports the same admin set, and the chain's rule accepts the rotation
+  admin-rotate submit     preflight, then commit it (--dry-run: preflight only)
 
 Run any subcommand with --help for its flags. The runbook is RUNBOOK_F95_CONSENSUS_KEY_ROTATION.md.
 `)
@@ -764,11 +782,19 @@ func kindOf(tx []byte) string {
 func historyCheck(args []string, c rpcDoer) error {
 	fs := flag.NewFlagSet("history-check", flag.ContinueOnError)
 	rpc := fs.String("rpc", "", "one validator's CometBFT RPC (it must hold every block from 1)")
+	rules := fs.Int("rules", 8, "the rules whose continuation to check: 8 (the kinds v8 adds) or 12 (history as v12 judges it)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if *rpc == "" {
 		return errors.New("--rpc is required")
+	}
+	switch *rules {
+	case 8:
+	case 12:
+		return historyCheckV12(*rpc, c)
+	default:
+		return fmt.Errorf("--rules is 8 or 12")
 	}
 	var st struct {
 		SyncInfo struct {

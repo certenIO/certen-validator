@@ -227,6 +227,7 @@ func verifyAdminQuorum(digest []byte, sigs []PolicySignature, current *ledger.En
 	}
 
 	seen := make(map[string]struct{}, len(sigs))
+	seenKeys := make(map[string]struct{}, len(sigs))
 	valid := 0
 
 	for _, s := range sigs {
@@ -243,11 +244,16 @@ func verifyAdminQuorum(digest []byte, sigs []PolicySignature, current *ledger.En
 		if err != nil || len(pub) != ed25519.PublicKeySize {
 			continue
 		}
+		// Distinct KEYS (rules v12): one key named under two ids is one signer, never two.
+		if _, dup := seenKeys[string(pub)]; dup {
+			continue
+		}
 		sig, err := hex.DecodeString(s.Signature)
 		if err != nil || !ed25519.Verify(ed25519.PublicKey(pub), digest, sig) {
 			continue
 		}
 		seen[s.KeyID] = struct{}{}
+		seenKeys[string(pub)] = struct{}{}
 		valid++
 	}
 

@@ -197,8 +197,16 @@ func verifyAdminReseal(t *AdminResealTx, chainID string, state *ledger.Entitleme
 	if state == nil {
 		return fmt.Errorf("no sealed policy exists to re-seal")
 	}
+	// Once, and only from the set sealed at genesis: any recorded change - the re-seal itself or, from rules v12, an
+	// admin rotation - ends the re-seal's applicability. Which one is named, so the refusal says what happened.
+	for _, r := range state.AdminReseals {
+		if r.Kind == "" {
+			return fmt.Errorf("this chain already re-sealed its admin set at height %d", r.Height)
+		}
+	}
 	if len(state.AdminReseals) > 0 {
-		return fmt.Errorf("this chain already re-sealed its admin set at height %d", state.AdminReseals[0].Height)
+		return fmt.Errorf("this chain's admin set was changed by an admin rotation at height %d; the re-seal replaces "+
+			"only the set sealed at genesis", state.AdminReseals[0].Height)
 	}
 	keys, threshold := AdminSetAt(state, height)
 	if !sameAdminSet(keys, threshold, from) {

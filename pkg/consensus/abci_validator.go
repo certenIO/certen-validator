@@ -113,10 +113,24 @@ type ValidatorApp struct {
 	blockRulesV9Verdict  bool
 	blockRulesV10Verdict bool
 	blockRulesV11Verdict bool
+	blockRulesV12Verdict bool
 	rulesV8FirstVerdict  int64
 	rulesV9FirstVerdict  int64
 	rulesV10FirstVerdict int64
 	rulesV11FirstVerdict int64
+	rulesV12FirstVerdict int64
+
+	// blockAdminSetChanged: this execution of the block has accepted an admin-set change (a re-seal or an admin
+	// rotation). At most one lands per block (rules v12, admin_rotate_apply.go). Reset by FinalizeBlock.
+	blockAdminSetChanged bool
+
+	// The policy updates, validator rotations and BLS registry versions THIS execution of the block accepted. Each kind
+	// is judged against its records below the block's height plus these - never against a record an earlier execution
+	// of the same block wrote - so executing a block again decides every transaction of it as the first execution did
+	// (replay_determinism_test.go). Reset by FinalizeBlock; read only for the height being executed.
+	blockPolicyChanges   []ledger.ScheduledPolicyChange
+	blockRotationRecords []ledger.ValidatorRotationRecord
+	blockRegistryRecords []ledger.BLSRegistryRecord
 }
 
 // committedRulesVersion is the lowest rules version that reproduces the committed history, result codes
@@ -129,11 +143,15 @@ type ValidatorApp struct {
 //   - v8 from then on,
 //   - v9 once a block is decided in a way only v9 decides it: a refused second block for a committed
 //     operation, or a block naming no validator that v8 would have accepted under the chain's name.
+//   - v10, v11 and v12 once a block decides a transaction of the kind each adds (registry, re-seal, admin
+//     rotation), accepted or refused - each older version judged those bytes as a ValidatorBlock.
 //
 // Stamping it (rather than the binary's version) is truthful, and it leaves the older binary able to start
 // on this state until a block makes that genuinely impossible.
 func (app *ValidatorApp) committedRulesVersion() uint64 {
 	switch {
+	case app.rulesV12FirstVerdict > 0:
+		return executionRulesV12
 	case app.rulesV11FirstVerdict > 0:
 		return executionRulesV11
 	case app.rulesV10FirstVerdict > 0:
@@ -253,7 +271,8 @@ func NewValidatorApp(ledgerStore *ledger.LedgerStore, chainID string) *Validator
 			version uint64
 			into    *int64
 		}{{executionRulesV8, &app.rulesV8FirstVerdict}, {executionRulesV9, &app.rulesV9FirstVerdict},
-			{executionRulesV10, &app.rulesV10FirstVerdict}, {executionRulesV11, &app.rulesV11FirstVerdict}} {
+			{executionRulesV10, &app.rulesV10FirstVerdict}, {executionRulesV11, &app.rulesV11FirstVerdict},
+			{executionRulesV12, &app.rulesV12FirstVerdict}} {
 			first, err := ledgerStore.RulesFirstVerdict(v.version)
 			if err != nil {
 				app.logger.Fatalf("❌ the first v%d verdict could not be read: %v - not starting on a ledger this node cannot read", v.version, err)
@@ -278,6 +297,14 @@ func NewValidatorApp(ledgerStore *ledger.LedgerStore, chainID string) *Validator
 			// and says exactly what to do.
 			ver, err := checkExecutionRulesVersion(state.ExecutionRulesVersion, state.LastBlockHeight)
 			if err != nil {
+				app.logger.Fatalf("❌ %v", err)
+			}
+			// v12 counts admin signatures by distinct key; older state is continued only where that changes nothing.
+			policy, err := ledgerStore.LoadEntitlementPolicy()
+			if err != nil {
+				app.logger.Fatalf("❌ the committed policy could not be read: %v - not starting on a ledger this node cannot read", err)
+			}
+			if err := checkAdminKeyCountingContinuity(state.ExecutionRulesVersion, policy); err != nil {
 				app.logger.Fatalf("❌ %v", err)
 			}
 			app.executionRulesVersion = ver
@@ -481,6 +508,14 @@ func (app *ValidatorApp) CheckTx(ctx context.Context, req *abcitypes.RequestChec
 	if rs, ok := DecodeAdminReseal(req.Tx); ok {
 		if err := rs.CheckShape(); err != nil {
 			return &abcitypes.ResponseCheckTx{Code: codeAdminResealRefused, Log: "admin re-seal refused: " + err.Error()}, nil
+		}
+		return &abcitypes.ResponseCheckTx{Code: 0, GasWanted: 1, GasUsed: 1}, nil
+	}
+	// The admin rotation (rules v12): its shape and every new key's proof of possession filter the mempool; the chain,
+	// the sequence, the set in force and the admin quorum are judged in FinalizeBlock.
+	if ar, ok := DecodeAdminRotate(req.Tx); ok {
+		if err := ar.CheckShape(); err != nil {
+			return &abcitypes.ResponseCheckTx{Code: codeAdminRotateRefused, Log: "admin rotation refused: " + err.Error()}, nil
 		}
 		return &abcitypes.ResponseCheckTx{Code: 0, GasWanted: 1, GasUsed: 1}, nil
 	}
@@ -792,6 +827,9 @@ func (app *ValidatorApp) FinalizeBlock(ctx context.Context, req *abcitypes.Reque
 	app.blockRulesV9Verdict = false
 	app.blockRulesV10Verdict = false
 	app.blockRulesV11Verdict = false
+	app.blockRulesV12Verdict = false
+	app.blockAdminSetChanged = false
+	app.blockPolicyChanges, app.blockRotationRecords, app.blockRegistryRecords = nil, nil, nil
 	// A fresh slice, never [:0]: the previous block's slice may already belong to the persister.
 	app.blockValidatorBlocks = nil
 
@@ -820,6 +858,13 @@ func (app *ValidatorApp) FinalizeBlock(ctx context.Context, req *abcitypes.Reque
 		if rs, ok := DecodeAdminReseal(tx); ok {
 			app.blockRulesV11Verdict = true
 			result := app.processAdminReseal(rs, req.Height)
+			txResults[i] = &result
+			continue
+		}
+		// Nor is the admin rotation (rules v12). v11 judged it as a ValidatorBlock.
+		if ar, ok := DecodeAdminRotate(tx); ok {
+			app.blockRulesV12Verdict = true
+			result := app.processAdminRotate(ar, req.Height)
 			txResults[i] = &result
 			continue
 		}
@@ -1061,6 +1106,25 @@ func (app *ValidatorApp) Query(ctx context.Context, req *abcitypes.RequestQuery)
 			return &abcitypes.ResponseQuery{Code: 1, Log: "failed to read the rotation log: " + err.Error()}, nil
 		}
 		b, err := json.Marshal(log)
+		if err != nil {
+			return &abcitypes.ResponseQuery{Code: 1, Log: err.Error()}, nil
+		}
+		return &abcitypes.ResponseQuery{Code: 0, Value: b, Height: app.latestHeight}, nil
+
+	case "/certen/admin_set":
+		// The admin record (rules v12, admin_rotate.go): every admin-set change, and the set in force for the next block
+		// with its id and the sequence the next admin rotation carries.
+		if app.ledgerStore == nil {
+			return &abcitypes.ResponseQuery{Code: 1, Log: "ledger store not available"}, nil
+		}
+		policy, err := app.ledgerStore.LoadEntitlementPolicy()
+		if err != nil {
+			return &abcitypes.ResponseQuery{Code: 1, Log: "failed to read the committed policy: " + err.Error()}, nil
+		}
+		if policy == nil {
+			return &abcitypes.ResponseQuery{Code: 1, Log: "this chain sealed no policy, so it has no admin set"}, nil
+		}
+		b, err := json.Marshal(NewAdminSetView(policy, app.latestHeight))
 		if err != nil {
 			return &abcitypes.ResponseQuery{Code: 1, Log: err.Error()}, nil
 		}

@@ -24,6 +24,7 @@ func (app *ValidatorApp) processAdminReseal(rt *AdminResealTx, height int64) abc
 	if state != nil {
 		for _, r := range state.AdminReseals {
 			if r.Height == height && r.ID == rt.ResealID() {
+				app.blockAdminSetChanged = true // one admin-set change per block (rules v12, admin_rotate_apply.go)
 				app.blockBundles = append(app.blockBundles, r.ID)
 				return abcitypes.ExecTxResult{Code: 0, GasWanted: 1, GasUsed: 1}
 			}
@@ -45,6 +46,7 @@ func (app *ValidatorApp) processAdminReseal(rt *AdminResealTx, height int64) abc
 	}
 	app.logger.Printf("🔐 [ADMIN-RESEAL] accepted at height %d: the admin set is now %d keys, threshold %d, from height %d",
 		height, len(rt.AdminKeys), rt.AdminThreshold, height+1)
+	app.blockAdminSetChanged = true
 	app.blockBundles = append(app.blockBundles, rt.ResealID())
 	return abcitypes.ExecTxResult{Code: 0, GasWanted: 1, GasUsed: 1}
 }
