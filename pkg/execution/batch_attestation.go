@@ -304,6 +304,7 @@ func (s *BatchStack) HandleBatchAttestationRequest(
 	// one, a different height, a substituted executionCommitment — changes the root and therefore
 	// the bundleId, and matches none of our trees.
 	var tree *BatchTree
+	var treeMembers []*PendingBatchIntent
 	derived := make([]string, 0, len(chunks))
 	mine := map[[32]byte][32]byte{}
 	mineSets := map[[32]byte][32]byte{}
@@ -328,7 +329,7 @@ func (s *BatchStack) HandleBatchAttestationRequest(
 		}
 		derived = append(derived, shortHex("0x"+hex.EncodeToString(t.BundleID[:])))
 		if t.BundleID == wantBundle {
-			tree = t
+			tree, treeMembers = t, chunk
 			break
 		}
 	}
@@ -372,6 +373,17 @@ func (s *BatchStack) HandleBatchAttestationRequest(
 	sk := km.PrivateKey()
 	if sk == nil {
 		return refuse("validator BLS private key not loaded")
+	}
+
+	// ---- Keep the tree before signing it (RB5 D4) --------------------------------
+	// This validator will be asked to state and certify what these members did, from its OWN copy of them: the
+	// database is shared, and the mempool forgets members once their outcome is recorded (outcome_retention.go).
+	byOp := make(map[[32]byte]*PendingBatchIntent, len(treeMembers))
+	for _, m := range treeMembers {
+		byOp[m.OperationID] = m
+	}
+	if err := s.retainMembers(tree, byOp, OutcomeTreeSigned); err != nil {
+		return refuseWith(retentionRefusalCode(err), "keeping batch %s for its outcome: %v", shortHex(resp.BundleID), err)
 	}
 
 	// SignV6_1PreExec, never SignWithDomain: the latter hashes to a different G1 point and

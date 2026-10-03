@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"net/http"
 	"net/url"
 	"sort"
 	"strings"
@@ -140,6 +141,15 @@ func askAll[T any](ctx context.Context, r *AgreeingReader, read func(context.Con
 			cctx, cancel := context.WithTimeout(ctx, r.timeout)
 			defer cancel()
 			v, err := read(cctx, p.client)
+			// A provider that throttles has not answered yet: it is asked again, within the read's own bound, rather
+			// than counted out - a throttled provider would otherwise leave every fact unestablished in a burst of reads.
+			for wait := rateLimitBackoff; err != nil && rateLimited(err) && wait <= maxRateLimitBackoff; wait *= 2 {
+				select {
+				case <-cctx.Done():
+				case <-time.After(wait):
+					v, err = read(cctx, p.client)
+				}
+			}
 			out[i] = answer[T]{host: p.host, value: v, err: err}
 		}(i, p)
 	}
@@ -307,4 +317,112 @@ func (r *AgreeingReader) HeaderByHash(ctx context.Context, hash common.Hash) (*t
 		return nil, fmt.Errorf("%w: chain %d header %s: %d of %d (%s)", ErrTooFewProviders, r.chainID, hash.Hex(), answered, len(as), unanswered(as))
 	}
 	return picked, nil
+}
+
+// RecentStateDepth is how far below the lowest latest head of the answering providers RecentAgreedHeader reads: deep
+// enough that every provider has the block, shallow enough that every provider still serves its state (a provider that
+// keeps no historical state - Arbitrum Sepolia's publicnode at the finalized block, measured 2026-10-03 - serves the
+// head's recent past only).
+const RecentStateDepth = 3
+
+// RecentAgreedHeader is a recent block every answering provider holds identically: the header at RecentStateDepth below
+// the lowest latest head any of them reports. It is the block agreed eth_calls read state at (CallContractAtHash). It is
+// NOT a finalized block; a caller that needs finality establishes it separately.
+func (r *AgreeingReader) RecentAgreedHeader(ctx context.Context) (*types.Header, error) {
+	latest, err := r.HeaderByNumber(ctx, big.NewInt(int64(rpc.LatestBlockNumber)))
+	if err != nil {
+		return nil, err
+	}
+	n := latest.Number.Uint64()
+	if n > RecentStateDepth {
+		n -= RecentStateDepth
+	}
+	return r.HeaderByNumber(ctx, new(big.Int).SetUint64(n))
+}
+
+// CallContractAtHash returns the result of a call at the block with this hash when every provider that answered returns
+// the same bytes and at least MinAgreeingProviders answered. A provider that does not hold the block, or its state, does
+// not answer; one that answers differently is a disagreement.
+func (r *AgreeingReader) CallContractAtHash(ctx context.Context, msg ethereum.CallMsg, blockHash common.Hash) ([]byte, error) {
+	as := askAll(ctx, r, func(c context.Context, cl *ethclient.Client) ([]byte, error) {
+		return cl.CallContractAtHash(c, msg, blockHash)
+	})
+	return agreedBytes(r, as, fmt.Sprintf("call to %s at block %s", addrOf(msg.To), blockHash.Hex()))
+}
+
+// CodeAtHash returns an account's code at the block with this hash when every provider that answered returns the same.
+func (r *AgreeingReader) CodeAtHash(ctx context.Context, account common.Address, blockHash common.Hash) ([]byte, error) {
+	as := askAll(ctx, r, func(c context.Context, cl *ethclient.Client) ([]byte, error) {
+		return cl.CodeAtHash(c, account, blockHash)
+	})
+	return agreedBytes(r, as, fmt.Sprintf("code of %s at block %s", account.Hex(), blockHash.Hex()))
+}
+
+func addrOf(a *common.Address) string {
+	if a == nil {
+		return "<creation>"
+	}
+	return a.Hex()
+}
+
+func agreedBytes(r *AgreeingReader, as []answer[[]byte], what string) ([]byte, error) {
+	var picked []byte
+	answered := 0
+	for _, a := range as {
+		if a.err != nil {
+			continue
+		}
+		answered++
+		if answered == 1 {
+			picked = a.value
+			continue
+		}
+		if !bytes.Equal(a.value, picked) {
+			return nil, fmt.Errorf("%w: chain %d %s: one provider returns 0x%x, %s returns 0x%x", ErrProvidersDisagree,
+				r.chainID, what, picked, a.host, a.value)
+		}
+	}
+	if answered < MinAgreeingProviders {
+		return nil, fmt.Errorf("%w: chain %d %s: %d of %d (%s)", ErrTooFewProviders, r.chainID, what, answered, len(as), unanswered(as))
+	}
+	return picked, nil
+}
+
+// LocatorClient is one provider's client, for LOCATING an event only. Nothing a locator returns is a fact: a log it finds
+// is established through an agreed read (its transaction's agreed receipt) before anything rests on it, and a provider
+// that hides a log only delays that, because every provider is asked.
+type LocatorClient struct {
+	Host   string
+	Client *ethclient.Client
+}
+
+// Locators are the providers' clients, for locating events (see LocatorClient).
+func (r *AgreeingReader) Locators() []LocatorClient {
+	out := make([]LocatorClient, len(r.providers))
+	for i, p := range r.providers {
+		out[i] = LocatorClient{Host: p.host, Client: p.client}
+	}
+	return out
+}
+
+// rateLimitBackoff and maxRateLimitBackoff bound how a throttled provider is asked again: 250 ms, then doubling, up to
+// 4 s - a few seconds in all, inside the read's own timeout.
+const (
+	rateLimitBackoff    = 250 * time.Millisecond
+	maxRateLimitBackoff = 4 * time.Second
+)
+
+// rateLimited reports whether a provider refused a read because it throttles this client (HTTP 429, or the JSON-RPC
+// rate-limit errors providers return): not an answer, and not a disagreement.
+func rateLimited(err error) bool {
+	var he rpc.HTTPError
+	if errors.As(err, &he) && he.StatusCode == http.StatusTooManyRequests {
+		return true
+	}
+	var ec rpc.Error
+	if errors.As(err, &ec) && (ec.ErrorCode() == -32005 || ec.ErrorCode() == -32029) {
+		return true
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "429 too many requests") || strings.Contains(s, "rate limit exceeded")
 }

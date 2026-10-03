@@ -248,6 +248,10 @@ var batchQuorumAttestorForEvidence atomic.Pointer[execution.BatchQuorumAttestor]
 // voting power and the aggregate is refused.
 var batchAttesterIdentity atomic.Pointer[execution.BatchAttesterIdentity]
 
+// outcomePeerForRequests answers the outcome recorder's requests (RB5 D4): built in the batching wiring block once the kept
+// trees and the settlement chains' outcome registries are in hand; until then the endpoint answers 503.
+var outcomePeerForRequests atomic.Pointer[execution.OutcomePeer]
+
 // batchPeriodBlocksFromEnv reads BATCH_PERIOD_BLOCKS.
 //
 // Every validator MUST agree on this value. It buckets BFT heights into periods, the period
@@ -794,6 +798,39 @@ func main() {
 		// seconds before a peer finishes processing the round — so it returns 200 with Error
 		// and Code set rather than an HTTP error status.
 		resp := stack.HandleOnDemandAttestationRequest(&req, *me)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	})
+
+	// Peer OUTCOME attestation (RB5 D4). The recorder asks this validator to co-sign a batch anchor's outcome root; the
+	// handler derives every member's outcome from the tree THIS validator kept when it signed the anchor and its own
+	// agreed reads of the chain, and signs the registry's outcome message only on an exact root match - see
+	// pkg/execution/outcome_peer.go.
+	mux.HandleFunc(execution.OutcomeRequestEndpoint, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		peer := outcomePeerForRequests.Load()
+		if peer == nil {
+			http.Error(w, "outcome peer not ready", http.StatusServiceUnavailable)
+			return
+		}
+		me := batchAttesterIdentity.Load()
+		if me == nil {
+			http.Error(w, "attester identity not configured", http.StatusServiceUnavailable)
+			return
+		}
+		var req execution.OutcomeRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), execution.DefaultOutcomeRequestTimeout)
+		defer cancel()
+		// A refusal is a normal outcome (outcome_not_final especially, until every member is final everywhere), so it
+		// returns 200 with Error and Code set.
+		resp := peer.HandleOutcomeRequest(ctx, &req, *me)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
 	})
@@ -1562,6 +1599,19 @@ func startValidator(
 		return nil, nil, fmt.Errorf("batch path: %w", gErr)
 	}
 	log.Printf("✅ [BATCH] settling on chains %v, each on a CertenAnchorV8_2", batchChains)
+	// Each settlement chain's CertenOutcomeRegistryV1 (CERTEN_OUTCOME_REGISTRY_<chainId>), read back through
+	// independent providers: bound to that chain's anchor, deployed on that chain (RB5 D4). Missing or wrong stops
+	// the start by name.
+	outcomeCtx, outcomeCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	outcomeChains, ocErr := execution.OutcomeChainsFromEnv(outcomeCtx, resolver, batchChains)
+	outcomeCancel()
+	if ocErr != nil {
+		return nil, nil, fmt.Errorf("batch path: %w", ocErr)
+	}
+	for _, id := range batchChains {
+		log.Printf("✅ [OUTCOME] chain %d: outcome registry %s records anchor %s", id, outcomeChains[id].Registry().Hex(),
+			outcomeChains[id].Anchor().Hex())
+	}
 	submitter := execution.NewBatchProofSubmitter(resolver, log.Printf)
 	peers := execution.BatchAttestationPeersFromEnv()
 	if len(peers) == 0 {
@@ -1600,6 +1650,15 @@ func startValidator(
 		return nil, nil, fmt.Errorf("the validator cannot start without its database")
 	}
 	stack.MemberOutcomes = database.NewIntentLifecycleRepository(dbClient)
+	// Every batch tree this validator signs or proves is kept on its own disk before it is signed, so it can state and
+	// certify what the members did once the batch settles (RB5 D4). A store that cannot be opened stops the start.
+	outcomeTrees, otErr := execution.NewOutcomeTreeStore(execution.OutcomeTreeDir())
+	if otErr != nil {
+		return nil, nil, fmt.Errorf("batch path: %w (the files are left in place; resolve them before restarting)", otErr)
+	}
+	stack.OutcomeTrees = outcomeTrees
+	prover.SetOutcomeTreeRetainer(stack)
+	log.Printf("🌳 [OUTCOME] batch trees kept at %s", outcomeTrees.Dir())
 	// The attester compares an incoming request's period width against this and
 	// refuses a mismatch, so a proposer cannot widen what this node selects.
 	periodBlocks, err := batchPeriodBlocksFromEnv()
@@ -1703,6 +1762,33 @@ func startValidator(
 		log.Printf("⚡ [OD] on-demand submitter running for the later members of sequential cross-chain " +
 			"intents only (ON_DEMAND_INTENT_KEYED is not true; on_demand intents take the period path)")
 	}
+
+	// The outcome peer: certifies an anchor's outcome root only when its own derivation, over the tree it kept and its own
+	// agreed reads of the chain, reproduces it (RB5 D4).
+	outcomeReaders := make(map[int64]execution.OutcomeChainReader, len(outcomeChains))
+	for id, c := range outcomeChains {
+		outcomeReaders[id] = c
+	}
+	outcomePeerForRequests.Store(&execution.OutcomePeer{Trees: outcomeTrees, Chains: outcomeReaders,
+		Attempts: execution.StackAttemptSource{Stack: stack}})
+
+	// The outcome recorder: every validator passes over the trees it kept; for each V8.2 anchor whose members are all
+	// final, the elected one gathers the quorum's partials over the registry's outcome message and records it, write-once
+	// (RB5 D4). The database is a hint; every fact is re-derived from the chain.
+	outcomeRecorder := &execution.BatchOutcomeRecorder{
+		ValidatorID: cfg.ValidatorID, Roster: consensus.BatchLeaderRoster, Trees: outcomeTrees,
+		Chains: make(map[int64]execution.OutcomeRecorderChain, len(outcomeChains)), Registries: execution.OutcomeRegistryAddresses(outcomeChains),
+		Attempts: execution.StackAttemptSource{Stack: stack}, Submitter: execution.ResolverOutcomeSubmitter{Resolver: resolver},
+		Records: database.NewBatchOutcomeRepository(dbClient), Peers: peers, Timeout: execution.DefaultOutcomeRequestTimeout,
+		Logf: log.Printf,
+	}
+	for id, c := range outcomeChains {
+		outcomeRecorder.Chains[id] = c
+	}
+	if err := outcomeRecorder.Validate(); err != nil {
+		return nil, nil, fmt.Errorf("batch path: %w", err)
+	}
+	go outcomeRecorder.Run(context.Background(), execution.OutcomeRecordInterval)
 
 	// Publish to the peer attestation handler. Without this a proposer's
 	// request gets 503 and no quorum can ever form.
@@ -2315,6 +2401,19 @@ func checkEnvironment() error {
 		ethrpc.CheckEnv,
 		func() error { _, err := entitlement.StoreConfigFromEnv(); return err },
 		func() error { _, err := batchPeriodBlocksFromEnv(); return err },
+		func() error {
+			// Every chain CERTEN settles on names its outcome registry (RB5 D4). The chains themselves are checked
+			// where the batch path starts; here, once they are named, so is each registry.
+			if strings.TrimSpace(os.Getenv(execution.SettlementChainsEnv)) == "" {
+				return nil
+			}
+			chains, err := execution.SettlementChainsFromEnv(strategy.SupportedChainIDs)
+			if err != nil {
+				return err
+			}
+			_, err = execution.OutcomeRegistriesFromEnv(chains)
+			return err
+		},
 		func() error { _, err := bftTimeoutFromEnv(); return err },
 		func() error { _, err := envvar.Bool("MIGRATE_ON_START", false); return err },
 		func() error { _, err := accumulate.LogLevelFromEnv(); return err },

@@ -2,6 +2,7 @@ package execution
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -76,7 +77,13 @@ type BatchQuorumAttestor struct {
 	// be another lane's or another chain's.
 	verifyMu  sync.Mutex
 	verifyTxs map[[32]byte]string
+
+	// retainer keeps every tree this validator proves for its outcome (RB5 D4). Required: prove refuses without it.
+	retainer OutcomeTreeRetainer
 }
+
+// SetOutcomeTreeRetainer wires the store the trees this validator proves are kept in (BatchStack.RetainTree).
+func (a *BatchQuorumAttestor) SetOutcomeTreeRetainer(r OutcomeTreeRetainer) { a.retainer = r }
 
 // TakeVerifyTx returns and clears bundleID's verify transaction hash. Empty means that anchor's last
 // attestation attempt did not reach a mined transaction of this node's.
@@ -232,6 +239,16 @@ func (a *BatchQuorumAttestor) prove(
 		return fmt.Errorf("validator BLS private key not loaded; cannot contribute a partial")
 	}
 	sk := km.PrivateKey()
+
+	// ---- Keep the tree before proving it (RB5 D4) -----------------------------
+	// The leader certifies this anchor's outcome later exactly as its peers do: from its own kept copy of the members.
+	if a.retainer == nil {
+		return fmt.Errorf("%w: no outcome tree retention is wired; this validator could not certify the outcome of what it proves", ErrOutcome)
+	}
+	if err := a.retainer.RetainTree(tree, OutcomeTreeProved); err != nil {
+		return fmt.Errorf("batch 0x%x: keeping the tree for its outcome: %w", tree.BundleID[:8], err)
+	}
+
 	ownSig, err := consensus.SignBatchAttestation(sk, msgHash)
 	if err != nil {
 		return fmt.Errorf("signing own partial: %w", err)
@@ -407,6 +424,10 @@ func (a *BatchQuorumAttestor) ProveBatchRootOnDemand(
 	})
 	if err == nil {
 		return nil
+	}
+	// A member whose tree cannot be kept yet (its deadline is not known yet) is waited for, never an attempt spent.
+	if errors.Is(err, ErrOutcomeNotYet) {
+		return &QuorumNotReadyError{Err: err}
 	}
 	// Only classify as "not ready" when nobody actively disagreed. A single mismatch on a
 	// one-member batch means two nodes hold different data for the same intent, and no amount

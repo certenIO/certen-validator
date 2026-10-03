@@ -210,6 +210,11 @@ func (s *BatchStack) HandleOnDemandAttestationRequest(
 		return refuseWith(CodeNotReady, "validator BLS private key not loaded")
 	}
 
+	// ---- Keep the tree before signing it (RB5 D4): see HandleBatchAttestationRequest --------------
+	if err := s.retainMembers(tree, map[[32]byte]*PendingBatchIntent{member.OperationID: member}, OutcomeTreeSigned); err != nil {
+		return refuseWith(retentionRefusalCode(err), "keeping batch %s for its outcome: %v", shortHex(resp.BundleID), err)
+	}
+
 	// SignV6_1PreExec, never SignWithDomain: the latter hashes to a different G1 point and
 	// makes the V2 circuit unsatisfiable, which is what took Sepolia test #7 down.
 	sig := bls_zkp.SignV6_1PreExec(sk, msgHash)
