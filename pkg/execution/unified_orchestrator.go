@@ -1862,13 +1862,24 @@ const (
 // validator only attests to a result it can INDEPENDENTLY confirm on the target
 // chain — the core of a meaningful multi-validator quorum
 // ("each validator independently observes and attests", result_attestation.go).
-// Before signing it: (1) structurally validates the message, (2) enforces
-// freshness (replay protection), and (3) re-observes the anchor transaction via
-// the same chain strategy used in Phase 7 and requires it to be finalized,
-// successful, AND to recompute to the exact ResultHash claimed. The result hash
-// is a deterministic function of on-chain facts (e.g. Solana sha256(txHash||slot||
-// "solana")), so an honest peer's recomputation matches while a fabricated or
-// non-existent result is rejected.
+// Before signing it:
+//
+//  1. validates the message's structure;
+//  2. enforces freshness (replay protection);
+//  3. re-observes the settlement transaction the message names (msg.AnchorTxHash, a historical name) through the
+//     chain strategy Phase 7 uses, in its own finalized chain: one this peer's chain has not finalized YET is
+//     answered "not yet" (Retryable, RB5-F49), an observation that is not final is refused, and a final one must
+//     recompute to the exact ResultHash claimed - a
+//     deterministic function of the transaction, its status, its block and that block's header roots (or of the
+//     effects shortfall the message claims), so an honest peer's recomputation matches
+//     and a fabricated or non-existent result is refused. A REVERTED settlement is attested, not refused: the revert
+//     is a finalized, verifiable outcome, and the result hash binds which outcome occurred;
+//  4. derives the committed effect from the user-signed intent it fetches itself and verifies it on its own chain
+//     reads (RB-SEC-1): executed with every committed effect, or reverted (peerVerifyCommittedEffect), or - when the
+//     message claims it - executed without a committed effect, re-derived and signed only if identical (RB3-F67).
+//
+// A member that never settled has no transaction and is verified from this validator's own copy of the member
+// instead (handlePeerNonSettlement, RB3-F49).
 func (o *UnifiedOrchestrator) HandlePeerAttestationRequest(
 	ctx context.Context,
 	req *PeerAttestationRequest,
@@ -1938,7 +1949,7 @@ func (o *UnifiedOrchestrator) HandlePeerAttestationRequest(
 		return fail(fmt.Sprintf("independent observation of %s failed: %v", msg.AnchorTxHash, err))
 	}
 	if !obs.IsFinalized {
-		return fail("anchor transaction not finalized on independent observation")
+		return fail("settlement transaction not finalized on independent observation")
 	}
 	// A REVERT is an outcome, not a reason to refuse.
 	//
