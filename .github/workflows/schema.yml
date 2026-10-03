@@ -28,10 +28,23 @@ jobs:
       CERTEN_CONTRACTS_DIR: ${{ github.workspace }}/certen-contracts
     steps:
       - uses: actions/checkout@v4
+      # certen-contracts is private, and the workflow's own GITHUB_TOKEN reads only this repository: without a key of its
+      # own the checkout failed on every run since it was added (RB5-F48), and the shared execution-commitment vectors
+      # the tests compare against were never checked in CI. A read-only deploy key of certen-contracts, stored here as
+      # the CERTEN_CONTRACTS_DEPLOY_KEY secret, reads that one repository and nothing else.
+      - name: Require the certen-contracts deploy key
+        env:
+          KEY: ${{ secrets.CERTEN_CONTRACTS_DEPLOY_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::secret CERTEN_CONTRACTS_DEPLOY_KEY is not set: add a read-only deploy key to certenIO/certen-contracts and its private key as this repository's Actions secret CERTEN_CONTRACTS_DEPLOY_KEY"
+            exit 1
+          fi
       - uses: actions/checkout@v4
         with:
           repository: certenIO/certen-contracts
           path: certen-contracts
+          ssh-key: ${{ secrets.CERTEN_CONTRACTS_DEPLOY_KEY }}
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25.0"
