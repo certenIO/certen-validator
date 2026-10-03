@@ -520,7 +520,7 @@ func TestCommittedAdminRotationHistoryIsChecked(t *testing.T) {
 		t.Fatalf("an admin rotation accepted and recorded by v12: %v", err)
 	}
 	// Checked once: the watermark covers the chain, and a second start reads nothing.
-	if through, err := accepted.ledgerStore.KindsCheckedThrough(CurrentExecutionRulesVersion); err != nil || through != 1 {
+	if through, err := accepted.ledgerStore.KindsCheckedThrough(CurrentExecutionRulesVersion, CommittedHistoryCheckVersion); err != nil || through != 1 {
 		t.Fatalf("kinds checked through %d, %v", through, err)
 	}
 	if err := accepted.IndexCommittedHistory(&fakeHistory{base: 1}); err != nil {
@@ -534,7 +534,7 @@ func TestCommitAdvancesTheKindsWatermark(t *testing.T) {
 	for h := int64(1); h <= 3; h++ {
 		commitBlock(t, app, nil, h, beforeV9)
 	}
-	if through, err := app.ledgerStore.KindsCheckedThrough(CurrentExecutionRulesVersion); err != nil || through != 3 {
+	if through, err := app.ledgerStore.KindsCheckedThrough(CurrentExecutionRulesVersion, CommittedHistoryCheckVersion); err != nil || through != 3 {
 		t.Fatalf("kinds checked through %d, %v", through, err)
 	}
 }
