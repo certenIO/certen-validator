@@ -2041,7 +2041,22 @@ const (
 	WriteBackRefusedAlreadyWritten = "refused_already_written" // the member's outcome is already on Accumulate
 	WriteBackRefusedUnresolved     = "refused_outcome_unknown" // an earlier write-back of it has an unknown outcome
 	WriteBackUnresolved            = "outcome_unknown"         // submitted, and whether it reached Accumulate is unknown
+	// RB5-F18: what a record made before Phase 9 states. The proof bundle, its artifact and its G2 level are stored
+	// before the write-back is attempted - the write-back carries their proof id - so the write-back's outcome is not
+	// known to them. Its outcome is recorded where it happens (member_write_backs, intent_member_outcomes and the
+	// proof cycle completion), never in these records.
+	WriteBackPending = "pending"
 )
+
+// writeBackStateAtBundle is the write-back state a record stored before Phase 9 can state: pending, unless a state is
+// already known. It used to be the empty string, which states nothing, beside a write_back_success that was always
+// false because nothing had been written yet (RB5-F18).
+func writeBackStateAtBundle(result *UnifiedProofCycleResult) string {
+	if result == nil || result.WriteBackState == "" {
+		return WriteBackPending
+	}
+	return result.WriteBackState
+}
 
 // ObserveSettlement reads a settlement from its chain with the strategy Phase 7 observes it with (the RB4-F55
 // repair runner checks a settlement is final and executed before re-driving its member).
@@ -2722,7 +2737,7 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 		"attestation_scheme": result.Scheme,
 		"threshold_met":      result.ThresholdMet,
 		"write_back_success": result.WriteBackSuccess,
-		"write_back_state":   result.WriteBackState,
+		"write_back_state":   writeBackStateAtBundle(result),
 	}
 	// What the proven execution DID. An artifact exists for a reverted settlement as well as a
 	// successful one - the failure is proven, attested and written back too - so the artifact must
@@ -2976,7 +2991,7 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 			"operation_commitment": hex.EncodeToString(req.OperationCommitment[:]),
 			"outcome_bound":        bindingEnforced,
 			"write_back_success":   result.WriteBackSuccess,
-			"write_back_state":     result.WriteBackState,
+			"write_back_state":     writeBackStateAtBundle(result),
 			"threshold_m":          thresholdM,
 			"threshold_n":          thresholdN,
 		}

@@ -55,3 +55,32 @@ func TestTheBundleStatesTheGovernedExecutionTheG1ProofEstablishes(t *testing.T) 
 		}
 	}
 }
+
+// RB5-F18, the same defect in the records stored beside the bundle: the artifact and its G2 level stated the
+// write-back's state as "" and its success as false, read before Phase 9 attempts it. They now state it is pending.
+func TestRecordsStoredBeforePhase9StateTheWriteBackIsPending(t *testing.T) {
+	db := s1OpenDB(t)
+	g0, _ := json.Marshal(certenproof.G0Result{G0ProofComplete: true})
+	c, intentID := f73Cycle(t, g0, g1StatingExecution(true))
+	t.Cleanup(func() { cleanupProofArtifacts(db, intentID) })
+	if err := f73Orchestrator(db).generateAndPersistBundle(context.Background(), c); err != nil {
+		t.Fatal(err)
+	}
+	var artifactRaw, g2Raw []byte
+	if err := db.QueryRow(`SELECT artifact_json FROM proof_artifacts WHERE intent_id=$1`, intentID).Scan(&artifactRaw); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT g.level_json FROM governance_proof_levels g JOIN proof_artifacts p ON p.proof_id = g.proof_id
+		WHERE p.intent_id=$1 AND g.gov_level='G2'`, intentID).Scan(&g2Raw); err != nil {
+		t.Fatal(err)
+	}
+	for name, raw := range map[string][]byte{"artifact": artifactRaw, "G2 level": g2Raw} {
+		var flags map[string]interface{}
+		if err := json.Unmarshal(raw, &flags); err != nil {
+			t.Fatal(err)
+		}
+		if flags["write_back_state"] != WriteBackPending || flags["write_back_success"] != false {
+			t.Errorf("the %s, stored before Phase 9, states write_back_state=%q write_back_success=%v", name, flags["write_back_state"], flags["write_back_success"])
+		}
+	}
+}
