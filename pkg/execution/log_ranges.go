@@ -7,6 +7,8 @@ import (
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/core/types"
+
+	"github.com/certen/independant-validator/pkg/ethrpc"
 )
 
 // minLogSpan is the narrowest block range filterLogsSplitting will ask for before it accepts that the
@@ -33,7 +35,9 @@ func filterLogsSplitting(ctx context.Context, f logFilterer, q ethereum.FilterQu
 	if err == nil {
 		return logs, nil
 	}
-	if ctx.Err() != nil || hi-lo+1 <= minLogSpan {
+	// A provider that cannot answer now (ethrpc.IsTransient) is not refusing the range: halving it only multiplies the
+	// queries a throttled provider is sent.
+	if ctx.Err() != nil || hi-lo+1 <= minLogSpan || ethrpc.IsTransient(err) {
 		return nil, fmt.Errorf("logs %d-%d: %w", lo, hi, err)
 	}
 	mid := lo + (hi-lo)/2

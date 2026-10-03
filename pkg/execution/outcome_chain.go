@@ -218,13 +218,13 @@ func (c *AgreedOutcomeChain) locateLeafConsumed(ctx context.Context, account com
 	var found []types.Log
 	var failures []string
 	for _, loc := range c.reader.Locators() {
-		head, err := loc.Client.HeaderByNumber(ctx, new(big.Int).SetUint64(to))
+		head, err := loc.HeaderByNumber(ctx, new(big.Int).SetUint64(to))
 		if err != nil {
 			failures = append(failures, fmt.Sprintf("%s: %v", loc.Host, err))
 			continue
 		}
 		from, err := searchBlockAtOrBefore(to, head.Time, uint64(searchFrom.Unix()), func(n uint64) (uint64, error) {
-			h, err := loc.Client.HeaderByNumber(ctx, new(big.Int).SetUint64(n))
+			h, err := loc.HeaderByNumber(ctx, new(big.Int).SetUint64(n))
 			if err != nil {
 				return 0, err
 			}
@@ -239,7 +239,7 @@ func (c *AgreedOutcomeChain) locateLeafConsumed(ctx context.Context, account com
 			if hi > to {
 				hi = to
 			}
-			logs, err := filterLogsSplitting(ctx, loc.Client, q, lo, hi)
+			logs, err := filterLogsSplitting(ctx, loc, q, lo, hi)
 			if err != nil {
 				failures = append(failures, fmt.Sprintf("%s: %v", loc.Host, err))
 				break
@@ -425,7 +425,7 @@ func (c *AgreedOutcomeChain) RecordedOutcome(ctx context.Context, bundleID [32]b
 		ToBlock: new(big.Int).SetUint64(block), Topics: [][]common.Hash{{batchOutcomeRecordedTopic}, {common.Hash(bundleID)}}}
 	var failures []string
 	for _, loc := range c.reader.Locators() {
-		logs, err := loc.Client.FilterLogs(ctx, q)
+		logs, err := loc.FilterLogs(ctx, q)
 		if err != nil {
 			failures = append(failures, fmt.Sprintf("%s: %v", loc.Host, err))
 			continue
@@ -460,7 +460,7 @@ func (c *AgreedOutcomeChain) RecordedOutcome(ctx context.Context, bundleID [32]b
 // decodes the quorum proof it submitted.
 func (c *AgreedOutcomeChain) recordedProof(ctx context.Context, rec *RecordedOutcomeTx) error {
 	for _, loc := range c.reader.Locators() {
-		tx, _, err := loc.Client.TransactionByHash(ctx, rec.Tx)
+		tx, _, err := loc.TransactionByHash(ctx, rec.Tx)
 		if err != nil || tx == nil || tx.Hash() != rec.Tx {
 			continue
 		}
