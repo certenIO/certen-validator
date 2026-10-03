@@ -194,10 +194,10 @@ func parseRetryAfter(v string, now time.Time) (time.Duration, bool) {
 
 // dialProvider dials one provider with a transport that records its Retry-After; a transient failure to connect (a
 // websocket endpoint dials eagerly) is retried like a query.
-func dialProvider(ctx context.Context, host, rawurl string, timeout time.Duration) (*ethclient.Client, *retryAfterHint, error) {
+func dialProvider(ctx context.Context, host, rawurl string, timeout, budget time.Duration) (*ethclient.Client, *retryAfterHint, error) {
 	hint := &retryAfterHint{}
 	httpClient := &http.Client{Transport: &retryAfterTransport{base: http.DefaultTransport, hint: hint}}
-	c, err := retryTransient(ctx, host, hint, constructionRetryBudget, timeout, func(c context.Context) (*rpc.Client, error) {
+	c, err := retryTransient(ctx, host, hint, budget, timeout, func(c context.Context) (*rpc.Client, error) {
 		return rpc.DialOptions(c, rawurl, rpc.WithHTTPClient(httpClient))
 	})
 	if err != nil {

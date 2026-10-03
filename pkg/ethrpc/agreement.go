@@ -36,11 +36,15 @@ var ErrProvidersDisagree = errors.New("providers disagree")
 var ErrTooFewProviders = errors.New("too few providers answered")
 
 // AgreeingReader is a FinalityReader over several independent providers of one chain. A fact is returned only when every
-// provider that answered agrees and at least MinAgreeingProviders answered.
+// provider that answered agrees and at least MinAgreeingProviders answered. Only providers whose chain id has been
+// verified are ever asked (verify.go).
 type AgreeingReader struct {
-	chainID   int64
-	providers []agreeingProvider
-	timeout   time.Duration
+	chainID int64
+	timeout time.Duration
+
+	mu        sync.Mutex
+	providers []agreeingProvider    // verified: the only providers asked for facts
+	pending   []*unverifiedProvider // configured, chain id not yet verified: never asked for a fact
 }
 
 type agreeingProvider struct {
@@ -74,41 +78,25 @@ func providerHost(raw string) string {
 	return strings.ToLower(u.Hostname())
 }
 
-// NewAgreeingReader dials every endpoint, keeps one per host, and checks that each serves chainID. It refuses fewer than
-// MinAgreeingProviders distinct hosts, and any endpoint that serves another chain. timeout bounds each attempt and is
-// each later read's own deadline. A provider that answers transiently (IsTransient) is asked again, the same provider
-// for the same chain id, for at most TransientRetryBudget across the whole construction (sooner if ctx ends); one that
-// still cannot answer stops the construction with its own error, by name and attempt count.
+// NewAgreeingReader dials every endpoint, keeps one per host, and verifies, all hosts at once, that each serves chainID.
+// timeout bounds each attempt and is each later read's own deadline.
+//
+//   - A provider that answers ANOTHER chain id refuses the construction outright: that is a misconfiguration, not an
+//     outage.
+//   - A provider that answers transiently (IsTransient) is asked again, the same provider for the same chain id, within
+//     TransientRetryBudget (sooner if ctx ends).
+//   - The construction succeeds once at least MinAgreeingProviders distinct hosts are verified: it then waits at most
+//     UnverifiedProviderGrace for the rest. Every provider still unverified is logged by name with its error, is asked
+//     for nothing, and is re-verified in the background (verify.go); it joins only once its chain id is verified.
+//   - Fewer than MinAgreeingProviders verified hosts within the budget refuses the construction, naming every
+//     unverified provider and its error.
 func NewAgreeingReader(ctx context.Context, chainID int64, urls []string, timeout time.Duration) (*AgreeingReader, error) {
 	if timeout <= 0 {
 		timeout = DefaultReadTimeout
 	}
-	ctx, cancelAll := context.WithTimeout(ctx, constructionRetryBudget)
-	defer cancelAll()
 	r := &AgreeingReader{chainID: chainID, timeout: timeout}
-	seen := map[string]bool{}
-	for _, u := range urls {
-		h := providerHost(u)
-		if h == "" || seen[h] {
-			continue
-		}
-		seen[h] = true
-		c, hint, err := dialProvider(ctx, h, u, timeout)
-		if err != nil {
-			return nil, fmt.Errorf("chain %d provider %s: dial: %w", chainID, h, err)
-		}
-		id, err := retryTransient(ctx, h, hint, constructionRetryBudget, timeout, c.ChainID)
-		if err != nil {
-			return nil, fmt.Errorf("chain %d provider %s: read its chain id: %w", chainID, h, err)
-		}
-		if id.Int64() != chainID {
-			return nil, fmt.Errorf("chain %d provider %s serves chain %s", chainID, h, id)
-		}
-		r.providers = append(r.providers, agreeingProvider{host: h, client: c, hint: hint, health: healthOf(chainID, u)})
-	}
-	if len(r.providers) < MinAgreeingProviders {
-		return nil, fmt.Errorf("chain %d has %d independent provider(s) %v; at least %d are required, so that no single "+
-			"provider's view is taken as the chain's (RB5-F53)", chainID, len(r.providers), ProviderHosts(urls), MinAgreeingProviders)
+	if err := r.verifyAll(ctx, urls); err != nil {
+		return nil, err
 	}
 	return r, nil
 }
@@ -122,8 +110,9 @@ func FinalityReaderForChain(ctx context.Context, chainID int64, primary string) 
 
 // Hosts names the providers, for logs.
 func (r *AgreeingReader) Hosts() []string {
-	hosts := make([]string, len(r.providers))
-	for i, p := range r.providers {
+	providers := r.verified()
+	hosts := make([]string, len(providers))
+	for i, p := range providers {
 		hosts[i] = p.host
 	}
 	return hosts
@@ -136,9 +125,10 @@ type answer[T any] struct {
 }
 
 func askAll[T any](ctx context.Context, r *AgreeingReader, read func(context.Context, *ethclient.Client) (T, error)) []answer[T] {
-	out := make([]answer[T], len(r.providers))
+	providers := r.verified()
+	out := make([]answer[T], len(providers))
 	var wg sync.WaitGroup
-	for i, p := range r.providers {
+	for i, p := range providers {
 		wg.Add(1)
 		go func(i int, p agreeingProvider) {
 			defer wg.Done()
@@ -404,8 +394,9 @@ type LocatorClient struct {
 
 // Locators are the providers' clients, for locating events (see LocatorClient).
 func (r *AgreeingReader) Locators() []LocatorClient {
-	out := make([]LocatorClient, len(r.providers))
-	for i, p := range r.providers {
+	providers := r.verified()
+	out := make([]LocatorClient, len(providers))
+	for i, p := range providers {
 		out[i] = LocatorClient{Host: p.host, Client: p.client, hint: p.hint, health: p.health, timeout: r.timeout}
 	}
 	return out
