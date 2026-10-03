@@ -71,6 +71,7 @@ func AdminSeedFromEnv() (adminSeed, error) {
 
 	raw := strings.TrimSpace(os.Getenv("CERTEN_ENTITLEMENT_ADMIN_KEYS"))
 	if raw != "" {
+		idOfKey := map[string]string{}
 		for _, entry := range strings.Split(raw, ",") {
 			entry = strings.TrimSpace(entry)
 			if entry == "" {
@@ -87,6 +88,12 @@ func AdminSeedFromEnv() (adminSeed, error) {
 					"CERTEN_ENTITLEMENT_ADMIN_KEYS entry %q: public key must be %d hex-encoded bytes",
 					id, ed25519.PublicKeySize)
 			}
+			// One key under two ids would look like two admins and sign as one.
+			if other, dup := idOfKey[string(b)]; dup {
+				return seed, fmt.Errorf("CERTEN_ENTITLEMENT_ADMIN_KEYS names one public key as both %q and %q: "+
+					"one key is one admin", other, id)
+			}
+			idOfKey[string(b)] = id
 			seed.Keys[id] = hexKey
 		}
 	}

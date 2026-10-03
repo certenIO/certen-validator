@@ -299,3 +299,50 @@ func VerifyAdminRotate(t *AdminRotateTx, chainID string, state *ledger.Entitleme
 	return verifyAdminQuorum(t.SigningBytes(), t.Signatures, &ledger.EntitlementPolicyState{AdminKeys: keys, AdminThreshold: threshold},
 		"admin rotation", "the admin set cannot be rotated")
 }
+
+// adminSetsRepeatingAKey names every admin set the chain has had - the genesis seal and every recorded change - that
+// names one public key under two ids.
+func adminSetsRepeatingAKey(state *ledger.EntitlementPolicyState) []string {
+	if state == nil {
+		return nil
+	}
+	repeats := func(keys map[string]string) string {
+		seen := map[string]string{}
+		for _, id := range sortedAdminIDs(keys) {
+			k := strings.ToLower(keys[id])
+			if other, dup := seen[k]; dup {
+				return fmt.Sprintf("%q and %q", other, id)
+			}
+			seen[k] = id
+		}
+		return ""
+	}
+	var out []string
+	if r := repeats(state.AdminKeys); r != "" {
+		out = append(out, "the genesis seal names one key as "+r)
+	}
+	for _, c := range state.AdminReseals {
+		if r := repeats(c.Keys); r != "" {
+			out = append(out, fmt.Sprintf("the admin set recorded at height %d names one key as %s", c.Height, r))
+		}
+	}
+	return out
+}
+
+// checkAdminKeyCountingContinuity is the claim behind continuing older state with v12's admin quorum, which counts
+// distinct keys where every earlier version counted distinct ids: the two counts differ only for a set naming one key
+// under two ids. State committed under an older version (or stamped none) is continued only if no admin set its chain
+// has had does; v12's own state is judged by v12 throughout.
+func checkAdminKeyCountingContinuity(persisted uint64, state *ledger.EntitlementPolicyState) error {
+	if persisted >= executionRulesV12 {
+		return nil
+	}
+	if found := adminSetsRepeatingAKey(state); len(found) > 0 {
+		return fmt.Errorf("execution rules v%d count an admin threshold by distinct keys, and this chain's state, committed "+
+			"under v%d, had an admin set naming one key twice (%s): v%d counted that key once per id, so its history may "+
+			"hold an admin-signed transaction this binary decides differently. Run the binary that committed it, or reset "+
+			"both CometBFT and the application ledger", CurrentExecutionRulesVersion, persisted, strings.Join(found, "; "),
+			persisted)
+	}
+	return nil
+}

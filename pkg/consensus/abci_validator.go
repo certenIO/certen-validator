@@ -299,6 +299,14 @@ func NewValidatorApp(ledgerStore *ledger.LedgerStore, chainID string) *Validator
 			if err != nil {
 				app.logger.Fatalf("❌ %v", err)
 			}
+			// v12 counts admin signatures by distinct key; older state is continued only where that changes nothing.
+			policy, err := ledgerStore.LoadEntitlementPolicy()
+			if err != nil {
+				app.logger.Fatalf("❌ the committed policy could not be read: %v - not starting on a ledger this node cannot read", err)
+			}
+			if err := checkAdminKeyCountingContinuity(state.ExecutionRulesVersion, policy); err != nil {
+				app.logger.Fatalf("❌ %v", err)
+			}
 			app.executionRulesVersion = ver
 
 			app.latestHeight = state.LastBlockHeight

@@ -169,6 +169,12 @@ const (
 	// entry - every node fails to apply such a block and the chain halts - so no live history holds one; that too is
 	// checked at every start (rotationBlockVerdicts).
 	//
+	// And from v12 every admin threshold - policy update, validator rotation, BLS registry, admin rotation - counts
+	// distinct KEYS, not distinct ids: one key named under two ids used to count twice. The two counts differ only for
+	// an admin set naming one key twice, so a node refuses to continue older state if any admin set its chain has had
+	// does (checkAdminKeyCountingContinuity); certen-testnet's sets - the lost genesis pair and the re-seal's three -
+	// name distinct keys, and genesis no longer seals such a set.
+	//
 	// v12 CONTINUES v7..v11 state without a reset: the kind is new, so no committed history contains it, and that is
 	// checked, not assumed - IndexCommittedHistory refuses to start on any committed admin-rotation-kind transaction that
 	// v12 did not decide (a ValidatorBlock's code, or an acceptance with no rotation recorded for it). Every other kind
