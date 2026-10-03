@@ -3,6 +3,7 @@ package consensus
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -104,5 +105,69 @@ func TestCommittedPolicyReplaysAreChecked(t *testing.T) {
 	}
 	if good.committedRulesVersion() != executionRulesV12 {
 		t.Fatalf("stamped v%d", good.committedRulesVersion())
+	}
+}
+
+// An accepted admin re-seal is history only when the committed policy records it at that height under its id; an
+// accepted one with no record is divergent or corrupt state, refused by name - also on a chain already indexed.
+func TestAnAcceptedReSealWithoutItsRecordIsRefused(t *testing.T) {
+	f := newRotationFixture()
+	_, to, _ := resealSets(f)
+	reseal := resealFor(to, rotChain)
+	raw := rotJSON(t, reseal)
+	hist := &fakeHistory{base: 1, blocks: map[int64][][]byte{1: {raw}}, times: map[int64]time.Time{1: beforeV9},
+		codes: map[int64][]uint32{1: {0}}}
+	bare := historyApp(t, 1)
+	if err := bare.ledgerStore.RecordCommittedBlock(1, nil); err != nil {
+		t.Fatal(err)
+	}
+	err := bare.IndexCommittedHistory(hist)
+	if !errors.Is(err, ErrCommittedHistoryUnderCurrentRules) || !strings.Contains(err.Error(), "admin re-seal that was accepted, but the committed policy holds no record") {
+		t.Fatalf("an accepted re-seal with no record: %v", err)
+	}
+	recorded := historyApp(t, 1)
+	st, err := recorded.ledgerStore.LoadEntitlementPolicy()
+	if err != nil || st == nil {
+		t.Fatalf("policy: (%v, %v)", st, err)
+	}
+	st.AdminReseals = []ledger.AdminReseal{{Height: 1, ID: reseal.ResealID(), Keys: reseal.AdminKeys, Threshold: reseal.AdminThreshold}}
+	if err := recorded.ledgerStore.SaveEntitlementPolicy(st); err != nil {
+		t.Fatal(err)
+	}
+	if err := recorded.IndexCommittedHistory(hist); err != nil {
+		t.Fatalf("an accepted re-seal with its record: %v", err)
+	}
+	// The exported check a tool runs: with the records, the same verdicts; without them, the acceptance is listed as
+	// unread, never passed as checked.
+	if v, u, err := CommittedBlockViolations(1, [][]byte{raw}, []uint32{0}, &CommittedRecords{Policy: st}); err != nil || len(v) != 0 || len(u) != 0 {
+		t.Fatalf("with its record: %v %v %v", v, u, err)
+	}
+	if v, u, err := CommittedBlockViolations(1, [][]byte{raw}, []uint32{0}, &CommittedRecords{}); err != nil || len(v) != 1 || len(u) != 0 {
+		t.Fatalf("records without it: %v %v %v", v, u, err)
+	}
+	if v, u, err := CommittedBlockViolations(1, [][]byte{raw}, []uint32{0}, nil); err != nil || len(v) != 0 || len(u) != 1 {
+		t.Fatalf("records not read: %v %v %v", v, u, err)
+	}
+}
+
+// Records without the registry log (a node of the first v12 release serves the admin record, not the log) leave every
+// accepted registry unread - never passed, never refused for want of a log nobody read - while re-seals are still
+// checked against the admin record. An empty log that WAS read is a log without the record: refused.
+func TestARegistryLogNotReadIsUnreadNotMissing(t *testing.T) {
+	f := newRegistryFixture(t)
+	reg := f.registry(1, "ops-1", "ops-2")
+	raw := rotJSON(t, reg)
+	_, to, _ := resealSets(f.rotationFixture)
+	reseal := resealFor(to, rotChain)
+	resealRaw := rotJSON(t, reseal)
+	policy := &ledger.EntitlementPolicyState{AdminKeys: f.policy.AdminKeys, AdminThreshold: 2}
+	v, u, err := CommittedBlockViolations(1, [][]byte{raw, resealRaw}, []uint32{0, 0}, &CommittedRecords{Policy: policy})
+	if err != nil || len(u) != 1 || !strings.Contains(u[0], "BLS registry (version 1)") || len(v) != 1 ||
+		!strings.Contains(v[0], "admin re-seal that was accepted") {
+		t.Fatalf("no registry log read: violations %v unread %v %v", v, u, err)
+	}
+	if v, u, err := CommittedBlockViolations(1, [][]byte{raw}, []uint32{0}, &CommittedRecords{Policy: policy,
+		Registry: &ledger.BLSRegistryLog{}}); err != nil || len(v) != 1 || len(u) != 0 {
+		t.Fatalf("a read registry log without the record: violations %v unread %v %v", v, u, err)
 	}
 }

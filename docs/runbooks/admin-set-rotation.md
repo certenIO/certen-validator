@@ -60,8 +60,32 @@ operator checks the live chain beforehand (step 1).
    validator-rotate history-check --rules 12 --rpc http://<validator>:26657
    ```
 
-   It reads every block and its result codes and judges them the way a v12 node does. The output must end with
-   `v12 continues this chain's history exactly`. Any `FOUND:` line means v12 must **not** be deployed on this chain.
+   It reads every block and its result codes and judges them the way a v12 node does. It also reads the node's
+   committed records and requires every accepted (code 0) registry, re-seal and admin rotation to be recorded at its
+   height under its id. Exit codes:
+
+   | Exit | Meaning |
+   |---|---|
+   | 0 | **Verified.** Every check made, every acceptance found in its record. Ends with `v12 continues this chain's history exactly`. |
+   | 3 | **INCOMPLETE, NOT verified.** Nothing found wrong, but the node could not serve some records, so those acceptances are listed by name as `RECORD NOT READ` with the reason, and the "exactly" line is withheld. |
+   | 4 | **FOUND.** History the rules do not reproduce (each listed as `FOUND:`). v12 must **not** continue this state. |
+   | 1 | The check could not run (an RPC or read error). |
+
+   Which records a node serves:
+   - **v11:** none. Every accepted registry and re-seal is unread (exit 3); an accepted admin rotation is `FOUND`.
+   - **The first v12 release (f15ffe5):** serves the admin record (`/certen/admin_set`), so re-seals and admin rotations
+     are checked against it. It does not serve the registry log, so every accepted registry is unread (exit 3).
+   - **This release (with `/certen/bls_registry`):** serves both. A complete chain exits 0.
+
+   An unread record is never a pass. Every v12 node checks every acceptance against its own ledger when it starts, and
+   refuses to start on one without its record.
+
+   Live facts for certen-testnet:
+   - The admin record holds the re-seal change at height 2788 (code 0), which the check finds.
+   - Registry version 1 at height 2790 (code 0) cannot be read over RPC until this release is deployed, so against
+     f15ffe5 the check exits 3 with that registry listed. Its record is evidenced by every intent certificate since
+     height 2791, each verified against that registry.
+   - After this release is deployed, the same command must exit 0.
 2. **Deploy all 7 together.** Stop every validator, install the v12 binary, and start every validator. Nodes on
    different rules judge admin signatures differently, so the fleet must never run mixed versions while
    admin-signed transactions flow.
@@ -70,7 +94,16 @@ operator checks the live chain beforehand (step 1).
    - refuses to start if any admin set its chain ever had names one key twice. certen-testnet's sets name distinct keys
      (`TestCertenTestnetAdminSetsNameDistinctKeys`);
    - reads every committed block once (logs `[HISTORY] checking committed heights 1-N ...` then `✅ [HISTORY] ... hold
-     no transaction rules v12 decide differently`) and records that the chain is checked.
+     no transaction rules v12 decide differently`) and records that the chain is checked. An accepted (code 0) BLS
+     registry, admin re-seal or admin rotation must be in the node's committed records, at its height under its id
+     (and, for a registry, its version). An acceptance without its record is divergent or corrupt state, and the node
+     refuses by name.
+
+     certen-testnet's real history meets this by construction. The accepted re-seal (height 2788) and registry
+     version 1 (height 2790) were written to the ledger in the same FinalizeBlock that returned code 0, and a failed
+     write stops the node rather than returning 0. The runlog records both accepted on all 7 nodes. The registry
+     record is also what every ValidatorBlock's intent certificate has been verified against since height 2791. The
+     check itself is the proof on each node.
 
    If a node refuses, it names the reason and writes nothing that blocks a rollback. Roll back to the v11 binary.
 4. **Verify app version 12 on every node:**
@@ -186,3 +219,22 @@ drives them with the `validator-rotate` binary built from the tree, over each no
   not it was signed. v12 refuses it by name.
 - **Admin thresholds counted distinct ids, not keys**, and the genesis seed accepted one key under two ids. Both are
   fixed, with the startup continuity check from Part A step 3.
+- **An accepted registry or re-seal was taken as history even with no record of it.** If the committed state does not
+  hold the record of a code-0 registry, re-seal or admin rotation, the state is divergent or corrupt, and v12 refuses
+  it by name. The startup check enforces this, and so does `history-check --rules 12` against a v12 node. The
+  pre-v12 fixture chain and both live rehearsals pass it, with every acceptance found in its record.
+
+## As designed: a duplicate within its own block
+
+A byte-different copy of a BLS registry or a policy update, in the **same block** as the original, is accepted as a
+no-op (code 0). Examples are the same JSON with a trailing space, or the same content with other signatures. The copy
+has no state effect: it writes no record and changes nothing. Its id equals the original's, which is already in the
+app hash, and it carries the original's record. This was the behaviour before v12, and v12 keeps it.
+
+Other duplicates are refused:
+
+| Duplicate | v12 verdict | Why |
+|---|---|---|
+| Validator rotation copy in the same block | Refused (code 6) | Its validator updates would be applied twice. |
+| Admin rotation copy in the same block | Refused (code 12) | One admin-set change per block. |
+| Policy update with a version scheduled in an earlier block | Refused (code 5) | An update cannot be replayed. |

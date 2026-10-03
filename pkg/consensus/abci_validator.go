@@ -1130,6 +1130,22 @@ func (app *ValidatorApp) Query(ctx context.Context, req *abcitypes.RequestQuery)
 		}
 		return &abcitypes.ResponseQuery{Code: 0, Value: b, Height: app.latestHeight}, nil
 
+	case "/certen/bls_registry":
+		// The committed BLS registry log (RB5 D3): every version the chain accepted, where, and under which id - what a
+		// history check finds each accepted registry's record in (validator-rotate history-check --rules 12).
+		if app.ledgerStore == nil {
+			return &abcitypes.ResponseQuery{Code: 1, Log: "ledger store not available"}, nil
+		}
+		log, err := app.ledgerStore.LoadBLSRegistry()
+		if err != nil {
+			return &abcitypes.ResponseQuery{Code: 1, Log: "failed to read the BLS registry log: " + err.Error()}, nil
+		}
+		b, err := json.Marshal(log)
+		if err != nil {
+			return &abcitypes.ResponseQuery{Code: 1, Log: err.Error()}, nil
+		}
+		return &abcitypes.ResponseQuery{Code: 0, Value: b, Height: app.latestHeight}, nil
+
 	default:
 		return &abcitypes.ResponseQuery{
 			Code: 2,

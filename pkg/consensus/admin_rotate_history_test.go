@@ -17,6 +17,13 @@ import (
 // v11 test suite already had, so the same function runs unchanged against the v11 binary (origin/main 96522ff); its
 // output there is pinned below.
 func preV12Chain(t *testing.T) []string {
+	lines, _, _, _ := runPreV12Chain(t)
+	return lines
+}
+
+// runPreV12Chain is preV12Chain, also returning the app (its ledger is the chain's committed state) and every block's
+// transactions and result codes.
+func runPreV12Chain(t *testing.T) ([]string, *ValidatorApp, [][][]byte, [][]uint32) {
 	t.Helper()
 	f := newRegistryFixture(t)
 	from, to, newAdmins := resealSets(f.rotationFixture)
@@ -45,6 +52,7 @@ func preV12Chain(t *testing.T) []string {
 		{rotJSON(t, f.registry(2, "ops-1", "ops-2")), rotJSON(t, byNew)},
 	}
 	var out []string
+	var allCodes [][]uint32
 	for i, txs := range blocks {
 		h := int64(i + 1)
 		resp, err := app.FinalizeBlock(context.Background(), &abcitypes.RequestFinalizeBlock{
@@ -60,8 +68,9 @@ func preV12Chain(t *testing.T) []string {
 			t.Fatal(err)
 		}
 		out = append(out, fmt.Sprintf("h=%d codes=%v apphash=%x stamp=v%d", h, codes, resp.AppHash, app.committedRulesVersion()))
+		allCodes = append(allCodes, codes)
 	}
-	return out
+	return out, app, blocks, allCodes
 }
 
 // v11PreV12Chain is preV12Chain's output under the v11 binary (origin/main 96522ff, captured 2026-10-03).
@@ -88,5 +97,40 @@ func TestPreV12HistoryReplaysIdenticallyUnderV12(t *testing.T) {
 		if got[i] != v11PreV12Chain[i] {
 			t.Fatalf("block %d under v12:\n  %s\nunder v11:\n  %s", i+1, got[i], v11PreV12Chain[i])
 		}
+	}
+}
+
+// The stricter history check refuses no legitimately committed history: every block of the pre-v12 chain - a
+// registry accepted, a re-seal refused and one accepted, a registry refused and one accepted by the re-sealed admins -
+// passes it against the chain's own committed records, both as each node runs it at start and as the tool runs it.
+func TestThePreV12ChainPassesTheRecordCheck(t *testing.T) {
+	_, app, blocks, codes := runPreV12Chain(t)
+	records, err := app.committedRecords()
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted := 0
+	for i := range blocks {
+		h := int64(i + 1)
+		v, u, err := CommittedBlockViolations(h, blocks[i], codes[i], records)
+		if err != nil || len(v) != 0 || len(u) != 0 {
+			t.Fatalf("block %d: %v %v %v", h, v, u, err)
+		}
+		for j, tx := range blocks[i] {
+			_, isKind, err := app.kindViolation(h, j, tx, codes[i][j])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if isKind && codes[i][j] == 0 {
+				accepted++
+			}
+		}
+		if _, found, err := app.historicalOperations(h, time.Unix(1_800_000_000+h, 0), blocks[i], codes[i]); err != nil || len(found) != 0 {
+			t.Fatalf("block %d at start: %v %v", h, found, err)
+		}
+	}
+	// Two registries and one re-seal accepted (and one policy update): each found in its record.
+	if accepted != 4 {
+		t.Fatalf("%d accepted transactions of the checked kinds, want 4", accepted)
 	}
 }
