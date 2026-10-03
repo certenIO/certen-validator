@@ -25,6 +25,7 @@ import (
 	"github.com/certen/independant-validator/pkg/anchor"
 	"github.com/certen/independant-validator/pkg/consensus"
 	"github.com/certen/independant-validator/pkg/crypto/bls_zkp"
+	"github.com/certen/independant-validator/pkg/ethrpc"
 	"github.com/certen/independant-validator/pkg/execution/contracts"
 	"github.com/certen/independant-validator/pkg/intent"
 	"github.com/certen/independant-validator/pkg/proof"
@@ -402,7 +403,7 @@ func NewEthereumContractManager(config *CertenContractConfig) (*EthereumContract
 	}
 
 	// Connect to Ethereum
-	client, err := ethclient.Dial(config.EthereumRPC)
+	client, err := ethrpc.DialRetrying(context.Background(), config.EthereumRPC)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to Ethereum: %w", err)
 	}

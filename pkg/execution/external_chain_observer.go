@@ -91,7 +91,7 @@ func NewExternalChainObserver(config *ExternalChainObserverConfig) (*ExternalCha
 
 	// Dial the raw RPC client so we can derive both the high-level ethclient and the
 	// gethclient (RB-5: gethclient exposes eth_getProof for storage-slot state proofs).
-	rpcClient, err := rpc.DialContext(context.Background(), config.EthereumRPC)
+	rpcClient, err := ethrpc.DialRPCRetrying(context.Background(), config.EthereumRPC)
 	if err != nil {
 		return nil, fmt.Errorf("connect to ethereum: %w", err)
 	}

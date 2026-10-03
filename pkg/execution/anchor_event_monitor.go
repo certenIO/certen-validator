@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/certen/independant-validator/pkg/ethrpc"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
@@ -95,7 +96,7 @@ func (m *AnchorEventMonitor) Start(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("anchor event monitor: chain %d: %w", chainID, err)
 		}
-		client, err := ethclient.DialContext(ctx, rpc)
+		client, err := ethrpc.DialRetrying(ctx, rpc)
 		if err != nil {
 			return fmt.Errorf("anchor event monitor: chain %d: dial: %w", chainID, err)
 		}
