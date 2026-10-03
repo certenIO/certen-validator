@@ -27,11 +27,16 @@ var (
 
 // debugf prints only at LOG_LEVEL=debug. An unreadable LOG_LEVEL is refused at startup (main.checkEnvironment).
 func debugf(format string, args ...interface{}) {
+	if DebugLogging() {
+		log.Printf(format, args...)
+	}
+}
+
+// DebugLogging reports whether LOG_LEVEL=debug, for packages that log through their own logger (RB5-F47).
+func DebugLogging() bool {
 	debugOnce.Do(func() {
 		lvl, err := LogLevelFromEnv()
 		debugOn = err == nil && lvl == "debug"
 	})
-	if debugOn {
-		log.Printf(format, args...)
-	}
+	return debugOn
 }

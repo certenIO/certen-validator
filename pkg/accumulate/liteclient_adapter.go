@@ -687,7 +687,7 @@ func (l *LiteClientAdapter) parseCertenTransaction(entry BlockEntry, block *Mino
 	// elements that could be shorter (RB3-F36).
 
 	// Debug: Log final IntentData before returning
-	log.Printf("🔍 [DEBUG-INTENT-DATA] Final IntentData for %s contains %d elements: %+v",
+	debugf("🔍 [DEBUG-INTENT-DATA] Final IntentData for %s contains %d elements: %+v",
 		hash, len(certenTx.IntentData), certenTx.IntentData)
 
 	return certenTx
@@ -792,21 +792,21 @@ func (l *LiteClientAdapter) extractIntentDataFromEntry(entry BlockEntry) map[str
 													switch i {
 													case 0:
 														intentData["intentData"] = jsonData
-														log.Printf("✅ [EXTRACT-INTENT] Decoded intentData from element %d: %+v", i, jsonData)
+														debugf("✅ [EXTRACT-INTENT] Decoded intentData from element %d: %+v", i, jsonData)
 													case 1:
 														intentData["crossChainData"] = jsonData
-														log.Printf("✅ [EXTRACT-INTENT] Decoded crossChainData from element %d: %+v", i, jsonData)
+														debugf("✅ [EXTRACT-INTENT] Decoded crossChainData from element %d: %+v", i, jsonData)
 													case 2:
 														intentData["governanceData"] = jsonData
-														log.Printf("✅ [EXTRACT-INTENT] Decoded governanceData from element %d: %+v", i, jsonData)
+														debugf("✅ [EXTRACT-INTENT] Decoded governanceData from element %d: %+v", i, jsonData)
 													case 3:
 														intentData["replayData"] = jsonData
-														log.Printf("✅ [EXTRACT-INTENT] Decoded replayData from element %d: %+v", i, jsonData)
+														debugf("✅ [EXTRACT-INTENT] Decoded replayData from element %d: %+v", i, jsonData)
 													default:
 														// Handle additional data elements beyond the core 4
 														fieldKey := fmt.Sprintf("additionalData_%d", i)
 														intentData[fieldKey] = jsonData
-														log.Printf("✅ [EXTRACT-INTENT] Decoded additional data element %s: %+v", fieldKey, jsonData)
+														debugf("✅ [EXTRACT-INTENT] Decoded additional data element %s: %+v", fieldKey, jsonData)
 													}
 												} else {
 													// Some elements might be raw text or other formats, store as hex string
