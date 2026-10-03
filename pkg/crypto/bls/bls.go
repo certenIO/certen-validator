@@ -18,7 +18,6 @@ package bls
 import (
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -457,49 +456,30 @@ func VerifyAggregateSignatureWithDomain(aggSig *Signature, publicKeys []*PublicK
 // HELPER FUNCTIONS
 // =============================================================================
 
-// hashToG1 hashes a message to a point on G1
-// Uses the "hash and pray" method for simplicity
+// SignatureDST is the RFC 9380 domain separation tag of these signatures: the hash_to_curve suite
+// BLS12381G1_XMD:SHA-256_SSWU_RO_ of the BLS signature ciphersuite (draft-irtf-cfrg-bls-signature, "NUL_" scheme).
+const SignatureDST = "BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_NUL_"
+
+// hashToG1 maps a message to G1 with RFC 9380's hash_to_curve (RB5-F54).
+//
+// It used to hash to 32 bytes and try G1Affine.SetBytes on them - which, for 32 bytes, always fails - and then return
+// fr(hash)·G1. Every hash point had a discrete log anyone could compute, so one signature sk·s·G1 gave away sk·G1 and,
+// from it, the signer's signature on any message (TestOneSignatureMustNotLetAnyoneSignAnotherMessage). It also fell back
+// to the generator itself after 1,000 tries. hash_to_curve has neither weakness: no one knows the discrete log of its
+// output, and it cannot fail for a valid DST.
 func hashToG1(message []byte) bls12381.G1Affine {
-	// Create a deterministic hash
-	h := sha256.New()
-	h.Write([]byte("BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_"))
-	h.Write(message)
-
-	var counter uint64
-	for {
-		h2 := sha256.New()
-		h2.Write(h.Sum(nil))
-		binary.Write(h2, binary.BigEndian, counter)
-		hash := h2.Sum(nil)
-
-		// Try to create a valid G1 point
-		var point bls12381.G1Affine
-		_, err := point.SetBytes(hash)
-		if err == nil && !point.IsInfinity() {
-			// Ensure point is in the correct subgroup by multiplying by cofactor
-			// For BLS12-381 G1, the cofactor is (z - 1)^2 / 3 where z = -0xd201000000010000
-			// But we can use a simpler check: the point is already on the curve
-			return point
-		}
-
-		// Hash to a scalar and multiply generator
-		var scalar fr.Element
-		scalar.SetBytes(hash)
-		var scalarBig big.Int
-		scalar.BigInt(&scalarBig)
-
-		var result bls12381.G1Affine
-		result.ScalarMultiplication(&g1Gen, &scalarBig)
-		if !result.IsInfinity() {
-			return result
-		}
-
-		counter++
-		if counter > 1000 {
-			// Fallback: return generator (should never happen with proper hash)
-			return g1Gen
-		}
+	p, err := hashToCurveG1(message, []byte(SignatureDST))
+	if err != nil {
+		// SignatureDST is a valid constant DST; an error here is a broken build, never an input.
+		panic(fmt.Sprintf("bls: hash_to_curve with the signature DST: %v", err))
 	}
+	return p
+}
+
+// hashToCurveG1 is RFC 9380 hash_to_curve for BLS12-381 G1 (expand_message_xmd with SHA-256, simplified SWU, random
+// oracle), via gnark-crypto.
+func hashToCurveG1(message, dst []byte) (bls12381.G1Affine, error) {
+	return bls12381.HashToG1(message, dst)
 }
 
 // computeDomainMessage computes a domain-separated message hash
