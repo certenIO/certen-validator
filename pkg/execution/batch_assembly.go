@@ -1033,7 +1033,13 @@ func (s *BatchStack) admit(
 		intentMessage = m
 	}
 
+	// The member's commit block: the BVN block its intent was written in, whose consensus time commitTime is - read by
+	// discovery from exactly that block. Any later reader of a missing commit time reads that block (RB5-F57).
+	execPartition, execBlock := commitBlockOf(attestation)
+
 	return &PendingBatchIntent{
+		ExecPartition:        execPartition,
+		ExecBlock:            execBlock,
 		IntentID:             intentID,
 		GovernanceCommitment: governanceCommitment,
 		AccumulateSetRoot:    accSetRoot,

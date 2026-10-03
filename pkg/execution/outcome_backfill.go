@@ -408,8 +408,9 @@ type AccumulateIntentSource struct {
 	Client *http.Client
 }
 
-// SignedIntent reads the intent's writeData blobs, and the consensus time of the block its principal's main chain
-// recorded the transaction in - the block it executed in, which admission took as its commit time (RB4-F74).
+// SignedIntent reads the intent's writeData blobs, and the member's commit time: the consensus time of the BVN block
+// its principal's main chain recorded the transaction in - the block it executed in, which admission took as its commit
+// time (RB4-F74) - read with ResolveCommitTime like every other path (RB5-F57).
 func (s AccumulateIntentSource) SignedIntent(ctx context.Context, txHash, principal string) ([][]byte, time.Time, error) {
 	if s.Adapter == nil {
 		return nil, time.Time{}, fmt.Errorf("no Accumulate client")
@@ -455,10 +456,25 @@ func (s AccumulateIntentSource) SignedIntent(ctx context.Context, txHash, princi
 	if out.Error != nil {
 		return nil, time.Time{}, fmt.Errorf("the chain entry of %s on %s: %s", txHash, principal, out.Error.Message)
 	}
-	if !strings.EqualFold(out.Result.Entry, strings.TrimPrefix(txHash, "0x")) || out.Result.Receipt.LocalBlockTime.IsZero() {
-		return nil, time.Time{}, fmt.Errorf("the chain entry of %s on %s names no block time", txHash, principal)
+	if !strings.EqualFold(out.Result.Entry, strings.TrimPrefix(txHash, "0x")) || out.Result.Receipt.LocalBlock == 0 {
+		return nil, time.Time{}, fmt.Errorf("the chain entry of %s on %s names no block", txHash, principal)
 	}
-	return blobs, out.Result.Receipt.LocalBlockTime, nil
+	// The member's commit time, read exactly as every other path reads it (RB5-F57): the consensus time of its commit
+	// block - the BVN block holding the transaction, which the receipt names by index - with ResolveCommitTime.
+	partition, err := s.Adapter.TransactionBlock(ctx, txHash, int64(out.Result.Receipt.LocalBlock))
+	if err != nil {
+		return nil, time.Time{}, fmt.Errorf("the commit block of %s: %w", txHash, err)
+	}
+	t, err := ResolveCommitTime(ctx, s.Adapter.MinorBlockTime, partition, out.Result.Receipt.LocalBlock)
+	if err != nil {
+		return nil, time.Time{}, fmt.Errorf("the commit time of %s: %w", txHash, err)
+	}
+	// The receipt states the same block's time; a disagreement is refused, never chosen between.
+	if rt := out.Result.Receipt.LocalBlockTime; !rt.IsZero() && !rt.Equal(t) {
+		return nil, time.Time{}, fmt.Errorf("the receipt of %s states block %d at %s, the block reads %s", txHash,
+			out.Result.Receipt.LocalBlock, rt.UTC().Format(time.RFC3339), t.Format(time.RFC3339))
+	}
+	return blobs, t, nil
 }
 
 // canonicalMemberOrder refuses members not in the order a tree is formed in: ascending commit height, then intent id.

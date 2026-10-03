@@ -218,6 +218,15 @@ func (p *PendingAttestation) SignedIntentBlobs() ([][]byte, error) {
 	return [][]byte{ci.IntentData, ci.CrossChainData, ci.GovernanceData, ci.ReplayData}, nil
 }
 
+// ExecutionBlock is the BVN minor block the round's intent was written in (CertenIntent.ExecutionBlock): the batch
+// member's commit block (RB5-F57).
+func (p *PendingAttestation) ExecutionBlock() (partition string, index int64) {
+	if p == nil {
+		return "", 0
+	}
+	return p.CertenIntent.ExecutionBlock()
+}
+
 // IsCadence reports whether this attestation is being replayed from the cadence queue.
 func (p *PendingAttestation) IsCadence() bool { return p != nil && p.Replayed }
 

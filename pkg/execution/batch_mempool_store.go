@@ -98,14 +98,17 @@ type persistedMember struct {
 	Attestation json.RawMessage `json:"attestation,omitempty"`
 	// This validator's own settlement progress on an on-demand member. omitempty for the same
 	// version-skew reason as Lane.
-	AnchorProved       bool     `json:"anchor_proved,omitempty"`
-	AnchorTx           string   `json:"anchor_tx,omitempty"`
-	VerifyTx           string   `json:"verify_tx,omitempty"`
-	AnchorBlock        uint64   `json:"anchor_block,omitempty"`
-	AttestedSeen       bool     `json:"attested_seen,omitempty"`
-	FirstSeen          int64    `json:"first_seen,omitempty"` // unix seconds
-	CommitPartition    string   `json:"commit_partition,omitempty"`
-	CommitTimeMs       int64    `json:"commit_time_ms,omitempty"` // unix milliseconds
+	AnchorProved    bool   `json:"anchor_proved,omitempty"`
+	AnchorTx        string `json:"anchor_tx,omitempty"`
+	VerifyTx        string `json:"verify_tx,omitempty"`
+	AnchorBlock     uint64 `json:"anchor_block,omitempty"`
+	AttestedSeen    bool   `json:"attested_seen,omitempty"`
+	FirstSeen       int64  `json:"first_seen,omitempty"` // unix seconds
+	CommitPartition string `json:"commit_partition,omitempty"`
+	CommitTimeMs    int64  `json:"commit_time_ms,omitempty"` // unix milliseconds
+	// The commit block (RB5-F57); omitempty, for the same version-skew reason as Lane.
+	ExecPartition      string   `json:"exec_partition,omitempty"`
+	ExecBlock          uint64   `json:"exec_block,omitempty"`
 	SettlementTx       string   `json:"settlement_tx,omitempty"`
 	SettlementTxs      []string `json:"settlement_txs,omitempty"`
 	SettlementNonce    uint64   `json:"settlement_nonce,omitempty"`
@@ -269,6 +272,8 @@ func (s *BatchMempoolStore) encodeMember(p *PendingBatchIntent, lane BatchLane) 
 		FirstSeen:          unixOrZero(p.FirstSeen),
 		CommitPartition:    p.CommitPartition,
 		CommitTimeMs:       unixMilliOrZero(p.CommitTime),
+		ExecPartition:      p.ExecPartition,
+		ExecBlock:          p.ExecBlock,
 		SettlementTx:       p.SettlementTx,
 		SettlementTxs:      append([]string(nil), p.SettlementTxs...),
 		SettlementNonce:    p.SettlementNonce,
@@ -423,6 +428,8 @@ func (s *BatchMempoolStore) Load(m *BatchMempool) (int, error) {
 			FirstSeen:            timeOrZero(pm.FirstSeen),
 			CommitPartition:      pm.CommitPartition,
 			CommitTime:           timeOrZeroMilli(pm.CommitTimeMs),
+			ExecPartition:        pm.ExecPartition,
+			ExecBlock:            pm.ExecBlock,
 			SettlementTx:         pm.SettlementTx,
 			SettlementTxs:        pm.SettlementTxs,
 			SettlementNonce:      pm.SettlementNonce,

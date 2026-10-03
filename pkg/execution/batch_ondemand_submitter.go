@@ -470,10 +470,11 @@ func (s *OnDemandSubmitter) failoverElapsed(ctx context.Context, member *Pending
 	return time.Since(origin)
 }
 
-// resolveCommitTime reads and records the member's Accumulate block time if it is missing.
+// resolveCommitTime reads and records the member's commit time if it is missing: the consensus time of its commit block,
+// with ResolveCommitTime - never the Directory block that anchored it (CommitPartition/CommitHeight), whose time is later
+// and would give this validator another notBefore than its peers (RB5-F57).
 func (s *OnDemandSubmitter) resolveCommitTime(ctx context.Context, member *PendingBatchIntent) {
-	if !member.CommitTime.IsZero() || s.cfg.CommitTime == nil ||
-		member.CommitPartition == "" || member.CommitHeight == 0 {
+	if !member.CommitTime.IsZero() || s.cfg.CommitTime == nil {
 		return
 	}
 	key := memberWorkKey(member.ChainID, member.OperationID)
@@ -481,12 +482,12 @@ func (s *OnDemandSubmitter) resolveCommitTime(ctx context.Context, member *Pendi
 		return
 	}
 	rctx, cancel := context.WithTimeout(ctx, onDemandCommitTimeRead)
-	t, err := s.cfg.CommitTime(rctx, member.CommitPartition, member.CommitHeight)
+	t, err := ResolveCommitTime(rctx, s.cfg.CommitTime, member.ExecPartition, member.ExecBlock)
 	cancel()
-	if err != nil || t.IsZero() {
+	if err != nil {
 		s.commitTimeTried[key] = time.Now()
-		s.cfg.Logf("⚠️ [OD] intent=%s: reading the block time of %s height %d: %v - failover runs from this "+
-			"validator's first sighting until it can be read", member.IntentID, member.CommitPartition, member.CommitHeight, err)
+		s.cfg.Logf("⚠️ [OD] intent=%s: reading the time of its commit block %d on %s: %v - failover runs from this "+
+			"validator's first sighting until it can be read", member.IntentID, member.ExecBlock, member.ExecPartition, err)
 		return
 	}
 	delete(s.commitTimeTried, key)

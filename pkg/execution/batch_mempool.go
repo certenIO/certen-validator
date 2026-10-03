@@ -116,12 +116,21 @@ type PendingBatchIntent struct {
 	// bundleId — which is precisely what lets a quorum co-sign one batch.
 	CommitHeight uint64
 
-	// CommitPartition is the Accumulate partition whose minor block CommitHeight counts, and
-	// CommitTime that block's consensus time. CommitTime is the member's COMMON clock: every
-	// validator reads the same value for it, and it survives a restart. The on-demand failover
-	// rotation and the gas-deferral deadline are measured from it (see Origin). Zero until known.
+	// CommitPartition is the Accumulate partition whose minor block CommitHeight counts (the Directory block that
+	// anchored the intent). CommitTime is the consensus time of the member's commit block (ExecPartition/ExecBlock,
+	// below) - the member's COMMON clock: every validator reads the same value for it, and it survives a restart. The
+	// on-demand failover rotation, the deadline and a v4 leaf's notBefore are measured from it (see Origin). Zero until
+	// known.
 	CommitPartition string
 	CommitTime      time.Time
+
+	// ExecPartition and ExecBlock are the member's COMMIT BLOCK: the BVN minor block its intent was written in (the
+	// partition's URL, acc://bvn-<id>.acme, and the block's index). CommitTime is that block's consensus time and
+	// nothing else (RB5-F57): admission takes it from discovery, which read exactly that block, and every path that
+	// resolves a missing one reads it with ResolveCommitTime. CommitPartition/CommitHeight name the Directory block
+	// that anchored it - the member's period - whose time is later, and is never a member's commit time.
+	ExecPartition string
+	ExecBlock     uint64
 
 	// EnqueuedAt is when this process queued the member. Local, and reset by a restart: only the
 	// memory-backstop prune uses it, where a restart extending retention is the safe direction.
