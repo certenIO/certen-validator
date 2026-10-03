@@ -554,6 +554,13 @@ func (e *CertenDataEntry) ToDoubleHashFormat() [][]byte {
 	entries = append(entries, labeled("threshold_numerator", fmt.Sprintf("%d", e.ThresholdNumerator)))
 	entries = append(entries, labeled("threshold_denominator", fmt.Sprintf("%d", e.ThresholdDenominator)))
 
+	// RB5-F18: the settlement's inclusion verdicts, computed from its verified trie proofs (ExternalChainProofSummary).
+	// They were computed into the transaction body, which is never written, so no write-back stated them. They close
+	// the always-present block above; the blocks below are present only when set and are located by key, as every
+	// appended entry is.
+	entries = append(entries, labeled("tx_inclusion_proof_valid", fmt.Sprintf("%t", e.TxInclusionProofValid)))
+	entries = append(entries, labeled("receipt_inclusion_proof_valid", fmt.Sprintf("%t", e.ReceiptInclusionProofValid)))
+
 	// OUTCOME - appended after every positional entry, and only when set, so a settlement's record is
 	// unchanged. A member that never settled says so, with why (RB3-F49).
 	if e.Outcome != "" {

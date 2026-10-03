@@ -295,6 +295,10 @@ type UnifiedProofCycleResult struct {
 
 	// CommitmentData from the original request, propagated for multi-leg aggregator write-back
 	CommitmentData map[string]interface{} `json:"commitment_data,omitempty"`
+
+	// level3 is, per level record, why its level-3 root does not commit the operation the cycle's quorum signs - nil
+	// when it does (level3CommitsOperation). Recorded with the levels, read when the cycle completes (RB5-F18).
+	level3 map[uuid.UUID]error
 }
 
 // =============================================================================
@@ -1858,13 +1862,24 @@ const (
 // validator only attests to a result it can INDEPENDENTLY confirm on the target
 // chain — the core of a meaningful multi-validator quorum
 // ("each validator independently observes and attests", result_attestation.go).
-// Before signing it: (1) structurally validates the message, (2) enforces
-// freshness (replay protection), and (3) re-observes the anchor transaction via
-// the same chain strategy used in Phase 7 and requires it to be finalized,
-// successful, AND to recompute to the exact ResultHash claimed. The result hash
-// is a deterministic function of on-chain facts (e.g. Solana sha256(txHash||slot||
-// "solana")), so an honest peer's recomputation matches while a fabricated or
-// non-existent result is rejected.
+// Before signing it:
+//
+//  1. validates the message's structure;
+//  2. enforces freshness (replay protection);
+//  3. re-observes the settlement transaction the message names (msg.AnchorTxHash, a historical name) through the
+//     chain strategy Phase 7 uses, in its own finalized chain: one this peer's chain has not finalized YET is
+//     answered "not yet" (Retryable, RB5-F49), an observation that is not final is refused, and a final one must
+//     recompute to the exact ResultHash claimed - a
+//     deterministic function of the transaction, its status, its block and that block's header roots (or of the
+//     effects shortfall the message claims), so an honest peer's recomputation matches
+//     and a fabricated or non-existent result is refused. A REVERTED settlement is attested, not refused: the revert
+//     is a finalized, verifiable outcome, and the result hash binds which outcome occurred;
+//  4. derives the committed effect from the user-signed intent it fetches itself and verifies it on its own chain
+//     reads (RB-SEC-1): executed with every committed effect, or reverted (peerVerifyCommittedEffect), or - when the
+//     message claims it - executed without a committed effect, re-derived and signed only if identical (RB3-F67).
+//
+// A member that never settled has no transaction and is verified from this validator's own copy of the member
+// instead (handlePeerNonSettlement, RB3-F49).
 func (o *UnifiedOrchestrator) HandlePeerAttestationRequest(
 	ctx context.Context,
 	req *PeerAttestationRequest,
@@ -1934,7 +1949,7 @@ func (o *UnifiedOrchestrator) HandlePeerAttestationRequest(
 		return fail(fmt.Sprintf("independent observation of %s failed: %v", msg.AnchorTxHash, err))
 	}
 	if !obs.IsFinalized {
-		return fail("anchor transaction not finalized on independent observation")
+		return fail("settlement transaction not finalized on independent observation")
 	}
 	// A REVERT is an outcome, not a reason to refuse.
 	//
@@ -2041,7 +2056,22 @@ const (
 	WriteBackRefusedAlreadyWritten = "refused_already_written" // the member's outcome is already on Accumulate
 	WriteBackRefusedUnresolved     = "refused_outcome_unknown" // an earlier write-back of it has an unknown outcome
 	WriteBackUnresolved            = "outcome_unknown"         // submitted, and whether it reached Accumulate is unknown
+	// RB5-F18: what a record made before Phase 9 states. The proof bundle, its artifact and its G2 level are stored
+	// before the write-back is attempted - the write-back carries their proof id - so the write-back's outcome is not
+	// known to them. Its outcome is recorded where it happens (member_write_backs, intent_member_outcomes and the
+	// proof cycle completion), never in these records.
+	WriteBackPending = "pending"
 )
+
+// writeBackStateAtBundle is the write-back state a record stored before Phase 9 can state: pending, unless a state is
+// already known. It used to be the empty string, which states nothing, beside a write_back_success that was always
+// false because nothing had been written yet (RB5-F18).
+func writeBackStateAtBundle(result *UnifiedProofCycleResult) string {
+	if result == nil || result.WriteBackState == "" {
+		return WriteBackPending
+	}
+	return result.WriteBackState
+}
 
 // ObserveSettlement reads a settlement from its chain with the strategy Phase 7 observes it with (the RB4-F55
 // repair runner checks a settlement is final and executed before re-driving its member).
@@ -2402,6 +2432,12 @@ func (o *UnifiedOrchestrator) buildAttestationBundleFromCycle(cycle *activeCycle
 		extResult.OutcomeReason = fmt.Sprintf("settlement %s executed the committed call(s) under leaf %s, but committed effects are absent: events %v, state %v",
 			c.TxHash, c.Leaf, c.MissingEvents, c.UnsetState)
 	}
+	// The settlement's tx and receipt inclusion proofs, as Phase 7's gate verified them, so the write-back states
+	// whether they verify against this block's roots (RB5-F18). Only the gate's proofs of THIS transaction are
+	// carried; the result never had any, so tx_inclusion_proof_valid was always false and never written.
+	if p := cycle.SettlementProof; p != nil && cycle.NonSettlement == nil && p.TxHash == txHash {
+		extResult.TxInclusionProof, extResult.ReceiptInclusionProof = p.TxInclusionProof, p.ReceiptInclusionProof
+	}
 
 	// Copy logs from all observation results (not just primary)
 	for _, obsResult := range result.ObservationResults {
@@ -2716,7 +2752,7 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 		"attestation_scheme": result.Scheme,
 		"threshold_met":      result.ThresholdMet,
 		"write_back_success": result.WriteBackSuccess,
-		"write_back_state":   result.WriteBackState,
+		"write_back_state":   writeBackStateAtBundle(result),
 	}
 	// What the proven execution DID. An artifact exists for a reverted settlement as well as a
 	// successful one - the failure is proven, attested and written back too - so the artifact must
@@ -2970,7 +3006,7 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 			"operation_commitment": hex.EncodeToString(req.OperationCommitment[:]),
 			"outcome_bound":        bindingEnforced,
 			"write_back_success":   result.WriteBackSuccess,
-			"write_back_state":     result.WriteBackState,
+			"write_back_state":     writeBackStateAtBundle(result),
 			"threshold_m":          thresholdM,
 			"threshold_n":          thresholdN,
 		}
@@ -3323,22 +3359,27 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 		)
 	}
 
-	// Set anchor reference from chain execution results
-	if len(result.ObservationResults) > 0 {
-		obs := result.ObservationResults[0]
-		bundle.SetAnchorReference(
-			result.ChainID,
-			obs.TxHash,
-			obs.BlockNumber,
-			obs.Confirmations,
-		)
-		// Also set contract address if available
-		if bundle.ProofComponents.AnchorReference != nil {
-			bundle.ProofComponents.AnchorReference.AnchorBlockHash = obs.BlockHash
+	// Component 2, the anchor reference: where this proof's batch root was published - its layer 5's anchor-create
+	// transaction and block, as anchor_references and proof_artifacts state it - never the settlement, which is
+	// component 5. It used to be filled from the settlement observation, the very conflation RB3-F135 removed from
+	// those rows (RB5-F18). A proof without a layer 5 has no established anchor and states none.
+	if anchorL5 != nil {
+		confirmations, required, _ := anchorDepth(anchorL5, settled)
+		bundle.ProofComponents.AnchorReference = &proof.AnchorReferenceProof{
+			TargetChain:       result.ChainID,
+			AnchorTxHash:      anchorL5.AnchorTx,
+			AnchorBlockNumber: anchorL5.BlockNumber,
+			AnchorBlockHash:   anchorL5.BlockHash,
+			Confirmations:     confirmations,
+			RequiredConfs:     required,
+			AnchoredAt:        anchorL5.BlockTime,
 		}
-		// Component 5: the receipt and the verified inclusion proofs, so a stranger can check the
-		// event off any RPC. Only present when the gate verified a receipt proof (persistVerifiedProofs
-		// wrote it onto the observation); never a receipt without its proof.
+	}
+
+	// Component 5: the attested settlement's receipt and verified inclusion proofs, so a stranger can check the
+	// event off any RPC. Only present when the gate verified a receipt proof (persistVerifiedProofs wrote it onto
+	// the observation); never a receipt without its proof.
+	if obs := settled; obs != nil {
 		if len(obs.ReceiptProof) > 0 {
 			logs := make([]proof.ExecutionLog, 0, len(obs.Logs))
 			for _, l := range obs.Logs {
@@ -3377,8 +3418,10 @@ func (o *UnifiedOrchestrator) generateAndPersistBundle(ctx context.Context, cycl
 					G0ProofComplete: true,
 				},
 				ThresholdSatisfied: result.ThresholdMet,
-				ExecutionSuccess:   result.WriteBackSuccess,
-				G1ProofComplete:    true,
+				// What the proven G1 result says about the governed transaction's execution. It used to be the
+				// write-back's success, read here before Phase 9 runs, so it was always false (RB5-F18).
+				ExecutionSuccess: governedExecutionProven(govIn),
+				G1ProofComplete:  true,
 			},
 		}
 		bundle.SetGovernanceProof(govProof)
@@ -3590,6 +3633,24 @@ func attestedSettlement(cycle *activeCycle, result *UnifiedProofCycleResult) *ch
 	return provenSettlementObservation(result.ObservationResults, cycle.SettlementTx)
 }
 
+// anchorDepth is what is known of a layer 5 anchor's depth: the confirmations the settlement requires, and - once the
+// settlement, which needed the anchor's root, is final - the anchor's confirmations, which are at least the
+// settlement's plus the blocks between them. Otherwise its depth is not known here (zero, not final).
+func anchorDepth(l5 *Layer5, settled *chain.ObservationResult) (confirmations, required int, final bool) {
+	required = 12
+	if settled != nil && settled.RequiredConfirmations > 0 {
+		required = settled.RequiredConfirmations
+	}
+	if l5 == nil || settled == nil || !settled.IsFinalized || l5.BlockNumber > settled.BlockNumber {
+		return 0, required, false
+	}
+	confirmations = settled.Confirmations + int(settled.BlockNumber-l5.BlockNumber)
+	if confirmations < required {
+		confirmations = required
+	}
+	return confirmations, required, true
+}
+
 // writeAnchorReference records where the proof's batch root was published - its layer 5's anchor-create
 // transaction and block - and the settlement the cycle attested. A proof without a layer 5 has no
 // established anchor and gets no anchor reference (it is summary-only for L5); its settlement is on
@@ -3603,20 +3664,9 @@ func (o *UnifiedOrchestrator) writeAnchorReference(ctx context.Context, proofID 
 	if !IsTransactionHash(l5.AnchorTx) || l5.BlockNumber == 0 {
 		return fmt.Errorf("proof %s: layer 5 states anchor %q at block %d; not recorded as its anchor", proofID, l5.AnchorTx, l5.BlockNumber)
 	}
-	reqConfirmations := settled.RequiredConfirmations
-	if reqConfirmations <= 0 {
-		reqConfirmations = 12
-	}
-	// The anchor is at or before the settlement, which needed its root: once the settlement is final, so is
-	// the anchor, by at least the blocks between them. Otherwise its depth is not known here.
-	confirmations, final := 0, false
+	confirmations, reqConfirmations, final := anchorDepth(l5, settled)
 	var confirmedAt *time.Time
-	if settled.IsFinalized && l5.BlockNumber <= settled.BlockNumber {
-		confirmations = settled.Confirmations + int(settled.BlockNumber-l5.BlockNumber)
-		if confirmations < reqConfirmations {
-			confirmations = reqConfirmations
-		}
-		final = true
+	if final {
 		now := time.Now().UTC()
 		confirmedAt = &now
 	}

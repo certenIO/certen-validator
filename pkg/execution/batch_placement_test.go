@@ -14,8 +14,10 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/google/uuid"
 
 	"github.com/certen/independant-validator/pkg/database"
+	"github.com/certen/independant-validator/pkg/proof"
 )
 
 // RB3-F85: a member's proof artifact states its own place in its anchored batch - its leaf, index,
@@ -100,6 +102,50 @@ func TestTheArtifactStatesTheMembersPlaceInItsBatch(t *testing.T) {
 	}
 	if attAnchor.String != createTx || attSettle.String != settleTx {
 		t.Fatalf("validator_attestations anchor %v settlement %v", attAnchor, attSettle)
+	}
+
+	// RB5-F18: the stored bundle's anchor reference (component 2) is the same anchor - layer 5's create transaction
+	// and block - not the settlement it used to be filled from.
+	ref := storedBundle(t, db, repos, intentID).ProofComponents.AnchorReference
+	if ref == nil || ref.AnchorTxHash != createTx || ref.AnchorBlockNumber != 90 {
+		t.Fatalf("the bundle's anchor reference is %+v; the anchor is %s @ 90 (the settlement %s @ 100 is component 5)", ref, createTx, settleTx)
+	}
+	// The settlement (block 100, 12 deep, final) needed the anchor's root: the anchor is at least 22 deep. Its block
+	// was not read back (no observer for its chain here), so its time is not known and none is stated.
+	if ref.Confirmations != 22 || ref.RequiredConfs != 12 || !ref.AnchoredAt.IsZero() {
+		t.Fatalf("anchor depth %d of %d, anchored at %v", ref.Confirmations, ref.RequiredConfs, ref.AnchoredAt)
+	}
+}
+
+// storedBundle reads back the proof bundle the cycle stored for intentID.
+func storedBundle(t *testing.T, db *sql.DB, repos *database.Repositories, intentID string) *proof.CertenProofBundle {
+	t.Helper()
+	var proofID uuid.UUID
+	if err := db.QueryRow(`SELECT proof_id FROM proof_artifacts WHERE intent_id=$1`, intentID).Scan(&proofID); err != nil {
+		t.Fatalf("artifact of %s: %v", intentID, err)
+	}
+	stored, err := repos.ProofArtifacts.GetProofBundleByProofID(context.Background(), proofID)
+	if err != nil || stored == nil {
+		t.Fatalf("bundle of %s: %v", intentID, err)
+	}
+	b, err := proof.BundleFromCompressedJSON(stored.BundleData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// RB5-F18: a proof with no layer 5 has no established anchor, and its bundle states none - not its settlement.
+func TestABundleWithoutALayer5StatesNoAnchorReference(t *testing.T) {
+	db := s1OpenDB(t)
+	repos := database.NewRepositories(database.NewClientFromDB(db))
+	c, intentID := f73Cycle(t, nil, nil)
+	t.Cleanup(func() { cleanupProofArtifacts(db, intentID) })
+	if err := f73Orchestrator(db).generateAndPersistBundle(context.Background(), c); err != nil {
+		t.Fatal(err)
+	}
+	if ref := storedBundle(t, db, repos, intentID).ProofComponents.AnchorReference; ref != nil {
+		t.Fatalf("a proof without a layer 5 states anchor %s @ %d (the settlement is %s)", ref.AnchorTxHash, ref.AnchorBlockNumber, c.SettlementTx)
 	}
 }
 

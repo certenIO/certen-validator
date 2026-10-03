@@ -318,11 +318,11 @@ production; the legacy orchestrator writes the same facts on its fallback path):
 
 | Record | Writer |
 |---|---|
-| Validator-set snapshot | phase 8: self + `ATTESTATION_PEERS`, weight 1 each, sorted so every validator derives the same set; linked from every attestation and aggregate. Legacy: the attestation collector's snapshot |
+| Validator-set snapshot | phase 8: the settlement chain's on-chain validator registry (the anchor's), each member at its registered key and voting power (`registryAttestationSet`), sorted by address so every validator derives the same set - never the configured `ATTESTATION_PEERS` and never a weight of 1 each (RB3-F41); linked from every attestation and aggregate, and stated in the write-back (RB5-F14). Legacy: the attestation collector's snapshot |
 | Message consistency | phase 8: every collected attestation signed the same message |
 | Result hash chain | phase 9, where the write-back bundle binds it, per observer and target chain; re-seeded from the database on start so a restart does not fork the chain. Multi-leg: the aggregator. Legacy: steps 1-3 of the anchor workflow as sequence 0-2 |
 | Proof levels 1-4 | `generateAndPersistBundle` (on-demand and per batch transaction): L1 the chained proof, L2 the governance commitment, L3 the anchored root (from the same anchor binding layer 5 uses, so never the settlement transaction), L4 the observed result |
-| Cycle completion | after write-back: all four levels present, `bindings_valid` = every attestation signed a message naming this level-4 result and level-3 root; multi-leg cycles complete when the unified write-back lands |
+| Cycle completion | after write-back: all four levels present, `bindings_valid` = every attestation signed one message naming this level-4 result and the operation commitment, and this record's level-3 root commits that operation (layer 5 verifies offline and its member is that operation: `level3CommitsOperation`, RB5-F18); multi-leg cycles complete when the unified write-back lands |
 | Certen anchor proof | beside every artifact the anchor binding covers; `proof_hash` over the canonical four components, signed with the validator key (Ed25519 unified, BLS legacy), marked verified only when the quorum was met, the hash covers the proof and the anchor binding verifies offline. Batch processor: beside each batch artifact |
 | Anchor confirmations | confirmation tracker, onto every Certen proof of that anchor (by anchor record and by anchor transaction) |
 | Proof requests | new `pkg/proofrequests` fulfiller on every validator: pending → processing (one claim wins) → batched → completed with the proof, or failed at the deadline and retried; the winner alone calls the request's http(s) callback |

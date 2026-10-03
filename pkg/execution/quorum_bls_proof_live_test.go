@@ -113,3 +113,28 @@ func TestTheQuorumProofPathIsAcceptedByTheDeployedVerifiers(t *testing.T) {
 		}
 	}
 }
+
+// RB5-F13, the other half: a Phase 8 result aggregate - RFC 9380 hash_to_curve (RB5-F54) - is not an aggregate the
+// deployed verifiers can be given. The strict path, with the production proving keys, refuses to prove it over the
+// message it signed: the circuit's hash of that message is another curve point, so no witness satisfies it.
+func TestAPhase8AggregateCannotBeProvenForTheDeployedVerifiers(t *testing.T) {
+	if os.Getenv("BLS_ZK_KEYS_DIR") == "" {
+		t.Fatal("the live build requires BLS_ZK_KEYS_DIR (the proving keys whose verification key is deployed)")
+	}
+	_, folded, _ := phase8Quorum(t)
+	var signers []string
+	var powers []*big.Int
+	for i := range folded.Attestations {
+		signers = append(signers, common.BigToAddress(big.NewInt(int64(i+1))).Hex())
+		powers = append(powers, big.NewInt(100))
+	}
+	agg := &consensus.QuorumAggregate{
+		AggregateSignatureHex: hex.EncodeToString(folded.AggregatedSignature), AggregatePublicKeyHex: hex.EncodeToString(folded.AggregatedPublicKey),
+		SignedVotingPower: big.NewInt(int64(100 * len(signers))), TotalVotingPower: big.NewInt(700), Signers: signers, SignerPowers: powers,
+	}
+	if _, _, err := (&EthereumContractManager{}).BuildQuorumBLSProofData(agg, folded.MessageHash); err == nil {
+		t.Fatal("the strict path proved a Phase 8 aggregate for the deployed verifiers")
+	} else {
+		t.Logf("refused, as it must be: %v", err)
+	}
+}

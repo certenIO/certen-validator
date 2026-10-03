@@ -39,6 +39,19 @@ func levelProven(level string, raw json.RawMessage) bool {
 	return false
 }
 
+// governedExecutionProven is the proven G1 result's own execution verdict: that the governed Accumulate transaction
+// executed, which G1 states as its G0 inclusion proof being complete. False when the cycle carries no G1 result, or
+// one that does not state it. It is never the write-back's success: the bundle that states it is stored before
+// Phase 9 runs (RB5-F18).
+func governedExecutionProven(in *GovernanceLevelInputs) bool {
+	raw := in.ResultFor("G1")
+	if len(raw) == 0 {
+		return false
+	}
+	var g certenproof.G1Result
+	return json.Unmarshal(raw, &g) == nil && g.ExecutionSuccess && g.G0ProofComplete
+}
+
 // settlementInclusionProven reports whether the cycle's settlement is proven included in its block:
 // the gate's own observation of it carries a transaction and a receipt inclusion proof that verify.
 func settlementInclusionProven(cycle *activeCycle) bool {

@@ -362,7 +362,7 @@ func (o *UnifiedOrchestrator) resolveAnchorBinding(
 		return nil, binding
 	}
 	if anchorObs != nil && l5.BlockNumber == anchorObs.BlockNumber {
-		l5.BlockHash, l5.Confirmations = anchorObs.BlockHash, anchorObs.Confirmations
+		l5.BlockHash, l5.Confirmations, l5.BlockTime = anchorObs.BlockHash, anchorObs.Confirmations, anchorObs.BlockTimestamp
 	}
 	// The Accumulate validator-set evidence of the set this anchor committed (RB5-F4). Anything but "attached" is
 	// named: the layer then states that it carries none (ExternalClaim), and proofverify reports the set as asserted.

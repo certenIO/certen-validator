@@ -20,6 +20,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/google/uuid"
@@ -85,6 +87,16 @@ func (o *UnifiedOrchestrator) recordProofLevels(ctx context.Context, cycle *acti
 		}
 	}
 	result := cycle.Result
+	// Whether this record's level-3 root commits the operation the cycle's quorum signs; the cycle's completion reads
+	// it for bindings_valid (RB5-F18).
+	var operation [32]byte
+	if cycle.Request != nil {
+		operation = cycle.Request.OperationCommitment
+	}
+	if result.level3 == nil {
+		result.level3 = map[uuid.UUID]error{}
+	}
+	result.level3[completion.CompletionID] = level3CommitsOperation(anchor, operation)
 	if len(result.ObservationResults) > 0 && len(result.ChainExecutionIDs) == len(result.ObservationResults) {
 		obs := result.ObservationResults[0]
 		if obs.IsFinalized {
@@ -253,12 +265,15 @@ func storeCertenAnchorProof(ctx context.Context, repos *database.Repositories, p
 		in.Artifact.ProofID, stored.ProofID, verified, anchor.AnchorTx)
 }
 
-// levelsBoundByAttestations checks the attestations agree on the result and on the operation commitment the
-// cycle's validators signed (RB3-F106: the argument was named merkleRoot and carried the same commitment).
-//
-// levelsBoundByAttestations reports whether the quorum signed the cross-level binding: every attestation
-// carries a message naming this cycle's level-4 result and level-3 root, and they all signed the same
-// message. A quorum over a different result or root binds nothing.
+// A level record's bindings_valid states that its levels are bound to one another: the quorum signed this
+// cycle's level-4 result together with the operation, and the level-3 root commits that operation. The quorum's
+// message names the result and the operation commitment, not the root (its wire key "merkle_root" is historical,
+// RB3-F106); the root is bound to the operation by the anchor itself - level3CommitsOperation. It used to be stated
+// on the attestations alone, while saying they named the level-3 root (RB5-F18).
+
+// levelsBoundByAttestations reports whether the quorum signed this cycle's level-4 result and the operation
+// commitment: every attestation's message names both, and they all signed the same message. A quorum over a
+// different result or operation binds nothing.
 func levelsBoundByAttestations(result *UnifiedProofCycleResult, operationCommitment [32]byte) bool {
 	if result == nil || !result.ThresholdMet || len(result.Attestations) == 0 || len(result.ObservationResults) == 0 {
 		return false
@@ -275,6 +290,31 @@ func levelsBoundByAttestations(result *UnifiedProofCycleResult, operationCommitm
 		hashes = append(hashes, att.MessageHash[:])
 	}
 	return attestationMessagesAgree(hashes)
+}
+
+// level3CommitsOperation establishes that a level record's level-3 root - its layer 5's batch root - commits the
+// operation the quorum signed: layer 5 verifies offline (the member's leaf is under the root; the batch operation id
+// recomputes from the batch's members, this operation among them; the anchor committed that id together with this
+// root in the bundle id and message its quorum signed), and the member it proves is this operation. nil when it does,
+// and why not otherwise: no layer 5, a layer 5 that states no members (a row rebuilt from the chain or written before
+// RB4-F66) or no anchor commitment (written before migration 00018), one that does not verify, or another operation.
+func level3CommitsOperation(l5 *Layer5, operation [32]byte) error {
+	switch {
+	case l5 == nil:
+		return errors.New("no layer 5: the level-3 root is not established")
+	case l5.Governance == nil:
+		return fmt.Errorf("layer 5 states no members of its batch, so no operation is proven under root %s", short16(l5.BatchRoot))
+	case l5.Commitment == nil:
+		return fmt.Errorf("layer 5 states no anchor commitment, so its batch operation id is not proven anchored with root %s", short16(l5.BatchRoot))
+	}
+	if err := l5.VerifyOffline(); err != nil {
+		return fmt.Errorf("layer 5 does not verify: %w", err)
+	}
+	if want := hex.EncodeToString(operation[:]); !strings.EqualFold(strings.TrimPrefix(l5.Governance.OperationID, "0x"), want) {
+		return fmt.Errorf("layer 5 proves operation %s under root %s; the quorum signed operation %s",
+			l5.Governance.OperationID, short16(l5.BatchRoot), want)
+	}
+	return nil
 }
 
 // proofCycleHash binds the four level hashes and the write-back transaction.
@@ -297,8 +337,22 @@ func (o *UnifiedOrchestrator) completeProofCycles(ctx context.Context, cycleID s
 		return
 	}
 	repo := o.config.Repos.ProofArtifacts
-	bindings := levelsBoundByAttestations(result, merkleRoot)
+	signed := levelsBoundByAttestations(result, merkleRoot)
 	for _, completionID := range completions {
+		// The quorum's binding of levels 4 and 2's operation, and this record's level-3 root committing that
+		// operation; a record whose level 3 was never judged is not bound.
+		bindings := signed
+		if result == nil || result.level3 == nil {
+			bindings = false
+			logfPrintf("⚠️ [PROOF-LEVELS] cycle %s level record %s: its level-3 binding was never established; bindings_valid=false", cycleID, completionID)
+		} else if l3, judged := result.level3[completionID]; !judged || l3 != nil {
+			bindings = false
+			why := "never established"
+			if l3 != nil {
+				why = l3.Error()
+			}
+			logfPrintf("⚠️ [PROOF-LEVELS] cycle %s level record %s: level 3 does not commit the signed operation (%s); bindings_valid=false", cycleID, completionID, why)
+		}
 		c := ProofCompletion{CompletionID: completionID, CycleID: cycleID, WriteBackTx: writeBackTx, BindingsValid: bindings}
 		err := closeProofCompletion(ctx, repo, c)
 		var unclosable *errCompletionUnclosable

@@ -6,7 +6,10 @@
 // Per Unified Multi-Chain Architecture:
 // - Primary attestation scheme for EVM chains
 // - Supports cryptographic signature aggregation
-// - ZK-verified on-chain verification
+// - Signs Phase 8 result attestations with RFC 9380 hash_to_curve (RB5-F54). Their aggregate is verified off chain:
+//   by each counting validator, and from the Accumulate write-back's own entries (VerifyWriteBackQuorum, RB5-F14).
+//   It is not the aggregate the EVM contracts ZK-verify: those - the batch quorum and the batch outcome - are signed
+//   with the same validator keys over HashMessageToG1V2 (see AttestationSchemeBLS12381, RB5-F13).
 
 package strategy
 

@@ -73,7 +73,8 @@ func (p ChainPlatform) IsValid() bool {
 func (p ChainPlatform) DefaultAttestationScheme() attestation.AttestationScheme {
 	switch p {
 	case ChainPlatformEVM:
-		// BLS for EVM - ZK-verified on-chain
+		// BLS for EVM: the batch quorum and batch outcome aggregates are ZK-verified on chain; the per-result Phase 8
+		// aggregate is verified off chain (see AttestationSchemeBLS12381, RB5-F13)
 		return attestation.AttestationSchemeBLS12381
 	case ChainPlatformCosmWasm, ChainPlatformSolana, ChainPlatformMove,
 		ChainPlatformTON, ChainPlatformNEAR, ChainPlatformCardano:

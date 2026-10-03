@@ -30,7 +30,8 @@ type Registry struct {
 
 // platformSchemes is the attestation scheme of each platform CERTEN settles on.
 var platformSchemes = map[chain.ChainPlatform]attestation.AttestationScheme{
-	// BLS12-381 for EVM chains - ZK-verified on-chain aggregation
+	// BLS12-381 for EVM chains, whose batch quorum and batch outcome aggregates are ZK-verified on chain; the
+	// per-result Phase 8 aggregate this scheme's strategy folds is verified off chain (AttestationSchemeBLS12381, RB5-F13)
 	chain.ChainPlatformEVM: attestation.AttestationSchemeBLS12381,
 }
 

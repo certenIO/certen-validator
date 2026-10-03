@@ -36,21 +36,31 @@ func levelBytes(label string) []byte {
 }
 
 // canonicalSingleLeafAnchor writes the canonical anchor row for an intent that settled alone: a one-member
-// tree whose root is its leaf, published by anchorTx.
+// tree whose root is its leaf, published by anchorTx - a V8.2 anchor whose batch operation id commits the member's
+// operation (the leaf's value here) and its governance, as the batch path records them (RB4-F66, RB5).
 func canonicalSingleLeafAnchor(t *testing.T, db *sql.DB, intentID, accumTx string, leaf [32]byte, anchorTx string) uuid.UUID {
 	t.Helper()
 	ctx := context.Background()
 	batchID := uuid.New()
-	bundle := "0x" + hex.EncodeToString(levelBytes("bundle-"+intentID))
+	operation := "0x" + hex.EncodeToString(leaf[:])
+	rec := &database.AnchorQuorumRecord{ChainID: 84532, Root: leaf[:], BatchOperationID: testBatchOperationID(operation)}
+	asV8_2Anchor(t, rec, 1, 7_000_000)
 	if _, err := db.ExecContext(ctx, `
-		INSERT INTO anchor_batches (id, batch_type, status, merkle_root, target_chain, chain_id, bundle_id, anchor_create_tx, anchor_tx_hash, anchor_block_num, verify_block, quorum_reached)
-		VALUES ($1, 'on_demand', 'confirmed', $2, 'evm-84532', 84532, $3, $4, $4, 4231, 4242, TRUE)`,
-		batchID, leaf[:], bundle, anchorTx); err != nil {
+		INSERT INTO anchor_batches (id, batch_type, status, merkle_root, target_chain, chain_id, bundle_id, anchor_create_tx, anchor_tx_hash, anchor_block_num, verify_block, quorum_reached,
+			batch_operation_id, batch_operation_id_version, message_hash, anchor_version, batch_leaf_count, accumulate_block_height,
+			certen_validator_set_root, accumulate_set_root, accumulate_incarnation)
+		VALUES ($1, 'on_demand', 'confirmed', $2, 'evm-84532', 84532, $3, $4, $4, 4231, 4242, TRUE,
+			$5, 'v2', $6, $7, $8, $9, $10, $11, $12)`,
+		batchID, leaf[:], rec.BundleID, anchorTx,
+		rec.BatchOperationID, rec.MessageHash, rec.AnchorVersion, rec.BatchLeafCount, rec.AccumulateBlockHeight,
+		rec.CertenSetRoot, rec.AccumulateSetRoot, rec.AccumulateIncarnation); err != nil {
 		t.Fatalf("canonical anchor row: %v", err)
 	}
 	if _, err := db.ExecContext(ctx, `
-		INSERT INTO batch_transactions (batch_id, accumulate_tx_hash, account_url, tree_index, transaction_hash, intent_id, merkle_path)
-		VALUES ($1, $2, 'acc://levels.acme/tokens', 0, $3, $4, '[]')`, batchID, accumTx, leaf[:], intentID); err != nil {
+		INSERT INTO batch_transactions (batch_id, accumulate_tx_hash, account_url, tree_index, transaction_hash, intent_id, merkle_path,
+			operation_id, governance_commitment)
+		VALUES ($1, $2, 'acc://levels.acme/tokens', 0, $3, $4, '[]', $5, $6)`, batchID, accumTx, leaf[:], intentID,
+		operation, "0x"+hex.EncodeToString(testGov[:])); err != nil {
 		t.Fatalf("canonical member row: %v", err)
 	}
 	t.Cleanup(func() {
@@ -286,6 +296,7 @@ func TestTheAnchorIsReadBackForItsBlockHashAndDepth(t *testing.T) {
 	f := newLevelFixture(t)
 	observer := &anchorChain{obs: &chain.ObservationResult{
 		TxHash: f.anchorTx, BlockNumber: 4230, BlockHash: "0xanchorblock", Confirmations: 812, IsFinalized: true,
+		BlockTimestamp: time.Unix(1_790_000_000, 0).UTC(),
 	}}
 	registry := strategy.NewRegistry()
 	if err := registry.RegisterChainStrategy("84532", &chain.ChainConfig{}, observer); err != nil {
@@ -305,7 +316,11 @@ func TestTheAnchorIsReadBackForItsBlockHashAndDepth(t *testing.T) {
 	if l5 := layer5Of(t, f); l5.BlockNumber != 4230 || l5.BlockHash != "0xanchorblock" {
 		t.Fatalf("layer 5 states block %d (%s)", l5.BlockNumber, l5.BlockHash)
 	}
-	f.orch.resolveAnchorBinding(context.Background(), f.artifact.ProofID, f.placement(t), f.cycle.Result)
+	again, _ := f.orch.resolveAnchorBinding(context.Background(), f.artifact.ProofID, f.placement(t), f.cycle.Result)
+	// The anchor block's time, as read back, is what the proof bundle states as its anchor's anchored_at (RB5-F18).
+	if again == nil || !again.BlockTime.Equal(time.Unix(1_790_000_000, 0)) {
+		t.Fatalf("the anchor's read-back block time is not carried: %+v", again)
+	}
 	if observer.calls != 1 {
 		t.Fatalf("the anchor was read %d times in one cycle", observer.calls)
 	}
@@ -341,6 +356,57 @@ func TestUnifiedProofCycleBindingsNeedTheQuorumToSignThisResultAndOperationCommi
 	}
 }
 
+// RB5-F18 (survey §5 item 10): bindings_valid said the quorum signed "this cycle's level-4 result and level-3 root",
+// but the quorum's message names the operation, not the root, and nothing tied the root to that operation: a quorum
+// over another operation, whose level 3 commits a different one, was bound. Level 3 must now commit the operation the
+// quorum signed - proven from layer 5 - or the record is not bound.
+func TestUnifiedProofCycleBindingsNeedLevel3ToCommitTheSignedOperation(t *testing.T) {
+	ctx := context.Background()
+	complete := func(t *testing.T, f *levelFixture, signed [32]byte) *database.ProofCycleCompletionRecord {
+		t.Helper()
+		f.orch.completeProofCycles(ctx, f.cycle.CycleID, f.cycle.Completions, f.cycle.Result, signed, "writeback-tx")
+		record, err := f.repos.ProofArtifacts.GetProofCycleCompletionByProof(ctx, f.artifact.ProofID)
+		if err != nil || record == nil || !record.AllLevelsComplete {
+			t.Fatalf("level record: %+v, %v", record, err)
+		}
+		return record
+	}
+
+	t.Run("the quorum signed another operation than level 3 commits", func(t *testing.T) {
+		f := newLevelFixture(t)
+		other := levelHash("an operation that is not in the anchored batch")
+		f.cycle.Request.OperationCommitment = other
+		message := *f.cycle.Result.Attestations[0].Message
+		message.OperationCommitment = other
+		for _, att := range f.cycle.Result.Attestations {
+			att.Message = &message
+		}
+		f.record(t)
+		if complete(t, f, other).BindingsValid {
+			t.Fatal("bindings were accepted though the level-3 root commits another operation than the quorum signed")
+		}
+	})
+
+	t.Run("level 3 states no members of its batch", func(t *testing.T) {
+		f := newLevelFixture(t)
+		if _, err := f.db.ExecContext(ctx, `UPDATE anchor_batches SET batch_operation_id_version = NULL WHERE id = $1`, f.batchID); err != nil {
+			t.Fatal(err)
+		}
+		f.record(t)
+		if complete(t, f, f.root).BindingsValid {
+			t.Fatal("bindings were accepted though no operation is proven under the level-3 root")
+		}
+	})
+
+	t.Run("level 3 commits the signed operation", func(t *testing.T) {
+		f := newLevelFixture(t)
+		f.record(t)
+		if !complete(t, f, f.root).BindingsValid {
+			t.Fatal("a level-3 root that commits the signed operation was not bound")
+		}
+	})
+}
+
 func TestLevelsBoundByAttestations(t *testing.T) {
 	root, result := levelHash("root"), levelHash("result")
 	message := &attestation.AttestationMessage{ResultHash: result, OperationCommitment: root}
@@ -366,6 +432,37 @@ func TestLevelsBoundByAttestations(t *testing.T) {
 	for name, tc := range cases {
 		if got := levelsBoundByAttestations(tc.result, root); got != tc.want {
 			t.Errorf("%s: bound = %v, want %v", name, got, tc.want)
+		}
+	}
+}
+
+// RB5-F18 (survey §5 item 12): the schema runbook said Phase 8's set is "self + ATTESTATION_PEERS, weight 1 each".
+// It is the registry's members at their registered power, whoever is configured as a peer.
+func TestThePhase8SetIsTheRegistryAtRegisteredPower(t *testing.T) {
+	threshold := attestation.DefaultThresholdConfig().CalculateThresholdWeight
+	reg := map[string]consensus.ValidatorRegistryEntry{}
+	powers := map[string]int64{"0x0000000000000000000000000000000000000003": 250, "0x0000000000000000000000000000000000000001": 100,
+		"0x0000000000000000000000000000000000000002": 40}
+	for addr, p := range powers {
+		s, err := attestation.NewBLSStrategyWithNewKey(addr, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reg[addr] = consensus.ValidatorRegistryEntry{EVMAddress: addr, PublicKeyHex: hex.EncodeToString(s.PublicKey()), VotingPower: big.NewInt(p)}
+	}
+	set, err := registryAttestationSet(reg, threshold, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(set.Validators) != 3 || set.TotalWeight.Int64() != 390 || set.ThresholdWeight.Int64() != threshold(390) {
+		t.Fatalf("%d members, weight %s of %s", len(set.Validators), set.ThresholdWeight, set.TotalWeight)
+	}
+	for i, v := range set.Validators {
+		if i > 0 && set.Validators[i-1].ValidatorID >= v.ValidatorID {
+			t.Fatal("the set is not in address order")
+		}
+		if v.Weight.Int64() != powers[v.ValidatorID] {
+			t.Fatalf("%s counted at %s; its registered power is %d", v.ValidatorID, v.Weight, powers[v.ValidatorID])
 		}
 	}
 }
