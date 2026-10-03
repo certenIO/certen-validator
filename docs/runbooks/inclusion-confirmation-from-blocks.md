@@ -225,7 +225,8 @@ As planned:
 
 As shipped:
 - **`REQUIRE_BFT_COMMIT` has no rollback.** Any value but `true` refuses to start (RB3-F98).
-- **`INCLUSION_SCAN=off` still exists.** It restores the index-based path, the defect in §1a. It is open in §7.6.
+- **`INCLUSION_SCAN=off` is refused too** (RB5-F50, 87caee6). Any value that turns the scan off stops the node at
+  boot and is refused by the broadcaster. The index-based path it restored, the defect in §1a, is removed.
 
 **Consensus safety note:** none of this touches ABCI, the app hash, or FinalizeBlock. It changes only how
 a node *observes* its own submission. A rolling deploy is safe and nodes may run mixed versions.
@@ -242,8 +243,8 @@ a node *observes* its own submission. A rolling deploy is safe and nodes may run
 - [x] E1 observed live (§7.5).
 - [ ] E3–E4 observed in staging. There is no staging fleet; see §7.6.
 - [x] E2's purpose, deciding whether to flip the default, is moot: RB3-F98 removed the switch instead (§7.1).
-- [ ] Docs/env templates updated. No template on main mentions either setting. `REQUIRE_BFT_COMMIT` needs
-      none, since there is nothing to choose; `INCLUSION_SCAN` is §7.6's open item.
+- [x] Docs/env templates: none needed. Neither setting is a choice any more, since `REQUIRE_BFT_COMMIT` other
+      than `true` and `INCLUSION_SCAN` off both refuse to start (§7.1).
 
 ---
 
@@ -254,6 +255,7 @@ a node *observes* its own submission. A rolling deploy is safe and nodes may run
 | Change | Contents | Where |
 |---|---|---|
 | Steps 1–4 | the inclusion scan (`scanInclusions`, `resolveOutcome`, `lookupMempoolOnly`, the seven-method `broadcastRPC`), behind `INCLUSION_SCAN` (default on) | 10eca2b, 2026-09-18 |
+| No way back to the index | `INCLUSION_SCAN` that turns the scan off refuses to start (`requireInclusionScan` in `CheckEnv`) and is refused by the broadcaster; `lookupTxByHash` and `committedResult`, the index-only path, are removed | RB5-F50, 87caee6 |
 | Step 5 as planned | `REQUIRE_BFT_COMMIT` defaults to required, keeps `false` as an opt-out, startup log, env templates | branch `fix/require-bft-commit-by-default`, **never merged; superseded** |
 | Step 5 as shipped | `requireCommitted` refuses an admitted but uncommitted block as retryable (`ErrValidatorBlockNotCommitted`); `REQUIRE_BFT_COMMIT` other than `true` refuses to start | RB3-F98, b6ce6b8, 2026-09-27 (merged with #62) |
 
@@ -318,10 +320,6 @@ mutation is caught now in both the Phase 2 and lost-reply paths.
 
 ### 7.6 Still open
 
-- **`INCLUSION_SCAN=off`.** It is a live switch back to the index-based path, the defect this runbook
-  removes. It appears in no template. Nothing in the fleet sets it, but a node started with it would
-  again report a committed ValidatorBlock as failed. It should be removed the way RB3-F98 removed
-  `REQUIRE_BFT_COMMIT=false`: refuse to start rather than run the defective path.
 - **E3 and E4** need a staging fleet: an induced slow commit, and a policy activation between two blocks.
   There is none, so both are unobserved.
 - **The race detector** has not been run on this code. The development environment has no C toolchain, and
