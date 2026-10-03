@@ -620,9 +620,15 @@ func (r *Reporter) post(ctx context.Context, event *CostEvent) (int, string, err
 func ServiceToken(method, path string, body []byte, secret, version string) string {
 	t := time.Now().Unix()
 	nonce := newNonce()
-	sum := sha256.Sum256(body)
+	// An empty body signs an empty hash field, as both verifiers define it (the gateway's bodyHash, and
+	// proofs_service's authVerifyServiceToken hashing only when bodyLen > 0).
+	bodyHash := ""
+	if len(body) > 0 {
+		sum := sha256.Sum256(body)
+		bodyHash = hex.EncodeToString(sum[:])
+	}
 	signed := fmt.Sprintf("%d.%s.%s.%d.%s.%s",
-		t, strings.ToUpper(method), canonicalPath(path), len(body), hex.EncodeToString(sum[:]), nonce)
+		t, strings.ToUpper(method), canonicalPath(path), len(body), bodyHash, nonce)
 
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(signed))

@@ -114,3 +114,23 @@ func TestCanonicalPathSortsQueryKeys(t *testing.T) {
 		}
 	}
 }
+
+// An empty body is signed with an empty body-hash field, the rule both verifiers define: the gateway's bodyHash
+// returns ” for no body, and proofs_service hashes only when bodyLen > 0. Signing sha256("") instead makes every
+// bodiless request (a GET) a signature mismatch at the verifier.
+func TestServiceTokenSignsAnEmptyBodyWithAnEmptyHash(t *testing.T) {
+	for _, body := range [][]byte{nil, {}} {
+		header := ServiceToken("get", "/api/v1/proofs?b=2&a=1", body, vecSecret, "v1")
+		parts := map[string]string{}
+		for _, kv := range strings.Split(header, ",") {
+			i := strings.Index(kv, "=")
+			parts[kv[:i]] = kv[i+1:]
+		}
+		signed := parts["t"] + ".GET./api/v1/proofs?a=1&b=2.0.." + parts["n"]
+		mac := hmac.New(sha256.New, []byte(vecSecret))
+		mac.Write([]byte(signed))
+		if want := hex.EncodeToString(mac.Sum(nil)); parts["v1"] != want {
+			t.Fatalf("body %v: the signature is not over %q", body, signed)
+		}
+	}
+}
