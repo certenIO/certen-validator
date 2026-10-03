@@ -1168,9 +1168,11 @@ func (id *IntentDiscovery) processBlock(job *BlockProcessJob, workerID string) e
 
 // convertCertenTransactionToIntent converts a CertenTransaction from v3 API to canonical CertenIntent format
 func (id *IntentDiscovery) convertCertenTransactionToIntent(certenTx *accumulate.CertenTransaction) (*CertenIntent, error) {
-	// Debug: Log the incoming CertenTransaction data
-	id.logger.Printf("🔍 [DEBUG-CONVERSION-INPUT] Converting CertenTransaction %s with %d IntentData elements: %+v",
-		certenTx.Hash, len(certenTx.IntentData), certenTx.IntentData)
+	// The whole decoded transaction, at LOG_LEVEL=debug only (RB5-F47).
+	if accumulate.DebugLogging() {
+		id.logger.Printf("🔍 [DEBUG-CONVERSION-INPUT] Converting CertenTransaction %s with %d IntentData elements: %+v",
+			certenTx.Hash, len(certenTx.IntentData), certenTx.IntentData)
+	}
 
 	// Extract intent type from the transaction data
 	intentType := "general" // Default

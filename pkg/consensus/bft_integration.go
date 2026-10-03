@@ -25,7 +25,6 @@ import (
 	abcitypes "github.com/cometbft/cometbft/abci/types"
 	"github.com/cometbft/cometbft/config"
 	cmted25519 "github.com/cometbft/cometbft/crypto/ed25519"
-	cmtlog "github.com/cometbft/cometbft/libs/log"
 	"github.com/cometbft/cometbft/node"
 	"github.com/cometbft/cometbft/p2p"
 	"github.com/cometbft/cometbft/privval"
@@ -1657,9 +1656,11 @@ func NewRealCometBFTEngine(
 		return nil, fmt.Errorf("CometBFT genesis %s: %w - it is never generated at boot", cometCfg.GenesisFile(), err)
 	}
 
-	// CRITICAL FIX: Enable CometBFT logging to see consensus activity
-	tmLogger := cmtlog.NewTMLogger(cmtlog.NewSyncWriter(os.Stdout))
-	tmLogger = tmLogger.With("module", "cometbft")
+	// CometBFT's logging, at the validator's LOG_LEVEL (RB5-F47).
+	tmLogger, err := cometLogger(os.Stdout)
+	if err != nil {
+		return nil, fmt.Errorf("CometBFT logger: %w", err)
+	}
 
 	// Index the committed chain before the node opens its stores: the handshake below replays blocks through
 	// FinalizeBlock, and the committed-operation rule judges them against this index (RB3-F141). The check
