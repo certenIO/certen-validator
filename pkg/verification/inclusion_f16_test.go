@@ -77,12 +77,13 @@ func TestLevel4RefusesAHashListPresentedAsAnInclusionProof(t *testing.T) {
 	sibling := crypto.Keccak256Hash([]byte("sibling"))
 	root := crypto.Keccak256Hash(append(append([]byte{}, r.TxHash[:]...), sibling[:]...))
 	raw, _ := json.Marshal(map[string]interface{}{"leaf_hash": r.TxHash, "leaf_index": 0, "proof_hashes": [][32]byte{sibling},
-		"proof_directions": []int{1}, "expected_root": root})
+		"proof_directions": []int{1}, "expected_root": [32]byte(root)})
 	var list MerkleInclusionProofData
 	if err := json.Unmarshal(raw, &list); err != nil {
 		t.Fatal(err)
 	}
 	r.TxInclusionProof = &list
+	r.ReceiptInclusionProof = nil // the transaction's "proof" is judged alone
 	r.TransactionsRoot = root
 	r.ResultHash = v.computeResultHash(r)
 	res := &VerificationResult{Details: map[string]interface{}{}}
