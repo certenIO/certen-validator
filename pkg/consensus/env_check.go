@@ -10,7 +10,7 @@ func CheckEnv() error {
 	return envvar.Check(
 		func() error { _, err := ContractCallsAllowed(); return err },
 		func() error { _, err := executionValidationEnabled(); return err },
-		func() error { _, err := inclusionScanEnabled(); return err },
+		requireInclusionScan,
 		func() error { _, err := onDemandLaneEnabled(); return err },
 		func() error { _, err := blockRetentionFromEnv(); return err },
 	)

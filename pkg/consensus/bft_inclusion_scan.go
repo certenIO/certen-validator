@@ -38,6 +38,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/certen/independant-validator/pkg/envvar"
+	"os"
 	"time"
 
 	cmttypes "github.com/cometbft/cometbft/types"
@@ -50,16 +51,25 @@ type inclusion struct {
 	Log    string
 }
 
-// inclusionScanEnabled reports whether outcomes are decided from committed blocks.
+// requireInclusionScan refuses INCLUSION_SCAN set to anything that turns the scan off (RB5-F50).
 //
-// Default ON. INCLUSION_SCAN=off restores the previous index-based path for one release, because turning
-// off a path that decides whether a target-chain side effect executes deserves a way back that does not
-// need a rebuild. Nothing here touches ABCI, the app hash or FinalizeBlock — it changes only how a node
-// observes its own submission — so a rolling deploy is safe and mixed versions are fine.
-//
-// A value that is not a switch is refused; it used to mean "on" for anything but "off".
-func inclusionScanEnabled() (bool, error) {
-	return envvar.Bool("INCLUSION_SCAN", true)
+// A broadcast's outcome is decided from committed blocks, and only from them. INCLUSION_SCAN=off used to
+// restore the index-based path "for one release": the transaction index stores by hash and keeps the LAST
+// inclusion, so after a resend it reports a rejected duplicate for a ValidatorBlock that committed - the
+// false failure this scan exists to remove. That release is long past, and a switch back to a known defect
+// is not a rollback. Unset, or a value meaning on, is accepted; anything else stops the node at boot
+// (CheckEnv), as REQUIRE_BFT_COMMIT=false does (RB3-F98).
+func requireInclusionScan() error {
+	on, err := envvar.Bool("INCLUSION_SCAN", true)
+	if err != nil {
+		return err
+	}
+	if !on {
+		return fmt.Errorf("INCLUSION_SCAN=%s is not supported: a broadcast is decided from committed blocks, never from "+
+			"the transaction index, which reports a rejected duplicate for a committed ValidatorBlock (RB5-F50)",
+			os.Getenv("INCLUSION_SCAN"))
+	}
+	return nil
 }
 
 // blockchainInfoPageSize is CometBFT's hard limit for one BlockchainInfo call (rpc/core/blocks.go).
