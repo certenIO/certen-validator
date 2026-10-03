@@ -52,6 +52,10 @@ const OutcomeFailoverAfter = 10 * time.Minute
 // OutcomeRecordInterval is how often the recorder passes over the kept trees.
 const OutcomeRecordInterval = time.Minute
 
+// OutcomeUnattestedRecheck is how often an anchor whose proof has not executed is read again. Its tree is kept: an
+// anchor does not expire, and one attested later still has an outcome to record.
+const OutcomeUnattestedRecheck = 10 * time.Minute
+
 // outcomeRecordGas bounds recordBatchOutcome: the anchor's quorum verification (the Groth16 check of the aggregate)
 // and two storage writes.
 const outcomeRecordGas = 1_000_000
@@ -141,6 +145,8 @@ type BatchOutcomeRecorder struct {
 	sent     map[[32]byte]*sentOutcome
 	// named marks anchors the database lists as unrecorded but this validator does not hold, named once.
 	named map[string]bool
+	// unattestedUntil spaces out the reads of anchors whose proof has not executed.
+	unattestedUntil map[[32]byte]time.Time
 }
 
 func (r *BatchOutcomeRecorder) logf(format string, a ...interface{}) {
@@ -251,8 +257,27 @@ func (r *BatchOutcomeRecorder) Pass(ctx context.Context) map[[32]byte]OutcomeSte
 	held := map[string]bool{}
 	for _, t := range trees {
 		held[fmt.Sprintf("%d|0x%x", t.ChainID, t.BundleID)] = true
+		r.mu.Lock()
+		waitUntil := r.unattestedUntil[t.BundleID]
+		r.mu.Unlock()
+		if r.now().Before(waitUntil) {
+			out[t.BundleID] = OutcomeStepNotAttested
+			continue
+		}
 		step, err := r.handle(ctx, t)
 		out[t.BundleID] = step
+		r.mu.Lock()
+		if step == OutcomeStepNotAttested {
+			// An anchor whose proof has not executed may still be attested later, so its tree is kept; it is read again
+			// less often than one in flight.
+			if r.unattestedUntil == nil {
+				r.unattestedUntil = map[[32]byte]time.Time{}
+			}
+			r.unattestedUntil[t.BundleID] = r.now().Add(OutcomeUnattestedRecheck)
+		} else {
+			delete(r.unattestedUntil, t.BundleID)
+		}
+		r.mu.Unlock()
 		if err != nil {
 			r.logf("⚠️ [OUTCOME] chain %d anchor 0x%x: %s: %v", t.ChainID, t.BundleID[:8], step, err)
 		}
@@ -376,6 +401,10 @@ func (r *BatchOutcomeRecorder) recorded(ctx context.Context, c OutcomeRecorderCh
 	if err := r.Trees.Release(t.ChainID, t.BundleID); err != nil {
 		return OutcomeStepRecorded, err
 	}
+	r.mu.Lock()
+	delete(r.hints, t.BundleID)
+	delete(r.unattestedUntil, t.BundleID)
+	r.mu.Unlock()
 	return OutcomeStepReleased, nil
 }
 

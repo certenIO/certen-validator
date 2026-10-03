@@ -60,11 +60,13 @@ type recorderChain struct {
 	mu       sync.Mutex
 	views    []OutcomeAnchorView // served in turn before the static view
 	recorded *RecordedOutcomeTx
+	reads    int
 }
 
 func (c *recorderChain) AnchorView(ctx context.Context, b [32]byte) (*OutcomeAnchorView, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.reads++
 	if len(c.views) > 0 {
 		v := c.views[0]
 		c.views = c.views[1:]
@@ -373,5 +375,30 @@ func TestARecordTransactionsCalldataDecodes(t *testing.T) {
 	}
 	if _, _, _, err := decodeRecordBatchOutcome(data[:40]); err == nil {
 		t.Fatal("truncated calldata decoded")
+	}
+}
+
+// An anchor whose proof has not executed keeps its tree - it may still be attested - and is read again only after
+// OutcomeUnattestedRecheck.
+func TestAnUnattestedAnchorKeepsItsTreeAndIsReadLessOften(t *testing.T) {
+	f := newRecorderFixture(t, true)
+	f.chain.view.Anchor.ProofExecuted = false
+	now := f.derived.ResolvedAt
+	f.rec.Now = func() time.Time { return now }
+	for i := 0; i < 3; i++ {
+		if steps := f.rec.Pass(context.Background()); steps[f.kept.BundleID] != OutcomeStepNotAttested {
+			t.Fatalf("pass %d: step %s", i, steps[f.kept.BundleID])
+		}
+	}
+	if f.chain.reads != 1 || f.sub.calls != 0 {
+		t.Fatalf("%d reads, %d submissions within the recheck interval", f.chain.reads, f.sub.calls)
+	}
+	now = now.Add(OutcomeUnattestedRecheck + time.Second)
+	f.rec.Pass(context.Background())
+	if f.chain.reads != 2 {
+		t.Fatalf("not read again after the recheck interval: %d reads", f.chain.reads)
+	}
+	if _, err := f.rec.Trees.Load(84532, f.kept.BundleID); err != nil {
+		t.Fatalf("the tree of an unattested anchor was released: %v", err)
 	}
 }
