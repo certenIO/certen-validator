@@ -83,15 +83,14 @@ const (
 	txNotFound     txLookup = iota // both lookups answered and neither has the transaction
 	txLookupFailed                 // a lookup did not answer, so absence is not established
 	txInMempool
-	txCommitted
 )
 
 // lookupMempoolOnly answers just the "is it queued" question, without consulting the transaction index.
 //
 // The index cannot be asked for a verdict: it stores by hash and the node overwrites it with the LAST
 // inclusion, so after a resend it can report a rejected duplicate for a ValidatorBlock that committed
-// perfectly well. When the inclusion scan is on, the blocks answer "did it commit" and this answers only
-// "is another copy still pending" — the one thing the mempool genuinely knows.
+// perfectly well. The blocks answer "did it commit" and this answers only "is another copy still pending"
+// — the one thing the mempool genuinely knows.
 //
 // A lookup that does not answer is txLookupFailed, never absence: unconfirmed_txs takes the mempool lock
 // and therefore blocks for as long as a commit does, which is exactly when the broadcast reply was lost.
@@ -109,59 +108,6 @@ func lookupMempoolOnly(ctx context.Context, rpc broadcastRPC, hash []byte, timeo
 		}
 	}
 	return txNotFound
-}
-
-// lookupTxByHash reports whether the transaction is committed or waiting in the mempool.
-//
-// Each lookup gets its own timeout. unconfirmed_txs takes the mempool lock and therefore blocks for as long
-// as a block commit does, exactly when the broadcast reply was lost; a lookup that does not answer is
-// reported as txLookupFailed, never as absence. The caller retries the broadcast either way, which is safe
-// (a duplicate is deduplicated), but only a real absence may end in "not in the mempool".
-func lookupTxByHash(ctx context.Context, rpc broadcastRPC, hash []byte, timeout time.Duration) (txLookup, *coretypes.ResultTx) {
-	failed := false
-
-	tctx, tcancel := context.WithTimeout(ctx, timeout)
-	res, err := rpc.Tx(tctx, hash, false)
-	tcancel()
-	switch {
-	case err == nil && res != nil:
-		return txCommitted, res
-	case err != nil && !strings.Contains(err.Error(), "not found"):
-		failed = true // the indexer did not answer, rather than answering "not found"
-	}
-
-	uctx, ucancel := context.WithTimeout(ctx, timeout)
-	defer ucancel()
-	limit := unconfirmedLookupLimit
-	u, err := rpc.UnconfirmedTxs(uctx, &limit)
-	if err != nil || u == nil {
-		return txLookupFailed, nil
-	}
-	for _, tx := range u.Txs {
-		if bytes.Equal(tx.Hash(), hash) {
-			return txInMempool, nil
-		}
-	}
-	if failed {
-		return txLookupFailed, nil
-	}
-	return txNotFound, nil
-}
-
-// committedResult turns a committed transaction into the execution result, failing if the block rejected it.
-func committedResult(logger *log.Logger, res *coretypes.ResultTx, since time.Time) (*BFTExecutionResult, error) {
-	if res.TxResult.Code != 0 {
-		logger.Printf("❌ [COMETBFT] Transaction failed in block: code=%d log=%s", res.TxResult.Code, res.TxResult.Log)
-		return nil, fmt.Errorf("transaction failed in block: code=%d log=%s", res.TxResult.Code, res.TxResult.Log)
-	}
-	logger.Printf("🎉 [COMETBFT] ValidatorBlock COMMITTED at height=%d hash=%X (elapsed: %v)",
-		res.Height, res.Hash, time.Since(since).Round(time.Millisecond))
-	return &BFTExecutionResult{
-		Height:      res.Height,
-		TxHash:      res.Hash,
-		BlockHash:   nil,
-		CommittedAt: time.Now().UTC(),
-	}, nil
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) bool {
@@ -195,8 +141,7 @@ func submitValidatorBlock(ctx context.Context, rpc broadcastRPC, payload []byte,
 	sum := sha256.Sum256(payload)
 	txHash := sum[:]
 
-	scanning, err := inclusionScanEnabled()
-	if err != nil {
+	if err := requireInclusionScan(); err != nil {
 		return nil, err
 	}
 	if committedThrough < 0 {
@@ -224,12 +169,10 @@ func submitValidatorBlock(ctx context.Context, rpc broadcastRPC, payload []byte,
 	logger.Printf("📡 [COMETBFT] Phase 1: Submitting to mempool via BroadcastTxSync...")
 submit:
 	for attempt := 1; ; attempt++ {
-		if scanning {
-			// Before the copy is offered, not after: a height read afterwards could already be past the
-			// block this copy landed in, which would wrongly make an earlier failure look final.
-			if h, err := statusHeight(ctx, rpc, timing.lookupTimeout); err == nil {
-				admittedAt = append(admittedAt, h)
-			}
+		// Before the copy is offered, not after: a height read afterwards could already be past the block
+		// this copy landed in, which would wrongly make an earlier failure look final.
+		if h, err := statusHeight(ctx, rpc, timing.lookupTimeout); err == nil {
+			admittedAt = append(admittedAt, h)
 		}
 		attemptCtx, cancel := context.WithTimeout(ctx, timing.attemptTimeout)
 		logger.Printf("📡 [COMETBFT] BroadcastTxSync attempt %d (timeout=%v)...", attempt, timing.attemptTimeout)
@@ -274,42 +217,32 @@ submit:
 		//
 		// The blocks are asked first. The index would answer for whichever copy was indexed last, which
 		// after a resend can be a rejected duplicate of a block that committed perfectly well.
-		var state txLookup
-		if scanning {
-			// The mempool answers only "is another copy still pending". The blocks answer everything else.
-			// The INDEX answers nothing here: it stores by hash and keeps the last inclusion, so after a
-			// resend it reports a rejected duplicate for a block that committed — the false failure itself.
-			state = lookupMempoolOnly(ctx, rpc, txHash, timing.lookupTimeout)
+		// The mempool answers only "is another copy still pending". The blocks answer everything else. The
+		// INDEX answers nothing here: it stores by hash and keeps the last inclusion, so after a resend it
+		// reports a rejected duplicate for a block that committed — the false failure itself.
+		state := lookupMempoolOnly(ctx, rpc, txHash, timing.lookupTimeout)
 
-			inc, complete, scanErr := scanInclusions(ctx, rpc, txHash, h0, timing)
-			if scanErr == nil {
-				switch out := resolveOutcome(inc, complete, admittedAt, state == txInMempool); out.kind {
-				case outcomeCommittedOK:
-					logger.Printf("✅ [COMETBFT] Reply lost (%v) but the ValidatorBlock is committed at height=%d: hash=%X",
-						err, out.height, txHash)
-					logger.Printf("🎉 [COMETBFT] ValidatorBlock COMMITTED at height=%d hash=%X (elapsed: %v)",
-						out.height, txHash, time.Since(start).Round(time.Millisecond))
-					return committedAtHeight(txHash, out.height), nil
-				case outcomeFailedFinal:
-					// REMEMBERED, NOT RETURNED. This copy is dead, but CometBFT removed it from the mempool
-					// cache precisely because it was rejected, so identical bytes can be admitted again and
-					// the resend may commit — which is the case this whole change exists for. Returning
-					// here would reinstate the false failure in a new place. It is reported only once the
-					// submit budget is out and no resend can still succeed.
-					if blockFailure == nil {
-						f := out
-						blockFailure = &f
-					}
-					logger.Printf("⚠️ [COMETBFT] A copy of this ValidatorBlock was rejected in block %d (code=%d); "+
-						"it has been evicted from the mempool cache, so the resend may still commit", out.height, out.code)
+		inc, complete, scanErr := scanInclusions(ctx, rpc, txHash, h0, timing)
+		if scanErr == nil {
+			switch out := resolveOutcome(inc, complete, admittedAt, state == txInMempool); out.kind {
+			case outcomeCommittedOK:
+				logger.Printf("✅ [COMETBFT] Reply lost (%v) but the ValidatorBlock is committed at height=%d: hash=%X",
+					err, out.height, txHash)
+				logger.Printf("🎉 [COMETBFT] ValidatorBlock COMMITTED at height=%d hash=%X (elapsed: %v)",
+					out.height, txHash, time.Since(start).Round(time.Millisecond))
+				return committedAtHeight(txHash, out.height), nil
+			case outcomeFailedFinal:
+				// REMEMBERED, NOT RETURNED. This copy is dead, but CometBFT removed it from the mempool cache
+				// precisely because it was rejected, so identical bytes can be admitted again and the resend
+				// may commit — which is the case this whole change exists for. Returning here would reinstate
+				// the false failure in a new place. It is reported only once the submit budget is out and no
+				// resend can still succeed.
+				if blockFailure == nil {
+					f := out
+					blockFailure = &f
 				}
-			}
-		} else {
-			var committed *coretypes.ResultTx
-			state, committed = lookupTxByHash(ctx, rpc, txHash, timing.lookupTimeout)
-			if state == txCommitted {
-				logger.Printf("✅ [COMETBFT] Reply lost (%v) but the ValidatorBlock is already committed: hash=%X", err, txHash)
-				return committedResult(logger, committed, start)
+				logger.Printf("⚠️ [COMETBFT] A copy of this ValidatorBlock was rejected in block %d (code=%d); "+
+					"it has been evicted from the mempool cache, so the resend may still commit", out.height, out.code)
 			}
 		}
 
@@ -361,25 +294,21 @@ submit:
 	logger.Printf("⏳ [COMETBFT] Phase 2: Polling for block inclusion (max %v)...", timing.inclusionPoll)
 	pollStart := time.Now()
 	for {
-		if scanning {
-			// rpc.Tx is still called, but only as a HINT that something has been indexed; it is never the
-			// verdict. The blocks decide.
-			_, _ = rpc.Tx(ctx, txHash, false)
+		// rpc.Tx is still called, but only as a HINT that something has been indexed; it is never the
+		// verdict. The blocks decide.
+		_, _ = rpc.Tx(ctx, txHash, false)
 
-			inc, complete, scanErr := scanInclusions(ctx, rpc, txHash, h0, timing)
-			if scanErr == nil {
-				switch out := resolveOutcome(inc, complete, admittedAt, false); out.kind {
-				case outcomeCommittedOK:
-					logger.Printf("🎉 [COMETBFT] ValidatorBlock COMMITTED at height=%d hash=%X (elapsed: %v)",
-						out.height, txHash, time.Since(pollStart).Round(time.Millisecond))
-					return committedAtHeight(txHash, out.height), nil
-				case outcomeFailedFinal:
-					logger.Printf("❌ [COMETBFT] Transaction failed in block: code=%d log=%s", out.code, out.log)
-					return nil, fmt.Errorf("transaction failed in block: code=%d log=%s", out.code, out.log)
-				}
+		inc, complete, scanErr := scanInclusions(ctx, rpc, txHash, h0, timing)
+		if scanErr == nil {
+			switch out := resolveOutcome(inc, complete, admittedAt, false); out.kind {
+			case outcomeCommittedOK:
+				logger.Printf("🎉 [COMETBFT] ValidatorBlock COMMITTED at height=%d hash=%X (elapsed: %v)",
+					out.height, txHash, time.Since(pollStart).Round(time.Millisecond))
+				return committedAtHeight(txHash, out.height), nil
+			case outcomeFailedFinal:
+				logger.Printf("❌ [COMETBFT] Transaction failed in block: code=%d log=%s", out.code, out.log)
+				return nil, fmt.Errorf("transaction failed in block: code=%d log=%s", out.code, out.log)
 			}
-		} else if res, err := rpc.Tx(ctx, txHash, false); err == nil && res != nil {
-			return committedResult(logger, res, pollStart)
 		}
 		if time.Since(pollStart) > timing.inclusionPoll || !sleepCtx(ctx, timing.pollInterval) {
 			logger.Printf("⚠️ [COMETBFT] Poll timeout - returning with mempool confirmation only")

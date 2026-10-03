@@ -721,33 +721,39 @@ func TestD1HappyPathIsFastAndCheap(t *testing.T) {
 	}
 }
 
-// The escape hatch has to actually work: with INCLUSION_SCAN=off nothing scans.
-func TestInclusionScanCanBeTurnedOff(t *testing.T) {
-	if on, err := inclusionScanEnabled(); !on || err != nil {
-		t.Fatalf("the scan is not on by default (%v, %v)", on, err)
+// RB5-F50: there is no switch back to the index. INCLUSION_SCAN=off restored the index-based path, which
+// reports a rejected duplicate for a committed ValidatorBlock - the defect the scan removes. Every value that
+// turns the scan off is refused, at boot and by the broadcaster itself; one that is not a switch is refused
+// as before.
+func TestInclusionScanCannotBeTurnedOff(t *testing.T) {
+	if err := requireInclusionScan(); err != nil {
+		t.Fatalf("unset was refused: %v", err)
 	}
-	t.Setenv("INCLUSION_SCAN", "off")
-	if on, err := inclusionScanEnabled(); on || err != nil {
-		t.Fatalf("INCLUSION_SCAN=off did not disable the scan (%v, %v)", on, err)
+	for _, v := range []string{"on", "true", "1"} {
+		t.Setenv("INCLUSION_SCAN", v)
+		if err := requireInclusionScan(); err != nil {
+			t.Fatalf("INCLUSION_SCAN=%s was refused: %v", v, err)
+		}
 	}
-	t.Setenv("INCLUSION_SCAN", "of")
-	if _, err := inclusionScanEnabled(); err == nil {
-		t.Fatal("INCLUSION_SCAN=of was not refused; it used to leave the scan on")
-	}
-	t.Setenv("INCLUSION_SCAN", "on")
-	if on, _ := inclusionScanEnabled(); !on {
-		t.Fatal("INCLUSION_SCAN=on disabled the scan")
+	for _, v := range []string{"off", "false", "0", "no", "of"} {
+		t.Setenv("INCLUSION_SCAN", v)
+		if err := requireInclusionScan(); err == nil {
+			t.Fatalf("INCLUSION_SCAN=%s was accepted", v)
+		}
+		if err := CheckEnv(); err == nil {
+			t.Fatalf("boot accepted INCLUSION_SCAN=%s", v)
+		}
 	}
 }
 
-func TestInclusionScanOffUsesTheIndexPath(t *testing.T) {
+func TestInclusionScanOffIsRefusedBeforeAnyBroadcast(t *testing.T) {
 	t.Setenv("INCLUSION_SCAN", "off")
 	chain := &scriptedChain{tip: 99, blocks: map[int64][]scriptedTx{}}
 	res, err := submitValidatorBlock(context.Background(), chain, testPayload, startFloor(chain), scanTiming(), broadcastQuietLog)
-	if err != nil || res.Height != 0 {
-		t.Fatalf("res=%+v err=%v", res, err)
+	if err == nil || !strings.Contains(err.Error(), "RB5-F50") {
+		t.Fatalf("INCLUSION_SCAN=off was not refused: res=%+v err=%v", res, err)
 	}
-	if chain.infoReads != 0 || chain.blockReads != 0 {
-		t.Fatalf("scanned with INCLUSION_SCAN=off: info=%d blocks=%d", chain.infoReads, chain.blockReads)
+	if chain.broadcasts != 0 {
+		t.Fatalf("broadcast %d time(s) with INCLUSION_SCAN=off", chain.broadcasts)
 	}
 }
