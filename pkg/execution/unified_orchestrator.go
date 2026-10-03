@@ -295,6 +295,10 @@ type UnifiedProofCycleResult struct {
 
 	// CommitmentData from the original request, propagated for multi-leg aggregator write-back
 	CommitmentData map[string]interface{} `json:"commitment_data,omitempty"`
+
+	// level3 is, per level record, why its level-3 root does not commit the operation the cycle's quorum signs - nil
+	// when it does (level3CommitsOperation). Recorded with the levels, read when the cycle completes (RB5-F18).
+	level3 map[uuid.UUID]error
 }
 
 // =============================================================================
