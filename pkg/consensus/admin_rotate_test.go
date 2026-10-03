@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -535,5 +536,57 @@ func TestCommitAdvancesTheKindsWatermark(t *testing.T) {
 	}
 	if through, err := app.ledgerStore.KindsCheckedThrough(CurrentExecutionRulesVersion); err != nil || through != 3 {
 		t.Fatalf("kinds checked through %d, %v", through, err)
+	}
+}
+
+// /certen/admin_set answers what a tool needs to make and judge the next rotation: the set in force for the next block,
+// its id, the next sequence and every change - and a rotation the view's Policy accepts is one the chain accepts.
+func TestTheAdminSetQuery(t *testing.T) {
+	f := newRotationFixture()
+	app, _ := rotationApp(t, f)
+	b := setB(f)
+	view := func() *AdminSetView {
+		t.Helper()
+		res, err := app.Query(context.Background(), &abcitypes.RequestQuery{Path: "/certen/admin_set"})
+		if err != nil || res.Code != 0 {
+			t.Fatalf("query: (%+v, %v)", res, err)
+		}
+		var v AdminSetView
+		if err := json.Unmarshal(res.Value, &v); err != nil {
+			t.Fatal(err)
+		}
+		return &v
+	}
+	v := view()
+	if v.InForceSetID != genesisSetID(f) || v.NextSequence != 1 || len(v.Changes) != 0 {
+		t.Fatalf("before any rotation: %+v", v)
+	}
+	rot := adminRotation(v.NextSequence, v.InForceSetID, b, 2).signedBy(f.admins, "ops-2", "ops-3")
+	if err := VerifyAdminRotate(rot, rotChain, v.Policy(), v.Height+1); err != nil {
+		t.Fatalf("the view's policy refuses what the chain accepts: %v", err)
+	}
+	finalize(t, app, 1, abcitypes.CommitInfo{}, rotJSON(t, rot))
+	// Mid-block (finalized, not committed) the view still answers for the committed height.
+	if mid := view(); mid.InForceSetID != genesisSetID(f) || mid.NextSequence != 1 {
+		t.Fatalf("before Commit: %+v", mid)
+	}
+	if _, err := app.Commit(context.Background(), &abcitypes.RequestCommit{}); err != nil {
+		t.Fatal(err)
+	}
+	if v = view(); v.InForceSetID != AdminSetID(b.public(), 2) || v.NextSequence != 2 || len(v.Changes) != 1 || v.Height != 1 {
+		t.Fatalf("after the rotation: %+v", v)
+	}
+}
+
+// certen-testnet's admin sets - the lost genesis pair and the re-seal's three - name distinct keys, so counting
+// distinct keys from v12 on changes no verdict its history holds (checkAdminKeyCountingContinuity).
+func TestCertenTestnetAdminSetsNameDistinctKeys(t *testing.T) {
+	state := &ledger.EntitlementPolicyState{AdminKeys: lostAdminSet.Keys, AdminThreshold: lostAdminSet.Threshold,
+		AdminReseals: []ledger.AdminReseal{{Height: 2788, Keys: resealedAdminSet.Keys, Threshold: resealedAdminSet.Threshold}}}
+	if found := adminSetsRepeatingAKey(state); len(found) != 0 {
+		t.Fatalf("certen-testnet's admin sets repeat a key: %v", found)
+	}
+	if err := checkAdminKeyCountingContinuity(executionRulesV11, state); err != nil {
+		t.Fatal(err)
 	}
 }

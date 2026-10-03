@@ -1111,6 +1111,25 @@ func (app *ValidatorApp) Query(ctx context.Context, req *abcitypes.RequestQuery)
 		}
 		return &abcitypes.ResponseQuery{Code: 0, Value: b, Height: app.latestHeight}, nil
 
+	case "/certen/admin_set":
+		// The admin record (rules v12, admin_rotate.go): every admin-set change, and the set in force for the next block
+		// with its id and the sequence the next admin rotation carries.
+		if app.ledgerStore == nil {
+			return &abcitypes.ResponseQuery{Code: 1, Log: "ledger store not available"}, nil
+		}
+		policy, err := app.ledgerStore.LoadEntitlementPolicy()
+		if err != nil {
+			return &abcitypes.ResponseQuery{Code: 1, Log: "failed to read the committed policy: " + err.Error()}, nil
+		}
+		if policy == nil {
+			return &abcitypes.ResponseQuery{Code: 1, Log: "this chain sealed no policy, so it has no admin set"}, nil
+		}
+		b, err := json.Marshal(NewAdminSetView(policy, app.latestHeight))
+		if err != nil {
+			return &abcitypes.ResponseQuery{Code: 1, Log: err.Error()}, nil
+		}
+		return &abcitypes.ResponseQuery{Code: 0, Value: b, Height: app.latestHeight}, nil
+
 	default:
 		return &abcitypes.ResponseQuery{
 			Code: 2,

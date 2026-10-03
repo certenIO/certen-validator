@@ -403,6 +403,13 @@ func isValidatorBlockTx(tx []byte) bool {
 // transaction is one of those kinds; violation, when not empty, says how its recorded outcome is one this binary does
 // not reproduce: the version before each judged those bytes as a ValidatorBlock, with a ValidatorBlock's code.
 func (app *ValidatorApp) kindViolation(height int64, i int, tx []byte, code uint32) (violation string, isKind bool, err error) {
+	return kindViolationWith(height, i, tx, code, app.ledgerStore.LoadEntitlementPolicy)
+}
+
+// kindViolationWith is kindViolation with the committed policy read through policy, only when an accepted admin rotation
+// has to be found in its record.
+func kindViolationWith(height int64, i int, tx []byte, code uint32,
+	policy func() (*ledger.EntitlementPolicyState, error)) (violation string, isKind bool, err error) {
 	if _, ok := DecodeBLSRegistry(tx); ok {
 		// v9 judged a registry-kind transaction as a ValidatorBlock and refused it with code 2; v10 accepts it or
 		// refuses it with code 9. History holding one decided v9's way is history v10 does not reproduce.
@@ -437,7 +444,7 @@ func (app *ValidatorApp) kindViolation(height int64, i int, tx []byte, code uint
 		case codeAdminRotateRefused:
 			return "", true, nil
 		case 0:
-			state, err := app.ledgerStore.LoadEntitlementPolicy()
+			state, err := policy()
 			if err != nil {
 				return "", true, fmt.Errorf("the committed policy, to check the admin rotation at height %d: %w", height, err)
 			}
@@ -541,4 +548,26 @@ func rotationBlockVerdicts(height int64, txs [][]byte, codes []uint32) (violatio
 		}
 	}
 	return violations, v12
+}
+
+// CommittedBlockViolations judges one committed block - its transactions and the result codes it committed - the way
+// every node judges its history before it starts (IndexCommittedHistory): each transaction of a kind rules v10-v12
+// added, and the block's validator rotations as a whole. policy is the chain's committed policy (nil when none can be
+// read: an accepted admin rotation then has no record to be found in). Tools run it over a chain before an upgrade.
+func CommittedBlockViolations(height int64, txs [][]byte, codes []uint32, policy *ledger.EntitlementPolicyState) ([]string, error) {
+	if len(codes) != len(txs) {
+		return nil, fmt.Errorf("block %d has %d transactions and %d results", height, len(txs), len(codes))
+	}
+	var out []string
+	for i, tx := range txs {
+		v, _, err := kindViolationWith(height, i, tx, codes[i], func() (*ledger.EntitlementPolicyState, error) { return policy, nil })
+		if err != nil {
+			return nil, err
+		}
+		if v != "" {
+			out = append(out, v)
+		}
+	}
+	found, _ := rotationBlockVerdicts(height, txs, codes)
+	return append(out, found...), nil
 }

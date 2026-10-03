@@ -181,28 +181,10 @@ func (t *AdminRotateTx) CheckShape() error {
 	if b, err := hex.DecodeString(t.CurrentSetID); err != nil || len(b) != sha256.Size || t.CurrentSetID != strings.ToLower(t.CurrentSetID) {
 		return fmt.Errorf("current_set_id is not a lowercase hex sha256")
 	}
+	if err := CheckAdminSetShape(t.NewAdminKeys, t.NewThreshold); err != nil {
+		return err
+	}
 	n := len(t.NewAdminKeys)
-	if n == 0 || n > maxAdminKeys {
-		return fmt.Errorf("the new admin set has %d keys; it needs 1 to %d", n, maxAdminKeys)
-	}
-	seen := make(map[string]string, n)
-	for _, id := range sortedAdminIDs(t.NewAdminKeys) {
-		k := t.NewAdminKeys[id]
-		if !adminKeyIDPattern.MatchString(id) {
-			return fmt.Errorf("admin key id %q is not a plain name (letters, digits, '.', '_', '-'; at most 64)", id)
-		}
-		if !isCanonicalEd25519Hex(k) {
-			return fmt.Errorf("admin key %q is not an ed25519 public key in lowercase hex", id)
-		}
-		if other, dup := seen[k]; dup {
-			return fmt.Errorf("admin keys %q and %q are the same key: one key is one signer", other, id)
-		}
-		seen[k] = id
-	}
-	if min := minimumAdminThreshold(n); t.NewThreshold < min || t.NewThreshold > n {
-		return fmt.Errorf("threshold %d is not allowed for %d keys: it must be %d to %d (a set of two or more keys "+
-			"never lets one key act alone)", t.NewThreshold, n, min, n)
-	}
 	proved := make(map[string]bool, n)
 	for _, p := range t.Possession {
 		pub, ok := t.NewAdminKeys[p.KeyID]
@@ -345,4 +327,59 @@ func checkAdminKeyCountingContinuity(persisted uint64, state *ledger.Entitlement
 			persisted)
 	}
 	return nil
+}
+
+// CheckAdminSetShape is the rule for any admin set a rotation installs: 1 to maxAdminKeys keys, each a plain id and an
+// ed25519 public key in lowercase hex, no key twice, and a threshold from minimumAdminThreshold to the number of keys.
+func CheckAdminSetShape(keys map[string]string, threshold int) error {
+	n := len(keys)
+	if n == 0 || n > maxAdminKeys {
+		return fmt.Errorf("the new admin set has %d keys; it needs 1 to %d", n, maxAdminKeys)
+	}
+	seen := make(map[string]string, n)
+	for _, id := range sortedAdminIDs(keys) {
+		k := keys[id]
+		if !adminKeyIDPattern.MatchString(id) {
+			return fmt.Errorf("admin key id %q is not a plain name (letters, digits, '.', '_', '-'; at most 64)", id)
+		}
+		if !isCanonicalEd25519Hex(k) {
+			return fmt.Errorf("admin key %q is not an ed25519 public key in lowercase hex", id)
+		}
+		if other, dup := seen[k]; dup {
+			return fmt.Errorf("admin keys %q and %q are the same key: one key is one signer", other, id)
+		}
+		seen[k] = id
+	}
+	if min := minimumAdminThreshold(n); threshold < min || threshold > n {
+		return fmt.Errorf("threshold %d is not allowed for %d keys: it must be %d to %d (a set of two or more keys "+
+			"never lets one key act alone)", threshold, n, min, n)
+	}
+	return nil
+}
+
+// AdminSetView is what a node answers at /certen/admin_set: its committed admin record and, for the next block, the
+// set in force, its id and the sequence the next admin rotation must carry. Tools judge a rotation against it with the
+// chain's own rule (VerifyAdminRotate on Policy, at Height+1).
+type AdminSetView struct {
+	Height           int64                `json:"height"` // the app's committed height
+	GenesisKeys      map[string]string    `json:"genesis_keys"`
+	GenesisThreshold int                  `json:"genesis_threshold"`
+	Changes          []ledger.AdminReseal `json:"changes"`
+	InForceKeys      map[string]string    `json:"in_force_keys"`
+	InForceThreshold int                  `json:"in_force_threshold"`
+	InForceSetID     string               `json:"in_force_set_id"`
+	NextSequence     uint64               `json:"next_sequence"`
+}
+
+// NewAdminSetView is the view of a committed policy at committed height h.
+func NewAdminSetView(state *ledger.EntitlementPolicyState, h int64) *AdminSetView {
+	keys, threshold := AdminSetAt(state, h+1)
+	return &AdminSetView{Height: h, GenesisKeys: state.AdminKeys, GenesisThreshold: state.AdminThreshold,
+		Changes: state.AdminReseals, InForceKeys: keys, InForceThreshold: threshold,
+		InForceSetID: AdminSetID(keys, threshold), NextSequence: NextAdminSequence(state, h+1)}
+}
+
+// Policy is the admin part of the committed policy the view was made from - everything VerifyAdminRotate reads.
+func (v *AdminSetView) Policy() *ledger.EntitlementPolicyState {
+	return &ledger.EntitlementPolicyState{AdminKeys: v.GenesisKeys, AdminThreshold: v.GenesisThreshold, AdminReseals: v.Changes}
 }
