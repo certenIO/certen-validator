@@ -328,6 +328,8 @@ func TestMempool_DrainsIntoAVerifiableTree(t *testing.T) {
 
 // Mixed single-leg and multi-leg members in ONE tree â€” both nesting levels together.
 func TestMempool_MixedSingleAndMultiLegMembers(t *testing.T) {
+	// Chain 1 is no settlement chain, so it is on no account leaf version until it is given one (RB5-F57).
+	withAccountLeafVersions(t, "1=v3")
 	m := newTestMempool(BatchMempoolConfig{MaxBatchSize: 10})
 
 	single := pending("single", "acc://a.acme", 1, acct1, 1, oneLeg(1, dst, 5))
