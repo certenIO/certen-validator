@@ -26,7 +26,7 @@ const screenPrincipal = "acc://payer.acme/data"
 func discoveryWithScreen(t *testing.T, store *entitlement.Store, enforce bool) *IntentDiscovery {
 	t.Helper()
 	id := &IntentDiscovery{logger: log.New(io.Discard, "", 0)}
-	id.SetEntitlementScreen(store, enforce)
+	id.SetEntitlementScreen(store, func() bool { return enforce })
 	return id
 }
 
@@ -189,5 +189,37 @@ func TestPreScreenPassingIsNotAuthorization(t *testing.T) {
 	// later stage could mistake for a grant.
 	if intent.IntentID != "i1" || intent.AccountURL != screenPrincipal {
 		t.Fatal("the pre-screen must not mutate the intent")
+	}
+}
+
+// ── The mode is the chain's, asked at each intent (RB4-F37a) ────────────────
+
+// It was the environment's mode, a bool fixed at startup: a policy update that moved the chain to enforce (or back to
+// observe) never reached the pre-screen, which kept declining - or admitting - by the old rule.
+func TestPreScreenAsksTheEnforcedModeAtEachIntent(t *testing.T) {
+	store := screenStore(t, []entitlement.Leaf{activeLeaf("acc://other.acme/data")}, time.Now().Add(time.Hour))
+	enforcing := false
+	id := &IntentDiscovery{logger: log.New(io.Discard, "", 0)}
+	id.SetEntitlementScreen(store, func() bool { return enforcing })
+
+	if !id.entitlementPreScreen(&CertenIntent{IntentID: "i1", AccountURL: screenPrincipal}) {
+		t.Fatal("while the chain observes, an absent principal must proceed")
+	}
+	enforcing = true
+	if id.entitlementPreScreen(&CertenIntent{IntentID: "i2", AccountURL: screenPrincipal}) {
+		t.Fatal("once the chain enforces, an absent principal must be declined")
+	}
+	enforcing = false
+	if !id.entitlementPreScreen(&CertenIntent{IntentID: "i3", AccountURL: screenPrincipal}) {
+		t.Fatal("back to observe, it must proceed again")
+	}
+}
+
+func TestPreScreenWithNoModeSourceDeclinesNothing(t *testing.T) {
+	store := screenStore(t, []entitlement.Leaf{activeLeaf("acc://other.acme/data")}, time.Now().Add(time.Hour))
+	id := &IntentDiscovery{logger: log.New(io.Discard, "", 0)}
+	id.SetEntitlementScreen(store, nil)
+	if !id.entitlementPreScreen(&CertenIntent{IntentID: "i1", AccountURL: screenPrincipal}) {
+		t.Fatal("with no enforced mode wired, screening is off")
 	}
 }

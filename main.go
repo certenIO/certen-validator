@@ -2105,8 +2105,9 @@ func startValidator(
 	// everything — indistinguishable from a genuinely unentitled principal, and
 	// in enforce mode it would refuse the entire fleet's work.
 	//
-	// Mode comes from the SAME parse the gate uses, so the producer and the
-	// verifier can never disagree about whether the gate is on.
+	// The MODE the producers act on is the one the chain enforces (ValidatorApp.EntitlementMode, below), so the
+	// producer and the verifier can never disagree about whether the gate is on. The environment parse here supplies
+	// only the store's configuration and keys; its mode is the genesis seed, which a sealed chain ignores (RB4-F37a).
 	if entGateCfg, err := consensus.EntitlementConfigFromEnv(); err != nil {
 		log.Fatalf("invalid entitlement configuration: %v", err)
 	} else {
@@ -2125,10 +2126,14 @@ func startValidator(
 		// batchScheduler) — the refresher lives for the process lifetime.
 		entStore.Start(context.Background())
 
-		validator.SetEntitlementStore(entStore, entGateCfg.Mode)
+		// The mode both producers act on is the one the chain enforces - the sealed policy and every update since,
+		// read from the ValidatorApp at each use - never entGateCfg.Mode, the environment's genesis seed (RB4-F37a).
+		validator.SetEntitlementStore(entStore, validatorApp.EntitlementMode)
 		// Pre-screen only declines work when the gate is actually enforcing;
 		// in observe mode a decline would drop intents the gate would admit.
-		intentDiscovery.SetEntitlementScreen(entStore, entGateCfg.Mode == consensus.EntitlementEnforce)
+		intentDiscovery.SetEntitlementScreen(entStore, func() bool {
+			return validatorApp.EntitlementMode() == consensus.EntitlementEnforce
+		})
 
 		// Report the SEALED mode, not the environment's.
 		//
@@ -2137,7 +2142,7 @@ func startValidator(
 		// and redeploys gets a warning log and no behaviour change. Publishing
 		// this as a gauge is how the fleet's ACTUAL mode becomes observable
 		// rather than assumed.
-		metrics.SetEntitlementMode(string(entGateCfg.Mode))
+		metrics.SetEntitlementMode(string(validatorApp.EntitlementMode()))
 
 		// Epoch freshness, sampled independently of refresh success.
 		//

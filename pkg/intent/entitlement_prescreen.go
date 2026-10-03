@@ -26,10 +26,12 @@ import (
 // CERTEN_INTENT memo could keep the fleet busy at no cost to themselves.
 // Declining early makes that attack cost them Accumulate fees for nothing.
 
-// SetEntitlementScreen wires the snapshot and mode used by the pre-screen.
-// Leaving it unset disables screening entirely, which is correct for a
-// deployment not running the entitlement gate.
-func (id *IntentDiscovery) SetEntitlementScreen(store *entitlement.Store, enforce bool) {
+// SetEntitlementScreen wires the snapshot used by the pre-screen, and whether the CHAIN enforces entitlement now -
+// asked at each intent, so a policy update that changes the mode changes what is declined (RB4-F37a: it was the
+// environment's mode, fixed at startup, and on a chain sealed observe an env saying enforce declined intents the
+// consensus gate would admit). Leaving it unset disables screening entirely, which is correct for a deployment not
+// running the entitlement gate.
+func (id *IntentDiscovery) SetEntitlementScreen(store *entitlement.Store, enforce func() bool) {
 	id.mu.Lock()
 	defer id.mu.Unlock()
 	id.entitlementStore = store
@@ -44,12 +46,13 @@ func (id *IntentDiscovery) SetEntitlementScreen(store *entitlement.Store, enforc
 // will catch the latter, and nothing catches the former.
 func (id *IntentDiscovery) entitlementPreScreen(intent *CertenIntent) bool {
 	id.mu.RLock()
-	store, enforce := id.entitlementStore, id.entitlementEnforce
+	store, enforcing := id.entitlementStore, id.entitlementEnforce
 	id.mu.RUnlock()
 
-	if store == nil || !store.Enabled() {
+	if store == nil || !store.Enabled() || enforcing == nil {
 		return true // not configured — screening is off
 	}
+	enforce := enforcing()
 
 	principal := strings.TrimSpace(intent.AccountURL)
 	if principal == "" {
