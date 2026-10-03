@@ -37,6 +37,8 @@ type stubProvider struct {
 	// block's state does. latest, when set, is the head the "latest" tag names.
 	callResult []byte
 	latest     uint64
+	// throttle answers this many eth_calls with HTTP 429 before serving them.
+	throttle int
 }
 
 func (p *stubProvider) serve(t *testing.T) string { return p.serveOn(t, "127.0.0.1:0") }
@@ -95,6 +97,11 @@ func (p *stubProvider) serveOn(t *testing.T, addr string) string {
 			_, _ = fmt.Sscanf(tag, "0x%x", &n)
 			reply(p.headers[n])
 		case "eth_call", "eth_getCode":
+			if p.throttle > 0 {
+				p.throttle--
+				http.Error(w, `{"error":{"code":-32005,"message":"rate limit exceeded"}}`, http.StatusTooManyRequests)
+				return
+			}
 			if p.callResult == nil {
 				_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"historical state is not available"}}`, req.ID)
 				return

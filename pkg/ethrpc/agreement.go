@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"net/http"
 	"net/url"
 	"sort"
 	"strings"
@@ -140,6 +141,15 @@ func askAll[T any](ctx context.Context, r *AgreeingReader, read func(context.Con
 			cctx, cancel := context.WithTimeout(ctx, r.timeout)
 			defer cancel()
 			v, err := read(cctx, p.client)
+			// A provider that throttles has not answered yet: it is asked again, within the read's own bound, rather
+			// than counted out - a throttled provider would otherwise leave every fact unestablished in a burst of reads.
+			for wait := rateLimitBackoff; err != nil && rateLimited(err) && wait <= maxRateLimitBackoff; wait *= 2 {
+				select {
+				case <-cctx.Done():
+				case <-time.After(wait):
+					v, err = read(cctx, p.client)
+				}
+			}
 			out[i] = answer[T]{host: p.host, value: v, err: err}
 		}(i, p)
 	}
@@ -393,4 +403,26 @@ func (r *AgreeingReader) Locators() []LocatorClient {
 		out[i] = LocatorClient{Host: p.host, Client: p.client}
 	}
 	return out
+}
+
+// rateLimitBackoff and maxRateLimitBackoff bound how a throttled provider is asked again: 250 ms, then doubling, up to
+// 4 s - a few seconds in all, inside the read's own timeout.
+const (
+	rateLimitBackoff    = 250 * time.Millisecond
+	maxRateLimitBackoff = 4 * time.Second
+)
+
+// rateLimited reports whether a provider refused a read because it throttles this client (HTTP 429, or the JSON-RPC
+// rate-limit errors providers return): not an answer, and not a disagreement.
+func rateLimited(err error) bool {
+	var he rpc.HTTPError
+	if errors.As(err, &he) && he.StatusCode == http.StatusTooManyRequests {
+		return true
+	}
+	var ec rpc.Error
+	if errors.As(err, &ec) && (ec.ErrorCode() == -32005 || ec.ErrorCode() == -32029) {
+		return true
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "429 too many requests") || strings.Contains(s, "rate limit exceeded")
 }

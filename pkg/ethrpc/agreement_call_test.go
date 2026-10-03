@@ -58,3 +58,22 @@ func TestLocatorsNameEveryProvider(t *testing.T) {
 		t.Fatalf("locators %+v", ls)
 	}
 }
+
+// A throttled provider is asked again within the read's bound, not counted out: free providers throttle a burst of reads
+// (measured 2026-10-03 on tenderly's public gateways: HTTP 429 at about the twelfth call), and counting them out left
+// every fact unestablished. One that never stops throttling still establishes nothing.
+func TestAThrottledProviderIsAskedAgainNotCountedOut(t *testing.T) {
+	throttled := callProvider([]byte{1})
+	throttled.throttle = 2
+	r := reader(t, callProvider([]byte{1}), throttled)
+	to := common.HexToAddress("0x01")
+	if got, err := r.CallContractAtHash(context.Background(), ethereum.CallMsg{To: &to}, common.Hash{1}); err != nil || len(got) != 1 {
+		t.Fatalf("a provider that throttled twice was counted out: (%x, %v)", got, err)
+	}
+	stuck := callProvider([]byte{1})
+	stuck.throttle = 1000
+	r = reader(t, callProvider([]byte{1}), stuck)
+	if _, err := r.CallContractAtHash(context.Background(), ethereum.CallMsg{To: &to}, common.Hash{1}); !errors.Is(err, ErrTooFewProviders) {
+		t.Fatalf("a provider that never answers was taken as agreeing: %v", err)
+	}
+}
