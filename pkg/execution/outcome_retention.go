@@ -267,10 +267,20 @@ func (t *OutcomeTree) Verify() error {
 	return nil
 }
 
-// sameMembers reports whether two kept trees state the same members (roles and write time aside).
+// sameMembers reports whether two kept trees state the same members - roles, write time and each member's search floor
+// aside: the floor is where a search starts, not a fact, and a tree rebuilt from Accumulate starts it at the commit time
+// where a validator that queued the member started it at its first sighting.
 func (t *OutcomeTree) sameMembers(o *OutcomeTree) bool {
 	a, b := *t, *o
 	a.Roles, b.Roles, a.RetainedAt, b.RetainedAt = nil, nil, time.Time{}, time.Time{}
+	a.Members = append([]OutcomeTreeMember(nil), a.Members...)
+	b.Members = append([]OutcomeTreeMember(nil), b.Members...)
+	for i := range a.Members {
+		a.Members[i].SearchFrom = 0
+	}
+	for i := range b.Members {
+		b.Members[i].SearchFrom = 0
+	}
 	ja, errA := json.Marshal(a)
 	jb, errB := json.Marshal(b)
 	return errA == nil && errB == nil && bytes.Equal(ja, jb)

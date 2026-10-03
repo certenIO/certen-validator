@@ -323,3 +323,80 @@ func (r *BatchOutcomeRepository) AttestedAnchorsWithoutOutcome(ctx context.Conte
 	}
 	return out, rows.Err()
 }
+
+// AnchorMemberHint is what the database recorded about one member of an anchor - a HINT for rebuilding the tree, which
+// the rebuild verifies against the anchor on the chain.
+type AnchorMemberHint struct {
+	TreeIndex              int
+	Leaf                   []byte
+	OperationID            string
+	GovernanceCommitment   string
+	CertifiedIntentMessage string
+	IntentID               string
+	ADIURL                 string
+	AccumTxHash            string
+	// LifecycleAccumTxHash is the intent's Accumulate transaction as its lifecycle row recorded it.
+	LifecycleAccumTxHash string
+	// Account is the member's account as recorded (from_address).
+	Account string
+	// CommitHeight is the Accumulate height its lifecycle row recorded the intent at (block_height): the height that
+	// placed it in its period, and with its intent id its place in its tree.
+	CommitHeight int64
+}
+
+// AnchorMemberHints is what the database recorded about an anchor's members.
+type AnchorMemberHints struct {
+	BatchOperationIDVersion string
+	Members                 []AnchorMemberHint
+}
+
+// AnchorMemberHints reads the canonical row of (chain, bundle) and its members; nil when there is no such row.
+func (r *BatchOutcomeRepository) AnchorMemberHints(ctx context.Context, chainID int64, bundleID string) (*AnchorMemberHints, error) {
+	var id string
+	var version sql.NullString
+	err := r.client.DB().QueryRowContext(ctx, `SELECT id::text, batch_operation_id_version FROM anchor_batches
+		WHERE chain_id = $1 AND lower(bundle_id) = lower($2)`, chainID, bundleID).Scan(&id, &version)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	out := &AnchorMemberHints{BatchOperationIDVersion: version.String}
+	rows, err := r.client.DB().QueryContext(ctx, `
+		SELECT bt.tree_index, bt.transaction_hash, COALESCE(bt.operation_id, ''), COALESCE(bt.governance_commitment, ''),
+			COALESCE(bt.certified_intent_message, ''), COALESCE(bt.intent_id, ''), COALESCE(bt.adi_url, bt.account_url),
+			COALESCE(bt.accumulate_tx_hash, ''), COALESCE(il.accum_tx_hash, ''), COALESCE(bt.from_address, ''), COALESCE(il.block_height, 0)
+		FROM batch_transactions bt LEFT JOIN intent_lifecycle il ON il.intent_id = bt.intent_id
+		WHERE bt.batch_id = $1::uuid ORDER BY bt.tree_index`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var h AnchorMemberHint
+		if err := rows.Scan(&h.TreeIndex, &h.Leaf, &h.OperationID, &h.GovernanceCommitment, &h.CertifiedIntentMessage, &h.IntentID,
+			&h.ADIURL, &h.AccumTxHash, &h.LifecycleAccumTxHash, &h.Account, &h.CommitHeight); err != nil {
+			return nil, err
+		}
+		out.Members = append(out.Members, h)
+	}
+	return out, rows.Err()
+}
+
+// CertifiedAuthority is the key page and key book CERTEN's quorum certified for an operation, from its intent quorum
+// certificate's message inputs; "" when no certificate is recorded.
+func (r *BatchOutcomeRepository) CertifiedAuthority(ctx context.Context, operationID string) (string, string, error) {
+	c, err := NewConsensusRepository(r.client).IntentQuorumCertificate(ctx, operationID)
+	if err != nil || c == nil {
+		return "", "", err
+	}
+	var in struct {
+		KeyPageURL string `json:"key_page_url"`
+		KeyBookURL string `json:"key_book_url"`
+	}
+	if err := json.Unmarshal(c.MessageInputs, &in); err != nil {
+		return "", "", fmt.Errorf("the certificate of %s: message inputs: %w", operationID, err)
+	}
+	return in.KeyPageURL, in.KeyBookURL, nil
+}

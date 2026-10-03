@@ -154,3 +154,59 @@ func TestAttestedAnchorsWithoutAnOutcomeAreListedAsHints(t *testing.T) {
 		t.Fatalf("hints %v", got)
 	}
 }
+
+// The backfill's hints: an anchor's members in tree order with what each row recorded, and the key page CERTEN's
+// quorum certified for an operation.
+func TestTheAnchorMemberHintsAreTheRowsAsRecorded(t *testing.T) {
+	repo := outcomeRepoForTest(t)
+	ctx := context.Background()
+	bundle := bundleHex(940)
+	var batchID string
+	if err := testDB.QueryRowContext(ctx, `
+		INSERT INTO anchor_batches (chain_id, bundle_id, verify_tx, anchor_version, accumulate_set_root, accumulate_incarnation,
+			batch_operation_id_version)
+		VALUES (7778, $1, $2, 'v8_2', $3, $3, 'v3') RETURNING id::text`, bundle, word(0x31), word(0x32)).Scan(&batchID); err != nil {
+		t.Fatal(err)
+	}
+	intent := "hint-" + bundle[2:10]
+	for i, op := range []string{word(0x41), word(0x42)} {
+		if _, err := testDB.ExecContext(ctx, `
+			INSERT INTO batch_transactions (batch_id, accumulate_tx_hash, account_url, tree_index, transaction_hash, intent_id, adi_url,
+				from_address, operation_id, governance_commitment, certified_intent_message)
+			VALUES ($1::uuid, $2, 'acc://x.acme', $3, $4, $5, 'acc://x.acme', '0x1019dbd51aadab221feb6d7b6ffc96d4e5e321ac', $6, $7, $8)`,
+			batchID, strings.Repeat(fmt.Sprintf("%02x", 0xa0+i), 32), 1-i, []byte{byte(i)}, fmt.Sprintf("%s-%d", intent, i), op, word(0x51), word(0x61)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := testDB.ExecContext(ctx, `INSERT INTO intent_lifecycle (intent_id, accum_tx_hash, block_height) VALUES ($1, 'cd', 77)`,
+		intent+"-0"); err != nil {
+		t.Fatal(err)
+	}
+	h, err := repo.AnchorMemberHints(ctx, 7778, strings.ToUpper(bundle[2:]))
+	if err == nil && h != nil {
+		t.Fatal("a bundle id without its 0x prefix matched")
+	}
+	h, err = repo.AnchorMemberHints(ctx, 7778, bundle)
+	if err != nil || h == nil || h.BatchOperationIDVersion != "v3" || len(h.Members) != 2 {
+		t.Fatalf("(%+v, %v)", h, err)
+	}
+	if h.Members[0].TreeIndex != 0 || h.Members[0].OperationID != word(0x42) || h.Members[1].CommitHeight != 77 ||
+		h.Members[1].LifecycleAccumTxHash != "cd" || h.Members[0].GovernanceCommitment != word(0x51) || h.Members[0].ADIURL != "acc://x.acme" {
+		t.Fatalf("members %+v", h.Members)
+	}
+	if none, err := repo.AnchorMemberHints(ctx, 7778, bundleHex(941)); none != nil || err != nil {
+		t.Fatalf("an unknown anchor: (%v, %v)", none, err)
+	}
+	if _, err := testDB.ExecContext(ctx, `INSERT INTO intent_quorum_certificates (operation_id, message, registry_version, certen_chain_id,
+		certificate, registry, message_inputs, certified_height) VALUES ($1, $2, 1, 'c', '{}', '{}', $3, 9)`, word(0x43), word(0x44),
+		`{"key_page_url":"acc://x.acme/book/1","key_book_url":"acc://x.acme/book"}`); err != nil {
+		t.Fatal(err)
+	}
+	page, book, err := repo.CertifiedAuthority(ctx, word(0x43))
+	if err != nil || page != "acc://x.acme/book/1" || book != "acc://x.acme/book" {
+		t.Fatalf("(%q, %q, %v)", page, book, err)
+	}
+	if page, _, err := repo.CertifiedAuthority(ctx, word(0x45)); page != "" || err != nil {
+		t.Fatalf("an uncertified operation: (%q, %v)", page, err)
+	}
+}
