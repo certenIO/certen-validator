@@ -260,3 +260,41 @@ func (o *ExternalChainObserver) VerifyExecutedCall(
 	}
 	return result, nil
 }
+
+// ClassifyMemberExecution is the member's execution as its batch outcome states it (RB5 D4): txHash is the member's
+// execution (observeMemberExecution: its account, exactly its committed calls, its operationID, its leaf consumed, in a
+// finalized, agreed, inclusion-proven receipt), and each committed effect is either proven present or proven absent.
+// It returns the observation and the committed effects proven ABSENT, by (leg, index): events missing from the
+// inclusion-proven logs, and slots proven, against the block's stateRoot, to hold another value. Nothing absent is
+// the success VerifyExecutedCall accepts; something absent is the shortfall VerifyEffectsNotProven attests. An effect
+// that can be proven neither present nor absent is an error: no outcome is stated on it.
+func (o *ExternalChainObserver) ClassifyMemberExecution(
+	ctx context.Context,
+	txHash common.Hash,
+	legs []CommittedLeg,
+	opID [32]byte,
+	account common.Address,
+) (*ExternalChainResult, []CommittedEffect, []CommittedEffect, error) {
+	result, _, err := o.observeMemberExecution(ctx, txHash, legs, opID, account)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	var missing, unset []CommittedEffect
+	for li, l := range legs {
+		for ei, e := range l.Events {
+			if !eventPresent(result.Logs, e) {
+				missing = append(missing, CommittedEffect{Leg: uint64(li), Index: uint64(ei)})
+			}
+		}
+		holds, err := o.committedSlotsHold(ctx, result, l.State)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("the committed state of settlement %s is proven neither present nor absent: %w", txHash.Hex(), err)
+		}
+		for si, ok := range holds {
+			if !ok {
+				unset = append(unset, CommittedEffect{Leg: uint64(li), Index: uint64(si)})
+			}
+		}
+	}
+	return result, missing, unset, nil
+}
