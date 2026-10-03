@@ -1906,6 +1906,11 @@ func startValidator(
 		NonSettlements:           nonSettlements,
 		MemberOutcomes:           memberOutcomes,
 		ProofCompletions:         proofCompletions,
+		// The Accumulate validator-set evidence every V8.2 proof carries (RB5-F4): the Directory's set and threshold
+		// derived from account bytes under the incarnation this validator verified at boot, rebuilt every 10 minutes.
+		ValidatorSetProver: execution.CachedValidatorSetProver(func(ctx context.Context) (*proof.ValidatorSetProof, error) {
+			return proof.BuildValidatorSetProof(ctx, proof.NewHTTPQuerier(strings.TrimSuffix(cfg.AccumulateURL, "/")+"/v3"), stack.Incarnation)
+		}, 10*time.Minute),
 	}
 
 	unifiedOrchestrator, unifiedErr := execution.NewUnifiedOrchestrator(unifiedConfig)

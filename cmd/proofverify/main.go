@@ -399,7 +399,7 @@ func reportAccumulateCommitment(id uuid.UUID, l5 *execution.Layer5, cp *chained_
 		fmt.Printf("      committed on-chain (root %s…), under the incarnation you pinned (%s…). It cannot be\n",
 			short(strings.TrimPrefix(l5.Commitment.AccumulateSetRoot, "0x")), short(strings.TrimPrefix(l5.Commitment.Incarnation, "0x")))
 		fmt.Printf("      substituted. Whether it descends from that incarnation's genesis set is not checked here.\n")
-		return exitVerified
+		return reportValidatorSetEvidence(id, l5, cp, pinned, exitVerified)
 	case state == execution.AccumulateSetCommittedUnpinned:
 		fmt.Printf("SUMMARY-ONLY (Accumulate incarnation)  %s\n", id)
 		fmt.Printf("  the validator set this proof's L4 used IS the one its anchor committed (root %s…), under\n",
@@ -407,7 +407,7 @@ func reportAccumulateCommitment(id uuid.UUID, l5 *execution.Layer5, cp *chained_
 		fmt.Printf("  incarnation %s…; no --incarnation was pinned, so which Accumulate chain that is rests on the\n",
 			short(strings.TrimPrefix(l5.Commitment.Incarnation, "0x")))
 		fmt.Printf("  anchor alone. Pin one (cmd/incarnation) to check it.\n")
-		return exitSummaryOnly
+		return reportValidatorSetEvidence(id, l5, cp, pinned, exitSummaryOnly)
 	case state == execution.AccumulateSetNotCommittedV8_1:
 		fmt.Printf("SUMMARY-ONLY (Accumulate validator set)  %s\n", id)
 		fmt.Printf("  this proof settled under a V8.1 anchor, which committed no Accumulate validator set: the set\n")
@@ -419,6 +419,34 @@ func reportAccumulateCommitment(id uuid.UUID, l5 *execution.Layer5, cp *chained_
 		fmt.Printf("  was verified against is carried by the proof and not checked against its anchor.\n")
 		return exitSummaryOnly
 	}
+}
+
+// reportValidatorSetEvidence checks the Accumulate validator-set evidence layer 5 carries (RB5-F4) and says what it
+// establishes, never more: the set DERIVED from account bytes, and whether it is bound to the anchor the L4 leg signed
+// (today it is not: binding needs historical state, AIP-058). Evidence that is present and proven wrong fails the proof.
+func reportValidatorSetEvidence(id uuid.UUID, l5 *execution.Layer5, cp *chained_proof.ChainedProof, pinned *[32]byte, code int) int {
+	if l5.Accumulate == nil {
+		fmt.Printf("  L5  carries no Accumulate validator-set evidence: the set L4 was verified against is the proof's own\n")
+		fmt.Printf("      statement, committed on-chain but not derived from chain state here.\n")
+		return code
+	}
+	if cp.Layer4DN == nil {
+		fmt.Printf("FAILED (Accumulate validator set)  %s\n", id)
+		fmt.Printf("  layer 5 carries validator-set evidence but the proof has no Directory leg to check it against\n")
+		return exitFailed
+	}
+	var pin *string
+	if pinned != nil {
+		h := hex.EncodeToString(pinned[:])
+		pin = &h
+	}
+	res := l5.Accumulate.VerifyAgainstDirectoryLeg(cp.Layer4DN, pin)
+	if res.Err != nil {
+		fmt.Printf("FAILED (Accumulate validator set)  %s\n  %s\n", id, res.Claim())
+		return exitFailed
+	}
+	fmt.Printf("  L5  validator-set evidence (verdict %s): %s\n", res.Verdict, res.Claim())
+	return code
 }
 
 // reportGovernanceDecision re-derives who decided the proof's transaction from the stored vote record and checks
