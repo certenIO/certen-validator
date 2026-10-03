@@ -23,6 +23,7 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/certen/independant-validator/pkg/ethrpc"
 	"github.com/certen/independant-validator/pkg/proof"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
@@ -80,7 +81,7 @@ func NewG2OutcomeBindingService(config *G2Config, logger Logger) *G2OutcomeBindi
 
 	// Connect to Ethereum RPC for state verification
 	if config.EthereumRPCURL != "" {
-		client, err := ethclient.Dial(config.EthereumRPCURL)
+		client, err := ethrpc.DialRetrying(context.Background(), config.EthereumRPCURL)
 		if err != nil {
 			logger.Printf("⚠️ [G2] Failed to connect to Ethereum RPC: %v", err)
 		} else {

@@ -714,7 +714,7 @@ func dialFirstReachable(endpoints []string, primary string) (*ethclient.Client, 
 
 	var lastErr error
 	for _, u := range ordered {
-		client, err := ethclient.Dial(u)
+		client, err := ethrpc.DialRetrying(context.Background(), u)
 		if err != nil {
 			lastErr = err
 			continue

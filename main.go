@@ -1601,8 +1601,12 @@ func startValidator(
 	log.Printf("✅ [BATCH] settling on chains %v, each on a CertenAnchorV8_2", batchChains)
 	// Each settlement chain's CertenOutcomeRegistryV1 (CERTEN_OUTCOME_REGISTRY_<chainId>), read back through
 	// independent providers: bound to that chain's anchor, deployed on that chain (RB5 D4). Missing or wrong stops
-	// the start by name.
-	outcomeCtx, outcomeCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	// the start by name. A provider that cannot answer for a moment (a 429 from the shared Infura key, a gateway error) is
+	// asked again within ethrpc.TransientRetryBudget per construction, and each chain constructs its providers twice (the
+	// agreed reader and its observer's) before it reads the registry: the boot allows for that per chain, rather than one
+	// minute for all of them.
+	outcomeBudget := time.Duration(len(batchChains)) * (2*ethrpc.TransientRetryBudget + time.Minute)
+	outcomeCtx, outcomeCancel := context.WithTimeout(context.Background(), outcomeBudget)
 	outcomeChains, ocErr := execution.OutcomeChainsFromEnv(outcomeCtx, resolver, batchChains)
 	outcomeCancel()
 	if ocErr != nil {

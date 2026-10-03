@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/certen/independant-validator/pkg/ethrpc"
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
@@ -26,7 +27,7 @@ type Client struct {
 
 // NewClient creates a new Ethereum client
 func NewClient(url string, chainID int64) (*Client, error) {
-	client, err := ethclient.Dial(url)
+	client, err := ethrpc.DialRetrying(context.Background(), url)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to Ethereum: %w", err)
 	}

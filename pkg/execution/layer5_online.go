@@ -9,7 +9,8 @@ import (
 	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/ethclient"
+
+	"github.com/certen/independant-validator/pkg/ethrpc"
 )
 
 // Layer5OnlineCheck is what VerifyLayer5Online read from the chain.
@@ -37,7 +38,7 @@ func VerifyLayer5Online(ctx context.Context, rpcURL string, l5 *Layer5) (*Layer5
 	if !IsTransactionHash(l5.AnchorTx) {
 		return nil, fmt.Errorf("layer5: anchorTx %q is not a transaction hash", l5.AnchorTx)
 	}
-	client, err := ethclient.DialContext(ctx, rpcURL)
+	client, err := ethrpc.DialRetrying(ctx, rpcURL)
 	if err != nil {
 		return nil, fmt.Errorf("connect to %s: %w", rpcURL, err)
 	}

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-	"net/http"
 	"net/url"
 	"sort"
 	"strings"
@@ -37,16 +36,22 @@ var ErrProvidersDisagree = errors.New("providers disagree")
 var ErrTooFewProviders = errors.New("too few providers answered")
 
 // AgreeingReader is a FinalityReader over several independent providers of one chain. A fact is returned only when every
-// provider that answered agrees and at least MinAgreeingProviders answered.
+// provider that answered agrees and at least MinAgreeingProviders answered. Only providers whose chain id has been
+// verified are ever asked (verify.go).
 type AgreeingReader struct {
-	chainID   int64
-	providers []agreeingProvider
-	timeout   time.Duration
+	chainID int64
+	timeout time.Duration
+
+	mu        sync.Mutex
+	providers []agreeingProvider    // verified: the only providers asked for facts
+	pending   []*unverifiedProvider // configured, chain id not yet verified: never asked for a fact
 }
 
 type agreeingProvider struct {
 	host   string
 	client *ethclient.Client
+	hint   *retryAfterHint // its last Retry-After
+	health *providerHealth // whether it is resting (see health.go)
 }
 
 // ProviderHosts reduces endpoint URLs to their hosts, without any path or query, so that two URLs of one operator are
@@ -73,38 +78,25 @@ func providerHost(raw string) string {
 	return strings.ToLower(u.Hostname())
 }
 
-// NewAgreeingReader dials every endpoint, keeps one per host, and checks that each serves chainID. It refuses fewer than
-// MinAgreeingProviders distinct hosts, and any endpoint that serves another chain.
+// NewAgreeingReader dials every endpoint, keeps one per host, and verifies, all hosts at once, that each serves chainID.
+// timeout bounds each attempt and is each later read's own deadline.
+//
+//   - A provider that answers ANOTHER chain id refuses the construction outright: that is a misconfiguration, not an
+//     outage.
+//   - A provider that answers transiently (IsTransient) is asked again, the same provider for the same chain id, within
+//     TransientRetryBudget (sooner if ctx ends).
+//   - The construction succeeds once at least MinAgreeingProviders distinct hosts are verified: it then waits at most
+//     UnverifiedProviderGrace for the rest. Every provider still unverified is logged by name with its error, is asked
+//     for nothing, and is re-verified in the background (verify.go); it joins only once its chain id is verified.
+//   - Fewer than MinAgreeingProviders verified hosts within the budget refuses the construction, naming every
+//     unverified provider and its error.
 func NewAgreeingReader(ctx context.Context, chainID int64, urls []string, timeout time.Duration) (*AgreeingReader, error) {
 	if timeout <= 0 {
-		timeout = 20 * time.Second
+		timeout = DefaultReadTimeout
 	}
 	r := &AgreeingReader{chainID: chainID, timeout: timeout}
-	seen := map[string]bool{}
-	for _, u := range urls {
-		h := providerHost(u)
-		if h == "" || seen[h] {
-			continue
-		}
-		seen[h] = true
-		c, err := ethclient.DialContext(ctx, u)
-		if err != nil {
-			return nil, fmt.Errorf("chain %d provider %s: dial: %w", chainID, h, err)
-		}
-		cctx, cancel := context.WithTimeout(ctx, timeout)
-		id, err := c.ChainID(cctx)
-		cancel()
-		if err != nil {
-			return nil, fmt.Errorf("chain %d provider %s: read its chain id: %w", chainID, h, err)
-		}
-		if id.Int64() != chainID {
-			return nil, fmt.Errorf("chain %d provider %s serves chain %s", chainID, h, id)
-		}
-		r.providers = append(r.providers, agreeingProvider{host: h, client: c})
-	}
-	if len(r.providers) < MinAgreeingProviders {
-		return nil, fmt.Errorf("chain %d has %d independent provider(s) %v; at least %d are required, so that no single "+
-			"provider's view is taken as the chain's (RB5-F53)", chainID, len(r.providers), ProviderHosts(urls), MinAgreeingProviders)
+	if err := r.verifyAll(ctx, urls); err != nil {
+		return nil, err
 	}
 	return r, nil
 }
@@ -113,13 +105,14 @@ func NewAgreeingReader(ctx context.Context, chainID int64, urls []string, timeou
 // <PREFIX>_URL_FALLBACKS and the paid fallbacks; see EndpointsForChainID). It refuses fewer than MinAgreeingProviders
 // independent hosts: there is no single-provider mode.
 func FinalityReaderForChain(ctx context.Context, chainID int64, primary string) (*AgreeingReader, error) {
-	return NewAgreeingReader(ctx, chainID, EndpointsForChainID(chainID, primary), 20*time.Second)
+	return NewAgreeingReader(ctx, chainID, EndpointsForChainID(chainID, primary), DefaultReadTimeout)
 }
 
 // Hosts names the providers, for logs.
 func (r *AgreeingReader) Hosts() []string {
-	hosts := make([]string, len(r.providers))
-	for i, p := range r.providers {
+	providers := r.verified()
+	hosts := make([]string, len(providers))
+	for i, p := range providers {
 		hosts[i] = p.host
 	}
 	return hosts
@@ -132,24 +125,21 @@ type answer[T any] struct {
 }
 
 func askAll[T any](ctx context.Context, r *AgreeingReader, read func(context.Context, *ethclient.Client) (T, error)) []answer[T] {
-	out := make([]answer[T], len(r.providers))
+	providers := r.verified()
+	out := make([]answer[T], len(providers))
 	var wg sync.WaitGroup
-	for i, p := range r.providers {
+	for i, p := range providers {
 		wg.Add(1)
 		go func(i int, p agreeingProvider) {
 			defer wg.Done()
-			cctx, cancel := context.WithTimeout(ctx, r.timeout)
-			defer cancel()
-			v, err := read(cctx, p.client)
-			// A provider that throttles has not answered yet: it is asked again, within the read's own bound, rather
-			// than counted out - a throttled provider would otherwise leave every fact unestablished in a burst of reads.
-			for wait := rateLimitBackoff; err != nil && rateLimited(err) && wait <= maxRateLimitBackoff; wait *= 2 {
-				select {
-				case <-cctx.Done():
-				case <-time.After(wait):
-					v, err = read(cctx, p.client)
-				}
-			}
+			// A provider that cannot answer now (throttled, a gateway error, a dropped connection) has not answered yet:
+			// it is asked again, the same query, within the read's own deadline, rather than counted out - a throttled
+			// provider would otherwise leave every fact unestablished in a burst of reads. One that never answers stays
+			// unanswered: it is not replaced by another provider, and it is not counted. One that stayed unable to answer
+			// for a whole read rests (health.go), so that the reads after it do not each wait out its deadline.
+			v, err := askProvider(ctx, p.health, p.host, p.hint, r.timeout, r.timeout, func(c context.Context) (T, error) {
+				return read(c, p.client)
+			})
 			out[i] = answer[T]{host: p.host, value: v, err: err}
 		}(i, p)
 	}
@@ -391,38 +381,57 @@ func agreedBytes(r *AgreeingReader, as []answer[[]byte], what string) ([]byte, e
 // LocatorClient is one provider's client, for LOCATING an event only. Nothing a locator returns is a fact: a log it finds
 // is established through an agreed read (its transaction's agreed receipt) before anything rests on it, and a provider
 // that hides a log only delays that, because every provider is asked.
+//
+// Its HeaderByNumber, FilterLogs and TransactionByHash ask the provider again while it answers transiently, within the
+// reader's per-read timeout, exactly as an agreed read does; Client is the bare client.
 type LocatorClient struct {
-	Host   string
-	Client *ethclient.Client
+	Host    string
+	Client  *ethclient.Client
+	hint    *retryAfterHint
+	health  *providerHealth
+	timeout time.Duration
 }
 
 // Locators are the providers' clients, for locating events (see LocatorClient).
 func (r *AgreeingReader) Locators() []LocatorClient {
-	out := make([]LocatorClient, len(r.providers))
-	for i, p := range r.providers {
-		out[i] = LocatorClient{Host: p.host, Client: p.client}
+	providers := r.verified()
+	out := make([]LocatorClient, len(providers))
+	for i, p := range providers {
+		out[i] = LocatorClient{Host: p.host, Client: p.client, hint: p.hint, health: p.health, timeout: r.timeout}
 	}
 	return out
 }
 
-// rateLimitBackoff and maxRateLimitBackoff bound how a throttled provider is asked again: 250 ms, then doubling, up to
-// 4 s - a few seconds in all, inside the read's own timeout.
-const (
-	rateLimitBackoff    = 250 * time.Millisecond
-	maxRateLimitBackoff = 4 * time.Second
-)
+func (l LocatorClient) budget() time.Duration {
+	if l.timeout <= 0 {
+		return DefaultReadTimeout
+	}
+	return l.timeout
+}
 
-// rateLimited reports whether a provider refused a read because it throttles this client (HTTP 429, or the JSON-RPC
-// rate-limit errors providers return): not an answer, and not a disagreement.
-func rateLimited(err error) bool {
-	var he rpc.HTTPError
-	if errors.As(err, &he) && he.StatusCode == http.StatusTooManyRequests {
-		return true
+// HeaderByNumber is the provider's header at number, asked again while the provider answers transiently.
+func (l LocatorClient) HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error) {
+	return askProvider(ctx, l.health, l.Host, l.hint, l.budget(), 0, func(c context.Context) (*types.Header, error) {
+		return l.Client.HeaderByNumber(c, number)
+	})
+}
+
+// FilterLogs is the provider's answer to q, asked again while the provider answers transiently.
+func (l LocatorClient) FilterLogs(ctx context.Context, q ethereum.FilterQuery) ([]types.Log, error) {
+	return askProvider(ctx, l.health, l.Host, l.hint, l.budget(), 0, func(c context.Context) ([]types.Log, error) {
+		return l.Client.FilterLogs(c, q)
+	})
+}
+
+// TransactionByHash is the provider's transaction with this hash, asked again while the provider answers transiently.
+func (l LocatorClient) TransactionByHash(ctx context.Context, hash common.Hash) (*types.Transaction, bool, error) {
+	type found struct {
+		tx      *types.Transaction
+		pending bool
 	}
-	var ec rpc.Error
-	if errors.As(err, &ec) && (ec.ErrorCode() == -32005 || ec.ErrorCode() == -32029) {
-		return true
-	}
-	s := strings.ToLower(err.Error())
-	return strings.Contains(s, "429 too many requests") || strings.Contains(s, "rate limit exceeded")
+	f, err := askProvider(ctx, l.health, l.Host, l.hint, l.budget(), 0, func(c context.Context) (found, error) {
+		tx, pending, err := l.Client.TransactionByHash(c, hash)
+		return found{tx, pending}, err
+	})
+	return f.tx, f.pending, err
 }

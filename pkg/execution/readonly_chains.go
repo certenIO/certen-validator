@@ -3,6 +3,7 @@
 package execution
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 
 	"github.com/certen/independant-validator/pkg/config"
+	"github.com/certen/independant-validator/pkg/ethrpc"
 )
 
 // ReadOnlyChains resolves chains for code that only READS: eth_call, eth_getTransactionByHash,
@@ -92,7 +94,7 @@ func (r *ReadOnlyChains) ClientForChain(chainID int64) (*ethclient.Client, commo
 	if chainCfg == nil || chainCfg.RPCURL == "" {
 		return nil, common.Address{}, fmt.Errorf("no RPC configuration for chainId=%d", chainID)
 	}
-	client, err := ethclient.Dial(chainCfg.RPCURL)
+	client, err := ethrpc.DialRetrying(context.Background(), chainCfg.RPCURL)
 	if err != nil {
 		return nil, common.Address{}, fmt.Errorf("connecting to chain %d: %w", chainID, err)
 	}

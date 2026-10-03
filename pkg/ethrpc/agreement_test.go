@@ -39,6 +39,18 @@ type stubProvider struct {
 	latest     uint64
 	// throttle answers this many eth_calls with HTTP 429 before serving them.
 	throttle int
+	// failNext answers this many requests of ANY method with failStatus (429 when zero), carrying failRetryAfter as the
+	// Retry-After header when set, before serving them. calls counts the requests of each method.
+	failNext       int
+	failStatus     int
+	failRetryAfter string
+	calls          map[string]int
+}
+
+func (p *stubProvider) callsOf(method string) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls[method]
 }
 
 func (p *stubProvider) serve(t *testing.T) string { return p.serveOn(t, "127.0.0.1:0") }
@@ -59,6 +71,22 @@ func (p *stubProvider) serveOn(t *testing.T, addr string) string {
 			Params []json.RawMessage `json:"params"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
+		if p.calls == nil {
+			p.calls = map[string]int{}
+		}
+		p.calls[req.Method]++
+		if p.failNext > 0 {
+			p.failNext--
+			if p.failRetryAfter != "" {
+				w.Header().Set("Retry-After", p.failRetryAfter)
+			}
+			status := p.failStatus
+			if status == 0 {
+				status = http.StatusTooManyRequests
+			}
+			http.Error(w, `{"jsonrpc":"2.0","id":1,"error":{"code":-32005,"message":"Too Many Requests"}}`, status)
+			return
+		}
 		reply := func(v interface{}) {
 			b, _ := json.Marshal(v)
 			_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":%s}`, req.ID, b)
