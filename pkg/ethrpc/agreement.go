@@ -47,6 +47,7 @@ type agreeingProvider struct {
 	host   string
 	client *ethclient.Client
 	hint   *retryAfterHint // its last Retry-After
+	health *providerHealth // whether it is resting (see health.go)
 }
 
 // ProviderHosts reduces endpoint URLs to their hosts, without any path or query, so that two URLs of one operator are
@@ -103,7 +104,7 @@ func NewAgreeingReader(ctx context.Context, chainID int64, urls []string, timeou
 		if id.Int64() != chainID {
 			return nil, fmt.Errorf("chain %d provider %s serves chain %s", chainID, h, id)
 		}
-		r.providers = append(r.providers, agreeingProvider{host: h, client: c, hint: hint})
+		r.providers = append(r.providers, agreeingProvider{host: h, client: c, hint: hint, health: healthOf(chainID, u)})
 	}
 	if len(r.providers) < MinAgreeingProviders {
 		return nil, fmt.Errorf("chain %d has %d independent provider(s) %v; at least %d are required, so that no single "+
@@ -141,13 +142,12 @@ func askAll[T any](ctx context.Context, r *AgreeingReader, read func(context.Con
 		wg.Add(1)
 		go func(i int, p agreeingProvider) {
 			defer wg.Done()
-			cctx, cancel := context.WithTimeout(ctx, r.timeout)
-			defer cancel()
 			// A provider that cannot answer now (throttled, a gateway error, a dropped connection) has not answered yet:
 			// it is asked again, the same query, within the read's own deadline, rather than counted out - a throttled
 			// provider would otherwise leave every fact unestablished in a burst of reads. One that never answers stays
-			// unanswered: it is not replaced by another provider, and it is not counted.
-			v, err := retryTransient(cctx, p.host, p.hint, r.timeout, 0, func(c context.Context) (T, error) {
+			// unanswered: it is not replaced by another provider, and it is not counted. One that stayed unable to answer
+			// for a whole read rests (health.go), so that the reads after it do not each wait out its deadline.
+			v, err := askProvider(ctx, p.health, p.host, p.hint, r.timeout, r.timeout, func(c context.Context) (T, error) {
 				return read(c, p.client)
 			})
 			out[i] = answer[T]{host: p.host, value: v, err: err}
@@ -398,6 +398,7 @@ type LocatorClient struct {
 	Host    string
 	Client  *ethclient.Client
 	hint    *retryAfterHint
+	health  *providerHealth
 	timeout time.Duration
 }
 
@@ -405,7 +406,7 @@ type LocatorClient struct {
 func (r *AgreeingReader) Locators() []LocatorClient {
 	out := make([]LocatorClient, len(r.providers))
 	for i, p := range r.providers {
-		out[i] = LocatorClient{Host: p.host, Client: p.client, hint: p.hint, timeout: r.timeout}
+		out[i] = LocatorClient{Host: p.host, Client: p.client, hint: p.hint, health: p.health, timeout: r.timeout}
 	}
 	return out
 }
@@ -419,14 +420,14 @@ func (l LocatorClient) budget() time.Duration {
 
 // HeaderByNumber is the provider's header at number, asked again while the provider answers transiently.
 func (l LocatorClient) HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error) {
-	return retryTransient(ctx, l.Host, l.hint, l.budget(), 0, func(c context.Context) (*types.Header, error) {
+	return askProvider(ctx, l.health, l.Host, l.hint, l.budget(), 0, func(c context.Context) (*types.Header, error) {
 		return l.Client.HeaderByNumber(c, number)
 	})
 }
 
 // FilterLogs is the provider's answer to q, asked again while the provider answers transiently.
 func (l LocatorClient) FilterLogs(ctx context.Context, q ethereum.FilterQuery) ([]types.Log, error) {
-	return retryTransient(ctx, l.Host, l.hint, l.budget(), 0, func(c context.Context) ([]types.Log, error) {
+	return askProvider(ctx, l.health, l.Host, l.hint, l.budget(), 0, func(c context.Context) ([]types.Log, error) {
 		return l.Client.FilterLogs(c, q)
 	})
 }
@@ -437,7 +438,7 @@ func (l LocatorClient) TransactionByHash(ctx context.Context, hash common.Hash) 
 		tx      *types.Transaction
 		pending bool
 	}
-	f, err := retryTransient(ctx, l.Host, l.hint, l.budget(), 0, func(c context.Context) (found, error) {
+	f, err := askProvider(ctx, l.health, l.Host, l.hint, l.budget(), 0, func(c context.Context) (found, error) {
 		tx, pending, err := l.Client.TransactionByHash(c, hash)
 		return found{tx, pending}, err
 	})
