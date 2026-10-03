@@ -99,7 +99,15 @@ func (o *UnifiedOrchestrator) processNonSettlements(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		claim, obs, err := observeNonSettlement(ctx, o.config.NonSettlementChain, rec.Facts, rec.Cause)
+		claim, obs, err := observeNonSettlementAt(ctx, o.config.NonSettlementChain, rec.Facts, rec.Cause, rec.ClaimBlock)
+		if err == nil && rec.ClaimBlock == 0 {
+			// Pinned from now on, durably: a restart must not move the claim either (RB5-F46).
+			rec.ClaimBlock = claim.Block
+			if perr := o.config.NonSettlements.Put(rec); perr != nil {
+				fmt.Printf("❌ [NON-SETTLEMENT] intent %s on chain %d: pinning its claim at block %d: %v\n",
+					rec.Facts.IntentID, rec.Facts.ChainID, claim.Block, perr)
+			}
+		}
 		switch {
 		case errors.Is(err, errNotYetAttestable):
 			continue
@@ -149,6 +157,9 @@ func (o *UnifiedOrchestrator) retryNonSettlement(ctx context.Context, rec *NonSe
 		o.removeNonSettlement(rec)
 		return
 	}
+	// Every unattested attempt is said, with its cause (RB5-F46: they were silent, visible only in the queue file).
+	fmt.Printf("⚠️ [NON-SETTLEMENT] intent %s on chain %d: attempt %d not attested (%v); retried\n",
+		rec.Facts.IntentID, rec.Facts.ChainID, rec.Attempts, cause)
 	if err := o.config.NonSettlements.Put(rec); err != nil {
 		fmt.Printf("❌ [NON-SETTLEMENT] intent %s: recording attempt %d: %v\n", rec.Facts.IntentID, rec.Attempts, err)
 	}
