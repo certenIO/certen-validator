@@ -16,6 +16,7 @@ import (
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
@@ -32,6 +33,10 @@ type stubProvider struct {
 	receiptIn common.Hash              // block the receipt names; zero = not found
 	height    uint64
 	tx        common.Hash
+	// callResult is what eth_call and eth_getCode return at any block; nil answers the way a provider without that
+	// block's state does. latest, when set, is the head the "latest" tag names.
+	callResult []byte
+	latest     uint64
 }
 
 func (p *stubProvider) serve(t *testing.T) string { return p.serveOn(t, "127.0.0.1:0") }
@@ -74,6 +79,12 @@ func (p *stubProvider) serveOn(t *testing.T, addr string) string {
 		case "eth_getBlockByNumber":
 			var tag string
 			_ = json.Unmarshal(req.Params[0], &tag)
+			if tag == "latest" && p.latest != 0 {
+				h := *p.headers[p.height]
+				h.Number = new(big.Int).SetUint64(p.latest)
+				reply(&h)
+				return
+			}
 			if tag == "finalized" {
 				h := *p.headers[p.height]
 				h.Number = new(big.Int).SetUint64(p.finalized)
@@ -83,6 +94,12 @@ func (p *stubProvider) serveOn(t *testing.T, addr string) string {
 			var n uint64
 			_, _ = fmt.Sscanf(tag, "0x%x", &n)
 			reply(p.headers[n])
+		case "eth_call", "eth_getCode":
+			if p.callResult == nil {
+				_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"historical state is not available"}}`, req.ID)
+				return
+			}
+			reply(hexutil.Bytes(p.callResult))
 		case "eth_getBlockReceipts":
 			reply([]interface{}{receipt(p.headers[p.height].Hash())})
 		default:
