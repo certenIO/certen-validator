@@ -21,9 +21,9 @@ func TestToDoubleHashFormat_SingleLeg_BackwardCompatible(t *testing.T) {
 
 	entries := entry.ToDoubleHashFormat()
 
-	// 51 base + 8 appended SEC-14 verifiable-aggregate entries.
-	if len(entries) != 59 {
-		t.Errorf("Expected 59 entries for single-leg, got %d", len(entries))
+	// 51 base + 8 appended SEC-14 verifiable-aggregate entries + the 2 inclusion verdicts (RB5-F18).
+	if len(entries) != 61 {
+		t.Errorf("Expected 61 entries for single-leg, got %d", len(entries))
 	}
 
 	// Verify version is 2.0
@@ -62,8 +62,9 @@ func TestToDoubleHashFormat_MultiLeg_4Legs(t *testing.T) {
 
 	entries := entry.ToDoubleHashFormat()
 
-	// 51 base + 2 (leg_count, multi_leg_result_hash) + 4*9 (per-leg entries) + 8 (SEC-14 aggregate)
-	expectedCount := 51 + 2 + 4*9 + 8
+	// 51 base + 2 (leg_count, multi_leg_result_hash) + 4*9 (per-leg entries) + 8 (SEC-14 aggregate) + 2 (inclusion
+	// verdicts, RB5-F18)
+	expectedCount := 51 + 2 + 4*9 + 8 + 2
 	if len(entries) != expectedCount {
 		t.Errorf("Expected %d entries for 4-leg intent, got %d", expectedCount, len(entries))
 	}
@@ -139,9 +140,9 @@ func TestToDoubleHashFormat_SingleLeg_NoMultiLegEntries(t *testing.T) {
 
 	entries := entry.ToDoubleHashFormat()
 
-	// Should be 51 base entries + 8 appended SEC-14 aggregate entries (no multi-leg data)
-	if len(entries) != 59 {
-		t.Errorf("Expected 59 entries for single-leg (LegCount=1), got %d", len(entries))
+	// Should be 51 base entries + 8 appended SEC-14 aggregate entries + 2 inclusion verdicts (no multi-leg data)
+	if len(entries) != 61 {
+		t.Errorf("Expected 61 entries for single-leg (LegCount=1), got %d", len(entries))
 	}
 
 	// Verify no entry contains "leg_count="

@@ -2402,6 +2402,12 @@ func (o *UnifiedOrchestrator) buildAttestationBundleFromCycle(cycle *activeCycle
 		extResult.OutcomeReason = fmt.Sprintf("settlement %s executed the committed call(s) under leaf %s, but committed effects are absent: events %v, state %v",
 			c.TxHash, c.Leaf, c.MissingEvents, c.UnsetState)
 	}
+	// The settlement's tx and receipt inclusion proofs, as Phase 7's gate verified them, so the write-back states
+	// whether they verify against this block's roots (RB5-F18). Only the gate's proofs of THIS transaction are
+	// carried; the result never had any, so tx_inclusion_proof_valid was always false and never written.
+	if p := cycle.SettlementProof; p != nil && cycle.NonSettlement == nil && p.TxHash == txHash {
+		extResult.TxInclusionProof, extResult.ReceiptInclusionProof = p.TxInclusionProof, p.ReceiptInclusionProof
+	}
 
 	// Copy logs from all observation results (not just primary)
 	for _, obsResult := range result.ObservationResults {

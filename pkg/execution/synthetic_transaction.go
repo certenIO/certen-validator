@@ -112,7 +112,11 @@ type ProofCycleResult struct {
 
 // ExternalChainProofSummary contains a summary of the external chain proof
 type ExternalChainProofSummary struct {
-	// Merkle proof indicators (actual proofs are too large)
+	// Merkle proof indicators (the proofs themselves are in the proof bundle's execution proof and the
+	// chain_execution_results row, not in the write-back). Each is computed by verifying the proof the settlement
+	// gate verified - its trie walk (MerkleInclusionProof.Verify) to a root equal to the block header's root the
+	// result states - never read from a flag; false when the result carries no such proof. Both are written back as
+	// tx_inclusion_proof_valid and receipt_inclusion_proof_valid (RB5-F18).
 	TxInclusionProofValid      bool     `json:"tx_inclusion_proof_valid"`
 	ReceiptInclusionProofValid bool     `json:"receipt_inclusion_proof_valid"`
 	ProofRootHash              [32]byte `json:"proof_root_hash"`
@@ -231,6 +235,12 @@ type CertenDataEntry struct {
 	MinValidators      int    `json:"min_validators,omitempty"`      // minimum distinct signers
 	SignatureScheme    string `json:"signature_scheme,omitempty"`    // WriteBackSignatureScheme
 	AttestationDomain  string `json:"attestation_domain,omitempty"`  // the signing domain
+
+	// RB5-F18: whether the settlement transaction and its receipt are proven in the block the entry names - each a
+	// Patricia-trie proof the settlement gate verified, verified again here against the transactions_root and
+	// receipts_root above (ExternalChainProofSummary). False when no such proof exists (a non-settlement has none).
+	TxInclusionProofValid      bool `json:"tx_inclusion_proof_valid"`
+	ReceiptInclusionProofValid bool `json:"receipt_inclusion_proof_valid"`
 
 	// ==========================================================================
 	// AUDIT REFERENCES (Entries 41-44) - Links for independent verification
@@ -440,14 +450,14 @@ func (b *SyntheticTxBuilder) BuildFromBundleWithContext(bundle *AttestationBundl
 
 	// Build external chain proof summary
 	externalProof := ExternalChainProofSummary{
-		TxInclusionProofValid:      result.TxInclusionProof != nil && result.TxInclusionProof.Verified,
-		ReceiptInclusionProofValid: result.ReceiptInclusionProof != nil && result.ReceiptInclusionProof.Verified,
+		TxInclusionProofValid:      inclusionProofHolds(result.TxInclusionProof, result.TransactionsRoot),
+		ReceiptInclusionProofValid: inclusionProofHolds(result.ReceiptInclusionProof, result.ReceiptsRoot),
 		ConfirmationBlocks:         result.ConfirmationBlocks,
 		FinalizedAt:                result.FinalizedAt,
 	}
 
-	// Compute proof root hash
-	if result.TxInclusionProof != nil {
+	// The root the transaction proof reaches: the header's transactions root, stated only when the proof holds.
+	if externalProof.TxInclusionProofValid {
 		externalProof.ProofRootHash = result.TxInclusionProof.ExpectedRoot
 	}
 
@@ -479,6 +489,10 @@ func (b *SyntheticTxBuilder) BuildFromBundleWithContext(bundle *AttestationBundl
 		StateRoot:        result.StateRoot.Hex(),
 		ReceiptsRoot:     result.ReceiptsRoot.Hex(),
 		TransactionsRoot: result.TransactionsRoot.Hex(),
+
+		// The settlement's inclusion in its block, as its verified proofs establish (RB5-F18)
+		TxInclusionProofValid:      externalProof.TxInclusionProofValid,
+		ReceiptInclusionProofValid: externalProof.ReceiptInclusionProofValid,
 
 		// Governance proof
 		ValidatorCount: agg.ValidatorCount,
@@ -849,6 +863,12 @@ func ComputeDoubleHash(data []byte) []byte {
 	first := sha256.Sum256(data)
 	second := sha256.Sum256(first[:])
 	return second[:]
+}
+
+// inclusionProofHolds reports whether p proves its leaf in the trie whose root is headerRoot: the proof's own root is
+// the header's, and its trie walk verifies (MerkleInclusionProof.Verify). The proof's Verified flag is never read.
+func inclusionProofHolds(p *MerkleInclusionProof, headerRoot common.Hash) bool {
+	return p != nil && headerRoot != (common.Hash{}) && common.Hash(p.ExpectedRoot) == headerRoot && p.Verify()
 }
 
 // computeEventsHash computes a deterministic hash of all event logs
