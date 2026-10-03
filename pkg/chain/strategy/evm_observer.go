@@ -24,6 +24,8 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rlp"
+
+	"github.com/certen/independant-validator/pkg/ethrpc"
 )
 
 // =============================================================================
@@ -164,85 +166,99 @@ func (o *EVMObserver) ObserveTransaction(ctx context.Context, txHash common.Hash
 		o.pendingLock.Unlock()
 	}()
 
-	// Wait for receipt
-	receipt, err := o.waitForReceipt(ctx, txHash, deadline)
-	if err != nil {
-		return nil, fmt.Errorf("wait for receipt: %w", err)
-	}
-
-	// Get block header — works on all EVM chains including OP Stack (Base, Optimism)
-	// which have deposit tx types that BlockByHash can't decode.
-	// TRON returns non-standard fields ("stateRoot":"0x") that break Go's header unmarshal,
-	// so we handle this gracefully with a receipt-only fallback.
-	header, headerErr := o.client.HeaderByHash(ctx, receipt.BlockHash)
-	if headerErr != nil && !tronChainIDs[o.chainID] {
-		// On every chain but TRON a header that cannot be read is a node or network fault. The
-		// receipt-only observation below would stand in the validator's clock for the block time and,
-		// at its deadline, declare the receipt final (RB3-F69).
-		return nil, fmt.Errorf("read the header of block %s on chain %d: %w", receipt.BlockHash.Hex(), o.chainID, headerErr)
-	}
-
-	var result *ObservationResult
-	if headerErr != nil {
-		// Fallback: build result from receipt only (TRON, non-standard EVM chains)
-		log.Printf("⚠️ [EVM-OBSERVER] HeaderByHash failed (non-standard chain): %v — using receipt-only observation", headerErr)
-		result = &ObservationResult{
-			TxHash:                receipt.TxHash.Hex(),
-			BlockNumber:           receipt.BlockNumber.Uint64(),
-			BlockHash:             receipt.BlockHash.Hex(),
-			BlockTimestamp:        time.Now().UTC(), // Best approximation
-			Status:                uint8(receipt.Status),
-			RequiredConfirmations: o.requiredConfirmations,
-			GasUsed:               receipt.GasUsed,
-			ChainIDNumeric:        o.chainID,
-		}
-		for _, l := range receipt.Logs {
-			topics := make([]string, len(l.Topics))
-			for i, t := range l.Topics {
-				topics[i] = t.Hex()
-			}
-			result.Logs = append(result.Logs, EventLog{
-				Address:  l.Address.Hex(),
-				Topics:   topics,
-				Data:     l.Data,
-				LogIndex: l.Index,
-			})
-		}
-
-		// Wait for confirmations using BlockNumber() (works on TRON jsonrpc even though HeaderByHash doesn't)
-		confirmTicker := time.NewTicker(o.pollingInterval)
-		defer confirmTicker.Stop()
-		confirmed := false
-		for !confirmed {
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-confirmTicker.C:
-				if time.Now().After(deadline) {
-					// Timeout — mark as finalized anyway since we have a receipt
-					log.Printf("⚠️ [EVM-OBSERVER] Confirmation timeout on non-standard chain, accepting receipt as finalized")
-					confirmed = true
-					break
-				}
-				currentBlock, err := o.client.BlockNumber(ctx)
-				if err != nil {
-					continue
-				}
-				confirmations := int(currentBlock - receipt.BlockNumber.Uint64())
-				result.Confirmations = confirmations
-				if confirmations >= o.requiredConfirmations {
-					confirmed = true
-				}
-			}
-		}
-		result.IsFinalized = true
-		result.ResultHash = computeResultHash(result)
-	} else {
-		// Wait for required confirmations
-		result, err = o.waitForConfirmationsFromHeader(ctx, receipt, header, deadline)
+	// Every chain but TRON: the receipt as the FINALIZED chain holds it - its block at or below the chain's finalized tag,
+	// canonical at its height, the receipt that block's own (ethrpc.SettledInFinalizedChain, RB5-F49). It used to wait for
+	// a count of confirmations (2 on testnets) on whatever block the receipt named - a block a reorg may have replaced.
+	var (
+		receipt   *types.Receipt
+		header    *types.Header
+		headerErr error
+		result    *ObservationResult
+		err       error
+	)
+	if !tronChainIDs[o.chainID] {
+		receipt, err = ethrpc.SettledInFinalizedChain(ctx, o.client, txHash, deadline, o.pollingInterval, log.Printf)
 		if err != nil {
-			return nil, fmt.Errorf("wait for confirmations: %w", err)
+			return nil, fmt.Errorf("observe %s in the finalized chain %d: %w", txHash.Hex(), o.chainID, err)
 		}
+		if header, err = o.client.HeaderByNumber(ctx, receipt.BlockNumber); err != nil {
+			return nil, fmt.Errorf("read the finalized header at %d on chain %d: %w", receipt.BlockNumber.Uint64(), o.chainID, err)
+		}
+		if header.Hash() != receipt.BlockHash {
+			return nil, fmt.Errorf("the finalized header at %d on chain %d is %s, the receipt names %s", receipt.BlockNumber.Uint64(),
+				o.chainID, header.Hash().Hex(), receipt.BlockHash.Hex())
+		}
+		result = o.finalizedResult(ctx, receipt, header)
+	} else {
+		// TRON (outside the settled chains' scope): unchanged.
+		if receipt, err = o.waitForReceipt(ctx, txHash, deadline); err != nil {
+			return nil, fmt.Errorf("wait for receipt: %w", err)
+		}
+		// TRON returns non-standard fields ("stateRoot":"0x") that break Go's header unmarshal, so a receipt-only observation
+		// stands in when its header cannot be read.
+		header, headerErr = o.client.HeaderByHash(ctx, receipt.BlockHash)
+		if headerErr != nil {
+			// Fallback: build result from receipt only (TRON, non-standard EVM chains)
+			log.Printf("⚠️ [EVM-OBSERVER] HeaderByHash failed (non-standard chain): %v — using receipt-only observation", headerErr)
+			result = &ObservationResult{
+				TxHash:                receipt.TxHash.Hex(),
+				BlockNumber:           receipt.BlockNumber.Uint64(),
+				BlockHash:             receipt.BlockHash.Hex(),
+				BlockTimestamp:        time.Now().UTC(), // Best approximation
+				Status:                uint8(receipt.Status),
+				RequiredConfirmations: o.requiredConfirmations,
+				GasUsed:               receipt.GasUsed,
+				ChainIDNumeric:        o.chainID,
+			}
+			for _, l := range receipt.Logs {
+				topics := make([]string, len(l.Topics))
+				for i, t := range l.Topics {
+					topics[i] = t.Hex()
+				}
+				result.Logs = append(result.Logs, EventLog{
+					Address:  l.Address.Hex(),
+					Topics:   topics,
+					Data:     l.Data,
+					LogIndex: l.Index,
+				})
+			}
+
+			// Wait for confirmations using BlockNumber() (works on TRON jsonrpc even though HeaderByHash doesn't)
+			confirmTicker := time.NewTicker(o.pollingInterval)
+			defer confirmTicker.Stop()
+			confirmed := false
+			for !confirmed {
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-confirmTicker.C:
+					if time.Now().After(deadline) {
+						// Timeout — mark as finalized anyway since we have a receipt
+						log.Printf("⚠️ [EVM-OBSERVER] Confirmation timeout on non-standard chain, accepting receipt as finalized")
+						confirmed = true
+						break
+					}
+					currentBlock, err := o.client.BlockNumber(ctx)
+					if err != nil {
+						continue
+					}
+					confirmations := int(currentBlock - receipt.BlockNumber.Uint64())
+					result.Confirmations = confirmations
+					if confirmations >= o.requiredConfirmations {
+						confirmed = true
+					}
+				}
+			}
+			result.IsFinalized = true
+			result.ResultHash = computeResultHash(result)
+		} else {
+			// Wait for required confirmations
+			result, err = o.waitForConfirmationsFromHeader(ctx, receipt, header, deadline)
+			if err != nil {
+				return nil, fmt.Errorf("wait for confirmations: %w", err)
+			}
+		}
+
 	}
 
 	// Try full block fetch for Merkle proofs (best-effort — fails on OP Stack and TRON chains)
@@ -356,6 +372,33 @@ func (o *EVMObserver) waitForReceipt(ctx context.Context, txHash common.Hash, de
 			return receipt, nil
 		}
 	}
+}
+
+// finalizedResult is the observation of a receipt in a finalized block (RB5-F49): final by the chain's own finalized tag,
+// so IsFinalized; Confirmations is how far the head has moved past it, for the record.
+func (o *EVMObserver) finalizedResult(ctx context.Context, receipt *types.Receipt, header *types.Header) *ObservationResult {
+	result := &ObservationResult{
+		TxHash:                receipt.TxHash.Hex(),
+		BlockNumber:           receipt.BlockNumber.Uint64(),
+		BlockHash:             receipt.BlockHash.Hex(),
+		BlockTimestamp:        time.Unix(int64(header.Time), 0),
+		Status:                uint8(receipt.Status),
+		RequiredConfirmations: o.requiredConfirmations,
+		GasUsed:               receipt.GasUsed,
+		ChainIDNumeric:        o.chainID,
+		IsFinalized:           true,
+	}
+	for _, l := range receipt.Logs {
+		topics := make([]string, len(l.Topics))
+		for i, t := range l.Topics {
+			topics[i] = t.Hex()
+		}
+		result.Logs = append(result.Logs, EventLog{Address: l.Address.Hex(), Topics: topics, Data: l.Data, LogIndex: l.Index})
+	}
+	if head, err := o.client.BlockNumber(ctx); err == nil && head >= receipt.BlockNumber.Uint64() {
+		result.Confirmations = int(head - receipt.BlockNumber.Uint64())
+	}
+	return result
 }
 
 // waitForConfirmationsFromHeader waits for required block confirmations using a block header

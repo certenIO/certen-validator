@@ -1889,8 +1889,8 @@ func startValidator(
 		Repos:                    orchestratorRepos,
 		UnifiedRepo:              unifiedRepo,
 		ThresholdConfig:          attestationStrategy.DefaultThresholdConfig(),
-		ObservationTimeout:       10 * time.Minute,
-		AttestationTimeout:       5 * time.Minute,
+		ObservationTimeout:       ethrpc.FinalityBound, // Phase 7 waits for the chain's finalized block (RB5-F49)
+		AttestationTimeout:       execution.PeerAttestationRounds,
 		WriteBackTimeout:         2 * time.Minute,
 		AttestationPeers:         cfg.AttestationPeers,
 		AttestationRequiredCount: cfg.AttestationRequiredCount,

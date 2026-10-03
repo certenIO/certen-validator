@@ -29,6 +29,8 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/ethereum/go-ethereum/trie"
 
+	"github.com/certen/independant-validator/pkg/ethrpc"
+
 	"github.com/certen/independant-validator/pkg/execution/contracts"
 )
 
@@ -138,21 +140,14 @@ func (o *ExternalChainObserver) ObserveTransaction(
 	startTime := time.Now()
 	deadline := startTime.Add(o.timeout)
 
-	// Wait for receipt
-	receipt, err := o.waitForReceipt(ctx, txHash, deadline)
+	// The transaction's receipt as the FINALIZED chain holds it (RB5-F49): its block is final and canonical, and the
+	// receipt is that block's own - not an index entry that may name a block a reorg replaced.
+	receipt, err := o.settledInFinalizedChain(ctx, txHash, deadline)
 	if err != nil {
-		return nil, fmt.Errorf("wait for receipt: %w", err)
+		return nil, err
 	}
 
-	o.log("📦 [OBSERVER] Receipt received for tx: %s in block %d", txHash.Hex(), receipt.BlockNumber.Uint64())
-
-	// Wait for finalization (required confirmations)
-	err = o.waitForFinalization(ctx, receipt.BlockNumber, deadline)
-	if err != nil {
-		return nil, fmt.Errorf("wait for finalization: %w", err)
-	}
-
-	o.log("✅ [OBSERVER] Transaction finalized with %d confirmations", o.requiredConfirmations)
+	o.log("✅ [OBSERVER] Transaction %s is in finalized block %d (%s)", txHash.Hex(), receipt.BlockNumber.Uint64(), receipt.BlockHash.Hex())
 
 	// The header bound to the receipt (required), and the full block when this chain's
 	// transactions can be decoded (an enrichment, for the inclusion proofs). See fetchBlockForResult.
@@ -299,40 +294,10 @@ func (o *ExternalChainObserver) waitForReceipt(
 	}
 }
 
-// waitForFinalization waits for the required number of block confirmations
-func (o *ExternalChainObserver) waitForFinalization(
-	ctx context.Context,
-	txBlockNumber *big.Int,
-	deadline time.Time,
-) error {
-
-	ticker := time.NewTicker(o.pollingInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-			if time.Now().After(deadline) {
-				return fmt.Errorf("timeout waiting for finalization")
-			}
-
-			currentBlock, err := o.ethClient.BlockNumber(ctx)
-			if err != nil {
-				o.log("⚠️ [OBSERVER] Error getting block number: %v", err)
-				continue
-			}
-
-			confirmations := int(currentBlock - txBlockNumber.Uint64())
-			if confirmations >= o.requiredConfirmations {
-				return nil
-			}
-
-			o.log("⏳ [OBSERVER] Waiting for finalization: %d/%d confirmations",
-				confirmations, o.requiredConfirmations)
-		}
-	}
+// settledInFinalizedChain is the transaction's receipt as the finalized chain holds it - ethrpc.SettledInFinalizedChain,
+// the one rule this observer and the chain strategy's observer share (RB5-F49).
+func (o *ExternalChainObserver) settledInFinalizedChain(ctx context.Context, txHash common.Hash, deadline time.Time) (*types.Receipt, error) {
+	return ethrpc.SettledInFinalizedChain(ctx, o.ethClient, txHash, deadline, o.pollingInterval, o.log)
 }
 
 // =============================================================================

@@ -264,7 +264,7 @@ func verifyNonSettlementClaim(ctx context.Context, rd NonSettlementChain, own *P
 		return readErr(fmt.Errorf("reading the finalized block: %w", err))
 	}
 	if c.Block > fin.Number.Uint64() {
-		return fmt.Errorf("block %d is not finalized here (finalized %d)", c.Block, fin.Number.Uint64())
+		return fmt.Errorf("block %d is not finalized here (finalized %d): %w", c.Block, fin.Number.Uint64(), ErrNotYetFinalized)
 	}
 	hdr, err := rd.HeaderAt(ctx, c.ChainID, c.Block)
 	if err != nil {
