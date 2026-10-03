@@ -34,9 +34,10 @@ type FinalityReader interface {
 // chain's "finalized" block tag, it is the canonical block at its height, and the receipt is that block's own.
 //
 // Finality is the chain's own finalized tag - what an intent requires (finality_requirements: finalized) - not a count of
-// confirmations. On 2026-10-02 a Sepolia tip reorg replaced block 11832868 (0x032d2bfd… -> 0x7bec386b…) seconds after a
-// settlement landed in it: the canonical block re-included it, but the RPC's index kept answering with the orphaned hash,
-// and the settlement was failed for good at one confirmation.
+// confirmations. On 2026-10-02 the settlement 0x261b7ed5… of Sepolia block 11832868 was observed at one confirmation: its
+// receipt named block 0x032d2bfd…, while the load-balanced RPC served header 0x7bec386b2d05… for that height (a backend on a
+// short-lived fork). The header binding failed and the settlement was failed for good. 0x032d2bfd… is the block that became
+// final (re-checked 2026-10-03 on three providers); waiting for finality makes the header and the receipt agree.
 //
 // Once the receipt's height is final, the block at that height is canonical, and the receipt is read from that block
 // itself when the index names another one. A transaction the canonical block at that height does not hold was re-mined

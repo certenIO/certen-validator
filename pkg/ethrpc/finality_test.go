@@ -36,9 +36,9 @@ func (f *fakeFinality) BlockReceipts(context.Context, rpc.BlockNumberOrHash) ([]
 }
 
 func TestTheReceiptIsTheFinalizedCanonicalBlocksOwn(t *testing.T) {
-	tx := common.HexToHash("0x261b7ed5")
+	tx := common.HexToHash("0x01")
 	canon := &types.Header{Number: big.NewInt(11832868), Difficulty: big.NewInt(0), Extra: []byte("canonical")}
-	stale := &types.Receipt{TxHash: tx, BlockNumber: big.NewInt(11832868), BlockHash: common.HexToHash("0x032d2bfd"), Status: 1}
+	stale := &types.Receipt{TxHash: tx, BlockNumber: big.NewInt(11832868), BlockHash: common.HexToHash("0x0ff1ce"), Status: 1}
 	own := &types.Receipt{TxHash: tx, BlockNumber: big.NewInt(11832868), BlockHash: canon.Hash(), Status: 1}
 	f := &fakeFinality{finalized: 11832900, canonical: canon, indexed: stale, inBlock: []*types.Receipt{own}}
 	got, err := SettledInFinalizedChain(context.Background(), f, tx, time.Now().Add(time.Second), time.Millisecond, nil)
