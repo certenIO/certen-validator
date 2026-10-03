@@ -411,6 +411,28 @@ func (p *ValidatorSetProof) Verify(in VerifyInput) (Verdict, error) {
 	return VerdictVerified, nil
 }
 
+// ProvenRoot is the BPT root both accounts are proven into (steps 11-13), so a verifier can tell whether this evidence
+// is bound to the anchor a quorum signed - and supply that anchor to Verify only when it is (RB5-F4). Supplying an
+// anchor the evidence is not proven into is a claim of binding that fails as tampering.
+func (p *ValidatorSetProof) ProvenRoot() (string, error) {
+	if p == nil {
+		return "", fmt.Errorf("validatorSetProof: absent")
+	}
+	netAnchor, err := p.Network.verify()
+	if err != nil {
+		return "", fmt.Errorf("validatorSetProof.network: %w", err)
+	}
+	globAnchor, err := p.Globals.verify()
+	if err != nil {
+		return "", fmt.Errorf("validatorSetProof.globals: %w", err)
+	}
+	if netAnchor != globAnchor {
+		return "", fmt.Errorf("validatorSetProof: the two accounts are proven into different BPT roots (network=%s globals=%s)",
+			netAnchor[:16], globAnchor[:16])
+	}
+	return netAnchor, nil
+}
+
 // verify runs steps 11-13 for one account and returns the proven BPT root.
 func (a *AccountStateProof) verify() (string, error) {
 	// 11. the state hashes to the leaf being proven.

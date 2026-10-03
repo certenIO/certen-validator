@@ -103,6 +103,28 @@ func (r AccumulateBindingResult) Claim() string {
 	}
 }
 
+// VerifyAgainstDirectoryLeg checks the extension against the proof's own Directory leg (RB5-F4): the leg's asserted
+// set and threshold, and its state-tree anchor as the binding ONLY when the evidence is proven into that very root.
+// Evidence proven into another root (today: the serving node's current one) is checked as unbound - derived, not
+// bound - never presented as a claim of binding that would fail as tampering.
+func (b *AccumulateBinding) VerifyAgainstDirectoryLeg(dn *chained_proof.Layer4, pinnedIncarnation *string) AccumulateBindingResult {
+	if b == nil || b.ValidatorSetProof == nil {
+		return AccumulateBindingResult{Present: false}
+	}
+	if dn == nil {
+		return AccumulateBindingResult{Present: true, Err: fmt.Errorf("no Directory leg to check the validator-set evidence against")}
+	}
+	root, err := b.ValidatorSetProof.ProvenRoot()
+	if err != nil {
+		return AccumulateBindingResult{Present: true, Err: err}
+	}
+	bound := ""
+	if strings.EqualFold(root, strings.TrimPrefix(dn.StateTreeAnchor, "0x")) {
+		bound = dn.StateTreeAnchor
+	}
+	return b.Verify(dn.ValidatorSet, dn.AcceptThreshold, bound, pinnedIncarnation)
+}
+
 // VerifyAccumulateBinding checks the extension, if present.
 //
 // pinnedIncarnation is the verifier's OUT-OF-BAND value and may be nil. Without

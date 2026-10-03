@@ -364,6 +364,18 @@ func (o *UnifiedOrchestrator) resolveAnchorBinding(
 	if anchorObs != nil && l5.BlockNumber == anchorObs.BlockNumber {
 		l5.BlockHash, l5.Confirmations = anchorObs.BlockHash, anchorObs.Confirmations
 	}
+	// The Accumulate validator-set evidence of the set this anchor committed (RB5-F4). Anything but "attached" is
+	// named: the layer then states that it carries none (ExternalClaim), and proofverify reports the set as asserted.
+	switch attached, err := AttachValidatorSetProof(ctx, l5, o.config.ValidatorSetProver); {
+	case err != nil:
+		logfPrintf("🚨 [L5-PERSIST] proof %s: no Accumulate validator-set evidence: %v", proofID, err)
+	case attached == ValidatorSetChanged:
+		logfPrintf("🚨 [L5-PERSIST] proof %s: the Accumulate validator set now differs from the set anchor %s committed; "+
+			"evidence of the committed set needs historical state (AIP-058) - none attached", proofID, binding.AnchorTxHash)
+	case attached == ValidatorSetAttached:
+		logfPrintf("🧬 [L5-PERSIST] proof %s: Accumulate validator-set evidence attached (set root %s…)", proofID,
+			short16(l5.Accumulate.ValidatorSetRoot))
+	}
 	return l5, binding
 }
 

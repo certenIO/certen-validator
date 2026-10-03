@@ -106,6 +106,10 @@ type UnifiedOrchestratorConfig struct {
 	// Required: without it there is no quorum to count.
 	ResultQuorumRegistry ResultQuorumRegistryFn
 
+	// ValidatorSetProver builds the Accumulate Directory's validator-set evidence that every V8.2 proof's layer 5
+	// carries (RB5-F4). Required in production (main); without it layer 5 names that it carries none.
+	ValidatorSetProver ValidatorSetProver
+
 	// Non-settlement (RB3-F49): a member that never settled is attested by quorum and written back.
 	// MemberLookup finds this validator's own copy of a member; NonSettlementChain reads the chain
 	// facts; NonSettlements holds failures until they are attestable. All required.
