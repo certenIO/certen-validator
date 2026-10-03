@@ -18,7 +18,9 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/certen/independant-validator/pkg/ethproof"
 	"github.com/certen/independant-validator/pkg/merkle"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 )
 
@@ -233,14 +235,9 @@ type ExternalChainResultData struct {
 	ReceiptInclusionProof *MerkleInclusionProofData `json:"receipt_inclusion_proof"`
 }
 
-// MerkleInclusionProofData contains Merkle proof for verification
-type MerkleInclusionProofData struct {
-	LeafHash        [32]byte   `json:"leaf_hash"`
-	LeafIndex       uint64     `json:"leaf_index"`
-	ProofHashes     [][32]byte `json:"proof_hashes"`
-	ProofDirections []uint8    `json:"proof_directions"`
-	ExpectedRoot    [32]byte   `json:"expected_root"`
-}
+// MerkleInclusionProofData is a Merkle-Patricia inclusion proof against a block's transactionsRoot or receiptsRoot, in
+// the one format the system emits (pkg/ethproof, RB5-F16).
+type MerkleInclusionProofData = ethproof.InclusionProof
 
 // AggregatedAttestationData contains aggregated attestation for verification
 type AggregatedAttestationData struct {
@@ -653,15 +650,24 @@ func (v *UnifiedVerifier) verifyExecutionProof(proof *ExecutionProofBundle, resu
 			proof.Result.ResultHash, expectedHash)
 	}
 
-	// Verify Merkle inclusion proofs
-	if proof.Result.TxInclusionProof != nil {
-		if !v.verifyMerkleInclusionProof(proof.Result.TxInclusionProof) {
-			return fmt.Errorf("transaction inclusion proof verification failed")
+	// Verify the Merkle-Patricia inclusion proofs against the result's own roots: the transaction proof must prove this
+	// transaction, and the receipt proof the receipt at the same index (pkg/ethproof).
+	if p := proof.Result.TxInclusionProof; p != nil {
+		leaf, err := ethproof.VerifyInclusion(p, common.Hash(proof.Result.TransactionsRoot), p.LeafIndex)
+		if err != nil {
+			return fmt.Errorf("transaction inclusion proof verification failed: %w", err)
+		}
+		if crypto.Keccak256Hash(leaf) != common.Hash(proof.Result.TxHash) {
+			return fmt.Errorf("transaction inclusion proof verification failed: it proves another transaction")
 		}
 	}
-	if proof.Result.ReceiptInclusionProof != nil {
-		if !v.verifyMerkleInclusionProof(proof.Result.ReceiptInclusionProof) {
-			return fmt.Errorf("receipt inclusion proof verification failed")
+	if p := proof.Result.ReceiptInclusionProof; p != nil {
+		index := p.LeafIndex
+		if tx := proof.Result.TxInclusionProof; tx != nil {
+			index = tx.LeafIndex
+		}
+		if _, err := ethproof.VerifyInclusion(p, common.Hash(proof.Result.ReceiptsRoot), index); err != nil {
+			return fmt.Errorf("receipt inclusion proof verification failed: %w", err)
 		}
 	}
 
@@ -693,32 +699,6 @@ func (v *UnifiedVerifier) computeResultHash(result *ExternalChainResultData) [32
 	data = append(data, result.StateRoot[:]...)
 	data = append(data, byte(result.Status))
 	return sha256.Sum256(data)
-}
-
-// verifyMerkleInclusionProof verifies a Merkle inclusion proof using Keccak256
-func (v *UnifiedVerifier) verifyMerkleInclusionProof(proof *MerkleInclusionProofData) bool {
-	if len(proof.ProofHashes) != len(proof.ProofDirections) {
-		return false
-	}
-
-	currentHash := proof.LeafHash
-
-	for i, proofHash := range proof.ProofHashes {
-		var combined []byte
-		if proof.ProofDirections[i] == 0 {
-			// Proof hash is on the left
-			combined = append(proofHash[:], currentHash[:]...)
-		} else {
-			// Proof hash is on the right
-			combined = append(currentHash[:], proofHash[:]...)
-		}
-		// Use real Keccak256 for Ethereum compatibility
-		// Per Phase 5 Task 5.4: Using go-ethereum's crypto.Keccak256 (not a placeholder)
-		hash := crypto.Keccak256Hash(combined)
-		currentHash = hash
-	}
-
-	return currentHash == proof.ExpectedRoot
 }
 
 // verifyAggregatedAttestation verifies the BLS aggregated attestation
