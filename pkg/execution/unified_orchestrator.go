@@ -40,6 +40,7 @@ import (
 	// of a classification drift apart.
 	"github.com/certen/independant-validator/pkg/consensus"
 	"github.com/certen/independant-validator/pkg/database"
+	"github.com/certen/independant-validator/pkg/ethrpc"
 	"github.com/certen/independant-validator/pkg/proof"
 	"github.com/certen/independant-validator/pkg/strategy"
 )
@@ -171,8 +172,8 @@ type ChainedProofResult struct {
 func DefaultUnifiedOrchestratorConfig() *UnifiedOrchestratorConfig {
 	return &UnifiedOrchestratorConfig{
 		ThresholdConfig:    attestation.DefaultThresholdConfig(),
-		ObservationTimeout: 30 * time.Minute,
-		AttestationTimeout: 5 * time.Minute,
+		ObservationTimeout: ethrpc.FinalityBound, // Phase 7 waits for the chain's finalized block (RB5-F49)
+		AttestationTimeout: peerAttestationRounds,
 		WriteBackTimeout:   2 * time.Minute,
 		EnableMultiChain:   true,
 	}
@@ -1199,7 +1200,9 @@ func (o *UnifiedOrchestrator) observerForChain(msg *attestation.AttestationMessa
 		ChainID:               chainID,
 		ValidatorID:           o.config.ValidatorID,
 		RequiredConfirmations: 1,
-		Timeout:               90 * time.Second,
+		// Its reads follow the finality rule (RB5-F49). The executor's gate reads a settlement Phase 7 already observed
+		// final; a peer, whose view may trail, gets the same patience as its own observation, then answers "not yet".
+		Timeout: peerFinalityPatience,
 	})
 }
 
@@ -1659,7 +1662,34 @@ type PeerAttestationResponse struct {
 	Success     bool                     `json:"success"`
 	Error       string                   `json:"error,omitempty"`
 	Attestation *attestation.Attestation `json:"attestation,omitempty"`
+	// Retryable: the peer could not reproduce the result YET - its view of the chain has not finalized the block - which
+	// is not a verdict; the requester asks again (RB5-F49). Every other refusal is final.
+	Retryable bool `json:"retryable,omitempty"`
 }
+
+// peerFinalityPatience is how long a peer waits, inside one attestation request, for its own view of the chain to
+// finalize the block it is asked about before it answers "not yet" (RB5-F49). The validators read load-balanced
+// endpoints whose backends disagree on the finalized head by minutes; the requester asks again rather than holding a
+// request open.
+const peerFinalityPatience = 90 * time.Second
+
+// notFinalizedYet: err says this validator's view of the chain has not finalized the block yet - the finality rule's own
+// error, or a chain read that ran out of patience while the request itself (ctx) is still live (RB5-F49).
+func notFinalizedYet(ctx context.Context, err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, ErrNotYetFinalized) || (errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil)
+}
+
+// peerRetryBackoff spaces the requester's rounds to peers that answered "not yet" (RB5-F49).
+const peerRetryBackoff = 20 * time.Second
+
+// PeerAttestationRounds bounds Phase 8's rounds to its peers (RB5-F49): as long as a peer still accepts the message - it
+// refuses one older than peerAttestationMaxAgeSec - less a minute for the last round.
+const PeerAttestationRounds = (peerAttestationMaxAgeSec - 60) * time.Second
+
+const peerAttestationRounds = PeerAttestationRounds
 
 // collectPeerAttestations broadcasts attestation requests to peer validators
 // and collects their responses
@@ -1682,49 +1712,77 @@ func (o *UnifiedOrchestrator) collectPeerAttestations(
 		RequestedAt:  time.Now().UTC(),
 	}
 
-	// Request attestations from peers in parallel
-	var wg sync.WaitGroup
-	responses := make(chan *PeerAttestationResponse, len(o.config.AttestationPeers))
-
-	for _, peer := range o.config.AttestationPeers {
-		wg.Add(1)
-		go func(peerURL string) {
-			defer wg.Done()
-			resp, err := o.requestAttestationFromPeer(ctx, peerURL, req)
-			if err != nil {
-				fmt.Printf("Failed to get attestation from %s: %v\n", peerURL, err)
-				responses <- &PeerAttestationResponse{
-					CycleID: cycle.CycleID,
-					Success: false,
-					Error:   err.Error(),
-				}
-				return
-			}
-			responses <- resp
-		}(peer)
+	// Rounds (RB5-F49): every peer is asked; a peer that answers "not yet" - its view of the chain has not finalized
+	// the block - is asked again after peerRetryBackoff, until none is left, the attestation deadline passes, or the
+	// message would be too old for a peer to accept (every validator signs this one message, timestamp included).
+	lastRound := time.Now().Add(time.Duration(peerAttestationMaxAgeSec-60) * time.Second)
+	if message.Timestamp != 0 {
+		lastRound = time.Unix(message.Timestamp, 0).Add(time.Duration(peerAttestationMaxAgeSec-60) * time.Second)
 	}
-
-	// Wait for all requests to complete (or timeout)
-	go func() {
-		wg.Wait()
-		close(responses)
-	}()
-
-	// Collect successful responses
+	pending := append([]string(nil), o.config.AttestationPeers...)
 	var attestations []*attestation.Attestation
-	for resp := range responses {
-		if resp.Success && resp.Attestation != nil {
-			// Verify the attestation before adding
-			valid, err := attestStrategy.Verify(ctx, resp.Attestation)
-			if err != nil {
-				fmt.Printf("Failed to verify attestation: %v\n", err)
+	for round := 1; len(pending) > 0; round++ {
+		type answer struct {
+			peer string
+			resp *PeerAttestationResponse
+		}
+		var wg sync.WaitGroup
+		answers := make(chan answer, len(pending))
+		for _, peer := range pending {
+			wg.Add(1)
+			go func(peerURL string) {
+				defer wg.Done()
+				resp, err := o.requestAttestationFromPeer(ctx, peerURL, req)
+				if err != nil {
+					fmt.Printf("Failed to get attestation from %s: %v\n", peerURL, err)
+					resp = &PeerAttestationResponse{CycleID: cycle.CycleID, Success: false, Error: err.Error()}
+				}
+				answers <- answer{peerURL, resp}
+			}(peer)
+		}
+		go func() {
+			wg.Wait()
+			close(answers)
+		}()
+
+		var again []string
+		for a := range answers {
+			resp := a.resp
+			if resp.Success && resp.Attestation != nil {
+				// Verify the attestation before adding
+				valid, err := attestStrategy.Verify(ctx, resp.Attestation)
+				if err != nil {
+					fmt.Printf("Failed to verify attestation: %v\n", err)
+					continue
+				}
+				if !valid {
+					fmt.Printf("Attestation from %s failed verification\n", resp.Attestation.ValidatorID)
+					continue
+				}
+				attestations = append(attestations, resp.Attestation)
 				continue
 			}
-			if !valid {
-				fmt.Printf("Attestation from %s failed verification\n", resp.Attestation.ValidatorID)
-				continue
+			if resp.Retryable {
+				again = append(again, a.peer)
 			}
-			attestations = append(attestations, resp.Attestation)
+		}
+		pending = again
+		if len(pending) == 0 {
+			break
+		}
+		if time.Now().Add(peerRetryBackoff).After(lastRound) {
+			fmt.Printf("[Phase 8] cycle %s: %d peer(s) still had not finalized the block after %d round(s); the message is "+
+				"about to be too old for them to accept\n", cycle.CycleID, len(pending), round)
+			break
+		}
+		fmt.Printf("[Phase 8] cycle %s: round %d - %d peer(s) not finalized yet, asking again in %s\n",
+			cycle.CycleID, round, len(pending), peerRetryBackoff)
+		select {
+		case <-ctx.Done():
+			fmt.Printf("[Phase 8] cycle %s: attestation deadline reached with %d peer(s) not finalized yet\n",
+				cycle.CycleID, len(pending))
+			return attestations, nil
+		case <-time.After(peerRetryBackoff):
 		}
 	}
 
@@ -1810,6 +1868,14 @@ func (o *UnifiedOrchestrator) HandlePeerAttestationRequest(
 		fmt.Printf("[Phase 8] Rejecting peer attestation request (cycle=%s): %s\n", cid, msg)
 		return &PeerAttestationResponse{CycleID: cid, Success: false, Error: msg}, nil
 	}
+	notYet := func(msg string) (*PeerAttestationResponse, error) {
+		cid := ""
+		if req != nil {
+			cid = req.CycleID
+		}
+		fmt.Printf("[Phase 8] Not attesting yet (cycle=%s), ask again: %s\n", cid, msg)
+		return &PeerAttestationResponse{CycleID: cid, Success: false, Error: msg, Retryable: true}, nil
+	}
 
 	// 1. Structural validation.
 	if req == nil || req.Message == nil {
@@ -1822,7 +1888,7 @@ func (o *UnifiedOrchestrator) HandlePeerAttestationRequest(
 	// A member that never settled has no transaction: it is verified from this validator's own copy of
 	// the member and its own chain reads (RB3-F49).
 	if msg.NonSettlement != nil {
-		return o.handlePeerNonSettlement(ctx, req, fail)
+		return o.handlePeerNonSettlement(ctx, req, fail, notYet)
 	}
 	if msg.TargetChain == "" || msg.AnchorTxHash == "" {
 		return fail("attestation message missing target_chain/anchor_tx_hash")
@@ -1847,10 +1913,15 @@ func (o *UnifiedOrchestrator) HandlePeerAttestationRequest(
 	if err != nil {
 		return fail(fmt.Sprintf("unsupported target chain %q: %v", msg.TargetChain, err))
 	}
-	obsCtx, cancel := context.WithTimeout(ctx, o.config.ObservationTimeout)
+	// The requester observed it in its finalized chain; this peer's view may trail by minutes (RB5-F49): it waits
+	// peerFinalityPatience, then answers "not yet" rather than refusing.
+	obsCtx, cancel := context.WithTimeout(ctx, peerFinalityPatience)
 	defer cancel()
 	obs, err := chainStrategy.ObserveTransaction(obsCtx, msg.AnchorTxHash)
 	if err != nil {
+		if notFinalizedYet(ctx, err) {
+			return notYet(fmt.Sprintf("%s is not in this validator's finalized chain yet: %v", msg.AnchorTxHash, err))
+		}
 		return fail(fmt.Sprintf("independent observation of %s failed: %v", msg.AnchorTxHash, err))
 	}
 	if !obs.IsFinalized {
@@ -1882,6 +1953,9 @@ func (o *UnifiedOrchestrator) HandlePeerAttestationRequest(
 		// peer derives the shortfall itself - from the user-signed intent and its own chain reads - and
 		// signs only the identical claim, bound to the settlement it re-observed.
 		own, serr := o.peerDeriveEffectsShortfall(ctx, msg, chainStrategy)
+		if notFinalizedYet(ctx, serr) {
+			return notYet(fmt.Sprintf("effects shortfall not reproducible yet: %v", serr))
+		}
 		if serr != nil {
 			return fail(fmt.Sprintf("effects shortfall not reproduced: %v", serr))
 		}
@@ -1901,6 +1975,9 @@ func (o *UnifiedOrchestrator) HandlePeerAttestationRequest(
 		//     USER-SIGNED intent (fetched from Accumulate), so the quorum — not just the
 		//     executor — enforces RB-2/RB-4/RB-5. Fails closed on any doubt.
 		if err := o.peerVerifyCommittedEffect(ctx, msg, chainStrategy, obs.Status != 1); err != nil {
+			if notFinalizedYet(ctx, err) {
+				return notYet(fmt.Sprintf("committed effect not verifiable yet: %v", err))
+			}
 			return fail(fmt.Sprintf("committed-effect verification failed: %v", err))
 		}
 	}

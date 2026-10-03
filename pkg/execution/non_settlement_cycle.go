@@ -212,7 +212,7 @@ func (o *UnifiedOrchestrator) runNonSettlementCycle(ctx context.Context, rec *No
 // handlePeerNonSettlement is a peer's side of a non-settlement: it verifies the claim from its OWN copy
 // of the member and its OWN chain reads, and signs only a result it reproduces.
 func (o *UnifiedOrchestrator) handlePeerNonSettlement(ctx context.Context, req *PeerAttestationRequest,
-	fail func(string) (*PeerAttestationResponse, error)) (*PeerAttestationResponse, error) {
+	fail, notYet func(string) (*PeerAttestationResponse, error)) (*PeerAttestationResponse, error) {
 	msg := req.Message
 	c := msg.NonSettlement
 	if msg.IntentID == "" || msg.ResultHash == ([32]byte{}) {
@@ -240,6 +240,10 @@ func (o *UnifiedOrchestrator) handlePeerNonSettlement(ctx context.Context, req *
 	vctx, cancel := context.WithTimeout(ctx, o.config.ObservationTimeout)
 	defer cancel()
 	if err := verifyNonSettlementClaim(vctx, o.config.NonSettlementChain, own, msg); err != nil {
+		if errors.Is(err, ErrNotYetFinalized) {
+			// The claim's (pinned) block is not final in this validator's view yet: asked again, not refused (RB5-F49).
+			return notYet(fmt.Sprintf("non-settlement not reproducible yet: %v", err))
+		}
 		return fail(fmt.Sprintf("non-settlement not reproduced: %v", err))
 	}
 	attestStrategy, err := o.config.Registry.GetAttestationStrategy(req.Scheme)

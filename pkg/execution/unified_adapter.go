@@ -15,6 +15,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/certen/independant-validator/pkg/ethrpc"
 )
 
 // =============================================================================
@@ -310,7 +312,10 @@ func dropUnobservableHashes(in []string) []string {
 // Phase 7 waits on external-chain receipts, so it is legitimately slow — but never unbounded. An
 // unbounded wait is indistinguishable from a hang and leaves the intent settled on chain with no
 // record written back to acc://certen-protocol.acme/execution-results.
-var unifiedProofCycleTimeout = 10 * time.Minute
+//
+// Phase 7 waits for the chain's finalized block (RB5-F49), up to ethrpc.FinalityBound; Phase 8's peer rounds and Phase
+// 9's write-back follow it.
+var unifiedProofCycleTimeout = ethrpc.FinalityBound + 30*time.Minute
 
 // isHash32 reports whether s is a 0x-prefixed 32-byte hex string.
 //

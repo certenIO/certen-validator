@@ -62,7 +62,7 @@ func DefaultEVMStrategyConfig() *EVMStrategyConfig {
 		GasLimit:        3000000,
 		MaxGasPriceGwei: 100,
 		TxTimeout:       2 * time.Minute,
-		ReceiptTimeout:  30 * time.Minute,
+		ReceiptTimeout:  ethrpc.FinalityBound, // waits for the chain's finalized block (RB5-F49)
 		PollingInterval: 12 * time.Second,
 	}
 }
@@ -540,7 +540,7 @@ func NewEVMStrategyFromConfig(chainConfig *ChainConfig, privateKeyHex string, va
 		GasLimit:              3000000,
 		MaxGasPriceGwei:       100,
 		TxTimeout:             2 * time.Minute,
-		ReceiptTimeout:        30 * time.Minute,
+		ReceiptTimeout:        ethrpc.FinalityBound, // waits for the chain's finalized block (RB5-F49)
 		PollingInterval:       12 * time.Second,
 		ValidatorID:           validatorID,
 	}
