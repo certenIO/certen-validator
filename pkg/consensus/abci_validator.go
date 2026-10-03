@@ -123,6 +123,14 @@ type ValidatorApp struct {
 	// blockAdminSetChanged: this execution of the block has accepted an admin-set change (a re-seal or an admin
 	// rotation). At most one lands per block (rules v12, admin_rotate_apply.go). Reset by FinalizeBlock.
 	blockAdminSetChanged bool
+
+	// The policy updates, validator rotations and BLS registry versions THIS execution of the block accepted. Each kind
+	// is judged against its records below the block's height plus these - never against a record an earlier execution
+	// of the same block wrote - so executing a block again decides every transaction of it as the first execution did
+	// (replay_determinism_test.go). Reset by FinalizeBlock; read only for the height being executed.
+	blockPolicyChanges   []ledger.ScheduledPolicyChange
+	blockRotationRecords []ledger.ValidatorRotationRecord
+	blockRegistryRecords []ledger.BLSRegistryRecord
 }
 
 // committedRulesVersion is the lowest rules version that reproduces the committed history, result codes
@@ -813,6 +821,7 @@ func (app *ValidatorApp) FinalizeBlock(ctx context.Context, req *abcitypes.Reque
 	app.blockRulesV11Verdict = false
 	app.blockRulesV12Verdict = false
 	app.blockAdminSetChanged = false
+	app.blockPolicyChanges, app.blockRotationRecords, app.blockRegistryRecords = nil, nil, nil
 	// A fresh slice, never [:0]: the previous block's slice may already belong to the persister.
 	app.blockValidatorBlocks = nil
 

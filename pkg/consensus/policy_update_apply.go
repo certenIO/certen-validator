@@ -2,6 +2,8 @@ package consensus
 
 import (
 	abcitypes "github.com/cometbft/cometbft/abci/types"
+
+	"github.com/certen/independant-validator/pkg/ledger"
 )
 
 // The ABCI side of policy updates. Both functions run inside FinalizeBlock and
@@ -56,6 +58,14 @@ func (app *ValidatorApp) activatePolicyForBlock(height int64, blockTimeUnix int6
 //
 // Accepting one does NOT change the rule in force; it appends to the schedule.
 // The rule only ever changes by derivation at the activation height.
+//
+// It is judged against the schedule as it stood before this block - the entries
+// proposed below this height - plus the updates this execution of the block
+// accepted (blockPolicyChanges), never against an entry an earlier execution of
+// the same block wrote. So executing the block again (a crash between
+// FinalizeBlock and Commit, or a handshake replay) decides every transaction of
+// it exactly as the first execution did, a refused one included; an acceptance
+// an earlier execution already scheduled is not scheduled twice.
 func (app *ValidatorApp) processPolicyUpdate(pu *PolicyUpdateTx, height int64) abcitypes.ExecTxResult {
 	if app.ledgerStore == nil {
 		return abcitypes.ExecTxResult{Code: 5, Log: "policy updates require a ledger store"}
@@ -68,36 +78,75 @@ func (app *ValidatorApp) processPolicyUpdate(pu *PolicyUpdateTx, height int64) a
 		// failed persist below does.
 		app.logger.Fatalf("❌ [POLICY] the committed policy could not be read at height %d: %v", height, err)
 	}
+	var before *ledger.EntitlementPolicyState
+	if current != nil {
+		b := *current // copy; never mutate committed state in place
+		b.Schedule = nil
+		for _, e := range current.Schedule {
+			if e.ProposedAtHeight < height {
+				b.Schedule = append(b.Schedule, e)
+			}
+		}
+		for _, e := range app.blockPolicyChanges {
+			if e.ProposedAtHeight == height {
+				b.Schedule = append(b.Schedule, e)
+			}
+		}
+		before = &b
+	}
 
-	// REPLAY. On re-execution the schedule already contains this update, so
-	// verification would refuse it as stale — and a refusal would withhold its
-	// id from the app hash, producing exactly the divergence this design
-	// prevents. An already-scheduled update is therefore an accepted no-op.
-	if IsPolicyUpdateScheduled(current, pu.Version) {
+	// An update whose version is already scheduled is an accepted no-op.
+	if IsPolicyUpdateScheduled(before, pu.Version) {
 		app.blockBundles = append(app.blockBundles, pu.PolicyUpdateID())
 		return abcitypes.ExecTxResult{Code: 0, GasWanted: 1, GasUsed: 1}
 	}
 
 	// Judged by the admin set in force for this block (AdminSetAt, rules v11); the update is applied to the committed
 	// state itself, whose genesis seal and re-seal record it leaves untouched.
-	if err := VerifyPolicyUpdateOnChain(pu, withAdminSetAt(current, height), app.currentBlockTime.UTC().Unix(), app.cometChainID); err != nil {
+	if err := VerifyPolicyUpdateOnChain(pu, withAdminSetAt(before, height), app.currentBlockTime.UTC().Unix(), app.cometChainID); err != nil {
 		app.logger.Printf("🚫 [POLICY] rejected update at height %d: %v", height, err)
 		return abcitypes.ExecTxResult{Code: 5, Log: "policy update rejected: " + err.Error()}
 	}
 
-	next := ApplyPolicyUpdate(pu, current, height)
-	if err := app.ledgerStore.SaveEntitlementPolicy(next); err != nil {
-		// Persisting failed here but may have succeeded elsewhere, so the fleet
-		// would disagree about the schedule. Stop rather than drift.
-		app.logger.Fatalf("❌ [POLICY] could not persist an accepted update at height %d: %v", height, err)
+	accepted := ApplyPolicyUpdate(pu, before, height).Schedule
+	entry := accepted[len(accepted)-1]
+	if IsPolicyUpdateScheduled(current, pu.Version) {
+		// An earlier execution of this block scheduled it; anything else under this version is a contradiction.
+		for _, e := range current.Schedule {
+			if e.Version == pu.Version && !sameScheduledChange(e, entry) {
+				app.logger.Fatalf("❌ [POLICY] version %d is already scheduled at height %d, but this execution of block %d "+
+					"accepts another update under it: the committed schedule and this block disagree", pu.Version, e.ProposedAtHeight, height)
+			}
+		}
+	} else {
+		next := ApplyPolicyUpdate(pu, current, height)
+		if err := app.ledgerStore.SaveEntitlementPolicy(next); err != nil {
+			// Persisting failed here but may have succeeded elsewhere, so the fleet
+			// would disagree about the schedule. Stop rather than drift.
+			app.logger.Fatalf("❌ [POLICY] could not persist an accepted update at height %d: %v", height, err)
+		}
+		app.logger.Printf("📜 [POLICY] scheduled at height %d: mode=%s activates at unix %d (version %d)",
+			height, pu.Mode, pu.ActivationUnix, pu.Version)
 	}
+	app.blockPolicyChanges = append(app.blockPolicyChanges, entry)
 
 	// Contribute to the app hash, so nodes commit to the update having been
 	// INCLUDED — not merely to its effect at the activation height.
 	app.blockBundles = append(app.blockBundles, pu.PolicyUpdateID())
 
-	app.logger.Printf("📜 [POLICY] scheduled at height %d: mode=%s activates at unix %d (version %d)",
-		height, pu.Mode, pu.ActivationUnix, pu.Version)
-
 	return abcitypes.ExecTxResult{Code: 0, GasWanted: 1, GasUsed: 1}
+}
+
+// sameScheduledChange reports whether two schedule entries are the same accepted update.
+func sameScheduledChange(a, b ledger.ScheduledPolicyChange) bool {
+	if a.Mode != b.Mode || a.ActivationUnix != b.ActivationUnix || a.Version != b.Version ||
+		a.ProposedAtHeight != b.ProposedAtHeight || len(a.Keys) != len(b.Keys) {
+		return false
+	}
+	for id, k := range a.Keys {
+		if b.Keys[id] != k {
+			return false
+		}
+	}
+	return true
 }

@@ -11,9 +11,12 @@ import (
 // processValidatorRotation judges a rotation carried by block `height` and, when it is accepted, records it
 // and stages the ValidatorUpdates this block returns (RB3-F95).
 //
-// Like a policy update, the rotation is persisted here, in FinalizeBlock, and a replay of the block that
-// accepted it is an accepted no-op that returns the same updates - so a crash between FinalizeBlock and
-// Commit, or a handshake replay, reproduces the block's result exactly.
+// Like a policy update, the rotation is persisted here, in FinalizeBlock. It is judged against the rotations
+// accepted below this height and those this execution of the block accepted (blockRotationRecords) - never
+// against a rotation an earlier execution of the same block wrote - so executing the block again (a crash
+// between FinalizeBlock and Commit, or a handshake replay) decides every transaction of it exactly as the first
+// execution did, a refused one included, and returns the same updates. An acceptance whose record an earlier
+// execution already wrote is not written twice.
 func (app *ValidatorApp) processValidatorRotation(vr *ValidatorRotationTx, height int64) abcitypes.ExecTxResult {
 	if app.ledgerStore == nil {
 		return abcitypes.ExecTxResult{Code: 6, Log: "validator rotation requires a ledger store"}
@@ -24,10 +27,21 @@ func (app *ValidatorApp) processValidatorRotation(vr *ValidatorRotationTx, heigh
 		// read their ledger include it, and would return different validator updates: a fork. Stop.
 		app.logger.Fatalf("❌ [ROTATION] the validator rotation log could not be read at height %d: %v", height, err)
 	}
+	before := &ledger.ValidatorRotationLog{}
+	for _, r := range log.Rotations {
+		if r.Height < height {
+			before.Rotations = append(before.Rotations, r)
+		}
+	}
+	for _, r := range app.blockRotationRecords {
+		if r.Height == height {
+			before.Rotations = append(before.Rotations, r)
+		}
+	}
 
-	// REPLAY: this block already accepted this rotation.
-	for i := range log.Rotations {
-		r := &log.Rotations[i]
+	// The same version accepted earlier in this block.
+	for i := range before.Rotations {
+		r := &before.Rotations[i]
 		if r.Version != vr.Version {
 			continue
 		}
@@ -46,28 +60,42 @@ func (app *ValidatorApp) processValidatorRotation(vr *ValidatorRotationTx, heigh
 		app.logger.Fatalf("❌ [ROTATION] the committed policy (admin quorum) could not be read at height %d: %v", height, err)
 	}
 	// Judged by the admin set in force for this block (AdminSetAt, rules v11).
-	power, err := VerifyValidatorRotation(vr, app.cometChainID, withAdminSetAt(policy, height), app.genesisValidators, log, height)
+	power, err := VerifyValidatorRotation(vr, app.cometChainID, withAdminSetAt(policy, height), app.genesisValidators, before, height)
 	if err != nil {
 		app.logger.Printf("🚫 [ROTATION] refused at height %d: %v", height, err)
 		return abcitypes.ExecTxResult{Code: 6, Log: "validator rotation refused: " + err.Error()}
 	}
 
-	log.Rotations = append(log.Rotations, ledger.ValidatorRotationRecord{
+	rec := ledger.ValidatorRotationRecord{
 		Version:   vr.Version,
 		Height:    height,
 		OldPubKey: strings.ToLower(strings.TrimPrefix(vr.OldPubKey, "0x")),
 		NewPubKey: strings.ToLower(strings.TrimPrefix(vr.NewPubKey, "0x")),
 		Power:     power,
 		ID:        vr.RotationID(),
-	})
-	if err := app.ledgerStore.SaveValidatorRotations(log); err != nil {
-		// Persisting failed here but may have succeeded elsewhere: the fleet would disagree about the set.
-		app.logger.Fatalf("❌ [ROTATION] could not persist an accepted rotation at height %d: %v", height, err)
 	}
-	app.logger.Printf("🔑 [ROTATION] accepted at height %d: version %d, %s... -> %s... (power %d), effective at height %d",
-		height, vr.Version, vr.OldPubKey[:min(12, len(vr.OldPubKey))], vr.NewPubKey[:min(12, len(vr.NewPubKey))],
-		power, height+2)
-	return app.stageRotation(&log.Rotations[len(log.Rotations)-1])
+	written := false
+	for _, r := range log.Rotations {
+		if r.Height == height && r.Version == rec.Version {
+			if r.ID != rec.ID || r.OldPubKey != rec.OldPubKey || r.NewPubKey != rec.NewPubKey || r.Power != rec.Power {
+				app.logger.Fatalf("❌ [ROTATION] height %d already records rotation version %d as %s, but this execution of "+
+					"the block accepts %s: the committed record and this block disagree", height, rec.Version, r.ID, rec.ID)
+			}
+			written = true
+		}
+	}
+	if !written {
+		log.Rotations = append(log.Rotations, rec)
+		if err := app.ledgerStore.SaveValidatorRotations(log); err != nil {
+			// Persisting failed here but may have succeeded elsewhere: the fleet would disagree about the set.
+			app.logger.Fatalf("❌ [ROTATION] could not persist an accepted rotation at height %d: %v", height, err)
+		}
+		app.logger.Printf("🔑 [ROTATION] accepted at height %d: version %d, %s... -> %s... (power %d), effective at height %d",
+			height, vr.Version, vr.OldPubKey[:min(12, len(vr.OldPubKey))], vr.NewPubKey[:min(12, len(vr.NewPubKey))],
+			power, height+2)
+	}
+	app.blockRotationRecords = append(app.blockRotationRecords, rec)
+	return app.stageRotation(&rec)
 }
 
 // stageRotation returns the rotation's updates to CometBFT and folds its id into this block's app hash.
