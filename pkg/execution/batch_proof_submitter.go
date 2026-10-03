@@ -3,7 +3,6 @@ package execution
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"fmt"
 	"math/big"
 	"strings"
@@ -294,75 +293,16 @@ func (s *BatchProofSubmitterImpl) SubmitBatchQuorumProof(
 	agg *consensus.QuorumAggregate,
 	messageHash [32]byte,
 ) (verifyTxHash string, verifyBlock uint64, sender string, err error) {
-	if agg == nil {
-		return "", 0, "", fmt.Errorf("nil quorum aggregate; refusing to submit an unattested batch root")
-	}
-	if agg.SignedVotingPower == nil || agg.SignedVotingPower.Sign() <= 0 {
-		return "", 0, "", fmt.Errorf("quorum aggregate reports no signed voting power")
-	}
-	if len(agg.Signers) < 2 {
-		// AggregateBatchAttestations already enforces threshold by power, so this is
-		// belt-and-braces against a degenerate registry (e.g. a one-validator set slipping
-		// into production config) producing a single-signer aggregate that the anchor's
-		// authorized-subset commitments would reject anyway.
-		return "", 0, "", fmt.Errorf(
-			"refusing to submit a %d-signer aggregate: the anchor's authorized pubkey "+
-				"commitments cover subsets of 5, 6 and 7 only", len(agg.Signers))
-	}
-
-	// THE SIGNERS, not the roster.
-	//
-	// _verifyBLSProof does not take signedVotingPower on trust. It walks validatorAddresses,
-	// looks each address up in the anchor's own registry, refuses unregistered entries,
-	// duplicates and mis-declared powers, and then requires
-	//
-	//	blsProof.signedVotingPower == sum(registered power of validatorAddresses)
-	//
-	// Passing the full seven-validator roster here alongside a 600/700 signed power therefore
-	// fails: the contract recomputes 700 and rejects. That is exactly what a 6-of-7 batch hit
-	// live on 2026-08-02 — the aggregate and the ZK proof were both correct, and the submission
-	// was rejected on the declared signer SET.
-	//
-	// The roster still reaches the contract, via totalVotingPower, which it compares against its
-	// own stored total.
-	validators := make([]common.Address, 0, len(agg.Signers))
-	powers := make([]*big.Int, 0, len(agg.Signers))
-	if len(agg.SignerPowers) != len(agg.Signers) {
-		return "", 0, "", fmt.Errorf("aggregate reports %d signers but %d powers; refusing to submit an "+
-			"inconsistent signer set", len(agg.Signers), len(agg.SignerPowers))
-	}
-	for i, s := range agg.Signers {
-		if !common.IsHexAddress(s) {
-			return "", 0, "", fmt.Errorf("signer %q is not an EVM address", s)
-		}
-		validators = append(validators, common.HexToAddress(s))
-		powers = append(powers, new(big.Int).Set(agg.SignerPowers[i]))
-	}
-	total := agg.TotalVotingPower
-	signed := agg.SignedVotingPower
-
-	// Cheap local restatement of the contract's own rule, so a mismatch is caught here with a
-	// clear message instead of as an opaque revert that costs the anchor gas.
-	check := big.NewInt(0)
-	for _, p := range powers {
-		check.Add(check, p)
-	}
-	if check.Cmp(signed) != 0 {
-		return "", 0, "", fmt.Errorf("declared signed power %s does not equal the sum of the signers' "+
-			"registered powers %s; the anchor would reject this", signed, check)
+	// The signer set, the ZK blob and thresholdMet: the one strict path every quorum proof takes
+	// (quorum_bls_proof.go). The signers, not the roster, at their registered powers; the proof against the AGGREGATE
+	// key, verified locally and from its ABI bytes; every failure named (RB5-F55).
+	if _, _, err := quorumSignerSet(agg); err != nil {
+		return "", 0, "", err
 	}
 
 	ecm, anchorAddr, err := s.chains.ManagerForChain(chainID)
 	if err != nil {
 		return "", 0, "", err
-	}
-
-	sigBytes, err := hex.DecodeString(strings.TrimPrefix(agg.AggregateSignatureHex, "0x"))
-	if err != nil {
-		return "", 0, "", fmt.Errorf("decoding aggregate signature: %w", err)
-	}
-	if len(sigBytes) == 0 {
-		return "", 0, "", fmt.Errorf("empty aggregate signature")
 	}
 
 	// Governance material. The anchor rejects a zero keyBookRoot when minimumGovernanceLevel
@@ -373,19 +313,13 @@ func (s *BatchProofSubmitterImpl) SubmitBatchQuorumProof(
 		return "", 0, "", fmt.Errorf("building validator key page proof: %w", err)
 	}
 
-	// The ZK blob. Proven against the AGGREGATE public key — the pairing only holds for the key
-	// the aggregate signature actually verifies under, which is what AggregateBatchAttestations
-	// returned after checking that very relation.
-	zkProofBytes, pubkeyCommitment := ecm.generateBLSZKProof(
-		sigBytes, messageHash, signed, total, agg.AggregatePublicKeyHex,
-	)
-	if len(zkProofBytes) == 0 {
-		return "", 0, "", fmt.Errorf(
-			"BLS ZK proof generation returned nothing for anchor 0x%x; the anchor exists but "+
-				"cannot be attested", bundleID[:8])
+	blsProof, pubkeyCommitment, err := ecm.BuildQuorumBLSProofData(agg, messageHash)
+	if err != nil {
+		return "", 0, "", fmt.Errorf("anchor 0x%x exists but cannot be attested: %w", bundleID[:8], err)
 	}
 	s.logf("[BATCH-PROOF] chain=%d zk proof %d bytes, pubkeyCommitment=0x%x, signed=%s/%s over %d signers",
-		chainID, len(zkProofBytes), pubkeyCommitment[:8], signed, total, len(agg.Signers))
+		chainID, len(blsProof.AggregateSignature), pubkeyCommitment[:8], blsProof.SignedVotingPower,
+		blsProof.TotalVotingPower, len(agg.Signers))
 
 	proof := contracts.CertenAnchorV4CertenProof{
 		TransactionHash: bundleID, // no single Accumulate tx for a batch; the id identifies it
@@ -403,19 +337,7 @@ func (s *BatchProofSubmitterImpl) SubmitBatchQuorumProof(
 			ProvidedSignatures: big.NewInt(1),
 			ThresholdMet:       true,
 		},
-		BlsProof: contracts.CertenAnchorV4BLSProofData{
-			// The Groth16 blob, NOT sigBytes. The raw aggregate is the witness that produced it.
-			AggregateSignature: zkProofBytes,
-			ValidatorAddresses: validators,
-			VotingPowers:       powers,
-			TotalVotingPower:   total,
-			SignedVotingPower:  signed,
-			// Computed from the two values above, never asserted. Asserting it would let a
-			// sub-threshold aggregate claim compliance the arithmetic does not support.
-			ThresholdMet: new(big.Int).Mul(signed, big.NewInt(batchQuorumThresholdDen)).
-				Cmp(new(big.Int).Mul(total, big.NewInt(batchQuorumThresholdNum))) >= 0,
-			MessageHash: messageHash,
-		},
+		BlsProof: blsProof,
 		Commitments: contracts.CertenAnchorV4CommitmentData{
 			OperationCommitment:  batchOperationID, // V7 requires this exact value
 			CrossChainCommitment: [32]byte{},
