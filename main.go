@@ -1772,6 +1772,24 @@ func startValidator(
 	outcomePeerForRequests.Store(&execution.OutcomePeer{Trees: outcomeTrees, Chains: outcomeReaders,
 		Attempts: execution.StackAttemptSource{Stack: stack}})
 
+	// The outcome recorder: every validator passes over the trees it kept; for each V8.2 anchor whose members are all
+	// final, the elected one gathers the quorum's partials over the registry's outcome message and records it, write-once
+	// (RB5 D4). The database is a hint; every fact is re-derived from the chain.
+	outcomeRecorder := &execution.BatchOutcomeRecorder{
+		ValidatorID: cfg.ValidatorID, Roster: consensus.BatchLeaderRoster, Trees: outcomeTrees,
+		Chains: make(map[int64]execution.OutcomeRecorderChain, len(outcomeChains)), Registries: execution.OutcomeRegistryAddresses(outcomeChains),
+		Attempts: execution.StackAttemptSource{Stack: stack}, Submitter: execution.ResolverOutcomeSubmitter{Resolver: resolver},
+		Records: database.NewBatchOutcomeRepository(dbClient), Peers: peers, Timeout: execution.DefaultOutcomeRequestTimeout,
+		Logf: log.Printf,
+	}
+	for id, c := range outcomeChains {
+		outcomeRecorder.Chains[id] = c
+	}
+	if err := outcomeRecorder.Validate(); err != nil {
+		return nil, nil, fmt.Errorf("batch path: %w", err)
+	}
+	go outcomeRecorder.Run(context.Background(), execution.OutcomeRecordInterval)
+
 	// Publish to the peer attestation handler. Without this a proposer's
 	// request gets 503 and no quorum can ever form.
 	batchStackForAttestation.Store(stack)

@@ -1,6 +1,7 @@
 package execution
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -399,4 +400,110 @@ func (c *AgreedOutcomeChain) OutcomeMessage(ctx context.Context, bundleID, root 
 	}
 	m, ok := out[0].([32]byte)
 	return m, okOr(ok, "outcomeMessage", out[0])
+}
+
+// RecordedOutcomeTx is a recordBatchOutcome transaction as the chain holds it: its agreed receipt's
+// BatchOutcomeRecorded event and the proof its calldata carried.
+type RecordedOutcomeTx struct {
+	BundleID    [32]byte
+	Tx          common.Hash
+	Block       uint64
+	Recorder    common.Address
+	Root        [32]byte
+	MessageHash [32]byte
+	Proof       contracts.CertenAnchorV4BLSProofData
+}
+
+// batchOutcomeRecordedTopic is the registry's BatchOutcomeRecorded(bytes32,bytes32,address,bytes32) event.
+var batchOutcomeRecordedTopic = outcomeRegistryABI.Events["BatchOutcomeRecorded"].ID
+
+// RecordedOutcome is the transaction that recorded bundleID's outcome in block (the registry's recordedInBlock): its
+// event located through each provider, established by its agreed receipt, and its calldata read from a provider and
+// bound to its hash.
+func (c *AgreedOutcomeChain) RecordedOutcome(ctx context.Context, bundleID [32]byte, block uint64) (*RecordedOutcomeTx, error) {
+	q := ethereum.FilterQuery{Addresses: []common.Address{c.registry}, FromBlock: new(big.Int).SetUint64(block),
+		ToBlock: new(big.Int).SetUint64(block), Topics: [][]common.Hash{{batchOutcomeRecordedTopic}, {common.Hash(bundleID)}}}
+	var failures []string
+	for _, loc := range c.reader.Locators() {
+		logs, err := loc.Client.FilterLogs(ctx, q)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", loc.Host, err))
+			continue
+		}
+		for _, l := range logs {
+			r, err := c.reader.TransactionReceipt(ctx, l.TxHash)
+			if err != nil {
+				return nil, err
+			}
+			for _, lg := range r.Logs {
+				if lg.Address != c.registry || len(lg.Topics) != 4 || lg.Topics[0] != batchOutcomeRecordedTopic ||
+					lg.Topics[1] != common.Hash(bundleID) || len(lg.Data) != 32 {
+					continue
+				}
+				out := &RecordedOutcomeTx{BundleID: bundleID, Tx: l.TxHash, Block: r.BlockNumber.Uint64(), Recorder: common.BytesToAddress(lg.Topics[3][12:]),
+					Root: lg.Topics[2]}
+				copy(out.MessageHash[:], lg.Data)
+				if err := c.recordedProof(ctx, out); err != nil {
+					return nil, err
+				}
+				return out, nil
+			}
+		}
+	}
+	if len(failures) > 0 {
+		return nil, readErr(fmt.Errorf("locating BatchOutcomeRecorded(0x%x) in block %d: %s", bundleID[:8], block, strings.Join(failures, "; ")))
+	}
+	return nil, outcomeNotYet("no provider returns the BatchOutcomeRecorded event of 0x%x in block %d", bundleID[:8], block)
+}
+
+// recordedProof reads the record transaction's calldata - from any provider, bound to the transaction's hash - and
+// decodes the quorum proof it submitted.
+func (c *AgreedOutcomeChain) recordedProof(ctx context.Context, rec *RecordedOutcomeTx) error {
+	for _, loc := range c.reader.Locators() {
+		tx, _, err := loc.Client.TransactionByHash(ctx, rec.Tx)
+		if err != nil || tx == nil || tx.Hash() != rec.Tx {
+			continue
+		}
+		bundle, root, proof, err := decodeRecordBatchOutcome(tx.Data())
+		if err != nil {
+			return fmt.Errorf("transaction %s: %w", rec.Tx.Hex(), err)
+		}
+		if bundle != rec.BundleID || root != rec.Root {
+			return fmt.Errorf("recordBatchOutcome %s submitted root 0x%x, its event names 0x%x", rec.Tx.Hex(), root[:8], rec.Root[:8])
+		}
+		if proof.MessageHash != rec.MessageHash {
+			return fmt.Errorf("recordBatchOutcome %s carried message 0x%x, its event names 0x%x", rec.Tx.Hex(), proof.MessageHash[:8], rec.MessageHash[:8])
+		}
+		rec.Proof = *proof
+		return nil
+	}
+	return readErr(fmt.Errorf("no provider returns the calldata of %s", rec.Tx.Hex()))
+}
+
+// decodeRecordBatchOutcome decodes recordBatchOutcome calldata: the anchor, the root and the quorum proof submitted.
+func decodeRecordBatchOutcome(data []byte) (bundle, root [32]byte, proof *contracts.CertenAnchorV4BLSProofData, err error) {
+	method := outcomeRegistryABI.Methods["recordBatchOutcome"]
+	if len(data) < 4 || !bytes.Equal(data[:4], method.ID) {
+		return bundle, root, nil, fmt.Errorf("not a recordBatchOutcome call")
+	}
+	args, err := method.Inputs.Unpack(data[4:])
+	if err != nil || len(args) != 3 {
+		return bundle, root, nil, fmt.Errorf("recordBatchOutcome calldata does not decode: %v", err)
+	}
+	b, ok1 := args[0].([32]byte)
+	r, ok2 := args[1].([32]byte)
+	if !ok1 || !ok2 {
+		return bundle, root, nil, fmt.Errorf("recordBatchOutcome calldata carries %T, %T", args[0], args[1])
+	}
+	defer func() {
+		// abi.ConvertType panics on a struct that does not match; that is a decode failure here, never a crash.
+		if p := recover(); p != nil {
+			proof, err = nil, fmt.Errorf("recordBatchOutcome calldata carries no BLSProofData: %v", p)
+		}
+	}()
+	pr, ok := abi.ConvertType(args[2], new(contracts.CertenAnchorV4BLSProofData)).(*contracts.CertenAnchorV4BLSProofData)
+	if !ok || pr == nil {
+		return b, r, nil, fmt.Errorf("recordBatchOutcome calldata carries no BLSProofData")
+	}
+	return b, r, pr, nil
 }

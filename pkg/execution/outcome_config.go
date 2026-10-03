@@ -128,3 +128,12 @@ func OutcomeChainsFromEnv(ctx context.Context, r *EVMChainResolverImpl, chains [
 	}
 	return out, nil
 }
+
+// OutcomeRegistryAddresses are the registries of the chains' agreed readers, by chain.
+func OutcomeRegistryAddresses(chains map[int64]*AgreedOutcomeChain) map[int64]common.Address {
+	out := make(map[int64]common.Address, len(chains))
+	for id, c := range chains {
+		out[id] = c.Registry()
+	}
+	return out
+}
