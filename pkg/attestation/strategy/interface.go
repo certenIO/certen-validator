@@ -38,7 +38,8 @@ const (
 	// with RFC 9380 hash_to_curve (RB5-F54), which the circuit does not compute, and no contract is sent it. It is
 	// verified by every counting validator and, from the Accumulate write-back's own entries, by VerifyWriteBackQuorum
 	// (RB5-F14); the result it attests reaches the EVM chain as its member's outcome leaf, under the batch outcome root
-	// the registry records (RB5 D4). TestWhichBLSAggregatesTheDeployedVerifiersCheck pins both halves (RB5-F13).
+	// the registry records (RB5 D4). TestWhichBLSAggregatesTheDeployedVerifiersCheck pins both halves, and
+	// TestAPhase8AggregateCannotBeProvenForTheDeployedVerifiers (live) shows the production prover refuses it (RB5-F13).
 	AttestationSchemeBLS12381 AttestationScheme = "bls12-381"
 
 	// AttestationSchemeEd25519 is Ed25519 for chains with native support
