@@ -286,6 +286,7 @@ func TestTheAnchorIsReadBackForItsBlockHashAndDepth(t *testing.T) {
 	f := newLevelFixture(t)
 	observer := &anchorChain{obs: &chain.ObservationResult{
 		TxHash: f.anchorTx, BlockNumber: 4230, BlockHash: "0xanchorblock", Confirmations: 812, IsFinalized: true,
+		BlockTimestamp: time.Unix(1_790_000_000, 0).UTC(),
 	}}
 	registry := strategy.NewRegistry()
 	if err := registry.RegisterChainStrategy("84532", &chain.ChainConfig{}, observer); err != nil {
@@ -305,7 +306,11 @@ func TestTheAnchorIsReadBackForItsBlockHashAndDepth(t *testing.T) {
 	if l5 := layer5Of(t, f); l5.BlockNumber != 4230 || l5.BlockHash != "0xanchorblock" {
 		t.Fatalf("layer 5 states block %d (%s)", l5.BlockNumber, l5.BlockHash)
 	}
-	f.orch.resolveAnchorBinding(context.Background(), f.artifact.ProofID, f.placement(t), f.cycle.Result)
+	again, _ := f.orch.resolveAnchorBinding(context.Background(), f.artifact.ProofID, f.placement(t), f.cycle.Result)
+	// The anchor block's time, as read back, is what the proof bundle states as its anchor's anchored_at (RB5-F18).
+	if again == nil || !again.BlockTime.Equal(time.Unix(1_790_000_000, 0)) {
+		t.Fatalf("the anchor's read-back block time is not carried: %+v", again)
+	}
 	if observer.calls != 1 {
 		t.Fatalf("the anchor was read %d times in one cycle", observer.calls)
 	}
