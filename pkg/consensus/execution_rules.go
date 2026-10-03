@@ -169,6 +169,11 @@ const (
 	// entry - every node fails to apply such a block and the chain halts - so no live history holds one; that too is
 	// checked at every start (rotationBlockVerdicts).
 	//
+	// v12 refuses (code 5) a policy update whose version an EARLIER block scheduled. v11 accepted it as a no-op (code 0,
+	// its id in the app hash) whatever it carried, which made "an update cannot be replayed" untrue; every start checks
+	// that no committed block holds one accepted that way (kindViolation), and history-check --rules 12 checks it
+	// against the live chain before the deploy. The same update again within its own block stays the accepted no-op.
+	//
 	// And from v12 every admin threshold - policy update, validator rotation, BLS registry, admin rotation - counts
 	// distinct KEYS, not distinct ids: one key named under two ids used to count twice. The two counts differ only for
 	// an admin set naming one key twice, so a node refuses to continue older state if any admin set its chain has had

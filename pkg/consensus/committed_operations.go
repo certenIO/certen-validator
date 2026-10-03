@@ -277,6 +277,13 @@ func (app *ValidatorApp) indexCommittedOperations(h committedHistory) error {
 		if v12 {
 			app.recordFirstVerdict(executionRulesV12, &app.rulesV12FirstVerdict, height)
 		}
+		replayRefused, err := app.policyReplayRefused(height, txs, codes)
+		if err != nil {
+			return err
+		}
+		if replayRefused {
+			app.recordFirstVerdict(executionRulesV12, &app.rulesV12FirstVerdict, height)
+		}
 		for _, tx := range txs {
 			if _, ok := DecodeValidatorRotation(tx); ok {
 				app.recordFirstVerdict(executionRulesV8, &app.rulesV8FirstVerdict, height)
@@ -436,6 +443,26 @@ func kindViolationWith(height int64, i int, tx []byte, code uint32,
 		}
 		return "", true, nil
 	}
+	if pu, ok := DecodePolicyUpdate(tx); ok {
+		// v11 accepted (code 0) a policy update whose version an earlier block had scheduled, as a no-op; v12 refuses it
+		// (code 5). History holding one accepted that way is history v12 does not reproduce.
+		if code != 0 {
+			return "", true, nil
+		}
+		state, err := policy()
+		if err != nil {
+			return "", true, fmt.Errorf("the committed policy, to check the policy update at height %d: %w", height, err)
+		}
+		if state != nil {
+			for _, e := range state.Schedule {
+				if e.Version == pu.Version && e.ProposedAtHeight < height {
+					return fmt.Sprintf("height %d tx %d is a policy update accepted again: version %d was scheduled at height %d, "+
+						"and v12 refuses it", height, i, pu.Version, e.ProposedAtHeight), true, nil
+				}
+			}
+		}
+		return "", true, nil
+	}
 	if ar, ok := DecodeAdminRotate(tx); ok {
 		// v11 judged an admin-rotation-kind transaction as a ValidatorBlock. v12 refuses one with code 12 - a code no
 		// earlier version returns - or accepts it and records it, at its height, under its id. Anything else is a
@@ -570,4 +597,29 @@ func CommittedBlockViolations(height int64, txs [][]byte, codes []uint32, policy
 	}
 	found, _ := rotationBlockVerdicts(height, txs, codes)
 	return append(out, found...), nil
+}
+
+// policyReplayRefused reports whether a committed block refused a policy update whose version an earlier block had
+// scheduled - a verdict only v12 reaches (v11 accepted it as a no-op).
+func (app *ValidatorApp) policyReplayRefused(height int64, txs [][]byte, codes []uint32) (bool, error) {
+	var state *ledger.EntitlementPolicyState
+	for i, tx := range txs {
+		pu, ok := DecodePolicyUpdate(tx)
+		if !ok || codes[i] == 0 {
+			continue
+		}
+		if state == nil {
+			s, err := app.ledgerStore.LoadEntitlementPolicy()
+			if err != nil || s == nil {
+				return false, err
+			}
+			state = s
+		}
+		for _, e := range state.Schedule {
+			if e.Version == pu.Version && e.ProposedAtHeight < height {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }

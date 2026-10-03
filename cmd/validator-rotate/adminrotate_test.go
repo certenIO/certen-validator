@@ -317,3 +317,19 @@ func TestHistoryCheckForV12(t *testing.T) {
 		t.Fatal("an unknown --rules was accepted")
 	}
 }
+
+// history-check --rules 12 finds a policy update accepted again in a later block from the blocks alone.
+func TestHistoryCheckFindsAPolicyAcceptedAgain(t *testing.T) {
+	update := []byte(fmt.Sprintf(`{"kind":%q,"chain_id":%q,"mode":"off","activation_unix":1800000700,"version":2}`, consensus.PolicyUpdateKind, chain))
+	n := &fakeAdminNode{appVersion: "11", chainID: chain, height: 2, validators: 1,
+		blocks: map[int64][][]byte{1: {update, update}, 2: {update}}, codes: map[int64][]uint32{1: {0, 0}, 2: {0}}}
+	srv := n.serve(t)
+	defer srv.Close()
+	if err := historyCheck([]string{"--rules", "12", "--rpc", srv.URL}, srv.Client()); err == nil {
+		t.Fatal("a policy update accepted again a block later passed")
+	}
+	n.codes[2] = []uint32{5}
+	if err := historyCheck([]string{"--rules", "12", "--rpc", srv.URL}, srv.Client()); err != nil {
+		t.Fatalf("refused a block later, and accepted twice within its own block: %v", err)
+	}
+}

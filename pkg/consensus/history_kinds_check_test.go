@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	"github.com/certen/independant-validator/pkg/ledger"
 )
 
 // The claim behind continuing older state - "no committed history contains a transaction of the new kind decided the
@@ -69,5 +71,38 @@ func TestCommittedRotationsAreJudgedPerBlock(t *testing.T) {
 	}
 	if err := indexed.IndexCommittedHistory(hist(0, 0)); !errors.Is(err, ErrCommittedHistoryUnderCurrentRules) {
 		t.Fatalf("an indexed block with the same rotation accepted twice: %v", err)
+	}
+}
+
+// A policy update accepted again in a later block (v11's no-op) is history v12 does not reproduce; one refused there is
+// v12's verdict and stamps the state v12.
+func TestCommittedPolicyReplaysAreChecked(t *testing.T) {
+	update := []byte(fmt.Sprintf(`{"kind":%q,"chain_id":"certen-testnet","mode":"off","activation_unix":1800000700,"version":2}`, PolicyUpdateKind))
+	hist := func(code uint32) *fakeHistory {
+		return &fakeHistory{base: 1, blocks: map[int64][][]byte{1: {update}, 2: {update}},
+			times: map[int64]time.Time{1: beforeV9, 2: beforeV9}, codes: map[int64][]uint32{1: {0}, 2: {code}}}
+	}
+	scheduled := func(app *ValidatorApp) {
+		st, err := app.ledgerStore.LoadEntitlementPolicy()
+		if err != nil || st == nil {
+			t.Fatalf("policy: (%v, %v)", st, err)
+		}
+		st.Schedule = append(st.Schedule, ledger.ScheduledPolicyChange{Mode: "off", ActivationUnix: 1800000700, Version: 2, ProposedAtHeight: 1})
+		if err := app.ledgerStore.SaveEntitlementPolicy(st); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bad := historyApp(t, 2)
+	scheduled(bad)
+	if err := bad.IndexCommittedHistory(hist(0)); !errors.Is(err, ErrCommittedHistoryUnderCurrentRules) {
+		t.Fatalf("an update accepted again a block later: %v", err)
+	}
+	good := historyApp(t, 2)
+	scheduled(good)
+	if err := good.IndexCommittedHistory(hist(5)); err != nil {
+		t.Fatalf("an update refused a block later: %v", err)
+	}
+	if good.committedRulesVersion() != executionRulesV12 {
+		t.Fatalf("stamped v%d", good.committedRulesVersion())
 	}
 }

@@ -474,6 +474,7 @@ func historyCheckV12(rpc string, c rpcDoer) error {
 		policy = v.Policy()
 	}
 	kinds := map[string]int{}
+	scheduledAt := map[uint64]int64{} // policy version -> the height that accepted it first
 	var found []string
 	txCount := 0
 	for h := int64(1); h <= latest; h++ {
@@ -513,6 +514,20 @@ func historyCheckV12(rpc string, c rpcDoer) error {
 			return err
 		}
 		found = append(found, v...)
+		// A policy update accepted (code 0) under a version an earlier block already scheduled: v11 accepted it as a
+		// no-op, v12 refuses it. The schedule is exactly the policy updates the chain accepted, so the blocks tell.
+		for i, raw := range txs {
+			pu, ok := consensus.DecodePolicyUpdate(raw)
+			if !ok || codes[i] != 0 {
+				continue
+			}
+			if at, seen := scheduledAt[pu.Version]; seen && at < h {
+				found = append(found, fmt.Sprintf("height %d tx %d is a policy update accepted again: version %d was scheduled "+
+					"at height %d, and v12 refuses it", h, i, pu.Version, at))
+			} else if !seen {
+				scheduledAt[pu.Version] = h
+			}
+		}
 		txCount += len(txs)
 	}
 	fmt.Printf("chain %s, rules v%d: blocks 1..%d read with their results, %d transactions\n", n.chainID, n.appVersion, latest, txCount)

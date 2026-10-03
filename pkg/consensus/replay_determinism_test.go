@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
+	"strings"
 	"testing"
 
 	abcitypes "github.com/cometbft/cometbft/abci/types"
@@ -144,5 +145,43 @@ func TestTheSameRotationTwiceInABlockIsAcceptedOnce(t *testing.T) {
 	}
 	if v := app.committedRulesVersion(); v != executionRulesV12 {
 		t.Fatalf("a block only v12 decides this way left the state stamped v%d", v)
+	}
+}
+
+// "An update cannot be replayed" (VerifyPolicyUpdate): yet an update whose version was scheduled in an EARLIER block was
+// accepted again - code 0, its id folded into the app hash - whatever it carried, signatures or not. Rules v12 refuses
+// it by name; the same update again within its own block is still the accepted no-op it was.
+func TestAPolicyUpdateIsNotAcceptedAgainInALaterBlock(t *testing.T) {
+	f := newRotationFixture()
+	app, _, restart := replayFixture(t, f)
+	update := func(mode string, admins ...string) []byte {
+		u := &PolicyUpdateTx{Kind: PolicyUpdateKind, ChainID: rotChain, Mode: mode,
+			ActivationUnix: 1_800_000_001 + MinActivationDelay + 60, Version: 1}
+		for _, id := range admins {
+			u.Signatures = append(u.Signatures, PolicySignature{KeyID: id,
+				Signature: hex.EncodeToString(ed25519.Sign(f.admins[id], u.SigningBytes()))})
+		}
+		return rotJSON(t, u)
+	}
+	good := update(string(EntitlementOff), "ops-1", "ops-2")
+	replayCheck(t, app, restart, 1, []uint32{0, 0}, good, append(append([]byte(nil), good...), ' '))
+	if _, err := app.Commit(context.Background(), &abcitypes.RequestCommit{}); err != nil {
+		t.Fatal(err)
+	}
+	if v := app.committedRulesVersion(); v >= executionRulesV12 {
+		t.Fatalf("a block v11 decides the same way stamped v%d", v)
+	}
+	// Later: the same update, and an unsigned one under its version.
+	resp := finalize(t, app, 2, abcitypes.CommitInfo{}, append(append([]byte(nil), good...), ' ', ' '), update(string(EntitlementObserve)))
+	for i, r := range resp.TxResults {
+		if r.Code != 5 || !strings.Contains(r.Log, "version 1 was scheduled at height 1") {
+			t.Fatalf("tx %d in a later block: %d %s", i, r.Code, r.Log)
+		}
+	}
+	if _, err := app.Commit(context.Background(), &abcitypes.RequestCommit{}); err != nil {
+		t.Fatal(err)
+	}
+	if v := app.committedRulesVersion(); v != executionRulesV12 {
+		t.Fatalf("a refusal only v12 makes left the state stamped v%d", v)
 	}
 }

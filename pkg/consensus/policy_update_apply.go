@@ -1,6 +1,8 @@
 package consensus
 
 import (
+	"fmt"
+
 	abcitypes "github.com/cometbft/cometbft/abci/types"
 
 	"github.com/certen/independant-validator/pkg/ledger"
@@ -95,10 +97,24 @@ func (app *ValidatorApp) processPolicyUpdate(pu *PolicyUpdateTx, height int64) a
 		before = &b
 	}
 
-	// An update whose version is already scheduled is an accepted no-op.
-	if IsPolicyUpdateScheduled(before, pu.Version) {
-		app.blockBundles = append(app.blockBundles, pu.PolicyUpdateID())
-		return abcitypes.ExecTxResult{Code: 0, GasWanted: 1, GasUsed: 1}
+	// An update whose version is already scheduled. Scheduled earlier in THIS block, the same version again is the
+	// accepted no-op it always was. Scheduled in an earlier block, it is a replay: rules v11 accepted it as a no-op too -
+	// whatever it carried, signed or not - which made "an update cannot be replayed" untrue; v12 refuses it by name, a
+	// verdict v11 does not reach (committedRulesVersion).
+	if before != nil {
+		for _, e := range before.Schedule {
+			if e.Version != pu.Version {
+				continue
+			}
+			if e.ProposedAtHeight < height {
+				app.blockRulesV12Verdict = true
+				app.logger.Printf("🚫 [POLICY] rejected update at height %d: version %d was scheduled at height %d", height, pu.Version, e.ProposedAtHeight)
+				return abcitypes.ExecTxResult{Code: 5, Log: fmt.Sprintf("policy update rejected: version %d was scheduled at "+
+					"height %d; an update cannot be replayed", pu.Version, e.ProposedAtHeight)}
+			}
+			app.blockBundles = append(app.blockBundles, pu.PolicyUpdateID())
+			return abcitypes.ExecTxResult{Code: 0, GasWanted: 1, GasUsed: 1}
+		}
 	}
 
 	// Judged by the admin set in force for this block (AdminSetAt, rules v11); the update is applied to the committed
