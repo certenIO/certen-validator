@@ -34,6 +34,9 @@ type NonSettlementRecord struct {
 	QueuedAt  time.Time `json:"queued_at"`
 	Attempts  int       `json:"attempts,omitempty"`
 	LastError string    `json:"last_error,omitempty"`
+	// ClaimBlock is the finalized block the non-settlement was first observed at; every attempt claims it there, so
+	// peers whose view of the chain trails this node's reach the same block (RB5-F46). 0 until first observed.
+	ClaimBlock uint64 `json:"claim_block,omitempty"`
 }
 
 func (r *NonSettlementRecord) key() string {

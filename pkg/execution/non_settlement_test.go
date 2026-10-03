@@ -324,3 +324,65 @@ func TestAdapterRefusesACycleThatNamesNoLane(t *testing.T) {
 		}
 	}
 }
+
+// RB5-F46: the claim is pinned at the block it was first observed at. A peer whose view of the chain trails the
+// requester's - one load-balanced endpoint whose backends disagree on the finalized head - reaches that block and
+// reproduces the claim, instead of refusing a claim that moves to the requester's newest finalized block on every
+// attempt (intent bb72e258, 2026-10-02: claimed at 47608254, the peers finalized at 47608085).
+func TestNonSettlement_TheClaimIsPinnedAtItsFirstBlock(t *testing.T) {
+	own := nsMember()
+	f, _ := memberFacts(own)
+	past := f.Deadline.Add(nonSettlementFinality + time.Minute).Unix()
+	requester := &fakeNSChain{finalized: 500, times: map[uint64]int64{500: past, 600: past + 1200}, consumed: map[uint64]bool{}}
+	first, _, err := observeNonSettlementAt(context.Background(), requester, f, "dropped", 0)
+	if err != nil || first.Block != 500 {
+		t.Fatalf("first observation: %+v %v", first, err)
+	}
+	// The requester's backend moves on; the claim does not.
+	requester.finalized = 600
+	again, obs, err := observeNonSettlementAt(context.Background(), requester, f, "dropped", first.Block)
+	if err != nil || again.Block != 500 || again.BlockHash != first.BlockHash || again.BlockTime != first.BlockTime {
+		t.Fatalf("a later attempt moved the claim: %+v %v", again, err)
+	}
+	// A peer whose backend has finalized only 520 reproduces the pinned claim; it would refuse one at 600.
+	peer := &fakeNSChain{finalized: 520, times: requester.times, consumed: map[uint64]bool{}}
+	msg := &attestation.AttestationMessage{IntentID: own.IntentID, ResultHash: obs.ResultHash, TargetChain: odChainStr,
+		ChainID: odChainStr, Timestamp: time.Now().Unix(), NonSettlement: again}
+	if err := verifyNonSettlementClaim(context.Background(), peer, own, msg); err != nil {
+		t.Fatalf("a trailing peer refused the pinned claim: %v", err)
+	}
+	moved, mobs, err := observeNonSettlementAt(context.Background(), requester, f, "dropped", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verifyNonSettlementClaim(context.Background(), peer, own, &attestation.AttestationMessage{IntentID: own.IntentID,
+		ResultHash: mobs.ResultHash, TargetChain: odChainStr, ChainID: odChainStr, Timestamp: time.Now().Unix(),
+		NonSettlement: moved}) == nil {
+		t.Fatal("the trailing peer reproduced a claim at a block it has not finalized")
+	}
+	// A pinned block this node has not finalized yet is waited for, not replaced.
+	requester.finalized = 400
+	if _, _, err := observeNonSettlementAt(context.Background(), requester, f, "dropped", 500); !errors.Is(err, errNotYetAttestable) {
+		t.Fatalf("a pinned block not finalized here: %v", err)
+	}
+}
+
+// The pin is durable: the first observation stores it on the record, and a restart keeps it.
+func TestNonSettlement_ThePinSurvivesARestart(t *testing.T) {
+	own := nsMember()
+	f, _ := memberFacts(own)
+	c := nsChainPast(f.Deadline)
+	o := nsOrchestrator(t, own, c)
+	if err := o.config.NonSettlements.Put(&NonSettlementRecord{Facts: f, Cause: "dropped", QueuedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	o.processNonSettlements(context.Background()) // no peers here: the cycle fails and the record is retried
+	reopened, err := OpenNonSettlementQueue(o.config.NonSettlements.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recs := reopened.All()
+	if len(recs) != 1 || recs[0].ClaimBlock != 500 {
+		t.Fatalf("the claim block was not kept across a restart: %+v", recs)
+	}
+}

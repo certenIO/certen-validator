@@ -212,10 +212,31 @@ var (
 
 // observeNonSettlement establishes a member's non-settlement at the chain's latest finalized block.
 func observeNonSettlement(ctx context.Context, rd NonSettlementChain, f NonSettlementFacts, cause string) (*NonSettlementClaim, *chain.ObservationResult, error) {
+	return observeNonSettlementAt(ctx, rd, f, cause, 0)
+}
+
+// observeNonSettlementAt is observeNonSettlement at a pinned block: once a non-settlement was first observed at block
+// pinned, every later attempt claims it at that same block (0: not pinned yet - the latest finalized block). It waits
+// until this node's view of the chain has finalized the pinned block.
+//
+// RB5-F46: the claim used to move to the requester's newest finalized block on every attempt. The validators read one
+// load-balanced endpoint whose backends disagree on the finalized head by minutes, so peers behind the requester's
+// backend refused each claim as "not finalized here" (intent bb72e258, 2026-10-02: claim at 47608254, peers finalized at
+// 47608085) - and the next attempt chased a newer block again. Pinned, the peers reach the block and the quorum forms.
+func observeNonSettlementAt(ctx context.Context, rd NonSettlementChain, f NonSettlementFacts, cause string, pinned uint64) (*NonSettlementClaim, *chain.ObservationResult, error) {
 	account, leaf, deadline := f.Account, f.Leaf, f.Deadline
 	head, err := rd.FinalizedHeader(ctx, f.ChainID)
 	if err != nil {
 		return nil, nil, readErr(fmt.Errorf("reading the finalized block of chain %d: %w", f.ChainID, err))
+	}
+	if pinned != 0 {
+		if head.Number.Uint64() < pinned {
+			return nil, nil, fmt.Errorf("%w (the claim is pinned at block %d; finalized here %d)", errNotYetAttestable,
+				pinned, head.Number.Uint64())
+		}
+		if head, err = rd.HeaderAt(ctx, f.ChainID, pinned); err != nil {
+			return nil, nil, readErr(fmt.Errorf("reading the pinned block %d of chain %d: %w", pinned, f.ChainID, err))
+		}
 	}
 	if int64(head.Time) <= deadline.Add(nonSettlementFinality).Unix() {
 		return nil, nil, fmt.Errorf("%w (finalized %s, deadline %s)", errNotYetAttestable,
