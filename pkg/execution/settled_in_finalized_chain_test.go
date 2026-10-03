@@ -19,9 +19,13 @@ import (
 )
 
 // RB5-F49: a settlement is observed in the FINALIZED chain, bound to the canonical block at its height, and read from that
-// block when the RPC's index names a block a reorg replaced. Live 2026-10-02: Sepolia block 11832868 was replaced
-// (0x032d2bfd… -> 0x7bec386b…) seconds after settlement 0x261b7ed5… landed; the canonical block re-included it, the index
-// kept the orphaned hash, and the member was failed for good at one confirmation.
+// block when the RPC's index names another one.
+//
+// Live 2026-10-02: settlement 0x261b7ed5… landed in Sepolia block 11832868, and its receipt named block 0x032d2bfd…. At one
+// confirmation the load-balanced RPC served header 0x7bec386b2d05… for that height (a backend on a short-lived fork), the
+// binding failed, and the member was failed for good. 0x032d2bfd… is the block that became final.
+// TestTheLiveForkHeaderIsWaitedOutUntilFinality replays that sequence. The stale-index tests cover the converse: an index
+// naming a block the finalized chain does not have.
 
 type reorgNode struct {
 	tx        common.Hash
@@ -31,6 +35,13 @@ type reorgNode struct {
 	orphan    common.Hash   // the hash the index still names
 	inBlock   bool          // the canonical block holds tx
 	signed    *types.Transaction
+
+	// forkHeader, when set, is what a backend serves at height until the chain has finalized it (the live case).
+	forkHeader *types.Header
+	// finalizeAfter is how many reads of the finalized tag answer finalizedBefore before it reaches finalized.
+	finalizeAfter   int
+	finalizedBefore uint64
+	finalizedReads  int
 }
 
 func (n *reorgNode) serve(t *testing.T) *ethclient.Client {
@@ -59,8 +70,16 @@ func (n *reorgNode) serve(t *testing.T) *ethclient.Client {
 			var tag string
 			_ = json.Unmarshal(req.Params[0], &tag)
 			h := *n.canonical
-			if tag == "finalized" {
-				h.Number = new(big.Int).SetUint64(n.finalized)
+			fin := n.finalized
+			if n.finalizedReads < n.finalizeAfter {
+				fin = n.finalizedBefore
+			}
+			switch {
+			case tag == "finalized":
+				n.finalizedReads++
+				h.Number = new(big.Int).SetUint64(fin)
+			case n.forkHeader != nil && fin < n.height:
+				h = *n.forkHeader
 			}
 			reply(&h)
 		case "eth_getTransactionByHash":
@@ -99,10 +118,10 @@ func canonicalAt(height uint64) *types.Header {
 }
 
 func TestASettlementIsReadFromTheFinalizedCanonicalBlockWhenTheIndexIsStale(t *testing.T) {
-	tx := common.HexToHash("0x261b7ed5bd643d79b4b5867377fbd161d13002864ee77d868e9af775800d7c64")
+	tx := common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000b0b")
 	canon := canonicalAt(11832868)
 	n := &reorgNode{tx: tx, height: 11832868, finalized: 11832900, canonical: canon,
-		orphan: common.HexToHash("0x032d2bfd7e06588657809c63cf8cc64276aa14e777cf8e8eb12f669bb5a8b32c"), inBlock: true}
+		orphan: common.HexToHash("0x0ff1ce00000000000000000000000000000000000000000000000000000000aa"), inBlock: true}
 	got, err := reorgObserver(n.serve(t)).settledInFinalizedChain(context.Background(), tx, time.Now().Add(time.Second))
 	if err != nil {
 		t.Fatalf("THE regression: a settlement re-included by the canonical block was refused: %v", err)
@@ -155,7 +174,7 @@ func TestTheObserverReportsTheSettlementInItsFinalizedCanonicalBlock(t *testing.
 	}
 	canon := canonicalAt(11832868)
 	n := &reorgNode{tx: signed.Hash(), height: 11832868, finalized: 11832900, canonical: canon, signed: signed,
-		orphan: common.HexToHash("0x032d2bfd7e06588657809c63cf8cc64276aa14e777cf8e8eb12f669bb5a8b32c"), inBlock: true}
+		orphan: common.HexToHash("0x0ff1ce00000000000000000000000000000000000000000000000000000000aa"), inBlock: true}
 	o := reorgObserver(n.serve(t))
 	o.timeout, o.requiredConfirmations = time.Second, 1
 	got, err := o.ObserveTransaction(context.Background(), signed.Hash())
@@ -164,5 +183,32 @@ func TestTheObserverReportsTheSettlementInItsFinalizedCanonicalBlock(t *testing.
 	}
 	if got.BlockHash != canon.Hash() || got.BlockNumber.Uint64() != 11832868 || got.Status != 1 {
 		t.Fatalf("observed block %s at %d status %d; want the canonical %s", got.BlockHash.Hex(), got.BlockNumber, got.Status, canon.Hash().Hex())
+	}
+}
+
+// The live sequence of 2026-10-02 (synthetic headers in its shape): the receipt names the block that becomes final; until it is,
+// a backend serves a fork header at that height (live: 0x7bec386b2d05… vs 0x032d2bfd…). Observing at one confirmation failed the member on the
+// header binding; the finality rule waits, and once the block is final the header is the receipt's block.
+func TestTheLiveForkHeaderIsWaitedOutUntilFinality(t *testing.T) {
+	key, _ := crypto.GenerateKey()
+	signed, err := types.SignTx(types.NewTx(&types.DynamicFeeTx{ChainID: big.NewInt(11155111), Nonce: 81, GasTipCap: big.NewInt(1),
+		GasFeeCap: big.NewInt(2), Gas: 21000, To: &common.Address{0x10}, Value: big.NewInt(1)}),
+		types.LatestSignerForChainID(big.NewInt(11155111)), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	final := canonicalAt(11832868)
+	fork := canonicalAt(11832868)
+	fork.Extra = []byte("fork")
+	n := &reorgNode{tx: signed.Hash(), height: 11832868, finalized: 11832900, canonical: final, signed: signed,
+		orphan: final.Hash(), inBlock: true, forkHeader: fork, finalizeAfter: 3, finalizedBefore: 11832840}
+	o := reorgObserver(n.serve(t))
+	o.timeout, o.requiredConfirmations = 5*time.Second, 1
+	got, err := o.ObserveTransaction(context.Background(), signed.Hash())
+	if err != nil {
+		t.Fatalf("the live sequence still fails: %v", err)
+	}
+	if got.BlockHash != final.Hash() || n.finalizedReads < 4 {
+		t.Fatalf("observed block %s after %d finality reads; want %s once final", got.BlockHash.Hex(), n.finalizedReads, final.Hash().Hex())
 	}
 }

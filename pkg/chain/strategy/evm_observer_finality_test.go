@@ -17,10 +17,10 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 )
 
-// RB5-F49: the strategy observer reports a settlement finalized only in the chain's finalized, canonical block. Live
-// 2026-10-02 a Sepolia tip reorg replaced block 11832868 (0x032d2bfd… -> 0x7bec386b…) seconds after a settlement landed;
-// the RPC's index kept the orphaned hash, and the observer - counting two confirmations past the block the receipt named -
-// would call the orphan final.
+// RB5-F49: the strategy observer reports a settlement finalized only in the chain's finalized, canonical block. It used to
+// count two confirmations past whatever block the receipt named. Here the RPC's index names a block the finalized chain
+// does not have; the old observer called that block final. (The live event of 2026-10-02 was the converse - a fork header
+// served before finality; see pkg/execution TestTheLiveForkHeaderIsWaitedOutUntilFinality.)
 func TestTheStrategyObserverReportsTheFinalizedCanonicalBlock(t *testing.T) {
 	key, _ := crypto.GenerateKey()
 	signed, err := types.SignTx(types.NewTx(&types.DynamicFeeTx{ChainID: big.NewInt(11155111), Nonce: 80, GasTipCap: big.NewInt(1),
@@ -29,7 +29,7 @@ func TestTheStrategyObserverReportsTheFinalizedCanonicalBlock(t *testing.T) {
 		t.Fatal(err)
 	}
 	tx := signed.Hash()
-	orphan := common.HexToHash("0x032d2bfd7e06588657809c63cf8cc64276aa14e777cf8e8eb12f669bb5a8b32c")
+	orphan := common.HexToHash("0x0ff1ce00000000000000000000000000000000000000000000000000000000aa")
 	canon := &types.Header{Number: big.NewInt(11832868), Difficulty: big.NewInt(0), GasLimit: 30_000_000, Time: 1_790_000_000,
 		Extra: []byte("canonical"), BaseFee: big.NewInt(1)}
 	finalized := uint64(11832900)
