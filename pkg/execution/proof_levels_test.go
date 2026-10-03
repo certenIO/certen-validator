@@ -436,6 +436,37 @@ func TestLevelsBoundByAttestations(t *testing.T) {
 	}
 }
 
+// RB5-F18 (survey §5 item 12): the schema runbook said Phase 8's set is "self + ATTESTATION_PEERS, weight 1 each".
+// It is the registry's members at their registered power, whoever is configured as a peer.
+func TestThePhase8SetIsTheRegistryAtRegisteredPower(t *testing.T) {
+	threshold := attestation.DefaultThresholdConfig().CalculateThresholdWeight
+	reg := map[string]consensus.ValidatorRegistryEntry{}
+	powers := map[string]int64{"0x0000000000000000000000000000000000000003": 250, "0x0000000000000000000000000000000000000001": 100,
+		"0x0000000000000000000000000000000000000002": 40}
+	for addr, p := range powers {
+		s, err := attestation.NewBLSStrategyWithNewKey(addr, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reg[addr] = consensus.ValidatorRegistryEntry{EVMAddress: addr, PublicKeyHex: hex.EncodeToString(s.PublicKey()), VotingPower: big.NewInt(p)}
+	}
+	set, err := registryAttestationSet(reg, threshold, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(set.Validators) != 3 || set.TotalWeight.Int64() != 390 || set.ThresholdWeight.Int64() != threshold(390) {
+		t.Fatalf("%d members, weight %s of %s", len(set.Validators), set.ThresholdWeight, set.TotalWeight)
+	}
+	for i, v := range set.Validators {
+		if i > 0 && set.Validators[i-1].ValidatorID >= v.ValidatorID {
+			t.Fatal("the set is not in address order")
+		}
+		if v.Weight.Int64() != powers[v.ValidatorID] {
+			t.Fatalf("%s counted at %s; its registered power is %d", v.ValidatorID, v.Weight, powers[v.ValidatorID])
+		}
+	}
+}
+
 func TestRegistryAttestationSetIsTheSameOnEveryValidator(t *testing.T) {
 	threshold := attestation.DefaultThresholdConfig().CalculateThresholdWeight
 	_, reg := rb3Validators(t, 3)
