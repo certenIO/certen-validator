@@ -205,8 +205,12 @@ func registerMetrics(reg prometheus.Registerer) {
 
 // follower proves every finalized block of one chain from start on.
 type follower struct {
-	chainID  int64
-	src      ethproof.NumberedSource
+	chainID int64
+	src     ethproof.NumberedSource
+	// one are the chain's providers read one at a time (ethproof.CheckBlockFromOne), rotating per block: a block costs one
+	// provider's reads, not every provider's, so following every block does not starve the validators that share the
+	// providers. Empty: every block is checked through src (agreed).
+	one      []*rpc.Client
 	workers  int
 	attempts int
 	backoff  time.Duration
@@ -251,7 +255,7 @@ func (f *follower) step(ctx context.Context) ([]result, error) {
 		numbers = append(numbers, n)
 	}
 	sort.Slice(numbers, func(i, j int) bool { return numbers[i] < numbers[j] })
-	rs := checkAll(ctx, f.src, numbers, f.workers, f.attempts, f.backoff, nil)
+	rs := f.checkAll(ctx, numbers)
 	for _, r := range rs {
 		switch {
 		case r.err == nil && r.check != nil:
@@ -278,6 +282,53 @@ func (f *follower) step(ctx context.Context) ([]result, error) {
 	}
 	mProvenThrough.WithLabelValues(f.label()).Set(float64(through))
 	return rs, nil
+}
+
+// checkAll checks numbers in parallel: through one rotating provider when the follower has them, confirming any refusal
+// through the agreeing providers before it counts; otherwise through the agreeing providers.
+func (f *follower) checkAll(ctx context.Context, numbers []uint64) []result {
+	if len(f.one) == 0 {
+		return checkAll(ctx, f.src, numbers, f.workers, f.attempts, f.backoff, nil)
+	}
+	out := make([]result, len(numbers))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, max(1, f.workers))
+	for i, n := range numbers {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int, n uint64) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			out[i] = f.checkOne(ctx, n)
+		}(i, n)
+	}
+	wg.Wait()
+	return out
+}
+
+// checkOne checks block n through one provider (the block's turn in the rotation, then the others while it is unread),
+// and confirms a refusal through the agreeing providers: one provider's answer never counts as a block that cannot be
+// proven. A provider whose bodies fail where the agreed bodies prove is logged by name and the block counts as proven.
+func (f *follower) checkOne(ctx context.Context, n uint64) result {
+	var last result
+	for k := 0; k < len(f.one); k++ {
+		c := f.one[(int(n)+k)%len(f.one)]
+		chk, err := ethproof.CheckBlockFromOne(ctx, c, n)
+		last = result{number: n, check: chk, err: err}
+		if err == nil {
+			return last
+		}
+		if errors.Is(err, ethproof.ErrUnread) {
+			continue
+		}
+		confirmed := checkWithRetries(ctx, f.src, n, f.attempts, f.backoff)
+		if confirmed.err == nil {
+			f.logf("⚠️ [BLOCKPROOF] chain %d block %d: one provider's bodies did not prove (%v), the agreed bodies do - that provider "+
+				"is wrong, not the block", f.chainID, n, err)
+		}
+		return confirmed
+	}
+	return last
 }
 
 // =============================================================================
@@ -418,7 +469,16 @@ func runFollow(ctx context.Context, logger *log.Logger, chains string, workers, 
 			logger.Printf("chain %d providers: %v", id, err)
 			return exitUsage
 		}
-		f := &follower{chainID: id, src: src, workers: workers, attempts: attempts, backoff: 2 * time.Second, maxBatch: maxBatch,
+		var one []*rpc.Client
+		for _, u := range endpoints(id, "") {
+			c, err := rpc.DialContext(ctx, u)
+			if err != nil {
+				logger.Printf("chain %d provider %s: %v", id, ethrpc.ProviderHosts([]string{u}), err)
+				continue
+			}
+			one = append(one, c)
+		}
+		f := &follower{chainID: id, src: src, one: one, workers: workers, attempts: attempts, backoff: 2 * time.Second, maxBatch: maxBatch,
 			logf: logger.Printf}
 		logger.Printf("following chain %d through %v", id, src.Hosts())
 		wg.Add(1)
