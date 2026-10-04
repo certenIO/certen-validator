@@ -208,6 +208,13 @@ func deploymentBlock(ctx context.Context, p chainReader, addr common.Address, he
 	return lo, nil
 }
 
+// isRateRefusal reports a provider's "request rate exceeded" answer (HTTP 429, JSON-RPC -32005/-32007/-32029).
+func isRateRefusal(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "429") || strings.Contains(msg, "Too Many Requests") ||
+		strings.Contains(msg, "-32005") || strings.Contains(msg, "-32007") || strings.Contains(msg, "-32029")
+}
+
 // rateLimited runs read, retrying it - the same read - while the provider answers that its request rate is exceeded
 // (HTTP 429, JSON-RPC -32005/-32007/-32029), with a growing pause, at most eight times. Any other error, and the ninth
 // rate refusal, is returned: a read is never replaced by another answer.
@@ -218,9 +225,7 @@ func rateLimited(ctx context.Context, read func() error) error {
 		if err == nil || attempt == 8 {
 			return err
 		}
-		msg := err.Error()
-		if !strings.Contains(msg, "429") && !strings.Contains(msg, "Too Many Requests") &&
-			!strings.Contains(msg, "-32005") && !strings.Contains(msg, "-32007") && !strings.Contains(msg, "-32029") {
+		if !isRateRefusal(err) {
 			return err
 		}
 		select {
@@ -247,15 +252,9 @@ func tokensReceived(ctx context.Context, p chainReader, accounts []common.Addres
 		if hi > to {
 			hi = to
 		}
-		var logs []types.Log
-		err := rateLimited(ctx, func() error {
-			var err error
-			logs, err = p.FilterLogs(ctx, ethereum.FilterQuery{FromBlock: new(big.Int).SetUint64(lo), ToBlock: new(big.Int).SetUint64(hi),
-				Topics: [][]common.Hash{{transferTopic}, nil, recipients}})
-			return err
-		})
+		logs, err := transferLogsSplitting(ctx, p, recipients, lo, hi)
 		if err != nil {
-			return nil, fmt.Errorf("Transfer logs in [%d, %d]: %w", lo, hi, err)
+			return nil, err
 		}
 		for _, l := range logs {
 			if len(l.Topics) == 3 { // ERC-20 (ERC-721 Transfer has 4 topics)
@@ -269,6 +268,40 @@ func tokensReceived(ctx context.Context, p chainReader, accounts []common.Addres
 	}
 	sort.Slice(out, func(i, j int) bool { return bytes.Compare(out[i][:], out[j][:]) < 0 })
 	return out, nil
+}
+
+// minLogSpan is the narrowest range transferLogsSplitting asks for before it accepts that the provider refuses the query
+// itself, not its width.
+const minLogSpan = 16
+
+// transferLogsSplitting is every Transfer log to recipients in [lo, hi]. Providers cap eth_getLogs ranges differently and
+// the cap is not discoverable up front (drpc's free plan refuses 10,000 blocks), so a refused range is split in two and
+// each half asked for, as pkg/execution's filterLogsSplitting does. A rate refusal is retried as the same read
+// (rateLimited), never split; a range at minLogSpan that is still refused is returned with the provider's error.
+func transferLogsSplitting(ctx context.Context, p chainReader, recipients []common.Hash, lo, hi uint64) ([]types.Log, error) {
+	var logs []types.Log
+	err := rateLimited(ctx, func() error {
+		var err error
+		logs, err = p.FilterLogs(ctx, ethereum.FilterQuery{FromBlock: new(big.Int).SetUint64(lo), ToBlock: new(big.Int).SetUint64(hi),
+			Topics: [][]common.Hash{{transferTopic}, nil, recipients}})
+		return err
+	})
+	if err == nil {
+		return logs, nil
+	}
+	if ctx.Err() != nil || hi-lo+1 <= minLogSpan || isRateRefusal(err) {
+		return nil, fmt.Errorf("Transfer logs in [%d, %d]: %w", lo, hi, err)
+	}
+	mid := lo + (hi-lo)/2
+	left, err := transferLogsSplitting(ctx, p, recipients, lo, mid)
+	if err != nil {
+		return nil, err
+	}
+	right, err := transferLogsSplitting(ctx, p, recipients, mid+1, hi)
+	if err != nil {
+		return nil, err
+	}
+	return append(left, right...), nil
 }
 
 // AccountAddress is the CREATE2 address factory deploys an (ADI, governing book) account at, exactly as factory V10
