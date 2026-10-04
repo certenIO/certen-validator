@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/certen/independant-validator/pkg/database"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -384,5 +385,59 @@ func TestNonSettlement_ThePinSurvivesARestart(t *testing.T) {
 	recs := reopened.All()
 	if len(recs) != 1 || recs[0].ClaimBlock != 500 {
 		t.Fatalf("the claim block was not kept across a restart: %+v", recs)
+	}
+}
+
+// RB6-F10: a member refused by name before any chain transaction is recorded refused AT ONCE, so the intent reads
+// refused_pending_attestation - not "in progress" for an hour - and its non-settlement, attested or given up, fails the
+// intent as refused (the intent's own defect), never as a failed settlement.
+func TestNonSettlement_ARefusalIsNamedAtOnceAndFailsTheIntentAsRefused(t *testing.T) {
+	db := s1OpenDB(t)
+	ctx := context.Background()
+	own := nsMember()
+	own.IntentID = fmt.Sprintf("rb6-f10-%d", time.Now().UnixNano())
+	s1Seed(ctx, t, db, own.IntentID)
+	t.Cleanup(func() { db.Exec(`DELETE FROM intent_member_outcomes WHERE intent_id = $1`, own.IntentID) })
+	o := nsOrchestrator(t, own, nsChainPast(nsCommit.Add(maxGasDeferral)))
+	o.config.Repos = s1Orchestrator(t, db).config.Repos
+	refusal := "member x account unusable: account verifies certen:batchleaf:v1 leaves, not certen:batchleaf:v3"
+	commitment := map[string]interface{}{
+		"outcome": "failed", "reason": "no settlement transaction reached the target chain: dropped from its batch: " + refusal,
+		"refusal": refusal, "targetChain": odChainStr, "memberChains": []int64{odChain}, "memberLegs": 1,
+		commitmentNonSettlementOperationID: common.Hash(own.OperationID).Hex(), "proofClass": "on_demand",
+	}
+	if err := NewUnifiedOrchestratorAdapter(o).StartProofCycleWithAccumulateRef(ctx, own.IntentID, "", [32]byte{},
+		&struct{ RawTxHashes []string }{}, commitment, "acc://x.acme/data", "tx", ""); err != nil {
+		t.Fatal(err)
+	}
+	read := func() (status, class, settlement, cycle, recRefusal string) {
+		var c, r *string
+		if err := db.QueryRow(`SELECT l.status, l.failure_class, m.settlement, m.proof_cycle, m.refusal FROM intent_lifecycle l
+			JOIN intent_member_outcomes m USING (intent_id) WHERE l.intent_id = $1`, own.IntentID).Scan(&status, &c, &settlement, &cycle, &r); err != nil {
+			t.Fatalf("THE regression: the refusal was not recorded at once: %v", err)
+		}
+		if c != nil {
+			class = *c
+		}
+		if r != nil {
+			recRefusal = *r
+		}
+		return
+	}
+	if st, class, s, c, r := read(); st != "refused_pending_attestation" || class != "" || s != "none" || c != "refused" || r != refusal {
+		t.Fatalf("at queue time: %s / %q, member %s / %s, refusal %q", st, class, s, c, r)
+	}
+	recs := o.config.NonSettlements.All()
+	if len(recs) != 1 || recs[0].Refusal != refusal {
+		t.Fatalf("the queued record does not carry the refusal: %+v", recs)
+	}
+
+	// Attested and written back: the intent fails as refused.
+	if err := o.recordMemberOutcome(ctx, nonSettlementCycle(recs[0], &NonSettlementClaim{Block: 500}), database.MemberSettlementNone,
+		database.MemberProofCycleWritten, recs[0].Cause); err != nil {
+		t.Fatal(err)
+	}
+	if st, class, _, c, _ := read(); st != "failed" || class != "refused" || c != "written" {
+		t.Fatalf("after attestation: %s / %q (%s); want failed / refused", st, class, c)
 	}
 }

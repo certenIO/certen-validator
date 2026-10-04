@@ -132,6 +132,10 @@ type persistedMember struct {
 	// IntentMessage is the intent message this validator's block signed (RB5 D3), 0x-hex; absent for a member
 	// committed before a BLS registry was in force. The certified message is re-read from the chain's record.
 	IntentMessage string `json:"intent_message,omitempty"`
+	// RefusedAt marks an on-demand member refused by name before any chain transaction, kept for its non-settlement's
+	// verification (RB6-F11), as unix seconds. omitempty, and written with lane on_demand: an older binary restores it as
+	// a queued member and refuses it again - the refusal is deterministic - instead of refusing to load the file.
+	RefusedAt int64 `json:"refused_at,omitempty"`
 }
 
 // persistedPredecessor is a MemberPredecessor on disk.
@@ -213,6 +217,17 @@ func (s *BatchMempoolStore) Save(m *BatchMempool) error {
 				m.mu.Unlock()
 				return fmt.Errorf("encoding batch mempool: %w", err)
 			}
+			out = append(out, pm)
+		}
+	}
+	for _, byOp := range m.refused {
+		for _, r := range byOp {
+			pm, err := s.encodeMember(r.member, LaneOnDemand)
+			if err != nil {
+				m.mu.Unlock()
+				return fmt.Errorf("encoding batch mempool: %w", err)
+			}
+			pm.RefusedAt = r.at.Unix()
 			out = append(out, pm)
 		}
 	}
@@ -485,6 +500,12 @@ func (s *BatchMempoolStore) Load(m *BatchMempool) (int, error) {
 		var err error
 		switch BatchLane(pm.Lane) {
 		case LaneOnDemand:
+			if pm.RefusedAt != 0 {
+				m.mu.Lock()
+				m.keepRefusedLocked(p, time.Unix(pm.RefusedAt, 0).UTC())
+				m.mu.Unlock()
+				break
+			}
 			err = m.addOnDemand(p)
 		case LaneOnCadence, "":
 			err = m.add(p)

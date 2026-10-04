@@ -63,6 +63,10 @@ type PendingBatchIntent struct {
 	ADIURL   string
 	ChainID  int64
 
+	// Refusal is the named cause when the member was refused before any chain transaction because the intent itself
+	// cannot be settled as submitted (IntentRefusedError, RB6-F10); set as it is handed to the drop handler.
+	Refusal string
+
 	// Account holding the funds. Must be the CertenAccountV7 for ADIURL.
 	Account common.Address
 
@@ -456,6 +460,11 @@ type BatchMempool struct {
 	// Keyed by operationID because that is the intent's identity and the lookup key an attester
 	// is given. See batch_mempool_ondemand.go.
 	onDemand map[int64]map[[32]byte]*PendingBatchIntent
+	// refused holds on-demand members refused by name before any chain transaction (RB6-F11): never attempted again,
+	// and kept for RefusedKeep so this validator can verify the members' non-settlement claims from its own copy, as
+	// every peer must (FindMember). Removing them on refusal left no peer holding the member, so no non-settlement of a
+	// refused member could ever be attested.
+	refused map[int64]map[[32]byte]*refusedMember
 	// heldPastTTL: see HeldPastTTL.
 	heldPastTTL int
 
@@ -677,6 +686,7 @@ func NewBatchMempool(cfg BatchMempoolConfig) *BatchMempool {
 		pool:     make(map[int64][]*PendingBatchIntent),
 		seen:     make(map[string]bool),
 		onDemand: make(map[int64]map[[32]byte]*PendingBatchIntent),
+		refused:  make(map[int64]map[[32]byte]*refusedMember),
 	}
 }
 
@@ -1055,6 +1065,7 @@ func (m *BatchMempool) PruneOlderThanExcept(horizonStart uint64, keep map[*Pendi
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	m.pruneRefusedLocked(time.Now())
 	pruned := 0
 	for chainID, pool := range m.pool {
 		var rest []*PendingBatchIntent
@@ -1129,6 +1140,10 @@ func (m *BatchMempool) FindMember(chainID int64, operationID [32]byte) (*Pending
 	defer m.mu.Unlock()
 	if p := m.onDemand[chainID][operationID]; p != nil {
 		c := *p
+		return &c, true
+	}
+	if r := m.refused[chainID][operationID]; r != nil {
+		c := *r.member
 		return &c, true
 	}
 	for _, p := range m.pool[chainID] {

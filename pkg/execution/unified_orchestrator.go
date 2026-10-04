@@ -40,6 +40,7 @@ import (
 	// of a classification drift apart.
 	"github.com/certen/independant-validator/pkg/consensus"
 	"github.com/certen/independant-validator/pkg/database"
+	"github.com/certen/independant-validator/pkg/ethproof"
 	"github.com/certen/independant-validator/pkg/ethrpc"
 	"github.com/certen/independant-validator/pkg/proof"
 	"github.com/certen/independant-validator/pkg/strategy"
@@ -267,7 +268,10 @@ type UnifiedProofCycleResult struct {
 
 	// Phase 7 results
 	ObservationResults []*chain.ObservationResult `json:"observation_results,omitempty"`
-	ChainExecutionIDs  []uuid.UUID                `json:"chain_execution_ids,omitempty"`
+	// UnprovenSettlement is the member's settlement when Phase 7 read its final receipt but could not prove it in its
+	// block (settled_unproven): the chain holds it, no observation carries it.
+	UnprovenSettlement *chain.UnprovenSettlementError `json:"-"`
+	ChainExecutionIDs  []uuid.UUID                    `json:"chain_execution_ids,omitempty"`
 
 	// Phase 8 results
 	Attestations          []*attestation.Attestation         `json:"attestations,omitempty"`
@@ -337,6 +341,9 @@ type UnifiedOrchestrator struct {
 // activeCycle tracks a running proof cycle
 type activeCycle struct {
 	CycleID string
+	// Refusal is the named cause of a refusal before any chain transaction (RB6-F10), recorded on the member outcome; it is
+	// not part of anything attested.
+	Refusal string
 	// AnchoredRoot is the batch root the member's anchor published (its Level 3 hash), read from its
 	// canonical anchor row before the write-back; zero where the member has no placement (RB3-F106).
 	AnchoredRoot [32]byte
@@ -614,7 +621,9 @@ func (o *UnifiedOrchestrator) StartProofCycle(ctx context.Context, req *UnifiedP
 	// write-back that did not happen is not recorded as written.
 	proofCycle, reason := database.MemberProofCycleWritten, ""
 	if result.WriteBackState != WriteBackWritten {
-		proofCycle, reason = database.MemberProofCycleFailed, "write-back "+result.WriteBackState
+		// The action executed; its bundle was not written back: owed, not failed (RB6). A member nothing executed for
+		// would have failed earlier; this path has an observed settlement.
+		proofCycle, reason = memberProofCycleOwed(observedSettlement(result.ObservationResults)), "write-back "+result.WriteBackState
 	}
 	if tx, reverted := revertedObservation(result.ObservationResults); reverted {
 		reason = strings.TrimPrefix(reason+"; settlement transaction "+tx+" reverted on the target chain", "; ")
@@ -766,12 +775,14 @@ func (o *UnifiedOrchestrator) recordMemberOutcome(
 	out := database.MemberOutcome{
 		IntentID: req.IntentID, ChainID: chainID, MemberChains: chains, Legs: legs,
 		Settlement: settlement, ProofCycle: proofCycle, CycleID: req.CycleID, Reason: reason,
-		EffectsProven: cycleEffectsProven(cycle), ReportedBy: o.config.ValidatorID,
+		EffectsProven: cycleEffectsProven(cycle), ReportedBy: o.config.ValidatorID, Refusal: cycle.Refusal,
 	}
 	if result != nil {
 		out.WriteBackTx = result.WriteBackTxHash
 		if len(result.ObservationResults) > 0 && result.ObservationResults[0] != nil {
 			out.SettlementTx = result.ObservationResults[0].TxHash
+		} else if result.UnprovenSettlement != nil {
+			out.SettlementTx = result.UnprovenSettlement.TxHash
 		}
 	}
 	derived, err := o.config.Repos.IntentLifecycle.RecordMemberOutcome(ctx, out)
@@ -860,7 +871,23 @@ func (o *UnifiedOrchestrator) recordPhaseFailure(ctx context.Context, cycle *act
 		fmt.Printf("🛑 [LIFECYCLE] cycle %s: %s - no member outcome recorded for this cycle\n", cycle.CycleID, reason)
 		return
 	}
-	if rErr := o.recordMemberOutcome(ctx, cycle, observedSettlement(cycle.Result.ObservationResults), database.MemberProofCycleFailed, reason); rErr != nil {
+	settlement := observedSettlement(cycle.Result.ObservationResults)
+	var unproven *chain.UnprovenSettlementError
+	switch {
+	case settlement == database.MemberSettlementUnobserved && errors.As(err, &unproven):
+		// The final receipt was read; only its proof is missing. The member is recorded as the chain holds it -
+		// settled or reverted, with its settlement transaction - never "unobserved" (RB6-F9).
+		cycle.Result.UnprovenSettlement = unproven
+		settlement = database.MemberSettlementSettled
+		if unproven.Status == 0 {
+			settlement = database.MemberSettlementReverted
+		}
+	case errors.Is(err, errNotMembersSettlement):
+		// The gate PROVED the observed transaction is not this member's settlement: nothing of this member executed
+		// that the cycle can name. Not observed, failed - never "settled" on another transaction's receipt.
+		settlement = database.MemberSettlementUnobserved
+	}
+	if rErr := o.recordMemberOutcome(ctx, cycle, settlement, memberProofCycleOwed(settlement), reason); rErr != nil {
 		fmt.Printf("❌ [LIFECYCLE] cycle %s failed in phase %d and its failure could not be recorded: %v\n", cycle.CycleID, phase, rErr)
 	}
 }
@@ -1106,11 +1133,39 @@ func (o *UnifiedOrchestrator) verifyContractCallGate(ctx context.Context, cycle 
 			lastErr = serr
 		}
 	}
+	err = gateRefusal(chainStrategy.ChainID(), lastErr)
+	fmt.Printf("❌ [RB-GATE] %v\n", err)
+	return nil, err
+}
+
+// errNotMembersSettlement marks the gate's proven verdict that no observed transaction is the member's settlement (its
+// binding to the member, operation or calls is refused): a verdict, not a read or a proof that could not be built.
+var errNotMembersSettlement = errors.New("no observed transaction is the member's settlement")
+
+// memberProofCycleOwed is the proof cycle of a member whose cycle ended without a write-back: an action that executed
+// (settled or reverted) has its bundle owed - proof_pending, recovered automatically - and anything else failed (RB6).
+func memberProofCycleOwed(settlement database.MemberSettlement) database.MemberProofCycle {
+	if settlement == database.MemberSettlementSettled || settlement == database.MemberSettlementReverted {
+		return database.MemberProofCyclePending
+	}
+	return database.MemberProofCycleFailed
+}
+
+// gateRefusal is why the contract-call gate found no observed transaction it could verify as the member's settlement.
+// When what failed is the proof itself (pkg/ethproof refused the block), the transaction is not shown to be anything
+// else: it is the named state settled_unproven, never "not the member's settlement" (RB6-F9).
+func gateRefusal(chainID string, lastErr error) error {
 	if lastErr == nil {
 		lastErr = fmt.Errorf("the cycle observed no transaction")
 	}
-	fmt.Printf("❌ [RB-GATE] No observed transaction is this member's settlement (chain=%s): %v\n", chainStrategy.ChainID(), lastErr)
-	return nil, fmt.Errorf("no observed transaction is the member's settlement (chain=%s): %w", chainStrategy.ChainID(), lastErr)
+	if errors.Is(lastErr, ethproof.ErrRefused) {
+		return fmt.Errorf("settled_unproven: the member's settlement on chain %s cannot be proven in its block: %w", chainID, lastErr)
+	}
+	if IsChainReadError(lastErr) {
+		// Not a verdict: the chain could not be read. The settlement is owed its proof, not refused.
+		return fmt.Errorf("the member's settlement on chain %s could not be verified (a chain read failed): %w", chainID, lastErr)
+	}
+	return fmt.Errorf("%w (chain=%s): %w", errNotMembersSettlement, chainID, lastErr)
 }
 
 // observationReverted reports whether an observed transaction is a finalized REVERT.

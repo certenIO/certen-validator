@@ -27,7 +27,7 @@ func TestProofCycle_CarriesTheLaneThatSettledIt(t *testing.T) {
 		bv = failureTestValidator(orch)
 		att = &PendingAttestation{IntentID: "i1", Replayed: true,
 			CertenIntent: memberIntent(t, leg("base-sepolia", 84532, "0x"))}
-		bv.RunBatchMemberRefusal(context.Background(), att, 84532, "dropped", lane)
+		bv.RunBatchMemberRefusal(context.Background(), att, 84532, "dropped", "", lane)
 		if got := orch.commitment["proofClass"]; got != lane {
 			t.Fatalf("dropped from the %s lane, the failure record states proofClass %v", lane, got)
 		}

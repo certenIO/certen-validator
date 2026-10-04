@@ -234,7 +234,8 @@ func (o *EVMObserver) observeSettled(ctx context.Context, txHash common.Hash, de
 	}
 	settlement, err := ethproof.BuildWithin(ctx, src, receipt.BlockHash, txHash, uint64(receipt.TransactionIndex), deadline, o.pollingInterval)
 	if err != nil {
-		return nil, fmt.Errorf("prove %s in block %s on chain %d: %w", txHash.Hex(), receipt.BlockHash.Hex(), o.chainID, err)
+		return nil, &UnprovenSettlementError{ChainID: o.chainID, TxHash: txHash.Hex(), BlockHash: receipt.BlockHash.Hex(),
+			BlockNumber: receipt.BlockNumber.Uint64(), Status: receipt.Status, Err: err}
 	}
 
 	result := o.finalizedResult(ctx, receipt, header)

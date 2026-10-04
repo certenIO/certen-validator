@@ -54,8 +54,23 @@ const (
 	// IntentLifecycleComplete - Phase 9 writeback to Accumulate succeeded
 	IntentLifecycleComplete IntentLifecycleStatus = "complete"
 
-	// IntentLifecycleFailed - Any phase failed
+	// IntentLifecycleFailed - nothing executed as committed and nothing is owed: a proven revert or absent effect, a
+	// non-settlement, an attested refusal. Never an intent whose action executed with its proof still owed (RB6).
 	IntentLifecycleFailed IntentLifecycleStatus = "failed"
+
+	// IntentLifecycleExecutedProofPending - every member resolved and at least one EXECUTED on its chain with its proof
+	// bundle not produced yet. NOT a failure and NOT terminal: the bundle is recovered automatically, and the intent
+	// then completes (RB6, owner decision 2026-10-04).
+	IntentLifecycleExecutedProofPending IntentLifecycleStatus = "executed_proof_pending"
+
+	// IntentLifecycleExecutedProofUnavailable - executed, and its proof can never be produced (declared by an operator,
+	// with the evidence). Terminal; not a failure of the action.
+	IntentLifecycleExecutedProofUnavailable IntentLifecycleStatus = "executed_proof_unavailable"
+
+	// IntentLifecycleRefusedPendingAttestation - refused by name before any chain transaction (the member's refusal
+	// names why); the quorum attestation of its non-settlement is pending, after which the intent fails with
+	// failure_class refused (RB6-F10).
+	IntentLifecycleRefusedPendingAttestation IntentLifecycleStatus = "refused_pending_attestation"
 )
 
 // IntentFailureClass is why a failed intent failed, set from typed errors where the failure is recorded

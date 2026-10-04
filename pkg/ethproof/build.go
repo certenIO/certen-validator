@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum"
@@ -29,6 +30,11 @@ type Source interface {
 
 // ErrRefused is the class of every refusal to build a proof.
 var ErrRefused = errors.New("no inclusion proof")
+
+// errUnencodable marks a provider's answer whose bodies could not be brought to their consensus encoding: a
+// transaction or receipt of a type or shape no encoder here handles, or one that does not hash to what the provider
+// states. Unlike an unanswered read, it does not change by asking again.
+var errUnencodable = errors.New("cannot be encoded")
 
 func refused(format string, args ...interface{}) error {
 	return fmt.Errorf("%w: %s", ErrRefused, fmt.Sprintf(format, args...))
@@ -56,21 +62,21 @@ func ReadBlock(ctx context.Context, src Source, blockHash common.Hash) (*Block, 
 	if header == nil || header.Hash() != blockHash {
 		return nil, refused("the agreed header for block %s is not that block", blockHash.Hex())
 	}
-	txs, err := src.AgreedLists(ctx, "transactions of block "+blockHash.Hex(), func(ctx context.Context, c *rpc.Client) ([][]byte, error) {
+	txs, err := agreedEncodings(ctx, src, "transactions of block "+blockHash.Hex(), func(ctx context.Context, c *rpc.Client) ([][]byte, error) {
 		return readTxs(ctx, c, blockHash)
 	})
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrRefused, err)
+		return nil, err
 	}
 	if root := TrieRoot(txs); root != header.TxHash {
 		return nil, refused("the transactions of block %s have root %s, its header's transactionsRoot is %s; an encoding is wrong for this chain",
 			blockHash.Hex(), root.Hex(), header.TxHash.Hex())
 	}
-	receipts, err := src.AgreedLists(ctx, "receipts of block "+blockHash.Hex(), func(ctx context.Context, c *rpc.Client) ([][]byte, error) {
+	receipts, err := agreedEncodings(ctx, src, "receipts of block "+blockHash.Hex(), func(ctx context.Context, c *rpc.Client) ([][]byte, error) {
 		return readReceipts(ctx, c, blockHash, len(txs))
 	})
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrRefused, err)
+		return nil, err
 	}
 	if len(receipts) != len(txs) {
 		return nil, refused("block %s holds %d transactions and %d receipts", blockHash.Hex(), len(txs), len(receipts))
@@ -80,6 +86,39 @@ func ReadBlock(ctx context.Context, src Source, blockHash common.Hash) (*Block, 
 			blockHash.Hex(), root.Hex(), header.ReceiptHash.Hex())
 	}
 	return &Block{Header: header, Txs: txs, Receipts: receipts}, nil
+}
+
+// agreedEncodings is src.AgreedLists of what, refused as unprovable - not as unanswered - when at least
+// ethrpc.MinAgreeingProviders providers served the bodies and none of their answers could be encoded: then no provider
+// agreement will ever be reached by asking again (an encoder is missing or wrong for this chain), and the refusal names
+// the encoding failure. One provider's unencodable answer alone stays an unanswered read: a single provider cannot make a
+// block unprovable.
+func agreedEncodings(ctx context.Context, src Source, what string, read func(context.Context, *rpc.Client) ([][]byte, error)) ([][]byte, error) {
+	var mu sync.Mutex
+	unencodable := map[*rpc.Client]error{}
+	out, err := src.AgreedLists(ctx, what, func(ctx context.Context, c *rpc.Client) ([][]byte, error) {
+		v, err := read(ctx, c)
+		if errors.Is(err, errUnencodable) {
+			mu.Lock()
+			unencodable[c] = err
+			mu.Unlock()
+		}
+		return v, err
+	})
+	if err == nil {
+		return out, nil
+	}
+	if errors.Is(err, ethrpc.ErrTooFewProviders) && len(unencodable) >= ethrpc.MinAgreeingProviders {
+		var first error
+		for _, e := range unencodable {
+			if first == nil || e.Error() < first.Error() {
+				first = e
+			}
+		}
+		return nil, fmt.Errorf("%w: %d providers serve the %s and none of their answers can be encoded: %w", ErrRefused,
+			len(unencodable), what, first)
+	}
+	return nil, fmt.Errorf("%w: %w", ErrRefused, err)
 }
 
 // Prove builds the settlement proof of transaction txHash at index in this block, and verifies it as a reader would
@@ -166,10 +205,11 @@ func readTxs(ctx context.Context, c *rpc.Client, blockHash common.Hash) ([][]byt
 	for i, raw := range blk.Transactions {
 		enc, stated, err := EncodeTxJSON(raw)
 		if err != nil {
-			return nil, fmt.Errorf("transaction %d of block %s: %w", i, blockHash.Hex(), err)
+			return nil, fmt.Errorf("transaction %d of block %s %w: %w", i, blockHash.Hex(), errUnencodable, err)
 		}
 		if got := crypto.Keccak256Hash(enc); got != stated {
-			return nil, fmt.Errorf("transaction %d of block %s encodes to %s, the provider states %s", i, blockHash.Hex(), got.Hex(), stated.Hex())
+			return nil, fmt.Errorf("transaction %d of block %s %w: it encodes to %s, the provider states %s", i, blockHash.Hex(),
+				errUnencodable, got.Hex(), stated.Hex())
 		}
 		out[i] = enc
 	}
@@ -211,7 +251,7 @@ func readReceipts(ctx context.Context, c *rpc.Client, blockHash common.Hash, n i
 	for i, raw := range raws {
 		enc, ref, err := EncodeReceiptJSON(raw)
 		if err != nil {
-			return nil, fmt.Errorf("receipt %d of block %s: %w", i, blockHash.Hex(), err)
+			return nil, fmt.Errorf("receipt %d of block %s %w: %w", i, blockHash.Hex(), errUnencodable, err)
 		}
 		if ref.BlockHash != blockHash || ref.TxIndex != uint64(i) {
 			return nil, fmt.Errorf("receipt %d of block %s states block %s index %d", i, blockHash.Hex(), ref.BlockHash.Hex(), ref.TxIndex)

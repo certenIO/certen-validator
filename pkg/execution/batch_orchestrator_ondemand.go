@@ -214,7 +214,14 @@ func (o *BatchOrchestrator) SettleOnDemandMember(
 			o.logf("[OD] intent=%s account screen failed (%v) after the member's anchor was attested or a "+
 				"settlement sent; resolving from the chain instead", member.IntentID, err)
 		} else {
-			return nil, fmt.Errorf("member %s account unusable: %w", member.IntentID, err)
+			unusable := fmt.Errorf("member %s account unusable: %w", member.IntentID, err)
+			if IsChainReadError(err) {
+				// A read that failed is not a verdict: the member waits for a read that succeeds, never refused on it.
+				return nil, unusable
+			}
+			// An answer the chain gave - the intent's own defect, its account cannot take this chain's leaves - so it
+			// is refused by name (RB6-F10): the intent cannot be settled as submitted.
+			return nil, &IntentRefusedError{Err: unusable}
 		}
 	}
 

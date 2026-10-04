@@ -80,9 +80,14 @@ type fakeODChain struct {
 	createCalls int
 	settleCalls int
 	costs       []costCall
+
+	// accountErr is the account screen's answer (nil: usable).
+	accountErr error
 }
 
-func (f *fakeODChain) memberAccountUsable(context.Context, *PendingBatchIntent) error { return nil }
+func (f *fakeODChain) memberAccountUsable(context.Context, *PendingBatchIntent) error {
+	return f.accountErr
+}
 func (f *fakeODChain) anchorAlreadyAttested(context.Context, [32]byte) (bool, error) {
 	return f.attested, nil
 }

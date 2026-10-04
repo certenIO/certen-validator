@@ -99,8 +99,9 @@ func TestIntentStatus_CompleteOnlyWhenEveryMemberSettledAndWasWritten(t *testing
 	}
 }
 
-// A member whose write-back failed is not complete; the same member's later, written report replaces
-// it and the intent is derived again.
+// A member whose write-back failed is not complete - and, its action having executed, not failed either: its proof
+// bundle is owed (RB6, owner decision 2026-10-04: an executed action is never reported failed). The same member's later,
+// written report replaces it and the intent is derived again, to complete.
 func TestIntentStatus_ARetriedWriteBackIsDerivedAgain(t *testing.T) {
 	db := s1OpenDB(t)
 	ctx := context.Background()
@@ -110,9 +111,12 @@ func TestIntentStatus_ARetriedWriteBackIsDerivedAgain(t *testing.T) {
 	t.Cleanup(func() { db.Exec(`DELETE FROM intent_member_outcomes WHERE intent_id=$1`, id) })
 
 	c := memberCycle(id, "84532", []int64{84532}, 1, settledObs("0xbase"))
-	o.recordMemberOutcome(ctx, c, database.MemberSettlementSettled, database.MemberProofCycleFailed, "phase 9 failed: quorum not met")
-	if status, _, _, msg := lifecycleRow(t, db, id); status != "failed" || !strings.Contains(msg, "not written back") {
-		t.Fatalf("a settlement not written back: status %q msg %q", status, msg)
+	if err := o.recordMemberOutcome(ctx, c, database.MemberSettlementSettled, database.MemberProofCycleFailed, "phase 9 failed: quorum not met"); err == nil {
+		t.Fatal("THE regression: an executed member was recorded failed")
+	}
+	o.recordMemberOutcome(ctx, c, database.MemberSettlementSettled, database.MemberProofCyclePending, "phase 9 failed: quorum not met")
+	if status, _, _, msg := lifecycleRow(t, db, id); status != "executed_proof_pending" || !strings.Contains(msg, "executed, proof pending") {
+		t.Fatalf("a settlement not written back: status %q msg %q; want executed_proof_pending", status, msg)
 	}
 	finish(ctx, o, c)
 	if status, _, _, _ := lifecycleRow(t, db, id); status != "complete" {

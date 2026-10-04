@@ -105,6 +105,7 @@ func TestTheCapturedBlocksCoverTheChainsTransactionTypes(t *testing.T) {
 		ethprooftest.ArbitrumDeposit:  {0x64, 0x6a},
 		ethprooftest.ArbitrumUnsigned: {0x65, 0x6a},
 		ethprooftest.ArbitrumContract: {0x66, 0x6a},
+		ethprooftest.ArbitrumRedeem:   {0x0, 0x2, 0x68, 0x6a},
 	}
 	for name, types := range want {
 		_, b, _ := settlement(t, name)

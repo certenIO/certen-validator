@@ -82,7 +82,10 @@ func (f *Fixture) index() {
 //   - Arbitrum Sepolia 315677780: Nitro's unsigned 0x65 (delivered by Inbox.sendUnsignedTransaction, Sepolia tx
 //     0x14ce4671…) and the internal 0x6a; its "settlement" is the unsigned transaction;
 //   - Arbitrum Sepolia 315677781: Nitro's contract 0x66 (Inbox.sendContractTransaction, Sepolia tx 0x997addbc…) and the
-//     internal 0x6a; its "settlement" is the contract transaction.
+//     internal 0x6a; its "settlement" is the contract transaction;
+//   - Arbitrum Sepolia 315690738: an ordinary sequencer block - other parties' signed transactions of types 0 and 2 - holding
+//     a signed ArbRetryableTx.redeem (0xa67138f2…) and the Nitro retry 0x68 it scheduled: the one Nitro type that shares a
+//     block with signed transactions, so a settlement can land beside it. Its "settlement" is the signed redeem.
 const (
 	Sepolia          = "sepolia_11792612"
 	SepoliaSetCode   = "sepolia_11837286"
@@ -92,16 +95,17 @@ const (
 	ArbitrumDeposit  = "arbitrum_sepolia_313235886"
 	ArbitrumUnsigned = "arbitrum_sepolia_315677780"
 	ArbitrumContract = "arbitrum_sepolia_315677781"
+	ArbitrumRedeem   = "arbitrum_sepolia_315690738"
 )
 
 // All names every captured block.
 var All = []string{Sepolia, SepoliaSetCode, BaseSepolia, ArbitrumSepolia, ArbitrumRetry, ArbitrumDeposit, ArbitrumUnsigned,
-	ArbitrumContract}
+	ArbitrumContract, ArbitrumRedeem}
 
 // Settlements names the captured blocks whose "settlement" is a signed transaction, as every CERTEN settlement is. The
 // Nitro blocks' stand-ins (a submit-retryable, a deposit, an unsigned and a contract transaction) are system transactions no relayer signs: Nitro gives every
 // delayed message its own block, so a settlement never shares one with them; they prove the encoders.
-var Settlements = []string{Sepolia, SepoliaSetCode, BaseSepolia, ArbitrumSepolia}
+var Settlements = []string{Sepolia, SepoliaSetCode, BaseSepolia, ArbitrumSepolia, ArbitrumRedeem}
 
 func testdataDir() string {
 	_, file, _, _ := runtime.Caller(0)

@@ -166,7 +166,8 @@ func (r *IntentLifecycleRepository) UpdateStatus(
 	}
 
 	// Build query: update status + phase timestamp + optional fields.
-	// Guard: don't overwrite terminal states.
+	// Guard: don't overwrite terminal states, nor the states only member outcomes derive (RB6): an intent whose action
+	// executed with its proof owed, or whose refusal awaits attestation, moves on only through RecordMemberOutcome.
 	//
 	// The phase-timestamp clause is CONDITIONAL. Not every status has a column —
 	// pending_signatures never did — and a status without one used to interpolate
@@ -187,7 +188,7 @@ func (r *IntentLifecycleRepository) UpdateStatus(
 		    write_back_tx = COALESCE($6, write_back_tx),
 		    failure_class = $8
 		WHERE intent_id = $7
-		  AND status NOT IN ('complete', 'failed')
+		  AND status NOT IN ('complete', 'failed', 'executed_proof_pending', 'executed_proof_unavailable', 'refused_pending_attestation')
 	`, timestampCol)
 		args = []interface{}{
 			string(newStatus), now, now,
@@ -203,7 +204,7 @@ func (r *IntentLifecycleRepository) UpdateStatus(
 		    write_back_tx = COALESCE($5, write_back_tx),
 		    failure_class = $7
 		WHERE intent_id = $6
-		  AND status NOT IN ('complete', 'failed')
+		  AND status NOT IN ('complete', 'failed', 'executed_proof_pending', 'executed_proof_unavailable', 'refused_pending_attestation')
 	`
 		args = []interface{}{
 			string(newStatus), now,
