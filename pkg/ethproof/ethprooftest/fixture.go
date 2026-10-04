@@ -78,21 +78,28 @@ func (f *Fixture) index() {
 //   - Arbitrum Sepolia 312921216: types 2 and Nitro's internal 0x6a, holding the real settlement 0x5ec65d4b… at index 19;
 //   - Arbitrum Sepolia 315455204: Nitro's submit-retryable 0x69, its auto-redeem retry 0x68 and the internal 0x6a; its
 //     "settlement" is the submit-retryable;
-//   - Arbitrum Sepolia 313235886: Nitro's L1 ETH deposit 0x64 and the internal 0x6a; its "settlement" is the deposit.
+//   - Arbitrum Sepolia 313235886: Nitro's L1 ETH deposit 0x64 and the internal 0x6a; its "settlement" is the deposit;
+//   - Arbitrum Sepolia 315677780: Nitro's unsigned 0x65 (delivered by Inbox.sendUnsignedTransaction, Sepolia tx
+//     0x14ce4671…) and the internal 0x6a; its "settlement" is the unsigned transaction;
+//   - Arbitrum Sepolia 315677781: Nitro's contract 0x66 (Inbox.sendContractTransaction, Sepolia tx 0x997addbc…) and the
+//     internal 0x6a; its "settlement" is the contract transaction.
 const (
-	Sepolia         = "sepolia_11792612"
-	SepoliaSetCode  = "sepolia_11837286"
-	BaseSepolia     = "base_sepolia_47368146"
-	ArbitrumSepolia = "arbitrum_sepolia_312921216"
-	ArbitrumRetry   = "arbitrum_sepolia_315455204"
-	ArbitrumDeposit = "arbitrum_sepolia_313235886"
+	Sepolia          = "sepolia_11792612"
+	SepoliaSetCode   = "sepolia_11837286"
+	BaseSepolia      = "base_sepolia_47368146"
+	ArbitrumSepolia  = "arbitrum_sepolia_312921216"
+	ArbitrumRetry    = "arbitrum_sepolia_315455204"
+	ArbitrumDeposit  = "arbitrum_sepolia_313235886"
+	ArbitrumUnsigned = "arbitrum_sepolia_315677780"
+	ArbitrumContract = "arbitrum_sepolia_315677781"
 )
 
 // All names every captured block.
-var All = []string{Sepolia, SepoliaSetCode, BaseSepolia, ArbitrumSepolia, ArbitrumRetry, ArbitrumDeposit}
+var All = []string{Sepolia, SepoliaSetCode, BaseSepolia, ArbitrumSepolia, ArbitrumRetry, ArbitrumDeposit, ArbitrumUnsigned,
+	ArbitrumContract}
 
 // Settlements names the captured blocks whose "settlement" is a signed transaction, as every CERTEN settlement is. The
-// Nitro blocks' stand-ins (a submit-retryable, a deposit) are system transactions no relayer signs: Nitro gives every
+// Nitro blocks' stand-ins (a submit-retryable, a deposit, an unsigned and a contract transaction) are system transactions no relayer signs: Nitro gives every
 // delayed message its own block, so a settlement never shares one with them; they prove the encoders.
 var Settlements = []string{Sepolia, SepoliaSetCode, BaseSepolia, ArbitrumSepolia}
 

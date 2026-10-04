@@ -97,12 +97,14 @@ func TestRealBlocksProveEveryEntryAgainstTheHeaderRoots(t *testing.T) {
 // The captured blocks cover the transaction types the supported chains carry.
 func TestTheCapturedBlocksCoverTheChainsTransactionTypes(t *testing.T) {
 	want := map[string][]byte{
-		ethprooftest.Sepolia:         {0x0, 0x2, 0x3},
-		ethprooftest.SepoliaSetCode:  {0x0, 0x2, 0x3, 0x4},
-		ethprooftest.BaseSepolia:     {0x0, 0x2, 0x7e},
-		ethprooftest.ArbitrumSepolia: {0x2, 0x6a},
-		ethprooftest.ArbitrumRetry:   {0x68, 0x69, 0x6a},
-		ethprooftest.ArbitrumDeposit: {0x64, 0x6a},
+		ethprooftest.Sepolia:          {0x0, 0x2, 0x3},
+		ethprooftest.SepoliaSetCode:   {0x0, 0x2, 0x3, 0x4},
+		ethprooftest.BaseSepolia:      {0x0, 0x2, 0x7e},
+		ethprooftest.ArbitrumSepolia:  {0x2, 0x6a},
+		ethprooftest.ArbitrumRetry:    {0x68, 0x69, 0x6a},
+		ethprooftest.ArbitrumDeposit:  {0x64, 0x6a},
+		ethprooftest.ArbitrumUnsigned: {0x65, 0x6a},
+		ethprooftest.ArbitrumContract: {0x66, 0x6a},
 	}
 	for name, types := range want {
 		_, b, _ := settlement(t, name)
@@ -335,6 +337,10 @@ func TestANitroTransactionMissingAConsensusFieldIsRefused(t *testing.T) {
 		{ethprooftest.ArbitrumRetry, "0x69", "retryData"},
 		{ethprooftest.ArbitrumRetry, "0x69", "beneficiary"},
 		{ethprooftest.ArbitrumDeposit, "0x64", "requestId"},
+		{ethprooftest.ArbitrumUnsigned, "0x65", "maxFeePerGas"},
+		{ethprooftest.ArbitrumUnsigned, "0x65", "value"},
+		{ethprooftest.ArbitrumContract, "0x66", "requestId"},
+		{ethprooftest.ArbitrumContract, "0x66", "maxFeePerGas"},
 	} {
 		f := ethprooftest.Load(t, c.name)
 		found := false

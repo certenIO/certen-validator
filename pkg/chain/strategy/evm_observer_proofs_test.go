@@ -143,7 +143,8 @@ func TestAnUnprovableSettlementIsNotObserved(t *testing.T) {
 // A Nitro system transaction named as the settlement is proven in its block - the encoders cover it - and then refused by
 // name, because no relayer signed it and it states no signer or call to observe.
 func TestANitroSystemTransactionIsNotObservedAsASettlement(t *testing.T) {
-	for _, name := range []string{ethprooftest.ArbitrumRetry, ethprooftest.ArbitrumDeposit} {
+	for _, name := range []string{ethprooftest.ArbitrumRetry, ethprooftest.ArbitrumDeposit, ethprooftest.ArbitrumUnsigned,
+		ethprooftest.ArbitrumContract} {
 		f := ethprooftest.Load(t, name)
 		o := fixtureObserver(t, &ethprooftest.Provider{F: f}, &ethprooftest.Provider{F: f, NoBlockReceipts: true})
 		obs, err := o.ObserveTransaction(context.Background(), f.SettlementTx)
