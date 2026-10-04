@@ -5,6 +5,7 @@ package strategy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -198,5 +199,35 @@ func TestAnObserverWithoutAgreedBodiesRefusesByName(t *testing.T) {
 		PollingInterval: 5 * time.Millisecond, Timeout: time.Second})
 	if _, err := o.ObserveTransaction(context.Background(), f.SettlementTx); err == nil || !strings.Contains(err.Error(), "cannot serve a block's agreed bodies") {
 		t.Fatalf("an observer reading one provider's bodies: %v", err)
+	}
+}
+
+// A final settlement whose block cannot be proven - every provider serves a transaction type no encoder knows - is
+// refused as settled_unproven, carrying the final receipt's facts, so the member is recorded as the chain holds it.
+func TestAnUnprovableBlocksSettlementIsSettledUnproven(t *testing.T) {
+	f := ethprooftest.Load(t, ethprooftest.ArbitrumRedeem)
+	retype := func(method string, _ []json.RawMessage, res json.RawMessage) json.RawMessage {
+		if method != "eth_getBlockByHash" {
+			return res
+		}
+		var b map[string]json.RawMessage
+		var txs []map[string]json.RawMessage
+		if json.Unmarshal(res, &b) != nil || json.Unmarshal(b["transactions"], &txs) != nil || len(txs) == 0 {
+			return res
+		}
+		txs[0]["type"] = json.RawMessage(`"0x7d"`)
+		b["transactions"], _ = json.Marshal(txs)
+		out, _ := json.Marshal(b)
+		return out
+	}
+	o := fixtureObserver(t, &ethprooftest.Provider{F: f, Mutate: retype}, &ethprooftest.Provider{F: f, Mutate: retype})
+	_, err := o.ObserveTransaction(context.Background(), f.SettlementTx)
+	var unproven *UnprovenSettlementError
+	if !errors.As(err, &unproven) {
+		t.Fatalf("THE regression: an unprovable settlement's final receipt was dropped: %v", err)
+	}
+	if !strings.EqualFold(unproven.TxHash, f.SettlementTx.Hex()) || unproven.BlockHash != f.BlockHash().Hex() || unproven.Status != 1 ||
+		!strings.Contains(err.Error(), "settled_unproven") || !strings.Contains(err.Error(), "0x7d") {
+		t.Fatalf("settled_unproven does not carry the receipt's facts and the refusal: %+v", unproven)
 	}
 }

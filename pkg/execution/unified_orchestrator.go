@@ -267,7 +267,10 @@ type UnifiedProofCycleResult struct {
 
 	// Phase 7 results
 	ObservationResults []*chain.ObservationResult `json:"observation_results,omitempty"`
-	ChainExecutionIDs  []uuid.UUID                `json:"chain_execution_ids,omitempty"`
+	// UnprovenSettlement is the member's settlement when Phase 7 read its final receipt but could not prove it in its
+	// block (settled_unproven): the chain holds it, no observation carries it.
+	UnprovenSettlement *chain.UnprovenSettlementError `json:"-"`
+	ChainExecutionIDs  []uuid.UUID                    `json:"chain_execution_ids,omitempty"`
 
 	// Phase 8 results
 	Attestations          []*attestation.Attestation         `json:"attestations,omitempty"`
@@ -772,6 +775,8 @@ func (o *UnifiedOrchestrator) recordMemberOutcome(
 		out.WriteBackTx = result.WriteBackTxHash
 		if len(result.ObservationResults) > 0 && result.ObservationResults[0] != nil {
 			out.SettlementTx = result.ObservationResults[0].TxHash
+		} else if result.UnprovenSettlement != nil {
+			out.SettlementTx = result.UnprovenSettlement.TxHash
 		}
 	}
 	derived, err := o.config.Repos.IntentLifecycle.RecordMemberOutcome(ctx, out)
@@ -860,7 +865,18 @@ func (o *UnifiedOrchestrator) recordPhaseFailure(ctx context.Context, cycle *act
 		fmt.Printf("🛑 [LIFECYCLE] cycle %s: %s - no member outcome recorded for this cycle\n", cycle.CycleID, reason)
 		return
 	}
-	if rErr := o.recordMemberOutcome(ctx, cycle, observedSettlement(cycle.Result.ObservationResults), database.MemberProofCycleFailed, reason); rErr != nil {
+	settlement := observedSettlement(cycle.Result.ObservationResults)
+	var unproven *chain.UnprovenSettlementError
+	if settlement == database.MemberSettlementUnobserved && errors.As(err, &unproven) {
+		// The final receipt was read; only its proof is missing. The member is recorded as the chain holds it -
+		// settled or reverted, with its settlement transaction - never "unobserved" (RB6-F9).
+		cycle.Result.UnprovenSettlement = unproven
+		settlement = database.MemberSettlementSettled
+		if unproven.Status == 0 {
+			settlement = database.MemberSettlementReverted
+		}
+	}
+	if rErr := o.recordMemberOutcome(ctx, cycle, settlement, database.MemberProofCycleFailed, reason); rErr != nil {
 		fmt.Printf("❌ [LIFECYCLE] cycle %s failed in phase %d and its failure could not be recorded: %v\n", cycle.CycleID, phase, rErr)
 	}
 }
