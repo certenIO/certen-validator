@@ -268,7 +268,7 @@ func TestASettledUnprovenMemberIsRepairable(t *testing.T) {
 			if _, err := s.db.Exec(`DELETE FROM chain_execution_results WHERE tx_hash = $1`, s.tx); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := s.db.Exec(`UPDATE intent_member_outcomes SET settlement = 'settled', settlement_tx = $3,
+			if _, err := s.db.Exec(`UPDATE intent_member_outcomes SET settlement = 'settled', proof_cycle = 'proof_pending', settlement_tx = $3,
 				reason = 'phase 7 failed: observe transaction 0: settled_unproven: no inclusion proof'
 				WHERE intent_id = $1 AND chain_id = $2`, s.intentID, 84532, memberTx); err != nil {
 				t.Fatal(err)

@@ -329,7 +329,9 @@ func (r *MemberRepairRunner) preconditions(ctx context.Context, req MemberRepair
 	facts.before = map[string]any{"settlement": settlement, "proof_cycle": proofCycle, "settlement_tx": settlementTx.String,
 		"write_back_tx": writeBackTx.String, "cycle_id": cycleID.String, "reason": reason.String, "recorded_at": recordedAt.UTC()}
 	facts.cycleBefore = cycleID.String
-	if !r.check(res, "member outcome", proofCycle == string(database.MemberProofCycleFailed),
+	// 2. … failed, or its action executed with its proof bundle owed (proof_pending, RB6) - the member the automatic
+	// recovery re-drives.
+	if !r.check(res, "member outcome", proofCycle == string(database.MemberProofCycleFailed) || proofCycle == string(database.MemberProofCyclePending),
 		fmt.Sprintf("recorded %s / %s by cycle %s", settlement, proofCycle, cycleID.String)) {
 		return nil, false
 	}

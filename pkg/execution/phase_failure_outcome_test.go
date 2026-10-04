@@ -34,16 +34,18 @@ func TestPhaseFailureRecordsTheSettlementItObserved(t *testing.T) {
 	}
 	gate := errors.New("RB contract-call verification gate failed: contract-call leg committed no events")
 
+	// RB6: an action that executed (settled or reverted) is never recorded failed - its bundle is owed (proof_pending).
 	for _, tc := range []struct {
-		name  string
-		obs   []*chain.ObservationResult
-		phase int
-		want  database.MemberSettlement
+		name      string
+		obs       []*chain.ObservationResult
+		phase     int
+		want      database.MemberSettlement
+		wantCycle database.MemberProofCycle
 	}{
-		{"settled, then the gate refused", []*chain.ObservationResult{settledObs("0xe9b9")}, 7, database.MemberSettlementSettled},
-		{"reverted, then attestation failed", []*chain.ObservationResult{revertedObs("0xdead")}, 8, database.MemberSettlementReverted},
-		{"nothing observed", nil, 7, database.MemberSettlementUnobserved},
-		{"only an empty observation slot", []*chain.ObservationResult{nil}, 7, database.MemberSettlementUnobserved},
+		{"settled, then the gate refused", []*chain.ObservationResult{settledObs("0xe9b9")}, 7, database.MemberSettlementSettled, database.MemberProofCyclePending},
+		{"reverted, then attestation failed", []*chain.ObservationResult{revertedObs("0xdead")}, 8, database.MemberSettlementReverted, database.MemberProofCyclePending},
+		{"nothing observed", nil, 7, database.MemberSettlementUnobserved, database.MemberProofCycleFailed},
+		{"only an empty observation slot", []*chain.ObservationResult{nil}, 7, database.MemberSettlementUnobserved, database.MemberProofCycleFailed},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			id := "f65-" + strings.ReplaceAll(tc.name, " ", "-")
@@ -54,8 +56,8 @@ func TestPhaseFailureRecordsTheSettlementItObserved(t *testing.T) {
 			o.recordPhaseFailure(ctx, c, tc.phase, gate)
 
 			settlement, proofCycle, reason := outcome(id)
-			if settlement != string(tc.want) || proofCycle != string(database.MemberProofCycleFailed) {
-				t.Fatalf("recorded settlement=%s proof_cycle=%s; want %s / failed", settlement, proofCycle, tc.want)
+			if settlement != string(tc.want) || proofCycle != string(tc.wantCycle) {
+				t.Fatalf("recorded settlement=%s proof_cycle=%s; want %s / %s", settlement, proofCycle, tc.want, tc.wantCycle)
 			}
 			if !strings.Contains(reason, "phase") || !strings.Contains(reason, "committed no events") {
 				t.Fatalf("reason %q does not say which phase failed and why", reason)
@@ -97,8 +99,8 @@ func TestAnUnprovenSettlementIsRecordedAsTheChainHoldsIt(t *testing.T) {
 				WHERE intent_id = $1`, id).Scan(&settlement, &proofCycle, &settlementTx, &reason); err != nil {
 				t.Fatal(err)
 			}
-			if settlement != string(tc.want) || proofCycle != string(database.MemberProofCycleFailed) {
-				t.Fatalf("THE regression: recorded settlement=%s proof_cycle=%s for a final receipt of status %d; want %s / failed",
+			if settlement != string(tc.want) || proofCycle != string(database.MemberProofCyclePending) {
+				t.Fatalf("THE regression: recorded settlement=%s proof_cycle=%s for a final receipt of status %d; want %s / proof_pending",
 					settlement, proofCycle, tc.status, tc.want)
 			}
 			if !strings.EqualFold(settlementTx, tx) {

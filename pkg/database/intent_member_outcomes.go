@@ -37,9 +37,25 @@ type MemberProofCycle string
 const (
 	// MemberProofCycleWritten: written back under a quorum attestation.
 	MemberProofCycleWritten MemberProofCycle = "written"
-	// MemberProofCycleFailed: the proof cycle ended without a write-back.
+	// MemberProofCycleFailed: the proof cycle ended without a write-back, and nothing executed. Never the state of a
+	// settled or reverted member (an executed action is never reported failed - RB6, migration 00021).
 	MemberProofCycleFailed MemberProofCycle = "failed"
+	// MemberProofCyclePending: the member's action EXECUTED (settled or reverted, receipt read final); its proof bundle is
+	// not produced yet. Recovered automatically (RB6).
+	MemberProofCyclePending MemberProofCycle = "proof_pending"
+	// MemberProofCycleUnavailable: the member's action executed and its proof can never be produced - declared by an
+	// operator with the evidence (never inferred).
+	MemberProofCycleUnavailable MemberProofCycle = "proof_unavailable"
+	// MemberProofCycleRefused: refused by name before any chain transaction (Refusal says why); its non-settlement
+	// attestation is pending. Only with settlement none.
+	MemberProofCycleRefused MemberProofCycle = "refused"
 )
+
+// executed reports whether a member's action executed on its chain: its settlement transaction was mined, final,
+// whether it succeeded or reverted.
+func (s MemberSettlement) executed() bool {
+	return s == MemberSettlementSettled || s == MemberSettlementReverted
+}
 
 // MemberOutcome is one chain member's terminal outcome.
 type MemberOutcome struct {
@@ -61,8 +77,11 @@ type MemberOutcome struct {
 	// the member settled but did not do what the intent committed to, and counts as failed (RB3-F67).
 	EffectsProven *bool
 	// ReportedBy is the validator reporting the outcome. A report that replaces a recorded outcome is recorded
-	// as a correction under its name (RB4-F58).
+	// as a correction under its name (RB4-F58). It is stored on the member: the reporter recovers a proof_pending member.
 	ReportedBy string
+	// Refusal is the named cause of a refusal before any chain transaction (RB6-F10). Set, the member has no
+	// settlement and the intent fails with failure_class refused.
+	Refusal string
 }
 
 // RecordedMemberOutcome is a member's outcome as recorded.
@@ -125,9 +144,25 @@ func (o *MemberOutcome) validate() error {
 		return fmt.Errorf("%w: settlement %q", ErrMemberOutcomeInvalid, o.Settlement)
 	}
 	switch o.ProofCycle {
-	case MemberProofCycleWritten, MemberProofCycleFailed:
+	case MemberProofCycleWritten, MemberProofCycleFailed, MemberProofCyclePending, MemberProofCycleUnavailable, MemberProofCycleRefused:
 	default:
 		return fmt.Errorf("%w: proof cycle %q", ErrMemberOutcomeInvalid, o.ProofCycle)
+	}
+	// An action that executed is never reported failed: its bundle is written, pending or declared unavailable (RB6).
+	if o.Settlement.executed() && o.ProofCycle == MemberProofCycleFailed {
+		return fmt.Errorf("%w: member %d %s on chain (tx %s) cannot be recorded failed; its proof is pending or unavailable",
+			ErrMemberOutcomeInvalid, o.ChainID, o.Settlement, o.SettlementTx)
+	}
+	if !o.Settlement.executed() && (o.ProofCycle == MemberProofCyclePending || o.ProofCycle == MemberProofCycleUnavailable) {
+		return fmt.Errorf("%w: member %d is %s with settlement %s: only an executed action has a proof pending or unavailable",
+			ErrMemberOutcomeInvalid, o.ChainID, o.ProofCycle, o.Settlement)
+	}
+	if (o.ProofCycle == MemberProofCycleRefused || o.Refusal != "") && o.Settlement != MemberSettlementNone {
+		return fmt.Errorf("%w: member %d is refused with settlement %s: a refusal precedes any chain transaction",
+			ErrMemberOutcomeInvalid, o.ChainID, o.Settlement)
+	}
+	if o.ProofCycle == MemberProofCycleRefused && o.Refusal == "" {
+		return fmt.Errorf("%w: member %d is refused with no named cause", ErrMemberOutcomeInvalid, o.ChainID)
 	}
 	return nil
 }
@@ -219,15 +254,21 @@ func (r *IntentLifecycleRepository) RecordMemberOutcome(ctx context.Context, o M
 
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO intent_member_outcomes
-			(intent_id, chain_id, settlement, proof_cycle, legs, settlement_tx, write_back_tx, cycle_id, reason, effects_proven, recorded_at)
-		VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''), NULLIF($7, ''), NULLIF($8, ''), NULLIF($9, ''), $10, now())
+			(intent_id, chain_id, settlement, proof_cycle, legs, settlement_tx, write_back_tx, cycle_id, reason, effects_proven,
+			 reported_by, refusal, next_proof_attempt_at, recorded_at)
+		VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''), NULLIF($7, ''), NULLIF($8, ''), NULLIF($9, ''), $10, $11, NULLIF($12, ''),
+			CASE WHEN $13 THEN now() END, now())
 		ON CONFLICT (intent_id, chain_id) DO UPDATE SET
 			settlement = EXCLUDED.settlement, proof_cycle = EXCLUDED.proof_cycle, legs = EXCLUDED.legs,
 			settlement_tx = EXCLUDED.settlement_tx, write_back_tx = EXCLUDED.write_back_tx,
 			cycle_id = EXCLUDED.cycle_id, reason = EXCLUDED.reason, effects_proven = EXCLUDED.effects_proven,
+			reported_by = EXCLUDED.reported_by, refusal = COALESCE(EXCLUDED.refusal, intent_member_outcomes.refusal),
+			next_proof_attempt_at = CASE WHEN EXCLUDED.proof_cycle = 'proof_pending'
+				THEN COALESCE(intent_member_outcomes.next_proof_attempt_at, now()) END,
 			recorded_at = now()`,
 		o.IntentID, o.ChainID, string(o.Settlement), string(o.ProofCycle), o.Legs,
-		o.SettlementTx, o.WriteBackTx, o.CycleID, o.Reason, o.EffectsProven); err != nil {
+		o.SettlementTx, o.WriteBackTx, o.CycleID, o.Reason, o.EffectsProven, o.ReportedBy, o.Refusal,
+		o.ProofCycle == MemberProofCyclePending); err != nil {
 		return derived, fmt.Errorf("record member outcome %s/%d: %w", o.IntentID, o.ChainID, err)
 	}
 
@@ -237,21 +278,22 @@ func (r *IntentLifecycleRepository) RecordMemberOutcome(ctx context.Context, o M
 
 	rows, err := tx.QueryContext(ctx, `
 		SELECT chain_id, settlement, proof_cycle, legs, COALESCE(settlement_tx, ''), COALESCE(write_back_tx, ''), COALESCE(reason, ''),
-		       effects_proven
+		       effects_proven, COALESCE(refusal, '')
 		FROM intent_member_outcomes WHERE intent_id = $1 ORDER BY chain_id`, o.IntentID)
 	if err != nil {
 		return derived, fmt.Errorf("read member outcomes of %s: %w", o.IntentID, err)
 	}
 	type row struct {
-		settlement, proofCycle, settlementTx, writeBackTx, reason string
-		legs                                                      int
-		effectsProven                                             sql.NullBool
+		settlement, proofCycle, settlementTx, writeBackTx, reason, refusal string
+		legs                                                               int
+		effectsProven                                                      sql.NullBool
 	}
 	got := map[int64]row{}
 	for rows.Next() {
 		var c int64
 		var rr row
-		if err := rows.Scan(&c, &rr.settlement, &rr.proofCycle, &rr.legs, &rr.settlementTx, &rr.writeBackTx, &rr.reason, &rr.effectsProven); err != nil {
+		if err := rows.Scan(&c, &rr.settlement, &rr.proofCycle, &rr.legs, &rr.settlementTx, &rr.writeBackTx, &rr.reason, &rr.effectsProven,
+			&rr.refusal); err != nil {
 			rows.Close()
 			return derived, fmt.Errorf("scan member outcome: %w", err)
 		}
@@ -262,38 +304,57 @@ func (r *IntentLifecycleRepository) RecordMemberOutcome(ctx context.Context, o M
 		return derived, fmt.Errorf("read member outcomes of %s: %w", o.IntentID, err)
 	}
 
-	complete := true
+	// Each member is one of (RB6, DESIGN_RB6_execution_outcome_states.md): done (executed and written back with its
+	// committed effects), pending (executed, proof bundle not produced yet), unavailable (executed, bundle never
+	// producible), refused (refused by name before any chain transaction, attestation pending), or failed (anything
+	// else: a proven revert or absent effect, a non-settlement, a refusal attested, nothing observed).
+	var done, pending, unavailable, refused, failed, failedRefusals int
 	var legsDone, legsFailed int
 	parts := make([]string, 0, len(chains))
 	lastWriteBack := ""
+	states := map[string]string{"written": "written back", "failed": "not written back", "proof_pending": "executed, proof pending",
+		"proof_unavailable": "executed, proof unavailable", "refused": "refused, attestation pending"}
 	for _, c := range chains {
 		rr, ok := got[c]
 		if !ok {
-			derived.Terminal = false
 			parts = append(parts, strconv.FormatInt(c, 10)+": pending")
-			complete = false
 			continue
 		}
-		part := fmt.Sprintf("%d: %s, %s", c, rr.settlement, map[string]string{"written": "written back", "failed": "not written back"}[rr.proofCycle])
+		part := fmt.Sprintf("%d: %s, %s", c, rr.settlement, states[rr.proofCycle])
 		if rr.settlementTx != "" {
 			part += " (tx " + rr.settlementTx + ")"
 		}
 		// Settled but a committed effect provably absent: it did not do what the intent committed to.
-		unproven := rr.effectsProven.Valid && !rr.effectsProven.Bool
-		if unproven {
+		effectsAbsent := rr.effectsProven.Valid && !rr.effectsProven.Bool
+		if effectsAbsent {
 			part += ", committed effects NOT proven"
 		}
-		if rr.reason != "" {
+		if rr.refusal != "" {
+			part += " - refused: " + rr.refusal
+		} else if rr.reason != "" {
 			part += " - " + rr.reason
 		}
 		parts = append(parts, part)
-		if rr.settlement == string(MemberSettlementSettled) && !unproven {
+		executedAsCommitted := rr.settlement == string(MemberSettlementSettled) && !effectsAbsent
+		if executedAsCommitted {
 			legsDone += rr.legs
 		} else {
 			legsFailed += rr.legs
 		}
-		if rr.settlement != string(MemberSettlementSettled) || unproven || rr.proofCycle != string(MemberProofCycleWritten) {
-			complete = false
+		switch {
+		case rr.proofCycle == string(MemberProofCyclePending):
+			pending++
+		case rr.proofCycle == string(MemberProofCycleUnavailable):
+			unavailable++
+		case rr.proofCycle == string(MemberProofCycleRefused):
+			refused++
+		case rr.proofCycle == string(MemberProofCycleWritten) && executedAsCommitted:
+			done++
+		default:
+			failed++
+			if rr.refusal != "" {
+				failedRefusals++
+			}
 		}
 		if rr.writeBackTx != "" {
 			lastWriteBack = rr.writeBackTx
@@ -314,23 +375,54 @@ func (r *IntentLifecycleRepository) RecordMemberOutcome(ctx context.Context, o M
 		return derived, tx.Commit()
 	}
 
-	if complete {
-		derived.Status = IntentLifecycleComplete
+	// Every member has an outcome. An executed action whose bundle is still owed keeps the intent open; so does a refusal
+	// awaiting its attestation. Neither is a failure (failure_class stays NULL).
+	var status IntentLifecycleStatus
+	switch {
+	case pending > 0:
+		status = IntentLifecycleExecutedProofPending
+	case refused > 0:
+		status = IntentLifecycleRefusedPendingAttestation
+	case failed == 0 && unavailable == 0:
+		status = IntentLifecycleComplete
+	case failed == 0:
+		status = IntentLifecycleExecutedProofUnavailable
+	default:
+		status = IntentLifecycleFailed
+	}
+	derived.Status = status
+	switch status {
+	case IntentLifecycleComplete, IntentLifecycleExecutedProofUnavailable:
+		message := sql.NullString{}
+		if status == IntentLifecycleExecutedProofUnavailable {
+			message = sql.NullString{String: derived.Summary, Valid: true}
+		}
 		_, err = tx.ExecContext(ctx, `
 			UPDATE intent_lifecycle SET status = $1, legs_completed = $2, legs_failed = $3,
-				completed_at = COALESCE(completed_at, $4), failed_at = NULL, error_message = NULL, failure_class = NULL,
-				write_back_tx = COALESCE(NULLIF($5, ''), write_back_tx), updated_at = $4
-			WHERE intent_id = $6`,
-			string(IntentLifecycleComplete), legsDone, legsFailed, now, lastWriteBack, o.IntentID)
-	} else {
-		derived.Status = IntentLifecycleFailed
+				completed_at = COALESCE(completed_at, $4), failed_at = NULL, error_message = $5, failure_class = NULL,
+				write_back_tx = COALESCE(NULLIF($6, ''), write_back_tx), updated_at = $4
+			WHERE intent_id = $7`,
+			string(status), legsDone, legsFailed, now, message, lastWriteBack, o.IntentID)
+	case IntentLifecycleExecutedProofPending, IntentLifecycleRefusedPendingAttestation:
+		_, err = tx.ExecContext(ctx, `
+			UPDATE intent_lifecycle SET status = $1, legs_completed = $2, legs_failed = $3,
+				completed_at = NULL, failed_at = NULL, error_message = $4, failure_class = NULL,
+				write_back_tx = COALESCE(NULLIF($5, ''), write_back_tx), updated_at = $6
+			WHERE intent_id = $7`,
+			string(status), legsDone, legsFailed, derived.Summary, lastWriteBack, now, o.IntentID)
+	default:
+		// Refused by name before any chain transaction, on every failed member: the intent itself cannot be settled.
+		class := "settlement_failed"
+		if failedRefusals == failed {
+			class = "refused"
+		}
 		_, err = tx.ExecContext(ctx, `
 			UPDATE intent_lifecycle SET status = $1, legs_completed = $2, legs_failed = $3,
 				failed_at = COALESCE(failed_at, $4), completed_at = NULL, error_message = $5,
-				failure_class = 'settlement_failed',
-				write_back_tx = COALESCE(NULLIF($6, ''), write_back_tx), updated_at = $4
-			WHERE intent_id = $7`,
-			string(IntentLifecycleFailed), legsDone, legsFailed, now, derived.Summary, lastWriteBack, o.IntentID)
+				failure_class = $6,
+				write_back_tx = COALESCE(NULLIF($7, ''), write_back_tx), updated_at = $4
+			WHERE intent_id = $8`,
+			string(IntentLifecycleFailed), legsDone, legsFailed, now, derived.Summary, class, lastWriteBack, o.IntentID)
 	}
 	if err != nil {
 		return derived, fmt.Errorf("derive status of %s: %w", o.IntentID, err)
@@ -415,7 +507,8 @@ type lifecycleOutcome struct {
 }
 
 func (l lifecycleOutcome) terminal() bool {
-	return l.Status.String == string(IntentLifecycleComplete) || l.Status.String == string(IntentLifecycleFailed)
+	return l.Status.String == string(IntentLifecycleComplete) || l.Status.String == string(IntentLifecycleFailed) ||
+		l.Status.String == string(IntentLifecycleExecutedProofUnavailable)
 }
 
 func (l lifecycleOutcome) view() map[string]any {
