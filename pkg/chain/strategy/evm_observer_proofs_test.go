@@ -140,9 +140,25 @@ func TestAnUnprovableSettlementIsNotObserved(t *testing.T) {
 	}
 }
 
+// A Nitro system transaction named as the settlement is proven in its block - the encoders cover it - and then refused by
+// name, because no relayer signed it and it states no signer or call to observe.
+func TestANitroSystemTransactionIsNotObservedAsASettlement(t *testing.T) {
+	for _, name := range []string{ethprooftest.ArbitrumRetry, ethprooftest.ArbitrumDeposit} {
+		f := ethprooftest.Load(t, name)
+		o := fixtureObserver(t, &ethprooftest.Provider{F: f}, &ethprooftest.Provider{F: f, NoBlockReceipts: true})
+		obs, err := o.ObserveTransaction(context.Background(), f.SettlementTx)
+		if err == nil {
+			t.Fatalf("%s: a system transaction was observed as a settlement (result %x)", name, obs.ResultHash)
+		}
+		if !strings.Contains(err.Error(), "does not decode") || !strings.Contains(err.Error(), f.SettlementTx.Hex()) {
+			t.Fatalf("%s: refused, but not by name: %v", name, err)
+		}
+	}
+}
+
 // What the observation emits verifies from its own bytes, and a tampered copy does not.
 func TestAnObservationsProofsVerifyFromItsOwnBytes(t *testing.T) {
-	for _, name := range ethprooftest.All {
+	for _, name := range ethprooftest.Settlements {
 		_, obs := observeFixture(t, name)
 		enc, err := json.Marshal(obs)
 		if err != nil {

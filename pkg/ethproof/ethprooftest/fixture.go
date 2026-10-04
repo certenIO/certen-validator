@@ -91,6 +91,11 @@ const (
 // All names every captured block.
 var All = []string{Sepolia, SepoliaSetCode, BaseSepolia, ArbitrumSepolia, ArbitrumRetry, ArbitrumDeposit}
 
+// Settlements names the captured blocks whose "settlement" is a signed transaction, as every CERTEN settlement is. The
+// Nitro blocks' stand-ins (a submit-retryable, a deposit) are system transactions no relayer signs: Nitro gives every
+// delayed message its own block, so a settlement never shares one with them; they prove the encoders.
+var Settlements = []string{Sepolia, SepoliaSetCode, BaseSepolia, ArbitrumSepolia}
+
 func testdataDir() string {
 	_, file, _, _ := runtime.Caller(0)
 	return filepath.Join(filepath.Dir(file), "..", "testdata")
