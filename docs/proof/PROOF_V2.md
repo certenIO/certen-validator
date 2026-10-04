@@ -1,6 +1,6 @@
 # Proof v2 — a proof that needs no trust in CERTEN, any node, any provider or any retention window
 
-Status: DRAFT r2 for owner sign-off (RB6 §1). r1 covered the Accumulate side only; r2 is the full recommendation. Nothing
+Status: r2 SIGNED OFF by the owner 2026-10-04 (RB6 §1); §8, §11 and §12 carry the owner's decisions. r1 covered the Accumulate side only; r2 is the full recommendation. Nothing
 in v2 ships before sign-off. v1 is frozen and keeps verifying every stored v1 proof forever.
 
 ## 1. The goal, stated as a trust base
@@ -121,12 +121,12 @@ deployment; the beacon light-client endpoints available for Sepolia; header-chai
 
 ## 8. Permanence and independence
 
-1. **CERTEN-run archival nodes:** at least one Kermit node retaining full history from genesis (`bpt-history-depth`
-   covering all of it), and archival/beacon access for the three target chains. Required, not optional: without them,
-   building a v2 proof depends on a third party's retention.
+1. **CERTEN-run archival nodes:** owner decision 2026-10-04: **not for now.** v2 proofs are built from public Kermit
+   nodes; an execution block outside their retention gets the named state `g1_historical_unavailable` /
+   `historical_state_unavailable`, never a fallback. Revisit if that state appears in production.
 2. **Anchor the trust root publicly:** the incarnation anchor and periodic spine checkpoints are committed on Ethereum, so
    the trust root is public and timestamped (still re-derived, never trusted).
-3. **Upstream asks:** publish the genesis anchor incl. incarnation; version `globals` writes; sign the major-block index
+3. **Upstream asks** (owner: yes, tracked in RB7 §3C): publish the genesis anchor incl. incarnation; version `globals` writes; sign the major-block index
    entry; attach a per-window network-state proof; the DAG-BFT state-root requirement (§6).
 
 ## 9. Verification assurance
@@ -157,19 +157,22 @@ tool, never a proof).
 
 - **Phase A — Accumulate side, self-contained:** §4, §5, §6, §8.1–8.2, the spec and both verifiers for S1–S5.
 - **Phase B — target-chain side:** S6 nonce slot, §7 finality levels and contract identity, both verifiers for S6–S8.
-- Each phase: shadow beside v1 (only v1 feeds govRoot) → exit criteria met → atomic switch → live e2e on all three
-  chains → every stored proof and every new proof verifies.
+- Each phase: shadow beside v1 (only v1 feeds govRoot) → exit → atomic switch → live e2e on all three chains → every
+  stored proof and every new proof verifies.
+- **Shadow exit (owner decision 2026-10-04): no time period.** A short run of live intents covering the hard cases (each
+  chain; a delegated signer; multiple signers; a signer page on another partition; a multi-leg intent) with zero
+  disagreements (v1 vs v2 page, Go vs TypeScript) and zero verification failures. Any failure: fix and re-run.
+- **Phase B follows Phase A directly**; its research items (§7) are done while Phase A is in shadow.
 
 Rough size: Phase A several weeks; Phase B more (light client and rollup finality are the largest single pieces);
 together a matter of months, not weeks.
 
-## 12. Owner decisions requested
+## 12. Owner decisions (2026-10-04)
 
-1. Sign off this design (trust base §1, statements §3, principles §2, staged finality §7).
-2. Shadow exit criteria per phase: proposed 14 days and ≥50 live intents across the three chains, zero G1 cross-check
-   disagreements, zero v2 verification failures, zero Go/TypeScript disagreements.
-3. Approve running CERTEN's own archival Kermit node(s) (§8.1) and posting the upstream asks (§8.3, §6).
-4. Phase B ordering relative to other programme work.
+1. Design: signed off.
+2. Shadow exit: no time period; a short hard-case run, zero disagreements, zero failures (§11).
+3. Archival node: not for now (§8.1). Upstream asks: yes, in RB7 §3C.
+4. Phase B directly after Phase A.
 
 ## 13. Order of work after sign-off
 
