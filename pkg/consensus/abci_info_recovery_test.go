@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"os"
+	"sync"
 	"testing"
 
 	abcitypes "github.com/cometbft/cometbft/abci/types"
@@ -23,13 +24,23 @@ import (
 // the ledger, which is the durable record of what this app committed.
 
 // memKV is the smallest thing satisfying ledger.KV, so the recovery path can
-// be exercised without a real database.
-type memKV struct{ m map[string][]byte }
+// be exercised without a real database. It is safe for concurrent use, as the
+// ledger's real store is: a live-network test reads it while the node writes.
+type memKV struct {
+	mu sync.RWMutex
+	m  map[string][]byte
+}
 
 func newMemKV() *memKV { return &memKV{m: map[string][]byte{}} }
 
-func (k *memKV) Get(key []byte) ([]byte, error) { return k.m[string(key)], nil }
+func (k *memKV) Get(key []byte) ([]byte, error) {
+	k.mu.RLock()
+	defer k.mu.RUnlock()
+	return k.m[string(key)], nil
+}
 func (k *memKV) Set(key, value []byte) error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
 	k.m[string(key)] = append([]byte(nil), value...)
 	return nil
 }
