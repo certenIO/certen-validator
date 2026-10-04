@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	chain "github.com/certen/independant-validator/pkg/chain/strategy"
@@ -94,6 +95,10 @@ type MemberRepairRunner struct {
 	// under a ten-minute limit).
 	OutcomeWait time.Duration
 	Logf        func(string, ...interface{})
+
+	// serving serializes repairs: a requested repair and the automatic proof recovery (ProofRecovery) each arm one
+	// member's round at a time.
+	serving sync.Mutex
 }
 
 // MemberRepairDir is where a validator's repair requests and results live.
@@ -233,6 +238,8 @@ type repairFacts struct {
 
 // Serve runs one request.
 func (r *MemberRepairRunner) Serve(ctx context.Context, req MemberRepairRequest) *MemberRepairResult {
+	r.serving.Lock()
+	defer r.serving.Unlock()
 	res := &MemberRepairResult{Request: req, Validator: r.ValidatorID, StartedAt: time.Now().UTC()}
 	facts, ok := r.preconditions(ctx, req, res)
 	if !ok {

@@ -2115,6 +2115,11 @@ func startValidator(
 	}
 	log.Printf("✅ [MEMBER-REPAIR] repair requests served from %s", memberRepairs.Dir)
 
+	// RB6: an executed action's owed proof bundle (proof_pending) is recovered automatically, through the same repair.
+	proofRecovery := &execution.ProofRecovery{DB: dbClient.DB(), ValidatorID: cfg.ValidatorID, Repair: memberRepairs.Serve, Logf: log.Printf}
+	go proofRecovery.Run(context.Background())
+	log.Printf("✅ [PROOF-RECOVERY] proof_pending members reported by %s are re-driven automatically", cfg.ValidatorID)
+
 	// ENTITLEMENT — wire the epoch snapshot to the two places that consume it.
 	//
 	// The gate inside the ABCI validator only VERIFIES evidence; something has
