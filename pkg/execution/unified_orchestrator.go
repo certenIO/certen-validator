@@ -40,6 +40,7 @@ import (
 	// of a classification drift apart.
 	"github.com/certen/independant-validator/pkg/consensus"
 	"github.com/certen/independant-validator/pkg/database"
+	"github.com/certen/independant-validator/pkg/ethproof"
 	"github.com/certen/independant-validator/pkg/ethrpc"
 	"github.com/certen/independant-validator/pkg/proof"
 	"github.com/certen/independant-validator/pkg/strategy"
@@ -1122,11 +1123,22 @@ func (o *UnifiedOrchestrator) verifyContractCallGate(ctx context.Context, cycle 
 			lastErr = serr
 		}
 	}
+	err = gateRefusal(chainStrategy.ChainID(), lastErr)
+	fmt.Printf("❌ [RB-GATE] %v\n", err)
+	return nil, err
+}
+
+// gateRefusal is why the contract-call gate found no observed transaction it could verify as the member's settlement.
+// When what failed is the proof itself (pkg/ethproof refused the block), the transaction is not shown to be anything
+// else: it is the named state settled_unproven, never "not the member's settlement" (RB6-F9).
+func gateRefusal(chainID string, lastErr error) error {
 	if lastErr == nil {
 		lastErr = fmt.Errorf("the cycle observed no transaction")
 	}
-	fmt.Printf("❌ [RB-GATE] No observed transaction is this member's settlement (chain=%s): %v\n", chainStrategy.ChainID(), lastErr)
-	return nil, fmt.Errorf("no observed transaction is the member's settlement (chain=%s): %w", chainStrategy.ChainID(), lastErr)
+	if errors.Is(lastErr, ethproof.ErrRefused) {
+		return fmt.Errorf("settled_unproven: the member's settlement on chain %s cannot be proven in its block: %w", chainID, lastErr)
+	}
+	return fmt.Errorf("no observed transaction is the member's settlement (chain=%s): %w", chainID, lastErr)
 }
 
 // observationReverted reports whether an observed transaction is a finalized REVERT.

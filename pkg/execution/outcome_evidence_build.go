@@ -5,6 +5,7 @@ package execution
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math/big"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/ethereum/go-ethereum/rlp"
 
 	"github.com/certen/independant-validator/pkg/ethproof"
+	"github.com/certen/independant-validator/pkg/ethrpc"
 	"github.com/certen/independant-validator/pkg/execution/contracts"
 )
 
@@ -296,6 +298,11 @@ func (c *AgreedOutcomeChain) TransactionInclusion(ctx context.Context, tx common
 	// implementation the settlement gate and the strategy observer use (pkg/ethproof).
 	s, err := ethproof.Build(ctx, c.reader, hdr.Hash(), tx, uint64(r.TransactionIndex))
 	if err != nil {
+		if !errors.Is(err, ethrpc.ErrTooFewProviders) && !errors.Is(err, ethrpc.ErrProvidersDisagree) {
+			// The block cannot be proven (settled_unproven): the evidence is asked for again, as a read is, until it can.
+			return nil, nil, readErr(fmt.Errorf("settled_unproven: %s cannot be proven in block %d yet (asked again until it can): %w",
+				tx.Hex(), hdr.Number.Uint64(), err))
+		}
 		return nil, nil, readErr(fmt.Errorf("inclusion proofs of %s in block %d: %w", tx.Hex(), hdr.Number.Uint64(), err))
 	}
 	raw, err := rlp.EncodeToBytes(hdr)

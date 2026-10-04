@@ -5,8 +5,9 @@
 // and every entry's inclusion proofs built and verified).
 //
 // A settlement can only be proven if every transaction and receipt of its block can be encoded. A chain upgrade that
-// adds a transaction type, or changes one, makes every block holding it unprovable: settlements in those blocks stall,
-// and nothing else notices. This command finds such blocks before a settlement depends on one.
+// adds a transaction type, or changes one, makes every block holding it unprovable: a settlement in such a block is
+// recorded settled_unproven and is not attested or written back until its block can be proven and the member is repaired
+// (validator repair member-proof-cycle). This command finds such blocks before a settlement depends on one.
 //
 // Two modes:
 //
@@ -185,7 +186,7 @@ var (
 	mEntriesProven = prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: "certen", Subsystem: "blockproof",
 		Name: "entries_proven_total", Help: "Transactions proven, by EIP-2718 type"}, []string{"chain_id", "tx_type"})
 	mRefused = prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: "certen", Subsystem: "blockproof",
-		Name: "refused_total", Help: "Finalized blocks that CANNOT be proven: a settlement in one would stall"}, []string{"chain_id"})
+		Name: "refused_total", Help: "Finalized blocks that CANNOT be proven: a settlement in one would be recorded settled_unproven"}, []string{"chain_id"})
 	mUnreadAttempts = prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: "certen", Subsystem: "blockproof",
 		Name: "unread_total", Help: "Block checks the providers did not answer or agree on (the block stays pending)"}, []string{"chain_id"})
 	mPending = prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: "certen", Subsystem: "blockproof",
