@@ -10,6 +10,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"flag"
 	"fmt"
 	"os"
@@ -165,6 +166,82 @@ func walkSpine(ctx context.Context, c *jsonrpc.Client) ([]*proofv2.Spine, error)
 	}
 	fmt.Printf("spine: %d majors verified to DN block %d (%s), 0 updates, accounting complete\n",
 		sp.NextMajor-1, sp.LastMinorBlock, time.Since(t0).Round(time.Millisecond))
+
+	// State cross-check: prove the network definition against a certified state root inside the node's retention window,
+	// and require it to equal the set the walk derived. Walk a copy of the spine to the head, keeping each hop, certify
+	// an anchor a little behind the head (the head's own anchor may not exist yet on a quiet network), then prove the
+	// state at that anchor's block: the state receipt passes through the block's state tree root, which the certified
+	// anchor carries, so the receipt's prefix up to that root is the proof.
+	hops := []*proofv2.Spine{sp.Clone()}
+	for len(hops) < 50 {
+		last := hops[len(hops)-1]
+		mr, err := c.MinorRootRange(ctx, api.MinorRootRangeOptions{Partition: protocol.Directory, Since: last.LastMinorBlock})
+		if err != nil {
+			break
+		}
+		next := last.Clone()
+		if err := next.AdvanceEpoch(mr); err != nil {
+			break
+		}
+		hops = append(hops, next)
+	}
+	if len(hops) < 2 {
+		return nil, fmt.Errorf("cross-check: the walk could not reach past the last major block")
+	}
+	head := hops[len(hops)-1].LastMinorBlock
+	want := head - 100
+	var base *proofv2.Spine
+	for _, h := range hops {
+		if h.LastMinorBlock < want {
+			base = h
+		}
+	}
+	now := base.Clone()
+	mr, err := c.MinorRootRange(ctx, api.MinorRootRangeOptions{Partition: protocol.Directory, Since: now.LastMinorBlock, Until: want})
+	if err != nil {
+		return nil, fmt.Errorf("certify DN %d: %w", want, err)
+	}
+	if err := now.AdvanceEpoch(mr); err != nil {
+		return nil, fmt.Errorf("certify DN %d: %w", want, err)
+	}
+	if len(now.Applied) != 0 {
+		return nil, fmt.Errorf("cross-check: %d network updates after the last major block; main-chain accounting must cover them", len(now.Applied))
+	}
+
+	q, err := c.Query(ctx, protocol.DnUrl().JoinPath(protocol.Network), &api.DefaultQuery{IncludeReceipt: &api.ReceiptOptions{ForHeight: now.LastMinorBlock}})
+	if err != nil {
+		return nil, fmt.Errorf("network definition at DN %d: %w", now.LastMinorBlock, err)
+	}
+	ar, ok := q.(*api.AccountRecord)
+	if !ok || ar.Receipt == nil {
+		return nil, fmt.Errorf("network definition at DN %d: got %T without a receipt", now.LastMinorBlock, q)
+	}
+	body, err := ar.Account.MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
+	sum := sha256.Sum256(body)
+	if !ar.Receipt.StartsAtMainState || !bytes.Equal(ar.Receipt.Start, sum[:]) || !ar.Receipt.Validate(nil) {
+		return nil, fmt.Errorf("network definition receipt does not start at the served state or does not validate")
+	}
+	prefix := receiptPrefixTo(&ar.Receipt.Receipt, now.StateTreeAnchor[:])
+	if prefix == nil {
+		return nil, fmt.Errorf("network definition receipt (to DN %d) never passes through the state root %x certified at DN %d",
+			ar.Receipt.LocalBlock, now.StateTreeAnchor, now.LastMinorBlock)
+	}
+	fmt.Printf("cross-check: network definition proven in %d steps to the state root certified at DN %d\n", len(prefix.Entries), now.LastMinorBlock)
+	def, ok := ar.Account.(*protocol.DataAccount)
+	if !ok || def.Entry == nil || len(def.Entry.GetData()) != 1 {
+		return nil, fmt.Errorf("network account is %T, not a one-entry data account", ar.Account)
+	}
+	derived, err := sp.Globals().Network.MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
+	if !bytes.Equal(def.Entry.GetData()[0], derived) {
+		return nil, fmt.Errorf("the proven network definition at DN %d differs from the set the walk derived", now.LastMinorBlock)
+	}
+	fmt.Printf("cross-check: PASS - the network definition proven at certified DN %d equals the set the walk derived\n", now.LastMinorBlock)
 	return snaps, nil
 }
 
@@ -231,6 +308,31 @@ func proveOne(ctx context.Context, c *jsonrpc.Client, snaps []*proofv2.Spine, t 
 		return fmt.Errorf("receipt ends at %x, spine certified %x (DN %d)", cont.Anchor, sp.RootChainAnchor, sp.LastMinorBlock)
 	}
 	return nil
+}
+
+// receiptPrefixTo returns the leading part of r that ends at value, or nil when no intermediate value of r equals it.
+func receiptPrefixTo(r *merkle.Receipt, value []byte) *merkle.Receipt {
+	h := append([]byte(nil), r.Start...)
+	for i := 0; ; i++ {
+		if bytes.Equal(h, value) {
+			p := &merkle.Receipt{Start: r.Start, Anchor: append([]byte(nil), h...), Entries: r.Entries[:i]}
+			if p.Validate(nil) {
+				return p
+			}
+			return nil
+		}
+		if i == len(r.Entries) {
+			return nil
+		}
+		e := r.Entries[i]
+		var s [32]byte
+		if e.Right {
+			s = sha256.Sum256(append(append([]byte(nil), h...), e.Hash...))
+		} else {
+			s = sha256.Sum256(append(append([]byte(nil), e.Hash...), h...))
+		}
+		h = s[:]
+	}
 }
 
 func mustHex(s string) []byte {
