@@ -110,3 +110,20 @@ func TestTheSubmitterKeepsARefusedMemberAndNamesTheRefusal(t *testing.T) {
 		t.Fatalf("a deadline failure was kept or named a refusal (%q)", droppedRefusal)
 	}
 }
+
+// Only an answer the chain gave refuses a member by name; a screen read that failed is not a verdict and never becomes a
+// refusal (the member waits for a read that succeeds).
+func TestOnlyAChainVerdictRefusesAMember(t *testing.T) {
+	m := odMember(5, odChain, 2888)
+	verdict := &fakeODChain{accountErr: errors.New("account 0x96b9 verifies \"certen:batchleaf:v1\" leaves, not \"certen:batchleaf:v3\"")}
+	_, err := odOrchestrator(verdict).SettleOnDemandMember(context.Background(), m, proveOK)
+	var refused *IntentRefusedError
+	if !errors.As(err, &refused) {
+		t.Fatalf("a chain verdict was not a refusal: %v", err)
+	}
+	flaky := &fakeODChain{accountErr: readErr(errors.New("reading LEAF_DOMAIN: 429 Too Many Requests"))}
+	_, err = odOrchestrator(flaky).SettleOnDemandMember(context.Background(), m, proveOK)
+	if err == nil || errors.As(err, &refused) || !IsChainReadError(err) {
+		t.Fatalf("THE regression: a failed read was turned into a refusal: %v", err)
+	}
+}
