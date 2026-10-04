@@ -16,8 +16,9 @@ import (
 	"gitlab.com/accumulatenetwork/accumulate/protocol"
 )
 
-// The fixture is a live Kermit transaction (rb4-phase-c-09282125.acme/data, 7dec3f82...) built by cmd/proofv2build on
-// 2026-10-04, with the Directory's 491 major records and the Kermit incarnation evidence RB5 Phase A published.
+// The fixture is a live Kermit transaction (certen-protocol.acme/billing-receipts, 3cfb04cf..., BVN1 block 13595785)
+// built by cmd/proofv2build on 2026-10-04 with three pages captured as of its block (book/1, book/2 and the account),
+// with the Directory's 491 major records and the Kermit incarnation evidence RB5 Phase A published.
 const kermitPin = "cac6698ed49a286ad8a3de94540a3354dfe964f366a439f4fdfb34533059fda0"
 
 func gunzip(t *testing.T, path string) []byte {
@@ -53,7 +54,7 @@ func load(t *testing.T) fixture {
 		t.Fatal(err)
 	}
 	fx.ev = new(Evidence)
-	if err := json.Unmarshal(gunzip(t, "testdata/evidence_7dec3f82.json.gz"), fx.ev); err != nil {
+	if err := json.Unmarshal(gunzip(t, "testdata/evidence_3cfb04cf.json.gz"), fx.ev); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile("../testdata/incarnation/kermit.json")
@@ -77,6 +78,12 @@ func TestVerifyLiveKermitProof(t *testing.T) {
 	}
 	if rep.SetVerdict != proof.VerdictVerified {
 		t.Fatalf("set verdict %s, want verified", rep.SetVerdict)
+	}
+	if rep.AnchorBlock != 13595785 || len(rep.Pages) != 3 || rep.Partition != "acc://bvn-BVN1.acme" {
+		t.Fatalf("anchor block %d, %d pages, partition %s", rep.AnchorBlock, len(rep.Pages), rep.Partition)
+	}
+	if _, ok := rep.Pages[0].(*protocol.KeyPage); !ok {
+		t.Fatalf("page 0 is %T, want a key page", rep.Pages[0])
 	}
 	if rep.Majors == 0 || rep.CertifiedBlock == 0 || rep.CheckBlock < rep.CertifiedBlock || rep.Validators != 3 || rep.Threshold != 2 {
 		t.Fatalf("unexpected report %+v", rep)
@@ -121,10 +128,10 @@ func TestVerifyRefusesTampering(t *testing.T) {
 			fx.ev.TxHash = flipHexByte(fx.ev.TxHash, 0)
 		}, "not the transaction"},
 		{"the certified anchor's signatures stripped (a signature-less anchor presented as certified)", func(t *testing.T, fx *fixture) {
-			mutateMinorRoot(t, &fx.ev.Certify, func(r *api.MinorRootRecord) { r.Signatures = nil })
+			mutateMinorRoot(t, &fx.ev.Certify[len(fx.ev.Certify)-1], func(r *api.MinorRootRecord) { r.Signatures = nil })
 		}, "quorum not met"},
 		{"one signature forged", func(t *testing.T, fx *fixture) {
-			mutateMinorRoot(t, &fx.ev.Certify, func(r *api.MinorRootRecord) {
+			mutateMinorRoot(t, &fx.ev.Certify[len(fx.ev.Certify)-1], func(r *api.MinorRootRecord) {
 				ed := r.Signatures[0].(*protocol.ED25519Signature)
 				ed.Signature[0] ^= 1
 			})
@@ -132,7 +139,7 @@ func TestVerifyRefusesTampering(t *testing.T) {
 		{"the certified anchor forked off the verified root", func(t *testing.T, fx *fixture) {
 			// The root a run starts from is computed from Pending alone (Count is metadata the verifier never reads), so
 			// a fork is a different Pending.
-			mutateMinorRoot(t, &fx.ev.Certify, func(r *api.MinorRootRecord) {
+			mutateMinorRoot(t, &fx.ev.Certify[len(fx.ev.Certify)-1], func(r *api.MinorRootRecord) {
 				for _, p := range r.RootProof.MerkleState.Pending {
 					if p != nil {
 						p[0] ^= 1
@@ -160,6 +167,22 @@ func TestVerifyRefusesTampering(t *testing.T) {
 		{"the set check run dropped", func(t *testing.T, fx *fixture) {
 			fx.ev.Check.Hops = nil
 		}, "no minor-root run"},
+		{"a page's state changed (a key added)", func(t *testing.T, fx *fixture) {
+			fx.ev.Pages[0].State = flipHexByte(fx.ev.Pages[0].State, len(fx.ev.Pages[0].State)/2-2)
+		}, "page"},
+		{"a page proven to another block's state root", func(t *testing.T, fx *fixture) {
+			r, _ := decodeReceipt(fx.ev.Pages[0].Receipt)
+			r.Entries = r.Entries[:len(r.Entries)-1]
+			r.Anchor = nil
+			b, _ := r.MarshalBinary()
+			fx.ev.Pages[0].Receipt = hex.EncodeToString(b)
+		}, "not the block's state root"},
+		{"a page swapped for another account's", func(t *testing.T, fx *fixture) {
+			fx.ev.Pages[0].URL = fx.ev.Pages[1].URL
+		}, "not acc://"},
+		{"the partition anchor altered (another block named)", func(t *testing.T, fx *fixture) {
+			fx.ev.Anchor.Message = flipHexByte(fx.ev.Anchor.Message, len(fx.ev.Anchor.Message)/2-8)
+		}, "anchor"},
 		{"another incarnation pinned", func(t *testing.T, fx *fixture) {
 			fx.pin[0] ^= 1
 		}, "not the pinned"},

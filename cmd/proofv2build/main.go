@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -31,14 +32,15 @@ func main() {
 	corpus := flag.String("corpus", "", "targets, one per line: <account> <tx hex> [bvn]")
 	bvn := flag.String("bvn", "bvn1", "default BVN")
 	out := flag.String("out", "", "directory to write archive.json.gz and <tx>.json into")
+	pagesFlag := flag.String("pages", "", "comma-separated accounts to capture as of each transaction's block (G1(a))")
 	flag.Parse()
-	if err := run(*endpoint, *incPath, *pin, *corpus, *bvn, *out); err != nil {
+	if err := run(*endpoint, *incPath, *pin, *corpus, *bvn, *out, *pagesFlag); err != nil {
 		fmt.Println("FAIL:", err)
 		os.Exit(1)
 	}
 }
 
-func run(endpoint, incPath, pinHex, corpus, bvn, out string) error {
+func run(endpoint, incPath, pinHex, corpus, bvn, out, pagesFlag string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
@@ -87,7 +89,28 @@ func run(endpoint, incPath, pinHex, corpus, bvn, out string) error {
 			leg = fs[2]
 		}
 		t1 := time.Now()
-		ev, err := b.Build(ctx, account, tx, leg)
+		var pages []*proofv2.PageState
+		if pagesFlag != "" {
+			block, err := b.TxBlock(ctx, account, tx)
+			if err != nil {
+				failed++
+				fmt.Printf("FAIL %s: block: %v\n", tx[:12], err)
+				continue
+			}
+			for _, pu := range strings.Split(pagesFlag, ",") {
+				p, err := b.CapturePage(ctx, pu, block)
+				if err != nil {
+					fmt.Printf("     %s: %v\n", tx[:12], err)
+					continue
+				}
+				pages = append(pages, p)
+			}
+		}
+		ev, err := b.Build(ctx, account, tx, leg, pages...)
+		for wait := 0; errors.Is(err, proofv2.ErrNotYetCertified) && wait < 60; wait++ {
+			time.Sleep(10 * time.Second)
+			ev, err = b.Build(ctx, account, tx, leg, pages...)
+		}
 		if err != nil {
 			failed++
 			fmt.Printf("FAIL %s: %v\n", tx[:12], err)
@@ -99,8 +122,8 @@ func run(endpoint, incPath, pinHex, corpus, bvn, out string) error {
 			fmt.Printf("FAIL %s verify: %v\n", tx[:12], err)
 			continue
 		}
-		fmt.Printf("PASS %s: certified DN %d, set checked at DN %d: %s (%d validators, threshold %d) (%s)\n",
-			tx[:12], rep.CertifiedBlock, rep.CheckBlock, rep.SetVerdict, rep.Validators, rep.Threshold, time.Since(t1).Round(time.Millisecond))
+		fmt.Printf("PASS %s: certified DN %d, set checked at DN %d: %s (%d validators, threshold %d); %s anchor block %d, %d pages proven (%s)\n",
+			tx[:12], rep.CertifiedBlock, rep.CheckBlock, rep.SetVerdict, rep.Validators, rep.Threshold, rep.Partition, rep.AnchorBlock, len(rep.Pages), time.Since(t1).Round(time.Millisecond))
 		if out != "" {
 			j, _ := json.MarshalIndent(ev, "", " ")
 			if err := os.WriteFile(filepath.Join(out, tx+".json"), j, 0o644); err != nil {

@@ -33,10 +33,18 @@ type Evidence struct {
 	// Receipt runs from the transaction hash to the certified Directory root (binary merkle.Receipt, hex).
 	Receipt string `json:"receipt"`
 
-	// Certify extends the spine, from its first Majors major records, to the Directory anchor whose root chain anchor
+	// Certify extends the spine, from its first Majors major records, through one or more minor-root runs (each bounded
+	// by the server) to the Directory anchor whose root chain anchor
 	// the receipt ends at (binary api.MinorRootRecord, hex).
-	Majors  uint64 `json:"majors"`
-	Certify string `json:"certify"`
+	Majors  uint64   `json:"majors"`
+	Certify []string `json:"certify"`
+
+	// Anchor is the partition's anchor for the block the transaction's receipt passes through: it names that block
+	// and the partition's state root at it, which every page must be proven into.
+	Anchor PartitionAnchor `json:"anchor"`
+
+	// Pages are the governing key pages and the principal account as of the anchor's block (G1(a)).
+	Pages []PageState `json:"pages,omitempty"`
 
 	// Check proves the validator set in force at a certified block at or after the certified one.
 	Check SetCheck `json:"check"`
@@ -57,9 +65,16 @@ type Report struct {
 	CertifiedBlock uint64
 	CertifiedRoot  [32]byte
 	CheckBlock     uint64
-	SetVerdict     proof.Verdict
-	Validators     int
-	Threshold      uint64
+
+	// Partition and AnchorBlock are the transaction's partition and the block of its anchor the transaction's receipt
+	// passes through: the transaction executed at or before AnchorBlock, and every page is its state as of
+	// AnchorBlock. That AnchorBlock is exactly the execution block is not proven here (see page.go).
+	Partition   string
+	AnchorBlock uint64
+	Pages       []protocol.Account
+	SetVerdict  proof.Verdict
+	Validators  int
+	Threshold   uint64
 }
 
 // Archive is the Directory's major-block records from major block 1, shared by every proof.
@@ -113,12 +128,17 @@ func Verify(ev *Evidence, ar *Archive, inc *proof.IncarnationEvidence, pinned [3
 
 	// S1-S2: the receipt from the transaction to a certified root.
 	cert := at[ev.Majors].Clone()
-	mr, err := decodeMinorRoot(ev.Certify)
-	if err != nil {
-		return nil, fmt.Errorf("certify: %w", err)
+	if len(ev.Certify) == 0 {
+		return nil, fmt.Errorf("certify: no minor-root run")
 	}
-	if err := cert.AdvanceEpoch(mr); err != nil {
-		return nil, fmt.Errorf("certify: %w", err)
+	for i, h := range ev.Certify {
+		mr, err := decodeMinorRoot(h)
+		if err != nil {
+			return nil, fmt.Errorf("certify run %d: %w", i, err)
+		}
+		if err := cert.AdvanceEpoch(mr); err != nil {
+			return nil, fmt.Errorf("certify run %d: %w", i, err)
+		}
 	}
 	r, err := decodeReceipt(ev.Receipt)
 	if err != nil {
@@ -138,6 +158,31 @@ func Verify(ev *Evidence, ar *Archive, inc *proof.IncarnationEvidence, pinned [3
 		return nil, fmt.Errorf("receipt does not validate")
 	}
 	rep.CertifiedBlock, rep.CertifiedRoot = cert.LastMinorBlock, cert.RootChainAnchor
+
+	// The partition anchor: executed by the Directory, proven into the same certified root, naming the block whose
+	// root chain the transaction's receipt passes through and whose state root the pages are proven into.
+	body, seq, anchorTx, err := anchorBody(ev.Anchor.Message)
+	if err != nil {
+		return nil, err
+	}
+	ar2, err := decodeReceipt(ev.Anchor.Receipt)
+	if err != nil {
+		return nil, fmt.Errorf("partition anchor: %w", err)
+	}
+	if !bytes.Equal(ar2.Start, anchorTx) || !bytes.Equal(ar2.Anchor, cert.RootChainAnchor[:]) || !ar2.Validate(nil) {
+		return nil, fmt.Errorf("partition anchor: its receipt does not prove the anchor transaction into the certified root")
+	}
+	if prefixTo(r, body.RootChainAnchor[:]) == nil {
+		return nil, fmt.Errorf("the transaction's receipt does not pass through the anchor's root chain anchor %x", body.RootChainAnchor)
+	}
+	rep.Partition, rep.AnchorBlock = seq.Source.String(), body.MinorBlockIndex
+	for i := range ev.Pages {
+		acct, err := verifyPage(&ev.Pages[i], body.StateTreeAnchor[:])
+		if err != nil {
+			return nil, fmt.Errorf("page: %w", err)
+		}
+		rep.Pages = append(rep.Pages, acct)
+	}
 
 	// The validator set: walked to a certified block at or after the certified one, proven there, equal to the set
 	// the walk derived. Every write the walk applied must be accounted for by the network account's main chain.

@@ -5,15 +5,22 @@ package proofv2
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"strings"
 
 	chained_proof "github.com/certen/independant-validator/accumulate-lite-client-2/liteclient/proof/working-proof_do_not_edit"
 	"github.com/certen/independant-validator/pkg/proof"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3/jsonrpc"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/database/merkle"
+	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
 	"gitlab.com/accumulatenetwork/accumulate/protocol"
 )
+
+// ErrNotYetCertified means the Directory has not yet emitted an anchor at or after the block the proof needs
+// certified; on a quiet network that can take minutes. Retry Build later with the same captured pages.
+var ErrNotYetCertified = errors.New("the Directory has not yet emitted an anchor certifying this block")
 
 // Builder builds v2 Accumulate evidence from a live network.
 type Builder struct {
@@ -92,8 +99,9 @@ func (b *Builder) lastMajorBefore(block uint64) (uint64, *Spine, error) {
 	return 0, nil, fmt.Errorf("DN block %d precedes the first major block", block)
 }
 
-// Build proves one transaction (S1-S2) and the validator set in force (the set check).
-func (b *Builder) Build(ctx context.Context, account, txHash, bvn string) (*Evidence, error) {
+// Build proves one transaction (S1-S2), its partition anchor, the captured pages (G1(a)) and the validator set in
+// force (the set check). Pages are captured with CapturePage at discovery, while their block is inside retention.
+func (b *Builder) Build(ctx context.Context, account, txHash, bvn string, pages ...*PageState) (*Evidence, error) {
 	cp, err := chained_proof.NewProofBuilder(b.C, false).BuildProof(ctx, chained_proof.ProofInput{Account: account, TxHash: txHash, BVN: bvn})
 	if err != nil {
 		return nil, fmt.Errorf("account and partition legs: %w", err)
@@ -112,12 +120,26 @@ func (b *Builder) Build(ctx context.Context, account, txHash, bvn string) (*Evid
 	if err != nil {
 		return nil, err
 	}
-	mr, err := b.C.MinorRootRange(ctx, api.MinorRootRangeOptions{Partition: protocol.Directory, Since: cert.LastMinorBlock, Until: cp.Layer3.DNSelfAnchorRecordedAtMinorBlockIndex})
-	if err != nil {
-		return nil, fmt.Errorf("certify DN %d: %w", cp.Layer3.DNSelfAnchorRecordedAtMinorBlockIndex, err)
-	}
-	if err := cert.AdvanceEpoch(mr); err != nil {
-		return nil, fmt.Errorf("certify: %w", err)
+	// A minor-root run is bounded, so a long range can take several; walk until the run covers the target block.
+	target := cp.Layer3.DNSelfAnchorRecordedAtMinorBlockIndex
+	var mr *api.MinorRootRecord
+	var runs []string
+	for cert.LastMinorBlock < target {
+		mr, err = b.C.MinorRootRange(ctx, api.MinorRootRangeOptions{Partition: protocol.Directory, Since: cert.LastMinorBlock, Until: target})
+		if err != nil {
+			if strings.Contains(err.Error(), "no anchor at or after") {
+				return nil, fmt.Errorf("DN %d: %w", target, ErrNotYetCertified)
+			}
+			return nil, fmt.Errorf("certify DN %d: %w", target, err)
+		}
+		if err := cert.AdvanceEpoch(mr); err != nil {
+			return nil, fmt.Errorf("certify: %w", err)
+		}
+		rb, err := mr.MarshalBinary()
+		if err != nil {
+			return nil, err
+		}
+		runs = append(runs, hex.EncodeToString(rb))
 	}
 
 	// The Directory leg, asked to end at exactly the certified root: ForHeight on a chain-entry receipt is a root
@@ -137,6 +159,41 @@ func (b *Builder) Build(ctx context.Context, account, txHash, bvn string) (*Evid
 		return nil, fmt.Errorf("combine: %w", err)
 	}
 
+	// The partition anchor for the transaction's block, proven into the same certified root.
+	l4 := cp.Layer4BVN
+	if l4 == nil {
+		return nil, fmt.Errorf("no partition anchor leg for the transaction's block")
+	}
+	pool, err := url.Parse(l4.AnchorPool)
+	if err != nil {
+		return nil, err
+	}
+	idx := l4.AnchorIndex
+	aq, err := b.C.Query(ctx, pool, &api.ChainQuery{Name: "main", Index: &idx, IncludeReceipt: &api.ReceiptOptions{ForHeight: uint64(height)}})
+	if err != nil {
+		return nil, fmt.Errorf("partition anchor at root height %d: %w", height, err)
+	}
+	ace, ok := aq.(*api.ChainEntryRecord[api.Record])
+	if !ok || ace.Receipt == nil {
+		return nil, fmt.Errorf("partition anchor: got %T without a receipt", aq)
+	}
+	arb, err := ace.Receipt.Receipt.MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
+	stateRoot, err := hex.DecodeString(l4.StateTreeAnchor)
+	if err != nil {
+		return nil, err
+	}
+	var trimmed []PageState
+	for _, p := range pages {
+		t, err := trimPage(p, stateRoot)
+		if err != nil {
+			return nil, err
+		}
+		trimmed = append(trimmed, *t)
+	}
+
 	set, err := b.buildSetCheck(ctx, cert.LastMinorBlock)
 	if err != nil {
 		return nil, err
@@ -146,14 +203,12 @@ func (b *Builder) Build(ctx context.Context, account, txHash, bvn string) (*Evid
 	if err != nil {
 		return nil, err
 	}
-	cb, err := mr.MarshalBinary()
-	if err != nil {
-		return nil, err
-	}
 	ev := &Evidence{
 		Version: Version, Account: account, TxHash: txHash,
-		Receipt: hex.EncodeToString(rb), Majors: n, Certify: hex.EncodeToString(cb),
-		Check: *set,
+		Receipt: hex.EncodeToString(rb), Majors: n, Certify: runs,
+		Anchor: PartitionAnchor{Message: l4.SequencedMessage, Receipt: hex.EncodeToString(arb)},
+		Pages:  trimmed,
+		Check:  *set,
 	}
 
 	// The producer verifies its own output, so a malformed proof never reaches storage.
