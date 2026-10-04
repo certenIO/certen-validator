@@ -20,6 +20,9 @@ import (
 type NonSettlementRecord struct {
 	Facts NonSettlementFacts `json:"facts"`
 	Cause string             `json:"cause"`
+	// Refusal is the named cause when the intent itself was refused before any chain transaction (RB6-F10): the member
+	// is recorded refused at once, and its attested non-settlement fails the intent as refused. omitempty.
+	Refusal string `json:"refusal,omitempty"`
 
 	// The proof cycle's write-back identity, as a settlement's cycle carries it.
 	UserID       string  `json:"user_id,omitempty"`

@@ -1730,7 +1730,7 @@ func startValidator(
 				if m == nil {
 					return
 				}
-				validator.RunBatchMemberRefusal(ctx, m.Attestation, m.ChainID, cause, string(execution.LaneOnCadence))
+				validator.RunBatchMemberRefusal(ctx, m.Attestation, m.ChainID, cause, m.Refusal, string(execution.LaneOnCadence))
 			},
 		},
 		log.Printf,
@@ -1756,7 +1756,7 @@ func startValidator(
 			if m == nil {
 				return
 			}
-			validator.RunBatchMemberRefusal(ctx, m.Attestation, m.ChainID, cause, string(execution.LaneOnDemand))
+			validator.RunBatchMemberRefusal(ctx, m.Attestation, m.ChainID, cause, m.Refusal, string(execution.LaneOnDemand))
 		},
 		// The Accumulate block time of a member queued without it: the failover clock.
 		CommitTime: liteClientAdapter.MinorBlockTime,

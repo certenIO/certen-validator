@@ -412,11 +412,23 @@ func (s *OnDemandSubmitter) dispose(
 	case txHash != "" && s.cfg.Attest != nil:
 		s.cfg.Attest(ctx, member.Attestation, txHash, member.ChainID, false)
 	case s.cfg.OnDropped != nil:
+		var refused *IntentRefusedError
+		if errors.As(cause, &refused) {
+			// The named cause travels with the member's failure record: the intent is refused, not a failed settlement.
+			member.Refusal = refused.Error()
+		}
 		s.cfg.OnDropped(ctx, member, fmt.Sprintf("%v", cause))
 	case s.cfg.Attest != nil:
 		s.cfg.Attest(ctx, member.Attestation, txHash, member.ChainID, false)
 	default:
 		s.cfg.Logf("[OD] ⚠️ intent=%s failed with no attest or drop handler wired; it is recorded nowhere", member.IntentID)
+	}
+	// Refused by name before any chain transaction: kept, never attempted again here, so this validator can verify the
+	// member's non-settlement from its own copy (RB6-F11). Anything else leaves the queue.
+	var refused *IntentRefusedError
+	if txHash == "" && errors.As(cause, &refused) {
+		s.cfg.Stack.Mempool.RefuseOnDemand(member.ChainID, member.OperationID, time.Now().UTC())
+		return
 	}
 	s.cfg.Stack.Mempool.RemoveOnDemand(member.ChainID, member.OperationID)
 }

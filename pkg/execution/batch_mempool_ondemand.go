@@ -157,6 +157,63 @@ func (m *BatchMempool) removeOnDemand(chainID int64, opID [32]byte) bool {
 	return true
 }
 
+// RefusedKeep is how long a member refused before any chain transaction is kept after its refusal: past its deadline (at
+// most an hour after its commit), the non-settlement give-up (50 minutes past the deadline) and margin.
+const RefusedKeep = 3 * time.Hour
+
+// refusedMember is an on-demand member refused by name before any chain transaction, and when.
+type refusedMember struct {
+	member *PendingBatchIntent
+	at     time.Time
+}
+
+// RefuseOnDemand moves a queued on-demand member that was refused by name before any chain transaction out of the
+// settling queue into the refused set (RB6-F11): it is never attempted again on this validator, and FindMember still
+// finds it, so this validator verifies the member's non-settlement claim from its own copy. It reports whether the
+// member was queued.
+func (m *BatchMempool) RefuseOnDemand(chainID int64, opID [32]byte, at time.Time) bool {
+	m.mu.Lock()
+	p := m.onDemand[chainID][opID]
+	if p == nil {
+		m.mu.Unlock()
+		return false
+	}
+	m.mu.Unlock()
+	if !m.removeOnDemand(chainID, opID) {
+		return false
+	}
+	m.mu.Lock()
+	m.keepRefusedLocked(p, at)
+	m.pruneRefusedLocked(at)
+	m.mu.Unlock()
+	m.persist()
+	return true
+}
+
+func (m *BatchMempool) keepRefusedLocked(p *PendingBatchIntent, at time.Time) {
+	if m.refused == nil {
+		m.refused = make(map[int64]map[[32]byte]*refusedMember)
+	}
+	if m.refused[p.ChainID] == nil {
+		m.refused[p.ChainID] = make(map[[32]byte]*refusedMember)
+	}
+	m.refused[p.ChainID][p.OperationID] = &refusedMember{member: p, at: at}
+}
+
+// pruneRefusedLocked forgets refused members kept longer than RefusedKeep.
+func (m *BatchMempool) pruneRefusedLocked(now time.Time) {
+	for chainID, byOp := range m.refused {
+		for op, r := range byOp {
+			if now.Sub(r.at) > RefusedKeep {
+				delete(byOp, op)
+			}
+		}
+		if len(byOp) == 0 {
+			delete(m.refused, chainID)
+		}
+	}
+}
+
 // NoteOnDemandProgress records this validator's own progress on a queued on-demand member and
 // persists it. It reports whether the member was queued; a member that is not (the period lane, or
 // one already released) is left alone.

@@ -341,6 +341,9 @@ type UnifiedOrchestrator struct {
 // activeCycle tracks a running proof cycle
 type activeCycle struct {
 	CycleID string
+	// Refusal is the named cause of a refusal before any chain transaction (RB6-F10), recorded on the member outcome; it is
+	// not part of anything attested.
+	Refusal string
 	// AnchoredRoot is the batch root the member's anchor published (its Level 3 hash), read from its
 	// canonical anchor row before the write-back; zero where the member has no placement (RB3-F106).
 	AnchoredRoot [32]byte
@@ -772,7 +775,7 @@ func (o *UnifiedOrchestrator) recordMemberOutcome(
 	out := database.MemberOutcome{
 		IntentID: req.IntentID, ChainID: chainID, MemberChains: chains, Legs: legs,
 		Settlement: settlement, ProofCycle: proofCycle, CycleID: req.CycleID, Reason: reason,
-		EffectsProven: cycleEffectsProven(cycle), ReportedBy: o.config.ValidatorID,
+		EffectsProven: cycleEffectsProven(cycle), ReportedBy: o.config.ValidatorID, Refusal: cycle.Refusal,
 	}
 	if result != nil {
 		out.WriteBackTx = result.WriteBackTxHash

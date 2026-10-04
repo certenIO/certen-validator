@@ -179,6 +179,9 @@ type PendingAttestation struct {
 	// batch member was dropped for. It is what the failed proof cycle records as its reason. Empty
 	// means no cause beyond what the cycle itself establishes.
 	FailureReason string
+	// Refusal is the named cause when the intent itself was refused before any chain transaction (RB6-F10); it makes the
+	// recorded failure a refusal, not a failed settlement.
+	Refusal string
 
 	// BatchedWith lists the other intent IDs settled by the SAME on-chain batch
 	// transaction, empty for a solo execution. Recorded in the commitment map so the
@@ -673,6 +676,10 @@ func (bv *BFTValidator) recordFailedProofCycle(
 		"targetChain":              strconv.FormatInt(chainID, 10),
 		"chainID":                  chainID,
 		"proofClass":               att.SettlementLane,
+	}
+	if att.Refusal != "" {
+		// Refused by name before any chain transaction: the intent's own defect (RB6-F10).
+		commitment["refusal"] = att.Refusal
 	}
 	// The member's operation: the executor finds its own copy of the member by it, and every peer
 	// verifies the non-settlement from its own copy (RB3-F49).

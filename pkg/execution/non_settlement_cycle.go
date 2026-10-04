@@ -55,8 +55,9 @@ func (o *UnifiedOrchestrator) QueueNonSettlement(req *UnifiedProofCycleRequest) 
 		return fmt.Errorf("intent %s: %w", req.IntentID, err)
 	}
 	reason, _ := req.CommitmentData["reason"].(string)
+	refusal, _ := req.CommitmentData["refusal"].(string)
 	rec := &NonSettlementRecord{
-		Facts: facts, Cause: reason,
+		Facts: facts, Cause: reason, Refusal: refusal,
 		AccountURL: req.AccumulateAccountURL, AccumTxHash: req.AccumulateTxHash, BVN: req.AccumulateBVN,
 		MemberChains: commitmentInt64s(req.CommitmentData["memberChains"]),
 		MemberLegs:   int(commitmentInt64(req.CommitmentData["memberLegs"])),
@@ -71,6 +72,14 @@ func (o *UnifiedOrchestrator) QueueNonSettlement(req *UnifiedProofCycleRequest) 
 	}
 	fmt.Printf("[NON-SETTLEMENT] intent %s on chain %d queued (%s); attestable after %s\n",
 		req.IntentID, chainID, reason, facts.Deadline.Add(nonSettlementFinality).Format(time.RFC3339))
+	if refusal != "" {
+		// Refused by name: the outcome is known now and is recorded now, named, so the intent reads
+		// refused_pending_attestation instead of in progress until its non-settlement is attested (RB6-F10).
+		if err := o.recordMemberOutcome(context.Background(), nonSettlementCycle(rec, nil), database.MemberSettlementNone,
+			database.MemberProofCycleRefused, reason); err != nil {
+			fmt.Printf("❌ [NON-SETTLEMENT] intent %s on chain %d: its refusal could not be recorded yet: %v\n", req.IntentID, chainID, err)
+		}
+	}
 	return nil
 }
 
@@ -188,7 +197,7 @@ func nonSettlementCycle(rec *NonSettlementRecord, claim *NonSettlementClaim) *ac
 	result := &UnifiedProofCycleResult{CycleID: cycleID, ChainID: chainID, StartedAt: time.Now().UTC()}
 	// StartedAt, like any cycle's: the verification record's duration is measured from it. Without it
 	// every non-settlement's verification record was refused as out of range, and a warning hid that.
-	return &activeCycle{CycleID: cycleID, Request: req, Result: result, NonSettlement: claim, StartedAt: result.StartedAt}
+	return &activeCycle{CycleID: cycleID, Request: req, Result: result, NonSettlement: claim, StartedAt: result.StartedAt, Refusal: rec.Refusal}
 }
 
 // runNonSettlementCycle attests the non-settlement by quorum and writes it back.
