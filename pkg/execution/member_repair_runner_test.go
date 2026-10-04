@@ -247,3 +247,43 @@ func TestARepairRequestIsKeptAndAnswered(t *testing.T) {
 		t.Fatal("a runner that is not wired started")
 	}
 }
+
+// RB6-F9: a member Phase 7 recorded settled_unproven - settled, with its settlement transaction, and no observation
+// anywhere because its block could not be proven - can be repaired once it can be proven: the repair observes and proves
+// it afresh (no other validator's observation exists to adopt). A member naming another transaction is still refused.
+func TestASettledUnprovenMemberIsRepairable(t *testing.T) {
+	for name, tc := range map[string]struct {
+		memberTx string
+		want     string
+	}{
+		"the member names this settlement":    {"", MemberRepairReached},
+		"the member names another settlement": {"0x" + strings.Repeat("77", 32), MemberRepairRefused},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := newRepairScene(t)
+			memberTx := tc.memberTx
+			if memberTx == "" {
+				memberTx = s.tx
+			}
+			if _, err := s.db.Exec(`DELETE FROM chain_execution_results WHERE tx_hash = $1`, s.tx); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.db.Exec(`UPDATE intent_member_outcomes SET settlement = 'settled', settlement_tx = $3,
+				reason = 'phase 7 failed: observe transaction 0: settled_unproven: no inclusion proof'
+				WHERE intent_id = $1 AND chain_id = $2`, s.intentID, 84532, memberTx); err != nil {
+				t.Fatal(err)
+			}
+			s.onReprocess = func(reach chan consensus.MemberRepairReach, apply bool) error {
+				reach <- consensus.MemberRepairReach{Snapshot: snapshot}
+				return nil
+			}
+			res := s.runner(t, "validator-3").Serve(context.Background(), s.request(false))
+			if res.Outcome != tc.want {
+				t.Fatalf("THE regression: %s: %s", res.Outcome, res.Reason)
+			}
+			if tc.want == MemberRepairRefused && !strings.Contains(res.Reason, "recorded observation") {
+				t.Fatalf("refused, but not on the observation: %s", res.Reason)
+			}
+		})
+	}
+}

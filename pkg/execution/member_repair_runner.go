@@ -357,13 +357,23 @@ func (r *MemberRepairRunner) preconditions(ctx context.Context, req MemberRepair
 		strconv.FormatInt(req.ChainID, 10), req.SettlementTx).Scan(&observer)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		r.check(res, "recorded observation", false, fmt.Sprintf("no observation of %s is recorded; run the repair on the validator that settled it", req.SettlementTx))
-		return nil, false
+		// No validator recorded an observation of it. A settlement Phase 7 read final but could not prove in its block
+		// (settled_unproven, RB6-F9) is recorded on the member - settled or reverted, with this settlement transaction -
+		// and has no observation anywhere: this validator's proof cycle observes and proves it afresh (step 6 and the
+		// cycle's own Phase 7), and its observation is the one recorded. Any other member with no observation is refused.
+		named := strings.EqualFold(settlementTx.String, req.SettlementTx) &&
+			(settlement == string(database.MemberSettlementSettled) || settlement == string(database.MemberSettlementReverted))
+		if !r.check(res, "recorded observation", named, fmt.Sprintf("no observation of %s is recorded by any validator; the member "+
+			"records settlement %s / %q; run the repair on the validator that settled it", req.SettlementTx, settlement, settlementTx.String)) {
+			return nil, false
+		}
+		res.Checks[len(res.Checks)-1].Detail = fmt.Sprintf("no observation of %s is recorded by any validator, and the member records it %s "+
+			"(settled_unproven): this validator's proof cycle observes and proves it", req.SettlementTx, settlement)
 	case err != nil:
 		r.check(res, "recorded observation", false, err.Error())
 		return nil, false
 	}
-	if !r.check(res, "recorded observation", observer.String == r.ValidatorID,
+	if err == nil && !r.check(res, "recorded observation", observer.String == r.ValidatorID,
 		fmt.Sprintf("observed by %s; this is %s", observer.String, r.ValidatorID)) {
 		return nil, false
 	}
