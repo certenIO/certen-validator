@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -33,6 +34,7 @@ type createdAnchorChain struct {
 	createdIn uint64
 	creator   common.Address // what anchors(bundle).validator records
 	tx        *types.Transaction
+	dup       *types.Transaction // the creator's duplicate createBatchAnchor call, never mined
 	bundle    [32]byte
 	root      [32]byte
 }
@@ -48,12 +50,64 @@ func testKey(label string) *ecdsa.PrivateKey {
 
 func (c *createdAnchorChain) serve(t *testing.T) *ethclient.Client {
 	t.Helper()
+	server := httptest.NewServer(c.handler(t, false))
+	t.Cleanup(server.Close)
+	client, err := ethclient.Dial(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(client.Close)
+	return client
+}
+
+// provide serves the chain from one provider per entry of liars, each on its own loopback host - a liar names, as the
+// creation, the creator's duplicate createBatchAnchor call (dup), which the chain never mined - configured as production
+// configures Base Sepolia's providers, and returns a client of the first, the orchestrator's own.
+func (c *createdAnchorChain) provide(t *testing.T, liars ...bool) *ethclient.Client {
+	t.Helper()
+	urls := make([]string, len(liars))
+	for i, lie := range liars {
+		l, err := net.Listen("tcp", endpointHosts[i])
+		if err != nil {
+			t.Fatalf("listen on %s: %v", endpointHosts[i], err)
+		}
+		server := httptest.NewUnstartedServer(c.handler(t, lie))
+		server.Listener = l
+		server.Start()
+		t.Cleanup(server.Close)
+		urls[i] = server.URL
+	}
+	t.Setenv("BASE_SEPOLIA_RPC_URL", urls[0])
+	t.Setenv("BASE_SEPOLIA_URL_FALLBACKS", strings.Join(urls[1:], ","))
+	t.Setenv("INFURA_BASE_SEPOLIA_URL", "")
+	t.Setenv("ALCHEMY_BASE_SEPOLIA_URL", "")
+	client, err := ethclient.Dial(urls[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(client.Close)
+	return client
+}
+
+func (c *createdAnchorChain) handler(t *testing.T, lie bool) http.Handler {
+	t.Helper()
 	parsed, err := abiFromJSON(contracts.CertenAnchorV8_2BatchABI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	event := anchorEventsABI.Events["BatchAnchorCreated"]
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// The transaction this provider says created the anchor, in the creating block, and the log its receipt carries.
+	stated, statedHash := c.createdIn, c.blockHash()
+	creation := c.tx
+	if lie {
+		creation = c.dup
+	}
+	createLog := func() *types.Log {
+		return &types.Log{Address: c.anchor, BlockNumber: stated, BlockHash: statedHash, TxHash: creation.Hash(),
+			Topics: []common.Hash{event.ID, common.Hash(c.bundle), common.Hash(c.root), common.BytesToHash(c.creator.Bytes())},
+			Data:   []byte{}}
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		var req struct {
 			ID     json.RawMessage   `json:"id"`
@@ -68,13 +122,18 @@ func (c *createdAnchorChain) serve(t *testing.T) *ethclient.Client {
 		case "eth_blockNumber":
 			result = hexutil.EncodeUint64(uint64(len(c.times) - 1))
 		case "eth_getBlockByHash":
-			if strings.Contains(string(req.Params[0]), strings.TrimPrefix(c.blockHash().Hex(), "0x")) {
-				result = c.header(c.createdIn)
+			for _, n := range []uint64{c.createdIn, c.createdIn + 1} {
+				if strings.Contains(string(req.Params[0]), strings.TrimPrefix(c.header(n).Hash().Hex(), "0x")) {
+					result = c.header(n)
+				}
 			}
 		case "eth_getBlockByNumber":
 			var tag string
 			_ = json.Unmarshal(req.Params[0], &tag)
 			n, _ := hexutil.DecodeUint64(tag)
+			if tag == "latest" {
+				n = uint64(len(c.times) - 1)
+			}
 			if n < uint64(len(c.times)) {
 				result = c.header(n)
 			}
@@ -95,29 +154,31 @@ func (c *createdAnchorChain) serve(t *testing.T) *ethclient.Client {
 			to, _ := hexutil.DecodeUint64(q.ToBlock)
 			logs := []*types.Log{}
 			if c.createdIn >= from && c.createdIn <= to {
-				logs = append(logs, &types.Log{
-					Address: c.anchor, BlockNumber: c.createdIn, TxHash: c.tx.Hash(),
-					Topics: []common.Hash{event.ID, common.Hash(c.bundle), common.Hash(c.root), common.BytesToHash(c.creator.Bytes())},
-					Data:   []byte{},
-				})
+				logs = append(logs, createLog())
 			}
 			result = logs
 		case "eth_getTransactionByHash":
-			raw, _ := c.tx.MarshalJSON()
+			if !strings.Contains(string(req.Params[0]), strings.TrimPrefix(creation.Hash().Hex(), "0x")) {
+				break
+			}
+			raw, _ := creation.MarshalJSON()
 			m := map[string]any{}
 			_ = json.Unmarshal(raw, &m)
-			from, _ := types.Sender(types.LatestSignerForChainID(big.NewInt(c.chainID)), c.tx)
+			from, _ := types.Sender(types.LatestSignerForChainID(big.NewInt(c.chainID)), creation)
 			m["from"] = strings.ToLower(from.Hex())
-			m["blockNumber"] = hexutil.EncodeUint64(c.createdIn)
-			m["blockHash"] = c.blockHash().Hex()
+			m["blockNumber"] = hexutil.EncodeUint64(stated)
+			m["blockHash"] = statedHash.Hex()
 			m["transactionIndex"] = "0x0"
 			result = m
 		case "eth_getTransactionReceipt":
+			if !strings.Contains(string(req.Params[0]), strings.TrimPrefix(creation.Hash().Hex(), "0x")) {
+				break
+			}
 			result = map[string]any{
-				"transactionHash": c.tx.Hash().Hex(), "transactionIndex": "0x0",
-				"blockHash":   c.blockHash().Hex(),
-				"blockNumber": hexutil.EncodeUint64(c.createdIn), "cumulativeGasUsed": "0x1", "gasUsed": "0x1",
-				"effectiveGasPrice": "0x1", "logs": []any{}, "logsBloom": "0x" + strings.Repeat("00", 256),
+				"transactionHash": creation.Hash().Hex(), "transactionIndex": "0x0",
+				"blockHash":   statedHash.Hex(),
+				"blockNumber": hexutil.EncodeUint64(stated), "cumulativeGasUsed": "0x1", "gasUsed": "0x1",
+				"effectiveGasPrice": "0x1", "logs": []*types.Log{createLog()}, "logsBloom": "0x" + strings.Repeat("00", 256),
 				"status": "0x1", "type": "0x2", "contractAddress": nil,
 			}
 		default:
@@ -125,14 +186,7 @@ func (c *createdAnchorChain) serve(t *testing.T) *ethclient.Client {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": result})
-	}))
-	t.Cleanup(server.Close)
-	client, err := ethclient.Dial(server.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(client.Close)
-	return client
+	})
 }
 
 func (c *createdAnchorChain) header(n uint64) *types.Header {
@@ -163,12 +217,18 @@ func newCreatedAnchorChain(t *testing.T, signer *ecdsa.PrivateKey) *createdAncho
 		t.Fatal(err)
 	}
 	c.tx = tx
+	if c.dup, err = types.SignNewTx(signer, types.LatestSignerForChainID(big.NewInt(c.chainID)), &types.DynamicFeeTx{
+		ChainID: big.NewInt(c.chainID), Nonce: 4, GasTipCap: big.NewInt(1), GasFeeCap: big.NewInt(2), Gas: 500000,
+		To: &anchor, Data: v82CreateCall(c.chainID, c.root),
+	}); err != nil {
+		t.Fatal(err)
+	}
 	return c
 }
 
 func TestAnAnchorAnotherValidatorCreatedIsRecordedWithItsCreateTransaction(t *testing.T) {
 	c := newCreatedAnchorChain(t, testKey("anchor creator"))
-	o := &BatchOrchestrator{incarnation: testIncarnation, ecm: &EthereumContractManager{client: c.serve(t)}, anchorV7: c.anchor, logf: t.Logf}
+	o := &BatchOrchestrator{incarnation: testIncarnation, ecm: &EthereumContractManager{client: c.provide(t, false, false)}, anchorV7: c.anchor, logf: t.Logf}
 	tree := &BatchTree{ChainID: c.chainID, BundleID: c.bundle, Root: c.root}
 
 	created, err := o.existingAnchorCreation(context.Background(), tree, 0)
@@ -191,13 +251,30 @@ func TestAnAnchorAnotherValidatorCreatedIsRecordedWithItsCreateTransaction(t *te
 // A located transaction the anchor's recorded creator did not sign is not taken as the create transaction.
 func TestALocatedCreateTransactionMustBeSignedByTheRecordedCreator(t *testing.T) {
 	c := newCreatedAnchorChain(t, testKey("someone else"))
-	o := &BatchOrchestrator{incarnation: testIncarnation, ecm: &EthereumContractManager{client: c.serve(t)}, anchorV7: c.anchor, logf: t.Logf}
+	o := &BatchOrchestrator{incarnation: testIncarnation, ecm: &EthereumContractManager{client: c.provide(t, false, false)}, anchorV7: c.anchor, logf: t.Logf}
 	_, err := o.existingAnchorCreation(context.Background(), &BatchTree{ChainID: c.chainID, BundleID: c.bundle, Root: c.root}, 0)
 	if err == nil || !strings.Contains(err.Error(), "records creator") {
 		t.Fatalf("err = %v; want the signer refused", err)
 	}
 	if IsChainReadError(err) {
 		t.Fatal("a contradiction was reported as an unread chain - it would be retried for ever as if transient")
+	}
+}
+
+// The orchestrator's own provider names, as another validator's anchor creation, that validator's duplicate
+// createBatchAnchor call - signed, same bundle and root, never mined - with a receipt for it; the other provider tells
+// the truth. What the orchestrator records on the tree - written to the database and stated in layer 5 -
+// is never that one provider's word (RB5-F53).
+func TestASingleLyingProvidersAnchorCreationIsNotWrittenToTheTree(t *testing.T) {
+	c := newCreatedAnchorChain(t, testKey("anchor creator"))
+	o := &BatchOrchestrator{incarnation: testIncarnation, ecm: &EthereumContractManager{client: c.provide(t, true, false)}, anchorV7: c.anchor, logf: t.Logf}
+	tree := &BatchTree{ChainID: c.chainID, BundleID: c.bundle, Root: c.root}
+	created, err := o.existingAnchorCreation(context.Background(), tree, 0)
+	if err == nil {
+		t.Fatalf("THE regression: one provider's anchor creation was recorded: %s in block %d (created by %s)", created.TxHash, created.Block, c.tx.Hash().Hex())
+	}
+	if !strings.Contains(err.Error(), c.dup.Hash().Hex()) {
+		t.Fatalf("refused, but not by name: %v", err)
 	}
 }
 
